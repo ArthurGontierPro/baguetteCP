@@ -27,29 +27,31 @@
      (b) nothing is logged inside a branch; the branch's refutation is derived only
          when it closes.
 
-   What is implemented here is (b), but sharpened by one observation that changes what
-   "derived when it closes" has to mean: a propagator's [Explanation.t] is *never
-   rendered* during search, not even at the point a branch fails. Only one thing is
-   ever asked of the proof, per branch: the clause "not all of these decisions can
-   hold simultaneously" (the branch's nogood), built purely from the *literals of the
-   decisions themselves* -- and it is logged as a [rup] of that clause alone, with no
-   reference to any intermediate [Explanation.t] a propagator constructed to reach the
-   conflict.
+   What is implemented here is a mixture, and the split is not a design preference but
+   what the checker forced (docs/DECISIONS.md D-0012, D-0013, D-0014).
 
-   Why this is sound, and not a weaker echo of (a): [rup]'s check is "does the
-   database, extended with the negation of every literal in this clause, propagate
-   (by the checker's own generalised unit propagation over pseudo-Boolean
-   constraints) to a contradiction". Negating every literal of the nogood clause is
-   *exactly* asserting the decisions the branch took. The checker then has to
-   re-derive the same conflict our propagators found, using only the model rows
-   (already in the database, unconditionally) and the order-encoding's consistency
-   family -- and it can, because every M1 bounds propagator (int_lin_le and everything
-   built on it: int_le, int_lt, int_eq, int_lin_eq) *is* generalised unit propagation
-   over its own row; there is no reasoning our propagators perform that the checker's
-   RUP search cannot replay by itself once it is told which literals to assume. This
-   is checked against the real checker below (the veripb-backed tests), not asserted.
-   So a leaf's nogood needs nothing from [Explanation.t] at all: the decisions are
-   already, by construction, everything the checker needs to reconstruct the reason.
+   **A conflict with no decision active** renders the propagator's own [Explanation.t]
+   and logs the derivation itself: D-0013's weaken-out-the-other-variables, divide by
+   the pushed coefficient, add the opposing bounds. That is a [pol] chain the checker
+   accepts, and M1-T12 is what made [Explanation.t] able to express it.
+
+   **A conflict inside a branch** still logs only the nogood -- the clause "not all of
+   these decisions can hold simultaneously", built from the decision literals alone,
+   as a [rup]. This is known to be **incomplete**, and the header used to claim
+   otherwise. The claim was that every M1 bounds propagator *is* generalised unit
+   propagation over its own row, so the checker could always replay a branch's
+   refutation given the decisions to assume. D-0012 disproved it: the claim holds for
+   0/1 domains, where the order encoding degenerates into clauses, and fails as soon
+   as domains are wider, because bounds propagation across several rows is strictly
+   stronger than PB unit propagation on each row. veripb rejects the nogood for
+   `x1 = 1, x3 <= 2` in a four-variable model that is only UNSAT by parity, even
+   though that nogood is true.
+
+   So the branching case is open work, tracked by D-0014, and the UNSAT models in
+   test/unit/test_endtoend.ml that need a decision are marked xfail rather than
+   pretended to pass. D-0014 also records what is known about closing it: interning a
+   decision-free lemma first makes some previously-rejected nogoods verify, but not
+   all of them.
 
    This gives (a)'s property -- every logged constraint is globally valid, no
    assumption ever sits unprotected in the database -- at (b)'s cost -- one clause per
@@ -135,12 +137,21 @@ let extract_assignment store : assignment =
    point, exactly the nogood clause that would state "not all of these hold". *)
 let rec dfs engine store ctx (decisions : Lit.t list) : node =
   match Engine.propagate engine store with
-  | Engine.Conflict _ ->
-      (* The propagator's own [Explanation.t] is deliberately not consulted -- see the
-         module header. Only the active decisions matter to the proof. *)
-      let lits = List.map Lit.negate decisions in
-      let cid = Justify.emit ctx (Explanation.clause lits) in
-      NFail (lits, cid)
+  | Engine.Conflict e -> (
+      match decisions with
+      | [] ->
+          (* D-0013: with no decision active there is nothing to negate, and the
+             propagator's own derivation *is* the contradiction. Emitting it is the
+             whole point of M1-T12 -- a bare clause here is the "trust me" that
+             D-0012 recorded veripb rejecting. *)
+          let cid = Justify.emit ctx e in
+          NFail ([], cid)
+      | _ ->
+          (* D-0012's branching case, still open (M1-T13/D-0014): the nogood over the
+             active decisions, which the checker cannot always reach. *)
+          let lits = List.map Lit.negate decisions in
+          let cid = Justify.emit ctx (Explanation.clause lits) in
+          NFail (lits, cid))
   | Engine.Fixpoint -> (
       match pick_var store with
       | None -> NSat (extract_assignment store)
@@ -254,5 +265,15 @@ let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
           invalid_arg
             "Search.solve: the root nogood must be decision-free -- solve must be \
              called with no ambient decisions active");
+      (* I-X2: the live set must be empty at [conclusion], and the contradiction cited
+         by the conclusion is the one id that counts as discharged by it
+         (docs/PROOF-FORMAT.md section 5). A root refutation's derivation leaves its
+         intermediate steps behind -- they are at level 0, so no [w] retires them --
+         so retire them explicitly here. Nothing references them again: the proof ends
+         on the next line. *)
+      let leftovers =
+        List.filter (fun id -> id <> cid) (Writer.live_ids ctx.Justify.writer)
+      in
+      if leftovers <> [] then Writer.delete_many ctx.Justify.writer leftovers;
       Writer.conclusion ctx.Justify.writer (Writer.Unsat (Some cid));
       Unsat

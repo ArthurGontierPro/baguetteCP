@@ -171,16 +171,20 @@ let pack ~id (lin : Linear.t) =
 
 (* A <= is one Linear instance; an equality is its (le, ge) pair -- two instances, one
    per model row (D-0011). *)
-let build_engine m store =
+let build_engine m store ids =
   let to_vars terms = List.map (fun (a, i) -> (a, Var.of_int i)) terms in
   let instances =
-    List.concat_map
-      (function
-        | Le (terms, rhs) -> [ Linear.make store (to_vars terms) rhs ]
-        | Eq (terms, rhs) ->
-            let le, ge = Lin_eq.make store (to_vars terms) rhs in
-            [ le; ge ])
-      m.cstrs
+    List.concat
+    @@ List.map2
+         (fun cstr id ->
+        match (cstr, id) with
+           | Le (terms, rhs), `Le row_id ->
+               [ Linear.make ~row_id store (to_vars terms) rhs ]
+           | Eq (terms, rhs), `Eq (le_id, ge_id) ->
+               let le, ge = Lin_eq.make ~le_id ~ge_id store (to_vars terms) rhs in
+               [ le; ge ]
+           | _ -> assert false)
+         m.cstrs ids
   in
   Engine.create (List.mapi (fun id lin -> pack ~id lin) instances)
 
@@ -197,15 +201,21 @@ let build_encoding m =
       terms
   in
   let negate terms = List.map (fun (a, x) -> (-a, x)) terms in
-  List.iter
-    (function
-      | Le (terms, rhs) -> ignore (Encoding.add_int_lin_le e (to_names terms) rhs)
-      | Eq (terms, rhs) ->
-          let t = to_names terms in
-          ignore (Encoding.add_int_lin_le e t rhs);
-          ignore (Encoding.add_int_lin_le e (negate t) (-rhs)))
-    m.cstrs;
-  e
+  (* Each propagator instance must justify against its OWN row (D-0011), so the ids are
+     kept and threaded to build_engine rather than discarded. Without that every
+     explanation falls back to Trivial, which cannot say which row it meant. *)
+  let ids =
+    List.map
+      (function
+        | Le (terms, rhs) -> `Le (Encoding.add_int_lin_le e (to_names terms) rhs)
+        | Eq (terms, rhs) ->
+            let t = to_names terms in
+            let le_id = Encoding.add_int_lin_le e t rhs in
+            let ge_id = Encoding.add_int_lin_le e (negate t) (-rhs) in
+            `Eq (le_id, ge_id))
+      m.cstrs
+  in
+  (e, ids)
 
 (* Search does not render Explanation.Trivial today (search.ml's header), so this being
    consulted would itself be news. When the D-0012 fix makes search emit justifications,
@@ -255,8 +265,8 @@ let run_model m =
   let opb = Filename.concat dir "model.opb" in
   let pbp = Filename.concat dir "model.pbp" in
   let store = build_store m in
-  let engine = build_engine m store in
-  let encoding = build_encoding m in
+  let encoding, ids = build_encoding m in
+  let engine = build_engine m store ids in
   let oc = open_out opb in
   Encoding.write_opb ~comments:[ m.title ] encoding oc;
   close_out oc;
@@ -288,7 +298,11 @@ let run_model m =
   (* Only an UNSAT proof exercises the search's own reasoning, and D-0012 says those do
      not check yet. Marked the way test/models/PENDING marks a known failure: if one
      starts passing, the suite fails and says to remove the marker. *)
-  let xfail_veripb = not expect_sat in
+  (* Since M1-T12 a conflict with no decision active logs its real derivation (D-0013)
+     and verifies. What is still open is the branching case (D-0012, D-0014): a nogood
+     over decision literals that the checker cannot always reach. So the models that
+     have to branch are the ones still marked. *)
+  let xfail_veripb = (not expect_sat) && m.needs_search in
   (match veripb_path () with
   | None ->
       incr failures;
