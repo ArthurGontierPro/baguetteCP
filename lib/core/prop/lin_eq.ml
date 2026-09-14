@@ -1,74 +1,59 @@
 (* int_lin_eq: sum_i a_i * x_i = c, over integer variables with possibly negative or
    zero coefficients.
 
-   Consistency level: BOUNDS (docs/SPEC.md 3.2), same as [Linear] (lib/core/prop/linear.ml):
-   this module only ever tightens lo/hi, never punches a hole.
-
-   Justification shape (docs/PROOF-FORMAT.md section 4, `int_lin_eq` row): "two
-   int_lin_le derivations". This module takes that literally rather than inventing a
-   fused equality reasoning of its own -- [make] builds *two* [Linear.t] values,
+   docs/DECISIONS.md D-0011: one propagator instance justifies against exactly one
+   model row. An equality is *two* rows -- [Encoding.add_equality] posts the `<=` and
+   `>=` halves separately and hands back two distinct ids -- so [int_lin_eq] is not
+   itself a propagator instance. [make] returns a PAIR of ordinary [Linear.t] values,
 
      le : sum_i  a_i * x_i <=  c
      ge : sum_i -a_i * x_i <= -c        (i.e. sum_i a_i * x_i >= c)
 
-   and [propagate] is nothing but running both to fixpoint. Every explanation this
-   module ever returns is therefore, unmodified, exactly the [Cut (Trivial, Linear
-   (units, units_rhs), 1, 1)] shape [Linear.explain] already produces and that veripb
-   already accepts (D-0009, D-0010) -- there is no new derivation kind to prove sound,
-   only two existing ones run side by side. This is also why there is no new call into
-   [Order_reason] here: [Linear] already calls it, and this module never touches a
-   chain literal directly.
+   for a caller to post as two separate, independently watched propagators, each paired
+   with its own id from [Encoding.add_equality] -- that function's own comment says its
+   two ids are `(geq, leq)`, so [ge] pairs with the first and [le] with the second.
+   Each of [le]/[ge] is exactly [int_lin_le] as it already exists: same module, same
+   propagate, same explanation shape. This file contributes nothing beyond the
+   negation that builds [ge] from [le]'s terms.
 
-   The one thing this module owns that plain [int_lin_le] does not: which underlying
-   model constraint a given pruning's [Trivial] refers to. [Encoding.add_equality]
-   posts the equality as exactly these same two rows (its own comment says so: "this is
-   the same split"), yielding two ids. A caller wiring this propagator's explanations to
-   a proof therefore needs the *pair* of ids and must route an explanation to the ctx
-   pointed at whichever of [le]/[ge] produced it -- [le]/[ge] below expose the two
-   [Linear.t] values themselves (by structural identity, not by name) so a caller can
-   tell which one is asking, exactly the way test/unit/test_justify.ml's [build_two_ctx]
-   / [for_constraint] pattern already handles two model rows sharing one writer.
+   An earlier version of this module fused [le] and [ge] into one propagator that
+   alternated them internally to a shared fixpoint, and proposed that a caller route
+   each resulting explanation to the model id for whichever half produced it by
+   comparing against the exposed [Linear.t] values. D-0011 records why that is wrong:
+   a pruning's explanation is recorded on the trail as [{ var; old; why }]
+   (lib/core/store.ml's [entry]) -- **the trail records no propagator identity** -- so a
+   caller walking the trail later (conflict analysis, from M2-T3 on) has the
+   explanation and nothing else and cannot tell which half produced it. [Trivial] is
+   then unresolvable: there is no way to route it to the correct [ctx.model_id]. The
+   fix is not a cleverer routing scheme, it is to never need one: post [le] and [ge] as
+   two instances, each of which is asked to justify only against the one row it knows
+   about, so [Trivial] is resolvable by construction and nothing ever has to inspect an
+   explanation to work out which row it meant.
 
-   Fixpoint requires alternating the two directions, not one pass of each: for a
-   positive coefficient, [le] tightens the hi bound and [ge] tightens the lo bound (and
-   vice versa for a negative coefficient), and each direction's own slack computation
-   reads the *other* variables' current bounds -- so a tightening [le] makes to x_j can
-   let [ge] tighten some other x_i further, which can in turn let [le] tighten more.
-   [propagate] therefore loops both to a shared fixpoint (comparing a full store
-   snapshot each round, cheaply, since domains only ever shrink so the loop provably
-   terminates - I-D3) rather than assuming one round of each suffices. *)
+   The fixpoint reasoning the old fused loop used to justify itself is still correct,
+   it just belongs to the engine now, not here: [engine.ml] runs propagators to a
+   fixpoint and re-wakes a propagator when a variable it watches changes. Tightening
+   [le]'s bound on some x_i can enable [ge] to tighten a bound on some x_j (their slack
+   computations read each other's current bounds -- [le] tightens hi for a positive
+   coefficient and lo for a negative one, [ge] the opposite, and each's slack depends on
+   every term's *current* min), which is exactly "a watched variable changed, re-run the
+   propagators watching it" -- the engine's own job. Positing [le] and [ge] as two
+   ordinary instances therefore reaches the same fixpoint a hand-written alternation
+   would reach, without a second, ad hoc scheduler duplicating what the engine already
+   does. Do not re-add a loop here.
 
-type t = { le : Linear.t; ge : Linear.t }
-
-let name = "int_lin_eq"
-let consistency = Propagator.Bounds
+   Consistency level: BOUNDS, inherited entirely from [Linear] (see that module's
+   header). Justification shape: each of [le]/[ge] is exactly [int_lin_le]'s own
+   [Cut (Trivial, Linear (units, units_rhs), 1, 1)] -- docs/PROOF-FORMAT.md section 4's
+   `int_lin_eq` row, "two int_lin_le derivations", taken completely literally. *)
 
 let negate_terms terms = List.map (fun (a, x) -> (-a, x)) terms
 
+(* [make store terms rhs] : (le, ge), the two [Linear.t] instances the equality
+   [sum terms = rhs] decomposes into. Post both to the engine; pair [le] with the
+   `<=` id and [ge] with the `>=` id from [Encoding.add_equality] (whose own return
+   order is [(geq, leq)]). *)
 let make store terms rhs =
   let le = Linear.make store terms rhs in
   let ge = Linear.make store (negate_terms terms) (-rhs) in
-  { le; ge }
-
-(* Both halves range over the same variables (one is the other's negation), so either
-   suffices; [le] is arbitrary. *)
-let vars t = Linear.vars t.le
-
-(* Exposed so a caller can tell [le] and [ge] apart by structural identity (as
-   [Justify]'s memo already does for [Explanation.t], see lib/core/justify.ml's header)
-   when deciding which model constraint's ctx to justify a given pruning against. *)
-let le t = t.le
-let ge t = t.ge
-
-let propagate t store =
-  let rec loop () =
-    let snap = Store.snapshot store in
-    match Linear.propagate t.le store with
-    | Propagator.Conflict _ as c -> c
-    | Propagator.Fixpoint -> (
-        match Linear.propagate t.ge store with
-        | Propagator.Conflict _ as c -> c
-        | Propagator.Fixpoint ->
-            if Store.same_domains store snap then Propagator.Fixpoint else loop ())
-  in
-  loop ()
+  (le, ge)

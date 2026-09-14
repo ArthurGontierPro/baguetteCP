@@ -518,6 +518,29 @@ let test_multi_step_chain () =
    to it, whichever of [Lin_eq]'s two [Linear] children actually pushed the bound. That
    is what makes reusing it here safe rather than a coincidence worth re-deriving. *)
 
+(* D-0011: [Lin_eq.make]/[Int_eq.make] are no longer propagators -- they return a pair
+   of ordinary [Linear.t] instances ([le], [ge]) for a caller (the engine) to post
+   separately, each against its own model row. There is no library-level "run both to
+   a shared fixpoint" any more: that alternation is the engine's job now (see
+   lib/core/prop/lin_eq.ml's header for why). The soundness/checking/idempotence tests
+   below still need to know what the *pair*, run to fixpoint, computes -- so this test
+   file supplies that alternation itself, exactly the way a future engine will, but
+   only as test-local glue for driving the black-box checks below. It is deliberately
+   NOT reused by the veripb tests further down: those instead run [le]/[ge] as two
+   separately-justified instances, which is the property D-0011 exists to protect. *)
+let propagate_pair (le, ge) store =
+  let rec loop () =
+    let snap = Store.snapshot store in
+    match Linear.propagate le store with
+    | Propagator.Conflict _ as c -> c
+    | Propagator.Fixpoint -> (
+        match Linear.propagate ge store with
+        | Propagator.Conflict _ as c -> c
+        | Propagator.Fixpoint ->
+            if Store.same_domains store snap then Propagator.Fixpoint else loop ())
+  in
+  loop ()
+
 (* Generic soundness harness, parameterised over [propagate]/[vars]-shaped functions and
    a [satisfies] predicate, so int_lin_eq / int_le / int_lt / int_eq do not each need a
    hand-copied version of [check_soundness_case] above. Only ever asserts I-P1 (never
@@ -550,7 +573,7 @@ let test_lin_eq_soundness () =
   let case name coeffs rhs ranges =
     check_generic_soundness name
       ~make:(fun store -> Lin_eq.make store (List.mapi (fun i a -> (a, var i)) coeffs) rhs)
-      ~propagate:Lin_eq.propagate ~n:(List.length coeffs) ~ranges
+      ~propagate:propagate_pair ~n:(List.length coeffs) ~ranges
       ~satisfies:(fun a -> List.fold_left2 (fun acc c v -> acc + (c * v)) 0 coeffs a = rhs)
   in
   case "int_lin_eq: 2 vars, positive coeffs" [ 1; 1 ] 2 [ (-3, 3); (-3, 3) ];
@@ -582,7 +605,7 @@ let test_int_eq_soundness () =
   let case name ranges =
     check_generic_soundness name
       ~make:(fun store -> Int_eq.make store (var 0) (var 1))
-      ~propagate:Int_eq.propagate ~n:2 ~ranges
+      ~propagate:propagate_pair ~n:2 ~ranges
       ~satisfies:(fun a -> match a with [ x; y ] -> x = y | _ -> false)
   in
   case "int_eq: overlapping ranges" [ (-3, 3); (-1, 5) ];
@@ -602,7 +625,7 @@ let test_checking () =
     List.iteri
       (fun i v -> ignore (Store.fix store (var i) v Explanation.trivial))
       fix_values;
-    match Lin_eq.propagate prop store with
+    match propagate_pair prop store with
     | Propagator.Conflict _ -> check label expect_conflict
     | Propagator.Fixpoint -> check label (not expect_conflict)
   in
@@ -638,11 +661,11 @@ let test_checking () =
     "I-P3 int_lt: x=2,y=2 (x<y violated) is a conflict";
   run_le
     (fun store -> Int_eq.make store (var 0) (var 1))
-    Int_eq.propagate [ ("x", 0, 5); ("y", 0, 5) ] [ 3; 3 ] false
+    propagate_pair [ ("x", 0, 5); ("y", 0, 5) ] [ 3; 3 ] false
     "I-P3 int_eq: x=3,y=3 is not a conflict";
   run_le
     (fun store -> Int_eq.make store (var 0) (var 1))
-    Int_eq.propagate [ ("x", 0, 5); ("y", 0, 5) ] [ 3; 4 ] true
+    propagate_pair [ ("x", 0, 5); ("y", 0, 5) ] [ 3; 4 ] true
     "I-P3 int_eq: x=3,y=4 is a conflict"
 
 (* ------------------------------------------------------- idempotence at the interface *)
@@ -667,7 +690,7 @@ let test_new_idempotence () =
   in
   run_twice "int_lin_eq"
     (fun store -> Lin_eq.make store [ (2, var 0); (-1, var 1); (3, var 2) ] 4)
-    Lin_eq.propagate
+    propagate_pair
     [ ("x", -3, 3); ("y", -3, 3); ("z", -3, 3) ];
   run_twice "int_le"
     (fun store -> Int_le.make store (var 0) (var 1))
@@ -677,7 +700,7 @@ let test_new_idempotence () =
     Int_lt.propagate [ ("x", -3, 3); ("y", -3, 3) ];
   run_twice "int_eq"
     (fun store -> Int_eq.make store (var 0) (var 1))
-    Int_eq.propagate [ ("x", -5, 5); ("y", -2, 8) ]
+    propagate_pair [ ("x", -5, 5); ("y", -2, 8) ]
 
 (* ------------------------------------------------- explanation shape, per pruning *)
 
@@ -713,7 +736,7 @@ let test_lin_eq_entailment () =
   let store = mk_store bounds in
   let prop = Lin_eq.make store terms 4 in
   let before = Store.trail_length store in
-  (match Lin_eq.propagate prop store with
+  (match propagate_pair prop store with
   | Propagator.Conflict _ -> check "int_lin_eq entailment: expected Fixpoint" false
   | Propagator.Fixpoint -> check_all_entries_shape "int_lin_eq entailment" store bounds
                               terms before)
@@ -746,7 +769,7 @@ let test_int_eq_entailment () =
   ignore (Store.set_hi store (var 1) 1 Explanation.trivial);
   let prop = Int_eq.make store (var 0) (var 1) in
   let before = Store.trail_length store in
-  match Int_eq.propagate prop store with
+  match propagate_pair prop store with
   | Propagator.Conflict _ -> check "int_eq entailment: expected Fixpoint" false
   | Propagator.Fixpoint ->
       check_all_entries_shape "int_eq entailment" store bounds terms before
@@ -838,18 +861,21 @@ let build_int_lin_eq_multi dir =
   let store =
     Store.create ~names:[| "x1"; "x2" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
   in
-  let t = Lin_eq.make store [ (1, Var.of_int 0); (1, Var.of_int 1) ] 4 in
+  let le, ge = Lin_eq.make store [ (1, Var.of_int 0); (1, Var.of_int 1) ] 4 in
   (match Store.set_hi store (Var.of_int 1) 2 Explanation.trivial with
   | Store.Changed -> ()
   | _ -> failwith "build_int_lin_eq_multi: x2 <= 2 setup failed");
   (match Store.set_lo store (Var.of_int 1) 2 Explanation.trivial with
   | Store.Changed -> ()
   | _ -> failwith "build_int_lin_eq_multi: x2 >= 2 setup failed");
-  (match Linear.propagate (Lin_eq.le t) store with
+  (* D-0011: [le] and [ge] are two independently-justified instances, each posted (in
+     a real engine) against its own model row -- run them here exactly as the engine
+     would run two separately-watched propagators, one after the other. *)
+  (match Linear.propagate le store with
   | Propagator.Conflict _ -> failwith "build_int_lin_eq_multi: le pass conflicted"
   | Propagator.Fixpoint -> ());
   let before = Store.trail_length store in
-  (match Linear.propagate (Lin_eq.ge t) store with
+  (match Linear.propagate ge store with
   | Propagator.Conflict _ -> failwith "build_int_lin_eq_multi: ge pass conflicted"
   | Propagator.Fixpoint -> ());
   let after = Store.trail_length store in
@@ -993,12 +1019,15 @@ let build_int_eq_multi dir =
   let store =
     Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
   in
-  let t = Int_eq.make store (Var.of_int 0) (Var.of_int 1) in
+  let le, _ge = Int_eq.make store (Var.of_int 0) (Var.of_int 1) in
   (match Store.set_hi store (Var.of_int 1) 2 Explanation.trivial with
   | Store.Changed -> ()
   | _ -> failwith "build_int_eq_multi: y <= 2 setup failed");
   let before = Store.trail_length store in
-  (match Linear.propagate (Int_eq.le t) store with
+  (* D-0011: only [le] is run -- it alone is the instance whose model row (leq_id) we
+     are about to justify against; [ge] is irrelevant to this pruning and posting it
+     would just be extra queue churn a real engine schedule would also pay. *)
+  (match Linear.propagate le store with
   | Propagator.Conflict _ -> failwith "build_int_eq_multi: le pass conflicted"
   | Propagator.Fixpoint -> ());
   let after = Store.trail_length store in
@@ -1022,6 +1051,144 @@ let build_int_eq_multi dir =
   Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x", 2); ("y", 2) ]));
   close_out oc;
   (opb, pbp)
+
+(* ============================================================================
+   D-0011: pairing. [Lin_eq.make]/[Int_eq.make] hand back TWO instances precisely so
+   that each one justifies against exactly one model row, with nothing downstream ever
+   having to inspect an explanation to guess which row it meant. The two checks below
+   pin that property down directly, on [Lin_eq] (the general case; [Int_eq] is its
+   two-variable specialisation and shares the same [Trivial]-resolution mechanics, so
+   it does not need its own copy of this):
+
+   1. [le]'s explanation, justified against [le]'s own row (the `<=` id from
+      [Encoding.add_equality]), must verify -- this is just the ordinary case,
+      asserted here to have a controlled baseline for (2).
+   2. The SAME explanation, justified against [ge]'s row (the `>=` id) instead -- the
+      pairing D-0011 exists to rule out -- is checked against veripb to see whether the
+      checker itself catches the mismatch. *)
+
+(* Shared setup: x1 + x2 = 4, x1/x2 declared [0,5], x2 established >= 2 by a genuine
+   model constraint (one fact; the encoding's own consistency chain supplies
+   "x2 >= 1"). Running [le] (the `<=` half) pushes hi(x1) to 2, citing x2's two-literal
+   lower chain -- more than the one-step case D-0010 shows a suite can miss. Returns
+   both ids from [Encoding.add_equality] so a caller can pick the right one, or -- for
+   test (2) above -- deliberately the wrong one. *)
+let setup_lin_eq_pairing dir tag =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x1" ~lo:0 ~hi:5;
+  Encoding.declare_int e "x2" ~lo:0 ~hi:5;
+  let c_bound = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "x2" 2) ] 1) in
+  ignore c_bound;
+  let opb_terms, const = Encoding.linear_terms_int_lin_le e [ (1, "x1"); (1, "x2") ] in
+  let geq_id, leq_id = Encoding.add_equality e opb_terms (4 - const) in
+  let opb = Filename.concat dir (tag ^ ".opb") in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "x1 + x2 = 4; x2 >= 2 (established)" ] e oc;
+  close_out oc;
+  let store =
+    Store.create ~names:[| "x1"; "x2" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
+  in
+  let le, _ge = Lin_eq.make store [ (1, Var.of_int 0); (1, Var.of_int 1) ] 4 in
+  (match Store.set_lo store (Var.of_int 1) 2 Explanation.trivial with
+  | Store.Changed -> ()
+  | _ -> failwith "setup_lin_eq_pairing: x2 >= 2 setup failed");
+  let before = Store.trail_length store in
+  (match Linear.propagate le store with
+  | Propagator.Conflict _ -> failwith "setup_lin_eq_pairing: le pass conflicted"
+  | Propagator.Fixpoint -> ());
+  let after = Store.trail_length store in
+  let entries = List.filteri (fun i _ -> i < after - before) (Store.trail_entries store) in
+  let entry =
+    match
+      List.find_opt (fun (en : Store.entry) -> Var.equal en.var (Var.of_int 0)) entries
+    with
+    | Some en -> en
+    | None -> failwith "setup_lin_eq_pairing: x1's bound was never pushed by le"
+  in
+  let expl = Explanation.force (Store.explanation store entry) in
+  (e, leq_id, geq_id, opb, expl, linear_child_of expl)
+
+(* (1): [le]'s explanation against [le]'s own row (leq_id). The correct pairing. *)
+let build_lin_eq_pairing_ok dir =
+  let e, leq_id, _geq_id, opb, expl, linear_child =
+    setup_lin_eq_pairing dir "linteq_pair_ok"
+  in
+  let pbp = Filename.concat dir "linteq_pair_ok.pbp" in
+  let oc = open_out pbp in
+  let w = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof e w;
+  let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> leq_id) in
+  let id_linear = Justify.emit ctx linear_child in
+  let id_cut = Justify.emit ctx expl in
+  Writer.delete_many w [ id_linear; id_cut ];
+  Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x1", 2); ("x2", 2) ]));
+  close_out oc;
+  (opb, pbp)
+
+(* (2): the SAME [le] explanation, cited against [ge]'s row (geq_id) instead -- the
+   mismatch D-0011 says must never happen, deliberately constructed to see whether
+   veripb itself catches it. *)
+let build_lin_eq_pairing_wrong dir =
+  let e, _leq_id, geq_id, opb, expl, linear_child =
+    setup_lin_eq_pairing dir "linteq_pair_wrong"
+  in
+  let pbp = Filename.concat dir "linteq_pair_wrong.pbp" in
+  let oc = open_out pbp in
+  let w = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof e w;
+  let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> geq_id) in
+  let id_linear = Justify.emit ctx linear_child in
+  let id_cut = Justify.emit ctx expl in
+  Writer.delete_many w [ id_linear; id_cut ];
+  Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x1", 2); ("x2", 2) ]));
+  close_out oc;
+  (opb, pbp)
+
+(* Like [run_veripb], but returns the outcome instead of counting a rejection as a
+   test failure -- used only for (2) above, where a rejection is what we are hoping to
+   see and an accept is a finding to report rather than a bug in this test suite.
+   [None] means veripb was not found (the earlier [run_veripb] call already reports
+   that as a failure once; this probe just avoids reporting it a second time). *)
+let veripb_accepts ~build =
+  match veripb_path () with
+  | None -> None
+  | Some veripb ->
+      let dir = Filename.temp_file "baguette_prop_veripb_probe" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let opb, pbp = build dir in
+      let log = Filename.concat dir "log" in
+      let rc =
+        Sys.command
+          (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
+             (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
+      in
+      List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp; log ];
+      (try Sys.rmdir dir with _ -> ());
+      Some (rc = 0)
+
+let test_lin_eq_pairing () =
+  run_veripb
+    ~name:"D-0011 pairing: le's explanation against its OWN row verifies"
+    ~build:build_lin_eq_pairing_ok;
+  match veripb_accepts ~build:build_lin_eq_pairing_wrong with
+  | None -> ()
+  | Some false ->
+      check
+        "D-0011 pairing: le's explanation against the WRONG (ge) row is rejected by \
+         veripb"
+        true
+  | Some true ->
+      Printf.printf
+        "NOTE D-0011 pairing: veripb ACCEPTS le's explanation cited against the wrong \
+         (ge) row too. A `pol` combination of two valid ids is unconditionally sound \
+         cutting-planes reasoning regardless of which valid ids they are, and the \
+         derived id here is never used for anything (it is deleted right after, and \
+         `conclusion SAT` only checks the assignment against the *original* model, not \
+         against anything this derivation proved) -- so nothing in this proof's \
+         acceptance actually depends on Trivial resolving to the *right* row. The \
+         checker does not enforce the pairing D-0011 requires; only discipline in this \
+         codebase does. Recorded as a finding, not a test failure.\n"
 
 (* ------------------------------------------------------------------------ main *)
 
@@ -1050,6 +1217,7 @@ let () =
     ~build:build_int_lt_multi;
   run_veripb ~name:"int_eq: multi-step chain, checked end to end"
     ~build:build_int_eq_multi;
+  test_lin_eq_pairing ();
   if !failures > 0 then (
     Printf.printf "\n%d FAILURE(S)\n" !failures;
     exit 1)
