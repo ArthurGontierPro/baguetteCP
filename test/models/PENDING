@@ -7,8 +7,5 @@
 #
 # Delete a line the moment its model works. The file should be empty by M1-T11.
 
-trivial_sat     no search yet (M1-T10); no propagators yet (M1-T7..T9)
-trivial_unsat   no search yet (M1-T10); no propagators yet (M1-T7..T9)
-lin_sat         int_lin_le propagator is M1-T7
-lin_unsat       int_lin_le propagator is M1-T7
-ne_sat          int_ne needs the direct encoding, M1-T9
+ne_sat          int_ne is rejected, not dropped: it needs the direct encoding, M1-T9
+chain_sat       the answer is right and the PROOF is not: the search tries a = 0 first, that branch fails, and the nogood it logs is true but not RUP-reachable (D-0012/D-0017). M1-T13
