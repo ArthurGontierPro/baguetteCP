@@ -29,7 +29,7 @@ type cid = int
 module Pol = struct
   type t =
     | Id of cid
-    | Axiom of Lit.t  (* the literal axiom  l >= 0 *)
+    | Axiom of Lit.t (* the literal axiom  l >= 0 *)
     | Add of t * t
     | Mul of t * int
     | Div of t * int
@@ -39,12 +39,15 @@ module Pol = struct
   let id c = Id c
   let axiom l = Axiom l
   let add a b = Add (a, b)
+
   let mul a k =
     if k < 1 then invalid_arg "Pol.mul: multiplier must be >= 1"
     else if k = 1 then a
     else Mul (a, k)
+
   let div a k = if k < 1 then invalid_arg "Pol.div: divisor must be >= 1" else Div (a, k)
   let saturate a = Sat a
+
   (* VeriPB's weakening step ignores the sign of its argument, so it takes the
      variable, not a literal: [c x w] drops x's term and its coefficient from the
      degree. *)
@@ -63,14 +66,20 @@ module Pol = struct
   let rec write b = function
     | Id c -> Buffer.add_string b (string_of_int c)
     | Axiom l -> Buffer.add_string b (Lit.to_string l)
-    | Add (a, c) -> write b a; Buffer.add_char b ' '; write b c; Buffer.add_string b " +"
+    | Add (a, c) ->
+        write b a;
+        Buffer.add_char b ' ';
+        write b c;
+        Buffer.add_string b " +"
     | Mul (a, k) ->
         write b a;
         Buffer.add_string b (Printf.sprintf " %d *" k)
     | Div (a, k) ->
         write b a;
         Buffer.add_string b (Printf.sprintf " %d d" k)
-    | Sat a -> write b a; Buffer.add_string b " s"
+    | Sat a ->
+        write b a;
+        Buffer.add_string b " s"
     | Weaken (a, v) ->
         write b a;
         Buffer.add_string b (Printf.sprintf " %s w" (Lit.var_name v))
@@ -90,8 +99,8 @@ type entry = { origin : string; level : int }
 type t = {
   oc : out_channel;
   mutable next_id : cid;
-  live : (cid, entry) Hashtbl.t;  (* id -> what introduced it, for audit failures *)
-  model : (cid, unit) Hashtbl.t;  (* ids fixed by the .opb, not an obligation *)
+  live : (cid, entry) Hashtbl.t; (* id -> what introduced it, for audit failures *)
+  model : (cid, unit) Hashtbl.t; (* ids fixed by the .opb, not an obligation *)
   audit : bool;
   comments : bool;
   mutable level : int;
@@ -153,7 +162,8 @@ let header t ~n_model_constraints =
       Hashtbl.replace t.model i ()
     done
 
-let model_ids t = Hashtbl.fold (fun id () acc -> id :: acc) t.model [] |> List.sort compare
+let model_ids t =
+  Hashtbl.fold (fun id () acc -> id :: acc) t.model [] |> List.sort compare
 
 (* ------------------------- deletion levels ------------------------------- *)
 
@@ -170,16 +180,15 @@ let current_level t = t.level
 
 let wipe_level t l =
   line t "w %d" l;
-  if t.audit then begin
+  if t.audit then
     let doomed =
       Hashtbl.fold
         (fun id (e : entry) acc -> if e.level >= l then id :: acc else acc)
         t.live []
     in
     List.iter (Hashtbl.remove t.live) doomed
-  end
-  (* VeriPB's LevelStack does not move the current level on a wipe, so neither do we:
-     the mirror has to stay exact (invariant I-X3). *)
+(* VeriPB's LevelStack does not move the current level on a wipe, so neither do we:
+   the mirror has to stay exact (invariant I-X3). *)
 
 (* ------------------------------ rules ------------------------------------ *)
 
@@ -226,10 +235,9 @@ let red t ~origin ~witness c =
 (* ---------------------------- deletion ----------------------------------- *)
 
 let forget t id =
-  if t.audit then begin
+  if t.audit then (
     Hashtbl.remove t.live id;
-    Hashtbl.remove t.model id
-  end
+    Hashtbl.remove t.model id)
 
 let delete_many t ids =
   match ids with
@@ -295,33 +303,33 @@ let audit_report t =
   List.iter
     (fun id ->
       let (e : entry) = Hashtbl.find t.live id in
-      Buffer.add_string b (Printf.sprintf "  id %d from %s (level %d)\n" id e.origin e.level))
+      Buffer.add_string b
+        (Printf.sprintf "  id %d from %s (level %d)\n" id e.origin e.level))
     (live_ids t);
   Buffer.contents b
 
 let check_audit t =
-  if t.audit && Hashtbl.length t.live > 0 then begin
+  if t.audit && Hashtbl.length t.live > 0 then
     (* No printing here: the exception carries the report and has a printer, so a
        solver that lets it escape still shows it, and a test that expects it is not
        forced to swallow stderr. *)
     raise (Audit_failed (audit_report t))
-  end
 
 (* --------------------------- conclusion ---------------------------------- *)
 
 type verdict =
   | Sat of Lit.t list
-      (* The satisfying assignment. [] falls back on a previously logged [sol],
-         which the checker only accepts when deletion checking is on; passing the
-         assignment is the form that always works. *)
+    (* The satisfying assignment. [] falls back on a previously logged [sol],
+       which the checker only accepts when deletion checking is on; passing the
+       assignment is the form that always works. *)
   | Unsat of cid option
-      (* The id of the derived contradiction. [None] makes the checker search the
-         database for one -- accepted, but it is work we can spare it, and under the
-         audit an undeleted contradiction id would fail I-X2 anyway. *)
+    (* The id of the derived contradiction. [None] makes the checker search the
+       database for one -- accepted, but it is work we can spare it, and under the
+       audit an undeleted contradiction id would fail I-X2 anyway. *)
   | Bounds of {
       lower : int;
-      lower_id : cid option;  (* the constraint that establishes the lower bound *)
-      upper : int option;  (* None is INF: no solution was found *)
+      lower_id : cid option; (* the constraint that establishes the lower bound *)
+      upper : int option; (* None is INF: no solution was found *)
       upper_assignment : Lit.t list;
     }
 

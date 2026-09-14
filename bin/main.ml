@@ -12,8 +12,7 @@ type options = {
 }
 
 let usage () =
-  prerr_endline
-    "usage: baguette MODEL.fzn [--proof PREFIX] [--proof-comments] [--all]";
+  prerr_endline "usage: baguette MODEL.fzn [--proof PREFIX] [--proof-comments] [--all]";
   exit 2
 
 let parse_args argv =
@@ -48,17 +47,18 @@ let parse_args argv =
   match !model with
   | None -> usage ()
   | Some m ->
-      { model = m;
+      {
+        model = m;
         proof_prefix = !proof_prefix;
         proof_comments = !proof_comments;
-        all_solutions = !all_solutions }
+        all_solutions = !all_solutions;
+      }
 
 let () =
   let opts = parse_args Sys.argv in
-  if not (Sys.file_exists opts.model) then begin
+  if not (Sys.file_exists opts.model) then (
     Printf.eprintf "no such file: %s\n" opts.model;
-    exit 2
-  end;
+    exit 2);
   (* M1-T6 parses, M1-T7 onward propagates, M1-T10 searches. Until then, fail loudly:
      the spec forbids pretending a model was handled. *)
   Printf.eprintf

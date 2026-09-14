@@ -5,8 +5,8 @@
    whole point of a stable scheme. Do not introduce a second one. *)
 
 type pbvar =
-  | Ge of string * int  (* x_ge_v : x >= v, the order encoding *)
-  | Eq of string * int  (* x_eq_v : x = v,  the direct encoding *)
+  | Ge of string * int (* x_ge_v : x >= v, the order encoding *)
+  | Eq of string * int (* x_eq_v : x = v,  the direct encoding *)
 
 type t = { v : pbvar; positive : bool }
 
@@ -26,15 +26,13 @@ let var_name = function
   | Ge (x, v) -> Printf.sprintf "%s_ge_%s" (sanitize x) (int_suffix v)
   | Eq (x, v) -> Printf.sprintf "%s_eq_%s" (sanitize x) (int_suffix v)
 
-let to_string l =
-  if l.positive then var_name l.v else "~" ^ var_name l.v
+let to_string l = if l.positive then var_name l.v else "~" ^ var_name l.v
 
 (* x >= v, as a literal. *)
 let ge x v = pos (Ge (x, v))
 
 (* x <= v, which the order encoding expresses as ~(x >= v+1). *)
 let le x v = neg (Ge (x, v + 1))
-
 let eq x v = pos (Eq (x, v))
 let ne x v = neg (Eq (x, v))
 
@@ -74,5 +72,4 @@ let is_direct = function Ge _ -> false | Eq _ -> true
 (* True when [sanitize] had to rewrite the identifier, i.e. the .opb name and the
    FlatZinc name differ and the mapping must be dumped as a comment. *)
 let is_renamed x = String.equal (sanitize x) x = false
-
 let pp fmt l = Format.pp_print_string fmt (to_string l)

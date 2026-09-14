@@ -9,17 +9,11 @@
    returns [Fixpoint]. It must be sound, checking, and idempotent at the interface
    (invariants I-P1 to I-P3). *)
 
-type result =
-  | Fixpoint
-  | Conflict of Explanation.t
+type result = Fixpoint | Conflict of Explanation.t
 
 (* One of these, not a free-form string, so that a typo cannot silently claim a stronger
    consistency than the code delivers. docs/GLOSSARY.md defines each. *)
-type consistency =
-  | Bounds
-  | Domain
-  | Value
-  | Checking
+type consistency = Bounds | Domain | Value | Checking
 
 let consistency_to_string = function
   | Bounds -> "bounds"

@@ -16,16 +16,14 @@
 module Lit = Baguette_proof.Lit
 
 type t =
-  | Trivial
-      (* The model constraint itself justifies this; no derivation needed. *)
-  | Clause of Lit.t list
-      (* These literals together imply the pruning. Renders to rup. *)
+  | Trivial (* The model constraint itself justifies this; no derivation needed. *)
+  | Clause of Lit.t list (* These literals together imply the pruning. Renders to rup. *)
   | Linear of (int * Lit.t) list * int
-      (* sum a_i l_i >= b. Renders to pol over the model constraint. *)
+    (* sum a_i l_i >= b. Renders to pol over the model constraint. *)
   | Cut of t * t * int * int
-      (* Linear combination: c1 * e1 + c2 * e2, the cutting-planes workhorse. *)
+    (* Linear combination: c1 * e1 + c2 * e2, the cutting-planes workhorse. *)
   | Deferred of thunk
-      (* Computed only if actually needed. *)
+(* Computed only if actually needed. *)
 
 and thunk = { mutable forced : t option; mutable compute : unit -> t }
 
@@ -35,7 +33,6 @@ let trivial = Trivial
 let clause lits = Clause lits
 let linear terms rhs = Linear (terms, rhs)
 let cut e1 e2 c1 c2 = Cut (e1, e2, c1, c2)
-
 let deferred compute = Deferred { forced = None; compute }
 
 (* Force to a non-deferred head. Nested [Deferred] is allowed: a thunk may return another
@@ -57,26 +54,26 @@ let is_forced = function Deferred { forced = None; _ } -> false | _ -> true
 
 (* The forced value if it is already available, without running any thunk. Useful for
    debug printing, which must not have side effects on the memo table. *)
-let peek = function
-  | Deferred th -> th.forced
-  | e -> Some e
+let peek = function Deferred th -> th.forced | e -> Some e
 
 (* Literals mentioned by an explanation, after forcing, without duplicates. Conflict
    analysis walks this. *)
 let lits e =
   let seen = Hashtbl.create 16 in
   let acc = ref [] in
-  let add l = if not (Hashtbl.mem seen l) then begin
+  let add l =
+    if not (Hashtbl.mem seen l) then (
       Hashtbl.add seen l ();
-      acc := l :: !acc
-    end
+      acc := l :: !acc)
   in
   let rec go e =
     match force e with
     | Trivial -> ()
     | Clause ls -> List.iter add ls
     | Linear (terms, _) -> List.iter (fun (_, l) -> add l) terms
-    | Cut (a, b, _, _) -> go a; go b
+    | Cut (a, b, _, _) ->
+        go a;
+        go b
     | Deferred _ -> assert false (* force returns a non-deferred head *)
   in
   go e;
@@ -109,7 +106,6 @@ let rec to_string e =
    [expl] value itself, which the GC keeps alive independently. *)
 module Arena = struct
   type id = int
-
   type t = { mutable items : expl array; mutable len : int }
 
   (* Not a valid index; [get] on it raises. Lets containers hold a "no reason yet". *)
@@ -146,12 +142,11 @@ module Arena = struct
 
   let truncate a n =
     if n < 0 then invalid_arg "Explanation.Arena.truncate: negative length";
-    if n < a.len then begin
+    if n < a.len then (
       (* Drop the references so the explanations, and anything their thunks captured,
          become collectable. *)
       Array.fill a.items n (a.len - n) Trivial;
-      a.len <- n
-    end
+      a.len <- n)
 
   let clear a = truncate a 0
 end

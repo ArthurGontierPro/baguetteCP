@@ -20,8 +20,8 @@ type cid = Writer.cid
 (* The truth value of a bound, once the encoding's constants are taken into account.
    [x >= l] is not a variable: it is the constant true. *)
 type cond =
-  | Holds  (* vacuously true, no literal needed *)
-  | Fails  (* impossible, no literal exists *)
+  | Holds (* vacuously true, no literal needed *)
+  | Fails (* impossible, no literal exists *)
   | Cond of Lit.t
 
 exception Undeclared of string
@@ -61,7 +61,7 @@ type t = {
   ints : (string, ivar) Hashtbl.t;
   mutable decl_rev : string list;
   mutable rev_constraints : Opb.constr list;
-  mutable n : int;  (* ids 1..n have been assigned *)
+  mutable n : int; (* ids 1..n have been assigned *)
   mutable objective : Opb.objective option;
 }
 
@@ -74,9 +74,15 @@ let create () =
     objective = None;
   }
 
-let find t x = match Hashtbl.find_opt t.ints x with Some v -> v | None -> raise (Undeclared x)
+let find t x =
+  match Hashtbl.find_opt t.ints x with Some v -> v | None -> raise (Undeclared x)
+
 let is_declared t x = Hashtbl.mem t.ints x
-let domain t x = let v = find t x in (v.lo, v.hi)
+
+let domain t x =
+  let v = find t x in
+  (v.lo, v.hi)
+
 let vars t = List.rev t.decl_rev
 let n_constraints t = t.n
 let constraints t = List.rev t.rev_constraints
@@ -157,7 +163,10 @@ let eq t x value =
   else Cond (Lit.eq x value)
 
 let ne t x value =
-  match eq t x value with Holds -> Fails | Fails -> Holds | Cond l -> Cond (Lit.negate l)
+  match eq t x value with
+  | Holds -> Fails
+  | Fails -> Holds
+  | Cond l -> Cond (Lit.negate l)
 
 (* x_eq_v  <->  x_ge_v /\ ~x_ge_(v+1),  with the constant halves dropped.
 
@@ -174,11 +183,7 @@ let ensure_direct t w x =
       let size = v.hi - v.lo + 1 in
       if size > max_direct_values then raise (Direct_too_large (x, size));
       let d =
-        {
-          d_lo = Hashtbl.create 16;
-          d_hi = Hashtbl.create 16;
-          d_fwd = Hashtbl.create 16;
-        }
+        { d_lo = Hashtbl.create 16; d_hi = Hashtbl.create 16; d_fwd = Hashtbl.create 16 }
       in
       Writer.comment w "direct encoding of %s over [%d, %d]" x v.lo v.hi;
       let z value = Lit.Eq (x, value) in
@@ -186,17 +191,15 @@ let ensure_direct t w x =
         let zl = Lit.eq x value in
         let origin = Printf.sprintf "channel %s=%d" x value in
         (* ~x_eq_v \/ x_ge_v, only when x >= v is not the constant true *)
-        if value > v.lo then begin
-          let c = Opb.clause [ Lit.negate zl; Lit.ge x value ] in
-          let id = Writer.red w ~origin ~witness:[ (z value, Writer.Zero) ] c in
-          Hashtbl.replace d.d_lo value id
-        end;
+        (if value > v.lo then
+           let c = Opb.clause [ Lit.negate zl; Lit.ge x value ] in
+           let id = Writer.red w ~origin ~witness:[ (z value, Writer.Zero) ] c in
+           Hashtbl.replace d.d_lo value id);
         (* ~x_eq_v \/ ~x_ge_(v+1), only when x >= v+1 is not the constant false *)
-        if value < v.hi then begin
-          let c = Opb.clause [ Lit.negate zl; Lit.le x value ] in
-          let id = Writer.red w ~origin ~witness:[ (z value, Writer.Zero) ] c in
-          Hashtbl.replace d.d_hi value id
-        end;
+        (if value < v.hi then
+           let c = Opb.clause [ Lit.negate zl; Lit.le x value ] in
+           let id = Writer.red w ~origin ~witness:[ (z value, Writer.Zero) ] c in
+           Hashtbl.replace d.d_hi value id);
         (* x_eq_v \/ ~x_ge_v \/ x_ge_(v+1) *)
         let body =
           [ zl ]
@@ -242,7 +245,7 @@ let derive_at_most_one t w x a b =
   let chain =
     List.init (max 0 (b - a - 1)) (fun i -> Hashtbl.find v.consistency (a + 1 + i))
   in
-  let ids = (Hashtbl.find d.d_hi a :: Hashtbl.find d.d_lo b :: chain) in
+  let ids = Hashtbl.find d.d_hi a :: Hashtbl.find d.d_lo b :: chain in
   Writer.comment w "at-most-one for %s: %d and %d are exclusive" x a b;
   Writer.pol w
     ~origin:(Printf.sprintf "at-most-one %s %d %d" x a b)
@@ -255,15 +258,16 @@ let direct_ids t x =
   | Some d ->
       let acc = ref [] in
       let take h = Hashtbl.iter (fun _ id -> acc := id :: !acc) h in
-      take d.d_lo; take d.d_hi; take d.d_fwd;
+      take d.d_lo;
+      take d.d_hi;
+      take d.d_fwd;
       List.sort compare !acc
 
 let retire_direct t w x =
   let ids = direct_ids t x in
-  if ids <> [] then begin
+  if ids <> [] then (
     Writer.delete_many w ids;
-    (find t x).direct <- None
-  end
+    (find t x).direct <- None)
 
 let retire_all_direct t w = List.iter (fun x -> retire_direct t w x) (vars t)
 
@@ -278,7 +282,9 @@ let assignment_lits_of t x value =
   let v = find t x in
   if value < v.lo || value > v.hi then invalid_arg "Encoding.assignment_lits_of";
   let order =
-    List.init (max 0 (v.hi - v.lo)) (fun i ->
+    List.init
+      (max 0 (v.hi - v.lo))
+      (fun i ->
         let k = v.lo + 1 + i in
         if value >= k then Lit.ge x k else Lit.negate (Lit.ge x k))
   in
@@ -286,7 +292,9 @@ let assignment_lits_of t x value =
     match v.direct with
     | None -> []
     | Some _ ->
-        List.init (v.hi - v.lo + 1) (fun i ->
+        List.init
+          (v.hi - v.lo + 1)
+          (fun i ->
             let k = v.lo + i in
             if value = k then Lit.eq x k else Lit.ne x k)
   in

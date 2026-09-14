@@ -16,28 +16,26 @@ let failures = ref 0
 
 let check name cond =
   if cond then Printf.printf "ok   %s\n" name
-  else begin
+  else (
     incr failures;
-    Printf.printf "FAIL %s\n" name
-  end
+    Printf.printf "FAIL %s\n" name)
 
 let check_str name ~expected ~actual =
   if String.equal expected actual then Printf.printf "ok   %s\n" name
-  else begin
+  else (
     incr failures;
-    Printf.printf "FAIL %s\n       expected: %s\n       actual:   %s\n" name expected actual
-  end
+    Printf.printf "FAIL %s\n       expected: %s\n       actual:   %s\n" name expected
+      actual)
 
 let contains ~needle haystack =
   let n = String.length needle and h = String.length haystack in
   if n = 0 then true
-  else begin
+  else
     let found = ref false in
     for i = 0 to h - n do
       if (not !found) && String.equal (String.sub haystack i n) needle then found := true
     done;
     !found
-  end
 
 (* ------------------------------------------------------------------ locating models *)
 
@@ -93,21 +91,19 @@ let reject name ~src ~line ~needles =
   | Error (e : F.Error.t) ->
       let msg = F.Error.to_string e in
       let missing = List.filter (fun s -> not (contains ~needle:s msg)) needles in
-      if missing <> [] then begin
+      if missing <> [] then (
         incr failures;
         Printf.printf "FAIL %s: message does not mention %s\n       message: %s\n" name
           (String.concat ", " (List.map (Printf.sprintf "%S") missing))
-          msg
-      end
-      else if e.F.Error.pos.F.Pos.line <> line then begin
+          msg)
+      else if e.F.Error.pos.F.Pos.line <> line then (
         incr failures;
-        Printf.printf "FAIL %s: expected the error on line %d, got line %d\n       message: %s\n"
-          name line e.F.Error.pos.F.Pos.line msg
-      end
-      else if e.F.Error.pos.F.Pos.col <= 0 then begin
+        Printf.printf
+          "FAIL %s: expected the error on line %d, got line %d\n       message: %s\n" name
+          line e.F.Error.pos.F.Pos.line msg)
+      else if e.F.Error.pos.F.Pos.col <= 0 then (
         incr failures;
-        Printf.printf "FAIL %s: error carries no column\n       message: %s\n" name msg
-      end
+        Printf.printf "FAIL %s: error carries no column\n       message: %s\n" name msg)
       else Printf.printf "ok   %s (%s)\n" name (F.Pos.to_string e.F.Error.pos)
 
 (* ============================================================ the five shipped models *)
@@ -135,8 +131,7 @@ let test_lin_sat () =
       check "lin_sat: names" (names m = [ "x"; "y" ]);
       check "lin_sat: domains 0..5" (doms m = [ M.Drange (0, 5); M.Drange (0, 5) ]);
       check "lin_sat: constraints"
-        (kinds m
-        = [ M.Int_lin_le ([ (1, 0); (2, 1) ], 6); M.Int_lt (M.Var 1, M.Var 0) ]);
+        (kinds m = [ M.Int_lin_le ([ (1, 0); (2, 1) ], 6); M.Int_lt (M.Var 1, M.Var 0) ]);
       check "lin_sat: output x and y"
         (m.M.output = [ M.Out_var ("x", M.Var 0); M.Out_var ("y", M.Var 1) ]))
 
@@ -146,8 +141,7 @@ let test_lin_unsat () =
       check "lin_unsat: negative coefficients survive"
         (kinds m
         = [
-            M.Int_lin_le ([ (1, 0); (1, 1) ], 3);
-            M.Int_lin_le ([ (-1, 0); (-1, 1) ], -8);
+            M.Int_lin_le ([ (1, 0); (1, 1) ], 3); M.Int_lin_le ([ (-1, 0); (-1, 1) ], -8);
           ]))
 
 let test_ne_sat () =
@@ -190,10 +184,8 @@ let test_kitchen_sink () =
         (List.nth (doms m) 2 = M.Drange (0, 4) && List.nth (doms m) 3 = M.Drange (0, 4));
       check "sink: parameter array is substituted into the coefficients"
         (kinds m
-        = [
-            M.Int_lin_eq ([ (1, 2); (-2, 3); (3, 4) ], 4);
-            M.Int_ne (M.Var 1, M.Const 3);
-          ]);
+        = [ M.Int_lin_eq ([ (1, 2); (-2, 3); (3, 4) ], 4); M.Int_ne (M.Var 1, M.Const 3) ]
+        );
       check "sink: minimize objective" (m.M.objective = M.Minimize (M.Var 4));
       check "sink: search annotation honoured"
         (m.M.search = [ M.Int_search ([ 4 ], M.First_fail, M.Indomain_min) ]);
@@ -247,13 +239,10 @@ let test_constant_folding () =
 
 let test_rejections () =
   (* SPEC 2.1, normative: no defaulting to a machine-word range. *)
-  reject "reject: var int with no domain" ~line:1
-    ~src:"var int: x;\nsolve satisfy;\n"
-    ~needles:
-      [ "error"; "`x`"; "no domain"; "finite declared domain"; "<test>:1:1" ];
+  reject "reject: var int with no domain" ~line:1 ~src:"var int: x;\nsolve satisfy;\n"
+    ~needles:[ "error"; "`x`"; "no domain"; "finite declared domain"; "<test>:1:1" ];
   reject "reject: var int with no domain inside an array" ~line:1
-    ~src:"array [1..2] of var int: xs;\nsolve satisfy;\n"
-    ~needles:[ "no domain" ];
+    ~src:"array [1..2] of var int: xs;\nsolve satisfy;\n" ~needles:[ "no domain" ];
   (* SPEC 2.1, normative: name the builtin, never skip it. *)
   reject "reject: unknown builtin" ~line:2
     ~src:"var 1..3: x;\nconstraint frobnicate(x, 1);\nsolve satisfy;\n"
@@ -266,11 +255,7 @@ let test_rejections () =
        solve satisfy;\n"
     ~needles:[ "unsupported builtin"; "`all_different_int`"; "M4" ];
   reject "reject: reified builtin from M3" ~line:3
-    ~src:
-      "var 1..3: x;\n\
-       var bool: b;\n\
-       constraint int_eq_reif(x, 2, b);\n\
-       solve satisfy;\n"
+    ~src:"var 1..3: x;\nvar bool: b;\nconstraint int_eq_reif(x, 2, b);\nsolve satisfy;\n"
     ~needles:[ "`int_eq_reif`"; "M3" ];
   reject "reject: missing semicolon" ~line:2 ~src:"var 1..3: x\nsolve satisfy;\n"
     ~needles:[ "expected"; "`;`" ];
@@ -337,22 +322,19 @@ let () =
         "FAIL could not locate test/models/ from the current directory or the executable \
          path; the shipped-model assertions did not run"
   | Some d -> Printf.printf "(models from %s)\n" d);
-  if models_dir <> None then begin
+  if models_dir <> None then (
     test_trivial_sat ();
     test_trivial_unsat ();
     test_lin_sat ();
     test_lin_unsat ();
-    test_ne_sat ()
-  end;
+    test_ne_sat ());
   test_kitchen_sink ();
   test_misc_accepts ();
   test_constant_folding ();
   test_rejections ();
   check_str "error rendering carries file:line:col" ~expected:"<t>:2:12: error: boom"
-    ~actual:
-      (F.Error.to_string { F.Error.pos = F.Pos.make "<t>" 2 12; msg = "boom" });
-  if !failures > 0 then begin
+    ~actual:(F.Error.to_string { F.Error.pos = F.Pos.make "<t>" 2 12; msg = "boom" });
+  if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
-    exit 1
-  end
+    exit 1)
   else print_endline "\nflatzinc unit tests passed"

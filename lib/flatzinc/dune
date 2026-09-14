@@ -6,5 +6,6 @@
 ;
 ; No menhir stanza: enabling one requires `(using menhir X.Y)` in dune-project, which is
 ; owned elsewhere. lexer.ml/parser.ml are hand written; see the header of lexer.ml.
+
 (library
  (name baguette_flatzinc))

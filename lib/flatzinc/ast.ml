@@ -12,13 +12,13 @@
 type expr =
   | Int of int
   | Bool of bool
-  | String of string  (* only ever appears inside annotations *)
+  | String of string (* only ever appears inside annotations *)
   | Ident of string
-  | Access of string * expr  (* x[3] *)
+  | Access of string * expr (* x[3] *)
   | Array of expr list
-  | Set of int list  (* {1, 3, 5} — a set *literal*, used as an int domain *)
-  | Range of int * int  (* 1..5 — as a value, e.g. inside output_array([1..2]) *)
-  | Call of string * expr list  (* annotation application, e.g. int_search(...) *)
+  | Set of int list (* {1, 3, 5} — a set *literal*, used as an int domain *)
+  | Range of int * int (* 1..5 — as a value, e.g. inside output_array([1..2]) *)
+  | Call of string * expr list (* annotation application, e.g. int_search(...) *)
 
 (* Annotations are just expressions: [::output_var] is [Ident "output_var"] and
    [::output_array([1..2])] is [Call ("output_array", [Array [Range (1, 2)]])]. *)
@@ -26,18 +26,15 @@ type annot = expr
 
 type index_set =
   | Ix_range of int * int
-  | Ix_int  (* array[int] of ... — length comes from the initialiser *)
+  | Ix_int (* array[int] of ... — length comes from the initialiser *)
 
 type base_type =
   | Tbool
-  | Tint  (* `int` with no domain: legal for a parameter, rejected for a var *)
+  | Tint (* `int` with no domain: legal for a parameter, rejected for a var *)
   | Trange of int * int
   | Tset of int list
 
-type ti =
-  | Par of base_type
-  | Var of base_type
-  | Arr of index_set * ti
+type ti = Par of base_type | Var of base_type | Arr of index_set * ti
 
 type decl = {
   d_name : string;
@@ -54,10 +51,7 @@ type constraint_item = {
   c_pos : Pos.t;
 }
 
-type solve_kind =
-  | Satisfy
-  | Minimize of expr
-  | Maximize of expr
+type solve_kind = Satisfy | Minimize of expr | Maximize of expr
 
 type model = {
   decls : decl list;

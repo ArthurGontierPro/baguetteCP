@@ -98,8 +98,7 @@ let rec operand env pos (e : Ast.expr) : Model.operand =
   | Ast.Set _ -> Error.failf pos "a set literal is used where a single value is expected"
   | Ast.Range _ -> Error.failf pos "a range is used where a single value is expected"
   | Ast.String _ -> Error.failf pos "a string is used where a single value is expected"
-  | Ast.Call (f, _) ->
-      Error.failf pos "`%s(...)` is an annotation, not a value" f
+  | Ast.Call (f, _) -> Error.failf pos "`%s(...)` is an annotation, not a value" f
 
 and const_of env pos what e =
   match operand env pos e with
@@ -118,8 +117,7 @@ let operands env pos (e : Ast.expr) : Model.operand list =
   | Ast.Ident s when Hashtbl.mem env.scalars s ->
       Error.failf pos "`%s` is not an array, but an array is expected here" s
   | Ast.Ident s -> Error.failf pos "undeclared identifier `%s`" s
-  | _ ->
-      Error.failf pos "expected an array, found `%s`" (Ast.string_of_expr e)
+  | _ -> Error.failf pos "expected an array, found `%s`" (Ast.string_of_expr e)
 
 let as_const pos ~builtin ~what (op : Model.operand) =
   match op with
@@ -148,7 +146,8 @@ let domain_of_base pos name (bt : Ast.base_type) =
 let check_par_domain pos name (bt : Ast.base_type) n =
   match bt with
   | Ast.Trange (l, u) when n < l || n > u ->
-      Error.failf pos "parameter `%s` = %d is outside its declared domain %d..%d" name n l u
+      Error.failf pos "parameter `%s` = %d is outside its declared domain %d..%d" name n l
+        u
   | Ast.Tset ns when ns <> [] && not (List.mem n ns) ->
       Error.failf pos "parameter `%s` = %d is outside its declared domain {%s}" name n
         (String.concat "," (List.map string_of_int ns))
@@ -165,8 +164,7 @@ let dims_of_output_annot pos (args : Ast.expr list) default =
         (function
           | Ast.Range (l, u) -> (l, u)
           | e ->
-              Error.failf pos
-                "`output_array` expects an array of ranges, found `%s`"
+              Error.failf pos "`output_array` expects an array of ranges, found `%s`"
                 (Ast.string_of_expr e))
         ranges
   | _ -> default
@@ -197,8 +195,8 @@ let add_par_scalar env (d : Ast.decl) bt =
   | Some e -> (
       match operand env pos e with
       | Model.Var _ ->
-          Error.failf pos "parameter `%s` is assigned a variable; parameters must be fixed"
-            name
+          Error.failf pos
+            "parameter `%s` is assigned a variable; parameters must be fixed" name
       | Model.Const n ->
           check_par_domain pos name bt n;
           bind_scalar env pos name (Model.Const n))
@@ -238,7 +236,9 @@ let add_par_array env (d : Ast.decl) ix bt =
               Error.failf pos
                 "array `%s` is declared over %d..%d (%d element(s)) but its initialiser \
                  has %d"
-                name l u (u - l + 1) len
+                name l u
+                (u - l + 1)
+                len
             else (l, u)
         | Ast.Ix_int -> (1, len)
       in
@@ -254,9 +254,11 @@ let add_var_array env (d : Ast.decl) ix bt =
         (match ix with
         | Ast.Ix_range (l, u) when u - l + 1 <> len ->
             Error.failf pos
-              "array `%s` is declared over %d..%d (%d element(s)) but its initialiser has \
-               %d"
-              name l u (u - l + 1) len
+              "array `%s` is declared over %d..%d (%d element(s)) but its initialiser \
+               has %d"
+              name l u
+              (u - l + 1)
+              len
         | _ -> ());
         Array.of_list ops
     | None -> (
@@ -279,9 +281,7 @@ let add_var_array env (d : Ast.decl) ix bt =
             a)
   in
   let lo, hi =
-    match ix with
-    | Ast.Ix_range (l, u) -> (l, u)
-    | Ast.Ix_int -> (1, Array.length elems)
+    match ix with Ast.Ix_range (l, u) -> (l, u) | Ast.Ix_int -> (1, Array.length elems)
   in
   bind_array env pos name [ (lo, hi) ] elems;
   record_array_output env pos d [ (lo, hi) ] elems
@@ -340,11 +340,12 @@ let build_constraint env (c : Ast.constraint_item) =
         let nc = List.length coeffs and nv = List.length vars in
         if nc <> nv then
           Error.failf pos
-            "builtin `%s`: the coefficient array has %d element(s) but the variable array \
-             has %d"
+            "builtin `%s`: the coefficient array has %d element(s) but the variable \
+             array has %d"
             id nc nv;
-        let rhs0 = as_const pos ~builtin:id ~what:"the right-hand side"
-            (operand env pos ra) in
+        let rhs0 =
+          as_const pos ~builtin:id ~what:"the right-hand side" (operand env pos ra)
+        in
         let terms, rhs =
           List.fold_left2
             (fun (ts, r) coeff op ->
@@ -367,7 +368,7 @@ let build_constraint env (c : Ast.constraint_item) =
     | "int_ne" -> cmp (fun a b -> Model.Int_ne (a, b))
     | other -> unsupported_builtin pos other
   in
-  { Model.k = k; Model.c_pos = pos }
+  { Model.k; Model.c_pos = pos }
 
 (* ----------------------------------------------------------- search annotations *)
 
@@ -433,9 +434,7 @@ let build (m : Ast.model) : Model.t =
     | Ast.Minimize e -> Model.Minimize (operand env m.Ast.solve_pos e)
     | Ast.Maximize e -> Model.Maximize (operand env m.Ast.solve_pos e)
   in
-  let search =
-    List.filter_map (search_of_annot env m.Ast.solve_pos) m.Ast.solve_annots
-  in
+  let search = List.filter_map (search_of_annot env m.Ast.solve_pos) m.Ast.solve_annots in
   {
     Model.vars = Array.of_list (List.rev env.vars_rev);
     constraints;

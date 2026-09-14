@@ -1,5 +1,6 @@
 ; One executable per area so that sessions working in parallel never contend on the
 ; same test file. Add a name here when you add a test module.
+
 (tests
  (names test_core test_proof test_flatzinc)
  (libraries baguette_core baguette_proof baguette_flatzinc))

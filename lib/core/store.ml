@@ -14,7 +14,6 @@
    (no trail entry survives whose reason has been dropped) and stops the arena growing
    without bound over a long search. *)
 type mark = { trail_mark : int; reason_mark : int }
-
 type entry = { var : Var.t; old : Domain.t; why : Explanation.Arena.id }
 
 type t = {
@@ -27,10 +26,7 @@ type t = {
   mutable n_levels : int;
 }
 
-type outcome =
-  | Unchanged
-  | Changed
-  | Conflict of Explanation.t
+type outcome = Unchanged | Changed | Conflict of Explanation.t
 
 let dummy_entry =
   { var = Var.of_int 0; old = Domain.singleton 0; why = Explanation.Arena.null }
@@ -60,20 +56,18 @@ let reasons t = t.reasons
 (* ------------------------------------------------------------- trail growth *)
 
 let push_entry t e =
-  if t.trail_len = Array.length t.trail then begin
+  if t.trail_len = Array.length t.trail then (
     let bigger = Array.make (2 * Array.length t.trail) dummy_entry in
     Array.blit t.trail 0 bigger 0 t.trail_len;
-    t.trail <- bigger
-  end;
+    t.trail <- bigger);
   t.trail.(t.trail_len) <- e;
   t.trail_len <- t.trail_len + 1
 
 let push_mark t m =
-  if t.n_levels = Array.length t.marks then begin
+  if t.n_levels = Array.length t.marks then (
     let bigger = Array.make (2 * Array.length t.marks) dummy_mark in
     Array.blit t.marks 0 bigger 0 t.n_levels;
-    t.marks <- bigger
-  end;
+    t.marks <- bigger);
   t.marks.(t.n_levels) <- m;
   t.n_levels <- t.n_levels + 1
 
@@ -137,7 +131,6 @@ let backtrack_to t target_level =
 (* ------------------------------------------------------------------ reading *)
 
 let all_fixed t = Array.for_all Domain.is_fixed t.domains
-
 let snapshot t = Array.copy t.domains
 
 let same_domains t snap =
@@ -158,7 +151,6 @@ let trail_entries t =
 (* The trail position at which each open level began, oldest level first. I-T2 says these
    are monotone; [check_invariants] asserts it. *)
 let level_marks t = List.init t.n_levels (fun i -> t.marks.(i).trail_mark)
-
 let explanation t e = Explanation.Arena.get t.reasons e.why
 
 (* Debug-mode check of the trail invariants. Cheap enough to call after a backtrack in
@@ -176,9 +168,7 @@ let check_invariants t =
     if not (Explanation.Arena.mem t.reasons t.trail.(i).why) then ok_reasons := false
   done;
   (* I-D1: no stored domain is empty. *)
-  let ok_domains =
-    Array.for_all (fun d -> Domain.lo d <= Domain.hi d) t.domains
-  in
+  let ok_domains = Array.for_all (fun d -> Domain.lo d <= Domain.hi d) t.domains in
   ok_marks && !ok_reasons && ok_domains
 
 let to_string t =

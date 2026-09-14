@@ -7,48 +7,33 @@
    lives on the core side of the boundary, not here. *)
 
 type domain =
-  | Dbool  (* a `var bool`: treated as 0/1 *)
-  | Drange of int * int  (* inclusive *)
-  | Dset of int list  (* sorted, duplicate-free, non-empty *)
+  | Dbool (* a `var bool`: treated as 0/1 *)
+  | Drange of int * int (* inclusive *)
+  | Dset of int list (* sorted, duplicate-free, non-empty *)
 
 type var = { v_name : string; v_dom : domain; v_pos : Pos.t }
 
 (* A constraint argument after name resolution: either a literal integer (a parameter,
    a bool, or an inline constant) or an index into [t.vars]. *)
-type operand =
-  | Const of int
-  | Var of int
+type operand = Const of int | Var of int
 
 (* Linear constraints are normalised: constant entries of the FlatZinc variable array are
    folded into the right-hand side, so [terms] only ever mentions real variables.
    A term list may repeat a variable index; propagators are free to merge. *)
 type cstr =
-  | Int_lin_le of (int * int) list * int  (* sum coeff*x_i <= rhs *)
-  | Int_lin_eq of (int * int) list * int  (* sum coeff*x_i  = rhs *)
-  | Int_lin_ne of (int * int) list * int  (* sum coeff*x_i <> rhs *)
-  | Int_le of operand * operand  (* a <= b *)
-  | Int_lt of operand * operand  (* a <  b *)
-  | Int_eq of operand * operand  (* a  = b *)
-  | Int_ne of operand * operand  (* a <> b *)
+  | Int_lin_le of (int * int) list * int (* sum coeff*x_i <= rhs *)
+  | Int_lin_eq of (int * int) list * int (* sum coeff*x_i  = rhs *)
+  | Int_lin_ne of (int * int) list * int (* sum coeff*x_i <> rhs *)
+  | Int_le of operand * operand (* a <= b *)
+  | Int_lt of operand * operand (* a <  b *)
+  | Int_eq of operand * operand (* a  = b *)
+  | Int_ne of operand * operand (* a <> b *)
 
 type constr = { k : cstr; c_pos : Pos.t }
-
-type var_choice =
-  | Input_order
-  | First_fail
-
-type val_choice =
-  | Indomain_min
-  | Indomain_max
-
-type search =
-  | Int_search of int list * var_choice * val_choice
-  | Seq of search list
-
-type objective =
-  | Satisfy
-  | Minimize of operand
-  | Maximize of operand
+type var_choice = Input_order | First_fail
+type val_choice = Indomain_min | Indomain_max
+type search = Int_search of int list * var_choice * val_choice | Seq of search list
+type objective = Satisfy | Minimize of operand | Maximize of operand
 
 (* What SPEC 2.2 has to print. Arrays keep their index ranges so the standard FlatZinc
    `array1d(1..2, [...])` output can be reproduced. *)
@@ -60,7 +45,7 @@ type t = {
   vars : var array;
   constraints : constr list;
   objective : objective;
-  search : search list;  (* [] means: use the default of SPEC 3.4 *)
+  search : search list; (* [] means: use the default of SPEC 3.4 *)
   output : output_item list;
 }
 
@@ -89,7 +74,9 @@ let string_of_operand t = function
 
 let string_of_terms t terms =
   String.concat " + "
-    (List.map (fun (c, i) -> Printf.sprintf "%d*%s" c (string_of_operand t (Var i))) terms)
+    (List.map
+       (fun (c, i) -> Printf.sprintf "%d*%s" c (string_of_operand t (Var i)))
+       terms)
 
 let string_of_cstr t = function
   | Int_lin_le (ts, r) -> Printf.sprintf "%s <= %d" (string_of_terms t ts) r
@@ -107,10 +94,13 @@ let string_of_cstr t = function
 let to_string t =
   let b = Buffer.create 256 in
   Array.iter
-    (fun v -> Buffer.add_string b (Printf.sprintf "var %s: %s\n" (string_of_domain v.v_dom) v.v_name))
+    (fun v ->
+      Buffer.add_string b
+        (Printf.sprintf "var %s: %s\n" (string_of_domain v.v_dom) v.v_name))
     t.vars;
   List.iter
-    (fun c -> Buffer.add_string b (Printf.sprintf "constraint %s\n" (string_of_cstr t c.k)))
+    (fun c ->
+      Buffer.add_string b (Printf.sprintf "constraint %s\n" (string_of_cstr t c.k)))
     t.constraints;
   Buffer.add_string b
     (match t.objective with

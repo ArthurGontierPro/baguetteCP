@@ -15,10 +15,9 @@ let failures = ref 0
 
 let check name cond =
   if cond then Printf.printf "ok   %s\n" name
-  else begin
+  else (
     incr failures;
-    Printf.printf "FAIL %s\n" name
-  end
+    Printf.printf "FAIL %s\n" name)
 
 let check_raises name f =
   match f () with
@@ -127,13 +126,12 @@ let test_domains () =
   let sub a b = List.for_all (fun v -> Domain.mem a v) (Domain.to_list b) in
   let base = List.fold_left shrink (Domain.make 0 8) [ 2; 5 ] in
   let steps =
-    [ Domain.set_lo base 1; Domain.set_hi base 7; Domain.remove base 3;
-      Domain.fix base 4 ]
+    [
+      Domain.set_lo base 1; Domain.set_hi base 7; Domain.remove base 3; Domain.fix base 4;
+    ]
   in
   check "I-D3: results are subsets"
-    (List.for_all
-       (function Domain.Changed d' -> sub base d' | _ -> true)
-       steps);
+    (List.for_all (function Domain.Changed d' -> sub base d' | _ -> true) steps);
 
   (* Equality is over the value sets, not the representations: the right-hand domain
      never allocated a bitset, the left-hand one did and then walked its bound past it. *)
@@ -148,8 +146,7 @@ let test_domains () =
   check_raises "domain: of_list of nothing is rejected" (fun () -> Domain.of_list []);
 
   check "domain: to_string of a range" (Domain.to_string (Domain.make 1 5) = "1..5");
-  check "domain: to_string of a fixed domain"
-    (Domain.to_string (Domain.singleton 7) = "7");
+  check "domain: to_string of a fixed domain" (Domain.to_string (Domain.singleton 7) = "7");
   check "domain: to_string shows holes"
     (Domain.to_string (changed (Domain.remove (Domain.make 1 5) 3)) = "1..5 \\ {3}");
 
@@ -164,8 +161,7 @@ let test_domains () =
 (* -------------------------------------------------------------------- store *)
 
 let sample_store () =
-  Store.create
-    ~names:[| "x"; "y"; "z" |]
+  Store.create ~names:[| "x"; "y"; "z" |]
     ~domains:[| Domain.make 0 10; Domain.make 0 10; Domain.make 0 10 |]
 
 let test_store () =
@@ -261,14 +257,11 @@ let test_store () =
         | _ -> false)
     | [] -> false);
   Store.backtrack s3;
-  check "I-T3: reasons are dropped with their level"
-    (Arena.length (Store.reasons s3) = 0);
+  check "I-T3: reasons are dropped with their level" (Arena.length (Store.reasons s3) = 0);
   check "I-T3: no orphan entries remain" (Store.check_invariants s3);
 
   check "store: all_fixed is false while anything is open" (not (Store.all_fixed s3));
-  let s4 =
-    Store.create ~names:[| "a" |] ~domains:[| Domain.make 2 2 |]
-  in
+  let s4 = Store.create ~names:[| "a" |] ~domains:[| Domain.make 2 2 |] in
   check "store: all_fixed is true when everything is pinned" (Store.all_fixed s4)
 
 (* ------------------------------------------------------------- explanations *)
@@ -340,19 +333,18 @@ let test_explanations () =
           (Explanation.cut (Explanation.clause [ l ])
              (Explanation.clause [ Lit.ge "y" 1 ])
              1 1))
-     = 2);
+    = 2);
   check "explanation: lits of a cut does not double-count"
     (List.length (Explanation.lits combined) = 1);
   check "explanation: lits reaches through a Deferred"
     (List.map Lit.to_string
        (Explanation.lits (Explanation.deferred (fun () -> Explanation.clause [ l ])))
-     = [ "x_ge_3" ]);
+    = [ "x_ge_3" ]);
   check "explanation: lits of a linear reason are its terms"
     (List.map Lit.to_string
        (Explanation.lits (Explanation.linear [ (2, l); (3, Lit.ge "y" 1) ] 4))
-     = [ "x_ge_3"; "y_ge_1" ]);
-  check "explanation: trivial mentions nothing"
-    (Explanation.lits Explanation.trivial = []);
+    = [ "x_ge_3"; "y_ge_1" ]);
+  check "explanation: trivial mentions nothing" (Explanation.lits Explanation.trivial = []);
 
   check "explanation: to_string of a linear reason"
     (Explanation.to_string (Explanation.linear [ (2, l) ] 4) = "linear(+2 x_ge_3 >= 4)");
@@ -388,15 +380,13 @@ let test_explanations () =
   let _ = Arena.force_at b id in
   let _ = Arena.force_at b id in
   check "arena: force_at memoises into the arena"
-    (!n = 1
-    && match Arena.get b id with Explanation.Clause [ _ ] -> true | _ -> false)
+    (!n = 1 && match Arena.get b id with Explanation.Clause [ _ ] -> true | _ -> false)
 
 let () =
   test_domains ();
   test_store ();
   test_explanations ();
-  if !failures > 0 then begin
+  if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
-    exit 1
-  end
+    exit 1)
   else print_endline "\ncore unit tests passed"

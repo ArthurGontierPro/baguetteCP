@@ -12,7 +12,6 @@ exception Error of t
 (* [failf pos "..."] raises; its result type is polymorphic so it can be used in any
    position. *)
 let failf pos fmt = Printf.ksprintf (fun msg -> raise (Error { pos; msg })) fmt
-
 let to_string { pos; msg } = Printf.sprintf "%s: error: %s" (Pos.to_string pos) msg
 
 (* Note: this module's [Error] exception shadows the [Error] constructor of [result],

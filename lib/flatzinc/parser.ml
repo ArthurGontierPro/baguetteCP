@@ -25,7 +25,8 @@ let advance st = if st.i < Array.length st.toks - 1 then st.i <- st.i + 1
 
 let expect st tok what =
   if cur st = tok then advance st
-  else Error.failf (pos st) "expected %s but found %s" what (Lexer.string_of_token (cur st))
+  else
+    Error.failf (pos st) "expected %s but found %s" what (Lexer.string_of_token (cur st))
 
 let expect_ident st what =
   match cur st with
@@ -37,23 +38,24 @@ let expect_ident st what =
 (* Integer literals may carry an explicit sign: `-8` in a coefficient array, `-1..3` in
    a domain. *)
 let parse_int st =
-  let bad t = Error.failf (pos st) "expected an integer literal but found %s"
+  let bad t =
+    Error.failf (pos st) "expected an integer literal but found %s"
       (Lexer.string_of_token t)
   in
   match cur st with
   | Lexer.INT n ->
       advance st;
       n
-  | Lexer.MINUS ->
+  | Lexer.MINUS -> (
       advance st;
-      (match cur st with
+      match cur st with
       | Lexer.INT n ->
           advance st;
           -n
       | t -> bad t)
-  | Lexer.PLUS ->
+  | Lexer.PLUS -> (
       advance st;
-      (match cur st with
+      match cur st with
       | Lexer.INT n ->
           advance st;
           n
@@ -63,13 +65,12 @@ let parse_int st =
 let rec parse_expr st =
   let p = pos st in
   let e = parse_primary st in
-  if cur st = Lexer.DOTDOT then begin
+  if cur st = Lexer.DOTDOT then (
     advance st;
     let e2 = parse_primary st in
     match (e, e2) with
     | Ast.Int a, Ast.Int b -> Ast.Range (a, b)
-    | _ -> Error.failf p "a range must have integer literal bounds"
-  end
+    | _ -> Error.failf p "a range must have integer literal bounds")
   else e
 
 and parse_primary st =
@@ -87,16 +88,14 @@ and parse_primary st =
       Ast.String s
   | Lexer.IDENT id ->
       advance st;
-      if cur st = Lexer.LPAR then begin
+      if cur st = Lexer.LPAR then (
         advance st;
-        Ast.Call (id, parse_seq st Lexer.RPAR "`)`")
-      end
-      else if cur st = Lexer.LBRACK then begin
+        Ast.Call (id, parse_seq st Lexer.RPAR "`)`"))
+      else if cur st = Lexer.LBRACK then (
         advance st;
         let ix = parse_expr st in
         expect st Lexer.RBRACK "`]` closing an array access";
-        Ast.Access (id, ix)
-      end
+        Ast.Access (id, ix))
       else Ast.Ident id
   | Lexer.LBRACK ->
       advance st;
@@ -109,7 +108,8 @@ and parse_primary st =
            (function
              | Ast.Int n -> n
              | e ->
-                 Error.failf p "a set literal may only contain integer literals, found `%s`"
+                 Error.failf p
+                   "a set literal may only contain integer literals, found `%s`"
                    (Ast.string_of_expr e))
            es)
   | t -> Error.failf p "expected an expression but found %s" (Lexer.string_of_token t)
@@ -117,36 +117,30 @@ and parse_primary st =
 (* A comma-separated list terminated by [close], which is consumed. Tolerates a
    trailing comma. *)
 and parse_seq st close close_name =
-  if cur st = close then begin
+  if cur st = close then (
     advance st;
-    []
-  end
-  else begin
+    [])
+  else
     let rec loop acc =
       let e = parse_expr st in
       let acc = e :: acc in
-      if cur st = Lexer.COMMA then begin
+      if cur st = Lexer.COMMA then (
         advance st;
-        if cur st = close then begin
+        if cur st = close then (
           advance st;
-          List.rev acc
-        end
-        else loop acc
-      end
-      else begin
+          List.rev acc)
+        else loop acc)
+      else (
         expect st close close_name;
-        List.rev acc
-      end
+        List.rev acc)
     in
     loop []
-  end
 
 let parse_annots st =
   let rec loop acc =
-    if cur st = Lexer.DCOLON then begin
+    if cur st = Lexer.DCOLON then (
       advance st;
-      loop (parse_primary st :: acc)
-    end
+      loop (parse_primary st :: acc))
     else List.rev acc
   in
   loop []
@@ -193,7 +187,8 @@ and parse_base_type st =
            (function
              | Ast.Int n -> n
              | e ->
-                 Error.failf p "a domain set may only contain integer literals, found `%s`"
+                 Error.failf p
+                   "a domain set may only contain integer literals, found `%s`"
                    (Ast.string_of_expr e))
            es)
   | Lexer.SET ->
@@ -244,10 +239,9 @@ let parse_model st =
         let p = pos st in
         let id = expect_ident st "a builtin name after `constraint`" in
         let args =
-          if cur st = Lexer.LPAR then begin
+          if cur st = Lexer.LPAR then (
             advance st;
-            parse_seq st Lexer.RPAR "`)`"
-          end
+            parse_seq st Lexer.RPAR "`)`")
           else
             Error.failf (pos st)
               "expected `(` after the builtin name `%s` in a constraint item" id
@@ -288,10 +282,9 @@ let parse_model st =
         let name = expect_ident st "a parameter or variable name" in
         let annots = parse_annots st in
         let value =
-          if cur st = Lexer.EQ then begin
+          if cur st = Lexer.EQ then (
             advance st;
-            Some (parse_expr st)
-          end
+            Some (parse_expr st))
           else None
         in
         expect st Lexer.SEMI "`;` at the end of the declaration";

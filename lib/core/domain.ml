@@ -22,13 +22,8 @@
    of the domain is inside [base, base + span). Bits outside the current bounds may be
    stale; [mem] tests the bounds first, so they are harmless. *)
 type holes = { base : int; span : int; bits : Bytes.t }
-
 type t = { lo : int; hi : int; holes : holes option }
-
-type result =
-  | Unchanged
-  | Changed of t
-  | Failed
+type result = Unchanged | Changed of t | Failed
 
 exception Bad_domain of string
 
@@ -57,21 +52,19 @@ let set_bit bits i =
 (* Number of set bits in the inclusive bit range [i0, i1]. *)
 let count_bits bits i0 i1 =
   if i1 < i0 then 0
-  else begin
+  else
     let b0 = i0 lsr 3 and b1 = i1 lsr 3 in
-    let head_mask = 0xff lsl (i0 land 7) land 0xff in
+    let head_mask = (0xff lsl (i0 land 7)) land 0xff in
     let tail_mask = 0xff lsr (7 - (i1 land 7)) in
     if b0 = b1 then
       popcount8.(Char.code (Bytes.get bits b0) land head_mask land tail_mask)
-    else begin
+    else
       let total = ref popcount8.(Char.code (Bytes.get bits b0) land head_mask) in
       for k = b0 + 1 to b1 - 1 do
         total := !total + popcount8.(Char.code (Bytes.get bits k))
       done;
       total := !total + popcount8.(Char.code (Bytes.get bits b1) land tail_mask);
       !total
-    end
-  end
 
 (* ------------------------------------------------------------- construction *)
 
@@ -106,8 +99,7 @@ let size d =
       let i1 = min (h.span - 1) (d.hi - h.base) in
       width - count_bits h.bits i0 i1
 
-let has_holes d =
-  match d.holes with None -> false | Some _ -> size d < d.hi - d.lo + 1
+let has_holes d = match d.holes with None -> false | Some _ -> size d < d.hi - d.lo + 1
 
 let iter f d =
   for v = d.lo to d.hi do
@@ -153,14 +145,17 @@ let equal a b =
    would cost a copy. *)
 let settle d =
   let l = ref d.lo in
-  while !l <= d.hi && is_hole d !l do incr l done;
+  while !l <= d.hi && is_hole d !l do
+    incr l
+  done;
   if !l > d.hi then Failed
-  else begin
+  else
     (* terminates at or above [!l], which is known not to be a hole *)
     let h = ref d.hi in
-    while is_hole d !h do decr h done;
+    while is_hole d !h do
+      decr h
+    done;
     Changed { d with lo = !l; hi = !h }
-  end
 
 (* Copy-on-write hole insertion. [None] means "declined" - see [max_hole_span]. *)
 let with_hole d v =
@@ -168,19 +163,17 @@ let with_hole d v =
   | Some h ->
       let i = v - h.base in
       if i < 0 || i >= h.span then None
-      else begin
+      else
         let bits = Bytes.copy h.bits in
         set_bit bits i;
         Some { d with holes = Some { h with bits } }
-      end
   | None ->
       let span = d.hi - d.lo + 1 in
       if span > max_hole_span then None
-      else begin
+      else
         let bits = Bytes.make ((span + 7) / 8) '\000' in
         set_bit bits (v - d.lo);
         Some { d with holes = Some { base = d.lo; span; bits } }
-      end
 
 let set_lo d v =
   if v <= d.lo then Unchanged else if v > d.hi then Failed else settle { d with lo = v }

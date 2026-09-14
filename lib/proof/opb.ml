@@ -32,13 +32,10 @@ let le terms rhs = ge (List.map (fun (a, l) -> (-a, l)) terms) (-rhs)
    the same reason. *)
 let checker_count c = match c.rel with Ge -> 1 | Eq -> 2
 let n_checker_constraints cs = List.fold_left (fun n c -> n + checker_count c) 0 cs
-
 let terms c = c.terms
 let relation c = c.rel
 let rhs c = c.rhs
-
 let lits c = List.map snd c.terms
-
 let map_terms f c = { c with terms = List.map f c.terms }
 
 (* Merge repeated variables and drop zero coefficients.
@@ -67,11 +64,10 @@ let normalise c =
            let a, v = Hashtbl.find coef key in
            if a = 0 then None
            else if a > 0 then Some (a, Lit.pos v)
-           else begin
+           else (
              (* a * v = a + (-a) * ~v  with a < 0: the constant a moves right. *)
              rhs := !rhs - a;
-             Some (-a, Lit.neg v)
-           end)
+             Some (-a, Lit.neg v)))
   in
   { terms; rel = c.rel; rhs = !rhs }
 
@@ -96,8 +92,7 @@ let objective_to_string o =
   List.iter
     (fun (a, l) -> Buffer.add_string b (Printf.sprintf "%+d %s " a (Lit.to_string l)))
     o.obj_terms;
-  if o.obj_constant <> 0 then
-    Buffer.add_string b (Printf.sprintf "%+d " o.obj_constant);
+  if o.obj_constant <> 0 then Buffer.add_string b (Printf.sprintf "%+d " o.obj_constant);
   Buffer.add_string b ";";
   Buffer.contents b
 
@@ -109,10 +104,9 @@ let var_names constraints =
       List.iter
         (fun (_, (l : Lit.t)) ->
           let n = Lit.var_name l.Lit.v in
-          if not (Hashtbl.mem seen n) then begin
+          if not (Hashtbl.mem seen n) then (
             Hashtbl.replace seen n ();
-            order := n :: !order
-          end)
+            order := n :: !order))
         c.terms)
     constraints;
   List.rev !order
@@ -128,10 +122,9 @@ let rename_comments constraints =
       List.iter
         (fun (_, (l : Lit.t)) ->
           let x = Lit.owner l.Lit.v in
-          if Lit.is_renamed x && not (Hashtbl.mem seen x) then begin
+          if Lit.is_renamed x && not (Hashtbl.mem seen x) then (
             Hashtbl.replace seen x ();
-            acc := Printf.sprintf "name %s -> %s" x (Lit.sanitize x) :: !acc
-          end)
+            acc := Printf.sprintf "name %s -> %s" x (Lit.sanitize x) :: !acc))
         c.terms)
     constraints;
   List.rev !acc

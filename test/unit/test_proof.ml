@@ -18,17 +18,15 @@ let failures = ref 0
 
 let check name cond =
   if cond then Printf.printf "ok   %s\n" name
-  else begin
+  else (
     incr failures;
-    Printf.printf "FAIL %s\n" name
-  end
+    Printf.printf "FAIL %s\n" name)
 
 let check_eq name ~expected ~got =
   if String.equal expected got then Printf.printf "ok   %s\n" name
-  else begin
+  else (
     incr failures;
-    Printf.printf "FAIL %s\n       expected: %s\n            got: %s\n" name expected got
-  end
+    Printf.printf "FAIL %s\n       expected: %s\n            got: %s\n" name expected got)
 
 let raises name f =
   match f () with
@@ -59,14 +57,15 @@ let test_lits () =
   check "lit: plain identifiers are not renamed" (not (Lit.is_renamed "x"));
   (* A var bool is the order encoding on [0,1]; no third naming scheme. *)
   check_eq "lit: bool true" ~expected:"b_ge_1" ~got:(Lit.to_string (Lit.bool_true "b"));
-  check_eq "lit: bool false" ~expected:"~b_ge_1"
-    ~got:(Lit.to_string (Lit.bool_false "b"));
+  check_eq "lit: bool false" ~expected:"~b_ge_1" ~got:(Lit.to_string (Lit.bool_false "b"));
   check "lit: var_name of a pbvar" (Lit.var_name (Lit.Ge ("q", 7)) = "q_ge_7");
-  check "lit: owner and value" (Lit.owner (Lit.Eq ("q", 7)) = "q" && Lit.value (Lit.Eq ("q", 7)) = 7);
+  check "lit: owner and value"
+    (Lit.owner (Lit.Eq ("q", 7)) = "q" && Lit.value (Lit.Eq ("q", 7)) = 7);
   check "lit: order and direct are distinguishable"
     (Lit.is_order (Lit.Ge ("q", 1)) && Lit.is_direct (Lit.Eq ("q", 1)));
   check "lit: equality"
-    (Lit.equal (Lit.ge "x" 1) (Lit.ge "x" 1) && not (Lit.equal (Lit.ge "x" 1) (Lit.le "x" 0)));
+    (Lit.equal (Lit.ge "x" 1) (Lit.ge "x" 1)
+    && not (Lit.equal (Lit.ge "x" 1) (Lit.le "x" 0)));
   check "lit: ge and eq families do not collide"
     (Lit.to_string (Lit.ge "x" 1) <> Lit.to_string (Lit.eq "x" 1))
 
@@ -78,13 +77,11 @@ let test_opb () =
   let c = Opb.ge [ (1, Lit.ge "x" 1); (-2, Lit.le "y" 3) ] 1 in
   check_eq "opb: renders a constraint" ~expected:"+1 x_ge_1 -2 ~y_ge_4 >= 1 ;"
     ~got:(Opb.constr_to_string c);
-  check_eq "opb: a clause is a >= 1 constraint"
-    ~expected:"+1 x_ge_1 +1 ~y_ge_4 >= 1 ;"
+  check_eq "opb: a clause is a >= 1 constraint" ~expected:"+1 x_ge_1 +1 ~y_ge_4 >= 1 ;"
     ~got:(Opb.constr_to_string (Opb.clause [ Lit.ge "x" 1; Lit.le "y" 3 ]));
   check_eq "opb: <= is stored negated" ~expected:"-1 x_ge_1 -1 x_ge_2 >= -1 ;"
     ~got:(Opb.constr_to_string (Opb.le [ (1, Lit.ge "x" 1); (1, Lit.ge "x" 2) ] 1));
-  check_eq "opb: equality renders with ="
-    ~expected:"+1 x_ge_1 = 1 ;"
+  check_eq "opb: equality renders with =" ~expected:"+1 x_ge_1 = 1 ;"
     ~got:(Opb.constr_to_string (Opb.eq [ (1, Lit.ge "x" 1) ] 1));
   (* An equality is two constraints to the checker, and the header must say so or
      every id in the proof is off by one. *)
@@ -106,8 +103,7 @@ let test_opb () =
     ~got:(Opb.constr_to_string (Opb.normalise (Opb.ge [ (-2, Lit.ge "x" 1) ] (-1))));
   check_eq "opb: objective line" ~expected:"min: +1 x_ge_1 +1 x_ge_2 ;"
     ~got:
-      (Opb.objective_to_string
-         (Opb.objective [ (1, Lit.ge "x" 1); (1, Lit.ge "x" 2) ]))
+      (Opb.objective_to_string (Opb.objective [ (1, Lit.ge "x" 1); (1, Lit.ge "x" 2) ]))
 
 (* ------------------------------------------------------------------ *)
 (* Writer                                                              *)
@@ -118,7 +114,7 @@ let emitted ?(comments = true) ?(audit = true) f =
   let path = Filename.temp_file "baguette_proof" ".pbp" in
   let oc = open_out path in
   let w = Writer.create ~comments ~audit oc in
-  let r = (try Ok (f w) with e -> Error e) in
+  let r = try Ok (f w) with e -> Error e in
   (try close_out oc with _ -> ());
   let ic = open_in_bin path in
   let n = in_channel_length ic in
@@ -261,7 +257,8 @@ let test_audit () =
         Writer.wipe_level w 3;
         Writer.conclusion w (Writer.Unsat None))
   in
-  check "audit: a level wipe discharges its ids" (match r with Ok () -> true | _ -> false);
+  check "audit: a level wipe discharges its ids"
+    (match r with Ok () -> true | _ -> false);
   (* And audit off never raises. *)
   let _, r =
     emitted ~audit:false (fun w ->
@@ -375,8 +372,7 @@ let test_direct_encoding () =
     (has "red +1 ~x_eq_2 +1 x_ge_2 >= 1 ; x_eq_2 -> 0"
     && has "red +1 x_eq_2 +1 ~x_ge_2 >= 1 ; x_eq_2 -> 1");
   (* Exactly-one is derived from the channelling, never assumed. *)
-  check "encoding: at-least-one is a pol over the channelling ids"
-    (has "pol 3 6 + 8 +");
+  check "encoding: at-least-one is a pol over the channelling ids" (has "pol 3 6 + 8 +");
   check "encoding: at-most-one is a pol over channelling plus the order chain"
     (has "pol 2 7 + 1 +");
   check "encoding: the definitions are retired" (has "del id 2 3 4 5 6 7 8")
@@ -407,11 +403,16 @@ let test_renaming_comments () =
 
 let veripb_path () =
   let candidates =
-    [ Filename.concat (Sys.getenv_opt "HOME" |> Option.value ~default:"") ".local/bin/veripb" ]
+    [
+      Filename.concat
+        (Sys.getenv_opt "HOME" |> Option.value ~default:"")
+        ".local/bin/veripb";
+    ]
   in
   match List.find_opt Sys.file_exists candidates with
   | Some p -> Some p
-  | None -> if Sys.command "command -v veripb >/dev/null 2>&1" = 0 then Some "veripb" else None
+  | None ->
+      if Sys.command "command -v veripb >/dev/null 2>&1" = 0 then Some "veripb" else None
 
 (* The model:  x, y in [0,3],  x >= 2,  x + y <= 2,  y >= 1.  Unsatisfiable.
    The proof also introduces y's direct encoding, derives exactly-one over it, and
@@ -443,12 +444,16 @@ let build_unsat dir =
   Writer.delete_many w [ alo; amo ];
   Encoding.retire_direct e w "y";
   let cons_x1 = Option.get (Encoding.consistency_id e "x" 1) in
-  let x_ge_1 = Writer.pol w ~origin:"x >= 2 gives x >= 1" Pol.(sum [ id c_x2; id cons_x1 ]) in
+  let x_ge_1 =
+    Writer.pol w ~origin:"x >= 2 gives x >= 1" Pol.(sum [ id c_x2; id cons_x1 ])
+  in
   let y_le_0 =
     Writer.pol w ~origin:"x >= 2 and x + y <= 2 give y <= 0"
       Pol.(sum [ id c_sum; id x_ge_1; id c_x2 ])
   in
-  let contra = Writer.pol w ~origin:"y <= 0 contradicts y >= 1" Pol.(sum [ id y_le_0; id c_y1 ]) in
+  let contra =
+    Writer.pol w ~origin:"y <= 0 contradicts y >= 1" Pol.(sum [ id y_le_0; id c_y1 ])
+  in
   Writer.delete_many w [ x_ge_1; y_le_0 ];
   Writer.conclusion w (Writer.Unsat (Some contra));
   close_out oc;
@@ -459,17 +464,18 @@ let test_veripb_accepts () =
   | None ->
       incr failures;
       print_endline
-        "FAIL proof: veripb not found — invariant I-X1 was NOT checked. Install it \
-         (see docs/PROOF-FORMAT.md) and re-run; do not treat this as a pass."
-  | Some veripb ->
+        "FAIL proof: veripb not found — invariant I-X1 was NOT checked. Install it (see \
+         docs/PROOF-FORMAT.md) and re-run; do not treat this as a pass."
+  | Some veripb -> (
       let dir = Filename.temp_file "baguette_veripb" "" in
       Sys.remove dir;
       Sys.mkdir dir 0o700;
       let opb, pbp = build_unsat dir in
       let log = Filename.concat dir "log" in
       let rc =
-        Sys.command (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
-                       (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
+        Sys.command
+          (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
+             (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
       in
       let out =
         let ic = open_in_bin log in
@@ -478,13 +484,12 @@ let test_veripb_accepts () =
         s
       in
       if rc = 0 then Printf.printf "ok   proof: veripb accepts the emitted proof (I-X1)\n"
-      else begin
+      else (
         incr failures;
         Printf.printf "FAIL proof: veripb rejected the emitted proof (I-X1)\n%s\n" out;
-        Printf.printf "  model: %s\n  proof: %s\n" opb pbp
-      end;
+        Printf.printf "  model: %s\n  proof: %s\n" opb pbp);
       List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp; log ];
-      (try Sys.rmdir dir with _ -> ())
+      try Sys.rmdir dir with _ -> ())
 
 let () =
   test_lits ();
@@ -500,8 +505,7 @@ let () =
   test_assignment_lits ();
   test_renaming_comments ();
   test_veripb_accepts ();
-  if !failures > 0 then begin
+  if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
-    exit 1
-  end
+    exit 1)
   else print_endline "\nproof unit tests passed"

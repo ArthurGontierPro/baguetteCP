@@ -12,7 +12,7 @@ type token =
   | OF
   | VAR
   | BOOL
-  | TINT  (* the type keyword `int` *)
+  | TINT (* the type keyword `int` *)
   | SET
   | CONSTRAINT
   | SOLVE
@@ -120,24 +120,24 @@ let tokenize ~file src =
       newline ();
       incr i)
     else if c = ' ' || c = '\t' || c = '\r' then incr i
-    else if c = '%' then while !i < n && src.[!i] <> '\n' do incr i done
-    else if c = '/' && !i + 1 < n && src.[!i + 1] = '*' then begin
+    else if c = '%' then
+      while !i < n && src.[!i] <> '\n' do
+        incr i
+      done
+    else if c = '/' && !i + 1 < n && src.[!i + 1] = '*' then (
       let p = here () in
       i := !i + 2;
       let closed = ref false in
       while not !closed do
         if !i + 1 >= n then Error.failf p "unterminated block comment"
-        else if src.[!i] = '*' && src.[!i + 1] = '/' then begin
+        else if src.[!i] = '*' && src.[!i + 1] = '/' then (
           i := !i + 2;
-          closed := true
-        end
-        else begin
+          closed := true)
+        else (
           if src.[!i] = '\n' then newline ();
-          incr i
-        end
-      done
-    end
-    else if is_digit c then begin
+          incr i)
+      done)
+    else if is_digit c then (
       let p = here () in
       let start = !i in
       while !i < n && is_digit src.[!i] do
@@ -156,58 +156,49 @@ let tokenize ~file src =
       let text = String.sub src start (!i - start) in
       match int_of_string_opt text with
       | Some v -> emit p (INT v)
-      | None -> Error.failf p "integer literal `%s` does not fit in an OCaml int" text
-    end
-    else if is_ident_start c then begin
+      | None -> Error.failf p "integer literal `%s` does not fit in an OCaml int" text)
+    else if is_ident_start c then (
       let p = here () in
       let start = !i in
       while !i < n && is_ident_char src.[!i] do
         incr i
       done;
       let s = String.sub src start (!i - start) in
-      match keyword s with Some t -> emit p t | None -> emit p (IDENT s)
-    end
-    else if c = '"' then begin
+      match keyword s with Some t -> emit p t | None -> emit p (IDENT s))
+    else if c = '"' then (
       let p = here () in
       incr i;
       let b = Buffer.create 16 in
       let closed = ref false in
       while not !closed do
         if !i >= n then Error.failf p "unterminated string literal"
-        else begin
+        else
           let ch = src.[!i] in
-          if ch = '"' then begin
+          if ch = '"' then (
             incr i;
-            closed := true
-          end
+            closed := true)
           else if ch = '\n' then Error.failf p "unterminated string literal"
-          else if ch = '\\' && !i + 1 < n then begin
+          else if ch = '\\' && !i + 1 < n then (
             (match src.[!i + 1] with
             | 'n' -> Buffer.add_char b '\n'
             | 't' -> Buffer.add_char b '\t'
             | other -> Buffer.add_char b other);
-            i := !i + 2
-          end
-          else begin
+            i := !i + 2)
+          else (
             Buffer.add_char b ch;
-            incr i
-          end
-        end
+            incr i)
       done;
-      emit p (STRING (Buffer.contents b))
-    end
-    else begin
+      emit p (STRING (Buffer.contents b)))
+    else
       let p = here () in
       let two = if !i + 1 < n then String.sub src !i 2 else "" in
-      if String.equal two "::" then begin
+      if String.equal two "::" then (
         i := !i + 2;
-        emit p DCOLON
-      end
-      else if String.equal two ".." then begin
+        emit p DCOLON)
+      else if String.equal two ".." then (
         i := !i + 2;
-        emit p DOTDOT
-      end
-      else begin
+        emit p DOTDOT)
+      else (
         incr i;
         match c with
         | ':' -> emit p COLON
@@ -222,9 +213,7 @@ let tokenize ~file src =
         | '=' -> emit p EQ
         | '-' -> emit p MINUS
         | '+' -> emit p PLUS
-        | _ -> Error.failf p "unexpected character %C" c
-      end
-    end
+        | _ -> Error.failf p "unexpected character %C" c)
   done;
   emit (here ()) EOF;
   Array.of_list (List.rev !out)
