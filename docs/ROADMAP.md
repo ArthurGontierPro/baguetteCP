@@ -35,10 +35,13 @@ Goal: solve models with only linear integer constraints, and VeriPB accepts ever
 | M1-T7a | `int_lin_le` propagator and its explanations | DONE | the reference propagator; copy its shape, and its `order_reason` chains (D-0010) |
 | M1-T7b | `Justify`: explanation to VeriPB rules | DONE | `Linear` states its own terms as `rup`; memo dropped in lockstep with the writer's wipe |
 | M1-T7c | Order-encoding expansion of `sum a_i x_i` into a PB row | DONE | `Encoding.expand_int_lin_le`; the consistency clauses are load-bearing |
-| M1-T8 | `int_lin_eq`, `int_le`, `int_lt`, `int_eq` | TODO | after T7 |
+| M1-T8 | `int_lin_eq`, `int_le`, `int_lt`, `int_eq` | DONE | one instance per model row, not one fused propagator (D-0011) |
 | M1-T9 | `int_lin_ne`, `int_ne` (needs direct encoding) | TODO | |
-| M1-T10 | DFS search with first-fail, decisions logged in the proof | TODO | |
+| M1-T10 | DFS search with first-fail, decisions logged in the proof | DONE | the answer is right everywhere; the branch-nogood *proof* is open (D-0012) |
 | M1-T11 | End-to-end: 5 small models solve and verify | TODO | the milestone gate; `test/models/PENDING` must be empty |
+| M1-T12 | Make the D-0013 derivation real: `Combine`/`Weaken`/`Model_row` + the root conflict | DONE | D-0015; root refutations now verify |
+| M1-T13 | The branching half of D-0013: justify a conflict reached under decisions | TODO | research done (D-0014, D-0016); no scheme is complete yet |
+| M1-T14 | Wire the CLI: `.fzn` in, solution + proof out | TODO | the engine exists and is unreachable from `bin/`; blocks T11 |
 
 ## M2 — Booleans
 
