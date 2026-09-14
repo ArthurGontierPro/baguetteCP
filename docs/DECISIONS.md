@@ -582,3 +582,60 @@ Consequences:
   branch-dependent ones.
 - Still open: a hand-derivable `pol` chain for the third instance's parity fact, and an
   instance where a kept decision literal is genuinely load-bearing.
+
+## D-0017  A SAT run's nogoods are checked too, so SAT proofs fail as well
+Status: DECIDED
+Date: 2026-09-15
+Amends: D-0012, whose consequences section overstates one point.
+
+Context: M1-T14 wired the CLI and added `test/models/chain_sat.fzn`, a **satisfiable**
+model with a unique solution (`b = a+1`, `c = b+1`, `a+b+c = 6`, so `a = 1, b = 2, c = 3`).
+The solver gets the right answer. veripb rejects the proof.
+
+D-0012 says, of its own satisfiable instance:
+
+> `k = 8` (SAT) passes and always would have: `conclusion SAT` checks the assignment
+> against the model, so a SAT run's nogoods carry no weight.
+
+The second clause is false as stated. It is true that the *conclusion* does not depend
+on them. It is not true that they carry no weight, because **veripb checks every rule as
+it is emitted**, not only the ones the conclusion cites. A nogood logged while the search
+is still looking for its solution is a proof step like any other, and an unreachable one
+sinks the whole proof. The entire emitted proof for `chain_sat` is:
+
+```
+f 30
+# 1
+rup +1 a_ge_1 >= 1 ;        <- rejected here, line 4, long before the conclusion
+# 1
+w 1
+conclusion SAT : a_ge_1 ~a_ge_2 ... c_ge_3 ~c_ge_4 ...
+```
+
+`indomain_min` tries `a = 0` first; that branch fails, and the nogood "not `a <= 0`" is
+logged. It is true — `a = 0` forces `b = 1`, `c = 2`, and `3 <> 6` — and it is not
+reachable by reverse unit propagation, because getting there means bounds propagation
+across three equality rows. That is precisely D-0012, arriving through a door D-0012 said
+was closed.
+
+Decision: record the correction, and treat the branching gap (D-0013's open half, M1-T13)
+as gating **satisfiable** models too, not only unsatisfiable ones.
+
+Consequences:
+- The practical reach of M1-T13 is much larger than the roadmap's framing suggests. Any
+  model whose search takes one wrong turn before finding a solution emits an unverifiable
+  proof, and that is most models of any size. "The UNSAT models stay xfail" (D-0013,
+  D-0014) understates what is xfail.
+- Why D-0012's claim survived this long: a SAT run only logs a nogood if some branch
+  *fails first*. Every satisfiable instance in `test/unit/test_endtoend.ml` and the two
+  shipped satisfiable models happen to be solved by a search whose first choice is right
+  at every level, so no nogood is ever emitted and the proof is three lines long. A model
+  has to be wrong once, and recover, before this shows up at all.
+- This is the fourth finding in this project to be invisible on the instances chosen to
+  test the thing it breaks, and the shape repeats: the failing case needs one more step
+  of something than the test instance had — one wider domain (D-0012), one further bound
+  (D-0010), one restatement (D-0009), and here one wrong turn. It is worth choosing test
+  instances that are *deliberately one step past* the smallest thing that exercises the
+  feature.
+- `chain_sat` is in `test/models/PENDING` for this reason. Its answer is checked and
+  correct; only its proof is xfail. If it starts passing, the runner fails and says so.
