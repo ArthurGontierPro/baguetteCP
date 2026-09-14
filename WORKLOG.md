@@ -15,7 +15,6 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 | integration | `test/unit/test_endtoend.ml` | orchestrator | 2026-09-14 — no single session can make it pass alone |
 | M1-T12 — make the D-0013 derivation real: `Explanation` + `Justify` + `int_lin_le` | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/prop/**`, `test/unit/test_prop.ml`, `test/unit/test_justify.ml` | agent-explain | 2026-09-14 — **authorised to change the Explanation ADT**, see D-0013 |
 | M1-T13 — the branching half of D-0013, research only | none — scratchpad only | agent-branch | 2026-09-14 |
-| M1-T14 — wire the CLI: `.fzn` in, solution + proof out | `lib/flatzinc/compile.ml` (new), `lib/flatzinc/output.ml` (new), `lib/flatzinc/model.ml`, `lib/flatzinc/dune`, `bin/main.ml`, `test/unit/test_compile.ml` (new), `test/models/**`, `test/expected/**` | orchestrator | 2026-09-14 |
 
 ## Cross-session requests
 
@@ -47,6 +46,7 @@ work. The owning session picks it up.
 | M1-T7b | agent-justify | 2026-09-14 | `Justify`: memo, level-wipe lockstep, `Linear` as faithful `rup` (D-0009) |
 | M1-T7c | agent-encoding | 2026-09-14 | `Encoding.expand_int_lin_le`: integer term to PB row over the order encoding |
 | M1-T7 | orchestrator | 2026-09-14 | Chain fix (D-0010) + cross-session repairs; a real pruning's reason is accepted by veripb |
+| M1-T14 | orchestrator + agent-compile + agent-output | 2026-09-15 | The CLI is wired: `.fzn` in, solution + verified proof out. 5 models pass, 564 checks |
 
 ## Handoff notes
 
@@ -154,3 +154,46 @@ type and both of its users move together.
 
 `lib/core/explanation.ml` is unfrozen for agent-explain, and only for it. D-0013 says what
 the ADT is missing and why; the change is no longer speculative.
+
+**2026-09-15 — orchestrator, M1-T14: the CLI is wired**
+
+`bin/main.ml` no longer prints "not implemented yet". Five of the seven models solve
+and veripb accepts every proof; `make check` is green at 564 checks, up from 462.
+`test/models/PENDING` is down to two: `ne_sat` (M1-T9, `int_ne` is now *rejected* with
+a position and a name rather than absent) and `chain_sat`.
+
+Two things the next session should know.
+
+**The split worked this time, and the reason is worth keeping.** Two sessions ran on
+disjoint files again, but unlike the M1-T7 round the contract between them was written
+out operationally — what each function must *mean*, which index space it lives in, an
+example of the bytes it emits — rather than being left implicit in a shared type. The
+one cross-piece invariant (`Var.of_int i` denotes `Model.var m i`) was stated in both
+briefs, implemented in `Compile`, and re-checked at run time in `main.ml`, because a
+permutation there is invisible to I-S1: the check would be handed the same permuted
+array and confirm it. Nothing had to be repaired at integration.
+
+**`chain_sat` was added to catch an index permutation and caught something else.**
+It is satisfiable, the answer is right, and veripb rejects the proof — see D-0017.
+D-0012 said a SAT run's nogoods carry no weight because `conclusion SAT` checks the
+assignment. True of the conclusion, false of the steps: veripb checks every rule as it
+is emitted, so a nogood logged while the search is still hunting sinks the proof. That
+makes **M1-T13 gate satisfiable models too**, which is a much larger claim than the
+roadmap's framing — any model whose search takes one wrong turn before succeeding emits
+an unverifiable proof. It stayed hidden because a SAT run only logs a nogood if a branch
+fails first, and every satisfiable instance in the suite happens to be solved by a search
+that guesses right at every level.
+
+For whoever takes M1-T13: it is now the single thing standing between this solver and
+being usable on anything non-trivial, and D-0016 point 1 is the most promising lead —
+`pol` can recover a leaf's nogood by going through a root contradiction. D-0016 also
+warns that guarding the wrong literal produces a valid but useless generalisation, so a
+derivation recipe has to identify which decision the branch's refutation actually turns
+on.
+
+Smaller notes: `Encoding.add_equality` looks like the way to post an `int_lin_eq` and is
+not — it takes PB literal terms and skips the order-encoding expansion; use two
+`add_int_lin_le` calls. An empty term list is a real, representable PB row (`>= 1 ;`) that
+veripb accepts, which is what makes a false ground constraint like `int_le(2, 1)` provable
+rather than a special case. And `make check` reformats a tree someone else has already
+called clean, so the reformat lands on whoever runs the gate next.
