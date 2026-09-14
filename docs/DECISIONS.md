@@ -168,3 +168,59 @@ grows with the interesting part of the search rather than with its total size, w
 the difference between a proof you can check and one you cannot. Individual `del id N`
 remains correct for constraints not tied to a decision level, such as forgotten learned
 clauses.
+
+## D-0009  A bound fact in a `pol` needs a constraint id, not a literal
+Status: DECIDED
+Date: 2026-09-14
+Arose from: M1-T7, where the propagator and the proof bridge were written against
+incompatible readings of `Explanation.Linear`.
+
+Context: `Explanation.Linear (terms, rhs)` was documented as "renders to `pol` over the
+model constraint". Two sessions read that differently and both readings were defensible:
+the propagator built `Linear` as *the order-encoding unit literals witnessing the current
+bounds of the other variables* (`Cut (Trivial, Linear units, 1, 1)`, model row plus the
+bound facts), while the bridge read it as *a restatement of the model row itself* and
+emitted `pol <model_id>`, discarding `terms` and `rhs`.
+
+The bridge's reading is not merely a different convention, it is unsound as a
+justification: veripb accepts a restatement, so the tests passed, but the id handed back
+does not state what the explanation claims, and the composition of the two halves emits
+twice the model row and justifies nothing.
+
+The propagator's reading, however, **cannot be rendered as a `pol` at all**. Checked
+against veripb 2.2.2 directly:
+
+```
+f 1                  * model: 1 x1 >= 1
+pol x2
+rup 1 x2 >= 1 ;      * Failed to show '1 x2 >= 1' by reverse unit propagation
+```
+
+A bare literal in a `pol` expression is the *trivial axiom* `x2 >= 0`. It does not assert
+that the literal holds. So a list of literals can never tell a `pol` step that
+`x_i >= lo_i` currently holds; only a constraint already in the checker's database can,
+and during search that means the constraint the solver logged when it made the decision
+or the earlier pruning (D-0008 gives those their levels).
+
+Decision: an explanation that appeals to a bound fact must name the **constraint id** that
+established it. Until `Explanation.t` can carry ids, `Linear (terms, rhs)` renders as
+`rup` of exactly the constraint it states -- faithful, and the bound facts it needs are in
+the checker's database once search logs its decisions. `pol` remains the target and
+returns once ids are expressible.
+
+Consequences:
+- `docs/PROOF-FORMAT.md` section 4's `int_lin_le` row ("`pol` -- the model constraint plus
+  order-encoding units, one division") describes the destination, not what M1 emits. The
+  table now says so.
+- `Cut` has no division operator, so even with ids the "one division" of a bounds pruning
+  is not expressible today. Both gaps are the same gap, and both are properly part of
+  **D-0003**, which is still open: whether an explanation is a *value* naming ids or a
+  *computation* that derives them is exactly the (a)-versus-(b) question there. This is
+  the first place where leaving D-0003 open has cost real work, which is itself an
+  argument for closing it before M2-T3.
+- End-to-end validation of an `int_lin_le` justification is blocked until search logs
+  decisions as constraints (M1-T10). A unit test at level 0 has no bound facts in the
+  database and cannot stand in for it.
+- Nothing yet expands an integer linear term `sum a_i x_i` into PB literals over the order
+  encoding -- `Opb` constraints are built over `Lit.t` directly. The model row an
+  `int_lin_le` justification must cite therefore cannot be written yet. That is M1-T7c.
