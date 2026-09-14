@@ -108,3 +108,54 @@ let to_string t =
     | Minimize o -> Printf.sprintf "solve minimize %s\n" (string_of_operand t o)
     | Maximize o -> Printf.sprintf "solve maximize %s\n" (string_of_operand t o));
   Buffer.contents b
+
+(* ------------------------------------------------------- independent solution check *)
+
+(* I-S1: "Every solution printed satisfies every constraint — re-checked independently by
+   [Model.check_assignment], not by trusting the propagators."
+
+   This is the oracle, so it is written to be *obviously* right rather than fast or
+   clever. It re-reads the model the front end built and re-evaluates it from scratch:
+   no domain store, no propagator, no encoding, nothing the solver also uses. The moment
+   it shares code with the engine it stops being independent and starts agreeing with the
+   engine's bugs.
+
+   Two consequences worth keeping:
+
+   - It evaluates all seven constraint kinds, including [Int_lin_ne] and [Int_ne], for
+     which no propagator exists yet. A hole here would be a hole exactly where the solver
+     already has one, which is the one place a checker must not be silent.
+   - It checks the *declared* domains too, not only the constraints. A solution that
+     assigns 7 to a `var 1..3` violates the model just as surely as one that breaks a
+     linear constraint, and a bug in the store is more likely to produce the former. *)
+
+let in_domain dom v =
+  match dom with
+  | Dbool -> v = 0 || v = 1
+  | Drange (l, u) -> l <= v && v <= u
+  | Dset ns -> List.mem v ns
+
+let check_assignment (t : t) (values : int array) : bool =
+  let n = Array.length t.vars in
+  if Array.length values <> n then
+    invalid_arg
+      (Printf.sprintf "Model.check_assignment: expected %d values, got %d" n
+         (Array.length values));
+  let value = function Const c -> c | Var i -> values.(i) in
+  let sum terms = List.fold_left (fun acc (c, i) -> acc + (c * values.(i))) 0 terms in
+  let holds (c : constr) =
+    match c.k with
+    | Int_lin_le (ts, rhs) -> sum ts <= rhs
+    | Int_lin_eq (ts, rhs) -> sum ts = rhs
+    | Int_lin_ne (ts, rhs) -> sum ts <> rhs
+    | Int_le (a, b) -> value a <= value b
+    | Int_lt (a, b) -> value a < value b
+    | Int_eq (a, b) -> value a = value b
+    | Int_ne (a, b) -> value a <> value b
+  in
+  let domains_ok =
+    let ok = ref true in
+    Array.iteri (fun i v -> if not (in_domain v.v_dom values.(i)) then ok := false) t.vars;
+    !ok
+  in
+  domains_ok && List.for_all holds t.constraints

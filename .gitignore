@@ -13,3 +13,4 @@ _build/
 _opam/
 test/out/
 perf.data*
+.claude/worktrees/
