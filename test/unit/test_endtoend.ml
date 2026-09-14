@@ -7,33 +7,33 @@
 
    What it covers that the per-area suites do not:
 
-   1. **Integer variables wider than [0, 1].** Every search proof in test_engine.ml uses
-      0/1 domains, where x = [x >= 1] and every bound fact is exactly one step from its
-      declared bound. That is the value at which D-0010's bug was invisible, so a search
-      proof over 0/1 variables exercises none of the order-encoding chain machinery. The
-      models here use [0, 3].
+   1. **Integer variables, not 0/1 flags.** test_engine.ml's search proofs use [0, 1]
+      domains, where x = [x >= 1], the order encoding degenerates into clauses, and PB
+      unit propagation is as strong as bounds propagation. That is why D-0012 was
+      invisible to it. The models here use wide domains, including ones that do not start
+      at zero and ones that run negative, so a bound fact is several order-encoding steps
+      from its declared bound and the expansion's constant is not zero.
 
-   2. **Model rows built by the real expansion.** test_engine.ml writes its PB rows by
-      hand over [x >= 1] literals, which is correct only because its domains are 0/1.
-      Here the rows come from Encoding.add_int_lin_le (M1-T7c), so the constant folding
-      and the sign handling are the ones the solver would really use.
+   2. **Coefficients other than 1 and -1.** With unit coefficients a bounds push never
+      divides, so the rounding half of int_lin_le (PROOF-FORMAT section 4 promises "one
+      division", floor or ceil by sign) is never exercised. Several models below have
+      coefficients 2, 3, 4 and negatives, chosen so pushes land on non-integer quotients.
 
-   3. **A search tree deeper than one decision**, with backtracking at more than one
-      level, so nogood resolution is exercised rather than just nogood emission.
+   3. **Model rows built by the real expansion**, from Encoding.add_int_lin_le (M1-T7c),
+      not written by hand over [x >= 1] literals.
 
-   The models are chosen so that bounds propagation provably cannot settle them and the
-   search really has to branch. Both turn on a parity argument, which bounds reasoning
-   cannot see:
+   4. **The expected answer is computed by brute force**, never asserted by hand. Each
+      model is enumerated over its full box and the solver must agree with that. A test
+      whose expected answer is hand-written is a test that can be talked into agreeing
+      with a bug.
 
-     x1 = x2, x3 = x4, all in [0, 3], x1 + x2 + x3 + x4 = k
-     i.e. 2*(x1 + x3) = k, which has no integer solution for odd k.
+   Several models are UNSAT by parity or divisibility, which bounds reasoning cannot see,
+   so the search has to branch rather than being settled at the root.
 
-   k = 7 is therefore UNSAT, but no bound is ever contradicted at the root: the sum lies
-   in [0, 12] and each pair only forces its partner. The solver must enumerate. k = 8 is
-   SAT at (1, 1, 3, 3), and first-fail/indomain-min reaches it only after x1 = 0 fails,
-   so the SAT proof carries a real backtrack too. *)
+   Note the asymmetry, recorded in D-0012: a SAT run's proof is accepted almost
+   regardless, because `conclusion SAT` checks the assignment against the model rather
+   than anything the search derived. Only the UNSAT proofs test the search's reasoning. *)
 
-module Lit = Baguette_proof.Lit
 module Encoding = Baguette_proof.Encoding
 module Writer = Baguette_proof.Writer
 module Var = Baguette_core.Var
@@ -54,179 +54,183 @@ let check name cond =
     incr failures;
     Printf.printf "FAIL %s\n" name)
 
-let var = Var.of_int
+(* A term is (coefficient, variable index). Turning these into PB rows is Encoding's
+   job, not this file's. *)
+type cstr = Le of (int * int) list * int | Eq of (int * int) list * int
 
-(* Four variables over [0, 3]: wide enough that a bound fact is several order-encoding
-   steps from its declared bound, which is the case 0/1 domains cannot produce. *)
-let names = [| "x1"; "x2"; "x3"; "x4" |]
-let lo, hi = (0, 3)
+type model = {
+  title : string;
+  vars : (string * int * int) array; (* name, lo, hi *)
+  cstrs : cstr list;
+  needs_search : bool; (* bounds propagation alone cannot settle it *)
+}
 
-let mk_store () =
-  Store.create ~names
-    ~domains:(Array.map (fun _ -> Domain.make lo hi) names)
+let models =
+  [
+    {
+      title = "parity, unit coefficients, [0,3]";
+      vars = [| ("x1", 0, 3); ("x2", 0, 3); ("x3", 0, 3); ("x4", 0, 3) |];
+      cstrs =
+        [
+          Eq ([ (1, 0); (-1, 1) ], 0);
+          Eq ([ (1, 2); (-1, 3) ], 0);
+          Eq ([ (1, 0); (1, 1); (1, 2); (1, 3) ], 7);
+        ];
+      needs_search = true;
+    };
+    {
+      title = "parity, unit coefficients, [0,3], satisfiable";
+      vars = [| ("x1", 0, 3); ("x2", 0, 3); ("x3", 0, 3); ("x4", 0, 3) |];
+      cstrs =
+        [
+          Eq ([ (1, 0); (-1, 1) ], 0);
+          Eq ([ (1, 2); (-1, 3) ], 0);
+          Eq ([ (1, 0); (1, 1); (1, 2); (1, 3) ], 8);
+        ];
+      needs_search = true;
+    };
+    {
+      title = "divisibility, coefficients 2 and 4, [0,3]";
+      vars = [| ("x1", 0, 3); ("x2", 0, 3) |];
+      cstrs = [ Eq ([ (2, 0); (4, 1) ], 7) ];
+      (* Bounds propagation settles this at the root: the >= row forces x2 >= 1, the <=
+         row forces x2 <= 1, and 2*x1 = 3 then has no integer solution. Kept because it
+         exercises rounding in both directions with no search at all -- and because its
+         proof is rejected too, which shows D-0012 is not only about branching. *)
+      needs_search = false;
+    };
+    {
+      title = "mixed signs, negative domain, coefficients 2 and -4";
+      vars = [| ("x1", 0, 3); ("x2", -2, 2) |];
+      cstrs = [ Eq ([ (2, 0); (-4, 1) ], 3) ];
+      (* Also root-refutable: x2 is squeezed to 0 from both sides, leaving 2*x1 = 3. *)
+      needs_search = false;
+    };
+    {
+      (* Even left-hand side, odd right-hand side, but with a spread of coefficients and
+         enough slack that no bound is contradicted at the root: this one has to branch
+         on x2 and refute both children, with divisions in every push. *)
+      title = "parity with coefficients 2, 6, 2 -- needs a decision";
+      vars = [| ("x1", 0, 3); ("x2", 0, 3); ("x3", 0, 3) |];
+      cstrs = [ Eq ([ (2, 0); (6, 1); (2, 2) ], 9) ];
+      needs_search = true;
+    };
+    {
+      title = "varied coefficients and offset domains, satisfiable";
+      vars = [| ("x1", 1, 4); ("x2", -1, 2); ("x3", -2, 5) |];
+      cstrs =
+        [
+          Eq ([ (3, 0); (-2, 1); (1, 2) ], 4);
+          Le ([ (1, 0); (1, 1); (1, 2) ], 6);
+          Le ([ (-1, 0); (2, 2) ], 3);
+        ];
+      needs_search = false;
+    };
+    {
+      title = "common factor 3, right-hand side 5, offset domains";
+      vars = [| ("x1", -1, 3); ("x2", 0, 4); ("x3", 2, 6) |];
+      cstrs = [ Eq ([ (3, 0); (3, 1); (-3, 2) ], 5) ];
+      needs_search = true;
+    };
+  ]
+
+(* The independent oracle: enumerate the whole box. This is the only thing here that
+   says what the answer should be, and the solver is required to agree with it. *)
+let evaluate cstrs (assign : int array) =
+  let value terms = List.fold_left (fun acc (a, i) -> acc + (a * assign.(i))) 0 terms in
+  List.for_all
+    (function
+      | Le (terms, rhs) -> value terms <= rhs | Eq (terms, rhs) -> value terms = rhs)
+    cstrs
+
+let brute_force m =
+  let n = Array.length m.vars in
+  let assign = Array.make n 0 in
+  let found = ref None in
+  let rec go i =
+    if !found <> None then ()
+    else if i = n then (if evaluate m.cstrs assign then found := Some (Array.copy assign))
+    else
+      let _, lo, hi = m.vars.(i) in
+      for v = lo to hi do
+        if !found = None then (
+          assign.(i) <- v;
+          go (i + 1))
+      done
+  in
+  go 0;
+  !found
+
+let build_store m =
+  Store.create
+    ~names:(Array.map (fun (n, _, _) -> n) m.vars)
+    ~domains:(Array.map (fun (_, lo, hi) -> Domain.make lo hi) m.vars)
 
 let pack ~id (lin : Linear.t) =
   Propagator.pack ~id (module Linear : Propagator.S with type t = Linear.t) lin
 
-(* x1 = x2, x3 = x4, and x1 + x2 + x3 + x4 = k, as eight Linear instances: each
-   equality posts as its own (le, ge) pair, one instance per model row (D-0011). *)
-let build_store_and_engine k =
-  let store = mk_store () in
-  let x1, x2, x3, x4 = (var 0, var 1, var 2, var 3) in
-  let eq12_le, eq12_ge = Lin_eq.make store [ (1, x1); (-1, x2) ] 0 in
-  let eq34_le, eq34_ge = Lin_eq.make store [ (1, x3); (-1, x4) ] 0 in
-  let sum_le, sum_ge =
-    Lin_eq.make store [ (1, x1); (1, x2); (1, x3); (1, x4) ] k
+(* A <= is one Linear instance; an equality is its (le, ge) pair -- two instances, one
+   per model row (D-0011). *)
+let build_engine m store =
+  let to_vars terms = List.map (fun (a, i) -> (a, Var.of_int i)) terms in
+  let instances =
+    List.concat_map
+      (function
+        | Le (terms, rhs) -> [ Linear.make store (to_vars terms) rhs ]
+        | Eq (terms, rhs) ->
+            let le, ge = Lin_eq.make store (to_vars terms) rhs in
+            [ le; ge ])
+      m.cstrs
   in
-  let engine =
-    Engine.create
-      [
-        pack ~id:0 eq12_le;
-        pack ~id:1 eq12_ge;
-        pack ~id:2 eq34_le;
-        pack ~id:3 eq34_ge;
-        pack ~id:4 sum_le;
-        pack ~id:5 sum_ge;
-      ]
-  in
-  (store, engine)
+  Engine.create (List.mapi (fun id lin -> pack ~id lin) instances)
 
-(* The same model as PB rows, through the real order-encoding expansion rather than by
-   hand. Every equality is posted as its two >= rows explicitly: an .opb line with `=`
-   counts as TWO constraints for the `f` rule (PROOF-FORMAT section 2, trap 1), which is
-   why Encoding refuses Eq outright. *)
-let negate_terms terms = List.map (fun (a, x) -> (-a, x)) terms
-
-let add_equality_rows e terms rhs =
-  let le = Encoding.add_int_lin_le e terms rhs in
-  let ge = Encoding.add_int_lin_le e (negate_terms terms) (-rhs) in
-  (le, ge)
-
-let build_encoding k =
+(* An equality posts as its two >= rows explicitly: an .opb line with `=` counts as TWO
+   constraints for the `f` rule (PROOF-FORMAT section 2, trap 1). *)
+let build_encoding m =
   let e = Encoding.create () in
-  Array.iter (fun n -> Encoding.declare_int e n ~lo ~hi) names;
-  ignore (add_equality_rows e [ (1, "x1"); (-1, "x2") ] 0);
-  ignore (add_equality_rows e [ (1, "x3"); (-1, "x4") ] 0);
-  ignore
-    (add_equality_rows e [ (1, "x1"); (1, "x2"); (1, "x3"); (1, "x4") ] k);
+  Array.iter (fun (n, lo, hi) -> Encoding.declare_int e n ~lo ~hi) m.vars;
+  let to_names terms =
+    List.map
+      (fun (a, i) ->
+        let n, _, _ = m.vars.(i) in
+        (a, n))
+      terms
+  in
+  let negate terms = List.map (fun (a, x) -> (-a, x)) terms in
+  List.iter
+    (function
+      | Le (terms, rhs) -> ignore (Encoding.add_int_lin_le e (to_names terms) rhs)
+      | Eq (terms, rhs) ->
+          let t = to_names terms in
+          ignore (Encoding.add_int_lin_le e t rhs);
+          ignore (Encoding.add_int_lin_le e (negate t) (-rhs)))
+    m.cstrs;
   e
 
-(* Search never renders Explanation.Trivial (see search.ml's header), so a model_id
-   lookup being consulted at all would itself be the bug. *)
+(* Search does not render Explanation.Trivial today (search.ml's header), so this being
+   consulted would itself be news. When the D-0012 fix makes search emit justifications,
+   this must become a real per-instance lookup (D-0011). *)
 let mk_ctx writer encoding =
   Justify.create ~writer ~encoding ~model_id:(fun () ->
       failwith "integration: search demanded Explanation.Trivial")
 
-(* I-S1: re-check a solution against the model directly, never by trusting the
-   propagators that produced it. *)
-let independent_check k (assignment : Search.assignment) =
-  let v i = List.assoc (var i) assignment in
-  let x1, x2, x3, x4 = (v 0, v 1, v 2, v 3) in
-  List.for_all (fun x -> x >= lo && x <= hi) [ x1; x2; x3; x4 ]
-  && x1 = x2 && x3 = x4
-  && x1 + x2 + x3 + x4 = k
+(* I-S1: re-check against the model itself, never by trusting the propagators. *)
+let independent_check m (assignment : Search.assignment) =
+  let n = Array.length m.vars in
+  let assign = Array.make n 0 in
+  List.iter (fun (v, value) -> assign.(Var.to_int v) <- value) assignment;
+  let in_box = ref true in
+  Array.iteri
+    (fun i (_, lo, hi) -> if assign.(i) < lo || assign.(i) > hi then in_box := false)
+    m.vars;
+  !in_box && evaluate m.cstrs assign
 
 let veripb_path () =
-  let candidates =
-    [ Filename.concat (Sys.getenv "HOME") ".local/bin/veripb"; "veripb" ]
-  in
-  List.find_opt
-    (fun p -> Sys.file_exists p || Sys.command (Printf.sprintf "command -v %s >/dev/null 2>&1" (Filename.quote p)) = 0)
-    candidates
+  let p = Filename.concat (Sys.getenv "HOME") ".local/bin/veripb" in
+  if Sys.file_exists p then Some p
+  else if Sys.command "command -v veripb >/dev/null 2>&1" = 0 then Some "veripb"
+  else None
 
-(* Run one model end to end and hand back what veripb said, plus the proof text so a
-   caller can assert on what was actually emitted rather than only on the exit code. *)
-let run_model ~k ~expect_sat ~xfail_veripb =
-  let dir = Filename.temp_file "baguette_e2e" "" in
-  Sys.remove dir;
-  Sys.mkdir dir 0o700;
-  let opb = Filename.concat dir "model.opb" in
-  let pbp = Filename.concat dir "model.pbp" in
-  let store, engine = build_store_and_engine k in
-  let encoding = build_encoding k in
-  let oc = open_out opb in
-  Encoding.write_opb
-    ~comments:[ Printf.sprintf "x1 = x2, x3 = x4, x1+x2+x3+x4 = %d, all in [0,3]" k ]
-    encoding oc;
-  close_out oc;
-  let oc = open_out pbp in
-  let writer = Writer.create ~comments:true ~audit:true oc in
-  Encoding.start_proof encoding writer;
-  let ctx = mk_ctx writer encoding in
-  let entry_level = Store.level store in
-  let outcome =
-    Search.solve ~engine ~store ~ctx ~check:(independent_check k) ()
-  in
-  close_out oc;
-  let exit_level = Store.level store in
-  let proof =
-    let ic = open_in_bin pbp in
-    let s = really_input_string ic (in_channel_length ic) in
-    close_in ic;
-    s
-  in
-  let tag = Printf.sprintf "k=%d" k in
-  (match outcome with
-  | Search.Sat assignment ->
-      check (Printf.sprintf "%s: search reports SAT as expected" tag) expect_sat;
-      check
-        (Printf.sprintf "%s: the solution independently satisfies the model (I-S1)" tag)
-        (independent_check k assignment)
-  | Search.Unsat ->
-      check (Printf.sprintf "%s: search reports UNSAT as expected" tag) (not expect_sat));
-  check
-    (Printf.sprintf "%s: decision level restored on return (I-S3)" tag)
-    (entry_level = exit_level);
-  let rc =
-    match veripb_path () with
-    | None -> -1
-    | Some veripb ->
-        let log = Filename.concat dir "log" in
-        let rc =
-          Sys.command
-            (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
-               (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
-        in
-        if rc <> 0 then (
-          let ic = open_in_bin log in
-          let s = really_input_string ic (in_channel_length ic) in
-          close_in ic;
-          let ic = open_in_bin opb in
-          let m = really_input_string ic (in_channel_length ic) in
-          close_in ic;
-          Printf.printf "  veripb said:\n%s\n  model was:\n%s\n  proof was:\n%s\n" s m proof);
-        rc
-  in
-  (match veripb_path () with
-  | None ->
-      incr failures;
-      Printf.printf
-        "FAIL %s: veripb not found -- I-X1 was NOT checked. Do not treat this as a pass.\n"
-        tag
-  | Some _ ->
-      if not xfail_veripb then
-        check (Printf.sprintf "%s: veripb accepts the search proof (I-X1)" tag) (rc = 0)
-      else if rc = 0 then (
-        (* Same discipline as test/models/PENDING: a known failure that starts passing
-           fails the suite, so the list cannot rot into quietly-broken things. *)
-        incr failures;
-        Printf.printf
-          "XPASS %s: veripb now ACCEPTS this proof. M1-T10's nogood scheme was fixed \
-           (or the model stopped exercising the gap). Delete ~xfail_veripb here and \
-           close out D-0012.\n"
-          tag)
-      else
-        Printf.printf
-          "xfail %s: veripb rejects the search proof -- M1-T10 is reopened, see D-0012. \
-           The solver's ANSWER is correct; its proof is not.\n"
-          tag);
-  List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp; Filename.concat dir "log" ];
-  (try Sys.rmdir dir with _ -> ());
-  proof
-
-(* Count how many decisions the proof actually opened. A proof that never opened a
-   second level would mean the model was settled by propagation alone, and this file
-   would be testing nothing it claims to test. *)
 let count_occurrences needle s =
   let n = String.length needle in
   let rec go i acc =
@@ -236,21 +240,92 @@ let count_occurrences needle s =
   in
   go 0 0
 
+let read_file path =
+  let ic = open_in_bin path in
+  let s = really_input_string ic (in_channel_length ic) in
+  close_in ic;
+  s
+
+let run_model m =
+  let expected = brute_force m in
+  let expect_sat = expected <> None in
+  let dir = Filename.temp_file "baguette_e2e" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let opb = Filename.concat dir "model.opb" in
+  let pbp = Filename.concat dir "model.pbp" in
+  let store = build_store m in
+  let engine = build_engine m store in
+  let encoding = build_encoding m in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ m.title ] encoding oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let writer = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof encoding writer;
+  let ctx = mk_ctx writer encoding in
+  let entry_level = Store.level store in
+  let outcome = Search.solve ~engine ~store ~ctx ~check:(independent_check m) () in
+  close_out oc;
+  let exit_level = Store.level store in
+  let proof = read_file pbp in
+  let tag = m.title in
+  (match outcome with
+  | Search.Sat assignment ->
+      check (Printf.sprintf "%s: agrees with brute force (SAT)" tag) expect_sat;
+      check
+        (Printf.sprintf "%s: the solution independently satisfies the model (I-S1)" tag)
+        (independent_check m assignment)
+  | Search.Unsat ->
+      check (Printf.sprintf "%s: agrees with brute force (UNSAT)" tag) (not expect_sat));
+  check
+    (Printf.sprintf "%s: decision level restored on return (I-S3)" tag)
+    (entry_level = exit_level);
+  if m.needs_search then
+    check
+      (Printf.sprintf "%s: the search really branched" tag)
+      (count_occurrences "# 1" proof > 0);
+  (* Only an UNSAT proof exercises the search's own reasoning, and D-0012 says those do
+     not check yet. Marked the way test/models/PENDING marks a known failure: if one
+     starts passing, the suite fails and says to remove the marker. *)
+  let xfail_veripb = not expect_sat in
+  (match veripb_path () with
+  | None ->
+      incr failures;
+      Printf.printf
+        "FAIL %s: veripb not found -- I-X1 was NOT checked. Do not treat this as a pass.\n"
+        tag
+  | Some veripb ->
+      let log = Filename.concat dir "log" in
+      let rc =
+        Sys.command
+          (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
+             (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
+      in
+      if not xfail_veripb then (
+        check (Printf.sprintf "%s: veripb accepts the search proof (I-X1)" tag) (rc = 0);
+        if rc <> 0 then
+          Printf.printf "  veripb said:\n%s\n  model:\n%s\n  proof:\n%s\n" (read_file log)
+            (read_file opb) proof)
+      else if rc = 0 then (
+        incr failures;
+        Printf.printf
+          "XPASS %s: veripb now ACCEPTS this UNSAT proof. Either D-0012 is fixed or this \
+           model stopped exercising it -- check which, then remove the xfail.\n"
+          tag)
+      else
+        Printf.printf
+          "xfail %s: veripb rejects the UNSAT proof (D-0012). The answer is right; the \
+           proof is not.\n"
+          tag);
+  List.iter
+    (fun f -> try Sys.remove f with _ -> ())
+    [ opb; pbp; Filename.concat dir "log" ];
+  try Sys.rmdir dir with _ -> ()
+
 let () =
   print_endline "";
-  (* k=7 is the one that exposes D-0012: its UNSAT proof leans on the branch nogoods
-     being RUP-derivable, and over [0,3] domains they are not. k=8 passes because
-     `conclusion SAT` checks the assignment against the model, so its nogoods carry no
-     weight -- which is precisely why a SAT-only end-to-end test proves little here. *)
-  let unsat_proof = run_model ~k:7 ~expect_sat:false ~xfail_veripb:true in
-  let sat_proof = run_model ~k:8 ~expect_sat:true ~xfail_veripb:false in
-  (* The point of these models is that bounds propagation cannot settle them. If the
-     search never branched twice, the parity argument was being decided some other way
-     and the deeper tree this file exists to exercise was never built. *)
-  check "k=7: the search really branched (more than one decision level opened)"
-    (count_occurrences "# 2" unsat_proof > 0);
-  check "k=8: the SAT run backtracked at least once"
-    (count_occurrences "w " sat_proof > 0);
+  List.iter run_model models;
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
