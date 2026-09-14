@@ -224,3 +224,55 @@ Consequences:
 - Nothing yet expands an integer linear term `sum a_i x_i` into PB literals over the order
   encoding -- `Opb` constraints are built over `Lit.t` directly. The model row an
   `int_lin_le` justification must cite therefore cannot be written yet. That is M1-T7c.
+
+## D-0010  A bound fact is a chain of order literals, not one literal
+Status: DECIDED
+Date: 2026-09-14
+Arose from: M1-T7b round 2, driving the real `int_lin_le` propagator into veripb.
+
+Context: `int_lin_le` explains a pruning with `Cut (Trivial, Linear units, 1, 1)`, where
+`units` is meant to say "the other variables are at these bounds". It built one literal
+per excluded term, `(a_i, x_i_ge_b_i)`, with `rhs = sum_i a_i * b_i`.
+
+That is dimensionally wrong. An order literal is 0/1, so `a_i * x_i_ge_b_i` reaches at
+most `a_i`, while the row demands `a_i * b_i`. For `b_i = 1` the two coincide, which is
+why a one-step bound verified and looked like a working shape. A two-step bound is
+rejected outright:
+
+```
+Hint: Failed to show '1 x2_ge_2 >= 2' by reverse unit propagation
+```
+
+This is arithmetic, not a missing fact: no proof state can satisfy that row.
+
+Decision: a bound fact is stated in the **same currency as the model row** — the order
+encoding's own expansion, `x = lo_decl + sum_{v = lo_decl+1}^{hi_decl} [x >= v]` (M1-T7c,
+`Encoding.expand_int_lin_le`). So, for coefficient `a` and *declared* bounds
+`[lo_decl, hi_decl]`:
+
+- a lower bound `x >= b` contributes the chain `(a, x_ge_v)` for `v` in
+  `lo_decl+1 .. b`, adding `a * (b - lo_decl)` to the right-hand side;
+- an upper bound `x <= b` contributes `(|a|, Lit.le x u)` for `u` in `b .. hi_decl-1`
+  — that is `~x_ge_(u+1)` — adding `|a| * (hi_decl - b)`.
+
+Both are measured **relative to the declared bound**, never against the raw value, which
+is the mistake above: the constant `lo_decl` lives on the right-hand side of the model
+row, so an explanation that omits it is speaking a different language from the row it
+must combine with.
+
+Consequences:
+- The bound used is the *current* one from the store; the offset is the *declared* one
+  from the model. A propagator therefore has to capture its variables' declared bounds at
+  construction, when the store still holds them, rather than reading the store at prune
+  time. This is a new obligation on every propagator that appeals to a bound.
+- It follows that **`Store`'s initial domains and `Encoding`'s declared domains must
+  agree**, since the row's constant comes from one and the explanation's offset from the
+  other. Nothing wires the two together yet; when M1-T11 does, that agreement is an
+  assertion at wiring time, not a hope. Recorded here so it is not discovered a third time.
+- Chain construction belongs in one shared helper that every propagator calls, not copied
+  into each. `int_lin_le` is the reference propagator precisely because four more are
+  about to copy it.
+- `Explanation.Linear` keeps meaning literally what it says — a PB constraint over the
+  literals listed. The alternative, having `Justify` silently expand a single literal into
+  its chain, was rejected: it would make the emitted proof differ from what the value
+  states, which is the exact failure mode D-0009 records.
