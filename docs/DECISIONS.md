@@ -276,3 +276,43 @@ Consequences:
   literals listed. The alternative, having `Justify` silently expand a single literal into
   its chain, was rejected: it would make the emitted proof differ from what the value
   states, which is the exact failure mode D-0009 records.
+
+## D-0011  One propagator instance, one model row
+Status: DECIDED
+Date: 2026-09-14
+Arose from: M1-T8, where `int_lin_eq` was built as one propagator over two model rows.
+
+Context: `Explanation.Trivial` means "the model constraint itself justifies this". It
+carries no payload, so *which* constraint that is has to come from somewhere else.
+`Justify` takes it from `ctx.model_id`, which the caller sets.
+
+`int_lin_eq` posts as two rows (`Encoding.add_equality` returns both ids) and was
+implemented as a single propagator running an `le` and a `ge` half to a joint fixpoint.
+Its header proposes that a caller route each explanation to the context for whichever
+half produced it, by comparing against the exposed `Linear.t` values.
+
+That does not work for a pruning. A pruning's explanation is recorded on the trail as
+`{ var; old; why }` — **the trail records no propagator identity**. A caller walking the
+trail has the explanation and nothing else, so it cannot tell which half produced it, and
+`Trivial` is unresolvable.
+
+Decision: **one propagator instance justifies against exactly one model row.** An
+equality posts as two `Linear` instances rather than one fused propagator. The engine
+already runs propagators to a fixpoint and wakes them on the variables that changed, so
+two instances reach the same fixpoint the fused loop reaches by hand — the internal
+alternation duplicates the engine's own job.
+
+Consequences:
+- The propagator-to-row map stays a lookup on the instance, which is what makes `Trivial`
+  resolvable at all in M1.
+- In M1 this is sufficient, because reasons are demanded only for *conflicts*, which
+  `propagate` returns directly to the engine — so the instance that produced it is known.
+- It is **not** sufficient from M2-T3 on. Clause learning walks the trail, and there the
+  explanation is all there is. Resolving that needs either the trail to record the
+  propagator that made each change, or `Explanation` to carry the row — and that is the
+  same "value naming ids versus computation deriving them" question as **D-0003**, which
+  remains open. This is the second time D-0003 has blocked concrete work (D-0009 was the
+  first). It should be closed before M2-T3 starts, not during it.
+- Cost: a little more queue churn than a fused loop. M6 is deliberately the last
+  milestone, and a routing hazard that every future caller must get right is worse than
+  queue churn.
