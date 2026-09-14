@@ -79,82 +79,132 @@ let decode_bound (l : Lit.t) =
    docs/DECISIONS.md D-0010 was exactly a row that failed this. *)
 let max_attainable lterms = List.fold_left (fun acc (a, _) -> acc + max a 0) 0 lterms
 
-(* The constant a set of terms contributes at their *declared* bound (decl_lo for a
-   non-negative coefficient, decl_hi for a negative one) - i.e. [a_i * decl_bound_i]
-   summed over [indices]. A chain's [units_rhs] (D-0010) is measured *relative to*
-   this constant, so recovering the "raw" quantity the propagator's own floor/ceil
-   division used (docs/core/prop/linear.ml's [term_min]) needs this added back:
-   raw_min_i = a_i * decl_bound_i + chain_contribution_i. *)
-let const_contribution bounds terms indices =
-  List.fold_left
-    (fun acc idx ->
-      let a, _ = List.nth terms idx in
-      if a = 0 then acc
-      else
-        let _, lo, hi = List.nth bounds idx in
-        let decl_bound = if a >= 0 then lo else hi in
-        acc + (a * decl_bound))
-    0 indices
+(* ----------------------------------------------------- D-0013 Combine shape checks *)
 
-let all_but bounds idx = List.filteri (fun i _ -> i <> idx) (List.mapi (fun i _ -> i) bounds)
-
-(* Verify one [Cut (Trivial, Linear (lterms, units_rhs), 1, 1)] explanation against the
-   constraint it came from: [bounds]/[terms] are the same index-aligned lists the test
-   built the propagator from (declared domain and coefficient per variable, by [Var.of_int]
-   position). Returns [(units_rhs, ok)] so callers can go on to check the derived bound. *)
-let verify_linear_shape test_name store bounds terms lterms units_rhs =
+(* D-0013: verify one summand of a [Combine] against the term it stands for --
+   [bounds]/[terms] are the index-aligned (name, decl_lo, decl_hi) / (coeff, var)
+   lists the test built the propagator from, [idx] the term's position. Declared
+   (current bound == declared bound) must render as [Weaken], derived (tighter than
+   declared) must render as [Term] citing something -- never the other way around,
+   which is exactly the D-0009 distinction D-0013 makes structural. A [Weaken]
+   chain's own literals are checked against [Order_reason.weaken_declared]'s output
+   verbatim (not just its length), and against I-D0010's max-attainable guard: the
+   chain's own literals, all at 1, must reach at least its own contribution -- true
+   by construction here, but asserted directly rather than assumed, per this task's
+   own instruction that every explanation's row gets this check. *)
+(* [~strict] holds when the caller's [coeff] is known to be exactly what the
+   *producing* instance itself used internally (true for [Linear] driven directly --
+   [test_conflict], [check_entailment_case], [test_multi_step_chain]). [Lin_eq]'s
+   [ge] half negates every coefficient before handing it to [Linear.make] (see
+   lib/core/prop/lin_eq.ml), so a generic checker fed the *un*negated [terms] cannot
+   know, from the sign of [coeff] alone, which of [x]'s two bounds the *actual*
+   producing half cared about -- only its magnitude survives negation. Non-strict
+   mode checks exactly that: the summand's own coefficient magnitude, and, for a
+   [Weaken], that its literals are [Order_reason.weaken_declared]'s output at
+   *either* polarity (the actual polarity is determined by the sign the producing
+   half really used, invisible here) -- still catching a wrong chain, wrong
+   magnitude, or wrong-shaped summand, just not "should this have cited instead". *)
+let verify_one_summand ?(strict = true) test_name store bounds idx coeff summand =
   let ok = ref true in
   let expect cond msg =
     if not cond then ok := false;
     check (Printf.sprintf "%s: %s" test_name msg) cond
   in
-  (* The row must at least be able to reach its own rhs. *)
-  expect (max_attainable lterms >= units_rhs) "row can attain its own rhs";
-  (* With our construction every chain step is tight, so the sum should be exact. *)
-  let sum_coeffs = List.fold_left (fun acc (a, _) -> acc + a) 0 lterms in
-  expect (sum_coeffs = units_rhs) "sum of coefficients matches rhs exactly";
-  (* Every chain step's coefficient must be the |original coefficient| for its
-     variable, and the v-sequence must be the exact contiguous run D-0010 specifies,
-     relative to the *declared* bound, not the raw current one. *)
-  let name_to_idx = List.mapi (fun i (n, _, _) -> (n, i)) bounds in
-  let groups = Hashtbl.create 8 in
-  let group_order = ref [] in
-  List.iter
-    (fun (a, l) ->
-      let nm = Lit.owner l.Lit.v in
-      if not (Hashtbl.mem groups nm) then group_order := nm :: !group_order;
-      let prev = try Hashtbl.find groups nm with Not_found -> [] in
-      Hashtbl.replace groups nm ((a, l) :: prev))
-    lterms;
-  List.iter
-    (fun nm ->
-      let group = List.rev (Hashtbl.find groups nm) in
-      let idx = List.assoc nm name_to_idx in
-      let _, decl_lo, decl_hi = List.nth bounds idx in
-      let orig_coeff, _ = List.nth terms idx in
-      let d = Store.get store (var idx) in
-      expect
-        (List.for_all (fun (a, _) -> a = abs orig_coeff) group)
-        (Printf.sprintf "chain coefficients for %s match |%d|" nm orig_coeff);
-      match group with
-      | [] -> ()
-      | (_, l0) :: _ ->
-          if l0.Lit.positive then (
-            (* lower-bound chain: v in decl_lo+1 .. current lo *)
-            let b = Domain.lo d in
-            let expected = List.init (b - decl_lo) (fun i -> decl_lo + 1 + i) in
-            let actual = List.map (fun (_, l) -> decode_bound l) group in
-            expect (actual = expected)
-              (Printf.sprintf "lower chain for %s is decl_lo+1..%d" nm b))
-          else
-            (* upper-bound chain: v in current hi .. decl_hi-1 *)
-            let b = Domain.hi d in
-            let expected = List.init (decl_hi - b) (fun i -> b + i) in
-            let actual = List.map (fun (_, l) -> decode_bound l) group in
-            expect (actual = expected)
-              (Printf.sprintf "upper chain for %s is %d..decl_hi-1" nm b))
-    (List.rev !group_order);
+  let name, decl_lo, decl_hi = List.nth bounds idx in
+  let mag = abs coeff in
+  let pos_lits, pos_c = Order_reason.weaken_declared ~coeff:mag ~name ~decl_lo ~decl_hi in
+  let neg_lits, neg_c = Order_reason.weaken_declared ~coeff:(-mag) ~name ~decl_lo ~decl_hi in
+  let check_weaken lits =
+    expect
+      (lits = pos_lits || lits = neg_lits)
+      (Printf.sprintf
+         "%s: weaken chain matches Order_reason.weaken_declared (coeff magnitude %d)" name
+         mag);
+    let contribution = if lits = pos_lits then pos_c else neg_c in
+    expect
+      (max_attainable lits >= contribution)
+      (Printf.sprintf "%s: weaken chain can attain its own contribution" name)
+  in
+  (if not strict then (
+     match summand with
+     | Explanation.Weaken lits -> check_weaken lits
+     | Explanation.Term (c, _cited) ->
+         expect (c = mag)
+           (Printf.sprintf "%s: cited derived bound is scaled by abs(coeff) = %d" name mag))
+   else
+     let d = Store.get store (var idx) in
+     let still_declared =
+       if coeff >= 0 then Domain.lo d <= decl_lo else Domain.hi d >= decl_hi
+     in
+     match (summand, still_declared) with
+     | Explanation.Weaken lits, true -> check_weaken lits
+     | Explanation.Term (c, _cited), false ->
+         expect (c = mag)
+           (Printf.sprintf "%s: cited derived bound is scaled by abs(coeff) = %d" name mag)
+     | Explanation.Weaken _, false ->
+         expect false
+           (Printf.sprintf
+              "%s: bound is derived (tighter than declared) but the summand weakens \
+               instead of citing"
+              name)
+     | Explanation.Term _, true ->
+         expect false
+           (Printf.sprintf
+              "%s: bound is still declared but the summand cites instead of weakening" name));
   !ok
+
+(* Verify a whole [Combine (summands, divisor)] against the row it came from:
+   [excluded] is [Some idx], the pushed variable (excluded from the sum, divisor is
+   [abs] its coefficient), or [None] for a row-level conflict (every term
+   participates, divisor 1). Checks the base summand is [Term (1, Model_row _)] --
+   never bare [Trivial], see explanation.ml's header on why -- and that every other
+   nonzero term gets exactly one summand, verified by [verify_one_summand], in the
+   same order as [terms]. *)
+let verify_combine ?(strict = true) test_name store bounds terms expl ~excluded =
+  let ok = ref true in
+  let expect cond msg =
+    if not cond then ok := false;
+    check (Printf.sprintf "%s: %s" test_name msg) cond
+  in
+  match expl with
+  | Explanation.Combine (base :: rest, divisor) ->
+      let expected_divisor =
+        match excluded with None -> 1 | Some idx -> abs (fst (List.nth terms idx))
+      in
+      expect (divisor = expected_divisor) "divisor is abs(pushed coefficient), or 1";
+      (match base with
+      | Explanation.Term (1, Explanation.Model_row _) -> ()
+      | _ -> expect false "first summand is Term (1, Model_row _), not Trivial");
+      let expected_others =
+        List.mapi (fun i t -> (i, t)) terms
+        |> List.filter (fun (i, (a, _)) -> a <> 0 && Some i <> excluded)
+      in
+      if List.length rest <> List.length expected_others then
+        expect false "one summand per nonzero, non-pushed term"
+      else
+        List.iter2
+          (fun (idx, (coeff, _x)) summand ->
+            if not (verify_one_summand ~strict test_name store bounds idx coeff summand)
+            then ok := false)
+          expected_others rest;
+      !ok
+  | _ ->
+      expect false "top-level shape is Combine (_ :: _, _)";
+      false
+
+(* The bound a D-0013 derivation pushes, recomputed independently from the store
+   rather than from the [Explanation.t] itself (I-P1's own discipline: check the
+   *effect*, not the mechanism that produced it) -- the sum, over every *other*
+   nonzero term, of its current minimum contribution ([term_min]'s own formula),
+   subtracted from [rhs]. Matches [Linear.propagate]'s [max_term] exactly. *)
+let others_min store terms ~excluded =
+  List.mapi (fun i t -> (i, t)) terms
+  |> List.filter (fun (i, (a, _)) -> a <> 0 && Some i <> excluded)
+  |> List.fold_left
+       (fun acc (idx, (a, _x)) ->
+         let d = Store.get store (var idx) in
+         acc + if a >= 0 then a * Domain.lo d else a * Domain.hi d)
+       0
 
 (* ---------------------------------------------------------- I-P1: soundness *)
 
@@ -172,7 +222,7 @@ let check_soundness_case name coeffs rhs ranges =
   let has_support i v = List.exists (fun sol -> List.nth sol i = v) solutions in
   let store = mk_store bounds in
   let raw_terms = List.mapi (fun i a -> (a, var i)) coeffs in
-  let prop = Linear.make store raw_terms rhs in
+  let prop = Linear.make store raw_terms rhs ~row_id:1 in
   let result = Linear.propagate prop store in
   match result with
   | Propagator.Conflict _ ->
@@ -217,7 +267,7 @@ let test_bounds_consistency () =
   let bounds = List.mapi (fun i (lo, hi) -> (Printf.sprintf "x%d" i, lo, hi)) ranges in
   let store = mk_store bounds in
   let raw_terms = List.mapi (fun i a -> (a, var i)) coeffs in
-  let prop = Linear.make store raw_terms rhs in
+  let prop = Linear.make store raw_terms rhs ~row_id:1 in
   match Linear.propagate prop store with
   | Propagator.Conflict _ -> check "bounds consistency: expected Fixpoint" false
   | Propagator.Fixpoint ->
@@ -259,7 +309,7 @@ let test_idempotence () =
   let bounds = List.mapi (fun i (lo, hi) -> (Printf.sprintf "x%d" i, lo, hi)) ranges in
   let store = mk_store bounds in
   let raw_terms = List.mapi (fun i a -> (a, var i)) coeffs in
-  let prop = Linear.make store raw_terms rhs in
+  let prop = Linear.make store raw_terms rhs ~row_id:1 in
   (match Linear.propagate prop store with
   | Propagator.Conflict _ -> check "idempotence: expected Fixpoint first pass" false
   | Propagator.Fixpoint -> check "idempotence: first pass is a fixpoint result" true);
@@ -274,37 +324,37 @@ let test_idempotence () =
 let test_conflict () =
   (* 2x + 3y <= 1, x and y declared [0,3] but already known (some earlier propagator)
      to be >= 1 each: min is 2+3=5 > 1. Declared bounds differ from current on
-     purpose, so the reason's chains are non-empty and worth checking - at the
-     declared bounds themselves the model row alone is already infeasible and needs
-     no extra literals, which would make this a degenerate test of I-P1/I-P3 conflict
-     reporting but not of the chain shape. *)
+     purpose (D-0013's own case: both bounds here are derived, not declared, so the
+     conflict cites rather than weakens both terms) -- at the declared bounds
+     themselves the model row alone is already infeasible and needs no extra
+     citation, which would make this a degenerate test of I-P1/I-P3 conflict
+     reporting but not of the Combine shape. *)
   let bounds = [ ("x", 0, 3); ("y", 0, 3) ] in
   let store = mk_store bounds in
   let raw_terms = [ (2, var 0); (3, var 1) ] in
-  let prop = Linear.make store raw_terms 1 in
+  let prop = Linear.make store raw_terms 1 ~row_id:1 in
   ignore (Store.set_lo store (var 0) 1 Explanation.trivial);
   ignore (Store.set_lo store (var 1) 1 Explanation.trivial);
   match Linear.propagate prop store with
   | Propagator.Fixpoint -> check "conflict: expected Conflict" false
   | Propagator.Conflict e ->
-      let lits = Explanation.lits e in
+      (* [Explanation.lits] walks into [Combine]'s [Weaken] summands but not into a
+         [Term]'s cited explanation until *that* is forced -- and here both x and y
+         are cited via the placeholder [Explanation.trivial] (standing in for "some
+         earlier propagator already established this"), which carries no literals
+         of its own (docs/core/explanation.ml: [Trivial] is the model row itself, an
+         indivisible reference, not a set of literals to enumerate). An empty result
+         is therefore the *correct* answer for this specific setup, not a smell --
+         asserted directly since D-0013 changed what a legitimate answer looks like
+         here (it used to always be nonempty, back when every "other var" reason was
+         a literal chain regardless of whether it was declared or derived). *)
       check "conflict: reported" true;
-      check "conflict: explanation has literals" (lits <> []);
-      (match Explanation.force e with
-      | Explanation.Cut
-          (Explanation.Trivial, Explanation.Linear (lterms, units_rhs), 1, 1) ->
-          ignore (verify_linear_shape "conflict" store bounds raw_terms lterms units_rhs);
-          let all_idx = List.mapi (fun i _ -> i) bounds in
-          let const_all = const_contribution bounds raw_terms all_idx in
-          check "conflict: numeric contradiction (c - const - units_rhs < 0)"
-            (1 - const_all - units_rhs < 0);
-          check "conflict: covers every term"
-            (Hashtbl.length
-               (let h = Hashtbl.create 8 in
-                List.iter (fun (_, l) -> Hashtbl.replace h (Lit.owner l.Lit.v) ()) lterms;
-                h)
-            = List.length raw_terms)
-      | _ -> check "conflict: unexpected explanation shape" false)
+      check "conflict: lits does not raise" (ignore (Explanation.lits e); true);
+      let e' = Explanation.force e in
+      if verify_combine "conflict" store bounds raw_terms e' ~excluded:None then
+        let max_term = 1 - others_min store raw_terms ~excluded:None in
+        check "conflict: numeric contradiction (rhs - min contribution < 0)"
+          (max_term < 0)
 
 (* ---------------------------------------------------------- explanation entailment *)
 
@@ -316,7 +366,7 @@ let test_conflict () =
 let check_entailment_case name coeffs rhs bounds =
   let store = mk_store bounds in
   let raw_terms = List.mapi (fun i a -> (a, var i)) coeffs in
-  let prop = Linear.make store raw_terms rhs in
+  let prop = Linear.make store raw_terms rhs ~row_id:1 in
   let before = Store.trail_length store in
   match Linear.propagate prop store with
   | Propagator.Conflict _ -> check (Printf.sprintf "%s: expected Fixpoint" name) false
@@ -329,51 +379,32 @@ let check_entailment_case name coeffs rhs bounds =
       let new_entries = List.filteri (fun i _ -> i < after - before) entries in
       List.iter
         (fun (e : Store.entry) ->
-          let a =
-            match List.find_opt (fun (_, x) -> Var.equal x e.var) raw_terms with
-            | Some (a, _) -> a
-            | None -> failwith "entailment test: var not in constraint"
+          let pushed_idx =
+            match
+              List.find_opt (fun i -> Var.equal (var i) e.var)
+                (List.mapi (fun i _ -> i) bounds)
+            with
+            | Some i -> i
+            | None -> failwith "entailment test: pushed var not found by index"
           in
+          let a, _ = List.nth raw_terms pushed_idx in
           let expl = Explanation.force (Store.explanation store e) in
-          match expl with
-          | Explanation.Cut
-              (Explanation.Trivial, Explanation.Linear (lterms, units_rhs), 1, 1) ->
-              let shape_ok =
-                verify_linear_shape name store bounds raw_terms lterms units_rhs
-              in
-              (* The Linear part must exclude exactly the pushed variable. *)
+          let shape_ok =
+            verify_combine name store bounds raw_terms expl ~excluded:(Some pushed_idx)
+          in
+          if shape_ok then begin
+            let max_term = rhs - others_min store raw_terms ~excluded:(Some pushed_idx) in
+            let d_now = Store.get store e.var in
+            if a > 0 then
               check
-                (Printf.sprintf "%s: pushed var absent from its own reason" name)
-                (not
-                   (List.exists
-                      (fun (_, l) -> Lit.owner l.Lit.v = Store.name store e.var)
-                      lterms));
-              if shape_ok then begin
-                let pushed_idx =
-                  match
-                    List.find_opt (fun i -> Var.equal (var i) e.var)
-                      (List.mapi (fun i _ -> i) bounds)
-                  with
-                  | Some i -> i
-                  | None -> failwith "entailment test: pushed var not found by index"
-                in
-                let const_others =
-                  const_contribution bounds raw_terms (all_but bounds pushed_idx)
-                in
-                let max_term = rhs - const_others - units_rhs in
-                let d_now = Store.get store e.var in
-                if a > 0 then
-                  check
-                    (Printf.sprintf "%s: pushed hi matches floor division" name)
-                    (Domain.hi d_now = Linear.floordiv max_term a)
-                else if a < 0 then
-                  check
-                    (Printf.sprintf "%s: pushed lo matches ceil division" name)
-                    (Domain.lo d_now = Linear.ceildiv max_term a)
-                else
-                  check (Printf.sprintf "%s: zero coefficient never pushes" name) false
-              end
-          | _ -> check (Printf.sprintf "%s: unexpected explanation shape" name) false)
+                (Printf.sprintf "%s: pushed hi matches floor division" name)
+                (Domain.hi d_now = Linear.floordiv max_term a)
+            else if a < 0 then
+              check
+                (Printf.sprintf "%s: pushed lo matches ceil division" name)
+                (Domain.lo d_now = Linear.ceildiv max_term a)
+            else check (Printf.sprintf "%s: zero coefficient never pushes" name) false
+          end)
         new_entries
 
 let test_explanation_entailment () =
@@ -413,94 +444,83 @@ let test_order_reason () =
   check "Order_reason: upper chain at the declared bound is empty"
     (Order_reason.upper_bound_terms ~coeff:1 ~name:"x" ~decl_hi:5 5 = ([], 0))
 
-(* End-to-end: a variable's bound is moved *before* the propagator's own [make] would
-   see it as anything but declared - simulating an earlier propagator's pruning - so
-   that when it is later used in someone else's reason, it is more than one step away
-   from its declared bound. The point is exactly what D-0010 got wrong: a one-step
-   bound looked fine, a multi-step one was rejected by veripb outright. *)
-let test_multi_step_chain () =
-  (* Lower-bound case: x's declared domain is [-5, 5]; before propagating, x is
-     already known to be >= 2 (a gap of 7 from its declared lo). y's push must then
-     cite the full 7-literal chain for x, not a single "x >= 2" literal. *)
-  let bounds = [ ("x", -5, 5); ("y", -5, 5) ] in
-  let store = mk_store bounds in
-  let raw_terms = [ (1, var 0); (1, var 1) ] in
-  let prop = Linear.make store raw_terms 2 in
-  (match Store.set_lo store (var 0) 2 Explanation.trivial with
-  | Store.Changed -> ()
-  | _ -> check "multi-step lower: setup prune applied" false);
-  let before = Store.trail_length store in
-  (match Linear.propagate prop store with
-  | Propagator.Conflict _ -> check "multi-step lower: expected Fixpoint" false
-  | Propagator.Fixpoint ->
-      let after = Store.trail_length store in
-      let entries =
-        List.filteri (fun i _ -> i < after - before) (Store.trail_entries store)
-      in
-      let y_entry =
-        List.find_opt (fun (e : Store.entry) -> Var.equal e.var (var 1)) entries
-      in
-      (match y_entry with
-      | None -> check "multi-step lower: y was pushed" false
-      | Some e -> (
-          match Explanation.force (Store.explanation store e) with
-          | Explanation.Cut
-              (Explanation.Trivial, Explanation.Linear (lterms, units_rhs), 1, 1) ->
-              ignore (verify_linear_shape "multi-step lower" store bounds raw_terms
-                        lterms units_rhs);
-              let x_terms =
-                List.filter (fun (_, l) -> Lit.owner l.Lit.v = "x") lterms
-              in
-              check "multi-step lower: x's chain has more than one literal"
-                (List.length x_terms > 1);
-              check "multi-step lower: x's chain is exactly 7 literals"
-                (List.length x_terms = 7);
-              check "multi-step lower: x's chain values are -4..2"
-                (List.map (fun (_, l) -> decode_bound l) x_terms
-                = [ -4; -3; -2; -1; 0; 1; 2 ])
-          | _ -> check "multi-step lower: unexpected explanation shape" false)));
+(* D-0013's two term shapes, each with a coefficient other than 1 (docs/DECISIONS.md
+   D-0013: "unit-coefficient tests prove nothing about [division]"; the task behind
+   this module makes the same point about the chain literals) and, for the citing
+   case, a bound more than one step from declared:
 
-  (* Symmetric upper-bound case: x's declared domain is [-5, 5]; x is already known to
-     be <= -3 (a gap of 8 from its declared hi). The constraint uses a negative
-     coefficient on x so its *minimum* is driven by the upper bound. *)
-  let bounds2 = [ ("x", -5, 5); ("y", -5, 5) ] in
-  let store2 = mk_store bounds2 in
-  let raw_terms2 = [ (-1, var 0); (1, var 1) ] in
-  let prop2 = Linear.make store2 raw_terms2 (-2) in
-  (match Store.set_hi store2 (var 0) (-3) Explanation.trivial with
-  | Store.Changed -> ()
-  | _ -> check "multi-step upper: setup prune applied" false);
-  let before2 = Store.trail_length store2 in
-  match Linear.propagate prop2 store2 with
-  | Propagator.Conflict _ -> check "multi-step upper: expected Fixpoint" false
-  | Propagator.Fixpoint ->
-      let after2 = Store.trail_length store2 in
-      let entries =
-        List.filteri (fun i _ -> i < after2 - before2) (Store.trail_entries store2)
-      in
-      let y_entry =
-        List.find_opt (fun (e : Store.entry) -> Var.equal e.var (var 1)) entries
-      in
-      (match y_entry with
-      | None -> check "multi-step upper: y was pushed" false
-      | Some e -> (
-          match Explanation.force (Store.explanation store2 e) with
-          | Explanation.Cut
-              (Explanation.Trivial, Explanation.Linear (lterms, units_rhs), 1, 1) ->
-              ignore
-                (verify_linear_shape "multi-step upper" store2 bounds2 raw_terms2 lterms
-                   units_rhs);
-              let x_terms =
-                List.filter (fun (_, l) -> Lit.owner l.Lit.v = "x") lterms
-              in
-              check "multi-step upper: x's chain has more than one literal"
-                (List.length x_terms > 1);
-              check "multi-step upper: x's chain is exactly 8 literals"
-                (List.length x_terms = 8);
-              check "multi-step upper: x's chain values are -3..4"
-                (List.map (fun (_, l) -> decode_bound l) x_terms
-                = [ -3; -2; -1; 0; 1; 2; 3; 4 ])
-          | _ -> check "multi-step upper: unexpected explanation shape" false))
+   1. "Cite": x's bound was already tightened by an earlier step (simulated here by
+      pushing it with [Explanation.trivial] before running this propagator, standing
+      in for whatever real derivation established it -- this test only cares that
+      *something* is cited, not what). The summand for x must be [Term], scaled by
+      [abs coeff], never a [Weaken] chain, however many steps away from declared it
+      is.
+   2. "Weaken": x is left at its declared bound entirely untouched. The summand must
+      be [Weaken], and -- this is the D-0013 shape a unit coefficient cannot
+      exercise -- its chain spans x's *whole* declared width (not a prefix relative
+      to any current value, there being no "current" to be relative to) at
+      coefficient [abs coeff] per literal, polarity determined by the *sign* of
+      coeff (see [Order_reason.weaken_declared]'s header). *)
+let test_multi_step_chain () =
+  let run_case name ~coeffs ~rhs ~bounds ~x_setup =
+    let store = mk_store bounds in
+    let raw_terms = List.mapi (fun i a -> (a, var i)) coeffs in
+    let prop = Linear.make store raw_terms rhs ~row_id:1 in
+    (match x_setup store with
+    | None -> ()
+    | Some (set, bound) -> (
+        match set store (var 0) bound Explanation.trivial with
+        | Store.Changed -> ()
+        | _ -> check (Printf.sprintf "%s: setup prune applied" name) false));
+    let before = Store.trail_length store in
+    match Linear.propagate prop store with
+    | Propagator.Conflict _ -> check (Printf.sprintf "%s: expected Fixpoint" name) false
+    | Propagator.Fixpoint -> (
+        let after = Store.trail_length store in
+        let entries =
+          List.filteri (fun i _ -> i < after - before) (Store.trail_entries store)
+        in
+        match List.find_opt (fun (e : Store.entry) -> Var.equal e.var (var 1)) entries with
+        | None -> check (Printf.sprintf "%s: y was pushed" name) false
+        | Some e ->
+            let expl = Explanation.force (Store.explanation store e) in
+            (* The Weaken cases carry real literals ([Explanation.lits] must reach
+               them); the cite cases legitimately may not (see test_conflict's own
+               note on [Trivial]). *)
+            (if x_setup store = None then
+               check (Printf.sprintf "%s: lits reaches into the weaken chain" name)
+                 (Explanation.lits expl <> []));
+            if verify_combine name store bounds raw_terms expl ~excluded:(Some 1) then
+              let max_term = rhs - others_min store raw_terms ~excluded:(Some 1) in
+              let d_now = Store.get store e.var in
+              let b, _ = List.nth raw_terms 1 in
+              if b > 0 then
+                check
+                  (Printf.sprintf "%s: y's pushed hi matches floor division" name)
+                  (Domain.hi d_now = Linear.floordiv max_term b)
+              else
+                check
+                  (Printf.sprintf "%s: y's pushed lo matches ceil division" name)
+                  (Domain.lo d_now = Linear.ceildiv max_term b))
+  in
+  (* Cite, positive coefficient (2), bound seven steps above declared lo. *)
+  run_case "multi-step cite (coeff 2, lower)" ~coeffs:[ 2; 1 ] ~rhs:6
+    ~bounds:[ ("x", -5, 5); ("y", -5, 5) ]
+    ~x_setup:(fun _ -> Some (Store.set_lo, 2));
+  (* Cite, negative coefficient (-3), bound eight steps below declared hi. *)
+  run_case "multi-step cite (coeff -3, upper)" ~coeffs:[ -3; 1 ] ~rhs:9
+    ~bounds:[ ("x", -5, 5); ("y", -5, 5) ]
+    ~x_setup:(fun _ -> Some (Store.set_hi, -3));
+  (* Weaken, positive coefficient (3): x is left fully declared ([-5,5], 10 literals);
+     the D-0013 shape a coefficient of 1 cannot exercise (D-0010's own regression was
+     invisible at coefficient 1 for exactly this reason). *)
+  run_case "multi-step weaken (coeff 3, lower)" ~coeffs:[ 3; 1 ] ~rhs:(-15)
+    ~bounds:[ ("x", -5, 5); ("y", -5, 5) ]
+    ~x_setup:(fun _ -> None);
+  (* Weaken, negative coefficient (-2), x fully declared. *)
+  run_case "multi-step weaken (coeff -2, upper)" ~coeffs:[ -2; 1 ] ~rhs:(-10)
+    ~bounds:[ ("x", -5, 5); ("y", -5, 5) ]
+    ~x_setup:(fun _ -> None)
 
 (* ============================================================================
    M1-T8: int_lin_eq, int_le, int_lt, int_eq.
@@ -572,7 +592,7 @@ let check_generic_soundness name ~make ~propagate ~n ~ranges ~satisfies =
 let test_lin_eq_soundness () =
   let case name coeffs rhs ranges =
     check_generic_soundness name
-      ~make:(fun store -> Lin_eq.make store (List.mapi (fun i a -> (a, var i)) coeffs) rhs)
+      ~make:(fun store -> Lin_eq.make store (List.mapi (fun i a -> (a, var i)) coeffs) rhs ~le_id:1 ~ge_id:2)
       ~propagate:propagate_pair ~n:(List.length coeffs) ~ranges
       ~satisfies:(fun a -> List.fold_left2 (fun acc c v -> acc + (c * v)) 0 coeffs a = rhs)
   in
@@ -589,22 +609,22 @@ let test_compare_soundness () =
       ~satisfies:(fun a -> match a with [ x; y ] -> rel x y | _ -> false)
   in
   case "int_le: overlapping ranges"
-    (fun store -> Int_le.make store (var 0) (var 1))
+    (fun store -> Int_le.make store (var 0) (var 1) ~row_id:1)
     Int_le.propagate ( <= ) [ (-3, 3); (-3, 3) ];
   case "int_le: disjoint, x strictly above y's range"
-    (fun store -> Int_le.make store (var 0) (var 1))
+    (fun store -> Int_le.make store (var 0) (var 1) ~row_id:1)
     Int_le.propagate ( <= ) [ (2, 5); (-5, -2) ];
   case "int_lt: overlapping ranges"
-    (fun store -> Int_lt.make store (var 0) (var 1))
+    (fun store -> Int_lt.make store (var 0) (var 1) ~row_id:1)
     Int_lt.propagate ( < ) [ (-3, 3); (-3, 3) ];
   case "int_lt: touching ranges (x may equal y's lo, still < possible)"
-    (fun store -> Int_lt.make store (var 0) (var 1))
+    (fun store -> Int_lt.make store (var 0) (var 1) ~row_id:1)
     Int_lt.propagate ( < ) [ (0, 3); (0, 3) ]
 
 let test_int_eq_soundness () =
   let case name ranges =
     check_generic_soundness name
-      ~make:(fun store -> Int_eq.make store (var 0) (var 1))
+      ~make:(fun store -> Int_eq.make store (var 0) (var 1) ~le_id:1 ~ge_id:2)
       ~propagate:propagate_pair ~n:2 ~ranges
       ~satisfies:(fun a -> match a with [ x; y ] -> x = y | _ -> false)
   in
@@ -621,7 +641,7 @@ let test_int_eq_soundness () =
 let test_checking () =
   let run_eq bounds coeffs rhs fix_values expect_conflict label =
     let store = mk_store bounds in
-    let prop = Lin_eq.make store (List.mapi (fun i a -> (a, var i)) coeffs) rhs in
+    let prop = Lin_eq.make store (List.mapi (fun i a -> (a, var i)) coeffs) rhs ~le_id:1 ~ge_id:2 in
     List.iteri
       (fun i v -> ignore (Store.fix store (var i) v Explanation.trivial))
       fix_values;
@@ -644,27 +664,27 @@ let test_checking () =
     | Propagator.Fixpoint -> check label (not expect_conflict)
   in
   run_le
-    (fun store -> Int_le.make store (var 0) (var 1))
+    (fun store -> Int_le.make store (var 0) (var 1) ~row_id:1)
     Int_le.propagate [ ("x", 0, 5); ("y", 0, 5) ] [ 2; 2 ] false
     "I-P3 int_le: x=2,y=2 (x<=y holds) is not a conflict";
   run_le
-    (fun store -> Int_le.make store (var 0) (var 1))
+    (fun store -> Int_le.make store (var 0) (var 1) ~row_id:1)
     Int_le.propagate [ ("x", 0, 5); ("y", 0, 5) ] [ 3; 2 ] true
     "I-P3 int_le: x=3,y=2 (x<=y violated) is a conflict";
   run_le
-    (fun store -> Int_lt.make store (var 0) (var 1))
+    (fun store -> Int_lt.make store (var 0) (var 1) ~row_id:1)
     Int_lt.propagate [ ("x", 0, 5); ("y", 0, 5) ] [ 2; 3 ] false
     "I-P3 int_lt: x=2,y=3 (x<y holds) is not a conflict";
   run_le
-    (fun store -> Int_lt.make store (var 0) (var 1))
+    (fun store -> Int_lt.make store (var 0) (var 1) ~row_id:1)
     Int_lt.propagate [ ("x", 0, 5); ("y", 0, 5) ] [ 2; 2 ] true
     "I-P3 int_lt: x=2,y=2 (x<y violated) is a conflict";
   run_le
-    (fun store -> Int_eq.make store (var 0) (var 1))
+    (fun store -> Int_eq.make store (var 0) (var 1) ~le_id:1 ~ge_id:2)
     propagate_pair [ ("x", 0, 5); ("y", 0, 5) ] [ 3; 3 ] false
     "I-P3 int_eq: x=3,y=3 is not a conflict";
   run_le
-    (fun store -> Int_eq.make store (var 0) (var 1))
+    (fun store -> Int_eq.make store (var 0) (var 1) ~le_id:1 ~ge_id:2)
     propagate_pair [ ("x", 0, 5); ("y", 0, 5) ] [ 3; 4 ] true
     "I-P3 int_eq: x=3,y=4 is a conflict"
 
@@ -689,26 +709,24 @@ let test_new_idempotence () =
       (Store.same_domains store snap)
   in
   run_twice "int_lin_eq"
-    (fun store -> Lin_eq.make store [ (2, var 0); (-1, var 1); (3, var 2) ] 4)
+    (fun store -> Lin_eq.make store [ (2, var 0); (-1, var 1); (3, var 2) ] 4 ~le_id:1 ~ge_id:2)
     propagate_pair
     [ ("x", -3, 3); ("y", -3, 3); ("z", -3, 3) ];
   run_twice "int_le"
-    (fun store -> Int_le.make store (var 0) (var 1))
+    (fun store -> Int_le.make store (var 0) (var 1) ~row_id:1)
     Int_le.propagate [ ("x", -3, 3); ("y", -3, 3) ];
   run_twice "int_lt"
-    (fun store -> Int_lt.make store (var 0) (var 1))
+    (fun store -> Int_lt.make store (var 0) (var 1) ~row_id:1)
     Int_lt.propagate [ ("x", -3, 3); ("y", -3, 3) ];
   run_twice "int_eq"
-    (fun store -> Int_eq.make store (var 0) (var 1))
+    (fun store -> Int_eq.make store (var 0) (var 1) ~le_id:1 ~ge_id:2)
     propagate_pair [ ("x", -5, 5); ("y", -2, 8) ]
 
 (* ------------------------------------------------- explanation shape, per pruning *)
 
-(* Runs [propagate] once and checks every trail entry it created has a
-   [Cut (Trivial, Linear (...), 1, 1)] explanation whose [Linear] child passes
-   [verify_linear_shape] -- which starts with the max-attainable guard (I-D0010's
-   check): a row that cannot reach its own rhs is unsatisfiable and no proof state
-   accepts it. *)
+(* Runs [propagate] once and checks every trail entry it created is a D-0013
+   [Combine], verified by [verify_combine] against whichever term the entry's own
+   variable is at. *)
 let check_all_entries_shape name store bounds terms before =
   let after = Store.trail_length store in
   check (Printf.sprintf "%s: at least one pruning happened" name) (after > before);
@@ -716,37 +734,42 @@ let check_all_entries_shape name store bounds terms before =
   let new_entries = List.filteri (fun i _ -> i < after - before) entries in
   List.iter
     (fun (e : Store.entry) ->
-      match Explanation.force (Store.explanation store e) with
-      | Explanation.Cut
-          (Explanation.Trivial, Explanation.Linear (lterms, units_rhs), 1, 1) ->
-          ignore (verify_linear_shape name store bounds terms lterms units_rhs)
-      | Explanation.Trivial ->
-          (* A pruning whose reason needed no extra bound facts at all (units_rhs = 0,
-             the model constraint alone suffices) can legitimately force straight to
-             [Trivial] if a caller ever short-circuits [Cut (Trivial, Linear([],0),1,1)]
-             -- none of these propagators do that, so seeing this would itself be
-             worth investigating, but it is not a shape violation per se. *)
-          check (Printf.sprintf "%s: unexpected bare Trivial reason" name) false
-      | _ -> check (Printf.sprintf "%s: unexpected explanation shape" name) false)
+      let pushed_idx =
+        match List.find_opt (fun i -> Var.equal (var i) e.var) (List.mapi (fun i _ -> i) bounds) with
+        | Some i -> i
+        | None -> failwith (name ^ ": pushed var not found by index")
+      in
+      let expl = Explanation.force (Store.explanation store e) in
+      ignore
+        (verify_combine ~strict:false name store bounds terms expl
+           ~excluded:(Some pushed_idx)))
     new_entries
 
 let test_lin_eq_entailment () =
   let bounds = [ ("x", -3, 3); ("y", -3, 3); ("z", -3, 3) ] in
   let terms = [ (2, var 0); (-1, var 1); (3, var 2) ] in
   let store = mk_store bounds in
-  let prop = Lin_eq.make store terms 4 in
+  let prop = Lin_eq.make store terms 4 ~le_id:1 ~ge_id:2 in
   let before = Store.trail_length store in
   (match propagate_pair prop store with
   | Propagator.Conflict _ -> check "int_lin_eq entailment: expected Fixpoint" false
   | Propagator.Fixpoint -> check_all_entries_shape "int_lin_eq entailment" store bounds
                               terms before)
 
+(* [make] must run before the simulated earlier pruning, not after -- D-0010's own
+   rule ("[make] therefore reads each variable's domain out of the store at
+   construction time ... this has to happen before anything ... has narrowed it"),
+   restated here because getting the order backwards doesn't fail loudly: it just
+   quietly captures the *narrowed* domain as "declared", so the citing case this
+   test means to exercise silently degenerates into weakening an already-tight
+   declared range instead -- which is another D-0010-shaped trap a green suite can
+   miss, this time in the test rather than the propagator. *)
 let test_compare_entailment () =
   let bounds = [ ("x", -5, 5); ("y", -5, 5) ] in
   let terms = [ (1, var 0); (-1, var 1) ] in
   (let store = mk_store bounds in
+   let prop = Int_le.make store (var 0) (var 1) ~row_id:1 in
    ignore (Store.set_lo store (var 0) 2 Explanation.trivial);
-   let prop = Int_le.make store (var 0) (var 1) in
    let before = Store.trail_length store in
    match Int_le.propagate prop store with
    | Propagator.Conflict _ -> check "int_le entailment: expected Fixpoint" false
@@ -754,8 +777,8 @@ let test_compare_entailment () =
        check_all_entries_shape "int_le entailment" store bounds terms before);
   let terms_lt = [ (1, var 0); (-1, var 1) ] in
   let store2 = mk_store bounds in
+  let prop2 = Int_lt.make store2 (var 0) (var 1) ~row_id:1 in
   ignore (Store.set_lo store2 (var 0) 2 Explanation.trivial);
-  let prop2 = Int_lt.make store2 (var 0) (var 1) in
   let before2 = Store.trail_length store2 in
   match Int_lt.propagate prop2 store2 with
   | Propagator.Conflict _ -> check "int_lt entailment: expected Fixpoint" false
@@ -766,8 +789,8 @@ let test_int_eq_entailment () =
   let bounds = [ ("x", -5, 5); ("y", -5, 5) ] in
   let terms = [ (1, var 0); (-1, var 1) ] in
   let store = mk_store bounds in
+  let prop = Int_eq.make store (var 0) (var 1) ~le_id:1 ~ge_id:2 in
   ignore (Store.set_hi store (var 1) 1 Explanation.trivial);
-  let prop = Int_eq.make store (var 0) (var 1) in
   let before = Store.trail_length store in
   match propagate_pair prop store with
   | Propagator.Conflict _ -> check "int_eq entailment: expected Fixpoint" false
@@ -826,15 +849,6 @@ let run_veripb ~name ~build =
       List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp; log ];
       try Sys.rmdir dir with _ -> ())
 
-(* Pull the [Cut (Trivial, lin, 1, 1)]'s [Linear] child out of a forced explanation,
-   failing loudly (not silently skipping) if the shape is ever something else -- a
-   veripb build that quietly emitted nothing for the wrong reason would be worse than
-   one that crashes here. *)
-let linear_child_of expl =
-  match expl with
-  | Explanation.Cut (Explanation.Trivial, lin, 1, 1) -> lin
-  | _ -> failwith "linear_child_of: unexpected explanation shape"
-
 (* int_lin_eq: x1 + x2 = 4, x1, x2 declared [0,5]. x2 is pinned to exactly 2 by a real
    model constraint (x2 <= 2 *and* x2 >= 2, i.e. x2 = 2 is asserted outright, four
    literals' worth of chain contribution split across upper and lower); the pruning we
@@ -848,8 +862,6 @@ let build_int_lin_eq_multi dir =
   Encoding.declare_int e "x2" ~lo:0 ~hi:5;
   let c_x2_le = Encoding.add_constraint e (Opb.ge [ (1, Lit.le "x2" 2) ] 1) in
   let c_x2_ge = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "x2" 2) ] 1) in
-  ignore c_x2_le;
-  ignore c_x2_ge;
   let opb_terms, const = Encoding.linear_terms_int_lin_le e [ (1, "x1"); (1, "x2") ] in
   let geq_id, leq_id = Encoding.add_equality e opb_terms (4 - const) in
   ignore leq_id;
@@ -861,11 +873,13 @@ let build_int_lin_eq_multi dir =
   let store =
     Store.create ~names:[| "x1"; "x2" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
   in
-  let le, ge = Lin_eq.make store [ (1, Var.of_int 0); (1, Var.of_int 1) ] 4 in
-  (match Store.set_hi store (Var.of_int 1) 2 Explanation.trivial with
+  let le, ge =
+    Lin_eq.make store [ (1, Var.of_int 0); (1, Var.of_int 1) ] 4 ~le_id:leq_id ~ge_id:geq_id
+  in
+  (match Store.set_hi store (Var.of_int 1) 2 (Explanation.model_row c_x2_le) with
   | Store.Changed -> ()
   | _ -> failwith "build_int_lin_eq_multi: x2 <= 2 setup failed");
-  (match Store.set_lo store (Var.of_int 1) 2 Explanation.trivial with
+  (match Store.set_lo store (Var.of_int 1) 2 (Explanation.model_row c_x2_ge) with
   | Store.Changed -> ()
   | _ -> failwith "build_int_lin_eq_multi: x2 >= 2 setup failed");
   (* D-0011: [le] and [ge] are two independently-justified instances, each posted (in
@@ -888,14 +902,12 @@ let build_int_lin_eq_multi dir =
     | None -> failwith "build_int_lin_eq_multi: x1's bound was never pushed by ge"
   in
   let expl = Explanation.force (Store.explanation store entry) in
-  let linear_child = linear_child_of expl in
   let oc = open_out pbp in
   let w = Writer.create ~comments:true ~audit:true oc in
   Encoding.start_proof e w;
   let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> geq_id) in
-  let id_linear = Justify.emit ctx linear_child in
-  let id_cut = Justify.emit ctx expl in
-  Writer.delete_many w [ id_linear; id_cut ];
+  let id = Justify.emit ctx expl in
+  Writer.delete w id;
   Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x1", 2); ("x2", 2) ]));
   close_out oc;
   (opb, pbp)
@@ -909,7 +921,6 @@ let build_int_le_multi dir =
   Encoding.declare_int e "x" ~lo:0 ~hi:5;
   Encoding.declare_int e "y" ~lo:0 ~hi:5;
   let c_bound = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "x" 3) ] 1) in
-  ignore c_bound;
   let model_row = Encoding.add_int_lin_le e [ (1, "x"); (-1, "y") ] 0 in
   let opb = Filename.concat dir "intle_multi.opb" in
   let pbp = Filename.concat dir "intle_multi.pbp" in
@@ -919,8 +930,8 @@ let build_int_le_multi dir =
   let store =
     Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
   in
-  let prop = Int_le.make store (Var.of_int 0) (Var.of_int 1) in
-  (match Store.set_lo store (Var.of_int 0) 3 Explanation.trivial with
+  let prop = Int_le.make store (Var.of_int 0) (Var.of_int 1) ~row_id:model_row in
+  (match Store.set_lo store (Var.of_int 0) 3 (Explanation.model_row c_bound) with
   | Store.Changed -> ()
   | _ -> failwith "build_int_le_multi: x >= 3 setup failed");
   let before = Store.trail_length store in
@@ -937,14 +948,12 @@ let build_int_le_multi dir =
     | None -> failwith "build_int_le_multi: y's bound was never pushed"
   in
   let expl = Explanation.force (Store.explanation store entry) in
-  let linear_child = linear_child_of expl in
   let oc = open_out pbp in
   let w = Writer.create ~comments:true ~audit:true oc in
   Encoding.start_proof e w;
   let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> model_row) in
-  let id_linear = Justify.emit ctx linear_child in
-  let id_cut = Justify.emit ctx expl in
-  Writer.delete_many w [ id_linear; id_cut ];
+  let id = Justify.emit ctx expl in
+  Writer.delete w id;
   Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x", 3); ("y", 3) ]));
   close_out oc;
   (opb, pbp)
@@ -958,7 +967,6 @@ let build_int_lt_multi dir =
   Encoding.declare_int e "x" ~lo:0 ~hi:5;
   Encoding.declare_int e "y" ~lo:0 ~hi:5;
   let c_bound = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "x" 3) ] 1) in
-  ignore c_bound;
   let model_row = Encoding.add_int_lin_le e [ (1, "x"); (-1, "y") ] (-1) in
   let opb = Filename.concat dir "intlt_multi.opb" in
   let pbp = Filename.concat dir "intlt_multi.pbp" in
@@ -968,8 +976,8 @@ let build_int_lt_multi dir =
   let store =
     Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
   in
-  let prop = Int_lt.make store (Var.of_int 0) (Var.of_int 1) in
-  (match Store.set_lo store (Var.of_int 0) 3 Explanation.trivial with
+  let prop = Int_lt.make store (Var.of_int 0) (Var.of_int 1) ~row_id:model_row in
+  (match Store.set_lo store (Var.of_int 0) 3 (Explanation.model_row c_bound) with
   | Store.Changed -> ()
   | _ -> failwith "build_int_lt_multi: x >= 3 setup failed");
   let before = Store.trail_length store in
@@ -986,14 +994,12 @@ let build_int_lt_multi dir =
     | None -> failwith "build_int_lt_multi: y's bound was never pushed"
   in
   let expl = Explanation.force (Store.explanation store entry) in
-  let linear_child = linear_child_of expl in
   let oc = open_out pbp in
   let w = Writer.create ~comments:true ~audit:true oc in
   Encoding.start_proof e w;
   let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> model_row) in
-  let id_linear = Justify.emit ctx linear_child in
-  let id_cut = Justify.emit ctx expl in
-  Writer.delete_many w [ id_linear; id_cut ];
+  let id = Justify.emit ctx expl in
+  Writer.delete w id;
   Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x", 3); ("y", 4) ]));
   close_out oc;
   (opb, pbp)
@@ -1007,7 +1013,6 @@ let build_int_eq_multi dir =
   Encoding.declare_int e "x" ~lo:0 ~hi:5;
   Encoding.declare_int e "y" ~lo:0 ~hi:5;
   let c_bound = Encoding.add_constraint e (Opb.ge [ (1, Lit.le "y" 2) ] 1) in
-  ignore c_bound;
   let opb_terms, const = Encoding.linear_terms_int_lin_le e [ (1, "x"); (-1, "y") ] in
   let geq_id, leq_id = Encoding.add_equality e opb_terms (0 - const) in
   ignore geq_id;
@@ -1019,8 +1024,8 @@ let build_int_eq_multi dir =
   let store =
     Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
   in
-  let le, _ge = Int_eq.make store (Var.of_int 0) (Var.of_int 1) in
-  (match Store.set_hi store (Var.of_int 1) 2 Explanation.trivial with
+  let le, _ge = Int_eq.make store (Var.of_int 0) (Var.of_int 1) ~le_id:leq_id ~ge_id:geq_id in
+  (match Store.set_hi store (Var.of_int 1) 2 (Explanation.model_row c_bound) with
   | Store.Changed -> ()
   | _ -> failwith "build_int_eq_multi: y <= 2 setup failed");
   let before = Store.trail_length store in
@@ -1040,14 +1045,12 @@ let build_int_eq_multi dir =
     | None -> failwith "build_int_eq_multi: x's bound was never pushed by le"
   in
   let expl = Explanation.force (Store.explanation store entry) in
-  let linear_child = linear_child_of expl in
   let oc = open_out pbp in
   let w = Writer.create ~comments:true ~audit:true oc in
   Encoding.start_proof e w;
   let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> leq_id) in
-  let id_linear = Justify.emit ctx linear_child in
-  let id_cut = Justify.emit ctx expl in
-  Writer.delete_many w [ id_linear; id_cut ];
+  let id = Justify.emit ctx expl in
+  Writer.delete w id;
   Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x", 2); ("y", 2) ]));
   close_out oc;
   (opb, pbp)
@@ -1055,140 +1058,80 @@ let build_int_eq_multi dir =
 (* ============================================================================
    D-0011: pairing. [Lin_eq.make]/[Int_eq.make] hand back TWO instances precisely so
    that each one justifies against exactly one model row, with nothing downstream ever
-   having to inspect an explanation to guess which row it meant. The two checks below
-   pin that property down directly, on [Lin_eq] (the general case; [Int_eq] is its
-   two-variable specialisation and shares the same [Trivial]-resolution mechanics, so
-   it does not need its own copy of this):
+   having to inspect an explanation to guess which row it meant.
 
-   1. [le]'s explanation, justified against [le]'s own row (the `<=` id from
-      [Encoding.add_equality]), must verify -- this is just the ordinary case,
-      asserted here to have a controlled baseline for (2).
-   2. The SAME explanation, justified against [ge]'s row (the `>=` id) instead -- the
-      pairing D-0011 exists to rule out -- is checked against veripb to see whether the
-      checker itself catches the mismatch. *)
+   Before M1-T12 this had to be checked by *trying* the wrong pairing and seeing
+   whether veripb happened to catch it -- [Explanation.Trivial] carried no row
+   identity of its own, so a caller could always cite it against the wrong
+   [ctx.model_id] and the mistake was only ever a matter of proof-checker luck (see
+   this file's history: it used to run that experiment and print a NOTE either way).
 
-(* Shared setup: x1 + x2 = 4, x1/x2 declared [0,5], x2 established >= 2 by a genuine
-   model constraint (one fact; the encoding's own consistency chain supplies
-   "x2 >= 1"). Running [le] (the `<=` half) pushes hi(x1) to 2, citing x2's two-literal
-   lower chain -- more than the one-step case D-0010 shows a suite can miss. Returns
-   both ids from [Encoding.add_equality] so a caller can pick the right one, or -- for
-   test (2) above -- deliberately the wrong one. *)
-let setup_lin_eq_pairing dir tag =
-  let e = Encoding.create () in
-  Encoding.declare_int e "x1" ~lo:0 ~hi:5;
-  Encoding.declare_int e "x2" ~lo:0 ~hi:5;
-  let c_bound = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "x2" 2) ] 1) in
-  ignore c_bound;
-  let opb_terms, const = Encoding.linear_terms_int_lin_le e [ (1, "x1"); (1, "x2") ] in
-  let geq_id, leq_id = Encoding.add_equality e opb_terms (4 - const) in
-  let opb = Filename.concat dir (tag ^ ".opb") in
-  let oc = open_out opb in
-  Encoding.write_opb ~comments:[ "x1 + x2 = 4; x2 >= 2 (established)" ] e oc;
-  close_out oc;
-  let store =
-    Store.create ~names:[| "x1"; "x2" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
-  in
-  let le, _ge = Lin_eq.make store [ (1, Var.of_int 0); (1, Var.of_int 1) ] 4 in
-  (match Store.set_lo store (Var.of_int 1) 2 Explanation.trivial with
-  | Store.Changed -> ()
-  | _ -> failwith "setup_lin_eq_pairing: x2 >= 2 setup failed");
-  let before = Store.trail_length store in
-  (match Linear.propagate le store with
-  | Propagator.Conflict _ -> failwith "setup_lin_eq_pairing: le pass conflicted"
-  | Propagator.Fixpoint -> ());
-  let after = Store.trail_length store in
-  let entries = List.filteri (fun i _ -> i < after - before) (Store.trail_entries store) in
-  let entry =
-    match
-      List.find_opt (fun (en : Store.entry) -> Var.equal en.var (Var.of_int 0)) entries
-    with
-    | Some en -> en
-    | None -> failwith "setup_lin_eq_pairing: x1's bound was never pushed by le"
-  in
-  let expl = Explanation.force (Store.explanation store entry) in
-  (e, leq_id, geq_id, opb, expl, linear_child_of expl)
-
-(* (1): [le]'s explanation against [le]'s own row (leq_id). The correct pairing. *)
-let build_lin_eq_pairing_ok dir =
-  let e, leq_id, _geq_id, opb, expl, linear_child =
-    setup_lin_eq_pairing dir "linteq_pair_ok"
-  in
-  let pbp = Filename.concat dir "linteq_pair_ok.pbp" in
-  let oc = open_out pbp in
-  let w = Writer.create ~comments:true ~audit:true oc in
-  Encoding.start_proof e w;
-  let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> leq_id) in
-  let id_linear = Justify.emit ctx linear_child in
-  let id_cut = Justify.emit ctx expl in
-  Writer.delete_many w [ id_linear; id_cut ];
-  Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x1", 2); ("x2", 2) ]));
-  close_out oc;
-  (opb, pbp)
-
-(* (2): the SAME [le] explanation, cited against [ge]'s row (geq_id) instead -- the
-   mismatch D-0011 says must never happen, deliberately constructed to see whether
-   veripb itself catches it. *)
-let build_lin_eq_pairing_wrong dir =
-  let e, _leq_id, geq_id, opb, expl, linear_child =
-    setup_lin_eq_pairing dir "linteq_pair_wrong"
-  in
-  let pbp = Filename.concat dir "linteq_pair_wrong.pbp" in
-  let oc = open_out pbp in
-  let w = Writer.create ~comments:true ~audit:true oc in
-  Encoding.start_proof e w;
-  let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> geq_id) in
-  let id_linear = Justify.emit ctx linear_child in
-  let id_cut = Justify.emit ctx expl in
-  Writer.delete_many w [ id_linear; id_cut ];
-  Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x1", 2); ("x2", 2) ]));
-  close_out oc;
-  (opb, pbp)
-
-(* Like [run_veripb], but returns the outcome instead of counting a rejection as a
-   test failure -- used only for (2) above, where a rejection is what we are hoping to
-   see and an accept is a finding to report rather than a bug in this test suite.
-   [None] means veripb was not found (the earlier [run_veripb] call already reports
-   that as a failure once; this probe just avoids reporting it a second time). *)
-let veripb_accepts ~build =
-  match veripb_path () with
-  | None -> None
-  | Some veripb ->
-      let dir = Filename.temp_file "baguette_prop_veripb_probe" "" in
-      Sys.remove dir;
-      Sys.mkdir dir 0o700;
-      let opb, pbp = build dir in
-      let log = Filename.concat dir "log" in
-      let rc =
-        Sys.command
-          (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
-             (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
-      in
-      List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp; log ];
-      (try Sys.rmdir dir with _ -> ());
-      Some (rc = 0)
-
+   [Explanation.Model_row] (docs/DECISIONS.md D-0013) removes the hazard structurally
+   instead of by discipline: [Linear.make]'s [~row_id] bakes each instance's own row
+   into every explanation it ever builds, so there is no [ctx.model_id] left for a
+   caller to get wrong. The check below asserts exactly that -- [ctx]'s own
+   [model_id] is a thunk that fails if ever called, and the proof still verifies,
+   which is only possible if [expl] never once needed it. *)
 let test_lin_eq_pairing () =
+  let build dir =
+    let e = Encoding.create () in
+    Encoding.declare_int e "x1" ~lo:0 ~hi:5;
+    Encoding.declare_int e "x2" ~lo:0 ~hi:5;
+    let c_bound = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "x2" 2) ] 1) in
+    let opb_terms, const = Encoding.linear_terms_int_lin_le e [ (1, "x1"); (1, "x2") ] in
+    let geq_id, leq_id = Encoding.add_equality e opb_terms (4 - const) in
+    let opb = Filename.concat dir "linteq_pairing.opb" in
+    let oc = open_out opb in
+    Encoding.write_opb ~comments:[ "x1 + x2 = 4; x2 >= 2 (established)" ] e oc;
+    close_out oc;
+    let store =
+      Store.create ~names:[| "x1"; "x2" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
+    in
+    let le, _ge =
+      Lin_eq.make store [ (1, Var.of_int 0); (1, Var.of_int 1) ] 4 ~le_id:leq_id
+        ~ge_id:geq_id
+    in
+    (match Store.set_lo store (Var.of_int 1) 2 (Explanation.model_row c_bound) with
+    | Store.Changed -> ()
+    | _ -> failwith "test_lin_eq_pairing: x2 >= 2 setup failed");
+    let before = Store.trail_length store in
+    (match Linear.propagate le store with
+    | Propagator.Conflict _ -> failwith "test_lin_eq_pairing: le pass conflicted"
+    | Propagator.Fixpoint -> ());
+    let after = Store.trail_length store in
+    let entries =
+      List.filteri (fun i _ -> i < after - before) (Store.trail_entries store)
+    in
+    let entry =
+      match
+        List.find_opt (fun (en : Store.entry) -> Var.equal en.var (Var.of_int 0)) entries
+      with
+      | Some en -> en
+      | None -> failwith "test_lin_eq_pairing: x1's bound was never pushed by le"
+    in
+    let expl = Explanation.force (Store.explanation store entry) in
+    let pbp = Filename.concat dir "linteq_pairing.pbp" in
+    let oc = open_out pbp in
+    let w = Writer.create ~comments:true ~audit:true oc in
+    Encoding.start_proof e w;
+    let ctx =
+      Justify.create ~writer:w ~encoding:e
+        ~model_id:(fun () ->
+          failwith
+            "test_lin_eq_pairing: ctx.model_id was consulted -- expl's base should be \
+             Model_row leq_id, not Trivial")
+    in
+    let id = Justify.emit ctx expl in
+    Writer.delete w id;
+    Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x1", 2); ("x2", 2) ]));
+    close_out oc;
+    (opb, pbp)
+  in
   run_veripb
-    ~name:"D-0011 pairing: le's explanation against its OWN row verifies"
-    ~build:build_lin_eq_pairing_ok;
-  match veripb_accepts ~build:build_lin_eq_pairing_wrong with
-  | None -> ()
-  | Some false ->
-      check
-        "D-0011 pairing: le's explanation against the WRONG (ge) row is rejected by \
-         veripb"
-        true
-  | Some true ->
-      Printf.printf
-        "NOTE D-0011 pairing: veripb ACCEPTS le's explanation cited against the wrong \
-         (ge) row too. A `pol` combination of two valid ids is unconditionally sound \
-         cutting-planes reasoning regardless of which valid ids they are, and the \
-         derived id here is never used for anything (it is deleted right after, and \
-         `conclusion SAT` only checks the assignment against the *original* model, not \
-         against anything this derivation proved) -- so nothing in this proof's \
-         acceptance actually depends on Trivial resolving to the *right* row. The \
-         checker does not enforce the pairing D-0011 requires; only discipline in this \
-         codebase does. Recorded as a finding, not a test failure.\n"
+    ~name:
+      "D-0011 pairing: le's explanation never touches ctx.model_id (Model_row \
+       supersedes Trivial) and still verifies"
+    ~build
 
 (* ------------------------------------------------------------------------ main *)
 

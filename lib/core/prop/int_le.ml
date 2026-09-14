@@ -15,20 +15,18 @@
    D-0010 chain substitution instead of five -- is worth more here than the hot path
    would be, so this is a thin instance, not a rewrite.
 
-   Justification shape: identical to [int_lin_le]'s, because that is genuinely what
-   this is -- [Cut (Trivial, Linear (units, units_rhs), 1, 1)], where [Trivial] refers
-   to the model row [x - y <= 0] and [units] is [Order_reason]'s chain for whichever of
-   [x], [y] was not pushed. See docs/DECISIONS.md D-0009 for why the [Linear] child
-   renders as [rup] rather than [pol] today, and D-0010 for the chain shape.
-   docs/PROOF-FORMAT.md section 4's `int_le` row currently describes a direct,
-   hand-modelled `int_le` ("pol -- single model constraint, unit"); as implemented here
-   the row should instead say "same as int_lin_le" -- reported back per this task's
-   instructions, since that table is orchestrator-owned. *)
+   Justification shape: identical to [int_lin_le]'s -- docs/DECISIONS.md D-0013's
+   "weaken, divide, add" [Combine], over the model row [x - y <= 0] (its own row id
+   passed in as [?row_id], same requirement as [Linear.make]'s). See
+   docs/PROOF-FORMAT.md section 4's `int_le` row, which currently describes a direct,
+   hand-modelled `int_le` ("pol -- single model constraint, unit"); as implemented
+   here the row should instead say "same as int_lin_le" -- reported back per this
+   task's instructions, since that table is orchestrator-owned. *)
 
 type t = Linear.t
 
 let name = "int_le"
 let consistency = Propagator.Bounds
-let make store x y = Linear.make store [ (1, x); (-1, y) ] 0
+let make ?row_id store x y = Linear.make ?row_id store [ (1, x); (-1, y) ] 0
 let vars = Linear.vars
 let propagate = Linear.propagate

@@ -44,16 +44,19 @@
 
    Consistency level: BOUNDS, inherited entirely from [Linear] (see that module's
    header). Justification shape: each of [le]/[ge] is exactly [int_lin_le]'s own
-   [Cut (Trivial, Linear (units, units_rhs), 1, 1)] -- docs/PROOF-FORMAT.md section 4's
-   `int_lin_eq` row, "two int_lin_le derivations", taken completely literally. *)
+   docs/DECISIONS.md D-0013 [Combine] -- docs/PROOF-FORMAT.md section 4's
+   `int_lin_eq` row, "two int_lin_le derivations", taken completely literally, each
+   against its own row id ([~le_id]/[~ge_id], from [Encoding.add_equality]). *)
 
 let negate_terms terms = List.map (fun (a, x) -> (-a, x)) terms
 
-(* [make store terms rhs] : (le, ge), the two [Linear.t] instances the equality
-   [sum terms = rhs] decomposes into. Post both to the engine; pair [le] with the
-   `<=` id and [ge] with the `>=` id from [Encoding.add_equality] (whose own return
-   order is [(geq, leq)]). *)
-let make store terms rhs =
-  let le = Linear.make store terms rhs in
-  let ge = Linear.make store (negate_terms terms) (-rhs) in
+(* [make store terms rhs ?le_id ?ge_id] : (le, ge), the two [Linear.t] instances the
+   equality [sum terms = rhs] decomposes into. Post both to the engine; pair [le]
+   with the `<=` id and [ge] with the `>=` id from [Encoding.add_equality] (whose own
+   return order is [(geq, leq)] -- i.e. [?ge_id] is that function's first result,
+   [?le_id] its second). Both optional for the same reason [Linear.make]'s [?row_id]
+   is -- see that module's header. *)
+let make ?le_id ?ge_id store terms rhs =
+  let le = Linear.make ?row_id:le_id store terms rhs in
+  let ge = Linear.make ?row_id:ge_id store (negate_terms terms) (-rhs) in
   (le, ge)

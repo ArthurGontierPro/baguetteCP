@@ -13,8 +13,8 @@
    (lib/core/prop/int_le.ml) gives for [int_le] over [int_lin_le].
 
    Justification shape: [Lin_eq]'s -- "two int_lin_le derivations" (docs/PROOF-FORMAT.md
-   section 4's `int_lin_eq` row), i.e. each pruning is [Cut (Trivial, Linear (units,
-   units_rhs), 1, 1)] over whichever of the model rows [x - y <= 0] / [y - x <= 0] the
+   section 4's `int_lin_eq` row), i.e. each pruning is docs/DECISIONS.md D-0013's
+   [Combine] over whichever of the model rows [x - y <= 0] / [y - x <= 0] the
    producing instance ([le] or [ge] respectively) was built against.
 
    What a DOMAIN-consistent version would need, and why this one stops short of it:
@@ -30,4 +30,4 @@
    interior holes and a different, value-indexed explanation shape; M1 does not ask for
    it and this module does not build it. *)
 
-let make store x y = Lin_eq.make store [ (1, x); (-1, y) ] 0
+let make ?le_id ?ge_id store x y = Lin_eq.make ?le_id ?ge_id store [ (1, x); (-1, y) ] 0

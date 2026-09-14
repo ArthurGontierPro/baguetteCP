@@ -16,6 +16,7 @@ module Domain = Baguette_core.Domain
 module Store = Baguette_core.Store
 module Propagator = Baguette_core.Propagator
 module Linear = Baguette_core.Linear
+module Lin_eq = Baguette_core.Lin_eq
 
 let failures = ref 0
 
@@ -393,8 +394,8 @@ let setup_int_lin_le ~x2_lo ~rhs dir tag =
     Store.create ~names:[| "x1"; "x2" |]
       ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
   in
-  let lin = Linear.make store [ (1, Var.of_int 0); (1, Var.of_int 1) ] rhs in
-  (match Store.set_lo store (Var.of_int 1) x2_lo Explanation.trivial with
+  let lin = Linear.make store [ (1, Var.of_int 0); (1, Var.of_int 1) ] rhs ~row_id:model_row in
+  (match Store.set_lo store (Var.of_int 1) x2_lo (Explanation.model_row c_bound) with
   | Store.Conflict _ -> failwith "setup_int_lin_le: x2 >= x2_lo conflicts"
   | Store.Unchanged | Store.Changed -> ());
   (match Linear.propagate lin store with
@@ -413,29 +414,30 @@ let setup_int_lin_le ~x2_lo ~rhs dir tag =
   (e, c_bound, model_row, opb, pbp, expl)
 
 (* x2_lo = 1: the excluded bound fact is [x2 >= 1], one step above x2's declared lo of
-   0, so int_lin_le's [Linear ([(1, x2_ge_1)], 1)] states exactly what a single literal
-   at coefficient 1 can reach (1 = 1*1). rup finds it immediately -- it is verbatim
-   [c_bound]. This is the shape that works. *)
+   0 -- the case D-0010 shows is the one a green suite can miss (it happens to be the
+   value where a wrong, one-literal shape would also have verified). Under D-0013 this
+   is a [Combine]: [Model_row model_row]'s base, weakening x1 away entirely (x1 is
+   still fully declared), cite x2's established bound ([c_bound]) scaled by [abs
+   coeff = 1], divided by 1 (x1's own coefficient). *)
 let build_int_lin_le_ok dir =
-  let e, _c_bound, model_row, opb, pbp, expl =
+  let e, _c_bound, _model_row, opb, pbp, expl =
     setup_int_lin_le ~x2_lo:1 ~rhs:2 dir "intlinle_ok"
   in
   let oc = open_out pbp in
   let w = Writer.create ~comments:true ~audit:true oc in
   Encoding.start_proof e w;
-  let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> model_row) in
-  (* [expl] is [Cut (Trivial, Linear (...), 1, 1)]: emitting it mints one id for the
-     [Linear] child and one for the [Cut] combination, both owned. Pre-emit the child
-     so its id is in hand to delete too -- the memo means the recursive call inside the
-     [Cut] just returns the same id rather than re-deriving it. *)
-  let linear_child =
-    match expl with
-    | Explanation.Cut (Explanation.Trivial, lin, 1, 1) -> lin
-    | _ -> failwith "build_int_lin_le_ok: unexpected explanation shape"
+  (* [expl]'s base is [Model_row model_row], not [Trivial] (D-0013 / explanation.ml's
+     header): [ctx.model_id] should never be consulted, so make it fail if it ever
+     is. *)
+  let ctx =
+    Justify.create ~writer:w ~encoding:e
+      ~model_id:(fun () ->
+        failwith
+          "build_int_lin_le_ok: ctx.model_id was consulted -- expl's base should be \
+           Model_row, not Trivial")
   in
-  let id_linear = Justify.emit ctx linear_child in
-  let id_cut = Justify.emit ctx expl in
-  Writer.delete_many w [ id_linear; id_cut ];
+  let id = Justify.emit ctx expl in
+  Writer.delete w id;
   Writer.conclusion w
     (Writer.Sat (Encoding.assignment_lits e [ ("x1", 0); ("x2", 1) ]));
   close_out oc;
@@ -444,32 +446,141 @@ let build_int_lin_le_ok dir =
 (* x2_lo = 2: the excluded bound fact is [x2 >= 2], *two* steps above x2's declared lo
    of 0. This is the case that caught D-0010: int_lin_le used to state it as the single
    literal [(1, x2_ge_2)] at rhs 2, which no proof state can satisfy since one 0/1
-   literal at coefficient 1 reaches at most 1. With the chain (D-0010) it emits
-
-     rup +1 x2_ge_1 +1 x2_ge_2 >= 2 ;
-
-   which RUP derives from the logged bound plus the order-encoding consistency clause
-   x2_ge_2 -> x2_ge_1, and veripb accepts. Counted, not a probe: it guards the fix. *)
+   literal at coefficient 1 reaches at most 1. Under D-0013 the fact does not need
+   restating at all -- [c_bound] (the constraint that already established [x2 >= 2])
+   is cited directly, by id, scaled by [abs coeff]; the gap D-0010 found is simply not
+   expressible any more, since there is no chain length left to get wrong. Counted,
+   not a probe: it guards the fix. *)
 let build_int_lin_le_gap dir =
-  let e, _c_bound, model_row, opb, pbp, expl =
+  let e, _c_bound, _model_row, opb, pbp, expl =
     setup_int_lin_le ~x2_lo:2 ~rhs:3 dir "intlinle_gap"
   in
   let oc = open_out pbp in
   let w = Writer.create ~comments:true ~audit:false oc in
   Encoding.start_proof e w;
-  let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> model_row) in
-  let linear_child =
-    match expl with
-    | Explanation.Cut (Explanation.Trivial, lin, 1, 1) -> lin
-    | _ -> failwith "build_int_lin_le_gap: unexpected explanation shape"
+  let ctx =
+    Justify.create ~writer:w ~encoding:e
+      ~model_id:(fun () ->
+        failwith
+          "build_int_lin_le_gap: ctx.model_id was consulted -- expl's base should be \
+           Model_row, not Trivial")
   in
-  let id_linear = Justify.emit ctx linear_child in
-  let id_cut = Justify.emit ctx expl in
-  Writer.delete_many w [ id_linear; id_cut ];
+  let id = Justify.emit ctx expl in
+  Writer.delete w id;
   Writer.conclusion w
     (Writer.Sat (Encoding.assignment_lits e [ ("x1", 0); ("x2", 2) ]));
   close_out oc;
   (opb, pbp)
+
+(* ------------------------------------------------------------------ *)
+(* D-0013, checked end to end: the worked example itself.              *)
+(*                                                                     *)
+(* 2*x1 + 4*x2 = 7, x1/x2 in [0,3] -- refuted at the root, no search   *)
+(* at all. int_lin_eq posts as two int_lin_le instances (D-0011); run  *)
+(* to a joint fixpoint the way engine.ml will, one of the two hits the *)
+(* cross-instance conflict D-0013's own worked example ends on. This   *)
+(* is the derivation docs/DECISIONS.md D-0013 records as accepted by   *)
+(* veripb 2.2.2 in full; this test is what checks the *solver*         *)
+(* actually produces it, not just that the hand-written proof does.    *)
+(* ------------------------------------------------------------------ *)
+
+let propagate_pair (le, ge) store =
+  let rec loop () =
+    let snap = Store.snapshot store in
+    match Linear.propagate le store with
+    | Propagator.Conflict _ as c -> c
+    | Propagator.Fixpoint -> (
+        match Linear.propagate ge store with
+        | Propagator.Conflict _ as c -> c
+        | Propagator.Fixpoint ->
+            if Store.same_domains store snap then Propagator.Fixpoint else loop ())
+  in
+  loop ()
+
+let setup_d0013 () =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x1" ~lo:0 ~hi:3;
+  Encoding.declare_int e "x2" ~lo:0 ~hi:3;
+  let opb_terms, const =
+    Encoding.linear_terms_int_lin_le e [ (2, "x1"); (4, "x2") ]
+  in
+  let geq_id, leq_id = Encoding.add_equality e opb_terms (7 - const) in
+  let store =
+    Store.create ~names:[| "x1"; "x2" |] ~domains:[| Domain.make 0 3; Domain.make 0 3 |]
+  in
+  let le, ge =
+    Lin_eq.make store [ (2, Var.of_int 0); (4, Var.of_int 1) ] 7 ~le_id:leq_id ~ge_id:geq_id
+  in
+  let outcome = propagate_pair (le, ge) store in
+  (e, opb_terms, geq_id, leq_id, outcome)
+
+let build_d0013_conflict dir =
+  let e, opb_terms, _geq_id, _leq_id, outcome = setup_d0013 () in
+  let expl =
+    match outcome with
+    | Propagator.Conflict e -> Explanation.force e
+    | Propagator.Fixpoint -> failwith "build_d0013_conflict: expected a Conflict"
+  in
+  let opb = Filename.concat dir "d0013.opb" in
+  let pbp = Filename.concat dir "d0013.pbp" in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "2*x1 + 4*x2 = 7, x1/x2 in [0,3]" ] e oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let w = Writer.create ~comments:true ~audit:false oc in
+  Encoding.start_proof e w;
+  let ctx =
+    Justify.create ~writer:w ~encoding:e
+      ~model_id:(fun () ->
+        failwith
+          "build_d0013_conflict: ctx.model_id was consulted -- every base in this \
+           derivation should be Model_row, not Trivial")
+  in
+  let id = Justify.emit ctx expl in
+  Writer.conclusion w (Writer.Unsat (Some id));
+  close_out oc;
+  ignore opb_terms;
+  (opb, pbp)
+
+let test_d0013_conflict () =
+  (* Solved shape: propagation alone (no search) must already find the conflict. *)
+  let _, _, _, _, outcome = setup_d0013 () in
+  check "D-0013: 2x1+4x2=7 in [0,3]^2 is refuted by propagation alone, no search"
+    (match outcome with Propagator.Conflict _ -> true | Propagator.Fixpoint -> false);
+  (* The divisor text D-0013's own worked example calls out explicitly (task
+     instructions: "assert that a division emits the divisor you expect"). Both
+     int_lin_le instances divide by their own coefficient magnitude: 4 for x2's
+     pruning, 2 for x1's. *)
+  let s =
+    text (fun w ->
+        let _, _, _, _, outcome = setup_d0013 () in
+        let expl =
+          match outcome with
+          | Propagator.Conflict e -> Explanation.force e
+          | Propagator.Fixpoint -> failwith "test_d0013_conflict: expected a Conflict"
+        in
+        let e = Encoding.create () in
+        Encoding.declare_int e "x1" ~lo:0 ~hi:3;
+        Encoding.declare_int e "x2" ~lo:0 ~hi:3;
+        let opb_terms, const = Encoding.linear_terms_int_lin_le e [ (2, "x1"); (4, "x2") ] in
+        let _geq_id, _leq_id = Encoding.add_equality e opb_terms (7 - const) in
+        Encoding.start_proof e w;
+        let ctx =
+          Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> failwith "unused")
+        in
+        ignore (Justify.emit ctx expl))
+  in
+  let ends_with suffix s =
+    let ls = String.length s and lsuf = String.length suffix in
+    ls >= lsuf && String.sub s (ls - lsuf) lsuf = suffix
+  in
+  let lines = String.split_on_char '\n' s in
+  check "D-0013: some step divides by 4 (x2's own coefficient)"
+    (List.exists (fun l -> String.length l > 0 && l.[0] = 'p' && ends_with " 4 d" l) lines);
+  check "D-0013: some step divides by 2 (x1's own coefficient)"
+    (List.exists (fun l -> String.length l > 0 && l.[0] = 'p' && ends_with " 2 d" l) lines);
+  run_veripb ~name:"D-0013: 2x1+4x2=7 in [0,3]^2, root conflict, checked end to end"
+    ~build:build_d0013_conflict
 
 let () =
   test_trivial ();
@@ -488,6 +599,7 @@ let () =
   run_veripb
     ~name:"justify: a real int_lin_le pruning (two-step bound, the D-0010 chain)"
     ~build:build_int_lin_le_gap;
+  test_d0013_conflict ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

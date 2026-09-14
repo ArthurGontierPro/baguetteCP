@@ -55,3 +55,45 @@ let upper_bound_terms ~coeff ~name ~decl_hi b =
   else
     let n = decl_hi - b in
     (List.init n (fun i -> (coeff, Lit.le name (b + i))), coeff * n)
+
+(* ---------------------------------------------------------------------------
+   M1-T12 / docs/DECISIONS.md D-0013: full-declared-range *weakening* chains.
+
+   [lower_bound_terms]/[upper_bound_terms] above build a chain that *asserts* a
+   fact ("x currently >= b"), relative to the declared bound, for use in a [rup]
+   row (D-0010). D-0013 needs a different chain: one that *weakens a variable's
+   entire contribution out of a row*, via literal axioms (D-0009: an axiom cannot
+   assert a bound, but it can weaken one away). That chain always spans the
+   variable's *whole* declared width, not a prefix relative to some current value
+   -- there is nothing "current" about it, it is valid regardless of what the
+   variable turns out to be, which is the whole point of using it instead of a
+   fact.
+
+   Which literal polarity cancels depends on the *sign* of the row's own
+   coefficient for that term, not on which bound (lower/upper) is being pinned:
+   the model row a propagator justifies against is always the checker's ">="
+   normalisation of "sum coeff_i x_i <= rhs" (lib/proof/opb.ml's [Opb.le]), which
+   negates every coefficient. So a term with [coeff > 0] appears in the *stored*
+   row with a *negative* coefficient on the positive literal [x_ge_v] -- cancelling
+   it needs an axiom of the *same* polarity, at coefficient [coeff], and nets to
+   the row exactly (opposite-sign equal-magnitude coefficients on the same literal
+   sum to zero: nothing is added to the right-hand side). A term with [coeff < 0]
+   appears with a *positive* stored coefficient on [x_ge_v] -- cancelling it needs
+   the *negated* literal [~x_ge_v] (same shape as [upper_bound_terms]'s), at
+   coefficient [-coeff], and (same-variable opposite-polarity equal-magnitude
+   literals sum to a constant) adds [-coeff] to the right-hand side for every step
+   of the chain. Both cases are checked directly against veripb 2.2.2 in
+   test/unit/test_prop.ml and are exactly D-0013's worked example (row 6's
+   positive-coefficient x1 term weakens via [~x1_ge_v], contributing 2 per step;
+   row 5's negative-*stored* term weakens via [x1_ge_v], contributing 0).
+
+   Returns [([], 0)] when [coeff = 0] (an absent term needs no weakening) or when
+   [decl_lo = decl_hi] (a fixed variable has no order literals at all). *)
+let weaken_declared ~coeff ~name ~decl_lo ~decl_hi =
+  let width = decl_hi - decl_lo in
+  if coeff = 0 || width <= 0 then ([], 0)
+  else if coeff > 0 then
+    (List.init width (fun i -> (coeff, Lit.ge name (decl_lo + 1 + i))), 0)
+  else
+    let c = -coeff in
+    (List.init width (fun i -> (c, Lit.le name (decl_lo + i))), c * width)

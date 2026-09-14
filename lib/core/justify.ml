@@ -201,10 +201,67 @@ let emit_cut ~emit ctx e1 e2 c1 c2 =
     ~origin:(Printf.sprintf "cut(%d*%d + %d*%d)" c1 id1 c2 id2)
     Pol.(add (mul (id id1) c1) (mul (id id2) c2))
 
+(* [Combine (summands, divisor)] -- docs/DECISIONS.md D-0013: the "weaken, divide, add"
+   derivation. One [pol] step: every summand's [Pol.t] fragment added left to right,
+   then (unless [divisor = 1]) divided.
+
+   A [Term (c, e)] summand recurses through [emit] exactly as [Cut]'s operands do --
+   the recursion can legitimately land on an explanation another propagator instance
+   built (its own base a [Model_row] naming *that* instance's row, not this one),
+   which is exactly why [Model_row] exists (see explanation.ml's header): the id it
+   cites is unambiguous regardless of which [ctx] is doing the recursing.
+
+   A [Weaken lits] summand emits no rule and consumes no id: each [(c, l)] becomes
+   [Pol.mul (Pol.axiom l) c], folded together with [Pol.add]. This is the one place a
+   bare literal is deliberately allowed into a [pol] expression as the *trivial*
+   axiom [l >= 0] (D-0009) -- never to assert [l] holds, only to cancel a term whose
+   variable is still sitting at its declared bound. [emit_summand] therefore has two
+   return shapes (mint an id vs. build a fragment directly); folding both into one
+   [Pol.t] before the single [Writer.pol] call is what keeps the whole [Combine] to
+   exactly one proof line, matching every step of D-0013's worked example. *)
+let emit_summand ~emit ctx = function
+  | Explanation.Term (c, e) ->
+      if c < 1 then
+        invalid_arg (Printf.sprintf "Justify.emit: Combine term coefficient must be >= 1, got %d" c);
+      let id = emit ctx e in
+      Pol.mul (Pol.id id) c
+  | Explanation.Weaken lits ->
+      (match lits with
+      | [] -> invalid_arg "Justify.emit: Combine's Weaken summand must be non-empty"
+      | _ -> ());
+      validate_lits ctx (List.map snd lits);
+      List.fold_left
+        (fun acc (c, l) ->
+          if c < 1 then
+            invalid_arg
+              (Printf.sprintf "Justify.emit: Weaken axiom coefficient must be >= 1, got %d" c);
+          Pol.add acc (Pol.mul (Pol.axiom l) c))
+        (let c0, l0 = List.hd lits in
+         Pol.mul (Pol.axiom l0) c0)
+        (List.tl lits)
+
+let emit_combine ~emit ctx summands divisor =
+  (match summands with
+  | [] -> invalid_arg "Justify.emit: Combine must have at least one summand"
+  | _ -> ());
+  let expr =
+    List.fold_left
+      (fun acc s -> Pol.add acc (emit_summand ~emit ctx s))
+      (emit_summand ~emit ctx (List.hd summands))
+      (List.tl summands)
+  in
+  let expr = if divisor <= 1 then expr else Pol.div expr divisor in
+  Writer.pol ctx.writer
+    ~origin:(Printf.sprintf "combine(%d summand(s), / %d)" (List.length summands) divisor)
+    expr
+
 (* [emit ctx e] renders [e] into proof rules through [Writer] and returns the id of the
    resulting constraint.
 
    - [Trivial] costs nothing: it returns [ctx.model_id ()] directly, no rule emitted.
+   - [Model_row id] costs nothing either: [id] is already the constraint's id, no
+     lookup and no rule (see explanation.ml's header on why this differs from
+     [Trivial]).
    - Every other constructor is memoised on [e]'s physical identity (see the module
      header) before doing any work, so asking for the same explanation twice is free
      the second time.
@@ -216,10 +273,13 @@ let emit_cut ~emit ctx e1 e2 c1 c2 =
 let rec emit ctx (e : Explanation.t) : Writer.cid =
   match e with
   | Explanation.Trivial -> ctx.model_id ()
+  | Explanation.Model_row id -> id
   | Explanation.Clause lits -> memoized ctx e (fun () -> emit_clause ctx lits)
   | Explanation.Linear (terms, rhs) ->
       memoized ctx e (fun () -> emit_linear ctx terms rhs)
   | Explanation.Cut (e1, e2, c1, c2) ->
       memoized ctx e (fun () -> emit_cut ~emit ctx e1 e2 c1 c2)
+  | Explanation.Combine (summands, divisor) ->
+      memoized ctx e (fun () -> emit_combine ~emit ctx summands divisor)
   | Explanation.Deferred _ ->
       memoized ctx e (fun () -> emit ctx (Explanation.force e))
