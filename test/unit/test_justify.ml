@@ -384,11 +384,19 @@ let setup_int_lin_le ~x2_lo ~rhs dir tag =
     ~comments:[ Printf.sprintf "x1 + x2 <= %d; x2 >= %d" rhs x2_lo ]
     e oc;
   close_out oc;
+  (* D-0010: the store's declared domains must agree with the encoding's, because the
+     model row's constant comes from one and the explanation's chain offset from the
+     other. So x2 is *declared* [0, 5] here, matching [declare_int] above, and the fact
+     "x2 >= x2_lo" is applied below as a pruning -- after [make] has frozen the declared
+     bounds -- rather than smuggled in as a narrower initial domain. *)
   let store =
     Store.create ~names:[| "x1"; "x2" |]
-      ~domains:[| Domain.make 0 5; Domain.make x2_lo 5 |]
+      ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
   in
-  let lin = Linear.make [ (1, Var.of_int 0); (1, Var.of_int 1) ] rhs in
+  let lin = Linear.make store [ (1, Var.of_int 0); (1, Var.of_int 1) ] rhs in
+  (match Store.set_lo store (Var.of_int 1) x2_lo Explanation.trivial with
+  | Store.Conflict _ -> failwith "setup_int_lin_le: x2 >= x2_lo conflicts"
+  | Store.Unchanged | Store.Changed -> ());
   (match Linear.propagate lin store with
   | Propagator.Conflict _ -> failwith "setup_int_lin_le: expected a Fixpoint, got Conflict"
   | Propagator.Fixpoint -> ());
@@ -433,12 +441,15 @@ let build_int_lin_le_ok dir =
   close_out oc;
   (opb, pbp)
 
-(* x2_lo = 2: the excluded bound fact is [x2 >= 2], which is *two* steps above x2's
-   declared lo of 0, so int_lin_le's [Linear ([(1, x2_ge_2)], 2)] claims a single
-   coefficient-1 literal reaches 2 -- impossible (max 1). Not expected to pass; run
-   for its own sake and report exactly what veripb says, per D-0009's own prediction
-   that this needs M1-T10 (real decision logging with the intermediate literal too, or
-   equivalent) and cannot be made to work at the Justify level alone. *)
+(* x2_lo = 2: the excluded bound fact is [x2 >= 2], *two* steps above x2's declared lo
+   of 0. This is the case that caught D-0010: int_lin_le used to state it as the single
+   literal [(1, x2_ge_2)] at rhs 2, which no proof state can satisfy since one 0/1
+   literal at coefficient 1 reaches at most 1. With the chain (D-0010) it emits
+
+     rup +1 x2_ge_1 +1 x2_ge_2 >= 2 ;
+
+   which RUP derives from the logged bound plus the order-encoding consistency clause
+   x2_ge_2 -> x2_ge_1, and veripb accepts. Counted, not a probe: it guards the fix. *)
 let build_int_lin_le_gap dir =
   let e, _c_bound, model_row, opb, pbp, expl =
     setup_int_lin_le ~x2_lo:2 ~rhs:3 dir "intlinle_gap"
@@ -460,35 +471,6 @@ let build_int_lin_le_gap dir =
   close_out oc;
   (opb, pbp)
 
-(* Not a counted check: this scenario is *expected* to fail per D-0009, so failing it
-   would be softening the test suite by grading down an already-known negative result.
-   Runs veripb anyway and prints exactly what it says, for the report. *)
-let probe_veripb ~name ~build =
-  match veripb_path () with
-  | None -> Printf.printf "SKIP %s: veripb not found\n" name
-  | Some veripb -> (
-      let dir = Filename.temp_file "baguette_justify_probe" "" in
-      Sys.remove dir;
-      Sys.mkdir dir 0o700;
-      let opb, pbp = build dir in
-      let log = Filename.concat dir "log" in
-      let rc =
-        Sys.command
-          (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
-             (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
-      in
-      let out =
-        let ic = open_in_bin log in
-        let s = really_input_string ic (in_channel_length ic) in
-        close_in ic;
-        s
-      in
-      Printf.printf "INFO %s: veripb %s\n%s\n" name
-        (if rc = 0 then "accepted (unexpectedly)" else "rejected, as D-0009 predicts")
-        out;
-      List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp; log ];
-      try Sys.rmdir dir with _ -> ())
-
 let () =
   test_trivial ();
   test_memoisation ();
@@ -503,8 +485,8 @@ let () =
   run_veripb
     ~name:"justify: a real int_lin_le pruning (one-step bound), checked end to end"
     ~build:build_int_lin_le_ok;
-  probe_veripb
-    ~name:"justify: a real int_lin_le pruning (two-step bound, D-0009's known gap)"
+  run_veripb
+    ~name:"justify: a real int_lin_le pruning (two-step bound, the D-0010 chain)"
     ~build:build_int_lin_le_gap;
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
