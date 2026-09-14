@@ -89,3 +89,26 @@ have an obvious cheap one.
 
 Decision: pending. M4-T1 does bounds consistency first precisely so that M4-T2 can be
 evaluated against a working baseline.
+
+## D-0005  Domains decline to punch holes in enormous ranges
+Status: DECIDED
+Date: 2026-09-14
+
+Context: `Domain.t` allocates its hole bitset lazily, sized to the declared range. A
+variable declared over a very wide range would make that allocation absurd, but the
+alternative representations (a balanced set, a run-list) cost O(log n) membership, and
+SPEC section 3.1 requires O(1).
+
+Decision: above `max_hole_span = 2^20` values, `Domain.remove` declines to punch an
+interior hole and returns `Unchanged`. Bound movements are never affected — they do not
+touch the bitset.
+
+Consequences: declining to prune is *sound* (we only ever keep values we could have
+removed, never remove ones we should have kept) and leaves search complete, so no
+solution is lost and no proof step is affected. It makes propagation weaker on such
+variables, which is a performance question, not a correctness one. The FlatZinc subset in
+SPEC section 2.1 does not produce domains this wide in practice. If it ever does, the fix
+is a second representation for wide domains, not raising the constant.
+
+This is the kind of behaviour that looks like a bug to whoever next reads a weak
+propagation result, which is why it is written down rather than left in a comment.

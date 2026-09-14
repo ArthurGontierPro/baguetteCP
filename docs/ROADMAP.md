@@ -26,7 +26,7 @@ Goal: solve models with only linear integer constraints, and VeriPB accepts ever
 | ID | Task | Status | Notes |
 |---|---|---|---|
 | M1-T1 | `Domain` with bounds + lazy holes, unit tested | WIP | |
-| M1-T2 | `Trail` with decision levels and undo | WIP | |
+| M1-T2 | `Store`: domains + trail, decision levels and undo | WIP | |
 | M1-T3 | `Explanation` type + arena + memoised `Deferred` | WIP | central; claim it alone |
 | M1-T4 | Order encoding in `lib/proof/lit.ml`, `.opb` writer | WIP | see PROOF-FORMAT §3 |
 | M1-T5 | `writer.ml`: rule emission, constraint ids, audit mode | WIP | |

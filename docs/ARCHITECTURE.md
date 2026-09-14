@@ -18,7 +18,7 @@ lib/flatzinc/   Baguette_flatzinc
 lib/core/       Baguette_core
   var.ml                       variable identity (abstract int)
   domain.ml                    finite integer domain
-  trail.ml                     backtrackable store: domains + undo log
+  store.ml                     backtrackable store: domains + undo trail
   explanation.ml       *****   the Explanation type. Read docs/SPEC.md 3.3 first.
   propagator.ml                the propagator interface (module type PROPAGATOR)
   prop/                        one module per constraint family
@@ -53,15 +53,20 @@ Operations return a `change` describing what moved (`NoChange | Bound of ... | H
 so the engine knows which propagators to re-queue and the proof layer knows which
 literals became true.
 
-## 3. Trail
+## 3. Store (the trail)
 
-Backtracking is a classic undo trail: every mutation pushes a closure-free record
-(`var`, `old_lo`, `old_hi`, `old_holes_ref`) and `backtrack_to level` replays it in
+`Store.t` owns the domain array and the undo trail. Every mutation pushes a record of
+the variable and its previous `Domain.t`, and `backtrack_to level` replays them in
 reverse. Decision levels are marks into that array.
 
-The trail also records, per entry, the **explanation index** of the change, so that when
-a conflict is analysed we can walk back through the reasons. Explanations are stored in a
-side arena (`explanation.ml`), not inline, to keep trail records small and uniform.
+Domains are immutable values, so a saved entry shares no mutable state with the domain
+that replaced it. That is what makes I-T1 hold without deep copying.
+
+Each entry records the **explanation id** of the change, so conflict analysis can walk
+back through the reasons. Explanations live in a side arena (`Explanation.Arena`), not
+inline, to keep trail records small and uniform. A level mark covers both the trail and
+the arena, so backtracking rewinds them together and reasons neither orphan nor
+accumulate (I-T3).
 
 ## 4. Explanations
 

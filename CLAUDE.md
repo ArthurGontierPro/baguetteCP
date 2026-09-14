@@ -30,6 +30,26 @@ overwrite each other's work.
 
 `/claim`, `/handoff` and `/check` automate steps 2, 4 and the pre-commit gate.
 
+### dune's build directory is shared, and it is locked
+
+`dune` takes a **global lock on `_build/`**. Two sessions running `dune build` in this
+checkout at the same time will corrupt `_build/.lock` and both will fail with
+*"Unexpected contents of build directory global lock file"*.
+
+File-level claims do not protect you from this. Either build when no one else is, or
+build into your own directory:
+
+```sh
+dune build --build-dir=/tmp/baguette-build-$$ lib/core/
+```
+
+If you find `_build/.lock` already corrupted, check whether another session is mid-build
+before deleting it — deleting it under a running build breaks that build.
+
+Scope your builds to your own directory (`dune build lib/core/`) rather than a bare
+`dune build`, which will also try to compile whatever half-finished state the other
+sessions have on disk and fail for reasons that are not yours.
+
 ### Files that are contention hotspots
 
 Edits to these are frequent conflicts. Claim them explicitly and keep the edit short:
