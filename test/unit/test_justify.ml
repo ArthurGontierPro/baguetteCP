@@ -11,6 +11,11 @@ module Writer = Baguette_proof.Writer
 module Encoding = Baguette_proof.Encoding
 module Explanation = Baguette_core.Explanation
 module Justify = Baguette_core.Justify
+module Var = Baguette_core.Var
+module Domain = Baguette_core.Domain
+module Store = Baguette_core.Store
+module Propagator = Baguette_core.Propagator
+module Linear = Baguette_core.Linear
 
 let failures = ref 0
 
@@ -91,6 +96,20 @@ let test_trivial () =
         check "trivial: adds no live entry" (Writer.live_count w = live0))
   in
   expect_ok "trivial: no exception" r
+
+(* Round 2: the defect that slipped through round 1 was that [emit_linear] discarded
+   [terms] and [rhs] entirely and emitted [pol <model_id>] -- veripb happily accepts a
+   restatement of the model row, so this test's absence, not any propagator's, was what
+   let it through. Assert the actual emitted line, not just that veripb liked *something*. *)
+let test_linear_states_its_own_terms () =
+  let s =
+    text (fun w ->
+        let _, ctx, _ = build_ctx w in
+        ignore (Justify.emit ctx (Explanation.linear [ (1, Lit.ge "x" 2) ] 1)))
+  in
+  let lines = String.split_on_char '\n' s in
+  check "linear: emits a rup of exactly its own terms and rhs, not a pol"
+    (List.exists (String.equal "rup +1 x_ge_2 >= 1 ;") lines)
 
 (* ------------------------------------------------------------------ *)
 (* 4. Memoisation: emitting the same value twice is free the second time. *)
@@ -320,9 +339,160 @@ let build_cut_proof dir =
   close_out oc;
   (opb, pbp)
 
+(* ------------------------------------------------------------------ *)
+(* Round 2: agent-core's actual int_lin_le shape, end to end.          *)
+(*                                                                     *)
+(* D-0009 (docs/DECISIONS.md) already flags that full validation of an *)
+(* int_lin_le justification is blocked on M1-T10 (search logging       *)
+(* decisions as constraints) -- a level-0 test has no bound facts in   *)
+(* the database. What follows is the closest honest approximation of  *)
+(* that without it: stand in for "search logged a decision" with a     *)
+(* genuine second model constraint that establishes the bound fact     *)
+(* int_lin_le's explanation is going to cite, then run the real        *)
+(* [Linear.propagate] to get a real [Explanation.t] rather than one I  *)
+(* hand-wrote (see lib/core/prop/linear.ml's header for the shape).    *)
+(* ------------------------------------------------------------------ *)
+
+(* The order-encoding telescoping of an integer term [a * x] over a variable declared
+   [0, width]: sum_{v=1}^{width} a * [x >= v]. Standing in for the general "expand a
+   linear term into order-encoding literals" machinery that docs/DECISIONS.md D-0009
+   notes does not exist yet (M1-T7c) -- written out by hand here because this test
+   controls its own tiny model and does not need the general case. *)
+let telescope a name width = List.init width (fun i -> (a, Lit.ge name (i + 1)))
+
+(* Build the model and store for [x1 + x2 <= rhs], x1 in [0,5], x2 in [0,5] modelled,
+   but with the store's *runtime* domain for x2 starting at [x2_lo, 5] -- standing in
+   for "x2 >= x2_lo was already established", backed by a genuine extra model
+   constraint so the fact int_lin_le's explanation cites is real, not orphaned. Runs
+   the real propagator and returns everything a caller needs to Justify.emit the
+   explanation for x1's pruning and check it end to end. *)
+let setup_int_lin_le ~x2_lo ~rhs dir tag =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x1" ~lo:0 ~hi:5;
+  Encoding.declare_int e "x2" ~lo:0 ~hi:5;
+  let c_bound =
+    Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "x2" x2_lo) ] 1)
+  in
+  let model_row =
+    Encoding.add_constraint e
+      (Opb.le (telescope 1 "x1" 5 @ telescope 1 "x2" 5) rhs)
+  in
+  let opb = Filename.concat dir (tag ^ ".opb") in
+  let pbp = Filename.concat dir (tag ^ ".pbp") in
+  let oc = open_out opb in
+  Encoding.write_opb
+    ~comments:[ Printf.sprintf "x1 + x2 <= %d; x2 >= %d" rhs x2_lo ]
+    e oc;
+  close_out oc;
+  let store =
+    Store.create ~names:[| "x1"; "x2" |]
+      ~domains:[| Domain.make 0 5; Domain.make x2_lo 5 |]
+  in
+  let lin = Linear.make [ (1, Var.of_int 0); (1, Var.of_int 1) ] rhs in
+  (match Linear.propagate lin store with
+  | Propagator.Conflict _ -> failwith "setup_int_lin_le: expected a Fixpoint, got Conflict"
+  | Propagator.Fixpoint -> ());
+  let entry =
+    match
+      List.find_opt
+        (fun (en : Store.entry) -> Var.equal en.var (Var.of_int 0))
+        (Store.trail_entries store)
+    with
+    | Some en -> en
+    | None -> failwith "setup_int_lin_le: x1's bound was never pushed"
+  in
+  let expl = Explanation.force (Store.explanation store entry) in
+  (e, c_bound, model_row, opb, pbp, expl)
+
+(* x2_lo = 1: the excluded bound fact is [x2 >= 1], one step above x2's declared lo of
+   0, so int_lin_le's [Linear ([(1, x2_ge_1)], 1)] states exactly what a single literal
+   at coefficient 1 can reach (1 = 1*1). rup finds it immediately -- it is verbatim
+   [c_bound]. This is the shape that works. *)
+let build_int_lin_le_ok dir =
+  let e, _c_bound, model_row, opb, pbp, expl =
+    setup_int_lin_le ~x2_lo:1 ~rhs:2 dir "intlinle_ok"
+  in
+  let oc = open_out pbp in
+  let w = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof e w;
+  let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> model_row) in
+  (* [expl] is [Cut (Trivial, Linear (...), 1, 1)]: emitting it mints one id for the
+     [Linear] child and one for the [Cut] combination, both owned. Pre-emit the child
+     so its id is in hand to delete too -- the memo means the recursive call inside the
+     [Cut] just returns the same id rather than re-deriving it. *)
+  let linear_child =
+    match expl with
+    | Explanation.Cut (Explanation.Trivial, lin, 1, 1) -> lin
+    | _ -> failwith "build_int_lin_le_ok: unexpected explanation shape"
+  in
+  let id_linear = Justify.emit ctx linear_child in
+  let id_cut = Justify.emit ctx expl in
+  Writer.delete_many w [ id_linear; id_cut ];
+  Writer.conclusion w
+    (Writer.Sat (Encoding.assignment_lits e [ ("x1", 0); ("x2", 1) ]));
+  close_out oc;
+  (opb, pbp)
+
+(* x2_lo = 2: the excluded bound fact is [x2 >= 2], which is *two* steps above x2's
+   declared lo of 0, so int_lin_le's [Linear ([(1, x2_ge_2)], 2)] claims a single
+   coefficient-1 literal reaches 2 -- impossible (max 1). Not expected to pass; run
+   for its own sake and report exactly what veripb says, per D-0009's own prediction
+   that this needs M1-T10 (real decision logging with the intermediate literal too, or
+   equivalent) and cannot be made to work at the Justify level alone. *)
+let build_int_lin_le_gap dir =
+  let e, _c_bound, model_row, opb, pbp, expl =
+    setup_int_lin_le ~x2_lo:2 ~rhs:3 dir "intlinle_gap"
+  in
+  let oc = open_out pbp in
+  let w = Writer.create ~comments:true ~audit:false oc in
+  Encoding.start_proof e w;
+  let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> model_row) in
+  let linear_child =
+    match expl with
+    | Explanation.Cut (Explanation.Trivial, lin, 1, 1) -> lin
+    | _ -> failwith "build_int_lin_le_gap: unexpected explanation shape"
+  in
+  let id_linear = Justify.emit ctx linear_child in
+  let id_cut = Justify.emit ctx expl in
+  Writer.delete_many w [ id_linear; id_cut ];
+  Writer.conclusion w
+    (Writer.Sat (Encoding.assignment_lits e [ ("x1", 0); ("x2", 2) ]));
+  close_out oc;
+  (opb, pbp)
+
+(* Not a counted check: this scenario is *expected* to fail per D-0009, so failing it
+   would be softening the test suite by grading down an already-known negative result.
+   Runs veripb anyway and prints exactly what it says, for the report. *)
+let probe_veripb ~name ~build =
+  match veripb_path () with
+  | None -> Printf.printf "SKIP %s: veripb not found\n" name
+  | Some veripb -> (
+      let dir = Filename.temp_file "baguette_justify_probe" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let opb, pbp = build dir in
+      let log = Filename.concat dir "log" in
+      let rc =
+        Sys.command
+          (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
+             (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
+      in
+      let out =
+        let ic = open_in_bin log in
+        let s = really_input_string ic (in_channel_length ic) in
+        close_in ic;
+        s
+      in
+      Printf.printf "INFO %s: veripb %s\n%s\n" name
+        (if rc = 0 then "accepted (unexpectedly)" else "rejected, as D-0009 predicts")
+        out;
+      List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp; log ];
+      try Sys.rmdir dir with _ -> ())
+
 let () =
   test_trivial ();
   test_memoisation ();
+  test_linear_states_its_own_terms ();
   test_deferred_linear ();
   test_deferred_cut ();
   test_wipe ();
@@ -330,6 +500,12 @@ let () =
     ~build:build_linear_proof;
   run_veripb ~name:"justify: a Cut of two Linears, checked end to end"
     ~build:build_cut_proof;
+  run_veripb
+    ~name:"justify: a real int_lin_le pruning (one-step bound), checked end to end"
+    ~build:build_int_lin_le_ok;
+  probe_veripb
+    ~name:"justify: a real int_lin_le pruning (two-step bound, D-0009's known gap)"
+    ~build:build_int_lin_le_gap;
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

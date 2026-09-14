@@ -6,8 +6,10 @@
    to sit on the [core] side of the line, calling down into [Baguette_proof.Writer].
 
    docs/PROOF-FORMAT.md section 2's rule is "prefer [pol] over [rup] everywhere [pol]
-   states the reasoning; [rup] makes the checker search" -- every constructor below
-   follows it except [Clause], which cannot (see the comment there).
+   states the reasoning; [rup] makes the checker search" -- [Cut] and [Trivial] follow
+   it. [Clause] cannot (see the comment there), and neither, it turns out, can [Linear]
+   as [Explanation.t] is shaped today -- see D-0009 (docs/DECISIONS.md) and the comment
+   on [emit_linear].
 
    -------------------------------------------------------------------------------
    Context
@@ -67,6 +69,7 @@
    longer contains would otherwise let a later [Cut] silently cite a deleted id. *)
 
 module Lit = Baguette_proof.Lit
+module Opb = Baguette_proof.Opb
 module Writer = Baguette_proof.Writer
 module Pol = Baguette_proof.Writer.Pol
 module Encoding = Baguette_proof.Encoding
@@ -144,23 +147,41 @@ let emit_clause ctx lits =
     ~origin:(Printf.sprintf "clause(%s)" (String.concat " " (List.map Lit.to_string lits)))
     lits
 
-(* [Linear (terms, rhs)] -- pol, citing the current model constraint.
+(* [Linear (terms, rhs)] -- rup of exactly the constraint it states. Not [pol]; see
+   D-0009 (docs/DECISIONS.md) for the full story, summarised here because
+   docs/PROOF-FORMAT.md section 2 requires a propagator (and by extension, its bridge)
+   that can only manage [rup] to say why in its own header.
 
-   Per the doc comment on [Explanation.Linear], this constructor "renders to pol over
-   the model constraint": its contract is that [(terms, rhs)] state exactly the PB
-   constraint [ctx.model_id ()] already carries (that promise is the propagator's to
-   keep -- Justify has no way to see inside an existing id to check it, since [Writer]
-   deliberately does not retain constraint bodies, only ids). Given that, the derivation
-   is the simplest one that is still real cutting planes rather than assertion: [pol
-   <model_id>], which restates the model constraint under a fresh id. A fresh id is the
-   point of not just returning [ctx.model_id ()] the way [Trivial] does: the caller gets
-   an id it *owns* and can feed into a later [Cut] or delete independently of the model
-   constraint (which nobody owns -- see [Writer.model_ids]). *)
+   The earlier version of this function ignored [terms] and [rhs] entirely and emitted
+   [pol <model_id>], restating the model constraint. That was wrong: [Explanation.Linear]
+   is used by propagators (see [lib/core/prop/linear.ml]'s [int_lin_le]) to carry a
+   restatement of *bound facts*, e.g. "the order-encoding unit literals witnessing the
+   current bounds of the other variables" -- a completely different constraint from the
+   model row, and the old code silently discarded it.
+
+   The tempting fix -- render [terms >= rhs] as [pol], citing whatever established each
+   literal -- does not work, because a [pol] expression cannot state that a literal
+   *holds*: a bare literal in one is the trivial axiom [lit >= 0] (true for 0 or 1
+   alike), not an assertion that it is 1. Checked directly against veripb 2.2.2:
+
+     f 1                  * model: 1 x1 >= 1
+     pol x2
+     rup 1 x2 >= 1 ;      * Failed to show '1 x2 >= 1' by reverse unit propagation
+
+   So a bound fact can only be cited by the id of a constraint that already establishes
+   it (a decision or an earlier pruning search has logged, per D-0008's levels) -- never
+   by naming its literal inside a [pol] expression. [Explanation.t] cannot carry that id
+   (D-0003 is still open on whether it ever will), so the only honest rendering today is
+   [rup]: state [terms >= rhs] outright and let the checker's own unit-propagation search
+   find the already-logged facts that make it true. This is faithful to what the
+   explanation claims, unlike the old [pol <model_id>], at the cost of being exactly the
+   "checker searches" case docs/PROOF-FORMAT.md section 2 says to avoid when a [pol] is
+   available -- it is not available here. *)
 let emit_linear ctx terms rhs =
   validate_lits ctx (List.map snd terms);
-  Writer.pol ctx.writer
-    ~origin:(Printf.sprintf "linear(... >= %d) over model constraint" rhs)
-    (Pol.id (ctx.model_id ()))
+  Writer.rup ctx.writer
+    ~origin:(Printf.sprintf "linear: %s" (Opb.constr_to_string (Opb.ge terms rhs)))
+    (Opb.ge terms rhs)
 
 (* [Cut (e1, e2, c1, c2)] -- recurse on both reasons, then combine: c1 * e1 + c2 * e2.
 
