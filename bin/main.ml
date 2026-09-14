@@ -65,6 +65,9 @@ let () =
     "baguette: not implemented yet (roadmap M1). Model %s was parsed as a path only.\n"
     opts.model;
   (match opts.proof_prefix with
-  | Some p -> Printf.eprintf "baguette: would write %s.opb and %s.pbp\n" p p
-  | None -> ());
+  | Some p ->
+      Printf.eprintf "baguette: would write %s.opb and %s.pbp (comments: %b)\n" p p
+        opts.proof_comments
+  | None -> Printf.eprintf "baguette: no --proof given; no proof would be written\n");
+  Printf.eprintf "baguette: all solutions: %b\n" opts.all_solutions;
   exit 3
