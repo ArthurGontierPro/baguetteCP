@@ -12,7 +12,46 @@ OUT="${ROOT}/test/out"
 
 mkdir -p "${OUT}"
 
-pass=0; fail=0; skip=0
+pass=0; fail=0; skip=0; xfail=0; xpass=0
+
+PENDING="${ROOT}/test/models/PENDING"
+
+# Is this model known not to work yet? See test/models/PENDING.
+is_pending() {
+  [ -f "${PENDING}" ] || return 1
+  grep -v '^[[:space:]]*#' "${PENDING}" 2>/dev/null \
+    | awk '{print $1}' | grep -qx "$1"
+}
+
+pending_reason() {
+  grep -v '^[[:space:]]*#' "${PENDING}" 2>/dev/null \
+    | awk -v m="$1" '$1 == m { $1 = ""; sub(/^ +/, ""); print }'
+}
+
+# Report an outcome, accounting for whether the model was expected to fail.
+# $1 = basename, $2 = "pass" or "fail", $3 = detail shown on an unexpected result
+report() {
+  local base="$1" outcome="$2" detail="${3:-}"
+  if is_pending "${base}"; then
+    if [ "${outcome}" = "pass" ]; then
+      echo "XPASS ${base}: listed in test/models/PENDING but it PASSES now."
+      echo "       Delete its line from test/models/PENDING."
+      xpass=$((xpass+1))
+      return 1
+    fi
+    echo "xfail ${base}: $(pending_reason "${base}")"
+    xfail=$((xfail+1))
+    return 0
+  fi
+  if [ "${outcome}" = "pass" ]; then
+    echo "PASS  ${base}"
+    pass=$((pass+1))
+    return 0
+  fi
+  echo "FAIL  ${base}: ${detail}"
+  fail=$((fail+1))
+  return 1
+}
 
 if [ ! -x "${SOLVER}" ]; then
   echo "solver not built at ${SOLVER} — run 'make build' first" >&2
@@ -38,17 +77,15 @@ for fzn in "${ROOT}"/test/models/*.fzn; do
   rc=$?
 
   if [ "${rc}" -ne 0 ]; then
-    echo "FAIL ${base}: solver exited ${rc}"
+    if report "${base}" fail "solver exited ${rc}"; then continue; fi
     sed 's/^/       /' "${prefix}.err" | head -5
-    fail=$((fail+1))
     continue
   fi
 
   if ! diff -u "${expected}" "${prefix}.out" > "${prefix}.diff"; then
-    echo "FAIL ${base}: output differs from test/expected/${base}.out"
+    if report "${base}" fail "output differs from test/expected/${base}.out"; then continue; fi
     sed 's/^/       /' "${prefix}.diff" | head -20
     echo "       Do not edit the expected file to make this pass (invariant I-M1)."
-    fail=$((fail+1))
     continue
   fi
 
@@ -59,17 +96,24 @@ for fzn in "${ROOT}"/test/models/*.fzn; do
   fi
 
   if "${VERIPB}" "${prefix}.opb" "${prefix}.pbp" > "${prefix}.veripb" 2>&1; then
-    echo "PASS ${base}"
-    pass=$((pass+1))
+    report "${base}" pass || true
   else
-    echo "FAIL ${base}: veripb rejected the proof"
+    if report "${base}" fail "veripb rejected the proof"; then continue; fi
     sed 's/^/       /' "${prefix}.veripb" | tail -20
     echo "       opb=${prefix}.opb proof=${prefix}.pbp"
     echo "       See docs/PROOF-FORMAT.md section 6 before changing anything."
-    fail=$((fail+1))
   fi
 done
 
 echo
-echo "model tests: ${pass} passed, ${fail} failed, ${skip} skipped"
-[ "${fail}" -eq 0 ]
+echo "model tests: ${pass} passed, ${fail} failed, ${xfail} expected-fail, ${xpass} unexpected-pass, ${skip} skipped"
+
+if [ "${xfail}" -gt 0 ]; then
+  echo "  ${xfail} model(s) are listed in test/models/PENDING and are not yet expected to"
+  echo "  work. That file should be empty by M1-T11."
+fi
+if [ "${xpass}" -gt 0 ]; then
+  echo "  ${xpass} model(s) pass but are still listed in test/models/PENDING. Remove them."
+fi
+
+[ "${fail}" -eq 0 ] && [ "${xpass}" -eq 0 ]

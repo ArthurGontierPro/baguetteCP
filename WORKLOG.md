@@ -12,9 +12,7 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M1-T1, M1-T2, M1-T3 | `lib/core/{var,domain,store,explanation,propagator}.ml`, `lib/core/dune`, `test/unit/test_core.ml` | agent-core | 2026-09-14 |
-| M1-T4, M1-T5 | `lib/proof/{lit,opb,writer}.ml`, `lib/proof/dune`, `test/unit/test_proof.ml` | agent-proof | 2026-09-14 |
-| M1-T6 | `lib/flatzinc/**`, `test/unit/test_flatzinc.ml` | agent-flatzinc | 2026-09-14 |
+| _(none)_ | | | |
 
 ## Cross-session requests
 
@@ -31,6 +29,12 @@ work. The owning session picks it up.
 | Task | Session | Date | Summary |
 |---|---|---|---|
 | M0-T1 | setup | 2026-09-14 | Project skeleton, docs, dune files, test harness, `.claude/` setup |
+| M0-T2 | orchestrator | 2026-09-14 | opam 2.5.2 + OCaml 5.1.1 switch `baguette`; bootstrap.sh rewritten to fetch the opam binary |
+| M0-T3 | all | 2026-09-14 | Everything compiles; 253 unit checks pass |
+| M0-T4 | orchestrator | 2026-09-14 | `make check` green, with `test/models/PENDING` for not-yet-working models |
+| M1-T1, M1-T2, M1-T3 | agent-core | 2026-09-14 | Domain (bitset holes), Store (trail + explanation arena), Explanation (memoised Deferred) |
+| M1-T4, M1-T5 | agent-proof | 2026-09-14 | Encoding, OPB writer, proof writer; proofs accepted by veripb 2.2.2 |
+| M1-T6 | agent-flatzinc | 2026-09-14 | Hand-written lexer/parser/builder; parses all five test models |
 
 ## Handoff notes
 
@@ -54,3 +58,24 @@ here; `bubblewrap` is absent so sandboxing stays disabled.
 Three agents dispatched in parallel on disjoint file sets (see Active claims). They do
 not commit — the orchestrator commits each area as it lands, to avoid racing on the git
 index.
+
+**2026-09-14 — orchestrator, after the first parallel round**
+
+Three agents ran concurrently on disjoint file sets and none collided, but file-level
+claims turned out not to be enough: **dune holds a global lock on `_build/`**, so
+concurrent builds corrupt `_build/.lock` and both fail. Build into your own
+`--build-dir` while others are working. This is now in CLAUDE.md.
+
+Seven errors in `docs/PROOF-FORMAT.md` were found by building against the real checker
+and are fixed. Two of them silently corrupt a proof rather than failing it — the worst
+being that an `.opb` line with `=` counts as **two** constraints for the `f` rule, which
+shifts every later id so `pol` steps quietly reference the wrong constraints. If you are
+touching the proof layer, read section 2's "Traps" before anything else.
+
+`make check` is green but five model tests are `xfail` via `test/models/PENDING` — the
+solver does not solve yet. Delete lines from that file as propagators land; the runner
+fails if a listed model starts passing, so the list cannot rot.
+
+**Next is M1-T7** (`int_lin_le` + its `pol` justification). It is the reference
+propagator — every later one copies its shape — so it is worth doing carefully and alone
+rather than in parallel with M1-T8/T9.

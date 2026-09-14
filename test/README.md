@@ -29,6 +29,23 @@ product: see `docs/SPEC.md` section 1.
 skipped with a `SKIP` line rather than silently passing — check for those in the output
 before believing a green run.
 
+## Expected failures — `test/models/PENDING`
+
+Until the engine lands, no model solves, so every model test would be red. A gate that is
+red for five milestones is a gate everyone learns to ignore, so models that are not yet
+expected to work are listed in `test/models/PENDING`, one basename and a reason per line.
+They are reported as `xfail` on every run and do not turn the gate red.
+
+Two properties keep that from rotting into a list of quietly broken things:
+
+- Every run prints the pending count and says the file should be empty by M1-T11.
+- If a model listed there starts **passing**, the runner reports `XPASS` and **fails**,
+  telling you to delete the line. You cannot leave a working model marked as broken.
+
+Delete a line the moment its model works. Adding a line is a decision about scope, not a
+way to silence a failure: a model that used to pass and now does not is a regression, and
+belongs in a bug report rather than in this file.
+
 ## Rules
 
 - Expected outputs are ground truth. Changing one requires a spec change and a decision

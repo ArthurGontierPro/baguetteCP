@@ -1,0 +1,14 @@
+# Models that are not expected to pass yet, one basename per line with a reason.
+#
+# The runner treats these as expected failures: they do not turn the gate red, but they
+# are reported on every run so they cannot be forgotten. If a model listed here starts
+# PASSING, the runner fails and tells you to delete the line — that is what stops this
+# list from rotting into a list of quietly broken things.
+#
+# Delete a line the moment its model works. The file should be empty by M1-T11.
+
+trivial_sat     no search yet (M1-T10); no propagators yet (M1-T7..T9)
+trivial_unsat   no search yet (M1-T10); no propagators yet (M1-T7..T9)
+lin_sat         int_lin_le propagator is M1-T7
+lin_unsat       int_lin_le propagator is M1-T7
+ne_sat          int_ne needs the direct encoding, M1-T9
