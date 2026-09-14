@@ -10,10 +10,12 @@ freely — but changes to §4 (explanations) need a decision record.
 ```
 bin/main.ml                    CLI: parse args, wire everything, print results
 
-lib/flatzinc/   Baguette_flatzinc
+lib/flatzinc/   Baguette_flatzinc      (standalone: does not depend on core yet)
+  pos.ml  error.ml             source positions; one error type carrying a Pos.t
   ast.ml                       FlatZinc syntax tree
-  lexer.mll  parser.mly        surface syntax -> ast
-  builder.ml                   ast -> Model (vars + constraint instances)
+  lexer.ml  parser.ml          hand-written scanner + recursive descent (D-0006)
+  model.ml                     the front end's output: vars, domains, constraints
+  builder.ml                   ast -> Model, and the SPEC 2.1 normative rules
 
 lib/core/       Baguette_core
   var.ml                       variable identity (abstract int)
@@ -23,14 +25,18 @@ lib/core/       Baguette_core
   propagator.ml                the propagator interface (module type PROPAGATOR)
   prop/                        one module per constraint family
     linear.ml  alldiff.ml  element.ml  clause.ml ...
+  justify.ml                   Explanation -> proof rule(s). Lives here, not in
+                               lib/proof/, because the dependency runs core -> proof:
+                               proof cannot see Explanation.
   engine.ml                    propagate-to-fixpoint loop, the queue
   search.ml                    branching, backtracking, restarts
+  debug.ml                     BAGUETTE_DEBUG-gated invariant checks
 
 lib/proof/      Baguette_proof
   lit.ml                       order/direct encoding literals; naming is normative
   opb.ml                       write the .opb model file
+  encoding.ml                  which variable has which encoding; channelling
   writer.ml                    write the .pbp proof: emit rules, hand back constraint ids
-  justify.ml                   Explanation -> proof rule(s)
 ```
 
 Dependency direction is strictly `flatzinc -> core -> proof`. `core` must not depend on

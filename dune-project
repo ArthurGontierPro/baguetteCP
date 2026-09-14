@@ -6,5 +6,4 @@
  (name baguette)
  (synopsis "A CP solver with VeriPB proof logging and higher-order explanations")
  (depends
-  (ocaml (>= 5.0))
-  (menhir (>= 20220210))))
+  (ocaml (>= 5.0))))

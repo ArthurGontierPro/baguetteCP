@@ -78,7 +78,7 @@ of concurrent edits succeed instead of conflicting.
 | `docs/ROADMAP.md` | milestones and task IDs (`M1-T3` etc.) — the source of claimable work |
 | `docs/DECISIONS.md` | append-only decision log. Check it before re-arguing a settled design point. |
 | `docs/GLOSSARY.md` | CP and proof-logging vocabulary as *this project* uses it |
-| `lib/core/` | domains, trail, explanations, propagators, search |
+| `lib/core/` | domains, store/trail, explanations, propagators, search |
 | `lib/proof/` | OPB emission and VeriPB proof writing |
 | `lib/flatzinc/` | FlatZinc lexer, parser, model builder |
 | `bin/` | the `baguette` CLI |
@@ -121,6 +121,10 @@ Several sessions share this checkout, so staging discipline matters more than us
 
 ## Environment note
 
-The OCaml toolchain is **not yet installed on this machine**. Run `scripts/bootstrap.sh`
-once before the first build. `veripb` is already present at `~/.local/bin/veripb`
-(proof format version 2.0).
+The toolchain is installed and working:
+
+- opam 2.5.2 at `~/.local/bin/opam`, switch `baguette` on OCaml 5.1.1
+- `veripb` 2.2.2 at `~/.local/bin/veripb`, proof format version 2.0
+
+Put `eval "$(opam env --switch=baguette)"` in your shell before building. On a fresh
+machine, `scripts/bootstrap.sh` does the whole setup and is safe to re-run.

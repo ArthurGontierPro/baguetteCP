@@ -112,3 +112,59 @@ is a second representation for wide domains, not raising the constant.
 
 This is the kind of behaviour that looks like a bug to whoever next reads a weak
 propagation result, which is why it is written down rather than left in a comment.
+
+## D-0006  Hand-written lexer and parser rather than ocamllex/menhir
+Status: DECIDED
+Date: 2026-09-14
+
+Context: `dune-project` originally declared a `menhir` dependency. Using it also requires
+a `(using menhir X.Y)` stanza in `dune-project`, a file held by the orchestrator while
+three sessions worked in parallel — so the choice was forced earlier than it otherwise
+would have been.
+
+Decision: a hand-written scanner (`lexer.ml`) and recursive-descent parser (`parser.ml`),
+about 550 lines together. `menhir` is dropped from the declared dependencies, since an
+unused declared dependency misleads whoever reads the file next.
+
+Consequences:
+- Exact control of diagnostics, which SPEC section 2.1 leans on hard: every error carries
+  `file:line:col`, and an unsupported builtin names itself and the milestone it belongs
+  to rather than being silently skipped.
+- The FlatZinc grammar for this subset is small and stable; if the accepted subset grows
+  substantially, revisit this. Adding menhir later is a one-line change to
+  `dune-project` plus a grammar file, not a rewrite of the front end.
+
+## D-0007  Booleans use the order encoding on [0, 1]
+Status: DECIDED
+Date: 2026-09-14
+
+Context: `Lit.pbvar` has constructors for the order encoding (`Ge`) and the direct
+encoding (`Eq`) but none for a plain Boolean. A `var bool` needs *some* PB name.
+
+Decision: encode `var bool` as the order encoding on `[0, 1]`. "b is true" is `b_ge_1`,
+reached through `Lit.bool_true` / `Lit.bool_false`.
+
+Consequences: one naming scheme instead of two, so `bool2int` channelling is free and
+Booleans compose with linear constraints without a special case. The cost is that proofs
+say `b_ge_1` where a reader might expect `b`. That is a real readability cost and it is
+accepted deliberately — PROOF-FORMAT section 3 exists to make names predictable, and a
+second scheme for the same concept would undermine it more than an unfamiliar spelling
+does.
+
+## D-0008  Backtracking uses proof levels, not per-reason deletion
+Status: DECIDED
+Date: 2026-09-14
+Supersedes the original advice in PROOF-FORMAT section 5.
+
+Context: PROOF-FORMAT originally said to retire reasons on backtrack with one `del` per
+reason. VeriPB has `# <level>` (set level) and `w <level>` (wipe level), which this
+document had mis-documented — `#` was wrongly described as a comment marker.
+
+Decision: tag derived constraints with the solver's decision level via `#`, and retire
+them on backtrack with a single `w`.
+
+Consequences: one proof line per backtrack instead of one per reason. The proof then
+grows with the interesting part of the search rather than with its total size, which is
+the difference between a proof you can check and one you cannot. Individual `del id N`
+remains correct for constraints not tied to a decision level, such as forgotten learned
+clauses.

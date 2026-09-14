@@ -27,29 +27,57 @@ These are the VeriPB 2.0 rules this project uses. Anything outside this list nee
 decision record before it appears in emitted proofs — an unfamiliar rule in a proof is a
 debugging problem for whoever reads the failure next.
 
-| Rule | Meaning | Used for |
-|---|---|---|
-| `f` | number of model constraints loaded | proof preamble |
-| `pol` (`p`) | cutting-planes derivation in reverse Polish | the workhorse: most propagator justifications |
-| `rup` (`u`) | reverse unit propagation | prunings whose reason is clausal |
-| `red` | redundance-based strengthening | introducing definitions (reified vars, direct-encoding channelling) |
-| `del` / `d` | delete constraints by id | retiring reasons on backtrack |
-| `delc` | delete a core constraint | rare; objective updates |
-| `core` | move constraints to core | after a solution improves the bound |
-| `sol` / `soli` / `v` | log a solution | SAT answers, objective improvement |
-| `o` | log an improving solution | optimisation |
-| `obju` | update objective | optimisation |
-| `a` | add a constraint assumed-checked | **forbidden in release builds** — debugging only |
-| `*` / `#` | comment / section marker | readability of emitted proofs |
-| `conclusion` | final claim | every proof ends with one |
-| `end` | end of proof | last line |
+Every row below was checked empirically against veripb 2.2.2. Where this document once
+disagreed with the checker, the checker won; see the traps at the end of this section,
+because two of those errors silently corrupt a proof rather than failing it.
+
+| Rule | Syntax | Meaning | Used for |
+|---|---|---|---|
+| `f` | `f N` | load N model constraints, numbering them 1..N | proof preamble |
+| `pol` (`p`) | `pol <rpn>` | cutting-planes derivation in reverse Polish | the workhorse: most propagator justifications |
+| `rup` (`u`) | `rup <terms> >= <n> ;` | reverse unit propagation | prunings whose reason is clausal |
+| `red` | `red <constraint> ; <witness>` | redundance-based strengthening | definitions: reified vars, direct-encoding channelling |
+| `del` (`d`) | `del id N M ...` | delete constraints by id | retiring an individual reason |
+| `#` | `# <level>` | **set the current level** | opening a decision level |
+| `w` | `w <level>` | wipe every constraint at or above that level | backtracking — see section 5 |
+| `core` | `core id N ...` | move constraints to core | after a solution improves the bound |
+| `sol` | `sol <lits>` | log a solution, adding nothing | SAT answers |
+| `solx` (`v`) | `solx <lits>` | log a solution *and* add the excluding clause | enumeration; **yields an id** |
+| `soli` (`o`) | `soli <lits>` | log an improving solution; needs an objective | optimisation; **yields an id** |
+| `obju` | `obju ...` | update the objective | optimisation |
+| `output` | `output NONE` | declare the output mode | **mandatory**, immediately before `conclusion` |
+| `conclusion` | see SPEC section 4.3 | final claim | every proof ends with one |
+| `end` | `end pseudo-Boolean proof` | end of proof | last line, exact text |
+| `a` | | add a constraint assumed-checked | **forbidden in release builds** — debugging only |
+| `*` | `* text` | comment | readability of emitted proofs |
 
 `pol` syntax is reverse Polish over constraint ids: `pol 3 4 + 2 d` means "constraint 3
-plus constraint 4, divided by 2". Literal axioms are written `~x1` / `x1`.
+plus constraint 4, divided by 2". Literal axioms are written `~x1` / `x1`. Its weakening
+operator `w` takes a **variable, not a literal** — it ignores any sign you give it, and
+VeriPB only logs a warning rather than failing, so a sign there is a silent no-op.
 
 **Rule**: prefer `pol` over `rup`. A `pol` step states the actual reasoning and is cheap
 to check; `rup` makes the checker search. A propagator that can only produce `rup` should
 say so in its module header and explain why.
+
+### Traps
+
+Four things this document previously got wrong. The first two are the dangerous ones,
+because they corrupt ids rather than producing an error you would notice:
+
+1. **An `.opb` line with `=` counts as TWO constraints** for the `f` rule — the checker
+   splits it into `>=` and `<=`. Get the count wrong and every later id is shifted, so
+   `pol` steps silently reference the wrong constraints. `Opb.n_checker_constraints`
+   computes the header count the checker's way; `Encoding.add_constraint` refuses `Eq`
+   outright and `Encoding.add_equality` emits the two `>=` lines explicitly, returning
+   both ids.
+2. **`sol`, `solx`/`v` and `soli`/`o` differ in id accounting**: `sol` adds no constraint,
+   the other two each add one. Treating them as interchangeable desynchronises our id
+   counter from the checker's.
+3. **`#` is not a comment or section marker.** It is the set-level rule and takes an
+   integer; `#` followed by prose is a parse error. Only `*` introduces a comment.
+4. **Deletion takes an identifier kind**: `del id N`, not `del N`. Same for `delc` and
+   `core` (`id` / `range` / `find` / `spec`).
 
 ## 3. Encoding *(normative — names are part of the contract)*
 
@@ -91,6 +119,13 @@ x_eq_v  <->  x_ge_v  /\  ~x_ge_(v+1)
 emitted with `red` as a definition. Exactly-one over `x_eq_*` follows from the
 channelling and MUST be derived, not assumed.
 
+### Booleans
+
+`Lit.pbvar` has no Boolean constructor. A `var bool` is encoded as the order encoding on
+`[0, 1]`: "b is true" is `b_ge_1`, via `Lit.bool_true` / `Lit.bool_false`. Do not invent a
+bare `b` name for a Boolean — that would be a second naming scheme for the same thing, and
+the point of this section is that there is only one.
+
 ### Naming
 
 Variable names in the OPB file are the FlatZinc identifier with the suffixes above.
@@ -115,10 +150,29 @@ it emits. The table below is the index; it is maintained as propagators land.
 
 ## 5. Backtracking and deletion
 
-Reasons logged during search are deleted on backtrack, in reverse order of introduction.
+Use **levels**, not individual deletions. `# <level>` sets the current level, everything
+derived afterwards is tagged with it, and `w <level>` wipes every constraint at or above
+that level in a single rule. One proof line per backtrack instead of one `del` per reason
+— which matters because the alternative makes the proof grow with the size of the search
+rather than with the interesting part of it.
+
+`w` on a level that was never set is an error (*"Tried to wipe level N that was never
+set"*), so levels must be opened before they are wiped. That mirrors the solver's own
+decision levels exactly, which is the point.
+
+`del id N ...` is still right for retiring a constraint not tied to a decision level,
+such as a learned clause being forgotten.
+
 Failing to delete does not make a proof wrong, but makes it grow without bound and makes
 checking quadratic. `BAGUETTE_PROOF_AUDIT=1` asserts the live-id set is empty at
 `conclusion`.
+
+**What the audit covers**: the live set holds only ids *handed back by rule emission*.
+Model constraints introduced by `f` are excluded — ARCHITECTURE §6 says "an id you
+received is an id you are responsible for deleting", and nobody receives those;
+`Writer.model_ids` lists them separately. A contradiction consumed by
+`conclusion UNSAT : <cid>`, and the lower-bound id in `BOUNDS`, count as discharged by
+the conclusion, since they cannot be deleted before being referenced.
 
 ## 6. Debugging a rejected proof
 

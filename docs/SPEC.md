@@ -128,9 +128,26 @@ names are what make that possible.
 
 ### 4.3 Conclusion
 
-- SAT: the proof ends with a `conclusion SAT` referencing a logged solution.
-- UNSAT: the proof derives contradiction and ends `conclusion UNSAT`.
-- OPT: the proof ends `conclusion BOUNDS <obj> <obj>`.
+Order is fixed and all three lines are required:
+
+```
+output NONE
+conclusion <claim>
+end pseudo-Boolean proof
+```
+
+`output` is mandatory — omitting it makes the checker reject the proof — and `end` must be
+exactly that text.
+
+| Answer | Conclusion |
+|---|---|
+| SAT | `conclusion SAT` — requires a previously logged solution **and** that deletion checking was never switched off. `conclusion SAT : <assignment>` states the assignment inline instead. |
+| UNSAT | `conclusion UNSAT`, optionally `conclusion UNSAT : <cid>` naming the contradiction. Without the id the checker searches its database for one. |
+| OPT | `conclusion BOUNDS <lo> [: <cid>] <hi\|INF> [: <assignment>]` |
+
+**`BOUNDS` requires the `.opb` to carry a `min:` objective line**; without one the checker
+raises `InvalidProof`. The optional `<cid>` names a constraint implying the lower bound,
+saving the checker a search.
 
 ---
 
