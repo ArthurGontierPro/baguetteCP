@@ -4,7 +4,16 @@
    chain helper it uses (lib/core/prop/order_reason.ml, docs/DECISIONS.md D-0010).
    Follows test_core.ml's shape: a [check] counter, one function per area, exit 1 on any
    failure. See docs/INVARIANTS.md for I-P1..I-P4, which the sections below are named
-   after. *)
+   after.
+
+   M1-T8 adds int_lin_eq, int_le, int_lt, int_eq (lib/core/prop/lin_eq.ml,
+   lib/core/prop/int_le.ml, int_lt.ml, int_eq.ml). All four delegate their actual
+   propagation to [Linear]/[Lin_eq], so their explanations are, unmodified, exactly
+   [Linear]'s [Cut (Trivial, Linear (units, units_rhs), 1, 1)] shape -- the sections
+   below re-run [Linear]'s own I-P1..I-P4 style checks against them (soundness,
+   checking, idempotence, the max-attainable guard) and, per this task, add one
+   end-to-end veripb check per propagator with a multi-step bound-fact chain, the case
+   D-0010 shows is the one a green suite can otherwise miss entirely. *)
 
 module Domain = Baguette_core.Domain
 module Store = Baguette_core.Store
@@ -12,8 +21,16 @@ module Var = Baguette_core.Var
 module Explanation = Baguette_core.Explanation
 module Propagator = Baguette_core.Propagator
 module Linear = Baguette_core.Linear
+module Lin_eq = Baguette_core.Lin_eq
+module Int_le = Baguette_core.Int_le
+module Int_lt = Baguette_core.Int_lt
+module Int_eq = Baguette_core.Int_eq
 module Order_reason = Baguette_core.Order_reason
 module Lit = Baguette_proof.Lit
+module Opb = Baguette_proof.Opb
+module Writer = Baguette_proof.Writer
+module Encoding = Baguette_proof.Encoding
+module Justify = Baguette_core.Justify
 
 let failures = ref 0
 
@@ -485,6 +502,527 @@ let test_multi_step_chain () =
                 = [ -3; -2; -1; 0; 1; 2; 3; 4 ])
           | _ -> check "multi-step upper: unexpected explanation shape" false))
 
+(* ============================================================================
+   M1-T8: int_lin_eq, int_le, int_lt, int_eq.
+
+   All four delegate propagation wholesale to [Linear] (int_le, int_lt: directly;
+   int_lin_eq, int_eq: via [Lin_eq], two [Linear] instances run to a shared
+   fixpoint) -- see the module headers in lib/core/prop/{lin_eq,int_le,int_lt,int_eq}.ml
+   for why. So every explanation any of them ever produces is, unmodified, [Linear]'s
+   own [Cut (Trivial, Linear (units, units_rhs), 1, 1)] shape, and [verify_linear_shape]
+   above already checks that shape against a set of (name, decl_lo, decl_hi) bounds and
+   (coeff, var) terms regardless of which direction (le or ge) produced it: the
+   coefficient check there only ever compares magnitudes ([abs orig_coeff]), and the
+   chain-direction check reads the sign straight off the produced literal, not off the
+   caller's [terms] list. So the original (unnegated) terms/bounds can always be handed
+   to it, whichever of [Lin_eq]'s two [Linear] children actually pushed the bound. That
+   is what makes reusing it here safe rather than a coincidence worth re-deriving. *)
+
+(* Generic soundness harness, parameterised over [propagate]/[vars]-shaped functions and
+   a [satisfies] predicate, so int_lin_eq / int_le / int_lt / int_eq do not each need a
+   hand-copied version of [check_soundness_case] above. Only ever asserts I-P1 (never
+   remove a supported value) -- exactly right for int_eq, which is bounds- not
+   domain-consistent (see lib/core/prop/int_eq.ml's header): a brute-force check phrased
+   as "no supported value removed" is silent about values int_eq is allowed to leave
+   behind, which is the honest thing for this consistency level to check. *)
+let check_generic_soundness name ~make ~propagate ~n ~ranges ~satisfies =
+  let bounds = List.mapi (fun i (lo, hi) -> (Printf.sprintf "x%d" i, lo, hi)) ranges in
+  let assignments = cartesian ranges in
+  let solutions = List.filter satisfies assignments in
+  let has_support i v = List.exists (fun sol -> List.nth sol i = v) solutions in
+  let store = mk_store bounds in
+  let prop = make store in
+  match propagate prop store with
+  | Propagator.Conflict _ ->
+      check (Printf.sprintf "%s: conflict only when truly unsat" name) (solutions = [])
+  | Propagator.Fixpoint ->
+      let ok = ref true in
+      for i = 0 to n - 1 do
+        let lo, hi = List.nth ranges i in
+        let d = Store.get store (var i) in
+        for v = lo to hi do
+          if has_support i v && not (Domain.mem d v) then ok := false
+        done
+      done;
+      check (Printf.sprintf "%s: I-P1 no supported value removed" name) !ok
+
+let test_lin_eq_soundness () =
+  let case name coeffs rhs ranges =
+    check_generic_soundness name
+      ~make:(fun store -> Lin_eq.make store (List.mapi (fun i a -> (a, var i)) coeffs) rhs)
+      ~propagate:Lin_eq.propagate ~n:(List.length coeffs) ~ranges
+      ~satisfies:(fun a -> List.fold_left2 (fun acc c v -> acc + (c * v)) 0 coeffs a = rhs)
+  in
+  case "int_lin_eq: 2 vars, positive coeffs" [ 1; 1 ] 2 [ (-3, 3); (-3, 3) ];
+  case "int_lin_eq: 2 vars, one negative coeff" [ 1; -1 ] 0 [ (-3, 3); (-3, 3) ];
+  case "int_lin_eq: 3 vars, mixed signs" [ 2; -1; 3 ] 4 [ (-3, 3); (-3, 3); (-3, 3) ];
+  case "int_lin_eq: 3 vars, one zero coeff" [ 1; 0; -2 ] 1 [ (-2, 2); (-2, 2); (-2, 2) ];
+  case "int_lin_eq: all-negative coeffs" [ -2; -3 ] (-5) [ (-3, 3); (-3, 3) ];
+  case "int_lin_eq: unsatisfiable target" [ 1; 1; 1 ] (-20) [ (-3, 3); (-3, 3); (-3, 3) ]
+
+let test_compare_soundness () =
+  let case name make propagate rel ranges =
+    check_generic_soundness name ~make ~propagate ~n:2 ~ranges
+      ~satisfies:(fun a -> match a with [ x; y ] -> rel x y | _ -> false)
+  in
+  case "int_le: overlapping ranges"
+    (fun store -> Int_le.make store (var 0) (var 1))
+    Int_le.propagate ( <= ) [ (-3, 3); (-3, 3) ];
+  case "int_le: disjoint, x strictly above y's range"
+    (fun store -> Int_le.make store (var 0) (var 1))
+    Int_le.propagate ( <= ) [ (2, 5); (-5, -2) ];
+  case "int_lt: overlapping ranges"
+    (fun store -> Int_lt.make store (var 0) (var 1))
+    Int_lt.propagate ( < ) [ (-3, 3); (-3, 3) ];
+  case "int_lt: touching ranges (x may equal y's lo, still < possible)"
+    (fun store -> Int_lt.make store (var 0) (var 1))
+    Int_lt.propagate ( < ) [ (0, 3); (0, 3) ]
+
+let test_int_eq_soundness () =
+  let case name ranges =
+    check_generic_soundness name
+      ~make:(fun store -> Int_eq.make store (var 0) (var 1))
+      ~propagate:Int_eq.propagate ~n:2 ~ranges
+      ~satisfies:(fun a -> match a with [ x; y ] -> x = y | _ -> false)
+  in
+  case "int_eq: overlapping ranges" [ (-3, 3); (-1, 5) ];
+  case "int_eq: disjoint ranges (unsat)" [ (0, 2); (5, 8) ];
+  case "int_eq: nested ranges" [ (-5, 5); (-2, 2) ]
+
+(* ------------------------------------------------- I-P3: checking, all fixed *)
+
+(* With every variable fixed to a single value, a propagator must report Conflict iff
+   the assignment violates its constraint -- and nothing else, since there is nothing
+   left to prune. [make] runs before [Store.fix] so the propagator's frozen declared
+   bounds are the wide ones, exactly as test_conflict above does with [Store.set_lo]. *)
+let test_checking () =
+  let run_eq bounds coeffs rhs fix_values expect_conflict label =
+    let store = mk_store bounds in
+    let prop = Lin_eq.make store (List.mapi (fun i a -> (a, var i)) coeffs) rhs in
+    List.iteri
+      (fun i v -> ignore (Store.fix store (var i) v Explanation.trivial))
+      fix_values;
+    match Lin_eq.propagate prop store with
+    | Propagator.Conflict _ -> check label expect_conflict
+    | Propagator.Fixpoint -> check label (not expect_conflict)
+  in
+  run_eq [ ("x", 0, 3); ("y", 0, 3) ] [ 1; 1 ] 3 [ 1; 2 ] false
+    "I-P3 int_lin_eq: satisfying fixed assignment is not a conflict";
+  run_eq [ ("x", 0, 3); ("y", 0, 3) ] [ 1; 1 ] 3 [ 1; 3 ] true
+    "I-P3 int_lin_eq: violating fixed assignment is a conflict";
+  let run_le make propagate bounds fix_values expect_conflict label =
+    let store = mk_store bounds in
+    let prop = make store in
+    List.iteri
+      (fun i v -> ignore (Store.fix store (var i) v Explanation.trivial))
+      fix_values;
+    match propagate prop store with
+    | Propagator.Conflict _ -> check label expect_conflict
+    | Propagator.Fixpoint -> check label (not expect_conflict)
+  in
+  run_le
+    (fun store -> Int_le.make store (var 0) (var 1))
+    Int_le.propagate [ ("x", 0, 5); ("y", 0, 5) ] [ 2; 2 ] false
+    "I-P3 int_le: x=2,y=2 (x<=y holds) is not a conflict";
+  run_le
+    (fun store -> Int_le.make store (var 0) (var 1))
+    Int_le.propagate [ ("x", 0, 5); ("y", 0, 5) ] [ 3; 2 ] true
+    "I-P3 int_le: x=3,y=2 (x<=y violated) is a conflict";
+  run_le
+    (fun store -> Int_lt.make store (var 0) (var 1))
+    Int_lt.propagate [ ("x", 0, 5); ("y", 0, 5) ] [ 2; 3 ] false
+    "I-P3 int_lt: x=2,y=3 (x<y holds) is not a conflict";
+  run_le
+    (fun store -> Int_lt.make store (var 0) (var 1))
+    Int_lt.propagate [ ("x", 0, 5); ("y", 0, 5) ] [ 2; 2 ] true
+    "I-P3 int_lt: x=2,y=2 (x<y violated) is a conflict";
+  run_le
+    (fun store -> Int_eq.make store (var 0) (var 1))
+    Int_eq.propagate [ ("x", 0, 5); ("y", 0, 5) ] [ 3; 3 ] false
+    "I-P3 int_eq: x=3,y=3 is not a conflict";
+  run_le
+    (fun store -> Int_eq.make store (var 0) (var 1))
+    Int_eq.propagate [ ("x", 0, 5); ("y", 0, 5) ] [ 3; 4 ] true
+    "I-P3 int_eq: x=3,y=4 is a conflict"
+
+(* ------------------------------------------------------- idempotence at the interface *)
+
+let test_new_idempotence () =
+  let run_twice name make propagate bounds =
+    let store = mk_store bounds in
+    let prop = make store in
+    (match propagate prop store with
+    | Propagator.Conflict _ ->
+        check (Printf.sprintf "%s: expected Fixpoint first pass" name) false
+    | Propagator.Fixpoint -> check (Printf.sprintf "%s: first pass is Fixpoint" name) true);
+    let snap = Store.snapshot store in
+    (match propagate prop store with
+    | Propagator.Conflict _ ->
+        check (Printf.sprintf "%s: second propagate must not conflict" name) false
+    | Propagator.Fixpoint ->
+        check (Printf.sprintf "%s: second propagate reports Fixpoint" name) true);
+    check
+      (Printf.sprintf "%s: second propagate changed nothing" name)
+      (Store.same_domains store snap)
+  in
+  run_twice "int_lin_eq"
+    (fun store -> Lin_eq.make store [ (2, var 0); (-1, var 1); (3, var 2) ] 4)
+    Lin_eq.propagate
+    [ ("x", -3, 3); ("y", -3, 3); ("z", -3, 3) ];
+  run_twice "int_le"
+    (fun store -> Int_le.make store (var 0) (var 1))
+    Int_le.propagate [ ("x", -3, 3); ("y", -3, 3) ];
+  run_twice "int_lt"
+    (fun store -> Int_lt.make store (var 0) (var 1))
+    Int_lt.propagate [ ("x", -3, 3); ("y", -3, 3) ];
+  run_twice "int_eq"
+    (fun store -> Int_eq.make store (var 0) (var 1))
+    Int_eq.propagate [ ("x", -5, 5); ("y", -2, 8) ]
+
+(* ------------------------------------------------- explanation shape, per pruning *)
+
+(* Runs [propagate] once and checks every trail entry it created has a
+   [Cut (Trivial, Linear (...), 1, 1)] explanation whose [Linear] child passes
+   [verify_linear_shape] -- which starts with the max-attainable guard (I-D0010's
+   check): a row that cannot reach its own rhs is unsatisfiable and no proof state
+   accepts it. *)
+let check_all_entries_shape name store bounds terms before =
+  let after = Store.trail_length store in
+  check (Printf.sprintf "%s: at least one pruning happened" name) (after > before);
+  let entries = Store.trail_entries store in
+  let new_entries = List.filteri (fun i _ -> i < after - before) entries in
+  List.iter
+    (fun (e : Store.entry) ->
+      match Explanation.force (Store.explanation store e) with
+      | Explanation.Cut
+          (Explanation.Trivial, Explanation.Linear (lterms, units_rhs), 1, 1) ->
+          ignore (verify_linear_shape name store bounds terms lterms units_rhs)
+      | Explanation.Trivial ->
+          (* A pruning whose reason needed no extra bound facts at all (units_rhs = 0,
+             the model constraint alone suffices) can legitimately force straight to
+             [Trivial] if a caller ever short-circuits [Cut (Trivial, Linear([],0),1,1)]
+             -- none of these propagators do that, so seeing this would itself be
+             worth investigating, but it is not a shape violation per se. *)
+          check (Printf.sprintf "%s: unexpected bare Trivial reason" name) false
+      | _ -> check (Printf.sprintf "%s: unexpected explanation shape" name) false)
+    new_entries
+
+let test_lin_eq_entailment () =
+  let bounds = [ ("x", -3, 3); ("y", -3, 3); ("z", -3, 3) ] in
+  let terms = [ (2, var 0); (-1, var 1); (3, var 2) ] in
+  let store = mk_store bounds in
+  let prop = Lin_eq.make store terms 4 in
+  let before = Store.trail_length store in
+  (match Lin_eq.propagate prop store with
+  | Propagator.Conflict _ -> check "int_lin_eq entailment: expected Fixpoint" false
+  | Propagator.Fixpoint -> check_all_entries_shape "int_lin_eq entailment" store bounds
+                              terms before)
+
+let test_compare_entailment () =
+  let bounds = [ ("x", -5, 5); ("y", -5, 5) ] in
+  let terms = [ (1, var 0); (-1, var 1) ] in
+  (let store = mk_store bounds in
+   ignore (Store.set_lo store (var 0) 2 Explanation.trivial);
+   let prop = Int_le.make store (var 0) (var 1) in
+   let before = Store.trail_length store in
+   match Int_le.propagate prop store with
+   | Propagator.Conflict _ -> check "int_le entailment: expected Fixpoint" false
+   | Propagator.Fixpoint ->
+       check_all_entries_shape "int_le entailment" store bounds terms before);
+  let terms_lt = [ (1, var 0); (-1, var 1) ] in
+  let store2 = mk_store bounds in
+  ignore (Store.set_lo store2 (var 0) 2 Explanation.trivial);
+  let prop2 = Int_lt.make store2 (var 0) (var 1) in
+  let before2 = Store.trail_length store2 in
+  match Int_lt.propagate prop2 store2 with
+  | Propagator.Conflict _ -> check "int_lt entailment: expected Fixpoint" false
+  | Propagator.Fixpoint ->
+      check_all_entries_shape "int_lt entailment" store2 bounds terms_lt before2
+
+let test_int_eq_entailment () =
+  let bounds = [ ("x", -5, 5); ("y", -5, 5) ] in
+  let terms = [ (1, var 0); (-1, var 1) ] in
+  let store = mk_store bounds in
+  ignore (Store.set_hi store (var 1) 1 Explanation.trivial);
+  let prop = Int_eq.make store (var 0) (var 1) in
+  let before = Store.trail_length store in
+  match Int_eq.propagate prop store with
+  | Propagator.Conflict _ -> check "int_eq entailment: expected Fixpoint" false
+  | Propagator.Fixpoint ->
+      check_all_entries_shape "int_eq entailment" store bounds terms before
+
+(* ============================================================================
+   End-to-end veripb checks (I-X1), one per propagator, each with a bound fact two
+   or more steps from its declared bound -- the case D-0010 shows a green suite can
+   miss entirely at one step. Follows test/unit/test_justify.ml's
+   [veripb_path]/[run_veripb]/[setup_int_lin_le] shape. *)
+
+let veripb_path () =
+  let candidates =
+    [
+      Filename.concat
+        (Sys.getenv_opt "HOME" |> Option.value ~default:"")
+        ".local/bin/veripb";
+    ]
+  in
+  match List.find_opt Sys.file_exists candidates with
+  | Some p -> Some p
+  | None ->
+      if Sys.command "command -v veripb >/dev/null 2>&1" = 0 then Some "veripb" else None
+
+let run_veripb ~name ~build =
+  match veripb_path () with
+  | None ->
+      incr failures;
+      Printf.printf
+        "FAIL %s: veripb not found -- invariant I-X1 was NOT checked. Install it (see \
+         docs/PROOF-FORMAT.md) and re-run; do not treat this as a pass.\n"
+        name
+  | Some veripb -> (
+      let dir = Filename.temp_file "baguette_prop_veripb" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let opb, pbp = build dir in
+      let log = Filename.concat dir "log" in
+      let rc =
+        Sys.command
+          (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
+             (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
+      in
+      let out =
+        let ic = open_in_bin log in
+        let s = really_input_string ic (in_channel_length ic) in
+        close_in ic;
+        s
+      in
+      if rc = 0 then Printf.printf "ok   %s (I-X1)\n" name
+      else (
+        incr failures;
+        Printf.printf "FAIL %s: veripb rejected the proof (I-X1)\n%s\n" name out;
+        Printf.printf "  model: %s\n  proof: %s\n" opb pbp);
+      List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp; log ];
+      try Sys.rmdir dir with _ -> ())
+
+(* Pull the [Cut (Trivial, lin, 1, 1)]'s [Linear] child out of a forced explanation,
+   failing loudly (not silently skipping) if the shape is ever something else -- a
+   veripb build that quietly emitted nothing for the wrong reason would be worse than
+   one that crashes here. *)
+let linear_child_of expl =
+  match expl with
+  | Explanation.Cut (Explanation.Trivial, lin, 1, 1) -> lin
+  | _ -> failwith "linear_child_of: unexpected explanation shape"
+
+(* int_lin_eq: x1 + x2 = 4, x1, x2 declared [0,5]. x2 is pinned to exactly 2 by a real
+   model constraint (x2 <= 2 *and* x2 >= 2, i.e. x2 = 2 is asserted outright, four
+   literals' worth of chain contribution split across upper and lower); the pruning we
+   justify is x1's hi tightened by the >= (ge) half of the equality, whose reason cites
+   x2's *upper*-bound chain -- x2's current hi (2) is three steps below its declared hi
+   (5): x2 <= 2, x2 <= 3, x2 <= 4, strictly more than the one-step case D-0010 shows is
+   not enough of a test. *)
+let build_int_lin_eq_multi dir =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x1" ~lo:0 ~hi:5;
+  Encoding.declare_int e "x2" ~lo:0 ~hi:5;
+  let c_x2_le = Encoding.add_constraint e (Opb.ge [ (1, Lit.le "x2" 2) ] 1) in
+  let c_x2_ge = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "x2" 2) ] 1) in
+  ignore c_x2_le;
+  ignore c_x2_ge;
+  let opb_terms, const = Encoding.linear_terms_int_lin_le e [ (1, "x1"); (1, "x2") ] in
+  let geq_id, leq_id = Encoding.add_equality e opb_terms (4 - const) in
+  ignore leq_id;
+  let opb = Filename.concat dir "linteq_multi.opb" in
+  let pbp = Filename.concat dir "linteq_multi.pbp" in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "x1 + x2 = 4; x2 = 2 (established)" ] e oc;
+  close_out oc;
+  let store =
+    Store.create ~names:[| "x1"; "x2" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
+  in
+  let t = Lin_eq.make store [ (1, Var.of_int 0); (1, Var.of_int 1) ] 4 in
+  (match Store.set_hi store (Var.of_int 1) 2 Explanation.trivial with
+  | Store.Changed -> ()
+  | _ -> failwith "build_int_lin_eq_multi: x2 <= 2 setup failed");
+  (match Store.set_lo store (Var.of_int 1) 2 Explanation.trivial with
+  | Store.Changed -> ()
+  | _ -> failwith "build_int_lin_eq_multi: x2 >= 2 setup failed");
+  (match Linear.propagate (Lin_eq.le t) store with
+  | Propagator.Conflict _ -> failwith "build_int_lin_eq_multi: le pass conflicted"
+  | Propagator.Fixpoint -> ());
+  let before = Store.trail_length store in
+  (match Linear.propagate (Lin_eq.ge t) store with
+  | Propagator.Conflict _ -> failwith "build_int_lin_eq_multi: ge pass conflicted"
+  | Propagator.Fixpoint -> ());
+  let after = Store.trail_length store in
+  let entries = List.filteri (fun i _ -> i < after - before) (Store.trail_entries store) in
+  let entry =
+    match
+      List.find_opt (fun (en : Store.entry) -> Var.equal en.var (Var.of_int 0)) entries
+    with
+    | Some en -> en
+    | None -> failwith "build_int_lin_eq_multi: x1's bound was never pushed by ge"
+  in
+  let expl = Explanation.force (Store.explanation store entry) in
+  let linear_child = linear_child_of expl in
+  let oc = open_out pbp in
+  let w = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof e w;
+  let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> geq_id) in
+  let id_linear = Justify.emit ctx linear_child in
+  let id_cut = Justify.emit ctx expl in
+  Writer.delete_many w [ id_linear; id_cut ];
+  Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x1", 2); ("x2", 2) ]));
+  close_out oc;
+  (opb, pbp)
+
+(* int_le: x <= y, x, y declared [0,5]. x >= 3 is established by a real model
+   constraint, three steps above x's declared lo of 0 (x >= 1, x >= 2, x >= 3), and
+   drives lo(y) up to 3 via int_le's own propagation -- the reason for that push cites
+   x's full three-literal chain. *)
+let build_int_le_multi dir =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:0 ~hi:5;
+  Encoding.declare_int e "y" ~lo:0 ~hi:5;
+  let c_bound = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "x" 3) ] 1) in
+  ignore c_bound;
+  let model_row = Encoding.add_int_lin_le e [ (1, "x"); (-1, "y") ] 0 in
+  let opb = Filename.concat dir "intle_multi.opb" in
+  let pbp = Filename.concat dir "intle_multi.pbp" in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "x <= y; x >= 3 (established)" ] e oc;
+  close_out oc;
+  let store =
+    Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
+  in
+  let prop = Int_le.make store (Var.of_int 0) (Var.of_int 1) in
+  (match Store.set_lo store (Var.of_int 0) 3 Explanation.trivial with
+  | Store.Changed -> ()
+  | _ -> failwith "build_int_le_multi: x >= 3 setup failed");
+  let before = Store.trail_length store in
+  (match Int_le.propagate prop store with
+  | Propagator.Conflict _ -> failwith "build_int_le_multi: propagate conflicted"
+  | Propagator.Fixpoint -> ());
+  let after = Store.trail_length store in
+  let entries = List.filteri (fun i _ -> i < after - before) (Store.trail_entries store) in
+  let entry =
+    match
+      List.find_opt (fun (en : Store.entry) -> Var.equal en.var (Var.of_int 1)) entries
+    with
+    | Some en -> en
+    | None -> failwith "build_int_le_multi: y's bound was never pushed"
+  in
+  let expl = Explanation.force (Store.explanation store entry) in
+  let linear_child = linear_child_of expl in
+  let oc = open_out pbp in
+  let w = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof e w;
+  let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> model_row) in
+  let id_linear = Justify.emit ctx linear_child in
+  let id_cut = Justify.emit ctx expl in
+  Writer.delete_many w [ id_linear; id_cut ];
+  Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x", 3); ("y", 3) ]));
+  close_out oc;
+  (opb, pbp)
+
+(* int_lt: x < y, x, y declared [0,5]. x >= 3 established (three steps), driving
+   lo(y) up to 4 via int_lt -- same chain shape as int_le above, checked separately
+   since int_lt is a different rhs (-1) over the same two-term row, not a re-run of
+   the same proof. *)
+let build_int_lt_multi dir =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:0 ~hi:5;
+  Encoding.declare_int e "y" ~lo:0 ~hi:5;
+  let c_bound = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "x" 3) ] 1) in
+  ignore c_bound;
+  let model_row = Encoding.add_int_lin_le e [ (1, "x"); (-1, "y") ] (-1) in
+  let opb = Filename.concat dir "intlt_multi.opb" in
+  let pbp = Filename.concat dir "intlt_multi.pbp" in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "x < y; x >= 3 (established)" ] e oc;
+  close_out oc;
+  let store =
+    Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
+  in
+  let prop = Int_lt.make store (Var.of_int 0) (Var.of_int 1) in
+  (match Store.set_lo store (Var.of_int 0) 3 Explanation.trivial with
+  | Store.Changed -> ()
+  | _ -> failwith "build_int_lt_multi: x >= 3 setup failed");
+  let before = Store.trail_length store in
+  (match Int_lt.propagate prop store with
+  | Propagator.Conflict _ -> failwith "build_int_lt_multi: propagate conflicted"
+  | Propagator.Fixpoint -> ());
+  let after = Store.trail_length store in
+  let entries = List.filteri (fun i _ -> i < after - before) (Store.trail_entries store) in
+  let entry =
+    match
+      List.find_opt (fun (en : Store.entry) -> Var.equal en.var (Var.of_int 1)) entries
+    with
+    | Some en -> en
+    | None -> failwith "build_int_lt_multi: y's bound was never pushed"
+  in
+  let expl = Explanation.force (Store.explanation store entry) in
+  let linear_child = linear_child_of expl in
+  let oc = open_out pbp in
+  let w = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof e w;
+  let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> model_row) in
+  let id_linear = Justify.emit ctx linear_child in
+  let id_cut = Justify.emit ctx expl in
+  Writer.delete_many w [ id_linear; id_cut ];
+  Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x", 3); ("y", 4) ]));
+  close_out oc;
+  (opb, pbp)
+
+(* int_eq: x = y, x, y declared [0,5]. y <= 2 is established by a real model
+   constraint, three steps below y's declared hi of 5 (y <= 2, y <= 3, y <= 4), which
+   int_eq's le half turns into a push of x's hi down to 2, citing y's full
+   three-literal upper chain. *)
+let build_int_eq_multi dir =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:0 ~hi:5;
+  Encoding.declare_int e "y" ~lo:0 ~hi:5;
+  let c_bound = Encoding.add_constraint e (Opb.ge [ (1, Lit.le "y" 2) ] 1) in
+  ignore c_bound;
+  let opb_terms, const = Encoding.linear_terms_int_lin_le e [ (1, "x"); (-1, "y") ] in
+  let geq_id, leq_id = Encoding.add_equality e opb_terms (0 - const) in
+  ignore geq_id;
+  let opb = Filename.concat dir "inteq_multi.opb" in
+  let pbp = Filename.concat dir "inteq_multi.pbp" in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "x = y; y <= 2 (established)" ] e oc;
+  close_out oc;
+  let store =
+    Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
+  in
+  let t = Int_eq.make store (Var.of_int 0) (Var.of_int 1) in
+  (match Store.set_hi store (Var.of_int 1) 2 Explanation.trivial with
+  | Store.Changed -> ()
+  | _ -> failwith "build_int_eq_multi: y <= 2 setup failed");
+  let before = Store.trail_length store in
+  (match Linear.propagate (Int_eq.le t) store with
+  | Propagator.Conflict _ -> failwith "build_int_eq_multi: le pass conflicted"
+  | Propagator.Fixpoint -> ());
+  let after = Store.trail_length store in
+  let entries = List.filteri (fun i _ -> i < after - before) (Store.trail_entries store) in
+  let entry =
+    match
+      List.find_opt (fun (en : Store.entry) -> Var.equal en.var (Var.of_int 0)) entries
+    with
+    | Some en -> en
+    | None -> failwith "build_int_eq_multi: x's bound was never pushed by le"
+  in
+  let expl = Explanation.force (Store.explanation store entry) in
+  let linear_child = linear_child_of expl in
+  let oc = open_out pbp in
+  let w = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof e w;
+  let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> leq_id) in
+  let id_linear = Justify.emit ctx linear_child in
+  let id_cut = Justify.emit ctx expl in
+  Writer.delete_many w [ id_linear; id_cut ];
+  Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x", 2); ("y", 2) ]));
+  close_out oc;
+  (opb, pbp)
+
 (* ------------------------------------------------------------------------ main *)
 
 let () =
@@ -496,6 +1034,22 @@ let () =
   test_explanation_entailment ();
   test_order_reason ();
   test_multi_step_chain ();
+  test_lin_eq_soundness ();
+  test_compare_soundness ();
+  test_int_eq_soundness ();
+  test_checking ();
+  test_new_idempotence ();
+  test_lin_eq_entailment ();
+  test_compare_entailment ();
+  test_int_eq_entailment ();
+  run_veripb ~name:"int_lin_eq: multi-step chain, checked end to end"
+    ~build:build_int_lin_eq_multi;
+  run_veripb ~name:"int_le: multi-step chain, checked end to end"
+    ~build:build_int_le_multi;
+  run_veripb ~name:"int_lt: multi-step chain, checked end to end"
+    ~build:build_int_lt_multi;
+  run_veripb ~name:"int_eq: multi-step chain, checked end to end"
+    ~build:build_int_eq_multi;
   if !failures > 0 then (
     Printf.printf "\n%d FAILURE(S)\n" !failures;
     exit 1)
