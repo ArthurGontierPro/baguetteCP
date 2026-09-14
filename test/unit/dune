@@ -2,5 +2,6 @@
 ; same test file. Add a name here when you add a test module.
 
 (tests
- (names test_core test_proof test_flatzinc test_prop test_justify)
+ (names test_core test_proof test_flatzinc test_prop test_justify test_engine
+   test_endtoend)
  (libraries baguette_core baguette_proof baguette_flatzinc))

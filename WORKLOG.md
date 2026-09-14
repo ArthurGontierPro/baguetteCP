@@ -12,7 +12,9 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| _(none — M1-T7 released in full; next round claims below)_ | | | |
+| M1-T8 — `int_lin_eq`, `int_le`, `int_lt`, `int_eq` | `lib/core/prop/**`, `test/unit/test_prop.ml` | agent-props | 2026-09-14 |
+| M1-T10 — propagation engine + DFS search, decisions logged | `lib/core/engine.ml`, `lib/core/search.ml`, `test/unit/test_engine.ml` | agent-engine | 2026-09-14 |
+| integration | `test/unit/test_endtoend.ml` | orchestrator | 2026-09-14 — no single session can make it pass alone |
 
 ## Cross-session requests
 
@@ -25,6 +27,7 @@ work. The owning session picks it up.
 | `WORKLOG.md`, `docs/**`, `dune-project`, `Makefile`, `scripts/**` and all committing are held by the orchestrator this round — agents touch none of them | — | orchestrator | standing |
 | **All `dune` files are orchestrator-owned.** `lib/core/dune` already has `(include_subdirs unqualified)` so a new `lib/core/prop/*.ml` needs no dune edit, and `test/unit/dune` already names `test_prop` and `test_justify`. Need another module named? Ask here | `**/dune` | orchestrator | standing |
 | `lib/proof/encoding.ml` is now claimed by agent-encoding, and `lib/core/justify.ml` compiles against `Encoding.is_declared`: agent-encoding may **add** to encoding.ml but must not change the signature of anything already there | `lib/proof/encoding.ml` | orchestrator | standing |
+| `lib/core/justify.ml`, `lib/core/explanation.ml`, `lib/core/prop/order_reason.ml` and `lib/proof/**` are **read-only** for both sessions this round: read them freely, edit none of them. Need a change? Write it here | — | orchestrator | standing |
 | M1-T7 is split across two sessions. The contract between them is the **existing** `Explanation.t` ADT in `lib/core/explanation.ml`, which neither may change: agent-core builds `Linear`/`Cut` values, agent-justify renders any of them. A change there is a cross-session request, not an edit | `lib/core/explanation.ml` | orchestrator | standing |
 
 ## Completed
