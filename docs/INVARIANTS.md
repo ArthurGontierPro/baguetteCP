@@ -26,7 +26,7 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
 
 - **I-P1** Soundness: a propagator removes only values that cannot extend to a solution of
   *its own constraint* under the current domains. Tested by brute force on small domains —
-  see `test/unit/test_propagator_soundness.ml`, and add every new propagator to it.
+  see `test/unit/test_prop.ml`, and add every new propagator to it.
 - **I-P2** Fixpoint: when `engine.propagate` returns without failure, running any
   propagator again changes nothing.
 - **I-P3** Checking: with all variables fixed, a propagator reports failure iff the
