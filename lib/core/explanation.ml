@@ -83,9 +83,9 @@ and summand =
   | Term of int * t
     (* coeff * (recursively emit this explanation and cite its resulting id). *)
   | Weaken of (int * Lit.t) list
-    (* sum of coeff_i * axiom(lit_i): weakens a variable's contribution out of the
-       row it is added to. See the module header -- never meaningful outside a
-       [Combine]'s summand list. *)
+(* sum of coeff_i * axiom(lit_i): weakens a variable's contribution out of the
+   row it is added to. See the module header -- never meaningful outside a
+   [Combine]'s summand list. *)
 
 and thunk = { mutable forced : t option; mutable compute : unit -> t }
 
@@ -96,7 +96,6 @@ let clause lits = Clause lits
 let linear terms rhs = Linear (terms, rhs)
 let cut e1 e2 c1 c2 = Cut (e1, e2, c1, c2)
 let model_row id = Model_row id
-
 let term coeff e = Term (coeff, e)
 let weaken lits = Weaken lits
 
@@ -181,7 +180,8 @@ and summand_to_string = function
   | Term (c, e) -> Printf.sprintf "%d*%s" c (to_string e)
   | Weaken lits ->
       "weaken("
-      ^ String.concat " " (List.map (fun (c, l) -> Printf.sprintf "%d*%s" c (Lit.to_string l)) lits)
+      ^ String.concat " "
+          (List.map (fun (c, l) -> Printf.sprintf "%d*%s" c (Lit.to_string l)) lits)
       ^ ")"
 
 (* ------------------------------------------------------------------- arena *)

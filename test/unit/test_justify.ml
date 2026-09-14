@@ -335,8 +335,7 @@ let build_cut_proof dir =
   in
   let id_cut = Justify.emit ctx_cut (Explanation.cut ex ey 1 1) in
   Writer.delete_many w [ id_x; id_y; id_cut ];
-  Writer.conclusion w
-    (Writer.Sat (Encoding.assignment_lits e [ ("x", 2); ("y", 1) ]));
+  Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x", 2); ("y", 1) ]));
   close_out oc;
   (opb, pbp)
 
@@ -371,19 +370,14 @@ let setup_int_lin_le ~x2_lo ~rhs dir tag =
   let e = Encoding.create () in
   Encoding.declare_int e "x1" ~lo:0 ~hi:5;
   Encoding.declare_int e "x2" ~lo:0 ~hi:5;
-  let c_bound =
-    Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "x2" x2_lo) ] 1)
-  in
+  let c_bound = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "x2" x2_lo) ] 1) in
   let model_row =
-    Encoding.add_constraint e
-      (Opb.le (telescope 1 "x1" 5 @ telescope 1 "x2" 5) rhs)
+    Encoding.add_constraint e (Opb.le (telescope 1 "x1" 5 @ telescope 1 "x2" 5) rhs)
   in
   let opb = Filename.concat dir (tag ^ ".opb") in
   let pbp = Filename.concat dir (tag ^ ".pbp") in
   let oc = open_out opb in
-  Encoding.write_opb
-    ~comments:[ Printf.sprintf "x1 + x2 <= %d; x2 >= %d" rhs x2_lo ]
-    e oc;
+  Encoding.write_opb ~comments:[ Printf.sprintf "x1 + x2 <= %d; x2 >= %d" rhs x2_lo ] e oc;
   close_out oc;
   (* D-0010: the store's declared domains must agree with the encoding's, because the
      model row's constant comes from one and the explanation's chain offset from the
@@ -391,15 +385,17 @@ let setup_int_lin_le ~x2_lo ~rhs dir tag =
      "x2 >= x2_lo" is applied below as a pruning -- after [make] has frozen the declared
      bounds -- rather than smuggled in as a narrower initial domain. *)
   let store =
-    Store.create ~names:[| "x1"; "x2" |]
-      ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
+    Store.create ~names:[| "x1"; "x2" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
   in
-  let lin = Linear.make store [ (1, Var.of_int 0); (1, Var.of_int 1) ] rhs ~row_id:model_row in
+  let lin =
+    Linear.make store [ (1, Var.of_int 0); (1, Var.of_int 1) ] rhs ~row_id:model_row
+  in
   (match Store.set_lo store (Var.of_int 1) x2_lo (Explanation.model_row c_bound) with
   | Store.Conflict _ -> failwith "setup_int_lin_le: x2 >= x2_lo conflicts"
   | Store.Unchanged | Store.Changed -> ());
   (match Linear.propagate lin store with
-  | Propagator.Conflict _ -> failwith "setup_int_lin_le: expected a Fixpoint, got Conflict"
+  | Propagator.Conflict _ ->
+      failwith "setup_int_lin_le: expected a Fixpoint, got Conflict"
   | Propagator.Fixpoint -> ());
   let entry =
     match
@@ -430,16 +426,14 @@ let build_int_lin_le_ok dir =
      header): [ctx.model_id] should never be consulted, so make it fail if it ever
      is. *)
   let ctx =
-    Justify.create ~writer:w ~encoding:e
-      ~model_id:(fun () ->
+    Justify.create ~writer:w ~encoding:e ~model_id:(fun () ->
         failwith
           "build_int_lin_le_ok: ctx.model_id was consulted -- expl's base should be \
            Model_row, not Trivial")
   in
   let id = Justify.emit ctx expl in
   Writer.delete w id;
-  Writer.conclusion w
-    (Writer.Sat (Encoding.assignment_lits e [ ("x1", 0); ("x2", 1) ]));
+  Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x1", 0); ("x2", 1) ]));
   close_out oc;
   (opb, pbp)
 
@@ -459,16 +453,14 @@ let build_int_lin_le_gap dir =
   let w = Writer.create ~comments:true ~audit:false oc in
   Encoding.start_proof e w;
   let ctx =
-    Justify.create ~writer:w ~encoding:e
-      ~model_id:(fun () ->
+    Justify.create ~writer:w ~encoding:e ~model_id:(fun () ->
         failwith
           "build_int_lin_le_gap: ctx.model_id was consulted -- expl's base should be \
            Model_row, not Trivial")
   in
   let id = Justify.emit ctx expl in
   Writer.delete w id;
-  Writer.conclusion w
-    (Writer.Sat (Encoding.assignment_lits e [ ("x1", 0); ("x2", 2) ]));
+  Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x1", 0); ("x2", 2) ]));
   close_out oc;
   (opb, pbp)
 
@@ -501,15 +493,15 @@ let setup_d0013 () =
   let e = Encoding.create () in
   Encoding.declare_int e "x1" ~lo:0 ~hi:3;
   Encoding.declare_int e "x2" ~lo:0 ~hi:3;
-  let opb_terms, const =
-    Encoding.linear_terms_int_lin_le e [ (2, "x1"); (4, "x2") ]
-  in
+  let opb_terms, const = Encoding.linear_terms_int_lin_le e [ (2, "x1"); (4, "x2") ] in
   let geq_id, leq_id = Encoding.add_equality e opb_terms (7 - const) in
   let store =
     Store.create ~names:[| "x1"; "x2" |] ~domains:[| Domain.make 0 3; Domain.make 0 3 |]
   in
   let le, ge =
-    Lin_eq.make store [ (2, Var.of_int 0); (4, Var.of_int 1) ] 7 ~le_id:leq_id ~ge_id:geq_id
+    Lin_eq.make store
+      [ (2, Var.of_int 0); (4, Var.of_int 1) ]
+      7 ~le_id:leq_id ~ge_id:geq_id
   in
   let outcome = propagate_pair (le, ge) store in
   (e, opb_terms, geq_id, leq_id, outcome)
@@ -530,8 +522,7 @@ let build_d0013_conflict dir =
   let w = Writer.create ~comments:true ~audit:false oc in
   Encoding.start_proof e w;
   let ctx =
-    Justify.create ~writer:w ~encoding:e
-      ~model_id:(fun () ->
+    Justify.create ~writer:w ~encoding:e ~model_id:(fun () ->
         failwith
           "build_d0013_conflict: ctx.model_id was consulted -- every base in this \
            derivation should be Model_row, not Trivial")
@@ -562,7 +553,9 @@ let test_d0013_conflict () =
         let e = Encoding.create () in
         Encoding.declare_int e "x1" ~lo:0 ~hi:3;
         Encoding.declare_int e "x2" ~lo:0 ~hi:3;
-        let opb_terms, const = Encoding.linear_terms_int_lin_le e [ (2, "x1"); (4, "x2") ] in
+        let opb_terms, const =
+          Encoding.linear_terms_int_lin_le e [ (2, "x1"); (4, "x2") ]
+        in
         let _geq_id, _leq_id = Encoding.add_equality e opb_terms (7 - const) in
         Encoding.start_proof e w;
         let ctx =
@@ -576,9 +569,13 @@ let test_d0013_conflict () =
   in
   let lines = String.split_on_char '\n' s in
   check "D-0013: some step divides by 4 (x2's own coefficient)"
-    (List.exists (fun l -> String.length l > 0 && l.[0] = 'p' && ends_with " 4 d" l) lines);
+    (List.exists
+       (fun l -> String.length l > 0 && l.[0] = 'p' && ends_with " 4 d" l)
+       lines);
   check "D-0013: some step divides by 2 (x1's own coefficient)"
-    (List.exists (fun l -> String.length l > 0 && l.[0] = 'p' && ends_with " 2 d" l) lines);
+    (List.exists
+       (fun l -> String.length l > 0 && l.[0] = 'p' && ends_with " 2 d" l)
+       lines);
   run_veripb ~name:"D-0013: 2x1+4x2=7 in [0,3]^2, root conflict, checked end to end"
     ~build:build_d0013_conflict
 
@@ -596,8 +593,7 @@ let () =
   run_veripb
     ~name:"justify: a real int_lin_le pruning (one-step bound), checked end to end"
     ~build:build_int_lin_le_ok;
-  run_veripb
-    ~name:"justify: a real int_lin_le pruning (two-step bound, the D-0010 chain)"
+  run_veripb ~name:"justify: a real int_lin_le pruning (two-step bound, the D-0010 chain)"
     ~build:build_int_lin_le_gap;
   test_d0013_conflict ();
   if !failures > 0 then (

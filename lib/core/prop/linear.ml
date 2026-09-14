@@ -137,9 +137,9 @@ let vars t = List.map (fun tm -> tm.x) t.terms
    nonzero coefficients). *)
 let floordiv a b =
   let q = a / b and r = a mod b in
-  if r <> 0 && (r < 0) <> (b < 0) then q - 1 else q
+  if r <> 0 && r < 0 <> (b < 0) then q - 1 else q
 
-let ceildiv a b = -floordiv (-a) b
+let ceildiv a b = -(floordiv (-a) b)
 
 (* ------------------------------------------------------------------- min/max terms *)
 
@@ -165,7 +165,8 @@ let find_lo_reason store v ~decl_lo =
     let rec scan = function
       | [] -> None
       | (e : Store.entry) :: rest ->
-          if Var.equal e.var v && Domain.lo e.old < cur then Some (Store.explanation store e)
+          if Var.equal e.var v && Domain.lo e.old < cur then
+            Some (Store.explanation store e)
           else scan rest
     in
     scan (Store.trail_entries store)
@@ -178,7 +179,8 @@ let find_hi_reason store v ~decl_hi =
     let rec scan = function
       | [] -> None
       | (e : Store.entry) :: rest ->
-          if Var.equal e.var v && Domain.hi e.old > cur then Some (Store.explanation store e)
+          if Var.equal e.var v && Domain.hi e.old > cur then
+            Some (Store.explanation store e)
           else scan rest
     in
     scan (Store.trail_entries store)
@@ -212,31 +214,47 @@ let snapshot_source store (tm : term) : source_snap option =
     if cur <= tm.decl_lo then
       Some
         (Snap_weaken
-           { coeff = tm.coeff; name = Store.name store tm.x; decl_lo = tm.decl_lo;
-             decl_hi = tm.decl_hi })
+           {
+             coeff = tm.coeff;
+             name = Store.name store tm.x;
+             decl_lo = tm.decl_lo;
+             decl_hi = tm.decl_hi;
+           })
     else
       match find_lo_reason store tm.x ~decl_lo:tm.decl_lo with
       | Some expl -> Some (Snap_cite { coeff = tm.coeff; expl })
       | None ->
           Some
             (Snap_weaken
-               { coeff = tm.coeff; name = Store.name store tm.x; decl_lo = tm.decl_lo;
-                 decl_hi = tm.decl_hi })
+               {
+                 coeff = tm.coeff;
+                 name = Store.name store tm.x;
+                 decl_lo = tm.decl_lo;
+                 decl_hi = tm.decl_hi;
+               })
   else
     let cur = Domain.hi (Store.get store tm.x) in
     if cur >= tm.decl_hi then
       Some
         (Snap_weaken
-           { coeff = tm.coeff; name = Store.name store tm.x; decl_lo = tm.decl_lo;
-             decl_hi = tm.decl_hi })
+           {
+             coeff = tm.coeff;
+             name = Store.name store tm.x;
+             decl_lo = tm.decl_lo;
+             decl_hi = tm.decl_hi;
+           })
     else
       match find_hi_reason store tm.x ~decl_hi:tm.decl_hi with
       | Some expl -> Some (Snap_cite { coeff = tm.coeff; expl })
       | None ->
           Some
             (Snap_weaken
-               { coeff = tm.coeff; name = Store.name store tm.x; decl_lo = tm.decl_lo;
-                 decl_hi = tm.decl_hi })
+               {
+                 coeff = tm.coeff;
+                 name = Store.name store tm.x;
+                 decl_lo = tm.decl_lo;
+                 decl_hi = tm.decl_hi;
+               })
 
 let summand_of_snap = function
   | Snap_weaken { coeff; name; decl_lo; decl_hi } ->
@@ -296,41 +314,36 @@ let propagate t store =
   let slack = t.rhs - total_min in
   if slack < 0 then
     Propagator.Conflict (explain_row store (base_explanation t) t.terms ~exclude:None 1)
-  else begin
+  else
     let result = ref Propagator.Fixpoint in
     let conflict = ref None in
     List.iteri
       (fun idx (tm, m) ->
-        if !conflict = None && tm.coeff <> 0 then begin
+        if !conflict = None && tm.coeff <> 0 then
           let max_term = m + slack in
           let d = Store.get store tm.x in
-          if tm.coeff > 0 then begin
+          if tm.coeff > 0 then (
             let new_hi = floordiv max_term tm.coeff in
-            if new_hi < Domain.hi d then begin
+            if new_hi < Domain.hi d then
               let expl =
-                explain_row store (base_explanation t) t.terms ~exclude:(Some idx) tm.coeff
+                explain_row store (base_explanation t) t.terms ~exclude:(Some idx)
+                  tm.coeff
               in
               match Store.set_hi store tm.x new_hi expl with
-              | Store.Conflict _ -> conflict := Some (explain_cross_conflict store tm expl)
-              | Store.Changed | Store.Unchanged -> ()
-            end
-          end
-          else begin
+              | Store.Conflict _ ->
+                  conflict := Some (explain_cross_conflict store tm expl)
+              | Store.Changed | Store.Unchanged -> ())
+          else
             let new_lo = ceildiv max_term tm.coeff in
-            if new_lo > Domain.lo d then begin
+            if new_lo > Domain.lo d then
               let expl =
-                  explain_row store (base_explanation t) t.terms ~exclude:(Some idx)
-                    (-tm.coeff)
-                in
+                explain_row store (base_explanation t) t.terms ~exclude:(Some idx)
+                  (-tm.coeff)
+              in
               match Store.set_lo store tm.x new_lo expl with
-              | Store.Conflict _ -> conflict := Some (explain_cross_conflict store tm expl)
-              | Store.Changed | Store.Unchanged -> ()
-            end
-          end
-        end)
+              | Store.Conflict _ ->
+                  conflict := Some (explain_cross_conflict store tm expl)
+              | Store.Changed | Store.Unchanged -> ())
       (List.combine t.terms mins);
-    (match !conflict with
-    | Some e -> result := Propagator.Conflict e
-    | None -> ());
+    (match !conflict with Some e -> result := Propagator.Conflict e | None -> ());
     !result
-  end

@@ -126,9 +126,7 @@ let validate_lits ctx lits =
 (* Run [thunk] and memoise its result under [e]'s identity, unless it is already
    memoised. *)
 let memoized ctx (e : Explanation.t) (thunk : unit -> Writer.cid) : Writer.cid =
-  match find_memo ctx e with
-  | Some m -> m.cid
-  | None -> remember ctx e (thunk ())
+  match find_memo ctx e with Some m -> m.cid | None -> remember ctx e (thunk ())
 
 (* [Clause lits] -- rup, not pol.
 
@@ -144,7 +142,8 @@ let memoized ctx (e : Explanation.t) (thunk : unit -> Writer.cid) : Writer.cid =
 let emit_clause ctx lits =
   validate_lits ctx lits;
   Writer.rup_clause ctx.writer
-    ~origin:(Printf.sprintf "clause(%s)" (String.concat " " (List.map Lit.to_string lits)))
+    ~origin:
+      (Printf.sprintf "clause(%s)" (String.concat " " (List.map Lit.to_string lits)))
     lits
 
 (* [Linear (terms, rhs)] -- rup of exactly the constraint it states. Not [pol]; see
@@ -222,7 +221,8 @@ let emit_cut ~emit ctx e1 e2 c1 c2 =
 let emit_summand ~emit ctx = function
   | Explanation.Term (c, e) ->
       if c < 1 then
-        invalid_arg (Printf.sprintf "Justify.emit: Combine term coefficient must be >= 1, got %d" c);
+        invalid_arg
+          (Printf.sprintf "Justify.emit: Combine term coefficient must be >= 1, got %d" c);
       let id = emit ctx e in
       Pol.mul (Pol.id id) c
   | Explanation.Weaken lits ->
@@ -234,7 +234,8 @@ let emit_summand ~emit ctx = function
         (fun acc (c, l) ->
           if c < 1 then
             invalid_arg
-              (Printf.sprintf "Justify.emit: Weaken axiom coefficient must be >= 1, got %d" c);
+              (Printf.sprintf
+                 "Justify.emit: Weaken axiom coefficient must be >= 1, got %d" c);
           Pol.add acc (Pol.mul (Pol.axiom l) c))
         (let c0, l0 = List.hd lits in
          Pol.mul (Pol.axiom l0) c0)
@@ -281,5 +282,4 @@ let rec emit ctx (e : Explanation.t) : Writer.cid =
       memoized ctx e (fun () -> emit_cut ~emit ctx e1 e2 c1 c2)
   | Explanation.Combine (summands, divisor) ->
       memoized ctx e (fun () -> emit_combine ~emit ctx summands divisor)
-  | Explanation.Deferred _ ->
-      memoized ctx e (fun () -> emit ctx (Explanation.force e))
+  | Explanation.Deferred _ -> memoized ctx e (fun () -> emit ctx (Explanation.force e))

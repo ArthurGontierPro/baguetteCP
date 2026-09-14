@@ -436,9 +436,7 @@ let eval_row assign (c : Opb.constr) =
       (fun acc (a, l) -> acc + (a * if lit_truth assign l then 1 else 0))
       0 (Opb.terms c)
   in
-  match Opb.relation c with
-  | Opb.Ge -> lhs >= Opb.rhs c
-  | Opb.Eq -> lhs = Opb.rhs c
+  match Opb.relation c with Opb.Ge -> lhs >= Opb.rhs c | Opb.Eq -> lhs = Opb.rhs c
 
 (* All assignments of a list of (name, lo, hi) domains, as (name, value) lists. *)
 let rec all_assignments = function
@@ -472,7 +470,8 @@ let check_soundness name ~domains ~terms ~rhs =
 let test_int_lin_le_soundness () =
   check_soundness "int_lin_le soundness: 2x + 3y <= 10, x,y in [0,3]"
     ~domains:[ ("x", 0, 3); ("y", 0, 3) ]
-    ~terms:[ (2, "x"); (3, "y") ] ~rhs:10;
+    ~terms:[ (2, "x"); (3, "y") ]
+    ~rhs:10;
   check_soundness "int_lin_le soundness: negative coefficient, x - y <= 1"
     ~domains:[ ("x", 0, 2); ("y", 0, 2) ]
     ~terms:[ (1, "x"); (-1, "y") ]
@@ -503,17 +502,14 @@ let test_int_lin_le_worked_examples () =
   (* 2x + 3y <= 10 : the example from the task report. *)
   check_eq "int_lin_le: 2x + 3y <= 10 over [0,3]x[0,3]"
     ~expected:"+2 ~x_ge_1 +2 ~x_ge_2 +2 ~x_ge_3 +3 ~y_ge_1 +3 ~y_ge_2 +3 ~y_ge_3 >= 5 ;"
-    ~got:
-      (Opb.constr_to_string (Encoding.expand_int_lin_le e [ (2, "x"); (3, "y") ] 10));
+    ~got:(Opb.constr_to_string (Encoding.expand_int_lin_le e [ (2, "x"); (3, "y") ] 10));
   let e2 = Encoding.create () in
   Encoding.declare_int e2 "x" ~lo:0 ~hi:2;
   Encoding.declare_int e2 "y" ~lo:0 ~hi:2;
   (* x - y <= 1 : a negative coefficient. *)
   check_eq "int_lin_le: negative coefficient, x - y <= 1"
     ~expected:"+1 ~x_ge_1 +1 ~x_ge_2 +1 y_ge_1 +1 y_ge_2 >= 1 ;"
-    ~got:
-      (Opb.constr_to_string
-         (Encoding.expand_int_lin_le e2 [ (1, "x"); (-1, "y") ] 1));
+    ~got:(Opb.constr_to_string (Encoding.expand_int_lin_le e2 [ (1, "x"); (-1, "y") ] 1));
   let e3 = Encoding.create () in
   Encoding.declare_int e3 "x" ~lo:0 ~hi:3;
   Encoding.declare_int e3 "k" ~lo:4 ~hi:4;
@@ -571,7 +567,9 @@ let build_int_lin_le_unsat dir =
   Encoding.start_proof e w;
   let cons_x1 = Option.get (Encoding.consistency_id e "x" 1) in
   (* x >= 2 and x_ge_2 -> x_ge_1 give x >= 1. *)
-  let x_ge_1 = Writer.pol w ~origin:"x >= 2 gives x >= 1" Pol.(sum [ id c_x2; id cons_x1 ]) in
+  let x_ge_1 =
+    Writer.pol w ~origin:"x >= 2 gives x >= 1" Pol.(sum [ id c_x2; id cons_x1 ])
+  in
   (* The int_lin_le row, plus x >= 1 and x >= 2, forces
      ~y_ge_1 + ~y_ge_2 >= 3 -- impossible since that sum is at most 2. *)
   let contra =
@@ -636,7 +634,8 @@ let test_int_lin_le_veripb () =
         s
       in
       if rc = 0 then
-        Printf.printf "ok   int_lin_le: veripb accepts a proof over the expanded row (I-X1)\n"
+        Printf.printf
+          "ok   int_lin_le: veripb accepts a proof over the expanded row (I-X1)\n"
       else (
         incr failures;
         Printf.printf "FAIL int_lin_le: veripb rejected the proof (I-X1)\n%s\n" out;

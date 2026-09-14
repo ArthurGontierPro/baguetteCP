@@ -94,7 +94,6 @@ module Writer = Baguette_proof.Writer
 module Encoding = Baguette_proof.Encoding
 
 type assignment = (Var.t * int) list
-
 type outcome = Sat of assignment | Unsat
 
 (* Raised if the independently-checked solution (invariant I-S1) fails the caller's
@@ -252,9 +251,7 @@ let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
   match result with
   | NSat assignment ->
       if not (check assignment) then raise (Unsound_solution assignment);
-      let bindings =
-        List.map (fun (v, x) -> (Store.name store v, x)) assignment
-      in
+      let bindings = List.map (fun (v, x) -> (Store.name store v, x)) assignment in
       let lits = Encoding.assignment_lits ctx.Justify.encoding bindings in
       Writer.conclusion ctx.Justify.writer (Writer.Sat lits);
       Sat assignment
@@ -263,8 +260,8 @@ let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
       | [] -> ()
       | _ ->
           invalid_arg
-            "Search.solve: the root nogood must be decision-free -- solve must be \
-             called with no ambient decisions active");
+            "Search.solve: the root nogood must be decision-free -- solve must be called \
+             with no ambient decisions active");
       (* I-X2: the live set must be empty at [conclusion], and the contradiction cited
          by the conclusion is the one id that counts as discharged by it
          (docs/PROOF-FORMAT.md section 5). A root refutation's derivation leaves its

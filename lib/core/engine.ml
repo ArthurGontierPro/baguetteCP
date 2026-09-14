@@ -74,7 +74,7 @@ let watchers_of_new_entries t store ~since =
 let propagate (t : t) (store : Store.t) : outcome =
   let n = n_instances t in
   if n = 0 then Fixpoint
-  else begin
+  else
     let in_queue = Array.make n false in
     let queue = Queue.create () in
     let enqueue id =
@@ -82,7 +82,9 @@ let propagate (t : t) (store : Store.t) : outcome =
         in_queue.(id) <- true;
         Queue.push id queue)
     in
-    Array.iter (fun (inst : Propagator.instance) -> enqueue inst.Propagator.id) t.instances;
+    Array.iter
+      (fun (inst : Propagator.instance) -> enqueue inst.Propagator.id)
+      t.instances;
     let conflict = ref None in
     while Option.is_none !conflict && not (Queue.is_empty queue) do
       let id = Queue.pop queue in
@@ -96,4 +98,3 @@ let propagate (t : t) (store : Store.t) : outcome =
           List.iter enqueue woken
     done;
     match !conflict with Some e -> Conflict e | None -> Fixpoint
-  end

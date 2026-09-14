@@ -177,7 +177,7 @@ let build_engine m store ids =
     List.concat
     @@ List.map2
          (fun cstr id ->
-        match (cstr, id) with
+           match (cstr, id) with
            | Le (terms, rhs), `Le row_id ->
                [ Linear.make ~row_id store (to_vars terms) rhs ]
            | Eq (terms, rhs), `Eq (le_id, ge_id) ->

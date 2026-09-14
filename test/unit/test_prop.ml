@@ -113,7 +113,9 @@ let verify_one_summand ?(strict = true) test_name store bounds idx coeff summand
   let name, decl_lo, decl_hi = List.nth bounds idx in
   let mag = abs coeff in
   let pos_lits, pos_c = Order_reason.weaken_declared ~coeff:mag ~name ~decl_lo ~decl_hi in
-  let neg_lits, neg_c = Order_reason.weaken_declared ~coeff:(-mag) ~name ~decl_lo ~decl_hi in
+  let neg_lits, neg_c =
+    Order_reason.weaken_declared ~coeff:(-mag) ~name ~decl_lo ~decl_hi
+  in
   let check_weaken lits =
     expect
       (lits = pos_lits || lits = neg_lits)
@@ -125,12 +127,12 @@ let verify_one_summand ?(strict = true) test_name store bounds idx coeff summand
       (max_attainable lits >= contribution)
       (Printf.sprintf "%s: weaken chain can attain its own contribution" name)
   in
-  (if not strict then (
+  (if not strict then
      match summand with
      | Explanation.Weaken lits -> check_weaken lits
      | Explanation.Term (c, _cited) ->
          expect (c = mag)
-           (Printf.sprintf "%s: cited derived bound is scaled by abs(coeff) = %d" name mag))
+           (Printf.sprintf "%s: cited derived bound is scaled by abs(coeff) = %d" name mag)
    else
      let d = Store.get store (var idx) in
      let still_declared =
@@ -150,7 +152,8 @@ let verify_one_summand ?(strict = true) test_name store bounds idx coeff summand
      | Explanation.Term _, true ->
          expect false
            (Printf.sprintf
-              "%s: bound is still declared but the summand cites instead of weakening" name));
+              "%s: bound is still declared but the summand cites instead of weakening"
+              name));
   !ok
 
 (* Verify a whole [Combine (summands, divisor)] against the row it came from:
@@ -227,9 +230,7 @@ let check_soundness_case name coeffs rhs ranges =
   match result with
   | Propagator.Conflict _ ->
       (* Sound iff there really is no solution at all in the original box. *)
-      check
-        (Printf.sprintf "%s: conflict only when truly unsat" name)
-        (solutions = [])
+      check (Printf.sprintf "%s: conflict only when truly unsat" name) (solutions = [])
   | Propagator.Fixpoint ->
       let ok = ref true in
       for i = 0 to n - 1 do
@@ -248,8 +249,7 @@ let check_soundness_case name coeffs rhs ranges =
 let test_soundness () =
   check_soundness_case "2 vars, positive coeffs" [ 1; 1 ] 2 [ (-3, 3); (-3, 3) ];
   check_soundness_case "2 vars, one negative coeff" [ 1; -1 ] 0 [ (-3, 3); (-3, 3) ];
-  check_soundness_case "3 vars, mixed signs" [ 2; -1; 3 ] 4
-    [ (-3, 3); (-3, 3); (-3, 3) ];
+  check_soundness_case "3 vars, mixed signs" [ 2; -1; 3 ] 4 [ (-3, 3); (-3, 3); (-3, 3) ];
   check_soundness_case "3 vars, one zero coeff" [ 1; 0; -2 ] 1
     [ (-2, 2); (-2, 2); (-2, 2) ];
   check_soundness_case "2 vars, all-negative coeffs" [ -2; -3 ] (-5) [ (-3, 3); (-3, 3) ];
@@ -349,12 +349,13 @@ let test_conflict () =
          here (it used to always be nonempty, back when every "other var" reason was
          a literal chain regardless of whether it was declared or derived). *)
       check "conflict: reported" true;
-      check "conflict: lits does not raise" (ignore (Explanation.lits e); true);
+      check "conflict: lits does not raise"
+        (ignore (Explanation.lits e);
+         true);
       let e' = Explanation.force e in
       if verify_combine "conflict" store bounds raw_terms e' ~excluded:None then
         let max_term = 1 - others_min store raw_terms ~excluded:None in
-        check "conflict: numeric contradiction (rhs - min contribution < 0)"
-          (max_term < 0)
+        check "conflict: numeric contradiction (rhs - min contribution < 0)" (max_term < 0)
 
 (* ---------------------------------------------------------- explanation entailment *)
 
@@ -381,7 +382,8 @@ let check_entailment_case name coeffs rhs bounds =
         (fun (e : Store.entry) ->
           let pushed_idx =
             match
-              List.find_opt (fun i -> Var.equal (var i) e.var)
+              List.find_opt
+                (fun i -> Var.equal (var i) e.var)
                 (List.mapi (fun i _ -> i) bounds)
             with
             | Some i -> i
@@ -392,7 +394,7 @@ let check_entailment_case name coeffs rhs bounds =
           let shape_ok =
             verify_combine name store bounds raw_terms expl ~excluded:(Some pushed_idx)
           in
-          if shape_ok then begin
+          if shape_ok then
             let max_term = rhs - others_min store raw_terms ~excluded:(Some pushed_idx) in
             let d_now = Store.get store e.var in
             if a > 0 then
@@ -403,8 +405,7 @@ let check_entailment_case name coeffs rhs bounds =
               check
                 (Printf.sprintf "%s: pushed lo matches ceil division" name)
                 (Domain.lo d_now = Linear.ceildiv max_term a)
-            else check (Printf.sprintf "%s: zero coefficient never pushes" name) false
-          end)
+            else check (Printf.sprintf "%s: zero coefficient never pushes" name) false)
         new_entries
 
 let test_explanation_entailment () =
@@ -480,16 +481,19 @@ let test_multi_step_chain () =
         let entries =
           List.filteri (fun i _ -> i < after - before) (Store.trail_entries store)
         in
-        match List.find_opt (fun (e : Store.entry) -> Var.equal e.var (var 1)) entries with
+        match
+          List.find_opt (fun (e : Store.entry) -> Var.equal e.var (var 1)) entries
+        with
         | None -> check (Printf.sprintf "%s: y was pushed" name) false
         | Some e ->
             let expl = Explanation.force (Store.explanation store e) in
             (* The Weaken cases carry real literals ([Explanation.lits] must reach
                them); the cite cases legitimately may not (see test_conflict's own
                note on [Trivial]). *)
-            (if x_setup store = None then
-               check (Printf.sprintf "%s: lits reaches into the weaken chain" name)
-                 (Explanation.lits expl <> []));
+            if x_setup store = None then
+              check
+                (Printf.sprintf "%s: lits reaches into the weaken chain" name)
+                (Explanation.lits expl <> []);
             if verify_combine name store bounds raw_terms expl ~excluded:(Some 1) then
               let max_term = rhs - others_min store raw_terms ~excluded:(Some 1) in
               let d_now = Store.get store e.var in
@@ -592,9 +596,11 @@ let check_generic_soundness name ~make ~propagate ~n ~ranges ~satisfies =
 let test_lin_eq_soundness () =
   let case name coeffs rhs ranges =
     check_generic_soundness name
-      ~make:(fun store -> Lin_eq.make store (List.mapi (fun i a -> (a, var i)) coeffs) rhs ~le_id:1 ~ge_id:2)
+      ~make:(fun store ->
+        Lin_eq.make store (List.mapi (fun i a -> (a, var i)) coeffs) rhs ~le_id:1 ~ge_id:2)
       ~propagate:propagate_pair ~n:(List.length coeffs) ~ranges
-      ~satisfies:(fun a -> List.fold_left2 (fun acc c v -> acc + (c * v)) 0 coeffs a = rhs)
+      ~satisfies:(fun a ->
+        List.fold_left2 (fun acc c v -> acc + (c * v)) 0 coeffs a = rhs)
   in
   case "int_lin_eq: 2 vars, positive coeffs" [ 1; 1 ] 2 [ (-3, 3); (-3, 3) ];
   case "int_lin_eq: 2 vars, one negative coeff" [ 1; -1 ] 0 [ (-3, 3); (-3, 3) ];
@@ -605,21 +611,25 @@ let test_lin_eq_soundness () =
 
 let test_compare_soundness () =
   let case name make propagate rel ranges =
-    check_generic_soundness name ~make ~propagate ~n:2 ~ranges
-      ~satisfies:(fun a -> match a with [ x; y ] -> rel x y | _ -> false)
+    check_generic_soundness name ~make ~propagate ~n:2 ~ranges ~satisfies:(fun a ->
+        match a with [ x; y ] -> rel x y | _ -> false)
   in
   case "int_le: overlapping ranges"
     (fun store -> Int_le.make store (var 0) (var 1) ~row_id:1)
-    Int_le.propagate ( <= ) [ (-3, 3); (-3, 3) ];
+    Int_le.propagate ( <= )
+    [ (-3, 3); (-3, 3) ];
   case "int_le: disjoint, x strictly above y's range"
     (fun store -> Int_le.make store (var 0) (var 1) ~row_id:1)
-    Int_le.propagate ( <= ) [ (2, 5); (-5, -2) ];
+    Int_le.propagate ( <= )
+    [ (2, 5); (-5, -2) ];
   case "int_lt: overlapping ranges"
     (fun store -> Int_lt.make store (var 0) (var 1) ~row_id:1)
-    Int_lt.propagate ( < ) [ (-3, 3); (-3, 3) ];
+    Int_lt.propagate ( < )
+    [ (-3, 3); (-3, 3) ];
   case "int_lt: touching ranges (x may equal y's lo, still < possible)"
     (fun store -> Int_lt.make store (var 0) (var 1) ~row_id:1)
-    Int_lt.propagate ( < ) [ (0, 3); (0, 3) ]
+    Int_lt.propagate ( < )
+    [ (0, 3); (0, 3) ]
 
 let test_int_eq_soundness () =
   let case name ranges =
@@ -641,7 +651,9 @@ let test_int_eq_soundness () =
 let test_checking () =
   let run_eq bounds coeffs rhs fix_values expect_conflict label =
     let store = mk_store bounds in
-    let prop = Lin_eq.make store (List.mapi (fun i a -> (a, var i)) coeffs) rhs ~le_id:1 ~ge_id:2 in
+    let prop =
+      Lin_eq.make store (List.mapi (fun i a -> (a, var i)) coeffs) rhs ~le_id:1 ~ge_id:2
+    in
     List.iteri
       (fun i v -> ignore (Store.fix store (var i) v Explanation.trivial))
       fix_values;
@@ -649,10 +661,13 @@ let test_checking () =
     | Propagator.Conflict _ -> check label expect_conflict
     | Propagator.Fixpoint -> check label (not expect_conflict)
   in
-  run_eq [ ("x", 0, 3); ("y", 0, 3) ] [ 1; 1 ] 3 [ 1; 2 ] false
+  run_eq
+    [ ("x", 0, 3); ("y", 0, 3) ]
+    [ 1; 1 ] 3 [ 1; 2 ] false
     "I-P3 int_lin_eq: satisfying fixed assignment is not a conflict";
-  run_eq [ ("x", 0, 3); ("y", 0, 3) ] [ 1; 1 ] 3 [ 1; 3 ] true
-    "I-P3 int_lin_eq: violating fixed assignment is a conflict";
+  run_eq
+    [ ("x", 0, 3); ("y", 0, 3) ]
+    [ 1; 1 ] 3 [ 1; 3 ] true "I-P3 int_lin_eq: violating fixed assignment is a conflict";
   let run_le make propagate bounds fix_values expect_conflict label =
     let store = mk_store bounds in
     let prop = make store in
@@ -665,28 +680,34 @@ let test_checking () =
   in
   run_le
     (fun store -> Int_le.make store (var 0) (var 1) ~row_id:1)
-    Int_le.propagate [ ("x", 0, 5); ("y", 0, 5) ] [ 2; 2 ] false
-    "I-P3 int_le: x=2,y=2 (x<=y holds) is not a conflict";
+    Int_le.propagate
+    [ ("x", 0, 5); ("y", 0, 5) ]
+    [ 2; 2 ] false "I-P3 int_le: x=2,y=2 (x<=y holds) is not a conflict";
   run_le
     (fun store -> Int_le.make store (var 0) (var 1) ~row_id:1)
-    Int_le.propagate [ ("x", 0, 5); ("y", 0, 5) ] [ 3; 2 ] true
-    "I-P3 int_le: x=3,y=2 (x<=y violated) is a conflict";
+    Int_le.propagate
+    [ ("x", 0, 5); ("y", 0, 5) ]
+    [ 3; 2 ] true "I-P3 int_le: x=3,y=2 (x<=y violated) is a conflict";
   run_le
     (fun store -> Int_lt.make store (var 0) (var 1) ~row_id:1)
-    Int_lt.propagate [ ("x", 0, 5); ("y", 0, 5) ] [ 2; 3 ] false
-    "I-P3 int_lt: x=2,y=3 (x<y holds) is not a conflict";
+    Int_lt.propagate
+    [ ("x", 0, 5); ("y", 0, 5) ]
+    [ 2; 3 ] false "I-P3 int_lt: x=2,y=3 (x<y holds) is not a conflict";
   run_le
     (fun store -> Int_lt.make store (var 0) (var 1) ~row_id:1)
-    Int_lt.propagate [ ("x", 0, 5); ("y", 0, 5) ] [ 2; 2 ] true
-    "I-P3 int_lt: x=2,y=2 (x<y violated) is a conflict";
+    Int_lt.propagate
+    [ ("x", 0, 5); ("y", 0, 5) ]
+    [ 2; 2 ] true "I-P3 int_lt: x=2,y=2 (x<y violated) is a conflict";
   run_le
     (fun store -> Int_eq.make store (var 0) (var 1) ~le_id:1 ~ge_id:2)
-    propagate_pair [ ("x", 0, 5); ("y", 0, 5) ] [ 3; 3 ] false
-    "I-P3 int_eq: x=3,y=3 is not a conflict";
+    propagate_pair
+    [ ("x", 0, 5); ("y", 0, 5) ]
+    [ 3; 3 ] false "I-P3 int_eq: x=3,y=3 is not a conflict";
   run_le
     (fun store -> Int_eq.make store (var 0) (var 1) ~le_id:1 ~ge_id:2)
-    propagate_pair [ ("x", 0, 5); ("y", 0, 5) ] [ 3; 4 ] true
-    "I-P3 int_eq: x=3,y=4 is a conflict"
+    propagate_pair
+    [ ("x", 0, 5); ("y", 0, 5) ]
+    [ 3; 4 ] true "I-P3 int_eq: x=3,y=4 is a conflict"
 
 (* ------------------------------------------------------- idempotence at the interface *)
 
@@ -709,18 +730,22 @@ let test_new_idempotence () =
       (Store.same_domains store snap)
   in
   run_twice "int_lin_eq"
-    (fun store -> Lin_eq.make store [ (2, var 0); (-1, var 1); (3, var 2) ] 4 ~le_id:1 ~ge_id:2)
+    (fun store ->
+      Lin_eq.make store [ (2, var 0); (-1, var 1); (3, var 2) ] 4 ~le_id:1 ~ge_id:2)
     propagate_pair
     [ ("x", -3, 3); ("y", -3, 3); ("z", -3, 3) ];
   run_twice "int_le"
     (fun store -> Int_le.make store (var 0) (var 1) ~row_id:1)
-    Int_le.propagate [ ("x", -3, 3); ("y", -3, 3) ];
+    Int_le.propagate
+    [ ("x", -3, 3); ("y", -3, 3) ];
   run_twice "int_lt"
     (fun store -> Int_lt.make store (var 0) (var 1) ~row_id:1)
-    Int_lt.propagate [ ("x", -3, 3); ("y", -3, 3) ];
+    Int_lt.propagate
+    [ ("x", -3, 3); ("y", -3, 3) ];
   run_twice "int_eq"
     (fun store -> Int_eq.make store (var 0) (var 1) ~le_id:1 ~ge_id:2)
-    propagate_pair [ ("x", -5, 5); ("y", -2, 8) ]
+    propagate_pair
+    [ ("x", -5, 5); ("y", -2, 8) ]
 
 (* ------------------------------------------------- explanation shape, per pruning *)
 
@@ -735,7 +760,11 @@ let check_all_entries_shape name store bounds terms before =
   List.iter
     (fun (e : Store.entry) ->
       let pushed_idx =
-        match List.find_opt (fun i -> Var.equal (var i) e.var) (List.mapi (fun i _ -> i) bounds) with
+        match
+          List.find_opt
+            (fun i -> Var.equal (var i) e.var)
+            (List.mapi (fun i _ -> i) bounds)
+        with
         | Some i -> i
         | None -> failwith (name ^ ": pushed var not found by index")
       in
@@ -751,10 +780,10 @@ let test_lin_eq_entailment () =
   let store = mk_store bounds in
   let prop = Lin_eq.make store terms 4 ~le_id:1 ~ge_id:2 in
   let before = Store.trail_length store in
-  (match propagate_pair prop store with
+  match propagate_pair prop store with
   | Propagator.Conflict _ -> check "int_lin_eq entailment: expected Fixpoint" false
-  | Propagator.Fixpoint -> check_all_entries_shape "int_lin_eq entailment" store bounds
-                              terms before)
+  | Propagator.Fixpoint ->
+      check_all_entries_shape "int_lin_eq entailment" store bounds terms before
 
 (* [make] must run before the simulated earlier pruning, not after -- D-0010's own
    rule ("[make] therefore reads each variable's domain out of the store at
@@ -874,7 +903,9 @@ let build_int_lin_eq_multi dir =
     Store.create ~names:[| "x1"; "x2" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
   in
   let le, ge =
-    Lin_eq.make store [ (1, Var.of_int 0); (1, Var.of_int 1) ] 4 ~le_id:leq_id ~ge_id:geq_id
+    Lin_eq.make store
+      [ (1, Var.of_int 0); (1, Var.of_int 1) ]
+      4 ~le_id:leq_id ~ge_id:geq_id
   in
   (match Store.set_hi store (Var.of_int 1) 2 (Explanation.model_row c_x2_le) with
   | Store.Changed -> ()
@@ -893,7 +924,9 @@ let build_int_lin_eq_multi dir =
   | Propagator.Conflict _ -> failwith "build_int_lin_eq_multi: ge pass conflicted"
   | Propagator.Fixpoint -> ());
   let after = Store.trail_length store in
-  let entries = List.filteri (fun i _ -> i < after - before) (Store.trail_entries store) in
+  let entries =
+    List.filteri (fun i _ -> i < after - before) (Store.trail_entries store)
+  in
   let entry =
     match
       List.find_opt (fun (en : Store.entry) -> Var.equal en.var (Var.of_int 0)) entries
@@ -939,7 +972,9 @@ let build_int_le_multi dir =
   | Propagator.Conflict _ -> failwith "build_int_le_multi: propagate conflicted"
   | Propagator.Fixpoint -> ());
   let after = Store.trail_length store in
-  let entries = List.filteri (fun i _ -> i < after - before) (Store.trail_entries store) in
+  let entries =
+    List.filteri (fun i _ -> i < after - before) (Store.trail_entries store)
+  in
   let entry =
     match
       List.find_opt (fun (en : Store.entry) -> Var.equal en.var (Var.of_int 1)) entries
@@ -985,7 +1020,9 @@ let build_int_lt_multi dir =
   | Propagator.Conflict _ -> failwith "build_int_lt_multi: propagate conflicted"
   | Propagator.Fixpoint -> ());
   let after = Store.trail_length store in
-  let entries = List.filteri (fun i _ -> i < after - before) (Store.trail_entries store) in
+  let entries =
+    List.filteri (fun i _ -> i < after - before) (Store.trail_entries store)
+  in
   let entry =
     match
       List.find_opt (fun (en : Store.entry) -> Var.equal en.var (Var.of_int 1)) entries
@@ -1024,7 +1061,9 @@ let build_int_eq_multi dir =
   let store =
     Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
   in
-  let le, _ge = Int_eq.make store (Var.of_int 0) (Var.of_int 1) ~le_id:leq_id ~ge_id:geq_id in
+  let le, _ge =
+    Int_eq.make store (Var.of_int 0) (Var.of_int 1) ~le_id:leq_id ~ge_id:geq_id
+  in
   (match Store.set_hi store (Var.of_int 1) 2 (Explanation.model_row c_bound) with
   | Store.Changed -> ()
   | _ -> failwith "build_int_eq_multi: y <= 2 setup failed");
@@ -1036,7 +1075,9 @@ let build_int_eq_multi dir =
   | Propagator.Conflict _ -> failwith "build_int_eq_multi: le pass conflicted"
   | Propagator.Fixpoint -> ());
   let after = Store.trail_length store in
-  let entries = List.filteri (fun i _ -> i < after - before) (Store.trail_entries store) in
+  let entries =
+    List.filteri (fun i _ -> i < after - before) (Store.trail_entries store)
+  in
   let entry =
     match
       List.find_opt (fun (en : Store.entry) -> Var.equal en.var (Var.of_int 0)) entries
@@ -1088,8 +1129,9 @@ let test_lin_eq_pairing () =
       Store.create ~names:[| "x1"; "x2" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
     in
     let le, _ge =
-      Lin_eq.make store [ (1, Var.of_int 0); (1, Var.of_int 1) ] 4 ~le_id:leq_id
-        ~ge_id:geq_id
+      Lin_eq.make store
+        [ (1, Var.of_int 0); (1, Var.of_int 1) ]
+        4 ~le_id:leq_id ~ge_id:geq_id
     in
     (match Store.set_lo store (Var.of_int 1) 2 (Explanation.model_row c_bound) with
     | Store.Changed -> ()
@@ -1115,8 +1157,7 @@ let test_lin_eq_pairing () =
     let w = Writer.create ~comments:true ~audit:true oc in
     Encoding.start_proof e w;
     let ctx =
-      Justify.create ~writer:w ~encoding:e
-        ~model_id:(fun () ->
+      Justify.create ~writer:w ~encoding:e ~model_id:(fun () ->
           failwith
             "test_lin_eq_pairing: ctx.model_id was consulted -- expl's base should be \
              Model_row leq_id, not Trivial")
@@ -1129,8 +1170,8 @@ let test_lin_eq_pairing () =
   in
   run_veripb
     ~name:
-      "D-0011 pairing: le's explanation never touches ctx.model_id (Model_row \
-       supersedes Trivial) and still verifies"
+      "D-0011 pairing: le's explanation never touches ctx.model_id (Model_row supersedes \
+       Trivial) and still verifies"
     ~build
 
 (* ------------------------------------------------------------------------ main *)

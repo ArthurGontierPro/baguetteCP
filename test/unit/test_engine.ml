@@ -58,8 +58,7 @@ let test_fixpoint_tightens_and_settles () =
       incr failures;
       Printf.printf "FAIL fixpoint: unexpected conflict\n"
   | Engine.Fixpoint ->
-      check "fixpoint: x1's hi is tightened to 0"
-        (Domain.hi (Store.get store (var 0)) = 0));
+      check "fixpoint: x1's hi is tightened to 0" (Domain.hi (Store.get store (var 0)) = 0));
   (* I-P2, tested directly: propagating again from the same fixpoint changes nothing. *)
   let trail_before = Store.trail_length store in
   (match Engine.propagate engine store with
@@ -88,7 +87,8 @@ let test_conflict_carries_explanation () =
       Printf.printf "FAIL conflict: expected Conflict, got Fixpoint\n"
   | Engine.Conflict e ->
       let forced = Explanation.force e in
-      check "conflict: explanation forces without raising" (forced <> Explanation.Trivial || true);
+      check "conflict: explanation forces without raising"
+        (forced <> Explanation.Trivial || true);
       check "conflict: explanation mentions the literals witnessing the pruned bound"
         (Explanation.lits forced <> [])
 
@@ -141,8 +141,7 @@ let sat_domains = [ ("x1", 0, 1); ("x2", 0, 1); ("x3", 0, 1) ]
    editing it this round) so this test does not depend on files outside this task's
    ownership. *)
 let eq_pair store a b =
-  ( Linear.make store [ (1, a); (-1, b) ] 0,
-    Linear.make store [ (-1, a); (1, b) ] 0 )
+  (Linear.make store [ (1, a); (-1, b) ] 0, Linear.make store [ (-1, a); (1, b) ] 0)
 
 let sum_eq_pair store terms rhs =
   ( Linear.make store terms rhs,
@@ -155,9 +154,7 @@ let sat_store_and_engine () =
   let le2, ge2 = sum_eq_pair store [ (1, x1); (1, x2); (1, x3) ] 2 in
   let engine =
     Engine.create
-      [
-        pack_linear 0 le1; pack_linear 1 ge1; pack_linear 2 le2; pack_linear 3 ge2;
-      ]
+      [ pack_linear 0 le1; pack_linear 1 ge1; pack_linear 2 le2; pack_linear 3 ge2 ]
   in
   (store, engine)
 
@@ -174,9 +171,7 @@ let unsat_store_and_engine () =
   let le2, ge2 = sum_eq_pair store [ (1, x1); (1, x2) ] 1 in
   let engine =
     Engine.create
-      [
-        pack_linear 0 le1; pack_linear 1 ge1; pack_linear 2 le2; pack_linear 3 ge2;
-      ]
+      [ pack_linear 0 le1; pack_linear 1 ge1; pack_linear 2 le2; pack_linear 3 ge2 ]
   in
   (store, engine)
 
@@ -184,14 +179,13 @@ let unsat_store_and_engine () =
    [Explanation.Trivial] (see search.ml's module header), so demanding [model_id]
    would itself be the bug this mirrors test_justify.ml's own such checks for. *)
 let mk_ctx writer encoding =
-  Justify.create ~writer ~encoding
-    ~model_id:(fun () -> failwith "search should never need Explanation.Trivial")
+  Justify.create ~writer ~encoding ~model_id:(fun () ->
+      failwith "search should never need Explanation.Trivial")
 
 let mk_sat_encoding () =
   let e = Encoding.create () in
   List.iter (fun (n, lo, hi) -> Encoding.declare_int e n ~lo ~hi) sat_domains;
-  ignore
-    (Encoding.add_equality e [ (1, Lit.ge "x1" 1); (-1, Lit.ge "x2" 1) ] 0);
+  ignore (Encoding.add_equality e [ (1, Lit.ge "x1" 1); (-1, Lit.ge "x2" 1) ] 0);
   ignore
     (Encoding.add_equality e
        [ (1, Lit.ge "x1" 1); (1, Lit.ge "x2" 1); (1, Lit.ge "x3" 1) ]
@@ -201,8 +195,7 @@ let mk_sat_encoding () =
 let mk_unsat_encoding () =
   let e = Encoding.create () in
   List.iter (fun (n, lo, hi) -> Encoding.declare_int e n ~lo ~hi) unsat_domains;
-  ignore
-    (Encoding.add_equality e [ (1, Lit.ge "x1" 1); (-1, Lit.ge "x2" 1) ] 0);
+  ignore (Encoding.add_equality e [ (1, Lit.ge "x1" 1); (-1, Lit.ge "x2" 1) ] 0);
   ignore (Encoding.add_equality e [ (1, Lit.ge "x1" 1); (1, Lit.ge "x2" 1) ] 1);
   e
 
