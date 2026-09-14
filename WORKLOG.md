@@ -12,9 +12,7 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M1-T7a — `int_lin_le` propagator | `lib/core/prop/linear.ml`, `test/unit/test_prop.ml` | agent-core | 2026-09-14 — released, see Completed |
-| M1-T7b — `Justify`: explanation to VeriPB rule | `lib/core/justify.ml`, `test/unit/test_justify.ml` | agent-justify | 2026-09-14 — round 2: making `Linear` faithful (D-0009) |
-| M1-T7c — order-encoding expansion of `sum a_i x_i` | `lib/proof/encoding.ml`, `lib/proof/opb.ml`, `test/unit/test_proof.ml` | agent-encoding | 2026-09-14 |
+| _(none — M1-T7 released in full; next round claims below)_ | | | |
 
 ## Cross-session requests
 
@@ -41,6 +39,9 @@ work. The owning session picks it up.
 | M1-T4, M1-T5 | agent-proof | 2026-09-14 | Encoding, OPB writer, proof writer; proofs accepted by veripb 2.2.2 |
 | M1-T6 | agent-flatzinc | 2026-09-14 | Hand-written lexer/parser/builder; parses all five test models |
 | M1-T7a | agent-core | 2026-09-14 | `int_lin_le` bounds propagator, deferred explanations, 33 checks incl. brute-force soundness |
+| M1-T7b | agent-justify | 2026-09-14 | `Justify`: memo, level-wipe lockstep, `Linear` as faithful `rup` (D-0009) |
+| M1-T7c | agent-encoding | 2026-09-14 | `Encoding.expand_int_lin_le`: integer term to PB row over the order encoding |
+| M1-T7 | orchestrator | 2026-09-14 | Chain fix (D-0010) + cross-session repairs; a real pruning's reason is accepted by veripb |
 
 ## Handoff notes
 
@@ -110,3 +111,30 @@ Also found: nothing expands `sum a_i x_i` into PB literals over the order encodi
 model row an `int_lin_le` proof must cite cannot be written at all yet. That is now M1-T7c
 and it blocks the end-to-end check. `make check` is green, and `test/models/PENDING` is
 unchanged at five — the solver still does not solve.
+
+**2026-09-14 — orchestrator, M1-T7 closed**
+
+It works: `Linear.propagate` prunes, its explanation renders, and veripb accepts the
+result. The two-step case that broke is now a counted I-X1 check emitting
+`rup +1 x2_ge_1 +1 x2_ge_2 >= 2 ;` followed by `pol 10 11 +`.
+
+Three bugs in three rounds, none of which a green test suite caught:
+
+1. Two sessions read `Explanation.Linear` differently and veripb accepted the mismatch,
+   because re-stating a constraint is trivially valid (D-0009).
+2. A bound fact stated as one literal instead of a chain. It verified at a one-step bound
+   and is unsatisfiable at every larger one, so the first test written happened to land
+   on the only value where the bug is invisible (D-0010).
+3. `make`'s new signature broke the other session's test file, seen by neither, because
+   each builds scoped to its own target — which is exactly what the shared `_build/` lock
+   forces them to do.
+
+The pattern in all three: **each session verified its own half and every half was green.**
+What found the bugs was running the halves together against the real checker. Whoever
+orchestrates the next round should treat "both agents report success" as the beginning of
+review, not the end of it, and should own one integration test that no single agent can
+make pass alone.
+
+For M1-T8: copy `prop/linear.ml`'s shape *and* `prop/order_reason.ml`'s chains. Do not
+re-derive bound-fact literals by hand — that is the D-0010 bug, and it will look like it
+works.

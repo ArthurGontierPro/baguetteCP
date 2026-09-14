@@ -31,10 +31,10 @@ Goal: solve models with only linear integer constraints, and VeriPB accepts ever
 | M1-T4 | Order encoding in `lib/proof/lit.ml`, `.opb` writer | DONE | see PROOF-FORMAT §3 |
 | M1-T5 | `writer.ml`: rule emission, constraint ids, audit mode | DONE | |
 | M1-T6 | FlatZinc lexer + parser for the §2.1 subset | DONE | independent of core — good parallel task |
-| M1-T7 | `int_lin_le` propagator + `pol` justification | WIP | split into T7a/T7b/T7c below after D-0009 |
-| M1-T7a | `int_lin_le` propagator and its explanations | DONE | the reference propagator; copy its shape |
-| M1-T7b | `Justify`: explanation to VeriPB rules | WIP | mechanism landed; `Linear` renders unfaithfully, see D-0009 |
-| M1-T7c | Order-encoding expansion of `sum a_i x_i` into a PB row | TODO | nothing can write the model row an `int_lin_le` proof must cite |
+| M1-T7 | `int_lin_le` propagator + justification | DONE | verified end to end against veripb; `rup` not `pol`, see D-0009 |
+| M1-T7a | `int_lin_le` propagator and its explanations | DONE | the reference propagator; copy its shape, and its `order_reason` chains (D-0010) |
+| M1-T7b | `Justify`: explanation to VeriPB rules | DONE | `Linear` states its own terms as `rup`; memo dropped in lockstep with the writer's wipe |
+| M1-T7c | Order-encoding expansion of `sum a_i x_i` into a PB row | DONE | `Encoding.expand_int_lin_le`; the consistency clauses are load-bearing |
 | M1-T8 | `int_lin_eq`, `int_le`, `int_lt`, `int_eq` | TODO | after T7 |
 | M1-T9 | `int_lin_ne`, `int_ne` (needs direct encoding) | TODO | |
 | M1-T10 | DFS search with first-fail, decisions logged in the proof | TODO | |
