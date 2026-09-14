@@ -370,3 +370,62 @@ Consequences:
   a one-step bound is the value where the arithmetic coincides). The pattern is strong
   enough to act on: **no proof-layer claim should be believed on the strength of 0/1
   domains or single-step bounds.**
+
+## D-0013  How a bounds conflict is justified: weaken, divide, add
+Status: DECIDED for the no-decision case; the branching case is **OPEN** (see below)
+Date: 2026-09-14
+Follows: D-0012, which established that asserting a conflict is not enough.
+
+Context: D-0012 left the question "what should search emit instead". The smallest form of
+the question needs no search at all. For `2*x1 + 4*x2 = 7` with both in `[0, 3]`, bounds
+propagation refutes at the root — the `>=` row forces `x2 >= 1`, the `<=` row forces
+`x2 <= 1`, and `2*x1 = 3` has no integer solution — and the solver emitted `rup >= 1 ;`,
+a bare empty clause, which veripb rejects.
+
+Decision: a bounds conflict is justified by **pure cutting planes**, no `rup`. Verified
+against veripb 2.2.2, which accepts this in full and concludes UNSAT:
+
+```
+f 6                     * 5 is the <= row, 6 the >= row
+pol 6 ~x1_ge_1 2 * + ~x1_ge_2 2 * + ~x1_ge_3 2 * + 4 d    * 7:  x2 >= 1
+pol 5 x1_ge_1 2 * + x1_ge_2 2 * + x1_ge_3 2 * + 4 d       * 8:  x2 <= 1
+pol 6 8 4 * + 2 d                                          * 9:  x1 >= 2
+pol 5 7 4 * + 2 d                                          * 10: x1 <= 1
+pol 9 10 +                                                 * 11: contradiction
+conclusion UNSAT : 11
+```
+
+The rule it establishes, for a pruning on `x_j` from `sum a_i x_i <= c`:
+
+1. Start from the model row, in the `>=` form the `.opb` holds.
+2. For every other variable `i`, remove its contribution by adding `|a_i|` times a
+   **literal axiom** per order literal — the positive literal to pin `x_i` at its declared
+   *lower* bound, the negated literal to pin it at its declared *upper* bound, whichever
+   direction the pruning needs. This is the step that makes D-0009's finding harmless:
+   an axiom cannot assert a bound, but it can *weaken one away*, which is all this needs.
+3. Where `x_i` sits at a bound that was **derived** rather than declared, cite that
+   constraint's id, multiplied by `|a_i|`, instead of the axioms.
+4. Divide by `|a_j|`. VeriPB's `d` rounds the right-hand side up, which is exactly the
+   ceiling a bounds push needs — this is PROOF-FORMAT section 4's promised "one division",
+   and it is why unit-coefficient tests prove nothing about this step.
+5. A conflict is two opposite bounds on the same variable, added: their sum normalises to
+   `0 >= 1`.
+
+Consequences:
+- Every one of these steps is `pol`. The project's standing preference for `pol` over
+  `rup` (PROOF-FORMAT section 2) is not merely satisfiable here, it is the natural form;
+  the checker never has to search.
+- Steps 2 and 3 are the same operation with a different source, so `Explanation` needs to
+  distinguish "declared bound, weaken with axioms" from "derived bound, cite this id".
+  It currently expresses neither: `Linear` carries literals with no ids (D-0009) and
+  `Cut` has no divisor for step 4 (D-0010, D-0011). **This is the concrete shape of the
+  change D-0003 has been blocking**, and it is now specified precisely enough to make.
+- **Still open: the branching case.** A constraint derived inside a branch is valid only
+  under that branch's decisions, and a decision is not in the database. The natural
+  extension is to derive constraints that *carry the decision variable's order literals
+  with large enough coefficients*, making them globally valid — for `2*x1 + 6*x2 + 2*x3 = 9`
+  the constraint `x1 + 9*[x2>=1] + x3 >= 5` is globally valid and gives the branch bound
+  when `[x2>=1]` is 0. Getting the second branch's bound tight enough by the same route
+  was not achieved by hand here and is the open work. Until it is settled, the UNSAT
+  models in `test/unit/test_endtoend.ml` stay xfail.
+- Artefacts: `scratchpad/research/r.opb`, `r.pbp` (session-local).
