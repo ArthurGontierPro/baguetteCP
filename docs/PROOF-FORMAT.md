@@ -141,7 +141,7 @@ it emits. The table below is the index; it is maintained as propagators land.
 | Propagator | Consistency | Justification |
 |---|---|---|
 | `int_le` | bounds | `pol` — single model constraint, unit |
-| `int_lin_le` | bounds | `pol` — the model constraint plus order-encoding units, one division |
+| `int_lin_le` | bounds | **target**: `pol` — the model constraint plus order-encoding units, one division. **M1 emits** `rup` of the stated bound: a literal in a `pol` is the trivial axiom `lit >= 0`, so bound facts need constraint ids the explanation cannot yet carry (D-0009) |
 | `int_lin_eq` | bounds | two `int_lin_le` derivations |
 | `int_ne` | value | `rup` over direct-encoding literals |
 | `bool_clause` | — | `rup` |
