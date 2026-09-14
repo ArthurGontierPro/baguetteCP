@@ -12,7 +12,8 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| _(none)_ | | | |
+| M1-T7a — `int_lin_le` propagator | `lib/core/prop/linear.ml`, `test/unit/test_prop.ml` | agent-core | 2026-09-14 |
+| M1-T7b — `Justify`: explanation to VeriPB rule | `lib/core/justify.ml`, `test/unit/test_justify.ml` | agent-justify | 2026-09-14 |
 
 ## Cross-session requests
 
@@ -23,6 +24,8 @@ work. The owning session picks it up.
 |---|---|---|---|
 | `lib/proof/lit.ml` is a shared dependency: agent-proof may **add** to it but must not change the existing signatures of `pbvar`, `t`, `ge`, `le`, `eq`, `ne`, `negate`, `to_string`, `var_name`, since agent-core compiles against them | `lib/proof/lit.ml` | orchestrator | standing |
 | `WORKLOG.md`, `docs/**`, `dune-project`, `Makefile`, `scripts/**` and all committing are held by the orchestrator this round — agents touch none of them | — | orchestrator | standing |
+| **All `dune` files are orchestrator-owned.** `lib/core/dune` already has `(include_subdirs unqualified)` so a new `lib/core/prop/*.ml` needs no dune edit, and `test/unit/dune` already names `test_prop` and `test_justify`. Need another module named? Ask here | `**/dune` | orchestrator | standing |
+| M1-T7 is split across two sessions. The contract between them is the **existing** `Explanation.t` ADT in `lib/core/explanation.ml`, which neither may change: agent-core builds `Linear`/`Cut` values, agent-justify renders any of them. A change there is a cross-session request, not an edit | `lib/core/explanation.ml` | orchestrator | standing |
 
 ## Completed
 

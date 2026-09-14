@@ -1,3 +1,8 @@
+; Propagators live in prop/, one module per constraint family (ARCHITECTURE section 1).
+; `unqualified` means prop/linear.ml is the module Linear of this library, not Prop.Linear.
+
+(include_subdirs unqualified)
+
 (library
  (name baguette_core)
  (libraries baguette_proof))
