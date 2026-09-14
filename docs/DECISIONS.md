@@ -316,3 +316,57 @@ Consequences:
 - Cost: a little more queue churn than a fused loop. M6 is deliberately the last
   milestone, and a routing hazard that every future caller must get right is worse than
   queue churn.
+
+## D-0012  A branch nogood is not RUP-derivable from the model rows alone
+Status: DECIDED
+Date: 2026-09-14
+Arose from: the M1-T10 integration test, running search over `[0, 3]` domains.
+
+Context: M1-T10 logs one clause per failed branch — "not all of these decisions hold
+simultaneously" — over the decision literals, by `rup`, and resolves them up the tree.
+It avoids rendering propagator explanations during search at all. The argument was that
+`rup`'s check is exactly "assume these decisions and re-derive the conflict", and that
+the checker can always replay it because every M1 bounds propagator *is* generalised unit
+propagation over its own row.
+
+**That argument is false**, and its tests could not see it: they use `[0, 1]` domains,
+where the order encoding degenerates (`x = [x >= 1]`) and the rows become clauses, on
+which PB unit propagation really is as strong as bounds propagation. Over `[0, 3]` it
+fails. From the model `x1 = x2, x3 = x4, x1+x2+x3+x4 = 7`, all in `[0, 3]`:
+
+```
+rup +1 ~x1_ge_1 +1 x2_ge_1 >= 1 ;              accepted
+rup +1 x3_ge_3 +1 x1_ge_2 +1 ~x1_ge_1 >= 1 ;   Failed ... by reverse unit propagation
+```
+
+The second is the nogood for the branch `x1 = 1, x3 <= 2`. It is *semantically valid* —
+`x1 = 1` forces `x2 = 1`, leaving `x3 + x4 = 5` with `x3 = x4`, which `x3 <= 2` refutes.
+It is simply not reachable by unit propagation: the sum rows carry slack 2 or more under
+those assumptions, so no literal is ever forced and propagation stalls before reaching a
+contradiction. Bounds propagation across several rows is strictly stronger than PB unit
+propagation on each row.
+
+Decision: a search proof **must carry the propagator reasoning**, not delegate it to the
+checker's `rup` search. The nogood scheme stays as the skeleton — one clause per failed
+branch, resolved up the tree — but each branch must first emit the derivation that
+actually refutes it, built from the `Explanation.t` values the propagators already
+produce, so that the nogood is then reachable. This is option (a) from M1-T10's original
+framing: derived constraints guarded by the negated active decisions.
+
+Consequences:
+- `Justify`, `Explanation` and the per-propagator justification work (M1-T7, M1-T8) are
+  **load-bearing for search after all**. M1-T10's report concluded they were not needed;
+  that conclusion held only for 0/1 domains.
+- The integration test's `k = 7` case is an expected failure (`~xfail_veripb`) until this
+  lands, using the same discipline as `test/models/PENDING`: if it starts passing, the
+  suite fails and tells you to delete the marker. The solver's *answer* is correct; its
+  *proof* is not, and that distinction is what the marker records.
+- `k = 8` (SAT) passes and always would have: `conclusion SAT` checks the assignment
+  against the model, so a SAT run's nogoods carry no weight. **An end-to-end test that
+  only covers SAT proves very little here.** Any future end-to-end coverage must include
+  UNSAT.
+- This is the third finding in a row that was invisible on a toy instance and visible on a
+  slightly larger one (D-0009 was invisible because a restatement is valid, D-0010 because
+  a one-step bound is the value where the arithmetic coincides). The pattern is strong
+  enough to act on: **no proof-layer claim should be believed on the strength of 0/1
+  domains or single-step bounds.**
