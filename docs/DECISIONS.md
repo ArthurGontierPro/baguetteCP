@@ -429,3 +429,71 @@ Consequences:
   was not achieved by hand here and is the open work. Until it is settled, the UNSAT
   models in `test/unit/test_endtoend.ml` stay xfail.
 - Artefacts: `scratchpad/research/r.opb`, `r.pbp` (session-local).
+
+## D-0014  Decision-free lemmas strengthen a branch nogood, but do not yet close it
+Status: **PARTIAL** — the mechanism is confirmed; the scheme is not complete
+Date: 2026-09-14
+Follows: D-0012, D-0013. Does **not** close D-0013's open half, despite being asked to.
+
+Context: D-0013 left open how to justify a branch refutation, since a decision is not
+entailed by the model and `pol` cannot assert one (D-0009). Investigated by hand-deriving
+proofs and checking every one against veripb 2.2.2.
+
+Three things came back, and they matter in different directions.
+
+**1. Both instances chosen to exercise branching turn out not to need it.** They are
+refutable at the root, decision-free, by `pol` alone. For `2*x1 + 6*x2 + 2*x3 = 9` over
+`[0,3]`, dividing each row by 2 gives `x1 + 3*x2 + x3 >= 5` and `<= 4` — a contradiction
+in three lines. For `x1 = x2, x3 = x4, x1+x2+x3+x4 = 7` the equalities are *added into*
+the sum row to eliminate `x2` and `x4`, then the same division applies. Both verified.
+
+This generalises D-0013 in a way worth stating: where two rows are linked by a
+channelling equality, **add the equality row** with a coefficient that cancels the
+redundant variable, rather than pinning either variable to a literal. These are
+Chvátal–Gomory arguments, and the order encoding represents each variable's whole
+declared domain, so cutting planes sees them without a case split.
+
+**2. Interning those lemmas turns a rejected nogood into an accepted one.** D-0012's own
+failing step — `rup +1 x3_ge_3 +1 x1_ge_2 +1 ~x1_ge_1 >= 1 ;` — is accepted verbatim,
+same clause and same decisions, once the two decision-free lemmas are in the database.
+This is the first direct evidence for what to *do* about D-0012 rather than what is wrong
+with it: `rup` was not too weak in principle, it was running against too weak a database.
+
+**3. It is not enough.** The sibling nogood for the `x1 = 2` sub-branch still fails with
+the same lemmas interned, because unit propagation forces nothing from either lemma
+alone and never adds two constraints together. So a scheme of "intern decision-free
+lemmas, then `rup` the nogood" closes some branches and not others, and nothing here
+says which in advance.
+
+Decision: record the mechanism as confirmed and the scheme as **incomplete**. Do not
+implement "intern and hope" as though it were a rule. The remaining gap is exactly the
+case where closing a leaf needs two lemmas *combined*, which is a `pol` step no `rup`
+will find on its own.
+
+Also flagged, because it is a real architectural departure rather than a detail: the
+proposed rule has the **proof layer derive things the solver never derived**. The root
+refutations above are not reasoning any bounds propagator performs — the solver branches
+on these models. A proof need not mirror the search, and shortening it this way is
+legitimate, but "the proof layer runs its own derivations" is a different system from
+"the proof layer records what the solver did", and it should be adopted deliberately
+rather than as a side effect of fixing a rejected step.
+
+Consequences:
+- `rup` is not eliminable. Closing a leaf whose contradiction appears only under an
+  assumed decision is exactly what `rup`'s check does and what `pol` structurally cannot
+  (D-0009). It stays legitimate here rather than being a workaround, and
+  `docs/PROOF-FORMAT.md` section 2's preference is still honoured everywhere else.
+- The UNSAT models in `test/unit/test_endtoend.ml` stay xfail. Three of them are
+  root-refutable and should start verifying when M1-T12 lands; the two branching ones
+  need the gap above closed first.
+- None of this generalises past linear bounds consistency. It rests on Chvátal–Gomory
+  completeness for integer-linear infeasibility over an exact domain representation.
+  Hall-set reasoning (D-0004, M4) is a different problem and this record says nothing
+  about it.
+- For **D-0003**: this is concrete evidence for reading (a), a richer explanation
+  language. What has to be expressible is a *derivation recipe* — which rows to add, at
+  which coefficients, which variable to eliminate — not merely a value versus a
+  computation. That is the fourth finding to land on D-0003.
+- For **M2-T3**: a decision-free lemma is precisely a learned clause with root-level
+  lifetime. Clause learning should test whether a conflict clause depends on any decision
+  before tagging it to a level, since a level-0 lemma is strictly more valuable.
