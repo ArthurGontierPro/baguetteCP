@@ -8,24 +8,31 @@ OCAML_VERSION="5.1.1"
 
 say() { printf '\033[1m==>\033[0m %s\n' "$*"; }
 
+export PATH="${HOME}/.local/bin:${PATH}"
+
 if ! command -v opam >/dev/null 2>&1; then
-  say "opam not found — installing"
-  # Official installer. Review it first if you would rather not pipe to sh.
-  bash -c "sh <(curl -fsSL https://opam.ocaml.org/install.sh)"
+  say "opam not found — installing the release binary to ~/.local/bin"
+  mkdir -p "${HOME}/.local/bin"
+  VER="$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+        https://github.com/ocaml/opam/releases/latest | sed 's|.*/tag/||')"
+  curl -fsSL -o "${HOME}/.local/bin/opam" \
+    "https://github.com/ocaml/opam/releases/download/${VER}/opam-${VER}-x86_64-linux"
+  chmod +x "${HOME}/.local/bin/opam"
+  say "installed opam ${VER}"
 else
   say "opam present: $(opam --version)"
 fi
 
 if [ ! -d "${HOME}/.opam" ]; then
   say "initialising opam (this takes a few minutes)"
-  opam init --bare --disable-sandboxing -y
+  opam init --bare --disable-sandboxing --no-setup -y
 fi
 
-eval "$(opam env)"
+eval "$(opam env 2>/dev/null || true)"
 
 if ! opam switch list --short | grep -qx "${SWITCH_NAME}"; then
   say "creating switch ${SWITCH_NAME} on OCaml ${OCAML_VERSION}"
-  opam switch create "${SWITCH_NAME}" "ocaml-base-compiler.${OCAML_VERSION}" -y
+  opam switch create "${SWITCH_NAME}" "ocaml-base-compiler.${OCAML_VERSION}" -y -j "$(nproc)"
 fi
 
 opam switch set "${SWITCH_NAME}"

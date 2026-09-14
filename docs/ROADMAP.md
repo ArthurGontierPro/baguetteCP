@@ -15,8 +15,8 @@ Goal: `make check` passes on a skeleton. Nothing solves anything yet.
 | ID | Task | Status | Notes |
 |---|---|---|---|
 | M0-T1 | Project skeleton, dune files, Makefile | DONE | scaffolded |
-| M0-T2 | `scripts/bootstrap.sh` installs opam + OCaml 5 + deps; `dune build` succeeds | TODO | **start here** — no toolchain on this machine yet |
-| M0-T3 | The scaffolded OCaml compiles and `dune runtest` is green | TODO | scaffold was written without a compiler present; expect type errors |
+| M0-T2 | `scripts/bootstrap.sh` installs opam + OCaml 5 + deps; `dune build` succeeds | WIP | **start here** — no toolchain on this machine yet |
+| M0-T3 | The scaffolded OCaml compiles and `dune runtest` is green | WIP | scaffold was written without a compiler present; expect type errors |
 | M0-T4 | CI-equivalent: `make check` gate documented and working | TODO | |
 
 ## M1 — linear integer core, proved
@@ -25,12 +25,12 @@ Goal: solve models with only linear integer constraints, and VeriPB accepts ever
 
 | ID | Task | Status | Notes |
 |---|---|---|---|
-| M1-T1 | `Domain` with bounds + lazy holes, unit tested | TODO | |
-| M1-T2 | `Trail` with decision levels and undo | TODO | |
-| M1-T3 | `Explanation` type + arena + memoised `Deferred` | TODO | central; claim it alone |
-| M1-T4 | Order encoding in `lib/proof/lit.ml`, `.opb` writer | TODO | see PROOF-FORMAT §3 |
-| M1-T5 | `writer.ml`: rule emission, constraint ids, audit mode | TODO | |
-| M1-T6 | FlatZinc lexer + parser for the §2.1 subset | TODO | independent of core — good parallel task |
+| M1-T1 | `Domain` with bounds + lazy holes, unit tested | WIP | |
+| M1-T2 | `Trail` with decision levels and undo | WIP | |
+| M1-T3 | `Explanation` type + arena + memoised `Deferred` | WIP | central; claim it alone |
+| M1-T4 | Order encoding in `lib/proof/lit.ml`, `.opb` writer | WIP | see PROOF-FORMAT §3 |
+| M1-T5 | `writer.ml`: rule emission, constraint ids, audit mode | WIP | |
+| M1-T6 | FlatZinc lexer + parser for the §2.1 subset | WIP | independent of core — good parallel task |
 | M1-T7 | `int_lin_le` propagator + `pol` justification | TODO | the reference propagator; copy its shape |
 | M1-T8 | `int_lin_eq`, `int_le`, `int_lt`, `int_eq` | TODO | after T7 |
 | M1-T9 | `int_lin_ne`, `int_ne` (needs direct encoding) | TODO | |
