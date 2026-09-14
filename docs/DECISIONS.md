@@ -497,3 +497,88 @@ Consequences:
 - For **M2-T3**: a decision-free lemma is precisely a learned clause with root-level
   lifetime. Clause learning should test whether a conflict clause depends on any decision
   before tagging it to a level, since a level-0 lemma is strictly more valuable.
+
+## D-0015  Explanation gets a divisor, a named row, and a weaken-only summand
+Status: DECIDED
+Date: 2026-09-14
+Implements: D-0013. Supersedes the ADT gaps recorded in D-0009, D-0010 and D-0011.
+
+Context: D-0013 specified the derivation and named what `Explanation.t` could not say —
+`Linear` carries literals but no id, `Cut` has no divisor, and nothing distinguished
+"still at the declared bound, weaken it away" from "at a derived bound, cite that id".
+
+Decision: three additions.
+
+- `Combine (summands, divisor)` is one `pol` step: sum the summands, then divide unless
+  the divisor is 1.
+- A summand is `Term (coeff, t)` — recurse and cite the resulting id, as `Cut` already
+  did — or `Weaken` , a sum of literal axioms. **`Weaken` is deliberately not a `t`** and
+  cannot be emitted on its own, because D-0009 established that an axiom cannot assert a
+  bound, only weaken one away. Making that structural beats leaving it a convention
+  someone has to remember, which is how D-0009 happened.
+- `Model_row id` names a constraint id directly rather than going through the single
+  ambient `ctx.model_id`. This is D-0011's unresolvable `Trivial` made tractable: one
+  `Combine` can cite an explanation another propagator instance built against a
+  *different* row, in the same tree, which one mutable pointer cannot express.
+
+Consequences:
+- Every propagator instance must be given its own row id at construction. Without it the
+  explanation falls back to `Trivial` and reinherits D-0011's ambiguity — which is not a
+  hypothetical: `test_endtoend.ml` computed the ids and discarded them, and that is
+  exactly what it did.
+- A root conflict now logs its real derivation and veripb accepts it. Two of the
+  integration test's UNSAT models flipped from xfail to passing on this.
+- A root refutation's intermediate steps sit at level 0 where no `w` retires them, so the
+  emitting caller must delete them before `conclusion` or the I-X2 audit fails. It did.
+- Cross-instance conflicts — two instances tightening opposite bounds on one variable,
+  caught by `Store`'s own check rather than either row's slack — take a second
+  combination path that no model in the current suite exercises. It is covered by code
+  review only, which is worth knowing given this project's history with untested paths.
+
+## D-0016  The `pol` vocabulary, and what it can and cannot reach
+Status: PARTIAL — amends D-0014
+Date: 2026-09-14
+
+Context: whether a `pol` step can close a leaf that `rup` cannot, since unit propagation
+never adds two constraints together and adding is what `pol` does.
+
+Findings, all checked against veripb 2.2.2:
+
+1. **`pol` can recover any leaf's nogood once the model is refuted at the root**, by
+   adding the leaf's decision literals as axioms on top of the derived contradiction.
+   Verified for the `x1 = 2` leaf that D-0014 could not close. But the honest shape is
+   narrower than it sounds: it works by going *through* the root contradiction, so it
+   recovers a clause shape rather than doing branch-local reasoning. Where a root
+   refutation exists, the per-branch nogood scheme is simply unnecessary.
+2. **Keeping a decision's literal rather than weakening it away is a real and more general
+   operation.** Keeping `x1_ge_2` in D-0013's derivation yields `x1 < 2 => x2 >= 1`,
+   globally valid and strictly more general than the `x1 = 0` instance of it. It did not
+   close the leaf here, for a reason worth recording: that model's refutation runs through
+   the equalities, not through `x1`'s bound family, so the kept literal was not the one
+   the refutation depends on. **Guarding the wrong literal produces a valid but useless
+   generalisation** — so a derivation recipe must identify which decision a branch's
+   refutation actually turns on.
+3. **No genuinely branch-only instance has been found.** Three instances built to require
+   branching turned out not to, the third (`x1 + 2*x2 = 4`) being settled by `rup` at the
+   bare root with no decisions asserted. Chvátal–Gomory completeness for integer-linear
+   infeasibility over a bounded box is a structural reason to expect none exists in this
+   class: **branching is a search strategy here, never a proof necessity.** That does not
+   extend past linear arithmetic — Hall-set reasoning (D-0004) is a different problem.
+
+Correction to a claim made in reaching these: `rup` is **not** "complete cutting-planes
+search inside the checker". It is reverse unit propagation over PB constraints — stronger
+than clausal unit propagation, weaker than cutting planes. The third instance's fact is
+reachable by plain PB propagation: asserting `x1 >= 3` forces `x1`'s whole order family,
+the `<=` row then forces every `~x2` literal, and the `>=` row is violated. Nothing
+stronger than propagation is involved, and the distinction matters because it is the
+difference between "the checker will find it" and "the checker will find it if it is one
+propagation away".
+
+Consequences:
+- Look for a root refutation before emitting a per-branch nogood; it can make the nogood
+  machinery unnecessary for that model entirely.
+- `rup` stays legitimate where composing the `pol` chain mechanically is harder than the
+  checker's own propagation, which includes some decision-free facts, not only
+  branch-dependent ones.
+- Still open: a hand-derivable `pol` chain for the third instance's parity fact, and an
+  instance where a kept decision literal is genuinely load-bearing.

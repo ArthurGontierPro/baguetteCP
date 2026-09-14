@@ -56,6 +56,20 @@ plus constraint 4, divided by 2". Literal axioms are written `~x1` / `x1`. Its w
 operator `w` takes a **variable, not a literal** — it ignores any sign you give it, and
 VeriPB only logs a warning rather than failing, so a sign there is a silent no-op.
 
+The three operators, as checked against veripb 2.2.2 rather than assumed:
+
+| Op | Effect |
+|---|---|
+| `w <var>` | drops the variable's term and subtracts its coefficient from the right-hand side, **clamped at 0**. Exactly equivalent to adding `|a|` copies of that literal's axiom, which is how D-0013's derivation was first written |
+| `s` | saturation: caps every coefficient at the current right-hand side, per literal; the right-hand side is unchanged |
+| `d N` | divides **every coefficient and the right-hand side**, rounding each **up** |
+
+The division row is the one to read twice: this document previously said `d` rounds only
+the right-hand side. It rounds the coefficients too, by the same ceiling. Checked: from
+`+3 x1 +1 x2 >= 1`, `2 d` gives `+2 x1 +1 x2 >= 1` — under truncation it would have given
+`+1 x1 >= 1`, forcing `x1`, and a `rup` of `x1` after the division is rejected, which is
+what settles it.
+
 **Rule**: prefer `pol` over `rup`. A `pol` step states the actual reasoning and is cheap
 to check; `rup` makes the checker search. A propagator that can only produce `rup` should
 say so in its module header and explain why.
