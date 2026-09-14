@@ -12,9 +12,9 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M1-T8 — `int_lin_eq`, `int_le`, `int_lt`, `int_eq` | `lib/core/prop/**`, `test/unit/test_prop.ml` | agent-props | 2026-09-14 |
-| M1-T10 — propagation engine + DFS search, decisions logged | `lib/core/engine.ml`, `lib/core/search.ml`, `test/unit/test_engine.ml` | agent-engine | 2026-09-14 |
 | integration | `test/unit/test_endtoend.ml` | orchestrator | 2026-09-14 — no single session can make it pass alone |
+| M1-T12 — make the D-0013 derivation real: `Explanation` + `Justify` + `int_lin_le` | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/prop/**`, `test/unit/test_prop.ml`, `test/unit/test_justify.ml` | agent-explain | 2026-09-14 — **authorised to change the Explanation ADT**, see D-0013 |
+| M1-T13 — the branching half of D-0013, research only | none — scratchpad only | agent-branch | 2026-09-14 |
 
 ## Cross-session requests
 
@@ -141,3 +141,14 @@ make pass alone.
 For M1-T8: copy `prop/linear.ml`'s shape *and* `prop/order_reason.ml`'s chains. Do not
 re-derive bound-fact literals by hand — that is the D-0010 bug, and it will look like it
 works.
+
+**2026-09-14 — orchestrator, after D-0013**
+
+The whole M1-T7/T8 vertical (propagator, explanation, bridge) is being handed to **one**
+session this round rather than split. Splitting it along `Explanation.t` is exactly what
+produced D-0009: two sessions agreed on the type and disagreed on its meaning, and the
+checker accepted the mismatch. A shared type is not a shared contract, so this time the
+type and both of its users move together.
+
+`lib/core/explanation.ml` is unfrozen for agent-explain, and only for it. D-0013 says what
+the ADT is missing and why; the change is no longer speculative.
