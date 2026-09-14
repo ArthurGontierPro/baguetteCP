@@ -1,0 +1,8 @@
+% Unsatisfiable by linear reasoning: x + y >= 8 is impossible under x + y <= 3.
+array [1..2] of int: coeffs = [1, 1];
+array [1..2] of int: neg_coeffs = [-1, -1];
+var 0..5: x :: output_var;
+var 0..5: y :: output_var;
+constraint int_lin_le(coeffs, [x, y], 3);
+constraint int_lin_le(neg_coeffs, [x, y], -8);
+solve satisfy;

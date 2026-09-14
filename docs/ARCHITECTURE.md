@@ -1,0 +1,120 @@
+# Architecture
+
+How the pieces fit. `docs/SPEC.md` says *what*; this says *how*, and may change more
+freely — but changes to §4 (explanations) need a decision record.
+
+---
+
+## 1. Module map
+
+```
+bin/main.ml                    CLI: parse args, wire everything, print results
+
+lib/flatzinc/   Baguette_flatzinc
+  ast.ml                       FlatZinc syntax tree
+  lexer.mll  parser.mly        surface syntax -> ast
+  builder.ml                   ast -> Model (vars + constraint instances)
+
+lib/core/       Baguette_core
+  var.ml                       variable identity (abstract int)
+  domain.ml                    finite integer domain
+  trail.ml                     backtrackable store: domains + undo log
+  explanation.ml       *****   the Explanation type. Read docs/SPEC.md 3.3 first.
+  propagator.ml                the propagator interface (module type PROPAGATOR)
+  prop/                        one module per constraint family
+    linear.ml  alldiff.ml  element.ml  clause.ml ...
+  engine.ml                    propagate-to-fixpoint loop, the queue
+  search.ml                    branching, backtracking, restarts
+
+lib/proof/      Baguette_proof
+  lit.ml                       order/direct encoding literals; naming is normative
+  opb.ml                       write the .opb model file
+  writer.ml                    write the .pbp proof: emit rules, hand back constraint ids
+  justify.ml                   Explanation -> proof rule(s)
+```
+
+Dependency direction is strictly `flatzinc -> core -> proof`. `core` must not depend on
+`flatzinc`. `proof` must not reach back into `core`'s mutable state — it receives values.
+
+---
+
+## 2. Domains
+
+`Domain.t` is a bounds pair plus an optional hole set:
+
+- `lo`, `hi` as ints — the common case, and the only thing most propagators read
+- a bitset of removed values, allocated lazily, only when a hole is actually punched
+
+Rationale: the overwhelming majority of propagation in a linear-heavy FlatZinc workload
+is bounds reasoning. Paying for a full bitset per variable up front is wasted memory and
+worse cache behaviour. Variables that reach `all_different` or `element` get the bitset.
+
+Operations return a `change` describing what moved (`NoChange | Bound of ... | Holes of ...`)
+so the engine knows which propagators to re-queue and the proof layer knows which
+literals became true.
+
+## 3. Trail
+
+Backtracking is a classic undo trail: every mutation pushes a closure-free record
+(`var`, `old_lo`, `old_hi`, `old_holes_ref`) and `backtrack_to level` replays it in
+reverse. Decision levels are marks into that array.
+
+The trail also records, per entry, the **explanation index** of the change, so that when
+a conflict is analysed we can walk back through the reasons. Explanations are stored in a
+side arena (`explanation.ml`), not inline, to keep trail records small and uniform.
+
+## 4. Explanations
+
+This is the design centre of the project.
+
+An explanation answers: *why was this value removed?* in a form the proof layer can turn
+into a VeriPB rule. Three concerns pull on the type:
+
+1. **Cost.** Most prunings are never asked for a reason — they are never involved in a
+   conflict, and never need a proof step beyond the propagator's own logged constraint.
+   Computing a full reason eagerly for every pruning is the classic way to make a
+   proof-logging solver ten times slower than its unlogged sibling.
+2. **Composition.** The reason for a pruning is often "because of *this* other pruning,
+   plus a cut" — reasons refer to reasons.
+3. **Checkability.** Whatever the shape, it must come out as `pol`/`rup`/`red` steps.
+
+### Deferred explanations
+
+The type therefore has a deferred constructor: an explanation may be a *thunk* that,
+when forced, produces the concrete reason. OCaml makes this cheap and readable, which is
+a large part of why the language was chosen (see D-0001).
+
+```ocaml
+type t =
+  | Trivial                              (* from the model constraint itself *)
+  | Clause of Lit.t list                 (* a set of literals that imply the pruning *)
+  | Linear of (int * Lit.t) list * int   (* a PB constraint: sum a_i l_i >= b *)
+  | Cut of t * t * int * int             (* linear combination of two reasons *)
+  | Deferred of (unit -> t)              (* computed only if actually needed *)
+```
+
+`Deferred` MUST be memoised on force — a reason can be demanded more than once during
+conflict analysis, and recomputing a propagator's reason is not cheap.
+
+**Open**: whether `Cut` and `Deferred` are enough, or whether explanations should be
+parameterised over the reasons they consume (a genuinely higher-order form). That is
+decision **D-0003**; do not build past M3 without settling it.
+
+## 5. Propagation loop
+
+A priority queue of propagator ids, ordered by cost class (cheap bounds propagators
+before `all_different`). `engine.ml` pops, runs, applies the resulting changes to the
+trail, and re-queues the propagators watching the changed variables.
+
+Failure aborts the loop and hands the failing explanation to `search.ml`.
+
+## 6. Proof writing
+
+`writer.ml` owns the proof file and the **constraint id counter**. Every rule emission
+returns a `Cid.t` — an abstract id. The rule is: *an id you received is an id you are
+responsible for deleting.* Since OCaml will not enforce that statically, it is enforced
+dynamically in debug builds: the writer tracks live ids and asserts the set is empty at
+`conclusion` time. Turn that on with `BAGUETTE_PROOF_AUDIT=1`.
+
+This is the one place where OCaml costs us relative to Rust (D-0001 records that
+trade-off explicitly), so it gets a runtime check instead.

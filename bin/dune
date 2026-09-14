@@ -1,0 +1,4 @@
+(executable
+ (name main)
+ (public_name baguette)
+ (libraries baguette_core baguette_proof baguette_flatzinc))

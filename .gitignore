@@ -1,0 +1,15 @@
+_build/
+*.install
+*.opb
+*.pbp
+*.pbp.trace
+.merlin
+*.cmi
+*.cmo
+*.cmx
+*.o
+*.a
+*.annot
+_opam/
+test/out/
+perf.data*

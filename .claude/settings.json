@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dune build:*)",
+      "Bash(dune runtest:*)",
+      "Bash(dune clean)",
+      "Bash(dune exec:*)",
+      "Bash(make:*)",
+      "Bash(opam:*)",
+      "Bash(veripb:*)",
+      "Bash(./scripts/run_model_tests.sh:*)",
+      "Bash(./scripts/verify_proof.sh:*)",
+      "Bash(./scripts/shrink.sh:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sed -n '/^## Active claims/,/^## Completed/p' \"$CLAUDE_PROJECT_DIR/WORKLOG.md\""
+          }
+        ]
+      }
+    ]
+  }
+}

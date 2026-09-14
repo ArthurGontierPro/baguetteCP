@@ -1,0 +1,3 @@
+(library
+ (name baguette_core)
+ (libraries baguette_proof))

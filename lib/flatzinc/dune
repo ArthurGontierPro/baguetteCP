@@ -1,0 +1,3 @@
+(library
+ (name baguette_flatzinc)
+ (libraries baguette_core))

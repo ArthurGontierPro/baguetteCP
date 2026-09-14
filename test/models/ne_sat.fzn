@@ -1,0 +1,6 @@
+% Forces the direct encoding: int_ne needs x_eq_v literals and channelling.
+var 1..2: x :: output_var;
+var 1..2: y :: output_var;
+constraint int_ne(x, y);
+constraint int_lt(x, y);
+solve satisfy;

@@ -1,0 +1,7 @@
+% Linear constraint plus a strict comparison; needs real bounds propagation.
+array [1..2] of int: coeffs = [1, 2];
+var 0..5: x :: output_var;
+var 0..5: y :: output_var;
+constraint int_lin_le(coeffs, [x, y], 6);
+constraint int_lt(y, x);
+solve satisfy;
