@@ -312,3 +312,59 @@ let write_opb ?(comments = []) t oc =
 
 (* Start the proof. Must be called after the .opb is complete (invariant I-X5). *)
 let start_proof t w = Writer.header w ~n_model_constraints:t.n
+
+(* ---------------------------------------------------------------------------
+   M1-T7c: expanding an integer linear term into a PB row over the order
+   encoding.
+
+   Under the order encoding (docs/SPEC.md 4.2, PROOF-FORMAT section 3), an
+   integer variable x with domain [lo, hi] satisfies
+
+       x  =  lo  +  sum_{v = lo+1}^{hi} [x >= v]
+
+   ([x >= v] is 1 when the literal x_ge_v holds, 0 otherwise; x >= lo is the
+   constant true and contributes nothing beyond lo itself). Substituting into
+
+       sum_i a_i x_i  <=  rhs
+
+   gives
+
+       sum_i sum_{v = lo_i+1}^{hi_i} a_i [x_i >= v]   <=   rhs - sum_i a_i lo_i
+
+   which is exactly the shape [Opb.le] wants: a list of (coefficient, literal)
+   terms over the *unnegated* x_ge_v literals, and a right-hand side. [Opb.le]
+   is what negates terms to reach the checker's ">=" form, so this function
+   must not also negate -- passing it the substituted "<=" terms unmodified is
+   what keeps the sign right for both positive and negative a_i alike.
+
+   A variable with a_i = 0 contributes nothing (skipped outright, so it never
+   even touches the constant). A singleton domain (lo_i = hi_i) has no order
+   literals at all -- the [List.init] below produces zero terms for it -- and
+   contributes only lo_i * a_i to the constant. *)
+let linear_terms_int_lin_le t terms =
+  List.fold_left
+    (fun (acc, const) (a, x) ->
+      if a = 0 then (acc, const)
+      else
+        let v = find t x in
+        let const = const + (a * v.lo) in
+        let vterms =
+          List.init (max 0 (v.hi - v.lo)) (fun i -> (a, Lit.ge x (v.lo + 1 + i)))
+        in
+        (acc @ vterms, const))
+    ([], 0) terms
+
+(* The full row  sum_i a_i x_i <= rhs,  as a normalised [Opb.t]. Exposed on its
+   own (not just via [add_int_lin_le]) so a caller -- or a test -- can inspect
+   the row before it is committed to the .opb. *)
+let expand_int_lin_le t terms rhs =
+  let opb_terms, const = linear_terms_int_lin_le t terms in
+  Opb.normalise (Opb.le opb_terms (rhs - const))
+
+(* Post  sum_i a_i x_i <= rhs  as a model constraint and hand back its id.
+   Terms are (coefficient, integer-variable-name) pairs, matching the shape
+   [add_equality] and [add_constraint] already use for term lists elsewhere in
+   this module. The expansion always produces a ">=" row (see [expand_int_lin_le]
+   above via [Opb.le]), so it never trips [add_constraint]'s refusal of [Eq] --
+   there is no separate equality path to keep in sync with I-X5 here. *)
+let add_int_lin_le t terms rhs = add_constraint t (expand_int_lin_le t terms rhs)

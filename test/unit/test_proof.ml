@@ -397,10 +397,6 @@ let test_renaming_comments () =
   check "encoding: the sanitisation mapping is dumped as a comment"
     (List.exists (String.equal "* name a[1] -> a_1_") (String.split_on_char '\n' s))
 
-(* ------------------------------------------------------------------ *)
-(* The one that matters: I-X1                                          *)
-(* ------------------------------------------------------------------ *)
-
 let veripb_path () =
   let candidates =
     [
@@ -413,6 +409,244 @@ let veripb_path () =
   | Some p -> Some p
   | None ->
       if Sys.command "command -v veripb >/dev/null 2>&1" = 0 then Some "veripb" else None
+
+(* ------------------------------------------------------------------ *)
+(* M1-T7c: order-encoding expansion of sum a_i x_i <= rhs               *)
+(* ------------------------------------------------------------------ *)
+
+(* Evaluate a normalised Opb.constr under a concrete integer assignment
+   (name -> value), by reading off each order literal's truth value directly
+   from the assignment rather than from any Encoding state. This is the
+   independent check: it knows nothing about how [expand_int_lin_le] built
+   the row, only what an order literal *means* (x_ge_v holds iff value >= v),
+   so it cannot be fooled by a sign error that cancels itself inside the same
+   code path. *)
+let lit_truth assign (l : Lit.t) =
+  let v = l.Lit.v in
+  let base =
+    match v with
+    | Lit.Ge (x, k) -> List.assoc x assign >= k
+    | Lit.Eq (x, k) -> List.assoc x assign = k
+  in
+  if l.Lit.positive then base else not base
+
+let eval_row assign (c : Opb.constr) =
+  let lhs =
+    List.fold_left
+      (fun acc (a, l) -> acc + (a * if lit_truth assign l then 1 else 0))
+      0 (Opb.terms c)
+  in
+  match Opb.relation c with
+  | Opb.Ge -> lhs >= Opb.rhs c
+  | Opb.Eq -> lhs = Opb.rhs c
+
+(* All assignments of a list of (name, lo, hi) domains, as (name, value) lists. *)
+let rec all_assignments = function
+  | [] -> [ [] ]
+  | (x, lo, hi) :: rest ->
+      let tails = all_assignments rest in
+      List.concat_map
+        (fun v -> List.map (fun tail -> (x, v) :: tail) tails)
+        (List.init (hi - lo + 1) (fun i -> lo + i))
+
+(* The arithmetic check: for every point of the (small) domain, the expanded
+   PB row must agree with the integer constraint it was built from. This is
+   what would catch a sign or constant error -- one that a single worked
+   example could easily miss, but a mismatched point here cannot. *)
+let check_soundness name ~domains ~terms ~rhs =
+  let e = Encoding.create () in
+  List.iter (fun (x, lo, hi) -> Encoding.declare_int e x ~lo ~hi) domains;
+  let row = Encoding.expand_int_lin_le e terms rhs in
+  let bad =
+    List.find_opt
+      (fun assign ->
+        let int_side =
+          List.fold_left (fun acc (a, x) -> acc + (a * List.assoc x assign)) 0 terms
+          <= rhs
+        in
+        eval_row assign row <> int_side)
+      (all_assignments domains)
+  in
+  check name (bad = None)
+
+let test_int_lin_le_soundness () =
+  check_soundness "int_lin_le soundness: 2x + 3y <= 10, x,y in [0,3]"
+    ~domains:[ ("x", 0, 3); ("y", 0, 3) ]
+    ~terms:[ (2, "x"); (3, "y") ] ~rhs:10;
+  check_soundness "int_lin_le soundness: negative coefficient, x - y <= 1"
+    ~domains:[ ("x", 0, 2); ("y", 0, 2) ]
+    ~terms:[ (1, "x"); (-1, "y") ]
+    ~rhs:1;
+  check_soundness "int_lin_le soundness: both coefficients negative"
+    ~domains:[ ("x", 0, 2); ("y", 0, 2) ]
+    ~terms:[ (-2, "x"); (-1, "y") ]
+    ~rhs:(-1);
+  check_soundness "int_lin_le soundness: a zero coefficient contributes nothing"
+    ~domains:[ ("x", 0, 5); ("y", 0, 3) ]
+    ~terms:[ (0, "x"); (1, "y") ]
+    ~rhs:2;
+  check_soundness "int_lin_le soundness: a singleton-domain variable is a constant"
+    ~domains:[ ("x", 0, 3); ("k", 4, 4) ]
+    ~terms:[ (1, "x"); (1, "k") ]
+    ~rhs:5;
+  check_soundness "int_lin_le soundness: three variables, mixed signs"
+    ~domains:[ ("x", -1, 2); ("y", 0, 2); ("z", 1, 3) ]
+    ~terms:[ (2, "x"); (-3, "y"); (1, "z") ]
+    ~rhs:2
+
+(* Worked examples, checked by eye against the substitution in the module
+   header of [Encoding], with the exact rendered .opb line pinned. *)
+let test_int_lin_le_worked_examples () =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:0 ~hi:3;
+  Encoding.declare_int e "y" ~lo:0 ~hi:3;
+  (* 2x + 3y <= 10 : the example from the task report. *)
+  check_eq "int_lin_le: 2x + 3y <= 10 over [0,3]x[0,3]"
+    ~expected:"+2 ~x_ge_1 +2 ~x_ge_2 +2 ~x_ge_3 +3 ~y_ge_1 +3 ~y_ge_2 +3 ~y_ge_3 >= 5 ;"
+    ~got:
+      (Opb.constr_to_string (Encoding.expand_int_lin_le e [ (2, "x"); (3, "y") ] 10));
+  let e2 = Encoding.create () in
+  Encoding.declare_int e2 "x" ~lo:0 ~hi:2;
+  Encoding.declare_int e2 "y" ~lo:0 ~hi:2;
+  (* x - y <= 1 : a negative coefficient. *)
+  check_eq "int_lin_le: negative coefficient, x - y <= 1"
+    ~expected:"+1 ~x_ge_1 +1 ~x_ge_2 +1 y_ge_1 +1 y_ge_2 >= 1 ;"
+    ~got:
+      (Opb.constr_to_string
+         (Encoding.expand_int_lin_le e2 [ (1, "x"); (-1, "y") ] 1));
+  let e3 = Encoding.create () in
+  Encoding.declare_int e3 "x" ~lo:0 ~hi:3;
+  Encoding.declare_int e3 "k" ~lo:4 ~hi:4;
+  (* x + k <= 5, k fixed at 4: k contributes only to the constant, no k_ge_* literal. *)
+  check_eq "int_lin_le: a singleton-domain variable is constant-only"
+    ~expected:"+1 ~x_ge_1 +1 ~x_ge_2 +1 ~x_ge_3 >= 2 ;"
+    ~got:(Opb.constr_to_string (Encoding.expand_int_lin_le e3 [ (1, "x"); (1, "k") ] 5));
+  (* A zero coefficient never even looks up the variable's domain, so it works
+     even for a variable this Encoding never declared. *)
+  let e4 = Encoding.create () in
+  Encoding.declare_int e4 "y" ~lo:0 ~hi:3;
+  check_eq "int_lin_le: a zero coefficient contributes no term and needs no domain"
+    ~expected:"+1 ~y_ge_1 +1 ~y_ge_2 +1 ~y_ge_3 >= 1 ;"
+    ~got:
+      (Opb.constr_to_string
+         (Encoding.expand_int_lin_le e4 [ (0, "never_declared"); (1, "y") ] 2))
+
+let test_int_lin_le_add () =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:0 ~hi:2 (* 1 consistency clause: id 1 *);
+  let cid = Encoding.add_int_lin_le e [ (1, "x") ] 1 in
+  check "encoding: add_int_lin_le follows the consistency clauses" (cid = 2);
+  check_eq "encoding: add_int_lin_le posts the expanded row"
+    ~expected:"+1 ~x_ge_1 +1 ~x_ge_2 >= 1 ;"
+    ~got:(Opb.constr_to_string (List.nth (Encoding.constraints e) 1));
+  check "encoding: header count agrees with the ids assigned"
+    (Opb.n_checker_constraints (Encoding.constraints e) = Encoding.n_constraints e)
+
+(* End-to-end: post a real int_lin_le row through add_int_lin_le, derive a
+   contradiction from it with a real veripb, and check I-X1 and I-X5 together.
+
+   Model: x, y in [0,2],  x + y <= 1  (posted via add_int_lin_le),  x >= 2
+   (posted directly). Unsatisfiable: x >= 2 forces y <= -1, which is outside
+   y's domain.
+
+   Soundness of the derivation below rests on the order-encoding consistency
+   clauses that [declare_int] already emits (x_ge_2 -> x_ge_1): without them,
+   x >= 2 would not license deriving x >= 1, which is the step the row needs
+   to be summed against. That is the sense in which those clauses are what
+   makes an int_lin_le row usable at all, not just the row's own arithmetic. *)
+let build_int_lin_le_unsat dir =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:0 ~hi:2 (* consistency id 1: x_ge_2 -> x_ge_1 *);
+  Encoding.declare_int e "y" ~lo:0 ~hi:2 (* consistency id 2: y_ge_2 -> y_ge_1 *);
+  let c_sum = Encoding.add_int_lin_le e [ (1, "x"); (1, "y") ] 1 (* id 3 *) in
+  let c_x2 = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "x" 2) ] 1) (* id 4 *) in
+  let opb = Filename.concat dir "int_lin_le.opb" in
+  let pbp = Filename.concat dir "int_lin_le.pbp" in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "x + y <= 1 (int_lin_le); x >= 2" ] e oc;
+  close_out oc;
+  let f_count = Opb.n_checker_constraints (Encoding.constraints e) in
+  let oc = open_out pbp in
+  let w = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof e w;
+  let cons_x1 = Option.get (Encoding.consistency_id e "x" 1) in
+  (* x >= 2 and x_ge_2 -> x_ge_1 give x >= 1. *)
+  let x_ge_1 = Writer.pol w ~origin:"x >= 2 gives x >= 1" Pol.(sum [ id c_x2; id cons_x1 ]) in
+  (* The int_lin_le row, plus x >= 1 and x >= 2, forces
+     ~y_ge_1 + ~y_ge_2 >= 3 -- impossible since that sum is at most 2. *)
+  let contra =
+    Writer.pol w ~origin:"the row, x >= 1 and x >= 2 overdetermine y"
+      Pol.(sum [ id c_sum; id x_ge_1; id c_x2 ])
+  in
+  Writer.delete_many w [ x_ge_1 ];
+  Writer.conclusion w (Writer.Unsat (Some contra));
+  close_out oc;
+  (opb, pbp, f_count)
+
+let test_int_lin_le_veripb () =
+  match veripb_path () with
+  | None ->
+      incr failures;
+      print_endline
+        "FAIL int_lin_le: veripb not found -- invariant I-X1 was NOT checked for the \
+         int_lin_le row."
+  | Some veripb -> (
+      let dir = Filename.temp_file "baguette_veripb_lin" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let opb, pbp, f_count = build_int_lin_le_unsat dir in
+      (* I-X5: the .opb's constraint count and the f line must agree. *)
+      let opb_text =
+        let ic = open_in_bin opb in
+        let s = really_input_string ic (in_channel_length ic) in
+        close_in ic;
+        s
+      in
+      check "int_lin_le: the .opb header count matches what we computed for f"
+        (let prefix = Printf.sprintf "* #variable= " in
+         String.length opb_text > String.length prefix
+         &&
+         let expected_suffix = Printf.sprintf "#constraint= %d\n" f_count in
+         let has_substr hay needle =
+           let hl = String.length hay and nl = String.length needle in
+           let rec go i = i + nl <= hl && (String.sub hay i nl = needle || go (i + 1)) in
+           go 0
+         in
+         has_substr opb_text expected_suffix);
+      let pbp_text =
+        let ic = open_in_bin pbp in
+        let s = really_input_string ic (in_channel_length ic) in
+        close_in ic;
+        s
+      in
+      check "int_lin_le: the proof's f line matches the computed count"
+        (List.exists
+           (String.equal (Printf.sprintf "f %d" f_count))
+           (String.split_on_char '\n' pbp_text));
+      let log = Filename.concat dir "log" in
+      let rc =
+        Sys.command
+          (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
+             (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
+      in
+      let out =
+        let ic = open_in_bin log in
+        let s = really_input_string ic (in_channel_length ic) in
+        close_in ic;
+        s
+      in
+      if rc = 0 then
+        Printf.printf "ok   int_lin_le: veripb accepts a proof over the expanded row (I-X1)\n"
+      else (
+        incr failures;
+        Printf.printf "FAIL int_lin_le: veripb rejected the proof (I-X1)\n%s\n" out;
+        Printf.printf "  model: %s\n  proof: %s\n" opb pbp);
+      List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp; log ];
+      try Sys.rmdir dir with _ -> ())
+
+(* ------------------------------------------------------------------ *)
+(* The one that matters: I-X1                                          *)
+(* ------------------------------------------------------------------ *)
 
 (* The model:  x, y in [0,3],  x >= 2,  x + y <= 2,  y >= 1.  Unsatisfiable.
    The proof also introduces y's direct encoding, derives exactly-one over it, and
@@ -504,6 +738,10 @@ let () =
   test_direct_encoding ();
   test_assignment_lits ();
   test_renaming_comments ();
+  test_int_lin_le_soundness ();
+  test_int_lin_le_worked_examples ();
+  test_int_lin_le_add ();
+  test_int_lin_le_veripb ();
   test_veripb_accepts ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
