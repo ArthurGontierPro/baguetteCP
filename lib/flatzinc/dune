@@ -1,3 +1,10 @@
+; The FlatZinc front end is deliberately standalone: it depends on no other library in
+; this project. Baguette_core is being rewritten in parallel (M1-T1..T5) and the front
+; end's output type lives here, in model.ml, so that `dune build lib/flatzinc/` is
+; meaningful on its own. The `flatzinc -> core` edge of docs/ARCHITECTURE.md gets added
+; when the engine is wired up.
+;
+; No menhir stanza: enabling one requires `(using menhir X.Y)` in dune-project, which is
+; owned elsewhere. lexer.ml/parser.ml are hand written; see the header of lexer.ml.
 (library
- (name baguette_flatzinc)
- (libraries baguette_core))
+ (name baguette_flatzinc))
