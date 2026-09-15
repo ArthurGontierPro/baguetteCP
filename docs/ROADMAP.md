@@ -44,7 +44,7 @@ Goal: solve models with only linear integer constraints, and VeriPB accepts ever
 | M1-T14 | Wire the CLI: `.fzn` in, solution + proof out | DONE | 5 models solve with verified proofs; `Compile` + `Output` + `Model.check_assignment` |
 | M1-T15 | Proof-mutation harness: corrupt a step, assert veripb rejects | DONE | D-0020: found `lin_unsat`'s refutation carries a unit of slack, registered known-slack with XPASS protection |
 | M1-T16 | Populate the tests: a per-propagator × per-situation matrix, and a randomised differential tester | DONE | found 3 real bugs, 2 of them new. 142 + 10 checks, 17 verified break-it mutations |
-| M1-T17 | Fix the three `int_ne` composition bugs M1-T16 pinned | TODO | **the gate is red until this lands.** A: `Snap_cite` vs a `Clause`; B: `Store.remove` records no facts; C: a root `int_ne` conflict is not a contradiction |
+| M1-T17 | Fix the three `int_ne` composition bugs M1-T16 pinned | DONE | D-0022, I-X7, I-P5. Gate green: 147 matrix + 11 fuzzer checks |
 
 ## M2 — Booleans
 

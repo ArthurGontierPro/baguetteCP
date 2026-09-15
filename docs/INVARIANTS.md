@@ -55,6 +55,19 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
   M1-T13 and was harmless only by accident, because search happened to force a conflict
   explanation immediately. Conflict analysis (M2-T3) will not.
 
+- **I-X7** What `conclusion UNSAT` cites is a line the checker has itself established is a
+  contradiction — either a `pol` chain closing at `0 >= k` (D-0013) or an explicitly
+  derived empty clause (D-0022). A propagator's reason is never cited as a contradiction
+  on the propagator's word. `Search.rests_on_a_clause` is where the two are told apart.
+
+- **I-P5** Every store mutator that can move a bound takes `~facts`, and every propagator
+  that calls one passes the facts it actually read. A propagator that prunes through a
+  factless mutator writes a D-0018 trace line with an empty reason — an unconditional
+  claim — and on a satisfiable model such a line is not merely unprovable, it is **false**.
+  This is the companion to I-P4: I-P4 makes every change carry an *explanation*, I-P5 makes
+  every bound move carry the *facts* its trace line negates. `int_ne` violated this from
+  M1-T9 until M1-T17 by pruning through `Store.remove`.
+
 ## Search
 
 - **I-S1** Every solution printed satisfies every constraint — re-checked independently by

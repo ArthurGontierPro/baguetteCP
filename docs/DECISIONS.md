@@ -882,3 +882,46 @@ Consequences:
   went from 3 lines to 20.
 - New invariant **I-X6**, which D-0018 stated only in prose: a `Deferred` thunk closes over
   a snapshot and never reads live store state.
+
+## D-0022  A root conflict is its own contradiction only if its derivation is numeric
+Status: DECIDED
+Date: 2026-09-15
+Amends: D-0013, whose "with no decision active there is nothing to negate, and the
+propagator's own derivation *is* the contradiction" was written when `int_lin_le` was the
+only propagator and is false for a second family.
+
+Context: M1-T16's matrix found that an `int_ne` conflict with no decision on the stack was
+handed to `conclusion UNSAT` as though it were a contradiction. It is not. `int_lin_le`'s
+root conflict is a numeric chain closing at `0 >= positive`, which the checker can see is
+infeasible. A `Clause` says "not all of these values at once", which is only a
+contradiction once the facts fixing each variable to its value are present — and the root
+arm wrote no trace, so they were absent. veripb: `Constraint is not a contradiction`.
+
+Decision: a propagator's root conflict is closed as its own contradiction **only when its
+derivation is a pure numeric chain**. A derivation that rests on a `Clause` anywhere —
+because the reason *is* one (`int_ne` with everything fixed), or because a `Combine` folded
+one in as a cited bound (D-0019's last consequence) — is closed the D-0018 way instead:
+the root's own trace lines, the conflict's reason line, the derivation, and then the
+**empty clause** as `rup >= 1 ;`, which is what the conclusion cites. The empty clause is
+not a new shape: it is the nogood over an empty decision stack.
+
+`Search.rests_on_a_clause` is where the two are told apart, by walking the forced
+explanation structurally.
+
+Consequences:
+- D-0021's "every pruning gets a line" now covers the root conflict of a clausal reason
+  too. **Measured**: both instances that pinned this bug verify *without* the root trace,
+  because PB unit propagation refutes them from the rows alone — so neither is evidence
+  that the trace is needed. An instance where it is: `2x>=3, 2x<=5, 2y>=3, 2y<=5, x<>y`,
+  where both bounds need a division so nothing propagates from the rows; it is accepted
+  with the trace and **rejected with the trace blanked**. That is the eighth case in this
+  project where the instance chosen to test a thing could not see it break.
+- **Folding a `Clause` into a `pol` is left in place deliberately.** It is sound — a `pol`
+  derives whatever it derives — and strictly stronger than weakening it away, which
+  produces `0 >= 0` and still fails to close. The defect D-0019's last consequence
+  recorded was the *citation*, not the arithmetic. Weakening would also erase the very
+  signal `rests_on_a_clause` reads, so adopting it later means `linear.ml` must instead
+  tell `search.ml` the derivation is not self-contained.
+- A disequality that removes a value strictly inside the interval moves no bound, writes
+  no trace line, and no order literal can state it. That is D-0019 point 3's boundary, and
+  it is where the direct encoding would become necessary.
