@@ -7,5 +7,7 @@
 #
 # Delete a line the moment its model works. The file should be empty by M1-T11.
 
-ne_sat          int_ne is rejected, not dropped: it needs the direct encoding, M1-T9
-chain_sat       the answer is right and the PROOF is not: the search tries a = 0 first, that branch fails, and the nogood it logs is true but not RUP-reachable (D-0012/D-0017). M1-T13
+ne_sat          int_ne is rejected at compile.ml, not dropped. The propagator and its
+#               proof exist and verify (M1-T9); what is missing is the CLI wiring.
+#               D-0019: it does NOT need the direct encoding -- that was the old reason
+#               on this line and it was wrong.

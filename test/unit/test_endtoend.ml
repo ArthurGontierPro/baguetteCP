@@ -295,14 +295,12 @@ let run_model m =
     check
       (Printf.sprintf "%s: the search really branched" tag)
       (count_occurrences "# 1" proof > 0);
-  (* Only an UNSAT proof exercises the search's own reasoning, and D-0012 says those do
-     not check yet. Marked the way test/models/PENDING marks a known failure: if one
-     starts passing, the suite fails and says to remove the marker. *)
-  (* Since M1-T12 a conflict with no decision active logs its real derivation (D-0013)
-     and verifies. What is still open is the branching case (D-0012, D-0014): a nogood
-     over decision literals that the checker cannot always reach. So the models that
-     have to branch are the ones still marked. *)
-  let xfail_veripb = (not expect_sat) && m.needs_search in
+  (* There is no xfail here any more. M1-T13 (docs/DECISIONS.md D-0018) closed the
+     branching case: a branch's own propagation trace is logged, so the nogood over the
+     decision literals is ordinary RUP and every model in this table verifies. The three
+     models that used to be marked -- the D-0012 parity instances -- are exactly the ones
+     that now exercise the trace, so they are the last ones that should be excused. *)
+  let xfail_veripb = false in
   (match veripb_path () with
   | None ->
       incr failures;
