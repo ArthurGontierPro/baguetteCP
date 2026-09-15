@@ -8,7 +8,7 @@
 
    The printer half is anchored twice. Hand-built models cover the shapes the shipped
    models happen not to contain (bools, negatives, array2d, empty arrays, an empty output
-   list), and then the three satisfiable models in test/models/ are parsed for real and
+   list), and then four of the satisfiable models in test/models/ are parsed for real and
    printed, and the bytes compared with test/expected/*.out. Those files are I-M1 ground
    truth: if this test fails on them the printer is wrong, not the file.
 
@@ -96,7 +96,11 @@ let test_scalars () =
     model
       ~vars:[| v "x" (M.Drange (0, 10)); v "b" M.Dbool; v "n" (M.Drange (-5, 5)) |]
       ~output:
-        [ M.Out_var ("x", M.Var 0); M.Out_var ("b", M.Var 1); M.Out_var ("n", M.Var 2) ]
+        [
+          M.Out_var ("x", M.Oint, M.Var 0);
+          M.Out_var ("b", M.Obool, M.Var 1);
+          M.Out_var ("n", M.Oint, M.Var 2);
+        ]
       ()
   in
   check_str "scalars: int, bool true, negative"
@@ -106,14 +110,32 @@ let test_scalars () =
     ~actual:(O.solution m [| 0; 0; 0 |])
 
 let test_const_item () =
-  (* A `Const' output item is a parameter the builder folded to a literal. Its FlatZinc
-     type is gone by then, so it prints as an integer even if it was a bool — see the
-     comment in output.ml. *)
+  (* A `Const' output item is a parameter the builder folded to a literal. The value
+     alone cannot say whether it was an int or a bool, which is exactly why the item
+     carries its declared [out_ty]: under [Oint] the literal prints as a decimal, under
+     [Obool] as false/true. M1-T21 — before it, every [Const] printed as a decimal and a
+     bool parameter reached the user as `1'. *)
   let m =
-    model ~output:[ M.Out_var ("k", M.Const 42); M.Out_var ("neg", M.Const (-1)) ] ()
+    model
+      ~output:
+        [ M.Out_var ("k", M.Oint, M.Const 42); M.Out_var ("neg", M.Oint, M.Const (-1)) ]
+      ()
   in
-  check_str "const item prints as an integer" ~expected:"k = 42;\nneg = -1;\n----------\n"
-    ~actual:(O.solution m [||])
+  check_str "const item, Oint: prints as an integer"
+    ~expected:"k = 42;\nneg = -1;\n----------\n" ~actual:(O.solution m [||]);
+  let b =
+    model
+      ~output:[ M.Out_var ("t", M.Obool, M.Const 1); M.Out_var ("f", M.Obool, M.Const 0) ]
+      ()
+  in
+  check_str "const item, Obool: prints as false/true"
+    ~expected:"t = true;\nf = false;\n----------\n" ~actual:(O.solution b [||]);
+  (* A Boolean item holding something that is not 0 or 1 is a bug upstream (the builder
+     rejects `var bool: b = 3;'), and I-S1 says it must not be laundered into a
+     plausible-looking `true'. *)
+  let bad = model ~output:[ M.Out_var ("bad", M.Obool, M.Const 3) ] () in
+  check_raises_invalid "const item, Obool: a non-Boolean value raises" (fun () ->
+      O.solution bad [||])
 
 let test_arrays () =
   let m =
@@ -128,19 +150,26 @@ let test_arrays () =
         |]
       ~output:
         [
-          M.Out_array ("x", [ (1, 3) ], [ M.Var 0; M.Var 1; M.Var 2 ]);
-          M.Out_array ("y", [ (1, 2); (1, 2) ], [ M.Var 0; M.Var 1; M.Var 2; M.Var 3 ]);
-          M.Out_array ("z", [ (1, 0) ], []);
-          M.Out_array ("mixed", [ (0, 1) ], [ M.Var 4; M.Const 9 ]);
+          M.Out_array ("x", [ (1, 3) ], M.Oint, [ M.Var 0; M.Var 1; M.Var 2 ]);
+          M.Out_array
+            ("y", [ (1, 2); (1, 2) ], M.Oint, [ M.Var 0; M.Var 1; M.Var 2; M.Var 3 ]);
+          M.Out_array ("z", [ (1, 0) ], M.Oint, []);
+          (* One array declaration has one base type, so an array's [out_ty] governs
+             every element: a [Var] and a folded [Const] side by side print by the same
+             rule. Both directions are covered — an int array mixing the two, and a bool
+             array mixing them. Before M1-T21 the [Const 0] in `flags' printed as `0'. *)
+          M.Out_array ("mixed", [ (0, 1) ], M.Oint, [ M.Var 3; M.Const 9 ]);
+          M.Out_array ("flags", [ (0, 1) ], M.Obool, [ M.Var 4; M.Const 0 ]);
         ]
       ()
   in
-  check_str "array1d / array2d / empty array / mixed operands"
+  check_str "array1d / array2d / empty array / mixed operands / bool array"
     ~expected:
       "x = array1d(1..3, [1, 2, 3]);\n\
        y = array2d(1..2, 1..2, [1, 2, 3, 4]);\n\
        z = array1d(1..0, []);\n\
-       mixed = array1d(0..1, [true, 9]);\n\
+       mixed = array1d(0..1, [4, 9]);\n\
+       flags = array1d(0..1, [true, false]);\n\
        ----------\n"
     ~actual:(O.solution m [| 1; 2; 3; 4; 1 |])
 
@@ -151,7 +180,10 @@ let test_empty_output () =
 
 let test_bad_index () =
   let m =
-    model ~vars:[| v "x" (M.Drange (0, 1)) |] ~output:[ M.Out_var ("x", M.Var 3) ] ()
+    model
+      ~vars:[| v "x" (M.Drange (0, 1)) |]
+      ~output:[ M.Out_var ("x", M.Oint, M.Var 3) ]
+      ()
   in
   check_raises_invalid "out-of-range variable index raises Invalid_argument" (fun () ->
       O.solution m [| 0 |])
@@ -176,7 +208,11 @@ let test_expected_bytes () =
   in
   one "trivial_sat" [| 1 |];
   one "lin_sat" [| 1; 0 |];
-  one "ne_sat" [| 1; 2 |]
+  one "ne_sat" [| 1; 2 |];
+  (* M1-T21. `aliased' and the elements of `flags' are aliases, not variables, so this
+     model declares exactly two: b and x. The interesting bytes are the ones no variable
+     is behind. *)
+  one "bool_out_sat" [| 0; 2 |]
 
 (* ================================================================ check_assignment *)
 

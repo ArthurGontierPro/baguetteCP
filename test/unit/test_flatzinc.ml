@@ -115,7 +115,7 @@ let test_trivial_sat () =
       check "trivial_sat: domain 1..3" (doms m = [ M.Drange (1, 3) ]);
       check "trivial_sat: int_le(x, 2)" (kinds m = [ M.Int_le (M.Var 0, M.Const 2) ]);
       check "trivial_sat: satisfy" (m.M.objective = M.Satisfy);
-      check "trivial_sat: output x" (m.M.output = [ M.Out_var ("x", M.Var 0) ]);
+      check "trivial_sat: output x" (m.M.output = [ M.Out_var ("x", M.Oint, M.Var 0) ]);
       check "trivial_sat: no search annotation" (m.M.search = []))
 
 let test_trivial_unsat () =
@@ -133,7 +133,8 @@ let test_lin_sat () =
       check "lin_sat: constraints"
         (kinds m = [ M.Int_lin_le ([ (1, 0); (2, 1) ], 6); M.Int_lt (M.Var 1, M.Var 0) ]);
       check "lin_sat: output x and y"
-        (m.M.output = [ M.Out_var ("x", M.Var 0); M.Out_var ("y", M.Var 1) ]))
+        (m.M.output
+        = [ M.Out_var ("x", M.Oint, M.Var 0); M.Out_var ("y", M.Oint, M.Var 1) ]))
 
 let test_lin_unsat () =
   with_model "lin_unsat" (fun m ->
@@ -192,9 +193,9 @@ let test_kitchen_sink () =
       check "sink: output items in declaration order"
         (m.M.output
         = [
-            M.Out_var ("s", M.Var 1);
-            M.Out_array ("xs", [ (1, 2) ], [ M.Var 2; M.Var 3 ]);
-            M.Out_var ("obj", M.Var 4);
+            M.Out_var ("s", M.Oint, M.Var 1);
+            M.Out_array ("xs", [ (1, 2) ], M.Oint, [ M.Var 2; M.Var 3 ]);
+            M.Out_var ("obj", M.Oint, M.Var 4);
           ])
 
 let test_misc_accepts () =

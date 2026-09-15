@@ -153,9 +153,38 @@ let check_par_domain pos name (bt : Ast.base_type) n =
         (String.concat "," (List.map string_of_int ns))
   | _ -> ()
 
-let record_scalar_output env (d : Ast.decl) op =
+(* The declared base type, reduced to what the printer needs (SPEC 2.2: a bool prints as
+   false/true, an integer as a decimal). This is where an output item's type is captured,
+   and it is the only place it can be: one line later the declaration is gone and all
+   that is left is an operand, which for a folded parameter is an indistinguishable
+   [Model.Const 1].
+
+   Deliberately total, rather than a detour through [domain_of_base]: that one *rejects*
+   a `var int` with no domain, which is right for a scalar declaration but would newly
+   reject `array [1..2] of var int: xs = [x, y];`, whose elements carry their own
+   declared domains. *)
+let out_ty_of_base (bt : Ast.base_type) =
+  match bt with
+  | Ast.Tbool -> Model.Obool
+  | Ast.Tint | Ast.Trange _ | Ast.Tset _ -> Model.Oint
+
+(* A `var bool` aliased to a constant must be aliased to a *Boolean* constant. Nothing
+   else in the front end looks at this: [check_par_domain] is about `par` declarations,
+   and `bool` has no syntax for a domain to check against. Without it, an ill-typed
+   `var bool: b = 3;` would travel all the way to the printer, which can only raise on it
+   — an error message about the store, thrown at output time, for a mistake that is right
+   here in the declaration. *)
+let check_bool_alias pos name (bt : Ast.base_type) (op : Model.operand) =
+  match (bt, op) with
+  | Ast.Tbool, Model.Const n when n <> 0 && n <> 1 ->
+      Error.failf pos
+        "`%s` is declared `var bool` but is assigned %d, which is not a Boolean value"
+        name n
+  | _ -> ()
+
+let record_scalar_output env ty (d : Ast.decl) op =
   if Ast.has_flag_annot "output_var" d.Ast.d_annots then
-    env.outputs_rev <- Model.Out_var (d.Ast.d_name, op) :: env.outputs_rev
+    env.outputs_rev <- Model.Out_var (d.Ast.d_name, ty, op) :: env.outputs_rev
 
 let dims_of_output_annot pos (args : Ast.expr list) default =
   match args with
@@ -169,13 +198,13 @@ let dims_of_output_annot pos (args : Ast.expr list) default =
         ranges
   | _ -> default
 
-let record_array_output env pos (d : Ast.decl) dims elems =
+let record_array_output env pos ty (d : Ast.decl) dims elems =
   match Ast.find_call_annot "output_array" d.Ast.d_annots with
   | None -> ()
   | Some args ->
       let dims = dims_of_output_annot pos args dims in
       env.outputs_rev <-
-        Model.Out_array (d.Ast.d_name, dims, Array.to_list elems) :: env.outputs_rev
+        Model.Out_array (d.Ast.d_name, dims, ty, Array.to_list elems) :: env.outputs_rev
 
 let bind_scalar env pos name op =
   if Hashtbl.mem env.scalars name || Hashtbl.mem env.arrays name then
@@ -211,8 +240,9 @@ let add_var_scalar env (d : Ast.decl) bt =
     | Some e -> operand env pos e
     | None -> Model.Var (new_var env name dom pos)
   in
+  check_bool_alias pos name bt op;
   bind_scalar env pos name op;
-  record_scalar_output env d op
+  record_scalar_output env (out_ty_of_base bt) d op
 
 let add_par_array env (d : Ast.decl) ix bt =
   let pos = d.Ast.d_pos and name = d.Ast.d_name in
@@ -260,6 +290,7 @@ let add_var_array env (d : Ast.decl) ix bt =
               (u - l + 1)
               len
         | _ -> ());
+        List.iter (check_bool_alias pos name bt) ops;
         Array.of_list ops
     | None -> (
         match ix with
@@ -284,7 +315,7 @@ let add_var_array env (d : Ast.decl) ix bt =
     match ix with Ast.Ix_range (l, u) -> (l, u) | Ast.Ix_int -> (1, Array.length elems)
   in
   bind_array env pos name [ (lo, hi) ] elems;
-  record_array_output env pos d [ (lo, hi) ] elems
+  record_array_output env pos (out_ty_of_base bt) d [ (lo, hi) ] elems
 
 let add_decl env (d : Ast.decl) =
   match d.Ast.d_ti with

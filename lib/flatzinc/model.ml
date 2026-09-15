@@ -35,11 +35,25 @@ type val_choice = Indomain_min | Indomain_max
 type search = Int_search of int list * var_choice * val_choice | Seq of search list
 type objective = Satisfy | Minimize of operand | Maximize of operand
 
+(* How the values of an output item are to be *written*. SPEC 2.2 prints a `bool` as
+   false/true and an integer as a decimal, and the only thing that says which is the
+   declaration the `output_var` / `output_array` annotation sits on — an [operand] cannot
+   say: [Const 1] is the same word for `1` and for `true`, and the builder folds a bool
+   parameter to [Const 1] while resolving names.
+
+   So the type travels *with the output item*, recorded by the builder from the
+   declaration's base type at the moment the item is created. It is not re-derived at
+   print time from the operand (impossible) nor from the referenced variable's domain
+   (possible for [Var], but then [Const] would still have nowhere to get it from, and the
+   two cases would print by two different rules). One declaration, one type, one rule. *)
+type out_ty = Obool | Oint
+
 (* What SPEC 2.2 has to print. Arrays keep their index ranges so the standard FlatZinc
-   `array1d(1..2, [...])` output can be reproduced. *)
+   `array1d(1..2, [...])` output can be reproduced, and carry a single [out_ty]: an
+   array declaration has one base type, so all its elements print the same way. *)
 type output_item =
-  | Out_var of string * operand
-  | Out_array of string * (int * int) list * operand list
+  | Out_var of string * out_ty * operand
+  | Out_array of string * (int * int) list * out_ty * operand list
 
 type t = {
   vars : var array;

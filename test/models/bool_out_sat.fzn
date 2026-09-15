@@ -1,0 +1,29 @@
+% The only model whose output contains `bool` items, so the only one that pins the
+% false/true half of the FlatZinc output format (SPEC 2.2) through the CLI.
+%
+% A bool reaches the printer by three routes, and this model takes all three:
+%
+%   `aliased' -- a `var bool' aliased to a bool *parameter*. The builder folds the
+%                parameter to a constant while resolving names, so nothing about the
+%                value says it was ever a bool. This is the M1-T21 bug: before the fix
+%                it printed `aliased = 1;', which is not valid FlatZinc output.
+%   `flags'   -- an `output_array' of `var bool' whose elements are folded constants
+%                too, one of each truth value.
+%   `b'       -- an honest `var bool' that the search has to assign, and which the
+%                printer used to get right, because a real variable still carries its
+%                declared domain.
+%
+% `x' is here so that one model shows both print styles: 1 as an integer next to 1 as a
+% bool. The solution is unique -- int_eq pins x, b is the only free variable and 0 is
+% the only value in its domain that... is not forced at all: b is unconstrained, so the
+% default search of SPEC 3.4 (input_order, indomain_min) settles it at false. That is
+% the same reliance trivial_sat.fzn has on the default strategy, and if the default ever
+% changes this test is supposed to notice.
+bool: t = true;
+bool: f = false;
+var bool: aliased :: output_var = t;
+array [1..2] of var bool: flags :: output_array([1..2]) = [f, t];
+var bool: b :: output_var;
+var 1..3: x :: output_var;
+constraint int_eq(x, 2);
+solve satisfy;
