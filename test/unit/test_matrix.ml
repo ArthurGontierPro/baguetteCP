@@ -1431,8 +1431,23 @@ let known_bug_ne_trace_facts () =
     "ne/trace-facts: a branch failed, so the trace was written (this is what      \
      test_prop.ml's ne_search cannot reach)"
     (Trace.emitted_ids trace <> []);
-  check "ne/trace-facts: int_ne's factless line is in the proof, byte for byte"
-    (contains "rup +1 y_ge_2 >= 1 ;" proof);
+  (* M1-T17 inverted this check. It used to assert the BUG's bytes -- that the
+     factless line `rup +1 y_ge_2 >= 1 ;` was present -- which pinned the symptom
+     rather than the situation, so fixing the bug turned it red. The instance has
+     exactly one solution, x = 2 and y = 1, so `y >= 2` is false in the model: that
+     line can never be both present and correct.
+
+     What replaces it is strictly stronger, and still byte-for-byte. It names the
+     line the same pruning must now write, which asserts the situation (int_ne moved
+     y's lower bound, citing x fixed to 1) and the content (the facts are there and
+     are the right ones) in one check, with no probe flag needed. The absence of the
+     old form is asserted alongside it, so a regression to a factless line is caught
+     even if some other line happens to satisfy the positive check. *)
+  check
+    "ne/trace-facts: the bound-moving disequality line carries its facts, byte for byte"
+    (contains "rup +1 y_ge_2 +1 ~y_ge_1 +1 ~x_ge_1 +1 x_ge_2 >= 1 ;" proof);
+  check "ne/trace-facts: and the factless form is gone (it was false in this model)"
+    (not (contains "rup +1 y_ge_2 >= 1 ;" proof));
   let trace_ids = Trace.emitted_ids trace in
   let bad =
     List.filter
