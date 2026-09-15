@@ -15,7 +15,6 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 | integration | `test/unit/test_endtoend.ml` | orchestrator | 2026-09-14 — no single session can make it pass alone |
 | M1-T12 — make the D-0013 derivation real: `Explanation` + `Justify` + `int_lin_le` | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/prop/**`, `test/unit/test_prop.ml`, `test/unit/test_justify.ml` | agent-explain | 2026-09-14 — **authorised to change the Explanation ADT**, see D-0013 |
 | M1-T13 — the branching half of D-0013, research only | none — scratchpad only | agent-branch | 2026-09-14 |
-| M1-T11 — wire `int_ne`/`int_lin_ne` into the CLI, clear the last `PENDING` line | `lib/flatzinc/compile.ml`, `test/unit/test_compile.ml`, `test/models/PENDING`, and at release `docs/ROADMAP.md` + this file | agent-ne-wiring | 2026-09-15 — works on branch `worktree-m1-t11-ne-wiring`, not on master |
 
 ## Cross-session requests
 
@@ -36,6 +35,7 @@ work. The owning session picks it up.
 | Each session builds into its own `--build-dir` (`dune build --build-dir=/tmp/baguette-build-<tag> <target>`). Three sessions share `_build/`'s global lock this round, so a bare `dune build` will fail for reasons that are not yours | — | orchestrator | standing, this round |
 | Clarifying this round's split: `lib/core/prop/linear.ml` belongs to **agent-trace**, not agent-ne. A D-0018 trace line states `claim ∨ ¬(reason)` where the reason is the *other terms' current bound literals* — knowledge only the propagator has, and which `Explanation.t` deliberately does not carry in that shape (`Weaken` holds the declared-width chain the `pol` needs, which is a different projection). agent-ne owns `lib/core/prop/ne.ml` and no other file in `prop/` | `lib/core/prop/linear.ml` | orchestrator | standing, this round |
 | M1-T16 runs alone: no other session is active, so agent-tests may add new files under `test/models/` and `test/expected/` (new files only — it must not edit an existing model, an existing expected output, or `PENDING`). Everything under `lib/` stays read-only: this task finds bugs and pins them, it does not fix them | `test/**` | orchestrator | standing, this round |
+| `test/unit/test_matrix.ml`'s empty-cell note (line ~1192) is stale: it says four `int_ne` cells (|a| > 1, common factor, offset domains, negative domains) are left unfilled because "every disequality pruning that moves a bound **currently** emits a factless trace line". M1-T17 fixed that and inverted `known_bug_ne_trace_facts` itself, so the stated reason no longer holds and those cells are fillable. Not touched here — M1-T11 claimed neither the matrix nor `lib/` | `test/unit/test_matrix.ml` | agent-ne-wiring | open |
 
 ## Completed
 
@@ -58,6 +58,7 @@ work. The owning session picks it up.
 | M1-T15 | agent-mutate | 2026-09-15 | D-0020: mutation harness + control lane, 18 checks. Found `lin_unsat`'s refutation has a unit of slack |
 | M1-T16 | agent-tests | 2026-09-15 | Case matrix + randomised differential tester, 152 checks, 17 verified break-it mutations. Found 3 real bugs (2 new), all pinned; gate is red until M1-T17 |
 | M1-T17 | agent-fix + orchestrator | 2026-09-15 | D-0022/I-X7/I-P5: `remove_with_facts`, and a clausal root conflict closed by the empty clause. Gate green |
+| M1-T11 | agent-ne-wiring | 2026-09-15 | `int_ne`/`int_lin_ne` posted by `compile.ml` instead of rejected, + five disequality models. 14/14 models verify, `PENDING` empty, 864 unit checks. On branch `worktree-m1-t11-ne-wiring` |
 
 ## Handoff notes
 
@@ -280,3 +281,51 @@ times. Two-phase upgrade proposed and not yet taken: adopt the Rust checker whil
 emitting 2.0 (no proof changes), then migrate emission to 3.0 before M2. Phase 2
 supersedes D-0002 and needs its own decision record; its prize is **labels**, which delete
 the `=`-counts-as-two-constraints trap in PROOF-FORMAT section 2 outright.
+
+**2026-09-15 — agent-ne-wiring, M1-T11: the last PENDING line is gone**
+
+`compile.ml` now posts both disequalities, so `test/models/PENDING` is empty and all 14
+models solve with a proof veripb accepts (864 unit checks, 0 failures). M1-T11 and the
+CLI half of M1-T9 are closed.
+
+**The wiring itself was three lines, as the last handoff said. The hour went on finding
+an instance that could watch it fail.** `ne_sat.fzn` — the model this task was measured
+by, and the one line in `PENDING` — carries `int_lt(x, y)` beside its `int_ne`, and
+`int_lt` alone fixes `x = 1, y = 2`. It passes whether or not the disequality does
+anything, and its SAT proof contains no `rup` at all, because a search that never
+conflicts never cites a reason and `conclusion SAT` is self-checking. Wiring `int_ne`
+and calling that green would have been the sixth instance in this project that could not
+see the thing it tested break. Five models now cover what it cannot: a bound moved by
+`int_ne` alone, `int_lin_ne`'s division under a non-unit coefficient (nothing exercised
+`int_lin_ne` from the CLI before — every `int_ne` is `1*x + (-1)*y <> 0`), a satisfiable
+run refuted once *by* a clause, both branches closed by clauses and resolved to the
+empty clause, and `int_ne(x, x)`.
+
+Two things worth knowing before touching this area.
+
+**`Engine.create` indexes its array by `Propagator.id`**, so an instance's id must equal
+its position in the list it is handed — and an arm of `compile`'s match may yield one
+instance or two, so it cannot know its own position. The arms now yield `pending`
+instances (`int -> Propagator.instance`) and `compile` assigns ids once with a single
+`List.mapi`. A new arm that packs its own instance with an id it invents will look
+correct and will run the wrong propagator.
+
+**`int_ne(x, x)` is a real case and it works.** `normalise_terms` merges the two
+occurrences into a zero coefficient and drops it, leaving the false empty sum, and both
+halves agree about it with no variable left to disagree over: the A/B rows degenerate to
+two contradictory units on the auxiliary Boolean, the propagator conflicts with an empty
+`Clause`, and the refutation is `rup >= 1 ;` closed the D-0022/I-X7 way. That is
+`ne_self_unsat.fzn`. No special case was added and none should be — it is the
+ground-constraint argument in `compile.ml`'s header, a second time.
+
+One finding handed back rather than fixed, in `Cross-session requests`:
+`test_matrix.ml`'s empty-cell note still says disequality prunings emit a factless trace
+line, which M1-T17 fixed. Four `int_ne` shape cells are now fillable and the note says
+they are not. M1-T11 claimed neither the matrix nor `lib/`, so it is a request.
+
+Note for whoever merges: this work is on branch `worktree-m1-t11-ne-wiring`, not on
+master. `test_output` and `test_mutation` locate the checkout from the cwd or the
+executable path, so building into a `--build-dir` outside the tree makes both FAIL
+loudly (not skip) — pass `BAGUETTE_ROOT`, or just use `dune --root .` inside the
+worktree, which gives each worktree its own `_build` and no shared lock at all. That is
+a cheaper answer to the `_build` contention in CLAUDE.md than a private `--build-dir`.

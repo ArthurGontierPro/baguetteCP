@@ -36,9 +36,9 @@ Goal: solve models with only linear integer constraints, and VeriPB accepts ever
 | M1-T7b | `Justify`: explanation to VeriPB rules | DONE | `Linear` states its own terms as `rup`; memo dropped in lockstep with the writer's wipe |
 | M1-T7c | Order-encoding expansion of `sum a_i x_i` into a PB row | DONE | `Encoding.expand_int_lin_le`; the consistency clauses are load-bearing |
 | M1-T8 | `int_lin_eq`, `int_le`, `int_lt`, `int_eq` | DONE | one instance per model row, not one fused propagator (D-0011) |
-| M1-T9 | `int_lin_ne`, `int_ne` | DONE | D-0019: it does **not** need the direct encoding — a `rup` target is a clause. Propagator + proof verify; CLI wiring in `compile.ml` is the only thing left, tracked by M1-T11 |
+| M1-T9 | `int_lin_ne`, `int_ne` | DONE | D-0019: it does **not** need the direct encoding — a `rup` target is a clause. Propagator + proof verify, and M1-T11 wired both builtins into `compile.ml` |
 | M1-T10 | DFS search with first-fail, decisions logged in the proof | DONE | the answer is right everywhere; the branch-nogood *proof* is open (D-0012) |
-| M1-T11 | End-to-end: 5 small models solve and verify | WIP | 6 of 7 do, and every UNSAT proof now verifies with no xfail. `PENDING` holds only `ne_sat`, which needs `int_ne` wired into `compile.ml` |
+| M1-T11 | End-to-end: 5 small models solve and verify | DONE | **14 of 14** solve and verify, and `test/models/PENDING` is empty for the first time. `int_ne`/`int_lin_ne` wired into `compile.ml`, plus five disequality models — `ne_sat` could not see `int_ne` break, since `int_lt` alone solves it |
 | M1-T12 | Make the D-0013 derivation real: `Combine`/`Weaken`/`Model_row` + the root conflict | DONE | D-0015; root refutations now verify |
 | M1-T13 | The branching half of D-0013: justify a conflict reached under decisions | DONE | D-0018 + D-0021. One `rup` line per pruning, root prunings included; the nogood is ordinary `rup` along it. `chain_sat` and the three D-0012 parity models verify |
 | M1-T14 | Wire the CLI: `.fzn` in, solution + proof out | DONE | 5 models solve with verified proofs; `Compile` + `Output` + `Model.check_assignment` |
