@@ -301,9 +301,26 @@ let contains needle s =
    in exactly these). Everything else -- [#], [w], [del], [*], [output], [conclusion] --
    mints nothing, so walking the file with this counter reproduces the checker's
    numbering and lets a line be matched to the id the solver got back for it. *)
+(* A 3.0 rule that yields an id is prefixed with its label, `@c7 rup ... ;` (D-0023),
+   so the rule name is not always the start of the line. Splitting the label off keeps
+   every predicate below reading one format or the other without knowing which -- and
+   without it [mints_id] silently matches nothing under 3.0, which would make the
+   blanking control blank NOTHING and then "fail" for a reason that has nothing to do
+   with the trace. *)
+let label_prefix line =
+  if String.length line > 0 && line.[0] = '@' then
+    match String.index_opt line ' ' with
+    | Some i -> String.sub line 0 (i + 1)
+    | None -> ""
+  else ""
+
+let strip_label line =
+  let n = String.length (label_prefix line) in
+  String.sub line n (String.length line - n)
+
 let mints_id line =
   List.exists
-    (fun p -> starts_with p line)
+    (fun p -> starts_with p (strip_label line))
     [ "pol "; "rup "; "red "; "solx "; "soli "; "obju " ]
 
 (* Every rule line of the proof, as (id, text). *)
@@ -324,15 +341,21 @@ let numbered_rules ~n_model proof =
    question being asked -- is this line derivable from the model alone? -- with no
    search, no decisions and no other derived constraint in the database. *)
 let standalone ~dir ~opb ~n_model rule_line =
+  (* The wrapper has to be in the same format as the line it wraps, or the checker
+     rejects the *wrapper* and the test reads that as the trace line failing. Which
+     format is whatever the writer that produced [rule_line] used. *)
+  let v3 = Writer.default_format () = Writer.V3_0 in
+  let t s = if v3 then s ^ " ;" else s in
   run_veripb ~dir ~opb
     (String.concat "\n"
        [
-         "pseudo-Boolean proof version 2.0";
-         Printf.sprintf "f %d" n_model;
+         Printf.sprintf "pseudo-Boolean proof version %s"
+           (Writer.format_to_string (Writer.default_format ()));
+         t (Printf.sprintf "f %d" n_model);
          rule_line;
-         "output NONE";
-         "conclusion NONE";
-         "end pseudo-Boolean proof";
+         t "output NONE";
+         t "conclusion NONE";
+         t "end pseudo-Boolean proof";
          "";
        ])
 
@@ -349,7 +372,10 @@ let blank_rules ~n_model ~victim ~taut proof =
        (fun line ->
          if mints_id line then (
            incr id;
-           if victim !id then taut else line)
+           (* Keep the label: under 3.0 it is the NAME later rules cite, so dropping it
+              turns every later citation into a parse error and the control would then
+              be green because the proof no longer parses. *)
+           if victim !id then label_prefix line ^ taut else line)
          else line)
        (lines_of proof))
 
@@ -403,9 +429,15 @@ let run_model m =
 
   (* ---- the search went as deep as this model is here to make it go, and a branch
      really failed: no trace line means nothing below tests anything. *)
+  (* A decision level is `# N` in a 2.0 proof and the comment `% level N` in a 3.0 one,
+     which has no set-level rule (D-0024). Checking only for `# N` would make this
+     vacuously FALSE under 3.0, so the check would fail rather than silently pass --
+     but the neighbouring checks that count on the search having gone deep would then
+     be running on an instance nobody had confirmed. Accept either spelling. *)
   check
     (Printf.sprintf "%s: the search reached depth %d" tag m.min_depth)
-    (contains (Printf.sprintf "# %d" m.min_depth) proof);
+    (contains (Printf.sprintf "# %d" m.min_depth) proof
+    || contains (Printf.sprintf "%% level %d" m.min_depth) proof);
   check (tag ^ ": a branch failed, so a trace was written") (List.length trace_ids > 0);
 
   (* ---- ordering (D-0018 point 4): no [w] appears before the last trace line, i.e.
@@ -525,16 +557,27 @@ let byte_contract proof =
   expect "the nogood over the negated decision" "rup +1 a_ge_1 >= 1 ;";
   (* Order: the whole trace, then the conflict line, then the nogood, then the wipe. *)
   let ls = lines_of proof in
-  let pos needle =
+  (* Substring, not whole-line: a 3.0 rule carries a `@cN ` label in front of it. *)
+  let pos_if f =
     let best = ref (-1) in
-    List.iteri (fun i l -> if !best < 0 && l = needle then best := i) ls;
+    List.iteri (fun i l -> if !best < 0 && f l then best := i) ls;
     !best
   in
+  let pos needle = pos_if (fun l -> contains needle l) in
   let p_trace = pos "rup +1 ~c_ge_3 +1 b_ge_2 >= 1 ;" in
   let p_conflict = pos "rup +1 a_ge_1 +1 b_ge_2 +1 c_ge_3 >= 1 ;" in
   let p_nogood = pos "rup +1 a_ge_1 >= 1 ;" in
-  let p_wipe = pos "w 1" in
-  check "chain bytes: trace, then conflict line, then nogood, then the wipe"
+  (* The backtrack. `w 1` in 2.0; in 3.0 there is no wipe rule and the backtrack is the
+     explicit deletion the writer emits in its place (D-0024). Either way it is the
+     first retiring line in the file, and D-0018 point 4 is that nothing is retired
+     before the nogood is written -- which is the property under test here and is
+     unchanged by the format. *)
+  let p_wipe =
+    pos_if (fun l ->
+        let l = String.trim l in
+        l = "w 1" || (String.length l >= 4 && String.sub l 0 4 = "del "))
+  in
+  check "chain bytes: trace, then conflict line, then nogood, then the backtrack"
     (p_trace >= 0 && p_trace < p_conflict && p_conflict < p_nogood && p_nogood < p_wipe)
 
 let () =

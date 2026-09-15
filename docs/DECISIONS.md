@@ -1061,31 +1061,40 @@ So: yes, with two qualifications that must be said plainly.
 `test_proof.ml` checks the full 3.0 vocabulary end to end, including two negative
 controls (3.0.2 must REJECT a corrupted 3.0 proof; 2.2.2 must reject a 3.0 proof).
 
-The default is 2.0 because flipping it turns **80 unit checks red**, in files this
-session does not own. Measured by running every test executable with
-`BAGUETTE_PROOF_FORMAT=3.0`:
+The default is 2.0 because flipping it leaves **58 unit checks red**, 43 of them in a
+file this session does not own. Measured by running every test executable with
+`BAGUETTE_PROOF_FORMAT=3.0`. It was 80 before the format-agnostic fixes listed in the
+right-hand column:
 
 | executable | failures | why |
 |---|---|---|
-| `test_matrix` | 43 | resolves its own checker (`~/.local/bin`, which cannot read 3.0) and greps proofs for `# 1` to detect a decision level. Owned by another session. |
-| `test_mutation` | 11 | `mutate_proof.sh` is a 2.0 parser |
-| `test_trace` | 11 | pins emitted 2.0 line text |
+| `test_matrix` | 43 | resolves its own checker (`~/.local/bin`, which cannot read 3.0 at all) and greps proofs for `# 1` to detect a decision level. **Owned by another session** — not touched |
 | `test_justify` | 4 | pins emitted 2.0 line text |
 | `test_prop` | 4 | pins emitted 2.0 line text |
 | `test_endtoend` | 4 | greps for `# 1` |
 | `test_proof` | 2 | pins the unlabelled `.opb` and the `f` line |
 | `test_random` | 1 | greps for `# 1` |
+| `test_mutation` | **0** (was 11) | `mutate_proof.sh` taught both grammars: an optional `@label` before the rule name, `% level N` as well as `# N`, and `del range` expansion when working out which ids are already dead |
+| `test_trace` | **0** (was 11) | label-aware `mints_id`, a standalone-check wrapper in the proof's own format, and a backtrack test that accepts the explicit deletion 3.0 uses in place of `w` |
 
 None of these is a proof being wrong. Every one is a test that pins 2.0 *text*, which
 is a correct thing for those tests to do and exactly why they have to be changed
-deliberately rather than deleted. The two `# 1` greps are the ones to be careful with:
-under 3.0 they become vacuously true, which is a test that silently stops testing —
-the failure mode this project keeps finding. They need the `% level 1` marker, not
-removal.
+deliberately rather than deleted. The `# 1` greps are the ones to be careful with:
+under 3.0 they become vacuously true or vacuously false depending on their polarity,
+and a test that silently stops testing is the failure mode this project keeps finding.
+They need the `% level 1` marker, not removal. `test_mutation` and `test_trace` show
+what that looks like; the two `not (contains "# 1" ...)` assertions in `test_matrix`
+are the dangerous ones, because they go vacuously TRUE.
+
+One thing the fix to `mutate_proof.sh` exposed, worth knowing before reading a green
+lane: under 3.0 the `drop-line` mutation also un-defines the deleted step's label, so
+any later rule citing it is a *parse* error. The lane then holds for a reason that has
+nothing to do with the derivation — it holds on `chain_sat`, where under 2.0 it
+correctly reported the instance as wrong for that lane. Noted in the script.
 
 Flipping the default is a single change to `Writer.format_from_env`'s fallback plus
-those eight files. It is not attempted here because `test_matrix.ml` is held by another
-session and 43 of the 80 are in it.
+those six files. It is not attempted here because `test_matrix.ml` is held by another
+session and 43 of the 58 are in it.
 
 ## D-0024  VeriPB 3.0 deletes the level stack, so the writer keeps the tags
 Status: DECIDED

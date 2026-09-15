@@ -66,6 +66,11 @@ drop-line      delete one emitted derivation step entirely -- `pol`, `rup`, `red
                solution rule, by default the last one. Never a `#`, `w` or `del`: failing
                to delete is not an error (PROOF-FORMAT section 5), so a lane built on one
                of those would be green for the wrong reason.
+               NOTE on 3.0: deleting a step also un-defines its label, so any later
+               `del`/`pol` citing it is a PARSE error. The lane then holds for a reason
+               that has nothing to do with the derivation -- it holds on chain_sat, where
+               under 2.0 it correctly reported the instance as wrong for this lane. Read a
+               green 3.0 drop-line as "the label was still referenced", not as slack found.
 EOF
 }
 
@@ -155,6 +160,48 @@ cleanup() {
 # pol-cite to pick a replacement id that is still live.
 f_count() { awk '$1=="f" {print $2; exit}' "${PROOF}"; }
 
+# --- 2.0 or 3.0? -------------------------------------------------------------------
+# The two formats are separate grammars (docs/PROOF-FORMAT.md sections 2 and 2a) and
+# every awk program below has to read both, or the lane reports "no eligible site" on
+# a 3.0 proof -- which is exit 3, correctly NOT a pass, but also not a test. The two
+# differences that matter to a text mutator:
+#
+#   * a rule may be prefixed with a label, so the rule name is not always $1;
+#   * the level marker is `# N` in 2.0 and the comment `% level N` in 3.0.
+#
+# Both are handled by the shared awk prelude below rather than by branching per lane.
+FORMAT="$(awk '/^pseudo-Boolean proof version/ {print $NF; exit}' "${PROOF}")"
+case "${FORMAT}" in
+  2.0|3.0) ;;
+  *) echo "mutate_proof.sh: ${PROOF} declares proof format '${FORMAT}', which this" >&2
+     echo "     script does not know how to corrupt. Nothing was tested." >&2
+     exit 2 ;;
+esac
+
+# Prepended to every awk program here. [r] is the index of the rule-name token and
+# [rule] the name itself, so `rule == "pol"` works whether or not the line is
+# labelled. [lvl] tracks the decision level across both markers.
+read -r -d '' AWK_PRELUDE <<'AWKEOF' || true
+function rulestart(   i) { return ($1 ~ /^@/) ? 2 : 1 }
+function rulename(   i) { i = rulestart(); return $i }
+# A constraint reference: a bare id in 2.0, the label @cN in 3.0. Both forms are
+# recognised everywhere, and a replacement is written back in the form it replaced.
+function is_id(t) { return t ~ /^[0-9]+$/ || t ~ /^@c[0-9]+$/ }
+function id_num(t) { sub(/^@c/, "", t); return t + 0 }
+function same_form(orig, n) { return (orig ~ /^@/) ? "@c" n : "" n }
+# The decision level marker: `# N` in 2.0, the comment `% level N` in 3.0 (there is no
+# set-level RULE there at all -- D-0024). `w N` ends a level in 2.0; 3.0 backtracks
+# with a deletion that carries no level, so after a 3.0 backtrack [lvl] stays where the
+# last marker put it. That only misclassifies a claim emitted AFTER a wipe, and nothing
+# emits one -- deletions and the conclusion follow. Said here rather than left to be
+# rediscovered.
+function read_level(   ) {
+  if ($1 == "#" && $2 ~ /^[0-9]+$/) { return $2 + 0 }
+  if ($1 == "%" && $2 == "level" && $3 ~ /^[0-9]+$/) { return $3 + 0 }
+  return -1
+}
+AWKEOF
+
 # Pick the claim line to corrupt, and say where it came from: "branch" (emitted inside a
 # decision level) or "root". Shared by `rup-drop-lit` and `rhs-const`, because both are
 # subject to the same two traps.
@@ -170,15 +217,15 @@ f_count() { awk '$1=="f" {print $2; exit}' "${PROOF}"; }
 #
 # $1 = 1 to allow a unit claim as a last resort, 0 to refuse one.
 select_claim() {
-  awk -v nth="${NTH}" -v allow_unit="$1" '
+  awk -v nth="${NTH}" -v allow_unit="$1" "${AWK_PRELUDE}"'
     function nterms(  i, c) {
       c = 0
       for (i = 2; i <= NF; i++) { if ($i == ">=") break; if ($i ~ /^[+-]?[0-9]+$/) c++ }
       return c
     }
-    $1 == "#" { lvl = $2 + 0; next }
-    $1 == "w" { lvl = $2 - 1; if (lvl < 0) lvl = 0; next }
-    $1 == "rup" || $1 == "u" || $1 == "red" {
+    read_level() >= 0 { lvl = read_level(); next }
+    $1 == "w" && $2 ~ /^[0-9]+$/ { lvl = $2 - 1; if (lvl < 0) lvl = 0; next }
+    rulename() == "rup" || rulename() == "u" || rulename() == "red" {
       n = nterms()
       if (n >= 2 && lvl >= 1) branch[++nb] = NR
       else if (n >= 2)        root[++nr] = NR
@@ -213,20 +260,21 @@ case "${MUT}" in
     ;;
 
   pol-coeff)
-    awk -v nth="${NTH}" -v desc="${DESC}" '
+    awk -v nth="${NTH}" -v desc="${DESC}" "${AWK_PRELUDE}"'
       function isnum(t) { return t ~ /^-?[0-9]+$/ }
       function islit(t) { return t ~ /^~?[A-Za-z_][A-Za-z0-9_]*$/ }
       {
-        if (!done && ($1 == "pol" || $1 == "p")) {
+        if (!done && rulename() == "pol") {
+          rs = rulestart()
           n = split($0, t, " ")
           idx = 0; kind = ""
-          for (i = 3; i <= n; i++)
+          for (i = rs + 2; i <= n; i++)
             if (t[i] == "d" && isnum(t[i-1])) { idx = i-1; kind = "divisor"; break }
           if (idx == 0)
-            for (i = 3; i <= n; i++)
+            for (i = rs + 2; i <= n; i++)
               if (t[i] == "*" && isnum(t[i-1])) { idx = i-1; kind = "multiplier"; break }
           if (idx == 0)
-            for (i = 2; i <= n; i++)
+            for (i = rs + 1; i <= n; i++)
               if (islit(t[i])) { idx = i; kind = "axiom"; break }
           if (idx > 0) {
             hit++
@@ -249,36 +297,52 @@ case "${MUT}" in
     ;;
 
   pol-cite)
-    DELETED="$(awk '($1=="del"||$1=="d"||$1=="delc") && $2=="id" {for(i=3;i<=NF;i++) printf "%s ", $i}' "${PROOF}")"
-    awk -v nth="${NTH}" -v desc="${DESC}" -v nf="$(f_count)" -v deleted="${DELETED}" '
-      function isnum(t) { return t ~ /^[0-9]+$/ }
+    # Which ids are already retired at the point pol-cite runs, so it never swaps in a
+    # dead one -- that would make the lane green because the id is gone, not because the
+    # derivation is load-bearing. Covers 2.0's `del id N`/`delc id N` and 3.0's
+    # `del id @cN`, `delc @cN` and `del range @cLO @cHI` (which names a span, not a list,
+    # and so has to be expanded).
+    DELETED="$(awk "${AWK_PRELUDE}"'
+      $1=="del" || $1=="d" || $1=="delc" {
+        start = 3
+        if ($2 != "id" && $2 != "range") start = 2     # 3.0 delc takes the ref directly
+        if ($2 == "range" && is_id($3) && is_id($4)) {
+          for (k = id_num($3); k <= id_num($4); k++) printf "%s ", k
+          next
+        }
+        for (i = start; i <= NF; i++) if (is_id($i)) printf "%s ", id_num($i)
+      }' "${PROOF}")"
+    awk -v nth="${NTH}" -v desc="${DESC}" -v nf="$(f_count)" -v deleted="${DELETED}" "${AWK_PRELUDE}"'
       BEGIN {
         split(deleted, dd, " ")
         for (k in dd) if (dd[k] != "") dead[dd[k]] = 1
       }
       {
-        if (!done && ($1 == "pol" || $1 == "p")) {
+        if (!done && rulename() == "pol") {
+          rs = rulestart()
           n = split($0, t, " ")
-          # An integer operand is an id unless the next token makes it a coefficient.
+          # An operand is a constraint reference unless the next token makes the number
+          # a coefficient. A label is never a coefficient, so only the bare form needs
+          # that guard.
           idx = 0
-          for (i = 2; i <= n; i++)
-            if (isnum(t[i]) && t[i+1] != "*" && t[i+1] != "d") { idx = i; break }
+          for (i = rs + 1; i <= n; i++)
+            if (is_id(t[i]) && t[i+1] != "*" && t[i+1] != "d") { idx = i; break }
           if (idx > 0) {
             delete cited
-            for (i = 2; i <= n; i++) if (isnum(t[i])) cited[t[i]] = 1
-            orig = t[idx] + 0
+            for (i = rs + 1; i <= n; i++) if (is_id(t[i])) cited[id_num(t[i])] = 1
+            orig = id_num(t[idx])
             cand = 0
             for (off = 1; off <= nf && cand == 0; off++) {
               for (s = -1; s <= 1 && cand == 0; s += 2) {
                 c = orig + (s * off)
-                if (c >= 1 && c <= nf && !(c in dead) && !(("" c) in cited)) cand = c
+                if (c >= 1 && c <= nf && !(c in dead) && !((c) in cited)) cand = c
               }
             }
             if (cand > 0) {
               hit++
               if (hit == nth) {
                 before = $0
-                t[idx] = cand
+                t[idx] = same_form(t[idx], cand)
                 out = t[1]
                 for (i = 2; i <= n; i++) out = out " " t[i]
                 printf "line %d: cited id %d replaced by live id %d\n  before: %s\n   after: %s\n", \
@@ -363,9 +427,10 @@ case "${MUT}" in
     # not make a proof wrong", so a lane built on a dropped `w` is green for the wrong
     # reason, and a dropped `f`/`output`/`conclusion` tests the parser rather than the
     # derivation. Default target is the LAST such step, the one the conclusion leans on.
-    TARGET="$(awk '
-      $1=="pol" || $1=="p" || $1=="rup" || $1=="u" || $1=="red" || \
-      $1=="solx" || $1=="v" || $1=="soli" || $1=="o" { deriv[++nd] = NR }
+    TARGET="$(awk "${AWK_PRELUDE}"'
+      rulename()=="pol" || rulename()=="p" || rulename()=="rup" || rulename()=="u" || \
+      rulename()=="red" || rulename()=="solx" || rulename()=="v" || \
+      rulename()=="soli" || rulename()=="o" { deriv[++nd] = NR }
       END { if (nd >= '"${NTH}"') print deriv[nd - '"${NTH}"' + 1] }' "${PROOF}")"
     if [ -n "${TARGET}" ]; then
       awk -v tline="${TARGET}" -v desc="${DESC}" '
