@@ -20,7 +20,6 @@ share an `_build` lock:
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M1-T18 + M1-T19 — adopt the Rust VeriPB 3.0.2 checker, then migrate emission to format 3.0 | `lib/proof/**`, `lib/core/justify.ml`, `lib/core/trace.ml`, `lib/core/search.ml`, `lib/core/explanation.ml`, `lib/core/prop/**`, `scripts/**`, `docs/PROOF-FORMAT.md`, `docs/SPEC.md`, `docs/DECISIONS.md` (append only), `test/unit/test_{proof,justify,mutation,trace}.ml` | agent-proof3 | 2026-09-15 — **authorised to supersede D-0002**, which is what phase 2 requires |
-| M1-T20 — correct the empty-cell note M1-T17 invalidated, and fill the four `int_ne` shape cells | `test/unit/test_matrix.ml` only | agent-matrix | 2026-09-15 — `lib/` is read-only for it: this task pins behaviour, it does not change it |
 
 `WORKLOG.md`, `docs/ROADMAP.md`, `test/models/PENDING` and all `dune` files are
 orchestrator-held this round; no agent touches them, and the merge is the orchestrator's.
@@ -72,6 +71,7 @@ work. The owning session picks it up.
 | M1-T12 | agent-explain + orchestrator | 2026-09-15 | D-0015: `Combine`/`Weaken`/`Model_row` made real and the root conflict wired to its derivation; two UNSAT proofs verify. Row added 2026-09-15 — the task shipped but was never released from Active claims |
 | integration | orchestrator | 2026-09-15 | `test/unit/test_endtoend.ml` is green as part of the 864-check suite. Row added 2026-09-15 — released late, same reason |
 | M1-T21 | agent-output + orchestrator | 2026-09-15 | An output item carries its declared `out_ty`, captured in `builder.ml` where the declaration is still in hand. `bool_out_sat.fzn` pins all three routes to the printer. 868 unit checks, 15/15 models |
+| M1-T20 | agent-matrix + orchestrator | 2026-09-15 | Three new disequality instances fill the offset and negative-domain cells for both propagators and `|a|>1` / common-factor for `int_lin_ne`; the note now distinguishes cells blocked by a bug from cells unreachable by construction. 194 matrix checks |
 
 ## Handoff notes
 
@@ -395,3 +395,32 @@ aliasing such a par into a `var bool` is a declaration-site error.
 
 One file outside the assignment: `test/unit/test_flatzinc.ml`, unowned this round,
 changed mechanically for the constructor arity. No assertion changed meaning.
+
+**2026-09-15 — orchestrator, M1-T20 merged: two cells stay empty, and the reason changed**
+
+The note was wrong and the task was live: M1-T17's `Store.remove_with_facts` really did
+unblock those cells. Three new instances now cover the offset and entirely-negative
+shapes for both disequalities, and `|a| > 1` and common-factor for `int_lin_ne`.
+
+**`int_ne` x `|a| > 1` and x common-factor stay empty, and the note no longer blames the
+bug.** `int_ne` *is* `1*x + (-1)*y <> 0` — its coefficients are 1 and -1 in every
+instance there can ever be, so those shapes are unreachable **by construction**. They
+could be turned X by putting a big coefficient on some *other* row of an `int_ne` model,
+since a shape is credited to every propagator in an instance's `props`; that would record
+something `int_ne` did not do. Left empty on purpose, like the `int_lt` row. The
+remainder column is empty for the same kind of reason: a non-zero remainder is precisely
+where a disequality declines to prune, so there is no push to round.
+
+Verified here rather than taken on report. I re-ran the agent's mutation myself — stubbed
+`Ne.propagate` to `Fixpoint`, rebuilt, and watched all three new instances fail by name
+(`int_ne/negative-domain`, `int_lin_ne/common-factor-offset`, `int_lin_ne/coprime-negative`),
+58 failures in all — then reverted and confirmed 915 `ok`, 0 FAIL, 194 matrix checks.
+
+**The finding to carry forward.** The agent's first drafts were two-variable models, and
+they failed the existing `every nogood needs the trace — none is standalone-RUP` check:
+over domains whose declared bounds the search reaches directly, veripb's own unit
+propagation replays the whole refutation from the `.opb`, so the nogood is standalone-RUP
+and the trace it was supposed to rest on was never load-bearing. A passing, hollow proof
+— the seventh instance of this project's signature failure mode, caught this time by a
+check rather than by a human. The instances were fixed, not the check. That check has now
+paid for itself twice.
