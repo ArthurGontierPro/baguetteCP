@@ -1,0 +1,36 @@
+% A satisfiable model whose search must guess WRONG before it can succeed.
+%
+% Every other satisfiable model in test/models/ except chain_sat.fzn is solved by a
+% search that guesses right at every level, which is exactly the blind spot D-0017
+% recorded: a SAT run only logs a nogood if a branch fails first, so none of them
+% exercises the branch-level proof at all.
+%
+% This claim is MEASURED, not reasoned about -- an earlier version of this file asserted
+% it from indomain_min and was wrong, because root propagation happened to fix every
+% variable and the proof contained no `# 1` at all. The emitted proof for this model
+% contains, in order: four level-0 trace lines, a `# 1` decision level, six more trace
+% lines under it, the conflict's own reason line, the nogood `rup +1 r_ge_3 >= 1 ;`,
+% the `w 1` that retires the branch, and `conclusion SAT`. The same model is mirrored as
+% [guess_wrong (mirrors test/models/guess_wrong_sat.fzn)] in test/unit/test_matrix.ml,
+% where "a solution found only after a branch failed" is an asserted check rather than a
+% sentence in a comment -- so if the search shape ever changes, something goes red.
+%
+% The expected output is a fact about the model, not about the search: p + q + r = 6 and
+% 2p + 3q + 4r = 20 under p <= q <= r has exactly one solution over 1..4, checked by
+% enumeration. So this file stays ground truth under invariant I-M1 whatever strategy the
+% solver uses.
+%
+% Data shape: the domains are offset away from zero (1..4, the D-0010 shape, so every
+% bound fact is several order literals from its declared bound), and the second row's
+% coefficients are all past |1| with two of them sharing a factor, so the Combine
+% division is non-trivial and rounds.
+array [1..3] of int: ones = [1, 1, 1];
+array [1..3] of int: weights = [2, 3, 4];
+var 1..4: p :: output_var;
+var 1..4: q :: output_var;
+var 1..4: r :: output_var;
+constraint int_lin_eq(ones, [p, q, r], 6);
+constraint int_lin_eq(weights, [p, q, r], 20);
+constraint int_le(p, q);
+constraint int_le(q, r);
+solve satisfy;
