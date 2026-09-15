@@ -1,0 +1,23 @@
+% Unsatisfiable by parity, over three domains that are entirely negative.
+%
+% 2a - 2b + 2c is even for every integer assignment and -5 is odd, so there is no
+% solution -- and -5 sits inside the row's own [-14, 4] span, so no bound can see that.
+% The search has to branch, refute both children at every level, and resolve the two
+% nogoods back to the empty clause: the shape D-0018 says is the only one that can catch
+% a regression in the branch-level derivation ("a root-level UNSAT model cannot catch a
+% regression here"), which test/models/lin_unsat.fzn and trivial_unsat.fzn cannot do
+% because both are refuted at level 0.
+%
+% The data shape is the other half of the point. D-0021 measured that chain_sat cannot
+% distinguish "root prunings need trace lines" from "they do not" -- blank either half of
+% its trace and it still verifies -- and that an OFFSET domain is what makes the
+% difference visible. Every domain here is offset and entirely negative, the coefficients
+% share a factor of 2 and are all past |1|, and one is negative, so every bound fact is
+% several order literals away from its declared bound and the expansion's constant is
+% non-zero.
+array [1..3] of int: coeffs = [2, -2, 2];
+var -4..-1: a :: output_var;
+var -4..-1: b :: output_var;
+var -4..-1: c :: output_var;
+constraint int_lin_eq(coeffs, [a, b, c], -5);
+solve satisfy;
