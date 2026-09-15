@@ -106,8 +106,18 @@
    sum as though it were a bound derivation. [Linear]'s [Snap_cite] path does exactly
    that when it cites the trail entry that last moved a bound (lib/core/prop/linear.ml,
    [find_lo_reason]/[find_hi_reason]) -- and this propagator *can* move a bound, since
-   removing a value at [lo] or [hi] shrinks the interval. That composition is reported
-   as a cross-session request rather than worked around here; see the hand-back note.
+   removing a value at [lo] or [hi] shrinks the interval.
+
+   M1-T17 note on that composition: the [pol] it produces is *sound* (a [pol] is sound
+   whatever it cites; it simply derives something valid that is not the bound the row's
+   own slack argument claimed), and what was actually broken was downstream --
+   lib/core/search.ml's root arm cited that [pol] to [conclusion UNSAT] as though it
+   were a contradiction, which veripb rejects with "Constraint is not a contradiction".
+   [Search.rests_on_a_clause] now recognises a derivation that rests on a clause and
+   closes such a root conflict the D-0018 way, over the trace, so nothing this module
+   produces is cited as a contradiction it does not establish. Making [Snap_cite] itself
+   weaken rather than cite is still open; see the M1-T17 hand-back for the measurement
+   of what that costs and which pinned check it moves.
 
    ---------------------------------------------------------------------------
    Snapshotting
@@ -121,6 +131,7 @@
    cheap; it is the clause construction that is deferred. *)
 
 module Encoding = Baguette_proof.Encoding
+module Lit = Baguette_proof.Lit
 
 (* One term of the sum. [name] and the declared bounds are frozen at [make] time:
    the name because nothing can rename a variable and the deferred thunk should not
@@ -181,6 +192,56 @@ let nogood pairs =
    behind a thunk over the already-snapshotted values. *)
 let explain pairs = Explanation.deferred (fun () -> nogood pairs)
 
+(* ---------------------------------------------------------------------------
+   The other projection of the same pruning: its bound facts (docs/DECISIONS.md
+   D-0018/D-0021, and [Store.entry]'s [facts])
+   ---------------------------------------------------------------------------
+
+   Removing a value that sits at [lo] or at [hi] shrinks the interval, so it *is* a
+   bound move, so lib/core/trace.ml writes a line for it:
+
+       rup <the order literal the new bound establishes> \/ ~<fact> ... >= 1 ;
+
+   Until M1-T17 this module pruned through [Store.remove], which records [no_facts],
+   and that line came out with an empty tail -- claiming the new bound
+   unconditionally. On a satisfiable model it is not merely unprovable, it is false,
+   and veripb rejects it.
+
+   The facts are the same data as the clause and are stated as the *positive*
+   literals [Trace] will negate, so that the line it builds is exactly the nogood
+   [explain] would have produced for the same pairs:
+
+     - every OTHER term is fixed at [v], which is two order facts, [x >= v] and
+       [x <= v]. Negated they are [Encoding.ne_clause_lits]'s two halves, i.e.
+       "x <> v", and the constant halves drop at the declared bounds for the same
+       reason they drop there (docs/PROOF-FORMAT.md section 3).
+
+     - the PRUNED term contributes the bound the removal is about to move, and only
+       that one: with [w] at [lo] the fact is [x >= w] and [Trace]'s own claim is
+       [x >= w+1], which are the two halves of "x <> w" between them. Stating [x <= w]
+       as well would be stating something false (the domain is wider than that) and
+       would duplicate the claim's own literal in the clause.
+
+     - a removal strictly inside the interval moves no bound, gets no line at all
+       (lib/core/trace.ml's [claims]), and contributes nothing here. An order literal
+       cannot state a hole; that is D-0019 point 3's test for when the direct encoding
+       is forced, and M1 does not reach it.
+
+   [d] is the pruned variable's domain as it stands *now*, before the removal, and is
+   read here rather than inside the thunk: I-X6, the same snapshot discipline the
+   values in [pairs] already follow. *)
+let fixed_facts tm v =
+  (if v > tm.decl_lo then [ Lit.ge tm.name v ] else [])
+  @ if v < tm.decl_hi then [ Lit.le tm.name v ] else []
+
+let moved_bound_fact tm w d =
+  if w = Domain.lo d then if w > tm.decl_lo then [ Lit.ge tm.name w ] else []
+  else if w = Domain.hi d then if w < tm.decl_hi then [ Lit.le tm.name w ] else []
+  else []
+
+let pruning_facts tm w d fixed_others () =
+  moved_bound_fact tm w d @ List.concat_map (fun (o, v) -> fixed_facts o v) fixed_others
+
 (* ------------------------------------------------------------------- propagation *)
 
 let fixed_at store tm = Domain.value (Store.get store tm.x)
@@ -232,11 +293,13 @@ let propagate t store =
         let d = Store.get store tm.x in
         if not (Domain.mem d w) then Propagator.Fixpoint
         else
-          let pairs =
-            (tm, w) :: List.map (fun o -> (o, Domain.lo (Store.get store o.x))) others
+          let fixed_others =
+            List.map (fun o -> (o, Domain.lo (Store.get store o.x))) others
           in
+          let pairs = (tm, w) :: fixed_others in
           let expl = explain pairs in
-          match Store.remove store tm.x w expl with
+          let facts = pruning_facts tm w d fixed_others in
+          match Store.remove_with_facts store tm.x w ~facts expl with
           | Store.Conflict e ->
               (* Unreachable at the interface: [tm] is unfixed, so its domain holds at
                  least two values and removing one cannot empty it. Handled rather

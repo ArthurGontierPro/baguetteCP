@@ -163,15 +163,29 @@ let fix t v value why = apply t v (Domain.fix (get t v) value) no_facts why
    [facts] is NOT the explanation and does not weaken invariant I-P4: [why] is still
    mandatory here exactly as it is above. See [entry] for what the two are each for.
 
-   There is no [remove]/[fix] variant yet because M1 is bounds-only (docs/SPEC.md 3.2)
-   and nothing punches a hole; a propagator that does needs its claim stated in the
-   direct encoding, which is a larger question than adding an argument here (see
-   lib/core/trace.ml's [claims]). *)
+   [remove_with_facts] is the same addition for the third mutator. It was left out when
+   the other two landed, on the grounds that "M1 is bounds-only (docs/SPEC.md 3.2) and
+   nothing punches a hole" -- which [int_ne] (M1-T9, docs/DECISIONS.md D-0019) made
+   untrue in the same round, and the gap was a real bug: a disequality that removes the
+   value sitting at [lo] or at [hi] *shrinks the interval*, so it moves a bound, so
+   lib/core/trace.ml gives it a trace line -- and with [no_facts] that line stated the
+   new bound with an empty reason, i.e. unconditionally, which is simply false and which
+   veripb rejects.
+
+   Note what is and is not fixed by having the function: a removal that moves no bound
+   (a hole strictly inside the interval) still gets no line, because there is no order
+   literal that states it. That is unchanged and still correct for M1 -- see
+   lib/core/trace.ml's [claims], and D-0019 point 3 for the test of when the direct
+   encoding is genuinely forced. What this makes possible is the bound-moving case, and
+   only that. *)
 let set_lo_with_facts t v bound ~facts why =
   apply t v (Domain.set_lo (get t v) bound) facts why
 
 let set_hi_with_facts t v bound ~facts why =
   apply t v (Domain.set_hi (get t v) bound) facts why
+
+let remove_with_facts t v value ~facts why =
+  apply t v (Domain.remove (get t v) value) facts why
 
 (* ------------------------------------------------------- conflict bound facts *)
 

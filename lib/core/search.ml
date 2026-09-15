@@ -154,18 +154,95 @@ let wipe_after_nogood ctx ~lvl ~nogood =
       (not (Writer.auditing w)) || Writer.is_live w nogood);
   Justify.wipe_level ctx lvl
 
+(* Does this derivation rest on a clausal reason?
+
+   docs/DECISIONS.md D-0013 closed the no-decision case with "the propagator's own
+   derivation *is* the contradiction", and for [int_lin_le] it is: a row whose slack has
+   gone negative weakens every other variable out, divides, and adds down to a numeric
+   [0 >= k], which veripb reads as a contradiction directly. That sentence was written
+   when [int_lin_le] was the only propagator there was, and it is false for a clausal
+   reason. A [Clause] says "not all of these variables take these values at once"
+   (D-0019): a perfectly good constraint, and not a contradiction -- veripb says so in
+   as many words, "Constraint is not a contradiction", at the [conclusion] line rather
+   than at the rule, which is what makes the mistake hard to read off the output.
+
+   It reaches the root arm two ways, and this predicate is deliberately structural so
+   that it catches both: the propagator's conflict explanation can BE a [Clause]
+   ([int_ne] conflicting with every variable fixed), or a [Combine] can have folded one
+   into its arithmetic as a cited summand ([int_lin_le] citing the trail entry that last
+   moved a bound, where the entry is a disequality's -- D-0019's last consequence). The
+   second is sound as a [pol] step, which is why nothing louder happens at the rule
+   itself: a [pol] derives whatever it derives, here something valid that simply is not
+   what the row's own slack argument claimed, because a clause over several variables
+   does not cancel this row's coefficient for the one variable the way a chain-sum over
+   that variable's declared range does (lib/core/prop/linear.ml's header states that
+   contract).
+
+   Either way the honest close is the one D-0018 already uses everywhere else: write the
+   trace, then state the contradiction as a [rup] the checker verifies for itself. *)
+let rec rests_on_a_clause (e : Explanation.t) =
+  match Explanation.force e with
+  | Explanation.Clause _ -> true
+  | Explanation.Trivial | Explanation.Model_row _ | Explanation.Linear _ -> false
+  | Explanation.Cut (a, b, _, _) -> rests_on_a_clause a || rests_on_a_clause b
+  | Explanation.Combine (summands, _) ->
+      List.exists
+        (function
+          | Explanation.Term (_, e) -> rests_on_a_clause e | Explanation.Weaken _ -> false)
+        summands
+  | Explanation.Deferred _ -> false (* [force] returns a non-deferred head *)
+
+(* A root conflict whose derivation rests on a clause, closed the D-0018 way.
+
+   Three lines, in this order, and the order is the same one the under-a-decision arm
+   uses for the same reason (D-0018 point 4 and [Trace]'s header):
+
+   1. the branch's trace -- here the *root's* trace, every level-0 pruning. D-0021: a
+      [rup] check starts from nothing and does not inherit the solver's root fixpoint,
+      so the bounds this conflict rests on have to be on the page before anything can
+      unit propagate to them. This is exactly the measurement D-0021 records for
+      `offset`, arrived at from the other end.
+   2. the conflict's own reason line, when the propagator recorded facts for it
+      (D-0018 point 3).
+   3. the propagator's own derivation, which is emitted even though it is not the
+      contradiction: it is still a valid consequence, and it leaves the empty clause one
+      unit propagation away rather than a search away.
+
+   Then the contradiction itself, as the empty clause. That is not a new rule or a new
+   shape -- it is [rup >= 1 ;], the nogood over an empty decision stack, i.e. what the
+   decision arm below emits with [decisions = []] substituted in. Citing *it* rather
+   than the derivation is the whole fix: what [conclusion UNSAT] names is now a line
+   veripb has checked to be a contradiction, not one this module asserted was. *)
+let close_root_conflict ctx trace store e =
+  Trace.emit ctx trace store;
+  let _ : Writer.cid option = Trace.conflict_line ctx trace store in
+  match Explanation.force e with
+  | Explanation.Clause [] ->
+      (* Already the empty clause -- a disequality every one of whose variables the
+         model declares fixed (D-0019). Emitting it twice would be silly. *)
+      Justify.emit ctx e
+  | _ ->
+      let _ : Writer.cid = Justify.emit ctx e in
+      Justify.emit ctx (Explanation.clause [])
+
 let rec dfs engine store ctx trace (decisions : Lit.t list) : node =
   match Engine.propagate engine store with
   | Engine.Conflict e -> (
       match decisions with
       | [] ->
-          (* D-0013: with no decision active there is nothing to negate, and the
-             propagator's own derivation *is* the contradiction. Emitting it is the
-             whole point of M1-T12 -- a bare clause here is the "trust me" that
-             D-0012 recorded veripb rejecting. Nothing has been branched on yet, so
-             there is no trace to write: [dfs] reaches this with [decisions = []] only
-             on the very first call. *)
-          let cid = Justify.emit ctx e in
+          (* D-0013: with no decision active there is nothing to negate. Where the
+             propagator's own derivation really *is* the contradiction -- the [pol]
+             chain M1-T12 exists to build -- emitting it and citing it is still the
+             answer, and a bare clause there would be the "trust me" that D-0012
+             recorded veripb rejecting. Where it is not, [close_root_conflict] takes
+             over; [rests_on_a_clause] above is the difference and says why.
+             Nothing has been branched on yet, so the trace this writes is the root's
+             own: [dfs] reaches this arm with [decisions = []] only on the very first
+             call. *)
+          let cid =
+            if rests_on_a_clause e then close_root_conflict ctx trace store e
+            else Justify.emit ctx e
+          in
           NFail ([], cid)
       | _ ->
           (* D-0018, in the order the record gives: the branch's own propagation trace
