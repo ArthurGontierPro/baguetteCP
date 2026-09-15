@@ -37,7 +37,7 @@ in a form the proof layer can render. It is a value of `Explanation.t`. Distingu
 in code or comments without saying which reading you mean.
 
 **Justification** — the concrete proof step(s) an explanation renders to. Explanations are
-solver-side; justifications are proof-side. `lib/proof/justify.ml` is the boundary.
+solver-side; justifications are proof-side. `lib/core/justify.ml` is the boundary (it lives in `core`, not `proof`: the dependency direction is `core -> proof`, so `proof` cannot see `Explanation`).
 
 **Nogood** — an assignment fragment known to extend to no solution. Learned from
 conflicts. A clause over encoding literals.
@@ -60,3 +60,16 @@ prunings become single literals.
 contradiction. Cheaper to emit, more expensive to check than `pol`.
 
 **Trail** — the undo log making domain mutation backtrackable.
+
+**Trace** *(D-0018)* — the sequence of per-pruning proof lines a failing branch writes
+before its nogood, each stating "these bound facts imply that bound". Every line is
+globally valid and mentions no decision; what the decisions do is make the nogood over
+them RUP *along* the trace. Not a synonym for **Trail**: the trail is solver-side undo
+state, the trace is what gets written into the proof from it.
+
+**Value consistent** — a propagator that only ever removes values it can name, without
+claiming anything about the values it leaves behind. Weaker than **Domain consistent**,
+which additionally guarantees every remaining value extends to a solution. `int_ne`
+declares this level (M1-T9) although its algorithm happens to achieve domain consistency
+for a disequality — declaring the weaker level is deliberate, since `Propagator.consistency`
+is a promise the proof layer is entitled to rely on.

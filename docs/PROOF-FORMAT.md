@@ -117,8 +117,9 @@ order encoding is the default: `lo := k` is the single literal `x_ge_k`, and `hi
 
 ### Direct encoding
 
-Introduced lazily, only for variables that a disequality, `element` or `all_different`
-propagator touches:
+Introduced lazily, only for variables that an `element` or `all_different` propagator
+touches (M4). **Not** for disequalities — see "Disequalities" below; that sentence used
+to name them and was wrong:
 
 ```
 x_eq_v        for l <= v <= u       meaning  x = v
@@ -132,6 +133,40 @@ x_eq_v  <->  x_ge_v  /\  ~x_ge_(v+1)
 
 emitted with `red` as a definition. Exactly-one over `x_eq_*` follows from the
 channelling and MUST be derived, not assumed.
+
+The test for when the direct encoding is genuinely forced is whether a *reason* has to
+mention a hole. A reason that does cannot be negated into a clause without a single
+literal standing for `x = v`. A disequality's reasons never do — they are only ever
+"these variables are fixed to these values" — which is why M1-T9 needs none of this.
+
+### Disequalities *(M1-T9)*
+
+The order encoding cannot state `x = v` as a single **literal**, which is what the
+section above is about. But a `rup` target is a **clause**, and a disequality is two
+ordinary order literals:
+
+```
+x <> v   <->   ~x_ge_v  \/  x_ge_(v+1)
+```
+
+Constant halves drop at the declared bounds, and a declared-fixed variable yields the
+**empty** clause — which is correct, being the false clause, and renders as `rup >= 1 ;`.
+
+In the `.opb`, a disequality is carried as two big-M rows over the order encoding with
+one fresh selector Boolean `_neN`, `L` and `U` the span of `sum a_i x_i` over declared
+domains:
+
+```
+row A:  sum a_i x_i - (U - c + 1) b  <=  c - 1      (b = 0  ->  sum <= c-1)
+row B:  sum a_i x_i - (c + 1 - L) b  >=  L          (b = 1  ->  sum >= c+1)
+```
+
+Both are posted through `add_int_lin_le`, so both are plain `>=` lines and **the
+`=`-counts-as-two trap in section 2 is not in play**. The `.opb` must carry the
+disequality at all because it is what `conclusion SAT` is checked against; the selector
+is filled in by the checker's own unit propagation, which is checked rather than
+assumed. Aux names are minted as `$neN`, which FlatZinc cannot spell, and sanitised to
+`_neN` on the way into the file.
 
 ### Booleans
 
@@ -154,12 +189,13 @@ it emits. The table below is the index; it is maintained as propagators land.
 
 | Propagator | Consistency | Justification |
 |---|---|---|
-| `int_le` | bounds | the instance `1*x + -1*y <= 0` of `int_lin_le`; `Cut (Trivial, Linear, 1, 1)`, the `Linear` child as `rup` (D-0009) |
+| `int_le` | bounds | the instance `1*x + -1*y <= 0` of `int_lin_le`, and therefore `int_lin_le`'s `Combine` (D-0013/D-0015) — **not** the `Cut (Trivial, Linear, 1, 1)` this row claimed until M1-T13 |
 | `int_lt` | bounds | the same, at rhs `-1` |
 | `int_eq` | bounds | `int_lin_eq` on `x - y = 0`. A domain-consistent version would intersect domains value by value and name the excluded value rather than a bound chain — not built |
-| `int_lin_le` | bounds | **target**: `pol` — the model constraint plus order-encoding units, one division. **M1 emits** `rup` of the stated bound: a literal in a `pol` is the trivial axiom `lit >= 0`, so bound facts need constraint ids the explanation cannot yet carry (D-0009) |
+| `int_lin_le` | bounds | `pol` — the model row, every *other* term weakened away by literal axioms or cited by the id that established it, then one division by the pushed coefficient (`Combine`, D-0013/D-0015). Under a decision each push also gets a D-0018 trace line. The older "M1 emits `rup` of the stated bound" is no longer true |
 | `int_lin_eq` | bounds | two `int_lin_le` derivations |
-| `int_ne` | value | `rup` over direct-encoding literals |
+| `int_ne` | value (domain, in fact) | `rup` over **order**-encoding literals: the claim disjoined with the negation of its reason, which is D-0018's trace-line shape. No direct encoding — see section 3, "Disequalities" |
+| `int_lin_ne` | value | the same, over every term |
 | `bool_clause` | — | `rup` |
 | `all_different` | *TBD* | Hall-set reasoning; see M4 and D-0004 |
 | `element` | *TBD* | M4 |

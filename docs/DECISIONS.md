@@ -753,3 +753,84 @@ Consequences:
   propagate to a failure, and backtrack. A root-level UNSAT model cannot catch a
   regression here. This is the fifth finding in this project invisible on the instance
   chosen to test the thing it breaks; see M1-T15.
+
+## D-0019  A disequality needs the order encoding, not the direct one
+Status: DECIDED
+Date: 2026-09-15
+Corrects: `docs/PROOF-FORMAT.md` section 3, which named disequalities as a reason to
+introduce the direct encoding. Roadmap M1-T9's own wording ("needs direct encoding") was
+wrong for the same reason.
+
+Context: M1-T9 was scoped on the belief that `int_ne` cannot be justified over the order
+encoding. The belief rests on a true statement — the order encoding cannot express `x = v`
+as a single **literal** — and an unnoticed jump from "literal" to "clause". A `rup` target
+is a clause, and
+
+    x <> v   <->   ~x_ge_v \/ x_ge_(v+1)
+
+is two ordinary order literals. Constant halves drop at the declared bounds; a
+declared-fixed variable yields the **empty** clause, which is correct (it is the false
+clause) and which veripb accepts as `rup >= 1 ;`.
+
+Decision:
+1. `int_ne` and `int_lin_ne` justify over the **order** encoding, as the claim disjoined
+   with the negation of the reason — D-0018's trace-line shape, arrived at independently.
+   No `Explanation` constructor was needed: `Clause` was enough, as PROOF-FORMAT section 4
+   predicted, and that prediction was checked against the real checker rather than assumed.
+2. The `.opb` carries a disequality as two big-M rows over the order encoding with one
+   fresh selector Boolean, both posted through `add_int_lin_le` so that both are plain
+   `>=` lines. The `.opb` must carry it at all because it is what `conclusion SAT` is
+   checked against — equisatisfiability is not enough when the checker re-checks the
+   assignment against the file.
+3. The direct encoding stays unbuilt until M4. **The test for when it is genuinely forced
+   is whether a reason has to mention a hole**: such a reason cannot be negated into a
+   clause without a single literal standing for `x = v`. A disequality's reasons never do;
+   `element` and `all_different` reasons do.
+
+Consequences:
+- Two rows and a `>=` apiece means the section 2 trap (an `.opb` line with `=` counts as
+  **two** constraints for the `f` rule, shifting every later id) is not in play. There is
+  a test asserting the checker's constraint count matches ours after posting.
+- Not building the direct encoding also avoids an I-X2 problem that would have had to be
+  solved first: `ensure_direct` mints `red` ids that nothing between `start_proof` and
+  `conclusion` can retire, and the CLI turns the audit on by default.
+- A disequality propagator *can* move a bound (removing a value at `lo` or `hi` shrinks
+  the interval) and its explanation is a `Clause`, not a chain-sum. `int_lin_le`'s
+  `Snap_cite` path assumes anything it cites is a unit-coefficient chain-sum over a
+  declared range. See D-0020's consequences and the M1-T13 handoff; this is a real gap,
+  it is reachable only at a root conflict, and it fails loudly rather than silently.
+
+## D-0020  lin_unsat's refutation has a unit of slack, and only mutation found it
+Status: DECIDED
+Date: 2026-09-15
+Follows from: D-0018's last consequence, which asked for M1-T15.
+
+Context: the mutation harness's first run found that `lin_unsat`'s proof still verifies
+after a coefficient inside one of its weakening `pol` steps is corrupted. Reproduced by
+hand, outside the harness, against veripb 2.2.2:
+
+    before: pol 9 y_ge_1 y_ge_2 + y_ge_3 + y_ge_4 + y_ge_5 + +
+     after: pol 9 y_ge_1 2 * y_ge_2 + y_ge_3 + y_ge_4 + y_ge_5 + +
+    s VERIFIED UNSATISFIABLE
+
+The honest refutation closes at `0 >= 2`, one unit wider than a contradiction needs to be,
+so a one-unit coefficient error leaves a residual that is still infeasible. The proof is
+*valid*; it is simply not the proof we meant, and every test we had said it was.
+
+Decision: keep the derivation (it is sound) and keep the finding visible. The lane is
+registered as known-slack, reported on every run, and turns the suite **red as an XPASS**
+if it ever starts rejecting — the anti-rot mechanism `test/models/PENDING` already uses.
+Mutation lanes over `pol` steps gate on an instance whose margin is one.
+
+Consequences:
+- **"veripb accepts" is not evidence that a derivation is load-bearing.** Three of this
+  project's findings (D-0009, D-0010, and this one) are cases where the checker accepted
+  something that did not assert what we believed. A `pol` only has to get close enough
+  that unit propagation finishes the job; slack rows still close a proof.
+- Choose mutation instances at margin one. A corruption applied to a conflict with three
+  units of slack proves nothing, and prints green.
+- `drop-line` is accepted on every `conclusion SAT` proof, because a SAT conclusion leans
+  on the assignment and nothing downstream cites a derivation step. This nuances D-0017: a
+  SAT run's nogoods *are* checked when emitted, but they are not load-bearing for the
+  conclusion, so deleting one leaves a valid proof. Mutation lanes that delete a line
+  belong on UNSAT instances only.
