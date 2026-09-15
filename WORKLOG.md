@@ -19,7 +19,6 @@ share an `_build` lock:
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M1-T18 + M1-T19 — adopt the Rust VeriPB 3.0.2 checker, then migrate emission to format 3.0 | `lib/proof/**`, `lib/core/justify.ml`, `lib/core/trace.ml`, `lib/core/search.ml`, `lib/core/explanation.ml`, `lib/core/prop/**`, `scripts/**`, `docs/PROOF-FORMAT.md`, `docs/SPEC.md`, `docs/DECISIONS.md` (append only), `test/unit/test_{proof,justify,mutation,trace}.ml` | agent-proof3 | 2026-09-15 — **authorised to supersede D-0002**, which is what phase 2 requires |
 
 `WORKLOG.md`, `docs/ROADMAP.md`, `test/models/PENDING` and all `dune` files are
 orchestrator-held this round; no agent touches them, and the merge is the orchestrator's.
@@ -72,6 +71,8 @@ work. The owning session picks it up.
 | integration | orchestrator | 2026-09-15 | `test/unit/test_endtoend.ml` is green as part of the 864-check suite. Row added 2026-09-15 — released late, same reason |
 | M1-T21 | agent-output + orchestrator | 2026-09-15 | An output item carries its declared `out_ty`, captured in `builder.ml` where the declaration is still in hand. `bool_out_sat.fzn` pins all three routes to the printer. 868 unit checks, 15/15 models |
 | M1-T20 | agent-matrix + orchestrator | 2026-09-15 | Three new disequality instances fill the offset and negative-domain cells for both propagators and `|a|>1` / common-factor for `int_lin_ne`; the note now distinguishes cells blocked by a bug from cells unreachable by construction. 194 matrix checks |
+| M1-T18 | agent-proof3 + orchestrator | 2026-09-15 | Checker selection in one place (`Checker.find` / `scripts/checker.sh`), 3.0.2 the checker of record, and a missing checker now FAILS instead of skipping. Found and fixed a real proof bug: 3.0.2 rejected `ne_conflict_sat` |
+| M1-T19 | agent-proof3 + orchestrator | 2026-09-15 | VeriPB 3.0 is the emitted default. 925 unit checks / 0 failures under **both** formats, 15/15 models. D-0023, D-0024, D-0025 |
 
 ## Handoff notes
 
@@ -424,3 +425,59 @@ and the trace it was supposed to rest on was never load-bearing. A passing, holl
 — the seventh instance of this project's signature failure mode, caught this time by a
 check rather than by a human. The instances were fixed, not the check. That check has now
 paid for itself twice.
+
+**2026-09-15 — orchestrator: 3.0 is the default, and the round is closed**
+
+All three agents merged. `Active claims` is empty and, unlike last time, that is true.
+
+**agent-proof3 was told to re-verify the inherited equivalence claim rather than trust
+it, and the claim was false.** 3.0.2 rejected `ne_conflict_sat`. It was our proof, not
+the checker: `conclusion SAT : <assignment>` carried only the model variables' order
+literals, and 2.2.2 quietly unit-propagated the missing `_ne0` selector while 3.0.2
+states outright that a conclusion's assignment is not propagated. `encoding.ml` had
+recorded that as "checked against veripb 2.2.2, not assumed" — and it *was*, for 2.2.2.
+A fact measured against one checker had been written down as a fact about proofs. The
+fix is `sol` plus a bare `conclusion SAT`, which is what PROOF-FORMAT already claimed we
+did. **That bug shipped in every SAT proof this project has ever emitted.**
+
+**I finished the flip agent-proof3 left open**, because "3.0 behind an env var with a
+2.0 default" is not the upgrade. It cost one line in `format_from_env` and six test
+files, and not one failure was a proof being wrong — every one pinned 2.0 *text*.
+
+**Two of those pins are the reason this note is long.** `test_matrix` asserted
+`not (contains "# 1" proof)` — "this model is refuted at the root, so no level is ever
+opened". Under 3.0 the string `# 1` does not occur *whatever the proof says*, so both
+assertions go **vacuously true**. They would not have gone red. They would have stopped
+testing, silently, inside a green suite. That is the eighth instance of this project's
+signature failure mode and the first where the trigger was a *format* change rather
+than a propagator change.
+
+So the spellings now live in `Writer`, which is what writes them — `level_marker`,
+`level_of_line`, `opens_level`, `strip_label`, `rule_body` — and tests read proof text
+through it. This is the same shape of fix as collapsing nine private `veripb` lookups
+into `Checker.find`: a project-wide fact had been copied into many files, and copies
+cannot all stay right. **The rule for the next format change: a test that reads emitted
+proof text goes through the module that wrote it.**
+
+Measured, not asserted: **925 unit checks, 0 failures, under BOTH 3.0 and 2.0**;
+15/15 models; 194 matrix, 18 mutation, 11 random; `fmt` clean; `PENDING` still empty;
+`scripts/checker.sh` resolves `~/.cargo/bin/veripb` 3.0.2. The 2.0 fallback is exercised
+in full rather than merely retained — an escape hatch nothing runs would rot in a week.
+
+**Correcting D-0023's speed note.** It reported 17–29x per invocation but no change in
+suite wall time, because `test_matrix` ignored `$VERIPB` and was 28–31s of a 32s run.
+With that file on the shared resolver, **`test_matrix` alone went ~30s → 1.2s.** The
+speedup was always real; one file's private lookup hid it from the clock.
+
+Open, and worth knowing before M2:
+- `solx` and `obju` are not usable as we emit them under 3.0 (`solx` needs a preserved
+  set, `obju` explicit subproofs). Nothing in M1 reaches either; M5 and any enumeration
+  work will.
+- D-0024's asymptotic cost is unmeasured on a deep search. 3.0 proofs are ~19% larger on
+  the current models and the deletion-vs-wipe effect is invisible at this size. Measure
+  it before M2-T3 lands, since that is where D-0008's argument mattered.
+- Under 3.0 the `drop-line` mutation changes character: deleting a step un-defines its
+  label, so a later citation is a parse error. A green `drop-line` lane now means "the
+  label was still referenced", not "slack found".
+- `docs/SPEC.md` 2.2 still never states the bool print rule M1-T21 enforced (the request
+  above). agent-proof3 held SPEC and did not take it; it is still open.
