@@ -12,9 +12,10 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| integration | `test/unit/test_endtoend.ml` | orchestrator | 2026-09-14 — no single session can make it pass alone |
-| M1-T12 — make the D-0013 derivation real: `Explanation` + `Justify` + `int_lin_le` | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/prop/**`, `test/unit/test_prop.ml`, `test/unit/test_justify.ml` | agent-explain | 2026-09-14 — **authorised to change the Explanation ADT**, see D-0013 |
-| M1-T13 — the branching half of D-0013, research only | none — scratchpad only | agent-branch | 2026-09-14 |
+_No session is holding anything right now._ The three rows that stood here
+(`integration`, M1-T12, M1-T13) were stale: all three had shipped, and M1-T13 was already
+listed under Completed. Cleared 2026-09-15 by the orchestrator — see the handoff note
+"the claims table had rotted".
 
 ## Cross-session requests
 
@@ -59,6 +60,8 @@ work. The owning session picks it up.
 | M1-T16 | agent-tests | 2026-09-15 | Case matrix + randomised differential tester, 152 checks, 17 verified break-it mutations. Found 3 real bugs (2 new), all pinned; gate is red until M1-T17 |
 | M1-T17 | agent-fix + orchestrator | 2026-09-15 | D-0022/I-X7/I-P5: `remove_with_facts`, and a clausal root conflict closed by the empty clause. Gate green |
 | M1-T11 | agent-ne-wiring | 2026-09-15 | `int_ne`/`int_lin_ne` posted by `compile.ml` instead of rejected, + five disequality models. 14/14 models verify, `PENDING` empty, 864 unit checks. On branch `worktree-m1-t11-ne-wiring` |
+| M1-T12 | agent-explain + orchestrator | 2026-09-15 | D-0015: `Combine`/`Weaken`/`Model_row` made real and the root conflict wired to its derivation; two UNSAT proofs verify. Row added 2026-09-15 — the task shipped but was never released from Active claims |
+| integration | orchestrator | 2026-09-15 | `test/unit/test_endtoend.ml` is green as part of the 864-check suite. Row added 2026-09-15 — released late, same reason |
 
 ## Handoff notes
 
@@ -329,3 +332,27 @@ executable path, so building into a `--build-dir` outside the tree makes both FA
 loudly (not skip) — pass `BAGUETTE_ROOT`, or just use `dune --root .` inside the
 worktree, which gives each worktree its own `_build` and no shared lock at all. That is
 a cheaper answer to the `_build` contention in CLAUDE.md than a private `--build-dir`.
+
+**2026-09-15 — orchestrator: the claims table had rotted, and M1 is merged to master**
+
+Three rows sat under `## Active claims` describing work that had already shipped:
+`integration`, M1-T12 and M1-T13. M1-T13 was *simultaneously* listed under Completed, so
+the two tables contradicted each other. M1-T12 and `integration` were in neither. A
+session reading the protocol in good faith would have believed `explanation.ml`,
+`justify.ml` and `prop/**` were held by a live agent and routed around files nobody was
+holding — which is exactly the cost the protocol exists to avoid, paid for nothing.
+
+Both tables are now correct and Active claims is empty. **The lesson is not "remember to
+release"** — every one of those three sessions *did* write a handoff note; what they
+skipped was the one-line table edit, because the note felt like the deliverable. If a
+session writes a handoff note without also moving its row, the row is what a later
+session reads. `/handoff` does both; the rows that rotted were released by hand.
+
+`worktree-m1-t11-ne-wiring` is merged to master as a fast-forward (4 commits, 0 behind).
+M1 is closed: M1-T1..T17 all DONE, 14/14 models solve, `PENDING` empty, 864 unit checks.
+
+**On the checker.** `veripb` resolves to the **Python 2.2.2** build at `~/.local/bin`,
+but a **Rust 3.0.2** build is already installed at `~/.cargo/bin/veripb` — `~/.local/bin`
+simply comes first on PATH. The previous handoff's two-phase proposal is therefore
+cheaper than it reads: phase 1 needs no new install, only a decision about which binary
+the harness invokes. Dispatched this round as M1-T18 / M1-T19.
