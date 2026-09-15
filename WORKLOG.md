@@ -15,7 +15,7 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 | integration | `test/unit/test_endtoend.ml` | orchestrator | 2026-09-14 — no single session can make it pass alone |
 | M1-T12 — make the D-0013 derivation real: `Explanation` + `Justify` + `int_lin_le` | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/prop/**`, `test/unit/test_prop.ml`, `test/unit/test_justify.ml` | agent-explain | 2026-09-14 — **authorised to change the Explanation ADT**, see D-0013 |
 | M1-T13 — the branching half of D-0013, research only | none — scratchpad only | agent-branch | 2026-09-14 |
-| M1-T16 — populate the tests so each case has an instance that can see it break | `test/unit/test_matrix.ml` (new), `test/unit/test_random.ml` (new), `test/models/*.fzn` + `test/expected/*.out` (new files only) | agent-tests | 2026-09-15 |
+| M1-T17 — fix the three `int_ne` composition bugs M1-T16 pinned | `lib/core/store.ml`, `lib/core/search.ml`, `lib/core/prop/ne.ml`, `lib/core/prop/linear.ml` | agent-fix | 2026-09-15 |
 
 ## Cross-session requests
 
@@ -56,6 +56,7 @@ work. The owning session picks it up.
 | M1-T13 | agent-trace + orchestrator | 2026-09-15 | D-0018/D-0021: one `rup` line per pruning, root prunings included. `chain_sat` and the three D-0012 parity models verify; no veripb xfail left anywhere |
 | M1-T9 | agent-ne | 2026-09-15 | D-0019: `int_ne`/`int_lin_ne` over the **order** encoding — the direct encoding is not what a disequality needs. 182 checks. CLI wiring still open |
 | M1-T15 | agent-mutate | 2026-09-15 | D-0020: mutation harness + control lane, 18 checks. Found `lin_unsat`'s refutation has a unit of slack |
+| M1-T16 | agent-tests | 2026-09-15 | Case matrix + randomised differential tester, 152 checks, 17 verified break-it mutations. Found 3 real bugs (2 new), all pinned; gate is red until M1-T17 |
 
 ## Handoff notes
 
