@@ -10,18 +10,16 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
-| Task | Files being touched | Session | Since |
-|---|---|---|---|
-The three rows that stood here (`integration`, M1-T12, M1-T13) were stale and were
-cleared 2026-09-15 — see the handoff note "the claims table had rotted". This round's
-claims, dispatched by the orchestrator, each in **its own worktree** so that no two
-share an `_build` lock:
+**Nothing is claimed. No session is running.**
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 
-`WORKLOG.md`, `docs/ROADMAP.md`, `test/models/PENDING` and all `dune` files are
-orchestrator-held this round; no agent touches them, and the merge is the orchestrator's.
+Two rounds are recorded in `## Completed` below. The rows that stood here on
+2026-09-15 (`integration`, M1-T12, M1-T13) were stale — see the handoff note "the
+claims table had rotted" — and the round dispatched after it (M1-T18/T19 agent-proof3,
+M1-T20 agent-matrix, M1-T21 agent-output, one worktree each so that no two shared an
+`_build` lock) is merged and released.
 
 ## Cross-session requests
 
