@@ -11,19 +11,25 @@ BASE="$(basename "${FZN}" .fzn)"
 PREFIX="${OUT}/${BASE}"
 
 SOLVER="${BAGUETTE:-${ROOT}/_build/default/bin/main.exe}"
-VERIPB="${VERIPB:-veripb}"
+
+# scripts/checker.sh owns which veripb this is; it also explains why a missing one
+# is a failure rather than a skip. This script used to `echo SKIP; exit 0` here, so
+# a machine with no checker made every proof test pass.
+# shellcheck source=checker.sh
+. "${ROOT}/scripts/checker.sh"
 
 mkdir -p "${OUT}"
 
-if ! command -v "${VERIPB}" >/dev/null 2>&1; then
-  echo "SKIP ${BASE}: veripb not on PATH" >&2
-  exit 0
+if ! baguette_resolve_veripb; then
+  echo "FAIL ${BASE}: the proof was NOT checked." >&2
+  baguette_veripb_diagnostic
+  exit 1
 fi
 
 echo "--- solving ${BASE}"
 "${SOLVER}" "${FZN}" --proof "${PREFIX}" > "${PREFIX}.out"
 
-echo "--- checking ${BASE}.pbp"
+echo "--- checking ${BASE}.pbp with ${VERIPB}"
 if "${VERIPB}" "${PREFIX}.opb" "${PREFIX}.pbp"; then
   echo "OK   ${BASE}"
 else

@@ -524,12 +524,20 @@ let run () =
     let proof, outcome = solve_to_proof ~dir ~name:"chain" chain in
     check "chain: the solver solves it (the instance is what we think it is)"
       (match outcome with Search.Sat _ -> true | Search.Unsat -> false);
+    (* "A decision level was opened" is spelled `# 1` in a 2.0 proof and `% level 1` in
+       a 3.0 one, which has no set-level rule at all (D-0024). Looking only for `# 1`
+       would make this check vacuously FALSE under 3.0 -- the mirror of the hazard
+       PROOF-FORMAT section 5 warns about, and a test that stops testing is worse than
+       one that fails. Accept either marker. *)
     let branched =
       let s = read_file proof in
-      String.length s > 0
-      && List.exists
-           (fun l -> String.length l >= 3 && String.sub l 0 3 = "# 1")
-           (String.split_on_char '\n' s)
+      let opens_a_level l =
+        let starts p =
+          String.length l >= String.length p && String.sub l 0 (String.length p) = p
+        in
+        starts "# 1" || starts "% level 1"
+      in
+      String.length s > 0 && List.exists opens_a_level (String.split_on_char '\n' s)
     in
     check "chain: the search really branched, so its proof is a branch-level one (D-0018)"
       branched;

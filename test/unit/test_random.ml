@@ -424,11 +424,12 @@ let build m store obs =
 
 (* ================================================================== veripb *)
 
-let veripb =
-  let p = Filename.concat (Sys.getenv "HOME") ".local/bin/veripb" in
-  if Sys.file_exists p then Some p
-  else if Sys.command "command -v veripb >/dev/null 2>&1" = 0 then Some "veripb"
-  else None
+(* Which checker to run: lib/proof/checker.ml, shared with scripts/checker.sh.
+   Every test module open-coded this search, and every copy looked at
+   ~/.local/bin/veripb first -- so a project-wide choice of checker lived in nine
+   places and silently meant the Python 2.2.2 (M1-T18). [None] is a FAILURE at every
+   call site below, never a skip. *)
+let veripb = Baguette_proof.Checker.find ()
 
 let contains needle s =
   let n = String.length needle and m = String.length s in

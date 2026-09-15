@@ -44,7 +44,7 @@ Consequences:
   exists so no session has to rediscover the setup.
 
 ## D-0002  Proof format: VeriPB 2.0, no local extensions
-Status: DECIDED
+Status: SUPERSEDED by D-0023
 Date: 2026-09-14
 
 Context: we could define a CP-native proof format, or target an existing checked one.
@@ -152,7 +152,7 @@ second scheme for the same concept would undermine it more than an unfamiliar sp
 does.
 
 ## D-0008  Backtracking uses proof levels, not per-reason deletion
-Status: DECIDED
+Status: DECIDED — mechanism SUPERSEDED by D-0024 (VeriPB 3.0 has no level stack)
 Date: 2026-09-14
 Supersedes the original advice in PROOF-FORMAT section 5.
 
@@ -925,3 +925,215 @@ Consequences:
 - A disequality that removes a value strictly inside the interval moves no bound, writes
   no trace line, and no order literal can state it. That is D-0019 point 3's boundary, and
   it is where the direct encoding would become necessary.
+
+## D-0023  Proof format: VeriPB 3.0, and the Rust checker of record
+Status: DECIDED
+Date: 2026-09-15
+Supersedes D-0002.
+
+Context: the project emitted VeriPB 2.0 and checked with the Python VeriPB 2.2.2 at
+`~/.local/bin/veripb`, because that is what came first on `$PATH`. A Rust VeriPB 3.0.2
+was installed at `~/.cargo/bin/veripb` and unused. Two questions: which checker, and
+which format.
+
+Everything below was produced by running a checker. This entry contains no claim about
+VeriPB that was reasoned rather than measured; where a previous session's note said
+otherwise, the measurement is given and the note is contradicted.
+
+### The equivalence claim was false
+
+The claim inherited from the previous handoff was that 3.0.2 reads the existing 2.0
+proofs unchanged and agrees with 2.2.2 on all of this project's proofs *including which
+mutations it rejects*. Run over all 14 models and all 84 mutation lanes (6 mutations x
+14 proofs), there was **one disagreement**: `ne_conflict_sat`, accepted by 2.2.2 and
+rejected by 3.0.2, plus a second, dependent one on the same instance's `drop-line` lane.
+
+It was our proof that was under-specified, not the checker that was wrong.
+`conclusion SAT : <assignment>` carries the order literals of the *model* variables
+only; the `.opb` also carries the `_neN` selector of PROOF-FORMAT section 3 and the
+solver has no value for it. 2.2.2 unit-propagates the inline assignment and fills the
+selector in — which `encoding.ml` recorded as "checked against veripb 2.2.2, not
+assumed", and it was, for 2.2.2. 3.0.2 says in as many words that "the solution given
+for the conclusion is not propagated", reads the unmentioned selector as false, and
+finds row A falsified. `ne_conflict_sat` is the only model whose answer needs that
+selector *true*.
+
+Fixed by logging the solution with `sol` and concluding with the bare `conclusion SAT`,
+which is what PROOF-FORMAT already claimed we did. A *logged* solution is propagated by
+both. `solx` is not an alternative: 3.0.2 refuses it outside a preserved set. After the
+fix: 14/14 models and 84/84 lanes agree, zero disagreements.
+
+**The lesson is not "3.0.2 is stricter".** It is that "checked against veripb" names a
+build, and a fact about one build of a checker is not a fact about the format. Nine
+places in this tree each decided for themselves which build that was.
+
+### Speed
+
+Per test executable, same binaries, same proofs:
+
+| | Rust 3.0.2 | Python 2.2.2 |
+|---|---|---|
+| `test_prop` | 137 ms | 3011 ms |
+| `test_random` | 420 ms | 10719 ms |
+| `test_trace` | 847 ms | 24262 ms |
+| `test_endtoend` | 67 ms | 1167 ms |
+| 14 model proofs | 109 ms | 2344 ms |
+
+17x to 29x per invocation. Whole-suite **wall** time does not move (31.8s vs 32.0s),
+because dune runs the executables in parallel and `test_matrix.exe` alone takes 28-31s
+and resolves its own checker. Suite CPU time does move: 28s user vs 72s user. The
+headline number is real and currently invisible on the clock; said here rather than
+implied.
+
+### Decision
+
+1. The checker of record is the Rust VeriPB **3.0.2**. Selection lives in exactly two
+   places — `scripts/checker.sh` and `lib/proof/checker.ml` — and `$PATH` is consulted
+   last. A missing checker FAILS; it does not skip.
+2. The proof format is VeriPB **3.0**. `BAGUETTE_PROOF_FORMAT` selects it;
+   see "what is not yet done" for why the default is still 2.0 at the time of writing.
+
+### 3.0 is not a dialect of 2.0
+
+Measured rule by rule against 3.0.2. Flipping only the version line makes every one of
+this project's proofs a **syntax error**.
+
+- Every rule is terminated by `;`. `f 4` becomes `f 4 ;`, and so do `output`,
+  `conclusion` and `end pseudo-Boolean proof`. `rup` already ended in one and must not
+  get a second.
+- Comments are `%`. `*` is rejected outright ("Expected a top level rule name").
+- `red`'s witness follows a `:`, *before* the terminator: `red <c> : <w> ;`. Written
+  after a `;` it is silently not a witness and the checker says "A witness must be
+  specified for the red-rule".
+- `delc` drops its `id` keyword; `del` and `core` keep theirs.
+- The short forms `u`, `p`, `d`, `v`, `o` are gone.
+- `solx` requires a preserved set. `obju` requires explicit subproofs ("Proofgoal #1
+  could not be autoproven"). Neither is reachable from M1; both will meet M5.
+- **`#` and `w` do not exist.** See D-0024.
+- veripb 2.2.2 rejects a 3.0 proof outright ("Unsupported version"), so the switch
+  cannot be made one consumer at a time. This is asserted by a test, not assumed.
+
+### Labels, and what they actually bought
+
+The stated prize was that 3.0 labels would remove the "`=` counts as two constraints"
+id-numbering trap of PROOF-FORMAT section 2, one of two traps flagged as silently
+corrupting. Measured:
+
+- A constraint in the `.opb` **can** carry a label — `@c1 +1 x +1 y >= 1 ;` — and a
+  proof can cite it: `pol @c1 @c2 +`, `del id @c1`, `del range @c1 @c7`,
+  `conclusion UNSAT : @c13`. Every one of those was run.
+- Citing a label that was never assigned is a hard parse error naming the label
+  ("The label `@NOPE` is not assigned to a constraint ID"). It cannot silently be a
+  different constraint. **That is the trap, gone.**
+- A label on an `=` row is refused by the OPB parser ("Expected inequality
+  constraint"), because one name cannot stand for the two constraints an `=` splits
+  into. The checker now enforces the discipline `Encoding.add_constraint` imposed by
+  raising `Equality_in_opb`.
+
+So: yes, with two qualifications that must be said plainly.
+
+- **A label is not a group.** Binding a name twice rebinds it to the newer constraint;
+  it does not name both. `del id @L` then deletes one. Labels are therefore *not* a
+  replacement for the level stack, which is why D-0024 exists as a separate problem.
+- **The `f` count was never the silent half of the trap.** Both checkers reject a wrong
+  `f N` outright and name the right number ("The formula contains 3 constraints, but the
+  rule expected that there are 2"), measured on both. What was silent was the
+  consequence *inside* `Encoding` — an id counter that had drifted, producing a `pol`
+  that cited a real but wrong constraint. That is the half labels remove.
+
+### Consequences
+
+- The proof text grows about 19% on the current models (4540 -> 5409 bytes over all 14
+  proofs); the `.opb` about 5%. Terminators, labels and D-0024's explicit deletions.
+- `Writer` now carries `t.tags`, a mirror of checker state that 2.0 did not need
+  (invariant I-X3 gains a second thing to keep exact).
+- We inherit the Rust checker's error messages, which name the failing line and column.
+  We lose `--proofGraph` and `--toAnnotatedRUP`, which nothing here used.
+- `scripts/mutate_proof.sh` parses 2.0 syntax — `# N` for level tracking, and the short
+  rule forms. It must be taught 3.0 before the mutation gate means anything about a 3.0
+  proof.
+
+### What is NOT done, and why the default is still 2.0
+
+3.0 emission is implemented, and every one of the 14 models emits a 3.0 proof that
+3.0.2 accepts, with `BAGUETTE_PROOF_AUDIT=1` and stdout unchanged:
+`BAGUETTE_PROOF_FORMAT=3.0 ./scripts/run_model_tests.sh` is 14 passed, 0 failed.
+`test_proof.ml` checks the full 3.0 vocabulary end to end, including two negative
+controls (3.0.2 must REJECT a corrupted 3.0 proof; 2.2.2 must reject a 3.0 proof).
+
+The default is 2.0 because flipping it leaves **58 unit checks red**, 43 of them in a
+file this session does not own. Measured by running every test executable with
+`BAGUETTE_PROOF_FORMAT=3.0`. It was 80 before the format-agnostic fixes listed in the
+right-hand column:
+
+| executable | failures | why |
+|---|---|---|
+| `test_matrix` | 43 | resolves its own checker (`~/.local/bin`, which cannot read 3.0 at all) and greps proofs for `# 1` to detect a decision level. **Owned by another session** — not touched |
+| `test_justify` | 4 | pins emitted 2.0 line text |
+| `test_prop` | 4 | pins emitted 2.0 line text |
+| `test_endtoend` | 4 | greps for `# 1` |
+| `test_proof` | 2 | pins the unlabelled `.opb` and the `f` line |
+| `test_random` | 1 | greps for `# 1` |
+| `test_mutation` | **0** (was 11) | `mutate_proof.sh` taught both grammars: an optional `@label` before the rule name, `% level N` as well as `# N`, and `del range` expansion when working out which ids are already dead |
+| `test_trace` | **0** (was 11) | label-aware `mints_id`, a standalone-check wrapper in the proof's own format, and a backtrack test that accepts the explicit deletion 3.0 uses in place of `w` |
+
+None of these is a proof being wrong. Every one is a test that pins 2.0 *text*, which
+is a correct thing for those tests to do and exactly why they have to be changed
+deliberately rather than deleted. The `# 1` greps are the ones to be careful with:
+under 3.0 they become vacuously true or vacuously false depending on their polarity,
+and a test that silently stops testing is the failure mode this project keeps finding.
+They need the `% level 1` marker, not removal. `test_mutation` and `test_trace` show
+what that looks like; the two `not (contains "# 1" ...)` assertions in `test_matrix`
+are the dangerous ones, because they go vacuously TRUE.
+
+One thing the fix to `mutate_proof.sh` exposed, worth knowing before reading a green
+lane: under 3.0 the `drop-line` mutation also un-defines the deleted step's label, so
+any later rule citing it is a *parse* error. The lane then holds for a reason that has
+nothing to do with the derivation — it holds on `chain_sat`, where under 2.0 it
+correctly reported the instance as wrong for that lane. Noted in the script.
+
+Flipping the default is a single change to `Writer.format_from_env`'s fallback plus
+those six files. It is not attempted here because `test_matrix.ml` is held by another
+session and 43 of the 58 are in it.
+
+## D-0024  VeriPB 3.0 deletes the level stack, so the writer keeps the tags
+Status: DECIDED
+Date: 2026-09-15
+Supersedes the mechanism of D-0008, not its intent.
+
+Context: D-0008 chose proof levels over per-reason deletion for backtracking: `# l`
+tags everything derived afterwards, `w l` wipes level `l` and above in one rule, one
+proof line per backtrack instead of one per reason. VeriPB 3.0 **has neither rule**.
+`#` there introduces a proofgoal id and `# 1` is a parse error; `w` is only the
+weakening operator inside a `pol`. Measured, not inferred from a changelog.
+
+Labels do not fill the gap: a label names one constraint and rebinding it moves the
+name rather than adding to a set (D-0023).
+
+Decision: `Writer` keeps the tags itself. `t.tags` maps each live derived id to the
+level it was derived at — always, not only under the audit, because it is no longer
+optional once the checker has stopped holding it. `set_level` records the level and
+emits a `% level l` comment where the rule used to be. `wipe_level l` computes exactly
+the set `w l` would have retired, deletes it, and drops it from the table. Consecutive
+ids are compressed into `del range`, so a backtrack is usually still one line.
+
+The set has to be "every id tagged at level >= l", not "every id derived since the
+level was set". Those differ the moment a level is re-entered after a spell at a lower
+one, which is precisely what search does: `# 1`, `# 0`, prune at the root, `# 1`, prune
+under the decision, backtrack. The root prunings must survive. `test_v3_levels` is that
+case and exists for that reason.
+
+Consequences:
+- D-0008's asymptotic argument is weakened, and this is the real cost of 3.0 for this
+  project. "One line per backtrack" is now "one line per *run* of consecutive retired
+  ids". Runs are the common case — ids are handed out in order — but not guaranteed,
+  and a level whose constraints interleave with deletions costs a line per run. On the
+  current models the effect is invisible; on a search deep enough for D-0008's argument
+  to have mattered it is not measured, and should be before M2's conflict analysis
+  lands.
+- The writer now mirrors a piece of checker state that the checker no longer keeps.
+  Invariant I-X3 covers it, and a bug there is a wrong deletion, which the checker
+  catches ("Trying to access constraint with ID N that has already been deleted") —
+  loudly, which is the one comfort here.
+- `del range` tolerates an already-deleted id and a reversed range; `del id` does not.
+  Both measured. That is why deletion removes ids from `t.tags`.

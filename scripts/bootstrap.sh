@@ -42,11 +42,16 @@ say "installing build and dev dependencies"
 opam install -y dune menhir ocamlformat.0.26.1 ocaml-lsp-server
 
 say "checking veripb"
-if command -v veripb >/dev/null 2>&1; then
-  say "veripb present at $(command -v veripb)"
+# scripts/checker.sh is the single source of truth for which checker this project
+# uses and in what order it looks; do not re-implement the search here.
+# shellcheck source=checker.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/checker.sh"
+if baguette_resolve_veripb; then
+  say "veripb present at ${VERIPB}"
+  "${VERIPB}" --version 2>&1 | grep -i version | head -1 | sed 's/^/  /'
 else
-  echo "WARNING: veripb not on PATH. The proof tests will not run." >&2
-  echo "         Expected at ~/.local/bin/veripb" >&2
+  echo "WARNING: no veripb found. The proof tests will FAIL (they do not skip)." >&2
+  baguette_veripb_diagnostic
 fi
 
 cat <<'MSG'

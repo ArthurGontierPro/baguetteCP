@@ -313,8 +313,22 @@ let assignment_lits t bindings =
    Output
    --------------------------------------------------------------------------- *)
 
-let write_opb ?(comments = []) t oc =
-  Opb.write ?objective:t.objective oc ~comments ~constraints:(constraints t)
+(* [labels] writes each row as `@cN <row> ;` so the proof can cite it by name. That
+   is a VeriPB 3.0 feature and nothing else understands it, so it must match the
+   writer's format; [write_opb_for] is the form that cannot get that wrong and is
+   what callers should use. *)
+let write_opb ?(comments = []) ?labels t oc =
+  let labels =
+    match labels with Some b -> b | None -> Writer.default_format () = Writer.V3_0
+  in
+  Opb.write ?objective:t.objective ~labels oc ~comments ~constraints:(constraints t)
+
+(* The .opb written for a particular writer: the labels follow its format. The .opb
+   and the .pbp are one artefact in two files and disagreeing about labelling makes
+   every citation in the proof a parse error, so tie them together here rather than
+   at each of the half-dozen call sites. *)
+let write_opb_for ?(comments = []) t w oc =
+  write_opb ~comments ~labels:(Writer.format w = Writer.V3_0) t oc
 
 (* Start the proof. Must be called after the .opb is complete (invariant I-X5). *)
 let start_proof t w = Writer.header w ~n_model_constraints:t.n
