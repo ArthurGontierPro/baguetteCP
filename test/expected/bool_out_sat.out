@@ -1,0 +1,5 @@
+aliased = true;
+flags = array1d(1..2, [false, true]);
+b = false;
+x = 2;
+----------
