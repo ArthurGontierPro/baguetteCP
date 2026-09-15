@@ -63,6 +63,11 @@ type t = {
   mutable rev_constraints : Opb.constr list;
   mutable n : int; (* ids 1..n have been assigned *)
   mutable objective : Opb.objective option;
+  mutable n_aux : int;
+      (* How many auxiliary variables this encoding has minted of its own accord
+         (M1-T9's disequality rows need one each). Only ever increases, so a name
+         handed out once is never handed out again even after a failed candidate.
+         See [fresh_aux_name]. *)
 }
 
 let create () =
@@ -72,6 +77,7 @@ let create () =
     rev_constraints = [];
     n = 0;
     objective = None;
+    n_aux = 0;
   }
 
 let find t x =
@@ -368,3 +374,169 @@ let expand_int_lin_le t terms rhs =
    above via [Opb.le]), so it never trips [add_constraint]'s refusal of [Eq] --
    there is no separate equality path to keep in sync with I-X5 here. *)
 let add_int_lin_le t terms rhs = add_constraint t (expand_int_lin_le t terms rhs)
+
+(* ---------------------------------------------------------------------------
+   M1-T9: disequalities.
+
+   ---------------------------------------------------------------------------
+   Part 1 -- saying "x <> v" in the order encoding
+   ---------------------------------------------------------------------------
+
+   docs/PROOF-FORMAT.md section 3 introduces the direct encoding with the remark
+   that a disequality is what needs it, and that is true of a disequality's
+   *literal*: the order encoding has no single Boolean meaning "x = v", so nothing
+   in it can be negated to get one. It is *not* true of a disequality's *clause*,
+   and a clause is all a [rup] target ever needs:
+
+       x <> v     <->     ~[x >= v]  \/  [x >= v+1]
+
+   -- x is either strictly below v or strictly above it. Both literals are ordinary
+   order-encoding literals that the .opb already declares, so [ne_clause_lits] needs
+   no new Boolean, no [red] definition, and no channelling. The constant halves drop
+   out exactly as they do everywhere else in this module: at [v = decl_lo] the
+   literal [x >= v] is the constant true, so [~[x >= v]] is the constant false and
+   contributes nothing, leaving the single literal [x >= lo+1]; symmetrically at
+   [v = decl_hi]. A variable declared fixed at [v] loses both halves and the clause
+   is *empty* -- which is the right answer, being the false clause: "x <> v" is
+   unsatisfiable when the model declares x = v.
+
+   This is deliberately not a second naming scheme (section 3's standing warning):
+   it introduces no name at all, it spends the two order literals the encoding
+   already has. The direct encoding above stays exactly as it was, still the thing
+   M4's all_different and element will need -- a *reason* that mentions a hole
+   ("x <> v holds") cannot be negated into a clause without a single literal for it,
+   which is the case that genuinely forces [ensure_direct]. A disequality
+   propagator's reasons are only ever "these variables are fixed to these values",
+   whose negation is this clause, so M1-T9 does not reach that case. See the report
+   for the docs change this implies.
+
+   ---------------------------------------------------------------------------
+   Part 2 -- putting "sum a_i x_i <> c" in the .opb
+   ---------------------------------------------------------------------------
+
+   The .opb *must* carry the disequality. It is the artefact the checker validates
+   a [conclusion SAT] assignment against, so an .opb that omitted it would be a
+   relaxation of the model and would accept a solution the model forbids -- the same
+   class of unsoundness [Compile.reject_set_domain] refuses a set domain over.
+
+   A single PB row cannot say [<>]. Two can, with one fresh Boolean [b] selecting
+   which side of [c] the sum falls on, and the row's own attainable range as the
+   big-M constant (so the unselected side is vacuous rather than merely large):
+
+       L = min over declared domains of sum a_i x_i
+       U = max over declared domains of sum a_i x_i
+
+       row A:   sum a_i x_i  -  (U - c + 1) b   <=   c - 1
+       row B:   sum a_i x_i  -  (c + 1 - L) b   >=   L
+
+   b = 0 makes A say [sum <= c-1] and B say [sum >= L], which is vacuous; b = 1
+   makes B say [sum >= c+1] and A say [sum <= U], vacuous. So the pair is exactly
+   [sum <> c] projected onto the model's own variables, and b is determined by any
+   solution rather than free (which is what keeps [conclusion SAT] working: search
+   hands veripb the model variables' literals only, and whichever of A/B is tight
+   unit-propagates b for it -- checked against veripb 2.2.2, not assumed).
+
+   When c is outside [L, U] the disequality is vacuously true and both rows come out
+   vacuous of their own accord (the big-M constant goes non-positive and each row
+   degenerates to a bound the range already guarantees); there is no special case
+   here and none is wanted, for the reason [Compile]'s ground-constraint comment
+   gives -- a special case is a place the .opb and the propagator can disagree.
+
+   Both rows go through [add_int_lin_le], so both are ordinary [>=] lines and the
+   [=]-counts-as-two trap (section 2's Traps, [Opb.n_checker_constraints]) is not in
+   play: [add_int_lin_ne] adds exactly two to [n_constraints] and to the [f] count.
+   --------------------------------------------------------------------------- *)
+
+(* The literals of the clause "x <> value", over the order encoding, given the
+   variable's *declared* bounds. [[]] is the false clause and means the declared
+   domain is the single value [value].
+
+   Takes the bounds rather than reading them from a [t] so that a propagator can
+   call it with the declared bounds it froze at construction time (docs/DECISIONS.md
+   D-0010 requires that freezing, because the store no longer holds them once
+   anything has narrowed the domain) -- the same reason [Order_reason]'s chain
+   helpers in lib/core/prop/ take explicit bounds. [ne_clause] below is the
+   [t]-reading wrapper for callers that are already on the proof side. *)
+let ne_clause_lits ~name ~decl_lo ~decl_hi value =
+  if decl_lo > decl_hi then invalid_arg "Encoding.ne_clause_lits: empty declared domain";
+  if value < decl_lo || value > decl_hi then
+    invalid_arg
+      (Printf.sprintf "Encoding.ne_clause_lits: %d is outside %s's declared domain %d..%d"
+         value name decl_lo decl_hi);
+  (if value > decl_lo then [ Lit.negate (Lit.ge name value) ] else [])
+  @ if value < decl_hi then [ Lit.ge name (value + 1) ] else []
+
+(* "x <> value" for a variable this encoding has declared. *)
+let ne_clause t x value =
+  let v = find t x in
+  ne_clause_lits ~name:x ~decl_lo:v.lo ~decl_hi:v.hi value
+
+(* The least and greatest values [sum a_i x_i] can take over the declared domains.
+   Zero coefficients contribute nothing, as everywhere else in this module. *)
+let linear_span t terms =
+  List.fold_left
+    (fun (lo, hi) (a, x) ->
+      if a = 0 then (lo, hi)
+      else
+        let v = find t x in
+        if a > 0 then (lo + (a * v.lo), hi + (a * v.hi))
+        else (lo + (a * v.hi), hi + (a * v.lo)))
+    (0, 0) terms
+
+(* A name for an auxiliary Boolean that no FlatZinc identifier can collide with,
+   either as this module's own key or as the .opb name [Lit.sanitize] gives it.
+
+   The key cannot collide because '$' is not a FlatZinc identifier character
+   (lib/flatzinc/lexer.ml's [is_ident_start]/[is_ident_char]). The .opb name can, in
+   principle -- [sanitize] maps '$' to '_', so "$ne0" and a variable actually called
+   "_ne0" would both be "_ne0" -- and a silent collision there would merge two
+   variables' literals inside [Opb.normalise], which is exactly the failure
+   [Compile.check_name_collisions] exists to prevent for model variables. So the
+   candidate is checked against every declared variable's sanitised name and bumped
+   until it is free. That check is sound only because every model variable is
+   declared before any row is posted, which lib/flatzinc/compile.ml's header states
+   as a requirement of its own and which [add_int_lin_le] already relies on. *)
+let fresh_aux_name t prefix =
+  let taken = Hashtbl.create 64 in
+  Hashtbl.iter (fun k _ -> Hashtbl.replace taken (Lit.sanitize k) ()) t.ints;
+  let rec go i =
+    let cand = Printf.sprintf "$%s%d" prefix i in
+    if Hashtbl.mem t.ints cand || Hashtbl.mem taken (Lit.sanitize cand) then go (i + 1)
+    else (
+      t.n_aux <- i + 1;
+      cand)
+  in
+  go t.n_aux
+
+(* The two rows of [sum a_i x_i <> rhs], as [Opb.t] values, together with the name of
+   the auxiliary Boolean they share. Exposed separately from [add_int_lin_ne] for the
+   same reason [expand_int_lin_le] is exposed separately from [add_int_lin_le]: so a
+   caller -- or a test -- can look at the rows before they are committed to the .opb.
+
+   The aux variable must already be declared (as a bool, i.e. the order encoding on
+   [0, 1], D-0007) when this is called; [add_int_lin_ne] is what declares it. *)
+let expand_int_lin_ne t terms rhs ~aux =
+  let l, u = linear_span t terms in
+  let big_a = u - rhs + 1 in
+  let big_b = rhs + 1 - l in
+  let row_a = expand_int_lin_le t (terms @ [ (-big_a, aux) ]) (rhs - 1) in
+  (* sum >= L + big_b * b  is  -sum + big_b * b <= -L. *)
+  let row_b =
+    expand_int_lin_le t (List.map (fun (a, x) -> (-a, x)) terms @ [ (big_b, aux) ]) (-l)
+  in
+  (row_a, row_b)
+
+(* Post [sum a_i x_i <> rhs] as two model constraints and hand back both ids, in the
+   order they appear in the .opb: (A, B) with A the [sum <= c-1] side. Terms are
+   (coefficient, integer-variable-name) pairs, the same shape [add_int_lin_le] takes.
+
+   Declares the auxiliary Boolean as a side effect, so this must be called while the
+   .opb is still being built, and the returned ids obey I-X5 like any others. A
+   caller that wants the rows without the side effect wants [expand_int_lin_ne]. *)
+let add_int_lin_ne t terms rhs =
+  let aux = fresh_aux_name t "ne" in
+  declare_bool t aux;
+  let row_a, row_b = expand_int_lin_ne t terms rhs ~aux in
+  let id_a = add_constraint t row_a in
+  let id_b = add_constraint t row_b in
+  (id_a, id_b)

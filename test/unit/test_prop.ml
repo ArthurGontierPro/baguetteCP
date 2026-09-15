@@ -31,6 +31,9 @@ module Opb = Baguette_proof.Opb
 module Writer = Baguette_proof.Writer
 module Encoding = Baguette_proof.Encoding
 module Justify = Baguette_core.Justify
+module Ne = Baguette_core.Ne
+module Engine = Baguette_core.Engine
+module Search = Baguette_core.Search
 
 let failures = ref 0
 
@@ -1174,6 +1177,640 @@ let test_lin_eq_pairing () =
        Trivial) and still verifies"
     ~build
 
+(* ============================================================================
+   M1-T9: int_ne and int_lin_ne (lib/core/prop/ne.ml), and the disequality rows
+   lib/proof/encoding.ml posts for them.
+
+   Three things are being tested here and it is worth keeping them apart, because
+   this project has now had five findings that were invisible on the instance chosen
+   to test the thing they broke (D-0009, D-0010, D-0012, D-0017, D-0018):
+
+   1. the propagator's own behaviour -- I-P1 soundness by brute force, I-P3 checking,
+      I-P2/I-P3 idempotence;
+   2. the *text* of what is emitted -- the .opb rows and the [rup] line -- asserted
+      verbatim, because the encoding is normative (docs/PROOF-FORMAT.md section 3) and
+      a silent change of shape is exactly the class of defect D-0010 was;
+   3. whether veripb accepts it (I-X1), including a deliberately wrong [rup] that it
+      must *reject*. Without that last one, "veripb accepted our rup" says nothing:
+      [rup] is the one rule that searches for its own justification, so a test that
+      only ever feeds it true clauses cannot tell a correct explanation from a lucky
+      one. This is the local version of M1-T15's point.
+
+   Instance choice, deliberately one step past the smallest thing that works: every
+   case below fixes its reason variables to values that are *interior* to their
+   declared domains (so both halves of the "x <> v" clause are real literals, not
+   dropped constants), prunes a value that is *interior* to the pruned variable's
+   domain in at least one case (a genuine hole, not a bound move) and at a *bound* in
+   another (where one half of the clause is dropped), and the int_lin_ne case uses
+   three variables with coefficients 2, 3 and -1 rather than the +/-1 an int_ne would
+   have exercised anyway. A disequality test where both variables are already fixed
+   tests nothing at all. *)
+
+let raises name f =
+  match f () with exception _ -> check name true | _ -> check name false
+
+let read_file path =
+  let ic = open_in_bin path in
+  let s = really_input_string ic (in_channel_length ic) in
+  close_in ic;
+  s
+
+let has_line text line = List.exists (String.equal line) (String.split_on_char '\n' text)
+
+(* Like [run_veripb], but the proof MUST be rejected. Used for the negative controls:
+   a wrong explanation has to fail, or the positive checks prove nothing. *)
+let run_veripb_rejects ~name ~build =
+  match veripb_path () with
+  | None ->
+      incr failures;
+      Printf.printf
+        "FAIL %s: veripb not found -- invariant I-X1 was NOT checked. Install it (see \
+         docs/PROOF-FORMAT.md) and re-run; do not treat this as a pass.\n"
+        name
+  | Some veripb -> (
+      let dir = Filename.temp_file "baguette_prop_veripb_neg" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let opb, pbp = build dir in
+      let log = Filename.concat dir "log" in
+      let rc =
+        Sys.command
+          (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
+             (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
+      in
+      check (Printf.sprintf "%s (veripb rejects it, as it must)" name) (rc <> 0);
+      List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp; log ];
+      try Sys.rmdir dir with _ -> ())
+
+(* ---------------------------------------------- the "x <> v" clause, on its own *)
+
+let test_ne_clause_lits () =
+  let s lits = String.concat " " (List.map Lit.to_string lits) in
+  let lits v = Encoding.ne_clause_lits ~name:"x" ~decl_lo:0 ~decl_hi:4 v in
+  check "ne_clause_lits: an interior value gives both halves"
+    (s (lits 2) = "~x_ge_2 x_ge_3");
+  check "ne_clause_lits: at the declared lo, ~[x >= lo] is the constant false and drops"
+    (s (lits 0) = "x_ge_1");
+  check "ne_clause_lits: at the declared hi, [x >= hi+1] is the constant false and drops"
+    (s (lits 4) = "~x_ge_4");
+  (* A variable the model declares fixed cannot be different from that value: the
+     clause is empty, i.e. false, which is the correct answer and not a degenerate
+     one -- [Explanation.Clause []] renders as [rup >= 1 ;], a contradiction, and
+     veripb accepts that line against a .opb whose ne rows are unsatisfiable. *)
+  check "ne_clause_lits: a declared-fixed variable gives the empty (false) clause"
+    (Encoding.ne_clause_lits ~name:"k" ~decl_lo:3 ~decl_hi:3 3 = []);
+  raises "ne_clause_lits: a value outside the declared domain is an error" (fun () ->
+      ignore (Encoding.ne_clause_lits ~name:"x" ~decl_lo:0 ~decl_hi:4 5));
+  (* [Encoding.ne_clause] must agree with the explicit-bounds form: they are one
+     implementation and the propagator calls the explicit one with bounds it froze at
+     [make] time (D-0010), so a divergence would be invisible from the propagator. *)
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:0 ~hi:4;
+  check "ne_clause: the t-reading wrapper agrees with the explicit-bounds form"
+    (Encoding.ne_clause e "x" 2 = lits 2)
+
+(* ------------------------------------------------------- the .opb rows, verbatim *)
+
+let test_ne_rows () =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:1 ~hi:2;
+  Encoding.declare_int e "y" ~lo:1 ~hi:2;
+  let before = Encoding.n_constraints e in
+  let id_a, id_b = Encoding.add_int_lin_ne e [ (1, "x"); (-1, "y") ] 0 in
+  check "add_int_lin_ne: exactly two ids, consecutive"
+    (id_b = id_a + 1 && id_a = before + 1);
+  check "add_int_lin_ne: exactly two .opb lines" (Encoding.n_constraints e - before = 2);
+  (* The trap docs/PROOF-FORMAT.md section 2 records: an .opb line with '=' counts as
+     TWO constraints for [f], which shifts every later id. These rows are plain '>='
+     lines, and this is the assertion that says so rather than hoping. *)
+  check "add_int_lin_ne: the f count still equals the id count (no '=' line)"
+    (Opb.n_checker_constraints (Encoding.constraints e) = Encoding.n_constraints e);
+  let rows = List.map Opb.constr_to_string (Encoding.constraints e) in
+  check "add_int_lin_ne: row A is the 'sum <= c-1' side, selected by the aux bool"
+    (List.nth rows (before + 0) = "+1 ~x_ge_2 +1 y_ge_2 +2 _ne0_ge_1 >= 2 ;");
+  check "add_int_lin_ne: row B is the 'sum >= c+1' side"
+    (List.nth rows (before + 1) = "+1 x_ge_2 +1 ~y_ge_2 +2 ~_ne0_ge_1 >= 2 ;");
+  (* The aux Boolean is order-encoded on [0,1] (D-0007), so it contributes no
+     consistency clause of its own -- which is why the two rows above are the only
+     two lines this call added. *)
+  check "add_int_lin_ne: the aux bool is declared, under a name FlatZinc cannot spell"
+    (Encoding.is_declared e "$ne0" && not (Encoding.is_declared e "_ne0"));
+  let id_c, _ = Encoding.add_int_lin_ne e [ (1, "x") ] 2 in
+  check "add_int_lin_ne: a second disequality mints a second aux bool"
+    (Encoding.is_declared e "$ne1" && id_c = id_b + 1)
+
+(* ---------------------------------------------------------- I-P1: soundness *)
+
+let satisfies_ne coeffs rhs assignment =
+  List.fold_left2 (fun acc a v -> acc + (a * v)) 0 coeffs assignment <> rhs
+
+(* Brute force, in the same shape as [check_soundness_case] above but over the box
+   *after* the pre-fixing, since a disequality infers nothing until all but one of its
+   terms is fixed. [pre] is (index, value) pairs fixed before propagation, standing in
+   for whatever earlier propagator or decision fixed them.
+
+   Two directions are checked. I-P1 (never remove a supported value) is the one the
+   invariant demands. The converse -- with exactly one term left unfixed, every
+   *unsupported* value of it is removed -- is the strength claim this algorithm
+   actually makes, and it is asserted separately so that a regression that quietly
+   stopped pruning would show up as a strength failure rather than as nothing. *)
+let check_ne_soundness_case name coeffs rhs ranges pre =
+  let n = List.length coeffs in
+  let bounds = List.mapi (fun i (lo, hi) -> (Printf.sprintf "x%d" i, lo, hi)) ranges in
+  let store = mk_store bounds in
+  let prop = Ne.make store (List.mapi (fun i a -> (a, var i)) coeffs) rhs in
+  List.iter (fun (i, v) -> ignore (Store.fix store (var i) v Explanation.trivial)) pre;
+  let cur =
+    List.init n (fun i ->
+        let d = Store.get store (var i) in
+        (Domain.lo d, Domain.hi d))
+  in
+  let solutions = List.filter (satisfies_ne coeffs rhs) (cartesian cur) in
+  let has_support i v = List.exists (fun sol -> List.nth sol i = v) solutions in
+  let nonzero_unfixed =
+    List.length
+      (List.filteri
+         (fun i a -> a <> 0 && not (Domain.is_fixed (Store.get store (var i))))
+         coeffs)
+  in
+  match Ne.propagate prop store with
+  | Propagator.Conflict _ ->
+      check (Printf.sprintf "%s: conflict only when truly unsat" name) (solutions = [])
+  | Propagator.Fixpoint ->
+      let sound = ref true and strong = ref true in
+      List.iteri
+        (fun i (lo, hi) ->
+          let d = Store.get store (var i) in
+          for v = lo to hi do
+            let supported = has_support i v and kept = Domain.mem d v in
+            if supported && not kept then sound := false;
+            if nonzero_unfixed <= 1 && (not supported) && kept then strong := false
+          done)
+        cur;
+      check (Printf.sprintf "%s: I-P1 no supported value removed" name) !sound;
+      check
+        (Printf.sprintf "%s: with one term left, every unsupported value is removed" name)
+        !strong
+
+let test_ne_soundness () =
+  check_ne_soundness_case "int_ne x<>y, y fixed interior" [ 1; -1 ] 0
+    [ (0, 4); (0, 4) ]
+    [ (1, 2) ];
+  check_ne_soundness_case "int_ne x<>y, nothing fixed (must not prune)" [ 1; -1 ] 0
+    [ (0, 4); (0, 4) ]
+    [];
+  check_ne_soundness_case "int_ne x<>y, y fixed at x's declared lo" [ 1; -1 ] 0
+    [ (0, 4); (0, 4) ]
+    [ (1, 0) ];
+  check_ne_soundness_case "int_lin_ne 2a+3b-c<>5, a and b fixed" [ 2; 3; -1 ] 5
+    [ (0, 4); (0, 4); (0, 4) ]
+    [ (0, 2); (1, 1) ];
+  (* The quotient is not an integer: 2a must equal 5 - 3b = 2 ... with b = 0 it is 5,
+     odd, so nothing is prunable and the propagator must leave the domain alone. *)
+  check_ne_soundness_case "int_lin_ne 2a+3b<>5, non-integral quotient" [ 2; 3 ] 5
+    [ (0, 4); (0, 4) ]
+    [ (1, 0) ];
+  check_ne_soundness_case "int_lin_ne, target outside the reachable range" [ 1; 1 ] 99
+    [ (0, 4); (0, 4) ]
+    [ (1, 3) ];
+  (* A zero coefficient is not part of the constraint: fixing the other two must still
+     leave the disequality able to prune the one real unfixed term. *)
+  check_ne_soundness_case "int_lin_ne with a zero coefficient" [ 1; 0; -1 ] 0
+    [ (0, 4); (0, 4); (0, 4) ]
+    [ (0, 2) ];
+  check_ne_soundness_case "int_ne, negative domains" [ 1; -1 ] 0
+    [ (-3, 3); (-3, 3) ]
+    [ (1, -2) ]
+
+(* -------------------------------------------------- I-P3 checking, I-P2 fixpoint *)
+
+let test_ne_checking () =
+  let run name coeffs rhs ranges fix_values expect_conflict =
+    let bounds = List.mapi (fun i (lo, hi) -> (Printf.sprintf "x%d" i, lo, hi)) ranges in
+    let store = mk_store bounds in
+    let prop = Ne.make store (List.mapi (fun i a -> (a, var i)) coeffs) rhs in
+    List.iteri
+      (fun i v -> ignore (Store.fix store (var i) v Explanation.trivial))
+      fix_values;
+    match Ne.propagate prop store with
+    | Propagator.Conflict _ -> check name expect_conflict
+    | Propagator.Fixpoint -> check name (not expect_conflict)
+  in
+  run "I-P3 int_ne: x=2,y=3 (x<>y holds) is not a conflict" [ 1; -1 ] 0
+    [ (0, 4); (0, 4) ]
+    [ 2; 3 ] false;
+  run "I-P3 int_ne: x=2,y=2 (x<>y violated) is a conflict" [ 1; -1 ] 0
+    [ (0, 4); (0, 4) ]
+    [ 2; 2 ] true;
+  run "I-P3 int_lin_ne: 2a+3b-c=5 exactly is a conflict" [ 2; 3; -1 ] 5
+    [ (0, 4); (0, 4); (0, 4) ]
+    [ 2; 1 - 0; 2 ]
+    true;
+  run "I-P3 int_lin_ne: one off the forbidden total is not a conflict" [ 2; 3; -1 ] 5
+    [ (0, 4); (0, 4); (0, 4) ]
+    [ 2; 1; 1 ] false;
+  (* A zero coefficient must not be able to make the sum wrong. *)
+  run "I-P3 int_lin_ne: a zero coefficient contributes nothing to the check" [ 1; 0; -1 ]
+    0
+    [ (0, 4); (0, 4); (0, 4) ]
+    [ 2; 3; 2 ] true
+
+let test_ne_idempotence () =
+  let run name coeffs rhs ranges pre =
+    let bounds = List.mapi (fun i (lo, hi) -> (Printf.sprintf "x%d" i, lo, hi)) ranges in
+    let store = mk_store bounds in
+    let prop = Ne.make store (List.mapi (fun i a -> (a, var i)) coeffs) rhs in
+    List.iter (fun (i, v) -> ignore (Store.fix store (var i) v Explanation.trivial)) pre;
+    (match Ne.propagate prop store with
+    | Propagator.Conflict _ ->
+        check (Printf.sprintf "%s: expected Fixpoint first pass" name) false
+    | Propagator.Fixpoint -> ());
+    let snap = Store.snapshot store in
+    (match Ne.propagate prop store with
+    | Propagator.Conflict _ ->
+        check (Printf.sprintf "%s: I-P2 second propagate must not conflict" name) false
+    | Propagator.Fixpoint ->
+        check (Printf.sprintf "%s: I-P2 second propagate reports Fixpoint" name) true);
+    check
+      (Printf.sprintf "%s: I-P3 second propagate changed nothing" name)
+      (Store.same_domains store snap)
+  in
+  run "int_ne idempotence (interior hole)" [ 1; -1 ] 0 [ (0, 4); (0, 4) ] [ (1, 2) ];
+  (* The pruning takes the domain from 2 values to 1, so the second pass sees every
+     term fixed and must take the *checking* branch instead -- and must not report a
+     conflict there, since the value it removed is exactly the one that would have. *)
+  run "int_ne idempotence (pruning fixes the variable)" [ 1; -1 ] 0
+    [ (2, 3); (0, 4) ]
+    [ (1, 2) ];
+  run "int_lin_ne idempotence" [ 2; 3; -1 ] 5
+    [ (0, 4); (0, 4); (0, 4) ]
+    [ (0, 2); (1, 1) ]
+
+(* ============================================================================
+   End-to-end: the emitted text, and veripb (I-X1).
+
+   Each build posts the disequality as real .opb rows, narrows the store the way an
+   earlier propagator would have, runs the propagator, renders the explanation it
+   produced through [Justify], and hands the pair to veripb. [check_lines] asserts the
+   emitted text verbatim first, so a shape change is reported as a shape change rather
+   than only as a checker rejection several lines later. *)
+
+(* Shared skeleton: declare [decls], post [rows] (a function that may add model rows
+   and returns the ne row ids), fix [pre] in the store, propagate, pick out the trail
+   entry for [target] (or the conflict), emit it, conclude SAT with [sat]. *)
+let build_ne_case dir ~file ~decls ~pins ~terms ~rhs ~pre ~target ~sat ~expect_lines
+    ?(corrupt = fun lits -> lits) () =
+  let e = Encoding.create () in
+  List.iter (fun (n, lo, hi) -> Encoding.declare_int e n ~lo ~hi) decls;
+  let pin_ids = List.map (fun c -> Encoding.add_constraint e c) pins in
+  let decl_name i =
+    let n, _, _ = List.nth decls i in
+    n
+  in
+  ignore (Encoding.add_int_lin_ne e (List.map (fun (a, i) -> (a, decl_name i)) terms) rhs);
+  let opb = Filename.concat dir (file ^ ".opb") in
+  let pbp = Filename.concat dir (file ^ ".pbp") in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ file ] e oc;
+  close_out oc;
+  let store = mk_store (List.map (fun (n, lo, hi) -> (n, lo, hi)) decls) in
+  let prop = Ne.make store (List.map (fun (a, i) -> (a, var i)) terms) rhs in
+  List.iteri
+    (fun k (i, v) ->
+      let why =
+        match List.nth_opt pin_ids k with
+        | Some id -> Explanation.model_row id
+        | None -> Explanation.trivial
+      in
+      match Store.fix store (var i) v why with
+      | Store.Changed | Store.Unchanged -> ()
+      | Store.Conflict _ -> failwith (file ^ ": pre-fixing conflicted"))
+    pre;
+  let before = Store.trail_length store in
+  let expl =
+    match Ne.propagate prop store with
+    | Propagator.Conflict e -> e
+    | Propagator.Fixpoint -> (
+        let after = Store.trail_length store in
+        let entries =
+          List.filteri (fun i _ -> i < after - before) (Store.trail_entries store)
+        in
+        match
+          List.find_opt (fun (en : Store.entry) -> Var.equal en.var (var target)) entries
+        with
+        | Some en -> Store.explanation store en
+        | None -> failwith (file ^ ": nothing was pruned from the target variable"))
+  in
+  let expl =
+    match Explanation.force expl with
+    | Explanation.Clause lits -> Explanation.clause (corrupt lits)
+    | other -> other
+  in
+  let oc = open_out pbp in
+  let w = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof e w;
+  let ctx =
+    Justify.create ~writer:w ~encoding:e ~model_id:(fun () ->
+        failwith (file ^ ": ctx.model_id was consulted -- a Clause cites no row"))
+  in
+  let id = Justify.emit ctx expl in
+  Writer.delete w id;
+  Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e sat));
+  close_out oc;
+  let text = read_file pbp in
+  List.iter
+    (fun line ->
+      let ok = has_line text line in
+      if not ok then Printf.printf "     (actual proof text)\n%s\n" text;
+      check (Printf.sprintf "%s: emits `%s`" file line) ok)
+    expect_lines;
+  (opb, pbp)
+
+(* x, y in [0,4], x <> y, with x pinned to 2 by two real model rows. 2 is interior to
+   both declared domains, so the pruning is a genuine hole in y (lo and hi both stay
+   put) and every literal of the clause is a real one -- the case a test that pinned x
+   to 0 would have silently degenerated. *)
+let build_ne_hole dir =
+  build_ne_case dir ~file:"ne_hole"
+    ~decls:[ ("x", 0, 4); ("y", 0, 4) ]
+    ~pins:[ Opb.ge [ (1, Lit.ge "x" 2) ] 1; Opb.ge [ (1, Lit.le "x" 2) ] 1 ]
+    ~terms:[ (1, 0); (-1, 1) ]
+    ~rhs:0
+    ~pre:[ (0, 2) ]
+    ~target:1
+    ~sat:[ ("x", 2); ("y", 3) ]
+    ~expect_lines:
+      [
+        (* the claim (y <> 2) first, then the negation of its reason (x = 2):
+           docs/DECISIONS.md D-0018's trace-line shape, literally *)
+        "rup +1 ~y_ge_2 +1 y_ge_3 +1 ~x_ge_2 +1 x_ge_3 >= 1 ;";
+      ]
+    ()
+
+(* The same model with the wrong value claimed: y <> 1 rather than y <> 2. It is not
+   entailed (y = 1 is perfectly possible with x = 2), so veripb must reject it. This
+   is what makes the positive case above mean something. *)
+let build_ne_hole_wrong dir =
+  build_ne_case dir ~file:"ne_hole_wrong"
+    ~decls:[ ("x", 0, 4); ("y", 0, 4) ]
+    ~pins:[ Opb.ge [ (1, Lit.ge "x" 2) ] 1; Opb.ge [ (1, Lit.le "x" 2) ] 1 ]
+    ~terms:[ (1, 0); (-1, 1) ]
+    ~rhs:0
+    ~pre:[ (0, 2) ]
+    ~target:1
+    ~sat:[ ("x", 2); ("y", 3) ]
+    ~expect_lines:[]
+    ~corrupt:(fun _ ->
+      Encoding.ne_clause_lits ~name:"y" ~decl_lo:0 ~decl_hi:4 1
+      @ Encoding.ne_clause_lits ~name:"x" ~decl_lo:0 ~decl_hi:4 2)
+    ()
+
+(* The pruned value sits at the pruned variable's declared lo, so one half of its
+   clause is the constant false and drops: the claim is the single literal y_ge_1.
+   The reason variable is still pinned interior, so the reason keeps both halves. *)
+let build_ne_bound dir =
+  build_ne_case dir ~file:"ne_bound"
+    ~decls:[ ("x", 0, 4); ("y", 0, 4) ]
+    ~pins:[ Opb.ge [ (1, Lit.le "x" 0) ] 1 ]
+    ~terms:[ (1, 0); (-1, 1) ]
+    ~rhs:0
+    ~pre:[ (0, 0) ]
+    ~target:1
+    ~sat:[ ("x", 0); ("y", 1) ]
+    ~expect_lines:[ "rup +1 y_ge_1 +1 x_ge_1 >= 1 ;" ]
+    ()
+
+(* int_lin_ne with three variables and coefficients 2, 3, -1: 2a + 3b - c <> 5, with
+   a = 2 and b = 1 established, so c <> 2 -- an interior hole in c, reached through a
+   division by a coefficient that is neither 1 nor -1. *)
+let build_lin_ne dir =
+  build_ne_case dir ~file:"lin_ne"
+    ~decls:[ ("a", 0, 4); ("b", 0, 4); ("c", 0, 4) ]
+    ~pins:
+      [
+        Opb.ge [ (1, Lit.ge "a" 2) ] 1;
+        Opb.ge [ (1, Lit.le "a" 2) ] 1;
+        Opb.ge [ (1, Lit.ge "b" 1) ] 1;
+        Opb.ge [ (1, Lit.le "b" 1) ] 1;
+      ]
+    ~terms:[ (2, 0); (3, 1); (-1, 2) ]
+    ~rhs:5
+    ~pre:[ (0, 2); (1, 1) ]
+    ~target:2
+    ~sat:[ ("a", 2); ("b", 1); ("c", 3) ]
+    ~expect_lines:
+      [ "rup +1 ~c_ge_2 +1 c_ge_3 +1 ~a_ge_2 +1 a_ge_3 +1 ~b_ge_1 +1 b_ge_2 >= 1 ;" ]
+    ()
+
+(* A conflict: x and y are both fixed to 2 by earlier propagation that this proof does
+   not itself log, so the .opb is satisfiable and the [rup] line is checked on its own
+   merits. The clause is the same function of the same data as a pruning's -- see
+   ne.ml's header -- which is what this case exists to pin down. *)
+let build_ne_conflict dir =
+  build_ne_case dir ~file:"ne_conflict"
+    ~decls:[ ("x", 0, 4); ("y", 0, 4) ]
+    ~pins:[]
+    ~terms:[ (1, 0); (-1, 1) ]
+    ~rhs:0
+    ~pre:[ (0, 2); (1, 2) ]
+    ~target:0
+    ~sat:[ ("x", 1); ("y", 0) ]
+    ~expect_lines:[ "rup +1 ~x_ge_2 +1 x_ge_3 +1 ~y_ge_2 +1 y_ge_3 >= 1 ;" ]
+    ()
+
+(* ---------------------------------------------- the selector Boolean, both ways
+
+   [conclusion SAT] hands veripb the model variables' literals only; the disequality's
+   own auxiliary Boolean is left for the checker's unit propagation to fill in from
+   whichever of the two rows is tight. That is the one part of this encoding that is
+   not obviously local, so it is tested on *both* sides of c and with *two*
+   disequalities live at once -- a run that only ever landed below c would leave row
+   A's half of the mechanism unexercised, which is precisely the shape of the five
+   findings this file's other headers keep citing.
+
+   The rejected case is the point of the exercise: it shows the .opb really does
+   forbid x = y, i.e. that the pair of rows is the disequality and not merely
+   satisfiable alongside it. *)
+
+let build_selector dir ~file ~sat =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:0 ~hi:4;
+  Encoding.declare_int e "y" ~lo:0 ~hi:4;
+  ignore (Encoding.add_int_lin_ne e [ (1, "x"); (-1, "y") ] 0);
+  ignore (Encoding.add_int_lin_ne e [ (1, "x"); (1, "y") ] 4);
+  let opb = Filename.concat dir (file ^ ".opb") in
+  let pbp = Filename.concat dir (file ^ ".pbp") in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ file ] e oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let w = Writer.create ~audit:true oc in
+  Encoding.start_proof e w;
+  Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e sat));
+  close_out oc;
+  (opb, pbp)
+
+let test_ne_selector () =
+  run_veripb ~name:"int_ne rows: a solution above c (row A forces the selector)"
+    ~build:(fun dir -> build_selector dir ~file:"sel_hi" ~sat:[ ("x", 3); ("y", 0) ]);
+  run_veripb ~name:"int_ne rows: a solution below c (row B forces the selector)"
+    ~build:(fun dir -> build_selector dir ~file:"sel_lo" ~sat:[ ("x", 0); ("y", 3) ]);
+  run_veripb_rejects ~name:"int_ne rows: x = y is not a solution of the .opb"
+    ~build:(fun dir -> build_selector dir ~file:"sel_eq" ~sat:[ ("x", 2); ("y", 2) ]);
+  run_veripb_rejects ~name:"int_ne rows: x + y = 4 is not a solution of the .opb"
+    ~build:(fun dir -> build_selector dir ~file:"sel_sum" ~sat:[ ("x", 1); ("y", 3) ])
+
+(* ============================================================================
+   test/models/ne_sat.fzn, end to end.
+
+   The FlatZinc front end still *rejects* int_ne (lib/flatzinc/compile.ml's
+   [reject_ne], called at the [Model.Int_ne] arm of [compile]), so the CLI cannot yet
+   run this model and test/models/PENDING still lists it. Both of those files belong
+   to another session this round. What can be checked from here is everything below
+   that line: that the model's own store, encoding, propagators, search, proof and
+   veripb all agree once the two constraints are posted the way [Compile] posts them.
+
+   ne_sat.fzn is:
+
+       var 1..2: x;  var 1..2: y;
+       constraint int_ne(x, y);
+       constraint int_lt(x, y);
+       solve satisfy;
+
+   which is worth noting is *not* by itself a test of int_ne: int_lt alone fixes
+   x = 1, y = 2, so the disequality never prunes anything. That is exactly the shape
+   of instance D-0009/D-0010/D-0017 were invisible on, so the same wiring is run a
+   second time below over a model where int_ne is the only thing that can make
+   progress. Both are checked by veripb. *)
+
+let pack_ne ~id (p : Ne.t) =
+  Propagator.pack ~id (module Ne.Int_ne : Propagator.S with type t = Ne.t) p
+
+let pack_linear ~id (p : Linear.t) =
+  Propagator.pack ~id (module Linear : Propagator.S with type t = Linear.t) p
+
+(* [decls] and the two constraints, wired exactly as lib/flatzinc/compile.ml would:
+   every variable declared into store and encoding in the same order, each row posted
+   to the .opb before any propagator runs, each Linear instance given its own row id
+   (D-0011). [check] is the independent re-verification I-S1 demands -- a hand-written
+   one, as Search.solve's own header says a caller without a Model.t must supply. *)
+let build_search_case dir ~file ~decls ~ne_terms ~ne_rhs ~lt_terms ~lt_rhs ~check_sol =
+  let e = Encoding.create () in
+  List.iter (fun (n, lo, hi) -> Encoding.declare_int e n ~lo ~hi) decls;
+  let name_of i =
+    let n, _, _ = List.nth decls i in
+    n
+  in
+  ignore
+    (Encoding.add_int_lin_ne e (List.map (fun (a, i) -> (a, name_of i)) ne_terms) ne_rhs);
+  let lt_row =
+    Encoding.add_int_lin_le e (List.map (fun (a, i) -> (a, name_of i)) lt_terms) lt_rhs
+  in
+  let opb = Filename.concat dir (file ^ ".opb") in
+  let pbp = Filename.concat dir (file ^ ".pbp") in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ file ] e oc;
+  close_out oc;
+  let store = mk_store decls in
+  let ne = Ne.make store (List.map (fun (a, i) -> (a, var i)) ne_terms) ne_rhs in
+  let lt =
+    Linear.make ~row_id:lt_row store (List.map (fun (a, i) -> (a, var i)) lt_terms) lt_rhs
+  in
+  let engine = Engine.create [ pack_ne ~id:0 ne; pack_linear ~id:1 lt ] in
+  let oc = open_out pbp in
+  let w = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof e w;
+  let ctx =
+    Justify.create ~writer:w ~encoding:e ~model_id:(fun () ->
+        failwith (file ^ ": ctx.model_id was consulted -- every instance carries its row"))
+  in
+  let outcome = Search.solve ~engine ~store ~ctx ~check:check_sol () in
+  close_out oc;
+  (outcome, store, opb, pbp)
+
+let sat_values store (asn : Search.assignment) =
+  List.map (fun (v, value) -> (Store.name store v, value)) asn
+
+let build_ne_sat dir =
+  let decls = [ ("x", 1, 2); ("y", 1, 2) ] in
+  let check_sol asn =
+    let get i = List.assoc (var i) asn in
+    get 0 <> get 1 && get 0 < get 1
+  in
+  let outcome, store, opb, pbp =
+    build_search_case dir ~file:"ne_sat" ~decls
+      ~ne_terms:[ (1, 0); (-1, 1) ]
+      ~ne_rhs:0
+      ~lt_terms:[ (1, 0); (-1, 1) ]
+      ~lt_rhs:(-1) ~check_sol
+  in
+  (match outcome with
+  | Search.Sat asn ->
+      check "ne_sat: the solver finds x = 1, y = 2"
+        (sat_values store asn = [ ("x", 1); ("y", 2) ])
+  | Search.Unsat -> check "ne_sat: the solver finds a solution" false);
+  (opb, pbp)
+
+(* The same wiring over a model int_lt cannot finish on its own: x, y in [0, 4] with
+   x <> y and x < y + 0 ... would still be int_lt's job, so instead the linear row is
+   x + y <= 5 and the disequality is 2x - y <> 0. Nothing here is fixed by bounds
+   reasoning alone; the search must branch, int_ne must prune inside a branch, and the
+   proof must survive it. This is the "one step past" instance: ne_sat above would
+   have verified even if int_ne did nothing at all. *)
+let build_ne_search dir =
+  let decls = [ ("x", 0, 4); ("y", 0, 4) ] in
+  let check_sol asn =
+    let get i = List.assoc (var i) asn in
+    (2 * get 0) - get 1 <> 0 && get 0 + get 1 <= 5
+  in
+  let outcome, store, opb, pbp =
+    build_search_case dir ~file:"ne_search" ~decls
+      ~ne_terms:[ (2, 0); (-1, 1) ]
+      ~ne_rhs:0
+      ~lt_terms:[ (1, 0); (1, 1) ]
+      ~lt_rhs:5 ~check_sol
+  in
+  (match outcome with
+  | Search.Sat asn ->
+      let values = sat_values store asn in
+      check
+        (Printf.sprintf "ne_search: the solution %s satisfies both constraints"
+           (String.concat " "
+              (List.map (fun (n, v) -> Printf.sprintf "%s=%d" n v) values)))
+        (check_sol asn)
+  | Search.Unsat -> check "ne_search: the solver finds a solution" false);
+  (* ... and int_ne is what made that true. Without it the same search takes the same
+     first-fail, indomain_min path and lands on x = 0, y = 0, which the independent
+     re-check (I-S1) rejects as [Unsound_solution]. Asserting this is the difference
+     between "the run verified" and "the run verified *because* the disequality did
+     something": every earlier finding in this project (D-0009, D-0010, D-0012,
+     D-0017, D-0018) was invisible on an instance where the feature under test never
+     had to act. *)
+  let without_ne_is_wrong =
+    let store = mk_store decls in
+    let lt = Linear.make ~row_id:1 store [ (1, var 0); (1, var 1) ] 5 in
+    let engine = Engine.create [ pack_linear ~id:0 lt ] in
+    let scratch = Filename.concat dir "ne_search_without_ne.pbp" in
+    let oc = open_out scratch in
+    let w = Writer.create ~audit:false oc in
+    let e2 = Encoding.create () in
+    List.iter (fun (n, lo, hi) -> Encoding.declare_int e2 n ~lo ~hi) decls;
+    ignore (Encoding.add_int_lin_le e2 [ (1, "x"); (1, "y") ] 5);
+    Encoding.start_proof e2 w;
+    let ctx = Justify.create ~writer:w ~encoding:e2 ~model_id:(fun () -> 1) in
+    let r =
+      match Search.solve ~engine ~store ~ctx ~check:check_sol () with
+      | _ -> false
+      | exception Search.Unsound_solution _ -> true
+    in
+    close_out oc;
+    (try Sys.remove scratch with _ -> ());
+    r
+  in
+  check "ne_search: dropping int_ne makes the same search return a wrong answer"
+    without_ne_is_wrong;
+  (opb, pbp)
+
 (* ------------------------------------------------------------------------ main *)
 
 let () =
@@ -1202,6 +1839,24 @@ let () =
   run_veripb ~name:"int_eq: multi-step chain, checked end to end"
     ~build:build_int_eq_multi;
   test_lin_eq_pairing ();
+  test_ne_clause_lits ();
+  test_ne_rows ();
+  test_ne_soundness ();
+  test_ne_checking ();
+  test_ne_idempotence ();
+  run_veripb ~name:"int_ne: an interior hole, reason pinned interior" ~build:build_ne_hole;
+  run_veripb ~name:"int_ne: a pruning at the pruned variable's declared bound"
+    ~build:build_ne_bound;
+  run_veripb ~name:"int_lin_ne: 2a+3b-c<>5, three terms, coefficients past +/-1"
+    ~build:build_lin_ne;
+  run_veripb ~name:"int_ne: the conflict clause" ~build:build_ne_conflict;
+  run_veripb_rejects ~name:"int_ne: a rup claiming the wrong value"
+    ~build:build_ne_hole_wrong;
+  test_ne_selector ();
+  run_veripb ~name:"ne_sat.fzn, wired as Compile would: solved and verified"
+    ~build:build_ne_sat;
+  run_veripb ~name:"int_ne inside a search that must branch: solved and verified"
+    ~build:build_ne_search;
   if !failures > 0 then (
     Printf.printf "\n%d FAILURE(S)\n" !failures;
     exit 1)
