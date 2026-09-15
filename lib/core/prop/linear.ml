@@ -197,7 +197,7 @@ let find_hi_reason store v ~decl_hi =
    own reason to cite, not whatever happens to be current later. *)
 type source_snap =
   | Snap_weaken of { coeff : int; name : string; decl_lo : int; decl_hi : int }
-  | Snap_cite of { coeff : int; expl : Explanation.t }
+  | Snap_cite of { coeff : int; expl : Explanation.t; fact : Lit.t }
 
 (* [None] only for a zero coefficient (an absent term, contributing nothing). Otherwise
    picks the bound relevant to this term's sign (D-0013's own case split, matching
@@ -222,7 +222,10 @@ let snapshot_source store (tm : term) : source_snap option =
            })
     else
       match find_lo_reason store tm.x ~decl_lo:tm.decl_lo with
-      | Some expl -> Some (Snap_cite { coeff = tm.coeff; expl })
+      | Some expl ->
+          Some
+            (Snap_cite
+               { coeff = tm.coeff; expl; fact = Lit.ge (Store.name store tm.x) cur })
       | None ->
           Some
             (Snap_weaken
@@ -245,7 +248,10 @@ let snapshot_source store (tm : term) : source_snap option =
            })
     else
       match find_hi_reason store tm.x ~decl_hi:tm.decl_hi with
-      | Some expl -> Some (Snap_cite { coeff = tm.coeff; expl })
+      | Some expl ->
+          Some
+            (Snap_cite
+               { coeff = tm.coeff; expl; fact = Lit.le (Store.name store tm.x) cur })
       | None ->
           Some
             (Snap_weaken
@@ -260,7 +266,26 @@ let summand_of_snap = function
   | Snap_weaken { coeff; name; decl_lo; decl_hi } ->
       let lits, _ = Order_reason.weaken_declared ~coeff ~name ~decl_lo ~decl_hi in
       Explanation.weaken lits
-  | Snap_cite { coeff; expl } -> Explanation.term (abs coeff) expl
+  | Snap_cite { coeff; expl; _ } -> Explanation.term (abs coeff) expl
+
+(* docs/DECISIONS.md D-0018's *other* projection of the same snapshot: the bound facts
+   this row actually read, one order literal per other term, for the trace line
+   lib/core/trace.ml writes. Deliberately not [Explanation.lits] of the [Combine] --
+   that yields the declared-width [Weaken] chains the [pol] needs, which state nothing
+   about where a bound currently sits.
+
+   A [Snap_weaken] term contributes no literal at all: its bound is still the declared
+   one, so the fact is the encoding's own constant true (docs/PROOF-FORMAT.md section 3,
+   [Encoding.ge]'s [Holds]) and its negation is false. Putting it in the clause would be
+   wrong twice over -- there is no such literal, and a false disjunct is not a weakening.
+
+   A [Snap_cite] term contributes the literal for the bound as it stood *at the moment
+   of the pruning* ([snapshot_source] pins this down, which is what lets the whole trace
+   be written later, when the branch fails, and still be a faithful record of what was
+   derived when). Sign follows the same case split as the [Combine]: a_i >= 0 reads
+   lo(x_i) and states [x_i >= lo], a_i < 0 reads hi(x_i) and states [x_i <= hi]. *)
+let facts_of_snaps snaps =
+  List.filter_map (function Snap_cite { fact; _ } -> Some fact | _ -> None) snaps
 
 (* All terms except the one at [idx] (by position, not value - a variable could in
    principle appear twice, and each occurrence is excluded independently). *)
@@ -270,12 +295,17 @@ let others_except terms idx = List.filteri (fun i _ -> i <> idx) terms
    conflict, justifies the row's own contradiction, when [idx] is [None] and every
    term is "other"). Cheap eagerly (the snapshot decision above); the [Lit.t] chain
    and any recursive [emit] happen only once [Justify.emit] actually forces this. *)
-let explain_row store base terms ~exclude divisor =
+let row_snaps store terms ~exclude =
   let others = match exclude with None -> terms | Some idx -> others_except terms idx in
-  let snaps = List.filter_map (snapshot_source store) others in
+  List.filter_map (snapshot_source store) others
+
+let explain_of_snaps base snaps divisor =
   Explanation.deferred (fun () ->
       let summands = Explanation.term 1 base :: List.map summand_of_snap snaps in
       Explanation.combine summands divisor)
+
+let explain_row store base terms ~exclude divisor =
+  explain_of_snaps base (row_snaps store terms ~exclude) divisor
 
 (* D-0013 step 5: a conflict where this row's own new bound for [tm] contradicts a
    bound some *other* propagator instance already holds on the same variable -- add
@@ -285,12 +315,38 @@ let explain_row store base terms ~exclude divisor =
    the value that turned out to conflict); the store returns it back unchanged on
    [Conflict], so a caller could equally well reuse the value it already has instead
    of trusting the returned one, and this module does. *)
+(* The literal for the *opposite* bound involved in a cross-row conflict, or [None]
+   when that bound is still the declared one (the constant true -- and the case
+   [explain_cross_conflict] below refuses outright). Same shape as [facts_of_snaps]'s
+   per-term literal, for the one variable the two rows disagree about. *)
+let opposite_bound_fact store (tm : term) =
+  let name = Store.name store tm.x in
+  let d = Store.get store tm.x in
+  if tm.coeff > 0 then
+    if Domain.lo d <= tm.decl_lo then None else Some (Lit.ge name (Domain.lo d))
+  else if Domain.hi d >= tm.decl_hi then None
+  else Some (Lit.le name (Domain.hi d))
+
+(* docs/DECISIONS.md D-0018 is explicit that a [Deferred] thunk must close over a
+   *snapshot* and never read live store state: the whole reason the trace can be written
+   later, when a branch fails, rather than eagerly at every pruning, is that a reason
+   forced late still renders the derivation as of the moment it was made. This function
+   used to call [find_lo_reason]/[find_hi_reason] from inside the thunk, i.e. it looked
+   at whatever trail entry happened to witness the opposite bound at *force* time. It
+   was harmless in practice only because search forces a conflict's explanation
+   immediately; under conflict analysis (M2-T3), or under any change that defers the
+   rendering past a backtrack, it would have cited a reason that no longer holds -- and
+   the symptom would have been a rejected line somewhere else entirely, which is exactly
+   the trap D-0018 quotes from GCS. The lookup is therefore done here, eagerly, on the
+   same pattern as [snapshot_source]; only building the [Combine] stays deferred. A
+   trail scan per cross-row conflict is not a hot path -- conflicts are the rare case,
+   and the scan already happened, just a moment later. *)
 let explain_cross_conflict store (tm : term) new_bound_expl =
+  let opposite =
+    if tm.coeff > 0 then find_lo_reason store tm.x ~decl_lo:tm.decl_lo
+    else find_hi_reason store tm.x ~decl_hi:tm.decl_hi
+  in
   Explanation.deferred (fun () ->
-      let opposite =
-        if tm.coeff > 0 then find_lo_reason store tm.x ~decl_lo:tm.decl_lo
-        else find_hi_reason store tm.x ~decl_hi:tm.decl_hi
-      in
       match opposite with
       | Some opposite_expl ->
           Explanation.combine
@@ -308,15 +364,35 @@ let explain_cross_conflict store (tm : term) new_bound_expl =
 
 (* ------------------------------------------------------------------------ propagate *)
 
+(* Every push below hands [Store] both halves of docs/DECISIONS.md D-0018: the
+   [Explanation.t] (the [pol] the checker is shown when a derivation is demanded) and
+   [~facts] (the bound literals the trace line's clause negates). They come from one
+   [row_snaps] call, so the two cannot drift apart -- reading the same snapshot twice,
+   at two different moments, is the D-0013 trap [snapshot_source]'s header describes.
+
+   Both conflict paths call [Store.record_conflict_facts] immediately before handing the
+   conflict back, for D-0018 point 3: a conflict has no trail entry, so its own reason
+   line needs the facts routed separately. *)
 let propagate t store =
   let mins = List.map (fun tm -> term_min store tm) t.terms in
   let total_min = List.fold_left ( + ) 0 mins in
   let slack = t.rhs - total_min in
-  if slack < 0 then
-    Propagator.Conflict (explain_row store (base_explanation t) t.terms ~exclude:None 1)
+  if slack < 0 then (
+    let snaps = row_snaps store t.terms ~exclude:None in
+    Store.record_conflict_facts store (fun () -> facts_of_snaps snaps);
+    Propagator.Conflict (explain_of_snaps (base_explanation t) snaps 1))
   else
     let result = ref Propagator.Fixpoint in
     let conflict = ref None in
+    let cross_conflict tm snaps expl =
+      (* The row's own reasons, plus the opposing bound this new one ran into. Both
+         halves are snapshotted here, not inside the thunk, for the reason
+         [explain_cross_conflict] below spells out. *)
+      let opposite = opposite_bound_fact store tm in
+      Store.record_conflict_facts store (fun () ->
+          facts_of_snaps snaps @ match opposite with Some l -> [ l ] | None -> []);
+      conflict := Some (explain_cross_conflict store tm expl)
+    in
     List.iteri
       (fun idx (tm, m) ->
         if !conflict = None && tm.coeff <> 0 then
@@ -325,24 +401,20 @@ let propagate t store =
           if tm.coeff > 0 then (
             let new_hi = floordiv max_term tm.coeff in
             if new_hi < Domain.hi d then
-              let expl =
-                explain_row store (base_explanation t) t.terms ~exclude:(Some idx)
-                  tm.coeff
-              in
-              match Store.set_hi store tm.x new_hi expl with
-              | Store.Conflict _ ->
-                  conflict := Some (explain_cross_conflict store tm expl)
+              let snaps = row_snaps store t.terms ~exclude:(Some idx) in
+              let expl = explain_of_snaps (base_explanation t) snaps tm.coeff in
+              let facts () = facts_of_snaps snaps in
+              match Store.set_hi_with_facts store tm.x new_hi ~facts expl with
+              | Store.Conflict _ -> cross_conflict tm snaps expl
               | Store.Changed | Store.Unchanged -> ())
           else
             let new_lo = ceildiv max_term tm.coeff in
             if new_lo > Domain.lo d then
-              let expl =
-                explain_row store (base_explanation t) t.terms ~exclude:(Some idx)
-                  (-tm.coeff)
-              in
-              match Store.set_lo store tm.x new_lo expl with
-              | Store.Conflict _ ->
-                  conflict := Some (explain_cross_conflict store tm expl)
+              let snaps = row_snaps store t.terms ~exclude:(Some idx) in
+              let expl = explain_of_snaps (base_explanation t) snaps (-tm.coeff) in
+              let facts () = facts_of_snaps snaps in
+              match Store.set_lo_with_facts store tm.x new_lo ~facts expl with
+              | Store.Conflict _ -> cross_conflict tm snaps expl
               | Store.Changed | Store.Unchanged -> ())
       (List.combine t.terms mins);
     (match !conflict with Some e -> result := Propagator.Conflict e | None -> ());

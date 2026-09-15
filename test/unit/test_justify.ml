@@ -579,8 +579,50 @@ let test_d0013_conflict () =
   run_veripb ~name:"D-0013: 2x1+4x2=7 in [0,3]^2, root conflict, checked end to end"
     ~build:build_d0013_conflict
 
+(* ------------------------------------------------------------------ *)
+(* M1-T13 / D-0018: [emit_rup_clause], the door [Trace] writes through. *)
+(* ------------------------------------------------------------------ *)
+
+(* Three things are worth pinning here, all of which [Trace]'s own tests would only see
+   indirectly: the exact text (a clause, in Opb's `+1 l ... >= 1 ;` form), that it is
+   NOT memoised (two structurally identical trace lines are two different prunings and
+   must be two different ids -- memoising on structure would silently merge them, and
+   memoising on identity would never fire anyway), and that a literal about a variable
+   the encoding never declared is refused here rather than several lines later inside
+   veripb. *)
+let test_emit_rup_clause () =
+  let s =
+    text (fun w ->
+        let _, ctx, _ = build_ctx w in
+        ignore
+          (Justify.emit_rup_clause ctx ~origin:"trace"
+             [ Lit.ge "x" 2; Lit.negate (Lit.ge "x" 3) ]))
+  in
+  check_eq "emit_rup_clause: writes the clause verbatim"
+    ~expected:"rup +1 x_ge_2 +1 ~x_ge_3 >= 1 ;"
+    ~got:(List.nth (String.split_on_char '\n' s) 2);
+  let _, r =
+    emitted (fun w ->
+        let _, ctx, _ = build_ctx w in
+        let a = Justify.emit_rup_clause ctx ~origin:"trace" [ Lit.ge "x" 2 ] in
+        let b = Justify.emit_rup_clause ctx ~origin:"trace" [ Lit.ge "x" 2 ] in
+        check "emit_rup_clause: not memoised -- one id per line, not per clause value"
+          (a <> b);
+        (* Both are this test's to retire: an id you receive is an id you delete. *)
+        Writer.delete_many w [ a; b ])
+  in
+  expect_ok "emit_rup_clause: no exception" r;
+  let _, r =
+    emitted (fun w ->
+        let _, ctx, _ = build_ctx w in
+        ignore (Justify.emit_rup_clause ctx ~origin:"trace" [ Lit.ge "nosuchvar" 1 ]))
+  in
+  check "emit_rup_clause: an undeclared variable is refused here, not by veripb"
+    (match r with Error (Invalid_argument _) -> true | _ -> false)
+
 let () =
   test_trivial ();
+  test_emit_rup_clause ();
   test_memoisation ();
   test_linear_states_its_own_terms ();
   test_deferred_linear ();

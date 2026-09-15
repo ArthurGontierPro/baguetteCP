@@ -146,6 +146,18 @@ let emit_clause ctx lits =
       (Printf.sprintf "clause(%s)" (String.concat " " (List.map Lit.to_string lits)))
     lits
 
+(* A clause emitted outside the [Explanation.t] world entirely: docs/DECISIONS.md
+   D-0018's trace lines, which state "these bound facts imply that bound" and are
+   globally valid with no decision in them. They are deliberately *not* memoised --
+   each one is about one trail entry at one moment, two prunings of the same variable
+   in the same branch are two different lines, and physical identity of a freshly
+   built literal list would never hit the memo anyway. [validate_lits] still applies:
+   a propagator handing [Trace] a literal about an undeclared variable should say so
+   here, not several lines later inside veripb. *)
+let emit_rup_clause ctx ~origin lits =
+  validate_lits ctx lits;
+  Writer.rup_clause ctx.writer ~origin lits
+
 (* [Linear (terms, rhs)] -- rup of exactly the constraint it states. Not [pol]; see
    D-0009 (docs/DECISIONS.md) for the full story, summarised here because
    docs/PROOF-FORMAT.md section 2 requires a propagator (and by extension, its bridge)
