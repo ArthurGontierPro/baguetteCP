@@ -15,7 +15,6 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 | integration | `test/unit/test_endtoend.ml` | orchestrator | 2026-09-14 — no single session can make it pass alone |
 | M1-T12 — make the D-0013 derivation real: `Explanation` + `Justify` + `int_lin_le` | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/prop/**`, `test/unit/test_prop.ml`, `test/unit/test_justify.ml` | agent-explain | 2026-09-14 — **authorised to change the Explanation ADT**, see D-0013 |
 | M1-T13 — the branching half of D-0013, research only | none — scratchpad only | agent-branch | 2026-09-14 |
-| M1-T17 — fix the three `int_ne` composition bugs M1-T16 pinned | `lib/core/store.ml`, `lib/core/search.ml`, `lib/core/prop/ne.ml`, `lib/core/prop/linear.ml` | agent-fix | 2026-09-15 |
 
 ## Cross-session requests
 
@@ -57,6 +56,7 @@ work. The owning session picks it up.
 | M1-T9 | agent-ne | 2026-09-15 | D-0019: `int_ne`/`int_lin_ne` over the **order** encoding — the direct encoding is not what a disequality needs. 182 checks. CLI wiring still open |
 | M1-T15 | agent-mutate | 2026-09-15 | D-0020: mutation harness + control lane, 18 checks. Found `lin_unsat`'s refutation has a unit of slack |
 | M1-T16 | agent-tests | 2026-09-15 | Case matrix + randomised differential tester, 152 checks, 17 verified break-it mutations. Found 3 real bugs (2 new), all pinned; gate is red until M1-T17 |
+| M1-T17 | agent-fix + orchestrator | 2026-09-15 | D-0022/I-X7/I-P5: `remove_with_facts`, and a clausal root conflict closed by the empty clause. Gate green |
 
 ## Handoff notes
 
@@ -244,3 +244,38 @@ That clears the last `PENDING` line and closes M1-T11. After that, M2-T3 (clause
 is the next real one, and note I-X6 before starting it: conflict analysis is exactly the
 caller that will break a `Deferred` thunk that reads live store state, which is a bug
 `linear.ml` actually had until this round.
+
+**2026-09-15 — orchestrator, the M1-T16/T17 round**
+
+Populating the tests paid for itself in one round. The matrix and the fuzzer found
+**three real bugs, two of them new**, all in the seam between `int_ne` (M1-T9) and the
+trace machinery (M1-T13) — two pieces built the same morning and never run against each
+other until something deliberately composed them. The root cause of the worst one was a
+comment that went stale within hours: `store.ml` justified having no `remove_with_facts`
+with "M1 is bounds-only … nothing punches a hole", which M1-T9 made untrue in the same
+round. The emitted line was not merely unprovable, it was **false** on a satisfiable model.
+That is now invariant I-P5.
+
+Two process notes worth keeping.
+
+**A pin that asserts a bug's symptom expires the moment the bug is fixed.** M1-T16 pinned
+bug B as `contains "rup +1 y_ge_2 >= 1 ;"` — the presence of the bad line. Correct while
+the bug stood, red the instant it was fixed, and indistinguishable at a glance from "a
+test we broke". The replacement asserts the line the same pruning must now write, which
+pins the situation and the content together. When pinning a bug, prefer an assertion that
+stays true after the fix.
+
+**Two of the three "bugs" had a fix that looked obvious and was wrong.** Weakening the
+`Clause` out of the `pol` (the obvious fix for bug A) makes the derivation `0 >= 0`, which
+still does not close, *and* erases the signal the real fix reads. Both were settled by
+running the checker rather than by argument.
+
+Also: `veripb` here is the **Python 2.2.2** implementation and the 2.0 proof format. The
+current VeriPB is a **Rust** rewrite at 3.0.2 and it reads our 2.0 proofs unchanged
+(advisory only), agrees with the old checker on all 9 of our proofs including which
+mutations it rejects, and is ~30× faster per invocation — 223 ms to 7 ms, almost all of it
+Python startup, which matters because the suite shells out to the checker hundreds of
+times. Two-phase upgrade proposed and not yet taken: adopt the Rust checker while still
+emitting 2.0 (no proof changes), then migrate emission to 3.0 before M2. Phase 2
+supersedes D-0002 and needs its own decision record; its prize is **labels**, which delete
+the `=`-counts-as-two-constraints trap in PROOF-FORMAT section 2 outright.
