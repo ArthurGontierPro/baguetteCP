@@ -1137,3 +1137,66 @@ Consequences:
   loudly, which is the one comfort here.
 - `del range` tolerates an already-deleted id and a reversed range; `del id` does not.
   Both measured. That is why deletion removes ids from `t.tags`.
+
+---
+
+## D-0025  The 3.0 default is on, and what the test flip actually cost
+Status: DECIDED
+Date: 2026-09-15
+Completes D-0023. Task M1-T19.
+
+Context: D-0023 decided 3.0 and built the emission, but left the default at 2.0 because
+flipping it turned 58 unit checks red and 43 of those were in a file another session
+held. This entry records the flip and what was found doing it.
+
+**The flip itself is one line** — `Writer.format_from_env`'s fallback. Everything else
+was tests that pinned 2.0 *text*. Not one of them was a proof being wrong, which is the
+outcome D-0023 predicted and the reason the flip was safe to do in one go.
+
+### The failures were of three kinds, and only one was interesting
+
+1. **Level markers** (`test_matrix`, `test_endtoend`, `test_random`). 2.0 has the
+   SetLevel rule `# l`; 3.0 deleted it (D-0024) and `Writer.set_level` leaves
+   `% level l`. Tests grepped for `# 1`.
+2. **Labels and terminators** (`test_prop`, `test_justify`, `test_proof`). 3.0
+   introduces every derived constraint as `@cN rule ... ;`. Tests pinned the 2.0
+   spelling of an unchanged rule body.
+3. **`test_matrix`'s private checker lookup**, which preferred `~/.local/bin` — the
+   Python 2.2.2, which cannot read a 3.0 proof at all. 43 of the 55 failures.
+
+### The dangerous kind, and the rule that comes out of it
+
+Two of `test_matrix`'s assertions had the form `not (contains "# 1" proof)` — "this
+model is refuted at the root, so no decision level is ever opened". Under 3.0 the
+string `# 1` does not occur **whatever the proof says**, so both assertions go
+**vacuously true**. They would not have failed. They would have stopped testing, and
+the suite would have stayed green while two root-refutation claims went unchecked.
+
+**Rule: a test that reads emitted proof text must go through the module that wrote it.**
+`Writer` now exports `level_marker`, `level_of_line`, `opens_level`, `strip_label` and
+`rule_body`, and the tests use those instead of spelling a format out. The spelling then
+lives in exactly one place, and the next format change breaks compilation or fails a
+test rather than quietly emptying one. This is the same fix, and the same reasoning, as
+D-0023's collapse of nine private `veripb` lookups into `Checker.find` — a project-wide
+fact had been copied into many files, and the copies could not all be right at once.
+
+Stripping a label is not a weakening. What those assertions check is what a rule
+**says**; the label is its *name*, which 2.0 does not have and which the checker already
+verifies far more strictly than a string compare could — citing a name that was never
+bound is a parse error, which is precisely the id-drift trap D-0023 bought labels for.
+
+### Measured after the flip
+
+- **925 unit checks, 0 failures, under BOTH formats.** The 2.0 fallback is not
+  decorative: it is exercised in full, so it cannot rot.
+- 15/15 model tests pass; `test/models/PENDING` still empty.
+- 194 matrix, 18 mutation, 11 random checks.
+- Default emission is 3.0 and `scripts/checker.sh` resolves `~/.cargo/bin/veripb` 3.0.2.
+- `BAGUETTE_PROOF_FORMAT=2.0` still emits 2.0 and veripb 2.2.2 still accepts it.
+
+### The speed claim, corrected again
+
+D-0023 reported 17–29x per checker invocation but no change in suite wall time, because
+`test_matrix` ignored `$VERIPB` and took 28–31s of a 32s run. With that file on the
+shared resolver, **`test_matrix` alone went from ~30s to 1.2s**. The per-invocation
+speedup was always real; it was one file's private lookup that hid it from the clock.

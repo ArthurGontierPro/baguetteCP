@@ -2,11 +2,16 @@
 
 Everything `baguette` emits and the vocabulary it is allowed to use.
 
-Emitted proof format: **2.0** by default, **3.0** under `BAGUETTE_PROOF_FORMAT=3.0`.
-3.0 is the format this project is moving to and the one its checker of record speaks
-(D-0023); section 2a is its contract and section 2 is the 2.0 one that still ships.
-They are separate grammars, not options on one — a 2.0 proof is a syntax error to a
-3.0 reader and a 3.0 proof is refused outright by veripb 2.2.2.
+Emitted proof format: **3.0** by default (M1-T19), **2.0** under
+`BAGUETTE_PROOF_FORMAT=2.0`. 3.0 is what this project emits and what its checker of
+record speaks (D-0023); **section 2a is the live contract** and section 2 documents the
+2.0 grammar, which is still emitted on request and still fully tested. They are separate
+grammars, not options on one — a 2.0 proof is a syntax error to a 3.0 reader and a 3.0
+proof is refused outright by veripb 2.2.2.
+
+The whole suite is green under both: 925 unit checks either way, and the model tests
+pass under each. That is the property that makes the fallback meaningful rather than
+decorative — a 2.0 escape hatch nothing exercises would rot inside a week.
 
 ---
 
@@ -40,11 +45,11 @@ pass — the one outcome a suite built on "a test that does not check the proof 
 test" must never produce. Every entry point now fails loudly. There is no
 `BAGUETTE_SKIP_PROOFS` escape hatch and none should be added.
 
-The proof's first line MUST be exactly one of:
+The proof's first line MUST be exactly one of, and is the first by default:
 
 ```
-pseudo-Boolean proof version 2.0
 pseudo-Boolean proof version 3.0
+pseudo-Boolean proof version 2.0
 ```
 
 and the rest of the file must be in that format throughout. The `.opb` is part of the

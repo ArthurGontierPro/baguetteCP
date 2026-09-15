@@ -112,9 +112,10 @@ Every branching decision and every backtrack MUST be reflected in the proof.
 A run with `--proof PREFIX` writes two files:
 
 - `PREFIX.opb` — the pseudo-Boolean encoding of the model
-- `PREFIX.pbp` — the proof, beginning with `pseudo-Boolean proof version 3.0`, or
-  `2.0` while that remains the default. The two are separate grammars, not options on
-  one; `docs/PROOF-FORMAT.md` sections 2 and 2a are the respective contracts.
+- `PREFIX.pbp` — the proof, beginning with `pseudo-Boolean proof version 3.0`, which
+  is the default; `2.0` is emitted under `BAGUETTE_PROOF_FORMAT=2.0`. The two are
+  separate grammars, not options on one; `docs/PROOF-FORMAT.md` sections 2a and 2 are
+  the respective contracts.
 
 Both are required; VeriPB is invoked as `veripb PREFIX.opb PREFIX.pbp`.
 
