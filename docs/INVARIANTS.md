@@ -47,6 +47,14 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
 - **I-X5** The `.opb` is written before any `.pbp` rule references it, and its constraint
   count matches the `f` line.
 
+- **I-X6** A `Deferred` explanation's thunk closes over a **snapshot** and never reads live
+  store state. Forcing it later must render the derivation as of the moment the pruning
+  was made, not as of now. This is what makes D-0018's lazy trace sound: the trace is
+  written when a branch fails, by which time the store has moved on. `linear.ml`'s
+  `snapshot_source` is the pattern to copy; `explain_cross_conflict` violated this until
+  M1-T13 and was harmless only by accident, because search happened to force a conflict
+  explanation immediately. Conflict analysis (M2-T3) will not.
+
 ## Search
 
 - **I-S1** Every solution printed satisfies every constraint — re-checked independently by

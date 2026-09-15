@@ -15,10 +15,6 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 | integration | `test/unit/test_endtoend.ml` | orchestrator | 2026-09-14 — no single session can make it pass alone |
 | M1-T12 — make the D-0013 derivation real: `Explanation` + `Justify` + `int_lin_le` | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/prop/**`, `test/unit/test_prop.ml`, `test/unit/test_justify.ml` | agent-explain | 2026-09-14 — **authorised to change the Explanation ADT**, see D-0013 |
 | M1-T13 — the branching half of D-0013, research only | none — scratchpad only | agent-branch | 2026-09-14 |
-| M1-T13 — log the branch's propagation trace, so the nogood is plain `rup` (D-0018) | `lib/core/justify.ml`, `lib/core/engine.ml`, `lib/core/search.ml`, `lib/core/store.ml`, `lib/core/trace.ml` (new), `test/unit/test_trace.ml` (new), `test/unit/test_justify.ml` | agent-trace | 2026-09-15 — **authorised to change `Justify` and `Store.entry`**, see D-0018 |
-| M1-T9 — `int_ne`, `int_lin_ne` and the direct encoding they need | `lib/proof/encoding.ml`, `lib/proof/lit.ml`, `lib/core/prop/ne.ml` (new), `test/unit/test_prop.ml` | agent-ne | 2026-09-15 |
-| M1-T15 — proof-mutation harness: corrupt a step, assert veripb rejects | `scripts/mutate_proof.sh` (new), `test/unit/test_mutation.ml` (new) | agent-mutate | 2026-09-15 |
-| orchestration: D-0018, docs, dune, `bin/main.ml`, and the integration nobody else can make pass | `docs/**`, `WORKLOG.md`, `**/dune`, `bin/main.ml`, `test/unit/test_endtoend.ml`, `test/models/**` | orchestrator | 2026-09-15 |
 
 ## Cross-session requests
 
@@ -55,6 +51,9 @@ work. The owning session picks it up.
 | M1-T7c | agent-encoding | 2026-09-14 | `Encoding.expand_int_lin_le`: integer term to PB row over the order encoding |
 | M1-T7 | orchestrator | 2026-09-14 | Chain fix (D-0010) + cross-session repairs; a real pruning's reason is accepted by veripb |
 | M1-T14 | orchestrator + agent-compile + agent-output | 2026-09-15 | The CLI is wired: `.fzn` in, solution + verified proof out. 5 models pass, 564 checks |
+| M1-T13 | agent-trace + orchestrator | 2026-09-15 | D-0018/D-0021: one `rup` line per pruning, root prunings included. `chain_sat` and the three D-0012 parity models verify; no veripb xfail left anywhere |
+| M1-T9 | agent-ne | 2026-09-15 | D-0019: `int_ne`/`int_lin_ne` over the **order** encoding — the direct encoding is not what a disequality needs. 182 checks. CLI wiring still open |
+| M1-T15 | agent-mutate | 2026-09-15 | D-0020: mutation harness + control lane, 18 checks. Found `lin_unsat`'s refutation has a unit of slack |
 
 ## Handoff notes
 
@@ -205,3 +204,40 @@ not — it takes PB literal terms and skips the order-encoding expansion; use tw
 veripb accepts, which is what makes a false ground constraint like `int_le(2, 1)` provable
 rather than a special case. And `make check` reformats a tree someone else has already
 called clean, so the reformat lands on whoever runs the gate next.
+
+**2026-09-15 — orchestrator, the D-0018 round**
+
+Three sessions on disjoint files, all three landed, nothing had to be repaired at
+integration. `make check` is green with **no veripb xfail anywhere for the first time**;
+`test/models/PENDING` is down to one line, and that line is CLI wiring, not proof work.
+
+**The headline is not the code, it is that we had the wrong diagnosis for three decision
+records.** D-0012, D-0014 and D-0017 all elaborated on "the branch nogood is unreachable".
+It was reachable the whole time. What was missing was that we never wrote down the
+propagation the checker was supposed to replay. Reading a solver that had already solved
+it (GCS) took about three minutes to overturn what we had been theorising about for three
+rounds — and GCS's own docs record the identical misdiagnosis as a known trap, in wording
+that matches D-0012 almost line for line. When something in this area resists, read
+someone else's implementation before writing another decision record.
+
+Two corrections to my own D-0018, both found by building it:
+- point 1 was wrong. "Every pruning **under a decision**" should be "every pruning". A
+  `rup` check starts from nothing and does not inherit the root fixpoint. D-0021.
+- point 3 (the conflict's own reason line) is redundant for `int_lin_le` and is kept
+  deliberately. D-0021 says why, so nobody removes it as dead weight.
+
+`chain_sat` turned out not to discriminate between those two readings: blank either half
+of its trace and it still verifies; blank both and it fails. That is the fifth time in
+this project that the instance chosen to test a thing could not see the thing break. The
+mutation harness (M1-T15) now exists precisely for this, and its first run found that
+`lin_unsat`'s refutation carries a unit of slack — veripb accepts that proof with a
+corrupted coefficient. Reproduced by hand before believing it.
+
+For the next session: **`int_ne` is written, proved, tested, and not reachable from the
+CLI.** `compile.ml:365` still rejects it. agent-ne's handoff has the three lines, and the
+one wrinkle is that `instances` is typed to `Linear.t` and needs to become
+`Propagator.instance list`; `test_prop.ml` has a worked `pack_ne`/`pack_linear` example.
+That clears the last `PENDING` line and closes M1-T11. After that, M2-T3 (clause learning)
+is the next real one, and note I-X6 before starting it: conflict analysis is exactly the
+caller that will break a `Deferred` thunk that reads live store state, which is a bug
+`linear.ml` actually had until this round.

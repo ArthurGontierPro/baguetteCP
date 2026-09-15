@@ -200,6 +200,38 @@ it emits. The table below is the index; it is maintained as propagators land.
 | `all_different` | *TBD* | Hall-set reasoning; see M4 and D-0004 |
 | `element` | *TBD* | M4 |
 
+### The trace line *(D-0018, D-0021 — normative)*
+
+Every pruning writes one line, **root-level prunings included**:
+
+```
+rup 1 <claim> 1 ~<fact> 1 ~<fact> ... >= 1 ;
+```
+
+- **claim** — the order literal the pruning established. `set_lo x k` gives `x_ge_k`;
+  `set_hi x k` gives `~x_ge_(k+1)`.
+- **facts** — the bound facts the propagator actually read, negated. For `int_lin_le`,
+  each *other* term contributes `x_i >= lo(x_i)` when `a_i >= 0` and `x_i <= hi(x_i)`
+  when `a_i < 0`. A bound still at its declared value contributes **nothing**: its
+  negation is false, so including it would weaken the clause for no reason.
+- The line mentions **no decision** and is a consequence of one model row, so it is
+  globally valid. That is the whole point: the decisions appear only in the nogood, and
+  the nogood is RUP *along* the trace.
+- Each line is tagged with the decision level of the **trail entry** that produced it, not
+  the writer's current level, so one `w` per backtrack retires exactly the lines whose
+  prunings were undone.
+- Level-0 lines are covered by no `w` and MUST be deleted explicitly before `conclusion`,
+  or I-X2 fails.
+
+The facts are a *different projection of the reason* from the one a `pol` needs: `Weaken`
+carries the full declared-width chain, the trace line carries the current bound. Derive
+both from **one** snapshot, or they will drift and the checker will accept the mismatch
+(that is D-0009's failure mode, which cost a whole round).
+
+To check a single line in isolation, write a one-rule proof — `f N`, the line, then
+`conclusion NONE`. VeriPB accepts that and reports `VERIFIED NO CONCLUSION`. A trace line
+must verify this way (it is decision-free); a nogood must **not**.
+
 ## 5. Backtracking and deletion
 
 Use **levels**, not individual deletions. `# <level>` sets the current level, everything

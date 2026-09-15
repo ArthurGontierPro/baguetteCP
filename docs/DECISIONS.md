@@ -834,3 +834,51 @@ Consequences:
   SAT run's nogoods *are* checked when emitted, but they are not load-bearing for the
   conclusion, so deleting one leaves a valid proof. Mutation lanes that delete a line
   belong on UNSAT instances only.
+
+## D-0021  Every pruning needs a trace line, not only the ones under a decision
+Status: DECIDED
+Date: 2026-09-15
+Amends: D-0018, point 1, which is wrong as written. The rest of D-0018 stands and was
+confirmed by building it.
+
+Context: D-0018 point 1 says "every pruning that happens **under at least one decision**
+gets a proof line of its own". Implementing it revealed that the qualifier is wrong:
+**root-level prunings need lines too.**
+
+The reason is that a `rup` check starts from nothing. It does not inherit the solver's
+root fixpoint, so any root-derived bound that a branch's trace cites as a fact has to be
+derivable by the checker as well, and the only thing that makes it derivable is its own
+line. Measured: with level-0 lines suppressed, `offset: 2x1-2x2+4x3 = 7` is rejected.
+
+`chain_sat` does not discriminate, and how it fails to is worth recording, because it is
+this project's recurring failure mode in miniature. Measured against veripb 2.2.2 by
+rewriting trace lines into same-shaped tautologies, which keeps every later constraint id
+in place:
+
+- blank the ten level-0 lines, keep the two level-1 lines: **accepted**
+- blank the two level-1 lines, keep the ten level-0 lines: **accepted**
+- blank all twelve, keep the conflict reason line and the nogood: **rejected**
+
+So on `chain_sat` the two halves of the trace are individually redundant and jointly
+necessary — either one suffices to rebuild enough of the fixpoint for the nogood. A test
+that blanked one half and watched the proof still verify would have concluded that half
+was dead weight. Only blanking everything, or running a model with an offset domain,
+shows what is load-bearing.
+
+Decision: the rule is "every pruning gets a line", with no qualifier about decisions.
+
+Consequences:
+- Level-0 lines are not covered by any `w` (nothing wipes level 0), so they must be
+  deleted explicitly before `conclusion`, or I-X2 fails. `Search.solve` does this on both
+  the SAT and UNSAT paths.
+- D-0018 point 3, the conflict's own reason line, turns out to be **redundant for
+  `int_lin_le`**: a `slack < 0` row is detected as violated by the checker's own unit
+  propagation once the trace has assigned the bounds. Measured — dropping it, every model
+  still verifies. It is kept because it is cheap, because it makes the final step a single
+  unit propagation rather than a row violation, and because a propagator whose conflict is
+  not a single-row slack computation will need it. Recorded so nobody "discovers" it is
+  removable and removes it.
+- The count: a proof now grows by one line per pruning, root prunings included. `chain_sat`
+  went from 3 lines to 20.
+- New invariant **I-X6**, which D-0018 stated only in prose: a `Deferred` thunk closes over
+  a snapshot and never reads live store state.

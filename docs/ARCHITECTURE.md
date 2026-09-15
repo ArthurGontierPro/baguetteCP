@@ -74,6 +74,15 @@ inline, to keep trail records small and uniform. A level mark covers both the tr
 the arena, so backtracking rewinds them together and reasons neither orphan nor
 accumulate (I-T3).
 
+Since M1-T13 an entry carries two further fields that exist **only for the proof**
+(D-0018): `now`, the domain the pruning produced — the claim literal of a trace line is a
+function of it, and `old` alone cannot give it — and `facts`, a thunk for the bound facts
+the propagator read. So "keep trail records small" above is now a goal the entry only
+partly meets: five fields, two of them proof-side. `facts` is a thunk rather than a list
+for that reason, and the arena indirection for explanations matters more, not less. If
+the trail ever moves to `Bigarray`/`Bytes` (M6-T2, D-0001), these two fields are the
+awkward part of the move and should be planned for rather than discovered.
+
 ## 4. Explanations
 
 This is the design centre of the project.
