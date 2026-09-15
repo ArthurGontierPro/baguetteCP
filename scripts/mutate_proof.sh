@@ -120,15 +120,11 @@ if [ -z "${OPB}" ]; then OPB="${PROOF%.*}.opb"; fi
 case "${OPB}" in /*) ;; *) OPB="$(pwd)/${OPB}" ;; esac
 [ -f "${OPB}" ] || { echo "mutate_proof.sh: no model beside the proof: ${OPB}" >&2; exit 2; }
 
-VERIPB="${VERIPB:-}"
-if [ -z "${VERIPB}" ]; then
-  if command -v veripb >/dev/null 2>&1; then VERIPB="veripb"
-  elif [ -x "${HOME}/.local/bin/veripb" ]; then VERIPB="${HOME}/.local/bin/veripb"
-  fi
-fi
-if [ -z "${VERIPB}" ] || ! command -v "${VERIPB}" >/dev/null 2>&1; then
+# shellcheck source=checker.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/checker.sh"
+if ! baguette_resolve_veripb; then
   echo "mutate_proof.sh: veripb not found, so NOTHING was checked for ${MUT}." >&2
-  echo "     This is not a pass. See docs/PROOF-FORMAT.md for where veripb lives." >&2
+  baguette_veripb_diagnostic
   exit 4
 fi
 

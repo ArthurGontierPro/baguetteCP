@@ -397,18 +397,12 @@ let test_renaming_comments () =
   check "encoding: the sanitisation mapping is dumped as a comment"
     (List.exists (String.equal "* name a[1] -> a_1_") (String.split_on_char '\n' s))
 
-let veripb_path () =
-  let candidates =
-    [
-      Filename.concat
-        (Sys.getenv_opt "HOME" |> Option.value ~default:"")
-        ".local/bin/veripb";
-    ]
-  in
-  match List.find_opt Sys.file_exists candidates with
-  | Some p -> Some p
-  | None ->
-      if Sys.command "command -v veripb >/dev/null 2>&1" = 0 then Some "veripb" else None
+(* Which checker to run: lib/proof/checker.ml, shared with scripts/checker.sh.
+   Every test module open-coded this search, and every copy looked at
+   ~/.local/bin/veripb first -- so a project-wide choice of checker lived in nine
+   places and silently meant the Python 2.2.2 (M1-T18). [None] is a FAILURE at every
+   call site below, never a skip. *)
+let veripb_path () = Baguette_proof.Checker.find ()
 
 (* ------------------------------------------------------------------ *)
 (* M1-T7c: order-encoding expansion of sum a_i x_i <= rhs               *)
@@ -724,7 +718,25 @@ let test_veripb_accepts () =
       List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp; log ];
       try Sys.rmdir dir with _ -> ())
 
+(* Say which checker every I-X1 check in the suite is talking to, and its version.
+   "veripb accepted it" is only meaningful if you know which veripb, and until M1-T18
+   the answer was whichever build happened to come first on PATH -- on the
+   development machine, the Python 2.2.2, even though a 3.0.2 was installed. *)
+let report_checker () =
+  match Baguette_proof.Checker.find () with
+  | None ->
+      incr failures;
+      Printf.printf "FAIL %s\n" Baguette_proof.Checker.not_found_message
+  | Some p ->
+      Printf.printf "* checker: %s\n" p;
+      ignore
+        (Sys.command
+           (Printf.sprintf
+              "%s --version 2>&1 | grep -i version | head -1 | sed 's/^/*   /'"
+              (Filename.quote p)))
+
 let () =
+  report_checker ();
   test_lits ();
   test_opb ();
   test_pol ();

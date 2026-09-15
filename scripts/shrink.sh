@@ -10,7 +10,13 @@ set -uo pipefail
 FZN="${1:?usage: shrink.sh MODEL.fzn}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SOLVER="${BAGUETTE:-${ROOT}/_build/default/bin/main.exe}"
-VERIPB="${VERIPB:-veripb}"
+# shellcheck source=checker.sh
+. "${ROOT}/scripts/checker.sh"
+if ! baguette_resolve_veripb; then
+  echo "shrink.sh: no checker, so there is nothing to shrink against." >&2
+  baguette_veripb_diagnostic
+  exit 2
+fi
 OUT="${ROOT}/test/out/shrink"
 mkdir -p "${OUT}"
 

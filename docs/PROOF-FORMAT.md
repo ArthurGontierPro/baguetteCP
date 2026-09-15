@@ -1,11 +1,11 @@
 # The VeriPB contract
 
 Everything `baguette` emits and the vocabulary it is allowed to use.
-Checker on this machine: `~/.local/bin/veripb`, proof format **version 2.0**.
+Emitted proof format: **version 2.0**.
 
 ---
 
-## 1. Files
+## 1. Files, and which checker checks them
 
 ```
 PREFIX.opb     the model, in OPB format
@@ -14,6 +14,26 @@ PREFIX.pbp     the proof
 
 Verified with `veripb PREFIX.opb PREFIX.pbp`. `scripts/verify_proof.sh` wraps this and
 is what the test suite calls.
+
+**Which `veripb`** is decided in exactly two places, which must agree:
+`scripts/checker.sh` (shell) and `lib/proof/checker.ml` (OCaml). Run
+`scripts/checker.sh` to print the one that would be used, and its version. The order is
+
+1. `$VERIPB`, if set. An explicit choice wins and a broken one is an **error**, never a
+   silent fall-through to a different checker.
+2. `~/.cargo/bin/veripb` — VeriPB **3.0.2**, the Rust implementation. The checker of
+   record; see D-0023.
+3. `~/.local/bin/veripb` — VeriPB 2.2.2, the Python implementation. Fallback.
+4. `veripb` on `$PATH`.
+
+`$PATH` is last deliberately. Both builds are installed on the development machine and
+`~/.local/bin` comes first on `$PATH`, so "whatever is on `$PATH`" silently meant 2.2.2.
+
+**No checker is a failure, not a skip.** `verify_proof.sh` used to `echo SKIP; exit 0`
+when it could not find `veripb`, so a machine with no checker made every proof test
+pass — the one outcome a suite built on "a test that does not check the proof is half a
+test" must never produce. Every entry point now fails loudly. There is no
+`BAGUETTE_SKIP_PROOFS` escape hatch and none should be added.
 
 The proof's first line MUST be exactly:
 
@@ -76,7 +96,7 @@ say so in its module header and explain why.
 
 ### Traps
 
-Four things this document previously got wrong. The first two are the dangerous ones,
+Five things this document previously got wrong. The first two are the dangerous ones,
 because they corrupt ids rather than producing an error you would notice:
 
 1. **An `.opb` line with `=` counts as TWO constraints** for the `f` rule — the checker
@@ -92,6 +112,15 @@ because they corrupt ids rather than producing an error you would notice:
    integer; `#` followed by prose is a parse error. Only `*` introduces a comment.
 4. **Deletion takes an identifier kind**: `del id N`, not `del N`. Same for `delc` and
    `core` (`id` / `range` / `find` / `spec`).
+5. **`conclusion SAT : <assignment>` is not propagated by every checker.** 2.2.2 unit-
+   propagates the inline assignment and fills in encoding auxiliaries (the `_neN`
+   selectors of section 3) that the solver has no value for; 3.0.2 does not, and reads
+   an unmentioned variable as false. `ne_conflict_sat.fzn` needs a selector *true*, so
+   its honest proof was rejected by 3.0.2 and accepted by 2.2.2 — the single
+   disagreement between the two checkers over this project's proofs (M1-T18). Log the
+   assignment with `sol` and conclude with the bare `conclusion SAT`: a *logged*
+   solution is propagated by both. `Writer.conclusion` does this for `Sat`. `solx` is
+   not an alternative — 3.0.2 refuses it outside a preserved set.
 
 ## 3. Encoding *(normative — names are part of the contract)*
 

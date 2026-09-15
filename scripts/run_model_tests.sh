@@ -7,7 +7,8 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SOLVER="${BAGUETTE:-${ROOT}/_build/default/bin/main.exe}"
-VERIPB="${VERIPB:-veripb}"
+# shellcheck source=checker.sh
+. "${ROOT}/scripts/checker.sh"
 OUT="${ROOT}/test/out"
 
 mkdir -p "${OUT}"
@@ -58,9 +59,15 @@ if [ ! -x "${SOLVER}" ]; then
   exit 2
 fi
 
-have_veripb=1
-command -v "${VERIPB}" >/dev/null 2>&1 || have_veripb=0
-[ "${have_veripb}" -eq 1 ] || echo "NOTE: veripb not on PATH; proof checking will be skipped" >&2
+# No checker is a failure of the whole run, not a per-model skip: "a test that does
+# not check the proof is half a test" (CLAUDE.md). This used to set have_veripb=0 and
+# report every model as "PASS (output only; proof NOT checked)" against a skip count.
+if ! baguette_resolve_veripb; then
+  echo "run_model_tests.sh: no proof was checked, so nothing here passed." >&2
+  baguette_veripb_diagnostic
+  exit 2
+fi
+echo "checker: ${VERIPB}"
 
 for fzn in "${ROOT}"/test/models/*.fzn; do
   base="$(basename "${fzn}" .fzn)"
@@ -86,12 +93,6 @@ for fzn in "${ROOT}"/test/models/*.fzn; do
     if report "${base}" fail "output differs from test/expected/${base}.out"; then continue; fi
     sed 's/^/       /' "${prefix}.diff" | head -20
     echo "       Do not edit the expected file to make this pass (invariant I-M1)."
-    continue
-  fi
-
-  if [ "${have_veripb}" -eq 0 ]; then
-    echo "PASS ${base} (output only; proof NOT checked)"
-    skip=$((skip+1))
     continue
   fi
 
