@@ -110,10 +110,10 @@ let test_opb () =
 (* ------------------------------------------------------------------ *)
 
 (* Run [f] against a fresh writer and hand back everything it wrote. *)
-let emitted ?(comments = true) ?(audit = true) f =
+let emitted ?(comments = true) ?(audit = true) ?(format = Writer.V2_0) f =
   let path = Filename.temp_file "baguette_proof" ".pbp" in
   let oc = open_out path in
-  let w = Writer.create ~comments ~audit oc in
+  let w = Writer.create ~comments ~audit ~format oc in
   let r = try Ok (f w) with e -> Error e in
   (try close_out oc with _ -> ());
   let ic = open_in_bin path in
@@ -123,7 +123,7 @@ let emitted ?(comments = true) ?(audit = true) f =
   Sys.remove path;
   (s, r)
 
-let text f = fst (emitted f)
+let text ?format f = fst (emitted ?format f)
 
 let test_pol () =
   check_eq "pol: a single id" ~expected:"3" ~got:(Pol.to_string (Pol.id 3));
@@ -644,7 +644,7 @@ let test_int_lin_le_veripb () =
 (* The model:  x, y in [0,3],  x >= 2,  x + y <= 2,  y >= 1.  Unsatisfiable.
    The proof also introduces y's direct encoding, derives exactly-one over it, and
    retires it, so every piece of the encoding contract is exercised. *)
-let build_unsat dir =
+let build_unsat ?(format = Writer.V2_0) dir =
   let e = Encoding.create () in
   Encoding.declare_int e "x" ~lo:0 ~hi:3;
   Encoding.declare_int e "y" ~lo:0 ~hi:3;
@@ -655,10 +655,14 @@ let build_unsat dir =
   let opb = Filename.concat dir "unsat.opb" in
   let pbp = Filename.concat dir "unsat.pbp" in
   let oc = open_out opb in
-  Encoding.write_opb ~comments:[ "x >= 2; x + y <= 2; y >= 1" ] e oc;
+  (* Labels in the .opb must match the writer's format or every citation in the proof
+     is a parse error; [write_opb_for] is the form that cannot get that wrong, and it
+     needs the writer, so build it first and write the proof into it below. *)
+  let pbp_oc = open_out pbp in
+  let w = Writer.create ~comments:true ~audit:true ~format pbp_oc in
+  Encoding.write_opb_for ~comments:[ "x >= 2; x + y <= 2; y >= 1" ] e w oc;
   close_out oc;
-  let oc = open_out pbp in
-  let w = Writer.create ~comments:true ~audit:true oc in
+  let oc = pbp_oc in
   Encoding.start_proof e w;
   ignore (Encoding.ensure_direct e w "y");
   let alo = Encoding.derive_at_least_one e w "y" in
@@ -718,6 +722,191 @@ let test_veripb_accepts () =
       List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp; log ];
       try Sys.rmdir dir with _ -> ())
 
+(* ------------------------------------------------------------------ *)
+(* M1-T19: VeriPB 3.0 emission                                         *)
+(*                                                                     *)
+(* Every claim in D-0023 about 3.0 syntax is made here by running the   *)
+(* checker, not by reading a grammar. Three things have to hold and     *)
+(* the third is the one that makes the other two mean anything:        *)
+(*   1. the 3.0 checker ACCEPTS a 3.0 proof of an unsatisfiable model;  *)
+(* 2. the 3.0 checker REJECTS a corrupted one -- without this, "3.0.2 *)
+   (*      accepted it" says nothing at all (scripts/mutate_proof.sh's *)
+(*      argument, applied to the format switch itself);                 *)
+(*   3. the 2.2.2 checker REJECTS a 3.0 proof outright. That is not a   *)
+(*      nice-to-have: it is why the switch cannot be made one consumer  *)
+(*      at a time.                                                      *)
+(* ------------------------------------------------------------------ *)
+
+let read_whole path =
+  let ic = open_in_bin path in
+  let s = really_input_string ic (in_channel_length ic) in
+  close_in ic;
+  s
+
+(* [Some true] accepted, [Some false] rejected, [None] no such checker here. *)
+let run_checker ~checker ~opb ~pbp ~log =
+  if not (Sys.file_exists checker || checker = "veripb") then None
+  else
+    Some
+      (Sys.command
+         (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote checker)
+            (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
+      = 0)
+
+let test_v3_emitted_text () =
+  let s =
+    text ~format:Writer.V3_0 (fun w ->
+        Writer.header w ~n_model_constraints:4;
+        let a = Writer.pol w ~origin:"t" Pol.(sum [ id 1; id 2 ]) in
+        let b = Writer.rup_clause w ~origin:"t" [ Lit.ge "x" 1; Lit.ne "y" 2 ] in
+        let c =
+          Writer.red w ~origin:"t"
+            ~witness:[ (Lit.Eq ("y", 2), Writer.Zero) ]
+            (Opb.clause [ Lit.ne "y" 2; Lit.ge "y" 2 ])
+        in
+        Writer.delete_many w [ a; b; c ];
+        Writer.conclusion w (Writer.Unsat None))
+  in
+  (* The same proof as [test_writer_rules], every line different. Pinned in full
+     rather than grepped for, because the interesting failures here are a missing
+     terminator and a witness on the wrong side of a separator -- both of which a
+     substring check would sail past. *)
+  let expected =
+    String.concat "\n"
+      [
+        "pseudo-Boolean proof version 3.0";
+        "f 4 ;";
+        "@c5 pol @c1 @c2 + ;";
+        "@c6 rup +1 x_ge_1 +1 ~y_eq_2 >= 1 ;";
+        "@c7 red +1 ~y_eq_2 +1 y_ge_2 >= 1 : y_eq_2 -> 0 ;";
+        "del id @c5 @c6 @c7 ;";
+        "output NONE ;";
+        "conclusion UNSAT ;";
+        "end pseudo-Boolean proof ;";
+        "";
+      ]
+  in
+  check_eq "3.0: rule vocabulary, terminators, labels and the red witness separator"
+    ~expected ~got:s
+
+(* The level stack is gone in 3.0 (D-0024), so [wipe_level] has to reproduce `w l`
+   from the writer's own tags. The case that separates "delete what was derived since
+   the level was set" from the real semantics is a level RE-ENTERED after a spell at a
+   lower one -- which is exactly what search does: `# 1`, `# 0`, prune at the root,
+   `# 1`, prune under the decision, backtrack. The root prunings must survive. *)
+let test_v3_levels () =
+  let ids = ref [] in
+  let s =
+    text ~format:Writer.V3_0 (fun w ->
+        Writer.header w ~n_model_constraints:1;
+        Writer.set_level w 1;
+        Writer.set_level w 0;
+        let r1 = Writer.pol w ~origin:"root" (Pol.id 1) in
+        let r2 = Writer.pol w ~origin:"root" (Pol.id 1) in
+        Writer.set_level w 1;
+        let b1 = Writer.pol w ~origin:"branch" (Pol.id 1) in
+        let b2 = Writer.pol w ~origin:"branch" (Pol.id 1) in
+        Writer.wipe_level w 1;
+        ids := [ r1; r2; b1; b2 ];
+        (* The root pair is NOT covered by the wipe and has to go explicitly, which is
+           PROOF-FORMAT's "level-0 lines are covered by no `w`" -- unchanged by 3.0. *)
+        Writer.delete_many w [ r1; r2 ];
+        Writer.conclusion w (Writer.Unsat None))
+  in
+  let lines = String.split_on_char '\n' s in
+  let has l = List.exists (String.equal l) lines in
+  check "3.0: there is no set-level rule"
+    (not (List.exists (fun l -> String.length l > 0 && l.[0] = '#') lines));
+  check "3.0: there is no wipe rule"
+    (not (List.exists (fun l -> l = "w 1 ;" || l = "w 1") lines));
+  check "3.0: a level is still marked, as a comment, or the proof is unreadable"
+    (has "% level 1" && has "% level 0");
+  (* b1 and b2 are consecutive, so the backtrack is one line, not two. *)
+  check "3.0: a backtrack retires exactly the branch ids, as one range"
+    (has
+       (Printf.sprintf "del range @c%d @c%d" (List.nth !ids 2) (List.nth !ids 3) ^ " ;"));
+  check "3.0: the root prunings survive the backtrack and are retired separately"
+    (has (Printf.sprintf "del id @c%d @c%d ;" (List.nth !ids 0) (List.nth !ids 1)))
+
+let test_v3_veripb () =
+  match veripb_path () with
+  | None ->
+      incr failures;
+      print_endline ("FAIL 3.0: " ^ Baguette_proof.Checker.not_found_message)
+  | Some veripb -> (
+      let dir = Filename.temp_file "baguette_v3" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let opb, pbp = build_unsat ~format:Writer.V3_0 dir in
+      let log = Filename.concat dir "log" in
+      check "3.0: the emitted proof declares version 3.0"
+        (String.length (read_whole pbp) > 0
+        && List.hd (String.split_on_char '\n' (read_whole pbp))
+           = "pseudo-Boolean proof version 3.0");
+      (* 1. accepted *)
+      (match run_checker ~checker:veripb ~opb ~pbp ~log with
+      | None -> ()
+      | Some true ->
+          Printf.printf
+            "ok   3.0: veripb accepts a 3.0 proof over the full vocabulary -- red, \
+             levels, pol, del, conclusion UNSAT (I-X1)\n"
+      | Some false ->
+          incr failures;
+          Printf.printf
+            "FAIL 3.0: veripb rejected the emitted 3.0 proof (I-X1)\n\
+             %s\n\
+            \  model: %s\n\
+            \ proof: %s\n"
+            (read_whole log) opb pbp);
+      (* 2. and it rejects a corrupted one. The conclusion is made to cite @c1 -- a
+         perfectly good model row, and not a contradiction. Without this control,
+         "3.0.2 accepted it" is not evidence of anything: it is the argument
+         scripts/mutate_proof.sh's header makes, turned on the format switch. *)
+      let corrupted = Filename.concat dir "corrupt.pbp" in
+      let starts_with p l =
+        String.length l >= String.length p && String.sub l 0 (String.length p) = p
+      in
+      let oc = open_out corrupted in
+      output_string oc
+        (String.concat "\n"
+           (List.map
+              (fun l ->
+                if starts_with "conclusion " l then "conclusion UNSAT : @c1 ;" else l)
+              (String.split_on_char '\n' (read_whole pbp))));
+      close_out oc;
+      (match run_checker ~checker:veripb ~opb ~pbp:corrupted ~log with
+      | None -> ()
+      | Some false ->
+          Printf.printf
+            "ok   3.0: veripb rejects a 3.0 proof whose conclusion cites a \
+             non-contradiction\n"
+      | Some true ->
+          incr failures;
+          Printf.printf
+            "FAIL 3.0: veripb ACCEPTED a 3.0 proof concluding UNSAT from a model row \
+             that is not a contradiction. The acceptance above therefore says nothing.\n");
+      (* 3. the one-way door: 2.2.2 cannot read a 3.0 proof at all. Only checked when
+         that build is actually installed; it is a fact about the OTHER checker, so
+         its absence is not a failure here. *)
+      let py =
+        Filename.concat (try Sys.getenv "HOME" with Not_found -> "") ".local/bin/veripb"
+      in
+      (match run_checker ~checker:py ~opb ~pbp ~log with
+      | None ->
+          Printf.printf
+            "note 3.0: no 2.2.2 build here, so the one-way-door check did not run\n"
+      | Some false ->
+          Printf.printf
+            "ok   3.0: veripb 2.2.2 rejects a 3.0 proof outright -- the switch is not \
+             per-consumer (D-0023)\n"
+      | Some true ->
+          incr failures;
+          Printf.printf
+            "FAIL 3.0: veripb 2.2.2 ACCEPTED a 3.0 proof. D-0023 says it cannot; one of \
+             them is wrong.\n");
+      List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp; corrupted; log ];
+      try Sys.rmdir dir with _ -> ())
+
 (* Say which checker every I-X1 check in the suite is talking to, and its version.
    "veripb accepted it" is only meaningful if you know which veripb, and until M1-T18
    the answer was whichever build happened to come first on PATH -- on the
@@ -754,6 +943,9 @@ let () =
   test_int_lin_le_add ();
   test_int_lin_le_veripb ();
   test_veripb_accepts ();
+  test_v3_emitted_text ();
+  test_v3_levels ();
+  test_v3_veripb ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

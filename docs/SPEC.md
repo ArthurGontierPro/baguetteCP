@@ -13,7 +13,9 @@ Keywords MUST / SHOULD / MAY are used in the RFC 2119 sense.
 
 1. reads a model in **FlatZinc**,
 2. searches for a solution (or proves none exists, or proves optimality),
-3. emits a **VeriPB 2.0 proof** that an independent checker accepts.
+3. emits a **VeriPB proof** that an independent checker accepts. The format is
+   VeriPB **3.0** (D-0023); 2.0 is still what is emitted by default while the test
+   suite is migrated, and `BAGUETTE_PROOF_FORMAT` selects between them.
 
 The proof is not a debugging aid. It is a primary output: a run that produces a correct
 answer with an unverifiable proof is a **failed run**. *(normative)*
@@ -110,7 +112,9 @@ Every branching decision and every backtrack MUST be reflected in the proof.
 A run with `--proof PREFIX` writes two files:
 
 - `PREFIX.opb` — the pseudo-Boolean encoding of the model
-- `PREFIX.pbp` — the proof, beginning with `pseudo-Boolean proof version 2.0`
+- `PREFIX.pbp` — the proof, beginning with `pseudo-Boolean proof version 3.0`, or
+  `2.0` while that remains the default. The two are separate grammars, not options on
+  one; `docs/PROOF-FORMAT.md` sections 2 and 2a are the respective contracts.
 
 Both are required; VeriPB is invoked as `veripb PREFIX.opb PREFIX.pbp`.
 
@@ -155,7 +159,7 @@ saving the checker a search.
 
 - Being fast before being verified. Milestone order in `docs/ROADMAP.md` is deliberate.
 - Supporting all of FlatZinc. The subset in §2.1 is the target.
-- Inventing a proof format. If something cannot be expressed in VeriPB 2.0, that is a
+- Inventing a proof format. If something cannot be expressed in VeriPB, that is a
   finding worth writing up, not a reason to extend the format locally.
 
 ---
