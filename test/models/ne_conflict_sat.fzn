@@ -1,0 +1,19 @@
+% Satisfiable, and its search is refuted once BY THE DISEQUALITY before it succeeds.
+%
+% This is guess_wrong_sat.fzn's shape (D-0017: veripb checks every rule as it is
+% emitted, so a nogood logged while the search is still hunting sinks a SAT proof just
+% as surely as a bad refutation sinks an UNSAT one) with the conflict moved onto
+% int_ne. No other satisfiable model reaches a *clausal* conflict: every one of them
+% that fails a branch fails it on a Linear slack argument.
+%
+% x + y = 4 and x >= 2 leave x in 2..3, y in 1..2. The search decides x = 2, the
+% equality forces y = 2, and int_ne finds every term fixed with the sum at the value it
+% must avoid -- a conflict whose reason is a Clause stating its own content, which is
+% the composition M1-T17's bugs A and C lived in. The branch nogood is `x >= 3`, and
+% x = 3, y = 1 is the answer.
+var 1..3: x :: output_var;
+var 1..3: y :: output_var;
+constraint int_lin_eq([1,1],[x,y],4);
+constraint int_le(2, x);
+constraint int_ne(x, y);
+solve satisfy;

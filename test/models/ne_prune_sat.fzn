@@ -1,0 +1,19 @@
+% The smallest model in which int_ne is the only thing that can make progress.
+%
+% ne_sat.fzn is the model this one exists to correct. It also carries an int_ne, but it
+% carries int_lt(x, y) beside it, and int_lt alone fixes x = 1, y = 2 -- so ne_sat
+% verifies whether or not the disequality does anything at all. test_prop.ml's header
+% says so in as many words, and this project has now been bitten five times by an
+% instance that could not see the thing it was testing break (D-0009, D-0010, D-0012,
+% D-0017, D-0018).
+%
+% Here nothing but the disequality is posted. Root propagation infers nothing (with two
+% unfixed terms a disequality has nothing to say), so the search must decide x = 1, and
+% then int_ne must remove 1 from y for y = 2 to be found. That removal is also a *bound*
+% move, so it is the path I-P5 and M1-T17's bug B are about: before M1-T17 it emitted
+% `rup +1 y_ge_2 >= 1 ;`, a line asserting the new bound unconditionally, which is false
+% on this very model.
+var 1..2: x :: output_var;
+var 1..2: y :: output_var;
+constraint int_ne(x, y);
+solve satisfy;

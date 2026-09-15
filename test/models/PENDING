@@ -7,7 +7,6 @@
 #
 # Delete a line the moment its model works. The file should be empty by M1-T11.
 
-ne_sat          int_ne is rejected at compile.ml, not dropped. The propagator and its
-#               proof exist and verify (M1-T9); what is missing is the CLI wiring.
-#               D-0019: it does NOT need the direct encoding -- that was the old reason
-#               on this line and it was wrong.
+# Empty since M1-T11: every model in test/models/ solves, matches its expected output
+# and has a proof veripb accepts. Keep it that way -- a new model that does not work
+# belongs here with a reason, not commented out of the suite.

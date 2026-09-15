@@ -1,0 +1,16 @@
+% int_ne(x, x): the degenerate disequality, whose term list is empty once normalised.
+%
+% Compile.normalise_terms merges the two occurrences of x into a coefficient of 0 and
+% drops it, so what reaches the propagator is the empty sum <> 0 -- which is false, and
+% is the *ground contradiction* case Compile's header argues must be posted rather than
+% special-cased. It is worth a model because the two halves have to agree about it with
+% no variable left to disagree over: Encoding.add_int_lin_ne's A/B pair degenerates to
+% two contradictory units on its own auxiliary Boolean, and Ne.propagate reports a
+% conflict whose clause is empty. The proof is `rup >= 1 ;` against those two units.
+%
+% A model whose only content is a contradiction over no variables at all was checked
+% against veripb when M1-T14 went in (Compile's ground-constraint comment); this is the
+% disequality's version of it, and the one that has an auxiliary variable in play.
+var 1..3: x :: output_var;
+constraint int_ne(x, x);
+solve satisfy;

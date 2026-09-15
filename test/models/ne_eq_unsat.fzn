@@ -1,0 +1,19 @@
+% Unsatisfiable because a disequality and an equality contradict each other, which
+% neither bounds reasoning nor a single branch can see.
+%
+% x <> y and x = y over 1..2. Nothing propagates at the root: x = y prunes no bound
+% (both domains are already 1..2) and a disequality with two unfixed terms says
+% nothing. So the refutation needs *both* branches, and each branch is closed by a
+% clause rather than by slack: x = 1 forces y = 1 and int_ne then finds the sum at the
+% value it must avoid; x = 2 the same. The two nogoods are `x >= 2` and `x < 2`, and
+% level 0 resolves them to the empty clause.
+%
+% That last step is why this model is here rather than a unit test: `rup >= 1 ;` closing
+% a refutation that rests on clauses is exactly what D-0022/I-X7 added and what
+% Search.rests_on_a_clause chooses, and until int_ne reached the CLI no model could
+% reach it.
+var 1..2: x :: output_var;
+var 1..2: y :: output_var;
+constraint int_ne(x, y);
+constraint int_eq(x, y);
+solve satisfy;

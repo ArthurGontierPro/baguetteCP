@@ -1,0 +1,17 @@
+% The only model that exercises int_lin_ne: a disequality over more than two terms'
+% worth of arithmetic, with a coefficient past +/-1.
+%
+% int_ne is 1*x + (-1)*y <> 0 (lib/core/prop/ne.ml's Int_ne), so every int_ne model
+% leaves the general path -- a non-unit coefficient, and the division in [propagate]
+% that turns "the sum must avoid rhs" into "this one value must leave x_j's domain" --
+% completely untested from the CLI. 2x - y <> 0 needs that division: with x fixed at 0
+% the forbidden value of y is 0, and with x fixed at 1 it is 2.
+%
+% x + y <= 5 is there only to give the search something to do that the disequality
+% cannot do for it. The answer is x = 0, y = 1: first_fail/indomain_min decides x = 0,
+% int_lin_ne removes 0 from y, and indomain_min then takes y = 1.
+var 0..4: x :: output_var;
+var 0..4: y :: output_var;
+constraint int_lin_ne([2,-1],[x,y],0);
+constraint int_lin_le([1,1],[x,y],5);
+solve satisfy;
