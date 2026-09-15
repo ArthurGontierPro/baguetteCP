@@ -48,7 +48,7 @@ Goal: solve models with only linear integer constraints, and VeriPB accepts ever
 | M1-T18 | Adopt the Rust VeriPB **3.0.2** checker while still emitting format 2.0 | TODO | phase 1 of the upgrade. No proof changes: 3.0.2 reads our 2.0 proofs unchanged. Already installed at `~/.cargo/bin/veripb`, shadowed on PATH by the Python 2.2.2 |
 | M1-T19 | Migrate proof **emission** to format 3.0 | TODO | phase 2. **Supersedes D-0002, needs its own decision record.** The prize is labels, which delete the `=`-counts-as-two-constraints id trap in PROOF-FORMAT section 2 |
 | M1-T20 | Correct `test_matrix.ml`'s empty-cell note and fill the four `int_ne` shape cells | TODO | M1-T17 fixed the factless trace line; the note still says those cells are unreachable |
-| M1-T21 | A bool *parameter* folded to a `Const` prints as `0`/`1`, not `false`/`true` | TODO | `output.ml` sees an int and cannot tell; the type is lost in `Model.t`. Real output-correctness bug, independent of the proof |
+| M1-T21 | A bool *parameter* folded to a `Const` prints as `0`/`1`, not `false`/`true` | DONE | `output.ml` sees an int and cannot tell; the type is lost in `Model.t`. Real output-correctness bug, independent of the proof |
 
 ## M2 — Booleans
 

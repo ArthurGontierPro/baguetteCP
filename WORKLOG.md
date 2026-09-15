@@ -21,7 +21,6 @@ share an `_build` lock:
 |---|---|---|---|
 | M1-T18 + M1-T19 — adopt the Rust VeriPB 3.0.2 checker, then migrate emission to format 3.0 | `lib/proof/**`, `lib/core/justify.ml`, `lib/core/trace.ml`, `lib/core/search.ml`, `lib/core/explanation.ml`, `lib/core/prop/**`, `scripts/**`, `docs/PROOF-FORMAT.md`, `docs/SPEC.md`, `docs/DECISIONS.md` (append only), `test/unit/test_{proof,justify,mutation,trace}.ml` | agent-proof3 | 2026-09-15 — **authorised to supersede D-0002**, which is what phase 2 requires |
 | M1-T20 — correct the empty-cell note M1-T17 invalidated, and fill the four `int_ne` shape cells | `test/unit/test_matrix.ml` only | agent-matrix | 2026-09-15 — `lib/` is read-only for it: this task pins behaviour, it does not change it |
-| M1-T21 — a bool par prints `0`/`1` instead of `false`/`true` | `lib/flatzinc/{output,model,builder}.ml`, `test/unit/test_output.ml`, **new** files under `test/models/` and `test/expected/` | agent-output | 2026-09-15 — must not edit an existing model or expected output |
 
 `WORKLOG.md`, `docs/ROADMAP.md`, `test/models/PENDING` and all `dune` files are
 orchestrator-held this round; no agent touches them, and the merge is the orchestrator's.
@@ -44,6 +43,7 @@ work. The owning session picks it up.
 | `lib/core/explanation.ml` is **frozen again** this round. D-0018's derivation needs no new constructor: `Combine`/`Weaken`/`Model_row` already express it, and the new work is *where and when* they are emitted, not what they say. If the trace genuinely cannot be said with the current ADT, that is a cross-session request and a decision record, not an edit | `lib/core/explanation.ml` | orchestrator | standing, this round |
 | Each session builds into its own `--build-dir` (`dune build --build-dir=/tmp/baguette-build-<tag> <target>`). Three sessions share `_build/`'s global lock this round, so a bare `dune build` will fail for reasons that are not yours | — | orchestrator | standing, this round |
 | Clarifying this round's split: `lib/core/prop/linear.ml` belongs to **agent-trace**, not agent-ne. A D-0018 trace line states `claim ∨ ¬(reason)` where the reason is the *other terms' current bound literals* — knowledge only the propagator has, and which `Explanation.t` deliberately does not carry in that shape (`Weaken` holds the declared-width chain the `pol` needs, which is a different projection). agent-ne owns `lib/core/prop/ne.ml` and no other file in `prop/` | `lib/core/prop/linear.ml` | orchestrator | standing, this round |
+| **SPEC 2.2 never states the bool print rule.** It gives the line shape and the `----------` / `==========` / `=====UNSATISFIABLE=====` markers, but not that a bool MUST print as `false`/`true`, an int as a decimal, an array as `array<k>d(<ranges>, [...])`. M1-T21 found this: the rule lived only in `output.ml` and now in `test/expected/bool_out_sat.out`. The code is right by the FlatZinc standard; the spec is thin. agent-proof3 holds `docs/SPEC.md` this round — add the normative sentence, or hand it back | `docs/SPEC.md` | agent-output via orchestrator | open |
 | M1-T16 runs alone: no other session is active, so agent-tests may add new files under `test/models/` and `test/expected/` (new files only — it must not edit an existing model, an existing expected output, or `PENDING`). Everything under `lib/` stays read-only: this task finds bugs and pins them, it does not fix them | `test/**` | orchestrator | standing, this round |
 | `test/unit/test_matrix.ml`'s empty-cell note (line ~1192) is stale: it says four `int_ne` cells (|a| > 1, common factor, offset domains, negative domains) are left unfilled because "every disequality pruning that moves a bound **currently** emits a factless trace line". M1-T17 fixed that and inverted `known_bug_ne_trace_facts` itself, so the stated reason no longer holds and those cells are fillable. Not touched here — M1-T11 claimed neither the matrix nor `lib/` | `test/unit/test_matrix.ml` | agent-ne-wiring | open |
 
@@ -71,6 +71,7 @@ work. The owning session picks it up.
 | M1-T11 | agent-ne-wiring | 2026-09-15 | `int_ne`/`int_lin_ne` posted by `compile.ml` instead of rejected, + five disequality models. 14/14 models verify, `PENDING` empty, 864 unit checks. On branch `worktree-m1-t11-ne-wiring` |
 | M1-T12 | agent-explain + orchestrator | 2026-09-15 | D-0015: `Combine`/`Weaken`/`Model_row` made real and the root conflict wired to its derivation; two UNSAT proofs verify. Row added 2026-09-15 — the task shipped but was never released from Active claims |
 | integration | orchestrator | 2026-09-15 | `test/unit/test_endtoend.ml` is green as part of the 864-check suite. Row added 2026-09-15 — released late, same reason |
+| M1-T21 | agent-output + orchestrator | 2026-09-15 | An output item carries its declared `out_ty`, captured in `builder.ml` where the declaration is still in hand. `bool_out_sat.fzn` pins all three routes to the printer. 868 unit checks, 15/15 models |
 
 ## Handoff notes
 
@@ -365,3 +366,32 @@ but a **Rust 3.0.2** build is already installed at `~/.cargo/bin/veripb` — `~/
 simply comes first on PATH. The previous handoff's two-phase proposal is therefore
 cheaper than it reads: phase 1 needs no new install, only a decision about which binary
 the harness invokes. Dispatched this round as M1-T18 / M1-T19.
+
+**2026-09-15 — orchestrator, M1-T21 merged: the bug was in the builder, not the printer**
+
+`output.ml` blamed `Model.t` for losing the type. It was not `Model.t`: `builder.ml` had
+the declaration's `Ast.base_type` in hand at the moment it recorded the output item and
+threw it away. The type now rides on the output item (`Out_var of string * out_ty *
+operand`), so `Const` and `Var` render by one rule and the constructors do not typecheck
+without it. That is the difference between a fix and a guess-it-back-at-print-time patch.
+
+Verified here rather than taken on report: merged, rebuilt, `bool_out_sat.fzn` matches
+its expected output byte for byte and veripb accepts its proof; 868 unit checks, 0 FAIL;
+15/15 models pass; `PENDING` still empty.
+
+**A trap worth writing down, because I fell in it.** `dune runtest` does **not** rebuild
+`bin/main.exe`. I ran the suite green, then invoked `_build/default/bin/main.exe` by hand
+and watched the *old* binary reproduce the bug — 868 checks green and the CLI still
+printing `aliased = 1;`. The gate is not affected (`make check` is `fmt build test`, and
+`models:` depends on `build`), and the unit-level model assertions link the library
+rather than the exe. But anyone spot-checking the CLI after a `dune runtest` is holding a
+stale binary. Build before you believe what the CLI tells you.
+
+Two gaps agent-output found and correctly did not fix, neither an output bug today:
+a **par** declaration carrying `output_var` is silently dropped (`record_scalar_output`
+is reachable only from the var path), and `bool: q = 3;` is accepted silently
+(`check_par_domain` has no `Tbool` arm). The second is now caught wherever it matters —
+aliasing such a par into a `var bool` is a declaration-site error.
+
+One file outside the assignment: `test/unit/test_flatzinc.ml`, unowned this round,
+changed mechanically for the constructor arity. No assertion changed meaning.
