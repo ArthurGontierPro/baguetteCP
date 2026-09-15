@@ -108,7 +108,7 @@ let test_linear_states_its_own_terms () =
         let _, ctx, _ = build_ctx w in
         ignore (Justify.emit ctx (Explanation.linear [ (1, Lit.ge "x" 2) ] 1)))
   in
-  let lines = String.split_on_char '\n' s in
+  let lines = List.map Writer.strip_label (String.split_on_char '\n' s) in
   check "linear: emits a rup of exactly its own terms and rhs, not a pol"
     (List.exists (String.equal "rup +1 x_ge_2 >= 1 ;") lines)
 
@@ -561,7 +561,10 @@ let test_d0013_conflict () =
     let ls = String.length s and lsuf = String.length suffix in
     ls >= lsuf && String.sub s (ls - lsuf) lsuf = suffix
   in
-  let lines = String.split_on_char '\n' s in
+  (* [rule_body], not [strip_label]: under 3.0 a `pol` is introduced as `@cN pol ...`
+     AND terminated with `;`, and the claim pinned here -- that some step divides by
+     this coefficient -- is about the derivation, not about its name or punctuation. *)
+  let lines = List.map Writer.rule_body (String.split_on_char '\n' s) in
   check "D-0013: some step divides by 4 (x2's own coefficient)"
     (List.exists
        (fun l -> String.length l > 0 && l.[0] = 'p' && ends_with " 4 d" l)
@@ -594,7 +597,7 @@ let test_emit_rup_clause () =
   in
   check_eq "emit_rup_clause: writes the clause verbatim"
     ~expected:"rup +1 x_ge_2 +1 ~x_ge_3 >= 1 ;"
-    ~got:(List.nth (String.split_on_char '\n' s) 2);
+    ~got:(Writer.strip_label (List.nth (String.split_on_char '\n' s) 2));
   let _, r =
     emitted (fun w ->
         let _, ctx, _ = build_ctx w in

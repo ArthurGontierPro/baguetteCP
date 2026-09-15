@@ -242,15 +242,6 @@ let independent_check m (assignment : Search.assignment) =
    call site below, never a skip. *)
 let veripb_path () = Baguette_proof.Checker.find ()
 
-let count_occurrences needle s =
-  let n = String.length needle in
-  let rec go i acc =
-    if i + n > String.length s then acc
-    else if String.sub s i n = needle then go (i + 1) (acc + 1)
-    else go (i + 1) acc
-  in
-  go 0 0
-
 let read_file path =
   let ic = open_in_bin path in
   let s = really_input_string ic (in_channel_length ic) in
@@ -295,7 +286,7 @@ let run_model m =
   if m.needs_search then
     check
       (Printf.sprintf "%s: the search really branched" tag)
-      (count_occurrences "# 1" proof > 0);
+      (Writer.opens_level 1 proof);
   (* There is no xfail here any more. M1-T13 (docs/DECISIONS.md D-0018) closed the
      branching case: a branch's own propagation trace is logged, so the nogood over the
      decision literals is ordinary RUP and every model in this table verifies. The three

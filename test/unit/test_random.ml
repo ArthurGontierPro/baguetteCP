@@ -657,10 +657,10 @@ let run_case ~dir ~n m =
   ignore Verified;
   obs.branch_failed <- Trace.emitted_ids trace <> [];
   let proof = try read_file pbp with _ -> "" in
-  obs.deep_decisions <-
-    List.exists
-      (fun l -> String.length l >= 3 && String.sub l 0 3 = "# 2")
-      (String.split_on_char '\n' proof);
+  (* Level 2 reached, read through [Writer] so this keeps working when the emitted
+     format changes -- a hard-coded "# 2" finds nothing under 3.0 and would quietly
+     report that the generator never goes deep. *)
+  obs.deep_decisions <- Writer.opens_level 2 proof;
   let verdict =
     match result with
     | Error e -> Broken (Printf.sprintf "the solver raised %s" e)

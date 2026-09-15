@@ -289,11 +289,19 @@ let test_order_encoding () =
   (* docs/PROOF-FORMAT.md section 3: one consistency clause per lo < v < hi. *)
   check "encoding: order encoding emits hi-lo-1 consistency clauses"
     (Encoding.n_constraints e = 2);
+  (* Under 3.0 every model row is named in the .opb so the proof can cite it by label
+     rather than by position (D-0023). The rows themselves are unchanged, so the
+     expectation is the same text with the names put back in front. *)
+  let lbl i =
+    if Writer.default_format () = Writer.V3_0 then Printf.sprintf "@c%d " i else ""
+  in
   check_eq "encoding: the order-consistency clauses"
     ~expected:
-      "* #variable= 3 #constraint= 2\n\
-       +1 ~x_ge_2 +1 x_ge_1 >= 1 ;\n\
-       +1 ~x_ge_3 +1 x_ge_2 >= 1 ;\n"
+      (Printf.sprintf
+         "* #variable= 3 #constraint= 2\n\
+          %s+1 ~x_ge_2 +1 x_ge_1 >= 1 ;\n\
+          %s+1 ~x_ge_3 +1 x_ge_2 >= 1 ;\n"
+         (lbl 1) (lbl 2))
     ~got:(opb_text e);
   (* x >= lo is the constant true and x >= hi+1 the constant false: no variables. *)
   check "encoding: x >= lo holds vacuously" (Encoding.ge e "x" 0 = Encoding.Holds);
@@ -611,9 +619,14 @@ let test_int_lin_le_veripb () =
         close_in ic;
         s
       in
+      (* 3.0 terminates every rule, the preamble's `f` included. Both spellings are
+         named rather than one being matched loosely, so that a THIRD spelling would
+         fail here instead of slipping through. *)
       check "int_lin_le: the proof's f line matches the computed count"
         (List.exists
-           (String.equal (Printf.sprintf "f %d" f_count))
+           (fun l ->
+             let l = String.trim l in
+             l = Printf.sprintf "f %d" f_count || l = Printf.sprintf "f %d ;" f_count)
            (String.split_on_char '\n' pbp_text));
       let log = Filename.concat dir "log" in
       let rc =

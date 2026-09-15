@@ -1209,7 +1209,14 @@ let read_file path =
   close_in ic;
   s
 
-let has_line text line = List.exists (String.equal line) (String.split_on_char '\n' text)
+(* Compared by rule body, not by name: 3.0 introduces every derived constraint with a
+   label (`@c17 rup ... ;`) and these expectations are about what the rule says. The
+   label is checked where it means something -- by the checker, which rejects a citation
+   of a name that was never bound -- rather than duplicated into every text pin here. *)
+let has_line text line =
+  List.exists
+    (fun l -> String.equal line (Writer.strip_label l))
+    (String.split_on_char '\n' text)
 
 (* Like [run_veripb], but the proof MUST be rejected. Used for the negative controls:
    a wrong explanation has to fail, or the positive checks prove nothing. *)

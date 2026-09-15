@@ -530,11 +530,19 @@ let build m store obs ~deep =
 
 (* ================================================================== veripb *)
 
-let veripb =
-  let p = Filename.concat (Sys.getenv "HOME") ".local/bin/veripb" in
-  if Sys.file_exists p then Some p
-  else if Sys.command "command -v veripb >/dev/null 2>&1" = 0 then Some "veripb"
-  else None
+(* Which veripb: [Baguette_proof.Checker] decides, for this file as for every other.
+   This used to be a private copy of the search that preferred ~/.local/bin, which is
+   the Python 2.2.2 -- so this file alone went on checking against 2.2.2 after D-0023
+   made 3.0.2 the checker of record, and could not have checked a 3.0 proof at all.
+   It was also the suite's wall-clock pole for exactly that reason. *)
+let veripb = Baguette_proof.Checker.find ()
+
+(* The format the writer is actually emitting this run. Everything below that reads or
+   writes proof text has to agree with it: 3.0 is not a dialect of 2.0 (D-0023), so a
+   helper that knows only one spelling does not merely miss -- it goes quietly true.
+   See [level_of_line] for the case where that bit us. *)
+let proof_format = Writer.default_format ()
+let v3 = proof_format = Writer.V3_0
 
 let read_file path =
   let ic = open_in_bin path in
@@ -569,15 +577,19 @@ let run_veripb ~dir ~opb proof_text =
    that matters -- is this line derivable from the model alone, with no search, no
    decision and no other derived constraint in the database? *)
 let standalone ~dir ~opb ~n_model rule_line =
+  let term body = if v3 then body ^ " ;" else body in
   run_veripb ~dir ~opb
     (String.concat "\n"
        [
-         "pseudo-Boolean proof version 2.0";
-         Printf.sprintf "f %d" n_model;
+         Printf.sprintf "pseudo-Boolean proof version %s"
+           (Writer.format_to_string proof_format);
+         term (Printf.sprintf "f %d" n_model);
+         (* [rule_line] is copied verbatim out of the emitted proof, so it already
+            carries its own label and terminator in whichever format wrote it. *)
          rule_line;
-         "output NONE";
-         "conclusion NONE";
-         "end pseudo-Boolean proof";
+         term "output NONE";
+         term "conclusion NONE";
+         term "end pseudo-Boolean proof";
          "";
        ])
 
@@ -596,27 +608,42 @@ let contains needle s =
 (* Which rules mint a constraint id, in [Writer]'s own order. Everything else -- `#`,
    `w`, `del`, `*`, `output`, `conclusion` -- mints nothing, so walking the file with
    this counter reproduces the checker's numbering. *)
+(* In 3.0 every derived constraint is introduced with a label, `@c17 rup ... ;`, so
+   the rule name is no longer the first token. [Writer] owns the stripping, for the
+   same reason it owns the level marker: it is the thing that wrote the label. A
+   matcher that knew only the 2.0 spelling would find no rules at all, and every
+   id-walking check below would pass over an empty list -- green, and testing nothing. *)
+let strip_label = Writer.strip_label
+
 let mints_id line =
+  let body = strip_label line in
   List.exists
-    (fun p -> starts_with p line)
+    (fun p -> starts_with p body)
     [ "pol "; "rup "; "red "; "solx "; "soli "; "obju " ]
 
+(* Where a decision level was opened. [Writer] owns both spellings -- `# l` in 2.0,
+   the `% level l` comment in 3.0 (D-0024) -- because [Writer.set_level] is what wrote
+   them. Reading them back through it is what stops this file from being the one that
+   still knows only 2.0. *)
+let level_of_line = Writer.level_of_line
+let opens_level = Writer.opens_level
+
 (* Every rule line as (id, proof level it was filed at, text). The level comes from the
-   `# l` lines, which [Writer.set_level] emits whether or not comments are on. *)
+   marker [Writer.set_level] emits whether or not comments are on -- `# l` in 2.0, the
+   `% level l` comment in 3.0 (D-0024 took the rule away, not the information). *)
 let numbered_rules ~n_model proof =
   let id = ref n_model and level = ref 0 in
   List.filter_map
     (fun line ->
-      if starts_with "# " line then (
-        (try
-           level :=
-             int_of_string (String.trim (String.sub line 2 (String.length line - 2)))
-         with _ -> ());
-        None)
-      else if mints_id line then (
-        incr id;
-        Some (!id, !level, line))
-      else None)
+      match level_of_line line with
+      | Some l ->
+          level := l;
+          None
+      | None ->
+          if mints_id line then (
+            incr id;
+            Some (!id, !level, line))
+          else None)
     (lines_of proof)
 
 (* Replace the rules [victim] selects with a tautology over an existing variable. The
@@ -630,7 +657,7 @@ let blank_rules ~n_model ~victim ~taut proof =
        (fun line ->
          if mints_id line then (
            incr id;
-           if victim !id then taut else line)
+           if victim !id then taut !id else line)
          else line)
        (lines_of proof))
 
@@ -698,7 +725,7 @@ let run_instance inst =
   let rules = numbered_rules ~n_model proof in
   let trace_ids = Trace.emitted_ids trace in
   let is_trace id = List.mem id trace_ids in
-  let branched = contains "\n# 1" proof in
+  let branched = opens_level 1 proof in
 
   (* ---- the answer, from brute force, never hand-written *)
   (match outcome with
@@ -773,8 +800,10 @@ let run_instance inst =
            (shape_name d))
         (List.mem d shapes))
     inst.shape_claims;
-  (* The search shape, read off the `# l` markers the writer emits whatever the comment
-     flag says -- not inferred from first-fail and indomain_min. *)
+  (* The search shape, read off the level markers the writer emits whatever the comment
+     flag says -- not inferred from first-fail and indomain_min. [opens_level] knows
+     both spellings; spelling one of them here is how this check would go quietly true
+     under the other. *)
   if inst.depth = 0 then
     check
       (tag ^ ": the search does not branch at all, so there is no trace and no nogood")
@@ -782,7 +811,7 @@ let run_instance inst =
   else
     check
       (Printf.sprintf "%s: the search reaches decision level %d" tag inst.depth)
-      (contains (Printf.sprintf "\n# %d" inst.depth) proof);
+      (opens_level inst.depth proof);
   (match obs.forcing_raised with
   | None -> ()
   | Some e -> fail "%s: forcing an explanation raised %s" tag e);
@@ -833,8 +862,17 @@ let run_instance inst =
      nothing, so this blanks all of it. *)
   (if trace_ids <> [] then
      let name0, lo0, _ = m.vars.(0) in
-     let taut =
-       Printf.sprintf "rup +1 %s_ge_%d +1 ~%s_ge_%d >= 1 ;" name0 (lo0 + 1) name0 (lo0 + 1)
+     (* Under 3.0 the replacement must keep the *label* of the line it replaces, not
+        just its id: later `pol`, `del` and `conclusion` lines cite `@cN`, and an
+        unlabelled stand-in would make those a parse error -- the checker would then
+        reject for a dangling name rather than for the blanked reasoning, and this
+        control would be green for the wrong reason. *)
+     let taut id =
+       let body =
+         Printf.sprintf "rup +1 %s_ge_%d +1 ~%s_ge_%d >= 1 ;" name0 (lo0 + 1) name0
+           (lo0 + 1)
+       in
+       if v3 then Printf.sprintf "@c%d %s" id body else body
      in
      let blanked = blank_rules ~n_model ~victim:is_trace ~taut proof in
      match run_veripb ~dir ~opb blanked with
@@ -1395,7 +1433,7 @@ let known_bug_ne_snap_cite () =
   let outcome = Search.solve ~engine ~store ~ctx ~check:(fun _ -> true) () in
   close_out oc;
   check "ne/snap_cite: the solver refutes it at the root, with no decision made"
-    (outcome = Search.Unsat && not (contains "# 1" (read_file pbp)));
+    (outcome = Search.Unsat && not (opens_level 1 (read_file pbp)));
   (* The instance is only the instance we think it is if an int_ne Clause really did
      end up inside a `pol`. Asserting that separately means a change that stopped
      reaching the bug cannot make the test below pass for the wrong reason. *)
@@ -1478,7 +1516,7 @@ let known_bug_ne_root_conflict () =
   close_out oc;
   let proof = read_file pbp in
   check "ne/root-conflict: the solver refutes it with no decision made"
-    (outcome = Search.Unsat && not (contains "# 1" proof));
+    (outcome = Search.Unsat && not (opens_level 1 proof));
   check
     "ne/root-conflict: the contradiction the conclusion cites is int_ne's own clause \
      (the instance reaches the gap)"

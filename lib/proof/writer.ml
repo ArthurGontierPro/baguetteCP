@@ -133,8 +133,9 @@ end
 (* ---------------------------------------------------------------------------
    Which proof format to emit.
 
-   2.0 is what ships; 3.0 is reached with BAGUETTE_PROOF_FORMAT=3.0 or
-   [create ~format:V3_0]. They are NOT dialects of one another -- see D-0023 and
+   3.0 is what ships (M1-T19); 2.0 is still emitted on request, with
+   BAGUETTE_PROOF_FORMAT=2.0 or [create ~format:V2_0], and the whole suite is green
+   under both. They are NOT dialects of one another -- see D-0023 and
    docs/PROOF-FORMAT.md section 2a. The differences that matter here:
 
      - every rule is terminated by `;`
@@ -191,7 +192,7 @@ let audit_enabled () =
    kind of "green for the wrong reason" this project keeps finding. *)
 let format_from_env () =
   match Sys.getenv_opt "BAGUETTE_PROOF_FORMAT" with
-  | None | Some "" -> V2_0
+  | None | Some "" -> V3_0
   | Some s -> (
       match format_of_string (String.trim s) with
       | Some f -> f
@@ -322,6 +323,64 @@ let set_level t l =
   t.level <- l
 
 let current_level t = t.level
+
+(* ------------------------------------------------------------------ reading it back
+
+   [set_level] is the only thing that writes a level marker, so the spelling belongs
+   here rather than in each test that greps a proof for it. The reason this is a
+   function and not a convention: a test that hard-codes `# 1` does not FAIL when the
+   default flips to 3.0 -- it finds nothing, and an assertion of the form
+   `not (contains "# 1" proof)` passes vacuously. A test that has silently stopped
+   testing is worse than a red one, and the 3.0 flip turned up five of them.
+
+   Both spellings are recognised whatever the active format, so these cannot go stale
+   the next time the default moves. *)
+
+(* A proof line with its 3.0 label removed: `@c17 rup ... ;` becomes `rup ... ;`.
+
+   Tests that pin what a rule SAYS want the body; the label is the constraint's name,
+   which 2.0 does not have and which the checker verifies for them (a citation of a
+   name that was never bound is a parse error, which is the whole point of D-0023's
+   labels). Stripping it here keeps such an assertion meaning the same thing in both
+   formats instead of meaning nothing in one of them. *)
+let strip_label line =
+  if String.length line > 0 && line.[0] = '@' then
+    match String.index_opt line ' ' with
+    | Some i -> String.sub line (i + 1) (String.length line - i - 1)
+    | None -> line
+  else line
+
+(* The rule's text with its 3.0 decoration removed: label off the front, terminator
+   off the back. This is the projection a pin on "what this step says" wants -- 3.0
+   terminates every rule, so a `pol` that read `pol 3 4 + 2 d` in 2.0 reads
+   `@c17 pol 3 4 + 2 d ;` now, while saying exactly the same thing. (A `rup` carries
+   its own `;` in both formats, as part of the constraint syntax rather than as the
+   rule terminator, so it is unaffected either way.) *)
+let rule_body line =
+  let l = String.trim (strip_label line) in
+  let n = String.length l in
+  if n >= 1 && l.[n - 1] = ';' then String.trim (String.sub l 0 (n - 1)) else l
+
+let level_marker fmt l =
+  match fmt with
+  | V2_0 -> Printf.sprintf "# %d" l
+  | V3_0 -> Printf.sprintf "%% level %d" l
+
+(* [Some l] when [line] is a level marker in either format. 2.0 writes the SetLevel
+   rule `# l`; 3.0 has no such rule (D-0024) and [set_level] leaves `% level l`. *)
+let level_of_line line =
+  let line = String.trim line in
+  let has p =
+    String.length line >= String.length p && String.sub line 0 (String.length p) = p
+  in
+  let num_after k =
+    int_of_string_opt (String.trim (String.sub line k (String.length line - k)))
+  in
+  if has "# " then num_after 2 else if has "% level " then num_after 8 else None
+
+(* Does [proof] open decision level [l]? *)
+let opens_level l proof =
+  List.exists (fun line -> level_of_line line = Some l) (String.split_on_char '\n' proof)
 
 (* Compress a sorted id list into maximal runs, so a backtrack is one `del range`
    line in the common case instead of one id per retired reason. Contiguity is the
