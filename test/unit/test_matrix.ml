@@ -1103,6 +1103,134 @@ let instances =
          and the solution e = 2 is found only afterwards: int_lin_ne conflicting under a \
          decision, with a real linear trace in front of it";
     };
+    (* The three instances below fill the int_ne / int_lin_ne shape cells M1-T16 had to
+       leave empty. They were blocked on the M1-T17 bug, not on the data: a disequality
+       pruning that moved a bound wrote a factless trace line, so each of these would
+       have printed the same failure again. D-0022 / I-P5 closed that -- [Ne.propagate]
+       prunes through [Store.remove_with_facts] now -- and each instance below puts a
+       bound-moving disequality pruning inside a branch that then fails, so the line it
+       writes is emitted, verified standalone against the .opb, and blanked as a
+       negative control.
+
+       All three are SAT, and in all three the disequality is LOAD-BEARING: delete it
+       from the model and the search's first complete assignment is one it forbids
+       (x = y = -5, p = q = 5, a = b = -5 respectively). That is what ne_sat.fzn lacked
+       -- int_lt alone solved it, so int_ne could have been a no-op and the test stayed
+       green. Here a no-op disequality does not merely weaken the proof: [Search.solve]'s
+       own [check] rejects the assignment (I-S1) and the run disagrees with brute force.
+       Measured by mutating lib/core/prop/ne.ml, not argued.
+
+       All three also carry a third variable that the disequality does not mention, and
+       DECLARED domains wider than the box the root fixpoint leaves. Both are forced by
+       the "every nogood needs the trace" check above, and the first drafts of these
+       three failed it: over two variables whose declared bounds the search reaches
+       directly, veripb's own unit propagation replays the whole refutation from the
+       .opb and the nogood is standalone-RUP, which means the trace it was supposed to
+       rest on was never load-bearing. Widening the declared domain so the branch is
+       taken strictly inside it leaves the checker with an "at least k of n order
+       literals" row that forces no single literal -- the D-0012 wall -- so the nogood
+       needs the trace, which is the property these instances exist to exercise. *)
+    {
+      title = "int_ne/negative-domain";
+      m =
+        {
+          vars = [| ("x", -5, -1); ("y", -5, -1); ("m", -5, -1) |];
+          cstrs =
+            [
+              Ne (0, 1);
+              Lin_le ([ (-1, 0) ], 4);
+              Lin_eq ([ (1, 2); (-1, 0) ], 1);
+              Lin_le ([ (1, 1); (-1, 2) ], -1);
+              Lin_le ([ (-1, 1) ], 4);
+            ];
+        };
+      props = [ P_ne; P_lin_eq; P_lin_le ];
+      claims =
+        [
+          S_root_prune;
+          S_prune_one_decision;
+          S_conflict_under_decisions;
+          S_sat_after_failure;
+        ];
+      shape_claims = [ D_neg_coeff; D_offset_domain; D_negative_domain ];
+      depth = 2;
+      note =
+        "x >= -4, m = x + 1, y <= m - 1, y >= -4, x <> y over three domains that are \
+         entirely negative and offset away from zero, so every order-encoding constant \
+         int_ne writes is non-zero and negative -- the D-0010 shape applied to a \
+         disequality rather than to a linear row. indomain_min tries x = -4 first, where \
+         y's own bounds pin it to -4 as well, so int_ne removes -4 from y, which is y's \
+         lower bound; the branch then fails on y <= m - 1 and (-3, -4, -2) is reached \
+         afterwards. Drop the disequality and the search returns x = y = -4";
+    };
+    {
+      title = "int_lin_ne/common-factor-offset";
+      m =
+        {
+          vars = [| ("e", 1, 5); ("f", 1, 5); ("g", 1, 5) |];
+          cstrs =
+            [
+              Lin_ne ([ (2, 0); (4, 2) ], 16);
+              Lin_le ([ (-1, 0) ], -2);
+              Lin_eq ([ (1, 1); (-1, 0) ], 1);
+              Lin_le ([ (-1, 2) ], -3);
+              Lin_le ([ (1, 2); (-1, 1) ], 0);
+            ];
+        };
+      props = [ P_lin_ne; P_lin_eq; P_lin_le ];
+      claims =
+        [
+          S_root_prune;
+          S_prune_one_decision;
+          S_conflict_under_decisions;
+          S_sat_after_failure;
+        ];
+      shape_claims = [ D_neg_coeff; D_big_coeff; D_common_factor; D_offset_domain ];
+      depth = 3;
+      note =
+        "the same skeleton over domains offset away from zero on the positive side, with \
+         the disequality's OWN coefficients past |1| and sharing a factor: 2e + 4g <> \
+         16, e >= 2, f = e + 1, 3 <= g <= f. |a| > 1 means [Ne.propagate]'s division by \
+         the unfixed term's coefficient is not the identity, and the common factor 2 \
+         means divisibility is what decides between pruning and declining -- both \
+         outcomes occur here. At e = 2 the missing amount is 12, which 4 divides \
+         exactly, so g's lower bound 3 is removed and g <= f closes the branch; at e = 3 \
+         the remainder is 2 and int_lin_ne declines, which is how (3, 4, 3) survives. A \
+         no-op int_lin_ne returns (2, 3, 3) and I-S1 rejects it";
+    };
+    {
+      title = "int_lin_ne/coprime-negative";
+      m =
+        {
+          vars = [| ("a", -5, -1); ("b", -5, -1); ("c", -5, -1) |];
+          cstrs =
+            [
+              Lin_ne ([ (2, 0); (3, 2) ], -17);
+              Lin_le ([ (-1, 0) ], 4);
+              Lin_eq ([ (1, 1); (-1, 0) ], 1);
+              Lin_le ([ (-1, 2) ], 3);
+              Lin_le ([ (1, 2); (-1, 1) ], 0);
+            ];
+        };
+      props = [ P_lin_ne; P_lin_eq; P_lin_le ];
+      claims =
+        [
+          S_root_prune;
+          S_prune_one_decision;
+          S_conflict_under_decisions;
+          S_sat_after_failure;
+        ];
+      shape_claims = [ D_neg_coeff; D_big_coeff; D_offset_domain; D_negative_domain ];
+      depth = 3;
+      note =
+        "the instance above with the two things easiest to conflate pulled apart: 2a + \
+         3c <> -17 has |a| > 1 but the coefficients are COPRIME, and the domains are \
+         entirely negative. So the quotient is negative and the divisibility test has no \
+         common factor to lean on -- at a = -4 the missing amount is -9, which 3 \
+         divides, so c's lower bound -3 is removed and c <= b closes the branch; at a = \
+         -3 it is -11, which 3 does not divide, so int_lin_ne declines and (-3, -2, -3) \
+         survives. Without the disequality the search returns (-4, -3, -3)";
+    };
   ]
 
 (* ============================================================ the matrix report *)
@@ -1187,18 +1315,42 @@ let report_matrix () =
        shares every line of Linear, so a second branching instance would re-run \
        int_le/chain-offset with a different constant. The cell is left empty \
        deliberately rather than filled with a duplicate.";
-      "int_ne / int_lin_ne x the |a| > 1, common-factor, offset and negative-domain \
-       shapes: reachable, and NOT filled, because every disequality pruning that moves a \
-       bound currently emits a factless trace line -- see [known_bug_ne_trace_facts]. \
-       Those cells open up the moment that is fixed; filling them now would just be the \
-       same failure printed five more times.";
+      "int_ne / int_lin_ne x the offset and negative-domain shapes: FILLED as of M1-T20. \
+       M1-T16 left them empty because every disequality pruning that moved a bound then \
+       emitted a factless trace line, so an instance would only have reprinted that \
+       failure; M1-T17 fixed it (D-0022, I-P5, Store.remove_with_facts) and the cells \
+       opened as predicted. int_ne/negative-domain and int_lin_ne/coprime-negative fill \
+       them, and each was confirmed to fail with the fix reverted -- the factless line \
+       comes back and is not standalone-valid.";
+      "int_lin_ne x |a| > 1 and x the common factor: FILLED, by \
+       int_lin_ne/common-factor-offset (2e + 4g <> 16) and int_lin_ne/coprime-negative \
+       (2a + 3c <> -17, the same shape with the factor removed, because \"non-unit\" and \
+       \"shares a factor\" are easy to conflate and only one of them is what \
+       [Ne.propagate]'s divisibility test turns on).";
+      "int_ne x |a| > 1 and x the common factor: NOT filled, and NOT because of the \
+       M1-T17 bug -- these two cells are unreachable by construction. int_ne IS 1*x + \
+       (-1)*y <> 0 ([Ne.Int_ne.make]), so its coefficients are 1 and -1 in every \
+       instance there can ever be; neither |a| > 1 nor a shared factor is a shape its \
+       data can have. A shape is credited to every propagator in the instance's [props], \
+       so these cells COULD be turned X by putting a big coefficient on some other row \
+       of an int_ne model -- which would record something int_ne did not do. Left empty \
+       deliberately, like the int_lt row above.";
+      "int_ne / int_lin_ne x a push whose division has a remainder: not reachable as \
+       that column is defined. The column means a push whose division rounded; for a \
+       disequality a non-zero remainder is exactly the case where nothing is pruned \
+       ([Ne.propagate]'s `rest mod tm.coeff <> 0 -> Fixpoint`), so there is no push to \
+       round. Both int_lin_ne instances take that branch -- at e = 3 and at a = -3 -- \
+       and their notes say so; it is the absence of a push that is being exercised.";
       "int_ne x conflict at root from a row's own slack: a disequality has no slack. Its \
        root conflict is its own clause, which is [known_bug_ne_snap_cite]'s territory \
        when another row cites it.";
-      "pruning at root x entirely negative domains: lin_eq/offset-negative branches \
-       before it prunes anything at the root, so the cell is empty. Reachable; the \
-       instance to build is a negative-domain model whose root fixpoint moves a bound \
-       AND whose search still has to guess.";
+      "pruning at root x entirely negative domains: FILLED as of M1-T20, as a side \
+       effect rather than on purpose. M1-T16 left it empty because \
+       lin_eq/offset-negative branches before it prunes anything at the root, and asked \
+       for a negative-domain model whose root fixpoint moves a bound AND whose search \
+       still has to guess. int_ne/negative-domain and int_lin_ne/coprime-negative are \
+       both that model: the `x >= -4` and `y >= -4` rows move a bound at level 0 and the \
+       disequality still forces a wrong guess afterwards.";
     ]
 
 (* ================================================= the D-0019 / M1-T9 gap *)
