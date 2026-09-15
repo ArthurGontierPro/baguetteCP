@@ -11,5 +11,7 @@
   test_engine
   test_endtoend
   test_output
-  test_compile)
+  test_compile
+  test_trace
+  test_mutation)
  (libraries baguette_core baguette_proof baguette_flatzinc))

@@ -15,6 +15,10 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 | integration | `test/unit/test_endtoend.ml` | orchestrator | 2026-09-14 — no single session can make it pass alone |
 | M1-T12 — make the D-0013 derivation real: `Explanation` + `Justify` + `int_lin_le` | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/prop/**`, `test/unit/test_prop.ml`, `test/unit/test_justify.ml` | agent-explain | 2026-09-14 — **authorised to change the Explanation ADT**, see D-0013 |
 | M1-T13 — the branching half of D-0013, research only | none — scratchpad only | agent-branch | 2026-09-14 |
+| M1-T13 — log the branch's propagation trace, so the nogood is plain `rup` (D-0018) | `lib/core/justify.ml`, `lib/core/engine.ml`, `lib/core/search.ml`, `lib/core/store.ml`, `lib/core/trace.ml` (new), `test/unit/test_trace.ml` (new), `test/unit/test_justify.ml` | agent-trace | 2026-09-15 — **authorised to change `Justify` and `Store.entry`**, see D-0018 |
+| M1-T9 — `int_ne`, `int_lin_ne` and the direct encoding they need | `lib/proof/encoding.ml`, `lib/proof/lit.ml`, `lib/core/prop/ne.ml` (new), `test/unit/test_prop.ml` | agent-ne | 2026-09-15 |
+| M1-T15 — proof-mutation harness: corrupt a step, assert veripb rejects | `scripts/mutate_proof.sh` (new), `test/unit/test_mutation.ml` (new) | agent-mutate | 2026-09-15 |
+| orchestration: D-0018, docs, dune, `bin/main.ml`, and the integration nobody else can make pass | `docs/**`, `WORKLOG.md`, `**/dune`, `bin/main.ml`, `test/unit/test_endtoend.ml`, `test/models/**` | orchestrator | 2026-09-15 |
 
 ## Cross-session requests
 
@@ -30,6 +34,9 @@ work. The owning session picks it up.
 | `lib/core/justify.ml`, `lib/core/explanation.ml`, `lib/core/prop/order_reason.ml` and `lib/proof/**` are **read-only** for both sessions this round: read them freely, edit none of them. Need a change? Write it here | — | orchestrator | standing |
 | M1-T14 is split in two along a contract stated in full in the dispatch, not merely a type (the D-0009 lesson): agent-compile owns `lib/flatzinc/compile.ml` only; agent-output owns `lib/flatzinc/output.ml` and the `check_assignment` addition to `lib/flatzinc/model.ml` only. Neither touches `bin/main.ml`, any `dune` file, or the other's files; the orchestrator owns the wiring and the integration | `lib/flatzinc/**` | orchestrator | standing |
 | M1-T7 is split across two sessions. The contract between them is the **existing** `Explanation.t` ADT in `lib/core/explanation.ml`, which neither may change: agent-core builds `Linear`/`Cut` values, agent-justify renders any of them. A change there is a cross-session request, not an edit | `lib/core/explanation.ml` | orchestrator | standing |
+| **This round's split (D-0018).** agent-trace owns the trace vertical in `lib/core/`; agent-ne owns the direct encoding and `int_ne`; agent-mutate owns the mutation harness. The contract between agent-trace and agent-ne is that `Encoding` and `Lit` may only be **added** to — `Encoding.is_declared`, `Lit.ge/le/eq/ne/negate/to_string/owner` keep their current signatures, since `justify.ml` compiles against them | `lib/proof/encoding.ml`, `lib/proof/lit.ml` | orchestrator | standing, this round |
+| `lib/core/explanation.ml` is **frozen again** this round. D-0018's derivation needs no new constructor: `Combine`/`Weaken`/`Model_row` already express it, and the new work is *where and when* they are emitted, not what they say. If the trace genuinely cannot be said with the current ADT, that is a cross-session request and a decision record, not an edit | `lib/core/explanation.ml` | orchestrator | standing, this round |
+| Each session builds into its own `--build-dir` (`dune build --build-dir=/tmp/baguette-build-<tag> <target>`). Three sessions share `_build/`'s global lock this round, so a bare `dune build` will fail for reasons that are not yours | — | orchestrator | standing, this round |
 
 ## Completed
 

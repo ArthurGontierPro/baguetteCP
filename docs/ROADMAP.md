@@ -36,12 +36,13 @@ Goal: solve models with only linear integer constraints, and VeriPB accepts ever
 | M1-T7b | `Justify`: explanation to VeriPB rules | DONE | `Linear` states its own terms as `rup`; memo dropped in lockstep with the writer's wipe |
 | M1-T7c | Order-encoding expansion of `sum a_i x_i` into a PB row | DONE | `Encoding.expand_int_lin_le`; the consistency clauses are load-bearing |
 | M1-T8 | `int_lin_eq`, `int_le`, `int_lt`, `int_eq` | DONE | one instance per model row, not one fused propagator (D-0011) |
-| M1-T9 | `int_lin_ne`, `int_ne` (needs direct encoding) | TODO | |
+| M1-T9 | `int_lin_ne`, `int_ne` (needs direct encoding) | WIP | the other half of `PENDING`; `Clause` already renders as `rup`, so this is encoding work |
 | M1-T10 | DFS search with first-fail, decisions logged in the proof | DONE | the answer is right everywhere; the branch-nogood *proof* is open (D-0012) |
 | M1-T11 | End-to-end: 5 small models solve and verify | WIP | 5 of 7 do; `PENDING` holds `ne_sat` (M1-T9) and `chain_sat` (M1-T13, D-0017) |
 | M1-T12 | Make the D-0013 derivation real: `Combine`/`Weaken`/`Model_row` + the root conflict | DONE | D-0015; root refutations now verify |
-| M1-T13 | The branching half of D-0013: justify a conflict reached under decisions | TODO | D-0017: this gates SAT models too, not only UNSAT ones. Bigger than it looks |
+| M1-T13 | The branching half of D-0013: justify a conflict reached under decisions | WIP | **D-0018: D-0012's diagnosis was wrong.** Log the branch's propagation trace and the nogood is an ordinary `rup`. Smaller than it looks |
 | M1-T14 | Wire the CLI: `.fzn` in, solution + proof out | DONE | 5 models solve with verified proofs; `Compile` + `Output` + `Model.check_assignment` |
+| M1-T15 | Proof-mutation harness: corrupt a step, assert veripb rejects | TODO | D-0018's last consequence. A derivation with slack verifies even when corrupted; only this catches that |
 
 ## M2 — Booleans
 

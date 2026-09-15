@@ -639,3 +639,117 @@ Consequences:
   feature.
 - `chain_sat` is in `test/models/PENDING` for this reason. Its answer is checked and
   correct; only its proof is xfail. If it starts passing, the runner fails and says so.
+
+## D-0018  A branch nogood is RUP over the branch's own logged trace
+Status: DECIDED
+Date: 2026-09-15
+Amends: D-0012 and D-0017, whose *diagnosis* is wrong. Their observations stand.
+Closes the open half of D-0013. Supersedes D-0014's framing.
+
+Context: D-0012 observed that veripb rejects the nogood over the active decisions, and
+concluded:
+
+> bounds propagation across several rows is strictly stronger than PB unit propagation
+> on each row
+
+D-0017 carried that forward and made it gate satisfiable models too. Both observations
+are correct. The conclusion drawn from them -- that the nogood is *unreachable* and needs
+some new derivation to reach it -- is not.
+
+The Glasgow Constraint Solver (`~/gcs/glasgow-constraint-solver`, the reference
+implementation of this technique, McIlree's thesis) emits that nogood as a plain `rup`
+with the decisions negated, and veripb accepts it. Read directly:
+
+  - `gcs/innards/proofs/proof_logger.cc:391-410`, `ProofLogger::backtrack`: the claim is
+    the empty sum `>= 1` emitted under a reason which is the guess list. Rendered, from
+    their checked-in proof `.github/veripb_smoke/smoke.pbp`:
+
+        % backtracking
+        rup 1 ~i[_2][b0] 1 i[_1][in3_4] 1 i[_1][eq2] >= 1;
+
+    which is our `rup +1 a_ge_1 >= 1 ;` with more than one decision on the stack.
+
+  - `gcs/solve.cc:296-297`, the ordering, which is load-bearing:
+
+        logger->backtrack(guesses, backtrack_clause_set);   // emit the nogood FIRST
+        logger->forget_proof_level(depth + 1);              // then delete the trace
+
+The reason it works for them and not for us is not the encoding and not the rule. It is
+that **every propagation is logged, at the moment it is made, as its own reified line**
+(`proof_logger.cc:496-541`):
+
+    rup 1 <inferred literal> 1 ~r1 1 ~r2 ... >= 1 ;
+
+so that when veripb checks the backtrack clause it negates it -- asserting each decision
+as a unit -- and then unit-propagates *down the trace the solver already wrote*, one
+single constraint at a time, to the conflict line. It is never asked to re-derive a
+multi-row bounds fixpoint in one step. Their framework note (`dev_docs/literal-
+encodings.tex:2027`) puts it plainly: "it is essentially the solver writing down all the
+facts that it learned, at the points that it learned them."
+
+Our `lib/core/search.ml:27` states the strategy we chose instead, in its own words:
+"nothing is logged inside a branch; the branch's refutation is derived only when it
+closes." That is the whole defect. There is nothing for the checker to propagate along.
+
+This project has now spent D-0012, D-0014 and D-0017 on the wrong explanation of a
+symptom. GCS records the identical mistake as a known trap (`literal-encodings.tex:1712`,
+read in full):
+
+> We record the historical trap: when the literal layer is incomplete, a replay stalls,
+> and the stalled trail's *next* step is typically a bound crossing. The failure
+> therefore looks exactly like "unit propagation cannot thread a bound across the
+> equality". It usually is not. Twice, that misdiagnosis produced elaborate and
+> unnecessary machinery -- global cross-variable coverings, durable top-level lemmas --
+> for a problem that was a missing covering clause somewhere else entirely.
+
+D-0012's wording is that misdiagnosis almost verbatim.
+
+Decision: a branch's refutation is justified by **logging the branch's own propagation
+trace**, and the nogood is then an ordinary `rup` over the negated decisions.
+
+1. Every pruning that happens under at least one decision gets a proof line of its own:
+   the order literal it establishes, disjoined with the negation of its reason's
+   literals. One line per pruning, at the branch's proof level.
+2. The existing D-0013 `Combine` derivation is kept and is still correct -- but it is
+   applied **per bound push**, not once per conflict. Where the pruning is not plain RUP
+   over the row, the `pol` is emitted at a scratch level above the branch's, the reified
+   claim is emitted at the branch's level, and the scratch level is wiped immediately.
+   This is GCS's `JustifyExplicitly{..., ThenRUP::Yes}` (`gcs/innards/proofs/
+   infer_explicitly.hh:100-138`) and their `justify_linear_bounds`
+   (`gcs/constraints/linear/justify.cc:14-45`) is our weaken/divide/add, per push.
+3. A conflict under decisions logs its own reason line first, then the nogood.
+4. The nogood is emitted **before** the level is wiped. Reversing these two is the bug
+   this record exists to prevent someone rediscovering.
+
+We keep our lazy variant of (1) rather than copying GCS's eager logging: the trace is
+emitted when a branch actually *fails*, by walking the trail, not at every pruning on
+every successful path. This is sound here for a reason that is specific to this codebase
+and must be preserved -- `lib/core/prop/linear.ml`'s `snapshot_source` already pins down
+*which* trail entry witnesses each bound at push time, so a reason forced later still
+renders the derivation as of the moment it was made. A propagator whose `Deferred` thunk
+reads live store state instead of a snapshot would silently break this, which is the
+GCS `snapshot_reason` distinction (`gcs/innards/inference_tracker.hh:104-130`) arrived at
+from the other direction.
+
+Consequences:
+- D-0014's "interning a decision-free lemma makes some nogoods verify, but not all" is
+  explained: the lemma supplied, by hand and by luck, one of the trace lines that should
+  have been there all along. Stop pursuing it as a technique.
+- Nothing in `lib/proof/encoding.ml` needs to change. The encoding clauses are *not* what
+  makes a branch nogood reachable -- `literal-encodings.tex:2179` is explicit that they
+  "contribute nothing to the validity of any individual line". Our pure order encoding is
+  in fact ahead of GCS here: GCS's OPB is two's-complement bits, so it must mint order
+  atoms mid-proof with `red` and derive the ladder clauses with `pol`, all of which we
+  get as axioms. Do not port that machinery.
+- `Store.entry` records `old` but not the domain the pruning produced, so the literal a
+  trace line must claim is not directly recoverable from a trail entry. Recording it is
+  expected to be part of M1-T13.
+- A proof gets longer by one line per pruning under a decision. That is the cost of the
+  technique and it is not negotiable for correctness; M6 may revisit *when* lines are
+  written, never *whether*.
+- Testing: a RUP line asserting the fact one cares about tests nothing (`literal-
+  encodings.tex:2196`). Only a backtracking justification, checked after the decisions
+  are asserted, discriminates -- so the witness test for this work must branch,
+  propagate to a failure, and backtrack. A root-level UNSAT model cannot catch a
+  regression here. This is the fifth finding in this project invisible on the instance
+  chosen to test the thing it breaks; see M1-T15.
