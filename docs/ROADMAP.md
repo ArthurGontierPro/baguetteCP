@@ -43,6 +43,7 @@ Goal: solve models with only linear integer constraints, and VeriPB accepts ever
 | M1-T13 | The branching half of D-0013: justify a conflict reached under decisions | DONE | D-0018 + D-0021. One `rup` line per pruning, root prunings included; the nogood is ordinary `rup` along it. `chain_sat` and the three D-0012 parity models verify |
 | M1-T14 | Wire the CLI: `.fzn` in, solution + proof out | DONE | 5 models solve with verified proofs; `Compile` + `Output` + `Model.check_assignment` |
 | M1-T15 | Proof-mutation harness: corrupt a step, assert veripb rejects | DONE | D-0020: found `lin_unsat`'s refutation carries a unit of slack, registered known-slack with XPASS protection |
+| M1-T16 | Populate the tests: a per-propagator × per-situation matrix, and a randomised differential tester | TODO | five findings so far were invisible on the instance chosen to test them (D-0009, D-0010, D-0012, D-0017, D-0021). This is the systematic answer |
 
 ## M2 — Booleans
 

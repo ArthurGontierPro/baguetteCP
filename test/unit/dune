@@ -13,5 +13,7 @@
   test_output
   test_compile
   test_trace
-  test_mutation)
+  test_mutation
+  test_matrix
+  test_random)
  (libraries baguette_core baguette_proof baguette_flatzinc))
