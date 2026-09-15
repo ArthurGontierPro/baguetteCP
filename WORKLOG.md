@@ -15,6 +15,7 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 | integration | `test/unit/test_endtoend.ml` | orchestrator | 2026-09-14 — no single session can make it pass alone |
 | M1-T12 — make the D-0013 derivation real: `Explanation` + `Justify` + `int_lin_le` | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/prop/**`, `test/unit/test_prop.ml`, `test/unit/test_justify.ml` | agent-explain | 2026-09-14 — **authorised to change the Explanation ADT**, see D-0013 |
 | M1-T13 — the branching half of D-0013, research only | none — scratchpad only | agent-branch | 2026-09-14 |
+| M1-T11 — wire `int_ne`/`int_lin_ne` into the CLI, clear the last `PENDING` line | `lib/flatzinc/compile.ml`, `test/unit/test_compile.ml`, `test/models/PENDING`, and at release `docs/ROADMAP.md` + this file | agent-ne-wiring | 2026-09-15 — works on branch `worktree-m1-t11-ne-wiring`, not on master |
 
 ## Cross-session requests
 
