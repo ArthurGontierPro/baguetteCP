@@ -12,10 +12,19 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-_No session is holding anything right now._ The three rows that stood here
-(`integration`, M1-T12, M1-T13) were stale: all three had shipped, and M1-T13 was already
-listed under Completed. Cleared 2026-09-15 by the orchestrator — see the handoff note
-"the claims table had rotted".
+The three rows that stood here (`integration`, M1-T12, M1-T13) were stale and were
+cleared 2026-09-15 — see the handoff note "the claims table had rotted". This round's
+claims, dispatched by the orchestrator, each in **its own worktree** so that no two
+share an `_build` lock:
+
+| Task | Files being touched | Session | Since |
+|---|---|---|---|
+| M1-T18 + M1-T19 — adopt the Rust VeriPB 3.0.2 checker, then migrate emission to format 3.0 | `lib/proof/**`, `lib/core/justify.ml`, `lib/core/trace.ml`, `lib/core/search.ml`, `lib/core/explanation.ml`, `lib/core/prop/**`, `scripts/**`, `docs/PROOF-FORMAT.md`, `docs/SPEC.md`, `docs/DECISIONS.md` (append only), `test/unit/test_{proof,justify,mutation,trace}.ml` | agent-proof3 | 2026-09-15 — **authorised to supersede D-0002**, which is what phase 2 requires |
+| M1-T20 — correct the empty-cell note M1-T17 invalidated, and fill the four `int_ne` shape cells | `test/unit/test_matrix.ml` only | agent-matrix | 2026-09-15 — `lib/` is read-only for it: this task pins behaviour, it does not change it |
+| M1-T21 — a bool par prints `0`/`1` instead of `false`/`true` | `lib/flatzinc/{output,model,builder}.ml`, `test/unit/test_output.ml`, **new** files under `test/models/` and `test/expected/` | agent-output | 2026-09-15 — must not edit an existing model or expected output |
+
+`WORKLOG.md`, `docs/ROADMAP.md`, `test/models/PENDING` and all `dune` files are
+orchestrator-held this round; no agent touches them, and the merge is the orchestrator's.
 
 ## Cross-session requests
 
