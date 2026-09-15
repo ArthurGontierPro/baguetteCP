@@ -319,9 +319,24 @@ let check_audit t =
 
 type verdict =
   | Sat of Lit.t list
-    (* The satisfying assignment. [] falls back on a previously logged [sol],
-       which the checker only accepts when deletion checking is on; passing the
-       assignment is the form that always works. *)
+    (* The satisfying assignment. It is logged with [sol] and the conclusion is the
+       bare [conclusion SAT]; [] skips the [sol] and relies on one logged earlier.
+
+       Not the inline [conclusion SAT : <assignment>] form, and that is M1-T18's
+       finding rather than a style preference. The assignment we have is over the
+       *model* variables only -- the order-encoding families of the FlatZinc
+       variables. The .opb also carries encoding auxiliaries (the [_neN] selectors of
+       PROOF-FORMAT section 3), and nothing in the solver knows what they should be.
+       veripb 2.2.2 unit-propagates the inline assignment and fills them in; veripb
+       3.0.2 does not -- "the solution given for the conclusion is not propagated" --
+       and reads every unmentioned variable as false, so a model needing a selector
+       true has its honest proof REJECTED. test/models/ne_conflict_sat.fzn is such a
+       model and was the single disagreement between the two checkers.
+
+       A solution logged with [sol] *is* propagated, by both. Measured, not argued:
+       the checker's own hint says "if the solution should be propagated, then log
+       the solution inside the proof". [solx] is not an alternative -- 3.0.2 refuses
+       it outside a preserved set. *)
   | Unsat of cid option
     (* The id of the derived contradiction. [None] makes the checker search the
        database for one -- accepted, but it is work we can spare it, and under the
@@ -337,10 +352,12 @@ type verdict =
    does not mention it. NONE is the honest guarantee: we do not emit an output
    formula, so we claim nothing about one. *)
 let conclusion ?(output = "NONE") t v =
+  (* [sol] first: it is a derivation rule and [output] must be the line immediately
+     before [conclusion] (SPEC section 4.3). *)
+  (match v with Sat (_ :: _ as lits) -> solution t lits | _ -> ());
   line t "output %s" output;
   (match v with
-  | Sat [] -> line t "conclusion SAT"
-  | Sat lits -> line t "conclusion SAT : %s" (lits_to_string lits)
+  | Sat _ -> line t "conclusion SAT"
   | Unsat None -> line t "conclusion UNSAT"
   | Unsat (Some id) ->
       line t "conclusion UNSAT : %d" id;
