@@ -51,7 +51,18 @@
      independent instances. [Encoding.add_equality] is deliberately not used: it takes
      PB literal terms, not integer terms, and would not go through the order-encoding
      expansion these rows need.
-   - [Int_le] / [Int_lt] / [Int_eq] are the same shapes over `a - b`.
+   - [Int_lin_ne] is *two* rows and *one* instance -- the one asymmetric shape here,
+     and deliberately so. The rows are [Encoding.add_int_lin_ne]'s A/B pair over a
+     shared auxiliary Boolean, because a disequality is not a single PB inequality; the
+     single [Ne.t] cites *neither* of them, and the pair of ids is dropped rather than
+     stored. lib/core/prop/ne.ml's header is the argument: every explanation that
+     propagator builds is a [Clause] stating its own content in full, so it never names
+     a row, and D-0011's hazard -- [Explanation.Trivial], meaning "whatever
+     ctx.model_id points at" -- cannot arise. Handing [Ne.make] a row id it does not
+     use would be worse than dropping one: it would imply a citation that never happens.
+   - [Int_le] / [Int_lt] / [Int_eq] are the same shapes over `a - b`, and [Int_ne] is
+     the [Int_lin_ne] shape over `a - b`, packed under [Ne.Int_ne] rather than [Ne] so
+     the instance reports the builtin the model actually wrote.
 
    ---------------------------------------------------------------------------
    Normalisation happens once, and both halves read the same list
@@ -82,6 +93,7 @@ module Store = Baguette_core.Store
 module Propagator = Baguette_core.Propagator
 module Linear = Baguette_core.Linear
 module Lin_eq = Baguette_core.Lin_eq
+module Ne = Baguette_core.Ne
 module Engine = Baguette_core.Engine
 module Encoding = Baguette_proof.Encoding
 module Lit = Baguette_proof.Lit
@@ -154,22 +166,6 @@ let rec search_pos (m : Model.t) (s : Model.search) =
 (* SPEC 2.1 is normative about the shape of these: name the thing, say why it is not
    there, and exit non-zero. Each one asserts on its message in test_compile.ml, so
    the wording is part of the tested surface, not decoration. *)
-
-let reject_lin_ne pos builtin =
-  Error.failf pos
-    "unsupported builtin `%s`: baguette has no propagator for a linear disequality yet \
-     (roadmap M1-T9 -- it needs the direct encoding, which the order encoding alone \
-     cannot express). The constraint is rejected rather than dropped (docs/SPEC.md \
-     section 2.1)."
-    builtin
-
-let reject_ne pos builtin =
-  Error.failf pos
-    "unsupported builtin `%s`: baguette has no propagator for a disequality yet (roadmap \
-     M1-T9 -- it needs the direct encoding, which the order encoding alone cannot \
-     express). The constraint is rejected rather than dropped (docs/SPEC.md section \
-     2.1)."
-    builtin
 
 let reject_set_domain (v : Model.var) values =
   let lo = List.fold_left min (List.hd values) values in
@@ -265,8 +261,26 @@ let check_name_collisions (m : Model.t) =
 
 (* ------------------------------------------------------------------------ compile *)
 
-let pack ~id (lin : Linear.t) =
-  Propagator.pack ~id (module Linear : Propagator.S with type t = Linear.t) lin
+(* A propagator with everything decided except the id the engine will know it by.
+
+   That id is not a label: [Engine.create] builds its array from the list it is given
+   and then looks an instance up as [instances.(id)] (lib/core/engine.ml), so an
+   instance's id must equal its *position* in that list -- and an arm of the match
+   below, which may yield one instance or two, cannot know its own position. So each
+   arm yields pending instances and [compile] closes them over their index once, at the
+   end, with a single [List.mapi]. *)
+type pending = int -> Propagator.instance
+
+let pack_linear (lin : Linear.t) : pending =
+ fun id -> Propagator.pack ~id (module Linear : Propagator.S with type t = Linear.t) lin
+
+(* [Ne] and [Ne.Int_ne] are one propagator over one [Ne.t]; they differ only in the
+   [name] the packed instance reports, so each builtin is packed under its own. *)
+let pack_lin_ne (p : Ne.t) : pending =
+ fun id -> Propagator.pack ~id (module Ne : Propagator.S with type t = Ne.t) p
+
+let pack_ne (p : Ne.t) : pending =
+ fun id -> Propagator.pack ~id (module Ne.Int_ne : Propagator.S with type t = Ne.t) p
 
 let compile (m : Model.t) : t =
   (match m.Model.objective with
@@ -308,7 +322,7 @@ let compile (m : Model.t) : t =
   (* One row + one instance. [nterms] is the *same* normalised list on both sides. *)
   let post_le pos nterms rhs =
     let row_id = Encoding.add_int_lin_le encoding (opb_terms pos nterms) rhs in
-    [ Linear.make ~row_id store (prop_terms nterms) rhs ]
+    [ pack_linear (Linear.make ~row_id store (prop_terms nterms) rhs) ]
   in
   (* Two rows + two instances (D-0011). The `>=` half is the negated row; [Lin_eq.make]
      builds its [Linear.t] from the same negation, so each instance's terms are exactly
@@ -319,7 +333,15 @@ let compile (m : Model.t) : t =
       Encoding.add_int_lin_le encoding (opb_terms pos (negate_terms nterms)) (-rhs)
     in
     let le, ge = Lin_eq.make ~le_id ~ge_id store (prop_terms nterms) rhs in
-    [ le; ge ]
+    [ pack_linear le; pack_linear ge ]
+  in
+  (* Two rows, one instance, no row id -- see the module header. The propagator is
+     built here, eagerly, rather than inside the pending closure, because [Ne.make]
+     reads each variable's *declared* domain out of the store (D-0010) and must run
+     before anything narrows it; only the packing is deferred. *)
+  let post_ne pos nterms rhs ~pack =
+    ignore (Encoding.add_int_lin_ne encoding (opb_terms pos nterms) rhs : int * int);
+    [ pack (Ne.make store (prop_terms nterms) rhs) ]
   in
 
   (* A ground constraint -- one whose term list is empty once constants are folded, such
@@ -344,7 +366,17 @@ let compile (m : Model.t) : t =
      .opb line `>= 1 ;` is accepted, `pol` over it is accepted, `conclusion UNSAT` citing
      the result is accepted, and the vacuously true form `>= -1 ;` is accepted alongside
      a `conclusion SAT`. It also verifies with `#variable= 0`, i.e. in a model whose only
-     content is the ground contradiction. *)
+     content is the ground contradiction.
+
+     A disequality reaches the same case by a different route, and `int_ne(x, x)` is it:
+     [normalise_terms] merges the two occurrences of x into a zero coefficient and drops
+     it, leaving the empty sum <> 0, which is false. There is no special case for that
+     either, and none is wanted. [Encoding.add_int_lin_ne]'s A/B pair degenerates to two
+     contradictory units on its own auxiliary Boolean; [Ne.propagate] finds every one of
+     its (zero) terms fixed with the sum at the value it must avoid and conflicts with an
+     empty [Clause]; and the refutation veripb accepts is `rup >= 1 ;`, closed the
+     D-0022/I-X7 way because it rests on a clause. That model is
+     test/models/ne_self_unsat.fzn. *)
   let instances =
     List.concat_map
       (fun (c : Model.constr) ->
@@ -352,7 +384,8 @@ let compile (m : Model.t) : t =
         match c.Model.k with
         | Model.Int_lin_le (terms, rhs) -> post_le pos (normalise_terms terms) rhs
         | Model.Int_lin_eq (terms, rhs) -> post_eq pos (normalise_terms terms) rhs
-        | Model.Int_lin_ne (_, _) -> reject_lin_ne pos "int_lin_ne"
+        | Model.Int_lin_ne (terms, rhs) ->
+            post_ne pos (normalise_terms terms) rhs ~pack:pack_lin_ne
         | Model.Int_le (a, b) ->
             let terms, rhs = difference_terms a b ~offset:0 in
             post_le pos (normalise_terms terms) rhs
@@ -362,8 +395,10 @@ let compile (m : Model.t) : t =
         | Model.Int_eq (a, b) ->
             let terms, rhs = difference_terms a b ~offset:0 in
             post_eq pos (normalise_terms terms) rhs
-        | Model.Int_ne (_, _) -> reject_ne pos "int_ne")
+        | Model.Int_ne (a, b) ->
+            let terms, rhs = difference_terms a b ~offset:0 in
+            post_ne pos (normalise_terms terms) rhs ~pack:pack_ne)
       m.Model.constraints
   in
-  let engine = Engine.create (List.mapi (fun id lin -> pack ~id lin) instances) in
+  let engine = Engine.create (List.mapi (fun id pending -> pending id) instances) in
   { store; engine; encoding }

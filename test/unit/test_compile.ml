@@ -11,8 +11,11 @@
       distinguishable domains, so a permutation cannot hide behind symmetry.
 
    2. **Shape.** One propagator instance per model row (D-0011): a `<=` is one
-      instance and one .opb row, an equality is two of each. Counted through
-      [Engine.n_instances] and [Encoding.n_constraints].
+      instance and one .opb row, an equality is two of each, and a disequality is one
+      instance and *two* rows. That last one is the asymmetric case, and so the one a
+      later reader is most likely to "correct" -- compile.ml's header says why the
+      single instance cites neither of its rows. Counted through [Engine.n_instances]
+      and [Encoding.n_constraints].
 
    3. **Normalisation.** Constants folded into the right-hand side, repeated variables
       merged by summing coefficients, zero coefficients dropped -- checked both on
@@ -28,10 +31,13 @@
    half a test (CLAUDE.md), three models are run all the way: compiled here, solved by
    [Search.solve] writing a real .opb and .pbp, and handed to veripb. If veripb is
    missing the suite FAILS rather than skipping -- an unchecked proof is not a passing
-   proof. The end-to-end models are deliberately chosen to be either SAT or
-   root-refutable (refuted by bounds propagation with no decision active), because
-   D-0012/D-0014 record that the *branching* UNSAT case does not verify yet; a model
-   needing a decision would be testing that open gap, not this file's translation. *)
+   proof. The end-to-end models here are deliberately either SAT or root-refutable
+   (refuted by bounds propagation with no decision active). That was originally because
+   the branching UNSAT case did not verify at all -- D-0012/D-0014, both since
+   overturned by D-0018/D-0021 -- and it stays that way now for a different reason: a
+   model that needs a decision exercises the trace machinery rather than this file's
+   translation, and test/models/ now holds five disequality models that do exercise it
+   end to end. *)
 
 module F = Baguette_flatzinc
 module M = F.Model
@@ -150,6 +156,13 @@ let test_instance_counts () =
   let n, rows = instances_and_rows (two_bools "constraint int_eq(b,c);") in
   check "shape: int_eq is two instances (it is the int_lin_eq shape)" (n = 2);
   check "shape: int_eq is two .opb rows" (rows = 2);
+  let n, rows = instances_and_rows (two_bools "constraint int_ne(b,c);") in
+  check "shape: int_ne is one instance" (n = 1);
+  check "shape: int_ne is two .opb rows, and the instance cites neither (M1-T11)"
+    (rows = 2);
+  let n, rows = instances_and_rows (two_bools "constraint int_lin_ne([1,1],[b,c],1);") in
+  check "shape: int_lin_ne is one instance" (n = 1);
+  check "shape: int_lin_ne is two .opb rows (add_int_lin_ne's A/B pair)" (rows = 2);
   let n, rows =
     instances_and_rows
       (two_bools
@@ -266,6 +279,50 @@ let test_ground_constraints () =
     | Engine.Conflict _ -> true
     | Engine.Fixpoint -> false)
 
+(* ---------------------------------------------- 3c. the disequality path (M1-T11) *)
+
+(* A disequality that compiles but propagates nothing would satisfy [expect_accepted]
+   and still ignore the model, which is the one outcome SPEC 2.1 forbids outright. So
+   the wiring is checked by what it prunes, not by what it accepts. Each case fixes one
+   side with an equality first, because a disequality with two unfixed terms is entitled
+   to infer nothing at all (lib/core/prop/ne.ml). *)
+let test_disequalities () =
+  check "ne: int_ne prunes the other side once one side is fixed"
+    (propagated
+       "var 1..2: x;\n\
+        var 1..2: y;\n\
+        constraint int_eq(x,1);\n\
+        constraint int_ne(x,y);\n\
+        solve satisfy;\n"
+       1
+    = Some (2, 2));
+  (* 2x - y <> 0 with x fixed at 1 forbids y = 2, which is y's upper bound here, so a
+     bound actually moves. The non-unit coefficient also exercises the division in
+     [Ne.propagate] that no int_ne can reach, and would be lost by a normalisation that
+     dropped or merged the wrong term. *)
+  check "ne: int_lin_ne prunes through a non-unit coefficient"
+    (propagated
+       "var 0..2: x;\n\
+        var 0..2: y;\n\
+        constraint int_eq(x,1);\n\
+        constraint int_lin_ne([2,-1],[x,y],0);\n\
+        solve satisfy;\n"
+       1
+    = Some (0, 1));
+  (* int_ne(x, x) normalises to the empty sum <> 0, which is false. It is posted rather
+     than dropped, for the reason compile.ml's ground-constraint comment gives; and
+     test/models/ne_self_unsat.fzn runs this same model past veripb, where the .opb's
+     A/B pair degenerates to two contradictory units on its auxiliary Boolean. *)
+  let self =
+    Compile.compile (build "var 1..3: x;\nconstraint int_ne(x,x);\nsolve satisfy;\n")
+  in
+  check "ne: int_ne(x, x) is still one instance, not a dropped constraint"
+    (Engine.n_instances self.Compile.engine = 1);
+  check "ne: int_ne(x, x) conflicts at the root"
+    (match Engine.propagate self.Compile.engine self.Compile.store with
+    | Engine.Conflict _ -> true
+    | Engine.Fixpoint -> false)
+
 (* -------------------------------------------------------------- 4. rejections *)
 
 (* Assert on the message, not merely that something raised: SPEC 2.1 requires the
@@ -293,10 +350,13 @@ let expect_accepted name src =
   | _ -> Printf.printf "ok   %s\n" name
 
 let test_rejections () =
-  expect_rejected "reject: int_lin_ne names the builtin"
-    ~needles:[ "int_lin_ne"; "M1-T9" ]
+  (* Both disequalities were rejections here until M1-T11, with a message naming M1-T9
+     and claiming they needed the direct encoding. D-0019 overturned the reason and
+     M1-T11 the rejection, so what used to assert that wording now asserts that the
+     constraint compiles; [test_disequalities] is what checks it does something. *)
+  expect_accepted "accept: int_lin_ne is compiled rather than rejected (M1-T11)"
     "var 0..3: x;\nvar 0..3: y;\nconstraint int_lin_ne([1,1],[x,y],2);\nsolve satisfy;\n";
-  expect_rejected "reject: int_ne names the builtin" ~needles:[ "int_ne"; "M1-T9" ]
+  expect_accepted "accept: int_ne is compiled rather than rejected (M1-T11)"
     "var 0..3: x;\nvar 0..3: y;\nconstraint int_ne(x,y);\nsolve satisfy;\n";
   expect_rejected "reject: a set domain names the variable and what is missing"
     ~needles:[ "holes"; "relaxation"; "hull" ]
@@ -520,6 +580,7 @@ let () =
   test_constant_folding ();
   test_duplicate_coefficients ();
   test_ground_constraints ();
+  test_disequalities ();
   test_rejections ();
   test_end_to_end ();
   if !failures > 0 then (
