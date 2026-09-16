@@ -1,0 +1,34 @@
+% M1-T44. A root conflict whose `pol` derivation is a unit short, because a bound was
+% settled over a hole that the derivation never mentions.
+%
+% Found by M2-T11's seed sweep (seeds 133 and 151) and reduced by hand. The answer is
+% UNSATISFIABLE and it is right -- v1 = v0 and v0 <> v1 -- and until M1-T44 the proof
+% was rejected: `conclusion UNSAT` cited a `pol` chain that sums to `0 >= 0`.
+%
+% What happens at the root, in order:
+%
+%   1. int_le(v1, 0) pushes hi(v1) to 0, so v1 = 0.
+%   2. int_ne(v0, v1) removes the value 0 from v0. That is a HOLE strictly inside
+%      [-1, 1]: no bound moves, so lib/core/trace.ml writes no line for it, and the
+%      only record of it is the trail entry's `Clause` reason.
+%   3. int_eq(v1, v0)'s `v0 >= v1` half pushes lo(v0) to 0 -- and Domain.settle walks
+%      that bound over the hole to 1. The trail entry therefore records lo = 1 while
+%      its explanation derives only lo >= 0.
+%   4. int_eq's other half, `v0 <= v1`, now has slack -1 and conflicts. It cites the
+%      entry from (3) as the reason for lo(v0) = 1, which is a unit more than that
+%      entry proves, so the chain lands on `0 >= 0` instead of `0 >= 1`.
+%
+% The three rows cited -- int_le and the two halves of int_eq -- are jointly satisfiable
+% at v0 = v1 = 0, so NO re-routing of that derivation can close it: the disequality is
+% genuinely needed and was silently dropped. The fix folds the hole's own reason into
+% the citation, which makes Search.rests_on_a_clause see it and closes the conflict the
+% D-0018 way, with the empty clause the checker verifies for itself (D-0022, I-X7).
+%
+% Keep the domains offset (v0 starts at -1) and asymmetric: the hole has to land
+% strictly inside v0's interval for step (2) to punch rather than to move a bound.
+var -1..1: v0 :: output_var;
+var 0..2: v1 :: output_var;
+constraint int_le(v1, 0);
+constraint int_ne(v0, v1);
+constraint int_eq(v1, v0);
+solve satisfy;
