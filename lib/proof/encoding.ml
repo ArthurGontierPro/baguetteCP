@@ -13,7 +13,75 @@
 
    This module also owns the mapping from a model constraint to the id the [f] rule
    will give it. The .opb's line order and the proof's ids are the same thing, and
-   keeping them in one place is the only way invariant I-X5 stays true. *)
+   keeping them in one place is the only way invariant I-X5 stays true.
+
+   ---------------------------------------------------------------------------
+   "Compile is the only door", stated and enforced (M1-T32, from D-0029)
+   ---------------------------------------------------------------------------
+
+   D-0029 closed a soundness gap whose shape is worth restating here, because this
+   module is where the damage is done rather than where the fix went. A wrapped product
+   makes a propagator prune wrongly AND makes the .opb row say something other than the
+   model, computed from the same wrapping [*] -- so the two agree, and veripb, which
+   only ever sees the .opb, accepts the refutation of a model nobody wrote. There is no
+   independent oracle: [Model.check_assignment] wraps the same way, and on an UNSAT
+   answer there is no assignment to check at all.
+
+   The fix was a compile-time cap ([Checked.limit], lib/flatzinc/compile.ml). Its
+   consequence, recorded in D-0029 and filed as M1-T32, was that THIS MODULE and
+   lib/proof/opb.ml still computed unchecked and were safe only because [Compile]
+   happened to be the only caller. Nothing stated that, and a second entry point -- a
+   future front end, or a test calling [add_int_lin_le] directly -- could still write a
+   corrupted row.
+
+   The invariant, stated:
+
+     **No row is committed to the .opb whose arithmetic wrapped.** Every integer this
+     module or [Opb] derives from a posted linear row is representable in a native int.
+
+   And enforced, by [check_lin_le_computable] / [check_lin_ne_computable] below, on the
+   two functions that commit such a row: [add_int_lin_le] and [add_int_lin_ne]. They are
+   preconditions, computed in [Arith]'s overflow-checked operations, and they RAISE
+   [Unrepresentable]. They never decline: D-0029's asymmetry ("there is no 'decline'
+   available for an artefact that must exist") applies with more force here than to a
+   propagator, because this module is the thing that writes the artefact. Under
+   [Compile]'s cap neither can fire, so the .opb of every model the CLI accepts is
+   byte-for-byte what it was.
+
+   Three things this deliberately does NOT do, said here so they are not mistaken for
+   oversights:
+
+   1. **It does not call [Baguette_core.Checked], because it cannot.** [Checked] lives
+      in lib/core, and the dependency runs core -> proof (ARCHITECTURE section 1,
+      "Dependency direction"); lib/core/dune's `(libraries baguette_proof)` is the edge.
+      Inverting it is not on the table. [Arith] below is therefore a local copy of the
+      five primitives, and the copy is PINNED: test/unit/test_proof.ml asserts
+      [Encoding.Arith] and [Baguette_core.Checked] agree operation by operation over an
+      edge-case table. The test layer depends on both libraries even though neither
+      depends on the other, which is what makes the duplication checkable rather than a
+      second source of truth. [Checked]'s *policy* half -- [limit], [row_fits],
+      [bound_fits], and the derivation of the factor 16 -- stays where it is and is NOT
+      copied: a FlatZinc compile-time cap does not belong in the PB emitter, and a
+      second statement of that envelope is exactly the "copies cannot all stay right"
+      failure this tree has already paid for twice.
+
+   2. **The guard is on the committing door, not on the pure expansion.**
+      [expand_int_lin_le], [expand_int_lin_ne] and [linear_terms_int_lin_le] are
+      documented as the inspect-before-committing forms and stay exactly as they were,
+      wrapping arithmetic included. That is deliberate: it is what lets
+      test/unit/test_prop.ml's [test_opb_row_wraps_identically] go on demonstrating the
+      D-0029 defect on the row itself, which is the evidence this guard exists for.
+      Inspecting an expansion is not writing a file.
+
+   3. **It does not make a hand-built row safe.** A caller that assembles an
+      [Opb.constr] itself and calls [add_constraint] is outside the guard, because by
+      then there is no linear arithmetic left for this module to check. [add_constraint]
+      is the lower-level door and always was.
+
+   The bound the guard checks is an upper envelope, not the row itself, so it covers
+   lib/proof/opb.ml as well -- [Opb.le]'s negation and [Opb.normalise]'s moving of
+   coefficients to the right-hand side are both inside it. See [check_lin_le_computable]
+   for the derivation. opb.ml is not read by this guard and needs no change. *)
 
 type cid = Writer.cid
 
@@ -29,6 +97,66 @@ exception Redeclared of string
 exception Empty_domain of string
 exception No_direct_encoding of string
 exception Direct_too_large of string * int
+
+(* A row whose arithmetic cannot be carried out in a native int, so committing it to
+   the .opb would write a different constraint from the one the caller posted. See the
+   header, M1-T32. Loud by design: D-0029's "overflow raises; it never wraps and never
+   quietly declines". *)
+exception Unrepresentable of string
+
+(* ---------------------------------------------------------------------------
+   Overflow-checked arithmetic, local to this library.
+
+   A LOCAL COPY of lib/core/checked.ml's five primitives, and the header says why it
+   has to be one: core depends on proof, so [Baguette_core.Checked] is not nameable
+   here. It is a copy of the OPERATIONS only -- none of [Checked]'s cap, envelope or
+   [row_fits] policy is duplicated -- and test/unit/test_proof.ml pins it to the
+   original by asserting the two agree case by case. If that test is deleted, this
+   module has quietly become a second source of truth about 63-bit arithmetic.
+
+   Every operation returns exactly what the native operator returns whenever the native
+   operator is right, so nothing computed through these changes any emitted byte.
+   --------------------------------------------------------------------------- *)
+module Arith = struct
+  let fail fmt = Printf.ksprintf (fun s -> raise (Unrepresentable s)) fmt
+
+  let neg a =
+    if a = min_int then fail "-(%d) overflows a 63-bit int (min_int has no negation)" a
+    else -a
+
+  let abs a =
+    if a = min_int then fail "abs %d overflows a 63-bit int (min_int has no negation)" a
+    else Stdlib.abs a
+
+  (* Two's complement addition is exact modulo 2^63, so a sum is wrong exactly when
+     both operands share a sign and the result does not. *)
+  let add a b =
+    let s = a + b in
+    if a >= 0 = (b >= 0) && s >= 0 <> (a >= 0) then
+      fail "%d + %d overflows a 63-bit int" a b
+    else s
+
+  let sub a b =
+    let d = a - b in
+    if a >= 0 <> (b >= 0) && d >= 0 <> (a >= 0) then
+      fail "%d - %d overflows a 63-bit int" a b
+    else d
+
+  (* |a| and |b| below 2^30 bound the product by 2^60, which is every coefficient and
+     bound a real model has; that fast path costs four comparisons where the exact one
+     costs a division. Same split, and the same constant, as [Checked.mul]. *)
+  let small = 0x3FFFFFFF
+
+  let mul a b =
+    if a >= -small && a <= small && b >= -small && b <= small then a * b
+    else if a = 0 || b = 0 then 0
+    else if a = -1 then neg b
+    else if b = -1 then neg a
+    else
+      (* [a] is neither 0 nor -1 here, so this divides neither by zero nor by -1. *)
+      let p = a * b in
+      if p / a <> b then fail "%d * %d overflows a 63-bit int" a b else p
+end
 
 (* An .opb line [... = b] is two constraints as far as VeriPB is concerned, so it
    would shift every id after it. We never emit one; see [add_equality]. *)
@@ -381,13 +509,76 @@ let expand_int_lin_le t terms rhs =
   let opb_terms, const = linear_terms_int_lin_le t terms in
   Opb.normalise (Opb.le opb_terms (rhs - const))
 
+(* ---------------------------------------------------------------------------
+   M1-T32: the precondition that makes "Compile is the only door" enforced rather
+   than merely true. Read the header first.
+   --------------------------------------------------------------------------- *)
+
+(* The two magnitudes a linear row's arithmetic is bounded by, over the DECLARED
+   domains, computed in [Arith] so that measuring the row cannot itself wrap:
+
+     S = sum_i |a_i| * max(|lo_i|, |hi_i|)      the term mass
+     W = sum_i |a_i| * (hi_i - lo_i)            the expanded row's coefficient mass
+
+   A term with a_i = 0 contributes nothing, exactly as in
+   [linear_terms_int_lin_le] -- the two must skip the same terms or the guard would
+   measure a row the expansion does not build. *)
+let row_magnitudes t terms =
+  List.fold_left
+    (fun (s, w) (a, x) ->
+      if a = 0 then (s, w)
+      else
+        let v = find t x in
+        let m = Arith.abs a in
+        let s = Arith.add s (Arith.mul m (max (Arith.abs v.lo) (Arith.abs v.hi))) in
+        let w = Arith.add w (Arith.mul m (Arith.sub v.hi v.lo)) in
+        (s, w))
+    (0, 0) terms
+
+(* Is every integer derived from  sum_i a_i x_i <= rhs  representable?
+
+   The derivation, and it is an envelope rather than the row itself so that it also
+   covers lib/proof/opb.ml, which this module cannot check from the inside:
+
+   - [linear_terms_int_lin_le]'s fold computes each product a_i * lo_i and a running
+     constant. Each product is at most S and the running constant is at most S, since a
+     partial sum is bounded by the sum of the magnitudes.
+   - [expand_int_lin_le] then computes rhs - const, at most |rhs| + S.
+   - [Opb.le] negates every coefficient (magnitudes unchanged) and the right-hand side.
+   - [Opb.normalise] merges repeated variables -- a merged coefficient is at most W --
+     and moves one coefficient per negative or negated term to the right-hand side, a
+     total movement of at most W.
+
+   So |rhs| + S + W bounds every intermediate. Computing it in [Arith] and discarding
+   the result is the check: if it can be computed, nothing downstream wraps. *)
+let check_lin_le_computable t terms rhs ~what =
+  let s, w = row_magnitudes t terms in
+  try ignore (Arith.add (Arith.add (Arith.abs rhs) s) w : int)
+  with Unrepresentable why ->
+    raise
+      (Unrepresentable
+         (Printf.sprintf
+            "%s: the row's arithmetic does not fit in a 63-bit int (%s). Committing it \
+             would put a constraint in the .opb that is not the one posted, and veripb \
+             would verify the wrong model -- see docs/DECISIONS.md D-0029. \
+             lib/flatzinc/compile.ml's cap is what keeps this unreachable for a model \
+             the CLI accepts; a caller that reaches Encoding directly has to stay inside \
+             it too."
+            what why))
+
 (* Post  sum_i a_i x_i <= rhs  as a model constraint and hand back its id.
    Terms are (coefficient, integer-variable-name) pairs, matching the shape
    [add_equality] and [add_constraint] already use for term lists elsewhere in
    this module. The expansion always produces a ">=" row (see [expand_int_lin_le]
    above via [Opb.le]), so it never trips [add_constraint]'s refusal of [Eq] --
-   there is no separate equality path to keep in sync with I-X5 here. *)
-let add_int_lin_le t terms rhs = add_constraint t (expand_int_lin_le t terms rhs)
+   there is no separate equality path to keep in sync with I-X5 here.
+
+   This is one of the two committing doors M1-T32 guards. The check runs BEFORE the
+   expansion, so a row that cannot be computed never reaches [t.rev_constraints] and
+   the encoding is left exactly as it was. *)
+let add_int_lin_le t terms rhs =
+  check_lin_le_computable t terms rhs ~what:"Encoding.add_int_lin_le";
+  add_constraint t (expand_int_lin_le t terms rhs)
 
 (* ---------------------------------------------------------------------------
    M1-T9: disequalities.
@@ -547,7 +738,54 @@ let expand_int_lin_ne t terms rhs ~aux =
    Declares the auxiliary Boolean as a side effect, so this must be called while the
    .opb is still being built, and the returned ids obey I-X5 like any others. A
    caller that wants the rows without the side effect wants [expand_int_lin_ne]. *)
+(* The [int_lin_ne] half of M1-T32's precondition. Its A/B pair is the worst of the
+   four arithmetic paths lib/core/checked.ml's header sizes the cap against (path 4),
+   so it is the one place where checking only the base row would not be enough.
+
+   Checked here rather than inside [expand_int_lin_ne] for two reasons: that function
+   is the inspect-before-committing form, like [expand_int_lin_le] (see the header);
+   and this runs before [fresh_aux_name] mints anything, so a refused row leaves no
+   auxiliary Boolean declared behind it.
+
+   The auxiliary is a bool on [0, 1], so its contribution to both magnitudes is just
+   |coefficient| -- which is why the two augmented rows can be measured before the
+   aux exists. That mirrors [expand_int_lin_ne]'s own construction; the two must agree
+   about the big-M constants, so the formulas are written the same way round. *)
+let check_lin_ne_computable t terms rhs ~what =
+  check_lin_le_computable t terms rhs ~what;
+  let s, w = row_magnitudes t terms in
+  let l, u =
+    List.fold_left
+      (fun (lo, hi) (a, x) ->
+        if a = 0 then (lo, hi)
+        else
+          let v = find t x in
+          if a > 0 then (Arith.add lo (Arith.mul a v.lo), Arith.add hi (Arith.mul a v.hi))
+          else (Arith.add lo (Arith.mul a v.hi), Arith.add hi (Arith.mul a v.lo)))
+      (0, 0) terms
+  in
+  let big_a = Arith.add (Arith.sub u rhs) 1 in
+  let big_b = Arith.sub (Arith.add rhs 1) l in
+  let fits ~big ~rhs' =
+    let s = Arith.add s (Arith.abs big) and w = Arith.add w (Arith.abs big) in
+    ignore (Arith.add (Arith.add (Arith.abs rhs') s) w : int)
+  in
+  try
+    (* row A:  sum a_i x_i - big_a * aux <= rhs - 1 *)
+    fits ~big:big_a ~rhs':(Arith.sub rhs 1);
+    (* row B:  -sum a_i x_i + big_b * aux <= -L *)
+    fits ~big:big_b ~rhs':(Arith.neg l)
+  with Unrepresentable why ->
+    raise
+      (Unrepresentable
+         (Printf.sprintf
+            "%s: the disequality's A/B pair does not fit in a 63-bit int (%s). See \
+             docs/DECISIONS.md D-0029 and lib/core/checked.ml's envelope, path 4 -- this \
+             pair is the widest arithmetic the .opb ever performs."
+            what why))
+
 let add_int_lin_ne t terms rhs =
+  check_lin_ne_computable t terms rhs ~what:"Encoding.add_int_lin_ne";
   let aux = fresh_aux_name t "ne" in
   declare_bool t aux;
   let row_a, row_b = expand_int_lin_ne t terms rhs ~aux in
