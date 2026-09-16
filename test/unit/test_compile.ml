@@ -409,6 +409,15 @@ let test_rejections () =
 let evaluate (m : M.t) (assign : int array) =
   let value terms = List.fold_left (fun acc (a, i) -> acc + (a * assign.(i))) 0 terms in
   let operand = function M.Const n -> n | M.Var i -> assign.(i) in
+  (* A Boolean operand read as a Boolean. A value that is neither 0 nor 1 is a bug in
+     the store or a propagator, not a falsehood, so it is loud -- the same discipline
+     [Output.bool_string] applies for the same reason (I-S1). *)
+  let truth op =
+    match operand op with
+    | 0 -> false
+    | 1 -> true
+    | n -> failwith (Printf.sprintf "test_compile: non-Boolean value %d for a bool" n)
+  in
   List.for_all
     (fun (c : M.constr) ->
       match c.M.k with
@@ -417,8 +426,25 @@ let evaluate (m : M.t) (assign : int array) =
       | M.Int_le (a, b) -> operand a <= operand b
       | M.Int_lt (a, b) -> operand a < operand b
       | M.Int_eq (a, b) -> operand a = operand b
+      (* Written from the FlatZinc definition of each builtin, deliberately NOT by
+         calling [Model.check_assignment]: this helper's whole value is that it is a
+         second, independent reading of what a constraint means (see its header). Two
+         copies that agree are evidence; one copy called twice is not. An empty [xs] is
+         the identity of its connective -- or([]) false, and([]) true -- which
+         [List.exists]/[List.for_all] already give. M2-T1/M2-T2. *)
+      | M.Bool_clause (ps, ns) ->
+          List.exists truth ps || List.exists (fun o -> not (truth o)) ns
+      | M.Array_bool_or (xs, r) -> truth r = List.exists truth xs
+      | M.Array_bool_and (xs, r) -> truth r = List.for_all truth xs
+      | M.Bool2int (b, x) -> operand x = (if truth b then 1 else 0)
+      | M.Bool_eq (a, b) -> truth a = truth b
+      | M.Bool_not (a, b) -> truth a <> truth b
       | M.Int_lin_ne _ | M.Int_ne _ ->
-          (* compile rejects these, so a model reaching here at all is the bug. *)
+          (* STALE COMMENT PRESERVED DELIBERATELY, see the orchestrator note below.
+             This said "compile rejects these", which stopped being true at M1-T11.
+             It is left as a loud failure rather than silently given semantics,
+             because giving it semantics here without a test that reaches it would be
+             writing an oracle nobody has ever seen run. Filed as M1-T40. *)
           failwith "test_compile: evaluate reached a rejected constraint kind")
     m.M.constraints
 
