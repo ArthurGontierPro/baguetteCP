@@ -1,0 +1,49 @@
+% The two reified array builtins over a DECLARED array rather than an inline literal,
+% which is a different route through lib/flatzinc/builder.ml: `array_bool_or([a, b], r)`
+% builds its operand list from an array expression written at the call site, while this
+% resolves an array-typed identifier and then an element of it. Both the three-element
+% width and `xs[1]` as an operand are unexercised by the other bool_ models, which all
+% use two-element inline lists.
+%
+% It also pins the array output line for Booleans alongside a genuine `var bool` array
+% that the search has to assign -- test/models/bool_out_sat.fzn has one whose elements
+% are folded constants, so the printer's array path has never been driven by a solved
+% array until now.
+%
+% The run:
+%
+%   `~xs[1]' is a unit clause, so xs[1] is false at the root.
+%     -> array_bool_and's FORWARD clause (~s \/ xs[1]) makes s false.
+%   decide xs[2] = false  (indomain_min; xs[1] is already fixed, so xs[2] is first)
+%     -> `xs[2] \/ xs[3]' makes xs[3] true
+%     -> `xs[2] \/ ~xs[3]' is violated.  CONFLICT
+%   so xs[2] = true
+%     -> array_bool_or's BACKWARD clause (r \/ ~xs[2]) makes r true
+%     -> xs[3] is free, indomain_min settles it false
+%
+% WHAT THIS MODEL PINS, AND WHAT IT DOES NOT. Measured by deleting each decomposition's
+% instances and re-running, not by reading the trace above:
+%
+%   array_bool_or's backward clause  -- PINNED. Delete it and this model fails: r is
+%     never forced and the answer changes.
+%   array_bool_and's forward clause  -- NOT pinned, even though the trace above uses it.
+%     s comes out FALSE, which is also what indomain_min would settle on for a variable
+%     nothing constrains, so deleting the clause leaves the printed answer identical.
+%     That direction is pinned by test/models/bool_and_sat.fzn instead, where s's
+%     counterpart must come out true. Said here rather than left implied, because a
+%     trace line in a comment is not evidence that a model can see the line go missing.
+%
+% Ground truth, with no reference to the search: xs[1] is false; xs[2] \/ xs[3] and
+% xs[2] \/ ~xs[3] together entail xs[2]; r = or(xs) is then true and s = and(xs) is
+% false because xs[1] is not. Unique except for xs[3], which the default strategy
+% settles at false. r = true and xs[2] = true are both the opposite of the indomain_min
+% default.
+array [1..3] of var bool: xs :: output_array([1..3]);
+var bool: r :: output_var;
+var bool: s :: output_var;
+constraint array_bool_or(xs, r);
+constraint array_bool_and(xs, s);
+constraint bool_clause([], [xs[1]]);
+constraint bool_clause([xs[2], xs[3]], []);
+constraint bool_clause([xs[2]], [xs[3]]);
+solve satisfy;
