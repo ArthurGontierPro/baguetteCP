@@ -52,16 +52,46 @@ def offenders(text):
         yield arg, not SMALL.match(arg)
 
 
+def strip_comments(lines):
+    """Blank out OCaml comments, tracking (* *) nesting ACROSS lines.
+
+    The first version skipped only lines that *began* with "(*", so a
+    continuation line inside a multi-line comment still matched -- and the lint
+    duly failed the gate on a comment that was explaining this very trap. A
+    check that fires on prose about the bug is not checking the code.
+    """
+    depth = 0
+    out = []
+    for line in lines:
+        kept = []
+        i = 0
+        while i < len(line):
+            if line.startswith("(*", i):
+                depth += 1
+                i += 2
+                continue
+            if line.startswith("*)", i) and depth:
+                depth -= 1
+                i += 2
+                continue
+            if depth == 0:
+                kept.append(line[i])
+            i += 1
+        out.append("".join(kept))
+    return out
+
+
 def scan():
     bad = []
     for sub in ("lib", "test", "bin"):
         for path in sorted((ROOT / sub).rglob("*.ml")):
             if "_build" in path.parts:
                 continue
-            for n, line in enumerate(path.read_text().splitlines(), 1):
-                if "width-ok:" in line or line.lstrip().startswith("(*"):
+            raw = path.read_text().splitlines()
+            for n, (line, code) in enumerate(zip(raw, strip_comments(raw)), 1):
+                if "width-ok:" in line:
                     continue
-                for arg, is_bad in offenders(line):
+                for arg, is_bad in offenders(code):
                     if is_bad:
                         rel = path.relative_to(ROOT)
                         bad.append(f"{rel}:{n}: ~...:{arg}    {line.strip()[:90]}")
@@ -80,7 +110,18 @@ def self_test():
         "declare_int e ~lo:(-4) ~hi:4",
         "declare_int e2 ~lo:big ~hi:big",  # width 0, however large big is
     ]
+    # A width mentioned inside a comment is prose, not code. The lint failed the
+    # gate on exactly this on 2026-09-16: a comment explaining the trap.
+    commented = [
+        "   (D-0028), so `~hi:(max_int / 3)` is not a slightly bigger case, it is",
+        "(* declare_int e ~lo:0 ~hi:max_int would be an allocation loop *)",
+    ]
     ok = True
+    for s in commented:
+        stripped = strip_comments(["(* a multi-line comment opens here", s, "*)"])
+        if any(b for line in stripped for _, b in offenders(line)):
+            print(f"SELF-TEST FAIL: flagged a comment: {s}", file=sys.stderr)
+            ok = False
     for s in must_flag:
         if not any(b for _, b in offenders(s)):
             print(f"SELF-TEST FAIL: should have flagged: {s}", file=sys.stderr)
