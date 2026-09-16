@@ -163,6 +163,124 @@ let format_of_string = function
    The writer.
    --------------------------------------------------------------------------- *)
 
+(* ---------------------------------------------------------------------------
+   Deliberate corruption: the mutation knobs (M1-T26).
+
+   The mutation gate exists to show that a derivation is load-bearing: corrupt one
+   step and the checker must reject. Until M1-T26 the corruption was applied to the
+   emitted *text*, by awk, in scripts/mutate_proof.sh. That harness had to re-derive
+   from the text what this module already knew -- which token of a `pol` is a
+   coefficient and which is a constraint reference, which ids are still live, which
+   claim was emitted under a decision -- and it got one of them structurally wrong:
+   under 3.0 every derived constraint carries a label and is cited by it, so
+   *deleting* a step un-defines that label and the later citation fails to PARSE. The
+   checker rejects, the lane goes green, and nothing about the derivation was tested.
+   That is D-0020's failure mode, and it is not fixable in awk: the information
+   needed to avoid it is here, not in the output.
+
+   So the knobs are typed and sit next to the derivation, GCS-style. A knob names a
+   [kind] of corruption and a [site]; the site is matched against the [~origin] every
+   rule emission already carries ("combine(2 summand(s), / 1)", "trace: y_ge_2 from
+   3 fact(s)"), so a lane says which derivation it is corrupting instead of hunting
+   for it in the text.
+
+   HOW A KNOB IS PREVENTED FROM FIRING IN A NORMAL RUN. Five things, and none of
+   them is a convention:
+
+   1. [mutation] is NOT mutable. A writer's corruption status is fixed when it is
+      created and there is no setter, so no code path can turn a live writer into a
+      corrupting one.
+   2. [create] takes no mutation argument at all and always builds [None]. The only
+      way to obtain a corrupting writer is [create_mutated], which *requires* a
+      [Mutation.t]: there is no default, and no way to ask for one by accident.
+   3. [create_mutated] consults NO environment variable and no global. Compare
+      [audit] (BAGUETTE_PROOF_AUDIT) and [format] (BAGUETTE_PROOF_FORMAT): those are
+      deliberately switchable from outside the program, and this deliberately is not.
+      Nothing outside an OCaml call site can turn it on.
+   4. Nothing in lib/ or bin/ names [create_mutated]. test/unit/test_mutation.ml
+      asserts that by grepping the tree, so the day a propagator "temporarily" reaches
+      for it the mutation suite goes red.
+   5. Every corrupted proof says so in its own text: [header] emits an unconditional
+      `DELIBERATELY CORRUPTED` comment naming the knob. A corrupted proof can
+      therefore never be mistaken for a real one, by a human or by a grep.
+
+   At most ONE corruption is applied per proof ([mutation_note] latches), because a
+   lane that changed two things does not say which one the checker objected to.
+
+   A knob that finds no site does NOT silently emit a clean proof and let the lane
+   read the checker's "accepted" as slack: [mutation_fired] reports whether it fired
+   and the caller must fail the lane when it did not. That is the same rule as the
+   script's exit 3, moved into a value. *)
+
+module Mutation = struct
+  type kind =
+    | Perturb_coefficient
+      (* `pol`: the first divisor `N d` becomes `N+1 d`, else the first multiplier
+         `N *` becomes `N+1 *`, else the first literal axiom -- which is the
+         coefficient 1 -- is doubled. The text knob `pol-coeff`, typed. *)
+    | Swap_citation
+      (* `pol`: the first constraint reference is replaced by a DIFFERENT one that is
+         still live and not already cited in the same step. The writer knows the live
+         set exactly ([tags] plus the model rows), so unlike the text knob this cannot
+         swap in a retired id and score a rejection that is really "that id is gone". *)
+    | Truncate_derivation
+      (* `pol`: keep only the leftmost operand and throw the rest of the derivation
+         away. The step still yields its id and still BINDS ITS LABEL, so every later
+         citation parses and the checker has to judge the derivation rather than the
+         grammar. This is what the text knob `drop-line` was trying to be and cannot
+         be under 3.0 -- see the note above, and M1-T26's table. *)
+    | Drop_literal
+      (* `rup`/`red`: drop the last term of the claim. Refused outright on a claim with
+         fewer than two terms: dropping the only literal corrupts the CLAIM rather than
+         the reason behind it, and a lane that does that says nothing about the reason
+         (GCS dev_docs/constraints.md:1085). The refusal shows up as "did not fire". *)
+    | Strengthen_rhs
+  (* `rup`/`red`: raise the degree by one, which strengthens the claim. Lowering it
+     weakens the claim, which usually still checks and is therefore not a test. *)
+
+  type t = {
+    kind : kind;
+    site : string;
+        (* matched as a substring of a rule's [~origin]; "" matches any origin *)
+    occurrence : int; (* 1-based, over the sites the knob can actually corrupt *)
+  }
+
+  let kind_name = function
+    | Perturb_coefficient -> "perturb-coefficient"
+    | Swap_citation -> "swap-citation"
+    | Truncate_derivation -> "truncate-derivation"
+    | Drop_literal -> "drop-literal"
+    | Strengthen_rhs -> "strengthen-rhs"
+
+  let all_kinds =
+    [
+      Perturb_coefficient;
+      Swap_citation;
+      Truncate_derivation;
+      Drop_literal;
+      Strengthen_rhs;
+    ]
+
+  (* Which rule a knob can corrupt. A knob is never applied to a rule it does not
+     name: that is what stops "drop a literal" quietly doing nothing to a `pol` and
+     the lane reading the resulting clean proof as a finding. *)
+  let corrupts_pol = function
+    | Perturb_coefficient | Swap_citation | Truncate_derivation -> true
+    | Drop_literal | Strengthen_rhs -> false
+
+  let corrupts_claim = function
+    | Drop_literal | Strengthen_rhs -> true
+    | Perturb_coefficient | Swap_citation | Truncate_derivation -> false
+
+  let make ?(occurrence = 1) ~site kind =
+    if occurrence < 1 then
+      invalid_arg "Writer.Mutation.make: occurrence is 1-based and must be >= 1";
+    { kind; site; occurrence }
+
+  let describe m =
+    Printf.sprintf "%s at site %S, occurrence %d" (kind_name m.kind) m.site m.occurrence
+end
+
 type entry = { origin : string; level : int }
 
 type t = {
@@ -181,6 +299,17 @@ type t = {
   comments : bool;
   mutable level : int;
   mutable finished : bool;
+  mutable n_model : int;
+      (* how many constraints [f] loaded, so ids 1..n_model are the model rows. Kept
+         because [Swap_citation] needs the live set and the model rows are the half of
+         it that no table holds; [model] is populated only under [audit]. *)
+  mutation : Mutation.t option;
+      (* NOT mutable, and [create] always sets it to [None]: see the block comment on
+         [module Mutation] for why every one of those two words matters. *)
+  mutable mutation_hits : int; (* corruptible sites the knob has passed over *)
+  mutable mutation_note : string option;
+      (* [Some description] once the knob has fired. Latched: one corruption per proof,
+         so a rejection names one suspect. *)
 }
 
 let audit_enabled () =
@@ -230,8 +359,28 @@ let create ?(comments = false) ?audit ?format oc =
     comments;
     level = 0;
     finished = false;
+    n_model = 0;
+    mutation = None;
+    mutation_hits = 0;
+    mutation_note = None;
   }
 
+(* A writer that emits ONE deliberately wrong step, for the mutation gate. Off is not
+   a setting here: a normal writer comes from [create] and cannot become this one.
+   Read the block comment on [module Mutation] before calling it, and do not call it
+   from lib/ or bin/ -- test_mutation.ml checks that nothing there does. *)
+let create_mutated ?comments ?audit ?format ~mutation oc =
+  { (create ?comments ?audit ?format oc) with mutation = Some mutation }
+
+(* What was corrupted, or [None] if the knob never found a site it could corrupt.
+
+   A lane MUST check this. A knob that did not fire leaves a perfectly honest proof,
+   the checker accepts it, and a lane reading that acceptance as "the step was not
+   load-bearing" would be reporting a finding about a corruption that never happened
+   -- which is the shape of every bug this harness exists to catch. *)
+let mutation_note t = t.mutation_note
+let mutation_fired t = t.mutation_note <> None
+let mutation_plan t = t.mutation
 let format t = t.fmt
 let v3 t = t.fmt = V3_0
 
@@ -295,9 +444,22 @@ let fresh t ~origin =
    labels. *)
 let header t ~n_model_constraints =
   line t "pseudo-Boolean proof version %s" (format_to_string t.fmt);
+  (* A corrupted proof says so in its own first comment, unconditionally -- not under
+     --proof-comments, because the point is that this line cannot be switched off.
+     Nothing but [create_mutated] can produce it, so its presence in a file is proof
+     that the file came from the mutation gate and its absence is proof that it did
+     not. *)
+  (match t.mutation with
+  | Some m ->
+      always_comment t
+        "DELIBERATELY CORRUPTED PROOF (Writer.create_mutated): %s. Emitted by the M1-T26 \
+         mutation gate; a normal run cannot produce this line."
+        (Mutation.describe m)
+  | None -> ());
   rule t (Printf.sprintf "f %d" n_model_constraints);
   (* The f rule makes the model constraints ids 1..n. *)
   t.next_id <- n_model_constraints;
+  t.n_model <- n_model_constraints;
   if t.audit then
     for i = 1 to n_model_constraints do
       Hashtbl.replace t.model i ()
@@ -463,6 +625,205 @@ let wipe_level t l =
 (* VeriPB's LevelStack does not move the current level on a wipe, so neither do we:
    the mirror has to stay exact (invariant I-X3). *)
 
+(* ------------------------- applying a knob -------------------------------
+   All of this is dead code in a writer built by [create]: every entry point below
+   starts by matching [t.mutation], which is [None] there and cannot become anything
+   else. Nothing here writes to the channel. *)
+
+let contains_sub ~needle hay =
+  let n = String.length needle and h = String.length hay in
+  if n = 0 then true
+  else if n > h then false
+  else
+    let found = ref false in
+    let i = ref 0 in
+    while (not !found) && !i <= h - n do
+      if String.sub hay !i n = needle then found := true;
+      incr i
+    done;
+    !found
+
+(* The knob to apply to a rule with this [~origin], or [None]. [mutation_note] latches,
+   so this stops answering once the knob has fired: one corruption per proof. *)
+let knob_for t ~corrupts ~origin =
+  match t.mutation with
+  | Some m
+    when t.mutation_note = None && corrupts m.Mutation.kind
+         && contains_sub ~needle:m.Mutation.site origin ->
+      Some m
+  | _ -> None
+
+(* Rewrite the FIRST node, in the order the step is written (reverse Polish, so an
+   operand comes before the operator that consumes it), for which [f] returns a
+   replacement. [None] when no node matches.
+
+   This is the part the text harness could not get right. In `pol 3 4 *` the `4` is a
+   multiplier and the `3` a constraint reference; awk has to guess that from the token
+   that follows, and it guessed with a special case per shape. Here they are different
+   constructors. *)
+let rec rewrite_first f (p : Pol.t) =
+  match p with
+  | Pol.Id _ | Pol.Axiom _ -> f p
+  | Pol.Add (a, b) -> (
+      match rewrite_first f a with
+      | Some a' -> Some (Pol.Add (a', b))
+      | None -> (
+          match rewrite_first f b with Some b' -> Some (Pol.Add (a, b')) | None -> f p))
+  | Pol.Mul (a, k) -> (
+      match rewrite_first f a with Some a' -> Some (Pol.Mul (a', k)) | None -> f p)
+  | Pol.Div (a, k) -> (
+      match rewrite_first f a with Some a' -> Some (Pol.Div (a', k)) | None -> f p)
+  | Pol.Sat a -> (
+      match rewrite_first f a with Some a' -> Some (Pol.Sat a') | None -> f p)
+  | Pol.Weaken (a, v) -> (
+      match rewrite_first f a with Some a' -> Some (Pol.Weaken (a', v)) | None -> f p)
+
+let rec first_operand (p : Pol.t) =
+  match p with
+  | Pol.Id _ | Pol.Axiom _ -> p
+  | Pol.Add (a, _) -> first_operand a
+  | Pol.Mul (a, _) -> first_operand a
+  | Pol.Div (a, _) -> first_operand a
+  | Pol.Sat a -> first_operand a
+  | Pol.Weaken (a, _) -> first_operand a
+
+let rec cited_ids acc (p : Pol.t) =
+  match p with
+  | Pol.Id c -> c :: acc
+  | Pol.Axiom _ -> acc
+  | Pol.Add (a, b) -> cited_ids (cited_ids acc a) b
+  | Pol.Mul (a, _) | Pol.Div (a, _) | Pol.Weaken (a, _) -> cited_ids acc a
+  | Pol.Sat a -> cited_ids acc a
+
+(* Ids a corrupted citation may name: the model rows, which nothing retires, plus the
+   derived ids still tagged live. Citing a retired id is a rejection about the
+   DATABASE ("Trying to access constraint with ID N that has already been deleted"),
+   not about the derivation -- the text harness had to reconstruct this set by
+   replaying every `del` in the proof, which is where M1-T22's half-open off-by-one
+   lived. Under 2.0 [tags] is not maintained (the checker holds the levels there), so
+   only the model rows are offered; they are enough, and a wrong answer here can only
+   make the knob decline to fire, never manufacture a pass. *)
+let citable_ids t =
+  let live = ref [] in
+  if v3 t then Hashtbl.iter (fun id _ -> live := id :: !live) t.tags;
+  for i = t.n_model downto 1 do
+    live := i :: !live
+  done;
+  List.sort_uniq compare !live
+
+let apply_to_pol t kind (p : Pol.t) =
+  match kind with
+  | Mutation.Perturb_coefficient -> (
+      let divisor = function Pol.Div (a, k) -> Some (Pol.Div (a, k + 1)) | _ -> None in
+      let multiplier = function
+        | Pol.Mul (a, k) -> Some (Pol.Mul (a, k + 1))
+        | _ -> None
+      in
+      (* A bare literal axiom IS the coefficient 1, so doubling it is the same kind of
+         perturbation as bumping a multiplier. *)
+      let axiom = function Pol.Axiom l -> Some (Pol.Mul (Pol.Axiom l, 2)) | _ -> None in
+      match rewrite_first divisor p with
+      | Some q -> Some q
+      | None -> (
+          match rewrite_first multiplier p with
+          | Some q -> Some q
+          | None -> rewrite_first axiom p))
+  | Mutation.Swap_citation ->
+      let cited = cited_ids [] p in
+      let candidates = List.filter (fun c -> not (List.mem c cited)) (citable_ids t) in
+      rewrite_first
+        (function
+          | Pol.Id c -> (
+              (* Nearest id first, so the swap is a plausible off-by-one rather than a
+                 wild jump -- the corruption an id counter would actually make. *)
+              match
+                List.sort
+                  (fun a b -> compare (abs (a - c), a) (abs (b - c), b))
+                  candidates
+              with
+              | x :: _ -> Some (Pol.Id x)
+              | [] -> None)
+          | _ -> None)
+        p
+  | Mutation.Truncate_derivation ->
+      let q = first_operand p in
+      if q == p then None else Some q
+  | Mutation.Drop_literal | Mutation.Strengthen_rhs -> None
+
+(* [corrupt_pol] is what [pol] calls. It returns the expression to emit, and records
+   what it did. A corruption that renders identically to the honest step has not
+   happened, whatever the knob thinks: that guard is the in-emitter twin of the
+   script's `cmp -s` check, and it is why a knob applied to a one-operand `pol` reports
+   "did not fire" rather than producing a clean proof a lane would misread. *)
+let corrupt_pol t ~origin (p : Pol.t) =
+  match knob_for t ~corrupts:Mutation.corrupts_pol ~origin with
+  | None -> p
+  | Some m -> (
+      let render q =
+        if v3 t then Pol.to_string_cited ~cite:(cite t) q else Pol.to_string q
+      in
+      match apply_to_pol t m.Mutation.kind p with
+      | Some q when render q <> render p ->
+          t.mutation_hits <- t.mutation_hits + 1;
+          if t.mutation_hits = m.Mutation.occurrence then (
+            t.mutation_note <-
+              Some
+                (Printf.sprintf "%s\n  origin: %s\n  before: pol %s\n   after: pol %s"
+                   (Mutation.kind_name m.Mutation.kind)
+                   origin (render p) (render q));
+            q)
+          else p
+      | _ -> p)
+
+(* The same for the claim rules, [rup] and [red].
+
+   Which claim a lane corrupts is chosen by naming its [~origin], not by a heuristic
+   over the text. That matters for the reason trap (GCS dev_docs/constraints.md:1085):
+   dropping a literal from a reason is only a corruption when the literal traces back
+   to a search DECISION, because anything a propagator derived is in the proof as a
+   clause of its own and the checker has it either way. The text harness guessed at
+   that by preferring a clause emitted between a level marker and its wipe; a lane here
+   states the derivation it means. *)
+let corrupt_claim t ~origin (c : Opb.constr) =
+  match knob_for t ~corrupts:Mutation.corrupts_claim ~origin with
+  | None -> c
+  | Some m -> (
+      let applied =
+        match m.Mutation.kind with
+        | Mutation.Drop_literal ->
+            let ts = c.Opb.terms in
+            let n = List.length ts in
+            (* One-term claim: dropping its only literal corrupts the claim, not the
+               reason. Refused, and the refusal reaches the lane as "did not fire". *)
+            if n < 2 then None
+            else
+              Some
+                ( { c with Opb.terms = List.filteri (fun i _ -> i < n - 1) ts },
+                  Printf.sprintf "dropped the last of %d terms" n )
+        | Mutation.Strengthen_rhs ->
+            (* Raising the degree strengthens the claim, so the checker must reject it
+               unless the honest claim was weaker than it needed to be. Lowering it
+               weakens the claim, which usually still checks: not a test. *)
+            Some
+              ( { c with Opb.rhs = c.Opb.rhs + 1 },
+                Printf.sprintf "degree raised from %d to %d" c.Opb.rhs (c.Opb.rhs + 1) )
+        | Mutation.Perturb_coefficient | Mutation.Swap_citation
+        | Mutation.Truncate_derivation ->
+            None
+      in
+      match applied with
+      | Some (c', what) when Opb.constr_to_string c' <> Opb.constr_to_string c ->
+          t.mutation_hits <- t.mutation_hits + 1;
+          if t.mutation_hits = m.Mutation.occurrence then (
+            t.mutation_note <-
+              Some
+                (Printf.sprintf "%s (%s)\n  origin: %s\n  before: %s\n   after: %s"
+                   (Mutation.kind_name m.Mutation.kind)
+                   what origin (Opb.constr_to_string c) (Opb.constr_to_string c'));
+            c')
+          else c
+      | _ -> c)
+
 (* ------------------------------ rules ------------------------------------ *)
 
 (* Every rule below that yields an id takes its label from the id it is ABOUT to be
@@ -476,6 +837,8 @@ let emit_yielding t ~origin body_of_id =
 
 (* A cutting-planes derivation. *)
 let pol t ~origin p =
+  (* [corrupt_pol] is the identity for every writer [create] built. *)
+  let p = corrupt_pol t ~origin p in
   emit_yielding t ~origin (fun _ ->
       "pol " ^ if v3 t then Pol.to_string_cited ~cite:(cite t) p else Pol.to_string p)
 
@@ -488,6 +851,7 @@ let pol_raw t ~origin steps = emit_yielding t ~origin (fun _ -> "pol " ^ steps)
    The body already ends in " ;" (Opb.constr_to_string), which is the 3.0 terminator,
    so this goes through [line] rather than [rule]: `rup ... ; ;` is a syntax error. *)
 let rup t ~origin c =
+  let c = corrupt_claim t ~origin c in
   let id = t.next_id + 1 in
   line t "%srup %s" (label_for t id) (Opb.constr_to_string c);
   fresh t ~origin
@@ -506,6 +870,7 @@ let witness_value_to_string = function
 
 let red t ~origin ~witness c =
   (match witness with [] -> invalid_arg "Writer.red: empty witness" | _ -> ());
+  let c = corrupt_claim t ~origin c in
   let w =
     String.concat " "
       (List.map
