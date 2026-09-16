@@ -57,6 +57,28 @@ the `output` annotation, one assignment per line, terminated by `----------`; `=
 after the last solution when the search space is exhausted; `=====UNSATISFIABLE=====`
 when the model has no solution.
 
+**How a value is rendered** *(normative)*. Until now this section gave the line shape and
+the markers but never said what goes on the right of the `=`, so the rule lived only in
+`lib/flatzinc/output.ml` and in `test/expected/bool_out_sat.out`. It is stated here
+because it is a requirement on the solver's output, not an implementation detail:
+
+- A value is rendered under the **declared type of its output item**, not under the shape
+  of the value. A `bool` MUST print as `false` or `true`; an `int` MUST print as a decimal
+  numeral. These are not interchangeable: `1` and `true` are the same assignment printed
+  under two different types, and only the declaration says which.
+- An array item MUST print as `array<k>d(<range>, ..., [<elements>])`, with `k` the number
+  of dimensions, one `l..u` index range per dimension in order, and the elements in
+  row-major order as a single flat bracketed list, each rendered by the rule above.
+- Each output item occupies exactly one line, `name = value;`, newline-terminated. There
+  is no blank line and no trailing space anywhere in a solution block.
+
+This is the FlatZinc standard's rule, not a choice of this project's, which is why it is
+recorded without a decision record: nothing was decided here, the specification was
+merely silent where the code and the FlatZinc standard already agreed. The consequence
+for the implementation is the one M1-T21 had to fix — a `bool` *parameter* folded to a
+constant has lost its type by the time it reaches the printer, so the declared type MUST
+be carried to the printer rather than inferred there.
+
 ---
 
 ## 3. Solver semantics
