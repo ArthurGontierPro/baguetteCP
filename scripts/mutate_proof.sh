@@ -64,8 +64,11 @@ EOF
 
 list_mutations() {
   cat <<'EOF'
-control        no corruption at all. Passes only if veripb ACCEPTS. Every mutation lane
-               needs one of these on the same instance, or the lane proves nothing.
+control        no corruption at all. Passes only if veripb ACCEPTS. Since M1-T26 every
+               OTHER lane runs this check on the honest proof first and refuses to
+               report anything if it fails, so a lane can no longer be green on an
+               instance that does not verify. This entry stays for a caller that wants
+               to assert the honest proof on its own.
 pol-coeff      perturb a coefficient inside one `pol` step: a divisor `N d` becomes
                `N+1 d`, a multiplier `N *` becomes `N+1 *`, and a bare literal axiom --
                which is the coefficient 1 -- becomes `lit 2 *`.
