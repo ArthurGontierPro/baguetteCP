@@ -100,6 +100,14 @@ fast at our scale.**
 
 ### 2.1 BUG: `del range` is half-open; we emit it as inclusive
 
+> **FIXED 2026-09-16 by M1-T22.** The analysis below stands and was independently
+> re-measured against veripb 3.0.2 before the fix; only the tense is wrong now.
+> `Writer.del_run` emits the exclusive upper bound, falling back to a `del id` list
+> when the run ends at the newest id (there is no label one past it yet, and an
+> unbound label is a parse error). `PROOF-FORMAT.md` no longer says "inclusive" —
+> the line reference in the next paragraph is therefore stale. The same off-by-one
+> was found and fixed in `scripts/mutate_proof.sh`'s `pol-cite` lane.
+
 `docs/PROOF-FORMAT.md:161` documents `del range LO HI` as "inclusive".
 `Writer.wipe_level` (`lib/proof/writer.ml:418-421`) emits `del range lo hi` for the
 inclusive run `[lo..hi]`.
