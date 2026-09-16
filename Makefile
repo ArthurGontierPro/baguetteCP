@@ -1,13 +1,24 @@
+# MACHINE LIMIT: this box has 15 GB of RAM, shared by every concurrent session.
+# On 2026-09-16 a test binary reached 14.9 GB RSS and had to be killed by hand; later
+# the same day two more had to be killed at the ceiling. Warning sessions about it
+# twice did not work, so the cap is enforced here instead of documented elsewhere.
+#
+# Every target that RUNS something applies it. A run that dies against this cap is a
+# finding to report -- a test that needs more than 4 GB is a test with a wide declared
+# domain, and the order encoding is width-proportional (D-0028). Raise MEM_CAP_KB only
+# with a reason you are willing to write into WORKLOG.md.
+MEM_CAP_KB ?= 4000000
+
 .PHONY: build test unit models check fmt clean proof bootstrap bench
 
 build:
 	dune build
 
 unit:
-	dune runtest --force
+	ulimit -v $(MEM_CAP_KB) && dune runtest --force
 
 models: build
-	./scripts/run_model_tests.sh
+	ulimit -v $(MEM_CAP_KB) && ./scripts/run_model_tests.sh
 
 # Unit tests and model tests. Model tests include proof checking with veripb.
 test: unit models
@@ -24,7 +35,7 @@ check: fmt build test
 #   make proof FZN=test/models/trivial_sat.fzn
 proof: build
 	@test -n "$(FZN)" || { echo "usage: make proof FZN=path/to/model.fzn"; exit 2; }
-	./scripts/verify_proof.sh "$(FZN)"
+	ulimit -v $(MEM_CAP_KB) && ./scripts/verify_proof.sh "$(FZN)"
 
 bootstrap:
 	./scripts/bootstrap.sh
@@ -40,4 +51,4 @@ clean:
 # eighteen rows are at the process floor, so their timing columns measure exec and
 # not this solver.
 bench: build
-	./bench/run_bench.sh $(ARGS)
+	ulimit -v $(MEM_CAP_KB) && ./bench/run_bench.sh $(ARGS)

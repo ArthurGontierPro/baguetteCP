@@ -130,6 +130,35 @@ make proof FZN=test/models/foo.fzn   # solve and verify one model's proof
 
 ## Rules for this codebase
 
+### The machine has 15 GB of RAM, shared by every session running at once
+
+This is the constraint that has bitten this project hardest in practice. On 2026-09-16 a
+`test_prop.exe` reached **14.9 GB RSS** and had to be killed by hand; later the same day
+two more test binaries had to be killed at the ceiling. Each time it disrupted the user,
+not just the session that caused it.
+
+- **Run every suite under a cap.** `make`, `scripts/run_model_tests.sh` and
+  `scripts/verify_proof.sh` now apply `ulimit -v 4000000` themselves. If you invoke a
+  test binary or `dune runtest` directly, apply it yourself:
+
+  ```sh
+  (ulimit -v 4000000; timeout 900 dune runtest --root .)
+  ```
+
+- **A run that dies against the cap is a finding, not an obstacle.** Report it. Do not
+  raise the cap to get past it. `MEM_CAP_KB` and `BAGUETTE_MEM_CAP_KB` exist for
+  deliberate, explained exceptions and belong in `WORKLOG.md` when used.
+
+- **No test may declare a wide domain.** This is almost always the cause. The order
+  encoding is width-proportional (D-0028): `var 0..1000` is not a slightly larger test,
+  it is a thousand ladder clauses and a proof that dwarfs the whole suite. Keep declared
+  domains in the single or low double digits. If a property is only observable at width,
+  `test/models/width_root_unsat.fzn` already exists for that at w=999 — it is deliberate,
+  measured, and enough.
+
+- **Report peak RSS** for your final run (`/usr/bin/time -v`, or `\time -f '%M'`).
+
+
 - **Every propagation that prunes must be able to justify itself.** A propagator that
   narrows a domain without producing an `Explanation` is a bug, not an optimisation.
   There is no "add proof logging later" mode.
