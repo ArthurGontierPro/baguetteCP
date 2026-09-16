@@ -17,7 +17,6 @@ git worktree each (`.claude/worktrees/<tag>`), so no two share `_build`'s global
 |---|---|---|---|
 | M1-T22 | `lib/proof/writer.ml`, `test/unit/test_proof.ml`, `test/unit/test_mutation.ml`, `docs/PROOF-FORMAT.md` | agent-delrange | 2026-09-16 |
 | M1-T23 | `lib/core/prop/**`, new `lib/core/*.ml` for checked arithmetic, `lib/flatzinc/compile.ml`, `test/unit/test_matrix.ml`, `test/unit/test_prop.ml`, new files under `test/models/` + `test/expected/` | agent-overflow | 2026-09-16 |
-| M1-T24 | `lib/core/engine.ml`, `test/unit/test_engine.ml` | agent-trailcursor | 2026-09-16 |
 | M2-T0, M1-T27 | `docs/DECISIONS.md` only (doc-only round) | agent-decisions | 2026-09-16 |
 
 Two rounds are recorded in `## Completed` below. The rows that stood here on
@@ -81,6 +80,7 @@ work. The owning session picks it up.
 | M1-T20 | agent-matrix + orchestrator | 2026-09-15 | Three new disequality instances fill the offset and negative-domain cells for both propagators and `|a|>1` / common-factor for `int_lin_ne`; the note now distinguishes cells blocked by a bug from cells unreachable by construction. 194 matrix checks |
 | M1-T18 | agent-proof3 + orchestrator | 2026-09-15 | Checker selection in one place (`Checker.find` / `scripts/checker.sh`), 3.0.2 the checker of record, and a missing checker now FAILS instead of skipping. Found and fixed a real proof bug: 3.0.2 rejected `ne_conflict_sat` |
 | M1-T19 | agent-proof3 + orchestrator | 2026-09-15 | VeriPB 3.0 is the emitted default. 925 unit checks / 0 failures under **both** formats, 15/15 models. D-0023, D-0024, D-0025 |
+| M1-T24 | agent-trailcursor + orchestrator | 2026-09-16 | `Engine.propagate` walks the trail by index instead of materialising it. Wake order is preserved exactly, not merely as a set — verified by the orchestrator by flipping the loop and confirming the two order checks go red while the three vacuity guards stay green. 931 unit checks, 15/15 models, all 45 model artefacts byte-identical. Perf: ~2.7x on a synthetic 12000-entry trail, **no measurable difference on the real models** — reported as the null result it is |
 
 ## Handoff notes
 
