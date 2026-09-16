@@ -4,6 +4,7 @@
 (tests
  (names
   test_core
+  test_domain
   test_proof
   test_flatzinc
   test_prop
