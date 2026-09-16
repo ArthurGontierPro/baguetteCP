@@ -1,0 +1,33 @@
+% M1-T23. The largest numbers lib/flatzinc/compile.ml will accept, driven through the
+% whole CLI: parse, compile, propagate, branch, back off, solve, write the .opb, write
+% the .pbp, verify.
+%
+% This is test_matrix.ml's int_lin_ne/common-factor-offset with its disequality
+% multiplied through by K = 5 * 10^15, so the row reads 2K*e + 4K*g <> 16K. Divisibility
+% is scale-invariant: at e = 2 the missing amount is 12K, which 4K divides, so g's lower
+% bound is removed and g <= f closes that branch; at e = 3 the remainder is 2K and the
+% disequality declines, which is how the solution survives. Identical reasoning to the
+% unscaled model, seventeen digits wider.
+%
+% The row's magnitude -- |rhs| + sum |coeff| * max(|lo|, |hi|), the quantity the cap is
+% stated over -- is 230000000000000000, 79.8% of Checked.limit. A disequality is the
+% worst case that limit is sized against: Encoding.add_int_lin_ne folds the row's whole
+% attainable span into the big-M coefficients of the A/B pair it posts, so the constants
+% actually written to the .opb here are several times the row's own. That is envelope
+% path 4 in lib/core/checked.ml's header, and this model is what measures it rather than
+% assuming it.
+%
+% Before M1-T23 nothing in lib/ checked for overflow at all. The reason that was a
+% soundness bug rather than a rejected proof is that the .opb row is expanded from the
+% same arithmetic the propagator's slack uses, so a wrapped product corrupts both
+% halves identically and veripb has nothing left to disagree with.
+array [1..2] of int: dis = [10000000000000000, 20000000000000000];
+var 1..5: e :: output_var;
+var 1..5: f :: output_var;
+var 1..5: g :: output_var;
+constraint int_lin_ne(dis, [e, g], 80000000000000000);
+constraint int_le(2, e);
+constraint int_lin_eq([1, -1], [f, e], 1);
+constraint int_le(3, g);
+constraint int_le(g, f);
+solve satisfy;

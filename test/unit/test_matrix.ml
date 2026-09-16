@@ -76,6 +76,8 @@ module Lit = Baguette_proof.Lit
 module Var = Baguette_core.Var
 module Domain = Baguette_core.Domain
 module Store = Baguette_core.Store
+module Checked = Baguette_core.Checked
+module Flatzinc = Baguette_flatzinc
 module Propagator = Baguette_core.Propagator
 module Explanation = Baguette_core.Explanation
 module Linear = Baguette_core.Linear
@@ -184,6 +186,27 @@ let shape_name = function
   | D_cross_instance_cite -> "a bound derived by a different instance than the citer"
   | D_division_remainder -> "a push whose division has a remainder"
 
+(* The fourth axis, added by M1-T23. It is about the SIZE of the numbers rather than
+   their shape, which is why it is its own axis and not another [shape]: D_big_coeff
+   asks whether a coefficient is past |1|, this asks whether a coefficient times a
+   bound is past what a 63-bit int can hold. The two are independent -- every instance
+   in this file before M1-T23 has small coefficients AND small numbers, and the
+   demonstrating model has a single coefficient and no shape at all.
+
+   [O_far] and [O_near_limit] are read off the model like the other static shapes
+   ([static_overflow] below); the other three are not properties a runnable instance
+   can have, and live in [overflow_cells]. *)
+type overflow = O_far | O_near_limit | O_product | O_sum | O_compile_rejected
+
+let all_overflows = [ O_far; O_near_limit; O_product; O_sum; O_compile_rejected ]
+
+let overflow_name = function
+  | O_far -> "every row's magnitude is far below the cap"
+  | O_near_limit -> "a row within a factor of 4 of Checked.limit"
+  | O_product -> "one coefficient * bound leaves the 63-bit range"
+  | O_sum -> "every product fits, the weighted sum does not"
+  | O_compile_rejected -> "Compile refuses the model, naming the limit"
+
 (* ================================================================== models *)
 
 type cstr =
@@ -274,6 +297,38 @@ let static_shapes m =
       if hi < 0 then add D_negative_domain)
     m.vars;
   !s
+
+(* The magnitude lib/flatzinc/compile.ml caps, computed here from the model text the
+   same way [Compile.check_row] computes it from [Model.t] -- deliberately recomputed
+   rather than called, so that "this instance is near the cap" is an observation this
+   file makes and not a report the code under test makes. [max_int] stands in for a
+   magnitude that does not itself fit, which no instance in [instances] can have (it
+   would not compile) but which the classification must not silently call small. *)
+let row_terms_of = function
+  | Lin_le (t, r) -> (t, r)
+  | Lin_eq (t, r) -> (t, r)
+  | Lin_ne (t, r) -> (t, r)
+  | Le (i, j) -> ([ (1, i); (-1, j) ], 0)
+  | Lt (i, j) -> ([ (1, i); (-1, j) ], -1)
+  | Eq (i, j) -> ([ (1, i); (-1, j) ], 0)
+  | Ne (i, j) -> ([ (1, i); (-1, j) ], 0)
+
+let max_row_magnitude m =
+  List.fold_left
+    (fun acc c ->
+      let t, r = row_terms_of c in
+      let bounded =
+        List.map
+          (fun (a, i) ->
+            let _, lo, hi = m.vars.(i) in
+            (a, lo, hi))
+          t
+      in
+      match Checked.row_magnitude bounded r with Some v -> max acc v | None -> max_int)
+    0 m.cstrs
+
+let static_overflow m =
+  if max_row_magnitude m > Checked.limit / 4 then [ O_near_limit ] else [ O_far ]
 
 (* =============================================================== the probe *)
 
@@ -1269,6 +1324,111 @@ let instances =
          -3 it is -11, which 3 does not divide, so int_lin_ne declines and (-3, -2, -3) \
          survives. Without the disequality the search returns (-4, -3, -3)";
     };
+    (* ---------------------------------------------------------------- M1-T23
+
+       The three instances below sit near lib/flatzinc/compile.ml's cap rather than
+       near zero. They are here for the half of M1-T23 that is easy to skip: a cap
+       that rejects everything awkward is not a fix, it is a smaller solver. Each of
+       these compiles, solves, agrees with brute force and has a proof veripb accepts,
+       with every product and constant in it two orders of magnitude past anything the
+       rest of this file computes.
+
+       They are deliberately EXISTING instances rescaled rather than new shapes, so
+       that a difference in outcome is a difference the magnitude caused. *)
+    {
+      title = "lin_eq/near-limit-parity (lin_le/parity-branching scaled by 2^53)";
+      m =
+        {
+          vars = [| ("x1", 0, 3); ("x2", 0, 3); ("x3", 0, 3) |];
+          cstrs =
+            [
+              Lin_eq
+                ( [
+                    (18014398509481984, 0); (18014398509481984, 1); (18014398509481984, 2);
+                  ],
+                  45035996273704960 );
+            ];
+        };
+      props = [ P_lin_eq; P_lin_le ];
+      claims =
+        [
+          S_prune_one_decision;
+          S_prune_nested;
+          S_conflict_under_decisions;
+          S_both_branches_fail;
+        ];
+      shape_claims = [ D_big_coeff; D_common_factor; D_division_remainder ];
+      depth = 2;
+      note =
+        "2A(x1+x2+x3) = 5A with A = 2^53, i.e. lin_le/parity-branching multiplied \
+         through by 9007199254740992. Still UNSAT by parity, still invisible to bounds \
+         reasoning at the root, still refuted by branching -- and now the row's \
+         magnitude is 207165582859042816, 71.9% of Checked.limit, so every slack, every \
+         Combine divisor and every .opb constant in the proof is a 17-digit number. \
+         Everything this instance asserts about the outcome is in [claims], \
+         [shape_claims] and [depth] rather than here: UNSAT against brute force, the \
+         same four situations and the same depth 2 as the unscaled instance";
+    };
+    {
+      title = "int_le/near-limit-offset";
+      m =
+        {
+          vars =
+            [|
+              ("p", 144115188075855870, 144115188075855871);
+              ("q", 144115188075855870, 144115188075855871);
+            |];
+          cstrs = [ Le (0, 1); Lin_le ([ (-1, 0); (1, 1) ], -2) ];
+        };
+      props = [ P_le; P_lin_le ];
+      claims = [ S_root_slack_conflict ];
+      shape_claims = [ D_neg_coeff; D_offset_domain ];
+      depth = 0;
+      note =
+        "p <= q and q <= p - 2 over two domains sitting at 1.44 * 10^17, which is the \
+         largest offset a two-variable row with unit coefficients can have and still \
+         pass the cap: the row's magnitude is 288230376151711742, one below \
+         Checked.limit. Refuted at the root by the second row's own slack, so there is \
+         no trace -- what it exercises is the ORDER-ENCODING CONSTANT, a_i * lo_i, at \
+         the largest value the compiler will ever hand lib/proof/encoding.ml. That \
+         product is the exact expression that wrapped in the gap M1-T23 closed";
+    };
+    {
+      title = "int_lin_ne/near-limit (common-factor-offset scaled by 5 * 10^15)";
+      m =
+        {
+          vars = [| ("e", 1, 5); ("f", 1, 5); ("g", 1, 5) |];
+          cstrs =
+            [
+              Lin_ne
+                ([ (10000000000000000, 0); (20000000000000000, 2) ], 80000000000000000);
+              Lin_le ([ (-1, 0) ], -2);
+              Lin_eq ([ (1, 1); (-1, 0) ], 1);
+              Lin_le ([ (-1, 2) ], -3);
+              Lin_le ([ (1, 2); (-1, 1) ], 0);
+            ];
+        };
+      props = [ P_lin_ne; P_lin_eq; P_lin_le ];
+      claims =
+        [
+          S_root_prune;
+          S_prune_one_decision;
+          S_conflict_under_decisions;
+          S_sat_after_failure;
+        ];
+      shape_claims = [ D_neg_coeff; D_big_coeff; D_common_factor; D_offset_domain ];
+      depth = 3;
+      note =
+        "int_lin_ne/common-factor-offset with its disequality multiplied through by K = \
+         5 * 10^15: 2K e + 4K g <> 16K. Divisibility is scale-invariant, so the same \
+         pruning happens at e = 2 and the same decline at e = 3, and the outcome is \
+         asserted where it belongs -- brute-force agreement, I-S1 on the solution, and \
+         depth 3 -- rather than here. The row's magnitude is 230000000000000000, 79.8% \
+         of Checked.limit -- and a disequality is the worst case the cap is sized \
+         against (lib/core/checked.ml, envelope path 4), because Encoding.add_int_lin_ne \
+         puts the row's own attainable span into the A/B pair's big-M coefficients. So \
+         this is the instance that measures the factor of 16 rather than assuming it";
+    };
   ]
 
 (* ============================================================ the matrix report *)
@@ -1279,9 +1439,21 @@ let covered_props : (propagator, unit) Hashtbl.t = Hashtbl.create 16
 let cells_ps : (propagator * situation, unit) Hashtbl.t = Hashtbl.create 64
 let cells_pd : (propagator * shape, unit) Hashtbl.t = Hashtbl.create 64
 let cells_sd : (situation * shape, unit) Hashtbl.t = Hashtbl.create 64
+let covered_overflows : (overflow, unit) Hashtbl.t = Hashtbl.create 16
+let cells_po : (propagator * overflow, unit) Hashtbl.t = Hashtbl.create 64
 
 let record_coverage inst (r : result) =
   List.iter (fun p -> Hashtbl.replace covered_props p ()) inst.props;
+  (* M1-T23. Measured off the model, like [static_shapes], because there is nothing for
+     an instance to CLAIM here: "this row's magnitude is 72% of the cap" is arithmetic,
+     not behaviour. What keeps it honest is the hole check below -- if the near-limit
+     instances were not in fact near the limit, [O_near_limit] would be an uncovered
+     axis value and the run would go red. *)
+  let os = static_overflow inst.m in
+  List.iter (fun o -> Hashtbl.replace covered_overflows o ()) os;
+  List.iter
+    (fun p -> List.iter (fun o -> Hashtbl.replace cells_po (p, o) ()) os)
+    inst.props;
   List.iter (fun s -> Hashtbl.replace covered_situations s ()) r.reached;
   List.iter (fun d -> Hashtbl.replace covered_shapes d ()) r.shapes;
   List.iter
@@ -1310,6 +1482,9 @@ let report_matrix () =
     propagator_name (fun p i -> Hashtbl.mem cells_pd (p, List.nth all_shapes i));
   grid "situation x data shape" all_situations (List.map shape_name all_shapes)
     situation_name (fun s i -> Hashtbl.mem cells_sd (s, List.nth all_shapes i));
+  grid "propagator x overflow (M1-T23)" all_propagators
+    (List.map overflow_name all_overflows) propagator_name (fun p i ->
+      Hashtbl.mem cells_po (p, List.nth all_overflows i));
   print_endline "\n--- axis coverage ---";
   let holes = ref [] in
   List.iter
@@ -1336,6 +1511,14 @@ let report_matrix () =
       if not (Hashtbl.mem covered_shapes d) then
         holes := ("shape " ^ shape_name d) :: !holes)
     all_shapes;
+  List.iter
+    (fun o ->
+      Printf.printf "  %s  overflow %s\n"
+        (if Hashtbl.mem covered_overflows o then "X" else ".")
+        (overflow_name o);
+      if not (Hashtbl.mem covered_overflows o) then
+        holes := ("overflow " ^ overflow_name o) :: !holes)
+    all_overflows;
   (* A hole is reported, never absorbed. An axis value no instance reaches means the
      matrix is not testing it, whatever the pass count says. *)
   check "every axis value has at least one instance that reaches it" (!holes = []);
@@ -1382,6 +1565,40 @@ let report_matrix () =
       "int_ne x conflict at root from a row's own slack: a disequality has no slack. Its \
        root conflict is its own clause, which is [known_bug_ne_snap_cite]'s territory \
        when another row cites it.";
+      "OVERFLOW AXIS (M1-T23). Compile refuses the model x every propagator: EMPTY for \
+       all seven, by construction. The cap is enforced in lib/flatzinc/compile.ml before \
+       a single propagator instance exists, so there is no propagator to credit; putting \
+       the model's builtins in the column would record something no propagator did, \
+       which is the rule the int_lt and int_ne rows above already apply. The axis value \
+       is covered by [overflow_compile_cell] directly, which is why the coverage line \
+       for it is X while the whole column is empty.";
+      "overflow: a product / a sum that leaves the range x int_lin_eq, int_le, int_lt, \
+       int_eq: EMPTY, and for the reason the int_lt row gives. All four ARE Linear \
+       instances -- int_le.ml, int_lt.ml and lin_eq.ml hand their terms to Linear.make \
+       and re-export Linear.propagate unchanged -- so the overflowing product is the \
+       same line of the same function, reached with a different row id. Filling them \
+       would be the int_lin_le cell four more times.";
+      "overflow: a sum that leaves the range x int_ne: EMPTY, and unreachable by \
+       construction rather than merely unfilled. int_ne IS 1*x + (-1)*y <> 0, so when \
+       one term is unfixed [Ne.propagate]'s sum_of runs over exactly ONE other term: \
+       there is no sum, only a product, and the product cell IS filled (the negation of \
+       a fixed min_int). A three-term disequality is int_lin_ne, which fills the sum \
+       cell. Same shape of argument as int_ne x |a| > 1 above.";
+      "overflow: near the cap x int_lt, int_eq: EMPTY, duplicates again. int_lt is \
+       int_le with rhs - 1 and int_eq is Lin_eq over unit coefficients, so a near-limit \
+       instance for either is int_le/near-limit-offset or lin_eq/near-limit-parity with \
+       a different constant.";
+      "overflow: near the cap x int_ne: EMPTY, deliberately, and this one is worth the \
+       sentence. int_ne's coefficients are 1 and -1 in every instance there can ever be, \
+       so 'near the cap' for it is entirely a property of the DECLARED DOMAINS -- which \
+       int_le/near-limit-offset already drives to 1.44 * 10^17, the largest a \
+       two-variable unit-coefficient row can have and still pass, over the same [Linear] \
+       arithmetic and the same order-encoding constants. The path that is specific to a \
+       disequality, and that the cap's factor of 16 is actually sized against \
+       (lib/core/checked.ml, envelope path 4: Encoding.add_int_lin_ne folds the row's \
+       attainable span into the A/B pair's big-M coefficients), is driven to 79.8% of \
+       the cap by int_lin_ne/near-limit. Between the two, nothing about a disequality at \
+       scale is untested, and a third instance would fill a cell without adding a path.";
       "pruning at root x entirely negative domains: FILLED as of M1-T20, as a side \
        effect rather than on purpose. M1-T16 left it empty because \
        lin_eq/offset-negative branches before it prunes anything at the root, and asked \
@@ -1832,6 +2049,134 @@ let white_box_cells () =
   Hashtbl.replace covered_situations S_cross_row_conflict ();
   Hashtbl.replace cells_ps (P_lin_le, S_cross_row_conflict) ()
 
+(* ========================================== the overflow axis's own cells (M1-T23)
+
+   Three of the five [overflow] values cannot be an instance in [instances], and the
+   reason is the point of the task rather than an inconvenience:
+
+   - [O_product] and [O_sum] are what a propagator does when the arithmetic leaves the
+     63-bit range, and the policy (lib/core/checked.ml) is that it RAISES. A raising
+     propagator has no answer to compare against brute force and no proof to hand
+     veripb, so [run_instance] cannot host it. It is asserted directly instead.
+
+   - [O_compile_rejected] is a model that never reaches a propagator at all. Its
+     column in the propagator grid is therefore empty for every propagator, on purpose:
+     crediting a propagator for a model that was refused before any instance was built
+     would record something no propagator did, which is the rule the empty-cell note
+     below already applies to the int_lt and int_ne rows.
+
+   **A ceiling, and why it is a rule rather than a preference.** No instance and no
+   cell in this file declares a domain more than a few values wide -- the three
+   near-limit instances above sit at 1.44 * 10^17 with a declared WIDTH of one, and
+   the cells below reach overflow through coefficients and through a bound fixed at
+   min_int (width zero). docs/DECISIONS.md **D-0028** measures why: a justification is
+   Theta(declared width) per other term per pruning, so two variables declared
+   0..999999 produce a 156 MB .opb and one 29.8 MB `pol` line having pruned nothing.
+   Overflow is the area where "declare a domain near max_int" is the tempting test,
+   and that test cannot be run in this project today. Drive it through the
+   coefficient, which is where the wrapped product comes from anyway.
+
+   Each cell below also pins WHAT WOULD HAVE HAPPENED, not merely that something
+   raised. Before M1-T23 the first cell's [Linear.propagate] returned a [Conflict] on a
+   row that is satisfied by every value in the domain, because -2^61 * 4 wraps to 0 and
+   -2^61 * 3 wraps to +2^61; the checks below state those two products, so the cell
+   says why it exists and not only that the guard is present. *)
+
+let raises_overflow f =
+  try
+    ignore (f ());
+    false
+  with Checked.Overflow _ -> true
+
+let overflow_product_cells () =
+  (* The demonstrating row, built directly -- which is the one caller the compile-time
+     cap does not cover, and the reason the runtime policy is to raise. *)
+  let store = build_store { vars = [| ("x", 3, 4) |]; cstrs = [] } in
+  let lin = Linear.make ~row_id:1 store [ (-2305843009213693952, Var.of_int 0) ] 0 in
+  check
+    "overflow/product: -2^61 * 3 really does wrap to a POSITIVE number, which is what \
+     made the old slack argue for a conflict"
+    (-2305843009213693952 * 3 = 2305843009213693952);
+  check
+    "overflow/product: int_lin_le raises rather than conflicting on a row every value \
+     satisfies"
+    (raises_overflow (fun () -> Linear.propagate lin store));
+  (* int_ne's coefficients are 1 and -1 by construction, so its one overflowing product
+     is the negation of a fixed value at min_int -- which is also the one input
+     Stdlib.mod is not guaranteed to survive, further down the same function. *)
+  let s2 =
+    build_store { vars = [| ("u", 0, 2); ("v", min_int, min_int) |]; cstrs = [] }
+  in
+  let ne = Ne.Int_ne.make s2 (Var.of_int 0) (Var.of_int 1) in
+  check "overflow/product: int_ne raises on the negation of a fixed min_int"
+    (raises_overflow (fun () -> Ne.propagate ne s2));
+  (* int_lin_ne reaches the same cell the ordinary way, through a coefficient. *)
+  let s3 = build_store { vars = [| ("a", 4, 4); ("b", 0, 3) |]; cstrs = [] } in
+  let lne = Ne.make s3 [ (-2305843009213693952, Var.of_int 0); (1, Var.of_int 1) ] 0 in
+  check "overflow/product: int_lin_ne raises on a coefficient times a fixed value"
+    (raises_overflow (fun () -> Ne.propagate lne s3));
+  [ (P_lin_le, O_product); (P_ne, O_product); (P_lin_ne, O_product) ]
+
+let overflow_sum_cells () =
+  (* Every product fits; the running total does not. A per-product check alone would
+     miss this, and a per-product check is the obvious thing to write. *)
+  let big = (max_int / 2) + 1 in
+  let m = { vars = [| ("a", big, big); ("b", big, big); ("c", 0, 1) |]; cstrs = [] } in
+  let store = build_store m in
+  let lin =
+    Linear.make ~row_id:1 store
+      [ (1, Var.of_int 0); (1, Var.of_int 1); (1, Var.of_int 2) ]
+      0
+  in
+  check "overflow/sum: each product fits -- it is their total that does not"
+    (Checked.mul 1 big = big && raises_overflow (fun () -> Checked.add big big));
+  check "overflow/sum: int_lin_le raises on the fold of the minima"
+    (raises_overflow (fun () -> Linear.propagate lin store));
+  let s2 = build_store m in
+  let lne = Ne.make s2 [ (1, Var.of_int 0); (1, Var.of_int 1); (1, Var.of_int 2) ] 0 in
+  check "overflow/sum: int_lin_ne raises on the fixed terms' sum"
+    (raises_overflow (fun () -> Ne.propagate lne s2));
+  [ (P_lin_le, O_sum); (P_lin_ne, O_sum) ]
+
+(* The model that demonstrated the gap, end to end through the front end. Before
+   M1-T23 this model printed =====UNSATISFIABLE===== and emitted a .pbp that veripb
+   accepted, on a model x = 3 satisfies. It is refused now, and the refusal is checked
+   on its CONTENT: a rejection that does not say what the limit is, is not the
+   diagnostic SPEC 2.1's standard for a rejection asks for. *)
+let overflow_compile_cell () =
+  let src =
+    "array [1..1] of int: c = [-2305843009213693952];\n\
+     var 3..4: x;\n\
+     constraint int_lin_le(c, [x], 0);\n\
+     constraint int_le(x, 3);\n\
+     solve satisfy;\n"
+  in
+  (match Flatzinc.Compile.compile (Flatzinc.Builder.of_string ~file:"overflow" src) with
+  | exception Flatzinc.Error.Error e ->
+      let msg = Flatzinc.Error.to_string e in
+      check "overflow/compile: the demonstrating model is refused" true;
+      check "overflow/compile: the refusal states the limit and why it exists"
+        (contains "arithmetic limit" msg
+        && contains "288230376151711743" msg
+        && contains "wraps silently" msg);
+      if not (contains "arithmetic limit" msg) then Printf.printf "  message: %s\n" msg
+  | exception exn ->
+      fail "overflow/compile: raised the wrong exception: %s" (Printexc.to_string exn)
+  | _ ->
+      fail
+        "overflow/compile: the model COMPILED. This is the M1-T23 gap: x = 3 satisfies \
+         it, and the solver used to answer UNSAT with a proof veripb accepted");
+  [ O_compile_rejected ]
+
+let overflow_cells () =
+  let cells = overflow_product_cells () @ overflow_sum_cells () in
+  List.iter
+    (fun (p, o) ->
+      Hashtbl.replace cells_po (p, o) ();
+      Hashtbl.replace covered_overflows o ())
+    cells;
+  List.iter (fun o -> Hashtbl.replace covered_overflows o ()) (overflow_compile_cell ())
+
 (* ================================================================= main *)
 
 let () =
@@ -1850,6 +2195,8 @@ let () =
     instances;
   print_endline "";
   white_box_cells ();
+  print_endline "";
+  overflow_cells ();
   print_endline "";
   known_bug_ne_snap_cite ();
   print_endline "";

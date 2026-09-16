@@ -106,6 +106,17 @@
    and the .opb expansion compute from a row of magnitude M is bounded by 9M + 6, and
    the limit is max_int / 16.
 
+   **This is an overflow cap, not a width cap, and it does not help D-0028.** The
+   bound the limit places on a declared domain is |bound| <= 2.88 * 10^17, so a width
+   of 5.7 * 10^17 passes it -- thirteen orders of magnitude above the width at which
+   D-0028's measured cost (a justification is Theta(declared width) per other term per
+   pruning: 29.8 MB in one `pol` line at w = 10^6) becomes unusable. The two caps have
+   different justifications and different right answers, and D-0028 point 3 says so
+   directly: a width cap refuses models the FlatZinc standard allows, which is a SPEC
+   change with its own decision record. Nothing here is that record, and nothing here
+   should be read as having taken that decision. The declared-bound check below exists
+   because a bound is one of the two things that multiply, and for no other reason.
+
    The checks run *before* the row is posted, which is the whole point. The gap
    M1-T23 closed was not that a propagator pruned wrongly -- it was that
    [Encoding.linear_terms_int_lin_le] folds the constant sum_i a_i * lo_i with the
@@ -235,14 +246,14 @@ let reject_search pos ~annotation =
 
 let reject_declared_bound (v : Model.var) lo hi =
   Error.failf v.Model.v_pos
-    "variable `%s` is declared over %d..%d, and a declared bound may not exceed +/-%d. \
-     baguette computes over OCaml's native 63-bit int, which wraps silently, and a \
-     wrapped product is not merely a wrong bound: lib/proof/encoding.ml expands the .opb \
-     row from the same arithmetic the propagator uses, so the corrupted row and the \
-     corrupted pruning agree and veripb accepts a refutation of a model you did not \
-     write. The limit leaves every intermediate the solver and the encoding compute \
-     inside the representable range. Rescale the model, or shift the domain towards \
-     zero."
+    "variable `%s` is declared over %d..%d, which exceeds baguette's arithmetic limit: a \
+     declared bound may not exceed +/-%d. baguette computes over OCaml's native 63-bit \
+     int, which wraps silently, and a wrapped product is not merely a wrong bound: \
+     lib/proof/encoding.ml expands the .opb row from the same arithmetic the propagator \
+     uses, so the corrupted row and the corrupted pruning agree and veripb accepts a \
+     refutation of a model you did not write. The limit leaves every intermediate the \
+     solver and the encoding compute inside the representable range. Rescale the model, \
+     or shift the domain towards zero."
     v.Model.v_name lo hi Checked.limit
 
 let reject_row pos ~what ~magnitude =

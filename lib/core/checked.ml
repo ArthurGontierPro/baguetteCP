@@ -104,7 +104,15 @@
    *declared bound* must satisfy |bound| <= limit, and each *row* must satisfy
    M <= limit. Neither implies the other -- a huge coefficient on a small domain
    overflows without any bound being large, and a variable in no row at all is
-   still handed to [Domain.make] and [Encoding.declare_int]. *)
+   still handed to [Domain.make] and [Encoding.declare_int].
+
+   [limit] is chosen on overflow grounds and on no other. It is emphatically **not**
+   a domain-*width* cap: it permits a width of 5.7 * 10^17, and docs/DECISIONS.md
+   D-0028 measures a justification of 29.8 MB in a single `pol` line at a width of
+   10^6. A width policy is a different decision with a different right answer -- it
+   refuses models the FlatZinc standard allows and therefore needs a SPEC change and
+   its own record (D-0028 point 3) -- and folding one into the other silently is
+   exactly what that record asks not to happen. *)
 
 exception Overflow of string
 
