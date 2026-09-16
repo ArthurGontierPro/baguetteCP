@@ -627,7 +627,12 @@ let tmpdir () =
   Sys.mkdir d 0o700;
   d
 
-let run_case ~dir ~n m =
+(* One solve of one model under one branching order. Returns the verdict, what this run
+   observed, the proof text (so the caller can see whether two orders really did emit
+   different proofs), and whether the answer was SAT -- which must not depend on the
+   order. The caller names the order and prints that name with any failure, because
+   "case 37 is rejected" is not reproducible unless it says which tree was searched. *)
+let run_case ~dir ~n ~(order : Search.order) m =
   let opb = Filename.concat dir "m.opb" and pbp = Filename.concat dir "m.pbp" in
   let expected = brute_force m in
   let store = build_store m in
@@ -646,7 +651,9 @@ let run_case ~dir ~n m =
   let trace = Trace.create () in
   let entry_level = Store.level store in
   let result =
-    match Search.solve ~engine ~store ~ctx ~check:(independent_check m) ~trace () with
+    match
+      Search.solve ~engine ~store ~ctx ~check:(independent_check m) ~trace ~order ()
+    with
     | o ->
         close_out oc;
         Ok o
@@ -661,6 +668,12 @@ let run_case ~dir ~n m =
      format changes -- a hard-coded "# 2" finds nothing under 3.0 and would quietly
      report that the generator never goes deep. *)
   obs.deep_decisions <- Writer.opens_level 2 proof;
+  let answer =
+    match result with
+    | Ok (Search.Sat _) -> Some true
+    | Ok Search.Unsat -> Some false
+    | Error _ -> None
+  in
   let verdict =
     match result with
     | Error e -> Broken (Printf.sprintf "the solver raised %s" e)
@@ -711,7 +724,7 @@ let run_case ~dir ~n m =
                              (String.split_on_char '\n' proof)))))
   in
   List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp ];
-  (verdict, obs)
+  (verdict, obs, proof, answer)
 
 (* ================================================================== main *)
 
@@ -722,12 +735,60 @@ let getenv_int name default =
 
 let default_seed = 20260915
 
+(* The branching orders one generated model is searched under: the normative one first,
+   then [orders] randomised ones.
+
+   Three properties, and each of them is a separate decision:
+
+   - **One announced seed still reproduces the whole run.** [order_seeds] is a second
+     [Random.State.t] derived from that seed, so nothing here needs a knob of its own.
+   - **The branching draws do not touch the generator's state.** They come off a
+     different state entirely, so the sequence of MODELS is exactly the sequence this
+     file generated before M2-T11 -- which is why the coverage rates below still read
+     the values they were measured at, and why a drift in one of them would mean the
+     generator changed rather than that the orders moved. Taking the order seeds off [r]
+     was tried first and shifted every model after the first: the branch-failure rate
+     went 56% -> 34% with nothing about the generator changed.
+   - **Each order gets its own state.** The number of draws a search makes depends on how
+     deep it goes, so sharing one state between the orders would make order 2's tree
+     depend on how long order 1's search ran. Announcing the per-order seed is then
+     enough to reproduce one failing tree on its own. *)
+let orders_for r ~orders =
+  let seeds = List.init orders (fun _ -> Random.State.bits r) in
+  ("spec (docs/SPEC.md 3.4: first-fail, indomain_min)", Search.spec_order)
+  :: List.map
+       (fun sd ->
+         ( Printf.sprintf "random branching order, order-seed %d" sd,
+           Search.random_order (Random.State.make [| sd |]) ))
+       seeds
+
+(* The coverage counters are per CASE, not per run: a state is reached by a case if any
+   of its orders reaches it. [or_obs] is that fold. The per-run [obs] is kept separate
+   and is what the verdict buckets read, because attribution must use what the run that
+   was rejected did, not what some other tree did. *)
+let or_obs acc o =
+  acc.branch_failed <- acc.branch_failed || o.branch_failed;
+  acc.cross_conflict <- acc.cross_conflict || o.cross_conflict;
+  acc.div_nontrivial <- acc.div_nontrivial || o.div_nontrivial;
+  acc.div_remainder <- acc.div_remainder || o.div_remainder;
+  acc.root_conflict <- acc.root_conflict || o.root_conflict;
+  acc.deep_decisions <- acc.deep_decisions || o.deep_decisions;
+  acc.ne_moved_bound <- acc.ne_moved_bound || o.ne_moved_bound;
+  acc.ne_root_conflict <- acc.ne_root_conflict || o.ne_root_conflict;
+  acc.clause_in_pol <- acc.clause_in_pol || o.clause_in_pol
+
 let () =
-  print_endline "\nthe randomised differential tester (M1-T16)";
+  print_endline "\nthe randomised differential tester (M1-T16, M2-T11)";
   let seed = getenv_int "BAGUETTE_RANDOM_SEED" default_seed in
   let cases = getenv_int "BAGUETTE_RANDOM_CASES" 50 in
-  Printf.printf "  seed %d (BAGUETTE_RANDOM_SEED), %d cases (BAGUETTE_RANDOM_CASES)\n"
-    seed cases;
+  let orders = Stdlib.max 0 (getenv_int "BAGUETTE_RANDOM_ORDERS" 2) in
+  (* Derived from the announced seed, and deliberately NOT the generator's own state:
+     see [orders_for]. *)
+  let order_seeds = Random.State.make [| seed; 0xD018 |] in
+  Printf.printf
+    "  seed %d (BAGUETTE_RANDOM_SEED), %d cases (BAGUETTE_RANDOM_CASES), %d randomised \
+     branching order(s) per case besides the default (BAGUETTE_RANDOM_ORDERS)\n"
+    seed cases orders;
   (match veripb with
   | None ->
       print_endline
@@ -749,7 +810,10 @@ let () =
   and div = ref 0
   and rem = ref 0
   and ne_bound = ref 0
-  and offset_dom = ref 0 in
+  and offset_dom = ref 0
+  and runs = ref 0
+  and proof_varied = ref 0
+  and could_vary = ref 0 in
   let broken = ref [] in
   (try
      while !ran < cases do
@@ -759,29 +823,79 @@ let () =
        let box = Array.fold_left (fun acc (_, lo, hi) -> acc * (hi - lo + 1)) 1 m.vars in
        if box <= 2000 then (
          incr ran;
-         let verdict, obs = run_case ~dir ~n:!ran m in
-         if obs.branch_failed then incr branch_failed;
-         if obs.deep_decisions then incr deep;
-         if obs.root_conflict then incr root_conflict;
-         if obs.cross_conflict then incr cross;
-         if obs.div_nontrivial then incr div;
-         if obs.div_remainder then incr rem;
-         if obs.ne_moved_bound then incr ne_bound;
+         (* M2-T11: the same model, several trees. The ANSWER must not depend on the
+            order and the PROOF must -- a branch's refutation rests on that branch's own
+            trace (D-0018), so a different tree is a different proof, and the point of
+            this loop is that the invariants are asserted of each one. *)
+         let results =
+           List.map
+             (fun (label, order) -> (label, run_case ~dir ~n:!ran ~order m))
+             (orders_for order_seeds ~orders)
+         in
+         runs := !runs + List.length results;
+         let case_obs = new_obs () in
+         List.iter (fun (_, (_, o, _, _)) -> or_obs case_obs o) results;
+         (* Did the branching order actually change the emitted proof? Only a case that
+            branched at all can show this: one decided at the root has one tree whatever
+            the order says, so it is excluded from the denominator rather than counted as
+            a failure to vary. *)
+         (match results with
+         | (_, (_, _, p0, _)) :: rest when rest <> [] ->
+             if case_obs.deep_decisions || case_obs.branch_failed then (
+               incr could_vary;
+               if List.exists (fun (_, (_, _, p, _)) -> p <> p0) rest then
+                 incr proof_varied)
+         | _ -> ());
+         (* The answer is invariant under the branching order. Each run is already
+            checked against brute force on its own; this says the runs agree with each
+            other, which is the assertion that fails loudly if one order finds a
+            solution another one misses. *)
+         let answers = List.map (fun (_, (_, _, _, a)) -> a) results in
+         (match answers with
+         | a0 :: rest when List.exists (fun a -> a <> a0) rest ->
+             fail
+               "random case %d (seed %d): the ANSWER depends on the branching order -- \
+                %s. One of these orders is incomplete or unsound (I-S2)."
+               !ran seed
+               (String.concat ", "
+                  (List.map2
+                     (fun (label, _) a ->
+                       Printf.sprintf "%s: %s" label
+                         (match a with
+                         | None -> "raised"
+                         | Some true -> "SAT"
+                         | Some false -> "UNSAT"))
+                     results answers))
+         | _ -> ());
+         if case_obs.branch_failed then incr branch_failed;
+         if case_obs.deep_decisions then incr deep;
+         if case_obs.root_conflict then incr root_conflict;
+         if case_obs.cross_conflict then incr cross;
+         if case_obs.div_nontrivial then incr div;
+         if case_obs.div_remainder then incr rem;
+         if case_obs.ne_moved_bound then incr ne_bound;
          if Array.exists (fun (_, lo, _) -> lo <> 0) m.vars then incr offset_dom;
          (match brute_force m with Some _ -> incr sat | None -> incr unsat);
-         match verdict with
-         | Verified -> ()
-         | Known_ne_trace -> incr known_ne_trace
-         | Known_ne_root -> incr known_ne_root
-         | Known_ne_in_pol -> incr known_ne_in_pol
-         | Broken why -> broken := (!ran, m, why) :: !broken)
+         List.iter
+           (fun (label, (verdict, _, _, _)) ->
+             match verdict with
+             | Verified -> ()
+             | Known_ne_trace -> incr known_ne_trace
+             | Known_ne_root -> incr known_ne_root
+             | Known_ne_in_pol -> incr known_ne_in_pol
+             | Broken why -> broken := (!ran, m, label, why) :: !broken)
+           results)
      done
    with e ->
      fail "the generator itself raised %s -- the run is incomplete" (Printexc.to_string e));
   (try Sys.rmdir dir with _ -> ());
   let pct k = if !ran = 0 then 0.0 else 100.0 *. float_of_int k /. float_of_int !ran in
-  Printf.printf "\n  %d cases -- %d SAT, %d UNSAT\n" !ran !sat !unsat;
-  print_endline "\n  what the generated instances actually reached:";
+  Printf.printf "\n  %d cases, %d solver runs -- %d SAT, %d UNSAT\n" !ran !runs !sat
+    !unsat;
+  print_endline
+    "\n\
+    \  what the generated instances actually reached (a case counts if ANY of its \
+     branching orders reached it):";
   List.iter
     (fun (k, what) -> Printf.printf "    %5.1f%%  (%d/%d)  %s\n" (pct k) k !ran what)
     [
@@ -816,6 +930,33 @@ let () =
   check "the generator reaches a division by more than one" (!div > 0);
   check "the generator reaches a division with a remainder" (!rem > 0);
   check "the generator reaches a disequality pruning that moves a bound" (!ne_bound > 0);
+  (* M2-T11's own coverage number, and the one that says whether this file is testing
+     more than one tree at all. The denominator is the cases that branched: a case
+     decided at the root has nothing for an order to vary, so counting it would dilute
+     the rate with instances that CANNOT show the effect -- the same discipline as the
+     cross-row-conflict note below. A rate of zero here would mean the randomised orders
+     are re-deriving the default's tree every time and the whole row is decorative. *)
+  let vary_pct =
+    if !could_vary = 0 then 0.0
+    else 100.0 *. float_of_int !proof_varied /. float_of_int !could_vary
+  in
+  Printf.printf
+    "\n\
+    \  the branching order is randomised (M2-T11): %d of the %d cases that branched at all\n\
+    \  emit a DIFFERENT proof under some order, %.1f%%. The answer is asserted to be the \
+     same\n\
+    \  for every order and the proof is not: a branch's refutation rests on that \
+     branch's own\n\
+    \  trace (D-0018), so a different tree is a different proof of the same answer.\n"
+    !proof_varied !could_vary vary_pct;
+  if orders > 0 then
+    (* Measured at 100% of branching cases at the default size and over a 2000-case
+       soak; the floor is set far under that so ordinary drift does not turn the gate
+       red, while a randomisation that has stopped randomising does. *)
+    check
+      "a randomised branching order really does change the emitted proof (else this file \
+       is running one tree under several names)"
+      (!could_vary > 0 && vary_pct >= 40.0);
   (* Reported rather than asserted, and said out loud rather than left as a 0% that
      reads like bad luck: test_matrix.ml's [cross_row_cell] shows this state cannot be
      reached from two instances at all, because a push can only land outside a
@@ -871,8 +1012,8 @@ let () =
      green by itself once Snap_cite stops citing a clausal reason)"
     (!known_ne_in_pol = 0);
   List.iter
-    (fun (n, m, why) ->
-      fail "random case %d (seed %d): %s" n seed why;
+    (fun (n, m, label, why) ->
+      fail "random case %d (seed %d, %s): %s" n seed label why;
       Printf.printf "     paste this into test_matrix.ml's [instances]:\n%s\n"
         (show_model m))
     (List.rev !broken);
