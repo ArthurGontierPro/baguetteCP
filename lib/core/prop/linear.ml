@@ -67,6 +67,15 @@
        [i]'s summand is [Term (abs a_i, that entry's explanation)] -- cite it, do not
        re-derive it. [find_lo_reason]/[find_hi_reason] below locate it.
 
+   The second bullet hides a premise, and M1-T44 is what happens when it is false:
+   *the cited entry's explanation establishes the entry's recorded bound*. It does not
+   when [Domain.settle] walked that bound past a hole (see [settled_over_lo] below),
+   because the hole is a disequality's doing and the row's own derivation says nothing
+   about it. Those entries therefore cite the hole's reason as well, which is what makes
+   the dependency list honest -- and, since a [Clause] is what a hole's reason is,
+   what makes [Search.rests_on_a_clause] route the conflict the D-0022 way instead of
+   citing a chain that cannot close.
+
    Dividing the sum by [abs a_j] is D-0013 step 4 (and the "one division"
    docs/PROOF-FORMAT.md section 4 promises): [j]'s own terms are the only ones left
    with a nonzero coefficient after every other term cancels (each [Weaken] cancels
@@ -203,16 +212,79 @@ let term_min store (tm : term) =
    rather than the newest, so the pruning would cite a superseded reason. The two
    differ only on a variable whose bound moved twice in one branch, which is why no
    type and no model in the suite can tell them apart (see the commit message). *)
+(* ---------------------------------------------------------------------------
+   M1-T44: a bound can be stronger than the entry that carries it
+
+   [Domain.set_lo] does not stop where the propagator asked. It re-establishes I-D2 by
+   *settling* -- walking the new bound up past any hole it lands on -- so a trail
+   entry's recorded [lo] can be strictly greater than the bound its own explanation
+   derives, by exactly the run of holes immediately below it. Citing that entry as the
+   reason for its recorded bound is then short by that run, and a [Combine] built on it
+   lands on [0 >= 0] instead of [0 >= k]. That is the whole of M1-T44: the arithmetic
+   was never wrong, the *dependency list* was, because the hole's own reason -- a
+   disequality's [Clause], punched by [Store.remove_with_facts] -- is on the trail and
+   was silently dropped. See test/models/root_hole_unsat.fzn for the worked instance.
+
+   Holes only ever enter a domain through a removal, so each one has a trail entry
+   carrying its reason and the two functions below find it. The exception is a hole the
+   variable was *declared* with ([Domain.of_list]): no entry ever removed it, and it is
+   skipped here. That is not this task papering over the same bug in another guise --
+   lib/proof/encoding.ml has no representation for a declared hole at all, so such a
+   variable's declared domain is not in the .opb in the first place; nothing this module
+   can cite would make a proof about it sound. It is unreachable from the CLI today
+   (lib/flatzinc/ never calls [Domain.of_list]) and reported as a finding rather than
+   guarded here, because a guard would fail loudly in unit tests that build such a
+   domain for reasons that have nothing to do with the proof. *)
+
+(* The values [Domain.settle] walked the lower bound over on its way to [cur], newest
+   domain state [old] being the one the entry started from: the maximal run of holes
+   immediately below [cur]. It stops at the first value [old] still held, which is at or
+   above whatever bound was actually pushed -- so this never claims more than the settle
+   did. Empty when the entry's bound is exactly the bound its explanation derives, which
+   is every entry in a model with no disequality. *)
+let settled_over_lo old ~cur =
+  let rec go v acc =
+    if v < Domain.lo old || Domain.mem old v then acc else go (v - 1) (v :: acc)
+  in
+  go (cur - 1) []
+
+let settled_over_hi old ~cur =
+  let rec go v acc =
+    if v > Domain.hi old || Domain.mem old v then acc else go (v + 1) (v :: acc)
+  in
+  go (cur + 1) []
+
+(* The reason of the entry that took [value] out of [v]'s domain, searched from trail
+   position [before] downwards. A value leaves a domain once and never comes back
+   within a level, so there is at most one; [None] means it was a declared hole (see
+   above). *)
+let find_removal store v ~before ~value =
+  let rec scan i =
+    if i < 0 then None
+    else
+      let e : Store.entry = Store.trail_entry store i in
+      if Var.equal e.var v && Domain.mem e.old value && not (Domain.mem e.now value) then
+        Some (Store.explanation store e)
+      else scan (i - 1)
+  in
+  scan before
+
+(* Every reason the current lower bound of [v] rests on: the entry that moved it, then
+   one per hole that entry's settle walked over. [[]] exactly when the bound is still
+   the declared one (the old [None]). *)
 let find_lo_reason store v ~decl_lo =
   let cur = Domain.lo (Store.get store v) in
-  if cur <= decl_lo then None
+  if cur <= decl_lo then []
   else
     let rec scan i =
-      if i < 0 then None
+      if i < 0 then []
       else
         let e : Store.entry = Store.trail_entry store i in
         if Var.equal e.var v && Domain.lo e.old < cur then
-          Some (Store.explanation store e)
+          Store.explanation store e
+          :: List.filter_map
+               (fun h -> find_removal store v ~before:(i - 1) ~value:h)
+               (settled_over_lo e.old ~cur)
         else scan (i - 1)
     in
     scan (Store.trail_length store - 1)
@@ -221,14 +293,17 @@ let find_lo_reason store v ~decl_lo =
    Newest first, so the same downward index walk -- see [find_lo_reason]. *)
 let find_hi_reason store v ~decl_hi =
   let cur = Domain.hi (Store.get store v) in
-  if cur >= decl_hi then None
+  if cur >= decl_hi then []
   else
     let rec scan i =
-      if i < 0 then None
+      if i < 0 then []
       else
         let e : Store.entry = Store.trail_entry store i in
         if Var.equal e.var v && Domain.hi e.old > cur then
-          Some (Store.explanation store e)
+          Store.explanation store e
+          :: List.filter_map
+               (fun h -> find_removal store v ~before:(i - 1) ~value:h)
+               (settled_over_hi e.old ~cur)
         else scan (i - 1)
     in
     scan (Store.trail_length store - 1)
@@ -242,10 +317,20 @@ let find_hi_reason store v ~decl_hi =
    eagerly, not just cheap ints, matters here specifically because which trail entry
    currently witnesses a bound can change (or vanish on backtrack) between now and
    whenever this explanation is finally forced -- the snapshot pins down *this* row's
-   own reason to cite, not whatever happens to be current later. *)
+   own reason to cite, not whatever happens to be current later.
+
+   [Snap_cite]'s [holes] is M1-T44's addition: [expl] is still the entry that moved the
+   bound, and [holes] the reason of every hole that entry's settle walked past on the
+   way to it. [holes] is empty for every bound that was not settled over one, which is
+   every bound in a model with no disequality, and the rendering is then unchanged. *)
 type source_snap =
   | Snap_weaken of { coeff : int; name : string; decl_lo : int; decl_hi : int }
-  | Snap_cite of { coeff : int; expl : Explanation.t; fact : Lit.t }
+  | Snap_cite of {
+      coeff : int;
+      expl : Explanation.t;
+      holes : Explanation.t list;
+      fact : Lit.t;
+    }
 
 (* [None] only for a zero coefficient (an absent term, contributing nothing). Otherwise
    picks the bound relevant to this term's sign (D-0013's own case split, matching
@@ -270,11 +355,16 @@ let snapshot_source store (tm : term) : source_snap option =
            })
     else
       match find_lo_reason store tm.x ~decl_lo:tm.decl_lo with
-      | Some expl ->
+      | expl :: holes ->
           Some
             (Snap_cite
-               { coeff = tm.coeff; expl; fact = Lit.ge (Store.name store tm.x) cur })
-      | None ->
+               {
+                 coeff = tm.coeff;
+                 expl;
+                 holes;
+                 fact = Lit.ge (Store.name store tm.x) cur;
+               })
+      | [] ->
           Some
             (Snap_weaken
                {
@@ -296,11 +386,16 @@ let snapshot_source store (tm : term) : source_snap option =
            })
     else
       match find_hi_reason store tm.x ~decl_hi:tm.decl_hi with
-      | Some expl ->
+      | expl :: holes ->
           Some
             (Snap_cite
-               { coeff = tm.coeff; expl; fact = Lit.le (Store.name store tm.x) cur })
-      | None ->
+               {
+                 coeff = tm.coeff;
+                 expl;
+                 holes;
+                 fact = Lit.le (Store.name store tm.x) cur;
+               })
+      | [] ->
           Some
             (Snap_weaken
                {
@@ -310,11 +405,23 @@ let snapshot_source store (tm : term) : source_snap option =
                  decl_hi = tm.decl_hi;
                })
 
-let summand_of_snap = function
+(* One snapshot, one *or more* summands. A [Snap_cite] with holes behind it contributes
+   one [Term] per reason, all at [abs coeff] -- the scale at which the bound itself
+   enters, since each hole is a fact about the same variable's same chain. The extra
+   terms do not cancel the row's coefficient the way the bound's own chain-sum does, so
+   the [Combine] is no longer the self-contained numeric chain D-0013 describes; it is
+   still a sound [pol] (a [pol] derives whatever it derives), and the reason it may stop
+   closing on its own is precisely D-0022's, which is why [Search.rests_on_a_clause] --
+   reading exactly these summands -- then routes the conflict to its empty-clause close
+   instead of citing the chain. D-0022 settled the same trade the other way round for a
+   clause folded in as a bound, and for the same reason: weakening it away would erase
+   the signal and still not close. *)
+let summands_of_snap = function
   | Snap_weaken { coeff; name; decl_lo; decl_hi } ->
       let lits, _ = Order_reason.weaken_declared ~coeff ~name ~decl_lo ~decl_hi in
-      Explanation.weaken lits
-  | Snap_cite { coeff; expl; _ } -> Explanation.term (Checked.abs coeff) expl
+      [ Explanation.weaken lits ]
+  | Snap_cite { coeff; expl; holes; _ } ->
+      List.map (fun e -> Explanation.term (Checked.abs coeff) e) (expl :: holes)
 
 (* docs/DECISIONS.md D-0018's *other* projection of the same snapshot: the bound facts
    this row actually read, one order literal per other term, for the trace line
@@ -349,7 +456,7 @@ let row_snaps store terms ~exclude =
 
 let explain_of_snaps base snaps divisor =
   Explanation.deferred (fun () ->
-      let summands = Explanation.term 1 base :: List.map summand_of_snap snaps in
+      let summands = Explanation.term 1 base :: List.concat_map summands_of_snap snaps in
       Explanation.combine summands divisor)
 
 let explain_row store base terms ~exclude divisor =
@@ -396,11 +503,14 @@ let explain_cross_conflict store (tm : term) new_bound_expl =
   in
   Explanation.deferred (fun () ->
       match opposite with
-      | Some opposite_expl ->
+      | _ :: _ ->
+          (* One [Term] per reason the opposing bound rests on -- the entry that moved
+             it, plus any hole its settle walked over (M1-T44, [find_lo_reason]). *)
           Explanation.combine
-            [ Explanation.term 1 new_bound_expl; Explanation.term 1 opposite_expl ]
+            (Explanation.term 1 new_bound_expl
+            :: List.map (fun e -> Explanation.term 1 e) opposite)
             1
-      | None ->
+      | [] ->
           (* The opposite bound is still declared, yet contradicts a fresh derivation
              from this row alone -- that would already have been this row's own
              slack < 0 conflict before any per-term push was attempted. Believed
