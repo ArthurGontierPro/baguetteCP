@@ -19,7 +19,8 @@ baguette MODEL.fzn --proof P --time      # the same internal numbers, one model,
 `--time` writes its report to **stderr**, one `time: <phase> <microseconds> us <what it
 is>` line per phase, and is off unless asked. It changes no byte of stdout, of the `.opb`
 or of the `.pbp`; the harness verifies that before it measures anything (§1, "the
-self-checks").
+self-checks"). One row, `emitln`, is a **count** and carries a `lines` unit instead of
+`us` — deliberately, so that anything matching on `us` cannot read it as a duration.
 
 There is no `make bench` target. `Makefile` belongs to the orchestrator; if a target is
 wanted, the body is `./bench/run_bench.sh "$(ARGS)"` and it must not be a dependency of
@@ -63,10 +64,13 @@ per-column minimums of runs that never happened together.
 | `parse` | argument handling + `Builder.of_file` |
 | `compile` | `Compile.compile`: store, engine, encoding. No I/O, no proof |
 | `opb` | `Encoding.write_opb`: the `.opb` built, written and closed |
-| `search` | `Search.solve` — propagation and search **and the proof lines emitted during them** |
+| `propag` | `Search.solve` **minus** the proof emission inside it (M1-T47). An **upper bound** on propagation and search |
+| `emit` | of the same `Search.solve`, the time inside `Writer`'s own output calls. A **lower bound** on emission |
+| `clkovh` | the measuring clock's own cost: one calibrated `Sys.time` read per emitted line, landing **once in `emit` and once in `propag`**. Subtract from both |
+| `emitln` | lines the writer wrote during `search` — what `clkovh` is computed from |
 | `pbp` | proof channel opened, `Encoding.start_proof`, and the final `.pbp` flush |
 | `rest` | printing the solution, plus whatever in `main` is in no phase |
-| `inmain` | `startup` excluded; the sum of `parse`…`rest`, exactly |
+| `inmain` | `startup` excluded; the sum of `parse`…`rest`, exactly — and `propag` + `emit` is exactly the old `search`, so the sum did not change |
 | `notslv%` | `(wall − inmain) / wall` — an **upper bound** on the share of `solve ms` that is not the solver's own work |
 
 Three things travel with those numbers and are printed under the table every run, not
@@ -82,19 +86,28 @@ just recorded here:
 - **`notslv%` is a bound, not a figure.** `wall` and `inmain` are different clocks and
   CPU time is never above wall time, so `wall − inmain` over-states the overhead. It is
   labelled an upper bound wherever it appears.
-- **`search` still contains proof emission.** Every emission point is inside
-  `lib/core/justify.ml` and `lib/proof/writer.ml`; `bin/main.ml` can only bracket the
-  call. Splitting it wants an accumulator around `Writer.line`, the single funnel every
-  rule goes through. **Until that exists, "propagation costs X" is not a sentence this
-  harness supports.** The two proof phases that *are* separable — building the `.opb`
-  and flushing the `.pbp` — are separated, and on the wide models they are the larger
-  half.
+- **`search` is split, and both halves are bounds** (M1-T47, §3b). `emit` is the time
+  spent inside `Writer`'s output calls; the time spent *building* each rule's body —
+  `Pol.to_string_cited`, `Opb.constr_to_string`, the `Printf.sprintf` at each call site —
+  is spent before the writer is entered and lands in `propag`. So `emit` is a **lower**
+  bound on emission and `propag` an **upper** bound on propagation, and both are printed
+  with those words on them. **"Propagation costs at most X" is now a sentence this
+  harness supports. "Propagation costs exactly X" is not, and will not be until the
+  rendering is inside the accumulator too.**
+- **Subtract `clkovh` before quoting `emit` or `propag`.** It is the instrument, not the
+  program: one `Sys.time` read per emitted line, and `Sys.time` is
+  `CLOCK_PROCESS_CPUTIME_ID`, a real syscall at ~0.65–0.75 µs here rather than a vDSO
+  read. On `width_sat_depth` it is **350 µs of an 805 µs `emit`**. That is why it is a
+  column: a reader quoting the raw `emit` as the cost of writing a 545-line proof would
+  be wrong by a factor of 1.8, and nothing in the number would say so. It is calibrated
+  per run — minimum of nine 256-read bursts, taken in the report *after* every other
+  number has been read, so the calibration lands in no phase.
 
 ### The self-checks
 
-Before anything is measured, the harness checks two properties of the binary it is about
-to measure. Both are properties its own columns rest on, and both were false in this tree
-until 2026-09-16.
+Before anything is measured, the harness checks three properties of the binary it is
+about to measure. Each is a property its own columns rest on, and the first two were
+false in this tree until 2026-09-16.
 
 1. **`.opb` bytes do not depend on the path the model was given** (M1-T37). Loud `FAIL`
    and a non-zero exit, but not a refusal: inside one invocation both configurations use
@@ -106,9 +119,34 @@ until 2026-09-16.
    nothing appears unless the flag is given. **Fatal**, and nothing is measured: SPEC 2.2
    pins solution output byte for byte and `test/expected/*.out` is ground truth (I-M1),
    so a solver contaminating stdout is not one to take numbers from.
+3. **The emission accumulator actually counts** (M1-T47). An accumulator that had come
+   disconnected — a gate left shut, a new funnel added to `Writer` that nobody
+   instrumented — reports `emit 0` and `propag = search` on every row. That is not a
+   visible failure: it is the pre-M1-T47 table with an authoritative-looking column
+   bolted on, which is strictly worse than no column. So the harness runs an
+   **emission-heavy** model, one whose `.pbp` is written line after line during the
+   search (`width_sat_depth`: 545 lines, 29.9 kB, 196 level markers), and requires
+   `emitln > 0`, `emit > 0` and `emit <= search`. **Fatal**, and nothing is measured.
+
+   If that model is not among the ones being measured and cannot be found beside them or
+   in `test/models/`, the check is **skipped with a notice saying the split went
+   unexercised**. A near-zero `emit` on a handful of small models is not evidence in
+   either direction, and a column nobody has watched move must not read as a tested one.
+
+Both ways of disconnecting the accumulator were tried — `Writer.emitted_us` returning a
+constant 0, and the CLI leaving `Writer.time_emission` shut — and both come out as:
+
+```
+  FAIL  the emission accumulator is not counting: emit is 0 us over 543 emitted
+        lines -- the accumulator counted nothing.
+```
 
 A binary that rejects `--time` as an unknown option is not a failure — it is an older
 build, the internal table is skipped with a note, and the wall-clock table is complete.
+A binary that takes `--time` but reports no `emit` row predates M1-T47: the emission
+columns are **blanked with `-`, not filled with `0`** — a zero in a column called `emit`
+says "emission is free", which is a claim an absent measurement must not be able to make
+— and the footer keeps the old "*propagation costs X* is not supported" wording for it.
 
 **The first draft of check 2 was itself the failure it exists to catch**, and breaking
 the solver on purpose is how that was found. It decided "does this binary support
@@ -312,16 +350,121 @@ for.
 - On the small models `opb` is consistently the largest phase — 150–640 µs against 25–390
   µs for `search`. The suite spends more of itself stating problems than solving them.
 
-**What is still not measured, stated as plainly as the rest.** `search` is propagation,
+**What was still not measured, stated as plainly as the rest.** `search` is propagation,
 search and `.pbp` emission together. No row above separates them and no arithmetic here
 can. The hook is one accumulator around `Writer.line`; `lib/proof/` was not M1-T35's to
-change, and the request is recorded rather than the number guessed.
+change, and the request is recorded rather than the number guessed. *(Done — M1-T47,
+§3b. The hook was not one accumulator and `Writer.line` was not the whole funnel; §3b
+says what it actually took.)*
 
 Reproducibility of the internal columns, two full runs a minute apart under the same
 load: `width_root_unsat` `inmain` 38212 → 37044 µs (3%), `width_sat_depth` 12178 → 12321
 (1%), `chain_sat` 1563 → 1416 (9%), `trivial_sat` 531 → 361 (32%). The small models are
 noisy at sub-millisecond scale — and even their noise, ±170 µs, is a twentieth of the
 8 ms wall column they replace.
+
+## 3b. Splitting `search`: propagation apart from emission (M1-T47)
+
+Same machine, same checker, minimum of 7, 30 models. Load average 1.85 — the warning
+fired, and the wall column carries it; the CPU columns are what this section is about.
+`propag` + `emit` is exactly the old `search`, so `inmain` is unchanged and these rows
+are directly comparable with §3a's.
+
+```
+model                    wall us   startup    parse   compile       opb    propag     emit   clkovh  emitln      pbp    rest    inmain  notslv%
+array_sat                   7198      2432      117        77       283        54       32        2       4       89      18       670      91%
+bool_and_sat                7456      2694       81        88       196       109       40        9      14       93      16       623      92%
+bool_array_sat              7937      2389      135       121       258       113       30       10      16       68      21       746      91%
+bool_channel_sat            7825      2360       85        97       295        66       13        2       4       81      22       659      92%
+bool_channel_unsat          7900      2354       83        61       203        80       25        6      10       78      13       543      93%
+bool_clause_sat             7332      2334       80        55       196        75       28        7      11       61      15       510      93%
+bool_eq_sat                 7389      2313       75        71       182        88       30        7      12       62      15       523      93%
+bool_not_sat                7513      2517       79        71       189        85       33        7      12       62      13       532      93%
+bool_or_sat                 7445      2491      105        84       194        91       26        7      12       60      19       579      92%
+bool_out_sat                7379      2391       92        49       169        33       16        3       5       59      21       439      94%
+bool_reif_unsat             7566      2392       92       120       274       132       43       11      18       89      14       764      90%
+chain_sat                   8331      2359      103       241       562       258       40       15      24       93      61      1358      84%
+guess_wrong_sat             7706      2296      102       130       302       354       52       13      20       82      19      1041      86%
+lin_ne_sat                  7925      2450       76        99       260        53       18        3       6       59      15       580      93%
+lin_sat                     7744      2280       76       240       263        58       16        3       6       83      18       754      90%
+lin_unsat                   7684      2247       88        73       315        67       16        4       7      115      13       687      91%
+ne_conflict_sat             7303      2351       83        89       219       107       32        9      14       79      18       627      91%
+ne_eq_unsat                 7590      2384       66        80       192       104       32        9      14       77      13       564      93%
+ne_prune_sat                7435      2448       69        61       179        42       17        3       5       72      18       458      94%
+ne_sat                      7136      2359      156        90       178        31       11        2       4       59      18       543      92%
+ne_self_unsat               7734      2385       61        46       172        44       20        3       4       86      13       442      94%
+near_limit_ne_sat           7912      2481       98       145       338       169       46       12      20       68      16       880      89%
+near_limit_unsat            8432      2266       81        80       245       357       75       24      38       91      14       943      89%
+offset_unsat                8049      2385       83        76       231       385       84       32      50       91      13       963      88%
+root_hole_unsat             7721      2414       77        94       217       105       25        8      13       60      11       589      92%
+trivial_sat                 7730      2413       61        40       169        36       15        3       5       79      14       414      95%
+trivial_unsat               7546      2426       57        42       181        38       13        2       4       72      12       415      95%
+width_narrow_unsat          8060      2383       82       123       331        49       11        2       4       63       9       668      92%
+width_root_unsat           38766      2455       85     10026     18128      3140       75        2       4      491      20     31965      18%
+width_sat_depth            17895      2540       91      1298      3787      5109      805      350     543      166      24     11280      37%
+```
+
+**Read `emit` and `propag` with `clkovh` subtracted from each.** On `width_sat_depth`
+that is 805 − 350 = **455 µs of emission** and 5109 − 350 = **4759 µs of propagation and
+search**, inside a 5914 µs `search`. On the small models the correction is 2–32 µs
+against an `emit` of 11–84 µs: it is a third to a half of the raw number everywhere, not
+a rounding term.
+
+**What the split says, and only that.**
+
+- **Emission is not what `search` is made of.** Corrected, it is **7.7%** of
+  `width_sat_depth`'s search and **2.3%** of `width_root_unsat`'s, and 20–35% on the
+  small models where everything is tens of microseconds. The largest emission number in
+  the suite, 455 µs, is an eighth of the same model's `opb` phase (3787 µs).
+- **So the proof is still the expensive half of this solver — just not in `search`.**
+  `width_sat_depth` spends 3787 µs writing the `.opb`, 166 µs in `pbp` and 455 µs
+  emitting during the search: **4408 µs of an 11280 µs `inmain`, 39%, is proof**, of
+  which barely a tenth is the part that was fused. M1-T28's "dominated by proof
+  emission" survives as a statement about the model and does **not** survive as a
+  statement about `Search.solve`'s inner loop.
+- **`width_root_unsat`'s 3.1 ms of `propag` is now readable as propagation.** It is a
+  model with zero prunings and a 6-line proof; four lines are written during its search
+  and they cost 75 µs. Whatever that 3.1 ms is, it is not the writer.
+- **An upper bound, not a figure.** `propag` still contains every rule body this solver
+  renders — `Pol.to_string_cited` and friends — because that happens at the call site,
+  before the writer is entered. Nothing here measures how large that is. It is bounded
+  below by 0 and above by `propag`, and narrowing it means moving the accumulator up
+  into the rule functions, which is a different task.
+
+**The funnel audit, because the premise had to be checked before it could be used.**
+"Every rule goes through `Writer.line`" is true of rules and **false of the file**. Four
+places write to the `.pbp` channel: `line`, `comment`, `always_comment`, and the `flush`
+in `conclusion`. The bypass that matters is `always_comment`, because in format **3.0 —
+the default — `set_level` emits its level marker through it**, so every level marker in
+every 3.0 proof misses `line` entirely. Measured by building the version that takes the
+premise at face value: `emitln` on `width_sat_depth` falls from 543 to **347** (exactly
+the 196 level markers the `lvl` column counts) and corrected `emit`, measured
+back-to-back against the instrumented build in the same session, from 444 µs to
+**239 µs — a 46% under-count, reported without a symptom.**
+
+**The second thing that had to be measured rather than reasoned about.** A timer wrapped
+around `line`'s *body* does not work: `Printf.fprintf oc fmt` returns a closure that
+consumes the format's remaining arguments, so for a two-argument `line t fmt` the output
+happens after `line` has returned. That wrapper does not read zero — it still sees the
+format concatenation and the closure build — which is what makes it dangerous: on
+`width_sat_depth` it reports 648 µs against the correct 789 µs, an 18% shortfall wearing
+a plausible number's clothes. Driven to 200 kB lines, where the write cannot hide, the
+same two wrappers report **283 µs and 25 128 µs**. `Printf.kfprintf`'s continuation is
+the only place the end of a line can be observed.
+
+**The cost of the instrument, and why it is off by default.** `Sys.time` is
+`CLOCK_PROCESS_CPUTIME_ID` — a real syscall, not a vDSO read. Measured here over
+2 000 000 reads: **716–771 ns per read**, so the two-read wrapper is **1.47–1.59 µs per
+emitted line**. That is far too much to carry in a normal run, so the accumulator is
+behind a gate that costs **1.2–1.6 ns** per line and only `--time` opens it. In-process
+calibration of the same read, minimum of nine 256-read bursts, lands at ~645 ns. The
+reason it is min-of-bursts and not a single one: a single 512-read burst ranged
+**836–1871 ns** across five consecutive runs of the same model, which would have swung
+the published correction by a factor of two.
+
+**The artefacts did not move.** Every `.opb`, every `.pbp` and every byte of stdout for
+all 30 models is MD5-identical before and after M1-T47, checked on a run of the whole
+suite in both directions.
 
 ## 4. What the columns are *not*
 
@@ -334,12 +477,19 @@ noisy at sub-millisecond scale — and even their noise, ±170 µs, is a twentie
   `exec`, runtime start, parse, compile, solve, write the `.opb` and the `.pbp`, and
   `fsync` on exit. The internal table now says how that splits — except for the one join
   it cannot see, below.
-- **`search` is not propagation time either.** It is propagation, search, *and* the proof
-  lines emitted while they run. This is the honest residue of M1-T35: `bin/main.ml` can
-  only bracket `Search.solve`, and every emission point is inside `lib/core/justify.ml`
-  and `lib/proof/writer.ml`. The fix is an accumulator around `Writer.line` — the single
-  funnel every rule goes through — exposed as something like `Writer.emitted_us`. **Until
-  that exists, no row here supports a sentence of the form "propagation costs X."**
+- **`propag` is not propagation time exactly — it is an upper bound on it.** The fused
+  `search` column is gone (M1-T47, §3b): `propag` + `emit` is what it was, and `emit` is
+  the writer's own output calls. What keeps `propag` a bound rather than a figure is that
+  a rule's *body* is rendered at its call site — `Pol.to_string_cited`,
+  `Opb.constr_to_string`, the `Printf.sprintf` in `rule`'s argument — before the writer
+  is entered, so that rendering is counted in `propag`. **A row here supports
+  "propagation costs at most X." It does not support "propagation costs X",** and it will
+  not until the accumulator moves up into the rule functions.
+- **`emit` is not the whole cost of proof emission, in two directions at once.** Downward:
+  it excludes that same rendering, so it is a lower bound. Upward: it *includes* one
+  `Sys.time` read per line, which is a third to a half of it on this machine. Both are
+  reported — the second as the `clkovh` column — and both must be applied before the
+  number is quoted.
 - **`notslv%` is an upper bound, not a figure.** `wall` is wall time and `inmain` is CPU
   time, and CPU time is never above wall time, so `wall − inmain` over-states the
   overhead by however long the process was descheduled. Two clocks, subtracted on purpose
@@ -455,9 +605,19 @@ this harness reads at microsecond resolution and which is 25 µs to 5.2 ms acros
 suite instead of being buried under 8 ms of `exec`.
 
 The first half is unchanged: **M2-T8 does not exist, so the falsification has still not
-been run, and nothing here should be read as having run it.** And the warning above
-survives intact in a sharper form — `search` is still fused with proof emission, so a
-delta in that column between two binaries could be a cheaper scan or a cheaper emission,
-and D-0026's claim is about the scan. Splitting them (the `Writer.line` accumulator) is a
-precondition for reading a `search` delta as a statement about propagation, not merely a
-nicety.
+been run, and nothing here should be read as having run it.**
+
+**What M1-T47 changed about the warning that used to close this section.** It said that a
+delta in `search` between two binaries could be a cheaper scan or a cheaper emission, and
+that D-0026's claim is about the scan. That is no longer the obstacle: `propag` and `emit`
+are separate columns and a delta can be attributed to one of them (§3b). Two things
+remain, and they are smaller but not nothing:
+
+- `propag` is an **upper** bound — it carries the rendering of each rule's body — so a
+  `propag` delta is a delta in "propagation plus rendering". D-0026's `O(n·|trail|)` scan
+  is inside propagation proper, and nothing separates it from the rendering yet.
+- **The suite still may not be able to see the scan at all.** §3b puts `propag` at 31–385
+  µs on twenty-eight of thirty models. A "no measurable difference" result there would
+  mean the suite cannot see it, which is a different sentence from the prediction being
+  confirmed — the same trap M1-T24 fell into and reported correctly. `width_sat_depth`,
+  at 4.8 ms of corrected `propag`, is still the only row with room for the answer.
