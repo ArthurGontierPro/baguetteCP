@@ -39,8 +39,8 @@ let lower_bound_terms ~coeff ~name ~decl_lo b =
   if coeff <= 0 then invalid_arg "Order_reason.lower_bound_terms: coeff must be > 0";
   if b <= decl_lo then ([], 0)
   else
-    let n = b - decl_lo in
-    (List.init n (fun i -> (coeff, Lit.ge name (decl_lo + 1 + i))), coeff * n)
+    let n = Checked.sub b decl_lo in
+    (List.init n (fun i -> (coeff, Lit.ge name (decl_lo + 1 + i))), Checked.mul coeff n)
 
 (* The chain witnessing "x <= b", scaled by [coeff] (again a positive magnitude -
    pass [-a] when the constraint's own coefficient [a] is negative), contributing
@@ -53,8 +53,8 @@ let upper_bound_terms ~coeff ~name ~decl_hi b =
   if coeff <= 0 then invalid_arg "Order_reason.upper_bound_terms: coeff must be > 0";
   if b >= decl_hi then ([], 0)
   else
-    let n = decl_hi - b in
-    (List.init n (fun i -> (coeff, Lit.le name (b + i))), coeff * n)
+    let n = Checked.sub decl_hi b in
+    (List.init n (fun i -> (coeff, Lit.le name (b + i))), Checked.mul coeff n)
 
 (* ---------------------------------------------------------------------------
    M1-T12 / docs/DECISIONS.md D-0013: full-declared-range *weakening* chains.
@@ -89,11 +89,17 @@ let upper_bound_terms ~coeff ~name ~decl_hi b =
 
    Returns [([], 0)] when [coeff = 0] (an absent term needs no weakening) or when
    [decl_lo = decl_hi] (a fixed variable has no order literals at all). *)
+(* The arithmetic here goes through [Checked] (lib/core/checked.ml, roadmap M1-T23)
+   for the same reason [Linear]'s does: a chain's numeric contribution is a
+   coefficient times a declared width, and if that product wraps the [pol] the
+   explanation renders to states a different constant from the one the derivation
+   needs. Under lib/flatzinc/compile.ml's cap none of these can raise -- a width is at
+   most 2 * max(|lo|,|hi|) and the product is at most twice the row's own magnitude. *)
 let weaken_declared ~coeff ~name ~decl_lo ~decl_hi =
-  let width = decl_hi - decl_lo in
+  let width = Checked.sub decl_hi decl_lo in
   if coeff = 0 || width <= 0 then ([], 0)
   else if coeff > 0 then
     (List.init width (fun i -> (coeff, Lit.ge name (decl_lo + 1 + i))), 0)
   else
-    let c = -coeff in
-    (List.init width (fun i -> (c, Lit.le name (decl_lo + i))), c * width)
+    let c = Checked.neg coeff in
+    (List.init width (fun i -> (c, Lit.le name (decl_lo + i))), Checked.mul c width)
