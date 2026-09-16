@@ -349,35 +349,49 @@ let test_hole_wake_delivered () =
    does NOT happen: no exception, no conflict, no wrong-looking domain unless you know
    to look at y. [Engine.propagate] cheerfully reports a fixpoint. The only thing that
    notices is the I-P2 re-run. *)
+let starved_message msg =
+  (* Printed on a PASS, deliberately: this is what the instrument says when it fires,
+     and the next person to see it will be seeing it for real. *)
+  Printf.printf "     (what it says: %s)\n"
+    (String.concat " " (String.split_on_char '\n' msg));
+  check "starved: the message names the propagator that still had work"
+    (contains msg "eq_dom" && contains msg "I-P2")
+
 let test_hole_wake_starved_is_caught () =
   let store, engine = hole_scene ~trigger:(fun _ -> Engine.wake_on_bounds) () in
   Engine.reset_stats ();
-  (match Engine.propagate engine store with
+  (* Which of the two paths this takes depends on BAGUETTE_DEBUG, and both are the same
+     instrument. With it OFF (the default), [propagate] returns a fixpoint it should not
+     have and the test re-runs the check by hand -- which is the interesting shape,
+     because it can also inspect the damage. With it ON, [propagate] runs the check
+     itself and refuses to return at all; the suite has to stay green under
+     BAGUETTE_DEBUG=1, so that case is a pass here, not an uncaught exception. *)
+  match Engine.propagate engine store with
+  | exception Engine.Not_at_fixpoint msg ->
+      let _, _, masked = Engine.stats () in
+      check "starved: the mask really did drop a wake" (masked > 0);
+      check "starved: under BAGUETTE_DEBUG, propagate itself refuses the fixpoint" true;
+      starved_message msg
   | Engine.Conflict _ ->
       incr failures;
       Printf.printf "FAIL starved: unexpected conflict\n"
-  | Engine.Fixpoint -> ());
-  let _, _, masked = Engine.stats () in
-  check "starved: the mask really did drop a wake" (masked > 0);
-  (* The symptom, and the reason a green model suite proves nothing here: the solver
-     lost a pruning and said "fixpoint" anyway. *)
-  check "starved: propagate reports a fixpoint at which y has NOT lost the value"
-    (Domain.mem (Store.get store (var 1)) 2);
-  match raises_not_at_fixpoint engine store with
-  | None ->
-      incr failures;
-      Printf.printf
-        "FAIL starved: the I-P2 re-run check did NOT catch a starved propagator. That \
-         check is this round's only instrument for an unsound wake mask; if it cannot \
-         see this, it cannot see anything.\n"
-  | Some msg ->
-      check "starved: the I-P2 re-run check catches it" true;
-      (* Printed on a PASS, deliberately: this is what the instrument says when it
-         fires, and the next person to see it will be seeing it for real. *)
-      Printf.printf "     (what it says: %s)\n"
-        (String.concat " " (String.split_on_char '\n' msg));
-      check "starved: the message names the propagator that still had work"
-        (contains msg "eq_dom" && contains msg "I-P2")
+  | Engine.Fixpoint -> (
+      let _, _, masked = Engine.stats () in
+      check "starved: the mask really did drop a wake" (masked > 0);
+      (* The symptom, and the reason a green model suite proves nothing here: the solver
+         lost a pruning and said "fixpoint" anyway. *)
+      check "starved: propagate reports a fixpoint at which y has NOT lost the value"
+        (Domain.mem (Store.get store (var 1)) 2);
+      match raises_not_at_fixpoint engine store with
+      | None ->
+          incr failures;
+          Printf.printf
+            "FAIL starved: the I-P2 re-run check did NOT catch a starved propagator. \
+             That check is this round's only instrument for an unsound wake mask; if it \
+             cannot see this, it cannot see anything.\n"
+      | Some msg ->
+          check "starved: the I-P2 re-run check catches it" true;
+          starved_message msg)
 
 (* (c) The mask firing on a REAL propagator, and being safe when it does. [Linear]
    declares [Bounds] and reads only [Domain.lo]/[Domain.hi], so dropping its wake for
