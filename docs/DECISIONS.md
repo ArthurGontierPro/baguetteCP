@@ -1916,3 +1916,104 @@ Whether `quotient_filter` should be made exact. M4-T4a measured it as inexact in
 4095 small cases (~1%), inherited from JaCoP via GCS. Tightening it is a different and
 larger algorithm; M4-T4b decides whether it wants one, and the suite prints the gap so
 that the decision is made against a number rather than an impression.
+
+## D-0034  A wake trigger is a property of what a propagator READS, not of what it promises
+
+**Status**: accepted, 2026-09-16. **Decides** the question M2-T5 put to the orchestrator
+explicitly: derive the wake mask from `Propagator.consistency`, or amend the glossary so
+that `Bounds` means "reads only bounds"?
+
+**Neither, as stated. The trigger becomes its own declaration on `Propagator.instance`.**
+
+### Why not the glossary amendment
+
+`docs/GLOSSARY.md` defines "bounds consistent" as a promise about a propagator's *output*:
+what it will and will not prune. The mask needs a statement about its *input*: which parts
+of a domain it reads. Those are different properties of different ends of the same
+function, and they coincide today only as a matter of fact.
+
+M2-T5 checked that fact by reading every propagator in the tree rather than assuming it —
+`linear.ml` and its four re-exports, `bool2int.ml`, `bool_clause.ml`, `ne.ml` — and all of
+them do line up. But an audit is not a theorem, and this one expires silently the moment
+someone writes a `Bounds` propagator that reads a hole. Redefining the glossary term to
+make the audit true by fiat would give one word two jobs, and the failure it permits is
+invisible: the propagator is simply never woken, prunes less, and the proof still verifies
+because everything derived was derived correctly.
+
+This project has been bitten by exactly this shape before — two things that must agree,
+with no mechanism keeping them in agreement, is how D-0009 started.
+
+### What the evidence actually says
+
+The mask is worth **nothing measurable today**: M2-T5 instrumented the classifier and
+found `masked = 0` on all 29 models, across 970 propagator runs and 1210 wakes. Not one
+`Domain.Holes` change occurs in the whole suite, because `int_ne` is the only propagator
+that removes a value and in these models that value always sits at a bound, where `settle`
+turns it into a bound move.
+
+And the suite cannot see the mask being wrong. With `Domain` consistency deliberately
+starved of hole wakes, **all 29 models pass** — orchestrator reproduced this directly:
+29 passed, 0 failed, with only the new unit scenes going red (4 FAIL). So the mask's
+entire value and its entire risk lie in the future, and its only present instrument is the
+`BAGUETTE_DEBUG` I-P2 re-run check that shipped alongside it.
+
+### The decision
+
+1. The derived default (`trigger_of_consistency`) **stays for now**, because it is correct
+   for every propagator in the tree and that has been checked by reading them.
+2. It is a **stopgap with an expiry condition**, and the condition is the arrival of the
+   first propagator whose input set and output promise differ — in practice `all_different`
+   or `element` in M4. At that point the trigger becomes a field on `Propagator.instance`,
+   supplied by the author, and `trigger_of_consistency` is deleted rather than extended.
+3. Until then, **`BAGUETTE_DEBUG` is the net and must stay cheap enough to leave on** in
+   development. It has no coverage on the 6 models that conflict at the root, because
+   `propagate` never returns a fixpoint there; that gap is recorded, not closed.
+
+The alternative of flipping the default to `wake_on_any` — sound by construction, and a
+one-line change — was considered and rejected: it would leave the machinery in the tree
+with nothing exercising it outside the unit scenes, and an unexercised mechanism is how
+this project's signature failure mode starts. The mask is exercised, the audit is written
+down, and the expiry condition is named.
+
+## D-0035  An explanation must justify the bound as RECORDED, not the bound the propagator asked for
+
+**Status**: accepted, 2026-09-16. **Arose from** M1-T44, a correct UNSAT answer whose proof
+the checker rejected. **Records a premise that was load-bearing and had never been written
+down.**
+
+`Domain.set_lo` does not stop where the propagator asks. It re-establishes I-D2 by
+**settling** — walking the new bound past any hole it lands on. So a trail entry's recorded
+`lo` can be strictly *stronger* than the bound its own explanation derives, and the
+difference is exactly the holes the settle walked over.
+
+`linear.ml` cited such an entry as the reason for the entry's **recorded** bound. The
+premise "the cited entry's explanation establishes the entry's bound" is false for precisely
+these entries, and it appeared nowhere in the documentation. The hole's own `Clause` reason
+was therefore cited nowhere in the proof, and the chain fell **exactly one unit short** —
+`0 >= 0` where a contradiction was claimed.
+
+**The rule, stated once so it is not rediscovered**: a reason list that cites a trail entry
+must justify the entry's bound *as recorded*. Where a settle strengthened that bound, the
+reasons of the holes it walked over are part of the justification and must be cited with it.
+
+Two things worth keeping about how this was diagnosed:
+
+- **The rival diagnosis was refuted rather than argued down.** "The derivation is fine, the
+  route is wrong" would have been fixed by re-routing the conclusion. It is wrong because
+  the three rows the chain cites are **jointly satisfiable** at `v0 = v1 = 0`: no ordering
+  or discriminator over that set of rows could ever produce a contradiction. The route was
+  wrong *as a consequence* of the derivation being wrong.
+- **The tempting narrow fix was correctly declined.** Discriminating on "is this chain
+  `0 >= k` with `k >= 1`" would route this instance correctly while leaving the explanation
+  still lying about what the bound rests on — and `Explanation.lits` feeds M2-T3 conflict
+  analysis, where a learned clause built from a reason set that omits the disequality would
+  be **unsound**. Testing the symptom would have bought a green suite and a worse bug later.
+
+The fix needed no new rule: a hole's reason is a `Clause`, so `Search.rests_on_a_clause`
+answers "yes" and D-0022's existing path closes the conflict over the trace. D-0022 reaching
+a case it previously could not see, not a new mechanism.
+
+**Scope, measured**: 59 of 60 model artefacts byte-identical; only the new model's proof
+differs. Post-fix sweep of ~111,600 solver runs across 62 seeds, zero rejections, with the
+two known reproducers (seeds 133, 151) shown to *fail* with the fix reverted — so the sweep
+is a demonstrated detector rather than a silent pass.
