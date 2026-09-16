@@ -598,15 +598,21 @@ let test_int_lin_le_add () =
 let test_arith_matches_checked () =
   let module Checked = Baguette_core.Checked in
   let answer f x = try `V (f x) with _ -> `Raised in
-  let same name f g cases =
+  (* One check per operation, not per case: a divergence names the inputs it was found
+     on, so the report is as specific as a per-case check without a hundred identical
+     `ok` lines hiding the rest of the suite. *)
+  let same name f g show cases =
+    let bad = List.filter (fun c -> answer f c <> answer g c) cases in
+    check
+      (Printf.sprintf "M1-T32: Encoding.Arith.%s agrees with Checked.%s on all %d cases"
+         name name (List.length cases))
+      (bad = []);
     List.iter
-      (fun c ->
-        let a = answer f c and b = answer g c in
-        check
-          (Printf.sprintf "M1-T32: Encoding.Arith.%s agrees with Checked.%s" name name)
-          (a = b))
-      cases
+      (fun c -> Printf.printf "       diverges at %s\n" (show c))
+      (List.filteri (fun i _ -> i < 5) bad)
   in
+  let one x = string_of_int x in
+  let two (a, b) = Printf.sprintf "(%d, %d)" a b in
   (* The values straddle [mul]'s fast-path boundary deliberately: both copies take a
      four-comparison shortcut below 2^30 and an exact division above it, so a copy that
      drifted on WHERE that boundary sits would agree everywhere else. *)
@@ -630,11 +636,20 @@ let test_arith_matches_checked () =
     ]
   in
   let pairs = List.concat_map (fun a -> List.map (fun b -> (a, b)) ones) ones in
-  same "neg" Encoding.Arith.neg Checked.neg ones;
-  same "abs" Encoding.Arith.abs Checked.abs ones;
-  same "add" (fun (a, b) -> Encoding.Arith.add a b) (fun (a, b) -> Checked.add a b) pairs;
-  same "sub" (fun (a, b) -> Encoding.Arith.sub a b) (fun (a, b) -> Checked.sub a b) pairs;
-  same "mul" (fun (a, b) -> Encoding.Arith.mul a b) (fun (a, b) -> Checked.mul a b) pairs;
+  same "neg" Encoding.Arith.neg Checked.neg one ones;
+  same "abs" Encoding.Arith.abs Checked.abs one ones;
+  same "add"
+    (fun (a, b) -> Encoding.Arith.add a b)
+    (fun (a, b) -> Checked.add a b)
+    two pairs;
+  same "sub"
+    (fun (a, b) -> Encoding.Arith.sub a b)
+    (fun (a, b) -> Checked.sub a b)
+    two pairs;
+  same "mul"
+    (fun (a, b) -> Encoding.Arith.mul a b)
+    (fun (a, b) -> Checked.mul a b)
+    two pairs;
   (* And the fast path's own boundary, where a wrong constant would show up as a
      disagreement only on products the four comparisons let through. *)
   check "M1-T32: Arith.mul's fast path answers the same at 2^30 - 1 squared"
