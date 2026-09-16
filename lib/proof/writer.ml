@@ -835,15 +835,32 @@ let emit_yielding t ~origin body_of_id =
   assert (id = id');
   id
 
-(* A cutting-planes derivation. *)
+(* A cutting-planes derivation, and the ONLY way this module writes a `pol` line.
+
+   There used to be a [pol_raw] beside it, taking reverse-Polish text built elsewhere.
+   It had no caller anywhere in the tree and it is deleted (M1-T39). Three reasons, and
+   the first is the one that makes this a decision rather than tidying:
+
+   1. It bypassed [corrupt_pol], so it was the one emission path the mutation harness
+      could not reach. D-0030 makes it structurally impossible for a knob to fire in a
+      normal run; the dual obligation is that no emission path is structurally
+      incapable of being corrupted, or a future caller gets a derivation no lane can
+      ever gate. A proof step this file writes must be a proof step this file can
+      knowingly break.
+   2. It bypassed [Pol.to_string_cited], so under 3.0 it emitted positional text where
+      everything else emits labels. A caller would have had to re-derive the labelling
+      rule this module already knows -- the "a project-wide fact copied into several
+      files" failure this tree has recorded twice already (Checker.find, and the
+      level-marker spellings that D-0023's round collapsed into this module).
+   3. Nothing is lost. [Pol.t] spans the whole cutting-planes vocabulary
+      docs/PROOF-FORMAT.md section 2 lists -- ids, literal axioms, `+`, `* k`, `d k`,
+      `s`, `w v` -- so there is no derivation the raw form could state that [pol]
+      cannot. It bought no expressiveness, only an unchecked path. *)
 let pol t ~origin p =
   (* [corrupt_pol] is the identity for every writer [create] built. *)
   let p = corrupt_pol t ~origin p in
   emit_yielding t ~origin (fun _ ->
       "pol " ^ if v3 t then Pol.to_string_cited ~cite:(cite t) p else Pol.to_string p)
-
-(* Escape hatch for reverse-Polish text built elsewhere. Prefer [pol]. *)
-let pol_raw t ~origin steps = emit_yielding t ~origin (fun _ -> "pol " ^ steps)
 
 (* Reverse unit propagation of a PB constraint. Prefer [pol] where the reasoning is
    known; see docs/PROOF-FORMAT.md section 2.
