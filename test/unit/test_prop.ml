@@ -1461,14 +1461,30 @@ let test_ne_idempotence () =
    emitted text verbatim first, so a shape change is reported as a shape change rather
    than only as a checker rejection several lines later. *)
 
-(* Shared skeleton: declare [decls], post [rows] (a function that may add model rows
-   and returns the ne row ids), fix [pre] in the store, propagate, pick out the trail
-   entry for [target] (or the conflict), emit it, conclude SAT with [sat]. *)
-let build_ne_case dir ~file ~decls ~pins ~terms ~rhs ~pre ~target ~sat ~expect_lines
+(* Shared skeleton: declare [decls], post the disequality's two rows, fix [pre] IN THE
+   STORE, propagate, pick out the trail entry for [target] (or the conflict), emit it,
+   conclude SAT with [sat].
+
+   M1-T42 / D-0032: [pre] used to be pinned by real `.opb` rows as well as in the store,
+   and that was measured to weaken every builder below. With `x = 2` posted as a model
+   row, the model itself entails `y <> 2`, so a [rup] claiming `y <> 2` with NO REASON AT
+   ALL is still true and veripb accepts it, correctly -- the test was asking "is this
+   reason valid?" when the property that matters is "is this reason valid *because of
+   the facts it cites*?". Measured before it was changed, by deleting the facts from the
+   emitted clause: `ne_hole`, `ne_bound` and `lin_ne` all still passed the checker
+   (only their verbatim text pins went red), while `ne_conflict`, whose scene already
+   held its facts in the store alone, was REJECTED -- which is what a control looks like
+   when it works.
+
+   So the facts are established in the store and nowhere else. That is also the faithful
+   arrangement: in a real run a fixed value comes from a decision or from another
+   propagator, and neither of those is a model row. [build_ne_factless] and
+   [build_lin_ne_factless] are the controls this makes possible, and they are
+   meaningless under the old scene. *)
+let build_ne_case dir ~file ~decls ~terms ~rhs ~pre ~target ~sat ~expect_lines
     ?(corrupt = fun lits -> lits) () =
   let e = Encoding.create () in
   List.iter (fun (n, lo, hi) -> Encoding.declare_int e n ~lo ~hi) decls;
-  let pin_ids = List.map (fun c -> Encoding.add_constraint e c) pins in
   let decl_name i =
     let n, _, _ = List.nth decls i in
     n
@@ -1481,14 +1497,9 @@ let build_ne_case dir ~file ~decls ~pins ~terms ~rhs ~pre ~target ~sat ~expect_l
   close_out oc;
   let store = mk_store (List.map (fun (n, lo, hi) -> (n, lo, hi)) decls) in
   let prop = Ne.make store (List.map (fun (a, i) -> (a, var i)) terms) rhs in
-  List.iteri
-    (fun k (i, v) ->
-      let why =
-        match List.nth_opt pin_ids k with
-        | Some id -> Explanation.model_row id
-        | None -> Explanation.trivial
-      in
-      match Store.fix store (var i) v why with
+  List.iter
+    (fun (i, v) ->
+      match Store.fix store (var i) v Explanation.trivial with
       | Store.Changed | Store.Unchanged -> ()
       | Store.Conflict _ -> failwith (file ^ ": pre-fixing conflicted"))
     pre;
@@ -1539,7 +1550,6 @@ let build_ne_case dir ~file ~decls ~pins ~terms ~rhs ~pre ~target ~sat ~expect_l
 let build_ne_hole dir =
   build_ne_case dir ~file:"ne_hole"
     ~decls:[ ("x", 0, 4); ("y", 0, 4) ]
-    ~pins:[ Opb.ge [ (1, Lit.ge "x" 2) ] 1; Opb.ge [ (1, Lit.le "x" 2) ] 1 ]
     ~terms:[ (1, 0); (-1, 1) ]
     ~rhs:0
     ~pre:[ (0, 2) ]
@@ -1559,7 +1569,6 @@ let build_ne_hole dir =
 let build_ne_hole_wrong dir =
   build_ne_case dir ~file:"ne_hole_wrong"
     ~decls:[ ("x", 0, 4); ("y", 0, 4) ]
-    ~pins:[ Opb.ge [ (1, Lit.ge "x" 2) ] 1; Opb.ge [ (1, Lit.le "x" 2) ] 1 ]
     ~terms:[ (1, 0); (-1, 1) ]
     ~rhs:0
     ~pre:[ (0, 2) ]
@@ -1577,7 +1586,6 @@ let build_ne_hole_wrong dir =
 let build_ne_bound dir =
   build_ne_case dir ~file:"ne_bound"
     ~decls:[ ("x", 0, 4); ("y", 0, 4) ]
-    ~pins:[ Opb.ge [ (1, Lit.le "x" 0) ] 1 ]
     ~terms:[ (1, 0); (-1, 1) ]
     ~rhs:0
     ~pre:[ (0, 0) ]
@@ -1592,13 +1600,6 @@ let build_ne_bound dir =
 let build_lin_ne dir =
   build_ne_case dir ~file:"lin_ne"
     ~decls:[ ("a", 0, 4); ("b", 0, 4); ("c", 0, 4) ]
-    ~pins:
-      [
-        Opb.ge [ (1, Lit.ge "a" 2) ] 1;
-        Opb.ge [ (1, Lit.le "a" 2) ] 1;
-        Opb.ge [ (1, Lit.ge "b" 1) ] 1;
-        Opb.ge [ (1, Lit.le "b" 1) ] 1;
-      ]
     ~terms:[ (2, 0); (3, 1); (-1, 2) ]
     ~rhs:5
     ~pre:[ (0, 2); (1, 1) ]
@@ -1615,13 +1616,45 @@ let build_lin_ne dir =
 let build_ne_conflict dir =
   build_ne_case dir ~file:"ne_conflict"
     ~decls:[ ("x", 0, 4); ("y", 0, 4) ]
-    ~pins:[]
     ~terms:[ (1, 0); (-1, 1) ]
     ~rhs:0
     ~pre:[ (0, 2); (1, 2) ]
     ~target:0
     ~sat:[ ("x", 1); ("y", 0) ]
     ~expect_lines:[ "rup +1 ~x_ge_2 +1 x_ge_3 +1 ~y_ge_2 +1 y_ge_3 >= 1 ;" ]
+    ()
+
+(* The factless controls, one per disequality propagator. D-0032: without these the
+   test cannot distinguish a justification that works from a model that makes any
+   justification work.
+
+   Each emits the CLAIM ALONE -- `y <> 2`, unconditionally -- which is exactly what a
+   propagator that pruned without recording the facts it read would write. It is false
+   of the model (x is free, so y = 2 is perfectly possible), so veripb must reject it.
+   Under the old scene, where `x = 2` was pinned by `.opb` rows, both of these are
+   ACCEPTED: measured, not predicted. *)
+let build_ne_factless dir =
+  build_ne_case dir ~file:"ne_factless"
+    ~decls:[ ("x", 0, 4); ("y", 0, 4) ]
+    ~terms:[ (1, 0); (-1, 1) ]
+    ~rhs:0
+    ~pre:[ (0, 2) ]
+    ~target:1
+    ~sat:[ ("x", 2); ("y", 3) ]
+    ~expect_lines:[ "rup +1 ~y_ge_2 +1 y_ge_3 >= 1 ;" ]
+    ~corrupt:(fun _ -> Encoding.ne_clause_lits ~name:"y" ~decl_lo:0 ~decl_hi:4 2)
+    ()
+
+let build_lin_ne_factless dir =
+  build_ne_case dir ~file:"lin_ne_factless"
+    ~decls:[ ("a", 0, 4); ("b", 0, 4); ("c", 0, 4) ]
+    ~terms:[ (2, 0); (3, 1); (-1, 2) ]
+    ~rhs:5
+    ~pre:[ (0, 2); (1, 1) ]
+    ~target:2
+    ~sat:[ ("a", 2); ("b", 1); ("c", 3) ]
+    ~expect_lines:[ "rup +1 ~c_ge_2 +1 c_ge_3 >= 1 ;" ]
+    ~corrupt:(fun _ -> Encoding.ne_clause_lits ~name:"c" ~decl_lo:0 ~decl_hi:4 2)
     ()
 
 (* ---------------------------------------------- the selector Boolean, both ways
@@ -3199,6 +3232,10 @@ let () =
   run_veripb ~name:"int_ne: the conflict clause" ~build:build_ne_conflict;
   run_veripb_rejects ~name:"int_ne: a rup claiming the wrong value"
     ~build:build_ne_hole_wrong;
+  run_veripb_rejects ~name:"int_ne: a rup that claims its hole with no facts at all"
+    ~build:build_ne_factless;
+  run_veripb_rejects ~name:"int_lin_ne: a rup that claims its hole with no facts at all"
+    ~build:build_lin_ne_factless;
   test_ne_selector ();
   run_veripb ~name:"ne_sat.fzn, wired as Compile would: solved and verified"
     ~build:build_ne_sat;
