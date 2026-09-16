@@ -188,7 +188,14 @@ Several sessions share this checkout, so staging discipline matters more than us
 The toolchain is installed and working:
 
 - opam 2.5.2 at `~/.local/bin/opam`, switch `baguette` on OCaml 5.1.1
-- `veripb` 2.2.2 at `~/.local/bin/veripb`, proof format version 2.0
+- **The checker of record is VeriPB 3.0.2** (the Rust build) at `~/.cargo/bin/veripb`,
+  and the solver emits `pseudo-Boolean proof version 3.0` by default (D-0025).
+  `~/.local/bin/veripb` is the **Python VeriPB 2.2.2** this project used until then; it
+  is still on `PATH` and still used to check format-2.0 output, so *both* exist and they
+  are different programs. Never assume which one you invoked — `scripts/checker.sh` is
+  the single place that resolves it, and it documents the order. The two word their
+  rejections differently and share no substring (see M1-T46), so never match on one
+  wording alone.
 
 Put `eval "$(opam env --switch=baguette)"` in your shell before building. On a fresh
 machine, `scripts/bootstrap.sh` does the whole setup and is safe to re-run.
