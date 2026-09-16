@@ -1,0 +1,34 @@
+% array_bool_or, satisfiable, with a wrong guess so the reified decomposition's
+% clauses are exercised in BOTH directions and one of them is the conflict.
+%
+% compile.ml decomposes `array_bool_or([p, q], r)', i.e. r <-> (p \/ q), into three
+% clauses:
+%
+%   forward   (~r \/ p \/ q)      "if r then one of them"
+%   backward  (r \/ ~p)           "if p then r"
+%   backward  (r \/ ~q)           "if q then r"
+%
+% and this model makes the search use the forward clause as a CONFLICT and a backward
+% clause as a UNIT PROPAGATION, which is the pair a one-directional decomposition would
+% get wrong:
+%
+%   decide p = false  (indomain_min)
+%     -> `p \/ r' makes r true
+%     -> `p \/ ~q' makes q false
+%     -> forward clause (~r \/ p \/ q) is violated: r true, p false, q false.  CONFLICT
+%   so p = true
+%     -> backward clause (r \/ ~p) makes r true
+%     -> q is free, indomain_min settles it false
+%
+% Ground truth: `p \/ r' and `p \/ ~q' and r <-> (p \/ q). If p were false then r is
+% true and q is false, so p \/ q is false while r is true -- contradiction. So p is
+% true, hence r is true; q = false then satisfies everything. p = true and r = true are
+% both the opposite of the indomain_min default, so an ignored or one-way
+% `array_bool_or' cannot print this answer.
+var bool: p :: output_var;
+var bool: q :: output_var;
+var bool: r :: output_var;
+constraint array_bool_or([p, q], r);
+constraint bool_clause([p, r], []);
+constraint bool_clause([p], [q]);
+solve satisfy;

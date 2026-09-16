@@ -1,0 +1,32 @@
+% bool_eq, satisfiable, and the conflict that forces the answer is bool_eq's own.
+%
+% compile.ml decomposes `bool_eq(b, c)' into the two implications
+%
+%   (~b \/ c)   and   (b \/ ~c)
+%
+% The run:
+%
+%   decide a = false  (indomain_min, and a is declared first so it is decided first)
+%     -> `a \/ b' makes b true
+%     -> `a \/ ~c' makes c false
+%     -> bool_eq's (~b \/ c) is violated: b true, c false.  CONFLICT
+%   so a = true
+%     -> b is free, indomain_min settles it false
+%     -> bool_eq's (b \/ ~c) then makes c false
+%
+% The conflict is bool_eq's, not a plain clause's: under a = false the assignment
+% b = true, c = false satisfies `a \/ b' and `a \/ ~c' and bool_eq's (b \/ ~c), and
+% falsifies exactly one clause in the model -- the (~b \/ c) half of the equivalence.
+% If that half were not posted, the solver would print `a = false', so the answer is
+% evidence that BOTH directions of the equivalence reached the engine.
+%
+% Ground truth: a = false forces b = true and c = false, which bool_eq forbids; so a is
+% true, and b = c = false completes it. a = true is the opposite of the indomain_min
+% default.
+var bool: a :: output_var;
+var bool: b :: output_var;
+var bool: c :: output_var;
+constraint bool_eq(b, c);
+constraint bool_clause([a, b], []);
+constraint bool_clause([a], [c]);
+solve satisfy;

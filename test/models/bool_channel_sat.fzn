@@ -1,0 +1,33 @@
+% bool2int, satisfiable: the seam between the Boolean and the integer half, with BOTH
+% directions of the channelling load-bearing in the printed answer.
+%
+% lib/core/prop/bool2int.ml documents four pushes -- lo and hi, each way -- and warns
+% that a channelling constraint which prunes one way only is the classic silent
+% weakness. This model is built so that each direction does something the other cannot
+% do for it:
+%
+%   b -> x, on the upper bound. `p' and `q' are declared `var bool', so their domains
+%     are [0, 1] (D-0007). Channelling confines x and y to [0, 1] as well, DOWN FROM
+%     their declared 0..5. Without that push the linear row `x + y >= 2' is satisfied
+%     by x = 0, y = 2 and nothing forces either Boolean true -- the printed answer
+%     would be p = false, q = false, x = 0, y = 2.
+%
+%   x -> b, on the lower bound. With x, y <= 1 in hand the linear row makes x >= 1 and
+%     y >= 1, and it is the x -> b direction that turns those integer bounds into
+%     p = true and q = true. This is the direction whose absence a model alone has
+%     trouble seeing -- the search would recover the same answer by branching -- so it
+%     is pinned as an assertion rather than as a sentence here:
+%     test/unit/test_prop.ml's "bool2int: x -> b" checks push it directly.
+%
+% Ground truth, with no reference to the search: bool2int makes x = p and y = q, both
+% in {0, 1}; x + y >= 2 then forces x = y = 1, hence p = q = true. Unique solution.
+% Both Booleans print TRUE and both integers print 1, all four the opposite of what a
+% solver that ignored `bool2int' would print.
+var bool: p :: output_var;
+var bool: q :: output_var;
+var 0..5: x :: output_var;
+var 0..5: y :: output_var;
+constraint bool2int(p, x);
+constraint bool2int(q, y);
+constraint int_lin_le([-1, -1], [x, y], -2);
+solve satisfy;

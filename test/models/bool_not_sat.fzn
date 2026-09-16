@@ -1,0 +1,32 @@
+% bool_not, satisfiable, and the conflict that forces the answer is bool_not's own.
+%
+% compile.ml decomposes `bool_not(b, c)', i.e. c <-> ~b, into
+%
+%   (b \/ c)     "they cannot both be false"
+%   (~b \/ ~c)   "they cannot both be true"
+%
+% The run:
+%
+%   decide a = false  (indomain_min; a is declared first so it is decided first)
+%     -> `a \/ b' makes b true
+%     -> `a \/ c' makes c true
+%     -> bool_not's (~b \/ ~c) is violated: b and c both true.  CONFLICT
+%   so a = true
+%     -> b is free, indomain_min settles it false
+%     -> bool_not's (b \/ c) then makes c true
+%
+% Both halves of the decomposition are load-bearing and each is used in a different
+% role: (~b \/ ~c) is the conflict that refutes a = false, and (b \/ c) is the unit
+% propagation that fixes c afterwards. Dropping either one changes the printed answer,
+% so this model cannot pass against a half-posted `bool_not'.
+%
+% Ground truth: a = false forces b and c both true, which c <-> ~b forbids; so a is
+% true, b = false by indomain_min, and c = ~b = true. Both a and c come out TRUE, the
+% opposite of the default for each.
+var bool: a :: output_var;
+var bool: b :: output_var;
+var bool: c :: output_var;
+constraint bool_not(b, c);
+constraint bool_clause([a, b], []);
+constraint bool_clause([a, c], []);
+solve satisfy;

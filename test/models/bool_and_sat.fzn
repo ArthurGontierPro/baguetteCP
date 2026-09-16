@@ -1,0 +1,30 @@
+% array_bool_and, satisfiable, with a wrong guess so the reified decomposition's
+% clauses are exercised in both directions and one of them is the conflict.
+%
+% compile.ml decomposes `array_bool_and([p, q], r)', i.e. r <-> (p /\ q), into
+%
+%   forward   (~r \/ p)            "if r then p"
+%   forward   (~r \/ q)            "if r then q"
+%   backward  (r \/ ~p \/ ~q)      "if both then r"
+%
+% The run:
+%
+%   `q' is a unit clause, so q is true at the root.
+%   decide p = false  (indomain_min)
+%     -> `p \/ r' makes r true
+%     -> forward clause (~r \/ p) is violated: r true, p false.  CONFLICT
+%   so p = true
+%     -> backward clause (r \/ ~p \/ ~q) makes r true, both operands now being true
+%
+% Ground truth: q holds; p \/ r holds; r <-> p /\ q. If p were false, r would have to
+% be true by `p \/ r', and r true forces p true -- contradiction. So p is true, and
+% then r = p /\ q = true. Every one of p, q, r is TRUE, which is the opposite of the
+% indomain_min default for all three: a solver that dropped `array_bool_and' would
+% print `r = false', and one that dropped the backward clause would print it too.
+var bool: p :: output_var;
+var bool: q :: output_var;
+var bool: r :: output_var;
+constraint array_bool_and([p, q], r);
+constraint bool_clause([p, r], []);
+constraint bool_clause([q], []);
+solve satisfy;
