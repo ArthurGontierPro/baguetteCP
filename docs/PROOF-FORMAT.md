@@ -230,8 +230,9 @@ The `u - l - 1` consistency clauses ("the ladder") are written into the `.opb` e
 implementation choice, and the reason is not the one it looks like:
 
 - **No derivation this project emits ever cites a ladder id.** `Encoding.consistency_id`
-  has exactly one caller in `lib/`, `derive_at_most_one`, which itself has no caller
-  outside `test/`. Read from the emission side, the ladder looks like dead weight.
+  has **no** caller in `lib/` or `bin/` at all — only `test/unit/test_proof.ml` — and the
+  one place in `lib/` that reads the id table, `derive_at_most_one`, is itself called only
+  from that same test file. Read from the emission side, the ladder looks like dead weight.
 - **The checker's unit propagation needs it anyway.** Every `rup` in this project — the
   D-0018 trace lines of section 4 above, and the branch nogoods that are RUP *along*
   them — is checked by propagating from the model rows. A model row is the order
