@@ -85,9 +85,39 @@
    rejection below goes through [Error.failf] with a position, so the CLI's existing
    error path prints it like any parse error. [Model.t] carries no position for the
    solve item, so the objective and the search annotations borrow the position of a
-   variable they mention and fall back to [Pos.unknown] when they mention none. *)
+   variable they mention and fall back to [Pos.unknown] when they mention none.
+
+   ---------------------------------------------------------------------------
+   The arithmetic cap (roadmap M1-T23)
+   ---------------------------------------------------------------------------
+
+   This file is where the checked arithmetic in lib/core/prop/ stops being a runtime
+   tripwire and becomes a property of every model the CLI accepts. Two checks, on the
+   two things that multiply:
+
+     [check_declared_bound]  every declared bound satisfies |bound| <= Checked.limit
+     [check_row]             every posted row satisfies
+                               |rhs| + sum_i |a_i| * max(|lo_i|, |hi_i|) <= Checked.limit
+
+   Neither implies the other. A huge coefficient over a two-value domain overflows
+   with no large bound anywhere; and a variable that appears in no constraint at all
+   is still handed to [Domain.make] and [Encoding.declare_int], so it needs its own
+   check. lib/core/checked.ml's header derives the limit: everything the propagators
+   and the .opb expansion compute from a row of magnitude M is bounded by 9M + 6, and
+   the limit is max_int / 16.
+
+   The checks run *before* the row is posted, which is the whole point. The gap
+   M1-T23 closed was not that a propagator pruned wrongly -- it was that
+   [Encoding.linear_terms_int_lin_le] folds the constant sum_i a_i * lo_i with the
+   same wrapping arithmetic the propagator's slack uses, so the .opb row and the
+   solver agreed on a model that was not the one in the .fzn, and veripb had nothing
+   to disagree with. lib/proof/ cannot defend itself against that (a row has to be
+   written; there is no "decline" for an artefact). Refusing the model here is what
+   defends it, and refusing it *here* rather than at the first propagation is what
+   keeps [Checked.Overflow] off the search path entirely. *)
 
 module Var = Baguette_core.Var
+module Checked = Baguette_core.Checked
 module Domain = Baguette_core.Domain
 module Store = Baguette_core.Store
 module Propagator = Baguette_core.Propagator
@@ -122,14 +152,14 @@ let normalise_terms (terms : (int * int) list) : (int * int) list =
       | None ->
           Hashtbl.replace coeff i c;
           order := i :: !order
-      | Some c0 -> Hashtbl.replace coeff i (c0 + c))
+      | Some c0 -> Hashtbl.replace coeff i (Checked.add c0 c))
     terms;
   List.rev !order
   |> List.filter_map (fun i ->
          let c = Hashtbl.find coeff i in
          if c = 0 then None else Some (c, i))
 
-let negate_terms terms = List.map (fun (c, i) -> (-c, i)) terms
+let negate_terms terms = List.map (fun (c, i) -> (Checked.neg c, i)) terms
 
 (* [a - b <= offset], as a term list over model variable indices plus a right-hand
    side, with constant operands folded into the right-hand side so the term list only
@@ -140,10 +170,10 @@ let difference_terms (a : Model.operand) (b : Model.operand) ~offset =
   let terms = ref [] and rhs = ref offset in
   (match a with
   | Model.Var i -> terms := (1, i) :: !terms
-  | Model.Const n -> rhs := !rhs - n);
+  | Model.Const n -> rhs := Checked.sub !rhs n);
   (match b with
   | Model.Var j -> terms := (-1, j) :: !terms
-  | Model.Const n -> rhs := !rhs + n);
+  | Model.Const n -> rhs := Checked.add !rhs n);
   (List.rev !terms, !rhs)
 
 (* ---------------------------------------------------------------------- positions *)
@@ -197,6 +227,38 @@ let reject_search pos ~annotation =
      present). Remove the annotation, or write `int_search(..., first_fail, \
      indomain_min, complete)`."
     annotation
+
+(* roadmap M1-T23. The two arithmetic rejections. [Checked.limit] and the 9M + 6
+   envelope it is chosen against are derived in lib/core/checked.ml's header; the
+   message repeats the figure rather than the derivation because the person reading it
+   is holding a model, not the solver. *)
+
+let reject_declared_bound (v : Model.var) lo hi =
+  Error.failf v.Model.v_pos
+    "variable `%s` is declared over %d..%d, and a declared bound may not exceed +/-%d. \
+     baguette computes over OCaml's native 63-bit int, which wraps silently, and a \
+     wrapped product is not merely a wrong bound: lib/proof/encoding.ml expands the .opb \
+     row from the same arithmetic the propagator uses, so the corrupted row and the \
+     corrupted pruning agree and veripb accepts a refutation of a model you did not \
+     write. The limit leaves every intermediate the solver and the encoding compute \
+     inside the representable range. Rescale the model, or shift the domain towards \
+     zero."
+    v.Model.v_name lo hi Checked.limit
+
+let reject_row pos ~what ~magnitude =
+  Error.failf pos
+    "%s exceeds baguette's arithmetic limit: its magnitude |rhs| + sum |coeff| * \
+     max(|lo|, |hi|) over the declared domains is %s, and the limit is %d. That sum \
+     bounds every product and partial sum the propagator and the .opb expansion of this \
+     row compute, and baguette computes over OCaml's native 63-bit int, which wraps \
+     silently -- with the row and the propagator wrapping identically, so the proof \
+     would verify against an .opb that is not this model. Rescale the coefficients, or \
+     narrow the declared domains."
+    what
+    (match magnitude with
+    | Some m -> string_of_int m
+    | None -> "larger than a 63-bit int can hold")
+    Checked.limit
 
 (* [Model.search] is a list of annotations; [Seq] nests. Nothing here changes how the
    search runs -- [Search.solve] is not parameterised -- so the only useful thing to do
@@ -295,6 +357,16 @@ let compile (m : Model.t) : t =
   (* Variables, in Model.vars order, into both the store and the encoding. Read the
      module header before touching this. *)
   let bounds = Array.map bounds_of_domain m.Model.vars in
+  (* M1-T23, half one of the cap: a bound large enough to overflow when multiplied is
+     refused at its declaration, where the diagnostic can name the variable. A `var
+     bool` is (0, 1) and a set domain was already rejected above, so in practice this
+     only ever fires on a `Drange`. *)
+  Array.iteri
+    (fun i (v : Model.var) ->
+      let lo, hi = bounds.(i) in
+      if not (Checked.bound_fits lo && Checked.bound_fits hi) then
+        reject_declared_bound v lo hi)
+    m.Model.vars;
   let names = Array.map (fun (v : Model.var) -> v.Model.v_name) m.Model.vars in
   let store =
     Store.create ~names ~domains:(Array.map (fun (lo, hi) -> Domain.make lo hi) bounds)
@@ -319,8 +391,37 @@ let compile (m : Model.t) : t =
   let opb_terms pos terms = List.map (fun (c, i) -> (c, name_of pos i)) terms in
   let prop_terms terms = List.map (fun (c, i) -> (c, Var.of_int i)) terms in
 
+  (* M1-T23, half two of the cap. Called by every [post_*] below, on the *normalised*
+     term list -- the same list the row and the propagator are built from, so the
+     magnitude measured is the magnitude of what is actually posted. Merging duplicate
+     variables can only shrink it (|a + b| <= |a| + |b|), so checking after
+     normalisation is the tighter of the two places and never accepts a row the
+     unnormalised check would have refused for the row that is really emitted.
+
+     An equality posts a second row over the negated terms; its magnitude is identical
+     term by term, so one check covers both. A disequality's A/B pair is bigger than
+     its own row by the big-M coefficient, and that is exactly what the factor of 16
+     in [Checked.limit] is sized for (lib/core/checked.ml, path 4). *)
+  let term_bounds pos nterms =
+    List.map
+      (fun (c, i) ->
+        if i < 0 || i >= Model.nvars m then
+          Error.failf pos "internal: constraint mentions variable index %d, out of range"
+            i
+        else
+          let lo, hi = bounds.(i) in
+          (c, lo, hi))
+      nterms
+  in
+  let check_row pos ~what nterms rhs =
+    let tb = term_bounds pos nterms in
+    if not (Checked.row_fits tb rhs) then
+      reject_row pos ~what ~magnitude:(Checked.row_magnitude tb rhs)
+  in
+
   (* One row + one instance. [nterms] is the *same* normalised list on both sides. *)
   let post_le pos nterms rhs =
+    check_row pos ~what:"this linear inequality" nterms rhs;
     let row_id = Encoding.add_int_lin_le encoding (opb_terms pos nterms) rhs in
     [ pack_linear (Linear.make ~row_id store (prop_terms nterms) rhs) ]
   in
@@ -328,6 +429,7 @@ let compile (m : Model.t) : t =
      builds its [Linear.t] from the same negation, so each instance's terms are exactly
      the row it cites. *)
   let post_eq pos nterms rhs =
+    check_row pos ~what:"this linear equality" nterms rhs;
     let le_id = Encoding.add_int_lin_le encoding (opb_terms pos nterms) rhs in
     let ge_id =
       Encoding.add_int_lin_le encoding (opb_terms pos (negate_terms nterms)) (-rhs)
@@ -340,6 +442,7 @@ let compile (m : Model.t) : t =
      reads each variable's *declared* domain out of the store (D-0010) and must run
      before anything narrows it; only the packing is deferred. *)
   let post_ne pos nterms rhs ~pack =
+    check_row pos ~what:"this disequality" nterms rhs;
     ignore (Encoding.add_int_lin_ne encoding (opb_terms pos nterms) rhs : int * int);
     [ pack (Ne.make store (prop_terms nterms) rhs) ]
   in
@@ -381,23 +484,37 @@ let compile (m : Model.t) : t =
     List.concat_map
       (fun (c : Model.constr) ->
         let pos = c.Model.c_pos in
-        match c.Model.k with
-        | Model.Int_lin_le (terms, rhs) -> post_le pos (normalise_terms terms) rhs
-        | Model.Int_lin_eq (terms, rhs) -> post_eq pos (normalise_terms terms) rhs
-        | Model.Int_lin_ne (terms, rhs) ->
-            post_ne pos (normalise_terms terms) rhs ~pack:pack_lin_ne
-        | Model.Int_le (a, b) ->
-            let terms, rhs = difference_terms a b ~offset:0 in
-            post_le pos (normalise_terms terms) rhs
-        | Model.Int_lt (a, b) ->
-            let terms, rhs = difference_terms a b ~offset:(-1) in
-            post_le pos (normalise_terms terms) rhs
-        | Model.Int_eq (a, b) ->
-            let terms, rhs = difference_terms a b ~offset:0 in
-            post_eq pos (normalise_terms terms) rhs
-        | Model.Int_ne (a, b) ->
-            let terms, rhs = difference_terms a b ~offset:0 in
-            post_ne pos (normalise_terms terms) rhs ~pack:pack_ne)
+        (* [check_row] is the diagnostic path and covers every row this arm posts, but
+           the arithmetic that happens *before* a row exists -- merging duplicate
+           coefficients, folding a constant operand into the right-hand side, negating
+           an equality's terms -- is checked too (M1-T23) and can raise first, on
+           inputs so large that no magnitude can be reported. Converting that to the
+           same positioned [Error.failf] is what stops an overflowing model from
+           leaving the CLI with an escaping exception instead of a diagnostic. *)
+        try
+          match c.Model.k with
+          | Model.Int_lin_le (terms, rhs) -> post_le pos (normalise_terms terms) rhs
+          | Model.Int_lin_eq (terms, rhs) -> post_eq pos (normalise_terms terms) rhs
+          | Model.Int_lin_ne (terms, rhs) ->
+              post_ne pos (normalise_terms terms) rhs ~pack:pack_lin_ne
+          | Model.Int_le (a, b) ->
+              let terms, rhs = difference_terms a b ~offset:0 in
+              post_le pos (normalise_terms terms) rhs
+          | Model.Int_lt (a, b) ->
+              let terms, rhs = difference_terms a b ~offset:(-1) in
+              post_le pos (normalise_terms terms) rhs
+          | Model.Int_eq (a, b) ->
+              let terms, rhs = difference_terms a b ~offset:0 in
+              post_eq pos (normalise_terms terms) rhs
+          | Model.Int_ne (a, b) ->
+              let terms, rhs = difference_terms a b ~offset:0 in
+              post_ne pos (normalise_terms terms) rhs ~pack:pack_ne
+        with Checked.Overflow msg ->
+          reject_row pos
+            ~what:
+              (Printf.sprintf
+                 "this constraint (its coefficients alone already overflow: %s)" msg)
+            ~magnitude:None)
       m.Model.constraints
   in
   let engine = Engine.create (List.mapi (fun id pending -> pending id) instances) in
