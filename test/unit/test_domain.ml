@@ -97,7 +97,9 @@ let args = List.init 14 (fun i -> i - 4)
 let all_domains () =
   let acc = ref [] in
   for mask = 1 to (1 lsl (universe_hi + 1)) - 1 do
-    let vs = List.filter (fun v -> mask land (1 lsl v) <> 0) (List.init (universe_hi + 1) Fun.id) in
+    let vs =
+      List.filter (fun v -> mask land (1 lsl v) <> 0) (List.init (universe_hi + 1) Fun.id)
+    in
     acc := Domain.of_list vs :: !acc
   done;
   !acc

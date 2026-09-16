@@ -208,6 +208,235 @@ let test_wake_order_is_unchanged () =
   check "wake order: this instance can see a reversed walk" (got_all <> List.rev got_all)
 
 (* ===================================================================== *)
+(* 1c. M2-T5: trigger masking, and the I-P2 re-run check that is the      *)
+(*     only instrument able to tell a safe mask from an unsafe one.       *)
+(*                                                                       *)
+(* The hazard, stated once: an over-aggressive mask starves a propagator  *)
+(* of a wake it needed. Nothing raises. The proof still verifies, because *)
+(* every line that WAS written was derived correctly -- the missing       *)
+(* pruning simply has no line. The search just prunes less, and in the    *)
+(* worst case prints an assignment violating a constraint nobody woke to  *)
+(* check. So "the 29 models still pass" is not evidence about the mask;   *)
+(* it is evidence that those 29 models do not depend on the wakes it      *)
+(* removes. (They do not. Measured: across the whole model suite the mask *)
+(* drops ZERO wakes, because no model ever punches an interior hole.)     *)
+(*                                                                       *)
+(* What IS evidence is I-P2: at a real fixpoint no propagator has         *)
+(* anything left to say, so a starved propagator shows up as one that     *)
+(* still prunes when re-run. The scenes below are built so that the       *)
+(* engine's mask is wrong on purpose in one of them, and assert that      *)
+(* [Engine.check_fixpoint] catches exactly that -- with the matching      *)
+(* correctly-masked scene next to it, so a check that raised on           *)
+(* everything would not pass either.                                     *)
+(* ===================================================================== *)
+
+(* Two test-local propagators. They are here rather than taken from lib/core/prop/
+   because the tree has no hole-sensitive propagator yet: [linear] and [bool2int] read
+   only [Domain.lo]/[Domain.hi], [bool_clause] lives on 0/1 variables where interior
+   holes cannot exist, and [ne] prunes off fixedness. That absence is precisely why the
+   model suite cannot exercise this mask, and precisely why the scene has to be built
+   here. [Eq_dom] is a fair stand-in: domain-consistent equality is an ordinary
+   propagator and reads exactly what [all_different] and [element] will read in M4.
+
+   Both use [Store.remove] with [Explanation.trivial] and no facts. That is fine only
+   because nothing here writes a proof (see I-P5: a bound-moving prune through a
+   factless mutator would write a trace line with an empty reason). No [Engine] test
+   below emits proof rules from these two. *)
+
+module Punch = struct
+  type t = { px : Var.t; pv : int }
+
+  let name = "punch"
+
+  (* [Value]: it names the value it removes and claims nothing about the rest. Keeps
+     [wake_on_any], which is what we want -- the mask under test is the OTHER one's. *)
+  let consistency = Propagator.Value
+  let vars p = [ p.px ]
+
+  let propagate p store =
+    match Store.remove store p.px p.pv Explanation.trivial with
+    | Store.Conflict e -> Propagator.Conflict e
+    | Store.Changed | Store.Unchanged -> Propagator.Fixpoint
+end
+
+module Eq_dom = struct
+  type t = { ex : Var.t; ey : Var.t }
+
+  let name = "eq_dom"
+
+  (* Domain consistent, and genuinely hole-reading: it consults [Domain.mem] on one
+     variable for every value of the other. A hole punched in the middle of [ex] must
+     be mirrored into [ey], which is a pruning no bounds reasoning can find. *)
+  let consistency = Propagator.Domain
+  let vars p = [ p.ex; p.ey ]
+
+  (* Remove from [b] every value absent from [a]. The list is materialised before the
+     removals so the iteration is not walking a domain being mutated under it. *)
+  let mirror store a b =
+    let da = Store.get store a in
+    let gone =
+      List.filter (fun v -> not (Domain.mem da v)) (Domain.to_list (Store.get store b))
+    in
+    List.fold_left
+      (fun acc v ->
+        match acc with
+        | Propagator.Conflict _ -> acc
+        | Propagator.Fixpoint -> (
+            match Store.remove store b v Explanation.trivial with
+            | Store.Conflict e -> Propagator.Conflict e
+            | Store.Changed | Store.Unchanged -> Propagator.Fixpoint))
+      Propagator.Fixpoint gone
+
+  let propagate p store =
+    match mirror store p.ex p.ey with
+    | Propagator.Conflict e -> Propagator.Conflict e
+    | Propagator.Fixpoint -> mirror store p.ey p.ex
+end
+
+let pack_punch id p =
+  Propagator.pack ~id (module Punch : Propagator.S with type t = Punch.t) p
+
+let pack_eq_dom id p =
+  Propagator.pack ~id (module Eq_dom : Propagator.S with type t = Eq_dom.t) p
+
+(* x, y in 0..4 with x = y (domain consistent), and a propagator that removes the value
+   2 from x -- an INTERIOR removal, so a [Domain.Holes] change that moves no bound.
+   [Eq_dom] is instance 0 so that it runs before [Punch] on the seeding pass and can
+   only learn about the hole by being woken by it. Domains are five values wide: this
+   machine is shared and no test here needs a wide domain. *)
+let hole_scene ?trigger () =
+  let store = mk_store [ ("x", 0, 4); ("y", 0, 4) ] in
+  let insts =
+    [
+      pack_eq_dom 0 { Eq_dom.ex = var 0; ey = var 1 };
+      pack_punch 1 { Punch.px = var 0; pv = 2 };
+    ]
+  in
+  (store, Engine.create ?trigger insts)
+
+let raises_not_at_fixpoint engine store =
+  match Engine.check_fixpoint engine store with
+  | () -> None
+  | exception Engine.Not_at_fixpoint msg -> Some msg
+
+let contains msg sub =
+  let n = String.length sub and h = String.length msg in
+  let rec go i = i + n <= h && (String.sub msg i n = sub || go (i + 1)) in
+  go 0
+
+(* (a) The mask set correctly: [Eq_dom] declares [Domain] consistency, so the default
+   derivation gives it [wake_on_any], it is woken by the hole, and the fixpoint is a
+   real one. *)
+let test_hole_wake_delivered () =
+  let store, engine = hole_scene () in
+  Engine.reset_stats ();
+  (match Engine.propagate engine store with
+  | Engine.Conflict _ ->
+      incr failures;
+      Printf.printf "FAIL hole wake: unexpected conflict\n"
+  | Engine.Fixpoint -> ());
+  let _, _, masked = Engine.stats () in
+  check "hole wake: a Domain-consistency propagator IS woken by an interior hole"
+    (not (Domain.mem (Store.get store (var 1)) 2));
+  check "hole wake: nothing was masked in this scene" (masked = 0);
+  check "hole wake: the fixpoint survives the I-P2 re-run check"
+    (raises_not_at_fixpoint engine store = None)
+
+(* (b) The same scene with the mask deliberately wrong: [Eq_dom] is forced to
+   bounds-only, which starves it of the one wake it needs.
+
+   This is the break the task asks be made on purpose and watched go red. Note what
+   does NOT happen: no exception, no conflict, no wrong-looking domain unless you know
+   to look at y. [Engine.propagate] cheerfully reports a fixpoint. The only thing that
+   notices is the I-P2 re-run. *)
+let test_hole_wake_starved_is_caught () =
+  let store, engine = hole_scene ~trigger:(fun _ -> Engine.wake_on_bounds) () in
+  Engine.reset_stats ();
+  (match Engine.propagate engine store with
+  | Engine.Conflict _ ->
+      incr failures;
+      Printf.printf "FAIL starved: unexpected conflict\n"
+  | Engine.Fixpoint -> ());
+  let _, _, masked = Engine.stats () in
+  check "starved: the mask really did drop a wake" (masked > 0);
+  (* The symptom, and the reason a green model suite proves nothing here: the solver
+     lost a pruning and said "fixpoint" anyway. *)
+  check "starved: propagate reports a fixpoint at which y has NOT lost the value"
+    (Domain.mem (Store.get store (var 1)) 2);
+  match raises_not_at_fixpoint engine store with
+  | None ->
+      incr failures;
+      Printf.printf
+        "FAIL starved: the I-P2 re-run check did NOT catch a starved propagator. That \
+         check is this round's only instrument for an unsound wake mask; if it cannot \
+         see this, it cannot see anything.\n"
+  | Some msg ->
+      check "starved: the I-P2 re-run check catches it" true;
+      (* Printed on a PASS, deliberately: this is what the instrument says when it
+         fires, and the next person to see it will be seeing it for real. *)
+      Printf.printf "     (what it says: %s)\n"
+        (String.concat " " (String.split_on_char '\n' msg));
+      check "starved: the message names the propagator that still had work"
+        (contains msg "eq_dom" && contains msg "I-P2")
+
+(* (c) The mask firing on a REAL propagator, and being safe when it does. [Linear]
+   declares [Bounds] and reads only [Domain.lo]/[Domain.hi], so dropping its wake for
+   an interior hole must cost nothing -- and the I-P2 re-run is what says "must cost
+   nothing" out loud rather than in a comment. *)
+let test_bounds_propagator_masked_safely () =
+  let store = mk_store [ ("x", 0, 4); ("y", 0, 4) ] in
+  let lin = Linear.make store [ (1, var 0); (1, var 1) ] 8 in
+  let engine =
+    Engine.create [ pack_linear 0 lin; pack_punch 1 { Punch.px = var 0; pv = 2 } ]
+  in
+  Engine.reset_stats ();
+  (match Engine.propagate engine store with
+  | Engine.Conflict _ ->
+      incr failures;
+      Printf.printf "FAIL masked-safely: unexpected conflict\n"
+  | Engine.Fixpoint -> ());
+  let _, _, masked = Engine.stats () in
+  check "masked-safely: a Bounds propagator's wake for an interior hole is dropped"
+    (masked > 0);
+  check "masked-safely: and dropping it leaves a genuine fixpoint (I-P2)"
+    (raises_not_at_fixpoint engine store = None);
+  check "masked-safely: the hole itself was still punched"
+    (not (Domain.mem (Store.get store (var 0)) 2))
+
+(* The derivation itself, spelled out, so that a later edit to
+   [trigger_of_consistency] that quietly masks [Domain] or [Value] propagators has to
+   change a test that says why that would be wrong. *)
+let test_trigger_derivation () =
+  let t = Engine.trigger_of_consistency in
+  check "trigger: Bounds consistency wakes on bound moves only"
+    (t Propagator.Bounds = Engine.wake_on_bounds);
+  check "trigger: Domain consistency wakes on everything"
+    (t Propagator.Domain = Engine.wake_on_any);
+  check "trigger: Value consistency wakes on everything -- int_ne reads Domain.mem"
+    (t Propagator.Value = Engine.wake_on_any);
+  check "trigger: Checking consistency wakes on everything"
+    (t Propagator.Checking = Engine.wake_on_any);
+  check "trigger: a bounds-only mask does not drop bound moves"
+    (Engine.wakes_on Engine.wake_on_bounds (Domain.Bound { lo = Some 3; hi = None }));
+  check "trigger: a bounds-only mask drops interior holes"
+    (not (Engine.wakes_on Engine.wake_on_bounds (Domain.Holes [ 2 ])));
+  check "trigger: nobody is woken by NoChange"
+    (not (Engine.wakes_on Engine.wake_on_any Domain.NoChange))
+
+(* The I-P2 re-run check applied to the plain linear scenes of test 1: it must be quiet
+   on a fixpoint that really is one. Without this, "the check catches the starved
+   scene" would be consistent with a check that raises on everything. *)
+let test_check_fixpoint_is_quiet_on_real_fixpoints () =
+  let store = mk_store [ ("x1", 0, 5); ("x2", 3, 5) ] in
+  let lin = Linear.make store [ (1, var 0); (1, var 1) ] 3 in
+  let engine = Engine.create [ pack_linear 0 lin ] in
+  (match Engine.propagate engine store with
+  | Engine.Conflict _ -> ()
+  | Engine.Fixpoint -> ());
+  check "I-P2 check: quiet on a linear fixpoint"
+    (raises_not_at_fixpoint engine store = None)
+
+(* ===================================================================== *)
 (* Shared model builders for the search tests (2, 3, 4).                 *)
 (*                                                                       *)
 (* SAT model: x1, x2, x3 in [0,1], x1 = x2, x1+x2+x3 = 2. First-fail ties *)
@@ -466,6 +695,11 @@ let () =
   test_conflict_carries_explanation ();
   test_independent_constraints_reach_fixpoint ();
   test_wake_order_is_unchanged ();
+  test_trigger_derivation ();
+  test_hole_wake_delivered ();
+  test_hole_wake_starved_is_caught ();
+  test_bounds_propagator_masked_safely ();
+  test_check_fixpoint_is_quiet_on_real_fixpoints ();
   test_search_finds_and_verifies_a_solution ();
   test_search_exhausts_and_reports_unsat ();
   test_audit_empty_at_conclusion ();
