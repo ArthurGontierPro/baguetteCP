@@ -16,7 +16,6 @@ git worktree each (`.claude/worktrees/<tag>`), so no two share `_build`'s global
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M1-T31 + M1-T50 (one task, as M1-T44 argued) | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/prop/linear.ml`, `lib/core/prop/int_le.ml`, `int_lt.ml`, `int_eq.ml`, `lin_eq.ml`, `bool2int.ml`, `lib/core/search.ml`, `test/unit/test_core.ml`, `test/unit/test_matrix.ml` | agent-ambient | 2026-09-16 |
-| M1-T47 | `lib/proof/writer.ml`, `bench/run_bench.sh`, `bench/README.md` | agent-emit | 2026-09-16 |
 
 Two rounds are recorded in `## Completed` below. The rows that stood here on
 2026-09-15 (`integration`, M1-T12, M1-T13) were stale — see the handoff note "the
@@ -119,6 +118,7 @@ work. The owning session picks it up.
 | M2-T5 | agent-granularity | 2026-09-16 | `Domain.change` + engine trigger masking + the `BAGUETTE_DEBUG` I-P2 re-run check. **An unsound mask passes all 29 models** — orchestrator reproduced. `masked = 0` on every model. D-0034 |
 | M1-T44 | agent-rootfix | 2026-09-16 | **The rejected root proof is fixed**, and the rival diagnosis refuted rather than argued down. Orchestrator verified both directions on the original reproducer. D-0035, I-X9, new model `root_hole_unsat.fzn` |
 | M1-T32, M1-T38, M1-T39, M1-T41 | agent-proofhyg | 2026-09-16 | The committing door guarded (I-X8, D-0036), `triple_unsat` certified two ways, `pol_raw` deleted, `consistency_id` asserts the transition. **Caused and then diagnosed the second OOM**; the cause is now linted in the gate |
+| M1-T47 | agent-emit | 2026-09-16 | Emission split out of `search`. **Corrected the premise the task was written on**: three funnels plus a flush, and `always_comment` carries every level marker under the default format. Emission is 7.7%/2.3% of search on the two heavy models. 90/90 artefact hashes identical |
 
 ## Handoff notes
 
@@ -696,3 +696,38 @@ number matters less than the habit. This round produced at least four more — t
 self-check that exited 0 on the worst possible failure, two checks in the proof layer that
 could not see their own subject fail, and both drafts of my lint. **Every one was found by
 performing the break, and none by reading the code.** That is the habit to carry forward.
+
+### M1-T47 released (orchestrator, 2026-09-16)
+
+I wrote this task's brief around "one accumulator at `writer.ml:402`, the single funnel
+every rule goes through". **That premise was wrong, and the agent measured it rather than
+following it.** Three writes bypass `line`, and the one that matters is `always_comment`:
+under format 3.0 — the default since D-0025 — every level marker in every proof goes
+through it. Taking the brief at face value under-counts emission by **46%** on
+`width_sat_depth`, with no symptom at all; the column would simply have been wrong by
+about half on the one model it matters on.
+
+A second trap is worth carrying: a timer wrapped around `line`'s *body* does not measure
+the write, because `Printf.fprintf` returns a closure that consumes the format's remaining
+arguments after `line` has already returned. It does not read zero — it reads **18% low**,
+which is far more dangerous than zero, because a plausible number invites no scrutiny.
+Driven to 200 kB lines the same two wrappers report 283 µs against 25,128 µs.
+
+**The answer is less dramatic than M1-T28 implied, and that is the useful part.** Emission
+inside `search` is 7.7% of `width_sat_depth` and 2.3% of `width_root_unsat`. The proof is
+still the expensive half of this solver — 39% of `inmain` on the heavy model — but M1-T35
+had already separated nine tenths of it into the `.opb` phase. What was fused was small.
+
+Two things about how the numbers are published set a standard worth keeping. `emit` is a
+**lower** bound and `propag` an **upper** bound, because rendering (`Pol.to_string_cited`,
+`Opb.constr_to_string`) happens at the call site before the writer is entered — so the
+fusion is not gone, it moved, and the labels say so. And the instrument's own cost is a
+**column**, not a correction folded silently into the numbers: `Sys.time` costs 0.65–0.77 µs
+per read, about as much as its own granularity, so on `width_sat_depth` 350 µs of the 805 µs
+`emit` is the clock. Publishing that raw would have been wrong by 1.8× with nothing in the
+number to say so. Calibration is min-of-nine bursts, because a single burst ranged 836–1871 ns
+across five runs and would have swung the published correction by 2×.
+
+`bin/main.ml` was unowned this round and the agent changed it, keeping it in one commit so
+it could be routed or reverted whole. Reviewed and kept: the four new rows are deliberately
+outside `phases`, so `inmain` still equals the sum of the phases exactly.
