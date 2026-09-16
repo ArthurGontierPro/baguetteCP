@@ -1,4 +1,4 @@
-.PHONY: build test unit models check fmt clean proof bootstrap
+.PHONY: build test unit models check fmt clean proof bootstrap bench
 
 build:
 	dune build
@@ -32,3 +32,12 @@ bootstrap:
 clean:
 	dune clean
 	rm -rf test/out
+
+# Measurement, deliberately NOT a dependency of `check`: a benchmark that gates a
+# commit becomes a flaky test. M3-T5. Pass arguments through, e.g.
+#   make bench ARGS="-F 2.0"
+# Read bench/README.md first -- in particular, on the current models fifteen of the
+# eighteen rows are at the process floor, so their timing columns measure exec and
+# not this solver.
+bench: build
+	./bench/run_bench.sh $(ARGS)

@@ -15,7 +15,6 @@ git worktree each (`.claude/worktrees/<tag>`), so no two share `_build`'s global
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M3-T5, M1-T30 | `bench/**` (new directory, including its own new `bench/dune`), new `test/models/width_*.fzn` + `test/expected/width_*.out` | agent-bench | 2026-09-16 |
 | M1-T26 | `scripts/mutate_proof.sh`, `test/unit/test_mutation.ml`, `lib/proof/writer.ml` | agent-mutate2 | 2026-09-16 |
 | M2-T11 | `lib/core/search.ml`, `test/unit/test_random.ml` | agent-fuzz | 2026-09-16 |
 | M2-T1, M2-T2 | new `lib/core/prop/bool_*.ml`, `lib/flatzinc/compile.ml`, `lib/flatzinc/model.ml`, `test/unit/test_compile.ml`, `test/unit/test_prop.ml`, new `test/models/bool_*.fzn` + expected | agent-bool | 2026-09-16 |
@@ -96,6 +95,8 @@ work. The owning session picks it up.
 | M2-T0 | agent-decisions | 2026-09-16 | **D-0027**: D-0011 is a rule about *naming* rows, not counting them. Multi-row derivations are permitted, so **M4-T1 is unblocked**; the decomposition default stands and `int_lin_eq` is not re-fused |
 | M1-T27 | agent-decisions | 2026-09-16 | **D-0028**: width-proportional justifications are accepted and not weakened; no cap today. Measured, not predicted — a model with **zero prunings** emits a 29.8 MB proof line. Corrected its own roadmap row, which named a function with no caller in `lib/` |
 | M1-T23 | agent-overflow + orchestrator | 2026-09-16 | **The soundness gap is closed.** D-0029 + a normative SPEC 2.1 paragraph. Orchestrator reproduced the gap independently before merging: a model whose true answer is SAT printed UNSAT and veripb returned `s VERIFIED UNSATISFIABLE`, because the `.opb` row was folded from the same wrapping arithmetic as the propagator. `Checked` raises rather than declines — declining is unsound once the row is already written. Cap `max_int/16`, derived and asserted. 1005 unit checks, 17/17 models |
+| M3-T5, M3-T3 | agent-bench + orchestrator | 2026-09-16 | The proof benchmark: four separate columns, no total, minimums one at a time, spreads printed, and deltas inside the spread labelled `noise`. **It measured the process floor first, and that reframes the suite**: 15 of 18 models are timings of `exec`. Refuses models above w=10^5 or an estimated 2 GB peak (~1.5 kB RSS per unit of width, measured). `make bench` added by the orchestrator |
+| M1-T30 | agent-bench + orchestrator | 2026-09-16 | Three `width_` models. Orchestrator confirmed `width_root_unsat`: 6 proof lines, longest 23,779 B = **99.5% of the proof**, zero prunings. The gate can finally see width. +0.20 s on the model suite, stated plainly |
 
 ## Handoff notes
 
