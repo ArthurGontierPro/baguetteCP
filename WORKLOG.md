@@ -10,10 +10,11 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
-**Nothing is claimed. No session is running.**
+**One session is running.**
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| D-0003 resolution + roadmap update from the GCS comparison | `docs/DECISIONS.md` (append D-0026, and D-0003's status line), `docs/ROADMAP.md`, `WORKLOG.md` | agent-gcs-diff | 2026-09-16 |
 
 Two rounds are recorded in `## Completed` below. The rows that stood here on
 2026-09-15 (`integration`, M1-T12, M1-T13) were stale — see the handoff note "the
