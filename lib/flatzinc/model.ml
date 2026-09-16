@@ -193,13 +193,168 @@ let to_string t =
      bug into a plausible-looking solution, which is the one thing I-S1 exists to stop.
      lib/flatzinc/output.ml's [bool_string] refuses the same value for the same reason.
    - It shares no arithmetic with the Boolean propagators, because there is none to
-     share: nothing in the M2 row multiplies, so M1-T33's complaint about this oracle
-     (D-0029's consequence list: it wraps the way its subject wraps, so it is not
-     independent where overflow is concerned) does not reach the Boolean constraints.
-     It still stands, unchanged, for the four integer linear kinds.
+     share: nothing in the M2 row multiplies.
+   - **M1-T33: the linear sum is evaluated exactly, in arbitrary precision.** It used
+     to be `List.fold_left (fun acc (c, i) -> acc + (c * values.(i))) 0`, i.e. the same
+     wrapping `+` and `*` as [lib/core/prop/linear.ml] and [lib/proof/encoding.ml]. On
+     D-0029's overflow class that oracle agreed with the bug -- and it agreed with it
+     *because* the two computed the same wrong product, which is the one failure mode
+     an independent check must not have. M1-T23's compile-time cap means the native
+     version cannot overflow on any model the front end accepts today, so this was not
+     a live defect; it was the oracle's value that was wrong. An independent check that
+     shares a failure mode with its subject is not independent, and I-S1's whole worth
+     is that independence.
+
+     [Exact] below is written here rather than taken from [Baguette_core.Checked] on
+     purpose. [Checked] is what the propagators and the .opb expansion use; sharing it
+     would put the oracle back inside its subject's arithmetic, just at a different
+     level. It is also a different answer to a different question: [Checked] *detects*
+     overflow and raises, so it can only ever say "I cannot evaluate this"; [Exact]
+     has no overflow to detect and simply returns the right number, which is what an
+     oracle asked "does this assignment satisfy the model" has to be able to do.
+
+     What it is now independent of: OCaml's native integer width. No sum, product or
+     comparison below can wrap, so no wrapped product in a propagator or in an .opb row
+     can be confirmed by this function.
+
+     What it still shares, stated because the residue matters more than the claim:
+       * **The model.** It re-reads the same [Model.t] the compiler read. A coefficient
+         the *builder* got wrong, or a term list it folded wrongly, is re-checked as
+         written and agreed with. Exactness begins at this function's own arithmetic,
+         not at the front end's.
+       * **The indexing.** It is handed [values] indexed the same way the printer
+         indexes it, so a permutation of variables is invisible to it -- the reason
+         test/unit/test_compile.ml asserts [Var.of_int i = Model.var m i] directly.
+       * **The answer's existence.** On `=====UNSATISFIABLE=====` there is no
+         assignment for it to check at all (D-0029). I-S1 guards SAT answers only;
+         UNSAT is guarded by the proof, not by this.
    - It checks the *declared* domains too, not only the constraints. A solution that
      assigns 7 to a `var 1..3` violates the model just as surely as one that breaks a
      linear constraint, and a bug in the store is more likely to produce the former. *)
+
+(* Exact integer arithmetic, sign and magnitude, base 2^30 little-endian.
+
+   Deliberately small and deliberately local: it exists to evaluate `sum a_i v_i` and
+   compare it with a right-hand side, and it does nothing else. Base 2^30 is chosen so
+   that the inner product of [mul] -- one limb times one limb, plus an accumulator limb,
+   plus a carry -- stays below 2^62 and therefore cannot itself wrap on OCaml's 63-bit
+   [int]; that bound is asserted as a test rather than left as a comment.
+
+   [of_int] never negates its argument, because [min_int] has no negation: it takes the
+   sign first and builds the magnitude with [abs (n mod base)], whose operand is strictly
+   between -base and 0 and so always has one. That is the same trap D-0029 records
+   [Checked.ceildiv] falling into from the other side. *)
+module Exact = struct
+  let bits = 30
+  let base = 1 lsl bits
+  let mask = base - 1
+
+  (* [mag] is little-endian with no leading zero limb; [sign] is -1, 0 or 1, and is 0
+     exactly when [mag] is empty. *)
+  type t = { sign : int; mag : int array }
+
+  let zero = { sign = 0; mag = [||] }
+
+  let normalise sign mag =
+    let n = ref (Array.length mag) in
+    while !n > 0 && mag.(!n - 1) = 0 do
+      decr n
+    done;
+    if !n = 0 then zero else { sign; mag = Array.sub mag 0 !n }
+
+  let of_int n =
+    if n = 0 then zero
+    else
+      let sign = if n < 0 then -1 else 1 in
+      let limbs = ref [] in
+      let k = ref n in
+      while !k <> 0 do
+        limbs := abs (!k mod base) :: !limbs;
+        k := !k / base
+      done;
+      normalise sign (Array.of_list (List.rev !limbs))
+
+  let cmp_mag a b =
+    let la = Array.length a and lb = Array.length b in
+    if la <> lb then Stdlib.compare la lb
+    else
+      let rec go i =
+        if i < 0 then 0
+        else if a.(i) <> b.(i) then Stdlib.compare a.(i) b.(i)
+        else go (i - 1)
+      in
+      go (la - 1)
+
+  let add_mag a b =
+    let la = Array.length a and lb = Array.length b in
+    let n = Stdlib.max la lb + 1 in
+    let r = Array.make n 0 in
+    let carry = ref 0 in
+    for i = 0 to n - 1 do
+      let s = (if i < la then a.(i) else 0) + (if i < lb then b.(i) else 0) + !carry in
+      r.(i) <- s land mask;
+      carry := s lsr bits
+    done;
+    r
+
+  (* Requires |a| >= |b|, which every caller establishes with [cmp_mag] first. *)
+  let sub_mag a b =
+    let la = Array.length a and lb = Array.length b in
+    let r = Array.make la 0 in
+    let borrow = ref 0 in
+    for i = 0 to la - 1 do
+      let s = a.(i) - (if i < lb then b.(i) else 0) - !borrow in
+      if s < 0 then (
+        r.(i) <- s + base;
+        borrow := 1)
+      else (
+        r.(i) <- s;
+        borrow := 0)
+    done;
+    r
+
+  let add x y =
+    if x.sign = 0 then y
+    else if y.sign = 0 then x
+    else if x.sign = y.sign then normalise x.sign (add_mag x.mag y.mag)
+    else
+      let c = cmp_mag x.mag y.mag in
+      if c = 0 then zero
+      else if c > 0 then normalise x.sign (sub_mag x.mag y.mag)
+      else normalise y.sign (sub_mag y.mag x.mag)
+
+  let mul x y =
+    if x.sign = 0 || y.sign = 0 then zero
+    else
+      let la = Array.length x.mag and lb = Array.length y.mag in
+      let r = Array.make (la + lb) 0 in
+      for i = 0 to la - 1 do
+        let carry = ref 0 in
+        for j = 0 to lb - 1 do
+          let cur = r.(i + j) + (x.mag.(i) * y.mag.(j)) + !carry in
+          r.(i + j) <- cur land mask;
+          carry := cur lsr bits
+        done;
+        let k = ref (i + lb) in
+        while !carry <> 0 do
+          let cur = r.(!k) + !carry in
+          r.(!k) <- cur land mask;
+          carry := cur lsr bits;
+          incr k
+        done
+      done;
+      normalise (x.sign * y.sign) r
+
+  let compare x y =
+    if x.sign <> y.sign then Stdlib.compare x.sign y.sign
+    else if x.sign >= 0 then cmp_mag x.mag y.mag
+    else cmp_mag y.mag x.mag
+
+  (* The worst intermediate [mul] can produce, as a plain [int]. Exposed so that the
+     "cannot itself wrap" claim in this module's header is a checked assertion in
+     test/unit/test_compile.ml and not a comment nobody re-derives. *)
+  let widest_mul_intermediate = mask + (mask * mask) + mask
+end
 
 let in_domain dom v =
   match dom with
@@ -214,7 +369,14 @@ let check_assignment (t : t) (values : int array) : bool =
       (Printf.sprintf "Model.check_assignment: expected %d values, got %d" n
          (Array.length values));
   let value = function Const c -> c | Var i -> values.(i) in
-  let sum terms = List.fold_left (fun acc (c, i) -> acc + (c * values.(i))) 0 terms in
+  (* M1-T33: exact, so the oracle cannot confirm a wrapped product. See the header. *)
+  let sum terms =
+    List.fold_left
+      (fun acc (c, i) ->
+        Exact.add acc (Exact.mul (Exact.of_int c) (Exact.of_int values.(i))))
+      Exact.zero terms
+  in
+  let sum_cmp terms rhs = Exact.compare (sum terms) (Exact.of_int rhs) in
   (* A Boolean operand, read as a Boolean. See the header on why a third value is an
      error and not a falsehood. *)
   let truth op =
@@ -228,9 +390,9 @@ let check_assignment (t : t) (values : int array) : bool =
   in
   let holds (c : constr) =
     match c.k with
-    | Int_lin_le (ts, rhs) -> sum ts <= rhs
-    | Int_lin_eq (ts, rhs) -> sum ts = rhs
-    | Int_lin_ne (ts, rhs) -> sum ts <> rhs
+    | Int_lin_le (ts, rhs) -> sum_cmp ts rhs <= 0
+    | Int_lin_eq (ts, rhs) -> sum_cmp ts rhs = 0
+    | Int_lin_ne (ts, rhs) -> sum_cmp ts rhs <> 0
     | Int_le (a, b) -> value a <= value b
     | Int_lt (a, b) -> value a < value b
     | Int_eq (a, b) -> value a = value b
