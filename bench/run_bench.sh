@@ -247,12 +247,31 @@ mkdir -p "${SCDIR}"
 #      things. A failure here is FATAL: it means the solver is contaminating stdout,
 #      and no number should be taken from a binary doing that.
 #
+#   3. THE EMISSION ACCUMULATOR ACTUALLY COUNTS (M1-T47). `emit` and `propag` split
+#      `search` into proof emission and the rest, and the split is only as good as the
+#      accumulator behind it. An accumulator that had been disconnected -- a gate left
+#      shut, a funnel added to Writer that nobody instrumented -- would report `emit 0`
+#      and `propag = search` on every row, which is not a visible failure: it is the
+#      pre-M1-T47 table with two more columns and a false air of authority. So the
+#      harness runs an EMISSION-HEAVY model, one whose .pbp is hundreds of lines, and
+#      requires the column to move on it: emitln > 0, emit > 0, emit <= search.
+#      A failure here is FATAL, for the same reason check 2 is: the column would be
+#      worse than no column.
+#
+#      If that model is not among the ones being measured and cannot be found, the
+#      check is SKIPPED WITH A NOTICE that says the split has not been exercised. A
+#      zero column on four small models is not evidence of anything either way, and
+#      saying so is the point.
+#
 # A binary that does not know --time at all is not a failure: it is an older build,
 # the internal table is skipped with a notice, and the wall-clock table is unaffected.
-# That is the "where they are available" half of M1-T35.
+# That is the "where they are available" half of M1-T35. Likewise a binary that knows
+# --time but not `emit`: it predates M1-T47, the emission columns are blanked with a
+# notice, and `search` is reported fused exactly as it was.
 
 SELFCHECK_OPB_PATH_DEP=0 # set when check 1 fails
 HAVE_TIME_FLAG=0         # set when the solver understands --time
+HAVE_EMIT_ROWS=0         # set when the solver splits `search` into emit/propag
 
 # Does $1 REJECT --time as an unknown option? That, and only that, is an older binary.
 #
@@ -317,6 +336,46 @@ time_flag_is_quiet() {
   # And it must not change the proof either, or the two tables are about two runs.
   cmp -s "${SCDIR}/q1.opb" "${SCDIR}/q2.opb" || { sc_why=".opb differs"; return 1; }
   cmp -s "${SCDIR}/q1.pbp" "${SCDIR}/q2.pbp" || { sc_why=".pbp differs"; return 1; }
+  return 0
+}
+
+# An emission-heavy model to exercise the M1-T47 split on: one whose .pbp is written
+# line after line DURING the search, so that a disconnected accumulator cannot hide.
+# width_sat_depth is the one such model in this suite (545 lines, 29.9 kB, 196 level
+# markers). Looked for among the models being measured first, then beside them, then
+# in test/models/ relative to this script -- and if none of those has it, the caller
+# is told the split went unexercised rather than being shown an untested column.
+emission_heavy_model() {
+  local m
+  for m in "${MODELS[@]}"; do
+    case "${m}" in */width_sat_depth.fzn | width_sat_depth.fzn) printf '%s' "${m}"; return 0 ;; esac
+  done
+  for m in "$(dirname "${MODELS[0]}")/width_sat_depth.fzn" \
+    "$(dirname "$0")/../test/models/width_sat_depth.fzn"; do
+    [ -f "${m}" ] && { printf '%s' "${m}"; return 0; }
+  done
+  return 1
+}
+
+# Does `search` actually split? Returns 0 when it does, 1 when the columns are there
+# and dead, 3 when the binary has no emit rows at all (pre-M1-T47), 2 on a solve
+# failure. Sets sc_why, and sc_e/sc_l/sc_s for the message.
+emission_split_moves() {
+  local bin="$1" fzn="$2" txt
+  txt="$(timeout "${TIMEOUT}" "${bin}" "${fzn}" --proof "${SCDIR}/e1" --time 2>&1 >/dev/null)" ||
+    return 2
+  sc_e="$(printf '%s\n' "${txt}" | awk '$1 == "time:" && $2 == "emit" { print $3 }')"
+  sc_s="$(printf '%s\n' "${txt}" | awk '$1 == "time:" && $2 == "search" { print $3 }')"
+  sc_l="$(printf '%s\n' "${txt}" | awk '$1 == "time:" && $2 == "emitln" { print $3 }')"
+  [ -n "${sc_e}" ] || return 3
+  case "${sc_l}" in '' | *[!0-9]*) sc_why="no emitln count was reported"; return 1 ;; esac
+  case "${sc_e}" in '' | *[!0-9]*) sc_why="emit is not a number"; return 1 ;; esac
+  [ "${sc_l}" -gt 0 ] ||
+    { sc_why="emitln is 0 on a model that writes a 545-line .pbp during its search"; return 1; }
+  [ "${sc_e}" -gt 0 ] ||
+    { sc_why="emit is 0 us over ${sc_l} emitted lines -- the accumulator counted nothing"; return 1; }
+  [ "${sc_e}" -le "${sc_s}" ] ||
+    { sc_why="emit (${sc_e}) exceeds the search phase (${sc_s}) it is a part of"; return 1; }
   return 0
 }
 
@@ -432,6 +491,42 @@ if [ "${HAVE_TIME_FLAG}" -eq 1 ]; then
   esac
 fi
 
+# Check 3 (M1-T47). Only meaningful once --time is known to work.
+if [ "${HAVE_TIME_FLAG}" -eq 1 ]; then
+  sc_why=""; sc_e=""; sc_l=""; sc_s=""
+  sc_emodel="$(emission_heavy_model)" || sc_emodel=""
+  if [ -z "${sc_emodel}" ]; then
+    echo "  note  no emission-heavy model (width_sat_depth.fzn) was found, so the"
+    echo "        emit/propag split was NOT exercised. The columns below are printed"
+    echo "        but nothing here has shown that they move; on a handful of small"
+    echo "        models a near-zero \`emit\` is indistinguishable from a dead one."
+    # Presence of the rows only. Deliberately NOT a verdict on their values: that is
+    # what the model above is for, and claiming otherwise from a small model is the
+    # vacuously-true assertion D-0025 is a record of.
+    timeout "${TIMEOUT}" "${SOLVER_A}" "${sc_model}" --proof "${SCDIR}/e0" --time 2>&1 >/dev/null |
+      grep -q '^time: emit ' && HAVE_EMIT_ROWS=1
+  else
+    emission_split_moves "${SOLVER_A}" "${sc_emodel}"
+    case $? in
+      0) echo "  ok    the emit/propag split moves (M1-T47): $(basename "${sc_emodel}" .fzn)"
+         echo "        reports emit ${sc_e} us over ${sc_l} lines written during a ${sc_s} us search" ;;
+      3) echo "  note  this binary reports no \`emit\` row, so it predates M1-T47. \`search\`"
+         echo "        is reported fused -- propagation, search and .pbp emission together"
+         echo "        -- and the emission columns below are blank." ;;
+      2) echo "  FAIL  the emission self-check model could not be solved: ${sc_emodel}" >&2
+         exit 2 ;;
+      *) echo >&2
+         echo "  FAIL  the emission accumulator is not counting: ${sc_why}." >&2
+         echo "        \`emit\` and \`propag\` would then read as \"emission is free\" on every" >&2
+         echo "        row, which is the pre-M1-T47 table with an authoritative-looking" >&2
+         echo "        column bolted on. A wrong split is worse than a fused one." >&2
+         echo "        Nothing was measured." >&2
+         exit 2 ;;
+    esac
+    [ "${sc_e:-0}" -gt 0 ] && HAVE_EMIT_ROWS=1
+  fi
+fi
+
 sc_a=""; sc_b=""; sc_short_len=""; sc_long_len=""
 opb_path_independence "${SOLVER_A}" "${sc_model}"
 case $? in
@@ -484,9 +579,11 @@ echo
 # here:
 #   * a CPU number and a wall number are different measurements and their difference is
 #     an UPPER BOUND on process overhead, not an exact figure;
-#   * `search` still contains the proof lines emitted during the search. Only the .opb
-#     write and the .pbp flush are separable proof-emission phases from the CLI. See
-#     the note above `module Timing` in bin/main.ml.
+#   * `search` is no longer reported fused (M1-T47): it comes back as `propag` + `emit`,
+#     with `clkovh` saying how much of each is the measuring clock. Both are bounds --
+#     `emit` excludes the rendering of each rule's body, which happens at the call site
+#     -- so `propag` is an upper bound on propagation and `emit` a lower bound on
+#     emission. See the note above `module Timing` in bin/main.ml.
 declare -A PH
 
 internal_measure() {
@@ -503,8 +600,13 @@ internal_measure() {
     if [ "${best}" -lt 0 ] || [ "${proc}" -lt "${best}" ]; then
       best="${proc}"
       PH=()
+      # `us` and `lines` are both taken, and the unit is what tells them apart: emitln
+      # is a COUNT, and the report prints it with a `lines` unit precisely so that a
+      # reader matching on `us` cannot pick it up as a duration. Nothing sums it --
+      # [phsum] only adds the keys it is handed.
       while read -r k v; do PH["${k}"]="${v}"; done < <(
-        printf '%s\n' "${txt}" | awk '$1 == "time:" && $4 == "us" { print $2, $3 }'
+        printf '%s\n' "${txt}" |
+          awk '$1 == "time:" && ($4 == "us" || $4 == "lines") { print $2, $3 }'
       )
     fi
   done
@@ -577,6 +679,17 @@ measure() {
     m_i_compile="$(phsum compile)"
     m_i_opb="$(phsum opb)"
     m_i_search="$(phsum search)"
+    # M1-T47. Blank rather than 0 when the binary does not report them: a 0 in a
+    # column called `emit` says "emission is free", which is a claim, and an absent
+    # measurement must not be able to make one.
+    if [ "${HAVE_EMIT_ROWS}" -eq 1 ] && [ -n "${PH[emit]:-}" ]; then
+      m_i_emit="$(phsum emit)"
+      m_i_propag="$(phsum propag)"
+      m_i_clkovh="$(phsum clockovh)"
+      m_i_emitln="$(phsum emitln)"
+    else
+      m_i_emit="-"; m_i_propag="-"; m_i_clkovh="-"; m_i_emitln="-"
+    fi
     m_i_pbp="$(phsum proofopen pbpclose)"
     m_i_rest="$(phsum output other)"
     m_i_inmain="$(phsum inmain)"
@@ -660,11 +773,12 @@ refused=0
 declare -a NAMES=()
 
 ihdr() {
-  printf '%-22s %9s %9s %8s %9s %9s %9s %8s %7s %9s %8s\n' \
-    "model" "wall us" "startup" "parse" "compile" "opb" "search" "pbp" "rest" "inmain" "notslv%"
-  printf '%-22s %9s %9s %8s %9s %9s %9s %8s %7s %9s %8s\n' \
+  printf '%-22s %9s %9s %8s %9s %9s %9s %8s %8s %7s %8s %7s %9s %8s\n' \
+    "model" "wall us" "startup" "parse" "compile" "opb" "propag" "emit" "clkovh" "emitln" \
+    "pbp" "rest" "inmain" "notslv%"
+  printf '%-22s %9s %9s %8s %9s %9s %9s %8s %8s %7s %8s %7s %9s %8s\n' \
     "----------------------" "---------" "---------" "--------" "---------" "---------" \
-    "---------" "--------" "-------" "---------" "--------"
+    "---------" "--------" "--------" "-------" "--------" "-------" "---------" "--------"
 }
 
 run_config() {
@@ -704,9 +818,17 @@ run_config() {
       B_ssp[$base]=$ssp; B_vsp[$base]=$vsp; B_srss[$base]=$m_srss; B_vrss[$base]=$m_vrss
     fi
     if [ "${m_iok}" -eq 1 ]; then
-      ITAB+=("$(printf '%-22s %9s %9s %8s %9s %9s %9s %8s %7s %9s %7s%%' \
+      # `search` itself is not a column any more: it is exactly propag + emit, and a
+      # third column carrying their sum invites the reader to quote the fused number
+      # that this task exists to stop being quotable. Binaries that do not report the
+      # split show `search` under `propag` and a dash beside it, which is the honest
+      # rendering of "not separated here".
+      local c_propag="${m_i_propag}"
+      [ "${c_propag}" = "-" ] && c_propag="${m_i_search}"
+      ITAB+=("$(printf '%-22s %9s %9s %8s %9s %9s %9s %8s %8s %7s %8s %7s %9s %7s%%' \
         "${base}" "${m_solve}" "${m_i_startup}" "${m_i_parse}" "${m_i_compile}" \
-        "${m_i_opb}" "${m_i_search}" "${m_i_pbp}" "${m_i_rest}" "${m_i_inmain}" \
+        "${m_i_opb}" "${c_propag}" "${m_i_emit}" "${m_i_clkovh}" "${m_i_emitln}" \
+        "${m_i_pbp}" "${m_i_rest}" "${m_i_inmain}" \
         "$(pct $((m_solve - m_i_inmain)) "${m_solve}")")")
     fi
     if [ -n "${TSV}" ]; then
@@ -714,9 +836,10 @@ run_config() {
         "${which}" "${base}" "${m_fmt}" "${m_opb}" "${m_pbp}" "${m_solve}" "${m_verify}" \
         "${m_srss:-}" "${m_vrss:-}" "${m_lines}" "${m_longest}" "${m_rup}" "${m_pol}" \
         "${m_levels}" "${m_depth}" "${m_stable}" >> "${TSV}"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "${which}" "${base}" "${m_i_startup:-}" "${m_i_parse:-}" "${m_i_compile:-}" \
-        "${m_i_opb:-}" "${m_i_search:-}" "${m_i_pbp:-}" "${m_i_rest:-}" \
+        "${m_i_opb:-}" "${m_i_search:-}" "${m_i_propag:-}" "${m_i_emit:-}" \
+        "${m_i_clkovh:-}" "${m_i_emitln:-}" "${m_i_pbp:-}" "${m_i_rest:-}" \
         "${m_i_inmain:-}" >> "${TSV}.internal"
     fi
   done
@@ -742,10 +865,21 @@ run_config() {
     echo "    parse     argument handling + Builder.of_file (lex, parse, build Model.t)"
     echo "    compile   Compile.compile: store, engine, encoding. No I/O, no proof."
     echo "    opb       Encoding.write_opb: the .opb built, written and closed."
-    echo "    search    Search.solve: propagation and search, AND THE PROOF LINES EMITTED"
-    echo "              DURING THEM. These are not separable from the CLI -- every emission"
-    echo "              point is inside lib/core/justify.ml and lib/proof/writer.ml. A claim"
-    echo "              about propagation cost cannot be read off this column alone."
+    echo "    propag    Search.solve MINUS the proof emission inside it (M1-T47). An UPPER"
+    echo "              BOUND on what propagation and search themselves cost: see emit."
+    echo "    emit      of the same Search.solve, the time inside Writer's own output"
+    echo "              calls. A LOWER BOUND on proof emission, because building a rule's"
+    echo "              body -- Pol.to_string_cited, Opb.constr_to_string, the sprintf at"
+    echo "              each call site -- happens before the writer is entered and is"
+    echo "              therefore counted in propag. propag + emit = the old \`search\`."
+    echo "    clkovh    THE INSTRUMENT'S OWN COST, and it is not small: one calibrated"
+    echo "              Sys.time read per emitted line, landing ONCE in emit and ONCE in"
+    echo "              propag. Subtract it from both. It is a large fraction of emit on"
+    echo "              proof-heavy rows, which is why it is a column and not a footnote."
+    echo "    emitln    lines the writer wrote during search -- what clkovh is computed"
+    echo "              from. Close to the .pbp's own line count but not equal to it: the"
+    echo "              version line and Encoding.start_proof run in \`pbp\`, before the"
+    echo "              search opens. The conclusion IS inside, along with its flush."
     echo "    pbp       proof channel opened + Encoding.start_proof + the final .pbp flush."
     echo "    rest      printing the solution, and whatever in main is in no phase."
     echo "    inmain    startup excluded; the sum of parse..rest exactly."
@@ -769,7 +903,7 @@ if [ -n "${TSV}" ]; then
   # The internal timings go to their OWN file, not extra columns here, because they are
   # a different clock (CPU, not wall) measured on different runs. Putting two clocks in
   # one row is how they get subtracted from each other by someone reading it later.
-  printf 'config\tmodel\tstartup_cpu_us\tparse_cpu_us\tcompile_cpu_us\topb_cpu_us\tsearch_cpu_us\tpbp_cpu_us\trest_cpu_us\tinmain_cpu_us\n' > "${TSV}.internal"
+  printf 'config\tmodel\tstartup_cpu_us\tparse_cpu_us\tcompile_cpu_us\topb_cpu_us\tsearch_cpu_us\tpropag_cpu_us\temit_cpu_us\tclockovh_cpu_us\temit_lines\tpbp_cpu_us\trest_cpu_us\tinmain_cpu_us\n' > "${TSV}.internal"
 fi
 
 run_config A "${SOLVER_A}" "${FORMAT_A}" "${LABEL_A}"
@@ -841,10 +975,19 @@ echo "    propagator from a faster exec, which is precisely what M3-T5 ran into.
 echo "  * Do NOT subtract an internal number from a wall number and call the remainder"
 echo "    a measurement of overhead. CPU time is never above wall time, so the"
 echo "    remainder is an upper bound. notslv% is labelled as one."
+if [ "${HAVE_EMIT_ROWS}" -eq 1 ]; then
+echo "  * 'search' is split (M1-T47): 'propag' and 'emit' are the search without and"
+echo "    with the proof lines written during it. A statement of the form 'propagation"
+echo "    costs X' is now supported, AS A BOUND: 'emit' does not include the rendering"
+echo "    of each rule's body, which happens at its call site, so 'emit' is a lower"
+echo "    bound on emission and 'propag' an upper bound on propagation. Subtract"
+echo "    'clkovh' from both before quoting either -- it is the measuring clock, and on"
+echo "    a proof-heavy row it is a large fraction of 'emit'."
+else
 echo "  * The internal 'search' column still contains the proof lines written during"
-echo "    the search. Splitting it needs an accumulator inside lib/proof/writer.ml,"
-echo "    which M1-T35 did not own. Until that exists, a statement of the form"
-echo "    'propagation costs X' is not supported by this harness."
+echo "    the search: this binary reports no 'emit' row, so it predates M1-T47. For"
+echo "    these rows a statement of the form 'propagation costs X' is not supported."
+fi
 
 if [ "${SELFCHECK_OPB_PATH_DEP}" -eq 1 ]; then
   echo
