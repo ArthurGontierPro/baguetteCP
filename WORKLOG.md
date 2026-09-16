@@ -10,14 +10,11 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
-**Three sessions are running.** Round dispatched 2026-09-16 by the orchestrator, one
+**No sessions are running.** The fourth wave is merged and released; the claims table is empty and every row below is in `## Completed`. Round dispatched 2026-09-16 by the orchestrator, one
 git worktree each (`.claude/worktrees/<tag>`), so no two share `_build`'s global lock.
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M1-T32, M1-T38, M1-T39, M1-T41 | `lib/proof/encoding.ml`, `lib/proof/writer.ml`, `test/unit/test_proof.ml`, `test/unit/test_mutation.ml` | agent-proofhyg | 2026-09-16 |
-| M1-T44 (+ M1-T31 secondary) | `lib/core/search.ml`, `lib/core/justify.ml`, `lib/core/prop/linear.ml`, new `test/models/root_*.fzn` + expected | agent-rootfix | 2026-09-16 |
-| M2-T5 | `lib/core/domain.ml`, `lib/core/engine.ml`, `test/unit/test_domain.ml`, `test/unit/test_engine.ml` | agent-granularity | 2026-09-16 |
 
 Two rounds are recorded in `## Completed` below. The rows that stood here on
 2026-09-15 (`integration`, M1-T12, M1-T13) were stale — see the handoff note "the
@@ -117,6 +114,9 @@ work. The owning session picks it up.
 | M4-T4a | agent-interval | 2026-09-16 | `lib/core/interval.ml` + `test/unit/test_interval.ml`, 94 brute-force checks, 12 deliberate breaks each watched go red. Orchestrator reproduced break 12 independently before merging |
 | M1-T34, M1-T35, M1-T37 | agent-cli | 2026-09-16 | `--time` (CPU clock, stderr only, artefacts byte-identical — orchestrator verified), `Checked.Overflow` arm exiting 4 not 3, path-independent `.opb` header. **26 of 29 models are 84-96% process start-up.** **Eleventh instance of the signature failure mode — and the first found *inside the check written to prevent it*** |
 | M1-T42, M1-T33, M1-T40 | agent-oracle | 2026-09-16 | **8 of 9 veripb builders accepted a factless justification** — measured first, and the two causes separated. I-S1's oracle now evaluates in arbitrary precision. Found M1-T50 (`pol <own row> <own row> +`). 1223 checks, 174 artefacts byte-identical |
+| M2-T5 | agent-granularity | 2026-09-16 | `Domain.change` + engine trigger masking + the `BAGUETTE_DEBUG` I-P2 re-run check. **An unsound mask passes all 29 models** — orchestrator reproduced. `masked = 0` on every model. D-0034 |
+| M1-T44 | agent-rootfix | 2026-09-16 | **The rejected root proof is fixed**, and the rival diagnosis refuted rather than argued down. Orchestrator verified both directions on the original reproducer. D-0035, I-X9, new model `root_hole_unsat.fzn` |
+| M1-T32, M1-T38, M1-T39, M1-T41 | agent-proofhyg | 2026-09-16 | The committing door guarded (I-X8, D-0036), `triple_unsat` certified two ways, `pol_raw` deleted, `consistency_id` asserts the transition. **Caused and then diagnosed the second OOM**; the cause is now linted in the gate |
 
 ## Handoff notes
 
@@ -653,3 +653,44 @@ which is still **symmetric in its operands**, so pinning it by commutativity
 (`A*B - B*A = 0`) is provably blind. What sees it is the same product reached by two
 *factorisations*: `6*M - 2*(3M) = 0`. Worth remembering the next time a commutativity
 check looks like enough.
+
+### Fourth wave fully merged and released (orchestrator, 2026-09-16)
+
+Five agents, all merged. Gate on master: **30 models, 0 failures; 239 matrix checks;
+width lint green; `make check` rc=0.**
+
+**The day's most important result is M1-T44**: a correct `=====UNSATISFIABLE=====` whose
+proof the checker rejected, found by the M2-T11 fuzzer, and fixed at the cause rather than
+the symptom. `Domain.set_lo` settles past holes, so a recorded bound can be strictly
+stronger than what its own explanation derives — the premise `linear.ml` relied on was
+false and had never been written down. It is written down now: **I-X9** and **D-0035**.
+Two things about the diagnosis are worth imitating. The rival explanation ("the route is
+wrong") was *refuted* — the three rows cited are jointly satisfiable, so no re-routing
+could ever have closed them. And the tempting narrow fix (discriminate on `0 >= k`) was
+declined because it would leave the explanation still lying about what the bound rests on,
+and `Explanation.lits` feeds M2-T3 conflict analysis, where that becomes **unsoundness**.
+
+**M2-T5's measurement matters more than its code.** With the wake mask deliberately made
+unsound, **all 29 models passed** — I reproduced it. The mask never fires on the suite at
+all (`masked = 0`, 970 propagator runs, 1210 wakes), because no `Domain.Holes` change
+occurs anywhere. So the mask's entire value and entire risk are in the future, and the
+`BAGUETTE_DEBUG` I-P2 check is its only instrument. D-0034 settles the design question the
+agent put to me: a trigger is a property of what a propagator **reads**, and
+`Propagator.consistency` is a promise about what it **writes** — the two coincide today by
+audit, not by construction, so the derivation is a stopgap with a named expiry condition.
+
+**The memory problem is now enforced rather than requested.** Three binaries died at the
+ceiling in one day, all the same shape: a wide declared domain. `make` and the scripts
+apply `ulimit -v 4000000`; `CLAUDE.md` carries the rule; and
+`scripts/check_test_widths.sh` lints the syntactic tell in the gate, with a self-test that
+runs **first** so the guard re-proves it can fail before it is trusted to pass. Both its
+own bugs were caught by running it against the line it exists to catch — the first draft
+was waved through by its own `~lo:0`, and the second fired on a *comment* explaining the
+trap. Still open: a bare `dune runtest` is uncapped (M1-T53), and a real width cap in
+`declare_int` is normative (M1-T54).
+
+Counting instances of the signature failure mode is getting hard to keep straight, and the
+number matters less than the habit. This round produced at least four more — the bench
+self-check that exited 0 on the worst possible failure, two checks in the proof layer that
+could not see their own subject fail, and both drafts of my lint. **Every one was found by
+performing the break, and none by reading the code.** That is the habit to carry forward.
