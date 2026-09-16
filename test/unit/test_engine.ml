@@ -117,6 +117,97 @@ let test_independent_constraints_reach_fixpoint () =
     (Store.trail_length store = trail_before)
 
 (* ===================================================================== *)
+(* 1b. M1-T24: the trail-cursor walk wakes watchers in exactly the order  *)
+(*     the old whole-trail walk did.                                     *)
+(*                                                                       *)
+(* [Engine.watchers_of_new_entries] used to call [Store.trail_entries],   *)
+(* which builds the entire trail as a fresh newest-first list, and then   *)
+(* kept only its first [trail_length - since] elements. It now walks the  *)
+(* positions [since .. trail_length - 1] by index via [Store.trail_entry] *)
+(* instead, allocating nothing proportional to the whole trail.           *)
+(*                                                                       *)
+(* The *set* of woken propagators is the part correctness needs, but the  *)
+(* ORDER is what [propagate] enqueues in, and the enqueue order fixes the *)
+(* propagation order, which fixes the search tree, which fixes the        *)
+(* emitted proof text. So "same set" is not good enough to call this a    *)
+(* pure perf change: the order has to be identical too. Rather than argue *)
+(* that from the code, [reference_watchers] below is the OLD algorithm    *)
+(* written out verbatim, and the test asserts the two lists are equal --  *)
+(* so if anyone later "simplifies" the walk into the natural oldest-first *)
+(* direction (which reverses the result), this goes red and says so.      *)
+(* ===================================================================== *)
+
+(* The pre-M1-T24 implementation, kept here as the oracle. Do not "tidy" this into
+   the new one; its whole job is to be the independent second opinion. *)
+let reference_watchers (t : Engine.t) store ~since =
+  let len = Store.trail_length store in
+  let n_new = len - since in
+  if n_new <= 0 then []
+  else
+    let entries = Store.trail_entries store in
+    let acc = ref [] in
+    List.iteri
+      (fun i (e : Store.entry) ->
+        if i < n_new then
+          match Hashtbl.find_opt t.Engine.watchers e.var with
+          | None -> ()
+          | Some ids -> acc := List.rev_append ids !acc)
+      entries;
+    !acc
+
+let test_wake_order_is_unchanged () =
+  let store =
+    mk_store [ ("x0", 0, 100); ("x1", 0, 100); ("x2", 0, 100); ("x3", 0, 100) ]
+  in
+  (* Overlapping pairs, so the interesting variables carry several watchers each and a
+     per-entry ordering is actually observable: x0 -> {0,2}, x1 -> {0,1},
+     x2 -> {1,2,3}, x3 -> {3}. The rows are slack (each variable is <= 100 and the
+     bound is 500), so nothing here prunes -- this test is about the wake-up
+     bookkeeping, not about propagation. *)
+  let row a b = Linear.make store [ (1, var a); (1, var b) ] 500 in
+  let engine =
+    Engine.create
+      [
+        pack_linear 0 (row 0 1);
+        pack_linear 1 (row 1 2);
+        pack_linear 2 (row 0 2);
+        pack_linear 3 (row 2 3);
+      ]
+  in
+  let bump v n =
+    match Store.set_lo store (var v) n Explanation.trivial with
+    | Store.Conflict _ -> failwith "wake order: setup conflicted"
+    | Store.Changed | Store.Unchanged -> ()
+  in
+  let since_empty = Store.trail_length store in
+  check "wake order: nothing pushed since the cursor wakes nobody"
+    (Engine.watchers_of_new_entries engine store ~since:since_empty = []);
+  bump 2 5;
+  bump 0 7;
+  (* A cursor part-way along the trail, which is the only case [propagate] ever uses:
+     entries below [since] must not be looked at, and the walk must not start at 0. *)
+  let since_mid = Store.trail_length store in
+  bump 1 9;
+  bump 2 11;
+  bump 3 13;
+  let got_mid = Engine.watchers_of_new_entries engine store ~since:since_mid in
+  let got_all = Engine.watchers_of_new_entries engine store ~since:since_empty in
+  check "wake order: a mid-trail cursor reproduces the old walk exactly"
+    (got_mid = reference_watchers engine store ~since:since_mid);
+  check "wake order: a from-zero cursor reproduces the old walk exactly"
+    (got_all = reference_watchers engine store ~since:since_empty);
+  (* Guard against the above passing vacuously: both walks returning [] would satisfy
+     equality while testing nothing. This is the project's recurring failure mode (see
+     WORKLOG: "the instance chosen to test a thing could not see the thing break"). *)
+  check "wake order: the mid-trail walk actually woke somebody" (got_mid <> []);
+  check "wake order: the mid-trail cursor is a strict suffix, not the whole trail"
+    (List.length got_mid < List.length got_all);
+  (* And the direction really is observable on this instance: were the walk to run
+     oldest-first instead, the answer would be the reverse of this one. If that ever
+     stops being true the test above has gone blind. *)
+  check "wake order: this instance can see a reversed walk" (got_all <> List.rev got_all)
+
+(* ===================================================================== *)
 (* Shared model builders for the search tests (2, 3, 4).                 *)
 (*                                                                       *)
 (* SAT model: x1, x2, x3 in [0,1], x1 = x2, x1+x2+x3 = 2. First-fail ties *)
@@ -374,6 +465,7 @@ let () =
   test_fixpoint_tightens_and_settles ();
   test_conflict_carries_explanation ();
   test_independent_constraints_reach_fixpoint ();
+  test_wake_order_is_unchanged ();
   test_search_finds_and_verifies_a_solution ();
   test_search_exhausts_and_reports_unsat ();
   test_audit_empty_at_conclusion ();

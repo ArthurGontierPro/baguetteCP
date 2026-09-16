@@ -49,24 +49,33 @@ let create (instances : Propagator.instance list) : t =
 let n_instances t = Array.length t.instances
 
 (* Every newly-touched variable's watchers, for the trail entries pushed since
-   [since]. [Store.trail_entries] returns the whole trail, most-recent-first; the
-   entries pushed since [since] are exactly its first [trail_length store - since]
-   elements. *)
+   [since] -- the positions [since .. trail_length - 1].
+
+   This walks the trail by index ([Store.trail_entry] is O(1) and says so in its own
+   comment). It used to call [Store.trail_entries], which materialises the *whole*
+   trail as a fresh most-recent-first list and then kept only its first
+   [trail_length - since] elements: O(|trail|) allocation on every propagator call in
+   the fixpoint loop, to look at the handful of entries that call had just pushed.
+   The module header above already claimed "O(new entries) per propagator call"; that
+   is now true of the code as well as of the comment. M1-T24.
+
+   The walk runs *downwards*, newest position first, and that is not cosmetic. The
+   old code iterated a newest-first list prepending each entry's watchers with
+   [List.rev_append], so the returned list came out oldest-entry-first with each
+   entry's watcher list reversed, and [propagate] enqueues in exactly that order.
+   Counting down from [trail_length - 1] to [since] performs the identical sequence
+   of [rev_append]s on the identical entries, so the wake order -- and hence the
+   propagation order, the search tree and the emitted proof -- is unchanged, not
+   merely equal as a set. An upward walk would reverse it. *)
 let watchers_of_new_entries t store ~since =
-  let len = Store.trail_length store in
-  let n_new = len - since in
-  if n_new <= 0 then []
-  else
-    let entries = Store.trail_entries store in
-    let acc = ref [] in
-    List.iteri
-      (fun i (e : Store.entry) ->
-        if i < n_new then
-          match Hashtbl.find_opt t.watchers e.var with
-          | None -> ()
-          | Some ids -> acc := List.rev_append ids !acc)
-      entries;
-    !acc
+  let acc = ref [] in
+  for i = Store.trail_length store - 1 downto since do
+    let e : Store.entry = Store.trail_entry store i in
+    match Hashtbl.find_opt t.watchers e.var with
+    | None -> ()
+    | Some ids -> acc := List.rev_append ids !acc
+  done;
+  !acc
 
 (* Run every propagator to a joint fixpoint (invariant I-P2): a FIFO queue seeded with
    every instance, so nothing is skipped on the first pass, and thereafter re-fed only
