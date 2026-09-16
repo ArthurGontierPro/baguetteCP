@@ -15,7 +15,6 @@ git worktree each (`.claude/worktrees/<tag>`), so no two share `_build`'s global
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M4-T4a | new `lib/core/interval.ml`, new `test/unit/test_interval.ml`, **and the one line naming it in `test/unit/dune`** | agent-interval | 2026-09-16 |
 | M1-T32, M1-T38, M1-T39, M1-T41 | `lib/proof/encoding.ml`, `lib/proof/writer.ml`, `test/unit/test_proof.ml`, `test/unit/test_mutation.ml` | agent-proofhyg | 2026-09-16 |
 | M1-T34, M1-T35, M1-T37 | `bin/main.ml`, `bench/run_bench.sh` | agent-cli | 2026-09-16 |
 | M1-T42, M1-T33, M1-T40 | `test/unit/test_prop.ml`, `test/unit/test_compile.ml`, `lib/flatzinc/model.ml` | agent-oracle | 2026-09-16 |
@@ -110,6 +109,7 @@ work. The owning session picks it up.
 | M1-T28 | agent-lazy2 + orchestrator | 2026-09-16 | Index-walk in `linear.ml`. Direction shown by experiment, not argued: flipping it gives **10 veripb rejections**. 60/60 artefacts byte-identical; **9.9× at N=300**, null on the committed models |
 | M2-T1, M2-T2 | agent-bool (x2, interrupted) + agent-bool3 + orchestrator | 2026-09-16 | **D-0032.** Six Boolean builtins, 9 models, 1168 unit checks, 29/29 models. No `Explanation` ADT change needed. Delivered across three sessions, two of which were killed mid-task; each was salvaged to a branch rather than restarted. **13 deliberate breaks, each watched go red** — and break 7 showed a justification with no facts at all passing everything, because the test scenes held their facts as `.opb` model rows |
 | M2-T11 | agent-fuzz (interrupted) + agent-fuzz2 + orchestrator | 2026-09-16 | Seeded branching order, default unchanged. **60/60 artefacts byte-identical with hashes**, and a control showing the check can fail. ~500k solver runs. **Found M1-T44**: a correct UNSAT answer whose proof veripb rejects, CLI-reachable and predating the task — orchestrator reproduced it and confirmed the derivation lands on `0 >= 0`. Also found `random_order`'s hole guard shipped disabled by a short-circuit |
+| M4-T4a | agent-interval | 2026-09-16 | `lib/core/interval.ml` + `test/unit/test_interval.ml`, 94 brute-force checks, 12 deliberate breaks each watched go red. Orchestrator reproduced break 12 independently before merging |
 
 ## Handoff notes
 
@@ -551,3 +551,27 @@ Open, and worth knowing before M2:
 - Nothing under `lib/` was touched this round. The roadmap rows are proposals with
   dependencies, not a batch to apply in order; the four worth taking first are M1-T22,
   M1-T23, M1-T24 and M2-T0, of which two are defects and one gates M4.
+
+### M4-T4a released (orchestrator, 2026-09-16)
+
+`Interval` is on master: pure arithmetic over `Checked`, no `Store`/`Explanation`/`Var`,
+and no proof machinery -- which is the whole point of the split, because every claim in
+it is checkable by brute force over small ranges. 94 new checks, gate green at 29/29.
+
+Three things the next session should carry forward rather than rediscover:
+
+- **The `isqrt` deviation from GCS is load-bearing, do not "restore the port".** GCS's
+  initial estimate `(n+1)/2` overflows at `max_int` and the loop then returns a
+  *negative* square root. `(n / 2) + (n mod 2)` is the same number and does not wrap. I
+  reproduced this myself before merging: 3 checks go red, one of them by raising
+  `Checked.Overflow` on `-2305843009213693952 * -2305843009213693952`. The upstream file
+  still has the defect; it is unreachable in GCS's own use because their bounds are capped.
+- **`quotient_filter` is inexact and says so.** 40 of 4095 small cases are wider than the
+  exact hull. The suite counts and prints that number rather than hiding it, and pins one
+  instance by name. Containment is asserted, equality is not -- and break 8 shows why:
+  swapping `div_ceil` for `div_floor` in the lower bound leaves the containment sweep
+  **green**, because a looser bound is still sound. Only the separate exactness claim sees it.
+- **A trap is waiting for M4-T4b**, flagged in `interval.ml`'s header. `int_div` truncates
+  toward zero (the *relation*); `div_floor`/`div_ceil` round outward (the *bounds*). They
+  are two functions apart in one file, and using the relation's rounding to compute a
+  bound prunes values that have support.
