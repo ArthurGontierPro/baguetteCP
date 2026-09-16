@@ -48,7 +48,11 @@
    `int_lin_eq` row, "two int_lin_le derivations", taken completely literally, each
    against its own row id ([~le_id]/[~ge_id], from [Encoding.add_equality]). *)
 
-let negate_terms terms = List.map (fun (a, x) -> (-a, x)) terms
+(* [Checked.neg] rather than [-]: min_int has no negation, so an unchecked negation
+   here would turn the `>=` half of an equality into a row that is not the negation of
+   the `<=` half -- and both halves would then be justified against .opb rows that do
+   not say what the propagators believe (roadmap M1-T23, lib/core/checked.ml). *)
+let negate_terms terms = List.map (fun (a, x) -> (Checked.neg a, x)) terms
 
 (* [make store terms rhs ?le_id ?ge_id] : (le, ge), the two [Linear.t] instances the
    equality [sum terms = rhs] decomposes into. Post both to the engine; pair [le]
@@ -58,5 +62,5 @@ let negate_terms terms = List.map (fun (a, x) -> (-a, x)) terms
    is -- see that module's header. *)
 let make ?le_id ?ge_id store terms rhs =
   let le = Linear.make ?row_id:le_id store terms rhs in
-  let ge = Linear.make ?row_id:ge_id store (negate_terms terms) (-rhs) in
+  let ge = Linear.make ?row_id:ge_id store (negate_terms terms) (Checked.neg rhs) in
   (le, ge)

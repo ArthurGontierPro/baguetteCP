@@ -90,7 +90,25 @@
    cross-row case D-0013's own worked example exercises, its final two steps) combines
    this row's own new-bound derivation with whatever explanation currently holds the
    *opposite* bound on the same variable, added, divisor 1 -- D-0013 step 5, "two
-   opposite bounds on the same variable, added". *)
+   opposite bounds on the same variable, added".
+
+   ---------------------------------------------------------------------------
+   Arithmetic (roadmap M1-T23)
+   ---------------------------------------------------------------------------
+
+   Every product, sum, difference and division below goes through [Checked]
+   (lib/core/checked.ml), which raises [Checked.Overflow] rather than wrapping. Read
+   that module's header before changing any of it: this is not defensive decoration,
+   it is the fix for the one soundness gap M1 found. A wrapped [a_i * lo_i] here does
+   not merely prune wrongly -- [Encoding.linear_terms_int_lin_le] folds the *same*
+   product into the .opb row's constant, so the corrupted row and the corrupted slack
+   agree and veripb accepts a refutation of a model nobody wrote.
+
+   Nothing on this path can raise for a model the CLI accepted:
+   lib/flatzinc/compile.ml caps every declared bound and every row's magnitude
+   |c| + sum_i |a_i| * max(|lo_i|, |hi_i|) at [Checked.limit], which leaves a factor
+   of 16/9 over the largest intermediate anything computes from the row. The raise is
+   for callers that build a [Linear.t] directly, which is what every unit test does. *)
 
 module Lit = Baguette_proof.Lit
 
@@ -134,19 +152,27 @@ let vars t = List.map (fun tm -> tm.x) t.terms
 (* [Stdlib.(/)] truncates toward zero, which is the wrong rounding for a negative
    dividend or divisor: bounds propagation needs floor/ceil of the exact rational
    quotient regardless of sign. [b] is never zero here (callers only apply these to
-   nonzero coefficients). *)
-let floordiv a b =
-  let q = a / b and r = a mod b in
-  if r <> 0 && r < 0 <> (b < 0) then q - 1 else q
+   nonzero coefficients).
 
-let ceildiv a b = -(floordiv (-a) b)
+   Both are now [Checked]'s, re-exported under their old names because test_prop.ml
+   asserts a pushed bound against [Linear.floordiv]/[Linear.ceildiv] by name. The
+   rounding is character for character the rounding this module used to do inline;
+   what [Checked] adds is the guard on min_int / -1, the one division whose quotient
+   does not fit. [Checked.ceildiv] also stops routing through [-(floordiv (-a) b)],
+   which was a second place a native int could wrap -- [-a] has no answer for
+   a = min_int -- and answers the case split directly instead. *)
+let floordiv = Checked.floordiv
+let ceildiv = Checked.ceildiv
 
 (* ------------------------------------------------------------------- min/max terms *)
 
-(* The smallest value [a * x] can currently take, given [x]'s domain. *)
+(* The smallest value [a * x] can currently take, given [x]'s domain. The product is
+   checked: wrapping it is the M1-T23 gap, and it wraps into the .opb row as well as
+   into the slack (see the module header). *)
 let term_min store (tm : term) =
   let d = Store.get store tm.x in
-  if tm.coeff >= 0 then tm.coeff * Domain.lo d else tm.coeff * Domain.hi d
+  if tm.coeff >= 0 then Checked.mul tm.coeff (Domain.lo d)
+  else Checked.mul tm.coeff (Domain.hi d)
 
 (* -------------------------------------------------------- locating an earlier reason *)
 
@@ -266,7 +292,7 @@ let summand_of_snap = function
   | Snap_weaken { coeff; name; decl_lo; decl_hi } ->
       let lits, _ = Order_reason.weaken_declared ~coeff ~name ~decl_lo ~decl_hi in
       Explanation.weaken lits
-  | Snap_cite { coeff; expl; _ } -> Explanation.term (abs coeff) expl
+  | Snap_cite { coeff; expl; _ } -> Explanation.term (Checked.abs coeff) expl
 
 (* docs/DECISIONS.md D-0018's *other* projection of the same snapshot: the bound facts
    this row actually read, one order literal per other term, for the trace line
@@ -375,8 +401,8 @@ let explain_cross_conflict store (tm : term) new_bound_expl =
    line needs the facts routed separately. *)
 let propagate t store =
   let mins = List.map (fun tm -> term_min store tm) t.terms in
-  let total_min = List.fold_left ( + ) 0 mins in
-  let slack = t.rhs - total_min in
+  let total_min = Checked.sum mins in
+  let slack = Checked.sub t.rhs total_min in
   if slack < 0 then (
     let snaps = row_snaps store t.terms ~exclude:None in
     Store.record_conflict_facts store (fun () -> facts_of_snaps snaps);
@@ -396,7 +422,7 @@ let propagate t store =
     List.iteri
       (fun idx (tm, m) ->
         if !conflict = None && tm.coeff <> 0 then
-          let max_term = m + slack in
+          let max_term = Checked.add m slack in
           let d = Store.get store tm.x in
           if tm.coeff > 0 then (
             let new_hi = floordiv max_term tm.coeff in
@@ -411,7 +437,9 @@ let propagate t store =
             let new_lo = ceildiv max_term tm.coeff in
             if new_lo > Domain.lo d then
               let snaps = row_snaps store t.terms ~exclude:(Some idx) in
-              let expl = explain_of_snaps (base_explanation t) snaps (-tm.coeff) in
+              let expl =
+                explain_of_snaps (base_explanation t) snaps (Checked.neg tm.coeff)
+              in
               let facts () = facts_of_snaps snaps in
               match Store.set_lo_with_facts store tm.x new_lo ~facts expl with
               | Store.Conflict _ -> cross_conflict tm snaps expl

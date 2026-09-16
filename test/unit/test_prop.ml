@@ -34,6 +34,9 @@ module Justify = Baguette_core.Justify
 module Ne = Baguette_core.Ne
 module Engine = Baguette_core.Engine
 module Search = Baguette_core.Search
+module Checked = Baguette_core.Checked
+module Flatzinc = Baguette_flatzinc
+module Compile = Baguette_flatzinc.Compile
 
 let failures = ref 0
 
@@ -1812,6 +1815,276 @@ let build_ne_search dir =
     without_ne_is_wrong;
   (opb, pbp)
 
+(* =============================================== M1-T23: overflow, and the cap
+
+   Three things are checked here, and they are three different claims:
+
+   1. [Checked] computes what the unchecked operators compute wherever the result
+      fits, and raises wherever it does not. Without the first half the fix would be
+      a behaviour change dressed as a soundness fix.
+
+   2. The .opb row for an overflowing constraint is expanded from the SAME wrapped
+      arithmetic the propagator's slack uses. This is the half of the gap that makes
+      it a soundness bug rather than a rejected proof, and it is pinned as an
+      assertion on the bytes lib/proof/encoding.ml emits -- which this task may not
+      change, and did not need to. The pin stays true after the fix, because the fix
+      is not in [Encoding]: it is that [Compile] never hands [Encoding] such a row.
+
+   3. The propagators raise instead of wrapping, and [Compile] refuses the model
+      before either can happen.
+
+   The instance all three are built around is the one that demonstrated the gap:
+
+       array [1..1] of int: c = [-2305843009213693952];    % -2^61
+       var 3..4: x;
+       constraint int_lin_le(c, [x], 0);
+       constraint int_le(x, 3);
+
+   x = 3 satisfies it (-2^61 * 3 = -6917529027641081856 <= 0), and before M1-T23
+   baguette printed =====UNSATISFIABLE===== and emitted a proof veripb accepted.
+
+   ---------------------------------------------------------------------------
+   A ceiling on what any test here may DECLARE, and why
+   ---------------------------------------------------------------------------
+
+   **No test below declares a domain more than a few values wide.** Overflow is
+   driven entirely through large COEFFICIENTS against modest domains, which is where
+   the wrapped product actually comes from (`a_i * bound_i`), and through a bound
+   fixed at min_int (a width of ZERO). That is a hard rule, not a stylistic one:
+   docs/DECISIONS.md **D-0028** measures that a justification is Theta(declared
+   width) per other term per pruning -- two variables declared 0..999999 and one row
+   produce a 156 MB .opb and a single 29.8 MB `pol` line having pruned nothing -- and
+   [Order_reason.weaken_declared] and [lower_bound_terms], which this file calls
+   directly, are exactly the functions that build it. A test that declared a domain
+   near max_int would not run slowly; it would try to allocate a literal per value
+   and exhaust the machine. One such run did, mid-M1-T23, and took 14.9 GB before it
+   was killed.
+
+   The ONE place a wide bound appears below is [test_compile_cap]'s
+   `var 0..4000000000000000000`, and it is safe for a specific, checked reason:
+   lib/flatzinc/compile.ml runs the declared-bound check BEFORE [Store.create] and
+   before [Encoding.declare_int], so the model is refused with a diagnostic and
+   nothing ever enumerates it. That is the only shape a wide declared domain may have
+   in this file -- a rejection, never a propagation. *)
+
+let raises_overflow f =
+  try
+    ignore (f () : int);
+    false
+  with Checked.Overflow _ -> true
+
+let raises_overflow_unit f =
+  try
+    ignore (f ());
+    false
+  with Checked.Overflow _ -> true
+
+let test_checked_ops () =
+  (* Agreement, over a grid where nothing can overflow: a checked operator that
+     quietly rounded or mis-signed would be a worse bug than the one being fixed. *)
+  let agree_add = ref true and agree_sub = ref true and agree_mul = ref true in
+  for a = -40 to 40 do
+    for b = -40 to 40 do
+      if Checked.add a b <> a + b then agree_add := false;
+      if Checked.sub a b <> a - b then agree_sub := false;
+      if Checked.mul a b <> a * b then agree_mul := false
+    done
+  done;
+  check "checked: add agrees with (+) wherever the result fits" !agree_add;
+  check "checked: sub agrees with (-) wherever the result fits" !agree_sub;
+  check "checked: mul agrees with ( * ) wherever the result fits" !agree_mul;
+  (* The rounding, against the mathematical definition rather than against the
+     implementation it replaced -- floats are exact at this size. This is the trap
+     lib/core/prop/linear.ml's old header warns about: [Stdlib.(/)] truncates toward
+     zero, which is neither floor nor ceil once a sign is negative. *)
+  let agree_floor = ref true and agree_ceil = ref true in
+  for a = -40 to 40 do
+    for b = -12 to 12 do
+      if b <> 0 then (
+        let q = float_of_int a /. float_of_int b in
+        if Checked.floordiv a b <> int_of_float (Float.floor q) then agree_floor := false;
+        if Checked.ceildiv a b <> int_of_float (Float.ceil q) then agree_ceil := false)
+    done
+  done;
+  check "checked: floordiv is the floor of the exact quotient, at every sign" !agree_floor;
+  check "checked: ceildiv is the ceiling of the exact quotient, at every sign" !agree_ceil;
+  (* ceildiv no longer routes through -(floordiv (-a) b): that negation has no answer
+     for a = min_int, which is a second wrap on the path the fix is about. *)
+  check "checked: ceildiv min_int 1 is min_int, where -(floordiv (-a) b) would wrap"
+    (Checked.ceildiv min_int 1 = min_int);
+  (* The boundary. Each of these is a place lib/ used to wrap silently. *)
+  check "checked: max_int + 1 raises" (raises_overflow (fun () -> Checked.add max_int 1));
+  check "checked: min_int - 1 raises" (raises_overflow (fun () -> Checked.sub min_int 1));
+  check "checked: max_int + min_int does NOT raise (it fits, at -1)"
+    (Checked.add max_int min_int = -1);
+  check "checked: max_int * 2 raises" (raises_overflow (fun () -> Checked.mul max_int 2));
+  check "checked: min_int * -1 raises"
+    (raises_overflow (fun () -> Checked.mul min_int (-1)));
+  check "checked: 2^61 * 4 raises (the demonstrating product)"
+    (raises_overflow (fun () -> Checked.mul (-2305843009213693952) 4));
+  check "checked: 2^30 * 2^30 does not raise (the fast path's own boundary)"
+    (Checked.mul 0x3FFFFFFF 0x3FFFFFFF = 0x3FFFFFFF * 0x3FFFFFFF);
+  check "checked: neg min_int raises" (raises_overflow (fun () -> Checked.neg min_int));
+  check "checked: abs min_int raises" (raises_overflow (fun () -> Checked.abs min_int));
+  check "checked: floordiv min_int (-1) raises"
+    (raises_overflow (fun () -> Checked.floordiv min_int (-1)));
+  check "checked: rem min_int (-1) answers 0 rather than trusting Stdlib.mod"
+    (Checked.rem min_int (-1) = 0);
+  check "checked: sum raises on a partial sum that leaves the range"
+    (raises_overflow (fun () -> Checked.sum [ max_int; 1; -1 ]));
+  (* The cap's own arithmetic, asserted rather than trusted: lib/core/checked.ml's
+     header claims everything derived from a row of magnitude M is bounded by 9M + 6,
+     so a limit of max_int / 16 has to leave that inside the range. If someone raises
+     [limit], this is the check that goes red. *)
+  check "checked: 16 * limit fits, so the stated envelope is inside the range"
+    (Checked.limit > 0 && Checked.limit <= max_int / 16);
+  check "checked: 9 * limit + 6 fits, which is the envelope the header derives"
+    (raises_overflow (fun () -> Checked.add (Checked.mul 9 Checked.limit) 6) = false);
+  check "checked: row_magnitude is |rhs| + sum |a| * max(|lo|,|hi|)"
+    (Checked.row_magnitude [ (3, -5, 2); (-2, 0, 7) ] (-4) = Some (4 + (3 * 5) + (2 * 7)));
+  check "checked: row_magnitude reports None rather than a wrapped number"
+    (Checked.row_magnitude [ (max_int, 0, 2) ] 0 = None);
+  check "checked: row_fits refuses a row it cannot even measure"
+    (not (Checked.row_fits [ (max_int, 0, 2) ] 0));
+  check "checked: bound_fits refuses min_int, which has no absolute value"
+    (not (Checked.bound_fits min_int))
+
+(* The .opb half of the gap. [Encoding] is read-only for this task and is unchanged:
+   what is asserted is that it still folds sum_i a_i * lo_i with native arithmetic, so
+   a row that reached it with an overflowing constant would come out stating a
+   different constraint from the one in the model -- and the propagator, wrapping the
+   identical product, would agree with it. That agreement is why veripb could not see
+   the bug, and it is why the fix has to be a cap in lib/flatzinc/compile.ml rather
+   than a check inside a propagator. *)
+let test_opb_row_wraps_identically () =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:3 ~hi:4;
+  let row = Encoding.expand_int_lin_le e [ (-2305843009213693952, "x") ] 0 in
+  let text = Opb.constr_to_string row in
+  (* The true row is vacuous: -2^61 * x <= 0 holds for every x >= 0, so with x in 3..4
+     every assignment satisfies it. What comes out instead FORCES x_ge_4, because the
+     folded constant -2^61 * 3 wrapped to +2^61. *)
+  check "opb: the row for an overflowing constraint is itself wrapped"
+    (text = "+2305843009213693952 x_ge_4 >= 2305843009213693952 ;");
+  check "opb: and the propagator wraps the same product the same way"
+    (-2305843009213693952 * 3 = 2305843009213693952)
+
+(* The propagators refuse to wrap. Both are built directly, which is the one caller
+   the compile-time cap does not cover -- and is exactly why the runtime policy is to
+   raise rather than to decline quietly. *)
+let test_propagators_raise_on_overflow () =
+  let store = mk_store [ ("x", 3, 4) ] in
+  let lin = Linear.make ~row_id:1 store [ (-2305843009213693952, var 0) ] 0 in
+  check "linear: a term whose product overflows raises instead of conflicting"
+    (raises_overflow_unit (fun () -> Linear.propagate lin store));
+  (* Products that each fit, and a sum that does not: the second way a row's slack can
+     be wrong, and the one a per-product check alone would miss. *)
+  let big = (max_int / 2) + 1 in
+  let store2 = mk_store [ ("a", big, big); ("b", big, big); ("c", 0, 1) ] in
+  let lin2 = Linear.make ~row_id:1 store2 [ (1, var 0); (1, var 1); (1, var 2) ] 0 in
+  check "linear: products that fit but a sum that does not also raises"
+    (raises_overflow_unit (fun () -> Linear.propagate lin2 store2));
+  (* int_ne's coefficients are 1 and -1, so its only overflowing product is -1 * y
+     with y at min_int -- which is also the only input Stdlib.mod is not guaranteed to
+     survive further down. *)
+  let store3 = mk_store [ ("x", 0, 2); ("y", min_int, min_int) ] in
+  let ne = Ne.Int_ne.make store3 (var 0) (var 1) in
+  check "int_ne: negating a fixed value at min_int raises instead of wrapping"
+    (raises_overflow_unit (fun () -> Ne.propagate ne store3));
+  (* int_lin_ne, sum side: every product fits, the running total does not. *)
+  let store4 = mk_store [ ("p", big, big); ("q", big, big); ("r", 0, 3) ] in
+  let lne = Ne.make store4 [ (1, var 0); (1, var 1); (1, var 2) ] 0 in
+  check "int_lin_ne: a fixed-term sum that leaves the range raises"
+    (raises_overflow_unit (fun () -> Ne.propagate lne store4))
+
+(* ------------------------------------------------- the cap, at the model's edge *)
+
+let compile_src src = Compile.compile (Flatzinc.Builder.of_string ~file:"test" src)
+
+let contains_sub ~needle haystack =
+  let n = String.length needle and h = String.length haystack in
+  n = 0
+  ||
+  let found = ref false in
+  for i = 0 to h - n do
+    if (not !found) && String.equal (String.sub haystack i n) needle then found := true
+  done;
+  !found
+
+let expect_capped name ~needles src =
+  match compile_src src with
+  | exception Flatzinc.Error.Error e ->
+      let msg = Flatzinc.Error.to_string e in
+      let missing = List.filter (fun n -> not (contains_sub ~needle:n msg)) needles in
+      if missing = [] then check name true
+      else (
+        check name false;
+        Printf.printf "       message does not mention %s\n       message: %s\n"
+          (String.concat ", " missing) msg)
+  | exception exn ->
+      check name false;
+      Printf.printf "       raised the wrong exception: %s\n" (Printexc.to_string exn)
+  | _ ->
+      check name false;
+      Printf.printf "       compiled successfully -- the model was accepted\n"
+
+let expect_compiles name src =
+  match compile_src src with
+  | exception exn ->
+      check name false;
+      Printf.printf "       rejected: %s\n" (Printexc.to_string exn)
+  | _ -> check name true
+
+let test_compile_cap () =
+  (* The demonstration, as a model. Before M1-T23 this printed
+     =====UNSATISFIABLE===== with a proof veripb accepted; x = 3 satisfies it. *)
+  expect_capped
+    "cap: the model that shipped a wrong answer with a verified proof is refused"
+    ~needles:[ "arithmetic limit"; "288230376151711743"; "wraps silently" ]
+    "array [1..1] of int: c = [-2305843009213693952];\n\
+     var 3..4: x;\n\
+     constraint int_lin_le(c, [x], 0);\n\
+     constraint int_le(x, 3);\n\
+     solve satisfy;\n";
+  (* The declaration half of the cap. The row here is small; what is too large is the
+     domain itself, and the diagnostic has to name the variable. *)
+  expect_capped "cap: a declared bound past the limit is refused at its declaration"
+    ~needles:[ "`huge`"; "arithmetic limit"; "288230376151711743" ]
+    "var 0..4000000000000000000: huge;\nconstraint int_le(huge, 3);\nsolve satisfy;\n";
+  (* A disequality is capped on the same magnitude, even though its .opb rows are the
+     pair with the big-M constant -- which is what the factor of 16 is sized for. *)
+  expect_capped "cap: a disequality past the limit is refused too"
+    ~needles:[ "disequality"; "arithmetic limit" ]
+    "array [1..2] of int: c = [2305843009213693952, 1];\n\
+     var 0..3: x;\n\
+     var 0..3: y;\n\
+     constraint int_lin_ne(c, [x, y], 1);\n\
+     solve satisfy;\n";
+  (* Coefficients so large that the magnitude cannot itself be computed still produce
+     a diagnostic rather than an escaping Checked.Overflow. *)
+  expect_capped "cap: a magnitude that does not itself fit still produces a diagnostic"
+    ~needles:[ "arithmetic limit" ]
+    (Printf.sprintf
+       "array [1..2] of int: c = [%d, %d];\n\
+        var 0..3: x;\n\
+        var 0..3: y;\n\
+        constraint int_lin_le(c, [x, y], 0);\n\
+        solve satisfy;\n"
+       max_int max_int);
+  (* And the other direction, which is the half that stops the cap from being a way to
+     reject anything awkward: a row whose magnitude sits just under the limit compiles,
+     and its arithmetic is exact. 4 * 57646075230342348 + 4 = 230584300921369396, which
+     is 79.9% of the limit. *)
+  expect_compiles "cap: a row just under the limit still compiles"
+    "array [1..4] of int: c = [57646075230342348, 57646075230342348, 57646075230342348, \
+     57646075230342348];\n\
+     var 0..1: a;\n\
+     var 0..1: b;\n\
+     var 0..1: d;\n\
+     var 0..1: e;\n\
+     constraint int_lin_le(c, [a, b, d, e], 4);\n\
+     solve satisfy;\n"
+
 (* ------------------------------------------------------------------------ main *)
 
 let () =
@@ -1858,6 +2131,10 @@ let () =
     ~build:build_ne_sat;
   run_veripb ~name:"int_ne inside a search that must branch: solved and verified"
     ~build:build_ne_search;
+  test_checked_ops ();
+  test_opb_row_wraps_identically ();
+  test_propagators_raise_on_overflow ();
+  test_compile_cap ();
   if !failures > 0 then (
     Printf.printf "\n%d FAILURE(S)\n" !failures;
     exit 1)

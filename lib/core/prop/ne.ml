@@ -128,7 +128,22 @@
    live store state instead of a snapshot silently breaks the trace: an explanation
    forced later must still render the derivation as of the moment it was made, and by
    then the store may have been narrowed further or backtracked. Snapshotting ints is
-   cheap; it is the clause construction that is deferred. *)
+   cheap; it is the clause construction that is deferred.
+
+   ---------------------------------------------------------------------------
+   Arithmetic (roadmap M1-T23)
+   ---------------------------------------------------------------------------
+
+   [sum_of], the [rhs - sum] that gives the missing amount, and the divisibility test
+   and quotient that turn it into a value all go through [Checked]
+   (lib/core/checked.ml), which raises rather than wrapping. The stake is the same one
+   [Linear]'s header states and is if anything sharper here, because a wrapped
+   [sum_of] does not merely decline to prune: it can make an unrelated total look
+   exactly like [rhs] and remove a value that is in a solution, while
+   [Encoding.add_int_lin_ne] builds the A/B rows' big-M constants from the same
+   wrapped span. [Checked.rem] also answers min_int mod -1 directly, which is the one
+   input [Stdlib.mod] is not guaranteed to survive and which [rest mod tm.coeff] can
+   reach for a coefficient of -1 -- which is every [int_ne]. *)
 
 module Encoding = Baguette_proof.Encoding
 module Lit = Baguette_proof.Lit
@@ -253,7 +268,8 @@ let all_pairs store terms =
 
 let sum_of store terms =
   List.fold_left
-    (fun acc tm -> acc + (tm.coeff * Domain.lo (Store.get store tm.x)))
+    (fun acc tm ->
+      Checked.add acc (Checked.mul tm.coeff (Domain.lo (Store.get store tm.x))))
     0 terms
 
 (* The terms other than the one at [idx] -- by position, not by variable, since a
@@ -283,13 +299,15 @@ let propagate t store =
   | [ idx ] -> (
       let tm = List.nth t.terms idx in
       let others = others_except t.terms idx in
-      let rest = t.rhs - sum_of store others in
+      let rest = Checked.sub t.rhs (sum_of store others) in
       (* [tm.coeff] is non-zero by construction ([make] drops zero terms), so this
          division is well defined. A non-zero remainder means a_j * x_j can never hit
-         the missing amount for any integer x_j: nothing to prune. *)
-      if rest mod tm.coeff <> 0 then Propagator.Fixpoint
+         the missing amount for any integer x_j: nothing to prune. The remainder is
+         zero on the branch below, so [floordiv] is exact division there and its
+         rounding never comes into play -- it is used for its min_int / -1 guard. *)
+      if Checked.rem rest tm.coeff <> 0 then Propagator.Fixpoint
       else
-        let w = rest / tm.coeff in
+        let w = Checked.floordiv rest tm.coeff in
         let d = Store.get store tm.x in
         if not (Domain.mem d w) then Propagator.Fixpoint
         else
