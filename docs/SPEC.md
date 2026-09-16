@@ -14,8 +14,13 @@ Keywords MUST / SHOULD / MAY are used in the RFC 2119 sense.
 1. reads a model in **FlatZinc**,
 2. searches for a solution (or proves none exists, or proves optimality),
 3. emits a **VeriPB proof** that an independent checker accepts. The format is
-   VeriPB **3.0** (D-0023); 2.0 is still what is emitted by default while the test
-   suite is migrated, and `BAGUETTE_PROOF_FORMAT` selects between them.
+   VeriPB **3.0**, and 3.0 is what is emitted **by default** (D-0023 chose it, D-0025
+   turned the default on once the suite had migrated). `BAGUETTE_PROOF_FORMAT=2.0`
+   still selects the older format, and the suite is run both ways. The checker of
+   record is VeriPB **3.0.2**, the Rust build; the Python VeriPB 2.2.2 is also
+   installed and checks the 2.0 output. `scripts/checker.sh` is the single place that
+   resolves which binary runs — the two word their rejections differently and share no
+   substring, so never match on one wording alone (M1-T46).
 
 The proof is not a debugging aid. It is a primary output: a run that produces a correct
 answer with an unverifiable proof is a **failed run**. *(normative)*
