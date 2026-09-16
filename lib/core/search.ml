@@ -64,9 +64,12 @@
    How a decision and a backtrack become proof steps
    ---------------------------------------------------------------------------
 
-   Branching splits on a single order-encoding literal [l = x_ge_(lo+1)] for the
-   first-fail variable [x] at its current [lo] (indomain_min: try [x = lo] --
-   i.e. [~l] -- before [x > lo] -- i.e. [l]). Both branches run inside their own
+   Branching splits on a single order-encoding literal [l = x_ge_(k+1)] for the chosen
+   variable [x] at the chosen value [k] (docs/SPEC.md 3.4's default, [spec_order] below,
+   is first-fail with [k = lo]: try [x = lo] -- i.e. [~l] -- before [x > lo] -- i.e.
+   [l]). Which variable, which [k] and which side first are the *only* things the order
+   decides, and none of them reaches anything below this paragraph: one literal, one
+   level, one trace, one nogood, whatever the order says. Both branches run inside their own
    [Store] decision level (docs/DECISIONS.md D-0008), tagged in the proof with
    [Writer.set_level] to match: *every* decision opens a level and *every* backtrack
    wipes one, which is the sense in which "every branching decision and every
@@ -112,22 +115,99 @@ exception Unsound_solution of assignment
    recent decision literal and re-derive the next nogood up. *)
 type node = NSat of assignment | NFail of Lit.t list * Writer.cid
 
-(* ------------------------------------------------------------------ variable choice *)
+(* ------------------------------------------------------- the branching order (M2-T11)
+
+   Which variable is branched on, at which value, and which side first. docs/SPEC.md 3.4
+   fixes that -- first-fail, indomain_min -- and [spec_order] is it; it is the default of
+   [solve] and the only order anything outside the tests uses. [random_order] exists
+   because M1's whole nogood story (D-0018, D-0021) is a claim about *whatever* tree the
+   search happens to build: the branch's own trace is what its refutation rests on, so a
+   different tree is a different proof, and a fuzzer that only ever drives one tree shape
+   tests one shape of that claim. It is a test facility and nothing more.
+
+   What an order may vary is the *choice*. It may not vary the logging discipline around
+   it, and it cannot: everything below this point -- one level per decision, the trace
+   before the nogood, the nogood before the wipe (D-0018 point 4) -- is written once and
+   is the same code for every order. If making some order verify seems to need a change
+   to the emission, that is the emission relying on the fixed order, which is a finding
+   and not a patch. *)
+
+(* Every unfixed variable, in declaration order; empty exactly when everything is fixed.
+
+   An order chooses from this array and can choose nothing else, which is what keeps
+   completeness (I-S2) a property of this module rather than of the strategy it is handed:
+   [dfs] reports a solution exactly when the array is empty, so a strategy decides the
+   *shape* of the tree and never which leaves it has. *)
+let unfixed store =
+  let n = Store.n_vars store in
+  let acc = ref [] in
+  for i = n - 1 downto 0 do
+    let v = Var.of_int i in
+    if Domain.size (Store.get store v) > 1 then acc := v :: !acc
+  done;
+  Array.of_list !acc
+
+(* One decision. [d_split] is read as: the low branch is [x <= d_split], the high branch
+   is [x >= d_split + 1], and the single order literal [x_ge_(d_split+1)] is the one thing
+   the two branches disagree about -- so the two child nogoods still resolve on exactly
+   one literal, as they always did. [d_split] must lie in [lo, hi), which makes both
+   pushes strictly narrowing, which is what [check_decision_landed] asserts.
+
+   docs/SPEC.md 3.4's indomain_min is [d_split = lo] with the low side first (that branch
+   then fixes [x = lo], which is what [Search] has always emitted); indomain_max would be
+   [d_split = hi - 1] with the high side first. *)
+type decision = { d_var : Var.t; d_split : int; d_high_first : bool }
+
+(* An order is asked for a decision given the store and the non-empty array of unfixed
+   variables. *)
+type order = Store.t -> Var.t array -> decision
 
 (* First-fail (docs/SPEC.md 3.4): the unfixed variable (domain size > 1) with the
    smallest domain, ties broken by declaration order (the store's variable index). *)
-let pick_var store =
-  let n = Store.n_vars store in
-  let best = ref None in
-  for i = 0 to n - 1 do
-    let v = Var.of_int i in
-    let size = Domain.size (Store.get store v) in
-    if size > 1 then
-      match !best with
-      | None -> best := Some (v, size)
-      | Some (_, bsize) -> if size < bsize then best := Some (v, size)
+let first_fail store cands =
+  let best = ref cands.(0) in
+  let bsize = ref (Domain.size (Store.get store cands.(0))) in
+  for i = 1 to Array.length cands - 1 do
+    let size = Domain.size (Store.get store cands.(i)) in
+    if size < !bsize then (
+      best := cands.(i);
+      bsize := size)
   done;
-  Option.map fst !best
+  !best
+
+(* docs/SPEC.md 3.4, and the default of [solve]: first-fail, min-value branching. This is
+   the normative strategy and the only one the CLI can reach; `lib/flatzinc/compile.ml`
+   rejects an annotation asking for anything else rather than silently ignoring it. *)
+let spec_order store cands =
+  let v = first_fail store cands in
+  { d_var = v; d_split = Domain.lo (Store.get store v); d_high_first = false }
+
+(* A branching order driven by [r], for the fuzzer (test/unit/test_random.ml). Every
+   draw comes from [r], so one seed reproduces one whole tree.
+
+   The split is taken at a [k] with both [k] and [k+1] in the domain, so that
+   [set_hi _ k] lands on exactly [k] and [set_lo _ (k+1)] on exactly [k+1]. That is a
+   constraint on the proof rather than on the search: [Domain.settle] walks a bound over
+   a hole, so a decision at a hole would put a bound on the trail strictly stronger than
+   the [x_ge_(k+1)] its nogood negates, and the checker could not replay the difference
+   -- an interior hole gets no trace line at all ([Trace]'s [claims] writes one only when
+   a bound moves). [lo] is the fallback after a few misses because [lo] is what
+   docs/SPEC.md 3.4 already branches at: [lo] is in the domain by I-D2, so the low side
+   lands exactly, and the high side is then the same [set_lo _ (lo+1)] the default has
+   always made. So a random order reaches new tree shapes without inventing a class of
+   decision the default does not also make -- which is what makes a rejection under it a
+   finding about the solver rather than about this function. *)
+let random_order r store cands =
+  let v = cands.(Random.State.full_int r (Array.length cands)) in
+  let d = Store.get store v in
+  let lo = Domain.lo d and hi = Domain.hi d in
+  let rec pick tries =
+    if tries = 0 then lo
+    else
+      let k = lo + Random.State.full_int r (hi - lo) in
+      if Domain.mem d k && Domain.mem d (k + 1) then k else pick (tries - 1)
+  in
+  { d_var = v; d_split = pick 8; d_high_first = Random.State.bool r }
 
 let extract_assignment store : assignment =
   List.init (Store.n_vars store) (fun i ->
@@ -225,7 +305,7 @@ let close_root_conflict ctx trace store e =
       let _ : Writer.cid = Justify.emit ctx e in
       Justify.emit ctx (Explanation.clause [])
 
-let rec dfs engine store ctx trace (decisions : Lit.t list) : node =
+let rec dfs engine store ctx trace (order : order) (decisions : Lit.t list) : node =
   match Engine.propagate engine store with
   | Engine.Conflict e -> (
       match decisions with
@@ -255,21 +335,33 @@ let rec dfs engine store ctx trace (decisions : Lit.t list) : node =
           let lits = List.map Lit.negate decisions in
           let cid = Justify.emit ctx (Explanation.clause lits) in
           NFail (lits, cid))
-  | Engine.Fixpoint -> (
-      match pick_var store with
-      | None -> NSat (extract_assignment store)
-      | Some v -> branch engine store ctx trace decisions v)
+  | Engine.Fixpoint ->
+      let cands = unfixed store in
+      if Array.length cands = 0 then NSat (extract_assignment store)
+      else branch engine store ctx trace order decisions (order store cands)
 
-and branch engine store ctx trace decisions v : node =
+and branch engine store ctx trace order decisions (dec : decision) : node =
+  let v = dec.d_var in
   let d = Store.get store v in
-  let lo = Domain.lo d in
+  let k = dec.d_split in
+  if k < Domain.lo d || k >= Domain.hi d then
+    invalid_arg
+      (Printf.sprintf
+         "Search.branch: the order split %s at %d, outside [%d, %d) -- a decision must \
+          strictly narrow both branches"
+         (Store.name store v) k (Domain.lo d) (Domain.hi d));
   let name = Store.name store v in
-  let lit = Lit.ge name (lo + 1) in
-  (* indomain_min: [x = lo] (~lit) before [x > lo] (lit). *)
+  let lit = Lit.ge name (k + 1) in
+  (* The two sides, in the order this decision asks for. They are the same two functions
+     whichever way round they go: which side is explored first changes the tree, and
+     changes nothing about what is emitted for either side. *)
+  let first, second =
+    if dec.d_high_first then (explore_ge, explore_le) else (explore_le, explore_ge)
+  in
   Store.new_level store;
   let lvl = Store.level store in
   Writer.set_level ctx.Justify.writer lvl;
-  let r1 = explore_hi store engine ctx trace decisions v lo lit in
+  let r1 = first store engine ctx trace order decisions v k lit in
   Store.backtrack store;
   match r1 with
   | NSat asn ->
@@ -281,7 +373,7 @@ and branch engine store ctx trace decisions v : node =
       Debug.check "search: reopened level matches the one just closed" (fun () ->
           lvl2 = lvl);
       Writer.set_level ctx.Justify.writer lvl;
-      let r2 = explore_lo store engine ctx trace decisions v lo lit in
+      let r2 = second store engine ctx trace order decisions v k lit in
       Store.backtrack store;
       match r2 with
       | NSat asn ->
@@ -318,24 +410,29 @@ and check_decision_landed store lvl outcome =
       && Store.level store = lvl
       && Store.is_level_start store (Store.trail_length store - 1))
 
-and explore_hi store engine ctx trace decisions v lo lit =
+(* The low side, [x <= k] -- the decision literal is [~lit]. With [k = lo] (docs/SPEC.md
+   3.4's indomain_min) this fixes [x = lo], which is what it has always done. *)
+and explore_le store engine ctx trace order decisions v k lit =
   let lvl = Store.level store in
-  let outcome = Store.set_hi store v lo Explanation.trivial in
+  let outcome = Store.set_hi store v k Explanation.trivial in
   match outcome with
   | Store.Conflict _ ->
-      (* [lo] is always in [v]'s domain, so [set_hi _ lo] cannot fail; kept only so
-         this function is total against [Store.outcome] without assuming it. *)
+      (* [k >= lo] and [lo] is in [v]'s domain (I-D2), so [set_hi _ k] cannot empty it;
+         kept only so this function is total against [Store.outcome] without assuming
+         it. *)
       Trace.emit ctx trace store;
       let lits = List.map Lit.negate (Lit.negate lit :: decisions) in
       let cid = Justify.emit ctx (Explanation.clause lits) in
       NFail (lits, cid)
   | Store.Changed | Store.Unchanged ->
       check_decision_landed store lvl outcome;
-      dfs engine store ctx trace (Lit.negate lit :: decisions)
+      dfs engine store ctx trace order (Lit.negate lit :: decisions)
 
-and explore_lo store engine ctx trace decisions v lo lit =
+(* The high side, [x >= k + 1] -- the decision literal is [lit]. Symmetrically,
+   [k + 1 <= hi] and [hi] is in the domain, so this push cannot empty it either. *)
+and explore_ge store engine ctx trace order decisions v k lit =
   let lvl = Store.level store in
-  let outcome = Store.set_lo store v (lo + 1) Explanation.trivial in
+  let outcome = Store.set_lo store v (k + 1) Explanation.trivial in
   match outcome with
   | Store.Conflict _ ->
       Trace.emit ctx trace store;
@@ -344,7 +441,7 @@ and explore_lo store engine ctx trace decisions v lo lit =
       NFail (lits, cid)
   | Store.Changed | Store.Unchanged ->
       check_decision_landed store lvl outcome;
-      dfs engine store ctx trace (lit :: decisions)
+      dfs engine store ctx trace order (lit :: decisions)
 
 (* ------------------------------------------------------------------------------ API *)
 
@@ -352,6 +449,12 @@ and explore_lo store engine ctx trace decisions v lo lit =
    return equals the level on entry -- true here by construction, since every
    [Store.new_level] this module calls is paired with exactly one [Store.backtrack]
    before returning).
+
+   [?order] is the branching order and defaults to [spec_order], docs/SPEC.md 3.4's
+   normative first-fail/indomain_min: nothing outside the tests passes it, and the
+   default is byte-for-byte the tree this module has always built. [random_order] is
+   the fuzzer's (M2-T11); see the branching-order section above for what an order is
+   allowed to vary.
 
    [engine] is shared, reusable state (its watcher table does not depend on the
    store's contents); [store] and [ctx] carry the search's actual state. [check] is
@@ -370,7 +473,7 @@ and explore_lo store engine ctx trace decisions v lo lit =
    (invariant I-X2 -- see docs/PROOF-FORMAT.md section 5, "discharged by the
    conclusion"). *)
 let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
-    ~(check : assignment -> bool) ?trace () : outcome =
+    ~(check : assignment -> bool) ?trace ?(order = spec_order) () : outcome =
   let entry_level = Store.level store in
   (* [?trace] exists so a caller can read back *which* rules in the emitted proof were
      D-0018 trace lines (test/unit/test_trace.ml checks each of them standalone against
@@ -378,7 +481,7 @@ let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
      It is state this function would otherwise own privately; passing one in changes
      nothing about what is emitted. *)
   let trace = match trace with Some t -> t | None -> Trace.create () in
-  let result = dfs engine store ctx trace [] in
+  let result = dfs engine store ctx trace order [] in
   Debug.check "I-S3: decision level on return equals level on entry" (fun () ->
       Store.level store = entry_level);
   (* I-X2: the trace lines for prunings made at level 0 are the one class of rule this
