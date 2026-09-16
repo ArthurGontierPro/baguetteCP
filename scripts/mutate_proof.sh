@@ -307,7 +307,16 @@ case "${MUT}" in
         start = 3
         if ($2 != "id" && $2 != "range") start = 2     # 3.0 delc takes the ref directly
         if ($2 == "range" && is_id($3) && is_id($4)) {
-          for (k = id_num($3); k <= id_num($4); k++) printf "%s ", k
+          # Half-open: del range LO HI retires [LO, HI), so HI itself is STILL LIVE.
+          # Measured against veripb 3.0.2 by M1-T22; PROOF-FORMAT section 5 has the
+          # probe table. This loop used <= until then, which marked one live id per
+          # range as dead. That erred in the safe direction -- pol-cite merely skipped
+          # a usable candidate, it could not manufacture a false pass -- but a lane
+          # that quietly tests less than it claims is the signature failure mode of
+          # this project, so it is fixed rather than tolerated.
+          # NOTE: no apostrophes in this comment. It sits inside a single-quoted awk
+          # program, and one apostrophe ends that string and breaks the script.
+          for (k = id_num($3); k < id_num($4); k++) printf "%s ", k
           next
         }
         for (i = start; i <= NF; i++) if (is_id($i)) printf "%s ", id_num($i)
