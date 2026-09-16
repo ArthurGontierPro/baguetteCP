@@ -407,9 +407,7 @@ let pack_array_bool_and (p : Bool_clause.t) : pending =
     p
 
 let pack_bool_eq (p : Bool_clause.t) : pending =
-  pack_clause_as
-    (module Bool_clause.Bool_eq : Propagator.S with type t = Bool_clause.t)
-    p
+  pack_clause_as (module Bool_clause.Bool_eq : Propagator.S with type t = Bool_clause.t) p
 
 let pack_bool_not (p : Bool_clause.t) : pending =
   pack_clause_as
@@ -532,11 +530,11 @@ let compile (m : Model.t) : t =
   let bool_operand pos ~builtin ~what (op : Model.operand) : Model.operand =
     (match op with
     | Model.Const n -> if n <> 0 && n <> 1 then reject_non_bool_const pos ~builtin ~what n
-    | Model.Var i ->
+    | Model.Var i -> (
         if i < 0 || i >= Model.nvars m then
           Error.failf pos "internal: constraint mentions variable index %d, out of range"
             i
-        else (
+        else
           match (Model.var m i).Model.v_dom with
           | Model.Dbool -> ()
           | _ -> reject_non_bool_var pos ~builtin ~what (Model.var m i)));
@@ -583,7 +581,7 @@ let compile (m : Model.t) : t =
     List.iter
       (fun (op, positive) ->
         match bool_operand pos ~builtin ~what op with
-        | Model.Const n -> if (n = 1) = positive then incr k
+        | Model.Const n -> if n = 1 = positive then incr k
         | Model.Var i -> vlits_rev := (i, positive) :: !vlits_rev)
       lits;
     let vlits = List.rev !vlits_rev in

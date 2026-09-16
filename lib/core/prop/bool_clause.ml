@@ -139,18 +139,17 @@ let make store raw =
       (fun (x, positive) ->
         let key = (Var.to_int x, positive) in
         if Hashtbl.mem seen key then None
-        else begin
+        else (
           Hashtbl.add seen key ();
           let d = Store.get store x in
           if Domain.lo d <> 0 || Domain.hi d <> 1 then
             invalid_arg
               (Printf.sprintf
                  "Bool_clause.make: `%s` is declared over %s, but a clause literal must \
-                  be a `var bool`, i.e. the order encoding on [0, 1] \
-                  (docs/DECISIONS.md D-0007)"
+                  be a `var bool`, i.e. the order encoding on [0, 1] (docs/DECISIONS.md \
+                  D-0007)"
                  (Store.name store x) (Domain.to_string d));
-          Some { x; name = Store.name store x; positive }
-        end)
+          Some { x; name = Store.name store x; positive }))
       raw
   in
   let pb = List.map pb_lit lits in

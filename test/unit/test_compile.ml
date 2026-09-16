@@ -436,7 +436,7 @@ let evaluate (m : M.t) (assign : int array) =
           List.exists truth ps || List.exists (fun o -> not (truth o)) ns
       | M.Array_bool_or (xs, r) -> truth r = List.exists truth xs
       | M.Array_bool_and (xs, r) -> truth r = List.for_all truth xs
-      | M.Bool2int (b, x) -> operand x = (if truth b then 1 else 0)
+      | M.Bool2int (b, x) -> operand x = if truth b then 1 else 0
       | M.Bool_eq (a, b) -> truth a = truth b
       | M.Bool_not (a, b) -> truth a <> truth b
       | M.Int_lin_ne _ | M.Int_ne _ ->

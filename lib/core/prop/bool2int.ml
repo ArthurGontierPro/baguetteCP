@@ -148,8 +148,8 @@ let make store ~b ~x =
   if Domain.lo db <> 0 || Domain.hi db <> 1 then
     invalid_arg
       (Printf.sprintf
-         "Bool2int.make: `%s` is declared over %s, but bool2int's first argument must \
-          be a `var bool`, i.e. the order encoding on [0, 1] (docs/DECISIONS.md D-0007)"
+         "Bool2int.make: `%s` is declared over %s, but bool2int's first argument must be \
+          a `var bool`, i.e. the order encoding on [0, 1] (docs/DECISIONS.md D-0007)"
          (Store.name store b) (Domain.to_string db));
   let dx = Store.get store x in
   {
@@ -245,6 +245,4 @@ let propagate t store =
     ~facts:(ge_fact ~name:t.x_name ~decl_lo:t.x_decl_lo (Domain.lo dx));
   push_hi t.b ~name:t.b_name ~decl_lo:t.b_decl_lo (Domain.hi dx)
     ~facts:(le_fact ~name:t.x_name ~decl_hi:t.x_decl_hi (Domain.hi dx));
-  match !conflict with
-  | Some e -> Propagator.Conflict e
-  | None -> Propagator.Fixpoint
+  match !conflict with Some e -> Propagator.Conflict e | None -> Propagator.Fixpoint
