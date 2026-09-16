@@ -72,6 +72,8 @@ work. The owning session picks it up.
 | Each session works in its own git worktree under `.claude/worktrees/`. Build with `dune build --root .` and `dune runtest --root .` from inside it — a bare `dune build` or `make` fails there with "Don't know about directory", and a `--build-dir` outside the checkout breaks the model and mutation suites. See CLAUDE.md | — | orchestrator | standing, this round |
 | M1-T22 changes emitted proof *text* for 5 of 14 models; M1-T23 adds models. Neither may edit the other's expected outputs, and neither may edit an existing `test/expected/*.out` to make a suite pass — a model whose **solution** changes because of a deletion fix is a bug report, not an expected-output edit | `test/expected/**` | orchestrator | standing, this round |
 
+**UPDATE 2026-09-16 (orchestrator): this is now ENFORCED, not requested.** Two further test binaries had to be killed at the ceiling after sessions were warned, so warning is evidently not a control. `make`, `scripts/run_model_tests.sh` and `scripts/verify_proof.sh` apply `ulimit -v 4000000` themselves; `CLAUDE.md` carries the rule where every session reads it first. The cap is verified to bite (5 GB allocation -> `MemoryError`, 100 MB fine, gate peaks at 18.5 MB). **A bare `dune runtest --root .` in a worktree is still uncapped** — that is M1-T53, and until it lands, wrap your runs yourself: `(ulimit -v 4000000; timeout 900 dune runtest --root .)`. A run that dies against the cap is a finding to report, not a cap to raise.
+
 ## Completed
 
 | Task | Session | Date | Summary |
