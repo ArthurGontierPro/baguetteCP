@@ -15,7 +15,6 @@ git worktree each (`.claude/worktrees/<tag>`), so no two share `_build`'s global
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M1-T23 | `lib/core/prop/**`, new `lib/core/*.ml` for checked arithmetic, `lib/flatzinc/compile.ml`, `test/unit/test_matrix.ml`, `test/unit/test_prop.ml`, new files under `test/models/` + `test/expected/` | agent-overflow | 2026-09-16 |
 | M3-T5, M1-T30 | `bench/**` (new directory, including its own new `bench/dune`), new `test/models/width_*.fzn` + `test/expected/width_*.out` | agent-bench | 2026-09-16 |
 | M1-T26 | `scripts/mutate_proof.sh`, `test/unit/test_mutation.ml`, `lib/proof/writer.ml` | agent-mutate2 | 2026-09-16 |
 | M2-T11 | `lib/core/search.ml`, `test/unit/test_random.ml` | agent-fuzz | 2026-09-16 |
@@ -91,6 +90,7 @@ work. The owning session picks it up.
 | M1-T22 | agent-delrange + orchestrator | 2026-09-16 | `del range LO HI` deletes `[LO, HI)`, re-measured with controls before anything was changed. `Writer.del_run` emits the exclusive bound, falling back to a `del id` list when the run ends at the newest id. 7 leaked ids now retired; +0.4% proof bytes; no solution changed. The **same off-by-one was in `scripts/mutate_proof.sh`** and the orchestrator fixed it |
 | M2-T0 | agent-decisions | 2026-09-16 | **D-0027**: D-0011 is a rule about *naming* rows, not counting them. Multi-row derivations are permitted, so **M4-T1 is unblocked**; the decomposition default stands and `int_lin_eq` is not re-fused |
 | M1-T27 | agent-decisions | 2026-09-16 | **D-0028**: width-proportional justifications are accepted and not weakened; no cap today. Measured, not predicted — a model with **zero prunings** emits a 29.8 MB proof line. Corrected its own roadmap row, which named a function with no caller in `lib/` |
+| M1-T23 | agent-overflow + orchestrator | 2026-09-16 | **The soundness gap is closed.** D-0029 + a normative SPEC 2.1 paragraph. Orchestrator reproduced the gap independently before merging: a model whose true answer is SAT printed UNSAT and veripb returned `s VERIFIED UNSATISFIABLE`, because the `.opb` row was folded from the same wrapping arithmetic as the propagator. `Checked` raises rather than declines — declining is unsound once the row is already written. Cap `max_int/16`, derived and asserted. 1005 unit checks, 17/17 models |
 
 ## Handoff notes
 

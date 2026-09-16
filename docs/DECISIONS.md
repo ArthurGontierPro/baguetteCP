@@ -1545,3 +1545,78 @@ Consequences:
   about a proof-layer "cannot" three times already (D-0009's `pol`, D-0012's nogood,
   D-0019's direct encoding), each time corrected by someone running the checker instead
   of arguing.
+
+## D-0029  An arithmetic limit, enforced at compile time, and why declining to prune is not an option
+Status: DECIDED
+Date: 2026-09-16
+Task M1-T23. Closes the only soundness gap the GCS comparison found. Adds a normative
+paragraph to SPEC 2.1, which is why this record exists.
+
+Context: nothing in `lib/` checked for integer overflow. OCaml's native `int` is 63 bits
+and wraps silently.
+
+**The gap, reproduced by the orchestrator before this record was written** (not taken from
+the implementing session's report):
+
+    array [1..1] of int: c = [-2305843009213693952];   % -2^61
+    var 3..4: x;
+    constraint int_lin_le(c, [x], 0);
+    constraint int_le(x, 3);
+
+`x = 3` satisfies this: `-2^61 * 3 <= 0`. baguette printed `=====UNSATISFIABLE=====` and
+exited 0. The emitted row was
+
+    @c1 +2305843009213693952 x_ge_4 >= 2305843009213693952 ;
+
+— a row that *forces* `x = 4`, where the true row is vacuously true on `3..4`, because
+`Encoding.linear_terms_int_lin_le` folded `-2^61 * 3` and it wrapped to `+2^61`. With
+`x <= 3` that model really is unsatisfiable, so veripb 3.0.2 answered
+`s VERIFIED UNSATISFIABLE`. A wrong answer shipped with a proof the checker accepts.
+
+**Why this class is different from an ordinary bug.** The usual safety net is that the
+proof disagrees with the solver. Here it cannot: the propagator and the `.opb` expansion
+compute the same products with the same wrapping `*`, so they agree *because* they are
+both wrong. I-S1's independent oracle does not catch it either, since
+`Model.check_assignment` evaluates the sum with the same operators; and on an UNSAT answer
+there is no assignment for it to check at all. The failure is invisible from inside.
+
+Decision, three parts:
+
+**1. Overflow raises; it never wraps and never silently declines.** `lib/core/checked.ml`
+raises `Checked.Overflow` from every operation where a coefficient meets a bound. The
+tempting alternative — detect the overflow and decline to prune — is sound for a
+propagator in isolation and **not sound here**, because by the time any propagator runs,
+the `.opb` row for that constraint has already been written from the same arithmetic.
+There is no "decline" available for an artefact that must exist. Declining would leave a
+corrupted file on disk and say nothing. This is the asymmetry that makes proof logging
+different from plain solving, and it is why D-0005's "decline the work, stay sound"
+remedy does not transfer.
+
+**2. A compile-time cap, so the raise is a backstop rather than the mechanism.**
+`Compile` checks every declared bound and every posted row against
+`Checked.limit = max_int / 16`, and rejects with a positioned diagnostic and exit 3. The
+factor of 16 is derived, not chosen: the worst path is the `.opb` A/B pair for an
+`int_lin_ne`, which bounds everything by `9M + 6`, and 16 leaves a margin. The derivation
+is in `checked.ml`'s header and is asserted as a test, so raising the limit turns the
+suite red.
+
+**3. The cap is about overflow. It is NOT a width cap, and does not become one.** It
+permits a declared width of 5.7 x 10^17, thirteen orders of magnitude above where D-0028
+measures proof size becoming unusable. The two questions are deliberately kept apart: an
+overflow cap refuses models whose *arithmetic* cannot be computed, while a width cap would
+refuse models whose *proof* is too large to store — a different justification, a different
+bound, and its own SPEC change. D-0028 nominates this same check as where a width cap
+would live; that remains open and is not decided here.
+
+Consequences, recorded so they are not rediscovered:
+
+- **`lib/proof/encoding.ml` and `lib/proof/opb.ml` still compute unchecked** and now rely
+  entirely on `Compile`'s cap. The invariant is "Compile is the only door", and nothing
+  states or enforces it. A second entry point — a future front end, or a test calling
+  `Encoding.add_int_lin_le` directly — can still write a corrupted row. Filed as M1-T32.
+- **`Model.check_assignment` shares the failure mode** with the propagator it is supposed
+  to check independently. Under the cap it cannot overflow, but an oracle that wraps the
+  way its subject wraps is not independent, and I-S1's value rests on that independence.
+  Filed as M1-T33.
+- `ceildiv` no longer routes through `-(floordiv (-a) b)`; that negation has no answer at
+  `min_int`, i.e. it was a second wrap on the very path this record is about.

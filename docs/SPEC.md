@@ -50,6 +50,31 @@ rejected with a diagnostic; it is not defaulted to a machine-word range.
 Encountering a builtin outside the implemented set MUST produce a clear error naming the
 builtin and exit non-zero. It MUST NOT silently ignore the constraint. *(normative)*
 
+**Arithmetic limit** *(normative)*. The solver computes over a fixed-width machine
+integer, so there are FlatZinc models it MUST refuse rather than answer. For every posted
+linear row, the magnitude
+
+    M = |rhs| + sum_i |a_i| * max(|lo_i|, |hi_i|)   over the declared domains
+
+and every declared bound MUST be checked against an implementation limit, and a model
+exceeding it MUST be rejected with a positioned diagnostic naming the limit, exiting
+non-zero. It MUST NOT be accepted and answered.
+
+This refuses models the FlatZinc standard allows, which is why it is normative here and
+carries a decision record (**D-0029**). The alternative is not "accept more models", it is
+"answer some of them wrongly and prove it": the `.opb` row and the propagator are computed
+from the *same* arithmetic, so on overflow they wrap identically, the proof is a valid
+proof of a model that is not the one on disk, and the checker accepts it. M1-T23
+demonstrated exactly that. A wrong answer with a verified proof is the one outcome this
+project exists to make impossible, so the limit is normative rather than an
+implementation detail.
+
+The limit's *value* is not fixed by this specification — only that one exists, that it
+bounds every product and partial sum the propagators and the `.opb` expansion compute, and
+that exceeding it is a refusal rather than an answer. This limit is about **overflow**, not
+about proof size; the separate question of a *width* cap is open and is not decided here
+(see D-0028).
+
 ### 2.2 Output format
 
 Solutions are printed on stdout in the standard FlatZinc output format: the variables in
