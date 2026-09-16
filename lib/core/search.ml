@@ -196,7 +196,22 @@ let spec_order store cands =
    lands exactly, and the high side is then the same [set_lo _ (lo+1)] the default has
    always made. So a random order reaches new tree shapes without inventing a class of
    decision the default does not also make -- which is what makes a rejection under it a
-   finding about the solver rather than about this function. *)
+   finding about the solver rather than about this function.
+
+   The guard shipped disabled. It read [if true || (Domain.mem d k && Domain.mem d
+   (k + 1))], which short-circuits, so the membership test, [pick]'s recursion and
+   [tries] were all dead and every draw was taken whatever the domain looked like --
+   an unfinished-debugging edit from the interrupted session that wrote this, and one
+   no compiler warning catches. Restored here, and what the disabled version bought is
+   recorded rather than guessed at, because "the guard is load-bearing" would be a
+   claim nobody has tested: with it disabled, and with [random_order] further biased to
+   prefer a holey variable AND a hole split within it, 2051 splits out of 495723 over
+   108000 solver runs landed where the guard now refuses, and **not one of them was
+   rejected by veripb**. So the guard is conservative, not measured-necessary. It is
+   restored because the code must say what its header says and because attribution is
+   worth more here than 0.4% more tree shapes -- not because a hole split has been seen
+   to break a proof. Whoever wants that 0.4% back should take it deliberately, with an
+   instance that shows what it catches. *)
 let random_order r store cands =
   let v = cands.(Random.State.full_int r (Array.length cands)) in
   let d = Store.get store v in
@@ -205,7 +220,7 @@ let random_order r store cands =
     if tries = 0 then lo
     else
       let k = lo + Random.State.full_int r (hi - lo) in
-      if true || (Domain.mem d k && Domain.mem d (k + 1)) then k else pick (tries - 1)
+      if Domain.mem d k && Domain.mem d (k + 1) then k else pick (tries - 1)
   in
   { d_var = v; d_split = pick 8; d_high_first = Random.State.bool r }
 
