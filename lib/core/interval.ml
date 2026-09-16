@@ -50,7 +50,17 @@
 
    The test file checks their rounding against an independent float reference rather
    than assuming it, over every sign combination, because "we reused the shared one" is
-   not evidence about what the shared one does. *)
+   not evidence about what the shared one does.
+
+   **A warning for M4-T4b, which is easy to get backwards.** This rounding is about
+   *bounds*, not about what [int_div] means. The FlatZinc/MiniZinc [int_div] relation
+   truncates toward zero, with the remainder taking the dividend's sign, and the roadmap
+   records that as a SPEC addition M4-T4b needs before any code. The two are not in
+   conflict and must not be conflated: the relation says which triples (x, y, q) are
+   solutions, while [div_floor]/[div_ceil] answer "what is the widest bound this
+   constraint permits", which rounds outward whatever the relation does. A propagator
+   that used the relation's rounding to compute a bound would prune values that have
+   support. *)
 
 (* An integer interval. [lo > hi] means empty, which [square_filter] can return and
    which callers must test with [is_empty] before reading the bounds. *)
