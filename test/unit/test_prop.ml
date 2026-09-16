@@ -2574,23 +2574,39 @@ let write_and_emit dir base e ~expl ~model_id ~sol =
 (* (a \/ ~b \/ c) with a false and b true established by real model rows. The pruning is
    c := true and its reason is the clause; the rup must close in a single unit
    propagation against the clause row. *)
+(* The two facts are established in the STORE ONLY -- deliberately NOT as .opb rows,
+   and this is load-bearing for every control below it.
+
+   Measured, not reasoned: an earlier version of this scene posted `~a` and `b` as model
+   rows, the way build_int_le_multi and friends above do. That makes the .opb force
+   c true on its own, so a REASON WITH ITS FACTS DROPPED is still entailed by the model
+   and veripb accepts it. A break that deleted the facts from a justification passed the
+   whole suite -- 332 checks and 28 models -- until the scene was changed. It is the
+   D-0016 hazard (a valid but useless generalisation) and D-0009's (restating a
+   constraint is trivially valid) in one place, and it is the tenth instance of this
+   project's signature failure mode, caught here rather than shipped.
+
+   With the facts held only in the store, the .opb says nothing about a or b, so the
+   clause `a \/ ~b \/ c` is RUP (it is the row) while every weakening or corruption of
+   it is not. That is what makes [build_bool_clause_wrong] and
+   [build_bool_clause_weakened] real controls rather than decoration. It is also
+   faithful: in a real run these bounds come from a decision or from another
+   propagator, neither of which is a model row. *)
 let bool_clause_scene () =
   let e = Encoding.create () in
   Encoding.declare_bool e "a";
   Encoding.declare_bool e "b";
   Encoding.declare_bool e "c";
   let row = add_clause_row e [ ("a", true); ("b", false); ("c", true) ] in
-  let c_a = Encoding.add_constraint e (Opb.ge [ (1, Lit.bool_false "a") ] 1) in
-  let c_b = Encoding.add_constraint e (Opb.ge [ (1, Lit.bool_true "b") ] 1) in
   let store =
     Store.create ~names:[| "a"; "b"; "c" |]
       ~domains:[| Domain.make 0 1; Domain.make 0 1; Domain.make 0 1 |]
   in
   let prop = mk_bool_clause [ (0, true); (1, false); (2, true) ] store in
-  (match Store.set_hi store (var 0) 0 (Explanation.model_row c_a) with
+  (match Store.set_hi store (var 0) 0 Explanation.trivial with
   | Store.Changed -> ()
   | _ -> failwith "bool_clause_scene: a := false failed");
-  (match Store.set_lo store (var 1) 1 (Explanation.model_row c_b) with
+  (match Store.set_lo store (var 1) 1 Explanation.trivial with
   | Store.Changed -> ()
   | _ -> failwith "bool_clause_scene: b := true failed");
   (e, row, store, prop)
@@ -2617,6 +2633,18 @@ let build_bool_clause_wrong dir =
     Explanation.clause [ Lit.bool_true "a"; Lit.bool_false "b"; Lit.bool_false "c" ]
   in
   write_and_emit dir "boolclause_wrong" e ~expl ~model_id:row
+    ~sol:[ ("a", 0); ("b", 1); ("c", 1) ]
+
+(* The second control, and the one that tests the direction the first cannot: a reason
+   that is CORRECT AS FAR AS IT GOES but has dropped a literal. `~b \/ c` is a strictly
+   stronger claim than the clause -- it asserts c whenever b holds, regardless of a --
+   and a = 1, b = 1, c = 0 satisfies the .opb while falsifying it, so veripb must
+   reject. A justification that quietly forgets a fact it read is the shape of break
+   that a scene whose facts are model rows cannot see; see [bool_clause_scene]. *)
+let build_bool_clause_weakened dir =
+  let e, row, _, _ = bool_clause_scene () in
+  let expl = Explanation.clause [ Lit.bool_false "b"; Lit.bool_true "c" ] in
+  write_and_emit dir "boolclause_weakened" e ~expl ~model_id:row
     ~sol:[ ("a", 0); ("b", 1); ("c", 1) ]
 
 (* The conflict route that ends in a REFUTATION rather than in a clause, which is the
@@ -2715,15 +2743,21 @@ let bool2int_push dir base ~pre ~wvar ~wbound ~sol =
   let expl = Explanation.force (Store.explanation store entry) in
   write_and_emit dir base e ~expl ~model_id:row_le ~sol
 
-let row_fact e lit = Encoding.add_constraint e (Opb.ge [ (1, lit) ] 1)
+(* A setup bound, established in the store and NOT as an .opb row -- for the reason
+   spelled out at [bool_clause_scene], which was measured here: with `b_ge_1` posted as
+   a model row the .opb entails lo(x) := 1 by itself, so bool2int's reason verifies with
+   its facts deleted and the four checks below stop testing the justification. The
+   literal argument is kept so each caller still says which fact it is establishing. *)
+let store_fact (_l : Lit.t) = ()
 
 let build_bool2int_b_to_x_lo dir =
   bool2int_push dir "bool2int_b_to_x_lo"
     ~pre:
       [
         (fun e st ->
-          let c = row_fact e (Lit.bool_true "b") in
-          Store.set_lo st (var 0) 1 (Explanation.model_row c));
+          store_fact (Lit.bool_true "b");
+          ignore e;
+          Store.set_lo st (var 0) 1 Explanation.trivial);
       ]
     ~wvar:1 ~wbound:Lo
     ~sol:[ ("b", 1); ("x", 1) ]
@@ -2733,8 +2767,9 @@ let build_bool2int_b_to_x_hi dir =
     ~pre:
       [
         (fun e st ->
-          let c = row_fact e (Lit.bool_false "b") in
-          Store.set_hi st (var 0) 0 (Explanation.model_row c));
+          store_fact (Lit.bool_false "b");
+          ignore e;
+          Store.set_hi st (var 0) 0 Explanation.trivial);
       ]
     ~wvar:1 ~wbound:Hi
     ~sol:[ ("b", 0); ("x", 0) ]
@@ -2747,8 +2782,9 @@ let build_bool2int_x_to_b_lo dir =
     ~pre:
       [
         (fun e st ->
-          let c = row_fact e (Lit.ge "x" 1) in
-          Store.set_lo st (var 1) 1 (Explanation.model_row c));
+          store_fact (Lit.ge "x" 1);
+          ignore e;
+          Store.set_lo st (var 1) 1 Explanation.trivial);
       ]
     ~wvar:0 ~wbound:Lo
     ~sol:[ ("b", 1); ("x", 1) ]
@@ -2758,8 +2794,9 @@ let build_bool2int_x_to_b_hi dir =
     ~pre:
       [
         (fun e st ->
-          let c = row_fact e (Lit.le "x" 0) in
-          Store.set_hi st (var 1) 0 (Explanation.model_row c));
+          store_fact (Lit.le "x" 0);
+          ignore e;
+          Store.set_hi st (var 1) 0 Explanation.trivial);
       ]
     ~wvar:0 ~wbound:Hi
     ~sol:[ ("b", 0); ("x", 0) ]
@@ -2772,12 +2809,40 @@ let build_bool2int_wrong dir =
       ~pre:
         [
           (fun e st ->
-            let c = row_fact e (Lit.bool_false "b") in
-            Store.set_hi st (var 0) 0 (Explanation.model_row c));
+            store_fact (Lit.bool_false "b");
+            ignore e;
+            Store.set_hi st (var 0) 0 Explanation.trivial);
         ]
   in
   let expl = Explanation.clause [ Lit.ge "x" 1; Lit.bool_true "b" ] in
   write_and_emit dir "bool2int_wrong" e ~expl ~model_id:row_le ~sol:[ ("b", 0); ("x", 0) ]
+
+(* The control that was missing, and the reason this file's scenes stopped posting their
+   setup facts as model rows. b is false, so bool2int pushes hi(x) := 0 with the reason
+   `~x_ge_1 \/ b_ge_1` -- the claim, disjoined with the negation of the one fact it
+   read. This emits the claim ALONE, which is what a justification that forgot to record
+   its facts would emit: "x <= 0", unconditionally, which is simply false of the model
+   (b = 1, x = 1 is a solution). veripb must reject it.
+
+   Measured: deleting the facts from [implication] passed all 332 checks and all 28
+   models before this control existed, because the four positive push checks above
+   carried their facts as .opb rows and a factless claim was therefore still entailed.
+   That is the tenth instance of this project's signature failure mode; it is the one
+   the task asked to be looked for, and it was in this file rather than in lib/. *)
+let build_bool2int_factless dir =
+  let e, row_le, _, _, _ =
+    bool2int_scene
+      ~pre:
+        [
+          (fun e st ->
+            store_fact (Lit.bool_false "b");
+            ignore e;
+            Store.set_hi st (var 0) 0 Explanation.trivial);
+        ]
+  in
+  let expl = Explanation.clause [ Lit.le "x" 0 ] in
+  write_and_emit dir "bool2int_factless" e ~expl ~model_id:row_le
+    ~sol:[ ("b", 0); ("x", 0) ]
 
 (* ------------------------------------------- the .opb rows, verbatim, per builtin *)
 
@@ -3169,12 +3234,17 @@ let () =
     ~build:build_bool_clause_conflict;
   run_veripb_rejects ~name:"bool_clause: a rup claiming the wrong polarity"
     ~build:build_bool_clause_wrong;
+  run_veripb_rejects
+    ~name:"bool_clause: a rup that has dropped one of the clause's literals"
+    ~build:build_bool_clause_weakened;
   run_veripb ~name:"bool2int: b -> x, lower bound" ~build:build_bool2int_b_to_x_lo;
   run_veripb ~name:"bool2int: b -> x, upper bound" ~build:build_bool2int_b_to_x_hi;
   run_veripb ~name:"bool2int: x -> b, lower bound" ~build:build_bool2int_x_to_b_lo;
   run_veripb ~name:"bool2int: x -> b, upper bound" ~build:build_bool2int_x_to_b_hi;
   run_veripb_rejects ~name:"bool2int: a rup claiming the wrong polarity"
     ~build:build_bool2int_wrong;
+  run_veripb_rejects ~name:"bool2int: a rup that claims its bound with no facts at all"
+    ~build:build_bool2int_factless;
   test_single_row_check_can_fire ();
   test_no_single_row_refutes "bool_reif_unsat" "bool_reif_unsat.fzn";
   test_no_single_row_refutes "bool_channel_unsat" "bool_channel_unsat.fzn";
