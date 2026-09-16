@@ -60,6 +60,24 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
   derived empty clause (D-0022). A propagator's reason is never cited as a contradiction
   on the propagator's word. `Search.rests_on_a_clause` is where the two are told apart.
 
+- **I-X8** No row is committed to the `.opb` whose arithmetic wrapped.
+  `Encoding.add_int_lin_le` and `add_int_lin_ne` check, in overflow-checked arithmetic,
+  that every integer they and `Opb` will derive from the row is representable, and
+  **raise** rather than wrap or decline — D-0029: there is no "decline" available for an
+  artefact that must exist. `lib/flatzinc/compile.ml`'s cap keeps this unreachable for any
+  model the CLI accepts; the guard is what makes "Compile is the only door" a property of
+  the code rather than of who happens to call it. It does **not** cover a hand-built
+  `Opb.constr` passed to `add_constraint`, nor the pure `expand_*` forms, which stay
+  unguarded **deliberately** so that `test_prop.ml` can go on demonstrating the D-0029
+  defect on the expansion itself. Inspecting an expansion is not writing a file.
+
+- **I-X9** An explanation justifies the bound as **recorded on the trail**, not the bound
+  the propagator asked for. `Domain.set_lo`/`set_hi` settle past holes to re-establish
+  I-D2, so a recorded bound can be strictly stronger than what the reason derives; the
+  reasons of the holes the settle walked over are part of the justification and are cited
+  with it. Violating this produced M1-T44: a correct UNSAT whose chain fell exactly one
+  unit short. See D-0035.
+
 - **I-P5** Every store mutator that can move a bound takes `~facts`, and every propagator
   that calls one passes the facts it actually read. A propagator that prunes through a
   factless mutator writes a D-0018 trace line with an empty reason — an unconditional

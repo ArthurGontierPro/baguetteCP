@@ -2017,3 +2017,48 @@ a case it previously could not see, not a new mechanism.
 differs. Post-fix sweep of ~111,600 solver runs across 62 seeds, zero rejections, with the
 two known reproducers (seeds 133, 151) shown to *fail* with the fix reverted — so the sweep
 is a demonstrated detector rather than a silent pass.
+
+## D-0036  A dependency that cannot be inverted in `lib/` can still be pinned from `test/`
+
+**Status**: accepted, 2026-09-16. **Arose from** M1-T32: `lib/proof/encoding.ml` must not
+commit a row whose arithmetic wrapped (I-X8), but `Encoding` cannot name
+`Baguette_core.Checked` — `lib/proof` does not depend on `lib/core`, and inverting that is
+not on the table.
+
+Three routes were considered and two rejected for reasons worth keeping:
+
+- **Move `Checked`'s primitives into `lib/proof` and have core re-export them.** Rejected
+  because `Checked` is not only arithmetic: it carries `limit`, `row_fits`, `bound_fits`
+  and the derivation of the factor 16 — that is FlatZinc **compile-time policy**, which
+  does not belong in the PB emitter. Splitting the module would separate the operations
+  from the envelope argument whose entire value is being in one place.
+- **A type only a validated constructor can build.** Rejected because it changes
+  `add_int_lin_le`'s signature, which a standing cross-session request forbids, and more
+  substantively because it only *relocates* the check: the type would be defined in
+  `lib/proof` and constructed in the front end, which already has `Checked`.
+- **Accepted**: a local `Arith` in `encoding.ml` — an unavoidable copy — **pinned by a
+  test that asserts it agrees with `Checked` operation by operation**, over a table that
+  straddles `mul`'s fast-path boundary.
+
+The general point, which is the reason this is a decision record and not a comment:
+
+> **The test layer depends on both libraries although neither depends on the other.** That
+> is what makes a duplication *checkable* rather than a second source of truth.
+
+A copy nobody compares is two implementations drifting. A copy with an equivalence test is
+one implementation with a redundant encoding, and the test fails the moment they disagree —
+which is exactly what a break confirmed: widening `Arith.mul`'s fast path reddened the
+equivalence pin *and* two behavioural checks.
+
+**Only the arithmetic half is copied.** `Checked`'s policy half — the limit and the
+envelope — is not, and must not be: the emitter has no business deciding which models the
+front end accepts.
+
+**Why implement rather than document.** D-0031 is the precedent for answering a question
+without implementing it, because implementing measured worse (Θ(w²), 5× on a committed
+model). Here implementing costs ~60 lines, fires on nothing the CLI accepts, and changes
+no emitted byte — all 87 artefacts byte-identical. D-0029's asymmetry decides the rest:
+there is no "decline" available for an artefact that must exist, and that applies with more
+force to the module that *writes* the artefact than to the propagators, where it was
+already accepted. A documented-only invariant would have left the hole the roadmap row
+names — `test_matrix.ml` calls `Encoding` directly — genuinely open.
