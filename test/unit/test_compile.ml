@@ -401,6 +401,166 @@ let test_rejections () =
   expect_accepted "accept: no annotation at all (SPEC 3.4's default)"
     "var 0..3: x;\nconstraint int_le(x,3);\nsolve satisfy;\n"
 
+(* ------------------------------------- 4b. I-S1's oracle is arithmetically independent
+
+   M1-T33, from D-0029's consequence list. [Model.check_assignment] used to evaluate
+   `sum a_i v_i` with the same wrapping `+`/`*` as the propagator and the .opb expansion
+   it exists to check, so on the overflow class it agreed with the bug -- and agreed
+   *because* it computed the same wrong product. It now evaluates exactly.
+
+   These checks live in this file rather than beside the other [check_assignment] checks
+   in test/unit/test_output.ml because that file belongs to another session this round.
+   They are about the oracle, not about compile.ml, and should move when the two files
+   are next held together.
+
+   Note what is NOT asserted here: that this changes any answer the solver gives.
+   M1-T23's cap means no model the front end accepts can reach the wrapping case, so
+   every model's output is byte-identical either way. These models are built by hand,
+   bypassing [Compile] and therefore the cap, which is the only way to put the oracle in
+   front of the arithmetic it used to get wrong. *)
+
+let hand_model vars constraints =
+  {
+    M.vars =
+      Array.of_list
+        (List.map
+           (fun (n, lo, hi) ->
+             { M.v_name = n; M.v_dom = M.Drange (lo, hi); M.v_pos = F.Pos.unknown })
+           vars);
+    M.constraints = List.map (fun k -> { M.k; M.c_pos = F.Pos.unknown }) constraints;
+    M.objective = M.Satisfy;
+    M.search = [];
+    M.output = [];
+  }
+
+let test_oracle_arithmetic () =
+  (* D-0029's own reproduction, put to the oracle directly. -2^61 * 3 = -6.9e18, which
+     is well below zero, so `int_lin_le([-2^61], [x], 0)` HOLDS at x = 3. Native 63-bit
+     multiplication wraps that product to +2^61, a positive number, and answers
+     "violated" -- the same wrong product the .opb row was folded from, which is why the
+     old oracle could not see the bug D-0029 records. *)
+  let big = -2305843009213693952 (* -2^61 *) in
+  let m = hand_model [ ("x", 3, 4) ] [ M.Int_lin_le ([ (big, 0) ], 0) ] in
+  check "I-S1 oracle: -2^61 * 3 <= 0 holds (native arithmetic says it does not)"
+    (M.check_assignment m [| 3 |]);
+  check "I-S1 oracle: the wrapped product would have answered the opposite" (big * 3 > 0);
+  (* The converse direction, so the check above is not passing by answering "true" to
+     everything: the same coefficient with the inequality the other way round. *)
+  let m2 = hand_model [ ("x", 3, 4) ] [ M.Int_lin_le ([ (-big, 0) ], 0) ] in
+  check "I-S1 oracle: 2^61 * 3 <= 0 does not hold" (not (M.check_assignment m2 [| 3 |]));
+  (* Equality and disequality go through the same exact comparison. 2^61 * 3 is not
+     representable, so no [rhs] a native evaluator could be handed makes this true;
+     stated against the exact value's own sign instead. *)
+  let m3 = hand_model [ ("x", 3, 4) ] [ M.Int_lin_eq ([ (big, 0) ], 0) ] in
+  check "I-S1 oracle: -2^61 * 3 = 0 does not hold" (not (M.check_assignment m3 [| 3 |]));
+  let m4 = hand_model [ ("x", 3, 4) ] [ M.Int_lin_ne ([ (big, 0) ], 0) ] in
+  check "I-S1 oracle: -2^61 * 3 <> 0 holds" (M.check_assignment m4 [| 3 |]);
+  (* A sum whose TERMS each fit and whose total does not: two copies of 2^62 - 1 sum to
+     2^63 - 2, which wraps to -2. A native evaluator answers "<= 0"; the truth is not. *)
+  let huge = 4611686018427387903 (* 2^62 - 1 *) in
+  let m5 =
+    hand_model [ ("x", 1, 1); ("y", 1, 1) ] [ M.Int_lin_le ([ (huge, 0); (huge, 1) ], 0) ]
+  in
+  check "I-S1 oracle: (2^62-1) + (2^62-1) <= 0 does not hold (the sum, not a product)"
+    (not (M.check_assignment m5 [| 1; 1 |]));
+  check "I-S1 oracle: that sum really does wrap negative natively" (huge + huge < 0);
+  (* min_int as a coefficient: [of_int] must not negate it. A wrong [of_int] raises or
+     silently returns zero here rather than answering. *)
+  let m6 = hand_model [ ("x", 1, 1) ] [ M.Int_lin_le ([ (min_int, 0) ], -1) ] in
+  check "I-S1 oracle: min_int as a coefficient is exact, not negated"
+    (M.check_assignment m6 [| 1 |]);
+  let m7 = hand_model [ ("x", 1, 1) ] [ M.Int_lin_eq ([ (min_int, 0) ], 0) ] in
+  check "I-S1 oracle: min_int * 1 is not zero" (not (M.check_assignment m7 [| 1 |]));
+  (* Multi-limb times multi-limb. Everything above has at least one single-limb
+     operand, and that is not an accident of the values: a coefficient is what a model
+     writes down, so reaching the case needs a *value* past 2^30 too. It was found by
+     the break-it pass -- with [mul]'s inner carry deleted, every check above still
+     passed, because the inner loop only ever ran once. 2^40 * 2^35 and 2^37 * 2^38 are
+     both 2^75, which no native int holds; they must cancel exactly, leaving the third
+     term, so the assertion pins the exact total rather than only its sign. *)
+  let p1 = 1 lsl 40 and p2 = -(1 lsl 37) in
+  let wide = [ ("x", 0, 1 lsl 40); ("y", 0, 1 lsl 40); ("z", 0, 9) ] in
+  let terms = [ (p1, 0); (p2, 1); (1, 2) ] in
+  let vals = [| 1 lsl 35; 1 lsl 38; 5 |] in
+  check "I-S1 oracle: 2^40*2^35 - 2^37*2^38 + 5 = 5 exactly (multi-limb * multi-limb)"
+    (M.check_assignment (hand_model wide [ M.Int_lin_eq (terms, 5) ]) vals);
+  check "I-S1 oracle: ...and is not 4"
+    (not (M.check_assignment (hand_model wide [ M.Int_lin_eq (terms, 4) ]) vals));
+  check "I-S1 oracle: ...and orders correctly against both neighbours"
+    (M.check_assignment (hand_model wide [ M.Int_lin_le (terms, 5) ]) vals
+    && not (M.check_assignment (hand_model wide [ M.Int_lin_le (terms, 4) ]) vals));
+  (* ...and still not enough, which the break-it pass said again, twice.
+
+     First: 2^40 and 2^35 have *small* limbs (a single bit each), so no limb product
+     comes near 2^30 and [mul]'s inner carry stays zero throughout.
+
+     Second, and worth writing down because it is a trap: the obvious repair --
+     multi-limb operands with full limbs, pinned by commutativity, A*B - B*A = 0 -- is
+     provably blind to a lost inner carry. With the carry dropped, [mul] computes
+     r[k] = (sum of x_i*y_j over i+j=k) mod 2^30, and that convolution is *symmetric* in
+     x and y, so the broken A*B and the broken B*A are equal and cancel just as exactly
+     as the right ones do. A test can be commutative and useless at the same time.
+
+     What does see it is the same exact product reached by two different FACTORISATIONS,
+     because the limbs of 3M are not three times the limbs of M -- [of_int] carries, and
+     the broken multiply does not. 6*M and 2*(3M) are the same number; their broken
+     limb convolutions are not. *)
+  let m_big = 1234567890123456789 in
+  let factor = [ ("p", 0, max_int); ("q", 0, max_int) ] in
+  let two_ways = [ (6, 0); (-2, 1) ] in
+  check "I-S1 oracle: 6*M - 2*(3M) = 0, the same product by two factorisations"
+    (M.check_assignment
+       (hand_model factor [ M.Int_lin_eq (two_ways, 0) ])
+       [| m_big; 3 * m_big |]);
+  check "I-S1 oracle: ...and 6*M - 2*(3M - 1) is not zero"
+    (not
+       (M.check_assignment
+          (hand_model factor [ M.Int_lin_eq (two_ways, 0) ])
+          [| m_big; (3 * m_big) - 1 |]));
+  (* Carries and borrows in the ADDITION, across limbs and across sign: four terms of
+     magnitude 2^62 - 1 that cancel in pairs. Each partial sum is past what a native
+     int holds in both directions. *)
+  let hugev = max_int in
+  let four = [ ("a", 0, 1); ("b", 0, 1); ("c", 0, 1); ("d", 0, 1) ] in
+  let cancel = [ (hugev, 0); (hugev, 1); (-hugev, 2); (-hugev, 3) ] in
+  check "I-S1 oracle: max_int + max_int - max_int - max_int = 0, with carries"
+    (M.check_assignment (hand_model four [ M.Int_lin_eq (cancel, 0) ]) [| 1; 1; 1; 1 |]);
+  check "I-S1 oracle: the same four terms with one dropped are not zero"
+    (not
+       (M.check_assignment
+          (hand_model four [ M.Int_lin_eq (List.tl cancel, 0) ])
+          [| 1; 1; 1; 1 |]));
+  (* Ordinary-sized arithmetic must be unchanged: this is an oracle, and a rewrite that
+     moved a small answer would change what the solver prints. Cross-checked against the
+     native evaluation on every small case, where the two must agree exactly. *)
+  let agree = ref true in
+  for a = -6 to 6 do
+    for b = -6 to 6 do
+      for v = -6 to 6 do
+        for w = -6 to 6 do
+          for rhs = -4 to 4 do
+            let m =
+              hand_model
+                [ ("x", -6, 6); ("y", -6, 6) ]
+                [ M.Int_lin_le ([ (a, 0); (b, 1) ], rhs) ]
+            in
+            if M.check_assignment m [| v; w |] <> ((a * v) + (b * w) <= rhs) then
+              agree := false
+          done
+        done
+      done
+    done
+  done;
+  check "I-S1 oracle: agrees with native arithmetic on every small case (28561 of them)"
+    !agree;
+  (* The bound this module's header derives for [mul]'s inner product. If a later change
+     raises [bits], this is what says so instead of a silent wrap in the oracle itself. *)
+  (* Positive means it did not wrap computing itself; the headroom factor is what a
+     later change to [bits] would eat. At bits = 30 the bound is ~2^60 and max_int is
+     2^62 - 1, so there are two spare bits; at bits = 31 there would be none. *)
+  check "I-S1 oracle: mul's widest intermediate does not wrap, with headroom to spare"
+    (M.Exact.widest_mul_intermediate > 0 && max_int / M.Exact.widest_mul_intermediate >= 4)
+
 (* ------------------------------------------------------ 5. end to end, with veripb *)
 
 (* I-S1: re-check the solution against the model itself rather than trusting the
@@ -439,13 +599,22 @@ let evaluate (m : M.t) (assign : int array) =
       | M.Bool2int (b, x) -> operand x = if truth b then 1 else 0
       | M.Bool_eq (a, b) -> truth a = truth b
       | M.Bool_not (a, b) -> truth a <> truth b
-      | M.Int_lin_ne _ | M.Int_ne _ ->
-          (* STALE COMMENT PRESERVED DELIBERATELY, see the orchestrator note below.
-             This said "compile rejects these", which stopped being true at M1-T11.
-             It is left as a loud failure rather than silently given semantics,
-             because giving it semantics here without a test that reaches it would be
-             writing an oracle nobody has ever seen run. Filed as M1-T40. *)
-          failwith "test_compile: evaluate reached a rejected constraint kind")
+      (* M1-T40. This arm used to be a [failwith] saying "compile rejects these",
+         which stopped being true at M1-T11 -- so from M1-T11 until now the oracle had
+         never once been run on a disequality, and the only thing standing between it
+         and a silently wrong answer was that no model in this file contained one.
+         The semantics below are the FlatZinc definition of the two builtins, read off
+         the spec and deliberately NOT off [Model.check_assignment] or off
+         [lib/core/prop/ne.ml] -- same rule as the Boolean row above, and the reason
+         [evaluate] exists at all.
+
+         The deliverable of M1-T40 is not these two lines, it is
+         [test_end_to_end]'s three disequality models below: an oracle branch nobody
+         has seen run is exactly what D-0030 is about, so the semantics and the models
+         that reach them land together. Confirmed by inverting each arm in turn and
+         watching those models fail. *)
+      | M.Int_lin_ne (ts, r) -> value ts <> r
+      | M.Int_ne (a, b) -> operand a <> operand b)
     m.M.constraints
 
 (* Brute force over the declared box: the independent oracle for the expected answer.
@@ -595,7 +764,34 @@ let test_end_to_end () =
      against the real checker rather than assumed, which is what this run does. *)
   run_model ~title:"e2e unsat: a ground constraint that does not hold"
     ~src:
-      "var 1..3: x;\nconstraint int_le(x,3);\nconstraint int_le(2,1);\nsolve satisfy;\n"
+      "var 1..3: x;\nconstraint int_le(x,3);\nconstraint int_le(2,1);\nsolve satisfy;\n";
+  (* M1-T40: the three models that reach [evaluate]'s disequality arms. Before these,
+     both arms were a [failwith] nothing had ever executed.
+
+     SAT, int_ne: the search must branch (a disequality infers nothing until all but
+     one of its terms is fixed), so [evaluate] is called by [brute_force] over the
+     whole box, again as [Search.solve]'s [~check], and once more on the answer. *)
+  run_model ~title:"e2e sat: int_ne, the search must branch to find a witness"
+    ~src:"var 1..2: x;\nvar 1..2: y;\nconstraint int_ne(x,y);\nsolve satisfy;\n";
+  (* SAT, int_lin_ne, with coefficients past +/-1 so that [value]'s multiplication is
+     exercised rather than only its addition: 2x + 3y <> 7 rules out (2,1) and (5,-1),
+     and of those only (2,1) is in the box, so the oracle must reject exactly one of
+     the four assignments -- an arm that answered [=] would pick that one and nothing
+     else, which is what makes this model able to see the inversion. *)
+  run_model ~title:"e2e sat: int_lin_ne, 2x + 3y <> 7, coefficients past +/-1"
+    ~src:
+      "var 1..2: x;\n\
+       var 1..2: y;\n\
+       constraint int_lin_ne([2,3],[x,y],7);\n\
+       solve satisfy;\n";
+  (* UNSAT at the root, and the case where the two arms cannot cover for each other:
+     int_ne(x,x) is false for every x, so [brute_force] must return [None] -- an arm
+     reading [=] makes it satisfiable everywhere and the run disagrees with the solver
+     rather than merely picking a different witness. Compile folds the two occurrences
+     into a zero coefficient and the empty false sum (see compile.ml's header), so the
+     solver reaches UNSAT by a route that shares nothing with the oracle's reading. *)
+  run_model ~title:"e2e unsat: int_ne(x, x) is false for every x"
+    ~src:"var 1..3: x;\nconstraint int_ne(x,x);\nsolve satisfy;\n"
 
 (* ------------------------------------------------------------------------- main *)
 
@@ -609,6 +805,7 @@ let () =
   test_ground_constraints ();
   test_disequalities ();
   test_rejections ();
+  test_oracle_arithmetic ();
   test_end_to_end ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
