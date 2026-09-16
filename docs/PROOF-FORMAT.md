@@ -158,7 +158,7 @@ turn red when the default moves.
 | cutting planes | `pol <rpn>` | `pol <rpn> ;` | operands may be labels |
 | RUP | `rup <c> ;` | `rup <c> ;` | unchanged: the constraint already carries the terminator, and a second `;` is an error |
 | redundance | `red <c> ; <witness>` | `red <c> : <witness> ;` | the witness moves **before** the terminator. After a `;` it is silently not a witness |
-| delete | `del id N M` | `del id N M ;` | also `del range LO HI ;`, inclusive, tolerant of an already-deleted id and of a reversed range |
+| delete | `del id N M` | `del id N M ;` | also `del range LO HI ;`, **half-open: `[LO, HI)`, so `HI` survives** (measured against 3.0.2, M1-T22); tolerant of an already-deleted id and of a reversed range |
 | delete from core | `delc id N` | `delc N ;` | `delc` loses its `id`; `del` and `core` keep theirs |
 | core | `core id N` | `core id N ;` | |
 | set level | `# l` | **gone** | `#` introduces a proofgoal id; `# 1` is a parse error. See section 5 and D-0024 |
@@ -183,7 +183,9 @@ A constraint can be given a name, in the `.opb`:
 
 and in the proof, on any rule that yields an id (`pol`, `rup`, `red`, `solx`, `soli`);
 the name is then how later rules refer to it: `pol @c1 @c2 +`, `del id @c1`,
-`del range @c1 @c7`, `core id @c1`, `conclusion UNSAT : @c13`.
+`del range @c1 @c7`, `core id @c1`, `conclusion UNSAT : @c13`. That `del range` deletes
+`@c1`..`@c6` and **not** `@c7`; section 5 has the measurement and what it costs the
+writer.
 
 The writer labels **every** constraint `@c<id>` in 3.0 mode, model rows included, and
 cites nothing by number. **Trap 1 below is therefore closed in 3.0**: a citation that
@@ -362,6 +364,53 @@ The set retired is "every id **tagged** at level >= l", not "every id derived si
 level was set". They differ as soon as a level is re-entered after a spell at a lower
 one, which is what search does on every branch: `# 1`, `# 0`, prune at the root, `# 1`,
 prune under the decision, backtrack. The root prunings must survive.
+
+### What `del range LO HI` deletes *(measured, not assumed — M1-T22)*
+
+**`del range LO HI` deletes the half-open span `[LO, HI)`. The constraint named by `HI`
+is not deleted.**
+
+That sentence is a statement about **VeriPB 3.0.2**, the checker `scripts/checker.sh`
+resolves, and about nothing else. It is phrased that way deliberately: this project has
+already shipped a bug because "checked against veripb 2.2.2" was written down as a fact
+about proofs in general and stopped being true when the checker changed (M1-T18, and
+trap 5 in section 2). `test_v3_del_range_semantics` in `test/unit/test_proof.ml`
+re-measures it on every run, and `report_checker` at the top of that file prints which
+binary and which version answered. If a later checker disagrees, that test goes red and
+**this section is what changes**, not the test.
+
+How it was established, with controls in both directions, because "the checker accepted
+it" on its own is not evidence:
+
+| Probe after deriving `@a1 @a2 @a3` | 3.0.2 | what it settles |
+|---|---|---|
+| no deletion, then `pol @a3` | verified | the probe is valid when the id is live |
+| `del id @a3`, then `pol @a3` | error: *"Trying to access constraint with ID 5 that has already been deleted"* | a rejection really does mean "gone from the database" |
+| `del range @a1 @a3`, then `pol @a3` | **verified** | `@a3` **survived** the range that names it |
+| `del range @a1 @a3`, then `pol @a2` | error, ID deleted | the interior is deleted |
+| `del range @a1 @a3`, then `pol @a1` | error, ID deleted | `LO` is deleted |
+| `del range @a1 @a4`, then `pol @a3` | error, ID deleted | widening `HI` by one is what retires the old `HI` |
+
+Two consequences the writer depends on, measured the same way:
+
+- **An unbound label is a parse error**, not a tolerated bound: `del range @a1 @a6` with
+  no `@a6` gives *"The label `@a6` is not assigned to a constraint ID"*. A *numeric*
+  upper bound past the last id **is** tolerated, but the writer cites nothing by number
+  in 3.0 (section 2a) and a bare integer here would reintroduce trap 1 by hand.
+- **An already-deleted label still resolves**, so a range may name an upper bound that
+  an earlier deletion has retired.
+
+So `Writer.del_run` writes the *inclusive* run `[lo, hi]` as `del range lo (hi+1)`, and
+falls back to an explicit `del id` list — still one line, `del id` takes a list — when
+`hi` is the newest id the writer has handed out and there is therefore no `@c(hi+1)`
+label to name. Until M1-T22 it wrote `del range lo hi`, so every run of two or more ids
+left its last id live in the checker while `t.tags` and `t.live` had dropped it: an I-X3
+mirror violation, present in 7 lines across 5 of the 15 shipped models, and invisible to
+the audit because the audit checks our own bookkeeping against itself.
+
+That is why the regression test runs the checker rather than pinning the emitted string.
+The bug *was* a disagreement between our string and the checker's reading of it, and the
+test that pinned the string was green throughout.
 
 A 3.0 proof marks a level with a `% level N` comment where the rule used to be. It is
 emitted unconditionally, not under `--proof-comments`: without it nothing in the proof

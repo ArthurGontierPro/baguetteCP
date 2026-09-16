@@ -385,7 +385,10 @@ let opens_level l proof =
 (* Compress a sorted id list into maximal runs, so a backtrack is one `del range`
    line in the common case instead of one id per retired reason. Contiguity is the
    common case exactly because ids are handed out in order and a level's constraints
-   are derived consecutively. *)
+   are derived consecutively.
+
+   A run is INCLUSIVE of both ends: [(3, 5)] means the ids 3, 4 and 5. `del range`
+   is not -- see [del_run] below, which is where the two conventions meet. *)
 let runs ids =
   let rec go acc lo hi = function
     | [] -> List.rev ((lo, hi) :: acc)
@@ -393,6 +396,37 @@ let runs ids =
     | x :: rest -> go ((lo, hi) :: acc) x x rest
   in
   match ids with [] -> [] | x :: rest -> go [] x x rest
+
+(* The deletion rule that retires exactly the inclusive run [lo, hi] and nothing else.
+
+   **`del range LO HI` deletes the HALF-OPEN span [LO, HI)**: the constraint named by
+   HI survives. That is not a reading of a grammar, it is measured against VeriPB
+   3.0.2 -- the checker of record -- and it is pinned by [test_v3_del_range_semantics]
+   in test/unit/test_proof.ml, which runs the checker rather than asserting our own
+   text. M1-T22: we emitted `del range lo hi` for an inclusive run, so every run of
+   two or more ids left its last id live in the checker while [t.tags] and (under
+   audit) [t.live] had already dropped it -- the I-X3 mirror disagreeing with the
+   thing it mirrors. Not unsound; the proof simply kept a constraint it believed gone.
+
+   So the run [lo, hi] is written `del range <lo> <hi+1>`, and there is a catch: in
+   3.0 every reference is a LABEL, and an unbound label is a hard parse error --
+   "The label `@c9` is not assigned to a constraint ID". When [hi] is the newest id
+   the writer has handed out there is no `@c(hi+1)` yet, so the range cannot name its
+   own upper bound and the run goes out as an explicit `del id` list instead. That is
+   still ONE line -- `del id` takes a list -- it is only longer. Both shapes delete
+   the same set; the fallback is about what can be spelled, not about semantics.
+
+   The hi+1 label may itself already be deleted (a lower-level run retired it
+   earlier). That is fine and is measured too: a deleted label still resolves, and
+   `del range` tolerates already-deleted ids inside the span. *)
+let del_run t (lo, hi) =
+  if lo = hi then rule t (Printf.sprintf "del id %s" (cite t lo))
+  else if hi < t.next_id then
+    rule t (Printf.sprintf "del range %s %s" (cite t lo) (cite t (hi + 1)))
+  else
+    rule t
+      (Printf.sprintf "del id %s"
+         (cite_all t (List.init (hi - lo + 1) (fun k -> lo + k))))
 
 let wipe_level t l =
   if v3 t then (
@@ -408,17 +442,16 @@ let wipe_level t l =
        per reason, and that argument is gone. Runs recover most of it -- a level's
        ids are usually consecutive, so it is usually still one line -- but "usually"
        is not "always" and the proof now grows with the number of retired reasons in
-       the worst case. See D-0024. *)
+       the worst case. See D-0024.
+
+       [del_run] is what turns an inclusive run into a rule; `del range` is half-open
+       and that difference is the whole of M1-T22. *)
     let doomed =
       Hashtbl.fold (fun id lv acc -> if lv >= l then id :: acc else acc) t.tags []
       |> List.sort compare
     in
     List.iter (Hashtbl.remove t.tags) doomed;
-    List.iter
-      (fun (lo, hi) ->
-        if lo = hi then rule t (Printf.sprintf "del id %s" (cite t lo))
-        else rule t (Printf.sprintf "del range %s %s" (cite t lo) (cite t hi)))
-      (runs doomed))
+    List.iter (del_run t) (runs doomed))
   else line t "w %d" l;
   if t.audit then
     let doomed =
