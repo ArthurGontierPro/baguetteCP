@@ -234,7 +234,16 @@ let term_min store (tm : term) =
    can cite would make a proof about it sound. It is unreachable from the CLI today
    (lib/flatzinc/ never calls [Domain.of_list]) and reported as a finding rather than
    guarded here, because a guard would fail loudly in unit tests that build such a
-   domain for reasons that have nothing to do with the proof. *)
+   domain for reasons that have nothing to do with the proof.
+
+   Both directions are reached, and each is load-bearing on its own -- measured, not
+   assumed, because a mirrored pair is where this project keeps shipping a half that
+   nothing runs. Probed over one fuzzer seed (test/unit/test_random.ml, seed 133, 200
+   cases x 9 branching orders): the lower-bound settle fires 62 times and the UPPER-bound
+   settle 71. Each half was then broken on its own, and they fail in different places --
+   dropping [settled_over_lo]'s holes turns test/models/root_hole_unsat.fzn red and
+   leaves that seed green; dropping [settled_over_hi]'s holes leaves the model green and
+   turns 9 of that seed's cases red. Neither test covers the other's half. *)
 
 (* The values [Domain.settle] walked the lower bound over on its way to [cur], newest
    domain state [old] being the one the entry started from: the maximal run of holes
