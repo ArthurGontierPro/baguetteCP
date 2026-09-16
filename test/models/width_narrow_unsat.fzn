@@ -1,0 +1,27 @@
+% The control for width_root_unsat.fzn (M1-T30).
+%
+% Byte-for-byte the same model shape at w = 9 instead of w = 999: two variables
+% declared 0..w, one row demanding 5w/2, which exceeds the declared maximum 2w, so
+% the solver refutes it at the root with zero prunings and zero decisions. The proof
+% is six lines here too, and one `pol` line is still almost all of it.
+%
+% It exists because the thing D-0028 records is a RATIO, and one wide model on its
+% own cannot show a ratio. With this pair in the suite the scaling is readable
+% without running anything by hand:
+%
+%              .opb     .pbp    longest line
+%   w = 9      982 B    303 B      195 B
+%   w = 999    126 kB  23.9 kB    23.8 kB
+%   factor      128x      79x       122x       (w grows 111x)
+%
+% A single number cannot be misread as "wide models happen to be big"; a pair that
+% scales with w cannot be read any other way.
+%
+% w = 9 is also the widest domain the rest of the suite declares, so this model is
+% the point of contact: it says what the other fourteen models are measuring when
+% they measure nothing.
+array [1..2] of int: coeffs = [1, 1];
+var 0..9: a :: output_var;
+var 0..9: b :: output_var;
+constraint int_lin_eq(coeffs, [a, b], 22);
+solve satisfy;
