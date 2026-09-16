@@ -15,5 +15,6 @@
   test_trace
   test_mutation
   test_matrix
-  test_random)
+  test_random
+  test_interval)
  (libraries baguette_core baguette_proof baguette_flatzinc))
