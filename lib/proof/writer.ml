@@ -399,9 +399,86 @@ let is_live t id = Hashtbl.mem t.live id
    has run, nothing more may be written to it. *)
 let is_finished t = t.finished
 
+(* ---------------------------------------------------------------- M1-T47
+   Accounting for the time this module spends WRITING.
+
+   M1-T35 split the CLI's run into phases and found that one of them, [search], is
+   propagation, search and .pbp emission fused: bin/main.ml can only bracket
+   [Search.solve], and every emission point is below it. So no row of bench/ could
+   support "propagation costs X". This is the hook that separates them.
+
+   WHAT IS ACCUMULATED, exactly, because a column that looks authoritative and is not
+   is worse than no column:
+
+     * The three functions below -- [line], [comment], [always_comment] -- are the
+       only places this module writes to [t.oc], plus the [flush] in [conclusion],
+       which is timed too. Every RULE goes through [line] (via [rule], or directly
+       where the body already carries its own `;`). But [comment] and
+       [always_comment] do NOT go through [line], and that is not a corner case: in
+       format 3.0 -- the default -- [set_level] emits its level marker as an
+       [always_comment], so every level marker in every 3.0 proof bypasses [line].
+       All three are instrumented.
+     * NOT the building of a rule's body. [rule t (Printf.sprintf ...)],
+       [Pol.to_string_cited], [Opb.constr_to_string], [lits_to_string] all run at the
+       CALL SITE, before [line] is entered, and are not in this number. So this is a
+       LOWER bound on emission cost, and search-minus-emission is an UPPER bound on
+       propagation. Both are labelled that way wherever they are printed.
+
+   WHY [kfprintf] AND NOT A TIMER AROUND THE BODY. [Printf.fprintf oc fmt] returns a
+   closure that consumes the format's remaining arguments; the output happens as they
+   are applied, i.e. AFTER [line t fmt] has returned. A [let t0 = now () in ... ; r]
+   wrapper around the body therefore times the format set-up and nothing else -- it
+   reads as a plausible small number and is measuring the wrong thing. Measured here
+   before this was written: on width_sat_depth the naive wrapper reports 39 us against
+   this one's 286 us. [kfprintf]'s continuation runs after the last argument has been
+   printed, which is the only place the end of a line can be observed.
+
+   WHY IT IS OFF BY DEFAULT. [Sys.time] costs ~0.72 us per read on this machine
+   (measured, see bench/README.md section 3b) because CLOCK_PROCESS_CPUTIME_ID is a
+   real syscall, not a vDSO read. Two reads per emitted line is ~1.4 us per line of
+   instrument on top of the thing being measured, which on a 545-line proof is most
+   of a millisecond. That is far too much to carry in a normal run, so the gate is a
+   single bool dereference (~1.6 ns, measured) and the CLI closes it only under
+   --time. The overhead that remains INSIDE a --time run is real and is published
+   rather than hidden: [emitted_lines] is counted whether or not the clock is on, so
+   the correction is always computable. *)
+
+let emit_clock = ref false
+let emit_us = ref 0
+let emit_lines = ref 0
+
+(* CPU microseconds, the same clock and rounding bin/main.ml's Timing uses, so that
+   the two numbers can be subtracted. *)
+let emit_now () = int_of_float ((Sys.time () *. 1_000_000.) +. 0.5)
+
+(* Turn the per-line clock on. The CLI does this under --time and nothing else does;
+   a normal run pays one dereference per line and no syscall. *)
+let time_emission = emit_clock
+
+(* CPU microseconds spent inside the writer's own output calls since the process
+   started. Cumulative and process-wide rather than per-writer: a caller brackets the
+   region it cares about by differencing two reads. Reads 0 while the clock is off,
+   which is why [emitted_lines] exists beside it. *)
+let emitted_us () = !emit_us
+
+(* Lines actually written -- rules, level markers, comments that were not suppressed.
+   Counted unconditionally, so it is a witness that the accumulator was reached even
+   in a run with the clock off, and so that the instrument's own cost
+   ([emitted_lines] x one clock read) can be subtracted from [emitted_us]. *)
+let emitted_lines () = !emit_lines
+
 let line t fmt =
   if t.finished then invalid_arg "Writer: the proof has already ended";
-  Printf.fprintf t.oc (fmt ^^ "\n")
+  if not !emit_clock then (
+    incr emit_lines;
+    Printf.fprintf t.oc (fmt ^^ "\n"))
+  else
+    let t0 = emit_now () in
+    Printf.kfprintf
+      (fun _ ->
+        incr emit_lines;
+        emit_us := !emit_us + (emit_now () - t0))
+      t.oc (fmt ^^ "\n")
 
 (* A rule, terminated the way the format wants. 3.0 ends every rule with `;`; 2.0
    ends it at the newline. Rules whose body already carries a `;` -- [rup] and the
@@ -420,13 +497,47 @@ let label_for t id = if v3 t then Opb.label_of id ^ " " else ""
    SetLevel, in 3.0 it introduces a proofgoal id. *)
 let comment_char t = if v3 t then '%' else '*'
 
+(* Both arms are timed, and only the arm that writes is counted. A suppressed comment
+   still walks its format -- [ifprintf] is not free -- and that cost is incurred
+   because the proof machinery is there, so it belongs in the emission number; but it
+   puts no line in the file, so it must not inflate [emitted_lines], which is what the
+   instrument's own overhead is computed from. *)
 let comment t fmt =
-  if t.comments then Printf.fprintf t.oc ("%c " ^^ fmt ^^ "\n") (comment_char t)
-  else Printf.ifprintf t.oc ("%c " ^^ fmt ^^ "\n") (comment_char t)
+  if not !emit_clock then
+    if t.comments then (
+      incr emit_lines;
+      Printf.fprintf t.oc ("%c " ^^ fmt ^^ "\n") (comment_char t))
+    else Printf.ifprintf t.oc ("%c " ^^ fmt ^^ "\n") (comment_char t)
+  else
+    let t0 = emit_now () in
+    let stop _ = emit_us := !emit_us + (emit_now () - t0) in
+    if t.comments then
+      Printf.kfprintf
+        (fun oc ->
+          incr emit_lines;
+          stop oc)
+        t.oc
+        ("%c " ^^ fmt ^^ "\n")
+        (comment_char t)
+    else Printf.ikfprintf stop t.oc ("%c " ^^ fmt ^^ "\n") (comment_char t)
 
 (* A comment that is emitted whether or not --proof-comments is on. Used for the
-   few markers that make a proof navigable at all. *)
-let always_comment t fmt = Printf.fprintf t.oc ("%c " ^^ fmt ^^ "\n") (comment_char t)
+   few markers that make a proof navigable at all -- and, in format 3.0, for the level
+   markers themselves ([set_level]), which is why this bypass of [line] is not a
+   detail: on a model with 196 decisions it is 196 of the proof's lines. *)
+let always_comment t fmt =
+  if not !emit_clock then (
+    incr emit_lines;
+    Printf.fprintf t.oc ("%c " ^^ fmt ^^ "\n") (comment_char t))
+  else
+    let t0 = emit_now () in
+    Printf.kfprintf
+      (fun _ ->
+        incr emit_lines;
+        emit_us := !emit_us + (emit_now () - t0))
+      t.oc
+      ("%c " ^^ fmt ^^ "\n")
+      (comment_char t)
 
 let fresh t ~origin =
   t.next_id <- t.next_id + 1;
@@ -1067,5 +1178,14 @@ let conclusion ?(output = "NONE") t v =
       rule t (Buffer.contents b));
   rule t "end pseudo-Boolean proof";
   t.finished <- true;
-  flush t.oc;
+  (* The fourth write to [t.oc], and the only one that is not a line: it is where the
+     buffered proof actually reaches the kernel, so on a proof of any size it is the
+     single largest emission cost in the whole of [search]. It bypasses [line] by
+     construction and is accumulated here rather than left out. It adds no line, so
+     [emit_lines] does not move. *)
+  (if not !emit_clock then flush t.oc
+   else
+     let t0 = emit_now () in
+     flush t.oc;
+     emit_us := !emit_us + (emit_now () - t0));
   check_audit t
