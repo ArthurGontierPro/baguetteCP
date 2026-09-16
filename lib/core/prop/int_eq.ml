@@ -30,4 +30,4 @@
    interior holes and a different, value-indexed explanation shape; M1 does not ask for
    it and this module does not build it. *)
 
-let make ?le_id ?ge_id store x y = Lin_eq.make ?le_id ?ge_id store [ (1, x); (-1, y) ] 0
+let make ~le_id ~ge_id store x y = Lin_eq.make ~le_id ~ge_id store [ (1, x); (-1, y) ] 0

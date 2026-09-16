@@ -344,15 +344,12 @@ let solve opts (m : Model.t) =
           Writer.create ~comments:opts.proof_comments ~audit:(audit_enabled ()) proof_oc
         in
         Encoding.start_proof encoding writer;
-        (* Every propagator instance carries its own row id (D-0011/D-0015), so a
-           [Trivial] explanation reaching the proof layer means one did not, and there
-           is no honest way to guess which row it meant. Fail rather than pick. *)
-        let ctx =
-          Justify.create ~writer ~encoding ~model_id:(fun () ->
-              failwith
-                "an explanation reached the proof layer as Trivial: some propagator \
-                 instance was built without its model row id (D-0011)")
-        in
+        (* Every propagator instance carries its own row id (D-0011/D-0015). This used
+           to install a [model_id] thunk that raised, because [Explanation.Trivial]
+           could still reach the proof layer and there was no honest way to guess
+           which row it meant. M1-T31 removed the field: there is no ambient row to
+           install, so there is nothing to guard here. *)
+        let ctx = Justify.create ~writer ~encoding in
         (proof_oc, cleanup, ctx))
   in
   let check assignment =

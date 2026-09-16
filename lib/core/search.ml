@@ -278,7 +278,7 @@ let wipe_after_nogood ctx ~lvl ~nogood =
 let rec rests_on_a_clause (e : Explanation.t) =
   match Explanation.force e with
   | Explanation.Clause _ -> true
-  | Explanation.Trivial | Explanation.Model_row _ | Explanation.Linear _ -> false
+  | Explanation.Decision _ | Explanation.Model_row _ | Explanation.Linear _ -> false
   | Explanation.Cut (a, b, _, _) -> rests_on_a_clause a || rests_on_a_clause b
   | Explanation.Combine (summands, _) ->
       List.exists
@@ -426,10 +426,19 @@ and check_decision_landed store lvl outcome =
       && Store.is_level_start store (Store.trail_length store - 1))
 
 (* The low side, [x <= k] -- the decision literal is [~lit]. With [k = lo] (docs/SPEC.md
-   3.4's indomain_min) this fixes [x = lo], which is what it has always done. *)
+   3.4's indomain_min) this fixes [x = lo], which is what it has always done.
+
+   M1-T31/M1-T50: the reason pushed with it is [Explanation.decision ~lit] and not the
+   old [Explanation.trivial]. A decision is an assumption, not an instance of the model
+   constraint, and calling it [Trivial] was what let a propagator citing this entry
+   render it as the ambient model row (see explanation.ml's header). The literal is
+   exactly the one this branch assumes, so a propagator that reads a bound this entry
+   established can see *that* it is an assumption and weaken it out of its [pol]
+   (lib/core/prop/linear.ml's [Snap_assume]) rather than citing an id that does not
+   exist. It is the same literal the nogood negates on the way back out. *)
 and explore_le store engine ctx trace order decisions v k lit =
   let lvl = Store.level store in
-  let outcome = Store.set_hi store v k Explanation.trivial in
+  let outcome = Store.set_hi store v k (Explanation.decision (Lit.negate lit)) in
   match outcome with
   | Store.Conflict _ ->
       (* [k >= lo] and [lo] is in [v]'s domain (I-D2), so [set_hi _ k] cannot empty it;
@@ -447,7 +456,7 @@ and explore_le store engine ctx trace order decisions v k lit =
    [k + 1 <= hi] and [hi] is in the domain, so this push cannot empty it either. *)
 and explore_ge store engine ctx trace order decisions v k lit =
   let lvl = Store.level store in
-  let outcome = Store.set_lo store v (k + 1) Explanation.trivial in
+  let outcome = Store.set_lo store v (k + 1) (Explanation.decision lit) in
   match outcome with
   | Store.Conflict _ ->
       Trace.emit ctx trace store;

@@ -6,39 +6,39 @@
    to sit on the [core] side of the line, calling down into [Baguette_proof.Writer].
 
    docs/PROOF-FORMAT.md section 2's rule is "prefer [pol] over [rup] everywhere [pol]
-   states the reasoning; [rup] makes the checker search" -- [Cut] and [Trivial] follow
-   it. [Clause] cannot (see the comment there), and neither, it turns out, can [Linear]
-   as [Explanation.t] is shaped today -- see D-0009 (docs/DECISIONS.md) and the comment
-   on [emit_linear].
+   states the reasoning; [rup] makes the checker search" -- [Cut], [Combine] and
+   [Model_row] follow it. [Clause] cannot (see the comment there), and neither, it
+   turns out, can [Linear] as [Explanation.t] is shaped today -- see D-0009
+   (docs/DECISIONS.md) and the comment on [emit_linear]. [Decision] is neither: it is
+   not a derivation at all, and [emit] refuses it rather than rendering it as
+   something.
 
    -------------------------------------------------------------------------------
-   Context
+   Context -- and the ambient row that used to live in it (M1-T31)
    -------------------------------------------------------------------------------
 
-   [Explanation.Trivial] carries no data: it is just "the model constraint itself
-   justifies this". That is only meaningful relative to *which* model constraint is
-   currently being justified, and the [Explanation.t] type -- frozen for M1-T7, shared
-   with agent-core's propagators -- has no field to say so. So [emit] cannot answer
-   "which constraint is this about" from the explanation value alone; it has to be told,
-   which is what [ctx] is for:
+   [ctx] carries two things, and it used to carry a third:
 
      - [writer]   the proof writer every rule is emitted through.
      - [encoding] lets Justify sanity-check that the literals an explanation mentions
        belong to variables the encoding actually declared, which turns "propagator
        passed garbage" into an immediate, legible error instead of a confusing veripb
        rejection several lines later.
-     - [model_id] the lookup: "what is the id of the model constraint this batch of
-       explanations is about, right now". A thunk rather than a plain [Writer.cid]
-       because the answer can depend on state the caller only has lazily (e.g. a
-       constraint not yet posted), and because [for_constraint] below rebinds it
-       per-site while sharing everything else.
 
-   A single [ctx] is not pinned to one model constraint for its whole life: a caller
-   working through several posted constraints uses [for_constraint ctx model_id] to get
-   a view with a different [model_id] but the *same* writer, encoding and memo (the memo
-   lives behind a [ref] precisely so that copying the record for [for_constraint] does
-   not fork it). Construct one [ctx] near where the writer and encoding themselves live,
-   and re-derive per-constraint views from it with [for_constraint] as needed.
+   The third was [model_id], a thunk answering "what is the id of the model constraint
+   this batch of explanations is about, right now", with a [for_constraint] view to
+   rebind it per site. It existed for one reason: [Explanation.Trivial] carried no
+   data, so [emit] could not answer "which constraint is this about" from the
+   explanation value alone and had to be told.
+
+   Both are gone. D-0015 gave the ADT [Model_row id], so an explanation names its own
+   row; D-0011 says each propagator instance justifies against exactly one row and
+   [Linear.make] now *requires* it; and M1-T31 deleted [Trivial], which was the only
+   constructor that ever consulted the ambient pointer. What is left is the property
+   the row was written for: a [ctx] has no field in which an ambient row could be
+   stored, so no explanation can render as "whatever row happens to be current" -- not
+   by discipline, but because there is nowhere to put one. A caller that used to reach
+   for [for_constraint] wants [Explanation.model_row] in the explanation instead.
 
    -------------------------------------------------------------------------------
    Memoisation
@@ -59,8 +59,8 @@
    distinct explanation nodes alive during one conflict's analysis is small, so a linear
    scan costs nothing that matters, and it sidesteps the mutable-hash-key trap entirely.
 
-   [Trivial] is never memoised: it is a constant constructor (all its values are the
-   same immediate), it never writes anything, and re-answering [model_id ()] is free.
+   [Model_row] is never memoised: it writes nothing and returns the id it already
+   carries, so there is nothing to remember.
 
    Every memo entry is tagged with the writer's level at the moment it was created
    (docs/PROOF-FORMAT.md section 5: [w] wipes every constraint at or above a level).
@@ -79,19 +79,13 @@ type memo_entry = { cid : Writer.cid; level : int }
 type ctx = {
   writer : Writer.t;
   encoding : Encoding.t;
-  model_id : unit -> Writer.cid;
   memo : (Explanation.t * memo_entry) list ref;
-      (* Boxed behind a ref so [for_constraint]'s record copy shares it rather than
-         forking it: only [model_id] is meant to differ between views of the same
-         underlying proof state. *)
+      (* Boxed behind a ref for the same reason it always was -- it is proof state,
+         shared by every view of the same writer -- although since M1-T31 removed
+         [for_constraint] there is only ever one view. *)
 }
 
-let create ~writer ~encoding ~model_id = { writer; encoding; model_id; memo = ref [] }
-
-(* A view of [ctx] with a different answer to "what is the current model constraint",
-   sharing the writer, encoding and memo. Use this when moving from justifying one
-   posted constraint's prunings to another's. *)
-let for_constraint ctx model_id = { ctx with model_id }
+let create ~writer ~encoding = { writer; encoding; memo = ref [] }
 
 let find_memo ctx (e : Explanation.t) =
   let rec go = function
@@ -271,10 +265,17 @@ let emit_combine ~emit ctx summands divisor =
 (* [emit ctx e] renders [e] into proof rules through [Writer] and returns the id of the
    resulting constraint.
 
-   - [Trivial] costs nothing: it returns [ctx.model_id ()] directly, no rule emitted.
-   - [Model_row id] costs nothing either: [id] is already the constraint's id, no
-     lookup and no rule (see explanation.ml's header on why this differs from
-     [Trivial]).
+   - [Model_row id] costs nothing: [id] is already the constraint's id, no lookup and
+     no rule.
+   - [Decision] is the one constructor with no rendering at all, and the refusal is
+     the point rather than an omission. Nothing in the proof establishes a decision
+     (D-0009: a [pol] cannot assert a literal, a [rup] cannot derive a non-consequence),
+     so there is no id to return and no rule to write; the decisions reach the proof
+     negated, in the branch's nogood, and nowhere else (D-0018). Reaching here means a
+     caller asked for the id of an assumption -- which is what M1-T50 was, silently
+     answered with the ambient model row. [Explanation.term] and [Explanation.cut]
+     refuse to build a citation out of a decision, so the only way in is a direct
+     [emit] on one.
    - Every other constructor is memoised on [e]'s physical identity (see the module
      header) before doing any work, so asking for the same explanation twice is free
      the second time.
@@ -285,7 +286,13 @@ let emit_combine ~emit ctx summands divisor =
      inner explanation's rule twice (that guarantee is this memo). *)
 let rec emit ctx (e : Explanation.t) : Writer.cid =
   match e with
-  | Explanation.Trivial -> ctx.model_id ()
+  | Explanation.Decision l ->
+      invalid_arg
+        (Printf.sprintf
+           "Justify.emit: a decision (%s) has no constraint id -- nothing in the proof \
+            establishes it. A decision reaches the proof only negated, in its branch's \
+            nogood (D-0018). See justify.ml's [emit] header and M1-T50."
+           (Lit.to_string l))
   | Explanation.Model_row id -> id
   | Explanation.Clause lits -> memoized ctx e (fun () -> emit_clause ctx lits)
   | Explanation.Linear (terms, rhs) ->

@@ -83,8 +83,10 @@
 
    No [Explanation] constructor was needed for any of this: [Clause] was enough, which
    is D-0019 arriving at the same place from the disequality side. And no row id is
-   cited, so D-0011's [Trivial] hazard cannot arise here any more than it can in
-   lib/core/prop/ne.ml -- [make] takes no [?row_id] for that reason.
+   cited, so D-0011's "which row did this mean" hazard cannot arise here any more than
+   it can in lib/core/prop/ne.ml -- [make] takes no row id for that reason. (M1-T31
+   removed the ambient row the hazard used to resolve to; this module never depended
+   on it.)
 
    A bound fact still sitting at the variable's *declared* value contributes nothing
    to a clause: it is the encoding's constant true (docs/PROOF-FORMAT.md section 3,

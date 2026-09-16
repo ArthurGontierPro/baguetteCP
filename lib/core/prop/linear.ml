@@ -35,16 +35,22 @@
    this has to happen before anything (including this propagator, on a later call) has
    narrowed it.
 
-   [make] also takes [?row_id], the id (a Baguette_proof.Writer.cid, i.e. plain [int] --
+   [make] also takes [~row_id], the id (a Baguette_proof.Writer.cid, i.e. plain [int] --
    this module has no reason to depend on [Baguette_proof.Writer] just for its type) the
    .opb already gave this instance's own row. D-0011: one instance justifies against
    exactly one row, and that row is posted to the encoding before any propagator ever
    runs, so the id is available at construction time; passing it in beats resolving it
    later through an ambient [Justify.ctx], which is exactly the trap D-0013 hit (see
-   [Explanation.Model_row]'s header in lib/core/explanation.ml). It is optional, not
-   required, only because no caller in this checkout wires a model to the engine yet
-   (D-0010's own note, still true) -- every caller that *has* an id should always pass
-   it; see [base_explanation] below for what omitting it costs.
+   [Explanation.Model_row]'s header in lib/core/explanation.ml).
+
+   It is **required**, as of M1-T31. It was optional while nothing wired a model to the
+   engine (D-0010's note), and the fallback was [Explanation.Trivial] -- "whatever row
+   [ctx.model_id] currently points at". That fallback is what made the ambient row
+   reachable at all, so removing it and deleting [Trivial] are one change: with no
+   caller able to omit the id and no constructor able to mean "the current row", a
+   [Justify.ctx] has nowhere left to keep an ambient row and does not have the field.
+   A test that has no real row and does not care which one it names should pass a
+   made-up id and say so, rather than leave the question open.
 
    ---------------------------------------------------------------------------
    Proof step this justifies -- docs/DECISIONS.md D-0013, "weaken, divide, add"
@@ -127,21 +133,16 @@ module Lit = Baguette_proof.Lit
    explanation needs is the declared bound, which the store no longer holds once this or
    any other propagator has narrowed the domain). *)
 type term = { coeff : int; x : Var.t; decl_lo : int; decl_hi : int }
-type t = { terms : term list; rhs : int; row_id : int option }
+type t = { terms : term list; rhs : int; row_id : int }
 
 let name = "int_lin_le"
 let consistency = Propagator.Bounds
 
-(* [row_id] is optional -- and should always be given once a caller has one to give
-   (see the module header) -- purely so this stays source-compatible with callers
-   that have no id to hand yet (nothing wires the model to the engine before M1-T11,
-   docs/DECISIONS.md D-0010's own note). Without one, the base of every [Combine]
-   this instance builds falls back to [Explanation.trivial], which -- exactly the
-   ambiguity D-0013's own header on [Explanation.Model_row] describes -- only
-   resolves correctly for a caller that never combines this instance's explanations
-   with another instance's inside one [Combine] and controls [ctx.model_id] itself
-   for the single row in play. *)
-let make ?row_id store raw_terms rhs =
+(* [row_id] is required (M1-T31; see the module header). Every [Combine] this instance
+   builds is based on [Model_row row_id], so an instance without one could not name its
+   own base -- and the old answer to that, [Explanation.trivial], named whichever row
+   happened to be ambient in the [Justify.ctx] doing the rendering. *)
+let make ~row_id store raw_terms rhs =
   let terms =
     List.map
       (fun (coeff, x) ->
@@ -151,9 +152,7 @@ let make ?row_id store raw_terms rhs =
   in
   { terms; rhs; row_id }
 
-let base_explanation t =
-  match t.row_id with Some id -> Explanation.model_row id | None -> Explanation.trivial
-
+let base_explanation t = Explanation.model_row t.row_id
 let vars t = List.map (fun tm -> tm.x) t.terms
 
 (* -------------------------------------------------------------- integer division *)
@@ -331,7 +330,39 @@ let find_hi_reason store v ~decl_hi =
    [Snap_cite]'s [holes] is M1-T44's addition: [expl] is still the entry that moved the
    bound, and [holes] the reason of every hole that entry's settle walked past on the
    way to it. [holes] is empty for every bound that was not settled over one, which is
-   every bound in a model with no disequality, and the rendering is then unchanged. *)
+   every bound in a model with no disequality, and the rendering is then unchanged.
+
+   ---------------------------------------------------------------------------
+   [Snap_assume] -- M1-T50: a bound a *decision* established cannot be cited
+   ---------------------------------------------------------------------------
+
+   The [Snap_cite] branch's whole premise is that the bound was established by
+   something with an id in the proof. A search decision is not: nothing derives it
+   (D-0009, and search.ml's header argues it at length), so there is no constraint for
+   a [pol] to name. Until M1-T50 that case still took the [Snap_cite] branch, because
+   the reason a decision pushed was [Explanation.Trivial] and so indistinguishable from
+   a model row; [Justify.emit] then answered [ctx.model_id ()] and the step came out as
+   `pol <own row> <own row> +` -- the row added to itself, where the fact belonged. It
+   verified, because a [pol] makes no claim for a checker to refuse, and it said
+   something the explanation did not.
+
+   [Explanation.Decision] now names the case, and the honest rendering is the one that
+   was always available: *weaken the term away*, exactly as for a bound still at its
+   declared value. An axiom cannot assert a bound but it can weaken one away (D-0009),
+   and it is valid whatever the variable turns out to be, so the resulting [Combine] is
+   sound. It is also *weaker* than the bound the propagator pushed -- it has to be,
+   because the decision the pruning really rested on is not in the checker's database
+   at all. That is not a loss: a pruning made under a decision is justified by D-0018's
+   trace line, never by this [pol] (a [Combine] is emitted only at a root conflict,
+   where by construction no decision is in force), and the trace line is where the
+   decision's literal belongs.
+
+   Which is why [Snap_assume] keeps [fact] and [Snap_weaken] does not. The two render
+   identically into the [Combine] and differently into [facts_of_snaps]: the decision
+   moved the bound, so the pruning does depend on it, and dropping it from the trace
+   line would make that line an unconditional claim -- false on a satisfiable model,
+   the exact I-P5 failure [int_ne] shipped between M1-T9 and M1-T17. The emitted facts
+   are therefore byte-for-byte what they were before this change. *)
 type source_snap =
   | Snap_weaken of { coeff : int; name : string; decl_lo : int; decl_hi : int }
   | Snap_cite of {
@@ -340,79 +371,70 @@ type source_snap =
       holes : Explanation.t list;
       fact : Lit.t;
     }
+  | Snap_assume of {
+      coeff : int;
+      name : string;
+      decl_lo : int;
+      decl_hi : int;
+      fact : Lit.t;
+    }
+
+(* Is any reason this bound rests on a search decision?
+
+   Matched WITHOUT forcing, deliberately. [Explanation.force] on a [Deferred] runs a
+   propagator's thunk, and this predicate is consulted once per term per pruning at
+   *snapshot* time -- forcing here would make every explanation eager and undo
+   docs/ARCHITECTURE.md's "Deferred explanations" wholesale. It costs nothing to skip:
+   [Explanation.decision] is the only producer of a [Decision] and search.ml pushes it
+   directly, so a decision never arrives wrapped in a thunk. A [Deferred] that forced
+   to one would be a propagator claiming to have derived an assumption, which is a
+   different bug from this one.
+
+   The whole list, not just the head: a hole's reason (M1-T44) is cited at the same
+   scale as the bound itself, so if any of them is uncitable the term cannot be cited
+   at all and the honest move is to weaken the lot away. Holes come from
+   [Store.remove_with_facts] and a decision never removes a value, so this is a guard
+   on the invariant rather than a case anything reaches today. *)
+let rests_on_a_decision reasons =
+  List.exists (function Explanation.Decision _ -> true | _ -> false) reasons
 
 (* [None] only for a zero coefficient (an absent term, contributing nothing). Otherwise
    picks the bound relevant to this term's sign (D-0013's own case split, matching
-   [term_min]'s), and within it, declared (weaken) vs. derived (cite): see the module
-   header. The defensive branches below (falling back to weakening when the bound is
-   tighter than declared but no trail entry can be found) should be unreachable --
-   I-D2/I-D3 guarantee a bound only tightens via a recorded entry -- but weakening is
-   still *sound* even if this bookkeeping is ever wrong, just weaker than it should be,
-   so a defensive fallback here fails soft rather than emitting something unsound. *)
+   [term_min]'s), and within it: declared (weaken), assumed (weaken, but keep the fact
+   -- M1-T50), or derived (cite). See the module header for all three.
+
+   The defensive branches below (falling back to weakening when the bound is tighter
+   than declared but no trail entry can be found) should be unreachable -- I-D2/I-D3
+   guarantee a bound only tightens via a recorded entry -- but weakening is still
+   *sound* even if this bookkeeping is ever wrong, just weaker than it should be, so a
+   defensive fallback here fails soft rather than emitting something unsound. *)
 let snapshot_source store (tm : term) : source_snap option =
   if tm.coeff = 0 then None
-  else if tm.coeff >= 0 then
-    let cur = Domain.lo (Store.get store tm.x) in
-    if cur <= tm.decl_lo then
-      Some
-        (Snap_weaken
-           {
-             coeff = tm.coeff;
-             name = Store.name store tm.x;
-             decl_lo = tm.decl_lo;
-             decl_hi = tm.decl_hi;
-           })
-    else
-      match find_lo_reason store tm.x ~decl_lo:tm.decl_lo with
-      | expl :: holes ->
-          Some
-            (Snap_cite
-               {
-                 coeff = tm.coeff;
-                 expl;
-                 holes;
-                 fact = Lit.ge (Store.name store tm.x) cur;
-               })
-      | [] ->
-          Some
-            (Snap_weaken
-               {
-                 coeff = tm.coeff;
-                 name = Store.name store tm.x;
-                 decl_lo = tm.decl_lo;
-                 decl_hi = tm.decl_hi;
-               })
   else
-    let cur = Domain.hi (Store.get store tm.x) in
-    if cur >= tm.decl_hi then
-      Some
-        (Snap_weaken
-           {
-             coeff = tm.coeff;
-             name = Store.name store tm.x;
-             decl_lo = tm.decl_lo;
-             decl_hi = tm.decl_hi;
-           })
+    let name = Store.name store tm.x in
+    let weakened =
+      Snap_weaken { coeff = tm.coeff; name; decl_lo = tm.decl_lo; decl_hi = tm.decl_hi }
+    in
+    let assumed fact =
+      Snap_assume
+        { coeff = tm.coeff; name; decl_lo = tm.decl_lo; decl_hi = tm.decl_hi; fact }
+    in
+    let derived reasons fact =
+      match reasons with
+      | _ when rests_on_a_decision reasons -> assumed fact
+      | expl :: holes -> Snap_cite { coeff = tm.coeff; expl; holes; fact }
+      | [] -> weakened
+    in
+    if tm.coeff >= 0 then
+      let cur = Domain.lo (Store.get store tm.x) in
+      if cur <= tm.decl_lo then Some weakened
+      else
+        Some (derived (find_lo_reason store tm.x ~decl_lo:tm.decl_lo) (Lit.ge name cur))
     else
-      match find_hi_reason store tm.x ~decl_hi:tm.decl_hi with
-      | expl :: holes ->
-          Some
-            (Snap_cite
-               {
-                 coeff = tm.coeff;
-                 expl;
-                 holes;
-                 fact = Lit.le (Store.name store tm.x) cur;
-               })
-      | [] ->
-          Some
-            (Snap_weaken
-               {
-                 coeff = tm.coeff;
-                 name = Store.name store tm.x;
-                 decl_lo = tm.decl_lo;
-                 decl_hi = tm.decl_hi;
-               })
+      let cur = Domain.hi (Store.get store tm.x) in
+      if cur >= tm.decl_hi then Some weakened
+      else
+        Some (derived (find_hi_reason store tm.x ~decl_hi:tm.decl_hi) (Lit.le name cur))
 
 (* One snapshot, one *or more* summands. A [Snap_cite] with holes behind it contributes
    one [Term] per reason, all at [abs coeff] -- the scale at which the bound itself
@@ -426,7 +448,10 @@ let snapshot_source store (tm : term) : source_snap option =
    clause folded in as a bound, and for the same reason: weakening it away would erase
    the signal and still not close. *)
 let summands_of_snap = function
-  | Snap_weaken { coeff; name; decl_lo; decl_hi } ->
+  | Snap_weaken { coeff; name; decl_lo; decl_hi }
+  (* M1-T50: identical arithmetic to [Snap_weaken]. The two differ only in
+     [facts_of_snaps] -- see the [source_snap] header. *)
+  | Snap_assume { coeff; name; decl_lo; decl_hi; _ } ->
       let lits, _ = Order_reason.weaken_declared ~coeff ~name ~decl_lo ~decl_hi in
       [ Explanation.weaken lits ]
   | Snap_cite { coeff; expl; holes; _ } ->
@@ -449,7 +474,11 @@ let summands_of_snap = function
    derived when). Sign follows the same case split as the [Combine]: a_i >= 0 reads
    lo(x_i) and states [x_i >= lo], a_i < 0 reads hi(x_i) and states [x_i <= hi]. *)
 let facts_of_snaps snaps =
-  List.filter_map (function Snap_cite { fact; _ } -> Some fact | _ -> None) snaps
+  List.filter_map
+    (function
+      | Snap_cite { fact; _ } | Snap_assume { fact; _ } -> Some fact
+      | Snap_weaken _ -> None)
+    snaps
 
 (* All terms except the one at [idx] (by position, not value - a variable could in
    principle appear twice, and each occurrence is excluded independently). *)

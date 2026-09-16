@@ -17,7 +17,7 @@
 
    Justification shape: identical to [int_lin_le]'s -- docs/DECISIONS.md D-0013's
    "weaken, divide, add" [Combine], over the model row [x - y <= 0] (its own row id
-   passed in as [?row_id], same requirement as [Linear.make]'s). See
+   passed in as [~row_id], required exactly as [Linear.make]'s is). See
    docs/PROOF-FORMAT.md section 4's `int_le` row, which currently describes a direct,
    hand-modelled `int_le` ("pol -- single model constraint, unit"); as implemented
    here the row should instead say "same as int_lin_le" -- reported back per this
@@ -27,6 +27,6 @@ type t = Linear.t
 
 let name = "int_le"
 let consistency = Propagator.Bounds
-let make ?row_id store x y = Linear.make ?row_id store [ (1, x); (-1, y) ] 0
+let make ~row_id store x y = Linear.make ~row_id store [ (1, x); (-1, y) ] 0
 let vars = Linear.vars
 let propagate = Linear.propagate

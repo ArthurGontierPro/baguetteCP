@@ -23,12 +23,14 @@
    a pruning's explanation is recorded on the trail as [{ var; old; why }]
    (lib/core/store.ml's [entry]) -- **the trail records no propagator identity** -- so a
    caller walking the trail later (conflict analysis, from M2-T3 on) has the
-   explanation and nothing else and cannot tell which half produced it. [Trivial] is
-   then unresolvable: there is no way to route it to the correct [ctx.model_id]. The
-   fix is not a cleverer routing scheme, it is to never need one: post [le] and [ge] as
-   two instances, each of which is asked to justify only against the one row it knows
-   about, so [Trivial] is resolvable by construction and nothing ever has to inspect an
-   explanation to work out which row it meant.
+   explanation and nothing else and cannot tell which half produced it. A reason that
+   names no row is then unresolvable: there is no way to route it to the right model
+   constraint. The fix is not a cleverer routing scheme, it is to never need one: post
+   [le] and [ge] as two instances, each of which is asked to justify only against the
+   one row it knows about and each of which carries that row's id, so every base is a
+   [Model_row] and nothing ever has to inspect an explanation to work out which row it
+   meant. M1-T31 finished the job by deleting the fallback: there is no ambient row
+   left to route to, so a row that is not named cannot be guessed.
 
    The fixpoint reasoning the old fused loop used to justify itself is still correct,
    it just belongs to the engine now, not here: [engine.ml] runs propagators to a
@@ -54,13 +56,16 @@
    not say what the propagators believe (roadmap M1-T23, lib/core/checked.ml). *)
 let negate_terms terms = List.map (fun (a, x) -> (Checked.neg a, x)) terms
 
-(* [make store terms rhs ?le_id ?ge_id] : (le, ge), the two [Linear.t] instances the
+(* [make store terms rhs ~le_id ~ge_id] : (le, ge), the two [Linear.t] instances the
    equality [sum terms = rhs] decomposes into. Post both to the engine; pair [le]
    with the `<=` id and [ge] with the `>=` id from [Encoding.add_equality] (whose own
-   return order is [(geq, leq)] -- i.e. [?ge_id] is that function's first result,
-   [?le_id] its second). Both optional for the same reason [Linear.make]'s [?row_id]
-   is -- see that module's header. *)
-let make ?le_id ?ge_id store terms rhs =
-  let le = Linear.make ?row_id:le_id store terms rhs in
-  let ge = Linear.make ?row_id:ge_id store (negate_terms terms) (Checked.neg rhs) in
+   return order is [(geq, leq)] -- i.e. [~ge_id] is that function's first result,
+   [~le_id] its second). Both required for the same reason [Linear.make]'s [~row_id]
+   is (M1-T31) -- see that module's header. The pairing is this function's whole
+   point: the two halves are two different rows, so an instance that could not name
+   its own would have to fall back on whichever one happened to be ambient, and that
+   is precisely the ambiguity D-0011 named. *)
+let make ~le_id ~ge_id store terms rhs =
+  let le = Linear.make ~row_id:le_id store terms rhs in
+  let ge = Linear.make ~row_id:ge_id store (negate_terms terms) (Checked.neg rhs) in
   (le, ge)

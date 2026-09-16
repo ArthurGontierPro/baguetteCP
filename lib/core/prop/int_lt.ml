@@ -16,6 +16,6 @@ type t = Linear.t
 
 let name = "int_lt"
 let consistency = Propagator.Bounds
-let make ?row_id store x y = Linear.make ?row_id store [ (1, x); (-1, y) ] (-1)
+let make ~row_id store x y = Linear.make ~row_id store [ (1, x); (-1, y) ] (-1)
 let vars = Linear.vars
 let propagate = Linear.propagate
