@@ -9,7 +9,7 @@
 # with a reason you are willing to write into WORKLOG.md.
 MEM_CAP_KB ?= 4000000
 
-.PHONY: build test unit models check fmt clean proof bootstrap bench
+.PHONY: build test unit models check fmt lint clean proof bootstrap bench
 
 build:
 	dune build
@@ -27,8 +27,16 @@ fmt:
 	@command -v ocamlformat >/dev/null 2>&1 && dune build @fmt --auto-promote || \
 	  echo "ocamlformat not installed; skipping (opam install ocamlformat)"
 
+# The declared-width lint (M1-T53's sibling). Its self-test runs FIRST and on every
+# gate, so the guard re-proves it can fail before it is trusted to pass -- three test
+# binaries died at the memory ceiling because a width went unnoticed, and the first
+# draft of this lint waved the real line through.
+lint:
+	./scripts/check_test_widths.sh --self-test
+	./scripts/check_test_widths.sh
+
 # The gate. Run this before every commit.
-check: fmt build test
+check: fmt build lint test
 	@echo "check: ok"
 
 # Solve one model and verify its proof end to end.
