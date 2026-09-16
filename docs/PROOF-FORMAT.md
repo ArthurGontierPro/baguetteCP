@@ -223,6 +223,65 @@ variable. Bound prunings become unit literals over this family, which is exactly
 order encoding is the default: `lo := k` is the single literal `x_ge_k`, and `hi := k` is
 `~x_ge_(k+1)`.
 
+#### The consistency clauses are in the `.opb`, and they are load-bearing *(normative — M1-T25)*
+
+The `u - l - 1` consistency clauses ("the ladder") are written into the `.opb` eagerly, by
+`Encoding.declare_int`, for every declared variable. That is a requirement, not an
+implementation choice, and the reason is not the one it looks like:
+
+- **No derivation this project emits ever cites a ladder id.** `Encoding.consistency_id`
+  has **no** caller in `lib/` or `bin/` at all — only `test/unit/test_proof.ml` — and the
+  one place in `lib/` that reads the id table, `derive_at_most_one`, is itself called only
+  from that same test file. Read from the emission side, the ladder looks like dead weight.
+- **The checker's unit propagation needs it anyway.** Every `rup` in this project — the
+  D-0018 trace lines of section 4 above, and the branch nogoods that are RUP *along*
+  them — is checked by propagating from the model rows. A model row is the order
+  encoding's expansion (section 3's substitution, `Encoding.expand_int_lin_le`), in which
+  every literal of one variable carries the *same* coefficient, so the row constrains only
+  **how many** of `x`'s literals hold. Nothing but the ladder ties "`x_ge_k` holds" to
+  "at least `k - l` of them hold". Without it, `~x_ge_k` propagates nothing, the row's
+  slack never goes negative, and the trace line is not RUP.
+
+Measured rather than argued, because "nothing cites it" is a tempting thing to act on.
+Strip every ladder row out of each model's `.opb` (labels are explicit in 3.0, so the
+survivors keep their names; only the `f` count moves) and re-run the checker:
+
+| | models | what they have in common |
+|---|---|---|
+| still accepted | 13 of 20 | no trace line whose RUP check needs a count |
+| rejected | 7 of 20 | `chain_sat`, `guess_wrong_sat`, `ne_conflict_sat`, `near_limit_ne_sat`, `near_limit_unsat`, `offset_unsat`, `width_sat_depth` — and in every one the **first** line to fail is the first trace line |
+
+The `.opb` is therefore Θ(declared width) per variable twice over: once for the ladder and
+once for each row the variable appears in. That is a cost the project has accepted, not
+one it has failed to notice; **D-0028** owns the justification half of the same root cause
+and **D-0031** owns this half, including the measurement of what deferring the ladder
+would cost.
+
+#### Introducing a ladder rung mid-proof, if it is ever wanted
+
+It can be done, and the witness is not the obvious one. Measured against VeriPB 3.0.2:
+
+```
+red +1 ~x_ge_(v+1) +1 x_ge_v >= 1 : <witness> ;
+```
+
+- **A swap witness — `x_ge_v -> x_ge_(v+1)  x_ge_(v+1) -> x_ge_v` — works only while the
+  rung has no neighbour.** It is the natural witness (a model row counts literals, so
+  swapping two of them leaves every row invariant), and it is accepted for the first rung
+  of a variable and refused for the second: *"Proofgoal 2 could not be autoproven"*. The
+  goal it fails on is the neighbouring rung's image, which is genuinely false, so no
+  explicit subproof rescues it. Tried on the real models: 5 of 6 rejected.
+- **A rotation witness works.** Introduce the rungs in increasing `v`, and let the witness
+  cycle the whole already-laddered prefix down by one, `x_ge_(l+1) -> x_ge_(v+1)` together
+  with `x_ge_u -> x_ge_(u-1)` for `u` in `l+2 .. v+1`. Each existing rung's image is then
+  the rung below it (already in the database) and the bottom one's image is satisfied by
+  the negated claim. Accepted on all 8 models it was tried on.
+
+The price is that the witness for rung `v` is Θ(v) entries, so a whole ladder is Θ(w²)
+of proof text where the `.opb` spends Θ(w). Measured on `width_sat_depth`: `.opb`
+16 153 → 9 237 B, `.pbp` 29 859 → 221 525 B. That is why the rungs stay in the `.opb`;
+see D-0031.
+
 ### Direct encoding
 
 Introduced lazily, only for variables that an `element` or `all_different` propagator
@@ -417,6 +476,30 @@ emitted unconditionally, not under `--proof-comments`: without it nothing in the
 says where a decision began. A test that detects branching by grepping a proof must look
 for that marker under 3.0 — grepping for `# 1` there is not a failing test, it is a test
 that silently stops testing.
+
+### `drop-line` fails on the grammar in BOTH formats *(corrected — D-0030)*
+
+Deleting a derivation step from an emitted proof — the mutation harness's `drop-line`
+lane — does not test the derivation, in **either** format. It un-defines the step, so the
+next rule that refers to it cannot be read at all:
+
+| format | the checker's own words |
+|---|---|
+| 3.0 | ``The label `@c3` is not assigned to a constraint ID`` |
+| 2.0 | `Accessing the database out of bound with index 3` |
+
+This was written down in several places as a **3.0 quirk** — the roadmap said so, D-0023
+said so, and this section was cited as saying it. It is not one; 2.0 fails the same way
+for the same reason, one id short instead of one label short. D-0030 measured both and
+records the correction, and the two messages above are the measurement, not a reading of
+a grammar. The knob is unfixable as a text edit: a step is deleted *precisely because*
+something later cites it. The lane stays registered as `Unevaluated` and still runs;
+what actually judges an inference on that step is the `Truncate_derivation` knob, which
+keeps the leftmost operand so the step still binds its label.
+
+The general rule this is an instance of, and the one to apply to the next lane: **a lane
+rejected without the checker ever judging an inference is not a pass.** See D-0020 and
+D-0030.
 
 `del id N ...` is still right for retiring a constraint not tied to a decision level,
 such as a learned clause being forgotten.

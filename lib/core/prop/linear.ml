@@ -183,33 +183,55 @@ let term_min store (tm : term) =
    domain had a strictly smaller lo than the current one is exactly the entry that
    pushed lo to where it now sits: every entry for [v] *more recent* than it (already
    skipped, scanning newest-first) left lo unchanged, or it would have been the one
-   found instead. *)
+   found instead.
+
+   M1-T28: this walks the trail *by index, downwards*, and both halves of that matter.
+
+   By index, because [Store.trail_entries] materialises the whole trail as a fresh
+   list before the scan looks at a single entry, and the scan then stops at the first
+   match -- usually within a few entries of the newest. It runs once per term per
+   pruning, not once per propagator call, so it was the most expensive O(|trail|)
+   allocation left in [lib/] after M1-T24 fixed the identical defect in
+   [Engine.propagate]. [Store.trail_entry] is O(1) and says so in its own comment.
+
+   Downwards, because [Store.trail_entries] returns the trail *most recent first*
+   (its own header says so, and its loop prepends ascending positions, so the head is
+   position [trail_length - 1]). Scanning that list head-first is therefore scanning
+   positions downwards. This is M1-T24's lesson restated: the obvious rewrite,
+   [for i = 0 to trail_length - 1], is not a slower version of the same function, it
+   is a *different* function -- it returns the OLDEST entry that moved the bound
+   rather than the newest, so the pruning would cite a superseded reason. The two
+   differ only on a variable whose bound moved twice in one branch, which is why no
+   type and no model in the suite can tell them apart (see the commit message). *)
 let find_lo_reason store v ~decl_lo =
   let cur = Domain.lo (Store.get store v) in
   if cur <= decl_lo then None
   else
-    let rec scan = function
-      | [] -> None
-      | (e : Store.entry) :: rest ->
-          if Var.equal e.var v && Domain.lo e.old < cur then
-            Some (Store.explanation store e)
-          else scan rest
+    let rec scan i =
+      if i < 0 then None
+      else
+        let e : Store.entry = Store.trail_entry store i in
+        if Var.equal e.var v && Domain.lo e.old < cur then
+          Some (Store.explanation store e)
+        else scan (i - 1)
     in
-    scan (Store.trail_entries store)
+    scan (Store.trail_length store - 1)
 
-(* Symmetric for the upper bound: the entry that pushed hi down to its current value. *)
+(* Symmetric for the upper bound: the entry that pushed hi down to its current value.
+   Newest first, so the same downward index walk -- see [find_lo_reason]. *)
 let find_hi_reason store v ~decl_hi =
   let cur = Domain.hi (Store.get store v) in
   if cur >= decl_hi then None
   else
-    let rec scan = function
-      | [] -> None
-      | (e : Store.entry) :: rest ->
-          if Var.equal e.var v && Domain.hi e.old > cur then
-            Some (Store.explanation store e)
-          else scan rest
+    let rec scan i =
+      if i < 0 then None
+      else
+        let e : Store.entry = Store.trail_entry store i in
+        if Var.equal e.var v && Domain.hi e.old > cur then
+          Some (Store.explanation store e)
+        else scan (i - 1)
     in
-    scan (Store.trail_entries store)
+    scan (Store.trail_length store - 1)
 
 (* ------------------------------------------------------ per-term summand, snapshotted *)
 
