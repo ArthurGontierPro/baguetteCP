@@ -727,6 +727,19 @@ let certification_finds_root_unsat ~dir =
   let bad = rows_infeasible_by_arithmetic root_unsat in
   check "D-0030 control: the arithmetic half DOES find root_unsat's infeasible row"
     (List.exists (fun c -> Opb.constr_to_string c = "+1 ~x_ge_2 +1 ~x_ge_3 >= 3 ;") bad);
+  (* The over-counting trap, and it needs its own control because root_unsat's bad row
+     does NOT exercise it: its two literals are different variables, so summing the two
+     polarities and taking their maximum give the same answer. Replacing [max p n] with
+     [p + n] leaves every check above green -- measured. A row mentioning one variable
+     at both polarities can only reach 1. *)
+  let both = Opb.ge [ (1, Lit.bool_true "a"); (1, Lit.bool_false "a") ] 2 in
+  check
+    "D-0030 control: a variable at both polarities is counted once, not twice, so the \
+     arithmetic half finds this row infeasible too"
+    (max_attainable_lhs both = 1 && max_attainable_lhs both < Opb.rhs both);
+  let ok = Opb.clause [ Lit.bool_true "a"; Lit.bool_false "b" ] in
+  check "D-0030 control: ... and it does not fire on an ordinary clause"
+    (max_attainable_lhs ok >= Opb.rhs ok);
   match rows_that_refute_alone ~dir ~name:"root_unsat_control" root_unsat with
   | Cannot_certify why -> fail "D-0030 control: the certification did NOT run (%s)" why
   | Refuted_alone ids ->
