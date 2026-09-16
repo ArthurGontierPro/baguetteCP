@@ -1635,8 +1635,12 @@ a lane can be green while testing nothing.
 **1. `drop-line` rejects on the grammar, in BOTH formats.** Deleting a derivation step
 un-defines its label, so a later citation fails to parse: under 3.0 the message is
 "The label `@c3` is not assigned to a constraint ID", under 2.0 it is "Accessing the
-database out of bound with index 3". The roadmap, `docs/PROOF-FORMAT.md` §5 and D-0023
-all describe this as a **3.0 quirk**; it is not, and that is corrected here. The knob is
+database out of bound with index 3". The roadmap's M1-T26 row and D-0023 describe this as a
+**3.0 quirk**; it is not, and that is corrected here. (**Correction, 2026-09-16:** this
+record originally also named `docs/PROOF-FORMAT.md` §5 as carrying the claim. It did not —
+`drop-line` appeared nowhere in that file until M1-T25 added the corrected statement. The
+error was the orchestrator's, found by agent-lazy2 when it went looking for a sentence
+that was never there.) The knob is
 unfixable in text: a step is deleted precisely because something later cites it.
 
 The fix is not to delete the lane -- that is the same failure mode in a new costume. It
@@ -1697,3 +1701,110 @@ This is the ninth time in this project that the instance chosen to test a proper
 not observe that property failing. The recurring shape is worth naming: **a test is not
 evidence until something has been seen to break it.** The eight earlier instances are in
 D-0020, D-0023, D-0025, M1-T16, M1-T17, M1-T20, M1-T24 and M3-T5.
+
+## D-0031  The order encoding's ladder stays in the `.opb`: lazy by `red` is quadratic
+Status: DECIDED
+Date: 2026-09-16
+Task M1-T25. **Answers a roadmap row rather than implementing it.** No code changed; the
+`.opb` and every emitted proof are byte-for-byte what they were. Companion to D-0028,
+which owns the justification half of the same root cause.
+
+Context: `Encoding.declare_int` writes `hi - lo - 1` consistency clauses -- the "ladder",
+`x_ge_(v+1) -> x_ge_v` -- into the `.opb` for every declared variable, eagerly and
+uncapped. M1-T25 proposed to defer them: the `.opb` carries the bounds and a rung enters
+the proof by `red` "only when something cites them", following `Encoding.ensure_direct`,
+which is already that pattern for the *direct* encoding. The motivation is real:
+`width_root_unsat` emits a 126 kB `.opb` of which 76 kB is ladder, and M1-T23's arithmetic
+cap permits a declared width of 5.7 x 10^17.
+
+Reading the code first supported the row, and measuring it overturned it.
+
+**1. Nothing cites a rung, and the ladder is load-bearing anyway.** `Encoding.consistency_id`
+has no caller in `lib/` or `bin/` at all, and `derive_at_most_one`, the one function in
+`lib/` that reads the id table, is itself called only from `test/unit/test_proof.ml`. So
+"only when something cites them" would have deferred every rung of every variable for ever.
+
+That reading is wrong, because the demand is not citation -- it is the **checker's own unit
+propagation**, which is invisible at the emission site. A model row is the order encoding's
+expansion, in which every literal of one variable carries the *same* coefficient, so the row
+constrains only *how many* of `x`'s literals hold. Nothing but the ladder ties "`x_ge_k`
+holds" to "at least `k - l` of them hold", and without that a D-0018 trace line is not RUP.
+
+Measured, not argued: strip every ladder row from each shipped model's `.opb` and re-run
+3.0.2 -- **13 of 20 still accepted, 7 rejected** (`chain_sat`, `guess_wrong_sat`,
+`ne_conflict_sat`, `near_limit_ne_sat`, `near_limit_unsat`, `offset_unsat`,
+`width_sat_depth`), and in all seven the **first** line to fail is the first trace line.
+The orchestrator reproduced this independently on two models before this record was
+written: `chain_sat` fails RUP with the ladder stripped, `lin_sat` still verifies.
+
+The split is "does this run's proof contain a RUP check that needs a count" -- a property
+of the *run*, not of the model text, and therefore **not knowable when the `.opb` is
+written**, because the `.opb` is complete and closed before the first propagation (I-X5).
+
+**2. A rung can be introduced mid-proof, and the obvious witness is wrong.** Both measured:
+
+- **Swap** (`x_ge_v -> x_ge_(v+1)  x_ge_(v+1) -> x_ge_v`) is the natural witness, since a
+  row counts literals and swapping two leaves every row invariant. Accepted for a
+  variable's *first* rung, refused for its second: "Proofgoal 2 could not be autoproven."
+  The goal it fails on is the neighbouring rung's image, which is genuinely **false**, so no
+  explicit subproof rescues it. On real models: 5 of 6 rejected.
+- **Rotation** works: introduce rungs in increasing `v`, cycling the already-laddered prefix
+  down by one. Every existing rung's image is the rung below it, and the bottom rung's image
+  is satisfied by the negated claim. Accepted on all 8 models tried.
+
+**3. The rotation is Theta(w^2) against the `.opb`'s Theta(w).** On `width_sat_depth`
+(w = 99, a model whose ladder *is* used): today 16 153 B `.opb` + 29 859 B `.pbp` = 46 012 B;
+lazy 9 237 B + 221 525 B = 230 762 B. **Five times larger for the same search tree and the
+same answer.** That is a committed model, so shipping the lazy default would have shipped a
+regression.
+
+Where deferral *does* pay is the case where the ladder is never used. D-0028's shape, with
+the eager loop skipped by a throwaway local patch:
+
+| w | `.opb` eager -> lazy | solve RSS kB | verify RSS kB |
+|---|---|---|---|
+| 999 | 125 941 -> 49 623 | 9 080 -> 8 068 | 18 624 -> 16 480 |
+| 9 999 | 1 359 943 -> 535 627 | 33 164 -> 22 264 | 43 272 -> 36 964 |
+| 49 999 | 7 199 944 -> 2 855 630 | 139 688 -> 86 332 | 125 136 -> 75 856 |
+
+Consistently -60% `.opb`, -38% solver RSS, -39% checker RSS, about 2x on both timings. A
+**constant factor, not an asymptotic one**: the `.opb` stays Theta(w) because the row itself
+is (D-0028, "the width is inherited from the encoding"). The roadmap's framing --
+"`var 0..1000000: x` is a million-row `.opb`" -- is true and incomplete; removing the ladder
+leaves a 2.9 MB `.opb` at w = 5 x 10^4, not a small one.
+
+Decision, three parts:
+
+1. **The ladder stays in the `.opb`, for every declared variable, and that is now normative**
+   (SPEC 4.2). It is stated there rather than left in `declare_int` because the reason is
+   invisible from the emission side: no rule cites a rung, so the next person to read the
+   census will reach for the same deletion.
+2. **"Lazy by `red`" is rejected as a default, and the recipe is kept.** It is a bet that the
+   ladder will not be used, paid for by a quadratic if it is, and the bet cannot be settled
+   when the `.opb` is written. A width threshold does not rescue it: eager costs ~38w bytes
+   and lazy-if-used ~4.5w^2, so the crossover is w ~ 8, two orders of magnitude below where
+   the eager cost is worth attacking. The rotation witness is recorded in PROOF-FORMAT 3
+   anyway, because it is a measured fact about the checker that cost a session to establish.
+3. **Nothing about the row's shape changed, so D-0028's coupling is untouched.**
+   `lib/proof/encoding.ml` and `lib/core/prop/order_reason.ml` are byte-identical to their
+   state before M1-T25 started. Recorded so the next attempt knows those two files move
+   together or not at all -- a shipped M1-T25 would also have shifted every model row's id
+   and `@cN` label, which is the half of that coupling easiest to miss.
+
+Consequences:
+
+- **The ordering hazard.** A rotation witness permutes a variable's literals, and a *trace
+  line* mentioning them is not invariant under that permutation. So a lazy ladder can only be
+  materialised while the database is still just the `.opb` rows -- i.e. "on demand" can only
+  ever mean "all variables, at the first demand". A per-variable scheme materialised after
+  the first trace line is not merely costlier, it is **rejected**.
+- **The same is true of the direct encoding, and today it is latent.** `ensure_direct`
+  channels `x_eq_v` to `x_ge_v`, likewise not permutation-invariant, and `derive_at_most_one`
+  cites rungs by id. Nothing in `lib/` reaches either yet; M4 will.
+- **What would reopen this.** A witness for a rung that is O(1) in the declared width and
+  that the checker accepts against a database already holding the neighbouring rungs. The
+  argument above says the cascade is forced, but that is an argument, not an experiment, and
+  this project has been wrong about a proof-layer "cannot" three times (D-0009's `pol`,
+  D-0012's nogood, D-0019's direct encoding) -- each time corrected by someone running the
+  checker instead of reasoning. The swap-versus-rotation measurement is where a fourth
+  attempt should start.

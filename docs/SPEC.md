@@ -114,6 +114,20 @@ An integer variable's domain is a finite set of integers. The representation MUS
 lower/upper bound access in O(1) and membership in O(1); hole removal MAY be O(size).
 See `docs/ARCHITECTURE.md` §2 for the chosen representation.
 
+**Declared width is a cost the proof pays, and this specification does not cap it.** A
+variable's *declared* domain is what the proof artefacts are sized against, not its current
+one: §4.2's encoding gives it one Boolean and one consistency clause per interior value,
+and every row it appears in expands to one literal per interior value. Both artefacts are
+therefore Θ(declared width) per variable before the search has done anything at all — and
+this holds even for a model that is refuted on its declared bounds having pruned nothing.
+
+The solver MUST NOT silently answer a model whose declared width it cannot encode. If a
+width limit is ever imposed it is a refusal with a positioned diagnostic, in the same place
+and the same shape as §2.1's arithmetic limit, and it needs its own decision record,
+because it refuses models the FlatZinc standard allows. **No such limit exists today**, and
+that is deliberate (D-0028 part 3, D-0031). What exists is §2.1's arithmetic limit, which
+is about overflow and bounds the width only incidentally, at 5.7 × 10^17.
+
 ### 3.2 Propagation
 
 The engine runs propagators to a fixpoint. A propagator MUST be:
@@ -168,11 +182,29 @@ Both are required; VeriPB is invoked as `veripb PREFIX.opb PREFIX.pbp`.
 
 ### 4.2 Encoding
 
-Integer variables are encoded with the **order encoding**: for a variable `x` with domain
-`[l, u]`, Boolean variables `x_ge_v` for `l < v <= u`, with the consistency clauses
-`x_ge_(v+1) -> x_ge_v`. Direct-encoding literals `x_eq_v` are introduced **only** for
-variables that need them (disequality, element, all-different), with channelling
-constraints.
+Integer variables are encoded with the **order encoding**: for a variable `x` with
+declared domain `[l, u]`, Boolean variables `x_ge_v` for `l < v <= u`, together with the
+consistency clauses `x_ge_(v+1) -> x_ge_v` for `l < v < u`.
+
+**The consistency clauses MUST be in the `.opb`, and MUST be there for every declared
+variable** *(normative)*. They are not an optimisation and not a convenience for the
+solver: no proof step this solver emits ever cites one, and the checker needs them all the
+same. A model row is this encoding's own expansion, in which every literal of one variable
+carries the same coefficient, so a row constrains only *how many* of `x`'s literals hold.
+Nothing but the consistency clauses ties "`x_ge_k` holds" to "at least `k - l` of them
+hold", and without that the reverse-unit-propagation checks that carry every pruning in
+this project do not close. Measured: strip them from the shipped models' `.opb` files and
+7 of 20 proofs are rejected, in each case at the first trace line. Deferring them into the
+proof by `red` is possible and is a *pessimisation*; `docs/PROOF-FORMAT.md` §3 records the
+witness that works and what it costs, and **D-0031** records the decision.
+
+Direct-encoding literals `x_eq_v` are introduced **only** for the variables that need them
+— `element` and `all_different` (M4) — with channelling constraints, lazily, into the
+proof rather than the `.opb`. **A disequality does not need them**: `x <> v` is a *clause*
+over two ordinary order literals, which is all a `rup` target ever needs (D-0019). This
+sentence used to name disequalities among the users of the direct encoding; that was
+wrong, it was corrected in `docs/PROOF-FORMAT.md` §3 by M1-T9, and this is the same
+correction reaching the normative document at last.
 
 The full encoding contract, including variable naming, is in `docs/PROOF-FORMAT.md`.
 Naming is normative: the checker output is read by humans debugging failures, and stable
