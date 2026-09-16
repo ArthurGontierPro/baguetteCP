@@ -10,13 +10,12 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
-**Four sessions are running.** Round dispatched 2026-09-16 by the orchestrator, one
+**Three sessions are running.** Round dispatched 2026-09-16 by the orchestrator, one
 git worktree each (`.claude/worktrees/<tag>`), so no two share `_build`'s global lock.
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M1-T32, M1-T38, M1-T39, M1-T41 | `lib/proof/encoding.ml`, `lib/proof/writer.ml`, `test/unit/test_proof.ml`, `test/unit/test_mutation.ml` | agent-proofhyg | 2026-09-16 |
-| M1-T42, M1-T33, M1-T40 | `test/unit/test_prop.ml`, `test/unit/test_compile.ml`, `lib/flatzinc/model.ml` | agent-oracle | 2026-09-16 |
 | M1-T44 (+ M1-T31 secondary) | `lib/core/search.ml`, `lib/core/justify.ml`, `lib/core/prop/linear.ml`, new `test/models/root_*.fzn` + expected | agent-rootfix | 2026-09-16 |
 | M2-T5 | `lib/core/domain.ml`, `lib/core/engine.ml`, `test/unit/test_domain.ml`, `test/unit/test_engine.ml` | agent-granularity | 2026-09-16 |
 
@@ -36,6 +35,7 @@ work. The owning session picks it up.
 | `lib/proof/lit.ml` is a shared dependency: agent-proof may **add** to it but must not change the existing signatures of `pbvar`, `t`, `ge`, `le`, `eq`, `ne`, `negate`, `to_string`, `var_name`, since agent-core compiles against them | `lib/proof/lit.ml` | orchestrator | standing |
 | `WORKLOG.md`, `docs/**`, `dune-project`, `Makefile`, `scripts/**` and all committing are held by the orchestrator this round — agents touch none of them | — | orchestrator | standing |
 | **M1-T46**: `lib/core/search.ml:260-261` quotes veripb 2.2.2's `"Constraint is not a contradiction"`. 3.0.2 shares **no substring** with it. Prose only — please widen the comment to name both wordings, as `ne.ml` and `test_random.ml` now do. Do not match on either alone anywhere | `lib/core/search.ml` | orchestrator | open, for agent-rootfix |
+| **M1-T50, and a possible lead on M1-T44**: when the fact comes from a **decision**, `linear.ml` emits `pol <own row> <own row> +` — `Trivial` resolves to `ctx.model_id ()` at `justify.ml:288`, so the step derives twice the propagator's own row where the fact belongs. Confirmed by the orchestrator by reading `justify.ml:288` and `linear.ml:317,352`. **Worth checking against M1-T44's chain, which cancels to `0 >= 0`** — a citation that degenerates to the same row twice is exactly the shape that cancels. Do not treat this as a mandate to change `linear.ml` if your diagnosis says otherwise; it is a lead, not a conclusion | `lib/core/linear.ml`, `lib/core/justify.ml` | orchestrator | open, for agent-rootfix |
 | **M1-T46**: same, at `test/unit/test_proof.ml:1125` and `:1150` — the second is an assertion *message*, so a reader who trips it gets told to look for a string 3.0.2 never prints | `test/unit/test_proof.ml` | orchestrator | open, for agent-proofhyg |
 | **All `dune` files are orchestrator-owned.** `lib/core/dune` already has `(include_subdirs unqualified)` so a new `lib/core/prop/*.ml` needs no dune edit, and `test/unit/dune` already names `test_prop` and `test_justify`. Need another module named? Ask here | `**/dune` | orchestrator | standing |
 | `lib/proof/encoding.ml` is now claimed by agent-encoding, and `lib/core/justify.ml` compiles against `Encoding.is_declared`: agent-encoding may **add** to encoding.ml but must not change the signature of anything already there | `lib/proof/encoding.ml` | orchestrator | standing |
@@ -114,6 +114,7 @@ work. The owning session picks it up.
 | M2-T11 | agent-fuzz (interrupted) + agent-fuzz2 + orchestrator | 2026-09-16 | Seeded branching order, default unchanged. **60/60 artefacts byte-identical with hashes**, and a control showing the check can fail. ~500k solver runs. **Found M1-T44**: a correct UNSAT answer whose proof veripb rejects, CLI-reachable and predating the task — orchestrator reproduced it and confirmed the derivation lands on `0 >= 0`. Also found `random_order`'s hole guard shipped disabled by a short-circuit |
 | M4-T4a | agent-interval | 2026-09-16 | `lib/core/interval.ml` + `test/unit/test_interval.ml`, 94 brute-force checks, 12 deliberate breaks each watched go red. Orchestrator reproduced break 12 independently before merging |
 | M1-T34, M1-T35, M1-T37 | agent-cli | 2026-09-16 | `--time` (CPU clock, stderr only, artefacts byte-identical — orchestrator verified), `Checked.Overflow` arm exiting 4 not 3, path-independent `.opb` header. **26 of 29 models are 84-96% process start-up.** **Eleventh instance of the signature failure mode — and the first found *inside the check written to prevent it*** |
+| M1-T42, M1-T33, M1-T40 | agent-oracle | 2026-09-16 | **8 of 9 veripb builders accepted a factless justification** — measured first, and the two causes separated. I-S1's oracle now evaluates in arbitrary precision. Found M1-T50 (`pol <own row> <own row> +`). 1223 checks, 174 artefacts byte-identical |
 
 ## Handoff notes
 
@@ -614,3 +615,39 @@ inapplicable, printed a benign `note`, and **exited 0**. A test that cannot obse
 property it was written to check, found only by performing the break. Detection now turns
 on the argument parser's answer, and the report's destination is asserted before anything
 about stdout. If you take one habit from this round, take that one: perform the break.
+
+### M1-T42/T33/T40 released (orchestrator, 2026-09-16)
+
+The most useful thing in this round is a distinction the roadmap row did not know it
+needed. M1-T42 assumed one cause and measured two:
+
+- The three `int_ne` scenes were D-0032 — facts held as `.opb` model rows, so a factless
+  `rup` is genuinely **true** of that model and veripb is *right* to accept it. Moving the
+  facts into the store fixes them, and six new factless controls are now rejected.
+- The five `pol` builders are weakened by something moving facts cannot fix: **a `pol`
+  states a derivation, not a claim.** veripb recomputes the expression and accepts any
+  well-formed one, so deleting a summand does not make a false line — it makes a weaker
+  constraint, validly derived. **A factless control on a `pol` is impossible**, whatever
+  holds the facts. That is now M1-T51: `Writer` exposes no rule stating what a step
+  *concludes*, so every `pol` guard in the suite is a shape pin, and the code says so
+  rather than implying more.
+
+`build_ne_conflict` — the one scene that never posted a pin — was the only one already
+sound. D-0032 restated as a controlled experiment.
+
+**M1-T50 is a real defect and the thing to read next.** When a bound comes from a
+*decision*, the explanation is `Trivial`, and `justify.ml:288` resolves `Trivial` to
+`ctx.model_id ()`. So `linear.ml`'s `Combine` emits `pol <own row> <own row> +`: it
+derives twice the propagator's own row where the fact should be. The proof step does not
+say what the explanation says. I confirmed this by reading the three lines rather than
+trusting the scene. It is invisible today because a `pol` has no claim to check and
+`search.ml` discards the id — which is precisely the kind of "harmless" that M1-T44 turned
+out not to be. Routed to agent-rootfix as a lead, explicitly not as a mandate.
+
+**A test can be commutative and useless at once.** Two of M1-T33's deliberate breaks came
+back *green* first, and the agent strengthened the tests rather than softening the
+finding. With `mul`'s inner carry dropped, the routine computes a convolution mod 2^30 —
+which is still **symmetric in its operands**, so pinning it by commutativity
+(`A*B - B*A = 0`) is provably blind. What sees it is the same product reached by two
+*factorisations*: `6*M - 2*(3M) = 0`. Worth remembering the next time a commutativity
+check looks like enough.
