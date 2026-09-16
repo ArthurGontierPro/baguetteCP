@@ -27,6 +27,15 @@
 # proof that grew because the SEARCH changed is indistinguishable from one that grew
 # because each pruning now costs more lines -- and those two have opposite fixes.
 #
+# And, since M1-T35, a SECOND TABLE of the solver's own internal timings, read back
+# from `baguette --time`. The first table's "solve ms" is wall time around a whole
+# process and always will be; M3-T5 measured a 4.0 ms floor to start this binary and
+# found 15 of 18 models sitting at it, which is why that table alone could not support
+# a speed claim in either direction. The second table says how much of each of those
+# numbers the solver actually spent inside itself, and on which phase. The two tables
+# are printed side by side rather than one replacing the other, because the COMPARISON
+# between them is the measurement: it is what shows how much was `exec`.
+#
 # This is a measurement tool, not a gate. It is not wired into `make check` and must
 # not be: it takes minimums over repeated runs, which is slow by construction, and a
 # timing number has no business failing a build.
@@ -48,6 +57,10 @@
 #     unaccepted proof measures nothing.
 #   * A model whose declared widths put it over the memory estimate REFUSES to run
 #     rather than taking the machine down with it. See "the guard" below.
+#   * The instrument checks ITSELF before it measures anything. See "self-checks"
+#     below: two properties this harness's own columns rest on, both of which were
+#     broken in this tree until M1-T35/M1-T37, both verified against the binary that
+#     is about to be measured rather than assumed of it.
 
 set -uo pipefail
 
@@ -58,6 +71,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPEATS=5
 WARMUP=1
 OUTDIR="${ROOT}/bench/out"
+SCDIR="${OUTDIR}/selfcheck"
 TSV=""
 KEEP=0
 SOLVER_A="${BAGUETTE:-${ROOT}/_build/default/bin/main.exe}"
@@ -103,7 +117,10 @@ With no models named, every .fzn in test/models/ is measured.
   -S BIN   solver binary for configuration B           -- naming either -S or -F
   -F FMT   BAGUETTE_PROOF_FORMAT for configuration B      turns on comparison mode
   -b NAME  label for configuration B
-  -o FILE  also write the raw measurements as TSV
+  -o FILE  also write the raw measurements as TSV. The solver's internal timings go
+           to FILE.internal -- a separate file because they are a different clock
+           (CPU, not wall) taken on different runs, and two clocks in one row get
+           subtracted from each other by whoever reads it next.
   -t SECS  per-invocation timeout                      (default 300)
   -k       keep the .opb/.pbp artefacts under bench/out/
   -Y       run a model the width/memory guard refused. Says what it estimated.
@@ -197,6 +214,111 @@ if [ "${#MODELS[@]}" -eq 0 ]; then
 fi
 
 mkdir -p "${OUTDIR}"
+rm -rf "${SCDIR}"
+mkdir -p "${SCDIR}"
+
+# ------------------------------------------------------------------ self-checks
+#
+# Two properties of the binary about to be measured. Both are properties THIS
+# HARNESS'S OWN COLUMNS rest on, both were false in this tree until M1-T35/M1-T37, and
+# both are cheap to check, so they are checked against the binary rather than assumed
+# of it. A benchmark that trusts its instrument is how a retracted speed claim starts,
+# and this project has two (D-0023, D-0025).
+#
+#   1. .opb BYTES ARE A PROPERTY OF THE MODEL, not of the path you typed. The .opb
+#      carries a `* baguette: <name>` comment; while that name was the full path, the
+#      same model measured as test/models/x.fzn and as /tmp/x.fzn produced .opb files
+#      about 16 bytes apart. .opb bytes are the one column M3-T5 found trustworthy at
+#      every row, so a size that moves with the caller's directory undermines the one
+#      reliable measurement here. Checked by solving the same model through a short
+#      path and a long one and comparing the bytes.
+#
+#      A failure here is LOUD and makes the run exit non-zero, but it does not stop the
+#      measurement: within one invocation both configurations use the same path, so the
+#      .opb DELTA is still sound, and `-S old/main.exe` against a build from before
+#      M1-T37 has to stay possible. What breaks is comparing these bytes with someone
+#      else's, and the warning says exactly that.
+#
+#   2. --time IS INVISIBLE TO EVERYTHING ELSE. SPEC 2.2 pins solution output byte for
+#      byte and test/expected/*.out is ground truth (I-M1), so the timing report must
+#      appear on stderr only, must not move one byte of stdout, and must not change the
+#      proof. The internal table below is measured on ITS OWN runs with --time, so if
+#      --time perturbed the artefacts the two tables would silently be about different
+#      things. A failure here is FATAL: it means the solver is contaminating stdout,
+#      and no number should be taken from a binary doing that.
+#
+# A binary that does not know --time at all is not a failure: it is an older build,
+# the internal table is skipped with a notice, and the wall-clock table is unaffected.
+# That is the "where they are available" half of M1-T35.
+
+SELFCHECK_OPB_PATH_DEP=0 # set when check 1 fails
+HAVE_TIME_FLAG=0         # set when the solver understands --time
+
+# Does $1 REJECT --time as an unknown option? That, and only that, is an older binary.
+#
+# The distinction has to be drawn here and it has to be drawn on the ARGUMENT PARSER's
+# answer, not on where the output turned up. The first draft of this function asked
+# instead "is there a `time: process` line on stderr?" and treated its absence as "no
+# --time support" -- and a deliberate break that sent the whole report to STDOUT was
+# then reported as a benign `note  this binary has no working --time`, the quietness
+# check below was skipped as inapplicable, and the run exited 0. The worst failure this
+# file can have -- the solver contaminating the stdout that SPEC 2.2 pins byte for byte
+# -- came out as the mildest message it can print. That is this project's signature
+# failure mode (D-0025, D-0030, D-0032) inside the check written to prevent it, and it
+# was found by breaking the thing rather than by reading the code.
+#
+# So: unknown option means old binary, ANYTHING else means the flag was accepted and
+# everything it then does is this harness's business.
+time_flag_unknown() {
+  local bin="$1" fzn="$2" err rc
+  err="$(timeout "${TIMEOUT}" "${bin}" "${fzn}" --proof "${SCDIR}/t" --time 2>&1 >/dev/null)"
+  rc=$?
+  [ "${rc}" -ne 0 ] && printf '%s\n' "${err}" | grep -q 'unknown option: --time'
+}
+
+opb_path_independence() {
+  local bin="$1" fzn="$2" base short long a b
+  base="$(basename "${fzn}")"
+  short="${SCDIR}/s"
+  long="${SCDIR}/a/considerably/longer/directory/chain/than/the/other/one"
+  mkdir -p "${short}" "${long}"
+  cp "${fzn}" "${short}/${base}"
+  cp "${fzn}" "${long}/${base}"
+  timeout "${TIMEOUT}" "${bin}" "${short}/${base}" --proof "${SCDIR}/short" \
+    >/dev/null 2>&1 || return 2
+  timeout "${TIMEOUT}" "${bin}" "${long}/${base}" --proof "${SCDIR}/long" \
+    >/dev/null 2>&1 || return 2
+  a="$(stat -c%s "${SCDIR}/short.opb")"
+  b="$(stat -c%s "${SCDIR}/long.opb")"
+  sc_a="${a}"; sc_b="${b}"
+  sc_short_len="${#short}"; sc_long_len="${#long}"
+  [ "${a}" = "${b}" ] || return 1
+  cmp -s "${SCDIR}/short.opb" "${SCDIR}/long.opb" || return 1
+  return 0
+}
+
+time_flag_is_quiet() {
+  local bin="$1" fzn="$2"
+  timeout "${TIMEOUT}" "${bin}" "${fzn}" --proof "${SCDIR}/q1" \
+    > "${SCDIR}/q1.out" 2> "${SCDIR}/q1.err" || return 2
+  timeout "${TIMEOUT}" "${bin}" "${fzn}" --proof "${SCDIR}/q2" --time \
+    > "${SCDIR}/q2.out" 2> "${SCDIR}/q2.err" || return 2
+  # The report has to BE somewhere, and that somewhere has to be stderr. Checked
+  # first, so that "the report went to stdout" cannot be mistaken for "there is no
+  # report" -- see the note on time_flag_unknown.
+  grep -q '^time: process ' "${SCDIR}/q2.err" ||
+    { sc_why="--time was accepted but no 'time: process' line reached stderr"; return 1; }
+  # The solution must not move by one byte (SPEC 2.2, I-M1).
+  cmp -s "${SCDIR}/q1.out" "${SCDIR}/q2.out" || { sc_why="stdout differs"; return 1; }
+  # Nor may a timing line reach stdout by any route.
+  grep -q '^time:' "${SCDIR}/q2.out" && { sc_why="a time: line reached stdout"; return 1; }
+  # It must be off unless asked.
+  grep -q '^time:' "${SCDIR}/q1.err" && { sc_why="timings appear without --time"; return 1; }
+  # And it must not change the proof either, or the two tables are about two runs.
+  cmp -s "${SCDIR}/q1.opb" "${SCDIR}/q2.opb" || { sc_why=".opb differs"; return 1; }
+  cmp -s "${SCDIR}/q1.pbp" "${SCDIR}/q2.pbp" || { sc_why=".pbp differs"; return 1; }
+  return 0
+}
 
 # The declared widths of a model, as "widest total". Both numbers are read out of the
 # .fzn text rather than out of a solved model, because the whole point is to decide
@@ -272,7 +394,60 @@ checker_floor="$(floor_of "${VERIPB}" --version)"
 echo "  process floor $(ms "${solver_floor}") ms to start the solver and print its usage;"
 echo "                $(ms "${checker_floor}") ms to start the checker and print its version."
 echo "                A row at the floor is measuring process start-up, not work."
+echo "                Since M1-T35 the solver also reports its own \`startup\` from the"
+echo "                inside; the two are measured independently and should agree."
 echo "  audit         BAGUETTE_PROOF_AUDIT=${BAGUETTE_PROOF_AUDIT:-<unset>} (the CLI turns it on by default)"
+
+# ------------------------------------------------------------ run the self-checks
+#
+# Before anything is measured. See "self-checks" above for why each of these is a
+# property of this harness's own columns rather than of the solver in general.
+echo
+echo "self-checks on ${SOLVER_A}, before any measurement:"
+sc_model="${MODELS[0]}"
+
+if time_flag_unknown "${SOLVER_A}" "${sc_model}"; then
+  echo "  note  this binary rejects --time as an unknown option, so it predates M1-T35."
+  echo "        The internal-timing table is SKIPPED; the wall-clock table below is"
+  echo "        unaffected and complete."
+else
+  HAVE_TIME_FLAG=1
+fi
+
+if [ "${HAVE_TIME_FLAG}" -eq 1 ]; then
+  sc_why=""
+  time_flag_is_quiet "${SOLVER_A}" "${sc_model}"
+  case $? in
+    0) echo "  ok    --time reports on stderr, changes no byte of stdout, of the .opb or"
+       echo "        of the .pbp, and is silent without it (SPEC 2.2, I-M1)" ;;
+    2) echo "  FAIL  the self-check model could not be solved at all: ${sc_model}" >&2
+       exit 2 ;;
+    *) echo >&2
+       echo "  FAIL  --time is NOT invisible: ${sc_why}." >&2
+       echo "        SPEC 2.2 pins solution output byte for byte and test/expected/*.out is" >&2
+       echo "        ground truth (I-M1). A solver whose timing flag moves stdout is" >&2
+       echo "        contaminating the thing this benchmark exists to measure, and no" >&2
+       echo "        number is taken from it. Nothing was measured." >&2
+       exit 2 ;;
+  esac
+fi
+
+sc_a=""; sc_b=""; sc_short_len=""; sc_long_len=""
+opb_path_independence "${SOLVER_A}" "${sc_model}"
+case $? in
+  0) echo "  ok    .opb bytes do not depend on the path the model was given (M1-T37):"
+     echo "        ${sc_a} B through a ${sc_short_len}-character path and a ${sc_long_len}-character one" ;;
+  2) echo "  FAIL  the self-check model could not be solved at all: ${sc_model}" >&2
+     exit 2 ;;
+  *) SELFCHECK_OPB_PATH_DEP=1
+     echo "  FAIL  .opb bytes DEPEND ON THE PATH (M1-T37): ${sc_a} B through a"
+     echo "        ${sc_short_len}-character path, ${sc_b} B through a ${sc_long_len}-character one."
+     echo "        The .opb header comment is carrying the path it was given instead of the"
+     echo "        model's name, so the \`.opb B\` column below is a property of the caller's"
+     echo "        directory as well as of the model. Deltas WITHIN this run are still sound"
+     echo "        -- both configurations use the same path -- but these bytes must not be"
+     echo "        compared with any figure measured elsewhere. This run will exit non-zero." ;;
+esac
 
 # Several Claude sessions build in this checkout at once, and a benchmark run beside
 # a `dune build` measures the build. Said here rather than left to be wondered about
@@ -285,6 +460,65 @@ case "${first_load}" in
      echo "  machine, and these timings are measuring it too. Re-run when it is idle." ;;
 esac
 echo
+
+# ------------------------------------------- the solver's own internal timings
+#
+# M1-T35. `baguette --time` prints one `time: <phase> <microseconds> us <what it is>`
+# line per phase on stderr. This reads them back.
+#
+# THIS RUNS ON ITS OWN DEDICATED REPEATS, outside the timed ones, for exactly the
+# reason the peak-RSS pass does: --time costs a dozen clock reads and a dozen lines of
+# stderr, and none of that may land inside a number this harness prints as "solve ms".
+# The wall-clock column is therefore measured by a binary invoked exactly as it was
+# before M1-T35 existed, and stays comparable with bench/README.md's 2026-09-16 table.
+#
+# The repeat with the SMALLEST `process` total is the one reported, whole. Taking a
+# per-phase minimum across different runs would give a row whose parts do not add up to
+# any run that happened; the solve/verify columns above can do that because they are
+# two independent measurements, and a phase breakdown cannot.
+#
+# WHAT THESE NUMBERS ARE. CPU time (user + system) of the solver process, from
+# Sys.time. NOT wall time: bin/dune links no `unix`, and CPU time turns out to be the
+# better instrument anyway because it excludes the descheduling this file warns about
+# four sessions deep. Two things follow and are printed with the table rather than left
+# here:
+#   * a CPU number and a wall number are different measurements and their difference is
+#     an UPPER BOUND on process overhead, not an exact figure;
+#   * `search` still contains the proof lines emitted during the search. Only the .opb
+#     write and the .pbp flush are separable proof-emission phases from the CLI. See
+#     the note above `module Timing` in bin/main.ml.
+declare -A PH
+
+internal_measure() {
+  local fzn="$1" bin="$2" fmt="$3" prefix="$4"
+  local -a cmd=(timeout "${TIMEOUT}")
+  [ -n "${fmt}" ] && cmd+=(env "BAGUETTE_PROOF_FORMAT=${fmt}")
+  cmd+=("${bin}" "${fzn}" --proof "${prefix}" --time)
+  local i txt proc best=-1
+  for ((i = 0; i < REPEATS; i++)); do
+    txt="$("${cmd[@]}" 2>&1 >/dev/null)"
+    [ $? -ne 0 ] && return 1
+    proc="$(printf '%s\n' "${txt}" | awk '$1 == "time:" && $2 == "process" { print $3 }')"
+    case "${proc}" in '' | *[!0-9]*) return 1 ;; esac
+    if [ "${best}" -lt 0 ] || [ "${proc}" -lt "${best}" ]; then
+      best="${proc}"
+      PH=()
+      while read -r k v; do PH["${k}"]="${v}"; done < <(
+        printf '%s\n' "${txt}" | awk '$1 == "time:" && $4 == "us" { print $2, $3 }'
+      )
+    fi
+  done
+  [ -n "${PH[process]:-}" ] || return 1
+  return 0
+}
+
+# Sums of PH keys, tolerating a phase that did not run. The groupings are stated in the
+# table's own legend so that nothing is regrouped silently.
+phsum() {
+  local t=0 k
+  for k in "$@"; do t=$((t + ${PH[$k]:-0})); done
+  printf '%s' "${t}"
+}
 
 # ------------------------------------------------------------------ one measurement
 #
@@ -330,6 +564,22 @@ measure() {
   if [ "${HAVE_TIME}" -eq 1 ]; then
     m_srss="$(peak_rss_kb "${solve[@]}")"
     m_vrss="$(peak_rss_kb "${verify[@]}")"
+  fi
+
+  # The internal-timing pass (M1-T35), also outside the timed repeats. Skipped
+  # silently per model only when the binary has no --time at all, which the preflight
+  # has already announced once.
+  m_iok=0
+  if [ "${HAVE_TIME_FLAG}" -eq 1 ] && internal_measure "${fzn}" "${bin}" "${fmt}" "${prefix}"; then
+    m_iok=1
+    m_i_startup="$(phsum startup)"
+    m_i_parse="$(phsum args parse)"
+    m_i_compile="$(phsum compile)"
+    m_i_opb="$(phsum opb)"
+    m_i_search="$(phsum search)"
+    m_i_pbp="$(phsum proofopen pbpclose)"
+    m_i_rest="$(phsum output other)"
+    m_i_inmain="$(phsum inmain)"
   fi
 
   local first_opb="" first_pbp="" opb pbp
@@ -404,13 +654,23 @@ hdr() {
 declare -A A_opb A_pbp A_solve A_verify A_lines A_longest A_rup A_pol A_levels A_depth A_fmt A_stable A_srss A_vrss
 declare -A B_opb B_pbp B_solve B_verify B_lines B_longest B_rup B_pol B_levels B_depth B_fmt B_stable B_srss B_vrss
 declare -A A_ssp A_vsp B_ssp B_vsp
+declare -a ITAB=()
 failed=0
 refused=0
 declare -a NAMES=()
 
+ihdr() {
+  printf '%-22s %9s %9s %8s %9s %9s %9s %8s %7s %9s %8s\n' \
+    "model" "wall us" "startup" "parse" "compile" "opb" "search" "pbp" "rest" "inmain" "notslv%"
+  printf '%-22s %9s %9s %8s %9s %9s %9s %8s %7s %9s %8s\n' \
+    "----------------------" "---------" "---------" "--------" "---------" "---------" \
+    "---------" "--------" "-------" "---------" "--------"
+}
+
 run_config() {
   local which="$1" bin="$2" fmt="$3" label="$4"
   local fzn base
+  ITAB=()
   echo "configuration ${which}: ${label}"
   echo "  solver  ${bin}"
   echo "  format  BAGUETTE_PROOF_FORMAT=${fmt:-<unset, solver default>}"
@@ -443,14 +703,59 @@ run_config() {
       B_levels[$base]=$m_levels; B_depth[$base]=$m_depth; B_fmt[$base]=$m_fmt; B_stable[$base]=$m_stable
       B_ssp[$base]=$ssp; B_vsp[$base]=$vsp; B_srss[$base]=$m_srss; B_vrss[$base]=$m_vrss
     fi
+    if [ "${m_iok}" -eq 1 ]; then
+      ITAB+=("$(printf '%-22s %9s %9s %8s %9s %9s %9s %8s %7s %9s %7s%%' \
+        "${base}" "${m_solve}" "${m_i_startup}" "${m_i_parse}" "${m_i_compile}" \
+        "${m_i_opb}" "${m_i_search}" "${m_i_pbp}" "${m_i_rest}" "${m_i_inmain}" \
+        "$(pct $((m_solve - m_i_inmain)) "${m_solve}")")")
+    fi
     if [ -n "${TSV}" ]; then
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "${which}" "${base}" "${m_fmt}" "${m_opb}" "${m_pbp}" "${m_solve}" "${m_verify}" \
         "${m_srss:-}" "${m_vrss:-}" "${m_lines}" "${m_longest}" "${m_rup}" "${m_pol}" \
         "${m_levels}" "${m_depth}" "${m_stable}" >> "${TSV}"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "${which}" "${base}" "${m_i_startup:-}" "${m_i_parse:-}" "${m_i_compile:-}" \
+        "${m_i_opb:-}" "${m_i_search:-}" "${m_i_pbp:-}" "${m_i_rest:-}" \
+        "${m_i_inmain:-}" >> "${TSV}.internal"
     fi
   done
   echo
+
+  if [ "${#ITAB[@]}" -gt 0 ]; then
+    echo "  the solver's own internal timings, configuration ${which} (M1-T35)."
+    echo "  MICROSECONDS OF CPU TIME inside the solver process, from \`baguette --time\`,"
+    echo "  measured on dedicated runs OUTSIDE the timed repeats above -- so the wall-clock"
+    echo "  table is still produced by a binary invoked exactly as it was before --time"
+    echo "  existed. The repeat with the smallest total is reported whole, so the columns"
+    echo "  add up to \`inmain\` rather than being per-column minimums of different runs."
+    echo
+    ihdr
+    printf '%s\n' "${ITAB[@]}"
+    echo
+    echo "    wall us   the \"solve ms\" column above, in microseconds. WALL time around the"
+    echo "              whole process: exec, dynamic link, runtime start, all of the below,"
+    echo "              and exit. Every other column in this table is CPU time."
+    echo "    startup   CPU burned before main's first statement: exec, dynamic link, OCaml"
+    echo "              runtime start-up, module initialisers. THIS is M3-T5's process floor,"
+    echo "              measured from inside instead of inferred from a null model."
+    echo "    parse     argument handling + Builder.of_file (lex, parse, build Model.t)"
+    echo "    compile   Compile.compile: store, engine, encoding. No I/O, no proof."
+    echo "    opb       Encoding.write_opb: the .opb built, written and closed."
+    echo "    search    Search.solve: propagation and search, AND THE PROOF LINES EMITTED"
+    echo "              DURING THEM. These are not separable from the CLI -- every emission"
+    echo "              point is inside lib/core/justify.ml and lib/proof/writer.ml. A claim"
+    echo "              about propagation cost cannot be read off this column alone."
+    echo "    pbp       proof channel opened + Encoding.start_proof + the final .pbp flush."
+    echo "    rest      printing the solution, and whatever in main is in no phase."
+    echo "    inmain    startup excluded; the sum of parse..rest exactly."
+    echo "    notslv%   (wall - inmain) / wall. An UPPER BOUND on the share of the wall-clock"
+    echo "              column that is not the solver's own work, because wall and inmain are"
+    echo "              different clocks and CPU time is never above wall time. A row near"
+    echo "              100% is a row whose \"solve ms\" is a timing of exec."
+    echo
+  fi
+
   local fmts
   fmts="$(if [ "${which}" = "A" ]; then printf '%s\n' "${A_fmt[@]:-}"; else printf '%s\n' "${B_fmt[@]:-}"; fi | sort -u | tr '\n' ' ')"
   fmts="$(printf '%s' "${fmts}" | tr -s ' ')"
@@ -461,6 +766,10 @@ run_config() {
 
 if [ -n "${TSV}" ]; then
   printf 'config\tmodel\tformat\topb_bytes\tpbp_bytes\tsolve_us\tverify_us\tsolve_rss_kb\tverify_rss_kb\tlines\tlongest\trup\tpol\tlevels\tdepth\tbytes_reproducible\n' > "${TSV}"
+  # The internal timings go to their OWN file, not extra columns here, because they are
+  # a different clock (CPU, not wall) measured on different runs. Putting two clocks in
+  # one row is how they get subtracted from each other by someone reading it later.
+  printf 'config\tmodel\tstartup_cpu_us\tparse_cpu_us\tcompile_cpu_us\topb_cpu_us\tsearch_cpu_us\tpbp_cpu_us\trest_cpu_us\tinmain_cpu_us\n' > "${TSV}.internal"
 fi
 
 run_config A "${SOLVER_A}" "${FORMAT_A}" "${LABEL_A}"
@@ -523,6 +832,28 @@ echo "    instrumented). A proof that grew because the search changed and a proo
 echo "    grew because each pruning costs more lines need opposite fixes."
 echo "  * Byte counts come from a proof the checker ACCEPTED. A rejected proof is"
 echo "    reported as REJECTED with no timings at all."
+echo "  * The wall-clock table and the internal table are two different clocks and"
+echo "    they are printed side by side rather than one replacing the other. Wall time"
+echo "    around a process is what a user waits for and it will always carry the"
+echo "    process floor; CPU time inside the solver is what a change to the solver can"
+echo "    move. The pair is the measurement: 'solve ms' alone cannot tell a faster"
+echo "    propagator from a faster exec, which is precisely what M3-T5 ran into."
+echo "  * Do NOT subtract an internal number from a wall number and call the remainder"
+echo "    a measurement of overhead. CPU time is never above wall time, so the"
+echo "    remainder is an upper bound. notslv% is labelled as one."
+echo "  * The internal 'search' column still contains the proof lines written during"
+echo "    the search. Splitting it needs an accumulator inside lib/proof/writer.ml,"
+echo "    which M1-T35 did not own. Until that exists, a statement of the form"
+echo "    'propagation costs X' is not supported by this harness."
+
+if [ "${SELFCHECK_OPB_PATH_DEP}" -eq 1 ]; then
+  echo
+  echo "SELF-CHECK FAILED: .opb bytes depend on the path the model was given (M1-T37)."
+  echo "  The '.opb B' column above is a property of the caller's directory as well as of"
+  echo "  the model. Deltas within this run are sound; the absolute bytes must not be"
+  echo "  quoted against any figure measured from another directory. Exiting non-zero so"
+  echo "  that this cannot be scrolled past."
+fi
 
 if [ "${refused}" -gt 0 ]; then
   echo
@@ -535,4 +866,5 @@ if [ "${failed}" -gt 0 ]; then
   echo "${failed} model(s) did not produce a verified proof. Their rows carry no numbers."
   exit 1
 fi
+[ "${SELFCHECK_OPB_PATH_DEP}" -eq 1 ] && exit 1
 exit 0
