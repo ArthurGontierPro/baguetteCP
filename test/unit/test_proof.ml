@@ -820,26 +820,276 @@ let test_v3_levels () =
         let b1 = Writer.pol w ~origin:"branch" (Pol.id 1) in
         let b2 = Writer.pol w ~origin:"branch" (Pol.id 1) in
         Writer.wipe_level w 1;
-        ids := [ r1; r2; b1; b2 ];
-        (* The root pair is NOT covered by the wipe and has to go explicitly, which is
-           PROOF-FORMAT's "level-0 lines are covered by no `w`" -- unchanged by 3.0. *)
-        Writer.delete_many w [ r1; r2 ];
+        (* A second branch, with a level-0 line derived AFTER it. The doomed run then
+           stops short of the newest id, which is the only situation in which the
+           range form can name its own (exclusive) upper bound at all -- see
+           [Writer.del_run] and [test_v3_del_range_semantics]. *)
+        Writer.set_level w 1;
+        let b3 = Writer.pol w ~origin:"branch" (Pol.id 1) in
+        let b4 = Writer.pol w ~origin:"branch" (Pol.id 1) in
+        Writer.set_level w 0;
+        let r3 = Writer.pol w ~origin:"root" (Pol.id 1) in
+        Writer.wipe_level w 1;
+        ids := [ r1; r2; b1; b2; b3; b4; r3 ];
+        (* The root lines are NOT covered by either wipe and have to go explicitly,
+           which is PROOF-FORMAT's "level-0 lines are covered by no `w`" -- unchanged
+           by 3.0. *)
+        Writer.delete_many w [ r1; r2; r3 ];
         Writer.conclusion w (Writer.Unsat None))
   in
   let lines = String.split_on_char '\n' s in
   let has l = List.exists (String.equal l) lines in
+  let nth k = List.nth !ids k in
   check "3.0: there is no set-level rule"
     (not (List.exists (fun l -> String.length l > 0 && l.[0] = '#') lines));
   check "3.0: there is no wipe rule"
     (not (List.exists (fun l -> l = "w 1 ;" || l = "w 1") lines));
   check "3.0: a level is still marked, as a comment, or the proof is unreadable"
     (has "% level 1" && has "% level 0");
-  (* b1 and b2 are consecutive, so the backtrack is one line, not two. *)
-  check "3.0: a backtrack retires exactly the branch ids, as one range"
-    (has
-       (Printf.sprintf "del range @c%d @c%d" (List.nth !ids 2) (List.nth !ids 3) ^ " ;"));
-  check "3.0: the root prunings survive the backtrack and are retired separately"
-    (has (Printf.sprintf "del id @c%d @c%d ;" (List.nth !ids 0) (List.nth !ids 1)))
+  (* M1-T22. b1 and b2 are consecutive, but b2 is the newest id the writer has handed
+     out, so there is no `@c(b2+1)` label for a half-open range to name and the run
+     goes out as an explicit `del id` list. Still one line; only longer. *)
+  check
+    "3.0: a backtrack whose run reaches the newest id retires exactly those ids, as a \
+     del id list"
+    (has (Printf.sprintf "del id @c%d @c%d ;" (nth 2) (nth 3)));
+  (* M1-T22, the regression. `del range LO HI` deletes the HALF-OPEN [LO, HI), so the
+     inclusive run b3..b4 is written with r3 -- the first SURVIVOR -- as its upper
+     bound. Emitting `del range @cb3 @cb4` (what we did until M1-T22) leaves b4 live
+     in the checker while [tags] and [live] have dropped it: an I-X3 mirror violation.
+     The checker's half of this claim is [test_v3_del_range_semantics] below; this
+     half only pins what we write. *)
+  check "3.0: an inclusive run is written as a half-open range, ending one past the run"
+    (has (Printf.sprintf "del range @c%d @c%d ;" (nth 4) (nth 6)));
+  check "3.0: the run's own last id is NOT the range's upper bound"
+    (not (has (Printf.sprintf "del range @c%d @c%d ;" (nth 4) (nth 5))));
+  check "3.0: the root prunings survive both backtracks and are retired separately"
+    (has (Printf.sprintf "del id @c%d @c%d @c%d ;" (nth 0) (nth 1) (nth 6)))
+
+(* ------------------------------------------------------------------ *)
+(* M1-T22: what `del range` actually deletes                           *)
+(*                                                                     *)
+(* The bug this pins was a disagreement between our text and the        *)
+(* checker's reading of it, so an assertion about the text we emit      *)
+(* cannot catch it on its own -- [test_v3_levels] above is exactly that *)
+(* half, and it was GREEN while the bug shipped in 5 of 14 models. Both *)
+(* tests below run the checker instead:                                *)
+(*                                                                     *)
+(*   [test_v3_del_range_semantics]  what `del range LO HI` means, from  *)
+(*      hand-written proof text, with controls in both directions. This *)
+(*      is the measurement docs/PROOF-FORMAT.md section 2a cites, and   *)
+(*      it is a claim about a NAMED checker version -- the version is   *)
+(*      printed by [report_checker] at the top of this file. A fact     *)
+(*      measured against one checker is not a fact about proofs (the    *)
+(*      M1-T18 lesson), so if this goes red the doc is what changes.    *)
+(*                                                                     *)
+(*   [test_v3_wipe_level_against_checker]  that [Writer.wipe_level]'s   *)
+(*      own output retires exactly the ids the writer believes it       *)
+(*      retires -- invariant I-X3, checked against the thing being      *)
+(*      mirrored rather than against our model of it.                   *)
+(* ------------------------------------------------------------------ *)
+
+(* A two-line unsatisfiable .opb: `u >= 2` and `u < 2`. Summing the two rows is a
+   contradiction with no division or saturation in the way, which keeps every proof
+   below about deletion and nothing else. *)
+let del_range_opb dir name =
+  let e = Encoding.create () in
+  let c_pos = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "uu" 2) ] 1) in
+  let c_neg = Encoding.add_constraint e (Opb.ge [ (1, Lit.negate (Lit.ge "uu" 2)) ] 1) in
+  let opb = Filename.concat dir (name ^ ".opb") in
+  let oc = open_out opb in
+  Encoding.write_opb ~labels:true e oc;
+  close_out oc;
+  (opb, c_pos, c_neg)
+
+let write_lines path lines =
+  let oc = open_out path in
+  List.iter (fun l -> output_string oc (l ^ "\n")) lines;
+  close_out oc
+
+let test_v3_del_range_semantics () =
+  match veripb_path () with
+  | None ->
+      incr failures;
+      print_endline
+        ("FAIL 3.0 del range: " ^ Baguette_proof.Checker.not_found_message
+       ^ " -- the semantics of `del range` is MEASURED, never assumed, so with no \
+          checker this is not a pass.")
+  | Some veripb -> (
+      let dir = Filename.temp_file "baguette_delrange" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let opb, c_pos, c_neg = del_range_opb dir "m" in
+      let log = Filename.concat dir "log" in
+      (* ids: 1 = c_pos, 2 = c_neg, then 3, 4, 5 are copies of c_pos, and 6 is the
+         contradiction. A probe is `pol @cN` -- a one-operand derivation, valid for
+         any LIVE id and a hard error for a deleted one, which is what makes the
+         accept/reject answer mean "still in the database". *)
+      let a, b, c = (c_neg + 1, c_neg + 2, c_neg + 3) in
+      let proof ~del ~probe =
+        List.concat
+          [
+            [ "pseudo-Boolean proof version 3.0"; Printf.sprintf "f %d ;" c_neg ];
+            List.map (fun id -> Printf.sprintf "@c%d pol @c%d ;" id c_pos) [ a; b; c ];
+            del;
+            [ Printf.sprintf "@c%d pol @c%d ;" (c + 1) probe ];
+            [
+              Printf.sprintf "@c%d pol @c%d @c%d + ;" (c + 2) c_pos c_neg;
+              "output NONE ;";
+              Printf.sprintf "conclusion UNSAT : @c%d ;" (c + 2);
+              "end pseudo-Boolean proof ;";
+            ];
+          ]
+      in
+      let accepted name ~del ~probe =
+        let pbp = Filename.concat dir (name ^ ".pbp") in
+        write_lines pbp (proof ~del ~probe);
+        match run_checker ~checker:veripb ~opb ~pbp ~log with
+        | Some v -> v
+        | None -> failwith "checker vanished between find and run"
+      in
+      let range lo hi = [ Printf.sprintf "del range @c%d @c%d ;" lo hi ] in
+      (* The controls that make the answer readable at all. *)
+      check "3.0 del range: with no deletion, citing any derived id is accepted"
+        (accepted "ctl_none" ~del:[] ~probe:c);
+      check "3.0 del range: citing an id deleted by `del id` IS an error"
+        (not (accepted "ctl_delid" ~del:[ Printf.sprintf "del id @c%d ;" c ] ~probe:c));
+      (* The measurement itself, in both directions. *)
+      check "3.0 del range: `del range LO HI` does NOT delete HI -- the span is half-open"
+        (accepted "half_open_hi" ~del:(range a c) ~probe:c);
+      check "3.0 del range: it DOES delete LO"
+        (not (accepted "half_open_lo" ~del:(range a c) ~probe:a));
+      check "3.0 del range: it DOES delete everything strictly between LO and HI"
+        (not (accepted "half_open_mid" ~del:(range a c) ~probe:b));
+      check "3.0 del range: widening HI by one is what deletes the old HI"
+        (not (accepted "widened" ~del:(range a (c + 1)) ~probe:c));
+      (* Why [Writer.del_run] cannot always use the range form: the exclusive upper
+         bound must be a label that is already BOUND, or the proof does not parse. *)
+      check "3.0 del range: an unbound label as the upper bound is a parse error"
+        (not (accepted "unbound" ~del:(range a (c + 9)) ~probe:a));
+      Sys.readdir dir
+      |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
+      try Sys.rmdir dir with _ -> ())
+
+let test_v3_wipe_level_against_checker () =
+  match veripb_path () with
+  | None ->
+      incr failures;
+      print_endline
+        ("FAIL 3.0 wipe_level: " ^ Baguette_proof.Checker.not_found_message
+       ^ " -- I-X3 says our mirror agrees with the checker, which cannot be asserted \
+          without one.")
+  | Some veripb -> (
+      let dir = Filename.temp_file "baguette_wipe" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let log = Filename.concat dir "log" in
+      (* [interior] decides which shape [Writer.del_run] reaches: false leaves the
+         doomed run ending at the newest id (the `del id` list), true derives one
+         more level-0 line after it (the half-open `del range`). [probe] picks an id
+         to cite AFTER the wipe; the checker's accept/reject is then a direct read of
+         whether that id is still in its database. *)
+      let scenario name ~interior ~probe =
+        let e = Encoding.create () in
+        let c_pos = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "uu" 2) ] 1) in
+        let c_neg =
+          Encoding.add_constraint e (Opb.ge [ (1, Lit.negate (Lit.ge "uu" 2)) ] 1)
+        in
+        let opb = Filename.concat dir (name ^ ".opb") in
+        let pbp = Filename.concat dir (name ^ ".pbp") in
+        let pbp_oc = open_out pbp in
+        let w = Writer.create ~audit:false ~format:Writer.V3_0 pbp_oc in
+        let oc = open_out opb in
+        Encoding.write_opb_for e w oc;
+        close_out oc;
+        Encoding.start_proof e w;
+        Writer.set_level w 1;
+        let p1 = Writer.pol w ~origin:"branch" (Pol.id c_pos) in
+        let _p2 = Writer.pol w ~origin:"branch" (Pol.id c_pos) in
+        let p3 = Writer.pol w ~origin:"branch" (Pol.id c_pos) in
+        Writer.set_level w 0;
+        let past =
+          if interior then Some (Writer.pol w ~origin:"root" (Pol.id c_pos)) else None
+        in
+        Writer.wipe_level w 1;
+        (match probe with
+        | None -> ()
+        | Some pick ->
+            ignore
+              (Writer.pol w ~origin:"probe"
+                 (Pol.id (pick ~first:p1 ~last:p3 ~past ~model:c_pos))));
+        let contra =
+          Writer.pol w ~origin:"contradiction" Pol.(sum [ id c_pos; id c_neg ])
+        in
+        Writer.conclusion w (Writer.Unsat (Some contra));
+        close_out pbp_oc;
+        let verdict =
+          match run_checker ~checker:veripb ~opb ~pbp ~log with
+          | Some v -> v
+          | None -> failwith "checker vanished between find and run"
+        in
+        (verdict, read_whole pbp)
+      in
+      let verdict name ~interior ~probe = fst (scenario name ~interior ~probe) in
+      (* The baselines: the wipe on its own leaves a proof the checker accepts, in
+         both emission shapes. Without these, a rejection below would say nothing. *)
+      check "3.0 wipe_level: a backtrack ending at the newest id verifies"
+        (verdict "base_list" ~interior:false ~probe:None);
+      check "3.0 wipe_level: a backtrack with a later level-0 line verifies"
+        (verdict "base_range" ~interior:true ~probe:None);
+      (* I-X3, the direction M1-T22 got wrong. The writer drops the whole run from
+         [t.tags]; the checker must have dropped it too. Before the fix the LAST id
+         of the run was still live in the checker and this lane was ACCEPTED. *)
+      List.iter
+        (fun interior ->
+          let tag = if interior then "range" else "list" in
+          check
+            (Printf.sprintf
+               "3.0 wipe_level (%s form): the LAST id of the wiped run is gone from the \
+                checker too (I-X3)"
+               tag)
+            (not
+               (verdict ("last_" ^ tag) ~interior
+                  ~probe:(Some (fun ~first:_ ~last ~past:_ ~model:_ -> last))));
+          check
+            (Printf.sprintf
+               "3.0 wipe_level (%s form): the FIRST id of the wiped run is gone from the \
+                checker"
+               tag)
+            (not
+               (verdict ("first_" ^ tag) ~interior
+                  ~probe:(Some (fun ~first ~last:_ ~past:_ ~model:_ -> first))));
+          check
+            (Printf.sprintf
+               "3.0 wipe_level (%s form): a model row is untouched by the wipe, so a \
+                rejection above is about deletion and not about position"
+               tag)
+            (verdict ("model_" ^ tag) ~interior
+               ~probe:(Some (fun ~first:_ ~last:_ ~past:_ ~model -> model))))
+        [ false; true ];
+      (* The other side of half-open: the id the range NAMES as its upper bound is a
+         survivor, not a casualty. Deleting it would be the mirror violation in the
+         opposite direction -- silently losing a level-0 reason. *)
+      check
+        "3.0 wipe_level: the level-0 line one past the run survives the range that names \
+         it"
+        (verdict "past_range" ~interior:true
+           ~probe:(Some (fun ~first:_ ~last:_ ~past ~model:_ -> Option.get past)));
+      (* And that the range form really was the shape under test. *)
+      let _, text_range = scenario "shape_range" ~interior:true ~probe:None in
+      let _, text_list = scenario "shape_list" ~interior:false ~probe:None in
+      let contains needle hay =
+        let n = String.length needle and h = String.length hay in
+        let rec go i = i + n <= h && (String.sub hay i n = needle || go (i + 1)) in
+        n = 0 || go 0
+      in
+      check "3.0 wipe_level: the interior case really does emit `del range`"
+        (contains "del range " text_range);
+      check "3.0 wipe_level: the newest-id case really does emit a `del id` list"
+        (contains "del id " text_list && not (contains "del range " text_list));
+      Sys.readdir dir
+      |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
+      try Sys.rmdir dir with _ -> ())
 
 let test_v3_veripb () =
   match veripb_path () with
@@ -958,6 +1208,8 @@ let () =
   test_veripb_accepts ();
   test_v3_emitted_text ();
   test_v3_levels ();
+  test_v3_del_range_semantics ();
+  test_v3_wipe_level_against_checker ();
   test_v3_veripb ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
