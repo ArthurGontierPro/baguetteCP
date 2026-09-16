@@ -92,7 +92,8 @@ Decision: pending. M4-T1 does bounds consistency first precisely so that M4-T2 c
 evaluated against a working baseline.
 
 ## D-0005  Domains decline to punch holes in enormous ranges
-Status: DECIDED
+Status: DECIDED — the cap here covers the domain bitset only. The proof-side width cost
+it does *not* cover, and why this record's remedy is unavailable there, is **D-0028**.
 Date: 2026-09-14
 
 Context: `Domain.t` allocates its hole bitset lazily, sized to the declared range. A
@@ -227,7 +228,8 @@ Consequences:
   `int_lin_le` justification must cite therefore cannot be written yet. That is M1-T7c.
 
 ## D-0010  A bound fact is a chain of order literals, not one literal
-Status: DECIDED
+Status: DECIDED — the chain requirement stands. What it costs at width, and what a
+cheaper restatement must preserve to keep convincing the checker, is **D-0028**.
 Date: 2026-09-14
 Arose from: M1-T7b round 2, driving the real `int_lin_le` propagator into veripb.
 
@@ -1398,3 +1400,148 @@ Consequences:
   implementation and from the structure of the Hall argument, and nothing here tried it.
   If someone finds a per-row decomposition that propagates as strongly, point 3's default
   applies to `all_different` too and no harm is done.
+
+## D-0028  A justification's size is proportional to declared domain width
+Status: DECIDED
+Date: 2026-09-16
+Task M1-T27. Records a cost D-0010 creates, D-0005 does not cover, and M1-T25 does not
+fix. No code changed; the interval restatement is M4 work.
+
+Context: D-0010 requires a bound fact to be stated in the same currency as the model row
+it combines with — the order encoding's own expansion — which makes it a *chain* of
+order literals rather than one literal. `docs/GCS-COMPARISON.md` flagged the consequence
+("every bounds-consistency path must be independent of domain width", and reason-side
+width is the subtler hazard) and the roadmap row names `order_reason.ml:38-43`.
+
+Reading the code first changed what this record says, twice.
+
+**1. The lines the roadmap names are not on the live path.** `order_reason.ml:38-43` is
+`lower_bound_terms`; with `upper_bound_terms` it builds the declared-to-current chain
+that *asserts* a fact. Neither has a caller anywhere in `lib/` — only
+`test/unit/test_prop.ml`. Nothing in `lib/` constructs `Explanation.Linear` or `Cut` any
+more either; the census of explanation constructors used in `lib/` is `combine` x2 and
+`weaken` x1 in `linear.ml`, `trivial` x1 there, and `clause` in `ne.ml` and `search.ml`.
+
+**2. What does reach a proof is worse than the roadmap's description.** The live chain is
+`Order_reason.weaken_declared`, and it spans the variable's **whole declared width**, not
+the prefix between the declared and current bound. Its own header says why: there is
+nothing "current" about a weakening chain, it is valid regardless of what the variable
+turns out to be, which is the point of using it instead of a fact. So the size is
+Θ(declared width) *per other term of the row, per pruning, no matter how small the
+pruning* — and, as the measurement below shows, even when no pruning has happened at all.
+
+Measured here, in this worktree, against VeriPB 3.0.2. The model is two variables
+declared `0..w` and one row `a + b = 5w/2`, which is infeasible on the declared bounds
+alone, so the solver refutes it at the root having pruned **nothing**:
+
+| w | `.opb` | `.pbp` | axiom literals in the one `pol` line | solve | verify |
+|---|---|---|---|---|---|
+| 9 | 984 B | 303 B | 18 | — | — |
+| 99 | 11.5 kB | 2.29 kB | 198 | — | — |
+| 999 | 126 kB | 23.9 kB | 1 998 | — | 42 ms |
+| 9 999 | 1.36 MB | 258 kB | 19 998 | — | 130 ms |
+| 99 999 | 14.6 MB | 2.78 MB | 199 998 | 4 s | 1.3 s |
+| 999 999 | 156 MB | 29.8 MB | 1 999 998 | 72 s | 12 s |
+
+The whole `.pbp` is six lines at every width; one of them is 29.8 MB at the bottom row.
+veripb verifies every one of them — `s VERIFIED UNSATISFIABLE`, including the 30 MB line.
+So the roadmap's "a variable declared `0..1000000` carries million-literal reasons" is no
+longer a prediction: it is two million literals, in a single line, for a two-variable
+model that is infeasible by inspection, and the checker accepts it. **The failure mode is
+not rejection. It is a correct proof that nobody can store, read or review.**
+
+Three things the measurement separates, which the roadmap row runs together.
+
+- **Reasons are already width-independent; justifications are not.** Under D-0026's split,
+  `linear.ml`'s `facts_of_snaps` — the reason — is one literal per *cited term*, and
+  D-0018's trace lines are O(terms). The width lives entirely in the `Weaken` chains
+  inside a `Combine`, which is the justification. M2-T8 therefore does **not** fix this,
+  and the roadmap's title for this row names the half that is cheap.
+- **The width is inherited from the encoding, not invented by `order_reason.ml`.** The
+  model row *is* the order encoding's expansion, Θ(w) literals per variable
+  (`Encoding.expand_int_lin_le`), and an axiom chain that cancels a variable's
+  contribution to that row cannot be shorter than the row's own literals for that
+  variable. No rewrite confined to the reason layer can shorten it.
+- **Today the cost is paid on exactly one path.** A `Combine` is emitted only at a root
+  conflict: `search.ml`'s under-decision arm writes the trace and the nogood and never
+  emits the derivation. Measured: `offset_unsat`, which branches and refutes both children
+  at every level, contains 31 `rup` lines and **0** `pol`. D-0018 point 2 reserves a
+  per-bound-push `pol` at a scratch level for prunings that are not plain RUP over the
+  row; nothing exercises it yet, and M4's Hall intervals are the first thing that will.
+  When they do, this cost is multiplied by the number of prunings.
+
+Decision: three parts.
+
+1. **The project accepts width-proportional justifications, and does not weaken them to
+   escape.** A propagator may not narrow a domain without justifying it (`CLAUDE.md`'s
+   standing rule, I-P4), so D-0005's remedy — decline the work, stay sound, propagate
+   more weakly — is structurally *unavailable* on the proof side. The only sound options
+   are to refuse the model or to make the justification cheaper. M1 does neither, and
+   that is stated here rather than left to be discovered by whoever first points the
+   solver at a wide domain.
+2. **A width policy belongs to the encoding, and to SPEC, not to the reason layer.**
+   M1-T25 (lazy ladder atoms) addresses the `.opb` half of the same root cause and its
+   roadmap row already says it does not fix this. The coupling runs the other way too and
+   is easy to miss: `Order_reason.weaken_declared` and `Encoding.expand_int_lin_le`
+   perform the same substitution and, in that module's own words, "the two must agree on
+   the constant or the pieces don't combine". **If M1-T25 changes the row's shape, the
+   weakening chain must change in the same commit.** Neither row may be done alone.
+3. **There is no cap today, and D-0005's is not one.** D-0005 caps hole punching above
+   2^20 *values* and says bound movements are never affected — true, and exactly why it
+   does not cover this: this cost is paid by bound movements only, and it is already
+   unpleasant at w = 10^4, two orders of magnitude below D-0005's threshold. If a cap is
+   wanted, it belongs where M1-T23 caps declared domains for overflow — one check at
+   compile time — and refusing a model the FlatZinc standard allows is a SPEC change that
+   needs its own record. Not taken here.
+
+What a future interval restatement must preserve. D-0010's chain requirement is
+load-bearing *for the checker*, so a cheaper reason still has to convince it:
+
+- **Currency.** D-0010's arithmetic is not a convention, it is what the checker computes:
+  an order literal is 0/1, so `a * x_ge_b` tops out at `a`, never `a * b`. Whatever stands
+  in for the chain must still cancel the variable's contribution to the row *exactly*,
+  which means it arrives with a derived line relating it to the chain sum. A shorter
+  statement that does not cancel leaves a residue and the `pol` does not close.
+- **Declared offsets.** Measured against the declared bound, never the raw value — the
+  constant lives on the row's right-hand side (D-0010's central mistake, twice found).
+- **Citation by id (D-0009).** A bare literal in a `pol` is the trivial axiom `lit >= 0`.
+  An interval atom is usable only if some line establishes it *and* the derivation can
+  name that line: that is M2-T9's literal to defining-line index, and it is why GCS pins
+  boundary atoms to persistent top-level lines.
+- **I-X6.** The restated reason must still render the derivation as of the moment of the
+  pruning, not as of the moment it is forced.
+- **I-X2.** An atom minted mid-proof by `red` must be retired exactly once before
+  `conclusion`; D-0019's last consequence already records that `ensure_direct` has no
+  retirement path.
+- **Both axes, measured.** GCS measured a 5.9x smaller proof that took 3.5x *longer* to
+  check at an identical search tree. M3-T5 is the instrument; a restatement that shortens
+  the file and lengthens verification has not obviously won.
+
+Consequences:
+
+- **Nothing in the gate can see this.** The widest declared domain in `test/models/` is
+  `var 0..9`; the whole suite runs at w <= 9, where the chain is nine literals and
+  invisible. That is this project's signature failure mode in its purest form — the
+  instances chosen cannot watch the thing break. The shape that does is recorded above
+  and is cheap: two variables, one row, infeasible on the declared bounds, zero prunings,
+  w around 10^3. Adding it is a `test/models/` change, which this record does not make.
+- A neighbouring cost, measured in passing and explicitly **not** covered here: on a
+  *satisfiable* wide model (`a + b = w+1`, `b - a = 1`, `var 0..999`) the proof is 1.7 MB
+  with **no `pol` at all** — 5 495 lines whose largest is a 6.4 kB nogood carrying ~500
+  decision literals, because `indomain_min` descends one value at a time and search depth
+  is therefore Θ(w). That is a branching-strategy cost, not a reason cost, and no interval
+  restatement touches it. It is recorded so that a future measurement of "proof size
+  versus domain width" does not attribute it to this record's problem.
+- `Order_reason.lower_bound_terms`/`upper_bound_terms` and `Explanation.Linear`/`Cut` have
+  no producer in `lib/` (census above). They are D-0010's *fact* chain, which D-0026's
+  `Reason.t` is about to take over. This record deletes nothing and asks that whoever does
+  M2-T8 decide their fate deliberately, rather than find them unreferenced and assume they
+  were always dead.
+- **Asserted rather than measured**, and named so it can be falsified: the claim that the
+  chain cannot be shortened without changing the row. It is an argument from the
+  encoding's shape, not an experiment. What would falsify it is a hand-written proof that
+  cancels a variable's contribution to an `expand_int_lin_le` row using fewer than `w`
+  axioms and that veripb accepts. Nobody has tried it, and this project has been wrong
+  about a proof-layer "cannot" three times already (D-0009's `pol`, D-0012's nogood,
+  D-0019's direct encoding), each time corrected by someone running the checker instead
+  of arguing.
