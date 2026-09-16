@@ -1808,3 +1808,50 @@ Consequences:
   D-0012's nogood, D-0019's direct encoding) -- each time corrected by someone running the
   checker instead of reasoning. The swap-versus-rotation measurement is where a fourth
   attempt should start.
+
+## D-0032  A test scene must not hold its facts as model rows
+Status: DECIDED
+Date: 2026-09-16
+Task M2-T1/M2-T2. Sibling to D-0030 and D-0016. A rule about how a proof-checking test is
+built, not about any propagator.
+
+Context: M2-T1/M2-T2's break-it pass deleted the facts from `bool2int`'s justification, so
+that a reason claimed its bound **unconditionally** -- a plainly broken justification. It
+**passed all 332 unit checks and all 28 models.**
+
+The cause was in the test file, not in `lib/`. `bool_clause_scene` and `bool2int_scene`
+established their setup bounds as `.opb` **model rows**, copying the shape of the existing
+integer builders. A model row is part of the formula the checker is handed, so the model
+itself entails the claim, and a reason with no facts at all is still *true*. veripb accepts
+it, correctly. The test was asking "is this reason valid?" when the property that matters
+is "is this reason valid **because of the facts it cites**?".
+
+This is D-0009's "restating a constraint is trivially valid" and D-0016's valid-but-useless
+generalisation arriving together, in a new place. It is the **tenth** instance of this
+project's signature failure mode, and the first found by a deliberate break rather than by
+a later session tripping over it.
+
+Decision:
+
+- **A test scene establishes its facts in the store, never as `.opb` model rows.** That is
+  also the faithful arrangement: in a real run a bound comes from a decision or from another
+  propagator, and neither is a model row. A scene that posts its setup as rows is testing a
+  different thing from the one the solver does.
+- **Every propagator's justification test needs a factless control** -- a `rup` that claims
+  the bound citing nothing -- which the checker must **reject**. Without it, the test cannot
+  distinguish a justification that works from a model that makes any justification work.
+  M2-T1/M2-T2 adds two such controls; they are meaningless under the old scenes and
+  load-bearing under the new ones.
+- **A break-it pass is part of delivering a propagator, not an optional extra.** Thirteen
+  breaks were run here; four of them (a clause that checks but never unit-propagates, and
+  `bool2int` missing either direction) are **completely invisible to the model suite** --
+  the search recovers the same answer by branching and the output is byte-identical. Only
+  direct push assertions see them. Conversely, corrupting the *trace facts* is invisible to
+  the unit tests and caught only by models, because trace lines are written during a real
+  search. Neither layer alone is sufficient, and that is now measured rather than asserted.
+
+Known and deliberately not fixed here: `test_prop.ml`'s **integer** veripb builders
+(`build_int_lin_eq_multi`, `build_int_le_multi`, `build_int_lt_multi`, `build_int_eq_multi`
+and the `int_ne` builders) have the same construction. Whether it actually weakens them
+depends on each row's shape and **has not been measured**; a blind edit would be a guess.
+That is M1-T42.

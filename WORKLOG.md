@@ -16,7 +16,6 @@ git worktree each (`.claude/worktrees/<tag>`), so no two share `_build`'s global
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M2-T11 (verification leg) | `lib/core/search.ml`, `test/unit/test_random.ml` | agent-fuzz2 (succeeds agent-fuzz, interrupted; its code is merged, its *evidence* is not) | 2026-09-16 |
-| M2-T1, M2-T2 (**evidence leg outstanding**) | as before; code lives on branch `worktree-agent-a5537450084e26c0e` at `064a372`, builds and is green, **not merged** | agent-bool2 killed by an API rate limit; successor pending | 2026-09-16 |
 
 Two rounds are recorded in `## Completed` below. The rows that stood here on
 2026-09-15 (`integration`, M1-T12, M1-T13) were stale — see the handoff note "the
@@ -104,6 +103,7 @@ work. The owning session picks it up.
 | M1-T26 | agent-mutate2 + orchestrator | 2026-09-16 | **D-0030.** Typed mutation knobs moved into the emitter; controls made mandatory *in the type system* (a lane takes a token only the control gate produces). Lanes 14 -> 24, checks 18 -> 37. Found that `drop-line` fails on the grammar in **both** formats, and that **`root_unsat` cannot test load-bearingness at all** — one of its model rows is infeasible by itself. Orchestrator confirmed: a proof deriving *nothing* verifies on it. Registered `Known_slack`, not weakened away. Ninth instance of this project's signature failure mode |
 | M1-T25 | agent-lazy2 + orchestrator | 2026-09-16 | **D-0031. Answered, not implemented — and that is the right outcome.** The ladder is load-bearing because the checker's own unit propagation needs it, which no citation census can see. Lazy-by-`red` needs a *rotation* witness (the obvious swap is refused) and costs Θ(w²) — 5× larger on a committed model. `encoding.ml` and `order_reason.ml` are byte-identical to before the task started |
 | M1-T28 | agent-lazy2 + orchestrator | 2026-09-16 | Index-walk in `linear.ml`. Direction shown by experiment, not argued: flipping it gives **10 veripb rejections**. 60/60 artefacts byte-identical; **9.9× at N=300**, null on the committed models |
+| M2-T1, M2-T2 | agent-bool (x2, interrupted) + agent-bool3 + orchestrator | 2026-09-16 | **D-0032.** Six Boolean builtins, 9 models, 1168 unit checks, 29/29 models. No `Explanation` ADT change needed. Delivered across three sessions, two of which were killed mid-task; each was salvaged to a branch rather than restarted. **13 deliberate breaks, each watched go red** — and break 7 showed a justification with no facts at all passing everything, because the test scenes held their facts as `.opb` model rows |
 
 ## Handoff notes
 
