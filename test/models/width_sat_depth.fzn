@@ -1,0 +1,32 @@
+% The OTHER width cost, kept separate on purpose (M1-T30; D-0028's "a neighbouring
+% cost, measured in passing and explicitly NOT covered here").
+%
+% A satisfiable model over wide domains: a + b = 99 and b - a = 1, with both
+% variables declared 0..99. `indomain_min` descends one value at a time, so the
+% search depth is Theta(w) and the proof is 545 lines of `rup` with nogoods that
+% carry one decision literal per level, plus a `sol` line naming every order literal
+% of the solution.
+%
+% Measured here, with veripb 3.0.2:
+%
+%                     .opb     .pbp    lines   `pol`   `rup`   max level
+%   width_root_unsat  126 kB  23.9 kB      6       1       0       none
+%   this model       16.1 kB  29.9 kB    545       0     293         49
+%
+% The two are the same size and share no mechanism whatever. width_root_unsat's
+% proof is one enormous justification line for a derivation that never branched;
+% this one's is a long thin tree of small lines with no justification arithmetic in
+% it at all. D-0028 asks in as many words that a future measurement of "proof size
+% versus domain width" not attribute this cost to its own -- so the suite now
+% carries both, and they are labelled.
+%
+% Kept at w = 99, not 999. At 999 this shape is a 1.7 MB proof (D-0028) and would
+% cost the gate more than the effect is worth; at 99 it is 43 ms end to end and the
+% Theta(w) depth is already plain (49 decision levels for a two-variable model).
+array [1..2] of int: sum_c = [1, 1];
+array [1..2] of int: diff_c = [-1, 1];
+var 0..99: a :: output_var;
+var 0..99: b :: output_var;
+constraint int_lin_eq(sum_c, [a, b], 99);
+constraint int_lin_eq(diff_c, [a, b], 1);
+solve satisfy;

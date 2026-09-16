@@ -1,0 +1,43 @@
+% The width witness (M1-T30, shape recorded in D-0028).
+%
+% Until this model existed the widest declared domain in the whole suite was
+% `var 0..9`, so the width-proportional cost D-0028 measures was invisible to every
+% test: at w = 9 a weakening chain is nine literals and looks like nothing.
+%
+% Two variables at 0..999 and one row that is infeasible on the DECLARED bounds --
+% a + b can reach 1998 and the row demands 2500 -- so the solver refutes it at the
+% root having pruned NOTHING and branched NOWHERE. The proof is six lines. One of
+% them is 23.8 kB: `Order_reason.weaken_declared` spans each variable's whole
+% declared width, and the row it cancels against is the order encoding's own
+% expansion, which is Theta(w) literals per variable (D-0028, "the width is inherited
+% from the encoding").
+%
+% Measured here, with veripb 3.0.2, against the same shape at other widths:
+%
+%   w        .opb      .pbp    longest line   solve   verify
+%   9        982 B     303 B      195 B         5 ms    10 ms   <- width_narrow_unsat
+%   999      126 kB   23.9 kB    23.8 kB       50 ms    18 ms   <- this model
+%   4999     670 kB    128 kB     128 kB      231 ms    59 ms
+%   999999   156 MB   29.8 MB    29.8 MB       72 s     12 s    (D-0028, not a test)
+%
+% w = 999 is the smallest width that makes the effect unmistakable rather than
+% merely present: the single `pol` line is 99.5% of the proof and is two orders of
+% magnitude larger than any line the rest of the suite emits, while the model still
+% costs under a tenth of a second end to end. w = 99 is only a 2.2 kB line, which is
+% the same order as an ordinary proof here and would not stand out; w = 4999 costs
+% four times as much for a fact already established.
+%
+% This model is NOT a regression test for a fixed bug. It is a cost the project has
+% accepted and not fixed (D-0028 part 1): the `.opb` half is M1-T25 and the
+% justification half is D-0028 itself. If it ever gets cheap, the numbers above are
+% what changed -- measure with `bench/run_bench.sh`, which reports .opb bytes, .pbp
+% bytes and verify seconds separately, because they do not have to move together.
+%
+% Zero prunings, zero decisions, one `pol`, no `rup`: the pairing model for the
+% opposite shape is width_sat_depth.fzn, whose cost is search depth and which emits
+% no `pol` at all. Do not read the two as the same measurement.
+array [1..2] of int: coeffs = [1, 1];
+var 0..999: a :: output_var;
+var 0..999: b :: output_var;
+constraint int_lin_eq(coeffs, [a, b], 2500);
+solve satisfy;
