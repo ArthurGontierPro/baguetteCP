@@ -10,10 +10,15 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
-**Nothing is claimed. No session is running.**
+**Four sessions are running.** Round dispatched 2026-09-16 by the orchestrator, one
+git worktree each (`.claude/worktrees/<tag>`), so no two share `_build`'s global lock.
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M1-T22 | `lib/proof/writer.ml`, `test/unit/test_proof.ml`, `test/unit/test_mutation.ml`, `docs/PROOF-FORMAT.md` | agent-delrange | 2026-09-16 |
+| M1-T23 | `lib/core/prop/**`, new `lib/core/*.ml` for checked arithmetic, `lib/flatzinc/compile.ml`, `test/unit/test_matrix.ml`, `test/unit/test_prop.ml`, new files under `test/models/` + `test/expected/` | agent-overflow | 2026-09-16 |
+| M1-T24 | `lib/core/engine.ml`, `test/unit/test_engine.ml` | agent-trailcursor | 2026-09-16 |
+| M2-T0, M1-T27 | `docs/DECISIONS.md` only (doc-only round) | agent-decisions | 2026-09-16 |
 
 Two rounds are recorded in `## Completed` below. The rows that stood here on
 2026-09-15 (`integration`, M1-T12, M1-T13) were stale — see the handoff note "the
@@ -42,6 +47,11 @@ work. The owning session picks it up.
 | **SPEC 2.2 never states the bool print rule.** It gives the line shape and the `----------` / `==========` / `=====UNSATISFIABLE=====` markers, but not that a bool MUST print as `false`/`true`, an int as a decimal, an array as `array<k>d(<ranges>, [...])`. M1-T21 found this: the rule lived only in `output.ml` and now in `test/expected/bool_out_sat.out`. The code is right by the FlatZinc standard; the spec is thin. agent-proof3 holds `docs/SPEC.md` this round — add the normative sentence, or hand it back | `docs/SPEC.md` | agent-output via orchestrator | open |
 | M1-T16 runs alone: no other session is active, so agent-tests may add new files under `test/models/` and `test/expected/` (new files only — it must not edit an existing model, an existing expected output, or `PENDING`). Everything under `lib/` stays read-only: this task finds bugs and pins them, it does not fix them | `test/**` | orchestrator | standing, this round |
 | `test/unit/test_matrix.ml`'s empty-cell note (line ~1192) is stale: it says four `int_ne` cells (|a| > 1, common factor, offset domains, negative domains) are left unfilled because "every disequality pruning that moves a bound **currently** emits a factless trace line". M1-T17 fixed that and inverted `known_bug_ne_trace_facts` itself, so the stated reason no longer holds and those cells are fillable. Not touched here — M1-T11 claimed neither the matrix nor `lib/` | `test/unit/test_matrix.ml` | agent-ne-wiring | open |
+| **Round of 2026-09-16, four sessions, disjoint file sets.** agent-delrange owns the writer's deletion vertical; agent-overflow owns the arithmetic vertical in `lib/core/prop/` and `compile.ml`; agent-trailcursor owns `lib/core/engine.ml`; agent-decisions is doc-only in `docs/DECISIONS.md`. No file appears in two columns | — | orchestrator | standing, this round |
+| `WORKLOG.md`, `docs/ROADMAP.md`, `Makefile`, `dune-project`, `scripts/**` and **every `dune` file** are orchestrator-held this round. `lib/core/dune` has no `modules` field, so a new `lib/core/checked.ml` or `lib/core/prop/*.ml` needs no dune edit; a new *test executable* does, and that is a request here, not an edit | `**/dune` | orchestrator | standing, this round |
+| `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/store.ml`, `lib/core/trace.ml`, `lib/proof/encoding.ml` and `lib/proof/lit.ml` are **read-only for all four sessions**. M1-T24 in particular is a pure rewrite of `Engine.propagate` over the `Store.trail_entry` API that already exists — if it looks like `store.ml` needs a new accessor, that is a request here | — | orchestrator | standing, this round |
+| Each session works in its own git worktree under `.claude/worktrees/`. Build with `dune build --root .` and `dune runtest --root .` from inside it — a bare `dune build` or `make` fails there with "Don't know about directory", and a `--build-dir` outside the checkout breaks the model and mutation suites. See CLAUDE.md | — | orchestrator | standing, this round |
+| M1-T22 changes emitted proof *text* for 5 of 14 models; M1-T23 adds models. Neither may edit the other's expected outputs, and neither may edit an existing `test/expected/*.out` to make a suite pass — a model whose **solution** changes because of a deletion fix is a bug report, not an expected-output edit | `test/expected/**` | orchestrator | standing, this round |
 
 ## Completed
 
