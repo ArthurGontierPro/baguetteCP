@@ -919,17 +919,21 @@ let has_rule text body =
       carry the factless controls, and there the control is real: with the fact in the
       store the claim alone is simply false of the model, and veripb rejects it.
 
-   A finding from building scene 2, reported rather than fixed because it is in
-   lib/core, which this session does not own: with the setup bound established by a
-   *decision* (explanation [Trivial], which is what search.ml pushes), [linear.ml]'s
-   [Snap_cite] cites that [Trivial], and [Justify.emit Trivial] answers
-   [ctx.model_id ()] -- so the [Combine] emits `pol <own row> <own row> +`, citing the
-   propagator's own row where the fact should be. It derives twice the model row instead
-   of the bound the explanation means. veripb accepts it, because a [pol] has no claim.
-   It appears to be harmless today (search.ml discards that id and closes the branch
-   through the trace lines and the nogood) but it is not what the explanation says, and
-   nothing in the suite can see it. Hence the trace line, not the pol, is what scene 2
-   pins. *)
+   A finding from building scene 2, reported at the time rather than fixed because it
+   was in lib/core: with the setup bound established by a *decision* (explanation
+   [Trivial], which is what search.ml pushed), [linear.ml]'s [Snap_cite] cited that
+   [Trivial], and [Justify.emit Trivial] answered [ctx.model_id ()] -- so the [Combine]
+   emitted `pol <own row> <own row> +`, citing the propagator's own row where the fact
+   should be. veripb accepted it, because a [pol] has no claim.
+
+   **Fixed by M1-T50.** A decision's reason is [Explanation.Decision lit], not
+   [Trivial]; [snapshot_source] takes a third branch, [Snap_assume], which weakens the
+   term out of the row (a decision has no id to cite) while still contributing its
+   literal to the trace fact. So the four [decision_scene_*] builders below now push a
+   real decision, and the pol they would build no longer names the row twice. The trace
+   line remains what scene 2 pins -- that has not changed, and neither has a byte of
+   what these scenes emit. The shape itself is observed in test_matrix.ml, as
+   [D_weaken_and_assume]. *)
 let check_pol_cites base pbp w ~row ~fact =
   let text = read_file pbp in
   let want = Printf.sprintf "pol %s %s +" (Writer.cite w row) (Writer.cite w fact) in
@@ -1392,10 +1396,14 @@ let trace_builders =
 
    [Explanation.Model_row] (docs/DECISIONS.md D-0013) removes the hazard structurally
    instead of by discipline: [Linear.make]'s [~row_id] bakes each instance's own row
-   into every explanation it ever builds, so there is no [ctx.model_id] left for a
-   caller to get wrong. The check below asserts exactly that -- [ctx]'s own
-   [model_id] is a thunk that fails if ever called, and the proof still verifies,
-   which is only possible if [expl] never once needed it. *)
+   into every explanation it ever builds. The check below used to assert that by giving
+   [ctx] a [model_id] thunk that failed if ever called and watching the proof verify
+   anyway. M1-T31 finished the job and the assertion is now the type's: [Justify.ctx]
+   has no [model_id] field, so there is no ambient row for a caller to get wrong, and
+   [~row_id] is required rather than optional. What is left to check here is that the
+   pairing is right -- that [le] names the `<=` row and [ge] the `>=` one -- which the
+   checker still answers, because naming the wrong one of the two is a derivation
+   veripb refuses. *)
 let test_lin_eq_pairing () =
   let build dir =
     let e = Encoding.create () in
