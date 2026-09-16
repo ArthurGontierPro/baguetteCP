@@ -312,10 +312,49 @@ let test_order_encoding () =
   check "encoding: x <= lo-1 is impossible" (Encoding.le e "x" (-1) = Encoding.Fails);
   check "encoding: x <= 1 is a negated order literal"
     (Encoding.le e "x" 1 = Encoding.Cond (Lit.le "x" 1));
-  check "encoding: consistency ids are recoverable"
-    (Encoding.consistency_id e "x" 1 = Some 1 && Encoding.consistency_id e "x" 2 = Some 2);
+  (* M1-T41, from D-0031. This used to read [consistency_id e "x" 1 = Some 1] -- the
+     rung's EAGER value, i.e. its .opb row position. That is true today and is the first
+     assertion any future lazy-ladder attempt would break, which would make a rejected
+     design look like a broken test.
+
+     So what is asserted here is the TRANSITION instead: no rung has an id before the
+     ladder is materialised, every interior rung has one after, they are distinct, and
+     the two bounds never get one. Under D-0031's eager policy the materialisation point
+     IS [declare_int]; under a lazy scheme it would be a later demand. Either way the
+     observable is the same, so this check keeps its meaning under both.
+
+     What is NOT weakened by dropping the literal ids: that the rungs are .opb ROWS, in
+     order, with the right text, is exactly what the [check_eq] on [opb_text] above
+     pins, and SPEC 4.2 is where that is normative. Delete the ladder from the .opb and
+     the suite still goes red -- through that check rather than this one.
+
+     One thing this pair CANNOT see, said here rather than left to be discovered: under
+     the eager policy there is no state "declared, ladder not yet materialised", so the
+     "no id yet" half has to be exercised on a variable that has no rung for some other
+     reason. A bool is one -- declared, on [0, 1], no interior value -- and it goes
+     through exactly the declared-variable path a lazy scheme's pre-materialisation
+     state would. Found by breaking [consistency_id] to answer [Some 1] unconditionally:
+     with the "before" half written against an UNdeclared variable it stayed green,
+     because the answer was coming from the Undeclared path instead. *)
+  let e_rung = Encoding.create () in
+  Encoding.declare_bool e_rung "b";
+  check "encoding: a declared variable with no rung to materialise has no rung id"
+    (Encoding.consistency_id e_rung "b" 0 = None
+    && Encoding.consistency_id e_rung "b" 1 = None);
+  check "encoding: nor has one that has not been declared at all"
+    ((try Encoding.consistency_id e_rung "x" 1 with Encoding.Undeclared _ -> None)
+    = None);
+  Encoding.declare_int e_rung "x" ~lo:0 ~hi:3;
+  check "encoding: every interior rung has an id once the ladder is materialised"
+    (Encoding.consistency_id e_rung "x" 1 <> None
+    && Encoding.consistency_id e_rung "x" 2 <> None);
+  check "encoding: distinct rungs get distinct ids"
+    (Encoding.consistency_id e_rung "x" 1 <> Encoding.consistency_id e_rung "x" 2);
   check "encoding: no consistency clause at the bounds"
-    (Encoding.consistency_id e "x" 3 = None);
+    (Encoding.consistency_id e_rung "x" 0 = None
+    && Encoding.consistency_id e_rung "x" 3 = None);
+  raises "encoding: a rung of an undeclared variable is an error, not a missing rung"
+    (fun () -> Encoding.consistency_id e "zz" 1);
   (* A singleton domain needs no consistency clause at all. *)
   let e2 = Encoding.create () in
   Encoding.declare_int e2 "k" ~lo:5 ~hi:5;
