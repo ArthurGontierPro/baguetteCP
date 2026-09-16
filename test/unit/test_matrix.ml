@@ -160,6 +160,7 @@ type shape =
   | D_offset_domain
   | D_negative_domain
   | D_weaken_and_cite
+  | D_weaken_and_assume
   | D_cross_instance_cite
   | D_division_remainder
 
@@ -171,6 +172,7 @@ let all_shapes =
     D_offset_domain;
     D_negative_domain;
     D_weaken_and_cite;
+    D_weaken_and_assume;
     D_cross_instance_cite;
     D_division_remainder;
   ]
@@ -183,6 +185,8 @@ let shape_name = function
   | D_negative_domain -> "domains entirely negative"
   | D_weaken_and_cite ->
       "a declared bound (Weaken) and a derived one (Snap_cite), same row"
+  | D_weaken_and_assume ->
+      "a declared bound (Weaken) and one a DECISION established (Snap_assume), same row"
   | D_cross_instance_cite -> "a bound derived by a different instance than the citer"
   | D_division_remainder -> "a push whose division has a remainder"
 
@@ -341,12 +345,23 @@ type obs = {
   mutable div_nontrivial : bool;
   mutable div_remainder : bool;
   mutable weaken_and_cite : bool;
+  (* M1-T50's own shape: a row that weakens one term because its bound is still
+     declared and another because its bound was put there by a search decision, which
+     has no id to cite. The two render identically into the [pol] and differently into
+     the trace facts, so this is the cell that says the assumption's literal is still
+     on the page. *)
+  mutable weaken_and_assume : bool;
   mutable cross_instance_cite : bool;
   (* A Clause folded into a `pol` as though it were a chain-sum. This is the D-0019
      gap between int_ne and int_lin_le's Snap_cite path; see [known_bug_ne_snap_cite]
      at the bottom of the file. *)
   mutable clause_in_pol : bool;
   mutable forcing_raised : string option;
+  (* M1-T31/M1-T50: how many decision entries were seen on the trail, and the first one
+     whose recorded reason was not the literal that branch assumed. See
+     [check_decision_reasons]. *)
+  mutable decisions_seen : int;
+  mutable decision_reason_wrong : string option;
 }
 
 let new_obs () =
@@ -359,9 +374,12 @@ let new_obs () =
     div_nontrivial = false;
     div_remainder = false;
     weaken_and_cite = false;
+    weaken_and_assume = false;
     cross_instance_cite = false;
     clause_in_pol = false;
     forcing_raised = None;
+    decisions_seen = 0;
+    decision_reason_wrong = None;
   }
 
 (* Every [Model_row] id an explanation cites, and whether a [Clause] ever appears as a
@@ -371,7 +389,10 @@ let walk_explanation e =
   let rows = ref [] and clause_in_pol = ref false in
   let rec go ~in_pol e =
     match Explanation.force e with
-    | Explanation.Trivial -> ()
+    (* A decision has no row: it is an assumption, and since M1-T50 [linear.ml]
+       weakens such a term away rather than citing it, so one reaching here would be
+       news. *)
+    | Explanation.Decision _ -> ()
     | Explanation.Model_row id -> if not (List.mem id !rows) then rows := id :: !rows
     | Explanation.Clause _ -> if in_pol then clause_in_pol := true
     | Explanation.Linear _ -> ()
@@ -429,18 +450,21 @@ let scan_linear obs (lin : Linear.t) store =
             let cites =
               List.exists (function Linear.Snap_cite _ -> true | _ -> false) snaps
             in
+            let assumes =
+              List.exists (function Linear.Snap_assume _ -> true | _ -> false) snaps
+            in
             if weakens && cites then obs.weaken_and_cite <- true;
+            if weakens && assumes then obs.weaken_and_assume <- true;
             List.iter
               (function
                 | Linear.Snap_cite { expl; _ } ->
                     let rows, clause = walk_explanation expl in
                     if clause then obs.clause_in_pol <- true;
-                    let mine =
-                      match lin.Linear.row_id with Some i -> [ i ] | None -> []
-                    in
-                    if List.exists (fun r -> not (List.mem r mine)) rows then
+                    if List.exists (fun r -> r <> lin.Linear.row_id) rows then
                       obs.cross_instance_cite <- true
-                | Linear.Snap_weaken _ -> ())
+                (* M1-T50: a term whose bound a decision established weakens away and
+                   cites nothing, exactly like one still at its declared bound. *)
+                | Linear.Snap_weaken _ | Linear.Snap_assume _ -> ())
               snaps))
       (List.combine terms mins)
 
@@ -462,6 +486,58 @@ let classify_conflict obs store e =
       obs.cross_conflict <- true
   | _ -> ()
 
+(* M1-T31/M1-T50: a decision's trail entry carries [Explanation.Decision l], and [l]
+   has to be the literal that branch actually assumed -- the bound it recorded, in the
+   direction it moved. Nothing else in the suite reads that literal: [linear.ml]
+   weakens the term away without looking at it, and the D-0018 trace fact is computed
+   from the store, not from the reason. Measured, not assumed: with [Search.explore_le]
+   pushing the `>=` literal instead of its negation, the entire suite -- 30 models and
+   every unit binary -- stayed green. This is the check that sees it.
+
+   [Store.is_level_start] is how [Trace] tells a decision from a pruning, and this uses
+   the same test rather than a second one, so the two cannot disagree about which entry
+   is a decision.
+
+   The bound is compared with `>=` / `<=` rather than `=` on purpose: [Domain.set_lo]
+   settles past holes (I-X9/D-0035), so the recorded bound can be strictly stronger
+   than the one the decision asked for. What must hold is that the recorded bound
+   ENTAILS the assumed literal. *)
+let check_decision_reasons obs store =
+  for i = 0 to Store.trail_length store - 1 do
+    if Store.is_level_start store i then (
+      let e = Store.trail_entry store i in
+      let name = Store.name store e.Store.var in
+      obs.decisions_seen <- obs.decisions_seen + 1;
+      let wrong why =
+        if obs.decision_reason_wrong = None then
+          obs.decision_reason_wrong <- Some (Printf.sprintf "%s: %s" name why)
+      in
+      match Store.explanation store e with
+      | Explanation.Decision { Lit.v = Lit.Ge (n, b); positive } ->
+          if not (String.equal n name) then
+            wrong
+              (Printf.sprintf "decision literal is about %s, not the variable it moved" n)
+          else if positive then (
+            if Domain.lo e.Store.now < b then
+              wrong
+                (Printf.sprintf "assumed >= %d but recorded lo %d" b
+                   (Domain.lo e.Store.now));
+            if Domain.lo e.Store.now <= Domain.lo e.Store.old then
+              wrong "assumed a lower bound but moved the upper one")
+          else (
+            if Domain.hi e.Store.now > b - 1 then
+              wrong
+                (Printf.sprintf "assumed <= %d but recorded hi %d" (b - 1)
+                   (Domain.hi e.Store.now));
+            if Domain.hi e.Store.now >= Domain.hi e.Store.old then
+              wrong "assumed an upper bound but moved the lower one")
+      | Explanation.Decision _ -> wrong "decision literal is not an order literal"
+      | other ->
+          wrong
+            (Printf.sprintf "a decision's reason is %s, not a Decision"
+               (Explanation.to_string other)))
+  done
+
 module Probe_linear = struct
   type t = { lin : Linear.t; obs : obs; deep : bool }
 
@@ -473,6 +549,7 @@ module Probe_linear = struct
     (if t.deep then
        try scan_linear t.obs t.lin store
        with e -> t.obs.forcing_raised <- Some (Printexc.to_string e));
+    check_decision_reasons t.obs store;
     match Linear.propagate t.lin store with
     | Propagator.Conflict e ->
         (try classify_conflict t.obs store e
@@ -759,10 +836,8 @@ let run_instance inst =
      no `w` retires, so a leak raises at [conclusion] rather than shipping quietly. *)
   let writer = Writer.create ~audit:true oc in
   Encoding.start_proof encoding writer;
-  let ctx =
-    Justify.create ~writer ~encoding ~model_id:(fun () ->
-        failwith (tag ^ ": search demanded Explanation.Trivial (D-0011)"))
-  in
+  (* M1-T31: no ambient row to install, so no thunk to fail. *)
+  let ctx = Justify.create ~writer ~encoding in
   let trace = Trace.create () in
   let entry_level = Store.level store in
   let outcome =
@@ -824,6 +899,7 @@ let run_instance inst =
         (fun s ->
           match s with
           | D_weaken_and_cite -> obs.weaken_and_cite
+          | D_weaken_and_assume -> obs.weaken_and_assume
           | D_cross_instance_cite -> obs.cross_instance_cite
           | D_division_remainder -> obs.div_remainder
           | D_big_coeff -> obs.div_nontrivial
@@ -870,6 +946,16 @@ let run_instance inst =
   (match obs.forcing_raised with
   | None -> ()
   | Some e -> fail "%s: forcing an explanation raised %s" tag e);
+  (match obs.decision_reason_wrong with
+  | None ->
+      if inst.depth > 0 then
+        check
+          (Printf.sprintf
+             "%s: every decision on the trail records the literal it assumed (%d seen)"
+             tag obs.decisions_seen)
+          (obs.decisions_seen > 0)
+  | Some why ->
+      fail "%s: a decision's recorded reason is not the literal it assumed -- %s" tag why);
 
   (* ---- the whole proof. Never an xfail. *)
   (match run_veripb ~dir ~opb proof with
@@ -1055,13 +1141,19 @@ let instances =
       props = [ P_le; P_lin_eq; P_lin_le ];
       claims = [ S_prune_one_decision; S_prune_nested; S_both_branches_fail ];
       shape_claims =
-        [ D_neg_coeff; D_offset_domain; D_weaken_and_cite; D_cross_instance_cite ];
+        [ D_neg_coeff; D_offset_domain; D_weaken_and_assume; D_cross_instance_cite ];
       depth = 2;
       note =
         "p <= q <= r <= p forces all three equal, and 3p = 11 has no integer solution: \
          UNSAT for a reason bounds propagation over the offset domain 2..6 reaches only \
          after branching. int_le carries the cycle, so the bound each of its rows cites \
-         was derived by one of the other two instances";
+         was derived by one of the other two instances. M1-T50 moved this instance's \
+         mixed-snapshot claim from `weaken+cite` to `weaken+assume` -- not to make it \
+         pass, but because the claim stopped being true of the propagator: the term it \
+         used to CITE here sits at a bound a decision put there, and a decision has no \
+         id to cite, so it is weakened away with the decision's literal kept in the \
+         trace line. `weaken+cite` is still exercised, by [weaken_and_cite_cell], which \
+         is a root scene with no decision in it";
     };
     {
       title = "int_lt/strict-cycle";
@@ -1644,9 +1736,7 @@ let known_bug_ne_snap_cite () =
   let oc = open_out pbp in
   let writer = Writer.create ~audit:true oc in
   Encoding.start_proof encoding writer;
-  let ctx =
-    Justify.create ~writer ~encoding ~model_id:(fun () -> failwith "ne/snap_cite")
-  in
+  let ctx = Justify.create ~writer ~encoding in
   let outcome = Search.solve ~engine ~store ~ctx ~check:(fun _ -> true) () in
   close_out oc;
   check "ne/snap_cite: the solver refutes it at the root, with no decision made"
@@ -1726,9 +1816,7 @@ let known_bug_ne_root_conflict () =
   let oc = open_out pbp in
   let writer = Writer.create ~audit:true oc in
   Encoding.start_proof encoding writer;
-  let ctx =
-    Justify.create ~writer ~encoding ~model_id:(fun () -> failwith "ne/root-conflict")
-  in
+  let ctx = Justify.create ~writer ~encoding in
   let outcome = Search.solve ~engine ~store ~ctx ~check:(fun _ -> true) () in
   close_out oc;
   let proof = read_file pbp in
@@ -1820,9 +1908,7 @@ let known_bug_ne_trace_facts () =
   let oc = open_out pbp in
   let writer = Writer.create ~audit:true oc in
   Encoding.start_proof encoding writer;
-  let ctx =
-    Justify.create ~writer ~encoding ~model_id:(fun () -> failwith "ne/trace-facts")
-  in
+  let ctx = Justify.create ~writer ~encoding in
   let trace = Trace.create () in
   let outcome = Search.solve ~engine ~store ~ctx ~check:(independent_check m) ~trace () in
   close_out oc;
@@ -2016,7 +2102,8 @@ let cross_row_cell () =
   let oc = open_out pbp in
   let w = Writer.create ~audit:true oc in
   Encoding.start_proof e w;
-  let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> row) in
+  ignore row;
+  let ctx = Justify.create ~writer:w ~encoding:e in
   let outcome = Search.solve ~engine ~store ~ctx ~check:(fun _ -> true) () in
   close_out oc;
   check "white-box/cross-row: the duplicate-variable row is refuted"

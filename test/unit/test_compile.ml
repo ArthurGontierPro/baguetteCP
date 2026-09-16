@@ -690,12 +690,10 @@ let run_model ~title ~src =
   let oc = open_out pbp in
   let writer = Writer.create ~comments:true ~audit:true oc in
   Encoding.start_proof c.Compile.encoding writer;
-  let ctx =
-    Justify.create ~writer ~encoding:c.Compile.encoding ~model_id:(fun () ->
-        failwith
-          "test_compile: search demanded Explanation.Trivial -- an instance is missing \
-           its row id (D-0011)")
-  in
+  (* This used to install a [~model_id] thunk that failed, to catch a propagator
+     instance built without its row id. M1-T31 deleted the field: there is no ambient
+     row for such an instance to fall back on, so the guard has nothing to guard. *)
+  let ctx = Justify.create ~writer ~encoding:c.Compile.encoding in
   let entry_level = Store.level c.Compile.store in
   let outcome =
     Search.solve ~engine:c.Compile.engine ~store:c.Compile.store ~ctx

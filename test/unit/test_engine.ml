@@ -42,6 +42,20 @@ let var i = Var.of_int i
 let pack_linear id (lin : Linear.t) : Propagator.instance =
   Propagator.pack ~id (module Linear : Propagator.S with type t = Linear.t) lin
 
+(* M1-T31 made [Linear.make]'s [~row_id] required, and the propagation-only tests
+   below build no encoding, open no writer and render no explanation -- there is no
+   .opb for a row id to be an id *of*. [unrendered_row ()] says exactly that, rather
+   than threading a plausible-looking id through a test that would never look at it:
+   the values are distinct so that two instances in one test stay two instances
+   (D-0011), and if one of these tests ever did emit a proof it would cite an id the
+   .opb does not have and be rejected, which is the right way round. The scenes that
+   DO emit a proof ([sat_scene]/[unsat_scene]) use the encoding's own ids. *)
+let next_unrendered_row = ref 900
+
+let unrendered_row () =
+  incr next_unrendered_row;
+  !next_unrendered_row
+
 (* ===================================================================== *)
 (* 1. Engine fixpoint (I-P2), and that a conflict returns a usable        *)
 (*    explanation.                                                       *)
@@ -51,7 +65,7 @@ let pack_linear id (lin : Linear.t) : Propagator.instance =
    (the only way the row can hold once x2 >= 3). *)
 let test_fixpoint_tightens_and_settles () =
   let store = mk_store [ ("x1", 0, 5); ("x2", 3, 5) ] in
-  let lin = Linear.make store [ (1, var 0); (1, var 1) ] 3 in
+  let lin = Linear.make ~row_id:(unrendered_row ()) store [ (1, var 0); (1, var 1) ] 3 in
   let engine = Engine.create [ pack_linear 0 lin ] in
   (match Engine.propagate engine store with
   | Engine.Conflict _ ->
@@ -76,8 +90,8 @@ let test_fixpoint_tightens_and_settles () =
    actually mentions the literals that witness x2's bound. *)
 let test_conflict_carries_explanation () =
   let store = mk_store [ ("x1", 0, 5); ("x2", 0, 5) ] in
-  let lin = Linear.make store [ (1, var 0); (1, var 1) ] 3 in
-  (match Store.set_lo store (var 1) 4 Explanation.trivial with
+  let lin = Linear.make ~row_id:(unrendered_row ()) store [ (1, var 0); (1, var 1) ] 3 in
+  (match Store.set_lo store (var 1) 4 (Explanation.model_row 1) with
   | Store.Conflict _ -> failwith "test_conflict_carries_explanation: setup failed"
   | Store.Changed | Store.Unchanged -> ());
   let engine = Engine.create [ pack_linear 0 lin ] in
@@ -88,7 +102,7 @@ let test_conflict_carries_explanation () =
   | Engine.Conflict e ->
       let forced = Explanation.force e in
       check "conflict: explanation forces without raising"
-        (forced <> Explanation.Trivial || true);
+        (match forced with Explanation.Deferred _ -> false | _ -> true);
       check "conflict: explanation mentions the literals witnessing the pruned bound"
         (Explanation.lits forced <> [])
 
@@ -101,8 +115,12 @@ let test_conflict_carries_explanation () =
    that has to hold regardless, so that is what is checked. *)
 let test_independent_constraints_reach_fixpoint () =
   let store = mk_store [ ("x1", 0, 5); ("x2", 3, 5); ("y1", 0, 5); ("y2", 3, 5) ] in
-  let lin_x = Linear.make store [ (1, var 0); (1, var 1) ] 3 in
-  let lin_y = Linear.make store [ (1, var 2); (1, var 3) ] 3 in
+  let lin_x =
+    Linear.make ~row_id:(unrendered_row ()) store [ (1, var 0); (1, var 1) ] 3
+  in
+  let lin_y =
+    Linear.make ~row_id:(unrendered_row ()) store [ (1, var 2); (1, var 3) ] 3
+  in
   let engine = Engine.create [ pack_linear 0 lin_x; pack_linear 1 lin_y ] in
   (match Engine.propagate engine store with
   | Engine.Conflict _ ->
@@ -164,7 +182,9 @@ let test_wake_order_is_unchanged () =
      x2 -> {1,2,3}, x3 -> {3}. The rows are slack (each variable is <= 100 and the
      bound is 500), so nothing here prunes -- this test is about the wake-up
      bookkeeping, not about propagation. *)
-  let row a b = Linear.make store [ (1, var a); (1, var b) ] 500 in
+  let row a b =
+    Linear.make ~row_id:(unrendered_row ()) store [ (1, var a); (1, var b) ] 500
+  in
   let engine =
     Engine.create
       [
@@ -175,7 +195,7 @@ let test_wake_order_is_unchanged () =
       ]
   in
   let bump v n =
-    match Store.set_lo store (var v) n Explanation.trivial with
+    match Store.set_lo store (var v) n (Explanation.model_row 1) with
     | Store.Conflict _ -> failwith "wake order: setup conflicted"
     | Store.Changed | Store.Unchanged -> ()
   in
@@ -238,7 +258,8 @@ let test_wake_order_is_unchanged () =
    here. [Eq_dom] is a fair stand-in: domain-consistent equality is an ordinary
    propagator and reads exactly what [all_different] and [element] will read in M4.
 
-   Both use [Store.remove] with [Explanation.trivial] and no facts. That is fine only
+   Both use [Store.remove] with a placeholder [Model_row] reason and no facts. That is
+   fine only
    because nothing here writes a proof (see I-P5: a bound-moving prune through a
    factless mutator would write a trace line with an empty reason). No [Engine] test
    below emits proof rules from these two. *)
@@ -254,7 +275,7 @@ module Punch = struct
   let vars p = [ p.px ]
 
   let propagate p store =
-    match Store.remove store p.px p.pv Explanation.trivial with
+    match Store.remove store p.px p.pv (Explanation.model_row 1) with
     | Store.Conflict e -> Propagator.Conflict e
     | Store.Changed | Store.Unchanged -> Propagator.Fixpoint
 end
@@ -282,7 +303,7 @@ module Eq_dom = struct
         match acc with
         | Propagator.Conflict _ -> acc
         | Propagator.Fixpoint -> (
-            match Store.remove store b v Explanation.trivial with
+            match Store.remove store b v (Explanation.model_row 1) with
             | Store.Conflict e -> Propagator.Conflict e
             | Store.Changed | Store.Unchanged -> Propagator.Fixpoint))
       Propagator.Fixpoint gone
@@ -399,7 +420,7 @@ let test_hole_wake_starved_is_caught () =
    nothing" out loud rather than in a comment. *)
 let test_bounds_propagator_masked_safely () =
   let store = mk_store [ ("x", 0, 4); ("y", 0, 4) ] in
-  let lin = Linear.make store [ (1, var 0); (1, var 1) ] 8 in
+  let lin = Linear.make ~row_id:(unrendered_row ()) store [ (1, var 0); (1, var 1) ] 8 in
   let engine =
     Engine.create [ pack_linear 0 lin; pack_punch 1 { Punch.px = var 0; pv = 2 } ]
   in
@@ -442,7 +463,7 @@ let test_trigger_derivation () =
    scene" would be consistent with a check that raises on everything. *)
 let test_check_fixpoint_is_quiet_on_real_fixpoints () =
   let store = mk_store [ ("x1", 0, 5); ("x2", 3, 5) ] in
-  let lin = Linear.make store [ (1, var 0); (1, var 1) ] 3 in
+  let lin = Linear.make ~row_id:(unrendered_row ()) store [ (1, var 0); (1, var 1) ] 3 in
   let engine = Engine.create [ pack_linear 0 lin ] in
   (match Engine.propagate engine store with
   | Engine.Conflict _ -> ()
@@ -473,24 +494,47 @@ let sat_domains = [ ("x1", 0, 1); ("x2", 0, 1); ("x3", 0, 1) ]
    docs/DECISIONS.md D-0011's shape, built directly against [Linear] rather than
    through [Lin_eq]/[Int_eq] (lib/core/prop/**, owned by another session actively
    editing it this round) so this test does not depend on files outside this task's
-   ownership. *)
-let eq_pair store a b =
-  (Linear.make store [ (1, a); (-1, b) ] 0, Linear.make store [ (-1, a); (1, b) ] 0)
+   ownership.
 
-let sum_eq_pair store terms rhs =
-  ( Linear.make store terms rhs,
-    Linear.make store (List.map (fun (c, x) -> (-c, x)) terms) (-rhs) )
+   M1-T31: each half now takes the id of the .opb row it justifies against, because
+   [Linear.make]'s [~row_id] is required. The ids are the ones
+   [Encoding.add_equality] just handed back and not invented, so the scene builders
+   below have to post the encoding first -- which is why they return it. They used to
+   build the store and the encoding in two unrelated functions, with the propagator
+   instances naming no row at all and falling back on an ambient one that these tests
+   asserted was never consulted. *)
+let eq_pair store a b ~le_id ~ge_id =
+  ( Linear.make ~row_id:le_id store [ (1, a); (-1, b) ] 0,
+    Linear.make ~row_id:ge_id store [ (-1, a); (1, b) ] 0 )
 
-let sat_store_and_engine () =
+let sum_eq_pair store terms rhs ~le_id ~ge_id =
+  ( Linear.make ~row_id:le_id store terms rhs,
+    Linear.make ~row_id:ge_id store (List.map (fun (c, x) -> (-c, x)) terms) (-rhs) )
+
+(* [Encoding.add_equality] returns [(geq, leq)] -- see [Lin_eq.make]'s header, which
+   pairs them the same way round. *)
+let sat_scene () =
+  let e = Encoding.create () in
+  List.iter (fun (n, lo, hi) -> Encoding.declare_int e n ~lo ~hi) sat_domains;
+  let ge_a, le_a =
+    Encoding.add_equality e [ (1, Lit.ge "x1" 1); (-1, Lit.ge "x2" 1) ] 0
+  in
+  let ge_b, le_b =
+    Encoding.add_equality e
+      [ (1, Lit.ge "x1" 1); (1, Lit.ge "x2" 1); (1, Lit.ge "x3" 1) ]
+      2
+  in
   let store = mk_store sat_domains in
   let x1, x2, x3 = (var 0, var 1, var 2) in
-  let le1, ge1 = eq_pair store x1 x2 in
-  let le2, ge2 = sum_eq_pair store [ (1, x1); (1, x2); (1, x3) ] 2 in
+  let le1, ge1 = eq_pair store x1 x2 ~le_id:le_a ~ge_id:ge_a in
+  let le2, ge2 =
+    sum_eq_pair store [ (1, x1); (1, x2); (1, x3) ] 2 ~le_id:le_b ~ge_id:ge_b
+  in
   let engine =
     Engine.create
       [ pack_linear 0 le1; pack_linear 1 ge1; pack_linear 2 le2; pack_linear 3 ge2 ]
   in
-  (store, engine)
+  (store, engine, e)
 
 let sat_check (assignment : Search.assignment) =
   let v i = List.assoc (var i) assignment in
@@ -498,40 +542,26 @@ let sat_check (assignment : Search.assignment) =
 
 let unsat_domains = [ ("x1", 0, 1); ("x2", 0, 1) ]
 
-let unsat_store_and_engine () =
+let unsat_scene () =
+  let e = Encoding.create () in
+  List.iter (fun (n, lo, hi) -> Encoding.declare_int e n ~lo ~hi) unsat_domains;
+  let ge_a, le_a =
+    Encoding.add_equality e [ (1, Lit.ge "x1" 1); (-1, Lit.ge "x2" 1) ] 0
+  in
+  let ge_b, le_b = Encoding.add_equality e [ (1, Lit.ge "x1" 1); (1, Lit.ge "x2" 1) ] 1 in
   let store = mk_store unsat_domains in
   let x1, x2 = (var 0, var 1) in
-  let le1, ge1 = eq_pair store x1 x2 in
-  let le2, ge2 = sum_eq_pair store [ (1, x1); (1, x2) ] 1 in
+  let le1, ge1 = eq_pair store x1 x2 ~le_id:le_a ~ge_id:ge_a in
+  let le2, ge2 = sum_eq_pair store [ (1, x1); (1, x2) ] 1 ~le_id:le_b ~ge_id:ge_b in
   let engine =
     Engine.create
       [ pack_linear 0 le1; pack_linear 1 ge1; pack_linear 2 le2; pack_linear 3 ge2 ]
   in
-  (store, engine)
+  (store, engine, e)
 
-(* A ctx whose model_id must never be consulted -- [Search] never renders
-   [Explanation.Trivial] (see search.ml's module header), so demanding [model_id]
-   would itself be the bug this mirrors test_justify.ml's own such checks for. *)
-let mk_ctx writer encoding =
-  Justify.create ~writer ~encoding ~model_id:(fun () ->
-      failwith "search should never need Explanation.Trivial")
-
-let mk_sat_encoding () =
-  let e = Encoding.create () in
-  List.iter (fun (n, lo, hi) -> Encoding.declare_int e n ~lo ~hi) sat_domains;
-  ignore (Encoding.add_equality e [ (1, Lit.ge "x1" 1); (-1, Lit.ge "x2" 1) ] 0);
-  ignore
-    (Encoding.add_equality e
-       [ (1, Lit.ge "x1" 1); (1, Lit.ge "x2" 1); (1, Lit.ge "x3" 1) ]
-       2);
-  e
-
-let mk_unsat_encoding () =
-  let e = Encoding.create () in
-  List.iter (fun (n, lo, hi) -> Encoding.declare_int e n ~lo ~hi) unsat_domains;
-  ignore (Encoding.add_equality e [ (1, Lit.ge "x1" 1); (-1, Lit.ge "x2" 1) ] 0);
-  ignore (Encoding.add_equality e [ (1, Lit.ge "x1" 1); (1, Lit.ge "x2" 1) ] 1);
-  e
+(* M1-T31: a [ctx] has no ambient row any more, so there is no [~model_id] thunk here
+   to assert is never consulted. Every explanation names its own row. *)
+let mk_ctx writer encoding = Justify.create ~writer ~encoding
 
 (* ===================================================================== *)
 (* 2 and 3. Search functional behaviour: SAT with I-S1's independent      *)
@@ -544,8 +574,7 @@ let scratch_writer () =
   (path, oc)
 
 let test_search_finds_and_verifies_a_solution () =
-  let store, engine = sat_store_and_engine () in
-  let encoding = mk_sat_encoding () in
+  let store, engine, encoding = sat_scene () in
   let path, oc = scratch_writer () in
   let writer = Writer.create ~comments:false ~audit:true oc in
   Encoding.start_proof encoding writer;
@@ -565,8 +594,7 @@ let test_search_finds_and_verifies_a_solution () =
     (Store.level store = entry_level)
 
 let test_search_exhausts_and_reports_unsat () =
-  let store, engine = unsat_store_and_engine () in
-  let encoding = mk_unsat_encoding () in
+  let store, engine, encoding = unsat_scene () in
   let path, oc = scratch_writer () in
   let writer = Writer.create ~comments:false ~audit:true oc in
   Encoding.start_proof encoding writer;
@@ -595,9 +623,8 @@ let test_search_exhausts_and_reports_unsat () =
 (* ===================================================================== *)
 
 let test_audit_empty_at_conclusion () =
-  let run build_store_engine build_encoding check =
-    let store, engine = build_store_engine () in
-    let encoding = build_encoding () in
+  let run build_scene check =
+    let store, engine, encoding = build_scene () in
     let path, oc = scratch_writer () in
     let writer = Writer.create ~comments:false ~audit:true oc in
     Encoding.start_proof encoding writer;
@@ -618,9 +645,9 @@ let test_audit_empty_at_conclusion () =
     Sys.remove path;
     (outcome, !live_before_conclusion)
   in
-  let _, live_sat = run sat_store_and_engine mk_sat_encoding sat_check in
+  let _, live_sat = run sat_scene sat_check in
   check "audit: SAT proof's live set is empty at conclusion (I-X2)" (live_sat = 0);
-  let _, live_unsat = run unsat_store_and_engine mk_unsat_encoding (fun _ -> true) in
+  let _, live_unsat = run unsat_scene (fun _ -> true) in
   check "audit: UNSAT proof's live set is empty at conclusion (I-X2)" (live_unsat = 0)
 
 (* ===================================================================== *)
@@ -669,8 +696,7 @@ let run_veripb ~name ~build =
       try Sys.rmdir dir with _ -> ())
 
 let build_search_sat_proof dir =
-  let store, engine = sat_store_and_engine () in
-  let encoding = mk_sat_encoding () in
+  let store, engine, encoding = sat_scene () in
   let opb = Filename.concat dir "search_sat.opb" in
   let pbp = Filename.concat dir "search_sat.pbp" in
   let oc = open_out opb in
@@ -687,8 +713,7 @@ let build_search_sat_proof dir =
   (opb, pbp)
 
 let build_search_unsat_proof dir =
-  let store, engine = unsat_store_and_engine () in
-  let encoding = mk_unsat_encoding () in
+  let store, engine, encoding = unsat_scene () in
   let opb = Filename.concat dir "search_unsat.opb" in
   let pbp = Filename.concat dir "search_unsat.pbp" in
   let oc = open_out opb in

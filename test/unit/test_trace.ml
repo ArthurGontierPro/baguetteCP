@@ -403,10 +403,8 @@ let run_model m =
      [Writer.conclusion] would raise here rather than quietly shipping the leak. *)
   let writer = Writer.create ~audit:true oc in
   Encoding.start_proof encoding writer;
-  let ctx =
-    Justify.create ~writer ~encoding ~model_id:(fun () ->
-        failwith "test_trace: search demanded Explanation.Trivial (D-0011)")
-  in
+  (* M1-T31: no ambient row to install, so no thunk to fail. *)
+  let ctx = Justify.create ~writer ~encoding in
   let trace = Trace.create () in
   let entry_level = Store.level store in
   let outcome = Search.solve ~engine ~store ~ctx ~check:(independent_check m) ~trace () in

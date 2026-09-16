@@ -43,6 +43,17 @@ module Compile = Baguette_flatzinc.Compile
 
 let failures = ref 0
 
+(* Stands in for "some earlier derivation already established this", which is what
+   [Explanation.trivial] meant at the setup pushes throughout this file until M1-T31
+   deleted it. [Model_row] is the honest spelling of that -- a bound that came from a
+   row -- and it keeps these setups on [linear.ml]'s citing path, which is what the
+   shape tests below are about. The four [decision_scene_*] builders deliberately do
+   NOT use it: what they simulate is a search decision, and that is now a different
+   constructor with a different rendering (M1-T50). The id is out of range of every
+   encoding in this file on purpose: nothing renders this citation, and if something
+   ever did, veripb would reject the id rather than quietly accept a plausible one. *)
+let placeholder_reason = Explanation.model_row 901
+
 let check name cond =
   if cond then Printf.printf "ok   %s\n" name
   else (
@@ -342,17 +353,17 @@ let test_conflict () =
   let store = mk_store bounds in
   let raw_terms = [ (2, var 0); (3, var 1) ] in
   let prop = Linear.make store raw_terms 1 ~row_id:1 in
-  ignore (Store.set_lo store (var 0) 1 Explanation.trivial);
-  ignore (Store.set_lo store (var 1) 1 Explanation.trivial);
+  ignore (Store.set_lo store (var 0) 1 placeholder_reason);
+  ignore (Store.set_lo store (var 1) 1 placeholder_reason);
   match Linear.propagate prop store with
   | Propagator.Fixpoint -> check "conflict: expected Conflict" false
   | Propagator.Conflict e ->
       (* [Explanation.lits] walks into [Combine]'s [Weaken] summands but not into a
          [Term]'s cited explanation until *that* is forced -- and here both x and y
-         are cited via the placeholder [Explanation.trivial] (standing in for "some
-         earlier propagator already established this"), which carries no literals
-         of its own (docs/core/explanation.ml: [Trivial] is the model row itself, an
-         indivisible reference, not a set of literals to enumerate). An empty result
+         are cited via [placeholder_reason] (standing in for "some earlier propagator
+         already established this"), which carries no literals of its own
+         (lib/core/explanation.ml: a [Model_row] is the row itself, an indivisible
+         reference, not a set of literals to enumerate). An empty result
          is therefore the *correct* answer for this specific setup, not a smell --
          asserted directly since D-0013 changed what a legitimate answer looks like
          here (it used to always be nonempty, back when every "other var" reason was
@@ -460,7 +471,7 @@ let test_order_reason () =
    case, a bound more than one step from declared:
 
    1. "Cite": x's bound was already tightened by an earlier step (simulated here by
-      pushing it with [Explanation.trivial] before running this propagator, standing
+      pushing it with [placeholder_reason] before running this propagator, standing
       in for whatever real derivation established it -- this test only cares that
       *something* is cited, not what). The summand for x must be [Term], scaled by
       [abs coeff], never a [Weaken] chain, however many steps away from declared it
@@ -479,7 +490,7 @@ let test_multi_step_chain () =
     (match x_setup store with
     | None -> ()
     | Some (set, bound) -> (
-        match set store (var 0) bound Explanation.trivial with
+        match set store (var 0) bound placeholder_reason with
         | Store.Changed -> ()
         | _ -> check (Printf.sprintf "%s: setup prune applied" name) false));
     let before = Store.trail_length store in
@@ -664,7 +675,7 @@ let test_checking () =
       Lin_eq.make store (List.mapi (fun i a -> (a, var i)) coeffs) rhs ~le_id:1 ~ge_id:2
     in
     List.iteri
-      (fun i v -> ignore (Store.fix store (var i) v Explanation.trivial))
+      (fun i v -> ignore (Store.fix store (var i) v placeholder_reason))
       fix_values;
     match propagate_pair prop store with
     | Propagator.Conflict _ -> check label expect_conflict
@@ -681,7 +692,7 @@ let test_checking () =
     let store = mk_store bounds in
     let prop = make store in
     List.iteri
-      (fun i v -> ignore (Store.fix store (var i) v Explanation.trivial))
+      (fun i v -> ignore (Store.fix store (var i) v placeholder_reason))
       fix_values;
     match propagate prop store with
     | Propagator.Conflict _ -> check label expect_conflict
@@ -807,7 +818,7 @@ let test_compare_entailment () =
   let terms = [ (1, var 0); (-1, var 1) ] in
   (let store = mk_store bounds in
    let prop = Int_le.make store (var 0) (var 1) ~row_id:1 in
-   ignore (Store.set_lo store (var 0) 2 Explanation.trivial);
+   ignore (Store.set_lo store (var 0) 2 placeholder_reason);
    let before = Store.trail_length store in
    match Int_le.propagate prop store with
    | Propagator.Conflict _ -> check "int_le entailment: expected Fixpoint" false
@@ -816,7 +827,7 @@ let test_compare_entailment () =
   let terms_lt = [ (1, var 0); (-1, var 1) ] in
   let store2 = mk_store bounds in
   let prop2 = Int_lt.make store2 (var 0) (var 1) ~row_id:1 in
-  ignore (Store.set_lo store2 (var 0) 2 Explanation.trivial);
+  ignore (Store.set_lo store2 (var 0) 2 placeholder_reason);
   let before2 = Store.trail_length store2 in
   match Int_lt.propagate prop2 store2 with
   | Propagator.Conflict _ -> check "int_lt entailment: expected Fixpoint" false
@@ -828,7 +839,7 @@ let test_int_eq_entailment () =
   let terms = [ (1, var 0); (-1, var 1) ] in
   let store = mk_store bounds in
   let prop = Int_eq.make store (var 0) (var 1) ~le_id:1 ~ge_id:2 in
-  ignore (Store.set_hi store (var 1) 1 Explanation.trivial);
+  ignore (Store.set_hi store (var 1) 1 placeholder_reason);
   let before = Store.trail_length store in
   match propagate_pair prop store with
   | Propagator.Conflict _ -> check "int_eq entailment: expected Fixpoint" false
@@ -1019,7 +1030,7 @@ let build_int_lin_eq_multi dir =
   let oc = open_out pbp in
   let w = Writer.create ~comments:true ~audit:true oc in
   Encoding.start_proof e w;
-  let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> geq_id) in
+  let ctx = Justify.create ~writer:w ~encoding:e in
   let id = Justify.emit ctx expl in
   Writer.delete w id;
   Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x1", 2); ("x2", 2) ]));
@@ -1068,7 +1079,7 @@ let build_int_le_multi dir =
   let oc = open_out pbp in
   let w = Writer.create ~comments:true ~audit:true oc in
   Encoding.start_proof e w;
-  let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> model_row) in
+  let ctx = Justify.create ~writer:w ~encoding:e in
   let id = Justify.emit ctx expl in
   Writer.delete w id;
   Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x", 3); ("y", 3) ]));
@@ -1117,7 +1128,7 @@ let build_int_lt_multi dir =
   let oc = open_out pbp in
   let w = Writer.create ~comments:true ~audit:true oc in
   Encoding.start_proof e w;
-  let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> model_row) in
+  let ctx = Justify.create ~writer:w ~encoding:e in
   let id = Justify.emit ctx expl in
   Writer.delete w id;
   Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x", 3); ("y", 4) ]));
@@ -1173,7 +1184,7 @@ let build_int_eq_multi dir =
   let oc = open_out pbp in
   let w = Writer.create ~comments:true ~audit:true oc in
   Encoding.start_proof e w;
-  let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> leq_id) in
+  let ctx = Justify.create ~writer:w ~encoding:e in
   let id = Justify.emit ctx expl in
   Writer.delete w id;
   Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x", 2); ("y", 2) ]));
@@ -1216,7 +1227,7 @@ let decision_scene_int_le () =
     Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
   in
   let prop = Int_le.make store (Var.of_int 0) (Var.of_int 1) ~row_id:row in
-  (match Store.set_lo store (Var.of_int 0) 3 Explanation.trivial with
+  (match Store.set_lo store (Var.of_int 0) 3 (Explanation.decision (Lit.ge "x" 3)) with
   | Store.Changed -> ()
   | _ -> failwith "decision_scene_int_le: the decision did not move x's bound");
   let before = Store.trail_length store in
@@ -1238,7 +1249,7 @@ let decision_scene_int_lt () =
     Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
   in
   let prop = Int_lt.make store (Var.of_int 0) (Var.of_int 1) ~row_id:row in
-  (match Store.set_lo store (Var.of_int 0) 3 Explanation.trivial with
+  (match Store.set_lo store (Var.of_int 0) 3 (Explanation.decision (Lit.ge "x" 3)) with
   | Store.Changed -> ()
   | _ -> failwith "decision_scene_int_lt: the decision did not move x's bound");
   let before = Store.trail_length store in
@@ -1263,7 +1274,7 @@ let decision_scene_int_eq () =
   let le, _ge =
     Int_eq.make store (Var.of_int 0) (Var.of_int 1) ~le_id:leq_id ~ge_id:geq_id
   in
-  (match Store.set_hi store (Var.of_int 1) 2 Explanation.trivial with
+  (match Store.set_hi store (Var.of_int 1) 2 (Explanation.decision (Lit.le "y" 2)) with
   | Store.Changed -> ()
   | _ -> failwith "decision_scene_int_eq: the decision did not move y's bound");
   let before = Store.trail_length store in
@@ -1291,10 +1302,10 @@ let decision_scene_int_lin_eq () =
       4 ~le_id:leq_id ~ge_id:geq_id
   in
   (* x2 = 2, both bounds, by decision: two store pushes and not one .opb row. *)
-  (match Store.set_hi store (Var.of_int 1) 2 Explanation.trivial with
+  (match Store.set_hi store (Var.of_int 1) 2 (Explanation.decision (Lit.le "x2" 2)) with
   | Store.Changed -> ()
   | _ -> failwith "decision_scene_int_lin_eq: x2 <= 2 did not move");
-  (match Store.set_lo store (Var.of_int 1) 2 Explanation.trivial with
+  (match Store.set_lo store (Var.of_int 1) 2 (Explanation.decision (Lit.ge "x2" 2)) with
   | Store.Changed -> ()
   | _ -> failwith "decision_scene_int_lin_eq: x2 >= 2 did not move");
   (match Linear.propagate le store with
@@ -1314,6 +1325,9 @@ let decision_scene_int_lin_eq () =
    justification that forgot to record what it read would emit. *)
 let write_trace_case dir ~file ~scene ~factless ~expect_lines =
   let e, (entry : Store.entry), target, row, sol = scene () in
+  (* The scenes still report the row their propagator is about; nothing here resolves
+     a row from the ctx any more (M1-T31). *)
+  ignore row;
   let opb = Filename.concat dir (file ^ ".opb") in
   let pbp = Filename.concat dir (file ^ ".pbp") in
   let oc = open_out opb in
@@ -1323,7 +1337,7 @@ let write_trace_case dir ~file ~scene ~factless ~expect_lines =
   let oc = open_out pbp in
   let w = Writer.create ~comments:true ~audit:true oc in
   Encoding.start_proof e w;
-  let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> row) in
+  let ctx = Justify.create ~writer:w ~encoding:e in
   (match Trace.claims e entry target with
   | [] -> failwith (file ^ ": the pruning under test moved no bound, so it has no claim")
   | claims ->
@@ -1425,12 +1439,11 @@ let test_lin_eq_pairing () =
     let oc = open_out pbp in
     let w = Writer.create ~comments:true ~audit:true oc in
     Encoding.start_proof e w;
-    let ctx =
-      Justify.create ~writer:w ~encoding:e ~model_id:(fun () ->
-          failwith
-            "test_lin_eq_pairing: ctx.model_id was consulted -- expl's base should be \
-             Model_row leq_id, not Trivial")
-    in
+    (* [expl]'s base is [Model_row leq_id]. This used to install a [~model_id] thunk
+       that failed if consulted; M1-T31 deleted the field, so the property it asserted
+       -- that nothing here resolves a row from ambient state -- now holds of the type
+       rather than of this scene. *)
+    let ctx = Justify.create ~writer:w ~encoding:e in
     let id = Justify.emit ctx expl in
     Writer.delete w id;
     Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x1", 2); ("x2", 2) ]));
@@ -1439,8 +1452,8 @@ let test_lin_eq_pairing () =
   in
   run_veripb
     ~name:
-      "D-0011 pairing: le's explanation never touches ctx.model_id (Model_row supersedes \
-       Trivial) and still verifies"
+      "D-0011 pairing: le's explanation names its own row (Model_row leq_id) and still \
+       verifies"
     ~build
 
 (* ============================================================================
@@ -1577,7 +1590,7 @@ let check_ne_soundness_case name coeffs rhs ranges pre =
   let bounds = List.mapi (fun i (lo, hi) -> (Printf.sprintf "x%d" i, lo, hi)) ranges in
   let store = mk_store bounds in
   let prop = Ne.make store (List.mapi (fun i a -> (a, var i)) coeffs) rhs in
-  List.iter (fun (i, v) -> ignore (Store.fix store (var i) v Explanation.trivial)) pre;
+  List.iter (fun (i, v) -> ignore (Store.fix store (var i) v placeholder_reason)) pre;
   let cur =
     List.init n (fun i ->
         let d = Store.get store (var i) in
@@ -1648,7 +1661,7 @@ let test_ne_checking () =
     let store = mk_store bounds in
     let prop = Ne.make store (List.mapi (fun i a -> (a, var i)) coeffs) rhs in
     List.iteri
-      (fun i v -> ignore (Store.fix store (var i) v Explanation.trivial))
+      (fun i v -> ignore (Store.fix store (var i) v placeholder_reason))
       fix_values;
     match Ne.propagate prop store with
     | Propagator.Conflict _ -> check name expect_conflict
@@ -1678,7 +1691,7 @@ let test_ne_idempotence () =
     let bounds = List.mapi (fun i (lo, hi) -> (Printf.sprintf "x%d" i, lo, hi)) ranges in
     let store = mk_store bounds in
     let prop = Ne.make store (List.mapi (fun i a -> (a, var i)) coeffs) rhs in
-    List.iter (fun (i, v) -> ignore (Store.fix store (var i) v Explanation.trivial)) pre;
+    List.iter (fun (i, v) -> ignore (Store.fix store (var i) v placeholder_reason)) pre;
     (match Ne.propagate prop store with
     | Propagator.Conflict _ ->
         check (Printf.sprintf "%s: expected Fixpoint first pass" name) false
@@ -1751,7 +1764,7 @@ let build_ne_case dir ~file ~decls ~terms ~rhs ~pre ~target ~sat ~expect_lines
   let prop = Ne.make store (List.map (fun (a, i) -> (a, var i)) terms) rhs in
   List.iter
     (fun (i, v) ->
-      match Store.fix store (var i) v Explanation.trivial with
+      match Store.fix store (var i) v placeholder_reason with
       | Store.Changed | Store.Unchanged -> ()
       | Store.Conflict _ -> failwith (file ^ ": pre-fixing conflicted"))
     pre;
@@ -1778,10 +1791,7 @@ let build_ne_case dir ~file ~decls ~terms ~rhs ~pre ~target ~sat ~expect_lines
   let oc = open_out pbp in
   let w = Writer.create ~comments:true ~audit:true oc in
   Encoding.start_proof e w;
-  let ctx =
-    Justify.create ~writer:w ~encoding:e ~model_id:(fun () ->
-        failwith (file ^ ": ctx.model_id was consulted -- a Clause cites no row"))
-  in
+  let ctx = Justify.create ~writer:w ~encoding:e in
   let id = Justify.emit ctx expl in
   Writer.delete w id;
   Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e sat));
@@ -2011,10 +2021,7 @@ let build_search_case dir ~file ~decls ~ne_terms ~ne_rhs ~lt_terms ~lt_rhs ~chec
   let oc = open_out pbp in
   let w = Writer.create ~comments:true ~audit:true oc in
   Encoding.start_proof e w;
-  let ctx =
-    Justify.create ~writer:w ~encoding:e ~model_id:(fun () ->
-        failwith (file ^ ": ctx.model_id was consulted -- every instance carries its row"))
-  in
+  let ctx = Justify.create ~writer:w ~encoding:e in
   let outcome = Search.solve ~engine ~store ~ctx ~check:check_sol () in
   close_out oc;
   (outcome, store, opb, pbp)
@@ -2088,7 +2095,7 @@ let build_ne_search dir =
     List.iter (fun (n, lo, hi) -> Encoding.declare_int e2 n ~lo ~hi) decls;
     ignore (Encoding.add_int_lin_le e2 [ (1, "x"); (1, "y") ] 5);
     Encoding.start_proof e2 w;
-    let ctx = Justify.create ~writer:w ~encoding:e2 ~model_id:(fun () -> 1) in
+    let ctx = Justify.create ~writer:w ~encoding:e2 in
     let r =
       match Search.solve ~engine ~store ~ctx ~check:check_sol () with
       | _ -> false
@@ -2495,7 +2502,7 @@ let test_bool_clause_checking () =
     let prop = mk_bool_clause lits store in
     List.iteri
       (fun i v ->
-        match Store.fix store (var i) v Explanation.trivial with
+        match Store.fix store (var i) v placeholder_reason with
         | Store.Conflict _ -> failwith "test_bool_clause_checking: setup conflicted"
         | _ -> ())
       values;
@@ -2525,7 +2532,7 @@ let test_bool_clause_idempotence () =
     let prop = mk_bool_clause lits store in
     List.iter
       (fun (i, v) ->
-        match Store.fix store (var i) v Explanation.trivial with
+        match Store.fix store (var i) v placeholder_reason with
         | Store.Conflict _ -> failwith "test_bool_clause_idempotence: setup conflicted"
         | _ -> ())
       pre;
@@ -2568,8 +2575,8 @@ let test_bool_clause_unit_push () =
      lib/core/prop/bool_clause.ml's header states that identity; this is the check. *)
   let store = mk_store [ ("a", 0, 1); ("b", 0, 1); ("c", 0, 1) ] in
   let prop = mk_bool_clause [ (0, true); (1, false); (2, true) ] store in
-  ignore (Store.set_hi store (var 0) 0 Explanation.trivial);
-  ignore (Store.set_lo store (var 1) 1 Explanation.trivial);
+  ignore (Store.set_hi store (var 0) 0 placeholder_reason);
+  ignore (Store.set_lo store (var 1) 1 placeholder_reason);
   let before = Store.trail_length store in
   (match Bool_clause.propagate prop store with
   | Propagator.Conflict _ -> check "bool_clause: the unit push happened" false
@@ -2592,9 +2599,9 @@ let test_bool_clause_conflict_reason () =
      (the header says why), so this checks the conflict path reports it too. *)
   let store = mk_store [ ("a", 0, 1); ("b", 0, 1); ("c", 0, 1) ] in
   let prop = mk_bool_clause [ (0, true); (1, false); (2, true) ] store in
-  ignore (Store.set_hi store (var 0) 0 Explanation.trivial);
-  ignore (Store.set_lo store (var 1) 1 Explanation.trivial);
-  ignore (Store.set_hi store (var 2) 0 Explanation.trivial);
+  ignore (Store.set_hi store (var 0) 0 placeholder_reason);
+  ignore (Store.set_lo store (var 1) 1 placeholder_reason);
+  ignore (Store.set_hi store (var 2) 0 placeholder_reason);
   match Bool_clause.propagate prop store with
   | Propagator.Fixpoint -> check "bool_clause: an all-false clause conflicts" false
   | Propagator.Conflict e ->
@@ -2623,7 +2630,7 @@ let test_bool_clause_rejects_non_bool () =
      has already been fixed no longer looks like [0, 1]. That is the D-0010 requirement
      as a test rather than only as a comment in the header. *)
   let store2 = mk_store [ ("a", 0, 1) ] in
-  ignore (Store.set_hi store2 (var 0) 0 Explanation.trivial);
+  ignore (Store.set_hi store2 (var 0) 0 placeholder_reason);
   raises "bool_clause: make refuses a bool that has already been narrowed" (fun () ->
       ignore (mk_bool_clause [ (0, true) ] store2))
 
@@ -2655,13 +2662,13 @@ let test_bool2int_directions () =
   (* b -> x, lower bound. b is true; x, declared wide, must lose everything below 1. *)
   let _, s =
     bool2int_case ~b_range:(0, 1) ~x_range:(0, 5)
-      ~pre:[ (fun st -> Store.set_lo st (var 0) 1 Explanation.trivial) ]
+      ~pre:[ (fun st -> Store.set_lo st (var 0) 1 placeholder_reason) ]
   in
   check "bool2int: b -> x raises lo(x) when b is true" (snd (dom_pair s) = (1, 1));
   (* b -> x, upper bound. b is false; x must lose everything above 0. *)
   let _, s =
     bool2int_case ~b_range:(0, 1) ~x_range:(0, 5)
-      ~pre:[ (fun st -> Store.set_hi st (var 0) 0 Explanation.trivial) ]
+      ~pre:[ (fun st -> Store.set_hi st (var 0) 0 placeholder_reason) ]
   in
   check "bool2int: b -> x lowers hi(x) when b is false" (snd (dom_pair s) = (0, 0));
   (* b -> x with b untouched: b's DECLARED [0, 1] alone confines a wide x. This is the
@@ -2675,13 +2682,13 @@ let test_bool2int_directions () =
      weaker in everything, which is exactly why a model cannot see it. *)
   let _, s =
     bool2int_case ~b_range:(0, 1) ~x_range:(0, 5)
-      ~pre:[ (fun st -> Store.set_lo st (var 1) 1 Explanation.trivial) ]
+      ~pre:[ (fun st -> Store.set_lo st (var 1) 1 placeholder_reason) ]
   in
   check "bool2int: x -> b raises lo(b) when x >= 1" (fst (dom_pair s) = (1, 1));
   (* x -> b, upper bound. *)
   let _, s =
     bool2int_case ~b_range:(0, 1) ~x_range:(0, 5)
-      ~pre:[ (fun st -> Store.set_hi st (var 1) 0 Explanation.trivial) ]
+      ~pre:[ (fun st -> Store.set_hi st (var 1) 0 placeholder_reason) ]
   in
   check "bool2int: x -> b lowers hi(b) when x <= 0" (fst (dom_pair s) = (0, 0));
   (* One pass reaches the fixpoint, which is the ordering argument in the header: x is
@@ -2689,7 +2696,7 @@ let test_bool2int_directions () =
      so the second step has real work and must still happen in the same call. *)
   let _, s =
     bool2int_case ~b_range:(0, 1) ~x_range:(0, 5)
-      ~pre:[ (fun st -> Store.set_lo st (var 1) 1 Explanation.trivial) ]
+      ~pre:[ (fun st -> Store.set_lo st (var 1) 1 placeholder_reason) ]
   in
   check "bool2int: one pass does both directions, not just the first"
     (dom_pair s = ((1, 1), (1, 1)))
@@ -2732,10 +2739,10 @@ let test_bool2int_checking () =
     let store = mk_store [ ("b", 0, 1); ("x", xlo, xhi) ] in
     let prop = Bool2int.make store ~b:(var 0) ~x:(var 1) in
     let ok =
-      match Store.fix store (var 0) bval Explanation.trivial with
+      match Store.fix store (var 0) bval placeholder_reason with
       | Store.Conflict _ -> false
       | _ -> (
-          match Store.fix store (var 1) xval Explanation.trivial with
+          match Store.fix store (var 1) xval placeholder_reason with
           | Store.Conflict _ -> false
           | _ -> true)
     in
@@ -2784,8 +2791,8 @@ let test_bool2int_idempotence () =
               (Store.same_domains store snap))
   in
   run "nothing established, x wide" 0 5 [];
-  run "b true" 0 5 [ (fun st -> Store.set_lo st (var 0) 1 Explanation.trivial) ];
-  run "x >= 1" 0 5 [ (fun st -> Store.set_lo st (var 1) 1 Explanation.trivial) ];
+  run "b true" 0 5 [ (fun st -> Store.set_lo st (var 0) 1 placeholder_reason) ];
+  run "x >= 1" 0 5 [ (fun st -> Store.set_lo st (var 1) 1 placeholder_reason) ];
   run "x already [0,1]" 0 1 []
 
 let test_bool2int_conflicts () =
@@ -2811,8 +2818,8 @@ let test_bool2int_conflicts () =
     bool2int_case ~b_range:(0, 1) ~x_range:(0, 5)
       ~pre:
         [
-          (fun st -> Store.set_hi st (var 0) 0 Explanation.trivial);
-          (fun st -> Store.set_lo st (var 1) 1 Explanation.trivial);
+          (fun st -> Store.set_hi st (var 0) 0 placeholder_reason);
+          (fun st -> Store.set_lo st (var 1) 1 placeholder_reason);
         ]
   in
   match r with
@@ -2840,7 +2847,11 @@ let add_clause_row e (lits : (string * bool) list) =
     (List.map (fun (n, p) -> ((if p then -1 else 1), n)) lits)
     (q - 1)
 
+(* [~model_id] is kept in the signature although [Justify.create] no longer takes one
+   (M1-T31): the callers pass the row their explanation is about, and it documents the
+   scene. It is no longer a fallback -- [expl] names its own row. *)
 let write_and_emit dir base e ~expl ~model_id ~sol =
+  ignore model_id;
   let opb = Filename.concat dir (base ^ ".opb") in
   let pbp = Filename.concat dir (base ^ ".pbp") in
   let oc = open_out opb in
@@ -2849,7 +2860,7 @@ let write_and_emit dir base e ~expl ~model_id ~sol =
   let oc = open_out pbp in
   let w = Writer.create ~comments:true ~audit:true oc in
   Encoding.start_proof e w;
-  let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> model_id) in
+  let ctx = Justify.create ~writer:w ~encoding:e in
   let id = Justify.emit ctx expl in
   Writer.delete w id;
   Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e sol));
@@ -2888,10 +2899,10 @@ let bool_clause_scene () =
       ~domains:[| Domain.make 0 1; Domain.make 0 1; Domain.make 0 1 |]
   in
   let prop = mk_bool_clause [ (0, true); (1, false); (2, true) ] store in
-  (match Store.set_hi store (var 0) 0 Explanation.trivial with
+  (match Store.set_hi store (var 0) 0 placeholder_reason with
   | Store.Changed -> ()
   | _ -> failwith "bool_clause_scene: a := false failed");
-  (match Store.set_lo store (var 1) 1 Explanation.trivial with
+  (match Store.set_lo store (var 1) 1 placeholder_reason with
   | Store.Changed -> ()
   | _ -> failwith "bool_clause_scene: b := true failed");
   (e, row, store, prop)
@@ -2950,7 +2961,7 @@ let build_bool_clause_weakened dir =
 let build_bool_clause_conflict dir =
   let e = Encoding.create () in
   Encoding.declare_bool e "a";
-  let row = add_clause_row e [] in
+  ignore (add_clause_row e []);
   let store = Store.create ~names:[| "a" |] ~domains:[| Domain.make 0 1 |] in
   let prop = mk_bool_clause [] store in
   let expl =
@@ -2966,7 +2977,7 @@ let build_bool_clause_conflict dir =
   let oc = open_out pbp in
   let w = Writer.create ~comments:true ~audit:true oc in
   Encoding.start_proof e w;
-  let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> row) in
+  let ctx = Justify.create ~writer:w ~encoding:e in
   let id = Justify.emit ctx expl in
   Writer.conclusion w (Writer.Unsat (Some id));
   close_out oc;
@@ -3042,7 +3053,7 @@ let build_bool2int_b_to_x_lo dir =
         (fun e st ->
           store_fact (Lit.bool_true "b");
           ignore e;
-          Store.set_lo st (var 0) 1 Explanation.trivial);
+          Store.set_lo st (var 0) 1 placeholder_reason);
       ]
     ~wvar:1 ~wbound:Lo
     ~sol:[ ("b", 1); ("x", 1) ]
@@ -3054,7 +3065,7 @@ let build_bool2int_b_to_x_hi dir =
         (fun e st ->
           store_fact (Lit.bool_false "b");
           ignore e;
-          Store.set_hi st (var 0) 0 Explanation.trivial);
+          Store.set_hi st (var 0) 0 placeholder_reason);
       ]
     ~wvar:1 ~wbound:Hi
     ~sol:[ ("b", 0); ("x", 0) ]
@@ -3069,7 +3080,7 @@ let build_bool2int_x_to_b_lo dir =
         (fun e st ->
           store_fact (Lit.ge "x" 1);
           ignore e;
-          Store.set_lo st (var 1) 1 Explanation.trivial);
+          Store.set_lo st (var 1) 1 placeholder_reason);
       ]
     ~wvar:0 ~wbound:Lo
     ~sol:[ ("b", 1); ("x", 1) ]
@@ -3081,7 +3092,7 @@ let build_bool2int_x_to_b_hi dir =
         (fun e st ->
           store_fact (Lit.le "x" 0);
           ignore e;
-          Store.set_hi st (var 1) 0 Explanation.trivial);
+          Store.set_hi st (var 1) 0 placeholder_reason);
       ]
     ~wvar:0 ~wbound:Hi
     ~sol:[ ("b", 0); ("x", 0) ]
@@ -3096,7 +3107,7 @@ let build_bool2int_wrong dir =
           (fun e st ->
             store_fact (Lit.bool_false "b");
             ignore e;
-            Store.set_hi st (var 0) 0 Explanation.trivial);
+            Store.set_hi st (var 0) 0 placeholder_reason);
         ]
   in
   let expl = Explanation.clause [ Lit.ge "x" 1; Lit.bool_true "b" ] in
@@ -3122,7 +3133,7 @@ let build_bool2int_factless dir =
           (fun e st ->
             store_fact (Lit.bool_false "b");
             ignore e;
-            Store.set_hi st (var 0) 0 Explanation.trivial);
+            Store.set_hi st (var 0) 0 placeholder_reason);
         ]
   in
   let expl = Explanation.clause [ Lit.le "x" 0 ] in
