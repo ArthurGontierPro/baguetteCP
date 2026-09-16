@@ -10,12 +10,11 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
-**Two sessions are running (fifth wave, dispatched 2026-09-16).** The fourth wave is merged and released. Round dispatched 2026-09-16 by the orchestrator, one
+**No sessions are running.** Waves four and five are merged and released; the claims table is empty. Round dispatched 2026-09-16 by the orchestrator, one
 git worktree each (`.claude/worktrees/<tag>`), so no two share `_build`'s global lock.
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M1-T31 + M1-T50 (one task, as M1-T44 argued) | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/prop/linear.ml`, `lib/core/prop/int_le.ml`, `int_lt.ml`, `int_eq.ml`, `lin_eq.ml`, `bool2int.ml`, `lib/core/search.ml`, `test/unit/test_core.ml`, `test/unit/test_matrix.ml` | agent-ambient | 2026-09-16 |
 
 Two rounds are recorded in `## Completed` below. The rows that stood here on
 2026-09-15 (`integration`, M1-T12, M1-T13) were stale — see the handoff note "the
@@ -119,6 +118,7 @@ work. The owning session picks it up.
 | M1-T44 | agent-rootfix | 2026-09-16 | **The rejected root proof is fixed**, and the rival diagnosis refuted rather than argued down. Orchestrator verified both directions on the original reproducer. D-0035, I-X9, new model `root_hole_unsat.fzn` |
 | M1-T32, M1-T38, M1-T39, M1-T41 | agent-proofhyg | 2026-09-16 | The committing door guarded (I-X8, D-0036), `triple_unsat` certified two ways, `pol_raw` deleted, `consistency_id` asserts the transition. **Caused and then diagnosed the second OOM**; the cause is now linted in the gate |
 | M1-T47 | agent-emit | 2026-09-16 | Emission split out of `search`. **Corrected the premise the task was written on**: three funnels plus a flush, and `always_comment` carries every level marker under the default format. Emission is 7.7%/2.3% of search on the two heavy models. 90/90 artefact hashes identical |
+| M1-T31 + M1-T50 | agent-ambient | 2026-09-16 | `Explanation.Trivial` deleted, `Decision of Lit.t` added, ambient row unrepresentable. **Found that pushing the wrong decision literal left the whole suite green**; `test_matrix.ml` now observes it. D-0037. Zero of 30 artefacts change |
 
 ## Handoff notes
 
@@ -731,3 +731,40 @@ across five runs and would have swung the published correction by 2×.
 `bin/main.ml` was unowned this round and the agent changed it, keeping it in one commit so
 it could be routed or reverted whole. Reviewed and kept: the four new rows are deliberately
 outside `phases`, so `inmain` still equals the sum of the phases exactly.
+
+### M1-T31 + M1-T50 released — and the fifth wave closes the round (orchestrator, 2026-09-16)
+
+The ambient row is gone, and gone in the strong sense: `Justify.ctx` has no field that
+could hold one and there is no constructor meaning "the current row", so it is a **type
+error** rather than a guarded runtime path. `bin/main.ml`'s failing `model_id` thunk is
+deleted because there is nothing left to guard.
+
+Two things to carry forward.
+
+**The fix was a mislabel, not a rendering bug.** `Trivial` said "the model constraint
+itself justifies this", which is simply false of a decision — a decision is an assumption
+the search made. Once the reason says that honestly, the doubled `pol` citation cannot be
+written: a decision has no constraint id and structurally cannot have one (D-0009), so the
+term is weakened out of the row while its bound literal still reaches the trace line.
+Dropping that literal would have reproduced the I-P5 failure `int_ne` shipped between
+M1-T9 and M1-T17, and the agent kept it for exactly that reason.
+
+**The blind spot is the more valuable half.** Pushing the *wrong* decision literal —
+`lit` instead of `Lit.negate lit` — left **the entire suite green**: 30 models, every unit
+binary. Nothing read the literal, because the `pol` weakens the term away without it and
+the trace fact is computed from the store. That is this project's signature failure mode
+again, and it was found only by performing the break. `test_matrix.ml` now walks the trail
+on every propagation and checks at each level start that the reason names the variable
+that moved, in the direction it moved, with the recorded bound entailing it — `>=`/`<=`
+not `=`, because a settle can strengthen it (I-X9). The same break now reddens 13 checks.
+
+**Where the honesty was needed and given**: `Justify.emit` on a `Decision` still *raises*.
+The fully type-level form needs a trail-reason / emittable-derivation split, and all three
+routes to it leave the task's file set — `Store.outcome`'s `Conflict of Explanation.t`
+alone drags in ~74 test call sites. The agent said so instead of describing a raise as a
+type error, which is the report I wanted.
+
+I also narrowed **I-X9**, which I had written unconditionally this morning: it holds where
+an explanation is emitted as a `pol` at all, and a bound resting on an assumption is
+justified by its trace line instead. D-0018 point 2's per-push `pol` path and M2-T3 both
+reach that exception.
