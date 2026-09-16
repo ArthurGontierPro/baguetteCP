@@ -15,22 +15,38 @@
 #   about the propagator, not about the harness.
 #
 # The mutation is named, deterministic (same proof in, same corruption out) and applied
-# to a COPY: the proof you point this at is never written to. `control` applies no
-# corruption and passes only if veripb accepts -- a mutation lane whose instance does
-# not verify honestly is green for no reason at all, so every mutation lane is paired
-# with a control lane on the same instance.
+# to a COPY: the proof you point this at is never written to.
+#
+# THE CONTROL IS NOT OPTIONAL (M1-T26). Every lane verifies the UNCORRUPTED proof first
+# and refuses to report anything at all if that does not check out -- a lane whose
+# instance does not verify honestly is green for no reason at all. That used to be a
+# rule the caller had to remember; it is now the first half of every lane, with no flag
+# to skip it. `control` remains a lane of its own, for a caller that wants to assert the
+# honest proof by itself.
+#
+# AND "veripb said no" IS NOT ONE ANSWER (M1-T26). A rejection that never reached the
+# derivation -- the file did not parse, or a rule named an id that is gone -- says only
+# that the file is malformed, which any corruption of a text file achieves. Those are
+# separated here and get their own exit code, because a lane that cannot tell them apart
+# reports the D-0020 failure mode as a pass. See exit 5 and `drop-line`.
 #
 # Exit codes -- distinct on purpose, because "the lane did nothing" must not look like
 # "the lane passed":
 #
-#   0  the lane holds:   veripb rejected the corrupted proof (or accepted the control)
+#   0  the lane holds:   veripb rejected the corrupted proof ON THE DERIVATION (or
+#                        accepted the control)
 #   1  the lane FAILED:  veripb accepted a corrupted proof -- the honest derivation has
 #                        slack in it. This is the finding the harness exists to produce;
 #                        it belongs in docs/DECISIONS.md, not in a re-run.
+#                        Also: the UNCORRUPTED proof does not verify, so the lane was
+#                        not run (the mandatory control above).
 #   2  usage or environment error
 #   3  the mutation does not apply to this proof (no eligible line). NOT a pass: the
 #      caller must report the lane as not-run, never as green.
 #   4  veripb is not available, so nothing was checked. Also not a pass.
+#   5  veripb rejected, but WITHOUT EVER JUDGING THE DERIVATION: a parse error, or a
+#      citation of an id that is no longer defined. NOT a pass either -- the lane tested
+#      the grammar, not the proof. This is what `drop-line` does under format 3.0.
 set -uo pipefail
 
 usage() {
@@ -48,8 +64,11 @@ EOF
 
 list_mutations() {
   cat <<'EOF'
-control        no corruption at all. Passes only if veripb ACCEPTS. Every mutation lane
-               needs one of these on the same instance, or the lane proves nothing.
+control        no corruption at all. Passes only if veripb ACCEPTS. Since M1-T26 every
+               OTHER lane runs this check on the honest proof first and refuses to
+               report anything if it fails, so a lane can no longer be green on an
+               instance that does not verify. This entry stays for a caller that wants
+               to assert the honest proof on its own.
 pol-coeff      perturb a coefficient inside one `pol` step: a divisor `N d` becomes
                `N+1 d`, a multiplier `N *` becomes `N+1 *`, and a bare literal axiom --
                which is the coefficient 1 -- becomes `lit 2 *`.
@@ -66,11 +85,17 @@ drop-line      delete one emitted derivation step entirely -- `pol`, `rup`, `red
                solution rule, by default the last one. Never a `#`, `w` or `del`: failing
                to delete is not an error (PROOF-FORMAT section 5), so a lane built on one
                of those would be green for the wrong reason.
-               NOTE on 3.0: deleting a step also un-defines its label, so any later
-               `del`/`pol` citing it is a PARSE error. The lane then holds for a reason
-               that has nothing to do with the derivation -- it holds on chain_sat, where
-               under 2.0 it correctly reported the instance as wrong for this lane. Read a
-               green 3.0 drop-line as "the label was still referenced", not as slack found.
+               MEASURED (M1-T26), and the reason this knob moved into the emitter: a
+               derivation step is deleted precisely because something later cites it, so
+               deleting it breaks that citation and the checker stops at the GRAMMAR. It
+               never judges the derivation. Under 3.0 that is a parse error ("The label
+               `@c13` is not assigned to a constraint ID"); under 2.0 it is a database
+               error ("Accessing the database out of bound with index 3"). Both now exit
+               5, not 0. This knob is kept because the classification is worth asserting,
+               but it does NOT test a derivation and must not be counted as if it did.
+               Writer.Mutation.Truncate_derivation is the replacement that does: it emits
+               the step with its derivation thrown away but its LABEL still bound, so
+               every later citation parses and the checker has to judge the step.
 EOF
 }
 
@@ -486,8 +511,64 @@ fi
 echo "--- ${LANE}"
 sed 's/^/    /' "${DESC}"
 
+# --- the control lane, run INSIDE every mutation lane (M1-T26) ---------------------
+# A mutation lane whose instance does not verify honestly is green for no reason at
+# all, so "run a control lane too" was always the rule. It was a rule the CALLER had to
+# remember, which is not a rule at all: nothing stopped someone running
+# `mutate_proof.sh pol-coeff foo.pbp` on an instance whose honest proof veripb rejects
+# and reading the rejection of the corrupted one as a passing lane.
+#
+# So the control is not a separate lane any more, it is the first half of every lane,
+# and there is deliberately no flag to skip it. The `control` mutation stays as a lane
+# of its own because a caller wants to be able to assert the honest proof on its own,
+# but no lane depends on the caller remembering to.
+if [ "${MUT}" != "control" ]; then
+  CONTROL="${WORK}/control-${BASE}.pbp"
+  CONTROL_LOG="${WORK}/control.log"
+  cp "${PROOF}" "${CONTROL}"
+  "${VERIPB}" "${MODEL}" "${CONTROL}" > "${CONTROL_LOG}" 2>&1
+  crc=$?
+  if [ "${crc}" -ne 0 ]; then
+    echo "FAIL ${LANE}: veripb REJECTS the UNCORRUPTED proof this lane is built on." >&2
+    echo "     The lane was not run. Whatever the corrupted proof does, the answer would" >&2
+    echo "     mean nothing: a lane whose instance does not verify honestly is green for" >&2
+    echo "     no reason at all. Fix the instance, then re-run." >&2
+    sed 's/^/     /' "${CONTROL_LOG}" | tail -20 >&2
+    echo "     opb=${OPB} proof=${PROOF}" >&2
+    KEEP=1
+    cleanup
+    exit 1
+  fi
+fi
+
 "${VERIPB}" "${MODEL}" "${MUTATED}" > "${LOG}" 2>&1
 rc=$?
+
+# --- WHY did veripb reject? (M1-T26) -----------------------------------------------
+# "veripb said no" is not the same as "the derivation was load-bearing". A rejection
+# that never reached the derivation -- the proof did not parse, or a rule named an id
+# that is gone -- says only that the file is malformed, which every corruption of a
+# text file can achieve. That is the D-0020 failure mode wearing the harness as a
+# costume, and it is exactly what `drop-line` does under 3.0: deleting a step also
+# un-defines its label, so the later citation is a PARSE error and the derivation is
+# never judged at all.
+#
+# The messages below are VeriPB 3.0.2's and 2.2.2's, taken from runs, not from a
+# grammar. If a later checker words them differently this misclassifies a lane as
+# honest -- so the patterns are listed rather than folded into one regex, and the exit
+# code is distinct so a caller can assert the class it expects instead of assuming it.
+rejection_class() {
+  if grep -qi 'Syntax error while parsing' "$1" \
+    || grep -q 'is not assigned to a constraint ID' "$1" \
+    || grep -q 'Accessing the database out of bound' "$1" \
+    || grep -q 'has already been deleted' "$1" \
+    || grep -qi 'Unsupported version' "$1"
+  then
+    echo unevaluated
+  else
+    echo verification
+  fi
+}
 
 if [ "${MUT}" = "control" ]; then
   if [ "${rc}" -eq 0 ]; then
@@ -506,10 +587,21 @@ if [ "${MUT}" = "control" ]; then
 fi
 
 if [ "${rc}" -ne 0 ]; then
-  echo "OK   ${LANE}: veripb rejected the corrupted proof, as it must"
-  sed 's/^/     /' "${LOG}" | grep -i 'failed\|error' | head -3
+  if [ "$(rejection_class "${LOG}")" = "verification" ]; then
+    echo "OK   ${LANE}: veripb rejected the corrupted proof, as it must"
+    sed 's/^/     /' "${LOG}" | grep -i 'failed\|error' | head -3
+    cleanup
+    exit 0
+  fi
+  echo "UNEV ${LANE}: veripb rejected -- but before it ever judged the derivation." >&2
+  echo "     The proof did not parse, or a rule named an id that is no longer there, so" >&2
+  echo "     the checker never evaluated the step this lane corrupted. Read this as the" >&2
+  echo "     lane NOT having run: it says nothing about whether the derivation is" >&2
+  echo "     load-bearing, and reading it as a pass is the D-0020 failure mode." >&2
+  sed 's/^/     /' "${LOG}" | tail -10 >&2
+  KEEP=1
   cleanup
-  exit 0
+  exit 5
 fi
 
 echo "FAIL ${LANE}: veripb ACCEPTED a proof that was deliberately corrupted." >&2
