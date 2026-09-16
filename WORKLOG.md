@@ -15,7 +15,6 @@ git worktree each (`.claude/worktrees/<tag>`), so no two share `_build`'s global
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M2-T11 (verification leg) | `lib/core/search.ml`, `test/unit/test_random.ml` | agent-fuzz2 (succeeds agent-fuzz, interrupted; its code is merged, its *evidence* is not) | 2026-09-16 |
 | M4-T4a | new `lib/core/interval.ml`, new `test/unit/test_interval.ml`, **and the one line naming it in `test/unit/dune`** | agent-interval | 2026-09-16 |
 | M1-T32, M1-T38, M1-T39, M1-T41 | `lib/proof/encoding.ml`, `lib/proof/writer.ml`, `test/unit/test_proof.ml`, `test/unit/test_mutation.ml` | agent-proofhyg | 2026-09-16 |
 | M1-T34, M1-T35, M1-T37 | `bin/main.ml`, `bench/run_bench.sh` | agent-cli | 2026-09-16 |
@@ -110,6 +109,7 @@ work. The owning session picks it up.
 | M1-T25 | agent-lazy2 + orchestrator | 2026-09-16 | **D-0031. Answered, not implemented — and that is the right outcome.** The ladder is load-bearing because the checker's own unit propagation needs it, which no citation census can see. Lazy-by-`red` needs a *rotation* witness (the obvious swap is refused) and costs Θ(w²) — 5× larger on a committed model. `encoding.ml` and `order_reason.ml` are byte-identical to before the task started |
 | M1-T28 | agent-lazy2 + orchestrator | 2026-09-16 | Index-walk in `linear.ml`. Direction shown by experiment, not argued: flipping it gives **10 veripb rejections**. 60/60 artefacts byte-identical; **9.9× at N=300**, null on the committed models |
 | M2-T1, M2-T2 | agent-bool (x2, interrupted) + agent-bool3 + orchestrator | 2026-09-16 | **D-0032.** Six Boolean builtins, 9 models, 1168 unit checks, 29/29 models. No `Explanation` ADT change needed. Delivered across three sessions, two of which were killed mid-task; each was salvaged to a branch rather than restarted. **13 deliberate breaks, each watched go red** — and break 7 showed a justification with no facts at all passing everything, because the test scenes held their facts as `.opb` model rows |
+| M2-T11 | agent-fuzz (interrupted) + agent-fuzz2 + orchestrator | 2026-09-16 | Seeded branching order, default unchanged. **60/60 artefacts byte-identical with hashes**, and a control showing the check can fail. ~500k solver runs. **Found M1-T44**: a correct UNSAT answer whose proof veripb rejects, CLI-reachable and predating the task — orchestrator reproduced it and confirmed the derivation lands on `0 >= 0`. Also found `random_order`'s hole guard shipped disabled by a short-circuit |
 
 ## Handoff notes
 
