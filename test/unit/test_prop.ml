@@ -32,6 +32,7 @@ module Writer = Baguette_proof.Writer
 module Encoding = Baguette_proof.Encoding
 module Justify = Baguette_core.Justify
 module Ne = Baguette_core.Ne
+module Trace = Baguette_core.Trace
 module Engine = Baguette_core.Engine
 module Search = Baguette_core.Search
 module Checked = Baguette_core.Checked
@@ -847,6 +848,84 @@ let test_int_eq_entailment () =
    call site below, never a skip. *)
 let veripb_path () = Baguette_proof.Checker.find ()
 
+let read_file path =
+  let ic = open_in_bin path in
+  let s = really_input_string ic (in_channel_length ic) in
+  close_in ic;
+  s
+
+(* Compared by rule body, not by name: 3.0 introduces every derived constraint with a
+   label (`@c17 rup ... ;`) and these expectations are about what the rule says. The
+   label is checked where it means something -- by the checker, which rejects a citation
+   of a name that was never bound -- rather than duplicated into every text pin here. *)
+let has_line text line =
+  List.exists
+    (fun l -> String.equal line (Writer.strip_label l))
+    (String.split_on_char '\n' text)
+
+(* A rule pinned by what it SAYS, through the module that wrote it. [Writer.rule_body]
+   takes the 3.0 label off the front and the terminator off the back, so one expectation
+   means the same thing under both proof formats -- the rule the orchestrator's
+   2.0-to-3.0 note leaves behind: a test that reads emitted proof text goes through
+   [Writer]. *)
+let has_rule text body =
+  List.exists
+    (fun l -> String.equal body (Writer.rule_body l))
+    (String.split_on_char '\n' text)
+
+(* ---------------------------------------------------------------- M1-T42, measured
+
+   The four builders below justify their pruning with a [pol] (an
+   [Explanation.Combine]), and that makes them weak in a way D-0032's remedy does not
+   reach. Both halves of this were measured before anything was changed, by deleting
+   the facts from the justification each one exercises:
+
+     build_int_lin_eq_multi   pol   fact as .opb row   ACCEPTED -- nothing went red
+     build_int_le_multi       pol   fact as .opb row   ACCEPTED -- nothing went red
+     build_int_lt_multi       pol   fact as .opb row   ACCEPTED -- nothing went red
+     build_int_eq_multi       pol   fact as .opb row   ACCEPTED -- nothing went red
+     test_lin_eq_pairing      pol   fact as .opb row   ACCEPTED -- nothing went red
+
+   The reason is NOT D-0032's. A [rup] states a claim and the checker refutes a false
+   one; a [pol] states a *derivation*, and veripb recomputes whatever the expression
+   yields and accepts any well-formed one. Dropping a summand does not produce a false
+   line, it produces a different -- weaker -- constraint, validly derived. So a factless
+   control is impossible on a [pol]: there is nothing for the checker to refuse, whether
+   or not the facts are model rows.
+
+   Two things follow, and both are done below.
+
+   1. What guards these four is an assertion on the emitted text: the derivation must
+      cite the fact's id ([check_pol_cites]). That is a shape pin, and it is said to be
+      one -- it is the same guard the int_ne builders already had in their verbatim
+      [rup] pins, and it is what actually went red in the measurement above for those.
+
+   2. The artefact that DOES carry a claim for these propagators is D-0018's trace line,
+      which is what a real run writes for every pruning. So each of the four gets a
+      second scene -- [decision_scene_*] below -- in D-0032's shape: the setup bound is
+      established in the store alone, as a decision establishes it, the .opb holds only
+      the propagator's own row, and the trace line is emitted and checked. Those scenes
+      carry the factless controls, and there the control is real: with the fact in the
+      store the claim alone is simply false of the model, and veripb rejects it.
+
+   A finding from building scene 2, reported rather than fixed because it is in
+   lib/core, which this session does not own: with the setup bound established by a
+   *decision* (explanation [Trivial], which is what search.ml pushes), [linear.ml]'s
+   [Snap_cite] cites that [Trivial], and [Justify.emit Trivial] answers
+   [ctx.model_id ()] -- so the [Combine] emits `pol <own row> <own row> +`, citing the
+   propagator's own row where the fact should be. It derives twice the model row instead
+   of the bound the explanation means. veripb accepts it, because a [pol] has no claim.
+   It appears to be harmless today (search.ml discards that id and closes the branch
+   through the trace lines and the nogood) but it is not what the explanation says, and
+   nothing in the suite can see it. Hence the trace line, not the pol, is what scene 2
+   pins. *)
+let check_pol_cites base pbp w ~row ~fact =
+  let text = read_file pbp in
+  let want = Printf.sprintf "pol %s %s +" (Writer.cite w row) (Writer.cite w fact) in
+  let ok = has_rule text want in
+  if not ok then Printf.printf "     (actual proof text)\n%s\n" text;
+  check (Printf.sprintf "%s: the pol cites the fact's id -- `%s`" base want) ok
+
 let run_veripb ~name ~build =
   match veripb_path () with
   | None ->
@@ -945,6 +1024,7 @@ let build_int_lin_eq_multi dir =
   Writer.delete w id;
   Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x1", 2); ("x2", 2) ]));
   close_out oc;
+  check_pol_cites "int_lin_eq multi-step" pbp w ~row:geq_id ~fact:c_x2_le;
   (opb, pbp)
 
 (* int_le: x <= y, x, y declared [0,5]. x >= 3 is established by a real model
@@ -993,6 +1073,7 @@ let build_int_le_multi dir =
   Writer.delete w id;
   Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x", 3); ("y", 3) ]));
   close_out oc;
+  check_pol_cites "int_le multi-step" pbp w ~row:model_row ~fact:c_bound;
   (opb, pbp)
 
 (* int_lt: x < y, x, y declared [0,5]. x >= 3 established (three steps), driving
@@ -1041,6 +1122,7 @@ let build_int_lt_multi dir =
   Writer.delete w id;
   Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x", 3); ("y", 4) ]));
   close_out oc;
+  check_pol_cites "int_lt multi-step" pbp w ~row:model_row ~fact:c_bound;
   (opb, pbp)
 
 (* int_eq: x = y, x, y declared [0,5]. y <= 2 is established by a real model
@@ -1096,7 +1178,192 @@ let build_int_eq_multi dir =
   Writer.delete w id;
   Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x", 2); ("y", 2) ]));
   close_out oc;
+  check_pol_cites "int_eq multi-step" pbp w ~row:leq_id ~fact:c_bound;
   (opb, pbp)
+
+(* ------------------------------ M1-T42 scene 2: the claim, and the factless control
+
+   D-0032's shape, for the four integer propagators. The setup bound is established in
+   the STORE and nowhere else -- as a decision establishes it, with no .opb row saying
+   anything about it -- so the .opb holds exactly the propagator's own row(s). What is
+   emitted is D-0018's trace line for the pruning: the claim, disjoined with the
+   negation of the facts the propagator actually read. That line is the artefact that
+   carries a claim, and it is the one a real run writes; the [pol] above cannot be
+   controlled (see [check_pol_cites]'s header).
+
+   With the fact in the store rather than in the model, `claim alone` is simply false of
+   the .opb, so each [*_factless] control below is rejected by the checker -- and under
+   a scene that posted the fact as a model row it would be ACCEPTED, which is the whole
+   of D-0032 in one sentence. *)
+
+let entry_since store before v what =
+  let after = Store.trail_length store in
+  let entries =
+    List.filteri (fun i _ -> i < after - before) (Store.trail_entries store)
+  in
+  match List.find_opt (fun (en : Store.entry) -> Var.equal en.Store.var v) entries with
+  | Some en -> en
+  | None -> failwith (what ^ ": the bound under test was never pushed")
+
+(* Each scene returns (encoding, the pruning's trail entry, the pruned variable's name,
+   the row Justify's ctx falls back to, a solution of the .opb). *)
+let decision_scene_int_le () =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:0 ~hi:5;
+  Encoding.declare_int e "y" ~lo:0 ~hi:5;
+  let row = Encoding.add_int_lin_le e [ (1, "x"); (-1, "y") ] 0 in
+  let store =
+    Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
+  in
+  let prop = Int_le.make store (Var.of_int 0) (Var.of_int 1) ~row_id:row in
+  (match Store.set_lo store (Var.of_int 0) 3 Explanation.trivial with
+  | Store.Changed -> ()
+  | _ -> failwith "decision_scene_int_le: the decision did not move x's bound");
+  let before = Store.trail_length store in
+  (match Int_le.propagate prop store with
+  | Propagator.Conflict _ -> failwith "decision_scene_int_le: propagate conflicted"
+  | Propagator.Fixpoint -> ());
+  ( e,
+    entry_since store before (Var.of_int 1) "decision_scene_int_le",
+    "y",
+    row,
+    [ ("x", 3); ("y", 3) ] )
+
+let decision_scene_int_lt () =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:0 ~hi:5;
+  Encoding.declare_int e "y" ~lo:0 ~hi:5;
+  let row = Encoding.add_int_lin_le e [ (1, "x"); (-1, "y") ] (-1) in
+  let store =
+    Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
+  in
+  let prop = Int_lt.make store (Var.of_int 0) (Var.of_int 1) ~row_id:row in
+  (match Store.set_lo store (Var.of_int 0) 3 Explanation.trivial with
+  | Store.Changed -> ()
+  | _ -> failwith "decision_scene_int_lt: the decision did not move x's bound");
+  let before = Store.trail_length store in
+  (match Int_lt.propagate prop store with
+  | Propagator.Conflict _ -> failwith "decision_scene_int_lt: propagate conflicted"
+  | Propagator.Fixpoint -> ());
+  ( e,
+    entry_since store before (Var.of_int 1) "decision_scene_int_lt",
+    "y",
+    row,
+    [ ("x", 3); ("y", 4) ] )
+
+let decision_scene_int_eq () =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:0 ~hi:5;
+  Encoding.declare_int e "y" ~lo:0 ~hi:5;
+  let opb_terms, const = Encoding.linear_terms_int_lin_le e [ (1, "x"); (-1, "y") ] in
+  let geq_id, leq_id = Encoding.add_equality e opb_terms (0 - const) in
+  let store =
+    Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
+  in
+  let le, _ge =
+    Int_eq.make store (Var.of_int 0) (Var.of_int 1) ~le_id:leq_id ~ge_id:geq_id
+  in
+  (match Store.set_hi store (Var.of_int 1) 2 Explanation.trivial with
+  | Store.Changed -> ()
+  | _ -> failwith "decision_scene_int_eq: the decision did not move y's bound");
+  let before = Store.trail_length store in
+  (match Linear.propagate le store with
+  | Propagator.Conflict _ -> failwith "decision_scene_int_eq: le pass conflicted"
+  | Propagator.Fixpoint -> ());
+  ( e,
+    entry_since store before (Var.of_int 0) "decision_scene_int_eq",
+    "x",
+    leq_id,
+    [ ("x", 2); ("y", 2) ] )
+
+let decision_scene_int_lin_eq () =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x1" ~lo:0 ~hi:5;
+  Encoding.declare_int e "x2" ~lo:0 ~hi:5;
+  let opb_terms, const = Encoding.linear_terms_int_lin_le e [ (1, "x1"); (1, "x2") ] in
+  let geq_id, leq_id = Encoding.add_equality e opb_terms (4 - const) in
+  let store =
+    Store.create ~names:[| "x1"; "x2" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
+  in
+  let le, ge =
+    Lin_eq.make store
+      [ (1, Var.of_int 0); (1, Var.of_int 1) ]
+      4 ~le_id:leq_id ~ge_id:geq_id
+  in
+  (* x2 = 2, both bounds, by decision: two store pushes and not one .opb row. *)
+  (match Store.set_hi store (Var.of_int 1) 2 Explanation.trivial with
+  | Store.Changed -> ()
+  | _ -> failwith "decision_scene_int_lin_eq: x2 <= 2 did not move");
+  (match Store.set_lo store (Var.of_int 1) 2 Explanation.trivial with
+  | Store.Changed -> ()
+  | _ -> failwith "decision_scene_int_lin_eq: x2 >= 2 did not move");
+  (match Linear.propagate le store with
+  | Propagator.Conflict _ -> failwith "decision_scene_int_lin_eq: le pass conflicted"
+  | Propagator.Fixpoint -> ());
+  let before = Store.trail_length store in
+  (match Linear.propagate ge store with
+  | Propagator.Conflict _ -> failwith "decision_scene_int_lin_eq: ge pass conflicted"
+  | Propagator.Fixpoint -> ());
+  ( e,
+    entry_since store before (Var.of_int 0) "decision_scene_int_lin_eq",
+    "x1",
+    geq_id,
+    [ ("x1", 2); ("x2", 2) ] )
+
+(* [factless] deletes the facts, leaving the claim on its own -- exactly what a
+   justification that forgot to record what it read would emit. *)
+let write_trace_case dir ~file ~scene ~factless ~expect_lines =
+  let e, (entry : Store.entry), target, row, sol = scene () in
+  let opb = Filename.concat dir (file ^ ".opb") in
+  let pbp = Filename.concat dir (file ^ ".pbp") in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ file ] e oc;
+  close_out oc;
+  let facts = if factless then [] else entry.Store.facts () in
+  let oc = open_out pbp in
+  let w = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof e w;
+  let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> row) in
+  (match Trace.claims e entry target with
+  | [] -> failwith (file ^ ": the pruning under test moved no bound, so it has no claim")
+  | claims ->
+      List.iter
+        (fun claim ->
+          let id =
+            Trace.emit_line ctx ~origin:(file ^ ": D-0018 trace line") ~claim ~facts
+          in
+          Writer.delete w id)
+        claims);
+  Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e sol));
+  close_out oc;
+  let text = read_file pbp in
+  List.iter
+    (fun line ->
+      let ok = has_line text line in
+      if not ok then Printf.printf "     (actual proof text)\n%s\n" text;
+      check (Printf.sprintf "%s: emits `%s`" file line) ok)
+    expect_lines;
+  (opb, pbp)
+
+let trace_builders =
+  [
+    ( "int_le",
+      decision_scene_int_le,
+      "rup +1 y_ge_3 +1 ~x_ge_3 >= 1 ;",
+      "rup +1 y_ge_3 >= 1 ;" );
+    ( "int_lt",
+      decision_scene_int_lt,
+      "rup +1 y_ge_4 +1 ~x_ge_3 >= 1 ;",
+      "rup +1 y_ge_4 >= 1 ;" );
+    ( "int_eq",
+      decision_scene_int_eq,
+      "rup +1 ~x_ge_3 +1 y_ge_3 >= 1 ;",
+      "rup +1 ~x_ge_3 >= 1 ;" );
+    ( "int_lin_eq",
+      decision_scene_int_lin_eq,
+      "rup +1 x1_ge_2 +1 x2_ge_3 >= 1 ;",
+      "rup +1 x1_ge_2 >= 1 ;" );
+  ]
 
 (* ============================================================================
    D-0011: pairing. [Lin_eq.make]/[Int_eq.make] hand back TWO instances precisely so
@@ -1207,21 +1474,6 @@ let test_lin_eq_pairing () =
 
 let raises name f =
   match f () with exception _ -> check name true | _ -> check name false
-
-let read_file path =
-  let ic = open_in_bin path in
-  let s = really_input_string ic (in_channel_length ic) in
-  close_in ic;
-  s
-
-(* Compared by rule body, not by name: 3.0 introduces every derived constraint with a
-   label (`@c17 rup ... ;`) and these expectations are about what the rule says. The
-   label is checked where it means something -- by the checker, which rejects a citation
-   of a name that was never bound -- rather than duplicated into every text pin here. *)
-let has_line text line =
-  List.exists
-    (fun l -> String.equal line (Writer.strip_label l))
-    (String.split_on_char '\n' text)
 
 (* Like [run_veripb], but the proof MUST be rejected. Used for the negative controls:
    a wrong explanation has to fail, or the positive checks prove nothing. *)
@@ -3219,6 +3471,23 @@ let () =
   run_veripb ~name:"int_eq: multi-step chain, checked end to end"
     ~build:build_int_eq_multi;
   test_lin_eq_pairing ();
+  (* M1-T42 scene 2, per propagator: the D-0018 trace line against a scene whose fact is
+     in the store alone, then the same claim with its facts deleted, which the checker
+     must reject. The pair is the point: neither half means anything without the other. *)
+  List.iter
+    (fun (name, scene, line, factless_line) ->
+      run_veripb
+        ~name:
+          (Printf.sprintf "%s: the pruning's D-0018 trace line, fact in the store" name)
+        ~build:(fun dir ->
+          write_trace_case dir ~file:(name ^ "_decision") ~scene ~factless:false
+            ~expect_lines:[ line ]);
+      run_veripb_rejects
+        ~name:(Printf.sprintf "%s: the same claim with no facts at all" name)
+        ~build:(fun dir ->
+          write_trace_case dir ~file:(name ^ "_factless") ~scene ~factless:true
+            ~expect_lines:[ factless_line ]))
+    trace_builders;
   test_ne_clause_lits ();
   test_ne_rows ();
   test_ne_soundness ();
