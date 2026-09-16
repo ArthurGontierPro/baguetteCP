@@ -57,7 +57,7 @@ piece of CP reasoning turns out not to be expressible, that is a research findin
 write up — not a licence to extend the format in-tree.
 
 ## D-0003  What "higher-order explanation" means here
-Status: **OPEN** — blocks M3-T2
+Status: **RESOLVED by D-0026** (2026-09-16) — was OPEN, blocked M3-T2
 Date: 2026-09-14
 
 Context: the project goal names "explanations of higher order". Two readings are live and
@@ -76,8 +76,9 @@ they produce different code:
 These are not exclusive; the question is which one is the project's contribution and
 therefore which one gets the design investment.
 
-Decision: **not yet made.** Whoever resolves this, record the reasoning, not just the
-verdict — the rest of the explanation design follows from it.
+Decision: **made in D-0026** — (a) and (b) are layered, not alternatives: reasons are
+declarative data, justifications stay the reified cutting-planes expression. The
+reasoning is recorded there, as this record asked.
 
 ## D-0004  all_different justification strategy
 Status: OPEN — M4
@@ -278,7 +279,10 @@ Consequences:
   states, which is the exact failure mode D-0009 records.
 
 ## D-0011  One propagator instance, one model row
-Status: DECIDED
+Status: DECIDED — but **read D-0015 first**: its `Model_row` closed the ADT gap this
+record rests on, so a derivation citing several model rows *is* expressible (M4-T1's
+Hall-interval justification needs exactly that). Whether the one-instance-one-row
+*policy* still stands on its own cost grounds is M2-T0, not settled here.
 Date: 2026-09-14
 Arose from: M1-T8, where `int_lin_eq` was built as one propagator over two model rows.
 
@@ -1200,3 +1204,84 @@ D-0023 reported 17–29x per checker invocation but no change in suite wall time
 `test_matrix` ignored `$VERIPB` and took 28–31s of a 32s run. With that file on the
 shared resolver, **`test_matrix` alone went from ~30s to 1.2s**. The per-invocation
 speedup was always real; it was one file's private lookup that hid it from the clock.
+
+## D-0026  D-0003 resolved: reasons are data, justifications are cutting planes
+Status: DECIDED
+Date: 2026-09-16
+Resolves: D-0003. Arose from the GCS comparison, `docs/GCS-COMPARISON.md`.
+
+Context: D-0003 asked which reading of "explanations of higher order" is this project's
+contribution — (a) a richer explanation *language* (PB, cutting planes, parameterised
+reasons), or (b) explanations as first-class deferred *computations* that compose. It has
+now blocked concrete work three times: D-0009, D-0011 and M3-T2.
+
+The comparison against the Glasgow Constraint Solver supplied the missing evidence.
+
+- GCS answered (b), and answered it **against the shape our `Deferred` assumes**. Their
+  old closure-valued reasons "look lazy but are not — the domain walk, the fill and the
+  allocation all happen eagerly at the call site", measured at ~20% of runtime. What
+  replaced it is not a richer closure: a reason is *declarative data* naming a variable
+  scope, materialised into literals in exactly one place.
+- Nothing in GCS reads (a) as a contribution. They call a `pol` builder inline and get
+  the same proofs. Our `Combine`/`Weaken`/`Model_row` (D-0015) is already further down
+  the (a) road than GCS ever went.
+
+Decision: **(a) and (b) are layered, not alternatives.**
+
+- **(b) is the mechanism, and we adopt the mature form.** A *reason* — which facts
+  justify this pruning — becomes declarative data over a variable scope, materialised
+  into `Lit.t`s in one place. It is not a thunk graph. Laziness lives in *when* the
+  reason is materialised, not in a closure per pruning.
+- **(a) is the claim.** A *justification* — how the checker is convinced — stays the
+  reified cutting-planes expression: `Combine` with a divisor, `Weaken`, `Model_row`, and
+  `Term (coeff, t)` recursing into another justification. An explanation taking
+  explanations as arguments is the higher-order content, and it is what D-0016's "what
+  `pol` can and cannot reach", D-0004's `all_different` question and D-0012's branch
+  nogoods are all actually about.
+
+Reasoning, recorded because D-0003 asked for the reasoning and not just the verdict: the
+two readings answer different questions about the same pruning. For `2x + 3y <= 10` with
+`y >= 2` deriving `x <= 2`, the *reason* is the fact `y >= 2`; the *justification* is
+"add 3 times that fact to the row, then divide by 2". Our code already builds both — as
+`facts ()` and as `expl`, from one `row_snaps` call in `linear.ml` — and keeps them in
+agreement with a comment rather than a type. The layering makes the split the type it
+already is in practice.
+
+Consequences:
+
+- `Explanation.t` loses the reason-shaped constructors and keeps the derivation. A new
+  `Reason.t` carries the literal content. `Store`'s `~facts` thunk and `Trace`'s literal
+  list are that type in disguise today.
+- **I-P4 and I-P5 collapse into one obligation.** `int_ne` violated I-P5 from M1-T9 to
+  M1-T17; under one channel that is a type error rather than a code-review miss.
+- `linear.ml` loses `find_lo_reason`/`find_hi_reason`, which call `Store.trail_entries`
+  — allocating the whole trail — once per term per pruning. See the performance claim
+  below, which is the condition this decision was accepted under.
+- **Only non-narrowable reasons.** GCS's `Narrowable*` variants re-materialise against
+  whatever narrower state is current later. That is the exact opposite of I-X6, which
+  `explain_cross_conflict` violated until M1-T13 and which I-X6 itself warns conflict
+  analysis will not forgive. A reason materialised later must render the derivation as of
+  the moment of the pruning.
+- D-0003's own framing said the rest of the explanation design follows from this. What
+  follows: M2-T3's conflict analysis walks the trail and reads *variables* from a reason
+  without materialising literals; M3's reification dispatcher becomes possible because a
+  verdict can carry reason and justification as values; M4's Hall-interval reason is one
+  declarative value rather than a hand-built `Combine` plus a hand-built facts list.
+
+Accepted under a stated condition, with its falsifier named:
+
+> The layering must not cost speed and must make the code easier.
+
+"Easier" is already checkable: `linear.ml` sheds roughly 120 of its 421 lines and one
+invariant becomes a type. "Not slower" is a **prediction, not a measurement** — the
+change deletes an `O(n * |trail|)` scan per pruning and adds only a type split, so it
+should be faster, but nothing here has been benchmarked. This project has been wrong
+about speed twice already (D-0023, and "The speed claim, corrected again" in D-0025), so
+the prediction is recorded as falsifiable: **M3-T5 measures it, and if the layered form
+is slower on a real model, that reopens this record rather than being absorbed.**
+
+What this decision does NOT do: it does not remove D-0013's arithmetic, which becomes the
+justification half unchanged; it does not adopt GCS's second inference tracker, since we
+have no proofs-off mode by rule; and it does not settle how a reason is *restated* for
+wide domains, which is the interval question D-0010 and the order-encoding width policy
+own.
