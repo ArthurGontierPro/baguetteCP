@@ -64,12 +64,13 @@ let build_ctx w =
   Encoding.declare_int e "x" ~lo:0 ~hi:3;
   let c = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "x" 2) ] 1) in
   Encoding.start_proof e w;
-  let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> c) in
+  let ctx = Justify.create ~writer:w ~encoding:e in
   (e, ctx, c)
 
-(* Two int variables [x], [y], two model constraints [x >= 2] and [y >= 1], and two
-   ctx views over the same underlying writer/encoding/memo, each pointed at its own
-   constraint (see Justify.for_constraint). Used by the Cut tests. *)
+(* Two int variables [x], [y], two model constraints [x >= 2] and [y >= 1]. Used by
+   the Cut tests. Until M1-T31 this returned two [Justify.for_constraint] views of one
+   ctx, each with its own ambient [model_id]; there is only one ctx now, because a row
+   is named by the explanation ([Model_row]) and never by the renderer. *)
 let build_two_ctx w =
   let e = Encoding.create () in
   Encoding.declare_int e "x" ~lo:0 ~hi:3;
@@ -77,26 +78,44 @@ let build_two_ctx w =
   let cx = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "x" 2) ] 1) in
   let cy = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "y" 1) ] 1) in
   Encoding.start_proof e w;
-  let ctx_x = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> cx) in
-  let ctx_y = Justify.for_constraint ctx_x (fun () -> cy) in
-  (e, ctx_x, ctx_y)
+  let ctx = Justify.create ~writer:w ~encoding:e in
+  (e, ctx, cx, cy)
 
 (* ------------------------------------------------------------------ *)
-(* 5. Trivial: returns the model constraint id, emits nothing.        *)
+(* 5. Model_row: returns the model constraint id, emits nothing --     *)
+(*    and a Decision, which has no id at all, is refused.              *)
 (* ------------------------------------------------------------------ *)
 
-let test_trivial () =
+let test_model_row () =
   let _, r =
     emitted (fun w ->
         let _, ctx, c = build_ctx w in
         let last0 = Writer.last_id w in
         let live0 = Writer.live_count w in
-        let id = Justify.emit ctx Explanation.trivial in
-        check "trivial: returns the model constraint's own id" (id = c);
-        check "trivial: mints no new id" (Writer.last_id w = last0);
-        check "trivial: adds no live entry" (Writer.live_count w = live0))
+        let id = Justify.emit ctx (Explanation.model_row c) in
+        check "model_row: returns the model constraint's own id" (id = c);
+        check "model_row: mints no new id" (Writer.last_id w = last0);
+        check "model_row: adds no live entry" (Writer.live_count w = live0))
   in
-  expect_ok "trivial: no exception" r
+  expect_ok "model_row: no exception" r
+
+(* M1-T31/M1-T50. [Explanation.Trivial] used to stand here and resolve to
+   [ctx.model_id ()] -- the ambient row, which is how a *decision* on the trail came
+   out of [linear.ml] as `pol <own row> <own row> +`. The field is gone, so there is
+   no ambient row to fall back on, and the one reason with no constraint id says so
+   rather than guessing. *)
+let test_decision_has_no_id () =
+  let _, r =
+    emitted (fun w ->
+        let _, ctx, _ = build_ctx w in
+        let raised =
+          match Justify.emit ctx (Explanation.decision (Lit.ge "x" 2)) with
+          | _ -> false
+          | exception Invalid_argument _ -> true
+        in
+        check "decision: emit refuses it -- a decision has no constraint id" raised)
+  in
+  expect_ok "decision: no unexpected exception" r
 
 (* Round 2: the defect that slipped through round 1 was that [emit_linear] discarded
    [terms] and [rhs] entirely and emitted [pol <model_id>] -- veripb happily accepts a
@@ -162,28 +181,28 @@ let test_deferred_linear () =
 let test_deferred_cut () =
   let direct_text =
     text (fun w ->
-        let _, ctx_x, ctx_y = build_two_ctx w in
+        let _, ctx, _, _ = build_two_ctx w in
         let ex = Explanation.linear [ (1, Lit.ge "x" 2) ] 1 in
         let ey = Explanation.linear [ (1, Lit.ge "y" 1) ] 1 in
-        ignore (Justify.emit ctx_x ex);
-        ignore (Justify.emit ctx_y ey);
-        ignore (Justify.emit ctx_x (Explanation.cut ex ey 1 1)))
+        ignore (Justify.emit ctx ex);
+        ignore (Justify.emit ctx ey);
+        ignore (Justify.emit ctx (Explanation.cut ex ey 1 1)))
   in
   let calls = ref 0 in
   let deferred_text =
     text (fun w ->
-        let _, ctx_x, ctx_y = build_two_ctx w in
+        let _, ctx, _, _ = build_two_ctx w in
         let ex = Explanation.linear [ (1, Lit.ge "x" 2) ] 1 in
         let ey = Explanation.linear [ (1, Lit.ge "y" 1) ] 1 in
-        ignore (Justify.emit ctx_x ex);
-        ignore (Justify.emit ctx_y ey);
+        ignore (Justify.emit ctx ex);
+        ignore (Justify.emit ctx ey);
         let d =
           Explanation.deferred (fun () ->
               incr calls;
               Explanation.cut ex ey 1 1)
         in
-        let id1 = Justify.emit ctx_x d in
-        let id2 = Justify.emit ctx_x d in
+        let id1 = Justify.emit ctx d in
+        let id2 = Justify.emit ctx d in
         check "deferred cut: same id on repeat" (id1 = id2))
   in
   check_eq "deferred cut: identical proof text to the direct cut" ~expected:direct_text
@@ -199,15 +218,18 @@ let test_wipe () =
     emitted (fun w ->
         let e = Encoding.create () in
         Encoding.declare_int e "x" ~lo:0 ~hi:3;
-        let c0 = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "x" 1) ] 1) in
-        let c2 = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "x" 2) ] 1) in
+        ignore (Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "x" 1) ] 1));
+        ignore (Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "x" 2) ] 1));
         Encoding.start_proof e w;
-        let ctx0 = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> c0) in
+        let ctx0 = Justify.create ~writer:w ~encoding:e in
         let expl0 = Explanation.linear [ (1, Lit.ge "x" 1) ] 1 in
         let id0 = Justify.emit ctx0 expl0 in
         (* id0 is tagged at level 0. Everything from here on is tagged at level 2. *)
         Writer.set_level w 2;
-        let ctx2 = Justify.for_constraint ctx0 (fun () -> c2) in
+        (* One ctx, not a [for_constraint] view of it: M1-T31 removed the ambient row
+           a view could differ in, and the memo -- which is what this test is about --
+           was always shared anyway. *)
+        let ctx2 = ctx0 in
         let expl2 = Explanation.linear [ (1, Lit.ge "x" 2) ] 1 in
         let id2a = Justify.emit ctx2 expl2 in
         check "wipe: the level-2 id is live before the wipe" (Writer.is_live w id2a);
@@ -289,7 +311,8 @@ let build_linear_proof dir =
   let oc = open_out pbp in
   let w = Writer.create ~comments:true ~audit:true oc in
   Encoding.start_proof e w;
-  let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> c_x2) in
+  ignore c_x2;
+  let ctx = Justify.create ~writer:w ~encoding:e in
   let expl = Explanation.linear [ (1, Lit.ge "x" 2) ] 1 in
   let derived = Justify.emit ctx expl in
   Writer.delete w derived;
@@ -298,9 +321,11 @@ let build_linear_proof dir =
   (opb, pbp)
 
 (* Model: x, y in [0,3], model constraints [x >= 2] and [y >= 1]. A [Cut] of the two
-   matching [Linear] explanations, coefficients 1 and 1: each child is pre-emitted
-   through its own [for_constraint] view so the Cut's shared ctx never has to resolve
-   either leaf itself -- see the Justify header comment on cross-constraint Cuts. *)
+   matching [Linear] explanations, coefficients 1 and 1. Each child used to be
+   pre-emitted through its own [for_constraint] view, so that the Cut's shared ctx
+   never had to resolve either leaf through an ambient row. M1-T31 removed the ambient
+   row and with it the need for the views: one ctx renders both children, and a [Cut]
+   that did have to resolve a leaf would resolve it from the leaf's own value. *)
 let build_cut_proof dir =
   let e = Encoding.create () in
   Encoding.declare_int e "x" ~lo:0 ~hi:3;
@@ -315,19 +340,13 @@ let build_cut_proof dir =
   let oc = open_out pbp in
   let w = Writer.create ~comments:true ~audit:true oc in
   Encoding.start_proof e w;
-  let ctx_x = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> c_x2) in
-  let ctx_y = Justify.for_constraint ctx_x (fun () -> c_y1) in
+  ignore (c_x2, c_y1);
+  let ctx = Justify.create ~writer:w ~encoding:e in
   let ex = Explanation.linear [ (1, Lit.ge "x" 2) ] 1 in
   let ey = Explanation.linear [ (1, Lit.ge "y" 1) ] 1 in
-  let id_x = Justify.emit ctx_x ex in
-  let id_y = Justify.emit ctx_y ey in
-  (* This ctx's own model_id must never be consulted: both children are already
-     memoised, so the Cut recursion hits the memo instead of falling through to it. *)
-  let ctx_cut =
-    Justify.for_constraint ctx_x (fun () ->
-        failwith "Cut should not need to resolve either leaf itself")
-  in
-  let id_cut = Justify.emit ctx_cut (Explanation.cut ex ey 1 1) in
+  let id_x = Justify.emit ctx ex in
+  let id_y = Justify.emit ctx ey in
+  let id_cut = Justify.emit ctx (Explanation.cut ex ey 1 1) in
   Writer.delete_many w [ id_x; id_y; id_cut ];
   Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x", 2); ("y", 1) ]));
   close_out oc;
@@ -416,15 +435,10 @@ let build_int_lin_le_ok dir =
   let oc = open_out pbp in
   let w = Writer.create ~comments:true ~audit:true oc in
   Encoding.start_proof e w;
-  (* [expl]'s base is [Model_row model_row], not [Trivial] (D-0013 / explanation.ml's
-     header): [ctx.model_id] should never be consulted, so make it fail if it ever
-     is. *)
-  let ctx =
-    Justify.create ~writer:w ~encoding:e ~model_id:(fun () ->
-        failwith
-          "build_int_lin_le_ok: ctx.model_id was consulted -- expl's base should be \
-           Model_row, not Trivial")
-  in
+  (* [expl]'s base is [Model_row model_row]. This used to install a [~model_id] thunk
+     that failed if consulted, to prove the base was not [Trivial]; M1-T31 deleted
+     both, so there is nothing left that could be consulted. *)
+  let ctx = Justify.create ~writer:w ~encoding:e in
   let id = Justify.emit ctx expl in
   Writer.delete w id;
   Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x1", 0); ("x2", 1) ]));
@@ -446,12 +460,9 @@ let build_int_lin_le_gap dir =
   let oc = open_out pbp in
   let w = Writer.create ~comments:true ~audit:false oc in
   Encoding.start_proof e w;
-  let ctx =
-    Justify.create ~writer:w ~encoding:e ~model_id:(fun () ->
-        failwith
-          "build_int_lin_le_gap: ctx.model_id was consulted -- expl's base should be \
-           Model_row, not Trivial")
-  in
+  (* Same as [build_int_lin_le_ok]: [expl]'s base is a [Model_row], and since M1-T31
+     there is no ambient row it could have been instead. *)
+  let ctx = Justify.create ~writer:w ~encoding:e in
   let id = Justify.emit ctx expl in
   Writer.delete w id;
   Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x1", 0); ("x2", 2) ]));
@@ -515,12 +526,9 @@ let build_d0013_conflict dir =
   let oc = open_out pbp in
   let w = Writer.create ~comments:true ~audit:false oc in
   Encoding.start_proof e w;
-  let ctx =
-    Justify.create ~writer:w ~encoding:e ~model_id:(fun () ->
-        failwith
-          "build_d0013_conflict: ctx.model_id was consulted -- every base in this \
-           derivation should be Model_row, not Trivial")
-  in
+  (* Every base in this derivation is a [Model_row]; M1-T31 leaves no ambient row for
+     one of them to have been instead. *)
+  let ctx = Justify.create ~writer:w ~encoding:e in
   let id = Justify.emit ctx expl in
   Writer.conclusion w (Writer.Unsat (Some id));
   close_out oc;
@@ -552,9 +560,7 @@ let test_d0013_conflict () =
         in
         let _geq_id, _leq_id = Encoding.add_equality e opb_terms (7 - const) in
         Encoding.start_proof e w;
-        let ctx =
-          Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> failwith "unused")
-        in
+        let ctx = Justify.create ~writer:w ~encoding:e in
         ignore (Justify.emit ctx expl))
   in
   let ends_with suffix s =
@@ -618,7 +624,8 @@ let test_emit_rup_clause () =
     (match r with Error (Invalid_argument _) -> true | _ -> false)
 
 let () =
-  test_trivial ();
+  test_model_row ();
+  test_decision_has_no_id ();
   test_emit_rup_clause ();
   test_memoisation ();
   test_linear_states_its_own_terms ();

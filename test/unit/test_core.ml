@@ -171,7 +171,10 @@ let test_store () =
   check "store: variable count" (Store.n_vars s = 3);
   check "store: names" (Store.name s x = "x");
 
-  let why = Explanation.trivial in
+  (* Any reason will do -- this test is about the trail, not the proof. M1-T31
+     deleted [Explanation.trivial], which is what stood here; [Model_row] is the
+     honest spelling of "some model row justifies it" and nothing renders it. *)
+  let why = Explanation.model_row 1 in
   check "store: prune applies"
     (match Store.set_lo s x 3 why with Store.Changed -> true | _ -> false);
   check "store: prune took effect" (Domain.lo (Store.get s x) = 3);
@@ -229,8 +232,8 @@ let test_store () =
   for lvl = 0 to 5 do
     snaps.(lvl) <- Store.snapshot s2;
     Store.new_level s2;
-    ignore (Store.set_lo s2 vars.(lvl mod 3) (lvl + 1) Explanation.trivial);
-    ignore (Store.remove s2 vars.((lvl + 1) mod 3) (9 - lvl) Explanation.trivial)
+    ignore (Store.set_lo s2 vars.(lvl mod 3) (lvl + 1) (Explanation.model_row 1));
+    ignore (Store.remove s2 vars.((lvl + 1) mod 3) (9 - lvl) (Explanation.model_row 1))
   done;
   check "store: descended six levels" (Store.level s2 = 6);
   let exact = ref true in
@@ -344,14 +347,31 @@ let test_explanations () =
     (List.map Lit.to_string
        (Explanation.lits (Explanation.linear [ (2, l); (3, Lit.ge "y" 1) ] 4))
     = [ "x_ge_3"; "y_ge_1" ]);
-  check "explanation: trivial mentions nothing" (Explanation.lits Explanation.trivial = []);
+  (* M1-T31/M1-T50. [Trivial] used to sit here and mention nothing at all, which is
+     what made a reason set resting on a decision name no dependency -- the omission
+     D-0035 says becomes unsoundness once M2-T3 learns clauses from it. A decision's
+     reason set is exactly the literal it assumed. *)
+  check "explanation: a decision mentions the literal it assumed"
+    (List.map Lit.to_string (Explanation.lits (Explanation.decision l)) = [ "x_ge_3" ]);
+  check "explanation: a model row mentions nothing"
+    (Explanation.lits (Explanation.model_row 7) = []);
+  check "explanation: to_string of a decision names its literal"
+    (Explanation.to_string (Explanation.decision l) = "decision(x_ge_3)");
+
+  (* A decision has no constraint id, so it cannot be a [pol] operand and the ADT
+     refuses to build one out of it -- at the point the citation is made, not several
+     layers down inside [Justify] (M1-T50). *)
+  check_raises "explanation: term refuses to cite a decision" (fun () ->
+      ignore (Explanation.term 2 (Explanation.decision l)));
+  check_raises "explanation: cut refuses to cite a decision" (fun () ->
+      ignore (Explanation.cut (Explanation.decision l) (Explanation.clause [ l ]) 1 1));
 
   check "explanation: to_string of a linear reason"
     (Explanation.to_string (Explanation.linear [ (2, l) ] 4) = "linear(+2 x_ge_3 >= 4)");
 
   (* Arena: the trail stores indices, so resolution and truncation are invariants. *)
   let a = Arena.create ~capacity:1 () in
-  let i0 = Arena.add a Explanation.trivial in
+  let i0 = Arena.add a (Explanation.model_row 1) in
   let i1 = Arena.add a (Explanation.clause [ l ]) in
   let i2 = Arena.add a (Explanation.linear [ (1, l) ] 1) in
   check "arena: ids are dense" (i0 = 0 && i1 = 1 && i2 = 2);

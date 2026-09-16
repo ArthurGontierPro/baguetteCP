@@ -644,10 +644,8 @@ let run_case ~dir ~n ~(order : Search.order) m =
   let oc = open_out pbp in
   let writer = Writer.create ~audit:true oc in
   Encoding.start_proof encoding writer;
-  let ctx =
-    Justify.create ~writer ~encoding ~model_id:(fun () ->
-        failwith "test_random: search demanded Explanation.Trivial (D-0011)")
-  in
+  (* M1-T31: no ambient row to install, so no thunk to fail. *)
+  let ctx = Justify.create ~writer ~encoding in
   let trace = Trace.create () in
   let entry_level = Store.level store in
   let result =

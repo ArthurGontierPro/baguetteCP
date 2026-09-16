@@ -40,9 +40,9 @@
    solely inside a [Combine]'s sum, which is exactly the D-0009 distinction made
    structural instead of a convention someone has to remember.
 
-   [Model_row] exists because [Trivial] is not enough once a [Combine] cites an
-   explanation another propagator *instance* built: [Trivial] means "whatever
-   [ctx.model_id] currently points at" (docs/core/justify.ml), a single ambient
+   [Model_row] exists because [Trivial] was not enough once a [Combine] cites an
+   explanation another propagator *instance* built: [Trivial] meant "whatever
+   [ctx.model_id] currently points at" (lib/core/justify.ml), a single ambient
    pointer good for exactly one row at a time. D-0011 already found this: two
    propagator instances justify against two different rows, and nothing on the trail
    says which one produced a given pruning. A [Combine] can legitimately hold, in one
@@ -51,15 +51,45 @@
    row) -- two different rows, resolved simultaneously, which one mutable ambient
    pointer cannot do. [Model_row id] names the row explicitly and renders to [id]
    directly, no lookup, so each instance's own base survives being embedded inside
-   someone else's derivation. [Trivial] is kept for every existing single-row use
-   (decisions' placeholder pushes in search.ml, the pre-D-0013 [Linear]/[Cut] shape
-   test_core.ml still exercises) -- it is still correct there, just not general
-   enough for a cross-instance [Combine]. *)
+   someone else's derivation.
+
+   -------------------------------------------------------------------------------
+   M1-T31 / M1-T50: [Trivial] is gone, and [Decision] is not its replacement
+   -------------------------------------------------------------------------------
+
+   [Trivial] had exactly two producers left: [Linear.make] without a [row_id], and
+   search.ml's two decision pushes. The first is now impossible ([~row_id] is
+   required), and the second was never what [Trivial] said. "The model constraint
+   itself justifies this" is *false* of a decision: a decision is an assumption the
+   search made, not a consequence of any row. Calling it [Trivial] is what let
+   [Justify.emit] answer [ctx.model_id ()] and emit `pol <own row> <own row> +` --
+   M1-T50, a proof step that does not say what the explanation says.
+
+   So the constructor now carries what a decision actually is: [Decision lit], the
+   order literal the search assumed. Two consequences follow, and both are the point:
+
+   - **It has no constraint id, and never will.** Nothing in the proof establishes a
+     decision. D-0009 is why: a [pol] cannot assert a literal (a bare literal in one
+     is the trivial axiom [lit >= 0]) and a [rup] cannot derive one that is not a
+     consequence. The decisions enter the proof in exactly one place, negated, in the
+     branch's nogood -- D-0018 and lib/core/trace.ml's header say so already. A
+     [Decision] is therefore not citable, and [term]/[cut] below refuse to build a
+     summand out of one rather than leaving [Justify] to discover it.
+   - **It is not silent.** [Trivial]'s [lits] was [[]], so a reason set that rested on
+     a decision named nothing at all -- the omission D-0035 says becomes unsoundness
+     once M2-T3 builds learned clauses from it. [Decision lit]'s [lits] is [[lit]].
+
+   With [Trivial] gone, [Justify.ctx] has no [model_id] field at all: the ambient row
+   is not "discouraged", it is unrepresentable. Every row a derivation names, it names
+   with [Model_row]. *)
 
 module Lit = Baguette_proof.Lit
 
 type t =
-  | Trivial (* The model constraint itself justifies this; no derivation needed. *)
+  | Decision of Lit.t
+    (* An assumption the search made: [lit] holds *because we said so*, on this
+       branch only. Nothing derives it, so it has no constraint id and can never be
+       a [pol] operand -- see the module header. *)
   | Clause of Lit.t list (* These literals together imply the pruning. Renders to rup. *)
   | Linear of (int * Lit.t) list * int
     (* sum a_i l_i >= b. Renders to pol over the model constraint. *)
@@ -91,13 +121,37 @@ and thunk = { mutable forced : t option; mutable compute : unit -> t }
 
 type expl = t
 
-let trivial = Trivial
+let decision lit = Decision lit
 let clause lits = Clause lits
 let linear terms rhs = Linear (terms, rhs)
-let cut e1 e2 c1 c2 = Cut (e1, e2, c1, c2)
 let model_row id = Model_row id
-let term coeff e = Term (coeff, e)
 let weaken lits = Weaken lits
+
+(* The guard that keeps M1-T50 from coming back by a different route.
+
+   A [Cut] operand and a [Combine]'s [Term] are both "emit this explanation and cite
+   the id it produced" (lib/core/justify.ml's [emit_cut] and [emit_summand]). A
+   [Decision] has no id to cite -- it is an assumption, not a derivation -- so there
+   is no id for either of them to name, and the old code's answer was to fall through
+   to whatever row was ambient. This refuses at the point the mistake is made, not
+   several layers down inside [Justify] where the cited value is no longer in view.
+
+   The caller's correct move is the one lib/core/prop/linear.ml makes: a term whose
+   bound rests on a decision is *weakened* out of the row with declared-width axioms
+   (D-0009 -- an axiom cannot assert a bound but it can weaken one away), and the
+   decision's literal is carried by the D-0018 trace line instead. *)
+let citable what e =
+  match e with
+  | Decision l ->
+      invalid_arg
+        (Printf.sprintf
+           "Explanation.%s: a decision (%s) has no constraint id and cannot be cited. \
+            Weaken the term out of the row instead -- see explanation.ml's header."
+           what (Lit.to_string l))
+  | e -> e
+
+let cut e1 e2 c1 c2 = Cut (citable "cut" e1, citable "cut" e2, c1, c2)
+let term coeff e = Term (coeff, citable "term" e)
 
 let combine summands divisor =
   if divisor < 1 then invalid_arg "Explanation.combine: divisor must be >= 1";
@@ -141,7 +195,9 @@ let lits e =
   in
   let rec go e =
     match force e with
-    | Trivial -> ()
+    (* A decision's reason set is exactly the literal it assumed. [Trivial]'s was
+       empty, which is the dependency D-0035 says becomes unsoundness in M2-T3. *)
+    | Decision l -> add l
     | Model_row _ -> ()
     | Clause ls -> List.iter add ls
     | Linear (terms, _) -> List.iter (fun (_, l) -> add l) terms
@@ -159,7 +215,7 @@ let lits e =
 
 let rec to_string e =
   match e with
-  | Trivial -> "trivial"
+  | Decision l -> "decision(" ^ Lit.to_string l ^ ")"
   | Clause ls -> "clause(" ^ String.concat " " (List.map Lit.to_string ls) ^ ")"
   | Linear (terms, rhs) ->
       Printf.sprintf "linear(%s >= %d)"
@@ -202,14 +258,24 @@ module Arena = struct
   (* Not a valid index; [get] on it raises. Lets containers hold a "no reason yet". *)
   let null : id = -1
 
+  (* What an arena slot holds when nothing occupies it. [mem] bounds every [get], so
+     it is never observable; it exists only so [truncate] can drop its references and
+     let the GC collect what a discarded reason's thunk captured. [Trivial] played
+     this role until M1-T31 deleted it, and the empty clause is a deliberate
+     replacement rather than an arbitrary one: [Trivial] was a *plausible* reason, so
+     a slot that leaked read as "the model row justifies this" and nothing complained,
+     which is the failure mode this whole task is about. The empty clause renders as a
+     claimed contradiction and fails at the checker on sight. *)
+  let vacant : expl = Clause []
+
   let create ?(capacity = 256) () =
-    { items = Array.make (Stdlib.max 1 capacity) Trivial; len = 0 }
+    { items = Array.make (Stdlib.max 1 capacity) vacant; len = 0 }
 
   let length a = a.len
   let mem a (i : id) = i >= 0 && i < a.len
 
   let grow a =
-    let bigger = Array.make (Stdlib.max 1 (2 * Array.length a.items)) Trivial in
+    let bigger = Array.make (Stdlib.max 1 (2 * Array.length a.items)) vacant in
     Array.blit a.items 0 bigger 0 a.len;
     a.items <- bigger
 
@@ -236,7 +302,7 @@ module Arena = struct
     if n < a.len then (
       (* Drop the references so the explanations, and anything their thunks captured,
          become collectable. *)
-      Array.fill a.items n (a.len - n) Trivial;
+      Array.fill a.items n (a.len - n) vacant;
       a.len <- n)
 
   let clear a = truncate a 0

@@ -217,12 +217,10 @@ let build_encoding m =
   in
   (e, ids)
 
-(* Search does not render Explanation.Trivial today (search.ml's header), so this being
-   consulted would itself be news. When the D-0012 fix makes search emit justifications,
-   this must become a real per-instance lookup (D-0011). *)
-let mk_ctx writer encoding =
-  Justify.create ~writer ~encoding ~model_id:(fun () ->
-      failwith "integration: search demanded Explanation.Trivial")
+(* M1-T31: a [ctx] has no ambient row. This used to pass a [~model_id] thunk that
+   failed if ever consulted, because [Explanation.Trivial] could still resolve through
+   it; every explanation now names its own row with [Model_row]. *)
+let mk_ctx writer encoding = Justify.create ~writer ~encoding
 
 (* I-S1: re-check against the model itself, never by trusting the propagators. *)
 let independent_check m (assignment : Search.assignment) =

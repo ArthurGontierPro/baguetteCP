@@ -505,10 +505,8 @@ let solve_to_proof ?mutation ~dir ~name m =
     | Some mutation -> Writer.create_mutated ~comments:false ~audit:true ~mutation oc
   in
   Encoding.start_proof enc writer;
-  let ctx =
-    Justify.create ~writer ~encoding:enc ~model_id:(fun () ->
-        failwith "test_mutation: search demanded Explanation.Trivial")
-  in
+  (* M1-T31: no ambient row to install, so no thunk to fail. *)
+  let ctx = Justify.create ~writer ~encoding:enc in
   let instances =
     List.map2
       (fun (terms, rhs) row_id ->
