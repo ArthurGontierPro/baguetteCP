@@ -1,0 +1,30 @@
+% bool_clause, satisfiable, and the search must guess WRONG before it succeeds.
+%
+% Two things this model is built to do, neither of which the Boolean suite had before
+% (M2-T1/M2-T2 shipped its propagators with nothing that ran them):
+%
+% 1. THE ANSWER DEPENDS ON THE CONSTRAINT. The default search of SPEC 3.4 is
+%    input_order + indomain_min, and a `var bool' is the order encoding on [0, 1]
+%    (D-0007), so indomain_min tries FALSE first for every Boolean. A model whose
+%    answer is all-false is therefore solved just as well by a solver that ignores
+%    every Boolean constraint it is given. Here `a' is true, which is the value the
+%    search reaches last, so the answer is evidence that the clauses were posted and
+%    ran -- an ignored `bool_clause' would print `a = false'.
+%
+% 2. THE PROOF CONTAINS A DERIVATION. A satisfiable run only logs a nogood if a branch
+%    fails first (D-0017, and test/models/guess_wrong_sat.fzn is the integer mirror of
+%    this point), so a SAT model that root-propagates straight to its answer emits a
+%    proof with no `rup' in it at all and tests the .opb rows only. Here neither clause
+%    is unit at the root, the search decides a = false, `a \/ b' makes b true,
+%    `a \/ ~b' is then violated, and that conflict is what forces a = true. So the
+%    emitted proof carries bool_clause's unit-propagation reason AND its conflict
+%    reason, both of which veripb has to accept.
+%
+% Ground truth, independent of the search: a \/ b and a \/ ~b together entail a, and
+% with a true both clauses are satisfied whatever b is, so indomain_min settles b at
+% false. Unique under the default strategy; a = true is forced under any strategy.
+var bool: a :: output_var;
+var bool: b :: output_var;
+constraint bool_clause([a, b], []);
+constraint bool_clause([a], [b]);
+solve satisfy;

@@ -35,6 +35,8 @@ module Ne = Baguette_core.Ne
 module Engine = Baguette_core.Engine
 module Search = Baguette_core.Search
 module Checked = Baguette_core.Checked
+module Bool_clause = Baguette_core.Bool_clause
+module Bool2int = Baguette_core.Bool2int
 module Flatzinc = Baguette_flatzinc
 module Compile = Baguette_flatzinc.Compile
 
@@ -2085,6 +2087,1077 @@ let test_compile_cap () =
      constraint int_lin_le(c, [a, b, d, e], 4);\n\
      solve satisfy;\n"
 
+(* ======================================================== M2-T1 / M2-T2: the Booleans
+
+   The six Boolean builtins arrived on a branch that built, passed 1051 checks and 20
+   models, and ran NONE of them: every bool-mentioning check in the suite predated the
+   work, and there was no bool_clause / array_bool_or / array_bool_and / bool2int /
+   bool_not test or model anywhere in the tree. The suite was green because the new code
+   never executed. D-0030 names the rule that violates -- a test is not evidence until
+   something has been seen to break it -- so every check below was watched going red
+   against a deliberately broken propagator before it was committed.
+
+   The sections mirror the integer ones above:
+
+     1. the propagator's own behaviour: I-P1 by brute force, I-P3 checking, I-P2/I-P3
+        idempotence -- and, for bool_clause, the *stronger* claim its header makes.
+        [Propagator.Domain] is not a free upgrade over [Bounds]: SPEC 3.2 makes the
+        declared level the bound on what an explanation may claim, so a propagator that
+        declares DOMAIN and is only checked for "no supported value removed" has its
+        declaration tested by nothing at all. [check_clause_consistency] therefore
+        checks both directions -- no supported value removed AND no unsupported value
+        left behind -- and the second half is what catches a clause that quietly stops
+        unit-propagating.
+
+     2. the emitted text: the .opb rows compile.ml posts for each decomposition, and the
+        reasons the propagators build, both verbatim.
+
+     3. veripb (I-X1), including negative controls it must REJECT. [rup] is the one rule
+        that searches for its own justification, so a test that only ever feeds it true
+        clauses cannot tell a correct explanation from a lucky one.
+
+     4. D-0030's own check, on the two UNSAT models: that no single .opb row refutes
+        them. That is the defect which made `root_unsat` unable to test the thing it was
+        chosen to test, and it is checked here mechanically rather than by reading --
+        with a control, because a check for a defect is itself only evidence once it has
+        been seen to fire. *)
+
+(* ------------------------------------------------------- bool_clause: brute force *)
+
+(* A clause as (variable index, polarity) pairs, evaluated against an assignment --
+   written from the definition of a disjunction and not by calling anything in
+   lib/core/prop/, so that it is a second reading rather than the same one twice. *)
+let clause_holds lits assignment =
+  List.exists
+    (fun (i, positive) ->
+      let v = List.nth assignment i in
+      if positive then v = 1 else v = 0)
+    lits
+
+let mk_bool_clause lits store =
+  Bool_clause.make store (List.map (fun (i, p) -> (var i, p)) lits)
+
+(* Both halves of DOMAIN consistency (SPEC 3.2), which is what bool_clause declares.
+   One [propagate] call reaches this constraint's fixpoint: the only inference a clause
+   has is forcing its last open literal, and doing that satisfies the clause, so there
+   is never a second round. Asserted rather than assumed -- [test_bool_clause_
+   idempotence] re-runs and requires nothing to move. *)
+let check_clause_consistency name lits n =
+  let ranges = List.init n (fun _ -> (0, 1)) in
+  let bounds = List.mapi (fun i (lo, hi) -> (Printf.sprintf "b%d" i, lo, hi)) ranges in
+  let assignments = cartesian ranges in
+  let solutions = List.filter (clause_holds lits) assignments in
+  let has_support i v = List.exists (fun sol -> List.nth sol i = v) solutions in
+  let store = mk_store bounds in
+  let prop = mk_bool_clause lits store in
+  match Bool_clause.propagate prop store with
+  | Propagator.Conflict _ ->
+      check
+        (Printf.sprintf "bool_clause %s: conflict only when truly unsat" name)
+        (solutions = [])
+  | Propagator.Fixpoint ->
+      let sound = ref true and complete = ref true in
+      List.iteri
+        (fun i _ ->
+          let d = Store.get store (var i) in
+          for v = 0 to 1 do
+            if has_support i v && not (Domain.mem d v) then sound := false;
+            (* The DOMAIN half. A value with no support anywhere in the clause's
+               solution set must be gone; for a clause that is precisely "the last open
+               literal has been forced". *)
+            if (not (has_support i v)) && Domain.mem d v then complete := false
+          done)
+        bounds;
+      check (Printf.sprintf "bool_clause %s: I-P1 no supported value removed" name) !sound;
+      check
+        (Printf.sprintf "bool_clause %s: DOMAIN, no unsupported value left behind" name)
+        !complete
+
+let test_bool_clause_consistency () =
+  (* Shapes, not repetitions: all-positive, all-negative, mixed, a unit of each
+     polarity, a clause with a variable it does not mention (so the harness sees an
+     untouched column), the tautology, the duplicate, and the empty clause. *)
+  check_clause_consistency "(b0 \\/ b1 \\/ b2)" [ (0, true); (1, true); (2, true) ] 3;
+  check_clause_consistency "(~b0 \\/ ~b1 \\/ ~b2)"
+    [ (0, false); (1, false); (2, false) ]
+    3;
+  check_clause_consistency "(b0 \\/ ~b1 \\/ b2)" [ (0, true); (1, false); (2, true) ] 3;
+  check_clause_consistency "(~b0 \\/ b1)" [ (0, false); (1, true) ] 2;
+  check_clause_consistency "unit (b0)" [ (0, true) ] 1;
+  check_clause_consistency "unit (~b0)" [ (0, false) ] 1;
+  check_clause_consistency "(b0 \\/ b1) with an unmentioned b2" [ (0, true); (1, true) ] 3;
+  (* A variable at both polarities: the clause is a tautology, the propagator must never
+     fire, and [Bool_clause.make]'s header says that is achieved by the ordinary path
+     rather than by a special case. *)
+  check_clause_consistency "tautology (b0 \\/ ~b0)" [ (0, true); (0, false) ] 1;
+  (* The same literal twice is merged by [make], so this clause is a unit and forces its
+     variable. Without the merge it would read as two open literals and infer nothing --
+     sound, but strictly weaker, which is what the DOMAIN half above catches. *)
+  check_clause_consistency "duplicate (b0 \\/ b0)" [ (0, true); (0, true) ] 1;
+  (* The empty clause is false and is a legal value here: compile.ml reaches it from
+     `bool_clause([], [])`. *)
+  check_clause_consistency "the empty clause" [] 1
+
+(* ------------------------------------------------------------ bool_clause: I-P3 *)
+
+let test_bool_clause_checking () =
+  (* Every variable fixed: Conflict iff the assignment violates the clause, and nothing
+     else, there being nothing left to prune. [make] runs before the fixing so the
+     propagator's frozen declared bounds are the wide ones (D-0010). *)
+  let run name lits n values expect_conflict =
+    let bounds = List.init n (fun i -> (Printf.sprintf "b%d" i, 0, 1)) in
+    let store = mk_store bounds in
+    let prop = mk_bool_clause lits store in
+    List.iteri
+      (fun i v ->
+        match Store.fix store (var i) v Explanation.trivial with
+        | Store.Conflict _ -> failwith "test_bool_clause_checking: setup conflicted"
+        | _ -> ())
+      values;
+    let got =
+      match Bool_clause.propagate prop store with
+      | Propagator.Conflict _ -> true
+      | Propagator.Fixpoint -> false
+    in
+    check (Printf.sprintf "bool_clause I-P3 checking: %s" name) (got = expect_conflict)
+  in
+  let c3 = [ (0, true); (1, false); (2, true) ] in
+  (* (b0 \/ ~b1 \/ b2) is violated by exactly one of the eight assignments. *)
+  run "(b0 \\/ ~b1 \\/ b2) at 0,1,0 -- the only violating point" c3 3 [ 0; 1; 0 ] true;
+  run "(b0 \\/ ~b1 \\/ b2) at 0,1,1" c3 3 [ 0; 1; 1 ] false;
+  run "(b0 \\/ ~b1 \\/ b2) at 1,1,0" c3 3 [ 1; 1; 0 ] false;
+  run "(b0 \\/ ~b1 \\/ b2) at 0,0,0" c3 3 [ 0; 0; 0 ] false;
+  run "(b0 \\/ ~b1 \\/ b2) at 1,1,1" c3 3 [ 1; 1; 1 ] false;
+  run "the empty clause is violated at b0 = 0" [] 1 [ 0 ] true;
+  run "the empty clause is violated at b0 = 1" [] 1 [ 1 ] true
+
+(* ------------------------------------------------------ bool_clause: I-P2 / I-P3 *)
+
+let test_bool_clause_idempotence () =
+  let run name lits n pre =
+    let bounds = List.init n (fun i -> (Printf.sprintf "b%d" i, 0, 1)) in
+    let store = mk_store bounds in
+    let prop = mk_bool_clause lits store in
+    List.iter
+      (fun (i, v) ->
+        match Store.fix store (var i) v Explanation.trivial with
+        | Store.Conflict _ -> failwith "test_bool_clause_idempotence: setup conflicted"
+        | _ -> ())
+      pre;
+    match Bool_clause.propagate prop store with
+    | Propagator.Conflict _ ->
+        check (Printf.sprintf "bool_clause idempotence: %s (conflict)" name) true
+    | Propagator.Fixpoint -> (
+        let snap = Store.snapshot store in
+        match Bool_clause.propagate prop store with
+        | Propagator.Conflict _ ->
+            check
+              (Printf.sprintf
+                 "bool_clause idempotence: %s -- the second run conflicted where the \
+                  first did not"
+                 name)
+              false
+        | Propagator.Fixpoint ->
+            check
+              (Printf.sprintf "bool_clause I-P2/I-P3: %s, second run moves nothing" name)
+              (Store.same_domains store snap))
+  in
+  let c3 = [ (0, true); (1, false); (2, true) ] in
+  run "nothing fixed (two open, no inference)" c3 3 [];
+  run "one literal false (still two open)" c3 3 [ (0, 0) ];
+  run "two literals false (the unit case)" c3 3 [ (0, 0); (1, 1) ];
+  run "already satisfied" c3 3 [ (0, 1) ];
+  run "duplicate literal, unit on the first run" [ (0, true); (0, true) ] 1 []
+
+(* ---------------------------------------- bool_clause: the unit push and its reason *)
+
+let expl_lits e =
+  match Explanation.force e with
+  | Explanation.Clause ls -> Some (String.concat " " (List.map Lit.to_string ls))
+  | _ -> None
+
+let test_bool_clause_unit_push () =
+  (* (a \/ ~b \/ c) with a false and b true forces c true, and the reason is the whole
+     clause -- which for a clause is both the nogood and the implication, because the
+     assignment that falsifies the forced literal is the assignment that conflicts.
+     lib/core/prop/bool_clause.ml's header states that identity; this is the check. *)
+  let store = mk_store [ ("a", 0, 1); ("b", 0, 1); ("c", 0, 1) ] in
+  let prop = mk_bool_clause [ (0, true); (1, false); (2, true) ] store in
+  ignore (Store.set_hi store (var 0) 0 Explanation.trivial);
+  ignore (Store.set_lo store (var 1) 1 Explanation.trivial);
+  let before = Store.trail_length store in
+  (match Bool_clause.propagate prop store with
+  | Propagator.Conflict _ -> check "bool_clause: the unit push happened" false
+  | Propagator.Fixpoint ->
+      check "bool_clause: the unit push forced c true"
+        (Domain.lo (Store.get store (var 2)) = 1));
+  check "bool_clause: the unit push wrote exactly one trail entry"
+    (Store.trail_length store - before = 1);
+  let entry = List.hd (Store.trail_entries store) in
+  let expl = Store.explanation store entry in
+  check "bool_clause: the reason is the clause itself, in declaration order"
+    (expl_lits expl = Some "a_ge_1 ~b_ge_1 c_ge_1");
+  check "bool_clause: literals are the order-encoding spelling of D-0007"
+    (String.concat " " (List.map Lit.to_string (Bool_clause.literals prop))
+    = "a_ge_1 ~b_ge_1 c_ge_1")
+
+let test_bool_clause_conflict_reason () =
+  (* Every literal false: the clause is violated and the conflict's reason is the same
+     clause. Sharing one [Explanation.t] between prunings and conflicts is deliberate
+     (the header says why), so this checks the conflict path reports it too. *)
+  let store = mk_store [ ("a", 0, 1); ("b", 0, 1); ("c", 0, 1) ] in
+  let prop = mk_bool_clause [ (0, true); (1, false); (2, true) ] store in
+  ignore (Store.set_hi store (var 0) 0 Explanation.trivial);
+  ignore (Store.set_lo store (var 1) 1 Explanation.trivial);
+  ignore (Store.set_hi store (var 2) 0 Explanation.trivial);
+  match Bool_clause.propagate prop store with
+  | Propagator.Fixpoint -> check "bool_clause: an all-false clause conflicts" false
+  | Propagator.Conflict e ->
+      check "bool_clause: an all-false clause conflicts" true;
+      check "bool_clause: the conflict's reason is the clause"
+        (expl_lits e = Some "a_ge_1 ~b_ge_1 c_ge_1")
+
+let test_bool_clause_empty_conflict () =
+  let store = mk_store [ ("a", 0, 1) ] in
+  let prop = mk_bool_clause [] store in
+  match Bool_clause.propagate prop store with
+  | Propagator.Fixpoint -> check "bool_clause: the empty clause conflicts at once" false
+  | Propagator.Conflict e ->
+      check "bool_clause: the empty clause conflicts at once" true;
+      (* [Explanation.clause []] renders as `rup >= 1 ;`, closed the D-0022/I-X7 way. *)
+      check "bool_clause: the empty clause's reason is the empty clause"
+        (expl_lits e = Some "")
+
+let test_bool_clause_rejects_non_bool () =
+  (* The backstop [make] keeps for callers built by hand -- which every unit test is.
+     compile.ml rejects a non-Boolean argument with a position long before this. *)
+  let store = mk_store [ ("a", 0, 1); ("n", 0, 5) ] in
+  raises "bool_clause: make refuses a literal that is not a var bool" (fun () ->
+      ignore (mk_bool_clause [ (0, true); (1, true) ] store));
+  (* [make] reads the store, so it must be called before anything narrows: a bool that
+     has already been fixed no longer looks like [0, 1]. That is the D-0010 requirement
+     as a test rather than only as a comment in the header. *)
+  let store2 = mk_store [ ("a", 0, 1) ] in
+  ignore (Store.set_hi store2 (var 0) 0 Explanation.trivial);
+  raises "bool_clause: make refuses a bool that has already been narrowed" (fun () ->
+      ignore (mk_bool_clause [ (0, true) ] store2))
+
+(* --------------------------------------------------------------- bool2int: pushes *)
+
+(* The four pushes of lib/core/prop/bool2int.ml, one named check each. This is the
+   deliverable of this section: a channelling constraint that prunes one way and not the
+   other is the classic silent weakness, and it is silent precisely because a MODEL
+   cannot see it -- the search recovers the same answer by branching, so the printed
+   output is identical. Only a direct assertion on the push can tell the difference. *)
+
+let bool2int_case ~b_range ~x_range ~pre =
+  let blo, bhi = b_range and xlo, xhi = x_range in
+  let store = mk_store [ ("b", blo, bhi); ("x", xlo, xhi) ] in
+  let prop = Bool2int.make store ~b:(var 0) ~x:(var 1) in
+  List.iter
+    (fun f ->
+      match f store with
+      | Store.Conflict _ -> failwith "bool2int_case: setup conflicted"
+      | _ -> ())
+    pre;
+  (Bool2int.propagate prop store, store)
+
+let dom_pair store =
+  let d v = Store.get store (var v) in
+  ((Domain.lo (d 0), Domain.hi (d 0)), (Domain.lo (d 1), Domain.hi (d 1)))
+
+let test_bool2int_directions () =
+  (* b -> x, lower bound. b is true; x, declared wide, must lose everything below 1. *)
+  let _, s =
+    bool2int_case ~b_range:(0, 1) ~x_range:(0, 5)
+      ~pre:[ (fun st -> Store.set_lo st (var 0) 1 Explanation.trivial) ]
+  in
+  check "bool2int: b -> x raises lo(x) when b is true" (snd (dom_pair s) = (1, 1));
+  (* b -> x, upper bound. b is false; x must lose everything above 0. *)
+  let _, s =
+    bool2int_case ~b_range:(0, 1) ~x_range:(0, 5)
+      ~pre:[ (fun st -> Store.set_hi st (var 0) 0 Explanation.trivial) ]
+  in
+  check "bool2int: b -> x lowers hi(x) when b is false" (snd (dom_pair s) = (0, 0));
+  (* b -> x with b untouched: b's DECLARED [0, 1] alone confines a wide x. This is the
+     push test/models/bool_channel_sat.fzn depends on -- without it the linear row in
+     that model has nothing to bite on and the answer changes. *)
+  let _, s = bool2int_case ~b_range:(0, 1) ~x_range:(0, 5) ~pre:[] in
+  check "bool2int: b's declared [0,1] alone confines a wide x to [0,1]"
+    (snd (dom_pair s) = (0, 1));
+  (* x -> b, lower bound. x's lo has been raised by something else (a linear row, in a
+     real model) and b must follow. Dropping this direction is unsound in nothing and
+     weaker in everything, which is exactly why a model cannot see it. *)
+  let _, s =
+    bool2int_case ~b_range:(0, 1) ~x_range:(0, 5)
+      ~pre:[ (fun st -> Store.set_lo st (var 1) 1 Explanation.trivial) ]
+  in
+  check "bool2int: x -> b raises lo(b) when x >= 1" (fst (dom_pair s) = (1, 1));
+  (* x -> b, upper bound. *)
+  let _, s =
+    bool2int_case ~b_range:(0, 1) ~x_range:(0, 5)
+      ~pre:[ (fun st -> Store.set_hi st (var 1) 0 Explanation.trivial) ]
+  in
+  check "bool2int: x -> b lowers hi(b) when x <= 0" (fst (dom_pair s) = (0, 0));
+  (* One pass reaches the fixpoint, which is the ordering argument in the header: x is
+     narrowed to b's bounds first, then b to x's NEW bounds. Here x's lo is above b's,
+     so the second step has real work and must still happen in the same call. *)
+  let _, s =
+    bool2int_case ~b_range:(0, 1) ~x_range:(0, 5)
+      ~pre:[ (fun st -> Store.set_lo st (var 1) 1 Explanation.trivial) ]
+  in
+  check "bool2int: one pass does both directions, not just the first"
+    (dom_pair s = ((1, 1), (1, 1)))
+
+let test_bool2int_hole () =
+  (* The header's claim about a hole: x = {0, 2} meets hi(x) := 1 and [Domain.set_hi]
+     tightens past the hole (I-D2), leaving {0}. Declared consistency is BOUNDS, but the
+     hole must not survive as a wrong upper bound of 2. *)
+  let store =
+    Store.create ~names:[| "b"; "x" |]
+      ~domains:[| Domain.make 0 1; Domain.of_list [ 0; 2 ] |]
+  in
+  let prop = Bool2int.make store ~b:(var 0) ~x:(var 1) in
+  match Bool2int.propagate prop store with
+  | Propagator.Conflict _ ->
+      check "bool2int: a hole in x is tightened past, not into" false
+  | Propagator.Fixpoint ->
+      let d = Store.get store (var 1) in
+      check "bool2int: a hole in x is tightened past, not into"
+        (Domain.lo d = 0 && Domain.hi d = 0)
+
+let test_bool2int_soundness () =
+  let case name x_range =
+    check_generic_soundness name
+      ~make:(fun store -> Bool2int.make store ~b:(var 0) ~x:(var 1))
+      ~propagate:Bool2int.propagate ~n:2
+      ~ranges:[ (0, 1); x_range ]
+      ~satisfies:(fun a -> match a with [ b; x ] -> x = b | _ -> false)
+  in
+  case "bool2int: x declared wider than b" (0, 5);
+  case "bool2int: x declared exactly [0,1]" (0, 1);
+  case "bool2int: x declared with no overlap (unsat)" (2, 5);
+  case "bool2int: x declared entirely negative (unsat)" (-4, -1);
+  case "bool2int: x straddling zero" (-3, 3);
+  case "bool2int: x declared {0} only" (0, 0);
+  case "bool2int: x declared {1} only" (1, 1)
+
+let test_bool2int_checking () =
+  let run name xlo xhi bval xval expect_conflict =
+    let store = mk_store [ ("b", 0, 1); ("x", xlo, xhi) ] in
+    let prop = Bool2int.make store ~b:(var 0) ~x:(var 1) in
+    let ok =
+      match Store.fix store (var 0) bval Explanation.trivial with
+      | Store.Conflict _ -> false
+      | _ -> (
+          match Store.fix store (var 1) xval Explanation.trivial with
+          | Store.Conflict _ -> false
+          | _ -> true)
+    in
+    if not ok then check (Printf.sprintf "bool2int I-P3 checking: %s (setup)" name) false
+    else
+      let got =
+        match Bool2int.propagate prop store with
+        | Propagator.Conflict _ -> true
+        | Propagator.Fixpoint -> false
+      in
+      check (Printf.sprintf "bool2int I-P3 checking: %s" name) (got = expect_conflict)
+  in
+  run "b=0, x=0" 0 5 0 0 false;
+  run "b=1, x=1" 0 5 1 1 false;
+  run "b=0, x=1" 0 5 0 1 true;
+  run "b=1, x=0" 0 5 1 0 true;
+  run "b=1, x=3" 0 5 1 3 true;
+  run "b=0, x=4" 0 5 0 4 true
+
+let test_bool2int_idempotence () =
+  let run name xlo xhi pre =
+    let store = mk_store [ ("b", 0, 1); ("x", xlo, xhi) ] in
+    let prop = Bool2int.make store ~b:(var 0) ~x:(var 1) in
+    List.iter
+      (fun f ->
+        match f store with
+        | Store.Conflict _ -> failwith "test_bool2int_idempotence: setup conflicted"
+        | _ -> ())
+      pre;
+    match Bool2int.propagate prop store with
+    | Propagator.Conflict _ ->
+        check (Printf.sprintf "bool2int idempotence: %s (conflict)" name) true
+    | Propagator.Fixpoint -> (
+        let snap = Store.snapshot store in
+        match Bool2int.propagate prop store with
+        | Propagator.Conflict _ ->
+            check
+              (Printf.sprintf
+                 "bool2int idempotence: %s -- the second run conflicted where the first \
+                  did not"
+                 name)
+              false
+        | Propagator.Fixpoint ->
+            check
+              (Printf.sprintf "bool2int I-P2/I-P3: %s, second run moves nothing" name)
+              (Store.same_domains store snap))
+  in
+  run "nothing established, x wide" 0 5 [];
+  run "b true" 0 5 [ (fun st -> Store.set_lo st (var 0) 1 Explanation.trivial) ];
+  run "x >= 1" 0 5 [ (fun st -> Store.set_lo st (var 1) 1 Explanation.trivial) ];
+  run "x already [0,1]" 0 1 []
+
+let test_bool2int_conflicts () =
+  (* A conflict whose reason is the EMPTY clause, and the header says why that is the
+     correct and honest answer rather than a degenerate one: x is declared 2..5, b is a
+     var bool, and the model is unsatisfiable from its declared domains alone. Both the
+     fact read (b <= 1) and the bound it ran into (x >= 2) are still declared bounds,
+     which have no literal -- they are the encoding's constant true (PROOF-FORMAT
+     section 3) -- so the clause is empty, renders as `rup >= 1 ;` and is closed the
+     D-0022/I-X7 way. Same route as `int_ne(x, x)`. *)
+  let r, _ = bool2int_case ~b_range:(0, 1) ~x_range:(2, 5) ~pre:[] in
+  (match r with
+  | Propagator.Fixpoint -> check "bool2int: a declared-disjoint x conflicts at once" false
+  | Propagator.Conflict e ->
+      check "bool2int: a declared-disjoint x conflicts at once" true;
+      check "bool2int: its reason is the empty clause (both bounds still declared)"
+        (expl_lits e = Some ""));
+  (* And a conflict whose reason is NOT empty: both bounds have been moved, so both have
+     literals and both must appear. This is the half that would stay green if
+     [ge_fact]/[le_fact] dropped every fact rather than only the declared ones -- the
+     empty-clause case above cannot tell those two apart. *)
+  let r, _ =
+    bool2int_case ~b_range:(0, 1) ~x_range:(0, 5)
+      ~pre:
+        [
+          (fun st -> Store.set_hi st (var 0) 0 Explanation.trivial);
+          (fun st -> Store.set_lo st (var 1) 1 Explanation.trivial);
+        ]
+  in
+  match r with
+  | Propagator.Fixpoint -> check "bool2int: b false against x >= 1 conflicts" false
+  | Propagator.Conflict e ->
+      check "bool2int: b false against x >= 1 conflicts" true;
+      check "bool2int: the conflict names both moved bounds, negated"
+        (expl_lits e = Some "b_ge_1 ~x_ge_1")
+
+let test_bool2int_rejects_non_bool () =
+  let store = mk_store [ ("n", 0, 5); ("x", 0, 5) ] in
+  raises "bool2int: make refuses a first argument that is not a var bool" (fun () ->
+      ignore (Bool2int.make store ~b:(var 0) ~x:(var 1)))
+
+(* ------------------------------------------ bool_clause and bool2int, past the checker *)
+
+(* The row lib/flatzinc/compile.ml posts for a clause, by the same arithmetic:
+     x_1 \/ ... \/ x_p \/ ~y_1 \/ ... \/ ~y_q  is  -sum_i x_i + sum_j y_j <= q - 1,
+   expanded over the order encoding by the one door every other row goes through. The
+   verbatim text of what that produces is pinned in [test_bool_rows]; here it is used so
+   the rup is checked against the row a real model would actually carry. *)
+let add_clause_row e (lits : (string * bool) list) =
+  let q = List.length (List.filter (fun (_, p) -> not p) lits) in
+  Encoding.add_int_lin_le e
+    (List.map (fun (n, p) -> ((if p then -1 else 1), n)) lits)
+    (q - 1)
+
+let write_and_emit dir base e ~expl ~model_id ~sol =
+  let opb = Filename.concat dir (base ^ ".opb") in
+  let pbp = Filename.concat dir (base ^ ".pbp") in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ base ] e oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let w = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof e w;
+  let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> model_id) in
+  let id = Justify.emit ctx expl in
+  Writer.delete w id;
+  Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e sol));
+  close_out oc;
+  (opb, pbp)
+
+(* (a \/ ~b \/ c) with a false and b true established by real model rows. The pruning is
+   c := true and its reason is the clause; the rup must close in a single unit
+   propagation against the clause row. *)
+(* The two facts are established in the STORE ONLY -- deliberately NOT as .opb rows,
+   and this is load-bearing for every control below it.
+
+   Measured, not reasoned: an earlier version of this scene posted `~a` and `b` as model
+   rows, the way build_int_le_multi and friends above do. That makes the .opb force
+   c true on its own, so a REASON WITH ITS FACTS DROPPED is still entailed by the model
+   and veripb accepts it. A break that deleted the facts from a justification passed the
+   whole suite -- 332 checks and 28 models -- until the scene was changed. It is the
+   D-0016 hazard (a valid but useless generalisation) and D-0009's (restating a
+   constraint is trivially valid) in one place, and it is the tenth instance of this
+   project's signature failure mode, caught here rather than shipped.
+
+   With the facts held only in the store, the .opb says nothing about a or b, so the
+   clause `a \/ ~b \/ c` is RUP (it is the row) while every weakening or corruption of
+   it is not. That is what makes [build_bool_clause_wrong] and
+   [build_bool_clause_weakened] real controls rather than decoration. It is also
+   faithful: in a real run these bounds come from a decision or from another
+   propagator, neither of which is a model row. *)
+let bool_clause_scene () =
+  let e = Encoding.create () in
+  Encoding.declare_bool e "a";
+  Encoding.declare_bool e "b";
+  Encoding.declare_bool e "c";
+  let row = add_clause_row e [ ("a", true); ("b", false); ("c", true) ] in
+  let store =
+    Store.create ~names:[| "a"; "b"; "c" |]
+      ~domains:[| Domain.make 0 1; Domain.make 0 1; Domain.make 0 1 |]
+  in
+  let prop = mk_bool_clause [ (0, true); (1, false); (2, true) ] store in
+  (match Store.set_hi store (var 0) 0 Explanation.trivial with
+  | Store.Changed -> ()
+  | _ -> failwith "bool_clause_scene: a := false failed");
+  (match Store.set_lo store (var 1) 1 Explanation.trivial with
+  | Store.Changed -> ()
+  | _ -> failwith "bool_clause_scene: b := true failed");
+  (e, row, store, prop)
+
+let build_bool_clause_unit dir =
+  let e, row, store, prop = bool_clause_scene () in
+  (match Bool_clause.propagate prop store with
+  | Propagator.Conflict _ -> failwith "build_bool_clause_unit: conflicted"
+  | Propagator.Fixpoint -> ());
+  let entry = List.hd (Store.trail_entries store) in
+  let expl = Explanation.force (Store.explanation store entry) in
+  write_and_emit dir "boolclause_unit" e ~expl ~model_id:row
+    ~sol:[ ("a", 0); ("b", 1); ("c", 1) ]
+
+(* The negative control. Same scene, same facts, but the claim's polarity is flipped:
+   the derivation asserts c FALSE. That clause is not entailed -- a = 0, b = 1, c = 1
+   satisfies every row in the .opb -- so veripb must reject it. Without this, "veripb
+   accepted our rup" says nothing: [rup] searches for its own justification, and a test
+   that only ever feeds it true clauses cannot tell a correct explanation from a lucky
+   one. *)
+let build_bool_clause_wrong dir =
+  let e, row, _, _ = bool_clause_scene () in
+  let expl =
+    Explanation.clause [ Lit.bool_true "a"; Lit.bool_false "b"; Lit.bool_false "c" ]
+  in
+  write_and_emit dir "boolclause_wrong" e ~expl ~model_id:row
+    ~sol:[ ("a", 0); ("b", 1); ("c", 1) ]
+
+(* The second control, and the one that tests the direction the first cannot: a reason
+   that is CORRECT AS FAR AS IT GOES but has dropped a literal. `~b \/ c` is a strictly
+   stronger claim than the clause -- it asserts c whenever b holds, regardless of a --
+   and a = 1, b = 1, c = 0 satisfies the .opb while falsifying it, so veripb must
+   reject. A justification that quietly forgets a fact it read is the shape of break
+   that a scene whose facts are model rows cannot see; see [bool_clause_scene]. *)
+let build_bool_clause_weakened dir =
+  let e, row, _, _ = bool_clause_scene () in
+  let expl = Explanation.clause [ Lit.bool_false "b"; Lit.bool_true "c" ] in
+  write_and_emit dir "boolclause_weakened" e ~expl ~model_id:row
+    ~sol:[ ("a", 0); ("b", 1); ("c", 1) ]
+
+(* The conflict route that ends in a REFUTATION rather than in a clause, which is the
+   half a nogood over three literals cannot test: `a_ge_1 \/ ~b_ge_1 \/ c_ge_1` is a
+   perfectly good derived constraint and is not contradicting, so nothing can be
+   concluded from it alone -- the model-level refutations in test/models/bool_reif_unsat
+   .fzn and bool_channel_unsat.fzn are where a nogood gets resolved down to the empty
+   clause, and they run the whole pipeline. What IS testable here on its own is the
+   empty clause: `bool_clause([], [])` conflicts immediately with [Explanation.clause []],
+   which renders as `rup >= 1 ;` -- contradicting, and closed the D-0022/I-X7 way against
+   an .opb whose only row is the false empty sum. Same route as `int_ne(x, x)` takes in
+   test/models/ne_self_unsat.fzn, reached from the Boolean side.
+
+   The three-literal conflict clause is not left unchecked: [Bool_clause] shares ONE
+   [Explanation.t] between every pruning and every conflict of an instance (its header
+   says why), so the value [build_bool_clause_unit] puts past the checker above is
+   physically the same value a conflict of that clause would report. *)
+let build_bool_clause_conflict dir =
+  let e = Encoding.create () in
+  Encoding.declare_bool e "a";
+  let row = add_clause_row e [] in
+  let store = Store.create ~names:[| "a" |] ~domains:[| Domain.make 0 1 |] in
+  let prop = mk_bool_clause [] store in
+  let expl =
+    match Bool_clause.propagate prop store with
+    | Propagator.Conflict e -> Explanation.force e
+    | Propagator.Fixpoint -> failwith "build_bool_clause_conflict: did not conflict"
+  in
+  let opb = Filename.concat dir "boolclause_empty.opb" in
+  let pbp = Filename.concat dir "boolclause_empty.pbp" in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "bool_clause([], []) -- the false empty sum" ] e oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let w = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof e w;
+  let ctx = Justify.create ~writer:w ~encoding:e ~model_id:(fun () -> row) in
+  let id = Justify.emit ctx expl in
+  Writer.conclusion w (Writer.Unsat (Some id));
+  close_out oc;
+  (opb, pbp)
+
+(* bool2int's four pushes, each emitted and checked separately -- the module header
+   claims "test/unit/test_prop.ml runs every one of them past the real checker rather
+   than taking this paragraph's word for it", and these four runs are what make that
+   sentence true. [x] is declared 0..5, so the b -> x upper push moves a bound four
+   steps and its claim is `~x_ge_2` rather than the one-step case D-0010 warns is not
+   enough of a test. *)
+let bool2int_scene ~pre =
+  let e = Encoding.create () in
+  Encoding.declare_bool e "b";
+  Encoding.declare_int e "x" ~lo:0 ~hi:5;
+  (* row LE: x - b <= 0, then row GE: b - x <= 0, in the order compile.ml posts them. *)
+  let row_le = Encoding.add_int_lin_le e [ (1, "x"); (-1, "b") ] 0 in
+  let row_ge = Encoding.add_int_lin_le e [ (-1, "x"); (1, "b") ] 0 in
+  let store =
+    Store.create ~names:[| "b"; "x" |] ~domains:[| Domain.make 0 1; Domain.make 0 5 |]
+  in
+  let prop = Bool2int.make store ~b:(var 0) ~x:(var 1) in
+  List.iter
+    (fun f ->
+      match f e store with
+      | Store.Changed -> ()
+      | _ -> failwith "bool2int_scene: setup did not move a bound")
+    pre;
+  (e, row_le, row_ge, store, prop)
+
+(* Which push to read off the trail. Two pushes can land on the same variable in one
+   call (b true moves both of x's bounds), so naming the variable is not enough -- and
+   picking the wrong entry would silently check a different push than the one the test
+   is named after. *)
+type which_bound = Lo | Hi
+
+let bool2int_push dir base ~pre ~wvar ~wbound ~sol =
+  let e, row_le, _, store, prop = bool2int_scene ~pre in
+  let before = Store.trail_length store in
+  (match Bool2int.propagate prop store with
+  | Propagator.Conflict _ -> failwith (base ^ ": conflicted")
+  | Propagator.Fixpoint -> ());
+  let n_new = Store.trail_length store - before in
+  let entries = List.filteri (fun i _ -> i < n_new) (Store.trail_entries store) in
+  let moved (en : Store.entry) =
+    match wbound with
+    | Lo -> Domain.lo en.now > Domain.lo en.old
+    | Hi -> Domain.hi en.now < Domain.hi en.old
+  in
+  let entry =
+    match
+      List.find_opt
+        (fun (en : Store.entry) -> Var.equal en.var (var wvar) && moved en)
+        entries
+    with
+    | Some en -> en
+    | None -> failwith (base ^ ": the push under test never happened")
+  in
+  let expl = Explanation.force (Store.explanation store entry) in
+  write_and_emit dir base e ~expl ~model_id:row_le ~sol
+
+(* A setup bound, established in the store and NOT as an .opb row -- for the reason
+   spelled out at [bool_clause_scene], which was measured here: with `b_ge_1` posted as
+   a model row the .opb entails lo(x) := 1 by itself, so bool2int's reason verifies with
+   its facts deleted and the four checks below stop testing the justification. The
+   literal argument is kept so each caller still says which fact it is establishing. *)
+let store_fact (_l : Lit.t) = ()
+
+let build_bool2int_b_to_x_lo dir =
+  bool2int_push dir "bool2int_b_to_x_lo"
+    ~pre:
+      [
+        (fun e st ->
+          store_fact (Lit.bool_true "b");
+          ignore e;
+          Store.set_lo st (var 0) 1 Explanation.trivial);
+      ]
+    ~wvar:1 ~wbound:Lo
+    ~sol:[ ("b", 1); ("x", 1) ]
+
+let build_bool2int_b_to_x_hi dir =
+  bool2int_push dir "bool2int_b_to_x_hi"
+    ~pre:
+      [
+        (fun e st ->
+          store_fact (Lit.bool_false "b");
+          ignore e;
+          Store.set_hi st (var 0) 0 Explanation.trivial);
+      ]
+    ~wvar:1 ~wbound:Hi
+    ~sol:[ ("b", 0); ("x", 0) ]
+
+let build_bool2int_x_to_b_lo dir =
+  (* x >= 1 established by a real row; the push under test is lo(b) := 1. Its clause is
+     `b_ge_1 \/ ~x_ge_1`, which is RUP against row LE (x <= b), not against row GE --
+     the checker has to find that for itself, which is the point of emitting it. *)
+  bool2int_push dir "bool2int_x_to_b_lo"
+    ~pre:
+      [
+        (fun e st ->
+          store_fact (Lit.ge "x" 1);
+          ignore e;
+          Store.set_lo st (var 1) 1 Explanation.trivial);
+      ]
+    ~wvar:0 ~wbound:Lo
+    ~sol:[ ("b", 1); ("x", 1) ]
+
+let build_bool2int_x_to_b_hi dir =
+  bool2int_push dir "bool2int_x_to_b_hi"
+    ~pre:
+      [
+        (fun e st ->
+          store_fact (Lit.le "x" 0);
+          ignore e;
+          Store.set_hi st (var 1) 0 Explanation.trivial);
+      ]
+    ~wvar:0 ~wbound:Hi
+    ~sol:[ ("b", 0); ("x", 0) ]
+
+(* The negative control for the channelling: the b -> x scene with the claim's polarity
+   flipped. b is false, so x <= 0 is entailed and x >= 1 is not. *)
+let build_bool2int_wrong dir =
+  let e, row_le, _, _, _ =
+    bool2int_scene
+      ~pre:
+        [
+          (fun e st ->
+            store_fact (Lit.bool_false "b");
+            ignore e;
+            Store.set_hi st (var 0) 0 Explanation.trivial);
+        ]
+  in
+  let expl = Explanation.clause [ Lit.ge "x" 1; Lit.bool_true "b" ] in
+  write_and_emit dir "bool2int_wrong" e ~expl ~model_id:row_le ~sol:[ ("b", 0); ("x", 0) ]
+
+(* The control that was missing, and the reason this file's scenes stopped posting their
+   setup facts as model rows. b is false, so bool2int pushes hi(x) := 0 with the reason
+   `~x_ge_1 \/ b_ge_1` -- the claim, disjoined with the negation of the one fact it
+   read. This emits the claim ALONE, which is what a justification that forgot to record
+   its facts would emit: "x <= 0", unconditionally, which is simply false of the model
+   (b = 1, x = 1 is a solution). veripb must reject it.
+
+   Measured: deleting the facts from [implication] passed all 332 checks and all 28
+   models before this control existed, because the four positive push checks above
+   carried their facts as .opb rows and a factless claim was therefore still entailed.
+   That is the tenth instance of this project's signature failure mode; it is the one
+   the task asked to be looked for, and it was in this file rather than in lib/. *)
+let build_bool2int_factless dir =
+  let e, row_le, _, _, _ =
+    bool2int_scene
+      ~pre:
+        [
+          (fun e st ->
+            store_fact (Lit.bool_false "b");
+            ignore e;
+            Store.set_hi st (var 0) 0 Explanation.trivial);
+        ]
+  in
+  let expl = Explanation.clause [ Lit.le "x" 0 ] in
+  write_and_emit dir "bool2int_factless" e ~expl ~model_id:row_le
+    ~sol:[ ("b", 0); ("x", 0) ]
+
+(* ------------------------------------------- the .opb rows, verbatim, per builtin *)
+
+let compiled_rows src =
+  let t = compile_src src in
+  List.map Opb.constr_to_string (Encoding.constraints t.Compile.encoding)
+
+let test_bool_rows () =
+  (* The encoding is normative (docs/PROOF-FORMAT.md section 3) and a silent change of
+     row shape is exactly the class of defect D-0010 was, so these are pinned as text.
+     Every row below is a clause -- coefficient-1 literals against a right-hand side of
+     1 -- which is what makes bool_clause's rup close in a single unit propagation, and
+     is also the property the D-0030 check downstream rests on. *)
+  let decl = "var bool: a;\nvar bool: b;\nvar bool: c;\n" in
+  let rows src = compiled_rows (decl ^ src ^ "solve satisfy;\n") in
+  check "bool_clause: the row is the clause, over the order encoding"
+    (rows "constraint bool_clause([a, b], [c]);\n"
+    = [ "+1 a_ge_1 +1 b_ge_1 +1 ~c_ge_1 >= 1 ;" ]);
+  check "bool_clause: an all-negative clause"
+    (rows "constraint bool_clause([], [a, b]);\n" = [ "+1 ~a_ge_1 +1 ~b_ge_1 >= 1 ;" ]);
+  check "array_bool_or: one forward clause and one backward clause per operand"
+    (rows "constraint array_bool_or([a, b], c);\n"
+    = [
+        "+1 ~c_ge_1 +1 a_ge_1 +1 b_ge_1 >= 1 ;";
+        "+1 c_ge_1 +1 ~a_ge_1 >= 1 ;";
+        "+1 c_ge_1 +1 ~b_ge_1 >= 1 ;";
+      ]);
+  check "array_bool_and: one forward clause per operand and one backward clause"
+    (rows "constraint array_bool_and([a, b], c);\n"
+    = [
+        "+1 ~c_ge_1 +1 a_ge_1 >= 1 ;";
+        "+1 ~c_ge_1 +1 b_ge_1 >= 1 ;";
+        "+1 c_ge_1 +1 ~a_ge_1 +1 ~b_ge_1 >= 1 ;";
+      ]);
+  check "bool_eq: the two implications"
+    (rows "constraint bool_eq(a, b);\n"
+    = [ "+1 ~a_ge_1 +1 b_ge_1 >= 1 ;"; "+1 a_ge_1 +1 ~b_ge_1 >= 1 ;" ]);
+  check "bool_not: they cannot both be false, and cannot both be true"
+    (rows "constraint bool_not(a, b);\n"
+    = [ "+1 a_ge_1 +1 b_ge_1 >= 1 ;"; "+1 ~a_ge_1 +1 ~b_ge_1 >= 1 ;" ]);
+  (* An empty operand array is the identity of its connective, and compile.ml gets that
+     from the ordinary path rather than from an empty-array special case. *)
+  check "array_bool_or([], r): the forward clause degenerates to the unit ~r"
+    (rows "constraint array_bool_or([], c);\n" = [ "+1 ~c_ge_1 >= 1 ;" ]);
+  check "array_bool_and([], r): the backward clause degenerates to the unit r"
+    (rows "constraint array_bool_and([], c);\n" = [ "+1 c_ge_1 >= 1 ;" ]);
+  (* bool2int against an integer: the two halves of the equality, LE first. Pinned
+     because lib/core/prop/bool2int.ml's worked RUP checks assume that order. *)
+  (* x is declared 0..2, so its order encoding carries a consistency clause of its own
+     (x >= 2 -> x >= 1) and that row comes FIRST. It is pinned here rather than skipped
+     because every id in the proof counts from it: a row appearing or disappearing above
+     the model rows shifts every later citation, which is PROOF-FORMAT section 2's trap
+     in a different costume. `a` needs no such clause -- a var bool has exactly one
+     order literal (D-0007), which is why the all-Boolean pins above have none. *)
+  check "bool2int: x's consistency clause, then row LE (x - b <= 0), then row GE"
+    (compiled_rows
+       "var bool: a;\nvar 0..2: x;\nconstraint bool2int(a, x);\nsolve satisfy;\n"
+    = [
+        "+1 ~x_ge_2 +1 x_ge_1 >= 1 ;";
+        "+1 ~x_ge_1 +1 ~x_ge_2 +1 a_ge_1 >= 2 ;";
+        "+1 x_ge_1 +1 x_ge_2 +1 ~a_ge_1 >= 1 ;";
+      ])
+
+let test_bool_ground_rows () =
+  (* Constants fold, and the row stays an EXACT statement of the constraint rather than
+     a stronger one: each true constant literal weakens the right-hand side by one. A
+     tautology therefore posts a vacuous row and NO propagator -- compile.ml's header
+     calls that asymmetry load-bearing, because an instance over the remaining literals
+     would assert something the constraint does not say and would prune values that are
+     in solutions. *)
+  let t =
+    compile_src "var bool: a;\nconstraint bool_clause([a, true], []);\nsolve satisfy;\n"
+  in
+  (* `a \/ true`. The true constant weakens the right-hand side from 0 to... precisely
+     to the point where the row says nothing: `+1 a_ge_1 >= 0` is satisfied by every
+     assignment. That is the row being an EXACT statement of a tautology rather than a
+     stronger one -- the unit `+1 a_ge_1 >= 1` would be wrong, and is what a fold that
+     dropped the constant instead of counting it would produce. *)
+  check "bool_clause with a true constant: the row is vacuous, not the unit a"
+    (List.map Opb.constr_to_string (Encoding.constraints t.Compile.encoding)
+    = [ "+1 a_ge_1 >= 0 ;" ]);
+  check "bool_clause with a true constant: no propagator is posted"
+    (Engine.n_instances t.Compile.engine = 0);
+  let t =
+    compile_src "var bool: a;\nconstraint bool_clause([a, false], []);\nsolve satisfy;\n"
+  in
+  check "bool_clause with a false constant: the constant simply drops"
+    (List.map Opb.constr_to_string (Encoding.constraints t.Compile.encoding)
+    = [ "+1 a_ge_1 >= 1 ;" ]);
+  check "bool_clause with a false constant: the propagator is still posted"
+    (Engine.n_instances t.Compile.engine = 1);
+  (* `bool_clause([], [])` is the false clause: a legal, unsatisfiable model, posted with
+     no special case. The row is the empty sum >= 1. *)
+  let t = compile_src "var bool: a;\nconstraint bool_clause([], []);\nsolve satisfy;\n" in
+  check "bool_clause([], []): the row is the false empty sum"
+    (List.map Opb.constr_to_string (Encoding.constraints t.Compile.encoding)
+    = [ ">= 1 ;" ]);
+  (* A variable at both polarities is a tautology and posts a vacuous row -- but the
+     propagator IS posted, because no constant folded away: it simply never fires. *)
+  let t =
+    compile_src "var bool: a;\nconstraint bool_clause([a], [a]);\nsolve satisfy;\n"
+  in
+  check "bool_clause(a, ~a): a tautology over one variable posts a vacuous row"
+    (List.map Opb.constr_to_string (Encoding.constraints t.Compile.encoding)
+    = [ ">= 0 ;" ])
+
+let test_bool_type_rejections () =
+  (* A `var 0..1` is NOT a `var bool`: FlatZinc types them differently and the difference
+     is not cosmetic, since SPEC 2.2 prints a bool as false/true under its declared type
+     and the propagators spell every literal as b_ge_1. The diagnostic has to name the
+     variable and the way out. *)
+  expect_capped "bool_clause: a var 0..1 argument is refused, by name"
+    ~needles:[ "bool_clause"; "`n`"; "var bool"; "bool2int" ]
+    "var 0..1: n;\nconstraint bool_clause([n], []);\nsolve satisfy;\n";
+  expect_capped "array_bool_or: a non-Boolean operand is refused"
+    ~needles:[ "array_bool_or"; "`n`"; "var bool" ]
+    "var 0..1: n;\nvar bool: r;\nconstraint array_bool_or([n], r);\nsolve satisfy;\n";
+  expect_capped "array_bool_and: a non-Boolean reifier is refused"
+    ~needles:[ "array_bool_and"; "`n`"; "var bool" ]
+    "var bool: a;\nvar 0..1: n;\nconstraint array_bool_and([a], n);\nsolve satisfy;\n";
+  expect_capped "bool_eq: a non-Boolean argument is refused"
+    ~needles:[ "bool_eq"; "`n`"; "var bool" ]
+    "var bool: a;\nvar 0..1: n;\nconstraint bool_eq(a, n);\nsolve satisfy;\n";
+  expect_capped "bool_not: a non-Boolean argument is refused"
+    ~needles:[ "bool_not"; "`n`"; "var bool" ]
+    "var bool: a;\nvar 0..1: n;\nconstraint bool_not(a, n);\nsolve satisfy;\n";
+  expect_capped "bool2int: a non-Boolean FIRST argument is refused"
+    ~needles:[ "bool2int"; "`n`"; "var bool" ]
+    "var 0..1: n;\nvar 0..5: x;\nconstraint bool2int(n, x);\nsolve satisfy;\n";
+  expect_capped "bool_clause: a non-Boolean integer constant is refused"
+    ~needles:[ "bool_clause"; "Boolean" ]
+    "var bool: a;\nconstraint bool_clause([a, 2], []);\nsolve satisfy;\n";
+  (* And the other direction, so the type check cannot become a way to refuse anything
+     awkward: bool2int's SECOND argument is an ordinary integer and must be accepted,
+     wide domain and all. *)
+  expect_compiles "bool2int: a wide integer second argument still compiles"
+    "var bool: b;\nvar 0..1000: x;\nconstraint bool2int(b, x);\nsolve satisfy;\n"
+
+(* -------------------------------------------- the six builtins actually get posted *)
+
+let test_bool_instances_posted () =
+  (* compile.ml ACCEPTING a constraint and compile.ml POSTING it are different things,
+     and an ignored constraint still lets a model "solve". The models in test/models/
+     answer this by having answers that depend on the Boolean constraint; this asks the
+     same question of the instance count, where an off-by-one decomposition shows up
+     directly rather than through a search that happens to recover. *)
+  let n src = Engine.n_instances (compile_src src).Compile.engine in
+  let decl = "var bool: a;\nvar bool: b;\nvar bool: c;\n" in
+  check "bool_clause posts one instance"
+    (n (decl ^ "constraint bool_clause([a, b], [c]);\nsolve satisfy;\n") = 1);
+  check "array_bool_or posts one instance per clause (1 forward + 2 backward)"
+    (n (decl ^ "constraint array_bool_or([a, b], c);\nsolve satisfy;\n") = 3);
+  check "array_bool_and posts one instance per clause (2 forward + 1 backward)"
+    (n (decl ^ "constraint array_bool_and([a, b], c);\nsolve satisfy;\n") = 3);
+  check "bool_eq posts two instances, one per implication"
+    (n (decl ^ "constraint bool_eq(a, b);\nsolve satisfy;\n") = 2);
+  check "bool_not posts two instances"
+    (n (decl ^ "constraint bool_not(a, b);\nsolve satisfy;\n") = 2);
+  check "bool2int between two variables posts one instance"
+    (n "var bool: b;\nvar 0..5: x;\nconstraint bool2int(b, x);\nsolve satisfy;\n" = 1);
+  (* When either side is a constant there is nothing to channel and compile.ml routes to
+     the ordinary ground equality, which is two Linear instances. Stated as a check so
+     that routing cannot change silently. *)
+  check "bool2int against a constant integer routes to the ordinary equality"
+    (n "var bool: b;\nconstraint bool2int(b, 1);\nsolve satisfy;\n" = 2)
+
+(* ------------------------------- D-0030: no single .opb row refutes the UNSAT models *)
+
+(* The largest value a row's left-hand side can attain. Each pb variable is set once, so
+   its contribution is the better of "all its positive occurrences" and "all its negated
+   ones" -- which is why this cannot be a plain sum of positive coefficients: a row
+   mentioning both x and ~x would be over-counted, and over-counting is the direction
+   that would make this check pass when it should fail. *)
+let max_attainable_lhs (c : Opb.constr) =
+  let tbl = Hashtbl.create 16 in
+  List.iter
+    (fun (a, (l : Lit.t)) ->
+      let key = Lit.var_name l.Lit.v in
+      let p, n = try Hashtbl.find tbl key with Not_found -> (0, 0) in
+      if l.Lit.positive then Hashtbl.replace tbl key (p + a, n)
+      else Hashtbl.replace tbl key (p, n + a))
+    (Opb.terms c);
+  Hashtbl.fold (fun _ (p, n) acc -> acc + max (max p n) 0) tbl 0
+
+(* test/models/, located the way test_flatzinc.ml and test_output.ml locate it. Not
+   finding it is a FAILURE, never a skip: a check that silently does not run is the
+   failure mode this whole section exists for. *)
+let rec bool_find_up dir marker depth =
+  if depth <= 0 then None
+  else if Sys.file_exists (Filename.concat dir marker) then Some dir
+  else
+    let parent = Filename.dirname dir in
+    if String.equal parent dir then None else bool_find_up parent marker (depth - 1)
+
+let bool_models_dir =
+  let marker = Filename.concat "test" (Filename.concat "models" "bool_reif_unsat.fzn") in
+  match bool_find_up (Sys.getcwd ()) marker 12 with
+  | Some d -> Some (Filename.concat d (Filename.concat "test" "models"))
+  | None -> (
+      match bool_find_up (Filename.dirname Sys.executable_name) marker 12 with
+      | Some d -> Some (Filename.concat d (Filename.concat "test" "models"))
+      | None -> None)
+
+(* D-0030's finding, as a check. `root_unsat`'s .opb carries
+   `+1 ~x_ge_2 +1 ~x_ge_3 >= 3` -- two coefficient-1 literals asked to sum to 3 -- so the
+   model is refuted by a single row and a proof containing NO derivation at all verifies
+   against it. An UNSAT instance with that property cannot test whether a derivation was
+   load-bearing, which is why M1-T38 exists.
+
+   Checked two ways, because the first is arithmetic on our own reading of the row and
+   the second asks the checker:
+
+     1. every row's maximum attainable left-hand side reaches its right-hand side;
+     2. veripb REJECTS a proof that derives nothing and concludes `UNSAT : @ci`, for
+        every model row id i in turn. If any one were accepted, that row alone refutes
+        the model and everything above it is decoration. *)
+let test_no_single_row_refutes name model =
+  match bool_models_dir with
+  | None ->
+      incr failures;
+      Printf.printf
+        "FAIL %s: test/models was not found, so the D-0030 single-row check did NOT run. \
+         Do not treat this as a pass.\n"
+        name
+  | Some dir_models -> (
+      let t = compile_src (read_file (Filename.concat dir_models model)) in
+      let e = t.Compile.encoding in
+      let rows = Encoding.constraints e in
+      let bad =
+        List.filter
+          (fun c -> Opb.relation c = Opb.Ge && max_attainable_lhs c < Opb.rhs c)
+          rows
+      in
+      check
+        (Printf.sprintf "%s: no .opb row is infeasible on its own (D-0030)" name)
+        (bad = []);
+      List.iter
+        (fun c -> Printf.printf "       infeasible alone: %s\n" (Opb.constr_to_string c))
+        bad;
+      (* The same claim, put to the checker rather than to our arithmetic. *)
+      match veripb_path () with
+      | None ->
+          incr failures;
+          Printf.printf
+            "FAIL %s: veripb not found -- the D-0030 single-row check did NOT run. Do \
+             not treat this as a pass.\n"
+            name
+      | Some veripb -> (
+          let dir = Filename.temp_file "baguette_d0030" "" in
+          Sys.remove dir;
+          Sys.mkdir dir 0o700;
+          let opb = Filename.concat dir "m.opb" in
+          let oc = open_out opb in
+          Encoding.write_opb ~comments:[ name ] e oc;
+          close_out oc;
+          let n = Opb.n_checker_constraints rows in
+          let accepted = ref [] in
+          for i = 1 to n do
+            let pbp = Filename.concat dir "empty.pbp" in
+            let oc = open_out pbp in
+            (* A proof that derives NOTHING. If the checker accepts it, row i alone is
+               contradicting -- exactly root_unsat's defect. *)
+            Printf.fprintf oc
+              "pseudo-Boolean proof version 3.0\n\
+               f %d ;\n\
+               output NONE ;\n\
+               conclusion UNSAT : @c%d ;\n\
+               end pseudo-Boolean proof ;\n"
+              n i;
+            close_out oc;
+            let log = Filename.concat dir "log" in
+            let rc =
+              Sys.command
+                (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
+                   (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
+            in
+            if rc = 0 then accepted := i :: !accepted;
+            (try Sys.remove pbp with _ -> ());
+            try Sys.remove log with _ -> ()
+          done;
+          check
+            (Printf.sprintf
+               "%s: veripb rejects a derivation-free proof against each of the %d model \
+                rows (D-0030)"
+               name n)
+            (!accepted = []);
+          if !accepted <> [] then
+            Printf.printf
+              "       rows accepted as contradicting on their own: %s -- this model is \
+               as hollow as root_unsat\n"
+              (String.concat ", "
+                 (List.map (fun i -> Printf.sprintf "@c%d" i) (List.rev !accepted)));
+          (try Sys.remove opb with _ -> ());
+          try Sys.rmdir dir with _ -> ()))
+
+(* The control for that check, without which it is not evidence. D-0030 registered
+   root_unsat as [Known_slack] rather than weakening it away; this is the local mirror
+   of that decision -- the procedure is run against the row that is known to be bad and
+   must find it. If the check ever stops being able to see the defect, the two checks
+   above would go on passing and mean nothing, which is the failure mode itself. *)
+let test_single_row_check_can_fire () =
+  (* root_unsat's second row, verbatim from D-0030. *)
+  let c = Opb.ge [ (1, Lit.le "x" 1); (1, Lit.le "x" 2) ] 3 in
+  check "D-0030 control: the max-attainable check DOES fire on root_unsat's bad row"
+    (max_attainable_lhs c < Opb.rhs c);
+  let ok = Opb.clause [ Lit.bool_true "a"; Lit.bool_false "b" ] in
+  check "D-0030 control: it does not fire on an ordinary clause"
+    (max_attainable_lhs ok >= Opb.rhs ok);
+  (* The over-counting trap: a row mentioning one variable at both polarities can only
+     reach 1, not 2, and a plain sum of positive coefficients would say 2 and call this
+     row satisfiable. *)
+  let both = Opb.ge [ (1, Lit.bool_true "a"); (1, Lit.bool_false "a") ] 2 in
+  check "D-0030 control: a variable at both polarities is counted once, not twice"
+    (max_attainable_lhs both = 1 && max_attainable_lhs both < Opb.rhs both)
+
 (* ------------------------------------------------------------------------ main *)
 
 let () =
@@ -2135,6 +3208,46 @@ let () =
   test_opb_row_wraps_identically ();
   test_propagators_raise_on_overflow ();
   test_compile_cap ();
+
+  (* ------------------------------------------------- M2-T1 / M2-T2: the Booleans *)
+  test_bool_clause_consistency ();
+  test_bool_clause_checking ();
+  test_bool_clause_idempotence ();
+  test_bool_clause_unit_push ();
+  test_bool_clause_conflict_reason ();
+  test_bool_clause_empty_conflict ();
+  test_bool_clause_rejects_non_bool ();
+  test_bool2int_directions ();
+  test_bool2int_hole ();
+  test_bool2int_soundness ();
+  test_bool2int_checking ();
+  test_bool2int_idempotence ();
+  test_bool2int_conflicts ();
+  test_bool2int_rejects_non_bool ();
+  test_bool_rows ();
+  test_bool_ground_rows ();
+  test_bool_type_rejections ();
+  test_bool_instances_posted ();
+  run_veripb ~name:"bool_clause: the unit push's reason, checked end to end"
+    ~build:build_bool_clause_unit;
+  run_veripb ~name:"bool_clause: the empty clause refutes, closed the I-X7 way"
+    ~build:build_bool_clause_conflict;
+  run_veripb_rejects ~name:"bool_clause: a rup claiming the wrong polarity"
+    ~build:build_bool_clause_wrong;
+  run_veripb_rejects
+    ~name:"bool_clause: a rup that has dropped one of the clause's literals"
+    ~build:build_bool_clause_weakened;
+  run_veripb ~name:"bool2int: b -> x, lower bound" ~build:build_bool2int_b_to_x_lo;
+  run_veripb ~name:"bool2int: b -> x, upper bound" ~build:build_bool2int_b_to_x_hi;
+  run_veripb ~name:"bool2int: x -> b, lower bound" ~build:build_bool2int_x_to_b_lo;
+  run_veripb ~name:"bool2int: x -> b, upper bound" ~build:build_bool2int_x_to_b_hi;
+  run_veripb_rejects ~name:"bool2int: a rup claiming the wrong polarity"
+    ~build:build_bool2int_wrong;
+  run_veripb_rejects ~name:"bool2int: a rup that claims its bound with no facts at all"
+    ~build:build_bool2int_factless;
+  test_single_row_check_can_fire ();
+  test_no_single_row_refutes "bool_reif_unsat" "bool_reif_unsat.fzn";
+  test_no_single_row_refutes "bool_channel_unsat" "bool_channel_unsat.fzn";
   if !failures > 0 then (
     Printf.printf "\n%d FAILURE(S)\n" !failures;
     exit 1)

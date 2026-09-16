@@ -1,0 +1,32 @@
+% bool2int, UNSATISFIABLE: the channelling itself is what refutes the model, so the
+% emitted proof has to carry bool2int's own reasons rather than only a clause's.
+%
+% b is a `var bool', so it is the order encoding on [0, 1] (D-0007) and x = b confines
+% x to [0, 1]. The linear row says x >= 2. Nothing else is needed, and the refutation
+% therefore runs entirely through the b -> x direction of lib/core/prop/bool2int.ml:
+% the upper-bound push hi(x) := hi(b) = 1 meets the lower bound the linear row
+% established, and bool2int reports the conflict.
+%
+% This is a ROOT refutation -- no decision is ever made -- which is deliberately a
+% different proof shape from bool_reif_unsat.fzn's two-level search, and it is the
+% shape that exercises D-0021's "every pruning, root prunings included".
+%
+% No single .opb row refutes this model, which is the property D-0030 says to check
+% rather than assume:
+%
+%   x - b <= 0   over the order encoding is a sum of coefficient-1 literals with a
+%   b - x <= 0   right-hand side no larger than the number of literals in it, and
+%   -x <= -2     the same holds of the linear row and of every order-encoding
+%                consistency clause.
+%
+% test/unit/test_prop.ml's "bool_channel_unsat: no single .opb row refutes the model"
+% checks it mechanically, the same way it does for bool_reif_unsat.fzn: maximum
+% attainable left-hand side per row, plus veripb REJECTING a derivation-free proof that
+% concludes `UNSAT : @ci' for each row id i in turn.
+%
+% Ground truth: x = b and b in {0, 1} give x <= 1; x >= 2 is then impossible.
+var bool: b :: output_var;
+var 0..3: x :: output_var;
+constraint bool2int(b, x);
+constraint int_lin_le([-1], [x], -2);
+solve satisfy;

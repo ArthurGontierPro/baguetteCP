@@ -135,6 +135,8 @@ module Propagator = Baguette_core.Propagator
 module Linear = Baguette_core.Linear
 module Lin_eq = Baguette_core.Lin_eq
 module Ne = Baguette_core.Ne
+module Bool_clause = Baguette_core.Bool_clause
+module Bool2int = Baguette_core.Bool2int
 module Engine = Baguette_core.Engine
 module Encoding = Baguette_proof.Encoding
 module Lit = Baguette_proof.Lit
@@ -238,6 +240,33 @@ let reject_search pos ~annotation =
      present). Remove the annotation, or write `int_search(..., first_fail, \
      indomain_min, complete)`."
     annotation
+
+(* M2-T1 / M2-T2. The Boolean row's builtins take `var bool` arguments, and a `var bool`
+   is the one domain [Encoding.declare_bool] gives the order encoding on [0, 1]
+   (docs/PROOF-FORMAT.md section 3, "Booleans"). A `var 0..1` is *not* accepted in its
+   place: FlatZinc types a Boolean and a zero-one integer differently, and the difference
+   is not cosmetic here -- lib/core/prop/bool_clause.ml spells every literal as
+   [Lit.bool_true] / [Lit.bool_false], and SPEC 2.2 prints a `bool` output as
+   `false`/`true` under its *declared* type. Accepting an int would make the propagator's
+   literals and the declaration disagree about what the variable is. *)
+
+let reject_non_bool_var pos ~builtin ~what (v : Model.var) =
+  Error.failf pos
+    "builtin `%s`: %s must be a `var bool` or a Boolean constant, but `%s` is declared \
+     over %s. A `var 0..1` is not accepted in its place: docs/PROOF-FORMAT.md section 3 \
+     gives a `var bool` exactly one Boolean, `%s_ge_1`, and SPEC 2.2 prints it as \
+     false/true under its declared type, so an integer variable here would be encoded \
+     and printed as something the model did not declare. Declare it `var bool`, or use \
+     `bool2int` to channel between the two."
+    builtin what v.Model.v_name
+    (Model.string_of_domain v.Model.v_dom)
+    v.Model.v_name
+
+let reject_non_bool_const pos ~builtin ~what n =
+  Error.failf pos
+    "builtin `%s`: %s must be a Boolean, but the constant %d was given. `true` and \
+     `false` fold to 1 and 0; no other value is a Boolean."
+    builtin what n
 
 (* roadmap M1-T23. The two arithmetic rejections. [Checked.limit] and the 9M + 6
    envelope it is chosen against are derived in lib/core/checked.ml's header; the
@@ -355,6 +384,39 @@ let pack_lin_ne (p : Ne.t) : pending =
 let pack_ne (p : Ne.t) : pending =
  fun id -> Propagator.pack ~id (module Ne.Int_ne : Propagator.S with type t = Ne.t) p
 
+(* The five packings of one clause propagator (M2-T1). [Bool_clause] and its four
+   submodules share [t], [make], [vars] and [propagate] outright and differ only in the
+   [name] the packed instance reports, exactly as [Ne] and [Ne.Int_ne] do: an instance
+   says which builtin the model actually wrote, which is what a trace line or a failure
+   message has to say to be worth reading. A clause decomposition means several
+   instances carry the same name, which is correct -- they came from one builtin. *)
+let pack_clause_as (type a) (module P : Propagator.S with type t = a) (p : a) : pending =
+ fun id -> Propagator.pack ~id (module P) p
+
+let pack_bool_clause (p : Bool_clause.t) : pending =
+  pack_clause_as (module Bool_clause : Propagator.S with type t = Bool_clause.t) p
+
+let pack_array_bool_or (p : Bool_clause.t) : pending =
+  pack_clause_as
+    (module Bool_clause.Array_bool_or : Propagator.S with type t = Bool_clause.t)
+    p
+
+let pack_array_bool_and (p : Bool_clause.t) : pending =
+  pack_clause_as
+    (module Bool_clause.Array_bool_and : Propagator.S with type t = Bool_clause.t)
+    p
+
+let pack_bool_eq (p : Bool_clause.t) : pending =
+  pack_clause_as (module Bool_clause.Bool_eq : Propagator.S with type t = Bool_clause.t) p
+
+let pack_bool_not (p : Bool_clause.t) : pending =
+  pack_clause_as
+    (module Bool_clause.Bool_not : Propagator.S with type t = Bool_clause.t)
+    p
+
+let pack_bool2int (p : Bool2int.t) : pending =
+ fun id -> Propagator.pack ~id (module Bool2int : Propagator.S with type t = Bool2int.t) p
+
 let compile (m : Model.t) : t =
   (match m.Model.objective with
   | Model.Satisfy -> ()
@@ -458,6 +520,172 @@ let compile (m : Model.t) : t =
     [ pack (Ne.make store (prop_terms nterms) rhs) ]
   in
 
+  (* ------------------------------------------------------------- M2, Booleans *)
+
+  (* An operand a Boolean builtin requires to be Boolean. Checked *here*, not in
+     lib/flatzinc/builder.ml, because this is the first place the variable declarations
+     are in hand: the builder knows arity and shape, this knows types. Returned
+     unchanged so a caller can write [bool_operand ... op] where it would have written
+     [op] and cannot forget the check. *)
+  let bool_operand pos ~builtin ~what (op : Model.operand) : Model.operand =
+    (match op with
+    | Model.Const n -> if n <> 0 && n <> 1 then reject_non_bool_const pos ~builtin ~what n
+    | Model.Var i -> (
+        if i < 0 || i >= Model.nvars m then
+          Error.failf pos "internal: constraint mentions variable index %d, out of range"
+            i
+        else
+          match (Model.var m i).Model.v_dom with
+          | Model.Dbool -> ()
+          | _ -> reject_non_bool_var pos ~builtin ~what (Model.var m i)));
+    op
+  in
+
+  (* One clause -- a list of (operand, polarity) pairs -- as one .opb row and (unless it
+     is already satisfied) one propagator instance.
+
+     The row. A clause over Boolean variables is a linear inequality over the same
+     variables, so it goes through [Encoding.add_int_lin_le] like every other row rather
+     than through a second, clause-shaped door:
+
+         x_1 \/ ... \/ x_p \/ ~y_1 \/ ... \/ ~y_q
+       is  sum_i x_i + sum_j (1 - y_j) >= 1
+       is  -sum_i x_i + sum_j y_j <= q - 1
+
+     and the order-encoding expansion of that, over variables declared on [0, 1], is
+     literally the clause: `+1 x_1_ge_1 ... +1 ~y_1_ge_1 ... >= 1`. That is what makes
+     lib/core/prop/bool_clause.ml's [rup] close in a single unit propagation, and it is
+     why nothing here needs [Opb.clause]: one door into the .opb means one expansion to
+     keep right.
+
+     Constants. [k] counts the *constant* literals that are true. Each of them weakens
+     the row by one, which is the same `k` appearing in the right-hand side above with
+     the constant terms folded out, so the row stays an exact statement of the
+     constraint rather than a stronger one.
+
+     When k >= 1 the clause is a tautology and **no propagator is posted**. This is the
+     one place the row and the instance deliberately part company, and the asymmetry is
+     load-bearing rather than an optimisation: a [Bool_clause.t] over the *remaining*
+     variable literals would assert that one of them is true, which the constraint does
+     not say, and would prune values that are in solutions. The row is still posted,
+     because `conclusion SAT` re-checks the assignment against the .opb and the .opb
+     should be the model; a vacuous row costs one line and says something true.
+
+     When k = 0 and there are no variable literals either, the row is the empty sum
+     `>= 1 ;` -- false -- and the propagator is [Bool_clause.make]'s empty clause, which
+     conflicts immediately with [Explanation.clause []]. That is the ground-constraint
+     argument above, reached from the Boolean side; `bool_clause([], [])` is a legal
+     unsatisfiable model and needs no special case. *)
+  let post_clause pos ~builtin ~what ~pack (lits : (Model.operand * bool) list) =
+    let k = ref 0 and vlits_rev = ref [] in
+    List.iter
+      (fun (op, positive) ->
+        match bool_operand pos ~builtin ~what op with
+        | Model.Const n -> if n = 1 = positive then incr k
+        | Model.Var i -> vlits_rev := (i, positive) :: !vlits_rev)
+      lits;
+    let vlits = List.rev !vlits_rev in
+    let q = List.length (List.filter (fun (_, positive) -> not positive) vlits) in
+    let nterms =
+      normalise_terms
+        (List.map (fun (i, positive) -> ((if positive then -1 else 1), i)) vlits)
+    in
+    let rhs = !k + q - 1 in
+    check_row pos ~what:"this Boolean clause" nterms rhs;
+    ignore (Encoding.add_int_lin_le encoding (opb_terms pos nterms) rhs : int);
+    if !k > 0 then []
+    else
+      [
+        pack
+          (Bool_clause.make store
+             (List.map (fun (i, positive) -> (Var.of_int i, positive)) vlits));
+      ]
+  in
+
+  (* The four clause decompositions. Each posts its clauses in a fixed order, through
+     [let] bindings rather than by relying on the evaluation order of [@] or of a
+     constructor's arguments, which OCaml leaves unspecified: every [post_clause] call
+     appends a row to the .opb, so the order they run in is the order of the ids the
+     proof cites. Getting that wrong would not fail to compile and would not fail a
+     unit test -- it would shift every later id.
+
+     One instance per clause is D-0027 point 3's default and loses nothing here: unit
+     propagation over these clauses is domain consistent for the whole reified
+     constraint, which a fused propagator could not improve on. *)
+  let clause ~builtin ~pack pos lits =
+    post_clause pos ~builtin ~what:"every argument" ~pack lits
+  in
+
+  (* r <-> (x_1 \/ ... \/ x_n):  (~r \/ x_1 \/ ... \/ x_n)  and  (r \/ ~x_i) for each i.
+     An empty [xs] leaves the unit (~r), which forces r false -- the identity of the
+     connective, with no empty-array case to write. *)
+  let post_array_bool_or pos xs r =
+    let builtin = "array_bool_or" and pack = pack_array_bool_or in
+    let forward =
+      clause ~builtin ~pack pos ((r, false) :: List.map (fun x -> (x, true)) xs)
+    in
+    let backward =
+      List.concat_map (fun x -> clause ~builtin ~pack pos [ (r, true); (x, false) ]) xs
+    in
+    forward @ backward
+  in
+
+  (* r <-> (x_1 /\ ... /\ x_n):  (~r \/ x_i) for each i  and  (r \/ ~x_1 \/ ... \/ ~x_n).
+     An empty [xs] leaves the unit (r), which forces r true. *)
+  let post_array_bool_and pos xs r =
+    let builtin = "array_bool_and" and pack = pack_array_bool_and in
+    let forward =
+      List.concat_map (fun x -> clause ~builtin ~pack pos [ (r, false); (x, true) ]) xs
+    in
+    let backward =
+      clause ~builtin ~pack pos ((r, true) :: List.map (fun x -> (x, false)) xs)
+    in
+    forward @ backward
+  in
+
+  let post_bool_eq pos a b =
+    let builtin = "bool_eq" and pack = pack_bool_eq in
+    let fwd = clause ~builtin ~pack pos [ (a, false); (b, true) ] in
+    let bwd = clause ~builtin ~pack pos [ (a, true); (b, false) ] in
+    fwd @ bwd
+  in
+
+  let post_bool_not pos a b =
+    let builtin = "bool_not" and pack = pack_bool_not in
+    let fwd = clause ~builtin ~pack pos [ (a, true); (b, true) ] in
+    let bwd = clause ~builtin ~pack pos [ (a, false); (b, false) ] in
+    fwd @ bwd
+  in
+
+  (* bool2int(b, x) is x = b, so it posts the two rows an equality posts -- row LE
+     `x - b <= 0` first, row GE `b - x <= 0` second, which is the order
+     lib/core/prop/bool2int.ml's header names them in and the order its worked RUP
+     checks assume.
+
+     Two instances or one. When both operands are variables the instance is
+     [Bool2int.t], whose reasons are O(1) clauses rather than D-0013's weaken-divide-add
+     [pol]; D-0028 measured what the [pol] route costs and `bool2int` is precisely where
+     a wide integer meets a Boolean, so the [Weaken] chain would be one literal per value
+     of the integer's *declared* width, per pruning, for a constraint that immediately
+     confines it to {0, 1}. When either side is a constant there is nothing to channel:
+     the constraint is an ordinary ground equality and [post_eq] already states it
+     exactly, with two [Linear] instances over a term list of length at most one. Writing
+     a Boolean special case for that would be a second implementation of `x = c`. *)
+  let post_bool2int pos b x =
+    let b = bool_operand pos ~builtin:"bool2int" ~what:"the first argument" b in
+    match (b, x) with
+    | Model.Var bi, Model.Var xi ->
+        let nterms = normalise_terms [ (1, xi); (-1, bi) ] in
+        check_row pos ~what:"this bool2int channelling" nterms 0;
+        ignore (Encoding.add_int_lin_le encoding (opb_terms pos nterms) 0 : int);
+        ignore
+          (Encoding.add_int_lin_le encoding (opb_terms pos (negate_terms nterms)) 0 : int);
+        [ pack_bool2int (Bool2int.make store ~b:(Var.of_int bi) ~x:(Var.of_int xi)) ]
+    | _ ->
+        let terms, rhs = difference_terms x b ~offset:0 in
+        post_eq pos (normalise_terms terms) rhs
+  in
+
   (* A ground constraint -- one whose term list is empty once constants are folded, such
      as `int_le(1, 2)` or an int_lin_le over an all-constant array -- is posted like any
      other, and deliberately so.
@@ -520,6 +748,14 @@ let compile (m : Model.t) : t =
           | Model.Int_ne (a, b) ->
               let terms, rhs = difference_terms a b ~offset:0 in
               post_ne pos (normalise_terms terms) rhs ~pack:pack_ne
+          | Model.Bool_clause (ps, ns) ->
+              clause ~builtin:"bool_clause" ~pack:pack_bool_clause pos
+                (List.map (fun o -> (o, true)) ps @ List.map (fun o -> (o, false)) ns)
+          | Model.Array_bool_or (xs, r) -> post_array_bool_or pos xs r
+          | Model.Array_bool_and (xs, r) -> post_array_bool_and pos xs r
+          | Model.Bool2int (b, x) -> post_bool2int pos b x
+          | Model.Bool_eq (a, b) -> post_bool_eq pos a b
+          | Model.Bool_not (a, b) -> post_bool_not pos a b
         with Checked.Overflow msg ->
           reject_row pos
             ~what:

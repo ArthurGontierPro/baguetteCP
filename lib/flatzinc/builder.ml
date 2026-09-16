@@ -11,20 +11,29 @@
    lands, move its builtin from [planned] to [implemented] in the same commit — that is
    the only place the front end's idea of "supported" is written down. *)
 
-(* SPEC 2.1, milestone M1. *)
+(* SPEC 2.1, milestones M1 and M2. *)
 let implemented =
-  [ "int_lin_le"; "int_lin_eq"; "int_lin_ne"; "int_le"; "int_lt"; "int_eq"; "int_ne" ]
+  [
+    "int_lin_le";
+    "int_lin_eq";
+    "int_lin_ne";
+    "int_le";
+    "int_lt";
+    "int_eq";
+    "int_ne";
+    (* M2, the Boolean row (M2-T1 / M2-T2). *)
+    "bool_clause";
+    "array_bool_or";
+    "array_bool_and";
+    "bool2int";
+    "bool_eq";
+    "bool_not";
+  ]
 
 (* The rest of the SPEC 2.1 table, with the milestone that will bring it in. Listing
    these separately lets the error say "not yet" rather than "never". *)
 let planned =
   [
-    ("bool_clause", "M2");
-    ("bool2int", "M2");
-    ("bool_eq", "M2");
-    ("bool_not", "M2");
-    ("array_bool_or", "M2");
-    ("array_bool_and", "M2");
     ("int_lin_le_reif", "M3");
     ("int_eq_reif", "M3");
     ("int_le_reif", "M3");
@@ -388,6 +397,23 @@ let build_constraint env (c : Ast.constraint_item) =
         make (List.rev terms) rhs
     | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id
   in
+  (* M2: two arrays (`bool_clause`), and an array followed by a scalar (the two
+     reified array forms). Nothing here decides whether an operand is Boolean --
+     lib/flatzinc/compile.ml does, where the variable declarations are in hand and the
+     diagnostic can say which variable and what it was declared as. This function's job
+     is arity and shape, exactly as it is for the integer builtins above. *)
+  let two_arrays make =
+    arity 2;
+    match c.Ast.c_args with
+    | [ a; b ] -> make (operands env pos a) (operands env pos b)
+    | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id
+  in
+  let array_scalar make =
+    arity 2;
+    match c.Ast.c_args with
+    | [ a; r ] -> make (operands env pos a) (operand env pos r)
+    | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id
+  in
   let k =
     match id with
     | "int_lin_le" -> lin (fun ts r -> Model.Int_lin_le (ts, r))
@@ -397,6 +423,12 @@ let build_constraint env (c : Ast.constraint_item) =
     | "int_lt" -> cmp (fun a b -> Model.Int_lt (a, b))
     | "int_eq" -> cmp (fun a b -> Model.Int_eq (a, b))
     | "int_ne" -> cmp (fun a b -> Model.Int_ne (a, b))
+    | "bool_clause" -> two_arrays (fun ps ns -> Model.Bool_clause (ps, ns))
+    | "array_bool_or" -> array_scalar (fun xs r -> Model.Array_bool_or (xs, r))
+    | "array_bool_and" -> array_scalar (fun xs r -> Model.Array_bool_and (xs, r))
+    | "bool2int" -> cmp (fun b x -> Model.Bool2int (b, x))
+    | "bool_eq" -> cmp (fun a b -> Model.Bool_eq (a, b))
+    | "bool_not" -> cmp (fun a b -> Model.Bool_not (a, b))
     | other -> unsupported_builtin pos other
   in
   { Model.k; Model.c_pos = pos }

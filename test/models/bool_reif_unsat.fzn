@@ -1,0 +1,60 @@
+% UNSATISFIABLE, and deliberately NOT refutable by a single .opb row.
+%
+% ---------------------------------------------------------------------------
+% Why that last clause is the point of this file (D-0030)
+% ---------------------------------------------------------------------------
+%
+% D-0030 records that `test/models/root_unsat' -- the instance the mutation harness
+% used to test whether a derivation was load-bearing -- could not test it at all: one
+% of its .opb rows, `+1 ~x_ge_2 +1 ~x_ge_3 >= 3', asks two coefficient-1 literals to
+% sum to 3 and is therefore infeasible ON ITS OWN. A proof containing no derivation
+% whatsoever verifies against such a model, so every step above that row is decoration.
+% That was the ninth instance of this project's signature failure mode.
+%
+% Every row this model emits is a CLAUSE: a sum of coefficient-1 literals with a
+% right-hand side of 1. The largest value any such row's left-hand side can take is the
+% number of distinct variables it mentions, which is at least 1 in every row here, so
+% no row is infeasible by itself and no row can refute the model alone. That is checked
+% mechanically rather than asserted -- test/unit/test_prop.ml's
+% "bool_reif_unsat: no single .opb row refutes the model" parses the emitted .opb,
+% computes each row's maximum attainable left-hand side, and additionally asks veripb
+% to REJECT a hand-built proof that derives nothing and concludes `UNSAT : @ci' for
+% every row id i in turn. If any one of those were accepted, this model would be as
+% hollow as root_unsat is and the check says so by name.
+%
+% ---------------------------------------------------------------------------
+% The model
+% ---------------------------------------------------------------------------
+%
+%   c <-> (a \/ b)      array_bool_or
+%   d <-> (a /\ b)      array_bool_and
+%   c  =  d             bool_eq
+%   a \/ b              bool_clause
+%   ~a \/ ~b            bool_clause
+%
+% c = d says "or equals and", which over two Booleans says a = b. `a \/ b' then forces
+% both true and `~a \/ ~b' forbids exactly that. Unsatisfiable, by hand, with no
+% reference to the solver.
+%
+% The refutation needs a real search, which is what makes the proof carry Boolean
+% derivations at two decision levels rather than one root conflict:
+%
+%   decide a = false -> b true (a \/ b) -> c true (c \/ ~b) -> d true (bool_eq)
+%                    -> array_bool_and's (~d \/ a) is violated.  CONFLICT, level 1
+%   so     a = true  -> c true (c \/ ~a) -> d true (bool_eq) -> b true (~d \/ b)
+%                    -> `~a \/ ~b' is violated.                 CONFLICT, level 1
+%   both branches closed -> the empty clause at level 0 -> UNSAT
+%
+% Four of the six Boolean builtins appear (bool_clause, array_bool_or, array_bool_and,
+% bool_eq) and each contributes at least one reason to the emitted proof; bool_not and
+% bool2int are covered by bool_not_sat.fzn and bool_channel_unsat.fzn.
+var bool: a :: output_var;
+var bool: b :: output_var;
+var bool: c :: output_var;
+var bool: d :: output_var;
+constraint array_bool_or([a, b], c);
+constraint array_bool_and([a, b], d);
+constraint bool_eq(c, d);
+constraint bool_clause([a, b], []);
+constraint bool_clause([], [a, b]);
+solve satisfy;
