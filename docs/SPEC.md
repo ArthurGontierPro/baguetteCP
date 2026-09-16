@@ -75,6 +75,34 @@ that exceeding it is a refusal rather than an answer. This limit is about **over
 about proof size; the separate question of a *width* cap is open and is not decided here
 (see D-0028).
 
+**Integer division, modulo and absolute value** *(normative)*. `int_div(x, y, q)` and
+`int_mod(x, y, r)` are **relations**, not functions, and this specification fixes two
+things about them that are easy to get wrong in opposite directions.
+
+*Rounding.* `int_div` truncates **toward zero**, and `int_mod`'s remainder takes the sign
+of the **dividend**. So `int_div(-7, 2, q)` has the single solution `q = -3`, not `-4`, and
+`int_mod(-7, 2, r)` has `r = -1`, not `1`. The identity `x = y * q + r` with `|r| < |y|`
+holds for every solution. This matches MiniZinc's `div`/`mod` and is not negotiable by an
+implementation, because it decides which assignments are answers.
+
+*Division by zero is relational, not an error.* A model containing `int_div(x, y, q)`
+where `y`'s domain includes 0 MUST NOT be rejected, and MUST NOT abort when the search
+reaches `y = 0`. The value 0 simply has **no support** in the divisor: no triple
+`(x, 0, q)` satisfies the relation, so `y = 0` is pruned like any other unsupported value,
+with a justification like any other pruning. A model whose only solutions would require
+division by zero is therefore UNSAT, and MUST be reported as UNSAT with a proof — not as
+an error. The same holds for `int_mod`.
+
+*A bound is not the relation.* The rounding above says which triples are solutions. It does
+**not** say how to round when computing a *bound*. Bounds round **outward** — floor for a
+lower bound, ceiling for an upper one — whatever the relation does, because a bound must not
+exclude a supported value. These two roundings disagree on negative operands, and an
+implementation that uses the relation's rounding to compute a bound prunes values that have
+support. See **D-0033**.
+
+`int_abs(x, z)` is total and needs no such rule, but note that `|min_int|` is not
+representable; it falls under the arithmetic limit above.
+
 ### 2.2 Output format
 
 Solutions are printed on stdout in the standard FlatZinc output format: the variables in

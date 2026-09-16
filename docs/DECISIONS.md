@@ -1855,3 +1855,64 @@ Known and deliberately not fixed here: `test_prop.ml`'s **integer** veripb build
 and the `int_ne` builders) have the same construction. Whether it actually weakens them
 depends on each row's shape and **has not been measured**; a blind edit would be a guess.
 That is M1-T42.
+
+## D-0033  Division rounds toward zero as a relation and outward as a bound; dividing by zero is unsatisfiable, not an error
+
+**Status**: accepted, 2026-09-16. **Decides**: SPEC §2.1 "Integer division, modulo and
+absolute value". **Unblocks**: M4-T4b, which the roadmap gated on exactly these two
+additions. **Context**: M4-T4a (`lib/core/interval.ml`) is on master and already carries a
+header warning about the first half of this.
+
+### The two questions
+
+M4-T4b cannot start without answers to these, because both decide which assignments are
+answers, and an implementation that guesses differently is wrong rather than merely
+different.
+
+**1. Which way does `int_div` round?** Toward zero, with the remainder taking the
+dividend's sign. `-7 div 2 = -3`. This is MiniZinc's choice and GCS's, and the cost of
+disagreeing with it is that our answers to a standard FlatZinc file differ from every
+other solver's, silently.
+
+**2. What happens when the divisor can be zero?** Nothing special: it is unsatisfiable,
+not an error. The value 0 has no support in the divisor's domain, so it is pruned with a
+justification like any other value, and a model whose only solutions need it is UNSAT with
+a proof.
+
+The alternative — rejecting the model, or aborting the search on `y = 0` — is worse than
+it looks. It is not a safety measure; it is a refusal to answer a question that has a
+perfectly good answer, and it converts a provable UNSAT into an unproved error exit. The
+whole point of this solver is that "no solutions" is a claim we can *prove*. An error exit
+proves nothing, and a checker cannot audit it.
+
+### The trap this decision exists to prevent
+
+These two roundings are different, they disagree only on negative operands, and in our
+codebase they will live a few functions apart:
+
+- The **relation** truncates toward zero. It answers "is `(x, y, q)` a solution?"
+- A **bound** rounds outward — floor below, ceiling above. It answers "what is the widest
+  range this constraint permits?"
+
+`Interval.div_floor` and `Interval.div_ceil` are the second kind and are *not* the first.
+Using the relation's rounding to compute a bound prunes values that have support: with
+`x` in `1..10` and `2x <= -3`, the largest admissible `x` is `floor(-3/2) = -2`, while
+truncation answers `-1` and silently drops a supported value.
+
+This is a pruning that cannot justify itself — the `.opb` row permits what the propagator
+removed — so it is the shape of bug that this project treats as a soundness bug rather
+than a precision bug, even though "it only rounds the wrong way" sounds cosmetic.
+
+Note the asymmetry with D-0029. There, propagator and `.opb` wrapped *identically*, so the
+checker agreed with a wrong answer. Here they would disagree, so the checker would catch
+it — which makes this the *less* dangerous of the two failures, and the reason it is
+recorded as a trap to be tested for rather than as an open soundness gap. M4-T4b must
+include a test that watches the wrong rounding produce a rejected proof, not merely a test
+that the right rounding produces an accepted one.
+
+### What this does not decide
+
+Whether `quotient_filter` should be made exact. M4-T4a measured it as inexact in 40 of
+4095 small cases (~1%), inherited from JaCoP via GCS. Tightening it is a different and
+larger algorithm; M4-T4b decides whether it wants one, and the suite prints the gap so
+that the decision is made against a number rather than an impression.
