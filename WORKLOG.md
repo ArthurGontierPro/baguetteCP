@@ -10,13 +10,12 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
-**Five sessions are running.** Round dispatched 2026-09-16 by the orchestrator, one
+**Four sessions are running.** Round dispatched 2026-09-16 by the orchestrator, one
 git worktree each (`.claude/worktrees/<tag>`), so no two share `_build`'s global lock.
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M1-T32, M1-T38, M1-T39, M1-T41 | `lib/proof/encoding.ml`, `lib/proof/writer.ml`, `test/unit/test_proof.ml`, `test/unit/test_mutation.ml` | agent-proofhyg | 2026-09-16 |
-| M1-T34, M1-T35, M1-T37 | `bin/main.ml`, `bench/run_bench.sh` | agent-cli | 2026-09-16 |
 | M1-T42, M1-T33, M1-T40 | `test/unit/test_prop.ml`, `test/unit/test_compile.ml`, `lib/flatzinc/model.ml` | agent-oracle | 2026-09-16 |
 | M1-T44 (+ M1-T31 secondary) | `lib/core/search.ml`, `lib/core/justify.ml`, `lib/core/prop/linear.ml`, new `test/models/root_*.fzn` + expected | agent-rootfix | 2026-09-16 |
 | M2-T5 | `lib/core/domain.ml`, `lib/core/engine.ml`, `test/unit/test_domain.ml`, `test/unit/test_engine.ml` | agent-granularity | 2026-09-16 |
@@ -112,6 +111,7 @@ work. The owning session picks it up.
 | M2-T1, M2-T2 | agent-bool (x2, interrupted) + agent-bool3 + orchestrator | 2026-09-16 | **D-0032.** Six Boolean builtins, 9 models, 1168 unit checks, 29/29 models. No `Explanation` ADT change needed. Delivered across three sessions, two of which were killed mid-task; each was salvaged to a branch rather than restarted. **13 deliberate breaks, each watched go red** — and break 7 showed a justification with no facts at all passing everything, because the test scenes held their facts as `.opb` model rows |
 | M2-T11 | agent-fuzz (interrupted) + agent-fuzz2 + orchestrator | 2026-09-16 | Seeded branching order, default unchanged. **60/60 artefacts byte-identical with hashes**, and a control showing the check can fail. ~500k solver runs. **Found M1-T44**: a correct UNSAT answer whose proof veripb rejects, CLI-reachable and predating the task — orchestrator reproduced it and confirmed the derivation lands on `0 >= 0`. Also found `random_order`'s hole guard shipped disabled by a short-circuit |
 | M4-T4a | agent-interval | 2026-09-16 | `lib/core/interval.ml` + `test/unit/test_interval.ml`, 94 brute-force checks, 12 deliberate breaks each watched go red. Orchestrator reproduced break 12 independently before merging |
+| M1-T34, M1-T35, M1-T37 | agent-cli | 2026-09-16 | `--time` (CPU clock, stderr only, artefacts byte-identical — orchestrator verified), `Checked.Overflow` arm exiting 4 not 3, path-independent `.opb` header. **26 of 29 models are 84-96% process start-up.** **Eleventh instance of the signature failure mode — and the first found *inside the check written to prevent it*** |
 
 ## Handoff notes
 
@@ -577,3 +577,38 @@ Three things the next session should carry forward rather than rediscover:
   toward zero (the *relation*); `div_floor`/`div_ceil` round outward (the *bounds*). They
   are two functions apart in one file, and using the relation's rounding to compute a
   bound prunes values that have support.
+
+### M1-T34/T35/T37 released (orchestrator, 2026-09-16)
+
+The CLI can now time itself, and the first thing the instrument showed is that **26 of
+the 29 models are 84-96% `exec`**: the solver's own share of them is 0.37-1.6 ms. Three
+orders of magnitude of dynamic range were sitting under a wall-clock column that read
+6-8 ms for everything. `width_root_unsat` spends **18.8 ms writing the `.opb`** against
+5.2 ms of search on a model with *zero prunings* — D-0028's shape on the clock instead
+of in bytes.
+
+What the next session must not misread:
+
+- **No row today supports "propagation costs X".** `search` fuses propagation, search and
+  `.pbp` emission, because every emission point is below `bin/main.ml`'s reach. The agent
+  said so in the CLI's own report, in the harness footer *and* in the README rather than
+  letting someone discover it. M1-T47 is the fix: one accumulator at
+  `lib/proof/writer.ml:402`, the funnel every rule passes through.
+- **The clock is CPU, not wall, and that was forced** — `bin/dune` does not link `unix`.
+  So every phase excludes time the process was descheduled, and a CPU number must never be
+  subtracted from a wall number as if the difference were an error bar. `notslv%` is
+  labelled an upper bound everywhere it appears. Making it exact is one word (`unix`) in
+  `bin/dune`, which is mine to add, not an agent's — filed, not done silently.
+- The choice of clock was **measured, not assumed**: `Sys.time` resolves to 1 us here,
+  while `/proc/self/schedstat` — the obvious nanosecond alternative — only moves every
+  1.9 ms and cannot see a 400 us parse.
+
+**The eleventh instance of this project's signature failure mode, and the most instructive
+one yet, because it was inside the check written to prevent it.** The bench's own
+self-check decided "does this binary support `--time`?" by looking for a `time:` line on
+*stderr*. With the whole report deliberately sent to *stdout* — the worst failure this
+area can have — it concluded there was no `--time` support, skipped the quietness check as
+inapplicable, printed a benign `note`, and **exited 0**. A test that cannot observe the
+property it was written to check, found only by performing the break. Detection now turns
+on the argument parser's answer, and the report's destination is asserted before anything
+about stdout. If you take one habit from this round, take that one: perform the break.
