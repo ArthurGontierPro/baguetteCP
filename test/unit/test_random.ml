@@ -794,100 +794,21 @@ let or_obs acc o =
   acc.ne_root_conflict <- acc.ne_root_conflict || o.ne_root_conflict;
   acc.clause_in_pol <- acc.clause_in_pol || o.clause_in_pol
 
-(* ------------------------------------------ a pinned rejection found by M2-T11's sweep
+(* ------------------------------------------ M1-T44, found here and now fixed
 
    A heavy seed sweep (60 master seeds x 200 cases x 8 randomised branching orders,
-   108000 solver runs) found two cases whose proof veripb REJECTS. They are not a
-   branching finding: every one of the nine orders, the normative one included, emits the
-   same proof and is rejected identically, because the conflict is at the ROOT and no
-   order has made a decision yet. The sweep found them by generating more MODELS, not by
-   searching more trees.
+   108000 solver runs) found two cases (seeds 133 and 151) whose proof veripb rejected:
+   a correct UNSAT answer whose `conclusion UNSAT` cited a `pol` chain that sums to
+   `0 >= 0`. It was pinned here as [pinned_root_conflict], reported every run as
+   `xreject`, and written to go red in either direction -- including when it started
+   verifying.
 
-   Reduced by hand to the model below, and it reproduces through the CLI on an .fzn --
-   this is not an artefact of this file's wiring:
-
-     var -1..1: v0;  var 0..2: v1;
-     constraint int_le(v1, 0);  constraint int_ne(v0, v1);  constraint int_eq(v1, v0);
-
-   The solver's ANSWER is right (v1 = v0 and v0 <> v1). The proof is not. The whole of
-   it after the .opb is three lines, and veripb accepts every one of them -- swap
-   `conclusion UNSAT : @c10` for `conclusion NONE` and it returns `s VERIFIED NO
-   CONCLUSION`. What it rejects is the claim that the line cited is a contradiction:
-
-     @c8  pol @c3 ;
-     @c9  pol @c6 v1_ge_1 v1_ge_2 + + ;
-     @c10 pol @c7 @c8 + @c9 + ;
-     conclusion UNSAT : @c10 ;
-
-   Worked out over the .opb rows, @c9's two bare literals are D-0009's trivial axioms
-   `lit >= 0`, so adding them to @c6 cancels v1's chain out of it and leaves `v0_ge_0 +
-   v0_ge_1 >= 1`; summing that with @c7 and @c8 cancels both chains completely and lands
-   on **`0 >= 0`**, which is trivially true rather than a contradiction. The derivation
-   is a unit short. That is the shape the M1-T16 round already warned about in its
-   handoff -- "weakening the Clause out of the pol makes the derivation 0 >= 0, which
-   still does not close" -- reached here without any mutation.
-
-   Measured, not inferred: rejected by veripb 3.0.2 under the 3.0 format ("The constraint
-   with ID 10 is not contradicting, as specified by the hint") and by veripb 2.2.2 under
-   BAGUETTE_PROOF_FORMAT=2.0 ("Constraint is not a contradiction"), and byte-identical
-   under the pre-M2-T11 `search.ml`, so it predates this task entirely.
-
-   It is NOT one of the three int_ne buckets above: nothing clausal is cited (the two
-   disequality rows never appear in the derivation), so `Search.rests_on_a_clause`
-   returns false and `dfs`'s root arm takes D-0013's "the propagator's own derivation IS
-   the contradiction" path -- which is exactly the sentence that is false here. Fixing it
-   belongs to whoever owns `lib/core/prop/linear.ml` and the justification layer; this
-   file only pins it.
-
-   Registered the way test_mutation.ml's [known_slack] and test/models/PENDING register a
-   known failure: reported on every run so it cannot be forgotten, asserted against the
-   outcome that was MEASURED, and red the moment that outcome changes -- including red if
-   it starts verifying, which is the signal to delete this pin. Two things are asserted
-   that stay true after the bug is fixed (the answer is UNSAT and brute force agrees), so
-   this is not a pin that expires on the fix. *)
-let pinned_root_conflict =
-  {
-    vars = [| ("v0", -1, 1); ("v1", 0, 2) |];
-    cstrs = [ Lin_le ([ (1, 1) ], 0); Ne (0, 1); Eq (1, 0) ];
-  }
-
-let check_pinned_root_conflict () =
-  let dir = tmpdir () in
-  let verdict, _, _, answer =
-    run_case ~dir ~n:0 ~order:Search.spec_order pinned_root_conflict
-  in
-  (try Sys.rmdir dir with _ -> ());
-  check
-    "pinned root conflict: the answer is UNSAT and brute force agrees (asserted because \
-     it stays true after the proof bug is fixed -- the solver is right, its proof is \
-     not)"
-    (answer = Some false && brute_force pinned_root_conflict = None);
-  match verdict with
-  | Verified ->
-      incr checks;
-      fail
-        "XPASS pinned root conflict: veripb now ACCEPTS this proof. The root arm's \
-         derivation closes, or the instance stopped reaching it -- find out which, then \
-         delete [pinned_root_conflict] and this function."
-  | Known_ne_trace | Known_ne_root | Known_ne_in_pol ->
-      incr checks;
-      fail
-        "pinned root conflict: still rejected, but now attributed to one of the three \
-         int_ne buckets. It was NOT clausal when it was measured, so either the \
-         derivation changed or the attribution did. Read the proof before touching \
-         anything."
-  | Broken why ->
-      check
-        "pinned root conflict: veripb still rejects it for the measured reason -- the \
-         cited line is not a contradiction (2.2.2: \"not a contradiction\"; 3.0.2: \"is \
-         not contradicting\"). A different message means the bug changed shape."
-        (contains "is not contradicting" why || contains "not a contradiction" why);
-      print_endline
-        "xreject pinned root conflict: the root arm cites a `pol` chain that sums to 0 \
-         >= 0 as\n\
-        \        the contradiction (I-X7). Repro as an .fzn, and the full diagnosis, in \
-         the\n\
-        \        comment above [pinned_root_conflict]."
+   It started verifying, so the pin is gone. The cause was that a bound settled over a
+   hole is stronger than the trail entry that carries it, so the citation was a unit
+   short and the hole's own `Clause` reason was dropped from the derivation
+   (lib/core/prop/linear.ml, [settled_over_lo]). The instance it pinned lives on as
+   test/models/root_hole_unsat.fzn, where the whole gate runs it against the checker
+   rather than this file alone. *)
 
 let () =
   print_endline "\nthe randomised differential tester (M1-T16, M2-T11)";
@@ -1131,10 +1052,6 @@ let () =
     (List.rev !broken);
   check "every generated case agrees with brute force and its proof is accepted"
     (!broken = []);
-  (* The one rejection this file's sweep found and does NOT print a hundred times, on a
-     fixed instance rather than on whichever seed happened to reach it. See the comment
-     above [pinned_root_conflict]. *)
-  check_pinned_root_conflict ();
   Printf.printf "\n%d random checks" !checks;
   if !failures > 0 then (
     Printf.printf ", %d failure(s)\n" !failures;
