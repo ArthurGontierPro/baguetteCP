@@ -282,7 +282,8 @@ Consequences:
 Status: DECIDED — but **read D-0015 first**: its `Model_row` closed the ADT gap this
 record rests on, so a derivation citing several model rows *is* expressible (M4-T1's
 Hall-interval justification needs exactly that). Whether the one-instance-one-row
-*policy* still stands on its own cost grounds is M2-T0, not settled here.
+*policy* still stands on its own cost grounds is settled by **D-0027**: the rule is
+restated as one about *naming* rows, not counting them, and the decomposition half stands.
 Date: 2026-09-14
 Arose from: M1-T8, where `int_lin_eq` was built as one propagator over two model rows.
 
@@ -1285,3 +1286,115 @@ justification half unchanged; it does not adopt GCS's second inference tracker, 
 have no proofs-off mode by rule; and it does not settle how a reason is *restated* for
 wide domains, which is the interval question D-0010 and the order-encoding width policy
 own.
+
+## D-0027  D-0011 is a rule about naming rows, not about counting them
+Status: DECIDED
+Date: 2026-09-16
+Amends: D-0011, which D-0026 left pointing here. Task M2-T0.
+Prerequisite for M4-T1 (`docs/GCS-COMPARISON.md` §2.2 and §3, "Propagation").
+
+Context: D-0011 decided "**one propagator instance justifies against exactly one model
+row**". Read literally, that sentence forbids M4-T1 before it is written: a Hall-interval
+justification cites one recovered at-most-one line per Hall *value* and one at-least-one
+line per Hall *variable* (`docs/GCS-COMPARISON.md` §3), which is many model rows from one
+propagator instance. D-0026's round added a forward pointer saying D-0015 had closed the
+ADT gap D-0011 rests on, and deliberately left the *policy* open. This record closes it.
+
+D-0011's reasoning has two halves, and only one of them was about the ADT.
+
+- The **ADT half**. `Trivial` carries no payload, so *which* row it means comes from the
+  single ambient `ctx.model_id`; the trail records no propagator identity; therefore a
+  caller walking the trail cannot recover which half of a fused equality produced a
+  pruning, and `Trivial` is unresolvable. That half is closed, and by a record that says
+  so verbatim: D-0015 "supersedes the ADT gaps recorded in D-0009, D-0010 and D-0011",
+  and its `Model_row id` names a row *in the value*, so one `Combine` can hold an
+  explanation this instance built and one another instance built against a different row.
+- The **decomposition half**. An equality posts as two `Linear` instances rather than one
+  fused propagator, because the engine already runs propagators to a fixpoint and wakes
+  them on the variables that changed, so the fused loop's internal alternation duplicates
+  the engine's own job; and because a routing hazard every future caller must get right is
+  worse than queue churn. Nothing in D-0015 touches that argument, and nothing here does
+  either.
+
+And a third thing, which is what actually settles the question: **the literal reading is
+already false of shipped, verified output, and was false long before M4 was contemplated.**
+Measured in this worktree at this commit, `test/models/lin_unsat.fzn` (two `int_lin_le`
+constraints, hence two rows and two instances), whose proof the 15/15 model suite has
+veripb accept:
+
+```
+@c9  ... >= 7 ;      * row of int_lin_le(coeffs, [x,y], 3)      -- instance A
+@c10 ... >= 8 ;      * row of int_lin_le(neg_coeffs, [x,y], -8) -- instance B
+@c11 pol @c9 y_ge_1 y_ge_2 + ... + ;
+@c12 pol @c9 x_ge_1 x_ge_2 + ... + ;
+@c13 pol @c10 @c11 + @c12 + ;
+```
+
+`@c13` is one `Combine`, built by instance B, citing B's own row **and**, through `@c11`
+and `@c12` — which `linear.ml`'s `Snap_cite` path took off the trail — instance A's row.
+One derivation, two model rows, two instances, in a proof this project has shipped since
+M1-T12. So D-0027 is not a permission being granted. It is a description of what M1
+already does, arrived at exactly the way D-0015 predicted it would be.
+
+Decision: restate D-0011 as the rule it has always operationally been.
+
+1. **Anchoring stands, and it is about naming.** Every explanation must name the
+   constraints it rests on, explicitly, in the value: `Model_row id` for a model row,
+   `Term (c, e)` for another explanation. What D-0011 forbade, and what stays forbidden,
+   is an explanation whose row is resolved from *ambient context* while more than one row
+   is in play — that is the unresolvable `Trivial`, and it is a real hazard, not a
+   historical one (see the consequences).
+2. **Citation is unrestricted.** A derivation may cite any number of model rows and any
+   number of other instances' explanations. Multi-row derivations are permitted, and
+   M4-T1's Hall-interval justification is writable under this record with no further
+   decision needed.
+3. **Instance-per-row is the default for constraints that decompose, not a law.** Where a
+   constraint's rows propagate independently and the engine's fixpoint reproduces the
+   fused loop — `int_lin_eq`, `int_le`, `int_lt`, `int_eq` — post one instance per row, as
+   D-0011 said. Where the inference is *not* per row, and a global constraint's is not,
+   one instance owns several rows. `all_different`'s Hall argument cannot be split into
+   per-row propagators without destroying the propagation, and splitting it was never what
+   D-0011 was arguing about.
+4. **This does not re-fuse `int_lin_eq`.** D-0011's cost argument survives untouched, and
+   `docs/GCS-COMPARISON.md` §2.2 makes the same call: what D-0015 dissolved is D-0011's
+   *stated reason*, not automatically its *policy*. A session that wants the fused
+   equality back needs a new record and a measurement, not this one.
+
+Consequences:
+
+- **The residual `Trivial` hazard is concrete and should be closed before a multi-row
+  propagator lands.** Read off the code (not observed in emitted output, for the reason
+  below): `search.ml:323,338` pushes a decision with `Explanation.trivial`;
+  `linear.ml`'s `find_lo_reason`/`find_hi_reason` will happily return that entry's
+  explanation, `summand_of_snap` wraps it as `Term (|a|, Trivial)`, and `Justify.emit`
+  renders `Trivial` as `ctx.model_id ()` — the ambient row, which is *not* what
+  established that bound. That is D-0011's ambiguity, alive in the one place D-0015 did
+  not reach. It is unreachable today only because a `Combine` is emitted **only** at a
+  root conflict: `search.ml`'s under-decision arm writes the trace and the nogood and
+  never emits the derivation (measured: `offset_unsat`, which branches and refutes both
+  children at every level, contains 31 `rup` lines and 0 `pol`). The moment D-0018
+  point 2's per-push `pol` path is used — M4 is the first thing that will need it — the
+  hazard is live.
+- The cheap closure is to stop having an ambient row at all: every propagator passes its
+  `row_id`, `Linear.make`'s `?row_id` stops being optional, and `Justify.emit`'s
+  `Trivial -> ctx.model_id ()` arm goes. Then D-0011's hazard is a type error rather than
+  a convention, which is the same move D-0015 made for `Weaken`. Not done here — this
+  record is doc-only — and it is proposed to the roadmap rather than taken.
+- **M2-T7 is not a prerequisite for M4-T1, and that is a change from D-0011's own
+  reading.** D-0011 said the trail's missing propagator identity must be fixed before
+  M2-T3; that still holds for clause learning, which needs to know *who* inferred a
+  bound. A multi-row justification does not: if every explanation names its own rows,
+  trail-walking needs no propagator identity to resolve them. The two problems were the
+  same problem only while `Trivial` was the only way to name a row.
+- What is still **not** permitted, stated so that a later reader does not have to
+  re-derive it: an explanation that leaves its row ambiguous (point 1); a derivation that
+  finds the id it cites by searching proof state at emit time instead of naming an id
+  snapshotted at pruning time (I-X6, and D-0018's `snapshot_source` argument); and a
+  fused propagator that reaches a joint internal fixpoint over several rows and then
+  cannot say which row produced a given trail entry (point 3's "decompose where it
+  decomposes" is exactly this, and the trail still records no propagator identity).
+- Asserted, not measured: that `all_different`'s Hall inference cannot be decomposed into
+  one propagator per row. That is a claim about the constraint, taken from GCS's
+  implementation and from the structure of the Hall argument, and nothing here tried it.
+  If someone finds a per-row decomposition that propagates as strongly, point 3's default
+  applies to `all_different` too and no harm is done.
