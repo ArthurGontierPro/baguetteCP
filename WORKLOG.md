@@ -10,11 +10,10 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
-**One session is running.**
+**Nothing is claimed. No session is running.**
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| D-0003 resolution + roadmap update from the GCS comparison | `docs/DECISIONS.md` (append D-0026, and D-0003's status line), `docs/ROADMAP.md`, `WORKLOG.md` | agent-gcs-diff | 2026-09-16 |
 
 Two rounds are recorded in `## Completed` below. The rows that stood here on
 2026-09-15 (`integration`, M1-T12, M1-T13) were stale — see the handoff note "the
@@ -480,3 +479,36 @@ Open, and worth knowing before M2:
   label was still referenced", not "slack found".
 - `docs/SPEC.md` 2.2 still never states the bool print rule M1-T21 enforced (the request
   above). agent-proof3 held SPEC and did not take it; it is still open.
+
+- **GCS comparison, and D-0003 closed** (agent-gcs-diff, 2026-09-16). Three read-only
+  sweeps against `/home/arthur_gla/gcs/glasgow-constraint-solver` on the three axes the
+  user named — engine, proof logging, propagation. Full report in
+  `docs/GCS-COMPARISON.md`; it is the reference for every roadmap row added this round,
+  and it records what GCS **tried and abandoned** so we do not re-run those experiments.
+- The three sweeps ran independently and converged on the same top item, which is why
+  D-0026 was written: split the reason (which facts) from the justification (how the
+  checker is convinced). Our `Explanation.t` conflates them, which is why `linear.ml`
+  keeps `expl` and `facts ()` in agreement with a *comment*, and why it scans the whole
+  trail once per term per pruning to find who established each bound.
+- **One verified bug, not yet fixed** (M1-T22). `del range LO HI` is **half-open** in
+  veripb 3.0.2 — tested directly, with controls in both directions — but
+  `Writer.wipe_level` emits it for an *inclusive* run. Every multi-id run therefore
+  leaves its last id live in the checker while `tags`/`live` drop it (I-X3 mirror
+  violation). Present in 7 lines across 5 of 14 models today. Not unsound; it is proof
+  growth, and `PROOF-FORMAT.md:161` documents the wrong semantics. A run of length 1
+  takes the `del id` branch and is unaffected.
+- **The one soundness gap** (M1-T23): there is no overflow handling anywhere in `lib/`.
+  A wrapped product prunes wrongly *and* the `.opb` row is expanded from the same wrapped
+  arithmetic, so veripb accepts the proof. On a SAT model I-S1 catches it; on an UNSAT
+  model nothing does.
+- D-0003 and D-0011 now carry forward pointers. D-0011 sitting at DECIDED with no note
+  that D-0015 had already closed its ADT gap is the trap the comparison found: read
+  literally, it forbids writing M4-T1's Hall-interval justification at all. Whether its
+  *policy* still stands is M2-T0 and is deliberately left open.
+- D-0026 was accepted under a condition the next session should hold it to: "not slower"
+  is a **prediction**, not a measurement. M3-T5 is the named falsifier. If the layered
+  form measures slower on a real model, that reopens D-0026 rather than being absorbed —
+  this project has already corrected a speed claim twice (D-0023, D-0025).
+- Nothing under `lib/` was touched this round. The roadmap rows are proposals with
+  dependencies, not a batch to apply in order; the four worth taking first are M1-T22,
+  M1-T23, M1-T24 and M2-T0, of which two are defects and one gates M4.
