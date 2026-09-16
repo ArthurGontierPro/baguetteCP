@@ -10,7 +10,7 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
-**Four sessions are running.** Round dispatched 2026-09-16 by the orchestrator, one
+**Five sessions are running.** Round dispatched 2026-09-16 by the orchestrator, one
 git worktree each (`.claude/worktrees/<tag>`), so no two share `_build`'s global lock.
 
 | Task | Files being touched | Session | Since |
@@ -18,6 +18,8 @@ git worktree each (`.claude/worktrees/<tag>`), so no two share `_build`'s global
 | M1-T32, M1-T38, M1-T39, M1-T41 | `lib/proof/encoding.ml`, `lib/proof/writer.ml`, `test/unit/test_proof.ml`, `test/unit/test_mutation.ml` | agent-proofhyg | 2026-09-16 |
 | M1-T34, M1-T35, M1-T37 | `bin/main.ml`, `bench/run_bench.sh` | agent-cli | 2026-09-16 |
 | M1-T42, M1-T33, M1-T40 | `test/unit/test_prop.ml`, `test/unit/test_compile.ml`, `lib/flatzinc/model.ml` | agent-oracle | 2026-09-16 |
+| M1-T44 (+ M1-T31 secondary) | `lib/core/search.ml`, `lib/core/justify.ml`, `lib/core/prop/linear.ml`, new `test/models/root_*.fzn` + expected | agent-rootfix | 2026-09-16 |
+| M2-T5 | `lib/core/domain.ml`, `lib/core/engine.ml`, `test/unit/test_domain.ml`, `test/unit/test_engine.ml` | agent-granularity | 2026-09-16 |
 
 Two rounds are recorded in `## Completed` below. The rows that stood here on
 2026-09-15 (`integration`, M1-T12, M1-T13) were stale — see the handoff note "the
