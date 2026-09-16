@@ -934,7 +934,7 @@ Consequences:
   it is where the direct encoding would become necessary.
 
 ## D-0023  Proof format: VeriPB 3.0, and the Rust checker of record
-Status: DECIDED
+Status: DECIDED (its account of `drop-line` as a 3.0-only parse error is corrected by **D-0030**: the lane fails for the wrong reason under 2.0 as well)
 Date: 2026-09-15
 Supersedes D-0002.
 
@@ -1620,3 +1620,80 @@ Consequences, recorded so they are not rediscovered:
   Filed as M1-T33.
 - `ceildiv` no longer routes through `-(floordiv (-a) b)`; that negation has no answer at
   `min_int`, i.e. it was a second wrap on the very path this record is about.
+
+## D-0030  A mutation lane must judge a derivation, not a grammar -- and `root_unsat` cannot
+Status: DECIDED
+Date: 2026-09-16
+Task M1-T26. Extends D-0020. Adds no constraint on propagators; it constrains what the
+mutation harness is allowed to count as a passing lane.
+
+Context: D-0020 built the harness on the principle that a lane is worthless unless the
+corrupted proof is rejected *for the reason the lane is about*. M1-T26 audited every lane
+by reading veripb's actual message rather than its exit code, and found two distinct ways
+a lane can be green while testing nothing.
+
+**1. `drop-line` rejects on the grammar, in BOTH formats.** Deleting a derivation step
+un-defines its label, so a later citation fails to parse: under 3.0 the message is
+"The label `@c3` is not assigned to a constraint ID", under 2.0 it is "Accessing the
+database out of bound with index 3". The roadmap, `docs/PROOF-FORMAT.md` §5 and D-0023
+all describe this as a **3.0 quirk**; it is not, and that is corrected here. The knob is
+unfixable in text: a step is deleted precisely because something later cites it.
+
+The fix is not to delete the lane -- that is the same failure mode in a new costume. It
+is re-registered as `Unevaluated`, still run, still asserted to reject on the grammar, so
+the day it starts judging a derivation the suite says so. Its derivation coverage is
+carried by a new `Truncate_derivation` knob on the same step, which keeps the leftmost
+operand so the step still **binds its label** and the checker must judge the inference.
+
+**2. `root_unsat` is not a valid test instance for load-bearingness, and the orchestrator
+confirmed this independently.** Its `.opb` is two rows:
+
+    @c1 +1 ~x_ge_3 +1 x_ge_2 >= 1 ;
+    @c2 +1 ~x_ge_2 +1 ~x_ge_3 >= 3 ;
+
+`@c2` asks two coefficient-1 literals to sum to 3. It is **infeasible on its own**, so the
+model is refuted by a single row and every derivation above it is decoration. Verified by
+hand, outside the harness: a proof containing no derivation whatsoever --
+
+    pseudo-Boolean proof version 3.0
+    f 2 ;
+    output NONE ;
+    conclusion UNSAT : @c2 ;
+    end pseudo-Boolean proof ;
+
+-- returns `s VERIFIED UNSATISFIABLE`. So `root_unsat/truncate-derivation` is ACCEPTED,
+and its sibling `pol-coeff`/`pol-cite` lanes reject only because `conclusion UNSAT : @c3`
+names `@c3` by hint and the corruption makes *that* row non-contradicting. That is a
+strictly weaker claim than "the derivation was load-bearing", which is how those lanes
+have been read.
+
+The instance was chosen because its margin is one. A margin of one in the *derivation*
+does not help when a *model row* is independently contradictory.
+
+Decision:
+
+- A lane that is rejected without the checker ever judging an inference is **not a pass**.
+  The harness classifies this explicitly (script exit code 5) from a listed set of
+  checker messages, rather than treating any non-zero exit as success.
+- A control lane is **mandatory and unskippable**. It is enforced twice: the script
+  refuses to report on an instance whose clean proof does not verify, and the test makes
+  it a type error -- a lane takes a `controlled` token that only the control gate
+  produces. A lane without a control is not an expression the test file can write. When a
+  control fails, every declared lane fails **by name**; "waiting" lanes are gone.
+- Mutation knobs live in the emitter as typed corruptions of the `Pol.t` AST, not as text
+  edits. Text mutation must re-derive from the output what the emitter already knew, and
+  that is where M1-T22's `del range` off-by-one lived.
+- A knob must be structurally incapable of firing in a normal run. `Writer`'s mutation
+  field is immutable, `create` cannot set it, `create_mutated` reads **no** environment
+  variable (deliberately unlike `audit` and `format`), nothing in `lib/` or `bin/` names
+  it and a test greps the tree to keep it that way, and every corrupted proof carries a
+  `% DELIBERATELY CORRUPTED PROOF` banner.
+- `root_unsat`'s accepted lane is registered as `Known_slack` in D-0020's existing
+  mechanism -- reported every run, red if it ever starts rejecting -- and **not** weakened
+  away. Replacing it with an instance whose model rows are each individually satisfiable
+  is M1-T38.
+
+This is the ninth time in this project that the instance chosen to test a property could
+not observe that property failing. The recurring shape is worth naming: **a test is not
+evidence until something has been seen to break it.** The eight earlier instances are in
+D-0020, D-0023, D-0025, M1-T16, M1-T17, M1-T20, M1-T24 and M3-T5.
