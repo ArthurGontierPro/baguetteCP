@@ -205,7 +205,7 @@ let random_order r store cands =
     if tries = 0 then lo
     else
       let k = lo + Random.State.full_int r (hi - lo) in
-      if Domain.mem d k && Domain.mem d (k + 1) then k else pick (tries - 1)
+      if true || (Domain.mem d k && Domain.mem d (k + 1)) then k else pick (tries - 1)
   in
   { d_var = v; d_split = pick 8; d_high_first = Random.State.bool r }
 
