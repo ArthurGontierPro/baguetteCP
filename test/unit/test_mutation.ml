@@ -51,6 +51,47 @@
    fails, the instance's mutation lanes are not run and not counted, because their
    result would mean nothing.
 
+   ------------------------------------------------------------------------------
+   M1-T26. Three things changed, and the reason for all three is the same one.
+
+   (a) THE KNOBS MOVED INTO THE EMITTER. Corrupting proof *text* means re-deriving
+   from the output what [Writer] already knew, and one of those re-derivations was
+   structurally impossible to get right. Under format 3.0 every derived constraint
+   carries a label and is cited by it, so `drop-line` -- delete a step -- un-defines
+   that step's label and the later citation fails to PARSE. veripb rejects, the lane
+   goes green, and not one thing about the derivation was tested. Measured on both
+   instances that carried the lane, in both formats:
+
+     root_unsat/drop-line  3.0: "The label `@c3` is not assigned to a constraint ID"
+     lin_unsat/drop-line   3.0: "The label `@c13` is not assigned to a constraint ID"
+     root_unsat/drop-line  2.0: "Accessing the database out of bound with index 3"
+
+   [Writer.Mutation] is the replacement: typed corruptions applied next to the
+   derivation, selected by the [~origin] every rule emission already carries. In
+   particular [Truncate_derivation] is what `drop-line` was trying to be -- the step
+   is emitted with its derivation thrown away but its label still BOUND, so every
+   later citation parses and the checker has to judge the step rather than the
+   grammar.
+
+   (b) A REJECTION IS CLASSIFIED. "veripb said no" is not one answer. A rejection that
+   never reached the derivation says only that the file is malformed, which any
+   corruption of a text file achieves. mutate_proof.sh now exits 5 for that case and
+   the lanes below assert which class they expect, so `drop-line` stays registered and
+   runs -- as an assertion that it tests the GRAMMAR. It is not counted as if it
+   tested a derivation, and it is not quietly deleted either: dropping coverage while
+   the lane count stays flat is the same failure mode in a new costume.
+
+   (c) THE CONTROL IS NOT SKIPPABLE. It used to be a lane the caller ran first and a
+   convention that it must. Now it is enforced twice over: mutate_proof.sh verifies
+   the uncorrupted proof inside every lane before it will report anything, and here
+   [mutation_lane] and [emitter_lane] take a [controlled] token that only [gated] can
+   make and only after the control has passed. A mutation lane that has not had its
+   control run is not something this file can express. [gated] also fails every
+   declared lane by name when the control fails, and asserts afterwards that the lanes
+   run are exactly the lanes declared -- so coverage cannot quietly shrink either.
+   [waiting_lanes] is gone with it: a control that fails is red, not "waiting".
+   ------------------------------------------------------------------------------
+
    M1-T13 and the two branch instances. [chain] is the real thing: it branches, fails a
    branch and backtracks, which D-0018 says is the only shape that can catch a
    regression in this area ("a root-level UNSAT model cannot catch a regression here").
@@ -63,12 +104,14 @@
    and [Encoding]. It was built when no proof the solver emitted both verified and
    contained a branch-level clause, and it stays because it pins the two clause lanes to
    an instance whose margin is one by construction, independently of whatever the search
-   currently emits. [chain]'s own lanes are guarded on its control lane: if the
-   branch-level proof stops verifying, they report as waiting rather than failing, and
-   they come back on their own. Nothing here needs editing either way. *)
+   currently emits. [chain]'s own lanes are guarded on its control lane -- which since
+   M1-T26 means they FAIL if that control fails, rather than reporting as waiting. A
+   lane that is allowed to stand down on its own is a lane that can disappear without
+   anyone noticing. *)
 
 module Lit = Baguette_proof.Lit
 module Writer = Baguette_proof.Writer
+module Checker = Baguette_proof.Checker
 module Encoding = Baguette_proof.Encoding
 module Var = Baguette_core.Var
 module Domain = Baguette_core.Domain
@@ -177,11 +220,23 @@ let script =
 (* The exit codes mutate_proof.sh documents. "The lane did nothing" is deliberately
    not the same value as "the lane passed". *)
 type lane_result =
-  | Held (* veripb rejected the corruption, or accepted the control *)
+  | Held (* veripb rejected the corruption ON THE DERIVATION, or accepted the control *)
   | Slack (* veripb ACCEPTED a corrupted proof, or rejected the control *)
   | Not_applicable (* no site for this mutation in this proof *)
+  | Unevaluated
+    (* veripb rejected without ever judging the derivation: the proof did not parse, or
+       a rule cited an id that is no longer defined. NOT a pass -- the lane tested the
+       grammar. This is what `drop-line` does under 3.0; see (a) in the header. *)
   | No_checker (* veripb (or the script) missing: nothing was checked *)
   | Broken of int (* usage or internal error in the harness *)
+
+let lane_result_name = function
+  | Held -> "rejected-on-the-derivation"
+  | Slack -> "ACCEPTED"
+  | Not_applicable -> "no-site"
+  | Unevaluated -> "rejected-without-judging-the-derivation"
+  | No_checker -> "no-checker"
+  | Broken n -> Printf.sprintf "harness-error(%d)" n
 
 let run_lane ?nth ~proof mutation =
   match script with
@@ -204,12 +259,29 @@ let run_lane ?nth ~proof mutation =
         | 1 -> Slack
         | 3 -> Not_applicable
         | 4 -> No_checker
+        | 5 -> Unevaluated
         | n -> Broken n),
         out )
 
-(* The control lane. Returns whether it held, so that an instance whose honest proof
-   does not verify is reported as such rather than having meaningless lanes run on it. *)
-let control_lane ~tag ~proof =
+(* ------------------------------------------------------------------ *)
+(* The control gate                                                    *)
+(*                                                                     *)
+(* A mutation lane whose instance does not verify honestly is green    *)
+(* for no reason at all. Making that a rule the caller follows is not  *)
+(* making it a rule, so it is a TYPE here: [mutation_lane] and         *)
+(* [emitter_lane] take a [controlled], and [gated] is the only thing   *)
+(* that builds one -- after the control has passed. A lane without a   *)
+(* control is not an expression this file has.                         *)
+(* ------------------------------------------------------------------ *)
+
+type controlled = {
+  c_tag : string;
+  c_declared : string list; (* the lanes this instance promises to run *)
+  mutable c_run : string list; (* the lanes it actually ran *)
+}
+
+(* The control lane itself. Returns whether it held. *)
+let control_holds ~tag ~proof =
   let r, out = run_lane ~proof "control" in
   match r with
   | Held ->
@@ -227,18 +299,73 @@ let control_lane ~tag ~proof =
       show out;
       false
 
-(* A mutation lane.
+(* Run an instance's lanes behind its control.
 
-   [expect] is [`Rejects] for a lane that holds, or [`Known_slack why] for one where
-   veripb is known to ACCEPT the corruption. A known-slack lane is recorded the way
-   test/models/PENDING records a known failure: reported on every run so it cannot be
-   forgotten, and if it starts holding the suite goes red telling you to delete the
-   marker. That is what stops the list rotting into a list of quietly broken things --
-   and it is not a weakened test: the lane still runs and its result is still asserted,
-   only against the outcome that was actually measured and recorded. *)
-let mutation_lane ~tag ~proof ?nth ~expect mutation =
+   [declares] is the list of lane names the instance promises. Two things depend on it,
+   and both are about coverage not being allowed to shrink quietly:
+
+   - if the control FAILS, every declared lane is failed BY NAME. The run is red and
+     says which lanes did not run. It does not merely become shorter.
+   - if the control passes, the lanes actually run are checked against [declares]
+     afterwards. A lane deleted from the body while its name stays in the list -- or
+     the reverse -- is a failure, not a silently different suite. *)
+let gated ~tag ~declares ~control body =
+  if control () then (
+    let c = { c_tag = tag; c_declared = declares; c_run = [] } in
+    body c;
+    let sort = List.sort compare in
+    check
+      (Printf.sprintf "%s: every lane this instance declares was run (%d)" tag
+         (List.length c.c_declared))
+      (sort c.c_run = sort c.c_declared))
+  else
+    List.iter
+      (fun m ->
+        fail
+          "%s/%s: NOT RUN. The control lane on this instance failed, so this lane was \
+           not attempted -- and a lane that did not run is not a lane that passed."
+          tag m)
+      declares
+
+let ran c name = c.c_run <- name :: c.c_run
+
+(* ------------------------------------------------------------------ *)
+(* A lane through the text harness, scripts/mutate_proof.sh            *)
+(* ------------------------------------------------------------------ *)
+
+(* [expect] says which outcome this lane is asserting:
+
+   [`Rejects]          veripb must reject the corruption ON THE DERIVATION. The only
+                       expectation that means "this step is load-bearing".
+   [`Known_slack why]  veripb is known to ACCEPT the corruption. Recorded the way
+                       test/models/PENDING records a known failure: reported on every
+                       run so it cannot be forgotten, and if it starts holding the suite
+                       goes red telling you to delete the marker. Not a weakened test --
+                       the lane runs and its result is asserted, against the outcome
+                       that was measured.
+   [`Unevaluated why]  veripb rejects, but without ever judging the derivation. The lane
+                       tests the GRAMMAR. Registered so that it keeps running and keeps
+                       saying so, and so that the day it starts judging a derivation the
+                       suite says that too. It is NOT counted as derivation coverage;
+                       the emitter knob named in [why] is what covers that. *)
+let mutation_lane c ?nth ~proof ~expect mutation =
+  let tag = c.c_tag in
   let name = Printf.sprintf "%s/%s" tag mutation in
+  ran c mutation;
   let r, out = run_lane ?nth ~proof mutation in
+  let wrong_class got =
+    incr checks;
+    fail
+      "%s: this lane is registered as %s but veripb answered %s. The lane has found \
+       something: say what, do not re-register it to match (CLAUDE.md)."
+      name
+      (match expect with
+      | `Rejects -> "rejecting on the derivation"
+      | `Known_slack _ -> "accepting (known slack)"
+      | `Unevaluated _ -> "rejecting without judging the derivation")
+      (lane_result_name got);
+    show out
+  in
   match (r, expect) with
   | Held, `Rejects ->
       check (Printf.sprintf "%s: veripb rejects the corrupted proof" name) true
@@ -249,6 +376,13 @@ let mutation_lane ~tag ~proof ?nth ~expect mutation =
          was, or the instance stopped exercising it -- find out which, then delete this \
          lane's entry from [known_slack] below."
         name
+  | Unevaluated, `Unevaluated why ->
+      check
+        (Printf.sprintf
+           "%s: veripb rejects, and rejects on the GRAMMAR rather than the derivation -- \
+            %s"
+           name why)
+        true
   | Slack, `Rejects ->
       incr checks;
       fail
@@ -280,17 +414,7 @@ let mutation_lane ~tag ~proof ?nth ~expect mutation =
       incr checks;
       fail "%s: mutate_proof.sh itself failed (exit %d)" name n;
       show out
-
-(* Lanes on an instance whose honest proof does not verify yet. Reported, never
-   counted, never red: the point is that they light up on their own when it does. *)
-let waiting_lanes ~tag ~why lanes =
-  Printf.printf "wait %s/control: %s\n" tag why;
-  List.iter
-    (fun m ->
-      Printf.printf
-        "wait %s/%s: not run -- it activates by itself once the control lane above passes\n"
-        tag m)
-    lanes
+  | (Held | Slack | Unevaluated), _ -> wrong_class r
 
 (* ------------------------------------------------------------------ *)
 (* Instances                                                           *)
@@ -319,11 +443,21 @@ let independent_check m (assignment : Search.assignment) =
   List.iter (fun (v, value) -> assign.(Var.to_int v) <- value) assignment;
   evaluate m assign
 
+(* What a builder hands back. [fired] is [false] for an honest build and says, for a
+   mutated one, whether the knob found a site it could corrupt. A lane must check it:
+   a knob that did not fire leaves an honest proof, veripb accepts it, and reading that
+   acceptance as "the step was not load-bearing" would be a finding about a corruption
+   that never happened. It is the emitter's [Not_applicable]. *)
+type built = { pbp : string; opb : string; fired : bool }
+
 (* Solve [m] through the real pipeline -- the same one test_endtoend.ml drives -- and
    leave the .opb/.pbp pair behind for the harness to corrupt. These are the solver's
    own proofs, not transcriptions of them, so a lane cannot go stale against a
-   derivation that changed underneath it. *)
-let solve_to_proof ~dir ~name m =
+   derivation that changed underneath it.
+
+   [?mutation] arms one of the emitter's typed knobs for this build. A build without it
+   goes through [Writer.create], which cannot corrupt anything. *)
+let solve_to_proof ?mutation ~dir ~name m =
   let opb = Filename.concat dir (name ^ ".opb") in
   let pbp = Filename.concat dir (name ^ ".pbp") in
   let store =
@@ -347,7 +481,11 @@ let solve_to_proof ~dir ~name m =
   Encoding.write_opb ~comments:[ "test_mutation: " ^ name ] enc oc;
   close_out oc;
   let oc = open_out pbp in
-  let writer = Writer.create ~comments:false ~audit:true oc in
+  let writer =
+    match mutation with
+    | None -> Writer.create ~comments:false ~audit:true oc
+    | Some mutation -> Writer.create_mutated ~comments:false ~audit:true ~mutation oc
+  in
   Encoding.start_proof enc writer;
   let ctx =
     Justify.create ~writer ~encoding:enc ~model_id:(fun () ->
@@ -368,7 +506,7 @@ let solve_to_proof ~dir ~name m =
   in
   let outcome = Search.solve ~engine ~store ~ctx ~check:(independent_check m) () in
   close_out oc;
-  (pbp, outcome)
+  ({ pbp; opb; fired = Writer.mutation_fired writer }, outcome)
 
 (* -- root_unsat -----------------------------------------------------------------
    test/models/trivial_unsat.fzn's model: x in 1..3 with x <= 0. Propagation refutes
@@ -437,9 +575,9 @@ let chain =
    It is also why this is not a root-level reason: at the root the claim would restate
    what the checker already has, the corruption would be empty, and the lane would go
    green having tested nothing (trap 3). *)
-let branch_trace ~dir =
-  let opb = Filename.concat dir "branch_trace.opb" in
-  let pbp = Filename.concat dir "branch_trace.pbp" in
+let branch_trace ?mutation ?(name = "branch_trace") ~dir () =
+  let opb = Filename.concat dir (name ^ ".opb") in
+  let pbp = Filename.concat dir (name ^ ".pbp") in
   let enc = Encoding.create () in
   Encoding.declare_int enc "x" ~lo:0 ~hi:2;
   Encoding.declare_int enc "y" ~lo:0 ~hi:2;
@@ -448,7 +586,11 @@ let branch_trace ~dir =
   Encoding.write_opb ~comments:[ "test_mutation: branch_trace (M1-T15)" ] enc oc;
   close_out oc;
   let oc = open_out pbp in
-  let w = Writer.create ~comments:false ~audit:true oc in
+  let w =
+    match mutation with
+    | None -> Writer.create ~comments:false ~audit:true oc
+    | Some mutation -> Writer.create_mutated ~comments:false ~audit:true ~mutation oc
+  in
   Encoding.start_proof enc w;
   (* The decision level, and the fact that arrives under it. *)
   Writer.set_level w 1;
@@ -465,7 +607,133 @@ let branch_trace ~dir =
   Writer.wipe_level w 1;
   Writer.conclusion w (Writer.Sat (Encoding.assignment_lits enc [ ("x", 2); ("y", 1) ]));
   close_out oc;
-  pbp
+  { pbp; opb; fired = Writer.mutation_fired w }
+
+(* ------------------------------------------------------------------ *)
+(* Lanes through the emitter (M1-T26)                                  *)
+(* ------------------------------------------------------------------ *)
+
+let contains hay needle =
+  let n = String.length needle and h = String.length hay in
+  let rec go i = i + n <= h && (String.sub hay i n = needle || go (i + 1)) in
+  n = 0 || go 0
+
+(* Why veripb said no. The distinction is the whole of M1-T26 (b): a rejection that
+   never reached the derivation says only that the file is malformed. The markers are
+   VeriPB 3.0.2's and 2.2.2's, taken from runs; scripts/mutate_proof.sh classifies on
+   the same list and exits 5 where this returns [Rejected_unevaluated], so the two
+   halves of the harness agree about what a lane has shown. *)
+type verdict = Accepted | Rejected_on_derivation | Rejected_unevaluated | Unchecked
+
+let unevaluated_markers =
+  [
+    "Syntax error while parsing";
+    "is not assigned to a constraint ID";
+    "Accessing the database out of bound";
+    "has already been deleted";
+    "Unsupported version";
+  ]
+
+(* An emitter lane has no file to corrupt -- the corruption happened as the proof was
+   written -- so it runs the checker itself, through the same [Checker.find] the rest
+   of the tree resolves with. D-0023 put the choice of checker in exactly two places;
+   this is not a third. A missing checker is a FAILURE, never a skip. *)
+let check_proof { pbp; opb; _ } =
+  match Checker.find () with
+  | None -> (Unchecked, Checker.not_found_message)
+  | Some veripb ->
+      let log = Filename.temp_file "baguette_mutation_veripb" ".log" in
+      let rc =
+        Sys.command
+          (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
+             (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
+      in
+      let out = read_file log in
+      (try Sys.remove log with _ -> ());
+      let v =
+        if rc = 0 then Accepted
+        else if List.exists (contains out) unevaluated_markers then Rejected_unevaluated
+        else Rejected_on_derivation
+      in
+      (v, out)
+
+let verdict_name = function
+  | Accepted -> "ACCEPTED"
+  | Rejected_on_derivation -> "rejected-on-the-derivation"
+  | Rejected_unevaluated -> "rejected-without-judging-the-derivation"
+  | Unchecked -> "NOTHING CHECKED"
+
+(* The banner [Writer.header] stamps on any proof built by [create_mutated]. Asserted
+   on every emitter lane: a corrupted proof that did not say so could be mistaken for a
+   real one, and a clean proof that did would mean the stamp had stopped meaning
+   anything. *)
+let corruption_banner = "DELIBERATELY CORRUPTED PROOF"
+
+(* One emitter lane.
+
+   [build ~name ~mutation] emits the instance with the knob armed and returns the
+   [built] record. Four assertions, in order, and the first three are all about the
+   ways a lane can be green having tested nothing:
+
+     1. the knob FIRED -- otherwise the proof is honest and its acceptance says
+        nothing (see [built]);
+     2. the proof carries the corruption banner;
+     3. the control has already passed, which the [controlled] token witnesses;
+     4. the checker's verdict is the expected one, CLASS INCLUDED. *)
+let emitter_lane c ~build ~expect ~knob name =
+  let tag = c.c_tag in
+  let lane = Printf.sprintf "%s/%s" tag name in
+  ran c name;
+  let b = build ~name:(Printf.sprintf "%s_%s" tag name) ~mutation:knob in
+  if not b.fired then (
+    incr checks;
+    fail
+      "%s: the knob %s found no site it could corrupt, so the proof this lane checked is \
+       HONEST. Nothing was tested -- fix the site, do not read the checker's answer."
+      lane
+      (Writer.Mutation.describe knob))
+  else if not (contains (read_file b.pbp) corruption_banner) then (
+    incr checks;
+    fail "%s: a corrupted proof was emitted without the %S banner" lane corruption_banner)
+  else
+    let v, out = check_proof b in
+    match (v, expect) with
+    | Rejected_on_derivation, `Rejects ->
+        check
+          (Printf.sprintf "%s: veripb rejects the corrupted step, on the derivation" lane)
+          true
+    | Accepted, `Known_slack why ->
+        Printf.printf "xslack %s: veripb accepts this corruption -- %s\n" lane why
+    | Accepted, `Rejects ->
+        incr checks;
+        fail
+          "%s: veripb ACCEPTED a deliberately corrupted proof. The honest derivation has \
+           slack in it -- the corrupted step is not load-bearing. That is a finding \
+           about the propagator, not about this harness: record it in docs/DECISIONS.md. \
+           Do not weaken the lane to make it pass."
+          lane;
+        Printf.printf "       knob: %s\n" (Writer.Mutation.describe knob);
+        show out
+    | Rejected_on_derivation, `Known_slack _ ->
+        incr checks;
+        fail
+          "XPASS %s: veripb now REJECTS this corruption. The derivation is tighter than \
+           it was, or the instance stopped exercising it -- find out which, then delete \
+           this lane's known-slack entry."
+          lane
+    | Unchecked, _ ->
+        incr checks;
+        fail "%s: %s -- do not read this as a pass" lane (verdict_name Unchecked);
+        show out
+    | Rejected_unevaluated, _ ->
+        incr checks;
+        fail
+          "%s: veripb answered %s -- the proof did not parse, or a rule cited an id that \
+           is gone. An EMITTER knob must never do that: it is the failure the text knobs \
+           were moved here to escape. The lane tested the grammar and nothing else."
+          lane
+          (verdict_name Rejected_unevaluated);
+        show out
 
 (* ------------------------------------------------------------------ *)
 (* The registry                                                        *)
@@ -481,6 +749,60 @@ let known_slack_lin_unsat_pol_coeff =
    than assumed. The `pol` lanes gate on root_unsat, whose margin is one; this lane \
    stays registered so the slack is reported on every run"
 
+(* FOUND BY THIS TASK (M1-T26), and it wants a decision record.
+
+   root_unsat was chosen because its refutation closes at `0 >= 1` -- margin one, trap
+   1 in this file s header. It does. But the row the derivation starts from,
+
+       @c2  +1 ~x_ge_2 +1 ~x_ge_3 >= 3
+
+   is ALREADY a contradiction on its own: two literals, degree three, so the largest
+   the left-hand side can ever be is 2. Measured directly, not inferred -- a proof that
+   derives nothing at all and says `conclusion UNSAT : @c2` verifies:
+
+       pseudo-Boolean proof version 3.0 / f 2 ; / output NONE ;
+       conclusion UNSAT : @c2 ; / end pseudo-Boolean proof ;
+       -> s VERIFIED UNSATISFIABLE
+
+   So root_unsat s `pol` is not load-bearing: it restates a contradiction the .opb
+   already carries. The lane that shows this is [Truncate_derivation], which replaces
+   the step with its first operand -- and its first operand is @c2, still contradicting,
+   so the conclusion still holds.
+
+   Why the other `pol` lanes on this instance still reject, which is the subtle part:
+   `conclusion UNSAT : @c3` names @c3 by hint. [Perturb_coefficient] and
+   [Swap_citation] make @c3 something that is NOT a contradiction, and the checker
+   objects to the hint. They are testing that the step derives a contradiction, not that
+   the model needed it to. That is a weaker claim than this file has been reading them
+   as making, and it is the ninth time in this project that the instance picked to test
+   a thing could not see it break.
+
+   Registered, not silenced, and NOT fixed by weakening the lane: the fix is an
+   instance whose model rows are individually satisfiable, which is a new model and a
+   decision record, neither of which M1-T26 owns. lin_unsat/truncate-derivation
+   rejects, so the knob itself is known to work. *)
+let known_slack_root_unsat_truncate =
+  "root_unsat s model row @c2 (+1 ~x_ge_2 +1 ~x_ge_3 >= 3) is itself infeasible, so the \
+   pol that cites it derives a contradiction the .opb already had. Truncating the step \
+   to its first operand leaves @c3 = @c2, which is still contradicting, so the \
+   conclusion still checks. Measured: a proof with no derivation at all and `conclusion \
+   UNSAT : @c2` verifies. The finding is about the INSTANCE -- it cannot test whether \
+   this pol is load-bearing -- and it needs a decision record and a model whose rows are \
+   individually satisfiable"
+
+(* Registered the way [known_slack] is, and for the same reason: the lane keeps running
+   and keeps saying what it is. `drop-line` deletes a derivation step, and a derivation
+   step is deleted precisely because something later cites it -- so the checker stops at
+   the citation and never judges the derivation. Measured in both formats; see (a) in
+   this file's header for the messages. The lane is kept because asserting the CLASS of
+   the rejection is worth doing (if it ever starts judging a derivation, that is news),
+   and the derivation coverage it never had is now carried by the emitter's
+   [Truncate_derivation], which corrupts the same step with its label still bound. *)
+let drop_line_is_a_grammar_lane =
+  "deleting a step un-defines the label every later citation names, so veripb stops at \
+   the grammar; Writer.Mutation.Truncate_derivation is the lane that judges this step's \
+   derivation"
+
 (* ------------------------------------------------------------------ *)
 
 let run () =
@@ -494,34 +816,111 @@ let run () =
        BAGUETTE_ROOT to the checkout when building into a --build-dir outside it."
   else
     let dir = tmpdir () in
+    let knob = Writer.Mutation.make in
+    (* Where the emitter knobs aim. A site is a substring of the [~origin] the rule
+       emission already carries, so a lane NAMES the derivation it corrupts instead of
+       hunting for it in the text. "combine" is Justify.emit_combine's origin (D-0013's
+       weaken-divide-add) and the chain site names the claim literal outright: if the
+       search stops deriving `~b_ge_2` under a decision, the knob does not fire and the
+       lane FAILS saying so, rather than sliding onto a root-level line where dropping a
+       reason literal changes nothing the checker can see (trap 3). *)
+    let site_combine = "combine" in
+    let site_branch_trace = "branch_trace" in
+    let site_chain_branch_claim = "trace: ~b_ge_2" in
 
     (* -- the pol lanes, on the margin-one instance ---------------------------- *)
-    let proof, outcome = solve_to_proof ~dir ~name:"root_unsat" root_unsat in
+    let b, outcome = solve_to_proof ~dir ~name:"root_unsat" root_unsat in
     check "root_unsat: the solver refutes it (the instance is what we think it is)"
       (outcome = Search.Unsat);
-    if control_lane ~tag:"root_unsat" ~proof then (
-      mutation_lane ~tag:"root_unsat" ~proof ~expect:`Rejects "pol-coeff";
-      mutation_lane ~tag:"root_unsat" ~proof ~expect:`Rejects "pol-cite";
-      mutation_lane ~tag:"root_unsat" ~proof ~expect:`Rejects "drop-line");
+    let build_root ~name ~mutation =
+      fst (solve_to_proof ~mutation ~dir ~name root_unsat)
+    in
+    gated ~tag:"root_unsat"
+      ~control:(fun () -> control_holds ~tag:"root_unsat" ~proof:b.pbp)
+      ~declares:
+        [
+          "pol-coeff";
+          "pol-cite";
+          "drop-line";
+          "perturb-coefficient";
+          "swap-citation";
+          "truncate-derivation";
+        ]
+      (fun c ->
+        mutation_lane c ~proof:b.pbp ~expect:`Rejects "pol-coeff";
+        mutation_lane c ~proof:b.pbp ~expect:`Rejects "pol-cite";
+        mutation_lane c ~proof:b.pbp ~expect:(`Unevaluated drop_line_is_a_grammar_lane)
+          "drop-line";
+        emitter_lane c ~build:build_root ~expect:`Rejects
+          ~knob:(knob ~site:site_combine Writer.Mutation.Perturb_coefficient)
+          "perturb-coefficient";
+        emitter_lane c ~build:build_root ~expect:`Rejects
+          ~knob:(knob ~site:site_combine Writer.Mutation.Swap_citation)
+          "swap-citation";
+        (* What `drop-line` was for, done so that the checker has to answer it: the
+           step keeps its label and loses its derivation. *)
+        emitter_lane c ~build:build_root
+          ~expect:(`Known_slack known_slack_root_unsat_truncate)
+          ~knob:(knob ~site:site_combine Writer.Mutation.Truncate_derivation)
+          "truncate-derivation");
 
     (* -- the same lanes on the wider D-0015 derivation ------------------------ *)
-    let proof, outcome = solve_to_proof ~dir ~name:"lin_unsat" lin_unsat in
+    let b, outcome = solve_to_proof ~dir ~name:"lin_unsat" lin_unsat in
     check "lin_unsat: the solver refutes it (the instance is what we think it is)"
       (outcome = Search.Unsat);
-    if control_lane ~tag:"lin_unsat" ~proof then (
-      mutation_lane ~tag:"lin_unsat" ~proof
-        ~expect:(`Known_slack known_slack_lin_unsat_pol_coeff) "pol-coeff";
-      mutation_lane ~tag:"lin_unsat" ~proof ~expect:`Rejects "pol-cite";
-      mutation_lane ~tag:"lin_unsat" ~proof ~expect:`Rejects "drop-line");
+    let build_lin ~name ~mutation = fst (solve_to_proof ~mutation ~dir ~name lin_unsat) in
+    gated ~tag:"lin_unsat"
+      ~control:(fun () -> control_holds ~tag:"lin_unsat" ~proof:b.pbp)
+      ~declares:
+        [
+          "pol-coeff";
+          "pol-cite";
+          "drop-line";
+          "perturb-coefficient";
+          "swap-citation";
+          "truncate-derivation";
+        ]
+      (fun c ->
+        mutation_lane c ~proof:b.pbp
+          ~expect:(`Known_slack known_slack_lin_unsat_pol_coeff) "pol-coeff";
+        mutation_lane c ~proof:b.pbp ~expect:`Rejects "pol-cite";
+        mutation_lane c ~proof:b.pbp ~expect:(`Unevaluated drop_line_is_a_grammar_lane)
+          "drop-line";
+        (* Occurrence 1 is the first weakening `pol`, which is the step D-0020 is
+           about: the emitter lane lands on the same site the text lane does, and
+           finds the same slack. Registered, not silenced. *)
+        emitter_lane c ~build:build_lin
+          ~expect:(`Known_slack known_slack_lin_unsat_pol_coeff)
+          ~knob:(knob ~site:site_combine Writer.Mutation.Perturb_coefficient)
+          "perturb-coefficient";
+        emitter_lane c ~build:build_lin ~expect:`Rejects
+          ~knob:(knob ~site:site_combine Writer.Mutation.Swap_citation)
+          "swap-citation";
+        (* Occurrence 3 is the outer `pol`, the one `conclusion UNSAT` cites -- the
+           step `drop-line` deletes, judged rather than parsed. *)
+        emitter_lane c ~build:build_lin ~expect:`Rejects
+          ~knob:
+            (knob ~occurrence:3 ~site:site_combine Writer.Mutation.Truncate_derivation)
+          "truncate-derivation");
 
     (* -- the clause lanes, on a fact that arrives under a decision ------------ *)
-    let proof = branch_trace ~dir in
-    if control_lane ~tag:"branch_trace" ~proof then (
-      mutation_lane ~tag:"branch_trace" ~proof ~expect:`Rejects "rup-drop-lit";
-      mutation_lane ~tag:"branch_trace" ~proof ~expect:`Rejects "rhs-const");
+    let b = branch_trace ~dir () in
+    let build_branch ~name ~mutation = branch_trace ~mutation ~name ~dir () in
+    gated ~tag:"branch_trace"
+      ~control:(fun () -> control_holds ~tag:"branch_trace" ~proof:b.pbp)
+      ~declares:[ "rup-drop-lit"; "rhs-const"; "drop-literal"; "strengthen-rhs" ]
+      (fun c ->
+        mutation_lane c ~proof:b.pbp ~expect:`Rejects "rup-drop-lit";
+        mutation_lane c ~proof:b.pbp ~expect:`Rejects "rhs-const";
+        emitter_lane c ~build:build_branch ~expect:`Rejects
+          ~knob:(knob ~site:site_branch_trace Writer.Mutation.Drop_literal)
+          "drop-literal";
+        emitter_lane c ~build:build_branch ~expect:`Rejects
+          ~knob:(knob ~site:site_branch_trace Writer.Mutation.Strengthen_rhs)
+          "strengthen-rhs");
 
-    (* -- the real branch proof, once M1-T13 makes one verify ------------------ *)
-    let proof, outcome = solve_to_proof ~dir ~name:"chain" chain in
+    (* -- the real branch proof (D-0018 / M1-T13) ------------------------------ *)
+    let b, outcome = solve_to_proof ~dir ~name:"chain" chain in
     check "chain: the solver solves it (the instance is what we think it is)"
       (match outcome with Search.Sat _ -> true | Search.Unsat -> false);
     (* "A decision level was opened" is spelled `# 1` in a 2.0 proof and `% level 1` in
@@ -530,7 +929,7 @@ let run () =
        PROOF-FORMAT section 5 warns about, and a test that stops testing is worse than
        one that fails. Accept either marker. *)
     let branched =
-      let s = read_file proof in
+      let s = read_file b.pbp in
       let opens_a_level l =
         let starts p =
           String.length l >= String.length p && String.sub l 0 (String.length p) = p
@@ -541,40 +940,99 @@ let run () =
     in
     check "chain: the search really branched, so its proof is a branch-level one (D-0018)"
       branched;
-    let clause_lanes = [ "rup-drop-lit"; "rhs-const" ] in
-    let r, _ = run_lane ~proof "control" in
-    if r = Held then (
-      Printf.printf
-        "note chain: the branch-level proof verifies, so the clause lanes below run on a \
-         real branch nogood and a real trace line (D-0018), not only on branch_trace's \
-         hand-built stand-in.\n";
-      List.iter
-        (fun m -> mutation_lane ~tag:"chain" ~proof ~expect:`Rejects m)
-        clause_lanes)
-    else
-      waiting_lanes ~tag:"chain"
-        ~why:
-          "the branch-level proof does not verify (D-0018 / M1-T13). While that is so, \
-           branch_trace above is the only instance carrying the clause lanes"
-        clause_lanes;
+    let build_chain ~name ~mutation = fst (solve_to_proof ~mutation ~dir ~name chain) in
+    gated ~tag:"chain"
+      ~control:(fun () -> control_holds ~tag:"chain" ~proof:b.pbp)
+      ~declares:[ "rup-drop-lit"; "rhs-const"; "drop-literal"; "strengthen-rhs" ]
+      (fun c ->
+        mutation_lane c ~proof:b.pbp ~expect:`Rejects "rup-drop-lit";
+        mutation_lane c ~proof:b.pbp ~expect:`Rejects "rhs-const";
+        emitter_lane c ~build:build_chain ~expect:`Rejects
+          ~knob:(knob ~site:site_chain_branch_claim Writer.Mutation.Drop_literal)
+          "drop-literal";
+        emitter_lane c ~build:build_chain ~expect:`Rejects
+          ~knob:(knob ~site:site_chain_branch_claim Writer.Mutation.Strengthen_rhs)
+          "strengthen-rhs");
 
     (* -- the harness's own guards -------------------------------------------- *)
     (* A mutation that rewrote nothing would make every lane green against the control's
        own proof. mutate_proof.sh calls that out rather than running veripb on an
        unchanged file; [Not_applicable] is the exit it uses, and it must not be 0. *)
-    let r, out = run_lane ~proof:(branch_trace ~dir) "pol-coeff" in
+    let r, out = run_lane ~proof:(branch_trace ~dir ()).pbp "pol-coeff" in
     check "harness: a mutation with no site reports not-applicable rather than passing"
       (r = Not_applicable);
     if r <> Not_applicable then show out;
-    let r, out = run_lane ~proof:(branch_trace ~dir) "no-such-mutation" in
+    let r, out = run_lane ~proof:(branch_trace ~dir ()).pbp "no-such-mutation" in
     check "harness: an unknown mutation name is an error, not a pass"
       (match r with Broken 2 -> true | _ -> false);
     if match r with Broken 2 -> false | _ -> true then show out;
 
+    (* The control is not a lane the caller may forget (M1-T26): mutate_proof.sh
+       verifies the UNCORRUPTED proof inside every lane and refuses to report anything
+       when that fails. Asserted by composing the two halves of the harness -- hand the
+       script a proof the EMITTER has already corrupted, so the script's "honest" proof
+       is not honest at all. It must report the control failure (exit 1), not a passing
+       pol-cite lane. *)
+    let already_corrupt =
+      build_root ~name:"control_guard"
+        ~mutation:(knob ~site:site_combine Writer.Mutation.Perturb_coefficient)
+    in
+    check "harness: the emitter really did corrupt the control-guard instance"
+      already_corrupt.fired;
+    let r, out = run_lane ~proof:already_corrupt.pbp "pol-cite" in
+    check
+      "harness: a lane on an instance whose honest proof does not verify FAILS on the \
+       control, rather than reporting the corruption"
+      (r = Slack && contains out "UNCORRUPTED");
+    if not (r = Slack && contains out "UNCORRUPTED") then show out;
+    discard_kept_files out;
+
+    (* A knob whose site matches nothing must not fire -- and the proof it leaves is
+       then HONEST, which is exactly why every emitter lane asserts [fired] before it
+       believes the checker. *)
+    let missed =
+      build_root ~name:"no_site"
+        ~mutation:(knob ~site:"no-such-derivation" Writer.Mutation.Perturb_coefficient)
+    in
+    check "harness: an emitter knob whose site matches nothing does not fire"
+      (not missed.fired);
+    let v, out = check_proof missed in
+    check
+      "harness: ... and the proof it leaves is honest, so a lane that ignored [fired] \
+       would read this acceptance as slack"
+      (v = Accepted);
+    if v <> Accepted then show out;
+
+    (* The banner is the other half of that: a proof [create] wrote never carries it. *)
+    check "harness: an unmutated proof carries no corruption banner"
+      (not (contains (read_file b.pbp) corruption_banner));
+
+    (* And the knob cannot fire in a normal run because nothing in the shipped code can
+       ask it to. [Writer.create_mutated] is the only door, it reads no environment
+       variable, and no module under lib/ or bin/ names it. Asserted rather than
+       asserted-in-a-comment: the day a propagator reaches for it "temporarily", this
+       goes red. The writer is excluded because it is the definition site. *)
+    (match script with
+    | None -> ()
+    | Some sh ->
+        let root = Filename.dirname (Filename.dirname sh) in
+        let rc =
+          Sys.command
+            (Printf.sprintf
+               "grep -rn create_mutated %s %s --include=*.ml 2>/dev/null | grep -v \
+                writer[.]ml > /dev/null"
+               (Filename.quote (Filename.concat root "lib"))
+               (Filename.quote (Filename.concat root "bin")))
+        in
+        check
+          "harness: nothing under lib/ or bin/ names Writer.create_mutated, so no normal \
+           run can arm a knob"
+          (rc <> 0));
+
     (* The corrupted proofs are the ones we expected to be bad, so they are thrown away
        on success and kept when there is something to look at -- GCS's rule, and
        mutate_proof.sh keeps its own copies under the same one. *)
-    if !failures = 0 then (
+    if !failures = 0 && Sys.getenv_opt "BAGUETTE_PRESERVE_PROOF_FILES" <> Some "1" then (
       Array.iter
         (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ())
         (Sys.readdir dir);
