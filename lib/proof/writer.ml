@@ -501,7 +501,12 @@ let comment_char t = if v3 t then '%' else '*'
    still walks its format -- [ifprintf] is not free -- and that cost is incurred
    because the proof machinery is there, so it belongs in the emission number; but it
    puts no line in the file, so it must not inflate [emitted_lines], which is what the
-   instrument's own overhead is computed from. *)
+   instrument's own overhead is computed from. The consequence, stated rather than left
+   to be found: a suppressed comment costs two clock reads that [emitted_lines] does not
+   account for, so the reported overhead under-states itself by that much. Zero on every
+   model in the suite -- the only callers of [comment] are three lazy direct-encoding
+   paths in Encoding that nothing but test/unit/test_proof.ml reaches -- and it would
+   take a caller emitting far more suppressed comments than rules to matter. *)
 let comment t fmt =
   if not !emit_clock then
     if t.comments then (
