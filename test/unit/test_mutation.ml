@@ -25,9 +25,18 @@
 
    1. Mutate on an instance whose margin is ONE. Corrupt a proof of a conflict that had
       three units of slack and the contradiction survives anyway; the lane is then green
-      for the wrong reason. [root_unsat] below closes at `0 >= 1` and is the instance
+      for the wrong reason. [triple_unsat] below closes at `0 >= 1` and is the instance
       the `pol` lanes gate on. [lin_unsat] closes at `0 >= 2` and is registered as
       known-slack for exactly this reason -- see [known_slack] and the comment there.
+
+   1b. AND ON AN INSTANCE THAT NEEDS ITS DERIVATION AT ALL (M1-T38, from D-0030). A
+      margin of one in the derivation does not help if a single MODEL ROW is already
+      infeasible: the model is then refuted by that row and everything above it is
+      decoration, which is what [root_unsat] turned out to be. Trap 1 is a property of
+      the `pol`; this is a property of the .opb, and the two are independent.
+      [rows_that_refute_alone] puts the question to the checker -- a derivation-free
+      proof per model row, each of which must be REJECTED -- and it is run on
+      [triple_unsat] before its lanes, and on [root_unsat], which it must still catch.
    2. A mutation that only removes energy from a `pol` is usually not a test: a `pol`
       only has to get *close enough* that unit propagation finishes the job, so slack
       rows still close the proof. Hence `pol-coeff` perturbs a coefficient rather than
@@ -110,6 +119,7 @@
    anyone noticing. *)
 
 module Lit = Baguette_proof.Lit
+module Opb = Baguette_proof.Opb
 module Writer = Baguette_proof.Writer
 module Checker = Baguette_proof.Checker
 module Encoding = Baguette_proof.Encoding
@@ -450,6 +460,25 @@ let independent_check m (assignment : Search.assignment) =
    that never happened. It is the emitter's [Not_applicable]. *)
 type built = { pbp : string; opb : string; fired : bool }
 
+(* The .opb side of an instance: declare its variables, post its rows, hand back the
+   encoding and the row ids. Factored out of [solve_to_proof] because
+   [rows_that_refute_alone] must certify the SAME .opb the lanes are run against -- a
+   second copy of this that drifted would certify a model nothing tests. *)
+let encoding_of m =
+  let enc = Encoding.create () in
+  Array.iter (fun (n, lo, hi) -> Encoding.declare_int enc n ~lo ~hi) m.vars;
+  let named terms =
+    List.map
+      (fun (a, i) ->
+        let n, _, _ = m.vars.(i) in
+        (a, n))
+      terms
+  in
+  let row_ids =
+    List.map (fun (terms, rhs) -> Encoding.add_int_lin_le enc (named terms) rhs) m.rows
+  in
+  (enc, row_ids)
+
 (* Solve [m] through the real pipeline -- the same one test_endtoend.ml drives -- and
    leave the .opb/.pbp pair behind for the harness to corrupt. These are the solver's
    own proofs, not transcriptions of them, so a lane cannot go stale against a
@@ -465,18 +494,7 @@ let solve_to_proof ?mutation ~dir ~name m =
       ~names:(Array.map (fun (n, _, _) -> n) m.vars)
       ~domains:(Array.map (fun (_, lo, hi) -> Domain.make lo hi) m.vars)
   in
-  let enc = Encoding.create () in
-  Array.iter (fun (n, lo, hi) -> Encoding.declare_int enc n ~lo ~hi) m.vars;
-  let named terms =
-    List.map
-      (fun (a, i) ->
-        let n, _, _ = m.vars.(i) in
-        (a, n))
-      terms
-  in
-  let row_ids =
-    List.map (fun (terms, rhs) -> Encoding.add_int_lin_le enc (named terms) rhs) m.rows
-  in
+  let enc, row_ids = encoding_of m in
   let oc = open_out opb in
   Encoding.write_opb ~comments:[ "test_mutation: " ^ name ] enc oc;
   close_out oc;
@@ -513,10 +531,222 @@ let solve_to_proof ?mutation ~dir ~name m =
    it at level 0 and the whole proof is one `pol` over the model row plus two order-
    encoding axioms, closing at `0 >= 1`.
 
-   The MARGIN IS ONE, which is the entire reason this instance rather than a bigger
-   one carries the `pol` lanes (trap 1). Any single unit of energy taken out of, or
-   put into, that `pol` and the result stops being a contradiction. *)
+   Its margin is one, and that used to be the whole reason it carried the `pol` lanes.
+   M1-T26 found that the margin is not sufficient: its .opb row
+
+       @c2  +1 ~x_ge_2 +1 ~x_ge_3 >= 3
+
+   asks two coefficient-1 literals to sum to 3 and is INFEASIBLE ON ITS OWN, so the
+   model is refuted by a single row and the `pol` above it restates a contradiction the
+   checker already had. See D-0030.
+
+   THE LANES HAVE MOVED to [triple_unsat] below (M1-T38). This instance stays, and is
+   still built and still put to the checker, as the CONTROL for
+   [rows_that_refute_alone]: the procedure that certifies a candidate instance is only
+   evidence if it can be seen finding the defect, and this is the row known to have it.
+   If it ever stops being found, the certification of every other instance in this file
+   means nothing, and the check below says so rather than going quietly green. *)
 let root_unsat = { vars = [| ("x", 1, 3) |]; rows = [ ([ (1, 0) ], 0) ] }
+
+(* -- triple_unsat ---------------------------------------------------------------
+   M1-T38's replacement for [root_unsat] on the `pol` lanes.
+
+       x, y, z in 0..3,   x + y + z <= 3,   x >= 2,   y >= 2
+
+   Four properties, and the instance was chosen for all four at once. The first is the
+   one D-0030 says root_unsat cannot have; the fourth is what made a first, smaller
+   candidate (the same thing without z) unusable, and is recorded so it is not
+   rediscovered.
+
+   1. NO SINGLE ROW REFUTES IT, and neither does any pair. The .opb is
+
+        @c1..@c6  the three ladders
+        @c7  +1 ~x_ge_1 .. +1 ~z_ge_3 >= 6      (nine literals)
+        @c8  +1 x_ge_1 +1 x_ge_2 +1 x_ge_3 >= 2
+        @c9  +1 y_ge_1 +1 y_ge_2 +1 y_ge_3 >= 2
+
+      Every one of those is satisfiable on its own -- nine literals asked for six,
+      three asked for two, three asked for two -- and so is every pair: @c7 with @c8
+      leaves `sum ~y + sum ~z >= 3`, and @c8 and @c9 share no variable. Only all three
+      together close, so refuting this model genuinely REQUIRES the derivation.
+      Asserted two ways by [no_single_row_refutes] below, the second of which is the
+      checker's answer rather than our arithmetic.
+
+   2. THE MARGIN IS ONE (trap 1). The derivation's left-hand side is nine
+      complementary pairs collapsing to 3 + 3 + 3 = 9, against 6 + 2 + 2 = 10 on the
+      right: `0 >= 1`, exactly. A unit of energy taken out of, or put into, the `pol`
+      and it stops being a contradiction.
+
+   3. TRUNCATING THE DERIVATION LOSES IT. The step the `conclusion` cites is a
+      three-way combine whose first operand is @c7, which is satisfiable, so the
+      corruption is judged rather than absorbed. That is the lane root_unsat could not
+      carry. Emitted:
+
+        @c10 pol @c8 ;
+        @c11 pol @c9 ;
+        @c12 pol @c7 @c10 + @c11 + z_ge_1 z_ge_2 + z_ge_3 + + ;
+        conclusion UNSAT : @c12 ;
+
+   4. z IS IN NO OTHER ROW, AND THAT IS THE POINT. Nothing pins z, so its whole
+      contribution to @c7 has to be weakened away by literal axioms
+      (Order_reason.weaken_declared, D-0013) -- the `z_ge_1 z_ge_2 + z_ge_3 +` tail
+      above. Without a spectator variable the derivation is all constraint ids and no
+      coefficients, and `pol-coeff` / `perturb-coefficient` have NO SITE: they report
+      not-applicable and the lane fails saying nothing was tested. Measured on the
+      two-variable version of this instance before z was added. A `pol` lane needs a
+      `pol` with arithmetic in it, which is a requirement on the instance that neither
+      trap 1 nor D-0030 implies.
+
+   Deliberately NOT a bigger gap: at a gap of more than one the sum closes at
+   `0 >= k` with k > 1 and trap 1 bites, which is what lin_unsat is and why its
+   `pol-coeff` lane is registered known-slack. *)
+let triple_unsat =
+  {
+    vars = [| ("x", 0, 3); ("y", 0, 3); ("z", 0, 3) |];
+    rows = [ ([ (1, 0); (1, 1); (1, 2) ], 3); ([ (-1, 0) ], -2); ([ (-1, 1) ], -2) ];
+  }
+
+(* ------------------------------------------------------------------ *)
+(* Certifying an instance: does refuting it need the derivation?       *)
+(*                                                                     *)
+(* D-0030's finding, as a procedure a lane's instance must pass before *)
+(* the lane means anything. The technique is M2-T1/M2-T2's, in         *)
+(* test/unit/test_prop.ml [test_no_single_row_refutes]; it is reused   *)
+(* here against this file's own [model] values rather than against     *)
+(* .fzn files, because these instances have no .fzn.                   *)
+(* ------------------------------------------------------------------ *)
+
+(* The largest value a row's left-hand side can take. A variable occurring at both
+   polarities can only contribute once, which is the trap a plain sum of positive
+   coefficients falls into -- and it is exactly the shape the order encoding produces.
+   Same function as test_prop.ml's; that file is another session's and neither may
+   depend on the other's internals, so it is written out rather than shared. *)
+let max_attainable_lhs (c : Opb.constr) =
+  let tbl = Hashtbl.create 16 in
+  List.iter
+    (fun (a, (l : Lit.t)) ->
+      let key = Lit.var_name l.Lit.v in
+      let p, n = try Hashtbl.find tbl key with Not_found -> (0, 0) in
+      if l.Lit.positive then Hashtbl.replace tbl key (p + a, n)
+      else Hashtbl.replace tbl key (p, n + a))
+    (Opb.terms c);
+  Hashtbl.fold (fun _ (p, n) acc -> acc + max (max p n) 0) tbl 0
+
+(* Which of [m]'s .opb rows refute the model ALL BY THEMSELVES, put to the checker
+   rather than to our own arithmetic: for each row id in turn, a proof that derives
+   NOTHING and concludes `UNSAT : @ci`. veripb accepting one means row i is already a
+   contradiction, so every derivation above it is decoration and no mutation lane on
+   this instance can show a step to be load-bearing.
+
+   [Error msg] rather than an empty list when nothing could be run: a certification
+   that did not happen is never a pass. *)
+type certification = Refuted_alone of int list | Cannot_certify of string
+
+let rows_that_refute_alone ~dir ~name m =
+  match Checker.find () with
+  | None -> Cannot_certify Checker.not_found_message
+  | Some veripb ->
+      let enc, _ = encoding_of m in
+      let rows = Encoding.constraints enc in
+      let n = Opb.n_checker_constraints rows in
+      let opb = Filename.concat dir (name ^ "_cert.opb") in
+      let oc = open_out opb in
+      Encoding.write_opb ~comments:[ "test_mutation: certifying " ^ name ] enc oc;
+      close_out oc;
+      let accepted = ref [] in
+      for i = 1 to n do
+        let pbp = Filename.concat dir (name ^ "_cert.pbp") in
+        let oc = open_out pbp in
+        Printf.fprintf oc
+          "pseudo-Boolean proof version 3.0\n\
+           f %d ;\n\
+           output NONE ;\n\
+           conclusion UNSAT : @c%d ;\n\
+           end pseudo-Boolean proof ;\n"
+          n i;
+        close_out oc;
+        let log = Filename.concat dir (name ^ "_cert.log") in
+        let rc =
+          Sys.command
+            (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
+               (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
+        in
+        if rc = 0 then accepted := i :: !accepted;
+        (try Sys.remove pbp with _ -> ());
+        try Sys.remove log with _ -> ()
+      done;
+      (try Sys.remove opb with _ -> ());
+      Refuted_alone (List.rev !accepted)
+
+(* The arithmetic half of the same question, on our own reading of the rows. Kept
+   beside the checker's answer rather than instead of it: this one names the row in
+   terms a reader can check by eye, and the checker's is the one that cannot be wrong
+   about what veripb will do. *)
+let rows_infeasible_by_arithmetic m =
+  let enc, _ = encoding_of m in
+  List.filter
+    (fun c -> Opb.relation c = Opb.Ge && max_attainable_lhs c < Opb.rhs c)
+    (Encoding.constraints enc)
+
+(* Assert that no single row of [m] refutes it, i.e. that an instance is fit to carry a
+   mutation lane at all. Both halves must agree that there is nothing to find. *)
+let no_single_row_refutes ~dir ~name m =
+  let bad = rows_infeasible_by_arithmetic m in
+  check
+    (Printf.sprintf "%s: no .opb row is infeasible on its own, by arithmetic (D-0030)"
+       name)
+    (bad = []);
+  List.iter
+    (fun c -> Printf.printf "       infeasible alone: %s\n" (Opb.constr_to_string c))
+    bad;
+  match rows_that_refute_alone ~dir ~name m with
+  | Cannot_certify why ->
+      fail
+        "%s: the D-0030 certification did NOT run (%s), so nothing below it is evidence"
+        name why
+  | Refuted_alone [] ->
+      check
+        (Printf.sprintf
+           "%s: veripb rejects a derivation-free proof against every model row, so \
+            refuting this instance needs the derivation (D-0030)"
+           name)
+        true
+  | Refuted_alone ids ->
+      fail
+        "%s: veripb ACCEPTS a proof that derives nothing and concludes `UNSAT : %s`. \
+         This instance is as hollow as root_unsat and cannot carry a mutation lane -- \
+         fix the instance, do not re-register the lane."
+        name
+        (String.concat ", " (List.map (fun i -> Printf.sprintf "@c%d" i) ids))
+
+(* The control for that procedure, and it is not optional. D-0030 was found because an
+   instance nobody had certified turned out to be hollow; a certification nobody has
+   watched find a defect is the same mistake one level up. [root_unsat] is the row
+   known to be bad, so the procedure must report it -- both halves of it. *)
+let certification_finds_root_unsat ~dir =
+  let bad = rows_infeasible_by_arithmetic root_unsat in
+  check "D-0030 control: the arithmetic half DOES find root_unsat's infeasible row"
+    (List.exists (fun c -> Opb.constr_to_string c = "+1 ~x_ge_2 +1 ~x_ge_3 >= 3 ;") bad);
+  (* The over-counting trap, and it needs its own control because root_unsat's bad row
+     does NOT exercise it: its two literals are different variables, so summing the two
+     polarities and taking their maximum give the same answer. Replacing [max p n] with
+     [p + n] leaves every check above green -- measured. A row mentioning one variable
+     at both polarities can only reach 1. *)
+  let both = Opb.ge [ (1, Lit.bool_true "a"); (1, Lit.bool_false "a") ] 2 in
+  check
+    "D-0030 control: a variable at both polarities is counted once, not twice, so the \
+     arithmetic half finds this row infeasible too"
+    (max_attainable_lhs both = 1 && max_attainable_lhs both < Opb.rhs both);
+  let ok = Opb.clause [ Lit.bool_true "a"; Lit.bool_false "b" ] in
+  check "D-0030 control: ... and it does not fire on an ordinary clause"
+    (max_attainable_lhs ok >= Opb.rhs ok);
+  match rows_that_refute_alone ~dir ~name:"root_unsat_control" root_unsat with
+  | Cannot_certify why -> fail "D-0030 control: the certification did NOT run (%s)" why
+  | Refuted_alone ids ->
+      check
+        "D-0030 control: the checker half DOES find that root_unsat is refuted by one \
+         row alone (@c2), so the procedure can be seen working"
+        (List.mem 2 ids)
 
 (* -- lin_unsat ------------------------------------------------------------------
    test/models/lin_unsat.fzn: x + y <= 3 against x + y >= 8, over x, y in 0..5. The
@@ -746,49 +976,29 @@ let known_slack_lin_unsat_pol_coeff =
   "lin_unsat's refutation closes at `0 >= 2`, one unit wider than a contradiction needs \
    to be, so a one-unit coefficient perturbation of either weakening step still closes \
    it (`y_ge_1 >= 2` is still infeasible). Trap 1 in this file's header, measured rather \
-   than assumed. The `pol` lanes gate on root_unsat, whose margin is one; this lane \
-   stays registered so the slack is reported on every run"
+   than assumed. The `pol` lanes gate on triple_unsat, whose margin is one and whose \
+   rows are each individually satisfiable (M1-T38); this lane stays registered so the \
+   slack is reported on every run"
 
-(* FOUND BY THIS TASK (M1-T26), and it wants a decision record.
+(* GONE (M1-T38), and worth recording why rather than just deleting it.
 
-   root_unsat was chosen because its refutation closes at `0 >= 1` -- margin one, trap
-   1 in this file s header. It does. But the row the derivation starts from,
+   M1-T26 registered `root_unsat/truncate-derivation` as known-slack. The reason was not
+   slack in the derivation at all: root_unsat's model row
 
        @c2  +1 ~x_ge_2 +1 ~x_ge_3 >= 3
 
-   is ALREADY a contradiction on its own: two literals, degree three, so the largest
-   the left-hand side can ever be is 2. Measured directly, not inferred -- a proof that
-   derives nothing at all and says `conclusion UNSAT : @c2` verifies:
+   asks two coefficient-1 literals to sum to 3 and is ALREADY a contradiction, so
+   truncating the `pol` above it to its first operand leaves @c2, which still refutes the
+   model. Its sibling `pol-coeff` / `pol-cite` lanes rejected only because
+   `conclusion UNSAT : @c3` names @c3 by hint and the corruption makes THAT row
+   non-contradicting -- a strictly weaker claim than "the derivation was load-bearing".
+   D-0030 has the measurement.
 
-       pseudo-Boolean proof version 3.0 / f 2 ; / output NONE ;
-       conclusion UNSAT : @c2 ; / end pseudo-Boolean proof ;
-       -> s VERIFIED UNSATISFIABLE
-
-   So root_unsat s `pol` is not load-bearing: it restates a contradiction the .opb
-   already carries. The lane that shows this is [Truncate_derivation], which replaces
-   the step with its first operand -- and its first operand is @c2, still contradicting,
-   so the conclusion still holds.
-
-   Why the other `pol` lanes on this instance still reject, which is the subtle part:
-   `conclusion UNSAT : @c3` names @c3 by hint. [Perturb_coefficient] and
-   [Swap_citation] make @c3 something that is NOT a contradiction, and the checker
-   objects to the hint. They are testing that the step derives a contradiction, not that
-   the model needed it to. That is a weaker claim than this file has been reading them
-   as making, and it is the ninth time in this project that the instance picked to test
-   a thing could not see it break.
-
-   Registered, not silenced, and NOT fixed by weakening the lane: the fix is an
-   instance whose model rows are individually satisfiable, which is a new model and a
-   decision record, neither of which M1-T26 owns. lin_unsat/truncate-derivation
-   rejects, so the knob itself is known to work. *)
-let known_slack_root_unsat_truncate =
-  "root_unsat s model row @c2 (+1 ~x_ge_2 +1 ~x_ge_3 >= 3) is itself infeasible, so the \
-   pol that cites it derives a contradiction the .opb already had. Truncating the step \
-   to its first operand leaves @c3 = @c2, which is still contradicting, so the \
-   conclusion still checks. Measured: a proof with no derivation at all and `conclusion \
-   UNSAT : @c2` verifies. The finding is about the INSTANCE -- it cannot test whether \
-   this pol is load-bearing -- and it needs a decision record and a model whose rows are \
-   individually satisfiable"
+   The registration is not deleted to tidy the table: the lanes moved to
+   [triple_unsat], whose rows are each individually satisfiable, and the truncation lane
+   there REJECTS. root_unsat itself stays in this file as the control for
+   [rows_that_refute_alone] -- the defect is still measured on every run, it is simply
+   no longer being mistaken for a lane. *)
 
 (* Registered the way [known_slack] is, and for the same reason: the lane keeps running
    and keeps saying what it is. `drop-line` deletes a derivation step, and a derivation
@@ -829,14 +1039,21 @@ let run () =
     let site_chain_branch_claim = "trace: ~b_ge_2" in
 
     (* -- the pol lanes, on the margin-one instance ---------------------------- *)
-    let b, outcome = solve_to_proof ~dir ~name:"root_unsat" root_unsat in
-    check "root_unsat: the solver refutes it (the instance is what we think it is)"
+    (* M1-T38. The lanes were on [root_unsat] until D-0030 showed that one of its model
+       rows refutes the model by itself, so nothing above it can be load-bearing. They
+       are on [triple_unsat] now, and BEFORE they run, the procedure that says so is
+       shown finding that defect on root_unsat and not finding it here. An instance
+       that has not been certified is one nobody has checked can fail. *)
+    certification_finds_root_unsat ~dir;
+    no_single_row_refutes ~dir ~name:"triple_unsat" triple_unsat;
+    let b, outcome = solve_to_proof ~dir ~name:"triple_unsat" triple_unsat in
+    check "triple_unsat: the solver refutes it (the instance is what we think it is)"
       (outcome = Search.Unsat);
-    let build_root ~name ~mutation =
-      fst (solve_to_proof ~mutation ~dir ~name root_unsat)
+    let build_triple ~name ~mutation =
+      fst (solve_to_proof ~mutation ~dir ~name triple_unsat)
     in
-    gated ~tag:"root_unsat"
-      ~control:(fun () -> control_holds ~tag:"root_unsat" ~proof:b.pbp)
+    gated ~tag:"triple_unsat"
+      ~control:(fun () -> control_holds ~tag:"triple_unsat" ~proof:b.pbp)
       ~declares:
         [
           "pol-coeff";
@@ -851,16 +1068,17 @@ let run () =
         mutation_lane c ~proof:b.pbp ~expect:`Rejects "pol-cite";
         mutation_lane c ~proof:b.pbp ~expect:(`Unevaluated drop_line_is_a_grammar_lane)
           "drop-line";
-        emitter_lane c ~build:build_root ~expect:`Rejects
+        emitter_lane c ~build:build_triple ~expect:`Rejects
           ~knob:(knob ~site:site_combine Writer.Mutation.Perturb_coefficient)
           "perturb-coefficient";
-        emitter_lane c ~build:build_root ~expect:`Rejects
+        emitter_lane c ~build:build_triple ~expect:`Rejects
           ~knob:(knob ~site:site_combine Writer.Mutation.Swap_citation)
           "swap-citation";
         (* What `drop-line` was for, done so that the checker has to answer it: the
-           step keeps its label and loses its derivation. *)
-        emitter_lane c ~build:build_root
-          ~expect:(`Known_slack known_slack_root_unsat_truncate)
+           step keeps its label and loses its derivation. On root_unsat this was
+           ACCEPTED and registered known-slack (D-0030); here the truncation leaves
+           @c5, which is satisfiable, so the checker has to judge it. *)
+        emitter_lane c ~build:build_triple ~expect:`Rejects
           ~knob:(knob ~site:site_combine Writer.Mutation.Truncate_derivation)
           "truncate-derivation");
 
@@ -974,7 +1192,7 @@ let run () =
        is not honest at all. It must report the control failure (exit 1), not a passing
        pol-cite lane. *)
     let already_corrupt =
-      build_root ~name:"control_guard"
+      build_triple ~name:"control_guard"
         ~mutation:(knob ~site:site_combine Writer.Mutation.Perturb_coefficient)
     in
     check "harness: the emitter really did corrupt the control-guard instance"
@@ -991,7 +1209,7 @@ let run () =
        then HONEST, which is exactly why every emitter lane asserts [fired] before it
        believes the checker. *)
     let missed =
-      build_root ~name:"no_site"
+      build_triple ~name:"no_site"
         ~mutation:(knob ~site:"no-such-derivation" Writer.Mutation.Perturb_coefficient)
     in
     check "harness: an emitter knob whose site matches nothing does not fire"

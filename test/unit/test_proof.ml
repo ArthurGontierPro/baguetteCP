@@ -312,10 +312,49 @@ let test_order_encoding () =
   check "encoding: x <= lo-1 is impossible" (Encoding.le e "x" (-1) = Encoding.Fails);
   check "encoding: x <= 1 is a negated order literal"
     (Encoding.le e "x" 1 = Encoding.Cond (Lit.le "x" 1));
-  check "encoding: consistency ids are recoverable"
-    (Encoding.consistency_id e "x" 1 = Some 1 && Encoding.consistency_id e "x" 2 = Some 2);
+  (* M1-T41, from D-0031. This used to read [consistency_id e "x" 1 = Some 1] -- the
+     rung's EAGER value, i.e. its .opb row position. That is true today and is the first
+     assertion any future lazy-ladder attempt would break, which would make a rejected
+     design look like a broken test.
+
+     So what is asserted here is the TRANSITION instead: no rung has an id before the
+     ladder is materialised, every interior rung has one after, they are distinct, and
+     the two bounds never get one. Under D-0031's eager policy the materialisation point
+     IS [declare_int]; under a lazy scheme it would be a later demand. Either way the
+     observable is the same, so this check keeps its meaning under both.
+
+     What is NOT weakened by dropping the literal ids: that the rungs are .opb ROWS, in
+     order, with the right text, is exactly what the [check_eq] on [opb_text] above
+     pins, and SPEC 4.2 is where that is normative. Delete the ladder from the .opb and
+     the suite still goes red -- through that check rather than this one.
+
+     One thing this pair CANNOT see, said here rather than left to be discovered: under
+     the eager policy there is no state "declared, ladder not yet materialised", so the
+     "no id yet" half has to be exercised on a variable that has no rung for some other
+     reason. A bool is one -- declared, on [0, 1], no interior value -- and it goes
+     through exactly the declared-variable path a lazy scheme's pre-materialisation
+     state would. Found by breaking [consistency_id] to answer [Some 1] unconditionally:
+     with the "before" half written against an UNdeclared variable it stayed green,
+     because the answer was coming from the Undeclared path instead. *)
+  let e_rung = Encoding.create () in
+  Encoding.declare_bool e_rung "b";
+  check "encoding: a declared variable with no rung to materialise has no rung id"
+    (Encoding.consistency_id e_rung "b" 0 = None
+    && Encoding.consistency_id e_rung "b" 1 = None);
+  check "encoding: nor has one that has not been declared at all"
+    ((try Encoding.consistency_id e_rung "x" 1 with Encoding.Undeclared _ -> None)
+    = None);
+  Encoding.declare_int e_rung "x" ~lo:0 ~hi:3;
+  check "encoding: every interior rung has an id once the ladder is materialised"
+    (Encoding.consistency_id e_rung "x" 1 <> None
+    && Encoding.consistency_id e_rung "x" 2 <> None);
+  check "encoding: distinct rungs get distinct ids"
+    (Encoding.consistency_id e_rung "x" 1 <> Encoding.consistency_id e_rung "x" 2);
   check "encoding: no consistency clause at the bounds"
-    (Encoding.consistency_id e "x" 3 = None);
+    (Encoding.consistency_id e_rung "x" 0 = None
+    && Encoding.consistency_id e_rung "x" 3 = None);
+  raises "encoding: a rung of an undeclared variable is an error, not a missing rung"
+    (fun () -> Encoding.consistency_id e "zz" 1);
   (* A singleton domain needs no consistency clause at all. *)
   let e2 = Encoding.create () in
   Encoding.declare_int e2 "k" ~lo:5 ~hi:5;
@@ -539,6 +578,135 @@ let test_int_lin_le_add () =
     ~got:(Opb.constr_to_string (List.nth (Encoding.constraints e) 1));
   check "encoding: header count agrees with the ids assigned"
     (Opb.n_checker_constraints (Encoding.constraints e) = Encoding.n_constraints e)
+
+(* ------------------------------------------------------------------ *)
+(* M1-T32: "Compile is the only door", enforced                        *)
+(* ------------------------------------------------------------------ *)
+
+(* THE PIN THAT MAKES THE DUPLICATION SAFE.
+
+   [Encoding.Arith] is a local copy of [Baguette_core.Checked]'s five primitives, and
+   it has to be one: core depends on proof, so [Checked] is not nameable from
+   lib/proof/ (docs/ARCHITECTURE.md section 1). What makes that copy checkable rather
+   than a second source of truth is that the TEST layer depends on both libraries even
+   though neither depends on the other -- so the equivalence can be asserted here even
+   though it cannot be expressed in lib/.
+
+   Both operations are run on every case and the two answers are compared, raise
+   included. A case where one raises and the other does not is the divergence this
+   exists to catch. *)
+let test_arith_matches_checked () =
+  let module Checked = Baguette_core.Checked in
+  let answer f x = try `V (f x) with _ -> `Raised in
+  (* One check per operation, not per case: a divergence names the inputs it was found
+     on, so the report is as specific as a per-case check without a hundred identical
+     `ok` lines hiding the rest of the suite. *)
+  let same name f g show cases =
+    let bad = List.filter (fun c -> answer f c <> answer g c) cases in
+    check
+      (Printf.sprintf "M1-T32: Encoding.Arith.%s agrees with Checked.%s on all %d cases"
+         name name (List.length cases))
+      (bad = []);
+    List.iter
+      (fun c -> Printf.printf "       diverges at %s\n" (show c))
+      (List.filteri (fun i _ -> i < 5) bad)
+  in
+  let one x = string_of_int x in
+  let two (a, b) = Printf.sprintf "(%d, %d)" a b in
+  (* The values straddle [mul]'s fast-path boundary deliberately: both copies take a
+     four-comparison shortcut below 2^30 and an exact division above it, so a copy that
+     drifted on WHERE that boundary sits would agree everywhere else. *)
+  let ones =
+    [
+      0;
+      1;
+      -1;
+      7;
+      -7;
+      max_int;
+      min_int;
+      max_int - 1;
+      min_int + 1;
+      0x3FFFFFFF;
+      -0x3FFFFFFF;
+      0x40000000;
+      -0x40000000;
+      max_int / 2;
+      min_int / 2;
+    ]
+  in
+  let pairs = List.concat_map (fun a -> List.map (fun b -> (a, b)) ones) ones in
+  same "neg" Encoding.Arith.neg Checked.neg one ones;
+  same "abs" Encoding.Arith.abs Checked.abs one ones;
+  same "add"
+    (fun (a, b) -> Encoding.Arith.add a b)
+    (fun (a, b) -> Checked.add a b)
+    two pairs;
+  same "sub"
+    (fun (a, b) -> Encoding.Arith.sub a b)
+    (fun (a, b) -> Checked.sub a b)
+    two pairs;
+  same "mul"
+    (fun (a, b) -> Encoding.Arith.mul a b)
+    (fun (a, b) -> Checked.mul a b)
+    two pairs;
+  (* And the fast path's own boundary, where a wrong constant would show up as a
+     disagreement only on products the four comparisons let through. *)
+  check "M1-T32: Arith.mul's fast path answers the same at 2^30 - 1 squared"
+    (Encoding.Arith.mul 0x3FFFFFFF 0x3FFFFFFF = Checked.mul 0x3FFFFFFF 0x3FFFFFFF)
+
+(* The guard itself: a row whose arithmetic cannot be carried out is REFUSED at the
+   committing door rather than silently written wrapped.
+
+   The instance is D-0029's, verbatim: c = -2^61 against x in 3..4. The true row is
+   vacuous (-2^61 * x <= 0 for every x >= 0), the wrapped one FORCES x = 4, and veripb
+   accepted the refutation of that different model. test/unit/test_prop.ml's
+   [test_opb_row_wraps_identically] still demonstrates the wrap on the pure expansion,
+   which is what this guard exists to stop reaching a file. *)
+let test_committing_door_refuses_overflow () =
+  let overflows f =
+    match f () with exception Encoding.Unrepresentable _ -> true | _ -> false
+  in
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:3 ~hi:4;
+  let before = Encoding.n_constraints e in
+  check "M1-T32: add_int_lin_le refuses a row whose folded constant would wrap"
+    (overflows (fun () -> Encoding.add_int_lin_le e [ (-2305843009213693952, "x") ] 0));
+  check "M1-T32: ... and the encoding is left untouched, so no corrupted row is posted"
+    (Encoding.n_constraints e = before);
+  (* Products that each fit and a sum that does not -- the second way a row's
+     arithmetic goes wrong, and the one a per-product check alone would miss.
+
+     NO TEST MAY DECLARE A WIDE DOMAIN. The order encoding is width-proportional
+     (D-0028), so `~hi:(max_int / 3)` is not a slightly bigger case, it is
+     [declare_int] trying to allocate 10^18 ladder clauses -- which is how this test
+     drove the machine into its RAM ceiling on its first run. Large arithmetic is
+     driven through large COEFFICIENTS against domains of width 0 or 1 throughout. *)
+  let e2 = Encoding.create () in
+  let big = (max_int / 2) + 1 in
+  Encoding.declare_int e2 "a" ~lo:big ~hi:big (* fixed: width 0, no ladder *);
+  Encoding.declare_int e2 "b" ~lo:big ~hi:big;
+  check "M1-T32: a term mass that leaves the range is refused too"
+    (overflows (fun () -> Encoding.add_int_lin_le e2 [ (1, "a"); (1, "b") ] 0));
+  (* The A/B pair is the widest arithmetic the .opb performs (checked.ml, path 4), so
+     it is refused on rows the plain `<=` door still accepts. p is on [0, 1]: one
+     literal, one ladder rung fewer than that. *)
+  let e3 = Encoding.create () in
+  Encoding.declare_int e3 "p" ~lo:0 ~hi:1;
+  let a = max_int / 3 in
+  check "M1-T32: add_int_lin_le accepts a row inside the envelope"
+    (not (overflows (fun () -> Encoding.add_int_lin_le e3 [ (a, "p") ] 0)));
+  check "M1-T32: add_int_lin_ne refuses the same row, whose A/B pair is wider"
+    (overflows (fun () -> Encoding.add_int_lin_ne e3 [ (a, "p") ] 0));
+  (* And an ordinary row is unaffected -- the guard must not be a cap. *)
+  let e4 = Encoding.create () in
+  Encoding.declare_int e4 "y" ~lo:0 ~hi:10;
+  let id = Encoding.add_int_lin_le e4 [ (3, "y") ] 7 in
+  check "M1-T32: an ordinary row is posted exactly as before"
+    (id = Encoding.n_constraints e4
+    && Opb.constr_to_string (List.nth (Encoding.constraints e4) (id - 1))
+       = "+3 ~y_ge_1 +3 ~y_ge_2 +3 ~y_ge_3 +3 ~y_ge_4 +3 ~y_ge_5 +3 ~y_ge_6 +3 ~y_ge_7 \
+          +3 ~y_ge_8 +3 ~y_ge_9 +3 ~y_ge_10 >= 23 ;")
 
 (* End-to-end: post a real int_lin_le row through add_int_lin_le, derive a
    contradiction from it with a real veripb, and check I-X1 and I-X5 together.
@@ -1204,6 +1372,8 @@ let () =
   test_int_lin_le_soundness ();
   test_int_lin_le_worked_examples ();
   test_int_lin_le_add ();
+  test_arith_matches_checked ();
+  test_committing_door_refuses_overflow ();
   test_int_lin_le_veripb ();
   test_veripb_accepts ();
   test_v3_emitted_text ();
