@@ -10,11 +10,13 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
-**No sessions are running.** The fourth wave is merged and released; the claims table is empty and every row below is in `## Completed`. Round dispatched 2026-09-16 by the orchestrator, one
+**Two sessions are running (fifth wave, dispatched 2026-09-16).** The fourth wave is merged and released. Round dispatched 2026-09-16 by the orchestrator, one
 git worktree each (`.claude/worktrees/<tag>`), so no two share `_build`'s global lock.
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M1-T31 + M1-T50 (one task, as M1-T44 argued) | `lib/core/explanation.ml`, `lib/core/justify.ml`, `lib/core/prop/linear.ml`, `lib/core/prop/int_le.ml`, `int_lt.ml`, `int_eq.ml`, `lin_eq.ml`, `bool2int.ml`, `lib/core/search.ml`, `test/unit/test_core.ml`, `test/unit/test_matrix.ml` | agent-ambient | 2026-09-16 |
+| M1-T47 | `lib/proof/writer.ml`, `bench/run_bench.sh`, `bench/README.md` | agent-emit | 2026-09-16 |
 
 Two rounds are recorded in `## Completed` below. The rows that stood here on
 2026-09-15 (`integration`, M1-T12, M1-T13) were stale — see the handoff note "the
