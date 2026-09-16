@@ -2062,3 +2062,76 @@ there is no "decline" available for an artefact that must exist, and that applie
 force to the module that *writes* the artefact than to the propagators, where it was
 already accepted. A documented-only invariant would have left the hole the roadmap row
 names — `test_matrix.ml` calls `Encoding` directly — genuinely open.
+
+## D-0037  A decision is an assumption, not the model row: `Trivial` is deleted and the ambient row becomes unrepresentable
+
+**Status**: accepted, 2026-09-16. **Required by** `CLAUDE.md` ("do not add a constructor
+without a decision record"). **Delivers** M1-T31 and M1-T50, which could only go out
+together — the `?row_id` fallback *is* `Trivial`, and removing it breaks every test file's
+compile in the same commit that removes it.
+
+### The change
+
+`Explanation.Trivial` is **deleted**. A decision now carries `Explanation.Decision of Lit.t`.
+`Justify.ctx` loses `model_id` and `for_constraint` entirely; `Linear.make`'s `?row_id`
+(and `Lin_eq`/`Int_eq`'s `?le_id`/`?ge_id`) are **required**.
+
+### Why this is a mislabel, not a rendering bug
+
+M1-T50 observed `linear.ml` emitting `pol <own row> <own row> +` — deriving twice the
+propagator's own row where the fact belonged. The mechanism was `Trivial -> ctx.model_id ()`.
+
+The root cause is that `Trivial` means "the model constraint itself justifies this", and
+that sentence is **false of a decision**. A decision is an assumption the search made, not
+a consequence of any row. Once the reason says so honestly, the rest follows without
+invention:
+
+- A decision **has no constraint id and structurally cannot**. D-0009 already settles it: a
+  `pol` cannot assert a literal, a `rup` cannot derive a non-consequence, and `search.ml`
+  never logs a decision as a constraint. So it is not citable, ever.
+- `linear.ml` gains a third snapshot branch, `Snap_assume`: the term is **weakened** out of
+  the row with the declared-width axiom chain (sound whatever the variable turns out to be),
+  while its bound literal is **still** contributed to the D-0018 trace line. The two
+  projections diverge deliberately — it renders like `Snap_weaken` into the `pol` and like
+  `Snap_cite` into the facts. Dropping the fact would make the trace line an unconditional
+  claim, which is exactly the I-P5 failure `int_ne` shipped between M1-T9 and M1-T17.
+- `Explanation.term` and `cut` **refuse** a `Decision` where the citation is built, rather
+  than leaving `Justify` to discover it.
+
+**Effect on `Explanation.lits`, which D-0035 says becomes soundness once M2-T3 lands:**
+strictly improved. `Trivial`'s `lits` was `[]` — so a reason set resting on a decision named
+**no dependency at all**, precisely the omission D-0035 warns of. `Decision lit` gives
+`[lit]`, and `Snap_assume`'s weaken chain spans the declared width and therefore contains
+the decision's own literal. The `lits` of a decision-sourced `Combine` is a superset of what
+it was, never a subset.
+
+### On "a type error, not a raise" — what was and was not achieved
+
+**The ambient row is genuinely unrepresentable.** `Justify.ctx` has no field to hold one,
+`create` takes two arguments, and no constructor means "the current row". That is a
+type-level change; it reddened ~30 call sites across 10 files, and `bin/main.ml`'s failing
+`model_id` thunk is deleted because there is nothing left to guard.
+
+**`Justify.emit` on a `Decision` still raises, and that is stated rather than dressed up.**
+The fully type-level form needs two types — a trail `reason` and an emittable `derivation` —
+and all three routes to it leave the task's file set: `Store.outcome`'s
+`Conflict of Explanation.t` forces the split through `store.ml`, `engine.ml` and
+`propagator.ml`, with ~74 test call sites needing an explicit wrap; a `private` abbreviation
+needs the same 74 coercions; and `emit : … -> cid option` pushes a spurious `None` onto
+every honest caller. What was done instead is to move the refusal to *construction* and make
+`linear.ml` discriminate structurally, so nothing builds one. Strictly better than a silent
+**wrong** `pol`, but it is a raise. The type-level version is a real task, not a tidy-up.
+
+### The blind spot this exposed, which is the most useful part
+
+Pushing the **wrong** decision literal (`lit` instead of `Lit.negate lit` in `explore_le`)
+left the entire suite **green**: 30 models, every unit binary. Nothing read the literal —
+the `pol` weakens the term away without it and the trace fact is computed from the store.
+`test_matrix.ml` now walks the trail on every propagation and checks, at each
+`Store.is_level_start` entry, that the reason is `Decision l`, that `l` names the variable
+that moved in the direction it moved, and that the bound **as recorded** entails `l` — with
+`>=`/`<=` rather than `=`, because a settle can strengthen it (I-X9). The same break now
+reddens 13 matrix checks. Matrix checks 239 → 252.
+
+**Artefact delta: zero of 30 models change, all 90 hashes identical** — the predicted
+result, since a `Combine` is emitted only at a root conflict where no decision is in force.

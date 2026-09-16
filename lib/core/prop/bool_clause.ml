@@ -25,9 +25,11 @@
    lib/core/prop/ne.ml makes, for the same reason:
 
      - it cites no row id, because its justification is a [rup] whose target states
-       its own content in full. D-0011's hazard is [Explanation.Trivial] ("whatever
+       its own content in full. D-0011's hazard was [Explanation.Trivial] ("whatever
        ctx.model_id points at", unresolvable once it is on the trail with no
-       propagator identity attached); nothing here ever builds [Trivial] or
+       propagator identity attached). **It no longer exists** (M1-T31/M1-T50, D-0037): the
+       ambient row is unrepresentable now, not merely unused. Nothing here ever built
+       [Trivial] or
        [Model_row], so there is nothing to route and [make] takes no [?row_id]. An
        unused id parameter would be an invitation to believe it was load-bearing.
 

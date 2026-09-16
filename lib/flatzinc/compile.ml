@@ -39,7 +39,7 @@
    ---------------------------------------------------------------------------
 
    Every instance is given its own row id at construction. An instance without one
-   falls back to [Explanation.Trivial], which carries no payload and therefore cannot
+   falls back to the ambient row, which carries no payload and therefore cannot
    say *which* row it meant; D-0011 records why no routing scheme downstream can
    recover it (the trail stores [{ var; old; why }] and no propagator identity), and
    D-0015 records that test_endtoend.ml shipped exactly that bug by computing the ids
@@ -57,7 +57,7 @@
      single [Ne.t] cites *neither* of them, and the pair of ids is dropped rather than
      stored. lib/core/prop/ne.ml's header is the argument: every explanation that
      propagator builds is a [Clause] stating its own content in full, so it never names
-     a row, and D-0011's hazard -- [Explanation.Trivial], meaning "whatever
+     a row, and D-0011's hazard -- the ambient row, meaning "whatever
      ctx.model_id points at" -- cannot arise. Handing [Ne.make] a row id it does not
      use would be worse than dropping one: it would imply a citation that never happens.
    - [Int_le] / [Int_lt] / [Int_eq] are the same shapes over `a - b`, and [Int_ne] is

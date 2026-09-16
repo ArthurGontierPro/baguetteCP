@@ -26,9 +26,12 @@
 
    D-0011 (one propagator instance, one model row) is satisfied vacuously and it is
    worth being explicit about why, since this is the first propagator in the tree
-   that is not a [Linear]. D-0011's hazard is [Explanation.Trivial], which means
+   that is not a [Linear]. D-0011's hazard was [Explanation.Trivial], which meant
    "whatever ctx.model_id points at" and is unresolvable once it is on the trail with
-   no propagator identity attached. Nothing in this module ever builds [Trivial], or
+   no propagator identity attached. **[Explanation.Trivial] no longer exists** (M1-T31/M1-T50,
+   D-0037): a decision now carries [Decision of Lit.t] and [Linear.make]'s row id is
+   required, so the ambient row is unrepresentable rather than merely unused. Nothing in
+   this module ever built [Trivial], or
    [Model_row], or any constructor that names a constraint: every explanation it
    produces is a [Clause] that states its own content in full. So there is nothing to
    route and nothing to get wrong -- which is also why [make] takes no [?row_id],

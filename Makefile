@@ -32,8 +32,8 @@ fmt:
 # binaries died at the memory ceiling because a width went unnoticed, and the first
 # draft of this lint waved the real line through.
 lint:
-	./scripts/check_test_widths.sh --self-test
-	./scripts/check_test_widths.sh
+	./scripts/check_test_widths.py --self-test
+	./scripts/check_test_widths.py
 
 # The gate. Run this before every commit.
 check: fmt build lint test

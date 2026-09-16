@@ -78,6 +78,14 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
   with it. Violating this produced M1-T44: a correct UNSAT whose chain fell exactly one
   unit short. See D-0035.
 
+  **Scope, narrowed 2026-09-16 (M1-T50).** This holds where an explanation is *emitted as
+  a `pol`* at all. A bound resting on a **decision** is a deliberate exception: a decision
+  has no constraint id and structurally cannot have one (D-0009), so `Snap_assume` weakens
+  the term out of the row and derives something strictly weaker than the trail records.
+  Such a bound is justified by its **trace line**, not by a `pol`. Harmless today because a
+  `Combine` is emitted only at a root conflict, where no decision is in force — but
+  D-0018 point 2's per-push `pol` path and M2-T3 both reach it. See D-0037.
+
 - **I-P5** Every store mutator that can move a bound takes `~facts`, and every propagator
   that calls one passes the facts it actually read. A propagator that prunes through a
   factless mutator writes a D-0018 trace line with an empty reason — an unconditional
