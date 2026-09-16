@@ -50,6 +50,41 @@ Scope your builds to your own directory (`dune build lib/core/`) rather than a b
 `dune build`, which will also try to compile whatever half-finished state the other
 sessions have on disk and fail for reasons that are not yours.
 
+### If you are working in a worktree under `.claude/worktrees/`
+
+`make` and a bare `dune build` **do not work from there**, and the error does not say why:
+
+```
+Error: Don't know about directory .claude/worktrees/<name> specified on the command line!
+Error: No rule found for alias .claude/worktrees/<name>/default
+```
+
+The cause is that the worktree lives *inside* the main checkout, so dune walks up, finds
+the outer `dune-project` first, and treats your worktree as a subdirectory of the outer
+project rather than as a project of its own.
+
+Pass `--root .` to pin the project root to the worktree. That also puts `_build` inside
+the worktree, which is what you want anyway — it is then a private build directory, so
+the shared `_build/.lock` above stops being your problem:
+
+```sh
+dune build   --root .
+dune runtest --root .
+```
+
+Do **not** reach for a `--build-dir` outside the checkout instead. Two suites locate
+`test/models/` and `test/expected/` relative to the cwd or the executable, and the
+mutation harness needs `scripts/mutate_proof.sh`; from an out-of-tree build directory
+they cannot find those. They say so rather than passing quietly, which is the behaviour
+to preserve:
+
+```
+FAIL scripts/mutate_proof.sh was not found ... NOT ONE mutation lane ran. This is not a pass.
+```
+
+`BAGUETTE_ROOT=<checkout>` fixes the mutation harness but not the other two; `--root .`
+fixes all three.
+
 ### Files that are contention hotspots
 
 Edits to these are frequent conflicts. Claim them explicitly and keep the edit short:
