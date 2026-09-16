@@ -181,20 +181,34 @@ let parse_args argv =
       avoid a third is to publish the contaminated part as its own number.
 
    ---------------------------------------------------------------------------
-   What is still fused, said here rather than discovered later
+   What [search] used to fuse, and what it still does (M1-T47)
    ---------------------------------------------------------------------------
 
-   [search] contains the proof lines emitted DURING the search as well as propagation
-   and search themselves. Everything this file can reach is on this side of
-   [Search.solve]; the emission points are inside lib/core/justify.ml and
-   lib/proof/writer.ml, which this task does not own. Separating them wants an
-   accumulator around [Writer.line] -- the single funnel every rule goes through -- read
-   back as something like `Writer.emitted_us`. Until that exists, a claim of the form
-   "propagation costs X" cannot be made from [search] alone.
+   [search] used to be propagation, search AND the proof lines emitted during them,
+   with no way to tell them apart from here: every emission point is below
+   [Search.solve]. M1-T47 put the accumulator where the emission actually happens --
+   [Writer.emitted_us], around the writer's own output calls -- so [search] now splits
+   into two reported rows, [emit] and [propag].
 
-   The two proof-emission phases that ARE separable from here are separated, and on the
-   wide models they are the larger half: building and writing the .opb ([opb]) and
-   flushing the .pbp ([pbpclose]). *)
+   THEY ARE BOUNDS, NOT FIGURES, and the reason is specific rather than ritual.
+   [Writer] accumulates the time it spends WRITING a line; the time spent BUILDING
+   that line's body -- Pol.to_string_cited, Opb.constr_to_string, the Printf.sprintf
+   at each rule's call site -- is spent before the writer's output call is entered and
+   is not in [emit]. So:
+
+     emit   is a LOWER bound on what proof emission costs during the search;
+     propag is search - emit, an UPPER bound on what propagation and search cost.
+
+   Two more things travel with them. [emit] is measured with the same [Sys.time] as
+   every other row, which costs ~0.72 us per read here, so [emit] carries about one
+   clock read per emitted line of its own overhead and [search] carries two; the row
+   [emitln] is the line count the correction is computed from, and the report prints
+   it. And the clock inside the writer is only running under --time, so a run without
+   this flag pays one bool dereference per line and nothing else.
+
+   The two proof-emission phases that were ALREADY separable from here are still
+   separate, and on the wide models they are the larger half: building and writing the
+   .opb ([opb]) and flushing the .pbp ([pbpclose]). *)
 
 module Timing = struct
   (* Process CPU microseconds. See the note above for what that does and does not
@@ -205,6 +219,45 @@ module Timing = struct
   let startup = ref 0
   let phases : (string * int) list ref = ref []
   let record name us = if !on then phases := (name, us) :: !phases
+
+  (* M1-T47. Derived rows: they are a SPLIT of [search], not phases of their own, so
+     they are deliberately not in [phases] -- putting them there would make the sum
+     that produces [other] count the search twice. [emit_lines] is a count, not a
+     duration, and is printed with a `lines` unit so that nothing reading `$4 == "us"`
+     picks it up as a timing. *)
+  let emit_us = ref 0
+  let emit_lines = ref 0
+  let have_emit = ref false
+
+  (* The cost of ONE [Sys.time] read, in nanoseconds, measured on this machine under
+     this load rather than taken from a table. It is what [emit] and [propag] each
+     carry once per emitted line, and on a 545-line proof it is half of [emit] -- far
+     too large to leave folded in silently.
+
+     Called from [report], AFTER every number the report prints has been taken, so the
+     ~0.4 ms it costs lands in no phase and contaminates nothing. That placement is
+     the whole reason this is a function and not a constant: a calibration run before
+     the solve would show up in `rest` and move the very table it exists to correct.
+
+     MINIMUM OF BURSTS, NOT A MEAN, for the reason bench/README.md section 2 gives for
+     every other number in this project: a mean folds in whatever else the machine was
+     doing, and four sessions build on this one. A single 512-read burst was tried
+     first and ranged 836..1871 ns across five consecutive runs of the same model --
+     which would have made the published correction swing by a factor of two. Nine
+     bursts of 256, minimum taken, holds inside a few percent. *)
+  let clock_tick_ns () =
+    let n = 256 and bursts = 9 in
+    let best = ref max_int in
+    for _ = 1 to bursts do
+      let t0 = Sys.time () in
+      for _ = 1 to n do
+        ignore (Sys.time ())
+      done;
+      let t1 = Sys.time () in
+      let ns = int_of_float (((t1 -. t0) *. 1e9 /. float_of_int n) +. 0.5) in
+      if ns < !best then best := ns
+    done;
+    !best
 
   (* Free when timing is off: one dereference and the call itself. A phase whose body
      raises records nothing, which is why the report prints an `other` row instead of
@@ -229,8 +282,15 @@ module Timing = struct
     | "opb" ->
         "Encoding.write_opb: the .opb built, written and closed (0 without --proof)"
     | "proofopen" -> "proof channel opened, Writer.create, Encoding.start_proof"
-    | "search" ->
-        "Search.solve: propagation and search, AND the proof lines emitted during them"
+    | "search" -> "Search.solve: propagation, search and proof emission together"
+    | "emit" ->
+        "of `search`: inside Writer's output calls. LOWER bound -- excludes building \
+         each line"
+    | "propag" ->
+        "of `search`: search - emit. UPPER bound on propagation and search themselves"
+    | "clockovh" ->
+        "this instrument's own cost: charged ONCE to `emit` and ONCE to `propag`. \
+         Subtract it"
     | "pbpclose" -> "the .pbp flushed and closed (and removed, without --proof)"
     | "output" -> "Output.solution rendered, printed and flushed to stdout"
     | "other" -> "inside main but outside every phase above (dispatch, diagnostics)"
@@ -247,6 +307,8 @@ module Timing = struct
   let report () =
     if !on then (
       let in_main = now () - !main_start in
+      (* Calibrated here and nowhere earlier: see [clock_tick_ns]. *)
+      let tick_ns = if !have_emit then clock_tick_ns () else 0 in
       let ps = List.rev !phases in
       let summed = List.fold_left (fun a (_, us) -> a + us) 0 ps in
       prerr_endline
@@ -255,14 +317,38 @@ module Timing = struct
         "time: user+system CPU of THIS PROCESS, so below wall time by whatever the";
       prerr_endline "time: machine spent not running it. stderr only, never stdout.";
       row "startup" !startup;
-      List.iter (fun (n, us) -> row n us) ps;
+      List.iter
+        (fun (n, us) ->
+          row n us;
+          if n = "search" && !have_emit then (
+            row "emit" !emit_us;
+            row "propag" (us - !emit_us);
+            row "clockovh" (!emit_lines * tick_ns / 1000);
+            Printf.eprintf "time: %-10s %10d lines  %s\n" "emitln" !emit_lines
+              "proof lines written during `search`: what `clockovh` is computed from"))
+        ps;
       row "other" (in_main - summed);
       row "inmain" in_main;
       row "process" (!startup + in_main);
-      prerr_endline
-        "time: `search` INCLUDES the proof lines written during the search; only `opb`";
-      prerr_endline
-        "time: and `pbpclose` are separable proof-emission phases from the CLI. See the";
+      if !have_emit then (
+        prerr_endline
+          "time: `search` splits into `emit` and `propag` (M1-T47). BOTH ARE BOUNDS:";
+        prerr_endline
+          "time: `emit` is time inside Writer's output calls and EXCLUDES building each";
+        prerr_endline
+          "time: line's body at its call site, so it is a lower bound on emission and";
+        prerr_endline "time: `propag` is an upper bound on propagation.";
+        Printf.eprintf
+          "time: AND BOTH INCLUDE `clockovh`: Sys.time measured %d ns a read here, one\n"
+          tick_ns;
+        prerr_endline
+          "time: read per emitted line landing in each. Subtract it from both. `search`";
+        prerr_endline
+          "time: itself is 2 x clockovh above what the same run costs without --time.")
+      else
+        prerr_endline
+          "time: `search` INCLUDES the proof lines written during it: no writer was \
+           opened.";
       prerr_endline "time: note above module Timing in bin/main.ml before quoting these.")
 end
 
@@ -366,7 +452,16 @@ let solve opts (m : Model.t) =
             cleanup ()))
       (fun () ->
         Timing.phase "search" (fun () ->
-            Search.solve ~engine:compiled.Compile.engine ~store ~ctx ~check ()))
+            (* M1-T47. Writer's accumulator is process-wide and cumulative -- it has
+               already counted Encoding.start_proof, which ran in [proofopen] -- so
+               what belongs to [search] is the DIFFERENCE across this call and not the
+               total. Sampled inside the phase so that the two brackets nest. *)
+            let e0 = Writer.emitted_us () and l0 = Writer.emitted_lines () in
+            let r = Search.solve ~engine:compiled.Compile.engine ~store ~ctx ~check () in
+            Timing.emit_us := Writer.emitted_us () - e0;
+            Timing.emit_lines := Writer.emitted_lines () - l0;
+            Timing.have_emit := true;
+            r))
   in
   (* [flush stdout] is inside the phase on purpose: the runtime would flush at exit
      anyway, after at_exit has already printed the report, and a number called "output"
@@ -391,6 +486,9 @@ let () =
   Timing.main_start := t_main;
   let opts = parse_args Sys.argv in
   Timing.on := opts.time;
+  (* M1-T47. The writer's per-line clock is a syscall a line and stays off unless the
+     numbers are being asked for; --time is the only thing in the tree that opens it. *)
+  Writer.time_emission := opts.time;
   if opts.time then at_exit Timing.report;
   if not (Sys.file_exists opts.model) then (
     Printf.eprintf "no such file: %s\n" opts.model;
