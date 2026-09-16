@@ -439,13 +439,22 @@ let evaluate (m : M.t) (assign : int array) =
       | M.Bool2int (b, x) -> operand x = if truth b then 1 else 0
       | M.Bool_eq (a, b) -> truth a = truth b
       | M.Bool_not (a, b) -> truth a <> truth b
-      | M.Int_lin_ne _ | M.Int_ne _ ->
-          (* STALE COMMENT PRESERVED DELIBERATELY, see the orchestrator note below.
-             This said "compile rejects these", which stopped being true at M1-T11.
-             It is left as a loud failure rather than silently given semantics,
-             because giving it semantics here without a test that reaches it would be
-             writing an oracle nobody has ever seen run. Filed as M1-T40. *)
-          failwith "test_compile: evaluate reached a rejected constraint kind")
+      (* M1-T40. This arm used to be a [failwith] saying "compile rejects these",
+         which stopped being true at M1-T11 -- so from M1-T11 until now the oracle had
+         never once been run on a disequality, and the only thing standing between it
+         and a silently wrong answer was that no model in this file contained one.
+         The semantics below are the FlatZinc definition of the two builtins, read off
+         the spec and deliberately NOT off [Model.check_assignment] or off
+         [lib/core/prop/ne.ml] -- same rule as the Boolean row above, and the reason
+         [evaluate] exists at all.
+
+         The deliverable of M1-T40 is not these two lines, it is
+         [test_end_to_end]'s three disequality models below: an oracle branch nobody
+         has seen run is exactly what D-0030 is about, so the semantics and the models
+         that reach them land together. Confirmed by inverting each arm in turn and
+         watching those models fail. *)
+      | M.Int_lin_ne (ts, r) -> value ts <> r
+      | M.Int_ne (a, b) -> operand a <> operand b)
     m.M.constraints
 
 (* Brute force over the declared box: the independent oracle for the expected answer.
@@ -595,7 +604,34 @@ let test_end_to_end () =
      against the real checker rather than assumed, which is what this run does. *)
   run_model ~title:"e2e unsat: a ground constraint that does not hold"
     ~src:
-      "var 1..3: x;\nconstraint int_le(x,3);\nconstraint int_le(2,1);\nsolve satisfy;\n"
+      "var 1..3: x;\nconstraint int_le(x,3);\nconstraint int_le(2,1);\nsolve satisfy;\n";
+  (* M1-T40: the three models that reach [evaluate]'s disequality arms. Before these,
+     both arms were a [failwith] nothing had ever executed.
+
+     SAT, int_ne: the search must branch (a disequality infers nothing until all but
+     one of its terms is fixed), so [evaluate] is called by [brute_force] over the
+     whole box, again as [Search.solve]'s [~check], and once more on the answer. *)
+  run_model ~title:"e2e sat: int_ne, the search must branch to find a witness"
+    ~src:"var 1..2: x;\nvar 1..2: y;\nconstraint int_ne(x,y);\nsolve satisfy;\n";
+  (* SAT, int_lin_ne, with coefficients past +/-1 so that [value]'s multiplication is
+     exercised rather than only its addition: 2x + 3y <> 7 rules out (2,1) and (5,-1),
+     and of those only (2,1) is in the box, so the oracle must reject exactly one of
+     the four assignments -- an arm that answered [=] would pick that one and nothing
+     else, which is what makes this model able to see the inversion. *)
+  run_model ~title:"e2e sat: int_lin_ne, 2x + 3y <> 7, coefficients past +/-1"
+    ~src:
+      "var 1..2: x;\n\
+       var 1..2: y;\n\
+       constraint int_lin_ne([2,3],[x,y],7);\n\
+       solve satisfy;\n";
+  (* UNSAT at the root, and the case where the two arms cannot cover for each other:
+     int_ne(x,x) is false for every x, so [brute_force] must return [None] -- an arm
+     reading [=] makes it satisfiable everywhere and the run disagrees with the solver
+     rather than merely picking a different witness. Compile folds the two occurrences
+     into a zero coefficient and the empty false sum (see compile.ml's header), so the
+     solver reaches UNSAT by a route that shares nothing with the oracle's reading. *)
+  run_model ~title:"e2e unsat: int_ne(x, x) is false for every x"
+    ~src:"var 1..3: x;\nconstraint int_ne(x,x);\nsolve satisfy;\n"
 
 (* ------------------------------------------------------------------------- main *)
 
