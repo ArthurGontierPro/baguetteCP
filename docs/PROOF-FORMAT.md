@@ -161,6 +161,8 @@ all, and they name it explicitly rather than relying on a default.
 | comment | `* text` | `% text` | `*` is refused: "Expected a top level rule name" |
 | cutting planes | `pol <rpn>` | `pol <rpn> ;` | operands may be labels |
 | RUP | `rup <c> ;` | `rup <c> ;` | unchanged: the constraint already carries the terminator, and a second `;` is an error |
+| **implies / assert** | `ia <c> ; <id>` | `ia <c> : @hint ;` | **Was missing from this table until M1-T51 and is present in BOTH checkers.** Asks whether `<c>` is *syntactically implied* by the one constraint at the hint — no propagation, no search. Yields an id. See the trap below |
+| **equals** | `e <c> ; <id>` | `e <c> : @hint ;` | same shape; asks for syntactic *equality* rather than implication. Rejections: 3.0.2 "Expected constraint is not equal to the constraint at the hint.", unhinted "Constraint not found in database." |
 | redundance | `red <c> ; <witness>` | `red <c> : <witness> ;` | the witness moves **before** the terminator. After a `;` it is silently not a witness |
 | delete | `del id N M` | `del id N M ;` | also `del range LO HI ;`, **half-open: `[LO, HI)`, so `HI` survives** (measured against 3.0.2, M1-T22); tolerant of an already-deleted id and of a reversed range |
 | delete from core | `delc id N` | `delc N ;` | `delc` loses its `id`; `del` and `core` keep theirs |
@@ -176,6 +178,41 @@ all, and they name it explicitly rather than relying on a default.
 | end | `end pseudo-Boolean proof` | `... proof ;` | |
 | short forms | `u` `p` `d` `v` `o` | **gone** | |
 | label | — | `@name <rule> ;` | see below |
+
+### `ia`'s hint is load-bearing, and misplacing it fails open *(M1-T51)*
+
+`ia` is the only rule here that states what a *derivation concluded*, which is what makes
+it the checker-level control `pol` never had. Three measured facts about it, all of which
+cost something to learn:
+
+**The hint is not optional in practice.** Both checkers accept `ia <c> ;` with no hint,
+but unhinted it searches the **whole database**, and 3.0.2 says so when it fails:
+`Constraint not syntactically implied by any constraint in the database`. So an unhinted
+`ia` can be satisfied by an order-encoding ladder clause, or by some older derivation,
+rather than by the `pol` on the line above it — a control that passes on something other
+than its subject. `Writer.implied` makes the hint mandatory for exactly this reason.
+
+**Misplacing the hint fails OPEN, silently.** In 3.0 the hint goes after a `:` and
+*before* the terminator, as `red`'s witness does. After the `;` it is not a hint at all —
+it is parsed as the **label of the next rule** — so this verifies clean:
+
+```
+ia +1 x1 +1 x2 >= 1 ; @NOPE     <- @NOPE is not a hint, and no error is raised
+```
+
+Measured against 3.0.2: `s VERIFIED`. Compare the correctly-placed form, which rejects as
+it should. This is worse than trap 1 in section 2, which labels closed: a drifted *citation*
+is now a parse error naming the label, but a drifted *hint* is not a citation and nothing
+catches it. If you write an `ia` by hand, put the hint before the `;`.
+
+**The two checkers' rejections share no substring**, as everywhere else in this project:
+
+| | wording on a hint that does not imply the claim |
+|---|---|
+| 3.0.2 | `Expected constraint is not syntactically implied by the constraint at the hint.` |
+| 2.2.2 | `Hint: ('1 x1 >= 1', '1 x1 1 x2 >= 1')` — a bare tuple of claim and antecedent, with no sentence at all |
+
+Never match on one alone.
 
 ### Labels, and the trap they close
 

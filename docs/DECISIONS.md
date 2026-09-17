@@ -2135,3 +2135,59 @@ reddens 13 matrix checks. Matrix checks 239 → 252.
 
 **Artefact delta: zero of 30 models change, all 90 hashes identical** — the predicted
 result, since a `Combine` is emitted only at a root conflict where no decision is in force.
+
+## D-0038  Should an `Explanation` carry the bound it concludes, so a `pol` can be checked against it?
+
+**Status**: **OPEN**, raised 2026-09-17 by the orchestrator out of M1-T51. **Blocks** the
+adoption of `Writer.pol_concluding`, which exists and is demonstrated but has no caller in
+`lib/`. Interacts with **D-0003** (still open) and with **D-0026**'s propagator interface v2
+(M2-T8). Not to be decided in passing: it touches `lib/core/explanation.ml`, the central ADT
+every propagator depends on, and `CLAUDE.md` forbids a new constructor there without a record.
+
+### What M1-T51 established, and why that is not enough
+
+`pol` writes a derivation and nothing else. Its conclusion is whatever the reverse-Polish
+expression evaluates to, so a `pol` that computes something strictly **weaker** than the
+bound the propagator then pruned to is a *sound proof line under an unsound prune*, and the
+checker has nothing to object to. Measured, on the production writer with the existing
+`Truncate_derivation` knob: a `pol` truncated to derive a disjunction instead of a bound is
+**accepted** by 3.0.2 bare, and **rejected** once the conclusion is stated as an `ia`. The
+old guards did not catch it — they are regexes over emitted text and never run against a
+corrupted writer at all. This is why M1-T42 could only reach 8 of its 9 cells.
+
+So the *rule* was never the obstacle. `ia` was there all along, in both checkers (see
+PROOF-FORMAT §2a, which was silent on it until M1-T51 and is now corrected). **The obstacle
+is that the claim does not exist to pass.** `Explanation.Combine of summand list * int` and
+`Cut of t * t * int * int` record how a bound was derived and not what was derived, so
+`Justify.emit_cut` and `emit_combine` have no conclusion in hand at the moment they call the
+writer.
+
+### The routes, and what each costs
+
+1. **`Explanation` gains the conclusion.** Most direct, and it makes the mismatch a type
+   error at construction rather than a checker rejection. But it widens the hotspot ADT, and
+   D-0003 is open and expected to reshape it — doing this first risks doing it twice.
+2. **Propagators supply the claim at the emission site.** Leaves `explanation.ml` alone.
+   But it puts the conclusion *beside* the explanation rather than in it, so nothing forces
+   the two to agree — which is most of the property we wanted.
+3. **Fold it into M2-T8's interface v2**, where D-0026 already separates a declarative
+   `Reason` from a `Justification`. The conclusion is naturally the `Reason`'s business.
+   Costs the most delay; is the only route that does not pre-empt a decision already queued.
+4. **Adopt `ia` only where the claim happens to be available**, and say where it is not.
+   Partial by construction, and a control with holes in it invites the assumption that it
+   has none.
+
+### What is NOT in question
+
+- **The hint is mandatory.** An unhinted `ia` searches the whole database, so it can pass on
+  an order-encoding ladder clause rather than on the derivation above it. `Writer.implied`
+  requires the hint and PROOF-FORMAT §2a now records that a *misplaced* hint fails **open**
+  and silently — `ia C ; @NOPE` verifies clean, because after the `;` a label belongs to the
+  next rule.
+- **The cost is not the reason to hesitate.** Projected adoption everywhere: `width_sat_depth`
+  +0 lines (it emits no `pol` at all), `width_root_unsat` 1 -> +2, whole suite +20 lines
+  (+2%). `pol` is rare here because D-0009 routes `int_lin_le` through `rup`.
+- **The coverage that exists today is real but narrow.** The suite emits only ~10 `pol` lines
+  across the model set, all on small unsat instances where the `pol` feeds the cited
+  contradiction. It says nothing about a pruning the conflict never cites, which is what
+  dominates any real search — and that is precisely the case M2-T3's clause learning creates.
