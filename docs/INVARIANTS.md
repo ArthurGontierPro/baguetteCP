@@ -61,10 +61,30 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
   at force time the pruning's own entry supports the bound and the derivation cites
   itself. A crash is not a check; two tests now catch it and they are the only ones that do.
 
-  `explain_cross_conflict` violated I-X6 until M1-T13 and was harmless only by accident,
-  because search happens to force a conflict explanation immediately. **That blind spot is
-  still open**: M2-T8 confirmed the function is reached, and that breaking its snapshot
-  discipline reddens nothing. Conflict analysis (M2-T3) is where it stops being harmless.
+  **`explain_cross_conflict` is settled, and the sentence that used to stand here was
+  wrong.** I wrote on 2026-09-17 that it "violated I-X6 until M1-T13 and still does", and
+  that the blind spot was open. It does not: M1-T13 hoisted the `lo_rests_on`/`hi_rests_on`
+  lookup out of the thunk and it never went back, so the thunk closed over nothing live.
+  What *was* true is narrower and was worth fixing — `store` remained in scope one line
+  above a thunk that must not read it, so the discipline was one careless edit from being
+  undone. It is structural now: the lookup is a separate `opposite_rests_on` at the push
+  site and the function takes `~opposite` and **no store at all**, so re-breaking it
+  requires changing a signature. Same move `Reason.lits` makes on the reason half.
+
+  Two facts to keep attached, because together they explain why nothing could see the
+  original break. **The cross-row path is unreachable from any `.fzn`**:
+  `compile.ml`'s `normalise_terms` merges duplicate coefficients before both the `.opb`
+  row and `Linear.make`, so `int_lin_le([2,-1],[d,d],-4)` arrives as `d <= -4` and is
+  solved with zero `pol` and zero `rup` lines (measured). The path is reachable only by
+  calling `Linear.make` directly, as `test_matrix.ml` does — which is why no test *model*
+  can cover it, and why one was deliberately not added. And **search forces a conflict
+  explanation immediately**, so even on that route the store has not moved. One test now
+  fires on a wrong *answer* rather than a crash (`test_prop.ml`), and it is the only thing
+  in the suite that does.
+
+  So the remaining I-X6 exposure is the **general** one, not this function: any future
+  thunk can still close over the store, and on the justification half nothing but
+  discipline stops it. That is what M2-T3 should be careful of.
 
 - **I-X7** What `conclusion UNSAT` cites is a line the checker has itself established is a
   contradiction — either a `pol` chain closing at `0 >= k` (D-0013) or an explicitly
