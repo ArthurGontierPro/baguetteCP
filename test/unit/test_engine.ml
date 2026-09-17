@@ -98,7 +98,9 @@ let test_fixpoint_tightens_and_settles () =
 let test_conflict_carries_explanation () =
   let store = mk_store [ ("x1", 0, 5); ("x2", 0, 5) ] in
   let lin = Linear.make ~row_id:(unrendered_row ()) store [ (1, var 0); (1, var 1) ] 3 in
-  (match Store.set_lo store (var 1) 4 (Reason.because Reason.none (Explanation.model_row 1)) with
+  (match
+     Store.set_lo store (var 1) 4 (Reason.because Reason.none (Explanation.model_row 1))
+   with
   | Store.Conflict _ -> failwith "test_conflict_carries_explanation: setup failed"
   | Store.Changed | Store.Unchanged -> ());
   let engine = Engine.create [ pack_linear 0 lin ] in
@@ -196,7 +198,9 @@ let test_conflict_names_its_propagator () =
   let doomed =
     Linear.make ~row_id:(unrendered_row ()) store [ (1, var 1); (1, var 2) ] 3
   in
-  (match Store.set_lo store (var 2) 4 (Reason.because Reason.none (Explanation.model_row 1)) with
+  (match
+     Store.set_lo store (var 2) 4 (Reason.because Reason.none (Explanation.model_row 1))
+   with
   | Store.Conflict _ -> failwith "conflict-id: setup failed"
   | Store.Changed | Store.Unchanged -> ());
   let engine = Engine.create [ pack_linear 0 quiet; pack_linear 1 doomed ] in
@@ -346,7 +350,9 @@ let test_wake_order_is_unchanged () =
       ]
   in
   let bump v n =
-    match Store.set_lo store (var v) n (Reason.because Reason.none (Explanation.model_row 1)) with
+    match
+      Store.set_lo store (var v) n (Reason.because Reason.none (Explanation.model_row 1))
+    with
     | Store.Conflict _ -> failwith "wake order: setup conflicted"
     | Store.Changed | Store.Unchanged -> ()
   in

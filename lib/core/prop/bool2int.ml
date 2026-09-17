@@ -216,8 +216,7 @@ let propagate t store =
       if bound > Domain.lo d then
         let claim = Lit.ge name bound in
         match
-          Store.set_lo store var bound
-            (Reason.because facts (implication ~claim facts))
+          Store.set_lo store var bound (Reason.because facts (implication ~claim facts))
         with
         | Store.Changed | Store.Unchanged -> ()
         | Store.Conflict _ ->
@@ -233,8 +232,7 @@ let propagate t store =
       if bound < Domain.hi d then
         let claim = Lit.le name bound in
         match
-          Store.set_hi store var bound
-            (Reason.because facts (implication ~claim facts))
+          Store.set_hi store var bound (Reason.because facts (implication ~claim facts))
         with
         | Store.Changed | Store.Unchanged -> ()
         | Store.Conflict _ ->

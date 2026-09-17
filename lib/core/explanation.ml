@@ -241,7 +241,8 @@ let lits e =
    share is the variable scope, and that is what [Store.apply]'s D-0026 check compares:
    a reason naming a variable this derivation never mentions is a reason for a different
    pruning. See [Reason.owners] for the other side of the comparison. *)
-let owners e = List.sort_uniq String.compare (List.map (fun l -> Lit.owner l.Lit.v) (lits e))
+let owners e =
+  List.sort_uniq String.compare (List.map (fun l -> Lit.owner l.Lit.v) (lits e))
 
 (* The variables this derivation WEAKENS out of its own row, at the top level only.
 

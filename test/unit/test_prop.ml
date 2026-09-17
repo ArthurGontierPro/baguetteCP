@@ -1019,10 +1019,16 @@ let build_int_lin_eq_multi dir =
       [ (1, Var.of_int 0); (1, Var.of_int 1) ]
       4 ~le_id:leq_id ~ge_id:geq_id
   in
-  (match Store.set_hi store (Var.of_int 1) 2 (Reason.because Reason.none (Explanation.model_row c_x2_le)) with
+  (match
+     Store.set_hi store (Var.of_int 1) 2
+       (Reason.because Reason.none (Explanation.model_row c_x2_le))
+   with
   | Store.Changed -> ()
   | _ -> failwith "build_int_lin_eq_multi: x2 <= 2 setup failed");
-  (match Store.set_lo store (Var.of_int 1) 2 (Reason.because Reason.none (Explanation.model_row c_x2_ge)) with
+  (match
+     Store.set_lo store (Var.of_int 1) 2
+       (Reason.because Reason.none (Explanation.model_row c_x2_ge))
+   with
   | Store.Changed -> ()
   | _ -> failwith "build_int_lin_eq_multi: x2 >= 2 setup failed");
   (* D-0011: [le] and [ge] are two independently-justified instances, each posted (in
@@ -1077,7 +1083,10 @@ let build_int_le_multi dir =
     Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
   in
   let prop = Int_le.make store (Var.of_int 0) (Var.of_int 1) ~row_id:model_row in
-  (match Store.set_lo store (Var.of_int 0) 3 (Reason.because Reason.none (Explanation.model_row c_bound)) with
+  (match
+     Store.set_lo store (Var.of_int 0) 3
+       (Reason.because Reason.none (Explanation.model_row c_bound))
+   with
   | Store.Changed -> ()
   | _ -> failwith "build_int_le_multi: x >= 3 setup failed");
   let before = Store.trail_length store in
@@ -1126,7 +1135,10 @@ let build_int_lt_multi dir =
     Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
   in
   let prop = Int_lt.make store (Var.of_int 0) (Var.of_int 1) ~row_id:model_row in
-  (match Store.set_lo store (Var.of_int 0) 3 (Reason.because Reason.none (Explanation.model_row c_bound)) with
+  (match
+     Store.set_lo store (Var.of_int 0) 3
+       (Reason.because Reason.none (Explanation.model_row c_bound))
+   with
   | Store.Changed -> ()
   | _ -> failwith "build_int_lt_multi: x >= 3 setup failed");
   let before = Store.trail_length store in
@@ -1179,7 +1191,10 @@ let build_int_eq_multi dir =
   let le, _ge =
     Int_eq.make store (Var.of_int 0) (Var.of_int 1) ~le_id:leq_id ~ge_id:geq_id
   in
-  (match Store.set_hi store (Var.of_int 1) 2 (Reason.because Reason.none (Explanation.model_row c_bound)) with
+  (match
+     Store.set_hi store (Var.of_int 1) 2
+       (Reason.because Reason.none (Explanation.model_row c_bound))
+   with
   | Store.Changed -> ()
   | _ -> failwith "build_int_eq_multi: y <= 2 setup failed");
   let before = Store.trail_length store in
@@ -1247,7 +1262,10 @@ let decision_scene_int_le () =
     Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
   in
   let prop = Int_le.make store (Var.of_int 0) (Var.of_int 1) ~row_id:row in
-  (match Store.set_lo store (Var.of_int 0) 3 (Reason.because Reason.none (Explanation.decision (Lit.ge "x" 3))) with
+  (match
+     Store.set_lo store (Var.of_int 0) 3
+       (Reason.because Reason.none (Explanation.decision (Lit.ge "x" 3)))
+   with
   | Store.Changed -> ()
   | _ -> failwith "decision_scene_int_le: the decision did not move x's bound");
   let before = Store.trail_length store in
@@ -1269,7 +1287,10 @@ let decision_scene_int_lt () =
     Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
   in
   let prop = Int_lt.make store (Var.of_int 0) (Var.of_int 1) ~row_id:row in
-  (match Store.set_lo store (Var.of_int 0) 3 (Reason.because Reason.none (Explanation.decision (Lit.ge "x" 3))) with
+  (match
+     Store.set_lo store (Var.of_int 0) 3
+       (Reason.because Reason.none (Explanation.decision (Lit.ge "x" 3)))
+   with
   | Store.Changed -> ()
   | _ -> failwith "decision_scene_int_lt: the decision did not move x's bound");
   let before = Store.trail_length store in
@@ -1294,7 +1315,10 @@ let decision_scene_int_eq () =
   let le, _ge =
     Int_eq.make store (Var.of_int 0) (Var.of_int 1) ~le_id:leq_id ~ge_id:geq_id
   in
-  (match Store.set_hi store (Var.of_int 1) 2 (Reason.because Reason.none (Explanation.decision (Lit.le "y" 2))) with
+  (match
+     Store.set_hi store (Var.of_int 1) 2
+       (Reason.because Reason.none (Explanation.decision (Lit.le "y" 2)))
+   with
   | Store.Changed -> ()
   | _ -> failwith "decision_scene_int_eq: the decision did not move y's bound");
   let before = Store.trail_length store in
@@ -1322,10 +1346,16 @@ let decision_scene_int_lin_eq () =
       4 ~le_id:leq_id ~ge_id:geq_id
   in
   (* x2 = 2, both bounds, by decision: two store pushes and not one .opb row. *)
-  (match Store.set_hi store (Var.of_int 1) 2 (Reason.because Reason.none (Explanation.decision (Lit.le "x2" 2))) with
+  (match
+     Store.set_hi store (Var.of_int 1) 2
+       (Reason.because Reason.none (Explanation.decision (Lit.le "x2" 2)))
+   with
   | Store.Changed -> ()
   | _ -> failwith "decision_scene_int_lin_eq: x2 <= 2 did not move");
-  (match Store.set_lo store (Var.of_int 1) 2 (Reason.because Reason.none (Explanation.decision (Lit.ge "x2" 2))) with
+  (match
+     Store.set_lo store (Var.of_int 1) 2
+       (Reason.because Reason.none (Explanation.decision (Lit.ge "x2" 2)))
+   with
   | Store.Changed -> ()
   | _ -> failwith "decision_scene_int_lin_eq: x2 >= 2 did not move");
   (match Linear.propagate le store with
@@ -1440,7 +1470,10 @@ let test_lin_eq_pairing () =
         [ (1, Var.of_int 0); (1, Var.of_int 1) ]
         4 ~le_id:leq_id ~ge_id:geq_id
     in
-    (match Store.set_lo store (Var.of_int 1) 2 (Reason.because Reason.none (Explanation.model_row c_bound)) with
+    (match
+       Store.set_lo store (Var.of_int 1) 2
+         (Reason.because Reason.none (Explanation.model_row c_bound))
+     with
     | Store.Changed -> ()
     | _ -> failwith "test_lin_eq_pairing: x2 >= 2 setup failed");
     let before = Store.trail_length store in
@@ -3484,6 +3517,81 @@ let test_single_row_check_can_fire () =
 
 (* ------------------------------------------------------------------------ main *)
 
+(* ------------------------------------- I-X6 on the JUSTIFICATION half (M2-T8)
+
+   D-0026 discharges I-X6 on the reason half by construction: a [Reason.t] is data and
+   [Reason.lits] takes no store, so it cannot read live state even in principle. The
+   justification half is still a thunk and still can, and a thunk that decided which trail
+   entry witnesses a bound *at force time* rather than at push time would render a later
+   bound as the reason for an earlier pruning. That is the defect
+   [explain_cross_conflict] shipped until M1-T13, which was harmless only by accident.
+
+   Nothing in the suite could see it. Measured: moving [Linear]'s per-term snapshot
+   decision inside the thunk reddened zero checks across every unit binary and all 34
+   models, because search forces what it forces immediately. This test is what closes
+   that, and the way it closes it is the only way available -- run the same scene twice
+   and force at two different moments:
+
+     A: force immediately, while the store still says what the propagator read;
+     B: move the cited bound to a DIFFERENT row's entry first, then force.
+
+   A snapshotting thunk gives the same derivation both times. A live-reading one cites
+   whatever moved the bound most recently, so B names row 902 where A names 901. The two
+   runs are separate stores because [Explanation.force] memoises: forcing once in one
+   store would make the second observation unreachable. *)
+let test_ix6_justification_snapshot () =
+  let scene ~move_after =
+    let store = mk_store [ ("x", 0, 5); ("y", 0, 5) ] in
+    (* rhs 10, not something tighter: the row must push x while leaving y a range, or the
+       second push below lands on a fixed variable and conflicts instead of moving a
+       bound -- which would make this a test of nothing. The precondition is asserted
+       rather than assumed, and it is what caught that first draft. *)
+    let prop = Linear.make store [ (2, var 0); (3, var 1) ] 10 ~row_id:1 in
+    (* y >= 1, by "some earlier propagator" whose row is 901. *)
+    ignore (Store.set_lo store (var 1) 1 placeholder_pruning);
+    let before = Store.trail_length store in
+    (match Linear.propagate prop store with
+    | Propagator.Conflict _ -> failwith "test_ix6: expected a pruning"
+    | Propagator.Fixpoint -> ());
+    let e =
+      match
+        List.find_opt
+          (fun (en : Store.entry) -> Var.equal en.Store.var (var 0))
+          (List.filteri
+             (fun i _ -> i < Store.trail_length store - before)
+             (Store.trail_entries store))
+      with
+      | Some e -> e
+      | None -> failwith "test_ix6: x was not pushed"
+    in
+    if move_after then
+      (* A DIFFERENT row now holds y's lower bound. Under the O(1) support this is what
+         [Store.lo_reasons] would answer from here on, so a thunk that asks again gets
+         902 and a thunk that snapshotted keeps 901. *)
+      ignore
+        (Store.set_lo store (var 1) 2
+           (Reason.because Reason.none (Explanation.model_row 902)));
+    (Explanation.to_string (Explanation.force (Store.explanation store e)), store)
+  in
+  let a, _ = scene ~move_after:false in
+  let b, store_b = scene ~move_after:true in
+  (* The scene has to actually move the bound, or this test proves nothing. *)
+  check "I-X6: the cited bound really was moved by another row before forcing"
+    (Domain.lo (Store.get store_b (var 1)) = 2
+    &&
+    match Store.lo_reasons store_b (var 1) with
+    | [ Explanation.Model_row 902 ] -> true
+    | _ -> false);
+  check "I-X6: the pruning's derivation cites the entry it read AT THE PUSH"
+    (a = b && String.length a > 0);
+  check "I-X6: and it is row 901's entry, not the row that moved the bound later"
+    (let contains needle hay =
+       let n = String.length needle and h = String.length hay in
+       let rec go i = i + n <= h && (String.sub hay i n = needle || go (i + 1)) in
+       go 0
+     in
+     contains "901" b && not (contains "902" b))
+
 (* ------------------------------ D-0026: one pruning, two halves that agree (M2-T8)
 
    The reference propagator's reason and justification used to be two calls
@@ -3505,9 +3613,7 @@ let test_single_row_check_can_fire () =
    over the wrong variable, changes the answer here and nowhere else in this file. *)
 let test_d0026_linear_pairing () =
   let store = mk_store [ ("x", 0, 5); ("y", 0, 5); ("w", 0, 5); ("q", 0, 5) ] in
-  let prop =
-    Linear.make store [ (2, var 0); (3, var 1); (-2, var 2) ] 4 ~row_id:1
-  in
+  let prop = Linear.make store [ (2, var 0); (3, var 1); (-2, var 2) ] 4 ~row_id:1 in
   (* y >= 2 and w <= 3, each by "some earlier propagator". [q] is in the store and NOT
      in the row: a reason that leaked the whole store's bounds rather than the row's
      scope would name it. *)
@@ -3515,7 +3621,8 @@ let test_d0026_linear_pairing () =
   ignore (Store.set_hi store (var 2) 3 placeholder_pruning);
   let before = Store.trail_length store in
   (match Linear.propagate prop store with
-  | Propagator.Conflict _ -> check "D-0026 linear: expected a pruning, not a conflict" false
+  | Propagator.Conflict _ ->
+      check "D-0026 linear: expected a pruning, not a conflict" false
   | Propagator.Fixpoint -> ());
   let pushed =
     List.filter
@@ -3686,6 +3793,7 @@ let () =
   (* ---------------------------------------------- M2-T8 / D-0026: the two halves *)
   test_d0026_linear_pairing ();
   test_d0026_all_declared ();
+  test_ix6_justification_snapshot ();
   test_no_single_row_refutes "bool_reif_unsat" "bool_reif_unsat.fzn";
   test_no_single_row_refutes "bool_channel_unsat" "bool_channel_unsat.fzn";
   if !failures > 0 then (

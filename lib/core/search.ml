@@ -648,8 +648,7 @@ and explore_le store engine ctx trace order decisions v k lit =
 and explore_ge store engine ctx trace order decisions v k lit =
   let lvl = Store.level store in
   let outcome =
-    Store.set_lo store v (k + 1)
-      (Reason.because Reason.none (Explanation.decision lit))
+    Store.set_lo store v (k + 1) (Reason.because Reason.none (Explanation.decision lit))
   in
   match outcome with
   | Store.Conflict _ ->

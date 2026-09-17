@@ -106,9 +106,9 @@
    it says "not all of these values together", not "x_j <> w". That is the correct
    and only honest shape for a clausal reason, and it is what D-0018 asks for, but it
    means an explanation from this module must not be dropped into a cutting-planes
-   sum as though it were a bound derivation. [Linear]'s [Snap_cite] path does exactly
-   that when it cites the trail entry that last moved a bound (lib/core/prop/linear.ml,
-   [Store.lo_reasons]/[hi_reasons]) -- and this propagator *can* move a bound, since
+   sum as though it were a bound derivation. [Linear]'s *citing* path does exactly
+   that when it cites the trail entry that last moved a bound (lib/core/prop/linear.ml's
+   [lo_rests_on], over [Store.lo_reasons]) -- and this propagator *can* move a bound, since
    removing a value at [lo] or [hi] shrinks the interval.
 
    M1-T17 note on that composition: the [pol] it produces is *sound* (a [pol] is sound
@@ -122,7 +122,7 @@
    by the hint". test/unit/test_random.ml matches both deliberately; see M1-T46.
    [Search.rests_on_a_clause] now recognises a derivation that rests on a clause and
    closes such a root conflict the D-0018 way, over the trace, so nothing this module
-   produces is cited as a contradiction it does not establish. Making [Snap_cite] itself
+   produces is cited as a contradiction it does not establish. Making the citing path
    weaken rather than cite is still open; see the M1-T17 hand-back for the measurement
    of what that costs and which pinned check it moves.
 
@@ -264,8 +264,7 @@ let moved_bound_fact tm w d =
 let pruning_reason tm w d fixed_others =
   moved_bound_fact tm w d
   @ List.concat_map
-      (fun (o, v) ->
-        Reason.fixed_at ~name:o.name ~decl_lo:o.decl_lo ~decl_hi:o.decl_hi v)
+      (fun (o, v) -> Reason.fixed_at ~name:o.name ~decl_lo:o.decl_lo ~decl_hi:o.decl_hi v)
       fixed_others
 
 (* The two halves of one pruning, from one snapshot, in one function -- D-0026, and the
@@ -274,9 +273,7 @@ let pruning_reason tm w d fixed_others =
    a nogood) and the reason is over the bound [w] is about to move plus the others; the
    two differ exactly there and by construction, not by two call sites agreeing. *)
 let justified_pruning tm w d fixed_others : Reason.justified =
-  Reason.because
-    (pruning_reason tm w d fixed_others)
-    (explain ((tm, w) :: fixed_others))
+  Reason.because (pruning_reason tm w d fixed_others) (explain ((tm, w) :: fixed_others))
 
 (* ------------------------------------------------------------------- propagation *)
 

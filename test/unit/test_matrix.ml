@@ -439,7 +439,7 @@ let scan_linear obs (lin : Linear.t) store =
       (* Annotated because [Linear.source_snap] is declared after [Linear.term] and also
          has a [coeff] field, so a bare [tm.Linear.coeff] disambiguates to the wrong one
          (M2-T8). *)
-      (fun idx ((tm : Linear.term), m) ->
+        (fun idx ((tm : Linear.term), m) ->
         let coeff = tm.Linear.coeff in
         if coeff <> 0 then
           let max_term = m + slack in

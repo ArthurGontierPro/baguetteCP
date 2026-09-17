@@ -66,7 +66,8 @@ module Lit = Baguette_proof.Lit
    direction, which is what decides whether the fact has a literal at all. *)
 type fact =
   | At_least of { name : string; value : int; decl : int } (* x >= value *)
-  | At_most of { name : string; value : int; decl : int } (* x <= value *)
+  | At_most of { name : string; value : int; decl : int }
+(* x <= value *)
 
 (* A reason is the facts, in the order the propagator read them. Order is preserved
    through [lits] and no duplicate is dropped: what a trace line's tail contains, and in
@@ -112,7 +113,8 @@ let bound_for_coeff ~coeff ~name ~decl_lo ~decl_hi value =
 let lit_of_fact = function
   | At_least { name; value; decl } ->
       if value > decl then Some (Lit.ge name value) else None
-  | At_most { name; value; decl } -> if value < decl then Some (Lit.le name value) else None
+  | At_most { name; value; decl } ->
+      if value < decl then Some (Lit.le name value) else None
 
 let lits (t : t) = List.filter_map lit_of_fact t
 

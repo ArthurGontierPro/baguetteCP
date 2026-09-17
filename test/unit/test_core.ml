@@ -549,7 +549,8 @@ let test_reason () =
     [ Reason.at_least ~name:"kept" ~decl:0 2; Reason.at_least ~name:"dropped" ~decl:7 7 ]
   in
   check "D-0026: owners includes a variable whose fact has no literal"
-    (Reason.owners mixed = [ "kept"; "dropped" ] && Reason.lits mixed = [ Lit.ge "kept" 2 ]);
+    (Reason.owners mixed = [ "kept"; "dropped" ]
+    && Reason.lits mixed = [ Lit.ge "kept" 2 ]);
   check "D-0026: owners dedupes but keeps first-seen order"
     (Reason.owners three = [ "a"; "b" ]);
 
@@ -571,12 +572,10 @@ let test_reason () =
      this backwards is break 1 in the M2-T8 hand-back, and it is why the shared helper
      exists rather than each propagator writing the conditional. *)
   check "D-0026: a non-negative coefficient reads lo and states x >= v"
-    (Reason.lits
-       [ Reason.bound_for_coeff ~coeff:2 ~name:"x" ~decl_lo:0 ~decl_hi:9 3 ]
+    (Reason.lits [ Reason.bound_for_coeff ~coeff:2 ~name:"x" ~decl_lo:0 ~decl_hi:9 3 ]
     = [ Lit.ge "x" 3 ]);
   check "D-0026: a negative coefficient reads hi and states x <= v"
-    (Reason.lits
-       [ Reason.bound_for_coeff ~coeff:(-2) ~name:"x" ~decl_lo:0 ~decl_hi:9 3 ]
+    (Reason.lits [ Reason.bound_for_coeff ~coeff:(-2) ~name:"x" ~decl_lo:0 ~decl_hi:9 3 ]
     = [ Lit.le "x" 3 ]);
 
   (* NON-NARROWABLE, which is the property I-X6 needs and the one GCS's [Narrowable*]
@@ -591,7 +590,11 @@ let test_reason () =
   let store =
     Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 9; Domain.make 0 9 |]
   in
-  let j = Reason.because [ Reason.at_least ~name:"x" ~decl:0 3 ] (Explanation.clause [ Lit.ge "x" 3 ]) in
+  let j =
+    Reason.because
+      [ Reason.at_least ~name:"x" ~decl:0 3 ]
+      (Explanation.clause [ Lit.ge "x" 3 ])
+  in
   (match Store.set_lo store (Var.of_int 0) 3 j with
   | Store.Changed -> ()
   | _ -> failwith "test_reason: setup");
@@ -672,9 +675,7 @@ let test_bound_support () =
     (Store.lo_support store x = before && Store.check_invariants store);
 
   (* [Domain.fix] moves both bounds at once and must support both. *)
-  let s2 =
-    Store.create ~names:[| "z" |] ~domains:[| Domain.make 0 9 |]
-  in
+  let s2 = Store.create ~names:[| "z" |] ~domains:[| Domain.make 0 9 |] in
   let z = Var.of_int 0 in
   ignore (Store.fix s2 z 4 (Reason.because Reason.none (Explanation.model_row 21)));
   check "M2-T8: fix supports both bounds it moved"
@@ -747,7 +748,10 @@ let test_agreement () =
      scene. *)
   let cited =
     Explanation.combine
-      [ Explanation.term 1 (Explanation.model_row 3); Explanation.term 2 (Explanation.model_row 9) ]
+      [
+        Explanation.term 1 (Explanation.model_row 3);
+        Explanation.term 2 (Explanation.model_row 9);
+      ]
       2
   in
   let cite_reason = [ Reason.at_least ~name:"y" ~decl:0 2 ] in
@@ -776,8 +780,8 @@ let test_agreement () =
   check "D-0026: a reason agrees with a justification that only WEAKENS its variable"
     (Store.agreement_holds plain
        (Reason.because [ Reason.at_least ~name:"x" ~decl:0 2 ] weaken_only)
-    && Reason.lits [ Reason.at_least ~name:"x" ~decl:0 2 ]
-       <> Explanation.lits weaken_only);
+    && Reason.lits [ Reason.at_least ~name:"x" ~decl:0 2 ] <> Explanation.lits weaken_only
+    );
 
   (* THE REVERSE DIRECTION, which is I-P5's: the derivation weakened [x] out of its own
      row, so the pruning depends on where [x] sits, so the reason must name it. Dropping
@@ -785,7 +789,8 @@ let test_agreement () =
      satisfiable model. *)
   check "I-P5/D-0026: a reason that OMITS a variable the derivation weakens DISAGREES"
     (not (Store.agreement_holds plain (Reason.because Reason.none weaken_only)));
-  check "I-P5/D-0026: naming a different variable does not substitute for the weakened one"
+  check
+    "I-P5/D-0026: naming a different variable does not substitute for the weakened one"
     (not
        (Store.agreement_holds plain
           (Reason.because [ Reason.at_least ~name:"y" ~decl:0 2 ] weaken_only)));

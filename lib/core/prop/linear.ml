@@ -71,11 +71,12 @@
      - otherwise [x_i]'s current bound was itself established by an earlier trail
        entry (bounds only ever tighten, so if it is not declared, something set it):
        [i]'s summand is [Term (abs a_i, that entry's explanation)] -- cite it, do not
-       re-derive it. [find_lo_reason]/[find_hi_reason] below locate it.
+       re-derive it. [lo_rests_on]/[hi_rests_on] below locate it, in O(1), out of
+       [Store.lo_support] (M2-T8).
 
    The second bullet hides a premise, and M1-T44 is what happens when it is false:
    *the cited entry's explanation establishes the entry's recorded bound*. It does not
-   when [Domain.settle] walked that bound past a hole (see [settled_over_lo] below),
+   when [Domain.settle] walked that bound past a hole (see [Store.settled_over_lo]),
    because the hole is a disequality's doing and the row's own derivation says nothing
    about it. Those entries therefore cite the hole's reason as well, which is what makes
    the dependency list honest -- and, since a [Clause] is what a hole's reason is,
@@ -308,8 +309,8 @@ let snapshot_source store (tm : term) : source_snap option =
    [Reason.bound_for_coeff] takes ints and a name. [Reason.lits] is where it becomes a
    literal, and where a term still at its declared bound drops out. *)
 let fact_of_snap s =
-  Reason.bound_for_coeff ~coeff:s.coeff ~name:s.name ~decl_lo:s.decl_lo
-    ~decl_hi:s.decl_hi s.value
+  Reason.bound_for_coeff ~coeff:s.coeff ~name:s.name ~decl_lo:s.decl_lo ~decl_hi:s.decl_hi
+    s.value
 
 (* D-0026's justification half: what this term contributes to the [Combine].
 
@@ -334,6 +335,7 @@ let summands_of_snap s =
       in
       [ Explanation.weaken lits ]
   | cited -> List.map (fun e -> Explanation.term (Checked.abs s.coeff) e) cited
+
 (* All terms except the one at [idx] (by position, not value - a variable could in
    principle appear twice, and each occurrence is excluded independently). *)
 let others_except terms idx = List.filteri (fun i _ -> i <> idx) terms
@@ -355,7 +357,8 @@ let row_snaps store terms ~exclude =
 let classify s =
   match s.cited with
   | _ :: _ -> `Cited
-  | [] -> if Option.is_some (Reason.lit_of_fact (fact_of_snap s)) then `Assumed else `Weakened
+  | [] ->
+      if Option.is_some (Reason.lit_of_fact (fact_of_snap s)) then `Assumed else `Weakened
 
 (* -------------------------------------------- the one pairing (D-0026) *)
 
@@ -381,8 +384,7 @@ let classify s =
    most prunings are never asked. The thunk closes over [snaps] and [base] only -- no
    store, no live domain (I-X6). *)
 let justified_of_snaps base snaps divisor : Reason.justified =
-  Reason.because
-    (List.map fact_of_snap snaps)
+  Reason.because (List.map fact_of_snap snaps)
     (Explanation.deferred (fun () ->
          let summands =
            Explanation.term 1 base :: List.concat_map summands_of_snap snaps
