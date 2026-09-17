@@ -1016,13 +1016,22 @@ let test_v3_levels () =
     (not (List.exists (fun l -> l = "w 1 ;" || l = "w 1") lines));
   check "3.0: a level is still marked, as a comment, or the proof is unreadable"
     (has "% level 1" && has "% level 0");
-  (* M1-T22. b1 and b2 are consecutive, but b2 is the newest id the writer has handed
-     out, so there is no `@c(b2+1)` label for a half-open range to name and the run
-     goes out as an explicit `del id` list. Still one line; only longer. *)
-  check
-    "3.0: a backtrack whose run reaches the newest id retires exactly those ids, as a \
-     del id list"
-    (has (Printf.sprintf "del id @c%d @c%d ;" (nth 2) (nth 3)));
+  (* M1-T22 found it, M1-T29 changed the shape. b1 and b2 are consecutive, but b2 is
+     the newest id the writer has handed out, so there is no `@c(b2+1)` label for a
+     half-open range to name. Until M1-T29 the run went out as an explicit `del id`
+     list -- one line, but one citation per retired reason. It is now the PAIR
+     `del range @cb1 @cb2 ;` (the half-open span, so b1 only) and `del id @cb2 ;`,
+     two rules of bounded length. Both halves are asserted, and the list shape is
+     asserted ABSENT: a partial change that emitted the range and forgot the trailing
+     `del id` would leave b2 live in the checker while [tags] dropped it, which is
+     exactly M1-T22's I-X3 violation coming back. That half is measured, not pinned,
+     by [test_v3_wipe_level_against_checker]. *)
+  check "3.0: a backtrack whose run reaches the newest id opens with a half-open range"
+    (has (Printf.sprintf "del range @c%d @c%d ;" (nth 2) (nth 3)));
+  check "3.0: ... and then retires the run's own last id, which the range does not"
+    (has (Printf.sprintf "del id @c%d ;" (nth 3)));
+  check "3.0: the newest-id run is no longer a citation per retired reason"
+    (not (has (Printf.sprintf "del id @c%d @c%d ;" (nth 2) (nth 3))));
   (* M1-T22, the regression. `del range LO HI` deletes the HALF-OPEN [LO, HI), so the
      inclusive run b3..b4 is written with r3 -- the first SURVIVOR -- as its upper
      bound. Emitting `del range @cb3 @cb4` (what we did until M1-T22) leaves b4 live
@@ -1141,6 +1150,151 @@ let test_v3_del_range_semantics () =
       |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
       try Sys.rmdir dir with _ -> ())
 
+(* ------------------------------------------------------------------ *)
+(* M1-T29: the pair spelling, measured, with the break performed      *)
+(*                                                                     *)
+(* [test_v3_del_range_semantics] above establishes what `del range`    *)
+(* means. This establishes what the PAIR means, which is a different   *)
+(* claim, and it does the thing this project keeps finding it has not  *)
+(* done: it performs the off-by-one rather than reading the code for   *)
+(* one. Over-deletion is the direction that matters. An upper bound    *)
+(* one too HIGH retires a constraint a later line may cite -- and      *)
+(* since D-0039/I-S4 "a later line" includes a trace line citing a     *)
+(* hole line -- while our own I-X2 audit sees nothing, because an      *)
+(* over-deleted id is not an un-retired id and the audit checks our    *)
+(* bookkeeping against itself. Only the checker can answer, so only    *)
+(* the checker is asked.                                               *)
+(*                                                                     *)
+(* Four derived ids, a..d, so that there is an id ABOVE the run: that  *)
+(* is what makes over-deletion observable at all (with the run ending  *)
+(* at the newest id there is nothing above it to lose), and it is what *)
+(* lets the wrong bound be a BOUND label rather than an unassigned one *)
+(* -- the two failures word themselves differently and both are        *)
+(* asserted.                                                           *)
+(* ------------------------------------------------------------------ *)
+let test_v3_del_pair_spelling () =
+  match veripb_path () with
+  | None ->
+      incr failures;
+      print_endline
+        ("FAIL 3.0 del pair: " ^ Baguette_proof.Checker.not_found_message
+       ^ " -- M1-T29's spelling is a claim about what 3.0.2 deletes, and with no checker \
+          this is not a pass.")
+  | Some veripb -> (
+      let dir = Filename.temp_file "baguette_delpair" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let opb, c_pos, c_neg = del_range_opb dir "m" in
+      let log = Filename.concat dir "log" in
+      let a, b, c, d = (c_neg + 1, c_neg + 2, c_neg + 3, c_neg + 4) in
+      (* [probe] is `pol @cN`: valid for any live id, a hard error for a deleted one,
+         so the accept/reject verdict reads straight off the checker's database. *)
+      let proof ~del ~probe =
+        List.concat
+          [
+            [ "pseudo-Boolean proof version 3.0"; Printf.sprintf "f %d ;" c_neg ];
+            List.map (fun id -> Printf.sprintf "@c%d pol @c%d ;" id c_pos) [ a; b; c; d ];
+            del;
+            [ Printf.sprintf "@c%d pol @c%d ;" (d + 1) probe ];
+            [
+              Printf.sprintf "@c%d pol @c%d @c%d + ;" (d + 2) c_pos c_neg;
+              "output NONE ;";
+              Printf.sprintf "conclusion UNSAT : @c%d ;" (d + 2);
+              "end pseudo-Boolean proof ;";
+            ];
+          ]
+      in
+      let accepted name ~del ~probe =
+        let pbp = Filename.concat dir (name ^ ".pbp") in
+        write_lines pbp (proof ~del ~probe);
+        match run_checker ~checker:veripb ~opb ~pbp ~log with
+        | Some v -> v
+        | None -> failwith "checker vanished between find and run"
+      in
+      (* [Writer.del_run]'s M1-T29 shape for the inclusive run [a, c]. *)
+      let pair lo hi =
+        [
+          Printf.sprintf "del range @c%d @c%d ;" lo hi; Printf.sprintf "del id @c%d ;" hi;
+        ]
+      in
+      (* The control, without which every rejection below says nothing. *)
+      check "3.0 del pair: with no deletion the whole run is live"
+        (accepted "pair_ctl" ~del:[] ~probe:c);
+      (* The pair is a legal proof at all, and deletes the run: all three ids. *)
+      check "3.0 del pair: the pair spelling is accepted by the checker"
+        (accepted "pair_ok" ~del:(pair a c) ~probe:d);
+      check "3.0 del pair: it deletes LO"
+        (not (accepted "pair_lo" ~del:(pair a c) ~probe:a));
+      check "3.0 del pair: it deletes the interior"
+        (not (accepted "pair_mid" ~del:(pair a c) ~probe:b));
+      check
+        "3.0 del pair: it deletes the run's own last id, which the range alone does NOT \
+         (M1-T22)"
+        (not (accepted "pair_hi" ~del:(pair a c) ~probe:c));
+      (* OVER-DELETION, the dangerous direction, performed. @cd is outside the run. *)
+      check
+        "3.0 del pair: the id one PAST the run survives -- the pair does not over-delete"
+        (accepted "pair_past" ~del:(pair a c) ~probe:d);
+      check
+        "3.0 del pair: an upper bound one too HIGH is caught by the trailing `del id`, \
+         not silent"
+        (not
+           (accepted "pair_over"
+              ~del:
+                [
+                  Printf.sprintf "del range @c%d @c%d ;" a d;
+                  Printf.sprintf "del id @c%d ;" c;
+                ]
+              ~probe:a));
+      (* The same break where the wrong bound is an UNASSIGNED label -- the case the
+         writer actually faces, since the run ends at the newest id. D-0023's trap
+         stays closed: a drifted citation is a parse error naming the label. *)
+      check
+        "3.0 del pair: an upper bound past every assigned label is a parse error naming \
+         it"
+        (not
+           (accepted "pair_unbound"
+              ~del:
+                [
+                  Printf.sprintf "del range @c%d @c%d ;" a (d + 4);
+                  Printf.sprintf "del id @c%d ;" c;
+                ]
+              ~probe:a));
+      (* UNDER-DELETION, the other direction: a bound one too low leaves the run's
+         second-to-last id live while our tags have dropped it -- the I-X3 mirror
+         violation M1-T22 shipped, in miniature. Caught by asserting @cb is GONE. *)
+      check
+        "3.0 del pair: an upper bound one too LOW leaves an id of the run live (so the \
+         `pair_mid` check above can fail)"
+        (accepted "pair_under"
+           ~del:
+             [
+               Printf.sprintf "del range @c%d @c%d ;" a b;
+               Printf.sprintf "del id @c%d ;" c;
+             ]
+           ~probe:b);
+      (* And the numeric route M1-T29 rejected, measured so the rejection is on
+         record rather than argued: exactly one past the last id is tolerated, two
+         past is a hard error. A spelling with no margin. *)
+      (* Probing the untouched MODEL row separates "parsed, and deleted the span"
+         from "was refused outright" -- both of which read as a rejection when the
+         probe is inside the span, which is how a measurement of a tolerance turns
+         into a measurement of nothing. *)
+      let num bound = [ Printf.sprintf "del range @c%d %d ;" a bound ] in
+      check
+        "3.0 del pair: a NUMERIC bound one past the last id parses (the route not taken, \
+         measured)"
+        (accepted "num_one_past_ok" ~del:(num (d + 1)) ~probe:c_pos);
+      check "3.0 del pair: ... and really does delete through the last id"
+        (not (accepted "num_one_past_d" ~del:(num (d + 1)) ~probe:d));
+      check
+        "3.0 del pair: a NUMERIC bound TWO past the last id is a hard error, so the \
+         numeric spelling has exactly one legal value"
+        (not (accepted "num_two_past" ~del:(num (d + 2)) ~probe:c_pos));
+      Sys.readdir dir
+      |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
+      try Sys.rmdir dir with _ -> ())
+
 let test_v3_wipe_level_against_checker () =
   match veripb_path () with
   | None ->
@@ -1255,8 +1409,36 @@ let test_v3_wipe_level_against_checker () =
       in
       check "3.0 wipe_level: the interior case really does emit `del range`"
         (contains "del range " text_range);
-      check "3.0 wipe_level: the newest-id case really does emit a `del id` list"
-        (contains "del id " text_list && not (contains "del range " text_list));
+      (* M1-T29. The newest-id case emits the PAIR, so both halves must be there --
+         and, unlike before, a `del range` in this text is now expected rather than
+         forbidden. Asserting the pair rather than just "some deletion happened" is
+         what keeps this check able to see its subject fail: the probes above are
+         satisfied by a single over-wide range too, and it is the trailing `del id`
+         that distinguishes a correct pair from one. *)
+      check
+        "3.0 wipe_level: the newest-id case emits a half-open range AND the run's last id"
+        (contains "del range " text_list && contains "del id " text_list);
+      (* Generically, not by naming ids: no `del id` rule this writer emits for a
+         wiped run carries more than one citation any more. That is the whole of
+         M1-T29's asymptotic claim, asserted on emitted text. *)
+      let del_id_widths text =
+        String.split_on_char '\n' text
+        |> List.filter_map (fun l ->
+               let l = String.trim l in
+               if String.length l >= 7 && String.sub l 0 7 = "del id " then
+                 Some (List.length (String.split_on_char ' ' l) - 3)
+               else None)
+      in
+      check "3.0 wipe_level: no `del id` rule carries more than one citation"
+        (List.for_all (fun n -> n <= 1) (del_id_widths text_list)
+        && List.for_all (fun n -> n <= 1) (del_id_widths text_range));
+      (* The over-deletion direction, end to end through [wipe_level] rather than
+         through hand-written text: an upper bound one too high in the pair's range
+         would retire [last] before the trailing `del id` reaches it, and 3.0.2 says
+         so ("Trying to access constraint with ID N that has already been deleted").
+         So the plain baseline verdict at the top of this test is itself the detector
+         -- stated here because a baseline that is also a detector is easy to read as
+         neither. [test_v3_del_pair_spelling] performs that break on purpose. *)
       Sys.readdir dir
       |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
       try Sys.rmdir dir with _ -> ())
@@ -1554,6 +1736,7 @@ let () =
   test_v3_emitted_text ();
   test_v3_levels ();
   test_v3_del_range_semantics ();
+  test_v3_del_pair_spelling ();
   test_v3_wipe_level_against_checker ();
   test_v3_veripb ();
   test_pol_states_its_conclusion ();
