@@ -108,7 +108,7 @@
    means an explanation from this module must not be dropped into a cutting-planes
    sum as though it were a bound derivation. [Linear]'s [Snap_cite] path does exactly
    that when it cites the trail entry that last moved a bound (lib/core/prop/linear.ml,
-   [find_lo_reason]/[find_hi_reason]) -- and this propagator *can* move a bound, since
+   [Store.lo_reasons]/[hi_reasons]) -- and this propagator *can* move a bound, since
    removing a value at [lo] or [hi] shrinks the interval.
 
    M1-T17 note on that composition: the [pol] it produces is *sound* (a [pol] is sound
@@ -224,7 +224,7 @@ let explain pairs = Explanation.deferred (fun () -> nogood pairs)
 
        rup <the order literal the new bound establishes> \/ ~<fact> ... >= 1 ;
 
-   Until M1-T17 this module pruned through [Store.remove], which records [no_facts],
+   Until M1-T17 this module pruned through a mutator that recorded no facts at all,
    and that line came out with an empty tail -- claiming the new bound
    unconditionally. On a satisfiable model it is not merely unprovable, it is false,
    and veripb rejects it.
@@ -252,17 +252,31 @@ let explain pairs = Explanation.deferred (fun () -> nogood pairs)
    [d] is the pruned variable's domain as it stands *now*, before the removal, and is
    read here rather than inside the thunk: I-X6, the same snapshot discipline the
    values in [pairs] already follow. *)
-let fixed_facts tm v =
-  (if v > tm.decl_lo then [ Lit.ge tm.name v ] else [])
-  @ if v < tm.decl_hi then [ Lit.le tm.name v ] else []
-
+(* M2-T8/D-0026: these are [Reason.fact]s, not [Lit.t]s, and the "drop it at the declared
+   bound" test they used to make for themselves now lives once, in [Reason.lit_of_fact].
+   Nothing else about them changed: the same facts in the same order, so the same tail on
+   the same line. *)
 let moved_bound_fact tm w d =
-  if w = Domain.lo d then if w > tm.decl_lo then [ Lit.ge tm.name w ] else []
-  else if w = Domain.hi d then if w < tm.decl_hi then [ Lit.le tm.name w ] else []
+  if w = Domain.lo d then [ Reason.at_least ~name:tm.name ~decl:tm.decl_lo w ]
+  else if w = Domain.hi d then [ Reason.at_most ~name:tm.name ~decl:tm.decl_hi w ]
   else []
 
-let pruning_facts tm w d fixed_others () =
-  moved_bound_fact tm w d @ List.concat_map (fun (o, v) -> fixed_facts o v) fixed_others
+let pruning_reason tm w d fixed_others =
+  moved_bound_fact tm w d
+  @ List.concat_map
+      (fun (o, v) ->
+        Reason.fixed_at ~name:o.name ~decl_lo:o.decl_lo ~decl_hi:o.decl_hi v)
+      fixed_others
+
+(* The two halves of one pruning, from one snapshot, in one function -- D-0026, and the
+   same shape [Linear.justified_of_snaps] has. The justification's clause is over
+   [(tm, w) :: fixed_others] (the pruned term fixed at [w] as well, which is what makes it
+   a nogood) and the reason is over the bound [w] is about to move plus the others; the
+   two differ exactly there and by construction, not by two call sites agreeing. *)
+let justified_pruning tm w d fixed_others : Reason.justified =
+  Reason.because
+    (pruning_reason tm w d fixed_others)
+    (explain ((tm, w) :: fixed_others))
 
 (* ------------------------------------------------------------------- propagation *)
 
@@ -302,7 +316,15 @@ let propagate t store =
   | [] ->
       (* I-P3, checking: with everything fixed, fail iff the constraint is violated. *)
       if sum_of store t.terms <> t.rhs then Propagator.Fixpoint
-      else Propagator.Conflict (Store.conflict store (explain (all_pairs store t.terms)))
+      else
+        (* [Reason.none], deliberately and now visibly: an all-fixed violation records no
+           bound facts, so [Trace.conflict_line] writes no line for it. The clause IS the
+           explanation here (every variable is fixed, so the nogood is the whole story),
+           and a reason line restating it would be a second copy of the same claim. Before
+           M2-T8 this was the default argument and said nothing. *)
+        Propagator.Conflict
+          (Store.conflict store
+             (Reason.because Reason.none (explain (all_pairs store t.terms))))
   | [ idx ] -> (
       let tm = List.nth t.terms idx in
       let others = others_except t.terms idx in
@@ -321,10 +343,7 @@ let propagate t store =
           let fixed_others =
             List.map (fun o -> (o, Domain.lo (Store.get store o.x))) others
           in
-          let pairs = (tm, w) :: fixed_others in
-          let expl = explain pairs in
-          let facts = pruning_facts tm w d fixed_others in
-          match Store.remove_with_facts store tm.x w ~facts expl with
+          match Store.remove store tm.x w (justified_pruning tm w d fixed_others) with
           | Store.Conflict e ->
               (* Unreachable at the interface: [tm] is unfixed, so its domain holds at
                  least two values and removing one cannot empty it. Handled rather

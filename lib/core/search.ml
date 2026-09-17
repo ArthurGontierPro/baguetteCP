@@ -611,11 +611,22 @@ and check_decision_landed store lvl outcome =
    render it as the ambient model row (see explanation.ml's header). The literal is
    exactly the one this branch assumes, so a propagator that reads a bound this entry
    established can see *that* it is an assumption and weaken it out of its [pol]
-   (lib/core/prop/linear.ml's [Snap_assume]) rather than citing an id that does not
-   exist. It is the same literal the nogood negates on the way back out. *)
+   (lib/core/prop/linear.ml's [snapshot_source], the branch that keeps a term's fact and
+   drops its citation) rather than citing an id that does not exist. It is the same literal
+   the nogood negates on the way back out.
+
+   M2-T8/D-0026: the push carries [Reason.none] beside that explanation, and it says so out
+   loud rather than getting it by default. It is the honest answer -- a decision rests on no
+   facts; it *is* the fact, and its literal enters the proof exactly once, negated, in the
+   branch nogood below (D-0018, D-0037) -- and it is also why [Trace] can skip a level start
+   without checking: [Reason.lits Reason.none] is empty, so a line for it would be an
+   unconditional claim. *)
 and explore_le store engine ctx trace order decisions v k lit =
   let lvl = Store.level store in
-  let outcome = Store.set_hi store v k (Explanation.decision (Lit.negate lit)) in
+  let outcome =
+    Store.set_hi store v k
+      (Reason.because Reason.none (Explanation.decision (Lit.negate lit)))
+  in
   match outcome with
   | Store.Conflict _ ->
       (* [k >= lo] and [lo] is in [v]'s domain (I-D2), so [set_hi _ k] cannot empty it;
@@ -636,7 +647,10 @@ and explore_le store engine ctx trace order decisions v k lit =
    [k + 1 <= hi] and [hi] is in the domain, so this push cannot empty it either. *)
 and explore_ge store engine ctx trace order decisions v k lit =
   let lvl = Store.level store in
-  let outcome = Store.set_lo store v (k + 1) (Explanation.decision lit) in
+  let outcome =
+    Store.set_lo store v (k + 1)
+      (Reason.because Reason.none (Explanation.decision lit))
+  in
   match outcome with
   | Store.Conflict _ ->
       Trace.emit ctx trace store;
