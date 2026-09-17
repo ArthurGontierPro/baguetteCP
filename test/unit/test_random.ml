@@ -311,9 +311,9 @@ module Probe_linear = struct
   let propagate t store =
     scan_linear t.obs t.lin store;
     match Linear.propagate t.lin store with
-    | Propagator.Conflict e ->
-        classify t.obs store e;
-        Propagator.Conflict e
+    | Propagator.Conflict c ->
+        classify t.obs store c.Store.c_why;
+        Propagator.Conflict c
     | Propagator.Fixpoint -> Propagator.Fixpoint
 end
 
@@ -344,10 +344,10 @@ module Probe_ne = struct
     in
     if List.exists2 (fun a b -> a <> b) before after then t.obs.ne_moved_bound <- true;
     match r with
-    | Propagator.Conflict e ->
-        classify t.obs store e;
+    | Propagator.Conflict c ->
+        classify t.obs store c.Store.c_why;
         if Store.level store = 0 then t.obs.ne_root_conflict <- true;
-        Propagator.Conflict e
+        Propagator.Conflict c
     | Propagator.Fixpoint -> Propagator.Fixpoint
 end
 

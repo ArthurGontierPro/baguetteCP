@@ -39,9 +39,17 @@
    assignment that violates a constraint nobody woke to check. The only direct evidence is
    "at the fixpoint, some propagator still has something to say", which is exactly I-P2,
    and exactly what [check_fixpoint] looks for. It runs under BAGUETTE_DEBUG, and it is
-   the thing to switch on first when a starved wake is suspected. *)
+   the thing to switch on first when a starved wake is suspected.
 
-type outcome = Fixpoint | Conflict of Explanation.t
+   M2-T7 adds the third thing this module owns: it is the only place that knows WHICH
+   propagator is running, so it is the only place that can record it. [Store] holds the
+   trail and stamps each entry, but [Store] cannot see a [Propagator.instance] at all
+   (the dependency runs the other way), so the engine brackets every [run] with
+   [Store.with_running] and then reads the stamp back in [check_attribution]. See
+   [Store.entry]'s [prop] field for why the id is stamped from here rather than passed in
+   by the propagator. *)
+
+type outcome = Fixpoint | Conflict of Store.conflict
 
 (* ------------------------------------------------------------------ triggers *)
 
@@ -223,6 +231,79 @@ let watchers_of_new_entries t store ~since =
   done;
   !acc
 
+(* --------------------------------------------- attribution, checked by reading it back *)
+
+exception Mis_attributed of string
+
+(* M2-T7's answer to "an id that is threaded but never read changes no behaviour at all".
+
+   After each [run], every trail entry that run pushed must be credited to the instance
+   that just ran, and that instance must be one that watches the variable the entry
+   changed. The second half is the one with teeth: the first catches a stamp that was
+   never written, the second catches a stamp that was written with a plausible but wrong
+   id -- which is exactly the failure mode M2-T3 would turn into a wrong learned clause,
+   and exactly the kind of thing this codebase has repeatedly shipped green (M1-T45's
+   [if true || ...], M1-T50's deliberately wrong decision literal).
+
+   It is ON BY DEFAULT, not behind BAGUETTE_DEBUG, and that is deliberate. A Debug-gated
+   check of a field nobody else reads is indistinguishable from no check at all in every
+   run the suite actually makes. The cost is one hashtable lookup and one short [List.mem]
+   per NEW TRAIL ENTRY -- the same lookup [watchers_of_new_entries] makes on the same
+   entries a moment later, and bounded by the number of prunings, not by the trail or the
+   variable count.
+
+   The watcher table is consulted rather than [inst.inst_vars] directly because it is
+   built from exactly that list ([create] above) and is indexed, so membership is O(the
+   watchers of one variable) instead of O(the instance's arity). The two agree by
+   construction; if they ever did not, this check is what would say so. *)
+let check_attribution (t : t) (inst : Propagator.instance) store ~since
+    ~(conflict : Store.conflict option) =
+  let id = inst.Propagator.id in
+  let watches v =
+    match Hashtbl.find_opt t.watchers v with None -> false | Some ids -> List.mem id ids
+  in
+  for i = since to Store.trail_length store - 1 do
+    let e : Store.entry = Store.trail_entry store i in
+    if e.Store.prop <> id then
+      raise
+        (Mis_attributed
+           (Printf.sprintf
+              "M2-T7: propagator #%d %s pruned %s, but the trail credits that change \
+               to                #%d. A trail entry must name the instance that made it; \
+               conflict analysis                (M2-T3) resolves an entry's reason \
+               constraint through this field, so a                wrong id here is a \
+               wrong learned clause. Check that Engine.propagate                brackets \
+               the run with Store.with_running and that Store.apply \
+               stamps                t.current_prop."
+              id inst.Propagator.inst_name
+              (Store.name store e.Store.var)
+              e.Store.prop))
+    else if not (watches e.Store.var) then
+      raise
+        (Mis_attributed
+           (Printf.sprintf
+              "M2-T7: the trail credits the change to %s to propagator #%d %s, which \
+               does                not watch %s. Either the propagator pruned a variable \
+               outside its own                scope -- which breaks I-P1, since \
+               soundness is stated about its own                constraint -- or the \
+               attribution is wrong."
+              (Store.name store e.Store.var)
+              id inst.Propagator.inst_name
+              (Store.name store e.Store.var)))
+  done;
+  match conflict with
+  | None -> ()
+  | Some c ->
+      if c.Store.c_prop <> id then
+        raise
+          (Mis_attributed
+             (Printf.sprintf
+                "M2-T7: propagator #%d %s reported a conflict, but the conflict \
+                 is                  credited to #%d. A conflict is where M2-T3's \
+                 resolution STARTS, so this                  id is the first constraint \
+                 of the learned clause."
+                id inst.Propagator.inst_name c.Store.c_prop))
+
 (* ------------------------------------------------- I-P2, checked by re-running *)
 
 exception Not_at_fixpoint of string
@@ -303,14 +384,24 @@ let propagate (t : t) (store : Store.t) : outcome =
       let inst = t.instances.(id) in
       let before = Store.trail_length store in
       incr runs;
-      match inst.Propagator.run store with
-      | Propagator.Conflict e -> conflict := Some e
+      (* The whole of M2-T7's threading, in one bracket: everything [inst] pushes while
+         this call is in flight is stamped with [inst]'s own id, and nothing else can be.
+         [check_attribution] then reads it back on both arms -- a propagator may push
+         prunings and *then* conflict, so the conflict arm has new entries to check too,
+         which is why the check is not simply folded into [watchers_of_new_entries]. *)
+      match
+        Store.with_running store inst.Propagator.id (fun () -> inst.Propagator.run store)
+      with
+      | Propagator.Conflict c ->
+          check_attribution t inst store ~since:before ~conflict:(Some c);
+          conflict := Some c
       | Propagator.Fixpoint ->
+          check_attribution t inst store ~since:before ~conflict:None;
           let woken = watchers_of_new_entries t store ~since:before in
           List.iter enqueue woken
     done;
     match !conflict with
-    | Some e -> Conflict e
+    | Some c -> Conflict c
     | None ->
         (* I-P2, checked rather than asserted in a comment. Only on the no-failure
            return: I-P2 says nothing about a [Conflict], and re-running propagators

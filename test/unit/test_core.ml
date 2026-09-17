@@ -407,10 +407,91 @@ let test_explanations () =
   check "arena: force_at memoises into the arena"
     (!n = 1 && match Arena.get b id with Explanation.Clause [ _ ] -> true | _ -> false)
 
+(* ------------------------------------------------- who made the change (M2-T7)
+
+   [Store.entry]'s [prop], the field docs/DECISIONS.md D-0011 says the trail lacks and
+   M2-T3 cannot start without. These are the store's half: that the stamp is whatever
+   [with_running] says and nothing else, that it is restored, and that [no_prop] really
+   is what an unattributed change gets. The engine's half -- that the stamp names the
+   instance that actually ran, and that the instance watches what it changed -- is
+   test_engine.ml's, because only the engine can see a [Propagator.instance]. *)
+
+let last_entry store = Store.trail_entry store (Store.trail_length store - 1)
+
+let test_attribution () =
+  let store =
+    Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
+  in
+  let r = Explanation.model_row 1 in
+  check "M2-T7: a fresh store has nobody running" (Store.running store = Store.no_prop);
+
+  (* A mutation made by nobody -- Search's decision pushes and every direct call from a
+     test take this path -- is attributed to nobody. It is not attributed to instance 0
+     by accident, which is the failure mode a sentinel of [0] would have had. *)
+  (match Store.set_lo store (Var.of_int 0) 1 r with
+  | Store.Changed -> ()
+  | _ -> failwith "test_attribution: setup");
+  check "M2-T7: a change made outside any propagator is no_prop"
+    ((last_entry store).Store.prop = Store.no_prop);
+
+  (* And inside a bracket it is stamped with that id, on the entry, not just held in the
+     field. *)
+  Store.with_running store 7 (fun () ->
+      check "M2-T7: with_running records the running instance" (Store.running store = 7);
+      match Store.set_lo store (Var.of_int 0) 2 r with
+      | Store.Changed ->
+          check "M2-T7: apply stamps the running instance onto the entry"
+            ((last_entry store).Store.prop = 7)
+      | _ -> failwith "test_attribution: push under a bracket");
+  check "M2-T7: with_running restores afterwards" (Store.running store = Store.no_prop);
+
+  (* Nested brackets restore the outer id rather than clearing to no_prop. Nothing nests
+     today; the point is that an engine that ever ran one propagator from inside another
+     would still attribute correctly, so this is not a trap left for M2-T8. *)
+  Store.with_running store 3 (fun () ->
+      Store.with_running store 4 (fun () ->
+          check "M2-T7: a nested bracket takes effect" (Store.running store = 4));
+      check "M2-T7: a nested bracket restores the outer id" (Store.running store = 3));
+
+  (* A propagator that raises -- [Checked]'s overflow guard does, by design -- must not
+     leave the store claiming it is still running, or the next change made by anyone
+     would be credited to it. *)
+  (try Store.with_running store 5 (fun () -> raise Exit) with Exit -> ());
+  check "M2-T7: with_running restores when the propagator raises"
+    (Store.running store = Store.no_prop);
+
+  (* A conflict is stamped from the same field, and defaults to recording no bound facts
+     -- which is what the D-0018 point 3 line keys off, and what the old one-shot
+     [conflict_facts] slot meant when nobody had armed it. *)
+  let c = Store.conflict store (Explanation.model_row 2) in
+  check "M2-T7: a conflict built outside a propagator is no_prop"
+    (c.Store.c_prop = Store.no_prop);
+  check "M2-T7: a conflict records no facts unless asked" (c.Store.c_facts () = []);
+  Store.with_running store 2 (fun () ->
+      let c =
+        Store.conflict store ~facts:(fun () -> [ Lit.ge "x" 1 ]) (Explanation.model_row 2)
+      in
+      check "M2-T7: a conflict names the propagator that reported it" (c.Store.c_prop = 2);
+      check "M2-T7: and carries its own bound facts"
+        (c.Store.c_facts () = [ Lit.ge "x" 1 ]));
+
+  (* The stamp survives a backtrack the way every other field does: I-T1 restores
+     domains, and an entry that is popped takes its attribution with it. *)
+  Store.new_level store;
+  Store.with_running store 11 (fun () ->
+      match Store.set_lo store (Var.of_int 1) 1 r with
+      | Store.Changed -> ()
+      | _ -> failwith "test_attribution: level push");
+  check "M2-T7: the deeper entry is attributed" ((last_entry store).Store.prop = 11);
+  Store.backtrack store;
+  check "M2-T7: backtracking pops the attributed entry with everything else"
+    ((last_entry store).Store.prop = 7 && Store.check_invariants store)
+
 let () =
   test_domains ();
   test_store ();
   test_explanations ();
+  test_attribution ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

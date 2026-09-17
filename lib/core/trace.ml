@@ -398,19 +398,24 @@ let emit (ctx : Justify.ctx) t store =
    the guess list. [None] when the propagator did not record any: the line is then
    redundant for [int_lin_le] (a slack < 0 row is detected as violated by the checker's
    own unit propagation once the trace has assigned its bounds) and writing `>= 1 ;`
-   over nothing would be a claim of unconditional contradiction, which is false. *)
-let conflict_line (ctx : Justify.ctx) t store =
-  match Store.take_conflict_facts store with
-  | None -> None
-  | Some f -> (
-      match f () with
-      | [] -> None
-      | facts ->
-          let cid =
-            Justify.emit_rup_clause ctx
-              ~origin:
-                (Printf.sprintf "trace: conflict from %d fact(s)" (List.length facts))
-              (List.map Lit.negate facts)
-          in
-          record t ~level:(Writer.current_level ctx.Justify.writer) cid;
-          Some cid)
+   over nothing would be a claim of unconditional contradiction, which is false.
+
+   M2-T7: the facts arrive *in* the conflict rather than out of a one-shot slot on the
+   store. [Store.take_conflict_facts] and the [conflict_facts] field it consumed are
+   gone, and with them the question the old comment had to answer -- "consumed exactly
+   once, immediately, and nothing may run in between" -- because a value passed in cannot
+   be stale, cannot be another propagator's, and cannot be consumed twice by accident.
+   The three sites that had to clear the slot ([take_conflict_facts], [Store.new_level],
+   [Store.backtrack]) are gone with it. [Store.no_facts] yielding [[]] is exactly what
+   the un-armed slot's [None] used to mean, so what gets written is unchanged. *)
+let conflict_line (ctx : Justify.ctx) t (c : Store.conflict) =
+  match c.Store.c_facts () with
+  | [] -> None
+  | facts ->
+      let cid =
+        Justify.emit_rup_clause ctx
+          ~origin:(Printf.sprintf "trace: conflict from %d fact(s)" (List.length facts))
+          (List.map Lit.negate facts)
+      in
+      record t ~level:(Writer.current_level ctx.Justify.writer) cid;
+      Some cid

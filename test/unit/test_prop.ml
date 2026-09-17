@@ -362,7 +362,8 @@ let test_conflict () =
   ignore (Store.set_lo store (var 1) 1 placeholder_reason);
   match Linear.propagate prop store with
   | Propagator.Fixpoint -> check "conflict: expected Conflict" false
-  | Propagator.Conflict e ->
+  | Propagator.Conflict c ->
+      let e = c.Store.c_why in
       (* [Explanation.lits] walks into [Combine]'s [Weaken] summands but not into a
          [Term]'s cited explanation until *that* is forced -- and here both x and y
          are cited via [placeholder_reason] (standing in for "some earlier propagator
@@ -1784,7 +1785,7 @@ let build_ne_case dir ~file ~decls ~terms ~rhs ~pre ~target ~sat ~expect_lines
   let before = Store.trail_length store in
   let expl =
     match Ne.propagate prop store with
-    | Propagator.Conflict e -> e
+    | Propagator.Conflict c -> c.Store.c_why
     | Propagator.Fixpoint -> (
         let after = Store.trail_length store in
         let entries =
@@ -2617,7 +2618,8 @@ let test_bool_clause_conflict_reason () =
   ignore (Store.set_hi store (var 2) 0 placeholder_reason);
   match Bool_clause.propagate prop store with
   | Propagator.Fixpoint -> check "bool_clause: an all-false clause conflicts" false
-  | Propagator.Conflict e ->
+  | Propagator.Conflict c ->
+      let e = c.Store.c_why in
       check "bool_clause: an all-false clause conflicts" true;
       check "bool_clause: the conflict's reason is the clause"
         (expl_lits e = Some "a_ge_1 ~b_ge_1 c_ge_1")
@@ -2627,7 +2629,8 @@ let test_bool_clause_empty_conflict () =
   let prop = mk_bool_clause [] store in
   match Bool_clause.propagate prop store with
   | Propagator.Fixpoint -> check "bool_clause: the empty clause conflicts at once" false
-  | Propagator.Conflict e ->
+  | Propagator.Conflict c ->
+      let e = c.Store.c_why in
       check "bool_clause: the empty clause conflicts at once" true;
       (* [Explanation.clause []] renders as `rup >= 1 ;`, closed the D-0022/I-X7 way. *)
       check "bool_clause: the empty clause's reason is the empty clause"
@@ -2819,7 +2822,8 @@ let test_bool2int_conflicts () =
   let r, _ = bool2int_case ~b_range:(0, 1) ~x_range:(2, 5) ~pre:[] in
   (match r with
   | Propagator.Fixpoint -> check "bool2int: a declared-disjoint x conflicts at once" false
-  | Propagator.Conflict e ->
+  | Propagator.Conflict c ->
+      let e = c.Store.c_why in
       check "bool2int: a declared-disjoint x conflicts at once" true;
       check "bool2int: its reason is the empty clause (both bounds still declared)"
         (expl_lits e = Some ""));
@@ -2837,7 +2841,8 @@ let test_bool2int_conflicts () =
   in
   match r with
   | Propagator.Fixpoint -> check "bool2int: b false against x >= 1 conflicts" false
-  | Propagator.Conflict e ->
+  | Propagator.Conflict c ->
+      let e = c.Store.c_why in
       check "bool2int: b false against x >= 1 conflicts" true;
       check "bool2int: the conflict names both moved bounds, negated"
         (expl_lits e = Some "b_ge_1 ~x_ge_1")
@@ -2979,7 +2984,7 @@ let build_bool_clause_conflict dir =
   let prop = mk_bool_clause [] store in
   let expl =
     match Bool_clause.propagate prop store with
-    | Propagator.Conflict e -> Explanation.force e
+    | Propagator.Conflict c -> Explanation.force c.Store.c_why
     | Propagator.Fixpoint -> failwith "build_bool_clause_conflict: did not conflict"
   in
   let opb = Filename.concat dir "boolclause_empty.opb" in

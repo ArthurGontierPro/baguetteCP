@@ -213,8 +213,7 @@ let propagate t store =
                the facts that produced it, plus that upper bound -- dropped when it is
                still the declared one, which leaves the empty clause; see the header. *)
             let all = facts @ le_fact ~name ~decl_hi (Domain.hi d) in
-            Store.record_conflict_facts store (fun () -> all);
-            conflict := Some (nogood all)
+            conflict := Some (Store.conflict store ~facts:(fun () -> all) (nogood all))
   in
   let push_hi var ~name ~decl_lo bound ~facts =
     if Option.is_none !conflict then
@@ -229,8 +228,7 @@ let propagate t store =
         | Store.Changed | Store.Unchanged -> ()
         | Store.Conflict _ ->
             let all = facts @ ge_fact ~name ~decl_lo (Domain.lo d) in
-            Store.record_conflict_facts store (fun () -> all);
-            conflict := Some (nogood all)
+            conflict := Some (Store.conflict store ~facts:(fun () -> all) (nogood all))
   in
   (* b -> x. [db] is read once: nothing below writes to b before the x pushes are
      done, so it cannot go stale in between. *)
@@ -247,4 +245,4 @@ let propagate t store =
     ~facts:(ge_fact ~name:t.x_name ~decl_lo:t.x_decl_lo (Domain.lo dx));
   push_hi t.b ~name:t.b_name ~decl_lo:t.b_decl_lo (Domain.hi dx)
     ~facts:(le_fact ~name:t.x_name ~decl_hi:t.x_decl_hi (Domain.hi dx));
-  match !conflict with Some e -> Propagator.Conflict e | None -> Propagator.Fixpoint
+  match !conflict with Some c -> Propagator.Conflict c | None -> Propagator.Fixpoint

@@ -9,7 +9,21 @@
    returns [Fixpoint]. It must be sound, checking, and idempotent at the interface
    (invariants I-P1 to I-P3). *)
 
-type result = Fixpoint | Conflict of Explanation.t
+(* M2-T7: a conflict is [Store.conflict], which carries the reporting instance's [id] and
+   the D-0018 point 3 bound facts alongside the [Explanation.t]. Note what a propagator
+   does NOT do here: it never writes its own id. Either it forwards the [Store.conflict]
+   a failing mutator handed it, unchanged, or it builds one with [Store.conflict store]
+   -- and that function stamps whoever [Engine] said was running. No function a
+   propagator calls to change a domain or to report a conflict takes an id, so a
+   propagator that wanted to name the wrong one would have to go out of its way, through
+   [Store.with_running], which the engine needs public. That route is not sealed; it is
+   *checked*, by [Engine.check_attribution], and test_engine.ml's [Steals_credit] walks
+   through it on purpose to prove the check fires. Sealing it is not available: [Store]
+   cannot tell an engine from a propagator, since it cannot see either type.
+
+   Reach the payload with [c_why] where the old [Conflict of Explanation.t] gave it
+   directly. *)
+type result = Fixpoint | Conflict of Store.conflict
 
 (* One of these, not a free-form string, so that a typo cannot silently claim a stronger
    consistency than the code delivers. docs/GLOSSARY.md defines each. *)

@@ -105,8 +105,8 @@ let test_conflict_carries_explanation () =
   | Engine.Fixpoint ->
       incr failures;
       Printf.printf "FAIL conflict: expected Conflict, got Fixpoint\n"
-  | Engine.Conflict e ->
-      let forced = Explanation.force e in
+  | Engine.Conflict c ->
+      let forced = Explanation.force c.Store.c_why in
       check "conflict: explanation forces without raising"
         (match forced with Explanation.Deferred _ -> false | _ -> true);
       check "conflict: explanation mentions the literals witnessing the pruned bound"
@@ -139,6 +139,150 @@ let test_independent_constraints_reach_fixpoint () =
   ignore (Engine.propagate engine store);
   check "independent: settled, no further changes on re-propagation"
     (Store.trail_length store = trail_before)
+
+(* ===================================================================== *)
+(* 1c. M2-T7: the trail names the propagator that made each change, and  *)
+(*     the engine reads that stamp back.                                 *)
+(*                                                                       *)
+(* These exist because an id that is threaded but never read changes no   *)
+(* behaviour at all, and this codebase's signature failure is a check     *)
+(* that cannot see its own subject fail (M1-T45's dead `if true || ...`,  *)
+(* M1-T50's deliberately wrong decision literal). So two of the four      *)
+(* tests below PERFORM the mis-attribution rather than reasoning about    *)
+(* it: one propagator claims another's id, one prunes a variable it never *)
+(* declared, and each must be refused.                                   *)
+(* ===================================================================== *)
+
+(* Two rows over disjoint variables, each with one variable already fixed by its
+   declaration so that each row has exactly one pruning to make. The trail then has one
+   entry per instance and every entry must name its own. *)
+let test_attribution_names_the_right_instance () =
+  let store = mk_store [ ("x1", 0, 5); ("x2", 3, 3); ("y1", 0, 5); ("y2", 3, 3) ] in
+  let row_x =
+    Linear.make ~row_id:(unrendered_row ()) store [ (1, var 0); (1, var 1) ] 3
+  in
+  let row_y =
+    Linear.make ~row_id:(unrendered_row ()) store [ (1, var 2); (1, var 3) ] 3
+  in
+  let engine = Engine.create [ pack_linear 0 row_x; pack_linear 1 row_y ] in
+  (match Engine.propagate engine store with
+  | Engine.Conflict _ -> failwith "attribution: unexpected conflict"
+  | Engine.Fixpoint -> ());
+  check "attribution: both rows pruned, so there is something to attribute"
+    (Store.trail_length store = 2);
+  let owner name =
+    let found = ref None in
+    for i = 0 to Store.trail_length store - 1 do
+      let e = Store.trail_entry store i in
+      if Store.name store e.Store.var = name then found := Some e.Store.prop
+    done;
+    !found
+  in
+  check "attribution: x1's pruning names the instance holding x1's row"
+    (owner "x1" = Some 0);
+  check "attribution: y1's pruning names the instance holding y1's row"
+    (owner "y1" = Some 1);
+  (* The check that would still pass if [prop] were a constant: it must not. *)
+  check "attribution: the two prunings are attributed differently"
+    (owner "x1" <> owner "y1")
+
+(* A conflict is where M2-T3's resolution starts, so it must name its constraint too.
+   Instance 0 is a row with nothing to say, so the conflict comes from instance 1 and a
+   stamp of "whoever ran first" or a hardcoded 0 would be visible here. *)
+let test_conflict_names_its_propagator () =
+  let store = mk_store [ ("z", 0, 5); ("x1", 0, 5); ("x2", 0, 5) ] in
+  let quiet = Linear.make ~row_id:(unrendered_row ()) store [ (1, var 0) ] 5 in
+  let doomed =
+    Linear.make ~row_id:(unrendered_row ()) store [ (1, var 1); (1, var 2) ] 3
+  in
+  (match Store.set_lo store (var 2) 4 (Explanation.model_row 1) with
+  | Store.Conflict _ -> failwith "conflict-id: setup failed"
+  | Store.Changed | Store.Unchanged -> ());
+  let engine = Engine.create [ pack_linear 0 quiet; pack_linear 1 doomed ] in
+  match Engine.propagate engine store with
+  | Engine.Fixpoint ->
+      incr failures;
+      Printf.printf "FAIL conflict-id: expected a Conflict\n"
+  | Engine.Conflict c ->
+      check "conflict: the conflict names the instance that reported it"
+        (c.Store.c_prop = 1);
+      check "conflict: and still carries its explanation"
+        (Explanation.lits (Explanation.force c.Store.c_why) <> [])
+
+(* THE BREAK, performed rather than argued: a propagator that does the real work of a
+   linear row while claiming, through [Store.with_running], to be a different instance.
+   [Store.with_running] is public -- the engine needs it -- so this back door exists, and
+   the whole value of [Engine.check_attribution] is that walking through it is refused
+   instead of yielding a trail that credits instance 1 with instance 0's pruning.
+   Without that check this scene answers correctly, verifies, and says nothing at all. *)
+module Steals_credit = struct
+  type t = Linear.t
+
+  let name = "steals_credit"
+  let consistency = Propagator.Bounds
+  let vars t = Linear.vars t
+  let propagate t store = Store.with_running store 1 (fun () -> Linear.propagate t store)
+end
+
+let contains msg needle =
+  let n = String.length needle and m = String.length msg in
+  let rec at i = i + n <= m && (String.sub msg i n = needle || at (i + 1)) in
+  at 0
+
+let test_stolen_credit_is_refused () =
+  let store = mk_store [ ("x1", 0, 5); ("x2", 3, 3) ] in
+  let lin = Linear.make ~row_id:(unrendered_row ()) store [ (1, var 0); (1, var 1) ] 3 in
+  let thief =
+    Propagator.pack ~id:0
+      (module Steals_credit : Propagator.S with type t = Steals_credit.t)
+      lin
+  in
+  let other =
+    pack_linear 1 (Linear.make ~row_id:(unrendered_row ()) store [ (1, var 0) ] 5)
+  in
+  let engine = Engine.create [ thief; other ] in
+  let caught =
+    match Engine.propagate engine store with
+    | _ -> None
+    | exception Engine.Mis_attributed msg -> Some msg
+  in
+  check "M2-T7: a prune attributed to another instance is refused" (Option.is_some caught);
+  check "M2-T7: and the refusal names the variable whose attribution is wrong"
+    (match caught with Some msg -> contains msg "x1" | None -> false)
+
+(* The second arm: a stamp that IS the running instance's own id, but on a variable that
+   instance never declared. That is not a threading bug, it is a scope bug -- I-P1's
+   soundness is stated about a propagator's OWN constraint, so a prune outside its
+   declared variables has no I-P1 to appeal to, and the variable would also be starved of
+   wakes (M2-T5). [vars] under-reports here in the most ordinary way there is: a row
+   whose second variable was forgotten. *)
+module Under_declared = struct
+  type t = Linear.t
+
+  let name = "under_declared"
+  let consistency = Propagator.Bounds
+
+  (* Deliberately WRONG: the row is over x1 and x2 and prunes x1, but only x2 is
+     declared. *)
+  let vars t = match Linear.vars t with [] -> [] | _ :: rest -> rest
+  let propagate t store = Linear.propagate t store
+end
+
+let test_undeclared_variable_is_refused () =
+  let store = mk_store [ ("x1", 0, 5); ("x2", 3, 3) ] in
+  let lin = Linear.make ~row_id:(unrendered_row ()) store [ (1, var 0); (1, var 1) ] 3 in
+  let inst =
+    Propagator.pack ~id:0
+      (module Under_declared : Propagator.S with type t = Under_declared.t)
+      lin
+  in
+  let engine = Engine.create [ inst ] in
+  let caught =
+    match Engine.propagate engine store with
+    | _ -> false
+    | exception Engine.Mis_attributed _ -> true
+  in
+  check "M2-T7: a prune of an undeclared variable is refused" caught
 
 (* ===================================================================== *)
 (* 1b. M1-T24: the trail-cursor walk wakes watchers in exactly the order  *)
@@ -963,6 +1107,10 @@ let test_hole_split_bridge () =
 let () =
   test_fixpoint_tightens_and_settles ();
   test_conflict_carries_explanation ();
+  test_attribution_names_the_right_instance ();
+  test_conflict_names_its_propagator ();
+  test_stolen_credit_is_refused ();
+  test_undeclared_variable_is_refused ();
   test_independent_constraints_reach_fixpoint ();
   test_wake_order_is_unchanged ();
   test_trigger_derivation ();

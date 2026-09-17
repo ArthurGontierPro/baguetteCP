@@ -566,17 +566,23 @@ let explain_cross_conflict store (tm : term) new_bound_expl =
    [row_snaps] call, so the two cannot drift apart -- reading the same snapshot twice,
    at two different moments, is the D-0013 trap [snapshot_source]'s header describes.
 
-   Both conflict paths call [Store.record_conflict_facts] immediately before handing the
-   conflict back, for D-0018 point 3: a conflict has no trail entry, so its own reason
-   line needs the facts routed separately. *)
+   Both conflict paths build their [Store.conflict] with [~facts], for D-0018 point 3: a
+   conflict has no trail entry, so its own reason line carries the facts itself. M2-T7
+   turned that from a [Store.record_conflict_facts] call immediately before the return
+   into a field of the returned value, which removes the window between arming the facts
+   and returning the conflict that the old one-shot slot's comment had to argue about.
+   Neither path names this instance's id: [Store.conflict] stamps whoever the engine said
+   was running. *)
 let propagate t store =
   let mins = List.map (fun tm -> term_min store tm) t.terms in
   let total_min = Checked.sum mins in
   let slack = Checked.sub t.rhs total_min in
-  if slack < 0 then (
+  if slack < 0 then
     let snaps = row_snaps store t.terms ~exclude:None in
-    Store.record_conflict_facts store (fun () -> facts_of_snaps snaps);
-    Propagator.Conflict (explain_of_snaps (base_explanation t) snaps 1))
+    Propagator.Conflict
+      (Store.conflict store
+         ~facts:(fun () -> facts_of_snaps snaps)
+         (explain_of_snaps (base_explanation t) snaps 1))
   else
     let result = ref Propagator.Fixpoint in
     let conflict = ref None in
@@ -585,13 +591,16 @@ let propagate t store =
          halves are snapshotted here, not inside the thunk, for the reason
          [explain_cross_conflict] below spells out. *)
       let opposite = opposite_bound_fact store tm in
-      Store.record_conflict_facts store (fun () ->
-          facts_of_snaps snaps @ match opposite with Some l -> [ l ] | None -> []);
-      conflict := Some (explain_cross_conflict store tm expl)
+      conflict :=
+        Some
+          (Store.conflict store
+             ~facts:(fun () ->
+               facts_of_snaps snaps @ match opposite with Some l -> [ l ] | None -> [])
+             (explain_cross_conflict store tm expl))
     in
     List.iteri
       (fun idx (tm, m) ->
-        if !conflict = None && tm.coeff <> 0 then
+        if Option.is_none !conflict && tm.coeff <> 0 then
           let max_term = Checked.add m slack in
           let d = Store.get store tm.x in
           if tm.coeff > 0 then (
@@ -615,5 +624,5 @@ let propagate t store =
               | Store.Conflict _ -> cross_conflict tm snaps expl
               | Store.Changed | Store.Unchanged -> ())
       (List.combine t.terms mins);
-    (match !conflict with Some e -> result := Propagator.Conflict e | None -> ());
+    (match !conflict with Some c -> result := Propagator.Conflict c | None -> ());
     !result

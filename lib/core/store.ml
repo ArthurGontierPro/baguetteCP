@@ -15,6 +15,13 @@ module Lit = Baguette_proof.Lit
    pruning for the propagators that do not (yet) supply one. *)
 let no_facts () = []
 
+(* The propagator instance that made a change, as the [id] of [Propagator.instance]
+   (lib/core/propagator.ml) -- the id that already existed and that [Engine] already
+   indexes its watcher lists and trigger masks by. [no_prop] is "no propagator":
+   [Search]'s decision pushes, and a direct mutation from a test, are attributed to
+   nobody, and that is the right answer for both. See [with_running]. *)
+let no_prop = -1
+
 (* A level mark records where in the trail the level began, and where in the explanation
    arena it began: backtracking rewinds both together, which is what keeps I-T3 true
    (no trail entry survives whose reason has been dropped) and stops the arena growing
@@ -45,14 +52,34 @@ type mark = { trail_mark : int; reason_mark : int }
 
    [why] stays the explanation arena index: I-T3 is still a bounds test.
 
+   [prop] is the propagator instance that made this change, M2-T7, closing the blocker
+   docs/DECISIONS.md D-0011 names against itself: "a pruning's explanation is recorded on
+   the trail as { var; old; why } -- **the trail records no propagator identity**. A
+   caller walking the trail has the explanation and nothing else, so it cannot tell which
+   half produced it, and [Trivial] is unresolvable." It is resolvable now. M2-T3's
+   conflict analysis walks this trail and asks, of an entry it did not watch happen,
+   which constraint implied it; that question has an answer here rather than needing
+   [Explanation] to carry the row.
+
+   It is stamped by [apply] off [t.current_prop], which the ENGINE sets around each
+   [run] -- never passed in by the propagator. That is the whole point: no mutator takes
+   an id, so a propagator has nothing to get wrong. [Engine.check_attribution] then reads
+   the stamp back, on by default, and rejects any entry that does not name the instance
+   that just ran or that credits an instance which does not watch the variable it
+   changed. That read-back is what stops the field being decoration -- an id that is
+   threaded and never read changes no behaviour at all, and would pass every test this
+   suite has.
+
    Note for docs/ARCHITECTURE.md section 3 (the "keep the trail record small" one):
-   this record is now five fields, two of which exist only for the proof. *)
+   this record is now six fields, three of which exist only for the proof and for
+   conflict analysis. *)
 type entry = {
   var : Var.t;
   old : Domain.t;
   now : Domain.t;
   why : Explanation.Arena.id;
   facts : unit -> Lit.t list;
+  prop : int;
 }
 
 type t = {
@@ -63,15 +90,39 @@ type t = {
   mutable trail_len : int;
   mutable marks : mark array;
   mutable n_levels : int;
-  (* The bound facts behind the conflict a propagator has just reported, for D-0018
-     point 3's "a conflict under decisions logs its own reason line first". A conflict
-     is not a domain change, so it has no trail entry to hang them on, and
-     [Propagator.result] (lib/core/propagator.ml, not this round's to change) carries
-     only the [Explanation.t]. See [record_conflict_facts]. *)
-  mutable conflict_facts : (unit -> Lit.t list) option;
+  (* The propagator instance currently running, or [no_prop]. Written only by
+     [with_running], read only by [apply] and [conflict] to stamp what they build.
+     M2-T7 replaced a [conflict_facts : (unit -> Lit.t list) option] one-shot slot here:
+     the facts behind a conflict now travel *in* the [conflict] value the propagator
+     returns, so there is no slot to arm, to consume exactly once, or to clear in the
+     three places ([take_conflict_facts], [new_level], [backtrack]) that arming it made
+     necessary. One mutable field remains, and unlike the slot it is written and cleared
+     by the same wrapper in the same call. *)
+  mutable current_prop : int;
 }
 
-type outcome = Unchanged | Changed | Conflict of Explanation.t
+(* A conflict, with the identity of the propagator that reported it.
+
+   [c_prop] is that propagator's instance id (M2-T7). A conflict was already the one
+   case D-0011 said was fine -- "reasons are demanded only for *conflicts*, which
+   [propagate] returns directly to the engine, so the instance that produced it is
+   known" -- but "known to the engine, in a local variable" is not the same as
+   "recorded", and [Search] and [Trace] are handed the conflict with the engine's local
+   long gone. M2-T3 needs the conflicting constraint to start a 1UIP resolution from.
+
+   [c_facts] is the bound facts behind the conflict, for D-0018 point 3's "a conflict
+   under decisions logs its own reason line first". A conflict establishes no bound and
+   so has no trail entry to hang them on; before M2-T7 they went through a one-shot
+   mutable slot on [t], armed by the propagator immediately before returning and
+   consumed immediately by [Trace.conflict_line]. They are a field of the returned value
+   now, which is what "consumed exactly once, immediately, and nothing may run in
+   between" was trying to approximate.
+
+   [no_facts] is the default and means "this conflict records none", exactly as an
+   unarmed slot did: [Trace.conflict_line] then writes no line, because a line over an
+   empty tail claims an unconditional contradiction, which is false. *)
+type conflict = { c_prop : int; c_why : Explanation.t; c_facts : unit -> Lit.t list }
+type outcome = Unchanged | Changed | Conflict of conflict
 
 let dummy_entry =
   {
@@ -80,6 +131,7 @@ let dummy_entry =
     now = Domain.singleton 0;
     why = Explanation.Arena.null;
     facts = no_facts;
+    prop = no_prop;
   }
 
 let dummy_mark = { trail_mark = 0; reason_mark = 0 }
@@ -95,7 +147,7 @@ let create ~names ~domains =
     trail_len = 0;
     marks = Array.make 16 dummy_mark;
     n_levels = 0;
-    conflict_facts = None;
+    current_prop = no_prop;
   }
 
 let n_vars t = Array.length t.domains
@@ -104,6 +156,40 @@ let name t v = t.names.(Var.to_int v)
 let level t = t.n_levels
 let trail_length t = t.trail_len
 let reasons t = t.reasons
+
+(* ------------------------------------------------ who is running (M2-T7) *)
+
+(* [Store] does not know what a propagator is -- [Propagator] depends on this module and
+   not the other way round -- so it holds the id as a plain int and trusts its caller for
+   nothing except that the id is the one the engine is about to run. That is a weaker
+   obligation than it looks: exactly one caller sets it ([Engine.propagate], through
+   [with_running]), and the check that the stamp is right lives there too, next to the
+   instance whose [inst_vars] it can compare against.
+
+   The alternative considered and rejected was for each propagator to pass its own id to
+   every mutator it calls. That is invasive -- every [set_lo]/[set_hi]/[remove] call site
+   in prop/ grows an argument -- and, worse, unenforceable: nothing stops a propagator
+   passing an id that is not its own, and there is no second source of truth to check it
+   against, because the caller IS the authority in that design. Stamping from the engine
+   leaves the mutators with no id to get wrong and gives the check something to compare
+   against; the one remaining route to a wrong stamp is re-entering [with_running] from
+   inside a propagator, which [Engine.check_attribution] refuses. *)
+let running t = t.current_prop
+
+(* Run [f] with [id] recorded as the running instance, restoring whatever was recorded
+   before. Restoring rather than clearing to [no_prop] so that nesting is not a trap: an
+   engine that ever runs a propagator from inside another one gets the right answer, and
+   a caller that never nests pays nothing for it.
+
+   [Fun.protect] rather than a plain set/run/restore because a propagator can raise --
+   [Checked]'s overflow guard does, by design (I-X8, D-0029) -- and a store left claiming
+   a propagator is running when none is would stamp the next change with a stale id.
+   The run is over in that case, but "the run is over" is an argument, and this is one
+   call per propagator invocation, which is noise next to the invocation. *)
+let with_running t id f =
+  let saved = t.current_prop in
+  t.current_prop <- id;
+  Fun.protect ~finally:(fun () -> t.current_prop <- saved) f
 
 (* ------------------------------------------------------------- trail growth *)
 
@@ -125,13 +211,30 @@ let push_mark t m =
 
 (* ----------------------------------------------------------------- mutation *)
 
+(* A conflict, attributed to whoever is running. The propagator never names itself; see
+   [with_running]. [~facts] defaults to [no_facts], which is "this conflict records no
+   bound facts" -- the same thing an un-armed [conflict_facts] slot used to mean, and the
+   behaviour [Trace.conflict_line] still keys off. *)
+let conflict t ?(facts = no_facts) why =
+  { c_prop = t.current_prop; c_why = why; c_facts = facts }
+
 (* Apply a Domain.result, recording the old value so it can be undone.
    Every path through here takes an explanation: invariant I-P4 is enforced by this
    signature, so do not add an optional reason argument. *)
 let apply t v (r : Domain.result) facts why =
   match r with
   | Domain.Unchanged -> Unchanged
-  | Domain.Failed -> Conflict why
+  | Domain.Failed ->
+      (* Deliberately WITHOUT [~facts]. [facts] here belongs to the change that did not
+         land, and the facts a *conflict* line needs are strictly more: the crossed
+         opposing bound as well (see lib/core/prop/linear.ml's [cross_conflict] and
+         bool2int.ml's push arms, which both build the fuller set and return their own
+         [conflict]). Attaching the partial set here would give those unreachable-at-the-
+         interface forwarding arms in ne.ml and bool_clause.ml a conflict line over too
+         few facts -- a claim that those facts alone are contradictory, which is false
+         and which veripb would reject. Before M2-T7 they recorded nothing and got no
+         line; they still get no line. *)
+      Conflict (conflict t why)
   | Domain.Changed d ->
       let i = Var.to_int v in
       let old = t.domains.(i) in
@@ -142,7 +245,7 @@ let apply t v (r : Domain.result) facts why =
       Debug.check "I-D1: a stored domain is non-empty" (fun () ->
           Domain.lo d <= Domain.hi d);
       let why = Explanation.Arena.add t.reasons why in
-      push_entry t { var = v; old; now = d; why; facts };
+      push_entry t { var = v; old; now = d; why; facts; prop = t.current_prop };
       t.domains.(i) <- d;
       Changed
 
@@ -193,25 +296,9 @@ let set_hi_with_facts t v bound ~facts why =
 let remove_with_facts t v value ~facts why =
   apply t v (Domain.remove (get t v) value) facts why
 
-(* ------------------------------------------------------- conflict bound facts *)
-
-(* Called by a propagator on the same call that returns [Propagator.Conflict], and
-   consumed exactly once, immediately, by whoever handles that conflict. Nothing else
-   may run in between: [Engine.propagate] returns as soon as a propagator conflicts.
-   [take_conflict_facts] clears the slot, and so do [new_level]/[backtrack], so a
-   propagator that sets it and then does not conflict cannot leak facts into someone
-   else's line later. *)
-let record_conflict_facts t f = t.conflict_facts <- Some f
-
-let take_conflict_facts t =
-  let r = t.conflict_facts in
-  t.conflict_facts <- None;
-  r
-
 (* ------------------------------------------------------------- backtracking *)
 
 let new_level t =
-  t.conflict_facts <- None;
   push_mark t
     { trail_mark = t.trail_len; reason_mark = Explanation.Arena.length t.reasons }
 
@@ -225,7 +312,6 @@ let undo_to t target =
 
 let backtrack t =
   if t.n_levels = 0 then invalid_arg "Store.backtrack: already at level 0";
-  t.conflict_facts <- None;
   let m = t.marks.(t.n_levels - 1) in
   undo_to t m.trail_mark;
   Explanation.Arena.truncate t.reasons m.reason_mark;
