@@ -21,14 +21,29 @@
 
        rup 1 <claim> 1 ~<fact_1> 1 ~<fact_2> ... >= 1 ;
 
-   where <claim> is the order literal the pruning established and the <fact_i> are the
-   bound facts the propagator actually read ([Store.entry]'s [facts]; for [int_lin_le]
-   that is lib/core/prop/linear.ml's [facts_of_snaps]). Read as a clause it says
-   "fact_1 and ... and fact_n imply claim", which is a genuine consequence of that one
-   model row -- so **no decision ever appears in a trace line**, and every line is
-   globally valid on its own. The decisions appear in exactly one place, the nogood,
-   which is now RUP because each of these lines is one unit propagation away from the
-   next.
+   where <claim> is what the pruning established and the <fact_i> are the bound facts
+   the propagator actually read ([Store.entry]'s [facts]; for [int_lin_le] that is
+   lib/core/prop/linear.ml's [facts_of_snaps]). Read as a clause it says "fact_1 and
+   ... and fact_n imply claim", which is a genuine consequence of that one model row --
+   so **no decision ever appears in a trace line**, and every line is globally valid on
+   its own. The decisions appear in exactly one place, the nogood, which is now RUP
+   because each of these lines is one unit propagation away from the next.
+
+   <claim> is a *clause*, not a literal, and both halves of that sentence earn their
+   keep (M1-T56, M1-T57):
+
+   - a bound move claims one order literal, as above;
+   - an interior hole claims the two of "x <> v", `x <= v-1 \/ x >= v+1`. That is
+     [Encoding.ne_clause_lits], which docs/PROOF-FORMAT.md section 4 already names as
+     [int_ne]'s justification -- this module simply never wrote it. Only a claim that
+     has to be a *single* literal forces the direct encoding (D-0019 point 3), and a
+     trace line's claim never had to be one;
+   - a bound the settle strengthened past a hole claims the recorded bound and cites
+     the hole's facts as well as the propagator's, so the line is RUP against the
+     hole's own line. That one line is therefore **not** a consequence of a single
+     model row, and it is the only kind here that is not. It is still decision-free and
+     still globally valid; what it needs from the database is a line this module wrote
+     itself, earlier, for an earlier trail entry.
 
    ---------------------------------------------------------------------------
    Lazy, not eager -- and why that is sound here specifically
@@ -72,6 +87,15 @@
      still there for level 1's second branch. Level-0 lines are never wiped by anything;
      [permanent_ids] hands them to [Search.solve], which deletes them before [conclusion]
      so invariant I-X2 still holds.
+
+   - **A hole's line and a settle's line are one mechanism, in that order.** The holes
+     a settle walks over are values removed by *earlier* trail entries, and [emit] walks
+     the trail oldest first, so the hole's line is in the database before the line that
+     rests on it. Before M1-T56 it was in the database only if something else happened
+     to cite it -- M1-T44 made the root-conflict path do so, and nothing else did -- and
+     the settle's line verified because the checker re-derived the hole from the .opb's
+     big-M disequality rows by unit propagation. That works for [int_ne]'s rows and is
+     not a property a trace line may rest on. See [line] and I-X9.
 
    - **A line is written once per pruning, not once per failing branch.** [n_done] is how
      far down the trail the trace has been written. After a backtrack the trail is
@@ -149,39 +173,181 @@ let claim_of_cond ~what ~name (c : Encoding.cond) =
         (Printf.sprintf "Trace: %s of %s is outside the encoding's declared domain" what
            name)
 
+(* "x <> v" over the *order* encoding: x <= v-1 or x >= v+1. That is
+   [Encoding.ne_clause_lits]'s clause, rebuilt here from the two [cond]s so the constant
+   halves drop by the same code path as every other claim in this module -- a [Fails]
+   half cannot be true and is dropped, a [Holds] half makes the whole clause a tautology
+   and there is nothing to write down.
+
+   M1-T56. An order literal cannot state a hole *on its own*, which is what the old
+   comment here read as "a pure hole removal produces no line -- correct today (M1 is
+   bounds-only)". It was not correct: [int_ne] has punched interior holes since M1-T9,
+   and a two-literal clause states one perfectly well. Only a claim that has to be a
+   single literal forces the direct encoding (D-0019 point 3), and a trace line's claim
+   never had to be.
+
+   A hole is strictly inside its own domain's bounds by construction -- [Domain.classify]
+   reports a change as a [Bound] *or* a [Holes] and never both, because a removal at a
+   bound settles and tightens that bound instead (I-D2) -- and a domain's bounds are
+   inside the declared ones, so both halves are [Cond] for every hole M1 can punch. The
+   other two cases are still handled rather than asserted, because "both halves fail"
+   is the one that would quietly write the *empty* clause, i.e. an unconditional
+   contradiction, which is the worst thing a trace line can say (compare I-P5). *)
+let hole_clause encoding name v =
+  match (Encoding.le encoding name (v - 1), Encoding.ge encoding name (v + 1)) with
+  | Encoding.Holds, _ | _, Encoding.Holds -> None
+  | below, above -> (
+      match
+        List.filter_map
+          (function Encoding.Cond l -> Some l | _ -> None)
+          [ below; above ]
+      with
+      | [] ->
+          invalid_arg
+            (Printf.sprintf "Trace: %s <> %d is unsatisfiable in the encoding" name v)
+      | lits -> Some lits)
+
+(* One line this module owes, before its facts are known.
+
+   [claim] is the positive part of the clause: one literal for a bound move, the two of
+   "x <> v" for a hole.
+
+   [settled_over] is M1-T57. [Domain.set_lo]/[set_hi] do not stop where the propagator
+   asks: [Domain.settle] walks the new bound past any hole it lands on, so [e.now]'s
+   bound can be *strictly stronger* than the bound the propagator's facts derive, and
+   the difference is exactly the holes walked over (D-0035). A line that claims [e.now]
+   from those facts alone claims more than they justify. It is a [rup], so it fails
+   loudly rather than silently -- and it has verified anyway, because the checker
+   happened to re-derive each hole from the .opb's disequality rows by unit propagation,
+   which is a property of [int_ne]'s big-M rows and not something a trace line may rest
+   on. I-X9 says what to do instead: the reasons of the holes the settle walked over are
+   part of the justification and are cited with it. [settled_over] carries those hole
+   values; [settle_facts] turns them into the facts that go in this line's tail, which
+   makes the line RUP against the *hole's own trace line* (M1-T56, written first because
+   the hole is earlier on the trail) rather than against a coincidence.
+
+   The set is the contiguous run of holes immediately below (or above) the new bound.
+   That is an over-approximation of what the settle walked over by at most the holes the
+   propagator's asked-for bound had already cleared, and it is empty exactly when no
+   settle happened -- so a pruning that landed on a member of the domain writes the byte
+   for byte identical line it wrote before. Extra facts only *weaken* the clause, so
+   they can cost precision and never soundness; the alternative is the propagator's
+   asked-for bound on the trail entry, which is not additive to [Store.entry] and is a
+   decision record, not an edit. *)
+type line = { claim : Lit.t list; settled_over : int list }
+
+(* The holes of [old] in the contiguous run immediately below [bound], ascending. Every
+   member of [old] below [bound] is below this run, so the bound the propagator asked
+   for lies inside it or at [bound]. *)
+let holes_below old bound =
+  let rec go acc v =
+    if v >= Domain.lo old && Domain.is_hole old v then go (v :: acc) (v - 1) else acc
+  in
+  go [] (bound - 1)
+
+(* The same run immediately above [bound], ascending. *)
+let holes_above old bound =
+  let rec go acc v =
+    if v <= Domain.hi old && Domain.is_hole old v then go (v :: acc) (v + 1) else acc
+  in
+  List.rev (go [] (bound + 1))
+
 (* Both bounds are checked: [Domain.set_lo]/[set_hi] move one, but [Domain.fix] moves
    both, and a propagator doing that deserves two lines rather than one silently dropped
-   half. A pure hole removal moves neither and produces no line -- correct today (M1 is
-   bounds-only, docs/SPEC.md 3.2) and *not* correct for a future domain-consistent
-   propagator, which will need a claim in the direct encoding instead; that is M1-T9's
-   and M4's business, and this returning [] is where it will show up. *)
-let claims encoding (e : Store.entry) name =
-  let lo_claim =
-    if Domain.lo e.now > Domain.lo e.old then
-      claim_of_cond ~what:"the new lower bound" ~name
-        (Encoding.ge encoding name (Domain.lo e.now))
-    else None
-  in
-  let hi_claim =
-    if Domain.hi e.now < Domain.hi e.old then
-      claim_of_cond ~what:"the new upper bound" ~name
-        (Encoding.le encoding name (Domain.hi e.now))
-    else None
-  in
-  List.filter_map Fun.id [ lo_claim; hi_claim ]
+   half. [Domain.classify] is asked rather than the bounds compared by hand because it
+   is the module that owns the [Bound]-or-[Holes] disjointness this function relies on,
+   and because it is what already recovers the interior holes of a [Holes] change. *)
+let lines encoding (e : Store.entry) name =
+  match Domain.classify ~old:e.Store.old ~now:e.Store.now with
+  | Domain.NoChange -> []
+  | Domain.Bound { lo; hi } ->
+      let bound_line ~what ~cond ~settled_over =
+        Option.map
+          (fun l -> { claim = [ l ]; settled_over })
+          (claim_of_cond ~what ~name cond)
+      in
+      let lo_line =
+        Option.bind lo (fun b ->
+            bound_line ~what:"the new lower bound" ~cond:(Encoding.ge encoding name b)
+              ~settled_over:(holes_below e.Store.old b))
+      in
+      let hi_line =
+        Option.bind hi (fun b ->
+            bound_line ~what:"the new upper bound" ~cond:(Encoding.le encoding name b)
+              ~settled_over:(holes_above e.Store.old b))
+      in
+      List.filter_map Fun.id [ lo_line; hi_line ]
+  | Domain.Holes vs ->
+      List.filter_map
+        (fun v ->
+          Option.map
+            (fun claim -> { claim; settled_over = [] })
+            (hole_clause encoding name v))
+        vs
+
+(* Just the claim clauses, which is what a test wanting to check one line in isolation
+   needs (test/unit/test_prop.ml drives every propagator's trace line through this and
+   [emit_line]). The facts a settle adds come from the trail, not from the entry, so they
+   are [emit]'s business and not visible here -- which is also why this is not the
+   function [emit] calls. *)
+let claims encoding e name = List.map (fun l -> l.claim) (lines encoding e name)
 
 (* ------------------------------------------------------------------- lines *)
 
-let clause_of ~claim ~facts = claim :: List.map Lit.negate facts
+let clause_of ~claim ~facts = claim @ List.map Lit.negate facts
 
 let emit_line (ctx : Justify.ctx) ~origin ~claim ~facts =
   Justify.emit_rup_clause ctx ~origin (clause_of ~claim ~facts)
+
+(* The trail entry that took [v] out of [var]'s domain, looking back from trail position
+   [before]. At most one live entry can have done it -- a removed value stays removed
+   until the backtrack that pops the entry that removed it -- so this finds the reason
+   of a hole that is still there, and finds it at the first hit.
+
+   [None] means a hole with no trail entry behind it, which within M1 means a *declared*
+   domain with a gap ([Domain.of_list], for `var {1,3,5}: x`, which the FlatZinc subset
+   of docs/SPEC.md 2.1 does not admit). It cites nothing rather than raising: the line is
+   then exactly as strong as the one this module wrote before M1-T57, so an encoding that
+   grows declared holes degrades to the old behaviour instead of aborting the solve --
+   and the .opb would have to state such a hole as a row anyway, which is what the
+   checker would then use. *)
+let remover store ~before ~var v =
+  let rec go i =
+    if i < 0 then None
+    else
+      let e = Store.trail_entry store i in
+      if
+        Var.equal e.Store.var var && Domain.mem e.Store.old v
+        && not (Domain.mem e.Store.now v)
+      then Some e
+      else go (i - 1)
+  in
+  go (before - 1)
+
+(* Append a fact if it is not already in the tail. The propagator's own facts keep their
+   order and are never rewritten, so every line for a pruning that did not settle comes
+   out unchanged; only the hole facts are appended, and a hole whose fact the propagator
+   already read is not stated twice. *)
+let add_fact acc l = if List.exists (Lit.equal l) acc then acc else acc @ [ l ]
+
+let settle_facts store ~before ~var holes base =
+  List.fold_left
+    (fun acc v ->
+      match remover store ~before ~var v with
+      | None -> acc
+      | Some e -> List.fold_left add_fact acc (e.Store.facts ()))
+    base holes
 
 (* Write every line the trail owes, oldest first, and leave the writer on the level it
    was on. [Search] emits the nogood straight after, at the branch's own level, so this
    must not move it -- the whole ordering D-0018 point 4 exists to protect
    ([set_level]/[w] are a stack the solver mirrors, and a trace that left the writer
-   somewhere else would wipe the wrong constraints). *)
+   somewhere else would wipe the wrong constraints).
+
+   Oldest first is load-bearing for more than readability now: a settle's line is RUP
+   against the lines of the holes it walked over (see [line]), and those holes are
+   earlier trail entries, so their lines are already in the database when the settle's
+   line is checked. *)
 let emit (ctx : Justify.ctx) t store =
   resync t store;
   let saved = Writer.current_level ctx.Justify.writer in
@@ -192,22 +358,33 @@ let emit (ctx : Justify.ctx) t store =
     remember t i e;
     if not (Store.is_level_start store i) then
       let name = Store.name store e.Store.var in
-      (* [claims] first: a change that moves no bound (a hole, which no M1 propagator
-         punches) writes nothing and must not force the [facts] thunk to find that out.
-         "Lazy where it is expensive" cuts here too. *)
-      match claims ctx.Justify.encoding e name with
+      (* [claims] first: a change that claims nothing writes nothing and must not force
+         the [facts] thunk to find that out. "Lazy where it is expensive" cuts here too.
+         Since M1-T56 an interior hole does get a claim, so the cases this skips are the
+         ones where the whole change is invisible to the encoding -- a bound that was
+         already the declared one. *)
+      match lines ctx.Justify.encoding e name with
       | [] -> ()
       | cs ->
           let facts = e.Store.facts () in
           let level = Store.level_of_index store i in
           List.iter
-            (fun claim ->
+            (fun { claim; settled_over } ->
+              let facts =
+                settle_facts store ~before:i ~var:e.Store.var settled_over facts
+              in
               if !at <> level then (
                 Writer.set_level ctx.Justify.writer level;
                 at := level);
               let origin =
-                Printf.sprintf "trace: %s from %d fact(s)" (Lit.to_string claim)
+                Printf.sprintf "trace: %s from %d fact(s)%s"
+                  (String.concat " \\/ " (List.map Lit.to_string claim))
                   (List.length facts)
+                  (match settled_over with
+                  | [] -> ""
+                  | vs ->
+                      Printf.sprintf ", settled over %s"
+                        (String.concat "," (List.map string_of_int vs)))
               in
               record t ~level (emit_line ctx ~origin ~claim ~facts))
             cs
