@@ -317,8 +317,7 @@ let remover store ~before ~var v =
     else
       let e = Store.trail_entry store i in
       if
-        Var.equal e.Store.var var
-        && Domain.mem e.Store.old v
+        Var.equal e.Store.var var && Domain.mem e.Store.old v
         && not (Domain.mem e.Store.now v)
       then Some e
       else go (i - 1)

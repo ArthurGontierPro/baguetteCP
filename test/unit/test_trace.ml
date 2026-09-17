@@ -703,13 +703,14 @@ let run_fzn c =
 
   (match outcome with
   | Search.Sat a ->
-      check (tag ^ ": the solution independently satisfies the model (I-S1)")
+      check
+        (tag ^ ": the solution independently satisfies the model (I-S1)")
         (independent a)
   | Search.Unsat ->
       incr failures;
       Printf.printf
-        "FAIL %s: answered UNSATISFIABLE, but this model is satisfiable -- the \
-         checks below would then all be about the wrong instance\n"
+        "FAIL %s: answered UNSATISFIABLE, but this model is satisfiable -- the checks \
+         below would then all be about the wrong instance\n"
         tag);
   check (tag ^ ": a branch failed, so a trace was written") (List.length trace_ids > 0);
 
@@ -764,7 +765,8 @@ let run_fzn c =
        tag (List.length trace_ids))
     (!bad_trace = []);
   List.iter
-    (fun (id, line) -> Printf.printf "  not valid even with the trace before it: %d  %s\n" id line)
+    (fun (id, line) ->
+      Printf.printf "  not valid even with the trace before it: %d  %s\n" id line)
     !bad_trace;
   check
     (tag ^ ": no non-trace rule is RUP from the .opb alone -- the trace is load-bearing")
@@ -782,7 +784,8 @@ let run_fzn c =
     List.filter
       (fun (id, line) ->
         is_trace id
-        && match standalone ~dir ~opb ~n_model line with Some ok -> not ok | None -> false)
+        &&
+        match standalone ~dir ~opb ~n_model line with Some ok -> not ok | None -> false)
       rules
   in
   check
