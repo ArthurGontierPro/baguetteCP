@@ -1290,9 +1290,21 @@ let test_v3_veripb () =
             \ proof: %s\n"
             (read_whole log) opb pbp);
       (* 2. and it rejects a corrupted one. The conclusion is made to cite @c1 -- a
-         perfectly good model row, and not a contradiction. Without this control,
+         perfectly good model row, and no contradiction at all. Without this control,
          "3.0.2 accepted it" is not evidence of anything: it is the argument
-         scripts/mutate_proof.sh's header makes, turned on the format switch. *)
+         scripts/mutate_proof.sh's header makes, turned on the format switch.
+
+         M1-T46: the two checkers word this rejection differently and share no useful
+         substring, so a reader debugging this lane must be told BOTH or they will
+         grep the log for a string the checker never printed. Measured, not guessed:
+
+           2.2.2  "Constraint is not a contradiction."
+           3.0.2  "The constraint with ID <n> is not contradicting, as specified by
+                   the hint."
+
+         This lane is 3.0-only and so only ever produces the second, but the message
+         below names both for the same reason lib/core/prop/ne.ml and
+         test/unit/test_random.ml do: nothing here may match on either alone. *)
       let corrupted = Filename.concat dir "corrupt.pbp" in
       let starts_with p l =
         String.length l >= String.length p && String.sub l 0 (String.length p) = p
@@ -1315,7 +1327,13 @@ let test_v3_veripb () =
           incr failures;
           Printf.printf
             "FAIL 3.0: veripb ACCEPTED a 3.0 proof concluding UNSAT from a model row \
-             that is not a contradiction. The acceptance above therefore says nothing.\n");
+             that establishes no contradiction. The acceptance above therefore says \
+             nothing.\n\
+            \  A rejection here would have been worded \"The constraint with ID <n> is \
+             not contradicting, as specified by the hint\" by 3.0.2, which is the \
+             checker this lane runs, and \"Constraint is not a contradiction\" by 2.2.2. \
+             The two share no useful substring (M1-T46): do not grep the log for one of \
+             them alone.\n");
       (* 3. the one-way door: 2.2.2 cannot read a 3.0 proof at all. Only checked when
          that build is actually installed; it is a fact about the OTHER checker, so
          its absence is not a failure here. *)
@@ -1388,9 +1406,9 @@ let test_pol_states_its_conclusion () =
         ("FAIL M1-T51 pol conclusion: " ^ Baguette_proof.Checker.not_found_message
        ^ " -- the whole point of this test is that the CHECKER, not a regex over the \
           emitted text, is what rejects a weakened `pol`. With no checker there is \
-          nothing here but shape pins, which is the state M1-T51 exists to leave. \
-          This is not a pass.")
-  | Some veripb ->
+          nothing here but shape pins, which is the state M1-T51 exists to leave. This \
+          is not a pass.")
+  | Some veripb -> (
       let dir = Filename.temp_file "baguette_polclaim" "" in
       Sys.remove dir;
       Sys.mkdir dir 0o700;
@@ -1450,8 +1468,8 @@ let test_pol_states_its_conclusion () =
             it ever starts failing then `pol` alone has grown a conclusion check and
             this test's premise needs re-measuring, not deleting. *)
       check
-        "M1-T51 the gap: a `pol` weakened to derive LESS than the claimed bound is \
-         still accepted when the proof does not state what it concludes"
+        "M1-T51 the gap: a `pol` weakened to derive LESS than the claimed bound is still \
+         accepted when the proof does not state what it concludes"
         (run ~name:"weak_bare" ~stated:false ~truncated:true = Some true);
       (* 3. THE CONTROL. Same corruption, same expression, same site -- the only
             difference from lane 2 is the `ia` line stating the claim. *)
@@ -1468,14 +1486,13 @@ let test_pol_states_its_conclusion () =
         n = 0 || go 0
       in
       let s = read_whole log in
-      check
-        "M1-T51: the rejection is the implication check, in whichever checker's words"
-        (contains "not syntactically implied" s || contains "Implication check failed" s
+      check "M1-T51: the rejection is the implication check, in whichever checker's words"
+        (contains "not syntactically implied" s
+        || contains "Implication check failed" s
         || contains "Hint: (" s);
       Sys.readdir dir
       |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
-      try Sys.rmdir dir with _ -> ()
-
+      try Sys.rmdir dir with _ -> ())
 
 (* Say which checker every I-X1 check in the suite is talking to, and its version.
    "veripb accepted it" is only meaningful if you know which veripb, and until M1-T18

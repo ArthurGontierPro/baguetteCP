@@ -1041,7 +1041,6 @@ let implied t ~origin ~hint c =
   else line t "ia %s %d" (Opb.constr_to_string c) hint;
   fresh t ~origin
 
-
 (* Redundance-based strengthening: used only to introduce definitions (direct-encoding
    channelling, reified variables). The witness maps variables to 0, 1 or a literal. *)
 type witness_value = Zero | One | To of Lit.t
