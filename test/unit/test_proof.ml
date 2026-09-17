@@ -1338,6 +1338,145 @@ let test_v3_veripb () =
       List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp; corrupted; log ];
       try Sys.rmdir dir with _ -> ())
 
+(* ------------------------------------------------------------------------- *)
+(* M1-T51: a `pol` that derives something WEAKER than the claimed bound.     *)
+(* ------------------------------------------------------------------------- *)
+
+(* The three-row .opb this test reasons over:
+
+     @c1  +1 vv_ge_1 +1 uu_ge_2  >= 1
+     @c2  +1 vv_ge_1 +1 ~uu_ge_2 >= 1
+     @c3  +1 ~vv_ge_1            >= 1
+
+   Summing @c1 and @c2 cancels uu_ge_2 against its negation and leaves
+   `+2 vv_ge_1 >= 1`; dividing by 2 gives `+1 vv_ge_1 >= 1`, i.e. vv >= 1. So the
+   honest derivation is `pol @c1 @c2 + 2 d` and the bound a propagator would prune to
+   on the strength of it is exactly `vv >= 1`.
+
+   Truncating that derivation to its leftmost operand leaves `@c1` itself, which is
+   `vv >= 1 OR uu >= 2` -- strictly weaker than the claim, and not a bound at all. A
+   propagator whose `pol` came out like that has pruned vv's domain on a derivation
+   that does not support the prune. That is the subject of this test.
+
+   @c3 is why the proof can close at all, and its role is load-bearing in a way worth
+   spelling out. The derivation UNDER TEST must not be what closes the proof: if the
+   conclusion cited it, a weakened `pol` would be caught downstream at the
+   `conclusion` line and this test would be measuring that old indirect control
+   instead of the new direct one -- the gap lane below would go red for the wrong
+   reason. So the contradiction is derived SEPARATELY, from @c1 @c2 @c3 under its own
+   origin, and the step under test is a side derivation that is created, claimed and
+   deleted without anything ever depending on it. That is also the realistic shape:
+   most prunings in a run are never cited by the conflict that ends the branch. *)
+let pol_claim_opb dir name =
+  let e = Encoding.create () in
+  let v = Lit.ge "vv" 1 in
+  let u = Lit.ge "uu" 2 in
+  let c1 = Encoding.add_constraint e (Opb.ge [ (1, v); (1, u) ] 1) in
+  let c2 = Encoding.add_constraint e (Opb.ge [ (1, v); (1, Lit.negate u) ] 1) in
+  let c3 = Encoding.add_constraint e (Opb.ge [ (1, Lit.negate v) ] 1) in
+  let opb = Filename.concat dir (name ^ ".opb") in
+  let oc = open_out opb in
+  Encoding.write_opb ~labels:true e oc;
+  close_out oc;
+  (opb, c1, c2, c3, v)
+
+let test_pol_states_its_conclusion () =
+  match veripb_path () with
+  | None ->
+      incr failures;
+      print_endline
+        ("FAIL M1-T51 pol conclusion: " ^ Baguette_proof.Checker.not_found_message
+       ^ " -- the whole point of this test is that the CHECKER, not a regex over the \
+          emitted text, is what rejects a weakened `pol`. With no checker there is \
+          nothing here but shape pins, which is the state M1-T51 exists to leave. \
+          This is not a pass.")
+  | Some veripb ->
+      let dir = Filename.temp_file "baguette_polclaim" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let log = Filename.concat dir "log" in
+      let site = "vv >= 1 from the two rows" in
+      (* [stated]: does the proof state its conclusion (`ia`) or only derive
+         (`pol`)? [truncated]: is the derivation corrupted to its leftmost operand,
+         so that it concludes something strictly weaker than the claim?
+
+         Returns [Some true] if veripb ACCEPTED the proof. *)
+      let run ~name ~stated ~truncated =
+        let opb, c1, c2, c3, v = pol_claim_opb dir name in
+        let pbp = Filename.concat dir (name ^ ".pbp") in
+        let oc = open_out pbp in
+        let mutation = Writer.Mutation.make ~site Writer.Mutation.Truncate_derivation in
+        let w =
+          if truncated then Writer.create_mutated ~format:Writer.V3_0 ~mutation oc
+          else Writer.create ~format:Writer.V3_0 oc
+        in
+        Writer.header w ~n_model_constraints:c3;
+        let expr = Pol.(div (add (id c1) (id c2)) 2) in
+        let claim = Opb.ge [ (1, v) ] 1 in
+        let id =
+          if stated then Writer.pol_concluding w ~origin:site ~claim expr
+          else Writer.pol w ~origin:site expr
+        in
+        (* The corruption must actually have happened, or every verdict below is about
+           a proof nobody broke. [mutation_note] is the writer's own record of whether
+           the knob found a site it could corrupt. *)
+        if truncated && Writer.mutation_note w = None then (
+          incr failures;
+          Printf.printf
+            "FAIL M1-T51 %s: the Truncate_derivation knob never fired at site %S, so \
+             this lane corrupted nothing and its verdict means nothing.\n"
+            name site);
+        Writer.delete w id;
+        (* The contradiction, under its own origin so the knob above cannot reach it:
+           vv >= 1 from the first two rows, plus @c3's ~vv, is 1 >= 2. *)
+        let bottom =
+          Writer.pol w ~origin:"the contradiction"
+            Pol.(add (div (add (id c1) (id c2)) 2) (id c3))
+        in
+        Writer.conclusion w (Writer.Unsat (Some bottom));
+        close_out oc;
+        run_checker ~checker:veripb ~opb ~pbp ~log
+      in
+      (* 1. The honest derivation, unstated and stated. Both must be accepted, or the
+            control below is measuring a broken baseline rather than a corruption. *)
+      check "M1-T51 baseline: an honest `pol` is accepted"
+        (run ~name:"honest_bare" ~stated:false ~truncated:false = Some true);
+      check "M1-T51 baseline: the same `pol` with its conclusion STATED is accepted"
+        (run ~name:"honest_ia" ~stated:true ~truncated:false = Some true);
+      (* 2. THE GAP. A `pol` truncated to derive something strictly weaker than the
+            bound it was emitted to support is accepted by veripb, because nothing in
+            the proof ever said what it was supposed to conclude. This lane asserts
+            the ACCEPTANCE: it is the control that makes lane 3 mean something, and if
+            it ever starts failing then `pol` alone has grown a conclusion check and
+            this test's premise needs re-measuring, not deleting. *)
+      check
+        "M1-T51 the gap: a `pol` weakened to derive LESS than the claimed bound is \
+         still accepted when the proof does not state what it concludes"
+        (run ~name:"weak_bare" ~stated:false ~truncated:true = Some true);
+      (* 3. THE CONTROL. Same corruption, same expression, same site -- the only
+            difference from lane 2 is the `ia` line stating the claim. *)
+      check
+        "M1-T51 the control: stating the conclusion makes the checker REJECT that same \
+         weakened `pol`"
+        (run ~name:"weak_ia" ~stated:true ~truncated:true = Some false);
+      (* 4. And the rejection is the one we think it is, not a parse error or a
+            dangling label. Both checkers' wordings are named because they share no
+            substring and this file must not match on either alone (M1-T46). *)
+      let contains needle hay =
+        let n = String.length needle and h = String.length hay in
+        let rec go i = i + n <= h && (String.sub hay i n = needle || go (i + 1)) in
+        n = 0 || go 0
+      in
+      let s = read_whole log in
+      check
+        "M1-T51: the rejection is the implication check, in whichever checker's words"
+        (contains "not syntactically implied" s || contains "Implication check failed" s
+        || contains "Hint: (" s);
+      Sys.readdir dir
+      |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
+      try Sys.rmdir dir with _ -> ()
+
+
 (* Say which checker every I-X1 check in the suite is talking to, and its version.
    "veripb accepted it" is only meaningful if you know which veripb, and until M1-T18
    the answer was whichever build happened to come first on PATH -- on the
@@ -1381,6 +1520,7 @@ let () =
   test_v3_del_range_semantics ();
   test_v3_wipe_level_against_checker ();
   test_v3_veripb ();
+  test_pol_states_its_conclusion ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
