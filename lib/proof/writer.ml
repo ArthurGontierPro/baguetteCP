@@ -696,15 +696,70 @@ let runs ids =
 
    The hi+1 label may itself already be deleted (a lower-level run retired it
    earlier). That is fine and is measured too: a deleted label still resolves, and
-   `del range` tolerates already-deleted ids inside the span. *)
+   `del range` tolerates already-deleted ids inside the span.
+
+   ---- M1-T29: the newest-id run no longer costs one citation per retired reason ----
+
+   The paragraph above is why that fallback existed; what follows is why it is gone.
+   The run [lo, hi] with [hi] the newest id is now written as a PAIR of rules --
+
+     del range @c<lo> @c<hi> ;      the half-open span [lo, hi): everything but [hi]
+     del id    @c<hi> ;             and then [hi] itself
+
+   -- which is two lines of bounded length instead of one line carrying [hi - lo + 1]
+   citations. The run's own last id is a label that certainly exists (we just handed
+   it out), so nothing here needs a bound that has not been assigned yet.
+
+   The two routes this replaces, and why neither was taken:
+
+   * A NUMERIC exclusive bound, `del range @c<lo> <hi+1>`. It is one line and 3.0.2
+     does tolerate an integer one past the last id -- measured -- but it reintroduces
+     the bare-integer citation D-0023's labels removed, at the one site where the
+     bound is the thing most likely to drift. It is also brittle in a way worth
+     recording: measured against 3.0.2, `<hi+1>` is accepted and `<hi+2>` is a hard
+     error ("Accessing the database out of bound with index 6. The index should be
+     between -6 and 5"), while `<hi>` silently under-deletes. A spelling whose only
+     legal value is the one we compute is a spelling with no margin.
+   * Minting one extra always-live constraint past the newest id, purely to give the
+     range an upper bound to name. That is O(1) proof text per backtrack but leaves a
+     constraint in the checker's database per backtrack, which trades a term that
+     grows with the reasons at ONE level for one that grows with the whole search, and
+     adds a rule that means nothing.
+
+   The pair also makes the dangerous direction LOUD, which is the reason to prefer it
+   over the numeric bound even setting D-0023 aside. Over-deletion is the silent
+   failure -- a range whose upper bound is one too high retires a constraint a later
+   line may cite (with D-0039 and I-S4, that now includes a trace line citing a hole
+   line), and nothing in our own bookkeeping notices, because an over-deleted id is
+   not an un-retired id and the I-X2 audit is checking us against ourselves. Here an
+   upper bound one too high is caught by the very next rule, measured against 3.0.2
+   in [test_v3_del_pair_spelling]:
+
+     - `@c<hi+1>` not yet assigned -> "The label `@c6` is not assigned to a
+       constraint ID at line 6 col 15" (a parse error naming the label -- D-0023's
+       trap staying closed);
+     - `@c<hi+1>` assigned -> "Trying to access constraint with ID 5 that has already
+       been deleted", raised by the trailing `del id`.
+
+   Deletion ORDER is unchanged in the sense I-S4 needs: both rules of the pair retire
+   ids from the same doomed set of the same [wipe_level] call, so no line survives its
+   own citee any longer or shorter than it did before. What changed is only how many
+   tokens the retirement is spelled with.
+
+   The cost, stated rather than left to be found: for a run of 2, 3 or 4 ids the pair
+   is a few bytes LONGER than the list it replaces (about 39 bytes against 8 + 6n).
+   It is used unconditionally anyway -- a threshold would buy back ~0.5% of today's
+   proof bytes at the price of a second shape that fires on no shipped model and is
+   therefore exercised by nothing but a unit test, and this project's signature defect
+   is a check that cannot see its own subject fail. One shape, exercised 14 times by
+   the model suite, is worth more than the bytes. *)
 let del_run t (lo, hi) =
   if lo = hi then rule t (Printf.sprintf "del id %s" (cite t lo))
   else if hi < t.next_id then
     rule t (Printf.sprintf "del range %s %s" (cite t lo) (cite t (hi + 1)))
-  else
-    rule t
-      (Printf.sprintf "del id %s"
-         (cite_all t (List.init (hi - lo + 1) (fun k -> lo + k))))
+  else (
+    rule t (Printf.sprintf "del range %s %s" (cite t lo) (cite t hi));
+    rule t (Printf.sprintf "del id %s" (cite t hi)))
 
 let wipe_level t l =
   if v3 t then (
@@ -718,9 +773,11 @@ let wipe_level t l =
        The cost is honest and belongs in the record: PROOF-FORMAT section 5's whole
        argument for levels was one proof line per backtrack rather than one deletion
        per reason, and that argument is gone. Runs recover most of it -- a level's
-       ids are usually consecutive, so it is usually still one line -- but "usually"
-       is not "always" and the proof now grows with the number of retired reasons in
-       the worst case. See D-0024.
+       ids are usually consecutive, so it is usually still one or two lines -- but
+       "usually" is not "always", and a level whose ids interleave with deletions
+       costs a pair of lines per run. What the proof no longer grows with, since
+       M1-T29, is the number of reasons retired at one level: every shape [del_run]
+       can emit is now of bounded length. See D-0024.
 
        [del_run] is what turns an inclusive run into a rule; `del range` is half-open
        and that difference is the whole of M1-T22. *)

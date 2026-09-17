@@ -2402,3 +2402,81 @@ variable and the line.
   disagree about one line — a one-liner with a trailing `(* width-ok: *)` marker passes
   fmt and silently stops being marked, so the function keeps a two-statement body on
   purpose. Both are commented in place.
+
+## D-0042  No aggregate width budget yet — the cost is Θ(total width), and that is not the same as a limit being due
+
+**Status**: **DECLINED**, 2026-09-17, with the evidence that would reverse it stated below.
+**Closes** M1-T65, which **D-0041** filed rather than decided. **Deliberately mirrors
+D-0028 part 3**, which declined the per-variable cap in this same register and named its
+trigger — and was right to, because the trigger arrived on 2026-09-16 and D-0041 is the
+result.
+
+### What was measured, and it settles the mechanism
+
+D-0041 capped `hi - lo` **per variable** at 10 000 and filed the obvious gap: 1 000
+variables at w=9 999 each still blow up, and the cap does not see it. The question was
+whether an aggregate budget is due. Measured on 2026-09-17 against the committed solver,
+emitting real artefacts:
+
+| vars | width | total width | `.opb` | bytes per unit of total width |
+|---|---|---|---|---|
+| 1 | 10 000 | 10 000 | 576 kB | 57.6 |
+| 20 | 500 | 10 000 | 421 kB | 42.1 |
+| 100 | 100 | 10 000 | 403 kB | 40.3 |
+| 1 000 | 10 | 10 000 | 367 kB | 36.7 |
+| 2 | 10 000 | 20 000 | 1.01 MB | 50.7 |
+| 200 | 500 | 100 000 | 4.43 MB | 44.3 |
+| 1 000 | 100 | 100 000 | 4.31 MB | 43.1 |
+
+**The governing quantity is the total, not the maximum.** Four different shapes summing to
+10 000 land within 1.6× of each other, and the per-variable cap bounds only one term of the
+sum. The residual spread is explained rather than left as noise: bytes per unit rise with
+*per-variable* width because the literal names get longer — `x0_ge_9999` costs more than
+`x0_ge_9`. So the mechanism D-0041 filed is real and is now quantified at **≈40–58 bytes
+of `.opb` per unit of total declared width**.
+
+### Why a limit is nevertheless not due
+
+1. **The artefact stays tractable far past anything plausible.** Total 100 000 is a 4.4 MB
+   `.opb`, ~1 s to solve and ~0.3 s for 3.0.2 to verify. D-0028's condemned case — "a proof
+   the checker accepts and nobody can store or review" — is 156 MB. The distance between
+   them is a factor of 35.
+2. **A cap at D-0041's 10 000 would refuse ordinary models.** 1 000 variables declared
+   `0..10` is a total of 10 000 and a perfectly normal CP model; it produces a 367 kB `.opb`
+   in 142 ms. Refusing that would be plainly wrong, and it is what the naive "reuse the
+   per-variable number" answer does. This is the concrete reason not to pick a constant by
+   analogy.
+3. **Every observed incident was a single wide domain**, and D-0041's per-variable cap
+   catches all three. The aggregate gap has produced no incident, and reaching it needs
+   deliberate construction: with each variable capped at 10 000, a total of 10^6 requires at
+   least 100 variables at the cap. Nobody writes that by accident.
+4. **The suite is nowhere near it.** The widest model by total declared width is
+   `width_root_unsat` at **1 998** (2 × 999). The next is `width_sat_depth` at 198. A cap
+   would be guarding a region no test occupies.
+5. **A guard for a non-risk is not free.** It is one more thing that can be found disabled
+   — M1-T45's `if true || ...` is this tree's own example — and it would be normative, so it
+   would need a SPEC paragraph asserting a limit nothing has yet required.
+
+### The trigger that reverses this
+
+Any one of:
+
+- a total declared width above **500 000** reached by a model somebody actually wants to
+  run (≈22 MB `.opb` on the constant above), or any `.opb` past ~25 MB from width alone;
+- an incident — a killed run, a swap event, a verify that does not finish — traced to
+  **total** rather than to a single variable's width;
+- M4's interval or direct encodings changing the per-unit constant materially, since the
+  whole argument rests on ≈40–58 bytes per unit;
+- a second front end or an API caller that declares variables in a loop, where "nobody
+  writes 100 variables at the cap by accident" stops holding.
+
+When it reverses, the number should come from the artefact size someone is willing to
+review, not from the per-variable cap. **The measurement above is the input, so whoever
+reverses this does not have to re-derive it.**
+
+### What is NOT claimed
+
+That the gap is harmless in general — only that it is not reachable by accident today and
+that no artefact size observed so far is a problem. D-0041's per-variable cap remains the
+control that matters, and the `.pbp` side of this was not measured separately; the table is
+`.opb` bytes, which is the term the ladder dominates.
