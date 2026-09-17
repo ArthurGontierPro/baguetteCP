@@ -15,7 +15,6 @@ git worktree each (`.claude/worktrees/<tag>`), so no two share `_build`'s global
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M2-T12 (the determinism half) | `scripts/check_determinism.sh`, `Makefile` | orchestrator | 2026-09-17 |
 | M2-T8 | **all of `lib/core/**`**, plus the `test/unit/*.ml` its signature change breaks | agent-iface | 2026-09-17 |
 
 Two rounds are recorded in `## Completed` below. The rows that stood here on
@@ -163,6 +162,7 @@ work. The owning session picks it up.
 | M1-T43 | orchestrator | 2026-09-17 | Confirmed by performing the flip in a throwaway worktree (`bool_clause.ml` is agent-iface's). `bool_reif_unsat` still reports `s VERIFIED UNSATISFIABLE` under a `pb_lit` polarity flip; **six** SAT models catch it, not the five the row claimed. Documented in the model header with the general rule: SAT models are the net for encoding bugs, UNSAT models for refutation bugs. **My first sweep classified all 34 models wrong** — the case pattern was `*ok*` and the script prints `OK` — so the numbers here are from the corrected run |
 | M1-T65 | orchestrator | 2026-09-17 | **Declined as D-0042, on measurement rather than on principle.** The cost is ≈40–58 bytes of `.opb` per unit of **total** declared width, so D-0041's filed gap is real — but total 100 000 is only 4.4 MB / 1 s / 0.3 s verify, and reusing 10 000 as an aggregate would refuse 1 000 variables declared `0..10` (367 kB, 142 ms), an ordinary model. No code. Four reversal triggers named, and the table is in the record so nobody re-derives it |
 | M1-T29 | agent-del | 2026-09-17 | The newest-id run is now a **pair**: `del range @c<lo> @c<hi>` (half-open) then `del id @c<hi>`, so it is two bounded lines instead of one carrying `hi-lo+1` citations. Rejected the numeric exclusive bound the row suggested and **measured why**: 3.0.2 accepts one past the last id, errors two past, and silently UNDER-deletes on the last id — a spelling with no margin, reintroducing the bare-integer citation D-0023 removed. Over-deletion is loud in both directions, **re-verified by the orchestrator on its own scene**. Artefacts: 0 `.opb`, 0 `.out`, **14 `.pbp`** moved, all still verifying. Merged as 51f819f |
+| M2-T12 (determinism half) | orchestrator | 2026-09-17 | `scripts/check_determinism.sh` in the gate: 34 models solved twice, `.opb`/`.pbp`/stdout must agree. **No golden digest** — a stored hash would be wrong on the next legitimate proof change and would train people to re-bless it, so the check is self-relative instead. Breaks: the self-test catches a flaky `.opb` and accepts the real solver; the real check against a flaky `.pbp` fails 34/34. 0.7 s. The seeded-branching half waits for `lib/core` |
 
 ## Handoff notes
 

@@ -9,7 +9,7 @@
 # with a reason you are willing to write into WORKLOG.md.
 MEM_CAP_KB ?= 4000000
 
-.PHONY: build test unit models check fmt fmt-check lint clean proof bootstrap bench
+.PHONY: build test unit models check fmt fmt-check lint determinism clean proof bootstrap bench
 
 build:
 	dune build
@@ -48,8 +48,18 @@ lint:
 	./scripts/check_test_widths.py --self-test
 	./scripts/check_test_widths.py
 
+# Artefact determinism (M2-T12): two runs of the same binary on the same model must
+# agree byte for byte. Needs bin/main.exe, hence the `build` dependency -- `dune runtest`
+# does not build it, which is the trap CLAUDE.md records. Self-test first, as `lint` and
+# `fmt-check` do. It deliberately compares runs against EACH OTHER rather than against a
+# stored digest: a committed hash would be wrong on the next legitimate proof change
+# (M1-T29 moved 14 of 34 .pbp files, correctly) and would train people to re-bless it.
+determinism: build
+	ulimit -v $(MEM_CAP_KB) && ./scripts/check_determinism.sh --self-test
+	ulimit -v $(MEM_CAP_KB) && ./scripts/check_determinism.sh
+
 # The gate. Run this before every commit.
-check: fmt-check build lint test
+check: fmt-check build lint determinism test
 	@echo "check: ok"
 
 # Solve one model and verify its proof end to end.

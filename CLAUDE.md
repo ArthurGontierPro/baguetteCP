@@ -248,7 +248,7 @@ scripts/                    checker.sh verify_proof.sh run_model_tests.sh shrink
 ```sh
 make build          # dune build
 make test           # unit + model + proof-checking tests
-make check          # fmt-check + build + lint + test — the gate before any commit.
+make check          # fmt-check + build + lint + determinism + test — the gate.
                     # It VERIFIES formatting and no longer fixes it (M1-T64): an
                     # unformatted file fails the gate instead of being silently
                     # rewritten in your working tree.
