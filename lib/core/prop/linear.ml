@@ -483,7 +483,10 @@ let propagate t store =
   else
     let result = ref Propagator.Fixpoint in
     let conflict = ref None in
-    let cross_conflict tm snaps expl =
+    (* [tm : term] and [idx]'s [tm] below are annotated because [source_snap] is declared
+       after [term] and also has a [coeff] field, so OCaml's field disambiguation picks
+       [source_snap] for a bare [tm.coeff]. *)
+    let cross_conflict (tm : term) snaps expl =
       (* The row's own reason, plus the opposing bound this new one ran into. Both halves
          are snapshotted here, not inside the thunk, for the reason
          [explain_cross_conflict] above spells out. *)
@@ -495,7 +498,7 @@ let propagate t store =
                 (explain_cross_conflict store tm expl)))
     in
     List.iteri
-      (fun idx (tm, m) ->
+      (fun idx ((tm : term), m) ->
         if Option.is_none !conflict && tm.coeff <> 0 then
           let max_term = Checked.add m slack in
           let d = Store.get store tm.x in
