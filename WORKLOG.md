@@ -151,7 +151,7 @@ work. The owning session picks it up.
 | Conflict resolution + D-0039 | orchestrator | 2026-09-17 | The two soundness sessions reached **opposite conclusions about each other's files**, each correctly stopping at its boundary. Resolved: the bridge is still needed and the reason was never the hole but the *implication*, which is ancestor-conditioned and can have no globally valid line. Corrected the stale prose in `search.ml`, and in `store.ml` where a **third** copy sat that neither agent owned or found. Measured and retired PROOF-FORMAT §4's standalone-RUP property. a7b6e79 |
 | M1-T58 | orchestrator | 2026-09-17 | `bin/main.ml` catches `Encoding.Unrepresentable`. Pre-fix, measured by injecting the raise into `solve` on the pre-fix binary: `Fatal error: exception ...`, **exit 2** — the same code as a bad command line — no context, no artefact warning. Post-fix: positioned diagnostic, **exit 4**, matching `Checked.Overflow` since M1-T34. Unblocks agent-widthcap's user-facing story for M1-T54. bf9c84c |
 | M1-T60 | agent-property | 2026-09-17 | Verified the property **and refuted the orchestrator's mechanism for it**. Real property: every M1 pruning follows from a **single model constraint**. Landed as **I-X10** + **D-0040**. Bounds-consistent Hall pruning removes *nothing* — it pushes a bound out of a saturated interval — so a hole-phrased invariant would have let M4-T1 through silently. All measurements independently reproduced by the orchestrator before landing. Read-only session; edited nothing, as briefed |
-| M2-T7 | agent-instid | 2026-09-17 | **The long pole; M2-T8 -> M2-T9 -> M2-T3 is unblocked.** Engine brackets each `run` with `Store.with_running inst.id`; `Store.apply` stamps `entry.prop`. No mutator takes an id. `conflict_facts`' one-shot slot is **gone** — `Conflict of Store.conflict` carries the facts. `Engine.check_attribution` reads the stamp back **always on**, not `BAGUETTE_DEBUG`-gated. Breaks: 121 and 123 unit FAILs, 30/34 and 34/34 models red; both now ship as permanent tests. **All 102 artefacts byte-identical, re-verified by the orchestrator after a failed first attempt that compared a stale binary with itself.** Landed **I-T4**. Merged as f2ea4b9 |
+| M2-T7 | agent-instid | 2026-09-17 | **The long pole; M2-T8 -> M2-T9 -> M2-T3 is unblocked.** Engine brackets each `run` with `Store.with_running inst.id`; `Store.apply` stamps `entry.prop`. No mutator takes an id. `conflict_facts`' one-shot slot is **gone** — `Conflict of Store.conflict` carries the facts. `Engine.check_attribution` reads the stamp back **always on**, not `BAGUETTE_DEBUG`-gated. Breaks: 121 and 123 unit FAILs, 30/34 and 34/34 models red; both now ship as permanent tests. **All 102 artefacts byte-identical, re-verified by the orchestrator after a failed first attempt that compared a stale binary with itself.** Landed **I-T4**. Merged as 338c611 |
 | M1-T54 | agent-widthcap | 2026-09-17 | `Encoding.max_order_width = 10_000` on `hi - lo`, raised before the Hashtbl and before the ladder loop so a refusal allocates nothing; `Compile` carries the positioned diagnostic and exit 3. Deliberately **not** `Unrepresentable` — that arm exits 4 and blames baguette, which is wrong for a legal model. Boundary re-verified through the CLI by the orchestrator: 10000 solves at exit 0, 10001 refused at exit 3. Overflow-safe by construction (`min_int..max_int` would compute width −1). Ratified as **D-0041** + SPEC §3.1 |
 | M1-T61 | orchestrator | 2026-09-17 | The I-X10 closure gate: a classification table asserted exhaustive against a read of `lib/core/prop/`, plus the Hall-bound-move refusal with an accept-side control on the same `.opb`. All three breaks performed; my first attempt at the missing-checker break was invalid (a bad `HOME` falls through to PATH and hits 2.2.2) and `$VERIPB` is the route to it |
 
@@ -841,3 +841,44 @@ guard landed in two binaries and missed `test_prop.exe`, the one that actually r
 one. All fifteen binaries now announce arming under `BAGUETTE_TEST_HEAP_CAP_ANNOUNCE`, which
 is checkable in a run rather than argued. When a task's whole point is coverage, the file set
 has to include the thing that was uncovered.
+
+### Wave seven closed (orchestrator, 2026-09-17)
+
+Three sessions plus two rows I took myself. Gate green at **1485 unit checks / 252 matrix
+checks / 34 models, peak RSS 54 MB**, and `BAGUETTE_DEBUG=1` clean. **M2-T7 is done, so
+M2-T8 -> M2-T9 -> M2-T3 is unblocked** — that was the point of the round.
+
+**Both agents that were given a premise found something wrong with it, and that is now the
+pattern rather than the exception.** Wave six had two (M1-T51 needed no new rule; M1-T56's
+"no order literal states a hole" was false). This round M1-T60's *mechanism* was wrong in
+my own framing: I wrote that Hall pruning "removes values with no disequality row behind
+it", and bounds-consistent Hall pruning removes nothing — it pushes a bound out of a
+saturated interval. An invariant phrased about holes would have let M4-T1 through silently,
+which is the exact failure the row existed to prevent. **Dispatch premises as premises.**
+
+**Read D-0040 before starting anything in M4.** It says `all_different` does *not* force
+the direct encoding — Hall's reason is a sum of n disequality rows and D-0027 already
+permits a cutting-planes justification, so the obligation is an explicit `pol` ahead of the
+trace line and no encoding change. M4-T2 and M4-T3 *do* force it, by D-0019 point 3's own
+test. M4-T4b breaks it more basically: the `.opb` carries no row for a product at all.
+Paying for the direct encoding when a `pol` would do would be expensive in exactly the way
+D-0028 measures.
+
+**I-S4 is still unchecked and M2-T7 deliberately did not change that.** `entry.prop` gives
+a future check its material, but the gap is about *levels*, not identity. Whoever takes
+M2-T3 owes it: a learned clause citing across levels is precisely the case I-S4's
+level-discipline argument does not cover, and `Trace` already has `Store.level_of_index`.
+
+**Two process notes, both from being caught out rather than from reading code.** The
+stale-binary trap is now in CLAUDE.md because it caught two of us on one day — a broken
+attribution read 34/34 green, and my own before/after artefact comparison came back
+byte-identical because the `dune` call had failed and both sides ran the same binary. A
+comparison whose two sides used one binary is not evidence of no change; it is no evidence.
+And M1-T64: `make fmt` auto-promotes, so the gate silently rewrites unformatted files
+instead of refusing them — which is how I came to commit another session's formatting debt
+inside an unrelated commit, and how two sessions each spent attention reporting the same
+two files.
+
+Remaining in M1: eight rows, none a false statement in the code. The next construction is
+**M2-T8** (interface v2, D-0026), now unblocked and the precondition for M2-T3, M3-T4 and
+M4.
