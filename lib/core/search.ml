@@ -258,8 +258,17 @@ let wipe_after_nogood ctx ~lvl ~nogood =
    when [int_lin_le] was the only propagator there was, and it is false for a clausal
    reason. A [Clause] says "not all of these variables take these values at once"
    (D-0019): a perfectly good constraint, and not a contradiction -- veripb says so in
-   as many words, "Constraint is not a contradiction", at the [conclusion] line rather
-   than at the rule, which is what makes the mistake hard to read off the output.
+   as many words, at the [conclusion] line rather than at the rule, which is what makes
+   the mistake hard to read off the output.
+
+   M1-T46: the two checkers word that rejection differently and **share no substring**,
+   so match on neither alone. 2.2.2 says "Constraint is not a contradiction"; 3.0.2 --
+   the checker of record, and the format emitted by default since D-0025 -- says "The
+   constraint with ID <n> is not contradicting, as specified by the hint". Measured
+   against both binaries, not guessed. lib/core/prop/ne.ml's header and
+   test/unit/test_random.ml carry the same pair, and that test matches both deliberately:
+   matching only the 2.0 wording is not a vacuous pass but it is a vacuous *diagnosis*,
+   reporting a known bug as a brand-new one.
 
    It reaches the root arm two ways, and this predicate is deliberately structural so
    that it catches both: the propagator's conflict explanation can BE a [Clause]
