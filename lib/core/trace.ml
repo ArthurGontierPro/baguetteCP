@@ -22,8 +22,8 @@
        rup 1 <claim> 1 ~<fact_1> 1 ~<fact_2> ... >= 1 ;
 
    where <claim> is what the pruning established and the <fact_i> are the bound facts
-   the propagator actually read ([Store.entry]'s [facts]; for [int_lin_le] that is
-   lib/core/prop/linear.ml's [facts_of_snaps]). Read as a clause it says "fact_1 and
+   the propagator actually read ([Store.entry]'s [reason], materialised by [Reason.lits] --
+   the ONE place a reason becomes literals, D-0026). Read as a clause it says "fact_1 and
    ... and fact_n imply claim", which is a genuine consequence of that one model row --
    so **no decision ever appears in a trace line**, and every line is globally valid on
    its own. The decisions appear in exactly one place, the nogood, which is now RUP
@@ -55,10 +55,12 @@
    a property of this codebase and not of the technique, and that has to be preserved:
    [linear.ml]'s [snapshot_source] decides *at push time* which trail entry witnesses
    each bound it read, so a reason forced later still renders the derivation as of the
-   moment it was made. [Store.entry]'s [facts] thunk closes over that snapshot, never
-   over the live store. A propagator whose thunk reads [Store.get] at force time would
-   silently break this -- it would render a *later* bound as the reason for an *earlier*
-   pruning -- and the symptom would be a rejected line somewhere else entirely.
+   moment it was made. [Store.entry]'s [reason] IS that snapshot -- as of M2-T8 it is
+   declarative data rather than a thunk, so this half cannot read the live store even in
+   principle (D-0026, I-X6). The justification half is still a thunk and still can: a
+   propagator whose thunk reads [Store.get] at force time would render a *later* bound as
+   the reason for an *earlier* pruning, and the symptom would be a rejected line somewhere
+   else entirely.
 
    ---------------------------------------------------------------------------
    What gets a line, at which proof level, and who deletes it
@@ -299,30 +301,15 @@ let clause_of ~claim ~facts = claim @ List.map Lit.negate facts
 let emit_line (ctx : Justify.ctx) ~origin ~claim ~facts =
   Justify.emit_rup_clause ctx ~origin (clause_of ~claim ~facts)
 
-(* The trail entry that took [v] out of [var]'s domain, looking back from trail position
-   [before]. At most one live entry can have done it -- a removed value stays removed
-   until the backtrack that pops the entry that removed it -- so this finds the reason
-   of a hole that is still there, and finds it at the first hit.
-
-   [None] means a hole with no trail entry behind it, which within M1 means a *declared*
-   domain with a gap ([Domain.of_list], for `var {1,3,5}: x`, which the FlatZinc subset
-   of docs/SPEC.md 2.1 does not admit). It cites nothing rather than raising: the line is
-   then exactly as strong as the one this module wrote before M1-T57, so an encoding that
-   grows declared holes degrades to the old behaviour instead of aborting the solve --
-   and the .opb would have to state such a hole as a row anyway, which is what the
-   checker would then use. *)
-let remover store ~before ~var v =
-  let rec go i =
-    if i < 0 then None
-    else
-      let e = Store.trail_entry store i in
-      if
-        Var.equal e.Store.var var && Domain.mem e.Store.old v
-        && not (Domain.mem e.Store.now v)
-      then Some e
-      else go (i - 1)
-  in
-  go (before - 1)
+(* [Store.remover] is the trail entry that took a value out of a variable's domain. It
+   used to be a local copy here; M2-T8 moved it to [Store], which had a second copy of it
+   in [Linear.find_removal] with the other off-by-one convention. [None] means a hole with
+   no trail entry behind it, which within M1 means a *declared* domain with a gap
+   ([Domain.of_list], for `var {1,3,5}: x`, which the FlatZinc subset of docs/SPEC.md 2.1
+   does not admit). This module cites nothing rather than raising: the line is then exactly
+   as strong as the one it wrote before M1-T57, so an encoding that grows declared holes
+   degrades to the old behaviour instead of aborting the solve -- and the .opb would have
+   to state such a hole as a row anyway, which is what the checker would then use. *)
 
 (* Append a fact if it is not already in the tail. The propagator's own facts keep their
    order and are never rewritten, so every line for a pruning that did not settle comes
@@ -333,9 +320,9 @@ let add_fact acc l = if List.exists (Lit.equal l) acc then acc else acc @ [ l ]
 let settle_facts store ~before ~var holes base =
   List.fold_left
     (fun acc v ->
-      match remover store ~before ~var v with
+      match Store.remover store ~before ~var v with
       | None -> acc
-      | Some e -> List.fold_left add_fact acc (e.Store.facts ()))
+      | Some e -> List.fold_left add_fact acc (Reason.lits e.Store.reason))
     base holes
 
 (* Write every line the trail owes, oldest first, and leave the writer on the level it
@@ -366,7 +353,7 @@ let emit (ctx : Justify.ctx) t store =
       match lines ctx.Justify.encoding e name with
       | [] -> ()
       | cs ->
-          let facts = e.Store.facts () in
+          let facts = Reason.lits e.Store.reason in
           let level = Store.level_of_index store i in
           List.iter
             (fun { claim; settled_over } ->
@@ -406,10 +393,10 @@ let emit (ctx : Justify.ctx) t store =
    once, immediately, and nothing may run in between" -- because a value passed in cannot
    be stale, cannot be another propagator's, and cannot be consumed twice by accident.
    The three sites that had to clear the slot ([take_conflict_facts], [Store.new_level],
-   [Store.backtrack]) are gone with it. [Store.no_facts] yielding [[]] is exactly what
-   the un-armed slot's [None] used to mean, so what gets written is unchanged. *)
+   [Store.backtrack]) are gone with it. [Reason.none] materialising to [[]] is exactly
+   what the un-armed slot's [None] used to mean, so what gets written is unchanged. *)
 let conflict_line (ctx : Justify.ctx) t (c : Store.conflict) =
-  match c.Store.c_facts () with
+  match Reason.lits c.Store.c_reason with
   | [] -> None
   | facts ->
       let cid =

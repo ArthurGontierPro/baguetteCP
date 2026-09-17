@@ -86,6 +86,7 @@ module Domain = Baguette_core.Domain
 module Store = Baguette_core.Store
 module Propagator = Baguette_core.Propagator
 module Explanation = Baguette_core.Explanation
+module Reason = Baguette_core.Reason
 module Linear = Baguette_core.Linear
 module Lin_eq = Baguette_core.Lin_eq
 module Int_le = Baguette_core.Int_le

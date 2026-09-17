@@ -176,18 +176,31 @@ let vars t = [ t.b; t.x ]
 (* "v >= value" / "v <= value" as an order literal, or nothing at all when the bound
    is still the declared one. See the module header: a declared bound is the
    encoding's constant true and has no literal. *)
-let ge_fact ~name ~decl_lo value = if value > decl_lo then [ Lit.ge name value ] else []
-let le_fact ~name ~decl_hi value = if value < decl_hi then [ Lit.le name value ] else []
+(* M2-T8/D-0026: a [Reason.fact], not a [Lit.t], and the "nothing at all when the bound
+   is still the declared one" test now lives once, in [Reason.lit_of_fact], rather than
+   here and in [Ne] and in [Linear]. A list of one so the call sites below can keep
+   concatenating. *)
+let ge_fact ~name ~decl_lo value = [ Reason.at_least ~name ~decl:decl_lo value ]
+let le_fact ~name ~decl_hi value = [ Reason.at_most ~name ~decl:decl_hi value ]
 
 (* "not all of these facts hold", the clause a conflict reports. *)
-let nogood facts = Explanation.clause (List.map Lit.negate facts)
+let nogood reason = Explanation.clause (List.map Lit.negate (Reason.lits reason))
 
 (* "these facts imply this claim", the clause a pruning reports -- and, literally, the
-   line lib/core/trace.ml will write for it from [claim] and [facts] separately. The
+   line lib/core/trace.ml will write for it from the claim and the reason separately. The
    two being the same clause is what keeps the explanation and the trace line from
    drifting; D-0009's failure mode was exactly a derivation and a trace that agreed on
-   a type and not on a meaning. *)
-let implication ~claim facts = Explanation.clause (claim :: List.map Lit.negate facts)
+   a type and not on a meaning.
+
+   Note what these two now are, post-D-0026: the justification is a *function of the
+   reason*. For this propagator the agreement D-0026 wants as a type is not merely a
+   shared source, it is a derivation -- there is no reason/justification pair to get
+   wrong, because one is computed from the other. [Linear] cannot do this (its
+   justification is a cutting-planes [Combine] over declared-width chains, which states
+   nothing about where a bound sits) and that is exactly why the two halves are separate
+   types rather than one. *)
+let implication ~claim reason =
+  Explanation.clause (claim :: List.map Lit.negate (Reason.lits reason))
 
 (* ------------------------------------------------------------------- propagation *)
 
@@ -203,9 +216,7 @@ let propagate t store =
       if bound > Domain.lo d then
         let claim = Lit.ge name bound in
         match
-          Store.set_lo_with_facts store var bound
-            ~facts:(fun () -> facts)
-            (implication ~claim facts)
+          Store.set_lo store var bound (Reason.because facts (implication ~claim facts))
         with
         | Store.Changed | Store.Unchanged -> ()
         | Store.Conflict _ ->
@@ -213,7 +224,7 @@ let propagate t store =
                the facts that produced it, plus that upper bound -- dropped when it is
                still the declared one, which leaves the empty clause; see the header. *)
             let all = facts @ le_fact ~name ~decl_hi (Domain.hi d) in
-            conflict := Some (Store.conflict store ~facts:(fun () -> all) (nogood all))
+            conflict := Some (Store.conflict store (Reason.because all (nogood all)))
   in
   let push_hi var ~name ~decl_lo bound ~facts =
     if Option.is_none !conflict then
@@ -221,14 +232,12 @@ let propagate t store =
       if bound < Domain.hi d then
         let claim = Lit.le name bound in
         match
-          Store.set_hi_with_facts store var bound
-            ~facts:(fun () -> facts)
-            (implication ~claim facts)
+          Store.set_hi store var bound (Reason.because facts (implication ~claim facts))
         with
         | Store.Changed | Store.Unchanged -> ()
         | Store.Conflict _ ->
             let all = facts @ ge_fact ~name ~decl_lo (Domain.lo d) in
-            conflict := Some (Store.conflict store ~facts:(fun () -> all) (nogood all))
+            conflict := Some (Store.conflict store (Reason.because all (nogood all)))
   in
   (* b -> x. [db] is read once: nothing below writes to b before the x pushes are
      done, so it cannot go stale in between. *)

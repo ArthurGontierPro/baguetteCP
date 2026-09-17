@@ -1,11 +1,28 @@
-(* Explanations: why a value was removed, in a form the proof layer can render.
+(* Explanations: HOW THE CHECKER IS CONVINCED that a value could be removed -- the
+   derivation, in a form the proof layer can render.
 
    This is the design centre of the project. Read docs/SPEC.md section 3.3 and
-   docs/ARCHITECTURE.md section 4 before changing it, and note that decision D-0003
-   (what "higher-order explanation" means here) is still OPEN and will reshape this type.
-   Do not add a constructor without a decision record, and when one is added, extend
-   [force], [lits] and [to_string] rather than adding a catch-all case - the
-   exhaustiveness warning is what will find every site that needs updating.
+   docs/ARCHITECTURE.md section 4 before changing it.
+
+   D-0003 ("what does higher-order explanation mean here?") is RESOLVED, by D-0026, and
+   the resolution split this type's job in two rather than reshaping it. *Which facts*
+   justify a pruning is now declarative data in lib/core/reason.ml; *how the checker is
+   convinced* is this type, unchanged, and it is the project's (a)-claim: [Combine] with
+   a divisor, [Weaken], [Model_row], and [Term (coeff, t)] recursing into another
+   justification -- an explanation taking explanations as arguments. Nothing about that
+   was flattened by D-0026 and nothing about it should be.
+
+   What changed here in M2-T8 is what this type is *not* asked to do any more. It no
+   longer doubles as the reason: no propagator projects an [Explanation.t] to get the
+   bound facts a trace line negates, and [Store.entry] no longer carries a second,
+   closure-valued reason channel beside it. The one new function is [owners], which
+   exists so the two halves can be *checked* against each other instead of kept in
+   agreement by a comment.
+
+   Do not add a constructor without a decision record -- D-0026 authorises the split, not
+   a new constructor -- and when one is added, extend [force], [lits] and [to_string]
+   rather than adding a catch-all case: the exhaustiveness warning is what will find
+   every site that needs updating.
 
    [Deferred] exists because most prunings are never asked for a reason. Computing a full
    explanation eagerly for every pruning is the standard way to make a proof-logging
@@ -212,6 +229,47 @@ let lits e =
   in
   go e;
   List.rev !acc
+
+(* The FlatZinc identifiers this derivation mentions, after forcing, without
+   duplicates -- [lits] projected through [Lit.owner].
+
+   D-0026 split the reason off this type, and the two halves then have to be checked
+   against each other rather than kept in agreement by a comment. Literal-for-literal
+   they do NOT agree and must not: the reason states where a bound currently *sits*,
+   while a [Weaken] summand states the variable's whole *declared* range (D-0013), so
+   the two projections of one pruning share no literal for a weakened term. What they do
+   share is the variable scope, and that is what [Store.apply]'s D-0026 check compares:
+   a reason naming a variable this derivation never mentions is a reason for a different
+   pruning. See [Reason.owners] for the other side of the comparison. *)
+let owners e =
+  List.sort_uniq String.compare (List.map (fun l -> Lit.owner l.Lit.v) (lits e))
+
+(* The variables this derivation WEAKENS out of its own row, at the top level only.
+
+   "Weakens out" is the D-0009 move: an axiom cannot assert a bound but it can cancel a
+   term whose variable is still where it was, so a [Weaken] summand is the derivation
+   saying "I read this variable and chose not to cite anything for it". Such a variable
+   must therefore appear in the reason -- if it does not, the trace line claims its bound
+   over a shorter tail than the pruning actually rested on, which is the I-P5 failure
+   [int_ne] shipped between M1-T9 and M1-T17 and the one M1-T50 found on the decision
+   path.
+
+   TOP LEVEL ONLY, and that is not a shortcut. Recursing through a [Term] would descend
+   into an explanation *another propagator instance* built, whose own [Weaken] summands
+   are about that row's other variables and have nothing to do with this pruning's reason
+   (that is exactly what [Model_row] exists for -- explanation.ml's header). There is no
+   way to tell "my own sub-derivation" from "someone else's cited one" in the tree, so
+   the check stays where the question is well posed. *)
+let top_weaken_owners e =
+  match force e with
+  | Combine (summands, _) ->
+      List.sort_uniq String.compare
+        (List.concat_map
+           (function
+             | Weaken lits -> List.map (fun (_, l) -> Lit.owner l.Lit.v) lits
+             | Term _ -> [])
+           summands)
+  | _ -> []
 
 let rec to_string e =
   match e with

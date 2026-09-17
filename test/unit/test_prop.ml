@@ -19,6 +19,7 @@ module Domain = Baguette_core.Domain
 module Store = Baguette_core.Store
 module Var = Baguette_core.Var
 module Explanation = Baguette_core.Explanation
+module Reason = Baguette_core.Reason
 module Propagator = Baguette_core.Propagator
 module Linear = Baguette_core.Linear
 module Lin_eq = Baguette_core.Lin_eq
@@ -58,6 +59,15 @@ let failures = ref 0
    encoding in this file on purpose: nothing renders this citation, and if something
    ever did, veripb would reject the id rather than quietly accept a plausible one. *)
 let placeholder_reason = Explanation.model_row 901
+
+(* The same placeholder as ONE [Reason.justified], which is the shape every store mutator
+   takes since M2-T8 (D-0026): the justification above plus [Reason.none]. The reason is
+   empty because these setups are about [linear.ml]'s *citing* path and not about the
+   trace line; a test that wants facts on the entry builds its own reason (see
+   [test_trace_facts] and the D-0026 tests at the end of this file). It has to be written
+   out, which is the point of the collapse -- before M2-T8 [Store.set_lo] meant
+   "no facts" silently and [set_lo_with_facts] was the opt-in. *)
+let placeholder_pruning = Reason.because Reason.none placeholder_reason
 
 let check name cond =
   if cond then Printf.printf "ok   %s\n" name
@@ -358,8 +368,8 @@ let test_conflict () =
   let store = mk_store bounds in
   let raw_terms = [ (2, var 0); (3, var 1) ] in
   let prop = Linear.make store raw_terms 1 ~row_id:1 in
-  ignore (Store.set_lo store (var 0) 1 placeholder_reason);
-  ignore (Store.set_lo store (var 1) 1 placeholder_reason);
+  ignore (Store.set_lo store (var 0) 1 placeholder_pruning);
+  ignore (Store.set_lo store (var 1) 1 placeholder_pruning);
   match Linear.propagate prop store with
   | Propagator.Fixpoint -> check "conflict: expected Conflict" false
   | Propagator.Conflict c ->
@@ -496,7 +506,7 @@ let test_multi_step_chain () =
     (match x_setup store with
     | None -> ()
     | Some (set, bound) -> (
-        match set store (var 0) bound placeholder_reason with
+        match set store (var 0) bound placeholder_pruning with
         | Store.Changed -> ()
         | _ -> check (Printf.sprintf "%s: setup prune applied" name) false));
     let before = Store.trail_length store in
@@ -681,7 +691,7 @@ let test_checking () =
       Lin_eq.make store (List.mapi (fun i a -> (a, var i)) coeffs) rhs ~le_id:1 ~ge_id:2
     in
     List.iteri
-      (fun i v -> ignore (Store.fix store (var i) v placeholder_reason))
+      (fun i v -> ignore (Store.fix store (var i) v placeholder_pruning))
       fix_values;
     match propagate_pair prop store with
     | Propagator.Conflict _ -> check label expect_conflict
@@ -698,7 +708,7 @@ let test_checking () =
     let store = mk_store bounds in
     let prop = make store in
     List.iteri
-      (fun i v -> ignore (Store.fix store (var i) v placeholder_reason))
+      (fun i v -> ignore (Store.fix store (var i) v placeholder_pruning))
       fix_values;
     match propagate prop store with
     | Propagator.Conflict _ -> check label expect_conflict
@@ -824,7 +834,7 @@ let test_compare_entailment () =
   let terms = [ (1, var 0); (-1, var 1) ] in
   (let store = mk_store bounds in
    let prop = Int_le.make store (var 0) (var 1) ~row_id:1 in
-   ignore (Store.set_lo store (var 0) 2 placeholder_reason);
+   ignore (Store.set_lo store (var 0) 2 placeholder_pruning);
    let before = Store.trail_length store in
    match Int_le.propagate prop store with
    | Propagator.Conflict _ -> check "int_le entailment: expected Fixpoint" false
@@ -833,7 +843,7 @@ let test_compare_entailment () =
   let terms_lt = [ (1, var 0); (-1, var 1) ] in
   let store2 = mk_store bounds in
   let prop2 = Int_lt.make store2 (var 0) (var 1) ~row_id:1 in
-  ignore (Store.set_lo store2 (var 0) 2 placeholder_reason);
+  ignore (Store.set_lo store2 (var 0) 2 placeholder_pruning);
   let before2 = Store.trail_length store2 in
   match Int_lt.propagate prop2 store2 with
   | Propagator.Conflict _ -> check "int_lt entailment: expected Fixpoint" false
@@ -845,7 +855,7 @@ let test_int_eq_entailment () =
   let terms = [ (1, var 0); (-1, var 1) ] in
   let store = mk_store bounds in
   let prop = Int_eq.make store (var 0) (var 1) ~le_id:1 ~ge_id:2 in
-  ignore (Store.set_hi store (var 1) 1 placeholder_reason);
+  ignore (Store.set_hi store (var 1) 1 placeholder_pruning);
   let before = Store.trail_length store in
   match propagate_pair prop store with
   | Propagator.Conflict _ -> check "int_eq entailment: expected Fixpoint" false
@@ -1009,10 +1019,16 @@ let build_int_lin_eq_multi dir =
       [ (1, Var.of_int 0); (1, Var.of_int 1) ]
       4 ~le_id:leq_id ~ge_id:geq_id
   in
-  (match Store.set_hi store (Var.of_int 1) 2 (Explanation.model_row c_x2_le) with
+  (match
+     Store.set_hi store (Var.of_int 1) 2
+       (Reason.because Reason.none (Explanation.model_row c_x2_le))
+   with
   | Store.Changed -> ()
   | _ -> failwith "build_int_lin_eq_multi: x2 <= 2 setup failed");
-  (match Store.set_lo store (Var.of_int 1) 2 (Explanation.model_row c_x2_ge) with
+  (match
+     Store.set_lo store (Var.of_int 1) 2
+       (Reason.because Reason.none (Explanation.model_row c_x2_ge))
+   with
   | Store.Changed -> ()
   | _ -> failwith "build_int_lin_eq_multi: x2 >= 2 setup failed");
   (* D-0011: [le] and [ge] are two independently-justified instances, each posted (in
@@ -1067,7 +1083,10 @@ let build_int_le_multi dir =
     Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
   in
   let prop = Int_le.make store (Var.of_int 0) (Var.of_int 1) ~row_id:model_row in
-  (match Store.set_lo store (Var.of_int 0) 3 (Explanation.model_row c_bound) with
+  (match
+     Store.set_lo store (Var.of_int 0) 3
+       (Reason.because Reason.none (Explanation.model_row c_bound))
+   with
   | Store.Changed -> ()
   | _ -> failwith "build_int_le_multi: x >= 3 setup failed");
   let before = Store.trail_length store in
@@ -1116,7 +1135,10 @@ let build_int_lt_multi dir =
     Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
   in
   let prop = Int_lt.make store (Var.of_int 0) (Var.of_int 1) ~row_id:model_row in
-  (match Store.set_lo store (Var.of_int 0) 3 (Explanation.model_row c_bound) with
+  (match
+     Store.set_lo store (Var.of_int 0) 3
+       (Reason.because Reason.none (Explanation.model_row c_bound))
+   with
   | Store.Changed -> ()
   | _ -> failwith "build_int_lt_multi: x >= 3 setup failed");
   let before = Store.trail_length store in
@@ -1169,7 +1191,10 @@ let build_int_eq_multi dir =
   let le, _ge =
     Int_eq.make store (Var.of_int 0) (Var.of_int 1) ~le_id:leq_id ~ge_id:geq_id
   in
-  (match Store.set_hi store (Var.of_int 1) 2 (Explanation.model_row c_bound) with
+  (match
+     Store.set_hi store (Var.of_int 1) 2
+       (Reason.because Reason.none (Explanation.model_row c_bound))
+   with
   | Store.Changed -> ()
   | _ -> failwith "build_int_eq_multi: y <= 2 setup failed");
   let before = Store.trail_length store in
@@ -1237,7 +1262,10 @@ let decision_scene_int_le () =
     Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
   in
   let prop = Int_le.make store (Var.of_int 0) (Var.of_int 1) ~row_id:row in
-  (match Store.set_lo store (Var.of_int 0) 3 (Explanation.decision (Lit.ge "x" 3)) with
+  (match
+     Store.set_lo store (Var.of_int 0) 3
+       (Reason.because Reason.none (Explanation.decision (Lit.ge "x" 3)))
+   with
   | Store.Changed -> ()
   | _ -> failwith "decision_scene_int_le: the decision did not move x's bound");
   let before = Store.trail_length store in
@@ -1259,7 +1287,10 @@ let decision_scene_int_lt () =
     Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
   in
   let prop = Int_lt.make store (Var.of_int 0) (Var.of_int 1) ~row_id:row in
-  (match Store.set_lo store (Var.of_int 0) 3 (Explanation.decision (Lit.ge "x" 3)) with
+  (match
+     Store.set_lo store (Var.of_int 0) 3
+       (Reason.because Reason.none (Explanation.decision (Lit.ge "x" 3)))
+   with
   | Store.Changed -> ()
   | _ -> failwith "decision_scene_int_lt: the decision did not move x's bound");
   let before = Store.trail_length store in
@@ -1284,7 +1315,10 @@ let decision_scene_int_eq () =
   let le, _ge =
     Int_eq.make store (Var.of_int 0) (Var.of_int 1) ~le_id:leq_id ~ge_id:geq_id
   in
-  (match Store.set_hi store (Var.of_int 1) 2 (Explanation.decision (Lit.le "y" 2)) with
+  (match
+     Store.set_hi store (Var.of_int 1) 2
+       (Reason.because Reason.none (Explanation.decision (Lit.le "y" 2)))
+   with
   | Store.Changed -> ()
   | _ -> failwith "decision_scene_int_eq: the decision did not move y's bound");
   let before = Store.trail_length store in
@@ -1312,10 +1346,16 @@ let decision_scene_int_lin_eq () =
       4 ~le_id:leq_id ~ge_id:geq_id
   in
   (* x2 = 2, both bounds, by decision: two store pushes and not one .opb row. *)
-  (match Store.set_hi store (Var.of_int 1) 2 (Explanation.decision (Lit.le "x2" 2)) with
+  (match
+     Store.set_hi store (Var.of_int 1) 2
+       (Reason.because Reason.none (Explanation.decision (Lit.le "x2" 2)))
+   with
   | Store.Changed -> ()
   | _ -> failwith "decision_scene_int_lin_eq: x2 <= 2 did not move");
-  (match Store.set_lo store (Var.of_int 1) 2 (Explanation.decision (Lit.ge "x2" 2)) with
+  (match
+     Store.set_lo store (Var.of_int 1) 2
+       (Reason.because Reason.none (Explanation.decision (Lit.ge "x2" 2)))
+   with
   | Store.Changed -> ()
   | _ -> failwith "decision_scene_int_lin_eq: x2 >= 2 did not move");
   (match Linear.propagate le store with
@@ -1343,7 +1383,7 @@ let write_trace_case dir ~file ~scene ~factless ~expect_lines =
   let oc = open_out opb in
   Encoding.write_opb ~comments:[ file ] e oc;
   close_out oc;
-  let facts = if factless then [] else entry.Store.facts () in
+  let facts = if factless then [] else Reason.lits entry.Store.reason in
   let oc = open_out pbp in
   let w = Writer.create ~comments:true ~audit:true oc in
   Encoding.start_proof e w;
@@ -1430,7 +1470,10 @@ let test_lin_eq_pairing () =
         [ (1, Var.of_int 0); (1, Var.of_int 1) ]
         4 ~le_id:leq_id ~ge_id:geq_id
     in
-    (match Store.set_lo store (Var.of_int 1) 2 (Explanation.model_row c_bound) with
+    (match
+       Store.set_lo store (Var.of_int 1) 2
+         (Reason.because Reason.none (Explanation.model_row c_bound))
+     with
     | Store.Changed -> ()
     | _ -> failwith "test_lin_eq_pairing: x2 >= 2 setup failed");
     let before = Store.trail_length store in
@@ -1604,7 +1647,7 @@ let check_ne_soundness_case name coeffs rhs ranges pre =
   let bounds = List.mapi (fun i (lo, hi) -> (Printf.sprintf "x%d" i, lo, hi)) ranges in
   let store = mk_store bounds in
   let prop = Ne.make store (List.mapi (fun i a -> (a, var i)) coeffs) rhs in
-  List.iter (fun (i, v) -> ignore (Store.fix store (var i) v placeholder_reason)) pre;
+  List.iter (fun (i, v) -> ignore (Store.fix store (var i) v placeholder_pruning)) pre;
   let cur =
     List.init n (fun i ->
         let d = Store.get store (var i) in
@@ -1675,7 +1718,7 @@ let test_ne_checking () =
     let store = mk_store bounds in
     let prop = Ne.make store (List.mapi (fun i a -> (a, var i)) coeffs) rhs in
     List.iteri
-      (fun i v -> ignore (Store.fix store (var i) v placeholder_reason))
+      (fun i v -> ignore (Store.fix store (var i) v placeholder_pruning))
       fix_values;
     match Ne.propagate prop store with
     | Propagator.Conflict _ -> check name expect_conflict
@@ -1705,7 +1748,7 @@ let test_ne_idempotence () =
     let bounds = List.mapi (fun i (lo, hi) -> (Printf.sprintf "x%d" i, lo, hi)) ranges in
     let store = mk_store bounds in
     let prop = Ne.make store (List.mapi (fun i a -> (a, var i)) coeffs) rhs in
-    List.iter (fun (i, v) -> ignore (Store.fix store (var i) v placeholder_reason)) pre;
+    List.iter (fun (i, v) -> ignore (Store.fix store (var i) v placeholder_pruning)) pre;
     (match Ne.propagate prop store with
     | Propagator.Conflict _ ->
         check (Printf.sprintf "%s: expected Fixpoint first pass" name) false
@@ -1778,7 +1821,7 @@ let build_ne_case dir ~file ~decls ~terms ~rhs ~pre ~target ~sat ~expect_lines
   let prop = Ne.make store (List.map (fun (a, i) -> (a, var i)) terms) rhs in
   List.iter
     (fun (i, v) ->
-      match Store.fix store (var i) v placeholder_reason with
+      match Store.fix store (var i) v placeholder_pruning with
       | Store.Changed | Store.Unchanged -> ()
       | Store.Conflict _ -> failwith (file ^ ": pre-fixing conflicted"))
     pre;
@@ -2516,7 +2559,7 @@ let test_bool_clause_checking () =
     let prop = mk_bool_clause lits store in
     List.iteri
       (fun i v ->
-        match Store.fix store (var i) v placeholder_reason with
+        match Store.fix store (var i) v placeholder_pruning with
         | Store.Conflict _ -> failwith "test_bool_clause_checking: setup conflicted"
         | _ -> ())
       values;
@@ -2546,7 +2589,7 @@ let test_bool_clause_idempotence () =
     let prop = mk_bool_clause lits store in
     List.iter
       (fun (i, v) ->
-        match Store.fix store (var i) v placeholder_reason with
+        match Store.fix store (var i) v placeholder_pruning with
         | Store.Conflict _ -> failwith "test_bool_clause_idempotence: setup conflicted"
         | _ -> ())
       pre;
@@ -2589,8 +2632,8 @@ let test_bool_clause_unit_push () =
      lib/core/prop/bool_clause.ml's header states that identity; this is the check. *)
   let store = mk_store [ ("a", 0, 1); ("b", 0, 1); ("c", 0, 1) ] in
   let prop = mk_bool_clause [ (0, true); (1, false); (2, true) ] store in
-  ignore (Store.set_hi store (var 0) 0 placeholder_reason);
-  ignore (Store.set_lo store (var 1) 1 placeholder_reason);
+  ignore (Store.set_hi store (var 0) 0 placeholder_pruning);
+  ignore (Store.set_lo store (var 1) 1 placeholder_pruning);
   let before = Store.trail_length store in
   (match Bool_clause.propagate prop store with
   | Propagator.Conflict _ -> check "bool_clause: the unit push happened" false
@@ -2613,9 +2656,9 @@ let test_bool_clause_conflict_reason () =
      (the header says why), so this checks the conflict path reports it too. *)
   let store = mk_store [ ("a", 0, 1); ("b", 0, 1); ("c", 0, 1) ] in
   let prop = mk_bool_clause [ (0, true); (1, false); (2, true) ] store in
-  ignore (Store.set_hi store (var 0) 0 placeholder_reason);
-  ignore (Store.set_lo store (var 1) 1 placeholder_reason);
-  ignore (Store.set_hi store (var 2) 0 placeholder_reason);
+  ignore (Store.set_hi store (var 0) 0 placeholder_pruning);
+  ignore (Store.set_lo store (var 1) 1 placeholder_pruning);
+  ignore (Store.set_hi store (var 2) 0 placeholder_pruning);
   match Bool_clause.propagate prop store with
   | Propagator.Fixpoint -> check "bool_clause: an all-false clause conflicts" false
   | Propagator.Conflict c ->
@@ -2646,7 +2689,7 @@ let test_bool_clause_rejects_non_bool () =
      has already been fixed no longer looks like [0, 1]. That is the D-0010 requirement
      as a test rather than only as a comment in the header. *)
   let store2 = mk_store [ ("a", 0, 1) ] in
-  ignore (Store.set_hi store2 (var 0) 0 placeholder_reason);
+  ignore (Store.set_hi store2 (var 0) 0 placeholder_pruning);
   raises "bool_clause: make refuses a bool that has already been narrowed" (fun () ->
       ignore (mk_bool_clause [ (0, true) ] store2))
 
@@ -2678,13 +2721,13 @@ let test_bool2int_directions () =
   (* b -> x, lower bound. b is true; x, declared wide, must lose everything below 1. *)
   let _, s =
     bool2int_case ~b_range:(0, 1) ~x_range:(0, 5)
-      ~pre:[ (fun st -> Store.set_lo st (var 0) 1 placeholder_reason) ]
+      ~pre:[ (fun st -> Store.set_lo st (var 0) 1 placeholder_pruning) ]
   in
   check "bool2int: b -> x raises lo(x) when b is true" (snd (dom_pair s) = (1, 1));
   (* b -> x, upper bound. b is false; x must lose everything above 0. *)
   let _, s =
     bool2int_case ~b_range:(0, 1) ~x_range:(0, 5)
-      ~pre:[ (fun st -> Store.set_hi st (var 0) 0 placeholder_reason) ]
+      ~pre:[ (fun st -> Store.set_hi st (var 0) 0 placeholder_pruning) ]
   in
   check "bool2int: b -> x lowers hi(x) when b is false" (snd (dom_pair s) = (0, 0));
   (* b -> x with b untouched: b's DECLARED [0, 1] alone confines a wide x. This is the
@@ -2698,13 +2741,13 @@ let test_bool2int_directions () =
      weaker in everything, which is exactly why a model cannot see it. *)
   let _, s =
     bool2int_case ~b_range:(0, 1) ~x_range:(0, 5)
-      ~pre:[ (fun st -> Store.set_lo st (var 1) 1 placeholder_reason) ]
+      ~pre:[ (fun st -> Store.set_lo st (var 1) 1 placeholder_pruning) ]
   in
   check "bool2int: x -> b raises lo(b) when x >= 1" (fst (dom_pair s) = (1, 1));
   (* x -> b, upper bound. *)
   let _, s =
     bool2int_case ~b_range:(0, 1) ~x_range:(0, 5)
-      ~pre:[ (fun st -> Store.set_hi st (var 1) 0 placeholder_reason) ]
+      ~pre:[ (fun st -> Store.set_hi st (var 1) 0 placeholder_pruning) ]
   in
   check "bool2int: x -> b lowers hi(b) when x <= 0" (fst (dom_pair s) = (0, 0));
   (* One pass reaches the fixpoint, which is the ordering argument in the header: x is
@@ -2712,7 +2755,7 @@ let test_bool2int_directions () =
      so the second step has real work and must still happen in the same call. *)
   let _, s =
     bool2int_case ~b_range:(0, 1) ~x_range:(0, 5)
-      ~pre:[ (fun st -> Store.set_lo st (var 1) 1 placeholder_reason) ]
+      ~pre:[ (fun st -> Store.set_lo st (var 1) 1 placeholder_pruning) ]
   in
   check "bool2int: one pass does both directions, not just the first"
     (dom_pair s = ((1, 1), (1, 1)))
@@ -2755,10 +2798,10 @@ let test_bool2int_checking () =
     let store = mk_store [ ("b", 0, 1); ("x", xlo, xhi) ] in
     let prop = Bool2int.make store ~b:(var 0) ~x:(var 1) in
     let ok =
-      match Store.fix store (var 0) bval placeholder_reason with
+      match Store.fix store (var 0) bval placeholder_pruning with
       | Store.Conflict _ -> false
       | _ -> (
-          match Store.fix store (var 1) xval placeholder_reason with
+          match Store.fix store (var 1) xval placeholder_pruning with
           | Store.Conflict _ -> false
           | _ -> true)
     in
@@ -2807,8 +2850,8 @@ let test_bool2int_idempotence () =
               (Store.same_domains store snap))
   in
   run "nothing established, x wide" 0 5 [];
-  run "b true" 0 5 [ (fun st -> Store.set_lo st (var 0) 1 placeholder_reason) ];
-  run "x >= 1" 0 5 [ (fun st -> Store.set_lo st (var 1) 1 placeholder_reason) ];
+  run "b true" 0 5 [ (fun st -> Store.set_lo st (var 0) 1 placeholder_pruning) ];
+  run "x >= 1" 0 5 [ (fun st -> Store.set_lo st (var 1) 1 placeholder_pruning) ];
   run "x already [0,1]" 0 1 []
 
 let test_bool2int_conflicts () =
@@ -2835,8 +2878,8 @@ let test_bool2int_conflicts () =
     bool2int_case ~b_range:(0, 1) ~x_range:(0, 5)
       ~pre:
         [
-          (fun st -> Store.set_hi st (var 0) 0 placeholder_reason);
-          (fun st -> Store.set_lo st (var 1) 1 placeholder_reason);
+          (fun st -> Store.set_hi st (var 0) 0 placeholder_pruning);
+          (fun st -> Store.set_lo st (var 1) 1 placeholder_pruning);
         ]
   in
   match r with
@@ -2917,10 +2960,10 @@ let bool_clause_scene () =
       ~domains:[| Domain.make 0 1; Domain.make 0 1; Domain.make 0 1 |]
   in
   let prop = mk_bool_clause [ (0, true); (1, false); (2, true) ] store in
-  (match Store.set_hi store (var 0) 0 placeholder_reason with
+  (match Store.set_hi store (var 0) 0 placeholder_pruning with
   | Store.Changed -> ()
   | _ -> failwith "bool_clause_scene: a := false failed");
-  (match Store.set_lo store (var 1) 1 placeholder_reason with
+  (match Store.set_lo store (var 1) 1 placeholder_pruning with
   | Store.Changed -> ()
   | _ -> failwith "bool_clause_scene: b := true failed");
   (e, row, store, prop)
@@ -3071,7 +3114,7 @@ let build_bool2int_b_to_x_lo dir =
         (fun e st ->
           store_fact (Lit.bool_true "b");
           ignore e;
-          Store.set_lo st (var 0) 1 placeholder_reason);
+          Store.set_lo st (var 0) 1 placeholder_pruning);
       ]
     ~wvar:1 ~wbound:Lo
     ~sol:[ ("b", 1); ("x", 1) ]
@@ -3083,7 +3126,7 @@ let build_bool2int_b_to_x_hi dir =
         (fun e st ->
           store_fact (Lit.bool_false "b");
           ignore e;
-          Store.set_hi st (var 0) 0 placeholder_reason);
+          Store.set_hi st (var 0) 0 placeholder_pruning);
       ]
     ~wvar:1 ~wbound:Hi
     ~sol:[ ("b", 0); ("x", 0) ]
@@ -3098,7 +3141,7 @@ let build_bool2int_x_to_b_lo dir =
         (fun e st ->
           store_fact (Lit.ge "x" 1);
           ignore e;
-          Store.set_lo st (var 1) 1 placeholder_reason);
+          Store.set_lo st (var 1) 1 placeholder_pruning);
       ]
     ~wvar:0 ~wbound:Lo
     ~sol:[ ("b", 1); ("x", 1) ]
@@ -3110,7 +3153,7 @@ let build_bool2int_x_to_b_hi dir =
         (fun e st ->
           store_fact (Lit.le "x" 0);
           ignore e;
-          Store.set_hi st (var 1) 0 placeholder_reason);
+          Store.set_hi st (var 1) 0 placeholder_pruning);
       ]
     ~wvar:0 ~wbound:Hi
     ~sol:[ ("b", 0); ("x", 0) ]
@@ -3125,7 +3168,7 @@ let build_bool2int_wrong dir =
           (fun e st ->
             store_fact (Lit.bool_false "b");
             ignore e;
-            Store.set_hi st (var 0) 0 placeholder_reason);
+            Store.set_hi st (var 0) 0 placeholder_pruning);
         ]
   in
   let expl = Explanation.clause [ Lit.ge "x" 1; Lit.bool_true "b" ] in
@@ -3151,7 +3194,7 @@ let build_bool2int_factless dir =
           (fun e st ->
             store_fact (Lit.bool_false "b");
             ignore e;
-            Store.set_hi st (var 0) 0 placeholder_reason);
+            Store.set_hi st (var 0) 0 placeholder_pruning);
         ]
   in
   let expl = Explanation.clause [ Lit.le "x" 0 ] in
@@ -3474,6 +3517,171 @@ let test_single_row_check_can_fire () =
 
 (* ------------------------------------------------------------------------ main *)
 
+(* ------------------------------------- I-X6 on the JUSTIFICATION half (M2-T8)
+
+   D-0026 discharges I-X6 on the reason half by construction: a [Reason.t] is data and
+   [Reason.lits] takes no store, so it cannot read live state even in principle. The
+   justification half is still a thunk and still can, and a thunk that decided which trail
+   entry witnesses a bound *at force time* rather than at push time would render a later
+   bound as the reason for an earlier pruning. That is the defect
+   [explain_cross_conflict] shipped until M1-T13, which was harmless only by accident.
+
+   Nothing in the suite could see it. Measured: moving [Linear]'s per-term snapshot
+   decision inside the thunk reddened zero checks across every unit binary and all 34
+   models, because search forces what it forces immediately. This test is what closes
+   that, and the way it closes it is the only way available -- run the same scene twice
+   and force at two different moments:
+
+     A: force immediately, while the store still says what the propagator read;
+     B: move the cited bound to a DIFFERENT row's entry first, then force.
+
+   A snapshotting thunk gives the same derivation both times. A live-reading one cites
+   whatever moved the bound most recently, so B names row 902 where A names 901. The two
+   runs are separate stores because [Explanation.force] memoises: forcing once in one
+   store would make the second observation unreachable. *)
+let test_ix6_justification_snapshot () =
+  let scene ~move_after =
+    let store = mk_store [ ("x", 0, 5); ("y", 0, 5) ] in
+    (* rhs 10, not something tighter: the row must push x while leaving y a range, or the
+       second push below lands on a fixed variable and conflicts instead of moving a
+       bound -- which would make this a test of nothing. The precondition is asserted
+       rather than assumed, and it is what caught that first draft. *)
+    let prop = Linear.make store [ (2, var 0); (3, var 1) ] 10 ~row_id:1 in
+    (* y >= 1, by "some earlier propagator" whose row is 901. *)
+    ignore (Store.set_lo store (var 1) 1 placeholder_pruning);
+    let before = Store.trail_length store in
+    (match Linear.propagate prop store with
+    | Propagator.Conflict _ -> failwith "test_ix6: expected a pruning"
+    | Propagator.Fixpoint -> ());
+    let e =
+      match
+        List.find_opt
+          (fun (en : Store.entry) -> Var.equal en.Store.var (var 0))
+          (List.filteri
+             (fun i _ -> i < Store.trail_length store - before)
+             (Store.trail_entries store))
+      with
+      | Some e -> e
+      | None -> failwith "test_ix6: x was not pushed"
+    in
+    if move_after then
+      (* A DIFFERENT row now holds y's lower bound. Under the O(1) support this is what
+         [Store.lo_reasons] would answer from here on, so a thunk that asks again gets
+         902 and a thunk that snapshotted keeps 901. *)
+      ignore
+        (Store.set_lo store (var 1) 2
+           (Reason.because Reason.none (Explanation.model_row 902)));
+    (Explanation.to_string (Explanation.force (Store.explanation store e)), store)
+  in
+  let a, _ = scene ~move_after:false in
+  let b, store_b = scene ~move_after:true in
+  (* The scene has to actually move the bound, or this test proves nothing. *)
+  check "I-X6: the cited bound really was moved by another row before forcing"
+    (Domain.lo (Store.get store_b (var 1)) = 2
+    &&
+    match Store.lo_reasons store_b (var 1) with
+    | [ Explanation.Model_row 902 ] -> true
+    | _ -> false);
+  check "I-X6: the pruning's derivation cites the entry it read AT THE PUSH"
+    (a = b && String.length a > 0);
+  check "I-X6: and it is row 901's entry, not the row that moved the bound later"
+    (let contains needle hay =
+       let n = String.length needle and h = String.length hay in
+       let rec go i = i + n <= h && (String.sub hay i n = needle || go (i + 1)) in
+       go 0
+     in
+     contains "901" b && not (contains "902" b))
+
+(* ------------------------------ D-0026: one pruning, two halves that agree (M2-T8)
+
+   The reference propagator's reason and justification used to be two calls
+   ([facts_of_snaps snaps] and [explain_of_snaps _ snaps _]) that happened to be given
+   the same list, kept honest by a comment. They are one call now. What can still go
+   wrong is what that one function computes, so this checks the three things the comment
+   used to promise and no earlier test asserts:
+
+     1. the reason's SCOPE is exactly the row's other terms -- not the pruned variable,
+        not a term that is absent from the row;
+     2. each fact is the bound relevant to that term's SIGN (D-0013's case split), at the
+        value the bound had when the pruning was made;
+     3. the two halves agree in the sense [Store.agreement_holds] means.
+
+   Scene: 2*x + 3*y - 2*w <= 4 over 0..5, with y's lower bound and w's upper bound each
+   already moved by an earlier (placeholder) propagator, so that the row has one derived
+   lower bound, one derived upper bound and one term left at its declared bound. That mix
+   is what makes (1) and (2) separable: a reason built over the wrong bound direction, or
+   over the wrong variable, changes the answer here and nowhere else in this file. *)
+let test_d0026_linear_pairing () =
+  let store = mk_store [ ("x", 0, 5); ("y", 0, 5); ("w", 0, 5); ("q", 0, 5) ] in
+  let prop = Linear.make store [ (2, var 0); (3, var 1); (-2, var 2) ] 4 ~row_id:1 in
+  (* y >= 2 and w <= 3, each by "some earlier propagator". [q] is in the store and NOT
+     in the row: a reason that leaked the whole store's bounds rather than the row's
+     scope would name it. *)
+  ignore (Store.set_lo store (var 1) 2 placeholder_pruning);
+  ignore (Store.set_hi store (var 2) 3 placeholder_pruning);
+  let before = Store.trail_length store in
+  (match Linear.propagate prop store with
+  | Propagator.Conflict _ ->
+      check "D-0026 linear: expected a pruning, not a conflict" false
+  | Propagator.Fixpoint -> ());
+  let pushed =
+    List.filter
+      (fun (e : Store.entry) -> Var.equal e.Store.var (var 0))
+      (List.filteri
+         (fun i _ -> i < Store.trail_length store - before)
+         (Store.trail_entries store))
+  in
+  match pushed with
+  | [] -> check "D-0026 linear: x was pushed" false
+  | e :: _ ->
+      (* slack = 4 - (2*0 + 3*2 + (-2)*3) = 4, so max(2x) = 0 + 4 and x <= 2. Asserted
+         rather than assumed: this is only a test of the reason if the pruning happened,
+         and x's entry is the FIRST push of the pass, so its snapshot still sees y and w
+         where the setup left them. *)
+      check "D-0026 linear: the pruning under test landed"
+        (Domain.hi (Store.get store (var 0)) = 2);
+      (* (1) The scope is the other two terms, in term order, and nothing else. *)
+      check "D-0026 linear: the reason's scope is exactly the row's OTHER terms"
+        (Reason.owners e.Store.reason = [ "y"; "w" ]);
+      (* (2) y has a positive coefficient so its LOWER bound is read; w has a negative
+         one so its UPPER bound is. Swapping the case split (break 1 in the hand-back)
+         gives [y <= 2; w >= 3] here. *)
+      check "D-0026 linear: each fact is the bound its term's SIGN reads, at its value"
+        (Reason.lits e.Store.reason = [ Lit.ge "y" 2; Lit.le "w" 3 ]);
+      (* (3) And the two halves are about the same pruning. *)
+      check "D-0026 linear: the reason and the justification agree"
+        (Store.agreement_holds store
+           (Reason.because e.Store.reason (Store.explanation store e)))
+
+(* The same row with every other term left at its declared bound: the reason's scope is
+   still the other terms -- the propagator DID read them -- but not one of the facts
+   materialises, because at a declared bound the order encoding states the constant true.
+   This is the pair of properties that used to be one constructor each ([Snap_weaken]
+   contributing no literal) and is now one value with two projections; a [lits] that
+   forgot to drop would put a nonexistent literal in every trace line, and an [owners]
+   that dropped with it would leave M2-T3 unable to see the variable at all. *)
+let test_d0026_all_declared () =
+  let store = mk_store [ ("x", 0, 5); ("y", 0, 5) ] in
+  let prop = Linear.make store [ (2, var 0); (3, var 1) ] 6 ~row_id:1 in
+  let before = Store.trail_length store in
+  (match Linear.propagate prop store with
+  | Propagator.Conflict _ -> check "D-0026 declared: expected a pruning" false
+  | Propagator.Fixpoint -> ());
+  match
+    List.filteri
+      (fun i _ -> i < Store.trail_length store - before)
+      (Store.trail_entries store)
+  with
+  | [] -> check "D-0026 declared: something was pushed" false
+  | e :: _ ->
+      check "D-0026 declared: the scope still names the term that was read"
+        (Reason.owners e.Store.reason <> []);
+      check "D-0026 declared: but no fact materialises, so the tail is empty"
+        (Reason.lits e.Store.reason = []);
+      check "D-0026 declared: and the halves still agree"
+        (Store.agreement_holds store
+           (Reason.because e.Store.reason (Store.explanation store e)))
+
 let () =
   print_endline "\npropagator unit tests";
   test_soundness ();
@@ -3581,6 +3789,11 @@ let () =
   run_veripb_rejects ~name:"bool2int: a rup that claims its bound with no facts at all"
     ~build:build_bool2int_factless;
   test_single_row_check_can_fire ();
+
+  (* ---------------------------------------------- M2-T8 / D-0026: the two halves *)
+  test_d0026_linear_pairing ();
+  test_d0026_all_declared ();
+  test_ix6_justification_snapshot ();
   test_no_single_row_refutes "bool_reif_unsat" "bool_reif_unsat.fzn";
   test_no_single_row_refutes "bool_channel_unsat" "bool_channel_unsat.fzn";
   if !failures > 0 then (

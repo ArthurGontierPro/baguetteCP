@@ -171,17 +171,25 @@ let literals t = t.pb
    builds, [claim :: List.map Lit.negate facts], comes out as the clause itself.
 
    Every fact here is a genuine, non-declared bound: a `var bool` is declared over the
-   whole of [0, 1] (lib/flatzinc/compile.ml's [bounds_of_domain]), so a literal can
-   only be false because something moved a bound, never because the declaration
-   already said so. That is why nothing is dropped here, unlike [Linear.facts_of_snaps]
-   and [Ne.fixed_facts], which must drop a fact that is still the encoding's constant
-   true (docs/PROOF-FORMAT.md section 3). *)
-let falsity_fact l = Lit.negate (pb_lit l)
+   whole of [0, 1] (lib/flatzinc/compile.ml's [bounds_of_domain], and [make] above
+   *checks* it), so a literal can only be false because something moved a bound, never
+   because the declaration already said so.
 
-let other_facts t (unit_lit : lit) =
+   M2-T8/D-0026: that used to be the reason this module needed a comment saying it is the
+   one producer that must NOT drop a fact at the declared bound, while [Linear] and [Ne]
+   had to drop. It needs no such comment now, because the declared bounds are in the fact
+   and the test is [Reason.lit_of_fact]'s: [0, 1] makes both of these strictly inside the
+   declaration, so nothing drops, and it drops for the right reason rather than by this
+   module remembering not to. The literals are unchanged: a positive occurrence's falsity
+   is [b <= 0] and a negative one's is [b >= 1], which is [Lit.negate] of [pb_lit]. *)
+let falsity_fact l =
+  if l.positive then Reason.at_most ~name:l.name ~decl:1 0
+  else Reason.at_least ~name:l.name ~decl:0 1
+
+let other_facts t (unit_lit : lit) : Reason.t =
   List.filter_map (fun l -> if l == unit_lit then None else Some (falsity_fact l)) t.lits
 
-let all_facts t = List.map falsity_fact t.lits
+let all_facts t : Reason.t = List.map falsity_fact t.lits
 
 (* ------------------------------------------------------------------- propagation *)
 
@@ -212,14 +220,16 @@ let rec survey_from store acc = function
 (* Force the last open literal true. A positive one moves lo to 1, a negative one
    moves hi to 0; either way exactly one bound moves, so lib/core/trace.ml writes
    exactly one line for it (its [claims] checks both bounds and would happily write
-   two). [Store.set_lo_with_facts]/[set_hi_with_facts] rather than the factless
-   mutators: I-P5, and without the facts the line would claim the new bound
-   unconditionally, which is false. *)
+   two). The reason is not optional and there is no factless mutator to reach for: I-P5,
+   and without it the line would claim the new bound unconditionally, which is false.
+
+   [t.expl] is the whole clause, built once in [make], and it is [claim :: List.map
+   Lit.negate (other_facts t l)] for whichever [l] turns out to be the unit -- so the
+   justification here is a function of the reason too, the same way [Bool2int]'s is. *)
 let assign t store (l : lit) =
-  let facts () = other_facts t l in
+  let j = Reason.because (other_facts t l) t.expl in
   let outcome =
-    if l.positive then Store.set_lo_with_facts store l.x 1 ~facts t.expl
-    else Store.set_hi_with_facts store l.x 0 ~facts t.expl
+    if l.positive then Store.set_lo store l.x 1 j else Store.set_hi store l.x 0 j
   in
   match outcome with
   | Store.Changed | Store.Unchanged -> Propagator.Fixpoint
@@ -242,7 +252,7 @@ let propagate t store =
          a conflict here is exactly "fail iff the assignment violates the
          constraint", and it is reached before every variable is fixed as well, which
          is the propagation half. *)
-      Propagator.Conflict (Store.conflict store ~facts:(fun () -> all_facts t) t.expl)
+      Propagator.Conflict (Store.conflict store (Reason.because (all_facts t) t.expl))
   | Units (_ :: _ :: _) ->
       (* [survey_from] returns at most one; it stops at the second. *)
       assert false
