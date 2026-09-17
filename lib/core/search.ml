@@ -115,6 +115,62 @@ exception Unsound_solution of assignment
    recent decision literal and re-derive the next nogood up. *)
 type node = NSat of assignment | NFail of Lit.t list * Writer.cid
 
+(* ------------------------------------------------------------ M1-T36: node counting *)
+
+(* The search-tree node count, kept by the search itself rather than read back out of
+   the proof it wrote.
+
+   WHAT A NODE IS HERE. One node is one child dispatched by [branch], plus the root.
+   [branch] explores a decision's two sides through [explore_le]/[explore_ge], and each
+   of those is one visit to one node of the tree: propagation runs there, and the visit
+   ends in a solution, a failure or a further decision. Counting at the dispatch rather
+   than inside [dfs] is deliberate and it is what makes the count TOTAL -- the
+   [Store.Conflict] arms of [explore_le]/[explore_ge] never reach [dfs], so a counter
+   living in [dfs] would silently miss a node that was visited and failed.
+
+   WHAT IT IS NOT. [bench/run_bench.sh] reported `lvl` -- the number of level markers in
+   the emitted .pbp -- as a stand-in for this, and labelled it a proxy. It is a
+   different number, and not by a constant factor:
+
+     * a level marker is written per child explored AND once more when a branch steps
+       back down to emit its combined nogood ([Writer.set_level] is the only thing that
+       writes one), so an internal node whose two children both fail contributes THREE
+       markers and TWO nodes, while one whose first child is satisfiable contributes ONE
+       marker and (down that path) one node. The ratio is a property of the tree's
+       shape, so it cannot be divided out;
+     * a marker is a property of the PROOF. It moves when the proof's shape changes with
+       the tree standing still, which is precisely the confusion D-0026's claim -- the
+       same search tree costs no more -- cannot be tested through;
+     * there is no marker at all without --proof, and the two formats spell it
+       differently (`# l` under 2.0, `% level l` under 3.0), so the proxy also depends
+       on which checker the run was aimed at.
+
+   [decisions] counts decisions taken: one per [branch] call, which is one per internal
+   node. [max_depth] is the deepest decision stack reached -- the depth of the TREE, not
+   the deepest level marker in the proof.
+
+   THE ARITHMETIC IS CHECKED, because a number nothing reads is decoration and this
+   project has shipped one (M1-T48). Branching is binary and every decision push lands
+   (I-D2, and [check_decision_landed] asserts it), so:
+
+       nodes =  2 * decisions + 1     when the tree was exhausted (Unsat)
+       nodes <= 2 * decisions + 1     when it was not (Sat: the search stops at the
+                                      first solution, so right siblings go unvisited)
+
+   [solve] asserts exactly that under [Debug.check], and test/unit/test_engine.ml
+   asserts it outside [Debug.check] on searches whose trees it knows. An off-by-one
+   anywhere in the accounting, or a count taken at the wrong event, breaks the equality
+   on every complete search. *)
+type stats = { mutable nodes : int; mutable decisions : int; mutable max_depth : int }
+
+let stats_create () = { nodes = 0; decisions = 0; max_depth = 0 }
+
+(* Does this pair of counts satisfy the identity above? [exhausted] is whether the
+   search closed its whole tree. Public because [solve] checks it only under
+   BAGUETTE_DEBUG and the tests must be able to check it always. *)
+let stats_consistent s ~exhausted =
+  if exhausted then s.nodes = (2 * s.decisions) + 1 else s.nodes <= (2 * s.decisions) + 1
+
 (* ------------------------------------------------------- the branching order (M2-T11)
 
    Which variable is branched on, at which value, and which side first. docs/SPEC.md 3.4
@@ -486,7 +542,7 @@ let bridges (ctx : Justify.ctx) store (decisions : Lit.t list) =
   in
   go (decision_entries store) (List.rev decisions) []
 
-let rec dfs engine store ctx trace (order : order) (decisions : Lit.t list) : node =
+let rec dfs engine store ctx trace stats (order : order) (decisions : Lit.t list) : node =
   match Engine.propagate engine store with
   | Engine.Conflict c -> (
       (* M2-T7: [c] carries the reporting instance's id ([c.Store.c_prop]) as well as its
@@ -530,9 +586,9 @@ let rec dfs engine store ctx trace (order : order) (decisions : Lit.t list) : no
   | Engine.Fixpoint ->
       let cands = unfixed store in
       if Array.length cands = 0 then NSat (extract_assignment store)
-      else branch engine store ctx trace order decisions (order store cands)
+      else branch engine store ctx trace stats order decisions (order store cands)
 
-and branch engine store ctx trace order decisions (dec : decision) : node =
+and branch engine store ctx trace stats order decisions (dec : decision) : node =
   let v = dec.d_var in
   let d = Store.get store v in
   let k = dec.d_split in
@@ -550,10 +606,19 @@ and branch engine store ctx trace order decisions (dec : decision) : node =
   let first, second =
     if dec.d_high_first then (explore_ge, explore_le) else (explore_le, explore_ge)
   in
+  (* M1-T36. One decision taken, and this decision sits one deeper than the ancestors
+     it was handed. [List.length] is O(depth) once per internal node, which is nothing
+     beside the propagation this node already ran; taking the depth from
+     [Store.level store] instead would tie the tree's depth to the store's level
+     numbering, and [solve] is allowed to be called at a non-zero level. *)
+  stats.decisions <- stats.decisions + 1;
+  let depth = List.length decisions + 1 in
+  if depth > stats.max_depth then stats.max_depth <- depth;
   Store.new_level store;
   let lvl = Store.level store in
   Writer.set_level ctx.Justify.writer lvl;
-  let r1 = first store engine ctx trace order decisions v k lit in
+  stats.nodes <- stats.nodes + 1;
+  let r1 = first store engine ctx trace stats order decisions v k lit in
   Store.backtrack store;
   match r1 with
   | NSat asn ->
@@ -565,7 +630,8 @@ and branch engine store ctx trace order decisions (dec : decision) : node =
       Debug.check "search: reopened level matches the one just closed" (fun () ->
           lvl2 = lvl);
       Writer.set_level ctx.Justify.writer lvl;
-      let r2 = second store engine ctx trace order decisions v k lit in
+      stats.nodes <- stats.nodes + 1;
+      let r2 = second store engine ctx trace stats order decisions v k lit in
       Store.backtrack store;
       match r2 with
       | NSat asn ->
@@ -621,7 +687,7 @@ and check_decision_landed store lvl outcome =
    branch nogood below (D-0018, D-0037) -- and it is also why [Trace] can skip a level start
    without checking: [Reason.lits Reason.none] is empty, so a line for it would be an
    unconditional claim. *)
-and explore_le store engine ctx trace order decisions v k lit =
+and explore_le store engine ctx trace stats order decisions v k lit =
   let lvl = Store.level store in
   let outcome =
     Store.set_hi store v k
@@ -641,11 +707,11 @@ and explore_le store engine ctx trace order decisions v k lit =
       NFail (lits, cid)
   | Store.Changed | Store.Unchanged ->
       check_decision_landed store lvl outcome;
-      dfs engine store ctx trace order (Lit.negate lit :: decisions)
+      dfs engine store ctx trace stats order (Lit.negate lit :: decisions)
 
 (* The high side, [x >= k + 1] -- the decision literal is [lit]. Symmetrically,
    [k + 1 <= hi] and [hi] is in the domain, so this push cannot empty it either. *)
-and explore_ge store engine ctx trace order decisions v k lit =
+and explore_ge store engine ctx trace stats order decisions v k lit =
   let lvl = Store.level store in
   let outcome =
     Store.set_lo store v (k + 1) (Reason.because Reason.none (Explanation.decision lit))
@@ -660,7 +726,7 @@ and explore_ge store engine ctx trace order decisions v k lit =
       NFail (lits, cid)
   | Store.Changed | Store.Unchanged ->
       check_decision_landed store lvl outcome;
-      dfs engine store ctx trace order (lit :: decisions)
+      dfs engine store ctx trace stats order (lit :: decisions)
 
 (* ------------------------------------------------------------------------------ API *)
 
@@ -692,7 +758,7 @@ and explore_ge store engine ctx trace order decisions v k lit =
    (invariant I-X2 -- see docs/PROOF-FORMAT.md section 5, "discharged by the
    conclusion"). *)
 let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
-    ~(check : assignment -> bool) ?trace ?(order = spec_order) () : outcome =
+    ~(check : assignment -> bool) ?trace ?stats ?(order = spec_order) () : outcome =
   let entry_level = Store.level store in
   (* [?trace] exists so a caller can read back *which* rules in the emitted proof were
      D-0018 trace lines (test/unit/test_trace.ml checks each of them standalone against
@@ -700,9 +766,23 @@ let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
      It is state this function would otherwise own privately; passing one in changes
      nothing about what is emitted. *)
   let trace = match trace with Some t -> t | None -> Trace.create () in
-  let result = dfs engine store ctx trace order [] in
+  (* M1-T36. [?stats] is read back the same way [?trace] is: state this function would
+     otherwise own privately, passed in so a caller can see it. Passing one changes no
+     byte of what is emitted -- the counters are read by nothing inside the search. The
+     root is counted HERE and nowhere else: [branch] counts the children it dispatches,
+     so the one node no [branch] dispatches is this one. *)
+  let stats = match stats with Some s -> s | None -> stats_create () in
+  stats.nodes <- stats.nodes + 1;
+  let result = dfs engine store ctx trace stats order [] in
   Debug.check "I-S3: decision level on return equals level on entry" (fun () ->
       Store.level store = entry_level);
+  (* M1-T36's identity, stated above [type stats]. [Unsat] means the tree was
+     exhausted, so the equality must hold exactly; [Sat] means it was not, so only the
+     bound does. *)
+  Debug.check "M1-T36: nodes = 2 * decisions + 1 on an exhausted tree, <= it otherwise"
+    (fun () ->
+      stats_consistent stats
+        ~exhausted:(match result with NFail _ -> true | NSat _ -> false));
   (* I-X2: the trace lines for prunings made at level 0 are the one class of rule this
      search emits that no [w] retires -- they are deliberately outside every branch's
      level, because a level-0 pruning outlives every branch and the checker needs it on

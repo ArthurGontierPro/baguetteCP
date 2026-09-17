@@ -66,6 +66,7 @@ type options = {
   proof_comments : bool;
   all_solutions : bool;
   time : bool;
+  stats : bool;
 }
 
 (* Exit codes. 0 covers both SAT and UNSAT: an UNSAT model is a successful run that
@@ -78,7 +79,8 @@ let exit_internal = 4
 
 let usage () =
   prerr_endline
-    "usage: baguette MODEL.fzn [--proof PREFIX] [--proof-comments] [--all] [--time]";
+    "usage: baguette MODEL.fzn [--proof PREFIX] [--proof-comments] [--all] [--time] \
+     [--stats]";
   prerr_endline "";
   prerr_endline "  --proof PREFIX    write PREFIX.opb and PREFIX.pbp (SPEC 4.1); verify";
   prerr_endline "                    them with: veripb PREFIX.opb PREFIX.pbp";
@@ -94,6 +96,14 @@ let usage () =
   prerr_endline "                    with and without it (SPEC 2.2). Read what each phase";
   prerr_endline "                    does and does not contain before quoting a number:";
   prerr_endline "                    the report says so on every line.";
+  prerr_endline "  --stats           search-tree counters, ON STDERR, one `stats: ` line";
+  prerr_endline "                    each (M1-T36): nodes visited, decisions taken, tree";
+  prerr_endline "                    depth. Counted by the search, NOT read back out of";
+  prerr_endline "                    the proof -- so it is available without --proof and";
+  prerr_endline "                    it does not move when the proof's shape does. It is";
+  prerr_endline "                    three int increments per node and no clock reads, so";
+  prerr_endline "                    unlike --time it is safe to leave on while timing.";
+  prerr_endline "                    stdout is byte-identical with and without it.";
   prerr_endline "";
   prerr_endline "  BAGUETTE_PROOF_AUDIT=0 disables the constraint-id audit (I-X2), which";
   prerr_endline "  is on by default here even though the library's own default is off.";
@@ -105,6 +115,7 @@ let parse_args argv =
   let proof_comments = ref false in
   let all_solutions = ref false in
   let time = ref false in
+  let stats = ref false in
   let rec go i =
     if i >= Array.length argv then ()
     else
@@ -121,6 +132,9 @@ let parse_args argv =
           go (i + 1)
       | "--time" ->
           time := true;
+          go (i + 1)
+      | "--stats" ->
+          stats := true;
           go (i + 1)
       | "-h" | "--help" -> usage ()
       | arg when String.length arg > 0 && arg.[0] = '-' ->
@@ -141,6 +155,7 @@ let parse_args argv =
         proof_comments = !proof_comments;
         all_solutions = !all_solutions;
         time = !time;
+        stats = !stats;
       }
 
 (* --------------------------------------------------------- timing (M1-T35) *)
@@ -412,6 +427,53 @@ let audit_enabled () =
      running the solver should get the check without having known to ask for it. *)
   match Sys.getenv_opt "BAGUETTE_PROOF_AUDIT" with Some "0" -> false | _ -> true
 
+(* --------------------------------------------------- search-tree counters (M1-T36) *)
+
+(* [Search.stats] rendered on stderr, one `stats: ` line each, under --stats.
+
+   WHY THIS IS NOT FOLDED INTO --time. The two instruments cost different things and
+   must be separable for that reason. --time takes a [Sys.time] per phase and one per
+   emitted proof line, and bench/run_bench.sh therefore runs it on its own dedicated
+   repeats so that none of it lands in a number printed as "solve ms" (M1-T47). This
+   costs three int increments per node and no clock reads, so it can be left on during
+   a timed run -- which is the whole point: the tree size and the time have to be
+   readable off the SAME run before "the same tree costs no more" (D-0026) means
+   anything.
+
+   STDERR ONLY, like the timings, because SPEC 2.2 pins stdout byte for byte.
+
+   The unit word is the third field and it is `nodes`/`decs`/`levels`, never `us`, so
+   that anything reading the timing report's `$4 == "us"` cannot pick these up as
+   durations -- the same discipline `emitln` follows with its `lines` unit. *)
+let report_stats (st : Search.stats) (outcome : Search.outcome) =
+  let exhausted = match outcome with Search.Unsat -> true | Search.Sat _ -> false in
+  prerr_endline
+    "stats: baguette search-tree counters (M1-T36). Counted by Search itself, not read";
+  prerr_endline
+    "stats: back out of the proof: available without --proof, and unmoved by a change";
+  prerr_endline "stats: to the proof's shape. stderr only, never stdout.";
+  Printf.eprintf "stats: %-10s %10d nodes  %s\n" "nodes" st.Search.nodes
+    "search-tree nodes visited: the root, plus every child Search.branch dispatched";
+  Printf.eprintf "stats: %-10s %10d decs   %s\n" "decisions" st.Search.decisions
+    "decisions taken: one per internal node (Search.branch calls)";
+  Printf.eprintf "stats: %-10s %10d levels %s\n" "maxdepth" st.Search.max_depth
+    "deepest decision stack reached: the depth of the TREE, not of the proof";
+  Printf.eprintf "stats: %-10s %10d %-6s %s\n" "exhausted"
+    (if exhausted then 1 else 0)
+    "bool" "1 if the search closed its whole tree (UNSAT), 0 if it stopped at a solution";
+  (* The identity these counters have to satisfy, stated above [Search.stats] and
+     checked here on every --stats run rather than only under BAGUETTE_DEBUG. Binary
+     branching with every push landing means an exhausted tree visits both sides of
+     every decision. If this line ever prints, one of the counters is counting the
+     wrong event and no number above may be quoted. *)
+  if not (Search.stats_consistent st ~exhausted) then
+    Printf.eprintf
+      "stats: INCONSISTENT -- nodes=%d is not %s 2 * decisions + 1 = %d. The counters \
+       are wrong; do not quote them (M1-T36).\n"
+      st.Search.nodes
+      (if exhausted then "=" else "<=")
+      ((2 * st.Search.decisions) + 1)
+
 let solve opts (m : Model.t) =
   let compiled = Timing.phase "compile" (fun () -> Compile.compile m) in
   let store = compiled.Compile.store in
@@ -445,6 +507,11 @@ let solve opts (m : Model.t) =
   let check assignment =
     Model.check_assignment m (assignment_values m store assignment)
   in
+  (* M1-T36. Always allocated and always threaded: the counters cost three increments
+     per node whether or not anyone asks to see them, and a counter that is only wired
+     up under a flag is a counter no test exercises. --stats decides whether it is
+     PRINTED, not whether it is kept. *)
+  let stats = Search.stats_create () in
   let outcome =
     Fun.protect
       ~finally:(fun () ->
@@ -458,7 +525,9 @@ let solve opts (m : Model.t) =
                what belongs to [search] is the DIFFERENCE across this call and not the
                total. Sampled inside the phase so that the two brackets nest. *)
             let e0 = Writer.emitted_us () and l0 = Writer.emitted_lines () in
-            let r = Search.solve ~engine:compiled.Compile.engine ~store ~ctx ~check () in
+            let r =
+              Search.solve ~engine:compiled.Compile.engine ~store ~ctx ~check ~stats ()
+            in
             Timing.emit_us := Writer.emitted_us () - e0;
             Timing.emit_lines := Writer.emitted_lines () - l0;
             Timing.have_emit := true;
@@ -473,7 +542,8 @@ let solve opts (m : Model.t) =
       | Search.Sat assignment ->
           print_string (Output.solution m (assignment_values m store assignment))
       | Search.Unsat -> print_string Output.unsatisfiable);
-      flush stdout)
+      flush stdout);
+  if opts.stats then report_stats stats outcome
 
 (* --------------------------------------------------------------------- main *)
 
