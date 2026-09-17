@@ -51,6 +51,11 @@ module Justify = Baguette_core.Justify
 module Encoding = Baguette_proof.Encoding
 module Writer = Baguette_proof.Writer
 
+(* M1-T53: bound this binary's OCaml heap so a runaway test aborts itself,
+   naming the cap, rather than relying on an outer `ulimit -v` a bare
+   `dune runtest --root .` does not apply. See mem_guard.ml. *)
+let () = Mem_guard.install ()
+
 let failures = ref 0
 
 let check name cond =

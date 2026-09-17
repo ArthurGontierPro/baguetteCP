@@ -20,6 +20,11 @@ module F = Baguette_flatzinc
 module M = F.Model
 module O = F.Output
 
+(* M1-T53: bound this binary's OCaml heap so a runaway test aborts itself,
+   naming the cap, rather than relying on an outer `ulimit -v` a bare
+   `dune runtest --root .` does not apply. See mem_guard.ml. *)
+let () = Mem_guard.install ()
+
 let failures = ref 0
 
 let check name cond =
@@ -307,6 +312,20 @@ let test_wrong_length () =
   check_raises_invalid "check_assignment: empty array for a two-variable model" (fun () ->
       M.check_assignment m [||])
 
+(* --------------------------------------------------------------------- mem_guard *)
+
+(* M1-T53: the guard must stay silent under an allocation nowhere near its cap, or
+   adopting it would cost every suite a false failure. 4 MB against a 512 MB cap is a
+   three-order-of-magnitude margin; [Gc.full_major] forces the alarm to actually run
+   rather than trusting it would have. Reaching this line at all is the assertion --
+   the alarm's own abort path (exercised by hand via MEM_GUARD_DEMO, see mem_guard.ml)
+   calls [exit], so a false trip here would end the process, not fail a [check]. *)
+let test_mem_guard_silent () =
+  Mem_guard.install ~limit_mb:512 ();
+  let x = Bytes.create (4 * 1024 * 1024) in
+  Gc.full_major ();
+  check "mem_guard: alarm installs and stays silent well under its cap" (Bytes.length x = 4 * 1024 * 1024)
+
 (* ------------------------------------- 4b. I-S1's oracle is arithmetically independent
 
    M1-T33, from D-0029's consequence list. [Model.check_assignment] used to evaluate
@@ -484,6 +503,7 @@ let () =
   test_each_kind ();
   test_domains ();
   test_wrong_length ();
+  test_mem_guard_silent ();
   test_oracle_arithmetic ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;

@@ -1,5 +1,10 @@
 ; One executable per area so that sessions working in parallel never contend on the
 ; same test file. Add a name here when you add a test module.
+;
+; mem_guard.ml (M1-T53) is deliberately NOT in the names list below: it is a shared
+; helper module (Mem_guard.install, a Gc-alarm heap guard), not its own test binary.
+; dune links it automatically into whichever names use it -- currently test_output
+; and test_compile -- with no entry needed here.
 
 (tests
  (names
