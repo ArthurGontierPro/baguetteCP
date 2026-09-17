@@ -146,9 +146,13 @@ because they corrupt ids rather than producing an error you would notice:
 this project a syntax error. Every row was run against 3.0.2; where a row says
 something is refused, the checker's own words are quoted.
 
-`BAGUETTE_PROOF_FORMAT=3.0` switches emission. The default is still 2.0 — see D-0023,
-"what is NOT done", for the eight test files that pin 2.0 text and the 80 checks that
-turn red when the default moves.
+`BAGUETTE_PROOF_FORMAT` switches emission, and **the default is 3.0** — D-0025 moved it,
+and `Writer.format_from_env` returns `V3_0` for an unset or empty variable. Set
+`BAGUETTE_PROOF_FORMAT=2.0` to get the older dialect, which is still emitted and still
+checked (by the Python VeriPB 2.2.2; see section 1). D-0023's "what is NOT done" describes
+the state *before* that move and its count of 2.0-pinning test files no longer holds: as of
+2026-09-17 only `test_proof.ml` (two `V2_0` sites) and `test_random.ml` name the format at
+all, and they name it explicitly rather than relying on a default.
 
 | Rule | 2.0 | 3.0 | Note |
 |---|---|---|---|
