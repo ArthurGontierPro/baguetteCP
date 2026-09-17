@@ -250,7 +250,8 @@ let objective t = t.objective
    --------------------------------------------------------------------------- *)
 
 (* ---------------------------------------------------------------------------
-   The width cap (M1-T54, taking D-0028 point 3)
+   The width cap (M1-T54, taking D-0028 point 3; decided in D-0041, which is also
+   where SPEC 3.1's normative paragraph comes from)
    ---------------------------------------------------------------------------
 
    The largest declared width [hi - lo] for which this module will build an order

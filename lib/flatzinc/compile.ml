@@ -126,7 +126,7 @@
    keeps [Checked.Overflow] off the search path entirely.
 
    ---------------------------------------------------------------------------
-   The width cap (roadmap M1-T54)
+   The width cap (roadmap M1-T54, decided in D-0041; SPEC 3.1 is normative)
    ---------------------------------------------------------------------------
 
    The separate decision D-0028 point 3 asked for, and the one the section above is
@@ -308,7 +308,8 @@ let reject_declared_bound (v : Model.var) lo hi =
      or shift the domain towards zero."
     v.Model.v_name lo hi Checked.limit
 
-(* roadmap M1-T54, from D-0028 point 3. The width rejection. The cap itself lives in
+(* M1-T54, from D-0028 point 3 and decided in D-0041. The width rejection. The cap
+   itself lives in
    [Encoding] -- next to the ladder it bounds, with its derivation -- and is named from
    here rather than copied: nothing in this tree has cost more than two statements of one
    envelope drifting apart (D-0029's [Arith] copy is a copy only because lib/proof cannot

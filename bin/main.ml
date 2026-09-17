@@ -537,6 +537,45 @@ let () =
              be right, but the proof is not one we are entitled to stand behind. *)
           Printf.eprintf "baguette: INTERNAL -- proof audit failed (I-X2): %s\n" msg;
           exit exit_internal
+      | exception Encoding.Width_too_large (x, lo, hi) ->
+          (* M1-T54 / D-0041. The sibling of the [Unrepresentable] arm below, and exit 4
+             for the same reason: lib/flatzinc/compile.ml refuses an over-wide declared
+             domain first, with a positioned diagnostic and exit 3 (which is the right
+             code, because an over-wide domain is a MODEL problem, not an invariant
+             failure). So reaching the encoding's own raise through this binary means
+             Compile's pass did not cover the path.
+
+             Measured before adding this, with Compile's pass disabled: the binary died
+             on "Fatal error: exception Baguette_proof.Encoding.Width_too_large(...)",
+             exit 2 -- the same code as a bad command line.
+
+             Two-reader wording, as I-X8 requires: reached through a different caller of
+             Encoding, this exception is the documented contract rather than a bug.
+
+             And unlike [Unrepresentable] there is NO "do not use the proof" warning,
+             because [declare_int] raises before the Hashtbl and before the ladder loop.
+             Nothing was allocated and nothing was written. *)
+          Printf.eprintf
+            "baguette: INTERNAL -- the encoding refused to declare `%s` over %d..%d, a \
+             width of %d, past Encoding.max_order_width = %d (D-0041, I-X8).\n"
+            x lo hi (hi - lo) Encoding.max_order_width;
+          prerr_endline
+            "  lib/flatzinc/compile.ml checks every declared width against that same \
+             constant and";
+          prerr_endline
+            "  rejects an over-wide model with a positioned diagnostic and exit 3, so no \
+             model this";
+          prerr_endline
+            "  CLI accepts should get here. Reaching it through baguette means that pass \
+             has a";
+          prerr_endline
+            "  hole. (Reached through a different caller of Encoding, this exception is \
+             the";
+          prerr_endline
+            "  documented contract, not a bug.) No proof was written: declare_int raises \
+             before";
+          prerr_endline "  it allocates the ladder.";
+          exit exit_internal
       | exception Encoding.Unrepresentable why ->
           (* M1-T58. [Encoding] is the *committing door* for the .opb: it raises this
              when a row's arithmetic does not fit a 63-bit int, so writing the row would

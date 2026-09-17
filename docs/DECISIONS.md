@@ -2319,3 +2319,86 @@ punch a hole whose clause is the M1 hole clause with `~b_ge_1` appended — stru
 move `_neN` already makes. I-X10 is phrased to permit a reification literal among the facts.
 Untestable today because M3-T1's `red` definitions do not exist; re-check when they do.
 M4-T3 and M4-T4b are likewise inferred from M4-T1's and M4-T2's measured shapes.
+
+## D-0041  A declared width limit, because a proof nobody can store is not an answer
+
+**Status**: accepted, 2026-09-17. **Delivers** M1-T54. **Adds a normative paragraph to
+SPEC §3.1**, which is why this record exists, and a cross-reference in §2.1. **Supersedes**
+the "no such limit exists today, and that is deliberate" of D-0028 part 3 and D-0031 —
+that stance reserved this decision pending evidence, and the evidence arrived.
+
+*(Numbered 41 rather than 40: the agent that proposed it and I were both writing a record
+on 2026-09-17 and both reached for 40. D-0040 is the `all_different` decision.)*
+
+### The evidence that had been asked for
+
+D-0028 part 3 declined to cap width and said what would change its mind. On 2026-09-16
+three memory-ceiling incidents happened in one day, all the same shape: a `test_prop.exe`
+run reached **14.9 GB RSS** with zero free and the box swapping and had to be killed by
+hand, and two further test binaries were killed at the ceiling afterwards. Each disrupted
+the user, not only the session responsible.
+
+Three defences were then built, and all three are the wrong kind. `ulimit -v`, `Mem_guard`
+(M1-T53) and `scripts/check_test_widths.sh` either **kill or fail after the allocation is
+under way**, or see only the syntactic form of a width in a test file. A refusal at the
+declaration is different in kind: nothing is allocated, and the diagnostic can name the
+variable and the line.
+
+### The decision, in four parts
+
+1. **The limit is `hi - lo <= 10_000`, per variable, owned by `Encoding.declare_int`.**
+   Bracketed by D-0028's own table rather than picked: 10 000 is the last width whose
+   artefacts fit in a review (1.36 MB `.opb`, 258 kB `.pbp`, 130 ms verify), and it is an
+   order of magnitude below w=99 999, the first row with a multi-second solve and an
+   eight-figure `.opb`. It leaves **10×** above `test/models/width_root_unsat.fzn`'s
+   deliberate w=999, which is measured, load-bearing, and must keep passing.
+
+2. **Two layers, one constant.** `Encoding.declare_int` raises `Width_too_large` before the
+   Hashtbl and before the ladder loop, so a refused declaration allocates nothing and
+   leaves no trace. `lib/flatzinc/compile.ml` names that same constant and carries the
+   positioned diagnostic and **exit 3**. The constant is **not copied**: `flatzinc` may
+   name `proof`, so unlike D-0029's `Arith` there is no excuse for a second statement of
+   the envelope. The check is overflow-safe by construction — `min_int..max_int` has width
+   2^64−1 and a naive `hi - lo` computes −1 and would *accept* it, so the test never
+   subtracts until it has established it may.
+
+3. **No escape hatch, and this is the part most likely to be revisited.** `MEM_CAP_KB` is
+   a knob on a test harness's resource limit; this is a **normative acceptance limit**. A
+   knob would make the accepted language environment-dependent, so two runs of the same
+   binary on the same `.fzn` could disagree about whether it is a legal model — the one
+   thing a normative statement must not allow. Three more reasons: exceeding it has no
+   partial mode, since D-0028 measured the outcome as a 30 MB proof line that *verifies*,
+   so raising the cap hands out the incident; any knob is a guard that can be found
+   disabled, and M1-T45's `if true || ...` is this tree's own example; and the legitimate
+   need ("my model really is `0..86400`") is not served by a bigger ladder but by a
+   different encoding, which M4's intervals are. A knob would let that work be deferred
+   indefinitely while users hit the ceiling. **What would change my mind**: a real model
+   that needs w > 10 000, is not served by rescaling, and whose proof someone actually
+   checks.
+
+4. **It is not `Checked.limit` and does not merge with it**, per D-0029 point 3. Different
+   justification (that one refuses models whose arithmetic cannot be *computed* and is a
+   soundness requirement; this one refuses models whose proof cannot be *stored*),
+   different value (~15 orders apart), and different exit code. Reusing `Unrepresentable`
+   was considered and rejected: its arm exits **4** and tells the reader that baguette's
+   own invariant failed, which is actively misleading for a legal FlatZinc model. An
+   over-wide domain is a model problem and gets exit 3. A test asserts the width message
+   does **not** contain "arithmetic limit", so the overflow cap cannot be what fires.
+
+### Consequences, including one filed rather than decided
+
+- **The cap is per variable, so a model's total ladder is still unbounded**: 1 000
+  variables at w=9 999 each still blows up. Filed as a roadmap row, not decided here,
+  because an aggregate budget has to name a variable to blame for a total that no single
+  variable caused, and that is a separate design question.
+- `Direct_too_large` / `max_direct_values = 100_000` becomes unreachable under this cap.
+  Kept, exactly as D-0029 kept `Encoding`'s arithmetic guard: the door checks its own
+  precondition regardless of who is standing in front of it (I-X8).
+- `bin/main.ml` gains a `Width_too_large` arm at **exit 4** — the sibling of
+  `Unrepresentable`'s, by the same argument, and with no "do not use the proof" warning
+  because nothing was written. Verified by injecting the raise, not by reading the code.
+- The declared-width lint needed teaching: it matches `~lo:`/`~hi:` labels and cannot tell
+  a *predicate* on a width from a *declaration* of one. And ocamlformat and the lint
+  disagree about one line — a one-liner with a trailing `(* width-ok: *)` marker passes
+  fmt and silently stops being marked, so the function keeps a two-statement body on
+  purpose. Both are commented in place.

@@ -108,6 +108,10 @@ support. See **D-0033**.
 `int_abs(x, z)` is total and needs no such rule, but note that `|min_int|` is not
 representable; it falls under the arithmetic limit above.
 
+A second, unrelated limit applies to declared **width** rather than magnitude. It is a
+different decision with a different justification and a different exit code; see §3.1 and
+**D-0041**.
+
 ### 2.2 Output format
 
 Solutions are printed on stdout in the standard FlatZinc output format: the variables in
@@ -147,19 +151,29 @@ An integer variable's domain is a finite set of integers. The representation MUS
 lower/upper bound access in O(1) and membership in O(1); hole removal MAY be O(size).
 See `docs/ARCHITECTURE.md` §2 for the chosen representation.
 
-**Declared width is a cost the proof pays, and this specification does not cap it.** A
+**Declared width is a cost the proof pays, and since D-0041 this specification caps it.** A
 variable's *declared* domain is what the proof artefacts are sized against, not its current
 one: §4.2's encoding gives it one Boolean and one consistency clause per interior value,
 and every row it appears in expands to one literal per interior value. Both artefacts are
 therefore Θ(declared width) per variable before the search has done anything at all — and
 this holds even for a model that is refuted on its declared bounds having pruned nothing.
 
-The solver MUST NOT silently answer a model whose declared width it cannot encode. If a
-width limit is ever imposed it is a refusal with a positioned diagnostic, in the same place
-and the same shape as §2.1's arithmetic limit, and it needs its own decision record,
-because it refuses models the FlatZinc standard allows. **No such limit exists today**, and
-that is deliberate (D-0028 part 3, D-0031). What exists is §2.1's arithmetic limit, which
-is about overflow and bounds the width only incidentally, at 5.7 × 10^17.
+**A declared width limit** *(normative — D-0041, which supersedes the "no such limit
+exists" of D-0028 part 3 and D-0031)*. The solver MUST NOT silently answer a model whose
+declared width it cannot encode. Every declared domain MUST be checked against an
+implementation limit on `hi - lo`, and a model exceeding it MUST be rejected with a
+positioned diagnostic naming the variable and the limit, exiting non-zero. It MUST NOT be
+accepted and answered, and **the limit MUST NOT be adjustable at run time** — a knob would
+make the accepted language environment-dependent, so two runs of the same binary on the
+same `.fzn` could disagree about whether it is a legal model, which is the one thing a
+normative statement must not allow.
+
+This refuses models the FlatZinc standard allows, and that is deliberate: the model is
+legal and the answer would be correct; what is unacceptable is the artefact. The limit is
+separate from §2.1's arithmetic limit **in justification, in value, and in the exit code it
+reports**. That one refuses models whose arithmetic cannot be *computed* and is a soundness
+requirement; this one refuses models whose proof cannot be *stored*. §2.1's limit bounds
+width only incidentally, at 5.7 × 10^17.
 
 ### 3.2 Propagation
 
