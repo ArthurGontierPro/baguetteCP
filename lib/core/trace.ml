@@ -125,13 +125,97 @@ type t = {
      a decision-free consequence of the model and needs nothing else in the database.
      See test/unit/test_trace.ml. *)
   mutable ids_rev : Writer.cid list;
+  (* Which lines this module wrote for each trail position, and for a hole line, which
+     hole it claims. Parallel to [done_] and keyed the same way. It exists so that when a
+     settle line cites a hole, this module can name the *id* of the hole's own line and
+     not merely the facts on it -- which is what makes I-S4 checkable. See [citations]. *)
+  mutable line_ids : written list array;
+  (* The I-S4 record, newest first. See [citation] and [i_s4_violations]. *)
+  mutable cites_rev : citation list;
+}
+
+(* One "line A rests on line B" edge, with the two facts I-S4 is about, **measured at the
+   moment of the citation** rather than recomputed afterwards.
+
+   I-S4: "a trace line that cites a hole is supported only while that hole's own line is
+   live, so the cited line must outlive the citing line." That is two obligations, and
+   they fail in different ways, so they are recorded separately:
+
+     [cited_live]   the cited line is on the page *now*. A settle line whose hole line
+                    has already been retired is a [rup] against a database that no longer
+                    contains what makes it true (D-0039: RUP in sequence, not standalone).
+     [cited_level]  the cited line's level is at or below the citing line's, so the [w]
+                    that retires the cited one retires the citing one first or with it.
+                    This is the *outlives* half, and it is the half that D-0039 point 1
+                    and I-S4 both say is argued rather than measured -- and the half
+                    M2-T3's learned clauses, citing across levels, will be the first
+                    thing to break.
+
+   [cited_live] is read from [Writer.is_live], which is maintained only under the audit
+   (which the CLI turns on by default). [live_known] records whether it was, so a run with
+   the audit off reports "not measured" rather than a false violation. The level half is
+   always measured: [Writer] keeps no per-id level table this module may read, but the
+   levels are exactly the ones this module chose for the two lines itself. *)
+(* One line this module wrote, against the trail position it wrote it for. [w_hole] is
+   the hole value for a hole line and [None] for a bound line; [w_level] is the level the
+   line was filed at, which is the entry's level and not the writer's ambient one. *)
+and written = { w_hole : int option; w_cid : Writer.cid; w_level : int }
+
+and citation = {
+  citing : Writer.cid;
+  cited : Writer.cid;
+  citing_level : int;
+  cited_level : int;
+  cited_live : bool;
+  live_known : bool;
+  hole : int; (* the hole value whose line is cited -- for the failure message *)
 }
 
 let create () =
-  { done_ = Array.make 64 Store.dummy_entry; n_done = 0; permanent = []; ids_rev = [] }
+  {
+    done_ = Array.make 64 Store.dummy_entry;
+    n_done = 0;
+    permanent = [];
+    ids_rev = [];
+    line_ids = Array.make 64 [];
+    cites_rev = [];
+  }
 
 let permanent_ids t = List.rev t.permanent
 let emitted_ids t = List.rev t.ids_rev
+
+(* The I-S4 edges, oldest first. *)
+let citations t = List.rev t.cites_rev
+
+(* I-S4 on one edge: [None] if it holds, [Some message] naming which half broke.
+
+   A pure function of the recorded edge, and public, because the two halves are not
+   equally reachable and a gate that could only ask about a whole run could not say so.
+   The *liveness* half is reachable today -- retire a hole line and then let a settle
+   cite it, which is what test/unit/test_trace.ml's break lane does. The *level* half is
+   not: [emit] files a line at the level of the trail entry that produced it, and a
+   settle can only walk over holes that already exist, which are at levels at or below
+   its own. That is exactly I-S4's argument, and exactly what M2-T3 invalidates when a
+   learned clause starts citing across levels -- so the level branch is checked against
+   the edge M2-T3 will create rather than left untested until it arrives. *)
+let i_s4_verdict c =
+  if c.live_known && not c.cited_live then
+    Some
+      (Printf.sprintf
+         "I-S4: line @c%d (level %d) cites @c%d for the hole <> %d, and @c%d is already \
+          retired"
+         c.citing c.citing_level c.cited c.hole c.cited)
+  else if c.cited_level > c.citing_level then
+    Some
+      (Printf.sprintf
+         "I-S4: line @c%d (level %d) cites @c%d (level %d) for the hole <> %d, so `w %d` \
+          retires the cited line while the citing line survives"
+         c.citing c.citing_level c.cited c.cited_level c.hole c.cited_level)
+  else None
+
+(* I-S4 over a whole run: one message per edge that broke it, empty when every cited line
+   was live and no deeper than its citer. *)
+let i_s4_violations t = List.filter_map i_s4_verdict (citations t)
 
 let record t ~level cid =
   t.ids_rev <- cid :: t.ids_rev;
@@ -139,10 +223,18 @@ let record t ~level cid =
 
 let remember t i (e : Store.entry) =
   if i >= Array.length t.done_ then (
-    let bigger = Array.make (Stdlib.max 64 (2 * (i + 1))) Store.dummy_entry in
+    let n = Stdlib.max 64 (2 * (i + 1)) in
+    let bigger = Array.make n Store.dummy_entry in
     Array.blit t.done_ 0 bigger 0 (Array.length t.done_);
-    t.done_ <- bigger);
+    t.done_ <- bigger;
+    let bigger_ids = Array.make n [] in
+    Array.blit t.line_ids 0 bigger_ids 0 (Array.length t.line_ids);
+    t.line_ids <- bigger_ids);
   t.done_.(i) <- e;
+  (* [emit] calls this once per position it is about to write lines for, and only for
+     positions at or past [n_done], so any ids recorded here before are from a branch a
+     backtrack has since retired. Clear them rather than let a settle cite one. *)
+  t.line_ids.(i) <- [];
   t.n_done <- Stdlib.max t.n_done (i + 1)
 
 (* Drop back to the longest prefix of the trail this module has actually written lines
@@ -235,8 +327,13 @@ let hole_clause encoding name v =
    for byte identical line it wrote before. Extra facts only *weaken* the clause, so
    they can cost precision and never soundness; the alternative is the propagator's
    asked-for bound on the trail entry, which is not additive to [Store.entry] and is a
-   decision record, not an edit. *)
-type line = { claim : Lit.t list; settled_over : int list }
+   decision record, not an edit.
+
+   [hole] is the value a hole line claims to be removed, and [None] for a bound line. It
+   is not part of what gets written -- the claim clause already says it -- it is what lets
+   [emit] record *which* of an entry's lines a later settle cites, so that I-S4's edges
+   are per-hole rather than per-trail-entry. *)
+type line = { claim : Lit.t list; settled_over : int list; hole : int option }
 
 (* The holes of [old] in the contiguous run immediately below [bound], ascending. Every
    member of [old] below [bound] is below this run, so the bound the propagator asked
@@ -265,7 +362,7 @@ let lines encoding (e : Store.entry) name =
   | Domain.Bound { lo; hi } ->
       let bound_line ~what ~cond ~settled_over =
         Option.map
-          (fun l -> { claim = [ l ]; settled_over })
+          (fun l -> { claim = [ l ]; settled_over; hole = None })
           (claim_of_cond ~what ~name cond)
       in
       let lo_line =
@@ -283,7 +380,7 @@ let lines encoding (e : Store.entry) name =
       List.filter_map
         (fun v ->
           Option.map
-            (fun claim -> { claim; settled_over = [] })
+            (fun claim -> { claim; settled_over = []; hole = Some v })
             (hole_clause encoding name v))
         vs
 
@@ -317,13 +414,53 @@ let emit_line (ctx : Justify.ctx) ~origin ~claim ~facts =
    already read is not stated twice. *)
 let add_fact acc l = if List.exists (Lit.equal l) acc then acc else acc @ [ l ]
 
-let settle_facts store ~before ~var holes base =
+(* The trail position this module last wrote lines for [e] at, by physical identity --
+   the same key [resync] uses, and for the same reason. [n_done] has already been bumped
+   past the entry [emit] is working on, so every position a settle can reach has been
+   (re)remembered in this pass or an earlier one and the array agrees with the trail. *)
+let position_of t (e : Store.entry) =
+  let rec go i =
+    if i >= t.n_done then None else if t.done_.(i) == e then Some i else go (i + 1)
+  in
+  go 0
+
+(* The id of the line this module wrote for [v]'s removal, if it wrote one. [None] covers
+   the two honest cases: a remover whose change was a *bound* move that happened to
+   exclude [v] (it has a line, but that line claims a bound, not `<> v`, so it is not the
+   hole's own line), and a hole the encoding stated as constant-true so no line exists. *)
+let hole_line_of t (e : Store.entry) v =
+  match position_of t e with
+  | None -> None
+  | Some i -> List.find_opt (fun w -> w.w_hole = Some v) t.line_ids.(i)
+
+(* The facts the settled-over holes contribute, and -- for I-S4 -- the ids of the lines
+   those holes were stated by. The two are gathered together because they come from the
+   same [Store.remover] lookup, and because a fact taken from a hole whose line this
+   module cannot name is precisely the case I-S4 has nothing to say about. *)
+let settle_facts t store ~before ~var holes base =
   List.fold_left
-    (fun acc v ->
+    (fun (acc, cited) v ->
       match Store.remover store ~before ~var v with
-      | None -> acc
-      | Some e -> List.fold_left add_fact acc (Reason.lits e.Store.reason))
-    base holes
+      | None -> (acc, cited)
+      | Some e ->
+          let acc = List.fold_left add_fact acc (Reason.lits e.Store.reason) in
+          let cited =
+            match hole_line_of t e v with None -> cited | Some w -> cited @ [ (v, w) ]
+          in
+          (acc, cited))
+    (base, []) holes
+
+(* Record one I-S4 edge and, under BAGUETTE_DEBUG, fail at the citation rather than at
+   the checker. [Debug.check] is the live gate; [i_s4_violations] is the same verdict as
+   data, for a test that wants to perform the break and then ask. *)
+let record_citation t (w : Writer.t) ~citing ~citing_level ~cited ~cited_level ~hole =
+  let live_known = Writer.auditing w in
+  let cited_live = live_known && Writer.is_live w cited in
+  let c = { citing; cited; citing_level; cited_level; cited_live; live_known; hole } in
+  t.cites_rev <- c :: t.cites_rev;
+  Debug.check
+    (match i_s4_verdict c with Some m -> m | None -> "I-S4")
+    (fun () -> i_s4_verdict c = None)
 
 (* Write every line the trail owes, oldest first, and leave the writer on the level it
    was on. [Search] emits the nogood straight after, at the branch's own level, so this
@@ -356,9 +493,9 @@ let emit (ctx : Justify.ctx) t store =
           let facts = Reason.lits e.Store.reason in
           let level = Store.level_of_index store i in
           List.iter
-            (fun { claim; settled_over } ->
-              let facts =
-                settle_facts store ~before:i ~var:e.Store.var settled_over facts
+            (fun { claim; settled_over; hole } ->
+              let facts, cited =
+                settle_facts t store ~before:i ~var:e.Store.var settled_over facts
               in
               if !at <> level then (
                 Writer.set_level ctx.Justify.writer level;
@@ -373,7 +510,18 @@ let emit (ctx : Justify.ctx) t store =
                       Printf.sprintf ", settled over %s"
                         (String.concat "," (List.map string_of_int vs)))
               in
-              record t ~level (emit_line ctx ~origin ~claim ~facts))
+              let cid = emit_line ctx ~origin ~claim ~facts in
+              record t ~level cid;
+              t.line_ids.(i) <-
+                { w_hole = hole; w_cid = cid; w_level = level } :: t.line_ids.(i);
+              (* I-S4's edges, one per hole line this line rests on. Recorded after the
+                 line is on the page so [citing] is a real id, and before the next
+                 iteration so the order matches the proof. *)
+              List.iter
+                (fun (v, w) ->
+                  record_citation t ctx.Justify.writer ~citing:cid ~citing_level:level
+                    ~cited:w.w_cid ~cited_level:w.w_level ~hole:v)
+                cited)
             cs
   done;
   if !at <> saved then Writer.set_level ctx.Justify.writer saved

@@ -716,6 +716,26 @@ let run_fzn c =
         tag);
   check (tag ^ ": a branch failed, so a trace was written") (List.length trace_ids > 0);
 
+  (* ---- I-S4, on a real run. Both models settle over a hole, so both must record at
+     least one citation: a settle line resting on the hole line M1-T56 wrote. A zero here
+     would make the verdict below vacuous, which is the one way this gate could pass
+     forever while I-S4 was false, so it is asserted first and separately. *)
+  let cites = Trace.citations trace in
+  check
+    (Printf.sprintf "%s: I-S4 -- a settle line cites a hole line (%d edge(s))" tag
+       (List.length cites))
+    (cites <> []);
+  check
+    (tag ^ ": I-S4 -- every edge names two lines this module wrote")
+    (List.for_all
+       (fun (c : Trace.citation) -> is_trace c.Trace.citing && is_trace c.Trace.cited)
+       cites);
+  let viol = Trace.i_s4_violations trace in
+  check
+    (tag ^ ": I-S4 -- every cited hole line is live and no deeper than its citer")
+    (viol = []);
+  List.iter (fun m -> Printf.printf "     %s\n" m) viol;
+
   (* ---- M1-T56 and M1-T57, as bytes. The hole's line did not exist before M1-T56;
      the settle's line existed without its last literal and was false. *)
   check
@@ -1092,6 +1112,279 @@ let test_ix10_content () =
   (try Sys.remove opb with Sys_error _ -> ());
   try Sys.rmdir dir with Sys_error _ -> ()
 
+(* ================================================================== I-S4's gate =====
+
+   I-S4 says a trace line that cites a hole is supported only while that hole's own line
+   is live, so **the cited line must outlive the citing line**. D-0039 point 1 records
+   that this holds "by the level discipline, but that is an argument, not a check", and
+   that the argument does not cover M2-T3's learned clauses. This section is the check.
+
+   [Trace] now records one edge per hole line a settle line rests on, with the two facts
+   I-S4 is about measured at the moment of the citation. [run_fzn] above asserts the
+   verdict on two real runs and asserts that the edge count is not zero. What it cannot
+   do is show that the verdict can come back non-empty: every model in the tree satisfies
+   I-S4, so a check that only ever ran on them would pass identically if it were wired to
+   [fun _ -> []]. This project's signature failure is a check that cannot see its own
+   subject fail, and it has never been found by reading. So the break is performed.
+
+   The scene is the smallest one with the shape I-S4 is about, and it is hand-driven
+   rather than searched precisely so that the two [Trace.emit] calls can be pulled apart
+   and a deletion slipped between them -- which is what M2-T3 will do by accident:
+
+     x in 0..5, with 2 and 3 removed (two adjacent holes, the shape D-0039 measured as
+     out of the checker's own unit-propagation reach), and then lo(x) pushed to 2, which
+     [Domain.settle] walks past both holes to 4.
+
+   Two lanes on that one scene:
+
+     CONTROL  emit the hole lines, then the settle line. Two edges, no violation. This is
+              not decoration: a "must report a violation" assertion is the single most
+              likely thing here to pass for the wrong reason -- a mis-built scene, a
+              settle that never happened, an entry the trail never got -- and every one
+              of those reports a violation too. The control is the same scene with the
+              break left out, and it must come back clean.
+     BREAK    delete the hole-at-2 line *before* the settle line is written. The settle
+              then rests on a line the proof no longer contains, [i_s4_violations] must
+              name it, and veripb must refuse the result.
+
+   The *level* half of I-S4 has no reachable instance today -- [emit] files a line at the
+   level of the trail entry that produced it and a settle only ever walks over holes at
+   levels at or below its own, which is I-S4's argument restated -- so it is checked
+   against the edge M2-T3 will create, through [Trace.i_s4_verdict] on one constructed
+   edge. When a learned clause cites across levels, that branch is already under test. *)
+
+module Reason = Baguette_core.Reason
+module Explanation = Baguette_core.Explanation
+
+let is4_source =
+  {|
+var 0..5: x :: output_var;
+var 3..3: p :: output_var;
+var 2..2: q :: output_var;
+constraint int_ne(x, p);
+constraint int_ne(x, q);
+constraint int_lin_le([-1],[x],-2);
+solve satisfy;
+|}
+
+let var_by_name store name =
+  let rec go i =
+    if i >= Store.n_vars store then None
+    else
+      let v = Var.of_int i in
+      if String.equal (Store.name store v) name then Some v else go (i + 1)
+  in
+  go 0
+
+(* Nothing here is a propagator, so nothing here has a derivation: [Reason.none] with the
+   empty clause is the honest pair (reason.ml's [none] -- "this change rests on no facts
+   at all" -- written out and seen, which is the whole of what I-P4 buys). It is also the
+   pair [Store.apply]'s D-0026 agreement check passes trivially, so this scene behaves
+   the same under BAGUETTE_DEBUG=1, where the I-S4 check itself is live. What the lines
+   claim is still true of the model: x <> 3, x <> 2 and x >= 4 are all entailed by it. *)
+let factless = Reason.because Reason.none (Explanation.clause [])
+
+(* [retire] is how many of the two hole lines to delete between the two emits, newest
+   first: 0 is the control, 1 breaks I-S4 for one edge, 2 breaks it for both. Measured
+   separately because the *checker* needs both gone before it refuses -- one remaining
+   hole line is enough of a hint for it to unit-propagate the other from `int_ne`'s big-M
+   rows, which is the same "the checker re-derives the hole unaided" phenomenon that hid
+   M1-T57 for ~111k runs (I-X9, D-0039). With neither line the settle line is refused,
+   measured: `rup +1 x_ge_4 >= 1 ;` alone against this .opb is "not implied by reverse
+   unit propagation". So I-S4 is observable through the checker on this scene, and the
+   report says at which dose. *)
+let is4_scene ~retire =
+  let dir = Filename.temp_file "baguette_is4" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let opb = Filename.concat dir "model.opb" in
+  let pbp = Filename.concat dir "model.pbp" in
+  let m = F.Builder.of_string ~file:"is4" is4_source in
+  let comp = F.Compile.compile m in
+  let store = comp.F.Compile.store in
+  let encoding = comp.F.Compile.encoding in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "is4" ] encoding oc;
+  close_out oc;
+  let oc = open_out pbp in
+  (* audit:true because [Writer.is_live] is only maintained under it, and the liveness
+     half of I-S4 is what this scene is about. [Writer.conclusion] is deliberately never
+     called: the I-X2 audit fires there and this proof is not meant to conclude anything,
+     only to have each of its rules checked under `conclusion NONE`. *)
+  let writer = Writer.create ~audit:true oc in
+  Encoding.start_proof encoding writer;
+  let ctx = Justify.create ~writer ~encoding in
+  let trace = Trace.create () in
+  let x = Option.get (var_by_name store "x") in
+  let removed v = Store.remove store x v factless = Store.Changed in
+  let ok_holes = removed 3 && removed 2 in
+  (* The hole lines. *)
+  Trace.emit ctx trace store;
+  let hole_ids = Trace.emitted_ids trace in
+  (* Emission order is trail order: the line for the hole at 3 first, then the one for
+     the hole at 2. Retire from the newest, so [retire = 1] is the hole at 2. *)
+  List.iter
+    (fun id -> Writer.delete writer id)
+    (List.filteri (fun i _ -> i < retire) (List.rev hole_ids));
+  (* The settle: asked for 2, lands on 4, having walked over both holes. *)
+  let settled =
+    Store.set_lo store x 2 factless = Store.Changed && Domain.lo (Store.get store x) = 4
+  in
+  (* Under BAGUETTE_DEBUG the break makes [Trace]'s own I-S4 check raise at the citation,
+     which is the check firing in its loudest form. Catch it so the lane can also report
+     the verdict and the checker's opinion. *)
+  let raised =
+    try
+      Trace.emit ctx trace store;
+      None
+    with Failure msg -> Some msg
+  in
+  close_out oc;
+  let proof = read_file pbp in
+  let v3 = Writer.default_format () = Writer.V3_0 in
+  let t s = if v3 then s ^ " ;" else s in
+  let full =
+    String.concat "\n"
+      (lines_of (String.trim proof)
+      @ [ t "output NONE"; t "conclusion NONE"; t "end pseudo-Boolean proof"; "" ])
+  in
+  let verdict = run_veripb ~dir ~opb full in
+  let result =
+    ( ok_holes,
+      settled,
+      List.length hole_ids,
+      Trace.citations trace,
+      Trace.i_s4_violations trace,
+      raised,
+      verdict )
+  in
+  List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp ];
+  (try Sys.rmdir dir with _ -> ());
+  result
+
+let test_is4_gate () =
+  (* ---- the control: the scene, unbroken. *)
+  let holes, settled, n_hole_lines, cites, viol, raised, verdict = is4_scene ~retire:0 in
+  check "I-S4 control: both holes were punched" holes;
+  check "I-S4 control: the settle walked past both holes onto 4" settled;
+  check "I-S4 control: each hole got its own line (M1-T56)" (n_hole_lines = 2);
+  check
+    (Printf.sprintf "I-S4 control: the settle line cites both hole lines (%d edge(s))"
+       (List.length cites))
+    (List.length cites = 2);
+  check "I-S4 control: no violation, so the scene itself satisfies I-S4" (viol = []);
+  check "I-S4 control: Trace's own check did not raise" (raised = None);
+  (match verdict with
+  | Some true -> check "I-S4 control: veripb accepts the unbroken scene" true
+  | Some false ->
+      check
+        "I-S4 control: veripb accepts the unbroken scene -- it did NOT, so the refusal \
+         in the break lane below proves nothing"
+        false
+  | None ->
+      check
+        "I-S4 control: veripb is available (a missing checker is a FAILURE, not a skip)"
+        false);
+
+  (* ---- the break: retire the cited line first. *)
+  let holes, settled, n_hole_lines, cites, viol, raised, verdict = is4_scene ~retire:1 in
+  check "I-S4 break: the scene is the same one (holes punched)" holes;
+  check "I-S4 break: the scene is the same one (settle onto 4)" settled;
+  check "I-S4 break: the scene is the same one (two hole lines)" (n_hole_lines = 2);
+  (* THE assertion this whole section exists for. *)
+  check
+    (Printf.sprintf
+       "I-S4 break: retiring a cited hole line before its citer is REPORTED (%d \
+        violation(s))"
+       (List.length viol))
+    (viol <> []);
+  List.iter (fun m -> Printf.printf "     reported: %s\n" m) viol;
+  (* The two configurations are genuinely different runs and both are asserted, rather
+     than one of them being papered over. With BAGUETTE_DEBUG=1 [Trace]'s own check
+     raises at the *first* violating citation, so the run stops there and the remaining
+     edges are never recorded -- being loud is the point of that lane. With it off the
+     whole settle line is written and the verdict is asked for afterwards, which is the
+     lane that reports one violation out of two edges. *)
+  if Baguette_core.Debug.enabled then (
+    check "I-S4 break: with BAGUETTE_DEBUG=1, Trace raises at the citation"
+      (raised <> None);
+    check "I-S4 break: and it raised on the first violating edge, not later"
+      (List.length cites = 1 && List.length viol = 1))
+  else (
+    check "I-S4 break: with the check as a verdict, Trace does not raise" (raised = None);
+    check
+      (Printf.sprintf "I-S4 break: the same two edges are recorded (%d)"
+         (List.length cites))
+      (List.length cites = 2);
+    check "I-S4 break: exactly one of the two edges broke -- the retired one, not both"
+      (List.length viol = 1));
+  (* One retired line is not yet enough to make the *checker* refuse: the surviving hole
+     line lets it unit-propagate the other hole out of `int_ne`'s big-M rows unaided,
+     which is I-X9's phenomenon and the reason M1-T57's false line survived ~111k runs.
+     Asserted rather than left as a remark, because the dose at which the checker starts
+     noticing is the quantity that says how much I-S4 is load-bearing. *)
+  (match verdict with
+  | Some ok ->
+      check
+        "I-S4 break: one retired line still verifies -- the checker re-derives the other \
+         hole unaided (I-X9), so I-S4 cannot be left to it"
+        ok
+  | None -> check "I-S4 break: veripb is available for the refusal lane" false);
+
+  (* ---- the same break at the dose the checker does notice: retire BOTH hole lines and
+     the settle line is no longer reachable. Measured: `rup +1 x_ge_4 >= 1 ;` against this
+     .opb alone is refused outright. This is the lane that makes the whole section a
+     measurement of I-S4 rather than of a bookkeeping field. *)
+  let holes, settled, _, cites, viol, _, verdict = is4_scene ~retire:2 in
+  check "I-S4 double break: the scene is the same one" (holes && settled);
+  check
+    (Printf.sprintf "I-S4 double break: every recorded edge is reported (%d of %d)"
+       (List.length viol) (List.length cites))
+    (List.length viol = List.length cites
+    && List.length viol = if Baguette_core.Debug.enabled then 1 else 2);
+  (match verdict with
+  | Some false ->
+      check
+        "I-S4 double break: veripb REFUSES the proof -- the settle line really does rest \
+         on the hole lines"
+        true
+  | Some true ->
+      Printf.printf
+        "     with BOTH hole lines retired the settle line still verified. Measured\n\
+        \     otherwise when this was written (`rup +1 x_ge_4 >= 1 ;` alone against\n\
+        \     this .opb is refused), so either the encoding changed or the scene no\n\
+        \     longer settles. See docs/DECISIONS.md D-0039 and I-S4.\n";
+      check "I-S4 double break: veripb REFUSES the proof" false
+  | None -> check "I-S4 double break: veripb is available for the refusal lane" false);
+
+  (* ---- the level half: no instance today, so the edge M2-T3 will build, by hand.
+     [emit] files a line at its trail entry's level and a settle only walks over holes at
+     levels at or below its own, which is the whole of I-S4's argument -- so this branch
+     of the verdict has no reachable scene until a learned clause cites across levels.
+     Checking it on a constructed edge is what stops it being dead code on that day. *)
+  let cross : Trace.citation =
+    {
+      Trace.citing = 41;
+      cited = 42;
+      citing_level = 1;
+      cited_level = 2;
+      cited_live = true;
+      live_known = true;
+      hole = 7;
+    }
+  in
+  (match Trace.i_s4_verdict cross with
+  | Some m ->
+      check "I-S4 level half: an edge citing a deeper line is REPORTED" true;
+      Printf.printf "     reported: %s\n" m
+  | None ->
+      check
+        "I-S4 level half: an edge citing a deeper line is REPORTED -- it was not, so \
+         M2-T3's cross-level citation would pass unnoticed"
+        false);
+  check "I-S4 level half: the same edge the other way round is clean"
+    (Trace.i_s4_verdict { cross with Trace.cited_level = 1 } = None)
+
 let () =
   print_endline "";
   (match veripb with
@@ -1110,6 +1403,7 @@ let () =
   List.iter run_fzn fzn_cases;
   test_ix10_closure ();
   test_ix10_content ();
+  test_is4_gate ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
