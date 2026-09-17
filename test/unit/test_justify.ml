@@ -632,10 +632,193 @@ let test_emit_rup_clause () =
   check "emit_rup_clause: an undeclared variable is refused here, not by veripb"
     (match r with Error (Invalid_argument _) -> true | _ -> false)
 
+(* ------------------------------------------------------------------ *)
+(* M2-T9. The claim index: clause -> the line that states it.          *)
+(* ------------------------------------------------------------------ *)
+
+(* An index is a new thing, so it can be wrong in new ways, and none of them is visible
+   from "the proof still verifies": a reused id that names the wrong line is a valid
+   [pol] over the wrong constraint (D-0020's lesson -- "veripb accepts" is not evidence
+   that a derivation is load-bearing), and an index that never fires at all leaves the
+   old duplicate lines and passes every pre-existing check. So each way it can be wrong
+   gets its own check, and the first of them is the one that catches the break the
+   handover asked for: point the index at a line that does not state the clause.
+
+     * it fires at all, and the reuse is against the RIGHT line -- checked by reading
+       the emitted text back and matching the reused id's own line against the clause;
+     * it is keyed structurally, not on rendered OPB names, which [Lit.sanitize]
+       makes non-injective;
+     * it is order-insensitive, because a clause is a set;
+     * it does not survive its level (the stale-after-a-backtrack case), and
+     * it does not reach *up* a level, which is I-S4 as a precondition and what keeps
+       [Search]'s nogood out of its way;
+     * the outermost line wins when two lines state the same clause;
+     * [defining_lit] answers only for a unit line, because only a unit line
+       establishes a literal (D-0009). *)
+
+(* The body of the line labelled [@c<id>] in [text], label stripped, or "" if no line
+   carries that label. In 2.0 there are no labels, so this returns "" and the callers
+   that use it say so rather than passing vacuously. *)
+let line_labelled text id =
+  let want = Printf.sprintf "@c%d " id in
+  let n = String.length want in
+  let rec go = function
+    | [] -> ""
+    | l :: rest ->
+        if String.length l >= n && String.sub l 0 n = want then Writer.strip_label l
+        else go rest
+  in
+  go (String.split_on_char '\n' text)
+
+let test_index_reuses_the_right_line () =
+  let clause = [ Lit.ge "x" 2; Lit.negate (Lit.ge "x" 3) ] in
+  let s, r =
+    emitted (fun w ->
+        let _, ctx, _ = build_ctx w in
+        let trace_id = Justify.emit_rup_clause ctx ~origin:"trace" clause in
+        let last = Writer.last_id w in
+        let reused = Justify.emit ctx (Explanation.clause clause) in
+        check "index: an Explanation.Clause reuses the trace line's id" (reused = trace_id);
+        check "index: and mints no new line for it" (Writer.last_id w = last);
+        (* The one check that would catch an index pointing at the WRONG line. An id is
+           just an integer, so [reused = trace_id] only says the two agree; this says
+           the line that id labels really does state the clause. *)
+        Writer.delete w trace_id;
+        reused)
+  in
+  let reused = match r with Ok id -> id | Error _ -> -1 in
+  if Writer.default_format () = Writer.V3_0 then
+    check_eq "index: the reused id labels the line that states the clause"
+      ~expected:"rup +1 x_ge_2 +1 ~x_ge_3 >= 1 ;" ~got:(line_labelled s reused)
+  else
+    check
+      "index: the reused id labels the line that states the clause (2.0 has no labels, \
+       so this lane is not checked here)"
+      false;
+  expect_ok "index: no exception" (Result.map ignore r)
+
+let test_index_is_structural () =
+  (* [Lit.sanitize] maps every non-alphanumeric to '_', so these two distinct variables
+     render to the same OPB name. An index keyed on [Lit.to_string] would hand back the
+     first one's line for the second one's clause -- a valid line about the wrong
+     variable, which is exactly the class of defect D-0009 and D-0020 record. *)
+  let _, r =
+    emitted (fun w ->
+        let e = Encoding.create () in
+        Encoding.declare_int e "a-b" ~lo:0 ~hi:3;
+        Encoding.declare_int e "a_b" ~lo:0 ~hi:3;
+        Encoding.start_proof e w;
+        let ctx = Justify.create ~writer:w ~encoding:e in
+        check "index: the two variables really do render to one OPB name"
+          (String.equal (Lit.to_string (Lit.ge "a-b" 2)) (Lit.to_string (Lit.ge "a_b" 2)));
+        let first = Justify.emit_rup_clause ctx ~origin:"trace" [ Lit.ge "a-b" 2 ] in
+        let last = Writer.last_id w in
+        let second = Justify.emit ctx (Explanation.clause [ Lit.ge "a_b" 2 ]) in
+        check "index: a different variable with the same OPB name is NOT reused"
+          (second <> first);
+        check "index: so it mints its own line" (Writer.last_id w > last);
+        Writer.delete_many w [ first; second ])
+  in
+  expect_ok "index: structural key, no exception" r
+
+let test_index_ignores_clause_order () =
+  let _, r =
+    emitted (fun w ->
+        let _, ctx, _ = build_ctx w in
+        let a = Lit.ge "x" 2 and b = Lit.negate (Lit.ge "x" 3) in
+        let first = Justify.emit_rup_clause ctx ~origin:"trace" [ a; b ] in
+        let last = Writer.last_id w in
+        let reused = Justify.emit ctx (Explanation.clause [ b; a ]) in
+        check "index: a clause is a set -- literal order does not matter"
+          (reused = first && Writer.last_id w = last);
+        Writer.delete w first)
+  in
+  expect_ok "index: clause order, no exception" r
+
+let test_index_levels () =
+  let _, r =
+    emitted (fun w ->
+        let _, ctx, _ = build_ctx w in
+        let clause = [ Lit.ge "x" 2 ] in
+        (* (a) Reaching UP a level is refused: a line at level 2 must not be handed to a
+           caller writing at level 1, because `w 2` would retire the cited line and
+           leave the citing one. This is I-S4 as a precondition, and it is what keeps
+           [Search]'s nogood -- emitted at the parent level -- from ever being answered
+           with a trace line from inside the branch it closes. *)
+        Writer.set_level w 2;
+        let deep = Justify.emit_rup_clause ctx ~origin:"trace" clause in
+        Writer.set_level w 1;
+        let shallow = Justify.emit ctx (Explanation.clause clause) in
+        check "index: a line at a deeper level is not reused by a shallower one"
+          (shallow <> deep);
+        (* (b) Stale after a backtrack: wiping level 2 must take the index entry with
+           it, so nothing later cites an id the proof no longer contains. Asked at
+           level 1, where (a) would refuse it anyway, and then at level 2 again, where
+           only the wipe can be the reason. *)
+        Writer.set_level w 2;
+        let deep2 = Justify.emit_rup_clause ctx ~origin:"trace" [ Lit.ge "x" 3 ] in
+        check "index: the level-2 line is live before the wipe" (Writer.is_live w deep2);
+        Justify.wipe_level ctx 2;
+        check "index: and gone after it" (not (Writer.is_live w deep2));
+        Writer.set_level w 2;
+        let after = Justify.emit ctx (Explanation.clause [ Lit.ge "x" 3 ]) in
+        check "index: a wiped line is not reused at the same level afterwards"
+          (after <> deep2);
+        (* (c) The outermost line wins when two lines state the same clause. Both are
+           written -- [emit_rup_clause] never consults the index -- and the one a later
+           caller may cite is the one that survives the most backtracking. *)
+        Writer.set_level w 0;
+        let outer = Justify.emit_rup_clause ctx ~origin:"trace" [ Lit.ge "x" 1 ] in
+        Writer.set_level w 3;
+        let inner = Justify.emit_rup_clause ctx ~origin:"trace" [ Lit.ge "x" 1 ] in
+        check "index: two lines can state one clause -- Trace always writes its own"
+          (inner <> outer);
+        let got = Justify.emit ctx (Explanation.clause [ Lit.ge "x" 1 ]) in
+        check "index: and the outermost of the two is the one handed back" (got = outer);
+        Justify.wipe_level ctx 1;
+        Writer.set_level w 0;
+        Writer.delete_many w [ shallow; outer ])
+  in
+  expect_ok "index: levels, no exception" r
+
+let test_defining_lit () =
+  let _, r =
+    emitted (fun w ->
+        let _, ctx, _ = build_ctx w in
+        let unit_id = Justify.emit_rup_clause ctx ~origin:"trace" [ Lit.ge "x" 2 ] in
+        let pair =
+          Justify.emit_rup_clause ctx ~origin:"trace"
+            [ Lit.ge "x" 3; Lit.negate (Lit.ge "x" 1) ]
+        in
+        check "defining_lit: a unit line establishes its literal"
+          (Justify.defining_lit ctx (Lit.ge "x" 2) = Some unit_id);
+        (* D-0009: a multi-literal clause establishes nothing about any one of its
+           literals, so the index must not answer for its members. *)
+        check "defining_lit: a member of a two-literal clause is NOT established"
+          (Justify.defining_lit ctx (Lit.ge "x" 3) = None);
+        check "defining_lit: a literal no line has stated is None"
+          (Justify.defining_lit ctx (Lit.negate (Lit.ge "x" 2)) = None);
+        check "defining_lit: the two-literal clause itself IS found"
+          (Justify.defining_line ctx [ Lit.negate (Lit.ge "x" 1); Lit.ge "x" 3 ]
+          = Some pair);
+        (* The empty clause is deliberately not indexed: it is the root nogood's own
+           claim, whose id [conclusion UNSAT] cites and [Search.solve] must not find
+           answered by someone else's line. *)
+        check "defining_lit: the empty clause is never indexed"
+          (Justify.defining_line ctx [] = None);
+        Writer.delete_many w [ unit_id; pair ])
+  in
+  expect_ok "defining_lit: no exception" r
+
 let () =
   test_model_row ();
   test_decision_has_no_id ();
   test_emit_rup_clause ();
+  test_index_reuses_the_right_line ();
+  test_index_is_structural ();
+  test_index_ignores_clause_order ();
+  test_index_levels ();
+  test_defining_lit ();
   test_memoisation ();
   test_linear_states_its_own_terms ();
   test_deferred_linear ();

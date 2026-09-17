@@ -187,26 +187,35 @@ let emitted_ids t = List.rev t.ids_rev
 (* The I-S4 edges, oldest first. *)
 let citations t = List.rev t.cites_rev
 
-(* I-S4, as a verdict on what was recorded: one message per edge that broke it, empty
-   when every cited line was live and no deeper than its citer. A pure function of
-   [citations], so a test can perform the break and then ask. *)
-let i_s4_violations t =
-  List.filter_map
-    (fun c ->
-      if c.live_known && not c.cited_live then
-        Some
-          (Printf.sprintf
-             "I-S4: line @c%d (level %d) cites @c%d for the hole <> %d, and @c%d is \
-              already retired"
-             c.citing c.citing_level c.cited c.hole c.cited)
-      else if c.cited_level > c.citing_level then
-        Some
-          (Printf.sprintf
-             "I-S4: line @c%d (level %d) cites @c%d (level %d) for the hole <> %d, so \
-              `w %d` retires the cited line while the citing line survives"
-             c.citing c.citing_level c.cited c.cited_level c.hole c.cited_level)
-      else None)
-    (citations t)
+(* I-S4 on one edge: [None] if it holds, [Some message] naming which half broke.
+
+   A pure function of the recorded edge, and public, because the two halves are not
+   equally reachable and a gate that could only ask about a whole run could not say so.
+   The *liveness* half is reachable today -- retire a hole line and then let a settle
+   cite it, which is what test/unit/test_trace.ml's break lane does. The *level* half is
+   not: [emit] files a line at the level of the trail entry that produced it, and a
+   settle can only walk over holes that already exist, which are at levels at or below
+   its own. That is exactly I-S4's argument, and exactly what M2-T3 invalidates when a
+   learned clause starts citing across levels -- so the level branch is checked against
+   the edge M2-T3 will create rather than left untested until it arrives. *)
+let i_s4_verdict c =
+  if c.live_known && not c.cited_live then
+    Some
+      (Printf.sprintf
+         "I-S4: line @c%d (level %d) cites @c%d for the hole <> %d, and @c%d is already \
+          retired"
+         c.citing c.citing_level c.cited c.hole c.cited)
+  else if c.cited_level > c.citing_level then
+    Some
+      (Printf.sprintf
+         "I-S4: line @c%d (level %d) cites @c%d (level %d) for the hole <> %d, so `w %d` \
+          retires the cited line while the citing line survives"
+         c.citing c.citing_level c.cited c.cited_level c.hole c.cited_level)
+  else None
+
+(* I-S4 over a whole run: one message per edge that broke it, empty when every cited line
+   was live and no deeper than its citer. *)
+let i_s4_violations t = List.filter_map i_s4_verdict (citations t)
 
 let record t ~level cid =
   t.ids_rev <- cid :: t.ids_rev;
@@ -447,15 +456,11 @@ let settle_facts t store ~before ~var holes base =
 let record_citation t (w : Writer.t) ~citing ~citing_level ~cited ~cited_level ~hole =
   let live_known = Writer.auditing w in
   let cited_live = live_known && Writer.is_live w cited in
-  t.cites_rev <-
-    { citing; cited; citing_level; cited_level; cited_live; live_known; hole }
-    :: t.cites_rev;
+  let c = { citing; cited; citing_level; cited_level; cited_live; live_known; hole } in
+  t.cites_rev <- c :: t.cites_rev;
   Debug.check
-    (Printf.sprintf
-       "I-S4: the hole line @c%d cited by @c%d is live and no deeper than it (levels %d \
-        and %d)"
-       cited citing cited_level citing_level) (fun () ->
-      ((not live_known) || cited_live) && cited_level <= citing_level)
+    (match i_s4_verdict c with Some m -> m | None -> "I-S4")
+    (fun () -> i_s4_verdict c = None)
 
 (* Write every line the trail owes, oldest first, and leave the writer on the level it
    was on. [Search] emits the nogood straight after, at the branch's own level, so this
