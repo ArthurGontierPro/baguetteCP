@@ -14,6 +14,7 @@ module Var = Baguette_core.Var
 module Explanation = Baguette_core.Explanation
 module Propagator = Baguette_core.Propagator
 module Linear = Baguette_core.Linear
+module Ne = Baguette_core.Ne
 module Engine = Baguette_core.Engine
 module Justify = Baguette_core.Justify
 module Search = Baguette_core.Search
@@ -41,6 +42,9 @@ let var i = Var.of_int i
 
 let pack_linear id (lin : Linear.t) : Propagator.instance =
   Propagator.pack ~id (module Linear : Propagator.S with type t = Linear.t) lin
+
+let pack_ne id (ne : Ne.t) : Propagator.instance =
+  Propagator.pack ~id (module Ne : Propagator.S with type t = Ne.t) ne
 
 (* M1-T31 made [Linear.make]'s [~row_id] required, and the propagation-only tests
    below build no encoding, open no writer and render no explanation -- there is no
@@ -729,6 +733,213 @@ let build_search_unsat_proof dir =
   close_out oc;
   (opb, pbp)
 
+(* ===================================================================== *)
+(* 6. M1-T55. A decision whose push settles past a hole, and the bridge  *)
+(*    line that puts the settle on the page.                             *)
+(* ===================================================================== *)
+
+(* [hx], [hy] in 0..2 with [hx <> 1], [hx = hy] and [hx <> hy].
+
+   Every part of that is load-bearing, and the shape is the one M1-T44/M2-T11 describe:
+
+     - [hx <> 1] is a disequality with one term, so it prunes at the root and punches a
+       hole strictly inside [0, 2]. No bound moves, so lib/core/trace.ml writes no line
+       for it -- the exclusion is on the page only as the .opb rows of that disequality.
+     - [hx <> hy] has two unfixed terms, so it infers nothing at the root. That is what
+       makes the search *have* to branch rather than being handed the answer by
+       propagation (the blind spot test/models/guess_wrong_sat.fzn's header records).
+     - [hx = hy] beside it makes the model UNSAT, so both branches fail and both nogoods
+       are emitted -- including the high side's, which is the one the settle is under.
+
+   So at the root fixpoint [hx] is {0, 2}: [first_fail] picks it (size 2 against [hy]'s
+   3), docs/SPEC.md 3.4's indomain_min splits at [lo = 0], and [explore_ge] pushes
+   [set_lo hx 1] -- straight onto the hole, which [Domain.settle] walks to 2. The trail
+   then records [hx >= 2] while the nogood negates [hx_ge_1].
+   [test_hole_split_precondition] asserts that precondition directly instead of trusting
+   this paragraph, because an instance that has stopped exhibiting the defect it was
+   written for is this project's signature failure (M1-T45, M1-T50). *)
+let hole_domains = [ ("hx", 0, 2); ("hy", 0, 2) ]
+
+let hole_scene () =
+  let e = Encoding.create () in
+  List.iter (fun (n, lo, hi) -> Encoding.declare_int e n ~lo ~hi) hole_domains;
+  ignore (Encoding.add_int_lin_ne e [ (1, "hx") ] 1 : int * int);
+  let le_id = Encoding.add_int_lin_le e [ (1, "hx"); (-1, "hy") ] 0 in
+  let ge_id = Encoding.add_int_lin_le e [ (-1, "hx"); (1, "hy") ] 0 in
+  ignore (Encoding.add_int_lin_ne e [ (1, "hx"); (-1, "hy") ] 0 : int * int);
+  let store = mk_store hole_domains in
+  let hx, hy = (var 0, var 1) in
+  let le, ge = eq_pair store hx hy ~le_id ~ge_id in
+  let ne_hole = Ne.make store [ (1, hx) ] 1 in
+  let ne_pair = Ne.make store [ (1, hx); (-1, hy) ] 0 in
+  let engine =
+    Engine.create
+      [ pack_linear 0 le; pack_linear 1 ge; pack_ne 2 ne_hole; pack_ne 3 ne_pair ]
+  in
+  (store, engine, e)
+
+let test_hole_split_precondition () =
+  let store, engine, _ = hole_scene () in
+  (match Engine.propagate engine store with
+  | Engine.Conflict _ ->
+      check "M1-T55: the hole scene reaches a root fixpoint rather than failing there"
+        false
+  | Engine.Fixpoint -> ());
+  let d = Store.get store (var 0) in
+  check
+    "M1-T55: at the root fixpoint hx is unfixed with lo = 0 and lo + 1 a HOLE -- so \
+     spec_order splits at 0 and the high push settles past 1"
+    (Domain.size d > 1 && Domain.lo d = 0
+    && (not (Domain.mem d 1))
+    && Domain.mem d 2);
+  check "M1-T55: hy is the wider domain, so first_fail branches on hx"
+    (Domain.size (Store.get store (var 1)) > Domain.size d)
+
+let build_hole_split_proof dir =
+  let store, engine, encoding = hole_scene () in
+  let opb = Filename.concat dir "hole_split.opb" in
+  let pbp = Filename.concat dir "hole_split.pbp" in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "hx <> 1; hx = hy; hx <> hy" ] encoding oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let writer = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof encoding writer;
+  let ctx = mk_ctx writer encoding in
+  (match Search.solve ~engine ~store ~ctx ~check:(fun _ -> true) () with
+  | Search.Unsat -> ()
+  | Search.Sat _ -> failwith "build_hole_split_proof: expected Unsat");
+  close_out oc;
+  (opb, pbp)
+
+let read_file path =
+  let ic = open_in_bin path in
+  let s = really_input_string ic (in_channel_length ic) in
+  close_in ic;
+  s
+
+let contains needle s =
+  let n = String.length needle and m = String.length s in
+  let rec go i = i + n <= m && (String.sub s i n = needle || go (i + 1)) in
+  n = 0 || go 0
+
+let lines_of s = String.split_on_char '\n' s
+
+(* The bridge this scene must produce, as bytes. Deliberately a literal string and not
+   something rebuilt out of [Lit]: a fix that computed the right clause and then failed
+   to write it would satisfy a check phrased in terms of [Lit], and "the check could not
+   see its own subject fail" is the thing this project keeps getting caught by. *)
+let hole_bridge_body = "+1 hx_ge_2 +1 ~hx_ge_1 >= 1"
+
+(* Is this line derivable from the model *alone*? A one-rule proof: load the .opb, state
+   the line, conclude nothing. VeriPB accepts `conclusion NONE`. The same question
+   test/unit/test_trace.ml asks of every trace line, asked here of the bridge -- which is
+   the whole claim the bridge makes, since it is decision-free for this scene (the split
+   is at the root, so it has no ancestors to carry). *)
+let standalone_verifies ~veripb ~dir ~opb ~n_model rule_line =
+  let v3 = Writer.default_format () = Writer.V3_0 in
+  let t s = if v3 then s ^ " ;" else s in
+  let pbp = Filename.concat dir "standalone.pbp" in
+  let oc = open_out pbp in
+  output_string oc
+    (String.concat "\n"
+       [
+         Printf.sprintf "pseudo-Boolean proof version %s"
+           (Writer.format_to_string (Writer.default_format ()));
+         t (Printf.sprintf "f %d" n_model);
+         rule_line;
+         t "output NONE";
+         t "conclusion NONE";
+         t "end pseudo-Boolean proof";
+         "";
+       ]);
+  close_out oc;
+  let log = Filename.concat dir "standalone.log" in
+  let rc =
+    Sys.command
+      (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb) (Filename.quote opb)
+         (Filename.quote pbp) (Filename.quote log))
+  in
+  (rc = 0, read_file log)
+
+let test_hole_split_bridge () =
+  let name = "M1-T55: the bridge for a decision that settled past a hole" in
+  match veripb_path () with
+  | None ->
+      incr failures;
+      Printf.printf
+        "FAIL %s: veripb not found -- the bridge was NOT checked. Install it and re-run; \
+         do not treat this as a pass.\n"
+        name
+  | Some veripb ->
+      let dir = Filename.temp_file "baguette_hole_split" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let opb, pbp = build_hole_split_proof dir in
+      let proof = read_file pbp in
+      (* 1. The line is on the page at all. *)
+      let bridge_line =
+        List.find_opt
+          (fun l -> contains "rup" l && contains hole_bridge_body l)
+          (lines_of proof)
+      in
+      (match bridge_line with
+      | None ->
+          incr failures;
+          Printf.printf
+            "FAIL %s: no `rup %s` in the emitted proof. The decision's push settled from \
+             hx >= 1 onto hx >= 2 and nothing said so, which is the M1-T55 defect.\n  \
+             proof: %s\n"
+            name hole_bridge_body pbp
+      | Some l -> Printf.printf "ok   %s is emitted (%s)\n" name (String.trim l));
+      (* 2. It is a real consequence of the model, not decoration. *)
+      let n_model =
+        List.fold_left
+          (fun acc l ->
+            match String.split_on_char ' ' (String.trim l) with
+            | "f" :: n :: _ -> ( try int_of_string n with _ -> acc)
+            | _ -> acc)
+          0 (lines_of proof)
+      in
+      (match bridge_line with
+      | None -> ()
+      | Some l -> (
+          match standalone_verifies ~veripb ~dir ~opb ~n_model (String.trim l) with
+          | true, _ ->
+              Printf.printf
+                "ok   %s verifies STANDALONE against the .opb (I-X1, and it is not \
+                 decoration)\n"
+                name
+          | false, log ->
+              incr failures;
+              Printf.printf
+                "FAIL %s: the bridge is NOT derivable from the model alone. %s\n  \
+                 model: %s\n"
+                name log opb));
+      (* 3. And the whole proof still verifies, bridge and all. *)
+      let log = Filename.concat dir "whole.log" in
+      let rc =
+        Sys.command
+          (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
+             (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
+      in
+      if rc = 0 then
+        Printf.printf "ok   %s: the whole hole-split proof verifies (I-X1)\n" name
+      else (
+        incr failures;
+        Printf.printf "FAIL %s: veripb rejected the hole-split proof (I-X1)\n%s\n" name
+          (read_file log));
+      List.iter
+        (fun f -> try Sys.remove f with _ -> ())
+        [
+          opb;
+          pbp;
+          log;
+          Filename.concat dir "standalone.pbp";
+          Filename.concat dir "standalone.log";
+        ];
+      (try Sys.rmdir dir with _ -> ())
+
 let () =
   test_fixpoint_tightens_and_settles ();
   test_conflict_carries_explanation ();
@@ -746,6 +957,8 @@ let () =
     ~build:build_search_sat_proof;
   run_veripb ~name:"search: a real UNSAT search with a backtrack, checked end to end"
     ~build:build_search_unsat_proof;
+  test_hole_split_precondition ();
+  test_hole_split_bridge ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

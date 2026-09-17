@@ -329,6 +329,156 @@ let close_root_conflict ctx trace store e =
       let _ : Writer.cid = Justify.emit ctx e in
       Justify.emit ctx (Explanation.clause [])
 
+(* ------------------------------------------------- a decision that settled at a hole
+
+   M1-T55, and the other half of the sentence in [random_order]'s header above.
+
+   [spec_order] splits at [d_split = lo] and [explore_ge] pushes [set_lo v (lo + 1)].
+   [Domain.settle] re-establishes I-D2 by walking a bound over a hole, so when [lo + 1]
+   is a hole the trail entry records [x >= m] for the next value [m] actually in the
+   domain, while the literal that branch assumed -- and the one its nogood negates -- is
+   [x_ge_(lo+1)]. The nogood therefore claims to have refuted [x >= lo + 1] on the
+   strength of having explored only [x >= m].
+
+   That claim is *true*. The values [lo + 1 .. m - 1] are excluded by constraints (I-P1),
+   and where a propagator needed an ancestor decision to exclude them the nogood is
+   conditioned on exactly those decisions. What is not automatic is that veripb can
+   *find* it. A [rup] check asserts the decisions and unit propagates one constraint at a
+   time; a pure hole removal moves no bound, so lib/core/trace.ml's [claims] writes no
+   line for it (that function says so itself, and M1-T56 is the same sentence from the
+   other end). The exclusion is on the page only as whatever the punching constraint's
+   own rows happen to unit propagate.
+
+   For every propagator M1 has, that is enough -- which is why M2-T11 measured 2051 hole
+   splits out of 495723 over 108000 runs with **not one veripb rejection**. A hole is
+   punched only by a disequality (lib/core/prop/ne.ml, [int_lin_ne]); its .opb encoding
+   is a bounded number of rows over that constraint's own literals; and PB unit
+   propagation over one such row reproduces exactly the bounds reasoning the propagator
+   did, given the other terms' bounds -- which are on the page either as a trace line or
+   as a decision the nogood itself asserts. So the proof has been resting on a property
+   of *the encoding of the current propagator set*, stated nowhere and checked by
+   nothing. M4's [all_different] prunes from a Hall set, whose reason is not one row, and
+   that property ends there.
+
+   Two routes were open (docs/ROADMAP.md M1-T55). Guarding [spec_order] the way
+   [random_order] is guarded was rejected: the split would no longer be at [lo], which is
+   docs/SPEC.md 3.4's indomain_min, so it is a normative change that moves every model's
+   proof to pay for a defect that has never been observed -- and [random_order]'s own
+   guard is not total anyway ([pick]'s fallback after 8 misses is [lo], which is where it
+   refuses to land). Making the decision's trail entry land exactly on the literal its
+   nogood negates was rejected because **it cannot be done**: the low side lands exactly
+   iff [k] is in the domain and the high side iff [k + 1] is, so demanding both is
+   demanding [random_order]'s guard condition, and a complementary literal pair at a hole
+   boundary always leaves one side settling. Choosing the literal from the settled bound
+   instead only moves the gap to the other side, where it is worse: the two children's
+   nogoods then no longer resolve on one literal.
+
+   So the missing step is written down instead. [bridges] emits, for each decision on the
+   path whose push settled past a hole, one line
+
+       rup 1 <the bound the trail recorded> 1 ~<the bound the decision assumed>
+              1 ~<each ancestor decision> >= 1 ;
+
+   read as a clause: "under these decisions, [x >= lo + 1] implies [x >= m]". It is
+   globally valid -- every ancestor it rests on is negated into it, which is form (a) of
+   this module's header -- and it is exactly the one fact the nogood's own check has been
+   deriving implicitly all along. It is emitted lazily, after [Trace.emit] and before the
+   nogood, because D-0021: a [rup] does not inherit the solver's root fixpoint, so the
+   trace the exclusion propagates along has to be on the page first.
+
+   What that buys is the point. The implicit dependency becomes a line veripb checks at
+   the decision that made it, naming the variable and both bounds, so when it stops
+   holding the proof is rejected *there* rather than at a nogood several inferences away
+   -- or, worse, accepted because some other route through the branch happened to close.
+   It also retires M1-T45: with the bridge on the page a hole split is harmless, so
+   [random_order]'s guard is no longer the thing standing between this module and a
+   rejection and the 0.4% of tree shapes it refuses can be reclaimed deliberately.
+
+   It changes no tree. No order, no split, no domain and no decision literal is touched;
+   a run that never splits at a hole emits byte-for-byte the proof it emitted before, and
+   [solve]'s "the default is byte-for-byte the tree this module has always built" still
+   holds -- for the tree *and*, on every model in test/models/ but the one added for this
+   task, for the bytes. *)
+
+(* The decision pushes of the open levels, oldest first: each is the first trail entry of
+   its own level, which is what [check_decision_landed] and [Store.is_level_start] assert
+   from their two sides. A level that has been opened but whose push has not landed (the
+   [Store.Conflict] arms of [explore_le]/[explore_ge]) contributes no entry, which is
+   what makes the walk below line up on the ancestors and drop the literal that never
+   made it onto the trail. *)
+let decision_entries store =
+  let n = Store.trail_length store in
+  let acc = ref [] in
+  for i = n - 1 downto 0 do
+    if Store.is_level_start store i then acc := Store.trail_entry store i :: !acc
+  done;
+  !acc
+
+(* Did this push land somewhere strictly stronger than its literal names, and if so on
+   what? [Some cond] is the bound the trail actually recorded; [None] means the push
+   landed exactly and there is nothing to bridge, which is the overwhelmingly common
+   case and the only one [random_order]'s guard permits.
+
+   The literal's polarity says which side the branch took: [x_ge_b] is the high side, so
+   the low bound moved and lands exactly on [b]; [~x_ge_b] is [x <= b - 1], so the high
+   bound moved and lands exactly on [b - 1]. *)
+let settled_bound encoding (e : Store.entry) name (l : Lit.t) =
+  let b = Lit.value l.Lit.v in
+  if l.Lit.positive then
+    let m = Domain.lo e.Store.now in
+    if m <= b then None else Some (Encoding.ge encoding name m)
+  else
+    let h = Domain.hi e.Store.now in
+    if h >= b - 1 then None else Some (Encoding.le encoding name h)
+
+(* Does this entry plausibly belong to this decision literal? The walk pairs two lists
+   that are built independently -- the open levels' pushes from [Store], the assumed
+   literals from [dfs]'s own recursion -- and a pairing that has slipped would write a
+   line about the wrong variable, which is the kind of mistake that verifies anyway
+   (a true clause about some other variable is still a true clause). So it is checked
+   rather than assumed, and a mismatch stops the walk instead of guessing. *)
+let aligned store (e : Store.entry) (l : Lit.t) =
+  Lit.is_order l.Lit.v
+  && String.equal (Store.name store e.Store.var) (Lit.owner l.Lit.v)
+  &&
+  if l.Lit.positive then Domain.lo e.Store.now > Domain.lo e.Store.old
+  else Domain.hi e.Store.now < Domain.hi e.Store.old
+
+let bridges (ctx : Justify.ctx) store (decisions : Lit.t list) =
+  let rec go entries rev_decisions ancestors =
+    match (entries, rev_decisions) with
+    | [], _ | _, [] -> ()
+    | (e : Store.entry) :: es, (l : Lit.t) :: ls ->
+        if not (aligned store e l) then
+          Debug.check
+            "M1-T55: the open levels' pushes and the assumed decision literals line up"
+            (fun () -> false)
+        else (
+          let name = Store.name store e.Store.var in
+          (match settled_bound ctx.Justify.encoding e name l with
+          | None -> ()
+          | Some cond -> (
+              match
+                Trace.claim_of_cond ~what:"the bound a decision settled onto" ~name cond
+              with
+              | None ->
+                  (* The settled bound is the declared one, so the claim is vacuous and
+                     no literal exists to state it -- nothing to bridge. *)
+                  ()
+              | Some claim ->
+                  let lits =
+                    claim :: Lit.negate l :: List.map Lit.negate ancestors
+                  in
+                  let origin =
+                    Printf.sprintf "M1-T55: %s settled onto %s" (Lit.to_string l)
+                      (Lit.to_string claim)
+                  in
+                  let _ : Writer.cid = Justify.emit_rup_clause ctx ~origin lits in
+                  ()));
+          go es ls (l :: ancestors))
+  in
+  go (decision_entries store) (List.rev decisions) []
+
 let rec dfs engine store ctx trace (order : order) (decisions : Lit.t list) : node =
   match Engine.propagate engine store with
   | Engine.Conflict e -> (
@@ -356,6 +506,11 @@ let rec dfs engine store ctx trace (order : order) (decisions : Lit.t list) : no
              propagate along. *)
           Trace.emit ctx trace store;
           let _ : Writer.cid option = Trace.conflict_line ctx trace store in
+          (* M1-T55: and then the bridge for any decision on this path that settled past
+             a hole, which is the step the nogood's own [rup] needs and has until now
+             been left to find for itself. It goes after the trace (D-0021) and before
+             the nogood, at the nogood's own level, so the same [w] retires both. *)
+          bridges ctx store decisions;
           let lits = List.map Lit.negate decisions in
           let cid = Justify.emit ctx (Explanation.clause lits) in
           NFail (lits, cid))
@@ -454,6 +609,9 @@ and explore_le store engine ctx trace order decisions v k lit =
          kept only so this function is total against [Store.outcome] without assuming
          it. *)
       Trace.emit ctx trace store;
+      (* M1-T55: the ancestors only -- this push did not land, so it has no trail entry
+         and nothing to bridge, and [bridges] drops it for exactly that reason. *)
+      bridges ctx store decisions;
       let lits = List.map Lit.negate (Lit.negate lit :: decisions) in
       let cid = Justify.emit ctx (Explanation.clause lits) in
       NFail (lits, cid)
@@ -469,6 +627,8 @@ and explore_ge store engine ctx trace order decisions v k lit =
   match outcome with
   | Store.Conflict _ ->
       Trace.emit ctx trace store;
+      (* M1-T55: as in [explore_le] -- the ancestors only. *)
+      bridges ctx store decisions;
       let lits = List.map Lit.negate (lit :: decisions) in
       let cid = Justify.emit ctx (Explanation.clause lits) in
       NFail (lits, cid)
