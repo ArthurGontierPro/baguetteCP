@@ -3592,6 +3592,118 @@ let test_ix6_justification_snapshot () =
      in
      contains "901" b && not (contains "902" b))
 
+(* ------------------- I-X6 on the CROSS-ROW CONFLICT path (the M2-T8 blind spot)
+
+   [Linear.explain_cross_conflict] is the other [Deferred] this module builds, and it was
+   the one nothing checked. I-X6 carried it as an open blind spot: M1-T13 hoisted its
+   lookup out of the thunk but left the store in scope one line above, and M2-T8 measured
+   that putting the lookup back reddens *zero* checks. Re-measured 2026-09-17 before this
+   test was written, and it is worse than "no unit check": 0 unit failures, 34/34 models,
+   and all 102 proof artefacts byte-identical. A violation in a function
+   [test_matrix.ml] proves is reached, that nothing in the suite can see, is this
+   project's signature failure mode.
+
+   The path has exactly one route, established by [test_matrix.ml]'s white-box cross-row
+   scene: a row naming the same variable twice, `2d - d <= -4` over `d` in 0..6. Term 0
+   pushes `hi(d)` down to 1; term 1 then computes its own push from the `mins` taken
+   *before* that, asks for `lo(d) >= 4`, and crosses the upper bound term 0 just
+   established. Nothing else reaches it -- two separate instances meeting in a third row
+   is reported as that row's own slack, never as a cross-row conflict.
+
+   The scene is run twice and the conflict's derivation forced at two different moments,
+   which is the only way available (compare [test_ix6_justification_snapshot]):
+
+     A: force immediately, while the store still says what the propagator read;
+     B: let a DIFFERENT row take over `hi(d)` first, then force.
+
+   The two runs are separate stores because [Explanation.force] memoises.
+
+   It fires on a WRONG ANSWER and not on a crash, which is the half that matters: a
+   live-reading thunk renders `model_row(902)` where a snapshotting one renders the
+   derivation of the entry that actually held the bound at the push. It is a different
+   shape from the two tests M2-T8 added -- those catch the per-term snapshot moving into
+   [justified_of_snaps]'s thunk, where the pruning's own entry supports the bound and the
+   derivation cites itself, so the symptom is a stack overflow rather than an answer. Here
+   the interloper is a plain [Model_row] and there is no recursion to run away: both runs
+   terminate and one of them is simply wrong.
+
+   Two things this test needs that a first draft got wrong, both left in as comments
+   because each one silently turned it green against the break:
+
+     - the render must force RECURSIVELY. [Explanation.to_string] prints an unforced
+       citation as "deferred[?]" whichever row it names, so the shallow renderer cannot
+       see the difference at all.
+     - nothing may force the conflict before the move. [Explanation.force] memoises, so
+       an eagerly-placed shape assertion fixes the answer and makes the observation
+       unreachable -- which is why the shape check below sits *after* the render. *)
+
+let rec render_deep e =
+  match Explanation.force e with
+  | Explanation.Combine (summands, divisor) ->
+      Printf.sprintf "combine(%s)/%d"
+        (String.concat " + "
+           (List.map
+              (function
+                | Explanation.Term (c, e) -> Printf.sprintf "%d*%s" c (render_deep e)
+                | Explanation.Weaken _ as w -> Explanation.summand_to_string w)
+              summands))
+        divisor
+  | Explanation.Cut (a, b, c1, c2) ->
+      Printf.sprintf "cut(%d*%s + %d*%s)" c1 (render_deep a) c2 (render_deep b)
+  | other -> Explanation.to_string other
+
+let string_contains needle hay =
+  let n = String.length needle and h = String.length hay in
+  let rec go i = i + n <= h && (String.sub hay i n = needle || go (i + 1)) in
+  go 0
+
+let test_ix6_cross_conflict_snapshot () =
+  let scene ~move_after =
+    let store = mk_store [ ("d", 0, 6) ] in
+    let prop = Linear.make store [ (2, var 0); (-1, var 0) ] (-4) ~row_id:7001 in
+    let c =
+      match Linear.propagate prop store with
+      | Propagator.Conflict c -> c
+      | Propagator.Fixpoint -> failwith "I-X6 cross: the scene did not conflict at all"
+    in
+    if move_after then
+      (* [d] is 0..1 at this point -- term 0 pushed hi to 1 and term 1's push failed, so
+         nothing else moved. A different row now holds hi(d), which is the bound the
+         conflict ran into. Under the O(1) support that is what [Store.hi_reasons]
+         answers from here on, so a thunk that asks again gets 902 where a thunk that
+         snapshotted keeps the entry it actually read. *)
+      ignore
+        (Store.set_hi store (var 0) 0
+           (Reason.because Reason.none (Explanation.model_row 902)));
+    let rendered = render_deep c.Store.c_why in
+    (* AFTER the render, deliberately: see the last paragraph of the comment above. This
+       reads the memo rather than forcing anything. D-0013 step 5's shape is the
+       two-summand, divisor-1 [Combine], which is how [test_matrix.ml]'s
+       [classify_conflict] tells this path from the row's own slack conflict. *)
+    let is_cross =
+      match Explanation.force c.Store.c_why with
+      | Explanation.Combine ([ Explanation.Term (1, _); Explanation.Term (1, _) ], 1) ->
+          true
+      | _ -> false
+    in
+    (rendered, is_cross, store)
+  in
+  let a, a_cross, _ = scene ~move_after:false in
+  let b, b_cross, store_b = scene ~move_after:true in
+  check
+    "I-X6 cross: the scene reaches Linear's cross-row conflict path at all (D-0013 step \
+     5)"
+    (a_cross && b_cross);
+  (* Without this the test could pass by the interloper never landing, which is the
+     vacuous-control failure the D-0030 checks in this file also guard against. *)
+  check "I-X6 cross: and another row really did take the cited bound over before forcing"
+    (Domain.hi (Store.get store_b (var 0)) = 0
+    && Store.hi_reasons store_b (var 0) = [ Explanation.Model_row 902 ]);
+  check "I-X6 cross: the conflict's derivation cites the bound it read AT THE PUSH"
+    (a = b && String.length a > 0);
+  check "I-X6 cross: and not the row that took that bound over afterwards"
+    (string_contains "model_row(7001)" b && not (string_contains "902" b))
+
 (* ------------------------------ D-0026: one pruning, two halves that agree (M2-T8)
 
    The reference propagator's reason and justification used to be two calls
@@ -3794,6 +3906,7 @@ let () =
   test_d0026_linear_pairing ();
   test_d0026_all_declared ();
   test_ix6_justification_snapshot ();
+  test_ix6_cross_conflict_snapshot ();
   test_no_single_row_refutes "bool_reif_unsat" "bool_reif_unsat.fzn";
   test_no_single_row_refutes "bool_channel_unsat" "bool_channel_unsat.fzn";
   if !failures > 0 then (
