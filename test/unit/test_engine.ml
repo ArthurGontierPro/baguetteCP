@@ -1114,6 +1114,149 @@ let test_hole_split_bridge () =
         ];
       try Sys.rmdir dir with _ -> ())
 
+(* ===================================================================== *)
+(* 7. M1-T36. The node counter, and the fact that it is NOT the level    *)
+(*    marker count the benchmark used to report in its place.            *)
+(* ===================================================================== *)
+
+(* How many level markers does a proof contain? This is the benchmark's old `lvl`
+   proxy, transcribed: [Writer.set_level] writes `# l` under format 2.0 and the comment
+   `% level l` under 3.0, so both spellings have to be admitted or the count is zero
+   under whichever format the run did not use -- the same trap bench/run_bench.sh's
+   rule-count regexes document. *)
+let level_markers pbp =
+  List.length
+    (List.filter
+       (fun l ->
+         let l = String.trim l in
+         let after p =
+           String.length l > String.length p
+           && String.sub l 0 (String.length p) = p
+           &&
+           let rest =
+             String.sub l (String.length p) (String.length l - String.length p)
+           in
+           rest <> "" && String.for_all (fun c -> c >= '0' && c <= '9') rest
+         in
+         after "# " || after "% level ")
+       (lines_of (read_file pbp)))
+
+let check_eq name got want =
+  if got = want then Printf.printf "ok   %s (%d)\n" name got
+  else (
+    incr failures;
+    Printf.printf "FAIL %s: got %d, want %d\n" name got want)
+
+(* [unsat_scene] is x1 = x2 and x1 + x2 = 1 over 0..1, and its tree is small enough to
+   write down by hand rather than record whatever the counter happens to say -- which is
+   the whole point, since a counter checked against its own output checks nothing.
+
+   Root: no bound moves (x1 + x2 = 1 with both in 0..1 tightens nothing), so the root is
+   a fixpoint with two unfixed variables. [first_fail] breaks the size tie by index and
+   picks x1; [spec_order] splits at [lo = 0]. The low side fixes x1 = 0, which forces
+   x2 = 0 and contradicts the sum; the high side fixes x1 = 1, which forces x2 = 1 and
+   contradicts it again. So: ONE decision, TWO children, and the root.
+
+   nodes = 3, decisions = 1, max_depth = 1. *)
+let unsat_tree = (3, 1, 1)
+
+(* And the marker count that same run's proof carries, pinned as a number rather than
+   compared to the nodes. On THIS tree the two coincide at 3, and they coincide for
+   unrelated reasons: 3 nodes is two children plus the root; 3 markers is one per child
+   explored plus one for the step back down to the parent that emits the combined
+   nogood. [sat_tree_markers] below is 2 markers against the same 3 nodes, so no
+   constant relates the two -- which is the finding, and the reason the proxy could not
+   answer D-0026. Both numbers are pinned so that a change in either one reddens. *)
+let unsat_markers = 3
+let sat_tree_markers = (3, 1, 2)
+let node_stats = ref None
+let sat_node_stats = ref None
+
+let build_node_count_proof dir =
+  let store, engine, encoding = unsat_scene () in
+  let opb = Filename.concat dir "nodes.opb" in
+  let pbp = Filename.concat dir "nodes.pbp" in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "x1 = x2; x1 + x2 = 1" ] encoding oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let writer = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof encoding writer;
+  let ctx = mk_ctx writer encoding in
+  let stats = Search.stats_create () in
+  (match Search.solve ~engine ~store ~ctx ~check:(fun _ -> true) ~stats () with
+  | Search.Unsat -> ()
+  | Search.Sat _ -> failwith "build_node_count_proof: expected Unsat");
+  close_out oc;
+  node_stats := Some (stats, level_markers pbp);
+  (opb, pbp)
+
+(* The counts themselves, read back from the run [run_veripb] just checked. Asserting
+   them there rather than in a run of its own is deliberate: the numbers then describe a
+   search whose proof a real checker accepted, so "a test that does not check the proof
+   is half a test" holds for the counter too. *)
+let test_node_counts () =
+  match !node_stats with
+  | None ->
+      incr failures;
+      print_endline
+        "FAIL M1-T36: the node-count proof was never built, so nothing was counted"
+  | Some (st, markers) ->
+      let n, d, depth = unsat_tree in
+      check_eq "M1-T36: nodes visited on the hand-derived UNSAT tree" st.Search.nodes n;
+      check_eq "M1-T36: decisions taken on it" st.Search.decisions d;
+      check_eq "M1-T36: tree depth reached" st.Search.max_depth depth;
+      check "M1-T36: nodes = 2 * decisions + 1 -- the tree was exhausted"
+        (Search.stats_consistent st ~exhausted:true);
+      check_eq "M1-T36: level markers in the same proof -- the old `lvl` proxy" markers
+        unsat_markers
+
+(* And the other half of the identity: a search that stops at the first solution has
+   NOT visited both sides of every decision, so only the inequality may be asserted.
+   [sat_scene] is x1 = x2 and x1 + x2 + x3 = 2 over the same widths. *)
+let test_node_counts_sat () =
+  let store, engine, encoding = sat_scene () in
+  let path, oc = scratch_writer () in
+  let writer = Writer.create ~comments:false ~audit:true oc in
+  Encoding.start_proof encoding writer;
+  let ctx = mk_ctx writer encoding in
+  let stats = Search.stats_create () in
+  let outcome = Search.solve ~engine ~store ~ctx ~check:sat_check ~stats () in
+  close_out oc;
+  let markers = level_markers path in
+  Sys.remove path;
+  check "M1-T36: the SAT scene is still SAT with a stats record threaded through it"
+    (match outcome with Search.Sat _ -> true | Search.Unsat -> false);
+  check "M1-T36: nodes <= 2 * decisions + 1 on a search stopped at a solution"
+    (Search.stats_consistent stats ~exhausted:false);
+  check "M1-T36: the root alone is a node, so a search that ran counts at least one"
+    (stats.Search.nodes >= 1);
+  let n, d, m = sat_tree_markers in
+  check_eq "M1-T36: nodes visited before the first solution" stats.Search.nodes n;
+  check_eq "M1-T36: decisions taken before it" stats.Search.decisions d;
+  check_eq "M1-T36: level markers in the SAT proof" markers m;
+  sat_node_stats := Some (stats, markers)
+
+(* THE POINT OF THE ROW, and it can only be made by comparing two trees. The proxy is
+   not the node count, and it is not a fixed multiple of it either: the UNSAT scene has
+   3 nodes and 3 markers, the SAT scene has 3 nodes and 2 markers. Same node count,
+   different marker count -- so a benchmark holding only the markers cannot tell whether
+   the tree moved, which is exactly what D-0026's claim needs it to be able to do.
+   A change that made this counter read the proof back, or a scaling that pretended one
+   number is the other times a constant, reddens here. *)
+let test_marker_proxy_is_not_the_node_count () =
+  match (!node_stats, !sat_node_stats) with
+  | Some (u, um), Some (sa, sm) ->
+      check
+        "M1-T36: two trees with the SAME node count carry DIFFERENT marker counts -- the \
+         proxy is neither the node count nor a multiple of it"
+        (u.Search.nodes = sa.Search.nodes && um <> sm)
+  | _ ->
+      incr failures;
+      print_endline
+        "FAIL M1-T36: one of the two runs did not record its counts, so the proxy \
+         comparison was NOT made"
+
 let () =
   test_fixpoint_tightens_and_settles ();
   test_conflict_carries_explanation ();
@@ -1137,6 +1280,11 @@ let () =
     ~build:build_search_unsat_proof;
   test_hole_split_precondition ();
   test_hole_split_bridge ();
+  run_veripb ~name:"M1-T36: the node-counted UNSAT search, checked end to end"
+    ~build:build_node_count_proof;
+  test_node_counts ();
+  test_node_counts_sat ();
+  test_marker_proxy_is_not_the_node_count ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
