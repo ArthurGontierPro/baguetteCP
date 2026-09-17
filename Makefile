@@ -9,7 +9,7 @@
 # with a reason you are willing to write into WORKLOG.md.
 MEM_CAP_KB ?= 4000000
 
-.PHONY: build test unit models check fmt lint clean proof bootstrap bench
+.PHONY: build test unit models check fmt fmt-check lint clean proof bootstrap bench
 
 build:
 	dune build
@@ -23,9 +23,22 @@ models: build
 # Unit tests and model tests. Model tests include proof checking with veripb.
 test: unit models
 
+# The explicit fixer. Rewrites files. NOT in the gate -- see fmt-check and M1-T64.
 fmt:
 	@command -v ocamlformat >/dev/null 2>&1 && dune build @fmt --auto-promote || \
 	  echo "ocamlformat not installed; skipping (opam install ocamlformat)"
+
+# The gate's formatting check (M1-T64). VERIFIES; it does not fix.
+#
+# `check` used to depend on `fmt`, which auto-promotes -- so an unformatted commit was
+# never anybody's failure, it was silently repaired in the next person's working tree,
+# and on 2026-09-17 that is exactly how one session's formatting debt ended up inside
+# another's unrelated commit while two more sessions separately reported the same files.
+# Its self-test runs FIRST, the same discipline `lint` follows: a guard nobody has seen
+# fail is not yet a guard.
+fmt-check:
+	./scripts/check_fmt.sh --self-test
+	./scripts/check_fmt.sh
 
 # The declared-width lint (M1-T53's sibling). Its self-test runs FIRST and on every
 # gate, so the guard re-proves it can fail before it is trusted to pass -- three test
@@ -36,7 +49,7 @@ lint:
 	./scripts/check_test_widths.py
 
 # The gate. Run this before every commit.
-check: fmt build lint test
+check: fmt-check build lint test
 	@echo "check: ok"
 
 # Solve one model and verify its proof end to end.

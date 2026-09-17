@@ -17,7 +17,6 @@ git worktree each (`.claude/worktrees/<tag>`), so no two share `_build`'s global
 |---|---|---|---|
 | M2-T8 | **all of `lib/core/**`**, plus the `test/unit/*.ml` its signature change breaks | agent-iface | 2026-09-17 |
 | M1-T29 | `lib/proof/writer.ml`, `test/unit/test_proof.ml` | agent-del | 2026-09-17 |
-| M1-T64 | `Makefile`, `scripts/**` | orchestrator | 2026-09-17 |
 
 Two rounds are recorded in `## Completed` below. The rows that stood here on
 2026-09-15 (`integration`, M1-T12, M1-T13) were stale — see the handoff note "the
@@ -159,6 +158,7 @@ work. The owning session picks it up.
 | M2-T7 | agent-instid | 2026-09-17 | **The long pole; M2-T8 -> M2-T9 -> M2-T3 is unblocked.** Engine brackets each `run` with `Store.with_running inst.id`; `Store.apply` stamps `entry.prop`. No mutator takes an id. `conflict_facts`' one-shot slot is **gone** — `Conflict of Store.conflict` carries the facts. `Engine.check_attribution` reads the stamp back **always on**, not `BAGUETTE_DEBUG`-gated. Breaks: 121 and 123 unit FAILs, 30/34 and 34/34 models red; both now ship as permanent tests. **All 102 artefacts byte-identical, re-verified by the orchestrator after a failed first attempt that compared a stale binary with itself.** Landed **I-T4**. Merged as 338c611 |
 | M1-T54 | agent-widthcap | 2026-09-17 | `Encoding.max_order_width = 10_000` on `hi - lo`, raised before the Hashtbl and before the ladder loop so a refusal allocates nothing; `Compile` carries the positioned diagnostic and exit 3. Deliberately **not** `Unrepresentable` — that arm exits 4 and blames baguette, which is wrong for a legal model. Boundary re-verified through the CLI by the orchestrator: 10000 solves at exit 0, 10001 refused at exit 3. Overflow-safe by construction (`min_int..max_int` would compute width −1). Ratified as **D-0041** + SPEC §3.1 |
 | M1-T61 | orchestrator | 2026-09-17 | The I-X10 closure gate: a classification table asserted exhaustive against a read of `lib/core/prop/`, plus the Hall-bound-move refusal with an accept-side control on the same `.opb`. All three breaks performed; my first attempt at the missing-checker break was invalid (a bad `HOME` falls through to PATH and hits 2.2.2) and `$VERIPB` is the route to it |
+| M1-T64 | orchestrator | 2026-09-17 | `make check` now depends on `fmt-check`, which **verifies** formatting; `make fmt` stays the explicit fixer. `scripts/check_fmt.sh --self-test` runs first on every gate and proves **both** polarities in an isolated throwaway project — refuses unformatted, accepts formatted — so the self-test cannot leave a stray module in this shared checkout. Break measured both ways: unformatted code now fails the gate at exit 2 **and is left alone**, where `make fmt` silently rewrote it and passed |
 
 ## Handoff notes
 
