@@ -55,7 +55,6 @@ module Writer = Baguette_proof.Writer
    naming the cap, rather than relying on an outer `ulimit -v` a bare
    `dune runtest --root .` does not apply. See mem_guard.ml. *)
 let () = Mem_guard.install ()
-
 let failures = ref 0
 
 let check name cond =
@@ -405,7 +404,6 @@ let test_rejections () =
      satisfy;\n";
   expect_accepted "accept: no annotation at all (SPEC 3.4's default)"
     "var 0..3: x;\nconstraint int_le(x,3);\nsolve satisfy;\n"
-
 
 (* ------------------------------------------------------ 5. end to end, with veripb *)
 

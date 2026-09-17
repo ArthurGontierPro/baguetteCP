@@ -537,6 +537,61 @@ let () =
              be right, but the proof is not one we are entitled to stand behind. *)
           Printf.eprintf "baguette: INTERNAL -- proof audit failed (I-X2): %s\n" msg;
           exit exit_internal
+      | exception Encoding.Unrepresentable why ->
+          (* M1-T58. [Encoding] is the *committing door* for the .opb: it raises this
+             when a row's arithmetic does not fit a 63-bit int, so writing the row would
+             put a constraint in the file that is not the one posted and veripb would
+             cheerfully verify the wrong model (D-0029, I-X8).
+
+             Before this arm existed the CLI died on an uncaught exception here --
+             "Fatal error: exception Baguette_proof.Encoding.Unrepresentable(...)",
+             exit 2, no context and no warning about the artefact. [Checked.Overflow]
+             below has had a positioned diagnostic since M1-T34; this is its twin and
+             was simply missing.
+
+             Why it is exit 4 and not exit 3, by the same argument as Overflow's: a
+             model genuinely over the arithmetic limit is rejected by
+             lib/flatzinc/compile.ml's cap first, with a positioned diagnostic and
+             exit 3. So reaching HERE means the cap did not cover the path, which is an
+             invariant this binary states about itself failing -- not a model problem.
+             Reporting it as one would send the reader to rescale a model when the bug
+             is in the checking.
+
+             What is NOT the same as Overflow, and is the reason I-X8 exists: this
+             exception is raised by the module that writes the artefact, on behalf of
+             *any* caller. `bin/main.ml` is the only front end today and it goes through
+             Compile's cap, so this is unreachable from here. A second front end -- or a
+             caller that drives Encoding directly, as the test suite does -- has no such
+             cap in front of it, and for those this exception is the contract rather than
+             a bug. The message therefore says which of the two the reader is looking at
+             instead of asserting it is a baguette bug outright. *)
+          Printf.eprintf
+            "baguette: INTERNAL -- the encoding refused to commit a row (I-X8, D-0029):\n\
+            \  %s\n"
+            why;
+          Printf.eprintf
+            "  Compile checks every declared bound and every posted row against \
+             Checked.limit = %d\n"
+            Checked.limit;
+          prerr_endline
+            "  before Encoding is reached, so no model this CLI accepts should get here. \
+             Reaching";
+          prerr_endline
+            "  it through baguette means the cap has a hole -- a path whose arithmetic \
+             the cap";
+          prerr_endline
+            "  does not bound. (Reached through a different caller of Encoding, this \
+             exception";
+          prerr_endline
+            "  is the documented contract, not a bug: Encoding never declines quietly.)";
+          prerr_endline
+            "  DO NOT USE ANY PROOF FROM THIS RUN. The .opb is written before the search \
+             and may";
+          prerr_endline
+            "  already be on disk, partially written, encoding a different model than \
+             the .fzn --";
+          prerr_endline "  and a checker would accept it (D-0029, SPEC 2.1).";
+          exit exit_internal
       | exception Checked.Overflow msg ->
           (* M1-T34. D-0029 decided that overflow RAISES rather than wrapping or quietly
              declining, and put a compile-time cap in front of the raise so that no model

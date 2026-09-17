@@ -24,7 +24,6 @@ module O = F.Output
    naming the cap, rather than relying on an outer `ulimit -v` a bare
    `dune runtest --root .` does not apply. See mem_guard.ml. *)
 let () = Mem_guard.install ()
-
 let failures = ref 0
 
 let check name cond =
@@ -324,7 +323,8 @@ let test_mem_guard_silent () =
   Mem_guard.install ~limit_mb:512 ();
   let x = Bytes.create (4 * 1024 * 1024) in
   Gc.full_major ();
-  check "mem_guard: alarm installs and stays silent well under its cap" (Bytes.length x = 4 * 1024 * 1024)
+  check "mem_guard: alarm installs and stays silent well under its cap"
+    (Bytes.length x = 4 * 1024 * 1024)
 
 (* ------------------------------------- 4b. I-S1's oracle is arithmetically independent
 
