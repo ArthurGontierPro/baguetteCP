@@ -239,54 +239,66 @@ let spec_order store cands =
   { d_var = v; d_split = Domain.lo (Store.get store v); d_high_first = false }
 
 (* A branching order driven by [r], for the fuzzer (test/unit/test_random.ml). Every
-   draw comes from [r], so one seed reproduces one whole tree.
+   draw comes from [r], so one seed reproduces one whole tree. Three draws per decision
+   -- the variable, the split, and which side goes first -- and NO rejection of any
+   split in [lo, hi), which is the only shape constraint [branch] imposes.
 
-   The split is taken at a [k] with both [k] and [k+1] in the domain, so that
-   [set_hi _ k] lands on exactly [k] and [set_lo _ (k+1)] on exactly [k+1]. That is a
-   constraint on the proof rather than on the search: [Domain.settle] walks a bound over
-   a hole, so a decision at a hole would put a bound on the trail strictly stronger than
-   the [x_ge_(k+1)] its nogood negates, and the checker could not replay the difference
-   -- the parenthetical here used to read "an interior hole gets no trace line at all
-   ([Trace]'s [claims] writes one only when a bound moves)", and M1-T56 has made that
-   false: a hole states itself as the two-literal clause `x <= v-1 or x >= v+1` and does
-   get a line. **The constraint on this function is unchanged, and the reason is worth
-   keeping straight** -- what is missing at a hole split was never the hole, it is the
-   *implication* from the literal the branch assumed to the bound the settle established.
-   That implication is conditioned on the ancestor decisions, so it can have no globally
-   valid line of its own (D-0018); [bridges] below states it per settled decision, and
-   this guard is why [random_order] need not rely on that.
-   [lo] is the fallback after a few misses because [lo] is what
-   docs/SPEC.md 3.4 already branches at: [lo] is in the domain by I-D2, so the low side
-   lands exactly, and the high side is then the same [set_lo _ (lo+1)] the default has
-   always made. So a random order reaches new tree shapes without inventing a class of
-   decision the default does not also make -- which is what makes a rejection under it a
-   finding about the solver rather than about this function.
+   ---------------------------------------------------------------------------
+   M1-T45: the hole guard this function used to carry, and why it is gone
+   ---------------------------------------------------------------------------
 
-   The guard shipped disabled. It read [if true || (Domain.mem d k && Domain.mem d
-   (k + 1))], which short-circuits, so the membership test, [pick]'s recursion and
-   [tries] were all dead and every draw was taken whatever the domain looked like --
-   an unfinished-debugging edit from the interrupted session that wrote this, and one
-   no compiler warning catches. Restored here, and what the disabled version bought is
-   recorded rather than guessed at, because "the guard is load-bearing" would be a
-   claim nobody has tested: with it disabled, and with [random_order] further biased to
-   prefer a holey variable AND a hole split within it, 2051 splits out of 495723 over
-   108000 solver runs landed where the guard now refuses, and **not one of them was
-   rejected by veripb**. So the guard is conservative, not measured-necessary. It is
-   restored because the code must say what its header says and because attribution is
-   worth more here than 0.4% more tree shapes -- not because a hole split has been seen
-   to break a proof. Whoever wants that 0.4% back should take it deliberately, with an
-   instance that shows what it catches. *)
+   This function used to refuse to split at a [k] unless both [k] and [k + 1] were in
+   the domain, retrying up to eight times and falling back to [lo]. The refusal was
+   about the proof and not about the search: [Domain.settle] walks a bound over a hole,
+   so a decision at a hole puts a bound on the trail strictly STRONGER than the
+   [x_ge_(k+1)] its nogood negates, and the checker cannot replay the difference unless
+   the difference is written down.
+
+   Three things settled that, in this order, and the last one is the one that matters:
+
+     1. The guard shipped DISABLED. It read [if true || (Domain.mem d k && Domain.mem d
+        (k + 1))], which short-circuits, so the membership test, the retry recursion and
+        the [tries] counter were all dead and every draw was taken whatever the domain
+        looked like -- an unfinished-debugging edit no compiler warning catches. It was
+        restored rather than deleted, deliberately, because "the guard is load-bearing"
+        was a claim nobody had tested.
+     2. Then it was measured. With it disabled, and with [random_order] further biased
+        to prefer a holey variable AND a hole split within it, 2051 splits out of 495723
+        over 108000 solver runs landed where it refused, and NOT ONE was rejected by
+        veripb. So it was conservative, not measured-necessary. The guard was also never
+        total: the fallback after eight misses could itself land at a hole.
+     3. M1-T55 then wrote the missing step down. [bridges] below states, per settled
+        decision and conditioned on that decision's ancestors, the implication from the
+        literal the branch assumed to the bound the settle established. That is exactly
+        what a hole split was missing, and it had to be written anyway: [spec_order] --
+        the normative order, the CLI's only one -- splits at [d_split = lo] and
+        [explore_ge] pushes [set_lo v (lo + 1)], which lands on a hole whenever [lo + 1]
+        is one. So the normative default ALREADY makes the decision this guard refused,
+        has no guard of its own and never did, and M1-T55 closed that by emitting the
+        bridge rather than by adding one.
+
+   Point 3 is the argument, and M1-T45's bar was the right way round: taking these
+   shapes back needed an instance showing what the guard catches. There is none.
+   [test_hole_split_sweep] in test/unit/test_engine.ml forces EVERY split shape the
+   guard used to refuse -- a hole below the split, a hole above it, and holes on both
+   sides at once -- over every interior hole pattern of a width-5 domain, at the root
+   and one level down so the ancestor conjunct of [bridges] is under test too, and runs
+   the real checker over each resulting proof. Every one verifies. What the guard bought
+   was 0.4% fewer tree shapes for the fuzzer and one asymmetry with the normative order;
+   what it cost was a class of decision the default makes and the fuzzer could not.
+
+   If a hole split is ever rejected under this function, that is now a finding about
+   [bridges] or about a propagator, which is what a fuzzer is for -- it is not a finding
+   about this function. *)
 let random_order r store cands =
   let v = cands.(Random.State.full_int r (Array.length cands)) in
   let d = Store.get store v in
   let lo = Domain.lo d and hi = Domain.hi d in
-  let rec pick tries =
-    if tries = 0 then lo
-    else
-      let k = lo + Random.State.full_int r (hi - lo) in
-      if Domain.mem d k && Domain.mem d (k + 1) then k else pick (tries - 1)
-  in
-  { d_var = v; d_split = pick 8; d_high_first = Random.State.bool r }
+  {
+    d_var = v;
+    d_split = lo + Random.State.full_int r (hi - lo);
+    d_high_first = Random.State.bool r;
+  }
 
 let extract_assignment store : assignment =
   List.init (Store.n_vars store) (fun i ->
@@ -426,15 +438,17 @@ let close_root_conflict ctx trace store (c : Store.conflict) =
    that property ends there.
 
    Two routes were open (docs/ROADMAP.md M1-T55). Guarding [spec_order] the way
-   [random_order] is guarded was rejected: the split would no longer be at [lo], which is
-   docs/SPEC.md 3.4's indomain_min, so it is a normative change that moves every model's
-   proof to pay for a defect that has never been observed -- and [random_order]'s own
-   guard is not total anyway ([pick]'s fallback after 8 misses is [lo], which is where it
-   refuses to land). Making the decision's trail entry land exactly on the literal its
-   nogood negates was rejected because **it cannot be done**: the low side lands exactly
-   iff [k] is in the domain and the high side iff [k + 1] is, so demanding both is
-   demanding [random_order]'s guard condition, and a complementary literal pair at a hole
-   boundary always leaves one side settling. Choosing the literal from the settled bound
+   [random_order] was then guarded was rejected: the split would no longer be at [lo],
+   which is docs/SPEC.md 3.4's indomain_min, so it is a normative change that moves every
+   model's proof to pay for a defect that has never been observed -- and that guard was
+   not total anyway, its fallback after eight misses being [lo] itself, which is where it
+   refused to land. (M1-T45 has since removed it outright; the argument above is what
+   made that possible, and [random_order]'s header records the evidence.) Making the
+   decision's trail entry land exactly on the literal its nogood negates was rejected
+   because **it cannot be done**: the low side lands exactly iff [k] is in the domain and
+   the high side iff [k + 1] is, so demanding both is demanding that old guard's
+   condition, and a complementary literal pair at a hole boundary always leaves one side
+   settling. Choosing the literal from the settled bound
    instead only moves the gap to the other side, where it is worse: the two children's
    nogoods then no longer resolve on one literal.
 
@@ -455,9 +469,9 @@ let close_root_conflict ctx trace store (c : Store.conflict) =
    the decision that made it, naming the variable and both bounds, so when it stops
    holding the proof is rejected *there* rather than at a nogood several inferences away
    -- or, worse, accepted because some other route through the branch happened to close.
-   It also retires M1-T45: with the bridge on the page a hole split is harmless, so
-   [random_order]'s guard is no longer the thing standing between this module and a
-   rejection and the 0.4% of tree shapes it refuses can be reclaimed deliberately.
+   It also retires M1-T45, and M1-T45 has now taken it up: with the bridge on the page a
+   hole split is harmless, so [random_order] no longer refuses one and the 0.4% of tree
+   shapes it used to give up are back. [test_hole_split_sweep] is the evidence.
 
    It changes no tree. No order, no split, no domain and no decision literal is touched;
    a run that never splits at a hole emits byte-for-byte the proof it emitted before, and
@@ -482,7 +496,7 @@ let decision_entries store =
 (* Did this push land somewhere strictly stronger than its literal names, and if so on
    what? [Some cond] is the bound the trail actually recorded; [None] means the push
    landed exactly and there is nothing to bridge, which is the overwhelmingly common
-   case and the only one [random_order]'s guard permits.
+   case -- and, before M1-T45, the only one [random_order] would produce.
 
    The literal's polarity says which side the branch took: [x_ge_b] is the high side, so
    the low bound moved and lands exactly on [b]; [~x_ge_b] is [x <= b - 1], so the high
