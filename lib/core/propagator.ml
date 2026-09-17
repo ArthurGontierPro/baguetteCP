@@ -13,10 +13,13 @@
    the D-0018 point 3 bound facts alongside the [Explanation.t]. Note what a propagator
    does NOT do here: it never writes its own id. Either it forwards the [Store.conflict]
    a failing mutator handed it, unchanged, or it builds one with [Store.conflict store]
-   -- and that function stamps whoever [Engine] said was running. There is deliberately
-   no way to name an id from inside a propagator, because a propagator that could name
-   one could name the wrong one, and a prune credited to the wrong constraint is a wrong
-   answer that conflict analysis (M2-T3) would produce silently.
+   -- and that function stamps whoever [Engine] said was running. No function a
+   propagator calls to change a domain or to report a conflict takes an id, so a
+   propagator that wanted to name the wrong one would have to go out of its way, through
+   [Store.with_running], which the engine needs public. That route is not sealed; it is
+   *checked*, by [Engine.check_attribution], and test_engine.ml's [Steals_credit] walks
+   through it on purpose to prove the check fires. Sealing it is not available: [Store]
+   cannot tell an engine from a propagator, since it cannot see either type.
 
    Reach the payload with [c_why] where the old [Conflict of Explanation.t] gave it
    directly. *)

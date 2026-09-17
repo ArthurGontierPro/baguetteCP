@@ -62,10 +62,13 @@ type mark = { trail_mark : int; reason_mark : int }
    [Explanation] to carry the row.
 
    It is stamped by [apply] off [t.current_prop], which the ENGINE sets around each
-   [run] -- never passed in by the propagator. That is the whole point: a propagator
-   cannot name an id at all, so it cannot name the wrong one. [Engine.check_attribution]
-   then reads the stamp back and rejects any entry credited to an instance that does not
-   watch the variable it changed, which is what stops the field being decoration.
+   [run] -- never passed in by the propagator. That is the whole point: no mutator takes
+   an id, so a propagator has nothing to get wrong. [Engine.check_attribution] then reads
+   the stamp back, on by default, and rejects any entry that does not name the instance
+   that just ran or that credits an instance which does not watch the variable it
+   changed. That read-back is what stops the field being decoration -- an id that is
+   threaded and never read changes no behaviour at all, and would pass every test this
+   suite has.
 
    Note for docs/ARCHITECTURE.md section 3 (the "keep the trail record small" one):
    this record is now six fields, three of which exist only for the proof and for
@@ -166,9 +169,11 @@ let reasons t = t.reasons
    The alternative considered and rejected was for each propagator to pass its own id to
    every mutator it calls. That is invasive -- every [set_lo]/[set_hi]/[remove] call site
    in prop/ grows an argument -- and, worse, unenforceable: nothing stops a propagator
-   passing an id that is not its own, and the resulting mis-attribution is invisible.
-   Stamping from the engine makes attributing a prune to the wrong propagator
-   structurally impossible rather than merely discouraged. *)
+   passing an id that is not its own, and there is no second source of truth to check it
+   against, because the caller IS the authority in that design. Stamping from the engine
+   leaves the mutators with no id to get wrong and gives the check something to compare
+   against; the one remaining route to a wrong stamp is re-entering [with_running] from
+   inside a propagator, which [Engine.check_attribution] refuses. *)
 let running t = t.current_prop
 
 (* Run [f] with [id] recorded as the running instance, restoring whatever was recorded
