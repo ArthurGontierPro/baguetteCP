@@ -50,10 +50,21 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
 - **I-X6** A `Deferred` explanation's thunk closes over a **snapshot** and never reads live
   store state. Forcing it later must render the derivation as of the moment the pruning
   was made, not as of now. This is what makes D-0018's lazy trace sound: the trace is
-  written when a branch fails, by which time the store has moved on. `linear.ml`'s
-  `snapshot_source` is the pattern to copy; `explain_cross_conflict` violated this until
-  M1-T13 and was harmless only by accident, because search happened to force a conflict
-  explanation immediately. Conflict analysis (M2-T3) will not.
+  written when a branch fails, by which time the store has moved on.
+
+  **The two halves now have different standing (M2-T8).** On the *reason* half it is
+  discharged **by the type**: `Reason.t` is a list of frozen facts and `Reason.lits` takes
+  no store, so a reason cannot read live state even by mistake. On the *justification*
+  half it is still discipline, not type — a thunk can still close over the wrong thing,
+  and M2-T8 measured what that costs: moving a per-term snapshot inside the justification
+  thunk kills four binaries with a **stack overflow** rather than a wrong answer, because
+  at force time the pruning's own entry supports the bound and the derivation cites
+  itself. A crash is not a check; two tests now catch it and they are the only ones that do.
+
+  `explain_cross_conflict` violated I-X6 until M1-T13 and was harmless only by accident,
+  because search happens to force a conflict explanation immediately. **That blind spot is
+  still open**: M2-T8 confirmed the function is reached, and that breaking its snapshot
+  discipline reddens nothing. Conflict analysis (M2-T3) is where it stops being harmless.
 
 - **I-X7** What `conclusion UNSAT` cites is a line the checker has itself established is a
   contradiction — either a `pol` chain closing at `0 >= k` (D-0013) or an explicitly
@@ -86,13 +97,19 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
   `Combine` is emitted only at a root conflict, where no decision is in force — but
   D-0018 point 2's per-push `pol` path and M2-T3 both reach it. See D-0037.
 
-- **I-P5** Every store mutator that can move a bound takes `~facts`, and every propagator
-  that calls one passes the facts it actually read. A propagator that prunes through a
-  factless mutator writes a D-0018 trace line with an empty reason — an unconditional
-  claim — and on a satisfiable model such a line is not merely unprovable, it is **false**.
-  This is the companion to I-P4: I-P4 makes every change carry an *explanation*, I-P5 makes
-  every bound move carry the *facts* its trace line negates. `int_ne` violated this from
-  M1-T9 until M1-T17 by pruning through `Store.remove`.
+- **I-P5** *(merged into I-P4 by M2-T8 — kept for its history, which is the reason the
+  merge was worth doing.)* Every bound move carries the **facts** its trace line negates,
+  as I-P4 makes every change carry an *explanation*. A propagator that pruned through a
+  factless mutator wrote a D-0018 trace line with an empty reason — an unconditional claim
+  — and on a satisfiable model such a line is not merely unprovable, it is **false**.
+  `int_ne` violated this from M1-T9 until M1-T17 by pruning through `Store.remove`, and
+  M1-T57 was the same shape again in a different guise.
+
+  Since M2-T8 there is **one** obligation, not two that can drift apart: every mutator
+  takes a single `Reason.justified`, which pairs the reason with the justification, and
+  `set_lo_with_facts` / `set_hi_with_facts` / `remove_with_facts` / `no_facts` are gone.
+  A caller with genuinely no facts writes `Reason.none` and is **seen** doing it, which is
+  the property the separate `~facts` argument could never enforce.
 
 ## Search
 

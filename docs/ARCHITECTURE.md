@@ -84,12 +84,20 @@ proof-side — M2-T3 resolves an entry's reason constraint through it, which is 
 `Engine.check_attribution` reads it back on every propagation and not only under
 `BAGUETTE_DEBUG`.
 
-So "keep trail records small" above is now a goal the entry only partly meets: **six
-fields**, two of them proof-side and one for conflict analysis. `facts` is a thunk rather
-than a list for that reason, and the arena indirection for explanations matters more, not
-less. If the trail ever moves to `Bigarray`/`Bytes` (M6-T2, D-0001), `now`, `facts` and
-`prop` are the awkward part of the move and should be planned for rather than discovered —
-`prop` is the easiest of the three, being a plain int.
+**M2-T8 then reshaped the record again.** `facts`, a thunk, became `reason : Reason.t`,
+a list of frozen facts that materialises on demand and closes over nothing — so the
+laziness moved from a closure per pruning to a materialisation point, and I-X6 on that
+half became a type property. And `sup_lo` / `sup_hi` were added: the trail position of
+the entry that established each bound, maintained by `apply` and restored by `undo_to`,
+which is what let `linear.ml`'s per-pruning backward trail scan be deleted.
+
+So "keep trail records small" above is now a goal the entry only partly meets: **eight
+fields** — `var`, `old`, `now`, `why`, `reason`, `prop`, `sup_lo`, `sup_hi` — two of them
+proof-side, one for conflict analysis and two for support. The arena indirection for
+explanations matters more, not less. If the trail ever moves to `Bigarray`/`Bytes`
+(M6-T2, D-0001), `now` and `reason` are the awkward part of the move and should be planned
+for rather than discovered; `prop`, `sup_lo` and `sup_hi` are plain ints and are the easy
+part.
 
 ## 4. Explanations
 
