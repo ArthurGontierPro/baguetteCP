@@ -23,7 +23,7 @@
 # swapping the box as merely slow.
 #
 # Two more, for the same reason at one remove: solve time is reported apart from
-# verify time, and a search-tree proxy is reported apart from both. Without them a
+# verify time, and the search-tree node count is reported apart from both. Without them a
 # proof that grew because the SEARCH changed is indistinguishable from one that grew
 # because each pruning now costs more lines -- and those two have opposite fixes.
 #
@@ -342,7 +342,8 @@ time_flag_is_quiet() {
 # An emission-heavy model to exercise the M1-T47 split on: one whose .pbp is written
 # line after line DURING the search, so that a disconnected accumulator cannot hide.
 # width_sat_depth is the one such model in this suite (545 lines, 29.9 kB, 196 level
-# markers). Looked for among the models being measured first, then beside them, then
+# markers over a 99-node tree -- M1-T36, and the two numbers being that far apart is
+# why the marker count is no longer reported as the tree on its own). Looked for among the models being measured first, then beside them, then
 # in test/models/ relative to this script -- and if none of those has it, the caller
 # is told the split went unexercised rather than being shown an untested column.
 emission_heavy_model() {
@@ -629,7 +630,8 @@ phsum() {
 #   m_solve m_verify        minimum microseconds
 #   m_solve_hi m_verify_hi  maximum microseconds, which is where the spread comes from
 #   m_srss m_vrss           peak RSS in kB of solve and of verify
-#   m_lines m_longest m_rup m_pol m_levels m_depth   proof shape, and the tree proxy
+#   m_lines m_longest m_rup m_pol m_levels m_depth   proof shape, and the old proxy
+#   m_nodes m_decs m_tdepth   the search tree, from the solver's own counter (M1-T36)
 #   m_fmt        the format the .pbp says it is, read from the file, not from the env
 #   m_status     ok | REJECTED | SOLVER-FAILED | REFUSED
 measure() {
@@ -640,6 +642,7 @@ measure() {
 
   m_status=ok
   m_stable=1
+  m_nodes="-"; m_decs="-"; m_tdepth="-"
   m_solve=0; m_verify=0; m_solve_hi=0; m_verify_hi=0
   m_srss=""; m_vrss=""
 
@@ -749,6 +752,43 @@ measure() {
   m_depth="$(grep -oE '^(% level |# )[0-9]+' "${prefix}.pbp" | grep -oE '[0-9]+$' | sort -n | tail -1)"
   [ -z "${m_depth}" ] && m_depth=0
 
+  # M1-T36. The REAL search tree, counted by the solver and printed by `--stats` on
+  # stderr, replacing what `m_levels` above was standing in for. `m_levels` is kept and
+  # still printed, because the two diverging is the single most useful thing this table
+  # can say: same nodes with different markers is a proof-shape change at an unchanged
+  # tree, which is exactly D-0026's claim and exactly what the proxy alone could not
+  # distinguish from a tree that moved.
+  #
+  # ITS OWN DEDICATED PASS, outside the timed repeats, for the same reason --time gets
+  # one. The cost here is three int increments per node and four stderr lines, not a
+  # dozen clock reads, so it would very likely be invisible -- but "very likely
+  # invisible" is not a measurement, and bench/README.md's rule is that the instrument
+  # stays out of the number. Run with --proof to the SAME prefix so this is literally
+  # the configuration being measured, and after the metrics above are taken; the bytes
+  # are already known reproducible across repeats (m_stable) so rewriting them changes
+  # nothing that was read.
+  #
+  # A binary that does not know --stats -- SOLVER_B may be an older one -- prints a
+  # usage error and exits non-zero. That leaves the three columns as "-", which is the
+  # honest rendering of "this configuration cannot report its tree", and it must not be
+  # read as zero.
+  local stats_txt
+  if stats_txt="$("${solve[@]}" --stats 2>&1 >/dev/null)"; then
+    if printf '%s\n' "${stats_txt}" | grep -q 'INCONSISTENT'; then
+      # The solver's own identity check (nodes = 2 * decisions + 1 on an exhausted
+      # tree) failed. The counters are wrong, so no tree column may be printed -- and
+      # the whole model is reported as a failure rather than as a run with a gap in it.
+      m_status="SOLVER-FAILED (--stats reported INCONSISTENT counters: $(printf '%s\n' "${stats_txt}" | grep INCONSISTENT | head -1))"
+      return 1
+    fi
+    m_nodes="$(printf '%s\n' "${stats_txt}" | awk '$1 == "stats:" && $2 == "nodes" { print $3 }')"
+    m_decs="$(printf '%s\n' "${stats_txt}" | awk '$1 == "stats:" && $2 == "decisions" { print $3 }')"
+    m_tdepth="$(printf '%s\n' "${stats_txt}" | awk '$1 == "stats:" && $2 == "maxdepth" { print $3 }')"
+    case "${m_nodes}" in '' | *[!0-9]*) m_nodes="-" ;; esac
+    case "${m_decs}" in '' | *[!0-9]*) m_decs="-" ;; esac
+    case "${m_tdepth}" in '' | *[!0-9]*) m_tdepth="-" ;; esac
+  fi
+
   [ "${KEEP}" -eq 0 ] && rm -f "${prefix}.stdout" "${prefix}.stderr" "${prefix}.veripb" \
                                "${prefix}.opb" "${prefix}.pbp"
   return 0
@@ -757,15 +797,16 @@ measure() {
 # ------------------------------------------------------------------ the run
 
 hdr() {
-  printf '%-22s %10s %10s %9s %6s %9s %6s %7s %7s %7s %5s %5s %5s %4s\n' \
-    "model" ".opb B" ".pbp B" "solve ms" "+-%" "verify ms" "+-%" "slvMB" "vrfMB" "longest" "lines" "rup" "pol" "lvl"
-  printf '%-22s %10s %10s %9s %6s %9s %6s %7s %7s %7s %5s %5s %5s %4s\n' \
+  printf '%-22s %10s %10s %9s %6s %9s %6s %7s %7s %7s %5s %5s %5s %6s %4s\n' \
+    "model" ".opb B" ".pbp B" "solve ms" "+-%" "verify ms" "+-%" "slvMB" "vrfMB" "longest" "lines" "rup" "pol" "nodes" "lvl"
+  printf '%-22s %10s %10s %9s %6s %9s %6s %7s %7s %7s %5s %5s %5s %6s %4s\n' \
     "----------------------" "----------" "----------" "---------" "------" "---------" "------" \
-    "-------" "-------" "-------" "-----" "-----" "-----" "----"
+    "-------" "-------" "-------" "-----" "-----" "-----" "------" "----"
 }
 
 declare -A A_opb A_pbp A_solve A_verify A_lines A_longest A_rup A_pol A_levels A_depth A_fmt A_stable A_srss A_vrss
 declare -A B_opb B_pbp B_solve B_verify B_lines B_longest B_rup B_pol B_levels B_depth B_fmt B_stable B_srss B_vrss
+declare -A A_nodes A_decs A_tdepth B_nodes B_decs B_tdepth
 declare -A A_ssp A_vsp B_ssp B_vsp
 declare -a ITAB=()
 failed=0
@@ -800,10 +841,10 @@ run_config() {
     local ssp vsp
     ssp="$(pct $((m_solve_hi - m_solve)) "${m_solve}")"
     vsp="$(pct $((m_verify_hi - m_verify)) "${m_verify}")"
-    printf '%-22s %10s %10s %9s %5s%% %9s %5s%% %7s %7s %7s %5s %5s %5s %4s%s\n' \
+    printf '%-22s %10s %10s %9s %5s%% %9s %5s%% %7s %7s %7s %5s %5s %5s %6s %4s%s\n' \
       "${base}" "${m_opb}" "${m_pbp}" "$(ms "${m_solve}")" "${ssp}" \
       "$(ms "${m_verify}")" "${vsp}" "$(mb "${m_srss}")" "$(mb "${m_vrss}")" \
-      "${m_longest}" "${m_lines}" "${m_rup}" "${m_pol}" "${m_levels}" \
+      "${m_longest}" "${m_lines}" "${m_rup}" "${m_pol}" "${m_nodes}" "${m_levels}" \
       "$([ "${m_stable}" -eq 0 ] && printf '  !! proof bytes NOT reproducible across repeats')"
     if [ "${which}" = "A" ]; then
       NAMES+=("${base}")
@@ -811,11 +852,13 @@ run_config() {
       A_lines[$base]=$m_lines; A_longest[$base]=$m_longest; A_rup[$base]=$m_rup; A_pol[$base]=$m_pol
       A_levels[$base]=$m_levels; A_depth[$base]=$m_depth; A_fmt[$base]=$m_fmt; A_stable[$base]=$m_stable
       A_ssp[$base]=$ssp; A_vsp[$base]=$vsp; A_srss[$base]=$m_srss; A_vrss[$base]=$m_vrss
+      A_nodes[$base]=$m_nodes; A_decs[$base]=$m_decs; A_tdepth[$base]=$m_tdepth
     else
       B_opb[$base]=$m_opb; B_pbp[$base]=$m_pbp; B_solve[$base]=$m_solve; B_verify[$base]=$m_verify
       B_lines[$base]=$m_lines; B_longest[$base]=$m_longest; B_rup[$base]=$m_rup; B_pol[$base]=$m_pol
       B_levels[$base]=$m_levels; B_depth[$base]=$m_depth; B_fmt[$base]=$m_fmt; B_stable[$base]=$m_stable
       B_ssp[$base]=$ssp; B_vsp[$base]=$vsp; B_srss[$base]=$m_srss; B_vrss[$base]=$m_vrss
+      B_nodes[$base]=$m_nodes; B_decs[$base]=$m_decs; B_tdepth[$base]=$m_tdepth
     fi
     if [ "${m_iok}" -eq 1 ]; then
       # `search` itself is not a column any more: it is exactly propag + emit, and a
@@ -832,10 +875,11 @@ run_config() {
         "$(pct $((m_solve - m_i_inmain)) "${m_solve}")")")
     fi
     if [ -n "${TSV}" ]; then
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "${which}" "${base}" "${m_fmt}" "${m_opb}" "${m_pbp}" "${m_solve}" "${m_verify}" \
         "${m_srss:-}" "${m_vrss:-}" "${m_lines}" "${m_longest}" "${m_rup}" "${m_pol}" \
-        "${m_levels}" "${m_depth}" "${m_stable}" >> "${TSV}"
+        "${m_levels}" "${m_depth}" "${m_stable}" "${m_nodes}" "${m_decs}" "${m_tdepth}" \
+        >> "${TSV}"
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "${which}" "${base}" "${m_i_startup:-}" "${m_i_parse:-}" "${m_i_compile:-}" \
         "${m_i_opb:-}" "${m_i_search:-}" "${m_i_propag:-}" "${m_i_emit:-}" \
@@ -899,7 +943,7 @@ run_config() {
 }
 
 if [ -n "${TSV}" ]; then
-  printf 'config\tmodel\tformat\topb_bytes\tpbp_bytes\tsolve_us\tverify_us\tsolve_rss_kb\tverify_rss_kb\tlines\tlongest\trup\tpol\tlevels\tdepth\tbytes_reproducible\n' > "${TSV}"
+  printf 'config\tmodel\tformat\topb_bytes\tpbp_bytes\tsolve_us\tverify_us\tsolve_rss_kb\tverify_rss_kb\tlines\tlongest\trup\tpol\tlevels\tdepth\tbytes_reproducible\tnodes\tdecisions\ttree_depth\n' > "${TSV}"
   # The internal timings go to their OWN file, not extra columns here, because they are
   # a different clock (CPU, not wall) measured on different runs. Putting two clocks in
   # one row is how they get subtracted from each other by someone reading it later.
@@ -918,9 +962,9 @@ if [ "${COMPARE}" -eq 1 ]; then
   echo "${LABEL_B} against ${LABEL_A}, one column at a time. A timing delta no larger than"
   echo "the spread measured above is NOISE and is labelled so; it is not a small win."
   echo
-  printf '%-22s %12s %12s %14s %14s %10s\n' "model" ".opb" ".pbp" "solve" "verify" "tree(lvl)"
-  printf '%-22s %12s %12s %14s %14s %10s\n' "----------------------" "------------" "------------" \
-    "--------------" "--------------" "----------"
+  printf '%-22s %12s %12s %14s %14s %12s\n' "model" ".opb" ".pbp" "solve" "verify" "tree(nodes)"
+  printf '%-22s %12s %12s %14s %14s %12s\n' "----------------------" "------------" "------------" \
+    "--------------" "--------------" "------------"
   for base in "${NAMES[@]}"; do
     [ -z "${B_opb[$base]:-}" ] && continue
     d_opb="$(pct $(( ${B_opb[$base]} - ${A_opb[$base]} )) "${A_opb[$base]}")"
@@ -934,15 +978,38 @@ if [ "${COMPARE}" -eq 1 ]; then
     a_s="${d_solve#-}"; a_v="${d_verify#-}"
     [ "${a_s}" -le "${lim_s}" ] 2>/dev/null && noise_s=" noise"
     [ "${a_v}" -le "${lim_v}" ] 2>/dev/null && noise_v=" noise"
+    # M1-T36. The verdict now comes from the node count, which is the tree, and the
+    # level-marker count is consulted only to separate the two cases the proxy alone
+    # used to fuse:
+    #
+    #   CHANGED     the node counts differ. The tree moved; nothing else here is a
+    #               like-for-like comparison on this model.
+    #   proof-only  the same nodes, different markers. The SAME TREE, written down
+    #               differently. This is the case D-0026's claim is about, and the old
+    #               tree(lvl) column reported it as CHANGED -- so a benchmark holding
+    #               only the proxy could not test the claim it was there to test.
+    #   same        both agree.
+    #   n/a         at least one configuration could not report its tree (an older
+    #               binary without --stats). NOT "same" -- unknown.
     tree="same"
-    [ "${B_levels[$base]}" != "${A_levels[$base]}" ] && tree="CHANGED"
-    printf '%-22s %11s%% %11s%% %8s%%%-6s %8s%%%-6s %10s\n' \
+    if [ "${A_nodes[$base]:--}" = "-" ] || [ "${B_nodes[$base]:--}" = "-" ]; then
+      tree="n/a"
+    elif [ "${B_nodes[$base]}" != "${A_nodes[$base]}" ]; then
+      tree="CHANGED"
+    elif [ "${B_levels[$base]}" != "${A_levels[$base]}" ]; then
+      tree="proof-only"
+    fi
+    printf '%-22s %11s%% %11s%% %8s%%%-6s %8s%%%-6s %12s\n' \
       "${base}" "${d_opb}" "${d_pbp}" "${d_solve}" "${noise_s}" "${d_verify}" "${noise_v}" "${tree}"
   done
   echo
-  echo "tree(lvl) is the search-tree proxy. Where it says CHANGED the two configurations"
-  echo "did not explore the same tree, and NONE of the other four columns is a"
-  echo "like-for-like comparison of proof density on that model."
+  echo "tree(nodes) compares the SOLVER'S OWN node count (M1-T36), not the level markers"
+  echo "in the proof. CHANGED means the two configurations did not explore the same tree,"
+  echo "and NONE of the other four columns is a like-for-like comparison on that model."
+  echo "proof-only means the same tree written down differently -- the level-marker count"
+  echo "moved and the node count did not -- which is the case worth comparing the other"
+  echo "four columns on, and the case the old tree(lvl) column reported as CHANGED."
+  echo "n/a means a configuration could not report its tree. It does not mean 'same'."
 fi
 
 # ------------------------------------------------------------------ footer
@@ -960,10 +1027,20 @@ echo "  * slvMB / vrfMB are peak RSS, from a dedicated run outside the timed rep
 echo "    On this box memory is the resource that fails first: a wide-domain model"
 echo "    costs about 1.5 kB of RSS per unit of declared width against 63 bytes of"
 echo "    .opb, so a size-and-time-only benchmark would call swapping 'slow'."
-echo "  * solve and verify are separate on purpose, and so is lvl (the search-tree"
-echo "    proxy: one level marker per branch child explored -- node count is not"
-echo "    instrumented). A proof that grew because the search changed and a proof that"
-echo "    grew because each pruning costs more lines need opposite fixes."
+echo "  * solve and verify are separate on purpose, and so are nodes and lvl. A proof"
+echo "    that grew because the search changed and a proof that grew because each"
+echo "    pruning costs more lines need opposite fixes, and telling them apart is what"
+echo "    these two columns are for:"
+echo "      nodes  the SOLVER'S OWN search-tree node count (M1-T36, \`--stats\`): the"
+echo "             root plus every child Search.branch dispatched. Counted by the"
+echo "             search, so it does not move when the proof's shape does, and it is"
+echo "             available with no proof written at all. \`-\` means the binary does"
+echo "             not report it; that is not a zero."
+echo "      lvl    level markers in the .pbp -- what this column used to be alone, and"
+echo "             labelled a proxy. It is NOT the node count and not a multiple of it:"
+echo "             a marker goes in per child explored AND per step back down to a"
+echo "             parent, and none go in without --proof. Kept because nodes and lvl"
+echo "             DIVERGING is the informative case: same tree, denser proof."
 echo "  * Byte counts come from a proof the checker ACCEPTED. A rejected proof is"
 echo "    reported as REJECTED with no timings at all."
 echo "  * The wall-clock table and the internal table are two different clocks and"

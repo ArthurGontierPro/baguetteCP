@@ -1114,6 +1114,422 @@ let test_hole_split_bridge () =
         ];
       try Sys.rmdir dir with _ -> ())
 
+(* ===================================================================== *)
+(* 7. M1-T36. The node counter, and the fact that it is NOT the level    *)
+(*    marker count the benchmark used to report in its place.            *)
+(* ===================================================================== *)
+
+(* How many level markers does a proof contain? This is the benchmark's old `lvl`
+   proxy, transcribed: [Writer.set_level] writes `# l` under format 2.0 and the comment
+   `% level l` under 3.0, so both spellings have to be admitted or the count is zero
+   under whichever format the run did not use -- the same trap bench/run_bench.sh's
+   rule-count regexes document. *)
+let level_markers pbp =
+  List.length
+    (List.filter
+       (fun l ->
+         let l = String.trim l in
+         let after p =
+           String.length l > String.length p
+           && String.sub l 0 (String.length p) = p
+           &&
+           let rest =
+             String.sub l (String.length p) (String.length l - String.length p)
+           in
+           rest <> "" && String.for_all (fun c -> c >= '0' && c <= '9') rest
+         in
+         after "# " || after "% level ")
+       (lines_of (read_file pbp)))
+
+let check_eq name got want =
+  if got = want then Printf.printf "ok   %s (%d)\n" name got
+  else (
+    incr failures;
+    Printf.printf "FAIL %s: got %d, want %d\n" name got want)
+
+(* [unsat_scene] is x1 = x2 and x1 + x2 = 1 over 0..1, and its tree is small enough to
+   write down by hand rather than record whatever the counter happens to say -- which is
+   the whole point, since a counter checked against its own output checks nothing.
+
+   Root: no bound moves (x1 + x2 = 1 with both in 0..1 tightens nothing), so the root is
+   a fixpoint with two unfixed variables. [first_fail] breaks the size tie by index and
+   picks x1; [spec_order] splits at [lo = 0]. The low side fixes x1 = 0, which forces
+   x2 = 0 and contradicts the sum; the high side fixes x1 = 1, which forces x2 = 1 and
+   contradicts it again. So: ONE decision, TWO children, and the root.
+
+   nodes = 3, decisions = 1, max_depth = 1. *)
+let unsat_tree = (3, 1, 1)
+
+(* And the marker count that same run's proof carries, pinned as a number rather than
+   compared to the nodes. On THIS tree the two coincide at 3, and they coincide for
+   unrelated reasons: 3 nodes is two children plus the root; 3 markers is one per child
+   explored plus one for the step back down to the parent that emits the combined
+   nogood. [sat_tree_markers] below is 2 markers against the same 3 nodes, so no
+   constant relates the two -- which is the finding, and the reason the proxy could not
+   answer D-0026. Both numbers are pinned so that a change in either one reddens. *)
+let unsat_markers = 3
+let sat_tree_markers = (3, 1, 2)
+let node_stats = ref None
+let sat_node_stats = ref None
+
+let build_node_count_proof dir =
+  let store, engine, encoding = unsat_scene () in
+  let opb = Filename.concat dir "nodes.opb" in
+  let pbp = Filename.concat dir "nodes.pbp" in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "x1 = x2; x1 + x2 = 1" ] encoding oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let writer = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof encoding writer;
+  let ctx = mk_ctx writer encoding in
+  let stats = Search.stats_create () in
+  (match Search.solve ~engine ~store ~ctx ~check:(fun _ -> true) ~stats () with
+  | Search.Unsat -> ()
+  | Search.Sat _ -> failwith "build_node_count_proof: expected Unsat");
+  close_out oc;
+  node_stats := Some (stats, level_markers pbp);
+  (opb, pbp)
+
+(* The counts themselves, read back from the run [run_veripb] just checked. Asserting
+   them there rather than in a run of its own is deliberate: the numbers then describe a
+   search whose proof a real checker accepted, so "a test that does not check the proof
+   is half a test" holds for the counter too. *)
+let test_node_counts () =
+  match !node_stats with
+  | None ->
+      incr failures;
+      print_endline
+        "FAIL M1-T36: the node-count proof was never built, so nothing was counted"
+  | Some (st, markers) ->
+      let n, d, depth = unsat_tree in
+      check_eq "M1-T36: nodes visited on the hand-derived UNSAT tree" st.Search.nodes n;
+      check_eq "M1-T36: decisions taken on it" st.Search.decisions d;
+      check_eq "M1-T36: tree depth reached" st.Search.max_depth depth;
+      check "M1-T36: nodes = 2 * decisions + 1 -- the tree was exhausted"
+        (Search.stats_consistent st ~exhausted:true);
+      check_eq "M1-T36: level markers in the same proof -- the old `lvl` proxy" markers
+        unsat_markers
+
+(* And the other half of the identity: a search that stops at the first solution has
+   NOT visited both sides of every decision, so only the inequality may be asserted.
+   [sat_scene] is x1 = x2 and x1 + x2 + x3 = 2 over the same widths. *)
+let test_node_counts_sat () =
+  let store, engine, encoding = sat_scene () in
+  let path, oc = scratch_writer () in
+  let writer = Writer.create ~comments:false ~audit:true oc in
+  Encoding.start_proof encoding writer;
+  let ctx = mk_ctx writer encoding in
+  let stats = Search.stats_create () in
+  let outcome = Search.solve ~engine ~store ~ctx ~check:sat_check ~stats () in
+  close_out oc;
+  let markers = level_markers path in
+  Sys.remove path;
+  check "M1-T36: the SAT scene is still SAT with a stats record threaded through it"
+    (match outcome with Search.Sat _ -> true | Search.Unsat -> false);
+  check "M1-T36: nodes <= 2 * decisions + 1 on a search stopped at a solution"
+    (Search.stats_consistent stats ~exhausted:false);
+  check "M1-T36: the root alone is a node, so a search that ran counts at least one"
+    (stats.Search.nodes >= 1);
+  let n, d, m = sat_tree_markers in
+  check_eq "M1-T36: nodes visited before the first solution" stats.Search.nodes n;
+  check_eq "M1-T36: decisions taken before it" stats.Search.decisions d;
+  check_eq "M1-T36: level markers in the SAT proof" markers m;
+  sat_node_stats := Some (stats, markers)
+
+(* THE POINT OF THE ROW, and it can only be made by comparing two trees. The proxy is
+   not the node count, and it is not a fixed multiple of it either: the UNSAT scene has
+   3 nodes and 3 markers, the SAT scene has 3 nodes and 2 markers. Same node count,
+   different marker count -- so a benchmark holding only the markers cannot tell whether
+   the tree moved, which is exactly what D-0026's claim needs it to be able to do.
+   A change that made this counter read the proof back, or a scaling that pretended one
+   number is the other times a constant, reddens here. *)
+let test_marker_proxy_is_not_the_node_count () =
+  match (!node_stats, !sat_node_stats) with
+  | Some (u, um), Some (sa, sm) ->
+      check
+        "M1-T36: two trees with the SAME node count carry DIFFERENT marker counts -- the \
+         proxy is neither the node count nor a multiple of it"
+        (u.Search.nodes = sa.Search.nodes && um <> sm)
+  | _ ->
+      incr failures;
+      print_endline
+        "FAIL M1-T36: one of the two runs did not record its counts, so the proxy \
+         comparison was NOT made"
+
+(* ===================================================================== *)
+(* 8. M1-T45. Every branching shape random_order's hole guard refused,   *)
+(*    forced deliberately, and the real checker over each proof.          *)
+(* ===================================================================== *)
+
+(* The guard's own condition, transcribed: it would take a split at [k] only when both
+   [k] and [k + 1] were in the domain. Everything else it refused, and this predicate is
+   what says a shape below is one of those -- rather than a comment claiming it is. *)
+let guard_refused d k = not (Domain.mem d k && Domain.mem d (k + 1))
+
+(* An order that makes one chosen decision and otherwise defers to the normative one.
+   This is how the refused shapes get exercised DELIBERATELY instead of being waited for:
+   [random_order] would reach them at 0.4% of its draws, which is a measurement, not a
+   test. *)
+let forced_order (wanted : (Var.t * int * bool) list) store cands =
+  let rec pick = function
+    | [] -> Search.spec_order store cands
+    | (v, k, hf) :: rest ->
+        let d = Store.get store v in
+        if Array.exists (fun c -> c = v) cands && k >= Domain.lo d && k < Domain.hi d then
+          { Search.d_var = v; d_split = k; d_high_first = hf }
+        else pick rest
+  in
+  pick wanted
+
+(* [hx] in 0..4 with a hole punched at each of [holes], [hy] in 0..4, [hx = hy] and
+   [hx <> hy]. Built to the same recipe as [hole_scene] above and for the same reasons:
+   the disequalities punch interior holes at the root without moving a bound, [hx <> hy]
+   has two unfixed terms so it infers nothing and the search must branch, and [hx = hy]
+   beside it makes the model UNSAT so BOTH children emit a nogood -- which is where a
+   settled decision has to be bridged. Width 5, so the order encoding stays small and
+   the declared-width lint has nothing to say. *)
+let sweep_domains = [ ("hx", 0, 4); ("hy", 0, 4) ]
+
+let sweep_scene holes =
+  let e = Encoding.create () in
+  List.iter (fun (n, lo, hi) -> Encoding.declare_int e n ~lo ~hi) sweep_domains;
+  List.iter
+    (fun h -> ignore (Encoding.add_int_lin_ne e [ (1, "hx") ] h : int * int))
+    holes;
+  let le_id = Encoding.add_int_lin_le e [ (1, "hx"); (-1, "hy") ] 0 in
+  let ge_id = Encoding.add_int_lin_le e [ (-1, "hx"); (1, "hy") ] 0 in
+  ignore (Encoding.add_int_lin_ne e [ (1, "hx"); (-1, "hy") ] 0 : int * int);
+  let store = mk_store sweep_domains in
+  let hx, hy = (var 0, var 1) in
+  let le, ge = eq_pair store hx hy ~le_id ~ge_id in
+  let props =
+    pack_linear 0 le :: pack_linear 1 ge
+    :: List.mapi (fun i h -> pack_ne (2 + i) (Ne.make store [ (1, hx) ] h)) holes
+    @ [ pack_ne (2 + List.length holes) (Ne.make store [ (1, hx); (-1, hy) ] 0) ]
+  in
+  (store, Engine.create props, e)
+
+(* Three variables in 0..2, each with its middle value punched out, and a disequality
+   against every sum they can reach. Three unfixed terms infer nothing, and two still
+   infer nothing, so the search must take TWO decisions before propagation can close a
+   branch -- which is what puts a settled hole decision in [bridges]' ANCESTORS list
+   rather than only in its own conjunct. The depth-1 sweep above cannot reach that. *)
+let deep_domains = [ ("dx", 0, 2); ("dy", 0, 2); ("dz", 0, 2) ]
+
+let deep_scene () =
+  let e = Encoding.create () in
+  List.iter (fun (n, lo, hi) -> Encoding.declare_int e n ~lo ~hi) deep_domains;
+  List.iter
+    (fun n -> ignore (Encoding.add_int_lin_ne e [ (1, n) ] 1 : int * int))
+    [ "dx"; "dy"; "dz" ];
+  let terms = [ (1, "dx"); (1, "dy"); (1, "dz") ] in
+  List.iter
+    (fun c -> ignore (Encoding.add_int_lin_ne e terms c : int * int))
+    [ 0; 2; 4; 6 ];
+  let store = mk_store deep_domains in
+  let dx, dy, dz = (var 0, var 1, var 2) in
+  let holes =
+    List.mapi (fun i v -> pack_ne i (Ne.make store [ (1, v) ] 1)) [ dx; dy; dz ]
+  in
+  let sums =
+    List.mapi
+      (fun i c -> pack_ne (3 + i) (Ne.make store [ (1, dx); (1, dy); (1, dz) ] c))
+      [ 0; 2; 4; 6 ]
+  in
+  (store, Engine.create (holes @ sums), e)
+
+(* One shape: build the scene, force the decisions, solve to UNSAT, hand the proof to
+   the real checker. Returns [None] on acceptance and [Some complaint] on rejection --
+   and a missing checker is a rejection here, never a skip (I-X1). *)
+let run_shape ~veripb ~dir ~tag ~scene ~opb_comment ~wanted =
+  let store, engine, encoding = scene () in
+  let opb = Filename.concat dir (tag ^ ".opb") in
+  let pbp = Filename.concat dir (tag ^ ".pbp") in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ opb_comment ] encoding oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let writer = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof encoding writer;
+  let ctx = mk_ctx writer encoding in
+  let stats = Search.stats_create () in
+  let outcome =
+    Search.solve ~engine ~store ~ctx
+      ~check:(fun _ -> true)
+      ~stats ~order:(forced_order wanted) ()
+  in
+  close_out oc;
+  let verdict =
+    match outcome with
+    | Search.Sat _ -> Some "the scene was SAT, so no child nogood was emitted"
+    | Search.Unsat ->
+        let log = Filename.concat dir (tag ^ ".log") in
+        let rc =
+          Sys.command
+            (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
+               (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
+        in
+        let out = read_file log in
+        (try Sys.remove log with _ -> ());
+        if rc = 0 then None else Some out
+  in
+  (* Kept only when it is the evidence of a rejection. *)
+  if verdict = None then List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp ];
+  (verdict, stats.Search.nodes)
+
+(* The sweep. Every interior hole pattern of a width-5 domain, crossed with every split
+   position and both child orders; the ones the guard would have refused are forced and
+   checked, and the ones it would have allowed are counted separately so that the
+   "refused" figure is a proportion of something and not a bare number.
+
+   THE ROW'S BAR, BOTH WAYS ROUND. M1-T45 asked for "an instance showing what it
+   catches" before the shapes could be taken back. A rejection here IS that instance and
+   would put the guard back; no rejection over the whole enumeration, with the count
+   printed, is the other answer -- and the count is printed precisely so that "no
+   instance found" comes with the size of the search that failed to find one. *)
+let test_hole_split_sweep () =
+  match veripb_path () with
+  | None ->
+      incr failures;
+      print_endline
+        "FAIL M1-T45: veripb not found -- NOT ONE hole-split shape was checked. This is \
+         not a pass; install it (docs/PROOF-FORMAT.md) and re-run."
+  | Some veripb -> (
+      let dir = Filename.temp_file "baguette_holesweep" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let refused = ref 0 and allowed = ref 0 and rejected = ref 0 in
+      let patterns =
+        [ []; [ 1 ]; [ 2 ]; [ 3 ]; [ 1; 2 ]; [ 1; 3 ]; [ 2; 3 ]; [ 1; 2; 3 ] ]
+      in
+      List.iter
+        (fun holes ->
+          (* The root fixpoint's domain is what the guard would have inspected, so read
+             it from a propagated store rather than computing it from [holes]. *)
+          let probe, probe_engine, _ = sweep_scene holes in
+          (match Engine.propagate probe_engine probe with
+          | Engine.Conflict _ ->
+              incr failures;
+              Printf.printf
+                "FAIL M1-T45: the sweep scene with holes %s failed at the root, so it \
+                 branches at nothing\n"
+                (String.concat "," (List.map string_of_int holes))
+          | Engine.Fixpoint -> ());
+          let d = Store.get probe (var 0) in
+          for k = Domain.lo d to Domain.hi d - 1 do
+            if not (guard_refused d k) then incr allowed
+            else
+              List.iter
+                (fun hf ->
+                  incr refused;
+                  let tag =
+                    Printf.sprintf "h%s_k%d_%s"
+                      (String.concat "" (List.map string_of_int holes))
+                      k
+                      (if hf then "hi" else "lo")
+                  in
+                  match
+                    run_shape ~veripb ~dir ~tag
+                      ~scene:(fun () -> sweep_scene holes)
+                      ~opb_comment:"hx has interior holes; hx = hy; hx <> hy"
+                      ~wanted:[ (var 0, k, hf) ]
+                  with
+                  | None, _ -> ()
+                  | Some why, _ ->
+                      incr rejected;
+                      Printf.printf
+                        "FAIL M1-T45: veripb REJECTED the hole split holes=[%s] k=%d \
+                         high_first=%b -- THIS is the instance the guard catches, and it \
+                         belongs back\n\
+                         %s\n"
+                        (String.concat "," (List.map string_of_int holes))
+                        k hf why)
+                [ false; true ]
+          done)
+        patterns;
+      check
+        "M1-T45: the sweep really did reach shapes the guard refused (a sweep that \
+         reached none would pass vacuously)"
+        (!refused > 0);
+      check
+        "M1-T45: and shapes it allowed too, so `refused` is a proportion and not a bare \
+         count"
+        (!allowed > 0);
+      (* Pinned, not compared to itself. The enumeration over eight interior hole
+         patterns x four split positions x two child orders yields exactly these two
+         counts; a change that quietly stopped enumerating -- a pattern dropped, a loop
+         bound slipped -- would otherwise still print a confident "0 rejected". *)
+      check_eq "M1-T45: hole-split shapes the guard used to refuse, forced and checked"
+        !refused 40;
+      check_eq "M1-T45: and shapes it would have allowed, in the same enumeration"
+        !allowed 12;
+      if !rejected = 0 then
+        Printf.printf
+          "ok   M1-T45: %d previously-refused hole-split shapes forced (against %d the \
+           guard allowed), 0 rejected by veripb\n"
+          !refused !allowed
+      else (
+        incr failures;
+        Printf.printf "FAIL M1-T45: %d of %d refused shapes were rejected\n" !rejected
+          !refused);
+      try Sys.rmdir dir with _ -> ())
+
+(* And the depth-2 case, which the sweep above structurally cannot reach: a settled hole
+   decision sitting in [bridges]' ancestor list, not just in its own conjunct. *)
+let test_hole_split_with_settled_ancestor () =
+  match veripb_path () with
+  | None ->
+      incr failures;
+      print_endline
+        "FAIL M1-T45: veripb not found -- the ancestor case was NOT checked. Not a pass."
+  | Some veripb -> (
+      let dir = Filename.temp_file "baguette_holedeep" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      (* The precondition, asserted rather than asserted-in-a-comment: at the root every
+         one of the three variables is {0, 2}, so a split at 1 is refused on each, and
+         propagation infers nothing -- so the search has to take two of them. *)
+      let probe, probe_engine, _ = deep_scene () in
+      (match Engine.propagate probe_engine probe with
+      | Engine.Conflict _ ->
+          incr failures;
+          print_endline "FAIL M1-T45: the depth-2 scene failed at the root"
+      | Engine.Fixpoint -> ());
+      let ok_hole v =
+        let d = Store.get probe v in
+        Domain.lo d = 0 && Domain.hi d = 2 && (not (Domain.mem d 1)) && guard_refused d 1
+      in
+      check
+        "M1-T45: in the depth-2 scene every variable is {0, 2} at the root, so a split \
+         at 1 is one the guard refused"
+        (ok_hole (var 0) && ok_hole (var 1) && ok_hole (var 2));
+      List.iter
+        (fun hf ->
+          match
+            run_shape ~veripb ~dir
+              ~tag:(Printf.sprintf "deep_%s" (if hf then "hi" else "lo"))
+              ~scene:deep_scene
+              ~opb_comment:"dx, dy, dz in {0, 2}; dx + dy + dz <> 0, 2, 4, 6"
+              ~wanted:[ (var 0, 1, hf); (var 1, 1, hf); (var 2, 1, hf) ]
+          with
+          | None, nodes ->
+              check
+                (Printf.sprintf
+                   "M1-T45: a hole split under a SETTLED hole ancestor verifies \
+                    (high_first=%b, %d nodes)"
+                   hf nodes)
+                (nodes > 3)
+          | Some why, _ ->
+              incr failures;
+              Printf.printf
+                "FAIL M1-T45: veripb REJECTED a hole split under a settled hole ancestor \
+                 (high_first=%b) -- the guard belongs back\n\
+                 %s\n"
+                hf why)
+        [ false; true ];
+      try Sys.rmdir dir with _ -> ())
+
 let () =
   test_fixpoint_tightens_and_settles ();
   test_conflict_carries_explanation ();
@@ -1137,6 +1553,13 @@ let () =
     ~build:build_search_unsat_proof;
   test_hole_split_precondition ();
   test_hole_split_bridge ();
+  run_veripb ~name:"M1-T36: the node-counted UNSAT search, checked end to end"
+    ~build:build_node_count_proof;
+  test_node_counts ();
+  test_node_counts_sat ();
+  test_marker_proxy_is_not_the_node_count ();
+  test_hole_split_sweep ();
+  test_hole_split_with_settled_ancestor ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

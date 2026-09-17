@@ -115,6 +115,62 @@ exception Unsound_solution of assignment
    recent decision literal and re-derive the next nogood up. *)
 type node = NSat of assignment | NFail of Lit.t list * Writer.cid
 
+(* ------------------------------------------------------------ M1-T36: node counting *)
+
+(* The search-tree node count, kept by the search itself rather than read back out of
+   the proof it wrote.
+
+   WHAT A NODE IS HERE. One node is one child dispatched by [branch], plus the root.
+   [branch] explores a decision's two sides through [explore_le]/[explore_ge], and each
+   of those is one visit to one node of the tree: propagation runs there, and the visit
+   ends in a solution, a failure or a further decision. Counting at the dispatch rather
+   than inside [dfs] is deliberate and it is what makes the count TOTAL -- the
+   [Store.Conflict] arms of [explore_le]/[explore_ge] never reach [dfs], so a counter
+   living in [dfs] would silently miss a node that was visited and failed.
+
+   WHAT IT IS NOT. [bench/run_bench.sh] reported `lvl` -- the number of level markers in
+   the emitted .pbp -- as a stand-in for this, and labelled it a proxy. It is a
+   different number, and not by a constant factor:
+
+     * a level marker is written per child explored AND once more when a branch steps
+       back down to emit its combined nogood ([Writer.set_level] is the only thing that
+       writes one), so an internal node whose two children both fail contributes THREE
+       markers and TWO nodes, while one whose first child is satisfiable contributes ONE
+       marker and (down that path) one node. The ratio is a property of the tree's
+       shape, so it cannot be divided out;
+     * a marker is a property of the PROOF. It moves when the proof's shape changes with
+       the tree standing still, which is precisely the confusion D-0026's claim -- the
+       same search tree costs no more -- cannot be tested through;
+     * there is no marker at all without --proof, and the two formats spell it
+       differently (`# l` under 2.0, `% level l` under 3.0), so the proxy also depends
+       on which checker the run was aimed at.
+
+   [decisions] counts decisions taken: one per [branch] call, which is one per internal
+   node. [max_depth] is the deepest decision stack reached -- the depth of the TREE, not
+   the deepest level marker in the proof.
+
+   THE ARITHMETIC IS CHECKED, because a number nothing reads is decoration and this
+   project has shipped one (M1-T48). Branching is binary and every decision push lands
+   (I-D2, and [check_decision_landed] asserts it), so:
+
+       nodes =  2 * decisions + 1     when the tree was exhausted (Unsat)
+       nodes <= 2 * decisions + 1     when it was not (Sat: the search stops at the
+                                      first solution, so right siblings go unvisited)
+
+   [solve] asserts exactly that under [Debug.check], and test/unit/test_engine.ml
+   asserts it outside [Debug.check] on searches whose trees it knows. An off-by-one
+   anywhere in the accounting, or a count taken at the wrong event, breaks the equality
+   on every complete search. *)
+type stats = { mutable nodes : int; mutable decisions : int; mutable max_depth : int }
+
+let stats_create () = { nodes = 0; decisions = 0; max_depth = 0 }
+
+(* Does this pair of counts satisfy the identity above? [exhausted] is whether the
+   search closed its whole tree. Public because [solve] checks it only under
+   BAGUETTE_DEBUG and the tests must be able to check it always. *)
+let stats_consistent s ~exhausted =
+  if exhausted then s.nodes = (2 * s.decisions) + 1 else s.nodes <= (2 * s.decisions) + 1
+
 (* ------------------------------------------------------- the branching order (M2-T11)
 
    Which variable is branched on, at which value, and which side first. docs/SPEC.md 3.4
@@ -183,54 +239,66 @@ let spec_order store cands =
   { d_var = v; d_split = Domain.lo (Store.get store v); d_high_first = false }
 
 (* A branching order driven by [r], for the fuzzer (test/unit/test_random.ml). Every
-   draw comes from [r], so one seed reproduces one whole tree.
+   draw comes from [r], so one seed reproduces one whole tree. Three draws per decision
+   -- the variable, the split, and which side goes first -- and NO rejection of any
+   split in [lo, hi), which is the only shape constraint [branch] imposes.
 
-   The split is taken at a [k] with both [k] and [k+1] in the domain, so that
-   [set_hi _ k] lands on exactly [k] and [set_lo _ (k+1)] on exactly [k+1]. That is a
-   constraint on the proof rather than on the search: [Domain.settle] walks a bound over
-   a hole, so a decision at a hole would put a bound on the trail strictly stronger than
-   the [x_ge_(k+1)] its nogood negates, and the checker could not replay the difference
-   -- the parenthetical here used to read "an interior hole gets no trace line at all
-   ([Trace]'s [claims] writes one only when a bound moves)", and M1-T56 has made that
-   false: a hole states itself as the two-literal clause `x <= v-1 or x >= v+1` and does
-   get a line. **The constraint on this function is unchanged, and the reason is worth
-   keeping straight** -- what is missing at a hole split was never the hole, it is the
-   *implication* from the literal the branch assumed to the bound the settle established.
-   That implication is conditioned on the ancestor decisions, so it can have no globally
-   valid line of its own (D-0018); [bridges] below states it per settled decision, and
-   this guard is why [random_order] need not rely on that.
-   [lo] is the fallback after a few misses because [lo] is what
-   docs/SPEC.md 3.4 already branches at: [lo] is in the domain by I-D2, so the low side
-   lands exactly, and the high side is then the same [set_lo _ (lo+1)] the default has
-   always made. So a random order reaches new tree shapes without inventing a class of
-   decision the default does not also make -- which is what makes a rejection under it a
-   finding about the solver rather than about this function.
+   ---------------------------------------------------------------------------
+   M1-T45: the hole guard this function used to carry, and why it is gone
+   ---------------------------------------------------------------------------
 
-   The guard shipped disabled. It read [if true || (Domain.mem d k && Domain.mem d
-   (k + 1))], which short-circuits, so the membership test, [pick]'s recursion and
-   [tries] were all dead and every draw was taken whatever the domain looked like --
-   an unfinished-debugging edit from the interrupted session that wrote this, and one
-   no compiler warning catches. Restored here, and what the disabled version bought is
-   recorded rather than guessed at, because "the guard is load-bearing" would be a
-   claim nobody has tested: with it disabled, and with [random_order] further biased to
-   prefer a holey variable AND a hole split within it, 2051 splits out of 495723 over
-   108000 solver runs landed where the guard now refuses, and **not one of them was
-   rejected by veripb**. So the guard is conservative, not measured-necessary. It is
-   restored because the code must say what its header says and because attribution is
-   worth more here than 0.4% more tree shapes -- not because a hole split has been seen
-   to break a proof. Whoever wants that 0.4% back should take it deliberately, with an
-   instance that shows what it catches. *)
+   This function used to refuse to split at a [k] unless both [k] and [k + 1] were in
+   the domain, retrying up to eight times and falling back to [lo]. The refusal was
+   about the proof and not about the search: [Domain.settle] walks a bound over a hole,
+   so a decision at a hole puts a bound on the trail strictly STRONGER than the
+   [x_ge_(k+1)] its nogood negates, and the checker cannot replay the difference unless
+   the difference is written down.
+
+   Three things settled that, in this order, and the last one is the one that matters:
+
+     1. The guard shipped DISABLED. It read [if true || (Domain.mem d k && Domain.mem d
+        (k + 1))], which short-circuits, so the membership test, the retry recursion and
+        the [tries] counter were all dead and every draw was taken whatever the domain
+        looked like -- an unfinished-debugging edit no compiler warning catches. It was
+        restored rather than deleted, deliberately, because "the guard is load-bearing"
+        was a claim nobody had tested.
+     2. Then it was measured. With it disabled, and with [random_order] further biased
+        to prefer a holey variable AND a hole split within it, 2051 splits out of 495723
+        over 108000 solver runs landed where it refused, and NOT ONE was rejected by
+        veripb. So it was conservative, not measured-necessary. The guard was also never
+        total: the fallback after eight misses could itself land at a hole.
+     3. M1-T55 then wrote the missing step down. [bridges] below states, per settled
+        decision and conditioned on that decision's ancestors, the implication from the
+        literal the branch assumed to the bound the settle established. That is exactly
+        what a hole split was missing, and it had to be written anyway: [spec_order] --
+        the normative order, the CLI's only one -- splits at [d_split = lo] and
+        [explore_ge] pushes [set_lo v (lo + 1)], which lands on a hole whenever [lo + 1]
+        is one. So the normative default ALREADY makes the decision this guard refused,
+        has no guard of its own and never did, and M1-T55 closed that by emitting the
+        bridge rather than by adding one.
+
+   Point 3 is the argument, and M1-T45's bar was the right way round: taking these
+   shapes back needed an instance showing what the guard catches. There is none.
+   [test_hole_split_sweep] in test/unit/test_engine.ml forces EVERY split shape the
+   guard used to refuse -- a hole below the split, a hole above it, and holes on both
+   sides at once -- over every interior hole pattern of a width-5 domain, at the root
+   and one level down so the ancestor conjunct of [bridges] is under test too, and runs
+   the real checker over each resulting proof. Every one verifies. What the guard bought
+   was 0.4% fewer tree shapes for the fuzzer and one asymmetry with the normative order;
+   what it cost was a class of decision the default makes and the fuzzer could not.
+
+   If a hole split is ever rejected under this function, that is now a finding about
+   [bridges] or about a propagator, which is what a fuzzer is for -- it is not a finding
+   about this function. *)
 let random_order r store cands =
   let v = cands.(Random.State.full_int r (Array.length cands)) in
   let d = Store.get store v in
   let lo = Domain.lo d and hi = Domain.hi d in
-  let rec pick tries =
-    if tries = 0 then lo
-    else
-      let k = lo + Random.State.full_int r (hi - lo) in
-      if Domain.mem d k && Domain.mem d (k + 1) then k else pick (tries - 1)
-  in
-  { d_var = v; d_split = pick 8; d_high_first = Random.State.bool r }
+  {
+    d_var = v;
+    d_split = lo + Random.State.full_int r (hi - lo);
+    d_high_first = Random.State.bool r;
+  }
 
 let extract_assignment store : assignment =
   List.init (Store.n_vars store) (fun i ->
@@ -370,15 +438,17 @@ let close_root_conflict ctx trace store (c : Store.conflict) =
    that property ends there.
 
    Two routes were open (docs/ROADMAP.md M1-T55). Guarding [spec_order] the way
-   [random_order] is guarded was rejected: the split would no longer be at [lo], which is
-   docs/SPEC.md 3.4's indomain_min, so it is a normative change that moves every model's
-   proof to pay for a defect that has never been observed -- and [random_order]'s own
-   guard is not total anyway ([pick]'s fallback after 8 misses is [lo], which is where it
-   refuses to land). Making the decision's trail entry land exactly on the literal its
-   nogood negates was rejected because **it cannot be done**: the low side lands exactly
-   iff [k] is in the domain and the high side iff [k + 1] is, so demanding both is
-   demanding [random_order]'s guard condition, and a complementary literal pair at a hole
-   boundary always leaves one side settling. Choosing the literal from the settled bound
+   [random_order] was then guarded was rejected: the split would no longer be at [lo],
+   which is docs/SPEC.md 3.4's indomain_min, so it is a normative change that moves every
+   model's proof to pay for a defect that has never been observed -- and that guard was
+   not total anyway, its fallback after eight misses being [lo] itself, which is where it
+   refused to land. (M1-T45 has since removed it outright; the argument above is what
+   made that possible, and [random_order]'s header records the evidence.) Making the
+   decision's trail entry land exactly on the literal its nogood negates was rejected
+   because **it cannot be done**: the low side lands exactly iff [k] is in the domain and
+   the high side iff [k + 1] is, so demanding both is demanding that old guard's
+   condition, and a complementary literal pair at a hole boundary always leaves one side
+   settling. Choosing the literal from the settled bound
    instead only moves the gap to the other side, where it is worse: the two children's
    nogoods then no longer resolve on one literal.
 
@@ -399,9 +469,9 @@ let close_root_conflict ctx trace store (c : Store.conflict) =
    the decision that made it, naming the variable and both bounds, so when it stops
    holding the proof is rejected *there* rather than at a nogood several inferences away
    -- or, worse, accepted because some other route through the branch happened to close.
-   It also retires M1-T45: with the bridge on the page a hole split is harmless, so
-   [random_order]'s guard is no longer the thing standing between this module and a
-   rejection and the 0.4% of tree shapes it refuses can be reclaimed deliberately.
+   It also retires M1-T45, and M1-T45 has now taken it up: with the bridge on the page a
+   hole split is harmless, so [random_order] no longer refuses one and the 0.4% of tree
+   shapes it used to give up are back. [test_hole_split_sweep] is the evidence.
 
    It changes no tree. No order, no split, no domain and no decision literal is touched;
    a run that never splits at a hole emits byte-for-byte the proof it emitted before, and
@@ -426,7 +496,7 @@ let decision_entries store =
 (* Did this push land somewhere strictly stronger than its literal names, and if so on
    what? [Some cond] is the bound the trail actually recorded; [None] means the push
    landed exactly and there is nothing to bridge, which is the overwhelmingly common
-   case and the only one [random_order]'s guard permits.
+   case -- and, before M1-T45, the only one [random_order] would produce.
 
    The literal's polarity says which side the branch took: [x_ge_b] is the high side, so
    the low bound moved and lands exactly on [b]; [~x_ge_b] is [x <= b - 1], so the high
@@ -486,7 +556,7 @@ let bridges (ctx : Justify.ctx) store (decisions : Lit.t list) =
   in
   go (decision_entries store) (List.rev decisions) []
 
-let rec dfs engine store ctx trace (order : order) (decisions : Lit.t list) : node =
+let rec dfs engine store ctx trace stats (order : order) (decisions : Lit.t list) : node =
   match Engine.propagate engine store with
   | Engine.Conflict c -> (
       (* M2-T7: [c] carries the reporting instance's id ([c.Store.c_prop]) as well as its
@@ -530,9 +600,9 @@ let rec dfs engine store ctx trace (order : order) (decisions : Lit.t list) : no
   | Engine.Fixpoint ->
       let cands = unfixed store in
       if Array.length cands = 0 then NSat (extract_assignment store)
-      else branch engine store ctx trace order decisions (order store cands)
+      else branch engine store ctx trace stats order decisions (order store cands)
 
-and branch engine store ctx trace order decisions (dec : decision) : node =
+and branch engine store ctx trace stats order decisions (dec : decision) : node =
   let v = dec.d_var in
   let d = Store.get store v in
   let k = dec.d_split in
@@ -550,10 +620,19 @@ and branch engine store ctx trace order decisions (dec : decision) : node =
   let first, second =
     if dec.d_high_first then (explore_ge, explore_le) else (explore_le, explore_ge)
   in
+  (* M1-T36. One decision taken, and this decision sits one deeper than the ancestors
+     it was handed. [List.length] is O(depth) once per internal node, which is nothing
+     beside the propagation this node already ran; taking the depth from
+     [Store.level store] instead would tie the tree's depth to the store's level
+     numbering, and [solve] is allowed to be called at a non-zero level. *)
+  stats.decisions <- stats.decisions + 1;
+  let depth = List.length decisions + 1 in
+  if depth > stats.max_depth then stats.max_depth <- depth;
   Store.new_level store;
   let lvl = Store.level store in
   Writer.set_level ctx.Justify.writer lvl;
-  let r1 = first store engine ctx trace order decisions v k lit in
+  stats.nodes <- stats.nodes + 1;
+  let r1 = first store engine ctx trace stats order decisions v k lit in
   Store.backtrack store;
   match r1 with
   | NSat asn ->
@@ -565,7 +644,8 @@ and branch engine store ctx trace order decisions (dec : decision) : node =
       Debug.check "search: reopened level matches the one just closed" (fun () ->
           lvl2 = lvl);
       Writer.set_level ctx.Justify.writer lvl;
-      let r2 = second store engine ctx trace order decisions v k lit in
+      stats.nodes <- stats.nodes + 1;
+      let r2 = second store engine ctx trace stats order decisions v k lit in
       Store.backtrack store;
       match r2 with
       | NSat asn ->
@@ -621,7 +701,7 @@ and check_decision_landed store lvl outcome =
    branch nogood below (D-0018, D-0037) -- and it is also why [Trace] can skip a level start
    without checking: [Reason.lits Reason.none] is empty, so a line for it would be an
    unconditional claim. *)
-and explore_le store engine ctx trace order decisions v k lit =
+and explore_le store engine ctx trace stats order decisions v k lit =
   let lvl = Store.level store in
   let outcome =
     Store.set_hi store v k
@@ -641,11 +721,11 @@ and explore_le store engine ctx trace order decisions v k lit =
       NFail (lits, cid)
   | Store.Changed | Store.Unchanged ->
       check_decision_landed store lvl outcome;
-      dfs engine store ctx trace order (Lit.negate lit :: decisions)
+      dfs engine store ctx trace stats order (Lit.negate lit :: decisions)
 
 (* The high side, [x >= k + 1] -- the decision literal is [lit]. Symmetrically,
    [k + 1 <= hi] and [hi] is in the domain, so this push cannot empty it either. *)
-and explore_ge store engine ctx trace order decisions v k lit =
+and explore_ge store engine ctx trace stats order decisions v k lit =
   let lvl = Store.level store in
   let outcome =
     Store.set_lo store v (k + 1) (Reason.because Reason.none (Explanation.decision lit))
@@ -660,7 +740,7 @@ and explore_ge store engine ctx trace order decisions v k lit =
       NFail (lits, cid)
   | Store.Changed | Store.Unchanged ->
       check_decision_landed store lvl outcome;
-      dfs engine store ctx trace order (lit :: decisions)
+      dfs engine store ctx trace stats order (lit :: decisions)
 
 (* ------------------------------------------------------------------------------ API *)
 
@@ -692,7 +772,7 @@ and explore_ge store engine ctx trace order decisions v k lit =
    (invariant I-X2 -- see docs/PROOF-FORMAT.md section 5, "discharged by the
    conclusion"). *)
 let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
-    ~(check : assignment -> bool) ?trace ?(order = spec_order) () : outcome =
+    ~(check : assignment -> bool) ?trace ?stats ?(order = spec_order) () : outcome =
   let entry_level = Store.level store in
   (* [?trace] exists so a caller can read back *which* rules in the emitted proof were
      D-0018 trace lines (test/unit/test_trace.ml checks each of them standalone against
@@ -700,9 +780,23 @@ let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
      It is state this function would otherwise own privately; passing one in changes
      nothing about what is emitted. *)
   let trace = match trace with Some t -> t | None -> Trace.create () in
-  let result = dfs engine store ctx trace order [] in
+  (* M1-T36. [?stats] is read back the same way [?trace] is: state this function would
+     otherwise own privately, passed in so a caller can see it. Passing one changes no
+     byte of what is emitted -- the counters are read by nothing inside the search. The
+     root is counted HERE and nowhere else: [branch] counts the children it dispatches,
+     so the one node no [branch] dispatches is this one. *)
+  let stats = match stats with Some s -> s | None -> stats_create () in
+  stats.nodes <- stats.nodes + 1;
+  let result = dfs engine store ctx trace stats order [] in
   Debug.check "I-S3: decision level on return equals level on entry" (fun () ->
       Store.level store = entry_level);
+  (* M1-T36's identity, stated above [type stats]. [Unsat] means the tree was
+     exhausted, so the equality must hold exactly; [Sat] means it was not, so only the
+     bound does. *)
+  Debug.check "M1-T36: nodes = 2 * decisions + 1 on an exhausted tree, <= it otherwise"
+    (fun () ->
+      stats_consistent stats
+        ~exhausted:(match result with NFail _ -> true | NSat _ -> false));
   (* I-X2: the trace lines for prunings made at level 0 are the one class of rule this
      search emits that no [w] retires -- they are deliberately outside every branch's
      level, because a level-0 pruning outlives every branch and the checker needs it on
