@@ -963,3 +963,104 @@ against a 1576-check suite with no failures and nothing that looked like an erro
 `dune runtest` does not build `bin/main.exe`, which produced a byte-identical artefact
 comparison for me and a green 34/34 for a deliberately broken change. **Hash the binary
 when you compare, and pass `--force` when you report a count.**
+
+---
+
+## Starting M2-T3: clause learning (1UIP). Read this section first.
+
+Written 2026-09-17 at the close of wave nine, for whoever picks up M2-T3. It is the next
+task, it is the largest one left, and **it should have `lib/core` exclusively** — do not
+run a second session in there beside it.
+
+### Its preconditions are closed, deliberately and in order
+
+D-0011 said the trail's missing propagator identity "should be closed before M2-T3 starts,
+not during it". That principle was applied to all three:
+
+- **M2-T7** — every trail entry names the instance that made it (`entry.prop`, **I-T4**),
+  checked always-on by `Engine.check_attribution`, not under `BAGUETTE_DEBUG`.
+- **M2-T8** — D-0026's split. One `Reason.justified` per mutator, so I-P4 and I-P5 are one
+  obligation. `linear.ml`'s per-pruning trail scan is gone.
+- **M2-T9** — `Justify.ctx.stated`, a clause → defining-line index.
+
+### What you have that earlier sessions did not
+
+- `Reason.owners` walks a reason's **variables without materialising a literal**.
+- `Store.lo_support` / `hi_sup` resolve the entry that established a bound in **O(1)**,
+  maintained by `apply` and restored by `undo_to`.
+- `entry.prop` resolves an entry's reason *constraint* — you no longer need to keep
+  explanations alive across levels to know what caused a pruning.
+- `Reason.justified` holds reason and justification as **one value** across a backtrack.
+- `Store.conflict` is the single construction point for a conflict (`c_prop`, `c_why`,
+  `c_reason`).
+- `Justify.defining_line` / `defining_lit` for a line whose claim `Justify` knows.
+
+### Three things to read before writing code, and why each will bite
+
+1. **I-S4.** A cited hole line must outlive the line citing it. It holds today by an
+   argument about the level discipline, and that argument **explicitly does not cover a
+   learned clause citing across levels** — which is exactly what 1UIP produces. M2-T9 made
+   I-S4 *measured* rather than argued, and left the level half checked on the edge you are
+   about to build. **This is the invariant your task is most likely to violate.**
+2. **M1-T66.** With `Search.bridges` disabled, 34/34 models pass and **exactly one** unit
+   check reddens — M1-T55's own text assertion. Verified twice, independently. So the
+   proof's soundness for a hole split currently rests on the encoding's own rows
+   (**I-X10**), not on the bridge, and nothing observes the difference. Do not delete the
+   bridge on that basis; know that you cannot rely on the suite to tell you if you break it.
+3. **I-X10 and D-0040.** Every M1 pruning follows from a **single model constraint**. A
+   learned clause does not — it is the first thing in this solver that will rest on several.
+   D-0040 is the precedent for what that costs: derive it explicitly with a `pol`/`ia`
+   ahead of the line that uses it. The closure gate in `test/unit/test_trace.ml` classifies
+   every module in `lib/core/prop/`; if learning introduces a new pruner, that gate fires
+   until you classify it, which is deliberate.
+
+### What is NOT available, so you do not go looking
+
+- **`defining_lit` has no caller.** Giving it one needs a *citation* slot in `Combine`/`Cut`
+  — D-0009's other, separate missing field. Not done, not decided.
+- **D-0043** (the conclusion as a `Reason.fact`) is resolved but **not implemented**, and
+  the record says explicitly it is **not a precondition of M2-T3 and must not be folded
+  into it**. It pairs with M2-T9's follow-up and M4-T1.
+- **The general I-X6 exposure remains** on the justification half: a thunk can still close
+  over the store, and only discipline stops it. The reason half is type-safe
+  (`Reason.lits` takes no store). `explain_cross_conflict` is settled and now takes no
+  store at all.
+- **M2-T8's agreement check catches a reason naming the wrong *variable*, not the right
+  variable at the wrong *value*.** Do not read a green debug run as more than that.
+
+### Process, from three sessions that lost work this week
+
+- **Commit as soon as it compiles.** One session committed nothing across a long run and
+  lost it all; I salvaged its tree by hand into a branch marked DOES NOT BUILD. The one
+  that committed frequently lost nothing.
+- **`dune runtest` does not build `bin/main.exe`**, and without `--force` it re-runs only
+  what changed. Both traps caught someone this week. Hash the binary when you compare
+  artefacts; pass `--force` when you report a count.
+- The gate is now `fmt-check + build + lint + determinism + test`. It **verifies**
+  formatting rather than fixing it, and the determinism check requires two runs of the same
+  binary to produce byte-identical `.opb`/`.pbp`/stdout — relevant to you, because a
+  learned-clause database iterated in hash order would move bytes run to run.
+- **Baseline to beat:** 1625 unit checks, 252 matrix checks, 34/34 models, 102/102
+  artefacts byte-identical, peak RSS 55 MB.
+
+### The volume check on M1-T45 is done, and it passed
+
+agent-search4 asked for a heavy fuzzer sweep to confirm the shapes its guard removal
+reclaimed survive at volume. Run at the close of wave nine: **120 seeds** of
+`test_random.ml`, each 200 cases x 8 branching orders, so roughly **192,000 solver runs**.
+**Zero proofs rejected.** So the hole guard's removal is verified beyond the 40 hand-forced
+shapes, and M2-T3 can build on it.
+
+Four of the 120 seeds did report a failure, and it is **not** a soundness one — it is
+`test_random.ml:969`'s *coverage* assertion, which requires the generator to have reached a
+disequality pruning that moves a bound and simply does not on those seeds. Recorded as
+**M2-T13**, because a coverage assertion that depends on the seed is flaky by construction:
+the gate is green only because the default seed reaches the shape, so anyone setting
+`BAGUETTE_RANDOM_SEED` has a ~3% chance of a red that reads like a real rejection — in the
+one file whose entire purpose is that a rejection under an unusual seed is a finding.
+
+### After it
+
+**M2-T4** (learned-clause deletion and its matching `del`) follows directly, and
+**M1-T29**'s pair spelling is what its deletion will use. M2-T6 and M2-T10 also want
+`lib/core` and should queue behind, not beside.
