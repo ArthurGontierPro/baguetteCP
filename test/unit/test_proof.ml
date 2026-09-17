@@ -1384,7 +1384,24 @@ let test_v3_veripb () =
    reason. So the contradiction is derived SEPARATELY, from @c1 @c2 @c3 under its own
    origin, and the step under test is a side derivation that is created, claimed and
    deleted without anything ever depending on it. That is also the realistic shape:
-   most prunings in a run are never cited by the conflict that ends the branch. *)
+   most prunings in a run are never cited by the conflict that ends the branch.
+
+   That last point is also the resolution of an apparent contradiction with
+   test_mutation, and it is worth writing down because it looks at first glance as
+   though M1-T51 were already covered. The `triple_unsat/truncate-derivation` and
+   `lin_unsat/truncate-derivation` lanes are green, and they say "veripb rejects the
+   corrupted step, on the derivation". They are not lying. They are green because in
+   those models the truncated `pol` IS load-bearing: the whole model suite emits ten
+   `pol` lines between its thirty-one models, all of them on small unsat instances
+   where the derivation feeds the contradiction that `conclusion UNSAT` cites. Break
+   it and the conclusion stops checking.
+
+   So the existing coverage is real but it is not general. It holds because the test
+   models are small enough that every `pol` matters, and it says nothing about the
+   case that dominates any real search -- a pruning the eventual conflict never cites.
+   For that case, before this rule, the answer was that NOTHING caught it: not the
+   shape pins, which never run against a corrupted writer at all, and not the checker,
+   which the gap lane below shows accepting it. Hence M1-T42's ninth cell. *)
 let pol_claim_opb dir name =
   let e = Encoding.create () in
   let v = Lit.ge "vv" 1 in
