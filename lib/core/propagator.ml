@@ -9,7 +9,18 @@
    returns [Fixpoint]. It must be sound, checking, and idempotent at the interface
    (invariants I-P1 to I-P3). *)
 
-type result = Fixpoint | Conflict of Explanation.t
+(* M2-T7: a conflict is [Store.conflict], which carries the reporting instance's [id] and
+   the D-0018 point 3 bound facts alongside the [Explanation.t]. Note what a propagator
+   does NOT do here: it never writes its own id. Either it forwards the [Store.conflict]
+   a failing mutator handed it, unchanged, or it builds one with [Store.conflict store]
+   -- and that function stamps whoever [Engine] said was running. There is deliberately
+   no way to name an id from inside a propagator, because a propagator that could name
+   one could name the wrong one, and a prune credited to the wrong constraint is a wrong
+   answer that conflict analysis (M2-T3) would produce silently.
+
+   Reach the payload with [c_why] where the old [Conflict of Explanation.t] gave it
+   directly. *)
+type result = Fixpoint | Conflict of Store.conflict
 
 (* One of these, not a free-form string, so that a typo cannot silently claim a stronger
    consistency than the code delivers. docs/GLOSSARY.md defines each. *)

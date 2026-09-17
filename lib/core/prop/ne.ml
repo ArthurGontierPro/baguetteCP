@@ -302,7 +302,7 @@ let propagate t store =
   | [] ->
       (* I-P3, checking: with everything fixed, fail iff the constraint is violated. *)
       if sum_of store t.terms <> t.rhs then Propagator.Fixpoint
-      else Propagator.Conflict (explain (all_pairs store t.terms))
+      else Propagator.Conflict (Store.conflict store (explain (all_pairs store t.terms)))
   | [ idx ] -> (
       let tm = List.nth t.terms idx in
       let others = others_except t.terms idx in

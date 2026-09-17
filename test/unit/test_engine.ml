@@ -105,8 +105,8 @@ let test_conflict_carries_explanation () =
   | Engine.Fixpoint ->
       incr failures;
       Printf.printf "FAIL conflict: expected Conflict, got Fixpoint\n"
-  | Engine.Conflict e ->
-      let forced = Explanation.force e in
+  | Engine.Conflict c ->
+      let forced = Explanation.force c.Store.c_why in
       check "conflict: explanation forces without raising"
         (match forced with Explanation.Deferred _ -> false | _ -> true);
       check "conflict: explanation mentions the literals witnessing the pruned bound"

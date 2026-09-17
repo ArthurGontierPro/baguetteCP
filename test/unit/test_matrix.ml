@@ -556,10 +556,10 @@ module Probe_linear = struct
        with e -> t.obs.forcing_raised <- Some (Printexc.to_string e));
     check_decision_reasons t.obs store;
     match Linear.propagate t.lin store with
-    | Propagator.Conflict e ->
-        (try classify_conflict t.obs store e
+    | Propagator.Conflict c ->
+        (try classify_conflict t.obs store c.Store.c_why
          with exn -> t.obs.forcing_raised <- Some (Printexc.to_string exn));
-        Propagator.Conflict e
+        Propagator.Conflict c
     | Propagator.Fixpoint -> Propagator.Fixpoint
 end
 
@@ -572,10 +572,10 @@ module Probe_ne = struct
 
   let propagate t store =
     match Ne.propagate t.ne store with
-    | Propagator.Conflict e ->
-        (try classify_conflict t.obs store e
+    | Propagator.Conflict c ->
+        (try classify_conflict t.obs store c.Store.c_why
          with exn -> t.obs.forcing_raised <- Some (Printexc.to_string exn));
-        Propagator.Conflict e
+        Propagator.Conflict c
     | Propagator.Fixpoint -> Propagator.Fixpoint
 end
 

@@ -242,8 +242,7 @@ let propagate t store =
          a conflict here is exactly "fail iff the assignment violates the
          constraint", and it is reached before every variable is fixed as well, which
          is the propagation half. *)
-      Store.record_conflict_facts store (fun () -> all_facts t);
-      Propagator.Conflict t.expl
+      Propagator.Conflict (Store.conflict store ~facts:(fun () -> all_facts t) t.expl)
   | Units (_ :: _ :: _) ->
       (* [survey_from] returns at most one; it stops at the second. *)
       assert false

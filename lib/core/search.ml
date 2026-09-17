@@ -325,9 +325,10 @@ let rec rests_on_a_clause (e : Explanation.t) =
    decision arm below emits with [decisions = []] substituted in. Citing *it* rather
    than the derivation is the whole fix: what [conclusion UNSAT] names is now a line
    veripb has checked to be a contradiction, not one this module asserted was. *)
-let close_root_conflict ctx trace store e =
+let close_root_conflict ctx trace store (c : Store.conflict) =
+  let e = c.Store.c_why in
   Trace.emit ctx trace store;
-  let _ : Writer.cid option = Trace.conflict_line ctx trace store in
+  let _ : Writer.cid option = Trace.conflict_line ctx trace c in
   match Explanation.force e with
   | Explanation.Clause [] ->
       (* Already the empty clause -- a disequality every one of whose variables the
@@ -487,7 +488,13 @@ let bridges (ctx : Justify.ctx) store (decisions : Lit.t list) =
 
 let rec dfs engine store ctx trace (order : order) (decisions : Lit.t list) : node =
   match Engine.propagate engine store with
-  | Engine.Conflict e -> (
+  | Engine.Conflict c -> (
+      (* M2-T7: [c] carries the reporting instance's id ([c.Store.c_prop]) as well as its
+         explanation and its bound facts. Nothing in M1's proof shape reads the id -- a
+         nogood names decisions, not constraints -- but M2-T3's resolution starts from
+         exactly this constraint, and it is now recorded rather than lost with the
+         engine's loop variable. *)
+      let e = c.Store.c_why in
       match decisions with
       | [] ->
           (* D-0013: with no decision active there is nothing to negate. Where the
@@ -500,7 +507,7 @@ let rec dfs engine store ctx trace (order : order) (decisions : Lit.t list) : no
              own: [dfs] reaches this arm with [decisions = []] only on the very first
              call. *)
           let cid =
-            if rests_on_a_clause e then close_root_conflict ctx trace store e
+            if rests_on_a_clause e then close_root_conflict ctx trace store c
             else Justify.emit ctx e
           in
           NFail ([], cid)
@@ -511,7 +518,7 @@ let rec dfs engine store ctx trace (order : order) (decisions : Lit.t list) : no
              decisions, and it is RUP precisely because the other two are there to unit
              propagate along. *)
           Trace.emit ctx trace store;
-          let _ : Writer.cid option = Trace.conflict_line ctx trace store in
+          let _ : Writer.cid option = Trace.conflict_line ctx trace c in
           (* M1-T55: and then the bridge for any decision on this path that settled past
              a hole, which is the step the nogood's own [rup] needs and has until now
              been left to find for itself. It goes after the trace (D-0021) and before

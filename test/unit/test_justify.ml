@@ -520,7 +520,7 @@ let build_d0013_conflict dir =
   let e, opb_terms, _geq_id, _leq_id, outcome = setup_d0013 () in
   let expl =
     match outcome with
-    | Propagator.Conflict e -> Explanation.force e
+    | Propagator.Conflict c -> Explanation.force c.Store.c_why
     | Propagator.Fixpoint -> failwith "build_d0013_conflict: expected a Conflict"
   in
   let opb = Filename.concat dir "d0013.opb" in
@@ -554,7 +554,7 @@ let test_d0013_conflict () =
         let _, _, _, _, outcome = setup_d0013 () in
         let expl =
           match outcome with
-          | Propagator.Conflict e -> Explanation.force e
+          | Propagator.Conflict c -> Explanation.force c.Store.c_why
           | Propagator.Fixpoint -> failwith "test_d0013_conflict: expected a Conflict"
         in
         let e = Encoding.create () in
