@@ -15,10 +15,10 @@ git worktree each (`.claude/worktrees/<tag>`), so no two share `_build`'s global
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| D-0038 (deciding it) | `docs/**` | orchestrator | 2026-09-17 |
 | M2-T9 + M1-T59 + the I-S4 check | `lib/core/justify.ml`, `lib/core/trace.ml`, `test/unit/test_justify.ml`, `test/unit/test_trace.ml` | agent-index | 2026-09-17 |
 | I-X6 on `explain_cross_conflict` + M1-T63 | `lib/core/prop/linear.ml`, `test/unit/test_prop.ml` | agent-linear | 2026-09-17 |
 | M1-T36 + M1-T45 | `lib/core/search.ml`, `bin/main.ml`, `bench/run_bench.sh`, `test/unit/test_engine.ml` | agent-search4 | 2026-09-17 |
-| M1-T62 (closing it) + D-0038 | `lib/core/store.ml`, `docs/**` | orchestrator | 2026-09-17 |
 
 Two rounds are recorded in `## Completed` below. The rows that stood here on
 2026-09-15 (`integration`, M1-T12, M1-T13) were stale — see the handoff note "the
@@ -172,6 +172,7 @@ work. The owning session picks it up.
 | M2-T12 (determinism half) | orchestrator | 2026-09-17 | `scripts/check_determinism.sh` in the gate: 34 models solved twice, `.opb`/`.pbp`/stdout must agree. **No golden digest** — a stored hash would be wrong on the next legitimate proof change and would train people to re-bless it, so the check is self-relative instead. Breaks: the self-test catches a flaky `.opb` and accepts the real solver; the real check against a flaky `.pbp` fails 34/34. 0.7 s. The seeded-branching half waits for `lib/core` |
 | M2-T8 | agent-iface | 2026-09-17 | D-0026 delivered. `Reason.t` frozen facts, `Reason.lits` takes no store (I-X6 by type on that half), one `Reason.justified` per mutator so I-P4+I-P5 are one obligation, `linear.ml`'s trail scan deleted. 1551 ok, 34/34, **102/102 artefacts byte-identical** (binaries hashed). Ten breaks. Merged as 16ad7c6 |
 | M1-T64 followup | orchestrator | 2026-09-17 | `scripts/check_fmt.sh` ran `dune build @fmt` with no `--root .`, so it failed in every worktree — **and reported "files are not formatted"**, a false failure blaming the reader. My bug: M1-T64 put it in the gate without running it from a worktree, which is where every agent works. Fixed and verified from a worktree; a harness error is now reported as one, in dune's words |
+| M1-T62 | orchestrator | 2026-09-17 | **Closed by M2-T8, not by work.** Checked the premise before dispatching and both halves were dead: `no_facts` is gone, all four mutators take one `Reason.justified` with no factless sibling and no optional argument, and `ne.ml:343` is a real `lib` caller. What remains — `Reason.none` in three commented places — is the explicit route the row wanted to keep, not the silent one it wanted gone. **One dispatch saved by checking a premise** |
 
 ## Handoff notes
 
