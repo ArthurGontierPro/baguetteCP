@@ -3,7 +3,8 @@
 A constraint programming solver with VeriPB proof logging and higher-order explanations.
 
 - **Input**: FlatZinc (a subset — see `docs/SPEC.md`)
-- **Output**: solutions + a VeriPB 2.0 proof that the checker accepts
+- **Output**: solutions + a VeriPB **3.0** proof that the checker accepts (the default
+  since D-0025; `BAGUETTE_PROOF_FORMAT=2.0` still emits the older dialect)
 - **Language**: OCaml 5, built with dune
 
 ---
@@ -196,8 +197,11 @@ lib/core/       Baguette_core
   domain.ml                 bounds pair + lazily allocated hole set (ARCH §2)
   store.ml                  backtrackable store: domains + undo trail (ARCH §3)
   explanation.ml    *****   THE Explanation ADT. Read SPEC §3.3 + ARCH §4 first.
-                            D-0003 is OPEN and will reshape it. No new constructor
-                            without a decision record.
+                            D-0003 is RESOLVED (by D-0026): reasons are declarative
+                            data, justifications are cutting planes. M2-T8 is the
+                            reshaping D-0003 used to promise, and it is IN PROGRESS --
+                            check `## Active claims` before touching this file. Still
+                            no new constructor without a decision record.
   justify.ml                Explanation.t -> VeriPB rules -> constraint id. Lives in
                             core, not proof, because proof cannot see Explanation.
   trace.ml                  records what a branch learned so its nogood is plain RUP
@@ -230,9 +234,13 @@ test/unit/                  test_core test_domain test_engine test_prop test_pro
                             test_justify test_trace test_flatzinc test_compile
                             test_endtoend test_matrix test_mutation test_output
                             test_random test_interval
-test/models/                31 .fzn models   test/expected/  their expected outputs
+  mem_guard.ml              NOT a test binary: the shared Gc-alarm heap guard every
+                            suite installs (M1-T53). All 15 announce arming under
+                            BAGUETTE_TEST_HEAP_CAP_ANNOUNCE=1
+test/models/                34 .fzn models   test/expected/  their expected outputs
 scripts/                    checker.sh verify_proof.sh run_model_tests.sh shrink.sh
-                            mutate_proof.sh check_test_widths.sh bootstrap.sh
+                            mutate_proof.sh check_test_widths.py check_fmt.sh
+                            bootstrap.sh
 ```
 
 ## Commands
