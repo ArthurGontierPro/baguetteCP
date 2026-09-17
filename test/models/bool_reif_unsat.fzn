@@ -48,6 +48,32 @@
 % Four of the six Boolean builtins appear (bool_clause, array_bool_or, array_bool_and,
 % bool_eq) and each contributes at least one reason to the emitted proof; bool_not and
 % bool2int are covered by bool_not_sat.fzn and bool_channel_unsat.fzn.
+%
+% ---------------------------------------------------------------------------
+% What this model is NOT a net for (M1-T43, measured 2026-09-17)
+% ---------------------------------------------------------------------------
+%
+% Read this before relying on this file to catch a Boolean encoding bug. It tests the
+% D-0030 single-row property above and the two-level refutation below, and it is strong
+% at both. It is NOT a universal net, and one specific hole is measured:
+%
+% Flip every literal's polarity at its source -- `pb_lit' in lib/core/prop/bool_clause.ml,
+% swapping Lit.bool_true for Lit.bool_false -- and rebuild. THIS MODEL STILL VERIFIES:
+% veripb reports `s VERIFIED UNSATISFIABLE' and the answer is still UNSATISFIABLE. The
+% flip turns some of its reasons into clauses the reified structure happens to entail,
+% so the proof stays sound while the encoding is wrong.
+%
+% Six models DO catch that flip, all of them SAT: bool_and_sat, bool_array_sat,
+% bool_clause_sat, bool_eq_sat, bool_not_sat, bool_or_sat. Three further Boolean models
+% miss it as this one does -- bool_channel_sat, bool_channel_unsat and bool_out_sat --
+% which is unsurprising, since the channelling pair route through bool2int rather than
+% through this `pb_lit'.
+%
+% The asymmetry is the lesson and it generalises past this flip: an UNSAT model proves
+% a refutation exists, and a wrong encoding can still admit one. A SAT model has to
+% produce an assignment that the model itself accepts (I-S1), so a wrong encoding has
+% nowhere to hide. When you want a net for an ENCODING bug, reach for a SAT model; when
+% you want one for a REFUTATION bug, reach for this.
 var bool: a :: output_var;
 var bool: b :: output_var;
 var bool: c :: output_var;
