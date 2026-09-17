@@ -59,7 +59,7 @@ self_test() {
   # and normalises the spacing.
   printf 'let  f   x=\n  x+1\nlet g y    =   f  (  y  )\n' > "$d/probe.ml"
 
-  if (cd "$d" && dune build @fmt >/dev/null 2>&1); then
+  if (cd "$d" && dune build --root . @fmt >/dev/null 2>&1); then
     echo "FAIL fmt self-test: @fmt ACCEPTED a deliberately unformatted module."
     echo "     The gate below would therefore pass on unformatted code, which is the"
     echo "     whole failure M1-T64 exists to close. Do not trust a green fmt check"
@@ -69,8 +69,8 @@ self_test() {
 
   # And the other polarity: it must ACCEPT formatted input, or it is a check that always
   # fails, which is just as useless and much easier to notice too late.
-  (cd "$d" && dune build @fmt --auto-promote >/dev/null 2>&1) || true
-  if (cd "$d" && dune build @fmt >/dev/null 2>&1); then
+  (cd "$d" && dune build --root . @fmt --auto-promote >/dev/null 2>&1) || true
+  if (cd "$d" && dune build --root . @fmt >/dev/null 2>&1); then
     echo "fmt self-test: refuses unformatted, accepts formatted"
     return 0
   fi
@@ -84,16 +84,35 @@ run_check() {
     warn_missing
     return 0
   fi
-  if (cd "$ROOT" && dune build @fmt >/dev/null 2>&1); then
+  # `--root .` is not optional, and leaving it off is how this script shipped broken.
+  # A worktree under .claude/worktrees/ lives INSIDE the main checkout, so dune walks up,
+  # finds the outer dune-project first, and refuses with "Don't know about directory
+  # .claude/worktrees/<name>". CLAUDE.md documents that for `dune build`; a script that
+  # runs dune on the user's behalf has to honour it too. `--root .` is correct in the
+  # main checkout as well, so there is no branch here.
+  out="$( (cd "$ROOT" && dune build --root . @fmt 2>&1) )" && {
     echo "fmt: clean"
     return 0
+  }
+
+  # A non-zero exit is NOT automatically "unformatted". Before the --root fix above, this
+  # script reported "files are not formatted" when dune had not managed to run at all --
+  # a false failure blaming the reader for something they had not done, which is worse
+  # than no check. So the two are told apart, and anything that is not a formatting diff
+  # is reported as what it is.
+  if printf '%s' "$out" | grep -q "Don't know about directory\|No rule found for alias\|Error: Cannot find"; then
+    echo "FAIL fmt: dune could not run here, so formatting was NOT checked."
+    echo "     This is a harness problem, not your formatting. dune's words:"
+    printf '%s\n' "$out" | sed 's/^/       /' | head -12
+    return 1
   fi
+
   echo "FAIL fmt: files are not formatted. The gate no longer fixes this for you (M1-T64)."
   echo "     Run \`make fmt\` to format, then look at \`git status\` and stage only YOUR"
   echo "     files -- if the diff touches a file you did not work on, it is another"
   echo "     session's formatting debt and belongs in their commit, not yours."
   echo ""
-  (cd "$ROOT" && dune build @fmt 2>&1 | head -40) || true
+  printf '%s\n' "$out" | sed 's/^/       /' | head -40
   return 1
 }
 
