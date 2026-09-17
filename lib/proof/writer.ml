@@ -757,9 +757,7 @@ let del_run t (lo, hi) =
   if lo = hi then rule t (Printf.sprintf "del id %s" (cite t lo))
   else if hi < t.next_id then
     rule t (Printf.sprintf "del range %s %s" (cite t lo) (cite t (hi + 1)))
-  else (
-    rule t (Printf.sprintf "del range %s %s" (cite t lo) (cite t hi));
-    rule t (Printf.sprintf "del id %s" (cite t hi)))
+  else rule t (Printf.sprintf "del range %s %s" (cite t lo) (cite t hi))
 
 let wipe_level t l =
   if v3 t then (

@@ -1308,12 +1308,25 @@ let test_v3_wipe_level_against_checker () =
       Sys.remove dir;
       Sys.mkdir dir 0o700;
       let log = Filename.concat dir "log" in
-      (* [interior] decides which shape [Writer.del_run] reaches: false leaves the
-         doomed run ending at the newest id (the `del id` list), true derives one
-         more level-0 line after it (the half-open `del range`). [probe] picks an id
-         to cite AFTER the wipe; the checker's accept/reject is then a direct read of
-         whether that id is still in its database. *)
-      let scenario name ~interior ~probe =
+      (* [survivors] is how many level-0 lines are derived AFTER the branch, and it
+         decides which shape [Writer.del_run] reaches:
+
+           0  the doomed run ends at the newest id     -> M1-T29's `del range` + `del id` pair
+           1  one line past the run                    -> the half-open `del range`, bound = that line
+           2  two lines past the run                   -> the same range, and a SECOND survivor
+                                                          that an over-wide bound would eat
+
+         The 2 case exists because of M1-T29. With one survivor, a bound one too high
+         names a label that was never assigned, so the checker refuses the line for
+         its grammar and the deletion semantics are never reached -- a rejection that
+         is a measurement of nothing. With two, the wrong bound is a BOUND label and
+         the over-deletion is real and silent, which is the direction that matters
+         (I-S4: a cited hole line must outlive the line citing it, and nothing in our
+         own I-X2 audit can see an id deleted too early).
+
+         [probe] picks an id to cite AFTER the wipe; the checker's accept/reject is
+         then a direct read of whether that id is still in its database. *)
+      let scenario name ~survivors ~probe =
         let e = Encoding.create () in
         let c_pos = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "uu" 2) ] 1) in
         let c_neg =
@@ -1333,7 +1346,12 @@ let test_v3_wipe_level_against_checker () =
         let p3 = Writer.pol w ~origin:"branch" (Pol.id c_pos) in
         Writer.set_level w 0;
         let past =
-          if interior then Some (Writer.pol w ~origin:"root" (Pol.id c_pos)) else None
+          if survivors >= 1 then Some (Writer.pol w ~origin:"root" (Pol.id c_pos))
+          else None
+        in
+        let past2 =
+          if survivors >= 2 then Some (Writer.pol w ~origin:"root" (Pol.id c_pos))
+          else None
         in
         Writer.wipe_level w 1;
         (match probe with
@@ -1341,7 +1359,7 @@ let test_v3_wipe_level_against_checker () =
         | Some pick ->
             ignore
               (Writer.pol w ~origin:"probe"
-                 (Pol.id (pick ~first:p1 ~last:p3 ~past ~model:c_pos))));
+                 (Pol.id (pick ~first:p1 ~last:p3 ~past ~past2 ~model:c_pos))));
         let contra =
           Writer.pol w ~origin:"contradiction" Pol.(sum [ id c_pos; id c_neg ])
         in
@@ -1354,54 +1372,76 @@ let test_v3_wipe_level_against_checker () =
         in
         (verdict, read_whole pbp)
       in
-      let verdict name ~interior ~probe = fst (scenario name ~interior ~probe) in
+      let verdict name ~survivors ~probe = fst (scenario name ~survivors ~probe) in
       (* The baselines: the wipe on its own leaves a proof the checker accepts, in
-         both emission shapes. Without these, a rejection below would say nothing. *)
+         every emission shape. Without these, a rejection below would say nothing. *)
       check "3.0 wipe_level: a backtrack ending at the newest id verifies"
-        (verdict "base_list" ~interior:false ~probe:None);
+        (verdict "base_list" ~survivors:0 ~probe:None);
       check "3.0 wipe_level: a backtrack with a later level-0 line verifies"
-        (verdict "base_range" ~interior:true ~probe:None);
+        (verdict "base_range" ~survivors:1 ~probe:None);
+      check "3.0 wipe_level: a backtrack with two later level-0 lines verifies"
+        (verdict "base_range2" ~survivors:2 ~probe:None);
       (* I-X3, the direction M1-T22 got wrong. The writer drops the whole run from
          [t.tags]; the checker must have dropped it too. Before the fix the LAST id
          of the run was still live in the checker and this lane was ACCEPTED. *)
       List.iter
-        (fun interior ->
-          let tag = if interior then "range" else "list" in
+        (fun (survivors, tag) ->
           check
             (Printf.sprintf
                "3.0 wipe_level (%s form): the LAST id of the wiped run is gone from the \
                 checker too (I-X3)"
                tag)
             (not
-               (verdict ("last_" ^ tag) ~interior
-                  ~probe:(Some (fun ~first:_ ~last ~past:_ ~model:_ -> last))));
+               (verdict ("last_" ^ tag) ~survivors
+                  ~probe:(Some (fun ~first:_ ~last ~past:_ ~past2:_ ~model:_ -> last))));
           check
             (Printf.sprintf
                "3.0 wipe_level (%s form): the FIRST id of the wiped run is gone from the \
                 checker"
                tag)
             (not
-               (verdict ("first_" ^ tag) ~interior
-                  ~probe:(Some (fun ~first ~last:_ ~past:_ ~model:_ -> first))));
+               (verdict ("first_" ^ tag) ~survivors
+                  ~probe:(Some (fun ~first ~last:_ ~past:_ ~past2:_ ~model:_ -> first))));
           check
             (Printf.sprintf
                "3.0 wipe_level (%s form): a model row is untouched by the wipe, so a \
                 rejection above is about deletion and not about position"
                tag)
-            (verdict ("model_" ^ tag) ~interior
-               ~probe:(Some (fun ~first:_ ~last:_ ~past:_ ~model -> model))))
-        [ false; true ];
+            (verdict ("model_" ^ tag) ~survivors
+               ~probe:(Some (fun ~first:_ ~last:_ ~past:_ ~past2:_ ~model -> model))))
+        [ (0, "pair"); (1, "range"); (2, "range2") ];
       (* The other side of half-open: the id the range NAMES as its upper bound is a
          survivor, not a casualty. Deleting it would be the mirror violation in the
          opposite direction -- silently losing a level-0 reason. *)
       check
         "3.0 wipe_level: the level-0 line one past the run survives the range that names \
          it"
-        (verdict "past_range" ~interior:true
-           ~probe:(Some (fun ~first:_ ~last:_ ~past ~model:_ -> Option.get past)));
+        (verdict "past_range" ~survivors:1
+           ~probe:(Some (fun ~first:_ ~last:_ ~past ~past2:_ ~model:_ -> Option.get past)));
+      (* OVER-DELETION, with a bound label as the wrong bound (M1-T29).
+
+         With one survivor the wrong bound `@c(past+1)` was never assigned, so a
+         checker refusal is about the grammar and proves nothing about what a range
+         deletes. With TWO survivors the wrong bound is `@c(past2)`, which IS
+         assigned, so an upper bound one too high silently retires [past] -- a
+         level-0 reason a later line may still cite (I-S4). These two checks are the
+         only thing in this file that can see that happen: the audit cannot, because
+         an over-deleted id is not an un-retired id, and no model test can, because a
+         constraint nothing cites again is a constraint whose absence is invisible. *)
+      check
+        "3.0 wipe_level: with two survivors, the FIRST one still survives the range \
+         (over-deletion by one)"
+        (verdict "past2_first" ~survivors:2
+           ~probe:(Some (fun ~first:_ ~last:_ ~past ~past2:_ ~model:_ -> Option.get past)));
+      check
+        "3.0 wipe_level: with two survivors, the SECOND one survives too (over-deletion \
+         by two)"
+        (verdict "past2_second" ~survivors:2
+           ~probe:
+             (Some (fun ~first:_ ~last:_ ~past:_ ~past2 ~model:_ -> Option.get past2)));
       (* And that the range form really was the shape under test. *)
-      let _, text_range = scenario "shape_range" ~interior:true ~probe:None in
-      let _, text_list = scenario "shape_list" ~interior:false ~probe:None in
+      let _, text_range = scenario "shape_range" ~survivors:1 ~probe:None in
+      let _, text_list = scenario "shape_list" ~survivors:0 ~probe:None in
       let contains needle hay =
         let n = String.length needle and h = String.length hay in
         let rec go i = i + n <= h && (String.sub hay i n = needle || go (i + 1)) in
