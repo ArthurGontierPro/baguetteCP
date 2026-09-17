@@ -8,6 +8,44 @@ A constraint programming solver with VeriPB proof logging and higher-order expla
 
 ---
 
+## Context budget — read this before you open a file
+
+`docs/` is **340 KB ≈ 85k tokens**. `WORKLOG.md` alone is 68 KB ≈ 17k tokens. Reading
+them "to be thorough" costs more than the work you were dispatched to do, and a session
+that spends its context on reading has none left for the task. So the rule is:
+
+**Never read a file over ~20 KB whole. Scope the read.**
+
+| File | Size | How to read it |
+|---|---|---|
+| `WORKLOG.md` | 68 KB | **The `SessionStart` hook already printed `## Active claims` for you.** Do not re-read the file to get it. For other sections: `sed -n '/^## Cross-session requests/,/^## Completed/p' WORKLOG.md`, or `tail -60` for the latest handoff notes. |
+| `docs/DECISIONS.md` | 126 KB | Never whole. `grep -n 'D-0028' docs/DECISIONS.md` then `sed -n '<start>,<end>p'`. To catch up: `grep -n '^## D-' docs/DECISIONS.md \| tail -20`. |
+| `docs/ROADMAP.md` | 46 KB | Never whole. `grep -n -A8 'M1-T31' docs/ROADMAP.md` for your task's row. |
+| `docs/PROOF-FORMAT.md` | 30 KB | By section, and the sections are stable: §1 checkers, §2 rules 2.0, §2a rules 3.0, §3 encoding (normative), §4 per-propagator justification, §5 backtracking/deletion, §6 debugging a rejected proof. `sed -n '352,402p'` is §4. |
+| `docs/GCS-COMPARISON.md` | 29 KB | Background. Read only if the task is explicitly about the comparison. |
+| `docs/SPEC.md` | 14 KB | Normative. Read the relevant section whole; §2.1 is the FlatZinc subset, §3.2 consistency levels, §3.3 explanations. |
+| `docs/INVARIANTS.md` | 6 KB | Read whole before touching `lib/core/`. It is short on purpose. |
+| `docs/ARCHITECTURE.md` | 7 KB | Read whole if you are changing structure. Its §1 module map is **stale** — use the map below. |
+| `docs/GLOSSARY.md` | 4 KB | Read whole if the vocabulary is new to you. |
+
+**Module headers are the cheapest documentation in this repo.** Every module in `lib/`
+opens with a comment stating what it is, its consistency level, and which spec section
+governs it. `head -40 lib/core/prop/linear.ml` answers most questions about a propagator
+for ~400 tokens. Do that before grepping, and grep before reading whole files.
+
+**Command output is context too.** `dune runtest`, `make bench` and model runs emit far
+more than you need:
+
+```sh
+(ulimit -v 4000000; timeout 900 make test) > /tmp/test-$$.log 2>&1; tail -40 /tmp/test-$$.log
+grep -c FAIL /tmp/test-$$.log
+```
+
+Never pipe a full test or benchmark run into your context and then read it. Redirect,
+then `grep`/`tail`. Report the peak RSS line and the failures, not the transcript.
+
+---
+
 ## Read before you start
 
 This project is worked on by **several Claude sessions at once, in this same checkout,
@@ -16,7 +54,10 @@ overwrite each other's work.
 
 ### The protocol
 
-1. **Read `WORKLOG.md` first, every session.** It lists who is working on what right now.
+1. **Know what is claimed.** The `SessionStart` hook prints `## Active claims` from
+   `WORKLOG.md` at the top of your session. That is your copy — work from it. Re-read
+   from disk only if you have reason to think it changed under you (a long session, or a
+   `git pull`), and then re-read *that section*, not the file.
 2. **Claim before you edit.** Append your task to the `## Active claims` table in
    `WORKLOG.md` with a task ID from `docs/ROADMAP.md`, the files you intend to touch,
    and a session tag. Commit that claim immediately, before writing any code.
@@ -104,29 +145,109 @@ of concurrent edits succeed instead of conflicting.
 
 ## Where things are
 
-| Path | Contents |
-|---|---|
-| `docs/SPEC.md` | **normative**. What the solver must do. Changes here need a decision record. |
-| `docs/ARCHITECTURE.md` | module map, data structures, how a propagation actually flows |
-| `docs/PROOF-FORMAT.md` | the VeriPB contract: encoding, rule vocabulary, per-propagator justification |
-| `docs/INVARIANTS.md` | properties every change must preserve. Read before touching core. |
-| `docs/ROADMAP.md` | milestones and task IDs (`M1-T3` etc.) — the source of claimable work |
-| `docs/DECISIONS.md` | append-only decision log. Check it before re-arguing a settled design point. |
-| `docs/GLOSSARY.md` | CP and proof-logging vocabulary as *this project* uses it |
-| `lib/core/` | domains, store/trail, explanations, propagators, search |
-| `lib/proof/` | OPB emission and VeriPB proof writing |
-| `lib/flatzinc/` | FlatZinc lexer, parser, model builder |
-| `bin/` | the `baguette` CLI |
-| `test/` | unit tests, `.fzn` models, expected outputs |
+Dependency direction is strictly `flatzinc -> core -> proof`. `core` must not depend on
+`flatzinc`. `proof` must not reach back into `core`'s mutable state — it receives values.
+
+This map is current. Trust it over `docs/ARCHITECTURE.md` §1, which still lists
+propagators that do not exist (`alldiff`, `element`, `clause`) and omits several that do.
+
+```
+bin/main.ml                 CLI: parse args, wire everything, print results
+
+lib/flatzinc/   Baguette_flatzinc
+  pos.ml error.ml           source positions; the single front-end error type
+  ast.ml                    FlatZinc syntax tree, restricted to SPEC 2.1
+  lexer.ml parser.ml        hand-written scanner + recursive descent (D-0006)
+  model.ml                  the front end's output: vars, domains, constraints
+  builder.ml                ast -> Model.t, and the normative rules of SPEC 2.1
+  compile.ml                Model.t -> store + PB encoding + propagator instances;
+                            this is the flatzinc -> core edge
+  output.ml                 solution printing in FlatZinc output format
+
+lib/core/       Baguette_core
+  var.ml                    variable identity (abstract int)
+  domain.ml                 bounds pair + lazily allocated hole set (ARCH §2)
+  store.ml                  backtrackable store: domains + undo trail (ARCH §3)
+  explanation.ml    *****   THE Explanation ADT. Read SPEC §3.3 + ARCH §4 first.
+                            D-0003 is OPEN and will reshape it. No new constructor
+                            without a decision record.
+  justify.ml                Explanation.t -> VeriPB rules -> constraint id. Lives in
+                            core, not proof, because proof cannot see Explanation.
+  trace.ml                  records what a branch learned so its nogood is plain RUP
+                            (D-0018, M1-T13)
+  propagator.ml             the PROPAGATOR module type (51 lines — read it whole)
+  engine.ml                 propagate-to-fixpoint loop and the queue (ARCH §5)
+  search.ml                 DFS, branching, backtracking, every step proof-logged
+  checked.ml                checked integer arithmetic + the overflow cap (M1-T23)
+  interval.ml               interval arithmetic: mul, square, div of bounds (M4-T4a)
+  debug.ml                  BAGUETTE_DEBUG-gated invariant checks
+  prop/                     one module per constraint family:
+    linear.ml               int_lin_le. THE REFERENCE PROPAGATOR — copy this shape.
+    lin_eq.ml               int_lin_eq (two model rows, see D-0011)
+    ne.ml                   int_lin_ne and int_ne (VALUE consistency)
+    int_le.ml int_lt.ml     degenerate linear constraints, delegate to Linear
+    int_eq.ml               delegates to Lin_eq
+    bool2int.ml             bool <-> int channelling
+    bool_clause.ml          clauses, and the array_bool_or/and/eq/not family
+    order_reason.ml         bound-fact chains in the order encoding (D-0010)
+
+lib/proof/      Baguette_proof
+  lit.ml                    encoding literals; naming is NORMATIVE (PROOF-FORMAT §3)
+  encoding.ml               which variable has which encoding; channelling
+  opb.ml                    writes the .opb model file
+  writer.ml                 writes the .pbp proof; owns the constraint-id counter
+                            (I-X2: an id you receive is an id you must delete)
+  checker.ml                resolves which veripb to use; mirrors scripts/checker.sh
+
+test/unit/                  test_core test_domain test_engine test_prop test_proof
+                            test_justify test_trace test_flatzinc test_compile
+                            test_endtoend test_matrix test_mutation test_output
+                            test_random test_interval
+test/models/                31 .fzn models   test/expected/  their expected outputs
+scripts/                    checker.sh verify_proof.sh run_model_tests.sh shrink.sh
+                            mutate_proof.sh check_test_widths.sh bootstrap.sh
+```
 
 ## Commands
 
 ```sh
 make build          # dune build
-make test           # dune runtest  (unit + model + proof-checking tests)
-make check          # fmt + build + test — the gate before any commit
+make test           # unit + model + proof-checking tests
+make check          # fmt + build + lint + test — the gate before any commit
 make proof FZN=test/models/foo.fzn   # solve and verify one model's proof
+make bench ARGS="..."                # measurement only, never a commit gate
 ```
+
+---
+
+## Dispatching subagents
+
+If you are an orchestrator session, the sub-sessions you spawn are the largest single
+line in this project's token bill, because each one starts with no context and
+rediscovers the codebase from scratch. Four rules:
+
+1. **Give the agent its coordinates, not a search.** Name the files, the module headers
+   to read, and the doc sections by line range. "Fix the `pol` step in
+   `lib/core/prop/linear.ml:317,352`, see `justify.ml:288`, PROOF-FORMAT §4" costs a
+   fraction of "investigate the linear propagator's justification".
+2. **Match the effort to the task.** Design, proof-soundness and conflict-analysis work
+   earn `high`/`xhigh`. Mechanical work — adding a test model, widening a comment to
+   name both checker wordings, formatting, running the gate and reporting — does not.
+   Dispatch those at `low` or `medium`.
+3. **Match the model tier to the task.** Reading-and-reporting work (locate every site
+   that matches a string; summarise what a suite failed on) does not need the top tier.
+   Reserve it for the work where the explanation type or the proof is at stake.
+4. **Bound the report.** Say what you want back and what you do not: *"Return the file
+   and line of each site, one line of context each, and the final `make check` verdict.
+   Do not paste source or test output."* An unbounded agent report lands in your context
+   and is re-read on every subsequent turn of your session.
+
+Use `Explore`-style read-only agents for "where is X" questions and reserve
+general-purpose agents for work that actually edits. Continue an existing agent rather
+than spawning a fresh one for a follow-up in the same area — the fresh one pays the
+discovery cost again.
+
+---
 
 ## Rules for this codebase
 
@@ -158,6 +279,7 @@ not just the session that caused it.
 
 - **Report peak RSS** for your final run (`/usr/bin/time -v`, or `\time -f '%M'`).
 
+### Proof discipline
 
 - **Every propagation that prunes must be able to justify itself.** A propagator that
   narrows a domain without producing an `Explanation` is a bug, not an optimisation.
