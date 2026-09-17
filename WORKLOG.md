@@ -790,3 +790,41 @@ I also narrowed **I-X9**, which I had written unconditionally this morning: it h
 an explanation is emitted as a `pol` at all, and a bound resting on an assumption is
 justified by its trace line instead. D-0018 point 2's per-push `pol` path and M2-T3 both
 reach that exception.
+
+### Wave six closed (orchestrator, 2026-09-17)
+
+Five sessions, all merged, gate green at **1431 unit checks / 252 matrix checks / 34 models,
+peak RSS 36 MB**. M1 is down to eight open rows, none of which is a known-false statement in
+the code. Four things to carry forward.
+
+**The most valuable output of the wave was a premise being wrong, twice.** M1-T51 asked for
+a new `e`/`ia`-style rule in the writer; no new rule was needed, because `ia` and `e` exist
+in *both* checkers and PROOF-FORMAT §2a had simply never listed them. M1-T56's blocker was
+that "no order literal states an interior hole"; a claim never had to *be* a literal. In
+both cases the task had been sized against the premise rather than against the problem, and
+in both cases the agent that checked the premise finished faster than the brief expected. The
+lesson for dispatch: state the premise *as* a premise, and say it may be wrong.
+
+**The standalone-RUP property is gone, and that is D-0039.** A settle line cites the holes
+the settle crossed, so it is RUP against the `.opb` *plus earlier trace lines*, not against
+the `.opb` alone — measured, six of eight lines standalone-valid on
+`trace_settle_holes_sat`, two refused. Not a soundness loss; VeriPB checks each `rup` against
+the database as it stands. But it makes deletion order load-bearing (**I-S4**), and I-S4
+holds today by an argument about levels that **does not cover M2-T3's learned clauses**.
+Whoever starts M2-T3 should read I-S4 first.
+
+**M1-T60 is the row I would read before anything in M4.** Asked to exhibit a
+decision-at-a-hole that veripb rejects, agent-search3 could not, and found the reason: every
+hole M1 can punch is punched by a disequality whose `.opb` rows unit-propagate the exclusion,
+given bounds that are themselves on the page. A whole family of proofs has been verifying
+because of a property of the *encoding of the constraints that happen to exist*, stated in no
+document — and that is also why M1-T57's false line survived ~111k runs. `all_different`'s
+Hall-interval prunings remove values with no disequality row behind them, so M4-T1 ends it.
+
+**Two of the round's corrections were to my own dispatch, not to the agents' work**, and both
+were the same mistake: scoping a file set so tightly that the task could not close. The heap
+guard landed in two binaries and missed `test_prop.exe`, the one that actually reached
+14.9 GB; and `MEM_GUARD_DEMO` installed a guard of its own, so it never tested the installed
+one. All fifteen binaries now announce arming under `BAGUETTE_TEST_HEAP_CAP_ANNOUNCE`, which
+is checkable in a run rather than argued. When a task's whole point is coverage, the file set
+has to include the thing that was uncovered.

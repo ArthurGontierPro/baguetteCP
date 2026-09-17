@@ -23,6 +23,8 @@ module Opb = Baguette_proof.Opb
 module Writer = Baguette_proof.Writer
 module Encoding = Baguette_proof.Encoding
 
+(* M1-T53: the inner heap guard; see mem_guard.ml for what it cannot see. *)
+let () = Mem_guard.install ()
 let failures = ref 0
 
 let check name cond =

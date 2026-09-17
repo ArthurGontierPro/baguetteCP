@@ -79,6 +79,8 @@ module Search = Baguette_core.Search
 module Justify = Baguette_core.Justify
 module Trace = Baguette_core.Trace
 
+(* M1-T53: the inner heap guard; see mem_guard.ml for what it cannot see. *)
+let () = Mem_guard.install ()
 let failures = ref 0
 
 let check name cond =
