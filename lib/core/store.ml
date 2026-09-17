@@ -279,11 +279,18 @@ let conflict t (j : Reason.justified) =
    violation, and nothing here claims otherwise -- the type discharges I-X6 on the reason
    half (lib/core/reason.ml), and on the justification half it stays an argument that
    test_prop.ml's snapshot tests check by backtracking before forcing. *)
+(* The predicate, public and unconditional, so that a test can assert it directly rather
+   than only through an environment variable read at module initialisation. A check that
+   only runs under [BAGUETTE_DEBUG] is a check the suite cannot see fail; test_core.ml
+   tests this function on both answers and then re-runs itself with the flag on to prove
+   the wiring below fires. *)
+let agreement_holds (j : Reason.justified) =
+  let mentioned = Explanation.owners j.justification in
+  List.for_all (fun o -> List.mem o mentioned) (Reason.owners j.reason)
+
 let check_agreement (j : Reason.justified) =
   Debug.check "D-0026: the reason names only variables the justification mentions"
-    (fun () ->
-      let mentioned = Explanation.owners j.justification in
-      List.for_all (fun o -> List.mem o mentioned) (Reason.owners j.reason))
+    (fun () -> agreement_holds j)
 
 (* Apply a Domain.result, recording the old value so it can be undone.
 

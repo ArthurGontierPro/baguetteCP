@@ -500,12 +500,290 @@ let test_attribution () =
   check "M2-T7: backtracking pops the attributed entry with everything else"
     ((last_entry store).Store.prop = 7 && Store.check_invariants store)
 
+(* ------------------------------------------------- reasons are data (M2-T8, D-0026)
+
+   docs/DECISIONS.md D-0026 split the old single explanation channel into a declarative
+   [Reason.t] (which facts) and an [Explanation.t] (how the checker is convinced). These
+   tests are for the failure modes that split *creates*, which by construction no test
+   written before M2-T8 can see: a reason materialised over the wrong scope, materialised
+   at the wrong moment, or agreeing with its justification only by luck.
+
+   "The existing suite still passes" is necessary and nowhere near sufficient here -- the
+   whole point of a refactor that changes no behaviour is that the old suite is blind to
+   whether the new structure is right. *)
+
+let test_reason () =
+  (* The ONE materialisation rule, and it is the one that used to be copied into
+     [Linear.facts_of_snaps], [Ne.fixed_facts] and [Bool2int.ge_fact]: a fact at the
+     variable's DECLARED bound has no literal, because the order encoding states it as
+     the constant true (docs/PROOF-FORMAT.md section 3). Both directions, because a
+     mirrored pair is where this project keeps shipping a half that nothing runs. *)
+  check "D-0026: a lower fact past the declared bound materialises"
+    (Reason.lits [ Reason.at_least ~name:"x" ~decl:0 3 ] = [ Lit.ge "x" 3 ]);
+  check "D-0026: a lower fact AT the declared bound materialises to nothing"
+    (Reason.lits [ Reason.at_least ~name:"x" ~decl:3 3 ] = []);
+  check "D-0026: an upper fact past the declared bound materialises"
+    (Reason.lits [ Reason.at_most ~name:"x" ~decl:9 4 ] = [ Lit.le "x" 4 ]);
+  check "D-0026: an upper fact AT the declared bound materialises to nothing"
+    (Reason.lits [ Reason.at_most ~name:"x" ~decl:4 4 ] = []);
+  check "D-0026: Reason.none materialises to nothing" (Reason.lits Reason.none = []);
+
+  (* Order and duplicates survive materialisation. The tail of a trace line is an
+     artefact this project diffs byte for byte, so a [lits] that sorted or deduped would
+     be a silent artefact change rather than a bug anyone would see as one. *)
+  let three =
+    [
+      Reason.at_least ~name:"a" ~decl:0 1;
+      Reason.at_most ~name:"b" ~decl:9 2;
+      Reason.at_least ~name:"a" ~decl:0 1;
+    ]
+  in
+  check "D-0026: lits preserves order and keeps duplicates"
+    (Reason.lits three = [ Lit.ge "a" 1; Lit.le "b" 2; Lit.ge "a" 1 ]);
+
+  (* The scope is what a reason names, INCLUDING the variables whose fact does not
+     materialise. M2-T3 is meant to walk a reason's variables without building a single
+     literal, so [owners] must not be a projection of [lits]. This is the check that
+     fails if someone "simplifies" it to one. *)
+  let mixed =
+    [ Reason.at_least ~name:"kept" ~decl:0 2; Reason.at_least ~name:"dropped" ~decl:7 7 ]
+  in
+  check "D-0026: owners includes a variable whose fact has no literal"
+    (Reason.owners mixed = [ "kept"; "dropped" ] && Reason.lits mixed = [ Lit.ge "kept" 2 ]);
+  check "D-0026: owners dedupes but keeps first-seen order"
+    (Reason.owners three = [ "a"; "b" ]);
+
+  (* [fixed_at] is "x = v" as the two order facts [Ne] states, and each half drops at its
+     own declared bound independently -- the case [Ne.fixed_facts] got right by hand and
+     which now has to keep being right in one place for three callers. *)
+  check "D-0026: fixed_at states both halves"
+    (Reason.lits (Reason.fixed_at ~name:"x" ~decl_lo:0 ~decl_hi:9 4)
+    = [ Lit.ge "x" 4; Lit.le "x" 4 ]);
+  check "D-0026: fixed_at at the declared lo states only the upper half"
+    (Reason.lits (Reason.fixed_at ~name:"x" ~decl_lo:0 ~decl_hi:9 0) = [ Lit.le "x" 0 ]);
+  check "D-0026: fixed_at at the declared hi states only the lower half"
+    (Reason.lits (Reason.fixed_at ~name:"x" ~decl_lo:0 ~decl_hi:9 9) = [ Lit.ge "x" 9 ]);
+  check "D-0026: fixed_at on a one-value declaration states nothing"
+    (Reason.lits (Reason.fixed_at ~name:"x" ~decl_lo:4 ~decl_hi:4 4) = []);
+
+  (* [bound_for_coeff] is D-0013's case split, shared so a linear-shaped propagator's
+     reason and its row arithmetic cannot disagree about WHICH bound was read. Getting
+     this backwards is break 1 in the M2-T8 hand-back, and it is why the shared helper
+     exists rather than each propagator writing the conditional. *)
+  check "D-0026: a non-negative coefficient reads lo and states x >= v"
+    (Reason.lits
+       [ Reason.bound_for_coeff ~coeff:2 ~name:"x" ~decl_lo:0 ~decl_hi:9 3 ]
+    = [ Lit.ge "x" 3 ]);
+  check "D-0026: a negative coefficient reads hi and states x <= v"
+    (Reason.lits
+       [ Reason.bound_for_coeff ~coeff:(-2) ~name:"x" ~decl_lo:0 ~decl_hi:9 3 ]
+    = [ Lit.le "x" 3 ]);
+
+  (* NON-NARROWABLE, which is the property I-X6 needs and the one GCS's [Narrowable*]
+     variants do not have. A reason built now and materialised after the store has moved
+     must render the bound as it was AT THE PRUNING, not as it is now.
+
+     Note what makes this test able to see its subject fail: it materialises the same
+     reason twice, side by side with the bound that has since moved, and asserts the two
+     are different. A test that only checked "the literals are x >= 3" would pass just as
+     happily against a reason that re-read the store, because the store still said 3 at
+     that instant. *)
+  let store =
+    Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 9; Domain.make 0 9 |]
+  in
+  let j = Reason.because [ Reason.at_least ~name:"x" ~decl:0 3 ] (Explanation.clause [ Lit.ge "x" 3 ]) in
+  (match Store.set_lo store (Var.of_int 0) 3 j with
+  | Store.Changed -> ()
+  | _ -> failwith "test_reason: setup");
+  let e = last_entry store in
+  let at_push = Reason.lits e.Store.reason in
+  Store.new_level store;
+  ignore
+    (Store.set_lo store (Var.of_int 0) 7
+       (Reason.because Reason.none (Explanation.model_row 1)));
+  check "I-X6: the store really did move under the reason"
+    (Domain.lo (Store.get store (Var.of_int 0)) = 7);
+  check "I-X6: a reason materialised later renders the bound as of the pruning"
+    (Reason.lits e.Store.reason = at_push && at_push = [ Lit.ge "x" 3 ]);
+  Store.backtrack store;
+  check "I-X6: and still does after the later push is backtracked"
+    (Reason.lits e.Store.reason = [ Lit.ge "x" 3 ])
+
+(* ------------------------------------------ what holds a bound up (M2-T8)
+
+   [Store.lo_support]/[hi_support] replaced [Linear.find_lo_reason]'s downward trail
+   scan. M1-T28 recorded that the *direction* of that scan was load-bearing and that
+   "the two differ only on a variable whose bound moved twice in one branch, which is
+   why no type and no model in the suite can tell them apart". That is now a two-line
+   test, because the answer is a value rather than a walk. *)
+let test_bound_support () =
+  let store =
+    Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 9; Domain.make 0 9 |]
+  in
+  let x = Var.of_int 0 in
+  let r n = Reason.because Reason.none (Explanation.model_row n) in
+  let row_of_support sup =
+    match Store.explanation store (Store.trail_entry store sup) with
+    | Explanation.Model_row n -> n
+    | _ -> -1
+  in
+  check "M2-T8: an untouched bound has no support"
+    (Store.lo_support store x = Store.no_support
+    && Store.hi_support store x = Store.no_support);
+
+  ignore (Store.set_lo store x 2 (r 11));
+  check "M2-T8: the entry that moved lo supports lo"
+    (row_of_support (Store.lo_support store x) = 11);
+  check "M2-T8: and moving lo did not give hi a support"
+    (Store.hi_support store x = Store.no_support);
+
+  (* Moving the OTHER bound must not steal the first one's support. *)
+  ignore (Store.set_hi store x 8 (r 12));
+  check "M2-T8: hi gets its own support and lo keeps its own"
+    (row_of_support (Store.hi_support store x) = 12
+    && row_of_support (Store.lo_support store x) = 11);
+
+  (* THE M1-T28 property, which no model could see: with lo moved twice, the reason is
+     the NEWEST entry that moved it, not the oldest. The old upward-scanning variant
+     returned 11 here; the downward one and this array return 13. *)
+  Store.new_level store;
+  ignore (Store.set_lo store x 5 (r 13));
+  check "M1-T28: the support is the NEWEST entry that moved the bound, not the oldest"
+    (row_of_support (Store.lo_support store x) = 13);
+  check "M2-T8: lo_reasons cites that entry's explanation"
+    (match Store.lo_reasons store x with
+    | [ Explanation.Model_row 13 ] -> true
+    | _ -> false);
+
+  (* And it is restored on the way back up, or a citation would name a popped entry. *)
+  Store.backtrack store;
+  check "M2-T8: backtracking restores the superseded support"
+    (row_of_support (Store.lo_support store x) = 11
+    && row_of_support (Store.hi_support store x) = 12);
+  check "M2-T8: the support array agrees with the trail (check_invariants)"
+    (Store.check_invariants store);
+
+  (* An interior hole moves no bound, so it takes no support -- the case that makes
+     "support" different from "the newest entry for this variable". *)
+  ignore (Store.set_lo store x 2 (r 14));
+  let before = Store.lo_support store x in
+  ignore (Store.remove store x 5 (r 15));
+  check "M2-T8: an interior hole does not become a bound's support"
+    (Store.lo_support store x = before && Store.check_invariants store);
+
+  (* [Domain.fix] moves both bounds at once and must support both. *)
+  let s2 =
+    Store.create ~names:[| "z" |] ~domains:[| Domain.make 0 9 |]
+  in
+  let z = Var.of_int 0 in
+  ignore (Store.fix s2 z 4 (Reason.because Reason.none (Explanation.model_row 21)));
+  check "M2-T8: fix supports both bounds it moved"
+    (Store.lo_support s2 z = 0 && Store.hi_support s2 z = 0 && Store.check_invariants s2)
+
+(* ------------------------------- the reason and the justification must agree (D-0026)
+
+   D-0026 exists to turn "the two are kept in agreement by a comment" into a type. The
+   type gets the two halves to one place; it cannot by itself say they are about the same
+   pruning. [Store.agreement_holds] is that last step -- the reason may only name
+   variables the justification mentions -- and [Store.apply] asserts it under
+   BAGUETTE_DEBUG.
+
+   The predicate is tested here, unconditionally. The WIRING is tested by
+   [test_agreement_is_wired] below, which re-runs this binary with BAGUETTE_DEBUG=1 and
+   performs the break, because [Debug.enabled] is read once at module initialisation and
+   a check nothing runs is not a check. *)
+let test_agreement () =
+  let expl = Explanation.clause [ Lit.ge "x" 1; Lit.le "y" 4 ] in
+  check "D-0026: a reason over the justification's own variables agrees"
+    (Store.agreement_holds
+       (Reason.because [ Reason.at_least ~name:"y" ~decl:0 2 ] expl));
+  check "D-0026: an empty reason agrees with anything"
+    (Store.agreement_holds (Reason.because Reason.none expl));
+  check "D-0026: a reason naming a variable the justification never mentions DISAGREES"
+    (not
+       (Store.agreement_holds
+          (Reason.because [ Reason.at_least ~name:"z" ~decl:0 2 ] expl)));
+  (* The disagreement is found even when the offending fact is one of several and even
+     when it would not have materialised -- the scope is what the propagator READ, so a
+     fact at its declared bound still has to be about a variable in the derivation. *)
+  check "D-0026: one stray fact among good ones still DISAGREES"
+    (not
+       (Store.agreement_holds
+          (Reason.because
+             [
+               Reason.at_least ~name:"x" ~decl:0 1;
+               Reason.at_least ~name:"z" ~decl:5 5;
+               Reason.at_most ~name:"y" ~decl:9 4;
+             ]
+             expl)));
+  (* A [Weaken] summand shares NO literal with the reason (declared-width chain versus
+     the current bound), so this has to compare scopes and not literals. A check written
+     over [Explanation.lits] equality would call every real [Linear] pruning a
+     disagreement. *)
+  let weaken_only =
+    Explanation.combine
+      [
+        Explanation.term 1 (Explanation.model_row 3);
+        Explanation.weaken [ (2, Lit.ge "x" 1); (2, Lit.ge "x" 2) ];
+      ]
+      2
+  in
+  check "D-0026: a reason agrees with a justification that only WEAKENS its variable"
+    (Store.agreement_holds
+       (Reason.because [ Reason.at_least ~name:"x" ~decl:0 2 ] weaken_only)
+    && Reason.lits [ Reason.at_least ~name:"x" ~decl:0 2 ]
+       <> Explanation.lits weaken_only);
+  (* And it looks THROUGH a Deferred: a propagator's justification is a thunk, so a check
+     that gave up on an unforced one would never fire in production. *)
+  check "D-0026: the check forces a Deferred justification rather than passing it"
+    (not
+       (Store.agreement_holds
+          (Reason.because
+             [ Reason.at_least ~name:"z" ~decl:0 2 ]
+             (Explanation.deferred (fun () -> expl)))))
+
+(* Performing the break, rather than reading the code: re-run this very binary with
+   BAGUETTE_DEBUG=1 in a mode that pushes a disagreeing pruning, and require it to die.
+   The control -- the same push with an agreeing reason -- must survive, or a non-zero
+   exit would prove nothing about the check. *)
+let disagreeing_push ~agree () =
+  let store =
+    Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
+  in
+  let name = if agree then "x" else "z" in
+  let j =
+    Reason.because
+      [ Reason.at_least ~name ~decl:0 3 ]
+      (Explanation.clause [ Lit.ge "x" 1 ])
+  in
+  ignore (Store.set_lo store (Var.of_int 0) 2 j)
+
+let test_agreement_is_wired () =
+  let run mode =
+    Sys.command
+      (Printf.sprintf "BAGUETTE_DEBUG=1 %s %s >/dev/null 2>&1"
+         (Filename.quote Sys.executable_name)
+         mode)
+  in
+  check "D-0026: BAGUETTE_DEBUG accepts a pruning whose reason agrees (the control)"
+    (run "--agreeing-push" = 0);
+  check "D-0026: BAGUETTE_DEBUG REJECTS a pruning whose reason names a stray variable"
+    (run "--disagreeing-push" <> 0)
+
 let () =
-  test_domains ();
-  test_store ();
-  test_explanations ();
-  test_attribution ();
-  if !failures > 0 then (
-    Printf.printf "\n%d failure(s)\n" !failures;
-    exit 1)
-  else print_endline "\ncore unit tests passed"
+  match Array.to_list Sys.argv with
+  | _ :: "--agreeing-push" :: _ -> disagreeing_push ~agree:true ()
+  | _ :: "--disagreeing-push" :: _ -> disagreeing_push ~agree:false ()
+  | _ ->
+      test_domains ();
+      test_store ();
+      test_explanations ();
+      test_attribution ();
+      test_reason ();
+      test_bound_support ();
+      test_agreement ();
+      test_agreement_is_wired ();
+      if !failures > 0 then (
+        Printf.printf "\n%d failure(s)\n" !failures;
+        exit 1)
+      else print_endline "\ncore unit tests passed"
