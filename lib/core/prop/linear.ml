@@ -204,7 +204,14 @@ let term_min store (tm : term) =
    about the store: [decl_lo] is what this instance froze at [make] time, which is not the
    bound the store was created with when a unit test narrows a variable before building
    the propagator. Dropping the guard would make such a test cite an entry where the old
-   code weakened, so it is behaviour and not decoration. *)
+   code weakened, so it is behaviour and not decoration.
+
+   M1-T63: the declared-hole hedge this module used to carry is NOT here any more. A hole
+   the variable was declared with ([Domain.of_list]) has no trail entry to cite, and the
+   one surviving statement of what happens then is [Store.remover]'s header, which also
+   names the gate that makes it unreachable (lib/flatzinc/compile.ml's
+   [reject_set_domain], refusing [Model.Dset] outright). M2-T8 deleted this module's copy
+   along with [find_lo_reason]/[find_hi_reason]; do not reinstate it here. *)
 let lo_rests_on store v ~decl_lo =
   if Domain.lo (Store.get store v) <= decl_lo then [] else Store.lo_reasons store v
 
