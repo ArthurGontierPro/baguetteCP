@@ -530,6 +530,307 @@ let run_model m =
   (try Sys.rmdir dir with _ -> ());
   (proof, n_model)
 
+(* --------------------------------- the hole and the settle (M1-T56, M1-T57) *)
+
+(* Two things this file could not see before, both found by M1-T44 and both about
+   [Trace.claims] reading [Store.entry]'s [now]:
+
+   - **M1-T56.** A removal strictly inside the interval moves no bound, and [claims]
+     wrote no line for it on the premise that "M1 is bounds-only". [int_ne] has punched
+     such holes since M1-T9. The claim is a two-literal clause rather than a literal,
+     which is the only reason it was ever thought impossible in the order encoding.
+
+   - **M1-T57.** [Domain.set_lo] settles past holes, so the recorded bound can be
+     strictly stronger than the propagator's facts derive (D-0035, I-X9), and the line
+     claimed the recorded one from those facts alone.
+
+   The models above cannot reach either: they are [Linear]/[Lin_eq] only, so no hole is
+   ever punched. These two come through the FlatZinc front end because the whole point is
+   [int_ne] interacting with a bounds propagator, and writing that by hand here would be
+   writing the interaction rather than testing it. They are the same sources as
+   test/models/trace_settle_sat.fzn and test/models/trace_settle_holes_sat.fzn -- kept
+   here as well, not referenced by path, so this binary tests what it says it tests when
+   run from anywhere.
+
+   What makes them detectors rather than decoration: both are **satisfiable**, and the
+   pre-M1-T57 line is *violated by the model's own solution*. root_hole_unsat.fzn has the
+   same defect at the root and verified anyway, because in an UNSAT model every clause is
+   entailed and the checker re-derived the missing hole from the .opb's big-M rows on its
+   own. That is what made the defect invisible across ~111k runs, and it is why
+   [pre_fix_rejected] below is the check that matters most in this section. *)
+
+module F = Baguette_flatzinc
+
+type fzn_case = {
+  fzn : string; (* the model's name in test/models/, for the messages *)
+  source : string;
+  (* The exact bytes of the two lines under test. Quoted from a run, as the [chain]
+     byte contract above is, and for the same reason: a shared idea of what a line
+     means is worth nothing until someone writes the bytes down. *)
+  hole_line : string;
+  settle_line : string;
+  (* The literal M1-T57 adds to [settle_line]: the fact behind the hole the settle
+     walked over. Removing it from the line reconstructs exactly what this module
+     emitted before the fix, which must not verify. *)
+  settle_hole_fact : string;
+  (* How many trace lines are NOT consequences of one model row on their own. A settle's
+     line is RUP against the *hole's* line, which is a line this module wrote itself --
+     so docs/PROOF-FORMAT.md section 4's "a trace line must verify [standalone]" does not
+     hold for it, and this number says so per model rather than leaving the weaker
+     property unstated. It is 0 where the checker can still re-derive the single hole
+     from the .opb by itself and 1 where two holes in a row put that out of its reach. *)
+  needs_prefix : int;
+}
+
+let fzn_cases =
+  [
+    {
+      fzn = "trace_settle_sat";
+      source =
+        {|
+var 2..3: y :: output_var;
+var 0..4: x :: output_var;
+var 0..4: w :: output_var;
+var 0..1: z :: output_var;
+constraint int_ne(x, y);
+constraint int_lin_le([-1,-1],[x,w],-4);
+constraint int_lin_le([1,-1],[w,y],0);
+constraint int_lin_le([1,-1],[x,z],2);
+constraint int_lin_le([1,-1],[z,y],-2);
+solve satisfy;
+|};
+      (* x <> 2, under the decision y = 2. Two claim literals, one negated fact. *)
+      hole_line = "rup +1 ~x_ge_2 +1 x_ge_3 +1 y_ge_3 >= 1 ;";
+      (* lo(x) asked for 2 and settled to 3. `w_ge_3` is the propagator's own fact
+         ("w <= 2") negated; `y_ge_3` is the hole's. *)
+      settle_line = "rup +1 x_ge_3 +1 w_ge_3 +1 y_ge_3 >= 1 ;";
+      settle_hole_fact = "+1 y_ge_3 ";
+      needs_prefix = 0;
+    };
+    {
+      fzn = "trace_settle_holes_sat";
+      source =
+        {|
+var 2..4: y :: output_var;
+var 0..5: x :: output_var;
+var 0..4: w :: output_var;
+var 0..2: z :: output_var;
+var 3..3: p :: output_var;
+constraint int_ne(x, y);
+constraint int_ne(x, p);
+constraint int_lin_le([-1,-1],[x,w],-4);
+constraint int_lin_le([1,-1],[w,y],0);
+constraint int_lin_le([1,-1],[x,z],2);
+constraint int_lin_le([1,-1],[z,y],-2);
+solve satisfy;
+|};
+      (* The level-1 hole. The root one, `~x_ge_3 \/ x_ge_4`, has no facts at all
+         because p is at both its declared bounds; it is checked by the
+         standalone/prefix sweep below rather than quoted twice. *)
+      hole_line = "rup +1 ~x_ge_2 +1 x_ge_3 +1 y_ge_3 >= 1 ;";
+      (* Settled over BOTH holes, 2 and 3, so lo(x) landed on 4. The hole at 3
+         contributed no fact, which is why only one literal is added here. *)
+      settle_line = "rup +1 x_ge_4 +1 w_ge_3 +1 y_ge_3 >= 1 ;";
+      settle_hole_fact = "+1 y_ge_3 ";
+      needs_prefix = 1;
+    };
+  ]
+
+(* Like [standalone], but with [prefix] (trace lines, in file order, labels stripped)
+   stated first. That is the honest form of the D-0018 property once a settle exists: a
+   trace line is RUP against the model rows *and the trace lines this module already
+   wrote*, and nothing else -- no decision, no nogood, no conflict line.
+
+   Labels are stripped from every line including the one under test, because a subset of
+   a proof's rules carries a subset of its auto-numbered [@cN] names and re-stating
+   `@c20` as the checker's own `@c19` is a duplicate-name parse error, which would make
+   this whole check fail for a reason that has nothing to do with the trace. Nothing
+   here cites anything by name, so the names are not needed. *)
+let standalone_after ~dir ~opb ~n_model ~prefix rule_line =
+  let v3 = Writer.default_format () = Writer.V3_0 in
+  let t s = if v3 then s ^ " ;" else s in
+  run_veripb ~dir ~opb
+    (String.concat "\n"
+       ([
+          Printf.sprintf "pseudo-Boolean proof version %s"
+            (Writer.format_to_string (Writer.default_format ()));
+          t (Printf.sprintf "f %d" n_model);
+        ]
+       @ List.map strip_label prefix
+       @ [
+           strip_label rule_line;
+           t "output NONE";
+           t "conclusion NONE";
+           t "end pseudo-Boolean proof";
+           "";
+         ]))
+
+let run_fzn c =
+  let tag = c.fzn in
+  let dir = Filename.temp_file "baguette_trace_fzn" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let opb = Filename.concat dir "model.opb" in
+  let pbp = Filename.concat dir "model.pbp" in
+  let m = F.Builder.of_string ~file:tag c.source in
+  let comp = F.Compile.compile m in
+  let store = comp.F.Compile.store in
+  let encoding = comp.F.Compile.encoding in
+  let engine = comp.F.Compile.engine in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ tag ] encoding oc;
+  close_out oc;
+  let n_model = Encoding.n_constraints encoding in
+  let oc = open_out pbp in
+  let writer = Writer.create ~audit:true oc in
+  Encoding.start_proof encoding writer;
+  let ctx = Justify.create ~writer ~encoding in
+  let trace = Trace.create () in
+  (* I-S1 the same way bin/main.ml does it: the model re-checks the assignment, the
+     propagators are not trusted. [Compile] builds the store in [Model.vars] order, which
+     is the promise that makes this index-for-index. *)
+  let independent (a : Search.assignment) =
+    let values = Array.make (F.Model.nvars m) 0 in
+    List.iter (fun (v, value) -> values.(Var.to_int v) <- value) a;
+    F.Model.check_assignment m values
+  in
+  let outcome = Search.solve ~engine ~store ~ctx ~check:independent ~trace () in
+  close_out oc;
+  let proof = read_file pbp in
+  let rules = numbered_rules ~n_model proof in
+  let trace_ids = Trace.emitted_ids trace in
+  let is_trace id = List.mem id trace_ids in
+
+  (match outcome with
+  | Search.Sat a ->
+      check (tag ^ ": the solution independently satisfies the model (I-S1)")
+        (independent a)
+  | Search.Unsat ->
+      incr failures;
+      Printf.printf
+        "FAIL %s: answered UNSATISFIABLE, but this model is satisfiable -- the \
+         checks below would then all be about the wrong instance\n"
+        tag);
+  check (tag ^ ": a branch failed, so a trace was written") (List.length trace_ids > 0);
+
+  (* ---- M1-T56 and M1-T57, as bytes. The hole's line did not exist before M1-T56;
+     the settle's line existed without its last literal and was false. *)
+  check
+    (tag ^ ": M1-T56 -- the interior hole gets its own line, " ^ c.hole_line)
+    (contains c.hole_line proof);
+  check
+    (tag ^ ": M1-T57 -- the settled bound cites the hole's reason, " ^ c.settle_line)
+    (contains c.settle_line proof);
+
+  (* ---- the whole proof. This is the check the two models exist for: before M1-T57
+     VeriPB 3.0.2 refused the settle line outright. *)
+  (match run_veripb ~dir ~opb proof with
+  | None ->
+      incr failures;
+      Printf.printf
+        "FAIL %s: veripb not found -- I-X1 was NOT checked. Do not read this as a pass.\n"
+        tag
+  | Some ok ->
+      check (tag ^ ": veripb accepts the proof (I-X1)") ok;
+      if not ok then Printf.printf "  model:\n%s\n  proof:\n%s\n" (read_file opb) proof);
+
+  (* ---- every trace line, against the .opb plus the trace lines before it. That is
+     the D-0018 property in the form that survives a settle: a settle's line is RUP
+     against the *hole's* line, which this module wrote itself, so "one model row" is
+     too narrow for it while "the whole proof" would be too wide to mean anything. No
+     decision, no nogood and no conflict line is ever in the prefix.
+
+     The mirror half is deliberately NOT the same question. A nogood *must* be RUP once
+     the trace is in the database -- that is the entire claim of D-0018 -- so it is
+     checked against the .opb ALONE, where it must fail. Asking it against the trace as
+     well would assert the opposite of the design and would have this section reporting
+     a defect every time the module worked. *)
+  let bad_trace = ref [] and bad_nogood = ref [] in
+  let prefix = ref [] in
+  List.iter
+    (fun (id, line) ->
+      if is_trace id then (
+        (match standalone_after ~dir ~opb ~n_model ~prefix:(List.rev !prefix) line with
+        | None -> ()
+        | Some ok -> if not ok then bad_trace := (id, line) :: !bad_trace);
+        prefix := line :: !prefix)
+      else
+        match standalone ~dir ~opb ~n_model line with
+        | None -> ()
+        | Some ok -> if ok then bad_nogood := (id, line) :: !bad_nogood)
+    rules;
+  check
+    (Printf.sprintf "%s: all %d trace lines verify against the .opb and the trace so far"
+       tag (List.length trace_ids))
+    (!bad_trace = []);
+  List.iter
+    (fun (id, line) -> Printf.printf "  not valid even with the trace before it: %d  %s\n" id line)
+    !bad_trace;
+  check
+    (tag ^ ": no non-trace rule is RUP from the .opb alone -- the trace is load-bearing")
+    (!bad_nogood = []);
+  List.iter
+    (fun (id, line) -> Printf.printf "  unexpectedly standalone-valid: %d  %s\n" id line)
+    !bad_nogood;
+
+  (* ---- and how many of those lines are NOT consequences of one model row on their
+     own. PROOF-FORMAT section 4 says a trace line must verify standalone; a settle's
+     line rests on the hole's line and does not, and this counts them rather than
+     leaving the deviation unrecorded. The count is per model and asserted exactly:
+     drifting either way is a change in what the trace rests on. *)
+  let not_standalone =
+    List.filter
+      (fun (id, line) ->
+        is_trace id
+        && match standalone ~dir ~opb ~n_model line with Some ok -> not ok | None -> false)
+      rules
+  in
+  check
+    (Printf.sprintf "%s: exactly %d trace line(s) need an earlier trace line (got %d)" tag
+       c.needs_prefix (List.length not_standalone))
+    (List.length not_standalone = c.needs_prefix);
+
+  (* ---- the detector. Take the settle line as emitted, delete the hole fact M1-T57
+     added, and the result must be refused even with the whole trace in front of it: it
+     is the pre-fix line, and it is false in a model that has a solution. The removal is
+     asserted to have changed something first -- a no-op edit would make this check pass
+     by testing the correct line twice. *)
+  let pre_fix =
+    let n = String.length c.settle_hole_fact in
+    let rec go i =
+      if i + n > String.length c.settle_line then c.settle_line
+      else if String.sub c.settle_line i n = c.settle_hole_fact then
+        String.sub c.settle_line 0 i
+        ^ String.sub c.settle_line (i + n) (String.length c.settle_line - i - n)
+      else go (i + 1)
+    in
+    go 0
+  in
+  check
+    (tag ^ ": the pre-M1-T57 line is a different line from the one emitted")
+    (not (String.equal pre_fix c.settle_line));
+  (match standalone_after ~dir ~opb ~n_model ~prefix:(List.rev !prefix) pre_fix with
+  | None -> ()
+  | Some ok ->
+      check
+        (tag ^ ": without the hole's fact the settle line is REFUSED, " ^ pre_fix)
+        (not ok));
+
+  (* ---- the negative control: blank every trace line into a tautology and the proof
+     must fail. Without this, everything above could be measuring a decorative trace. *)
+  let taut = "rup +1 x_ge_1 +1 ~x_ge_1 >= 1 ;" in
+  let blanked = blank_rules ~n_model ~victim:is_trace ~taut proof in
+  (match run_veripb ~dir ~opb blanked with
+  | None -> ()
+  | Some ok ->
+      check (tag ^ ": with the trace blanked out, veripb rejects the proof") (not ok);
+      if ok then Printf.printf "  blanked proof still verified:\n%s\n" blanked);
+
+  List.iter
+    (fun f -> try Sys.remove f with _ -> ())
+    [ opb; pbp; Filename.concat dir "check.pbp"; Filename.concat dir "check.log" ];
+  try Sys.rmdir dir with _ -> ()
+
 (* ------------------------------------------------ the byte-level contract *)
 
 (* D-0009's lesson, applied: a shared idea of what a line *means* is worth nothing
@@ -593,6 +894,7 @@ let () =
       if i = 0 then chain_proof := proof)
     models;
   byte_contract !chain_proof;
+  List.iter run_fzn fzn_cases;
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
