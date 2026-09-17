@@ -789,9 +789,7 @@ let test_hole_split_precondition () =
   check
     "M1-T55: at the root fixpoint hx is unfixed with lo = 0 and lo + 1 a HOLE -- so \
      spec_order splits at 0 and the high push settles past 1"
-    (Domain.size d > 1 && Domain.lo d = 0
-    && (not (Domain.mem d 1))
-    && Domain.mem d 2);
+    (Domain.size d > 1 && Domain.lo d = 0 && (not (Domain.mem d 1)) && Domain.mem d 2);
   check "M1-T55: hy is the wider domain, so first_fail branches on hx"
     (Domain.size (Store.get store (var 1)) > Domain.size d)
 
@@ -835,7 +833,27 @@ let hole_bridge_body = "+1 hx_ge_2 +1 ~hx_ge_1 >= 1"
    the line, conclude nothing. VeriPB accepts `conclusion NONE`. The same question
    test/unit/test_trace.ml asks of every trace line, asked here of the bridge -- which is
    the whole claim the bridge makes, since it is decision-free for this scene (the split
-   is at the root, so it has no ancestors to carry). *)
+   is at the root, so it has no ancestors to carry).
+
+   **What this check cannot see, measured rather than assumed.** It confirms the bridge is
+   derivable. It does NOT discriminate a correct bridge from an over-strong one, and the
+   reason is structural, not a defect in the wiring:
+
+     - this scene's .opb is unsatisfiable, and every clause over its variables is
+       therefore entailed by it -- `rup +1 hx_ge_2 >= 1`, the bridge with its own
+       assumption dropped, verifies standalone here too;
+     - and that is not cured by moving to a satisfiable scene. [spec_order] is low-side
+       first, so it enters the high side of a hole split only when [x = lo] has just
+       failed *under the ancestor decisions* -- which is to say the claim literal is
+       entailed under those ancestors wherever a bridge exists at all. A scene where it
+       is not would need the hole split to sit under a decision path that fails while
+       some other path has a solution with [x = lo].
+
+   So the discriminating check here is the byte-exact one above, which reddens under all
+   three of "the bridge is not emitted", "its claim is off by one" and "its assumption is
+   dropped". This one is the I-X1 statement -- the line veripb is asked to accept really
+   is accepted, standing alone, with no search and no other derived constraint in the
+   database. Both are worth having and neither is the other. *)
 let standalone_verifies ~veripb ~dir ~opb ~n_model rule_line =
   let v3 = Writer.default_format () = Writer.V3_0 in
   let t s = if v3 then s ^ " ;" else s in
@@ -871,7 +889,7 @@ let test_hole_split_bridge () =
         "FAIL %s: veripb not found -- the bridge was NOT checked. Install it and re-run; \
          do not treat this as a pass.\n"
         name
-  | Some veripb ->
+  | Some veripb -> (
       let dir = Filename.temp_file "baguette_hole_split" "" in
       Sys.remove dir;
       Sys.mkdir dir 0o700;
@@ -888,8 +906,8 @@ let test_hole_split_bridge () =
           incr failures;
           Printf.printf
             "FAIL %s: no `rup %s` in the emitted proof. The decision's push settled from \
-             hx >= 1 onto hx >= 2 and nothing said so, which is the M1-T55 defect.\n  \
-             proof: %s\n"
+             hx >= 1 onto hx >= 2 and nothing said so, which is the M1-T55 defect.\n\
+            \  proof: %s\n"
             name hole_bridge_body pbp
       | Some l -> Printf.printf "ok   %s is emitted (%s)\n" name (String.trim l));
       (* 2. It is a real consequence of the model, not decoration. *)
@@ -913,8 +931,8 @@ let test_hole_split_bridge () =
           | false, log ->
               incr failures;
               Printf.printf
-                "FAIL %s: the bridge is NOT derivable from the model alone. %s\n  \
-                 model: %s\n"
+                "FAIL %s: the bridge is NOT derivable from the model alone. %s\n\
+                \  model: %s\n"
                 name log opb));
       (* 3. And the whole proof still verifies, bridge and all. *)
       let log = Filename.concat dir "whole.log" in
@@ -938,7 +956,7 @@ let test_hole_split_bridge () =
           Filename.concat dir "standalone.pbp";
           Filename.concat dir "standalone.log";
         ];
-      (try Sys.rmdir dir with _ -> ())
+      try Sys.rmdir dir with _ -> ())
 
 let () =
   test_fixpoint_tightens_and_settles ();

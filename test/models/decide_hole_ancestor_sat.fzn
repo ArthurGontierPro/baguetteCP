@@ -1,0 +1,43 @@
+% M1-T55, the other arm: a bridge emitted for an ANCESTOR decision, on a SATISFIABLE
+% model. test/models/decide_hole_split_unsat.fzn covers the hole split itself, where the
+% settled decision is the deepest one on the path; this one covers [Search.bridges]'
+% walk up the path, which is the part that has to line the open levels' pushes up with
+% the assumed literals and get each decision's own ancestors right.
+%
+% Two copies of the same gadget, which is the smallest thing that branches and fails:
+% `v = 2w` with `w` in 0..1 leaves `v` in {0, 2} with no bound to prune, and `v <> w`
+% then makes `v = 0` fail (it forces `w = 0`, so `v = w`) while `v = 2` succeeds. On the
+% x/y copy the hole is punched first, by int_ne(x, 1), so x is {0, 2} at the root with 1
+% strictly inside it.
+%
+% The tree, and each line of it is in the emitted proof:
+%
+%   1. first_fail picks x (size 2; a is size 3) and splits at lo = 0. The low branch
+%      fixes x = 0, x = 2y gives y = 0, and int_ne(x, y) conflicts.
+%   2. The high branch pushes `set_lo x 1` ONTO THE HOLE and settles to x = 2 -- the
+%      M1-T55 shape. Nothing about it is written down at the time; it is a decision, so
+%      lib/core/trace.ml gives it no line.
+%   3. Under it, first_fail picks b and splits at 0. That branch fails the same way, and
+%      its nogood carries x_ge_1 as an ancestor -- so the bridge
+%      `rup +1 x_ge_2 +1 ~x_ge_1 >= 1 ;` is emitted for a decision one level ABOVE the
+%      one that just failed.
+%   4. b = 1 then gives a = 2 and the model is SAT.
+%
+% So this file is also the one place in test/models/ where a bridge appears on a SAT
+% run -- the proof ends in `sol`/`conclusion SAT`, not in a nogood, and the bridge still
+% has to be retired by the level's own wipe for the I-X2 audit to stay empty.
+%
+% The solution is unique and is a fact about the model, not about the search: x = 2y and
+% x <> y over y in 0..1 forces x = 2, y = 1, and likewise a = 2, b = 1. Ground truth
+% under I-M1. Domains are width 3 at most (D-0028).
+array [1..2] of int: minus_two = [1, -2];
+var 0..2: x :: output_var;
+var 0..1: y :: output_var;
+var 0..2: a :: output_var;
+var 0..1: b :: output_var;
+constraint int_ne(x, 1);
+constraint int_lin_eq(minus_two, [x, y], 0);
+constraint int_ne(x, y);
+constraint int_lin_eq(minus_two, [a, b], 0);
+constraint int_ne(a, b);
+solve satisfy;

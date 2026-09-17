@@ -453,7 +453,7 @@ let bridges (ctx : Justify.ctx) store (decisions : Lit.t list) =
           Debug.check
             "M1-T55: the open levels' pushes and the assumed decision literals line up"
             (fun () -> false)
-        else (
+        else
           let name = Store.name store e.Store.var in
           (match settled_bound ctx.Justify.encoding e name l with
           | None -> ()
@@ -466,16 +466,14 @@ let bridges (ctx : Justify.ctx) store (decisions : Lit.t list) =
                      no literal exists to state it -- nothing to bridge. *)
                   ()
               | Some claim ->
-                  let lits =
-                    claim :: Lit.negate l :: List.map Lit.negate ancestors
-                  in
+                  let lits = claim :: Lit.negate l :: List.map Lit.negate ancestors in
                   let origin =
                     Printf.sprintf "M1-T55: %s settled onto %s" (Lit.to_string l)
                       (Lit.to_string claim)
                   in
                   let _ : Writer.cid = Justify.emit_rup_clause ctx ~origin lits in
                   ()));
-          go es ls (l :: ancestors))
+          go es ls (l :: ancestors)
   in
   go (decision_entries store) (List.rev decisions) []
 
