@@ -10,6 +10,7 @@ module Opb = Baguette_proof.Opb
 module Writer = Baguette_proof.Writer
 module Encoding = Baguette_proof.Encoding
 module Explanation = Baguette_core.Explanation
+module Reason = Baguette_core.Reason
 module Justify = Baguette_core.Justify
 module Var = Baguette_core.Var
 module Domain = Baguette_core.Domain
@@ -408,7 +409,7 @@ let setup_int_lin_le ~x2_lo ~rhs dir tag =
   let lin =
     Linear.make store [ (1, Var.of_int 0); (1, Var.of_int 1) ] rhs ~row_id:model_row
   in
-  (match Store.set_lo store (Var.of_int 1) x2_lo (Explanation.model_row c_bound) with
+  (match Store.set_lo store (Var.of_int 1) x2_lo (Reason.because Reason.none (Explanation.model_row c_bound)) with
   | Store.Conflict _ -> failwith "setup_int_lin_le: x2 >= x2_lo conflicts"
   | Store.Unchanged | Store.Changed -> ());
   (match Linear.propagate lin store with

@@ -8,6 +8,7 @@ module Domain = Baguette_core.Domain
 module Store = Baguette_core.Store
 module Var = Baguette_core.Var
 module Explanation = Baguette_core.Explanation
+module Reason = Baguette_core.Reason
 module Arena = Baguette_core.Explanation.Arena
 module Lit = Baguette_proof.Lit
 
@@ -178,8 +179,12 @@ let test_store () =
 
   (* Any reason will do -- this test is about the trail, not the proof. M1-T31
      deleted [Explanation.trivial], which is what stood here; [Model_row] is the
-     honest spelling of "some model row justifies it" and nothing renders it. *)
-  let why = Explanation.model_row 1 in
+     honest spelling of "some model row justifies it" and nothing renders it.
+
+     M2-T8/D-0026: a mutator takes ONE [Reason.justified], both halves together. This
+     test is not exercising the trace, so its reason is [Reason.none] -- written out,
+     because there is no longer a mutator that means it by omission. *)
+  let why = Reason.because Reason.none (Explanation.model_row 1) in
   check "store: prune applies"
     (match Store.set_lo s x 3 why with Store.Changed -> true | _ -> false);
   check "store: prune took effect" (Domain.lo (Store.get s x) = 3);
@@ -237,8 +242,9 @@ let test_store () =
   for lvl = 0 to 5 do
     snaps.(lvl) <- Store.snapshot s2;
     Store.new_level s2;
-    ignore (Store.set_lo s2 vars.(lvl mod 3) (lvl + 1) (Explanation.model_row 1));
-    ignore (Store.remove s2 vars.((lvl + 1) mod 3) (9 - lvl) (Explanation.model_row 1))
+    let r = Reason.because Reason.none (Explanation.model_row 1) in
+    ignore (Store.set_lo s2 vars.(lvl mod 3) (lvl + 1) r);
+    ignore (Store.remove s2 vars.((lvl + 1) mod 3) (9 - lvl) r)
   done;
   check "store: descended six levels" (Store.level s2 = 6);
   let exact = ref true in
@@ -254,7 +260,9 @@ let test_store () =
   let s3 = sample_store () in
   let lit = Lit.ge "x" 4 in
   Store.new_level s3;
-  ignore (Store.set_lo s3 (Var.of_int 0) 4 (Explanation.clause [ lit ]));
+  ignore
+    (Store.set_lo s3 (Var.of_int 0) 4
+       (Reason.because Reason.none (Explanation.clause [ lit ])));
   let reason_count = Arena.length (Store.reasons s3) in
   check "I-T3: the reason was interned" (reason_count = 1);
   check "I-T3: the trail entry resolves to its reason"
@@ -422,7 +430,7 @@ let test_attribution () =
   let store =
     Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
   in
-  let r = Explanation.model_row 1 in
+  let r = Reason.because Reason.none (Explanation.model_row 1) in
   check "M2-T7: a fresh store has nobody running" (Store.running store = Store.no_prop);
 
   (* A mutation made by nobody -- Search's decision pushes and every direct call from a
@@ -460,20 +468,25 @@ let test_attribution () =
   check "M2-T7: with_running restores when the propagator raises"
     (Store.running store = Store.no_prop);
 
-  (* A conflict is stamped from the same field, and defaults to recording no bound facts
-     -- which is what the D-0018 point 3 line keys off, and what the old one-shot
-     [conflict_facts] slot meant when nobody had armed it. *)
-  let c = Store.conflict store (Explanation.model_row 2) in
+  (* A conflict is stamped from the same field, and a conflict with no bound facts says
+     [Reason.none] -- which is what the D-0018 point 3 line keys off, and what the old
+     one-shot [conflict_facts] slot meant when nobody had armed it. M2-T8 removed the
+     default: it is the same behaviour, now written down at the call site. *)
+  let c = Store.conflict store (Reason.because Reason.none (Explanation.model_row 2)) in
   check "M2-T7: a conflict built outside a propagator is no_prop"
     (c.Store.c_prop = Store.no_prop);
-  check "M2-T7: a conflict records no facts unless asked" (c.Store.c_facts () = []);
+  check "M2-T7: a conflict records no facts unless asked"
+    (Reason.lits c.Store.c_reason = []);
   Store.with_running store 2 (fun () ->
       let c =
-        Store.conflict store ~facts:(fun () -> [ Lit.ge "x" 1 ]) (Explanation.model_row 2)
+        Store.conflict store
+          (Reason.because
+             [ Reason.at_least ~name:"x" ~decl:0 1 ]
+             (Explanation.model_row 2))
       in
       check "M2-T7: a conflict names the propagator that reported it" (c.Store.c_prop = 2);
       check "M2-T7: and carries its own bound facts"
-        (c.Store.c_facts () = [ Lit.ge "x" 1 ]));
+        (Reason.lits c.Store.c_reason = [ Lit.ge "x" 1 ]));
 
   (* The stamp survives a backtrack the way every other field does: I-T1 restores
      domains, and an entry that is popped takes its attribution with it. *)

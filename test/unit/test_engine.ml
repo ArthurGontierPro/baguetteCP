@@ -12,6 +12,7 @@ module Domain = Baguette_core.Domain
 module Store = Baguette_core.Store
 module Var = Baguette_core.Var
 module Explanation = Baguette_core.Explanation
+module Reason = Baguette_core.Reason
 module Propagator = Baguette_core.Propagator
 module Linear = Baguette_core.Linear
 module Ne = Baguette_core.Ne
@@ -97,7 +98,7 @@ let test_fixpoint_tightens_and_settles () =
 let test_conflict_carries_explanation () =
   let store = mk_store [ ("x1", 0, 5); ("x2", 0, 5) ] in
   let lin = Linear.make ~row_id:(unrendered_row ()) store [ (1, var 0); (1, var 1) ] 3 in
-  (match Store.set_lo store (var 1) 4 (Explanation.model_row 1) with
+  (match Store.set_lo store (var 1) 4 (Reason.because Reason.none (Explanation.model_row 1)) with
   | Store.Conflict _ -> failwith "test_conflict_carries_explanation: setup failed"
   | Store.Changed | Store.Unchanged -> ());
   let engine = Engine.create [ pack_linear 0 lin ] in
@@ -195,7 +196,7 @@ let test_conflict_names_its_propagator () =
   let doomed =
     Linear.make ~row_id:(unrendered_row ()) store [ (1, var 1); (1, var 2) ] 3
   in
-  (match Store.set_lo store (var 2) 4 (Explanation.model_row 1) with
+  (match Store.set_lo store (var 2) 4 (Reason.because Reason.none (Explanation.model_row 1)) with
   | Store.Conflict _ -> failwith "conflict-id: setup failed"
   | Store.Changed | Store.Unchanged -> ());
   let engine = Engine.create [ pack_linear 0 quiet; pack_linear 1 doomed ] in
@@ -345,7 +346,7 @@ let test_wake_order_is_unchanged () =
       ]
   in
   let bump v n =
-    match Store.set_lo store (var v) n (Explanation.model_row 1) with
+    match Store.set_lo store (var v) n (Reason.because Reason.none (Explanation.model_row 1)) with
     | Store.Conflict _ -> failwith "wake order: setup conflicted"
     | Store.Changed | Store.Unchanged -> ()
   in
@@ -408,11 +409,14 @@ let test_wake_order_is_unchanged () =
    here. [Eq_dom] is a fair stand-in: domain-consistent equality is an ordinary
    propagator and reads exactly what [all_different] and [element] will read in M4.
 
-   Both use [Store.remove] with a placeholder [Model_row] reason and no facts. That is
-   fine only
-   because nothing here writes a proof (see I-P5: a bound-moving prune through a
-   factless mutator would write a trace line with an empty reason). No [Engine] test
-   below emits proof rules from these two. *)
+   Both prune with a placeholder [Model_row] justification and [Reason.none]. Since
+   M2-T8 (D-0026) that is one value and the empty reason is written out rather than
+   defaulted, which is what makes it *visible* that these two do not record what they
+   read. It is fine only because nothing here writes a proof (see I-P5: a bound-moving
+   prune with an empty reason would write a trace line with an empty tail, an
+   unconditional claim). No [Engine] test below emits proof rules from these two. *)
+
+let no_facts_placeholder = Reason.because Reason.none (Explanation.model_row 1)
 
 module Punch = struct
   type t = { px : Var.t; pv : int }
@@ -425,7 +429,7 @@ module Punch = struct
   let vars p = [ p.px ]
 
   let propagate p store =
-    match Store.remove store p.px p.pv (Explanation.model_row 1) with
+    match Store.remove store p.px p.pv no_facts_placeholder with
     | Store.Conflict e -> Propagator.Conflict e
     | Store.Changed | Store.Unchanged -> Propagator.Fixpoint
 end
@@ -453,7 +457,7 @@ module Eq_dom = struct
         match acc with
         | Propagator.Conflict _ -> acc
         | Propagator.Fixpoint -> (
-            match Store.remove store b v (Explanation.model_row 1) with
+            match Store.remove store b v no_facts_placeholder with
             | Store.Conflict e -> Propagator.Conflict e
             | Store.Changed | Store.Unchanged -> Propagator.Fixpoint))
       Propagator.Fixpoint gone

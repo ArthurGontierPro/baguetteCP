@@ -80,6 +80,7 @@ module Checked = Baguette_core.Checked
 module Flatzinc = Baguette_flatzinc
 module Propagator = Baguette_core.Propagator
 module Explanation = Baguette_core.Explanation
+module Reason = Baguette_core.Reason
 module Linear = Baguette_core.Linear
 module Lin_eq = Baguette_core.Lin_eq
 module Int_le = Baguette_core.Int_le
@@ -435,7 +436,10 @@ let scan_linear obs (lin : Linear.t) store =
   let slack = lin.Linear.rhs - List.fold_left ( + ) 0 mins in
   if slack >= 0 then
     List.iteri
-      (fun idx (tm, m) ->
+      (* Annotated because [Linear.source_snap] is declared after [Linear.term] and also
+         has a [coeff] field, so a bare [tm.Linear.coeff] disambiguates to the wrong one
+         (M2-T8). *)
+      (fun idx ((tm : Linear.term), m) ->
         let coeff = tm.Linear.coeff in
         if coeff <> 0 then
           let max_term = m + slack in
@@ -449,27 +453,35 @@ let scan_linear obs (lin : Linear.t) store =
             if max_term mod coeff <> 0 then obs.div_remainder <- true;
             let others = Linear.others_except terms idx in
             let snaps = List.filter_map (Linear.snapshot_source store) others in
-            let weakens =
-              List.exists (function Linear.Snap_weaken _ -> true | _ -> false) snaps
-            in
-            let cites =
-              List.exists (function Linear.Snap_cite _ -> true | _ -> false) snaps
-            in
-            let assumes =
-              List.exists (function Linear.Snap_assume _ -> true | _ -> false) snaps
-            in
-            if weakens && cites then obs.weaken_and_cite <- true;
-            if weakens && assumes then obs.weaken_and_assume <- true;
+            (* M2-T8 collapsed [Snap_weaken]/[Snap_cite]/[Snap_assume] into one record;
+               [Linear.classify] is the same three-way distinction as a function, so this
+               probe still observes what it observed and still observes it structurally
+               rather than by asking the code under test for a flag. *)
+            let any k = List.exists (fun s -> Linear.classify s = k) snaps in
+            let weakens = any `Weakened in
+            if weakens && any `Cited then obs.weaken_and_cite <- true;
+            if weakens && any `Assumed then obs.weaken_and_assume <- true;
             List.iter
-              (function
-                | Linear.Snap_cite { expl; _ } ->
-                    let rows, clause = walk_explanation expl in
-                    if clause then obs.clause_in_pol <- true;
-                    if List.exists (fun r -> r <> lin.Linear.row_id) rows then
-                      obs.cross_instance_cite <- true
+              (fun s ->
+                match Linear.classify s with
+                | `Cited -> (
+                    (* The HEAD of [cited] only: it is the entry that moved the bound,
+                       which is exactly what the old [Snap_cite { expl; _ }] pattern
+                       bound. The tail is the reasons of the holes the settle walked over
+                       (M1-T44), and they are deliberately not walked here so that this
+                       probe observes what it observed before M2-T8 -- they reach
+                       [clause_in_pol] anyway, through [classify_conflict]'s walk of the
+                       whole conflict explanation. *)
+                    match s.Linear.cited with
+                    | [] -> ()
+                    | expl :: _ ->
+                        let rows, clause = walk_explanation expl in
+                        if clause then obs.clause_in_pol <- true;
+                        if List.exists (fun r -> r <> lin.Linear.row_id) rows then
+                          obs.cross_instance_cite <- true)
                 (* M1-T50: a term whose bound a decision established weakens away and
                    cites nothing, exactly like one still at its declared bound. *)
-                | Linear.Snap_weaken _ | Linear.Snap_assume _ -> ())
+                | `Weakened | `Assumed -> ())
               snaps))
       (List.combine terms mins)
 
