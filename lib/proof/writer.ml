@@ -992,6 +992,56 @@ let rup t ~origin c =
 (* Reverse unit propagation of a clause -- the common case. *)
 let rup_clause t ~origin lits = rup t ~origin (Opb.clause lits)
 
+(* ---------------- stating what a step CONCLUDES (M1-T51) ------------------
+
+   [pol] writes a derivation and nothing else. Its conclusion is whatever the reverse-
+   Polish expression happens to evaluate to, and until this rule existed the proof
+   contained no statement of what the propagator BELIEVED it had derived. A `pol` that
+   computes something strictly weaker than the bound the propagator then pruned to is
+   a sound proof line under an unsound prune, and the checker has nothing to object
+   to. M1-T42 could only reach 8 of its 9 cells for exactly this reason: every `pol`
+   guard in the suite was a regex over emitted text, so it could see the derivation
+   change shape but never see the checker judge it.
+
+   [implied] closes that. `ia C : @hint ;` asks the checker whether [C] is
+   syntactically implied by the constraint at [hint] -- a one-constraint check, no
+   search -- and it is the missing half of a `pol`: the derivation says how, the `ia`
+   says what.
+
+   BOTH checkers have this rule, which is why it can be the control rather than a
+   3.0-only luxury. docs/PROOF-FORMAT.md section 2a lists no `e` and no `ia` and is
+   INCOMPLETE on this point; see the M1-T51 hand-back. Measured wordings, and the two
+   share no substring, so match on neither alone:
+
+     3.0.2  "Expected constraint is not syntactically implied by the constraint at the
+             hint."
+     2.2.2  "Hint: ('<claim>', '<the constraint at the hint>')"
+
+   The hint is mandatory here even though both checkers accept the rule without one.
+   Unhinted, `ia C ;` searches the WHOLE database and 3.0.2 says so ("Constraint not
+   syntactically implied by any constraint in the database"), which makes it a much
+   weaker control than it looks: the claim being implied by some ladder clause or some
+   older derivation says nothing about the `pol` on the line above. A control that can
+   be satisfied by a constraint other than its subject is this project's signature
+   failure mode. The hint is what makes the rule name its subject.
+
+   Syntax differs, and neither form was guessed:
+     3.0: `ia <body> : @chint ;`  -- the hint follows a `:`, before the terminator,
+          exactly as [red]'s witness does. After the `;` it is not a hint at all: it
+          is parsed as the LABEL OF THE NEXT RULE, so `ia C ; @c1` verifies against
+          the whole database and a bogus `ia C ; @NOPE` verifies too. That is the trap
+          this comment exists to record.
+     2.0: `ia <constraint> ; <id>` -- positional, after the terminator.
+
+   It yields an id like any other rule, so I-X2 applies to what it hands back. *)
+let implied t ~origin ~hint c =
+  let c = corrupt_claim t ~origin c in
+  let id = t.next_id + 1 in
+  if v3 t then line t "%sia %s : %s ;" (label_for t id) (Opb.constr_body c) (cite t hint)
+  else line t "ia %s %d" (Opb.constr_to_string c) hint;
+  fresh t ~origin
+
+
 (* Redundance-based strengthening: used only to introduce definitions (direct-encoding
    channelling, reified variables). The witness maps variables to 0, 1 or a literal. *)
 type witness_value = Zero | One | To of Lit.t
@@ -1036,6 +1086,37 @@ let delete_many t ids =
       List.iter (forget t) ids
 
 let delete t id = delete_many t [ id ]
+
+(* A `pol` that states its own conclusion, and the form a propagator should reach for.
+
+   Emits three lines where [pol] emits one:
+
+     @cN   pol <derivation> ;        the reasoning
+           ia  <claim> : @cN ;       the claim, checked against that reasoning
+           del id @cN ;              the reasoning, retired
+
+   and returns the id of the CLAIM, not of the derivation. Three consequences worth
+   stating, because each one was a choice:
+
+   1. The caller receives exactly one id and owes exactly one deletion, so I-X2 reads
+      the same as it does for [pol]. The derivation's id never escapes this function.
+   2. What escapes is the claim, so a later step that cites this id cites the bound the
+      [Explanation] says was derived, not whatever the cutting-planes expression
+      happened to evaluate to. Where those differ the difference now surfaces at the
+      `ia` instead of propagating silently into the parent derivation.
+   3. The derivation is deleted immediately. It has served its purpose the moment the
+      `ia` is checked, and leaving it live would make every pruning grow the checker's
+      database by two constraints instead of one.
+
+   The internal [pol] goes through [corrupt_pol] exactly as a bare [pol] does, so the
+   mutation harness reaches the derivation here through the lanes it already has --
+   which is the D-0030 dual obligation in the [pol] comment above, and the reason this
+   is a wrapper rather than a second emission path. *)
+let pol_concluding t ~origin ~claim p =
+  let derivation = pol t ~origin p in
+  let id = implied t ~origin ~hint:derivation claim in
+  delete t derivation;
+  id
 
 (* 3.0 drops the `id` keyword from [delc] and takes the constraint reference directly
    ("Expected a constraint ID (label or signed integer) ... but found `id`"). [del]
