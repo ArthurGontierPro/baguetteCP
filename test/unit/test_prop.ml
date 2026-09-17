@@ -3484,6 +3484,97 @@ let test_single_row_check_can_fire () =
 
 (* ------------------------------------------------------------------------ main *)
 
+(* ------------------------------ D-0026: one pruning, two halves that agree (M2-T8)
+
+   The reference propagator's reason and justification used to be two calls
+   ([facts_of_snaps snaps] and [explain_of_snaps _ snaps _]) that happened to be given
+   the same list, kept honest by a comment. They are one call now. What can still go
+   wrong is what that one function computes, so this checks the three things the comment
+   used to promise and no earlier test asserts:
+
+     1. the reason's SCOPE is exactly the row's other terms -- not the pruned variable,
+        not a term that is absent from the row;
+     2. each fact is the bound relevant to that term's SIGN (D-0013's case split), at the
+        value the bound had when the pruning was made;
+     3. the two halves agree in the sense [Store.agreement_holds] means.
+
+   Scene: 2*x + 3*y - 2*w <= 4 over 0..5, with y's lower bound and w's upper bound each
+   already moved by an earlier (placeholder) propagator, so that the row has one derived
+   lower bound, one derived upper bound and one term left at its declared bound. That mix
+   is what makes (1) and (2) separable: a reason built over the wrong bound direction, or
+   over the wrong variable, changes the answer here and nowhere else in this file. *)
+let test_d0026_linear_pairing () =
+  let store = mk_store [ ("x", 0, 5); ("y", 0, 5); ("w", 0, 5); ("q", 0, 5) ] in
+  let prop =
+    Linear.make store [ (2, var 0); (3, var 1); (-2, var 2) ] 4 ~row_id:1
+  in
+  (* y >= 2 and w <= 3, each by "some earlier propagator". [q] is in the store and NOT
+     in the row: a reason that leaked the whole store's bounds rather than the row's
+     scope would name it. *)
+  ignore (Store.set_lo store (var 1) 2 placeholder_pruning);
+  ignore (Store.set_hi store (var 2) 3 placeholder_pruning);
+  let before = Store.trail_length store in
+  (match Linear.propagate prop store with
+  | Propagator.Conflict _ -> check "D-0026 linear: expected a pruning, not a conflict" false
+  | Propagator.Fixpoint -> ());
+  let pushed =
+    List.filter
+      (fun (e : Store.entry) -> Var.equal e.Store.var (var 0))
+      (List.filteri
+         (fun i _ -> i < Store.trail_length store - before)
+         (Store.trail_entries store))
+  in
+  match pushed with
+  | [] -> check "D-0026 linear: x was pushed" false
+  | e :: _ ->
+      (* slack = 4 - (2*0 + 3*2 + (-2)*3) = 4, so max(2x) = 0 + 4 and x <= 2. Asserted
+         rather than assumed: this is only a test of the reason if the pruning happened,
+         and x's entry is the FIRST push of the pass, so its snapshot still sees y and w
+         where the setup left them. *)
+      check "D-0026 linear: the pruning under test landed"
+        (Domain.hi (Store.get store (var 0)) = 2);
+      (* (1) The scope is the other two terms, in term order, and nothing else. *)
+      check "D-0026 linear: the reason's scope is exactly the row's OTHER terms"
+        (Reason.owners e.Store.reason = [ "y"; "w" ]);
+      (* (2) y has a positive coefficient so its LOWER bound is read; w has a negative
+         one so its UPPER bound is. Swapping the case split (break 1 in the hand-back)
+         gives [y <= 2; w >= 3] here. *)
+      check "D-0026 linear: each fact is the bound its term's SIGN reads, at its value"
+        (Reason.lits e.Store.reason = [ Lit.ge "y" 2; Lit.le "w" 3 ]);
+      (* (3) And the two halves are about the same pruning. *)
+      check "D-0026 linear: the reason and the justification agree"
+        (Store.agreement_holds store
+           (Reason.because e.Store.reason (Store.explanation store e)))
+
+(* The same row with every other term left at its declared bound: the reason's scope is
+   still the other terms -- the propagator DID read them -- but not one of the facts
+   materialises, because at a declared bound the order encoding states the constant true.
+   This is the pair of properties that used to be one constructor each ([Snap_weaken]
+   contributing no literal) and is now one value with two projections; a [lits] that
+   forgot to drop would put a nonexistent literal in every trace line, and an [owners]
+   that dropped with it would leave M2-T3 unable to see the variable at all. *)
+let test_d0026_all_declared () =
+  let store = mk_store [ ("x", 0, 5); ("y", 0, 5) ] in
+  let prop = Linear.make store [ (2, var 0); (3, var 1) ] 6 ~row_id:1 in
+  let before = Store.trail_length store in
+  (match Linear.propagate prop store with
+  | Propagator.Conflict _ -> check "D-0026 declared: expected a pruning" false
+  | Propagator.Fixpoint -> ());
+  match
+    List.filteri
+      (fun i _ -> i < Store.trail_length store - before)
+      (Store.trail_entries store)
+  with
+  | [] -> check "D-0026 declared: something was pushed" false
+  | e :: _ ->
+      check "D-0026 declared: the scope still names the term that was read"
+        (Reason.owners e.Store.reason <> []);
+      check "D-0026 declared: but no fact materialises, so the tail is empty"
+        (Reason.lits e.Store.reason = []);
+      check "D-0026 declared: and the halves still agree"
+        (Store.agreement_holds store
+           (Reason.because e.Store.reason (Store.explanation store e)))
+
 let () =
   print_endline "\npropagator unit tests";
   test_soundness ();
@@ -3591,6 +3682,10 @@ let () =
   run_veripb_rejects ~name:"bool2int: a rup that claims its bound with no facts at all"
     ~build:build_bool2int_factless;
   test_single_row_check_can_fire ();
+
+  (* ---------------------------------------------- M2-T8 / D-0026: the two halves *)
+  test_d0026_linear_pairing ();
+  test_d0026_all_declared ();
   test_no_single_row_refutes "bool_reif_unsat" "bool_reif_unsat.fzn";
   test_no_single_row_refutes "bool_channel_unsat" "bool_channel_unsat.fzn";
   if !failures > 0 then (

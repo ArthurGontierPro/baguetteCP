@@ -197,6 +197,14 @@ let n_vars t = Array.length t.domains
 let get t v = t.domains.(Var.to_int v)
 let name t v = t.names.(Var.to_int v)
 let level t = t.n_levels
+
+(* The trail position of the entry that established [v]'s current lower (upper) bound, or
+   [no_support] while it is still the bound [v] was created with. O(1). Defined here, so
+   far above the section that explains it, only because the D-0026 agreement check below
+   reads it; the argument for why it is equivalent to the scan it replaced lives at
+   "what holds a bound up". *)
+let lo_support t v = t.lo_sup.(Var.to_int v)
+let hi_support t v = t.hi_sup.(Var.to_int v)
 let trail_length t = t.trail_len
 let reasons t = t.reasons
 
@@ -254,12 +262,109 @@ let push_mark t m =
 
 (* ----------------------------------------------------------------- mutation *)
 
+(* The variable of that name, or [None]. Linear in the variable count and only ever
+   called from the debug-gated agreement check, so no index is kept for it. *)
+let var_named t name =
+  let n = Array.length t.names in
+  let rec go i =
+    if i >= n then None
+    else if String.equal t.names.(i) name then Some (Var.of_int i)
+    else go (i + 1)
+  in
+  go 0
+
+(* The predicate, public and unconditional, so that a test can assert it directly rather
+   than only through an environment variable read at module initialisation. A check that
+   only runs under [BAGUETTE_DEBUG] is a check the suite cannot see fail; test_core.ml
+   tests this function on both answers and then re-runs itself with the flag on to prove
+   the wiring fires.
+
+   Two directions, and neither is the naive one.
+
+   **Forward.** Every fact the reason actually STATES is about a bound the justification
+   could have used: either the derivation MENTIONS that variable's literals, or that bound
+   is held up by a trail entry -- in which case the derivation is entitled to cite it by
+   id and says nothing about the variable at all. That second arm is not slack, it is
+   D-0038: [Explanation.Combine] records how a bound was derived and not what was derived,
+   so a [Term (c, e)] citing "the entry that established y >= 2" contains no literal about
+   y anywhere. The naive predicate ([Reason.owners] included in [Explanation.owners])
+   therefore FIRES ON EVERY CORRECT CITING PRUNING -- found by running it, in
+   test_prop.ml's D-0026 scene, not by reading it.
+
+   "Actually states" is the second correction the same way. A fact at its declared bound
+   materialises to no literal at all, so it appears in neither half and can contradict
+   nothing: [Bool2int] pushing `x <= 1` out of `b <= 1` with `b` still at its declared
+   upper bound is a correct pruning whose reason materialises to nothing and whose clause
+   mentions only `x`. Requiring a support there fired on three test binaries. Both
+   corrections were found by turning BAGUETTE_DEBUG on and watching the check reject
+   working code; neither was visible by reading it.
+
+   Requiring a support is the sharpest forward statement available until D-0038 gives a
+   conclusion to compare against; see the M2-T8 hand-back for what it consequently does
+   not catch.
+
+   **Reverse.** Every variable the derivation weakens out of its own row at the top level
+   must be named by the reason ([Explanation.top_weaken_owners] says why top level). This
+   is the I-P5 direction: a derivation that read a variable and weakened it away has a
+   pruning that depends on it, and a reason that omits it writes a trace line over too
+   short a tail. *)
+let agreement_holds t (j : Reason.justified) =
+  let mentioned = Explanation.owners j.justification in
+  let supported fact =
+    match var_named t (Reason.fact_owner fact) with
+    | None -> false
+    | Some v ->
+        if Reason.fact_is_lower fact then lo_support t v <> no_support
+        else hi_support t v <> no_support
+  in
+  let named = Reason.owners j.reason in
+  List.for_all
+    (fun fact ->
+      Option.is_none (Reason.lit_of_fact fact)
+      || List.mem (Reason.fact_owner fact) mentioned
+      || supported fact)
+    j.reason
+  && List.for_all
+       (fun o -> List.mem o named)
+       (Explanation.top_weaken_owners j.justification)
+
+(* The failing message carries the offending pair, because "these two disagree" without
+   saying which fact and which derivation is a message that sends the reader back to a
+   breakpoint. Built only on the failing path, so the enabled-and-passing cost is the
+   predicate alone. *)
+let check_agreement t (j : Reason.justified) =
+  if Debug.enabled && not (agreement_holds t j) then
+    failwith
+      (Printf.sprintf
+         "invariant violated: D-0026: the reason and the justification are about the \
+          same pruning -- reason [%s] vs justification %s"
+         (Reason.to_string j.reason)
+         (Explanation.to_string (Explanation.force j.justification)))
+
 (* A conflict, attributed to whoever is running. The propagator never names itself; see
    [with_running]. It takes the same [Reason.justified] a pruning does, so "a conflict
    with no facts" is [Reason.because Reason.none expl] -- written out, never defaulted;
    see [Reason.none]. *)
 let conflict t (j : Reason.justified) =
+  check_agreement t j;
   { c_prop = t.current_prop; c_why = j.justification; c_reason = j.reason }
+
+(* The one documented exception to the agreement check, for [apply]'s [Failed] arm alone.
+
+   That arm deliberately pairs the justification of the change that did NOT land with
+   [Reason.none], because the facts a *conflict* line needs are strictly more than the
+   pruning's (see the comment there). The pair is therefore a real disagreement by the
+   check's standard -- the derivation weakens variables the empty reason does not name --
+   and it is sound only because nothing writes a trace line for it: [Trace.conflict_line]
+   writes nothing over an empty tail, and the propagators that care build their own
+   [conflict] with the fuller set.
+
+   It is a separate function rather than a flag on [conflict] so that the exception is one
+   named call site that a reader trips over, and so that adding a second one is an edit to
+   this file. Found by turning the check on: this arm was the only false positive left in
+   the suite once non-materialising facts were skipped. *)
+let unattributed_conflict t why =
+  { c_prop = t.current_prop; c_why = why; c_reason = Reason.none }
 
 (* The D-0026 agreement check.
 
@@ -279,19 +384,6 @@ let conflict t (j : Reason.justified) =
    violation, and nothing here claims otherwise -- the type discharges I-X6 on the reason
    half (lib/core/reason.ml), and on the justification half it stays an argument that
    test_prop.ml's snapshot tests check by backtracking before forcing. *)
-(* The predicate, public and unconditional, so that a test can assert it directly rather
-   than only through an environment variable read at module initialisation. A check that
-   only runs under [BAGUETTE_DEBUG] is a check the suite cannot see fail; test_core.ml
-   tests this function on both answers and then re-runs itself with the flag on to prove
-   the wiring below fires. *)
-let agreement_holds (j : Reason.justified) =
-  let mentioned = Explanation.owners j.justification in
-  List.for_all (fun o -> List.mem o mentioned) (Reason.owners j.reason)
-
-let check_agreement (j : Reason.justified) =
-  Debug.check "D-0026: the reason names only variables the justification mentions"
-    (fun () -> agreement_holds j)
-
 (* Apply a Domain.result, recording the old value so it can be undone.
 
    Every path through here takes ONE [Reason.justified], which is both halves of
@@ -313,7 +405,7 @@ let apply t v (r : Domain.result) (j : Reason.justified) =
          too few facts -- a claim that those facts alone are contradictory, which is
          false and which veripb would reject. Before M2-T7 they recorded nothing and got
          no line; they still get no line. *)
-      Conflict (conflict t (Reason.because Reason.none why))
+      Conflict (unattributed_conflict t why)
   | Domain.Changed d ->
       let i = Var.to_int v in
       let old = t.domains.(i) in
@@ -323,7 +415,7 @@ let apply t v (r : Domain.result) (j : Reason.justified) =
           && Domain.size d < Domain.size old);
       Debug.check "I-D1: a stored domain is non-empty" (fun () ->
           Domain.lo d <= Domain.hi d);
-      check_agreement j;
+      check_agreement t j;
       let why = Explanation.Arena.add t.reasons why in
       let at = t.trail_len in
       push_entry t
@@ -448,9 +540,6 @@ let trail_entry t i =
    already narrowed the variable (which unit tests do deliberately), so the guard stays
    at the call site where the declared bound lives -- [Linear.snapshot_source] already
    makes exactly that test before asking. *)
-let lo_support t v = t.lo_sup.(Var.to_int v)
-let hi_support t v = t.hi_sup.(Var.to_int v)
-
 (* The entry that took [value] out of [var]'s domain, looking back from trail position
    [before] (exclusive). A value leaves a domain once and stays gone until the backtrack
    that pops the entry that removed it, so there is at most one and this finds it at the

@@ -243,6 +243,33 @@ let lits e =
    pruning. See [Reason.owners] for the other side of the comparison. *)
 let owners e = List.sort_uniq String.compare (List.map (fun l -> Lit.owner l.Lit.v) (lits e))
 
+(* The variables this derivation WEAKENS out of its own row, at the top level only.
+
+   "Weakens out" is the D-0009 move: an axiom cannot assert a bound but it can cancel a
+   term whose variable is still where it was, so a [Weaken] summand is the derivation
+   saying "I read this variable and chose not to cite anything for it". Such a variable
+   must therefore appear in the reason -- if it does not, the trace line claims its bound
+   over a shorter tail than the pruning actually rested on, which is the I-P5 failure
+   [int_ne] shipped between M1-T9 and M1-T17 and the one M1-T50 found on the decision
+   path.
+
+   TOP LEVEL ONLY, and that is not a shortcut. Recursing through a [Term] would descend
+   into an explanation *another propagator instance* built, whose own [Weaken] summands
+   are about that row's other variables and have nothing to do with this pruning's reason
+   (that is exactly what [Model_row] exists for -- explanation.ml's header). There is no
+   way to tell "my own sub-derivation" from "someone else's cited one" in the tree, so
+   the check stays where the question is well posed. *)
+let top_weaken_owners e =
+  match force e with
+  | Combine (summands, _) ->
+      List.sort_uniq String.compare
+        (List.concat_map
+           (function
+             | Weaken lits -> List.map (fun (_, l) -> Lit.owner l.Lit.v) lits
+             | Term _ -> [])
+           summands)
+  | _ -> []
+
 let rec to_string e =
   match e with
   | Decision l -> "decision(" ^ Lit.to_string l ^ ")"

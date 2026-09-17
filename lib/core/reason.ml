@@ -137,6 +137,12 @@ let owners (t : t) =
         Some n))
     t
 
+(* Per-fact accessors, for the agreement check: which variable, and which of its two
+   bounds. Kept here rather than pattern-matched at the call site so that a third
+   direction, if one is ever added, is a compile error in one place. *)
+let fact_owner = function At_least { name; _ } | At_most { name; _ } -> name
+let fact_is_lower = function At_least _ -> true | At_most _ -> false
+
 let fact_to_string = function
   | At_least { name; value; decl } ->
       Printf.sprintf "%s>=%d%s" name value (if value > decl then "" else "[decl]")

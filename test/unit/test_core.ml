@@ -693,29 +693,74 @@ let test_bound_support () =
    performs the break, because [Debug.enabled] is read once at module initialisation and
    a check nothing runs is not a check. *)
 let test_agreement () =
+  (* Two stores: one where nothing has moved, and one where [y]'s lower bound is held up
+     by a trail entry. The difference is the whole of the forward check's second arm. *)
+  let fresh () =
+    Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 9; Domain.make 0 9 |]
+  in
+  let plain = fresh () in
+  let derived = fresh () in
+  ignore
+    (Store.set_lo derived (Var.of_int 1) 2
+       (Reason.because Reason.none (Explanation.model_row 1)));
   let expl = Explanation.clause [ Lit.ge "x" 1; Lit.le "y" 4 ] in
   check "D-0026: a reason over the justification's own variables agrees"
-    (Store.agreement_holds
+    (Store.agreement_holds plain
        (Reason.because [ Reason.at_least ~name:"y" ~decl:0 2 ] expl));
   check "D-0026: an empty reason agrees with anything"
-    (Store.agreement_holds (Reason.because Reason.none expl));
+    (Store.agreement_holds plain (Reason.because Reason.none expl));
   check "D-0026: a reason naming a variable the justification never mentions DISAGREES"
     (not
-       (Store.agreement_holds
+       (Store.agreement_holds plain
           (Reason.because [ Reason.at_least ~name:"z" ~decl:0 2 ] expl)));
-  (* The disagreement is found even when the offending fact is one of several and even
-     when it would not have materialised -- the scope is what the propagator READ, so a
-     fact at its declared bound still has to be about a variable in the derivation. *)
+  (* The disagreement is found even when the offending fact is one of several. *)
   check "D-0026: one stray fact among good ones still DISAGREES"
     (not
-       (Store.agreement_holds
+       (Store.agreement_holds plain
           (Reason.because
              [
                Reason.at_least ~name:"x" ~decl:0 1;
-               Reason.at_least ~name:"z" ~decl:5 5;
+               Reason.at_least ~name:"z" ~decl:0 5;
                Reason.at_most ~name:"y" ~decl:9 4;
              ]
              expl)));
+  (* But a stray fact AT its declared bound is allowed, and this records the limit on
+     purpose rather than leaving it to be discovered. Such a fact materialises to no
+     literal, so it is in neither half of the pruning and can contradict neither; the
+     forward arm skips it. [Bool2int] pushing `x <= 1` out of `b` still at its declared
+     upper bound is exactly this shape, and requiring a support for it reddened three
+     test binaries under BAGUETTE_DEBUG. What it costs: a reason may carry a *silent*
+     variable outside the derivation's scope, which is wrong data for M2-T3 even though
+     it is harmless to the proof. See the M2-T8 hand-back. *)
+  check "D-0026: a stray fact that materialises to NOTHING is permitted (documented gap)"
+    (Store.agreement_holds plain
+       (Reason.because [ Reason.at_least ~name:"z" ~decl:5 5 ] expl));
+
+  (* THE CITE ARM, and the case that made the naive predicate wrong: a [Combine] that
+     cites the id which established [y >= 2] contains no literal about [y] anywhere
+     (D-0038 -- an explanation records how a bound was derived, not what). So the same
+     reason that DISAGREES against a derivation mentioning nothing must AGREE once [y]'s
+     bound is held up by a trail entry the derivation is entitled to cite.
+
+     Both answers asserted against the same reason and the same justification, differing
+     only in the store, which is what makes this a test of the arm rather than of the
+     scene. *)
+  let cited =
+    Explanation.combine
+      [ Explanation.term 1 (Explanation.model_row 3); Explanation.term 2 (Explanation.model_row 9) ]
+      2
+  in
+  let cite_reason = [ Reason.at_least ~name:"y" ~decl:0 2 ] in
+  check "D-0038/D-0026: a cited bound agrees, because the trail holds it up"
+    (Store.agreement_holds derived (Reason.because cite_reason cited));
+  check "D-0038/D-0026: and the SAME pair disagrees when nothing established that bound"
+    (not (Store.agreement_holds plain (Reason.because cite_reason cited)));
+  (* The direction matters too: [y]'s LOWER bound is supported, its upper bound is not. *)
+  check "D-0026: the support consulted is the one the fact's direction names"
+    (not
+       (Store.agreement_holds derived
+          (Reason.because [ Reason.at_most ~name:"y" ~decl:9 4 ] cited)));
+
   (* A [Weaken] summand shares NO literal with the reason (declared-width chain versus
      the current bound), so this has to compare scopes and not literals. A check written
      over [Explanation.lits] equality would call every real [Linear] pruning a
@@ -729,15 +774,27 @@ let test_agreement () =
       2
   in
   check "D-0026: a reason agrees with a justification that only WEAKENS its variable"
-    (Store.agreement_holds
+    (Store.agreement_holds plain
        (Reason.because [ Reason.at_least ~name:"x" ~decl:0 2 ] weaken_only)
     && Reason.lits [ Reason.at_least ~name:"x" ~decl:0 2 ]
        <> Explanation.lits weaken_only);
+
+  (* THE REVERSE DIRECTION, which is I-P5's: the derivation weakened [x] out of its own
+     row, so the pruning depends on where [x] sits, so the reason must name it. Dropping
+     it leaves a trace line over too short a tail -- an unconditional claim on a
+     satisfiable model. *)
+  check "I-P5/D-0026: a reason that OMITS a variable the derivation weakens DISAGREES"
+    (not (Store.agreement_holds plain (Reason.because Reason.none weaken_only)));
+  check "I-P5/D-0026: naming a different variable does not substitute for the weakened one"
+    (not
+       (Store.agreement_holds plain
+          (Reason.because [ Reason.at_least ~name:"y" ~decl:0 2 ] weaken_only)));
+
   (* And it looks THROUGH a Deferred: a propagator's justification is a thunk, so a check
      that gave up on an unforced one would never fire in production. *)
   check "D-0026: the check forces a Deferred justification rather than passing it"
     (not
-       (Store.agreement_holds
+       (Store.agreement_holds plain
           (Reason.because
              [ Reason.at_least ~name:"z" ~decl:0 2 ]
              (Explanation.deferred (fun () -> expl)))))
