@@ -884,6 +884,214 @@ let byte_contract proof =
   check "chain bytes: trace, then conflict line, then nogood, then the backtrack"
     (p_trace >= 0 && p_trace < p_conflict && p_conflict < p_nogood && p_nogood < p_wipe)
 
+(* ================================================================= I-X10's gate =====
+
+   M1-T61. I-X10 says every trace line is RUP against the .opb plus the lines already on
+   the page, and that this holds because **every M1 pruning follows from a single model
+   constraint** whose rows unit-propagate the claim once the line's own facts are assumed.
+   That is a property of the propagator set that happens to exist, not of the encoding,
+   and it went unstated for a whole milestone.
+
+   The two checks below are deliberately different in kind, because the property has two
+   ways of failing and only one of them is about proof text.
+
+   The trap this file's other lanes cannot cover: they exercise the propagators that
+   EXIST. That is exactly why nobody noticed the property -- a suite that only ever runs
+   Linear and Ne cannot report that Linear and Ne are special. So (a) watches the set
+   itself for new arrivals, and (b) watches the checker's verdict on a pruning shape no
+   current propagator emits.
+
+   D-0040 has the measurements and the consequence for M4. *)
+
+let rec find_up dir marker depth =
+  if depth <= 0 then None
+  else if Sys.file_exists (Filename.concat dir marker) then Some dir
+  else
+    let parent = Filename.dirname dir in
+    if String.equal parent dir then None else find_up parent marker (depth - 1)
+
+(* Same cwd-relative walk the model suites use (test_flatzinc.ml, test_output.ml), so
+   `dune runtest --root .` from a worktree finds the tree. An out-of-tree --build-dir
+   cannot, which CLAUDE.md already says not to use. *)
+let repo_root =
+  let marker = Filename.concat "lib" (Filename.concat "core" "propagator.ml") in
+  match find_up (Sys.getcwd ()) marker 12 with
+  | Some d -> Some d
+  | None -> find_up (Filename.dirname Sys.executable_name) marker 12
+
+(* How a propagator family discharges I-X10.
+
+   [Single_row]      its pruning follows from ONE model constraint, whose rows
+                     unit-propagate the claim given the line's own facts. The trace line
+                     is then RUP with no help, and I-X10 holds for it.
+   [Needs_derivation] it counts several constraints, or rests on a structure the .opb does
+                     not carry. It MUST emit an explicit pol/ia deriving its pruning
+                     before its trace line (D-0027 permits the cutting planes; D-0040
+                     records that this is all `all_different` needs), or force the direct
+                     encoding (D-0019 point 3). No such propagator exists yet.
+   [Prunes_nothing]  not a pruner, so I-X10 has nothing to say about it. *)
+type ix10_class = Single_row | Needs_derivation | Prunes_nothing
+
+let ix10_table =
+  [
+    ("linear.ml", Single_row);
+    ("lin_eq.ml", Single_row);
+    ("ne.ml", Single_row);
+    ("int_le.ml", Single_row);
+    ("int_lt.ml", Single_row);
+    ("int_eq.ml", Single_row);
+    ("bool2int.ml", Single_row);
+    ("bool_clause.ml", Single_row);
+    (* Not a propagator: it renders bound-fact chains for a reason another propagator
+       already justified, so it introduces no pruning of its own. *)
+    ("order_reason.ml", Prunes_nothing);
+  ]
+
+(* (a) CLOSURE. OCaml cannot reflect over its own modules, so the only way to notice a
+   new propagator family is to read the directory. Adding lib/core/prop/all_different.ml
+   reddens this until someone classifies it -- which is the "visible event" I-X10 exists
+   to create. Without this check, I-X10 is a sentence rather than a gate. *)
+let test_ix10_closure () =
+  match repo_root with
+  | None ->
+      check "I-X10 closure: the repository root was found" false;
+      ()
+  | Some root ->
+      let dir =
+        Filename.concat root (Filename.concat "lib" (Filename.concat "core" "prop"))
+      in
+      let on_disk =
+        Sys.readdir dir |> Array.to_list
+        |> List.filter (fun f -> Filename.check_suffix f ".ml")
+        |> List.sort compare
+      in
+      check "I-X10 closure: lib/core/prop/ was read and is not empty" (on_disk <> []);
+      let classified = List.map fst ix10_table in
+      let unclassified = List.filter (fun f -> not (List.mem f classified)) on_disk in
+      let stale = List.filter (fun f -> not (List.mem f on_disk)) classified in
+      if unclassified <> [] then
+        Printf.printf
+          "     unclassified against I-X10: %s\n\
+          \     -- a new propagator family arrived. Decide whether its pruning follows\n\
+          \     from ONE model constraint (Single_row) or needs an explicit pol/ia ahead\n\
+          \     of its trace line (Needs_derivation). See docs/INVARIANTS.md I-X10 and\n\
+          \     docs/DECISIONS.md D-0040.\n"
+          (String.concat ", " unclassified);
+      if stale <> [] then
+        Printf.printf "     classified but gone from disk: %s\n"
+          (String.concat ", " stale);
+      check "I-X10 closure: every module in lib/core/prop/ is classified"
+        (unclassified = []);
+      check "I-X10 closure: no classification names a module that no longer exists"
+        (stale = []);
+      (* A table that classified nothing would pass the two checks above vacuously. *)
+      check "I-X10 closure: at least one family is classified Single_row"
+        (List.exists (fun (_, c) -> c = Single_row) ix10_table);
+      (* And the limit of this gate, asserted rather than left in a comment.
+         [Needs_derivation] has no members today -- that IS I-X10's content, so the
+         assertion is meaningful and not bookkeeping. When M4-T1 arrives and classifies
+         itself, this reddens on purpose: the closure check can see a family arrive, but
+         it does NOT verify that such a family actually emits its pol/ia ahead of its
+         trace line. Whoever turns this red owes that stronger check (D-0040), and the
+         red line is how they find out. *)
+      let needs = List.filter (fun (_, c) -> c = Needs_derivation) ix10_table in
+      if needs <> [] then
+        Printf.printf
+          "     %s is/are classified Needs_derivation, and THIS GATE DOES NOT CHECK\n\
+          \     that the required pol/ia is emitted ahead of the trace line -- only that\n\
+          \     the family was classified. Build that check now; see D-0040.\n"
+          (String.concat ", " (List.map fst needs));
+      check
+        "I-X10 closure: no family needs an explicit derivation yet -- when one does, \
+         this gate is too weak and must be strengthened"
+        (needs = [])
+
+(* (b) CONTENT. The closure check is a name list; on its own it would pass forever even
+   if I-X10 were false. This asserts the checker's actual verdict on the shape a
+   Needs_derivation propagator would emit.
+
+   The scene: x, y, w in 2..4 saturate {2,3,4}, so z in 2..5 is forced to 5. That is a
+   Hall interval, and `z >= 5` is exactly what a bounds-consistent all_different (M4-T1)
+   would prune. It is ENTAILED -- restricting z to 2..4 makes the model UNSAT -- and the
+   checker still will not take it on a bare rup, because it rests on three disequalities
+   at once rather than on one.
+
+   Two things about the scene are load-bearing:
+
+   * It MUST be satisfiable. In an UNSAT model every clause is entailed and a rup either
+     succeeds or fails on the checker's luck at unit-propagating a contradiction, which
+     measures nothing about our proof. That is not hypothetical: it is precisely how
+     M1-T57's false trace line survived ~111k fuzzer runs on root_hole_unsat.
+   * Widths are 3 and 4 (D-0028: the order encoding is width-proportional).
+
+   The accept-side control is not decoration. A "must be refused" assertion is the single
+   most likely thing in this file to pass forever for the wrong reason -- a typo'd literal
+   name, a malformed wrapper, a free variable -- and every one of those refuses too. The
+   control is a line on the SAME .opb that must be ACCEPTED, so the pair shows the
+   wrapper works and the refusal is about the claim. *)
+let hall_source =
+  {|
+var 2..4: x :: output_var;
+var 2..4: y :: output_var;
+var 2..4: w :: output_var;
+var 2..5: z :: output_var;
+constraint int_ne(x, y);
+constraint int_ne(x, w);
+constraint int_ne(x, z);
+constraint int_ne(y, w);
+constraint int_ne(y, z);
+constraint int_ne(w, z);
+solve satisfy;
+|}
+
+let test_ix10_content () =
+  let dir = Filename.temp_file "baguette_ix10" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let opb = Filename.concat dir "hall.opb" in
+  let m = F.Builder.of_string ~file:"hall_sat" hall_source in
+  let comp = F.Compile.compile m in
+  let encoding = comp.F.Compile.encoding in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "hall_sat" ] encoding oc;
+  close_out oc;
+  let n_model = Encoding.n_constraints encoding in
+  (* The Hall bound move itself: what M4-T1 would prune, and what I-X10 predicts the
+     checker refuses on a bare rup. *)
+  let hall_move = "rup +1 z_ge_5 >= 1 ;" in
+  (* An int_ne line on the same .opb: one model constraint, so I-X10 predicts accepted. *)
+  let single_row = "rup +1 ~z_ge_4 +1 z_ge_5 +1 ~x_ge_4 >= 1 ;" in
+  (match standalone ~dir ~opb ~n_model single_row with
+  | Some true ->
+      check "I-X10 content: the accept-side control verifies (wrapper is sound)" true
+  | Some false ->
+      check
+        "I-X10 content: the accept-side control verifies (wrapper is sound) -- it was \
+         REFUSED, so the refusal below proves nothing"
+        false
+  | None ->
+      (* scripts/checker.sh's no-skipping rule: a missing checker is a failure, never a
+         quiet pass. *)
+      check
+        "I-X10 content: veripb is available (a missing checker is a FAILURE, not a skip)"
+        false);
+  (match standalone ~dir ~opb ~n_model hall_move with
+  | Some false ->
+      check
+        "I-X10 content: a Hall bound move (M4-T1's shape) is REFUSED standalone, so a \
+         multi-constraint pruner must derive it"
+        true
+  | Some true ->
+      Printf.printf
+        "     `%s` VERIFIED against hall.opb. I-X10 says a pruning resting on three\n\
+        \     disequalities at once is not RUP from the model alone, so either the\n\
+        \     encoding changed or I-X10 is false. See docs/DECISIONS.md D-0040.\n"
+        hall_move;
+      check "I-X10 content: a Hall bound move (M4-T1's shape) is REFUSED standalone" false
+  | None -> check "I-X10 content: veripb is available for the refusal lane" false);
+  (try Sys.remove opb with Sys_error _ -> ());
+  try Sys.rmdir dir with Sys_error _ -> ()
+
 let () =
   print_endline "";
   (match veripb with
@@ -900,6 +1108,8 @@ let () =
     models;
   byte_contract !chain_proof;
   List.iter run_fzn fzn_cases;
+  test_ix10_closure ();
+  test_ix10_content ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
