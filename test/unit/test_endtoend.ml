@@ -325,9 +325,67 @@ let run_model m =
     [ opb; pbp; Filename.concat dir "log" ];
   try Sys.rmdir dir with _ -> ()
 
+(* M1-T48 tripwire. `Writer.comment` has exactly three callers, all in the M4
+   direct-encoding path (lib/proof/encoding.ml), which no current model reaches -- so
+   `--proof-comments` is a no-op on every model in test/models/ today, and nothing was
+   watching that. This test pins the no-op down two ways:
+
+   1. Directly against Writer.comment: with [comments:false] it must emit nothing at
+      all (not even a suppressed attempt reaching the channel); with [comments:true] it
+      must emit the line. This is the actual mechanism the flag switches, exercised
+      independently of any caller.
+
+   2. End-to-end against a real model+proof, run twice with the two settings: the
+      emitted .pbp must be byte-identical, matching M1-T47's finding on all 30 shipped
+      models. The day a propagator or M4's direct-encoding path starts calling
+      Writer.comment on a reachable path, this half goes red -- which is the point: it
+      is the signal that the CLI usage text (bin/main.ml) needs updating again. *)
+let test_proof_comments_noop () =
+  (* (1) the mechanism itself *)
+  let with_flag flag =
+    let path = Filename.temp_file "baguette_comment" "" in
+    let oc = open_out path in
+    let w = Writer.create ~comments:flag ~audit:false oc in
+    Writer.comment w "probe";
+    close_out oc;
+    let s = read_file path in
+    Sys.remove path;
+    s
+  in
+  check "Writer.comment: comments:false emits nothing" (with_flag false = "");
+  check "Writer.comment: comments:true emits the comment line"
+    (String.length (with_flag true) > 0);
+  (* (2) end-to-end no-op on a real model *)
+  let m = List.nth models 1 in
+  let run_once comments =
+    let dir = Filename.temp_file "baguette_e2e_flag" "" in
+    Sys.remove dir;
+    Sys.mkdir dir 0o700;
+    let pbp = Filename.concat dir "model.pbp" in
+    let store = build_store m in
+    let encoding, ids = build_encoding m in
+    let engine = build_engine m store ids in
+    let oc = open_out pbp in
+    let writer = Writer.create ~comments ~audit:true oc in
+    Encoding.start_proof encoding writer;
+    let ctx = mk_ctx writer encoding in
+    ignore (Search.solve ~engine ~store ~ctx ~check:(independent_check m) ());
+    close_out oc;
+    let s = read_file pbp in
+    (try Sys.remove pbp with _ -> ());
+    (try Sys.rmdir dir with _ -> ());
+    s
+  in
+  let without = run_once false in
+  let with_ = run_once true in
+  check
+    "end-to-end: --proof-comments is still a no-op on a real model (M1-T48)"
+    (without = with_)
+
 let () =
   print_endline "";
   List.iter run_model models;
+  test_proof_comments_noop ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

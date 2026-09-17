@@ -103,6 +103,18 @@ for fzn in "${ROOT}"/test/models/*.fzn; do
     continue
   fi
 
+  # M1-T49: with no --time (and no --proof-comments reaching a call site -- see
+  # M1-T48), stderr should be empty. This is the only thing in `make check`'s path
+  # that would notice a model start writing to stderr unasked; diff above only looks
+  # at stdout. If a model earns a legitimate stderr line some day, this needs to
+  # become a per-model expected-stderr comparison rather than being loosened to skip
+  # the check -- do not just delete this block to get past it.
+  if [ -s "${prefix}.err" ]; then
+    if report "${base}" fail "solver wrote to stderr with no --time flag (M1-T49)"; then continue; fi
+    sed 's/^/       /' "${prefix}.err" | head -20
+    continue
+  fi
+
   if ! diff -u "${expected}" "${prefix}.out" > "${prefix}.diff"; then
     if report "${base}" fail "output differs from test/expected/${base}.out"; then continue; fi
     sed 's/^/       /' "${prefix}.diff" | head -20

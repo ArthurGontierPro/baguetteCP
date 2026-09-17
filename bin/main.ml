@@ -82,8 +82,12 @@ let usage () =
   prerr_endline "";
   prerr_endline "  --proof PREFIX    write PREFIX.opb and PREFIX.pbp (SPEC 4.1); verify";
   prerr_endline "                    them with: veripb PREFIX.opb PREFIX.pbp";
-  prerr_endline "  --proof-comments  annotate the proof with the step that produced each";
-  prerr_endline "                    rule -- large, and only useful when debugging one";
+  prerr_endline "  --proof-comments  enable the proof writer's comment lines. As of M1,";
+  prerr_endline "                    no shipped model reaches a call site that emits one,";
+  prerr_endline "                    so this flag is currently a no-op on every model in";
+  prerr_endline "                    test/models/: .opb and .pbp are byte-identical with";
+  prerr_endline "                    and without it. It will start mattering once the";
+  prerr_endline "                    direct-encoding path (M4) lands (see M1-T48).";
   prerr_endline "  --all             every solution, not just the first (not implemented)";
   prerr_endline "  --time            phase-by-phase CPU timings, ON STDERR, one `time: `";
   prerr_endline "                    line each. Off by default; stdout is byte-identical";
