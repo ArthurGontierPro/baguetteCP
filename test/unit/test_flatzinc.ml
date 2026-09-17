@@ -320,6 +320,241 @@ let test_rejections () =
     ~src:"var 1..3: x;\nsolve satisfy;\nsolve satisfy;\n"
     ~needles:[ "only one `solve` item" ]
 
+(* ==================================================== the width cap (M1-T54, D-0028)
+
+   Why these live in test_flatzinc.exe rather than test_compile.exe or test_proof.exe:
+   the cap is two halves in two libraries -- the constant and the raise in
+   [Baguette_proof.Encoding], the positioned diagnostic in [Baguette_flatzinc.Compile]
+   -- and the thing worth testing is that they agree. This binary links both libraries,
+   and the file-ownership protocol in CLAUDE.md put this file, not the other two, in the
+   hands of the session that wrote the cap. If the cap ever moves, so should these.
+
+   What is NOT here, deliberately. There is no model file in test/models/ for either
+   side of the boundary. The reject side cannot be one: scripts/run_model_tests.sh
+   requires exit 0, empty stderr and a matching .out, and a refused model is exit 3 with
+   a diagnostic. The accept side must not be one: a model declared at the cap would
+   emit a 1.3 MB .opb, which is the artefact the cap exists to prevent, and "no test may
+   declare a wide domain" is a house rule with three memory-ceiling incidents behind it.
+   The accept side of the pair below therefore stops at compilation: nothing solves, and
+   nothing writes a proof. The "under the cap it still solves and the proof still
+   verifies" half is carried by test/models/width_root_unsat.fzn at w = 999, which is
+   deliberate and measured, runs in the model suite with veripb over its proof, and is
+   a factor of ten below the cap. *)
+
+module E = Baguette_proof.Encoding
+
+let cap = E.max_order_width
+
+(* A Compile-level rejection: [src] parses, and then [Compile.compile] must refuse it,
+   naming every needle and reporting a position on [line]. Distinct from [reject]
+   above, which only runs the builder. *)
+let reject_compile name ~src ~line ~needles =
+  let built = F.Error.catch (fun () -> F.Builder.of_string ~file:"<test>" src) in
+  match built with
+  | Error (e : F.Error.t) ->
+      incr failures;
+      Printf.printf "FAIL %s: the model did not even parse: %s\n" name
+        (F.Error.to_string e)
+  | Ok m -> (
+      match F.Error.catch (fun () -> F.Compile.compile m) with
+      | Ok _ ->
+          incr failures;
+          Printf.printf "FAIL %s: expected a rejection, compile accepted the model\n" name
+      | Error (e : F.Error.t) ->
+          let msg = F.Error.to_string e in
+          let missing = List.filter (fun s -> not (contains ~needle:s msg)) needles in
+          if missing <> [] then (
+            incr failures;
+            Printf.printf "FAIL %s: message does not mention %s\n       message: %s\n"
+              name
+              (String.concat ", " (List.map (Printf.sprintf "%S") missing))
+              msg)
+          else if e.F.Error.pos.F.Pos.line <> line then (
+            incr failures;
+            Printf.printf
+              "FAIL %s: expected the error on line %d, got line %d\n       message: %s\n"
+              name line e.F.Error.pos.F.Pos.line msg)
+          else if e.F.Error.pos.F.Pos.col <= 0 then (
+            incr failures;
+            Printf.printf "FAIL %s: error carries no column\n       message: %s\n" name
+              msg)
+          else Printf.printf "ok   %s (%s)\n" name (F.Pos.to_string e.F.Error.pos))
+
+let accepts_compile name ~src =
+  let built = F.Error.catch (fun () -> F.Builder.of_string ~file:"<test>" src) in
+  match built with
+  | Error (e : F.Error.t) ->
+      incr failures;
+      Printf.printf "FAIL %s: the model did not parse: %s\n" name (F.Error.to_string e)
+  | Ok m -> (
+      match F.Error.catch (fun () -> F.Compile.compile m) with
+      | Ok _ -> Printf.printf "ok   %s\n" name
+      | Error (e : F.Error.t) ->
+          incr failures;
+          Printf.printf "FAIL %s: compile refused a model it should accept: %s\n" name
+            (F.Error.to_string e))
+
+let raises_width_too_large f =
+  match f () with
+  | _ -> `Accepted
+  | exception E.Width_too_large (x, lo, hi) -> `Refused (x, lo, hi)
+  | exception e -> `Other (Printexc.to_string e)
+
+let test_width_cap_boundary () =
+  (* ------------------------------------------------------------------ the constant *)
+  (* width_root_unsat.fzn is at w = 999 and is load-bearing: a cap that refuses it
+     breaks the model suite. Assert the headroom rather than trusting it. *)
+  check "width cap: leaves room for width_root_unsat's w = 999" (cap >= 999);
+  check "width cap: at least a factor of 10 above w = 999" (cap >= 9990);
+  check_str "width cap: the constant is 10 000" ~expected:"10000"
+    ~actual:(string_of_int cap);
+
+  (* ----------------------------------------- the boundary, at Encoding's own door *)
+  (* Exactly at the cap: accepted, and the ladder is the full [cap - 1] clauses. The
+     clause count is the point -- it shows the declaration really built the encoding
+     rather than being declined by something upstream of the ladder. *)
+  (match
+     raises_width_too_large (fun () ->
+         let e = E.create () in
+         E.declare_int e "x" ~lo:0 ~hi:cap;
+         E.n_constraints e)
+   with
+  | `Accepted -> ()
+  | `Refused _ ->
+      incr failures;
+      Printf.printf "FAIL width cap: Encoding refused width %d, which is AT the cap\n" cap
+  | `Other s ->
+      incr failures;
+      Printf.printf "FAIL width cap: declaring at the cap raised %s\n" s);
+  let at_cap =
+    let e = E.create () in
+    E.declare_int e "x" ~lo:0 ~hi:cap;
+    E.n_constraints e
+  in
+  check_str "width cap: a domain AT the cap builds its whole ladder"
+    ~expected:(string_of_int (cap - 1))
+    ~actual:(string_of_int at_cap);
+
+  (* One unit over: refused, and refused by name. *)
+  (match
+     raises_width_too_large (fun () ->
+         let e = E.create () in
+         E.declare_int e "x" ~lo:0 ~hi:(cap + 1))
+   with
+  | `Refused ("x", 0, hi) when hi = cap + 1 ->
+      Printf.printf "ok   width cap: width %d is refused by Encoding.declare_int\n"
+        (cap + 1)
+  | `Refused (x, lo, hi) ->
+      incr failures;
+      Printf.printf "FAIL width cap: refused, but reported %s over %d..%d\n" x lo hi
+  | `Accepted ->
+      incr failures;
+      Printf.printf "FAIL width cap: Encoding ACCEPTED width %d, one over the cap\n"
+        (cap + 1)
+  | `Other s ->
+      incr failures;
+      Printf.printf "FAIL width cap: width %d raised %s, not Width_too_large\n" (cap + 1)
+        s);
+
+  (* A refused declaration must leave no trace: the variable is not declared, and no
+     constraint id was minted. Otherwise a caller that catches the exception carries on
+     against a half-built encoding, and the ids in the .opb no longer match the proof
+     (I-X5). *)
+  let e_trace = E.create () in
+  (try E.declare_int e_trace "wide" ~lo:0 ~hi:(cap + 1) with E.Width_too_large _ -> ());
+  check "width cap: a refused declaration declares nothing"
+    (not (E.is_declared e_trace "wide"));
+  check_str "width cap: a refused declaration mints no constraint id" ~expected:"0"
+    ~actual:(string_of_int (E.n_constraints e_trace));
+
+  (* The mixed-sign branch of [order_width_exceeds], where hi - lo is the width but
+     neither bound is. -5000..5000 is exactly the cap; one more either way is not. *)
+  check "width cap: -5000..5000 (width 10 000) is inside the cap"
+    (not (E.order_width_exceeds ~lo:(-5000) ~hi:5000));
+  check "width cap: -5001..5000 (width 10 001) is outside it"
+    (E.order_width_exceeds ~lo:(-5001) ~hi:5000);
+  check "width cap: -5000..5001 (width 10 001) is outside it"
+    (E.order_width_exceeds ~lo:(-5000) ~hi:5001);
+  (* A width that is not itself representable. min_int..max_int has width 2^64 - 1, and
+     a cap that computed [hi - lo] would get -1 here and accept it -- which is the
+     failure mode this codebase keeps finding: a check that cannot see its own subject
+     fail. Also the genuinely degenerate widths, which must stay accepted. *)
+  check "width cap: min_int..max_int is refused, not wrapped to width -1"
+    (E.order_width_exceeds ~lo:min_int ~hi:max_int);
+  check "width cap: min_int..(min_int + cap) is inside the cap"
+    (not (E.order_width_exceeds ~lo:min_int ~hi:(min_int + cap)));
+  check "width cap: min_int..(min_int + cap + 1) is outside it"
+    (E.order_width_exceeds ~lo:min_int ~hi:(min_int + cap + 1));
+  check "width cap: max_int..max_int (width 0) is inside the cap"
+    (not (E.order_width_exceeds ~lo:max_int ~hi:max_int));
+  check "width cap: min_int..min_int (width 0) is inside the cap"
+    (not (E.order_width_exceeds ~lo:min_int ~hi:min_int));
+  check "width cap: 0..0 is inside the cap" (not (E.order_width_exceeds ~lo:0 ~hi:0));
+  check "width cap: a bool's 0..1 is inside the cap"
+    (not (E.order_width_exceeds ~lo:0 ~hi:1));
+
+  (* ------------------------------------- the boundary, on the path a user goes down *)
+  (* The same pair through Compile, which is where the diagnostic comes from. AT the
+     cap is accepted: it compiles, and nothing here solves it or writes its proof.
+     ONE OVER is refused, with a position and with the numbers in the message.
+
+     Both bounds are far below Checked.limit = max_int / 16, so the arithmetic cap
+     (M1-T23) cannot be what fires -- and the needles below check the message is the
+     width one, not the overflow one. A single over-the-cap rejection proves nothing on
+     its own: the pair, and the wording, are what locate the boundary. *)
+  accepts_compile "width cap: compile accepts a domain at the cap"
+    ~src:(Printf.sprintf "var 0..%d: x :: output_var;\nsolve satisfy;\n" cap);
+  reject_compile "width cap: compile refuses a domain one over the cap" ~line:1
+    ~src:(Printf.sprintf "var 0..%d: x :: output_var;\nsolve satisfy;\n" (cap + 1))
+    ~needles:
+      [
+        "error";
+        "`x`";
+        Printf.sprintf "0..%d" (cap + 1);
+        Printf.sprintf "a width of %d" (cap + 1);
+        Printf.sprintf "baguette's limit is %d" cap;
+        "order encoding";
+        "legal FlatZinc";
+        "Narrow the declared domain";
+        "<test>:1:1";
+      ];
+  (* Negative and mixed-sign, through the front end too, so the branch that cannot
+     subtract is exercised from the outside as well. *)
+  accepts_compile "width cap: compile accepts -5000..5000"
+    ~src:"var -5000..5000: x :: output_var;\nsolve satisfy;\n";
+  reject_compile "width cap: compile refuses -5001..5000" ~line:1
+    ~src:"var -5001..5000: x :: output_var;\nsolve satisfy;\n"
+    ~needles:[ "`x`"; "-5001..5000"; "a width of 10001" ];
+  (* The width is per variable, and the variable named must be the offending one --
+     not the first in the model, and not the last. *)
+  reject_compile "width cap: the diagnostic names the offending variable" ~line:3
+    ~src:
+      (Printf.sprintf
+         "var 0..3: a :: output_var;\n\
+          var 0..3: b :: output_var;\n\
+          var 0..%d: wide :: output_var;\n\
+          var 0..3: c :: output_var;\n\
+          solve satisfy;\n"
+         (cap + 1))
+    ~needles:[ "`wide`"; "a width of " ^ string_of_int (cap + 1) ];
+  (* A model over BOTH caps is told about the arithmetic one: narrowing to 10 000 would
+     not have made it representable, so the width message would send the reader to fix
+     the wrong thing. This pins the order of the two passes in Compile. *)
+  reject_compile "width cap: over both caps reports the arithmetic cap first" ~line:1
+    ~src:"var 0..1000000000000000000: x :: output_var;\nsolve satisfy;\n"
+    ~needles:[ "`x`"; "arithmetic limit" ];
+  (* And a model over the width cap only must NOT be told about arithmetic. The
+     inverse of the case above, and the one that would silently hide a hole in the
+     width pass if the arithmetic message ever widened to cover width. *)
+  let width_only_msg =
+    let m = F.Builder.of_string ~file:"<test>" (Printf.sprintf "var 0..%d: x;\nsolve satisfy;\n" (cap + 1)) in
+    match F.Error.catch (fun () -> F.Compile.compile m) with
+    | Ok _ -> "ACCEPTED"
+    | Error (e : F.Error.t) -> F.Error.to_string e
+  in
+  check "width cap: the width message does not mention the arithmetic limit"
+    (not (contains ~needle:"arithmetic limit" width_only_msg))
+
 (* ============================================================================== main *)
 
 let () =
@@ -340,6 +575,7 @@ let () =
   test_misc_accepts ();
   test_constant_folding ();
   test_rejections ();
+  test_width_cap_boundary ();
   check_str "error rendering carries file:line:col" ~expected:"<t>:2:12: error: boom"
     ~actual:(F.Error.to_string { F.Error.pos = F.Pos.make "<t>" 2 12; msg = "boom" });
   if !failures > 0 then (
