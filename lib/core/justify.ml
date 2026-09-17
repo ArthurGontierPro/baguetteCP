@@ -66,7 +66,69 @@
    (docs/PROOF-FORMAT.md section 5: [w] wipes every constraint at or above a level).
    [wipe_level] drops the matching memo entries in the same call that wipes the writer,
    so the two stay in lockstep -- a stale memo entry pointing at an id the proof no
-   longer contains would otherwise let a later [Cut] silently cite a deleted id. *)
+   longer contains would otherwise let a later [Cut] silently cite a deleted id.
+
+   -------------------------------------------------------------------------------
+   The claim index (M2-T9): which line already states this?
+   -------------------------------------------------------------------------------
+
+   The memo above answers "have I emitted *this explanation value* before", keyed on
+   physical identity. It cannot answer the different and older question D-0009 leaves
+   open: **which constraint id establishes this bound fact?** That question has no
+   answer inside an [Explanation.t] -- the record says so in as many words ("an
+   explanation that appeals to a bound fact must name the constraint id that
+   established it ... until [Explanation.t] can carry ids, [Linear] renders as [rup]")
+   -- and the missing field is not on the ADT, it is here: a *lookup* from what a line
+   claims to the id of the line claiming it.
+
+   [stated] is that lookup. Its key is a clause, as a set of literals; its value is the
+   id of the line that put that clause on the page, with the writer's level at the
+   moment it did.
+
+   Three things about the key, each load-bearing:
+
+     - **A clause, not a literal.** D-0019's whole content is that the jump from
+       "literal" to "clause" is where a milestone went wrong: a [rup] target is a
+       clause, so a *line* claims a clause, and an index over literals could not
+       describe most of the lines this proof contains. The literal case is the
+       interesting one -- a **unit** line is the only thing that establishes a literal,
+       which is exactly what D-0009 needs and what [defining_lit] exposes -- but it is
+       the special case of the clause key, not a different table.
+     - **Structural, over [Lit.t] rather than over rendered names.** [Lit.var_name]
+       sanitises, so two distinct FlatZinc identifiers can render to one OPB name; a
+       key built from [Lit.to_string] would silently conflate them and hand back an id
+       that states something else. The key is the literal list itself, sorted by
+       [Lit.compare] so that clause order does not matter (a clause is a set) and
+       [Hashtbl]'s structural equality is the right equality ([Lit.t] holds no closure
+       and nothing mutable, unlike [Explanation.t] -- which is why the memo above
+       cannot be a [Hashtbl] and this can).
+     - **The empty clause and a clause with a repeated literal are not indexed.**
+       [Opb.clause] gives every literal coefficient 1 without merging duplicates, so a
+       repeated literal is a coefficient-2 row rather than the set its key would claim.
+       The empty clause is excluded for a different and sharper reason, below.
+
+   *Nothing iterates this table*, only [Hashtbl.find_opt] on it, so no emitted byte
+   depends on hash order (the gate's determinism lane is what would catch that).
+
+   Reuse is allowed under exactly two conditions, and the second is invariant I-S4
+   turned into a precondition:
+
+     1. the clause is indexed, and
+     2. the indexed line's level is **at or below the writer's current level**.
+
+   (2) is what makes reuse safe rather than merely economical, and it is the same
+   sentence I-S4 makes about a settle line citing a hole line: `w l` retires levels
+   `>= l`, so a line at a level at or below the citing line's is never retired before
+   it. Without (2) a deeper line could be reused by a shallower one and die first. It
+   also disposes of the one genuinely dangerous case: [Search]'s nogood goes through
+   [emit_clause] like every other clause, and the nogood's id is cited by
+   [conclusion UNSAT] at the root and asserted live by [wipe_after_nogood] under a
+   decision. A nogood is emitted at the *parent* level, so a trace line written inside
+   the branch it closes cannot be handed back for it; and the root nogood is
+   [Explanation.clause []], which is not indexed at all.
+
+   [wipe_level] drops the index's entries in the same call as the memo's, for the same
+   reason and in lockstep. *)
 
 module Lit = Baguette_proof.Lit
 module Opb = Baguette_proof.Opb
@@ -76,6 +138,10 @@ module Encoding = Baguette_proof.Encoding
 
 type memo_entry = { cid : Writer.cid; level : int }
 
+(* A claim that is already on the page: the id of the line stating it and the level that
+   line was written at. See the module header's "claim index". *)
+type stated = { s_cid : Writer.cid; s_level : int }
+
 type ctx = {
   writer : Writer.t;
   encoding : Encoding.t;
@@ -83,9 +149,14 @@ type ctx = {
       (* Boxed behind a ref for the same reason it always was -- it is proof state,
          shared by every view of the same writer -- although since M1-T31 removed
          [for_constraint] there is only ever one view. *)
+  stated : (Lit.t list, stated) Hashtbl.t;
+      (* M2-T9. Clause (as a sorted literal set) -> the line that states it. Read by
+         [defining_line] and [defining_lit], written by every clause this module puts on
+         the page, wiped by [wipe_level]. Lookup only -- never iterated for emission. *)
 }
 
-let create ~writer ~encoding = { writer; encoding; memo = ref [] }
+let create ~writer ~encoding =
+  { writer; encoding; memo = ref []; stated = Hashtbl.create 64 }
 
 let find_memo ctx (e : Explanation.t) =
   let rec go = function
@@ -104,7 +175,82 @@ let remember ctx (e : Explanation.t) (cid : Writer.cid) : Writer.cid =
    [Writer.wipe_level] directly when a [ctx] is in play. *)
 let wipe_level ctx level =
   Writer.wipe_level ctx.writer level;
-  ctx.memo := List.filter (fun (_, (m : memo_entry)) -> m.level < level) !(ctx.memo)
+  ctx.memo := List.filter (fun (_, (m : memo_entry)) -> m.level < level) !(ctx.memo);
+  Hashtbl.filter_map_inplace
+    (fun _ (s : stated) -> if s.s_level < level then Some s else None)
+    ctx.stated
+
+(* ------------------------------------------------------- the claim index (M2-T9) *)
+
+(* The key, or [None] for a clause this index does not describe: the empty clause, and
+   any clause whose [Opb] rendering is not the literal *set* its key would claim. See
+   the module header. *)
+let clause_key (lits : Lit.t list) : Lit.t list option =
+  match lits with
+  | [] -> None
+  | _ ->
+      let sorted = List.sort_uniq Lit.compare lits in
+      if List.compare_lengths sorted lits = 0 then Some sorted else None
+
+(* Record that [cid] states [lits]. The *outermost* line wins when a clause is stated
+   more than once: it is the one that survives the most backtracking, so it is the one
+   whose level satisfies [defining_line]'s condition for the widest set of callers.
+   (Within one [Trace.emit] the trail is walked oldest first, so levels arrive
+   non-decreasing and this is almost always the first writer anyway; the comparison is
+   here so that "almost always" is not what the index rests on.) *)
+let state_clause ctx (lits : Lit.t list) (cid : Writer.cid) =
+  match clause_key lits with
+  | None -> ()
+  | Some key -> (
+      let level = Writer.current_level ctx.writer in
+      match Hashtbl.find_opt ctx.stated key with
+      | Some s when s.s_level <= level -> ()
+      | _ -> Hashtbl.replace ctx.stated key { s_cid = cid; s_level = level })
+
+(* [defining_line ctx lits] is the id of a line already on the page that states exactly
+   the clause [lits], and that a line written *now* may cite: it is at or below the
+   current level, so no [w] retires it first (I-S4).
+
+   Under the audit the recorded id is also checked to be live. That is not a fallback --
+   it raises rather than quietly minting a fresh line -- because a dead id here means
+   this table and [Writer]'s live set have drifted, and the only thing that wipes either
+   is [wipe_level], which does both. Making it a fallback would also make *emission*
+   depend on whether the audit is on, and the .pbp must not. *)
+let defining_line ctx (lits : Lit.t list) : Writer.cid option =
+  match clause_key lits with
+  | None -> None
+  | Some key -> (
+      match Hashtbl.find_opt ctx.stated key with
+      | Some s when s.s_level <= Writer.current_level ctx.writer ->
+          if Writer.auditing ctx.writer && not (Writer.is_live ctx.writer s.s_cid) then
+            invalid_arg
+              (Printf.sprintf
+                 "Justify.defining_line: the claim index names @c%d for `%s`, which the \
+                  proof no longer contains -- the index and the writer's live set have \
+                  drifted. Only [Justify.wipe_level] may retire either, and it retires \
+                  both. See justify.ml's claim-index header and I-S4."
+                 s.s_cid
+                 (String.concat " " (List.map Lit.to_string key)))
+          else Some s.s_cid
+      | _ -> None)
+
+(* D-0009's missing field, and the whole reason the index exists.
+
+   "A bound fact in a `pol` needs a constraint id, not a literal": a bare literal in a
+   [pol] expression is the trivial axiom [l >= 0] and asserts nothing, so a derivation
+   that appeals to [l] *holding* must name a constraint that establishes it. Only a
+   **unit** line does that -- a multi-literal clause containing [l] establishes nothing
+   about [l] on its own -- so this is [defining_line] on the one-literal clause, and the
+   answer is [None] exactly when no line has stated [l] outright.
+
+   It has no caller in [lib/] yet, and that is a fact about [Explanation.t] rather than
+   about this function: today's [Combine]/[Cut] carry no slot in which a cited id could
+   sit next to (or instead of) a [Weaken] axiom, which is the ADT gap D-0009 and D-0038
+   are both circling. What this function closes is the *lookup*; what remains open is
+   the ADT. The index is nonetheless load-bearing from the moment it lands, through
+   [emit_clause] below -- see M1-T59 -- so it is not mechanism-with-no-caller in the
+   sense M1-T51's [Writer.pol_concluding] was. *)
+let defining_lit ctx (l : Lit.t) : Writer.cid option = defining_line ctx [ l ]
 
 let validate_lits ctx lits =
   List.iter
@@ -132,13 +278,36 @@ let memoized ctx (e : Explanation.t) (thunk : unit -> Writer.cid) : Writer.cid =
    disequality, ...), with no record of *how*. There is nothing for a cutting-planes
    expression to name. [rup] is the only rule in the vocabulary that accepts a bare
    target and searches for its own justification, so it is the only one that fits;
-   docs/PROOF-FORMAT.md section 4 makes the same call for [int_ne] and [bool_clause]. *)
+   docs/PROOF-FORMAT.md section 4 makes the same call for [int_ne] and [bool_clause].
+
+   M1-T59: and before writing one, ask the claim index whether the page already says
+   this. It did, twice out of 34 models, and the roadmap row is right that the fix is a
+   question of *who owns the claim* rather than a rendering bug. Both duplicates had the
+   same shape: [Trace] had already written the pruning's own line -- claim clause plus
+   negated facts -- and then a conflict path asked [Justify] for the id of the very same
+   [Clause], which had no way to know and wrote it again.
+
+     root_hole_unsat    @c9 and @c14 are `rup +1 ~v0_ge_0 +1 v0_ge_1 +1 v1_ge_1 >= 1 ;`
+     bool_channel_unsat @c6 and @c8  are `rup +1 ~x_ge_2 >= 1 ;`
+
+   Handing back an id this module did not mint is not new -- [Model_row] always has, and
+   the memo has since M1-T31 -- so I-X2's "an id you receive is an id you must delete"
+   already cannot mean exclusive ownership of an [emit] result, and [Search.solve]
+   already retires by [live_ids] rather than by counting what it was handed. *)
 let emit_clause ctx lits =
   validate_lits ctx lits;
-  Writer.rup_clause ctx.writer
-    ~origin:
-      (Printf.sprintf "clause(%s)" (String.concat " " (List.map Lit.to_string lits)))
-    lits
+  match defining_line ctx lits with
+  | Some cid -> cid
+  | None ->
+      let cid =
+        Writer.rup_clause ctx.writer
+          ~origin:
+            (Printf.sprintf "clause(%s)"
+               (String.concat " " (List.map Lit.to_string lits)))
+          lits
+      in
+      state_clause ctx lits cid;
+      cid
 
 (* A clause emitted outside the [Explanation.t] world entirely: docs/DECISIONS.md
    D-0018's trace lines, which state "these bound facts imply that bound" and are
@@ -147,10 +316,19 @@ let emit_clause ctx lits =
    in the same branch are two different lines, and physical identity of a freshly
    built literal list would never hit the memo anyway. [validate_lits] still applies:
    a propagator handing [Trace] a literal about an undeclared variable should say so
-   here, not several lines later inside veripb. *)
+   here, not several lines later inside veripb.
+
+   It *populates* the claim index (M2-T9) and deliberately does not *consult* it. That
+   asymmetry is the ownership answer M1-T59 asks for: the trace is the primary record of
+   what a branch learned, so it always writes its own line, and everything else asks it
+   what is already there. Consulting here would also break two properties [Trace] owns
+   -- [emitted_ids] would list one id twice, and [permanent_ids] would hand
+   [Search.solve] an id to delete twice, which is an I-X2 violation rather than a saving. *)
 let emit_rup_clause ctx ~origin lits =
   validate_lits ctx lits;
-  Writer.rup_clause ctx.writer ~origin lits
+  let cid = Writer.rup_clause ctx.writer ~origin lits in
+  state_clause ctx lits cid;
+  cid
 
 (* [Linear (terms, rhs)] -- rup of exactly the constraint it states. Not [pol]; see
    D-0009 (docs/DECISIONS.md) for the full story, summarised here because
