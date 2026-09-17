@@ -901,3 +901,24 @@ two files.
 Remaining in M1: eight rows, none a false statement in the code. The next construction is
 **M2-T8** (interface v2, D-0026), now unblocked and the precondition for M2-T3, M3-T4 and
 M4.
+
+### Post-M2-T8 verification the merge did not include (orchestrator, 2026-09-17)
+
+M2-T8 rewrote justification emission, so I ran the mutation harness against the merged
+tree rather than assuming `make check` covered it — the harness is the only thing that
+judges whether a derivation is *load-bearing*, and it is not part of the gate's own
+argument. **44 mutation checks, 0 FAIL**, and crucially the lanes are asserted to have
+fired: `triple_unsat` 6, `lin_unsat` 6, `branch_trace` 4, `chain` 4, each with an explicit
+"every lane this instance declares was run" check, plus four meta-checks that the harness
+cannot pass vacuously (a mutation with no site reports not-applicable; an unknown mutation
+name is an error; a lane whose honest proof does not verify fails on the control).
+
+Two lanes correctly report `xslack` rather than passing: `lin_unsat`'s refutation closes
+at `0 >= 2`, one unit wider than a contradiction needs, so a one-unit coefficient
+perturbation still closes it. That is measured and registered so the slack is reported on
+every run rather than quietly absorbed — the `pol` lanes gate on `triple_unsat`, whose
+margin is one.
+
+Worth repeating for whoever lands M2-T3: *"44 ok, 0 FAIL"* would have been true of a
+harness in which **no lane ran at all**, which is a failure this project has actually had.
+Check the per-instance lane counts, not the total.
