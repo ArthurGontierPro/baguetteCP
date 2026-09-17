@@ -106,16 +106,14 @@
    and the .opb expansion compute from a row of magnitude M is bounded by 9M + 6, and
    the limit is max_int / 16.
 
-   **This is an overflow cap, not a width cap, and it does not help D-0028.** The
-   bound the limit places on a declared domain is |bound| <= 2.88 * 10^17, so a width
-   of 5.7 * 10^17 passes it -- thirteen orders of magnitude above the width at which
-   D-0028's measured cost (a justification is Theta(declared width) per other term per
-   pruning: 29.8 MB in one `pol` line at w = 10^6) becomes unusable. The two caps have
-   different justifications and different right answers, and D-0028 point 3 says so
-   directly: a width cap refuses models the FlatZinc standard allows, which is a SPEC
-   change with its own decision record. Nothing here is that record, and nothing here
-   should be read as having taken that decision. The declared-bound check below exists
-   because a bound is one of the two things that multiply, and for no other reason.
+   **This is an overflow cap, not a width cap.** The bound the limit places on a
+   declared domain is |bound| <= 2.88 * 10^17, so a width of 5.7 * 10^17 passes it --
+   thirteen orders of magnitude above the width at which D-0028's measured cost (a
+   justification is Theta(declared width) per other term per pruning: 29.8 MB in one
+   `pol` line at w = 10^6) becomes unusable. The two caps have different
+   justifications and different right answers, and D-0029 point 3 keeps them apart
+   deliberately. The declared-bound check below exists because a bound is one of the
+   two things that multiply, and for no other reason.
 
    The checks run *before* the row is posted, which is the whole point. The gap
    M1-T23 closed was not that a propagator pruned wrongly -- it was that
@@ -125,7 +123,32 @@
    to disagree with. lib/proof/ cannot defend itself against that (a row has to be
    written; there is no "decline" for an artefact). Refusing the model here is what
    defends it, and refusing it *here* rather than at the first propagation is what
-   keeps [Checked.Overflow] off the search path entirely. *)
+   keeps [Checked.Overflow] off the search path entirely.
+
+   ---------------------------------------------------------------------------
+   The width cap (roadmap M1-T54)
+   ---------------------------------------------------------------------------
+
+   The separate decision D-0028 point 3 asked for, and the one the section above is
+   careful not to be. A third check, on the thing that is *expanded* rather than the
+   two things that multiply:
+
+     [reject_declared_width]  every declared domain satisfies
+                                hi - lo <= Encoding.max_order_width
+
+   The cap and its derivation live in lib/proof/encoding.ml, beside the ladder they
+   bound, and are NAMED from here rather than restated. What this file adds is the
+   position: [Encoding] can refuse but cannot say which line of which .fzn, so the
+   user-facing refusal is here -- exit 3, like every other rejection in this file --
+   and [Encoding.Width_too_large] is the backstop for a caller that does not come
+   through this door: a second front end, or a test. That is the two-layer shape of
+   M1-T32 / I-X8, and it is here for the same reason.
+
+   The exception is deliberately NOT [Encoding.Unrepresentable]. bin/main.ml's arm for
+   that one exits 4 and tells the reader baguette's own invariant has failed, which is
+   right for a wrapped row (Compile's arithmetic cap should have caught it) and would
+   be actively wrong here: an over-wide domain is a model problem, reported at the
+   model, with the model's exit code. *)
 
 module Var = Baguette_core.Var
 module Checked = Baguette_core.Checked
@@ -285,6 +308,30 @@ let reject_declared_bound (v : Model.var) lo hi =
      or shift the domain towards zero."
     v.Model.v_name lo hi Checked.limit
 
+(* roadmap M1-T54, from D-0028 point 3. The width rejection. The cap itself lives in
+   [Encoding] -- next to the ladder it bounds, with its derivation -- and is named from
+   here rather than copied: nothing in this tree has cost more than two statements of one
+   envelope drifting apart (D-0029's [Arith] copy is a copy only because lib/proof cannot
+   name lib/core; lib/flatzinc names lib/proof, so there is no excuse for a second
+   constant here).
+
+   Two readers, two messages. [Encoding.Width_too_large] is what a caller that did not
+   come through here gets; this is the one a person holding a .fzn gets, and it says
+   plainly that the limit is baguette's rather than FlatZinc's, because the model is
+   legal and the refusal is a deliberate choice about proof size. *)
+let reject_declared_width (v : Model.var) lo hi =
+  Error.failf v.Model.v_pos
+    "variable `%s` is declared over %d..%d, a width of %d, and baguette's limit is %d. \
+     Every integer variable is given the order encoding eagerly, so a declared width of \
+     w costs w-1 ladder clauses in the .opb before any constraint is posted, and makes \
+     every justification that cancels this variable's contribution Theta(w) literals \
+     long. Measured: two variables declared 0..999999 produce a 156 MB .opb and a single \
+     29.8 MB proof line, for a model that is infeasible by inspection -- a proof the \
+     checker accepts and nobody can store or review. This model is legal FlatZinc; the \
+     limit is baguette's, and refusing is deliberate rather than a defect. Narrow the \
+     declared domain, or rescale the model so the same question fits a smaller one."
+    v.Model.v_name lo hi (hi - lo) Encoding.max_order_width
+
 let reject_row pos ~what ~magnitude =
   Error.failf pos
     "%s exceeds baguette's arithmetic limit: its magnitude |rhs| + sum |coeff| * \
@@ -439,6 +486,29 @@ let compile (m : Model.t) : t =
       let lo, hi = bounds.(i) in
       if not (Checked.bound_fits lo && Checked.bound_fits hi) then
         reject_declared_bound v lo hi)
+    m.Model.vars;
+  (* M1-T54: the width cap, on the user-facing path, where the diagnostic can carry a
+     position. A separate pass and not a second clause in the loop above, because the
+     two caps answer different questions and share nothing but their subject: one is
+     about arithmetic that cannot be computed (a soundness requirement, D-0029), this
+     one about a proof that cannot be stored (a cost decision, D-0028).
+
+     It runs AFTER the arithmetic pass and the ordering is load-bearing twice over.
+     First, every bound here has passed [Checked.bound_fits], so |lo|, |hi| <=
+     Checked.limit = max_int / 16 and the [hi - lo] this message prints cannot itself
+     overflow -- [Encoding.order_width_exceeds] makes no such assumption because it has
+     no cap behind it. Second, a model that is over both limits should be told about the
+     arithmetic one, which is the harder error: narrowing a 10^18-wide domain to 10 000
+     would not have made it representable.
+
+     It also runs BEFORE [Store.create] and [Encoding.create], so a refused model
+     allocates neither a domain nor a ladder. That, rather than the diagnostic, is what
+     distinguishes this check from `ulimit -v` and [Mem_guard], which can only kill a
+     run already in progress. *)
+  Array.iteri
+    (fun i (v : Model.var) ->
+      let lo, hi = bounds.(i) in
+      if Encoding.order_width_exceeds ~lo ~hi then reject_declared_width v lo hi)
     m.Model.vars;
   let names = Array.map (fun (v : Model.var) -> v.Model.v_name) m.Model.vars in
   let store =

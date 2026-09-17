@@ -98,6 +98,12 @@ exception Empty_domain of string
 exception No_direct_encoding of string
 exception Direct_too_large of string * int
 
+(* A declared domain whose order ladder is longer than this module will build.
+   Carries the variable's name and its declared bounds -- not the width, because for
+   extreme bounds [hi - lo] is itself not representable and the exception exists partly
+   to report that case. See [max_order_width] and M1-T54. *)
+exception Width_too_large of string * int * int
+
 (* A row whose arithmetic cannot be carried out in a native int, so committing it to
    the .opb would write a different constraint from the one the caller posted. See the
    header, M1-T32. Loud by design: D-0029's "overflow raises; it never wraps and never
@@ -243,8 +249,77 @@ let objective t = t.objective
    Order encoding
    --------------------------------------------------------------------------- *)
 
+(* ---------------------------------------------------------------------------
+   The width cap (M1-T54, taking D-0028 point 3)
+   ---------------------------------------------------------------------------
+
+   The largest declared width [hi - lo] for which this module will build an order
+   ladder. Above it, [declare_int] raises [Width_too_large] and allocates nothing.
+
+   Why the cap is HERE. Every integer variable gets the order encoding eagerly
+   (PROOF-FORMAT section 3), so a declared width of w is w - 1 ladder clauses in the
+   .opb before any constraint is posted, and -- the half that actually hurts -- the row
+   expansion [expand_int_lin_le] is Theta(w) literals per variable, which makes every
+   justification that cancels this variable's contribution Theta(w) literals long
+   (D-0028: "the width is inherited from the encoding, not invented by
+   order_reason.ml"). This module is the one that mints that cost. A cap anywhere
+   downstream is a cap on a commitment already made.
+
+   Why it is a refusal and not a budget. Three memory-ceiling incidents on 2026-09-16
+   were all this shape, and the reason the existing defences did not help is that all
+   three act after the allocation is under way: `ulimit -v` and [Mem_guard] (M1-T53)
+   kill a run, and scripts/check_test_widths.sh sees only the *syntactic* form of a wide
+   domain in a test file. Refusing at the declaration is different in kind -- nothing is
+   allocated, and the caller can say which variable and where.
+
+   The number, and why this one. D-0028 measures the shape at a series of widths (two
+   variables, one row, refuted at the root having pruned nothing):
+
+     w        .opb     .pbp    solve   verify
+     999      126 kB   23.9 kB  50 ms   18 ms   <- test/models/width_root_unsat.fzn
+     9 999    1.36 MB  258 kB    —      130 ms
+     99 999   14.6 MB  2.78 MB   4 s    1.3 s
+     999 999  156 MB   29.8 MB  72 s    12 s
+
+   10 000 is bracketed by measurements on both sides: it is the last width at which a
+   whole model's artefacts still fit in a code review (a megabyte of .opb, a quarter of
+   a megabyte of proof, a verify in the tens of milliseconds), and one order of
+   magnitude below the first row where solving takes seconds and the .opb reaches eight
+   figures. It also leaves a factor of ten above [width_root_unsat]'s w = 999, which is
+   a deliberate, measured, load-bearing test and must keep passing.
+
+   This is NOT [Checked.limit], and D-0029 point 3 is explicit that it must not become
+   it: an overflow cap refuses models whose arithmetic cannot be *computed* and is a
+   soundness requirement, while this refuses models whose proof cannot be *stored*, and
+   the model it refuses is legal FlatZinc that baguette would otherwise answer
+   correctly. Different justification, different bound, and hence SPEC 2.1's own
+   sentence and its own decision record.
+
+   The cap is PER VARIABLE, which is what [declare_int] can see. It therefore does not
+   bound a model's total ladder: a thousand variables at w = 9 999 is still ten million
+   clauses. That gap is deliberate and left open rather than papered over here -- an
+   aggregate budget is a different check in a different place, with the awkward property
+   that it must name a variable to blame for a total nobody variable caused. *)
+let max_order_width = 10_000
+
+(* [lo <= hi] is a precondition. [hi - lo] is not always representable -- min_int..0 is
+   a legal pair of 63-bit ints whose width is not one -- so the comparison never
+   subtracts unless it has established that it may. Anything this refuses really does
+   exceed the cap: in the mixed-sign branch, [hi - lo >= hi] and [hi - lo >= -lo]. *)
+let order_width_exceeds ~lo ~hi =
+  if lo >= 0 || hi < 0 then
+    (* Same sign: hi - lo cannot overflow. *)
+    hi - lo > max_order_width
+  else
+    (* lo < 0 <= hi. Once both magnitudes are inside the cap, hi - lo is at most
+       2 * max_order_width, so the last test is safe to evaluate. *)
+    hi > max_order_width || lo < -max_order_width || hi - lo > max_order_width
+
 let declare_int t x ~lo ~hi =
   if lo > hi then raise (Empty_domain x);
+  (* Before the Hashtbl and before the ladder: a refused declaration leaves no trace
+     in [t] and costs no allocation. M1-T54. *)
+  if order_width_exceeds ~lo ~hi then raise (Width_too_large (x, lo, hi));
   (match Hashtbl.find_opt t.ints x with
   | Some v when v.lo = lo && v.hi = hi -> raise Exit (* idempotent redeclaration *)
   | Some _ -> raise (Redeclared x)
