@@ -1,0 +1,29 @@
+% M1-T56 + M1-T57, with the settle walking over TWO adjacent holes rather than one,
+% and with the two holes reasoned about differently on purpose.
+%
+% trace_settle_sat.fzn is the minimal case. This one adds a second disequality against
+% a variable whose declared domain is a single value, so:
+%
+%   - x <> 3 is punched at the ROOT, and its reason has no facts at all (the other term
+%     is at both its declared bounds, and a declared bound contributes no literal --
+%     docs/PROOF-FORMAT.md section 3). Its line is therefore the unconditional
+%     `~x_ge_3 \/ x_ge_4`, which is a genuine consequence of one .opb row;
+%   - x <> 2 is punched under the first decision, and its reason is "y <= 2";
+%   - the settling push then asks lo(x) >= 2 and Domain.settle walks it over BOTH holes
+%     to 4, so lib/core/trace.ml's contiguous-run lookup has to find two removers and
+%     fold in what each of them read -- one of which is nothing.
+%
+% As in trace_settle_sat.fzn the model is satisfiable and the pre-M1-T57 line
+% (`x >= 4 \/ w >= 3`) is false in it, so VeriPB rejects the proof without the fix.
+var 2..4: y :: output_var;
+var 0..5: x :: output_var;
+var 0..4: w :: output_var;
+var 0..2: z :: output_var;
+var 3..3: p :: output_var;
+constraint int_ne(x, y);
+constraint int_ne(x, p);
+constraint int_lin_le([-1,-1],[x,w],-4);
+constraint int_lin_le([1,-1],[w,y],0);
+constraint int_lin_le([1,-1],[x,z],2);
+constraint int_lin_le([1,-1],[z,y],-2);
+solve satisfy;

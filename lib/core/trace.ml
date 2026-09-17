@@ -21,14 +21,29 @@
 
        rup 1 <claim> 1 ~<fact_1> 1 ~<fact_2> ... >= 1 ;
 
-   where <claim> is the order literal the pruning established and the <fact_i> are the
-   bound facts the propagator actually read ([Store.entry]'s [facts]; for [int_lin_le]
-   that is lib/core/prop/linear.ml's [facts_of_snaps]). Read as a clause it says
-   "fact_1 and ... and fact_n imply claim", which is a genuine consequence of that one
-   model row -- so **no decision ever appears in a trace line**, and every line is
-   globally valid on its own. The decisions appear in exactly one place, the nogood,
-   which is now RUP because each of these lines is one unit propagation away from the
-   next.
+   where <claim> is what the pruning established and the <fact_i> are the bound facts
+   the propagator actually read ([Store.entry]'s [facts]; for [int_lin_le] that is
+   lib/core/prop/linear.ml's [facts_of_snaps]). Read as a clause it says "fact_1 and
+   ... and fact_n imply claim", which is a genuine consequence of that one model row --
+   so **no decision ever appears in a trace line**, and every line is globally valid on
+   its own. The decisions appear in exactly one place, the nogood, which is now RUP
+   because each of these lines is one unit propagation away from the next.
+
+   <claim> is a *clause*, not a literal, and both halves of that sentence earn their
+   keep (M1-T56, M1-T57):
+
+   - a bound move claims one order literal, as above;
+   - an interior hole claims the two of "x <> v", `x <= v-1 \/ x >= v+1`. That is
+     [Encoding.ne_clause_lits], which docs/PROOF-FORMAT.md section 4 already names as
+     [int_ne]'s justification -- this module simply never wrote it. Only a claim that
+     has to be a *single* literal forces the direct encoding (D-0019 point 3), and a
+     trace line's claim never had to be one;
+   - a bound the settle strengthened past a hole claims the recorded bound and cites
+     the hole's facts as well as the propagator's, so the line is RUP against the
+     hole's own line. That one line is therefore **not** a consequence of a single
+     model row, and it is the only kind here that is not. It is still decision-free and
+     still globally valid; what it needs from the database is a line this module wrote
+     itself, earlier, for an earlier trail entry.
 
    ---------------------------------------------------------------------------
    Lazy, not eager -- and why that is sound here specifically
@@ -72,6 +87,15 @@
      still there for level 1's second branch. Level-0 lines are never wiped by anything;
      [permanent_ids] hands them to [Search.solve], which deletes them before [conclusion]
      so invariant I-X2 still holds.
+
+   - **A hole's line and a settle's line are one mechanism, in that order.** The holes
+     a settle walks over are values removed by *earlier* trail entries, and [emit] walks
+     the trail oldest first, so the hole's line is in the database before the line that
+     rests on it. Before M1-T56 it was in the database only if something else happened
+     to cite it -- M1-T44 made the root-conflict path do so, and nothing else did -- and
+     the settle's line verified because the checker re-derived the hole from the .opb's
+     big-M disequality rows by unit propagation. That works for [int_ne]'s rows and is
+     not a property a trace line may rest on. See [line] and I-X9.
 
    - **A line is written once per pruning, not once per failing branch.** [n_done] is how
      far down the trail the trace has been written. After a backtrack the trail is
