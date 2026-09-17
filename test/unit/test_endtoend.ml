@@ -46,6 +46,11 @@ module Engine = Baguette_core.Engine
 module Search = Baguette_core.Search
 module Justify = Baguette_core.Justify
 
+(* M1-T53: the inner heap guard. test_prop.exe is the binary that reached 14.9 GB RSS on
+   2026-09-16 and had to be killed by hand, so a guard that covered only test_output and
+   test_compile would have missed the one incident it exists to prevent. `ulimit -v` stays
+   the outer backstop -- see mem_guard.ml's header for what this cannot see. *)
+let () = Mem_guard.install ()
 let failures = ref 0
 
 let check name cond =
@@ -378,8 +383,7 @@ let test_proof_comments_noop () =
   in
   let without = run_once false in
   let with_ = run_once true in
-  check
-    "end-to-end: --proof-comments is still a no-op on a real model (M1-T48)"
+  check "end-to-end: --proof-comments is still a no-op on a real model (M1-T48)"
     (without = with_)
 
 let () =

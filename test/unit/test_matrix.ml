@@ -91,6 +91,11 @@ module Search = Baguette_core.Search
 module Justify = Baguette_core.Justify
 module Trace = Baguette_core.Trace
 
+(* M1-T53: the inner heap guard. test_prop.exe is the binary that reached 14.9 GB RSS on
+   2026-09-16 and had to be killed by hand, so a guard that covered only test_output and
+   test_compile would have missed the one incident it exists to prevent. `ulimit -v` stays
+   the outer backstop -- see mem_guard.ml's header for what this cannot see. *)
+let () = Mem_guard.install ()
 let failures = ref 0
 let checks = ref 0
 

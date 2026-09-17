@@ -46,7 +46,45 @@
 
 let word_bytes = Sys.word_size / 8
 
-let install ?(limit_mb = 2048) ?(label = Filename.basename Sys.executable_name) () =
+(* The cap an [install] with no explicit [limit_mb] uses. The environment override is
+   not a convenience: without it the *installed* guard is unobservable, because the only
+   thing that could demonstrate it is an allocation big enough to trip 2 GB, which is
+   precisely the allocation this guard exists to prevent anyone running. With it, a
+   one-line run proves a given binary's guard is armed:
+
+     BAGUETTE_TEST_HEAP_CAP_MB=8 ./_build/default/test/unit/test_prop.exe   -> exit 3
+
+   MEM_GUARD_DEMO below does NOT prove that: it installs a guard of its own, so it fires
+   whether or not the binary ever called [install]. Telling those two apart is the whole
+   point (M1-T53). *)
+let default_limit_mb () =
+  match Sys.getenv_opt "BAGUETTE_TEST_HEAP_CAP_MB" with
+  | None | Some "" -> 2048
+  | Some s -> (
+      match int_of_string_opt (String.trim s) with
+      | Some n when n > 0 -> n
+      | _ ->
+          Printf.eprintf
+            "mem_guard: BAGUETTE_TEST_HEAP_CAP_MB=%S is not a positive number of MB\n%!" s;
+          exit 2)
+
+(* Arming and firing are two different claims, and only one of them is testable by
+   allocating. Most binaries in this suite have a major heap so small that no cap above
+   zero is ever crossed -- measured 2026-09-17: at BAGUETTE_TEST_HEAP_CAP_MB=1 only
+   test_prop.exe and test_output.exe abort; the other ten exit 0. That is *not* evidence
+   their guard is armed, and it is not evidence it is missing either: the run simply
+   cannot tell. So arming announces itself on request, which can be checked in every
+   binary regardless of how little it allocates:
+
+     BAGUETTE_TEST_HEAP_CAP_ANNOUNCE=1 ./_build/default/test/unit/test_core.exe
+
+   A binary that prints no `mem_guard: armed` line has not called [install], whatever its
+   heap does. Without this, "the guard is installed everywhere" would be a claim nothing
+   could falsify -- which is the failure mode M1-T53 is itself an instance of. *)
+let install ?limit_mb ?(label = Filename.basename Sys.executable_name) () =
+  let limit_mb = match limit_mb with Some n -> n | None -> default_limit_mb () in
+  if Sys.getenv_opt "BAGUETTE_TEST_HEAP_CAP_ANNOUNCE" <> None then
+    Printf.eprintf "mem_guard: armed at %d MB in %s\n%!" limit_mb label;
   let limit_words = limit_mb * 1024 * 1024 / word_bytes in
   let alarm = ref None in
   let check () =
