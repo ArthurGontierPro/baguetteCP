@@ -1,0 +1,42 @@
+% M1-T55. A decision whose push settles past a hole: the normative order splits at a
+% value whose successor is not in the domain.
+%
+% spec_order (lib/core/search.ml) is docs/SPEC.md 3.4's first-fail/indomain_min: it
+% splits at `d_split = lo`, and `explore_ge` pushes `set_lo v (lo + 1)`. When `lo + 1` is
+% a HOLE, `Domain.settle` walks that bound past it to re-establish I-D2, so the trail
+% entry lands on a bound strictly stronger than the `x_ge_(lo+1)` literal the branch
+% assumed and its nogood negates. `random_order`'s guard refuses exactly this shape; the
+% normative order has no such guard, and M2-T11 measured 2051 such splits over 108000
+% runs with zero veripb rejections -- latent, not live.
+%
+% What happens here, in order:
+%
+%   1. int_ne(x, 1) prunes at the root: one term, so it removes the value 1 outright.
+%      That is a hole strictly inside [0, 2] -- no bound moves, so lib/core/trace.ml
+%      writes no line for it, and the exclusion is on the page only as this
+%      disequality's own .opb rows.
+%   2. int_ne(x, y) has two unfixed terms, so it infers nothing. That is what makes the
+%      search branch rather than be handed the answer by propagation.
+%   3. first_fail picks x (domain {0,2}, size 2) over y (size 3) and splits at lo = 0.
+%      The low branch fixes x = 0, int_eq gives y = 0, and int_ne(x, y) conflicts.
+%   4. The high branch pushes `set_lo x 1` -- ONTO THE HOLE -- and settles to x = 2.
+%      int_eq gives y = 2 and int_ne(x, y) conflicts again, so the high nogood is
+%      emitted, and it negates x_ge_1 having explored only x >= 2.
+%
+% Since M1-T55 the proof carries the missing step as its own line,
+% `rup +1 x_ge_2 +1 ~x_ge_1 >= 1 ;` -- "x >= 1 implies x >= 2" -- emitted after the
+% branch's trace (D-0021) and before its nogood. A green run of THIS model does not by
+% itself prove the bridge is there: the nogood verified without it, which is what "latent"
+% means. test/unit/test_engine.ml is where the bridge's presence and its standalone
+% validity are asserted; this file is the end-to-end half, and it is what would go red if
+% the bridge ever became underivable.
+%
+% Domains stay at width 3 (D-0028: the order encoding is width-proportional). The answer
+% is UNSATISFIABLE and it is right -- x = y and x <> y are jointly unsatisfiable -- so
+% this file is ground truth under I-M1 whatever strategy the solver uses.
+var 0..2: x :: output_var;
+var 0..2: y :: output_var;
+constraint int_ne(x, 1);
+constraint int_ne(x, y);
+constraint int_eq(x, y);
+solve satisfy;
