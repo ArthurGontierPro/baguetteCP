@@ -102,6 +102,25 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
   space is exhausted, and the proof must independently establish it.
 - **I-S3** Decision level on return from search equals the level on entry.
 
+- **I-T4** Every trail entry names the propagator instance that made it, in `entry.prop`,
+  or `no_prop` where no propagator did (a decision, or a root-level declaration). The
+  naming instance must also **watch** the variable the entry changed. `Store.apply` stamps
+  the field from a slot the engine sets around each `run`, so no mutator takes an id and a
+  propagator has nothing to get wrong; `Engine.check_attribution` reads it back and raises
+  `Mis_attributed` on a mismatch. **It is on always, not under `BAGUETTE_DEBUG`** — M2-T3
+  resolves an entry's reason constraint through this field, so a wrong id is a wrong
+  learned clause, and an id that is threaded but never read is decoration. The cost is one
+  hashtable lookup per new entry, the same one `watchers_of_new_entries` already makes.
+
+  The "watches the variable it changed" half is the part that catches a *plausible* wrong
+  id rather than an obviously wrong one, and it is checked rather than sealed: the mutators
+  make a wrong id unreachable, but `Store.with_running` is public and must stay so, so that
+  route is guarded by the check. Two tests perform the break — `Steals_credit` re-enters
+  `with_running` with another instance's id, and `Under_declared` has `vars` under-report
+  so the propagator prunes a variable it never declared. Measured: stamping
+  `current_prop + 1` reddens 121 unit checks, kills 7 binaries and fails 30 of 34 models;
+  dropping the bracket reddens 123 and fails all 34.
+
 - **I-X10** Every trace line a propagator emits is RUP against the `.opb` plus the lines
   already on the page, and the reason is a property of **this propagator set**, not of the
   order encoding: every M1 pruning follows from a **single model constraint**, whose rows

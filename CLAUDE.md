@@ -126,6 +126,33 @@ FAIL scripts/mutate_proof.sh was not found ... NOT ONE mutation lane ran. This i
 `BAGUETTE_ROOT=<checkout>` fixes the mutation harness but not the other two; `--root .`
 fixes all three.
 
+### `dune runtest` does not build the solver, so the model tests can pass on a stale one
+
+`dune runtest --root .` builds and runs the **test binaries**. It does **not** build
+`bin/main.exe`. So this sequence silently tests the solver you had before your change:
+
+```sh
+dune runtest --root .          # green
+./scripts/run_model_tests.sh   # 34/34 -- against the OLD main.exe
+```
+
+`make models` depends on `build`, so `make` is safe — but `make` does not work in a
+worktree, which is exactly where everyone runs the script directly. Found twice on
+2026-09-17: once by the M2-T7 session, whose deliberately-broken attribution looked green
+at 34/34 until it ran `dune build --root . bin/`, and once by the orchestrator, who
+compared proof artefacts "before and after" a merge and got a byte-identical answer
+because the `dune` call had failed and both runs used the same binary.
+
+**Build the binary explicitly before any run that uses it**, and check that the build
+actually succeeded rather than trusting that the line scrolled past:
+
+```sh
+dune build --root . bin/ && ./scripts/run_model_tests.sh
+```
+
+A comparison whose two sides used the same binary is not evidence of no change; it is no
+evidence at all. If you are measuring a before/after, hash the binary too.
+
 ### Files that are contention hotspots
 
 Edits to these are frequent conflicts. Claim them explicitly and keep the edit short:

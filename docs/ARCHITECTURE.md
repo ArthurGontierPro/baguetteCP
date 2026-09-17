@@ -77,11 +77,19 @@ accumulate (I-T3).
 Since M1-T13 an entry carries two further fields that exist **only for the proof**
 (D-0018): `now`, the domain the pruning produced — the claim literal of a trace line is a
 function of it, and `old` alone cannot give it — and `facts`, a thunk for the bound facts
-the propagator read. So "keep trail records small" above is now a goal the entry only
-partly meets: five fields, two of them proof-side. `facts` is a thunk rather than a list
-for that reason, and the arena indirection for explanations matters more, not less. If
-the trail ever moves to `Bigarray`/`Bytes` (M6-T2, D-0001), these two fields are the
-awkward part of the move and should be planned for rather than discovered.
+the propagator read. **M2-T7 then added a sixth, `prop`**: the id of the propagator
+instance that made the entry, stamped by `Store.apply` from a slot the engine sets around
+each `run`, so no mutator takes an id and no propagator can pass the wrong one. It is not
+proof-side — M2-T3 resolves an entry's reason constraint through it, which is why
+`Engine.check_attribution` reads it back on every propagation and not only under
+`BAGUETTE_DEBUG`.
+
+So "keep trail records small" above is now a goal the entry only partly meets: **six
+fields**, two of them proof-side and one for conflict analysis. `facts` is a thunk rather
+than a list for that reason, and the arena indirection for explanations matters more, not
+less. If the trail ever moves to `Bigarray`/`Bytes` (M6-T2, D-0001), `now`, `facts` and
+`prop` are the awkward part of the move and should be planned for rather than discovered —
+`prop` is the easiest of the three, being a plain int.
 
 ## 4. Explanations
 
