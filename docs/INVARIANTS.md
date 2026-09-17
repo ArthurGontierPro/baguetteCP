@@ -102,6 +102,17 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
   space is exhausted, and the proof must independently establish it.
 - **I-S3** Decision level on return from search equals the level on entry.
 
+- **I-S4** A trace line that cites a hole is supported only while that hole's own line is
+  live, so **the cited line must outlive the citing line**. Since M1-T57 a settle line is
+  RUP against the `.opb` *plus* earlier trace lines rather than standalone (D-0039,
+  PROOF-FORMAT §4), which makes deletion order load-bearing where it previously was not.
+  It holds today by the level discipline rather than by a check: a settle at level `l` can
+  only cite holes punched at levels `<= l`, because a deeper hole does not exist yet when
+  it runs; and `w l` retires levels `>= l`, so the cited line is never retired before the
+  citing one. **Argued from the level discipline, not exhaustively measured** — and worth
+  re-checking when M2-T3's learned clauses start citing lines across levels, which is
+  exactly the case the argument above does not cover.
+
 ## The meta-invariant
 
 **I-M1** A failing test is information. The expected outputs in `test/expected/` and the

@@ -190,8 +190,16 @@ let spec_order store cands =
    constraint on the proof rather than on the search: [Domain.settle] walks a bound over
    a hole, so a decision at a hole would put a bound on the trail strictly stronger than
    the [x_ge_(k+1)] its nogood negates, and the checker could not replay the difference
-   -- an interior hole gets no trace line at all ([Trace]'s [claims] writes one only when
-   a bound moves). [lo] is the fallback after a few misses because [lo] is what
+   -- the parenthetical here used to read "an interior hole gets no trace line at all
+   ([Trace]'s [claims] writes one only when a bound moves)", and M1-T56 has made that
+   false: a hole states itself as the two-literal clause `x <= v-1 or x >= v+1` and does
+   get a line. **The constraint on this function is unchanged, and the reason is worth
+   keeping straight** -- what is missing at a hole split was never the hole, it is the
+   *implication* from the literal the branch assumed to the bound the settle established.
+   That implication is conditioned on the ancestor decisions, so it can have no globally
+   valid line of its own (D-0018); [bridges] below states it per settled decision, and
+   this guard is why [random_order] need not rely on that.
+   [lo] is the fallback after a few misses because [lo] is what
    docs/SPEC.md 3.4 already branches at: [lo] is in the domain by I-D2, so the low side
    lands exactly, and the high side is then the same [set_lo _ (lo+1)] the default has
    always made. So a random order reaches new tree shapes without inventing a class of

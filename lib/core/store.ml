@@ -172,12 +172,18 @@ let fix t v value why = apply t v (Domain.fix (get t v) value) no_facts why
    new bound with an empty reason, i.e. unconditionally, which is simply false and which
    veripb rejects.
 
-   Note what is and is not fixed by having the function: a removal that moves no bound
-   (a hole strictly inside the interval) still gets no line, because there is no order
-   literal that states it. That is unchanged and still correct for M1 -- see
-   lib/core/trace.ml's [claims], and D-0019 point 3 for the test of when the direct
-   encoding is genuinely forced. What this makes possible is the bound-moving case, and
-   only that. *)
+   Note what is and is not fixed by having the function. This comment used to end "a
+   removal that moves no bound (a hole strictly inside the interval) still gets no line,
+   because there is no order literal that states it", and that reasoning was wrong in its
+   premise rather than in its conclusion: M1-T56 observed that a claim never had to BE an
+   order literal. "x <> v" is the two-literal clause `x <= v-1 or x >= v+1`, which
+   docs/PROOF-FORMAT.md section 4 already names as [int_ne]'s justification, so an
+   interior hole can state itself without the direct encoding after all. [Trace]'s
+   [claims] now writes a line for it, and M1-T57 depends on that: a settled bound cites
+   the facts of the holes the settle walked over, which is only possible once those holes
+   are on the page. So both cases are covered here now, not just the bound-moving one.
+   D-0019 point 3 is still the test of when the direct encoding is genuinely forced, and
+   this is not it. *)
 let set_lo_with_facts t v bound ~facts why =
   apply t v (Domain.set_lo (get t v) bound) facts why
 

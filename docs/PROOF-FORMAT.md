@@ -416,9 +416,18 @@ Every pruning writes one line, **root-level prunings included**:
 rup 1 <claim> 1 ~<fact> 1 ~<fact> ... >= 1 ;
 ```
 
-- **claim** — the order literal the pruning established. `set_lo x k` gives `x_ge_k`;
-  `set_hi x k` gives `~x_ge_(k+1)`.
-- **facts** — the bound facts the propagator actually read, negated. For `int_lin_le`,
+- **claim** — what the pruning established, as a **clause**, not necessarily a single
+  literal. `set_lo x k` gives `x_ge_k`; `set_hi x k` gives `~x_ge_(k+1)`; and a pure hole
+  removal — which until M1-T56 got no line at all, on the mistaken grounds that no order
+  literal states it — gives the two-literal clause `x <= v-1 ∨ x >= v+1`, i.e.
+  `+1 ~x_ge_v +1 x_ge_(v+1) >= 1`. That is `Encoding.ne_clause_lits`, which §4 already
+  names as `int_ne`'s justification: a claim never had to *be* a literal.
+- **facts** — the bound facts the propagator actually read, negated, **plus the facts of
+  any holes a settle walked over** (M1-T57). `Domain.settle` can carry a bound past holes
+  to re-establish I-D2, so the bound on the trail is stronger than the one the propagator
+  asked for; a line that cited only the propagator's facts would then claim more than they
+  justify. On `root_hole_unsat` that line claimed `v0 >= 1` with an **empty** tail, i.e.
+  unconditionally — I-P5's worst case, and false. For `int_lin_le`,
   each *other* term contributes `x_i >= lo(x_i)` when `a_i >= 0` and `x_i <= hi(x_i)`
   when `a_i < 0`. A bound still at its declared value contributes **nothing**: its
   negation is false, so including it would weaken the clause for no reason.
@@ -436,9 +445,31 @@ carries the full declared-width chain, the trace line carries the current bound.
 both from **one** snapshot, or they will drift and the checker will accept the mismatch
 (that is D-0009's failure mode, which cost a whole round).
 
+#### Standalone RUP: what is still true, and what is not *(corrected — M1-T57, D-0039)*
+
 To check a single line in isolation, write a one-rule proof — `f N`, the line, then
-`conclusion NONE`. VeriPB accepts that and reports `VERIFIED NO CONCLUSION`. A trace line
-must verify this way (it is decision-free); a nogood must **not**.
+`conclusion NONE`. VeriPB accepts that and reports `VERIFIED NO CONCLUSION`.
+
+This section used to say "a trace line must verify this way (it is decision-free)". **That
+is no longer true, and the counter-example is in the suite.** Measured on
+`test/models/trace_settle_holes_sat.fzn` against 3.0.2: of its eight trace lines, six
+verify standalone and **two are refused**. The settle line
+`rup +1 x_ge_4 +1 w_ge_3 +1 y_ge_3 >= 1` is refused against the `.opb` alone and
+**accepted** once the hole line `rup +1 ~x_ge_3 +1 x_ge_4 >= 1` precedes it.
+
+The property that replaces it is weaker but still sharp. A trace line is RUP against the
+`.opb` **plus the trace lines already emitted**, and it remains **decision-free** — it
+mentions no decision and is globally valid, which is what the nogood story needs. What it
+is no longer is individually derivable from the model. So:
+
+- a **nogood** must still **not** verify standalone; that half is unchanged;
+- a trace line for a bound move that crossed no hole still verifies standalone;
+- a **settle** line, and any line citing a hole, does not, and a test that asserts
+  standalone validity for *every* line is asserting something false. Assert the count per
+  model, as `test_trace.ml` now does.
+
+There is a consequence for deletion, and it is load-bearing: a line that cites a hole
+line is only supported while that hole line is live. See **I-S4**.
 
 ## 5. Backtracking and deletion
 

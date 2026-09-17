@@ -2191,3 +2191,61 @@ writer.
   across the model set, all on small unsat instances where the `pol` feeds the cited
   contradiction. It says nothing about a pruning the conflict never cites, which is what
   dominates any real search — and that is precisely the case M2-T3's clause learning creates.
+
+## D-0039  A trace line is RUP in sequence, not standalone: the individual-derivability property is retired
+
+**Status**: accepted, 2026-09-17. **Forced by** M1-T56 and M1-T57 landing together.
+**Corrects** `docs/PROOF-FORMAT.md` §4, which stated the retired property as normative.
+**Adds** invariant **I-S4**. **Read together with** D-0018 and D-0021, whose nogood story
+this does *not* change, and with D-0035, whose "justify the bound as RECORDED" is what
+forces it.
+
+### What changed, and why it had to
+
+M1-T57's defect was that `Trace.claims` read `e.now` — the **settled** bound — while the
+facts on the line came from the propagator. `Domain.settle` walks a bound past holes to
+re-establish I-D2, so the recorded bound can be strictly stronger than the one the
+propagator asked for, and the line then claimed more than its facts justified. On
+`root_hole_unsat` it claimed `v0 >= 1` with an **empty** tail: unconditional, and false.
+That is I-P5's worst case, and D-0035 says the explanation must justify the bound as
+recorded, so weakening the claim back to the asked bound was not an option.
+
+The fix is for the line to also cite the facts of the holes the settle crossed. Those holes
+have lines of their own only because of M1-T56 — which is why the two tasks could not be
+split, and why T56 is T57's *prerequisite* rather than its sibling.
+
+### The consequence, stated plainly
+
+A settle line is no longer derivable from the `.opb` alone. Measured on
+`test/models/trace_settle_holes_sat.fzn` against 3.0.2: of eight trace lines, six verify
+standalone, and **two are refused**. The settle line is accepted the moment its hole line
+precedes it. So §4's "a trace line must verify this way (it is decision-free)" is **false**
+and is retired.
+
+**This is not a soundness loss.** VeriPB checks each `rup` against the database as it stands
+at that line, which is precisely RUP-in-sequence; a proof of this shape is exactly as valid
+as before. What is lost is *auditability of a line in isolation*, which had been convenient
+and had become an assumption. What is kept is the property the nogood story actually needs:
+a trace line mentions **no decision** and is globally valid, so the decisions still appear
+only in the nogood and the nogood is still RUP along the trace.
+
+### What this costs, and the part that is not yet checked
+
+1. **Deletion order becomes load-bearing** — I-S4. A cited hole line must outlive the line
+   citing it. It does today by the level discipline (a settle at level `l` cites only holes
+   at levels `<= l`; `w l` retires levels `>= l`), but that is an argument, not a check, and
+   **the argument does not cover M2-T3's learned clauses**, which will cite across levels.
+2. **Tests must stop asserting standalone validity universally.** A suite that asserts it
+   for every line is asserting something false. `test_trace.ml` asserts the refused count
+   per model instead — 0 for models with no settle, 1 for `trace_settle_holes_sat`.
+3. **The cited hole run is an over-approximation** — contiguous holes adjacent to the new
+   bound, empty exactly when no settle happened. Extra facts only weaken the clause, so it
+   costs precision and never soundness. The exact set needs the propagator's *asked* bound
+   on `Store.entry`, a new record field; not needed today, and that is the route if
+   precision is ever wanted.
+
+### What was rejected
+
+Making the claim the *asked* bound rather than the recorded one. It would restore standalone
+validity, and it is what D-0035 exists to forbid: the line would then justify a bound that
+is not the one on the trail, and the mismatch is exactly the drift D-0009 cost a round to.
