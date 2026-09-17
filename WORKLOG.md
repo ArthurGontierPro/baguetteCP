@@ -1064,3 +1064,31 @@ one file whose entire purpose is that a rejection under an unusual seed is a fin
 **M2-T4** (learned-clause deletion and its matching `del`) follows directly, and
 **M1-T29**'s pair spelling is what its deletion will use. M2-T6 and M2-T10 also want
 `lib/core` and should queue behind, not beside.
+
+### Worktree cleanup (orchestrator, 2026-09-17)
+
+**All 34 worktrees under `.claude/worktrees/` are removed**, and 20 auto-named
+`worktree-agent-<hash>` branches with them — those exist only as worktree scaffolding, so
+with the directory gone they name nothing. Every one was verified before removal: merged
+into `master`, no unique commits. `git fsck` clean afterwards, gate green.
+
+**Two commits were deliberately preserved and are still reachable.** Neither is merged, and
+each is kept on its branch:
+
+| Commit | Branch | What it is |
+|---|---|---|
+| `474a05f` | `wave8-del` | M1-T29's **deliberate break** — removes the trailing `del id`, leaving the run's last id live, and reddens exactly the three checks that assert the pair. Builds. Evidence, not unfinished work. |
+| `97d982e` | `worktree-agent-a5a5eb6cbb5505ceb` | agent-bool's M2-T1/M2-T2 WIP, **DOES NOT BUILD**. Dead work — both rows landed by another route — but it is the only copy, so it is not mine to discard. |
+
+Three files were lost with the directories, all checked first and all genuinely
+irrelevant: two scratch helpers in `agent-a28d6d45973af8420` that self-declare "Local
+helper for this worktree session. Not for committing" and hardcode paths into their own
+worktree, and a `scripts/check_fmt.sh` in `agent-del` that was **my** leftover from testing
+the M1-T64 worktree fix, byte-identical to master's.
+
+**What I did NOT do**, so the next session does not think it was an oversight: the twelve
+merged `wave6-*`/`wave7-*`/`wave8-iface`/`wave9-*` branches are still there. They are safe
+to delete — every commit is in `master` via a `--no-ff` merge that names the task — but I
+created them deliberately and with meaningful names, which is a different category from
+harness scaffolding, and pruning them was not what was asked. They will accumulate about
+three to five per wave, so prune them when it starts to cost something.
