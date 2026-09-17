@@ -459,7 +459,19 @@ let opposite_rests_on store (tm : term) =
    is now a visible change to a signature, and
    [test_prop.ml]'s [test_ix6_cross_conflict_snapshot] is the check that sees it: it
    forces one cross-row conflict at two moments with another row taking over the cited
-   bound in between, and it fires on the *derivation being wrong*, not on a crash. *)
+   bound in between, and it fires on the *derivation being wrong*, not on a crash.
+
+   WHY NO MODEL COVERS THIS, measured 2026-09-17. The only route into this path is a row
+   that names the same variable twice (test_matrix.ml's white-box cross-row scene:
+   `2d - d <= -4`, where term 0 pushes hi and term 1 then pushes lo from the pre-push
+   [mins] and crosses it). Two separate instances meeting in a third row is reported as
+   that row's own slack instead. And a repeated variable cannot arrive from the CLI:
+   lib/flatzinc/compile.ml's [normalise_terms] merges duplicate coefficients once, for
+   both the .opb row and [Linear.make], so `int_lin_le([2,-1],[d,d],-4)` reaches this
+   module as `d <= -4` and refutes through the row's own slack -- confirmed by running
+   it, whose proof is a single [pol]. So this function is reachable only from a library
+   caller today, which is the other half of why breaking it moved no artefact, and it is
+   why a test/models/ instance cannot stand in for the unit test above. *)
 let explain_cross_conflict ~opposite new_bound_expl =
   Explanation.deferred (fun () ->
       match opposite with
