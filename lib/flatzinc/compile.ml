@@ -325,11 +325,11 @@ let reject_declared_width (v : Model.var) lo hi =
      Every integer variable is given the order encoding eagerly, so a declared width of \
      w costs w-1 ladder clauses in the .opb before any constraint is posted, and makes \
      every justification that cancels this variable's contribution Theta(w) literals \
-     long. Measured: two variables declared 0..999999 produce a 156 MB .opb and a \
-     single 29.8 MB proof line, for a model that is infeasible by inspection -- a proof \
-     the checker accepts and nobody can store or review. This model is legal FlatZinc; \
-     the limit is baguette's, and refusing is deliberate rather than a defect. Narrow \
-     the declared domain, or rescale the model so the same question fits a smaller one."
+     long. Measured: two variables declared 0..999999 produce a 156 MB .opb and a single \
+     29.8 MB proof line, for a model that is infeasible by inspection -- a proof the \
+     checker accepts and nobody can store or review. This model is legal FlatZinc; the \
+     limit is baguette's, and refusing is deliberate rather than a defect. Narrow the \
+     declared domain, or rescale the model so the same question fits a smaller one."
     v.Model.v_name lo hi (hi - lo) Encoding.max_order_width
 
 let reject_row pos ~what ~magnitude =
