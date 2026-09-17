@@ -415,29 +415,45 @@ let opposite_bound_fact store (tm : term) =
   if tm.coeff > 0 then Reason.at_least ~name ~decl:tm.decl_lo (Domain.lo d)
   else Reason.at_most ~name ~decl:tm.decl_hi (Domain.hi d)
 
-(* docs/DECISIONS.md D-0018 is explicit that a [Deferred] thunk must close over a
-   *snapshot* and never read live store state: the whole reason the trace can be written
-   later, when a branch fails, rather than eagerly at every pruning, is that a reason
-   forced late still renders the derivation as of the moment it was made. This function
-   used to call [find_lo_reason]/[find_hi_reason] from inside the thunk, i.e. it looked
-   at whatever trail entry happened to witness the opposite bound at *force* time. It
-   was harmless in practice only because search forces a conflict's explanation
+(* The derivations the *opposite* bound rests on -- the one this row's new bound ran
+   into -- read HERE, at the moment of the pruning, and handed to
+   [explain_cross_conflict] below as a plain value.
+
+   Note which bound this reads, because it is the mirror of [snapshot_source]'s: a
+   positive coefficient means this row pushed [tm]'s UPPER bound, so the bound it ran
+   into is the lower one. O(1) as of M2-T8 ([Store.lo_support]), so the old argument
+   that a trail scan per cross-row conflict was not a hot path no longer has to be
+   made. *)
+let opposite_rests_on store (tm : term) =
+  if tm.coeff > 0 then lo_rests_on store tm.x ~decl_lo:tm.decl_lo
+  else hi_rests_on store tm.x ~decl_hi:tm.decl_hi
+
+(* docs/DECISIONS.md D-0018 and invariant I-X6 are explicit that a [Deferred] thunk must
+   close over a *snapshot* and never read live store state: the whole reason the trace can
+   be written later, when a branch fails, rather than eagerly at every pruning, is that a
+   reason forced late still renders the derivation as of the moment it was made. This
+   function used to call [find_lo_reason]/[find_hi_reason] from inside the thunk, i.e. it
+   looked at whatever trail entry happened to witness the opposite bound at *force* time.
+   It was harmless in practice only because search forces a conflict's explanation
    immediately; under conflict analysis (M2-T3), or under any change that defers the
    rendering past a backtrack, it would have cited a reason that no longer holds -- and
    the symptom would have been a rejected line somewhere else entirely, which is exactly
-   the trap D-0018 quotes from GCS. The lookup is therefore done here, eagerly, on the
-   same pattern as [snapshot_source]; only building the [Combine] stays deferred. The
-   lookup is O(1) as of M2-T8 ([Store.lo_support]), so the argument that a trail scan per
-   cross-row conflict was not a hot path no longer has to be made.
+   the trap D-0018 quotes from GCS. M1-T13 hoisted the lookup out of the thunk and it has
+   stayed out; only building the [Combine] is deferred.
 
-   Note which bound this reads, because it is the mirror of [snapshot_source]'s: a
-   positive coefficient means this row pushed [tm]'s UPPER bound, so the bound it ran into
-   is the lower one. *)
-let explain_cross_conflict store (tm : term) new_bound_expl =
-  let opposite =
-    if tm.coeff > 0 then lo_rests_on store tm.x ~decl_lo:tm.decl_lo
-    else hi_rests_on store tm.x ~decl_hi:tm.decl_hi
-  in
+   It takes [~opposite] and NOT the store, which is the point of the signature and not a
+   tidy-up. M1-T13's hoist left a [store] in scope one line above a thunk that must not
+   read it, so the discipline was one careless edit from being undone and *nothing in the
+   suite could see that edit*: measured 2026-09-17, moving the two lines above back inside
+   the thunk reddens **zero** checks across every unit binary, keeps all 34 models green
+   and leaves all 102 proof artefacts byte-identical. With no store here there is nothing
+   live to read, which is how lib/core/reason.ml discharges the same obligation on the
+   reason half -- by the type rather than by a reviewer noticing. Putting the store back
+   is now a visible change to a signature, and
+   [test_prop.ml]'s [test_ix6_cross_conflict_snapshot] is the check that sees it: it
+   forces one cross-row conflict at two moments with another row taking over the cited
+   bound in between, and it fires on the *derivation being wrong*, not on a crash. *)
+let explain_cross_conflict ~opposite new_bound_expl =
   Explanation.deferred (fun () ->
       match opposite with
       | _ :: _ ->
@@ -497,7 +513,7 @@ let propagate t store =
           (Store.conflict store
              (Reason.because
                 (List.map fact_of_snap snaps @ [ opposite_bound_fact store tm ])
-                (explain_cross_conflict store tm expl)))
+                (explain_cross_conflict ~opposite:(opposite_rests_on store tm) expl)))
     in
     List.iteri
       (fun idx ((tm : term), m) ->
