@@ -15,6 +15,7 @@ git worktree each (`.claude/worktrees/<tag>`), so no two share `_build`'s global
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M2-T12 (the determinism half) | `scripts/check_determinism.sh`, `Makefile` | orchestrator | 2026-09-17 |
 | M2-T8 | **all of `lib/core/**`**, plus the `test/unit/*.ml` its signature change breaks | agent-iface | 2026-09-17 |
 
 Two rounds are recorded in `## Completed` below. The rows that stood here on
