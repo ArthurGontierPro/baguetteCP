@@ -402,8 +402,13 @@ let emit_line (ctx : Justify.ctx) ~origin ~claim ~facts =
    used to be a local copy here; M2-T8 moved it to [Store], which had a second copy of it
    in [Linear.find_removal] with the other off-by-one convention. [None] means a hole with
    no trail entry behind it, which within M1 means a *declared* domain with a gap
-   ([Domain.of_list], for `var {1,3,5}: x`, which the FlatZinc subset of docs/SPEC.md 2.1
-   does not admit). This module cites nothing rather than raising: the line is then exactly
+   ([Domain.of_list], for `var {1,3,5}: x`). **What refuses that is named rather than
+   implied, so this and [Store.remover]'s header cannot drift apart (M1-T63):**
+   `reject_set_domain` in lib/flatzinc/compile.ml refuses `Model.Dset` unconditionally,
+   and `Domain.of_list` has no caller anywhere in `lib/`. Saying only that SPEC 2.1 "does
+   not admit" a set domain was the weaker form -- a subset can be widened, whereas the
+   gate is a line of code someone has to delete. This module cites nothing rather than
+   raising: the line is then exactly
    as strong as the one it wrote before M1-T57, so an encoding that grows declared holes
    degrades to the old behaviour instead of aborting the solve -- and the .opb would have
    to state such a hole as a row anyway, which is what the checker would then use. *)

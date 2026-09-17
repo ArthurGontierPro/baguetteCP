@@ -2138,7 +2138,7 @@ result, since a `Combine` is emitted only at a root conflict where no decision i
 
 ## D-0038  Should an `Explanation` carry the bound it concludes, so a `pol` can be checked against it?
 
-**Status**: **OPEN**, raised 2026-09-17 by the orchestrator out of M1-T51. **Blocks** the
+**Status**: **RESOLVED by D-0043** (2026-09-17) — was OPEN, raised out of M1-T51. **Blocks** the
 adoption of `Writer.pol_concluding`, which exists and is demonstrated but has no caller in
 `lib/`. Interacts with **D-0003** (still open) and with **D-0026**'s propagator interface v2
 (M2-T8). Not to be decided in passing: it touches `lib/core/explanation.ml`, the central ADT
@@ -2480,3 +2480,81 @@ That the gap is harmless in general — only that it is not reachable by acciden
 that no artefact size observed so far is a problem. D-0041's per-variable cap remains the
 control that matters, and the `.pbp` side of this was not measured separately; the table is
 `.opb` bytes, which is the term the ladder dominates.
+
+## D-0043  D-0038 resolved: the conclusion is a `Reason.fact`, carried on `justified`, in `reason.ml`
+
+**Status**: DECIDED, 2026-09-17. **Resolves D-0038**, which had four routes and no verdict
+because the evidence was not in yet. **Route 3** is chosen — fold it into the D-0026 split
+— and the implementation lands in `lib/core/reason.ml`, **not** `lib/core/explanation.ml`.
+
+### Why the verdict waited, and what arrived
+
+D-0038 was raised out of M1-T51, which built `Writer.pol_concluding` and `Writer.implied`
+and could give them **no caller in `lib/`**, because `Combine`/`Cut` record *how* a bound
+was derived and not *what*. The blocker was never the checker rule — `ia` and `e` exist in
+both checkers — it was that the claim did not exist to pass.
+
+Two sessions then converged on the same answer independently, from opposite ends, which is
+why this is now decided rather than argued:
+
+- **M2-T8** (the D-0026 split) reported that `Reason.fact` — `At_least`/`At_most` over a
+  name, a value and a declared flag — **already *is* a bound claim**, so the conclusion
+  type exists and needs no invention. It recommended `reason.ml` over `explanation.ml`.
+- **M2-T9** (the defining-line index) found a **second, independent use**, and it is the
+  one that settles it. The index it built is structurally limited to the clause-shaped
+  half of the proof: it can key a `rup` line because `Justify` knows that line's claim,
+  but **a `pol` line's content is computed by the checker and unknown to us**, so
+  `Combine`/`Cut` cannot be indexed at all. A conclusion on the explanation is *exactly
+  the key those lines would be indexed under* — the same value `pol_concluding ~claim`
+  wants.
+
+One use is a feature request. **Two unrelated consumers needing the same missing value is
+a type that is absent**, and that is the argument.
+
+### The decision
+
+A `Reason.justified` gains a conclusion expressed as a `Reason.fact`. The exact spelling is
+the implementing task's to choose; what this record fixes is *where it lives* and *what it
+is*.
+
+**Not in `explanation.ml`.** That file is a contention hotspot `CLAUDE.md` protects, every
+propagator depends on it, and M2-T8 got through the whole D-0026 split **without a new
+constructor there** — reaching for one now, for a value that is already `Reason`'s
+vocabulary, would spend that protection for nothing.
+
+**On `justified`, not beside it.** D-0038's route 2 was "propagators supply the claim at
+the emission site", and it is rejected for the reason route 2 itself names: nothing would
+force the conclusion and the reason to agree, which is most of the property wanted. The
+whole point of D-0026's `justified` is that it is the single value every mutator takes, so
+the field rides along with no new plumbing and cannot be supplied inconsistently.
+
+### On the conclusion being optional
+
+D-0038 worried that an optional conclusion reintroduces route 4's "partial by
+construction" weakness. It does not, and M2-T9's finding is why: the partition is
+**principled and already exists in the code**. A conclusion is meaningful exactly where a
+*pruning* happened. A **decision** has none — D-0037 settled that a decision is an
+assumption, not a derived bound — and a **conflict** concludes falsity rather than a bound.
+`Trace.claims` already draws that exact line, writing a line for a pruning and none for a
+decision. An optional conclusion tracks a distinction the solver already makes, rather than
+marking coverage the design failed to reach.
+
+### What this unlocks, and what it does not
+
+**Unlocks.** `Writer.pol_concluding` and `Writer.implied` get their first caller, closing
+M1-T51's adoption gap — and with it the defect M1-T51 measured, that a `pol` deriving
+something strictly weaker than the claimed bound is **accepted** bare and **rejected** once
+the conclusion is stated. M2-T9's index extends to `pol` lines. And M2-T8's agreement check
+becomes exact instead of "…or the fact has a support", which is the looser of its two arms.
+
+**Does not unlock**, and M2-T9 was explicit about this so it is recorded rather than
+discovered: it does **not** give `defining_lit` a caller. That needs a *citation* slot in
+`Combine`/`Cut` — D-0009's other, separate missing field — and that is a different decision.
+
+### Sequencing
+
+This is **not** a precondition of M2-T3 and must not be folded into it; M2-T3 is already
+the largest remaining task and D-0011's lesson was that preconditions close *before* a big
+task starts, not during. It is a natural companion to **M2-T9's follow-up** and to M4-T1,
+which D-0040 requires to emit an explicit `pol` ahead of its trace line — precisely the
+`pol` whose conclusion this makes checkable.

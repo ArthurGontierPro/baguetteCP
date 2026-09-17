@@ -144,6 +144,17 @@ at 34/34 until it ran `dune build --root . bin/`, and once by the orchestrator, 
 compared proof artefacts "before and after" a merge and got a byte-identical answer
 because the `dune` call had failed and both runs used the same binary.
 
+**And `dune runtest` without `--force` re-runs only what dune thinks changed**, so its
+check count can be far *lower* than the suite's and still say `0 FAIL`. On 2026-09-17 a
+session reported "938 ok" from a plain `dune runtest` against a suite of 1576 — no
+failures, but two thirds of the checks simply had not been re-run, and the low number
+went unremarked because nothing about it looks like an error. Always `--force` when you
+are reporting a count:
+
+```sh
+(ulimit -v 4000000; timeout 1800 dune runtest --root . --force)
+```
+
 **Build the binary explicitly before any run that uses it**, and check that the build
 actually succeeded rather than trusting that the line scrolled past:
 

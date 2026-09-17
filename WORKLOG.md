@@ -15,8 +15,6 @@ git worktree each (`.claude/worktrees/<tag>`), so no two share `_build`'s global
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M2-T9 + M1-T59 + the I-S4 check | `lib/core/justify.ml`, `lib/core/trace.ml`, `test/unit/test_justify.ml`, `test/unit/test_trace.ml` | agent-index | 2026-09-17 |
-| M1-T36 + M1-T45 | `lib/core/search.ml`, `bin/main.ml`, `bench/run_bench.sh`, `test/unit/test_engine.ml` | agent-search4 | 2026-09-17 |
 
 Two rounds are recorded in `## Completed` below. The rows that stood here on
 2026-09-15 (`integration`, M1-T12, M1-T13) were stale — see the handoff note "the
@@ -76,7 +74,7 @@ work. The owning session picks it up.
 | **Wave nine, dispatched 2026-09-17. Three sessions, and the shape is chosen to give M2-T3 a clean exclusive run next.** M2-T3 needs all of `lib/core` and D-0011's lesson was that its preconditions must be closed **before** it starts, not during. So this round closes the three things M2-T3 would otherwise trip over — the M2-T9 index it depends on, I-S4's unchecked argument, and `explain_cross_conflict`'s I-X6 blind spot — and sweeps the small M1 rows out of `lib/core` at the same time. **M2-T3 is deliberately NOT dispatched this round** | — | orchestrator | standing, this round |
 | **File map, disjoint by construction**: `justify.ml`+`trace.ml` = agent-index; `prop/linear.ml` = agent-linear; `search.ml`+`bin/main.ml`+`bench/` = agent-search4; `store.ml`+`docs/**`+`WORKLOG.md`+`scripts/**` = orchestrator. `lib/core/reason.ml` and `lib/core/explanation.ml` are **read-only for all three** — M2-T8 landed them hours ago and a second reshape this round would be churn. `lib/proof/**` is read-only for all three. `test_core.ml`, `test_matrix.ml` and `test_random.ml` are unowned: if your change breaks one, that is a request to me, not an edit | — | orchestrator | standing, this round |
 | **Request for agent-index, from agent-linear (M1-T63's remaining half).** `trace.ml:295-308`'s `remover` header duplicates what `store.ml:543-551` now says, but does **not** name `reject_set_domain` — it says only that SPEC 2.1 "does not admit" a set domain. Either point it at `Store.remover` or name the gate, so the two cannot drift. Small, prose only | `lib/core/trace.ml` | agent-linear via orchestrator | open, for agent-index |
-| **D-0038 is HELD, not forgotten.** I claimed it this round and am deliberately not writing the record until agent-index reports: I asked that session for its view because M2-T9's literal -> defining-line index may be the structure that makes a conclusion cheap to carry, and writing the record first would discard the evidence I asked for. **Current lean, for the record if I am interrupted**: route 3 in `reason.ml`, not `explanation.ml` — `Reason.fact` already *is* a bound claim, so `Reason.justified` could gain `concludes : fact option` without widening the protected `explanation.ml` hotspot, and it would make M2-T8's agreement check exact instead of "or it has a support". The open question I want agent-index's input on is whether `option` tracks a real distinction (a decision is an assumption per D-0037 and a conflict concludes falsity, so neither has a bound conclusion — the same partition `Trace.claims` already makes) or reintroduces route 4's "partial by construction" weakness | `docs/DECISIONS.md` | orchestrator | held, pending agent-index |
+| **D-0038 is RESOLVED as D-0043** (2026-09-17). The conclusion is a `Reason.fact` carried on `justified`, in `reason.ml`, not `explanation.ml`. **Two unrelated consumers needed the same missing value**, which is what decided it: M2-T8 found `Reason.fact` already *is* a bound claim, and M2-T9 found its index cannot key a `pol` at all because a `pol`'s content is computed by the checker — so the conclusion is exactly that key, and also exactly what `pol_concluding ~claim` wants. **Not a precondition of M2-T3 and must not be folded into it**; it pairs with M2-T9's follow-up and with M4-T1, which D-0040 requires to emit a `pol` ahead of its trace line | `docs/DECISIONS.md` | orchestrator | CLOSED |
 | **Wave eight, dispatched 2026-09-17. Same shape as wave seven and for the same reason**: M2-T8 rewrites the propagator interface, so it needs all of `lib/core`. agent-del works in `lib/proof` only; the orchestrator holds `Makefile` and `scripts/**`. **M2-T3 is still not dispatched** — M2-T8 is its precondition and M2-T9 follows M2-T8 | — | orchestrator | standing, this round |
 | **`lib/proof/writer.ml` is agent-del's and `lib/core/justify.ml` is agent-iface's, and they meet at the rule-emission boundary.** agent-del may **add** to `writer.ml` but must not change the signature of `pol`, `rup`, `rup_clause`, `implied`, `pol_concluding`, `fresh`, `delete`, `delete_many`, `wipe_level` or `del_run`, because `justify.ml` compiles against them and agent-iface is rewriting that file. A change there is a request here | `lib/proof/writer.ml` | orchestrator | standing, this round |
 | **Wave seven, dispatched 2026-09-17. Three sessions, and the split is dictated by M2-T7's footprint.** M2-T7 threads the propagator instance id onto the trail and onto `Conflict`, which reaches ~110 call sites across seven test files and nearly every module in `lib/core`. So agent-instid gets **all of `lib/core`**, and the only parallel work is outside it: agent-widthcap in `lib/proof` + `lib/flatzinc`, and agent-property read-only. Do not add a fourth session in `lib/core` this round | — | orchestrator | standing, this round |
@@ -174,6 +172,9 @@ work. The owning session picks it up.
 | M1-T64 followup | orchestrator | 2026-09-17 | `scripts/check_fmt.sh` ran `dune build @fmt` with no `--root .`, so it failed in every worktree — **and reported "files are not formatted"**, a false failure blaming the reader. My bug: M1-T64 put it in the gate without running it from a worktree, which is where every agent works. Fixed and verified from a worktree; a harness error is now reported as one, in dune's words |
 | M1-T62 | orchestrator | 2026-09-17 | **Closed by M2-T8, not by work.** Checked the premise before dispatching and both halves were dead: `no_facts` is gone, all four mutators take one `Reason.justified` with no factless sibling and no optional argument, and `ne.ml:343` is a real `lib` caller. What remains — `Reason.none` in three commented places — is the explicit route the row wanted to keep, not the silent one it wanted gone. **One dispatch saved by checking a premise** |
 | I-X6 (`explain_cross_conflict`) + M1-T63 | agent-linear | 2026-09-17 | **Corrected the premise I gave it.** The function read nothing live — M1-T13 hoisted the lookup out and it never returned; the real defect was `store` staying in scope beside the thunk. Now structural: takes `~opposite` and **no store**, so re-breaking needs a signature change. Also found the cross-row path is **unreachable from any `.fzn`** (`normalise_terms` merges duplicate coefficients; verified — 0 `pol`, 0 `rup`), so no model can cover it and none was added. Test fires on a wrong answer, not a crash; reddens 2, the only 2 in the suite. Merged as 0916937 |
+| M2-T9 + M1-T59 + I-S4 check | agent-index | 2026-09-17 | Index keyed structurally over `Lit.t` (**`Lit.sanitize` is non-injective** — names would have aliased). M1-T59 fell out of it; 2 of 102 `.pbp` moved, verified. **D-0019's gap NOT closed, verified.** I-S4 is now measured: retiring one cited hole line is reported and veripb still verifies (I-X9 re-derives it); retiring both is reported **and refused**. Break A: index one id high leaves 34/34 models green and veripb **accepts a `pol` citing the wrong line**. Merged as f72e902 |
+| M1-T36 + M1-T45 | agent-search4 | 2026-09-17 | Node = one child dispatched by `branch` plus the root, counted at dispatch; `stats_consistent` checks `nodes = 2·decisions + 1` on **every** `--stats` run. `lvl` differs structurally (99/49 vs 196 markers on `width_sat_depth`). Hole guard **removed on evidence**: 40 previously-refused shapes forced through 3.0.2, 0 rejections, sweep sensitive to its own corruption. 102/102 artefacts identical. Merged as 06302fd. Produced **M1-T66** |
+| M1-T63 (`trace.ml` half) + D-0043 | orchestrator | 2026-09-17 | `trace.ml`'s hedge now names `reject_set_domain` rather than saying SPEC 2.1 "does not admit" a set domain — a subset can be widened, a gate is a line someone must delete. And **D-0038 is resolved as D-0043** |
 
 ## Handoff notes
 
@@ -923,3 +924,42 @@ margin is one.
 Worth repeating for whoever lands M2-T3: *"44 ok, 0 FAIL"* would have been true of a
 harness in which **no lane ran at all**, which is a failure this project has actually had.
 Check the per-instance lane counts, not the total.
+
+### Wave nine closed (orchestrator, 2026-09-17)
+
+Three sessions, all merged. Gate green at **1625 unit checks / 252 matrix checks / 34
+models**, `BAGUETTE_DEBUG=1` clean, peak RSS 55 MB. **M1 is down to two open rows**, and
+`lib/core` is free. **M2-T3 is the next task and it should get an exclusive run.**
+
+**The wave's shape was chosen to make that possible**, and it worked: M2-T3's three
+preconditions are closed rather than pending. M2-T9's index exists; I-S4 is a **measured**
+check instead of an argument; and the I-X6 concern on `explain_cross_conflict` turned out
+to be stale and is now structurally impossible (the function takes no store).
+
+**Two of the three premises I dispatched were wrong, and the agents corrected them.** That
+is now the pattern rather than the exception — five instances this week. `explain_cross_conflict`
+read nothing live; M1-T63's `linear.ml` citation had been deleted by M2-T8. I also closed
+M1-T62 without dispatching it, because M2-T8 had silently killed both halves of its premise.
+**Check the premise before you spend a session on it.**
+
+**M1-T66 is the row to read before M2-T3.** With `Search.bridges` disabled, 34/34 models
+pass and exactly **one** unit check reddens — M1-T55's own text assertion. I verified that
+myself. It is I-X10's phenomenon again: the proof rests on the encoding's own rows, so the
+bridge is correct and its necessity is unobservable. M2-T3 is when that stops being fine,
+because a learned clause citing across levels is precisely what I-S4's level argument does
+not cover. **Do not delete the bridge on the strength of that row** — the task is to make
+its absence observable by something other than a text pin.
+
+**D-0038 is resolved as D-0043**, and how it resolved is worth keeping. I held the record
+until M2-T9 reported, because I had asked that session for evidence. Two unrelated
+consumers then turned out to need the same missing value — M2-T8's `Reason.fact` already
+*is* a bound claim, and M2-T9's index cannot key a `pol` at all, because a `pol`'s content
+is computed by the checker. One use is a feature request; two independent ones are a type
+that is absent.
+
+**Two reporting traps caught sessions this week and both are now in CLAUDE.md.** `dune
+runtest` without `--force` re-runs only what changed, so a session reported "938 ok"
+against a 1576-check suite with no failures and nothing that looked like an error. And
+`dune runtest` does not build `bin/main.exe`, which produced a byte-identical artefact
+comparison for me and a green 34/34 for a deliberately broken change. **Hash the binary
+when you compare, and pass `--force` when you report a count.**
