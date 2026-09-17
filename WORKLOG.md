@@ -15,6 +15,7 @@ git worktree each (`.claude/worktrees/<tag>`), so no two share `_build`'s global
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M1-T65 (measuring first) | `lib/proof/encoding.ml`, `lib/flatzinc/compile.ml`, `test/unit/test_flatzinc.ml` | orchestrator | 2026-09-17 |
 | M2-T8 | **all of `lib/core/**`**, plus the `test/unit/*.ml` its signature change breaks | agent-iface | 2026-09-17 |
 | M1-T29 | `lib/proof/writer.ml`, `test/unit/test_proof.ml` | agent-del | 2026-09-17 |
 
