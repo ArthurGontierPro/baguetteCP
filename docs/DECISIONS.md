@@ -2249,3 +2249,73 @@ only in the nogood and the nogood is still RUP along the trace.
 Making the claim the *asked* bound rather than the recorded one. It would restore standalone
 validity, and it is what D-0035 exists to forbid: the line would then justify a bound that
 is not the one on the trail, and the mismatch is exactly the drift D-0009 cost a round to.
+
+## D-0040  `all_different` does NOT force the direct encoding; it forces an explicit derivation
+
+**Status**: accepted, 2026-09-17. **Establishes** invariant **I-X10**. **Corrects** the
+`M1-T60` roadmap row, which I wrote, and the conclusion it invites. **Governs** M4-T1,
+M4-T2, M4-T3 and M4-T4b. **Read with** D-0019 (a `rup` target is a clause; point 3 is the
+test of when the direct encoding is genuinely forced), D-0027 (cutting-planes
+justifications are permitted), and D-0039/I-S4.
+
+### The property, and why it had gone unstated for a milestone
+
+Every trace line this solver emits is RUP against the `.opb` because **every M1 pruning
+follows from a single model constraint**, whose rows unit-propagate the claim once the
+line's own facts are assumed. That is a property of the propagator set that happens to
+exist — not of the order encoding — and it was written down nowhere. It is also why
+M2-T11 measured 2051 hole splits with zero rejections, and why M1-T57's *false* trace
+line survived ~111k fuzzer runs.
+
+### What I got wrong, and why the error mattered
+
+M1-T60's row said M4's `all_different` ends the property because "a Hall-interval pruning
+removes values with no disequality row behind them". **The conclusion is right and the
+mechanism is wrong.** Bounds-consistent Hall pruning removes no value: it pushes a bound
+out of a saturated interval. That is what makes it *bounds* consistent.
+
+The error is not cosmetic. An invariant phrased about **holes** would have let M4-T1
+through silently — the exact failure M1-T60 exists to prevent — because Hall's first
+violation is a **bound move**. I-X10 is therefore phrased about *how many model
+constraints a pruning rests on*, and says so.
+
+Measured against 3.0.2, on a satisfiable four-variable scene where `x, y, w ∈ 2..4`
+saturate `{2,3,4}` and `z ∈ 2..5` (17 rows):
+
+| line asserted against the `.opb` | 3.0.2 |
+|---|---|
+| `rup +1 z_ge_5 >= 1` — the Hall **bound move** (M4-T1) | **refused** |
+| `rup +1 ~z_ge_3 +1 z_ge_4 >= 1` — Régin's **hole** (M4-T2) | **refused** |
+| `rup +1 ~z_ge_4 +1 z_ge_5 +1 ~x_ge_4 >= 1` — an `int_ne` line, same `.opb` | **verified** |
+
+and both pruned values are genuinely entailed: restricting `z` to `2..4` is UNSAT, and so
+is pinning `z = 3`. These are *true* claims the checker will not take on a `rup`.
+
+### The decision
+
+**M4-T1 does not force the direct encoding.** Hall's reason is a sum of n disequality
+rows, and its justification is a cutting-planes derivation, which **D-0027 already permits
+outright**. M4-T1's obligation is therefore only to emit that derivation as explicit
+`pol` lines *ahead of* its trace line, so the line is RUP in sequence — D-0039's move, one
+step further. **No encoding change at all.**
+
+This is stated as its own decision because "`all_different` forces the direct encoding" is
+the wrong conclusion to draw from I-X10, and it is precisely the conclusion the roadmap row
+invited. Getting it wrong would mean paying for the direct encoding — which is
+width-proportional, and D-0028 is the record of what that costs — to buy something a `pol`
+already provides.
+
+**M4-T2 and M4-T3 are different and the direct encoding *is* forced for them**, by D-0019
+point 3's own test: whether a reason must mention a hole. Régin's reason ("these k values
+are covered by these k variables") and `element`'s ("i is one of these indices") both do.
+**M4-T4b violates more basically than any of them**: the `.opb` carries no row for a
+product, so there is nothing to unit-propagate at any consistency level. (M4-T4a is out of
+scope — `interval.ml` is pure arithmetic and prunes nothing.)
+
+### What is argued rather than measured
+
+That **M3's reification preserves** the property: `int_ne_reif` under a true selector should
+punch a hole whose clause is the M1 hole clause with `~b_ge_1` appended — structurally the
+move `_neN` already makes. I-X10 is phrased to permit a reification literal among the facts.
+Untestable today because M3-T1's `red` definitions do not exist; re-check when they do.
+M4-T3 and M4-T4b are likewise inferred from M4-T1's and M4-T2's measured shapes.

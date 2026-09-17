@@ -102,6 +102,39 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
   space is exhausted, and the proof must independently establish it.
 - **I-S3** Decision level on return from search equals the level on entry.
 
+- **I-X10** Every trace line a propagator emits is RUP against the `.opb` plus the lines
+  already on the page, and the reason is a property of **this propagator set**, not of the
+  order encoding: every M1 pruning follows from a **single model constraint**, whose rows
+  unit-propagate the claim once the facts on the line's own tail are assumed. Holds by
+  enumeration over the whole set — `Linear`, `Lin_eq`, `Int_le`, `Int_lt`, `Int_eq` (one
+  `int_lin_le` row each), `Ne` (`int_lin_ne`'s two big-M rows, the `_neN` selector filled
+  in by the checker's own unit propagation), `Bool2int` and `Bool_clause` (channelling and
+  clause rows). `Ne` is also the **only** thing that punches a hole: it is the sole caller
+  of `Store.remove_with_facts` in `lib/`; `Store.remove`/`Store.fix` have no `lib` callers
+  at all; `Domain.settle` only walks bounds past holes that already exist; and
+  `Domain.of_list` is unreachable because `compile.ml`'s `reject_set_domain` refuses a
+  declared set domain outright.
+
+  A propagator that counts **several** constraints (Hall intervals over n disequalities),
+  or rests on a structure the `.opb` does not carry (Régin's matching, `element`'s value
+  set, a product), breaks this. **It breaks it by a bound move as readily as by a hole**,
+  so an invariant phrased about holes would not see the first violator coming — that
+  phrasing was the orchestrator's, and it was wrong. Measured against 3.0.2 on a
+  satisfiable four-variable Hall scene (`x, y, w ∈ 2..4` saturate `{2,3,4}`, `z ∈ 2..5`):
+  the Hall **bound move** `rup +1 z_ge_5 >= 1` is **refused**, and so is Régin's hole
+  `rup +1 ~z_ge_3 +1 z_ge_4 >= 1`, while an `int_ne` line on the same `.opb` is accepted.
+  Both pruned values are genuinely entailed — restricting `z` to `2..4`, and pinning
+  `z = 3`, each make the model UNSAT — so these are true claims the checker will not take.
+  Such a propagator must derive its pruning explicitly (`pol`/`ia`) **before** its trace
+  line, so the line is RUP in sequence (D-0039's move, one step further), or else force
+  the direct encoding (D-0019 point 3). **Adding a propagator family without classifying
+  it against this invariant is the event I-X10 exists to make visible** — see D-0040 and
+  the closure gate in `test/unit/test_trace.ml`.
+
+  *Status, in I-S4's register*: the enumeration and both Hall measurements are **measured**.
+  That the enumeration stays complete as propagators are added is **argued**, and the
+  closure gate is what converts it into a check.
+
 - **I-S4** A trace line that cites a hole is supported only while that hole's own line is
   live, so **the cited line must outlive the citing line**. Since M1-T57 a settle line is
   RUP against the `.opb` *plus* earlier trace lines rather than standalone (D-0039,
