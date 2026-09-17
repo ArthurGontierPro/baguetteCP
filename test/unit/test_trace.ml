@@ -1206,7 +1206,6 @@ let is4_scene ~retire =
   let oc = open_out opb in
   Encoding.write_opb ~comments:[ "is4" ] encoding oc;
   close_out oc;
-  let n_model = Encoding.n_constraints encoding in
   let oc = open_out pbp in
   (* audit:true because [Writer.is_live] is only maintained under it, and the liveness
      half of I-S4 is what this scene is about. [Writer.conclusion] is deliberately never
@@ -1261,7 +1260,6 @@ let is4_scene ~retire =
   in
   List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp ];
   (try Sys.rmdir dir with _ -> ());
-  ignore n_model;
   result
 
 let test_is4_gate () =
