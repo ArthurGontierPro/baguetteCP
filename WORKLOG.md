@@ -15,7 +15,6 @@ git worktree each (`.claude/worktrees/<tag>`), so no two share `_build`'s global
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M1-T65 (measuring first) | `lib/proof/encoding.ml`, `lib/flatzinc/compile.ml`, `test/unit/test_flatzinc.ml` | orchestrator | 2026-09-17 |
 | M2-T8 | **all of `lib/core/**`**, plus the `test/unit/*.ml` its signature change breaks | agent-iface | 2026-09-17 |
 | M1-T29 | `lib/proof/writer.ml`, `test/unit/test_proof.ml` | agent-del | 2026-09-17 |
 
@@ -161,6 +160,7 @@ work. The owning session picks it up.
 | M1-T61 | orchestrator | 2026-09-17 | The I-X10 closure gate: a classification table asserted exhaustive against a read of `lib/core/prop/`, plus the Hall-bound-move refusal with an accept-side control on the same `.opb`. All three breaks performed; my first attempt at the missing-checker break was invalid (a bad `HOME` falls through to PATH and hits 2.2.2) and `$VERIPB` is the route to it |
 | M1-T64 | orchestrator | 2026-09-17 | `make check` now depends on `fmt-check`, which **verifies** formatting; `make fmt` stays the explicit fixer. `scripts/check_fmt.sh --self-test` runs first on every gate and proves **both** polarities in an isolated throwaway project — refuses unformatted, accepts formatted — so the self-test cannot leave a stray module in this shared checkout. Break measured both ways: unformatted code now fails the gate at exit 2 **and is left alone**, where `make fmt` silently rewrote it and passed |
 | M1-T43 | orchestrator | 2026-09-17 | Confirmed by performing the flip in a throwaway worktree (`bool_clause.ml` is agent-iface's). `bool_reif_unsat` still reports `s VERIFIED UNSATISFIABLE` under a `pb_lit` polarity flip; **six** SAT models catch it, not the five the row claimed. Documented in the model header with the general rule: SAT models are the net for encoding bugs, UNSAT models for refutation bugs. **My first sweep classified all 34 models wrong** — the case pattern was `*ok*` and the script prints `OK` — so the numbers here are from the corrected run |
+| M1-T65 | orchestrator | 2026-09-17 | **Declined as D-0042, on measurement rather than on principle.** The cost is ≈40–58 bytes of `.opb` per unit of **total** declared width, so D-0041's filed gap is real — but total 100 000 is only 4.4 MB / 1 s / 0.3 s verify, and reusing 10 000 as an aggregate would refuse 1 000 variables declared `0..10` (367 kB, 142 ms), an ordinary model. No code. Four reversal triggers named, and the table is in the record so nobody re-derives it |
 
 ## Handoff notes
 
