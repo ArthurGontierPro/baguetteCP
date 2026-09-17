@@ -15,6 +15,7 @@ git worktree each (`.claude/worktrees/<tag>`), so no two share `_build`'s global
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M1-T61 | `test/unit/test_trace.ml`, new `test/models/hall_sat.fzn` + `test/expected/hall_sat.out` | orchestrator | 2026-09-17 |
 | M2-T7 | **all of `lib/core/**`** (store, propagator, engine, search, justify, trace, prop/**), plus `test/unit/`{`test_core`,`test_prop`,`test_engine`,`test_justify`,`test_matrix`,`test_random`,`test_compile`}`.ml` | agent-instid | 2026-09-17 |
 | M1-T54 | `lib/proof/encoding.ml`, `lib/flatzinc/compile.ml`, `test/unit/test_flatzinc.ml`, new `test/models/width_*.fzn` + their `test/expected/` | agent-widthcap | 2026-09-17 |
 
