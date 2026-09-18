@@ -30,9 +30,10 @@ worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 uni
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M2-L6 | all of `lib/`, `test/unit/test_learn.ml`, `test/unit/test_analysis.ml`, `test/unit/dune`, new files under `test/models/` + `test/expected/` | agent-pb | 2026-09-18 |
-| M2-T14 | `test/unit/test_justify.ml`, `test_proof.ml`, `test_mutation.ml`, `test_trace.ml`, `test_core.ml`, `test_matrix.ml`, `test_endtoend.ml` | agent-fmt2 | 2026-09-18 |
 
 _(M2-L3 released 2026-09-18 by agent-learn3 — see `## Completed` and `## M2-L3 handoff`.)_
+
+_(M2-T14 released 2026-09-18 by agent-fmt2 — see `## Completed` and `## M2-T14 handoff`.)_
 
 Two rounds are recorded in `## Completed` below. The rows that stood here on
 2026-09-15 (`integration`, M1-T12, M1-T13) were stale — see the handoff note "the
@@ -210,6 +211,7 @@ work. The owning session picks it up.
 | M2-L1 | agent-learned | 2026-09-18 | `Learned.t` (PB inequality over `Lit.t`, clause = degree-1 case), its runtime instance as a **`Linear` instance** registered through the new `Engine.add`, and its proof-side introduction/deletion through the new `Writer.with_level`. D-0044's central claim **converted**: measured green on all 27 scenes. D-0045's prediction **measured before fixing**, in both formats. 1766 unit checks, 34/34, determinism clean. |
 
 | M2-L3 | agent-learn3 | 2026-09-18 | 1UIP clause learning over order literals, proof-only (**D-0044 fork (ii)**), with conflict-directed backjumping over the **decision closure** and its `rup` derivation at level 0. **I-S4's cross-level debt is discharged** and the check is wider than the invariant's wording. Backjump measured: 31 -> 9 nodes on `backjump_unsat.fzn`. **M1-T66 stays OPEN**: with `Search.bridges` disabled, 35/35 models still pass and no checker rejects — a learned clause citing across levels did NOT make the bridge load-bearing. 1833 unit checks, 267 matrix, 44 mutation, 35/35 models, determinism 35/35 byte-identical |
+| M2-T14 | agent-fmt2 | 2026-09-18 | Format-2.0 vacuity sweep. Three more instances of the M2-L0 defect found and fixed (test_proof 3.0-only lanes resolving 2.2.2 via `$VERIPB`; D-0030's certification in test_mutation writing a 3.0 proof against an env-format `.opb`; 20 blanked-trace controls asserting on exit status alone). Test (c) now checks the claim index by content, so it runs under both formats. |
 
 ## Handoff notes
 
@@ -1751,3 +1753,69 @@ good first task for whoever wants one**, and it is the kind of thing M2-L8 will 
 it measures both formats.
 
 The gate itself runs under 3.0, so `make check` is unaffected.
+
+## M2-T14 handoff, 2026-09-18 (agent-fmt2)
+
+The format-2.0 vacuity sweep. The row existed to answer one question: was the M2-L0 break
+lane fixed in `92e03a1` the only lane passing for a reason other than the one it claimed?
+
+**No. Three more, all the same defect.** In every case an artefact pair disagreed about
+format, the checker refused the file on the GRAMMAR, and a lane asserting a REJECTION took
+that as its evidence — D-0020/D-0030's rule exactly.
+
+1. **`test_proof.ml`, the 3.0-only blocks.** `del range`, the pair spelling, `wipe_level`,
+   the D-0023 one-way door, M1-T51 and M2-L1 all emit `version 3.0` and a labelled `.opb`
+   unconditionally, but resolved their checker through `Checker.find`, which honours
+   `$VERIPB`. Under `VERIPB=~/.local/bin/veripb` those went to the Python 2.2.2, which
+   cannot parse a labelled `.opb`: `3.0_broken.opb:2:1: Expected number.` 18 lanes asserting
+   ACCEPTED failed loudly; the lanes asserting REJECTED passed on the parse error. Fixed by
+   `veripb_v3`, which pairs a format with a binary that can read it — the same shape as
+   `test_justify.ml`'s `reduce_break_checkers`.
+2. **`test_mutation.ml`, `rows_that_refute_alone` — the worst of the three.** This is
+   D-0030's certification that an instance is not hollow. It wrote the `.opb` with a bare
+   `write_opb` (env format) and the proof as literal 3.0 text citing `@c<i>`. Under 2.0 that
+   is an unlabelled `.opb` cited by label, so every row was refused on the grammar and the
+   procedure reported "no row refutes alone" for every instance — the guard against a hollow
+   instance, hollow itself. **`certification_finds_root_unsat` caught it.** That control is
+   the only reason this was visible; do not let anyone tidy it away. Both files now go
+   through `Writer` / `write_opb_for`.
+3. **20 blanked-trace negative controls** (7 in `test_trace.ml`, 13 in `test_matrix.ml`).
+   These were passing for the right reason, but they asserted off the exit code alone and
+   `test_trace.ml` did not even keep the checker's output — so they would have gone green the
+   moment the blanked proof stopped parsing. They now assert the RUP wording.
+
+**Test (c) is done.** `test_justify.ml`'s claim-index lane resolved the reused id by reading
+its 3.0 `@c` label, so under 2.0 it asserted `false` on purpose. It now resolves the id by
+CONTENT — walking the file counting id-minting rules, which is how the checker numbers them
+— so the property is checked in both formats. The 3.0 label check is kept alongside, where
+it cross-validates the counter. **A 2.0 run is no longer permanently red.**
+
+**Both checker wordings, and a correction worth keeping.** The blanked-trace rejection is a
+RUP failure, and both binaries say *"reverse unit propagation"* — so for this rejection the
+usual "they share no substring" reasoning is false, exactly as the environment note now
+says. Both are listed at full strength and either is accepted; the shared fragment is
+deliberately not matched, being the least specific thing either prints.
+
+**One finding left deliberately red, NOT adjusted.** Under 2.0 + 2.2.2, `test_mutation.ml`'s
+`triple_unsat/drop-line` and `lin_unsat/drop-line` report that the checker judged the
+DERIVATION where the lane is registered as rejecting on the grammar. Under 3.0 dropping a
+line un-defines a label and the citation cannot parse; under 2.0 ids are positional, so the
+drop renumbers and the checker judges a real (wrong) derivation. That is a lane finding
+something and saying so, and its own message says not to re-register it to match. **Left
+alone on purpose** — whoever picks this up should decide whether `expect` should be
+format-dependent, and record it, rather than making the red go away.
+
+**No soundness problem found.** Nothing accepted a proof that should have been rejected, in
+either format.
+
+Final: all seven suites 0 FAIL under 3.0 (`dune runtest --root . --force` green repo-wide),
+and 0 FAIL under `BAGUETTE_PROOF_FORMAT=2.0 VERIPB=~/.local/bin/veripb` except the two
+`drop-line` findings above. `test_proof` went 18 FAIL → 0, `test_mutation` 3 → 2,
+`test_justify` 1 → 0. Peak RSS 22 MB (`test_justify`); nothing came near the cap. fmt clean,
+width lint clean.
+
+**The gate still runs under 3.0 only**, so none of this is exercised routinely. If M2-L8 or
+anyone else wants the 2.0 path defended rather than merely swept once, the configuration to
+add is the one in the row: both `BAGUETTE_PROOF_FORMAT=2.0` and `VERIPB` pointing at the
+Python build. Setting only the first checks a 2.0 proof with the 3.0 checker and finds none
+of this.
