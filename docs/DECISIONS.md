@@ -2728,3 +2728,88 @@ integer variables.
 asymmetry favours an earlier cut on the PB path is **argued, not measured** — it follows
 from `rup` needing no intermediate lines and `pol` needing one per step, but no byte of ours
 has been counted. M2-L8 converts it or refutes it.
+
+## D-0045  SPEC §3.4 and restarts: the question raised, with the finding it turned up
+
+**Status**: **OPEN — a question, not a decision.** Raised 2026-09-18 by the orchestrator as
+**M2-L9**, whose row says in terms: *raise it; do not decide it unilaterally.* `docs/SPEC.md`
+is the authority (CLAUDE.md), so a change to §3.4 goes through a record with a verdict in
+it. This record has no verdict. It exists so that whoever writes one is not starting from a
+blank page, and because **raising it turned up something that bears on M2-L1/L3/L4 right
+now**, whether or not restarts are ever enabled.
+
+### The question
+
+SPEC §3.4 fixes the default as *"first-fail variable selection, min-value branching,
+depth-first, with restarts disabled"*. M2-L0 … M2-L8 add clause and then PB learning. In
+CDCL, learning and restarts are complementary rather than independent: much of a learned
+constraint's value is realised on a **different** region of the search tree from the one
+that produced it, and restarting is the mechanism that reaches that region. With restarts
+off, a learned constraint mostly prunes within the subtree it was learned in, and the
+sequence recovers a fraction of its benefit. Nogood-recording-from-restarts (Lecoutre et
+al.) is unavailable to us for the same reason — its entire premise is the restart.
+
+So: **should §3.4 keep restarts disabled once learning works?** Not answered here.
+
+### What the proof would cost — less than expected
+
+The instinct is that restarts fight **I-X4** (*the proof is append-only and never rewound;
+backtracking becomes deletion, not truncation*). They do not. A restart is a backjump to
+level 0 — the operation the solver already performs and already logs. `Writer.wipe_level l`
+retires every constraint tagged at level `>= l`, so a restart is `wipe_level 1`, and
+`del_run` already bounds the number of lines that costs (M1-T29, D-0024). **I-S3** (level on
+return equals level on entry) is satisfied for the same reason: a restart from depth *d* is
+*d* levels of the unwinding that already exists. And §3.4's own second sentence — *"every
+branching decision and every backtrack MUST be reflected in the proof"* — already covers a
+restart normatively, because a restart **is** a backtrack.
+
+The cost is therefore not in the proof machinery. It is in completeness, below.
+
+### Where the real cost is: I-S2
+
+**I-S2** says `=====UNSATISFIABLE=====` is printed only after the space is exhausted, and
+the proof must independently establish it. Restarts with a fixed cutoff make search
+**incomplete** — a restart discards the remaining subtree without refuting it. Completeness
+is restored by an increasing restart limit (Luby, geometric), or by learning, because the
+accumulated learned constraints stop the search re-entering what it has already refuted.
+
+That gives a sequencing argument worth recording even before the verdict: **restarts must
+not be enabled before learning works.** Enabled earlier they would not be a tuning
+parameter, they would be a soundness bug against I-S2, and one the model suite would very
+likely not catch — 34/34 can pass while an UNSAT answer has stopped being earned.
+
+### The finding this raised, which does NOT wait for the verdict
+
+`Writer.wipe_level l` deletes every constraint **tagged at level `>= l`**. A learned
+constraint exists precisely to outlive the conflict that produced it. So:
+
+> **A learned constraint tagged at the decision level it was learned at is deleted by the
+> very backjump that follows learning it.** It must be a level-0 object, or the `del` that
+> retires its level takes it with it.
+
+This is not a restart problem; restarts only make it obvious. It is a constraint on
+**M2-L1** (proof-side introduction and deletion), **M2-L3** (attach the clause at the
+backjump level, not the level being retired — the row already says so, and this is *why*)
+and **M2-L4** (the retention policy must own the constraint's lifetime; if `wipe_level`
+also owns it, the two will double-delete and break **I-X2**, which M2-L4's test (a) asks
+about). Recorded here rather than left to be discovered in a rejected proof.
+
+### What decides it, and what a verdict owes
+
+**M2-L8's measurement**, not this record and not a citation. Deciding it now would be
+deciding it without the numbers, which is the sequencing M2-L9 was given last place for.
+
+A verdict that enables restarts owes: the named policy and its parameters in §3.4 (a policy,
+not a constant); the I-S2 completeness argument written out for *that* policy; a
+determinism argument, since the gate requires two runs of one binary to be byte-identical
+and a restart schedule driven by anything but a deterministic counter breaks it; and a proof
+artefact from a model that actually restarts, verified by both checkers.
+
+A verdict that keeps restarts disabled owes only the measurement and a sentence in §3.4
+saying it was considered against learning and declined — so the next session does not
+re-raise it from scratch.
+
+**Register**: the proof-cost analysis above is **argued from the code** (`wipe_level`,
+`del_run`, I-X4, I-S3), not measured — no proof containing a restart has ever been emitted
+or checked. The `wipe_level` finding **is** grounded: `lib/proof/writer.ml:764` computes its
+doomed set as every id tagged at level `>= l`.
