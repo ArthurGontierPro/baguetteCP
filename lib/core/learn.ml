@@ -33,8 +33,19 @@
    often the cut converts, so that claim is measured rather than assumed, and M2-L4 has
    the number when it writes the retention policy.
 
-   So the learned clause here is exactly what (ii) says: sound, on the page, correctly
-   deleted, and not propagating. What it does NOT do is drive the backjump, and this
+   **THE LAST CLAUSE OF THAT IS NO LONGER TRUE, and the fork was resolved from the other
+   end.** This said "the learned clause here is ... not propagating", and M2-L12 gave the
+   clause a propagator (lib/core/prop/clause.ml, registered by
+   [Search.register_learned]). M2-L13 then removed the fork itself: D-0054 says the
+   conversion question was the wrong one, because [to_linear_row] is a PROOF-side test,
+   and lib/core/prop/pb.ml propagates the learned row as a PB constraint over the order
+   literals it already names whether or not it converts. So (i) is not "restrict the cut"
+   any more and (ii) is not "proof-only" any more; what survives of this section is the
+   measurement [l_converts] takes and the LOOP argument above, which is the reason a
+   learned constraint needs a consumer at all.
+
+   So the learned clause here is exactly what (ii) said: sound, on the page, correctly
+   deleted -- and, since M2-L12/M2-L13, propagating. What it does NOT do is drive the backjump, and this
    module does not pretend otherwise -- see the next section, which is the part a reader
    will otherwise assume is the 1UIP cut's job.
 
@@ -209,7 +220,11 @@ type t = {
   l_cut : Analysis.t; (* the 1UIP cut it came from *)
   l_closure : Analysis.t; (* the decision closure the backjump rests on *)
   l_levels : int list; (* decision levels the conflict rests on, DESCENDING *)
-  l_converts : bool; (* would [Learned.to_linear_row] accept it? measured, not used *)
+  l_converts : bool;
+      (* Would [Learned.to_linear_row] accept it? MEASURED, NOT USED, and since M2-L13
+         that is the whole of what the predicate is for: D-0054 took it out of the
+         propagation path, so this is a statistic about the SHAPE of the cut and never a
+         gate on whether it may propagate. *)
   l_lbd : int;
       (* M2-L4's retention score: the number of distinct decision levels the MINIMISED
          clause's literals sit at -- Glucose's "literal block distance". Taken after

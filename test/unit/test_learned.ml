@@ -626,10 +626,17 @@ let test_determinism () =
 (* Test (f). I-X10 says every pruning must close to the .opb, and test_trace.ml's gate
    fires when a new module appears in lib/core/prop/ without a classification.
 
-   What the roadmap row expected was that red line. It did not come, and the reason is
-   the row's own architecture rather than a gap: a learned constraint is instantiated as
-   a [Linear] instance, so NO module appears in lib/core/prop/ and there is no new family
-   to classify. The gate is behaving correctly by staying silent.
+   What the M2-L1 roadmap row expected was that red line. It did not come then, because a
+   learned constraint was instantiated as a [Linear] instance and no module appeared in
+   lib/core/prop/ at all.
+
+   **M2-L13 MADE IT COME, and that is the gate working rather than a regression.**
+   D-0054 replaced the [Linear] instantiation with lib/core/prop/pb.ml, a slack
+   propagator over order literals, so there IS a new family now and test_trace.ml's I-X10
+   table had to classify it -- Single_row, with the standing of the order-encoding ladder
+   rows spelled out there. The check below is unchanged and still passes, because what it
+   asserts is narrower and still true: [learned.ml] itself is not a propagator and does
+   not live in prop/.
 
    That is not the end of the obligation, though, and this section states the part that
    survives. [Linear] is classified [Single_row] because its [Combine] is based on
@@ -657,10 +664,11 @@ let test_ix10_no_new_family () =
   | Some r ->
       let on_disk = Array.to_list (Sys.readdir (Filename.concat r prop_dir)) in
       check "(f) lib/core/prop/ was read and is not empty" (on_disk <> []);
-      check
-        "(f) I-X10: learning added NO module to lib/core/prop/, so test_trace.ml's \
-         closure gate correctly does not fire"
+      check "(f) I-X10: learned.ml is not a propagator family, so it adds no module here"
         (not (List.mem "learned.ml" on_disk));
+      check
+        "(f) ...while M2-L13's propagator IS one, and test_trace.ml's gate classifies it"
+        (List.mem "pb.ml" on_disk);
       check "(f) and learned.ml is where it belongs, in lib/core/"
         (Sys.file_exists (Filename.concat r "lib/core/learned.ml")));
   (* The obligation that does survive: the introduction is a line, and it precedes any

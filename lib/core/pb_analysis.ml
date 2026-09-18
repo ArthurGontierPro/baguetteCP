@@ -744,10 +744,18 @@ let to_string (t : t) =
       lib/core/reduce.ml gives -- dropping [a mod d] from a non-falsified term removes it
       from both the slack sum and the degree -- and it dominates [round_to_one] as
       [round_to_one] dominates [division].
-   2. A RUNTIME INSTANCE for the learned row. [Learned.instance] already builds one when
-      [to_linear_row] accepts, and the counters here say how often that is; what is
-      missing is the retention policy (M2-L4) that decides which to keep.
+   2. A RUNTIME INSTANCE for the learned row. **DONE, M2-L13, and not the way this said.**
+      It read "[Learned.instance] already builds one when [to_linear_row] accepts". That
+      was the plan D-0054 rejected: [to_linear_row] is an algebraic identity over the
+      DECLARED box, a proof-side test standing in for a solving-side one, and gating
+      propagation on it means propagating only the rows the proof pipeline happens to
+      emit in a convertible shape. [Learned.instance] is gone; [Learned.pb_instance]
+      builds a lib/core/prop/pb.ml slack propagator over the order literals the row
+      already names, which always exists, and [Search.register_learned_pb] registers it
+      with the retention citation M2-L4's policy needs.
    3. BACKJUMPING ON THE PB ROW. This row deliberately does not: the backjump still rests
       on lib/core/learn.ml's decision closure, because the levels a derived row names are
       not a dependency set any more than a 1UIP cut's are, and M2-L3 has the argument
-      written out. A PB row that propagates at runtime would change that calculation. *)
+      written out. **M2-L13 made the premise of the last sentence true** -- a PB row DOES
+      propagate at runtime now -- so "that would change the calculation" is no longer
+      hypothetical and is the open question this note hands on. *)

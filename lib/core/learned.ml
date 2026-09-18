@@ -27,12 +27,23 @@
    form [Opb] and the checker want and the form the reduction rules of M2-L5 assume.
 
    ---------------------------------------------------------------------------
-   The bet, and exactly where it holds -- MEASURED, M2-L1
+   The bet -- AND M2-L13 COLLECTED IT THE OTHER WAY (D-0054)
    ---------------------------------------------------------------------------
 
-   docs/ROADMAP.md M2-L1 bets that "a learned row is exactly what [Linear] already
-   propagates -- no new propagator family if this holds". It holds, with a boundary that
-   is worth stating precisely because M2-L3 will run into it:
+   docs/ROADMAP.md M2-L1 bet that "a learned row is exactly what [Linear] already
+   propagates -- no new propagator family if this holds". **The bet is LOST, deliberately,
+   and losing it is M2-L13.** D-0054's reason is one sentence: a PB line for proof logging
+   and a PB explanation for solving are different objects, and the conversion below
+   decides whether a row may propagate by an ALGEBRAIC IDENTITY OVER THE DECLARED BOX --
+   a proof-side test doing a solving-side job. What replaced it is
+   lib/core/prop/pb.ml, a slack propagator over the order literals the row already names,
+   instantiated by [pb_instance] at the bottom of this file; [Linear] is untouched and
+   lib/core/prop/clause.ml is now that propagator's degree-1 face, so the family count
+   went up by one and down by nothing.
+
+   The section below is kept BECAUSE the boundary it states is still exactly right about
+   [to_linear_row], which survives as the measured counter [Search.n_pb_converts]. Read it
+   as a fact about that predicate, not as a description of how a learned row propagates:
 
      - In the PROOF, D-0044 is right without qualification: the order literals are real
        0-1 variables of the .opb and a [Learned.t] is written out by [to_opb] with no
@@ -61,8 +72,8 @@
        to the shapes above or accept that the learned constraint is proof-only until a
        propagator for it exists. Recorded here rather than discovered there.
 
-   Nothing in this module widens [Linear]. It builds a [Linear.t] and hands it to
-   [Propagator.pack], which is the whole of "no new propagator family".
+   Nothing in this module widens [Linear], and since M2-L13 nothing in it builds a
+   [Linear.t] either.
 
    ---------------------------------------------------------------------------
    Why the [Linear.t] is built here instead of through [Linear.make]
