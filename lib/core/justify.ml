@@ -158,6 +158,12 @@ type ctx = {
 let create ~writer ~encoding =
   { writer; encoding; memo = ref []; stated = Hashtbl.create 64 }
 
+(* The writer a [ctx] emits through. [Learned] needs it to put a constraint on the page
+   with a rule this module has no [Explanation.t] for -- a learned constraint is not a
+   pruning's justification, it is a new constraint -- and asking for the field is more
+   honest than adding an [Explanation] constructor that means "and also remember this". *)
+let writer ctx = ctx.writer
+
 let find_memo ctx (e : Explanation.t) =
   let rec go = function
     | [] -> None
@@ -179,6 +185,22 @@ let wipe_level ctx level =
   Hashtbl.filter_map_inplace
     (fun _ (s : stated) -> if s.s_level < level then Some s else None)
     ctx.stated
+
+(* Emit at a chosen level -- [Writer.with_level] with the [ctx]'s two side tables kept
+   honest, and the call every learned constraint goes through (M2-L1, D-0045).
+
+   Nothing extra has to be done to them, and that is worth one sentence rather than
+   leaving a reader to check: [remember] and [state_clause] both stamp their entry with
+   [Writer.current_level] at the moment they are called, and [with_level] moves that
+   level for real, so a line emitted inside the bracket is remembered at the bracketed
+   level and [wipe_level] leaves it alone for exactly as long as the writer does. The two
+   structures cannot drift here for the same reason [wipe_level] above cannot let them
+   drift: there is one source of truth for the level and both read it.
+
+   Use it for a constraint that must OUTLIVE the level it was derived at -- which today
+   means a learned constraint and nothing else. Every other line in this project belongs
+   to the branch that derived it and is retired with it. *)
+let with_level ctx level f = Writer.with_level ctx.writer level f
 
 (* ------------------------------------------------------- the claim index (M2-T9) *)
 

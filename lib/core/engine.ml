@@ -141,7 +141,7 @@ let () =
 (* ------------------------------------------------------------------- engine *)
 
 type t = {
-  instances : Propagator.instance array;
+  mutable instances : Propagator.instance array;
   (* var -> ids of the propagator instances that read it. Built once at [create] time
      from each instance's [inst_vars]; instances never change their variable set after
      that, so the table does not need to be rebuilt per call. *)
@@ -150,7 +150,7 @@ type t = {
      [instances]) because that is what the watcher lists hold. Any id with no instance
      gets [wake_on_any]: an unknown instance is one whose reads are unknown, and the safe
      answer for an unknown reader is always "wake it". *)
-  triggers : trigger array;
+  mutable triggers : trigger array;
 }
 
 let create ?(trigger = default_trigger) (instances : Propagator.instance list) : t =
@@ -177,6 +177,62 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
   { instances = Array.of_list instances; watchers; triggers }
 
 let n_instances t = Array.length t.instances
+
+(* ------------------------------------------------- registering a LEARNED constraint *)
+
+(* The id the next [add] will demand, which is also the id [Propagator.pack] must be
+   given. Exposed rather than left to the caller to compute from [n_instances], because
+   the two are the same number only because [add] keeps them so, and a caller that
+   derived it for itself would silently stop agreeing the day that stops being true. *)
+let next_id t = Array.length t.instances
+
+(* Register one more propagator instance, AFTER [create] -- M2-L1's half of "instantiate
+   a learned constraint as a Linear instance registered with the engine".
+
+   Three things this has to get right, each of which is an existing invariant of this
+   file rather than a new rule:
+
+   1. [propagate] indexes [t.instances] BY ID ([t.instances.(id)]) and bounds its queue
+      by [n_instances], so an instance's id must equal its position. [create] gets that
+      by construction from a list built in order; here it is checked, loudly, because a
+      learned instance's id comes from a caller and a wrong one would silently make
+      [propagate] run the wrong propagator -- which is a wrong pruning attributed to the
+      right constraint, the exact shape I-T4 exists to catch.
+   2. The watcher table is the ONLY thing that tells [check_attribution] an instance is
+      allowed to prune a variable (its second arm). A learned row over variables this
+      engine has never seen is therefore registered against those variables here, or its
+      every pruning is a mis-attribution.
+   3. [triggers] is indexed by id too and is sized at [create]; it grows here. The
+      default for an id with no entry is [wake_on_any], so a short array is never
+      *unsound* -- it just wakes more than it must -- but it would make a learned
+      instance's trigger unreachable, which is a silent loss of the M2-T5 mask.
+
+   Appending copies both arrays. That is O(n) per learned constraint and is the right
+   trade for now: learning adds constraints at a rate bounded by conflicts, not by
+   propagations, and an amortised-growth buffer here would be a second representation of
+   "which instances exist" for no measured gain. Say so in M2-L4 if the retention policy
+   makes it a hot path. *)
+let add ?(trigger = default_trigger) (t : t) (inst : Propagator.instance) =
+  let expected = next_id t in
+  if inst.Propagator.id <> expected then
+    invalid_arg
+      (Printf.sprintf
+         "Engine.add: instance %s was packed with id #%d, but this engine's next id \
+          is           #%d. Engine.propagate indexes its instance array BY ID, so the \
+          two must           agree; pack with Engine.next_id."
+         inst.Propagator.inst_name inst.Propagator.id expected);
+  t.instances <- Array.append t.instances [| inst |];
+  List.iter
+    (fun v ->
+      let cur = try Hashtbl.find t.watchers v with Not_found -> [] in
+      if not (List.mem inst.Propagator.id cur) then
+        Hashtbl.replace t.watchers v (inst.Propagator.id :: cur))
+    inst.Propagator.inst_vars;
+  if Array.length t.triggers <= inst.Propagator.id then (
+    let grown = Array.make (inst.Propagator.id + 1) wake_on_any in
+    Array.blit t.triggers 0 grown 0 (Array.length t.triggers);
+    t.triggers <- grown);
+  t.triggers.(inst.Propagator.id) <- trigger inst
 
 let trigger_of t id =
   if id >= 0 && id < Array.length t.triggers then t.triggers.(id) else wake_on_any
