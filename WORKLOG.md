@@ -10,7 +10,12 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
-**Wave twelve is running: M2-L3, ALONE.** The M2-T3 briefing says twice that this row
+**Wave thirteen is running: M2-L5 (agent-reduce) and M2-L10 (agent-cover).** Disjoint by
+construction — one is `lib/core` + `test_justify.ml`, the other is `test/models` +
+`test/expected` + `test_learn.ml`. M2-L4 and M2-L6 are deliberately NOT dispatched: both
+are measurement rows and M2-L10 is what gives them something to measure.
+
+Previously: **wave twelve was M2-L3, ALONE.** The M2-T3 briefing says twice that this row
 should have `lib/core` exclusively, and M2-T10 — the obvious partner — needs a hook in
 `search.ml`, so there is no honest parallel task. Waves ten and eleven are merged,
 released and pushed. Wave ten was dispatched 2026-09-18 by the orchestrator: one git worktree each
@@ -20,6 +25,8 @@ worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 uni
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M2-L5 | NEW `lib/core/reduce.ml`, `lib/core/justify.ml`, `test/unit/test_justify.ml`, `test/unit/dune` | agent-reduce | 2026-09-18 |
+| M2-L10 | `test/models/**`, `test/expected/**`, `test/unit/test_learn.ml` | agent-cover | 2026-09-18 |
 
 _(M2-L3 released 2026-09-18 by agent-learn3 — see `## Completed` and `## M2-L3 handoff`.)_
 
