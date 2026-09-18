@@ -3032,3 +3032,133 @@ change. Deleting the reasoning because the format went would throw away the expe
   to twenty blanked-trace controls, and resolving the claim-index id by **content** rather
   than by label — survive and are keepers. Said plainly because the sequencing was mine, not
   a failure of that session.
+
+## D-0047  M2-L6's negative result is a *prediction*, and this is its falsifier
+
+**Status**: **RECORDED as a prediction, with a falsifier that is being run right now.**
+Written 2026-09-18 by the orchestrator, at the request of `docs/EXPLANATION-REVIEW.md` §4,
+**before** M2-L11 reports. The order matters: a prediction written down after the
+experiment reports is not a prediction.
+
+### Why this needs a record at all
+
+M2-L6 returned an honest negative, and the finding currently lives in **one commit message
+and one module header**. That is not enough to stop the next session re-running the
+experiment and re-deriving the same negative from zero — which is a real risk, because the
+row that would do it (M2-L7, `Saturate`) reaches for the same machinery. A session that
+starts from this record starts from *"carry the ladder rows into the reason"* instead.
+
+### The finding
+
+PB conflict analysis works: where the PB path succeeds it derives the **empty
+contradiction**, which is strictly stronger than the clause it replaces — it entails it,
+and the clause path has no route to it. But it is **degenerate as a propagation result**.
+Measured over the suite: `pb-stronger` at **36 of 36** learned rows, and every one of those
+36 is the degenerate case. A scene where a non-trivial learned inequality outpropagates its
+clause **was looked for and not found**.
+
+### The cause, and the prediction that follows
+
+**Our integer propagator is stronger than PB propagation on the same row.** `3a + 2b <= 14`
+with `lo(b) = 4` lets `Linear` deduce `a <= 2`; the row *alone* has slack 6 against pivot
+coefficient 3, so PB propagation on it deduces nothing. The strength is not in the row — it
+is in the **order-encoding ladder implications, and D-0028 puts those in separate `.opb`
+rows**. `Linear` already builds model-row-plus-ladder-chain as an `Explanation`
+(`Order_reason.weaken_declared`, D-0010); it never builds it as a *row*, so the PB analysis
+never sees it.
+
+> **The prediction, stated so that it can fail.** PB learning will keep producing degenerate
+> rows **for exactly as long as a reason is the model row without its ladder chain** — no
+> matter which reduction rule, stopping criterion or elimination order is used. The
+> degeneracy is a property of the *reason*, not of the analysis.
+
+### The falsifier
+
+**M2-L11**: carry the ladder rows into the reason, then count learned rows that are not the
+empty contradiction. Two outcomes, and both are informative:
+
+- **Non-degenerate rows appear.** The prediction holds, the cause was the reason, and
+  M2-L6's expected gain was simply banked in the wrong row.
+- **They do not.** The prediction is **wrong**, and that is the more interesting result: it
+  would locate the weakness in the elimination or reduction step rather than in the reason,
+  and it would make M2-L7 (`Saturate`) the next thing to try rather than a detour.
+
+Whoever closes M2-L11 should come back and mark this record with which one happened.
+
+### Scope
+
+This is a statement about **this solver's encoding** (D-0028), not about PB learning in
+general. D-0044 already makes that distinction for the learned-object type and it applies
+here unchanged: the degeneracy is downstream of the order encoding, so nothing here
+generalises to a solver whose propagators and whose PB rows express the same strength.
+
+## D-0048  Is a reified explanation a research output? D-0003's (a)-claim is coupled to an unrecorded answer
+
+**Status**: **OPEN — a question, not a decision.** Raised 2026-09-18 by the orchestrator out
+of `docs/EXPLANATION-REVIEW.md` §2, which reaches a **different conclusion from
+`GCS-COMPARISON.md` §6** on the same evidence. This record follows D-0045's pattern: it has
+no verdict, and it exists so that whoever writes one is not starting from a blank page.
+
+D-0026 already settled the part that was settleable — (a) and (b) are **layered, not
+alternatives**: reasons are declarative data, justifications stay the reified cutting-planes
+expression. What is left open is narrower and is stated below.
+
+### The two documents disagree
+
+`GCS-COMPARISON.md` §6 puts it sharply:
+
+> we have a reified cutting-planes expression on the trail where the mature solver has a
+> closure, and nobody has yet said what the reified form buys. That is evidence against (a)
+> being the productive axis.
+
+`EXPLANATION-REVIEW.md` §2 answers that this **follows only if explanations are a solver
+internal**, and that there is an answer from the literature side which is not a performance
+argument:
+
+> A closure cannot be printed, diffed, compared against a published explanation, lifted into
+> a schema, or shipped anywhere. A reified `Combine` tree can.
+
+Every use of explanations *outside* a solver's own conflict analysis needs them as data:
+comparing a generated explanation against Schutt et al.'s hand-written `cumulative`
+explanation; cataloguing explanation schemas per constraint; handing a derivation to an
+external justifier; step-wise explanation systems consuming solver output (Bogaerts/Guns,
+and the 2025 certifying-solvers work that replaces MUS search with proof-log reading). GCS's
+own "higher-order" content is a typed serialisable witness for an external justifier — they
+reified theirs too, at a different boundary.
+
+### The coupling, which is the actual content of this record
+
+> **Retiring `Deferred` / `Combine` in favour of a closure on runtime grounds is only sound
+> if the project has *also* decided that explanations are not a research output.** Those are
+> two decisions. Only one of them has ever been discussed, and it is the wrong one to decide
+> first.
+
+The failure mode this record exists to prevent is specific and quiet: a future session
+profiles, finds the reified tree costs more than a closure, and retires it — thereby
+deciding the research question **by accident, in a performance commit**, with nothing in the
+tree recording that a question was decided.
+
+### What would close it
+
+Either direction is fine; leaving it implicit is not.
+
+- **Close (a) by argument**: name at least one consumer of explanations outside conflict
+  analysis that this project intends to serve, and the form it needs them in. Exportability
+  then becomes a stated requirement, and any later profiling argument has to beat it rather
+  than ignore it.
+- **Abandon (a) explicitly**: record that explanations here are a solver internal and that
+  the proof log is the only artefact anyone outside is meant to read. `Deferred`/`Combine`
+  then stand or fall on runtime alone, and D-0003's (a)-claim is withdrawn rather than left
+  hanging.
+
+**It should not be settled by a profiler**, which is what will happen by default.
+
+### Bearing on scheduled work
+
+**M4-T1 is where this stops being abstract** and is the reason for raising it now rather
+than later. It is the first derivation that actually needs `Combine` / `Weaken` /
+`Model_row` (see that row, and `EXPLANATION-REVIEW.md` §3): a Hall justification cites many
+model rows in one tree. If the reified form is ever going to demonstrate what it buys, that
+is the row where it does — and equally, if it is going to look like expensive ceremony, that
+is where it will. Deciding this *before* M4-T1 means the row is read as evidence; deciding
+it after means the row is read as a verdict already reached.
