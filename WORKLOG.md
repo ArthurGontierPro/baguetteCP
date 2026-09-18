@@ -15,6 +15,7 @@ git worktree each (`.claude/worktrees/<tag>`), so no two share `_build`'s global
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M2-T3 **plan only** (no `lib/` code) | `docs/ROADMAP.md`, `docs/DECISIONS.md`, `WORKLOG.md` | orchestrator-plan | 2026-09-18 |
 
 Two rounds are recorded in `## Completed` below. The rows that stood here on
 2026-09-15 (`integration`, M1-T12, M1-T13) were stale — see the handoff note "the
