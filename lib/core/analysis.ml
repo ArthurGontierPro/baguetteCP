@@ -272,7 +272,41 @@ let decision_cut =
     postcondition = every_conflict_level_node_is_a_root;
   }
 
-let criteria = [ one_uip; conflict_side; decision_cut ]
+(* The FULL closure: resolve every non-root node away, at every level, until the cut is
+   over roots alone. Used with [~scope:Everywhere] below and with nothing else -- under
+   the default scope the walk cannot expand a node below the conflict level, so this
+   criterion would simply never be satisfied and [stopped_by_criterion] would report
+   [false]. [analyse] says so rather than leaving it to be discovered.
+
+   M2-L3 needs it and [decision_cut] is not it. [decision_cut] stops when every
+   CONFLICT-LEVEL node is a root and leaves the lower levels unexpanded, so the set of
+   levels its cut names is NOT a dependency set: a node at level j that is not a root
+   rests on further facts, at unknown levels, that the cut does not name. A backjump that
+   skipped a level on that basis would skip a branch nothing had refuted. This criterion
+   resolves until no such node is left, so every node IS a decision, a declared bound or
+   a factless pruning, and the levels it names really are the levels the conflict rests
+   on. See lib/core/learn.ml for the argument written out. *)
+let every_node_is_a_root v = List.for_all (fun n -> n.root) v.v_nodes
+
+let decision_closure =
+  {
+    crit_name = "decision-closure";
+    stop = every_node_is_a_root;
+    postcondition = every_node_is_a_root;
+  }
+
+let criteria = [ one_uip; conflict_side; decision_cut; decision_closure ]
+
+(* Which nodes the walk is allowed to resolve away.
+
+   [At_conflict_level] is M2-L2's own and the default: 1UIP and its siblings only ever
+   need to resolve the conflict level, and expanding below it would make every cut the
+   decision closure. [Everywhere] is M2-L3's, for [decision_closure] above. The
+   termination argument is unchanged and does not depend on which one is in force: every
+   fact a resolution introduces has a support strictly below the step's own
+   ([support_of]'s [~before]), so the largest expandable support strictly decreases
+   whatever the set of expandable nodes is. *)
+type scope = At_conflict_level | Everywhere
 
 (* ------------------------------------------------------- the walk *)
 
@@ -342,8 +376,8 @@ let add_node nodes n =
 
 exception Bad of error
 
-let analyse store (c : Store.conflict) ~(vars_of : int -> Var.t list option)
-    ~(criterion : criterion) : (t, error) result =
+let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
+    ~(vars_of : int -> Var.t list option) ~(criterion : criterion) : (t, error) result =
   let conflict_level = Store.level store in
   let max_resolutions = Store.trail_length store + 1 in
   let o1 = ref 0 and scanned = ref 0 and resolutions = ref 0 in
@@ -408,7 +442,7 @@ let analyse store (c : Store.conflict) ~(vars_of : int -> Var.t list option)
             r.Store.reason)
       holes
   in
-  let expandable n = (not n.root) && n.level = conflict_level in
+  let expandable n = (not n.root) && (scope = Everywhere || n.level = conflict_level) in
   let best_expandable nodes =
     List.fold_left
       (fun acc n ->
@@ -488,8 +522,20 @@ let facts t : Reason.t = List.map (fun n -> n.fact) t.nodes
    a weakening but a wrong line (lib/core/reason.ml's header). *)
 let lits t = List.map Lit.negate (Reason.lits (facts t))
 let nodes t = t.nodes
+let folds t = t.folds
+let antecedents t = t.antecedents
 let at_level t l = List.filter (fun n -> n.level = l) t.nodes
 let cited_levels t = List.sort_uniq Int.compare (List.map (fun n -> n.level) t.nodes)
+
+(* The DECISION levels the cut names, descending -- level 0 dropped, because level 0 is
+   not a decision and a fact still at its declared bound is recorded there too.
+
+   Read this off a cut produced with [~scope:Everywhere] and [decision_closure] and it is
+   a sound dependency set: every node is then a root, so every node is a decision, a
+   declared bound (level 0, dropped) or a factless pruning (globally valid, but recorded
+   at the level it happened at and therefore kept -- conservative, which is the safe
+   direction here). Read it off a 1UIP cut and it is NOT one; see [decision_closure]. *)
+let decision_levels t = List.rev (List.filter (fun l -> l > 0) (cited_levels t))
 
 (* Where a clause over this cut would become asserting: the second-highest level it
    cites, which is the level M2-L3 attaches the learned clause at. 0 when the cut cites

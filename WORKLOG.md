@@ -20,7 +20,8 @@ worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 uni
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M2-L3 | **all of `lib/` and all of `test/`** — it runs alone, as the briefing requires | agent-learn3 | 2026-09-18 |
+
+_(M2-L3 released 2026-09-18 by agent-learn3 — see `## Completed` and `## M2-L3 handoff`.)_
 
 Two rounds are recorded in `## Completed` below. The rows that stood here on
 2026-09-15 (`integration`, M1-T12, M1-T13) were stale — see the handoff note "the
@@ -196,6 +197,8 @@ work. The owning session picks it up.
 | M2-L2 | agent-cut | 2026-09-18 | **The cut, as data** — learns nothing, backjumps nowhere, so it was oracle-tested before anything depends on it. The criterion is a record carrying its **own postcondition**; three ship (`one_uip`, `conflict_side`, `decision_cut`), and `conflict_side`'s two-conflict-level cut is **accepted**, with an explicit check that `one_uip`'s postcondition is false of it — the line that would have reddened had 1UIP been written as an invariant of the cut, which is exactly what D-0044's amendment warned about and what M2-L6 needs. Holes load-bearing and measured: strip the folded `int_ne` facts and the cut is brute-force SAT. +64 checks. Merged as `a229509` |
 | M1-T66 | agent-bridge | 2026-09-18 | **Row NOT closed — the prize is out of reach in M1, and here is the proof.** The bridge's absence is now observable at the **derivation** rather than by grepping proof text: `Search.bridges` files a `Search.bridge` per settle (decision, literal assumed, bound settled onto, holes crossed, and which line states each hole at which level) and one `Trace.record_citation` per named hole, so a **decision** settle enters the I-S4 audit it was entirely outside of before (`Trace.emit` skips level-start entries, so a decision push writes no line and recorded no citation). Two scenes in `test_matrix.ml` read those records. Measured with `bridges` made a no-op: `bridge_derivation` reddens **at the derivation**, with a message saying the settle step is missing — while **veripb still accepts the proof**. That is route 1 answered in the negative and answered *analytically*: the settle is re-derivable from the page by two routes, the hole's own trace line (M1-T56) and, under it, `int_lin_ne`'s big-M `.opb` rows (I-X10) which no `w` can retire. `br_unnamed` is empty in both scenes, i.e. the page always names the hole. **No proof bytes change.** +15 unit checks (1723 -> 1738), 34/34, peak RSS 36 MB. Commits `7ae1843`, `6d08c4b` on `wave11-bridge` |
 | M2-L1 | agent-learned | 2026-09-18 | `Learned.t` (PB inequality over `Lit.t`, clause = degree-1 case), its runtime instance as a **`Linear` instance** registered through the new `Engine.add`, and its proof-side introduction/deletion through the new `Writer.with_level`. D-0044's central claim **converted**: measured green on all 27 scenes. D-0045's prediction **measured before fixing**, in both formats. 1766 unit checks, 34/34, determinism clean. |
+
+| M2-L3 | agent-learn3 | 2026-09-18 | 1UIP clause learning over order literals, proof-only (**D-0044 fork (ii)**), with conflict-directed backjumping over the **decision closure** and its `rup` derivation at level 0. **I-S4's cross-level debt is discharged** and the check is wider than the invariant's wording. Backjump measured: 31 -> 9 nodes on `backjump_unsat.fzn`. **M1-T66 stays OPEN**: with `Search.bridges` disabled, 35/35 models still pass and no checker rejects — a learned clause citing across levels did NOT make the bridge load-bearing. 1833 unit checks, 267 matrix, 44 mutation, 35/35 models, determinism 35/35 byte-identical |
 
 ## Handoff notes
 
@@ -1469,3 +1472,82 @@ See D-0044's 2026-09-18 amendment and D-0045's resolution section.
 Three premises of mine have now been wrong in two waves, all caught by agents. The pattern
 is not carelessness about the code — it is **briefing from rows that a later note had
 already superseded**. When you kill a premise, strike the request row, not just the note.
+
+
+## M2-L3 handoff, 2026-09-18 (agent-learn3)
+
+Merged as `08cfa83` on `wave12-learn3`. 1833 unit checks (was 1781), 267 matrix, 44
+mutation, **35/35** models (was 34 — `backjump_unsat.fzn` is new), determinism green
+across 35 models, `check_fmt.sh` clean, peak RSS 10.6 MB (`test_matrix.exe`, the
+heaviest). The whole suite was also run green under `BAGUETTE_PROOF_FORMAT=2.0` with
+`VERIPB=~/.local/bin/veripb`, i.e. against the Python 2.2.2 as well as the 3.0.2 of
+record.
+
+**Read `lib/core/learn.ml`'s header before touching any of this.** The five decisions
+below are all argued there at length and none of them is obvious.
+
+1. **D-0044's fork went (ii), proof-only, and it was not a convenience.** (i) would make
+   the learned clause a runtime propagator, which is what a 1UIP *asserting* backjump
+   needs; with nothing propagating it, a resume at the backjump level re-reaches the same
+   fixpoint and re-derives the same conflict, which is a loop. `stats.convertible` counts
+   how often `Learned.to_linear_row` would have accepted the cut: **0 of 4** on
+   `offset_unsat`, 0 on every integer model. Restricting the cut to shapes that convert
+   would have meant learning nothing at all outside Boolean models. M2-L4 has the number.
+
+2. **The backjump does NOT rest on the 1UIP cut.** The levels a 1UIP cut names are not a
+   dependency set — a non-root node at level j rests on further facts at levels the cut
+   never names — so `Analysis.backjump_level` is the wrong thing to skip a branch on and
+   would answer UNSAT on a satisfiable model. `Analysis.analyse` gained `?scope`, and the
+   new `decision_closure` criterion resolves every non-root node away at *every* level; the
+   levels of THAT cut are sound. The skip rule is then one line and needs no CDCL progress
+   argument: a nogood naming no literal of level `lvl` is already false under the decisions
+   above `lvl`, so it refutes the sibling too.
+
+3. **M2-L1 did give the entry point the row asks about.** The tension — emit while the
+   supports are live, but `Writer.fresh` tags at the current level — is resolved by filing
+   every branch nogood at the deepest decision level it names (`Search.filed_at`, through
+   `Justify.with_level`) and the learned clause at level 0 (`Learned.introduce`). Nothing
+   had to be worked around locally.
+
+4. **I-S4 is discharged, and narrowing it to hole lines would have been a vacuous check.**
+   `Learn.supports` reports every line the derivation rests on — the trace line behind
+   every entry the cut resolved, not only the folded hole lines — and `Learn.support_check`
+   asserts each is live at the moment the `rup` is written. With the break applied
+   (derivation after the `w`) the hole-lines-only version reported **nothing**: the hole
+   line sits at level 0 and what the `w` takes is the conflict-level bound lines. The
+   *outlives* half is argued away rather than waived — a `rup` names no id, so nothing can
+   dangle — and `Learn.crossings` reports the crossings as data (1 per learned clause on
+   `trace_settle_sat`) because M2-L6's `pol` is the first thing for which they WOULD be a
+   violation.
+
+5. **M1-T66 is still open, and this row was the predicted closer.** Re-measured today with
+   `Search.bridges` disabled and the binary hashed on both sides: **35/35 models pass and
+   no checker rejects anything.** The only reddening is M1-T55's text pin plus M1-T66's own
+   two derivation-level assertions in `test_matrix.ml`. A learned clause citing across
+   levels did not make the bridge observable to the checker, for the reason M1-T66 already
+   recorded: the settle is re-derivable from the hole's own trace line and `int_lin_ne`'s
+   big-M rows, and a `rup` is checked against exactly that database. Do not dispatch M1-T66
+   again expecting learning to close it.
+
+### Two findings the next session should not rediscover
+
+- **Semantic minimisation fires on NONE of the 35 shipped models** under the normative
+  order (`stats.n_min_dropped` is 0 on every one), because `Analysis.add_node`'s
+  strongest-per-slot merge has already done it one layer up, on the closure the nogood is
+  built from. It does fire under other branching orders — the (a2) break lane is
+  `random_order` at a pinned seed, where the Strongest proof verifies and the Weakest one
+  is rejected. `test_learn.ml` asserts the idleness too, so the sentence cannot rot.
+- **M1-T46's "the two checkers share no substring" does not hold for a RUP failure.** It is
+  true of the wordings M1-T46 measured (a non-contradiction; a deleted id). Both checkers
+  say "reverse unit propagation" when a `rup` fails. `test_learn.ml` matches
+  `is not implied by reverse unit propagation` (3.0.2) and `Failed to show` (2.2.2) rather
+  than the shared phrase, which is the least specific thing either says.
+
+### What M2-L4 inherits
+
+`Search.stats.learned_rev` holds every level-0 learned id and `Search.solve` retires them
+all, on every path, immediately before the conclusion — that is the whole retention policy
+today and it is deliberately the dumbest one. They are NOT retired at the backjump: a
+learned clause whose lifetime is a level's has learned nothing. The `BAGUETTE_PROOF_AUDIT`
+live-set check still cannot see a double delete, so if M2-L4 adds a policy that may delete
+what something else deletes, count `del` lines rather than trusting the audit.

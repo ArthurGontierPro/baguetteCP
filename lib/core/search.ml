@@ -113,7 +113,15 @@ exception Unsound_solution of assignment
    nogood -- the clause already asserted into the proof (its [Writer.cid] is still
    live) together with the literals it states, so the caller can drop its own most
    recent decision literal and re-derive the next nogood up. *)
-type node = NSat of assignment | NFail of Lit.t list * Writer.cid
+(* M2-L3: the literals are PAIRED WITH THE DECISION LEVEL each one negates, and the
+   pairing is the whole of what makes a backjump decidable locally. A frame owning level
+   [lvl] skips its sibling exactly when no pair in the nogood carries [lvl]: the clause is
+   then already false under the decisions ABOVE [lvl], so it refutes the sibling too.
+   Recomputing the level from the literal is not available -- semantic minimisation merges
+   two thresholds on one variable and keeps the DEEPER one's level, which is precisely the
+   information that would be lost. See lib/core/learn.ml. *)
+type nogood = (Lit.t * int) list
+type node = NSat of assignment | NFail of nogood * Writer.cid
 
 (* ------------------------------------------------------------ M1-T36: node counting *)
 
@@ -212,10 +220,48 @@ type stats = {
   mutable max_depth : int;
   mutable n_bridges : int;
   mutable bridges_rev : bridge list;
+  (* ------------------------------------------------------------------ M2-L3 *)
+  mutable skipped : int;
+      (* Siblings NOT explored because the branch's nogood was already false without
+         this level's decision. The M1-T36 identity is stated over it below; a backjump
+         that reported no skip would be a backjump that did not happen. *)
+  mutable n_learned : int; (* 1UIP clauses put on the page *)
+  mutable n_converts : int;
+      (* ...of which [Learned.to_linear_row] would accept, i.e. of which could have been
+         a runtime instance had this row taken D-0044 fork (i). MEASURED, not used: see
+         lib/core/learn.ml's header for why the fork went the other way, and M2-L4 for
+         who needs the number. *)
+  mutable learned_rev : Writer.cid list;
+      (* I-X2: every id [Learn.introduce] handed back, newest first. They are at level 0,
+         so no [w] retires them and [solve] must, on every path. *)
+  mutable i_s4_supports : int; (* hole lines the learned clauses' derivations rest on *)
+  mutable i_s4_crossings : int; (* ...of which sit above level 0 -- data, not a fault *)
+  mutable i_s4_broken_rev : string list; (* ...of which were already retired: faults *)
+  mutable n_min_dropped : int;
+      (* Literals semantic minimisation removed from a nogood. A reduction that never
+         fires is a reduction whose break lane cannot redden, which is why it is counted
+         rather than assumed to be doing something. *)
 }
 
 let stats_create () =
-  { nodes = 0; decisions = 0; max_depth = 0; n_bridges = 0; bridges_rev = [] }
+  {
+    nodes = 0;
+    decisions = 0;
+    max_depth = 0;
+    n_bridges = 0;
+    bridges_rev = [];
+    skipped = 0;
+    n_learned = 0;
+    n_converts = 0;
+    learned_rev = [];
+    i_s4_supports = 0;
+    i_s4_crossings = 0;
+    i_s4_broken_rev = [];
+    n_min_dropped = 0;
+  }
+
+let stats_learned s = List.rev s.learned_rev
+let stats_i_s4_broken s = List.rev s.i_s4_broken_rev
 
 (* The bridges this search derived, oldest first, up to [bridge_cap] of them. *)
 let stats_bridges s = List.rev s.bridges_rev
@@ -227,8 +273,17 @@ let record_bridge s b =
 (* Does this pair of counts satisfy the identity above? [exhausted] is whether the
    search closed its whole tree. Public because [solve] checks it only under
    BAGUETTE_DEBUG and the tests must be able to check it always. *)
+(* M2-L3 widens the identity by exactly one term rather than weakening it. Branching is
+   still binary and every push still lands; what changed is that a backjump dispatches
+   ONE child at an internal node instead of two, and [skipped] counts each time it did.
+   With learning off [skipped] is 0 and this is M1-T36's equation unaltered. A version
+   that merely relaxed the equality to an inequality would have stopped catching the
+   off-by-one it exists for, on every search. *)
+let stats_expected_nodes s = (2 * s.decisions) + 1 - s.skipped
+
 let stats_consistent s ~exhausted =
-  if exhausted then s.nodes = (2 * s.decisions) + 1 else s.nodes <= (2 * s.decisions) + 1
+  if exhausted then s.nodes = stats_expected_nodes s
+  else s.nodes <= stats_expected_nodes s
 
 (* ------------------------------------------------------- the branching order (M2-T11)
 
@@ -363,6 +418,84 @@ let extract_assignment store : assignment =
   List.init (Store.n_vars store) (fun i ->
       let v = Var.of_int i in
       (v, Domain.lo (Store.get store v)))
+
+(* ------------------------------------------------------- M2-L3: learning, as a config
+
+   What the search is allowed to do with a conflict, as a value rather than as an
+   environment variable, because two of the three fields exist ONLY so that a test can
+   perform a break and watch the checker reject it. A knob a test cannot set is a knob
+   whose break lane does not exist, and this project has shipped one (M1-T45).
+
+   [learn]      off is M1's search exactly: the nogood is the whole decision stack, no
+                cut is taken, no clause is put on the page and [stats.skipped] stays 0.
+                It is what test (c) measures against, and what a caller that wants the
+                hand-derived tree of M1-T36's accounting tests asks for.
+   [policy]     [Learn.Strongest] is the semantic minimisation. [Learn.Weakest] is this
+                row's test (a2) break: it keeps the threshold the other one drops, so the
+                nogood claims strictly more than the cut supports, and the checker
+                rejects it. It is wrong on purpose and is not reachable from the CLI.
+   [break_i_s4] retires the conflict level BEFORE the learned clause is derived instead
+                of after, which is this row's test (b) break -- D-0018 point 4 and I-S4
+                read backwards. The [rup] is then checked against a database that no
+                longer holds the trace lines it rests on. Also not CLI-reachable. *)
+type config = { learn : bool; policy : Learn.policy; break_i_s4 : bool }
+
+let default_config = { learn = true; policy = Learn.Strongest; break_i_s4 = false }
+let no_learning = { default_config with learn = false }
+
+(* ------------------------------------------------------------------- nogoods
+
+   The decision stack as a nogood: one literal per decision, negated, paired with the
+   level that decision was taken at. [decisions] is most-recent first and each branch
+   opens exactly one level, so the i-th entry sits at [top - i]. *)
+let levelled_nogood decisions ~top : nogood =
+  List.mapi (fun i l -> (Lit.negate l, top - i)) decisions
+
+(* The level a nogood is FILED at: the deepest decision level it names, or 0.
+
+   docs/ROADMAP.md M2-L3: "attach the clause at the backjump level, not the level being
+   retired". That is this function, and it is the whole resolution of the tension the row
+   names. The nogood is consumed by the frame owning its deepest level -- every frame
+   between there and the conflict skips its sibling and passes the nogood up untouched --
+   so it must survive their wipes and die with that frame's. [Writer.fresh] tags an id at
+   the writer's CURRENT level, which is the conflict's, so emitting it where it is derived
+   is exactly what gets it deleted on the way out (D-0045's addendum). [Justify.with_level]
+   is M2-L1's entry point for moving the level for real, in both formats, and it is the
+   entry point this row was told to check for and did find. *)
+let filed_at (ng : nogood) = List.fold_left (fun a (_, l) -> Stdlib.max a l) 0 ng
+
+(* Emit a branch nogood at the level it is filed at. The writer is left where it was:
+   [branch] owns the level marker either side of this and D-0018 point 4 depends on it. *)
+let emit_nogood ctx (ng : nogood) : Writer.cid =
+  Justify.with_level ctx (filed_at ng) (fun () ->
+      Justify.emit ctx (Explanation.clause (List.map fst ng)))
+
+let mentions_level (ng : nogood) lvl = List.exists (fun (_, l) -> l = lvl) ng
+
+(* [Learn.minimise_with], with what it removed recorded. See [stats.n_min_dropped]. *)
+let minimise stats policy (xs : nogood) : nogood =
+  let out = Learn.minimise_with policy xs in
+  stats.n_min_dropped <- stats.n_min_dropped + (List.length xs - List.length out);
+  out
+
+(* Resolve two sibling nogoods on the decision they disagree about, then minimise.
+
+   Dropping every pair at [lvl] from the union IS the resolution step: the two clauses
+   carry [l] and [~l] there and nothing else at that level, so the resolvent is the rest
+   of both. It is [rup] for the checker because both parents are still live -- which is
+   why the wipe comes after (D-0018 point 4). Deduplicated by literal, then ordered by
+   descending level, so the result is a function of the two clauses and not of the order
+   they were built in (test (f)). *)
+let combine_nogoods stats policy (a : nogood) (b : nogood) ~lvl : nogood =
+  let joined = List.filter (fun (_, l) -> l <> lvl) (a @ b) in
+  let deduped =
+    List.fold_left
+      (fun acc (l, i) ->
+        if List.exists (fun (m, _) -> Lit.equal m l) acc then acc else acc @ [ (l, i) ])
+      [] joined
+  in
+  minimise stats policy
+    (List.stable_sort (fun (_, i) (_, j) -> Stdlib.compare j i) deduped)
 
 (* ------------------------------------------------------------------------------ dfs *)
 
@@ -702,14 +835,53 @@ let bridges (ctx : Justify.ctx) trace stats store (decisions : Lit.t list) =
   in
   go (decision_entries store) (List.rev decisions) []
 
-let rec dfs engine store ctx trace stats (order : order) (decisions : Lit.t list) : node =
+(* M2-L3: take the cut, discharge I-S4, put the learned clause on the page, and report
+   the decision levels the conflict actually rests on.
+
+   [None] means "learn nothing here", and every route to it is a route the search already
+   handled before this row existed: learning off, an [Analysis] error, a criterion whose
+   postcondition did not hold, or a cut that materialises no literal. The caller then
+   builds the nogood over the whole decision stack, which is M1's behaviour unchanged. A
+   failure to learn is never a failure to solve.
+
+   The ORDER of the three steps here is the invariant, not an implementation detail. The
+   trace lines and the conflict line are already on the page (the caller emitted them);
+   the learned clause's [rup] is checked against them; and nothing has been wiped yet. The
+   [break_i_s4] arm retires the conflict level first, which is the same three steps in the
+   wrong order and is exactly what test (b) asserts the checker rejects. *)
+let rec learn_at_conflict engine store ctx trace stats cfg (c : Store.conflict) =
+  if not cfg.learn then None
+  else
+    match
+      Learn.at_conflict ~policy:cfg.policy store c ~vars_of:(Engine.vars_of engine)
+        ~decl:(Learned.decl_of_encoding ctx.Justify.encoding)
+    with
+    | None -> None
+    | Some l ->
+        (* The break: the `w` first, the derivation second. *)
+        if cfg.break_i_s4 then Justify.wipe_level ctx (Store.level store);
+        let ss = Learn.supports store trace l in
+        let broken = Learn.support_check ctx.Justify.writer ss in
+        stats.i_s4_supports <- stats.i_s4_supports + List.length ss;
+        stats.i_s4_crossings <- stats.i_s4_crossings + List.length (Learn.crossings ss);
+        stats.i_s4_broken_rev <- List.rev_append broken stats.i_s4_broken_rev;
+        Debug.check
+          (match broken with
+          | m :: _ -> m
+          | [] -> "I-S4: the learned clause's supports are live at its derivation")
+          (fun () -> broken = []);
+        let cid = Learn.introduce ctx l in
+        stats.n_learned <- stats.n_learned + 1;
+        if Learn.converts l then stats.n_converts <- stats.n_converts + 1;
+        stats.learned_rev <- cid :: stats.learned_rev;
+        Some (Learn.levels l)
+
+and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list) : node =
   match Engine.propagate engine store with
   | Engine.Conflict c -> (
       (* M2-T7: [c] carries the reporting instance's id ([c.Store.c_prop]) as well as its
-         explanation and its bound facts. Nothing in M1's proof shape reads the id -- a
-         nogood names decisions, not constraints -- but M2-T3's resolution starts from
-         exactly this constraint, and it is now recorded rather than lost with the
-         engine's loop variable. *)
+         explanation and its bound facts. M2-L3's resolution starts from exactly this
+         constraint. *)
       let e = c.Store.c_why in
       match decisions with
       | [] ->
@@ -721,7 +893,8 @@ let rec dfs engine store ctx trace stats (order : order) (decisions : Lit.t list
              over; [rests_on_a_clause] above is the difference and says why.
              Nothing has been branched on yet, so the trace this writes is the root's
              own: [dfs] reaches this arm with [decisions = []] only on the very first
-             call. *)
+             call. Nothing is learned here either -- a conflict under no decision is
+             already the strongest nogood there is. *)
           let cid =
             if rests_on_a_clause e then close_root_conflict ctx trace store c
             else Justify.emit ctx e
@@ -732,7 +905,11 @@ let rec dfs engine store ctx trace stats (order : order) (decisions : Lit.t list
              first, then the conflict's reason line, then the nogood. Each of the first
              two is globally valid and decision-free; only the last one mentions the
              decisions, and it is RUP precisely because the other two are there to unit
-             propagate along. *)
+             propagate along.
+
+             M2-L3 inserts the learned clause between the bridges and the nogood, which is
+             the one place it can go: after everything its [rup] rests on and before
+             anything that retires them. *)
           Trace.emit ctx trace store;
           let _ : Writer.cid option = Trace.conflict_line ctx trace c in
           (* M1-T55: and then the bridge for any decision on this path that settled past
@@ -740,15 +917,29 @@ let rec dfs engine store ctx trace stats (order : order) (decisions : Lit.t list
              been left to find for itself. It goes after the trace (D-0021) and before
              the nogood, at the nogood's own level, so the same [w] retires both. *)
           bridges ctx trace stats store decisions;
-          let lits = List.map Lit.negate decisions in
-          let cid = Justify.emit ctx (Explanation.clause lits) in
-          NFail (lits, cid))
+          let keep = learn_at_conflict engine store ctx trace stats cfg c in
+          let all = levelled_nogood decisions ~top:(Store.level store) in
+          let ng =
+            match keep with
+            | None -> minimise stats cfg.policy all
+            | Some ls ->
+                minimise stats cfg.policy (List.filter (fun (_, l) -> List.mem l ls) all)
+          in
+          let cid = emit_nogood ctx ng in
+          NFail (ng, cid))
   | Engine.Fixpoint ->
       let cands = unfixed store in
       if Array.length cands = 0 then NSat (extract_assignment store)
-      else branch engine store ctx trace stats order decisions (order store cands)
+      else branch engine store ctx trace stats cfg order decisions (order store cands)
 
-and branch engine store ctx trace stats order decisions (dec : decision) : node =
+(* Close out a level whose subtree is finished, leaving [ng] (filed below [lvl], so the
+   wipe cannot touch it) as this frame's answer. D-0018 point 4's two lines, in the order
+   gcs/solve.cc:296-297 has them: step the writer down, then wipe. *)
+and close_level ctx ~lvl ~nogood =
+  Writer.set_level ctx.Justify.writer (lvl - 1);
+  wipe_after_nogood ctx ~lvl ~nogood
+
+and branch engine store ctx trace stats cfg order decisions (dec : decision) : node =
   let v = dec.d_var in
   let d = Store.get store v in
   let k = dec.d_split in
@@ -767,10 +958,7 @@ and branch engine store ctx trace stats order decisions (dec : decision) : node 
     if dec.d_high_first then (explore_ge, explore_le) else (explore_le, explore_ge)
   in
   (* M1-T36. One decision taken, and this decision sits one deeper than the ancestors
-     it was handed. [List.length] is O(depth) once per internal node, which is nothing
-     beside the propagation this node already ran; taking the depth from
-     [Store.level store] instead would tie the tree's depth to the store's level
-     numbering, and [solve] is allowed to be called at a non-zero level. *)
+     it was handed. *)
   stats.decisions <- stats.decisions + 1;
   let depth = List.length decisions + 1 in
   if depth > stats.max_depth then stats.max_depth <- depth;
@@ -778,40 +966,52 @@ and branch engine store ctx trace stats order decisions (dec : decision) : node 
   let lvl = Store.level store in
   Writer.set_level ctx.Justify.writer lvl;
   stats.nodes <- stats.nodes + 1;
-  let r1 = first store engine ctx trace stats order decisions v k lit in
+  let r1 = first store engine ctx trace stats cfg order decisions v k lit in
   Store.backtrack store;
   match r1 with
   | NSat asn ->
       Justify.wipe_level ctx lvl;
       NSat asn
-  | NFail (lits1, _) -> (
+  | NFail (ng1, cid1) when not (mentions_level ng1 lvl) ->
+      (* THE BACKJUMP (M2-L3). Every literal of [ng1] is false under the decisions ABOVE
+         this one, so [ng1] refutes the sibling branch as well -- it differs from this one
+         only in the decision at [lvl], which [ng1] does not name. The sibling is not
+         explored and [ng1] is this frame's answer unchanged.
+
+         It is already filed below [lvl] ([filed_at]), so the wipe below retires this
+         level's trace lines and leaves it standing. That is the half of D-0045's addendum
+         this row had to get right, and getting it wrong is not a wrong answer -- it is
+         "Trying to access constraint with ID n that has already been deleted" several
+         lines later, or its 2.0 wording, which shares no substring with it (M1-T46). *)
+      stats.skipped <- stats.skipped + 1;
+      close_level ctx ~lvl ~nogood:cid1;
+      NFail (ng1, cid1)
+  | NFail (ng1, _cid1) -> (
       Store.new_level store;
       let lvl2 = Store.level store in
       Debug.check "search: reopened level matches the one just closed" (fun () ->
           lvl2 = lvl);
       Writer.set_level ctx.Justify.writer lvl;
       stats.nodes <- stats.nodes + 1;
-      let r2 = second store engine ctx trace stats order decisions v k lit in
+      let r2 = second store engine ctx trace stats cfg order decisions v k lit in
       Store.backtrack store;
       match r2 with
       | NSat asn ->
           Justify.wipe_level ctx lvl;
           NSat asn
-      | NFail (lits2, _) ->
-          let combined =
-            match lits1 with
-            | _ :: tl -> tl
-            | [] ->
-                invalid_arg
-                  "Search.branch: a branch's own nogood must mention its own decision"
-          in
-          Debug.check "search: both children's nogoods agree past their own decision"
-            (fun () ->
-              match lits2 with
-              | _ :: tl2 -> List.length tl2 = List.length combined
-              | [] -> false);
+      | NFail (ng2, cid2) when not (mentions_level ng2 lvl) ->
+          (* The mirror of the arm above, on the second child: [ng2] alone already
+             refutes this level, so there is nothing to resolve it against. *)
+          close_level ctx ~lvl ~nogood:cid2;
+          NFail (ng2, cid2)
+      | NFail (ng2, cid2) ->
+          Debug.check
+            "search: each child's nogood names its own decision level before they resolve"
+            (fun () -> mentions_level ng1 lvl && mentions_level ng2 lvl);
+          ignore cid2;
+          let combined = combine_nogoods stats cfg.policy ng1 ng2 ~lvl in
           Writer.set_level ctx.Justify.writer (lvl - 1);
-          let cid = Justify.emit ctx (Explanation.clause combined) in
+          let cid = emit_nogood ctx combined in
           wipe_after_nogood ctx ~lvl ~nogood:cid;
           NFail (combined, cid))
 
@@ -834,28 +1034,12 @@ and check_decision_landed store lvl outcome =
    M1-T31/M1-T50: the reason pushed with it is [Explanation.decision ~lit] and not the
    old [Explanation.trivial]. A decision is an assumption, not an instance of the model
    constraint, and calling it [Trivial] was what let a propagator citing this entry
-   render it as the ambient model row (see explanation.ml's header). The literal is
-   exactly the one this branch assumes, so a propagator that reads a bound this entry
-   established can see *that* it is an assumption and weaken it out of its [pol]
-   (lib/core/prop/linear.ml's [snapshot_source], the branch that keeps a term's fact and
-   drops its citation) rather than citing an id that does not exist. It is the same literal
-   the nogood negates on the way back out.
+   render it as the ambient model row (see explanation.ml's header).
 
    M2-T8/D-0026: the push carries [Reason.none] beside that explanation, and it says so out
-   loud rather than getting it by default. It is the honest answer -- a decision rests on no
-   facts; it *is* the fact, and its literal enters the proof exactly once, negated, in the
-   branch nogood below (D-0018, D-0037) -- and it is also why [Trace] can skip a level start
-   without checking: [Reason.lits Reason.none] is empty, so a line for it would be an
-   unconditional claim.
-
-   M2-L0/D-0043: and [~concludes:None] beside it, for the same reason said about the other
-   half of the pruning. A decision moves a bound, so it is the one place where "nothing was
-   concluded" is not obvious from the change itself -- D-0037 is what makes it true: the
-   bound is ASSUMED, not derived, and nothing in the proof establishes it ([Justify.emit]
-   refuses a [Decision] outright). Stating a conclusion here would claim the proof derives
-   the decision, which is the M1-T50 defect in a new place, so [Store.apply] rejects a
-   [Decision] that carries one rather than leaving it to this comment. *)
-and explore_le store engine ctx trace stats order decisions v k lit =
+   loud rather than getting it by default. M2-L0/D-0043: and [~concludes:None] beside it,
+   because the bound is ASSUMED, not derived. *)
+and explore_le store engine ctx trace stats cfg order decisions v k lit =
   let lvl = Store.level store in
   let outcome =
     Store.set_hi store v k
@@ -865,21 +1049,24 @@ and explore_le store engine ctx trace stats order decisions v k lit =
   | Store.Conflict _ ->
       (* [k >= lo] and [lo] is in [v]'s domain (I-D2), so [set_hi _ k] cannot empty it;
          kept only so this function is total against [Store.outcome] without assuming
-         it. *)
+         it. Nothing is learned here: the push never landed, so there is no trail entry
+         to walk back from and [Analysis] would have nothing to resolve. *)
       Trace.emit ctx trace store;
       (* M1-T55: the ancestors only -- this push did not land, so it has no trail entry
          and nothing to bridge, and [bridges] drops it for exactly that reason. *)
       bridges ctx trace stats store decisions;
-      let lits = List.map Lit.negate (Lit.negate lit :: decisions) in
-      let cid = Justify.emit ctx (Explanation.clause lits) in
-      NFail (lits, cid)
+      let ng =
+        minimise stats cfg.policy (levelled_nogood (Lit.negate lit :: decisions) ~top:lvl)
+      in
+      let cid = emit_nogood ctx ng in
+      NFail (ng, cid)
   | Store.Changed | Store.Unchanged ->
       check_decision_landed store lvl outcome;
-      dfs engine store ctx trace stats order (Lit.negate lit :: decisions)
+      dfs engine store ctx trace stats cfg order (Lit.negate lit :: decisions)
 
 (* The high side, [x >= k + 1] -- the decision literal is [lit]. Symmetrically,
    [k + 1 <= hi] and [hi] is in the domain, so this push cannot empty it either. *)
-and explore_ge store engine ctx trace stats order decisions v k lit =
+and explore_ge store engine ctx trace stats cfg order decisions v k lit =
   let lvl = Store.level store in
   let outcome =
     Store.set_lo store v (k + 1)
@@ -890,12 +1077,12 @@ and explore_ge store engine ctx trace stats order decisions v k lit =
       Trace.emit ctx trace store;
       (* M1-T55: as in [explore_le] -- the ancestors only. *)
       bridges ctx trace stats store decisions;
-      let lits = List.map Lit.negate (lit :: decisions) in
-      let cid = Justify.emit ctx (Explanation.clause lits) in
-      NFail (lits, cid)
+      let ng = minimise stats cfg.policy (levelled_nogood (lit :: decisions) ~top:lvl) in
+      let cid = emit_nogood ctx ng in
+      NFail (ng, cid)
   | Store.Changed | Store.Unchanged ->
       check_decision_landed store lvl outcome;
-      dfs engine store ctx trace stats order (lit :: decisions)
+      dfs engine store ctx trace stats cfg order (lit :: decisions)
 
 (* ------------------------------------------------------------------------------ API *)
 
@@ -927,7 +1114,8 @@ and explore_ge store engine ctx trace stats order decisions v k lit =
    (invariant I-X2 -- see docs/PROOF-FORMAT.md section 5, "discharged by the
    conclusion"). *)
 let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
-    ~(check : assignment -> bool) ?trace ?stats ?(order = spec_order) () : outcome =
+    ~(check : assignment -> bool) ?trace ?stats ?(order = spec_order)
+    ?(config = default_config) () : outcome =
   let entry_level = Store.level store in
   (* [?trace] exists so a caller can read back *which* rules in the emitted proof were
      D-0018 trace lines (test/unit/test_trace.ml checks each of them standalone against
@@ -942,7 +1130,7 @@ let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
      so the one node no [branch] dispatches is this one. *)
   let stats = match stats with Some s -> s | None -> stats_create () in
   stats.nodes <- stats.nodes + 1;
-  let result = dfs engine store ctx trace stats order [] in
+  let result = dfs engine store ctx trace stats config order [] in
   Debug.check "I-S3: decision level on return equals level on entry" (fun () ->
       Store.level store = entry_level);
   (* M1-T36's identity, stated above [type stats]. [Unsat] means the tree was
@@ -964,9 +1152,25 @@ let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
     | [] -> ()
     | ids -> Writer.delete_many ctx.Justify.writer ids
   in
+  (* I-X2, M2-L3's own half. A learned clause is introduced at level 0 (D-0045's addendum,
+     [Learned.introduce]) precisely so that no backjump retires it, which leaves exactly
+     one party who can: whoever asked for it. Until M2-L4's retention policy exists that
+     is this function, on every path, once each -- [Learn.introduce] goes through
+     [Writer.rup] and not through the memo, so no two conflicts share an id and this list
+     has no repeats to delete twice.
+
+     Note what is NOT done here: they are not retired at the backjump. A learned clause
+     whose lifetime were a level's would be a learned clause that learned nothing, and the
+     whole of D-0045's addendum is about it outliving the level it was derived at. *)
+  let retire_learned () =
+    match stats_learned stats with
+    | [] -> ()
+    | ids -> Writer.delete_many ctx.Justify.writer ids
+  in
   match result with
   | NSat assignment ->
       if not (check assignment) then raise (Unsound_solution assignment);
+      retire_learned ();
       retire_trace ();
       let bindings = List.map (fun (v, x) -> (Store.name store v, x)) assignment in
       let lits = Encoding.assignment_lits ctx.Justify.encoding bindings in
@@ -979,6 +1183,7 @@ let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
           invalid_arg
             "Search.solve: the root nogood must be decision-free -- solve must be called \
              with no ambient decisions active");
+      retire_learned ();
       (* I-X2: the live set must be empty at [conclusion], and the contradiction cited
          by the conclusion is the one id that counts as discharged by it
          (docs/PROOF-FORMAT.md section 5). A root refutation's derivation leaves its

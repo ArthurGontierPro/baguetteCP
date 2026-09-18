@@ -466,13 +466,28 @@ let report_stats (st : Search.stats) (outcome : Search.outcome) =
      branching with every push landing means an exhausted tree visits both sides of
      every decision. If this line ever prints, one of the counters is counting the
      wrong event and no number above may be quoted. *)
+  Printf.eprintf "stats: %-10s %10d nodes  %s\n" "skipped" st.Search.skipped
+    "siblings NOT explored: one per backjump (M2-L3). 0 means no backjump happened";
+  Printf.eprintf "stats: %-10s %10d cls    %s\n" "learned" st.Search.n_learned
+    "1UIP clauses derived and put on the page, level 0 (M2-L3, D-0044 fork ii)";
+  Printf.eprintf "stats: %-10s %10d cls    %s\n" "convertible" st.Search.n_converts
+    "...of which Learned.to_linear_row would accept, i.e. could propagate. MEASURED ONLY";
+  Printf.eprintf "stats: %-10s %10d lits   %s\n" "minimised" st.Search.n_min_dropped
+    "literals semantic minimisation removed from nogoods (M2-L3); 0 means it never fired";
+  Printf.eprintf "stats: %-10s %10d lines  %s\n" "i-s4-cross" st.Search.i_s4_crossings
+    "hole lines above level 0 a level-0 learned clause rests on -- data, not a fault";
+  if Search.stats_i_s4_broken st <> [] then
+    Printf.eprintf "stats: I-S4 VIOLATED %d time(s); first: %s\n"
+      (List.length (Search.stats_i_s4_broken st))
+      (List.hd (Search.stats_i_s4_broken st));
+  (* The identity, now with M2-L3's one extra term. See [Search.stats_consistent]. *)
   if not (Search.stats_consistent st ~exhausted) then
     Printf.eprintf
-      "stats: INCONSISTENT -- nodes=%d is not %s 2 * decisions + 1 = %d. The counters \
-       are wrong; do not quote them (M1-T36).\n"
+      "stats: INCONSISTENT -- nodes=%d is not %s 2 * decisions + 1 - skipped = %d. The \
+       counters are wrong; do not quote them (M1-T36, M2-L3).\n"
       st.Search.nodes
       (if exhausted then "=" else "<=")
-      ((2 * st.Search.decisions) + 1)
+      (Search.stats_expected_nodes st)
 
 let solve opts (m : Model.t) =
   let compiled = Timing.phase "compile" (fun () -> Compile.compile m) in

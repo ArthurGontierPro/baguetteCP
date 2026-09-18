@@ -1165,14 +1165,20 @@ let check_eq name got want =
 let unsat_tree = (3, 1, 1)
 
 (* And the marker count that same run's proof carries, pinned as a number rather than
-   compared to the nodes. On THIS tree the two coincide at 3, and they coincide for
-   unrelated reasons: 3 nodes is two children plus the root; 3 markers is one per child
-   explored plus one for the step back down to the parent that emits the combined
-   nogood. [sat_tree_markers] below is 2 markers against the same 3 nodes, so no
-   constant relates the two -- which is the finding, and the reason the proxy could not
-   answer D-0026. Both numbers are pinned so that a change in either one reddens. *)
-let unsat_markers = 3
-let sat_tree_markers = (3, 1, 2)
+   compared to the nodes. Both numbers are pinned so that a change in either one reddens,
+   and one changed: M2-L3 introduces a learned clause at level 0 through
+   [Justify.with_level] (D-0045's addendum), which is a marker pair per learned clause on
+   top of the branching's own -- a cost D-0045 states and does not hide.
+
+   3 nodes and 7 markers here; 3 nodes and 4 markers on [sat_tree_markers]'s scene. The
+   finding is unchanged and is if anything louder than when the two read 3 and 2: the
+   proxy is neither the node count nor a multiple of it, and it now moves with the
+   DERIVATION shape as well as the tree's -- which is precisely the confusion D-0026's
+   claim cannot be tested through. The tree itself did not move: nodes, decisions and
+   depth are all still what [unsat_tree] pins, and M2-L3's backjump does not fire on a
+   one-decision tree because there is no intervening level to skip. *)
+let unsat_markers = 7
+let sat_tree_markers = (3, 1, 4)
 let node_stats = ref None
 let sat_node_stats = ref None
 

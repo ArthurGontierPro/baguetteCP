@@ -1,0 +1,28 @@
+% M2-L3. The model the BACKJUMP is observable on, and the smallest one there is.
+%
+% x <> y and x = y over 0..3 is ne_eq_unsat with one more value: unsatisfiable, and
+% invisible to bounds reasoning, so the refutation has to branch down x's ladder and
+% close both children at every step. What is new here is p and q. They are unconstrained
+% and they have the smallest domains, so first-fail branches on them FIRST -- two
+% decisions the refutation below them does not depend on in any way.
+%
+% That is the whole scene. Every conflict's decision closure (lib/core/analysis.ml,
+% `decision_closure` under `~scope:Everywhere`) names x's levels and neither p's nor q's,
+% so the nogood that comes back up mentions neither, and the frames owning their levels
+% find a clause already false without their own decision. They skip their siblings:
+%
+%     learning off   31 nodes, 15 decisions, 0 skipped
+%     learning on     9 nodes,  5 decisions, 2 skipped
+%
+% Both refutations verify. Without p and q this is ne_eq_unsat and it skips nothing,
+% which is why the two spectators are the model rather than clutter in it: a backjump is
+% not observable at all unless some decision is irrelevant to the conflict.
+%
+% Widths are 0..1 and 0..3 (D-0028: the order encoding is width-proportional).
+var 0..1: p :: output_var;
+var 0..1: q :: output_var;
+var 0..3: x :: output_var;
+var 0..3: y :: output_var;
+constraint int_ne(x, y);
+constraint int_eq(x, y);
+solve satisfy;
