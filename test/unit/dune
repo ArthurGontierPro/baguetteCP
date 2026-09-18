@@ -22,5 +22,6 @@
   test_mutation
   test_matrix
   test_random
-  test_interval)
+  test_interval
+  test_analysis)
  (libraries baguette_core baguette_proof baguette_flatzinc))

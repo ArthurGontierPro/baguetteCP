@@ -162,8 +162,19 @@ let fact_value = function
    [support] is the trail position of the entry that established this bound, or
    [Store.no_support] when it is still the declared one. [implied_by] is that entry's
    [prop] (M2-T7) -- the constraint that implied the bound -- or [Store.no_prop].
-   [level] is the decision level that entry belongs to, or 0 when there is no entry. *)
-type node = { fact : Reason.fact; level : int; support : int; implied_by : int }
+   [level] is the decision level that entry belongs to, or 0 when there is no entry.
+
+   [root] is "this node is never resolved away" -- see the header. It is recorded on the
+   node rather than recomputed because a [criterion]'s postcondition is shown the nodes
+   and not the store, deliberately: a criterion that could reach the store could read
+   live state, which is the wrong side of I-X6's line. *)
+type node = {
+  fact : Reason.fact;
+  level : int;
+  support : int;
+  implied_by : int;
+  root : bool;
+}
 
 (* One hole folded into a bound move, per the rule in the header. [fold_into] is the
    trail position of the bound move that consumed the hole; [fold_prop] is the instance
@@ -189,8 +200,10 @@ type t = {
   folds : fold list;
   factless : int list;
       (* Trail positions of root entries that rest on no facts and are NOT a level start,
-         i.e. not decisions. Empty in every scene we have; reported rather than assumed
-         because I-P5 was unenforced until M1-T17. *)
+         i.e. not decisions. A search that pushes one decision per level never produces
+         one; a second constraint posted at a level already open does, and so would the
+         I-P5 shape that let [int_ne] prune factlessly from M1-T9 to M1-T17. Reported
+         rather than assumed empty, because that defect was invisible for eight tasks. *)
   resolutions : int;
   o1_supports : int;
   scanned_supports : int;
@@ -198,16 +211,16 @@ type t = {
 
 type error =
   | Misattributed of { at : int; claimed : int; var : string }
-      (* [entry.prop] at trail position [at] names an instance that does not exist or
-         does not watch [var]. The graph is corrupt: M2-L3 would derive the learned
-         clause over the wrong model row. *)
+    (* [entry.prop] at trail position [at] names an instance that does not exist or
+       does not watch [var]. The graph is corrupt: M2-L3 would derive the learned
+       clause over the wrong model row. *)
   | Diverged of int
 
 let error_to_string = function
   | Misattributed { at; claimed; var } ->
       Printf.sprintf
-        "Analysis: trail entry %d credits instance %d, which does not watch %s" at
-        claimed var
+        "Analysis: trail entry %d credits instance %d, which does not watch %s" at claimed
+        var
   | Diverged n -> Printf.sprintf "Analysis: did not terminate after %d resolutions" n
 
 (* ------------------------------------------------------- the criterion *)
@@ -222,11 +235,7 @@ type view = { v_nodes : node list; v_conflict_level : int }
 (* [stop] decides when the walk ends. [postcondition] is what THIS criterion guarantees
    about the cut it produced, and it is the only place a rule like 1UIP may be written
    down. See the header. *)
-type criterion = {
-  crit_name : string;
-  stop : view -> bool;
-  postcondition : view -> bool;
-}
+type criterion = { crit_name : string; stop : view -> bool; postcondition : view -> bool }
 
 let count_at_conflict_level v =
   List.length (List.filter (fun n -> n.level = v.v_conflict_level) v.v_nodes)
@@ -247,7 +256,23 @@ let one_uip =
 let conflict_side =
   { crit_name = "conflict-side"; stop = (fun _ -> true); postcondition = (fun _ -> true) }
 
-let criteria = [ one_uip; conflict_side ]
+(* The other end: resolve until every conflict-level node is a root, i.e. until the cut
+   is over the assumptions themselves. This is what M1's [Search] already learns without
+   any analysis at all (D-0018's branch nogood over the negated decisions), so it is the
+   baseline any cut has to beat rather than a candidate for M2-L3 -- and it is the third
+   value that makes [criterion] a component with a range rather than a two-valued flag.
+   Its postcondition is its own and says nothing about counts. *)
+let every_conflict_level_node_is_a_root v =
+  List.for_all (fun n -> n.level <> v.v_conflict_level || n.root) v.v_nodes
+
+let decision_cut =
+  {
+    crit_name = "decision-cut";
+    stop = every_conflict_level_node_is_a_root;
+    postcondition = every_conflict_level_node_is_a_root;
+  }
+
+let criteria = [ one_uip; conflict_side; decision_cut ]
 
 (* ------------------------------------------------------- the walk *)
 
@@ -263,8 +288,7 @@ let scan_support store ~before ~name ~is_lower ~value =
     else
       let e = Store.trail_entry store i in
       if
-        String.equal (Store.name store e.Store.var) name
-        && establishes e ~is_lower ~value
+        String.equal (Store.name store e.Store.var) name && establishes e ~is_lower ~value
       then i
       else go (i - 1)
   in
@@ -279,7 +303,9 @@ let support_of store ~before fact =
   match Store.var_named store name with
   | None -> (Store.no_support, false)
   | Some v ->
-      let fast = if is_lower then Store.lo_support store v else Store.hi_support store v in
+      let fast =
+        if is_lower then Store.lo_support store v else Store.hi_support store v
+      in
       if
         fast <> Store.no_support && fast < before
         && establishes (Store.trail_entry store fast) ~is_lower ~value
@@ -316,10 +342,6 @@ let add_node nodes n =
 
 exception Bad of error
 
-let is_root store n =
-  n.support = Store.no_support
-  || Reason.is_empty (Store.trail_entry store n.support).Store.reason
-
 let analyse store (c : Store.conflict) ~(vars_of : int -> Var.t list option)
     ~(criterion : criterion) : (t, error) result =
   let conflict_level = Store.level store in
@@ -341,14 +363,13 @@ let analyse store (c : Store.conflict) ~(vars_of : int -> Var.t list option)
       match vars_of prop with
       | Some vs when List.exists (Var.equal var) vs -> ()
       | _ ->
-          raise
-            (Bad (Misattributed { at; claimed = prop; var = Store.name store var }))
+          raise (Bad (Misattributed { at; claimed = prop; var = Store.name store var }))
   in
   let mk_node ~before fact =
     let support, fast = support_of store ~before fact in
     if fast then incr o1 else incr scanned;
     if support = Store.no_support then
-      { fact; level = 0; support; implied_by = Store.no_prop }
+      { fact; level = 0; support; implied_by = Store.no_prop; root = true }
     else
       let e = Store.trail_entry store support in
       check_attr ~at:support ~prop:e.Store.prop ~var:e.Store.var;
@@ -357,6 +378,7 @@ let analyse store (c : Store.conflict) ~(vars_of : int -> Var.t list option)
         level = Store.level_of_index store support;
         support;
         implied_by = e.Store.prop;
+        root = Reason.is_empty e.Store.reason;
       }
   in
   (* The facts a hole-consuming bound move rests on, per the rule in the header, with
@@ -386,7 +408,7 @@ let analyse store (c : Store.conflict) ~(vars_of : int -> Var.t list option)
             r.Store.reason)
       holes
   in
-  let expandable n = (not (is_root store n)) && n.level = conflict_level in
+  let expandable n = (not n.root) && n.level = conflict_level in
   let best_expandable nodes =
     List.fold_left
       (fun acc n ->
@@ -411,10 +433,10 @@ let analyse store (c : Store.conflict) ~(vars_of : int -> Var.t list option)
               nodes
           in
           let added =
-            e.Store.reason
-            @ hole_facts e ~at ~is_lower:(Reason.fact_is_lower n.fact)
+            e.Store.reason @ hole_facts e ~at ~is_lower:(Reason.fact_is_lower n.fact)
           in
-          loop (List.fold_left (fun acc f -> add_node acc (mk_node ~before:at f)) rest added)
+          loop
+            (List.fold_left (fun acc f -> add_node acc (mk_node ~before:at f)) rest added)
   in
   try
     if c.Store.c_prop <> Store.no_prop && vars_of c.Store.c_prop = None then
@@ -429,15 +451,12 @@ let analyse store (c : Store.conflict) ~(vars_of : int -> Var.t list option)
         [] c.Store.c_reason
     in
     let nodes = loop start in
-    let stopped =
-      criterion.stop { v_nodes = nodes; v_conflict_level = conflict_level }
-    in
+    let stopped = criterion.stop { v_nodes = nodes; v_conflict_level = conflict_level } in
     let factless =
       List.filter_map
         (fun n ->
           if
-            n.support <> Store.no_support
-            && Reason.is_empty (Store.trail_entry store n.support).Store.reason
+            n.root && n.support <> Store.no_support
             && not (Store.is_level_start store n.support)
           then Some n.support
           else None)
@@ -468,12 +487,9 @@ let facts t : Reason.t = List.map (fun n -> n.fact) t.nodes
    contributes nothing -- its negation is the constant false, and a false disjunct is not
    a weakening but a wrong line (lib/core/reason.ml's header). *)
 let lits t = List.map Lit.negate (Reason.lits (facts t))
-
 let nodes t = t.nodes
 let at_level t l = List.filter (fun n -> n.level = l) t.nodes
-
-let cited_levels t =
-  List.sort_uniq Int.compare (List.map (fun n -> n.level) t.nodes)
+let cited_levels t = List.sort_uniq Int.compare (List.map (fun n -> n.level) t.nodes)
 
 (* Where a clause over this cut would become asserting: the second-highest level it
    cites, which is the level M2-L3 attaches the learned clause at. 0 when the cut cites
