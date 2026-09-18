@@ -27,5 +27,6 @@
   test_learned
   test_learn
   test_ladder
-  test_retention)
+  test_retention
+  test_clause)
  (libraries baguette_core baguette_proof baguette_flatzinc))

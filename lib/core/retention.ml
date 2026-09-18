@@ -401,6 +401,21 @@ let cite t ~cid ~by =
   Hashtbl.replace t.cited cid by
 
 let uncite t ~cid = Hashtbl.remove t.cited cid
+
+(* Release EVERY citation at once, for [Search.solve]'s end-of-search sweep alone.
+
+   M2-L12. The guard [cite] installs is about the search: a trace line written by a
+   global unit or by a registered learned-clause instance is RUP only while its
+   constraint is live, so retiring a cited constraint MID-SEARCH is the fault the guard
+   catches. When [dfs] has returned there are no more nodes, nothing will propagate
+   again, and the constraints have to come off the page (I-X2) -- so the citations are
+   released first and [retire_all] then sweeps with its other two guards, the double
+   delete and the not-owned, still on.
+
+   This is NOT [~unchecked]: that skips all three and exists only so test_retention.ml
+   can perform the deletion the guards refuse and watch the checker's answer. Releasing
+   is a statement about lifetime and is made once, in one place. *)
+let release_all t = Hashtbl.reset t.cited
 let cited_by t cid = Hashtbl.find_opt t.cited cid
 
 (* ----------------------------------------------------------------- deletion *)

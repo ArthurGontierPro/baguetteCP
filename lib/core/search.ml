@@ -218,6 +218,54 @@ let bridge_cap = 256
    distribution's shape is what the policy is chosen from, and its tail is one bucket. *)
 let lbd_buckets = 17
 
+(* ------------------------------------------------------ M2-L12 step 1: a GLOBAL unit
+
+   A learned clause of ONE literal, as a permanent bound tightening.
+
+   D-0052's step 1, and the reason it comes first is now a measurement rather than an
+   estimate: over the 39 models of test/models/, instrumented at the point the clause is
+   built ([stats.width_hist]), **72 of 88 learned clauses have exactly one literal**, 5
+   have two, 8 have three and 3 have four. The provisional figure D-0052 refused to build
+   on -- "roughly 70, +/-5, parsed out of proof text" -- is confirmed at 72 by a counter
+   that cannot mistake an [Ne] hole line for a learned clause.
+
+   A unit 1UIP clause has backjump level 0. It is not a constraint that needs a
+   propagator, a watch list, a survey or two-open logic: it is a bound that holds
+   everywhere in the search tree from the moment it is derived. So it is applied
+   directly, with [Store.set_lo] / [Store.set_hi], and the only machinery it needs is the
+   justification every pruning needs.
+
+   WHERE IT IS APPLIED, and why that is not "level 0" in the literal sense. The store's
+   trail records changes at the level in force; it cannot write a change BELOW the
+   current level, and the clause is derived deep in the tree. So [apply_globals] re-runs
+   the list at the top of every [dfs] node instead, before [Engine.propagate]. The effect
+   is the one a level-0 tightening would have -- the bound holds at every node from here
+   on -- and the cost is one walk of a deduplicated list per node plus, at each node
+   where it actually moves a bound, exactly the trail entry and trace line that pruning
+   would have cost anyway. It is emphatically NOT mutable propagator state: the list only
+   grows, it is never undone, and nothing in it depends on the current branch.
+
+   THE JUSTIFICATION IS THE CLAUSE ITSELF, [Explanation.Clause [g_lit]], which renders as
+   `rup g_lit >= 1`. That is reverse unit propagation in one step against the learned
+   constraint [Learn.introduce] put on the page -- negating the target falsifies that
+   constraint outright. Which is exactly why [register_learned] below calls
+   [Retention.cite]: the line is RUP only while the constraint is LIVE (D-0052's "new
+   obligation", D-0051's "what would reverse this"). *)
+type global = {
+  g_lit : Lit.t; (* the unit literal, as it appears in the learned clause *)
+  g_cid : Writer.cid; (* the learned constraint the [rup] rests on *)
+  g_var : Var.t;
+  g_pos : bool; (* true: the literal is [x >= g_k]; false: [x <= g_k - 1] *)
+  g_k : int;
+  g_decl_lo : int;
+  g_decl_hi : int;
+  g_fact : Reason.fact; (* D-0043: what applying it concludes *)
+  g_expl : Explanation.t;
+      (* Built ONCE per global and shared, because lib/core/justify.ml memoises on
+         physical identity: one `rup` per decision level per unit, cited again
+         afterwards, exactly as lib/core/prop/clause.ml shares its own. *)
+}
+
 type stats = {
   mutable nodes : int;
   mutable decisions : int;
@@ -254,6 +302,43 @@ type stats = {
          is chosen from the DISTRIBUTION and this is O(1) memory on a search of any
          depth. Clause path only: the PB path's rows have no LBD of their own -- see
          [Retention]'s header for what they are scored on instead. *)
+  mutable width_hist : int array;
+  (* M2-L12 step 0. Index i counts learned CLAUSES of exactly i literals, with index
+     [lbd_buckets-1] the overflow bucket -- the same bucketing as [lbd_hist] because
+     the two are read side by side and a clause cannot have more literals than it has
+     levels plus one anyway.
+
+     This exists because D-0052 marked the figure its own sequencing rests on --
+     "roughly 70 of 88 learned clauses are unit" -- as PROVISIONAL, +/-5, having
+     extracted it by parsing level-0 `rup` lines out of proof TEXT, which also catches
+     [Ne] hole lines and every other level-0 `rup`. A counter incremented where the
+     clause is built cannot catch anything else: it counts exactly the clauses
+     [Learn.at_conflict] returned and [Learn.introduce] put on the page. Width 1 is
+     the population step 1 acts on -- a unit clause has backjump level 0 and is a
+     permanent global bound tightening. *)
+  (* ------------------------------------------------------------------ M2-L12 *)
+  mutable globals_rev : global list;
+      (* Learned units, newest first, DEDUPLICATED by literal. Replaced at [solve] entry
+         for the reason [db] is. Deduplication matters here and not for the clause
+         instances below: one model (width_sat_depth) derives 49 of the suite's 72 units,
+         many of them the same bound twice, and this list is walked at every node. *)
+  mutable n_global_prunes : int;
+      (* Times applying a global actually MOVED a bound. This is the counter that says
+         whether step 1 did anything: a learned unit that never prunes is a learned unit
+         the search had already re-derived for itself. *)
+  mutable n_global_conflicts : int; (* ...and times it refuted the node outright *)
+  mutable n_global_declined : int;
+      (* Units this search could not apply -- a [Lit.Eq] literal (the direct encoding has
+         no bound to move; D-0019 point 3 and D-0052 both say do not reach for
+         [Store.remove_with_facts]) or a name the encoding does not declare. Counted
+         rather than silently skipped, because "step 1 captured the unit population" is a
+         claim this number can refute. *)
+  mutable n_clause_instances : int;
+      (* M2-L12 step 2: multi-literal learned clauses registered with the engine as
+         [Clause.Learned_clause] instances. *)
+  mutable n_clause_declined : int;
+      (* ...and those [Clause.of_lits] refused, for the same two reasons as
+         [n_global_declined]. *)
   mutable i_s4_supports : int; (* hole lines the learned clauses' derivations rest on *)
   mutable i_s4_crossings : int; (* ...of which sit above level 0 -- data, not a fault *)
   mutable i_s4_broken_rev : string list; (* ...of which were already retired: faults *)
@@ -339,9 +424,16 @@ let stats_create () =
     skipped = 0;
     n_learned = 0;
     lbd_hist = Array.make lbd_buckets 0;
+    width_hist = Array.make lbd_buckets 0;
     n_converts = 0;
     learned_rev = [];
     db = Retention.create ();
+    globals_rev = [];
+    n_global_prunes = 0;
+    n_global_conflicts = 0;
+    n_global_declined = 0;
+    n_clause_instances = 0;
+    n_clause_declined = 0;
     i_s4_supports = 0;
     i_s4_crossings = 0;
     i_s4_broken_rev = [];
@@ -367,6 +459,16 @@ let stats_db s = s.db
 let stats_lbd s =
   Array.to_list (Array.mapi (fun i n -> (i, n)) s.lbd_hist)
   |> List.filter (fun (_, n) -> n > 0)
+
+(* M2-L12 step 0: the learned-CLAUSE WIDTH histogram as [(width, count)], ascending,
+   empty buckets dropped, last bucket overflow. Same shape as [stats_lbd]. *)
+let stats_width s =
+  Array.to_list (Array.mapi (fun i n -> (i, n)) s.width_hist)
+  |> List.filter (fun (_, n) -> n > 0)
+
+(* M2-L12: the learned units in force, oldest first, as their literals. A test reads this
+   to name the bound it expects to have moved. *)
+let stats_globals s = List.rev_map (fun g -> g.g_lit) s.globals_rev
 
 (* ------------------------------------------------------------------ M2-L6 counters *)
 
@@ -613,6 +715,21 @@ type config = {
          is in lib/core/retention.ml's header. Swappable for the same reason [reduction]
          and [pb_criterion] are (D-0044): the interesting alternatives are not
          parameterisations of one another. *)
+  propagate_learned : bool;
+      (* M2-L12. Whether a learned clause gets a runtime consumer: a unit becomes a
+         global bound tightening applied at every node, a wider one becomes a
+         [Clause.Learned_clause] instance registered with the engine. ON.
+
+         OFF is exactly the pre-M2-L12 build -- every learned constraint proof-only,
+         which is D-0044 fork (ii) as lib/core/learn.ml's header took it -- and it is
+         here for the same reason [pb_ladder] is: an improvement that cannot be switched
+         off is an improvement nobody can measure. It is also what makes test (a)'s break
+         possible, which is the obligation "assert the bound moves, and that it does NOT
+         without step 1" states in one sentence.
+
+         Turning it off does not make the proof different in kind, only smaller: the
+         learned constraints still go on the page, nothing cites them, and
+         [Retention]'s citation guard has nothing to guard. *)
 }
 
 let default_config =
@@ -626,6 +743,7 @@ let default_config =
     reduction = Reduce.round_to_one;
     pb_criterion = Pb_analysis.assertive_slack;
     retention = Retention.default;
+    propagate_learned = true;
   }
 
 let no_learning = { default_config with learn = false; pb = false }
@@ -634,6 +752,11 @@ let no_learning = { default_config with learn = false; pb = false }
    this solver did before M2-L4. The control side of test (c). *)
 let no_retention = { default_config with retention = Retention.keep_all }
 let no_pb = { default_config with pb = false }
+
+(* M2-L12 test (a)'s control side: learning on, every learned constraint proof-only. The
+   build lib/core/learn.ml's header describes, in which the backjump "would re-reach the
+   same fixpoint, re-take the same decision and re-derive the same conflict". *)
+let no_propagate_learned = { default_config with propagate_learned = false }
 
 (* ------------------------------------------------------------------- nogoods
 
@@ -1107,6 +1230,144 @@ let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_conve
              ~origin:"M2-L6 learned PB row");
         ignore (Retention.reduce stats.db ctx))
 
+(* ------------------------------------------------------- M2-L12: making it propagate
+
+   Everything below is D-0052's two steps and the retention obligation they create. See
+   [type global] above for step 1's argument and lib/core/prop/clause.ml's header for
+   step 2's.
+
+   Why the two steps do NOT share a mechanism, which is the question a reader will have:
+   a unit is applied by [Store.set_lo] at every node and a multi-literal clause is a
+   registered propagator instance. A unit could have been a width-1 [Clause] instance and
+   the code would be shorter. It is not, for two reasons that are about this engine
+   rather than about taste. [Engine.add] appends to an array, so it is O(n) per
+   registration and 72 units would be O(n^2) over a search. And a global applied at [dfs]
+   entry is in force BEFORE the first propagation round of the node, where an instance
+   would have to be woken and queued. D-0052 says step 1 "needs no clause propagator at
+   all"; this is that, and the saving is real rather than notional. *)
+
+(* The unit literal as a bound this search can move, or [None] when it is not one.
+
+   [None] on a [Lit.Eq] literal: the direct encoding has no bound to move (a positive
+   [Eq] fixes, which is two bounds from one literal; a negative one punches an interior
+   hole, i.e. [Store.remove_with_facts], of which I-X10 records [Ne] is the sole caller
+   in lib/ and which D-0052 told this row not to reach for). [None], too, on a name the
+   ENCODING does not declare -- the declared bounds have to come from there and not from
+   the store, because a learned constraint is built mid-search when the store's bounds
+   are narrow, which is the hazard lib/core/learned.ml's "Why the [Linear.t] is built
+   here instead of through [Linear.make]" spells out for the same reason. *)
+let global_of store ~(decl : string -> (int * int) option) ~cid (l : Lit.t) :
+    global option =
+  match l.Lit.v with
+  | Lit.Eq _ -> None
+  | Lit.Ge (nm, k) -> (
+      match (Store.var_named store nm, decl nm) with
+      | Some x, Some (lo, hi) ->
+          Some
+            {
+              g_lit = l;
+              g_cid = cid;
+              g_var = x;
+              g_pos = l.Lit.positive;
+              g_k = k;
+              g_decl_lo = lo;
+              g_decl_hi = hi;
+              g_fact =
+                (if l.Lit.positive then Reason.at_least ~name:nm ~decl:lo k
+                 else Reason.at_most ~name:nm ~decl:hi (k - 1));
+              g_expl = Explanation.clause [ l ];
+            }
+      | _, _ -> None)
+
+(* Apply every learned unit at this node. [Some c] is the first one that refuted it.
+
+   The conflict is BUILT HERE rather than forwarded from the mutator, and that is not
+   decoration. [Store.apply]'s [Failed] arm deliberately pairs the justification with
+   [Reason.none] (its comment says why: the facts a conflict line needs are strictly more
+   than the pruning's), so forwarding it would hand [Analysis] a conflict with no
+   antecedents and the 1UIP walk would find nothing to learn. The fuller set is the one
+   fact that makes it a contradiction: the OPPOSING bound the store already holds.
+   lib/core/prop/linear.ml's [cross_conflict] and bool2int.ml's push arms do exactly this
+   and for exactly this reason.
+
+   [Store.conflict] stamps [Store.no_prop] as the reporting instance, because none is
+   running -- which is the honest answer, and every consumer handles it: [Analysis] skips
+   a [no_prop] antecedent by name (its [add_antecedent]), [Engine.vars_of] and [row_of]
+   answer [None] out of range, and [Pb_analysis] turns that into its ordinary [No_row]
+   fallback. *)
+let apply_globals store stats : Store.conflict option =
+  let rec go = function
+    | [] -> None
+    | g :: rest -> (
+        let j = Reason.because ~concludes:(Some g.g_fact) Reason.none g.g_expl in
+        let r =
+          if g.g_pos then Store.set_lo store g.g_var g.g_k j
+          else Store.set_hi store g.g_var (g.g_k - 1) j
+        in
+        match r with
+        | Store.Unchanged -> go rest
+        | Store.Changed ->
+            stats.n_global_prunes <- stats.n_global_prunes + 1;
+            go rest
+        | Store.Conflict _ ->
+            stats.n_global_conflicts <- stats.n_global_conflicts + 1;
+            let d = Store.get store g.g_var in
+            let nm = Store.name store g.g_var in
+            let opposing =
+              if g.g_pos then Reason.at_most ~name:nm ~decl:g.g_decl_hi (Domain.hi d)
+              else Reason.at_least ~name:nm ~decl:g.g_decl_lo (Domain.lo d)
+            in
+            Some
+              (Store.conflict store
+                 (Reason.because ~concludes:None [ opposing ] g.g_expl)))
+  in
+  go (List.rev stats.globals_rev)
+
+(* Give the learned clause a runtime consumer, and TELL RETENTION IT HAS ONE.
+
+   The second half is the part that is easy to leave out and is the whole of step 3.
+   Before M2-L12 nothing propagated a learned constraint, so [Retention]'s policy and the
+   propagator set were independent -- D-0051's keep-all verdict was written on exactly
+   that independence, and its own "what would reverse this" section names this row as the
+   thing that ends it. A trace line from a global or from a registered instance is RUP
+   only while the learned constraint is on the page. [Retention.cite] makes retiring a
+   cited constraint raise [Retention.Cited] on OUR side, with a message naming the
+   checker's wording, instead of the checker discovering it several lines later as
+   "Trying to access constraint with ID n that has already been deleted".
+
+   A DUPLICATE unit is not cited, and that is deliberate rather than an omission: the
+   bound is already in force from the first derivation, the second constraint has no
+   consumer, and leaving it uncited leaves the policy free to evict it. *)
+let register_learned engine store ctx stats ~cid ~(lits : Lit.t list) =
+  let decl = Learned.decl_of_encoding ctx.Justify.encoding in
+  match lits with
+  | [] -> ()
+  | [ l ] -> (
+      if List.exists (fun g -> Lit.equal g.g_lit l) stats.globals_rev then ()
+      else
+        match global_of store ~decl ~cid l with
+        | None -> stats.n_global_declined <- stats.n_global_declined + 1
+        | Some g ->
+            stats.globals_rev <- g :: stats.globals_rev;
+            Retention.cite stats.db ~cid
+              ~by:
+                (Printf.sprintf "the learned unit %s, applied at every node (M2-L12)"
+                   (Lit.to_string l)))
+  | _ :: _ :: _ -> (
+      match Clause.of_lits store ~decl lits with
+      | None -> stats.n_clause_declined <- stats.n_clause_declined + 1
+      | Some p ->
+          let id = Engine.next_id engine in
+          Engine.add engine
+            (Propagator.pack ~id
+               (module Clause.Learned_clause : Propagator.S with type t = Clause.t)
+               p);
+          stats.n_clause_instances <- stats.n_clause_instances + 1;
+          Retention.cite stats.db ~cid
+            ~by:
+              (Printf.sprintf "learned_clause instance #%d over %s (M2-L12)" id
+                 (String.concat " " (List.map Lit.to_string (Clause.literals p)))))
+
 let rec learn_at_conflict engine store ctx trace stats cfg (c : Store.conflict) =
   if not cfg.learn then None
   else
@@ -1135,17 +1396,36 @@ let rec learn_at_conflict engine store ctx trace stats cfg (c : Store.conflict) 
         (let b = Learn.lbd l in
          let b = if b >= lbd_buckets then lbd_buckets - 1 else b in
          stats.lbd_hist.(b) <- stats.lbd_hist.(b) + 1);
+        (let w = List.length (Learn.lits l) in
+         let w = if w >= lbd_buckets then lbd_buckets - 1 else w in
+         stats.width_hist.(w) <- stats.width_hist.(w) + 1);
         stats.learned_rev <- cid :: stats.learned_rev;
         ignore
           (Retention.add stats.db ~cid ~row:(Learn.clause l) ~lbd:(Learn.lbd l)
              ~origin:"M2-L3 1UIP learned clause");
+        (* M2-L12. AFTER [Retention.add] -- [cite] replaces an entry's freedom to be
+           evicted, so the entry has to exist first -- and BEFORE [reduce], so that a
+           policy cannot evict on this very call a constraint the next line is about to
+           give a consumer. *)
+        if cfg.propagate_learned then
+          register_learned engine store ctx stats ~cid ~lits:(Learn.lits l);
         ignore (Retention.reduce stats.db ctx);
         pb_at_conflict engine store ctx stats cfg c ~clause_converts ~lbd:(Learn.lbd l)
           ~decl:(Learned.decl_of_encoding ctx.Justify.encoding);
         Some (Learn.levels l)
 
 and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list) : node =
-  match Engine.propagate engine store with
+  (* M2-L12 step 1: the learned units, applied before anything else at this node. See
+     [type global] on why this is where a "level-0 bound tightening" actually lands, and
+     [apply_globals] on why the conflict it can report is built rather than forwarded.
+     Before [Engine.propagate] and not after: a bound in force at the start of the round
+     is one every propagator sees, and [Engine.propagate] enqueues every instance on
+     entry anyway, so nothing has to be woken for it. *)
+  match
+    match apply_globals store stats with
+    | Some c -> Engine.Conflict c
+    | None -> Engine.propagate engine store
+  with
   | Engine.Conflict c -> (
       (* M2-T7: [c] carries the reporting instance's id ([c.Store.c_prop]) as well as its
          explanation and its bound facts. M2-L3's resolution starts from exactly this
@@ -1401,6 +1681,10 @@ let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
      not in [stats_create] because the policy lives on [config] and a [stats] is allowed
      to outlive a [solve]. *)
   stats.db <- Retention.create ~policy:config.retention ();
+  (* M2-L12: and the learned units, for the same reason -- a [stats] may outlive a
+     [solve], and a global from a previous search cites a constraint this one's writer
+     knows nothing about. *)
+  stats.globals_rev <- [];
   stats.nodes <- stats.nodes + 1;
   let result = dfs engine store ctx trace stats config order [] in
   Debug.check "I-S3: decision level on return equals level on entry" (fun () ->
@@ -1436,7 +1720,14 @@ let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
 
      Note what is still NOT done: they are not retired at the backjump. A learned clause
      whose lifetime were a level's would be a learned clause that learned nothing. *)
-  let retire_learned () = ignore (Retention.retire_all stats.db ctx) in
+  let retire_learned () =
+    (* M2-L12: release the citations first. They are a statement about the SEARCH -- a
+       global or a registered instance will write a [rup] resting on this constraint at
+       the next node -- and there is no next node. [Retention.release_all] says this at
+       length; the double-delete and not-owned guards stay on. *)
+    Retention.release_all stats.db;
+    ignore (Retention.retire_all stats.db ctx)
+  in
   match result with
   | NSat assignment ->
       if not (check assignment) then raise (Unsound_solution assignment);

@@ -33,7 +33,11 @@ module Reason = Baguette_core.Reason
 module Explanation = Baguette_core.Explanation
 module Propagator = Baguette_core.Propagator
 module Linear = Baguette_core.Linear
-module Bool_clause = Baguette_core.Bool_clause
+(* M2-L12/D-0052: bool_clause.ml was widened to general order literals and renamed
+   [Clause]; the Boolean face this file exercises is [Clause.make] plus the DOMAIN-
+   declaring submodules. Aliased under the old name so that every check below still says
+   which propagator it is about. What the widening ADDED is tested in test_clause.ml. *)
+module Bool_clause = Baguette_core.Clause
 module Engine = Baguette_core.Engine
 module Justify = Baguette_core.Justify
 module Learned = Baguette_core.Learned
