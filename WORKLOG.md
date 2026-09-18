@@ -10,14 +10,16 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
-**Wave ten is merged and released.** No sessions are running; the claims table is empty.
-It was dispatched 2026-09-18 by the orchestrator: one git worktree each
+**Wave eleven is running** (M2-L1, M1-T66), dispatched 2026-09-18, one worktree each on
+`wave11-learned` / `wave11-bridge`. Wave ten before it is merged, released and pushed; it was dispatched 2026-09-18 by the orchestrator: one git worktree each
 under `.claude/worktrees/<tag>`, on branches `wave10-concl` / `wave10-cut` / `wave10-flaky`,
 so no two share `_build`'s global lock. Build with `dune build --root .` from inside the
 worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 unit checks.
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M2-L1 | NEW `lib/core/learned.ml`, `lib/proof/writer.ml`, `lib/core/engine.ml`, `lib/core/justify.ml`, NEW `test/unit/test_learned.ml`, `test/unit/test_proof.ml`, `test/unit/dune` | agent-learned | 2026-09-18 |
+| M1-T66 | `lib/core/search.ml`, `test/unit/test_matrix.ml`, `test/unit/test_core.ml` | agent-bridge | 2026-09-18 |
 
 Two rounds are recorded in `## Completed` below. The rows that stood here on
 2026-09-15 (`integration`, M1-T12, M1-T13) were stale — see the handoff note "the
