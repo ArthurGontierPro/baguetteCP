@@ -700,12 +700,20 @@ and check_decision_landed store lvl outcome =
    facts; it *is* the fact, and its literal enters the proof exactly once, negated, in the
    branch nogood below (D-0018, D-0037) -- and it is also why [Trace] can skip a level start
    without checking: [Reason.lits Reason.none] is empty, so a line for it would be an
-   unconditional claim. *)
+   unconditional claim.
+
+   M2-L0/D-0043: and [~concludes:None] beside it, for the same reason said about the other
+   half of the pruning. A decision moves a bound, so it is the one place where "nothing was
+   concluded" is not obvious from the change itself -- D-0037 is what makes it true: the
+   bound is ASSUMED, not derived, and nothing in the proof establishes it ([Justify.emit]
+   refuses a [Decision] outright). Stating a conclusion here would claim the proof derives
+   the decision, which is the M1-T50 defect in a new place, so [Store.apply] rejects a
+   [Decision] that carries one rather than leaving it to this comment. *)
 and explore_le store engine ctx trace stats order decisions v k lit =
   let lvl = Store.level store in
   let outcome =
     Store.set_hi store v k
-      (Reason.because Reason.none (Explanation.decision (Lit.negate lit)))
+      (Reason.because ~concludes:None Reason.none (Explanation.decision (Lit.negate lit)))
   in
   match outcome with
   | Store.Conflict _ ->
@@ -728,7 +736,8 @@ and explore_le store engine ctx trace stats order decisions v k lit =
 and explore_ge store engine ctx trace stats order decisions v k lit =
   let lvl = Store.level store in
   let outcome =
-    Store.set_lo store v (k + 1) (Reason.because Reason.none (Explanation.decision lit))
+    Store.set_lo store v (k + 1)
+      (Reason.because ~concludes:None Reason.none (Explanation.decision lit))
   in
   match outcome with
   | Store.Conflict _ ->

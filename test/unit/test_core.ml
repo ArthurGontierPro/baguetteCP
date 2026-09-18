@@ -184,7 +184,7 @@ let test_store () =
      M2-T8/D-0026: a mutator takes ONE [Reason.justified], both halves together. This
      test is not exercising the trace, so its reason is [Reason.none] -- written out,
      because there is no longer a mutator that means it by omission. *)
-  let why = Reason.because Reason.none (Explanation.model_row 1) in
+  let why = Reason.because ~concludes:None Reason.none (Explanation.model_row 1) in
   check "store: prune applies"
     (match Store.set_lo s x 3 why with Store.Changed -> true | _ -> false);
   check "store: prune took effect" (Domain.lo (Store.get s x) = 3);
@@ -242,7 +242,7 @@ let test_store () =
   for lvl = 0 to 5 do
     snaps.(lvl) <- Store.snapshot s2;
     Store.new_level s2;
-    let r = Reason.because Reason.none (Explanation.model_row 1) in
+    let r = Reason.because ~concludes:None Reason.none (Explanation.model_row 1) in
     ignore (Store.set_lo s2 vars.(lvl mod 3) (lvl + 1) r);
     ignore (Store.remove s2 vars.((lvl + 1) mod 3) (9 - lvl) r)
   done;
@@ -262,7 +262,7 @@ let test_store () =
   Store.new_level s3;
   ignore
     (Store.set_lo s3 (Var.of_int 0) 4
-       (Reason.because Reason.none (Explanation.clause [ lit ])));
+       (Reason.because ~concludes:None Reason.none (Explanation.clause [ lit ])));
   let reason_count = Arena.length (Store.reasons s3) in
   check "I-T3: the reason was interned" (reason_count = 1);
   check "I-T3: the trail entry resolves to its reason"
@@ -430,7 +430,7 @@ let test_attribution () =
   let store =
     Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
   in
-  let r = Reason.because Reason.none (Explanation.model_row 1) in
+  let r = Reason.because ~concludes:None Reason.none (Explanation.model_row 1) in
   check "M2-T7: a fresh store has nobody running" (Store.running store = Store.no_prop);
 
   (* A mutation made by nobody -- Search's decision pushes and every direct call from a
@@ -472,7 +472,10 @@ let test_attribution () =
      [Reason.none] -- which is what the D-0018 point 3 line keys off, and what the old
      one-shot [conflict_facts] slot meant when nobody had armed it. M2-T8 removed the
      default: it is the same behaviour, now written down at the call site. *)
-  let c = Store.conflict store (Reason.because Reason.none (Explanation.model_row 2)) in
+  let c =
+    Store.conflict store
+      (Reason.because ~concludes:None Reason.none (Explanation.model_row 2))
+  in
   check "M2-T7: a conflict built outside a propagator is no_prop"
     (c.Store.c_prop = Store.no_prop);
   check "M2-T7: a conflict records no facts unless asked"
@@ -480,7 +483,7 @@ let test_attribution () =
   Store.with_running store 2 (fun () ->
       let c =
         Store.conflict store
-          (Reason.because
+          (Reason.because ~concludes:None
              [ Reason.at_least ~name:"x" ~decl:0 1 ]
              (Explanation.model_row 2))
       in
@@ -591,7 +594,7 @@ let test_reason () =
     Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 9; Domain.make 0 9 |]
   in
   let j =
-    Reason.because
+    Reason.because ~concludes:None
       [ Reason.at_least ~name:"x" ~decl:0 3 ]
       (Explanation.clause [ Lit.ge "x" 3 ])
   in
@@ -603,7 +606,7 @@ let test_reason () =
   Store.new_level store;
   ignore
     (Store.set_lo store (Var.of_int 0) 7
-       (Reason.because Reason.none (Explanation.model_row 1)));
+       (Reason.because ~concludes:None Reason.none (Explanation.model_row 1)));
   check "I-X6: the store really did move under the reason"
     (Domain.lo (Store.get store (Var.of_int 0)) = 7);
   check "I-X6: a reason materialised later renders the bound as of the pruning"
@@ -624,7 +627,7 @@ let test_bound_support () =
     Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 9; Domain.make 0 9 |]
   in
   let x = Var.of_int 0 in
-  let r n = Reason.because Reason.none (Explanation.model_row n) in
+  let r n = Reason.because ~concludes:None Reason.none (Explanation.model_row n) in
   let row_of_support sup =
     match Store.explanation store (Store.trail_entry store sup) with
     | Explanation.Model_row n -> n
@@ -677,7 +680,9 @@ let test_bound_support () =
   (* [Domain.fix] moves both bounds at once and must support both. *)
   let s2 = Store.create ~names:[| "z" |] ~domains:[| Domain.make 0 9 |] in
   let z = Var.of_int 0 in
-  ignore (Store.fix s2 z 4 (Reason.because Reason.none (Explanation.model_row 21)));
+  ignore
+    (Store.fix s2 z 4
+       (Reason.because ~concludes:None Reason.none (Explanation.model_row 21)));
   check "M2-T8: fix supports both bounds it moved"
     (Store.lo_support s2 z = 0 && Store.hi_support s2 z = 0 && Store.check_invariants s2)
 
@@ -703,22 +708,22 @@ let test_agreement () =
   let derived = fresh () in
   ignore
     (Store.set_lo derived (Var.of_int 1) 2
-       (Reason.because Reason.none (Explanation.model_row 1)));
+       (Reason.because ~concludes:None Reason.none (Explanation.model_row 1)));
   let expl = Explanation.clause [ Lit.ge "x" 1; Lit.le "y" 4 ] in
   check "D-0026: a reason over the justification's own variables agrees"
     (Store.agreement_holds plain
-       (Reason.because [ Reason.at_least ~name:"y" ~decl:0 2 ] expl));
+       (Reason.because ~concludes:None [ Reason.at_least ~name:"y" ~decl:0 2 ] expl));
   check "D-0026: an empty reason agrees with anything"
-    (Store.agreement_holds plain (Reason.because Reason.none expl));
+    (Store.agreement_holds plain (Reason.because ~concludes:None Reason.none expl));
   check "D-0026: a reason naming a variable the justification never mentions DISAGREES"
     (not
        (Store.agreement_holds plain
-          (Reason.because [ Reason.at_least ~name:"z" ~decl:0 2 ] expl)));
+          (Reason.because ~concludes:None [ Reason.at_least ~name:"z" ~decl:0 2 ] expl)));
   (* The disagreement is found even when the offending fact is one of several. *)
   check "D-0026: one stray fact among good ones still DISAGREES"
     (not
        (Store.agreement_holds plain
-          (Reason.because
+          (Reason.because ~concludes:None
              [
                Reason.at_least ~name:"x" ~decl:0 1;
                Reason.at_least ~name:"z" ~decl:0 5;
@@ -735,7 +740,7 @@ let test_agreement () =
      it is harmless to the proof. See the M2-T8 hand-back. *)
   check "D-0026: a stray fact that materialises to NOTHING is permitted (documented gap)"
     (Store.agreement_holds plain
-       (Reason.because [ Reason.at_least ~name:"z" ~decl:5 5 ] expl));
+       (Reason.because ~concludes:None [ Reason.at_least ~name:"z" ~decl:5 5 ] expl));
 
   (* THE CITE ARM, and the case that made the naive predicate wrong: a [Combine] that
      cites the id which established [y >= 2] contains no literal about [y] anywhere
@@ -756,14 +761,14 @@ let test_agreement () =
   in
   let cite_reason = [ Reason.at_least ~name:"y" ~decl:0 2 ] in
   check "D-0038/D-0026: a cited bound agrees, because the trail holds it up"
-    (Store.agreement_holds derived (Reason.because cite_reason cited));
+    (Store.agreement_holds derived (Reason.because ~concludes:None cite_reason cited));
   check "D-0038/D-0026: and the SAME pair disagrees when nothing established that bound"
-    (not (Store.agreement_holds plain (Reason.because cite_reason cited)));
+    (not (Store.agreement_holds plain (Reason.because ~concludes:None cite_reason cited)));
   (* The direction matters too: [y]'s LOWER bound is supported, its upper bound is not. *)
   check "D-0026: the support consulted is the one the fact's direction names"
     (not
        (Store.agreement_holds derived
-          (Reason.because [ Reason.at_most ~name:"y" ~decl:9 4 ] cited)));
+          (Reason.because ~concludes:None [ Reason.at_most ~name:"y" ~decl:9 4 ] cited)));
 
   (* A [Weaken] summand shares NO literal with the reason (declared-width chain versus
      the current bound), so this has to compare scopes and not literals. A check written
@@ -779,7 +784,9 @@ let test_agreement () =
   in
   check "D-0026: a reason agrees with a justification that only WEAKENS its variable"
     (Store.agreement_holds plain
-       (Reason.because [ Reason.at_least ~name:"x" ~decl:0 2 ] weaken_only)
+       (Reason.because ~concludes:None
+          [ Reason.at_least ~name:"x" ~decl:0 2 ]
+          weaken_only)
     && Reason.lits [ Reason.at_least ~name:"x" ~decl:0 2 ] <> Explanation.lits weaken_only
     );
 
@@ -788,21 +795,159 @@ let test_agreement () =
      it leaves a trace line over too short a tail -- an unconditional claim on a
      satisfiable model. *)
   check "I-P5/D-0026: a reason that OMITS a variable the derivation weakens DISAGREES"
-    (not (Store.agreement_holds plain (Reason.because Reason.none weaken_only)));
+    (not
+       (Store.agreement_holds plain
+          (Reason.because ~concludes:None Reason.none weaken_only)));
   check
     "I-P5/D-0026: naming a different variable does not substitute for the weakened one"
     (not
        (Store.agreement_holds plain
-          (Reason.because [ Reason.at_least ~name:"y" ~decl:0 2 ] weaken_only)));
+          (Reason.because ~concludes:None
+             [ Reason.at_least ~name:"y" ~decl:0 2 ]
+             weaken_only)));
 
   (* And it looks THROUGH a Deferred: a propagator's justification is a thunk, so a check
      that gave up on an unforced one would never fire in production. *)
   check "D-0026: the check forces a Deferred justification rather than passing it"
     (not
        (Store.agreement_holds plain
-          (Reason.because
+          (Reason.because ~concludes:None
              [ Reason.at_least ~name:"z" ~decl:0 2 ]
              (Explanation.deferred (fun () -> expl)))))
+
+(* ---------------------------------------------------------------------------
+   M2-L0 / D-0043, test (b): the agreement check becomes EXACT.
+
+   M2-T8 handed this back as a known limitation and named it precisely: the forward arm
+   of [agreement_holds] catches a reason naming the wrong *variable*, and not the right
+   variable at the wrong *value*, because its second arm ("...or the fact has a support")
+   is satisfied by any bound the trail happens to hold. It could not do better: nothing
+   in the pruning said what it concluded, so there was no value to compare against.
+
+   [Store.conclusion_holds] is that comparison, and it is exact in all three coordinates.
+   The break the roadmap asks for is I-X9's shape and the M1-T44 defect: a claim ONE UNIT
+   off the bound the trail actually holds. Off by one in either direction is wrong --
+   a weaker claim is what M1-T51 measured the checker silently accepting, and a stronger
+   one is a claim the store cannot back at all.
+   --------------------------------------------------------------------------- *)
+let test_conclusion () =
+  let store =
+    Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 9; Domain.make 0 9 |]
+  in
+  let v = Var.of_int 0 in
+  (* The justification mentions both variables, so the M2-T8 scope check PASSES on every
+     [j] below -- which is what makes the last check in this test a measurement of what
+     the conclusion adds rather than a restatement of what the scope check already did. *)
+  let expl = Explanation.clause [ Lit.ge "x" 3; Lit.le "y" 4 ] in
+  let j concludes =
+    Reason.because ~concludes [ Reason.at_least ~name:"y" ~decl:0 1 ] expl
+  in
+  (* The change under test: x's lower bound moves 0 -> 3, its upper bound stays at 9. *)
+  let old = Domain.make 0 9 and now = Domain.make 3 9 in
+  let holds c = Store.conclusion_holds store v ~old ~now (j c) in
+  check "D-0043 (b): the exact bound this change produced AGREES"
+    (holds (Some (Reason.at_least ~name:"x" ~decl:0 3)));
+  check "D-0043 (b): no conclusion at all agrees -- that is what [None] is for"
+    (holds None);
+  (* THE BREAK, both ways. One unit weak and one unit strong; the old check could see
+     neither, because "x" has a support the moment anything moved its bound. *)
+  check "D-0043 (b) THE BREAK: a conclusion ONE UNIT WEAK than the trail bound DISAGREES"
+    (not (holds (Some (Reason.at_least ~name:"x" ~decl:0 2))));
+  check
+    "D-0043 (b) THE BREAK: a conclusion ONE UNIT STRONG than the trail bound DISAGREES"
+    (not (holds (Some (Reason.at_least ~name:"x" ~decl:0 4))));
+  (* The other two coordinates, so that "exact" means all three and not just the value. *)
+  check "D-0043 (b): the right value on the WRONG VARIABLE disagrees"
+    (not (holds (Some (Reason.at_least ~name:"y" ~decl:0 3))));
+  check
+    "D-0043 (b): the right variable in the direction this change did NOT move disagrees"
+    (not (holds (Some (Reason.at_most ~name:"x" ~decl:9 9))));
+  (* And the limitation being removed, stated as a test rather than as a claim: the OLD
+     check accepts every one of the breaks above. It is not wrong -- it is answering a
+     different question (which variables, not which value) -- so this is a record of what
+     [conclusion_holds] adds, and it will go on passing. *)
+  check
+    "D-0043 (b): the M2-T8 scope check accepts the one-unit-off claim -- this is the \
+     limitation the conclusion removes, not a defect in it"
+    (Store.agreement_holds store (j (Some (Reason.at_least ~name:"x" ~decl:0 2))));
+  (* THE SETTLE WINDOW, which BAGUETTE_DEBUG measured rather than anybody designing it.
+     [Domain.set_lo] settles over the holes above the bound it is given (I-D2), so the
+     bound a propagator asks for and the bound the trail ends up holding are two
+     different numbers whenever a hole sits between them -- `x` over `0..9 \ {2}`, told
+     `x >= 2`, lands at 3. Both are honest claims about that one change: 2 is what the
+     row derives and what its [pol] is checked against, 3 is what lib/core/trace.ml's
+     line claims while citing the hole as [settled_over]. The window between them is
+     exactly the settled holes, and a claim that steps across a value which is NOT a
+     hole is still rejected. *)
+  let holed =
+    match Domain.remove (Domain.make 0 9) 2 with
+    | Domain.Changed d -> d
+    | _ -> failwith "D-0043 (b): the hole scene punched no hole"
+  in
+  let settled =
+    match Domain.set_lo holed 2 with
+    | Domain.Changed d -> d
+    | _ -> failwith "D-0043 (b): the settle scene moved no bound"
+  in
+  let across c = Store.conclusion_holds store v ~old:holed ~now:settled (j (Some c)) in
+  check "D-0043 (b): the scene really settles -- x >= 2 over 0..9 \\ {2} lands at 3"
+    (Domain.lo settled = 3);
+  check
+    "D-0043 (b): the bound the PROPAGATOR derived (2) is accepted although the trail \
+     holds 3 -- the gap is one hole wide and the hole is what closes it"
+    (across (Reason.at_least ~name:"x" ~decl:0 2));
+  check "D-0043 (b): the bound the TRAIL holds (3) is accepted too"
+    (across (Reason.at_least ~name:"x" ~decl:0 3));
+  check
+    "D-0043 (b): but 1 is REJECTED -- it steps across a value that is not a hole, so the \
+     window is a settle and not slack"
+    (not (across (Reason.at_least ~name:"x" ~decl:0 1)));
+  (* An upper-bound move, so the [At_most] arm is not tested only by its refusals. *)
+  let old = Domain.make 0 9 and now = Domain.make 0 4 in
+  check "D-0043 (b): the same, exact, for an upper bound"
+    (Store.conclusion_holds store v ~old ~now
+       (j (Some (Reason.at_most ~name:"x" ~decl:9 4))));
+  check "D-0043 (b): one unit off the new upper bound DISAGREES"
+    (not
+       (Store.conclusion_holds store v ~old ~now
+          (j (Some (Reason.at_most ~name:"x" ~decl:9 5)))))
+
+(* ---------------------------------------------------------------------------
+   M2-L0 / D-0043, test (c): the partition, at the store.
+
+   D-0043's optional conclusion is principled rather than partial: a pruning that moved a
+   bound concludes it, a DECISION concludes nothing (D-0037 -- it is an assumption, and
+   nothing in the proof establishes it), and a CONFLICT concludes falsity rather than a
+   bound. The line-or-no-line half of this -- that lib/core/trace.ml writes a line for a
+   pruning and none for a decision -- is asserted against [Trace.claims] in
+   test_prop.ml's [test_conclusion_partition]; what belongs here is the store's own
+   enforcement, because a decision's numbers AGREE with the bound it set, so
+   [conclusion_holds] alone would accept one that claimed to have derived it.
+   --------------------------------------------------------------------------- *)
+let test_decision_concludes_nothing () =
+  let decision c =
+    Reason.because ~concludes:c Reason.none (Explanation.decision (Lit.ge "x" 3))
+  in
+  let pruning c =
+    Reason.because ~concludes:c Reason.none (Explanation.clause [ Lit.ge "x" 3 ])
+  in
+  let fact = Some (Reason.at_least ~name:"x" ~decl:0 3) in
+  check "D-0043 (c): a decision carrying no conclusion is accepted -- the control"
+    (Store.decision_concludes_nothing (decision None));
+  check
+    "D-0043 (c) THE BREAK: a decision that claims to have DERIVED its bound is rejected \
+     (D-0037: it is an assumption)"
+    (not (Store.decision_concludes_nothing (decision fact)));
+  check "D-0043 (c): the same conclusion on a derived pruning is fine"
+    (Store.decision_concludes_nothing (pruning fact));
+  (* The numbers agree -- which is the whole point of having a second check. A decision
+     setting x >= 3 really does leave the trail at 3, so the exact check passes it. *)
+  let store = Store.create ~names:[| "x" |] ~domains:[| Domain.make 0 9 |] in
+  check
+    "D-0043 (c): and [conclusion_holds] alone would NOT catch it -- the bound a decision \
+     sets is the bound it would claim"
+    (Store.conclusion_holds store (Var.of_int 0) ~old:(Domain.make 0 9)
+       ~now:(Domain.make 3 9) (decision fact))
 
 (* Performing the break, rather than reading the code: re-run this very binary with
    BAGUETTE_DEBUG=1 in a mode that pushes a disagreeing pruning, and require it to die.
@@ -814,11 +959,28 @@ let disagreeing_push ~agree () =
   in
   let name = if agree then "x" else "z" in
   let j =
-    Reason.because
+    Reason.because ~concludes:None
       [ Reason.at_least ~name ~decl:0 3 ]
       (Explanation.clause [ Lit.ge "x" 1 ])
   in
   ignore (Store.set_lo store (Var.of_int 0) 2 j)
+
+(* The same treatment for D-0043's two checks: a check that only a unit test calls is a
+   predicate, not an invariant. These push through [Store.set_lo] for real, so what is
+   being measured is that [apply] consults them. [off] is the one-unit-off conclusion
+   (test (b)) and [decision] is the decision that claims its own bound (test (c)). *)
+let conclusion_push ~off ~decision () =
+  let store =
+    Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
+  in
+  let concludes = Some (Reason.at_least ~name:"x" ~decl:0 (if off then 3 else 2)) in
+  let justification =
+    if decision then Explanation.decision (Lit.ge "x" 2)
+    else Explanation.clause [ Lit.ge "x" 2 ]
+  in
+  ignore
+    (Store.set_lo store (Var.of_int 0) 2
+       (Reason.because ~concludes Reason.none justification))
 
 let test_agreement_is_wired () =
   let run mode =
@@ -830,12 +992,28 @@ let test_agreement_is_wired () =
   check "D-0026: BAGUETTE_DEBUG accepts a pruning whose reason agrees (the control)"
     (run "--agreeing-push" = 0);
   check "D-0026: BAGUETTE_DEBUG REJECTS a pruning whose reason names a stray variable"
-    (run "--disagreeing-push" <> 0)
+    (run "--disagreeing-push" <> 0);
+  check
+    "D-0043 (b): BAGUETTE_DEBUG accepts a pruning whose conclusion IS the bound it set \
+     (the control)"
+    (run "--exact-conclusion" = 0);
+  check
+    "D-0043 (b): BAGUETTE_DEBUG REJECTS a pruning whose conclusion is ONE UNIT off the \
+     bound the trail holds (I-X9's shape, the M1-T44 defect)"
+    (run "--off-by-one-conclusion" <> 0);
+  check
+    "D-0043 (c): BAGUETTE_DEBUG REJECTS a DECISION that carries a conclusion, although \
+     its numbers agree with the bound it set"
+    (run "--decision-with-a-conclusion" <> 0)
 
 let () =
   match Array.to_list Sys.argv with
   | _ :: "--agreeing-push" :: _ -> disagreeing_push ~agree:true ()
   | _ :: "--disagreeing-push" :: _ -> disagreeing_push ~agree:false ()
+  | _ :: "--exact-conclusion" :: _ -> conclusion_push ~off:false ~decision:false ()
+  | _ :: "--off-by-one-conclusion" :: _ -> conclusion_push ~off:true ~decision:false ()
+  | _ :: "--decision-with-a-conclusion" :: _ ->
+      conclusion_push ~off:false ~decision:true ()
   | _ ->
       test_domains ();
       test_store ();
@@ -844,6 +1022,8 @@ let () =
       test_reason ();
       test_bound_support ();
       test_agreement ();
+      test_conclusion ();
+      test_decision_concludes_nothing ();
       test_agreement_is_wired ();
       if !failures > 0 then (
         Printf.printf "\n%d failure(s)\n" !failures;

@@ -389,9 +389,18 @@ let classify s =
    variable scope, with the declared ones dropping out at [Reason.lits]. The justification
    stays [Deferred]: the [Lit.t] chains and any recursive [emit] are the expensive part and
    most prunings are never asked. The thunk closes over [snaps] and [base] only -- no
-   store, no live domain (I-X6). *)
-let justified_of_snaps base snaps divisor : Reason.justified =
-  Reason.because (List.map fact_of_snap snaps)
+   store, no live domain (I-X6).
+
+   M2-L0/D-0043: [~concludes] is the third half-that-is-not-a-half -- WHAT this pruning
+   derived, as a [Reason.fact]. It is passed in rather than computed here because this
+   function serves four sites and only two of them conclude a bound: the two pushes below
+   conclude exactly the bound they hand [Store.set_hi]/[set_lo], and the two conflict
+   paths conclude falsity, which is not a bound, so they pass [None] and are seen doing
+   it. It is NOT derivable from [snaps] -- [snaps] is what was read, the conclusion is
+   what came out -- which is exactly why D-0043 puts it on [justified] and not in the
+   reason. *)
+let justified_of_snaps ~concludes base snaps divisor : Reason.justified =
+  Reason.because ~concludes (List.map fact_of_snap snaps)
     (Explanation.deferred (fun () ->
          let summands =
            Explanation.term 1 base :: List.concat_map summands_of_snap snaps
@@ -516,7 +525,8 @@ let propagate t store =
   if slack < 0 then
     let snaps = row_snaps store t.terms ~exclude:None in
     Propagator.Conflict
-      (Store.conflict store (justified_of_snaps (base_explanation t) snaps 1))
+      (Store.conflict store
+         (justified_of_snaps ~concludes:None (base_explanation t) snaps 1))
   else
     let result = ref Propagator.Fixpoint in
     let conflict = ref None in
@@ -530,7 +540,7 @@ let propagate t store =
       conflict :=
         Some
           (Store.conflict store
-             (Reason.because
+             (Reason.because ~concludes:None
                 (List.map fact_of_snap snaps @ [ opposite_bound_fact store tm ])
                 (explain_cross_conflict ~opposite:(opposite_rests_on store tm) expl)))
     in
@@ -543,7 +553,11 @@ let propagate t store =
             let new_hi = floordiv max_term tm.coeff in
             if new_hi < Domain.hi d then
               let snaps = row_snaps store t.terms ~exclude:(Some idx) in
-              let j = justified_of_snaps (base_explanation t) snaps tm.coeff in
+              let concludes =
+                Some
+                  (Reason.at_most ~name:(Store.name store tm.x) ~decl:tm.decl_hi new_hi)
+              in
+              let j = justified_of_snaps ~concludes (base_explanation t) snaps tm.coeff in
               match Store.set_hi store tm.x new_hi j with
               | Store.Conflict _ -> cross_conflict tm snaps j.Reason.justification
               | Store.Changed | Store.Unchanged -> ())
@@ -551,8 +565,13 @@ let propagate t store =
             let new_lo = ceildiv max_term tm.coeff in
             if new_lo > Domain.lo d then
               let snaps = row_snaps store t.terms ~exclude:(Some idx) in
+              let concludes =
+                Some
+                  (Reason.at_least ~name:(Store.name store tm.x) ~decl:tm.decl_lo new_lo)
+              in
               let j =
-                justified_of_snaps (base_explanation t) snaps (Checked.neg tm.coeff)
+                justified_of_snaps ~concludes (base_explanation t) snaps
+                  (Checked.neg tm.coeff)
               in
               match Store.set_lo store tm.x new_lo j with
               | Store.Conflict _ -> cross_conflict tm snaps j.Reason.justification

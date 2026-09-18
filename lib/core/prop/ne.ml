@@ -272,8 +272,43 @@ let pruning_reason tm w d fixed_others =
    [(tm, w) :: fixed_others] (the pruned term fixed at [w] as well, which is what makes it
    a nogood) and the reason is over the bound [w] is about to move plus the others; the
    two differ exactly there and by construction, not by two call sites agreeing. *)
-let justified_pruning tm w d fixed_others : Reason.justified =
-  Reason.because (pruning_reason tm w d fixed_others) (explain ((tm, w) :: fixed_others))
+let justified_pruning ~concludes tm w d fixed_others : Reason.justified =
+  Reason.because ~concludes
+    (pruning_reason tm w d fixed_others)
+    (explain ((tm, w) :: fixed_others))
+
+(* D-0043's conclusion for a *value removal*, which is the one pruning shape whose claim
+   is not always a bound.
+
+   [Store.remove] does one of two things (I-D2, and [Domain.classify] reports them as
+   disjoint): removing a value AT a bound settles and tightens that bound, and removing
+   an interior value punches a hole. The first concludes the bound it settled to -- which
+   is exactly the claim lib/core/trace.ml writes for it, a single order literal with the
+   holes it stepped over as [settled_over]. The second concludes `x <> w`, a TWO-literal
+   clause over the order encoding ([Trace.hole_clause]), and that is not a [Reason.fact]
+   in any direction: it is [None], and reason.ml's header states that this [None] is
+   about the type and not about a gap in the solver's own partition.
+
+   The settled bound is walked out here rather than recovered from a second
+   [Domain.remove] call: that call allocates a hole bitset whose size is
+   width-proportional (D-0028), and running it twice per pruning to read one number back
+   is the kind of cost this project measures rather than pays. The walk is the same one
+   [Trace.holes_above]/[holes_below] do over the same domain, so the number this states
+   and the number the trace line claims come from one rule. *)
+let removal_conclusion tm w d =
+  if w = Domain.lo d then (
+    let v = ref (w + 1) in
+    while !v <= Domain.hi d && Domain.is_hole d !v do
+      incr v
+    done;
+    Some (Reason.at_least ~name:tm.name ~decl:tm.decl_lo !v))
+  else if w = Domain.hi d then (
+    let v = ref (w - 1) in
+    while !v >= Domain.lo d && Domain.is_hole d !v do
+      decr v
+    done;
+    Some (Reason.at_most ~name:tm.name ~decl:tm.decl_hi !v))
+  else None
 
 (* ------------------------------------------------------------------- propagation *)
 
@@ -321,7 +356,8 @@ let propagate t store =
            M2-T8 this was the default argument and said nothing. *)
         Propagator.Conflict
           (Store.conflict store
-             (Reason.because Reason.none (explain (all_pairs store t.terms))))
+             (Reason.because ~concludes:None Reason.none
+                (explain (all_pairs store t.terms))))
   | [ idx ] -> (
       let tm = List.nth t.terms idx in
       let others = others_except t.terms idx in
@@ -340,7 +376,10 @@ let propagate t store =
           let fixed_others =
             List.map (fun o -> (o, Domain.lo (Store.get store o.x))) others
           in
-          match Store.remove store tm.x w (justified_pruning tm w d fixed_others) with
+          let concludes = removal_conclusion tm w d in
+          match
+            Store.remove store tm.x w (justified_pruning ~concludes tm w d fixed_others)
+          with
           | Store.Conflict e ->
               (* Unreachable at the interface: [tm] is unfixed, so its domain holds at
                  least two values and removing one cannot empty it. Handled rather
