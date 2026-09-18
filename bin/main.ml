@@ -543,17 +543,38 @@ let report_stats (st : Search.stats) (outcome : Search.outcome) =
   Printf.eprintf "stats: %-10s %10d pivots %s\n" "pb-steps" st.Search.n_pb_steps
     "pivots eliminated by linear combination + reduction, over all analyses";
   Printf.eprintf "stats: %-10s %10d rows   %s\n" "pb-convert" st.Search.n_pb_converts
-    "...learned PB rows Learned.to_linear_row accepts, i.e. which could propagate";
+    "...learned PB rows Learned.to_linear_row accepts -- INCLUDING the empty \
+     contradiction";
   Printf.eprintf "stats: %-10s %10d rows   %s\n" "pb-stronger" st.Search.n_pb_stronger
     "...of those, where the SAME conflict's clause does NOT convert. M2-L6 test (a)";
-  (* M2-L11 test (b). READ THIS BESIDE [pb-stronger], NEVER INSTEAD OF IT. A learned row
-     that is the EMPTY CONTRADICTION is strictly stronger than the clause it replaces and
-     still useless as a propagation result, and [pb-stronger] cannot tell the two apart.
-     [pb-nondeg] can, so a claim that PB learning improved is a claim about this line --
-     the first thing it did was correct M2-L6's "36 of 36 degenerate", which is 26 of 36
-     NON-degenerate on the same 38 models. [pb-lifted] says whether lib/core/ladder.ml
-     fired at all: the lift is a retry after the bare model row fails, so 0 here means
-     this build derives exactly what M2-L6 derived. *)
+  (* M2-L11 test (b). READ THIS BESIDE [pb-convert] AND [pb-stronger], NEVER INSTEAD OF
+     EITHER. A learned row that is the EMPTY CONTRADICTION is strictly stronger than the
+     clause it replaces and still useless as a propagation result; it also CONVERTS -- to
+     a zero-term Linear -- so neither [pb-convert] nor [pb-stronger] can tell the two
+     apart. That is deliberate and it is what test_ladder.ml's degenerate control pins;
+     [pb-nondeg] is the counter that can, so a claim that PB learning improved is a claim
+     about this line.
+
+     Re-measured 2026-09-18 (M2-L4), by solving every model in test/models/ with `--stats`
+     and summing each line -- not read off an earlier note, which is how the figure this
+     replaces went stale:
+
+       39 models; pb-learned 38; pb-nondeg 28; pb-convert 36; pb-stronger 36.
+
+     **10 of those 36 conversions are the empty contradiction** -- backjump_lineq_unsat
+     (3), near_limit_unsat (3), offset_unsat (4), every one of them the int_lin_eq family
+     whose two halves add to 0 >= k in one elimination. So 26 of the 36 are conversions
+     that could actually propagate, and the same 10 inflate [pb-stronger].
+
+     The text here previously read "26 of 36 NON-degenerate on the same 38 models". Two
+     things were wrong with it and they pull in opposite directions: the suite is 39
+     models, not 38, and the non-degenerate count is 28 of 38 LEARNED ROWS, not 26 of 36
+     CONVERSIONS. 26 of 36 is a real figure about a different question -- the one in the
+     paragraph above.
+
+     [pb-lifted] says whether lib/core/ladder.ml fired at all: the lift is a retry after
+     the bare model row fails, so 0 here means this build derives exactly what M2-L6
+     derived. *)
   Printf.eprintf "stats: %-10s %10d rows   %s\n" "pb-nondeg" st.Search.n_pb_nondegenerate
     "...learned PB rows that are NOT the empty contradiction. M2-L11 test (b)";
   Printf.eprintf "stats: %-10s %10d rows   %s\n" "pb-lifted" st.Search.n_pb_lifted

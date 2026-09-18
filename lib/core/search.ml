@@ -273,13 +273,24 @@ type stats = {
          measure the suite has. It cannot look green in this one. *)
   mutable n_pb_steps : int; (* pivots eliminated, over all successful analyses *)
   mutable n_pb_converts : int;
-      (* ...of which [Learned.to_linear_row] accepts, i.e. which could be a runtime
-         instance. Measured against the clause path's [n_converts], which is the
-         comparison lib/core/pb_analysis.ml's "why the PB row can propagate where the
-         clause cannot" makes and does not assume. *)
+      (* ...of which [Learned.to_linear_row] accepts. Measured against the clause path's
+         [n_converts], which is the comparison lib/core/pb_analysis.ml's "why the PB row
+         can propagate where the clause cannot" makes and does not assume.
+
+         NOT "of which could be a runtime instance", which is what this comment said
+         until M2-L4 measured it. The EMPTY CONTRADICTION converts -- to a zero-term
+         [Linear] that propagates nothing -- and is counted here. Suite-wide on
+         2026-09-18: 36 conversions of 38 learned rows, of which **10 are the empty
+         contradiction** (backjump_lineq_unsat 3, near_limit_unsat 3, offset_unsat 4), so
+         26 could actually propagate. Read this beside [n_pb_nondegenerate], which is the
+         counter that can tell them apart, and see bin/main.ml's block above `pb-nondeg`.
+         The counter is left as it is on purpose: test_ladder.ml's degenerate control pins
+         that it CANNOT make the distinction, which is the property M2-L11 established. *)
   mutable n_pb_stronger : int;
   (* ...of which convert where the SAME conflict's clause does not. This is test (a)
-     as a counter: the number of times this row did something M2-L3 could not. *)
+     as a counter: the number of times this row did something M2-L3 could not -- with
+     [n_pb_converts]'s caveat above inherited in full, because it is the same predicate.
+     Suite-wide 36, of which the same 10 are vacuous. *)
   (* ------------------------------------------------------------------ M2-L11 *)
   mutable n_pb_nondegenerate : int;
       (* Learned PB rows that are NOT the empty contradiction, i.e. that still carry at
