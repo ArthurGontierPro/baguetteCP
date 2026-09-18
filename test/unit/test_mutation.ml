@@ -653,20 +653,31 @@ let rows_that_refute_alone ~dir ~name m =
       let rows = Encoding.constraints enc in
       let n = Opb.n_checker_constraints rows in
       let opb = Filename.concat dir (name ^ "_cert.opb") in
-      let oc = open_out opb in
-      Encoding.write_opb ~comments:[ "test_mutation: certifying " ^ name ] enc oc;
-      close_out oc;
       let accepted = ref [] in
       for i = 1 to n do
+        (* M2-T14. Both files are emitted through [Writer]/[write_opb_for] so that they
+           cannot disagree about the format. They did: the .opb came from a bare
+           [write_opb], which follows [Writer.default_format ()], while the proof was
+           this literal text, hardcoded to 3.0 with `;` terminators and an `@c<i>`
+           citation. Under BAGUETTE_PROOF_FORMAT=2.0 that wrote an UNLABELLED .opb and
+           then cited a label in it, so every row was refused on the grammar, [accepted]
+           came back empty for every instance, and [no_single_row_refutes] reported "no
+           row refutes alone" about a procedure that could not have found one.
+
+           That is D-0030's own guard against a hollow instance, passing for exactly the
+           reason D-0030 exists. It was caught by [certification_finds_root_unsat], the
+           control that asserts the procedure can still find the row it is known to have
+           -- which is why that control is not optional. *)
         let pbp = Filename.concat dir (name ^ "_cert.pbp") in
         let oc = open_out pbp in
-        Printf.fprintf oc
-          "pseudo-Boolean proof version 3.0\n\
-           f %d ;\n\
-           output NONE ;\n\
-           conclusion UNSAT : @c%d ;\n\
-           end pseudo-Boolean proof ;\n"
-          n i;
+        let w = Writer.create ~comments:false ~audit:false oc in
+        let opb_oc = open_out opb in
+        Encoding.write_opb_for ~comments:[ "test_mutation: certifying " ^ name ] enc w
+          opb_oc;
+        close_out opb_oc;
+        Encoding.start_proof enc w;
+        (* Derives NOTHING: the conclusion names a model row directly. *)
+        Writer.conclusion w (Writer.Unsat (Some i));
         close_out oc;
         let log = Filename.concat dir (name ^ "_cert.log") in
         let rc =
