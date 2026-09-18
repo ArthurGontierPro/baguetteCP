@@ -1881,3 +1881,69 @@ clause. `Search.no_pb` turns the path off for a comparison against M2-L3's numbe
 **I-S4 for a `pol` is discharged** — `learn.ml` explicitly left this here. Every leaf of a
 derivation is a `Model_row` of the .opb; no hole line, trace line or conflict-level id is
 ever cited. `Pb_analysis.cited_ids` returns the set so it is checked, not argued.
+
+## Wave fourteen handoff, 2026-09-18 (orchestrator): M2-L6 and M2-T14
+
+Two sessions, both merged and pushed. Gate green: **1986 unit checks**, 280 matrix, 44
+mutation, **38/38 models**, determinism byte-identical, width lint and fmt clean.
+
+**With M2-L6 in, the learning sequence is complete except M2-L4, M2-L7 and M2-L8.**
+
+### M2-L6's result is a negative, and it must not be read past
+
+The row existed to show a learned PB inequality is *strictly stronger* than the clause it
+replaces. It is — and it is also **degenerate**. Where the PB path succeeds it derives the
+**empty contradiction**, never a non-trivial inequality. **A scene where a non-trivial
+learned inequality outpropagates its clause was looked for and not found.** I re-measured:
+`pb-stronger` is **36 of 36** learned rows, and all 36 are that degenerate case.
+
+Fallback rate, independently re-measured and matching the report exactly: **0.581** — 86
+attempts, 36 learned, 50 fallbacks, 21 of 38 models, with `attempts = learned + fallbacks`
+holding. 0.00 on the lineq model, 1.00 on the bool ones.
+
+**Why, and this is the valuable part — now M2-L11.** *Our integer propagator is stronger
+than PB propagation on the same row.* `3a + 2b <= 14` with `lo(b) = 4` lets `Linear` deduce
+`a <= 2`; the row alone has slack 6 against pivot coefficient 3. The strength lives in the
+**ladder implications, which are separate `.opb` rows**. So the real reason for a `Linear`
+pruning is *model row + ladder chain* — something `Linear` already builds as an
+`Explanation` but never as a **row**, so the PB analysis cannot see it. Until it can,
+eliminating a pivot can only ever reach the contradiction. M2-L11 is that row, and its test
+(b) is deliberately a **number**: `pb-stronger` counting a non-degenerate learned row, so
+the improvement cannot be claimed without being measured.
+
+**Koops et al. was read properly and corrected two things in my brief.** Merging adjacent
+weakening steps on `pol` lines is **CakePB's own pass** (§5.4), not an emitter obligation —
+so M2-L5 needed no change. And "partial weakening before a non-normalised division" is §3's
+**MIR**, which is strictly stronger than both `Reduce` rules and belongs as a **third
+`Reduce.t`**, not inside this row. Both recorded rather than acted on, correctly.
+
+`explanation.ml` needed nothing again: **D-0044's table has now held three times** — M2-L5,
+M2-L6, and M2-L1 before them.
+
+### M2-T14 found three more vacuous lanes, and one of them was a guard
+
+Detailed in that row and in D-0030's amendment. The one to remember: **`test_mutation.ml`'s
+`rows_that_refute_alone` — D-0030's own certification that an instance is not hollow — was
+itself hollow under 2.0**, reporting "no row refutes alone" for *every* instance because an
+unlabelled `.opb` was cited by label. Only its own control made it visible.
+
+Verified by me under both configurations: `test_proof` **18 FAIL → 0**, `test_justify`
+**1 → 0**, `test_mutation` **3 → 2**, the survivors deliberate (**M2-T15**).
+
+### Two habits from this wave worth keeping
+
+- **Both agents reported a negative prominently rather than burying it** — agent-pb's "not
+  found", agent-fmt2's "two left deliberately red". Two sessions also converted *their own*
+  vacuous tests into reported facts rather than leaving them green. That is the behaviour
+  this project's rules exist to produce, and it is now the norm rather than the exception.
+- **Setting only `BAGUETTE_PROOF_FORMAT=2.0` exercises nothing**, because `Checker.find`
+  prefers the Rust 3.0.2 and never reaches the Python checker. **Both** variables are
+  required: `BAGUETTE_PROOF_FORMAT=2.0 VERIPB=$HOME/.local/bin/veripb`. The gate runs 3.0
+  only, so nothing routinely covers that path.
+
+### Next
+
+**M2-L4** (deletion policy, absorbs M2-T4) and **M2-L8** (benchmark) are both unblocked and
+both were held back for M2-L10's instances, which now exist — 4 models, 9 skips. **M2-L7**
+(saturation) still needs its own decision record before any code. **M2-L11** is the row that
+would make M2-L6 pay off, and **M2-T15** is a question, not work.
