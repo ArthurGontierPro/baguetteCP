@@ -10,6 +10,38 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
+**Wave seventeen is running: M2-L4 (agent-del) and a read-only scoping study (agent-convert).**
+
+**agent-del holds `lib/`, `bin/main.ml` and `test/**`.** M2-L4 is learned-constraint deletion,
+the matching `del` and a retention policy; it needs `lib/core/{learn,learned,search}.ml` *and*
+`lib/proof/writer.ml`, which owns the constraint-id counter and `wipe_level`. That is the
+learning vertical plus the writer, so there is no second editing task that does not collide —
+`lib/proof/encoding.ml` is not safe either, because M3-T1's `red` emission would want the
+writer too.
+
+**So the partner edits nothing at all.** agent-convert is a **read-only study**, the same shape
+wave fourteen used for M2-T14 when agent-pb held all of `lib/`. Its question is the one D-0049
+ended on: **what must a learned PB row look like before `Learned.to_linear_row` accepts it?**
+M2-L11 left `pb-convert 0` on its own fixture — the lifted rows are non-degenerate and still do
+not convert — so "lift more" is the wrong next move and M2-L7 (`Saturate`) should not be scoped
+until this is answered. It reports to the orchestrator, who writes any doc or record; it
+commits nothing. It works from its own worktree pinned at this wave's base so it reads a stable
+tree while agent-del edits.
+
+**Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `dune-project`,
+`scripts/**`, `bench/**` and all merging, as standing.
+
+**The one design question M2-L4 must settle before writing any policy** (its row says so, and
+D-0045 found it): `Writer.wipe_level l` deletes every id tagged at level `>= l`, so a learned
+constraint tagged at the level it was learned at is deleted **by the backjump**. If the
+retention policy also deletes it, that is an I-X2 double-delete arriving from two owners.
+**Decide who owns a learned constraint's lifetime first.**
+
+Wave sixteen (M2-L11 agent-ladder, M2-T17 agent-size) is merged, released and pushed; its one
+carry-over is that **M2-L6's `pb-*` figures in any older note are not to be trusted** — see the
+wave-sixteen handoff and D-0047's amendment.
+
+
 **Wave sixteen is COMPLETE: M2-L11 (agent-ladder) and M2-T17 (agent-size) are both merged,
 released and pushed. Every file is free.** The whole tree is unclaimed as of this line.
 
