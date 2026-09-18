@@ -2813,3 +2813,47 @@ re-raise it from scratch.
 `del_run`, I-X4, I-S3), not measured — no proof containing a restart has ever been emitted
 or checked. The `wipe_level` finding **is** grounded: `lib/proof/writer.ml:764` computes its
 doomed set as every id tagged at level `>= l`.
+
+### Addendum, same day: the finding is sharper than stated above, and it is a tension, not a caution
+
+Followed up in the code rather than left as a caution, because it steers three rows.
+
+**Every id is tagged automatically, with no opt-out.** `Writer.fresh t ~origin`
+(`lib/proof/writer.ml:547`) does `Hashtbl.replace t.tags t.next_id t.level` under 3.0 — it
+tags the new id with the writer's **current** level, unconditionally. There is **no
+`~level` argument** on `fresh`, and `set_level` (`:593`) is the only thing that moves
+`t.level`. So a learned constraint does not merely *risk* being tagged at the conflict
+level; it **is** tagged there, automatically, by the act of allocating its id.
+
+**That collides head-on with M2-L3's own emission rule.** M2-L3's row requires the learned
+clause's derivation be emitted *"while the trace lines supporting it are still live"* —
+that is, **before** the level is retired. Survival requires the learned id **not** be
+tagged at a level the retirement wipes. Today those two cannot both hold:
+
+| requirement | forces |
+|---|---|
+| M2-L3: derive while supports are live | emit **before** `wipe_level` |
+| the constraint must outlive the conflict | id tagged **below** the wiped level |
+| `Writer.fresh` | tags at `t.level`, **no override** |
+
+The only lever in the current API is `set_level t 0` before emitting, and that is not a
+free move: `set_level` is *"the only thing that writes a level marker"*, so it would emit a
+`% level 0` into the middle of a derivation and change the proof's level state around it.
+
+**So M2-L1 almost certainly owes `lib/proof/writer.ml` a new entry point** — an id
+allocated at a chosen level (`fresh ~level`, or a `fresh_persistent` that tags 0) — rather
+than a call-ordering trick in `lib/core`. That is a *proof-side* change, in a file the
+learning rows would otherwise never open, and it is the kind of thing that is cheap now and
+expensive once three rows have each worked around it differently.
+
+**And it must work in both formats.** Under 2.0 `t.tags` is not maintained at all — the
+checker holds the level stack and `w l` retires against it (`:876`). So the same hazard
+exists under 2.0 but is enforced by the *checker* rather than by our table, and a fix that
+only adjusts `t.tags` would be green under 3.0 and wrong under 2.0. Both wordings, both
+formats — the M1-T46 discipline applied to a data structure instead of a message.
+
+**Register**: this paragraph is read off the code (`fresh` at `:547`, `set_level` at `:593`,
+`wipe_level` at `:764`, the 2.0 note at `:876`) and is **not** measured — no learned
+constraint has ever been emitted, so no proof has yet been rejected this way. The
+prediction to falsify is: emit a learned constraint at the conflict level, and the backjump
+that follows deletes it.
