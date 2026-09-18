@@ -487,13 +487,38 @@ let test_degenerate_control () =
     "\n-- M2-L11 (b, control): the counter reads 0 where the rows really are degenerate";
   let r = run degenerate_src in
   let s = r.r_stats in
-  check_eq "b/control: the int_lin_eq family learns three PB rows" s.Search.n_pb_learned 3;
-  check_eq "b/control: ...every one of them strictly stronger than its clause"
-    s.Search.n_pb_stronger 3;
-  check_eq "b/control: ...and every one of them the EMPTY CONTRADICTION, so 0 here"
+  (* M2-L13 MOVED THIS NUMBER FROM 3 TO 1, and the move is the row working rather than
+     the test drifting. The empty contradiction now has a RUNTIME CONSUMER
+     (lib/core/prop/pb.ml, registered by [Search.register_learned_pb]), so the row
+     derived at the first conflict refutes the model at the very next node and the other
+     two conflicts never happen. The three-row figure is still reachable and is asserted
+     below with [propagate_learned = false], which is what makes this an improvement
+     rather than a lost measurement.
+
+     What this control is FOR is unchanged and still checked on whatever rows are
+     learned: [n_pb_nondegenerate] must read 0 where the rows really are degenerate. *)
+  check_eq "b/control: the int_lin_eq family learns a PB row" s.Search.n_pb_learned 1;
+  check_eq "b/control: ...strictly stronger than its clause" s.Search.n_pb_stronger 1;
+  check_eq "b/control: ...and it is the EMPTY CONTRADICTION, so 0 here"
     s.Search.n_pb_nondegenerate 0;
   check_eq "b/control: ...reached with no ladder rung, in one elimination each"
     s.Search.n_pb_lifted 0;
+  (* M2-L13's own control: with the learned constraint given no runtime consumer the
+     search takes all three conflicts again, and the counter still reads 0 on all three.
+     Both halves matter -- the first says the drop above is M2-L13's doing and not a
+     silently weakened assertion, the second says the degeneracy claim is about the rows
+     and not about how many of them there are. *)
+  let off = run ~config:Search.no_propagate_learned degenerate_src in
+  let so = off.r_stats in
+  check_eq "b/control (M2-L13 off): the same model takes three conflicts again"
+    so.Search.n_pb_learned 3;
+  check_eq "b/control (M2-L13 off): ...every one strictly stronger than its clause"
+    so.Search.n_pb_stronger 3;
+  check_eq "b/control (M2-L13 off): ...and every one degenerate, so 0 here"
+    so.Search.n_pb_nondegenerate 0;
+  check "b/control: so propagating the learned row is what cut three conflicts to one"
+    (so.Search.n_pb_learned > s.Search.n_pb_learned);
+  cleanup off;
   List.iter
     (fun (t : Pb.t) ->
       check "b/control: the row has no terms and a positive degree"

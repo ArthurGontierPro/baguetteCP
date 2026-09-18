@@ -255,7 +255,7 @@ let test_oracle_round_trip () =
       let c1 = run_to_fixpoint i1 s1 in
       (* the same row, round-tripped through Learned.t *)
       let s2 = mk () in
-      let i2 = Option.get (Learned.instance ~id:0 ~row_id:1 s2 ~decl learned) in
+      let i2 = Option.get (Learned.pb_instance ~id:0 ~row_id:1 s2 ~decl learned) in
       let c2 = run_to_fixpoint i2 s2 in
       if c1 = c2 && domains_of s1 = domains_of s2 then incr agree else incr disagree;
       (* and both against the oracle *)
@@ -336,7 +336,7 @@ let test_d0044_clause_is_degree_one () =
       scene s1;
       let c1 = run_to_fixpoint i1 s1 in
       let s2 = mk () in
-      let i2 = Option.get (Learned.instance ~id:0 ~row_id:1 s2 ~decl learned) in
+      let i2 = Option.get (Learned.pb_instance ~id:0 ~row_id:1 s2 ~decl learned) in
       scene s2;
       let c2 = run_to_fixpoint i2 s2 in
       if c1 then incr conflicted;
@@ -384,7 +384,7 @@ let test_d0044_clause_is_degree_one () =
       scene s1;
       let c1 = run_to_fixpoint i1 s1 in
       let s2 = mk () in
-      let i2 = Option.get (Learned.instance ~id:0 ~row_id:1 s2 ~decl wrong) in
+      let i2 = Option.get (Learned.pb_instance ~id:0 ~row_id:1 s2 ~decl wrong) in
       scene s2;
       let c2 = run_to_fixpoint i2 s2 in
       if c1 <> c2 || domains_of s1 <> domains_of s2 then saw_disagreement := true)
@@ -399,15 +399,20 @@ let test_d0044_clause_is_degree_one () =
 (* A propagator that runs the learned instance under SOMEBODY ELSE'S id. The only route
    to a wrong [entry.prop] is [Store.with_running], which the engine needs public --
    test_engine.ml's [Steals_credit] walks through it for the same reason. *)
+(* M2-L13: [inner] is now a packed [Propagator.instance] rather than a [Linear.t], so
+   this can wrap whatever family a learned row instantiates as. It wrapped a [Linear.t]
+   only because [Learned.to_linear] handed one over, and that function is gone. Nothing
+   about what the break does changed: it runs the real propagator under SOMEBODY ELSE'S
+   id through [Store.with_running], which is the only route to a wrong [entry.prop]. *)
 module Steals_credit = struct
-  type t = { inner : Linear.t; victim : int }
+  type t = { inner : Propagator.instance; victim : int }
 
   let name = "steals_credit"
   let consistency = Propagator.Bounds
-  let vars t = Linear.vars t.inner
+  let vars t = t.inner.Propagator.inst_vars
 
   let propagate t store =
-    Store.with_running store t.victim (fun () -> Linear.propagate t.inner store)
+    Store.with_running store t.victim (fun () -> t.inner.Propagator.run store)
 end
 
 (* Test (c). The learned instance is registered with a live engine, its prunings are
@@ -446,12 +451,20 @@ let test_it4_attribution () =
   let rungs v = List.init 4 (fun i -> (-1, Lit.ge v (i + 1))) in
   let learned = Learned.make (rungs "x" @ rungs "y") (-3) in
   let id = Engine.next_id engine in
-  let inst = Option.get (Learned.instance ~id ~row_id:99 store ~decl learned) in
+  let inst = Option.get (Learned.pb_instance ~id ~row_id:99 store ~decl learned) in
   Engine.add engine inst;
   check "(c) the learned instance got the engine's next id and was registered"
     (Engine.n_instances engine = 2 && inst.Propagator.id = 1);
-  check "(c) and it is a Linear instance -- no new propagator family"
-    (inst.Propagator.inst_name = Linear.name);
+  (* M2-L13 / D-0054 REPLACED THIS ASSERTION AND THE CLAIM UNDER IT. Until M2-L13 a
+     learned row was instantiated as a [Linear] -- D-0044's "no new propagator family"
+     bet -- through [Learned.to_linear_row], which decided the question by an ALGEBRAIC
+     IDENTITY OVER THE DECLARED BOX. That was a proof-side test doing a solving-side job
+     (D-0050, D-0054) and it is gone. The runtime object is now a PB slack propagator
+     over the order literals the row already names, and the family it belongs to is
+     lib/core/prop/pb.ml, of which lib/core/prop/clause.ml is the degree-1 face. The bet
+     was collected the other way; test (f) below says what survives of it. *)
+  check "(c) and it is a learned_pb instance -- D-0054's solving-side object"
+    (inst.Propagator.inst_name = "learned_pb");
   (match Engine.propagate engine store with
   | Engine.Fixpoint ->
       check "(c) check_attribution accepts every pruning the learned instance made"
@@ -468,7 +481,7 @@ let test_it4_attribution () =
     Propagator.pack ~id:0 (module Linear : Propagator.S with type t = Linear.t) row2
   in
   let engine2 = Engine.create [ base2 ] in
-  let lin2 = Option.get (Learned.to_linear ~row_id:99 store2 ~decl learned) in
+  let lin2 = Option.get (Learned.pb_instance ~id:1 ~row_id:99 store2 ~decl learned) in
   let thief =
     Propagator.pack ~id:1
       (module Steals_credit : Propagator.S with type t = Steals_credit.t)

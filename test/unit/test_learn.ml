@@ -601,12 +601,32 @@ let test_backjump_answers_the_same () =
    backjump_lineq_unsat.fzn's own run through scripts/verify_proof.sh; this in-process
    run re-confirms the same path from inside the solver. *)
 let test_m2l10_coverage () =
-  let scene ~title ~convertible src =
+  (* [~skips] is M2-L13's doing and is stated per scene rather than assumed. Giving the
+     learned PB row a runtime consumer (D-0054, lib/core/prop/pb.ml) means [lineq_src]'s
+     first conflict derives the empty contradiction, that constraint refutes the model at
+     the very next node, and there is nothing left to backjump OVER -- so [skipped] is 0
+     there under the default build and the coverage claim moves to the control below.
+     The other two scenes are unaffected and still skip. Re-measured, not assumed. *)
+  let scene ~title ~convertible ?(skips = true) src =
     let r, dir, opb, pbp = run src in
     check (Printf.sprintf "%s: solved to UNSAT" title) (r.r_outcome = Search.Unsat);
-    check
-      (Printf.sprintf "%s: skipped > 0 (Search.stats, the real --stats counter)" title)
-      (r.r_stats.Search.skipped > 0);
+    if skips then
+      check
+        (Printf.sprintf "%s: skipped > 0 (Search.stats, the real --stats counter)" title)
+        (r.r_stats.Search.skipped > 0)
+    else (
+      check
+        (Printf.sprintf "%s: M2-L13 refutes it outright, so there is nothing to skip over"
+           title)
+        (r.r_stats.Search.skipped = 0);
+      (* ...and the coverage M2-L10 asked for is still there, one switch away. A lane
+         that only recorded the 0 would have quietly lost the instance. *)
+      let off, d, o, pp = run ~config:Search.no_propagate_learned src in
+      check
+        (Printf.sprintf "%s: CONTROL -- with the learned row inert it backjumps again"
+           title)
+        (off.r_stats.Search.skipped > 0);
+      cleanup d [ o; pp ]);
     check
       (Printf.sprintf "%s: at least one clause learned" title)
       (r.r_stats.Search.n_learned > 0);
@@ -623,7 +643,8 @@ let test_m2l10_coverage () =
   in
   scene ~title:"M2-L10 deep (3-level backjump)" ~convertible:false deep_src;
   scene ~title:"M2-L10 bool (convertible)" ~convertible:true bool_src;
-  scene ~title:"M2-L10 lineq (non-convertible, int_lin_eq)" ~convertible:false lineq_src;
+  scene ~title:"M2-L10 lineq (non-convertible, int_lin_eq)" ~convertible:false
+    ~skips:false lineq_src;
   (* And the multi-level claim itself: deep_src's single refutation skips at least
      three siblings, strictly more than backjump_src's two. *)
   let deep, dir, opb, pbp = run deep_src in
@@ -781,9 +802,20 @@ let test_strictly_stronger () =
   let st = r.r_stats in
   let c = r.r_compile in
   let decl = Learned.decl_of_encoding c.Compile.encoding in
-  check_eq "a: conflicts analysed" st.Search.n_pb_attempts 3;
-  check_eq "a: PB rows learned, no fallback" st.Search.n_pb_learned 3;
+  (* M2-L13 MOVED THESE FROM 3 TO 1 and the move is the row working. The learned row on
+     this model is the empty contradiction; it now has a runtime consumer, so it refutes
+     the model at the next node and the second and third conflicts never happen. The
+     three-conflict figure is asserted below under [no_propagate_learned], which is what
+     makes this a shrunken tree rather than a weakened assertion. *)
+  check_eq "a: conflicts analysed" st.Search.n_pb_attempts 1;
+  check_eq "a: PB rows learned, no fallback" st.Search.n_pb_learned 1;
   check_eq "a: ...and the fallback count is 0" st.Search.n_pb_fallback 0;
+  (let off, d, o, pp = run ~config:Search.no_propagate_learned lineq_src in
+   check_eq "a: CONTROL -- with the learned row inert the search takes all three"
+     off.r_stats.Search.n_pb_attempts 3;
+   check "a: ...so propagating it is what removed two thirds of the conflicts"
+     (off.r_stats.Search.n_pb_attempts > st.Search.n_pb_attempts);
+   cleanup d [ o; pp ]);
   (* The clause path, on the SAME conflicts, converts nothing. This is M2-L3's own
      measured result and it is restated here because it is the baseline (a) beats. *)
   check_eq "a: the 1UIP clauses of those conflicts convert: none" st.Search.n_converts 0;
@@ -827,14 +859,24 @@ let test_strictly_stronger () =
         ((not (row_holds (fun _ -> true) t.Pb.row))
         && not (row_holds (fun _ -> false) t.Pb.row));
       let store = c.Compile.store in
-      check "a: the PB row has a runtime linear form where the clause has none"
+      (* M2-L13 / D-0054 rewrote the second half of this check, and the rewrite is the
+         point of that row rather than a repair. It used to ask [Learned.to_linear] for
+         the runtime instance, i.e. it decided whether the row may propagate by an
+         ALGEBRAIC IDENTITY OVER THE DECLARED BOX -- a proof-side test doing a
+         solving-side job (D-0050, D-0054). [to_linear] is gone; [to_linear_row] survives
+         as MEASUREMENT only, which is what the first check now says it is, and the
+         runtime object is a PB instance over the order literals the row already names. *)
+      check "a: to_linear_row still accepts this row -- MEASURED ONLY since M2-L13"
         (Learned.to_linear_row t.Pb.row ~decl <> None);
-      match Learned.to_linear ~row_id:0 store ~decl t.Pb.row with
-      | None -> check "a: the PB row builds a Linear instance" false
-      | Some lin ->
-          check "a: the PB row builds a Linear instance" true;
-          let before = List.map (fun v -> (v, Store.get store v)) (Linear.vars lin) in
-          let outcome = Linear.propagate lin store in
+      match Learned.pb_instance ~id:0 ~row_id:0 store ~decl t.Pb.row with
+      | None -> check "a: the PB row builds a runtime PB instance" false
+      | Some inst ->
+          check "a: the PB row builds a runtime PB instance" true;
+          check "a: ...and it is a learned_pb instance, not a Linear one"
+            (inst.Propagator.inst_name = "learned_pb");
+          let vars = inst.Propagator.inst_vars in
+          let before = List.map (fun v -> (v, Store.get store v)) vars in
+          let outcome = inst.Propagator.run store in
           let moved = List.exists (fun (v, d) -> Store.get store v <> d) before in
           check "a: running it at the root prunes, or conflicts -- it is not inert"
             (moved || match outcome with Propagator.Conflict _ -> true | _ -> false)));
@@ -939,7 +981,7 @@ let test_fallback_rate () =
   print_endline "\n-- M2-L6 (b): the fallback rate is instrumented and non-degenerate";
   let a, d1, o1, p1 = run lineq_src in
   let b, d2, o2, p2 = run bool_src in
-  check_eq "b: lineq -- conflicts analysed" a.r_stats.Search.n_pb_attempts 3;
+  check_eq "b: lineq -- conflicts analysed" a.r_stats.Search.n_pb_attempts 1;
   check "b: lineq -- the rate is 0.00, i.e. the PB path really ran"
     (Search.stats_pb_fallback_rate a.r_stats = 0.);
   check "b: lineq -- and rows were learned" (a.r_stats.Search.n_pb_learned > 0);
@@ -962,8 +1004,22 @@ let test_fallback_rate () =
   let c, d3, o3, p3 = run ~config:Search.no_pb lineq_src in
   check_eq "b: with cfg.pb off, nothing is attempted" c.r_stats.Search.n_pb_attempts 0;
   check_eq "b: ...and nothing is learned by this path" c.r_stats.Search.n_pb_learned 0;
-  check "b: ...while the M2-L3 clause path is unaffected"
-    (c.r_stats.Search.n_learned = a.r_stats.Search.n_learned);
+  (* M2-L13 CHANGED WHAT THIS LAST CHECK CAN CLAIM, and the change is a finding rather
+     than a repair. Until M2-L13 the PB path had no runtime effect, so switching it off
+     left the SEARCH identical and the clause counts with it. It has one now: with
+     [cfg.pb] off there is no learned PB row, so no [Pb.Learned_pb] instance, so this
+     model takes three conflicts instead of one and learns three clauses instead of one.
+     Turning the PB path off is no longer a proof-side-only switch.
+
+     What survives, and is what the check was for, is that the clause path does not
+     depend on the PB path's PRESENCE: compare against a run with [cfg.pb] ON and only
+     the registration off, and the clause counts agree exactly. *)
+  let e, d4, o4, p4 = run ~config:Search.no_propagate_learned lineq_src in
+  check "b: ...and with the PB path on but inert, the clause path matches cfg.pb=off"
+    (c.r_stats.Search.n_learned = e.r_stats.Search.n_learned);
+  check "b: ...while switching cfg.pb off now changes the search, which it did not before"
+    (c.r_stats.Search.n_learned <> a.r_stats.Search.n_learned);
+  cleanup d4 [ o4; p4 ];
   cleanup d1 [ o1; p1 ];
   cleanup d2 [ o2; p2 ];
   cleanup d3 [ o3; p3 ]
