@@ -234,13 +234,27 @@ let test_of_lits_declines () =
 
    [rev_order] is the branching order these scenes need and it is not a fuzzer knob: it
    picks the LAST unfixed variable rather than the smallest domain, which is what makes
-   the search branch a DIFFERENT variable at successive levels. Under SPEC 3.4's
-   first-fail/indomain_min every scene in test/models/ re-branches the same variable down
-   a spine, and a learned unit is then always exactly the sibling branch the search takes
-   next -- measured, and it is why [glob-prune] is 0 over all 39 models. The order is
-   legal by [Search.branch]'s only requirement (the split lies in [lo, hi)) and it is
-   used here for the reason test_random.ml's [random_order] exists: to reach a tree shape
-   the normative order does not build. *)
+   the search branch a DIFFERENT variable at successive levels. The order is legal by
+   [Search.branch]'s only requirement (the split lies in [lo, hi)) and it is used here
+   for the reason test_random.ml's [random_order] exists: to reach a tree shape the
+   normative order does not build.
+
+   TWO THINGS THIS COMMENT USED TO SAY ARE NO LONGER TRUE, and both were re-measured on
+   2026-09-18 rather than reasoned about:
+
+     - it said "every scene in test/models/ re-branches the same variable down a spine".
+       M2-L14's five combinatorial models (php_*, colour_unsat) are declared entirely
+       over 0..1, so the split `x <= 0` against `x >= 1` leaves both children singletons
+       and first-fail can only pick an unfixed variable next. They branch a different
+       variable at every level by construction.
+     - it said "[glob-prune] is 0 over all 39 models". The suite is 44, and under the
+       normative order [glob-prune] is 0 on all 44 as of main 0e265f1 -- but NOT in this
+       build: M2-L13 gives the learned PB row a runtime consumer, the tree shape changes,
+       and php_unsat then prunes 1 and php_wide_unsat 6 from learned UNITS that main's
+       search never derived at all (main learns 0 globals on either model). So M2-L12's
+       step 1 started paying because M2-L13 changed the search, which is worth knowing
+       before anyone reads a green check here as "units never fire under the normative
+       order". *)
 let rev_order store cands =
   let best = ref cands.(0) in
   Array.iter (fun v -> if Var.to_int v > Var.to_int !best then best := v) cands;
@@ -317,8 +331,10 @@ let check_verified name r =
 (* test/models/backjump_bool_unsat.fzn, verbatim: the Boolean reification chain, with
    two integer spectators in front of it so that the branching order has something to
    choose between. Under [rev_order] this is the scene in which a learned UNIT actually
-   moves a bound -- one of exactly two in test/models/ that do (the other is
-   bool_reif_unsat.fzn), measured by probing all 39 under this order. *)
+   moves a bound -- one of exactly two of the then-39 models that did (the other is
+   bool_reif_unsat.fzn), measured by probing all 39 under this order. That probe has not
+   been re-run over M2-L14's five additions, so "exactly two" is a figure about the 39
+   and is not claimed about the 44. *)
 let bool_src =
   "var 0..1: p :: output_var;\n\
    var 0..1: q :: output_var;\n\
@@ -350,16 +366,25 @@ let deep_src =
    (a) A learned unit actually prunes -- and does not, without step 1
 
    THE MEASURED CONTEXT, because a green check here would otherwise read as more than it
-   is. Under SPEC 3.4's normative first-fail/indomain_min order, [glob-prune] is ZERO on
-   all 39 models: that order re-branches the same variable down a spine, so a unit 1UIP
-   clause is always exactly the sibling branch the search takes next and is always
-   already in force by the time it is applied. A unit can only move a bound where the
-   search LEAVES the level its variable was branched at and opens a fresh node above it,
-   which needs successive levels to branch DIFFERENT variables. [rev_order] builds such a
-   tree; the normative order does not.
+   is. When M2-L12 wrote this, [glob-prune] was ZERO on all 39 models under SPEC 3.4's
+   normative first-fail/indomain_min order: that order re-branched the same variable down
+   a spine, so a unit 1UIP clause was always exactly the sibling branch the search took
+   next and was always already in force by the time it was applied. A unit can only move
+   a bound where the search LEAVES the level its variable was branched at and opens a
+   fresh node above it, which needs successive levels to branch DIFFERENT variables.
+   [rev_order] builds such a tree.
 
-   So this section asserts that the machinery works, not that the suite gets faster. The
-   node counts are asserted to be EQUAL on purpose -- see the last check. *)
+   RE-MEASURED 2026-09-18, on the 44-model suite and in THIS build, because two things
+   moved under that paragraph. M2-L14's php_* and colour_unsat are declared over 0..1 and
+   so branch a different variable at every level anyway; and M2-L13 gives the learned PB
+   row a runtime consumer, which changes the tree enough that php_unsat and
+   php_wide_unsat now derive learned UNITS (2 and 4) and prune from them (1 and 6) where
+   main 0e265f1 derives none at all. So the zero above is a fact about the pre-M2-L14
+   suite, not a law about the normative order.
+
+   What the section still asserts is unchanged: that the machinery works on a scene built
+   to exercise it, not that the suite gets faster. The node counts are asserted to be
+   EQUAL on purpose -- see the last check. *)
 let test_unit_prunes () =
   let on = run ~order:rev_order bool_src in
   let off = run ~config:Search.no_propagate_learned ~order:rev_order bool_src in
@@ -383,11 +408,19 @@ let test_unit_prunes () =
     | Search.Unsat, Search.Unsat -> true
     | Search.Sat _, Search.Sat _ -> true
     | _ -> false);
-  (* MEASURED AND PINNED, not hoped for. The pruning happens at a node the search was
-     going to refute anyway, so the tree is the same size. Over all 39 models under both
-     orders the node counts are identical with step 1 on and off; this check is that
-     result written down, so that the day a change makes the tree SMALLER it reddens here
-     and is noticed rather than absorbed. *)
+  (* MEASURED AND PINNED, not hoped for. On THIS scene the pruning happens at a node the
+     search was going to refute anyway, so the tree is the same size, and this check is
+     that result written down.
+
+     The generalisation it used to carry -- "over all 39 models under both orders the
+     node counts are identical with step 1 on and off" -- IS SPENT, and spending it is
+     the point of M2-L13 and M2-L14 rather than a regression. Swept over the 44 models on
+     2026-09-18 in this build, [propagate_learned] on versus off is 479 nodes against
+     2265 -- php_wide_unsat 77 against 1439, and even the old 39 subtotal 179 against
+     231, which was the number M2-L12 pinned as immovable. The equality below is
+     therefore a claim about this scene and the M2-L12 step-1 mechanism on it, and it is
+     kept precisely because it is the tripwire: the day a change makes THIS tree smaller
+     it reddens here and is noticed rather than absorbed. *)
   check
     "M2-L12 (a): ...and the tree is the SAME SIZE -- step 1 prunes, it does not search \
      less"

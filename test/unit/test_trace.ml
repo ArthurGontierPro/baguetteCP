@@ -1012,6 +1012,25 @@ let ix10_table =
        holds it -- and that is I-X3's business, guarded by [Retention.cite], not
        I-X10's. *)
     ("clause.ml", Single_row);
+    (* M2-L13/D-0054: the slack propagator for a learned PB row, of which clause.ml is
+       now the degree-1 face. Single_row, and the classification is worth spelling out
+       because it is the first one where a SECOND kind of .opb row takes part.
+
+       The pruning follows from ONE constraint -- the learned row, put on the page by
+       [Pb_analysis.introduce] with its [pol] derivation behind it -- and the trace line
+       is RUP against it with no explicit derivation emitted ahead. What the checker's
+       own unit propagation also uses is the ORDER-ENCODING LADDER rows of the variable
+       being pruned, because lib/core/prop/pb.ml folds the ladder into a rung's effective
+       coefficient. Those are not a second constraint in I-X10's sense: they are the
+       .opb's encoding of the variable itself (D-0028, docs/PROOF-FORMAT.md section 3),
+       written before the first decision and retired by nothing, and the same standing
+       lib/core/ladder.ml's lift relies on. So there is nothing to derive and nothing to
+       order, which is what Single_row means.
+
+       The LIFETIME condition of clause.ml's note applies here too and more strongly: a
+       learned PB row is on the page only while lib/core/retention.ml holds it.
+       [Search.register_learned_pb] cites it. That is I-X3's business, not I-X10's. *)
+    ("pb.ml", Single_row);
     (* Not a propagator: it renders bound-fact chains for a reason another propagator
        already justified, so it introduces no pruning of its own. *)
     ("order_reason.ml", Prunes_nothing);

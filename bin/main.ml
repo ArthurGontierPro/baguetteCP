@@ -560,6 +560,23 @@ let report_stats (st : Search.stats) (outcome : Search.outcome) =
   Printf.eprintf "stats: %-10s %10d cls    %s\n" "cls-decl"
     (st.Search.n_global_declined + st.Search.n_clause_declined)
     "...learned clauses neither step could instantiate (a Lit.Eq, or an unknown name)";
+  Printf.eprintf "stats: %-10s %10d prunes %s\n" "cls-prune" st.Search.n_clause_prunes
+    "...bounds those clause instances actually MOVED. M2-L12 measured 0 suite-wide";
+  (* M2-L13 / D-0054. The learned PB ROW as a runtime consumer -- the solving-side
+     object, instantiated by Pb.of_terms over the order literals it already names and
+     NOT by Learned.to_linear_row, which is the proof-side gate this row removed. Do not
+     read `pb-convert` as a success measure for it: that counter IS the gate. Read these.
+     `pb-prune` and `pb-confl` are the honest pair, counted off the trail (M2-T7 stamps
+     every entry with the instance that pushed it), and they are what M2-L12's measured
+     zero has to be compared against. *)
+  Printf.eprintf "stats: %-10s %10d inst   %s\n" "pb-inst" st.Search.n_pb_instances
+    "M2-L13: learned PB rows registered as engine instances (Pb.Learned_pb)";
+  Printf.eprintf "stats: %-10s %10d rows   %s\n" "pb-inst-no" st.Search.n_pb_inst_declined
+    "...rows Pb.of_terms refused (a Lit.Eq literal, or a name the encoding lacks)";
+  Printf.eprintf "stats: %-10s %10d prunes %s\n" "pb-prune" st.Search.n_pb_prunes
+    "...bounds a learned PB instance actually MOVED. The M2-L13 counter";
+  Printf.eprintf "stats: %-10s %10d confl  %s\n" "pb-confl" st.Search.n_pb_inst_conflicts
+    "...and conflicts one reported outright";
   Printf.eprintf "stats: %-10s %10d lits   %s\n" "minimised" st.Search.n_min_dropped
     "literals semantic minimisation removed from nogoods (M2-L3); 0 means it never fired";
   Printf.eprintf "stats: %-10s %10d lines  %s\n" "i-s4-cross" st.Search.i_s4_crossings

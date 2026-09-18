@@ -171,50 +171,47 @@
 
 module Lit = Baguette_proof.Lit
 
-(* One literal, as the order-encoding atom [x >= k] at a polarity.
+(* ---------------------------------------------------------------------------
+   M2-L13 / D-0054: there is now ONE implementation, and it is [Pb]
+   ---------------------------------------------------------------------------
 
-     [positive = true ] : the literal is  x >= k
-     [positive = false] : the literal is  x <= k - 1
+   D-0044 fixed the learned object as a PB inequality with the CLAUSE as its degree-1,
+   unit-coefficient case. Until M2-L13 that was a claim about types made in prose; this
+   module now *is* that case. [t] is [Pb.t], [make] and [of_lits] build one with every
+   coefficient 1 and degree 1, and [propagate] is [Pb.propagate] with no wrapper.
 
-   [name] is frozen at [make] time -- nothing renames a variable, and the explanation
-   should not have to hold the store to spell itself out. [decl_lo] / [decl_hi] are the
-   variable's DECLARED bounds, which is what [Reason] needs to decide whether a fact
-   materialises to a literal at all; they are frozen the same way and for the same
-   reason, and for a learned instance they come from the ENCODING rather than from the
-   store, because a learned constraint is built mid-search when the store's bounds are
-   narrow (lib/core/learned.ml's "Why the [Linear.t] is built here" says this at length
-   for the same hazard). *)
-type lit = {
-  x : Var.t;
-  name : string;
-  positive : bool;
-  k : int;
-  decl_lo : int;
-  decl_hi : int;
-}
+   lib/core/prop/pb.ml's header works the four arms of the old [survey] -- [Satisfied],
+   [Two_open], [Units [l]], [Units []] -- out of the slack rule and shows each falls out
+   rather than being special-cased, and its [reason_clause] is where the explanations
+   are shown to coincide: for a degree-1 row the literals a step names are always the
+   WHOLE constraint, in term order, so the [Explanation.t] is the same value -- the
+   shared one, which keeps lib/core/justify.ml's memoisation on physical identity firing
+   exactly as this module's header claims below.
 
-(* [pb] is the whole clause as proof literals and [expl] the whole clause as an
-   explanation, both built once in [make]: see the module header on why neither is
-   deferred and why sharing [expl] is worth doing. *)
-type t = { lits : lit list; pb : Lit.t list; expl : Explanation.t }
+   Everything the pre-M2-L13 version of this file said about the SHAPE of a clause is
+   still true and still above; what is gone is the second copy of the propagation loop.
+   The old header already refused "a second implementation to keep in step" for
+   [Array_bool_or]; keeping one for the degree-1 PB row would have been the same refusal
+   ignored. *)
+
+type t = Pb.t
 
 let name = "clause"
 
 (* BOUNDS, not DOMAIN. The header's "Consistency level" section is the argument, and
-   [Bool_clause.consistency] below is the restriction on which DOMAIN is still true. *)
-let consistency = Propagator.Bounds
-
-(* The order-encoding atom this literal is, at its polarity. [Lit.le x v] is
-   [neg (Ge (x, v + 1))], so a negative literal at threshold [k] spells `x <= k - 1` and
-   round-trips back to the same [k]. At [k = 1] these are exactly [Lit.bool_true] and
-   [Lit.bool_false], which is D-0007 / PROOF-FORMAT section 3 and the reason this module
-   cannot become the place a second naming scheme appears. *)
-let pb_lit l = if l.positive then Lit.ge l.name l.k else Lit.le l.name (l.k - 1)
+   [Bool_clause.consistency] below is the restriction on which DOMAIN is still true.
+   [Pb.consistency] is the same value and for the same reason. *)
+let consistency = Pb.consistency
 
 (* Drop exact duplicates -- the same variable at the same polarity and the same threshold
    twice -- because two occurrences of one literal would read below as two unassigned
    literals and the propagator would then decline to infer anything. That is sound but
    strictly weaker, and there is no reason to accept it when the merge is this cheap.
+
+   Note this is NOT [Learned.make]'s merge, which would sum the coefficients to 2 and
+   leave the degree at 1. `2l >= 1` and `l >= 1` force the same thing over 0-1, so
+   either would be correct; deduping keeps the clause a clause, which is what
+   [literals] and [width] are asked about.
 
    A variable occurring at both polarities, or at one polarity with two different
    thresholds, is LEFT ALONE. See the header's "opposite-direction pair" section: the
@@ -222,21 +219,18 @@ let pb_lit l = if l.positive then Lit.ge l.name l.k else Lit.le l.name (l.k - 1)
    is simply false. (Same-direction pairs subsume one another along the ladder;
    [Learn.minimise] already performs that reduction on a learned clause before it gets
    here, and doing it a second time here would duplicate its policy argument.) *)
-let dedup (ls : lit list) : lit list =
+let dedup (ls : Pb.atom list) : Pb.atom list =
   let seen = Hashtbl.create 16 in
   List.filter
-    (fun l ->
-      let key = (Var.to_int l.x, l.positive, l.k) in
+    (fun (a : Pb.atom) ->
+      let key = (Var.to_int a.Pb.x, a.Pb.positive, a.Pb.k) in
       if Hashtbl.mem seen key then false
       else (
         Hashtbl.add seen key ();
         true))
     ls
 
-let finish lits =
-  let lits = dedup lits in
-  let pb = List.map pb_lit lits in
-  { lits; pb; expl = Explanation.clause pb }
+let finish atoms = Pb.of_atoms (dedup atoms)
 
 (* --------------------------------------------------------------- the Boolean entry
 
@@ -263,7 +257,14 @@ let make store raw =
                  D-0007). For a clause over general order literals use [Clause.of_lits], \
                  which declares BOUNDS (D-0052)."
                 (Store.name store x) (Domain.to_string d));
-         { x; name = Store.name store x; positive; k = 1; decl_lo = 0; decl_hi = 1 })
+         {
+           Pb.x;
+           Pb.name = Store.name store x;
+           Pb.positive;
+           Pb.k = 1;
+           Pb.decl_lo = 0;
+           Pb.decl_hi = 1;
+         })
        raw)
 
 (* --------------------------------------------------------------- the general entry
@@ -272,152 +273,31 @@ let make store raw =
    ([Explanation.Clause] and [Learn.lits] are both [Lit.t list]).
 
    [decl] is the variable's DECLARED bounds, read from the encoding rather than from the
-   store: see the [lit] record's comment. [None] from it, or a name the store does not
-   know, means this engine cannot instantiate the clause, and the honest answer is to
-   decline rather than to guess a box.
-
-   [None] is also the answer for a [Lit.Eq] literal, and that refusal is the header's
-   point 3 kept true. A positive [Eq] would have to FIX a variable (two bounds from one
-   literal, which the survey's one-unit shape cannot express) and a negative [Eq] would
-   have to punch an interior hole, i.e. call [Store.remove_with_facts] -- of which I-X10
-   records [Ne] is the sole caller in lib/, and which D-0052 explicitly told this row not
-   to reach for. A 1UIP cut can contain such a literal (lib/core/learn.ml's [slot]
-   returns [None] for one), so declining is a case that really arises and is counted, not
-   a defensive arm. *)
+   store: see [Pb.atom]'s comment. [None] from it, or a name the store does not know,
+   means this engine cannot instantiate the clause, and the honest answer is to decline
+   rather than to guess a box. [None] is also the answer for a [Lit.Eq] literal, and
+   [Pb.atom_of] is where both refusals live now, with the reason. A 1UIP cut can contain
+   such a literal (lib/core/learn.ml's [slot] returns [None] for one), so declining is a
+   case that really arises and is counted, not a defensive arm. *)
 let of_lits store ~(decl : string -> (int * int) option) (ls : Lit.t list) : t option =
-  let one (l : Lit.t) =
-    match l.Lit.v with
-    | Lit.Eq _ -> None
-    | Lit.Ge (nm, k) -> (
-        match (Store.var_named store nm, decl nm) with
-        | Some x, Some (lo, hi) ->
-            Some
-              { x; name = nm; positive = l.Lit.positive; k; decl_lo = lo; decl_hi = hi }
-        | _ -> None)
-  in
   let rec go acc = function
     | [] -> Some (finish (List.rev acc))
-    | l :: rest -> ( match one l with None -> None | Some c -> go (c :: acc) rest)
+    | l :: rest -> (
+        match Pb.atom_of store ~decl l with None -> None | Some a -> go (a :: acc) rest)
   in
   go [] ls
 
-let vars t = List.map (fun l -> l.x) t.lits
+let vars = Pb.vars
 
 (* The clause, for callers that want to see what was built. *)
-let literals t = t.pb
-let width t = List.length t.lits
+let literals = Pb.literals
+let width = Pb.width
 
-(* ------------------------------------------------------------------- bound facts *)
+(* ------------------------------------------------------------------- propagation
 
-(* docs/DECISIONS.md D-0018's other projection: the facts lib/core/trace.ml negates into
-   the tail of a trace line. A literal that is *false* is a bound fact -- the positive
-   statement is `x <= k - 1` for a positive occurrence and `x >= k` for a negative one --
-   which is exactly [Lit.negate] of the literal, so the line [Trace] builds,
-   [claim :: List.map Lit.negate facts], comes out as the clause itself.
-
-   M2-T8/D-0026: the declared bounds are IN the fact, so whether it materialises to a
-   literal at all is [Reason.lit_of_fact]'s test and not this module's. For a `var bool`
-   (declared over the whole of [0, 1], and [make] above *checks* it) nothing ever drops,
-   which is what the pre-M2-L12 comment here said; for a general order literal a fact AT
-   the declared bound drops, correctly, because the encoding states it as the constant
-   true. That is the same rule [Linear] and [Ne] get, in the same one place. *)
-let falsity_fact l =
-  if l.positive then Reason.at_most ~name:l.name ~decl:l.decl_hi (l.k - 1)
-  else Reason.at_least ~name:l.name ~decl:l.decl_lo l.k
-
-let other_facts t (unit_lit : lit) : Reason.t =
-  List.filter_map (fun l -> if l == unit_lit then None else Some (falsity_fact l)) t.lits
-
-let all_facts t : Reason.t = List.map falsity_fact t.lits
-
-(* ------------------------------------------------------------------- propagation *)
-
-type status = Sat_lit | Unsat_lit | Open
-
-let status store l =
-  let d = Store.get store l.x in
-  if l.positive then
-    if Domain.lo d >= l.k then Sat_lit
-    else if Domain.hi d <= l.k - 1 then Unsat_lit
-    else Open
-  else if Domain.hi d <= l.k - 1 then Sat_lit
-  else if Domain.lo d >= l.k then Unsat_lit
-  else Open
-
-(* One walk over the clause. It stops at the first satisfied literal (nothing can be
-   inferred from a satisfied clause) and at the second open one (nor from a clause with
-   two ways left to be true). Otherwise it hands back the open literals, of which there
-   are none (every literal is false: conflict) or one (the unit).
-
-   Still a full walk with early exit, and deliberately so: D-0052 dropped watched
-   literals from this row because they would be the first search-dependent mutable
-   propagator state outside [Store]'s undo trail, and because the widest clause this
-   suite produces has four literals. *)
-type survey = Satisfied | Two_open | Units of lit list
-
-let rec survey_from store acc = function
-  | [] -> Units (List.rev acc)
-  | l :: rest -> (
-      match status store l with
-      | Sat_lit -> Satisfied
-      | Unsat_lit -> survey_from store acc rest
-      | Open -> if acc = [] then survey_from store [ l ] rest else Two_open)
-
-(* Force the last open literal true. A positive one moves lo to [k], a negative one moves
-   hi to [k - 1]; either way exactly one bound moves, so lib/core/trace.ml writes exactly
-   one line for it (its [claims] checks both bounds and would happily write two). The
-   reason is not optional and there is no factless mutator to reach for: I-P5, and
-   without it the line would claim the new bound unconditionally, which is false.
-
-   [t.expl] is the whole clause, built once in [make], and it is [claim :: List.map
-   Lit.negate (other_facts t l)] for whichever [l] turns out to be the unit -- so the
-   justification here is a function of the reason too, the same way [Bool2int]'s is. *)
-let assign t store (l : lit) =
-  (* D-0043: the unit's own bound is what this pruning concludes -- `x >= k` for a
-     positive occurrence, `x <= k - 1` for a negative one -- against the same declared
-     bounds [falsity_fact] above writes out, so the conclusion is the [Reason.fact]
-     mirror of the bound handed to the mutator on the next line and [Store.apply] can
-     check the two against each other. *)
-  let concludes =
-    Some
-      (if l.positive then Reason.at_least ~name:l.name ~decl:l.decl_lo l.k
-       else Reason.at_most ~name:l.name ~decl:l.decl_hi (l.k - 1))
-  in
-  let j = Reason.because ~concludes (other_facts t l) t.expl in
-  let outcome =
-    if l.positive then Store.set_lo store l.x l.k j
-    else Store.set_hi store l.x (l.k - 1) j
-  in
-  match outcome with
-  | Store.Changed | Store.Unchanged -> Propagator.Fixpoint
-  | Store.Conflict e ->
-      (* Unreachable at the interface: [l] is [Open], so its domain straddles the
-         threshold and moving one bound to the other side of it cannot empty it -- unless
-         a hole swallows the remainder, which [Domain.set_lo] settles over rather than
-         failing on. Handled rather than asserted so a future [Domain] change cannot turn
-         a silent wrong answer into the failure mode, and the explanation handed back is
-         the one that caused it, exactly as [Store.apply] returns it. *)
-      Propagator.Conflict e
-
-let propagate t store =
-  match survey_from store [] t.lits with
-  | Satisfied -> Propagator.Fixpoint
-  | Two_open -> Propagator.Fixpoint
-  | Units [ l ] -> assign t store l
-  | Units [] ->
-      (* I-P3, checking: every literal is false, so the clause is violated. This is also
-         the all-fixed case -- a fixed variable is never [Open] -- so declaring a conflict
-         here is exactly "fail iff the assignment violates the constraint", and it is
-         reached before every variable is fixed as well, which is the propagation half.
-
-         For order literals this arm is also where an opposite-direction pair's HOLE is
-         refuted: `x >= 3 \/ x <= 1` with `x` at [2, 2] lands here. See the header. *)
-      Propagator.Conflict
-        (Store.conflict store (Reason.because ~concludes:None (all_facts t) t.expl))
-  | Units (_ :: _ :: _) ->
-      (* [survey_from] returns at most one; it stops at the second. *)
-      assert false
-
+   [Pb.propagate], unwrapped. The header says why there is no second copy, and
+   lib/core/prop/pb.ml's own header derives the four arms this used to spell out. *)
+let propagate = Pb.propagate
 (* ---------------------------------------------------------------------------
    The Boolean face, and the same propagator under the name of the builtin that
    produced the clause.

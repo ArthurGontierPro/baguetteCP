@@ -337,8 +337,39 @@ type stats = {
       (* M2-L12 step 2: multi-literal learned clauses registered with the engine as
          [Clause.Learned_clause] instances. *)
   mutable n_clause_declined : int;
-      (* ...and those [Clause.of_lits] refused, for the same two reasons as
-         [n_global_declined]. *)
+  (* ...and those [Clause.of_lits] refused, for the same two reasons as
+     [n_global_declined]. *)
+  (* ------------------------------------------------------------------ M2-L13 *)
+  mutable n_pb_instances : int;
+      (* Learned PB ROWS registered with the engine as [Pb.Learned_pb] instances --
+         D-0054's solving-side object. Distinct from [n_clause_instances], which counts
+         the degree-1 case arriving by the M2-L3 clause path; a conflict can contribute
+         to both, because both objects are learned from it. *)
+  mutable n_pb_inst_declined : int;
+      (* ...and the rows [Pb.of_terms] refused: a [Lit.Eq] literal, or a name the
+         encoding does not declare. Same two reasons as [n_global_declined], counted
+         rather than silently skipped for the same reason. *)
+  mutable pb_inst_ids_rev : int list;
+      (* The engine instance ids of those, newest first. A LIST and not a [Hashtbl]:
+         nothing here may iterate a hash table (the determinism gate), and the list is
+         one entry per learned row. Read by [count_learned_activity] to tell a pruning
+         made by a learned PB row from one made by a learned clause. *)
+  mutable clause_inst_ids_rev : int list; (* ...and the M2-L12 clause instances' *)
+  mutable n_pb_prunes : int;
+      (* Bounds actually MOVED by a learned PB instance. This is the counter M2-L13
+         turns on and the one M2-L12 reported as 0 for the clause path: an instance with
+         no prunings is a propagator that exists and does nothing, which is the result
+         D-0054 reinterpreted. Counted off the TRAIL (whose entries carry the pushing
+         instance's id, M2-T7) rather than by the propagator, which has no stats. *)
+  mutable n_pb_inst_conflicts : int; (* ...and conflicts one reported outright *)
+  mutable n_clause_prunes : int; (* the same two, for the M2-L12 clause instances *)
+  mutable n_clause_inst_conflicts : int;
+  mutable first_learned_id : int;
+      (* [Engine.next_id] at [solve] entry: every instance id at or above it was
+         registered mid-search by this row or by M2-L12, and every id below it is a model
+         row's. The engine only ever appends ([Engine.add]), which is what makes the
+         range test sound; [Search]'s own comment on why the engine cannot be reset
+         between solves is the other half of that. *)
   mutable i_s4_supports : int; (* hole lines the learned clauses' derivations rest on *)
   mutable i_s4_crossings : int; (* ...of which sit above level 0 -- data, not a fault *)
   mutable i_s4_broken_rev : string list; (* ...of which were already retired: faults *)
@@ -434,6 +465,15 @@ let stats_create () =
     n_global_declined = 0;
     n_clause_instances = 0;
     n_clause_declined = 0;
+    n_pb_instances = 0;
+    n_pb_inst_declined = 0;
+    pb_inst_ids_rev = [];
+    clause_inst_ids_rev = [];
+    n_pb_prunes = 0;
+    n_pb_inst_conflicts = 0;
+    n_clause_prunes = 0;
+    n_clause_inst_conflicts = 0;
+    first_learned_id = max_int;
     i_s4_supports = 0;
     i_s4_crossings = 0;
     i_s4_broken_rev = [];
@@ -709,6 +749,14 @@ type config = {
   pb_criterion : Pb_analysis.criterion;
   pb_ladder : bool;
   break_ladder_mult : bool;
+  break_pb_degree : bool;
+      (* M2-L13's break. Registers the learned PB row's runtime instance with a degree
+         ONE HIGHER than the row that is on the page, so the propagator enforces a
+         constraint the proof does not state and its prunings are no longer RUP against
+         it. The point is that a wrong slack rule is NOT visible in the answer -- an
+         over-strong propagator still returns UNSAT on an unsatisfiable model -- so the
+         only oracle for it is the checker, and this is what puts the checker in front of
+         one. test/unit/test_pb.ml runs it and asserts the REJECTION's wording. *)
   retention : Retention.policy;
       (* M2-L4. [Retention.keep_all] is the pre-M2-L4 behaviour and test (c)'s "policy
          off" side; [Retention.default] is the policy and the measurement that chose it
@@ -740,6 +788,7 @@ let default_config =
     pb = true;
     pb_ladder = true;
     break_ladder_mult = false;
+    break_pb_degree = false;
     reduction = Reduce.round_to_one;
     pb_criterion = Pb_analysis.assertive_slack;
     retention = Retention.default;
@@ -1161,6 +1210,48 @@ let bridges (ctx : Justify.ctx) trace stats store (decisions : Lit.t list) =
    the learned clause's [rup] is checked against them; and nothing has been wiped yet. The
    [break_i_s4] arm retires the conflict level first, which is the same three steps in the
    wrong order and is exactly what test (b) asserts the checker rejects. *)
+(* M2-L13 / D-0054: give the learned PB ROW a runtime consumer.
+
+   This is the row's whole point, so it is worth saying what it is NOT. It is not a
+   conversion: nothing here asks [Learned.to_linear_row] whether the row can be read back
+   as an integer linear row over the declared box. That predicate was a PROOF-side test
+   standing in for a solving-side one (D-0050 named it "the right predicate used as the
+   wrong gate"; D-0054 named why), and M2-L13 took it out of this path entirely --
+   [Learned.to_linear] and [Learned.instance] are gone, and [to_linear_row] survives only
+   as [n_pb_converts], which bin/main.ml already labels MEASURED ONLY.
+
+   What replaces it is [Pb.of_terms], which instantiates the row AS A PB CONSTRAINT over
+   the order literals it already names, and declines only on a literal that has no bound
+   to move ([Lit.Eq]) or a name the encoding does not declare. Those are the two refusals
+   [Clause.of_lits] and [global_of] already make, for the same reasons.
+
+   AND TELL RETENTION IT HAS ONE, exactly as M2-L12's [register_learned] does: a trace
+   line from a registered instance is RUP only while the learned constraint is on the
+   page, so [Retention.cite] must refuse eviction of this id. The cap is SOFT since
+   M2-L12, so a cited constraint is refused eviction and the refusal is counted; this row
+   creates more citations and nothing else about that mechanism changes.
+
+   THE EMPTY CONTRADICTION IS REGISTERED TOO, deliberately. A row with no terms and a
+   positive degree is the constraint `0 >= b`, i.e. FALSE, derived by [pol] from model
+   rows alone and stated at level 0 -- so if it is on the page at all the model is
+   unsatisfiable, and a propagator for it conflicting at the next node is the correct
+   reading of the object rather than a degenerate case to special-case away. Suppressing
+   it would be deciding, on this side, that the proof-side derivation is not to be
+   believed. [Search.n_pb_nondegenerate] is how many rows are not this. *)
+let register_learned_pb engine store ctx stats ~bump ~cid ~(row : Learned.t) =
+  let decl = Learned.decl_of_encoding ctx.Justify.encoding in
+  let id = Engine.next_id engine in
+  match Learned.pb_instance ~id ~row_id:cid ~bump store ~decl row with
+  | None -> stats.n_pb_inst_declined <- stats.n_pb_inst_declined + 1
+  | Some inst ->
+      Engine.add engine inst;
+      stats.n_pb_instances <- stats.n_pb_instances + 1;
+      stats.pb_inst_ids_rev <- id :: stats.pb_inst_ids_rev;
+      Retention.cite stats.db ~cid
+        ~by:
+          (Printf.sprintf "learned_pb instance #%d, %s (M2-L13)" id
+             (Learned.to_string row))
+
 (* M2-L6: PB conflict analysis, alongside the clause. [clause_converts] is whether the
    SAME conflict's M2-L3 clause would have converted, which is what makes [n_pb_stronger]
    a comparison rather than a count.
@@ -1228,6 +1319,15 @@ let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_conve
         ignore
           (Retention.add stats.db ~cid ~row:t.Pb_analysis.row ~lbd
              ~origin:"M2-L6 learned PB row");
+        (* M2-L13. In the same place, and for the same two ordering reasons, M2-L12 put
+           its own registration: AFTER [Retention.add], because [cite] replaces an
+           entry's freedom to be evicted and the entry has to exist first, and BEFORE
+           [reduce], so that a policy cannot evict on this very call a constraint the
+           next line is about to give a consumer. *)
+        if cfg.propagate_learned then
+          register_learned_pb engine store ctx stats
+            ~bump:(if cfg.break_pb_degree then 1 else 0)
+            ~cid ~row:t.Pb_analysis.row;
         ignore (Retention.reduce stats.db ctx))
 
 (* ------------------------------------------------------- M2-L12: making it propagate
@@ -1278,6 +1378,46 @@ let global_of store ~(decl : string -> (int * int) option) ~cid (l : Lit.t) :
               g_expl = Explanation.clause [ l ];
             }
       | _, _ -> None)
+
+(* M2-L13's instrument: how much a LEARNED constraint actually did at this node.
+
+   M2-L12 reported 0 prunings from a learned clause over the whole suite, and that zero
+   is the measurement D-0054 reinterprets -- so a row that claims to make learned
+   constraints propagate has to be able to produce the same number, on the same
+   instrument, and have it move. This is that instrument.
+
+   It reads the TRAIL, not the propagators. Every entry carries the id of the instance
+   that pushed it (M2-T7, [Store.entry.prop]), and [Engine.add] only ever appends, so an
+   id at or above [first_learned_id] belongs to an instance this search registered. Which
+   KIND it is comes from the two id lists, which are short (one entry per learned
+   constraint) and are lists rather than hash tables because nothing in a solve may
+   iterate a [Hashtbl] -- the determinism gate is exactly what a learned database
+   iterated in hash order breaks.
+
+   It is pure measurement: it returns its argument unchanged and no other code reads the
+   counters. Passing a [stats] changes no byte of the emitted proof, which is the
+   property [solve]'s own comment on [?stats] states. *)
+let count_learned_activity stats store ~since (o : Engine.outcome) : Engine.outcome =
+  let classify id =
+    if id < stats.first_learned_id then ()
+    else if List.mem id stats.pb_inst_ids_rev then
+      stats.n_pb_prunes <- stats.n_pb_prunes + 1
+    else if List.mem id stats.clause_inst_ids_rev then
+      stats.n_clause_prunes <- stats.n_clause_prunes + 1
+  in
+  for i = since to Store.trail_length store - 1 do
+    classify (Store.trail_entry store i).Store.prop
+  done;
+  (match o with
+  | Engine.Conflict c ->
+      let id = c.Store.c_prop in
+      if id >= stats.first_learned_id then
+        if List.mem id stats.pb_inst_ids_rev then
+          stats.n_pb_inst_conflicts <- stats.n_pb_inst_conflicts + 1
+        else if List.mem id stats.clause_inst_ids_rev then
+          stats.n_clause_inst_conflicts <- stats.n_clause_inst_conflicts + 1
+  | Engine.Fixpoint -> ());
+  o
 
 (* Apply every learned unit at this node. [Some c] is the first one that refuted it.
 
@@ -1363,6 +1503,7 @@ let register_learned engine store ctx stats ~cid ~(lits : Lit.t list) =
                (module Clause.Learned_clause : Propagator.S with type t = Clause.t)
                p);
           stats.n_clause_instances <- stats.n_clause_instances + 1;
+          stats.clause_inst_ids_rev <- id :: stats.clause_inst_ids_rev;
           Retention.cite stats.db ~cid
             ~by:
               (Printf.sprintf "learned_clause instance #%d over %s (M2-L12)" id
@@ -1421,10 +1562,12 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
      Before [Engine.propagate] and not after: a bound in force at the start of the round
      is one every propagator sees, and [Engine.propagate] enqueues every instance on
      entry anyway, so nothing has to be woken for it. *)
+  let trail_before = Store.trail_length store in
   match
-    match apply_globals store stats with
-    | Some c -> Engine.Conflict c
-    | None -> Engine.propagate engine store
+    count_learned_activity stats store ~since:trail_before
+      (match apply_globals store stats with
+      | Some c -> Engine.Conflict c
+      | None -> Engine.propagate engine store)
   with
   | Engine.Conflict c -> (
       (* M2-T7: [c] carries the reporting instance's id ([c.Store.c_prop]) as well as its
@@ -1700,6 +1843,12 @@ let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
      it compiles again -- or [Engine] grows a truncate-to-a-mark and this comment becomes
      that function's reason for existing. *)
   stats.globals_rev <- [];
+  (* M2-L13: the id boundary [count_learned_activity] tests against. Recorded here rather
+     than in [stats_create] for the same reason the database is: a [stats] may outlive a
+     [solve], and the engine it is about to be pointed at is not the one it last saw. *)
+  stats.first_learned_id <- Engine.next_id engine;
+  stats.pb_inst_ids_rev <- [];
+  stats.clause_inst_ids_rev <- [];
   stats.nodes <- stats.nodes + 1;
   let result = dfs engine store ctx trace stats config order [] in
   Debug.check "I-S3: decision level on return equals level on entry" (fun () ->

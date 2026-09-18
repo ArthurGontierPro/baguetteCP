@@ -27,12 +27,23 @@
    form [Opb] and the checker want and the form the reduction rules of M2-L5 assume.
 
    ---------------------------------------------------------------------------
-   The bet, and exactly where it holds -- MEASURED, M2-L1
+   The bet -- AND M2-L13 COLLECTED IT THE OTHER WAY (D-0054)
    ---------------------------------------------------------------------------
 
-   docs/ROADMAP.md M2-L1 bets that "a learned row is exactly what [Linear] already
-   propagates -- no new propagator family if this holds". It holds, with a boundary that
-   is worth stating precisely because M2-L3 will run into it:
+   docs/ROADMAP.md M2-L1 bet that "a learned row is exactly what [Linear] already
+   propagates -- no new propagator family if this holds". **The bet is LOST, deliberately,
+   and losing it is M2-L13.** D-0054's reason is one sentence: a PB line for proof logging
+   and a PB explanation for solving are different objects, and the conversion below
+   decides whether a row may propagate by an ALGEBRAIC IDENTITY OVER THE DECLARED BOX --
+   a proof-side test doing a solving-side job. What replaced it is
+   lib/core/prop/pb.ml, a slack propagator over the order literals the row already names,
+   instantiated by [pb_instance] at the bottom of this file; [Linear] is untouched and
+   lib/core/prop/clause.ml is now that propagator's degree-1 face, so the family count
+   went up by one and down by nothing.
+
+   The section below is kept BECAUSE the boundary it states is still exactly right about
+   [to_linear_row], which survives as the measured counter [Search.n_pb_converts]. Read it
+   as a fact about that predicate, not as a description of how a learned row propagates:
 
      - In the PROOF, D-0044 is right without qualification: the order literals are real
        0-1 variables of the .opb and a [Learned.t] is written out by [to_opb] with no
@@ -61,8 +72,8 @@
        to the shapes above or accept that the learned constraint is proof-only until a
        propagator for it exists. Recorded here rather than discovered there.
 
-   Nothing in this module widens [Linear]. It builds a [Linear.t] and hands it to
-   [Propagator.pack], which is the whole of "no new propagator family".
+   Nothing in this module widens [Linear], and since M2-L13 nothing in it builds a
+   [Linear.t] either.
 
    ---------------------------------------------------------------------------
    Why the [Linear.t] is built here instead of through [Linear.make]
@@ -160,6 +171,12 @@ let make (raw : (int * Lit.t) list) (degree : int) : t =
 (* D-0044's degenerate case, written as what it is: every coefficient 1, degree 1. *)
 let of_clause (lits : Lit.t list) : t = make (List.map (fun l -> (1, l)) lits) 1
 let terms t = t.terms
+
+(* The row as [(coefficient, literal)] pairs -- the shape [Propagator.pb_row] has and the
+   shape lib/core/prop/pb.ml instantiates from. M2-L13: this is what replaced
+   [to_linear_row] on the propagation path. Every coefficient is >= 1, because [make]
+   established that. *)
+let raw_terms t = List.map (fun tm -> (tm.coeff, tm.lit)) t.terms
 let degree t = t.degree
 let lits t = List.map (fun tm -> tm.lit) t.terms
 let is_empty t = t.terms = []
@@ -387,38 +404,75 @@ let to_linear_row t ~decl =
       in
       Option.map (fun (terms, const) -> (terms, const - t.degree)) (fold [] const0 groups)
 
-(* The [Linear.t] a learned row propagates as, or [None] when it has no linear form.
+(* Pack the row for the engine, as a PB CONSTRAINT over the order literals it already
+   names -- lib/core/prop/pb.ml, which is D-0054's solving-side object and reads LIVE
+   domains. [None] when a literal has no bound to move ([Lit.Eq]) or names a variable
+   this store or this encoding does not know; [Pb.atom_of] holds both refusals and the
+   reason for each.
 
-   [~row_id] is the proof id [introduce] returned: every [Combine] the instance builds is
-   [Explanation.Model_row row_id], i.e. "cite that constraint". The constructor's name
-   says "model row" for historical reasons (D-0015); what it means is a constraint id
-   that is already on the page, and a learned constraint's id is exactly that -- which is
-   why no new [Explanation] constructor is spent here, and D-0044's central claim would
-   be in trouble if one were.
+   M2-L13 REPLACED [to_linear] AND [instance] WITH THIS, and the replacement is the whole
+   of the row. Those two built a [Linear.t] through [to_linear_row], i.e. they asked
+   whether the PB row could be read back as an integer linear row over the DECLARED box,
+   and propagated only if it could. D-0050 called that "the right predicate used as the
+   wrong gate" and D-0054 named why: an algebraic identity over the declared box is a
+   PROOF-side test, and whether a row is worth propagating is a SOLVING-side question.
+   Neither function had a caller in lib/ -- the bet of "no new propagator family" was
+   never actually collected -- so what M2-L13 removed was a designated path, not a live
+   one.
 
-   The declared bounds come from [decl], not from the store: see the module header. *)
-let to_linear ~row_id store ~decl t : Linear.t option =
-  match to_linear_row t ~decl with
-  | None -> None
-  | Some (rterms, rhs) ->
-      let rec build acc = function
-        | [] -> Some { Linear.terms = List.rev acc; rhs; row_id }
-        | (a, name) :: rest -> (
-            match (Store.var_named store name, decl name) with
-            | Some x, Some (lo, hi) ->
-                build ({ Linear.coeff = a; x; decl_lo = lo; decl_hi = hi } :: acc) rest
-            | _ -> None)
-      in
-      build [] rterms
+   [to_linear_row] itself stays, above, and is now only what bin/main.ml has always
+   called it: MEASURED ONLY. [Search.n_pb_converts] and [Learn.converts] read it, nothing
+   propagates through it, and test/unit/test_learned.ml keeps the D-0044 boundary it pins
+   by building the [Linear.t] itself.
 
-(* Pack it for the engine. [~id] must be [Engine.next_id] of the engine it is about to be
-   added to -- [Engine.add] checks that and says why. *)
-let instance ~id ~row_id store ~decl t : Propagator.instance option =
+   The two readings are NOT ordered, which is worth knowing before anyone reverses this:
+   on a row that is a model row's own expansion the linear reading is STRICTLY STRONGER,
+   because the slack rule is blind to the ladder rows that tie one rung to the next
+   (lib/core/prop/pb.ml's "Consistency level" section, and lib/core/pb_analysis.ml's
+   [Postcondition_failed] section for the same arithmetic on the analysis side). On a
+   1UIP-shaped row with a threshold strictly inside a ladder the linear reading does not
+   exist at all. This function is the one that always exists.
+
+   [~row_id] is the id [introduce] returned, and the instance DOES expose a
+   [Propagator.pb_row] built from it -- unlike the learned clause, which exposes none.
+   That is not an inconsistency between the two, it is D-0054's two objects finally both
+   being present for the same constraint: the row this instance propagates is the row on
+   the page, so it is citable, it is frozen, and PB conflict analysis can resolve against
+   it. Leaving it [None] is not neutral: [Engine.row_of] would answer [None], and
+   lib/core/pb_analysis.ml would fall back to the clause path on every conflict a learned
+   instance reports -- MEASURED on the php models, where omitting it cut the rows learned
+   on php_wide_unsat from 30 to 2 and grew the tree instead of shrinking it.
+
+   The terms handed over are the row's own, i.e. the DECLARED-bound object, which is what
+   [Propagator.pb_row]'s comment requires ("a row that moved with the search would be the
+   wrong side of I-X6"). The propagator beside it reads live domains. Same constraint,
+   two readings, which is the whole of D-0054.
+
+   [~bump] is M2-L13's BREAK and is 0 everywhere but in test/unit/test_pb.ml. It raises
+   the degree of the propagated constraint above the degree of the row on the page, so
+   the instance enforces something the proof does not state. Nothing about the ANSWER
+   changes on an unsatisfiable model, which is the whole reason the break exists: the
+   only oracle for a wrong slack rule is the checker. It is a parameter rather than a
+   test-local copy of this function because a break that exercises a copy of the code
+   proves nothing about the code.
+
+   [~id] must be [Engine.next_id] of the engine it is about to be added to -- [Engine.add]
+   checks that and says why. *)
+let pb_instance ~id ~row_id ?(bump = 0) store ~decl t : Propagator.instance option =
+  let row _store =
+    Some
+      {
+        Propagator.r_terms = raw_terms t;
+        Propagator.r_degree = t.degree;
+        Propagator.r_cid = row_id;
+      }
+  in
   Option.map
-    (fun lin -> Propagator.pack ~id (module Linear) lin)
-    (to_linear ~row_id store ~decl t)
+    (fun p ->
+      Propagator.pack ~id ~row (module Pb.Learned_pb : Propagator.S with type t = Pb.t) p)
+    (Pb.of_terms store ~decl ~degree:(t.degree + bump) (raw_terms t))
 
-(* The declared-domain lookup an [Encoding] provides, in the shape [to_linear] wants.
+(* The declared-domain lookup an [Encoding] provides, in the shape [pb_instance] wants.
    Kept here rather than in [Encoding] because it is this module's question: [Encoding]
    already answers it, it just answers it by raising. *)
 let decl_of_encoding enc name =
