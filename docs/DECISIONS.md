@@ -1702,6 +1702,39 @@ not observe that property failing. The recurring shape is worth naming: **a test
 evidence until something has been seen to break it.** The eight earlier instances are in
 D-0020, D-0023, D-0025, M1-T16, M1-T17, M1-T20, M1-T24 and M3-T5.
 
+### Amendment, 2026-09-18: under format 2.0 `drop-line` *can* judge a derivation, because ids are positional
+
+D-0030 concluded that `drop-line` fails on the **grammar in both formats** and recorded the
+two messages as the measurement. That is true of the line it measured. It is **not** true in
+general under 2.0, and M2-T14 surfaced the difference by running the mutation harness under
+`BAGUETTE_PROOF_FORMAT=2.0` with the Python 2.2.2 checker — a configuration nothing had
+exercised, because the gate runs 3.0 only.
+
+The reason is structural. Under **3.0** a constraint id is a **label** (`@c3`), so deleting
+the line that defines it leaves every later citation naming a label that was never assigned
+— a parse error, always, whichever line you drop. Under **2.0** ids are **positional**, so
+deleting a line **renumbers** everything after it. The citations still resolve; they just
+resolve to *different* constraints. The checker therefore reads a well-formed proof and
+judges an inference — and rejects it on the derivation.
+
+Measured on two instances, `triple_unsat` and `lin_unsat`, both dropping line 5 (a `pol`):
+under 2.0 veripb answers **rejected-on-the-derivation**, where the lane is registered
+`Unevaluated` (rejecting without judging).
+
+**What this does not change.** D-0030's rule stands untouched and is the reason the
+discrepancy was visible at all: *a lane rejected without the checker ever judging an
+inference is not a pass.* The harness reports the mismatch as a **failure** rather than
+silently re-registering the lane, and its message says so in as many words — "the lane has
+found something: say what, do not re-register it to match". That is the behaviour to keep.
+
+**What it opens, and is deliberately NOT decided here.** Whether a lane's `expect` should be
+**format-dependent** — `Unevaluated` under 3.0 and evaluated under 2.0 for the same knob on
+the same instance. Arguments exist both ways: a per-format expectation is honest about what
+each checker does, but it doubles the registration surface and makes a lane's meaning depend
+on an environment variable, which is how this class of bug arose in the first place. Recorded
+as **M2-T15**. Until it is decided, a 2.0 run of `test_mutation` has **two expected failures**
+and they are findings, not regressions.
+
 ## D-0031  The order encoding's ladder stays in the `.opb`: lazy by `red` is quadratic
 Status: DECIDED
 Date: 2026-09-16

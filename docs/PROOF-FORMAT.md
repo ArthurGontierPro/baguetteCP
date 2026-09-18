@@ -567,7 +567,17 @@ next rule that refers to it cannot be read at all:
 
 This was written down in several places as a **3.0 quirk** — the roadmap said so, D-0023
 said so, and this section was cited as saying it. It is not one; 2.0 fails the same way
-for the same reason, one id short instead of one label short. D-0030 measured both and
+for the same reason, one id short instead of one label short.
+
+**Refined 2026-09-18 (M2-T14, D-0030's amendment): that is true of the line measured, not
+of every line, and the two formats differ structurally.** A 3.0 id is a **label**, so
+dropping its defining line is a parse error *whichever* line you drop. A 2.0 id is
+**positional**, so dropping a line **renumbers** everything after it — the citations still
+resolve, just to different constraints, and the checker reads a well-formed proof and
+**judges an inference**. Measured on `triple_unsat` and `lin_unsat` dropping a `pol`: under
+2.0 veripb rejects **on the derivation**. So under 2.0 `drop-line` is sometimes an
+evaluating lane and sometimes not, depending on which line goes. Whether `expect` should
+therefore be per-format is **M2-T15**, raised and not decided. D-0030 measured both and
 records the correction, and the two messages above are the measurement, not a reading of
 a grammar. The knob is unfixable as a text edit: a step is deleted *precisely because*
 something later cites it. The lane stays registered as `Unevaluated` and still runs;
