@@ -490,6 +490,23 @@ let test_citation_guard () =
     with Retention.Cited _ -> false
   in
   check "M2-L12 (d): once released, the same retirement goes through" went_through;
+  (* M2-L12 step 3: the CAP IS SOFT. A policy that names a cited constraint has its
+     choice refused by [reduce] -- counted, not raised -- so BAGUETTE_RETENTION=lbd:0
+     stays runnable with propagation on instead of aborting the solver. That distinction
+     is the whole of why the filter is in [reduce] and not left to [retire]'s guard:
+     [Cited] is a FAULT (a caller deleting something it should have known was in use),
+     an unmeetable cap is a POLICY OUTCOME. *)
+  let db2 = Retention.create ~policy:(Retention.lbd ~cap:0) () in
+  let cid2 = Learned.introduce ctx row ~origin:"M2-L12 test (d) soft cap" in
+  ignore (Retention.add db2 ~cid:cid2 ~row ~lbd:2 ~origin:"M2-L12 test (d) soft cap");
+  Retention.cite db2 ~cid:cid2 ~by:"the learned unit x_ge_1 (M2-L12)";
+  let evicted = Retention.reduce db2 ctx in
+  check "M2-L12 step 3: an lbd:0 cap does NOT evict a cited constraint"
+    (evicted = [] && Retention.size db2 = 1 && Retention.n_pinned db2 = 1);
+  (* The control: the same policy on the same database with no citation evicts it. *)
+  Retention.release_all db2;
+  check "M2-L12 step 3 control: uncited, the same cap DOES evict it"
+    (Retention.reduce db2 ctx = [ cid2 ] && Retention.size db2 = 0);
   close_out oc;
   (try Sys.remove pbp with _ -> ());
   try Sys.rmdir dir with _ -> ()

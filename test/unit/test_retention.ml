@@ -223,7 +223,14 @@ type run = {
    lifetime is not a level's, so a retention policy that forgets to delete something
    surfaces here and nowhere else. [Writer.Audit_failed] is caught rather than allowed to
    abort, so a leak is one red check and not a dead binary. *)
-let run ?(policy = Retention.keep_all) src =
+(* M2-L12 added [?propagate_learned], defaulting to the SHIPPED build (true). Several
+   lanes below now run both ways, and the reason is the row's finding rather than
+   thoroughness: with a learned constraint given a runtime consumer, every constraint on
+   these two scenes is CITED, so no policy can evict anything and the lanes that measure
+   the policy's own mechanics have no eviction to measure. [false] is the M2-L4 build in
+   which they do -- the same binary, one config field -- and it is the side M2-L4's
+   original assertions are kept verbatim on. *)
+let run ?(policy = Retention.keep_all) ?(propagate_learned = true) src =
   let m = F.Builder.of_string ~file:"test" src in
   let c = Compile.compile m in
   let dir = scratch "baguette_retention" in
@@ -242,7 +249,7 @@ let run ?(policy = Retention.keep_all) src =
        (Search.solve ~engine:c.Compile.engine ~store:c.Compile.store ~ctx
           ~check:(fun _ -> true)
           ~stats
-          ~config:{ Search.default_config with retention = policy }
+          ~config:{ Search.default_config with retention = policy; propagate_learned }
           ())
    with Writer.Audit_failed r -> audit_error := Some r);
   close_out oc;
@@ -304,7 +311,13 @@ let has_duplicate l =
 let test_a_exactly_once () =
   List.iter
     (fun (name, src, cap) ->
-      let r = run ~policy:(Retention.lbd ~cap) src in
+      (* M2-L12: on the M2-L4 build. This lane is about I-X2 -- every learned id deleted
+         exactly ONCE, by the policy or by the sweep, adding up -- and it needs the
+         policy to actually evict to be about anything. On the shipped build it cannot,
+         because every learned constraint on these scenes has a consumer and [reduce]
+         refuses to evict a cited one; [test_a_pinned_on_the_shipped_build] below is that
+         side, with the same adding-up check on it. *)
+      let r = run ~policy:(Retention.lbd ~cap) ~propagate_learned:false src in
       let db = r.r_db in
       let title s = Printf.sprintf "(a) %s: %s" name s in
       (* Not vacuous: if the cap never fired, every check below would be a check about
@@ -335,6 +348,40 @@ let test_a_exactly_once () =
       expect_accepted
         ~title:(title "the proof with the policy on")
         ~dir:r.r_dir ~opb:r.r_opb ~pbp:r.r_pbp;
+      cleanup r.r_dir)
+    scenes
+
+(* M2-L12, the other side of the lane above: the SHIPPED build, where the same cap
+   evicts NOTHING.
+
+   This is not a weaker version of the check above, it is the finding. Every learned
+   constraint on these two scenes gets a runtime consumer -- a unit becomes a global
+   bound tightening, a wider clause a registered [Clause.Learned_clause] instance -- and
+   [Retention.reduce] refuses to evict a cited constraint, so the cap is SOFT. I-X2 still
+   has to hold: everything the policy could not evict has to be swept at the end, which
+   is the adding-up check repeated here against a zero eviction count. *)
+let test_a_pinned_on_the_shipped_build () =
+  List.iter
+    (fun (name, src, cap) ->
+      let r = run ~policy:(Retention.lbd ~cap) src in
+      let db = r.r_db in
+      let title s = Printf.sprintf "(a) %s shipped: %s" name s in
+      check
+        (title "every learned constraint has a consumer, so the policy evicts NOTHING")
+        (Retention.n_evicted db = 0 && Retention.n_cited db > 0);
+      check
+        (title "...and the refusals are counted rather than raised")
+        (Retention.n_pinned db > 0);
+      check
+        (title "I-X2 still adds up: what the cap could not evict, the sweep took")
+        (Retention.n_added db = Retention.n_swept db && Retention.size db = 0);
+      check
+        (title "no id is cited by two `del` rules")
+        (not (has_duplicate (del_citations r.r_proof)));
+      check
+        (title "I-X2: the live set is empty at conclusion (no Audit_failed)")
+        (r.r_audit_error = None);
+      expect_accepted ~title:(title "the proof") ~dir:r.r_dir ~opb:r.r_opb ~pbp:r.r_pbp;
       cleanup r.r_dir)
     scenes
 
@@ -490,21 +537,34 @@ let test_b_cited_is_caught () =
   ignore (Retention.add db ~cid ~row ~lbd:1 ~origin:"cited");
   Retention.cite db ~cid ~by:"trail entry 7 (x >= 2)";
   let before = pos_out oc in
-  (* Through the policy, which is the route a real search takes: [cap = 0] means the
-     policy wants this constraint gone on the very next reduce. *)
-  let via_policy =
+  (* M2-L12 SPLIT THIS IN TWO, and the split is the point rather than a relaxation.
+
+     Through the POLICY ([cap = 0] wants this constraint gone on the very next reduce)
+     the eviction is now REFUSED AND COUNTED, not raised. A cap that cannot be met
+     because everything under it is in use is a policy outcome, and with a learned
+     constraint given a runtime consumer it is the ordinary case -- raising there would
+     make BAGUETTE_RETENTION abort the solver on any real model.
+
+     Through [retire] DIRECTLY it still raises, because that is a caller deleting
+     something it should have known was in use: a fault, and the one the row asks our
+     machinery to catch instead of the checker. Every assertion M2-L4 made about the
+     message is kept, on that call. *)
+  check "(b) the policy does not evict a constraint that is still cited"
+    (Retention.reduce db ctx = []);
+  check "(b) ...and the refusal is counted rather than raised" (Retention.n_pinned db = 1);
+  let direct =
     try
-      ignore (Retention.reduce db ctx);
+      Retention.retire db ctx ~why:"a caller that should have known better" [ cid ];
       None
     with Retention.Cited m -> Some m
   in
-  check "(b) the policy cannot evict a constraint that is still cited" (via_policy <> None);
+  check "(b) retiring a cited constraint DIRECTLY still raises" (direct <> None);
   check "(b) the refusal names I-X3 and what cites it"
-    (match via_policy with
+    (match direct with
     | Some m -> contains ~needle:"I-X3" m && contains ~needle:"trail entry 7" m
     | None -> false);
   check "(b) the refusal names what the checker would OTHERWISE have said"
-    (match via_policy with Some m -> contains ~needle:deleted_wording m | None -> false);
+    (match direct with Some m -> contains ~needle:deleted_wording m | None -> false);
   check "(b) the refused eviction wrote NOTHING to the proof" (pos_out oc = before);
   check "(b) the constraint is still held after the refusal" (Retention.holds db cid);
   (* Release the citation and the same eviction now goes through: the guard is about the
@@ -545,24 +605,39 @@ let test_b_cited_break () =
     ~opb ~pbp;
   cleanup dir
 
-(* The measurement the header rests on: no learned constraint is cited by anything, on
-   any scene, because none of them propagates (D-0044's amendment, learn.ml's fork (ii)).
-   This is the assertion that FAILS the day one does, which is when the activity policy
-   stops being the constant zero and this row's choice has to be revisited. *)
-let test_b_no_citations_in_a_real_search () =
+(* M2-L4 asserted here that no learned constraint is cited by anything, on any scene,
+   because none of them propagated -- and said in as many words that this "is the
+   assertion that FAILS the day one does, which is when the activity policy stops being
+   the constant zero and this row's choice has to be revisited".
+
+   **M2-L12 is that day, and the assertion did fail**, which is the whole of why it was
+   written. It is INVERTED here rather than deleted, so the property is still pinned and
+   still has a control: on the shipped build a real search cites, on the
+   [propagate_learned = false] build it does not. What the revisiting concluded is in
+   lib/core/retention.ml's header -- keep_all stands, on a different argument. *)
+let test_b_citations_in_a_real_search () =
   List.iter
     (fun (name, src, cap) ->
       let r = run ~policy:(Retention.lbd ~cap) src in
       check
         (Printf.sprintf
-           "(b) %s: a real search cites NO learned constraint -- so activity is the \
-            constant zero (retention.ml section 2)"
+           "(b) %s: a real search DOES cite a learned constraint now (M2-L12) -- \
+            activity is no longer the constant zero"
            name)
-        (Retention.n_cited r.r_db = 0);
+        (Retention.n_cited r.r_db > 0);
       check
         (Printf.sprintf "(b) %s: ...and the scene did learn something to be cited" name)
         (Retention.n_added r.r_db > 0);
-      cleanup r.r_dir)
+      cleanup r.r_dir;
+      (* The control, and it is the same binary: without a consumer there is nothing to
+         cite, which is the state M2-L4 measured and the state this assertion had to be
+         able to tell apart from the one above. *)
+      let off = run ~policy:(Retention.lbd ~cap) ~propagate_learned:false src in
+      check
+        (Printf.sprintf
+           "(b) %s control: with propagate_learned off nothing is cited at all" name)
+        (Retention.n_cited off.r_db = 0 && Retention.n_added off.r_db > 0);
+      cleanup off.r_dir)
     scenes
 
 (* ==================================================== (c) .pbp bytes, on and off *)
@@ -586,8 +661,12 @@ let test_b_no_citations_in_a_real_search () =
 let test_c_bytes_both_ways () =
   List.iter
     (fun (name, src, cap) ->
-      let off = run ~policy:Retention.keep_all src in
-      let on = run ~policy:(Retention.lbd ~cap) src in
+      (* M2-L12: on the M2-L4 build, for the reason [test_a_exactly_once] states -- a
+         bytes-on-versus-off comparison needs the policy to evict, and on the shipped
+         build it cannot. The shipped build's answer is the lane below, and it is the
+         opposite assertion: byte-IDENTICAL, because nothing was evicted. *)
+      let off = run ~policy:Retention.keep_all ~propagate_learned:false src in
+      let on = run ~policy:(Retention.lbd ~cap) ~propagate_learned:false src in
       let title s = Printf.sprintf "(c) %s: %s" name s in
       expect_accepted ~title:(title "policy OFF") ~dir:off.r_dir ~opb:off.r_opb
         ~pbp:off.r_pbp;
@@ -612,6 +691,38 @@ let test_c_bytes_both_ways () =
         (title "the same ids are introduced either way")
         (List.length (Search.stats_learned on.r_stats)
         = List.length (Search.stats_learned off.r_stats));
+      cleanup off.r_dir;
+      cleanup on.r_dir)
+    scenes
+
+(* M2-L12: the same comparison on the SHIPPED build, where it comes out the other way.
+
+   D-0051's cap sweep was re-run for this row (lib/core/retention.ml's header has the
+   table) and its conclusion is that eviction still buys nothing -- but for a new reason:
+   what a policy may evict has no consumer, and what has a consumer it may not evict. On
+   these two scenes that is total: nothing is evicted at any cap, so the proof under
+   `lbd:<cap>` is BYTE-IDENTICAL to the proof under keep_all.
+
+   Asserting byte-identity is the opposite of what a before/after usually wants, and it is
+   asserted here for the same reason CLAUDE.md distrusts it: identical bytes are no
+   evidence UNLESS you know why. Here the why is checked beside it -- zero evicted, a
+   positive pinned count -- so the identity is a measurement and not two runs of the same
+   binary by accident. *)
+let test_c_bytes_on_the_shipped_build () =
+  List.iter
+    (fun (name, src, cap) ->
+      let off = run ~policy:Retention.keep_all src in
+      let on = run ~policy:(Retention.lbd ~cap) src in
+      let title s = Printf.sprintf "(c) %s shipped: %s" name s in
+      expect_accepted ~title:(title "policy OFF") ~dir:off.r_dir ~opb:off.r_opb
+        ~pbp:off.r_pbp;
+      expect_accepted ~title:(title "policy ON") ~dir:on.r_dir ~opb:on.r_opb ~pbp:on.r_pbp;
+      check
+        (title "the cap evicted nothing, because everything under it is cited")
+        (Retention.n_evicted on.r_db = 0 && Retention.n_pinned on.r_db > 0);
+      check
+        (title "...so the two proofs ARE byte-identical, and that is the finding")
+        (off.r_proof = on.r_proof);
       cleanup off.r_dir;
       cleanup on.r_dir)
     scenes
@@ -654,14 +765,16 @@ let test_policy_axis () =
 
 let () =
   test_a_exactly_once ();
+  test_a_pinned_on_the_shipped_build ();
   test_a_double_delete_guard ();
   test_a_double_delete_break ();
   test_a_wipe_level_zero_refused ();
   test_a_level_zero_deletion_costs ();
   test_b_cited_is_caught ();
   test_b_cited_break ();
-  test_b_no_citations_in_a_real_search ();
+  test_b_citations_in_a_real_search ();
   test_c_bytes_both_ways ();
+  test_c_bytes_on_the_shipped_build ();
   test_determinism ();
   test_policy_axis ();
   if !failures > 0 then (
