@@ -19,7 +19,6 @@ worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 uni
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M2-L1 | NEW `lib/core/learned.ml`, `lib/proof/writer.ml`, `lib/core/engine.ml`, `lib/core/justify.ml`, NEW `test/unit/test_learned.ml`, `test/unit/test_proof.ml`, `test/unit/dune` | agent-learned | 2026-09-18 |
-| M1-T66 | `lib/core/search.ml`, `test/unit/test_matrix.ml`, `test/unit/test_core.ml` | agent-bridge | 2026-09-18 |
 
 Two rounds are recorded in `## Completed` below. The rows that stood here on
 2026-09-15 (`integration`, M1-T12, M1-T13) were stale — see the handoff note "the
@@ -193,6 +192,7 @@ work. The owning session picks it up.
 | M2-T13 | agent-flaky | 2026-09-18 | `test_random.ml`'s five `!x > 0` coverage checks (deep decisions, root conflict, div>1, div-remainder, ne-moved-bound) made seed-independent: bounded top-up (cap 4000 extra draws, same seeded stream) keeps generating until every shape is reached, and failure of the check now prints `COVERAGE-GAP (... NOT a soundness failure)` through a new `coverage_check`, distinct from `check`. 130-seed sweep (1-130), 0 failures; top-up actually engaged on seeds 21/53/68/89 confirming it isn't a no-op. `make check`-equivalent gate green: fmt-check, width lint, determinism (34/34), 1625 unit checks, 252 matrix checks, 44 mutation checks. Commits `fb0ebf9`, `30b1d73` on `wave10-flaky` |
 | M2-L0 | agent-concl | 2026-09-18 | **D-0043 implemented.** `justified` gains `concludes : fact option` via a **required** `~concludes` — the recommendation taken, for `reason.ml`'s own `none` reason: a defaulted `?concludes` would be `set_lo` silently meaning `no_facts` again. 13 lib + 46 test sites write it out. `Writer.pol_concluding`/`implied` have their **first caller in `lib/`** (`Justify.emit_concluding`), closing M1-T51's adoption gap: a truncated `pol` is ACCEPTED bare and REJECTED once the conclusion is stated, matched against both checkers' wordings. **Finding**: the naive "exactly the new bound" check reddens three *real* scenes — `Domain.set_lo` settles over holes (I-D2), so the bound a propagator can **prove** and the bound the trail **lands on** are two different honest numbers; `conclusion_holds` admits exactly that window, value by value. +34 checks. Merged as `a229509` |
 | M2-L2 | agent-cut | 2026-09-18 | **The cut, as data** — learns nothing, backjumps nowhere, so it was oracle-tested before anything depends on it. The criterion is a record carrying its **own postcondition**; three ship (`one_uip`, `conflict_side`, `decision_cut`), and `conflict_side`'s two-conflict-level cut is **accepted**, with an explicit check that `one_uip`'s postcondition is false of it — the line that would have reddened had 1UIP been written as an invariant of the cut, which is exactly what D-0044's amendment warned about and what M2-L6 needs. Holes load-bearing and measured: strip the folded `int_ne` facts and the cut is brute-force SAT. +64 checks. Merged as `a229509` |
+| M1-T66 | agent-bridge | 2026-09-18 | **Row NOT closed — the prize is out of reach in M1, and here is the proof.** The bridge's absence is now observable at the **derivation** rather than by grepping proof text: `Search.bridges` files a `Search.bridge` per settle (decision, literal assumed, bound settled onto, holes crossed, and which line states each hole at which level) and one `Trace.record_citation` per named hole, so a **decision** settle enters the I-S4 audit it was entirely outside of before (`Trace.emit` skips level-start entries, so a decision push writes no line and recorded no citation). Two scenes in `test_matrix.ml` read those records. Measured with `bridges` made a no-op: `bridge_derivation` reddens **at the derivation**, with a message saying the settle step is missing — while **veripb still accepts the proof**. That is route 1 answered in the negative and answered *analytically*: the settle is re-derivable from the page by two routes, the hole's own trace line (M1-T56) and, under it, `int_lin_ne`'s big-M `.opb` rows (I-X10) which no `w` can retire. `br_unnamed` is empty in both scenes, i.e. the page always names the hole. **No proof bytes change.** +15 unit checks (1723 -> 1738), 34/34, peak RSS 36 MB. Commits `7ae1843`, `6d08c4b` on `wave11-bridge` |
 
 ## Handoff notes
 
@@ -1305,3 +1305,37 @@ and that collides head-on with M2-L3's rule to derive the clause while its suppo
 still live. M2-L1 is where that is cheapest to fix, and the fix must hold under **both**
 proof formats. **M2-L5** is unblocked now that M2-L0 is done. **M2-L3** wants `lib/core`
 and should queue behind M2-L1, not beside it.
+
+## M1-T66 handoff, 2026-09-18 (agent-bridge)
+
+**What changed.** `Search.bridges` now leaves its derivation behind as data instead of only
+as a line in the `.pbp`: a `Search.bridge` record per settle on `stats` (which decision,
+which literal assumed, which bound settled onto, which holes the push crossed, and for each
+hole the id and level of the line that states it), plus a `Trace.record_citation` per named
+hole. `test/unit/test_matrix.ml` gains `bridge_derivation` (the M1-T55 hole split) and
+`bridge_across_levels` (the ancestor arm, on a SAT model). Nothing in any emitted proof
+changed — the M1-T55 byte pin in `test_engine.ml` is still green and unmodified.
+
+**The honest verdict, and the thing M2-L3 needs to know.** Route 1 — a scene where removing
+the bridge makes a checker *reject* — is **not reachable in M1**, and the reason is
+structural rather than a failure of imagination. When veripb checks the nogood it asserts
+the decisions and unit-propagates, and it reaches the settled bound by two routes the bridge
+cannot take away: (1) the hole's own trace line, the clause `x <= v-1 \/ x >= v+1` that
+M1-T56 made every interior hole get and that `Trace.emit` puts on the page *before*
+`bridges` runs (D-0021 fixes that order); and failing that (2) `int_lin_ne`'s two big-M rows
+in the `.opb`, which are in the model file and which no `w` can ever retire — I-X10, and
+`Ne` is the only thing in M1 that punches a hole. Measured, not just argued: with `bridges`
+made a no-op, `bridge_derivation` reddens *at the derivation* and **veripb still accepts the
+proof**. `br_unnamed` was empty in both scenes, i.e. route (1) was available every time.
+
+**So the row stays open**, and what it now owes M2-L3 is one sentence: the bridge becomes
+load-bearing the moment a line cites the settle across levels, because route (1)'s support
+is level-tagged and route (2) is not a *citation* at all. `bridge_across_levels` is where
+that already half-happens today — the bridge is written at the nogood's level, deeper than
+the decision it bridges, citing a level-0 hole line — and it is the first I-S4 edge of that
+shape the audit has ever recorded. `Trace.i_s4_violations` is asserted empty in both scenes;
+when M2-L3's learned clause starts citing across levels, that is the assertion that reports
+it rather than the checker several inferences away.
+
+`docs/ROADMAP.md` M1-T66's row still says TODO and should be updated by whoever merges this;
+the file was read-only for this session.
