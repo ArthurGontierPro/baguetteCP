@@ -10,6 +10,44 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
+**Wave sixteen is running: M2-L11 (agent-ladder) and M2-T17 (agent-size).**
+
+The split is the usual one and it is forced. **agent-ladder holds all of `lib/`**, because
+M2-L11 changes what `Linear` hands to PB analysis: that is `lib/core/prop/linear.ml`,
+`order_reason.ml`, `pb_analysis.ml`, `justify.ml`, `search.ml`'s counters and
+`lib/proof/encoding.ml`, which is the whole learning vertical plus the encoding edge. The
+roadmap already says `lib/core` is held **exclusively** for the M2L sequence, so its partner
+has to be outside `lib/` entirely.
+
+**agent-size (M2-T17) is that partner, and it was scoped to be.** The row exists because
+`docs/EXPLANATION-REVIEW.md` §6 asked for explanation size to be a tracked number before
+M4-T1; it is deliberately specified against the **emitted `.pbp` artefacts**, which already
+contain every literal count it needs, so it changes no `lib/` file and adds no counter. It
+owns `bench/**` and nothing else. Same shape as M2-L8, for the same reason.
+
+**Orchestrator holds** `WORKLOG.md`, `docs/**`, `Makefile`, `dune-project`, `scripts/**`
+and all merging, as standing. Neither agent commits to `main`.
+
+**Before this wave dispatched, three stale things were corrected** — read these before
+trusting a roadmap row you remember:
+
+- **M1-T44 was NOT open.** It was marked "TODO — highest priority open defect" and it has
+  been fixed for some time; a wave aimed at it would have found nothing to do. Re-verified
+  through the CLI on the row's own minimal model: `s VERIFIED UNSATISFIABLE`, veripb 3.0.2,
+  binary `0011dc99`. The fix was **not** the one the row proposed (`rests_on_a_clause` was
+  never the defect); the cause was a bound settled over a hole being stronger than the trail
+  entry carrying it, fixed in `linear.ml`'s `settled_over_lo`. `test/models/root_hole_unsat.fzn`
+  is byte-for-byte that minimal model, so the gate runs it every time.
+- **M2-L11's test (c) said "verified under both formats".** It was written before D-0046;
+  there is one format. Corrected on the row, and agent-ladder is told.
+- **The `Makefile` line 106 request from agent-bench is CLOSED** — the comment already says
+  `ARGS="-r 9"` and `23 of the 38 rows`. It landed with the wave-fifteen merge and was never
+  marked.
+
+Wave fifteen (M2-T16 agent-drop, M2-L8 agent-bench) is merged, released and pushed; every
+file it held is free.
+
+
 **Wave fifteen is running: M2-T16 (agent-drop) and M2-L8 (agent-bench).**
 
 **M2-T16 is RELEASED, 2026-09-18 (agent-drop).** Moved to `## Completed`; handoff notes at
