@@ -672,8 +672,9 @@ let rows_that_refute_alone ~dir ~name m =
         let oc = open_out pbp in
         let w = Writer.create ~comments:false ~audit:false oc in
         let opb_oc = open_out opb in
-        Encoding.write_opb_for ~comments:[ "test_mutation: certifying " ^ name ] enc w
-          opb_oc;
+        Encoding.write_opb_for
+          ~comments:[ "test_mutation: certifying " ^ name ]
+          enc w opb_oc;
         close_out opb_oc;
         Encoding.start_proof enc w;
         (* Derives NOTHING: the conclusion names a model row directly. *)
