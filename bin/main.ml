@@ -449,8 +449,8 @@ let retention_policy () =
   let bad v =
     prerr_endline
       (Printf.sprintf
-         "baguette: BAGUETTE_RETENTION=%S is not a policy. Use `off`, `fifo:N` \
-          or           `lbd:N` (N = the database cap)."
+         "baguette: BAGUETTE_RETENTION=%S is not a policy. Use off, fifo:N or lbd:N, \
+          where N is the database cap."
          v);
     exit 2
   in
