@@ -162,7 +162,7 @@
 
    ---------------------------------------------------------------------------
    MEASURED, M2-L6: our integer propagator is STRONGER than PB propagation on the
-   same row, and that is the dominant non-[No_row] fallback
+   same row -- and M2-L11 has since made it a ROW
    ---------------------------------------------------------------------------
 
    This is the finding of the row and it was not anticipated by D-0044.
@@ -188,15 +188,28 @@
    So [Postcondition_failed] is not a defect in [Reduce] and not a defect in
    [bounds_before]. It is the honest report that the reason for this pruning is the model
    row PLUS a ladder chain, which is exactly what [Linear] already builds as an
-   [Explanation] ([Order_reason.weaken_declared], D-0010) and exactly what this module
-   does NOT have as a ROW. Resolving against the derived row rather than the model row is
-   the next step and it is named in "What is left" at the foot of this file; it is a
-   bigger change than this row, because it needs the propagator's derivation as data and
-   not only as a proof step.
+   [Explanation] ([Order_reason.weaken_declared], D-0010). M2-L11 gives the same chain to
+   THIS module as a row -- lib/core/ladder.ml -- and [step] below retries the reduction on
+   the lifted row when the bare one fails.
 
-   Where the PB path does succeed -- test/models/backjump_lineq_unsat.fzn, 3 of 3
-   conflicts, no fallback -- it is because the prunings there are at ladder ENDS, where
-   the row's own slack is tight enough to propagate without the ladder's help.
+   Where the PB path does succeed without any of that -- test/models/backjump_lineq_unsat
+   .fzn, 3 of 3 conflicts, no fallback -- it is because the prunings there are at ladder
+   ENDS, where the row's own slack is tight enough to propagate without the ladder's help.
+
+   TWO CORRECTIONS TO M2-L6'S OWN NUMBERS, both found by M2-L11 and both worth having in
+   front of whoever reads this section next.
+
+     1. [Postcondition_failed] is NOT "the dominant non-[No_row] fallback", which is what
+        this heading used to say. Counted over the 38 models on 2026-09-18: of 50
+        fallbacks, [No_pivot] is 26, [No_row] is 21 (int_ne 12, bool_clause 3,
+        array_bool_or 3, array_bool_and 2, bool_not 1, bool_eq 1) and
+        [Postcondition_failed] is 2. The scene the paragraph above describes is real and
+        the reasoning about it is right; it is simply not where the traffic is. The
+        traffic is conflicts whose conflict-level literals all rest on DECISIONS, which
+        nothing can resolve away.
+     2. "every learned row is the empty contradiction, 36 of 36" does not hold either. See
+        [Search.n_pb_nondegenerate]: it is 26 of 36 NON-degenerate, and the degenerate
+        ones are the int_lin_eq family alone.
 
    ---------------------------------------------------------------------------
    The fallback is permanent, and it is most of the traffic
