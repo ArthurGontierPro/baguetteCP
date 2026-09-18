@@ -454,7 +454,16 @@ type t = {
           can brute-force the entailment -- "these premises imply this conclusion" --
           rather than take the [pol] on trust. A cutting-planes derivation is sound at
           EVERY 0-1 point, not only at the ladder-consistent ones, so that oracle is
-          never vacuous even when the model itself is unsatisfiable. *)
+          never vacuous even when the model itself is unsatisfiable.
+
+          M2-L11: the LADDER rows a lift cites are in here too, and they must be. Without
+          them the premise set is not ladder-closed, and the conclusion genuinely is not
+          entailed by it -- which is the whole finding this row answers, restated as an
+          oracle failure. *)
+  ladder_rungs : int;
+      (** M2-L11: ladder rows cited across all eliminations, i.e. how much of the reason
+          came from the order encoding rather than from the model row. 0 means this
+          analysis is exactly the one M2-L6 would have produced. *)
 }
 
 type result = Learned_row of t | Fallback of fallback
@@ -501,7 +510,8 @@ exception Give_up of fallback
    [name_of] is only for the [No_row] message and may answer anything; a fallback reason
    nobody can read is a counter with no diagnosis behind it. *)
 let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row option)
-    ~(name_of : int -> string) ~(reduction : Reduce.t) ~(criterion : criterion) : result =
+    ~(name_of : int -> string) ~(ladder_id : string -> int -> int option)
+    ~(reduction : Reduce.t) ~(criterion : criterion) : result =
   let conflict_level = Store.level store in
   let max_steps = Store.trail_length store + 1 in
   let level_of = level_of store in
@@ -528,7 +538,7 @@ let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row optio
         else match best with Some (_, b) when b >= at -> best | _ -> Some (l, at))
       None (Learned.terms row)
   in
-  let step row expl steps pivots antecedents rows =
+  let step row expl steps pivots antecedents rows lifts =
     match pivot_of row with
     | None -> raise (Give_up No_pivot)
     | Some (l, at) ->
@@ -546,17 +556,44 @@ let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row optio
         (* Frozen at the propagation, not at the conflict. This is the I-X6 discharge and
            the header says why it cannot be the conflict-time predicate. *)
         let falsified = falsified_before store ~at in
-        let v = { Reduce.row = r; pivot = p; falsified } in
-        let o =
+        (* One attempt at the reduction, as a result rather than a raise, so that the
+           M2-L11 ladder lift below can be a RETRY on the same pivot instead of a second
+           copy of this block. *)
+        let attempt candidate =
+          let v = { Reduce.row = candidate; pivot = p; falsified } in
           match reduction.Reduce.reduce v with
-          | None -> raise (Give_up Reduction_declined)
+          | None -> Error Reduction_declined
           | Some o ->
-              if Reduce.postcondition_holds reduction v o then o
+              if Reduce.postcondition_holds reduction v o then Ok o
               else
-                raise
-                  (Give_up
-                     (Postcondition_failed
-                        (Reduce.slack o.Reduce.reduced ~falsified, o.Reduce.divisor)))
+                Error
+                  (Postcondition_failed
+                     (Reduce.slack o.Reduce.reduced ~falsified, o.Reduce.divisor))
+        in
+        (* M2-L11. The bare model row often does NOT PB-propagate the pivot our integer
+           propagator legitimately deduced, because the strength is in the order
+           encoding's ladder implications and those are separate .opb rows (D-0028). The
+           bare row is tried FIRST and unchanged -- so every conflict M2-L6 already
+           handled takes exactly the derivation it took before, and this row is purely
+           additive -- and the lift is the retry when it fails. See lib/core/ladder.ml.
+
+           A lift that does not help is not an error: the ORIGINAL failure is reported, so
+           [pb_fallback_rev]'s diagnosis still names the condition that actually stopped
+           the reduction rather than the rescue that also did not. *)
+        let o, wrap, lift =
+          match attempt r with
+          | Ok o -> (o, (fun e -> e), None)
+          | Error e0 -> (
+              let lifted =
+                try Ladder.lift ~row:r ~pivot:p ~falsified ~ladder_id
+                with Checked.Overflow m -> raise (Give_up (Overflow m))
+              in
+              match lifted with
+              | None -> raise (Give_up e0)
+              | Some lt -> (
+                  match attempt lt.Ladder.lifted with
+                  | Ok o -> (o, Ladder.derive lt, Some lt)
+                  | Error _ -> raise (Give_up e0)))
         in
         let a =
           match coeff_of row l with Some a -> a | None -> raise (Give_up No_pivot)
@@ -577,16 +614,27 @@ let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row optio
             [
               Explanation.term 1 expl;
               Explanation.term a
-                (o.Reduce.derive (Explanation.model_row reason_row.Propagator.r_cid));
+                (o.Reduce.derive
+                   (wrap (Explanation.model_row reason_row.Propagator.r_cid)));
             ]
             1
         in
-        let fresh = not (List.mem reason_row.Propagator.r_cid antecedents) in
-        let antecedents =
-          if fresh then antecedents @ [ reason_row.Propagator.r_cid ] else antecedents
+        let add (antecedents, rows) cid r =
+          if List.mem cid antecedents then (antecedents, rows)
+          else (antecedents @ [ cid ], rows @ [ r ])
         in
-        let rows = if fresh then rows @ [ r ] else rows in
-        (row', expl', pivots @ [ l ], antecedents, rows)
+        let acc = add (antecedents, rows) reason_row.Propagator.r_cid r in
+        (* The ladder rows are PREMISES of this derivation and are recorded as such. The
+           entailment oracle reads [antecedent_rows], and a premise it was not shown is a
+           premise it would wrongly report the conclusion as independent of. *)
+        let antecedents, rows =
+          match lift with
+          | None -> acc
+          | Some lt ->
+              List.fold_left (fun acc (cid, lr) -> add acc cid lr) acc lt.Ladder.rows
+        in
+        let lifts = match lift with None -> lifts | Some lt -> lifts + lt.Ladder.rungs in
+        (row', expl', pivots @ [ l ], antecedents, rows, lifts)
   in
   try
     let conflict_row =
@@ -601,7 +649,7 @@ let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row optio
        falls back rather than deriving from a premise the search does not share. *)
     if not (slack_at (view row0 0) conflict_level < 0) then
       raise (Give_up Not_conflicting);
-    let rec loop row expl steps pivots antecedents rows =
+    let rec loop row expl steps pivots antecedents rows lifts =
       if criterion.stop (view row steps) then
         if steps = 0 then raise (Give_up Nothing_to_learn)
         else
@@ -615,15 +663,16 @@ let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row optio
               criterion_name = criterion.crit_name;
               antecedents;
               antecedent_rows = rows;
+              ladder_rungs = lifts;
             }
       else if steps >= max_steps then raise (Give_up (Diverged steps))
       else
-        let row', expl', pivots', antecedents', rows' =
-          step row expl steps pivots antecedents rows
+        let row', expl', pivots', antecedents', rows', lifts' =
+          step row expl steps pivots antecedents rows lifts
         in
-        loop row' expl' (steps + 1) pivots' antecedents' rows'
+        loop row' expl' (steps + 1) pivots' antecedents' rows' lifts'
     in
-    loop row0 expl0 0 [] [ conflict_row.Propagator.r_cid ] [ row0 ]
+    loop row0 expl0 0 [] [ conflict_row.Propagator.r_cid ] [ row0 ] 0
   with Give_up f -> Fallback f
 
 (* ------------------------------------------------------- the proof side *)

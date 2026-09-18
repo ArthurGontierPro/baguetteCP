@@ -487,15 +487,26 @@ let report_stats (st : Search.stats) (outcome : Search.outcome) =
     st.Search.n_pb_fallback
     "...of which fell back to the M2-L3 clause path -- rate in brackets"
     (Search.stats_pb_fallback_rate st);
-  if Search.stats_pb_fallbacks st <> [] then
-    Printf.eprintf "stats: %-10s %10s        first fallback reason: %s\n" "pb-why" ""
-      (List.hd (Search.stats_pb_fallbacks st));
+  List.iter (fun r -> Printf.eprintf "stats: pb-why %s\n" r) (Search.stats_pb_fallbacks st);
   Printf.eprintf "stats: %-10s %10d pivots %s\n" "pb-steps" st.Search.n_pb_steps
     "pivots eliminated by linear combination + reduction, over all analyses";
   Printf.eprintf "stats: %-10s %10d rows   %s\n" "pb-convert" st.Search.n_pb_converts
     "...learned PB rows Learned.to_linear_row accepts, i.e. which could propagate";
   Printf.eprintf "stats: %-10s %10d rows   %s\n" "pb-stronger" st.Search.n_pb_stronger
     "...of those, where the SAME conflict's clause does NOT convert. M2-L6 test (a)";
+  (* M2-L11 test (b). READ THIS BESIDE [pb-stronger], NEVER INSTEAD OF IT. M2-L6 measured
+     [pb-stronger] at 36 of 36 and reported in the same breath that all 36 were the
+     EMPTY CONTRADICTION -- strictly stronger than the clause and still useless as a
+     propagation result. [pb-nondeg] is the counter that can tell those apart, so a claim
+     that PB learning improved is a claim about this line. [pb-lifted] says whether
+     lib/core/ladder.ml fired at all: the lift is a retry after the bare model row fails,
+     so 0 here means this build derives exactly what M2-L6 derived. *)
+  Printf.eprintf "stats: %-10s %10d rows   %s\n" "pb-nondeg" st.Search.n_pb_nondegenerate
+    "...learned PB rows that are NOT the empty contradiction. M2-L11 test (b)";
+  Printf.eprintf "stats: %-10s %10d rows   %s\n" "pb-lifted" st.Search.n_pb_lifted
+    "...learned by resolving against model row PLUS a ladder chain (M2-L11); 0 = M2-L6";
+  Printf.eprintf "stats: %-10s %10d rungs  %s\n" "pb-rungs" st.Search.n_pb_rungs
+    "order-encoding ladder rows those analyses cited, summed (D-0028)";
   if Search.stats_i_s4_broken st <> [] then
     Printf.eprintf "stats: I-S4 VIOLATED %d time(s); first: %s\n"
       (List.length (Search.stats_i_s4_broken st))
