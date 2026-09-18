@@ -1198,3 +1198,30 @@ discipline applied to a data structure instead of a message.
 Read off the code, **not measured**: no learned constraint has ever been emitted. The
 prediction to falsify is stated in D-0045 — emit one at the conflict level and the
 backjump deletes it.
+
+### M2-T13 verified independently by the orchestrator, 2026-09-18
+
+agent-flaky reported the four top-up seeds as *likely* analogues of the four the
+2026-09-17 sweep found, because the two sweeps used different case/order counts. That
+hedge was correct to make and it is now unnecessary — measured rather than argued:
+
+| seed | pre-fix binary (`62962b8`) | post-fix binary | top-up draws |
+|---|---|---|---|
+| 21 | **FAIL** | pass | 9 |
+| 53 | **FAIL** | pass | 5 |
+| 68 | **FAIL** | pass | 27 |
+| 89 | **FAIL** | pass | 14 |
+| 3 (control) | pass | pass | 0 |
+
+The pre-fix binary was built from `62962b8` in a throwaway worktree and **checked to be
+md5-distinct** from the fixed one before either was run — CLAUDE.md's rule that a
+before/after whose two sides used the same binary is not weak evidence but *no* evidence,
+which has caught this project twice. The control seed matters as much as the four: it
+passes on both binaries, so the old one was not simply always-red.
+
+**The defect, in the old binary's own words**: `FAIL the generator reaches a disequality
+pruning that moves a bound`. A bare `FAIL`, in the one file whose whole purpose is that a
+red is a soundness finding worth chasing. That is what the new `coverage_check`'s
+`COVERAGE-GAP (generator problem, NOT a proof rejection, NOT a soundness failure)` replaces
+— and it still increments `failures`, so the check was re-worded, **not weakened**, which
+was the thing to get wrong here and was checked rather than assumed.
