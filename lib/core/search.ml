@@ -1683,7 +1683,22 @@ let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
   stats.db <- Retention.create ~policy:config.retention ();
   (* M2-L12: and the learned units, for the same reason -- a [stats] may outlive a
      [solve], and a global from a previous search cites a constraint this one's writer
-     knows nothing about. *)
+     knows nothing about.
+
+     THE ENGINE IS NOT RESET AND CANNOT BE, and that is a stated limit rather than an
+     oversight. Step 2 registers a learned clause with [Engine.add], which appends; there
+     is no [Engine.remove], and adding one would mean rebuilding the watcher table that
+     [Engine.check_attribution]'s second arm reads. So **a second [solve] on an engine a
+     first [solve] has learned on is not supported**: the instances from the first search
+     would still be there, propagating, and their `rup` lines would rest on constraints
+     the first search's end-of-sweep already retired -- which the checker would find, a
+     long way from here.
+
+     Nothing does it. [Compile.compile] builds one engine per model and every caller in
+     lib/, bin/ and test/ solves once on it; the whole suite is green with the audit on,
+     which is what says so rather than this comment. If a caller ever needs to re-solve,
+     it compiles again -- or [Engine] grows a truncate-to-a-mark and this comment becomes
+     that function's reason for existing. *)
   stats.globals_rev <- [];
   stats.nodes <- stats.nodes + 1;
   let result = dfs engine store ctx trace stats config order [] in
