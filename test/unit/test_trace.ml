@@ -1003,7 +1003,15 @@ let ix10_table =
     ("int_lt.ml", Single_row);
     ("int_eq.ml", Single_row);
     ("bool2int.ml", Single_row);
-    ("bool_clause.ml", Single_row);
+    (* M2-L12/D-0052: bool_clause.ml, widened to general order literals and renamed. The
+       classification is UNCHANGED and that is the point of re-reading it here: a clause
+       over order literals is still one constraint whose rows unit-propagate the claim,
+       whether that constraint is a model row the front end posted or a learned one
+       [Learned.introduce] put on the page. What the widening DID add is a lifetime
+       condition -- a learned constraint is on the page only while lib/core/retention.ml
+       holds it -- and that is I-X3's business, guarded by [Retention.cite], not
+       I-X10's. *)
+    ("clause.ml", Single_row);
     (* Not a propagator: it renders bound-fact chains for a reason another propagator
        already justified, so it introduces no pruning of its own. *)
     ("order_reason.ml", Prunes_nothing);

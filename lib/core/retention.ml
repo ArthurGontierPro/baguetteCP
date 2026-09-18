@@ -176,6 +176,59 @@
    M2-L6's successors rather than a property of retention in general: deleting is free in
    a plain solver and is not free in a proof-logging one.
 
+   ---------------------------------------------------------------------------
+   M2-L12 RE-RAN THE SWEEP, BECAUSE THE CONDITION ABOVE WAS MET
+   ---------------------------------------------------------------------------
+
+   D-0051 said the verdict reverses "when a learned constraint is actually propagated",
+   and the paragraph above says eviction "would NOT be safe in a solver whose later `rup`
+   lines leaned on a learned unit to propagate". M2-L12 built exactly that solver: a unit
+   learned clause is applied at every node and a wider one is a registered
+   [Clause.Learned_clause] instance. So the table was re-run rather than inherited, on
+   the same model, the same four columns, with the same method (2026-09-18).
+
+   First, the OLD column reproduced EXACTLY -- `off` 48145 bytes / 124 `del`, `lbd:16`
+   48658 / 181, `lbd:0` 48793 / 196, all VERIFIED -- which is what makes the new one
+   worth reading. `BAGUETTE_PROPAGATE_LEARNED=off` is the build that produces it.
+
+   With propagation ON, on `width_sat_depth` (73 learned constraints, 49 of them cited):
+
+     | policy   | evicted | eviction refused | .pbp bytes | `del` | nodes | checker  |
+     |----------|---------|------------------|------------|-------|-------|----------|
+     | off      |       0 |                0 |      48145 |   124 |    99 | VERIFIED |
+     | lbd:16   |      16 |             1397 |      48289 |   140 |    99 | VERIFIED |
+     | fifo:8   |      20 |             1745 |      48325 |   144 |    99 | VERIFIED |
+     | lbd:0    |      24 |             2125 |      48361 |   148 |    99 | VERIFIED |
+
+   **The verdict is unchanged and the ARGUMENT for it is not.** D-0051's reason was
+   "activity is the constant zero". That reason is now false: 49 of the 73 constraints
+   have a consumer. The reason `keep_all` still wins is the new one:
+
+     1. **The constraints with activity are exactly the ones eviction may not touch.**
+        [reduce] below refuses to evict a cited constraint, so the achievable cap is
+        bounded below by the number of live consumers: at `lbd:0`, which asks for an
+        empty database, 24 of 73 go and 49 stay. Eviction cannot reduce the work the
+        globals do, because the globals are what pins them.
+     2. **What it CAN evict has no activity**, being the uncited remainder -- duplicates
+        and M2-L6 PB rows with no runtime instance -- so evicting it saves no propagation
+        and only adds `del` lines. Bytes and `del` rules still rise monotonically with
+        eviction, exactly as before.
+     3. **The tree is the same size at every cap** (99 nodes in all four rows), which is
+        the direct measurement that eviction is buying nothing here.
+
+   So: **`keep_all` stands, and D-0051's "what would reverse this" is now spent.** Do not
+   cite it a third time as "retention does not help while nothing propagates a learned
+   constraint" -- something does. Cite it as: retention does not help while the
+   constraints that propagate are the ones a policy may not evict, and the ones it may
+   evict do not propagate. What would reverse THAT is a database large enough for the
+   uncited remainder to dominate, or a consumer cheap enough to be worth dropping -- and
+   the sweep above is re-runnable with two environment variables.
+
+   And the safety note above has to be read the other way round now. The proof still
+   verifies at every cap, but no longer because nothing leans on a learned constraint:
+   it verifies because [reduce] refuses to delete the ones that are leaned on. The
+   citation guard is doing the work the citation count of 0 used to do for free.
+
    ### Determinism
 
    The gate requires two runs of one binary to be byte-identical, and a learned database
@@ -307,6 +360,13 @@ type t = {
   mutable n_swept : int;
   mutable n_duplicate : int;
   mutable n_cited : int;
+  mutable n_pinned : int;
+      (* M2-L12. Evictions the policy PROPOSED and [reduce] did NOT perform, because the
+         constraint had a live consumer. Proposals and not distinct constraints: [reduce]
+         runs once per conflict and an over-cap policy re-proposes the same pinned
+         entries every time, so this number is much larger than the database. That is
+         what makes it the right counter for "how hard is the policy pushing against the
+         citations", which is the question the sweep in the header asks. See [reduce]. *)
   gone : (Writer.cid, entry) Hashtbl.t;
       (* Retired by this database: cid -> the entry it was. Lookup only, never iterated
          (determinism, header). It is what turns a second deletion into an exception
@@ -331,6 +391,7 @@ let create ?(policy = default) () =
     n_swept = 0;
     n_duplicate = 0;
     n_cited = 0;
+    n_pinned = 0;
     gone = Hashtbl.create 64;
     cited = Hashtbl.create 16;
     keys = Hashtbl.create 64;
@@ -344,6 +405,7 @@ let n_evicted t = t.n_evicted
 let n_swept t = t.n_swept
 let n_duplicate t = t.n_duplicate
 let n_cited t = t.n_cited
+let n_pinned t = t.n_pinned
 let policy_name t = t.policy.p_name
 let holds t cid = List.exists (fun e -> e.e_cid = cid) t.live_rev
 let was_retired t cid = Hashtbl.mem t.gone cid
@@ -389,18 +451,33 @@ let add t ~cid ~(row : Learned.t) ~lbd ~origin =
 (* Record that [cid] is referenced by something still live -- a trail entry whose reason
    is this learned constraint, which is what I-X3 is about. [by] is for the message.
 
-   Nothing in lib/ calls this today and that is not an oversight: no learned constraint
-   propagates, so no trail entry can name one (header). It is here because the ROW asks
-   for the deletion of a cited constraint to be caught by our machinery rather than
-   discovered by the checker, and a guard that is written after the thing it guards has
-   shipped is a guard written against a bug that already exists. [n_cited] counts calls,
-   so "zero citations on the whole suite" is a measurement this module reports rather
-   than a claim its header makes. *)
+   M2-L4 wrote this with NO caller in lib/, because no learned constraint propagated and
+   so no trail entry could name one -- a guard written before the thing it guards, which
+   is the only time a guard is written against a bug that does not already exist.
+   **M2-L12 is that caller**: [Search.register_learned] cites a constraint the moment it
+   gives it a consumer, a global unit or a [Clause.Learned_clause] instance. [n_cited]
+   counts calls, so the population is a measurement this module reports rather than a
+   claim its header makes; on `width_sat_depth` it is 49 of 73. *)
 let cite t ~cid ~by =
   t.n_cited <- t.n_cited + 1;
   Hashtbl.replace t.cited cid by
 
 let uncite t ~cid = Hashtbl.remove t.cited cid
+
+(* Release EVERY citation at once, for [Search.solve]'s end-of-search sweep alone.
+
+   M2-L12. The guard [cite] installs is about the search: a trace line written by a
+   global unit or by a registered learned-clause instance is RUP only while its
+   constraint is live, so retiring a cited constraint MID-SEARCH is the fault the guard
+   catches. When [dfs] has returned there are no more nodes, nothing will propagate
+   again, and the constraints have to come off the page (I-X2) -- so the citations are
+   released first and [retire_all] then sweeps with its other two guards, the double
+   delete and the not-owned, still on.
+
+   This is NOT [~unchecked]: that skips all three and exists only so test_retention.ml
+   can perform the deletion the guards refuse and watch the checker's answer. Releasing
+   is a statement about lifetime and is made once, in one place. *)
+let release_all t = Hashtbl.reset t.cited
 let cited_by t cid = Hashtbl.find_opt t.cited cid
 
 (* ----------------------------------------------------------------- deletion *)
@@ -468,7 +545,31 @@ let retire ?(unchecked = false) t ctx ~why (ids : Writer.cid list) =
    deletion path. [retire]'s [Not_owned] is where it lands. *)
 let reduce t ctx =
   let victims = t.policy.p_evict (live_entries t) in
-  let ids = List.map (fun e -> e.e_cid) victims in
+  (* M2-L12: A CITED CONSTRAINT IS NOT ELIGIBLE FOR EVICTION, so the cap is SOFT.
+
+     Before M2-L12 this filter would have been dead code -- nothing propagated a learned
+     constraint, nothing cited one, and a policy's choice was always performable. Now a
+     unit is applied at every node and a wider clause has a registered instance, and a
+     trace line either writes is RUP only while the constraint is on the page. A policy
+     that named one would be naming a deletion the search cannot survive.
+
+     Filtering here rather than letting [retire]'s [Cited] guard fire is the difference
+     between a POLICY DECISION and a FAULT, and the two must not be confused. [Cited] is
+     for a caller deleting something it should have known was in use; that is a bug and
+     it raises. A cap that cannot be met because everything under it is in use is not a
+     bug, it is the measurement M2-L12 owes D-0051 -- so it is counted ([n_pinned]) and
+     reported, and [BAGUETTE_RETENTION=lbd:0] stays runnable instead of aborting the
+     solver.
+
+     The consequence is stated rather than buried: with [propagate_learned] on, NO
+     policy can evict a constraint with a consumer, so the achievable cap is bounded
+     below by the number of live consumers. That is exactly what the sweep in D-0051's
+     successor record has to be read against. *)
+  let evictable, pinned =
+    List.partition (fun e -> not (Hashtbl.mem t.cited e.e_cid)) victims
+  in
+  t.n_pinned <- t.n_pinned + List.length pinned;
+  let ids = List.map (fun e -> e.e_cid) evictable in
   if ids = [] then []
   else (
     retire t ctx ~why:(Printf.sprintf "eviction by %s" t.policy.p_name) ids;
@@ -490,5 +591,7 @@ let retire_all t ctx =
 
 (* A one-line summary for [--stats] and for a test that wants the shape of a run. *)
 let to_string t =
-  Printf.sprintf "%s: %d added, %d evicted, %d swept, %d live, %d duplicate, %d cited"
+  Printf.sprintf
+    "%s: %d added, %d evicted, %d swept, %d live, %d duplicate, %d cited, %d pinned"
     t.policy.p_name t.n_added t.n_evicted t.n_swept (size t) t.n_duplicate t.n_cited
+    t.n_pinned

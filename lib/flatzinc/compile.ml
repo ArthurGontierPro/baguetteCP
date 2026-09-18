@@ -158,7 +158,13 @@ module Propagator = Baguette_core.Propagator
 module Linear = Baguette_core.Linear
 module Lin_eq = Baguette_core.Lin_eq
 module Ne = Baguette_core.Ne
-module Bool_clause = Baguette_core.Bool_clause
+
+(* M2-L12/D-0052: the clause propagator was widened to general order literals and its
+   file renamed [Clause]. The Boolean face this front end builds is [Clause.make] plus
+   the submodules below, which still declare DOMAIN because their [0, 1] restriction
+   makes that true; the widened module itself declares BOUNDS. Aliased under the old name
+   so that every call site here keeps saying which builtin it is packing. *)
+module Bool_clause = Baguette_core.Clause
 module Bool2int = Baguette_core.Bool2int
 module Engine = Baguette_core.Engine
 module Encoding = Baguette_proof.Encoding
@@ -449,7 +455,9 @@ let pack_clause_as (type a) (module P : Propagator.S with type t = a) (p : a) : 
  fun id -> Propagator.pack ~id (module P) p
 
 let pack_bool_clause (p : Bool_clause.t) : pending =
-  pack_clause_as (module Bool_clause : Propagator.S with type t = Bool_clause.t) p
+  pack_clause_as
+    (module Bool_clause.Bool_clause : Propagator.S with type t = Bool_clause.t)
+    p
 
 let pack_array_bool_or (p : Bool_clause.t) : pending =
   pack_clause_as

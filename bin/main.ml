@@ -470,6 +470,22 @@ let retention_policy () =
           | "lbd", Some n -> Retention.lbd ~cap:n
           | _ -> bad v))
 
+(* [Search.config.propagate_learned], from the environment, for the same reason and with
+   the same discipline as [retention_policy] above: M2-L12 has to be able to measure a
+   build in which every learned constraint is proof-only, which is what this project was
+   before that row. BAGUETTE_PROPAGATE_LEARNED=off is that build. Anything other than
+   "off" or unset FAILS; a measurement run that silently used the default because the
+   spelling was wrong is the trap CLAUDE.md records twice. *)
+let propagate_learned () =
+  match Sys.getenv_opt "BAGUETTE_PROPAGATE_LEARNED" with
+  | None | Some "on" -> true
+  | Some "off" -> false
+  | Some v ->
+      prerr_endline
+        (Printf.sprintf
+           "baguette: BAGUETTE_PROPAGATE_LEARNED=%S is not a setting. Use on or off." v);
+      exit 2
+
 (* --------------------------------------------------- search-tree counters (M1-T36) *)
 
 (* [Search.stats] rendered on stderr, one `stats: ` line each, under --stats.
@@ -522,6 +538,28 @@ let report_stats (st : Search.stats) (outcome : Search.outcome) =
     (String.concat ","
        (List.map (fun (l, n) -> Printf.sprintf "%d:%d" l n) (Search.stats_lbd st)))
     "M2-L4: learned-clause LBD histogram, `lbd:count`; the last bucket is `>=`";
+  Printf.eprintf "stats: %-10s %10s        %s\n" "width"
+    (String.concat ","
+       (List.map (fun (w, n) -> Printf.sprintf "%d:%d" w n) (Search.stats_width st)))
+    "M2-L12: learned-clause WIDTH histogram, `lits:count`; the last bucket is `>=`";
+  (* M2-L12. [glob-prune] is the one to read: a learned unit that never moves a bound is
+     a bound the search had already re-derived for itself, so a build with units applied
+     and this counter at 0 would have changed nothing. [cls-inst] is step 2's population
+     and [glob-decl]/[cls-decl] are the literals neither step could take (a [Lit.Eq], or
+     a name the encoding does not declare) -- printed because "step 1 captured the unit
+     population" is a claim they can refute. *)
+  Printf.eprintf "stats: %-10s %10d units  %s\n" "globals"
+    (List.length (Search.stats_globals st))
+    "M2-L12: distinct learned UNITS in force as global bound tightenings";
+  Printf.eprintf "stats: %-10s %10d prunes %s\n" "glob-prune" st.Search.n_global_prunes
+    "...times applying one actually MOVED a bound; 0 means step 1 changed nothing";
+  Printf.eprintf "stats: %-10s %10d confl  %s\n" "glob-confl" st.Search.n_global_conflicts
+    "...times one refuted the node outright";
+  Printf.eprintf "stats: %-10s %10d inst   %s\n" "cls-inst" st.Search.n_clause_instances
+    "M2-L12 step 2: multi-literal learned clauses registered as engine instances";
+  Printf.eprintf "stats: %-10s %10d cls    %s\n" "cls-decl"
+    (st.Search.n_global_declined + st.Search.n_clause_declined)
+    "...learned clauses neither step could instantiate (a Lit.Eq, or an unknown name)";
   Printf.eprintf "stats: %-10s %10d lits   %s\n" "minimised" st.Search.n_min_dropped
     "literals semantic minimisation removed from nogoods (M2-L3); 0 means it never fired";
   Printf.eprintf "stats: %-10s %10d lines  %s\n" "i-s4-cross" st.Search.i_s4_crossings
@@ -647,7 +685,12 @@ let solve opts (m : Model.t) =
             let e0 = Writer.emitted_us () and l0 = Writer.emitted_lines () in
             let r =
               Search.solve ~engine:compiled.Compile.engine ~store ~ctx ~check ~stats
-                ~config:{ Search.default_config with retention = retention_policy () }
+                ~config:
+                  {
+                    Search.default_config with
+                    retention = retention_policy ();
+                    propagate_learned = propagate_learned ();
+                  }
                 ()
             in
             Timing.emit_us := Writer.emitted_us () - e0;
