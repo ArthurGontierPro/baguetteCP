@@ -422,12 +422,35 @@ let to_linear_row t ~decl =
    1UIP-shaped row with a threshold strictly inside a ladder the linear reading does not
    exist at all. This function is the one that always exists.
 
+   [~row_id] is the id [introduce] returned, and the instance DOES expose a
+   [Propagator.pb_row] built from it -- unlike the learned clause, which exposes none.
+   That is not an inconsistency between the two, it is D-0054's two objects finally both
+   being present for the same constraint: the row this instance propagates is the row on
+   the page, so it is citable, it is frozen, and PB conflict analysis can resolve against
+   it. Leaving it [None] is not neutral: [Engine.row_of] would answer [None], and
+   lib/core/pb_analysis.ml would fall back to the clause path on every conflict a learned
+   instance reports -- MEASURED on the php models, where omitting it cut the rows learned
+   on php_wide_unsat from 30 to 2 and grew the tree instead of shrinking it.
+
+   The terms handed over are the row's own, i.e. the DECLARED-bound object, which is what
+   [Propagator.pb_row]'s comment requires ("a row that moved with the search would be the
+   wrong side of I-X6"). The propagator beside it reads live domains. Same constraint,
+   two readings, which is the whole of D-0054.
+
    [~id] must be [Engine.next_id] of the engine it is about to be added to -- [Engine.add]
    checks that and says why. *)
-let pb_instance ~id store ~decl t : Propagator.instance option =
+let pb_instance ~id ~row_id store ~decl t : Propagator.instance option =
+  let row _store =
+    Some
+      {
+        Propagator.r_terms = raw_terms t;
+        Propagator.r_degree = t.degree;
+        Propagator.r_cid = row_id;
+      }
+  in
   Option.map
     (fun p ->
-      Propagator.pack ~id (module Pb.Learned_pb : Propagator.S with type t = Pb.t) p)
+      Propagator.pack ~id ~row (module Pb.Learned_pb : Propagator.S with type t = Pb.t) p)
     (Pb.of_terms store ~decl ~degree:t.degree (raw_terms t))
 
 (* The declared-domain lookup an [Encoding] provides, in the shape [pb_instance] wants.

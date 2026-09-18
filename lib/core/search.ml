@@ -1232,7 +1232,7 @@ let bridges (ctx : Justify.ctx) trace stats store (decisions : Lit.t list) =
 let register_learned_pb engine store ctx stats ~cid ~(row : Learned.t) =
   let decl = Learned.decl_of_encoding ctx.Justify.encoding in
   let id = Engine.next_id engine in
-  match Learned.pb_instance ~id store ~decl row with
+  match Learned.pb_instance ~id ~row_id:cid store ~decl row with
   | None -> stats.n_pb_inst_declined <- stats.n_pb_inst_declined + 1
   | Some inst ->
       Engine.add engine inst;
