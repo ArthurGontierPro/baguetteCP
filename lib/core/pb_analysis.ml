@@ -634,11 +634,9 @@ let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row optio
 
      - level 0, for exactly the reason lib/core/learned.ml's [introduce] gives: a
        constraint derived at the conflict level is deleted by the backjump that follows,
-       and both checkers then reject the next line that cites it -- in words that share no
-       substring ("Trying to access constraint with ID 3 that has already been deleted"
-       under 3.0; "Rule 6 is trying to access constraint (constraintId 3), that was marked
-       as safe to delete" under 2.0). [Justify.with_level] moves the level for real in
-       both formats.
+       and the checker then rejects the next line that cites it -- "Trying to access
+       constraint with ID 3 that has already been deleted". [Justify.with_level] moves the
+       level for real, in the proof, rather than only in our own table.
      - stating, through [Justify.emit_stating], because a bare [pol] derives whatever the
        cutting-planes expression evaluates to and says nothing about what we THINK it
        derived. With the claim on the page the checker's `ia` compares the two, so a

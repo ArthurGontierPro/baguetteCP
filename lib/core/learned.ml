@@ -24,7 +24,7 @@
    [make] normalises: a negative coefficient is absorbed by negating its literal
    (a*l = a + |a|*~l, so the degree grows by |a|), a zero coefficient is dropped, and
    repeated literals are merged. After [make] every coefficient is >= 1, which is the
-   form [Opb] and both checkers want and the form the reduction rules of M2-L5 assume.
+   form [Opb] and the checker want and the form the reduction rules of M2-L5 assume.
 
    ---------------------------------------------------------------------------
    The bet, and exactly where it holds -- MEASURED, M2-L1
@@ -86,22 +86,16 @@
    The proof side: level 0, or the backjump takes it -- D-0045's addendum
    ---------------------------------------------------------------------------
 
-   MEASURED by M2-L1 before it was fixed, against both checkers, and it is exactly what
-   D-0045 predicted:
-
-     - 3.0: [Writer.fresh] tags every id with the writer's current level and
-       [Writer.wipe_level l] deletes every id tagged at level >= l. A constraint derived
-       at the conflict level is deleted by the backjump that follows, and citing it
-       afterwards is "Trying to access constraint with ID 3 that has already been
-       deleted".
-     - 2.0: our [t.tags] is not maintained at all -- the checker holds the level stack
-       and `w l` retires against it. Same deletion, different machinery, and the wording
-       shares no useful substring: "Rule 6 is trying to access constraint (constraintId
-       3), that was marked as safe to delete".
+   MEASURED by M2-L1 before it was fixed, and it is exactly what D-0045 predicted:
+   [Writer.fresh] tags every id with the writer's current level and [Writer.wipe_level l]
+   deletes every id tagged at level >= l. A constraint derived at the conflict level is
+   deleted by the backjump that follows, and citing it afterwards is "Trying to access
+   constraint with ID 3 that has already been deleted".
 
    [introduce] therefore emits inside [Justify.with_level ctx 0], which moves the level
-   FOR REAL in both formats (a `# 0` under 2.0, a `% level 0` comment under 3.0) rather
-   than writing our own table, which would have been green under 3.0 and wrong under 2.0.
+   FOR REAL -- the `% level 0` marker goes on the page -- rather than writing our own
+   table, which would keep [t.tags] and the emitted proof disagreeing about where the id
+   landed (invariant I-X3).
 
    The consequence for I-X2 is the one M2-L4 will own: a level-0 id is no longer retired
    by any backjump, so somebody must delete it explicitly. That somebody is [retire], and

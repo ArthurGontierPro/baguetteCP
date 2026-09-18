@@ -20,14 +20,17 @@
 #    else, because the whole point of setting it is to pin the checker.
 # 2. $HOME/.cargo/bin/veripb -- the checker of record (VeriPB 3.0.2, the Rust
 #    implementation). See docs/DECISIONS.md D-0023.
-# 3. $HOME/.local/bin/veripb -- the Python VeriPB 2.2.2 this project used until
-#    M1-T18. Kept as a fallback so a machine with only that build still checks.
-# 4. `veripb` on PATH.
+# 3. `veripb` on PATH.
 #
-# PATH is LAST on purpose. Both builds are installed on the development machine and
-# ~/.local/bin comes first on PATH, so "whatever is on PATH" silently meant 2.2.2 --
-# which is exactly the failure M1-T18 exists to remove. Naming the binaries here
-# makes the choice greppable, and `scripts/checker.sh` makes it printable.
+# There is exactly ONE checker now: D-0046 removed proof format 2.0 and with it the
+# Python VeriPB this project used to keep beside the Rust one. The consequence is
+# recorded in D-0046 and is not a detail -- veripb 3.0.2 is the sole oracle, so a bug
+# in it is a bug this project has no second implementation to see it with.
+#
+# PATH is still LAST on purpose. Two builds used to be installed side by side with the
+# other one first on PATH, so "whatever is on PATH" silently meant the wrong checker --
+# exactly the failure M1-T18 exists to remove. Naming the binary here makes the choice
+# greppable, and `scripts/checker.sh` makes it printable.
 #
 # ---------------------------------------------------------------- no skipping
 #
@@ -40,18 +43,19 @@
 # escape hatch and none should be added.
 
 baguette_veripb_candidates() {
-  printf '%s\n' "${HOME}/.cargo/bin/veripb" "${HOME}/.local/bin/veripb" "veripb"
+  printf '%s\n' "${HOME}/.cargo/bin/veripb" "veripb"
 }
 
 baguette_veripb_diagnostic() {
   echo "  No VeriPB checker was found, so NOTHING was checked. This is a FAILURE," >&2
   echo "  not a skip: an unchecked proof is not a passing test (CLAUDE.md)." >&2
+  echo "  VeriPB 3.0.2 is the only checker this project has (D-0046); there is no" >&2
+  echo "  second implementation to fall back to." >&2
   echo "  Looked for, in order:" >&2
   echo "    \$VERIPB                      (currently: ${VERIPB:-<unset>})" >&2
   echo "    ${HOME}/.cargo/bin/veripb     VeriPB 3.0.2, Rust -- the checker of record" >&2
-  echo "    ${HOME}/.local/bin/veripb     VeriPB 2.2.2, Python -- fallback" >&2
   echo "    veripb on \$PATH" >&2
-  echo "  scripts/bootstrap.sh installs one. See docs/PROOF-FORMAT.md section 1." >&2
+  echo "  scripts/bootstrap.sh installs it. See docs/PROOF-FORMAT.md section 1." >&2
 }
 
 # Sets VERIPB (exported) on success. Returns 1 and explains on failure.

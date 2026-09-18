@@ -112,10 +112,10 @@ let test_opb () =
 (* ------------------------------------------------------------------ *)
 
 (* Run [f] against a fresh writer and hand back everything it wrote. *)
-let emitted ?(comments = true) ?(audit = true) ?(format = Writer.V2_0) f =
+let emitted ?(comments = true) ?(audit = true) f =
   let path = Filename.temp_file "baguette_proof" ".pbp" in
   let oc = open_out path in
-  let w = Writer.create ~comments ~audit ~format oc in
+  let w = Writer.create ~comments ~audit oc in
   let r = try Ok (f w) with e -> Error e in
   (try close_out oc with _ -> ());
   let ic = open_in_bin path in
@@ -125,60 +125,34 @@ let emitted ?(comments = true) ?(audit = true) ?(format = Writer.V2_0) f =
   Sys.remove path;
   (s, r)
 
-let text ?format f = fst (emitted ?format f)
+let text f = fst (emitted f)
+
+(* The cutting-planes expression algebra, rendered the one way it is ever emitted:
+   every constraint reference is its label (D-0023, D-0046). [Writer.cite] is what the
+   writer passes here, and [Opb.label_of] is what [Writer.cite] is. *)
+let render p = Pol.to_string_cited ~cite:Opb.label_of p
 
 let test_pol () =
-  check_eq "pol: a single id" ~expected:"3" ~got:(Pol.to_string (Pol.id 3));
-  check_eq "pol: reverse Polish addition" ~expected:"3 4 +"
-    ~got:(Pol.to_string Pol.(add (id 3) (id 4)));
-  (* The example in docs/PROOF-FORMAT.md section 2. *)
-  check_eq "pol: 'constraint 3 plus 4, divided by 2'" ~expected:"3 4 + 2 d"
-    ~got:(Pol.to_string Pol.(div (add (id 3) (id 4)) 2));
-  check_eq "pol: sum is left-associated" ~expected:"1 2 + 3 + 4 +"
-    ~got:(Pol.to_string Pol.(sum [ id 1; id 2; id 3; id 4 ]));
-  check_eq "pol: multiplying by one is a no-op" ~expected:"5"
-    ~got:(Pol.to_string Pol.(mul (id 5) 1));
-  check_eq "pol: literal axioms are written as literals" ~expected:"5 ~x_ge_2 +"
-    ~got:(Pol.to_string Pol.(add (id 5) (axiom (Lit.le "x" 1))));
-  check_eq "pol: saturation" ~expected:"5 s" ~got:(Pol.to_string Pol.(saturate (id 5)));
+  check_eq "pol: a single id" ~expected:"@c3" ~got:(render (Pol.id 3));
+  check_eq "pol: reverse Polish addition" ~expected:"@c3 @c4 +"
+    ~got:(render Pol.(add (id 3) (id 4)));
+  (* The example in docs/PROOF-FORMAT.md section 2a. *)
+  check_eq "pol: 'constraint 3 plus 4, divided by 2'" ~expected:"@c3 @c4 + 2 d"
+    ~got:(render Pol.(div (add (id 3) (id 4)) 2));
+  check_eq "pol: sum is left-associated" ~expected:"@c1 @c2 + @c3 + @c4 +"
+    ~got:(render Pol.(sum [ id 1; id 2; id 3; id 4 ]));
+  check_eq "pol: multiplying by one is a no-op" ~expected:"@c5"
+    ~got:(render Pol.(mul (id 5) 1));
+  check_eq "pol: literal axioms are written as literals" ~expected:"@c5 ~x_ge_2 +"
+    ~got:(render Pol.(add (id 5) (axiom (Lit.le "x" 1))));
+  check_eq "pol: saturation" ~expected:"@c5 s" ~got:(render Pol.(saturate (id 5)));
   (* VeriPB's weakening ignores the sign, so it takes the variable. *)
-  check_eq "pol: weakening names a variable, not a literal" ~expected:"5 y_ge_1 w"
-    ~got:(Pol.to_string Pol.(weaken (id 5) (Lit.Ge ("y", 1))));
-  check_eq "pol: linear combination" ~expected:"1 2 * 2 3 * +"
-    ~got:(Pol.to_string (Pol.lin_comb [ (2, 1); (3, 2) ]));
+  check_eq "pol: weakening names a variable, not a literal" ~expected:"@c5 y_ge_1 w"
+    ~got:(render Pol.(weaken (id 5) (Lit.Ge ("y", 1))));
+  check_eq "pol: linear combination" ~expected:"@c1 2 * @c2 3 * +"
+    ~got:(render (Pol.lin_comb [ (2, 1); (3, 2) ]));
   raises "pol: division by zero is rejected" (fun () -> Pol.div (Pol.id 1) 0);
   raises "pol: an empty sum is rejected" (fun () -> Pol.sum [])
-
-let test_writer_rules () =
-  let s =
-    text (fun w ->
-        Writer.header w ~n_model_constraints:4;
-        let a = Writer.pol w ~origin:"t" Pol.(sum [ id 1; id 2 ]) in
-        let b = Writer.rup_clause w ~origin:"t" [ Lit.ge "x" 1; Lit.ne "y" 2 ] in
-        let c =
-          Writer.red w ~origin:"t"
-            ~witness:[ (Lit.Eq ("y", 2), Writer.Zero) ]
-            (Opb.clause [ Lit.ne "y" 2; Lit.ge "y" 2 ])
-        in
-        Writer.delete_many w [ a; b; c ];
-        Writer.conclusion w (Writer.Unsat None))
-  in
-  let expected =
-    String.concat "\n"
-      [
-        "pseudo-Boolean proof version 2.0";
-        "f 4";
-        "pol 1 2 +";
-        "rup +1 x_ge_1 +1 ~y_eq_2 >= 1 ;";
-        "red +1 ~y_eq_2 +1 y_ge_2 >= 1 ; y_eq_2 -> 0";
-        "del id 5 6 7";
-        "output NONE";
-        "conclusion UNSAT";
-        "end pseudo-Boolean proof";
-        "";
-      ]
-  in
-  check_eq "writer: rule vocabulary and id sequence" ~expected ~got:s
 
 let test_writer_ids () =
   let ids = ref [] in
@@ -194,23 +168,25 @@ let test_writer_ids () =
   (* The f rule takes ids 1..10, so derived constraints start at 11. *)
   check "writer: derived ids follow the model constraints" (!ids = [ 11; 12; 13 ])
 
-let test_writer_levels () =
+(* A backtrack is a wipe, not a truncation of the file (invariant I-X4). What that wipe
+   is SPELLED as is [test_v3_levels]'s subject -- there is no set-level rule and no `w`
+   (D-0024), so the writer reproduces them from its own tags -- and this is the part of
+   the claim that is about the file rather than about the deletion set. *)
+let test_writer_not_truncated () =
   let s =
     text (fun w ->
         Writer.header w ~n_model_constraints:1;
         Writer.set_level w 2;
         let _ = Writer.pol w ~origin:"reason at level 2" (Pol.id 1) in
         let _ = Writer.pol w ~origin:"another" (Pol.id 1) in
-        (* A backtrack is a wipe, not a truncation of the file (invariant I-X4). *)
         Writer.wipe_level w 2;
         Writer.conclusion w (Writer.Unsat None))
   in
   let lines = String.split_on_char '\n' s in
   let has l = List.exists (String.equal l) lines in
-  check "writer: a decision level is set with the level rule" (has "# 2");
-  check "writer: a backtrack is a level wipe" (has "w 2");
+  check "writer: a decision level is marked" (has "% level 2");
   check "writer: the proof is never truncated"
-    (has "pseudo-Boolean proof version 2.0" && has "end pseudo-Boolean proof")
+    (has "pseudo-Boolean proof version 3.0" && has "end pseudo-Boolean proof ;")
 
 let test_audit () =
   (* An id that is handed out and never deleted is an I-X2 violation. *)
@@ -291,12 +267,9 @@ let test_order_encoding () =
   (* docs/PROOF-FORMAT.md section 3: one consistency clause per lo < v < hi. *)
   check "encoding: order encoding emits hi-lo-1 consistency clauses"
     (Encoding.n_constraints e = 2);
-  (* Under 3.0 every model row is named in the .opb so the proof can cite it by label
-     rather than by position (D-0023). The rows themselves are unchanged, so the
-     expectation is the same text with the names put back in front. *)
-  let lbl i =
-    if Writer.default_format () = Writer.V3_0 then Printf.sprintf "@c%d " i else ""
-  in
+  (* Every model row is named in the .opb so the proof can cite it by label rather than
+     by position (D-0023); labelling is unconditional (D-0046). *)
+  let lbl i = Printf.sprintf "@c%d " i in
   check_eq "encoding: the order-consistency clauses"
     ~expected:
       (Printf.sprintf
@@ -404,27 +377,33 @@ let test_direct_encoding () =
   in
   check "encoding: the direct encoding is now present"
     (Encoding.has_direct e "x" = false (* retired again *));
-  let lines = String.split_on_char '\n' s in
-  let has l = List.exists (String.equal l) lines in
+  (* Matched on the rule's BODY -- label off the front, terminator off the back
+     ([Writer.rule_body]) -- because what is asserted here is what each step SAYS, not
+     what it is named. The name is the checker's business and it verifies it for us: a
+     citation of a label that was never bound is a parse error (D-0023). *)
+  let bodies = List.map Writer.rule_body (String.split_on_char '\n' s) in
+  let has l = List.exists (String.equal l) bodies in
   (* The channelling of PROOF-FORMAT section 3, with the constant halves dropped:
-     x_ge_0 is true and x_ge_3 is false, so they never appear. *)
+     x_ge_0 is true and x_ge_3 is false, so they never appear. The witness follows the
+     `:` separator, before the terminator. *)
   (* x >= lo is the constant true, so x_eq_lo's "lower" half is not emitted. *)
   check "encoding: x_eq_lo has no x_ge_lo half"
-    (has "red +1 ~x_eq_0 +1 ~x_ge_1 >= 1 ; x_eq_0 -> 0"
-    && has "red +1 x_eq_0 +1 x_ge_1 >= 1 ; x_eq_0 -> 1"
-    && not (has "red +1 ~x_eq_0 +1 x_ge_0 >= 1 ; x_eq_0 -> 0"));
+    (has "red +1 ~x_eq_0 +1 ~x_ge_1 >= 1 : x_eq_0 -> 0"
+    && has "red +1 x_eq_0 +1 x_ge_1 >= 1 : x_eq_0 -> 1"
+    && not (has "red +1 ~x_eq_0 +1 x_ge_0 >= 1 : x_eq_0 -> 0"));
   check "encoding: the middle value gets both halves"
-    (has "red +1 ~x_eq_1 +1 x_ge_1 >= 1 ; x_eq_1 -> 0"
-    && has "red +1 ~x_eq_1 +1 ~x_ge_2 >= 1 ; x_eq_1 -> 0"
-    && has "red +1 x_eq_1 +1 ~x_ge_1 +1 x_ge_2 >= 1 ; x_eq_1 -> 1");
+    (has "red +1 ~x_eq_1 +1 x_ge_1 >= 1 : x_eq_1 -> 0"
+    && has "red +1 ~x_eq_1 +1 ~x_ge_2 >= 1 : x_eq_1 -> 0"
+    && has "red +1 x_eq_1 +1 ~x_ge_1 +1 x_ge_2 >= 1 : x_eq_1 -> 1");
   check "encoding: x_eq_hi has no x_ge_(hi+1) half"
-    (has "red +1 ~x_eq_2 +1 x_ge_2 >= 1 ; x_eq_2 -> 0"
-    && has "red +1 x_eq_2 +1 ~x_ge_2 >= 1 ; x_eq_2 -> 1");
+    (has "red +1 ~x_eq_2 +1 x_ge_2 >= 1 : x_eq_2 -> 0"
+    && has "red +1 x_eq_2 +1 ~x_ge_2 >= 1 : x_eq_2 -> 1");
   (* Exactly-one is derived from the channelling, never assumed. *)
-  check "encoding: at-least-one is a pol over the channelling ids" (has "pol 3 6 + 8 +");
+  check "encoding: at-least-one is a pol over the channelling ids"
+    (has "pol @c3 @c6 + @c8 +");
   check "encoding: at-most-one is a pol over channelling plus the order chain"
-    (has "pol 2 7 + 1 +");
-  check "encoding: the definitions are retired" (has "del id 2 3 4 5 6 7 8")
+    (has "pol @c2 @c7 + @c1 +");
+  check "encoding: the definitions are retired" (has "del id @c2 @c3 @c4 @c5 @c6 @c7 @c8")
 
 let test_assignment_lits () =
   let e = Encoding.create () in
@@ -447,38 +426,16 @@ let test_renaming_comments () =
     (List.exists (String.equal "* name a[1] -> a_1_") (String.split_on_char '\n' s))
 
 (* Which checker to run: lib/proof/checker.ml, shared with scripts/checker.sh.
-   Every test module open-coded this search, and every copy looked at
-   ~/.local/bin/veripb first -- so a project-wide choice of checker lived in nine
-   places and silently meant the Python 2.2.2 (M1-T18). [None] is a FAILURE at every
-   call site below, never a skip. *)
+   Every test module open-coded this search, and every copy resolved it differently --
+   so a project-wide choice of checker lived in nine places and could silently mean a
+   build nobody intended (M1-T18). [None] is a FAILURE at every call site below, never
+   a skip: an unchecked proof is not a passing test.
+
+   There is one checker (D-0046), so this is the only resolver the file needs. A lane
+   that asserts a REJECTION additionally asserts its WORDING wherever it can, which is
+   what separates "the checker judged the step" from "the artefact did not parse" --
+   M2-T14 found four lanes passing on the latter. *)
 let veripb_path () = Baguette_proof.Checker.find ()
-
-(* A checker that can READ format 3.0.
-
-   M2-T14. Several blocks below emit `pseudo-Boolean proof version 3.0` and a labelled
-   .opb unconditionally: they are measurements OF 3.0 -- what `del range` means, what
-   the pair spelling deletes, what `wipe_level` retires -- and there is no 2.0 form of
-   the question they ask. [Checker.find] honours $VERIPB, so under
-   `VERIPB=$HOME/.local/bin/veripb` those artefacts went to the Python 2.2.2 build,
-   which cannot parse a labelled .opb at all. Measured, the log then reads
-
-     /tmp/.../3.0_broken.opb:2:1: Expected number.
-
-   and on that parse error every lane asserting a REJECTION passed -- without the
-   checker ever judging a deletion -- while the lanes asserting acceptance failed. That
-   is D-0020/D-0030's rule verbatim, and it is the same defect as the M2-L0 break lane
-   fixed in 92e03a1, reached through $VERIPB rather than through a hardcoded ~labels.
-
-   So a 3.0-only lane names the 3.0 build, exactly as test_justify.ml's
-   [reduce_break_checkers] pairs each format with the binary that can read it. The
-   fallback to [Checker.find] is kept for a machine carrying only one veripb; where a
-   lane can also assert the rejection's WORDING it does, and that is what would catch
-   the fallback landing on a 2.2.2. *)
-let veripb_v3 () =
-  let home = try Sys.getenv "HOME" with Not_found -> "" in
-  let cargo = Filename.concat home ".cargo/bin/veripb" in
-  if Sys.file_exists cargo && not (Sys.is_directory cargo) then Some cargo
-  else veripb_path ()
 
 (* ------------------------------------------------------------------ *)
 (* M1-T7c: order-encoding expansion of sum a_i x_i <= rhs               *)
@@ -854,7 +811,7 @@ let test_int_lin_le_veripb () =
 (* The model:  x, y in [0,3],  x >= 2,  x + y <= 2,  y >= 1.  Unsatisfiable.
    The proof also introduces y's direct encoding, derives exactly-one over it, and
    retires it, so every piece of the encoding contract is exercised. *)
-let build_unsat ?(format = Writer.V2_0) dir =
+let build_unsat dir =
   let e = Encoding.create () in
   Encoding.declare_int e "x" ~lo:0 ~hi:3;
   Encoding.declare_int e "y" ~lo:0 ~hi:3;
@@ -865,12 +822,9 @@ let build_unsat ?(format = Writer.V2_0) dir =
   let opb = Filename.concat dir "unsat.opb" in
   let pbp = Filename.concat dir "unsat.pbp" in
   let oc = open_out opb in
-  (* Labels in the .opb must match the writer's format or every citation in the proof
-     is a parse error; [write_opb_for] is the form that cannot get that wrong, and it
-     needs the writer, so build it first and write the proof into it below. *)
   let pbp_oc = open_out pbp in
-  let w = Writer.create ~comments:true ~audit:true ~format pbp_oc in
-  Encoding.write_opb_for ~comments:[ "x >= 2; x + y <= 2; y >= 1" ] e w oc;
+  let w = Writer.create ~comments:true ~audit:true pbp_oc in
+  Encoding.write_opb ~comments:[ "x >= 2; x + y <= 2; y >= 1" ] e oc;
   close_out oc;
   let oc = pbp_oc in
   Encoding.start_proof e w;
@@ -900,51 +854,20 @@ let build_unsat ?(format = Writer.V2_0) dir =
   close_out oc;
   (opb, pbp)
 
-let test_veripb_accepts () =
-  match veripb_path () with
-  | None ->
-      incr failures;
-      print_endline
-        "FAIL proof: veripb not found — invariant I-X1 was NOT checked. Install it (see \
-         docs/PROOF-FORMAT.md) and re-run; do not treat this as a pass."
-  | Some veripb -> (
-      let dir = Filename.temp_file "baguette_veripb" "" in
-      Sys.remove dir;
-      Sys.mkdir dir 0o700;
-      let opb, pbp = build_unsat dir in
-      let log = Filename.concat dir "log" in
-      let rc =
-        Sys.command
-          (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
-             (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
-      in
-      let out =
-        let ic = open_in_bin log in
-        let s = really_input_string ic (in_channel_length ic) in
-        close_in ic;
-        s
-      in
-      if rc = 0 then Printf.printf "ok   proof: veripb accepts the emitted proof (I-X1)\n"
-      else (
-        incr failures;
-        Printf.printf "FAIL proof: veripb rejected the emitted proof (I-X1)\n%s\n" out;
-        Printf.printf "  model: %s\n  proof: %s\n" opb pbp);
-      List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp; log ];
-      try Sys.rmdir dir with _ -> ())
-
 (* ------------------------------------------------------------------ *)
 (* M1-T19: VeriPB 3.0 emission                                         *)
 (*                                                                     *)
 (* Every claim in D-0023 about 3.0 syntax is made here by running the   *)
-(* checker, not by reading a grammar. Three things have to hold and     *)
-(* the third is the one that makes the other two mean anything:        *)
-(*   1. the 3.0 checker ACCEPTS a 3.0 proof of an unsatisfiable model;  *)
-(* 2. the 3.0 checker REJECTS a corrupted one -- without this, "3.0.2 *)
-   (*      accepted it" says nothing at all (scripts/mutate_proof.sh's *)
-(*      argument, applied to the format switch itself);                 *)
-(*   3. the 2.2.2 checker REJECTS a 3.0 proof outright. That is not a   *)
-(*      nice-to-have: it is why the switch cannot be made one consumer  *)
-(*      at a time.                                                      *)
+(* checker, not by reading a grammar. Two things have to hold, and the  *)
+(* second is what makes the first mean anything:                       *)
+(*   1. the checker ACCEPTS the proof of an unsatisfiable model over    *)
+(*      the full vocabulary -- red, levels, pol, del, conclusion. This  *)
+(*      is invariant I-X1, and it absorbed the separate acceptance lane *)
+(*      that used to run the same artefacts under format 2.0 (D-0046).  *)
+(*   2. it REJECTS a corrupted one, and says WHY in words that show it  *)
+(*      judged the conclusion -- without this, "3.0.2 accepted it" says *)
+(*      nothing at all (scripts/mutate_proof.sh's argument, applied to  *)
+(*      this lane).                                                     *)
 (* ------------------------------------------------------------------ *)
 
 let read_whole path =
@@ -965,7 +888,7 @@ let run_checker ~checker ~opb ~pbp ~log =
 
 let test_v3_emitted_text () =
   let s =
-    text ~format:Writer.V3_0 (fun w ->
+    text (fun w ->
         Writer.header w ~n_model_constraints:4;
         let a = Writer.pol w ~origin:"t" Pol.(sum [ id 1; id 2 ]) in
         let b = Writer.rup_clause w ~origin:"t" [ Lit.ge "x" 1; Lit.ne "y" 2 ] in
@@ -1007,7 +930,7 @@ let test_v3_emitted_text () =
 let test_v3_levels () =
   let ids = ref [] in
   let s =
-    text ~format:Writer.V3_0 (fun w ->
+    text (fun w ->
         Writer.header w ~n_model_constraints:1;
         Writer.set_level w 1;
         Writer.set_level w 0;
@@ -1104,7 +1027,7 @@ let del_range_opb dir name =
   let c_neg = Encoding.add_constraint e (Opb.ge [ (1, Lit.negate (Lit.ge "uu" 2)) ] 1) in
   let opb = Filename.concat dir (name ^ ".opb") in
   let oc = open_out opb in
-  Encoding.write_opb ~labels:true e oc;
+  Encoding.write_opb e oc;
   close_out oc;
   (opb, c_pos, c_neg)
 
@@ -1114,7 +1037,7 @@ let write_lines path lines =
   close_out oc
 
 let test_v3_del_range_semantics () =
-  match veripb_v3 () with
+  match veripb_path () with
   | None ->
       incr failures;
       print_endline
@@ -1200,7 +1123,7 @@ let test_v3_del_range_semantics () =
 (* asserted.                                                           *)
 (* ------------------------------------------------------------------ *)
 let test_v3_del_pair_spelling () =
-  match veripb_v3 () with
+  match veripb_path () with
   | None ->
       incr failures;
       print_endline
@@ -1323,7 +1246,7 @@ let test_v3_del_pair_spelling () =
       try Sys.rmdir dir with _ -> ())
 
 let test_v3_wipe_level_against_checker () =
-  match veripb_v3 () with
+  match veripb_path () with
   | None ->
       incr failures;
       print_endline
@@ -1349,9 +1272,9 @@ let test_v3_wipe_level_against_checker () =
         let opb = Filename.concat dir (name ^ ".opb") in
         let pbp = Filename.concat dir (name ^ ".pbp") in
         let pbp_oc = open_out pbp in
-        let w = Writer.create ~audit:false ~format:Writer.V3_0 pbp_oc in
+        let w = Writer.create ~audit:false pbp_oc in
         let oc = open_out opb in
-        Encoding.write_opb_for e w oc;
+        Encoding.write_opb e oc;
         close_out oc;
         Encoding.start_proof e w;
         Writer.set_level w 1;
@@ -1471,7 +1394,7 @@ let test_v3_wipe_level_against_checker () =
       try Sys.rmdir dir with _ -> ())
 
 let test_v3_veripb () =
-  match veripb_v3 () with
+  match veripb_path () with
   | None ->
       incr failures;
       print_endline ("FAIL 3.0: " ^ Baguette_proof.Checker.not_found_message)
@@ -1479,7 +1402,7 @@ let test_v3_veripb () =
       let dir = Filename.temp_file "baguette_v3" "" in
       Sys.remove dir;
       Sys.mkdir dir 0o700;
-      let opb, pbp = build_unsat ~format:Writer.V3_0 dir in
+      let opb, pbp = build_unsat dir in
       let log = Filename.concat dir "log" in
       check "3.0: the emitted proof declares version 3.0"
         (String.length (read_whole pbp) > 0
@@ -1505,17 +1428,13 @@ let test_v3_veripb () =
          "3.0.2 accepted it" is not evidence of anything: it is the argument
          scripts/mutate_proof.sh's header makes, turned on the format switch.
 
-         M1-T46: the two checkers word this rejection differently and share no useful
-         substring, so a reader debugging this lane must be told BOTH or they will
-         grep the log for a string the checker never printed. Measured, not guessed:
+         The rejection's wording, measured and not guessed, is
 
-           2.2.2  "Constraint is not a contradiction."
-           3.0.2  "The constraint with ID <n> is not contradicting, as specified by
-                   the hint."
+           "The constraint with ID <n> is not contradicting, as specified by the hint."
 
-         This lane is 3.0-only and so only ever produces the second, but the message
-         below names both for the same reason lib/core/prop/ne.ml and
-         test/unit/test_random.ml do: nothing here may match on either alone. *)
+         and it is asserted below, not just the exit status: an exit status cannot tell
+         a JUDGEMENT from a parse error. lib/core/prop/ne.ml and
+         test/unit/test_random.ml carry the same wording. *)
       let corrupted = Filename.concat dir "corrupt.pbp" in
       let starts_with p l =
         String.length l >= String.length p && String.sub l 0 (String.length p) = p
@@ -1532,9 +1451,9 @@ let test_v3_veripb () =
       | None -> ()
       | Some false ->
           (* M2-T14: "it rejected" is not the claim -- "it judged the conclusion" is.
-             Both wordings above at full strength, either accepted; a checker that
-             merely failed to PARSE the artefact prints neither, which is how this lane
-             used to pass under a 2.2.2 handed a labelled .opb. *)
+             A checker that merely failed to PARSE the artefact prints nothing of the
+             sort, which is how this lane used to pass when it was handed an .opb the
+             checker could not read. *)
           let out = try read_whole log with _ -> "" in
           let says needle =
             let n = String.length needle in
@@ -1543,49 +1462,25 @@ let test_v3_veripb () =
             in
             go 0
           in
-          if says "is not contradicting" || says "not a contradiction" then
+          if says "is not contradicting" then
             Printf.printf
-              "ok   3.0: veripb rejects a 3.0 proof whose conclusion cites a \
+              "ok   3.0: veripb rejects a proof whose conclusion cites a \
                non-contradiction, and says so\n"
           else (
             incr failures;
             Printf.printf
               "FAIL 3.0: veripb refused the corrupted proof but never judged the \
-               conclusion -- neither 3.0.2's \"is not contradicting, as specified by the \
-               hint\" nor 2.2.2's \"Constraint is not a contradiction\" is in its \
-               output, so this is a malformed artefact and not a measurement.\n\
+               conclusion -- \"is not contradicting, as specified by the hint\" is not \
+               in its output, so this is a malformed artefact and not a measurement.\n\
               \  checker said: %s\n"
               (String.trim out))
       | Some true ->
           incr failures;
           Printf.printf
-            "FAIL 3.0: veripb ACCEPTED a 3.0 proof concluding UNSAT from a model row \
-             that establishes no contradiction. The acceptance above therefore says \
-             nothing.\n\
+            "FAIL 3.0: veripb ACCEPTED a proof concluding UNSAT from a model row that \
+             establishes no contradiction. The acceptance above therefore says nothing.\n\
             \  A rejection here would have been worded \"The constraint with ID <n> is \
-             not contradicting, as specified by the hint\" by 3.0.2, which is the \
-             checker this lane runs, and \"Constraint is not a contradiction\" by 2.2.2. \
-             The two share no useful substring (M1-T46): do not grep the log for one of \
-             them alone.\n");
-      (* 3. the one-way door: 2.2.2 cannot read a 3.0 proof at all. Only checked when
-         that build is actually installed; it is a fact about the OTHER checker, so
-         its absence is not a failure here. *)
-      let py =
-        Filename.concat (try Sys.getenv "HOME" with Not_found -> "") ".local/bin/veripb"
-      in
-      (match run_checker ~checker:py ~opb ~pbp ~log with
-      | None ->
-          Printf.printf
-            "note 3.0: no 2.2.2 build here, so the one-way-door check did not run\n"
-      | Some false ->
-          Printf.printf
-            "ok   3.0: veripb 2.2.2 rejects a 3.0 proof outright -- the switch is not \
-             per-consumer (D-0023)\n"
-      | Some true ->
-          incr failures;
-          Printf.printf
-            "FAIL 3.0: veripb 2.2.2 ACCEPTED a 3.0 proof. D-0023 says it cannot; one of \
-             them is wrong.\n");
+             not contradicting, as specified by the hint\".\n");
       List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp; corrupted; log ];
       try Sys.rmdir dir with _ -> ())
 
@@ -1644,12 +1539,12 @@ let pol_claim_opb dir name =
   let c3 = Encoding.add_constraint e (Opb.ge [ (1, Lit.negate v) ] 1) in
   let opb = Filename.concat dir (name ^ ".opb") in
   let oc = open_out opb in
-  Encoding.write_opb ~labels:true e oc;
+  Encoding.write_opb e oc;
   close_out oc;
   (opb, c1, c2, c3, v)
 
 let test_pol_states_its_conclusion () =
-  match veripb_v3 () with
+  match veripb_path () with
   | None ->
       incr failures;
       print_endline
@@ -1675,8 +1570,7 @@ let test_pol_states_its_conclusion () =
         let oc = open_out pbp in
         let mutation = Writer.Mutation.make ~site Writer.Mutation.Truncate_derivation in
         let w =
-          if truncated then Writer.create_mutated ~format:Writer.V3_0 ~mutation oc
-          else Writer.create ~format:Writer.V3_0 oc
+          if truncated then Writer.create_mutated ~mutation oc else Writer.create oc
         in
         Writer.header w ~n_model_constraints:c3;
         let expr = Pol.(div (add (id c1) (id c2)) 2) in
@@ -1765,44 +1659,24 @@ let test_pol_states_its_conclusion () =
      wipe_level 1                      -- the backjump
      pol <that constraint>             -- the learned constraint doing its job later
 
-   BROKEN must be rejected and FIXED must be accepted, in BOTH formats. Requiring both
-   directions is the point: a test that only ran the fixed case would pass just as well
-   against a writer that had never had the bug.
+   BROKEN must be rejected and FIXED must be accepted. Requiring both directions is the
+   point: a test that only ran the fixed case would pass just as well against a writer
+   that had never had the bug.
 
-   The two formats fail through DIFFERENT machinery, which is why running one is not
-   running both:
+   The machinery: VeriPB 3.0 has no level stack (D-0024), so [wipe_level] computes the
+   doomed set from our own [t.tags] and emits the `del`s itself. [Writer.with_level]
+   moves the level FOR REAL -- the `% level 0` marker goes on the page -- rather than
+   only adjusting [t.tags], so [t.tags] and the proof cannot drift apart (I-X3).
 
-     - 3.0 has no level stack (D-0024). [wipe_level] computes the doomed set from our own
-       [t.tags] and emits the `del`s itself, so the deletion is OURS.
-     - 2.0 has `w l` and the CHECKER holds the level stack; [t.tags] is not maintained at
-       all. The deletion is the checker's, and nothing we write to our own table can
-       reach it.
+   M2-T14. This used to assert on the checker's exit status alone. An exit status cannot
+   tell a JUDGEMENT from a parse error, and that gap was live: the BROKEN lane passed on
+   an .opb the checker could not read, never reaching a deletion at all. So the rejection
+   is asserted by its words (measured 2026-09-18):
 
-   So a fix that only adjusted [t.tags] would be green under 3.0 and wrong under 2.0.
-   [Writer.with_level] moves the level for real -- `# 0` under 2.0, a `% level 0` comment
-   under 3.0 -- which is what makes both columns below green.
+     "Trying to access constraint with ID 3 that has already been deleted."
 
-   M2-T14. This used to assert on the checker's exit status alone, on the grounds that
-   the two rejection wordings share no useful substring (M1-T46). An exit status cannot
-   tell a JUDGEMENT from a parse error, and that gap was live: under
-   `VERIPB=$HOME/.local/bin/veripb` the 3.0 half handed a labelled .opb to the Python
-   2.2.2 build, whose log read `3.0_broken.opb:2:1: Expected number.`, and the BROKEN
-   lane passed on that -- the checker never reached a deletion. Two things close it.
-   The format now picks the binary that can read it, and the rejection is asserted by
-   its words, both checkers' at full strength (measured 2026-09-18):
-
-     3.0.2  "Trying to access constraint with ID 3 that has already been deleted."
-     2.2.2  "Hint: Rule 6 is trying to access constraint (constraintId 3), that was
-             marked as safe to delete."
-
-   These two really do share no useful substring, so both are listed and either is
-   accepted. Neither can be produced by a file that failed to parse. *)
+   which no file that failed to parse can produce. *)
 let test_learned_survives_the_backjump () =
-  (* 3.0 artefacts need a 3.0 reader; a 2.0 proof is read by either build. *)
-  let checker_for = function
-    | Writer.V3_0 -> veripb_v3 ()
-    | Writer.V2_0 -> veripb_path ()
-  in
   match veripb_path () with
   | None ->
       incr failures;
@@ -1824,7 +1698,7 @@ let test_learned_survives_the_backjump () =
       in
       (* [at_level_0] is the fix. Returns the checker's verdict, the emitted text and the
          level our own table thinks the learned id landed at. *)
-      let scenario name ~format ~at_level_0 =
+      let scenario name ~at_level_0 =
         let e = Encoding.create () in
         let c_pos = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "uu" 2) ] 1) in
         let c_neg =
@@ -1833,9 +1707,9 @@ let test_learned_survives_the_backjump () =
         let opb = Filename.concat dir (name ^ ".opb") in
         let pbp = Filename.concat dir (name ^ ".pbp") in
         let pbp_oc = open_out pbp in
-        let w = Writer.create ~audit:false ~format pbp_oc in
+        let w = Writer.create ~audit:false pbp_oc in
         let oc = open_out opb in
-        Encoding.write_opb_for e w oc;
+        Encoding.write_opb e oc;
         close_out oc;
         Encoding.start_proof e w;
         Writer.set_level w 1;
@@ -1856,83 +1730,50 @@ let test_learned_survives_the_backjump () =
         in
         Writer.conclusion w (Writer.Unsat (Some contra));
         close_out pbp_oc;
-        let checker = match checker_for format with Some c -> c | None -> veripb in
         let verdict =
-          match run_checker ~checker ~opb ~pbp ~log with
+          match run_checker ~checker:veripb ~opb ~pbp ~log with
           | Some v -> v
           | None -> failwith "checker vanished between find and run"
         in
         (verdict, read_whole pbp, tag, try read_whole log with _ -> "")
       in
-      List.iter
-        (fun (tag, format) ->
-          let broken, broken_text, broken_level, broken_log =
-            scenario (tag ^ "_broken") ~format ~at_level_0:false
-          in
-          let fixed, fixed_text, fixed_level, _ =
-            scenario (tag ^ "_fixed") ~format ~at_level_0:true
-          in
-          check
-            (Printf.sprintf
-               "%s M2-L1: D-0045's prediction HOLDS -- a constraint minted at \
-                the                 conflict level is deleted by the backjump and citing \
-                it is REJECTED"
-               tag)
-            (not broken);
-          (* ... and it is the DELETION that rejects it, not a file the checker could
-             not parse. Both builds' words at full strength, either accepted (M1-T46).
-             Without this the lane passes on any malformed artefact. *)
-          let deletion_wordings =
-            [
-              ("3.0.2: \"has already been deleted\"", "that has already been deleted");
-              ( "2.2.2: \"was marked as safe to delete\"",
-                "that was marked as safe to delete" );
-            ]
-          in
-          let hit =
-            List.filter (fun (_, needle) -> has broken_log needle) deletion_wordings
-          in
-          check
-            (Printf.sprintf
-               "%s M2-L1: and the rejection is the DELETION, in whichever checker's \
-                words -- not a parse error"
-               tag)
-            (hit <> []);
-          if hit = [] then
-            Printf.printf "       checker said: %s\n" (String.trim broken_log);
-          check
-            (Printf.sprintf
-               "%s M2-L1: Writer.with_level 0 makes the learned constraint outlive \
-                the                 backjump -- the same proof is ACCEPTED"
-               tag)
-            fixed;
-          if format = Writer.V3_0 then (
-            check
-              (tag
-             ^ " M2-L1: without the fix our own tag table puts the learned id at \
-                the                 conflict level")
-              (broken_level = Some 1);
-            check
-              (tag ^ " M2-L1: with the fix it is tagged 0, so wipe_level cannot see it")
-              (fixed_level = Some 0))
-          else (
-            (* 2.0 keeps no tags, deliberately: the checker holds the levels. So the
-               only evidence that the level moved is the marker in the proof, and that
-               marker is exactly what a tags-only fix would not have written. *)
-            check
-              (tag ^ " M2-L1: 2.0 maintains no tag table, so ours cannot be the fix")
-              (broken_level = None && fixed_level = None);
-            check
-              (tag
-             ^ " M2-L1: the 2.0 fix is a real level marker in the proof, not \
-                a                       table update")
-              (has fixed_text "# 0" && not (has broken_text "# 0"))))
-        [ ("3.0", Writer.V3_0); ("2.0", Writer.V2_0) ]
+      let broken, broken_text, broken_level, broken_log =
+        scenario "broken" ~at_level_0:false
+      in
+      let fixed, fixed_text, fixed_level, _ = scenario "fixed" ~at_level_0:true in
+      check
+        "M2-L1: D-0045's prediction HOLDS -- a constraint minted at the conflict level \
+         is deleted by the backjump and citing it is REJECTED"
+        (not broken);
+      (* ... and it is the DELETION that rejects it, not a file the checker could not
+         parse. Without this the lane passes on any malformed artefact. *)
+      let needle = "that has already been deleted" in
+      let judged = has broken_log needle in
+      check
+        "M2-L1: and the rejection is the DELETION, in the checker's own words -- not a \
+         parse error"
+        judged;
+      if not judged then
+        Printf.printf "       checker said: %s\n" (String.trim broken_log);
+      check
+        "M2-L1: Writer.with_level 0 makes the learned constraint outlive the backjump -- \
+         the same proof is ACCEPTED"
+        fixed;
+      check
+        "M2-L1: without the fix our own tag table puts the learned id at the conflict \
+         level"
+        (broken_level = Some 1);
+      check "M2-L1: with the fix it is tagged 0, so wipe_level cannot see it"
+        (fixed_level = Some 0);
+      (* The tag table alone is not the fix: the level has to be moved in the PROOF, or
+         [t.tags] and the file disagree about where the id landed (I-X3). *)
+      check "M2-L1: the fix is a real level marker in the proof, not a table update"
+        (has fixed_text "% level 0" && not (has broken_text "% level 0"))
 
 (* Say which checker every I-X1 check in the suite is talking to, and its version.
    "veripb accepted it" is only meaningful if you know which veripb, and until M1-T18
-   the answer was whichever build happened to come first on PATH -- on the
-   development machine, the Python 2.2.2, even though a 3.0.2 was installed. *)
+   the answer was whichever build happened to come first on PATH -- which on the
+   development machine was not the one intended. *)
 let report_checker () =
   match Baguette_proof.Checker.find () with
   | None ->
@@ -1951,9 +1792,8 @@ let () =
   test_lits ();
   test_opb ();
   test_pol ();
-  test_writer_rules ();
   test_writer_ids ();
-  test_writer_levels ();
+  test_writer_not_truncated ();
   test_audit ();
   test_order_encoding ();
   test_ids_and_equality ();
@@ -1966,7 +1806,6 @@ let () =
   test_arith_matches_checked ();
   test_committing_door_refuses_overflow ();
   test_int_lin_le_veripb ();
-  test_veripb_accepts ();
   test_v3_emitted_text ();
   test_v3_levels ();
   test_v3_del_range_semantics ();

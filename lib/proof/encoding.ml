@@ -517,22 +517,16 @@ let assignment_lits t bindings =
    Output
    --------------------------------------------------------------------------- *)
 
-(* [labels] writes each row as `@cN <row> ;` so the proof can cite it by name. That
-   is a VeriPB 3.0 feature and nothing else understands it, so it must match the
-   writer's format; [write_opb_for] is the form that cannot get that wrong and is
-   what callers should use. *)
-let write_opb ?(comments = []) ?labels t oc =
-  let labels =
-    match labels with Some b -> b | None -> Writer.default_format () = Writer.V3_0
-  in
-  Opb.write ?objective:t.objective ~labels oc ~comments ~constraints:(constraints t)
+(* Every row is written as `@cN <row> ;` so the proof can cite it by name (D-0023).
 
-(* The .opb written for a particular writer: the labels follow its format. The .opb
-   and the .pbp are one artefact in two files and disagreeing about labelling makes
-   every citation in the proof a parse error, so tie them together here rather than
-   at each of the half-dozen call sites. *)
-let write_opb_for ?(comments = []) t w oc =
-  write_opb ~comments ~labels:(Writer.format w = Writer.V3_0) t oc
+   Labelling is unconditional and there is no knob for it. It used to be optional
+   because the .opb had to match the writer's format and format 2.0 had no labels; with
+   2.0 gone (D-0046) there is one grammar, so the only thing a switch could still do is
+   produce an .opb that every citation in the .pbp fails to parse against. That is why
+   the paired [write_opb_for] collapsed into this function rather than being kept as a
+   safer spelling of it: the unsafe spelling no longer exists. *)
+let write_opb ?(comments = []) t oc =
+  Opb.write ?objective:t.objective oc ~comments ~constraints:(constraints t)
 
 (* Start the proof. Must be called after the .opb is complete (invariant I-X5). *)
 let start_proof t w = Writer.header w ~n_model_constraints:t.n
@@ -715,7 +709,7 @@ let add_int_lin_le t terms rhs =
    [sum <> c] projected onto the model's own variables, and b is determined by any
    solution rather than free (which is what keeps [conclusion SAT] working: search
    hands veripb the model variables' literals only, and whichever of A/B is tight
-   unit-propagates b for it -- checked against veripb 2.2.2, not assumed).
+   unit-propagates b for it -- checked against the checker, not assumed).
 
    When c is outside [L, U] the disequality is vacuously true and both rows come out
    vacuous of their own accord (the big-M constant goes non-positive and each row

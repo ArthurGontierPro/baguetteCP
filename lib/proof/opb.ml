@@ -135,13 +135,13 @@ let rename_comments constraints =
 
 (* The header must be written before the constraints and must state the true counts,
    so callers collect constraints first, then write. See invariant I-X5. *)
-(* The label a constraint carries in the .opb and is cited by in the proof. VeriPB 3.0
-   only; see docs/PROOF-FORMAT.md section 2 and D-0023. It is the row's 1-based
-   position, which is also the id the [f] rule gives it -- but the *point* is that the
-   proof never has to rely on that agreement again, because it cites the name. *)
+(* The label a constraint carries in the .opb and is cited by in the proof. See
+   docs/PROOF-FORMAT.md section 2a and D-0023. It is the row's 1-based position, which
+   is also the id the [f] rule gives it -- but the *point* is that the proof never has
+   to rely on that agreement again, because it cites the name. *)
 let label_of i = Printf.sprintf "@c%d" i
 
-let write ?objective:obj ?(labels = false) oc ~comments ~constraints =
+let write ?objective:obj oc ~comments ~constraints =
   let names = var_names constraints in
   let obj_names =
     match obj with
@@ -161,20 +161,19 @@ let write ?objective:obj ?(labels = false) oc ~comments ~constraints =
   (match obj with
   | None -> ()
   | Some o -> Printf.fprintf oc "%s\n" (objective_to_string o));
-  (* A labelled row must be a single constraint: VeriPB 3.0 refuses `@c1 ... = k ;`
-     outright ("Expected inequality constraint"), because one name cannot stand for the
-     two constraints an `=` splits into. That is the checker enforcing the discipline
-     [Encoding.add_constraint] already imposes, so it is not a restriction here -- but
-     it is why labelling cannot simply be switched on over an .opb containing `=`. *)
+  (* Every row is labelled (D-0023), and a labelled row must be a single constraint:
+     VeriPB 3.0 refuses `@c1 ... = k ;` outright ("Expected inequality constraint"),
+     because one name cannot stand for the two constraints an `=` splits into. That is
+     the checker enforcing the discipline [Encoding.add_constraint] already imposes, so
+     it is not a restriction added here -- but it is why an `=` row cannot reach this
+     function at all. *)
   List.iteri
     (fun i c ->
-      if labels then
-        match c.rel with
-        | Ge -> Printf.fprintf oc "%s %s\n" (label_of (i + 1)) (constr_to_string c)
-        | Eq ->
-            invalid_arg
-              "Opb.write: an `=` row cannot carry a label -- it is two constraints to \
-               the checker, and one name cannot name both. Post it as two `>=` rows \
-               (Encoding.add_equality)."
-      else Printf.fprintf oc "%s\n" (constr_to_string c))
+      match c.rel with
+      | Ge -> Printf.fprintf oc "%s %s\n" (label_of (i + 1)) (constr_to_string c)
+      | Eq ->
+          invalid_arg
+            "Opb.write: an `=` row cannot carry a label -- it is two constraints to the \
+             checker, and one name cannot name both. Post it as two `>=` rows \
+             (Encoding.add_equality).")
     constraints

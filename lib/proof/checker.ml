@@ -6,13 +6,18 @@
      1. $VERIPB, if set. An explicit choice wins and is never silently replaced --
         a $VERIPB that does not resolve is an error, not a fall-through.
      2. $HOME/.cargo/bin/veripb   VeriPB 3.0.2, Rust. The checker of record (D-0023).
-     3. $HOME/.local/bin/veripb   VeriPB 2.2.2, Python. Fallback.
-     4. `veripb` on $PATH.
+     3. `veripb` on $PATH.
 
-   PATH is last deliberately. Both builds are installed on the development machine
-   and ~/.local/bin comes first on PATH, so "whatever is on PATH" silently meant the
-   Python 2.2.2. Every test module used to open-code its own copy of that search,
-   which is how a project-wide decision came to live in nine places at once.
+   There is exactly ONE checker now (D-0046 removed format 2.0 and with it the Python
+   VeriPB this project used to keep as a second implementation), so the list is short --
+   but it is still a list, and PATH is still last. The reason is historical and worth
+   keeping: two builds used to be installed side by side with the other one first on
+   PATH, so "whatever is on PATH" silently meant the wrong checker, which is the failure
+   M1-T18 exists to remove. A $PATH entry is whatever the machine happens to offer;
+   naming the path we mean is not.
+
+   Every test module used to open-code its own copy of this search, which is how a
+   project-wide decision came to live in nine places at once.
 
    This lives in lib/proof/ rather than in test/ because which checker the proofs are
    contracted against is part of the proof contract, not a property of one test
@@ -25,7 +30,7 @@
 
 let candidates () =
   let home = try Sys.getenv "HOME" with Not_found -> "" in
-  [ Filename.concat home ".cargo/bin/veripb"; Filename.concat home ".local/bin/veripb" ]
+  [ Filename.concat home ".cargo/bin/veripb" ]
 
 let on_path name =
   Sys.command (Printf.sprintf "command -v %s >/dev/null 2>&1" (Filename.quote name)) = 0
@@ -57,7 +62,8 @@ let find () =
 
 let not_found_message =
   "veripb not found, so the proof was NOT checked. This is a FAILURE, not a skip: an \
-   unchecked proof is not a passing test (CLAUDE.md). Looked at $VERIPB, then \
-   ~/.cargo/bin/veripb (3.0.2, the checker of record), then ~/.local/bin/veripb (2.2.2), \
-   then $PATH. scripts/bootstrap.sh installs one; scripts/checker.sh prints which one \
-   would be used."
+   unchecked proof is not a passing test (CLAUDE.md). VeriPB 3.0.2 is the only checker \
+   this project has -- there is no second implementation to fall back to (D-0046) -- so \
+   a missing one means NOTHING was verified. Looked at $VERIPB, then ~/.cargo/bin/veripb \
+   (3.0.2, the checker of record), then $PATH. scripts/bootstrap.sh installs it; \
+   scripts/checker.sh prints which one would be used."

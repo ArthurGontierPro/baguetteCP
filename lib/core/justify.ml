@@ -367,7 +367,9 @@ let emit_rup_clause ctx ~origin lits =
    The tempting fix -- render [terms >= rhs] as [pol], citing whatever established each
    literal -- does not work, because a [pol] expression cannot state that a literal
    *holds*: a bare literal in one is the trivial axiom [lit >= 0] (true for 0 or 1
-   alike), not an assertion that it is 1. Checked directly against veripb 2.2.2:
+   alike), not an assertion that it is 1. Checked directly against a checker -- the
+   transcript below is the original 2.0-era one (D-0046 retired that format and its
+   checker; the measurement is kept because it is what settled the question):
 
      f 1                  * model: 1 x1 >= 1
      pol x2

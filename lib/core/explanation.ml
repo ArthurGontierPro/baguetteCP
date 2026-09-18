@@ -33,7 +33,7 @@
    M1-T12 / docs/DECISIONS.md D-0013: [Model_row], [Combine], [Weaken]
    -------------------------------------------------------------------------------
 
-   D-0013 verified, against veripb 2.2.2, the actual derivation a bounds conflict at
+   D-0013 verified, against the checker, the actual derivation a bounds conflict at
    the root needs: weaken every *other* variable out of the model row with literal
    axioms (sound per D-0009 -- an axiom can never assert a bound, but it *can* weaken
    one away), or, where that variable sits at a bound some earlier step already

@@ -655,26 +655,26 @@ let rows_that_refute_alone ~dir ~name m =
       let opb = Filename.concat dir (name ^ "_cert.opb") in
       let accepted = ref [] in
       for i = 1 to n do
-        (* M2-T14. Both files are emitted through [Writer]/[write_opb_for] so that they
-           cannot disagree about the format. They did: the .opb came from a bare
-           [write_opb], which follows [Writer.default_format ()], while the proof was
-           this literal text, hardcoded to 3.0 with `;` terminators and an `@c<i>`
-           citation. Under BAGUETTE_PROOF_FORMAT=2.0 that wrote an UNLABELLED .opb and
-           then cited a label in it, so every row was refused on the grammar, [accepted]
-           came back empty for every instance, and [no_single_row_refutes] reported "no
-           row refutes alone" about a procedure that could not have found one.
+        (* M2-T14. Both files go through [Writer]/[Encoding] so that they cannot
+           disagree about the grammar. They did: the .opb came from [write_opb], which
+           followed a format switch, while the proof was literal text hardcoded to 3.0
+           with `;` terminators and an `@c<i>` citation. Set the switch the other way and
+           that wrote an UNLABELLED .opb and then cited a label in it, so every row was
+           refused on the grammar, [accepted] came back empty for every instance, and
+           [no_single_row_refutes] reported "no row refutes alone" about a procedure that
+           could not have found one.
 
            That is D-0030's own guard against a hollow instance, passing for exactly the
            reason D-0030 exists. It was caught by [certification_finds_root_unsat], the
            control that asserts the procedure can still find the row it is known to have
-           -- which is why that control is not optional. *)
+           -- which is why that control is not optional. The switch is gone (D-0046) and
+           the two files cannot differ any more, but the .pbp below is still literal text
+           and would drift from the .opb the same way if the grammar ever moved. *)
         let pbp = Filename.concat dir (name ^ "_cert.pbp") in
         let oc = open_out pbp in
         let w = Writer.create ~comments:false ~audit:false oc in
         let opb_oc = open_out opb in
-        Encoding.write_opb_for
-          ~comments:[ "test_mutation: certifying " ^ name ]
-          enc w opb_oc;
+        Encoding.write_opb ~comments:[ "test_mutation: certifying " ^ name ] enc opb_oc;
         close_out opb_oc;
         Encoding.start_proof enc w;
         (* Derives NOTHING: the conclusion names a model row directly. *)
@@ -865,9 +865,9 @@ let contains hay needle =
 
 (* Why veripb said no. The distinction is the whole of M1-T26 (b): a rejection that
    never reached the derivation says only that the file is malformed. The markers are
-   VeriPB 3.0.2's and 2.2.2's, taken from runs; scripts/mutate_proof.sh classifies on
-   the same list and exits 5 where this returns [Rejected_unevaluated], so the two
-   halves of the harness agree about what a lane has shown. *)
+   VeriPB 3.0.2's, taken from runs; scripts/mutate_proof.sh classifies on the same list
+   and exits 5 where this returns [Rejected_unevaluated], so the two halves of the
+   harness agree about what a lane has shown. *)
 type verdict = Accepted | Rejected_on_derivation | Rejected_unevaluated | Unchecked
 
 let unevaluated_markers =

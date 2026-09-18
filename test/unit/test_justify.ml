@@ -268,7 +268,8 @@ let test_wipe () =
 (* Which checker to run: lib/proof/checker.ml, shared with scripts/checker.sh.
    Every test module open-coded this search, and every copy looked at
    ~/.local/bin/veripb first -- so a project-wide choice of checker lived in nine
-   places and silently meant the Python 2.2.2 (M1-T18). [None] is a FAILURE at every
+   places and could silently mean a build nobody intended (M1-T18). [None] is a FAILURE
+   at every
    call site below, never a skip. *)
 let veripb_path () = Baguette_proof.Checker.find ()
 
@@ -489,7 +490,7 @@ let build_int_lin_le_gap dir =
 (* to a joint fixpoint the way engine.ml will, one of the two hits the *)
 (* cross-instance conflict D-0013's own worked example ends on. This   *)
 (* is the derivation docs/DECISIONS.md D-0013 records as accepted by   *)
-(* veripb 2.2.2 in full; this test is what checks the *solver*         *)
+(* the checker in full; this test is what checks the *solver*          *)
 (* actually produces it, not just that the hand-written proof does.    *)
 (* ------------------------------------------------------------------ *)
 
@@ -660,8 +661,7 @@ let test_emit_rup_clause () =
        establishes a literal (D-0009). *)
 
 (* The body of the line labelled [@c<id>] in [text], label stripped, or "" if no line
-   carries that label. 2.0 has no labels, so under 2.0 this answers nothing and only
-   the 3.0 half of the lane below uses it. *)
+   carries that label. *)
 let line_labelled text id =
   let want = Printf.sprintf "@c%d " id in
   let n = String.length want in
@@ -676,8 +676,9 @@ let line_labelled text id =
 (* ---- resolving an id to its line WITHOUT a label (M2-T14) -------------------
 
    The check below wants to know that the id the index handed back names the line that
-   states the clause. It used to ask that of [line_labelled], i.e. by reading a 3.0
-   label -- so under 2.0 it could not be asked at all, and the lane asserted [false] on
+   states the clause. It used to ask that of [line_labelled], i.e. by reading a label --
+   so under a format without labels it could not be asked at all, and the lane asserted
+   [false] on
    purpose rather than pass vacuously. That is honest but it leaves a 2.0 run
    permanently one check red, and a run that is always red is a run people stop reading.
 
@@ -741,19 +742,18 @@ let test_index_reuses_the_right_line () =
   let reused = match r with Ok id -> id | Error _ -> -1 in
   (* [reused = trace_id] above only says two integers agree. THIS is the check that
      would catch an index pointing at the wrong line: the line that mints that id
-     really does state the clause. Asked by content, so it is asked under both formats
-     -- the rendered body is the same string either way, because the ` ;` belongs to
-     [Opb.constr_to_string] and not to the 3.0 rule terminator. *)
+     really does state the clause. Asked by CONTENT, which is what M2-T14 changed here
+     and is a keeper: the ` ;` in the expectation belongs to [Opb.constr_to_string], not
+     to the rule terminator. *)
   let expected = "rup +1 x_ge_2 +1 ~x_ge_3 >= 1 ;" in
   check_eq "index: the reused id names the line that states the clause" ~expected
     ~got:(line_minting_id s reused);
-  (* Under 3.0 the same line must also carry `@c<reused>` as its label. That was the
-     whole of this lane before M2-T14; it is kept, so nothing is checked less, and it
-     now doubles as a cross-check that the content-based numbering above agrees with
-     what the writer labelled. *)
-  if Writer.default_format () = Writer.V3_0 then
-    check_eq "index: and under 3.0 the line's @c label agrees with that numbering"
-      ~expected ~got:(line_labelled s reused);
+  (* The same line must also carry `@c<reused>` as its label. That was the whole of this
+     lane before M2-T14; it is kept, so nothing is checked less, and it doubles as a
+     cross-check that the content-based numbering above agrees with what the writer
+     labelled. *)
+  check_eq "index: and the line's @c label agrees with that numbering" ~expected
+    ~got:(line_labelled s reused);
   expect_ok "index: no exception" (Result.map ignore r)
 
 let test_index_is_structural () =
@@ -907,16 +907,12 @@ let conclusion_break_opb dir name =
   let c3 = Encoding.add_constraint e (Opb.ge [ (1, Lit.negate v) ] 1) in
   let opb = Filename.concat dir (name ^ ".opb") in
   let oc = open_out opb in
-  (* NOT [~labels:true]. Labelling belongs to the 3.0 grammar, and the .opb and the
-     .pbp are one artefact in two files: hardcoding labels here wrote a 3.0 .opb beside
-     whatever the writer emitted, so under BAGUETTE_PROOF_FORMAT=2.0 with the Python
-     2.2.2 checker the .opb did not parse at all (`:3:1: Expected number`). Every lane
-     asserting ACCEPTED then failed, and -- the part that matters -- the lane asserting
-     REJECTED **passed on the parse error**, without the checker ever judging the
-     derivation. That is D-0020/D-0030's rule exactly: a lane rejected without the
-     checker judging an inference is not a pass. Omitting the argument makes the default
-     [Writer.default_format () = V3_0] decide, which is the same thing [Writer.create]
-     below will decide, so the two files cannot disagree. Found by M2-L5. *)
+  (* The .opb and the .pbp are one artefact in two files and they must agree about
+     labelling, or the checker stops at the GRAMMAR and never judges the derivation --
+     found by M2-L5, when this pair disagreed and the lane asserting REJECTED **passed on
+     the parse error**. That is D-0020/D-0030's rule exactly. Labelling is now
+     unconditional on both sides (D-0046), so they cannot disagree; the note stays
+     because the failure it records is what a future knob here would reintroduce. *)
   Encoding.write_opb e oc;
   close_out oc;
   (e, opb, c1, c2, c3)
@@ -1332,23 +1328,18 @@ let reduce_break_encoding () =
   let c2 = Encoding.add_constraint e (Opb.ge [ (1, Lit.negate rv) ] 1) in
   (e, c1, c2)
 
-(* BOTH checkers, at the format each one can read. M1-T46's rule is that a break lane
-   measured against one binary says nothing about the other, and D-0023's one-way door
-   means the artefact itself differs: 3.0's labelled .opb is a parse error for 2.2.2
-   (measured here -- it is what made the first draft of this test fail four lanes under
-   the Python build for a reason that had nothing to do with reduction). So the format
-   travels with the checker, and [Encoding.write_opb_for] is what keeps the .opb and the
-   .pbp agreeing about labels. *)
+(* The checker this break lane runs against. It used to be a LIST -- one entry per
+   checker, each paired with the format it could read -- because a break lane measured
+   against one binary says nothing about the other (M1-T46). D-0046 left one checker, so
+   the list collapsed to a single entry and the pairing has nothing left to pair. The
+   cost of that is recorded in D-0046 and is not hidden here: veripb 3.0.2 is now the
+   sole oracle for every lane below.
+
+   [] is a FAILURE, never a skip. *)
 let reduce_break_checkers () =
-  let home = try Sys.getenv "HOME" with Not_found -> "" in
-  List.filter
-    (fun (_, path, _) -> Sys.file_exists path && not (Sys.is_directory path))
-    [
-      ( "veripb 3.0.2 (Rust, the checker of record)",
-        Filename.concat home ".cargo/bin/veripb",
-        Writer.V3_0 );
-      ("veripb 2.2.2 (Python)", Filename.concat home ".local/bin/veripb", Writer.V2_0);
-    ]
+  match Baguette_proof.Checker.find () with
+  | None -> []
+  | Some p -> [ ("veripb 3.0.2, the checker of record", p) ]
 
 let test_reduction_truncation_is_rejected () =
   match reduce_break_checkers () with
@@ -1367,14 +1358,14 @@ let test_reduction_truncation_is_rejected () =
       (* [expl_of] picks the derivation the lane emits; [stated] decides whether the
          bound it claims reaches the page as an `ia` (M2-L0's [emit_concluding]).
          Returns [true] iff veripb ACCEPTED. *)
-      let run ~veripb ~fmt ~name ~stated ~expl_of =
+      let run ~veripb ~name ~stated ~expl_of =
         let e, c1, c2 = reduce_break_encoding () in
         let pbp = Filename.concat dir (name ^ ".pbp") in
         let opb = Filename.concat dir (name ^ ".opb") in
         let oc = open_out pbp in
-        let w = Writer.create ~comments:false ~audit:true ~format:fmt oc in
+        let w = Writer.create ~comments:false ~audit:true oc in
         let oc_opb = open_out opb in
-        Encoding.write_opb_for e w oc_opb;
+        Encoding.write_opb e oc_opb;
         close_out oc_opb;
         Encoding.start_proof e w;
         let ctx = Justify.create ~writer:w ~encoding:e in
@@ -1424,13 +1415,13 @@ let test_reduction_truncation_is_rejected () =
         n = 0 || go 0
       in
       List.iter
-        (fun (label, veripb, fmt) ->
+        (fun (label, veripb) ->
           let tag = Printf.sprintf " [%s]" label in
           let slug =
             String.map (function 'a' .. 'z' | '0' .. '9' -> '_' | c -> c) label
           in
           let slug = String.concat "" (String.split_on_char ' ' slug) in
-          let run = run ~veripb ~fmt in
+          let run = run ~veripb in
           check
             ("M2-L5 (c) baseline: roundToOne's derivation, emitted bare, is ACCEPTED"
            ^ tag)
@@ -1456,19 +1447,12 @@ let test_reduction_truncation_is_rejected () =
             ("M2-L5 (c) THE CONTROL M1-T42 COULD NOT BUILD: the same truncated reduction \
               is REJECTED once M2-L0's conclusion is stated" ^ tag)
             (not (run ~name:("trunc_stated" ^ slug) ~stated:true ~expl_of:truncated));
-          (* Which rejection it is, named at full strength in BOTH checkers' words --
-             3.0.2's sentence and 2.2.2's bare hint tuple (docs/PROOF-FORMAT.md section
-             2's table). Matching on one alone would pass vacuously against the other
-             binary, which is M1-T46's absolute rule; and the fragment the two DO share
-             on a RUP failure, "reverse unit propagation", is deliberately not used --
-             it is the least specific thing either says and this is an implication
-             failure, not a RUP one. *)
+          (* Which rejection it is, named at full strength: the implication check, not a
+             parse error and not a dangling label. The fragment "reverse unit
+             propagation" is deliberately not used -- it is the least specific thing the
+             checker says, and this is an implication failure, not a RUP one. *)
           let wordings =
-            [
-              ("3.0.2: \"not syntactically implied\"", "not syntactically implied");
-              ("2.2.2 alt: \"Implication check failed\"", "Implication check failed");
-              ("2.2.2: bare \"Hint: (claim, antecedent)\"", "Hint: (");
-            ]
+            [ ("\"not syntactically implied\"", "not syntactically implied") ]
           in
           let hit = List.filter (fun (_, needle) -> contains needle !last_out) wordings in
           let matched = hit <> [] in
@@ -1476,19 +1460,13 @@ let test_reduction_truncation_is_rejected () =
             Printf.printf "note M2-L5 (c)%s said: %s\n" tag
               (String.concat " + " (List.map fst hit));
           check
-            ("M2-L5 (c): the rejection is the IMPLICATION check -- 3.0.2's \"Expected \
-              constraint is not syntactically implied by the constraint at the hint.\" \
-              or 2.2.2's bare \"Hint: (claim, antecedent)\" tuple -- not a parse error \
-              and not a dangling label" ^ tag)
+            ("M2-L5 (c): the rejection is the IMPLICATION check -- \"Expected constraint \
+              is not syntactically implied by the constraint at the hint.\" -- not a \
+              parse error and not a dangling label" ^ tag)
             matched;
           if not matched then
             Printf.printf "       checker said: %s\n" (String.trim !last_out))
         checkers;
-      if List.length checkers < 2 then
-        Printf.printf
-          "note M2-L5 (c): only %d of the two checkers is installed, so the other's \
-           polarity was not measured here\n"
-          (List.length checkers);
       Sys.readdir dir
       |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
       try Sys.rmdir dir with _ -> ())
