@@ -1768,6 +1768,523 @@ let test_learned_survives_the_backjump () =
       check "M2-L1: the fix is a real level marker in the proof, not a table update"
         (has fixed_text "% level 0" && not (has broken_text "% level 0"))
 
+(* ------------------------------------------------------------------ *)
+(* M3-T1: reified variables                                            *)
+(*                                                                     *)
+(* The design is in lib/proof/encoding.ml's "M3-T1" header. What is    *)
+(* checked here, in the order the lanes run:                           *)
+(*                                                                     *)
+(*   1. the two rows MEAN  r <-> cond, checked point by point over     *)
+(*      small domains against an evaluator that knows only what an     *)
+(*      order literal means -- the same independent check              *)
+(*      [check_soundness] makes for a plain int_lin_le row, and the    *)
+(*      one that would catch a big-M off by one that cancels itself.   *)
+(*   2. the emitted [red] line puts the witness BEFORE the terminator, *)
+(*      pinned as text, with the trap itself performed: a proof whose  *)
+(*      witness sits after the `;` is REJECTED, and on the wording     *)
+(*      that says a witness was missing rather than on some parse      *)
+(*      error further down.                                            *)
+(*   3. veripb accepts a refutation that runs THROUGH the definition   *)
+(*      -- both halves load-bearing, the contradiction being           *)
+(*      `~r` and `r` -- so the definition is cited, not merely         *)
+(*      emitted. A definition nothing cites is not yet evidence.       *)
+(*   4. two deliberately wrong definitions are rejected, each on its   *)
+(*      own wording: the witnesses swapped, and a reifier that is not  *)
+(*      fresh. The second is the measurement behind the freshness      *)
+(* precondition, i.e. behind "a model-declared reified bool       *)
+   (*      cannot be defined by [red]". *)
+(* ------------------------------------------------------------------ *)
+
+(* r <-> (sum a_i x_i <= rhs), checked at every point of the (small) domains. The
+   evaluator reads each order literal off the integer assignment and knows nothing
+   about how [reif_rows] built either row, so a sign or big-M error that cancels
+   itself inside the construction cannot hide from it. *)
+let reif_semantics name ~domains ~terms ~rhs =
+  let e = Encoding.create () in
+  List.iter (fun (x, lo, hi) -> Encoding.declare_int e x ~lo ~hi) domains;
+  Encoding.declare_bool e "r";
+  let cond = Encoding.expand_int_lin_le e terms rhs in
+  let fwd, bwd = Encoding.reif_rows ~reifier:"r" ~cond in
+  let bad =
+    List.find_opt
+      (fun assign ->
+        let cond_true =
+          List.fold_left (fun acc (a, x) -> acc + (a * List.assoc x assign)) 0 terms
+          <= rhs
+        in
+        let r_true = List.assoc "r" assign = 1 in
+        let rows_hold = eval_row assign fwd && eval_row assign bwd in
+        rows_hold <> (r_true = cond_true))
+      (all_assignments (("r", 0, 1) :: domains))
+  in
+  check name (bad = None)
+
+let test_reif_rows () =
+  reif_semantics "reif: r <-> x <= 1, x in [0,3]"
+    ~domains:[ ("x", 0, 3) ]
+    ~terms:[ (1, "x") ]
+    ~rhs:1;
+  reif_semantics "reif: r <-> x + y <= 2"
+    ~domains:[ ("x", 0, 2); ("y", 0, 2) ]
+    ~terms:[ (1, "x"); (1, "y") ]
+    ~rhs:2;
+  reif_semantics "reif: r <-> 2x - y <= 1, mixed signs"
+    ~domains:[ ("x", 0, 2); ("y", 0, 2) ]
+    ~terms:[ (2, "x"); (-1, "y") ]
+    ~rhs:1;
+  reif_semantics "reif: r <-> x - y <= -1 over a domain that does not start at 0"
+    ~domains:[ ("x", -1, 2); ("y", 1, 3) ]
+    ~terms:[ (1, "x"); (-1, "y") ]
+    ~rhs:(-1);
+  (* The rendered pair, by eye against the header's formulas. x <= 1 over [0,3]
+     normalises to  ~x_ge_1 + ~x_ge_2 + ~x_ge_3 >= 2,  so A = 3, k = 2, A-k+1 = 2. *)
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:0 ~hi:3;
+  let fwd, bwd =
+    Encoding.reif_rows ~reifier:"r" ~cond:(Encoding.expand_int_lin_le e [ (1, "x") ] 1)
+  in
+  check_eq "reif: the forward row is the condition weakened by k ~r"
+    ~expected:"+2 ~r_ge_1 +1 ~x_ge_1 +1 ~x_ge_2 +1 ~x_ge_3 >= 2 ;"
+    ~got:(Opb.constr_to_string fwd);
+  check_eq "reif: the backward row is the negated condition weakened by (A-k+1) r"
+    ~expected:"+2 r_ge_1 +1 x_ge_1 +1 x_ge_2 +1 x_ge_3 >= 2 ;"
+    ~got:(Opb.constr_to_string bwd)
+
+let test_reif_preconditions () =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:0 ~hi:3;
+  let cond rhs = Encoding.expand_int_lin_le e [ (1, "x") ] rhs in
+  (* Constant on the coefficients alone: not a reification, a fixed Boolean. *)
+  (match Encoding.reif_rows ~reifier:"r" ~cond:(cond 3) with
+  | exception Encoding.Reif_constant ("r", true) ->
+      print_endline "ok   reif: a condition the row cannot falsify is refused as constant"
+  | (exception _) | _ ->
+      incr failures;
+      print_endline "FAIL reif: a vacuously true condition should raise Reif_constant");
+  (match Encoding.reif_rows ~reifier:"r" ~cond:(cond (-1)) with
+  | exception Encoding.Reif_constant ("r", false) ->
+      print_endline "ok   reif: a condition the row cannot satisfy is refused as constant"
+  | (exception _) | _ ->
+      incr failures;
+      print_endline "FAIL reif: an unsatisfiable condition should raise Reif_constant");
+  (* b <-> C(b) is not a definition. *)
+  Encoding.declare_bool e "r";
+  raises "reif: a condition mentioning the reifier is refused" (fun () ->
+      Encoding.reif_rows ~reifier:"r"
+        ~cond:(Encoding.expand_int_lin_le e [ (1, "x"); (1, "r") ] 1));
+  (* A reifier that is declared but is not a bool. *)
+  raises "reif: a non-Boolean reifier is refused" (fun () ->
+      Encoding.add_reif e ~reifier:"x" ~cond:(cond 1));
+  (* An `=` condition is two constraints and cannot be one pair. *)
+  raises "reif: an `=` condition is refused" (fun () ->
+      Encoding.reif_rows ~reifier:"r" ~cond:(Opb.eq [ (1, Lit.ge "x" 1) ] 1));
+  (* THE precondition: [define_reif] refuses a reifier the .opb already mentions, and
+     refuses it BEFORE writing anything. The checker's own refusal of the same
+     situation is [test_reif_veripb]'s "not fresh" lane -- this is the guard that means
+     a caller never reaches it. *)
+  let e2 = Encoding.create () in
+  Encoding.declare_int e2 "x" ~lo:0 ~hi:3;
+  Encoding.declare_bool e2 "b";
+  ignore (Encoding.add_constraint e2 (Opb.ge [ (1, Lit.bool_true "b") ] 1));
+  let w =
+    Writer.create ~comments:false ~audit:false
+      (let f = Filename.temp_file "baguette_reif" ".pbp" in
+       let oc = open_out f in
+       at_exit (fun () -> try Sys.remove f with _ -> ());
+       oc)
+  in
+  Writer.header w ~n_model_constraints:(Encoding.n_constraints e2);
+  (match
+     Encoding.define_reif e2 w ~reifier:"b"
+       ~cond:(Encoding.expand_int_lin_le e2 [ (1, "x") ] 1)
+   with
+  | exception Encoding.Reif_not_fresh "b" ->
+      print_endline
+        "ok   reif: define_reif refuses a reifier the .opb already constrains \
+         (Reif_not_fresh)"
+  | (exception _) | _ ->
+      incr failures;
+      print_endline "FAIL reif: define_reif accepted a non-fresh reifier");
+  (* And a fresh one is accepted, so the guard above is not simply refusing
+     everything -- the control that makes the refusal mean something. *)
+  match
+    Encoding.define_reif e2 w ~reifier:"$fresh"
+      ~cond:(Encoding.expand_int_lin_le e2 [ (1, "x") ] 1)
+  with
+  | r ->
+      check "reif: a fresh reifier is accepted and yields two ids"
+        (List.length (Encoding.reif_ids r) = 2
+        && Encoding.reif_fwd r <> Encoding.reif_bwd r
+        && Lit.to_string (Encoding.reif_lit r) = "_fresh_ge_1")
+  | exception _ ->
+      incr failures;
+      print_endline "FAIL reif: a fresh reifier was refused"
+
+(* The witness-before-terminator trap, on the text [Writer.red] actually emits. The
+   rule ends at the first `;`, so a witness written after one is SILENTLY not a
+   witness -- the failure this pins is one that passes quietly. *)
+let test_reif_emitted_text () =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:0 ~hi:3;
+  let s =
+    text (fun w ->
+        Writer.header w ~n_model_constraints:2;
+        ignore (Encoding.define_reif_int_lin_le e w ~reifier:"$r" [ (1, "x") ] 1))
+  in
+  let lines =
+    List.filter
+      (fun l -> String.length l > 0 && String.contains l 'r' && String.length l > 4)
+      (String.split_on_char '\n' s)
+  in
+  let red_lines =
+    List.filter
+      (fun l ->
+        let l = String.trim l in
+        let i = try Some (String.index l 'r') with Not_found -> None in
+        match i with
+        | Some i when i + 4 <= String.length l -> String.sub l i 4 = "red "
+        | _ -> false)
+      lines
+  in
+  check "reif: define_reif emits exactly two red lines" (List.length red_lines = 2);
+  let well_formed l =
+    (* exactly one `;`, at the end, and the witness separator before it *)
+    let semis =
+      List.length
+        (List.filter (fun c -> c = ';') (List.init (String.length l) (String.get l)))
+    in
+    let colon = try String.index l ':' with Not_found -> -1 in
+    let semi = try String.index l ';' with Not_found -> -1 in
+    semis = 1 && semi = String.length (String.trim l) - 1 && colon >= 0 && colon < semi
+  in
+  check "reif: the witness comes BEFORE the terminator on every red line"
+    (List.for_all (fun l -> well_formed (String.trim l)) red_lines);
+  let has needle =
+    List.exists
+      (fun l ->
+        String.length (String.trim l) >= String.length needle
+        &&
+        let t = String.trim l in
+        let n = String.length needle in
+        let rec go i =
+          i + n <= String.length t && (String.sub t i n = needle || go (i + 1))
+        in
+        go 0)
+      red_lines
+  in
+  check "reif: the forward half goes in first, under the witness that satisfies it"
+    (has "+2 ~_r_ge_1 +1 ~x_ge_1 +1 ~x_ge_2 +1 ~x_ge_3 >= 2 : _r_ge_1 -> 0 ;");
+  check "reif: the backward half goes in last, under the opposite witness"
+    (has "+2 _r_ge_1 +1 x_ge_1 +1 x_ge_2 +1 x_ge_3 >= 2 : _r_ge_1 -> 1 ;")
+
+(* THE LANE THAT VALIDATES THE DEFINITION, and the reason it looks the way it does.
+
+   A [red] goal is discharged by showing F /\ ~C entails the substituted database. If F
+   is itself contradictory, every goal discharges and EVERY witness is accepted --
+   including a wrong one. That is measured below, not assumed, and it is why the
+   definition is validated over a SATISFIABLE .opb: over a contradictory one, "veripb
+   accepted the red line" says nothing whatever.
+
+   The model here is therefore just x's ladder, x in [0, 3], which every value of x
+   satisfies. The proof introduces the definition and then logs a solution -- so the
+   two rows are checked twice over, once as redundance goals and once as constraints a
+   concrete assignment has to satisfy. *)
+let reif_sat_model dir name ~constrain_reifier =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:0 ~hi:3;
+  if constrain_reifier then (
+    Encoding.declare_bool e "b";
+    ignore (Encoding.add_constraint e (Opb.ge [ (1, Lit.bool_true "b") ] 1)));
+  let opb = Filename.concat dir (name ^ ".opb") in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "x in [0,3]; satisfiable" ] e oc;
+  close_out oc;
+  (e, opb)
+
+(* The model the two citation lanes refute:  x in [0,3],  x >= 3,  x <= 1.
+   Contradictory, and deliberately contradictory in a way that has NOTHING to do with
+   the reifier -- so a proof that routes the contradiction through the reifier is
+   demonstrating the definition rather than being carried by it. *)
+let reif_unsat_model dir name ~reifier_in_opb =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:0 ~hi:3;
+  let rows =
+    if reifier_in_opb then (
+      Encoding.declare_bool e "b";
+      Some (Encoding.add_int_lin_le_reif e [ (1, "x") ] 1 ~reifier:"b"))
+    else None
+  in
+  let c_hi = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "x" 3) ] 1) in
+  let c_lo = Encoding.add_constraint e (Opb.ge [ (1, Lit.negate (Lit.ge "x" 2)) ] 1) in
+  let opb = Filename.concat dir (name ^ ".opb") in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "x >= 3; x <= 1" ] e oc;
+  close_out oc;
+  (e, opb, rows, c_hi, c_lo)
+
+(* The derivation, shared by both doors: it takes the two ids of the definition and
+   knows nothing about where they came from. Both halves are load-bearing -- the
+   contradiction IS `~r` against `r` -- and each direction's claim goes through
+   [pol_concluding], so the checker judges the claim rather than accepting whatever the
+   cutting-planes expression happened to evaluate to. A big-M off by one shows up
+   exactly there. *)
+let refute_through_reifier e w ~reifier ~fwd ~bwd ~c_hi ~c_lo =
+  let r = Lit.bool_true reifier in
+  let cons1 = Option.get (Encoding.consistency_id e "x" 1) in
+  let cons2 = Option.get (Encoding.consistency_id e "x" 2) in
+  let x_ge_2 =
+    Writer.pol w ~origin:"x >= 3 gives x >= 2" Pol.(sum [ id c_hi; id cons2 ])
+  in
+  let x_ge_1 =
+    Writer.pol w ~origin:"x >= 2 gives x >= 1" Pol.(sum [ id x_ge_2; id cons1 ])
+  in
+  (* Forward half: x >= 3 falsifies the condition, so the reifier is false. *)
+  let not_r =
+    Writer.pol_concluding w ~origin:"x >= 3 falsifies x <= 1, so ~r"
+      ~claim:(Opb.ge [ (1, Lit.negate r) ] 1)
+      Pol.(div (sum [ id fwd; id x_ge_1; id x_ge_2; id c_hi ]) 2)
+  in
+  (* Backward half: x <= 1 satisfies the condition, so the reifier is true. *)
+  let not_x_ge_3 =
+    Writer.pol w ~origin:"x <= 1 gives x <= 2" Pol.(sum [ id c_lo; id cons2 ])
+  in
+  let yes_r =
+    Writer.pol_concluding w ~origin:"x <= 1 satisfies x <= 1, so r"
+      ~claim:(Opb.ge [ (1, r) ] 1)
+      Pol.(
+        div (sum [ id bwd; id c_lo; id not_x_ge_3; axiom (Lit.negate (Lit.ge "x" 1)) ]) 2)
+  in
+  let contra =
+    Writer.pol w ~origin:"the reifier cannot be both" Pol.(sum [ id not_r; id yes_r ])
+  in
+  Writer.delete_many w [ x_ge_1; x_ge_2; not_x_ge_3; not_r; yes_r ];
+  contra
+
+let test_reif_veripb () =
+  match veripb_path () with
+  | None ->
+      incr failures;
+      print_endline
+        ("FAIL M3-T1 reif: " ^ Baguette_proof.Checker.not_found_message
+       ^ " -- a red-based definition nothing checked is not a definition.")
+  | Some veripb -> (
+      let dir = Filename.temp_file "baguette_reif_veripb" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let log = Filename.concat dir "log" in
+      let run opb pbp = run_checker ~checker:veripb ~opb ~pbp ~log = Some true in
+      let says needle =
+        let out = try read_whole log with _ -> "" in
+        let n = String.length needle in
+        let rec go i =
+          i + n <= String.length out && (String.sub out i n = needle || go (i + 1))
+        in
+        go 0
+      in
+      let rejected_saying name ~opb ~pbp ~needle =
+        if run opb pbp then (
+          incr failures;
+          Printf.printf "FAIL %s (veripb ACCEPTED it)\n  model: %s\n  proof: %s\n" name
+            opb pbp)
+        else if says needle then Printf.printf "ok   %s\n" name
+        else (
+          incr failures;
+          Printf.printf
+            "FAIL %s -- it was rejected, but not on %S, so this lane cannot tell a \
+             JUDGEMENT from a parse error\n\
+             %s\n"
+            name needle
+            (try read_whole log with _ -> ""))
+      in
+      (* ---------------- the definition, over a satisfiable model ---------------- *)
+      let e, opb = reif_sat_model dir "def" ~constrain_reifier:false in
+      let pbp = Filename.concat dir "def.pbp" in
+      let oc = open_out pbp in
+      (* No audit: the two definition ids are deliberately still live at the [sol], so
+         that the logged solution has to satisfy them. *)
+      let w = Writer.create ~comments:true ~audit:false oc in
+      Encoding.start_proof e w;
+      ignore (Encoding.define_reif_int_lin_le e w ~reifier:"$r" [ (1, "x") ] 1);
+      Writer.conclusion w
+        (Writer.Sat (Encoding.assignment_lits e [ ("x", 3); ("$r", 0) ]));
+      close_out oc;
+      check
+        "M3-T1: veripb accepts a red-defined reifier over a SATISFIABLE model -- the \
+         redundance goals are real here, and the logged solution satisfies both rows"
+        (run opb pbp);
+      if not (run opb pbp) then
+        Printf.printf "  model: %s\n  proof: %s\n%s\n" opb pbp
+          (try read_whole log with _ -> "");
+      let accepted_text = read_whole pbp in
+      let rewrite name f =
+        let path = Filename.concat dir (name ^ ".pbp") in
+        let oc = open_out path in
+        output_string oc
+          (String.concat "\n" (List.map f (String.split_on_char '\n' accepted_text)));
+        close_out oc;
+        path
+      in
+      let is_red l =
+        let t = String.trim l in
+        let n = String.length t in
+        let rec go i = i + 4 <= n && (String.sub t i 4 = "red " || go (i + 1)) in
+        go 0
+      in
+      let ends_with suf l =
+        let n = String.length suf and m = String.length l in
+        m >= n && String.sub l (m - n) n = suf
+      in
+      (* (a) the two witnesses swapped. The forward half under `-> 1` asserts the
+         condition outright, which x's ladder alone does not entail. *)
+      let swapped =
+        rewrite "swapped" (fun l ->
+            if is_red l then
+              String.sub l 0 (String.length l - 6)
+              ^ if ends_with "-> 0 ;" l then "-> 1 ;" else "-> 0 ;"
+            else l)
+      in
+      rejected_saying
+        "M3-T1: veripb REJECTS the definition with its two witnesses swapped" ~opb
+        ~pbp:swapped ~needle:"Proofgoal #1 could not be autoproven";
+      (* (b) the forward half's big-M one too small. Still a definition-shaped line,
+         still well formed, and now too strong -- the constant is not decoration. *)
+      let small_m =
+        rewrite "small_m" (fun l ->
+            if is_red l && ends_with "-> 0 ;" l then
+              let rec replace i =
+                if i + 3 > String.length l then l
+                else if String.sub l i 3 = "+2 " then
+                  String.sub l 0 i ^ "+1 " ^ String.sub l (i + 3) (String.length l - i - 3)
+                else replace (i + 1)
+              in
+              replace 0
+            else l)
+      in
+      rejected_saying "M3-T1: veripb REJECTS a forward half whose big-M is one too small"
+        ~opb ~pbp:small_m ~needle:"Proofgoal #1 could not be autoproven";
+      (* (c) the witness after the terminator -- the trap lib/proof/opb.ml:74 records.
+         It is SILENTLY not a witness: 3.0.2 emits "A witness must be specified for the
+         red-rule" as a WARNING and carries on, and what fails is the redundance goal
+         further down. Over a contradictory model even that goal discharges -- see the
+         last lane of this function -- so a witness written after the `;` would be
+         accepted with nothing but a warning. Only the wording says which failure this
+         is, which is why it is the wording that is asserted. *)
+      let after_semi =
+        rewrite "after_semi" (fun l ->
+            if is_red l then
+              match String.index_opt l ':' with
+              | Some i ->
+                  let body = String.sub l 0 i in
+                  let w = String.trim (String.sub l (i + 1) (String.length l - i - 1)) in
+                  body ^ "; " ^ String.sub w 0 (max 0 (String.length w - 1))
+              | None -> l
+            else l)
+      in
+      rejected_saying
+        "M3-T1: veripb REJECTS a red whose witness sits after the terminator" ~opb
+        ~pbp:after_semi ~needle:"A witness must be specified for the red-rule";
+      (* (d) a reifier the .opb already constrains. THE measurement behind the
+         freshness precondition: the witness has to discharge that row under the
+         substitution and cannot. It is why a model-declared reified bool gets its
+         meaning from a .opb row and never from a `red`. [define_reif] refuses this
+         outright, so the rows are emitted by hand -- the point is that the CHECKER
+         answers, not our guard. *)
+      let e2, opb2 = reif_sat_model dir "notfresh" ~constrain_reifier:true in
+      let pbp2 = Filename.concat dir "notfresh.pbp" in
+      let oc = open_out pbp2 in
+      let w2 = Writer.create ~comments:true ~audit:false oc in
+      Encoding.start_proof e2 w2;
+      let fwd2, bwd2 =
+        Encoding.reif_rows ~reifier:"b"
+          ~cond:(Encoding.expand_int_lin_le e2 [ (1, "x") ] 1)
+      in
+      let bv = (Lit.bool_true "b").Lit.v in
+      ignore (Writer.red w2 ~origin:"by hand" ~witness:[ (bv, Writer.Zero) ] fwd2);
+      ignore (Writer.red w2 ~origin:"by hand" ~witness:[ (bv, Writer.One) ] bwd2);
+      Writer.conclusion w2 (Writer.Sat (Encoding.assignment_lits e2 [ ("x", 0) ]));
+      close_out oc;
+      rejected_saying
+        "M3-T1: veripb REJECTS a red-defined reifier the .opb already constrains -- the \
+         freshness precondition is the checker's, not ours"
+        ~opb:opb2 ~pbp:pbp2 ~needle:"Proofgoal 3 could not be autoproven";
+      (* ---------------- the definition, cited ---------------- *)
+      (* A definition nothing cites is not evidence. Here the contradiction is derived
+         THROUGH the reifier: `~r` from the forward half, `r` from the backward half,
+         and those two against each other. *)
+      let e3, opb3, _, c_hi3, c_lo3 = reif_unsat_model dir "lazy" ~reifier_in_opb:false in
+      let pbp3 = Filename.concat dir "lazy.pbp" in
+      let oc = open_out pbp3 in
+      let w3 = Writer.create ~comments:true ~audit:true oc in
+      Encoding.start_proof e3 w3;
+      let r3 = Encoding.define_reif_int_lin_le e3 w3 ~reifier:"$r" [ (1, "x") ] 1 in
+      let contra3 =
+        refute_through_reifier e3 w3 ~reifier:"$r" ~fwd:(Encoding.reif_fwd r3)
+          ~bwd:(Encoding.reif_bwd r3) ~c_hi:c_hi3 ~c_lo:c_lo3
+      in
+      Encoding.retire_reif w3 r3;
+      Writer.conclusion w3 (Writer.Unsat (Some contra3));
+      close_out oc;
+      check
+        "M3-T1: veripb accepts a refutation derived THROUGH a red-defined reifier, both \
+         halves cited"
+        (run opb3 pbp3);
+      if not (run opb3 pbp3) then
+        Printf.printf "  model: %s\n  proof: %s\n%s\n" opb3 pbp3
+          (try read_whole log with _ -> "");
+      (* The same derivation, over the SAME rows, reached through the .opb door: this
+         is what a model-declared reified bool looks like, and it is the check that the
+         two doors really do agree about the encoding. *)
+      let e4, opb4, rows4, c_hi4, c_lo4 =
+        reif_unsat_model dir "eager" ~reifier_in_opb:true
+      in
+      let fwd4, bwd4 = Option.get rows4 in
+      let pbp4 = Filename.concat dir "eager.pbp" in
+      let oc = open_out pbp4 in
+      let w4 = Writer.create ~comments:true ~audit:true oc in
+      Encoding.start_proof e4 w4;
+      let contra4 =
+        refute_through_reifier e4 w4 ~reifier:"b" ~fwd:fwd4 ~bwd:bwd4 ~c_hi:c_hi4
+          ~c_lo:c_lo4
+      in
+      Writer.conclusion w4 (Writer.Unsat (Some contra4));
+      close_out oc;
+      check
+        "M3-T1: the same derivation over the same two rows is accepted when they are \
+         .opb rows instead -- the two doors agree"
+        (run opb4 pbp4);
+      (* THE FINDING THAT SHAPES THIS WHOLE TEST, pinned so it cannot quietly stop
+         being true: over a CONTRADICTORY .opb the swapped-witness definition above is
+         ACCEPTED. Every redundance goal discharges from a contradictory database, so
+         "veripb accepted the red line" is not evidence unless the model is
+         satisfiable. This is the reason lane (a) does not live here. *)
+      let pbp5 = Filename.concat dir "vacuous.pbp" in
+      let oc = open_out pbp5 in
+      let w5 = Writer.create ~comments:true ~audit:true oc in
+      Encoding.start_proof e3 w5;
+      let bad = (Lit.bool_true "$q").Lit.v in
+      let fwd5, bwd5 =
+        Encoding.reif_rows ~reifier:"$q"
+          ~cond:(Encoding.expand_int_lin_le e3 [ (1, "x") ] 1)
+      in
+      (* Both witnesses wrong, on purpose. *)
+      let a5 = Writer.red w5 ~origin:"wrong" ~witness:[ (bad, Writer.One) ] fwd5 in
+      let b5 = Writer.red w5 ~origin:"wrong" ~witness:[ (bad, Writer.Zero) ] bwd5 in
+      let cons2 = Option.get (Encoding.consistency_id e3 "x" 2) in
+      let x_ge_2 = Writer.pol w5 ~origin:"x >= 2" Pol.(sum [ id c_hi3; id cons2 ]) in
+      let contra5 =
+        Writer.pol w5 ~origin:"x >= 2 against x <= 1" Pol.(sum [ id x_ge_2; id c_lo3 ])
+      in
+      Writer.delete_many w5 [ a5; b5; x_ge_2 ];
+      Writer.conclusion w5 (Writer.Unsat (Some contra5));
+      close_out oc;
+      check
+        "M3-T1 (measured, and the reason the definition lane uses a satisfiable model): \
+         over a CONTRADICTORY .opb veripb accepts a red whose witnesses are both wrong"
+        (run opb3 pbp5);
+      Sys.readdir dir
+      |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
+      try Sys.rmdir dir with _ -> ())
+
 (* Say which checker every I-X1 check in the suite is talking to, and its version.
    "veripb accepted it" is only meaningful if you know which veripb, and until M1-T18
    the answer was whichever build happened to come first on PATH -- which on the
@@ -1812,6 +2329,10 @@ let () =
   test_v3_veripb ();
   test_pol_states_its_conclusion ();
   test_learned_survives_the_backjump ();
+  test_reif_rows ();
+  test_reif_preconditions ();
+  test_reif_emitted_text ();
+  test_reif_veripb ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
