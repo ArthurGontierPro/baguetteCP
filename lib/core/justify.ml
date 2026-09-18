@@ -374,13 +374,28 @@ let emit_linear ctx terms rhs =
    hatch here on purpose -- a caller wanting to subtract a reason should be weakening or
    negating literals inside the reason itself, not asking [Cut] to do it, since [Cut]'s
    coefficients are exactly what get handed to [Pol.mul]. *)
-let emit_cut ~emit ctx e1 e2 c1 c2 =
+(* One [pol], or one [pol] that states what it concludes -- docs/DECISIONS.md D-0043.
+
+   [claim = None] is what every caller got before M2-L0 and is still what [emit] passes:
+   a bare [pol], whose content the checker recomputes and never compares against
+   anything. [Some c] routes the same expression through [Writer.pol_concluding], which
+   writes the derivation, an `ia` stating [c] against it, and a `del` of the derivation,
+   and hands back the id of the CLAIM. M1-T51 measured what that buys: a [pol] truncated
+   so it derives something strictly weaker than the bound the propagator actually set is
+   ACCEPTED bare and REJECTED once the claim is on the page. This function is the first
+   caller either rule has had in [lib/] since M1-T51 built them. *)
+let pol_stating ctx ~origin ~claim expr =
+  match claim with
+  | None -> Writer.pol ctx.writer ~origin expr
+  | Some c -> Writer.pol_concluding ctx.writer ~origin ~claim:c expr
+
+let emit_cut ~emit ~claim ctx e1 e2 c1 c2 =
   if c1 < 1 || c2 < 1 then
     invalid_arg
       (Printf.sprintf "Justify.emit: Cut coefficients must be >= 1, got (%d, %d)" c1 c2);
   let id1 = emit ctx e1 in
   let id2 = emit ctx e2 in
-  Writer.pol ctx.writer
+  pol_stating ctx ~claim
     ~origin:(Printf.sprintf "cut(%d*%d + %d*%d)" c1 id1 c2 id2)
     Pol.(add (mul (id id1) c1) (mul (id id2) c2))
 
@@ -425,7 +440,7 @@ let emit_summand ~emit ctx = function
          Pol.mul (Pol.axiom l0) c0)
         (List.tl lits)
 
-let emit_combine ~emit ctx summands divisor =
+let emit_combine ~emit ~claim ctx summands divisor =
   (match summands with
   | [] -> invalid_arg "Justify.emit: Combine must have at least one summand"
   | _ -> ());
@@ -436,7 +451,7 @@ let emit_combine ~emit ctx summands divisor =
       (List.tl summands)
   in
   let expr = if divisor <= 1 then expr else Pol.div expr divisor in
-  Writer.pol ctx.writer
+  pol_stating ctx ~claim
     ~origin:(Printf.sprintf "combine(%d summand(s), / %d)" (List.length summands) divisor)
     expr
 
@@ -476,7 +491,60 @@ let rec emit ctx (e : Explanation.t) : Writer.cid =
   | Explanation.Linear (terms, rhs) ->
       memoized ctx e (fun () -> emit_linear ctx terms rhs)
   | Explanation.Cut (e1, e2, c1, c2) ->
-      memoized ctx e (fun () -> emit_cut ~emit ctx e1 e2 c1 c2)
+      memoized ctx e (fun () -> emit_cut ~emit ~claim:None ctx e1 e2 c1 c2)
   | Explanation.Combine (summands, divisor) ->
-      memoized ctx e (fun () -> emit_combine ~emit ctx summands divisor)
+      memoized ctx e (fun () -> emit_combine ~emit ~claim:None ctx summands divisor)
   | Explanation.Deferred _ -> memoized ctx e (fun () -> emit ctx (Explanation.force e))
+
+(* [emit_concluding ctx ~concludes e] renders [e] exactly as [emit] does, except that
+   where the rendering is a [pol] -- and only there -- the [pol] states what it concludes.
+
+   [~concludes] is [Reason.justified]'s D-0043 field, passed through rather than
+   recovered: a [Combine] records how a bound was derived and not what, which is the
+   whole of why the field exists. The claim is the conclusion's order literal as a
+   one-literal constraint, which is the same clause lib/core/trace.ml writes for the same
+   pruning, so the `ia` and the trace line cannot claim two different bounds.
+
+   Four cases fall through to [emit], and each falls through for its own reason rather
+   than for lack of coverage:
+
+     - [None], or a conclusion at its declared bound. [Reason.lit_of_fact] is [None]
+       there because the encoding states that bound as the constant true (PROOF-FORMAT
+       section 3), so there is no literal to claim and an `ia` of the constant true would
+       be a line that says nothing.
+     - [Clause] and [Linear] are [rup], and a [rup] already names its own target
+       outright: the claim is the line. Wrapping one in an `ia` would restate it.
+     - [Model_row] mints no line at all. Its id is the row's, and a conclusion stated
+       against it would claim the ROW implies the bound, which is exactly the D-0020
+       restatement defect.
+     - [Decision] raises, in [emit], as it must.
+
+   It deliberately neither consults nor populates the memo. The memo maps an explanation
+   to the id of the constraint emitted for it, and what this returns for a [Combine] is
+   the id of the CLAIM, not of the derivation -- a strictly weaker constraint. Handing
+   that back to a later plain [emit] of the same explanation would give a parent [Cut] an
+   operand that is not what it asked for, which is the silent-weakening failure this whole
+   task exists to close. Two demands of one concluding explanation therefore write two
+   lines; there is no live caller yet for which that matters, and the alternative is
+   unsound. *)
+let emit_concluding ctx ~(concludes : Reason.fact option) (e : Explanation.t) : Writer.cid
+    =
+  let rec go e =
+    match Option.bind concludes Reason.lit_of_fact with
+    | None -> emit ctx e
+    | Some l -> (
+        (* The same hygiene [emit_clause] applies to a reason's literals: a conclusion
+           about a variable this encoding never declared is a caller's mistake and says
+           so here, not several lines later inside veripb. *)
+        validate_lits ctx [ l ];
+        let claim = Some (Opb.clause [ l ]) in
+        match e with
+        | Explanation.Cut (e1, e2, c1, c2) -> emit_cut ~emit ~claim ctx e1 e2 c1 c2
+        | Explanation.Combine (summands, divisor) ->
+            emit_combine ~emit ~claim ctx summands divisor
+        | Explanation.Deferred _ -> go (Explanation.force e)
+        | Explanation.Clause _ | Explanation.Linear _ | Explanation.Model_row _
+        | Explanation.Decision _ ->
+            emit ctx e)
+  in
+  go e
