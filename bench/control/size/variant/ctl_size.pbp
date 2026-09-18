@@ -7,7 +7,7 @@ f 4 ;
 @c2 rup +1 v2_ge_1 >= 1 ;
 @c3 rup +1 v3_ge_0 >= 1 ;
 @c9 rup +1 ~v0_ge_0 +1 v0_ge_1 +1 v1_ge_1 +1 v2_ge_0 +1 v2_ge_1 +1 v3_ge_0 >= 1 ;
-@c14 pol @c7 @c12 + @c13 + @c9 + @c1 + @c2 + @c3 + ;
+@c14 pol @c7 v4_ge_1 + @c12 + v5_ge_1 + v6_ge_0 + v7_ge_1 + @c13 + v8_ge_0 + @c9 + ;
 del id @c14 ;
 output NONE ;
 conclusion SAT ;

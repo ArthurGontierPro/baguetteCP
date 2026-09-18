@@ -587,10 +587,14 @@ solver alone on `width_root_unsat.fzn`, the heaviest model in the suite) -- far 
 **The control**, `bench/explanation_size.sh -c` (`bench/control/size/`, see
 `README-scenes.txt` there): a hand-authored `.pbp` fixture pair, tight vs. the same
 derivation deliberately widened, asserting both `rup_lits` and `pol_prems` come out
-strictly larger on the widened one. Verified by breaking the measurement code itself and
-watching `-c` fail, and once by breaking it in a way this particular fixture cannot catch
-(recorded in `README-scenes.txt` rather than hidden) -- exactly the shape M2-L8's control
-verification took in section 7.
+strictly larger on the widened one. The `pol` chain's widening is split across an `@c`-id
+part (held fixed) and a bare-literal part (the only thing that grows), because the largest
+real `pol_prems` figure in this baseline (`width_root_unsat`, 1999.0000) is almost entirely
+bare-literal premises -- so a regression in counting them is exactly the failure this
+control must catch. Verified by breaking the measurement code three ways: dropping literal
+counting from `rup_lits`, restricting `pol_prems` to `@c`-labelled tokens, and hard-coding
+`pol_prems` to a constant -- `-c` fails on all three, each naming which figure "did not
+grow" -- exactly the shape M2-L8's control verification took in section 7.
 
 ## 4. What the columns are *not*
 
