@@ -1,0 +1,56 @@
+% M2-L14. PIGEONHOLE 6 -> 5. The suite's first model with a real search TREE.
+%
+% x[(p-1)*5 + h] = 1 means pigeon p sits in hole h. Six pigeons, five holes:
+%
+%   sum_h x[p][h] = 1   for each pigeon p   (int_lin_eq -- every pigeon is housed)
+%   sum_p x[p][h] <= 1  for each hole h     (int_lin_le -- no hole takes two)
+%
+% UNSAT, and unsatisfiable for a reason no bounds propagator at the root can see: the
+% counting argument needs a case split, which is exactly why this is a search rather
+% than a root refutation.
+%
+% WHY THIS MODEL EXISTS (M2-L14). Before it, the largest search in the whole suite was
+% `width_sat_depth` at 99 nodes -- and that is a WIDTH fixture, a spine rather than a
+% search -- while every other model was <= 10 nodes. Conflict learning pays off when the
+% SAME conflict recurs in a DIFFERENT subtree, and a ten-node tree has no second subtree.
+% So M2-L12's "learned-constraint propagation changes nothing, suite-wide" was at least
+% partly a statement about the instrument. This is the instrument.
+%
+% MEASURED 2026-09-18 (`--stats`, this exact file):
+%
+%   BAGUETTE_PROPAGATE_LEARNED=on    107 nodes,  53 decisions, maxdepth 10,  54 learned
+%   BAGUETTE_PROPAGATE_LEARNED=off   239 nodes, 119 decisions, maxdepth 10, 120 learned
+%
+% 2.23x. On every pre-M2-L14 model in the suite that same ablation moves NOTHING.
+%
+% WHY EVERY VARIABLE IS 0..1. Two reasons, and they are the whole point of M2-L14.
+%
+% (1) D-0028: the order encoding is width-proportional, so hardness must come from
+%     COMBINATORIAL STRUCTURE, not from domain width. `var 0..1000` is not a bigger
+%     test, it is a thousand ladder clauses. Many variables, single-value domains.
+%
+% (2) A 0..1 variable can be branched AT MOST ONCE on any root-to-leaf path, so every
+%     level of the tree branches a DIFFERENT variable. lib/core/search.ml's
+%     [spec_order] splits at `d_split = lo`, i.e. `x <= 0` against `x >= 1`; on a
+%     domain of {0,1} BOTH children are singletons, so [first_fail] (which only ever
+%     considers unfixed variables) cannot pick it again below. That is a property of
+%     the encoding, not a hope about the heuristic.
+%
+%     This matters because M2-L12 measured that the suite's integer models re-branch
+%     the SAME variable down a spine -- the right child of `x <= k` still has a
+%     multi-value domain -- so a learned constraint was always exactly the branch the
+%     search was about to take anyway. A model that does not branch different
+%     variables cannot show learning however many nodes it has.
+array [1..30] of var 0..1: x;
+constraint int_lin_eq([1,1,1,1,1],[x[1],x[2],x[3],x[4],x[5]],1);
+constraint int_lin_eq([1,1,1,1,1],[x[6],x[7],x[8],x[9],x[10]],1);
+constraint int_lin_eq([1,1,1,1,1],[x[11],x[12],x[13],x[14],x[15]],1);
+constraint int_lin_eq([1,1,1,1,1],[x[16],x[17],x[18],x[19],x[20]],1);
+constraint int_lin_eq([1,1,1,1,1],[x[21],x[22],x[23],x[24],x[25]],1);
+constraint int_lin_eq([1,1,1,1,1],[x[26],x[27],x[28],x[29],x[30]],1);
+constraint int_lin_le([1,1,1,1,1,1],[x[1],x[6],x[11],x[16],x[21],x[26]],1);
+constraint int_lin_le([1,1,1,1,1,1],[x[2],x[7],x[12],x[17],x[22],x[27]],1);
+constraint int_lin_le([1,1,1,1,1,1],[x[3],x[8],x[13],x[18],x[23],x[28]],1);
+constraint int_lin_le([1,1,1,1,1,1],[x[4],x[9],x[14],x[19],x[24],x[29]],1);
+constraint int_lin_le([1,1,1,1,1,1],[x[5],x[10],x[15],x[20],x[25],x[30]],1);
+solve satisfy;

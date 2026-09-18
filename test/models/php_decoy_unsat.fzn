@@ -1,0 +1,54 @@
+% M2-L14. PIGEONHOLE 5 -> 4 UNDER SIX SPECTATORS. The backjump_deep_unsat.fzn shape
+% (M2-L10) at a scale where the thing it skips is a SEARCH and not a handful of nodes.
+%
+% a[1..6] are unconstrained. They are declared FIRST, and every variable here has the
+% same domain width, so first-fail's tie-break (declaration order -- lib/core/search.ml
+% [first_fail], docs/SPEC.md 3.4) branches all six of them before it touches the
+% pigeonhole. The refutation below them names none of their levels, so a nogood is
+% already false without any a-decision and each of the six frames skips its sibling.
+%
+% Why this one is worth a slot next to php_unsat.fzn: here the recurrence obligation
+% (c) asks about is true BY CONSTRUCTION rather than by counting -- the 2^6 assignments
+% of a are 64 subtrees in which the identical pigeonhole conflict is reachable, and
+% `skipped` counts what the search did not have to re-enter.
+%
+% MEASURED 2026-09-18 (`--stats`, this exact file):
+%
+%   BAGUETTE_PROPAGATE_LEARNED=on    41 nodes, 23 decisions, maxdepth 12, 6 skipped
+%   BAGUETTE_PROPAGATE_LEARNED=off   53 nodes, 29 decisions, maxdepth 12, 6 skipped
+%
+% `skipped` is 6 in BOTH columns and that is the point of stating it: the six sibling
+% subtrees are cut by BACKJUMPING, which predates M2-L12, while the 41-vs-53 node gap
+% is what learned-constraint PROPAGATION adds on top. The two effects are separable
+% here, which they are not in php_unsat.fzn.
+%
+% WHY EVERY VARIABLE IS 0..1. Two reasons, and they are the whole point of M2-L14.
+%
+% (1) D-0028: the order encoding is width-proportional, so hardness must come from
+%     COMBINATORIAL STRUCTURE, not from domain width. `var 0..1000` is not a bigger
+%     test, it is a thousand ladder clauses. Many variables, single-value domains.
+%
+% (2) A 0..1 variable can be branched AT MOST ONCE on any root-to-leaf path, so every
+%     level of the tree branches a DIFFERENT variable. lib/core/search.ml's
+%     [spec_order] splits at `d_split = lo`, i.e. `x <= 0` against `x >= 1`; on a
+%     domain of {0,1} BOTH children are singletons, so [first_fail] (which only ever
+%     considers unfixed variables) cannot pick it again below. That is a property of
+%     the encoding, not a hope about the heuristic.
+%
+%     This matters because M2-L12 measured that the suite's integer models re-branch
+%     the SAME variable down a spine -- the right child of `x <= k` still has a
+%     multi-value domain -- so a learned constraint was always exactly the branch the
+%     search was about to take anyway. A model that does not branch different
+%     variables cannot show learning however many nodes it has.
+array [1..6] of var 0..1: a;
+array [1..20] of var 0..1: x;
+constraint int_lin_eq([1,1,1,1],[x[1],x[2],x[3],x[4]],1);
+constraint int_lin_eq([1,1,1,1],[x[5],x[6],x[7],x[8]],1);
+constraint int_lin_eq([1,1,1,1],[x[9],x[10],x[11],x[12]],1);
+constraint int_lin_eq([1,1,1,1],[x[13],x[14],x[15],x[16]],1);
+constraint int_lin_eq([1,1,1,1],[x[17],x[18],x[19],x[20]],1);
+constraint int_lin_le([1,1,1,1,1],[x[1],x[5],x[9],x[13],x[17]],1);
+constraint int_lin_le([1,1,1,1,1],[x[2],x[6],x[10],x[14],x[18]],1);
+constraint int_lin_le([1,1,1,1,1],[x[3],x[7],x[11],x[15],x[19]],1);
+constraint int_lin_le([1,1,1,1,1],[x[4],x[8],x[12],x[16],x[20]],1);
+solve satisfy;
