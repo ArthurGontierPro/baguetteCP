@@ -549,6 +549,36 @@ let rec emit ctx (e : Explanation.t) : Writer.cid =
    task exists to close. Two demands of one concluding explanation therefore write two
    lines; there is no live caller yet for which that matters, and the alternative is
    unsound. *)
+(* M2-L6: emit [e] as a [pol] that STATES the constraint [claim], where [e] renders to a
+   [pol] at all.
+
+   [emit_concluding] below does the same thing for a pruning, whose claim is always a
+   one-literal constraint read off a [Reason.fact]. A learned PB inequality is not a
+   literal and not a bound, so it cannot go through that door; what it has is an [Opb.t]
+   it believes the derivation evaluates to. The value of saying so is described at
+   [Pb_analysis.introduce]: it makes the checker compare our arithmetic against its own,
+   at the line where they would first differ.
+
+   The three constructors that are not a [pol] fall through to [emit] unchanged, exactly
+   as they do in [emit_concluding], and for the same reason: there is no expression for an
+   `ia` to conclude from. A [Model_row] in particular returns an id that is already on the
+   page and states nothing, so a caller that needs the claim checked must hand this
+   function a derivation with at least one real step in it -- [Pb_analysis] guarantees
+   that by refusing to learn at zero eliminations. *)
+let emit_stating ctx ~(claim : Opb.constr) (e : Explanation.t) : Writer.cid =
+  let rec go (e : Explanation.t) =
+    match e with
+    | Explanation.Cut (e1, e2, c1, c2) ->
+        emit_cut ~emit ~claim:(Some claim) ctx e1 e2 c1 c2
+    | Explanation.Combine (summands, divisor) ->
+        emit_combine ~emit ~claim:(Some claim) ctx summands divisor
+    | Explanation.Deferred _ -> go (Explanation.force e)
+    | Explanation.Clause _ | Explanation.Linear _ | Explanation.Model_row _
+    | Explanation.Decision _ ->
+        emit ctx e
+  in
+  go e
+
 let emit_concluding ctx ~(concludes : Reason.fact option) (e : Explanation.t) : Writer.cid
     =
   let rec go e =

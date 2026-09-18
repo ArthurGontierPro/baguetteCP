@@ -156,6 +156,52 @@ let make ~row_id store raw_terms rhs =
 let base_explanation t = Explanation.model_row t.row_id
 let vars t = List.map (fun tm -> tm.x) t.terms
 
+(* ------------------------------------------------------- M2-L6: this row, as the .opb
+
+   The row [sum a_i x_i <= rhs] rewritten over order literals, in the ">=" form
+   [Propagator.pb_row] wants. The identity is the order encoding's own
+   (docs/PROOF-FORMAT.md section 3):
+
+     x_i  =  lo_i + sum_{v = lo_i+1}^{hi_i} [x_i >= v]
+
+   so, substituting and moving the constant across,
+
+     sum_i a_i x_i <= rhs
+     sum_i a_i lo_i  +  sum_i sum_v a_i [x_i >= v]  <=  rhs
+     sum_i sum_v (-a_i) [x_i >= v]  >=  (sum_i a_i lo_i) - rhs
+
+   which is what is returned. Negative coefficients are left as they are: normalising
+   them is [Learned.make]'s job and doing it in two places is how the two forms drift
+   apart.
+
+   [decl_lo]/[decl_hi] and NOT the live domain -- that is the whole of this function's
+   correctness. The .opb contains the ladder of the DECLARED domain; a row built from
+   narrowed bounds would be a different constraint from the one [row_id] names, and every
+   [pol] citing it would derive something the checker never agreed to. The store is read
+   for [Store.name] only, which does not move. See [Propagator.pb_row].
+
+   A term with [a_i = 0] contributes nothing at all, and a singleton declared domain has
+   no rungs and contributes only its constant -- both exactly as
+   [Encoding.linear_terms_int_lin_le] does it, because these two must agree literally or
+   [row_id] names a row this function cannot reproduce. test_learn.ml pins that agreement
+   on every model row the suite compiles. *)
+let pb_row store (t : t) : Propagator.pb_row =
+  let terms, const =
+    List.fold_left
+      (fun (acc, const) tm ->
+        if tm.coeff = 0 then (acc, const)
+        else
+          let name = Store.name store tm.x in
+          let rungs =
+            List.init
+              (max 0 (tm.decl_hi - tm.decl_lo))
+              (fun i -> (-tm.coeff, Lit.ge name (tm.decl_lo + 1 + i)))
+          in
+          (acc @ rungs, Checked.add const (Checked.mul tm.coeff tm.decl_lo)))
+      ([], 0) t.terms
+  in
+  { Propagator.r_terms = terms; r_degree = Checked.sub const t.rhs; r_cid = t.row_id }
+
 (* -------------------------------------------------------------- integer division *)
 
 (* [Stdlib.(/)] truncates toward zero, which is the wrong rounding for a negative

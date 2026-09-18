@@ -238,9 +238,36 @@ type stats = {
   mutable i_s4_crossings : int; (* ...of which sit above level 0 -- data, not a fault *)
   mutable i_s4_broken_rev : string list; (* ...of which were already retired: faults *)
   mutable n_min_dropped : int;
-      (* Literals semantic minimisation removed from a nogood. A reduction that never
-         fires is a reduction whose break lane cannot redden, which is why it is counted
-         rather than assumed to be doing something. *)
+  (* Literals semantic minimisation removed from a nogood. A reduction that never
+     fires is a reduction whose break lane cannot redden, which is why it is counted
+     rather than assumed to be doing something. *)
+  (* ------------------------------------------------------------------ M2-L6 *)
+  mutable n_pb_attempts : int;
+      (* Conflicts PB analysis was asked about. The denominator of the fallback rate, and
+         NOT [n_learned]: a conflict at no decision level is never analysed at all. *)
+  mutable n_pb_learned : int; (* ...of which produced a PB row that went on the page *)
+  mutable n_pb_fallback : int;
+      (* ...of which handed the conflict back to the M2-L3 clause path. This is the
+         counter docs/ROADMAP.md M2-L6 test (b) exists for: the clause path is permanent
+         (D-0044), so a build that ALWAYS fell back would look green in every other
+         measure the suite has. It cannot look green in this one. *)
+  mutable n_pb_steps : int; (* pivots eliminated, over all successful analyses *)
+  mutable n_pb_converts : int;
+      (* ...of which [Learned.to_linear_row] accepts, i.e. which could be a runtime
+         instance. Measured against the clause path's [n_converts], which is the
+         comparison lib/core/pb_analysis.ml's "why the PB row can propagate where the
+         clause cannot" makes and does not assume. *)
+  mutable n_pb_stronger : int;
+      (* ...of which convert where the SAME conflict's clause does not. This is test (a)
+         as a counter: the number of times this row did something M2-L3 could not. *)
+  mutable pb_rows_rev : Pb_analysis.t list;
+      (* The PB rows learned, newest first, capped. Kept so a test can run the ORACLE on
+         what a real solve actually derived -- test (e) -- instead of on a scene built to
+         make the oracle pass. Capped for the reason [bridges_rev] is. *)
+  mutable pb_fallback_rev : string list;
+      (* Why, newest first, capped. A rate with no breakdown behind it cannot be acted
+         on, and the breakdown is what says whether the traffic is [No_row] (expected,
+         D-0044) or [Not_conflicting] (a finding about the reduction). *)
 }
 
 let stats_create () =
@@ -258,9 +285,35 @@ let stats_create () =
     i_s4_crossings = 0;
     i_s4_broken_rev = [];
     n_min_dropped = 0;
+    n_pb_attempts = 0;
+    n_pb_learned = 0;
+    n_pb_fallback = 0;
+    n_pb_steps = 0;
+    n_pb_converts = 0;
+    n_pb_stronger = 0;
+    pb_rows_rev = [];
+    pb_fallback_rev = [];
   }
 
 let stats_learned s = List.rev s.learned_rev
+
+(* ------------------------------------------------------------------ M2-L6 counters *)
+
+(* The same cap and the same reason as [bridge_cap]: keeping every reason of a long
+   search would be a leak in a process that shares 15 GB, and no caller needs more than
+   the first few. The RATE is computed from [n_pb_fallback], which is uncapped. *)
+let pb_reason_cap = 64
+let stats_pb_fallbacks s = List.rev s.pb_fallback_rev
+let stats_pb_rows s = List.rev s.pb_rows_rev
+
+(* The fraction of analysed conflicts that fell back to the clause path, in [0., 1.].
+   [0.] when nothing was analysed -- which is honestly "no fallbacks happened", and a
+   caller that needs to tell that apart from "none of the many attempts fell back" has
+   [n_pb_attempts] to look at. *)
+let stats_pb_fallback_rate s =
+  if s.n_pb_attempts = 0 then 0.
+  else float_of_int s.n_pb_fallback /. float_of_int s.n_pb_attempts
+
 let stats_i_s4_broken s = List.rev s.i_s4_broken_rev
 
 (* The bridges this search derived, oldest first, up to [bridge_cap] of them. *)
@@ -437,11 +490,47 @@ let extract_assignment store : assignment =
    [break_i_s4] retires the conflict level BEFORE the learned clause is derived instead
                 of after, which is this row's test (b) break -- D-0018 point 4 and I-S4
                 read backwards. The [rup] is then checked against a database that no
-                longer holds the trace lines it rests on. Also not CLI-reachable. *)
-type config = { learn : bool; policy : Learn.policy; break_i_s4 : bool }
+                longer holds the trace lines it rests on. Also not CLI-reachable.
 
-let default_config = { learn = true; policy = Learn.Strongest; break_i_s4 = false }
-let no_learning = { default_config with learn = false }
+   M2-L6 adds three, and the first is the one a reader should look at twice.
+
+   [pb]         PB conflict analysis (lib/core/pb_analysis.ml). On, and ADDITIVE: when it
+                succeeds, the derived inequality goes on the page ALONGSIDE the M2-L3
+                clause, not instead of it. That is not hedging. The clause is what the
+                search's nogood and backjump rest on -- through [Learn.levels], which come
+                from the decision closure and not from either learned object -- and M2-L3
+                owns a body of assertions about it that this row has no business
+                disturbing. What the PB row adds is a strictly stronger constraint on the
+                page, under D-0044's same fork (ii): proof-only until M2-L4's retention
+                policy decides which learned objects earn a runtime instance. Off is the
+                state every M2-L3 measurement was taken in, so a comparison against those
+                numbers has a switch to set.
+   [reduction]  which [Reduce.t] brings the pivot's coefficient to 1. [round_to_one]
+                dominates [division] (D-0044), and [division] is here so a test can show
+                the difference on a real conflict rather than on a hand-built row.
+   [pb_criterion] the slack-based stopping rule. See lib/core/pb_analysis.ml on why an
+                assertive constraint is not a sufficient stop condition for PB. *)
+type config = {
+  learn : bool;
+  policy : Learn.policy;
+  break_i_s4 : bool;
+  pb : bool;
+  reduction : Reduce.t;
+  pb_criterion : Pb_analysis.criterion;
+}
+
+let default_config =
+  {
+    learn = true;
+    policy = Learn.Strongest;
+    break_i_s4 = false;
+    pb = true;
+    reduction = Reduce.round_to_one;
+    pb_criterion = Pb_analysis.assertive_slack;
+  }
+
+let no_learning = { default_config with learn = false; pb = false }
+let no_pb = { default_config with pb = false }
 
 (* ------------------------------------------------------------------- nogoods
 
@@ -849,6 +938,53 @@ let bridges (ctx : Justify.ctx) trace stats store (decisions : Lit.t list) =
    the learned clause's [rup] is checked against them; and nothing has been wiped yet. The
    [break_i_s4] arm retires the conflict level first, which is the same three steps in the
    wrong order and is exactly what test (b) asserts the checker rejects. *)
+(* M2-L6: PB conflict analysis, alongside the clause. [clause_converts] is whether the
+   SAME conflict's M2-L3 clause would have converted, which is what makes [n_pb_stronger]
+   a comparison rather than a count.
+
+   Order: this runs AFTER [Learn.introduce] and therefore after the trace lines, the
+   conflict line and the bridges. It does not have to -- the derivation cites model rows
+   only, which are on the page before the first decision and are retired by nothing, so
+   it is the one learned object in this solver with no ordering obligation at all. It
+   runs here so that the two learned objects appear in the proof in the order a reader
+   would expect, and so that [stats.learned_rev] retires them newest-first.
+
+   The [Debug] check is lib/core/pb_analysis.ml's I-S4 discharge, made a check rather
+   than left a paragraph: the derivation must cite constraint ids that are on the page at
+   level 0. A [pol] citing a hole line across levels is the violation learn.ml's header
+   says M2-L6's reduction steps are the first thing that could write. *)
+let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_converts ~decl
+    =
+  if not (cfg.learn && cfg.pb) then ()
+  else (
+    stats.n_pb_attempts <- stats.n_pb_attempts + 1;
+    match
+      Pb_analysis.analyse store c ~row_of:(Engine.row_of engine store)
+        ~name_of:(Engine.name_of engine) ~reduction:cfg.reduction
+        ~criterion:cfg.pb_criterion
+    with
+    | Pb_analysis.Fallback f ->
+        stats.n_pb_fallback <- stats.n_pb_fallback + 1;
+        if List.length stats.pb_fallback_rev < pb_reason_cap then
+          stats.pb_fallback_rev <-
+            Pb_analysis.fallback_to_string f :: stats.pb_fallback_rev
+    | Pb_analysis.Learned_row t ->
+        Debug.check "I-S4: a PB derivation cites only model rows, which no `w` retires"
+          (fun () ->
+            List.for_all
+              (fun id -> id >= 0)
+              (Pb_analysis.cited_ids t.Pb_analysis.derivation));
+        let cid = Pb_analysis.introduce ctx t in
+        stats.n_pb_learned <- stats.n_pb_learned + 1;
+        stats.n_pb_steps <- stats.n_pb_steps + t.Pb_analysis.steps;
+        let converts = Learned.to_linear_row t.Pb_analysis.row ~decl <> None in
+        if converts then stats.n_pb_converts <- stats.n_pb_converts + 1;
+        if converts && not clause_converts then
+          stats.n_pb_stronger <- stats.n_pb_stronger + 1;
+        if List.length stats.pb_rows_rev < pb_reason_cap then
+          stats.pb_rows_rev <- t :: stats.pb_rows_rev;
+        stats.learned_rev <- cid :: stats.learned_rev)
+
 let rec learn_at_conflict engine store ctx trace stats cfg (c : Store.conflict) =
   if not cfg.learn then None
   else
@@ -872,8 +1008,11 @@ let rec learn_at_conflict engine store ctx trace stats cfg (c : Store.conflict) 
           (fun () -> broken = []);
         let cid = Learn.introduce ctx l in
         stats.n_learned <- stats.n_learned + 1;
-        if Learn.converts l then stats.n_converts <- stats.n_converts + 1;
+        let clause_converts = Learn.converts l in
+        if clause_converts then stats.n_converts <- stats.n_converts + 1;
         stats.learned_rev <- cid :: stats.learned_rev;
+        pb_at_conflict engine store ctx stats cfg c ~clause_converts
+          ~decl:(Learned.decl_of_encoding ctx.Justify.encoding);
         Some (Learn.levels l)
 
 and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list) : node =

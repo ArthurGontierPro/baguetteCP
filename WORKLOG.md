@@ -10,7 +10,10 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
-**Wave fourteen is running: M2-L6 (agent-pb) and M2-T14 (agent-fmt2).** agent-pb has all of
+**Wave fourteen: M2-T14 (agent-fmt2) is running. M2-L6 (agent-pb) is RELEASED — see
+`## Handoff notes`, "M2-L6 — PB conflict analysis".**
+
+Previously: **Wave fourteen was M2-L6 (agent-pb) and M2-T14 (agent-fmt2).** agent-pb has all of
 `lib/` — M2-L6 is the PB conflict analysis and touches the whole learning vertical — so its
 partner is deliberately **outside `lib/` entirely**: a read-only-over-`lib/` audit of the
 format-2.0 path. The two share no file; `test_justify.ml` goes to agent-fmt2, so agent-pb
@@ -1820,3 +1823,60 @@ anyone else wants the 2.0 path defended rather than merely swept once, the confi
 add is the one in the row: both `BAGUETTE_PROOF_FORMAT=2.0` and `VERIPB` pointing at the
 Python build. Setting only the first checks a 2.0 proof with the 3.0 checker and finds none
 of this.
+### M2-L6 — PB conflict analysis (agent-pb, wave fourteen)
+
+**Done and green**: 1963 unit checks (baseline 1895 on `main`, +68), 38/38 models with
+proofs verified, determinism / width lint / fmt clean, peak RSS 10.6 MB.
+
+**The row works and its fallback is honest.** Suite-wide: **86 conflicts analysed, 36 PB
+rows learned, 50 fallbacks — rate 0.581**, across 21 of the 38 models. Neither degenerate
+end. `--stats` prints `pb-tried / pb-learned / pb-fallback (rate) / pb-why / pb-steps /
+pb-convert / pb-stronger` on stderr. Fallback breakdown: `no PB row` dominates (12 of the
+distinct first-reasons — `int_ne`, `bool_clause`, `array_bool_or`, `bool_not`, `bool_eq`
+expose none, deliberately), then `no pivot left`, then two `postcondition failed`.
+
+**Two findings the next session needs.**
+
+1. **Our integer propagator is STRONGER than PB propagation on the same row**, and this is
+   the dominant non-`No_row` fallback. `3a + 2b <= 14` with `lo(b) = 4` lets `Linear`
+   deduce `a <= 2`, but the row's PB form has slack 6 against a pivot coefficient of 3, so
+   it does not PB-propagate the pivot and `Reduce`'s postcondition correctly refuses. The
+   missing information is the **ladder** implications, which are separate .opb rows.
+   `Linear` already builds exactly the right thing as an `Explanation`
+   (`Order_reason.weaken_declared`, D-0010) but not as a **row**. Resolving against the
+   derived row rather than the model row is the next step and is the single biggest
+   available gain; it is bigger than this row was. Written up in `pb_analysis.ml`'s
+   "MEASURED" section.
+2. **Where the PB path succeeds it derives the EMPTY CONTRADICTION**, not a non-trivial
+   inequality. On `backjump_lineq_unsat` the two halves of the `int_lin_eq` give
+   `sum >= 3` and `sum <= 2` after a Chvátal–Gomory division and add to `0 >= k/2`, in one
+   elimination, and veripb checks it. That is strictly stronger than the clause (it
+   entails it) and the clause path has no route to it — but it is **degenerate as a
+   propagation result**, and a scene where a non-trivial learned inequality outpropagates
+   its clause was looked for and **not found**. Test (a) asserts the truth rather than the
+   hoped-for shape. Finding (1) is why.
+
+**Design notes.** `Propagator.pb_row` is new: the inequality an instance *is*, as the .opb
+contains it, with the id that names it, defaulting to `None` so an untaught family is not
+silently credited with one. `Linear.pb_row` builds it from the **declared** ladder (I-X6).
+`Learned.combine` is the `pol` addition and its third stage **cancels complementary
+literals**, which `make` deliberately does not — both checkers normalise `l + ~l` away, so
+skipping it would leave our copy of the row disagreeing with theirs.
+`Justify.emit_stating` makes the learned row's `pol` **state what it derives**, so veripb's
+`ia` compares our arithmetic against its own; that is the strongest check on this row and
+it is why (c) is worth more than "the proof is accepted".
+
+`falsified` is frozen **at the propagation**, not at the conflict, reconstructed from the
+trail's own `old`/`now` pair. The conflict-time predicate would have made every reduction
+fail its own postcondition — a 100% fallback rate, not an unsound proof. That is the I-X6
+obligation `reduce.ml` left to its caller.
+
+**`explanation.ml` needed nothing.** D-0044's table has now held three times.
+
+The PB row goes on the page **alongside** the M2-L3 clause, not instead of it: the
+backjump rests on the decision closure either way, and M2-L3 owns assertions about the
+clause. `Search.no_pb` turns the path off for a comparison against M2-L3's numbers.
+
+**I-S4 for a `pol` is discharged** — `learn.ml` explicitly left this here. Every leaf of a
+derivation is a `Model_row` of the .opb; no hole line, trace line or conflict-level id is
+ever cited. `Pb_analysis.cited_ids` returns the set so it is checked, not argued.
