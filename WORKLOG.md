@@ -10,8 +10,13 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
-**No sessions are running; the claims table is empty.** Wave thirteen (M2-L5 agent-reduce,
-M2-L10 agent-cover) is merged, released and pushed. M2-L10 was the row that unblocks the
+**Wave fourteen is running: M2-L6 (agent-pb) and M2-T14 (agent-fmt2).** agent-pb has all of
+`lib/` — M2-L6 is the PB conflict analysis and touches the whole learning vertical — so its
+partner is deliberately **outside `lib/` entirely**: a read-only-over-`lib/` audit of the
+format-2.0 path. The two share no file; `test_justify.ml` goes to agent-fmt2, so agent-pb
+puts its justification tests in `test_learn.ml` / `test_analysis.ml`.
+
+Previously: wave thirteen (M2-L5 agent-reduce, M2-L10 agent-cover) is merged, released and pushed. M2-L10 was the row that unblocks the
 measurement half of M2-L4, M2-L6 and M2-L8, which were deliberately held back for it.
 
 Previously: **wave twelve was M2-L3, ALONE.** The M2-T3 briefing says twice that this row
@@ -24,6 +29,8 @@ worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 uni
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M2-L6 | all of `lib/`, `test/unit/test_learn.ml`, `test/unit/test_analysis.ml`, `test/unit/dune`, new files under `test/models/` + `test/expected/` | agent-pb | 2026-09-18 |
+| M2-T14 | `test/unit/test_justify.ml`, `test_proof.ml`, `test_mutation.ml`, `test_trace.ml`, `test_core.ml`, `test_matrix.ml`, `test_endtoend.ml` | agent-fmt2 | 2026-09-18 |
 
 _(M2-L3 released 2026-09-18 by agent-learn3 — see `## Completed` and `## M2-L3 handoff`.)_
 
