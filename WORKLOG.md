@@ -1420,3 +1420,49 @@ the M2-T9 claim index both stamp `Writer.current_level`, so they follow for free
   mid-search. The declared bounds come from `Encoding.domain`. Confined to `to_linear`.
 - Numbers: **1766 unit checks** (baseline 1723), **34/34 models**, determinism clean, fmt
   clean, width lint clean, peak RSS **21 MB** (`test_proof`, the heaviest binary).
+
+## Wave eleven handoff, 2026-09-18 (orchestrator)
+
+Two sessions, both merged and pushed. Gate green: **1781 unit checks** (1723 + 15 + 43),
+267 matrix, 44 mutation, **34/34 models**, determinism byte-identical.
+
+**M2-L1 did the thing this project keeps asking for and rarely gets: it measured the bug
+before fixing it.** D-0045 predicted that a learned constraint minted at the conflict level
+is deleted by the following backjump. It is, in both formats, and the two checkers' exact
+rejections are now in the record. The fix — `Writer.with_level`, a bracket — is *better
+than the one I proposed*, and for a reason I had already written down and then failed to
+follow: under 2.0 `t.tags` is not maintained, so the level must move **in the proof**, not
+in our table. A `fresh ~level` would have been green under 3.0 and wrong under 2.0.
+
+**M1-T66 is half done and correctly left open.** The bridge's absence is now observable at
+its *derivation*; it is still invisible to the *checker*, and that is structural in M1
+rather than a gap in anyone's testing. I confirmed both halves myself.
+
+### The one thing to read before M2-L3
+
+**`Learned.to_linear_row` returns `None` on a threshold strictly inside an integer
+variable's ladder — which is exactly what a 1UIP cut over integer variables produces.**
+D-0044 is confirmed in the *proof* and bounded in the *store*: order literals are variables
+in the `.opb` but not in the store, where `x >= 3` is a question about a domain rather than
+a handle. So M2-L3 must choose, deliberately and up front, between restricting the cut to
+the shapes that convert and accepting a **proof-only** learned constraint until a
+propagator exists. Both are sound. Discovering this halfway through would be expensive.
+
+See D-0044's 2026-09-18 amendment and D-0045's resolution section.
+
+### Two guards that are weaker than they look
+
+- **The `BAGUETTE_PROOF_AUDIT=1` live-set audit cannot see a double delete** — a second
+  `forget` is a no-op, so the set is already clean. It witnesses the "at least once" half
+  of I-X2 and not the "exactly once" half. **M2-L4 must not rely on it**, since its whole
+  subject is a retention policy that may want to delete what a backjump also deletes.
+- **`Engine.check_attribution`'s watcher arm does not catch a mis-stamp** that lands on
+  another instance which also watches the variable. M2-L2 found it, M2-L1 confirmed it: the
+  break is caught by the stamp-vs-runner arm instead. Two rows have now measured this; it
+  is a known hole, not a surprise.
+
+### A note on my own dispatches
+
+Three premises of mine have now been wrong in two waves, all caught by agents. The pattern
+is not carelessness about the code — it is **briefing from rows that a later note had
+already superseded**. When you kill a premise, strike the request row, not just the note.
