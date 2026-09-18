@@ -10,10 +10,11 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
-**Wave fourteen: M2-T14 (agent-fmt2) is running. M2-L6 (agent-pb) is RELEASED — see
-`## Handoff notes`, "M2-L6 — PB conflict analysis".**
+**No sessions are running; the claims table is empty.** Wave fourteen — M2-L6 (agent-pb)
+and M2-T14 (agent-fmt2) — is merged, released and pushed. **With M2-L6 in, the M2-L
+learning sequence is complete except M2-L4, M2-L7 and M2-L8.**
 
-Previously: **Wave fourteen was M2-L6 (agent-pb) and M2-T14 (agent-fmt2).** agent-pb has all of
+It was dispatched as: **M2-L6 (agent-pb) and M2-T14 (agent-fmt2).** agent-pb has all of
 `lib/` — M2-L6 is the PB conflict analysis and touches the whole learning vertical — so its
 partner is deliberately **outside `lib/` entirely**: a read-only-over-`lib/` audit of the
 format-2.0 path. The two share no file; `test_justify.ml` goes to agent-fmt2, so agent-pb
