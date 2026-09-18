@@ -1551,3 +1551,73 @@ today and it is deliberately the dumbest one. They are NOT retired at the backju
 learned clause whose lifetime is a level's has learned nothing. The `BAGUETTE_PROOF_AUDIT`
 live-set check still cannot see a double delete, so if M2-L4 adds a policy that may delete
 what something else deletes, count `del` lines rather than trusting the audit.
+
+## Wave twelve handoff, 2026-09-18 (orchestrator): M2-L3, and two numbers to keep
+
+One session, merged and pushed. Gate green: **1835 unit checks**, 267 matrix, 44 mutation,
+**35/35 models** (one added), determinism byte-identical, peak RSS 10.6 MB. Also green under
+`BAGUETTE_PROOF_FORMAT=2.0` against Python 2.2.2.
+
+**The row's own finding is the valuable part**, and it was not in the brief: *the backjump
+cannot rest on the 1UIP cut*. The levels a 1UIP cut names are **not a dependency set** — a
+non-root node at level j rests on facts at levels the cut never names — so backjumping to
+`Analysis.backjump_level` would skip a subtree that nothing had refuted. `Analysis.analyse`
+gained `?scope` and a `decision_closure` criterion whose level set is sound. The skip rule
+needs no CDCL progress argument: a nogood naming no literal of level `lvl` is already false
+under the decisions above it, so it refutes the sibling too.
+
+### I measured the whole suite, and it corrects two claims — one of mine, one of the agent's
+
+Ran `--stats` over all 35 models:
+
+| | |
+|---|---|
+| models that learn a clause | **18 of 35** (77 clauses total) |
+| models where a backjump **skips** a sibling | **1 of 35** — `backjump_unsat`, the model this row added. 2 skips in the whole suite |
+| clauses `to_linear_row` would accept | **11 of 77 (14%)**, concentrated in the `bool_*` models, `bool_reif_unsat`, `ne_eq_unsat`, `trace_settle_sat` |
+
+**Correction to the agent's report.** It said `to_linear_row` accepts *"0 on every integer
+model"*. That is too strong: `ne_eq_unsat` converts 2 of 2 and `trace_settle_sat` 1 of 1.
+The honest statement is that convertibility is **model-dependent and unpredictable at 14%
+suite-wide** — which is a *better* argument for fork (ii) than "always zero", because a
+feature you cannot predict the availability of is exactly one you must not depend on.
+
+**The coverage caveat, and it is the one to carry.** Exactly **one model in thirty-five**
+exercises a backjump skip, and it is the one this row added. Clauses are learned on 18
+models, so the *derivation* path is well covered; the *skipping* path rests on a single
+instance. That is a thin base for:
+
+- **M2-L4** (deletion policy) — a policy tuned against a suite that backjumps twice in
+  total is tuned against nothing. It needs instances first, or it needs to say plainly that
+  its measurement is not yet a measurement.
+- **M2-L6** (PB analysis) — its fallback-rate instrumentation has the same problem.
+- **M2-L8** (benchmark) — same again, and it is the row that would notice.
+
+Adding backjump-exercising models is cheap and is probably the highest-value small task
+available right now.
+
+### Still open, deliberately
+
+**M1-T66 is still open and the answer is still NO.** A learned clause citing across levels
+was predicted to make the bridge load-bearing. Re-measured with `Search.bridges` disabled
+and binaries hashed on both sides: **35/35 models pass, no checker rejects**; only M1-T55's
+text pin and M1-T66's own two derivation assertions redden. That is now four independent
+measurements of the same negative, two of them mine. The reason is I-X10 and is recorded in
+the row.
+
+### A gate failure I caused, and the fix
+
+The merge was pushed before the gate finished — deliberate, since the point of pushing is
+not to sit on unpushed work — and the gate then failed. **It was not M2-L3's code**: the
+width lint's argument regex had a **space** in its bare-token character class, so in
+`agree_on ~name:"x" ~lo:(-1) ~hi:5 l (Learn.minimise l)` the `~hi:` argument matched `"5 l"`
+rather than `"5"`, and a width-6 domain was reported as unbounded. Fixed in
+`scripts/check_test_widths.py`: an argument is now either a parenthesised expression (which
+may contain spaces) or a bare token (which may not). **The self-test was extended in both
+directions** — the false-positive shape is a `must_pass`, and the *same shape with a
+genuinely wide bound* is a `must_flag`, so the fix cannot have bought its silence by
+matching less.
+
+Note what this says about the agent's report: it listed `check_fmt`, determinism and the
+suites, and **did not run the width lint**. `make` does not work in a worktree, so the gate
+is run piecewise there and a piece can be missed. Worth asking for explicitly next time.
