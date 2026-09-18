@@ -605,6 +605,112 @@ counting from `rup_lits`, restricting `pol_prems` to `@c`-labelled tokens, and h
 `pol_prems` to a constant -- `-c` fails on all three, each naming which figure "did not
 grow" -- exactly the shape M2-L8's control verification took in section 7.
 
+## 3e. The learning instrument: `bench/learning_baseline.sh`, 2026-09-18 (M2-L14)
+
+`bench/run_bench.sh`'s learning table (3c) reports what conflict analysis *did*. This
+one reports whether the suite is capable of *showing* that it mattered, which is a
+different question and, until M2-L14, had the answer **no**.
+
+Two columns per model, from an ablation on `BAGUETTE_PROPAGATE_LEARNED` (`bin/main.ml`;
+`off` is exactly the pre-M2-L12 build, every learned constraint proof-only), plus a
+direct count of the phenomenon learning exists to exploit.
+
+**How the re-derivation count works, and why it is the real test.** A node count is
+circumstantial: a tree can shrink for reasons unrelated to a learned constraint firing
+in a subtree it was not derived in. This is direct. A 1UIP nogood is *by construction*
+falsified by the decision path that produced it, so the search cannot re-derive the same
+nogood from inside that same subtree — to derive it a second time it must have reached
+an equivalent conflict from a path it had **already refuted**. So the script counts the
+level-0 learned `rup` lines in the emitted `.pbp`, canonicalises each one's literal set,
+and subtracts the distinct count. The remainder is a *count* of returns to an
+already-refuted conflict from elsewhere in the tree. It is measured on the `off` build
+on purpose: `on` is the build whose whole job is to stop those returns happening, so
+counting there would measure the fix rather than the phenomenon (it is 0 on every model
+in the `on` build, which is the fix working).
+
+```
+model                      nodes-on nodes-off  factor    nogoods distinct re-derived
+-------------------------  -------- --------- -------   -------- -------- ----------
+array_sat                         1        1   1.00x          0        0        0
+backjump_bool_unsat               5        5   1.00x          2        2        0
+backjump_deep_unsat              10       10   1.00x          4        4        0
+backjump_lineq_unsat              7        7   1.00x          6        6        0
+backjump_unsat                    9        9   1.00x          4        4        0
+bool_and_sat                      3        3   1.00x          2        2        0
+bool_array_sat                    4        4   1.00x          3        3        0
+bool_channel_sat                  1        1   1.00x          0        0        0
+bool_channel_unsat                1        1   1.00x          2        2        0
+bool_clause_sat                   4        4   1.00x          1        1        0
+bool_eq_sat                       4        4   1.00x          1        1        0
+bool_not_sat                      4        4   1.00x          1        1        0
+bool_or_sat                       4        4   1.00x          1        1        0
+bool_out_sat                      2        2   1.00x          0        0        0
+bool_reif_unsat                   3        3   1.00x          2        2        0
+chain_sat                         3        3   1.00x         11       11        0
+colour_unsat                     47       47   1.00x         24       24        0
+decide_hole_ancestor_sat          5        5   1.00x          1        1        0
+decide_hole_split_unsat           3        3   1.00x          3        3        0
+guess_wrong_sat                   3        3   1.00x          5        5        0
+ladder_lift_unsat                 5        5   1.00x          4        4        0
+lin_ne_sat                        3        3   1.00x          0        0        0
+lin_sat                           3        3   1.00x          0        0        0
+lin_unsat                         1        1   1.00x          0        0        0
+ne_conflict_sat                   3        3   1.00x          2        2        0
+ne_eq_unsat                       3        3   1.00x          2        2        0
+ne_prune_sat                      2        2   1.00x          0        0        0
+ne_sat                            1        1   1.00x          0        0        0
+ne_self_unsat                     1        1   1.00x          0        0        0
+near_limit_ne_sat                 5        5   1.00x          5        5        0
+near_limit_unsat                  5        5   1.00x          6        6        0
+offset_unsat                      7        7   1.00x          4        4        0
+php_decoy_unsat                  41       53   1.29x         24       12       12
+php_escape_sat                  124      256   2.06x        120       20      100
+php_unsat                       107      239   2.23x        120       20      100
+php_wide_unsat                  297     1439   4.85x        720       30      690
+root_hole_unsat                   1        1   1.00x          4        4        0
+trace_settle_holes_sat            6        6   1.00x          3        3        0
+trace_settle_sat                  5        5   1.00x          5        5        0
+trivial_sat                       2        2   1.00x          0        0        0
+trivial_unsat                     1        1   1.00x          0        0        0
+width_narrow_unsat                1        1   1.00x          0        0        0
+width_root_unsat                  1        1   1.00x          0        0        0
+width_sat_depth                  99       99   1.00x         51       51        0
+-------------------------  -------- --------- -------   -------- -------- ----------
+TOTAL (44 models)               847     2265   2.67x       1143               902
+
+4 of 44 models move at all under the ablation. A model that does not
+move is not evidence about learning -- it is a model with no second subtree.
+```
+
+**Read the `re-derived` column first.** It is **0 on every one of the 39 models that
+predate M2-L14**, `width_sat_depth`'s 99-node spine included. That is the row's premise,
+measured rather than inferred: before these five models the suite contained *no
+instance* of the situation conflict learning is for, so M2-L12's suite-wide zero was a
+statement about the instrument at least as much as about learning. The old 39 still
+total exactly 231 nodes and not one of them moves under the ablation.
+
+**Why these models and not bigger ones.** Every variable is `0..1`. Hardness is
+combinatorial — pigeonhole and graph colouring — not width, because the order encoding
+is width-proportional (D-0028) and a wide domain is a proof that dwarfs the suite. The
+narrow domain also buys the property M2-L12 found missing: `spec_order` splits at
+`x <= lo` against `x >= lo+1`, so on `{0,1}` **both** children are singletons and
+`first_fail` can never pick that variable again below. Every level branches a different
+variable, by construction rather than by hope. `php_wide_unsat` reaches depth 15 over 42
+variables; the integer models re-branch one variable down a spine.
+
+**Cost.** The whole script is 6.2 s and 10 MB peak RSS over 44 models (two solves and
+one proof-writing solve each). The five new models add about 0.4 s of solving and 0.1 s
+of `veripb` to `make check`; the full model suite is 1.9 s and 18.5 MB peak RSS, so
+nothing here is near the 4 GB cap.
+
+**`colour_unsat` is in the table at `1.00x` deliberately.** It is a real 47-node search
+on a non-pigeonhole shape (the Grötzsch graph, triangle-free and 4-chromatic) that
+learning does not help, because at `maxdepth 5` over 33 variables the conflicts sit near
+the top of the tree and a learned clause has almost no subtree left to prune. A negative
+datapoint from a model that *can* show the effect is worth more than another shape that
+flatters it.
+
+
 ## 4. What the columns are *not*
 
 - **`lvl` is not a node count, and since M1-T36 it no longer has to pretend to be.**
