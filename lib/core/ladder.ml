@@ -107,7 +107,7 @@
    of CONSTRAINT IDS of the ladder rows. They are different objects on different lines of
    the proof, appearing in different derivations -- [Linear]'s justification of its
    pruning, and PB analysis's derivation of a learned row -- and neither is a copy of the
-   other. test/unit/test_pb_analysis.ml pins that they cannot collide. *)
+   other. test/unit/test_ladder.ml pins that they cannot collide. *)
 
 module Lit = Baguette_proof.Lit
 
@@ -119,8 +119,8 @@ module Lit = Baguette_proof.Lit
    [Encoding.consistency_id]. Rebuilt here rather than fetched because [Propagator.pb_row]
    is the only channel core has for a row's terms and a ladder row has no propagator
    instance to hang one on; the ONE thing that must agree with the encoding is the shape,
-   and test/unit/test_pb_analysis.ml asserts it against [Encoding]'s own output rather
-   than against this comment. *)
+   and test/unit/test_ladder.ml asserts it against the constraint [Encoding] actually
+   appended, rather than against this comment. *)
 let ladder_row ~name w : Learned.t =
   Learned.make [ (1, Lit.ge name w); (1, Lit.negate (Lit.ge name (w + 1))) ] 1
 

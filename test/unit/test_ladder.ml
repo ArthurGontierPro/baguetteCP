@@ -309,6 +309,35 @@ let test_worked_case () =
           check "a: and it cites a's consistency rows, by the ids Encoding handed out"
             (List.map Option.some (Ladder.cited_ids lt)
             = [ ladder_id "a" 1; ladder_id "a" 2 ]);
+          (* THE SHAPE, against the constraint the encoding actually appended and not
+             against [Ladder]'s own comment. [Encoding.constraints] is in id order, so the
+             row with id [cid] is at index [cid - 1]. If [declare_int] ever wrote the
+             ladder differently, the [pol] would cite a row that does not say what this
+             module assumed and the arithmetic would be wrong while still checking out as
+             a well-formed derivation of something else. *)
+          let appended = Array.of_list (Encoding.constraints enc) in
+          List.iter2
+            (fun v cid ->
+              let c = appended.(cid - 1) in
+              check
+                (Printf.sprintf "a: ladder row L_%d is the constraint the .opb holds" v)
+                (Learned.to_string (Learned.make (Opb.terms c) (Opb.rhs c))
+                = Learned.to_string (Ladder.ladder_row ~name:"a" v)))
+            [ 1; 2 ] (Ladder.cited_ids lt);
+          (* NOT THE SAME OBJECT AS [Order_reason]'s CHAIN, and it cannot become one.
+             [Order_reason.weaken_declared] builds LITERAL AXIOMS, which name no
+             constraint id at all; this module cites ROW IDS. Asserted rather than argued,
+             because "they are different objects" is exactly the kind of claim that stops
+             being true when someone unifies them. *)
+          let ws, _ =
+            Order_reason.weaken_declared ~coeff:3 ~name:"a" ~decl_lo:0 ~decl_hi:4
+          in
+          check "a: Order_reason's chain cites no constraint id -- it is literal axioms"
+            (Pb.cited_ids (Explanation.combine [ Explanation.weaken ws ] 1) = []);
+          check
+            "a: ...while the ladder chain cites the model row and its rungs, once each"
+            (Pb.cited_ids (Ladder.derive lt (Explanation.model_row 999))
+            = 999 :: Ladder.cited_ids lt);
           (* THE ASSERTION THE WHOLE ROW IS FOR. *)
           check "a: THE COMBINED ROW DOES PB-PROPAGATE a <= 2"
             (Reduce.propagates lt.Ladder.lifted ~pivot ~falsified);
