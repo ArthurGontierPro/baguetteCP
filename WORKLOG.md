@@ -10,8 +10,16 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
-**No sessions are running; the claims table is empty.** Wave fourteen — M2-L6 (agent-pb)
-and M2-T14 (agent-fmt2) — is merged, released and pushed. **With M2-L6 in, the M2-L
+**Wave fifteen is running: M2-T16 (agent-drop) and M2-L8 (agent-bench).**
+
+**agent-drop has the whole repo except `bench/`**, and that is not laziness in the split:
+removing `Writer.V2_0` breaks every test that names it, so the code half and the test half
+**cannot** be separate sessions — a branch that does one without the other never compiles,
+and this project's rule is to commit as soon as it compiles. M2-L8 is the only task that is
+genuinely orthogonal, because every counter it needs (`learned`, `pb-fallback`, `skipped`)
+is already on `--stats`, so it reads stderr and touches no `lib/` file at all.
+
+Previously: wave fourteen — M2-L6 (agent-pb) and M2-T14 (agent-fmt2) — is merged, released and pushed. **With M2-L6 in, the M2-L
 learning sequence is complete except M2-L4, M2-L7 and M2-L8.**
 
 It was dispatched as: **M2-L6 (agent-pb) and M2-T14 (agent-fmt2).** agent-pb has all of
@@ -33,6 +41,8 @@ worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 uni
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M2-T16 | **everything except `bench/**`** — the 2.0 removal lands atomically | agent-drop | 2026-09-18 |
+| M2-L8 | `bench/**` only; read-only over `lib/` and `test/` | agent-bench | 2026-09-18 |
 | M2-L6 | all of `lib/`, `test/unit/test_learn.ml`, `test/unit/test_analysis.ml`, `test/unit/dune`, new files under `test/models/` + `test/expected/` | agent-pb | 2026-09-18 |
 
 _(M2-L3 released 2026-09-18 by agent-learn3 — see `## Completed` and `## M2-L3 handoff`.)_

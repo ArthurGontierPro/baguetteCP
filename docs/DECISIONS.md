@@ -2958,3 +2958,76 @@ is a no-op, so the set is already clean. I-X2 says ids are deleted *exactly* onc
 audit only witnesses the *at least* once half. M2-L1's test counts `del` lines in the proof
 text instead. **M2-L4 is where this bites**, because its whole subject is a retention
 policy that may want to delete something a backjump also wants to delete.
+
+## D-0046  Proof format 2.0 is removed from the project entirely
+
+**Status**: **DECIDED, 2026-09-18, by the project owner.** Not an orchestrator judgement
+call — this record exists because `docs/SPEC.md` is normative and CLAUDE.md requires a
+change to it to go through a decision record. Supersedes the dual-format arrangement
+D-0025 set up when 3.0 became the default.
+
+### The decision
+
+The solver emits **VeriPB 3.0 and only 3.0**. Format 2.0, the `BAGUETTE_PROOF_FORMAT`
+switch, and the Python VeriPB **2.2.2** checker leave the project.
+
+### Why now
+
+D-0025 made 3.0 the default and the checker of record and kept 2.0 alongside it. That was
+right at the time; what has changed is the measured cost of keeping it.
+
+**M2-T14 (2026-09-18) is the argument.** It found **four** test lanes passing for the wrong
+reason, every one of them on the 2.0 path, all the same defect: two artefacts disagreeing
+about format, the checker refusing the file on the **grammar**, and a lane asserting
+REJECTION taking that refusal as evidence. The worst was `test_mutation.ml`'s
+`rows_that_refute_alone` — **D-0030's own certification that an instance is not hollow, and
+it was itself hollow**, reporting "no row refutes alone" for every instance.
+
+The root cause is structural and does not get better with more sweeping: **the gate runs 3.0
+only**, so nothing routinely exercises 2.0, and a second format that nothing exercises is a
+place where vacuous passes breed unobserved. The options were to add a 2.0 leg to the gate —
+roughly doubling checker time to protect a format nothing ships — or to delete the format.
+Deleting it removes the bug class rather than sweeping it periodically.
+
+### What this costs, stated plainly
+
+**We lose a second, independent implementation as a cross-check.** Two separately written
+checkers agreeing that a proof verifies is stronger evidence than one, and several findings
+this project is proud of — M1-T46 itself, D-0030's measurements, D-0023's correction — came
+from the two disagreeing. After this, **veripb 3.0.2 is the sole oracle**, and a bug in it
+is a bug we have no way to see.
+
+That cost is real and was accepted. It is recorded here so that nobody later rediscovers it
+and assumes it was overlooked. If a second 3.0-capable checker ever exists, wiring it in
+recovers the property without bringing 2.0 back.
+
+### What goes
+
+`Writer`'s `V2_0` and every `v3 t` branch; `BAGUETTE_PROOF_FORMAT`; the 2.2.2 entry in
+`Checker.find` and `scripts/checker.sh`; `Opb`'s unlabelled mode and `Encoding.write_opb`'s
+`?labels` (labels become unconditional, and `write_opb_for` collapses into `write_opb`);
+`PROOF-FORMAT.md` §2, the 2.0 rule contract; `SPEC.md` §4.1's mention of the switch;
+`bench`'s `-F` flag; and every 2.0 lane and format matrix in the suite.
+
+### What stays, and this is not negotiable
+
+**History is not rewritten.** D-0023, D-0024, D-0025, D-0030 and the parts of
+`PROOF-FORMAT.md` that *record what 2.0 did and what it cost us to learn* stay exactly where
+they are, marked historical. Several of them are the evidence for decisions still in force —
+D-0024's account of why `wipe_level` reproduces `w l` explains code that survives this
+change. Deleting the reasoning because the format went would throw away the expensive half.
+
+### Consequences to handle deliberately, not by leaving stale text
+
+- **M1-T46's rule collapses.** "Never match on one checker's wording alone" exists because
+  two checkers worded rejections differently. With one checker, matching its wording *is*
+  correct. Every such site must be **simplified deliberately**, not left carrying a comment
+  about a checker that no longer exists. There are many.
+- **M2-T15 dissolves.** Whether a mutation lane's `expect` should be format-dependent is not
+  a question once there is one format. Close it.
+- **The two deliberately-red mutation lanes disappear** with it.
+- **Part of M2-T14's work is deleted by this**, hours after it landed. Its format-pairing
+  fixes become moot; its *format-independent* strengthenings — the wording assertions added
+  to twenty blanked-trace controls, and resolving the claim-index id by **content** rather
+  than by label — survive and are keepers. Said plainly because the sequencing was mine, not
+  a failure of that session.
