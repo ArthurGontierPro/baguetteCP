@@ -1226,3 +1226,80 @@ red is a soundness finding worth chasing. That is what the new `coverage_check`'
 `COVERAGE-GAP (generator problem, NOT a proof rejection, NOT a soundness failure)` replaces
 — and it still increments `failures`, so the check was re-worded, **not weakened**, which
 was the thing to get wrong here and was checked rather than assumed.
+
+## Wave ten handoff, 2026-09-18 (orchestrator)
+
+Three sessions, all merged. Gate green: **1723 unit checks** (1625 + 34 + 64, and the two
+agents' reported additions reconcile exactly), 252 matrix, 44 mutation, **34/34 models**,
+determinism byte-identical, peak RSS ~36 MB against a 55 MB baseline. Everything is pushed
+to `origin` (`git@github.com:ArthurGontierPro/baguetteCP.git`) — see "Pushing" below.
+
+### What the wave actually bought
+
+**M2-L0 closed M1-T51's adoption gap.** `Writer.pol_concluding` and `Writer.implied` sat
+with no caller in `lib/` since M1-T51; they have one now. The defect M1-T51 *measured* but
+could not *fix* is pinned in both polarities: a `pol` truncated to derive something
+strictly weaker is **ACCEPTED** bare and **REJECTED** once the conclusion is stated.
+
+**M2-L2 produced the cut without learning anything**, which was the point of splitting it.
+Its criterion is a record carrying its own postcondition, so the 1UIP rule is asserted
+**about the criterion** and never about the cut — D-0044's amendment made that call and
+this row honoured it. There is an explicit check that `one_uip`'s postcondition is *false*
+of `conflict_side`'s two-conflict-level cut, which is the assertion that would have
+reddened for M2-L6 had it been written one altitude up.
+
+### Three findings to carry forward
+
+1. **The derived bound and the trail bound are different honest numbers.** `Domain.set_lo`
+   settles over holes (I-D2), so a propagator told `x >= 2` over `0..9 \ {2}` lands the
+   trail at 3. A conclusion check demanding "exactly the new bound" reddens three *real*
+   scenes. `conclusion_holds` admits exactly that window and checks it value by value.
+2. **`Store.lo_support`/`hi_support` is not always the right edge**, and M2-L3 must know
+   this. A reason's facts are frozen at older values, so if the bound moved again the O(1)
+   array names a *later* entry and a naive walk runs up the trail instead of terminating.
+   `Analysis.support_of ~before` tries O(1) and falls back to a downward scan;
+   `o1_supports`/`scanned_supports` expose the split so a regression is visible.
+3. **A break that reddens nothing is still a result.** M2-L2's second `entry.prop` break
+   changed nothing, because stamping one high can land on another instance that *does*
+   watch the variable — the identical blind spot `Engine.check_attribution` has. It is not
+   invisible: `antecedents` then names the wrong instance twice, and that difference is
+   asserted. Reported rather than smoothed over, which is the behaviour to keep.
+
+### I got two premises wrong, and both were caught by the agent, not by me
+
+The wave-nine handoff says "check the premise before you spend a session on it" and counts
+five instances that week. Add two:
+
+- I marked `lib/core/search.ml` and `lib/core/store.ml` **read-only** for agent-concl, when
+  both hold `Reason.because` call sites — so the required-field route could not compile.
+  Caught by me minutes after dispatch and amended in flight.
+- I briefed agent-cut that `Store.remove`/`fix` "silently record `no_facts`". **False since
+  M2-T8**, and the wave-nine handoff already said so — but the *cross-session request row*
+  still carried the dead claim, and the row is what I read. That row is now marked STALE.
+
+The lesson is narrower than "check premises": **a superseded claim that lives in a request
+row outlives the handoff note that superseded it**, because briefs get written from the
+request table. When you kill a premise, strike the row, not just the note.
+
+### Pushing (new, 2026-09-18, at the user's instruction)
+
+A remote was added mid-session and **everything is now pushed to it**: `main`, all three
+`wave10-*` branches, the twelve merged `wave6`–`wave9` branches, and — most importantly —
+the two branches that are the **only copies** of their work, `wave8-del` (`474a05f`, M1-T29's
+deliberate break) and `worktree-agent-a5a5eb6cbb5505ceb` (`97d982e`, DOES NOT BUILD).
+**Keep pushing.** The standing instruction is to commit *and push*, so that a dead machine
+costs nothing. Push agent branches too, not just `main` — in-flight branch work is exactly
+what this project has lost three times.
+
+This also explains the `master` -> `main` rename recorded above: the remote is `origin/main`,
+so the local branch was renamed to agree with it. Not a session doing something odd.
+
+### Next
+
+**M2-L1** is the critical path and it does **not** start clean — read **D-0045's addendum**
+first. `Writer.fresh` tags every id with the writer's current level and has no override, so
+a learned constraint is deleted by the backjump that follows learning it, automatically,
+and that collides head-on with M2-L3's rule to derive the clause while its supports are
+still live. M2-L1 is where that is cheapest to fix, and the fix must hold under **both**
+proof formats. **M2-L5** is unblocked now that M2-L0 is done. **M2-L3** wants `lib/core`
+and should queue behind M2-L1, not beside it.
