@@ -430,7 +430,7 @@ it emits. The table below is the index; it is maintained as propagators land.
 | `int_lin_eq` | bounds | two `int_lin_le` derivations |
 | `int_ne` | value (domain, in fact) | `rup` over **order**-encoding literals: the claim disjoined with the negation of its reason, which is D-0018's trace-line shape. No direct encoding — see section 3, "Disequalities" |
 | `int_lin_ne` | value | the same, over every term |
-| `bool_clause` | — | `rup` |
+| `bool_clause` | `Domain` | `rup` |
 | `all_different` | *TBD* | Hall-set reasoning; see M4 and D-0004 |
 | `element` | *TBD* | M4 |
 

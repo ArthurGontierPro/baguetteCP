@@ -3453,3 +3453,111 @@ Note also that the proof verifies at **every** cap including `lbd:0`, so nothing
 on a learned constraint staying live. That is consistent with the zero citations and is why
 eviction is safe here at all; it would not be in a solver whose later `rup` lines lean on a
 learned unit.
+
+## D-0052  A clause over order literals is a WIDENING of `bool_clause`, not a new family — and watched literals are a separate question
+
+**Status**: **the analysis is ACCEPTED; the implementation is NOT scheduled here.** Produced
+2026-09-18 by a read-only study (agent-clause, wave seventeen) answering the one question
+D-0050 left open, and verified in the tree by the orchestrator. D-0050 recorded that this
+argument "has to be made, not asserted". It is made here.
+
+### Verdict: widening. D-0044's bet is not spent
+
+Three checkable facts decide it:
+
+1. **The explanation side is already generic.** `Explanation.Clause of Lit.t list`
+   (`lib/core/explanation.ml:110`) is over `Lit.t`, not over Booleans — verified.
+   `Justify.validate_lits` (`justify.ml:277-286`) checks only that a literal's owner is a
+   declared variable, nothing about the threshold. `Bool_clause` reaches this generic
+   machinery through `Lit.bool_true`/`bool_false` (`bool_clause.ml:118`), which are literally
+   `Lit.ge x 1` / `Lit.le x 0` — the **threshold-1 instance of a general constructor**.
+2. **`bool_clause.ml` is specialised, and every specialisation site is a constant
+   substitution, not a structural assumption**: the literal record omits the threshold
+   because it is always 1 (`:104`); `status` tests `lo >= 1` / `hi <= 0` (`:198-204`);
+   `assign` sets 1 / 0 (`:229-242`); `falsity_fact` hardcodes `~decl:1 0` / `~decl:0 1`
+   (`:185-187`); `make` rejects any variable not declared `[0,1]` (`:147-153`, verified). All
+   five become `k` / `k-1` with a declared-bounds lookup. `Store.set_lo/set_hi` and
+   `Reason.at_least/at_most` already take arbitrary values.
+3. **No new `Explanation` constructor and no new `PROOF-FORMAT` §4 row.** `Clause` already
+   exists and already renders to `rup`.
+
+### The refinement that matters: D-0050 bundled two separable things
+
+**Watched literals are NOT part of the widening, and should be dropped from the proposal.**
+`bool_clause` has no watches today (`survey_from`, `:212-218`, is a full walk with early
+exit), and **no propagator in `lib/core/prop/` has a single `mutable` field** — verified by
+grep, the grep returns nothing. Watch pointers would be the first search-dependent mutable
+propagator state outside `Store`'s undo trail. That is a genuinely new thing, it is a
+data-structure optimisation **orthogonal** to the widening, and at this suite's clause widths
+it buys nothing. Decide the widening; leave watches alone.
+
+### The real cost: the declared consistency level drops, and that is the honest counter-argument
+
+`Bool_clause` declares `Domain` (`:112`) on an argument its own header spends nine lines
+making (`:12-20`): for a clause, unit propagation *is* domain consistency, because **"Booleans
+have no interior"**. Order literals over integers **do**. `bool_clause.ml:120-128` leaves a
+variable occurring at both polarities alone because "the clause is then a tautology" — true
+for `b ∨ ¬b`, **false for `x≤1 ∨ x≥3`**, which is a hole. And `Learn.minimise`'s `slot`
+(`learn.ml:154-155`) keys on `(variable, polarity)`, so opposite-direction pairs survive
+minimisation **by design**. This is not hypothetical: at least **9 learned clauses of width
+≥ 3** carry an opposite-direction pair on one variable (width ≥ 3 excludes `Ne` hole lines,
+which are exactly width 2), so it is roughly 10% of real traffic.
+
+So the honest declared level for a clause over order literals is **`Bounds`**, not `Domain`.
+Chasing the hole instead would need `Store.remove_with_facts`, of which I-X10 records `Ne` is
+the **sole** caller in `lib/`, and would trip D-0019 point 3. Do not.
+
+**The strongest case against this record's own verdict** is exactly that: a widening that
+cannot preserve the widened module's declared level is arguably not one, and
+`bool_clause.ml`'s central soundness argument has to be rewritten. The reason the verdict
+stands anyway is that the alternative is worse — two modules sharing nothing is the "second
+implementation to keep in step" that `bool_clause.ml:284-286` explicitly refuses for
+`Array_bool_or` et al. **One module, one clause semantics, declared honestly at `Bounds`,
+with `Bool_clause` retained as a sub-module that declares `Domain` because its `[0,1]`
+restriction makes that true** — the `Ne` / `Ne.Int_ne` pattern the same file already uses at
+`:271-322`.
+
+### A new obligation this creates, and it lands on D-0051
+
+A trace line from a learned-clause instance is RUP-in-sequence against the learned constraint
+on the page — the same shape as I-X10's existing `Bool_clause` entry, not the Hall/Régin shape
+it refuses. **But it is RUP only while that learned constraint is LIVE.**
+
+Today nothing propagates a learned constraint, so retention policy and propagator set are
+independent — and **D-0051 was written on exactly that independence**. If a learned
+constraint gains a registered instance, retiring it silently stops every subsequent trace line
+from that instance being RUP. **D-0051's "what would reverse this" section anticipated this;
+this record is the other half of that link.** Whoever implements the widening must revisit
+`Retention` in the same change, not after it.
+
+### Recommended sequencing, if it is taken
+
+1. **Apply unit learned clauses as level-0 bound tightenings first.** A unit 1UIP clause has
+   backjump level 0 — it is a permanent global bound tightening and needs **no clause
+   propagator at all**: no watches, no survey, no two-open logic. Its justification is the
+   existing `Clause` `rup`. This appears to capture the large majority of the 75 proof-only
+   clauses for a small fraction of the work, and it requires none of the consistency-level
+   argument above.
+2. **Then widen `bool_clause` to a threshold** for the multi-literal remainder, declaring
+   `Bounds`, keeping `Bool_clause` as the `Domain`-declaring `[0,1]` sub-module.
+3. **Not watched literals.** Max observed clause width is 4.
+
+### Figures, and which of them you may rely on
+
+**Confirmed independently, suite-wide over 39 models**: `learned 88`, `convertible 13`,
+`pb-learned 38`, `pb-fallback 50`, `pb-convert 36`, `pb-nondeg 28`, `pb-stronger 36` —
+matching D-0050 exactly.
+
+**PROVISIONAL, do not build on it**: the clause-width histogram behind step 1 ("roughly 70 of
+88 learned clauses are unit") is ±5, extracted by parsing level-0 `rup` lines out of proof
+text, which also catches `Ne` hole lines and other level-0 `rup`s. The study said so itself.
+An independent cruder parse by the orchestrator measured a **different population** (all `rup`
+lines including trace chains) and therefore neither confirms nor refutes it. **Re-derive this
+from an instrumented run before step 1's priority is defended on it.** The `≥ 9 opposite-pair
+clauses of width ≥ 3` figure *is* exact, being a lower bound that excludes hole lines by
+construction.
+
+**One claim in the study was wrong**: it reported `CLAUDE.md`'s module map as saying "34 .fzn
+models". At its own base commit that map already said **39**. Checked rather than relayed —
+which is the standing rule here, and it applies to a study's incidental observations as much
+as to its headline.

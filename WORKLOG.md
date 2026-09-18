@@ -10,23 +10,8 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
-**Wave seventeen is running: M2-L4 (agent-del) and a read-only scoping study (agent-convert).**
-
-**agent-del holds `lib/`, `bin/main.ml` and `test/**`.** M2-L4 is learned-constraint deletion,
-the matching `del` and a retention policy; it needs `lib/core/{learn,learned,search}.ml` *and*
-`lib/proof/writer.ml`, which owns the constraint-id counter and `wipe_level`. That is the
-learning vertical plus the writer, so there is no second editing task that does not collide —
-`lib/proof/encoding.ml` is not safe either, because M3-T1's `red` emission would want the
-writer too.
-
-**So the partner edits nothing at all.** agent-convert is a **read-only study**, the same shape
-wave fourteen used for M2-T14 when agent-pb held all of `lib/`. Its question is the one D-0049
-ended on: **what must a learned PB row look like before `Learned.to_linear_row` accepts it?**
-M2-L11 left `pb-convert 0` on its own fixture — the lifted rows are non-degenerate and still do
-not convert — so "lift more" is the wrong next move and M2-L7 (`Saturate`) should not be scoped
-until this is answered. It reports to the orchestrator, who writes any doc or record; it
-commits nothing. It works from its own worktree pinned at this wave's base so it reads a stable
-tree while agent-del edits.
+**Wave seventeen is COMPLETE: M2-L4 (agent-del) merged and released; three read-only
+studies done (D-0050, D-0051, D-0052, M4-T5's gate). Every file is free.**
 
 **Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `dune-project`,
 `scripts/**`, `bench/**` and all merging, as standing.
@@ -2259,3 +2244,44 @@ propagator family" bet**. `bool_clause.ml` already is a clause propagator, so it
 widening rather than a new family — but that argument must be made in a record, not assumed.
 **75 of 88 learned clauses are proof-only today**, and the backjump they justify re-derives
 the conflict they came from, which is M2-L3's own stated regret.
+
+**2026-09-18 — wave seventeen closed: one row merged, three questions answered**
+
+**M2-L4 is in** (D-0051). `Retention` owns a learned constraint's lifetime alone, enforced by
+`Writer.wipe_level` refusing level 0 rather than audited. **D-0045 predicted the wrong
+collision**: it warned of two owners; the real shape was one owner, `Search.solve` sweeping
+every id ever introduced. The I-X2 audit **cannot witness that** — a second `forget` is a
+no-op — which is now written on I-X2 itself. Policy is `keep_all` **by measurement**: nothing
+propagates a learned constraint, so activity is the constant zero, and eviction monotonically
+*increases* proof bytes and `del` rules. Cite D-0051 as *"retention does not help while
+nothing propagates a learned constraint"*, never as *"retention does not help"*.
+
+**M4-T5's gate is evaluated and the answer is no.** Both its dependencies had been DONE for
+some time and nobody had checked. Decisive: **`width_root_unsat`, the largest proof in the
+suite, has ZERO `rup` lines** — its cost is one 1999-premise `pol` chain — so the biggest
+artefact here is not evidence about RUP hints at all. 36 of 37 non-width models are at the
+process floor. Revisit only when a real non-synthetic model enters the suite.
+
+**D-0052 settles D-0050's open question: the clause instance is a WIDENING of `bool_clause`,
+so D-0044's bet is NOT spent.** `Explanation.Clause` is already `Lit.t list`; the Boolean
+sites are constant substitutions. Two refinements worth carrying: **watched literals are a
+separate question and should be dropped** (they would be the first mutable propagator state
+outside `Store`'s trail, and max clause width here is 4), and **the declared level must drop to
+`Bounds`** because order literals have an interior — `x≤1 ∨ x≥3` is a hole, not a tautology.
+That is the honest counter-argument to the verdict and D-0052 states it rather than burying it.
+
+**New row M2-L12** carries the implementation, in two steps, with the `Retention` coupling
+named as part of the same change.
+
+**The standing rule earned its keep three times this wave.** Do not relay a figure you did not
+re-measure. M2-L4's report, the hints study and the clause study were each checked; the clause
+study's one unverified aside (that `CLAUDE.md` said "34 models") was **wrong** — its own base
+commit said 39. Its headline argument was sound, which is the point: the discipline is cheap
+and it is not an accusation.
+
+**Provisional figure, flagged**: "~70 of 88 learned clauses are unit" is ±5, from proof-text
+parsing. An orchestrator re-parse measured a *different* population and settles nothing.
+Re-derive it from instrumentation before M2-L12 step (1)'s priority rests on it.
+
+**Gate on `main`**: **2129 ok / 0 FAIL**, 280 matrix, 44 mutation, 12 random, **39/39 models**,
+determinism + fmt + width lint clean, `check: ok`. Peak RSS 37.8 MB unit, 18.6 MB models.
