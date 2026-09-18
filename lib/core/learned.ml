@@ -176,6 +176,78 @@ let is_empty t = t.terms = []
    is M2-L6's problem, not this module's). *)
 let is_clause t = t.degree = 1 && List.for_all (fun tm -> tm.coeff = 1) t.terms
 
+(* ------------------------------------------------- M2-L6: PB arithmetic on the row *)
+
+(* An instance's own row ([Propagator.pb_row]) as this type. [make] does the
+   normalisation, so a [pb_row] may hand over negative coefficients -- and
+   [Linear.pb_row] does, deliberately, so that the sign convention lives in exactly one
+   place. *)
+let of_pb_row (r : Propagator.pb_row) : t =
+  make r.Propagator.r_terms r.Propagator.r_degree
+
+(* [combine a ca b cb] is the cutting-planes ADDITION [ca * a + cb * b], which is what a
+   `pol` line of the form [ida ca * idb cb * +] derives. It is the step that eliminates
+   the pivot in PB conflict analysis, and the elimination is entirely in the third stage
+   below.
+
+   Three stages, and the third is the one a reader will look for:
+
+     1. scale. Every coefficient and the degree multiplied, through [Checked] -- I-X8 and
+        D-0029: growth past the cap must [raise], not wrap, and conflict analysis is the
+        one place in this solver where coefficients multiply without bound. The raise
+        propagates to the caller, which treats it as a reason to FALL BACK to the clause
+        path rather than as a crash; see lib/core/pb_analysis.ml.
+     2. merge. [make]'s job: repeated literals summed, zero coefficients dropped.
+     3. CANCEL COMPLEMENTS. [make] does not do this one, and must not be changed to: it
+        merges equal literals, and [l] and [~l] are not equal. But over 0-1 variables
+        [l + ~l = 1], so
+
+            p * l  +  n * ~l   =   min(p,n)  +  (p-m) * l  +  (n-m) * ~l,   m = min(p,n)
+
+        and the constant moves across, LOWERING the degree by m. Skipping this stage
+        would leave a row that is still sound but is not the row the checker holds: both
+        checkers normalise complements away when they read a constraint, so our copy and
+        theirs would disagree on every subsequent step, and the first [pol] built on the
+        difference would be rejected. That is the whole reason this function exists
+        instead of a fold over [make].
+
+   The pivot is cancelled by this stage and by nothing else: the caller arranges that the
+   pivot appears with coefficient [k] on one side and [k] on the other, so [p = n] and
+   both terms vanish. Nothing here knows which literal was the pivot, which is correct --
+   cancellation is arithmetic, not a special case. *)
+let combine (a : t) (ca : int) (b : t) (cb : int) : t =
+  let scaled t c = List.map (fun tm -> (Checked.mul c tm.coeff, tm.lit)) t.terms in
+  let raw = scaled a ca @ scaled b cb in
+  let degree = Checked.add (Checked.mul ca a.degree) (Checked.mul cb b.degree) in
+  (* Net each pseudo-Boolean variable, keeping both polarities so the constant that
+     falls out of the cancellation can be counted exactly once per variable. *)
+  let sorted = List.sort (fun (_, l1) (_, l2) -> Lit.var_compare l1.Lit.v l2.Lit.v) raw in
+  let rec cancel acc dropped = function
+    | [] -> (acc, dropped)
+    | (_, l) :: _ as group ->
+        let mine, others =
+          List.partition (fun (_, m) -> Lit.var_equal l.Lit.v m.Lit.v) group
+        in
+        let side positive =
+          List.fold_left
+            (fun s (c, m) -> if m.Lit.positive = positive then Checked.add s c else s)
+            0 mine
+        in
+        let p = side true and n = side false in
+        let m = min p n in
+        let keep =
+          List.filter
+            (fun (c, _) -> c > 0)
+            [
+              (Checked.sub p m, { Lit.v = l.Lit.v; Lit.positive = true });
+              (Checked.sub n m, { Lit.v = l.Lit.v; Lit.positive = false });
+            ]
+        in
+        cancel (acc @ keep) (Checked.add dropped m) others
+  in
+  let terms, dropped = cancel [] 0 sorted in
+  make terms (Checked.sub degree dropped)
+
 let to_string t =
   Printf.sprintf "%s >= %d"
     (String.concat " "

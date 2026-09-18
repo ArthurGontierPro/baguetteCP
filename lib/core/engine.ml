@@ -245,6 +245,14 @@ let vars_of t id =
     Some t.instances.(id).Propagator.inst_vars
   else None
 
+(* M2-L6: the PB row instance [id] is, or [None] when it does not expose one. The same
+   shape as [vars_of] and for the same reason -- lib/core/pb_analysis.ml is shown the
+   engine through two narrow functions rather than being handed the instance array. *)
+let row_of t store id =
+  if id >= 0 && id < Array.length t.instances then
+    t.instances.(id).Propagator.inst_row store
+  else None
+
 let trigger_of t id =
   if id >= 0 && id < Array.length t.triggers then t.triggers.(id) else wake_on_any
 

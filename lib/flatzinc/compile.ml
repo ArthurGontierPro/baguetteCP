@@ -421,8 +421,15 @@ let check_name_collisions (m : Model.t) =
    end, with a single [List.mapi]. *)
 type pending = int -> Propagator.instance
 
+(* M2-L6: every [Linear.t] in this solver is packed here -- including both halves of an
+   [int_lin_eq] (D-0011) and the [int_le]/[int_lt]/[int_eq] shapes that delegate -- so
+   teaching [Linear] its own PB row is taught once, here, and reaches all of them. *)
 let pack_linear (lin : Linear.t) : pending =
- fun id -> Propagator.pack ~id (module Linear : Propagator.S with type t = Linear.t) lin
+ fun id ->
+  Propagator.pack ~id
+    ~row:(fun store -> Some (Linear.pb_row store lin))
+    (module Linear : Propagator.S with type t = Linear.t)
+    lin
 
 (* [Ne] and [Ne.Int_ne] are one propagator over one [Ne.t]; they differ only in the
    [name] the packed instance reports, so each builtin is packed under its own. *)
