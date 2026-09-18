@@ -1339,3 +1339,27 @@ it rather than the checker several inferences away.
 
 `docs/ROADMAP.md` M1-T66's row still says TODO and should be updated by whoever merges this;
 the file was read-only for this session.
+
+### M1-T66 verified independently by the orchestrator, 2026-09-18
+
+agent-bridge's verdict is half positive and half negative, so both halves were checked in a
+throwaway worktree off `main` with `bridges` disabled at **all three** call sites (`ignore
+(bridges, ...)`, which keeps the build warning-clean without touching the function body):
+
+| with `bridges` disabled | result |
+|---|---|
+| `test_matrix.exe` | **exit 1, 2 FAILs** — `bridge` and `bridge/ancestor` |
+| model suite (binary rebuilt first) | **34/34 pass, exit 0** — veripb accepts every proof |
+
+So the positive half is real: the absence is now caught, and the failure text says what it
+is — *"…which is the M1-T66 defect and is NOT a formatting change: the nogood then negates
+`x >= 1` having explored only `x >= 2`, and nothing on the page says the one implies the
+other."* That is a message the next person can act on, which the old byte pin was not.
+
+And the negative half is real too, which is why the row stays open: **the checker still
+accepts.** That is now the fourth independent confirmation (M1-T45, the wave-nine
+orchestrator, agent-bridge, me). It is not a gap in anyone's testing — it is I-X10, and
+the remaining half of M1-T66 belongs to M2-L3, where a clause first cites across levels.
+
+Note it reddens **two** checks, not the one the agent named; `bridge/ancestor` is the
+cross-level one and is the more interesting of the pair for M2-L3.
