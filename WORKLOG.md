@@ -10,7 +10,9 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
-**Wave sixteen is running: M2-L11 (agent-ladder) and M2-T17 (agent-size).**
+**Wave sixteen: M2-T17 (agent-size) is RELEASED and merged; M2-L11 (agent-ladder) is still running.**
+
+**`bench/**` is free again.** `lib/`, `bin/main.ml`, `test/**` remain held by agent-ladder.
 
 The split is the usual one and it is forced. **agent-ladder holds all of `lib/`**, because
 M2-L11 changes what `Linear` hands to PB analysis: that is `lib/core/prop/linear.ml`,
@@ -2092,3 +2094,38 @@ doing. If you write a negative control, assert the sentence.
 Also: `veripb 3.0.2 is now the sole oracle`, stated in `scripts/checker.sh`,
 `Checker.not_found_message`, `SPEC.md` §1 and `PROOF-FORMAT.md` §1. A bug in it is a bug
 nothing here can see. D-0046 weighed that and accepted it; do not rediscover it as news.
+
+**2026-09-18 — M2-T17 (agent-size): explanation size is now a tracked number, and the
+control is the part to read**
+
+`bench/explanation_size.sh` reports two metrics per model, separately because they move
+independently: `rup_lits` (literals per derived `rup` constraint) and `pol_prems` (premises
+per `pol` chain). Both come off the emitted `.pbp`, so this added **no `lib/` change and no
+solver counter** — that scoping is why it could run beside the M2L sequence at all, and it
+is the same shape as M2-L8. Baseline is `bench/README.md` §3d. Not in `make check`, per the
+row and per the `make bench` rule.
+
+**Nothing looks verbose today, and that is the expected answer.** `pol_prems`' only large
+figures are the two known D-0028 width fixtures (1999.0, 19.0); the largest non-width figure
+is 5.0. While every propagator is linear the derivation is forced, so there is no room for a
+weak explanation to hide. **The metric's job starts at M4-T1**, where the choice of Hall set
+is the whole game — which is exactly why the row was scheduled before it rather than after.
+
+**The lesson from this one is about the control, not the metric.** As first delivered it
+passed, and the session *volunteered* that one of its three deliberate breaks — counting only
+`@c`-prefixed `pol` premises — was not caught by its fixture, calling it a small follow-up.
+It was not small: `width_root_unsat`'s `pol` line is essentially all bare literals, so
+`pol_prems=1999`, the largest figure in the whole baseline, is produced by precisely the
+token class the control did not protect. And the suite-wide run only *reports* — nothing
+asserts on it — so that regression would have changed the headline number with no lane going
+red. That is the "green for the wrong reason" shape M2-T14 and M1-T51 both found, arriving
+from a new direction: **not a lane that passes vacuously, but a metric whose largest value is
+unprotected.** If you add a benchmark figure, ask which of its numbers a control would catch
+being wrong.
+
+Fixture widened, `@c`-id count pinned at 4 on both sides so the growth is attributable.
+**Verified independently rather than read off the report**: honest script exits 0; flattening
+the variant fixture exits 1; break (3) re-applied by hand exits 1 on `pol_prems did not grow
+(4.0000 -> 4.0000)`. Gate after the merge is **1972 ok / 0 FAIL**, 280 matrix, 44 mutation,
+12 random, 38/38 models, determinism green — identical to the pre-merge baseline, as a
+`bench/`-only change should be. Peak RSS 9.6 MB.
