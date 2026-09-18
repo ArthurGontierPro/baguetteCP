@@ -1,0 +1,63 @@
+% M2-L14. THE SAT COUNTERPART: a satisfiable model whose search still has to refute a
+% pigeonhole first. Six pigeons, six holes -- but hole 6 is GATED by y:
+%
+%   x[p][6] <= y   for every pigeon p   (int_lin_le([1,-1], [x[p][6], y], 0))
+%
+% y is declared first and every variable is width 2, so first-fail's declaration-order
+% tie-break decides y first, and min-value branching (docs/SPEC.md 3.4) tries y = 0
+% first. y = 0 shuts hole 6 and leaves exactly php_unsat.fzn -- six pigeons, five holes
+% -- so the search must run that whole refutation before it flips y to 1 and walks
+% straight to a solution.
+%
+% The suite's other SAT models find their answer down a spine with no conflict at all
+% (groetzsch-style 4-colouring: 18 nodes, 17 decisions, maxdepth 17 -- no branching).
+% This one does 69 decisions and learns 54 clauses on the way to its answer, so it is
+% the SAT half of the SAT/UNSAT pair M2-L14 asks for on one shape.
+%
+% MEASURED 2026-09-18 (`--stats`, this exact file):
+%
+%   BAGUETTE_PROPAGATE_LEARNED=on    124 nodes, 69 decisions, maxdepth 16,  54 learned
+%   BAGUETTE_PROPAGATE_LEARNED=off   256 nodes, 135 decisions, maxdepth 16, 120 learned
+%
+% The solution is pinned in test/expected/: x and y are output, so a wrong answer is a
+% diff and not a silent pass. Check it by hand if it ever moves -- it is a permutation.
+%
+% WHY EVERY VARIABLE IS 0..1. Two reasons, and they are the whole point of M2-L14.
+%
+% (1) D-0028: the order encoding is width-proportional, so hardness must come from
+%     COMBINATORIAL STRUCTURE, not from domain width. `var 0..1000` is not a bigger
+%     test, it is a thousand ladder clauses. Many variables, single-value domains.
+%
+% (2) A 0..1 variable can be branched AT MOST ONCE on any root-to-leaf path, so every
+%     level of the tree branches a DIFFERENT variable. lib/core/search.ml's
+%     [spec_order] splits at `d_split = lo`, i.e. `x <= 0` against `x >= 1`; on a
+%     domain of {0,1} BOTH children are singletons, so [first_fail] (which only ever
+%     considers unfixed variables) cannot pick it again below. That is a property of
+%     the encoding, not a hope about the heuristic.
+%
+%     This matters because M2-L12 measured that the suite's integer models re-branch
+%     the SAME variable down a spine -- the right child of `x <= k` still has a
+%     multi-value domain -- so a learned constraint was always exactly the branch the
+%     search was about to take anyway. A model that does not branch different
+%     variables cannot show learning however many nodes it has.
+var 0..1: y :: output_var;
+array [1..36] of var 0..1: x :: output_array([1..36]);
+constraint int_lin_eq([1,1,1,1,1,1],[x[1],x[2],x[3],x[4],x[5],x[6]],1);
+constraint int_lin_eq([1,1,1,1,1,1],[x[7],x[8],x[9],x[10],x[11],x[12]],1);
+constraint int_lin_eq([1,1,1,1,1,1],[x[13],x[14],x[15],x[16],x[17],x[18]],1);
+constraint int_lin_eq([1,1,1,1,1,1],[x[19],x[20],x[21],x[22],x[23],x[24]],1);
+constraint int_lin_eq([1,1,1,1,1,1],[x[25],x[26],x[27],x[28],x[29],x[30]],1);
+constraint int_lin_eq([1,1,1,1,1,1],[x[31],x[32],x[33],x[34],x[35],x[36]],1);
+constraint int_lin_le([1,1,1,1,1,1],[x[1],x[7],x[13],x[19],x[25],x[31]],1);
+constraint int_lin_le([1,1,1,1,1,1],[x[2],x[8],x[14],x[20],x[26],x[32]],1);
+constraint int_lin_le([1,1,1,1,1,1],[x[3],x[9],x[15],x[21],x[27],x[33]],1);
+constraint int_lin_le([1,1,1,1,1,1],[x[4],x[10],x[16],x[22],x[28],x[34]],1);
+constraint int_lin_le([1,1,1,1,1,1],[x[5],x[11],x[17],x[23],x[29],x[35]],1);
+constraint int_lin_le([1,1,1,1,1,1],[x[6],x[12],x[18],x[24],x[30],x[36]],1);
+constraint int_lin_le([1,-1],[x[6],y],0);
+constraint int_lin_le([1,-1],[x[12],y],0);
+constraint int_lin_le([1,-1],[x[18],y],0);
+constraint int_lin_le([1,-1],[x[24],y],0);
+constraint int_lin_le([1,-1],[x[30],y],0);
+constraint int_lin_le([1,-1],[x[36],y],0);
+solve satisfy;

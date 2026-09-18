@@ -1,0 +1,119 @@
+% M2-L14. 3-COLOURING THE GROETZSCH GRAPH -- a search whose structure is NOT a
+% pigeonhole, so that M2-L13's baseline is not measured on one shape alone.
+%
+% The Groetzsch graph is the Mycielskian of C5: 11 vertices, 20 edges, TRIANGLE-FREE and
+% yet 4-chromatic -- the smallest graph that is both. So there is no clique to count and
+% the pigeonhole argument php_unsat.fzn turns on is simply absent here; the refutation
+% has to come out of the odd-cycle structure.
+%
+% x[(v-1)*3 + c] = 1 means vertex v takes colour c.
+%   sum_c x[v][c] = 1                  every vertex is coloured
+%   x[u][c] + x[v][c] <= 1  per edge   adjacent vertices differ
+%
+% Edges: the C5 u1..u5; each vi (= vertex 5+i) to BOTH C5-neighbours of ui; w (= 11) to
+% every vi. The encoding is self-checking: 4 colours on the same edge list is SAT and 3
+% is UNSAT, which is exactly the Groetzsch property, so a typo in the edge list would
+% almost certainly break that pair.
+%
+% MEASURED 2026-09-18 (`--stats`, this exact file):
+%
+%   BAGUETTE_PROPAGATE_LEARNED=on    47 nodes, 23 decisions, maxdepth 5, 24 learned
+%   BAGUETTE_PROPAGATE_LEARNED=off   47 nodes, 23 decisions, maxdepth 5, 24 learned
+%
+% THE ABLATION MOVES NOTHING HERE, and that is reported rather than hidden. maxdepth 5
+% over 33 variables says why: the conflicts sit near the top of the tree, so a learned
+% clause has almost no subtree left to prune. It is a negative datapoint for M2-L13 --
+% a real search that learning does not help -- and the suite is worth more with one in
+% it than with only the shapes that flatter the feature.
+%
+% WHY EVERY VARIABLE IS 0..1. Two reasons, and they are the whole point of M2-L14.
+%
+% (1) D-0028: the order encoding is width-proportional, so hardness must come from
+%     COMBINATORIAL STRUCTURE, not from domain width. `var 0..1000` is not a bigger
+%     test, it is a thousand ladder clauses. Many variables, single-value domains.
+%
+% (2) A 0..1 variable can be branched AT MOST ONCE on any root-to-leaf path, so every
+%     level of the tree branches a DIFFERENT variable. lib/core/search.ml's
+%     [spec_order] splits at `d_split = lo`, i.e. `x <= 0` against `x >= 1`; on a
+%     domain of {0,1} BOTH children are singletons, so [first_fail] (which only ever
+%     considers unfixed variables) cannot pick it again below. That is a property of
+%     the encoding, not a hope about the heuristic.
+%
+%     This matters because M2-L12 measured that the suite's integer models re-branch
+%     the SAME variable down a spine -- the right child of `x <= k` still has a
+%     multi-value domain -- so a learned constraint was always exactly the branch the
+%     search was about to take anyway. A model that does not branch different
+%     variables cannot show learning however many nodes it has.
+array [1..33] of var 0..1: x;
+constraint int_lin_eq([1,1,1],[x[1],x[2],x[3]],1);
+constraint int_lin_eq([1,1,1],[x[4],x[5],x[6]],1);
+constraint int_lin_eq([1,1,1],[x[7],x[8],x[9]],1);
+constraint int_lin_eq([1,1,1],[x[10],x[11],x[12]],1);
+constraint int_lin_eq([1,1,1],[x[13],x[14],x[15]],1);
+constraint int_lin_eq([1,1,1],[x[16],x[17],x[18]],1);
+constraint int_lin_eq([1,1,1],[x[19],x[20],x[21]],1);
+constraint int_lin_eq([1,1,1],[x[22],x[23],x[24]],1);
+constraint int_lin_eq([1,1,1],[x[25],x[26],x[27]],1);
+constraint int_lin_eq([1,1,1],[x[28],x[29],x[30]],1);
+constraint int_lin_eq([1,1,1],[x[31],x[32],x[33]],1);
+constraint int_lin_le([1,1],[x[1],x[4]],1);
+constraint int_lin_le([1,1],[x[2],x[5]],1);
+constraint int_lin_le([1,1],[x[3],x[6]],1);
+constraint int_lin_le([1,1],[x[4],x[7]],1);
+constraint int_lin_le([1,1],[x[5],x[8]],1);
+constraint int_lin_le([1,1],[x[6],x[9]],1);
+constraint int_lin_le([1,1],[x[7],x[10]],1);
+constraint int_lin_le([1,1],[x[8],x[11]],1);
+constraint int_lin_le([1,1],[x[9],x[12]],1);
+constraint int_lin_le([1,1],[x[10],x[13]],1);
+constraint int_lin_le([1,1],[x[11],x[14]],1);
+constraint int_lin_le([1,1],[x[12],x[15]],1);
+constraint int_lin_le([1,1],[x[13],x[1]],1);
+constraint int_lin_le([1,1],[x[14],x[2]],1);
+constraint int_lin_le([1,1],[x[15],x[3]],1);
+constraint int_lin_le([1,1],[x[16],x[13]],1);
+constraint int_lin_le([1,1],[x[17],x[14]],1);
+constraint int_lin_le([1,1],[x[18],x[15]],1);
+constraint int_lin_le([1,1],[x[16],x[4]],1);
+constraint int_lin_le([1,1],[x[17],x[5]],1);
+constraint int_lin_le([1,1],[x[18],x[6]],1);
+constraint int_lin_le([1,1],[x[19],x[1]],1);
+constraint int_lin_le([1,1],[x[20],x[2]],1);
+constraint int_lin_le([1,1],[x[21],x[3]],1);
+constraint int_lin_le([1,1],[x[19],x[7]],1);
+constraint int_lin_le([1,1],[x[20],x[8]],1);
+constraint int_lin_le([1,1],[x[21],x[9]],1);
+constraint int_lin_le([1,1],[x[22],x[4]],1);
+constraint int_lin_le([1,1],[x[23],x[5]],1);
+constraint int_lin_le([1,1],[x[24],x[6]],1);
+constraint int_lin_le([1,1],[x[22],x[10]],1);
+constraint int_lin_le([1,1],[x[23],x[11]],1);
+constraint int_lin_le([1,1],[x[24],x[12]],1);
+constraint int_lin_le([1,1],[x[25],x[7]],1);
+constraint int_lin_le([1,1],[x[26],x[8]],1);
+constraint int_lin_le([1,1],[x[27],x[9]],1);
+constraint int_lin_le([1,1],[x[25],x[13]],1);
+constraint int_lin_le([1,1],[x[26],x[14]],1);
+constraint int_lin_le([1,1],[x[27],x[15]],1);
+constraint int_lin_le([1,1],[x[28],x[10]],1);
+constraint int_lin_le([1,1],[x[29],x[11]],1);
+constraint int_lin_le([1,1],[x[30],x[12]],1);
+constraint int_lin_le([1,1],[x[28],x[1]],1);
+constraint int_lin_le([1,1],[x[29],x[2]],1);
+constraint int_lin_le([1,1],[x[30],x[3]],1);
+constraint int_lin_le([1,1],[x[31],x[16]],1);
+constraint int_lin_le([1,1],[x[32],x[17]],1);
+constraint int_lin_le([1,1],[x[33],x[18]],1);
+constraint int_lin_le([1,1],[x[31],x[19]],1);
+constraint int_lin_le([1,1],[x[32],x[20]],1);
+constraint int_lin_le([1,1],[x[33],x[21]],1);
+constraint int_lin_le([1,1],[x[31],x[22]],1);
+constraint int_lin_le([1,1],[x[32],x[23]],1);
+constraint int_lin_le([1,1],[x[33],x[24]],1);
+constraint int_lin_le([1,1],[x[31],x[25]],1);
+constraint int_lin_le([1,1],[x[32],x[26]],1);
+constraint int_lin_le([1,1],[x[33],x[27]],1);
+constraint int_lin_le([1,1],[x[31],x[28]],1);
+constraint int_lin_le([1,1],[x[32],x[29]],1);
+constraint int_lin_le([1,1],[x[33],x[30]],1);
+solve satisfy;
