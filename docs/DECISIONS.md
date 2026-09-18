@@ -2558,3 +2558,131 @@ the largest remaining task and D-0011's lesson was that preconditions close *bef
 task starts, not during. It is a natural companion to **M2-T9's follow-up** and to M4-T1,
 which D-0040 requires to emit an explicit `pol` ahead of its trace line — precisely the
 `pol` whose conclusion this makes checkable.
+
+## D-0044  The learned object is a PB inequality; a clause is its degenerate case
+
+**Status**: DECIDED, 2026-09-18. Sets the architecture for M2-T3, which is split into
+**M2-L0 … M2-L9** in `docs/ROADMAP.md`. Does **not** re-open D-0026, D-0037 or D-0043.
+
+### The question
+
+M2-T3 said "clause learning from conflicts (1UIP)". Lazy Clause Generation is the
+successful approach and clauses are what it learns, but committing the *learned-constraint
+type* to a clause is a decision that is expensive to reverse: every later wish for
+cardinality or linear learning then has to bridge two representations. The question raised
+was whether we can learn pseudo-Boolean constraints instead, and how far "instead" can go.
+
+### The decision
+
+**The learned-constraint type is a PB inequality `sum a_i l_i >= b` over `Lit.t`. A clause
+is the degree-1, unit-coefficient case of it, not a separate type.** The first conflict
+analysis we build (M2-L3) emits only the clause case; the type does not know that.
+
+**The reduction rule is a named, swappable component** (M2-L5), not code inlined into
+conflict analysis.
+
+**The arbitrary-constraint route is rejected** — see below.
+
+### Why this costs us nothing here, and would cost Pumpkin a lot
+
+This is the load-bearing argument and it is a property of *our encoding*, so it is worth
+stating rather than assuming.
+
+Pumpkin's LLG (Baauw, Flippo & Demirović, CP 2025) reports that its largest single cause of
+failed linear analysis is **hitting a clause**, and says why: it deliberately does not
+create 0-1 variables for atomic constraints, so a clause is a set of atomic constraints
+rather than of Boolean variables, and converting one to a linear inequality would mean
+minting an auxiliary variable per literal.
+
+**D-0028 gives us the opposite.** The order encoding is eager, so every atomic constraint
+already *is* a 0-1 variable in the `.opb`, and a clause over order literals already *is*
+the PB constraint `sum l_i >= 1` over those same variables. There is no conversion, no
+auxiliary variable, and no fallback cliff between the clausal and the linear path.
+
+So "clause learning" and "PB learning" are not two regimes for this solver; they are the
+same regime at two coefficient profiles. Sequencing clauses first (M2-L3) is therefore a
+*staging* decision, reversible at any point, and not the lock-in it would be elsewhere.
+
+The price of that encoding is width — it is Theta(total width), which is D-0041 and D-0042,
+and it is why the test suite keeps declared domains in the single digits. That price is
+already paid for other reasons; this decision spends none of it.
+
+### Why the reduction rule is a separate component
+
+PB conflict-analysis strength is an active research area whose results are **dominance**
+results, not benchmark wins, so the upgrade path is known in advance:
+
+- division beats saturation, exponentially (Elffers & Nordström, *Divide and Conquer*,
+  IJCAI 2018, and *On Division Versus Saturation*);
+- `roundToOne` — weaken literals, then divide so the reduced reason has slack zero —
+  is RoundingSat's stronger reduction;
+- Lomis, Devriendt, Bierlee & Guns (SAT 2025) give two further reductions, each shown
+  *at least as strong* as the existing ones;
+- MIR-based reduction (Mexi et al.) returns an equally strong or stronger reason than
+  division.
+
+The ceiling is known too: Vinyals et al. (SAT 2018) show what such solvers implement sits
+strictly *between* resolution and cutting planes, because every intermediate constraint is
+forced to stay conflicting. Strengthening the reduction moves us inside that gap; it does
+not close it. Nobody should expect a silver bullet from M2-L5 or M2-L7.
+
+**Measured against our own code, 2026-09-18:**
+
+| Reduction | Expressible today |
+|---|---|
+| division-based | **yes** — `Combine (summands, divisor)` is weaken-then-divide |
+| `roundToOne` | **yes, no ADT change** — `Weaken lits` then `Combine` with the divisor |
+| saturation-based | **no** — `Writer.Pol.saturate` exists and emits ` s`, and PROOF-FORMAT §2a documents it, but `Explanation.t` has no `Saturate` constructor, so `Justify` cannot reach it. That is M2-L7 and it needs its own record |
+| MIR | **no** — and Koops et al. note MIR is not the same as CG division. Out of scope |
+
+The reduction we can already express is the one that is provably stronger. That is luck,
+not design, and it is why M2-L5 needs no ADT change.
+
+### That this is loggable at a sane cost is measured, by someone else
+
+Koops, Le Berre, Myreen, Nordström, Oertel, Tan & Vinyals, *Practically Feasible Proof
+Logging for Pseudo-Boolean Optimization* (CP 2025) log the **full** conflict analysis of
+RoundingSat and Sat4j — division, saturation, weakening, core-guided search, LP integration
+— in VeriPB with a CakePB backend. RoundingSat: proof-logging overhead **median 2.7%**,
+95th percentile 21.1%, worst 46.2%; checking **median 1.43x** solve time, 95% within 9.22x,
+worst 19.17x.
+
+This is the single most important external fact for this plan, and it is *their*
+measurement, not ours: it says the emission path we are about to build is known to be
+affordable, and it removes "proof logging will make learning unaffordable" from the list of
+reasons not to try. Their partial-weakening-before-division technique (for divisions that
+are not in normalised form) and their merging of adjacent weakening steps on `pol` lines
+should be read before M2-L6's emission path is designed, not after.
+
+### The arbitrary-constraint route, and why it is rejected
+
+Veksler & Strichman (*Learning General Constraints in CSP*, CPAIOR 2015 / AIJ 2016) go
+past signed clauses to direct inference between general constraints: `Infer(c1, c2) -> c*`
+subject to (i) `c1 /\ c2 -> c*`, (ii) `c*` under the pre-propagation domains propagates to
+false — the same conflicting invariant — and (iii) explicitly, the strongest `c*` **that is
+easy to propagate**. They give rules R1–R7 satisfying (i) and (ii), R8–R9 satisfying only
+(i) and applied speculatively, and a meta-rule for disjunctions. Their examples do learn
+strictly stronger constraints than resolving the corresponding explanations.
+
+Rejected for us on cost, not on merit:
+
+1. The rules are **per ordered pair of constraint types**, not per constraint. Nine rules
+   bought them a handful of pairs; our nine propagator families are up to 45.
+2. Their own requirement (iii) is the wall: a learned constraint must be something the
+   solver can already propagate. For us each new learned *shape* needs a propagator, an
+   I-X10 classification and a justification.
+3. They still need a clausal fallback for unhandled pairs — as do IntSat and LLG. Three
+   independent systems, same fallback. **That is the argument for keeping M2-L3's clause
+   path permanently, and it does not rest on any one paper's benchmark table.**
+
+Recorded here so that M4-T2 (Régin) does not re-open it by accident.
+
+### Status register
+
+**Measured**: what our ADT and writer can express (the table above, read off
+`explanation.ml` and `writer.ml` on 2026-09-18). **External, measured by others**: the
+Koops overheads, the reduction dominance results. **Argued, not measured**: that the
+order-encoding argument makes the clause/PB regimes genuinely one for us — it follows from
+D-0028 and from `Encoding`'s literal naming, but no code has yet built a `Learned.t` from a
+clause and propagated it as a PB row. **M2-L1's test (b) is what converts it**, and if it
+fails, this record's central claim is wrong and the staging in M2-L3 must be revisited.
