@@ -1169,3 +1169,32 @@ the seed numbers are not a certain match, just the same order of magnitude (4-is
 **Next session**: if you touch this file's counters or `orders_for`, re-run the same sweep
 — the top-up loop is cheap when coverage is already reached (0 extra draws on ~97% of
 seeds) so it should not show up in normal runtimes.
+
+### Added 2026-09-18, after the briefing above was written: read D-0045's addendum before M2-L1
+
+The briefing above is still current in every respect. This is one thing it could not
+contain, because it was found the day after.
+
+**A learned constraint is deleted by the backjump that follows learning it, automatically.**
+`Writer.fresh` (`lib/proof/writer.ml:547`) tags every id it hands out with the writer's
+**current** level — `Hashtbl.replace t.tags t.next_id t.level`, with **no `~level`
+argument** — and `wipe_level l` (`:764`) deletes every id tagged at level `>= l`.
+`set_level` (`:593`) is the only lever that moves `t.level`, and it is also *"the only
+thing that writes a level marker"*, so reaching for it mid-derivation puts a `% level 0`
+in the middle of the derivation.
+
+That collides head-on with **M2-L3's own emission rule**, which says to emit the learned
+clause's derivation *while the trace lines supporting it are still live* — i.e. before the
+wipe, which is exactly where `fresh` will tag it for deletion. The two cannot both hold
+through the current API, so **M2-L1 most likely owes `lib/proof/writer.ml` a new entry
+point** (an id allocated at a chosen level) rather than a call-ordering trick in
+`lib/core`. Cheap in M2-L1; expensive once three rows have each worked around it.
+
+**It must hold under both formats.** Under 2.0 `t.tags` is not maintained at all (`:876`)
+— the checker holds the level stack and `w l` retires against it — so a fix that only
+adjusts the 3.0 table would be green under 3.0 and wrong under 2.0. That is the M1-T46
+discipline applied to a data structure instead of a message.
+
+Read off the code, **not measured**: no learned constraint has ever been emitted. The
+prediction to falsify is stated in D-0045 — emit one at the conflict level and the
+backjump deletes it.
