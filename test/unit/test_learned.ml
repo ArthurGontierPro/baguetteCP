@@ -33,6 +33,7 @@ module Reason = Baguette_core.Reason
 module Explanation = Baguette_core.Explanation
 module Propagator = Baguette_core.Propagator
 module Linear = Baguette_core.Linear
+
 (* M2-L12/D-0052: bool_clause.ml was widened to general order literals and renamed
    [Clause]; the Boolean face this file exercises is [Clause.make] plus the DOMAIN-
    declaring submodules. Aliased under the old name so that every check below still says
