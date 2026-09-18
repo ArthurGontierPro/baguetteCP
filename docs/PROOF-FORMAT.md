@@ -85,6 +85,7 @@ against veripb 2.2.2. Where this document disagreed with the checker, the checke
 | `pol` (`p`) | `pol <rpn>` | cutting-planes derivation in reverse Polish | the workhorse: most propagator justifications |
 | `rup` (`u`) | `rup <terms> >= <n> ;` | reverse unit propagation | prunings whose reason is clausal |
 | `red` | `red <constraint> ; <witness>` | redundance-based strengthening | definitions: reified vars, direct-encoding channelling |
+| `red`, **vacuity** | — | **over a CONTRADICTORY database every `red` is accepted, wrong witness or none at all** | measured on 3.0.2, D-0053. A redundance goal discharges trivially from a contradiction, so *"veripb accepted the `red`"* is **not evidence** unless the model is satisfiable. Any `red` emitted after the search has derived a conflict is rubber-stamped |
 | `del` (`d`) | `del id N M ...` | delete constraints by id | retiring an individual reason |
 | `#` | `# <level>` | **set the current level** | opening a decision level |
 | `w` | `w <level>` | wipe every constraint at or above that level | backtracking — see section 5 |
@@ -123,7 +124,7 @@ the old grammar for anyone reading an archived proof.
 | RUP | `rup <c> ;` | the constraint already carries the terminator, and a second `;` is an error |
 | **implies / assert** | `ia <c> : @hint ;` | **Was missing from this table until M1-T51.** Asks whether `<c>` is *syntactically implied* by the one constraint at the hint — no propagation, no search. Yields an id. See the trap below |
 | **equals** | `e <c> : @hint ;` | same shape; asks for syntactic *equality* rather than implication. Rejections: "Expected constraint is not equal to the constraint at the hint.", unhinted "Constraint not found in database." |
-| redundance | `red <c> : <witness> ;` | the witness goes **before** the terminator. After a `;` it is silently not a witness |
+| redundance | `red <c> : <witness> ;` | the witness goes **before** the terminator. After a `;` it is silently not a witness. **A missing witness is a `Warning`, not an error** (3.0.2: *"A witness must be specified for the red-rule"*), and the run continues — what fails is the redundance goal further down, *if* anything fails at all. See the next row |
 | delete | `del id N M ;` | also `del range LO HI ;`, **half-open: `[LO, HI)`, so `HI` survives** (measured, M1-T22); tolerant of an already-deleted id and of a reversed range |
 | delete from core | `delc N ;` | `delc` takes the reference directly; `del` and `core` keep their `id` |
 | core | `core id N ;` | |

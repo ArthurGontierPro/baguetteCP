@@ -3561,3 +3561,86 @@ construction.
 models". At its own base commit that map already said **39**. Checked rather than relayed —
 which is the standing rule here, and it applies to a study's incidental observations as much
 as to its headline.
+
+## D-0053  Reification has two doors, and `red` is vacuous over a contradictory database
+
+**Status**: **ACCEPTED**, implemented by M3-T1 (2026-09-18, agent-reify). Two findings in one
+record: the first is a design rule, the second is a **hole in the sole oracle** and reaches
+far beyond M3.
+
+### 1. The two doors, and which one is forced
+
+A reifier is an ordinary order-encoded bool (D-0007). Its definition against a condition
+normalised to `Σ aᵢlᵢ >= k` (all `aᵢ > 0`, `A = Σ aᵢ`) is exactly two rows:
+
+```
+FWD   b -> C     Σ aᵢ  lᵢ + k·~b        >= k          witness  b -> 0
+BWD   C -> b     Σ aᵢ ~lᵢ + (A-k+1)·b   >= A-k+1      witness  b -> 1
+```
+
+Both big-Ms are the smallest that work; a larger one is sound but weakens what a propagator
+can cut from the row, and "one too small" is a pinned rejection lane. `reif_rows` is **pure
+and shared** by `add_reif` (eager, `.opb`) and `define_reif` (lazy, `.pbp`), so the two doors
+cannot disagree about the encoding.
+
+> **`red` cannot give a model-declared reified bool its meaning.** `red` preserves
+> satisfiability *of the database*. If `b` already occurs in a loaded row, the witness
+> `b -> 0` must discharge that row under substitution, and for a model that genuinely
+> constrains `b` it cannot. **Measured, not argued**: the checker rejects such a case on
+> *"Proofgoal 3 could not be autoproven"*, and goal 3 **is** the model row the witness failed
+> to discharge.
+
+So `define_reif` carries a freshness precondition (`Reif_not_fresh`, raised before any line is
+written), and model-stated reification — `int_le_reif` and friends — goes through the `.opb`
+door. `red` is for conditions **the model never named**: the ones a propagator wants to carry
+as a single literal after the `.opb` was already written.
+
+### 2. `red` is vacuously accepted over a contradictory database — and this is not an M3 fact
+
+**Reproduced independently by the orchestrator on veripb 3.0.2**, on hand-written two-line
+fixtures, because it is the kind of claim that must not rest on one agent's test:
+
+| the `red` line | over a **satisfiable** `.opb` | over a **contradictory** `.opb` |
+|---|---|---|
+| witness that does **not** discharge its claim | rejected, `Proofgoal #1 could not be autoproven`, exit 1 | **`s VERIFIED`, exit 0** |
+| **no witness at all** | `Warning: A witness must be specified for the red-rule`, then rejected, exit 1 | `Warning: …`, then **`s VERIFIED`, exit 0** |
+
+Two consequences, and the second is the dangerous one:
+
+- **"veripb accepted the `red` line" is not evidence unless the model is satisfiable.** A
+  redundance goal discharges trivially from a contradictory database, so *every* witness is
+  accepted there, including a wrong one. M3-T1's acceptance lanes were reshaped onto a
+  satisfiable model after its first attempt found exactly this, and the vacuity is pinned as
+  its own passing check so it cannot quietly stop being true.
+- **A missing witness is a `Warning`, not an error.** Combined with the row above: **a `red`
+  with a missing or misplaced witness, emitted after the search has already derived a
+  contradiction, is accepted with nothing but a line on stderr.** Nothing in this project
+  reads the checker's stderr warnings.
+
+**This is a standing caveat on any future `red` emitted during search**, not a quirk of M3.
+D-0046 made veripb 3.0.2 the sole oracle and accepted that a bug in it is invisible here; this
+is the same shape one step out — a *silence* in it is invisible here. Any row that emits `red`
+after a conflict must justify itself by something other than the checker's acceptance.
+
+### The related trap, and why the wording is what gets asserted
+
+`Opb`'s own comment (`opb.ml:74-75`) records that VeriPB 3.0's `red` ends at the **first `;`**,
+so the witness must come before one: `red <body> : <witness> ;`. `Writer.red` emits that shape
+by construction. A witness after the `;` is therefore not a witness — and by the table above,
+what happens next depends on the database rather than on the mistake. **An exit status cannot
+tell a judgement from a parse error** (M2-T14 found four lanes green for exactly that reason),
+which is why these lanes assert the checker's wording at full strength.
+
+### What M3-T2 inherits
+
+**Can**: name any linear `Σ aᵢxᵢ <= c` over declared variables with one literal, mid-search,
+and cite `reif_fwd`/`reif_bwd` in a `pol`. All five M3-T4 dispatcher cases over a `<=`
+condition are cutting-planes steps over exactly these two rows.
+
+**Cannot**: `int_eq_reif` / `int_ne_reif` are **not one pair** — `b <-> (Σ = c)` needs
+`p <-> (Σ<=c)`, `q <-> (Σ>=c)` and `b <-> p ∧ q`. `reif_rows` gives `p` and `q`; **the
+conjunction channelling is deliberately not built**, and where `p`/`q` live is an open choice.
+Nor is anything wired into search yet: `ensure_direct`, the pattern this extends, has **no
+production caller today**, and a reifier registry needs an `Encoding.t` and a `Writer.t`
+together at pruning time — `justify.ml:146` is the only place in core that already holds a
+writer.

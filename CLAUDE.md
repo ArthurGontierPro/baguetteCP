@@ -363,6 +363,12 @@ not just the session that caused it.
 - **Every propagation that prunes must be able to justify itself.** A propagator that
   narrows a domain without producing an `Explanation` is a bug, not an optimisation.
   There is no "add proof logging later" mode.
+- **`red` is vacuous over a contradictory database, so the checker accepting one proves
+  nothing there.** Measured on 3.0.2 (D-0053): with the database already contradictory, a
+  `red` line is accepted with a **wrong** witness or with **no witness at all** — and a
+  missing witness is only a `Warning` on stderr, which nothing here reads. Verify a `red`
+  over a **satisfiable** model, or you have tested nothing. This bites any row that emits
+  `red` after a conflict, not just M3.
 - **A test that does not check the proof is half a test.** Any test that solves a model
   must also run `veripb` over the emitted proof. See `scripts/verify_proof.sh`.
 - **Never weaken a test to make it pass.** If a model test starts failing, the propagator
