@@ -7,40 +7,72 @@ freely — but changes to §4 (explanations) need a decision record.
 
 ## 1. Module map
 
-```
-bin/main.ml                    CLI: parse args, wire everything, print results
+*Verified against the tree on 2026-09-18.* This section was stale for long enough that
+`CLAUDE.md` carried its own replacement map and told readers to trust that one over this —
+it listed three propagators that have never existed (`alldiff`, `element`, `clause`) and
+omitted eleven modules that do, including `reason.ml`, which half of `lib/core` now depends
+on. If you change the tree, change this. A map nobody trusts costs more than no map.
 
-lib/flatzinc/   Baguette_flatzinc      (standalone: does not depend on core yet)
-  pos.ml  error.ml             source positions; one error type carrying a Pos.t
-  ast.ml                       FlatZinc syntax tree
-  lexer.ml  parser.ml          hand-written scanner + recursive descent (D-0006)
-  model.ml                     the front end's output: vars, domains, constraints
-  builder.ml                   ast -> Model, and the SPEC 2.1 normative rules
+```
+bin/main.ml                 CLI: parse args, wire everything, print results
+
+lib/flatzinc/   Baguette_flatzinc
+  pos.ml error.ml           source positions; the single front-end error type
+  ast.ml                    FlatZinc syntax tree, restricted to SPEC 2.1
+  lexer.ml parser.ml        hand-written scanner + recursive descent (D-0006)
+  model.ml                  the front end's output: vars, domains, constraints
+  builder.ml                ast -> Model.t, and the normative rules of SPEC 2.1
+  compile.ml                Model.t -> store + PB encoding + propagator instances;
+                            this is the flatzinc -> core edge
+  output.ml                 solution printing in FlatZinc output format (SPEC 2.2)
 
 lib/core/       Baguette_core
-  var.ml                       variable identity (abstract int)
-  domain.ml                    finite integer domain
-  store.ml                     backtrackable store: domains + undo trail
-  explanation.ml       *****   the Explanation type. Read docs/SPEC.md 3.3 first.
-  propagator.ml                the propagator interface (module type PROPAGATOR)
-  prop/                        one module per constraint family
-    linear.ml  alldiff.ml  element.ml  clause.ml ...
-  justify.ml                   Explanation -> proof rule(s). Lives here, not in
-                               lib/proof/, because the dependency runs core -> proof:
-                               proof cannot see Explanation.
-  engine.ml                    propagate-to-fixpoint loop, the queue
-  search.ml                    branching, backtracking, restarts
-  debug.ml                     BAGUETTE_DEBUG-gated invariant checks
+  var.ml                    variable identity (abstract int)
+  domain.ml                 bounds pair + lazily allocated hole set (section 2)
+  store.ml                  backtrackable store: domains + undo trail (section 3)
+  reason.ml                 WHICH FACTS justify a pruning, as declarative data, and
+                            [justified] -- the one value a mutator takes. D-0026's
+                            first half; [Explanation] is the second
+  explanation.ml    *****   THE Explanation ADT: HOW the checker is convinced, as a
+                            cutting-planes expression. Read SPEC 3.3 + section 4
+                            first. No new constructor without a decision record
+  justify.ml                Explanation.t -> VeriPB rules -> constraint id. Lives in
+                            core, not proof, because proof cannot see Explanation
+  trace.ml                  records what a branch learned so its nogood is plain RUP
+                            (D-0018)
+  propagator.ml             the PROPAGATOR module type (65 lines -- read it whole)
+  engine.ml                 propagate-to-fixpoint loop and the queue (section 5)
+  search.ml                 DFS, branching, backtracking, every step proof-logged.
+                            NOT restarts: SPEC 3.4 disables them, and whether that
+                            survives clause learning is the open question D-0045
+  checked.ml                checked integer arithmetic + the overflow cap
+  interval.ml               interval arithmetic: mul, square, div of bounds
+  debug.ml                  BAGUETTE_DEBUG-gated invariant checks
+  prop/                     one module per constraint family:
+    linear.ml               int_lin_le. THE REFERENCE PROPAGATOR -- copy this shape
+    lin_eq.ml               int_lin_eq (two model rows, see D-0011)
+    ne.ml                   int_lin_ne and int_ne (VALUE consistency)
+    int_le.ml int_lt.ml     degenerate linear constraints, delegate to Linear
+    int_eq.ml               delegates to Lin_eq
+    bool2int.ml             bool <-> int channelling
+    bool_clause.ml          clauses, and the array_bool_or/and/eq/not family
+    order_reason.ml         bound-fact chains in the order encoding (D-0010)
 
 lib/proof/      Baguette_proof
-  lit.ml                       order/direct encoding literals; naming is normative
-  opb.ml                       write the .opb model file
-  encoding.ml                  which variable has which encoding; channelling
-  writer.ml                    write the .pbp proof: emit rules, hand back constraint ids
+  lit.ml                    encoding literals; naming is NORMATIVE (PROOF-FORMAT 3)
+  encoding.ml               which variable has which encoding; channelling
+  opb.ml                    writes the .opb model file
+  writer.ml                 writes the .pbp proof; owns the constraint-id counter
+                            (I-X2: an id you receive is an id you must delete)
+  checker.ml                resolves which veripb to use; mirrors scripts/checker.sh
 ```
 
 Dependency direction is strictly `flatzinc -> core -> proof`. `core` must not depend on
 `flatzinc`. `proof` must not reach back into `core`'s mutable state — it receives values.
+
+That direction has a consequence worth stating once, because it has surprised two tasks:
+`lib/proof/` **cannot call `Baguette_core.Checked`**. A proof-side module needing checked
+arithmetic must get the value already checked from its caller, or do its own.
 
 ---
 

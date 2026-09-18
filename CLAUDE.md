@@ -26,7 +26,7 @@ that spends its context on reading has none left for the task. So the rule is:
 | `docs/GCS-COMPARISON.md` | 29 KB | Background. Read only if the task is explicitly about the comparison. |
 | `docs/SPEC.md` | 14 KB | Normative. Read the relevant section whole; §2.1 is the FlatZinc subset, §3.2 consistency levels, §3.3 explanations. |
 | `docs/INVARIANTS.md` | 6 KB | Read whole before touching `lib/core/`. It is short on purpose. |
-| `docs/ARCHITECTURE.md` | 7 KB | Read whole if you are changing structure. Its §1 module map is **stale** — use the map below. |
+| `docs/ARCHITECTURE.md` | 8 KB | Read whole if you are changing structure. Its §1 module map was stale for months; **corrected and verified against the tree on 2026-09-18**, and it now agrees with the map below. |
 | `docs/GLOSSARY.md` | 4 KB | Read whole if the vocabulary is new to you. |
 
 **Module headers are the cheapest documentation in this repo.** Every module in `lib/`
@@ -187,8 +187,12 @@ of concurrent edits succeed instead of conflicting.
 Dependency direction is strictly `flatzinc -> core -> proof`. `core` must not depend on
 `flatzinc`. `proof` must not reach back into `core`'s mutable state — it receives values.
 
-This map is current. Trust it over `docs/ARCHITECTURE.md` §1, which still lists
-propagators that do not exist (`alldiff`, `element`, `clause`) and omits several that do.
+This map is current, and since 2026-09-18 `docs/ARCHITECTURE.md` §1 says the same thing —
+it had drifted for months, listing three propagators that never existed (`alldiff`,
+`element`, `clause`) and omitting eleven that do. **The two are now duplicates, so they can
+drift again: if you add or move a module, change both.** This copy exists because it is the
+one you already have in context; §1 exists because it is where someone changing the
+structure looks.
 
 ```
 bin/main.ml                 CLI: parse args, wire everything, print results
