@@ -19,7 +19,6 @@ worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 uni
 |---|---|---|---|
 | M2-L0 | `lib/core/reason.ml`, `lib/core/justify.ml`, `lib/core/prop/**`, and every `test/unit/*.ml` EXCEPT `test_random.ml` and the new `test_analysis.ml` | agent-concl | 2026-09-18 |
 | M2-L2 | NEW `lib/core/analysis.ml`, NEW `test/unit/test_analysis.ml`, one line in `test/unit/dune` (lent) | agent-cut | 2026-09-18 |
-| M2-T13 | `test/unit/test_random.ml` only | agent-flaky | 2026-09-18 |
 
 Two rounds are recorded in `## Completed` below. The rows that stood here on
 2026-09-15 (`integration`, M1-T12, M1-T13) were stale — see the handoff note "the
@@ -190,6 +189,7 @@ work. The owning session picks it up.
 | M1-T36 + M1-T45 | agent-search4 | 2026-09-17 | Node = one child dispatched by `branch` plus the root, counted at dispatch; `stats_consistent` checks `nodes = 2·decisions + 1` on **every** `--stats` run. `lvl` differs structurally (99/49 vs 196 markers on `width_sat_depth`). Hole guard **removed on evidence**: 40 previously-refused shapes forced through 3.0.2, 0 rejections, sweep sensitive to its own corruption. 102/102 artefacts identical. Merged as 06302fd. Produced **M1-T66** |
 | M1-T63 (`trace.ml` half) + D-0043 | orchestrator | 2026-09-17 | `trace.ml`'s hedge now names `reject_set_domain` rather than saying SPEC 2.1 "does not admit" a set domain — a subset can be widened, a gate is a line someone must delete. And **D-0038 is resolved as D-0043** |
 | M2-T3 plan | orchestrator-plan | 2026-09-18 | Split M2-T3 into **M2-L0 … M2-L9** (new `## M2L` section in `docs/ROADMAP.md`) and recorded the architecture as **D-0044**. Docs only; no `lib/` change. Gate green |
+| M2-T13 | agent-flaky | 2026-09-18 | `test_random.ml`'s five `!x > 0` coverage checks (deep decisions, root conflict, div>1, div-remainder, ne-moved-bound) made seed-independent: bounded top-up (cap 4000 extra draws, same seeded stream) keeps generating until every shape is reached, and failure of the check now prints `COVERAGE-GAP (... NOT a soundness failure)` through a new `coverage_check`, distinct from `check`. 130-seed sweep (1-130), 0 failures; top-up actually engaged on seeds 21/53/68/89 confirming it isn't a no-op. `make check`-equivalent gate green: fmt-check, width lint, determinism (34/34), 1625 unit checks, 252 matrix checks, 44 mutation checks. Commits `fb0ebf9`, `30b1d73` on `wave10-flaky` |
 
 ## Handoff notes
 
@@ -1154,3 +1154,18 @@ to delete — every commit is in `master` via a `--no-ff` merge that names the t
 created them deliberately and with meaningful names, which is a different category from
 harness scaffolding, and pruning them was not what was asked. They will accumulate about
 three to five per wave, so prune them when it starts to cost something.
+
+**2026-09-18 — M2-T13, agent-flaky.** The five `test_random.ml` coverage checks
+(`!deep/!root_conflict/!div/!rem/!ne_bound > 0`) were seed-dependent; fixed by extracting
+the per-case solve+check logic into `process_case` so a bounded top-up phase (cap 4000,
+same seed's PRNG stream) can keep drawing cases until every shape appears, and by routing
+those five assertions through a new `coverage_check` that prints `COVERAGE-GAP (...NOT a
+soundness failure)` on failure instead of `FAIL`, so it can never be misread as a proof
+rejection. Verified with a 130-seed sweep (`BAGUETTE_RANDOM_SEED=1..130`, default
+cases/orders): 0 failures, and the top-up genuinely engaged (not a no-op) on seeds 21, 53,
+68, 89 — most likely the four the 2026-09-17 sweep found, though that sweep used
+`BAGUETTE_RANDOM_CASES=200 BAGUETTE_RANDOM_ORDERS=8` and this one used the defaults, so
+the seed numbers are not a certain match, just the same order of magnitude (4-ish of 120).
+**Next session**: if you touch this file's counters or `orders_for`, re-run the same sweep
+— the top-up loop is cheap when coverage is already reached (0 extra draws on ~97% of
+seeds) so it should not show up in normal runtimes.
