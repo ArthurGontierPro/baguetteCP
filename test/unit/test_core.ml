@@ -815,6 +815,108 @@ let test_agreement () =
              [ Reason.at_least ~name:"z" ~decl:0 2 ]
              (Explanation.deferred (fun () -> expl)))))
 
+(* ---------------------------------------------------------------------------
+   M2-L0 / D-0043, test (b): the agreement check becomes EXACT.
+
+   M2-T8 handed this back as a known limitation and named it precisely: the forward arm
+   of [agreement_holds] catches a reason naming the wrong *variable*, and not the right
+   variable at the wrong *value*, because its second arm ("...or the fact has a support")
+   is satisfied by any bound the trail happens to hold. It could not do better: nothing
+   in the pruning said what it concluded, so there was no value to compare against.
+
+   [Store.conclusion_holds] is that comparison, and it is exact in all three coordinates.
+   The break the roadmap asks for is I-X9's shape and the M1-T44 defect: a claim ONE UNIT
+   off the bound the trail actually holds. Off by one in either direction is wrong --
+   a weaker claim is what M1-T51 measured the checker silently accepting, and a stronger
+   one is a claim the store cannot back at all.
+   --------------------------------------------------------------------------- *)
+let test_conclusion () =
+  let store =
+    Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 9; Domain.make 0 9 |]
+  in
+  let v = Var.of_int 0 in
+  (* The justification mentions both variables, so the M2-T8 scope check PASSES on every
+     [j] below -- which is what makes the last check in this test a measurement of what
+     the conclusion adds rather than a restatement of what the scope check already did. *)
+  let expl = Explanation.clause [ Lit.ge "x" 3; Lit.le "y" 4 ] in
+  let j concludes =
+    Reason.because ~concludes [ Reason.at_least ~name:"y" ~decl:0 1 ] expl
+  in
+  (* The change under test: x's lower bound moves 0 -> 3, its upper bound stays at 9. *)
+  let old = Domain.make 0 9 and now = Domain.make 3 9 in
+  let holds c = Store.conclusion_holds store v ~old ~now (j c) in
+  check "D-0043 (b): the exact bound this change produced AGREES"
+    (holds (Some (Reason.at_least ~name:"x" ~decl:0 3)));
+  check "D-0043 (b): no conclusion at all agrees -- that is what [None] is for"
+    (holds None);
+  (* THE BREAK, both ways. One unit weak and one unit strong; the old check could see
+     neither, because "x" has a support the moment anything moved its bound. *)
+  check "D-0043 (b) THE BREAK: a conclusion ONE UNIT WEAK than the trail bound DISAGREES"
+    (not (holds (Some (Reason.at_least ~name:"x" ~decl:0 2))));
+  check
+    "D-0043 (b) THE BREAK: a conclusion ONE UNIT STRONG than the trail bound DISAGREES"
+    (not (holds (Some (Reason.at_least ~name:"x" ~decl:0 4))));
+  (* The other two coordinates, so that "exact" means all three and not just the value. *)
+  check "D-0043 (b): the right value on the WRONG VARIABLE disagrees"
+    (not (holds (Some (Reason.at_least ~name:"y" ~decl:0 3))));
+  check
+    "D-0043 (b): the right variable in the direction this change did NOT move disagrees"
+    (not (holds (Some (Reason.at_most ~name:"x" ~decl:9 9))));
+  (* And the limitation being removed, stated as a test rather than as a claim: the OLD
+     check accepts every one of the breaks above. It is not wrong -- it is answering a
+     different question (which variables, not which value) -- so this is a record of what
+     [conclusion_holds] adds, and it will go on passing. *)
+  check
+    "D-0043 (b): the M2-T8 scope check accepts the one-unit-off claim -- this is the \
+     limitation the conclusion removes, not a defect in it"
+    (Store.agreement_holds store (j (Some (Reason.at_least ~name:"x" ~decl:0 2))));
+  (* An upper-bound move, so the [At_most] arm is not tested only by its refusals. *)
+  let old = Domain.make 0 9 and now = Domain.make 0 4 in
+  check "D-0043 (b): the same, exact, for an upper bound"
+    (Store.conclusion_holds store v ~old ~now
+       (j (Some (Reason.at_most ~name:"x" ~decl:9 4))));
+  check "D-0043 (b): one unit off the new upper bound DISAGREES"
+    (not
+       (Store.conclusion_holds store v ~old ~now
+          (j (Some (Reason.at_most ~name:"x" ~decl:9 5)))))
+
+(* ---------------------------------------------------------------------------
+   M2-L0 / D-0043, test (c): the partition, at the store.
+
+   D-0043's optional conclusion is principled rather than partial: a pruning that moved a
+   bound concludes it, a DECISION concludes nothing (D-0037 -- it is an assumption, and
+   nothing in the proof establishes it), and a CONFLICT concludes falsity rather than a
+   bound. The line-or-no-line half of this -- that lib/core/trace.ml writes a line for a
+   pruning and none for a decision -- is asserted against [Trace.claims] in
+   test_prop.ml's [test_conclusion_partition]; what belongs here is the store's own
+   enforcement, because a decision's numbers AGREE with the bound it set, so
+   [conclusion_holds] alone would accept one that claimed to have derived it.
+   --------------------------------------------------------------------------- *)
+let test_decision_concludes_nothing () =
+  let decision c =
+    Reason.because ~concludes:c Reason.none (Explanation.decision (Lit.ge "x" 3))
+  in
+  let pruning c =
+    Reason.because ~concludes:c Reason.none (Explanation.clause [ Lit.ge "x" 3 ])
+  in
+  let fact = Some (Reason.at_least ~name:"x" ~decl:0 3) in
+  check "D-0043 (c): a decision carrying no conclusion is accepted -- the control"
+    (Store.decision_concludes_nothing (decision None));
+  check
+    "D-0043 (c) THE BREAK: a decision that claims to have DERIVED its bound is rejected \
+     (D-0037: it is an assumption)"
+    (not (Store.decision_concludes_nothing (decision fact)));
+  check "D-0043 (c): the same conclusion on a derived pruning is fine"
+    (Store.decision_concludes_nothing (pruning fact));
+  (* The numbers agree -- which is the whole point of having a second check. A decision
+     setting x >= 3 really does leave the trail at 3, so the exact check passes it. *)
+  let store = Store.create ~names:[| "x" |] ~domains:[| Domain.make 0 9 |] in
+  check
+    "D-0043 (c): and [conclusion_holds] alone would NOT catch it -- the bound a decision \
+     sets is the bound it would claim"
+    (Store.conclusion_holds store (Var.of_int 0) ~old:(Domain.make 0 9)
+       ~now:(Domain.make 3 9) (decision fact))
+
 (* Performing the break, rather than reading the code: re-run this very binary with
    BAGUETTE_DEBUG=1 in a mode that pushes a disagreeing pruning, and require it to die.
    The control -- the same push with an agreeing reason -- must survive, or a non-zero
@@ -831,6 +933,23 @@ let disagreeing_push ~agree () =
   in
   ignore (Store.set_lo store (Var.of_int 0) 2 j)
 
+(* The same treatment for D-0043's two checks: a check that only a unit test calls is a
+   predicate, not an invariant. These push through [Store.set_lo] for real, so what is
+   being measured is that [apply] consults them. [off] is the one-unit-off conclusion
+   (test (b)) and [decision] is the decision that claims its own bound (test (c)). *)
+let conclusion_push ~off ~decision () =
+  let store =
+    Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
+  in
+  let concludes = Some (Reason.at_least ~name:"x" ~decl:0 (if off then 3 else 2)) in
+  let justification =
+    if decision then Explanation.decision (Lit.ge "x" 2)
+    else Explanation.clause [ Lit.ge "x" 2 ]
+  in
+  ignore
+    (Store.set_lo store (Var.of_int 0) 2
+       (Reason.because ~concludes Reason.none justification))
+
 let test_agreement_is_wired () =
   let run mode =
     Sys.command
@@ -841,12 +960,28 @@ let test_agreement_is_wired () =
   check "D-0026: BAGUETTE_DEBUG accepts a pruning whose reason agrees (the control)"
     (run "--agreeing-push" = 0);
   check "D-0026: BAGUETTE_DEBUG REJECTS a pruning whose reason names a stray variable"
-    (run "--disagreeing-push" <> 0)
+    (run "--disagreeing-push" <> 0);
+  check
+    "D-0043 (b): BAGUETTE_DEBUG accepts a pruning whose conclusion IS the bound it set \
+     (the control)"
+    (run "--exact-conclusion" = 0);
+  check
+    "D-0043 (b): BAGUETTE_DEBUG REJECTS a pruning whose conclusion is ONE UNIT off the \
+     bound the trail holds (I-X9's shape, the M1-T44 defect)"
+    (run "--off-by-one-conclusion" <> 0);
+  check
+    "D-0043 (c): BAGUETTE_DEBUG REJECTS a DECISION that carries a conclusion, although \
+     its numbers agree with the bound it set"
+    (run "--decision-with-a-conclusion" <> 0)
 
 let () =
   match Array.to_list Sys.argv with
   | _ :: "--agreeing-push" :: _ -> disagreeing_push ~agree:true ()
   | _ :: "--disagreeing-push" :: _ -> disagreeing_push ~agree:false ()
+  | _ :: "--exact-conclusion" :: _ -> conclusion_push ~off:false ~decision:false ()
+  | _ :: "--off-by-one-conclusion" :: _ -> conclusion_push ~off:true ~decision:false ()
+  | _ :: "--decision-with-a-conclusion" :: _ ->
+      conclusion_push ~off:false ~decision:true ()
   | _ ->
       test_domains ();
       test_store ();
@@ -855,6 +990,8 @@ let () =
       test_reason ();
       test_bound_support ();
       test_agreement ();
+      test_conclusion ();
+      test_decision_concludes_nothing ();
       test_agreement_is_wired ();
       if !failures > 0 then (
         Printf.printf "\n%d failure(s)\n" !failures;
