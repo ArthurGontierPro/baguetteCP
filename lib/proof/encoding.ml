@@ -862,3 +862,204 @@ let add_int_lin_ne t terms rhs =
   let id_a = add_constraint t row_a in
   let id_b = add_constraint t row_b in
   (id_a, id_b)
+
+(* ---------------------------------------------------------------------------
+   M3-T1: reified variables, and the two doors a definition can come through
+   ---------------------------------------------------------------------------
+
+   A *reified variable* is a Boolean [b] that stands for a condition [C]:
+
+       b  <->  C
+
+   D-0007 already says what [b] is: a FlatZinc [var bool] is the order encoding on
+   [0, 1], one PB variable [b_ge_1], and "b is true" is [Lit.bool_true b]. Reification
+   introduces NO new naming scheme (section 3's standing warning) -- a reifier is an
+   ordinary Boolean, and that is deliberate: it means every existing propagator,
+   [assignment_lits], and every [pol] operand already knows how to talk about one.
+
+   The equivalence is two PB rows. With [C] normalised to  sum a_i l_i >= k  (all
+   a_i > 0, [Opb.normalise]) and  A = sum a_i:
+
+     FWD   b -> C        sum a_i l_i  +  k ~b        >= k
+     BWD   C -> b        sum a_i ~l_i +  (A-k+1) b   >= A-k+1
+
+   FWD reads: with b true the ~b term vanishes and C is asserted; with b false the term
+   pays the whole right-hand side and the row is vacuous. BWD is FWD applied to the
+   negation of C, which for a normalised row is  sum a_i ~l_i >= A-k+1. The two
+   big-M constants are the smallest that work, which matters: a bigger one is still
+   sound but weakens what a propagator can derive from the row by cutting planes.
+
+   [k <= 0] and [k > A] are refused ([Reif_constant]). Such a condition is constant on
+   the coefficients alone, so "b <-> C" is not a reification at all, it is a fixed
+   Boolean -- and the two rows degenerate (FWD stops mentioning b). The caller decides
+   what a fixed Boolean means in its model; this module will not guess. The check is
+   SYNTACTIC, over the normalised row: a condition that is constant only because of the
+   order ladder is not caught here and does not need to be, since the rows stay correct.
+
+   ---------------------------------------------------------------------------
+   The two doors, and why there are two
+   ---------------------------------------------------------------------------
+
+   [add_reif]     puts FWD and BWD in the .opb, eagerly, as model rows.
+   [define_reif]  puts them in the .pbp, lazily, as two [red] lines.
+
+   They share [reif_rows], so the two cannot disagree about the encoding. Which door a
+   definition comes through is NOT a matter of taste:
+
+   * A reified constraint the FlatZinc model states -- [int_le_reif(x, y, b)] -- is
+     MODEL information about a bool [b] the model also uses elsewhere. It goes in the
+     .opb. [red] cannot introduce it, and the checker is the one that says so: [red]
+     preserves satisfiability OF THE DATABASE, so it can only add what the database
+     already entails up to the witness. If [b_ge_1] occurs in any row already loaded,
+     the witness [b_ge_1 -> 0] has to discharge that row under the substitution, and
+     for a model that genuinely constrains b it cannot. veripb refuses it, and
+     test/unit/test_proof.ml performs that refusal rather than describing it.
+
+   * A condition the model never named -- one a propagator wants to carry as a single
+     literal mid-search -- has no row to sit in, because the .opb was written before
+     the propagator ran. That is [define_reif]'s case, and it is the same shape as the
+     direct encoding above: lazy, introduced by [red], retired by its own ids.
+
+   [define_reif] therefore has a PRECONDITION, and it is not a style rule: the reifier
+   must be FRESH -- not mentioned by any row already in the .opb, nor by the objective.
+   [Reif_not_fresh] is raised before a single line is written. The exception exists so
+   that a caller reaching for the wrong door finds out here, with the variable's name in
+   hand, instead of reading a redundance goal failure out of a checker log.
+
+   ---------------------------------------------------------------------------
+   Order of the two [red] lines
+   ---------------------------------------------------------------------------
+
+   FWD first, under the witness [b_ge_1 -> 0]; BWD second, under [b_ge_1 -> 1]. This is
+   the same rule [ensure_direct] states for the channelling clauses and for the same
+   reason. FWD is satisfied outright by b -> 0, and when it goes in first nothing else
+   in the database mentions b, so it raises no goal. BWD is satisfied by b -> 1, and the
+   one goal it does raise -- FWD under b -> 1, which is C itself -- is discharged by
+   BWD's own negation: negating BWD forces b to 0 and leaves exactly C. Swapping the
+   two witnesses makes veripb reject the definition, which is also performed rather than
+   described.
+
+   Deletion: the caller holds the [reif] value and owes [reif_ids] to invariant I-X2,
+   exactly as the caller of [Writer.pol] owes the id it receives. There is no registry
+   and no idempotence -- unlike [ensure_direct], which is keyed on a variable, a
+   definition is keyed on a CONDITION, and the module has no notion of two conditions
+   being the same one. Defining the same condition twice is two definitions and two
+   deletions.
+
+   The exceptions are declared here rather than with the others at the top of the file
+   so that this whole feature is one contiguous block: several sessions edit this file
+   at once, and a block appends where a scattered edit conflicts. *)
+
+(* The condition is constant on its coefficients alone, so [b] is fixed; the bool is
+   the value it is fixed to. *)
+exception Reif_constant of string * bool
+
+(* [define_reif] was asked to define a reifier that already occurs in the .opb. Use
+   [add_reif]: see the header. *)
+exception Reif_not_fresh of string
+
+(* The condition mentions the reifier. b <-> C(b) is not a definition. *)
+exception Reif_in_condition of string
+
+(* A reifier that is declared but is not a bool on [0, 1] (D-0007). *)
+exception Reif_not_boolean of string * int * int
+
+(* A definition, and the two ids that are its whole substance: [r_fwd] is what a
+   propagator cites to derive the condition from the reifier, [r_bwd] the reverse. *)
+type reif = { r_name : string; r_fwd : cid; r_bwd : cid }
+
+let reif_name r = r.r_name
+let reif_lit r = Lit.bool_true r.r_name
+let reif_fwd r = r.r_fwd
+let reif_bwd r = r.r_bwd
+
+(* Every id the definition minted, for invariant I-X2. *)
+let reif_ids r = [ r.r_fwd; r.r_bwd ]
+
+(* A reifier name this encoding has not used. Shares [fresh_aux_name]'s counter with
+   the disequality auxiliaries, which only ever increases, so a name handed out once is
+   never handed out twice. *)
+let fresh_reif_name t = fresh_aux_name t "reif"
+let reif_pbvar reifier = (Lit.bool_true reifier).Lit.v
+
+(* Does [reifier]'s Boolean occur in anything already committed to the .opb? *)
+let reif_occurs t reifier =
+  let target = Lit.var_name (reif_pbvar reifier) in
+  let in_terms terms =
+    List.exists (fun (_, (l : Lit.t)) -> String.equal (Lit.var_name l.Lit.v) target) terms
+  in
+  List.exists (fun c -> in_terms (Opb.terms c)) t.rev_constraints
+  || match t.objective with None -> false | Some o -> in_terms o.Opb.obj_terms
+
+(* The two rows of  reifier <-> cond,  as [Opb.constr] values. Exposed on its own for
+   the reason [expand_int_lin_le] is: a caller -- or a test -- can look at the rows
+   before either door commits them. Pure; it touches no encoding state, which is what
+   lets the .opb door and the .pbp door share it. *)
+let reif_rows ~reifier ~cond =
+  if Opb.relation cond = Opb.Eq then
+    invalid_arg
+      "Encoding.reif_rows: an `=` condition is two constraints and cannot be reified as \
+       one pair. Reify the two inequalities separately.";
+  let c = Opb.normalise cond in
+  let terms = Opb.terms c and k = Opb.rhs c in
+  let b = Lit.bool_true reifier in
+  let bname = Lit.var_name b.Lit.v in
+  if List.exists (fun (_, (l : Lit.t)) -> String.equal (Lit.var_name l.Lit.v) bname) terms
+  then raise (Reif_in_condition reifier);
+  (* [Opb.normalise] leaves every coefficient strictly positive, so A is the largest
+     value the left-hand side can take and 0 the smallest. *)
+  let big_a = List.fold_left (fun acc (a, _) -> Arith.add acc a) 0 terms in
+  if k <= 0 then raise (Reif_constant (reifier, true));
+  if k > big_a then raise (Reif_constant (reifier, false));
+  let k' = Arith.add (Arith.sub big_a k) 1 in
+  let fwd = Opb.ge ((k, Lit.negate b) :: terms) k in
+  let bwd =
+    Opb.ge ((k', b) :: List.map (fun (a, (l : Lit.t)) -> (a, Lit.negate l)) terms) k'
+  in
+  (fwd, bwd)
+
+(* The reifier is a bool (D-0007). Declare it if it is new; refuse it if it is declared
+   as something else, because then [b_ge_1] is one rung of a longer ladder and the two
+   rows above would be saying something other than what the caller means. *)
+let ensure_reif_bool t reifier =
+  match Hashtbl.find_opt t.ints reifier with
+  | None -> declare_bool t reifier
+  | Some v ->
+      if not (v.lo = 0 && v.hi = 1) then raise (Reif_not_boolean (reifier, v.lo, v.hi))
+
+(* The .opb door: the model says  reifier <-> cond.  Returns the two ids, FWD first. *)
+let add_reif t ~reifier ~cond =
+  ensure_reif_bool t reifier;
+  let fwd, bwd = reif_rows ~reifier ~cond in
+  let id_f = add_constraint t fwd in
+  let id_b = add_constraint t bwd in
+  (id_f, id_b)
+
+let add_int_lin_le_reif t terms rhs ~reifier =
+  check_lin_le_computable t terms rhs ~what:"Encoding.add_int_lin_le_reif";
+  add_reif t ~reifier ~cond:(expand_int_lin_le t terms rhs)
+
+(* The .pbp door: introduce  reifier <-> cond  as two [red] lines. See the header for
+   the freshness precondition and for why the order of the two is not free. *)
+let define_reif t w ~reifier ~cond =
+  (* Every refusal happens before the first line is written, so a rejected definition
+     leaves neither the encoding nor the proof file changed. *)
+  let fwd, bwd = reif_rows ~reifier ~cond in
+  if reif_occurs t reifier then raise (Reif_not_fresh reifier);
+  ensure_reif_bool t reifier;
+  let bv = reif_pbvar reifier in
+  let origin = Printf.sprintf "reif %s" reifier in
+  Writer.comment w "definition of the reifier %s" reifier;
+  let r_fwd = Writer.red w ~origin ~witness:[ (bv, Writer.Zero) ] fwd in
+  let r_bwd = Writer.red w ~origin ~witness:[ (bv, Writer.One) ] bwd in
+  { r_name = reifier; r_fwd; r_bwd }
+
+(* The same, for a condition given as  sum a_i x_i <= rhs  over declared variables.
+   [check_lin_le_computable] guards it for the reason [add_int_lin_le] is guarded: a
+   row whose arithmetic wrapped states something other than the caller posted, and a
+   .pbp line is no safer to get wrong than a .opb one. *)
+let define_reif_int_lin_le t w ~reifier terms rhs =
+  check_lin_le_computable t terms rhs ~what:"Encoding.define_reif_int_lin_le";
+  define_reif t w ~reifier ~cond:(expand_int_lin_le t terms rhs)
+
+let retire_reif w r = Writer.delete_many w (reif_ids r)
