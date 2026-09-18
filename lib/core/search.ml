@@ -161,9 +161,68 @@ type node = NSat of assignment | NFail of Lit.t list * Writer.cid
    asserts it outside [Debug.check] on searches whose trees it knows. An off-by-one
    anywhere in the accounting, or a count taken at the wrong event, breaks the equality
    on every complete search. *)
-type stats = { mutable nodes : int; mutable decisions : int; mutable max_depth : int }
+(* ------------------------------------------------------------------------- M1-T66
 
-let stats_create () = { nodes = 0; decisions = 0; max_depth = 0 }
+   What a bridge rested on, as data rather than as bytes in the proof.
+
+   M1-T55 put the settle step on the page; M1-T66 is the row that asked how anyone would
+   know if it stopped being there. The answer, measured twice (M1-T45 and the
+   orchestrator, 2026-09-17), was: nothing would, except one byte-level assertion in
+   test/unit/test_engine.ml that greps the proof text for the line. Disable [bridges]
+   outright and 34/34 models still pass and every checker still accepts, because the
+   settle is re-derivable from the page without it -- see the paragraph headed "why its
+   absence is invisible, and what this record does about it" above [bridges].
+
+   So the bridge is recorded here as a *derivation* instead: which decision it bridged,
+   from which literal onto which bound, which holes the push walked over, and -- the part
+   that matters for I-S4 and for M2-L3 -- which line on the page states each of those
+   holes, at which level. A test can then assert that the step was derived, and assert it
+   in the vocabulary of the derivation rather than in the vocabulary of the emitted text,
+   which is what M1-T66 asked for. [br_unnamed] is the honest remainder: holes the push
+   walked over that no line this solver wrote states, so the bridge rests on the model's
+   own rows for them (I-X10).
+
+   [Trace.record_citation] is called for every hole in [br_cited], so a decision settle
+   now enters the same I-S4 audit as a propagator settle. Before M1-T66 it did not enter
+   it at all: [Trace.emit] skips level-start entries, so a decision push gets no trace
+   line and therefore recorded no citation, and the one kind of settle whose line is
+   written at the *deepest* open level -- the one furthest from the holes it cites -- was
+   the one kind the audit could not see. *)
+type bridge = {
+  br_var : string;
+  br_assumed : Lit.t; (* the literal the branch assumed *)
+  br_settled : Lit.t; (* the bound the trail actually recorded *)
+  br_ancestors : Lit.t list;
+  br_holes : int list; (* the values the push settled over, ascending *)
+  br_cited : (int * Writer.cid * int) list; (* hole, its line, that line's level *)
+  br_unnamed : int list; (* holes no line of ours states *)
+  br_cid : Writer.cid;
+  br_level : int;
+}
+
+(* Keeping every bridge of a long search would be a leak in a process that shares 15 GB
+   with other sessions, and no caller needs more than the first few: a test names the
+   scene it built. So the list is capped and [n_bridges] carries the true total, which is
+   the number a measurement wants. *)
+let bridge_cap = 256
+
+type stats = {
+  mutable nodes : int;
+  mutable decisions : int;
+  mutable max_depth : int;
+  mutable n_bridges : int;
+  mutable bridges_rev : bridge list;
+}
+
+let stats_create () =
+  { nodes = 0; decisions = 0; max_depth = 0; n_bridges = 0; bridges_rev = [] }
+
+(* The bridges this search derived, oldest first, up to [bridge_cap] of them. *)
+let stats_bridges s = List.rev s.bridges_rev
+
+let record_bridge s b =
+  s.n_bridges <- s.n_bridges + 1;
+  if s.n_bridges <= bridge_cap then s.bridges_rev <- b :: s.bridges_rev
 
 (* Does this pair of counts satisfy the identity above? [exhausted] is whether the
    search closed its whole tree. Public because [solve] checks it only under
@@ -479,17 +538,22 @@ let close_root_conflict ctx trace store (c : Store.conflict) =
    holds -- for the tree *and*, on every model in test/models/ but the one added for this
    task, for the bytes. *)
 
-(* The decision pushes of the open levels, oldest first: each is the first trail entry of
-   its own level, which is what [check_decision_landed] and [Store.is_level_start] assert
-   from their two sides. A level that has been opened but whose push has not landed (the
-   [Store.Conflict] arms of [explore_le]/[explore_ge]) contributes no entry, which is
-   what makes the walk below line up on the ancestors and drop the literal that never
-   made it onto the trail. *)
+(* The decision pushes of the open levels, oldest first, each with the trail index it
+   sits at: each is the first trail entry of its own level, which is what
+   [check_decision_landed] and [Store.is_level_start] assert from their two sides. A level
+   that has been opened but whose push has not landed (the [Store.Conflict] arms of
+   [explore_le]/[explore_ge]) contributes no entry, which is what makes the walk below
+   line up on the ancestors and drop the literal that never made it onto the trail.
+
+   The index is carried because [Store.remover] is asked "which entry took [v] out of
+   this variable's domain *before* this point", and the point is a trail position. It is
+   the same ~before [Trace.settle_facts] passes for a propagator's settle; M1-T66 asks it
+   for a decision's. *)
 let decision_entries store =
   let n = Store.trail_length store in
   let acc = ref [] in
   for i = n - 1 downto 0 do
-    if Store.is_level_start store i then acc := Store.trail_entry store i :: !acc
+    if Store.is_level_start store i then acc := (i, Store.trail_entry store i) :: !acc
   done;
   !acc
 
@@ -500,15 +564,30 @@ let decision_entries store =
 
    The literal's polarity says which side the branch took: [x_ge_b] is the high side, so
    the low bound moved and lands exactly on [b]; [~x_ge_b] is [x <= b - 1], so the high
-   bound moved and lands exactly on [b - 1]. *)
+   bound moved and lands exactly on [b - 1].
+
+   M1-T66 adds the second half of the answer: *which holes* the push walked over to get
+   there. They are the run of holes of the pre-push domain between the literal's own
+   bound and the one the trail recorded, and they are what the bridge's [rup] silently
+   depends on -- [Trace.holes_below]/[holes_above] are the same two functions
+   [Trace.lines] uses for a propagator's settle, asked here for a decision's. Their run
+   can reach past the literal's bound (it stops at the first value the domain still
+   holds, which may be below it), so it is trimmed to the values the push actually
+   crossed rather than trusted wholesale. *)
 let settled_bound encoding (e : Store.entry) name (l : Lit.t) =
   let b = Lit.value l.Lit.v in
   if l.Lit.positive then
     let m = Domain.lo e.Store.now in
-    if m <= b then None else Some (Encoding.ge encoding name m)
+    if m <= b then None
+    else
+      let holes = List.filter (fun v -> v >= b) (Trace.holes_below e.Store.old m) in
+      Some (Encoding.ge encoding name m, holes)
   else
     let h = Domain.hi e.Store.now in
-    if h >= b - 1 then None else Some (Encoding.le encoding name h)
+    if h >= b - 1 then None
+    else
+      let holes = List.filter (fun v -> v <= b - 1) (Trace.holes_above e.Store.old h) in
+      Some (Encoding.le encoding name h, holes)
 
 (* Does this entry plausibly belong to this decision literal? The walk pairs two lists
    that are built independently -- the open levels' pushes from [Store], the assumed
@@ -523,11 +602,41 @@ let aligned store (e : Store.entry) (l : Lit.t) =
   if l.Lit.positive then Domain.lo e.Store.now > Domain.lo e.Store.old
   else Domain.hi e.Store.now < Domain.hi e.Store.old
 
-let bridges (ctx : Justify.ctx) store (decisions : Lit.t list) =
+(* ------------------------------------------------------------------------- M1-T66
+
+   Why its absence is invisible, and what this record does about it.
+
+   The bridge says "under these decisions, [x >= b] implies [x >= m]". When veripb checks
+   the nogood it asserts every decision and unit-propagates, and it reaches [x >= m] on
+   its own by two independent routes, either of which suffices:
+
+     1. the hole's own trace line. Since M1-T56 an interior hole gets a line of its own,
+        the clause [x <= v-1 \/ x >= v+1], and [Trace.emit] has already put every such
+        line on the page by the time [bridges] runs (D-0021 fixes that order). Asserting
+        [x >= b] falsifies [x <= b-1], so the hole line at [v = b] unit-propagates
+        [x >= b+1], and a run of holes chains;
+     2. failing that, the disequality's own [.opb] rows. I-X10: [Ne] is the only thing in
+        M1 that punches a hole, and [int_lin_ne]'s two big-M rows unit-propagate the
+        exclusion once the bounds on the line's own tail are assumed.
+
+   Route 2 is in the model file and can never be retired, so within M1's constraint
+   vocabulary there is no scene in which removing this function makes a checker reject.
+   That is not an argument for removing it -- it is an argument that M1 cannot *observe*
+   it, which is a different statement and a weaker one. M2-L3's learned clauses cite
+   across levels, which is exactly the case I-S4's level argument does not cover, and the
+   settle step is what those citations need to be able to name.
+
+   So what this function now leaves behind is the derivation, as data: [record_bridge]
+   files a [bridge] on [stats], and [Trace.record_citation] files one I-S4 edge per hole
+   whose line the page names. Both are checkable without reading a byte of the proof, and
+   the second puts the decision settle inside the invariant audit it was previously
+   outside of. [test/unit/test_matrix.ml]'s [bridge_derivation] is the test that reads
+   them. *)
+let bridges (ctx : Justify.ctx) trace stats store (decisions : Lit.t list) =
   let rec go entries rev_decisions ancestors =
     match (entries, rev_decisions) with
     | [], _ | _, [] -> ()
-    | (e : Store.entry) :: es, (l : Lit.t) :: ls ->
+    | (i, (e : Store.entry)) :: es, (l : Lit.t) :: ls ->
         if not (aligned store e l) then
           Debug.check
             "M1-T55: the open levels' pushes and the assumed decision literals line up"
@@ -536,7 +645,7 @@ let bridges (ctx : Justify.ctx) store (decisions : Lit.t list) =
           let name = Store.name store e.Store.var in
           (match settled_bound ctx.Justify.encoding e name l with
           | None -> ()
-          | Some cond -> (
+          | Some (cond, holes) -> (
               match
                 Trace.claim_of_cond ~what:"the bound a decision settled onto" ~name cond
               with
@@ -545,13 +654,50 @@ let bridges (ctx : Justify.ctx) store (decisions : Lit.t list) =
                      no literal exists to state it -- nothing to bridge. *)
                   ()
               | Some claim ->
+                  (* A push that landed strictly stronger than its literal landed there
+                     because [Domain.settle] walked it over something. If that run is
+                     empty the two halves of this module disagree about what a settle is,
+                     and the bridge below would be a line with nothing under it. *)
+                  Debug.check
+                    (Printf.sprintf
+                       "M1-T66: %s settled onto %s, so the push crossed at least \
+                        one                         hole"
+                       (Lit.to_string l) (Lit.to_string claim))
+                    (fun () -> holes <> []);
                   let lits = claim :: Lit.negate l :: List.map Lit.negate ancestors in
                   let origin =
                     Printf.sprintf "M1-T55: %s settled onto %s" (Lit.to_string l)
                       (Lit.to_string claim)
                   in
-                  let _ : Writer.cid = Justify.emit_rup_clause ctx ~origin lits in
-                  ()));
+                  let cid = Justify.emit_rup_clause ctx ~origin lits in
+                  let level = Writer.current_level ctx.Justify.writer in
+                  let cited, unnamed =
+                    List.fold_left
+                      (fun (cited, unnamed) v ->
+                        match Store.remover store ~before:i ~var:e.Store.var v with
+                        | None -> (cited, v :: unnamed)
+                        | Some rem -> (
+                            match Trace.hole_line_of trace rem v with
+                            | None -> (cited, v :: unnamed)
+                            | Some w ->
+                                Trace.record_citation trace ctx.Justify.writer ~citing:cid
+                                  ~citing_level:level ~cited:w.Trace.w_cid
+                                  ~cited_level:w.Trace.w_level ~hole:v;
+                                ((v, w.Trace.w_cid, w.Trace.w_level) :: cited, unnamed)))
+                      ([], []) holes
+                  in
+                  record_bridge stats
+                    {
+                      br_var = name;
+                      br_assumed = l;
+                      br_settled = claim;
+                      br_ancestors = ancestors;
+                      br_holes = holes;
+                      br_cited = List.rev cited;
+                      br_unnamed = List.rev unnamed;
+                      br_cid = cid;
+                      br_level = level;
+                    }));
           go es ls (l :: ancestors)
   in
   go (decision_entries store) (List.rev decisions) []
@@ -593,7 +739,7 @@ let rec dfs engine store ctx trace stats (order : order) (decisions : Lit.t list
              a hole, which is the step the nogood's own [rup] needs and has until now
              been left to find for itself. It goes after the trace (D-0021) and before
              the nogood, at the nogood's own level, so the same [w] retires both. *)
-          bridges ctx store decisions;
+          bridges ctx trace stats store decisions;
           let lits = List.map Lit.negate decisions in
           let cid = Justify.emit ctx (Explanation.clause lits) in
           NFail (lits, cid))
@@ -723,7 +869,7 @@ and explore_le store engine ctx trace stats order decisions v k lit =
       Trace.emit ctx trace store;
       (* M1-T55: the ancestors only -- this push did not land, so it has no trail entry
          and nothing to bridge, and [bridges] drops it for exactly that reason. *)
-      bridges ctx store decisions;
+      bridges ctx trace stats store decisions;
       let lits = List.map Lit.negate (Lit.negate lit :: decisions) in
       let cid = Justify.emit ctx (Explanation.clause lits) in
       NFail (lits, cid)
@@ -743,7 +889,7 @@ and explore_ge store engine ctx trace stats order decisions v k lit =
   | Store.Conflict _ ->
       Trace.emit ctx trace store;
       (* M1-T55: as in [explore_le] -- the ancestors only. *)
-      bridges ctx store decisions;
+      bridges ctx trace stats store decisions;
       let lits = List.map Lit.negate (lit :: decisions) in
       let cid = Justify.emit ctx (Explanation.clause lits) in
       NFail (lits, cid)
