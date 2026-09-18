@@ -437,9 +437,17 @@ let to_linear_row t ~decl =
    wrong side of I-X6"). The propagator beside it reads live domains. Same constraint,
    two readings, which is the whole of D-0054.
 
+   [~bump] is M2-L13's BREAK and is 0 everywhere but in test/unit/test_pb.ml. It raises
+   the degree of the propagated constraint above the degree of the row on the page, so
+   the instance enforces something the proof does not state. Nothing about the ANSWER
+   changes on an unsatisfiable model, which is the whole reason the break exists: the
+   only oracle for a wrong slack rule is the checker. It is a parameter rather than a
+   test-local copy of this function because a break that exercises a copy of the code
+   proves nothing about the code.
+
    [~id] must be [Engine.next_id] of the engine it is about to be added to -- [Engine.add]
    checks that and says why. *)
-let pb_instance ~id ~row_id store ~decl t : Propagator.instance option =
+let pb_instance ~id ~row_id ?(bump = 0) store ~decl t : Propagator.instance option =
   let row _store =
     Some
       {
@@ -451,7 +459,7 @@ let pb_instance ~id ~row_id store ~decl t : Propagator.instance option =
   Option.map
     (fun p ->
       Propagator.pack ~id ~row (module Pb.Learned_pb : Propagator.S with type t = Pb.t) p)
-    (Pb.of_terms store ~decl ~degree:t.degree (raw_terms t))
+    (Pb.of_terms store ~decl ~degree:(t.degree + bump) (raw_terms t))
 
 (* The declared-domain lookup an [Encoding] provides, in the shape [pb_instance] wants.
    Kept here rather than in [Encoding] because it is this module's question: [Encoding]

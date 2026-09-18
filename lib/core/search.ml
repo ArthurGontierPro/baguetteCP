@@ -749,6 +749,14 @@ type config = {
   pb_criterion : Pb_analysis.criterion;
   pb_ladder : bool;
   break_ladder_mult : bool;
+  break_pb_degree : bool;
+      (* M2-L13's break. Registers the learned PB row's runtime instance with a degree
+         ONE HIGHER than the row that is on the page, so the propagator enforces a
+         constraint the proof does not state and its prunings are no longer RUP against
+         it. The point is that a wrong slack rule is NOT visible in the answer -- an
+         over-strong propagator still returns UNSAT on an unsatisfiable model -- so the
+         only oracle for it is the checker, and this is what puts the checker in front of
+         one. test/unit/test_pb.ml runs it and asserts the REJECTION's wording. *)
   retention : Retention.policy;
       (* M2-L4. [Retention.keep_all] is the pre-M2-L4 behaviour and test (c)'s "policy
          off" side; [Retention.default] is the policy and the measurement that chose it
@@ -780,6 +788,7 @@ let default_config =
     pb = true;
     pb_ladder = true;
     break_ladder_mult = false;
+    break_pb_degree = false;
     reduction = Reduce.round_to_one;
     pb_criterion = Pb_analysis.assertive_slack;
     retention = Retention.default;
@@ -1229,10 +1238,10 @@ let bridges (ctx : Justify.ctx) trace stats store (decisions : Lit.t list) =
    reading of the object rather than a degenerate case to special-case away. Suppressing
    it would be deciding, on this side, that the proof-side derivation is not to be
    believed. [Search.n_pb_nondegenerate] is how many rows are not this. *)
-let register_learned_pb engine store ctx stats ~cid ~(row : Learned.t) =
+let register_learned_pb engine store ctx stats ~bump ~cid ~(row : Learned.t) =
   let decl = Learned.decl_of_encoding ctx.Justify.encoding in
   let id = Engine.next_id engine in
-  match Learned.pb_instance ~id ~row_id:cid store ~decl row with
+  match Learned.pb_instance ~id ~row_id:cid ~bump store ~decl row with
   | None -> stats.n_pb_inst_declined <- stats.n_pb_inst_declined + 1
   | Some inst ->
       Engine.add engine inst;
@@ -1316,7 +1325,9 @@ let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_conve
            [reduce], so that a policy cannot evict on this very call a constraint the
            next line is about to give a consumer. *)
         if cfg.propagate_learned then
-          register_learned_pb engine store ctx stats ~cid ~row:t.Pb_analysis.row;
+          register_learned_pb engine store ctx stats
+            ~bump:(if cfg.break_pb_degree then 1 else 0)
+            ~cid ~row:t.Pb_analysis.row;
         ignore (Retention.reduce stats.db ctx))
 
 (* ------------------------------------------------------- M2-L12: making it propagate
