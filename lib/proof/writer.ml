@@ -712,6 +712,27 @@ let del_run t (lo, hi) =
     rule t (Printf.sprintf "del id %s" (cite t hi)))
 
 let wipe_level t l =
+  (* M2-L4: a backjump may not be a second owner of a learned constraint's lifetime, and
+     this line is what makes that structural instead of a fact about [Search]'s call
+     sites.
+
+     A learned constraint is introduced at level 0 ([Justify.with_level ctx 0], D-0045's
+     addendum as M2-L1 resolved it) precisely so that no backjump retires it. Levels are
+     non-negative, so the ONLY wipe that could reach a level-0 tag is [wipe_level 0] --
+     and every caller in lib/ passes a decision level, which is >= 1. That was true by
+     inspection and would have stayed true only by inspection: a fifth call site passing
+     0 would have deleted every learned constraint on the page, silently from our side
+     (a second [forget] is a no-op, so the I-X2 audit cannot see the resulting double
+     delete -- D-0045) and loudly from the checker's, a long way from the mistake.
+
+     There is no legitimate [wipe_level 0]. Retiring the level-0 lines is [Trace]'s
+     [permanent_ids] and [Retention.retire_all], each of which deletes what it owns and
+     nothing else. So this refuses rather than documents. *)
+  if l <= 0 then
+    invalid_arg
+      "Writer.wipe_level: level must be >= 1. Level 0 holds the learned constraints \
+       and        the permanent trace lines, whose lifetimes are owned by Retention and \
+       Trace        respectively (M2-L4); no backjump may retire them.";
   (* VeriPB 3.0 deleted the level stack that D-0008 built backtracking on. `w l` retired
      every constraint TAGGED at level >= l, and the checker held the tags; now [t.tags]
      does, so the same set is computed here and deleted explicitly. This reproduces
