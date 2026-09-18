@@ -476,6 +476,57 @@ let test_conversion_rate () =
     r.r_stats.Search.n_converts 0;
   cleanup dir [ opb; pbp ]
 
+(* ================================================ the backjump does not change answers
+
+   The one thing a backjump can get wrong that nothing else in this file would catch: it
+   skips branches, and a branch skipped that was not refuted is a solution missed. The
+   proof would not say so -- a wrong UNSAT whose refutation the checker accepts is exactly
+   the shape M1-T44 was, and it was found by a fuzzer and not by a proof.
+
+   So: every scene here, under forty branching orders each, with learning ON and OFF,
+   answering the same thing. Learning OFF is M1's search unaltered, and M1's search is the
+   one `test_endtoend.ml` and `test_matrix.ml` check against brute force; this makes it the
+   oracle for the backjump rather than re-implementing one. The orders are seeded
+   [random_order]s, so the sweep covers trees `spec_order` never builds -- which is where
+   the skip rule is actually stressed, since the normative order's conflicts almost always
+   rest on the deepest decisions and skip nothing. *)
+let test_backjump_answers_the_same () =
+  let bad = ref 0 and skips = ref 0 and total = ref 0 in
+  List.iter
+    (fun src ->
+      for seed = 0 to 39 do
+        let order = seeded_order seed in
+        let on, d1, o1, p1 = run ~order src in
+        let off, d2, o2, p2 = run ~order ~config:Search.no_learning src in
+        incr total;
+        skips := !skips + on.r_stats.Search.skipped;
+        let same =
+          match (on.r_outcome, off.r_outcome) with
+          | Search.Unsat, Search.Unsat -> true
+          | Search.Sat a, Search.Sat b -> List.length a = List.length b
+          | _ -> false
+        in
+        if not same then (
+          incr bad;
+          Printf.printf
+            "  seed %d: learning says %s, M1's search says %s -- a skipped branch was \
+             not refuted\n"
+            seed
+            (match on.r_outcome with Search.Sat _ -> "SAT" | _ -> "UNSAT")
+            (match off.r_outcome with Search.Sat _ -> "SAT" | _ -> "UNSAT"));
+        cleanup d1 [ o1; p1 ];
+        cleanup d2 [ o2; p2 ]
+      done)
+    [ backjump_src; settle_src; holes_src ];
+  check
+    (Printf.sprintf
+       "backjump: %d order/scene pairs agree with M1's search, over %d skipped siblings"
+       !total !skips)
+    (!bad = 0);
+  (* And the sweep has to have exercised the thing it is about. A sweep in which nothing
+     was ever skipped agrees with M1's search for the least interesting reason there is. *)
+  check "backjump: the sweep really did skip branches" (!skips > 0)
+
 (* ============================================================ (d) I-S3 *)
 
 let test_i_s3 () =
@@ -522,6 +573,7 @@ let () =
   test_i_s4_crossings_are_real ();
   test_node_count_decreases ();
   test_conversion_rate ();
+  test_backjump_answers_the_same ();
   test_i_s3 ();
   test_determinism ();
   if !failures > 0 then (
