@@ -23,9 +23,11 @@ or of the `.pbp`; the harness verifies that before it measures anything (§1, "t
 self-checks"). One row, `emitln`, is a **count** and carries a `lines` unit instead of
 `us` — deliberately, so that anything matching on `us` cannot read it as a duration.
 
-There is no `make bench` target. `Makefile` belongs to the orchestrator; if a target is
-wanted, the body is `./bench/run_bench.sh "$(ARGS)"` and it must not be a dependency of
-`check`.
+There **is** a `make bench` target now (`make bench ARGS="..."`), and it is correctly not
+a dependency of `check`. `Makefile` belongs to the orchestrator, not to `bench/`; as of
+2026-09-18 its comment above that target still offers `ARGS="-F 2.0"` as the example, and
+that flag no longer exists — D-0046 removed the format it selected and M2-L8 removed the
+flag. Raised as a cross-session request rather than edited from here.
 
 ---
 

@@ -1273,9 +1273,9 @@ if [ "${CONTROL}" -eq 1 ]; then
   echo
   if [ "${CONTROL_FAIL}" -eq 0 ] && [ "${seen_proof_only}" -eq 1 ] && [ "${seen_changed}" -eq 1 ]; then
     echo "  The control PASSES in BOTH directions: a proof-only change was not reported as"
-    echo "  CHANGED, and a changed tree was not reported as proof-only. Both scenes moved"
-    echo "  their proof columns, so neither verdict came from an absence of movement, and"
-    echo "  both proofs were accepted by ${VERIPB##*/} before any of it was read."
+    echo "  CHANGED, and a changed tree was not reported as proof-only. EVERY scene moved"
+    echo "  its proof columns, so no verdict here came from an absence of movement, and"
+    echo "  every proof was accepted by ${VERIPB##*/} before any of it was read."
   else
     CONTROL_FAIL=1
     echo "  The control FAILS. This report cannot be trusted to separate a proof-only" >&2
