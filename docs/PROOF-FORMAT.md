@@ -205,7 +205,12 @@ it should. This is worse than trap 1 in section 2, which labels closed: a drifte
 is now a parse error naming the label, but a drifted *hint* is not a citation and nothing
 catches it. If you write an `ia` by hand, put the hint before the `;`.
 
-**The two checkers' rejections share no substring**, as everywhere else in this project:
+**The two checkers' rejections share no substring** here — as for *most*, though
+importantly **not all**, rejections in this project. The exception measured so far is a
+**RUP failure**, where both say *"reverse unit propagation"* (M2-L3, 2026-09-18). The rule
+that follows is the same either way and is the one to apply: **never match on one wording
+alone**, and do not match on a shared fragment that is weaker than the claim you are
+making — for RUP, list both wordings at full strength and accept either.
 
 | | wording on a hint that does not imply the claim |
 |---|---|

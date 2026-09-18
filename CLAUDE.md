@@ -370,8 +370,13 @@ The toolchain is installed and working:
   is still on `PATH` and still used to check format-2.0 output, so *both* exist and they
   are different programs. Never assume which one you invoked — `scripts/checker.sh` is
   the single place that resolves it, and it documents the order. The two word their
-  rejections differently and share no substring (see M1-T46), so never match on one
-  wording alone.
+  rejections differently, so **never match on one wording alone**. That operational rule
+  is absolute. The reason usually given for it — "they share no substring" (M1-T46) — is
+  **true of most rejections but not all**: a **RUP failure** has both saying *"reverse
+  unit propagation"*. Do not match on that shared fragment either, though; it is the least
+  specific thing either checker says, and any other RUP failure in the proof would match
+  it. List both wordings at full strength and accept either. Measured 2026-09-18 by M2-L3,
+  which runs its break lanes under both binaries.
 
 Put `eval "$(opam env --switch=baguette)"` in your shell before building. On a fresh
 machine, `scripts/bootstrap.sh` does the whole setup and is safe to re-run.
