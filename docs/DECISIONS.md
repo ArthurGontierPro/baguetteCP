@@ -2729,6 +2729,42 @@ asymmetry favours an earlier cut on the PB path is **argued, not measured** — 
 from `rup` needing no intermediate lines and `pol` needing one per step, but no byte of ours
 has been counted. M2-L8 converts it or refutes it.
 
+### Amendment, 2026-09-18: the claim is CONFIRMED in the proof and BOUNDED in the store
+
+M2-L1 converted D-0044's central claim from a bet into a measurement, and found the edge of
+it at the same time. Both halves are recorded because the second one steers M2-L3.
+
+**Confirmed, in the proof.** A degree-1 unit-coefficient `Learned.t` over order literals
+propagates **exactly** as `Bool_clause` does, on all 27 scenes tried, conflicts and domains
+alike — with a negative control proving the comparison can separate a *different* clause,
+so the agreement is a measurement and not a vacuous pass. The bet behind it held too: the
+runtime instance is a `Linear` instance, and **no new propagator family** was added.
+`lib/core/learned.ml` builds a `Linear.t` and hands it to `Propagator.pack`.
+
+**Bounded, in the store, and this is the part to read before M2-L3.** In the `.opb` an
+order literal *is* a variable, so a `Learned.t` is written out with no conversion. In the
+solver's **store** order literals are not variables at all — the store holds the model's
+integer variables, and `x >= v` is a *question about a domain*, not a handle. So a runtime
+instance exists only where the PB row reads back as a linear row over integer variables,
+and `Learned.to_linear_row` is exactly that predicate. It succeeds on a clause over `var
+bool`s (D-0007 order-encodes a Boolean on `[0,1]`, so its ladder has one rung), on a model
+row's own expansion (every rung gets the same coefficient, so a uniform run is
+`a_i * (x - lo_i)`), and on a threshold outside the ladder, which is a constant.
+
+It returns **`None`** on a threshold strictly *inside* an integer variable's ladder:
+`x >= 3` for `x` declared `0..5` is not any linear function of `x` over that box, and
+neither is a sum of two such. **There is no rounding of this, and it matters because a 1UIP
+cut over integer variables produces exactly those literals** — so M2-L3 must expect `None`
+from `to_linear_row` on its own output, and must either restrict the cut to the shapes
+above or accept that the learned constraint is **proof-only** until a propagator for it
+exists.
+
+This does **not** refute D-0044. The learned object is still a PB inequality and the
+*proof* side is unqualified — a proof-only learned constraint is still sound, still
+deleted correctly, and still does its work in the derivation. What is bounded is where a
+**runtime propagating instance** can exist today. Recorded here rather than discovered in
+M2-L3.
+
 ## D-0045  SPEC §3.4 and restarts: the question raised, with the finding it turned up
 
 **Status**: **OPEN — a question, not a decision.** Raised 2026-09-18 by the orchestrator as
@@ -2857,3 +2893,35 @@ formats — the M1-T46 discipline applied to a data structure instead of a messa
 constraint has ever been emitted, so no proof has yet been rejected this way. The
 prediction to falsify is: emit a learned constraint at the conflict level, and the backjump
 that follows deletes it.
+
+### Resolved, 2026-09-18, by M2-L1 — and the addendum guessed the wrong shape of fix
+
+The prediction above was *"emit a learned constraint at the conflict level and the backjump
+deletes it."* **It holds, exactly as written**, and it was measured through both checkers
+before anything was changed — which is the order this project asks for and the order that
+makes the fix trustworthy:
+
+| format | the checker's own words |
+|---|---|
+| 3.0 | `Trying to access constraint with ID 3 that has already been deleted` |
+| 2.0 | `Rule 6 is trying to access constraint (constraintId 3), that was marked as safe to delete` |
+
+**The fix is `Writer.with_level t l f`, a bracket — not the `fresh ~level` this addendum
+proposed.** The addendum's own 2.0 paragraph is why, and I did not follow my own reasoning
+to its conclusion when I wrote it: under 2.0 `t.tags` is **not maintained at all**, so
+nothing written into our table ever reaches the checker. The level therefore has to move
+**in the proof**, not in our bookkeeping. `with_level` emits `# 0`/`# 1` under 2.0 and
+`% level 0` under 3.0, and restores the level on exception. `Justify.with_level` wraps it,
+and the memo and M2-T9's claim index stamp `current_level`, so they follow for free.
+
+Both formats accept the fixed proof; eight checks cover the broken and the fixed direction
+in each format. The lesson is a small one and worth keeping: **an addendum that reasons
+correctly about a constraint can still propose a fix that violates it.** The 2.0 sentence
+was right and the suggested entry point contradicted it in the next paragraph.
+
+**One more finding, recorded because it bounds a guard rather than a feature**: the
+`BAGUETTE_PROOF_AUDIT=1` live-set audit **cannot see a double delete** — a second `forget`
+is a no-op, so the set is already clean. I-X2 says ids are deleted *exactly* once, and the
+audit only witnesses the *at least* once half. M2-L1's test counts `del` lines in the proof
+text instead. **M2-L4 is where this bites**, because its whole subject is a retention
+policy that may want to delete something a backjump also wants to delete.
