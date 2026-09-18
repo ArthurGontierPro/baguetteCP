@@ -1539,8 +1539,7 @@ let test_v3_veripb () =
           let says needle =
             let n = String.length needle in
             let rec go i =
-              i + n <= String.length out
-              && (String.sub out i n = needle || go (i + 1))
+              i + n <= String.length out && (String.sub out i n = needle || go (i + 1))
             in
             go 0
           in
@@ -1552,8 +1551,8 @@ let test_v3_veripb () =
             incr failures;
             Printf.printf
               "FAIL 3.0: veripb refused the corrupted proof but never judged the \
-               conclusion -- neither 3.0.2's \"is not contradicting, as specified by \
-               the hint\" nor 2.2.2's \"Constraint is not a contradiction\" is in its \
+               conclusion -- neither 3.0.2's \"is not contradicting, as specified by the \
+               hint\" nor 2.2.2's \"Constraint is not a contradiction\" is in its \
                output, so this is a malformed artefact and not a measurement.\n\
               \  checker said: %s\n"
               (String.trim out))
@@ -1800,7 +1799,10 @@ let test_pol_states_its_conclusion () =
    accepted. Neither can be produced by a file that failed to parse. *)
 let test_learned_survives_the_backjump () =
   (* 3.0 artefacts need a 3.0 reader; a 2.0 proof is read by either build. *)
-  let checker_for = function Writer.V3_0 -> veripb_v3 () | Writer.V2_0 -> veripb_path () in
+  let checker_for = function
+    | Writer.V3_0 -> veripb_v3 ()
+    | Writer.V2_0 -> veripb_path ()
+  in
   match veripb_path () with
   | None ->
       incr failures;
@@ -1860,7 +1862,7 @@ let test_learned_survives_the_backjump () =
           | Some v -> v
           | None -> failwith "checker vanished between find and run"
         in
-        (verdict, read_whole pbp, tag, (try read_whole log with _ -> ""))
+        (verdict, read_whole pbp, tag, try read_whole log with _ -> "")
       in
       List.iter
         (fun (tag, format) ->
