@@ -730,9 +730,9 @@ let wipe_level t l =
      nothing else. So this refuses rather than documents. *)
   if l <= 0 then
     invalid_arg
-      "Writer.wipe_level: level must be >= 1. Level 0 holds the learned constraints \
-       and        the permanent trace lines, whose lifetimes are owned by Retention and \
-       Trace        respectively (M2-L4); no backjump may retire them.";
+      "Writer.wipe_level: level must be >= 1. Level 0 holds the learned constraints and \
+       the permanent trace lines, whose lifetimes are owned by Retention and Trace \
+       respectively (M2-L4); no backjump may retire them.";
   (* VeriPB 3.0 deleted the level stack that D-0008 built backtracking on. `w l` retired
      every constraint TAGGED at level >= l, and the checker held the tags; now [t.tags]
      does, so the same set is computed here and deleted explicitly. This reproduces

@@ -59,6 +59,10 @@ lib/core/       Baguette_core
   ladder.ml                 the order-encoding ladder chain AS A ROW, so a PB reason
                             can propagate: lifts a Linear reason onto the ladder rungs
                             that actually carry its strength (M2-L11, D-0028/D-0010)
+  retention.ml              the learned-constraint DATABASE, and the SINGLE owner of a
+                            learned constraint's lifetime. Policies are swappable
+                            (`keep_all`, `fifo`, `lbd`) and the default is `keep_all`
+                            BY MEASUREMENT, not by omission -- see D-0051 (M2-L4)
   propagator.ml             the PROPAGATOR module type (65 lines -- read it whole)
   engine.ml                 propagate-to-fixpoint loop and the queue (section 5)
   search.ml                 DFS, branching, backtracking, every step proof-logged.

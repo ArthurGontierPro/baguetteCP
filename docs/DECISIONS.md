@@ -3378,3 +3378,78 @@ undoes. It changes nothing in the taxonomy above.
 If it is taken anyway for coverage, scope it narrowly: the constructor plus the `Reduce.t`
 plug, with a **pinned prediction in its record that no suite `pb-*` figure moves**, and a test
 asserting that prediction rather than a benchmark hoping for a win.
+
+## D-0051  A learned constraint has one owner, and retention is dominated by keeping everything
+
+**Status**: **ACCEPTED**, implemented by M2-L4 (2026-09-18, agent-del), `lib/core/retention.ml`.
+Two decisions in one record because the second only makes sense given the first.
+
+### 1. Ownership: `Retention` owns a learned constraint's lifetime, alone
+
+`Writer.wipe_level l` deletes exactly `{id | tag(id) >= l}` and is the only bulk deleter in
+the tree. A learned id is tagged **0** — `Learned.introduce` and `Pb_analysis.introduce` both
+emit inside `Justify.with_level ctx 0`, which moves the level for real so the tag and the
+proof agree (I-X3). Levels are non-negative, so only `wipe_level 0` could reach a level-0 tag.
+
+**`Writer.wipe_level` now refuses `l <= 0`** with an `invalid_arg` naming `Retention` and
+`Trace`. That is an API narrowing and it is the point of the decision: previously single
+ownership held only because `Search`'s four call sites all happen to pass a decision level. A
+fifth passing 0 would have deleted every learned constraint on the page — **silently from our
+side**, because a second `forget` is a no-op and the I-X2 audit cannot witness it, and loudly
+from the checker's, a long way from the mistake.
+
+### The collision that would really have happened was not the one D-0045 predicted
+
+D-0045 warned of a **two-owner** collision: the backjump and the policy both deleting. The
+real one is **one-owner**. `Search.solve` retired learned ids from `stats.learned_rev` —
+*every id ever introduced* — so a policy that evicts mid-search while that list is swept
+double-deletes from a single owner. D-0045's warning does not cover that shape.
+
+`learned_rev` is now an audit trail only; the sweep is `Retention.retire_all`, which deletes
+what the database **holds**. Measured by restoring the old sweep: **18 of 65 checks redden and
+the checker rejects** — *"Trying to access constraint with ID 16 that has already been
+deleted"*.
+
+### 2. The policy is `keep_all`, and that is a result
+
+The machinery is built, named, swappable and exercised (`BAGUETTE_RETENTION=off|fifo:N|lbd:N`
+keeps the sweep re-runnable). It is **off because the measurement says off**, which is what
+the row asked for — a policy justified by a measurement, not a citation.
+
+- **Activity is the constant zero.** Nothing propagates a learned constraint:
+  `Learned.instance` builds a `Linear` instance and **has no caller in `lib/`** (verified
+  independently). So an activity policy over a constant is FIFO, and `Retention.fifo` is that
+  policy under its honest name.
+- **LBD is degenerate here too**: over 39 models, **72 clauses at LBD 1, 16 at LBD 2, none at
+  ≥ 3**. Glucose's glue exemption would retain 100% of that, so it is deliberately not
+  implemented.
+- **The cap sweep on `width_sat_depth`** (73 learned constraints), reproduced independently by
+  the orchestrator:
+
+| policy | evicted | `.pbp` bytes | `del` rules | checker |
+|---|---|---|---|---|
+| `off` | 0 | 48145 | 124 | VERIFIED |
+| `lbd:16` | 57 | 48658 | 181 | VERIFIED |
+| `lbd:0` | 73 | 48793 | 196 | VERIFIED |
+
+**Eviction monotonically increases proof bytes and `del` rules.** Every policy is dominated by
+keeping everything. A ~10% verify-time slowdown was also measured, but at a ~15 ms workload
+that is weak evidence and **the decision does not rest on it** — the deterministic columns
+carry it.
+
+At the default, all **117 artefacts across 39 models are byte-identical** to the pre-M2-L4
+binary, with the two binaries genuinely different (`ae157416` → `05aaf5c4`).
+
+### What would reverse this
+
+The verdict is a fact about **this suite**, not about retention. It reverses when a learned
+constraint is actually propagated — i.e. when the clause path gets a runtime instance
+(D-0050's open question). At that point activity stops being constant, eviction starts saving
+propagation work rather than only adding `del` lines, and the sweep above must be re-run
+before `keep_all` is defended again. **Do not cite this record as "retention does not help";
+cite it as "retention does not help while nothing propagates a learned constraint".**
+
+Note also that the proof verifies at **every** cap including `lbd:0`, so nothing in it depends
+on a learned constraint staying live. That is consistent with the zero citations and is why
+eviction is safe here at all; it would not be in a solver whose later `rup` lines lean on a
+learned unit.

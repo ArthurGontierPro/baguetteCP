@@ -505,6 +505,15 @@ suite in both directions.
 
 ## 3c. Learning baseline, 2026-09-18 (38 models, minimum of 3 runs)
 
+> **STALE BY ONE MODEL.** This section was measured before `ladder_lift_unsat` landed
+> (M2-L11); the suite is **39** models now, and its counter figures — 86 clauses learned,
+> the 58% PB fallback rate — are one model short. Re-measured 2026-09-18 on the current
+> tree: **learned 88, convertible 13, pb-learned 38, pb-fallback 50, pb-convert 36,
+> pb-nondeg 28, pb-stronger 36.** Note that **10 of those 36 `pb-convert` are the empty
+> contradiction converting vacuously**; genuinely propagating conversions are **26** (D-0050).
+> The table below is left as measured rather than edited in place — re-run it before
+> quoting it.
+
 ```
 models that learned a clause   21 of 38
 models with a backjump skip     4 of 38

@@ -40,6 +40,11 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
 - **I-X1** Every emitted rule is accepted by VeriPB. Non-negotiable; it is the product.
 - **I-X2** Constraint ids are deleted exactly once. Checked at `conclusion` time under
   `BAGUETTE_PROOF_AUDIT=1`: the live set must be empty.
+  **The audit cannot witness a double delete** — a second `forget` is a no-op, so the live
+  set is empty either way, and the checker is the first thing that complains, a long way
+  from the mistake. The guard that *can* see it is `Retention.retire` plus
+  `Writer.wipe_level`'s refusal of level 0 (M2-L4, D-0051): single ownership is enforced
+  rather than audited.
 - **I-X3** Proof state mirrors solver state: a reason that has been deleted from the proof
   is not referenced by any live trail entry.
 - **I-X4** The proof is append-only and never rewound. Backtracking in the solver becomes
