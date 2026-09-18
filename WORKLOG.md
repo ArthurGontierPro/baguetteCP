@@ -15,7 +15,6 @@ git worktree each (`.claude/worktrees/<tag>`), so no two share `_build`'s global
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M2-L2/L6 cut-criterion amendment (docs only) | `docs/ROADMAP.md`, `docs/DECISIONS.md` | orchestrator-plan | 2026-09-18 |
 
 Two rounds are recorded in `## Completed` below. The rows that stood here on
 2026-09-15 (`integration`, M1-T12, M1-T13) were stale — see the handoff note "the
@@ -1001,6 +1000,19 @@ otherwise rediscover.
 Gate at close: `check: ok`, 34/34 models, 252 matrix checks, no FAIL lines. Docs-only
 change, so the 1625/102-artefact baseline is unchanged by construction rather than by
 measurement.
+
+**2026-09-18 — orchestrator-plan, amendment to the above**
+Asked whether 1UIP is right here, and it is not a settled default. The theorem behind it —
+first assertive clause gives the highest backjump — is a **SAT** theorem and Le Berre et al.
+(arXiv 2107.13085) show it does **not** hold for PB constraints, which propagate by slack
+and so can be asserting while carrying several conflict-level literals. M2-L2's test (b) had
+written the 1UIP rule as a general invariant of the cut; it is now scoped to the clause path,
+and the stopping criterion is a named component like the reduction rule. **The heading below
+still says "clause learning (1UIP)" — read it as the clause path only.** Also recorded: the
+cut choice is proof-free on the clause path (one `rup`, no intermediate lines) and sets proof
+size on the PB path (every step a `pol` operand), so the two paths pull opposite ways and
+M2-L8 is what decides it. Gate not re-run; docs-only amendment on a tree whose gate was green
+an hour earlier.
 
 ## Starting M2-T3: clause learning (1UIP). Read this section first.
 
