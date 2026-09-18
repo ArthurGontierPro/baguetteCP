@@ -1,0 +1,28 @@
+% M2-L8 control, scene 1 of 2: THE PROOF-ONLY VARIANT.
+%
+% The base refutation, verbatim, plus a spectator z that is FIXED BY ROOT PROPAGATION
+% and therefore never branched on: int_lin_le([1], [z], 0) prunes z to 0..0 before the
+% first decision, which the solver must justify, so the .opb gains its rows and the
+% .pbp gains the lines that prune it.
+%
+% The search tree is untouched -- z is fixed, so first-fail never selects it, and the
+% refutation of x != y /\ x = y below is the same refutation in the same order.
+% Measured 2026-09-18, against the base:
+%
+%     nodes 7 = 7, decisions 3 = 3, maxdepth 3 = 3, skipped 0 = 0, learned 4 = 4
+%     .opb  527 -> 639 B, .pbp 1275 -> 1339 B, 57 -> 61 lines, 21 -> 23 level markers
+%
+% That is the whole point of the scene: EVERY proof column moves and NO tree column
+% does, so a report that cannot separate the two has to get this row wrong. `-c`
+% requires the verdict `proof-only` here, and the verdict is non-vacuous by
+% construction -- it is only reachable when a proof column actually moved.
+%
+% z is declared last so that nothing about it can perturb the declaration-order
+% tiebreak among x and y even before propagation runs.
+var 0..3: x :: output_var;
+var 0..3: y :: output_var;
+var 0..3: z :: output_var;
+constraint int_ne(x, y);
+constraint int_eq(x, y);
+constraint int_lin_le([1], [z], 0);
+solve satisfy;

@@ -1,0 +1,19 @@
+% M2-L8 control, scene 3 of 3: THE SAME-NODE-COUNT BASE -- the scene that fires
+% against M1-T36's own rule, not merely against a hypothetical broken one.
+%
+% The scene 1 refutation with two branched spectators in front of it. Measured
+% 2026-09-18: 9 nodes, 5 decisions, maxdepth 5, 2 siblings skipped by backjumping.
+%
+% Its variant reaches the SAME NODE COUNT down a genuinely different tree. The solver's
+% own identity is `nodes = 2 * decisions + 1 - skipped`, so a tree can gain a decision
+% and skip two more siblings and land on the node count it started from -- and that is
+% not an exotic possibility, it is what backjumping does for a living. M1-T36 keyed
+% CHANGED on the node count alone, which was correct when it was written and went stale
+% the moment M2-L3 landed; this scene is what holds the widened rule in place.
+var 0..1: p :: output_var;
+var 0..1: q :: output_var;
+var 0..3: x :: output_var;
+var 0..3: y :: output_var;
+constraint int_ne(x, y);
+constraint int_eq(x, y);
+solve satisfy;

@@ -1,0 +1,24 @@
+% M2-L8 control, scene 2 of 2: THE CHANGED VARIANT.
+%
+% The base refutation plus a spectator p that is NOT fixed: width 2 against x and y's
+% width 4, so first-fail branches on it FIRST and the whole refutation moves one level
+% down. Measured 2026-09-18, against the base:
+%
+%     nodes 7 -> 8, decisions 3 -> 4, maxdepth 3 -> 4, skipped 0 -> 1
+%     .pbp 1275 -> 1315 B, 21 -> 25 level markers
+%
+% Note that the PROOF columns move here too, and by a similar amount to scene 1. That
+% is deliberate: a classifier that looked only at proof size would call these two rows
+% the same kind of event. The tree columns are what tell them apart, and `-c` requires
+% the verdict `CHANGED` here -- meaning the other columns are not a like-for-like
+% comparison on this row and must not be quoted as one.
+%
+% `skipped` moving 0 -> 1 is the second half of why M1-T36's nodes-only rule is not
+% enough for a learning benchmark: with backjumping in the solver, a tree can move
+% while its node count does not.
+var 0..1: p :: output_var;
+var 0..3: x :: output_var;
+var 0..3: y :: output_var;
+constraint int_ne(x, y);
+constraint int_eq(x, y);
+solve satisfy;

@@ -148,6 +148,7 @@ work. The owning session picks it up.
 | **D-0038 is open and it is the gate on M1-T51's adoption**, not a formality. `Writer.pol_concluding` exists, is demonstrated against the checker, and has **no caller in `lib/`**, because `Explanation.Combine`/`Cut` record how a bound was derived and not what was derived — there is no claim to pass. Four routes are written down in the record; route 3 folds it into **M2-T8**'s interface v2, where D-0026 already separates `Reason` from `Justification`, and is the only one that does not pre-empt D-0003. **Do not adopt `ia` piecemeal without deciding this** — a control with holes invites the assumption that it has none | `lib/core/explanation.ml`, `lib/core/justify.ml` | orchestrator via agent-polcheck | open, needs D-0038 |
 | **RESOLVED 2026-09-17, not a defect.** agent-search3 flagged `del id @c17 @c18 @c19 ;` followed by `del range @c14 @c17 ;` — `@c17` in both — as worth a glance from whoever owns `writer.ml`. It is correct: `del range` is **half-open**, `[LO, HI)`, as M1-T22 measured and PROOF-FORMAT §5 records, so the range stops at `@c16` and `@c17` is deleted exactly once. The appearance is consecutive ranges *chaining* on a shared bound, visible in `width_sat_depth`'s six ranges. I scanned all 34 proofs modelling half-openness: **zero overlapping deletion targets**. Right to flag, and the glance closes it | `lib/proof/writer.ml` | agent-search3, closed by orchestrator | CLOSED |
 | **M1-T36 is deliberately NOT dispatched in wave six.** A real node counter needs `lib/core/search.ml` (agent-search3) *and* `bin/main.ml` + `bench/run_bench.sh` (agent-cli) in one commit, and splitting it across two sessions would repeat the D-0009 mistake for a row the roadmap itself calls "Small". It goes out whole in wave seven, when both files are free | `lib/core/search.ml`, `bin/main.ml` | orchestrator | open, wave seven |
+| **`Makefile`'s `bench` comment offers a flag that no longer exists.** Line 106 documents `make bench ARGS="-F 2.0"`; D-0046 removed format 2.0 and M2-L8 removed `-F` from `bench/run_bench.sh`, so that example now fails with a usage error. The target body itself is fine. `Makefile` is not `bench/`'s to edit, so this is a one-line request rather than a commit. While there: the same comment says "fifteen of the eighteen rows are at the process floor" — the suite is **38** models now, and the re-measured figure is **23 of 38 at 90%+ `notslv%`** | `Makefile` | agent-bench | open, this round |
 
 **UPDATE 2026-09-16 (orchestrator): this is now ENFORCED, not requested.** Two further test binaries had to be killed at the ceiling after sessions were warned, so warning is evidently not a control. `make`, `scripts/run_model_tests.sh` and `scripts/verify_proof.sh` apply `ulimit -v 4000000` themselves; `CLAUDE.md` carries the rule where every session reads it first. The cap is verified to bite (5 GB allocation -> `MemoryError`, 100 MB fine, gate peaks at 18.5 MB). **A bare `dune runtest --root .` in a worktree is still uncapped** — that is M1-T53, and until it lands, wrap your runs yourself: `(ulimit -v 4000000; timeout 900 dune runtest --root .)`. A run that dies against the cap is a finding to report, not a cap to raise.
 
@@ -232,6 +233,7 @@ work. The owning session picks it up.
 
 | M2-L3 | agent-learn3 | 2026-09-18 | 1UIP clause learning over order literals, proof-only (**D-0044 fork (ii)**), with conflict-directed backjumping over the **decision closure** and its `rup` derivation at level 0. **I-S4's cross-level debt is discharged** and the check is wider than the invariant's wording. Backjump measured: 31 -> 9 nodes on `backjump_unsat.fzn`. **M1-T66 stays OPEN**: with `Search.bridges` disabled, 35/35 models still pass and no checker rejects — a learned clause citing across levels did NOT make the bridge load-bearing. 1833 unit checks, 267 matrix, 44 mutation, 35/35 models, determinism 35/35 byte-identical |
 | M2-T14 | agent-fmt2 | 2026-09-18 | Format-2.0 vacuity sweep. Three more instances of the M2-L0 defect found and fixed (test_proof 3.0-only lanes resolving 2.2.2 via `$VERIPB`; D-0030's certification in test_mutation writing a 3.0 proof against an env-format `.opb`; 20 blanked-trace controls asserting on exit status alone). Test (c) now checks the claim index by content, so it runs under both formats. |
+| M2-L8 | agent-bench | 2026-09-18 | The learning benchmark. Third table in `bench/run_bench.sh` reporting learned / convertible / skipped / pb-tried / pb-learned / pb-fallback / fb% / pb-stronger **beside** `.opb` bytes, `.pbp` bytes and verify ms, per model and summed over the suite as counts only. Verdict widened from M1-T36's nodes-alone to all four tree counters. **`bench/run_bench.sh -c`** is the control the row demanded: three scenes, asserted in both directions, exit non-zero on a misclassification, watched fire against three broken classifiers. `-f`/`-F`/`BAGUETTE_PROOF_FORMAT` gone from `bench/` (D-0046). Suite: 86 clauses over 21 of 38 models, 13 convertible, 9 skips over 4 models, PB 86/36/50 = **58% fallback**. |
 | M2-T16 | agent-drop | 2026-09-18 | **Proof format 2.0 removed from the project entirely** (D-0046). `Writer` emits 3.0 and only 3.0; `V2_0`, `BAGUETTE_PROOF_FORMAT`, `default_format`, every `v3 t` branch, `Pol.to_string`, `Opb.write ?labels` and `Encoding.write_opb_for` are gone, and `Checker.find` / `scripts/checker.sh` resolve one checker. **Artefact bytes byte-identical across all 38 models** (`.opb`, `.pbp`, stdout), binary hashed on both sides and different. Unit checks 1986 → 1972, all 14 accounted for. History kept and marked: D-0023/24/25/30 and `PROOF-FORMAT.md` §2. |
 
 ## Handoff notes
@@ -1963,6 +1965,52 @@ Verified by me under both configurations: `test_proof` **18 FAIL → 0**, `test_
 both were held back for M2-L10's instances, which now exist — 4 models, 9 skips. **M2-L7**
 (saturation) still needs its own decision record before any code. **M2-L11** is the row that
 would make M2-L6 pay off, and **M2-T15** is a question, not work.
+
+---
+
+## M2-L8 handoff, 2026-09-18 (agent-bench)
+
+**Released.** Files touched: `bench/run_bench.sh`, `bench/README.md`, `bench/control/**`
+(new), and these two WORKLOG rows. Nothing outside `bench/` was edited; `lib/` and `test/`
+were read-only throughout, as the wave-fifteen split required.
+
+**The numbers, and which of them may be quoted.** 38 models, all measured, none refused,
+none rejected, every proof accepted by VeriPB 3.0.2 before its row was printed. The
+learning counters are **exact**: 86 clauses over 21 of 38 models, 13 convertible (15%),
+9 skips over 4 models, PB 86 tried / 36 learned / 50 fallback = **58%**. They reproduce
+M2-L6's 0.581 on a suite that has grown since, and `pb-stronger` is still 36 of 36
+**degenerate** — M2-L6's honest negative is unchanged and M2-L11 still has everything to
+prove. The byte columns are exact at every row. **The timing columns mostly are not**:
+23 of 38 rows spend ≥90% of their wall-clock `solve ms` outside the solver's own work,
+and only `width_sat_depth` (5%) and `width_root_unsat` (27%) are below half. No count in
+this report is divided by a time, and `bench/README.md` §3c says why in those words.
+
+**The verdict rule changed, and the next session should know it.** M1-T36 keyed `CHANGED`
+on the node count alone. That was correct when written and went stale when backjumping
+landed: `nodes = 2 * decisions + 1 - skipped` lets a tree gain a decision, skip two more
+siblings and land back on the node count it started from. `bench/control/ctl_samenodes`
+is exactly that shape — nodes 9 = 9, decisions 5→4, skipped 2→0 — and under the old rule
+it came out `proof-only`, i.e. an invitation to compare the bytes and seconds of two
+different searches. All four tree counters now decide `CHANGED`.
+
+**`bench/run_bench.sh -c` asserts and exits non-zero.** It is not in `make check` and must
+not go in — `make bench` is measurement and a benchmark that gates a commit becomes a
+flaky test — but it is the one part of `bench/` that can fail, and anyone changing the
+comparison logic should run it. It was verified by breaking the classifier three ways
+(nodes-alone, hard-wired `proof-only`, hard-wired `CHANGED`); each break exits 1 and names
+the scene it got wrong. §7 of `bench/README.md` has the table.
+
+**Two things left for someone else.** (a) `Makefile` line 106 still documents
+`make bench ARGS="-F 2.0"`, a flag that no longer exists — raised under Cross-session
+requests; the target body is fine. (b) The proof-only control is a pair of *models*, not
+a pair of solver configurations, because after D-0046 there is no CLI knob that moves the
+proof without moving the tree: `--proof-comments` is a documented no-op on every shipped
+model (M1-T48's other half, already open). If M4's direct encoding ever makes that flag
+reachable, it becomes the better proof-only scene and `ctl_proof` can retire.
+
+**Peak RSS**: 10.4 MB for the control run; across the full suite, 9.7 MB solve and 18.6 MB
+verify. Nothing came near the cap, nothing timed out, and every run was under
+`ulimit -v 4000000`.
 
 **2026-09-18 — M2-T16 (agent-drop): format 2.0 is gone, and three things to know**
 

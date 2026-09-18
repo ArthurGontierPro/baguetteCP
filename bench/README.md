@@ -1,14 +1,15 @@
 # bench/ — the proof benchmark
 
-Task M3-T5, which absorbs M3-T3. This directory holds a measurement tool. It is **not
-part of `make check`** and must not become part of it: it takes minimums over repeated
+Task M3-T5, which absorbs M3-T3, extended by **M2-L8** to the learning counters. This
+directory holds a measurement tool. It is **not part of `make check`** and must not
+become part of it: it takes minimums over repeated
 sequential runs, which is slow by construction, and a timing number has no business
 failing a build.
 
 ```sh
 bench/run_bench.sh                       # every model in test/models/, one configuration
 bench/run_bench.sh -r 9 test/models/width_root_unsat.fzn
-bench/run_bench.sh -F 2.0 -b '2.0'       # 3.0 against 2.0, every column separately
+bench/run_bench.sh -c                    # THE CONTROL (M2-L8, §7) -- asserts, exits non-zero
 bench/run_bench.sh -S other/main.exe -b layered     # two solver builds
 bench/width_curve.sh                     # the D-0028 shape at w = 9, 99, 999, 9999
 bench/run_bench.sh -h                    # all the options
@@ -22,19 +23,22 @@ or of the `.pbp`; the harness verifies that before it measures anything (§1, "t
 self-checks"). One row, `emitln`, is a **count** and carries a `lines` unit instead of
 `us` — deliberately, so that anything matching on `us` cannot read it as a duration.
 
-There is no `make bench` target. `Makefile` belongs to the orchestrator; if a target is
-wanted, the body is `./bench/run_bench.sh "$(ARGS)"` and it must not be a dependency of
-`check`.
+There **is** a `make bench` target now (`make bench ARGS="..."`), and it is correctly not
+a dependency of `check`. `Makefile` belongs to the orchestrator, not to `bench/`; as of
+2026-09-18 its comment above that target still offers `ARGS="-F 2.0"` as the example, and
+that flag no longer exists — D-0046 removed the format it selected and M2-L8 removed the
+flag. Raised as a cross-session request rather than edited from here.
 
 ---
 
 ## 1. What it reports, and why they are separate columns
 
-There are now **two tables**, printed one after the other for each configuration. The
+There are now **three tables**, printed one after the other for each configuration. The
 first is wall-clock time around whole processes; the second is the solver's own account
-of where its time went, read back from `baguette --time` (M1-T35). They are printed side
-by side rather than one replacing the other, because **the comparison between them is
-the measurement** — it is what says how much of a row was `exec`.
+of where its time went, read back from `baguette --time` (M1-T35); the third is what
+conflict analysis did, read from `baguette --stats` (M2-L8). The first two are printed
+side by side rather than one replacing the other, because **the comparison between them
+is the measurement** — it is what says how much of a row was `exec`.
 
 ### The wall-clock table
 
@@ -102,6 +106,34 @@ just recorded here:
   be wrong by a factor of 1.8, and nothing in the number would say so. It is calibrated
   per run — minimum of nine 256-read bursts, taken in the report *after* every other
   number has been read, so the calibration lands in no phase.
+
+### The learning table (M2-L8)
+
+One row per model, from the solver's own `--stats` counters — **not** read back out of
+the `.pbp`. It rides the same dedicated `--stats` pass the tree columns come from, so it
+costs no extra run.
+
+| column | what it is |
+|---|---|
+| `.opb B` / `.pbp B` / `verify ms` | repeated from the first table, deliberately |
+| `learn` | 1UIP clauses derived and stated at level 0 (M2-L3) |
+| `conv` | …of which `Learned.to_linear_row` accepts. **An opportunity, not a saving** |
+| `skip` | siblings a backjump did *not* explore (M2-L3). A `0` here is a real zero |
+| `pbtry` / `pblrn` / `pbfall` | PB conflict analysis asked / succeeded / fell back (M2-L6) |
+| `fb%` | `pbfall / pbtry`, integer percent. `n/a` when `pbtry` is 0 |
+| `pbstrng` | learned PB rows that convert where the same conflict's clause does not |
+
+The three proof columns are **repeated rather than summarised**, and that is the whole
+design of this table. M2-L8 exists because learning is the one change in this solver that
+can move `.pbp` bytes without moving the search tree *and* move the search tree without
+moving `.pbp` bytes. Five quantities on one line is the only arrangement in which a
+reader can watch that happen. There is no total column, for the same reason there is none
+in the first table.
+
+Under the table, **suite totals** — and only of the *counts*. The bytes and the seconds
+are never summed: a sum over models of different sizes is an arbitrary weighting. A model
+whose binary reported no learning counters at all is counted in **none** of the sums and
+is named separately, because a missing measurement must not be able to read as a zero.
 
 ### The self-checks
 
@@ -203,16 +235,19 @@ harder:
   says `REJECTED` and reports nothing else. Timing an unaccepted proof measures nothing.
 - **The checker and the format are read, not assumed.** The checker comes from
   `scripts/checker.sh` (`Checker.find`'s shell twin — no path is hardcoded here) and is
-  printed with its version. The proof format is read back out of **each `.pbp`'s own
-  version line**, not from `BAGUETTE_PROOF_FORMAT`, because D-0023's lesson is that the
-  artefact is the authority and the environment variable is only a request.
+  printed with its version. The proof format is still read back out of **each `.pbp`'s
+  own version line** and printed, even though D-0046 left only one format to read: it is
+  a check on the artefact, not a knob, and D-0023's lesson is that the artefact is the
+  authority. There is no longer any way to *ask* for a format from this harness — `-f`
+  and `-F` are gone with the format they selected.
 
 One consequence of the last point, found while writing this: the first draft counted
-`rup` and `pol` lines with `grep ' rup '`, which counts 31 under format 3.0 and **0** for
-the same proof under 2.0, because 3.0 prefixes every derived constraint with a label.
-That is D-0025's vacuously-true assertion wearing a benchmark's clothes. The counts now
-use `^(@[^ ]+ )?rup `, the shell transcription of `Writer.strip_label`, and the script
-says so where it does it.
+`rup` and `pol` lines with `grep ' rup '`, and so counted **0** of a proof whose every
+derived constraint carries a label (`@c9 rup ...`) — a benchmark reporting a confident
+zero for a proof full of the thing it was counting. That is D-0025's vacuously-true
+assertion wearing a benchmark's clothes. The counts use `^(@[^ ]+ )?rup `, the shell
+transcription of `Writer.strip_label`, and the script says so where it does it. The
+optional prefix stays optional: nothing here may assume one spelling.
 
 ## 3. Baseline, 2026-09-16 (wall clock, 18 models, before `--time` existed)
 
@@ -264,11 +299,10 @@ width_sat_depth             16153      29859      17.8    25%      19.2    23%  
    the shape columns are here. A benchmark reporting one size number could not tell those
    two apart, and they have opposite fixes.
 
-Format comparison, same day, `-F 2.0`: 2.0 is 5–9% smaller `.opb` and 16–18% smaller
-`.pbp` on the small models, agreeing in direction with D-0023's "3.0 is about 19% larger".
-Every **timing** delta between the two formats came back inside the spread and the harness
-labelled all of them `noise`. That is the correct answer, not a disappointing one: the
-formats differ in bytes written, and at this problem size bytes written are not the cost.
+*(A format-2.0 comparison stood here until D-0046 removed that format from the project.
+Its finding is preserved in D-0023 and in the decision record, and is not re-measurable:
+the code that emitted 2.0 is gone. The timing half of it was a null result in any case —
+every delta came back inside the spread and was labelled `noise`.)*
 
 Width curve (`bench/width_curve.sh`, the D-0028 shape, zero prunings at every width):
 
@@ -466,13 +500,52 @@ the published correction by a factor of two.
 all 30 models is MD5-identical before and after M1-T47, checked on a run of the whole
 suite in both directions.
 
+## 3c. Learning baseline, 2026-09-18 (38 models, minimum of 3 runs)
+
+```
+models that learned a clause   21 of 38
+models with a backjump skip     4 of 38
+clauses learned                86, of which 13 convertible (15%)
+siblings skipped                9
+PB tried / learned / fallback  86 / 36 / 50
+PB FALLBACK RATE               58% over 86 attempts
+PB rows stronger than a clause 36
+```
+
+Three things this table says and one it refuses to.
+
+1. **The fallback rate is 58%, and it is a real measurement**: 86 attempts is a
+   denominator, not a rounding artefact, and every attempt came from a proof the checker
+   accepted. It reproduces M2-L6's own figure (0.581) on a suite that has grown since.
+2. **`pbstrng` is 36 of 36 and means nothing yet.** M2-L6's honest negative stands: all
+   36 are the degenerate empty-contradiction case. The counter is here so that M2-L11 —
+   giving PB analysis the ladder chain `Linear` actually uses — cannot be claimed without
+   a non-degenerate number to show. Until then, read this row as `36 degenerate`.
+3. **`conv` is 13 of 86 (15%) and is concentrated**, not spread: the `bool_*` models plus
+   a handful of others, exactly as M2-L10 measured. Convertibility is model-dependent,
+   which is the argument for D-0044's fork (ii).
+
+What it refuses: **any of these counts divided by a time.** 23 of the 38 rows spend ≥90%
+of their wall-clock `solve ms` outside the solver's own work (`notslv%`, §3a), and only
+`width_sat_depth` and `width_root_unsat` are below 50%. "Learning costs X µs per clause"
+is not supportable from this suite and this table does not offer it. The counts are exact;
+the seconds beside them, on 36 of 38 rows, are a timing of `exec`.
+
 ## 4. What the columns are *not*
 
-- **`lvl` is not a node count.** The solver does not count nodes, and this harness cannot
-  add one without touching `lib/` (owned elsewhere). `Search.branch` emits one level
-  marker per child it explores, in both formats, so `lvl` moves when the search tree moves
-  — which is the question it is here to answer. It is labelled a proxy everywhere it is
-  printed. If a node counter ever lands, this column should become it.
+- **`lvl` is not a node count, and since M1-T36 it no longer has to pretend to be.**
+  `Search.branch` emits one level marker per child it explores *and* one per step back
+  down to a parent, so `lvl` is neither the node count nor a multiple of it. The real
+  count is the `nodes` column, from the solver's own counter. `lvl` is kept because
+  **`nodes` and `lvl` diverging is the informative case**: the same tree, written down
+  more densely.
+- **`conv` is not a saving.** It counts learned clauses `Learned.to_linear_row` would
+  accept — clauses that *could* propagate if they were installed. Nothing in the solver
+  installs them (D-0044 fork ii is still open), so the column measures an opportunity,
+  not a benefit, and it says so under the table.
+- **`fb%` of a model with no PB attempts is `n/a`, not 0%.** A zero denominator means PB
+  analysis was never asked about a conflict on that model. Rendering that as `0%` would
+  read as "it never fell back", which is the opposite of what it means.
 - **`solve ms` is not propagation time, and still is not.** It is one whole process:
   `exec`, runtime start, parse, compile, solve, write the `.opb` and the `.pbp`, and
   `fsync` on exit. The internal table now says how that splits — except for the one join
@@ -621,3 +694,72 @@ remain, and they are smaller but not nothing:
   mean the suite cannot see it, which is a different sentence from the prediction being
   confirmed — the same trap M1-T24 fell into and reported correctly. `width_sat_depth`,
   at 4.8 ms of corrected `propag`, is still the only row with room for the answer.
+
+---
+
+## 7. The control: can this report tell a proof-only change from a changed tree? (M2-L8)
+
+```sh
+bench/run_bench.sh -c        # asserts; exits non-zero if either direction is wrong
+```
+
+This is the one part of `bench/` that **passes or fails** rather than reporting. It is
+still not a commit gate and must not become one — it takes minimums over repeated runs
+like everything else here — but it is an assertion, and it is the assertion the rest of
+the directory rests on.
+
+**Why it is needed.** Every comparison this harness prints ends in a verdict: `CHANGED`,
+`proof-only`, `same` or `n/a`. If that verdict is wrong, every number on the row is
+misread — a moved search tree gets quoted as a proof improvement. The verdict has been
+wrong here before. Until M1-T36 it was computed from level markers alone and reported
+every proof-only change as `CHANGED`. M1-T36 fixed it with the node count, and **that
+fix went stale the moment backjumping landed**: the solver's own identity is
+
+```
+nodes = 2 * decisions + 1 - skipped
+```
+
+so a tree can gain a decision, skip two more siblings, and arrive back at the node count
+it started from. A node-count-only rule calls that `proof-only`.
+
+**The three scenes.** `bench/control/base/NAME.fzn` is measured as configuration A and
+`bench/control/variant/NAME.fzn` as configuration B; they share basenames, so the control
+exercises the real join and the real classifier rather than a stub of them.
+
+| scene | what differs | required verdict |
+|---|---|---|
+| `ctl_proof` | a spectator fixed by **root propagation**: every proof column moves, no tree counter does | `proof-only` |
+| `ctl_tree` | a spectator that is **branched**: nodes 7→8, decisions 3→4, skipped 0→1 — and the proof columns move too | `CHANGED` |
+| `ctl_samenodes` | **nodes 9 = 9**, decisions 5→4, maxdepth 5→4, skipped 2→0 | `CHANGED` |
+
+`ctl_samenodes` is the one that earns its place. It is classified correctly only from
+`decisions`, `maxdepth` and `skipped`; under M1-T36's own historical rule it comes out
+`proof-only`, which is a report inviting you to compare the bytes and seconds of two
+different searches.
+
+**Both directions are required.** A classifier hard-wired to print `proof-only` passes
+`ctl_proof`; one hard-wired to print `CHANGED` passes both others. `-c` fails unless a
+`proof-only` verdict *and* a `CHANGED` verdict were both actually produced. Verified by
+breaking it on purpose, 2026-09-18 — all three exit 1:
+
+| break | what fails |
+|---|---|
+| verdict from `nodes` alone (M1-T36's rule) | `ctl_samenodes`: expected `CHANGED`, got `proof-only` |
+| verdict hard-wired to `proof-only` | `ctl_tree` and `ctl_samenodes` |
+| verdict hard-wired to `CHANGED` | `ctl_proof` |
+
+**What the control does not prove.** It shows the *classifier* separates the two cases on
+three scenes built to be separable. It does not show that every future change produces one
+of those two shapes, and it is not a proof of the underlying counters — the solver's own
+`INCONSISTENT` check on `nodes = 2·decisions + 1 − skipped` is what guards those, and this
+harness refuses the whole model if it trips.
+
+**Why scenes and not solver configurations.** Until D-0046 the proof-only scene was one
+model re-run under proof format 2.0. That knob is gone. `--proof-comments` cannot replace
+it — `bin/main.ml`'s own usage text records that it is a no-op on every shipped model —
+and every other CLI knob either changes nothing or changes the tree. Two models, one tree,
+two proofs is the shape still available without a `lib/` change. It rests on M1-T37's
+self-check, which runs before any measurement: `.opb` bytes are a property of the model,
+not of the path it was given. The scenes live in different directories, so if that ever
+broke, every control row would differ for a reason unrelated to what it tests — and the
+self-check says so and exits non-zero first.

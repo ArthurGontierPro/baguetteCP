@@ -1,0 +1,13 @@
+% M2-L8 control, scene 1 of 2: THE PROOF-ONLY BASE.
+%
+% x != y and x = y: unsatisfiable, refuted by a search that takes 3 decisions and
+% visits 7 nodes. Measured 2026-09-18: 7 nodes, 3 decisions, maxdepth 3, 0 skipped,
+% 4 learned clauses.
+%
+% Its variant (bench/control/variant/ctl_proof.fzn) explores exactly this tree and
+% writes a DIFFERENT proof. See that file for how.
+var 0..3: x :: output_var;
+var 0..3: y :: output_var;
+constraint int_ne(x, y);
+constraint int_eq(x, y);
+solve satisfy;
