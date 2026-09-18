@@ -852,79 +852,134 @@ let () =
   and proof_varied = ref 0
   and could_vary = ref 0 in
   let broken = ref [] in
+  (* One case, fully checked: solve under every order, fold the observations, assert
+     the order-independence invariants, and file the verdict. Extracted (M2-T13) so the
+     bounded coverage top-up below can call exactly this and get a case that is checked
+     as thoroughly as an ordinary one -- a case fetched only to complete a coverage
+     bucket is not exempted from brute-force or proof verification. *)
+  let process_case m =
+    incr ran;
+    (* M2-T11: the same model, several trees. The ANSWER must not depend on the
+       order and the PROOF must -- a branch's refutation rests on that branch's own
+       trace (D-0018), so a different tree is a different proof, and the point of
+       this loop is that the invariants are asserted of each one. *)
+    let results =
+      List.map
+        (fun (label, order) -> (label, run_case ~dir ~n:!ran ~order m))
+        (orders_for order_seeds ~orders)
+    in
+    runs := !runs + List.length results;
+    let case_obs = new_obs () in
+    List.iter (fun (_, (_, o, _, _)) -> or_obs case_obs o) results;
+    (* Did the branching order actually change the emitted proof? Only a case that
+       branched at all can show this: one decided at the root has one tree whatever
+       the order says, so it is excluded from the denominator rather than counted as
+       a failure to vary. *)
+    (match results with
+    | (_, (_, _, p0, _)) :: rest when rest <> [] ->
+        if case_obs.deep_decisions || case_obs.branch_failed then (
+          incr could_vary;
+          if List.exists (fun (_, (_, _, p, _)) -> p <> p0) rest then incr proof_varied)
+    | _ -> ());
+    (* The answer is invariant under the branching order. Each run is already
+       checked against brute force on its own; this says the runs agree with each
+       other, which is the assertion that fails loudly if one order finds a
+       solution another one misses. *)
+    let answers = List.map (fun (_, (_, _, _, a)) -> a) results in
+    (match answers with
+    | a0 :: rest when List.exists (fun a -> a <> a0) rest ->
+        fail
+          "random case %d (seed %d): the ANSWER depends on the branching order -- %s. \
+           One of these orders is incomplete or unsound (I-S2)."
+          !ran seed
+          (String.concat ", "
+             (List.map2
+                (fun (label, _) a ->
+                  Printf.sprintf "%s: %s" label
+                    (match a with
+                    | None -> "raised"
+                    | Some true -> "SAT"
+                    | Some false -> "UNSAT"))
+                results answers))
+    | _ -> ());
+    if case_obs.branch_failed then incr branch_failed;
+    if case_obs.deep_decisions then incr deep;
+    if case_obs.root_conflict then incr root_conflict;
+    if case_obs.cross_conflict then incr cross;
+    if case_obs.div_nontrivial then incr div;
+    if case_obs.div_remainder then incr rem;
+    if case_obs.ne_moved_bound then incr ne_bound;
+    if Array.exists (fun (_, lo, _) -> lo <> 0) m.vars then incr offset_dom;
+    (match brute_force m with Some _ -> incr sat | None -> incr unsat);
+    List.iter
+      (fun (label, (verdict, _, _, _)) ->
+        match verdict with
+        | Verified -> ()
+        | Known_ne_trace -> incr known_ne_trace
+        | Known_ne_root -> incr known_ne_root
+        | Known_ne_in_pol -> incr known_ne_in_pol
+        | Broken why -> broken := (!ran, m, label, why) :: !broken)
+      results
+  in
+  (* Keep the box small enough that brute force is exact and cheap; an instance whose
+     oracle is expensive is an instance whose budget bought nothing. *)
+  let box_ok m =
+    Array.fold_left (fun acc (_, lo, hi) -> acc * (hi - lo + 1)) 1 m.vars <= 2000
+  in
   (try
      while !ran < cases do
        let m = gen_model r in
-       (* Keep the box small enough that brute force is exact and cheap; an instance
-          whose oracle is expensive is an instance whose budget bought nothing. *)
-       let box = Array.fold_left (fun acc (_, lo, hi) -> acc * (hi - lo + 1)) 1 m.vars in
-       if box <= 2000 then (
-         incr ran;
-         (* M2-T11: the same model, several trees. The ANSWER must not depend on the
-            order and the PROOF must -- a branch's refutation rests on that branch's own
-            trace (D-0018), so a different tree is a different proof, and the point of
-            this loop is that the invariants are asserted of each one. *)
-         let results =
-           List.map
-             (fun (label, order) -> (label, run_case ~dir ~n:!ran ~order m))
-             (orders_for order_seeds ~orders)
-         in
-         runs := !runs + List.length results;
-         let case_obs = new_obs () in
-         List.iter (fun (_, (_, o, _, _)) -> or_obs case_obs o) results;
-         (* Did the branching order actually change the emitted proof? Only a case that
-            branched at all can show this: one decided at the root has one tree whatever
-            the order says, so it is excluded from the denominator rather than counted as
-            a failure to vary. *)
-         (match results with
-         | (_, (_, _, p0, _)) :: rest when rest <> [] ->
-             if case_obs.deep_decisions || case_obs.branch_failed then (
-               incr could_vary;
-               if List.exists (fun (_, (_, _, p, _)) -> p <> p0) rest then
-                 incr proof_varied)
-         | _ -> ());
-         (* The answer is invariant under the branching order. Each run is already
-            checked against brute force on its own; this says the runs agree with each
-            other, which is the assertion that fails loudly if one order finds a
-            solution another one misses. *)
-         let answers = List.map (fun (_, (_, _, _, a)) -> a) results in
-         (match answers with
-         | a0 :: rest when List.exists (fun a -> a <> a0) rest ->
-             fail
-               "random case %d (seed %d): the ANSWER depends on the branching order -- \
-                %s. One of these orders is incomplete or unsound (I-S2)."
-               !ran seed
-               (String.concat ", "
-                  (List.map2
-                     (fun (label, _) a ->
-                       Printf.sprintf "%s: %s" label
-                         (match a with
-                         | None -> "raised"
-                         | Some true -> "SAT"
-                         | Some false -> "UNSAT"))
-                     results answers))
-         | _ -> ());
-         if case_obs.branch_failed then incr branch_failed;
-         if case_obs.deep_decisions then incr deep;
-         if case_obs.root_conflict then incr root_conflict;
-         if case_obs.cross_conflict then incr cross;
-         if case_obs.div_nontrivial then incr div;
-         if case_obs.div_remainder then incr rem;
-         if case_obs.ne_moved_bound then incr ne_bound;
-         if Array.exists (fun (_, lo, _) -> lo <> 0) m.vars then incr offset_dom;
-         (match brute_force m with Some _ -> incr sat | None -> incr unsat);
-         List.iter
-           (fun (label, (verdict, _, _, _)) ->
-             match verdict with
-             | Verified -> ()
-             | Known_ne_trace -> incr known_ne_trace
-             | Known_ne_root -> incr known_ne_root
-             | Known_ne_in_pol -> incr known_ne_in_pol
-             | Broken why -> broken := (!ran, m, label, why) :: !broken)
-           results)
+       if box_ok m then process_case m
      done
    with e ->
      fail "the generator itself raised %s -- the run is incomplete" (Printexc.to_string e));
+  (* -------------------------------------------------------- M2-T13: coverage top-up
+
+     The five "the generator reaches ..." checks below are COVERAGE assertions: they say
+     whether the generator produced a certain SHAPE at all in this run, not whether the
+     solver got a case right. Read literally as "counter > 0 after `cases` cases from one
+     seed" they are seed-dependent -- a 120-seed sweep on 2026-09-17 found 4 of 120 seeds
+     where BAGUETTE_RANDOM_CASES cases from that seed's stream never happen to produce a
+     disequality pruning that moves a bound, so the run failed with wording that reads
+     exactly like a real proof rejection. That is the one file where a rejection is
+     supposed to be believed, so a spurious one here is worse than an ordinary flake.
+
+     Fixed by generating more, not by lowering the bar. If a shape has not appeared after
+     `cases` cases, keep drawing from the SAME stream (still seeded only by
+     BAGUETTE_RANDOM_SEED, so the whole run is still reproducible from one announced
+     seed) until every shape has appeared or a bounded number of extra attempts is spent.
+     Each extra case is [process_case]d exactly like an ordinary one, so top-up buys
+     coverage without buying an unchecked solver run: a genuine rejection found only
+     during top-up still lands in [broken] and is reported as such. The cap keeps a truly
+     vanished shape (a generator regression) from spinning forever; see [coverage_check]
+     below for how that is reported so it can never be mistaken for a soundness
+     rejection. *)
+  let coverage_reached () =
+    !deep > 0 && !root_conflict > 0 && !div > 0 && !rem > 0 && !ne_bound > 0
+  in
+  let topup_cap = 4000 in
+  let topup_spent = ref 0 in
+  if not (coverage_reached ()) then
+    (try
+       while (not (coverage_reached ())) && !topup_spent < topup_cap do
+         incr topup_spent;
+         let m = gen_model r in
+         if box_ok m then process_case m
+       done
+     with e ->
+       fail
+         "the generator itself raised %s during the M2-T13 coverage top-up -- the run \
+          is incomplete"
+         (Printexc.to_string e));
+  if !topup_spent > 0 then
+    Printf.printf
+      "\n\
+      \  M2-T13 coverage top-up: %d extra case(s) drawn from the same seed's stream to \
+       reach\n\
+      \  every coverage shape (cap %d); %s.\n"
+      !topup_spent topup_cap
+      (if coverage_reached () then "all reached"
+       else "still short of at least one -- see the COVERAGE-GAP line(s) below");
   (try Sys.rmdir dir with _ -> ());
   let pct k = if !ran = 0 then 0.0 else 100.0 *. float_of_int k /. float_of_int !ran in
   Printf.printf "\n  %d cases, %d solver runs -- %d SAT, %d UNSAT\n" !ran !runs !sat
@@ -962,11 +1017,46 @@ let () =
     "at least half the generated instances have a domain that does not start at zero \
      (the D-0010 / D-0021 shape)"
     (pct !offset_dom >= 50.0);
-  check "the generator reaches a search at least two decisions deep" (!deep > 0);
-  check "the generator reaches a root conflict" (!root_conflict > 0);
-  check "the generator reaches a division by more than one" (!div > 0);
-  check "the generator reaches a division with a remainder" (!rem > 0);
-  check "the generator reaches a disequality pruning that moves a bound" (!ne_bound > 0);
+  (* M2-T13: distinct from [check] on purpose. Failing one of these means the generator
+     did not produce a shape within [cases + topup_cap] attempts from this seed -- a
+     generator-coverage problem (or, after the bound above, a generator regression) --
+     and it must never print like, or be mistaken for, a proof rejection or any other
+     soundness finding. Hence the different name, the different prefix in the output,
+     and the explicit disclaimer repeated in every message below. *)
+  let coverage_gaps = ref 0 in
+  let coverage_check name cond =
+    incr checks;
+    if cond then Printf.printf "ok   %s\n" name
+    else (
+      incr coverage_gaps;
+      incr failures;
+      Printf.printf
+        "COVERAGE-GAP (generator problem, NOT a proof rejection, NOT a soundness \
+         failure) %s\n"
+        name)
+  in
+  let cov_budget = cases + !topup_spent in
+  coverage_check
+    (Printf.sprintf
+       "the generator reaches a search at least two decisions deep within %d cases"
+       cov_budget)
+    (!deep > 0);
+  coverage_check
+    (Printf.sprintf "the generator reaches a root conflict within %d cases" cov_budget)
+    (!root_conflict > 0);
+  coverage_check
+    (Printf.sprintf "the generator reaches a division by more than one within %d cases"
+       cov_budget)
+    (!div > 0);
+  coverage_check
+    (Printf.sprintf "the generator reaches a division with a remainder within %d cases"
+       cov_budget)
+    (!rem > 0);
+  coverage_check
+    (Printf.sprintf
+       "the generator reaches a disequality pruning that moves a bound within %d cases"
+       cov_budget)
+    (!ne_bound > 0);
   (* M2-T11's own coverage number, and the one that says whether this file is testing
      more than one tree at all. The denominator is the cases that branched: a case
      decided at the root has nothing for an order to vary, so counting it would dilute
