@@ -453,6 +453,33 @@ let test_renaming_comments () =
    call site below, never a skip. *)
 let veripb_path () = Baguette_proof.Checker.find ()
 
+(* A checker that can READ format 3.0.
+
+   M2-T14. Several blocks below emit `pseudo-Boolean proof version 3.0` and a labelled
+   .opb unconditionally: they are measurements OF 3.0 -- what `del range` means, what
+   the pair spelling deletes, what `wipe_level` retires -- and there is no 2.0 form of
+   the question they ask. [Checker.find] honours $VERIPB, so under
+   `VERIPB=$HOME/.local/bin/veripb` those artefacts went to the Python 2.2.2 build,
+   which cannot parse a labelled .opb at all. Measured, the log then reads
+
+     /tmp/.../3.0_broken.opb:2:1: Expected number.
+
+   and on that parse error every lane asserting a REJECTION passed -- without the
+   checker ever judging a deletion -- while the lanes asserting acceptance failed. That
+   is D-0020/D-0030's rule verbatim, and it is the same defect as the M2-L0 break lane
+   fixed in 92e03a1, reached through $VERIPB rather than through a hardcoded ~labels.
+
+   So a 3.0-only lane names the 3.0 build, exactly as test_justify.ml's
+   [reduce_break_checkers] pairs each format with the binary that can read it. The
+   fallback to [Checker.find] is kept for a machine carrying only one veripb; where a
+   lane can also assert the rejection's WORDING it does, and that is what would catch
+   the fallback landing on a 2.2.2. *)
+let veripb_v3 () =
+  let home = try Sys.getenv "HOME" with Not_found -> "" in
+  let cargo = Filename.concat home ".cargo/bin/veripb" in
+  if Sys.file_exists cargo && not (Sys.is_directory cargo) then Some cargo
+  else veripb_path ()
+
 (* ------------------------------------------------------------------ *)
 (* M1-T7c: order-encoding expansion of sum a_i x_i <= rhs               *)
 (* ------------------------------------------------------------------ *)
@@ -1087,7 +1114,7 @@ let write_lines path lines =
   close_out oc
 
 let test_v3_del_range_semantics () =
-  match veripb_path () with
+  match veripb_v3 () with
   | None ->
       incr failures;
       print_endline
@@ -1173,7 +1200,7 @@ let test_v3_del_range_semantics () =
 (* asserted.                                                           *)
 (* ------------------------------------------------------------------ *)
 let test_v3_del_pair_spelling () =
-  match veripb_path () with
+  match veripb_v3 () with
   | None ->
       incr failures;
       print_endline
@@ -1296,7 +1323,7 @@ let test_v3_del_pair_spelling () =
       try Sys.rmdir dir with _ -> ())
 
 let test_v3_wipe_level_against_checker () =
-  match veripb_path () with
+  match veripb_v3 () with
   | None ->
       incr failures;
       print_endline
@@ -1444,7 +1471,7 @@ let test_v3_wipe_level_against_checker () =
       try Sys.rmdir dir with _ -> ())
 
 let test_v3_veripb () =
-  match veripb_path () with
+  match veripb_v3 () with
   | None ->
       incr failures;
       print_endline ("FAIL 3.0: " ^ Baguette_proof.Checker.not_found_message)
@@ -1504,9 +1531,31 @@ let test_v3_veripb () =
       (match run_checker ~checker:veripb ~opb ~pbp:corrupted ~log with
       | None -> ()
       | Some false ->
-          Printf.printf
-            "ok   3.0: veripb rejects a 3.0 proof whose conclusion cites a \
-             non-contradiction\n"
+          (* M2-T14: "it rejected" is not the claim -- "it judged the conclusion" is.
+             Both wordings above at full strength, either accepted; a checker that
+             merely failed to PARSE the artefact prints neither, which is how this lane
+             used to pass under a 2.2.2 handed a labelled .opb. *)
+          let out = try read_whole log with _ -> "" in
+          let says needle =
+            let n = String.length needle in
+            let rec go i =
+              i + n <= String.length out && (String.sub out i n = needle || go (i + 1))
+            in
+            go 0
+          in
+          if says "is not contradicting" || says "not a contradiction" then
+            Printf.printf
+              "ok   3.0: veripb rejects a 3.0 proof whose conclusion cites a \
+               non-contradiction, and says so\n"
+          else (
+            incr failures;
+            Printf.printf
+              "FAIL 3.0: veripb refused the corrupted proof but never judged the \
+               conclusion -- neither 3.0.2's \"is not contradicting, as specified by the \
+               hint\" nor 2.2.2's \"Constraint is not a contradiction\" is in its \
+               output, so this is a malformed artefact and not a measurement.\n\
+              \  checker said: %s\n"
+              (String.trim out))
       | Some true ->
           incr failures;
           Printf.printf
@@ -1600,7 +1649,7 @@ let pol_claim_opb dir name =
   (opb, c1, c2, c3, v)
 
 let test_pol_states_its_conclusion () =
-  match veripb_path () with
+  match veripb_v3 () with
   | None ->
       incr failures;
       print_endline
@@ -1733,9 +1782,27 @@ let test_pol_states_its_conclusion () =
    [Writer.with_level] moves the level for real -- `# 0` under 2.0, a `% level 0` comment
    under 3.0 -- which is what makes both columns below green.
 
-   The rejection wordings share no useful substring (M1-T46), so this asserts on the
-   checker's exit status and not on its text. *)
+   M2-T14. This used to assert on the checker's exit status alone, on the grounds that
+   the two rejection wordings share no useful substring (M1-T46). An exit status cannot
+   tell a JUDGEMENT from a parse error, and that gap was live: under
+   `VERIPB=$HOME/.local/bin/veripb` the 3.0 half handed a labelled .opb to the Python
+   2.2.2 build, whose log read `3.0_broken.opb:2:1: Expected number.`, and the BROKEN
+   lane passed on that -- the checker never reached a deletion. Two things close it.
+   The format now picks the binary that can read it, and the rejection is asserted by
+   its words, both checkers' at full strength (measured 2026-09-18):
+
+     3.0.2  "Trying to access constraint with ID 3 that has already been deleted."
+     2.2.2  "Hint: Rule 6 is trying to access constraint (constraintId 3), that was
+             marked as safe to delete."
+
+   These two really do share no useful substring, so both are listed and either is
+   accepted. Neither can be produced by a file that failed to parse. *)
 let test_learned_survives_the_backjump () =
+  (* 3.0 artefacts need a 3.0 reader; a 2.0 proof is read by either build. *)
+  let checker_for = function
+    | Writer.V3_0 -> veripb_v3 ()
+    | Writer.V2_0 -> veripb_path ()
+  in
   match veripb_path () with
   | None ->
       incr failures;
@@ -1789,19 +1856,20 @@ let test_learned_survives_the_backjump () =
         in
         Writer.conclusion w (Writer.Unsat (Some contra));
         close_out pbp_oc;
+        let checker = match checker_for format with Some c -> c | None -> veripb in
         let verdict =
-          match run_checker ~checker:veripb ~opb ~pbp ~log with
+          match run_checker ~checker ~opb ~pbp ~log with
           | Some v -> v
           | None -> failwith "checker vanished between find and run"
         in
-        (verdict, read_whole pbp, tag)
+        (verdict, read_whole pbp, tag, try read_whole log with _ -> "")
       in
       List.iter
         (fun (tag, format) ->
-          let broken, broken_text, broken_level =
+          let broken, broken_text, broken_level, broken_log =
             scenario (tag ^ "_broken") ~format ~at_level_0:false
           in
-          let fixed, fixed_text, fixed_level =
+          let fixed, fixed_text, fixed_level, _ =
             scenario (tag ^ "_fixed") ~format ~at_level_0:true
           in
           check
@@ -1811,6 +1879,27 @@ let test_learned_survives_the_backjump () =
                 it is REJECTED"
                tag)
             (not broken);
+          (* ... and it is the DELETION that rejects it, not a file the checker could
+             not parse. Both builds' words at full strength, either accepted (M1-T46).
+             Without this the lane passes on any malformed artefact. *)
+          let deletion_wordings =
+            [
+              ("3.0.2: \"has already been deleted\"", "that has already been deleted");
+              ( "2.2.2: \"was marked as safe to delete\"",
+                "that was marked as safe to delete" );
+            ]
+          in
+          let hit =
+            List.filter (fun (_, needle) -> has broken_log needle) deletion_wordings
+          in
+          check
+            (Printf.sprintf
+               "%s M2-L1: and the rejection is the DELETION, in whichever checker's \
+                words -- not a parse error"
+               tag)
+            (hit <> []);
+          if hit = [] then
+            Printf.printf "       checker said: %s\n" (String.trim broken_log);
           check
             (Printf.sprintf
                "%s M2-L1: Writer.with_level 0 makes the learned constraint outlive \
