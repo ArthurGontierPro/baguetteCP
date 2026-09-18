@@ -227,7 +227,17 @@ let rec survey_from store acc = function
    Lit.negate (other_facts t l)] for whichever [l] turns out to be the unit -- so the
    justification here is a function of the reason too, the same way [Bool2int]'s is. *)
 let assign t store (l : lit) =
-  let j = Reason.because (other_facts t l) t.expl in
+  (* D-0043: the unit's own bound is what this pruning concludes -- `b >= 1` for a
+     positive occurrence, `b <= 0` for a negative one. The declared bounds are 0 and 1
+     (D-0007), the same two constants [falsity_fact] above already writes out, so the
+     conclusion is the [Reason.fact] mirror of the bound handed to the mutator on the
+     next line and [Store.apply] can check the two against each other. *)
+  let concludes =
+    Some
+      (if l.positive then Reason.at_least ~name:l.name ~decl:0 1
+       else Reason.at_most ~name:l.name ~decl:1 0)
+  in
+  let j = Reason.because ~concludes (other_facts t l) t.expl in
   let outcome =
     if l.positive then Store.set_lo store l.x 1 j else Store.set_hi store l.x 0 j
   in
@@ -252,7 +262,8 @@ let propagate t store =
          a conflict here is exactly "fail iff the assignment violates the
          constraint", and it is reached before every variable is fixed as well, which
          is the propagation half. *)
-      Propagator.Conflict (Store.conflict store (Reason.because (all_facts t) t.expl))
+      Propagator.Conflict
+        (Store.conflict store (Reason.because ~concludes:None (all_facts t) t.expl))
   | Units (_ :: _ :: _) ->
       (* [survey_from] returns at most one; it stops at the second. *)
       assert false

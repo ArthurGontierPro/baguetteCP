@@ -91,13 +91,23 @@ type mark = { trail_mark : int; reason_mark : int }
    that just ran or that credits an instance which does not watch the variable it
    changed. That read-back is what stops the field being decoration -- an id that is
    threaded and never read changes no behaviour at all, and would pass every test this
-   suite has. *)
+   suite has.
+
+   [concludes] is docs/DECISIONS.md D-0043's third half of the same pruning: WHAT it
+   derived, where [reason] is what it read and [why] is how the checker is convinced. It
+   is carried onto the trail rather than checked and dropped for the same reason [now]
+   is -- a caller walking the trail later (M2-T9's index keys a line by its claim, and a
+   `pol` line's content is otherwise unknown to us) has no other way to recover it, and
+   recomputing it would mean re-running the propagator. [apply] checks it against the
+   change it is recording before it gets here, so an entry's conclusion and its [old]/
+   [now] cannot disagree. *)
 type entry = {
   var : Var.t;
   old : Domain.t;
   now : Domain.t;
   why : Explanation.Arena.id;
   reason : Reason.t;
+  concludes : Reason.fact option;
   prop : int;
   sup_lo : int;
   sup_hi : int;
@@ -170,6 +180,7 @@ let dummy_entry =
     now = Domain.singleton 0;
     why = Explanation.Arena.null;
     reason = Reason.none;
+    concludes = None;
     prop = no_prop;
     sup_lo = no_support;
     sup_hi = no_support;
@@ -328,6 +339,54 @@ let agreement_holds t (j : Reason.justified) =
        (fun o -> List.mem o named)
        (Explanation.top_weaken_owners j.justification)
 
+(* D-0043's half of the same question, and the one M2-T8 could not ask.
+
+   [agreement_holds] above compares the two halves' variable SCOPES, and its forward arm
+   has to fall back on "...or the fact has a support" because nothing in the pruning said
+   what it concluded. That arm is why M2-T8 handed back a known limitation: it catches a
+   reason naming the wrong *variable*, and not the right variable at the wrong *value*.
+   A conclusion is a value, so this check is exact where that one is structural, and the
+   defect it closes is I-X9's shape -- the M1-T44 one, a claim one unit off the bound the
+   trail actually holds, which reaches veripb as a line the checker cannot derive and
+   which nothing on our side saw first.
+
+   Three conjuncts, and each rejects a different wrong answer:
+
+     - the conclusion is about the variable this change is about (not some other
+       variable that happens to sit at that value);
+     - its direction is one this change actually MOVED. A [Some] in the direction the
+       change left alone would be a claim about a bound this pruning did not establish,
+       which is the "right variable, wrong bound" case;
+     - its value is exactly the new bound. Not "at least as strong": a conclusion
+       stronger than the change is a claim the store cannot back, and a weaker one is
+       precisely what M1-T51 measured the checker accepting in silence.
+
+   [None] passes, and reason.ml's header enumerates when [None] is the honest answer --
+   a decision, a conflict, an interior hole. *)
+let conclusion_holds t v ~old ~now (j : Reason.justified) =
+  match j.concludes with
+  | None -> true
+  | Some f ->
+      String.equal (Reason.fact_owner f) (name t v)
+      &&
+      if Reason.fact_is_lower f then
+        Domain.lo now > Domain.lo old && Reason.fact_value f = Domain.lo now
+      else Domain.hi now < Domain.hi old && Reason.fact_value f = Domain.hi now
+
+(* D-0037, enforced rather than commented: a DECISION concludes nothing.
+
+   A decision moves a bound like any pruning, so [conclusion_holds] above would happily
+   accept one that claimed it -- the numbers agree, because the store really did set that
+   bound. What is wrong is not the number but the claim: nothing in the proof establishes
+   a decision ([Justify.emit] refuses a [Decision] outright, D-0009), so stating that the
+   pruning derived it is the M1-T50 defect wearing a new field. The match is on the raw
+   justification and not on [Explanation.force]: a decision is never [Deferred], and
+   forcing here would run a propagator's thunk inside an invariant check. *)
+let decision_concludes_nothing (j : Reason.justified) =
+  match j.justification with
+  | Explanation.Decision _ -> Option.is_none j.concludes
+  | _ -> true
+
 (* The failing message carries the offending pair, because "these two disagree" without
    saying which fact and which derivation is a message that sends the reader back to a
    breakpoint. Built only on the failing path, so the enabled-and-passing cost is the
@@ -340,6 +399,27 @@ let check_agreement t (j : Reason.justified) =
           same pruning -- reason [%s] vs justification %s"
          (Reason.to_string j.reason)
          (Explanation.to_string (Explanation.force j.justification)))
+
+(* The two conclusion checks above, under one [Debug.enabled] test and with the message
+   built only on the failing path -- [Debug.check]'s [name] is an ordinary argument, so a
+   [Printf.sprintf] handed to it is paid on every pruning of every run, debugging or not.
+   [check_agreement] is shaped this way for the same reason. *)
+let check_conclusion t v ~old ~now (j : Reason.justified) =
+  if Debug.enabled then (
+    if not (decision_concludes_nothing j) then
+      failwith
+        (Printf.sprintf
+           "invariant violated: D-0043/D-0037: a decision concludes nothing -- it is an \
+            assumption, not a derived bound, but this one claims %s"
+           (match j.concludes with None -> "-" | Some f -> Reason.fact_to_string f));
+    if not (conclusion_holds t v ~old ~now j) then
+      failwith
+        (Printf.sprintf
+           "invariant violated: D-0043: the conclusion must be the bound this change \
+            produced -- %s claims %s, but the change recorded is %s -> %s"
+           (name t v)
+           (match j.concludes with None -> "-" | Some f -> Reason.fact_to_string f)
+           (Domain.to_string old) (Domain.to_string now)))
 
 (* A conflict, attributed to whoever is running. The propagator never names itself; see
    [with_running]. It takes the same [Reason.justified] a pruning does, so "a conflict
@@ -416,6 +496,7 @@ let apply t v (r : Domain.result) (j : Reason.justified) =
       Debug.check "I-D1: a stored domain is non-empty" (fun () ->
           Domain.lo d <= Domain.hi d);
       check_agreement t j;
+      check_conclusion t v ~old ~now:d j;
       let why = Explanation.Arena.add t.reasons why in
       let at = t.trail_len in
       push_entry t
@@ -425,6 +506,7 @@ let apply t v (r : Domain.result) (j : Reason.justified) =
           now = d;
           why;
           reason = j.reason;
+          concludes = j.concludes;
           prop = t.current_prop;
           sup_lo = t.lo_sup.(i);
           sup_hi = t.hi_sup.(i);

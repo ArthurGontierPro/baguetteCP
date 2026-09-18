@@ -210,13 +210,21 @@ let propagate t store =
      bound does not move, or if a push earlier in this same call already conflicted --
      the store is consistent at that point and pushing further would record a second
      reason for a failure that already has one. *)
-  let push_lo var ~name ~decl_hi bound ~facts =
+  let push_lo var ~name ~decl_lo ~decl_hi bound ~facts =
     if Option.is_none !conflict then
       let d = Store.get store var in
       if bound > Domain.lo d then
         let claim = Lit.ge name bound in
+        (* D-0043: what this pruning concludes, as a [Reason.fact]. It is the same bound
+           in the same direction as [claim] -- [Reason.lit_of_fact] of it IS [claim]
+           whenever the bound has moved off the declared one -- built from the fact
+           constructor rather than from the literal so that the store can compare it
+           against the trail as data (numbers and a direction), which a [Lit.t] cannot
+           be asked. *)
+        let concludes = Some (Reason.at_least ~name ~decl:decl_lo bound) in
         match
-          Store.set_lo store var bound (Reason.because facts (implication ~claim facts))
+          Store.set_lo store var bound
+            (Reason.because ~concludes facts (implication ~claim facts))
         with
         | Store.Changed | Store.Unchanged -> ()
         | Store.Conflict _ ->
@@ -224,34 +232,40 @@ let propagate t store =
                the facts that produced it, plus that upper bound -- dropped when it is
                still the declared one, which leaves the empty clause; see the header. *)
             let all = facts @ le_fact ~name ~decl_hi (Domain.hi d) in
-            conflict := Some (Store.conflict store (Reason.because all (nogood all)))
+            conflict :=
+              Some
+                (Store.conflict store (Reason.because ~concludes:None all (nogood all)))
   in
-  let push_hi var ~name ~decl_lo bound ~facts =
+  let push_hi var ~name ~decl_lo ~decl_hi bound ~facts =
     if Option.is_none !conflict then
       let d = Store.get store var in
       if bound < Domain.hi d then
         let claim = Lit.le name bound in
+        let concludes = Some (Reason.at_most ~name ~decl:decl_hi bound) in
         match
-          Store.set_hi store var bound (Reason.because facts (implication ~claim facts))
+          Store.set_hi store var bound
+            (Reason.because ~concludes facts (implication ~claim facts))
         with
         | Store.Changed | Store.Unchanged -> ()
         | Store.Conflict _ ->
             let all = facts @ ge_fact ~name ~decl_lo (Domain.lo d) in
-            conflict := Some (Store.conflict store (Reason.because all (nogood all)))
+            conflict :=
+              Some
+                (Store.conflict store (Reason.because ~concludes:None all (nogood all)))
   in
   (* b -> x. [db] is read once: nothing below writes to b before the x pushes are
      done, so it cannot go stale in between. *)
   let db = Store.get store t.b in
-  push_lo t.x ~name:t.x_name ~decl_hi:t.x_decl_hi (Domain.lo db)
+  push_lo t.x ~name:t.x_name ~decl_lo:t.x_decl_lo ~decl_hi:t.x_decl_hi (Domain.lo db)
     ~facts:(ge_fact ~name:t.b_name ~decl_lo:t.b_decl_lo (Domain.lo db));
-  push_hi t.x ~name:t.x_name ~decl_lo:t.x_decl_lo (Domain.hi db)
+  push_hi t.x ~name:t.x_name ~decl_lo:t.x_decl_lo ~decl_hi:t.x_decl_hi (Domain.hi db)
     ~facts:(le_fact ~name:t.b_name ~decl_hi:t.b_decl_hi (Domain.hi db));
   (* x -> b, against x as it now stands: the two pushes above may have tightened it,
      and reading the pre-push bounds here would state a fact that is no longer the
      one the propagator acted on. *)
   let dx = Store.get store t.x in
-  push_lo t.b ~name:t.b_name ~decl_hi:t.b_decl_hi (Domain.lo dx)
+  push_lo t.b ~name:t.b_name ~decl_lo:t.b_decl_lo ~decl_hi:t.b_decl_hi (Domain.lo dx)
     ~facts:(ge_fact ~name:t.x_name ~decl_lo:t.x_decl_lo (Domain.lo dx));
-  push_hi t.b ~name:t.b_name ~decl_lo:t.b_decl_lo (Domain.hi dx)
+  push_hi t.b ~name:t.b_name ~decl_lo:t.b_decl_lo ~decl_hi:t.b_decl_hi (Domain.hi dx)
     ~facts:(le_fact ~name:t.x_name ~decl_hi:t.x_decl_hi (Domain.hi dx));
   match !conflict with Some c -> Propagator.Conflict c | None -> Propagator.Fixpoint
