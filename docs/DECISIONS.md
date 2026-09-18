@@ -3739,6 +3739,35 @@ background:
 wrong end of the pipeline: they preserve conflictingness **during** analysis, and then the
 result is handed to a proof-side gate to decide whether it may propagate.
 
+### AMENDED 2026-09-18, same day: the third result was the INSTRUMENT, not the framing
+
+The framing above stands, and one of its three pieces of evidence does not. M2-L12's zero —
+learned clauses propagating and changing nothing — was read here as "a proof shape made to
+propagate, so of course it achieved nothing". **That reading was at most half right.**
+
+M2-L14 built models on which learning can show, and the same ablation now moves hard:
+`php_wide_unsat` **297 nodes with propagation on against 1439 off, 4.85×**; `php_unsat`
+2.23×; `php_escape_sat` 2.06×. The control is what makes it evidence: **the 39 models that
+existed when M2-L12 was measured total exactly 231 nodes on both sides, and not one of them
+moves.** The old suite was structurally incapable of showing learning — its largest search
+was a 99-node width spine and everything else was ten nodes or fewer.
+
+So: **learned-constraint propagation was already worth up to 4.85× and nothing in the tree
+could see it.** The clause propagator M2-L12 delivered is doing real work.
+
+**What this does and does not change.** It does **not** rescue the proof-object/solving-object
+distinction from being real — `pb_row` is still frozen at declared bounds for I-X6 reasons,
+`to_linear_row` is still an algebraic identity over the declared box doing a solving-side job,
+and M2-L13 is still the right row. What it changes is the *expected size of the prize* and the
+reason to believe it: the solving-side object is worth building because the weaker, proof-shaped
+version of it is already worth 4.85×, not because the proof-shaped version was worthless.
+
+**And the transferable lesson is about measurement, not about PB.** A null result from an
+instrument that cannot produce a positive is not a null result. This one survived a full wave,
+a merge, and a decision record before the user asked whether the examples were hard enough.
+Before reporting that a mechanism does nothing, show that the measurement *could* have shown
+it doing something.
+
 ### The fix
 
 **Propagate the learned PB row as a PB constraint over order literals, and delete
