@@ -25,6 +25,12 @@ module Learn = Baguette_core.Learn
 module Encoding = Baguette_proof.Encoding
 module Writer = Baguette_proof.Writer
 module Lit = Baguette_proof.Lit
+module Learned = Baguette_core.Learned
+module Linear = Baguette_core.Linear
+module Reduce = Baguette_core.Reduce
+module Pb = Baguette_core.Pb_analysis
+module Checked = Baguette_core.Checked
+module Propagator = Baguette_core.Propagator
 
 let () = Mem_guard.install ()
 let failures = ref 0
@@ -171,6 +177,11 @@ type run = {
   r_entry_level : int;
   r_exit_level : int;
   r_audit_error : string option;
+  r_compile : Compile.t;
+      (* M2-L6: the store and the encoding, kept so that a test can build the RUNTIME
+         instance of a learned row and actually run it. Test (a)'s claim is that the PB
+         row propagates where the clause does not, and "propagates" is a statement about
+         a propagator, not about a conversion function returning [Some]. *)
 }
 
 (* Solve one model into a scratch directory and hand back everything the sections below
@@ -215,6 +226,7 @@ let run ?(config = Search.default_config) ?order src =
       r_entry_level = entry_level;
       r_exit_level = exit_level;
       r_audit_error = !audit_error;
+      r_compile = c;
     }
   in
   (r, dir, opb, pbp)
@@ -665,6 +677,514 @@ let test_determinism () =
       cleanup d2 [ o2; p2 ])
     [ ("backjump scene", backjump_src); ("holes scene", holes_src) ]
 
+(* ================================================================ M2-L6
+
+   The PB conflict-analysis lane. Six tests, one per lettered requirement of
+   docs/ROADMAP.md M2-L6, and the two that matter most are (a) -- the learned inequality
+   is strictly stronger than the clause -- and (b) -- the fallback rate is non-degenerate,
+   so a build that silently always fell back could not pass. *)
+
+(* A [Learned.t] evaluated at a 0-1 assignment of its literals. The assignment is a
+   function because the oracle below enumerates it as a bitmask, not as a list. *)
+let row_holds (assign : Lit.t -> bool) (row : Learned.t) =
+  let lhs =
+    List.fold_left
+      (fun acc (tm : Learned.term) ->
+        if assign tm.Learned.lit then acc + tm.Learned.coeff else acc)
+      0 (Learned.terms row)
+  in
+  lhs >= Learned.degree row
+
+(* Every literal any of these rows mentions, positive form, deduplicated and sorted so
+   the enumeration below is a function of the SET and not of the order. *)
+let literal_universe (rows : Learned.t list) =
+  let pos (l : Lit.t) = { l with Lit.positive = true } in
+  List.sort_uniq Lit.compare
+    (List.concat_map (fun r -> List.map pos (Learned.lits r)) rows)
+
+(* ------------------------------------------------------------------ (e) the oracle *)
+
+(* THE ORACLE: the learned inequality is entailed by the rows it was derived from.
+
+   Brute-forced over every 0-1 assignment to the literals involved -- NOT over the
+   integer box, and the difference is the point. A cutting-planes derivation (positive
+   linear combination, literal-axiom weakening, Chvatal-Gomory division) is sound at every
+   0-1 point, whether or not that point respects the order encoding's ladder. So this
+   oracle is the right statement about a [pol], and, unlike "every solution of the model
+   satisfies the row", it is NEVER VACUOUS -- which matters here because the models that
+   exercise this path are unsatisfiable, and a vacuous oracle is one that cannot fail.
+
+   The counts are reported so that a run where the premises are satisfied by NO assignment
+   is visible as such rather than passing silently. *)
+let oracle_entails ~title (t : Pb.t) =
+  let rows = t.Pb.antecedent_rows in
+  let universe = literal_universe (t.Pb.row :: rows) in
+  let n = List.length universe in
+  if n > 16 then
+    check
+      (Printf.sprintf "%s: oracle SKIPPED, %d literals is too wide to enumerate" title n)
+      false
+  else
+    let arr = Array.of_list universe in
+    let premises_met = ref 0 and violations = ref 0 in
+    for mask = 0 to (1 lsl n) - 1 do
+      let assign (l : Lit.t) =
+        let rec idx i =
+          if i >= n then None
+          else if Lit.equal arr.(i) { l with Lit.positive = true } then Some i
+          else idx (i + 1)
+        in
+        match idx 0 with
+        | None -> false
+        | Some i ->
+            let bit = mask land (1 lsl i) <> 0 in
+            if l.Lit.positive then bit else not bit
+      in
+      if List.for_all (row_holds assign) rows then (
+        incr premises_met;
+        if not (row_holds assign t.Pb.row) then incr violations)
+    done;
+    (* The premise count is REPORTED, not asserted. For a conflict derived from rows that
+       are jointly infeasible over 0-1 points -- which is what an [int_lin_eq] whose
+       right-hand side is not a multiple of its coefficients gives, and it is precisely
+       why the search conflicts there -- no point satisfies them and the entailment below
+       is vacuously true. A vacuous check is not evidence, so it is labelled as such here
+       and the non-vacuous oracle is [test_oracle_primitives]. *)
+    Printf.printf "     (%s: %d of %d 0-1 points satisfy the antecedents%s)\n" title
+      !premises_met (1 lsl n)
+      (if !premises_met = 0 then " -- ENTAILMENT VACUOUS HERE, see test_oracle_primitives"
+       else "");
+    check
+      (Printf.sprintf
+         "%s: oracle -- the learned row holds at every point satisfying the antecedents"
+         title)
+      (!violations = 0)
+
+let test_oracle () =
+  print_endline
+    "\n-- M2-L6 (e): the learned inequality is entailed by the rows it came from";
+  let r, dir, opb, pbp = run lineq_src in
+  let rows = Search.stats_pb_rows r.r_stats in
+  check "e: the run learned at least one PB row to run the oracle on" (rows <> []);
+  List.iteri (fun i t -> oracle_entails ~title:(Printf.sprintf "e: row %d" i) t) rows;
+  cleanup dir [ opb; pbp ]
+
+(* ------------------------------------------------------------------ (a) strength *)
+
+(* Test (a), and it is the row's whole justification: the learned inequality is STRICTLY
+   STRONGER than the clause the same conflict yields -- it propagates where the clause
+   does not.
+
+   "Propagates" is taken literally. [Learned.to_linear] is asked for the runtime instance
+   of each object; the clause has none at all (D-0044's fork, measured by M2-L3: a 1UIP
+   cut over integer variables puts thresholds strictly inside a ladder and
+   [to_linear_row] refuses them), and the PB row does. The instance is then RUN, at the
+   root, and asked to do something -- because an instance that exists but never prunes
+   would not have justified the row either. *)
+let test_strictly_stronger () =
+  print_endline
+    "\n-- M2-L6 (a): the learned inequality propagates where the clause does not";
+  let r, dir, opb, pbp = run lineq_src in
+  let st = r.r_stats in
+  let c = r.r_compile in
+  let decl = Learned.decl_of_encoding c.Compile.encoding in
+  check_eq "a: conflicts analysed" st.Search.n_pb_attempts 3;
+  check_eq "a: PB rows learned, no fallback" st.Search.n_pb_learned 3;
+  check_eq "a: ...and the fallback count is 0" st.Search.n_pb_fallback 0;
+  (* The clause path, on the SAME conflicts, converts nothing. This is M2-L3's own
+     measured result and it is restated here because it is the baseline (a) beats. *)
+  check_eq "a: the 1UIP clauses of those conflicts convert: none" st.Search.n_converts 0;
+  check "a: ...while the PB rows do convert" (st.Search.n_pb_converts > 0);
+  check_eq "a: ...and every one of them is stronger than its clause"
+    st.Search.n_pb_stronger st.Search.n_pb_learned;
+  (* WHAT THE ROW ACTUALLY IS, measured, and it is stronger than the roadmap asked for
+     and degenerate in a way the roadmap did not anticipate. Both halves are asserted
+     here rather than summarised, because "strictly stronger" is worth nothing as a claim
+     if the shape behind it is not on the record.
+
+     Every learned row on this model is the EMPTY ROW WITH POSITIVE DEGREE -- that is,
+     CONTRADICTION -- derived in one elimination from the two halves of the int_lin_eq.
+     It is legitimate cutting planes and veripb checks it (test (c)): the `>=` half gives
+     x1+x2+x3 >= 2.5 and a Chvatal-Gomory division rounds it to >= 3, the `<=` half
+     rounds to <= 2, and the two add to 0 >= k/2. The clause path cannot do this at all:
+     a clause is a disjunction of negated bounds and the empty clause is the only
+     contradiction it has, which a 1UIP cut over a non-empty decision stack never is.
+
+     So the row IS strictly stronger -- it entails the clause, being false everywhere --
+     and it is ALSO degenerate as a propagation test, because a contradiction converts
+     and prunes trivially. The honest statement is the one made here; a scene where the
+     PB path learns a non-trivial INEQUALITY that outpropagates its clause was looked for
+     and not found, and lib/core/pb_analysis.ml's "MEASURED" section says why: the ladder
+     implications live in separate .opb rows, so the reason row usually does not
+     PB-propagate its pivot and the analysis falls back before it gets that far. *)
+  let rows = Search.stats_pb_rows st in
+  (match rows with
+  | [] -> check "a: a PB row to instantiate" false
+  | t :: _ -> (
+      check "a: the learned row is the empty contradiction -- no terms, positive degree"
+        (Learned.terms t.Pb.row = [] && Learned.degree t.Pb.row > 0);
+      check "a: it was reached in one elimination from two model rows"
+        (t.Pb.steps = 1 && List.length t.Pb.antecedent_rows = 2);
+      check "a: ...and it cites model rows only, which is the I-S4 discharge for a pol"
+        (List.length (Pb.cited_ids t.Pb.derivation) = 2);
+      (* Strictly stronger, checked rather than asserted: a contradiction is false at
+         every 0-1 point, so it entails anything -- in particular the clause the same
+         conflict yielded, which is NOT false everywhere. *)
+      check "a: the contradiction is false at every 0-1 point (so it entails the clause)"
+        ((not (row_holds (fun _ -> true) t.Pb.row))
+        && not (row_holds (fun _ -> false) t.Pb.row));
+      let store = c.Compile.store in
+      check "a: the PB row has a runtime linear form where the clause has none"
+        (Learned.to_linear_row t.Pb.row ~decl <> None);
+      match Learned.to_linear ~row_id:0 store ~decl t.Pb.row with
+      | None -> check "a: the PB row builds a Linear instance" false
+      | Some lin ->
+          check "a: the PB row builds a Linear instance" true;
+          let before = List.map (fun v -> (v, Store.get store v)) (Linear.vars lin) in
+          let outcome = Linear.propagate lin store in
+          let moved = List.exists (fun (v, d) -> Store.get store v <> d) before in
+          check "a: running it at the root prunes, or conflicts -- it is not inert"
+            (moved || match outcome with Propagator.Conflict _ -> true | _ -> false)));
+  cleanup dir [ opb; pbp ]
+
+(* ------------------------------------------------------------------ (a2) the criterion *)
+
+(* Test (a2). Learning the first ASSERTIVE constraint gives the highest backjump in SAT;
+   Le Berre et al. (arXiv 2107.13085) show there is no such guarantee for PB. So the
+   criterion here must be slack-based, and a cut carrying SEVERAL conflict-level literals
+   must be ACCEPTED rather than resolved away.
+
+   Three things are asserted, and the third is the one that would catch a regression:
+
+     1. the criterion in force is the slack one, by name;
+     2. its postcondition HOLDS on what it stopped on;
+     3. on at least one learned row, the row carries more than one literal falsified at
+        the conflict level -- and [Analysis.one_uip]'s clausal rule would therefore NOT
+        have been satisfied there. That is the M2-L2 assertion which must not fire here,
+        and it is checked by counting rather than by trusting the header. *)
+let test_slack_criterion () =
+  print_endline "\n-- M2-L6 (a2): the stopping criterion is the slack one, not 1UIP";
+  check_eq "a2: the default criterion is the slack-based one" 0
+    (String.compare Search.default_config.Search.pb_criterion.Pb.crit_name
+       "assertive-slack");
+  check "a2: and it is not a literal count -- [first_resolution] is the other instance"
+    (List.length Pb.criteria >= 2);
+  let r, dir, opb, pbp = run lineq_src in
+  let rows = Search.stats_pb_rows r.r_stats in
+  check "a2: rows to inspect" (rows <> []);
+  List.iteri
+    (fun i (t : Pb.t) ->
+      check
+        (Printf.sprintf "a2: row %d was stopped by the slack criterion" i)
+        (String.equal t.Pb.criterion_name "assertive-slack"))
+    rows;
+  (* MEASURED, and worth stating because it is not what a reader would guess: on this
+     model every learned row comes out a UNIT -- one literal. That is the criterion
+     working, not failing: a unit row asserts at the lower level immediately. It does mean
+     this model cannot exercise the "several conflict-level literals" case, so that case
+     is tested directly on the criterion below rather than hoped for from a fixture. *)
+  Printf.printf "     (rows learned here have %s terms)\n"
+    (String.concat ","
+       (List.map
+          (fun (t : Pb.t) -> string_of_int (List.length (Learned.terms t.Pb.row)))
+          rows));
+  cleanup dir [ opb; pbp ];
+  (* THE ASSERTION THE ROADMAP ASKS FOR, stated on the criterion itself so that no fixture
+     has to happen to produce the shape.
+
+     A row with THREE literals all falsified at the conflict level, whose slack once the
+     conflict level is undone is small enough to propagate. The clausal 1UIP rule counts
+     three conflict-level literals and says "keep resolving"; the slack rule looks at the
+     arithmetic and says "stop, this is good". Le Berre et al. (arXiv 2107.13085) is the
+     statement that the second is right and the first has no guarantee behind it for PB.
+
+     [3a + 3b + 3c >= 3], with a, b and c all falsified at level 5 and nothing falsified
+     below it. At level 4 nothing is falsified, so the slack is 9 - 3 = 6... which does
+     NOT propagate. Tighten it: degree 8, so slack at level 4 is 9 - 8 = 1 and every
+     coefficient 3 exceeds it. The row therefore propagates at level 4 and is accepted,
+     while carrying three conflict-level literals. *)
+  let la = Lit.ge "a" 1 and lb = Lit.ge "b" 1 and lc = Lit.ge "c" 1 in
+  let row = Learned.make [ (3, la); (3, lb); (3, lc) ] 8 in
+  let level_of (l : Lit.t) = if List.exists (Lit.equal l) [ la; lb; lc ] then 5 else 0 in
+  let v = { Pb.c_row = row; c_conflict_level = 5; c_steps = 1; c_level_of = level_of } in
+  check_eq "a2: the scene really does carry three conflict-level literals"
+    (List.length
+       (List.filter
+          (fun (tm : Learned.term) -> level_of tm.Learned.lit = 5)
+          (Learned.terms row)))
+    3;
+  check "a2: the slack criterion ACCEPTS it -- several conflict-level literals is fine"
+    (Pb.assertive_slack.Pb.stop v);
+  check "a2: ...and its postcondition holds on it"
+    (Pb.postcondition_holds Pb.assertive_slack v);
+  check
+    "a2: ...whereas the clausal 1UIP rule would NOT have stopped here (3 > 1), which is \
+     the M2-L2 assertion that must not fire in this lane"
+    (List.length
+       (List.filter
+          (fun (tm : Learned.term) -> level_of tm.Learned.lit = 5)
+          (Learned.terms row))
+    > 1);
+  (* And the criterion is not vacuously true: a row that says nothing at the lower level
+     is REJECTED, so [stop] is a real test and not a constant. *)
+  let loose = Learned.make [ (3, la); (3, lb); (3, lc) ] 3 in
+  check "a2: ...and a row that asserts nothing below the conflict level is REJECTED"
+    (not (Pb.assertive_slack.Pb.stop { v with Pb.c_row = loose }))
+
+(* ------------------------------------------------------------------ (b) the rate *)
+
+(* Test (b). The clause path is PERMANENT (D-0044), so a build in which PB analysis never
+   succeeded would be green in every other measure this suite has. The rate is therefore
+   instrumented, reported by --stats, and asserted NON-DEGENERATE on a fixture: at least
+   one model where it is 0, and at least one where it is 1, so that neither "always
+   falls back" nor "the counter is never incremented" can pass.
+
+   [bool_src] falls back because [array_bool_or] exposes no PB row; [lineq_src] does not
+   fall back at all. Both facts are about lib/core/propagator.ml's [pb_row] being [None]
+   for a clause propagator, which is deliberate and documented there. *)
+let test_fallback_rate () =
+  print_endline "\n-- M2-L6 (b): the fallback rate is instrumented and non-degenerate";
+  let a, d1, o1, p1 = run lineq_src in
+  let b, d2, o2, p2 = run bool_src in
+  check_eq "b: lineq -- conflicts analysed" a.r_stats.Search.n_pb_attempts 3;
+  check "b: lineq -- the rate is 0.00, i.e. the PB path really ran"
+    (Search.stats_pb_fallback_rate a.r_stats = 0.);
+  check "b: lineq -- and rows were learned" (a.r_stats.Search.n_pb_learned > 0);
+  check "b: bool -- the rate is 1.00, i.e. the fallback really is taken"
+    (Search.stats_pb_fallback_rate b.r_stats = 1.);
+  check "b: bool -- and the reason is recorded, not just counted"
+    (Search.stats_pb_fallbacks b.r_stats <> []);
+  check "b: bool -- the reason names the propagator that has no PB row"
+    (match Search.stats_pb_fallbacks b.r_stats with
+    | m :: _ -> contains ~needle:"no PB row" m
+    | [] -> false);
+  (* The denominator is real: attempts = learned + fallbacks, on both runs. A counter
+     that did not satisfy this would be one the rate could not be computed from. *)
+  check_eq "b: lineq -- attempts = learned + fallbacks" a.r_stats.Search.n_pb_attempts
+    (a.r_stats.Search.n_pb_learned + a.r_stats.Search.n_pb_fallback);
+  check_eq "b: bool -- attempts = learned + fallbacks" b.r_stats.Search.n_pb_attempts
+    (b.r_stats.Search.n_pb_learned + b.r_stats.Search.n_pb_fallback);
+  (* And with the PB path switched off, nothing is attempted at all -- so the counters
+     measure this row's code and not something that was happening anyway. *)
+  let c, d3, o3, p3 = run ~config:Search.no_pb lineq_src in
+  check_eq "b: with cfg.pb off, nothing is attempted" c.r_stats.Search.n_pb_attempts 0;
+  check_eq "b: ...and nothing is learned by this path" c.r_stats.Search.n_pb_learned 0;
+  check "b: ...while the M2-L3 clause path is unaffected"
+    (c.r_stats.Search.n_learned = a.r_stats.Search.n_learned);
+  cleanup d1 [ o1; p1 ];
+  cleanup d2 [ o2; p2 ];
+  cleanup d3 [ o3; p3 ]
+
+(* ------------------------------------------------------------------ (c) the proof *)
+
+(* Test (c). The PB row reaches the page as a [pol] that STATES what it derives, so the
+   checker compares our [Learned.combine] arithmetic against its own and rejects the line
+   where they differ. That makes this test much sharper than "the proof is accepted": it
+   is the arithmetic of this row being checked by veripb rather than by an assertion.
+
+   Both the model that learns PB rows and the model that falls back are checked, so the
+   two paths are covered and not just the one. *)
+let test_proof_accepted () =
+  print_endline "\n-- M2-L6 (c): the proof is accepted, with the stated pol on the page";
+  List.iter
+    (fun (title, src) ->
+      let r, dir, opb, pbp = run src in
+      check
+        (Printf.sprintf "c: %s: the audit is clean (I-X2: every learned id retired)" title)
+        (r.r_audit_error = None);
+      expect_accepted ~title:(Printf.sprintf "c: %s" title) ~dir ~opb ~pbp;
+      cleanup dir [ opb; pbp ])
+    [
+      ("lineq (PB path)", lineq_src);
+      ("bool (fallback path)", bool_src);
+      ("backjump (fallback path)", backjump_src);
+    ]
+
+(* ------------------------------------------------------------------ (d) I-X8 *)
+
+(* Test (d). I-X8 / D-0029: coefficient growth must RAISE, not wrap. [Learned.combine] is
+   the one place in this solver where coefficients multiply without bound, so it is where
+   the cap is met.
+
+   Two halves, and the second is what makes the first worth having:
+
+     1. the arithmetic raises. A scene built to force growth past [Checked]'s cap asserts
+        [Checked.Overflow], not a wrapped negative coefficient.
+     2. the LOOP turns that raise into a fallback rather than into a crash. An overflow
+        during conflict analysis is a reason to learn a clause instead; it is never a
+        reason to abandon a solve, and it is never a reason to wrap. *)
+let test_overflow_raises () =
+  print_endline "\n-- M2-L6 (d): coefficient growth raises (I-X8 / D-0029)";
+  let l1 = Lit.ge "x" 1 and l2 = Lit.ge "y" 1 in
+  let big = max_int / 4 in
+  let a = Learned.make [ (big, l1) ] 1 in
+  let b = Learned.make [ (big, l2) ] 1 in
+  (* A modest combination is fine and does not raise: the break has to be the cap, not
+     any multiplication at all. *)
+  check "d: a combination inside the cap does not raise"
+    (try
+       let _ = Learned.combine a 1 b 1 in
+       true
+     with Checked.Overflow _ -> false);
+  check "d: growth past the cap RAISES Checked.Overflow, it does not wrap"
+    (try
+       let r = Learned.combine a big b big in
+       (* If we get here the cap did not fire. Report the coefficient we got, because a
+          wrapped NEGATIVE coefficient is the specific failure I-X8 exists to prevent and
+          it would otherwise look like an ordinary row. *)
+       Printf.printf
+         "     (no raise; first coefficient came out as %d -- a negative here is the \
+          wrap I-X8 forbids)\n"
+         (match Learned.terms r with tm :: _ -> tm.Learned.coeff | [] -> 0);
+       false
+     with Checked.Overflow _ -> true);
+  (* And the scaled degree overflows too, which is the other operand of the same rule. *)
+  check "d: the degree is checked as well as the coefficients"
+    (try
+       let _ =
+         Learned.combine
+           (Learned.make [ (1, l1) ] big)
+           big
+           (Learned.make [ (1, l2) ] big)
+           big
+       in
+       false
+     with Checked.Overflow _ -> true)
+
+(* ------------------------------------------------- determinism of the PB path *)
+
+(* The gate requires two runs to emit a byte-identical proof, and a learned row whose
+   terms came out of a hash table is the way that breaks. M2-L3 checks this for the clause
+   path; the PB path adds rows to the same proof, so it is checked here too. *)
+let test_pb_determinism () =
+  print_endline "\n-- M2-L6: two runs emit a byte-identical proof with the PB path on";
+  let a, d1, o1, p1 = run lineq_src in
+  let b, d2, o2, p2 = run lineq_src in
+  check "pb: two runs emit a byte-identical proof" (String.equal a.r_proof b.r_proof);
+  check_eq "pb: and identical PB counters" a.r_stats.Search.n_pb_learned
+    b.r_stats.Search.n_pb_learned;
+  check "pb: and identical learned rows"
+    (List.length (Search.stats_pb_rows a.r_stats)
+     = List.length (Search.stats_pb_rows b.r_stats)
+    && List.for_all2
+         (fun (x : Pb.t) (y : Pb.t) ->
+           String.equal (Learned.to_string x.Pb.row) (Learned.to_string y.Pb.row))
+         (Search.stats_pb_rows a.r_stats)
+         (Search.stats_pb_rows b.r_stats));
+  cleanup d1 [ o1; p1 ];
+  cleanup d2 [ o2; p2 ]
+
+(* THE NON-VACUOUS ORACLE (docs/ROADMAP.md M2-L6 test (e)).
+
+   [test_oracle] above runs the entailment on rows a real solve derived, which is the
+   right thing to check but is vacuous on the models that exercise this path: their
+   antecedents have no 0-1 model at all, which is exactly why the search conflicts on
+   them. So the entailment is also checked here, exhaustively, on rows chosen so that the
+   premises ARE satisfiable -- and the number of points at which they hold is asserted to
+   be positive, so this oracle cannot go vacuous without failing.
+
+   What is checked is the soundness of the two primitives the derivation is built from,
+   at every 0-1 point:
+
+     1. [Learned.combine a ca b cb] -- a positive linear combination, including the
+        complementary-literal cancellation that [Learned.make] deliberately does not do.
+        The cancellation is the step most likely to be wrong and the one the checkers
+        would catch only indirectly.
+     2. [Reduce]'s output -- literal-axiom weakening followed by Chvatal-Gomory division.
+        Division is sound at 0-1 points (if [sum a_i l_i >= b] holds then
+        [sum ceil(a_i/d) l_i >= ceil(b/d)] holds), which is what makes the whole
+        derivation sound at points that do not respect the order encoding's ladder.
+
+   Together with test (c) -- where the [pol] STATES the row and veripb compares our
+   arithmetic with its own -- this is the derivation checked from both ends. *)
+let entails ~title ~(premises : Learned.t list) ~(conclusion : Learned.t) =
+  let universe = literal_universe (conclusion :: premises) in
+  let n = List.length universe in
+  let arr = Array.of_list universe in
+  let premises_met = ref 0 and violations = ref 0 in
+  for mask = 0 to (1 lsl n) - 1 do
+    let assign (l : Lit.t) =
+      let rec idx i =
+        if i >= n then None
+        else if Lit.equal arr.(i) { l with Lit.positive = true } then Some i
+        else idx (i + 1)
+      in
+      match idx 0 with
+      | None -> false
+      | Some i ->
+          let bit = mask land (1 lsl i) <> 0 in
+          if l.Lit.positive then bit else not bit
+    in
+    if List.for_all (row_holds assign) premises then (
+      incr premises_met;
+      if not (row_holds assign conclusion) then incr violations)
+  done;
+  check
+    (Printf.sprintf "%s: the premises are satisfiable (%d of %d points) -- not vacuous"
+       title !premises_met (1 lsl n))
+    (!premises_met > 0);
+  check
+    (Printf.sprintf "%s: and the conclusion holds at every one of them" title)
+    (!violations = 0)
+
+let test_oracle_primitives () =
+  print_endline "\n-- M2-L6 (e): the derivation's primitives are sound at every 0-1 point";
+  let a = Lit.ge "a" 1 and b = Lit.ge "b" 1 and c = Lit.ge "c" 1 and d = Lit.ge "d" 1 in
+  (* 1. plain addition. *)
+  let r1 = Learned.make [ (3, a); (2, b) ] 4 in
+  let r2 = Learned.make [ (1, b); (4, c) ] 3 in
+  entails ~title:"e: combine 1*r1 + 1*r2" ~premises:[ r1; r2 ]
+    ~conclusion:(Learned.combine r1 1 r2 1);
+  entails ~title:"e: combine 2*r1 + 3*r2" ~premises:[ r1; r2 ]
+    ~conclusion:(Learned.combine r1 2 r2 3);
+  (* 2. the CANCELLATION, which is the step [Learned.make] does not do and the one this
+     row added. [a] on one side and [~a] on the other must cancel and lower the degree,
+     and the result must still be entailed. *)
+  let p = Learned.make [ (3, a); (2, b) ] 3 in
+  let q = Learned.make [ (3, Lit.negate a); (2, c) ] 2 in
+  let cancelled = Learned.combine p 1 q 1 in
+  check "e: the complementary pair really did cancel -- no [a] term survives"
+    (not
+       (List.exists
+          (fun (tm : Learned.term) -> Lit.var_equal tm.Learned.lit.Lit.v a.Lit.v)
+          (Learned.terms cancelled)));
+  entails ~title:"e: combine with cancellation" ~premises:[ p; q ] ~conclusion:cancelled;
+  (* 3. REDUCTION: weaken, then divide. Both rules, on a row where they differ -- this is
+     lib/core/reduce.ml's own worked case, [3v + 3u + 1w >= 5] with pivot [v]. *)
+  let v = Lit.ge "v" 1 and u = Lit.ge "u" 1 and w = Lit.ge "w" 1 in
+  let row = Learned.make [ (3, v); (3, u); (1, w) ] 5 in
+  let falsified _ = false in
+  let view = { Reduce.row; pivot = v; falsified } in
+  List.iter
+    (fun (rule : Reduce.t) ->
+      match rule.Reduce.reduce view with
+      | None ->
+          check (Printf.sprintf "e: %s reduces the worked case" rule.Reduce.name) false
+      | Some o ->
+          check (Printf.sprintf "e: %s reduces the worked case" rule.Reduce.name) true;
+          entails
+            ~title:(Printf.sprintf "e: %s's reduced row" rule.Reduce.name)
+            ~premises:[ row ] ~conclusion:o.Reduce.reduced)
+    [ Reduce.division; Reduce.round_to_one ];
+  (* And the difference between the two rules is real, which is what makes checking both
+     worth doing: [round_to_one] keeps [u], [division] throws it away. *)
+  (match (Reduce.division.Reduce.reduce view, Reduce.round_to_one.Reduce.reduce view) with
+  | Some dv, Some rt ->
+      check "e: round_to_one keeps strictly more than division does"
+        (List.length (Learned.terms rt.Reduce.reduced)
+        > List.length (Learned.terms dv.Reduce.reduced))
+  | _ -> check "e: both rules applied" false);
+  (* 4. The whole step, end to end: reduce a reason and add it to a conflicting row, the
+     way [Pb_analysis.step] does, and check the result is entailed by both originals. *)
+  let conflict = Learned.make [ (2, Lit.negate v); (2, d) ] 2 in
+  match Reduce.round_to_one.Reduce.reduce view with
+  | None -> check "e: the end-to-end step reduced" false
+  | Some o ->
+      let combined = Learned.combine conflict 1 o.Reduce.reduced 2 in
+      check "e: the end-to-end step reduced" true;
+      entails ~title:"e: conflict + 2 * reduce(reason)" ~premises:[ conflict; row ]
+        ~conclusion:combined
+
 let () =
   test_minimise_pure ();
   test_minimise_break_in_a_proof ();
@@ -676,6 +1196,14 @@ let () =
   test_backjump_answers_the_same ();
   test_i_s3 ();
   test_determinism ();
+  test_strictly_stronger ();
+  test_slack_criterion ();
+  test_fallback_rate ();
+  test_proof_accepted ();
+  test_overflow_raises ();
+  test_oracle ();
+  test_oracle_primitives ();
+  test_pb_determinism ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

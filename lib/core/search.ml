@@ -981,6 +981,8 @@ let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_conve
         if converts then stats.n_pb_converts <- stats.n_pb_converts + 1;
         if converts && not clause_converts then
           stats.n_pb_stronger <- stats.n_pb_stronger + 1;
+        if List.length stats.pb_rows_rev < pb_reason_cap then
+          stats.pb_rows_rev <- t :: stats.pb_rows_rev;
         stats.learned_rev <- cid :: stats.learned_rev)
 
 let rec learn_at_conflict engine store ctx trace stats cfg (c : Store.conflict) =
