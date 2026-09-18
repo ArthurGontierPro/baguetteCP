@@ -851,7 +851,17 @@ let conclusion_break_opb dir name =
   let c3 = Encoding.add_constraint e (Opb.ge [ (1, Lit.negate v) ] 1) in
   let opb = Filename.concat dir (name ^ ".opb") in
   let oc = open_out opb in
-  Encoding.write_opb ~labels:true e oc;
+  (* NOT [~labels:true]. Labelling belongs to the 3.0 grammar, and the .opb and the
+     .pbp are one artefact in two files: hardcoding labels here wrote a 3.0 .opb beside
+     whatever the writer emitted, so under BAGUETTE_PROOF_FORMAT=2.0 with the Python
+     2.2.2 checker the .opb did not parse at all (`:3:1: Expected number`). Every lane
+     asserting ACCEPTED then failed, and -- the part that matters -- the lane asserting
+     REJECTED **passed on the parse error**, without the checker ever judging the
+     derivation. That is D-0020/D-0030's rule exactly: a lane rejected without the
+     checker judging an inference is not a pass. Omitting the argument makes the default
+     [Writer.default_format () = V3_0] decide, which is the same thing [Writer.create]
+     below will decide, so the two files cannot disagree. Found by M2-L5. *)
+  Encoding.write_opb e oc;
   close_out oc;
   (e, opb, c1, c2, c3)
 
