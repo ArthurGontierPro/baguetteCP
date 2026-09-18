@@ -1,0 +1,19 @@
+% M2-L8 control, scene 3 of 3: THE SAME-NODE-COUNT VARIANT.
+%
+% No spectators, and x and y one value wider. Measured 2026-09-18, against the base:
+%
+%     nodes 9 = 9          <-- identical, and this is the whole point
+%     decisions 5 -> 4, maxdepth 5 -> 4, skipped 2 -> 0, learned 4 -> 5
+%
+% A report keying CHANGED on the node count alone -- which is exactly what this harness
+% did between M1-T36 and M2-L8 -- classifies this row `proof-only` or `same` and invites
+% the reader to compare its bytes and its seconds as though one search had been written
+% down two ways. Two different searches were run. The expected verdict is CHANGED, and
+% it is reachable only from `decisions`, `maxdepth` and `skipped`.
+%
+% Widths are 4 and 2 (D-0028).
+var 0..4: x :: output_var;
+var 0..4: y :: output_var;
+constraint int_ne(x, y);
+constraint int_eq(x, y);
+solve satisfy;
