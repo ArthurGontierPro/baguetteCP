@@ -3780,3 +3780,84 @@ discharged: the row is on the page as an `ia` line with its `pol` derivation beh
 
 Sequenced as **M2-L13**, and **it supersedes the "register the convertible rows" idea**, which
 would only have propagated whatever the proof pipeline happened to emit.
+
+## D-0055  D-0044's "no new propagator family" bet is lost, deliberately — and the slack rule must read the ladder
+
+**Status**: **ACCEPTED**, implemented by M2-L13 (2026-09-18, agent-pbprop), `lib/core/prop/pb.ml`.
+This overturns a recorded decision on evidence, so it says plainly what was bet, what was paid
+and what was bought.
+
+### The bet, and why it is now paid
+
+D-0044 fixed the learned object as a PB inequality with the clause as its degree-1 case, and
+bet that **no new propagator family** would be needed: a learned row would be instantiated as
+a `Linear` instance via `Learned.to_linear_row`. The bet held three times (M2-L5, M2-L6,
+M2-L11 each left `explanation.ml` untouched) and D-0052 confirmed the clause widening did not
+spend it either.
+
+**D-0054 is what breaks it.** `to_linear_row` is an algebraic identity over the *declared*
+box — a proof-side test — and it was standing as the gate on whether a learned row may
+propagate. Removing a proof-side gate from the solving path means propagating the PB row **as
+a PB row**, and that is a propagator family.
+
+`lib/core/prop/pb.ml`: counter/slack over `Lit.t`, **reads live domains** (the whole point —
+the proof row stays frozen and citable, the solving object does not), declares `Bounds`, no
+mutable state, no watched literals. `Learned.to_linear` and `Learned.instance` are **deleted**;
+`to_linear_row` survives only as a MEASURED-ONLY counter.
+
+### What it bought, measured and independently reproduced
+
+Nodes over the 44-model suite:
+
+| | learning off | clause propagation (M2-L12) | **PB propagation** |
+|---|---|---|---|
+| all 44 | 2265 | 847 | **479** |
+| the old 39 | 231 | 231 | **179** |
+| `php_wide_unsat` | 1439 | 297 | **77** |
+| `width_sat_depth` | 99 | 99 | **53** |
+
+`php_wide_unsat` is **18.7× end to end**. And the "231 either way" figure that M2-L12 pinned
+on the old 39 models — the one that motivated M2-L14 — **moves, to 179**: the `int_lin_eq`
+models where the empty contradiction finally has a consumer. So the old suite was not entirely
+inert; it was inert *to clauses*.
+
+**Test (a), which M2-L6 looked for and did not find, is answered.** `2·[a≥1] + [b≥1] + [c≥1] ≥ 2`
+with `a` fixed to 0: slack 0, both remaining coefficients beat it, **both forced**. The clause
+`a ∨ b ∨ c` over the same literals on the same store moves nothing. On real solves: **207 PB
+prunings** over the suite where the clause path measured 0.
+
+### The refactor is behaviour-preserving, and that is evidenced not asserted
+
+`clause.ml` is now literally `type t = Pb.t` with `propagate == Pb.propagate` — the clause is
+the degree-1 **face**, one implementation, which is the relationship D-0044 asserted all along.
+With learning propagation **off**, all 44 models emit byte-identical `.opb`, `.pbp`, stdout and
+stderr against the previous `main`, with the two binaries genuinely different (`78e1f187` vs
+`dc78e99a`). A comparison whose sides shared a binary would have been no evidence at all.
+
+### The second finding: the plain slack rule is ladder-blind
+
+**The textbook slack rule prunes 0 times on integer variables suite-wide.** `width_sat_depth`'s
+rows are `+2 a_ge_1 … +2 a_ge_99 >= 98`: slack 100, and no coefficient exceeds 2, so nothing is
+ever forced.
+
+Read **with the ladder** it is a different constraint. Falsifying `[x≥3]` falsifies `[x≥5]`
+with it (D-0028), so **a rung's effective coefficient is the suffix of its variable's rungs,
+not its own** — and the row then says `a ≥ 49`. That is where `width_sat_depth`'s 99 → 53 comes
+from.
+
+This is the ladder insight of M2-L11/D-0049 arriving on the **solving** side: the strength was
+never in the row alone, and a PB propagator that ignores the order encoding is measuring the
+wrong slack. It costs nothing in the proof — still one `rup` — because the extra inference is
+the **checker's own unit propagation over the ladder rows**, which are model rows retired by
+nothing.
+
+### Consequences to carry
+
+- **`Retention`'s "activity is the constant zero" argument is spent for the second and last
+  time.** `keep_all` now rests on M2-L12's argument alone; an activity policy is computable
+  and unwritten. Do not cite D-0051's original reasoning again.
+- **`cfg.pb = off` is no longer a proof-side-only switch.** Turning the PB path off now changes
+  the search, not just the emitted derivation.
+- **Backjumping still rests on the clause's decision closure** (`pb_analysis.ml:757`), whose own
+  note said "a PB row that propagates at runtime would change that calculation". It does now.
+  That question is open and is the natural successor row.

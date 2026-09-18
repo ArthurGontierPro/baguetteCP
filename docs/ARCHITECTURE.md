@@ -72,13 +72,19 @@ lib/core/       Baguette_core
   interval.ml               interval arithmetic: mul, square, div of bounds
   debug.ml                  BAGUETTE_DEBUG-gated invariant checks
   prop/                     one module per constraint family:
+    pb.ml                   the LEARNED PB ROW AS A PROPAGATOR: counter/slack over
+                            Lit.t, reading LIVE domains and the order ladder. The
+                            solving-side object of D-0054; D-0055 spends D-0044's
+                            "no new propagator family" bet knowingly (M2-L13)
     linear.ml               int_lin_le. THE REFERENCE PROPAGATOR -- copy this shape
     lin_eq.ml               int_lin_eq (two model rows, see D-0011)
     ne.ml                   int_lin_ne and int_ne (VALUE consistency)
     int_le.ml int_lt.ml     degenerate linear constraints, delegate to Linear
     int_eq.ml               delegates to Lin_eq
     bool2int.ml             bool <-> int channelling
-    bool_clause.ml          clauses, and the array_bool_or/and/eq/not family
+    clause.ml               clauses over ORDER literals (Bounds); the degree-1 face of
+                            pb.ml, plus the bool_clause/array_bool_or/and/eq/not family
+                            as Domain submodules (M2-L12)
     order_reason.ml         bound-fact chains in the order encoding (D-0010)
 
 lib/proof/      Baguette_proof

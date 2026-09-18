@@ -252,13 +252,19 @@ lib/core/       Baguette_core
   interval.ml               interval arithmetic: mul, square, div of bounds (M4-T4a)
   debug.ml                  BAGUETTE_DEBUG-gated invariant checks
   prop/                     one module per constraint family:
+    pb.ml                   the LEARNED PB ROW AS A PROPAGATOR: counter/slack over
+                            Lit.t, reading LIVE domains and the order ladder. The
+                            solving-side object of D-0054; D-0055 spends D-0044's
+                            "no new propagator family" bet knowingly (M2-L13)
     linear.ml               int_lin_le. THE REFERENCE PROPAGATOR — copy this shape.
     lin_eq.ml               int_lin_eq (two model rows, see D-0011)
     ne.ml                   int_lin_ne and int_ne (VALUE consistency)
     int_le.ml int_lt.ml     degenerate linear constraints, delegate to Linear
     int_eq.ml               delegates to Lin_eq
     bool2int.ml             bool <-> int channelling
-    bool_clause.ml          clauses, and the array_bool_or/and/eq/not family
+    clause.ml               clauses over ORDER literals (Bounds); the degree-1 face of
+                            pb.ml, plus the bool_clause/array_bool_or/and/eq/not
+                            family as Domain submodules (M2-L12)
     order_reason.ml         bound-fact chains in the order encoding (D-0010)
 
 lib/proof/      Baguette_proof
@@ -269,13 +275,13 @@ lib/proof/      Baguette_proof
                             (I-X2: an id you receive is an id you must delete)
   checker.ml                resolves which veripb to use; mirrors scripts/checker.sh
 
-test/unit/                  20 binaries: test_core test_domain test_engine test_prop
+test/unit/                  21 binaries: test_core test_domain test_engine test_prop
                             test_proof test_justify test_trace test_flatzinc
                             test_compile test_endtoend test_matrix test_mutation
                             test_output test_random test_interval test_learned
-                            test_learn test_analysis test_ladder test_retention
+                            test_learn test_analysis test_ladder test_retention test_clause test_pb
   mem_guard.ml              NOT a test binary: the shared Gc-alarm heap guard every
-                            suite installs (M1-T53). All 20 announce arming under
+                            suite installs (M1-T53). All 21 announce arming under
                             BAGUETTE_TEST_HEAP_CAP_ANNOUNCE=1
 test/models/                44 .fzn models   test/expected/  their expected outputs
 scripts/                    checker.sh verify_proof.sh run_model_tests.sh shrink.sh

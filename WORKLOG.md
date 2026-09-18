@@ -10,36 +10,7 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
-**Wave nineteen is running: M2-L13 (agent-pbprop) and M2-L14 (agent-models).**
-
-**The suite cannot measure learning, and this is now a number rather than a suspicion.**
-Node counts over all 39 models: the largest is **`width_sat_depth` at 99**, and that one is a
-width fixture — a spine, not a search. **Every other model in the suite is 10 nodes or fewer**
-(`backjump_deep_unsat` 10, `backjump_unsat` 9, `offset_unsat` 7, `backjump_lineq_unsat` 7,
-then down). Conflict learning pays off when the *same* conflict recurs in a *different*
-subtree; a ten-node tree has no second subtree. So M2-L12's zero is at least partly the
-instrument, not the mechanism, and until that is fixed **no learning row can be judged by a
-suite measurement** — which makes M2-L14 a precondition for reading M2-L13, not a companion
-to it.
-
-**agent-pbprop holds `lib/core/**`, `bin/main.ml` and `test/unit/**`** (including
-`test/unit/dune`). M2-L13 is D-0054's fix: propagate a learned PB row **as a PB constraint
-over order literals**, taking `Learned.to_linear_row` out of the propagation path.
-
-**agent-models holds `test/models/**`, `test/expected/**` and `bench/**`.** M2-L14 builds
-models where learning can actually show, and measures the baseline on the **current** binary
-so M2-L13 has something to move against. It changes no `lib/` file, which is what lets the two
-run together.
-
-**Narrow domains, many variables.** The order encoding is width-proportional (D-0028) and the
-15 GB ceiling is real, so hardness must come from **combinatorial structure, not domain
-width** — many small-domain variables that interact, where the search branches *different*
-variables at successive levels. That last part is not decoration: M2-L12 measured that under
-first-fail/smallest-value the search re-branches the *same* variable down a spine, so a
-learned constraint is already in force when applied. A model that does not branch different
-variables cannot show learning no matter how many nodes it has.
-
-**Neither agent may assert a hard-coded model count.** The suite stops being 39 this wave.
+**Wave nineteen is COMPLETE: M2-L13 and M2-L14 merged, released and pushed. Every file is free.**
 
 **Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `dune-project`,
 `scripts/**` and all merging, as standing.
@@ -2367,3 +2338,55 @@ Re-derive it from instrumentation before M2-L12 step (1)'s priority rests on it.
 
 **Gate on `main`**: **2129 ok / 0 FAIL**, 280 matrix, 44 mutation, 12 random, **39/39 models**,
 determinism + fmt + width lint clean, `check: ok`. Peak RSS 37.8 MB unit, 18.6 MB models.
+
+**2026-09-18 — wave nineteen: learning works, and it is worth 18.7× on the right model**
+
+**Read this before you trust any node count you remember.** The suite is **44 models** and the
+numbers moved twice in one wave.
+
+| | learning off | clause propagation | **PB propagation** |
+|---|---|---|---|
+| all 44 models | 2265 | 847 | **479** |
+| the old 39 | 231 | 231 | **179** |
+| `php_wide_unsat` | 1439 | 297 | **77** |
+| `width_sat_depth` | 99 | 99 | **53** |
+
+**Two corrections to things this project believed a day ago.**
+
+1. **"Learned-constraint propagation is worth nothing" was the instrument.** The old 39 models
+   had a largest search of 99 nodes — a width *spine* — and everything else at ≤ 10. A ten-node
+   tree has no second subtree, and learning pays when the same conflict recurs in one. Five
+   models later (all variables `0..1`, hardness combinatorial not width) the same ablation is
+   **4.85×**. The user asked whether the examples were hard enough; they were not.
+2. **"The old 39 are inert" was also wrong** — they were inert *to clauses*. PB propagation
+   moves them 231 → 179, on the `int_lin_eq` models where the empty contradiction finally has a
+   consumer.
+
+**D-0044's "no new propagator family" bet is deliberately LOST** (D-0055). `lib/core/prop/pb.ml`
+is a new family, and `clause.ml` is now literally `type t = Pb.t` — the degree-1 face, which is
+the relationship D-0044 asserted all along. The bet was worth keeping while the gate on
+propagation was `to_linear_row`; D-0054 showed that gate was a proof-side test doing a
+solving-side job, and removing it means propagating the PB row **as a PB row**.
+
+**The finding to carry into M4**: the textbook slack rule prunes **0 times on integer variables**
+— it is **ladder-blind**. Falsifying `[x≥3]` falsifies `[x≥5]` with it, so a rung's effective
+coefficient is the **suffix** of its variable's rungs, not its own. That is where
+`width_sat_depth` 99 → 53 comes from, and it costs nothing in the proof: still one `rup`,
+because the extra inference is the checker's own unit propagation over ladder rows. This is
+M2-L11's ladder insight arriving on the **solving** side.
+
+**Evidence discipline that made all of this readable**: with propagation **off**, all 44 models
+are byte-identical to the previous `main` with the two binaries genuinely different
+(`78e1f187` → `dc78e99a`). Every headline figure here was re-measured by the orchestrator, not
+relayed.
+
+**Two things now spent — do not cite them again.** `Retention`'s "activity is the constant zero"
+argument (twice over now), and `cfg.pb = off` as a proof-side-only switch: turning the PB path
+off now changes the search.
+
+**The natural successor row**: backjumping still rests on the clause's decision closure
+(`pb_analysis.ml:757`), whose own note said "a PB row that propagates at runtime would change
+that calculation". It does now, and nobody has redone that calculation.
+
+**Gate on `main`**: 2256 ok / 0 FAIL, 280 matrix, 44 mutation, 12 random, 44/44 models verified
+by veripb 3.0.2, determinism + fmt + width lint clean. Peak RSS 38.7 MB.
