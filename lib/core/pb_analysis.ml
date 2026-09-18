@@ -161,6 +161,44 @@
    it under [Debug].
 
    ---------------------------------------------------------------------------
+   MEASURED, M2-L6: our integer propagator is STRONGER than PB propagation on the
+   same row, and that is the dominant non-[No_row] fallback
+   ---------------------------------------------------------------------------
+
+   This is the finding of the row and it was not anticipated by D-0044.
+
+   [Reduce]'s postcondition requires that the reason row PROPAGATED the pivot, i.e. that
+   its slack under the assignment at the propagation was below the pivot's coefficient.
+   For a model row expanded over an order encoding, that is often false even though the
+   integer propagator legitimately made the pruning. Worked case, and it is not exotic --
+   it is [int_lin_le] doing its ordinary job:
+
+     3a + 2b <= 14,  a, b declared 0..4,  and lo(b) = 4 already established.
+
+   [Linear] deduces a <= 2, correctly. The row's PB form is
+
+     3~[a>=1] + 3~[a>=2] + 3~[a>=3] + 3~[a>=4] + 2~[b>=1] + ... + 2~[b>=4] >= 6
+
+   and with b at 4 every [b] term is falsified, leaving slack (3+3+3+3) - 6 = 6. The
+   pivot ~[a>=3] has coefficient 3, and 3 > 6 is false: the row ALONE does not
+   PB-propagate it. It cannot -- the fact that ~[a>=3] entails ~[a>=4] lives in the
+   LADDER constraints, which are separate rows of the .opb (D-0028, docs/PROOF-FORMAT.md
+   section 3), and a single row knows nothing about them.
+
+   So [Postcondition_failed] is not a defect in [Reduce] and not a defect in
+   [bounds_before]. It is the honest report that the reason for this pruning is the model
+   row PLUS a ladder chain, which is exactly what [Linear] already builds as an
+   [Explanation] ([Order_reason.weaken_declared], D-0010) and exactly what this module
+   does NOT have as a ROW. Resolving against the derived row rather than the model row is
+   the next step and it is named in "What is left" at the foot of this file; it is a
+   bigger change than this row, because it needs the propagator's derivation as data and
+   not only as a proof step.
+
+   Where the PB path does succeed -- test/models/backjump_lineq_unsat.fzn, 3 of 3
+   conflicts, no fallback -- it is because the prunings there are at ladder ENDS, where
+   the row's own slack is tight enough to propagate without the ladder's help.
+
+   ---------------------------------------------------------------------------
    The fallback is permanent, and it is most of the traffic
    ---------------------------------------------------------------------------
 
@@ -376,7 +414,17 @@ type fallback =
   | Overflow of string  (** I-X8 / D-0029: coefficient growth past [Checked]'s cap *)
   | Pivot_not_in_reason
   | No_pivot  (** no falsified conflict-level literal is left to resolve on *)
-  | Reduction_refused  (** [Reduce] said [None], or its own postcondition did not hold *)
+  | Reduction_declined
+      (** [Reduce] said [None]: the pivot is not a literal of the reason, or the
+          predicate reports it falsified. The latter is the interesting one -- it means
+          the frozen assignment is inconsistent at the pivot. *)
+  | Postcondition_failed of int * int
+      (** [Reduce]'s own postcondition did not hold on its output, with (slack of the
+          reduced row, coefficient of the pivot in the reason). A reason that genuinely
+          propagated gives slack exactly 0, so a non-zero here says the row fetched for
+          this entry did not propagate this pivot under the reconstructed assignment --
+          which is a statement about [bounds_before], not about [Reduce]. Carried as
+          numbers because the alternative is a counter nobody can act on. *)
   | Nothing_to_learn  (** the criterion stopped before any elimination happened *)
   | Diverged of int
 
@@ -386,7 +434,10 @@ let fallback_to_string = function
   | Overflow m -> Printf.sprintf "coefficient growth past the cap: %s" m
   | Pivot_not_in_reason -> "the pivot is not a literal of the reason row"
   | No_pivot -> "no falsified conflict-level literal left to resolve on"
-  | Reduction_refused -> "the reduction refused, or its postcondition did not hold"
+  | Reduction_declined -> "the reduction declined: pivot absent or reported falsified"
+  | Postcondition_failed (s, d) ->
+      Printf.sprintf "the reduction's postcondition failed (reduced slack %d, divisor %d)"
+        s d
   | Nothing_to_learn -> "the criterion stopped before any elimination"
   | Diverged n -> Printf.sprintf "did not terminate after %d eliminations" n
 
@@ -398,6 +449,12 @@ type t = {
   reduction_name : string;
   criterion_name : string;
   antecedents : int list;  (** constraint ids the derivation cites, first-seen order *)
+  antecedent_rows : Learned.t list;
+      (** the same rows as data, in the same order. Carried so that the row's test (e)
+          can brute-force the entailment -- "these premises imply this conclusion" --
+          rather than take the [pol] on trust. A cutting-planes derivation is sound at
+          EVERY 0-1 point, not only at the ladder-consistent ones, so that oracle is
+          never vacuous even when the model itself is unsatisfiable. *)
 }
 
 type result = Learned_row of t | Fallback of fallback
@@ -471,7 +528,7 @@ let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row optio
         else match best with Some (_, b) when b >= at -> best | _ -> Some (l, at))
       None (Learned.terms row)
   in
-  let step row expl steps pivots antecedents =
+  let step row expl steps pivots antecedents rows =
     match pivot_of row with
     | None -> raise (Give_up No_pivot)
     | Some (l, at) ->
@@ -492,10 +549,14 @@ let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row optio
         let v = { Reduce.row = r; pivot = p; falsified } in
         let o =
           match reduction.Reduce.reduce v with
-          | None -> raise (Give_up Reduction_refused)
+          | None -> raise (Give_up Reduction_declined)
           | Some o ->
               if Reduce.postcondition_holds reduction v o then o
-              else raise (Give_up Reduction_refused)
+              else
+                raise
+                  (Give_up
+                     (Postcondition_failed
+                        (Reduce.slack o.Reduce.reduced ~falsified, o.Reduce.divisor)))
         in
         let a =
           match coeff_of row l with Some a -> a | None -> raise (Give_up No_pivot)
@@ -520,11 +581,12 @@ let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row optio
             ]
             1
         in
+        let fresh = not (List.mem reason_row.Propagator.r_cid antecedents) in
         let antecedents =
-          if List.mem reason_row.Propagator.r_cid antecedents then antecedents
-          else antecedents @ [ reason_row.Propagator.r_cid ]
+          if fresh then antecedents @ [ reason_row.Propagator.r_cid ] else antecedents
         in
-        (row', expl', pivots @ [ l ], antecedents)
+        let rows = if fresh then rows @ [ r ] else rows in
+        (row', expl', pivots @ [ l ], antecedents, rows)
   in
   try
     let conflict_row =
@@ -539,7 +601,7 @@ let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row optio
        falls back rather than deriving from a premise the search does not share. *)
     if not (slack_at (view row0 0) conflict_level < 0) then
       raise (Give_up Not_conflicting);
-    let rec loop row expl steps pivots antecedents =
+    let rec loop row expl steps pivots antecedents rows =
       if criterion.stop (view row steps) then
         if steps = 0 then raise (Give_up Nothing_to_learn)
         else
@@ -552,13 +614,16 @@ let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row optio
               reduction_name = reduction.Reduce.name;
               criterion_name = criterion.crit_name;
               antecedents;
+              antecedent_rows = rows;
             }
       else if steps >= max_steps then raise (Give_up (Diverged steps))
       else
-        let row', expl', pivots', antecedents' = step row expl steps pivots antecedents in
-        loop row' expl' (steps + 1) pivots' antecedents'
+        let row', expl', pivots', antecedents', rows' =
+          step row expl steps pivots antecedents rows
+        in
+        loop row' expl' (steps + 1) pivots' antecedents' rows'
     in
-    loop row0 expl0 0 [] [ conflict_row.Propagator.r_cid ]
+    loop row0 expl0 0 [] [ conflict_row.Propagator.r_cid ] [ row0 ]
   with Give_up f -> Fallback f
 
 (* ------------------------------------------------------- the proof side *)

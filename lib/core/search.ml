@@ -260,6 +260,10 @@ type stats = {
   mutable n_pb_stronger : int;
       (* ...of which convert where the SAME conflict's clause does not. This is test (a)
          as a counter: the number of times this row did something M2-L3 could not. *)
+  mutable pb_rows_rev : Pb_analysis.t list;
+      (* The PB rows learned, newest first, capped. Kept so a test can run the ORACLE on
+         what a real solve actually derived -- test (e) -- instead of on a scene built to
+         make the oracle pass. Capped for the reason [bridges_rev] is. *)
   mutable pb_fallback_rev : string list;
       (* Why, newest first, capped. A rate with no breakdown behind it cannot be acted
          on, and the breakdown is what says whether the traffic is [No_row] (expected,
@@ -287,6 +291,7 @@ let stats_create () =
     n_pb_steps = 0;
     n_pb_converts = 0;
     n_pb_stronger = 0;
+    pb_rows_rev = [];
     pb_fallback_rev = [];
   }
 
@@ -299,6 +304,7 @@ let stats_learned s = List.rev s.learned_rev
    the first few. The RATE is computed from [n_pb_fallback], which is uncapped. *)
 let pb_reason_cap = 64
 let stats_pb_fallbacks s = List.rev s.pb_fallback_rev
+let stats_pb_rows s = List.rev s.pb_rows_rev
 
 (* The fraction of analysed conflicts that fell back to the clause path, in [0., 1.].
    [0.] when nothing was analysed -- which is honestly "no fallbacks happened", and a
