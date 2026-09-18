@@ -349,6 +349,73 @@ let conflict_of t store surveyed =
   let expl, facts = reason_clause t surveyed ~keep:(fun _ st -> st = Unsat_lit) in
   Propagator.Conflict (Store.conflict store (Reason.because ~concludes:None facts expl))
 
+(* ------------------------------------------------- the LADDER-EFFECTIVE coefficient
+
+   The plain slack rule forces [l_i] when [a_i > slack], because falsifying [l_i] alone
+   costs the left-hand side [a_i]. Over ORDER LITERALS that is an underestimate, and
+   badly so, because the rungs of one variable are not independent: `[x >= 5]` entails
+   `[x >= 3]`, so falsifying `[x >= 3]` falsifies `[x >= 5]` with it. The cost of
+   falsifying a rung is therefore the whole suffix of that variable's rungs above it,
+   not its own coefficient.
+
+   MEASURED, and it is the difference between a propagator and an ornament. The plain
+   rule prunes NOTHING on test/models/width_sat_depth.fzn, whose 24 learned rows have
+   the shape `+2 a_ge_1 ... +2 a_ge_99 >= 98`: total coefficient 198, degree 98, slack
+   100, and no single coefficient of 2 beats 100. Read with the ladder the same row says
+   `a >= 49`, which is what it means. The Boolean models do not notice, because a
+   `var bool` ladder has ONE rung (D-0007) and the two rules coincide -- which is why
+   this is not visible at all on the php family.
+
+   So:
+
+     effective([x >= k])   =  sum of a_j over x's NON-FALSIFIED POSITIVE rungs with
+                              threshold >= k
+     effective(~[x >= k])  =  sum of a_j over x's NON-FALSIFIED NEGATIVE terms with
+                              threshold <= k
+
+   and a literal is forced when its EFFECTIVE coefficient exceeds the slack. Already
+   falsified terms are excluded because the slack has already paid for them.
+
+   The proof obligation is still discharged in one [rup], and the extra step is the
+   checker's own unit propagation over rows that are already on the page. Negating the
+   emitted clause sets `~[x >= k]`; the LADDER rows of the .opb (D-0028,
+   docs/PROOF-FORMAT.md section 3) unit-propagate `~[x >= j]` for every j >= k; the row
+   is then short by [effective] and violated, because [effective > slack]. Same argument
+   mirrored for a negative claim. Nothing new is emitted and nothing new is cited -- the
+   ladder rows are model rows, on the page before the first decision and retired by
+   nothing, which is the same standing lib/core/ladder.ml's lift relies on.
+
+   This is where the pre-M2-L13 clause propagator was already slightly weak and nobody
+   had noticed: `[x >= 3] \/ [x >= 5]` with both literals open is the clause `[x >= 3]`,
+   and the old [Two_open] arm declined to say so. It does not arise in practice --
+   [Learn.minimise]'s [slot] keys on (variable, polarity) and subsumes same-direction
+   pairs before a clause is built, and a `bool_clause` has one rung per variable -- and
+   the suite's proofs are byte-identical across this change, which is what says so. *)
+let effective surveyed (tm : term) =
+  let a = tm.a in
+  List.fold_left
+    (fun acc (u, st) ->
+      if st = Unsat_lit then acc
+      else if Var.to_int u.a.x <> Var.to_int a.x then acc
+      else if u.a.positive <> a.positive then acc
+      else if a.positive then if u.a.k >= a.k then Checked.add acc u.coeff else acc
+      else if u.a.k <= a.k then Checked.add acc u.coeff
+      else acc)
+    0 surveyed
+
+(* Of the forceable literals of one variable at one polarity, keep the STRONGEST claim:
+   the largest threshold among the positive ones, the smallest among the negative. The
+   others are implied by it through the domain, so forcing them too would move no bound
+   and would only risk a second trace line for one inference. *)
+let strongest forceable (tm, _) =
+  not
+    (List.exists
+       (fun (u, _) ->
+         Var.to_int u.a.x = Var.to_int tm.a.x
+         && u.a.positive = tm.a.positive
+         && if tm.a.positive then u.a.k > tm.a.k else u.a.k < tm.a.k)
+       forceable)
+
 (* One pass, then repeat while the store moved.
 
    The loop is what a general PB row needs and a clause does not: forcing one literal
@@ -367,7 +434,10 @@ let rec propagate t store =
   let slack = slack_of t.degree surveyed in
   if slack < 0 then conflict_of t store surveyed
   else
-    let forced = List.filter (fun (tm, st) -> st = Open && tm.coeff > slack) surveyed in
+    let forceable =
+      List.filter (fun (tm, st) -> st = Open && effective surveyed tm > slack) surveyed
+    in
+    let forced = List.filter (strongest forceable) forceable in
     if forced = [] then Propagator.Fixpoint
     else
       let rec apply moved = function
