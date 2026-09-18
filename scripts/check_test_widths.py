@@ -26,7 +26,15 @@ import pathlib
 import re
 import sys
 
-ARG = re.compile(r"~(hi|lo):\s*(\(?-?[A-Za-z0-9_./ *+-]+\)?)")
+# An argument is EITHER a parenthesised expression -- which may contain spaces,
+# e.g. ~hi:(max_int / 3) or ~lo:(-1) -- OR a bare token with none.
+#
+# The bare alternative deliberately excludes the space that the first version of this
+# class allowed. With a space in it, `~hi:5 l (Learn.minimise l)` matched "5 l", which
+# is not a small literal, so the lint failed the gate on a width-6 domain. That is a
+# lint bug rather than a finding, and it cost a gate run on 2026-09-18. A bound is
+# followed by another argument far more often than not, so this shape is common.
+ARG = re.compile(r"~(hi|lo):\s*(\([^()]*\)|[A-Za-z0-9_.]+)")
 SMALL = re.compile(r"^\(?-?[0-9]{1,4}\)?$")
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -104,11 +112,19 @@ def self_test():
         'Encoding.declare_int e3 "p" ~lo:0 ~hi:(max_int / 3)',  # the real 2026-09-16 bug
         "declare_int e ~lo:0 ~hi:max_int",
         "declare_int e ~lo:0 ~hi:100000",
+        # the same shape as the 2026-09-18 false positive, but genuinely wide: the fix
+        # must not have bought its silence by simply matching less
+        "declare_int e ~lo:0 ~hi:100000 store other_arg",
+        'agree_on ~name:"x" ~lo:0 ~hi:(max_int / 3) l (Learn.minimise l)',
     ]
     must_pass = [
         'Encoding.declare_int e "x" ~lo:0 ~hi:9',
         "declare_int e ~lo:(-4) ~hi:4",
         "declare_int e2 ~lo:big ~hi:big",  # width 0, however large big is
+        # 2026-09-18: a bound followed by another argument on the same line. The old
+        # character class swallowed the space and read this as "5 l".
+        'agree_on ~name:"x" ~lo:(-1) ~hi:5 l (Learn.minimise l)',
+        "declare_int e ~lo:0 ~hi:9 store other_arg",
     ]
     # A width mentioned inside a comment is prose, not code. The lint failed the
     # gate on exactly this on 2026-09-16: a comment explaining the trap.
