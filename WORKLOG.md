@@ -2218,3 +2218,44 @@ actually worth knowing is **what a learned PB row must look like before
 **Final gate on `main` after both merges**: **2064 ok / 0 FAIL**, 280 matrix, 44 mutation,
 12 random, **39/39 models**, determinism green, fmt and width lint clean, `check: ok`. Peak
 RSS 37.7 MB unit, 18.5 MB models. Nothing came near the cap.
+
+**2026-09-18 — wave seventeen, the read-only half (agent-convert): D-0050, and a premise of
+mine that was wrong**
+
+**`pb-convert` is 36 of 38 suite-wide, not 0.** D-0049 reported `pb-convert 0` *on M2-L11's
+own fixture* and said so carefully. **I generalised it** — into this wave's briefing and into
+what I told the user — as though learned rows do not convert in general. They mostly do. The
+only two rows in the whole suite that `to_linear_row` refuses are the two M2-L11's lift
+produced, and that is structural: the lift substitutes rungs and accumulates multipliers, so
+it necessarily leaves a variable incomplete or non-uniform. **"Lift more" moves rows OUT of
+the convertible class.**
+
+**This is the second time in two waves** that a figure true of one model or one family was
+restated as a property of the suite — M2-L6's "36 of 36 degenerate" was the first. **The
+pattern is the finding**, and it is in D-0050: counters here are per-run and summed by hand,
+so a number read off one model is typographically indistinguishable from one read off the
+suite. **Say which you have.**
+
+**Three live figures are wrong and are routed to agent-del** (it owns those files this wave):
+`pb-convert`'s gloss in `bin/main.ml:496` says "could propagate" while 10 of the 36 it counts
+are the empty contradiction converting to a zero-term `Linear`; `bin/main.ml:503` says "38
+models" and "26 of 36" against an actual 39 and 28 of 38; `pb_analysis.ml:125-126` says "13 of
+86" against 13 of **88**. All three re-measured by me on `main` before routing.
+
+**`docs/DECISIONS.md` D-0044's amendment was substantively wrong** and is corrected in place:
+it said `to_linear_row` succeeds "on a clause over `var bool`s". The real condition is
+**declared width 1**, which is broader — `ne_eq_unsat` (`1..2`) and `trace_settle_sat`
+(`2..3`, `0..1`) convert with no Boolean present, and 3 of the 13 converting clauses are
+non-Boolean. Restricting a cut "to Boolean shapes" on that sentence would restrict it too far.
+
+**M2-L7 is demoted, not scheduled.** Its promotion was conditional on M2-L11 failing, and
+M2-L11 succeeded. Saturation is uniformity-preserving and cannot rescue a refused row.
+
+**The open question D-0050 leaves**, and it is the real one: the clause path is blocked at
+declared width ≥ 2 because `Learn.minimise` keeps one threshold per variable per direction —
+a strengthening step that is simultaneously a convertibility-destroyer. Fixing it means giving
+the clause path a clause instance over order literals, **which spends D-0044's "no new
+propagator family" bet**. `bool_clause.ml` already is a clause propagator, so it may be a
+widening rather than a new family — but that argument must be made in a record, not assumed.
+**75 of 88 learned clauses are proof-only today**, and the backjump they justify re-derives
+the conflict they came from, which is M2-L3's own stated regret.

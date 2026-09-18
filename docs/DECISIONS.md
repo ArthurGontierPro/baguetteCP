@@ -2781,7 +2781,13 @@ solver's **store** order literals are not variables at all — the store holds t
 integer variables, and `x >= v` is a *question about a domain*, not a handle. So a runtime
 instance exists only where the PB row reads back as a linear row over integer variables,
 and `Learned.to_linear_row` is exactly that predicate. It succeeds on a clause over `var
-bool`s (D-0007 order-encodes a Boolean on `[0,1]`, so its ladder has one rung), on a model
+bool`s (D-0007 order-encodes a Boolean on `[0,1]`, so its ladder has one rung) — **but
+"Boolean" is too narrow, and the correction matters: the real condition is DECLARED WIDTH 1,
+which is broader. `ne_eq_unsat` (`x, y : 1..2`) and `trace_settle_sat` (`y : 2..3`,
+`z : 0..1`) both convert and contain no Boolean at all; 3 of the 13 converting clauses come
+from non-Boolean width-1 variables. Anyone restricting a cut "to Boolean shapes" on the
+strength of the original sentence would restrict it too far. Measured and corrected
+2026-09-18, see D-0050** — on a model
 row's own expansion (every rung gets the same coefficient, so a uniform run is
 `a_i * (x - lo_i)`), and on a threshold outside the ladder, which is a constant.
 
@@ -3276,3 +3282,99 @@ non-degenerate but, on the fixture, **do not convert** to a propagating linear r
 (`pb-convert 0`), so the next honest question is not "lift more" but **what a learned PB row
 has to look like before `Learned.to_linear_row` accepts it**. That is a better-posed question
 than the one this row started from.
+
+## D-0050  `to_linear_row` is the right predicate being used as the wrong gate
+
+**Status**: **the measurements are SETTLED; the design question is OPEN.** Produced
+2026-09-18 by a read-only study (agent-convert, wave seventeen) and re-measured
+independently by the orchestrator before recording. It answers the question D-0049 closed
+on, and the answer is not the one that question assumed.
+
+### First, the premise that prompted the study was wrong, and the error was mine
+
+D-0049 ended by observing `pb-convert 0` on M2-L11's own fixture and asking what a learned
+row must look like before `Learned.to_linear_row` accepts it. D-0049 stated that carefully,
+as a fact about its fixture. **The orchestrator then generalised it** — into a wave briefing
+and into a report — as though learned rows do not convert in general. Suite-wide,
+**`pb-convert` is 36 of 38**. The two refused rows in the entire suite are precisely the two
+that M2-L11's ladder lift produced.
+
+That is the second time in two waves that a figure true of one model or one constraint family
+was restated as a property of the suite (the first was M2-L6's "36 of 36 degenerate", see
+D-0047's amendment). **The pattern is the finding**: this project's counters are per-run and
+summed by hand, so a number read off one model looks exactly like a number read off the
+suite. Say which you have.
+
+### The predicate, stated so a test can assert it
+
+`lib/core/learned.ml:362`, via `ladder_form` (:292) and `linear_of_rungs` (:329). A learned
+row converts iff, **for every integer variable it mentions, the row carries that variable's
+entire ladder at one uniform coefficient and one uniform polarity** — nothing partial, no
+gap, no second coefficient. A single `Lit.Eq` refuses outright (:298).
+
+Two corollaries carry the weight:
+
+- **For clauses it collapses to declared width 1.** Every clause coefficient is 1, so
+  uniformity is free and the rule becomes "the thresholds mentioned are the whole ladder".
+  `Learn.minimise` (`lib/core/learn.ml:201`, `Strongest`) deliberately keeps one threshold per
+  variable per direction, so a variable of declared width ≥ 2 can never have its full ladder
+  present. **Our own minimisation is a strengthening step that is simultaneously a
+  convertibility-destroyer.** Not a bug — but it is a designed-in ceiling nobody had stated.
+- **It tests an algebraic identity, not entailment.** `[x≥3] ≥ 1` is refused although it
+  entails `x ≥ 3`, a perfectly good linear row.
+
+### Where conversion actually fails (39 models, re-measured)
+
+Totals: `learned 88`, `convertible 13`, `pb-learned 38`, `pb-fallback 50`, `pb-convert 36`,
+`pb-nondeg 28`, `pb-stronger 36`.
+
+| PB path, 38 rows | rows | where |
+|---|---|---|
+| degenerate, converts **vacuously** | 10 | `backjump_lineq_unsat` 3, `near_limit_unsat` 3, `offset_unsat` 4 |
+| non-degenerate, converts **usefully** | 26 | `width_sat_depth` 24, `guess_wrong_sat` 1, `near_limit_ne_sat` 1 |
+| non-degenerate, **refused** | 2 | `ladder_lift_unsat` only |
+
+**There is no single blocker; there are two, in different places.** The PB path is not
+blocked (36/38). The clause path is blocked hard: 13 of 88, all width-1, and the two paths
+are perfectly disjoint because `Propagator.pb_row` has no row for the `array_bool_or` /
+`bool_clause` / `bool_eq` / `bool_not` / `int_ne` families, so the PB path never runs there.
+
+### The ladder lift and `to_linear_row` are mutually exclusive, structurally
+
+`Ladder.lift` substitutes a rung for a higher one and accumulates multipliers, so source rungs
+vanish and the target's coefficient grows (`lib/core/ladder.ml:59`). **If the lift moves any
+rung of a variable of declared width ≥ 2, the result is necessarily incomplete or non-uniform
+on that variable, hence non-convertible.** So "lift more" moves rows *out* of the convertible
+class. D-0049's instinct was right; this is the reason, and it is sharper than D-0049 stated.
+
+### The recommendation, and what is open
+
+**Keep `to_linear_row` as it is, and stop using it as the clause path's gate.** It is the
+honest predicate for "is this PB row literally a linear row over the box", and on the objects
+it was designed for it succeeds 95% of the time. It is being *used* as a universal test of
+"can this learned object propagate", which it is not.
+
+1. **OPEN — needs its own record.** Give the clause path a clause instance over order
+   literals (watched literals over `Lit.t`). It would convert 88 clauses from proof-only to
+   propagating against 13 today, and touches neither `to_linear_row` nor `explanation.ml` nor
+   the minimiser. **But it spends D-0044's central bet — "no new propagator family" — which
+   has held three times.** The half-rebuttal is that `lib/core/prop/bool_clause.ml` already is
+   a clause propagator, so this may be a *widening* of an existing family rather than a new
+   one. That argument has to be made, not asserted. **Not decided here.**
+2. **Do not relax `to_linear_row` to entailment.** Sound, tempting, and strictly weaker than
+   (1), plus it costs a new `Justify` obligation to derive the relaxed row via the ladder rows.
+3. What is **not** defensible is the status quo unexamined: 75 of 88 learned clauses are
+   proof-only, and the backjump they justify re-derives the conflict they came from — which is
+   M2-L3's own stated regret (`lib/core/learn.ml:212`).
+
+### M2-L7 (`Saturate`) is NOT the next row
+
+D-0047's chain promoted it conditionally on M2-L11 failing to produce non-degenerate rows.
+**M2-L11 succeeded**, so the condition was never met. Worse for it: saturation
+(`cᵢ := min(cᵢ, d)`) is **uniformity-preserving**, so it cannot rescue a refused row — the
+refused rows are refused for missing rungs or mixed coefficients, neither of which saturation
+undoes. It changes nothing in the taxonomy above.
+
+If it is taken anyway for coverage, scope it narrowly: the constructor plus the `Reduce.t`
+plug, with a **pinned prediction in its record that no suite `pb-*` figure moves**, and a test
+asserting that prediction rather than a benchmark hoping for a win.
