@@ -8,12 +8,12 @@
 % equivalent conflict from a path it had already refuted. So: count the level-0 learned
 % `rup` lines in the emitted .pbp and look for repeats.
 %
-%   BAGUETTE_PROPAGATE_LEARNED=off   1439 nodes; 720 level-0 nogoods, only 20 DISTINCT
-%                                    -- 700 re-derivations of a nogood already on the page
+%   BAGUETTE_PROPAGATE_LEARNED=off   1439 nodes; 720 level-0 nogoods, only 30 DISTINCT
+%                                    -- 690 re-derivations of a nogood already on the page
 %   BAGUETTE_PROPAGATE_LEARNED=on     297 nodes; 149 level-0 nogoods, 149 DISTINCT
 %                                    -- zero re-derivations
 %
-% The `off` column is the property named: 700 counted returns to an already-refuted
+% The `off` column is the property named: 690 counted returns to an already-refuted
 % conflict from a different path. The `on` column is what propagating the learned
 % constraint buys -- 4.84x fewer nodes. Measured 2026-09-18 on this exact file; the
 % same count on php_unsat.fzn is 100 re-derivations of 20 distinct nogoods out of 120.
