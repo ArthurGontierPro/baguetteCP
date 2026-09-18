@@ -2686,3 +2686,45 @@ order-encoding argument makes the clause/PB regimes genuinely one for us — it 
 D-0028 and from `Encoding`'s literal naming, but no code has yet built a `Learned.t` from a
 clause and propagated it as a PB row. **M2-L1's test (b) is what converts it**, and if it
 fails, this record's central claim is wrong and the staging in M2-L3 must be revisited.
+
+### Amendment, 2026-09-18: the cut is a second pluggable axis, and 1UIP is not settled
+
+Added the day this record landed, because the original text treated 1UIP as given and one
+of its test obligations (M2-L2's) encoded that assumption as a general invariant of the
+cut. It is not one.
+
+**The theorem that justifies 1UIP does not carry over.** Learning the first assertive
+clause gives the highest possible backjump *in a SAT solver*; Le Berre et al., *On
+Improving the Backjump Level in PB Solvers* (arXiv 2107.13085), state there is **no such
+guarantee in the presence of PB constraints**, so deriving an assertive constraint is no
+longer a sufficient stop condition, and they study continuing the analysis past the 1UIP to
+get a better backjump. A PB constraint propagates by slack, not by "all but one literal
+falsified", so a derived constraint can carry several conflict-level literals and still be
+asserting. The clausal stopping rule is not merely suboptimal there; it measures the wrong
+thing.
+
+**It is not settled in SAT either.** Feng & Bacchus, *Clause Size Reduction with all-UIP
+Learning* (SAT 2020), apply all-UIP under the constraint that LBD does not increase over
+the 1UIP minimum, with a measured improvement; Fleury & Biere (SAT 2021) made it efficient.
+Zhang et al.'s 2001 comparison that made 1UIP standard was CNF with VSIDS and restarts, and
+we have neither VSIDS nor (per SPEC §3.4, M2-L9) restarts.
+
+**So the stopping criterion is a named component, exactly as the reduction rule is.** The
+clause path (M2-L3) uses 1UIP; the PB path (M2-L6) uses the slack-based criterion. Neither
+is written into the analysis.
+
+**The proof-cost structure of the two paths is opposite, and this appears to be ours to
+discover.** A learned clause is a single `rup` line — intermediate resolvents are never
+logged, the checker re-derives them by unit propagation — so on the clause path the cut
+choice costs **nothing** in proof size and is a pure search question, revisable for free.
+On the PB path RUP does not work, which is the difficulty Koops et al. exist to solve, so
+every combination and reduction step is a `pol` operand and the cut choice **directly sets
+proof size and verify time**. The literature pulls toward cutting *later* for a better
+backjump; our proof cost pulls toward cutting *earlier*. M2-L8 is the row that can measure
+which wins, and no existing solver can have measured it, because none logs PB learning over
+integer variables.
+
+**Register**: the two citations are external and measured by others. That the proof-cost
+asymmetry favours an earlier cut on the PB path is **argued, not measured** — it follows
+from `rup` needing no intermediate lines and `pol` needing one per step, but no byte of ours
+has been counted. M2-L8 converts it or refutes it.
