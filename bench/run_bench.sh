@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# The proof benchmark (M3-T5, absorbing M3-T3). Read bench/README.md first; it says
-# what these numbers mean and, more importantly, what they do not.
+# The proof benchmark (M3-T5, absorbing M3-T3; extended by M2-L8 to the learning
+# counters). Read bench/README.md first; it says what these numbers mean and, more
+# importantly, what they do not.
 #
 # Four numbers, never one score:
 #
@@ -8,6 +9,15 @@
 #     .pbp bytes      how big the proof of it is
 #     verify seconds  how long a checker takes to believe it
 #     peak RSS        how much memory the two of them needed
+#
+# And, since M2-L8, a THIRD TABLE of what conflict analysis did: learned clauses,
+# how many of them convert, siblings skipped by backjumping, and the PB analysis's
+# attempt / learn / FALLBACK RATE. Same discipline, and for a sharper reason than the
+# first four: learning is the one change in this solver that can move proof bytes
+# without moving the search tree AND move the search tree without moving proof bytes.
+# A single column cannot report both, so there is no combined figure and no score --
+# the counts are summed over the suite (they are counts), the bytes and the seconds
+# never are.
 #
 # The first three are reported in separate columns because they do not have to move
 # together. GCS measured a 5.9x SMALLER proof that took 3.5x LONGER to check at an
@@ -76,13 +86,24 @@ TSV=""
 KEEP=0
 SOLVER_A="${BAGUETTE:-${ROOT}/_build/default/bin/main.exe}"
 SOLVER_B=""
-FORMAT_A=""
-FORMAT_B=""
 LABEL_A="A"
 LABEL_B="B"
 COMPARE=0
+CONTROL=0
 FORCE=0
 TIMEOUT=300
+
+# Where `-c` finds its two scene directories, and what each scene must be classified
+# as. See bench/control/README-scenes.txt. The table is the control's assertion: a
+# scene missing from it, or an entry with no scene, is itself a failure -- a control
+# that silently did not run is the failure mode it exists to prevent.
+CTLDIR="${ROOT}/bench/control"
+declare -A CONTROL_EXPECT=(
+  [ctl_proof]="proof-only"
+  [ctl_tree]="CHANGED"
+  [ctl_samenodes]="CHANGED"
+)
+CONTROL_FAIL=0
 
 # ------------------------------------------------------------------ the guard
 #
@@ -112,11 +133,13 @@ With no models named, every .fzn in test/models/ is measured.
   -r N     repeats per measurement, minimum reported   (default 5)
   -w N     warmup runs discarded before the repeats    (default 1)
   -s BIN   solver binary for configuration A           (default _build/default/bin/main.exe)
-  -f FMT   BAGUETTE_PROOF_FORMAT for configuration A   (default: the solver's own, 3.0)
   -a NAME  label for configuration A
-  -S BIN   solver binary for configuration B           -- naming either -S or -F
-  -F FMT   BAGUETTE_PROOF_FORMAT for configuration B      turns on comparison mode
-  -b NAME  label for configuration B
+  -S BIN   solver binary for configuration B           -- naming it turns on
+  -b NAME  label for configuration B                      comparison mode
+  -c       run THE CONTROL instead of the models: two scenes from bench/control/,
+           one that moves the proof at a fixed search tree and one that moves the
+           tree, and ASSERT that the comparison table tells them apart. Exits
+           non-zero if either scene is misclassified. See bench/README.md.
   -o FILE  also write the raw measurements as TSV. The solver's internal timings go
            to FILE.internal -- a separate file because they are a different clock
            (CPU, not wall) taken on different runs, and two clocks in one row get
@@ -130,7 +153,8 @@ Examples:
 
   bench/run_bench.sh                      every model, one configuration
   bench/run_bench.sh -r 9 test/models/width_root_unsat.fzn
-  bench/run_bench.sh -F 2.0 -b 'format 2.0'    3.0 against 2.0, four columns each
+  bench/run_bench.sh -c                   the control: does the report still tell a
+                                          proof-only change from a changed tree?
   bench/run_bench.sh -S /path/to/other/main.exe -b layered
                                           two solver builds -- this is the shape the
                                           D-0026 falsifier needs; see bench/README.md
@@ -139,16 +163,15 @@ EOF
   exit "${1:-2}"
 }
 
-while getopts "r:w:s:f:a:S:F:b:o:t:kYh" opt; do
+while getopts "r:w:s:a:S:b:o:t:ckYh" opt; do
   case "${opt}" in
     r) REPEATS="${OPTARG}" ;;
     w) WARMUP="${OPTARG}" ;;
     s) SOLVER_A="${OPTARG}" ;;
-    f) FORMAT_A="${OPTARG}" ;;
     a) LABEL_A="${OPTARG}" ;;
     S) SOLVER_B="${OPTARG}"; COMPARE=1 ;;
-    F) FORMAT_B="${OPTARG}"; COMPARE=1 ;;
     b) LABEL_B="${OPTARG}" ;;
+    c) CONTROL=1; COMPARE=1 ;;
     o) TSV="${OPTARG}" ;;
     t) TIMEOUT="${OPTARG}" ;;
     k) KEEP=1 ;;
@@ -180,6 +203,17 @@ ms() { printf '%d.%01d' $(( $1 / 1000 )) $(( ($1 % 1000) / 100 )); }
 # Percent, rounded, of $1 relative to $2. Guards $2 = 0.
 pct() { if [ "$2" -le 0 ]; then printf 'n/a'; else printf '%d' $(( ($1 * 100 + ($2 / 2)) / $2 )); fi; }
 
+# A RATE as an integer percent: $1 of $2. Three distinct non-answers, kept distinct:
+#   -    one of the two counters was not reported at all (an older binary)
+#   n/a  the denominator is 0 -- PB analysis was never ASKED on this model, so it has
+#        no fallback rate. Printing 0% there would read as "it never fell back", which
+#        is the opposite of what a 0 denominator means and is how a null result gets
+#        quoted as a win.
+rate() {
+  case "$1$2" in *[!0-9]*) printf '%s' '-'; return ;; esac
+  if [ "$2" -le 0 ]; then printf 'n/a'; else printf '%d' $(( ($1 * 100 + ($2 / 2)) / $2 )); fi
+}
+
 # Peak RSS of one command, in kB, or the empty string if /usr/bin/time is not here.
 # It is measured on its own dedicated run, NOT on the timed repeats, so that the
 # wrapper's own cost never lands in a number this harness reports as solve or verify
@@ -208,10 +242,30 @@ for bin in "${SOLVER_A}" ${SOLVER_B:+"${SOLVER_B}"}; do
   fi
 done
 
+# Configuration A and configuration B measure the SAME model list in every mode but
+# the control, where they deliberately measure two different directories of models
+# that share basenames -- that being the only way left, after D-0046 removed the
+# proof-format knob, to produce two runs that differ in the proof and not in the tree.
 MODELS=("$@")
-if [ "${#MODELS[@]}" -eq 0 ]; then
+if [ "${CONTROL}" -eq 1 ]; then
+  [ "${#MODELS[@]}" -eq 0 ] || {
+    echo "run_bench.sh: -c runs bench/control/, so it takes no model arguments." >&2
+    exit 2
+  }
+  mapfile -t MODELS < <(ls "${CTLDIR}"/base/*.fzn 2>/dev/null)
+  mapfile -t MODELS_B < <(ls "${CTLDIR}"/variant/*.fzn 2>/dev/null)
+  if [ "${#MODELS[@]}" -eq 0 ] || [ "${#MODELS[@]}" -ne "${#MODELS_B[@]}" ]; then
+    echo "run_bench.sh: -c needs matching scenes under ${CTLDIR}/base and .../variant," >&2
+    echo "  and found ${#MODELS[@]} and ${#MODELS_B[@]}. Nothing was measured." >&2
+    exit 2
+  fi
+  SOLVER_B="${SOLVER_A}"
+  LABEL_A="control: base"
+  LABEL_B="control: variant"
+elif [ "${#MODELS[@]}" -eq 0 ]; then
   mapfile -t MODELS < <(ls "${ROOT}"/test/models/*.fzn)
 fi
+[ "${CONTROL}" -eq 1 ] || MODELS_B=("${MODELS[@]}")
 
 mkdir -p "${OUTDIR}"
 rm -rf "${SCDIR}"
@@ -588,10 +642,8 @@ echo
 declare -A PH
 
 internal_measure() {
-  local fzn="$1" bin="$2" fmt="$3" prefix="$4"
-  local -a cmd=(timeout "${TIMEOUT}")
-  [ -n "${fmt}" ] && cmd+=(env "BAGUETTE_PROOF_FORMAT=${fmt}")
-  cmd+=("${bin}" "${fzn}" --proof "${prefix}" --time)
+  local fzn="$1" bin="$2" prefix="$3"
+  local -a cmd=(timeout "${TIMEOUT}" "${bin}" "${fzn}" --proof "${prefix}" --time)
   local i txt proc best=-1
   for ((i = 0; i < REPEATS; i++)); do
     txt="$("${cmd[@]}" 2>&1 >/dev/null)"
@@ -623,26 +675,48 @@ phsum() {
   printf '%s' "${t}"
 }
 
+# One `stats: ` counter by name, or "-" when this binary does not report it. A dash is
+# NOT a zero and is never summed: an older -S binary that predates M2-L3 reports no
+# `learned` line at all, and printing 0 there would be this harness asserting that it
+# learned nothing, which is a claim it has no measurement for.
+#
+# The value is $3 because the line is `stats: <name> <value> <unit> <prose>`; the unit
+# is what keeps a count and a duration apart elsewhere and it is deliberately not
+# stripped here, only stepped over.
+stat_of() {
+  local v
+  v="$(printf '%s\n' "$1" | awk -v k="$2" '$1 == "stats:" && $2 == k { print $3 }')"
+  case "${v}" in '' | *[!0-9]*) printf '%s' '-' ;; *) printf '%s' "${v}" ;; esac
+}
+
 # ------------------------------------------------------------------ one measurement
 #
-# Sets, for the model in $1 under the configuration in $2/$3 (binary, format):
+# Sets, for the model in $1 measured with the binary in $2, into $3 (the artefact
+# directory, one per configuration so the control's two scenes cannot overwrite each
+# other's .opb/.pbp -- they share basenames on purpose):
 #   m_opb m_pbp  bytes, and m_stable=1 if every repeat produced identical bytes
 #   m_solve m_verify        minimum microseconds
 #   m_solve_hi m_verify_hi  maximum microseconds, which is where the spread comes from
 #   m_srss m_vrss           peak RSS in kB of solve and of verify
 #   m_lines m_longest m_rup m_pol m_levels m_depth   proof shape, and the old proxy
-#   m_nodes m_decs m_tdepth   the search tree, from the solver's own counter (M1-T36)
+#   m_nodes m_decs m_tdepth m_skip    the search tree, from the solver's own counters
+#                                     (M1-T36; m_skip is M2-L3's backjump counter)
+#   m_lrn m_cnv                       clauses learned, and how many convert (M2-L8)
+#   m_pbt m_pbl m_pbf m_pbstr         PB analysis: tried / learned / fell back /
+#                                     non-degenerate (M2-L6)
 #   m_fmt        the format the .pbp says it is, read from the file, not from the env
 #   m_status     ok | REJECTED | SOLVER-FAILED | REFUSED
 measure() {
-  local fzn="$1" bin="$2" fmt="$3"
+  local fzn="$1" bin="$2" outdir="$3"
   local base prefix i t0 t1 rc
   base="$(basename "${fzn}" .fzn)"
-  prefix="${OUTDIR}/${base}"
+  mkdir -p "${outdir}"
+  prefix="${outdir}/${base}"
 
   m_status=ok
   m_stable=1
-  m_nodes="-"; m_decs="-"; m_tdepth="-"
+  m_nodes="-"; m_decs="-"; m_tdepth="-"; m_skip="-"
+  m_lrn="-"; m_cnv="-"; m_pbt="-"; m_pbl="-"; m_pbf="-"; m_pbstr="-"
   m_solve=0; m_verify=0; m_solve_hi=0; m_verify_hi=0
   m_srss=""; m_vrss=""
 
@@ -654,9 +728,7 @@ measure() {
     echo "  -Y: running ${base} anyway -- widest declared domain ${g_maxw}, estimated peak ${g_est} MB"
   fi
 
-  local -a solve=(timeout "${TIMEOUT}")
-  [ -n "${fmt}" ] && solve+=(env "BAGUETTE_PROOF_FORMAT=${fmt}")
-  solve+=("${bin}" "${fzn}" --proof "${prefix}")
+  local -a solve=(timeout "${TIMEOUT}" "${bin}" "${fzn}" --proof "${prefix}")
   local -a verify=(timeout "${TIMEOUT}" "${VERIPB}" "${prefix}.opb" "${prefix}.pbp")
 
   for ((i = 0; i < WARMUP; i++)); do
@@ -675,7 +747,7 @@ measure() {
   # silently per model only when the binary has no --time at all, which the preflight
   # has already announced once.
   m_iok=0
-  if [ "${HAVE_TIME_FLAG}" -eq 1 ] && internal_measure "${fzn}" "${bin}" "${fmt}" "${prefix}"; then
+  if [ "${HAVE_TIME_FLAG}" -eq 1 ] && internal_measure "${fzn}" "${bin}" "${prefix}"; then
     m_iok=1
     m_i_startup="$(phsum startup)"
     m_i_parse="$(phsum args parse)"
@@ -735,13 +807,14 @@ measure() {
 
   m_lines="$(wc -l < "${prefix}.pbp" | tr -d ' ')"
   m_longest="$(awk '{ if (length > n) n = length } END { print n + 0 }' "${prefix}.pbp")"
-  # Rule counts. The anchor has to admit BOTH formats: 3.0 introduces every derived
-  # constraint with a label (`@c9 rup ...`) and 2.0 does not (`rup ...`), so a grep
-  # for " rup " counts 31 lines under 3.0 and 0 under the same proof in 2.0 -- which
-  # is what the first draft of this script did, and it is D-0025's vacuous-assertion
-  # trap wearing a benchmark's clothes. `Writer.strip_label` is the authority on the
-  # optional prefix; this regex is its shell transcription and nothing else may
-  # assume a spelling.
+  # Rule counts. The label prefix is OPTIONAL in the anchor and stays optional after
+  # D-0046 removed format 2.0: the solver introduces derived constraints as
+  # `@c9 rup ...`, an unlabelled `rup ...` is still well-formed, and a grep for
+  # " rup " -- what the first draft of this script did -- counted 31 lines of one
+  # spelling and 0 of the other while looking like it had counted a proof. That is
+  # D-0025's vacuous-assertion trap wearing a benchmark's clothes, and it is why this
+  # regex tolerates the prefix instead of assuming it. `Writer.strip_label` is the
+  # authority on the spelling; nothing here may assume a different one.
   m_rup="$(grep -cE '^(@[^ ]+ )?rup ' "${prefix}.pbp")"
   m_pol="$(grep -cE '^(@[^ ]+ )?pol ' "${prefix}.pbp")"
   # Node count is not instrumented in the solver, so this is a PROXY and is labelled
@@ -772,6 +845,10 @@ measure() {
   # usage error and exits non-zero. That leaves the three columns as "-", which is the
   # honest rendering of "this configuration cannot report its tree", and it must not be
   # read as zero.
+  #
+  # M2-L8 rides the SAME pass for the learning counters -- `learned`, `convertible`,
+  # `skipped`, and the M2-L6 `pb-*` family -- because they come off the same `--stats`
+  # invocation and a second dedicated run would be a second measurement of nothing.
   local stats_txt
   if stats_txt="$("${solve[@]}" --stats 2>&1 >/dev/null)"; then
     if printf '%s\n' "${stats_txt}" | grep -q 'INCONSISTENT'; then
@@ -781,12 +858,16 @@ measure() {
       m_status="SOLVER-FAILED (--stats reported INCONSISTENT counters: $(printf '%s\n' "${stats_txt}" | grep INCONSISTENT | head -1))"
       return 1
     fi
-    m_nodes="$(printf '%s\n' "${stats_txt}" | awk '$1 == "stats:" && $2 == "nodes" { print $3 }')"
-    m_decs="$(printf '%s\n' "${stats_txt}" | awk '$1 == "stats:" && $2 == "decisions" { print $3 }')"
-    m_tdepth="$(printf '%s\n' "${stats_txt}" | awk '$1 == "stats:" && $2 == "maxdepth" { print $3 }')"
-    case "${m_nodes}" in '' | *[!0-9]*) m_nodes="-" ;; esac
-    case "${m_decs}" in '' | *[!0-9]*) m_decs="-" ;; esac
-    case "${m_tdepth}" in '' | *[!0-9]*) m_tdepth="-" ;; esac
+    m_nodes="$(stat_of "${stats_txt}" nodes)"
+    m_decs="$(stat_of "${stats_txt}" decisions)"
+    m_tdepth="$(stat_of "${stats_txt}" maxdepth)"
+    m_skip="$(stat_of "${stats_txt}" skipped)"
+    m_lrn="$(stat_of "${stats_txt}" learned)"
+    m_cnv="$(stat_of "${stats_txt}" convertible)"
+    m_pbt="$(stat_of "${stats_txt}" pb-tried)"
+    m_pbl="$(stat_of "${stats_txt}" pb-learned)"
+    m_pbf="$(stat_of "${stats_txt}" pb-fallback)"
+    m_pbstr="$(stat_of "${stats_txt}" pb-stronger)"
   fi
 
   [ "${KEEP}" -eq 0 ] && rm -f "${prefix}.stdout" "${prefix}.stderr" "${prefix}.veripb" \
@@ -807,11 +888,29 @@ hdr() {
 declare -A A_opb A_pbp A_solve A_verify A_lines A_longest A_rup A_pol A_levels A_depth A_fmt A_stable A_srss A_vrss
 declare -A B_opb B_pbp B_solve B_verify B_lines B_longest B_rup B_pol B_levels B_depth B_fmt B_stable B_srss B_vrss
 declare -A A_nodes A_decs A_tdepth B_nodes B_decs B_tdepth
+declare -A A_skip A_lrn A_cnv A_pbt A_pbl A_pbf A_pbstr
+declare -A B_skip B_lrn B_cnv B_pbt B_pbl B_pbf B_pbstr
 declare -A A_ssp A_vsp B_ssp B_vsp
+declare -A VERDICT WHY
 declare -a ITAB=()
+declare -a LTAB=()
 failed=0
 refused=0
 declare -a NAMES=()
+
+# M2-L8's table. The three columns it shares with the first table -- .opb B, .pbp B,
+# verify ms -- are repeated here ON PURPOSE and not summarised: the whole claim this
+# row exists to test is that learning can move any one of these five quantities
+# without moving the others, and five quantities side by side on one line is the only
+# arrangement in which a reader can see that happen. There is no total column here for
+# the same reason there is none in the first table.
+lhdr() {
+  printf '%-22s %10s %10s %9s %6s %5s %6s %6s %6s %7s %5s %7s\n' \
+    "model" ".opb B" ".pbp B" "verify ms" "learn" "conv" "skip" "pbtry" "pblrn" "pbfall" "fb%" "pbstrng"
+  printf '%-22s %10s %10s %9s %6s %5s %6s %6s %6s %7s %5s %7s\n' \
+    "----------------------" "----------" "----------" "---------" "------" "-----" "------" \
+    "------" "------" "-------" "-----" "-------"
+}
 
 ihdr() {
   printf '%-22s %9s %9s %8s %9s %9s %9s %8s %8s %7s %8s %7s %9s %8s\n' \
@@ -823,17 +922,22 @@ ihdr() {
 }
 
 run_config() {
-  local which="$1" bin="$2" fmt="$3" label="$4"
+  local which="$1" bin="$2" label="$3"
   local fzn base
+  local -a list=()
+  if [ "${which}" = "A" ]; then list=("${MODELS[@]}"); else list=("${MODELS_B[@]}"); fi
   ITAB=()
+  LTAB=()
+  local t_lrn=0 t_cnv=0 t_skip=0 t_pbt=0 t_pbl=0 t_pbf=0 t_pbstr=0
+  local n_lrn=0 n_skipm=0 n_rows=0 n_nostats=0
   echo "configuration ${which}: ${label}"
   echo "  solver  ${bin}"
-  echo "  format  BAGUETTE_PROOF_FORMAT=${fmt:-<unset, solver default>}"
+  [ "${CONTROL}" -eq 1 ] && echo "  models  $(dirname "${list[0]}")"
   echo
   hdr
-  for fzn in "${MODELS[@]}"; do
+  for fzn in "${list[@]}"; do
     base="$(basename "${fzn}" .fzn)"
-    if ! measure "${fzn}" "${bin}" "${fmt}"; then
+    if ! measure "${fzn}" "${bin}" "${OUTDIR}/${which}"; then
       printf '%-22s %s\n' "${base}" "${m_status} -- no timings reported for this model"
       case "${m_status}" in REFUSED*) refused=$((refused + 1)) ;; *) failed=$((failed + 1)) ;; esac
       continue
@@ -853,13 +957,32 @@ run_config() {
       A_levels[$base]=$m_levels; A_depth[$base]=$m_depth; A_fmt[$base]=$m_fmt; A_stable[$base]=$m_stable
       A_ssp[$base]=$ssp; A_vsp[$base]=$vsp; A_srss[$base]=$m_srss; A_vrss[$base]=$m_vrss
       A_nodes[$base]=$m_nodes; A_decs[$base]=$m_decs; A_tdepth[$base]=$m_tdepth
+      A_skip[$base]=$m_skip; A_lrn[$base]=$m_lrn; A_cnv[$base]=$m_cnv
+      A_pbt[$base]=$m_pbt; A_pbl[$base]=$m_pbl; A_pbf[$base]=$m_pbf; A_pbstr[$base]=$m_pbstr
     else
       B_opb[$base]=$m_opb; B_pbp[$base]=$m_pbp; B_solve[$base]=$m_solve; B_verify[$base]=$m_verify
       B_lines[$base]=$m_lines; B_longest[$base]=$m_longest; B_rup[$base]=$m_rup; B_pol[$base]=$m_pol
       B_levels[$base]=$m_levels; B_depth[$base]=$m_depth; B_fmt[$base]=$m_fmt; B_stable[$base]=$m_stable
       B_ssp[$base]=$ssp; B_vsp[$base]=$vsp; B_srss[$base]=$m_srss; B_vrss[$base]=$m_vrss
       B_nodes[$base]=$m_nodes; B_decs[$base]=$m_decs; B_tdepth[$base]=$m_tdepth
+      B_skip[$base]=$m_skip; B_lrn[$base]=$m_lrn; B_cnv[$base]=$m_cnv
+      B_pbt[$base]=$m_pbt; B_pbl[$base]=$m_pbl; B_pbf[$base]=$m_pbf; B_pbstr[$base]=$m_pbstr
     fi
+    n_rows=$((n_rows + 1))
+    case "${m_lrn}" in
+      *[!0-9]*) n_nostats=$((n_nostats + 1)) ;;
+      *)
+        t_lrn=$((t_lrn + m_lrn)); t_cnv=$((t_cnv + m_cnv)); t_skip=$((t_skip + m_skip))
+        t_pbt=$((t_pbt + m_pbt)); t_pbl=$((t_pbl + m_pbl)); t_pbf=$((t_pbf + m_pbf))
+        t_pbstr=$((t_pbstr + m_pbstr))
+        [ "${m_lrn}" -gt 0 ] && n_lrn=$((n_lrn + 1))
+        [ "${m_skip}" -gt 0 ] && n_skipm=$((n_skipm + 1))
+        ;;
+    esac
+    LTAB+=("$(printf '%-22s %10s %10s %9s %6s %5s %6s %6s %6s %7s %5s %7s' \
+      "${base}" "${m_opb}" "${m_pbp}" "$(ms "${m_verify}")" \
+      "${m_lrn}" "${m_cnv}" "${m_skip}" "${m_pbt}" "${m_pbl}" "${m_pbf}" \
+      "$(rate "${m_pbf}" "${m_pbt}")" "${m_pbstr}")")
     if [ "${m_iok}" -eq 1 ]; then
       # `search` itself is not a column any more: it is exactly propag + emit, and a
       # third column carrying their sum invites the reader to quote the fused number
@@ -875,10 +998,11 @@ run_config() {
         "$(pct $((m_solve - m_i_inmain)) "${m_solve}")")")
     fi
     if [ -n "${TSV}" ]; then
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "${which}" "${base}" "${m_fmt}" "${m_opb}" "${m_pbp}" "${m_solve}" "${m_verify}" \
         "${m_srss:-}" "${m_vrss:-}" "${m_lines}" "${m_longest}" "${m_rup}" "${m_pol}" \
         "${m_levels}" "${m_depth}" "${m_stable}" "${m_nodes}" "${m_decs}" "${m_tdepth}" \
+        "${m_skip}" "${m_lrn}" "${m_cnv}" "${m_pbt}" "${m_pbl}" "${m_pbf}" "${m_pbstr}" \
         >> "${TSV}"
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "${which}" "${base}" "${m_i_startup:-}" "${m_i_parse:-}" "${m_i_compile:-}" \
@@ -888,6 +1012,51 @@ run_config() {
     fi
   done
   echo
+
+  if [ "${#LTAB[@]}" -gt 0 ]; then
+    echo "  what conflict analysis did, configuration ${which} (M2-L8)."
+    echo "  COUNTS, from the solver's own \`--stats\` counters on the same dedicated pass"
+    echo "  the tree columns come from -- not read back out of the .pbp. Alongside them,"
+    echo "  repeated rather than summarised, the three proof numbers they are supposed to"
+    echo "  be able to move independently of."
+    echo
+    lhdr
+    printf '%s\n' "${LTAB[@]}"
+    echo
+    echo "    learn     1UIP clauses derived and stated at level 0 (M2-L3)"
+    echo "    conv      ...of which Learned.to_linear_row accepts, i.e. which could"
+    echo "              propagate if they were installed. MEASURED ONLY -- nothing in the"
+    echo "              solver acts on this yet (D-0044 fork ii), so it is a count of an"
+    echo "              opportunity, not of a saving."
+    echo "    skip      siblings a backjump did NOT explore (M2-L3). A 0 here is a real 0:"
+    echo "              learning happened and no backjump did."
+    echo "    pbtry     conflicts PB conflict analysis was asked about (M2-L6)"
+    echo "    pblrn     ...of which produced a PB inequality at level 0"
+    echo "    pbfall    ...of which fell back to the clause path instead"
+    echo "    fb%       pbfall / pbtry as an integer percent. \`n/a\` means pbtry was 0 --"
+    echo "              PB analysis was never asked on this model, which is NOT a 0% rate."
+    echo "    pbstrng   learned PB rows that convert where the same conflict's CLAUSE does"
+    echo "              not. M2-L6's own test (a), and the number to watch for M2-L11:"
+    echo "              M2-L6 left it at 0 non-degenerate rows suite-wide."
+    echo
+    echo "  suite totals for configuration ${which}, over ${n_rows} model(s) that produced a"
+    echo "  verified proof. COUNTS ONLY are summed. The bytes and the seconds above are"
+    echo "  deliberately NOT summed and there is no combined figure: a sum over models of"
+    echo "  different sizes is an arbitrary weighting, and this file's whole discipline is"
+    echo "  that these quantities move independently."
+    echo "    models that learned a clause   ${n_lrn} of ${n_rows}"
+    echo "    models with a backjump skip    ${n_skipm} of ${n_rows}"
+    echo "    clauses learned                ${t_lrn}, of which ${t_cnv} convertible ($(rate "${t_cnv}" "${t_lrn}")%)"
+    echo "    siblings skipped               ${t_skip}"
+    echo "    PB tried / learned / fallback  ${t_pbt} / ${t_pbl} / ${t_pbf}"
+    echo "    PB FALLBACK RATE               $(rate "${t_pbf}" "${t_pbt}")% over ${t_pbt} attempt(s)"
+    echo "    PB rows stronger than a clause ${t_pbstr}"
+    if [ "${n_nostats}" -gt 0 ]; then
+      echo "    ${n_nostats} model(s) reported no learning counters at all and are in NONE of the"
+      echo "    sums above -- an older binary without them. That is not zero learning."
+    fi
+    echo
+  fi
 
   if [ "${#ITAB[@]}" -gt 0 ]; then
     echo "  the solver's own internal timings, configuration ${which} (M1-T35)."
@@ -943,28 +1112,80 @@ run_config() {
 }
 
 if [ -n "${TSV}" ]; then
-  printf 'config\tmodel\tformat\topb_bytes\tpbp_bytes\tsolve_us\tverify_us\tsolve_rss_kb\tverify_rss_kb\tlines\tlongest\trup\tpol\tlevels\tdepth\tbytes_reproducible\tnodes\tdecisions\ttree_depth\n' > "${TSV}"
+  printf 'config\tmodel\tformat\topb_bytes\tpbp_bytes\tsolve_us\tverify_us\tsolve_rss_kb\tverify_rss_kb\tlines\tlongest\trup\tpol\tlevels\tdepth\tbytes_reproducible\tnodes\tdecisions\ttree_depth\tskipped\tlearned\tconvertible\tpb_tried\tpb_learned\tpb_fallback\tpb_stronger\n' > "${TSV}"
   # The internal timings go to their OWN file, not extra columns here, because they are
   # a different clock (CPU, not wall) measured on different runs. Putting two clocks in
   # one row is how they get subtracted from each other by someone reading it later.
   printf 'config\tmodel\tstartup_cpu_us\tparse_cpu_us\tcompile_cpu_us\topb_cpu_us\tsearch_cpu_us\tpropag_cpu_us\temit_cpu_us\tclockovh_cpu_us\temit_lines\tpbp_cpu_us\trest_cpu_us\tinmain_cpu_us\n' > "${TSV}.internal"
 fi
 
-run_config A "${SOLVER_A}" "${FORMAT_A}" "${LABEL_A}"
-[ "${COMPARE}" -eq 1 ] && run_config B "${SOLVER_B}" "${FORMAT_B}" "${LABEL_B}"
+run_config A "${SOLVER_A}" "${LABEL_A}"
+[ "${COMPARE}" -eq 1 ] && run_config B "${SOLVER_B}" "${LABEL_B}"
 
 # ------------------------------------------------------------------ the comparison
 #
 # Each column is compared on its own and the verdict is per column, because the whole
 # reason this row exists is that they move independently. A delta inside the measured
 # spread of EITHER configuration is printed as "noise", not as a small win.
+#
+# THE VERDICT (M1-T36, widened by M2-L8). Sets `tree` and `tree_why`:
+#
+#   CHANGED     a TREE counter moved: nodes, decisions, maxdepth or skipped. The two
+#               configurations did not explore the same tree, so none of the other
+#               columns on that row is a like-for-like comparison.
+#   proof-only  every tree counter identical and a PROOF artefact moved -- .opb or
+#               .pbp bytes, .pbp lines, rup or pol rules, or level markers. The same
+#               search, written down differently. This is the case D-0026's claim is
+#               about, and the case a learning change produces most often.
+#   same        nothing moved anywhere.
+#   n/a         a configuration could not report its tree. NOT "same": unknown.
+#
+# M1-T36 keyed CHANGED on the NODE COUNT ALONE, and that was right until backjumping
+# landed. `nodes = 2 * decisions + 1 - skipped` (the solver's own identity, which it
+# checks) means a tree can move -- different decisions, different siblings skipped --
+# and arrive at the SAME node count. Under M1-T36's rule that row would have been
+# labelled `proof-only` and its bytes and seconds quoted as a like-for-like
+# comparison of two different searches. So all four counters are consulted, and any
+# one of them moving is enough to refuse the comparison.
+#
+# The proof side is widened for the mirror-image reason: level markers alone could
+# report `same` on a row whose .pbp had grown by a third, because learning adds RUP
+# lines at level 0 and level 0 needs no marker.
+tree_verdict() {
+  local b="$1" d="" q=""
+  local an="${A_nodes[$b]:--}"  bn="${B_nodes[$b]:--}"
+  local ad="${A_decs[$b]:--}"   bd="${B_decs[$b]:--}"
+  local am="${A_tdepth[$b]:--}" bm="${B_tdepth[$b]:--}"
+  local as="${A_skip[$b]:--}"   bs="${B_skip[$b]:--}"
+  tree_why=""
+  case "${an}${bn}${ad}${bd}${am}${bm}${as}${bs}" in
+    *[!0-9]*) tree="n/a"; tree_why="a configuration reported no tree counters"; return ;;
+  esac
+  [ "${an}" != "${bn}" ] && d="${d} nodes ${an}->${bn}"
+  [ "${ad}" != "${bd}" ] && d="${d} decisions ${ad}->${bd}"
+  [ "${am}" != "${bm}" ] && d="${d} maxdepth ${am}->${bm}"
+  [ "${as}" != "${bs}" ] && d="${d} skipped ${as}->${bs}"
+  if [ -n "${d}" ]; then tree="CHANGED"; tree_why="${d# }"; return; fi
+  [ "${A_opb[$b]}" != "${B_opb[$b]}" ] && q="${q} .opb"
+  [ "${A_pbp[$b]}" != "${B_pbp[$b]}" ] && q="${q} .pbp"
+  [ "${A_lines[$b]}" != "${B_lines[$b]}" ] && q="${q} lines"
+  [ "${A_rup[$b]}" != "${B_rup[$b]}" ] && q="${q} rup"
+  [ "${A_pol[$b]}" != "${B_pol[$b]}" ] && q="${q} pol"
+  [ "${A_levels[$b]}" != "${B_levels[$b]}" ] && q="${q} levels"
+  if [ -n "${q}" ]; then
+    tree="proof-only"; tree_why="${q# } moved at an identical tree"; return
+  fi
+  tree="same"; tree_why="no column moved"
+}
+
 if [ "${COMPARE}" -eq 1 ]; then
   echo "${LABEL_B} against ${LABEL_A}, one column at a time. A timing delta no larger than"
   echo "the spread measured above is NOISE and is labelled so; it is not a small win."
   echo
-  printf '%-22s %12s %12s %14s %14s %12s\n' "model" ".opb" ".pbp" "solve" "verify" "tree(nodes)"
-  printf '%-22s %12s %12s %14s %14s %12s\n' "----------------------" "------------" "------------" \
-    "--------------" "--------------" "------------"
+  printf '%-22s %12s %12s %14s %14s %11s %9s %12s\n' \
+    "model" ".opb" ".pbp" "solve" "verify" "learn" "fb%" "verdict"
+  printf '%-22s %12s %12s %14s %14s %11s %9s %12s\n' "----------------------" "------------" "------------" \
+    "--------------" "--------------" "-----------" "---------" "------------"
   for base in "${NAMES[@]}"; do
     [ -z "${B_opb[$base]:-}" ] && continue
     d_opb="$(pct $(( ${B_opb[$base]} - ${A_opb[$base]} )) "${A_opb[$base]}")"
@@ -978,38 +1199,91 @@ if [ "${COMPARE}" -eq 1 ]; then
     a_s="${d_solve#-}"; a_v="${d_verify#-}"
     [ "${a_s}" -le "${lim_s}" ] 2>/dev/null && noise_s=" noise"
     [ "${a_v}" -le "${lim_v}" ] 2>/dev/null && noise_v=" noise"
-    # M1-T36. The verdict now comes from the node count, which is the tree, and the
-    # level-marker count is consulted only to separate the two cases the proxy alone
-    # used to fuse:
-    #
-    #   CHANGED     the node counts differ. The tree moved; nothing else here is a
-    #               like-for-like comparison on this model.
-    #   proof-only  the same nodes, different markers. The SAME TREE, written down
-    #               differently. This is the case D-0026's claim is about, and the old
-    #               tree(lvl) column reported it as CHANGED -- so a benchmark holding
-    #               only the proxy could not test the claim it was there to test.
-    #   same        both agree.
-    #   n/a         at least one configuration could not report its tree (an older
-    #               binary without --stats). NOT "same" -- unknown.
-    tree="same"
-    if [ "${A_nodes[$base]:--}" = "-" ] || [ "${B_nodes[$base]:--}" = "-" ]; then
-      tree="n/a"
-    elif [ "${B_nodes[$base]}" != "${A_nodes[$base]}" ]; then
-      tree="CHANGED"
-    elif [ "${B_levels[$base]}" != "${A_levels[$base]}" ]; then
-      tree="proof-only"
-    fi
-    printf '%-22s %11s%% %11s%% %8s%%%-6s %8s%%%-6s %12s\n' \
-      "${base}" "${d_opb}" "${d_pbp}" "${d_solve}" "${noise_s}" "${d_verify}" "${noise_v}" "${tree}"
+    tree=""; tree_why=""
+    tree_verdict "${base}"
+    VERDICT[$base]="${tree}"
+    WHY[$base]="${tree_why}"
+    printf '%-22s %11s%% %11s%% %8s%%%-6s %8s%%%-6s %11s %9s %12s\n' \
+      "${base}" "${d_opb}" "${d_pbp}" "${d_solve}" "${noise_s}" "${d_verify}" "${noise_v}" \
+      "${A_lrn[$base]:--}->${B_lrn[$base]:--}" \
+      "$(rate "${A_pbf[$base]:--}" "${A_pbt[$base]:--}")->$(rate "${B_pbf[$base]:--}" "${B_pbt[$base]:--}")" \
+      "${tree}"
   done
   echo
-  echo "tree(nodes) compares the SOLVER'S OWN node count (M1-T36), not the level markers"
-  echo "in the proof. CHANGED means the two configurations did not explore the same tree,"
-  echo "and NONE of the other four columns is a like-for-like comparison on that model."
-  echo "proof-only means the same tree written down differently -- the level-marker count"
-  echo "moved and the node count did not -- which is the case worth comparing the other"
-  echo "four columns on, and the case the old tree(lvl) column reported as CHANGED."
-  echo "n/a means a configuration could not report its tree. It does not mean 'same'."
+  echo "verdict compares the SOLVER'S OWN counters (M1-T36, widened by M2-L8), not the"
+  echo "level markers in the proof. CHANGED means a tree counter moved -- nodes, decisions,"
+  echo "maxdepth or skipped -- so the two configurations did not explore the same tree, and"
+  echo "NONE of the other columns is a like-for-like comparison on that model. proof-only"
+  echo "means every tree counter is identical and a proof artefact moved: the same search,"
+  echo "written down differently. That is the case worth comparing the other columns on,"
+  echo "and the case a learning change produces most often. n/a means a configuration could"
+  echo "not report its tree; it does not mean 'same'. Why each verdict was reached:"
+  for base in "${NAMES[@]}"; do
+    [ -z "${VERDICT[$base]:-}" ] && continue
+    printf '  %-22s %-11s %s\n' "${base}" "${VERDICT[$base]}" "${WHY[$base]}"
+  done
+fi
+
+# ------------------------------------------------------------------ the control
+#
+# M2-L8. The report above is only worth reading if it can tell a proof-only change
+# from a changed search tree, and that distinction is not self-evidently working: it
+# was WRONG here until M1-T36 added the node count, and M1-T36's own rule went stale
+# again the moment backjumping landed (see the verdict comment above). A benchmark
+# whose central classification is untested is a benchmark that will report a moved
+# tree as a proof improvement, which is precisely the mistake a learning change makes
+# easy to commit.
+#
+# So `-c` measures two scenes and requires BOTH verdicts, in both directions:
+#
+#   ctl_proof  the same refutation with an extra root-propagated spectator. Every
+#              proof column moves, no tree counter does  ->  proof-only
+#   ctl_tree   the same refutation with an extra BRANCHED spectator. Tree counters
+#              move -- and so do the proof columns, by a similar amount, which is what
+#              makes the scene a real test rather than a restatement  ->  CHANGED
+#
+# One direction alone proves nothing: a classifier hard-wired to print `proof-only`
+# passes ctl_proof, and one hard-wired to print `CHANGED` passes ctl_tree. Both are
+# required, and the run below refuses to pass unless both expected verdicts were
+# actually produced, on actual measurements, from proofs the checker accepted.
+if [ "${CONTROL}" -eq 1 ]; then
+  echo "THE CONTROL (M2-L8): can this report tell a proof-only change from a changed tree?"
+  echo
+  seen_proof_only=0
+  seen_changed=0
+  for base in "${!CONTROL_EXPECT[@]}"; do
+    want="${CONTROL_EXPECT[$base]}"
+    got="${VERDICT[$base]:-<the scene did not produce a comparable row>}"
+    if [ "${got}" = "${want}" ]; then
+      printf '  ok    %-14s classified %-11s -- %s
+' "${base}" "${got}" "${WHY[$base]}"
+      case "${got}" in
+        proof-only) seen_proof_only=1 ;;
+        CHANGED) seen_changed=1 ;;
+      esac
+    else
+      printf '  FAIL  %-14s expected %s, got %s
+' "${base}" "${want}" "${got}" >&2
+      [ -n "${WHY[$base]:-}" ] && printf '        the report said: %s
+' "${WHY[$base]}" >&2
+      CONTROL_FAIL=1
+    fi
+  done
+  echo
+  if [ "${CONTROL_FAIL}" -eq 0 ] && [ "${seen_proof_only}" -eq 1 ] && [ "${seen_changed}" -eq 1 ]; then
+    echo "  The control PASSES in BOTH directions: a proof-only change was not reported as"
+    echo "  CHANGED, and a changed tree was not reported as proof-only. Both scenes moved"
+    echo "  their proof columns, so neither verdict came from an absence of movement, and"
+    echo "  both proofs were accepted by ${VERIPB##*/} before any of it was read."
+  else
+    CONTROL_FAIL=1
+    echo "  The control FAILS. This report cannot be trusted to separate a proof-only" >&2
+    echo "  change from a changed search tree, which is the one distinction a learning" >&2
+    echo "  benchmark rests on. Do not quote a row from it until this passes." >&2
+    [ "${seen_proof_only}" -eq 1 ] || echo "  No scene was classified proof-only at all." >&2
+    [ "${seen_changed}" -eq 1 ] || echo "  No scene was classified CHANGED at all." >&2
+  fi
+  echo
 fi
 
 # ------------------------------------------------------------------ footer
@@ -1087,4 +1361,5 @@ if [ "${failed}" -gt 0 ]; then
   exit 1
 fi
 [ "${SELFCHECK_OPB_PATH_DEP}" -eq 1 ] && exit 1
+[ "${CONTROL_FAIL}" -eq 1 ] && exit 1
 exit 0

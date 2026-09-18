@@ -1,0 +1,9 @@
+% M2-L8 control, scene 2 of 2: THE CHANGED BASE.
+%
+% The same refutation as scene 1 -- 7 nodes, 3 decisions, maxdepth 3, 0 skipped. Its
+% variant genuinely moves the search tree; see bench/control/variant/ctl_tree.fzn.
+var 0..3: x :: output_var;
+var 0..3: y :: output_var;
+constraint int_ne(x, y);
+constraint int_eq(x, y);
+solve satisfy;
