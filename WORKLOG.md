@@ -25,7 +25,6 @@ worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 uni
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M2-L5 | NEW `lib/core/reduce.ml`, `lib/core/justify.ml`, `test/unit/test_justify.ml`, `test/unit/dune` | agent-reduce | 2026-09-18 |
 | M2-L10 | `test/models/**`, `test/expected/**`, `test/unit/test_learn.ml` | agent-cover | 2026-09-18 |
 
 _(M2-L3 released 2026-09-18 by agent-learn3 — see `## Completed` and `## M2-L3 handoff`.)_
@@ -206,6 +205,7 @@ work. The owning session picks it up.
 | M2-L1 | agent-learned | 2026-09-18 | `Learned.t` (PB inequality over `Lit.t`, clause = degree-1 case), its runtime instance as a **`Linear` instance** registered through the new `Engine.add`, and its proof-side introduction/deletion through the new `Writer.with_level`. D-0044's central claim **converted**: measured green on all 27 scenes. D-0045's prediction **measured before fixing**, in both formats. 1766 unit checks, 34/34, determinism clean. |
 
 | M2-L3 | agent-learn3 | 2026-09-18 | 1UIP clause learning over order literals, proof-only (**D-0044 fork (ii)**), with conflict-directed backjumping over the **decision closure** and its `rup` derivation at level 0. **I-S4's cross-level debt is discharged** and the check is wider than the invariant's wording. Backjump measured: 31 -> 9 nodes on `backjump_unsat.fzn`. **M1-T66 stays OPEN**: with `Search.bridges` disabled, 35/35 models still pass and no checker rejects — a learned clause citing across levels did NOT make the bridge load-bearing. 1833 unit checks, 267 matrix, 44 mutation, 35/35 models, determinism 35/35 byte-identical |
+| M2-L5 | agent-reduce | 2026-09-18 | Reduction as a named, swappable component: `lib/core/reduce.ml` with `division` and `roundToOne`, each carrying its own postcondition, collected in `reductions`. No constructor added to `explanation.ml` and no edit to `justify.ml` — D-0044's table held. Tests (a) (b) (c) in `test_justify.ml`; (c) runs six lanes under BOTH checkers |
 
 ## Handoff notes
 
@@ -1628,3 +1628,49 @@ matching less.
 Note what this says about the agent's report: it listed `check_fmt`, determinism and the
 suites, and **did not run the width lint**. `make` does not work in a worktree, so the gate
 is run piecewise there and a piece can be missed. Worth asking for explicitly next time.
+
+## M2-L5 handoff, 2026-09-18 (agent-reduce)
+
+`lib/core/reduce.ml` is new and is the whole of M2-L5. Three things the next session
+should know.
+
+**The signature, and what M2-L6 must not do to it.** A reduction is
+`{ name; reduce : view -> outcome option; postcondition : view -> outcome -> bool }`;
+`view` is `{ row : Learned.t; pivot : Lit.t; falsified : Lit.t -> bool }` and `outcome`
+is `{ reduced : Learned.t; weakened; divisor; derive : Explanation.t -> Explanation.t }`.
+`derive` is the load-bearing field: it maps the explanation that derives the ORIGINAL row
+to the one that derives the REDUCED row, so **M2-L7's saturation plugs in as another
+value in `reductions` with `weakened = []`, `divisor = 1` and
+`derive = fun e -> Saturate e`, and `analysis.ml` never learns which rule it is holding.**
+Do not let M2-L6 pattern-match on `weakened`/`divisor` to rebuild the proof step — those
+fields are there to be *inspected* by tests, not to be the emission path. Call `derive`.
+
+**`falsified` is a predicate and this module reads no store**, the same line
+`analysis.ml`'s `view` draws, for the same I-X6 reason. M2-L6 owns freezing it at the
+moment of the propagation; `reduce.ml` cannot un-freeze it.
+
+**Nothing in `justify.ml` needed to change.** D-0044's table is right: both rules are
+`Weaken lits` then `Combine (summands, divisor)`, which `Justify.emit` and
+`Justify.emit_concluding` already render. `explanation.ml` was not touched and no
+constructor was wanted.
+
+### Two measurements worth keeping
+
+**`Justify.emit_concluding` still has no live caller, and M2-L5 did not give it one.**
+Wiring `search.ml` to it would move every proof artefact, which is the orchestrator's
+call. But M2-L5's test (c) is now a second independent demonstration that the `ia` is
+what makes a *silently weakened derivation* visible: a reduction truncated to a bare
+division of an unweakened row derives `v+u+w >= 2` where roundToOne derives `v+u >= 2`,
+and it is **ACCEPTED bare / REJECTED stated**, under both checkers. The case for wiring
+it is now two rows strong, not one.
+
+**`test_justify.ml` is not green under `BAGUETTE_PROOF_FORMAT=2.0`, and was not before
+this row either.** `writer.ml`'s header claims "the whole suite is green" under 2.0.
+Measured 2026-09-18: M2-L0's `conclusion_break_opb` (line ~854) hardcodes
+`Encoding.write_opb ~labels:true`, so its `.opb` carries 3.0 labels that veripb 2.2.2
+rejects at `:2:1: Expected number` — four of its lanes fail for a reason that has nothing
+to do with what they test, and its "REJECTED" lane passes vacuously because *everything*
+is rejected. M2-L5's own (c) avoids this by using `Encoding.write_opb_for`, which ties
+the `.opb`'s labelling to the writer's format, and by running each checker at the format
+it can read. **The one-line fix for M2-L0's test is the same call**; it was left alone
+because it is M2-L0's row, not this one. Raised here rather than fixed silently.
