@@ -994,8 +994,8 @@ let test_conclusion_rejects_a_weakened_pol () =
          travels on Reason.justified and reaches the page as an `ia`"
         (not (run ~name:"weak_stated" ~stated:true ~truncated:true));
       (* And it is the implication check that rejects it, not a parse error or a dangling
-         label. Both checkers are named: they share no substring (M1-T46) and matching on
-         one alone would pass vacuously against the other. *)
+         label. Asserted at full strength: an exit status cannot tell a JUDGEMENT from a
+         refusal to parse, which is how four lanes came to be green (M2-T14). *)
       let contains needle hay =
         let n = String.length needle and h = String.length hay in
         let rec go i = i + n <= h && (String.sub hay i n = needle || go (i + 1)) in
@@ -1007,11 +1007,8 @@ let test_conclusion_rejects_a_weakened_pol () =
         close_in ic;
         s
       in
-      check
-        "D-0043 (a): the rejection is the implication check, in whichever checker's words"
-        (contains "not syntactically implied" s
-        || contains "Implication check failed" s
-        || contains "Hint: (" s);
+      check "D-0043 (a): the rejection is the implication check, in the checker's words"
+        (contains "not syntactically implied" s);
       Sys.readdir dir
       |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
       try Sys.rmdir dir with _ -> ())

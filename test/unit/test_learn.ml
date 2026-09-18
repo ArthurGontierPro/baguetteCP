@@ -272,7 +272,7 @@ let rejection_recognised out =
   List.exists (fun w -> contains ~needle:w out) rejection_wordings
 
 (* Assert that a run's proof is REJECTED, and that the rejection is one this project
-   recognises under whichever checker is on this machine. *)
+   recognises, in the checker's own words. *)
 let expect_rejected ~title ~dir ~opb ~pbp =
   match veripb ~dir ~opb ~pbp with
   | None ->

@@ -1622,18 +1622,16 @@ let test_pol_states_its_conclusion () =
          weakened `pol`"
         (run ~name:"weak_ia" ~stated:true ~truncated:true = Some false);
       (* 4. And the rejection is the one we think it is, not a parse error or a
-            dangling label. Both checkers' wordings are named because they share no
-            substring and this file must not match on either alone (M1-T46). *)
+            dangling label. Asserted at full strength: an exit status cannot tell a
+            JUDGEMENT from a refusal to parse (M2-T14). *)
       let contains needle hay =
         let n = String.length needle and h = String.length hay in
         let rec go i = i + n <= h && (String.sub hay i n = needle || go (i + 1)) in
         n = 0 || go 0
       in
       let s = read_whole log in
-      check "M1-T51: the rejection is the implication check, in whichever checker's words"
-        (contains "not syntactically implied" s
-        || contains "Implication check failed" s
-        || contains "Hint: (" s);
+      check "M1-T51: the rejection is the implication check, in the checker's words"
+        (contains "not syntactically implied" s);
       Sys.readdir dir
       |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
       try Sys.rmdir dir with _ -> ())
@@ -1651,7 +1649,7 @@ let test_pol_states_its_conclusion () =
    solver has whose lifetime is not a search level's, so it is the first caller that ever
    cares.
 
-   The scenario, in both proof formats:
+   The scenario:
 
      start_proof; set_level 1          -- we are inside a branch
      <mint a constraint>               -- at level 1 (broken) or inside
