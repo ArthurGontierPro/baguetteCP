@@ -18,7 +18,6 @@ worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 uni
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M2-L1 | NEW `lib/core/learned.ml`, `lib/proof/writer.ml`, `lib/core/engine.ml`, `lib/core/justify.ml`, NEW `test/unit/test_learned.ml`, `test/unit/test_proof.ml`, `test/unit/dune` | agent-learned | 2026-09-18 |
 | M1-T66 | `lib/core/search.ml`, `test/unit/test_matrix.ml`, `test/unit/test_core.ml` | agent-bridge | 2026-09-18 |
 
 Two rounds are recorded in `## Completed` below. The rows that stood here on
@@ -193,6 +192,7 @@ work. The owning session picks it up.
 | M2-T13 | agent-flaky | 2026-09-18 | `test_random.ml`'s five `!x > 0` coverage checks (deep decisions, root conflict, div>1, div-remainder, ne-moved-bound) made seed-independent: bounded top-up (cap 4000 extra draws, same seeded stream) keeps generating until every shape is reached, and failure of the check now prints `COVERAGE-GAP (... NOT a soundness failure)` through a new `coverage_check`, distinct from `check`. 130-seed sweep (1-130), 0 failures; top-up actually engaged on seeds 21/53/68/89 confirming it isn't a no-op. `make check`-equivalent gate green: fmt-check, width lint, determinism (34/34), 1625 unit checks, 252 matrix checks, 44 mutation checks. Commits `fb0ebf9`, `30b1d73` on `wave10-flaky` |
 | M2-L0 | agent-concl | 2026-09-18 | **D-0043 implemented.** `justified` gains `concludes : fact option` via a **required** `~concludes` — the recommendation taken, for `reason.ml`'s own `none` reason: a defaulted `?concludes` would be `set_lo` silently meaning `no_facts` again. 13 lib + 46 test sites write it out. `Writer.pol_concluding`/`implied` have their **first caller in `lib/`** (`Justify.emit_concluding`), closing M1-T51's adoption gap: a truncated `pol` is ACCEPTED bare and REJECTED once the conclusion is stated, matched against both checkers' wordings. **Finding**: the naive "exactly the new bound" check reddens three *real* scenes — `Domain.set_lo` settles over holes (I-D2), so the bound a propagator can **prove** and the bound the trail **lands on** are two different honest numbers; `conclusion_holds` admits exactly that window, value by value. +34 checks. Merged as `a229509` |
 | M2-L2 | agent-cut | 2026-09-18 | **The cut, as data** — learns nothing, backjumps nowhere, so it was oracle-tested before anything depends on it. The criterion is a record carrying its **own postcondition**; three ship (`one_uip`, `conflict_side`, `decision_cut`), and `conflict_side`'s two-conflict-level cut is **accepted**, with an explicit check that `one_uip`'s postcondition is false of it — the line that would have reddened had 1UIP been written as an invariant of the cut, which is exactly what D-0044's amendment warned about and what M2-L6 needs. Holes load-bearing and measured: strip the folded `int_ne` facts and the cut is brute-force SAT. +64 checks. Merged as `a229509` |
+| M2-L1 | agent-learned | 2026-09-18 | `Learned.t` (PB inequality over `Lit.t`, clause = degree-1 case), its runtime instance as a **`Linear` instance** registered through the new `Engine.add`, and its proof-side introduction/deletion through the new `Writer.with_level`. D-0044's central claim **converted**: measured green on all 27 scenes. D-0045's prediction **measured before fixing**, in both formats. 1766 unit checks, 34/34, determinism clean. |
 
 ## Handoff notes
 
@@ -1305,3 +1305,61 @@ and that collides head-on with M2-L3's rule to derive the clause while its suppo
 still live. M2-L1 is where that is cheapest to fix, and the fix must hold under **both**
 proof formats. **M2-L5** is unblocked now that M2-L0 is done. **M2-L3** wants `lib/core`
 and should queue behind M2-L1, not beside it.
+
+## M2-L1 handoff, 2026-09-18 (agent-learned)
+
+**The collision was measured before it was fixed**, which is what D-0045's addendum asked
+for. One scenario, four runs (broken/fixed x 3.0/2.0), through the resolved checker, in
+`test/unit/test_proof.ml`'s `test_learned_survives_the_backjump`:
+
+| | minted at the conflict level | minted inside `Writer.with_level w 0` |
+|---|---|---|
+| 3.0 (Rust 3.0.2) | **REJECTED** -- "Trying to access constraint with ID 3 that has already been deleted" | accepted |
+| 2.0 (Python 2.2.2) | **REJECTED** -- "Rule 6 is trying to access constraint (constraintId 3), that was marked as safe to delete" | accepted |
+
+So the prediction holds exactly as written. The entry point added is **`Writer.with_level
+t l f`**, not the `fresh ~level` the record guessed at: under 2.0 `t.tags` is not
+maintained and nothing we write to our own table reaches the checker, so the level has to
+move *in the proof*. The bracket emits `# 0` / `# 1` under 2.0 and a `% level 0` comment
+under 3.0, costs two marker lines per learned constraint, and restores the level even if
+the body raises. `Justify.with_level` is the wrapper `lib/core` should call -- the memo and
+the M2-T9 claim index both stamp `Writer.current_level`, so they follow for free.
+
+### For M2-L3, the two things worth knowing before you start
+
+1. **D-0044's central claim is converted, and the bet paid off.** A degree-1
+   unit-coefficient `Learned.t` over order literals propagates *exactly* as `Bool_clause`
+   does on all 27 scenes of a three-Boolean clause -- same conflicts, same domains, with a
+   negative control proving the comparison separates a different clause. A learned row is
+   instantiated as a **`Linear` instance**; **no module was added to `lib/core/prop/`**, so
+   `test_trace.ml`'s I-X10 closure gate correctly never fired. That silence is the bet
+   paying off, not a missed check, and `test_learned.ml`'s section (f) records it as a
+   measurement.
+
+2. **The boundary, which the roadmap row did not anticipate.** D-0044 is right without
+   qualification *in the proof* -- the order literals are real 0-1 variables of the .opb.
+   But in the **solver's store** they are not variables at all, so a learned constraint has
+   a runtime instance only where its PB row reads back as a linear row over the integer
+   variables. `Learned.to_linear_row` is exactly that predicate. It succeeds on a clause
+   over `var bool`s (one-rung ladder), on a model row's own expansion (uniform coefficient
+   over a whole ladder), and on out-of-range thresholds; it returns **`None` on a threshold
+   strictly inside an integer variable's ladder** -- `[x >= 3]` for `x` declared 0..4 is not
+   any linear function of x. **A 1UIP cut over integer variables produces exactly those
+   literals**, so M2-L3 must expect `None` from its own output and decide what to do: either
+   restrict the cut to the representable shapes, or accept that such a learned constraint is
+   proof-only until something can propagate it. This is a finding, not a defect in the type.
+
+### Other notes
+
+- `Engine.add` registers an instance after `create`. It requires `inst.id = Engine.next_id
+  engine` and says why: `Engine.propagate` indexes its instance array **by id**.
+- I-X2 for a learned constraint is **not** discharged by a backjump any more -- that is the
+  whole point -- so `Learned.retire` must be called. M2-L4's retention policy owns this;
+  until it exists, whoever called `introduce` does. The audit sees a missing delete; it
+  cannot see a *double* delete (the second `forget` is a no-op), so `test_learned.ml` counts
+  the `del`s in the proof text instead and says so.
+- `Learned` builds its `Linear.t` record directly rather than through `Linear.make`, because
+  `make` freezes the *current* domains as declared and a learned constraint is born
+  mid-search. The declared bounds come from `Encoding.domain`. Confined to `to_linear`.
+- Numbers: **1766 unit checks** (baseline 1723), **34/34 models**, determinism clean, fmt
+  clean, width lint clean, peak RSS **21 MB** (`test_proof`, the heaviest binary).
