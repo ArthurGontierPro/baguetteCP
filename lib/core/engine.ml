@@ -234,6 +234,17 @@ let add ?(trigger = default_trigger) (t : t) (inst : Propagator.instance) =
     t.triggers <- grown);
   t.triggers.(inst.Propagator.id) <- trigger inst
 
+(* The variables an instance watches, or [None] if this engine has no such instance.
+
+   The shape [Analysis.analyse] wants (M2-L2), and it is here rather than reconstructed
+   by the caller because [t.instances] is indexed by id and only [add] keeps it so. A
+   caller that built this from its own list of instances would stop agreeing with the
+   engine the moment a learned constraint was registered. *)
+let vars_of t id =
+  if id >= 0 && id < Array.length t.instances then
+    Some t.instances.(id).Propagator.inst_vars
+  else None
+
 let trigger_of t id =
   if id >= 0 && id < Array.length t.triggers then t.triggers.(id) else wake_on_any
 
