@@ -160,6 +160,12 @@ let make (raw : (int * Lit.t) list) (degree : int) : t =
 (* D-0044's degenerate case, written as what it is: every coefficient 1, degree 1. *)
 let of_clause (lits : Lit.t list) : t = make (List.map (fun l -> (1, l)) lits) 1
 let terms t = t.terms
+
+(* The row as [(coefficient, literal)] pairs -- the shape [Propagator.pb_row] has and the
+   shape lib/core/prop/pb.ml instantiates from. M2-L13: this is what replaced
+   [to_linear_row] on the propagation path. Every coefficient is >= 1, because [make]
+   established that. *)
+let raw_terms t = List.map (fun tm -> (tm.coeff, tm.lit)) t.terms
 let degree t = t.degree
 let lits t = List.map (fun tm -> tm.lit) t.terms
 let is_empty t = t.terms = []
@@ -387,38 +393,44 @@ let to_linear_row t ~decl =
       in
       Option.map (fun (terms, const) -> (terms, const - t.degree)) (fold [] const0 groups)
 
-(* The [Linear.t] a learned row propagates as, or [None] when it has no linear form.
+(* Pack the row for the engine, as a PB CONSTRAINT over the order literals it already
+   names -- lib/core/prop/pb.ml, which is D-0054's solving-side object and reads LIVE
+   domains. [None] when a literal has no bound to move ([Lit.Eq]) or names a variable
+   this store or this encoding does not know; [Pb.atom_of] holds both refusals and the
+   reason for each.
 
-   [~row_id] is the proof id [introduce] returned: every [Combine] the instance builds is
-   [Explanation.Model_row row_id], i.e. "cite that constraint". The constructor's name
-   says "model row" for historical reasons (D-0015); what it means is a constraint id
-   that is already on the page, and a learned constraint's id is exactly that -- which is
-   why no new [Explanation] constructor is spent here, and D-0044's central claim would
-   be in trouble if one were.
+   M2-L13 REPLACED [to_linear] AND [instance] WITH THIS, and the replacement is the whole
+   of the row. Those two built a [Linear.t] through [to_linear_row], i.e. they asked
+   whether the PB row could be read back as an integer linear row over the DECLARED box,
+   and propagated only if it could. D-0050 called that "the right predicate used as the
+   wrong gate" and D-0054 named why: an algebraic identity over the declared box is a
+   PROOF-side test, and whether a row is worth propagating is a SOLVING-side question.
+   Neither function had a caller in lib/ -- the bet of "no new propagator family" was
+   never actually collected -- so what M2-L13 removed was a designated path, not a live
+   one.
 
-   The declared bounds come from [decl], not from the store: see the module header. *)
-let to_linear ~row_id store ~decl t : Linear.t option =
-  match to_linear_row t ~decl with
-  | None -> None
-  | Some (rterms, rhs) ->
-      let rec build acc = function
-        | [] -> Some { Linear.terms = List.rev acc; rhs; row_id }
-        | (a, name) :: rest -> (
-            match (Store.var_named store name, decl name) with
-            | Some x, Some (lo, hi) ->
-                build ({ Linear.coeff = a; x; decl_lo = lo; decl_hi = hi } :: acc) rest
-            | _ -> None)
-      in
-      build [] rterms
+   [to_linear_row] itself stays, above, and is now only what bin/main.ml has always
+   called it: MEASURED ONLY. [Search.n_pb_converts] and [Learn.converts] read it, nothing
+   propagates through it, and test/unit/test_learned.ml keeps the D-0044 boundary it pins
+   by building the [Linear.t] itself.
 
-(* Pack it for the engine. [~id] must be [Engine.next_id] of the engine it is about to be
-   added to -- [Engine.add] checks that and says why. *)
-let instance ~id ~row_id store ~decl t : Propagator.instance option =
+   The two readings are NOT ordered, which is worth knowing before anyone reverses this:
+   on a row that is a model row's own expansion the linear reading is STRICTLY STRONGER,
+   because the slack rule is blind to the ladder rows that tie one rung to the next
+   (lib/core/prop/pb.ml's "Consistency level" section, and lib/core/pb_analysis.ml's
+   [Postcondition_failed] section for the same arithmetic on the analysis side). On a
+   1UIP-shaped row with a threshold strictly inside a ladder the linear reading does not
+   exist at all. This function is the one that always exists.
+
+   [~id] must be [Engine.next_id] of the engine it is about to be added to -- [Engine.add]
+   checks that and says why. *)
+let pb_instance ~id store ~decl t : Propagator.instance option =
   Option.map
-    (fun lin -> Propagator.pack ~id (module Linear) lin)
-    (to_linear ~row_id store ~decl t)
+    (fun p ->
+      Propagator.pack ~id (module Pb.Learned_pb : Propagator.S with type t = Pb.t) p)
+    (Pb.of_terms store ~decl ~degree:t.degree (raw_terms t))
 
-(* The declared-domain lookup an [Encoding] provides, in the shape [to_linear] wants.
+(* The declared-domain lookup an [Encoding] provides, in the shape [pb_instance] wants.
    Kept here rather than in [Encoding] because it is this module's question: [Encoding]
    already answers it, it just answers it by raising. *)
 let decl_of_encoding enc name =
