@@ -472,6 +472,8 @@ let report_stats (st : Search.stats) (outcome : Search.outcome) =
     "1UIP clauses derived and put on the page, level 0 (M2-L3, D-0044 fork ii)";
   Printf.eprintf "stats: %-10s %10d cls    %s\n" "convertible" st.Search.n_converts
     "...of which Learned.to_linear_row would accept, i.e. could propagate. MEASURED ONLY";
+  Printf.eprintf "stats: %-10s %10d lits   %s\n" "minimised" st.Search.n_min_dropped
+    "literals semantic minimisation removed from nogoods (M2-L3); 0 means it never fired";
   Printf.eprintf "stats: %-10s %10d lines  %s\n" "i-s4-cross" st.Search.i_s4_crossings
     "hole lines above level 0 a level-0 learned clause rests on -- data, not a fault";
   if Search.stats_i_s4_broken st <> [] then

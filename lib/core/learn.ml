@@ -270,37 +270,71 @@ let introduce ctx t : Writer.cid =
 
 (* ------------------------------------------------------------------ I-S4 *)
 
-(* One hole line the cut's derivation rests on: the hole value, the id of the line that
-   states it, and that line's level. *)
-type support = { s_hole : int; s_var : string; s_cid : Writer.cid; s_level : int }
+(* One line on the page that the cut's derivation rests on: what it states, the id of the
+   line, and that line's level. [s_hole] is the hole value for a hole line and [None] for
+   a bound line. *)
+type support = { s_hole : int option; s_var : string; s_cid : Writer.cid; s_level : int }
 
-(* Every hole line the 1UIP cut folded in. [Analysis.folds] records one entry per fold it
-   performed, and [Trace] knows which line it wrote for each hole; a hole no line of ours
-   states is not reported, because that is the case I-S4 has nothing to say about (it
-   rests on the model's own rows -- I-X10, and [Trace.settle_facts] makes the same
-   distinction for the same reason). *)
+let support_of_written (w : Trace.written) ~var =
+  {
+    s_hole = w.Trace.w_hole;
+    s_var = var;
+    s_cid = w.Trace.w_cid;
+    s_level = w.Trace.w_level;
+  }
+
+(* Every line the 1UIP cut's derivation rests on.
+
+   TWO sources, and taking only the second would be taking I-S4's phrasing for its
+   substance:
+
+     - the line behind every node's SUPPORTING ENTRY. The learned clause is a [rup]: the
+       checker re-derives it by unit propagation over the database as it stands, and what
+       it propagates along are exactly the trace lines of the entries the walk resolved
+       (D-0039, D-0021). Retire one and the [rup] is checked against a database that no
+       longer contains what makes it true.
+     - the HOLE line behind every fold ([Analysis.folds]). This is the set I-S4 is
+       literally about, and it is a subset of what the derivation needs rather than the
+       whole of it.
+
+   A line this module cannot name is not reported, because that is the case I-S4 has
+   nothing to say about: the step rests on the model's own rows (I-X10), which no `w` can
+   retire. [Trace.settle_facts] makes the same distinction for the same reason.
+
+   Deduplicated by id, in first-seen order -- one entry can support several nodes. *)
 let supports store trace (t : t) : support list =
-  List.filter_map
+  let acc = ref [] in
+  let add s =
+    if not (List.exists (fun x -> x.s_cid = s.s_cid) !acc) then acc := !acc @ [ s ]
+  in
+  List.iter
+    (fun (n : Analysis.node) ->
+      if n.Analysis.support <> Store.no_support then
+        let e = Store.trail_entry store n.Analysis.support in
+        List.iter
+          (fun w -> add (support_of_written w ~var:(Store.name store e.Store.var)))
+          (Trace.lines_at trace e))
+    (Analysis.nodes t.l_cut);
+  List.iter
     (fun (f : Analysis.fold) ->
       match Store.var_named store f.Analysis.fold_var with
-      | None -> None
+      | None -> ()
       | Some v -> (
           match
             Store.remover store ~before:f.Analysis.fold_into ~var:v f.Analysis.fold_value
           with
-          | None -> None
+          | None -> ()
           | Some e -> (
               match Trace.hole_line_of trace e f.Analysis.fold_value with
-              | None -> None
-              | Some w ->
-                  Some
-                    {
-                      s_hole = f.Analysis.fold_value;
-                      s_var = f.Analysis.fold_var;
-                      s_cid = w.Trace.w_cid;
-                      s_level = w.Trace.w_level;
-                    })))
-    (Analysis.folds t.l_cut)
+              | None -> ()
+              | Some w -> add (support_of_written w ~var:f.Analysis.fold_var))))
+    (Analysis.folds t.l_cut);
+  !acc
+
+let describe s =
+  match s.s_hole with
+  | Some h -> Printf.sprintf "the hole %s <> %d" s.s_var h
+  | None -> Printf.sprintf "the bound line for %s" s.s_var
 
 (* The LIVE-AT-DERIVATION half of I-S4, as messages -- empty when it holds. See the
    header for why this half applies to a [rup] and the "outlives" half does not.
@@ -317,10 +351,10 @@ let support_check (w : Writer.t) (ss : support list) : string list =
         else
           Some
             (Printf.sprintf
-               "I-S4: the learned clause's derivation folds the hole %s <> %d, whose \
-                line @c%d (level %d) is ALREADY RETIRED. The derivation must precede the \
-                `w` that retires its level (D-0018 point 4)."
-               s.s_var s.s_hole s.s_cid s.s_level))
+               "I-S4: the learned clause's derivation rests on %s, whose line @c%d \
+                (level %d) is ALREADY RETIRED. The derivation must precede the `w` that \
+                retires its level (D-0018 point 4)."
+               (describe s) s.s_cid s.s_level))
       ss
 
 (* The level crossings, as data: a hole line above level 0 that the level-0 learned

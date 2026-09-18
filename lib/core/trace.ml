@@ -433,6 +433,13 @@ let position_of t (e : Store.entry) =
    the two honest cases: a remover whose change was a *bound* move that happened to
    exclude [v] (it has a line, but that line claims a bound, not `<> v`, so it is not the
    hole's own line), and a hole the encoding stated as constant-true so no line exists. *)
+(* Every line this module wrote for one trail entry -- its bound line, and one per hole
+   it settled over. M2-L3 asks for all of them: the [rup] of a learned clause is checked
+   against the database as it stands, so what its derivation needs LIVE is every line
+   behind every entry the cut resolved, not only the hole lines I-S4 is phrased about. *)
+let lines_at t (e : Store.entry) =
+  match position_of t e with None -> [] | Some i -> t.line_ids.(i)
+
 let hole_line_of t (e : Store.entry) v =
   match position_of t e with
   | None -> None

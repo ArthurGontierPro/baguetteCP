@@ -237,6 +237,10 @@ type stats = {
   mutable i_s4_supports : int; (* hole lines the learned clauses' derivations rest on *)
   mutable i_s4_crossings : int; (* ...of which sit above level 0 -- data, not a fault *)
   mutable i_s4_broken_rev : string list; (* ...of which were already retired: faults *)
+  mutable n_min_dropped : int;
+      (* Literals semantic minimisation removed from a nogood. A reduction that never
+         fires is a reduction whose break lane cannot redden, which is why it is counted
+         rather than assumed to be doing something. *)
 }
 
 let stats_create () =
@@ -253,6 +257,7 @@ let stats_create () =
     i_s4_supports = 0;
     i_s4_crossings = 0;
     i_s4_broken_rev = [];
+    n_min_dropped = 0;
   }
 
 let stats_learned s = List.rev s.learned_rev
@@ -467,6 +472,12 @@ let emit_nogood ctx (ng : nogood) : Writer.cid =
 
 let mentions_level (ng : nogood) lvl = List.exists (fun (_, l) -> l = lvl) ng
 
+(* [Learn.minimise_with], with what it removed recorded. See [stats.n_min_dropped]. *)
+let minimise stats policy (xs : nogood) : nogood =
+  let out = Learn.minimise_with policy xs in
+  stats.n_min_dropped <- stats.n_min_dropped + (List.length xs - List.length out);
+  out
+
 (* Resolve two sibling nogoods on the decision they disagree about, then minimise.
 
    Dropping every pair at [lvl] from the union IS the resolution step: the two clauses
@@ -475,7 +486,7 @@ let mentions_level (ng : nogood) lvl = List.exists (fun (_, l) -> l = lvl) ng
    why the wipe comes after (D-0018 point 4). Deduplicated by literal, then ordered by
    descending level, so the result is a function of the two clauses and not of the order
    they were built in (test (f)). *)
-let combine_nogoods policy (a : nogood) (b : nogood) ~lvl : nogood =
+let combine_nogoods stats policy (a : nogood) (b : nogood) ~lvl : nogood =
   let joined = List.filter (fun (_, l) -> l <> lvl) (a @ b) in
   let deduped =
     List.fold_left
@@ -483,7 +494,7 @@ let combine_nogoods policy (a : nogood) (b : nogood) ~lvl : nogood =
         if List.exists (fun (m, _) -> Lit.equal m l) acc then acc else acc @ [ (l, i) ])
       [] joined
   in
-  Learn.minimise_with policy
+  minimise stats policy
     (List.stable_sort (fun (_, i) (_, j) -> Stdlib.compare j i) deduped)
 
 (* ------------------------------------------------------------------------------ dfs *)
@@ -910,10 +921,9 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
           let all = levelled_nogood decisions ~top:(Store.level store) in
           let ng =
             match keep with
-            | None -> Learn.minimise_with cfg.policy all
+            | None -> minimise stats cfg.policy all
             | Some ls ->
-                Learn.minimise_with cfg.policy
-                  (List.filter (fun (_, l) -> List.mem l ls) all)
+                minimise stats cfg.policy (List.filter (fun (_, l) -> List.mem l ls) all)
           in
           let cid = emit_nogood ctx ng in
           NFail (ng, cid))
@@ -999,7 +1009,7 @@ and branch engine store ctx trace stats cfg order decisions (dec : decision) : n
             "search: each child's nogood names its own decision level before they resolve"
             (fun () -> mentions_level ng1 lvl && mentions_level ng2 lvl);
           ignore cid2;
-          let combined = combine_nogoods cfg.policy ng1 ng2 ~lvl in
+          let combined = combine_nogoods stats cfg.policy ng1 ng2 ~lvl in
           Writer.set_level ctx.Justify.writer (lvl - 1);
           let cid = emit_nogood ctx combined in
           wipe_after_nogood ctx ~lvl ~nogood:cid;
@@ -1046,8 +1056,7 @@ and explore_le store engine ctx trace stats cfg order decisions v k lit =
          and nothing to bridge, and [bridges] drops it for exactly that reason. *)
       bridges ctx trace stats store decisions;
       let ng =
-        Learn.minimise_with cfg.policy
-          (levelled_nogood (Lit.negate lit :: decisions) ~top:lvl)
+        minimise stats cfg.policy (levelled_nogood (Lit.negate lit :: decisions) ~top:lvl)
       in
       let cid = emit_nogood ctx ng in
       NFail (ng, cid)
@@ -1068,9 +1077,7 @@ and explore_ge store engine ctx trace stats cfg order decisions v k lit =
       Trace.emit ctx trace store;
       (* M1-T55: as in [explore_le] -- the ancestors only. *)
       bridges ctx trace stats store decisions;
-      let ng =
-        Learn.minimise_with cfg.policy (levelled_nogood (lit :: decisions) ~top:lvl)
-      in
+      let ng = minimise stats cfg.policy (levelled_nogood (lit :: decisions) ~top:lvl) in
       let cid = emit_nogood ctx ng in
       NFail (ng, cid)
   | Store.Changed | Store.Unchanged ->
