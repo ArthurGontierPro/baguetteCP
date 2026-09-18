@@ -8,6 +8,7 @@
 module Lit = Baguette_proof.Lit
 module Opb = Baguette_proof.Opb
 module Writer = Baguette_proof.Writer
+module Pol = Baguette_proof.Writer.Pol
 module Encoding = Baguette_proof.Encoding
 module Explanation = Baguette_core.Explanation
 module Reason = Baguette_core.Reason
@@ -810,6 +811,147 @@ let test_defining_lit () =
   in
   expect_ok "defining_lit: no exception" r
 
+(* ------------------------------------------------------------------ *)
+(* M2-L0 / D-0043, test (a): the conclusion is what makes the CHECKER  *)
+(*   reject a `pol` that derives less than the pruning claimed.        *)
+(* ------------------------------------------------------------------ *)
+
+(* M1-T51 measured this break at the [Writer] level, with the claim handed to
+   [Writer.pol_concluding] by the test itself (test_proof.ml,
+   [test_pol_states_its_conclusion]). The gap it left is the one D-0043 closes: nothing
+   in [lib/] had a claim to hand it, because [Explanation.Combine] records how a bound was
+   derived and not what. This test is the same break one layer up, with the claim coming
+   from where it now lives -- [Reason.justified]'s [concludes] -- through
+   [Justify.emit_concluding].
+
+   Four lanes, and the first two exist so the last two mean something:
+
+     1. the honest derivation, bare               -- must be ACCEPTED
+     2. the honest derivation, stating its bound  -- must be ACCEPTED
+     3. the derivation truncated to its leftmost operand, so it derives a clause strictly
+        weaker than the bound the pruning claimed, and bare it is ACCEPTED. This lane
+        asserts the ACCEPTANCE. If it ever starts failing, a bare [pol] has grown a
+        conclusion check and this test's premise wants re-measuring, not deleting.
+     4. the same corruption with the conclusion stated -- REJECTED.
+
+   The model is UNSAT and the contradiction is derived under its own origin, so the
+   mutation knob cannot reach it: what differs between lanes is the pruning's line and
+   nothing else. *)
+let conclusion_break_opb dir name =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:0 ~hi:3;
+  Encoding.declare_int e "y" ~lo:0 ~hi:3;
+  let v = Lit.ge "x" 1 and u = Lit.ge "y" 2 in
+  (* c1 + c2, halved, is `x >= 1`; c3 says the opposite, so the model is UNSAT and the
+     proof can conclude. c1 alone is what the truncation leaves behind. *)
+  let c1 = Encoding.add_constraint e (Opb.ge [ (1, v); (1, u) ] 1) in
+  let c2 = Encoding.add_constraint e (Opb.ge [ (1, v); (1, Lit.negate u) ] 1) in
+  let c3 = Encoding.add_constraint e (Opb.ge [ (1, Lit.negate v) ] 1) in
+  let opb = Filename.concat dir (name ^ ".opb") in
+  let oc = open_out opb in
+  Encoding.write_opb ~labels:true e oc;
+  close_out oc;
+  (e, opb, c1, c2, c3)
+
+let test_conclusion_rejects_a_weakened_pol () =
+  match veripb_path () with
+  | None ->
+      incr failures;
+      print_endline
+        ("FAIL M2-L0/D-0043 (a): " ^ Baguette_proof.Checker.not_found_message
+       ^ " -- the whole point of this test is that the CHECKER rejects the weakened \
+          derivation, so with no checker there is nothing here. This is not a pass.")
+  | Some veripb -> (
+      let dir = Filename.temp_file "baguette_concl" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let log = Filename.concat dir "log" in
+      let site = "combine(2 summand(s), / 2)" in
+      (* [stated]: does the pruning go out through [emit_concluding] with the
+         [Reason.fact] it concluded, or through plain [emit]? [truncated]: is the `pol`
+         corrupted to its leftmost operand? Returns [true] iff veripb ACCEPTED. *)
+      let run ~name ~stated ~truncated =
+        let e, opb, c1, c2, c3 = conclusion_break_opb dir name in
+        let pbp = Filename.concat dir (name ^ ".pbp") in
+        let oc = open_out pbp in
+        let mutation = Writer.Mutation.make ~site Writer.Mutation.Truncate_derivation in
+        let w =
+          if truncated then Writer.create_mutated ~comments:false ~audit:true ~mutation oc
+          else Writer.create ~comments:false ~audit:true oc
+        in
+        Encoding.start_proof e w;
+        let ctx = Justify.create ~writer:w ~encoding:e in
+        (* The pruning as a propagator builds it: one [Combine] over the two rows,
+           divided by 2, and the bound it concluded. [x >= 1] with [x] declared from 0,
+           so the fact materialises to the literal the `ia` claims. *)
+        let expl =
+          Explanation.combine
+            [
+              Explanation.term 1 (Explanation.model_row c1);
+              Explanation.term 1 (Explanation.model_row c2);
+            ]
+            2
+        in
+        let concludes = Some (Reason.at_least ~name:"x" ~decl:0 1) in
+        let id =
+          if stated then Justify.emit_concluding ctx ~concludes expl
+          else Justify.emit ctx expl
+        in
+        if truncated && Writer.mutation_note w = None then (
+          incr failures;
+          Printf.printf
+            "FAIL M2-L0 %s: the Truncate_derivation knob never fired at site %S, so this \
+             lane corrupted nothing and its verdict means nothing.\n"
+            name site);
+        Writer.delete w id;
+        let bottom =
+          Writer.pol w ~origin:"the contradiction"
+            Pol.(add (div (add (id c1) (id c2)) 2) (id c3))
+        in
+        Writer.conclusion w (Writer.Unsat (Some bottom));
+        close_out oc;
+        Sys.command
+          (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
+             (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
+        = 0
+      in
+      check "D-0043 (a) baseline: an honest Combine, emitted bare, is accepted"
+        (run ~name:"honest_bare" ~stated:false ~truncated:false);
+      check
+        "D-0043 (a) baseline: the same Combine through emit_concluding is accepted -- \
+         stating the bound costs nothing when the derivation is honest"
+        (run ~name:"honest_stated" ~stated:true ~truncated:false);
+      check
+        "D-0043 (a) THE GAP: a Combine truncated to derive strictly LESS than the bound \
+         the pruning claimed is still ACCEPTED when nothing states the claim"
+        (run ~name:"weak_bare" ~stated:false ~truncated:true);
+      check
+        "D-0043 (a) THE CONTROL: the same truncation is REJECTED once the conclusion \
+         travels on Reason.justified and reaches the page as an `ia`"
+        (not (run ~name:"weak_stated" ~stated:true ~truncated:true));
+      (* And it is the implication check that rejects it, not a parse error or a dangling
+         label. Both checkers are named: they share no substring (M1-T46) and matching on
+         one alone would pass vacuously against the other. *)
+      let contains needle hay =
+        let n = String.length needle and h = String.length hay in
+        let rec go i = i + n <= h && (String.sub hay i n = needle || go (i + 1)) in
+        n = 0 || go 0
+      in
+      let s =
+        let ic = open_in_bin log in
+        let s = really_input_string ic (in_channel_length ic) in
+        close_in ic;
+        s
+      in
+      check
+        "D-0043 (a): the rejection is the implication check, in whichever checker's words"
+        (contains "not syntactically implied" s
+        || contains "Implication check failed" s
+        || contains "Hint: (" s);
+      Sys.readdir dir
+      |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
+      try Sys.rmdir dir with _ -> ())
+
 let () =
   test_model_row ();
   test_decision_has_no_id ();
@@ -834,6 +976,7 @@ let () =
   run_veripb ~name:"justify: a real int_lin_le pruning (two-step bound, the D-0010 chain)"
     ~build:build_int_lin_le_gap;
   test_d0013_conflict ();
+  test_conclusion_rejects_a_weakened_pol ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
