@@ -870,6 +870,38 @@ let test_conclusion () =
     "D-0043 (b): the M2-T8 scope check accepts the one-unit-off claim -- this is the \
      limitation the conclusion removes, not a defect in it"
     (Store.agreement_holds store (j (Some (Reason.at_least ~name:"x" ~decl:0 2))));
+  (* THE SETTLE WINDOW, which BAGUETTE_DEBUG measured rather than anybody designing it.
+     [Domain.set_lo] settles over the holes above the bound it is given (I-D2), so the
+     bound a propagator asks for and the bound the trail ends up holding are two
+     different numbers whenever a hole sits between them -- `x` over `0..9 \ {2}`, told
+     `x >= 2`, lands at 3. Both are honest claims about that one change: 2 is what the
+     row derives and what its [pol] is checked against, 3 is what lib/core/trace.ml's
+     line claims while citing the hole as [settled_over]. The window between them is
+     exactly the settled holes, and a claim that steps across a value which is NOT a
+     hole is still rejected. *)
+  let holed =
+    match Domain.remove (Domain.make 0 9) 2 with
+    | Domain.Changed d -> d
+    | _ -> failwith "D-0043 (b): the hole scene punched no hole"
+  in
+  let settled =
+    match Domain.set_lo holed 2 with
+    | Domain.Changed d -> d
+    | _ -> failwith "D-0043 (b): the settle scene moved no bound"
+  in
+  let across c = Store.conclusion_holds store v ~old:holed ~now:settled (j (Some c)) in
+  check "D-0043 (b): the scene really settles -- x >= 2 over 0..9 \\ {2} lands at 3"
+    (Domain.lo settled = 3);
+  check
+    "D-0043 (b): the bound the PROPAGATOR derived (2) is accepted although the trail \
+     holds 3 -- the gap is one hole wide and the hole is what closes it"
+    (across (Reason.at_least ~name:"x" ~decl:0 2));
+  check "D-0043 (b): the bound the TRAIL holds (3) is accepted too"
+    (across (Reason.at_least ~name:"x" ~decl:0 3));
+  check
+    "D-0043 (b): but 1 is REJECTED -- it steps across a value that is not a hole, so the \
+     window is a settle and not slack"
+    (not (across (Reason.at_least ~name:"x" ~decl:0 1)));
   (* An upper-bound move, so the [At_most] arm is not tested only by its refusals. *)
   let old = Domain.make 0 9 and now = Domain.make 0 4 in
   check "D-0043 (b): the same, exact, for an upper bound"

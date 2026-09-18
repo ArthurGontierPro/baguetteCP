@@ -357,9 +357,25 @@ let agreement_holds t (j : Reason.justified) =
      - its direction is one this change actually MOVED. A [Some] in the direction the
        change left alone would be a claim about a bound this pruning did not establish,
        which is the "right variable, wrong bound" case;
-     - its value is exactly the new bound. Not "at least as strong": a conclusion
-       stronger than the change is a claim the store cannot back, and a weaker one is
-       precisely what M1-T51 measured the checker accepting in silence.
+     - its value is the new bound, UP TO THE HOLES THE STORE SETTLED OVER, and that
+       window is checked value by value rather than allowed as slack. With no hole in
+       the way it reduces to "exactly the new bound", which is what every propagator in
+       [lib/] hits almost all of the time. Not "at least as strong" and not "at least as
+       weak": a conclusion stronger than the change is a claim the store cannot back,
+       and a weaker one is precisely what M1-T51 measured the checker accepting in
+       silence.
+
+   THE SETTLE WINDOW was measured, not designed. Running the suite under BAGUETTE_DEBUG
+   with the naive "exactly the new bound" test reddened three scenes and every one was
+   the same shape: [Domain.set_lo] does not stop at the bound it is given, it SETTLES
+   over the holes immediately above it (I-D2). `x` over `1..3 \ {2}`, told `x >= 2`,
+   lands at 3. Both numbers are honest claims about that one change -- 2 is what the
+   propagator's row derives and what its [pol] can be checked against, 3 is what the
+   trail holds and what lib/core/trace.ml's line claims, citing the hole's own line as
+   [settled_over] -- and the distance between them is exactly the settled holes. So that
+   is what this admits, and nothing else: every value strictly between the claim and the
+   new bound must be a hole of [old]. A claim one unit off across a value that is not a
+   hole is still rejected, which is the whole of test (b).
 
    [None] passes, and reason.ml's header enumerates when [None] is the honest answer --
    a decision, a conflict, an interior hole. *)
@@ -367,11 +383,28 @@ let conclusion_holds t v ~old ~now (j : Reason.justified) =
   match j.concludes with
   | None -> true
   | Some f ->
+      let b = Reason.fact_value f in
+      (* Every value from [b] towards the new bound, exclusive, was a hole. *)
+      let settled_up limit =
+        let rec go u = u >= limit || (Domain.is_hole old u && go (u + 1)) in
+        go b
+      in
+      let settled_down limit =
+        let rec go u = u <= limit || (Domain.is_hole old u && go (u - 1)) in
+        go b
+      in
       String.equal (Reason.fact_owner f) (name t v)
       &&
       if Reason.fact_is_lower f then
-        Domain.lo now > Domain.lo old && Reason.fact_value f = Domain.lo now
-      else Domain.hi now < Domain.hi old && Reason.fact_value f = Domain.hi now
+        Domain.lo now > Domain.lo old
+        && b > Domain.lo old
+        && b <= Domain.lo now
+        && settled_up (Domain.lo now)
+      else
+        Domain.hi now < Domain.hi old
+        && b < Domain.hi old
+        && b >= Domain.hi now
+        && settled_down (Domain.hi now)
 
 (* D-0037, enforced rather than commented: a DECISION concludes nothing.
 

@@ -3794,6 +3794,137 @@ let test_d0026_all_declared () =
         (Store.agreement_holds store
            (Reason.because ~concludes:None e.Store.reason (Store.explanation store e)))
 
+(* ---------------------------------------------------------------------------
+   M2-L0 / D-0043, test (c): the conclusion tracks the split lib/core/trace.ml
+   already draws.
+
+   D-0043's conclusion is OPTIONAL, and the roadmap asks that the [None] be shown to be
+   principled rather than a coverage gap: "assert it tracks [Trace.claims]' existing
+   line-or-no-line split". This is that assertion, against the real propagators and the
+   real [Trace], on one trail:
+
+     - a DECISION is a level start, which is exactly the entry [Trace.emit] skips, and it
+       concludes nothing (D-0037: it is an assumption). Note what is NOT claimed here --
+       [Trace.claims] on a decision entry would happily produce a clause; the skip is
+       [Trace.emit]'s, on [is_level_start]. The conclusion is the sharper record of the
+       two, and that is the point;
+     - a PRUNING that moved a bound concludes it, and the conclusion's literal is
+       *identical* to the single literal [Trace.claims] writes for the same entry. Two
+       independent renderings of "what this pruning established" agreeing on the nose;
+     - a REMOVAL at a bound settles that bound and concludes it, again the same literal;
+     - a REMOVAL of an interior value concludes nothing, and [Trace.claims] shows why:
+       its claim is a TWO-literal disequality clause, which is not a bound fact in any
+       direction (reason.ml's header says so; making it [Some] needs a new constructor
+       and its own decision record);
+     - a CONFLICT has no trail entry at all -- nothing to carry a conclusion on -- and
+       [Store.conflict]'s record has no conclusion field for one to sit in. The check
+       below is the observable half: the conflicting propagation left the trail alone.
+   --------------------------------------------------------------------------- *)
+let test_conclusion_partition () =
+  (* x + y <= 4 over [0, 5]^2, with y >= 3 decided at its own level. *)
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:0 ~hi:5;
+  Encoding.declare_int e "y" ~lo:0 ~hi:5;
+  let row = Encoding.add_int_lin_le e [ (1, "x"); (1, "y") ] 4 in
+  let store = mk_store [ ("x", 0, 5); ("y", 0, 5) ] in
+  let prop = Linear.make ~row_id:row store [ (1, var 0); (1, var 1) ] 4 in
+  Store.new_level store;
+  let d_index = Store.trail_length store in
+  (match
+     Store.set_lo store (var 1) 3
+       (Reason.because ~concludes:None Reason.none (Explanation.decision (Lit.ge "y" 3)))
+   with
+  | Store.Changed -> ()
+  | _ -> failwith "D-0043 (c): the decision did not move y's bound");
+  let p_index = Store.trail_length store in
+  (match Linear.propagate prop store with
+  | Propagator.Conflict _ -> failwith "D-0043 (c): the propagation conflicted"
+  | Propagator.Fixpoint -> ());
+  check "D-0043 (c): the propagation under test actually pruned"
+    (Store.trail_length store > p_index);
+  let decision = Store.trail_entry store d_index in
+  let pruning = Store.trail_entry store p_index in
+  check "D-0043 (c): the decision is the level start -- the entry Trace.emit skips"
+    (Store.is_level_start store d_index);
+  check "D-0043 (c): and it concludes NOTHING (D-0037: an assumption, not a derivation)"
+    (Option.is_none decision.Store.concludes);
+  check "D-0043 (c): the pruning is not a level start, so Trace writes its line"
+    (not (Store.is_level_start store p_index));
+  (* The agreement, stated as one equality: the conclusion's literal IS the claim. *)
+  let same_as_claim (entry : Store.entry) name what =
+    match (entry.Store.concludes, Trace.claims e entry name) with
+    | Some f, [ [ l ] ] ->
+        check
+          (Printf.sprintf
+             "D-0043 (c): %s concludes exactly the literal Trace.claims writes for it"
+             what)
+          (Reason.lit_of_fact f = Some l)
+    | c, claims ->
+        incr failures;
+        Printf.printf
+          "FAIL D-0043 (c): %s -- conclusion %s against %d trace claim(s) of sizes [%s]\n"
+          what
+          (match c with None -> "-" | Some f -> Reason.fact_to_string f)
+          (List.length claims)
+          (String.concat ";" (List.map (fun c -> string_of_int (List.length c)) claims))
+  in
+  same_as_claim pruning "x" "an int_lin_le bound pruning";
+  (* A conflict: the same row, both variables pushed past what it allows. No entry is
+     pushed, so there is nothing for a conclusion to ride on. *)
+  let store2 = mk_store [ ("x", 0, 5); ("y", 0, 5) ] in
+  let prop2 = Linear.make ~row_id:row store2 [ (1, var 0); (1, var 1) ] 4 in
+  ignore (Store.set_lo store2 (var 0) 3 placeholder_pruning);
+  ignore (Store.set_lo store2 (var 1) 3 placeholder_pruning);
+  let before = Store.trail_length store2 in
+  (match Linear.propagate prop2 store2 with
+  | Propagator.Conflict _ ->
+      check
+        "D-0043 (c): a conflict pushes no trail entry, so it carries no conclusion -- \
+         [Store.conflict]'s record has no field for one"
+        (Store.trail_length store2 = before)
+  | Propagator.Fixpoint -> failwith "D-0043 (c): the conflict scene did not conflict");
+  (* int_ne, both shapes. `a <> b` with b fixed: at a's lower bound it settles and
+     concludes, in a's interior it punches a hole and concludes nothing. *)
+  let ne_scene ~b_value =
+    let e = Encoding.create () in
+    Encoding.declare_int e "a" ~lo:0 ~hi:4;
+    Encoding.declare_int e "b" ~lo:0 ~hi:4;
+    let store = mk_store [ ("a", 0, 4); ("b", 0, 4) ] in
+    let prop = Ne.make store [ (1, var 0); (-1, var 1) ] 0 in
+    ignore (Store.fix store (var 1) b_value placeholder_pruning);
+    let before = Store.trail_length store in
+    (match Ne.propagate prop store with
+    | Propagator.Conflict _ -> failwith "D-0043 (c): the int_ne scene conflicted"
+    | Propagator.Fixpoint -> ());
+    if Store.trail_length store <= before then
+      failwith "D-0043 (c): the int_ne scene removed nothing";
+    (e, Store.trail_entry store before)
+  in
+  let e_bound, at_bound = ne_scene ~b_value:0 in
+  let same_as_claim_in e (entry : Store.entry) name what =
+    match (entry.Store.concludes, Trace.claims e entry name) with
+    | Some f, [ [ l ] ] ->
+        check
+          (Printf.sprintf
+             "D-0043 (c): %s concludes exactly the literal Trace.claims writes for it"
+             what)
+          (Reason.lit_of_fact f = Some l)
+    | _ ->
+        incr failures;
+        Printf.printf "FAIL D-0043 (c): %s -- conclusion and claim do not line up\n" what
+  in
+  same_as_claim_in e_bound at_bound "a"
+    "an int_ne removal AT a bound (it settles that bound)";
+  let e_hole, interior = ne_scene ~b_value:2 in
+  check
+    "D-0043 (c): an int_ne removal in the INTERIOR concludes nothing -- its claim is a \
+     disequality, not a bound"
+    (Option.is_none interior.Store.concludes);
+  check
+    "D-0043 (c): and Trace.claims is why -- the hole's claim is a TWO-literal clause, \
+     which no Reason.fact can spell"
+    (match Trace.claims e_hole interior "a" with [ [ _; _ ] ] -> true | _ -> false)
+
 let () =
   print_endline "\npropagator unit tests";
   test_soundness ();
@@ -3811,6 +3942,7 @@ let () =
   test_lin_eq_entailment ();
   test_compare_entailment ();
   test_int_eq_entailment ();
+  test_conclusion_partition ();
   run_veripb ~name:"int_lin_eq: multi-step chain, checked end to end"
     ~build:build_int_lin_eq_multi;
   run_veripb ~name:"int_le: multi-step chain, checked end to end"
