@@ -1,0 +1,31 @@
+% M2-L10. THE MULTI-LEVEL SHAPE: backjump_unsat with a third spectator, so a single
+% refutation skips THREE sibling branches in a row rather than two.
+%
+% Same core contradiction as backjump_unsat.fzn -- x <> y and x = y over 0..3, invisible
+% to bounds reasoning, so the refutation has to branch down x's ladder and close both
+% children at every step. p, q and r are unconstrained and share x's and y's smallest
+% domain width (0..1), so first-fail (ties broken by declaration order, docs/SPEC.md 3.4)
+% branches on them FIRST, one level each, ahead of x and y.
+%
+% Every conflict's decision closure names x's level alone (none of p, q or r's), so the
+% frames owning all THREE of their levels find a nogood already false without their own
+% decision and skip their sibling -- one backjump event per frame, so a SINGLE refutation
+% crosses three levels rather than backjump_unsat's two. Measured 2026-09-18:
+%
+%     learning off   63 nodes, 31 decisions, 0 skipped
+%     learning on     7 nodes,  4 decisions, 3 skipped
+%
+% Learned clauses are over x's and y's order literals, a threshold strictly inside their
+% ladder, so this is the NON-convertible path (D-0044's fork ii): Learned.to_linear_row
+% returns None on every one of them, same as backjump_unsat.
+%
+% Widths are 0..1 (p, q, r) and 0..3 (x, y): D-0028, the order encoding is
+% width-proportional.
+var 0..1: p :: output_var;
+var 0..1: q :: output_var;
+var 0..1: r :: output_var;
+var 0..3: x :: output_var;
+var 0..3: y :: output_var;
+constraint int_ne(x, y);
+constraint int_eq(x, y);
+solve satisfy;

@@ -1,0 +1,42 @@
+% M2-L10. THE CONVERTIBLE SHAPE: bool_reif_unsat's Boolean refutation (D-0030's
+% single-row-proof and array_bool_or/array_bool_and/bool_eq/bool_clause together) with
+% two spectator int variables in front of it, so the backjump this row needs to cover
+% happens over a learned clause that Learned.to_linear_row DOES accept.
+%
+% p and q are unconstrained 0..1 variables, declared before a, b, c, d so first-fail's
+% declaration-order tiebreak (both p/q and a..d have domain width 2) puts them first.
+% The Boolean refutation below is exactly bool_reif_unsat's:
+%
+%   c <-> (a \/ b)      array_bool_or
+%   d <-> (a /\ b)      array_bool_and
+%   c  =  d             bool_eq
+%   a \/ b              bool_clause
+%   ~a \/ ~b            bool_clause
+%
+% which forces both a and b true and then forbids exactly that -- unsatisfiable by hand,
+% at a level that depends on a, b, c, d alone. p and q's levels are named by neither
+% conflict's decision closure, so both are skipped. Measured 2026-09-18:
+%
+%     learning off    9 nodes, 4 decisions, 0 skipped
+%     learning on     5 nodes, 3 decisions, 2 skipped, BOTH learned clauses convertible
+%
+% Every learned clause here is a clause over Boolean order literals, and D-0007
+% order-encodes a Boolean on [0, 1] with one ladder rung, so `b >= 1` already IS the
+% variable and Learned.to_linear_row accepts every one of them (lib/core/learned.ml's
+% first bullet under "The bet"). That is the opposite path from backjump_deep_unsat.fzn
+% and backjump_unsat.fzn, whose learned clauses sit on a threshold strictly inside an
+% integer ladder and convert to None.
+%
+% Widths are 0..1 throughout (p, q, and the Booleans): D-0028.
+var 0..1: p :: output_var;
+var 0..1: q :: output_var;
+var bool: a :: output_var;
+var bool: b :: output_var;
+var bool: c :: output_var;
+var bool: d :: output_var;
+constraint array_bool_or([a, b], c);
+constraint array_bool_and([a, b], d);
+constraint bool_eq(c, d);
+constraint bool_clause([a, b], []);
+constraint bool_clause([], [a, b]);
+solve satisfy;

@@ -110,6 +110,60 @@ let holes_src =
    constraint int_lin_le([1,-1],[z,y],-2);\n\
    solve satisfy;\n"
 
+(* M2-L10: three new instances, added because a single skipping instance
+   (backjump_src / backjump_unsat.fzn, 2 skips) is not something M2-L4/L6/L8 can
+   measure against. Each is verbatim its test/models/*.fzn twin, and each is picked to
+   take a DIFFERENT path through the skip machinery -- see the .fzn header of each for
+   the full argument and the measured node/decision/skip counts. *)
+
+(* test/models/backjump_deep_unsat.fzn, verbatim: backjump_src with a THIRD spectator
+   (r), so one refutation skips three siblings rather than two -- "the backjump crosses
+   more than one level". Non-convertible, same as backjump_src: the learned clauses sit
+   on a threshold strictly inside x's/y's ladder. *)
+let deep_src =
+  "var 0..1: p;\n\
+   var 0..1: q;\n\
+   var 0..1: r;\n\
+   var 0..3: x;\n\
+   var 0..3: y;\n\
+   constraint int_ne(x, y);\n\
+   constraint int_eq(x, y);\n\
+   solve satisfy;\n"
+
+(* test/models/backjump_bool_unsat.fzn, verbatim: bool_reif_unsat's Boolean refutation
+   (array_bool_or/array_bool_and/bool_eq/bool_clause, D-0030) with two spectators in
+   front of it. Every learned clause here is over Boolean order literals, D-0007's
+   single-rung ladder, so [Learned.to_linear_row] accepts all of them -- the CONVERTIBLE
+   path, which backjump_src and deep_src do not exercise. *)
+let bool_src =
+  "var 0..1: p;\n\
+   var 0..1: q;\n\
+   var bool: a;\n\
+   var bool: b;\n\
+   var bool: c;\n\
+   var bool: d;\n\
+   constraint array_bool_or([a, b], c);\n\
+   constraint array_bool_and([a, b], d);\n\
+   constraint bool_eq(c, d);\n\
+   constraint bool_clause([a, b], []);\n\
+   constraint bool_clause([], [a, b]);\n\
+   solve satisfy;\n"
+
+(* test/models/backjump_lineq_unsat.fzn, verbatim: near_limit_unsat's int_lin_eq
+   refutation under checked arithmetic (coefficients near Checked.limit) with two
+   spectators in front of it. A third, non-Boolean, non-int_ne shape: linear-equality
+   reasoning rather than value-consistency disequality. Non-convertible, like deep_src:
+   its learned clauses also sit on thresholds strictly inside an integer ladder. *)
+let lineq_src =
+  "var 0..1: p;\n\
+   var 0..1: q;\n\
+   array [1..3] of int: c = [18014398509481984, 18014398509481984, 18014398509481984];\n\
+   var 0..3: x1;\n\
+   var 0..3: x2;\n\
+   var 0..3: x3;\n\
+   constraint int_lin_eq(c, [x1, x2, x3], 45035996273704960);\n\
+   solve satisfy;\n"
+
 type run = {
   r_outcome : Search.outcome;
   r_stats : Search.stats;
@@ -527,6 +581,51 @@ let test_backjump_answers_the_same () =
      was ever skipped agrees with M1's search for the least interesting reason there is. *)
   check "backjump: the sweep really did skip branches" (!skips > 0)
 
+(* ================================================== M2-L10: backjump instance coverage
+
+   docs/ROADMAP.md M2-L10: one skipping instance in the whole suite (backjump_src, 2
+   skips) is not something the retention (M2-L4), fallback-rate (M2-L6) or benchmark
+   (M2-L8) rows can measure against. Three more instances, each asserting [skipped > 0]
+   through [Search.stats] -- the same counter `--stats` prints, never by inspection --
+   and each taking a DIFFERENT path: deep_src crosses more than one level in a single
+   refutation, bool_src's learned clauses convert and deep_src's/lineq_src's do not,
+   lineq_src is a wholly different propagator family (int_lin_eq, not int_ne/int_eq or
+   Boolean clauses). Every proof here is also checked by
+   test/models/backjump_deep_unsat.fzn, backjump_bool_unsat.fzn and
+   backjump_lineq_unsat.fzn's own run through scripts/verify_proof.sh, under BOTH
+   BAGUETTE_PROOF_FORMAT settings and both veripb binaries -- this in-process run only
+   re-confirms the default (3.0) path, since [run] does not expose a format knob. *)
+let test_m2l10_coverage () =
+  let scene ~title ~convertible src =
+    let r, dir, opb, pbp = run src in
+    check (Printf.sprintf "%s: solved to UNSAT" title) (r.r_outcome = Search.Unsat);
+    check
+      (Printf.sprintf "%s: skipped > 0 (Search.stats, the real --stats counter)" title)
+      (r.r_stats.Search.skipped > 0);
+    check
+      (Printf.sprintf "%s: at least one clause learned" title)
+      (r.r_stats.Search.n_learned > 0);
+    if convertible then
+      check_eq
+        (Printf.sprintf "%s: every learned clause converts (Boolean order literals)" title)
+        r.r_stats.Search.n_converts r.r_stats.Search.n_learned
+    else
+      check_eq
+        (Printf.sprintf "%s: no learned clause converts (threshold inside a ladder)" title)
+        r.r_stats.Search.n_converts 0;
+    expect_accepted ~title:(title ^ ": the emitted proof") ~dir ~opb ~pbp;
+    cleanup dir [ opb; pbp ]
+  in
+  scene ~title:"M2-L10 deep (3-level backjump)" ~convertible:false deep_src;
+  scene ~title:"M2-L10 bool (convertible)" ~convertible:true bool_src;
+  scene ~title:"M2-L10 lineq (non-convertible, int_lin_eq)" ~convertible:false lineq_src;
+  (* And the multi-level claim itself: deep_src's single refutation skips at least
+     three siblings, strictly more than backjump_src's two. *)
+  let deep, dir, opb, pbp = run deep_src in
+  check_eq "M2-L10 deep: skips exactly 3, one per spectator (p, q, r)"
+    deep.r_stats.Search.skipped 3;
+  cleanup dir [ opb; pbp ]
+
 (* ============================================================ (d) I-S3 *)
 
 let test_i_s3 () =
@@ -573,6 +672,7 @@ let () =
   test_i_s4_crossings_are_real ();
   test_node_count_decreases ();
   test_conversion_rate ();
+  test_m2l10_coverage ();
   test_backjump_answers_the_same ();
   test_i_s3 ();
   test_determinism ();
