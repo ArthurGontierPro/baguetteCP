@@ -3,8 +3,9 @@
 A constraint programming solver with VeriPB proof logging and higher-order explanations.
 
 - **Input**: FlatZinc (a subset — see `docs/SPEC.md`)
-- **Output**: solutions + a VeriPB **3.0** proof that the checker accepts (the default
-  since D-0025; `BAGUETTE_PROOF_FORMAT=2.0` still emits the older dialect)
+- **Output**: solutions + a VeriPB **3.0** proof that the checker accepts. 3.0 is the
+  only format the solver emits (D-0046 removed 2.0, the `BAGUETTE_PROOF_FORMAT` switch
+  and the second checker)
 - **Language**: OCaml 5, built with dune
 
 ---
@@ -22,7 +23,7 @@ that spends its context on reading has none left for the task. So the rule is:
 | `WORKLOG.md` | 68 KB | **The `SessionStart` hook already printed `## Active claims` for you.** Do not re-read the file to get it. For other sections: `sed -n '/^## Cross-session requests/,/^## Completed/p' WORKLOG.md`, or `tail -60` for the latest handoff notes. |
 | `docs/DECISIONS.md` | 126 KB | Never whole. `grep -n 'D-0028' docs/DECISIONS.md` then `sed -n '<start>,<end>p'`. To catch up: `grep -n '^## D-' docs/DECISIONS.md \| tail -20`. |
 | `docs/ROADMAP.md` | 46 KB | Never whole. `grep -n -A8 'M1-T31' docs/ROADMAP.md` for your task's row. |
-| `docs/PROOF-FORMAT.md` | 30 KB | By section, and the sections are stable: §1 checkers, §2 rules 2.0, §2a rules 3.0, §3 encoding (normative), §4 per-propagator justification, §5 backtracking/deletion, §6 debugging a rejected proof. `sed -n '352,402p'` is §4. |
+| `docs/PROOF-FORMAT.md` | 30 KB | By section, and the sections are stable: §1 the checker, §2 **historical** (the 2.0 grammar D-0046 removed — do not read it for the contract), §2a **the contract**: the 3.0 rules, the `pol` operators and the traps, §3 encoding (normative), §4 per-propagator justification, §5 backtracking/deletion, §6 debugging a rejected proof. Find §4 with `grep -n '^## 4\.' docs/PROOF-FORMAT.md` rather than a pinned line range. |
 | `docs/GCS-COMPARISON.md` | 29 KB | Background. Read only if the task is explicitly about the comparison. |
 | `docs/SPEC.md` | 14 KB | Normative. Read the relevant section whole; §2.1 is the FlatZinc subset, §3.2 consistency levels, §3.3 explanations. |
 | `docs/INVARIANTS.md` | 6 KB | Read whole before touching `lib/core/`. It is short on purpose. |
@@ -364,19 +365,24 @@ Several sessions share this checkout, so staging discipline matters more than us
 The toolchain is installed and working:
 
 - opam 2.5.2 at `~/.local/bin/opam`, switch `baguette` on OCaml 5.1.1
-- **The checker of record is VeriPB 3.0.2** (the Rust build) at `~/.cargo/bin/veripb`,
-  and the solver emits `pseudo-Boolean proof version 3.0` by default (D-0025).
-  `~/.local/bin/veripb` is the **Python VeriPB 2.2.2** this project used until then; it
-  is still on `PATH` and still used to check format-2.0 output, so *both* exist and they
-  are different programs. Never assume which one you invoked — `scripts/checker.sh` is
-  the single place that resolves it, and it documents the order. The two word their
-  rejections differently, so **never match on one wording alone**. That operational rule
-  is absolute. The reason usually given for it — "they share no substring" (M1-T46) — is
-  **true of most rejections but not all**: a **RUP failure** has both saying *"reverse
-  unit propagation"*. Do not match on that shared fragment either, though; it is the least
-  specific thing either checker says, and any other RUP failure in the proof would match
-  it. List both wordings at full strength and accept either. Measured 2026-09-18 by M2-L3,
-  which runs its break lanes under both binaries.
+- **The checker is VeriPB 3.0.2** (the Rust build) at `~/.cargo/bin/veripb`, and the
+  solver emits `pseudo-Boolean proof version 3.0`. It is the **only** checker: D-0046
+  removed format 2.0 and with it the Python VeriPB this project used to keep alongside.
+  `scripts/checker.sh` is the single place that resolves which binary runs, and it
+  documents the order; a **missing** checker is a FAILURE, never a skip.
+
+  That one checker is now the **sole oracle** — a bug in it is a bug nothing here can
+  see. D-0046 states that cost and accepted it; do not rediscover it as a surprise.
+
+- **A lane that asserts a rejection must assert the checker's WORDING, at full strength.**
+  An exit status cannot tell a JUDGEMENT from a parse error, and M2-T14 found four lanes
+  green because a malformed artefact was refused on the grammar. Do not match on a
+  fragment weaker than the claim either: on a RUP failure the checker says *"reverse unit
+  propagation"*, which any other RUP failure in the proof would also match.
+
+  *(This replaces the older rule "never match on one checker's wording alone" — M1-T46 —
+  which existed because two checkers worded rejections differently. With one checker,
+  matching its wording is correct. What survives is the sentence above.)*
 
 Put `eval "$(opam env --switch=baguette)"` in your shell before building. On a fresh
 machine, `scripts/bootstrap.sh` does the whole setup and is safe to re-run.

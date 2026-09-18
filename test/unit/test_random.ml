@@ -431,9 +431,9 @@ let build m store obs =
 (* ================================================================== veripb *)
 
 (* Which checker to run: lib/proof/checker.ml, shared with scripts/checker.sh.
-   Every test module open-coded this search, and every copy looked at
-   ~/.local/bin/veripb first -- so a project-wide choice of checker lived in nine
-   places and silently meant the Python 2.2.2 (M1-T18). [None] is a FAILURE at every
+   Every test module open-coded this search, and every copy resolved it differently --
+   so a project-wide choice of checker lived in nine places and could silently mean a
+   build nobody intended (M1-T18). [None] is a FAILURE at every
    call site below, never a skip. *)
 let veripb = Baguette_proof.Checker.find ()
 
@@ -708,24 +708,14 @@ let run_case ~dir ~n ~(order : Search.order) m =
                    three disequality gaps, and a bucket that guessed from the run alone
                    would credit the wrong one.
 
-                   Both checkers' wordings are matched, because the emitted format is a
-                   knob (BAGUETTE_PROOF_FORMAT, D-0025) and the checker resolved by
-                   [Checker.find] is a knob too. 2.2.2 says "Constraint is not a
-                   contradiction"; 3.0.2 -- the default since M1-T19 -- says "The
-                   constraint with ID <n> is not contradicting, as specified by the
-                   hint", which shares no substring with it. Matching only the 2.0
-                   wording is not a vacuous pass (every bucket is asserted to be empty,
-                   so a rejection fails the suite whichever bucket it lands in) but it
-                   is a vacuous *diagnosis*: a known bug is reported as a brand-new one,
-                   with a model to paste into test_matrix.ml that is already there.
-                   Measured against both binaries, not guessed -- and the RUP wording is
-                   matched on the fragment the two share, "by reverse unit propagation",
-                   which 3.0.2 spells "... by reverse unit propagation (RUP) from core
-                   and derived database". *)
-                let not_contradicting =
-                  contains "not a contradiction" log
-                  || contains "is not contradicting" log
-                in
+                   The wording matched is the checker's own: "The constraint with ID <n>
+                   is not contradicting, as specified by the hint" (veripb 3.0.2).
+                   Measured, not guessed. Getting it wrong is not a vacuous PASS here --
+                   every bucket is asserted to be empty, so a rejection fails the suite
+                   whichever bucket it lands in -- but it is a vacuous *diagnosis*: a
+                   known bug is reported as a brand-new one, with a model to paste into
+                   test_matrix.ml that is already there. *)
+                let not_contradicting = contains "is not contradicting" log in
                 if
                   contains "by reverse unit propagation" log
                   && obs.ne_moved_bound && obs.branch_failed

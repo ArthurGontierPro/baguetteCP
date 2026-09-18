@@ -254,9 +254,9 @@ let build_engine m store ids =
 (* ------------------------------------------------------------------- veripb *)
 
 (* Which checker to run: lib/proof/checker.ml, shared with scripts/checker.sh.
-   Every test module open-coded this search, and every copy looked at
-   ~/.local/bin/veripb first -- so a project-wide choice of checker lived in nine
-   places and silently meant the Python 2.2.2 (M1-T18). [None] is a FAILURE at every
+   Every test module open-coded this search, and every copy resolved it differently --
+   so a project-wide choice of checker lived in nine places and could silently mean a
+   build nobody intended (M1-T18). [None] is a FAILURE at every
    call site below, never a skip. *)
 let veripb_path () = Baguette_proof.Checker.find ()
 let veripb = veripb_path ()

@@ -2,16 +2,14 @@
 
 Everything `baguette` emits and the vocabulary it is allowed to use.
 
-Emitted proof format: **3.0** by default (M1-T19), **2.0** under
-`BAGUETTE_PROOF_FORMAT=2.0`. 3.0 is what this project emits and what its checker of
-record speaks (D-0023); **section 2a is the live contract** and section 2 documents the
-2.0 grammar, which is still emitted on request and still fully tested. They are separate
-grammars, not options on one — a 2.0 proof is a syntax error to a 3.0 reader and a 3.0
-proof is refused outright by veripb 2.2.2.
+Emitted proof format: **VeriPB 3.0, and only 3.0** (M1-T19 built it, D-0025 made it the
+default, **D-0046 removed everything else**). There is no format switch and no second
+checker. **Section 2a is the contract.**
 
-The whole suite is green under both: 925 unit checks either way, and the model tests
-pass under each. That is the property that makes the fallback meaningful rather than
-decorative — a 2.0 escape hatch nothing exercises would rot inside a week.
+Section 2 is kept as **history**: it records what format 2.0 did and what it cost this
+project to learn, because several of those findings still explain code that survives the
+format. It does not describe anything `baguette` emits. Where a fact in it is still live,
+it says so and says where the live statement is.
 
 ---
 
@@ -33,11 +31,18 @@ is what the test suite calls.
    silent fall-through to a different checker.
 2. `~/.cargo/bin/veripb` — VeriPB **3.0.2**, the Rust implementation. The checker of
    record; see D-0023.
-3. `~/.local/bin/veripb` — VeriPB 2.2.2, the Python implementation. Fallback.
-4. `veripb` on `$PATH`.
+3. `veripb` on `$PATH`.
 
-`$PATH` is last deliberately. Both builds are installed on the development machine and
-`~/.local/bin` comes first on `$PATH`, so "whatever is on `$PATH`" silently meant 2.2.2.
+`$PATH` is last deliberately. This project once had two builds installed side by side
+with the other one first on `$PATH`, so "whatever is on `$PATH`" silently meant a checker
+nobody had chosen (M1-T18). Naming the path we mean is what closed that; a `$PATH` entry
+is whatever the machine happens to offer.
+
+**There is one checker, and D-0046 states what that costs.** Two independently written
+checkers agreeing that a proof verifies is stronger evidence than one, and several of
+this project's findings came from the two disagreeing. After D-0046, veripb 3.0.2 is the
+**sole oracle**: a bug in it is a bug we have no way to see. That was weighed and
+accepted, and it is recorded so nobody rediscovers it and assumes it was overlooked.
 
 **No checker is a failure, not a skip.** `verify_proof.sh` used to `echo SKIP; exit 0`
 when it could not find `veripb`, so a machine with no checker made every proof test
@@ -45,26 +50,34 @@ pass — the one outcome a suite built on "a test that does not check the proof 
 test" must never produce. Every entry point now fails loudly. There is no
 `BAGUETTE_SKIP_PROOFS` escape hatch and none should be added.
 
-The proof's first line MUST be exactly one of, and is the first by default:
+The proof's first line MUST be exactly:
 
 ```
 pseudo-Boolean proof version 3.0
-pseudo-Boolean proof version 2.0
 ```
 
-and the rest of the file must be in that format throughout. The `.opb` is part of the
-choice too: 3.0 labels its rows (section 2a) and 2.0 cannot. `Encoding.write_opb_for`
-takes the writer and so cannot get the two out of step; `write_opb` alone can.
+The `.opb` is part of the same artefact: every row carries a label (section 2a), and a
+`.pbp` citing a label the `.opb` never bound is a **parse error**, so the checker stops at
+the grammar and judges nothing. `Encoding.write_opb` labels unconditionally and is the
+only way to write one, which is what keeps the pair in step — this used to be a switch,
+and every time the two sides of it disagreed a lane went green for the wrong reason
+(M2-L5, M2-T14).
 
-## 2. Rule vocabulary, 2.0
+## 2. Rule vocabulary, 2.0 — *HISTORICAL (removed by D-0046)*
 
-These are the VeriPB 2.0 rules this project uses. Anything outside this list needs a
-decision record before it appears in emitted proofs — an unfamiliar rule in a proof is a
-debugging problem for whoever reads the failure next.
+> **Nothing in this section describes what `baguette` emits.** Format 2.0 and the Python
+> VeriPB 2.2.2 that read it left the project on 2026-09-18 (D-0046). The section is kept
+> because it is the record of what 2.0 did and what it cost to learn — D-0024's account
+> of `w` explains `Writer.wipe_level`, which survives, and the traps below are the
+> measurements that shaped the encoding. Deleting the reasoning along with the format
+> would have thrown away the expensive half.
+>
+> **The live contract is section 2a**, which is where the still-true parts of this
+> section now live: the `pol` operator semantics, the rule preferring `pol` over `rup`,
+> and the traps.
 
-Every row below was checked empirically against veripb 2.2.2. Where this document once
-disagreed with the checker, the checker won; see the traps at the end of this section,
-because two of those errors silently corrupt a proof rather than failing it.
+These were the VeriPB 2.0 rules this project used. Every row was checked empirically
+against veripb 2.2.2. Where this document disagreed with the checker, the checker won.
 
 | Rule | Syntax | Meaning | Used for |
 |---|---|---|---|
@@ -86,12 +99,54 @@ because two of those errors silently corrupt a proof rather than failing it.
 | `a` | | add a constraint assumed-checked | **forbidden in release builds** — debugging only |
 | `*` | `* text` | comment | readability of emitted proofs |
 
-`pol` syntax is reverse Polish over constraint ids: `pol 3 4 + 2 d` means "constraint 3
-plus constraint 4, divided by 2". Literal axioms are written `~x1` / `x1`. Its weakening
-operator `w` takes a **variable, not a literal** — it ignores any sign you give it, and
-VeriPB only logs a warning rather than failing, so a sign there is a silent no-op.
+*(The `pol` operator semantics, the `pol`-over-`rup` rule and the traps that used to
+close this section are live facts, not 2.0 facts, and have moved to section 2a.)*
 
-The three operators, as checked against veripb 2.2.2 rather than assumed:
+## 2a. The 3.0 rule vocabulary *(D-0023, D-0046)*
+
+**This is the contract.** Every row was run against veripb 3.0.2; where a row says
+something is refused, the checker's own words are quoted. Anything outside this list
+needs a decision record before it appears in an emitted proof — an unfamiliar rule in a
+proof is a debugging problem for whoever reads the failure next.
+
+3.0 was **not** a dialect of the 2.0 this project used to emit, which is why D-0046 could
+remove that format outright rather than deprecating it: there was no shared subset to
+keep. The "2.0" column that used to sit in this table is gone with it; section 2 holds
+the old grammar for anyone reading an archived proof.
+
+| Rule | Syntax | Note |
+|---|---|---|
+| version | `pseudo-Boolean proof version 3.0` | the first line, exactly |
+| load | `f N ;` | the count is required and a wrong one is a hard error naming the right number |
+| comment | `% text` | `*` is refused: "Expected a top level rule name" |
+| cutting planes | `pol <rpn> ;` | operands are labels; see the operators below |
+| RUP | `rup <c> ;` | the constraint already carries the terminator, and a second `;` is an error |
+| **implies / assert** | `ia <c> : @hint ;` | **Was missing from this table until M1-T51.** Asks whether `<c>` is *syntactically implied* by the one constraint at the hint — no propagation, no search. Yields an id. See the trap below |
+| **equals** | `e <c> : @hint ;` | same shape; asks for syntactic *equality* rather than implication. Rejections: "Expected constraint is not equal to the constraint at the hint.", unhinted "Constraint not found in database." |
+| redundance | `red <c> : <witness> ;` | the witness goes **before** the terminator. After a `;` it is silently not a witness |
+| delete | `del id N M ;` | also `del range LO HI ;`, **half-open: `[LO, HI)`, so `HI` survives** (measured, M1-T22); tolerant of an already-deleted id and of a reversed range |
+| delete from core | `delc N ;` | `delc` takes the reference directly; `del` and `core` keep their `id` |
+| core | `core id N ;` | |
+| set level | **does not exist** | `#` introduces a proofgoal id; `# 1` is a parse error. See section 5 and D-0024 |
+| wipe level | **does not exist** | `w` is only the weakening operator inside a `pol` |
+| solution | `sol <lits> ;` | may **not** carry a label: "the rule `sol` cannot be prefixed with a label" |
+| solution + exclude | `solx <lits> ;` | unusable as-is: "only possible if a preserved set is specified" |
+| improving solution | `soli <lits> ;` | M5; untested here |
+| objective update | `obju ... ;` | needs explicit subproofs: "Proofgoal #1 could not be autoproven". M5 |
+| output | `output NONE ;` | guarantees are `NONE`, `DERIVABLE`, `EQUISATISFIABLE`, `EQUIOPTIMAL`, `EQUIENUMERABLE` |
+| conclusion | `conclusion X ;` | see SPEC section 4.3 |
+| end | `end pseudo-Boolean proof ;` | last line, exact text |
+| label | `@name <rule> ;` | on any rule that yields an id; see below |
+| `a` | | add a constraint assumed-checked — **forbidden**, debugging only |
+
+### The `pol` operators
+
+`pol` is reverse Polish over constraint references: `pol @c3 @c4 + 2 d` means "constraint
+`@c3` plus constraint `@c4`, divided by 2". Literal axioms are written `~x1` / `x1`. The
+weakening operator `w` takes a **variable, not a literal** — it ignores any sign you give
+it, and VeriPB only logs a warning rather than failing, so a sign there is a silent no-op.
+
+The three operators, measured against the checker rather than assumed:
 
 | Op | Effect |
 |---|---|
@@ -99,8 +154,8 @@ The three operators, as checked against veripb 2.2.2 rather than assumed:
 | `s` | saturation: caps every coefficient at the current right-hand side, per literal; the right-hand side is unchanged |
 | `d N` | divides **every coefficient and the right-hand side**, rounding each **up** |
 
-The division row is the one to read twice: this document previously said `d` rounds only
-the right-hand side. It rounds the coefficients too, by the same ceiling. Checked: from
+The division row is the one to read twice: this document once said `d` rounds only the
+right-hand side. It rounds the coefficients too, by the same ceiling. Checked: from
 `+3 x1 +1 x2 >= 1`, `2 d` gives `+2 x1 +1 x2 >= 1` — under truncation it would have given
 `+1 x1 >= 1`, forcing `x1`, and a `rup` of `x1` after the division is rejected, which is
 what settles it.
@@ -111,73 +166,35 @@ say so in its module header and explain why.
 
 ### Traps
 
-Five things this document previously got wrong. The first two are the dangerous ones,
-because they corrupt ids rather than producing an error you would notice:
+Things this document has previously got wrong, restated for the format that ships. The
+first is the dangerous shape, because it corrupts ids rather than producing an error you
+would notice:
 
 1. **An `.opb` line with `=` counts as TWO constraints** for the `f` rule — the checker
-   splits it into `>=` and `<=`. Get the count wrong and every later id is shifted, so
-   `pol` steps silently reference the wrong constraints. `Opb.n_checker_constraints`
+   splits it into `>=` and `<=`. Get the count wrong and every later id is shifted, so a
+   `pol` step silently references the wrong constraint. `Opb.n_checker_constraints`
    computes the header count the checker's way; `Encoding.add_constraint` refuses `Eq`
    outright and `Encoding.add_equality` emits the two `>=` lines explicitly, returning
-   both ids. **Closed in 3.0**, where citations are labels rather than numbers — see
-   section 2a. Note that the `f` count itself was never the silent part: both checkers
-   reject a wrong one and name the right number. What was silent was a `pol` citing a
-   real but wrong constraint after our own counter had drifted.
-2. **`sol`, `solx`/`v` and `soli`/`o` differ in id accounting**: `sol` adds no constraint,
-   the other two each add one. Treating them as interchangeable desynchronises our id
-   counter from the checker's.
-3. **`#` is not a comment or section marker.** It is the set-level rule and takes an
-   integer; `#` followed by prose is a parse error. Only `*` introduces a comment.
-4. **Deletion takes an identifier kind**: `del id N`, not `del N`. Same for `delc` and
-   `core` (`id` / `range` / `find` / `spec`).
-5. **`conclusion SAT : <assignment>` is not propagated by every checker.** 2.2.2 unit-
-   propagates the inline assignment and fills in encoding auxiliaries (the `_neN`
-   selectors of section 3) that the solver has no value for; 3.0.2 does not, and reads
-   an unmentioned variable as false. `ne_conflict_sat.fzn` needs a selector *true*, so
-   its honest proof was rejected by 3.0.2 and accepted by 2.2.2 — the single
-   disagreement between the two checkers over this project's proofs (M1-T18). Log the
-   assignment with `sol` and conclude with the bare `conclusion SAT`: a *logged*
-   solution is propagated by both. `Writer.conclusion` does this for `Sat`. `solx` is
-   not an alternative — 3.0.2 refuses it outside a preserved set.
-
-## 2a. The 3.0 rule vocabulary *(D-0023)*
-
-3.0 is **not** a dialect of 2.0. Flipping the version line alone makes every proof in
-this project a syntax error. Every row was run against 3.0.2; where a row says
-something is refused, the checker's own words are quoted.
-
-`BAGUETTE_PROOF_FORMAT` switches emission, and **the default is 3.0** — D-0025 moved it,
-and `Writer.format_from_env` returns `V3_0` for an unset or empty variable. Set
-`BAGUETTE_PROOF_FORMAT=2.0` to get the older dialect, which is still emitted and still
-checked (by the Python VeriPB 2.2.2; see section 1). D-0023's "what is NOT done" describes
-the state *before* that move and its count of 2.0-pinning test files no longer holds: as of
-2026-09-17 only `test_proof.ml` (two `V2_0` sites) and `test_random.ml` name the format at
-all, and they name it explicitly rather than relying on a default.
-
-| Rule | 2.0 | 3.0 | Note |
-|---|---|---|---|
-| version | `pseudo-Boolean proof version 2.0` | `... version 3.0` | 2.2.2 rejects a 3.0 proof outright ("Unsupported version") |
-| load | `f N` | `f N ;` | the count is still required, and a wrong one is still a hard error in **both** |
-| comment | `* text` | `% text` | `*` is refused: "Expected a top level rule name" |
-| cutting planes | `pol <rpn>` | `pol <rpn> ;` | operands may be labels |
-| RUP | `rup <c> ;` | `rup <c> ;` | unchanged: the constraint already carries the terminator, and a second `;` is an error |
-| **implies / assert** | `ia <c> ; <id>` | `ia <c> : @hint ;` | **Was missing from this table until M1-T51 and is present in BOTH checkers.** Asks whether `<c>` is *syntactically implied* by the one constraint at the hint — no propagation, no search. Yields an id. See the trap below |
-| **equals** | `e <c> ; <id>` | `e <c> : @hint ;` | same shape; asks for syntactic *equality* rather than implication. Rejections: 3.0.2 "Expected constraint is not equal to the constraint at the hint.", unhinted "Constraint not found in database." |
-| redundance | `red <c> ; <witness>` | `red <c> : <witness> ;` | the witness moves **before** the terminator. After a `;` it is silently not a witness |
-| delete | `del id N M` | `del id N M ;` | also `del range LO HI ;`, **half-open: `[LO, HI)`, so `HI` survives** (measured against 3.0.2, M1-T22); tolerant of an already-deleted id and of a reversed range |
-| delete from core | `delc id N` | `delc N ;` | `delc` loses its `id`; `del` and `core` keep theirs |
-| core | `core id N` | `core id N ;` | |
-| set level | `# l` | **gone** | `#` introduces a proofgoal id; `# 1` is a parse error. See section 5 and D-0024 |
-| wipe level | `w l` | **gone** | `w` is only the weakening operator inside a `pol` |
-| solution | `sol <lits>` | `sol <lits> ;` | may **not** carry a label: "the rule `sol` cannot be prefixed with a label" |
-| solution + exclude | `solx <lits>` | `solx <lits> ;` | unusable as-is: "only possible if a preserved set is specified" |
-| improving solution | `soli <lits>` | `soli <lits> ;` | M5; untested here |
-| objective update | `obju ... ;` | `obju ... ;` | needs explicit subproofs: "Proofgoal #1 could not be autoproven". M5 |
-| output | `output NONE` | `output NONE ;` | guarantees are `NONE`, `DERIVABLE`, `EQUISATISFIABLE`, `EQUIOPTIMAL`, `EQUIENUMERABLE` |
-| conclusion | `conclusion X` | `conclusion X ;` | `ENUMERATION_COMPLETE` / `ENUMERATION_PARTIAL` are new |
-| end | `end pseudo-Boolean proof` | `... proof ;` | |
-| short forms | `u` `p` `d` `v` `o` | **gone** | |
-| label | — | `@name <rule> ;` | see below |
+   both ids. **Labels closed the silent half**: a citation is a name, so a drifted one is
+   a parse error rather than a different constraint (see *Labels* below). The `f` count
+   itself was never the silent part — a wrong one is rejected and the right number named.
+2. **`sol`, `solx` and `soli` differ in id accounting**: `sol` adds no constraint, the
+   other two each add one. Treating them as interchangeable desynchronises our id counter
+   from the checker's.
+3. **`#` is not a comment marker.** It introduces a proofgoal id. Comments are `%`.
+4. **Deletion takes an identifier kind**: `del id N`, not `del N`. Same for `core`
+   (`id` / `range` / `find` / `spec`). `delc` is the exception and takes the reference
+   directly.
+5. **`conclusion SAT : <assignment>` is not propagated.** 3.0.2 reads every variable the
+   assignment does not mention as false, and the assignment the solver has covers the
+   *model* variables only — not the encoding auxiliaries (the `_neN` selectors of
+   section 3), which nothing in the solver knows values for. `ne_conflict_sat.fzn` needs
+   a selector *true*, so its honest proof is REJECTED in that form. Log the assignment
+   with `sol` and conclude with the bare `conclusion SAT`: a *logged* solution **is**
+   propagated. `Writer.conclusion` does this for `Sat`. `solx` is not an alternative —
+   3.0.2 refuses it outside a preserved set. *(Historically this was the one point on
+   which the 2.2.2 this project also checked against disagreed, which is how it was
+   found; M1-T18.)*
 
 ### `ia`'s hint is load-bearing, and misplacing it fails open *(M1-T51)*
 
@@ -185,8 +202,8 @@ all, and they name it explicitly rather than relying on a default.
 it the checker-level control `pol` never had. Three measured facts about it, all of which
 cost something to learn:
 
-**The hint is not optional in practice.** Both checkers accept `ia <c> ;` with no hint,
-but unhinted it searches the **whole database**, and 3.0.2 says so when it fails:
+**The hint is not optional in practice.** The checker accepts `ia <c> ;` with no hint,
+but unhinted it searches the **whole database**, and says so when it fails:
 `Constraint not syntactically implied by any constraint in the database`. So an unhinted
 `ia` can be satisfied by an order-encoding ladder clause, or by some older derivation,
 rather than by the `pol` on the line above it — a control that passes on something other
@@ -201,23 +218,26 @@ ia +1 x1 +1 x2 >= 1 ; @NOPE     <- @NOPE is not a hint, and no error is raised
 ```
 
 Measured against 3.0.2: `s VERIFIED`. Compare the correctly-placed form, which rejects as
-it should. This is worse than trap 1 in section 2, which labels closed: a drifted *citation*
-is now a parse error naming the label, but a drifted *hint* is not a citation and nothing
-catches it. If you write an `ia` by hand, put the hint before the `;`.
+it should. This is worse than trap 1 above, which labels closed: a drifted *citation* is a
+parse error naming the label, but a drifted *hint* is not a citation and nothing catches
+it. If you write an `ia` by hand, put the hint before the `;`.
 
-**The two checkers' rejections share no substring** here — as for *most*, though
-importantly **not all**, rejections in this project. The exception measured so far is a
-**RUP failure**, where both say *"reverse unit propagation"* (M2-L3, 2026-09-18). The rule
-that follows is the same either way and is the one to apply: **never match on one wording
-alone**, and do not match on a shared fragment that is weaker than the claim you are
-making — for RUP, list both wordings at full strength and accept either.
+**Match the rejection's wording, at full strength.** The wording on a hint that does not
+imply the claim is
 
-| | wording on a hint that does not imply the claim |
-|---|---|
-| 3.0.2 | `Expected constraint is not syntactically implied by the constraint at the hint.` |
-| 2.2.2 | `Hint: ('1 x1 >= 1', '1 x1 1 x2 >= 1')` — a bare tuple of claim and antecedent, with no sentence at all |
+> `Expected constraint is not syntactically implied by the constraint at the hint.`
 
-Never match on one alone.
+A lane that asserts only a non-zero exit is green the moment the file stops PARSING, at
+which point the checker has judged nothing — M2-T14 found four lanes passing that way.
+So assert the sentence, not the exit code, and not a fragment weaker than the claim: on a
+RUP failure the checker says *"reverse unit propagation"*, which would equally match any
+other RUP failure in the file.
+
+*(This rule used to read "never match on one checker's wording alone", because two
+checkers worded their rejections differently and a lane matching one was vacuous against
+the other — M1-T46. With one checker, D-0046, matching its wording **is** the correct
+thing to do. What survives of M1-T46 is the part above: match the JUDGEMENT, at full
+strength.)*
 
 ### Labels, and the trap they close
 
@@ -233,19 +253,20 @@ the name is then how later rules refer to it: `pol @c1 @c2 +`, `del id @c1`,
 `@c1`..`@c6` and **not** `@c7`; section 5 has the measurement and what it costs the
 writer.
 
-The writer labels **every** constraint `@c<id>` in 3.0 mode, model rows included, and
-cites nothing by number. **Trap 1 below is therefore closed in 3.0**: a citation that
-has drifted is a parse error naming the label ("The label `@NOPE` is not assigned to a
-constraint ID"), not a silently different constraint. 3.0 also refuses a label on an
-`=` row ("Expected inequality constraint"), which is the checker enforcing the
-never-write-`=` discipline `Encoding.add_constraint` already imposed.
+The writer labels **every** constraint `@c<id>`, model rows included, and cites nothing by
+number. Labelling is unconditional and there is no knob for it (D-0046). **Trap 1's silent
+half is therefore closed**: a citation that has drifted is a parse error naming the label
+("The label `@NOPE` is not assigned to a constraint ID"), not a silently different
+constraint. The checker also refuses a label on an `=` row ("Expected inequality
+constraint"), which is it enforcing the never-write-`=` discipline
+`Encoding.add_constraint` already imposed.
 
 Two things labels do **not** do, and neither should be implied:
 
 - **A label is not a group.** Binding one name twice rebinds it; it does not name both,
   so `del id @L` deletes one constraint. Labels cannot stand in for the level stack.
-- **They do not remove the `f` count.** The count is still required and is still checked
-  — by both checkers, loudly. That half of trap 1 was never the silent half.
+- **They do not remove the `f` count.** The count is still required and is still checked,
+  loudly. That half of trap 1 was never the silent half.
 
 ## 3. Encoding *(normative — names are part of the contract)*
 
@@ -478,27 +499,24 @@ line is only supported while that hole line is live. See **I-S4**.
 
 ## 5. Backtracking and deletion
 
-**In 2.0**, use levels, not individual deletions. `# <level>` sets the current level,
-everything derived afterwards is tagged with it, and `w <level>` wipes every constraint
-at or above that level in a single rule. One proof line per backtrack instead of one
-`del` per reason — which matters because the alternative makes the proof grow with the
-size of the search rather than with the interesting part of it.
+**There is no level stack in the checker** — neither a set-level rule nor a wipe rule
+exists (section 2a, D-0024). `Writer` keeps the level tags itself and `wipe_level` emits
+the deletions the checker's own `w` would once have performed, compressed into
+`del range` where the ids are consecutive, which they usually are. The interface is
+`Writer.set_level` / `Writer.wipe_level` and callers do not see the difference.
 
-`w` on a level that was never set is an error (*"Tried to wipe level N that was never
-set"*), so levels must be opened before they are wiped. That mirrors the solver's own
-decision levels exactly, which is the point.
-
-**In 3.0 there is no level stack at all** — neither `#` nor `w` exists (section 2a), so
-the paragraph above describes a mechanism the checker no longer has. `Writer` keeps the
-tags itself and `wipe_level` emits the deletions `w` would have performed, compressed
-into `del range` where the ids are consecutive, which they usually are. The interface is
-unchanged: `Writer.set_level` / `Writer.wipe_level`, and callers do not know the
-difference. The asymptotic argument above is what this costs; D-0024 has the detail and
-is honest that it is a loss, not a wash.
+**What that costs, because it is a loss and not a wash.** The mechanism this replaces was
+one proof line per backtrack: `# <level>` set the current level, everything derived
+afterwards was tagged with it, and `w <level>` wiped every constraint at or above that
+level in a single rule. The alternative — one `del` per reason — makes the proof grow
+with the size of the search rather than with the interesting part of it, and that
+asymptotic argument is the whole reason levels existed. Runs recover most of it, but
+"most" is not "all". D-0024 is the record; it is kept, and it is what `Writer.wipe_level`
+exists to imitate.
 
 The set retired is "every id **tagged** at level >= l", not "every id derived since the
-level was set". They differ as soon as a level is re-entered after a spell at a lower
-one, which is what search does on every branch: `# 1`, `# 0`, prune at the root, `# 1`,
+level was set". They differ as soon as a level is re-entered after a spell at a lower one,
+which is what search does on every branch: level 1, level 0, prune at the root, level 1,
 prune under the decision, backtrack. The root prunings must survive.
 
 ### What `del range LO HI` deletes *(measured, not assumed — M1-T22)*
@@ -508,9 +526,11 @@ is not deleted.**
 
 That sentence is a statement about **VeriPB 3.0.2**, the checker `scripts/checker.sh`
 resolves, and about nothing else. It is phrased that way deliberately: this project has
-already shipped a bug because "checked against veripb 2.2.2" was written down as a fact
-about proofs in general and stopped being true when the checker changed (M1-T18, and
-trap 5 in section 2). `test_v3_del_range_semantics` in `test/unit/test_proof.ml`
+already shipped a bug because a measurement against one checker was written down as a
+fact about proofs in general and stopped being true when the checker changed (M1-T18, and
+trap 5 in section 2a). That risk is larger now, not smaller: 3.0.2 is the sole oracle
+(D-0046), so nothing else will contradict it.  `test_v3_del_range_semantics` in
+`test/unit/test_proof.ml`
 re-measures it on every run, and `report_checker` at the top of that file prints which
 binary and which version answered. If a later checker disagrees, that test goes red and
 **this section is what changes**, not the test.
@@ -532,7 +552,7 @@ Two consequences the writer depends on, measured the same way:
 - **An unbound label is a parse error**, not a tolerated bound: `del range @a1 @a6` with
   no `@a6` gives *"The label `@a6` is not assigned to a constraint ID"*. A *numeric*
   upper bound past the last id **is** tolerated, but the writer cites nothing by number
-  in 3.0 (section 2a) and a bare integer here would reintroduce trap 1 by hand.
+  (section 2a) and a bare integer here would reintroduce trap 1 by hand.
 - **An already-deleted label still resolves**, so a range may name an upper bound that
   an earlier deletion has retired.
 
@@ -548,41 +568,37 @@ That is why the regression test runs the checker rather than pinning the emitted
 The bug *was* a disagreement between our string and the checker's reading of it, and the
 test that pinned the string was green throughout.
 
-A 3.0 proof marks a level with a `% level N` comment where the rule used to be. It is
-emitted unconditionally, not under `--proof-comments`: without it nothing in the proof
-says where a decision began. A test that detects branching by grepping a proof must look
-for that marker under 3.0 — grepping for `# 1` there is not a failing test, it is a test
-that silently stops testing.
+A proof marks a level with a `% level N` comment where the rule used to be
+(`Writer.level_marker`). It is emitted unconditionally, not under `--proof-comments`:
+without it nothing in the proof says where a decision began. A test that detects branching
+by grepping a proof must look for that marker — and must ask `Writer` for the spelling
+rather than hardcoding one, because a grep for a spelling that has moved is not a failing
+test, it is a test that silently stops testing.
 
-### `drop-line` fails on the grammar in BOTH formats *(corrected — D-0030)*
+### `drop-line` fails on the grammar, and does not test a derivation *(D-0030)*
 
 Deleting a derivation step from an emitted proof — the mutation harness's `drop-line`
-lane — does not test the derivation, in **either** format. It un-defines the step, so the
-next rule that refers to it cannot be read at all:
+lane — does not test the derivation. It un-defines the step, so the next rule that refers
+to it cannot be read at all:
 
-| format | the checker's own words |
-|---|---|
-| 3.0 | ``The label `@c3` is not assigned to a constraint ID`` |
-| 2.0 | `Accessing the database out of bound with index 3` |
+> ``The label `@c3` is not assigned to a constraint ID``
 
-This was written down in several places as a **3.0 quirk** — the roadmap said so, D-0023
-said so, and this section was cited as saying it. It is not one; 2.0 fails the same way
-for the same reason, one id short instead of one label short.
+Every id is a **label**, so dropping its defining line is a parse error *whichever* line
+you drop, and the checker never reaches the reasoning. The knob is unfixable as a text
+edit: a step is deleted *precisely because* something later cites it. The lane stays
+registered as `Unevaluated` and still runs; what actually judges an inference on that step
+is the `Truncate_derivation` knob, which keeps the leftmost operand so the step still
+binds its label.
 
-**Refined 2026-09-18 (M2-T14, D-0030's amendment): that is true of the line measured, not
-of every line, and the two formats differ structurally.** A 3.0 id is a **label**, so
-dropping its defining line is a parse error *whichever* line you drop. A 2.0 id is
-**positional**, so dropping a line **renumbers** everything after it — the citations still
-resolve, just to different constraints, and the checker reads a well-formed proof and
-**judges an inference**. Measured on `triple_unsat` and `lin_unsat` dropping a `pol`: under
-2.0 veripb rejects **on the derivation**. So under 2.0 `drop-line` is sometimes an
-evaluating lane and sometimes not, depending on which line goes. Whether `expect` should
-therefore be per-format is **M2-T15**, raised and not decided. D-0030 measured both and
-records the correction, and the two messages above are the measurement, not a reading of
-a grammar. The knob is unfixable as a text edit: a step is deleted *precisely because*
-something later cites it. The lane stays registered as `Unevaluated` and still runs;
-what actually judges an inference on that step is the `Truncate_derivation` knob, which
-keeps the leftmost operand so the step still binds its label.
+*(History, because the correction cost something to get right. This was first written down
+as a **3.0 quirk**, which it is not — the 2.0 this project also emitted failed the same
+way, one id short instead of one label short. D-0030's amendment then refined that
+further: a 2.0 id was **positional**, so dropping a line **renumbered** everything after
+it, the citations still resolved (to different constraints), and the checker read a
+well-formed proof and judged an inference. So under 2.0 `drop-line` was sometimes an
+evaluating lane and sometimes not, depending on which line went. Whether `expect` should
+therefore be per-format was **M2-T15**; D-0046 dissolved that question by leaving one
+format, and it is closed.)*
 
 The general rule this is an instance of, and the one to apply to the next lane: **a lane
 rejected without the checker ever judging an inference is not a pass.** See D-0020 and

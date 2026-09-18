@@ -14,13 +14,13 @@ Keywords MUST / SHOULD / MAY are used in the RFC 2119 sense.
 1. reads a model in **FlatZinc**,
 2. searches for a solution (or proves none exists, or proves optimality),
 3. emits a **VeriPB proof** that an independent checker accepts. The format is
-   VeriPB **3.0**, and 3.0 is what is emitted **by default** (D-0023 chose it, D-0025
-   turned the default on once the suite had migrated). `BAGUETTE_PROOF_FORMAT=2.0`
-   still selects the older format, and the suite is run both ways. The checker of
-   record is VeriPB **3.0.2**, the Rust build; the Python VeriPB 2.2.2 is also
-   installed and checks the 2.0 output. `scripts/checker.sh` is the single place that
-   resolves which binary runs — the two word their rejections differently and share no
-   substring, so never match on one wording alone (M1-T46).
+   VeriPB **3.0, and only 3.0** (D-0023 chose it, D-0025 made it the default, D-0046
+   removed everything else); there is no format switch. The checker is VeriPB **3.0.2**,
+   the Rust build, and it is the only one — D-0046 records what losing the second
+   implementation costs. `scripts/checker.sh` is the single place that resolves which
+   binary runs. A lane asserting a rejection must assert the checker's **wording**, not
+   just a non-zero exit: an exit status cannot tell a judgement from a parse error, and
+   four lanes were found passing on the latter (M2-T14).
 
 The proof is not a debugging aid. It is a primary output: a run that produces a correct
 answer with an unverifiable proof is a **failed run**. *(normative)*
@@ -220,10 +220,14 @@ Every branching decision and every backtrack MUST be reflected in the proof.
 A run with `--proof PREFIX` writes two files:
 
 - `PREFIX.opb` — the pseudo-Boolean encoding of the model
-- `PREFIX.pbp` — the proof, beginning with `pseudo-Boolean proof version 3.0`, which
-  is the default; `2.0` is emitted under `BAGUETTE_PROOF_FORMAT=2.0`. The two are
-  separate grammars, not options on one; `docs/PROOF-FORMAT.md` sections 2a and 2 are
-  the respective contracts.
+- `PREFIX.pbp` — the proof, whose first line is exactly
+  `pseudo-Boolean proof version 3.0`. There is no other format and no switch (D-0046);
+  `docs/PROOF-FORMAT.md` section 2a is the contract, and its section 2 is the historical
+  record of the 2.0 that used to sit beside it.
+
+Both files carry the labels that let the proof cite a model row by name, and they must
+agree about that or the checker stops at the grammar without judging anything.
+`Encoding.write_opb` is the only way to write the `.opb`, so they cannot disagree.
 
 Both are required; VeriPB is invoked as `veripb PREFIX.opb PREFIX.pbp`.
 
