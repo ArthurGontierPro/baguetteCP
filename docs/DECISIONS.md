@@ -3644,3 +3644,110 @@ Nor is anything wired into search yet: `ensure_direct`, the pattern this extends
 production caller today**, and a reifier registry needs an `Encoding.t` and a `Writer.t`
 together at pruning time — `justify.ml:146` is the only place in core that already holds a
 writer.
+
+## D-0054  A proof line and a propagation explanation are different objects, and this project has been building one of them
+
+**Status**: **ACCEPTED as a framing; it re-scopes the M2L sequence.** Raised 2026-09-18 by
+the user, who put it in one sentence: *PB lines for proof logging are different from PB
+explanations for solving — the first must be complete and sound, the second must be useful to
+propagation.* This project has not made that distinction, and three results in the M2L
+sequence are that omission showing up as measurements.
+
+### The two objects
+
+| | **proof line** | **propagation explanation** |
+|---|---|---|
+| answers | why is this pruning *valid* | what should the solver *do next* |
+| criterion | sound + complete; the checker accepts | **conflicting under the live assignment**, and it prunes after the backjump |
+| must be | citable (`r_cid`), static | as strong as possible; need not be citable, need not be static |
+| lives in | `.opb` / `.pbp` — `pol`, `rup`, `red`, `ia` | the engine, as a propagator instance |
+
+### The codebase builds the first and calls it the second
+
+`Propagator.pb_row` (`lib/core/propagator.ml:61-83`) is explicitly a **proof** object, and its
+own comment says why:
+
+- `r_cid` is **required** — *"a row nobody can cite is a row no `pol` can be built from"*.
+- it is *"**emphatically not** a function of the store because it reads live domains"*; it
+  reads the **declared** bounds frozen at `make` time, because *"a row that moved with the
+  search would be the wrong side of I-X6"*.
+
+Both are correct for proof logging and disqualifying for propagation: propagation strength
+lives in the **live** domain at the moment of pruning. PB conflict analysis resolves over
+these rows, so what it learns is a proof object — and `Learned.to_linear_row` then decides
+whether it may propagate by testing an **algebraic identity over the declared box**. D-0050
+called that *"the right predicate used as the wrong gate"* without naming why it is the wrong
+gate. This is why: **a proof-side test is standing in for a solving-side one.**
+
+### Three results that are this omission, reinterpreted
+
+- **The PB analysis derives the empty contradiction** (M2-L6): *"strictly stronger than the
+  clause — it entails it — but degenerate as a propagation result."* That sentence **is** the
+  distinction. It was filed as a defect in the analysis; it is a category error in the
+  objective. Sound and complete for the proof, worthless for propagation.
+- **The ladder lift** (M2-L11, D-0049) exists because the strength that makes `Linear` prune
+  lives in the **live** bounds (`lo(b) = 4`), while the row cited in the proof is frozen at
+  declared bounds. The lift smuggles live information into a static row. That is the
+  conflation showing up as labour.
+- **Learned clauses now propagate and change nothing** (M2-L12). Measured: with learned-clause
+  propagation on versus off across all 39 models, the search visits **231 nodes either way**,
+  prunes **0 times** from a learned constraint, and emits **byte-identical proofs** (95332
+  bytes). A clause is the degree-1, static, citable case of a PB row — a **proof-logging
+  shape**. Making a proof shape propagate achieved nothing, which in hindsight is what it
+  should have done.
+
+Note that **D-0026's split is a different axis**: `Reason.t` (which facts justify) versus
+`Explanation.t` (how the checker is convinced). Both are proof-side. The proof/propagation
+split has never been made in this tree.
+
+### Why 1UIP and clauses are the default, which was never decided
+
+D-0044 fixed the learned object as a PB inequality with the clause as its degree-1 case. The
+clause path arrived as M2-L3 *"fork (ii), proof-only"* and D-0044 made it a **permanent**
+fallback. But the fallback rate is **50 of 88 conflicts**, and per D-0050 most of those are
+not PB analysis failing — `Propagator.pb_row` is `None` for `bool_clause`, `array_bool_or`,
+`bool_eq`, `bool_not` and `int_ne`, so there is no row to resolve against at all. **Clauses
+dominate because the PB side is unimplemented for half the constraint families**, and 1UIP is
+the SAT-shaped criterion that came attached to the clause path.
+
+The tree already half-knows 1UIP does not transfer: `pb_analysis.assertive_slack` cites Le
+Berre et al. for *"assertiveness gives no backjump guarantee over PB"*, and the clause path
+uses a 1UIP cut regardless.
+
+### The inspiration for the solving-side object: RoundingSat (Wietze Koops' line of work)
+
+`lib/core/reduce.ml`'s header **already states the key idea**, and confines it to the analysis:
+
+> adding two PB rows does not in general keep the result conflicting: the resolvent's slack
+> can go non-negative and the analysis then has nothing left to learn from. The fix, **from
+> RoundingSat on**, is to REDUCE the reason first — derive a weaker-but-conflict-preserving
+> row in which the resolved literal has coefficient 1 — and then resolve.
+
+**"Conflict-preserving" is a solving-side criterion, not a proof-side one.** RoundingSat's
+rounding is chosen to keep the constraint *useful*, and that is exactly the property a
+propagation explanation must have. Already cited here and now load-bearing rather than
+background:
+
+- **Elffers & Nordström**, *Divide and Conquer* (IJCAI 2018) — division, and why it beats
+  saturation exponentially (`DECISIONS.md:2649`).
+- **Koops, Le Berre, Myreen, Nordström, Oertel, Tan & Vinyals**, *Practically Feasible Proof
+  Logging for Pseudo-Boolean Solvers* (CP 2025) — RoundingSat and Sat4j under VeriPB with a
+  CakePB backend (`DECISIONS.md:2677`). Read for the **emission** side previously; it should
+  now be read for how RoundingSat keeps a learned constraint propagating.
+
+`Reduce.division` and `round_to_one` are therefore already the right machinery pointed at the
+wrong end of the pipeline: they preserve conflictingness **during** analysis, and then the
+result is handed to a proof-side gate to decide whether it may propagate.
+
+### The fix
+
+**Propagate the learned PB row as a PB constraint over order literals, and delete
+`to_linear_row` from the propagation path.** The conversion back to an integer linear row
+exists only because D-0044 bet "no new propagator family". A counter/slack-based PB propagator
+over `Lit.t` is what a PB solver has, the order encoding (D-0028) means those literals already
+exist, and the clause propagator delivered by M2-L12 is its **degree-1 case** — which is what
+D-0044 said the type relationship was all along. The proof obligation is unchanged and already
+discharged: the row is on the page as an `ia` line with its `pol` derivation behind it.
+
+Sequenced as **M2-L13**, and **it supersedes the "register the convertible rows" idea**, which
+would only have propagated whatever the proof pipeline happened to emit.
