@@ -660,7 +660,9 @@ let bridges (ctx : Justify.ctx) trace stats store (decisions : Lit.t list) =
                      and the bridge below would be a line with nothing under it. *)
                   Debug.check
                     (Printf.sprintf
-                       "M1-T66: %s settled onto %s, so the push crossed at least one                         hole" (Lit.to_string l) (Lit.to_string claim))
+                       "M1-T66: %s settled onto %s, so the push crossed at least \
+                        one                         hole"
+                       (Lit.to_string l) (Lit.to_string claim))
                     (fun () -> holes <> []);
                   let lits = claim :: Lit.negate l :: List.map Lit.negate ancestors in
                   let origin =

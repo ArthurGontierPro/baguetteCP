@@ -2281,6 +2281,212 @@ let overflow_cells () =
     cells;
   List.iter (fun o -> Hashtbl.replace covered_overflows o ()) (overflow_compile_cell ())
 
+(* ======================================== M1-T66: the bridge as a derivation *)
+
+(* M1-T55 put the settle step on the page. M1-T66 is the row that asked how anyone would
+   know if it stopped being there, and the measured answer -- twice, by M1-T45 and by the
+   orchestrator on 2026-09-17 -- was: nothing would. With [Search.bridges] disabled
+   outright 34/34 models still pass and no checker rejects anything; the ONE check that
+   reddens is a byte-level grep for `rup +1 hx_ge_2 +1 ~hx_ge_1 >= 1` in
+   test/unit/test_engine.ml.
+
+   That is not a gap in the tests, it is I-X10: the settle is re-derivable from the page
+   by two routes that neither the bridge nor this test can take away -- the hole's own
+   trace line (M1-T56), and, under it, [int_lin_ne]'s big-M rows in the .opb, which no
+   `w` can ever retire. Within M1's constraint vocabulary there is therefore NO scene in
+   which removing the bridge makes a checker reject, and this file does not pretend to
+   look for one.
+
+   What it does instead is assert the DERIVATION rather than the text. [Search.bridges]
+   now files a [Search.bridge] per settle it bridged and one [Trace] citation per hole
+   the page names, so the questions below are asked of data the solver produced while
+   deriving, in the vocabulary of literals and holes and levels:
+
+     - was a bridge derived here at all, for this decision, from this literal onto this
+       bound (so "it is missing" is a statement about the step, not about bytes);
+     - did the push really cross a hole, and does the bridge name the same one;
+     - is the line that states that hole live and at a level no deeper than the bridge's,
+       which is I-S4's obligation -- and the one it could not previously see for a
+       decision settle, because [Trace.emit] skips level-start entries so a decision push
+       writes no line and recorded no citation.
+
+   The last of those is the one M2-L3 inherits. A learned clause citing across levels is
+   exactly the case I-S4's level argument does not cover, and this is the edge that will
+   report it when it arrives.
+
+   The scene is test/models/decide_hole_split_unsat.fzn, built here directly so the check
+   can read the solver's state rather than a proof file: x in 0..2 with 1 removed at the
+   root, y in 0..2, x = y and x <> y. first_fail picks x (size 2 against y's 3) and splits
+   at lo = 0; the high side pushes `set_lo x 1` onto the hole and settles to x = 2. *)
+let bridge_derivation () =
+  let dir = Filename.temp_file "baguette_bridge" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let opb = Filename.concat dir "b.opb" and pbp = Filename.concat dir "b.pbp" in
+  let m =
+    {
+      vars = [| ("x", 0, 2); ("y", 0, 2) |];
+      cstrs = [ Lin_ne ([ (1, 0) ], 1); Ne (0, 1); Eq (0, 1) ];
+    }
+  in
+  check "bridge: brute force agrees the scene is UNSAT" (brute_force m = None);
+  let store = build_store m in
+  let obs = new_obs () in
+  let encoding, engine = build m store obs ~deep:true in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "M1-T66 bridge derivation" ] encoding oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let writer = Writer.create ~audit:true oc in
+  Encoding.start_proof encoding writer;
+  let ctx = Justify.create ~writer ~encoding in
+  let trace = Trace.create () in
+  let stats = Search.stats_create () in
+  let outcome =
+    Search.solve ~engine ~store ~ctx ~check:(fun _ -> true) ~trace ~stats ()
+  in
+  close_out oc;
+  check "bridge: the solver refutes the scene" (outcome = Search.Unsat);
+  (* The scene is only the scene we think it is if the search really did split at a hole
+     and settle past it. Exactly one decision on this tree can: the low side pushes
+     `set_hi x 0`, which lands exactly. *)
+  (match Search.stats_bridges stats with
+  | [ b ] ->
+      check "bridge: exactly one settle on this tree needed bridging"
+        (stats.Search.n_bridges = 1);
+      check "bridge: it bridges a decision on x, at the root (no ancestors)"
+        (String.equal b.Search.br_var "x" && b.Search.br_ancestors = []);
+      check "bridge: the literal assumed is x >= 1"
+        (b.Search.br_assumed.Lit.positive
+        && String.equal (Lit.owner b.Search.br_assumed.Lit.v) "x"
+        && Lit.value b.Search.br_assumed.Lit.v = 1);
+      check "bridge: the bound settled onto is x >= 2"
+        (b.Search.br_settled.Lit.positive
+        && String.equal (Lit.owner b.Search.br_settled.Lit.v) "x"
+        && Lit.value b.Search.br_settled.Lit.v = 2);
+      check "bridge: the push crossed exactly the hole at 1" (b.Search.br_holes = [ 1 ]);
+      (* I-X10 made concrete, and the reason the byte pin was all there was: the hole the
+         bridge walks over is STATED ON THE PAGE by a line of our own, so the checker
+         reaches the settled bound whether or not the bridge is there. If this ever goes
+         the other way -- a hole the push crossed that nothing we wrote names -- the
+         bridge has stopped being belt-and-braces and [br_unnamed] is where it shows. *)
+      (match (b.Search.br_cited, b.Search.br_unnamed) with
+      | [ (1, _, lvl) ], [] ->
+          check
+            "bridge: the hole at 1 has a line of our own, cited at a level no deeper \
+             than the bridge's (I-S4)"
+            (lvl <= b.Search.br_level)
+      | cited, unnamed ->
+          fail
+            "bridge: expected the hole at 1 to be named by exactly one line of ours and \
+             nothing left over, got %d cited and %d unnamed (%s). An unnamed hole means \
+             the bridge is no longer redundant with the page -- report it, do not adjust \
+             this check"
+            (List.length cited) (List.length unnamed)
+            (String.concat "," (List.map string_of_int unnamed)));
+      check "bridge: I-S4 holds over the whole run, decision settles now included"
+        (Trace.i_s4_violations trace = [])
+  | bs ->
+      fail
+        "bridge: the scene derived %d bridge(s), expected 1. Either the tree no longer \
+         splits at the hole in x -- in which case this instance has stopped testing what \
+         it claims -- or [Search.bridges] is no longer deriving the settle step for a \
+         decision whose push settled past a hole, which is the M1-T66 defect and is NOT \
+         a formatting change: the nogood then negates x >= 1 having explored only x >= \
+         2, and nothing on the page says the one implies the other"
+        (List.length bs));
+  (* And the proof still verifies, so none of the above was bought by changing what is
+     written (M1-T66 changes no proof bytes). *)
+  let proof = read_file pbp in
+  (match run_veripb ~dir ~opb proof with
+  | None -> fail "bridge: veripb not found -- the proof was NOT checked"
+  | Some ok ->
+      check "bridge: veripb accepts the proof (I-X1)" ok;
+      if not ok then Printf.printf "  veripb said:\n%s\n" !last_veripb_log);
+  List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp ];
+  try Sys.rmdir dir with _ -> ()
+
+(* The other arm, and the one M2-L3 should read first: a bridge emitted for a decision
+   one level ABOVE the branch that failed, on a SATISFIABLE model. Two copies of
+   test/models/decide_hole_ancestor_sat.fzn's gadget -- `v = 2w` with w in 0..1 leaves v
+   in {0, 2}, and `v <> w` fails the v = 0 side -- with the hole in x punched first.
+
+   What it adds to the scene above is the level gap. There the bridge and the hole line
+   were one `w` apart in the trivial way; here the bridge is written at the level of the
+   nogood that needed it, which is DEEPER than the level of the decision it bridges, and
+   deeper again than the level-0 line stating the hole. That is a citation across levels
+   happening in M1 today, and until M1-T66 it recorded no I-S4 edge at all -- so the one
+   shape whose level discipline I-S4 says is argued rather than measured was also the one
+   shape the audit never saw. It sees it now. *)
+let bridge_across_levels () =
+  let dir = Filename.temp_file "baguette_bridge_anc" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let opb = Filename.concat dir "b.opb" and pbp = Filename.concat dir "b.pbp" in
+  let m =
+    {
+      vars = [| ("x", 0, 2); ("y", 0, 1); ("a", 0, 2); ("b", 0, 1) |];
+      cstrs =
+        [
+          Lin_ne ([ (1, 0) ], 1);
+          Lin_eq ([ (1, 0); (-2, 1) ], 0);
+          Ne (0, 1);
+          Lin_eq ([ (1, 2); (-2, 3) ], 0);
+          Ne (2, 3);
+        ];
+    }
+  in
+  check "bridge/ancestor: brute force agrees the scene is SAT" (brute_force m <> None);
+  let store = build_store m in
+  let obs = new_obs () in
+  let encoding, engine = build m store obs ~deep:true in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "M1-T66 bridge across levels" ] encoding oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let writer = Writer.create ~audit:true oc in
+  Encoding.start_proof encoding writer;
+  let ctx = Justify.create ~writer ~encoding in
+  let trace = Trace.create () in
+  let stats = Search.stats_create () in
+  let outcome =
+    Search.solve ~engine ~store ~ctx ~check:(fun _ -> true) ~trace ~stats ()
+  in
+  close_out oc;
+  check "bridge/ancestor: the solver finds the solution"
+    (match outcome with Search.Sat _ -> true | _ -> false);
+  let deep =
+    List.filter
+      (fun b ->
+        String.equal b.Search.br_var "x"
+        && b.Search.br_holes = [ 1 ] && b.Search.br_level > 1)
+      (Search.stats_bridges stats)
+  in
+  (match deep with
+  | [] ->
+      fail
+        "bridge/ancestor: no bridge for x's settle was derived below the level of the \
+         decision that made it (%d bridge(s) in all). Either the tree changed shape, or \
+         the settle step for an ancestor decision is no longer being derived -- which is \
+         the M1-T66 defect in the one place it already crosses levels"
+        stats.Search.n_bridges
+  | b :: _ ->
+      check
+        "bridge/ancestor: the bridge is written deeper than the decision it bridges, and \
+         cites a strictly shallower line for the hole"
+        (match b.Search.br_cited with
+        | [ (1, _, lvl) ] -> lvl < b.Search.br_level && b.Search.br_unnamed = []
+        | _ -> false));
+  check "bridge/ancestor: I-S4 holds over the whole run" (Trace.i_s4_violations trace = []);
+  let proof = read_file pbp in
+  (match run_veripb ~dir ~opb proof with
+  | None -> fail "bridge/ancestor: veripb not found -- the proof was NOT checked"
+  | Some ok ->
+      check "bridge/ancestor: veripb accepts the proof (I-X1)" ok;
+      if not ok then Printf.printf "  veripb said:\n%s\n" !last_veripb_log);
+  List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp ];
+  try Sys.rmdir dir with _ -> ()
+
 (* ================================================================= main *)
 
 let () =
@@ -2307,6 +2513,10 @@ let () =
   known_bug_ne_trace_facts ();
   print_endline "";
   known_bug_ne_root_conflict ();
+  print_endline "";
+  bridge_derivation ();
+  print_endline "";
+  bridge_across_levels ();
   report_matrix ();
   Printf.printf "\n%d matrix checks" !checks;
   if !failures > 0 then (
