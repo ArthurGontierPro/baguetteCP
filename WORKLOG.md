@@ -15,7 +15,6 @@ git worktree each (`.claude/worktrees/<tag>`), so no two share `_build`'s global
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M2-T3 **plan only** (no `lib/` code) | `docs/ROADMAP.md`, `docs/DECISIONS.md`, `WORKLOG.md` | orchestrator-plan | 2026-09-18 |
 
 Two rounds are recorded in `## Completed` below. The rows that stood here on
 2026-09-15 (`integration`, M1-T12, M1-T13) were stale — see the handoff note "the
@@ -176,6 +175,7 @@ work. The owning session picks it up.
 | M2-T9 + M1-T59 + I-S4 check | agent-index | 2026-09-17 | Index keyed structurally over `Lit.t` (**`Lit.sanitize` is non-injective** — names would have aliased). M1-T59 fell out of it; 2 of 102 `.pbp` moved, verified. **D-0019's gap NOT closed, verified.** I-S4 is now measured: retiring one cited hole line is reported and veripb still verifies (I-X9 re-derives it); retiring both is reported **and refused**. Break A: index one id high leaves 34/34 models green and veripb **accepts a `pol` citing the wrong line**. Merged as f72e902 |
 | M1-T36 + M1-T45 | agent-search4 | 2026-09-17 | Node = one child dispatched by `branch` plus the root, counted at dispatch; `stats_consistent` checks `nodes = 2·decisions + 1` on **every** `--stats` run. `lvl` differs structurally (99/49 vs 196 markers on `width_sat_depth`). Hole guard **removed on evidence**: 40 previously-refused shapes forced through 3.0.2, 0 rejections, sweep sensitive to its own corruption. 102/102 artefacts identical. Merged as 06302fd. Produced **M1-T66** |
 | M1-T63 (`trace.ml` half) + D-0043 | orchestrator | 2026-09-17 | `trace.ml`'s hedge now names `reject_set_domain` rather than saying SPEC 2.1 "does not admit" a set domain — a subset can be widened, a gate is a line someone must delete. And **D-0038 is resolved as D-0043** |
+| M2-T3 plan | orchestrator-plan | 2026-09-18 | Split M2-T3 into **M2-L0 … M2-L9** (new `## M2L` section in `docs/ROADMAP.md`) and recorded the architecture as **D-0044**. Docs only; no `lib/` change. Gate green |
 
 ## Handoff notes
 
@@ -966,6 +966,40 @@ comparison for me and a green 34/34 for a deliberately broken change. **Hash the
 when you compare, and pass `--force` when you report a count.**
 
 ---
+
+**2026-09-18 — orchestrator-plan (M2-T3 plan, docs only)**
+Split M2-T3 into ten rows, `## M2L` in `docs/ROADMAP.md`, and wrote **D-0044**. The
+architecture decision is that the **learned-constraint type is a PB inequality and a clause
+is its degree-1 case**, so starting with clauses stages the work without committing to it.
+The reason that is free *here* is D-0028: our order encoding is eager, so a clause over
+order literals already **is** a PB constraint over the same 0-1 variables — no conversion,
+no auxiliary variables, no fallback cliff. Pumpkin's LLG reports the opposite situation as
+its largest single cause of failed linear analysis, because it deliberately does not mint
+0-1 variables for atomic constraints. **That argument is `argued`, not `measured`**, and
+M2-L1's test (b) is the one that converts it: if a degree-1 `Learned.t` does not propagate
+exactly as `Bool_clause` does, D-0044's central claim is wrong and the staging in M2-L3
+must be revisited. Do not let that test be quietly weakened.
+
+Three things the next session should know before starting M2-L0. **D-0043 is DECIDED and
+unimplemented**, and its own record forbids folding it into M2-T3 — so it is M2-L0, its own
+row, and it is a precondition of **Phase 3 only** (M2-L5 onward), not of the clause path.
+**Division and `roundToOne` are already expressible** with `Weaken` + `Combine (summands,
+divisor)`; saturation is not, because `Explanation.t` has no `Saturate` constructor even
+though `Writer.Pol.saturate` already emits ` s` — that gap is M2-L7 and needs its own
+decision record. And the `## Starting M2-T3` section below is **still current**: nothing in
+this plan supersedes its preconditions, its three things-that-will-bite (I-S4, M1-T66,
+I-X10/D-0040) or its baseline numbers.
+
+External fact worth not re-deriving: Koops et al., *Practically Feasible Proof Logging for
+PB Optimization* (CP 2025) log RoundingSat's and Sat4j's **full** conflict analysis in
+VeriPB at median 2.7% logging overhead and median 1.43x checking-to-solving. Read their
+§5–6 before designing M2-L6's emission path — partial weakening before a non-normalised
+division, and merged adjacent weakening steps on `pol` lines, are both things we will
+otherwise rediscover.
+
+Gate at close: `check: ok`, 34/34 models, 252 matrix checks, no FAIL lines. Docs-only
+change, so the 1625/102-artefact baseline is unchanged by construction rather than by
+measurement.
 
 ## Starting M2-T3: clause learning (1UIP). Read this section first.
 
