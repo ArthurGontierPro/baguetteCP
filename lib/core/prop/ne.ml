@@ -64,8 +64,8 @@
    `int_ne`. This module emits a [rup], and over *order*-encoding literals: see
    [Encoding.ne_clause_lits]'s header (lib/proof/encoding.ml) for why the direct
    encoding is not needed to say "x <> v" inside a clause, only to say it as a single
-   literal. Checked against veripb 2.2.2 rather than argued; test/unit/test_prop.ml
-   runs every shape below through the real checker.
+   literal. Checked against the checker rather than argued; test/unit/test_prop.ml runs
+   every shape below through it.
 
    Every explanation this module builds -- pruning and conflict alike -- is the same
    clause:
@@ -115,11 +115,9 @@
    whatever it cites; it simply derives something valid that is not the bound the row's
    own slack argument claimed), and what was actually broken was downstream --
    lib/core/search.ml's root arm cited that [pol] to [conclusion UNSAT] as though it
-   were a contradiction, which veripb rejects. The two checkers word that rejection
-   differently and share no substring, so match on neither alone: 2.2.2 says
-   "Constraint is not a contradiction", while 3.0.2 -- emitted and checked by default
-   since D-0025 -- says "The constraint with ID <n> is not contradicting, as specified
-   by the hint". test/unit/test_random.ml matches both deliberately; see M1-T46.
+   were a contradiction, which veripb rejects. The rejection is worded "The constraint
+   with ID <n> is not contradicting, as specified by the hint" (3.0.2, the checker of
+   record); test/unit/test_random.ml matches on it.
    [Search.rests_on_a_clause] now recognises a derivation that rests on a clause and
    closes such a root conflict the D-0018 way, over the trace, so nothing this module
    produces is cited as a contradiction it does not establish. Making the citing path

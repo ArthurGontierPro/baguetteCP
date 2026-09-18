@@ -254,31 +254,25 @@ let veripb ~dir ~opb ~pbp =
       (try Sys.remove log with _ -> ());
       Some (rc = 0, out)
 
-(* M1-T46: the two checkers word a rejection differently, so a break lane that matched one
-   wording alone would be a vacuous diagnosis on the other binary. Both breaks in this
-   file surface the same way -- a `rup` the checker cannot re-derive -- and the pair below
-   was MEASURED on 2026-09-18 by running each break lane under each binary, not guessed:
+(* Both breaks in this file surface the same way -- a `rup` the checker cannot re-derive
+   -- and the wording below was MEASURED on 2026-09-18 by running each break lane, not
+   guessed:
 
-     3.0.2  "The constraint is not implied by reverse unit propagation (RUP) from core
-             and derived database."
-     2.2.2  "Verification failed. ... Hint: Failed to show '1 w_ge_3 >= 1' by reverse
-             unit propagation."
+     "The constraint is not implied by reverse unit propagation (RUP) from core and
+      derived database."
 
-   Worth one sentence, because it is the one place this project's standing rule needs
-   qualifying: M1-T46 found that the two checkers' rejections "share no substring", and
-   that is true of the wordings it measured (a non-contradiction, and a deleted id). It is
-   NOT true of a RUP failure -- both say "reverse unit propagation". Matching only that
-   would still be wrong here, because it is the least specific thing either says and a
-   different RUP failure elsewhere in the proof would match it; so both wordings are
-   listed in full-strength form and either one counts. *)
-let rejection_wordings =
-  [ "is not implied by reverse unit propagation"; "Failed to show" ]
+   It is matched at FULL strength rather than on its "reverse unit propagation" fragment.
+   The fragment is the least specific thing the checker says about this class, so a
+   different RUP failure elsewhere in the proof would match it and the lane would report
+   the wrong break. Asserting the wording at all is what separates "the checker said no"
+   from "the checker judged this step": a file that failed to parse says neither. *)
+let rejection_wordings = [ "is not implied by reverse unit propagation" ]
 
 let rejection_recognised out =
   List.exists (fun w -> contains ~needle:w out) rejection_wordings
 
 (* Assert that a run's proof is REJECTED, and that the rejection is one this project
-   recognises under whichever checker is on this machine. *)
+   recognises, in the checker's own words. *)
 let expect_rejected ~title ~dir ~opb ~pbp =
   match veripb ~dir ~opb ~pbp with
   | None ->
@@ -604,9 +598,8 @@ let test_backjump_answers_the_same () =
    lineq_src is a wholly different propagator family (int_lin_eq, not int_ne/int_eq or
    Boolean clauses). Every proof here is also checked by
    test/models/backjump_deep_unsat.fzn, backjump_bool_unsat.fzn and
-   backjump_lineq_unsat.fzn's own run through scripts/verify_proof.sh, under BOTH
-   BAGUETTE_PROOF_FORMAT settings and both veripb binaries -- this in-process run only
-   re-confirms the default (3.0) path, since [run] does not expose a format knob. *)
+   backjump_lineq_unsat.fzn's own run through scripts/verify_proof.sh; this in-process
+   run re-confirms the same path from inside the solver. *)
 let test_m2l10_coverage () =
   let scene ~title ~convertible src =
     let r, dir, opb, pbp = run src in

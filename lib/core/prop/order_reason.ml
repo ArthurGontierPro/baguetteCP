@@ -82,7 +82,7 @@ let upper_bound_terms ~coeff ~name ~decl_hi b =
    the *negated* literal [~x_ge_v] (same shape as [upper_bound_terms]'s), at
    coefficient [-coeff], and (same-variable opposite-polarity equal-magnitude
    literals sum to a constant) adds [-coeff] to the right-hand side for every step
-   of the chain. Both cases are checked directly against veripb 2.2.2 in
+   of the chain. Both cases are checked directly against the checker in
    test/unit/test_prop.ml and are exactly D-0013's worked example (row 6's
    positive-coefficient x1 term weakens via [~x1_ge_v], contributing 2 per step;
    row 5's negative-*stored* term weakens via [x1_ge_v], contributing 0).

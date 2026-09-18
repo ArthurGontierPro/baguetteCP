@@ -254,9 +254,9 @@ let build_engine m store ids =
 (* ------------------------------------------------------------------- veripb *)
 
 (* Which checker to run: lib/proof/checker.ml, shared with scripts/checker.sh.
-   Every test module open-coded this search, and every copy looked at
-   ~/.local/bin/veripb first -- so a project-wide choice of checker lived in nine
-   places and silently meant the Python 2.2.2 (M1-T18). [None] is a FAILURE at every
+   Every test module open-coded this search, and every copy resolved it differently --
+   so a project-wide choice of checker lived in nine places and could silently mean a
+   build nobody intended (M1-T18). [None] is a FAILURE at every
    call site below, never a skip. *)
 let veripb_path () = Baguette_proof.Checker.find ()
 let veripb = veripb_path ()
@@ -309,25 +309,20 @@ let contains needle s =
 
 (* M2-T14. A negative control that accepts ANY non-zero exit is green the moment the
    file stops parsing, and a proof that does not parse says nothing whatever about the
-   reasoning it contains. That is not hypothetical: under format 2.0 the M2-L0 break
-   lane in test_justify.ml passed on `:3:1: Expected number` without the checker ever
+   reasoning it contains. That is not hypothetical: the M2-L0 break lane in
+   test_justify.ml once passed on `:3:1: Expected number` without the checker ever
    judging a derivation, which is the rule D-0020/D-0030 state outright.
 
    So every lane here that asserts a rejection also asserts WHAT the rejection says.
-   Blanking a trace line into a tautology leaves the nogood underivable, so the
-   rejection must be the RUP check. Both checkers' words are listed at full strength
-   and either is accepted (M1-T46). The fragment they SHARE -- "reverse unit
-   propagation" -- is deliberately not what is matched: on a RUP failure both binaries
-   emit it, so it is the least specific thing either one says, and it would equally
-   match a RUP failure anywhere else in the proof. Measured against both binaries on
-   2026-09-18. *)
+   Blanking a trace line into a tautology leaves the nogood underivable, so the rejection
+   must be the RUP check, and the checker's wording is matched at FULL strength. The
+   fragment "reverse unit propagation" is deliberately not what is matched: it is the
+   least specific thing the checker says about this class, and it would equally match a
+   RUP failure anywhere else in the proof. Measured 2026-09-18. *)
 let rup_rejection_wordings =
   [
-    ( "3.0.2: \"not implied by reverse unit propagation (RUP) from core and derived \
-       database\"",
+    ( "\"not implied by reverse unit propagation (RUP) from core and derived database\"",
       "not implied by reverse unit propagation (RUP) from core and derived database" );
-    ( "2.2.2: \"Hint: Failed to show ... by reverse unit propagation\"",
-      "Hint: Failed to show" );
   ]
 
 (* Assert that the last rejection is the one named, not a parse error or a dangling
@@ -337,7 +332,7 @@ let check_rejection_is ~tag ~what wordings =
   let hit = List.filter (fun (_, needle) -> contains needle out) wordings in
   check
     (Printf.sprintf
-       "%s: %s -- the rejection is that JUDGEMENT in whichever checker's words, not a \
+       "%s: %s -- the rejection is that JUDGEMENT in the checker's own words, not a \
         parse error"
        tag what)
     (hit <> []);
@@ -387,16 +382,14 @@ let numbered_rules ~n_model proof =
    question being asked -- is this line derivable from the model alone? -- with no
    search, no decisions and no other derived constraint in the database. *)
 let standalone ~dir ~opb ~n_model rule_line =
-  (* The wrapper has to be in the same format as the line it wraps, or the checker
-     rejects the *wrapper* and the test reads that as the trace line failing. Which
-     format is whatever the writer that produced [rule_line] used. *)
-  let v3 = Writer.default_format () = Writer.V3_0 in
-  let t s = if v3 then s ^ " ;" else s in
+  (* The wrapper is written in the same grammar as the line it wraps -- every rule
+     terminated by `;` -- or the checker rejects the *wrapper* and the test reads that as
+     the trace line failing. *)
+  let t s = s ^ " ;" in
   run_veripb ~dir ~opb
     (String.concat "\n"
        [
-         Printf.sprintf "pseudo-Boolean proof version %s"
-           (Writer.format_to_string (Writer.default_format ()));
+         "pseudo-Boolean proof version 3.0";
          t (Printf.sprintf "f %d" n_model);
          rule_line;
          t "output NONE";
@@ -698,15 +691,10 @@ solve satisfy;
    this whole check fail for a reason that has nothing to do with the trace. Nothing
    here cites anything by name, so the names are not needed. *)
 let standalone_after ~dir ~opb ~n_model ~prefix rule_line =
-  let v3 = Writer.default_format () = Writer.V3_0 in
-  let t s = if v3 then s ^ " ;" else s in
+  let t s = s ^ " ;" in
   run_veripb ~dir ~opb
     (String.concat "\n"
-       ([
-          Printf.sprintf "pseudo-Boolean proof version %s"
-            (Writer.format_to_string (Writer.default_format ()));
-          t (Printf.sprintf "f %d" n_model);
-        ]
+       ([ "pseudo-Boolean proof version 3.0"; t (Printf.sprintf "f %d" n_model) ]
        @ List.map strip_label prefix
        @ [
            strip_label rule_line;
@@ -1295,8 +1283,7 @@ let is4_scene ~retire =
   in
   close_out oc;
   let proof = read_file pbp in
-  let v3 = Writer.default_format () = Writer.V3_0 in
-  let t s = if v3 then s ^ " ;" else s in
+  let t s = s ^ " ;" in
   let full =
     String.concat "\n"
       (lines_of (String.trim proof)

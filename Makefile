@@ -103,9 +103,8 @@ clean:
 
 # Measurement, deliberately NOT a dependency of `check`: a benchmark that gates a
 # commit becomes a flaky test. M3-T5. Pass arguments through, e.g.
-#   make bench ARGS="-F 2.0"
-# Read bench/README.md first -- in particular, on the current models fifteen of the
-# eighteen rows are at the process floor, so their timing columns measure exec and
-# not this solver.
+#   make bench ARGS="-r 9"
+# Read bench/README.md first -- in particular, on the current models 23 of the 38 rows
+# are at the process floor, so their timing columns measure exec and not this solver.
 bench: build
 	ulimit -v $(MEM_CAP_KB) && ./bench/run_bench.sh $(ARGS)

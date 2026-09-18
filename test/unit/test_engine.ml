@@ -820,9 +820,9 @@ let test_audit_empty_at_conclusion () =
 (* ===================================================================== *)
 
 (* Which checker to run: lib/proof/checker.ml, shared with scripts/checker.sh.
-   Every test module open-coded this search, and every copy looked at
-   ~/.local/bin/veripb first -- so a project-wide choice of checker lived in nine
-   places and silently meant the Python 2.2.2 (M1-T18). [None] is a FAILURE at every
+   Every test module open-coded this search, and every copy resolved it differently --
+   so a project-wide choice of checker lived in nine places and could silently mean a
+   build nobody intended (M1-T18). [None] is a FAILURE at every
    call site below, never a skip. *)
 let veripb_path () = Baguette_proof.Checker.find ()
 
@@ -1015,15 +1015,13 @@ let hole_bridge_body = "+1 hx_ge_2 +1 ~hx_ge_1 >= 1"
    is accepted, standing alone, with no search and no other derived constraint in the
    database. Both are worth having and neither is the other. *)
 let standalone_verifies ~veripb ~dir ~opb ~n_model rule_line =
-  let v3 = Writer.default_format () = Writer.V3_0 in
-  let t s = if v3 then s ^ " ;" else s in
+  let t s = s ^ " ;" in
   let pbp = Filename.concat dir "standalone.pbp" in
   let oc = open_out pbp in
   output_string oc
     (String.concat "\n"
        [
-         Printf.sprintf "pseudo-Boolean proof version %s"
-           (Writer.format_to_string (Writer.default_format ()));
+         "pseudo-Boolean proof version 3.0";
          t (Printf.sprintf "f %d" n_model);
          rule_line;
          t "output NONE";
@@ -1123,11 +1121,11 @@ let test_hole_split_bridge () =
 (*    marker count the benchmark used to report in its place.            *)
 (* ===================================================================== *)
 
-(* How many level markers does a proof contain? This is the benchmark's old `lvl`
-   proxy, transcribed: [Writer.set_level] writes `# l` under format 2.0 and the comment
-   `% level l` under 3.0, so both spellings have to be admitted or the count is zero
-   under whichever format the run did not use -- the same trap bench/run_bench.sh's
-   rule-count regexes document. *)
+(* How many level markers does a proof contain? This is the benchmark's old `lvl` proxy,
+   transcribed. The spelling is [Writer.level_marker]'s -- there is no set-level RULE at
+   all (D-0024), so [Writer.set_level] leaves the comment `% level l` -- and it is asked
+   for here rather than hardcoded, so a test that pins a count cannot silently start
+   counting nothing if the spelling moves. *)
 let level_markers pbp =
   List.length
     (List.filter
@@ -1142,7 +1140,7 @@ let level_markers pbp =
            in
            rest <> "" && String.for_all (fun c -> c >= '0' && c <= '9') rest
          in
-         after "# " || after "% level ")
+         after "% level ")
        (lines_of (read_file pbp)))
 
 let check_eq name got want =

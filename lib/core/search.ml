@@ -149,9 +149,8 @@ type node = NSat of assignment | NFail of nogood * Writer.cid
      * a marker is a property of the PROOF. It moves when the proof's shape changes with
        the tree standing still, which is precisely the confusion D-0026's claim -- the
        same search tree costs no more -- cannot be tested through;
-     * there is no marker at all without --proof, and the two formats spell it
-       differently (`# l` under 2.0, `% level l` under 3.0), so the proxy also depends
-       on which checker the run was aimed at.
+     * there is no marker at all without --proof, so the proxy is not even defined for
+       a run that emits no proof.
 
    [decisions] counts decisions taken: one per [branch] call, which is one per internal
    node. [max_depth] is the deepest decision stack reached -- the depth of the TREE, not
@@ -618,14 +617,11 @@ let wipe_after_nogood ctx ~lvl ~nogood =
    as many words, at the [conclusion] line rather than at the rule, which is what makes
    the mistake hard to read off the output.
 
-   M1-T46: the two checkers word that rejection differently and **share no substring**,
-   so match on neither alone. 2.2.2 says "Constraint is not a contradiction"; 3.0.2 --
-   the checker of record, and the format emitted by default since D-0025 -- says "The
-   constraint with ID <n> is not contradicting, as specified by the hint". Measured
-   against both binaries, not guessed. lib/core/prop/ne.ml's header and
-   test/unit/test_random.ml carry the same pair, and that test matches both deliberately:
-   matching only the 2.0 wording is not a vacuous pass but it is a vacuous *diagnosis*,
-   reporting a known bug as a brand-new one.
+   The rejection is worded "The constraint with ID <n> is not contradicting, as specified
+   by the hint" (veripb 3.0.2, the checker of record). Measured, not guessed.
+   lib/core/prop/ne.ml's header and test/unit/test_random.ml carry the same wording, and
+   that test matches on it so that this failure is DIAGNOSED rather than merely caught:
+   a lane that only knows "the checker said no" reports a known bug as a brand-new one.
 
    It reaches the root arm two ways, and this predicate is deliberately structural so
    that it catches both: the propagator's conflict explanation can BE a [Clause]
@@ -1121,7 +1117,7 @@ and branch engine store ctx trace stats cfg order decisions (dec : decision) : n
          level's trace lines and leaves it standing. That is the half of D-0045's addendum
          this row had to get right, and getting it wrong is not a wrong answer -- it is
          "Trying to access constraint with ID n that has already been deleted" several
-         lines later, or its 2.0 wording, which shares no substring with it (M1-T46). *)
+         lines later. *)
       stats.skipped <- stats.skipped + 1;
       close_level ctx ~lvl ~nogood:cid1;
       NFail (ng1, cid1)

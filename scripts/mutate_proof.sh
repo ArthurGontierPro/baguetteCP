@@ -82,16 +82,15 @@ rhs-const      raise by one the constant on the right-hand side of a claim (`rup
                which strengthens it. Picks its target the same way rup-drop-lit does, and
                falls back to a unit claim only with a note saying the lane proves little.
 drop-line      delete one emitted derivation step entirely -- `pol`, `rup`, `red` or a
-               solution rule, by default the last one. Never a `#`, `w` or `del`: failing
-               to delete is not an error (PROOF-FORMAT section 5), so a lane built on one
-               of those would be green for the wrong reason.
+               solution rule, by default the last one. Never a level marker or a `del`:
+               failing to delete is not an error (PROOF-FORMAT section 5), so a lane
+               built on one of those would be green for the wrong reason.
                MEASURED (M1-T26), and the reason this knob moved into the emitter: a
                derivation step is deleted precisely because something later cites it, so
                deleting it breaks that citation and the checker stops at the GRAMMAR. It
-               never judges the derivation. Under 3.0 that is a parse error ("The label
-               `@c13` is not assigned to a constraint ID"); under 2.0 it is a database
-               error ("Accessing the database out of bound with index 3"). Both now exit
-               5, not 0. This knob is kept because the classification is worth asserting,
+               never judges the derivation. That is a parse error ("The label `@c13` is
+               not assigned to a constraint ID"), and it exits 5, not 0.
+               This knob is kept because the classification is worth asserting,
                but it does NOT test a derivation and must not be counted as if it did.
                Writer.Mutation.Truncate_derivation is the replacement that does: it emits
                the step with its derivation thrown away but its LABEL still bound, so
@@ -185,43 +184,37 @@ cleanup() {
 # pol-cite to pick a replacement id that is still live.
 f_count() { awk '$1=="f" {print $2; exit}' "${PROOF}"; }
 
-# --- 2.0 or 3.0? -------------------------------------------------------------------
-# The two formats are separate grammars (docs/PROOF-FORMAT.md sections 2 and 2a) and
-# every awk program below has to read both, or the lane reports "no eligible site" on
-# a 3.0 proof -- which is exit 3, correctly NOT a pass, but also not a test. The two
-# differences that matter to a text mutator:
-#
-#   * a rule may be prefixed with a label, so the rule name is not always $1;
-#   * the level marker is `# N` in 2.0 and the comment `% level N` in 3.0.
-#
-# Both are handled by the shared awk prelude below rather than by branching per lane.
+# --- the format this script corrupts ------------------------------------------------
+# VeriPB 3.0, and only 3.0 (D-0046; the grammar is docs/PROOF-FORMAT.md section 2a).
+# A proof declaring anything else is NOT corrupted and NOT reported as a pass: this
+# script cannot know where the derivation steps are in a grammar it has not read, and a
+# mutator that guesses is a lane that is green for the wrong reason.
 FORMAT="$(awk '/^pseudo-Boolean proof version/ {print $NF; exit}' "${PROOF}")"
 case "${FORMAT}" in
-  2.0|3.0) ;;
+  3.0) ;;
   *) echo "mutate_proof.sh: ${PROOF} declares proof format '${FORMAT}', which this" >&2
-     echo "     script does not know how to corrupt. Nothing was tested." >&2
+     echo "     script does not know how to corrupt (it corrupts 3.0 only). Nothing" >&2
+     echo "     was tested." >&2
      exit 2 ;;
 esac
 
 # Prepended to every awk program here. [r] is the index of the rule-name token and
 # [rule] the name itself, so `rule == "pol"` works whether or not the line is
-# labelled. [lvl] tracks the decision level across both markers.
+# labelled -- a rule that yields an id is, a `del`/`output`/`conclusion` is not.
 read -r -d '' AWK_PRELUDE <<'AWKEOF' || true
 function rulestart(   i) { return ($1 ~ /^@/) ? 2 : 1 }
 function rulename(   i) { i = rulestart(); return $i }
-# A constraint reference: a bare id in 2.0, the label @cN in 3.0. Both forms are
-# recognised everywhere, and a replacement is written back in the form it replaced.
-function is_id(t) { return t ~ /^[0-9]+$/ || t ~ /^@c[0-9]+$/ }
+# A constraint reference is always the label @cN -- there are no bare-integer citations
+# in an emitted proof (D-0023, and Writer.cite is the only thing that spells one).
+function is_id(t) { return t ~ /^@c[0-9]+$/ }
 function id_num(t) { sub(/^@c/, "", t); return t + 0 }
-function same_form(orig, n) { return (orig ~ /^@/) ? "@c" n : "" n }
-# The decision level marker: `# N` in 2.0, the comment `% level N` in 3.0 (there is no
-# set-level RULE there at all -- D-0024). `w N` ends a level in 2.0; 3.0 backtracks
-# with a deletion that carries no level, so after a 3.0 backtrack [lvl] stays where the
-# last marker put it. That only misclassifies a claim emitted AFTER a wipe, and nothing
-# emits one -- deletions and the conclusion follow. Said here rather than left to be
-# rediscovered.
+function same_form(orig, n) { return "@c" n }
+# The decision level marker. There is no set-level RULE at all (D-0024); Writer.set_level
+# leaves the comment `% level N`. A backtrack is a deletion that carries no level, so
+# after one [lvl] stays where the last marker put it. That only misclassifies a claim
+# emitted AFTER a wipe, and nothing emits one -- deletions and the conclusion follow.
+# Said here rather than left to be rediscovered.
 function read_level(   ) {
-  if ($1 == "#" && $2 ~ /^[0-9]+$/) { return $2 + 0 }
   if ($1 == "%" && $2 == "level" && $3 ~ /^[0-9]+$/) { return $3 + 0 }
   return -1
 }
@@ -324,13 +317,12 @@ case "${MUT}" in
   pol-cite)
     # Which ids are already retired at the point pol-cite runs, so it never swaps in a
     # dead one -- that would make the lane green because the id is gone, not because the
-    # derivation is load-bearing. Covers 2.0's `del id N`/`delc id N` and 3.0's
-    # `del id @cN`, `delc @cN` and `del range @cLO @cHI` (which names a span, not a list,
-    # and so has to be expanded).
+    # derivation is load-bearing. Covers `del id @cN`, `delc @cN` and
+    # `del range @cLO @cHI` (which names a span, not a list, and so has to be expanded).
     DELETED="$(awk "${AWK_PRELUDE}"'
       $1=="del" || $1=="d" || $1=="delc" {
         start = 3
-        if ($2 != "id" && $2 != "range") start = 2     # 3.0 delc takes the ref directly
+        if ($2 != "id" && $2 != "range") start = 2     # delc takes the ref directly
         if ($2 == "range" && is_id($3) && is_id($4)) {
           # Half-open: del range LO HI retires [LO, HI), so HI itself is STILL LIVE.
           # Measured against veripb 3.0.2 by M1-T22; PROOF-FORMAT section 5 has the
@@ -549,14 +541,15 @@ rc=$?
 # that never reached the derivation -- the proof did not parse, or a rule named an id
 # that is gone -- says only that the file is malformed, which every corruption of a
 # text file can achieve. That is the D-0020 failure mode wearing the harness as a
-# costume, and it is exactly what `drop-line` does under 3.0: deleting a step also
-# un-defines its label, so the later citation is a PARSE error and the derivation is
-# never judged at all.
+# costume, and it is exactly what `drop-line` does: deleting a step also un-defines its
+# label, so the later citation is a PARSE error and the derivation is never judged at
+# all.
 #
-# The messages below are VeriPB 3.0.2's and 2.2.2's, taken from runs, not from a
-# grammar. If a later checker words them differently this misclassifies a lane as
-# honest -- so the patterns are listed rather than folded into one regex, and the exit
-# code is distinct so a caller can assert the class it expects instead of assuming it.
+# The messages below are VeriPB 3.0.2's, taken from runs, not from a grammar. It is the
+# only checker this project has (D-0046), so matching its wording IS the right thing to
+# do -- but if it ever words them differently this misclassifies a lane as honest, so
+# the patterns are listed rather than folded into one regex, and the exit code is
+# distinct so a caller can assert the class it expects instead of assuming it.
 rejection_class() {
   if grep -qi 'Syntax error while parsing' "$1" \
     || grep -q 'is not assigned to a constraint ID' "$1" \

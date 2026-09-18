@@ -680,18 +680,11 @@ let build m store obs ~deep =
 (* ================================================================== veripb *)
 
 (* Which veripb: [Baguette_proof.Checker] decides, for this file as for every other.
-   This used to be a private copy of the search that preferred ~/.local/bin, which is
-   the Python 2.2.2 -- so this file alone went on checking against 2.2.2 after D-0023
-   made 3.0.2 the checker of record, and could not have checked a 3.0 proof at all.
-   It was also the suite's wall-clock pole for exactly that reason. *)
+   This used to be a private copy of the search with its own preference order -- so this
+   file alone went on checking against a build that was not the checker of record after
+   D-0023 named one, and could not have checked a 3.0 proof at all. It was also the
+   suite's wall-clock pole for exactly that reason. *)
 let veripb = Baguette_proof.Checker.find ()
-
-(* The format the writer is actually emitting this run. Everything below that reads or
-   writes proof text has to agree with it: 3.0 is not a dialect of 2.0 (D-0023), so a
-   helper that knows only one spelling does not merely miss -- it goes quietly true.
-   See [level_of_line] for the case where that bit us. *)
-let proof_format = Writer.default_format ()
-let v3 = proof_format = Writer.V3_0
 
 let read_file path =
   let ic = open_in_bin path in
@@ -726,15 +719,14 @@ let run_veripb ~dir ~opb proof_text =
    that matters -- is this line derivable from the model alone, with no search, no
    decision and no other derived constraint in the database? *)
 let standalone ~dir ~opb ~n_model rule_line =
-  let term body = if v3 then body ^ " ;" else body in
+  let term body = body ^ " ;" in
   run_veripb ~dir ~opb
     (String.concat "\n"
        [
-         Printf.sprintf "pseudo-Boolean proof version %s"
-           (Writer.format_to_string proof_format);
+         "pseudo-Boolean proof version 3.0";
          term (Printf.sprintf "f %d" n_model);
          (* [rule_line] is copied verbatim out of the emitted proof, so it already
-            carries its own label and terminator in whichever format wrote it. *)
+            carries its own label and terminator. *)
          rule_line;
          term "output NONE";
          term "conclusion NONE";
@@ -757,19 +749,16 @@ let contains needle s =
 (* M2-T14. "veripb said no" is not one answer, and a negative control that takes any
    non-zero exit is green the moment the proof stops PARSING -- at which point the
    checker has judged nothing and the control measures the grammar. That is how the
-   M2-L0 break lane in test_justify.ml came to pass under format 2.0, on
-   `:3:1: Expected number`. Lanes here that assert a rejection say which rejection.
+   M2-L0 break lane in test_justify.ml once came to pass, on `:3:1: Expected number`.
+   Lanes here that assert a rejection say WHICH rejection.
 
-   Both checkers at full strength, either accepted (M1-T46). Not the fragment they
-   share: on a RUP failure BOTH say "reverse unit propagation", so it is the least
-   specific thing either prints and would match any other RUP failure in the file. *)
+   The checker's wording, at full strength. Not the fragment "reverse unit propagation":
+   it is the least specific thing the checker prints about this class and would match
+   any other RUP failure in the file. *)
 let rup_rejection_wordings =
   [
-    ( "3.0.2: \"not implied by reverse unit propagation (RUP) from core and derived \
-       database\"",
+    ( "\"not implied by reverse unit propagation (RUP) from core and derived database\"",
       "not implied by reverse unit propagation (RUP) from core and derived database" );
-    ( "2.2.2: \"Hint: Failed to show ... by reverse unit propagation\"",
-      "Hint: Failed to show" );
   ]
 
 let check_rejection_is ~tag ~what wordings =
@@ -777,16 +766,16 @@ let check_rejection_is ~tag ~what wordings =
   let hit = List.filter (fun (_, needle) -> contains needle out) wordings in
   check
     (Printf.sprintf
-       "%s: %s -- the rejection is that JUDGEMENT in whichever checker's words, not a \
+       "%s: %s -- the rejection is that JUDGEMENT in the checker's own words, not a \
         parse error"
        tag what)
     (hit <> []);
   if hit = [] then Printf.printf "       checker said: %s\n" (String.trim out)
 
-(* Which rules mint a constraint id, in [Writer]'s own order. Everything else -- `#`,
-   `w`, `del`, `*`, `output`, `conclusion` -- mints nothing, so walking the file with
-   this counter reproduces the checker's numbering. *)
-(* In 3.0 every derived constraint is introduced with a label, `@c17 rup ... ;`, so
+(* Which rules mint a constraint id, in [Writer]'s own order. Everything else -- the
+   `% level` markers, `del`, comments, `output`, `conclusion` -- mints nothing, so
+   walking the file with this counter reproduces the checker's numbering. *)
+(* Every derived constraint is introduced with a label, `@c17 rup ... ;`, so
    the rule name is no longer the first token. [Writer] owns the stripping, for the
    same reason it owns the level marker: it is the thing that wrote the label. A
    matcher that knew only the 2.0 spelling would find no rules at all, and every
@@ -1049,17 +1038,14 @@ let run_instance inst =
      nothing, so this blanks all of it. *)
   (if trace_ids <> [] then
      let name0, lo0, _ = m.vars.(0) in
-     (* Under 3.0 the replacement must keep the *label* of the line it replaces, not
-        just its id: later `pol`, `del` and `conclusion` lines cite `@cN`, and an
-        unlabelled stand-in would make those a parse error -- the checker would then
-        reject for a dangling name rather than for the blanked reasoning, and this
-        control would be green for the wrong reason. *)
+     (* The replacement must keep the *label* of the line it replaces, not just its id:
+        later `pol`, `del` and `conclusion` lines cite `@cN`, and an unlabelled stand-in
+        would make those a parse error -- the checker would then reject for a dangling
+        name rather than for the blanked reasoning, and this control would be green for
+        the wrong reason. *)
      let taut id =
-       let body =
-         Printf.sprintf "rup +1 %s_ge_%d +1 ~%s_ge_%d >= 1 ;" name0 (lo0 + 1) name0
-           (lo0 + 1)
-       in
-       if v3 then Printf.sprintf "@c%d %s" id body else body
+       Printf.sprintf "@c%d rup +1 %s_ge_%d +1 ~%s_ge_%d >= 1 ;" id name0 (lo0 + 1) name0
+         (lo0 + 1)
      in
      let blanked = blank_rules ~n_model ~victim:is_trace ~taut proof in
      match run_veripb ~dir ~opb blanked with

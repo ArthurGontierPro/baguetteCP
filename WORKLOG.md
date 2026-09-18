@@ -12,6 +12,11 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 **Wave fifteen is running: M2-T16 (agent-drop) and M2-L8 (agent-bench).**
 
+**M2-T16 is RELEASED, 2026-09-18 (agent-drop).** Moved to `## Completed`; handoff notes at
+the bottom of the file. Every file except `bench/**` is free again. M2-L8 (agent-bench) is
+still running. Note for whoever merges: `Makefile`'s `bench` comment now says `ARGS="-r 9"`
+and `23 of the 38 rows`, replacing a `-F 2.0` example for a flag agent-bench removed.
+
 **agent-drop has the whole repo except `bench/`**, and that is not laziness in the split:
 removing `Writer.V2_0` breaks every test that names it, so the code half and the test half
 **cannot** be separate sessions — a branch that does one without the other never compiles,
@@ -229,6 +234,7 @@ work. The owning session picks it up.
 | M2-L3 | agent-learn3 | 2026-09-18 | 1UIP clause learning over order literals, proof-only (**D-0044 fork (ii)**), with conflict-directed backjumping over the **decision closure** and its `rup` derivation at level 0. **I-S4's cross-level debt is discharged** and the check is wider than the invariant's wording. Backjump measured: 31 -> 9 nodes on `backjump_unsat.fzn`. **M1-T66 stays OPEN**: with `Search.bridges` disabled, 35/35 models still pass and no checker rejects — a learned clause citing across levels did NOT make the bridge load-bearing. 1833 unit checks, 267 matrix, 44 mutation, 35/35 models, determinism 35/35 byte-identical |
 | M2-T14 | agent-fmt2 | 2026-09-18 | Format-2.0 vacuity sweep. Three more instances of the M2-L0 defect found and fixed (test_proof 3.0-only lanes resolving 2.2.2 via `$VERIPB`; D-0030's certification in test_mutation writing a 3.0 proof against an env-format `.opb`; 20 blanked-trace controls asserting on exit status alone). Test (c) now checks the claim index by content, so it runs under both formats. |
 | M2-L8 | agent-bench | 2026-09-18 | The learning benchmark. Third table in `bench/run_bench.sh` reporting learned / convertible / skipped / pb-tried / pb-learned / pb-fallback / fb% / pb-stronger **beside** `.opb` bytes, `.pbp` bytes and verify ms, per model and summed over the suite as counts only. Verdict widened from M1-T36's nodes-alone to all four tree counters. **`bench/run_bench.sh -c`** is the control the row demanded: three scenes, asserted in both directions, exit non-zero on a misclassification, watched fire against three broken classifiers. `-f`/`-F`/`BAGUETTE_PROOF_FORMAT` gone from `bench/` (D-0046). Suite: 86 clauses over 21 of 38 models, 13 convertible, 9 skips over 4 models, PB 86/36/50 = **58% fallback**. |
+| M2-T16 | agent-drop | 2026-09-18 | **Proof format 2.0 removed from the project entirely** (D-0046). `Writer` emits 3.0 and only 3.0; `V2_0`, `BAGUETTE_PROOF_FORMAT`, `default_format`, every `v3 t` branch, `Pol.to_string`, `Opb.write ?labels` and `Encoding.write_opb_for` are gone, and `Checker.find` / `scripts/checker.sh` resolve one checker. **Artefact bytes byte-identical across all 38 models** (`.opb`, `.pbp`, stdout), binary hashed on both sides and different. Unit checks 1986 → 1972, all 14 accounted for. History kept and marked: D-0023/24/25/30 and `PROOF-FORMAT.md` §2. |
 
 ## Handoff notes
 
@@ -2005,3 +2011,30 @@ reachable, it becomes the better proof-only scene and `ctl_proof` can retire.
 **Peak RSS**: 10.4 MB for the control run; across the full suite, 9.7 MB solve and 18.6 MB
 verify. Nothing came near the cap, nothing timed out, and every run was under
 `ulimit -v 4000000`.
+
+**2026-09-18 — M2-T16 (agent-drop): format 2.0 is gone, and three things to know**
+
+**Artefact bytes did not move.** All 38 models' `.opb`, `.pbp` and stdout are byte-identical
+before and after, with `bin/main.exe` hashed on both sides and different (`8223711a` →
+`0011dc99`). That is what D-0046 predicted — labels were already unconditional under the
+default — and it is worth stating as a *result*, because a byte comparison whose two sides
+used the same binary is no evidence at all.
+
+**The unit count dropped 1986 → 1972, and every one of the 14 is a second leg, not lost
+coverage.** Ten were format matrices collapsing (`test_learned_survives_the_backjump` ×4,
+`test_reduction_truncation_is_rejected` ×6). Four were lanes whose 3.0 twin asserts strictly
+more and which are now absorbed rather than duplicated: `test_writer_rules`,
+`test_veripb_accepts`, one of `test_writer_levels`' three assertions, and the 2.2.2
+one-way-door probe. If you are chasing the number, that is the whole of it.
+
+**M1-T46's rule is REPLACED, not deleted, and the replacement is the part that matters.**
+"Never match on one checker's wording alone" existed because there were two checkers; with
+one, matching its wording *is* correct, and 14 sites were simplified accordingly. What
+survives, and is now in `CLAUDE.md` and `PROOF-FORMAT.md` §2a: **a lane asserting a
+rejection must assert the checker's wording at full strength**, because an exit status
+cannot tell a judgement from a parse error — which is exactly what M2-T14 found four lanes
+doing. If you write a negative control, assert the sentence.
+
+Also: `veripb 3.0.2 is now the sole oracle`, stated in `scripts/checker.sh`,
+`Checker.not_found_message`, `SPEC.md` §1 and `PROOF-FORMAT.md` §1. A bug in it is a bug
+nothing here can see. D-0046 weighed that and accepted it; do not rediscover it as news.

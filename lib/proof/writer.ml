@@ -12,18 +12,11 @@
    would be legal but pointless. [model_ids] still lists them, for a caller that does want
    to retire them.
 
-   This module emits TWO formats -- see [type format] below, D-0023, and
-   docs/PROOF-FORMAT.md sections 2 and 2a. They are separate grammars, and every
-   difference between them was found by running a checker, not by reading a spec.
-
-   Syntax notes for 2.0, checked against veripb 2.2.2:
-     - [output NONE] is mandatory before [conclusion]; [conclusion] before [end].
-     - deletion is [del id N M ...], not [del N M ...].
-     - [#] is *not* a comment marker, it is the SetLevel rule and takes an integer.
-       Only [*] introduces a comment. See the note in the final report.
-     - [conclusion BOUNDS] is only accepted when the .opb carries an objective.
-
-   And for 3.0, checked against veripb 3.0.2:
+   This module emits ONE format: VeriPB 3.0, checked against veripb 3.0.2, the sole
+   checker of record. D-0046 removed format 2.0 and the BAGUETTE_PROOF_FORMAT switch;
+   docs/PROOF-FORMAT.md section 2a is the rule contract, and its section 2 survives
+   only as the historical record of what 2.0 did. Every syntax note below was found by
+   running the checker, not by reading a spec:
      - every rule ends in [;]; [rup] already does and must not get a second.
      - comments are [%]; [*] is refused outright.
      - [red]'s witness follows a [:], before the terminator.
@@ -73,36 +66,11 @@ module Pol = struct
     | (k, c) :: rest ->
         List.fold_left (fun acc (k, c) -> add acc (mul (id c) k)) (mul (id c) k) rest
 
-  let rec write b = function
-    | Id c -> Buffer.add_string b (string_of_int c)
-    | Axiom l -> Buffer.add_string b (Lit.to_string l)
-    | Add (a, c) ->
-        write b a;
-        Buffer.add_char b ' ';
-        write b c;
-        Buffer.add_string b " +"
-    | Mul (a, k) ->
-        write b a;
-        Buffer.add_string b (Printf.sprintf " %d *" k)
-    | Div (a, k) ->
-        write b a;
-        Buffer.add_string b (Printf.sprintf " %d d" k)
-    | Sat a ->
-        write b a;
-        Buffer.add_string b " s"
-    | Weaken (a, v) ->
-        write b a;
-        Buffer.add_string b (Printf.sprintf " %s w" (Lit.var_name v))
-
-  let to_string p =
-    let b = Buffer.create 64 in
-    write b p;
-    Buffer.contents b
-
-  (* The same, with constraint references rendered by [cite] instead of as integers.
-     VeriPB 3.0 lets a `pol` name its operands (`pol @c7 @c9 +`), which is the whole
-     point of D-0023: an id our counter got wrong is then a hard "label not assigned"
-     error rather than a silently different constraint. *)
+  (* Constraint references are rendered by [cite], never as bare integers: VeriPB 3.0
+     lets a `pol` name its operands (`pol @c7 @c9 +`), which is the whole point of
+     D-0023 -- an id our counter got wrong is then a hard "label not assigned" error
+     rather than a silently different constraint. The positional rendering this used to
+     sit beside went with format 2.0 (D-0046); there is no unlabelled `pol` any more. *)
   let rec write_cited b cite = function
     | Id c -> Buffer.add_string b (cite c)
     | Axiom l -> Buffer.add_string b (Lit.to_string l)
@@ -131,33 +99,24 @@ module Pol = struct
 end
 
 (* ---------------------------------------------------------------------------
-   Which proof format to emit.
+   The format this writer emits.
 
-   3.0 is what ships (M1-T19); 2.0 is still emitted on request, with
-   BAGUETTE_PROOF_FORMAT=2.0 or [create ~format:V2_0], and the whole suite is green
-   under both. They are NOT dialects of one another -- see D-0023 and
-   docs/PROOF-FORMAT.md section 2a. The differences that matter here:
+   VeriPB 3.0, and only 3.0 (D-0046; M1-T19 made it the default, D-0025 made it the
+   checker of record). The shape of the grammar, kept here because every one of these
+   is a thing the writer does differently from the 2.0 this project used to emit, and
+   the reasoning for each survives in docs/PROOF-FORMAT.md section 2a and D-0023/24:
 
      - every rule is terminated by `;`
-     - comments are `%`, not `*`
+     - comments are `%`; `*` is refused outright
      - `#` (set level) and `w` (wipe level) DO NOT EXIST. The level stack this
-       project's backtracking is built on (D-0008) is gone, and the writer has to
-       keep the tags itself and delete explicitly.
-     - `red`'s witness follows a `:`, before the terminator, not a `;`
-     - `delc` drops its `id` keyword
-     - constraints may be labelled `@name` and cited by name
-     - veripb 2.2.2 cannot read a 3.0 proof at all ("Unsupported version"), so this
-       is a one-way switch for every consumer of a proof at once.
+       project's backtracking is built on (D-0008) is not the checker's any more, so
+       the writer keeps the tags itself and deletes explicitly ([wipe_level], D-0024).
+     - `red`'s witness follows a `:`, before the terminator
+     - `delc` takes its constraint reference directly, with no `id` keyword
+     - constraints carry `@name` labels and are cited by name, never by number.
    --------------------------------------------------------------------------- *)
 
-type format = V2_0 | V3_0
-
-let format_to_string = function V2_0 -> "2.0" | V3_0 -> "3.0"
-
-let format_of_string = function
-  | "2.0" | "2" -> Some V2_0
-  | "3.0" | "3" -> Some V3_0
-  | _ -> None
+let proof_version = "3.0"
 
 (* ---------------------------------------------------------------------------
    The writer.
@@ -172,7 +131,7 @@ let format_of_string = function
    from the text what this module already knew -- which token of a `pol` is a
    coefficient and which is a constraint reference, which ids are still live, which
    claim was emitted under a decision -- and it got one of them structurally wrong:
-   under 3.0 every derived constraint carries a label and is cited by it, so
+   every derived constraint carries a label and is cited by it, so
    *deleting* a step un-defines that label and the later citation fails to PARSE. The
    checker rejects, the lane goes green, and nothing about the derivation was tested.
    That is D-0020's failure mode, and it is not fixable in awk: the information
@@ -194,9 +153,9 @@ let format_of_string = function
       way to obtain a corrupting writer is [create_mutated], which *requires* a
       [Mutation.t]: there is no default, and no way to ask for one by accident.
    3. [create_mutated] consults NO environment variable and no global. Compare
-      [audit] (BAGUETTE_PROOF_AUDIT) and [format] (BAGUETTE_PROOF_FORMAT): those are
-      deliberately switchable from outside the program, and this deliberately is not.
-      Nothing outside an OCaml call site can turn it on.
+      [audit] (BAGUETTE_PROOF_AUDIT), which is deliberately switchable from outside
+      the program; this deliberately is not. Nothing outside an OCaml call site can
+      turn it on.
    4. Nothing in lib/ or bin/ names [create_mutated]. test/unit/test_mutation.ml
       asserts that by grepping the tree, so the day a propagator "temporarily" reaches
       for it the mutation suite goes red.
@@ -285,16 +244,15 @@ type entry = { origin : string; level : int }
 
 type t = {
   oc : out_channel;
-  fmt : format;
   mutable next_id : cid;
   live : (cid, entry) Hashtbl.t; (* id -> what introduced it, for audit failures *)
   model : (cid, unit) Hashtbl.t; (* ids fixed by the .opb, not an obligation *)
   tags : (cid, int) Hashtbl.t;
-      (* 3.0 only, and always on there rather than under [audit]: the level each live
-         derived id was tagged with. In 2.0 the checker keeps this and [w] consults
-         it; 3.0 has no level stack, so [wipe_level] has to reproduce `w l` from this
-         table. It is a mirror of checker state (invariant I-X3) and stops being
-         optional the moment the checker stops holding it. *)
+      (* Always on, rather than under [audit]: the level each live derived id was
+         tagged with. VeriPB 3.0 has no level stack -- the checker used to keep this
+         and `w` used to consult it (D-0024) -- so [wipe_level] reproduces `w l` from
+         this table. It is a mirror of checker state (invariant I-X3) and stopped being
+         optional the moment the checker stopped holding it. *)
   audit : bool;
   comments : bool;
   mutable level : int;
@@ -315,42 +273,10 @@ type t = {
 let audit_enabled () =
   match Sys.getenv_opt "BAGUETTE_PROOF_AUDIT" with Some "1" -> true | _ -> false
 
-(* BAGUETTE_PROOF_FORMAT=3.0 switches emission, the same way BAGUETTE_PROOF_AUDIT
-   switches the audit. An unrecognised value is an error rather than a silent 2.0:
-   a typo that quietly emitted the format you were trying to leave is exactly the
-   kind of "green for the wrong reason" this project keeps finding. *)
-let format_from_env () =
-  match Sys.getenv_opt "BAGUETTE_PROOF_FORMAT" with
-  | None | Some "" -> V3_0
-  | Some s -> (
-      match format_of_string (String.trim s) with
-      | Some f -> f
-      | None ->
-          invalid_arg
-            (Printf.sprintf
-               "BAGUETTE_PROOF_FORMAT=%S is not a proof format this writer emits. Use \
-                2.0 or 3.0."
-               s))
-
-(* The format a writer gets when nobody says otherwise. Read once: the .opb has to be
-   written before the proof exists (invariant I-X5) and has to agree with it about
-   labelling, so [Encoding.write_opb] consults this before any writer is created. *)
-let default_format =
-  let cached = ref None in
-  fun () ->
-    match !cached with
-    | Some f -> f
-    | None ->
-        let f = format_from_env () in
-        cached := Some f;
-        f
-
-let create ?(comments = false) ?audit ?format oc =
+let create ?(comments = false) ?audit oc =
   let audit = match audit with Some b -> b | None -> audit_enabled () in
-  let fmt = match format with Some f -> f | None -> default_format () in
   {
     oc;
-    fmt;
     next_id = 0;
     live = Hashtbl.create 256;
     model = Hashtbl.create 64;
@@ -369,8 +295,8 @@ let create ?(comments = false) ?audit ?format oc =
    a setting here: a normal writer comes from [create] and cannot become this one.
    Read the block comment on [module Mutation] before calling it, and do not call it
    from lib/ or bin/ -- test_mutation.ml checks that nothing there does. *)
-let create_mutated ?comments ?audit ?format ~mutation oc =
-  { (create ?comments ?audit ?format oc) with mutation = Some mutation }
+let create_mutated ?comments ?audit ~mutation oc =
+  { (create ?comments ?audit oc) with mutation = Some mutation }
 
 (* What was corrupted, or [None] if the knob never found a site it could corrupt.
 
@@ -381,13 +307,11 @@ let create_mutated ?comments ?audit ?format ~mutation oc =
 let mutation_note t = t.mutation_note
 let mutation_fired t = t.mutation_note <> None
 let mutation_plan t = t.mutation
-let format t = t.fmt
-let v3 t = t.fmt = V3_0
 
-(* How a constraint is referred to. In 3.0 every constraint -- model rows included,
-   via Opb.label_of -- carries the label `@c<id>`, so nothing in an emitted proof is
-   a bare integer any more. *)
-let cite t id = if v3 t then Opb.label_of id else string_of_int id
+(* How a constraint is referred to. Every constraint -- model rows included, via
+   Opb.label_of -- carries the label `@c<id>`, so nothing in an emitted proof is a bare
+   integer. *)
+let cite _t id = Opb.label_of id
 let cite_all t ids = String.concat " " (List.map (cite t) ids)
 let auditing t = t.audit
 let last_id t = t.next_id
@@ -414,10 +338,9 @@ let is_finished t = t.finished
        only places this module writes to [t.oc], plus the [flush] in [conclusion],
        which is timed too. Every RULE goes through [line] (via [rule], or directly
        where the body already carries its own `;`). But [comment] and
-       [always_comment] do NOT go through [line], and that is not a corner case: in
-       format 3.0 -- the default -- [set_level] emits its level marker as an
-       [always_comment], so every level marker in every 3.0 proof bypasses [line].
-       All three are instrumented.
+       [always_comment] do NOT go through [line], and that is not a corner case:
+       [set_level] emits its level marker as an [always_comment], so every level
+       marker in every proof bypasses [line]. All three are instrumented.
      * NOT the building of a rule's body. [rule t (Printf.sprintf ...)],
        [Pol.to_string_cited], [Opb.constr_to_string], [lits_to_string] all run at the
        CALL SITE, before [line] is entered, and are not in this number. So this is a
@@ -480,22 +403,18 @@ let line t fmt =
         emit_us := !emit_us + (emit_now () - t0))
       t.oc (fmt ^^ "\n")
 
-(* A rule, terminated the way the format wants. 3.0 ends every rule with `;`; 2.0
-   ends it at the newline. Rules whose body already carries a `;` -- [rup] and the
-   OPB constraint rendering it uses -- go through [line] directly: a second one is a
-   syntax error in 3.0. *)
-let rule t body = if v3 t then line t "%s ;" body else line t "%s" body
+(* A rule, terminated by `;`. Rules whose body already carries one -- [rup] and the
+   OPB constraint rendering it uses -- go through [line] directly: a second `;` is a
+   syntax error. *)
+let rule t body = line t "%s ;" body
 
 (* The label a rule that YIELDS an id is prefixed with, so later rules can cite it by
-   name. Empty in 2.0. [sol] must not get one: VeriPB 3.0 says in as many words that
-   "the rule `sol` cannot be prefixed with a label", and it is right -- it yields
-   nothing to name. *)
-let label_for t id = if v3 t then Opb.label_of id ^ " " else ""
+   name. [sol] must not get one: VeriPB 3.0 says in as many words that "the rule `sol`
+   cannot be prefixed with a label", and it is right -- it yields nothing to name. *)
+let label_for _t id = Opb.label_of id ^ " "
 
-(* Comments. 2.0 spells them [*]; 3.0 spells them [%] and rejects [*] outright
-   ("Expected a top level rule name"). [#] is a comment in neither: in 2.0 it is
-   SetLevel, in 3.0 it introduces a proofgoal id. *)
-let comment_char t = if v3 t then '%' else '*'
+(* Comments are [%]; [*] is refused outright ("Expected a top level rule name"), and
+   [#] is not a comment either -- it introduces a proofgoal id. *)
 
 (* Both arms are timed, and only the arm that writes is counted. A suppressed comment
    still walks its format -- [ifprintf] is not free -- and that cost is incurred
@@ -511,8 +430,8 @@ let comment t fmt =
   if not !emit_clock then
     if t.comments then (
       incr emit_lines;
-      Printf.fprintf t.oc ("%c " ^^ fmt ^^ "\n") (comment_char t))
-    else Printf.ifprintf t.oc ("%c " ^^ fmt ^^ "\n") (comment_char t)
+      Printf.fprintf t.oc ("%% " ^^ fmt ^^ "\n"))
+    else Printf.ifprintf t.oc ("%% " ^^ fmt ^^ "\n")
   else
     let t0 = emit_now () in
     let stop _ = emit_us := !emit_us + (emit_now () - t0) in
@@ -522,18 +441,17 @@ let comment t fmt =
           incr emit_lines;
           stop oc)
         t.oc
-        ("%c " ^^ fmt ^^ "\n")
-        (comment_char t)
-    else Printf.ikfprintf stop t.oc ("%c " ^^ fmt ^^ "\n") (comment_char t)
+        ("%% " ^^ fmt ^^ "\n")
+    else Printf.ikfprintf stop t.oc ("%% " ^^ fmt ^^ "\n")
 
 (* A comment that is emitted whether or not --proof-comments is on. Used for the
-   few markers that make a proof navigable at all -- and, in format 3.0, for the level
-   markers themselves ([set_level]), which is why this bypass of [line] is not a
-   detail: on a model with 196 decisions it is 196 of the proof's lines. *)
+   few markers that make a proof navigable at all -- and for the level markers
+   themselves ([set_level]), which is why this bypass of [line] is not a detail: on a
+   model with 196 decisions it is 196 of the proof's lines. *)
 let always_comment t fmt =
   if not !emit_clock then (
     incr emit_lines;
-    Printf.fprintf t.oc ("%c " ^^ fmt ^^ "\n") (comment_char t))
+    Printf.fprintf t.oc ("%% " ^^ fmt ^^ "\n"))
   else
     let t0 = emit_now () in
     Printf.kfprintf
@@ -541,25 +459,23 @@ let always_comment t fmt =
         incr emit_lines;
         emit_us := !emit_us + (emit_now () - t0))
       t.oc
-      ("%c " ^^ fmt ^^ "\n")
-      (comment_char t)
+      ("%% " ^^ fmt ^^ "\n")
 
 let fresh t ~origin =
   t.next_id <- t.next_id + 1;
   if t.audit then Hashtbl.replace t.live t.next_id { origin; level = t.level };
-  if v3 t then Hashtbl.replace t.tags t.next_id t.level;
+  Hashtbl.replace t.tags t.next_id t.level;
   t.next_id
 
 (* Preamble: version line, then the count of model constraints loaded from the .opb.
 
-   The count is NOT the trap PROOF-FORMAT section 2 used to describe it as. Both
-   checkers reject a wrong one outright and name the right number ("The formula
-   contains 3 constraints, but the rule expected that there are 2"), measured on
-   both. What used to be silent was the *consequence* of miscounting inside
-   [Encoding] -- a `pol` citing a shifted id. In 3.0 that is gone too: citations are
-   labels. *)
+   The count is NOT the trap PROOF-FORMAT section 2 used to describe it as. The
+   checker rejects a wrong one outright and names the right number ("The formula
+   contains 3 constraints, but the rule expected that there are 2"), measured. What
+   used to be silent was the *consequence* of miscounting inside [Encoding] -- a `pol`
+   citing a shifted id. That is gone too: citations are labels. *)
 let header t ~n_model_constraints =
-  line t "pseudo-Boolean proof version %s" (format_to_string t.fmt);
+  line t "pseudo-Boolean proof version %s" proof_version;
   (* A corrupted proof says so in its own first comment, unconditionally -- not under
      --proof-comments, because the point is that this line cannot be switched off.
      Nothing but [create_mutated] can produce it, so its presence in a file is proof
@@ -592,12 +508,12 @@ let model_ids t =
    above. One [w] per backtrack beats one [del] per reason. *)
 let set_level t l =
   if l < 0 then invalid_arg "Writer.set_level: negative level";
-  (* 3.0 has no SetLevel rule -- `#` there introduces a proofgoal id and `# 1` is a
-     parse error. The level is still real; it is just ours to carry now, so record it
-     and leave a comment where the marker used to be. That comment is emitted
-     unconditionally: without it a 3.0 proof has nothing in it that says where a
-     decision began, and the proofs in this project are read by hand. *)
-  if v3 t then always_comment t "level %d" l else line t "# %d" l;
+  (* VeriPB 3.0 has no SetLevel rule -- `#` there introduces a proofgoal id and `# 1`
+     is a parse error. The level is still real; it is just ours to carry now, so record
+     it and leave a comment where the marker used to be. That comment is emitted
+     unconditionally: without it a proof has nothing in it that says where a decision
+     began, and the proofs in this project are read by hand. *)
+  always_comment t "level %d" l;
   t.level <- l
 
 let current_level t = t.level
@@ -605,33 +521,24 @@ let current_level t = t.level
 (* Allocate ids at a CHOSEN level for the duration of [f] -- docs/DECISIONS.md D-0045's
    addendum, and the entry point M2-L1 was sent to build.
 
-   The problem it exists for, measured before it was written (M2-L1, 2026-09-18, both
-   checkers, by hand):
-
-     - 3.0: [fresh] tags every id with [t.level], unconditionally and with no override,
-       and [wipe_level l] deletes every id tagged at level >= l. So a constraint derived
-       at the conflict level is deleted by the backjump that retires that level, and a
-       later `pol` citing it is rejected -- "Trying to access constraint with ID 3 that
-       has already been deleted" (veripb 3.0.2).
-     - 2.0: [t.tags] is not maintained at all; the CHECKER holds the level stack and
-       `w l` retires against it. Same outcome, different machinery and a different
-       wording -- "Rule 6 is trying to access constraint (constraintId 3), that was
-       marked as safe to delete" (veripb 2.2.2). The two share no useful substring;
-       match both (M1-T46).
+   The problem it exists for, measured before it was written (M2-L1, 2026-09-18, by
+   hand): [fresh] tags every id with [t.level], unconditionally and with no override,
+   and [wipe_level l] deletes every id tagged at level >= l. So a constraint derived at
+   the conflict level is deleted by the backjump that retires that level, and a later
+   `pol` citing it is rejected -- "Trying to access constraint with ID 3 that has
+   already been deleted" (veripb 3.0.2).
 
    A learned constraint exists precisely to outlive the conflict that produced it, so it
    must be introduced at level 0. Note what this is NOT: it is not a [fresh ~level]
-   argument that writes [t.tags] directly. That would be green under 3.0 and WRONG under
-   2.0, because under 2.0 nothing we write to our own table reaches the checker -- only
-   the `#` marker does. So the level has to be moved for real, in the proof, which is
-   what [set_level] already does in both formats, and this is a bracket around it rather
-   than a new allocation path.
+   argument that writes [t.tags] directly. The level is moved for real, by [set_level],
+   so that [t.tags] and the emitted proof keep saying the same thing about where an id
+   landed (invariant I-X3) instead of only our own table knowing; this is a bracket
+   around [set_level] rather than a new allocation path.
 
-   The cost is honest and is two marker lines per bracketed derivation: `# l` / `# saved`
-   under 2.0, and the `% level l` comment under 3.0. D-0045's objection to reaching for
+   The cost is honest and is two marker lines per bracketed derivation: the `% level l`
+   comment on the way in and another on the way out. D-0045's objection to reaching for
    [set_level] was that it puts a marker "in the middle of a derivation" -- true, and the
-   answer is that this brackets a WHOLE derivation rather than sitting inside one. The
-   marker pair is what makes the 2.0 half work at all; it cannot be optimised away.
+   answer is that this brackets a WHOLE derivation rather than sitting inside one.
 
    [f] is run at [l] and the level is restored even if it raises, because a writer left
    at the wrong level would mis-tag every id minted after it and the failure would
@@ -650,31 +557,26 @@ let with_level t l f =
     set_level t saved;
     r)
 
-(* The level an id is tagged with, or [None] if the id is not tagged. 3.0 only: under
-   2.0 [t.tags] is deliberately empty and the honest answer is "the checker knows, we do
-   not". A test that wants to see WHERE an id landed asks here rather than grepping the
-   proof, and gets [None] under 2.0 rather than a plausible-looking lie. *)
-let tag_of t id = if v3 t then Hashtbl.find_opt t.tags id else None
+(* The level an id is tagged with, or [None] if the id is not tagged -- it was retired,
+   or it is a model row, which nothing tags. A test that wants to see WHERE an id landed
+   asks here rather than grepping the proof. *)
+let tag_of t id = Hashtbl.find_opt t.tags id
 
 (* ------------------------------------------------------------------ reading it back
 
    [set_level] is the only thing that writes a level marker, so the spelling belongs
    here rather than in each test that greps a proof for it. The reason this is a
-   function and not a convention: a test that hard-codes `# 1` does not FAIL when the
-   default flips to 3.0 -- it finds nothing, and an assertion of the form
+   function and not a convention: a test that hard-codes a spelling does not FAIL when
+   that spelling moves -- it finds nothing, and an assertion of the form
    `not (contains "# 1" proof)` passes vacuously. A test that has silently stopped
-   testing is worse than a red one, and the 3.0 flip turned up five of them.
+   testing is worse than a red one, and the 2.0-to-3.0 flip turned up five of them. *)
 
-   Both spellings are recognised whatever the active format, so these cannot go stale
-   the next time the default moves. *)
-
-(* A proof line with its 3.0 label removed: `@c17 rup ... ;` becomes `rup ... ;`.
+(* A proof line with its label removed: `@c17 rup ... ;` becomes `rup ... ;`.
 
    Tests that pin what a rule SAYS want the body; the label is the constraint's name,
-   which 2.0 does not have and which the checker verifies for them (a citation of a
-   name that was never bound is a parse error, which is the whole point of D-0023's
-   labels). Stripping it here keeps such an assertion meaning the same thing in both
-   formats instead of meaning nothing in one of them. *)
+   and the checker verifies it for them (a citation of a name that was never bound is a
+   parse error, which is the whole point of D-0023's labels). Stripping it here keeps
+   such an assertion about the rule rather than about its name. *)
 let strip_label line =
   if String.length line > 0 && line.[0] = '@' then
     match String.index_opt line ' ' with
@@ -682,33 +584,27 @@ let strip_label line =
     | None -> line
   else line
 
-(* The rule's text with its 3.0 decoration removed: label off the front, terminator
-   off the back. This is the projection a pin on "what this step says" wants -- 3.0
-   terminates every rule, so a `pol` that read `pol 3 4 + 2 d` in 2.0 reads
-   `@c17 pol 3 4 + 2 d ;` now, while saying exactly the same thing. (A `rup` carries
-   its own `;` in both formats, as part of the constraint syntax rather than as the
-   rule terminator, so it is unaffected either way.) *)
+(* The rule's text with its decoration removed: label off the front, terminator off the
+   back. This is the projection a pin on "what this step says" wants -- every rule is
+   labelled and terminated, so a step that derives `@c3 @c4 + 2 d` is emitted as
+   `@c17 pol @c3 @c4 + 2 d ;`. (A `rup` carries its own `;` as part of the constraint
+   syntax rather than as the rule terminator, so it is unaffected either way.) *)
 let rule_body line =
   let l = String.trim (strip_label line) in
   let n = String.length l in
   if n >= 1 && l.[n - 1] = ';' then String.trim (String.sub l 0 (n - 1)) else l
 
-let level_marker fmt l =
-  match fmt with
-  | V2_0 -> Printf.sprintf "# %d" l
-  | V3_0 -> Printf.sprintf "%% level %d" l
+let level_marker l = Printf.sprintf "%% level %d" l
 
-(* [Some l] when [line] is a level marker in either format. 2.0 writes the SetLevel
-   rule `# l`; 3.0 has no such rule (D-0024) and [set_level] leaves `% level l`. *)
+(* [Some l] when [line] is a level marker. VeriPB 3.0 has no SetLevel rule (D-0024), so
+   [set_level] leaves the comment `% level l` and that is the only spelling there is. *)
 let level_of_line line =
   let line = String.trim line in
-  let has p =
-    String.length line >= String.length p && String.sub line 0 (String.length p) = p
-  in
-  let num_after k =
+  let p = "% level " in
+  let k = String.length p in
+  if String.length line >= k && String.sub line 0 k = p then
     int_of_string_opt (String.trim (String.sub line k (String.length line - k)))
-  in
-  if has "# " then num_after 2 else if has "% level " then num_after 8 else None
+  else None
 
 (* Does [proof] open decision level [l]? *)
 let opens_level l proof =
@@ -816,32 +712,30 @@ let del_run t (lo, hi) =
     rule t (Printf.sprintf "del id %s" (cite t hi)))
 
 let wipe_level t l =
-  if v3 t then (
-    (* VeriPB 3.0 deleted the level stack that D-0008 built backtracking on. `w l`
-       retired every constraint TAGGED at level >= l, and the checker held the tags;
-       now [t.tags] does, so the same set is computed here and deleted explicitly.
-       This reproduces `w l` exactly -- it is not "delete what was derived since",
-       which would be wrong the moment a level is re-entered after a `# 0` interlude
-       (search does exactly that: `# 1`, `# 0`, two root prunings, `# 1` again).
+  (* VeriPB 3.0 deleted the level stack that D-0008 built backtracking on. `w l` retired
+     every constraint TAGGED at level >= l, and the checker held the tags; now [t.tags]
+     does, so the same set is computed here and deleted explicitly. This reproduces
+     `w l` exactly -- it is not "delete what was derived since", which would be wrong the
+     moment a level is re-entered after an interlude at a lower level (search does
+     exactly that: level 1, level 0, two root prunings, level 1 again).
 
-       The cost is honest and belongs in the record: PROOF-FORMAT section 5's whole
-       argument for levels was one proof line per backtrack rather than one deletion
-       per reason, and that argument is gone. Runs recover most of it -- a level's
-       ids are usually consecutive, so it is usually still one or two lines -- but
-       "usually" is not "always", and a level whose ids interleave with deletions
-       costs a pair of lines per run. What the proof no longer grows with, since
-       M1-T29, is the number of reasons retired at one level: every shape [del_run]
-       can emit is now of bounded length. See D-0024.
+     The cost is honest and belongs in the record: PROOF-FORMAT section 5's whole
+     argument for levels was one proof line per backtrack rather than one deletion per
+     reason, and that argument is gone. Runs recover most of it -- a level's ids are
+     usually consecutive, so it is usually still one or two lines -- but "usually" is not
+     "always", and a level whose ids interleave with deletions costs a pair of lines per
+     run. What the proof no longer grows with, since M1-T29, is the number of reasons
+     retired at one level: every shape [del_run] can emit is of bounded length. See
+     D-0024, which is the record of what `w` did and why this function has to imitate it.
 
-       [del_run] is what turns an inclusive run into a rule; `del range` is half-open
-       and that difference is the whole of M1-T22. *)
-    let doomed =
-      Hashtbl.fold (fun id lv acc -> if lv >= l then id :: acc else acc) t.tags []
-      |> List.sort compare
-    in
-    List.iter (Hashtbl.remove t.tags) doomed;
-    List.iter (del_run t) (runs doomed))
-  else line t "w %d" l;
+     [del_run] is what turns an inclusive run into a rule; `del range` is half-open and
+     that difference is the whole of M1-T22. *)
+  let doomed =
+    Hashtbl.fold (fun id lv acc -> if lv >= l then id :: acc else acc) t.tags []
+    |> List.sort compare
+  in
+  List.iter (Hashtbl.remove t.tags) doomed;
+  List.iter (del_run t) (runs doomed);
   if t.audit then
     let doomed =
       Hashtbl.fold
@@ -927,12 +821,11 @@ let rec cited_ids acc (p : Pol.t) =
    DATABASE ("Trying to access constraint with ID N that has already been deleted"),
    not about the derivation -- the text harness had to reconstruct this set by
    replaying every `del` in the proof, which is where M1-T22's half-open off-by-one
-   lived. Under 2.0 [tags] is not maintained (the checker holds the levels there), so
-   only the model rows are offered; they are enough, and a wrong answer here can only
-   make the knob decline to fire, never manufacture a pass. *)
+   lived. A wrong answer here can only make the knob decline to fire, never manufacture
+   a pass. *)
 let citable_ids t =
   let live = ref [] in
-  if v3 t then Hashtbl.iter (fun id _ -> live := id :: !live) t.tags;
+  Hashtbl.iter (fun id _ -> live := id :: !live) t.tags;
   for i = t.n_model downto 1 do
     live := i :: !live
   done;
@@ -986,9 +879,7 @@ let corrupt_pol t ~origin (p : Pol.t) =
   match knob_for t ~corrupts:Mutation.corrupts_pol ~origin with
   | None -> p
   | Some m -> (
-      let render q =
-        if v3 t then Pol.to_string_cited ~cite:(cite t) q else Pol.to_string q
-      in
+      let render q = Pol.to_string_cited ~cite:(cite t) q in
       match apply_to_pol t m.Mutation.kind p with
       | Some q when render q <> render p ->
           t.mutation_hits <- t.mutation_hits + 1;
@@ -1074,8 +965,8 @@ let emit_yielding t ~origin body_of_id =
       incapable of being corrupted, or a future caller gets a derivation no lane can
       ever gate. A proof step this file writes must be a proof step this file can
       knowingly break.
-   2. It bypassed [Pol.to_string_cited], so under 3.0 it emitted positional text where
-      everything else emits labels. A caller would have had to re-derive the labelling
+   2. It bypassed [Pol.to_string_cited], so it emitted positional text where everything
+      else emits labels. A caller would have had to re-derive the labelling
       rule this module already knows -- the "a project-wide fact copied into several
       files" failure this tree has recorded twice already (Checker.find, and the
       level-marker spellings that D-0023's round collapsed into this module).
@@ -1086,13 +977,12 @@ let emit_yielding t ~origin body_of_id =
 let pol t ~origin p =
   (* [corrupt_pol] is the identity for every writer [create] built. *)
   let p = corrupt_pol t ~origin p in
-  emit_yielding t ~origin (fun _ ->
-      "pol " ^ if v3 t then Pol.to_string_cited ~cite:(cite t) p else Pol.to_string p)
+  emit_yielding t ~origin (fun _ -> "pol " ^ Pol.to_string_cited ~cite:(cite t) p)
 
 (* Reverse unit propagation of a PB constraint. Prefer [pol] where the reasoning is
    known; see docs/PROOF-FORMAT.md section 2.
 
-   The body already ends in " ;" (Opb.constr_to_string), which is the 3.0 terminator,
+   The body already ends in " ;" (Opb.constr_to_string), which is the rule terminator,
    so this goes through [line] rather than [rule]: `rup ... ; ;` is a syntax error. *)
 let rup t ~origin c =
   let c = corrupt_claim t ~origin c in
@@ -1119,16 +1009,13 @@ let rup_clause t ~origin lits = rup t ~origin (Opb.clause lits)
    search -- and it is the missing half of a `pol`: the derivation says how, the `ia`
    says what.
 
-   BOTH checkers have this rule, which is why it can be the control rather than a
-   3.0-only luxury. docs/PROOF-FORMAT.md section 2a lists no `e` and no `ia` and is
-   INCOMPLETE on this point; see the M1-T51 hand-back. Measured wordings, and the two
-   share no substring, so match on neither alone:
+   docs/PROOF-FORMAT.md section 2a lists no `e` and no `ia` and is INCOMPLETE on this
+   point; see the M1-T51 hand-back. The measured rejection wording, for a lane that
+   asserts this control fires:
 
-     3.0.2  "Expected constraint is not syntactically implied by the constraint at the
-             hint."
-     2.2.2  "Hint: ('<claim>', '<the constraint at the hint>')"
+     "Expected constraint is not syntactically implied by the constraint at the hint."
 
-   The hint is mandatory here even though both checkers accept the rule without one.
+   The hint is mandatory here even though the checker accepts the rule without one.
    Unhinted, `ia C ;` searches the WHOLE database and 3.0.2 says so ("Constraint not
    syntactically implied by any constraint in the database"), which makes it a much
    weaker control than it looks: the claim being implied by some ladder clause or some
@@ -1136,20 +1023,17 @@ let rup_clause t ~origin lits = rup t ~origin (Opb.clause lits)
    be satisfied by a constraint other than its subject is this project's signature
    failure mode. The hint is what makes the rule name its subject.
 
-   Syntax differs, and neither form was guessed:
-     3.0: `ia <body> : @chint ;`  -- the hint follows a `:`, before the terminator,
-          exactly as [red]'s witness does. After the `;` it is not a hint at all: it
-          is parsed as the LABEL OF THE NEXT RULE, so `ia C ; @c1` verifies against
-          the whole database and a bogus `ia C ; @NOPE` verifies too. That is the trap
-          this comment exists to record.
-     2.0: `ia <constraint> ; <id>` -- positional, after the terminator.
+   The syntax was not guessed: `ia <body> : @chint ;` -- the hint follows a `:`, before
+   the terminator, exactly as [red]'s witness does. After the `;` it is not a hint at
+   all: it is parsed as the LABEL OF THE NEXT RULE, so `ia C ; @c1` verifies against the
+   whole database and a bogus `ia C ; @NOPE` verifies too. That is the trap this comment
+   exists to record.
 
    It yields an id like any other rule, so I-X2 applies to what it hands back. *)
 let implied t ~origin ~hint c =
   let c = corrupt_claim t ~origin c in
   let id = t.next_id + 1 in
-  if v3 t then line t "%sia %s : %s ;" (label_for t id) (Opb.constr_body c) (cite t hint)
-  else line t "ia %s %d" (Opb.constr_to_string c) hint;
+  line t "%sia %s : %s ;" (label_for t id) (Opb.constr_body c) (cite t hint);
   fresh t ~origin
 
 (* Redundance-based strengthening: used only to introduce definitions (direct-encoding
@@ -1171,13 +1055,11 @@ let red t ~origin ~witness c =
            Printf.sprintf "%s -> %s" (Lit.var_name v) (witness_value_to_string value))
          witness)
   in
-  (* 2.0: `red <constraint> ; <witness>` -- the witness follows the constraint's own
-     terminator. 3.0: `red <constraint> : <witness> ;` -- the rule ends at the first
-     `;`, so a witness written after one is silently not a witness, and the checker
-     says "A witness must be specified for the red-rule". Measured both ways. *)
+  (* `red <constraint> : <witness> ;` -- the rule ends at the first `;`, so a witness
+     written after one is silently not a witness, and the checker says "A witness must
+     be specified for the red-rule". Measured. *)
   let id = t.next_id + 1 in
-  if v3 t then line t "%sred %s : %s ;" (label_for t id) (Opb.constr_body c) w
-  else line t "red %s %s" (Opb.constr_to_string c) w;
+  line t "%sred %s : %s ;" (label_for t id) (Opb.constr_body c) w;
   fresh t ~origin
 
 (* ---------------------------- deletion ----------------------------------- *)
@@ -1192,7 +1074,7 @@ let delete_many t ids =
   | [] -> ()
   | _ ->
       rule t (Printf.sprintf "del id %s" (cite_all t ids));
-      if v3 t then List.iter (Hashtbl.remove t.tags) ids;
+      List.iter (Hashtbl.remove t.tags) ids;
       List.iter (forget t) ids
 
 let delete t id = delete_many t [ id ]
@@ -1228,13 +1110,12 @@ let pol_concluding t ~origin ~claim p =
   delete t derivation;
   id
 
-(* 3.0 drops the `id` keyword from [delc] and takes the constraint reference directly
-   ("Expected a constraint ID (label or signed integer) ... but found `id`"). [del]
-   and [core] keep theirs. Measured; there is no pattern to infer. *)
+(* [delc] takes its constraint reference directly, with no `id` keyword ("Expected a
+   constraint ID (label or signed integer) ... but found `id`"). [del] and [core] keep
+   theirs. Measured; there is no pattern to infer. *)
 let delete_core t id =
-  rule t
-    (if v3 t then Printf.sprintf "delc %s" (cite t id) else Printf.sprintf "delc id %d" id);
-  if v3 t then Hashtbl.remove t.tags id;
+  rule t (Printf.sprintf "delc %s" (cite t id));
+  Hashtbl.remove t.tags id;
   forget t id
 
 (* Move constraints into the core set (after an improving solution, M5). *)
@@ -1252,8 +1133,8 @@ let solution t lits = rule t (Printf.sprintf "sol %s" (lits_to_string lits))
 (* [solx] records a solution *and* adds the clause excluding it; that clause is an
    id you own.
 
-   NOT USABLE IN 3.0 as it stands: "Logging and excluding a solution with 'solx' is
-   only possible if a preserved set is specified". 3.0 ties solution exclusion to the
+   NOT USABLE as it stands: "Logging and excluding a solution with 'solx' is only
+   possible if a preserved set is specified". VeriPB 3.0 ties solution exclusion to the
    `preserved` machinery, which this project has no encoding for. Nothing in M1 emits
    it; enumeration (and M5's `soli`, untested here) will have to face this. *)
 let solution_excluding t ~origin lits =
@@ -1324,13 +1205,14 @@ type verdict =
        *model* variables only -- the order-encoding families of the FlatZinc
        variables. The .opb also carries encoding auxiliaries (the [_neN] selectors of
        PROOF-FORMAT section 3), and nothing in the solver knows what they should be.
-       veripb 2.2.2 unit-propagates the inline assignment and fills them in; veripb
-       3.0.2 does not -- "the solution given for the conclusion is not propagated" --
-       and reads every unmentioned variable as false, so a model needing a selector
-       true has its honest proof REJECTED. test/models/ne_conflict_sat.fzn is such a
-       model and was the single disagreement between the two checkers.
+       veripb 3.0.2 does not propagate it -- "the solution given for the conclusion is
+       not propagated" -- and reads every unmentioned variable as false, so a model
+       needing a selector true has its honest proof REJECTED.
+       test/models/ne_conflict_sat.fzn is such a model, and was the single point on
+       which the 2.2.2 this project used to check against disagreed (D-0046 retired it;
+       the finding is why this form is not used).
 
-       A solution logged with [sol] *is* propagated, by both. Measured, not argued:
+       A solution logged with [sol] *is* propagated. Measured, not argued:
        the checker's own hint says "if the solution should be propagated, then log
        the solution inside the proof". [solx] is not an alternative -- 3.0.2 refuses
        it outside a preserved set. *)

@@ -935,6 +935,7 @@ Consequences:
 
 ## D-0023  Proof format: VeriPB 3.0, and the Rust checker of record
 Status: DECIDED (its account of `drop-line` as a 3.0-only parse error is corrected by **D-0030**: the lane fails for the wrong reason under 2.0 as well)
+**HISTORICAL in part, D-0046 (2026-09-18):** its choice of 3.0 and of the Rust 3.0.2 as the checker of record is IN FORCE and is now the whole arrangement. Everything it says about 2.0 still being emitted, about the dual-format suite, and about the Python 2.2.2 as a second checker describes a state that no longer exists. Kept because the measurements that chose 3.0 are the reasoning, not the contract.
 Date: 2026-09-15
 Supersedes D-0002.
 
@@ -1104,7 +1105,7 @@ those six files. It is not attempted here because `test_matrix.ml` is held by an
 session and 43 of the 58 are in it.
 
 ## D-0024  VeriPB 3.0 deletes the level stack, so the writer keeps the tags
-Status: DECIDED
+Status: DECIDED — **IN FORCE, and explicitly kept by D-0046.** Its account of what `w l` did is what `Writer.wipe_level` exists to imitate; the 2.0 half of the record is the specification of the function that survives, not a description of a dead format.
 Date: 2026-09-15
 Supersedes the mechanism of D-0008, not its intent.
 
@@ -1148,7 +1149,7 @@ Consequences:
 ---
 
 ## D-0025  The 3.0 default is on, and what the test flip actually cost
-Status: DECIDED
+Status: DECIDED — **SUPERSEDED by D-0046 (2026-09-18)**, which removed the dual-format arrangement this record set up: there is no default to flip any more, because there is one format. **HISTORICAL, and kept deliberately:** what the flip cost, and the five silently-vacuous tests it exposed, are the evidence for how this project tests a format change at all.
 Date: 2026-09-15
 Completes D-0023. Task M1-T19.
 
@@ -1622,7 +1623,7 @@ Consequences, recorded so they are not rediscovered:
   `min_int`, i.e. it was a second wrap on the very path this record is about.
 
 ## D-0030  A mutation lane must judge a derivation, not a grammar -- and `root_unsat` cannot
-Status: DECIDED
+Status: DECIDED — **IN FORCE.** Its rule is format-independent and is the one M2-T14 applied. Its 2026-09-18 amendment, comparing how `drop-line` fails under each format, is **HISTORICAL** as of D-0046: one format remains, and under it dropping a line is always a parse error. The rule itself is untouched.
 Date: 2026-09-16
 Task M1-T26. Extends D-0020. Adds no constraint on propagators; it constrains what the
 mutation harness is allowed to count as a passing lane.

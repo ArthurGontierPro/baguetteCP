@@ -781,7 +781,7 @@ let compile (m : Model.t) : t =
      here a single `pol <row_id>` restating the contradiction -- and concludes UNSAT
      citing it.
 
-     This was checked against veripb 2.2.2 rather than assumed, because none of the
+     This was checked against the checker rather than assumed, because none of the
      documentation says whether a constraint with no terms is even parseable. It is: an
      .opb line `>= 1 ;` is accepted, `pol` over it is accepted, `conclusion UNSAT` citing
      the result is accepted, and the vacuously true form `>= -1 ;` is accepted alongside

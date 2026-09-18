@@ -112,10 +112,10 @@ let narrow store name (lo, hi) =
 
 (* A [Justify.ctx] writing into a scratch file, plus the path so a test can read the
    proof back. [~audit] threads through to [Writer.create]. *)
-let ctx_in_file ?(audit = false) ?format ~decls () =
+let ctx_in_file ?(audit = false) ~decls () =
   let path = Filename.temp_file "baguette-learned" ".pbp" in
   let oc = open_out path in
-  let w = Writer.create ~audit ?format oc in
+  let w = Writer.create ~audit oc in
   let enc = encoding_of decls in
   Writer.header w ~n_model_constraints:0;
   (Justify.create ~writer:w ~encoding:enc, enc, w, oc, path)
