@@ -123,9 +123,15 @@
 
    D-0044's amendment and lib/core/learned.ml's header say [to_linear_row] returns [None]
    on a threshold strictly INSIDE an integer variable's ladder, and that a 1UIP cut over
-   integer variables produces exactly those. M2-L3 measured it: 13 of 86 learned clauses
-   convert, concentrated in the Boolean models. That is why M2-L3 took fork (ii),
-   proof-only.
+   integer variables produces exactly those. Re-measured 2026-09-18 (M2-L4), by solving
+   every model in test/models/ with `--stats` and summing the `learned` and `convertible`
+   lines: **13 of 88** learned clauses convert, concentrated in the Boolean models. That
+   is why M2-L3 took fork (ii), proof-only.
+
+   The denominator was 86 here until M2-L4 re-ran it, and was stale by
+   `ladder_lift_unsat`'s two clauses, neither of which converts. The numerator was and is
+   right. Stated because the correction is the same shape as the two M2-L11 made: a
+   figure copied forward across a row that added a model.
 
    A PB row resolved from model rows is a different object and it can land on the right
    side of that test. [Encoding.linear_terms_int_lin_le] gives every rung of a variable's

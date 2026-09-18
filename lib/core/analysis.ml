@@ -521,6 +521,28 @@ let facts t : Reason.t = List.map (fun n -> n.fact) t.nodes
    contributes nothing -- its negation is the constant false, and a false disjunct is not
    a weakening but a wrong line (lib/core/reason.ml's header). *)
 let lits t = List.map Lit.negate (Reason.lits (facts t))
+
+(* The same clause, each literal paired with the decision level of the node it came from.
+
+   [lits] goes through [Reason.lits], which is a [filter_map] and therefore loses the
+   correspondence with [nodes]; a caller that wants both has to rebuild it here or guess
+   at the alignment, and guessing is how a score ends up attributed to the wrong literal.
+   So this applies [Reason.lit_of_fact] to each node directly: it drops exactly the nodes
+   [lits] drops (a fact still at its declared bound has no literal), keeps node order, and
+   is 1:1 by construction rather than by coincidence.
+
+   M2-L4 reads it to compute an LBD -- the number of distinct levels a learned clause's
+   literals sit at. That number has to be taken AFTER minimisation (two literals over one
+   variable in one direction can sit at different levels and one of them is dropped), so
+   the levels have to travel with the literals rather than be counted here. *)
+let lits_levelled t : (Lit.t * int) list =
+  List.filter_map
+    (fun n ->
+      match Reason.lit_of_fact n.fact with
+      | None -> None
+      | Some l -> Some (Lit.negate l, n.level))
+    t.nodes
+
 let nodes t = t.nodes
 let folds t = t.folds
 let antecedents t = t.antecedents

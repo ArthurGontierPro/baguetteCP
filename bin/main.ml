@@ -55,6 +55,7 @@ module Fz_error = Baguette_flatzinc.Error
 module Var = Baguette_core.Var
 module Store = Baguette_core.Store
 module Search = Baguette_core.Search
+module Retention = Baguette_core.Retention
 module Justify = Baguette_core.Justify
 module Writer = Baguette_proof.Writer
 module Encoding = Baguette_proof.Encoding
@@ -105,6 +106,10 @@ let usage () =
   prerr_endline "                    unlike --time it is safe to leave on while timing.";
   prerr_endline "                    stdout is byte-identical with and without it.";
   prerr_endline "";
+  prerr_endline
+    "  BAGUETTE_RETENTION=off|fifo:N|lbd:N  the learned-constraint retention policy";
+  prerr_endline
+    "                    (M2-L4). Default `off`: measured, see lib/core/retention.ml.";
   prerr_endline "  BAGUETTE_PROOF_AUDIT=0 disables the constraint-id audit (I-X2), which";
   prerr_endline "  is on by default here even though the library's own default is off.";
   exit exit_usage
@@ -427,6 +432,44 @@ let audit_enabled () =
      running the solver should get the check without having known to ask for it. *)
   match Sys.getenv_opt "BAGUETTE_PROOF_AUDIT" with Some "0" -> false | _ -> true
 
+(* ------------------------------------------------- the retention policy (M2-L4) *)
+
+(* [Search.config.retention], from the environment.
+
+   An environment variable rather than a flag because it is a MEASUREMENT knob and not a
+   user-facing choice: M2-L4's test (c) measures .pbp bytes and checker time with the
+   policy on and off, and a measurement nobody else can re-run is a measurement this
+   project has already been burned by. The default is [Retention.default], so a normal
+   run never reads this.
+
+   Unparseable input FAILS rather than falling back to the default. A measurement run
+   that silently used the default because the spelling was wrong is exactly the
+   "byte-identical before and after" trap CLAUDE.md records twice. *)
+let retention_policy () =
+  let bad v =
+    prerr_endline
+      (Printf.sprintf
+         "baguette: BAGUETTE_RETENTION=%S is not a policy. Use off, fifo:N or lbd:N, \
+          where N is the database cap."
+         v);
+    exit 2
+  in
+  match Sys.getenv_opt "BAGUETTE_RETENTION" with
+  | None -> Retention.default
+  | Some "off" -> Retention.keep_all
+  | Some v -> (
+      match String.index_opt v ':' with
+      | None -> bad v
+      | Some i -> (
+          let kind = String.sub v 0 i in
+          let arg = String.sub v (i + 1) (String.length v - i - 1) in
+          match (kind, int_of_string_opt arg) with
+          | _, None -> bad v
+          | _, Some n when n < 0 -> bad v
+          | "fifo", Some n -> Retention.fifo ~cap:n
+          | "lbd", Some n -> Retention.lbd ~cap:n
+          | _ -> bad v))
+
 (* --------------------------------------------------- search-tree counters (M1-T36) *)
 
 (* [Search.stats] rendered on stderr, one `stats: ` line each, under --stats.
@@ -472,6 +515,13 @@ let report_stats (st : Search.stats) (outcome : Search.outcome) =
     "1UIP clauses derived and put on the page, level 0 (M2-L3, D-0044 fork ii)";
   Printf.eprintf "stats: %-10s %10d cls    %s\n" "convertible" st.Search.n_converts
     "...of which Learned.to_linear_row would accept, i.e. could propagate. MEASURED ONLY";
+  Printf.eprintf "stats: %-10s %10s        %s\n" "retention"
+    (Retention.policy_name (Search.stats_db st))
+    (Retention.to_string (Search.stats_db st));
+  Printf.eprintf "stats: %-10s %10s        %s\n" "lbd"
+    (String.concat ","
+       (List.map (fun (l, n) -> Printf.sprintf "%d:%d" l n) (Search.stats_lbd st)))
+    "M2-L4: learned-clause LBD histogram, `lbd:count`; the last bucket is `>=`";
   Printf.eprintf "stats: %-10s %10d lits   %s\n" "minimised" st.Search.n_min_dropped
     "literals semantic minimisation removed from nogoods (M2-L3); 0 means it never fired";
   Printf.eprintf "stats: %-10s %10d lines  %s\n" "i-s4-cross" st.Search.i_s4_crossings
@@ -493,17 +543,38 @@ let report_stats (st : Search.stats) (outcome : Search.outcome) =
   Printf.eprintf "stats: %-10s %10d pivots %s\n" "pb-steps" st.Search.n_pb_steps
     "pivots eliminated by linear combination + reduction, over all analyses";
   Printf.eprintf "stats: %-10s %10d rows   %s\n" "pb-convert" st.Search.n_pb_converts
-    "...learned PB rows Learned.to_linear_row accepts, i.e. which could propagate";
+    "...learned PB rows Learned.to_linear_row accepts -- INCLUDING the empty \
+     contradiction";
   Printf.eprintf "stats: %-10s %10d rows   %s\n" "pb-stronger" st.Search.n_pb_stronger
     "...of those, where the SAME conflict's clause does NOT convert. M2-L6 test (a)";
-  (* M2-L11 test (b). READ THIS BESIDE [pb-stronger], NEVER INSTEAD OF IT. A learned row
-     that is the EMPTY CONTRADICTION is strictly stronger than the clause it replaces and
-     still useless as a propagation result, and [pb-stronger] cannot tell the two apart.
-     [pb-nondeg] can, so a claim that PB learning improved is a claim about this line --
-     the first thing it did was correct M2-L6's "36 of 36 degenerate", which is 26 of 36
-     NON-degenerate on the same 38 models. [pb-lifted] says whether lib/core/ladder.ml
-     fired at all: the lift is a retry after the bare model row fails, so 0 here means
-     this build derives exactly what M2-L6 derived. *)
+  (* M2-L11 test (b). READ THIS BESIDE [pb-convert] AND [pb-stronger], NEVER INSTEAD OF
+     EITHER. A learned row that is the EMPTY CONTRADICTION is strictly stronger than the
+     clause it replaces and still useless as a propagation result; it also CONVERTS -- to
+     a zero-term Linear -- so neither [pb-convert] nor [pb-stronger] can tell the two
+     apart. That is deliberate and it is what test_ladder.ml's degenerate control pins;
+     [pb-nondeg] is the counter that can, so a claim that PB learning improved is a claim
+     about this line.
+
+     Re-measured 2026-09-18 (M2-L4), by solving every model in test/models/ with `--stats`
+     and summing each line -- not read off an earlier note, which is how the figure this
+     replaces went stale:
+
+       39 models; pb-learned 38; pb-nondeg 28; pb-convert 36; pb-stronger 36.
+
+     **10 of those 36 conversions are the empty contradiction** -- backjump_lineq_unsat
+     (3), near_limit_unsat (3), offset_unsat (4), every one of them the int_lin_eq family
+     whose two halves add to 0 >= k in one elimination. So 26 of the 36 are conversions
+     that could actually propagate, and the same 10 inflate [pb-stronger].
+
+     The text here previously read "26 of 36 NON-degenerate on the same 38 models". Two
+     things were wrong with it and they pull in opposite directions: the suite is 39
+     models, not 38, and the non-degenerate count is 28 of 38 LEARNED ROWS, not 26 of 36
+     CONVERSIONS. 26 of 36 is a real figure about a different question -- the one in the
+     paragraph above.
+
+     [pb-lifted] says whether lib/core/ladder.ml fired at all: the lift is a retry after
+     the bare model row fails, so 0 here means this build derives exactly what M2-L6
+     derived. *)
   Printf.eprintf "stats: %-10s %10d rows   %s\n" "pb-nondeg" st.Search.n_pb_nondegenerate
     "...learned PB rows that are NOT the empty contradiction. M2-L11 test (b)";
   Printf.eprintf "stats: %-10s %10d rows   %s\n" "pb-lifted" st.Search.n_pb_lifted
@@ -575,7 +646,9 @@ let solve opts (m : Model.t) =
                total. Sampled inside the phase so that the two brackets nest. *)
             let e0 = Writer.emitted_us () and l0 = Writer.emitted_lines () in
             let r =
-              Search.solve ~engine:compiled.Compile.engine ~store ~ctx ~check ~stats ()
+              Search.solve ~engine:compiled.Compile.engine ~store ~ctx ~check ~stats
+                ~config:{ Search.default_config with retention = retention_policy () }
+                ()
             in
             Timing.emit_us := Writer.emitted_us () - e0;
             Timing.emit_lines := Writer.emitted_lines () - l0;

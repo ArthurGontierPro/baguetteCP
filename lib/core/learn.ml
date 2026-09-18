@@ -210,6 +210,14 @@ type t = {
   l_closure : Analysis.t; (* the decision closure the backjump rests on *)
   l_levels : int list; (* decision levels the conflict rests on, DESCENDING *)
   l_converts : bool; (* would [Learned.to_linear_row] accept it? measured, not used *)
+  l_lbd : int;
+      (* M2-L4's retention score: the number of distinct decision levels the MINIMISED
+         clause's literals sit at -- Glucose's "literal block distance". Taken after
+         minimisation on purpose: [minimise] merges two literals over one variable in one
+         direction, and those two can sit at different levels, so an LBD read off the
+         unminimised cut can be strictly larger than the clause's own. Computed here
+         because this is where both the levels and the survivors are in hand; what is
+         done with it is [Retention]'s business, not this module's. *)
 }
 
 let lits t = t.l_lits
@@ -218,6 +226,7 @@ let cut t = t.l_cut
 let closure t = t.l_closure
 let levels t = t.l_levels
 let converts t = t.l_converts
+let lbd t = t.l_lbd
 
 (* Analyse one conflict both ways. [None] when either walk fails or when the 1UIP walk
    produced nothing to learn; the caller then behaves exactly as it did before this row
@@ -244,7 +253,14 @@ let at_conflict ?(policy = Strongest) store (c : Store.conflict)
             if not (Analysis.postcondition_holds Analysis.decision_closure closure) then
               None
             else
-              let ls = minimise ~policy (Analysis.lits cut) in
+              (* One minimisation, read two ways. [Analysis.lits_levelled] is
+                 [Analysis.lits] with each literal's level attached and in the same order
+                 (it is 1:1 by construction -- see its comment), so [List.map fst] of this
+                 is exactly [minimise ~policy (Analysis.lits cut)] and the clause is
+                 unchanged by M2-L4. [test_learn.ml]'s [minimise_agrees_with_levelled]
+                 pins that equality rather than leaving it as a claim in this comment. *)
+              let levelled = minimise_with policy (Analysis.lits_levelled cut) in
+              let ls = List.map fst levelled in
               if ls = [] then None
               else
                 let cl = Learned.of_clause ls in
@@ -256,6 +272,8 @@ let at_conflict ?(policy = Strongest) store (c : Store.conflict)
                     l_closure = closure;
                     l_levels = Analysis.decision_levels closure;
                     l_converts = Learned.to_linear_row cl ~decl <> None;
+                    l_lbd =
+                      List.length (List.sort_uniq Int.compare (List.map snd levelled));
                   })
 
 (* Put the learned clause on the page, at level 0, through M2-L1's own entry point.

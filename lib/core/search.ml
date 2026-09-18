@@ -213,6 +213,11 @@ type bridge = {
    the number a measurement wants. *)
 let bridge_cap = 256
 
+(* M2-L4: buckets for [stats.lbd_hist]. Index [lbd_buckets - 1] is the overflow bucket,
+   so an LBD of 16 or more is counted as 16 rather than growing the array -- the
+   distribution's shape is what the policy is chosen from, and its tail is one bucket. *)
+let lbd_buckets = 17
+
 type stats = {
   mutable nodes : int;
   mutable decisions : int;
@@ -231,8 +236,24 @@ type stats = {
          lib/core/learn.ml's header for why the fork went the other way, and M2-L4 for
          who needs the number. *)
   mutable learned_rev : Writer.cid list;
-      (* I-X2: every id [Learn.introduce] handed back, newest first. They are at level 0,
-         so no [w] retires them and [solve] must, on every path. *)
+      (* Every id [Learn.introduce] and [Pb_analysis.introduce] handed back, newest
+         first. AN AUDIT TRAIL, NOT A DELETION LIST -- M2-L4 took that job away from it,
+         and the distinction is the whole of lib/core/retention.ml's section 1. Deleting
+         from this list is deleting every id ever introduced, which double-deletes
+         anything the retention policy already evicted; [db] holds what is still live and
+         is what [solve] sweeps. Kept because "how many distinct ids did this search
+         introduce" is what test (a)'s exactly-once audit counts against. *)
+  mutable db : Retention.t;
+      (* M2-L4: the learned-constraint database and the SOLE owner of a learned id's
+         lifetime. Replaced at [solve] entry with one built from [config.retention];
+         [stats_create] gives it the default so that a [stats] used without a [solve] --
+         which several tests do -- is still well formed. *)
+  mutable lbd_hist : int array;
+      (* M2-L4. Index i counts learned CLAUSES whose LBD is i, with index [lbd_buckets-1]
+         the overflow bucket. A histogram rather than a list because the retention policy
+         is chosen from the DISTRIBUTION and this is O(1) memory on a search of any
+         depth. Clause path only: the PB path's rows have no LBD of their own -- see
+         [Retention]'s header for what they are scored on instead. *)
   mutable i_s4_supports : int; (* hole lines the learned clauses' derivations rest on *)
   mutable i_s4_crossings : int; (* ...of which sit above level 0 -- data, not a fault *)
   mutable i_s4_broken_rev : string list; (* ...of which were already retired: faults *)
@@ -252,13 +273,24 @@ type stats = {
          measure the suite has. It cannot look green in this one. *)
   mutable n_pb_steps : int; (* pivots eliminated, over all successful analyses *)
   mutable n_pb_converts : int;
-      (* ...of which [Learned.to_linear_row] accepts, i.e. which could be a runtime
-         instance. Measured against the clause path's [n_converts], which is the
-         comparison lib/core/pb_analysis.ml's "why the PB row can propagate where the
-         clause cannot" makes and does not assume. *)
+      (* ...of which [Learned.to_linear_row] accepts. Measured against the clause path's
+         [n_converts], which is the comparison lib/core/pb_analysis.ml's "why the PB row
+         can propagate where the clause cannot" makes and does not assume.
+
+         NOT "of which could be a runtime instance", which is what this comment said
+         until M2-L4 measured it. The EMPTY CONTRADICTION converts -- to a zero-term
+         [Linear] that propagates nothing -- and is counted here. Suite-wide on
+         2026-09-18: 36 conversions of 38 learned rows, of which **10 are the empty
+         contradiction** (backjump_lineq_unsat 3, near_limit_unsat 3, offset_unsat 4), so
+         26 could actually propagate. Read this beside [n_pb_nondegenerate], which is the
+         counter that can tell them apart, and see bin/main.ml's block above `pb-nondeg`.
+         The counter is left as it is on purpose: test_ladder.ml's degenerate control pins
+         that it CANNOT make the distinction, which is the property M2-L11 established. *)
   mutable n_pb_stronger : int;
   (* ...of which convert where the SAME conflict's clause does not. This is test (a)
-     as a counter: the number of times this row did something M2-L3 could not. *)
+     as a counter: the number of times this row did something M2-L3 could not -- with
+     [n_pb_converts]'s caveat above inherited in full, because it is the same predicate.
+     Suite-wide 36, of which the same 10 are vacuous. *)
   (* ------------------------------------------------------------------ M2-L11 *)
   mutable n_pb_nondegenerate : int;
       (* Learned PB rows that are NOT the empty contradiction, i.e. that still carry at
@@ -306,8 +338,10 @@ let stats_create () =
     bridges_rev = [];
     skipped = 0;
     n_learned = 0;
+    lbd_hist = Array.make lbd_buckets 0;
     n_converts = 0;
     learned_rev = [];
+    db = Retention.create ();
     i_s4_supports = 0;
     i_s4_crossings = 0;
     i_s4_broken_rev = [];
@@ -326,6 +360,13 @@ let stats_create () =
   }
 
 let stats_learned s = List.rev s.learned_rev
+let stats_db s = s.db
+
+(* M2-L4: the LBD histogram as [(lbd, count)], ascending, empty buckets dropped. The
+   last bucket is the overflow one, so a pair [(16, n)] means "16 or more". *)
+let stats_lbd s =
+  Array.to_list (Array.mapi (fun i n -> (i, n)) s.lbd_hist)
+  |> List.filter (fun (_, n) -> n > 0)
 
 (* ------------------------------------------------------------------ M2-L6 counters *)
 
@@ -566,6 +607,12 @@ type config = {
   pb_criterion : Pb_analysis.criterion;
   pb_ladder : bool;
   break_ladder_mult : bool;
+  retention : Retention.policy;
+      (* M2-L4. [Retention.keep_all] is the pre-M2-L4 behaviour and test (c)'s "policy
+         off" side; [Retention.default] is the policy and the measurement that chose it
+         is in lib/core/retention.ml's header. Swappable for the same reason [reduction]
+         and [pb_criterion] are (D-0044): the interesting alternatives are not
+         parameterisations of one another. *)
 }
 
 let default_config =
@@ -578,9 +625,14 @@ let default_config =
     break_ladder_mult = false;
     reduction = Reduce.round_to_one;
     pb_criterion = Pb_analysis.assertive_slack;
+    retention = Retention.default;
   }
 
 let no_learning = { default_config with learn = false; pb = false }
+
+(* Retention off: every learned constraint is held until the search ends, which is what
+   this solver did before M2-L4. The control side of test (c). *)
+let no_retention = { default_config with retention = Retention.keep_all }
 let no_pb = { default_config with pb = false }
 
 (* ------------------------------------------------------------------- nogoods
@@ -1001,8 +1053,8 @@ let bridges (ctx : Justify.ctx) trace stats store (decisions : Lit.t list) =
    than left a paragraph: the derivation must cite constraint ids that are on the page at
    level 0. A [pol] citing a hole line across levels is the violation learn.ml's header
    says M2-L6's reduction steps are the first thing that could write. *)
-let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_converts ~decl
-    =
+let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_converts ~lbd
+    ~decl =
   if not (cfg.learn && cfg.pb) then ()
   else (
     stats.n_pb_attempts <- stats.n_pb_attempts + 1;
@@ -1042,7 +1094,18 @@ let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_conve
           stats.n_pb_rungs <- stats.n_pb_rungs + t.Pb_analysis.ladder_rungs);
         if List.length stats.pb_rows_rev < pb_reason_cap then
           stats.pb_rows_rev <- t :: stats.pb_rows_rev;
-        stats.learned_rev <- cid :: stats.learned_rev)
+        stats.learned_rev <- cid :: stats.learned_rev;
+        (* M2-L4. [~lbd] here is the CONFLICT's LBD -- the 1UIP clause's, from the same
+           conflict -- and not the PB row's own. The row's literals come out of the
+           elimination with no trail entry to read a level off, so there is no honest
+           per-row figure to compute; scoring it by the conflict it came from is stated
+           rather than dressed up, and a later row that gives [Pb_analysis] levelled
+           literals should replace it. Registering it transfers I-X2's obligation to the
+           database. *)
+        ignore
+          (Retention.add stats.db ~cid ~row:t.Pb_analysis.row ~lbd
+             ~origin:"M2-L6 learned PB row");
+        ignore (Retention.reduce stats.db ctx))
 
 let rec learn_at_conflict engine store ctx trace stats cfg (c : Store.conflict) =
   if not cfg.learn then None
@@ -1069,8 +1132,15 @@ let rec learn_at_conflict engine store ctx trace stats cfg (c : Store.conflict) 
         stats.n_learned <- stats.n_learned + 1;
         let clause_converts = Learn.converts l in
         if clause_converts then stats.n_converts <- stats.n_converts + 1;
+        (let b = Learn.lbd l in
+         let b = if b >= lbd_buckets then lbd_buckets - 1 else b in
+         stats.lbd_hist.(b) <- stats.lbd_hist.(b) + 1);
         stats.learned_rev <- cid :: stats.learned_rev;
-        pb_at_conflict engine store ctx stats cfg c ~clause_converts
+        ignore
+          (Retention.add stats.db ~cid ~row:(Learn.clause l) ~lbd:(Learn.lbd l)
+             ~origin:"M2-L3 1UIP learned clause");
+        ignore (Retention.reduce stats.db ctx);
+        pb_at_conflict engine store ctx stats cfg c ~clause_converts ~lbd:(Learn.lbd l)
           ~decl:(Learned.decl_of_encoding ctx.Justify.encoding);
         Some (Learn.levels l)
 
@@ -1327,6 +1397,10 @@ let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
      root is counted HERE and nowhere else: [branch] counts the children it dispatches,
      so the one node no [branch] dispatches is this one. *)
   let stats = match stats with Some s -> s | None -> stats_create () in
+  (* M2-L4: one database per solve, built from the configured policy. Installed here and
+     not in [stats_create] because the policy lives on [config] and a [stats] is allowed
+     to outlive a [solve]. *)
+  stats.db <- Retention.create ~policy:config.retention ();
   stats.nodes <- stats.nodes + 1;
   let result = dfs engine store ctx trace stats config order [] in
   Debug.check "I-S3: decision level on return equals level on entry" (fun () ->
@@ -1350,21 +1424,19 @@ let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
     | [] -> ()
     | ids -> Writer.delete_many ctx.Justify.writer ids
   in
-  (* I-X2, M2-L3's own half. A learned clause is introduced at level 0 (D-0045's addendum,
-     [Learned.introduce]) precisely so that no backjump retires it, which leaves exactly
-     one party who can: whoever asked for it. Until M2-L4's retention policy exists that
-     is this function, on every path, once each -- [Learn.introduce] goes through
-     [Writer.rup] and not through the memo, so no two conflicts share an id and this list
-     has no repeats to delete twice.
+  (* I-X2, and M2-L4 is what changed here. A learned constraint is introduced at level 0
+     (D-0045's addendum, [Learned.introduce]) precisely so that no backjump retires it,
+     which leaves exactly one party who can. Since M2-L4 that party is [stats.db] and not
+     this function: the sweep deletes what the database still HOLDS, so a constraint the
+     policy already evicted mid-search is not deleted a second time here.
 
-     Note what is NOT done here: they are not retired at the backjump. A learned clause
-     whose lifetime were a level's would be a learned clause that learned nothing, and the
-     whole of D-0045's addendum is about it outliving the level it was derived at. *)
-  let retire_learned () =
-    match stats_learned stats with
-    | [] -> ()
-    | ids -> Writer.delete_many ctx.Justify.writer ids
-  in
+     Reading it off [stats_learned] -- every id ever introduced -- is the double delete,
+     and it is a double delete from ONE owner, which is the shape D-0045's warning about
+     two owners does not cover. lib/core/retention.ml section 1 is the record.
+
+     Note what is still NOT done: they are not retired at the backjump. A learned clause
+     whose lifetime were a level's would be a learned clause that learned nothing. *)
+  let retire_learned () = ignore (Retention.retire_all stats.db ctx) in
   match result with
   | NSat assignment ->
       if not (check assignment) then raise (Unsound_solution assignment);
