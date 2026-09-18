@@ -136,10 +136,11 @@ With no models named, every .fzn in test/models/ is measured.
   -a NAME  label for configuration A
   -S BIN   solver binary for configuration B           -- naming it turns on
   -b NAME  label for configuration B                      comparison mode
-  -c       run THE CONTROL instead of the models: two scenes from bench/control/,
-           one that moves the proof at a fixed search tree and one that moves the
-           tree, and ASSERT that the comparison table tells them apart. Exits
-           non-zero if either scene is misclassified. See bench/README.md.
+  -c       run THE CONTROL instead of the models: scenes from bench/control/, one
+           that moves the proof at a fixed search tree and two that move the tree
+           -- one of them at an unchanged NODE COUNT -- and ASSERT that the
+           comparison table tells them apart, in both directions. Exits non-zero
+           if any scene is misclassified. See bench/README.md section 7.
   -o FILE  also write the raw measurements as TSV. The solver's internal timings go
            to FILE.internal -- a separate file because they are a different clock
            (CPU, not wall) taken on different runs, and two clocks in one row get
