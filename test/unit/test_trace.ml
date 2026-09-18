@@ -272,6 +272,13 @@ let write_file path s =
   output_string oc s;
   close_out oc
 
+(* What the checker printed on the most recent [run_veripb]. M2-T14: an exit code alone
+   cannot tell a JUDGEMENT from a parse error, and a negative control that accepts any
+   non-zero exit is green the moment the file stops parsing -- which is exactly how the
+   M2-L0 break lane came to pass on `:3:1: Expected number` under format 2.0. Every lane
+   below that asserts a rejection also asserts what the rejection SAYS, off this. *)
+let last_veripb_log = ref ""
+
 (* [Some true] accepted, [Some false] rejected, [None] veripb is missing. *)
 let run_veripb ~dir ~opb proof_text =
   match veripb with
@@ -285,6 +292,7 @@ let run_veripb ~dir ~opb proof_text =
           (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote exe) (Filename.quote opb)
              (Filename.quote pbp) (Filename.quote log))
       in
+      (last_veripb_log := try read_file log with _ -> "");
       Some (rc = 0)
 
 (* ------------------------------------------- reading ids back out of a proof *)
@@ -298,6 +306,42 @@ let contains needle s =
   let n = String.length needle and m = String.length s in
   let rec go i = i + n <= m && (String.sub s i n = needle || go (i + 1)) in
   n = 0 || go 0
+
+(* M2-T14. A negative control that accepts ANY non-zero exit is green the moment the
+   file stops parsing, and a proof that does not parse says nothing whatever about the
+   reasoning it contains. That is not hypothetical: under format 2.0 the M2-L0 break
+   lane in test_justify.ml passed on `:3:1: Expected number` without the checker ever
+   judging a derivation, which is the rule D-0020/D-0030 state outright.
+
+   So every lane here that asserts a rejection also asserts WHAT the rejection says.
+   Blanking a trace line into a tautology leaves the nogood underivable, so the
+   rejection must be the RUP check. Both checkers' words are listed at full strength
+   and either is accepted (M1-T46). The fragment they SHARE -- "reverse unit
+   propagation" -- is deliberately not what is matched: on a RUP failure both binaries
+   emit it, so it is the least specific thing either one says, and it would equally
+   match a RUP failure anywhere else in the proof. Measured against both binaries on
+   2026-09-18. *)
+let rup_rejection_wordings =
+  [
+    ( "3.0.2: \"not implied by reverse unit propagation (RUP) from core and derived \
+       database\"",
+      "not implied by reverse unit propagation (RUP) from core and derived database" );
+    ( "2.2.2: \"Hint: Failed to show ... by reverse unit propagation\"",
+      "Hint: Failed to show" );
+  ]
+
+(* Assert that the last rejection is the one named, not a parse error or a dangling
+   label. [what] describes the judgement the lane expects. *)
+let check_rejection_is ~tag ~what wordings =
+  let out = !last_veripb_log in
+  let hit = List.filter (fun (_, needle) -> contains needle out) wordings in
+  check
+    (Printf.sprintf
+       "%s: %s -- the rejection is that JUDGEMENT in whichever checker's words, not a \
+        parse error"
+       tag what)
+    (hit <> []);
+  if hit = [] then Printf.printf "       checker said: %s\n" (String.trim out)
 
 (* Which rules mint a constraint id, in [Writer]'s own order (writer.ml calls [fresh]
    in exactly these). Everything else -- [#], [w], [del], [*], [output], [conclusion] --
@@ -524,7 +568,12 @@ let run_model m =
   | None -> ()
   | Some ok ->
       check (tag ^ ": with the trace blanked out, veripb rejects the proof") (not ok);
-      if ok then Printf.printf "  blanked proof still verified:\n%s\n" blanked);
+      if ok then Printf.printf "  blanked proof still verified:\n%s\n" blanked
+      else
+        check_rejection_is ~tag
+          ~what:
+            "with the trace blanked out the nogood is not reachable by unit propagation"
+          rup_rejection_wordings);
 
   List.iter
     (fun f -> try Sys.remove f with _ -> ())
@@ -849,7 +898,12 @@ let run_fzn c =
   | None -> ()
   | Some ok ->
       check (tag ^ ": with the trace blanked out, veripb rejects the proof") (not ok);
-      if ok then Printf.printf "  blanked proof still verified:\n%s\n" blanked);
+      if ok then Printf.printf "  blanked proof still verified:\n%s\n" blanked
+      else
+        check_rejection_is ~tag
+          ~what:
+            "with the trace blanked out the nogood is not reachable by unit propagation"
+          rup_rejection_wordings);
 
   List.iter
     (fun f -> try Sys.remove f with _ -> ())
