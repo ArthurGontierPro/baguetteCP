@@ -959,8 +959,8 @@ let () =
   in
   let topup_cap = 4000 in
   let topup_spent = ref 0 in
-  if not (coverage_reached ()) then
-    (try
+  (if not (coverage_reached ()) then
+     try
        while (not (coverage_reached ())) && !topup_spent < topup_cap do
          incr topup_spent;
          let m = gen_model r in
@@ -968,8 +968,8 @@ let () =
        done
      with e ->
        fail
-         "the generator itself raised %s during the M2-T13 coverage top-up -- the run \
-          is incomplete"
+         "the generator itself raised %s during the M2-T13 coverage top-up -- the run is \
+          incomplete"
          (Printexc.to_string e));
   if !topup_spent > 0 then
     Printf.printf
