@@ -26,7 +26,6 @@ worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 uni
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M2-L5 | NEW `lib/core/reduce.ml`, `lib/core/justify.ml`, `test/unit/test_justify.ml`, `test/unit/dune` | agent-reduce | 2026-09-18 |
-| M2-L10 | `test/models/**`, `test/expected/**`, `test/unit/test_learn.ml` | agent-cover | 2026-09-18 |
 
 _(M2-L3 released 2026-09-18 by agent-learn3 — see `## Completed` and `## M2-L3 handoff`.)_
 
@@ -206,6 +205,7 @@ work. The owning session picks it up.
 | M2-L1 | agent-learned | 2026-09-18 | `Learned.t` (PB inequality over `Lit.t`, clause = degree-1 case), its runtime instance as a **`Linear` instance** registered through the new `Engine.add`, and its proof-side introduction/deletion through the new `Writer.with_level`. D-0044's central claim **converted**: measured green on all 27 scenes. D-0045's prediction **measured before fixing**, in both formats. 1766 unit checks, 34/34, determinism clean. |
 
 | M2-L3 | agent-learn3 | 2026-09-18 | 1UIP clause learning over order literals, proof-only (**D-0044 fork (ii)**), with conflict-directed backjumping over the **decision closure** and its `rup` derivation at level 0. **I-S4's cross-level debt is discharged** and the check is wider than the invariant's wording. Backjump measured: 31 -> 9 nodes on `backjump_unsat.fzn`. **M1-T66 stays OPEN**: with `Search.bridges` disabled, 35/35 models still pass and no checker rejects — a learned clause citing across levels did NOT make the bridge load-bearing. 1833 unit checks, 267 matrix, 44 mutation, 35/35 models, determinism 35/35 byte-identical |
+| M2-L10 | agent-cover | 2026-09-18 | Three new skipping models (single-instance coverage was `backjump_unsat`, 2 skips total): `backjump_deep_unsat.fzn` (3-level backjump, non-convertible), `backjump_bool_unsat.fzn` (Boolean refutation, every learned clause convertible), `backjump_lineq_unsat.fzn` (int_lin_eq under checked arithmetic, non-convertible). Suite now has **4 skipping models, 10 skips total** (was 1/2). Each asserted `skipped > 0` via `Search.stats` in new `test_learn.ml:test_m2l10_coverage`, and each proof independently verified with `scripts/verify_proof.sh` under both `BAGUETTE_PROOF_FORMAT` settings and both veripb binaries (3.0.2, 2.2.2) — none rejected. 38/38 models, `dune runtest --force`: 1851 ok / 0 FAIL, determinism 38/38, width lint clean, fmt clean. Peak RSS: model tests 18.5 MB, `dune runtest` 37 MB. No existing model or expected output touched. Commit `ca7ba2c` on `wave13-cover` |
 
 ## Handoff notes
 
@@ -1628,3 +1628,14 @@ matching less.
 Note what this says about the agent's report: it listed `check_fmt`, determinism and the
 suites, and **did not run the width lint**. `make` does not work in a worktree, so the gate
 is run piecewise there and a piece can be missed. Worth asking for explicitly next time.
+
+**2026-09-18 — agent-cover, M2-L10**
+Added 3 models (`backjump_deep_unsat`, `backjump_bool_unsat`, `backjump_lineq_unsat`) to
+cover the multi-level, convertible and non-convertible-via-a-third-propagator-family shapes
+a backjump can take; `test_m2l10_coverage` in `test_learn.ml` asserts `skipped > 0` on all
+three plus the exact skip count for the 3-level one. All three verified under both proof
+formats and both veripb binaries by hand (`scripts/verify_proof.sh`), not just the default
+3.0/cargo path the in-process test exercises — worth doing explicitly for any new model,
+since nothing in the automated suite checks format 2.0. Next session (M2-L4/L6/L8): you now
+have 4 skipping models / 10 skips to tune against instead of 1/2, still thin for a real
+retention-policy or fallback-rate measurement — more instances would still help.

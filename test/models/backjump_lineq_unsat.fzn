@@ -1,0 +1,34 @@
+% M2-L10. A THIRD SHAPE: near_limit_unsat's int_lin_eq refutation (coefficients near
+% Checked.limit, D-0028's magnitude sibling rather than its width one) with two spectator
+% int variables in front of it, so the shape that backjumps here is linear-equality
+% reasoning under checked arithmetic rather than int_ne/int_eq or Boolean clauses.
+%
+% x1, x2, x3 keep near_limit_unsat's exact coefficients and right-hand side: the root
+% fixpoint settles without refuting anything (bounds reasoning alone cannot see the
+% infeasibility) so the search has to branch and close both children at every level,
+% same as that model. p and q are unconstrained 0..1 variables, declared first so
+% first-fail (smaller domain: width 2 against x1/x2/x3's width 4) picks them ahead of
+% x1, x2 and x3.
+%
+% Every conflict here is over x1/x2/x3's levels alone, so the frames owning p's and q's
+% levels skip their sibling. Measured 2026-09-18:
+%
+%     learning off   15 nodes, 7 decisions, 0 skipped
+%     learning on     7 nodes, 4 decisions, 2 skipped
+%
+% The learned clauses sit on thresholds strictly inside x1/x2/x3's ladders, so this is
+% the NON-convertible path, like backjump_unsat.fzn and backjump_deep_unsat.fzn -- but
+% via int_lin_eq's propagator rather than int_ne/int_eq's, and under the checked-
+% arithmetic path near_limit_unsat exists to exercise.
+%
+% Widths are 0..1 (p, q) and 0..3 (x1, x2, x3): D-0028's width bound. The coefficients
+% are large (as near_limit_unsat's are) but a coefficient is not a declared domain, so
+% ./scripts/check_test_widths.py's bound is unaffected.
+var 0..1: p :: output_var;
+var 0..1: q :: output_var;
+array [1..3] of int: c = [18014398509481984, 18014398509481984, 18014398509481984];
+var 0..3: x1 :: output_var;
+var 0..3: x2 :: output_var;
+var 0..3: x3 :: output_var;
+constraint int_lin_eq(c, [x1, x2, x3], 45035996273704960);
+solve satisfy;
