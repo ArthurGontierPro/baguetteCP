@@ -1681,3 +1681,66 @@ is rejected. M2-L5's own (c) avoids this by using `Encoding.write_opb_for`, whic
 the `.opb`'s labelling to the writer's format, and by running each checker at the format
 it can read. **The one-line fix for M2-L0's test is the same call**; it was left alone
 because it is M2-L0's row, not this one. Raised here rather than fixed silently.
+
+## Wave thirteen handoff, 2026-09-18 (orchestrator): M2-L5 and M2-L10
+
+Two sessions, both merged and pushed. Gate green on `main` after both:
+**38/38 models**, determinism byte-identical, width lint and fmt clean.
+
+**M2-L10 was the point of the wave** and it did what it was for. Skip coverage, which I
+re-measured myself across all 38 models rather than taking the report:
+
+| | before | after |
+|---|---|---|
+| models with a backjump skip | 1 | **4** |
+| total skips | 2 | **9** |
+| learned clauses | 77 | 86 |
+| convertible | 11 | 13 |
+
+Three shapes, three propagator families, both sides of D-0044's fork. **M2-L4, M2-L6 and
+M2-L8 are unblocked.** (The agent's report said 10 total skips; its own table sums to 9 and
+9 is what `--stats` gives. Corrected at the source, because these are the numbers the three
+measurement rows will quote.)
+
+**M2-L5 needed nothing from `explanation.ml` — or from `justify.ml`.** D-0044's table held
+exactly. That is the second row in a row to confirm a D-0044 prediction rather than bend it.
+
+### A vacuous pass, found and closed
+
+agent-reduce reported, out of scope and unprompted, that `test_justify.ml` was not green
+under `BAGUETTE_PROOF_FORMAT=2.0`. I verified it and it was worse than "not green":
+
+`conclusion_break_opb` wrote its `.opb` with `~labels:true`. Labelling belongs to the 3.0
+grammar, so under format 2.0 with the Python 2.2.2 checker **the `.opb` did not parse at
+all** — measured directly, `:3:1: Expected number`. The three lanes asserting ACCEPTED
+failed, and **the lane asserting REJECTED passed, on the parse error, without the checker
+ever judging the derivation.** That is D-0020/D-0030's rule verbatim: a lane rejected
+without the checker judging an inference is not a pass.
+
+Fixed by removing the argument, so `Writer.default_format ()` decides — the same thing
+`Writer.create` decides three lines later, so the two files cannot disagree. Measured in
+that configuration: **5 FAIL → 1 FAIL**, and all five D-0043 lanes now pass *genuinely*,
+including the one asserting the rejection is the implication check in whichever checker's
+words. That last lane is what proves it is no longer vacuous. Default 3.0 path unchanged at
+108 ok / 0 FAIL.
+
+### Read this before running the suite under format 2.0
+
+**A `BAGUETTE_PROOF_FORMAT=2.0` run of `test_justify` has exactly ONE expected FAIL**, and
+it is deliberate, not a regression:
+
+```
+FAIL index: the reused id labels the line that states the clause
+     (2.0 has no labels, so this lane is not checked here)
+```
+
+`test_justify.ml:693-700` asserts `false` on purpose under 2.0, because the check it wants
+— that the reused id labels the line *stating the clause* — is made by reading the label,
+and 2.0 has none. **I deliberately did not turn it into a pass**: announcing a hole loudly
+is this project's rule, and quietly flipping it would be weakening a test. But it does mean
+a 2.0 run is permanently red by one check, which trains people to ignore red. The real fix
+is to make that check by content rather than by label, and it is small — **taking it is a
+good first task for whoever wants one**, and it is the kind of thing M2-L8 will want when
+it measures both formats.
+
+The gate itself runs under 3.0, so `make check` is unaffected.
