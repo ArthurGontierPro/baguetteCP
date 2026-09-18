@@ -10,6 +10,49 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
+**Wave eighteen is running: M2-L12 (agent-prop) and M3-T1 (agent-reify).**
+
+**Two real editing tasks this time**, not a row plus a study, because the file split finally
+allows it: M2-L12 is `lib/core/**`, M3-T1 is `lib/proof/**`, and they meet at exactly one
+place, handled below.
+
+**agent-prop holds `lib/core/**`, `bin/main.ml`, and all of `test/unit/**` EXCEPT
+`test_proof.ml`** (including `test/unit/dune` and `test/models/**`). M2-L12 makes learned
+constraints propagate: unit clauses as level-0 bounds first, then widen `bool_clause` to a
+threshold. D-0052 settled that this is a **widening, not a new family**, so D-0044's bet is not
+spent.
+
+**agent-reify holds `lib/proof/**` and `test/unit/test_proof.ml` ONLY.** M3-T1 is `red`-based
+definitions for reified variables. `Writer.red` already exists (`writer.ml:1069`) and is
+already used for channelling (`encoding.ml:406,411,420`), so this extends a working pattern.
+
+**THE ONE PLACE THEY MEET, and it is a hard constraint on agent-reify.** Fourteen `lib/core`
+modules call into `Encoding` — `trace.ml` alone 11 times, plus `ne.ml`, `ladder.ml`,
+`learned.ml`, `search.ml`, `linear.ml`, `lin_eq.ml`, `bool2int.ml`, `order_reason.ml`,
+`reason.ml`, `justify.ml`, `analysis.ml`, `pb_analysis.ml`, `checked.ml`. **agent-reify may
+ADD to `Encoding` and `Lit` but must NOT change any existing signature**, or agent-prop's
+branch stops compiling. Same protocol as the standing `lib/proof/lit.ml` request above, and
+for the same reason.
+
+**A precondition on M2-L12 that is part of the row, not optional.** D-0052 marks the figure its
+step ordering rests on — "~70 of 88 learned clauses are unit" — as **provisional, ±5, from
+proof-text parsing**. agent-prop **re-derives it from an instrumented run first** and lets the
+measurement pick the order. If the histogram comes back different, the plan changes and that is
+the row working as intended.
+
+**And M2-L12 must revisit `Retention` in the same change.** A trace line from a learned-clause
+instance is RUP only while that constraint is **live**. Today nothing propagates a learned
+constraint, which is the independence D-0051 assumed; giving one a registered instance couples
+retention to the propagator set. D-0051 named this as the condition that reverses its keep-all
+verdict, so the verdict gets re-run, not inherited.
+
+**Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `dune-project`,
+`scripts/**`, `bench/**` and all merging, as standing.
+
+Wave seventeen (M2-L4, plus D-0050/D-0051/D-0052 and M4-T5's gate) is merged, released and
+pushed. Baseline to beat: **2129 ok / 0 FAIL, 280 matrix, 44 mutation, 39/39 models**.
+
+
 **Wave seventeen is COMPLETE: M2-L4 (agent-del) merged and released; three read-only
 studies done (D-0050, D-0051, D-0052, M4-T5's gate). Every file is free.**
 
