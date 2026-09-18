@@ -14,6 +14,9 @@ bench/run_bench.sh -S other/main.exe -b layered     # two solver builds
 bench/width_curve.sh                     # the D-0028 shape at w = 9, 99, 999, 9999
 bench/run_bench.sh -h                    # all the options
 
+bench/explanation_size.sh                # M2-T17: explanation SIZE, per model (see section 3d)
+bench/explanation_size.sh -c             # THE CONTROL for it (bench/control/size/) -- asserts
+
 baguette MODEL.fzn --proof P --time      # the same internal numbers, one model, by hand
 ```
 
@@ -530,6 +533,64 @@ of their wall-clock `solve ms` outside the solver's own work (`notslv%`, §3a), 
 `width_sat_depth` and `width_root_unsat` are below 50%. "Learning costs X µs per clause"
 is not supportable from this suite and this table does not offer it. The counts are exact;
 the seconds beside them, on 36 of 38 rows, are a timing of `exec`.
+
+## 3d. Explanation size baseline, 2026-09-18 (38 models, `bench/explanation_size.sh`)
+
+M2-T17, off `docs/EXPLANATION-REVIEW.md` section 5: **a sound but maximally weak
+explanation -- one naming every variable in scope -- passes every test in this repository
+today, and VeriPB accepts it.** Nothing before this measured explanation *quality*; the
+literature's quality metric is generality, and a shorter, weaker-premised explanation
+prunes more later. This is the first tracked number for it, landed deliberately before
+M4-T1 (`all_different`), where the choice of Hall set is the whole game.
+
+Two metrics, read straight off the emitted `.pbp` -- no `lib/` change, no new solver
+counter -- and reported separately because nothing says they move together:
+
+- **`rup_lits`**: literals per derived `rup` constraint, mean over that model's `rup`
+  lines. The direct reading of "how many variables does this explanation name."
+- **`pol_prems`**: premises cited per `pol` chain, mean over that model's `pol` lines --
+  every operand pushed (a cited constraint id or a literal pushed as its own unit axiom),
+  operators (`+ * d s w !`) excluded. The combining side of the same question: how many
+  facts did it take to build this derivation.
+
+A model with zero `rup` (or `pol`) lines reports `n/a` for that metric, not 0, for the
+same reason `fb%` does in section 4: a zero would read as "explanations here are free."
+
+```
+rup_lits  min .. max over the 26 of 38 models that have a `rup` line: 0.0000 .. 2.3636
+pol_prems min .. max over the 12 of 38 models that have a `pol` line: 2.0000 .. 1999.0000
+```
+
+Three largest by `rup_lits`: `guess_wrong_sat` 2.3636 (n=11), `offset_unsat` 2.1714
+(n=35), `backjump_lineq_unsat` / `near_limit_unsat` tied at 2.0833 (n=24 each).
+Three smallest: `ne_self_unsat` 0.0000 (n=1 -- the final contradiction line, an empty
+`rup >= 1 ;`, which is the correct zero-literal shape for the last step of an UNSAT
+derivation, not a bug), `bool_channel_unsat` 0.6667 (n=3), `ne_eq_unsat` 1.3333 (n=9).
+
+Three largest by `pol_prems`: `width_root_unsat` 1999.0000 (n=1) and `width_narrow_unsat`
+19.0000 (n=1) -- both are the D-0028 width fixtures, already the deliberate, measured
+outliers `CLAUDE.md` and `bench/README.md` section 5 describe them as; `lin_unsat` 5.0000
+(n=3) is the largest non-width figure. Three smallest: `bool_channel_unsat` / `near_limit_ne_sat`
+/ `width_sat_depth` tied at 2.0000 -- a `pol` chain combining exactly two premises, which is
+this proof format's floor (a chain of one premise needs no combination).
+
+**No model outside the two known width fixtures reads as anomalous.** That is itself the
+finding worth recording: today's propagators are all linear and their derivations are
+forced (section 5's own framing), so a metric built to catch a needlessly wide explanation
+currently has nothing non-width to catch. Its job starts at M4-T1.
+
+Verified this baseline is reproducible: two runs of `bench/explanation_size.sh` byte-for-byte
+identical, peak RSS 9.6 MB (`/usr/bin/time -v`, both the harness and, separately, the
+solver alone on `width_root_unsat.fzn`, the heaviest model in the suite) -- far under the
+15 GB / `ulimit -v 4000000` ceiling `CLAUDE.md` sets.
+
+**The control**, `bench/explanation_size.sh -c` (`bench/control/size/`, see
+`README-scenes.txt` there): a hand-authored `.pbp` fixture pair, tight vs. the same
+derivation deliberately widened, asserting both `rup_lits` and `pol_prems` come out
+strictly larger on the widened one. Verified by breaking the measurement code itself and
+watching `-c` fail, and once by breaking it in a way this particular fixture cannot catch
+(recorded in `README-scenes.txt` rather than hidden) -- exactly the shape M2-L8's control
+verification took in section 7.
 
 ## 4. What the columns are *not*
 
