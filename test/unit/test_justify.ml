@@ -19,6 +19,8 @@ module Store = Baguette_core.Store
 module Propagator = Baguette_core.Propagator
 module Linear = Baguette_core.Linear
 module Lin_eq = Baguette_core.Lin_eq
+module Learned = Baguette_core.Learned
+module Reduce = Baguette_core.Reduce
 
 (* M1-T53: the inner heap guard. test_prop.exe is the binary that reached 14.9 GB RSS on
    2026-09-16 and had to be killed by hand, so a guard that covered only test_output and
@@ -952,6 +954,479 @@ let test_conclusion_rejects_a_weakened_pol () =
       |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
       try Sys.rmdir dir with _ -> ())
 
+(* ------------------------------------------------------------------ *)
+(* M2-L5 / D-0044: REDUCTION as a named, swappable component.          *)
+(*   (a) hand-built rows, pinned against RoundingSat's definition;     *)
+(*   (b) the conflicting invariant is preserved;                       *)
+(*   (c) the checker-level control -- a TRUNCATED reduction is         *)
+(*       rejected once M2-L0's conclusion is stated, and accepted      *)
+(*       bare.                                                         *)
+(* ------------------------------------------------------------------ *)
+
+(* The literals every M2-L5 test is built from. Three order literals on three
+   single-digit domains -- D-0028 makes the encoding width-proportional and nothing here
+   needs width. *)
+let rv = Lit.ge "x" 1
+let ru = Lit.ge "y" 2
+let rw = Lit.ge "z" 1
+
+(* [falsified] as a set membership, which is all [Reduce.view] is ever shown: no store,
+   no live state (reduce.ml's header, and analysis.ml's [view] for the same reason). *)
+let falsified_in set l = List.exists (Lit.equal l) set
+let view row ~pivot ~falsified = { Reduce.row; pivot; falsified = falsified_in falsified }
+
+(* ------------------------------------------------------------- (a) *)
+
+(* The worked case of reduce.ml's header and of D-0044's table:
+
+     C = 3v + 3u + 1w >= 5,  pivot v (d = 3),  u and w NOT falsified
+
+   [division] weakens every non-falsified literal but the pivot, so u and w both go and
+   the row collapses to the pivot alone. [roundToOne] weakens only what the division
+   would round -- w, whose coefficient 1 is not a multiple of 3 -- and keeps u, whose 3
+   is. [v + u >= 2] is strictly stronger than [v >= 1] over 0-1 variables, which is the
+   dominance D-0044 cites and the whole reason both names exist. *)
+let test_reduce_pins_both_rules () =
+  let row = Learned.make [ (3, rv); (3, ru); (1, rw) ] 5 in
+  check_eq "M2-L5 (a): the hand-built reason row itself"
+    ~expected:"+3 x_ge_1 +3 y_ge_2 +1 z_ge_1 >= 5" ~got:(Learned.to_string row);
+  let v = view row ~pivot:rv ~falsified:[] in
+  check "M2-L5 (a): the row propagates its pivot, so it is a legitimate reason"
+    (Reduce.propagates row ~pivot:rv ~falsified:(falsified_in []));
+  (match Reduce.division.reduce v with
+  | None -> check "M2-L5 (a): division applies" false
+  | Some o ->
+      check_eq "M2-L5 (a) division: 3v+3u+w >= 5, pivot v -> v >= 1"
+        ~expected:"+1 x_ge_1 >= 1" ~got:(Learned.to_string o.reduced);
+      check "M2-L5 (a) division: divides by the pivot's coefficient" (o.divisor = 3);
+      check_eq "M2-L5 (a) division: the literal axioms it adds are ~u and ~w, scaled"
+        ~expected:"3*~y_ge_2 1*~z_ge_1"
+        ~got:
+          (String.concat " "
+             (List.map
+                (fun (c, l) -> Printf.sprintf "%d*%s" c (Lit.to_string l))
+                o.weakened));
+      check "M2-L5 (a) division: its own postcondition holds"
+        (Reduce.postcondition_holds Reduce.division v o));
+  match Reduce.round_to_one.reduce v with
+  | None -> check "M2-L5 (a): roundToOne applies" false
+  | Some o ->
+      check_eq "M2-L5 (a) roundToOne: the same row -> v + u >= 2, strictly stronger"
+        ~expected:"+1 x_ge_1 +1 y_ge_2 >= 2" ~got:(Learned.to_string o.reduced);
+      check_eq "M2-L5 (a) roundToOne: it weakens ONLY w, whose 1 is not a multiple of 3"
+        ~expected:"1*~z_ge_1"
+        ~got:
+          (String.concat " "
+             (List.map
+                (fun (c, l) -> Printf.sprintf "%d*%s" c (Lit.to_string l))
+                o.weakened));
+      check "M2-L5 (a) roundToOne: its own postcondition holds"
+        (Reduce.postcondition_holds Reduce.round_to_one v o);
+      (* D-0044's "divide so the reduced reason has slack zero", asserted rather than
+         quoted. *)
+      check "M2-L5 (a) roundToOne: the reduced reason has slack exactly zero"
+        (Reduce.slack o.reduced ~falsified:(falsified_in []) = 0);
+      (* And the dominance is the wrong way round for the other rule's postcondition:
+         roundToOne's output keeps a non-falsified literal, which is exactly what
+         [division]'s own clause forbids. A standing proof that the postconditions are
+         each rule's and not the type's (analysis.ml's [conflict_side] does this job for
+         the cut criterion). *)
+      check
+        "M2-L5 (a): division's postcondition is DIVISION's -- roundToOne's output fails \
+         it"
+        (not (Reduce.postcondition_holds Reduce.division v o))
+
+(* A falsified literal is never weakened: dropping it would take its coefficient out of
+   the degree but not out of the slack sum, which is exactly how a reduction loses the
+   conflict (reduce.ml's header). Both rules must leave it alone, so here they agree. *)
+let test_reduce_never_weakens_a_falsified_literal () =
+  let row = Learned.make [ (3, rv); (2, ru) ] 3 in
+  let v = view row ~pivot:rv ~falsified:[ ru ] in
+  let expect name (r : Reduce.t) =
+    match r.reduce v with
+    | None -> check (name ^ ": applies") false
+    | Some o ->
+        check_eq
+          (name ^ ": 3v+2u >= 3 with u falsified -> v + u >= 1")
+          ~expected:"+1 x_ge_1 +1 y_ge_2 >= 1" ~got:(Learned.to_string o.reduced);
+        check (name ^ ": nothing was weakened away") (o.weakened = []);
+        check (name ^ ": its own postcondition holds") (Reduce.postcondition_holds r v o)
+  in
+  expect "M2-L5 (a) division, falsified u" Reduce.division;
+  expect "M2-L5 (a) roundToOne, falsified u" Reduce.round_to_one
+
+(* Pivot coefficient 1: the divisor is 1, roundToOne finds every coefficient a multiple
+   of it, weakens nothing and returns the row unchanged -- and its [derive] is the
+   IDENTITY, so no `pol` line is written for a step that does nothing. Division still
+   weakens, because its rule does not consult the divisor at all. *)
+let test_reduce_is_a_no_op_at_divisor_one () =
+  let row = Learned.make [ (1, rv); (2, ru) ] 3 in
+  let v = view row ~pivot:rv ~falsified:[] in
+  (match Reduce.round_to_one.reduce v with
+  | None -> check "M2-L5 (a) roundToOne at d=1: applies" false
+  | Some o ->
+      check_eq "M2-L5 (a) roundToOne at d=1: the row is returned unchanged"
+        ~expected:(Learned.to_string row) ~got:(Learned.to_string o.reduced);
+      check "M2-L5 (a) roundToOne at d=1: divisor is 1 and nothing is weakened"
+        (o.divisor = 1 && o.weakened = []);
+      let base = Explanation.model_row 7 in
+      check "M2-L5 (a) roundToOne at d=1: [derive] is the identity -- no pol line at all"
+        (o.derive base == base);
+      check "M2-L5 (a) roundToOne at d=1: its own postcondition still holds"
+        (Reduce.postcondition_holds Reduce.round_to_one v o));
+  match Reduce.division.reduce v with
+  | None -> check "M2-L5 (a) division at d=1: applies" false
+  | Some o ->
+      check_eq "M2-L5 (a) division at d=1: u is weakened away anyway"
+        ~expected:"+1 x_ge_1 >= 1" ~got:(Learned.to_string o.reduced);
+      check "M2-L5 (a) division at d=1: it does emit a step, but no division"
+        (o.divisor = 1 && o.weakened <> []
+        && not (o.derive (Explanation.model_row 7) == Explanation.model_row 7))
+
+(* [reduce] answers [None], rather than something, when the rule does not apply. *)
+let test_reduce_declines () =
+  let row = Learned.make [ (3, rv); (3, ru) ] 4 in
+  check "M2-L5 (a): a pivot that is not a literal of the row is declined"
+    (Reduce.round_to_one.reduce (view row ~pivot:rw ~falsified:[]) = None);
+  check "M2-L5 (a): a falsified pivot is declined -- there is nothing to resolve on"
+    (Reduce.round_to_one.reduce (view row ~pivot:rv ~falsified:[ rv ]) = None)
+
+(* ------------------------------------------------------------- (b) *)
+
+(* THE PROPERTY M2-L5's row asks for: the reduced reason still propagates the same
+   literal, and still has negative slack once that literal is falsified -- the
+   conflicting invariant, which is the only reason reduction exists.
+
+   Those two halves are one fact (see [Reduce.propagates]), and both are asserted
+   separately anyway so that a future change that breaks the identity is caught by the
+   test rather than hidden by it.
+
+   Rows are pseudo-random from a FIXED seed: the determinism gate
+   (scripts/check_determinism.sh) is a commit gate here, so a test that samples has to
+   sample the same way twice. Coefficients stay in the single digits -- nothing about
+   this property needs magnitude, and Checked's cap is not what is under test. *)
+let test_reduce_preserves_the_conflicting_invariant () =
+  let st = Random.State.make [| 20260918 |] in
+  let pool = [| rv; ru; rw; Lit.ge "x" 2; Lit.ge "y" 1; Lit.ge "z" 3 |] in
+  let bad_lanes = ref 0 and rounds = 400 in
+  for _ = 1 to rounds do
+    let pivot = pool.(Random.State.int st (Array.length pool)) in
+    let d = 1 + Random.State.int st 6 in
+    (* Two to four other literals, each falsified or not. *)
+    let others =
+      List.filter_map
+        (fun l ->
+          if Lit.equal l pivot then None
+          else if Random.State.bool st then
+            Some (1 + Random.State.int st 8, l, Random.State.bool st)
+          else None)
+        (Array.to_list pool)
+    in
+    let fals = List.filter_map (fun (_, l, f) -> if f then Some l else None) others in
+    let free_sum =
+      List.fold_left (fun acc (c, _, f) -> if f then acc else acc + c) d others
+    in
+    (* Degree chosen so the row PROPAGATES the pivot: slack in [0, d). *)
+    let degree = free_sum - Random.State.int st d in
+    if degree >= 1 then
+      let row =
+        Learned.make
+          (List.map (fun (c, l, _) -> (c, l)) ((d, pivot, false) :: others))
+          degree
+      in
+      let v = view row ~pivot ~falsified:fals in
+      if Reduce.propagates row ~pivot ~falsified:(falsified_in fals) then
+        List.iter
+          (fun (r : Reduce.t) ->
+            match r.reduce v with
+            | None -> incr bad_lanes
+            | Some o ->
+                let still_propagates =
+                  Reduce.propagates o.reduced ~pivot ~falsified:(falsified_in fals)
+                in
+                let still_conflicting =
+                  Reduce.slack_with_pivot_falsified o.reduced ~pivot
+                    ~falsified:(falsified_in fals)
+                  < 0
+                in
+                if
+                  not
+                    (still_propagates && still_conflicting
+                    && Reduce.postcondition_holds r v o)
+                then incr bad_lanes)
+          Reduce.reductions
+  done;
+  check
+    (Printf.sprintf
+       "M2-L5 (b): over %d pseudo-random propagating reasons, every reduction's output \
+        still propagates the pivot AND still has negative slack"
+       rounds)
+    (!bad_lanes = 0);
+  if !bad_lanes > 0 then
+    Printf.printf "       %d lane(s) broke the invariant\n" !bad_lanes
+
+(* The property above is worth nothing unless it can go red, so here is a reduction that
+   breaks it, run through the same postcondition: one that weakens FALSIFIED literals
+   too. Weakening a falsified literal takes its coefficient out of the degree but not out
+   of the slack sum, so the slack rises by that coefficient -- and where the reason was
+   tight, that is enough to lose the conflict outright.
+
+     C = 3v + 3f >= 3,  pivot v (d = 3),  f FALSIFIED.  Slack 0, so C propagates v.
+
+       honest      weakens nothing:        3v + 3f >= 3   / 3  ->  v + f >= 1   slack 0
+       wrong       weakens f as well:      3v      >= 0   / 3  ->  v     >= 0   slack 1
+
+   [v >= 0] is not false -- it is vacuously true, and a reduction that hands the analysis
+   a vacuous reason has thrown the conflict away without saying so. The postcondition is
+   what says so. *)
+let test_reduce_property_has_teeth () =
+  let row = Learned.make [ (3, rv); (3, ru) ] 3 in
+  let v = view row ~pivot:rv ~falsified:[ ru ] in
+  check "M2-L5 (b) control: the row propagates its pivot, so it is a legitimate reason"
+    (Reduce.propagates row ~pivot:rv ~falsified:(falsified_in [ ru ]));
+  let honest = Option.get (Reduce.round_to_one.reduce v) in
+  check_eq "M2-L5 (b) control: the honest reduction keeps the falsified literal"
+    ~expected:"+1 x_ge_1 +1 y_ge_2 >= 1"
+    ~got:(Learned.to_string honest.reduced);
+  check "M2-L5 (b) control: and it keeps the conflict"
+    (Reduce.slack_with_pivot_falsified honest.reduced ~pivot:rv
+       ~falsified:(falsified_in [ ru ])
+     < 0
+    && Reduce.postcondition_holds Reduce.round_to_one v honest);
+  (* The same rule with the "never weaken a falsified literal" clause removed: weaken
+     every literal but the pivot, then divide. *)
+  let wrong =
+    {
+      Reduce.name = "weaken-everything (deliberately wrong)";
+      reduce =
+        (fun (vw : Reduce.view) ->
+          match Reduce.round_to_one.reduce vw with
+          | None -> None
+          | Some o ->
+              let d = o.divisor in
+              let dropped =
+                List.filter
+                  (fun (tm : Learned.term) -> not (Lit.equal tm.lit vw.pivot))
+                  (Learned.terms vw.row)
+              in
+              let degree =
+                List.fold_left
+                  (fun acc (tm : Learned.term) -> acc - tm.coeff)
+                  (Learned.degree vw.row) dropped
+              in
+              let up x = if x <= 0 then 0 else ((x - 1) / d) + 1 in
+              Some
+                {
+                  o with
+                  reduced = Learned.make [ (1, vw.pivot) ] (up degree);
+                  weakened =
+                    List.map
+                      (fun (tm : Learned.term) -> (tm.coeff, Lit.negate tm.lit))
+                      dropped;
+                });
+      postcondition = Reduce.round_to_one.postcondition;
+    }
+  in
+  match wrong.reduce v with
+  | None -> check "M2-L5 (b) control: the wrong rule applies" false
+  | Some o ->
+      check_eq "M2-L5 (b) THE BREAK: weakening the falsified f gives a VACUOUS reason"
+        ~expected:"+1 x_ge_1 >= 0" ~got:(Learned.to_string o.reduced);
+      check
+        "M2-L5 (b) THE BREAK: it no longer propagates the pivot and its slack is no \
+         longer negative -- the conflict is gone"
+        ((not (Reduce.propagates o.reduced ~pivot:rv ~falsified:(falsified_in [ ru ])))
+        && Reduce.slack_with_pivot_falsified o.reduced ~pivot:rv
+             ~falsified:(falsified_in [ ru ])
+           >= 0);
+      check
+        "M2-L5 (b) THE BREAK: and the postcondition the property test uses is what says \
+         so, so (b) can go red"
+        (not (Reduce.postcondition_holds Reduce.round_to_one v o))
+
+(* ------------------------------------------------------------- (c) *)
+
+(* The model every lane of (c) is checked against.
+
+     c1: 3v + 3u + 1w >= 5    the reason row
+     c2: ~v >= 1              v is false, so the model is UNSAT (3u + w <= 4 < 5)
+
+   Reducing c1 on pivot v derives [v >= 1] (division) or [v + u >= 2] (roundToOne); both
+   imply the bound [x >= 1] the pruning claims. A TRUNCATED reduction -- roundToOne with
+   its weakening step dropped, i.e. a bare division of an unweakened row -- derives
+   [v + u + w >= 2], which does NOT imply [x >= 1]: by the syntactic implication rule
+   2 - 1 - 1 = 0 < 1. That is the whole break, and nothing but the stated conclusion can
+   see it. *)
+let reduce_break_encoding () =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:0 ~hi:3;
+  Encoding.declare_int e "y" ~lo:0 ~hi:3;
+  Encoding.declare_int e "z" ~lo:0 ~hi:3;
+  let c1 = Encoding.add_constraint e (Opb.ge [ (3, rv); (3, ru); (1, rw) ] 5) in
+  let c2 = Encoding.add_constraint e (Opb.ge [ (1, Lit.negate rv) ] 1) in
+  (e, c1, c2)
+
+(* BOTH checkers, at the format each one can read. M1-T46's rule is that a break lane
+   measured against one binary says nothing about the other, and D-0023's one-way door
+   means the artefact itself differs: 3.0's labelled .opb is a parse error for 2.2.2
+   (measured here -- it is what made the first draft of this test fail four lanes under
+   the Python build for a reason that had nothing to do with reduction). So the format
+   travels with the checker, and [Encoding.write_opb_for] is what keeps the .opb and the
+   .pbp agreeing about labels. *)
+let reduce_break_checkers () =
+  let home = try Sys.getenv "HOME" with Not_found -> "" in
+  List.filter
+    (fun (_, path, _) -> Sys.file_exists path && not (Sys.is_directory path))
+    [
+      ( "veripb 3.0.2 (Rust, the checker of record)",
+        Filename.concat home ".cargo/bin/veripb",
+        Writer.V3_0 );
+      ("veripb 2.2.2 (Python)", Filename.concat home ".local/bin/veripb", Writer.V2_0);
+    ]
+
+let test_reduction_truncation_is_rejected () =
+  match reduce_break_checkers () with
+  | [] ->
+      incr failures;
+      print_endline
+        ("FAIL M2-L5 (c): " ^ Baguette_proof.Checker.not_found_message
+       ^ " -- (c) IS the checker rejecting a truncated reduction, so with no checker \
+          there is nothing here. This is not a pass.")
+  | checkers -> (
+      let dir = Filename.temp_file "baguette_reduce" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let log = Filename.concat dir "log" in
+      let last_out = ref "" in
+      (* [expl_of] picks the derivation the lane emits; [stated] decides whether the
+         bound it claims reaches the page as an `ia` (M2-L0's [emit_concluding]).
+         Returns [true] iff veripb ACCEPTED. *)
+      let run ~veripb ~fmt ~name ~stated ~expl_of =
+        let e, c1, c2 = reduce_break_encoding () in
+        let pbp = Filename.concat dir (name ^ ".pbp") in
+        let opb = Filename.concat dir (name ^ ".opb") in
+        let oc = open_out pbp in
+        let w = Writer.create ~comments:false ~audit:true ~format:fmt oc in
+        let oc_opb = open_out opb in
+        Encoding.write_opb_for e w oc_opb;
+        close_out oc_opb;
+        Encoding.start_proof e w;
+        let ctx = Justify.create ~writer:w ~encoding:e in
+        let row = Learned.make [ (3, rv); (3, ru); (1, rw) ] 5 in
+        let v = view row ~pivot:rv ~falsified:[] in
+        let expl = expl_of v (Explanation.model_row c1) in
+        let concludes = Some (Reason.at_least ~name:"x" ~decl:0 1) in
+        let id =
+          if stated then Justify.emit_concluding ctx ~concludes expl
+          else Justify.emit ctx expl
+        in
+        Writer.delete w id;
+        (* The contradiction is derived under its own origin, from the model rows
+           directly, so every lane ends the same way and what differs between them is the
+           pruning's line and nothing else. *)
+        let bottom =
+          Writer.pol w ~origin:"the contradiction"
+            Pol.(
+              add
+                (div
+                   (add
+                      (add (id c1) (mul (axiom (Lit.negate ru)) 3))
+                      (mul (axiom (Lit.negate rw)) 1))
+                   3)
+                (id c2))
+        in
+        Writer.conclusion w (Writer.Unsat (Some bottom));
+        close_out oc;
+        let rc =
+          Sys.command
+            (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
+               (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
+        in
+        (let ic = open_in_bin log in
+         last_out := really_input_string ic (in_channel_length ic);
+         close_in ic);
+        rc = 0
+      in
+      let honest (r : Reduce.t) v base = (Option.get (r.reduce v)).derive base in
+      (* The truncation: roundToOne's divisor with roundToOne's weakening step dropped.
+         This is not a mutation knob -- it is the defect a reduction component actually
+         has, a rule that weakens less than its own definition says. *)
+      let truncated _v base = Explanation.combine [ Explanation.term 1 base ] 3 in
+      let contains needle hay =
+        let n = String.length needle and h = String.length hay in
+        let rec go i = i + n <= h && (String.sub hay i n = needle || go (i + 1)) in
+        n = 0 || go 0
+      in
+      List.iter
+        (fun (label, veripb, fmt) ->
+          let tag = Printf.sprintf " [%s]" label in
+          let slug =
+            String.map (function 'a' .. 'z' | '0' .. '9' -> '_' | c -> c) label
+          in
+          let slug = String.concat "" (String.split_on_char ' ' slug) in
+          let run = run ~veripb ~fmt in
+          check
+            ("M2-L5 (c) baseline: roundToOne's derivation, emitted bare, is ACCEPTED"
+           ^ tag)
+            (run ~name:("rto_bare" ^ slug) ~stated:false
+               ~expl_of:(honest Reduce.round_to_one));
+          check
+            ("M2-L5 (c) baseline: roundToOne's derivation stating the bound it concluded \
+              is ACCEPTED -- an honest reduction pays nothing for the `ia`" ^ tag)
+            (run ~name:("rto_stated" ^ slug) ~stated:true
+               ~expl_of:(honest Reduce.round_to_one));
+          check
+            ("M2-L5 (c) baseline: division's derivation stating the same bound is \
+              ACCEPTED" ^ tag)
+            (run ~name:("div_stated" ^ slug) ~stated:true
+               ~expl_of:(honest Reduce.division));
+          check
+            ("M2-L5 (c) THE GAP: the reduction TRUNCATED -- divided without its \
+              weakening step, so it derives v+u+w >= 2 where roundToOne derives v+u >= 2 \
+              -- is still ACCEPTED bare. A bare `pol` checks well-formedness, not what \
+              was claimed." ^ tag)
+            (run ~name:("trunc_bare" ^ slug) ~stated:false ~expl_of:truncated);
+          check
+            ("M2-L5 (c) THE CONTROL M1-T42 COULD NOT BUILD: the same truncated reduction \
+              is REJECTED once M2-L0's conclusion is stated" ^ tag)
+            (not (run ~name:("trunc_stated" ^ slug) ~stated:true ~expl_of:truncated));
+          (* Which rejection it is, named at full strength in BOTH checkers' words --
+             3.0.2's sentence and 2.2.2's bare hint tuple (docs/PROOF-FORMAT.md section
+             2's table). Matching on one alone would pass vacuously against the other
+             binary, which is M1-T46's absolute rule; and the fragment the two DO share
+             on a RUP failure, "reverse unit propagation", is deliberately not used --
+             it is the least specific thing either says and this is an implication
+             failure, not a RUP one. *)
+          let wordings =
+            [
+              ("3.0.2: \"not syntactically implied\"", "not syntactically implied");
+              ("2.2.2 alt: \"Implication check failed\"", "Implication check failed");
+              ("2.2.2: bare \"Hint: (claim, antecedent)\"", "Hint: (");
+            ]
+          in
+          let hit = List.filter (fun (_, needle) -> contains needle !last_out) wordings in
+          let matched = hit <> [] in
+          if matched then
+            Printf.printf "note M2-L5 (c)%s said: %s\n" tag
+              (String.concat " + " (List.map fst hit));
+          check
+            ("M2-L5 (c): the rejection is the IMPLICATION check -- 3.0.2's \"Expected \
+              constraint is not syntactically implied by the constraint at the hint.\" \
+              or 2.2.2's bare \"Hint: (claim, antecedent)\" tuple -- not a parse error \
+              and not a dangling label" ^ tag)
+            matched;
+          if not matched then
+            Printf.printf "       checker said: %s\n" (String.trim !last_out))
+        checkers;
+      if List.length checkers < 2 then
+        Printf.printf
+          "note M2-L5 (c): only %d of the two checkers is installed, so the other's \
+           polarity was not measured here\n"
+          (List.length checkers);
+      Sys.readdir dir
+      |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
+      try Sys.rmdir dir with _ -> ())
+
 let () =
   test_model_row ();
   test_decision_has_no_id ();
@@ -977,6 +1452,13 @@ let () =
     ~build:build_int_lin_le_gap;
   test_d0013_conflict ();
   test_conclusion_rejects_a_weakened_pol ();
+  test_reduce_pins_both_rules ();
+  test_reduce_never_weakens_a_falsified_literal ();
+  test_reduce_is_a_no_op_at_divisor_one ();
+  test_reduce_declines ();
+  test_reduce_preserves_the_conflicting_invariant ();
+  test_reduce_property_has_teeth ();
+  test_reduction_truncation_is_rejected ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
