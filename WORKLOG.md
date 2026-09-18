@@ -10,6 +10,45 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
+**Wave nineteen is running: M2-L13 (agent-pbprop) and M2-L14 (agent-models).**
+
+**The suite cannot measure learning, and this is now a number rather than a suspicion.**
+Node counts over all 39 models: the largest is **`width_sat_depth` at 99**, and that one is a
+width fixture — a spine, not a search. **Every other model in the suite is 10 nodes or fewer**
+(`backjump_deep_unsat` 10, `backjump_unsat` 9, `offset_unsat` 7, `backjump_lineq_unsat` 7,
+then down). Conflict learning pays off when the *same* conflict recurs in a *different*
+subtree; a ten-node tree has no second subtree. So M2-L12's zero is at least partly the
+instrument, not the mechanism, and until that is fixed **no learning row can be judged by a
+suite measurement** — which makes M2-L14 a precondition for reading M2-L13, not a companion
+to it.
+
+**agent-pbprop holds `lib/core/**`, `bin/main.ml` and `test/unit/**`** (including
+`test/unit/dune`). M2-L13 is D-0054's fix: propagate a learned PB row **as a PB constraint
+over order literals**, taking `Learned.to_linear_row` out of the propagation path.
+
+**agent-models holds `test/models/**`, `test/expected/**` and `bench/**`.** M2-L14 builds
+models where learning can actually show, and measures the baseline on the **current** binary
+so M2-L13 has something to move against. It changes no `lib/` file, which is what lets the two
+run together.
+
+**Narrow domains, many variables.** The order encoding is width-proportional (D-0028) and the
+15 GB ceiling is real, so hardness must come from **combinatorial structure, not domain
+width** — many small-domain variables that interact, where the search branches *different*
+variables at successive levels. That last part is not decoration: M2-L12 measured that under
+first-fail/smallest-value the search re-branches the *same* variable down a spine, so a
+learned constraint is already in force when applied. A model that does not branch different
+variables cannot show learning no matter how many nodes it has.
+
+**Neither agent may assert a hard-coded model count.** The suite stops being 39 this wave.
+
+**Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `dune-project`,
+`scripts/**` and all merging, as standing.
+
+Wave eighteen (M2-L12, M3-T1) is merged, released and pushed. Baseline: **2190 ok / 0 FAIL,
+280 matrix, 44 mutation, 39/39 models**, and **231 nodes suite-wide** — that last number is
+M2-L13's target and M2-L12 pinned it.
+
+
 **Wave eighteen is running: M2-L12 (agent-prop) and M3-T1 (agent-reify).**
 
 **Two real editing tasks this time**, not a row plus a study, because the file split finally
