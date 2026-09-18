@@ -660,8 +660,8 @@ let test_emit_rup_clause () =
        establishes a literal (D-0009). *)
 
 (* The body of the line labelled [@c<id>] in [text], label stripped, or "" if no line
-   carries that label. In 2.0 there are no labels, so this returns "" and the callers
-   that use it say so rather than passing vacuously. *)
+   carries that label. 2.0 has no labels, so under 2.0 this answers nothing and only
+   the 3.0 half of the lane below uses it. *)
 let line_labelled text id =
   let want = Printf.sprintf "@c%d " id in
   let n = String.length want in
@@ -669,6 +669,55 @@ let line_labelled text id =
     | [] -> ""
     | l :: rest ->
         if String.length l >= n && String.sub l 0 n = want then Writer.strip_label l
+        else go rest
+  in
+  go (String.split_on_char '\n' text)
+
+(* ---- resolving an id to its line WITHOUT a label (M2-T14) -------------------
+
+   The check below wants to know that the id the index handed back names the line that
+   states the clause. It used to ask that of [line_labelled], i.e. by reading a 3.0
+   label -- so under 2.0 it could not be asked at all, and the lane asserted [false] on
+   purpose rather than pass vacuously. That is honest but it leaves a 2.0 run
+   permanently one check red, and a run that is always red is a run people stop reading.
+
+   An id can be resolved by CONTENT instead. VeriPB numbers constraints itself: the
+   `f <n>` header loads n model rows as ids 1..n, and every rule that mints an id takes
+   the next one, in file order. Walking the file with that counter reproduces the
+   checker's own numbering and so answers the same question in either format. *)
+
+(* The model-row count off the proof's own `f <n>` header. Both formats write it; 3.0
+   just adds a ` ;` terminator, which splitting on spaces discards. *)
+let model_row_count text =
+  let rec go = function
+    | [] -> 0
+    | l :: rest -> (
+        match String.split_on_char ' ' (String.trim (Writer.strip_label l)) with
+        | "f" :: n :: _ -> ( try int_of_string (String.trim n) with _ -> go rest)
+        | _ -> go rest)
+  in
+  go (String.split_on_char '\n' text)
+
+(* Which rules mint an id: exactly the emitters in writer.ml that call [fresh]. `#`,
+   `w`, `del`, `*`, `output`, `conclusion` and the level markers mint nothing, so they
+   must not advance the counter. *)
+let mints_id line =
+  let body = Writer.strip_label line in
+  List.exists
+    (fun p ->
+      String.length body >= String.length p && String.sub body 0 (String.length p) = p)
+    [ "pol "; "rup "; "ia "; "red "; "solx "; "soli "; "obju " ]
+
+(* The body of the line that mints constraint id [id], 3.0 label stripped, or "" if no
+   line mints it. Works in both formats. *)
+let line_minting_id text id =
+  let n = ref (model_row_count text) in
+  let rec go = function
+    | [] -> ""
+    | l :: rest ->
+        if mints_id l then (
+          incr n;
+          if !n = id then Writer.strip_label l else go rest)
         else go rest
   in
   go (String.split_on_char '\n' text)
@@ -690,14 +739,21 @@ let test_index_reuses_the_right_line () =
         reused)
   in
   let reused = match r with Ok id -> id | Error _ -> -1 in
+  (* [reused = trace_id] above only says two integers agree. THIS is the check that
+     would catch an index pointing at the wrong line: the line that mints that id
+     really does state the clause. Asked by content, so it is asked under both formats
+     -- the rendered body is the same string either way, because the ` ;` belongs to
+     [Opb.constr_to_string] and not to the 3.0 rule terminator. *)
+  let expected = "rup +1 x_ge_2 +1 ~x_ge_3 >= 1 ;" in
+  check_eq "index: the reused id names the line that states the clause" ~expected
+    ~got:(line_minting_id s reused);
+  (* Under 3.0 the same line must also carry `@c<reused>` as its label. That was the
+     whole of this lane before M2-T14; it is kept, so nothing is checked less, and it
+     now doubles as a cross-check that the content-based numbering above agrees with
+     what the writer labelled. *)
   if Writer.default_format () = Writer.V3_0 then
-    check_eq "index: the reused id labels the line that states the clause"
-      ~expected:"rup +1 x_ge_2 +1 ~x_ge_3 >= 1 ;" ~got:(line_labelled s reused)
-  else
-    check
-      "index: the reused id labels the line that states the clause (2.0 has no labels, \
-       so this lane is not checked here)"
-      false;
+    check_eq "index: and under 3.0 the line's @c label agrees with that numbering"
+      ~expected ~got:(line_labelled s reused);
   expect_ok "index: no exception" (Result.map ignore r)
 
 let test_index_is_structural () =
