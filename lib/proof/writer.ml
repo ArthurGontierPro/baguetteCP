@@ -602,6 +602,60 @@ let set_level t l =
 
 let current_level t = t.level
 
+(* Allocate ids at a CHOSEN level for the duration of [f] -- docs/DECISIONS.md D-0045's
+   addendum, and the entry point M2-L1 was sent to build.
+
+   The problem it exists for, measured before it was written (M2-L1, 2026-09-18, both
+   checkers, by hand):
+
+     - 3.0: [fresh] tags every id with [t.level], unconditionally and with no override,
+       and [wipe_level l] deletes every id tagged at level >= l. So a constraint derived
+       at the conflict level is deleted by the backjump that retires that level, and a
+       later `pol` citing it is rejected -- "Trying to access constraint with ID 3 that
+       has already been deleted" (veripb 3.0.2).
+     - 2.0: [t.tags] is not maintained at all; the CHECKER holds the level stack and
+       `w l` retires against it. Same outcome, different machinery and a different
+       wording -- "Rule 6 is trying to access constraint (constraintId 3), that was
+       marked as safe to delete" (veripb 2.2.2). The two share no useful substring;
+       match both (M1-T46).
+
+   A learned constraint exists precisely to outlive the conflict that produced it, so it
+   must be introduced at level 0. Note what this is NOT: it is not a [fresh ~level]
+   argument that writes [t.tags] directly. That would be green under 3.0 and WRONG under
+   2.0, because under 2.0 nothing we write to our own table reaches the checker -- only
+   the `#` marker does. So the level has to be moved for real, in the proof, which is
+   what [set_level] already does in both formats, and this is a bracket around it rather
+   than a new allocation path.
+
+   The cost is honest and is two marker lines per bracketed derivation: `# l` / `# saved`
+   under 2.0, and the `% level l` comment under 3.0. D-0045's objection to reaching for
+   [set_level] was that it puts a marker "in the middle of a derivation" -- true, and the
+   answer is that this brackets a WHOLE derivation rather than sitting inside one. The
+   marker pair is what makes the 2.0 half work at all; it cannot be optimised away.
+
+   [f] is run at [l] and the level is restored even if it raises, because a writer left
+   at the wrong level would mis-tag every id minted after it and the failure would
+   surface as a deletion somewhere else entirely. *)
+let with_level t l f =
+  let saved = t.level in
+  if saved = l then f ()
+  else (
+    set_level t l;
+    let r =
+      try f ()
+      with e ->
+        set_level t saved;
+        raise e
+    in
+    set_level t saved;
+    r)
+
+(* The level an id is tagged with, or [None] if the id is not tagged. 3.0 only: under
+   2.0 [t.tags] is deliberately empty and the honest answer is "the checker knows, we do
+   not". A test that wants to see WHERE an id landed asks here rather than grepping the
+   proof, and gets [None] under 2.0 rather than a plausible-looking lie. *)
+let tag_of t id = if v3 t then Hashtbl.find_opt t.tags id else None
+
 (* ------------------------------------------------------------------ reading it back
 
    [set_level] is the only thing that writes a level marker, so the spelling belongs

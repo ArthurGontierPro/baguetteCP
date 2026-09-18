@@ -1695,6 +1695,151 @@ let test_pol_states_its_conclusion () =
       |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
       try Sys.rmdir dir with _ -> ())
 
+(* -------------------------------------------------------------------------- *)
+(*   M2-L1 / D-0045: a learned constraint and the backjump that follows it.    *)
+(* -------------------------------------------------------------------------- *)
+
+(* D-0045's addendum states a prediction and asks for it to be falsified before it is
+   fixed: "emit a learned constraint at the conflict level, and the backjump that follows
+   deletes it". This is that measurement, and then the fix, in one scenario driven twice.
+
+   Why it is HERE and not in test_learned.ml: the thing under test is [Writer]'s id
+   lifetime, not the learned type. A learned constraint is simply the first object this
+   solver has whose lifetime is not a search level's, so it is the first caller that ever
+   cares.
+
+   The scenario, in both proof formats:
+
+     start_proof; set_level 1          -- we are inside a branch
+     <mint a constraint>               -- at level 1 (broken) or inside
+                                          [Writer.with_level w 0] (fixed)
+     wipe_level 1                      -- the backjump
+     pol <that constraint>             -- the learned constraint doing its job later
+
+   BROKEN must be rejected and FIXED must be accepted, in BOTH formats. Requiring both
+   directions is the point: a test that only ran the fixed case would pass just as well
+   against a writer that had never had the bug.
+
+   The two formats fail through DIFFERENT machinery, which is why running one is not
+   running both:
+
+     - 3.0 has no level stack (D-0024). [wipe_level] computes the doomed set from our own
+       [t.tags] and emits the `del`s itself, so the deletion is OURS.
+     - 2.0 has `w l` and the CHECKER holds the level stack; [t.tags] is not maintained at
+       all. The deletion is the checker's, and nothing we write to our own table can
+       reach it.
+
+   So a fix that only adjusted [t.tags] would be green under 3.0 and wrong under 2.0.
+   [Writer.with_level] moves the level for real -- `# 0` under 2.0, a `% level 0` comment
+   under 3.0 -- which is what makes both columns below green.
+
+   The rejection wordings share no useful substring (M1-T46), so this asserts on the
+   checker's exit status and not on its text. *)
+let test_learned_survives_the_backjump () =
+  match veripb_path () with
+  | None ->
+      incr failures;
+      print_endline
+        ("FAIL M2-L1 learned lifetime: " ^ Baguette_proof.Checker.not_found_message
+       ^ " -- D-0045's prediction is about what the CHECKER does with a wiped \
+          level,           which cannot be measured without one.")
+  | Some veripb ->
+      let dir = Filename.temp_file "baguette_learned" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let log = Filename.concat dir "log" in
+      let has hay needle =
+        let n = String.length needle in
+        let rec go i =
+          i + n <= String.length hay && (String.sub hay i n = needle || go (i + 1))
+        in
+        go 0
+      in
+      (* [at_level_0] is the fix. Returns the checker's verdict, the emitted text and the
+         level our own table thinks the learned id landed at. *)
+      let scenario name ~format ~at_level_0 =
+        let e = Encoding.create () in
+        let c_pos = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "uu" 2) ] 1) in
+        let c_neg =
+          Encoding.add_constraint e (Opb.ge [ (1, Lit.negate (Lit.ge "uu" 2)) ] 1)
+        in
+        let opb = Filename.concat dir (name ^ ".opb") in
+        let pbp = Filename.concat dir (name ^ ".pbp") in
+        let pbp_oc = open_out pbp in
+        let w = Writer.create ~audit:false ~format pbp_oc in
+        let oc = open_out opb in
+        Encoding.write_opb_for e w oc;
+        close_out oc;
+        Encoding.start_proof e w;
+        Writer.set_level w 1;
+        let learned =
+          if at_level_0 then
+            Writer.with_level w 0 (fun () ->
+                Writer.pol w ~origin:"learned" (Pol.id c_pos))
+          else Writer.pol w ~origin:"learned" (Pol.id c_pos)
+        in
+        let tag = Writer.tag_of w learned in
+        Writer.wipe_level w 1;
+        (* The learned constraint doing later what it was learned for. *)
+        let used = Writer.pol w ~origin:"uses the learned constraint" (Pol.id learned) in
+        Writer.delete w used;
+        if at_level_0 then Writer.delete w learned;
+        let contra =
+          Writer.pol w ~origin:"contradiction" Pol.(sum [ id c_pos; id c_neg ])
+        in
+        Writer.conclusion w (Writer.Unsat (Some contra));
+        close_out pbp_oc;
+        let verdict =
+          match run_checker ~checker:veripb ~opb ~pbp ~log with
+          | Some v -> v
+          | None -> failwith "checker vanished between find and run"
+        in
+        (verdict, read_whole pbp, tag)
+      in
+      List.iter
+        (fun (tag, format) ->
+          let broken, broken_text, broken_level =
+            scenario (tag ^ "_broken") ~format ~at_level_0:false
+          in
+          let fixed, fixed_text, fixed_level =
+            scenario (tag ^ "_fixed") ~format ~at_level_0:true
+          in
+          check
+            (Printf.sprintf
+               "%s M2-L1: D-0045's prediction HOLDS -- a constraint minted at \
+                the                 conflict level is deleted by the backjump and citing \
+                it is REJECTED"
+               tag)
+            (not broken);
+          check
+            (Printf.sprintf
+               "%s M2-L1: Writer.with_level 0 makes the learned constraint outlive \
+                the                 backjump -- the same proof is ACCEPTED"
+               tag)
+            fixed;
+          if format = Writer.V3_0 then (
+            check
+              (tag
+             ^ " M2-L1: without the fix our own tag table puts the learned id at \
+                the                 conflict level")
+              (broken_level = Some 1);
+            check
+              (tag ^ " M2-L1: with the fix it is tagged 0, so wipe_level cannot see it")
+              (fixed_level = Some 0))
+          else (
+            (* 2.0 keeps no tags, deliberately: the checker holds the levels. So the
+               only evidence that the level moved is the marker in the proof, and that
+               marker is exactly what a tags-only fix would not have written. *)
+            check
+              (tag ^ " M2-L1: 2.0 maintains no tag table, so ours cannot be the fix")
+              (broken_level = None && fixed_level = None);
+            check
+              (tag
+             ^ " M2-L1: the 2.0 fix is a real level marker in the proof, not \
+                a                       table update")
+              (has fixed_text "# 0" && not (has broken_text "# 0"))))
+        [ ("3.0", Writer.V3_0); ("2.0", Writer.V2_0) ]
+
 (* Say which checker every I-X1 check in the suite is talking to, and its version.
    "veripb accepted it" is only meaningful if you know which veripb, and until M1-T18
    the answer was whichever build happened to come first on PATH -- on the
@@ -1740,6 +1885,7 @@ let () =
   test_v3_wipe_level_against_checker ();
   test_v3_veripb ();
   test_pol_states_its_conclusion ();
+  test_learned_survives_the_backjump ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
