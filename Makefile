@@ -59,8 +59,34 @@ determinism: build
 	ulimit -v $(MEM_CAP_KB) && ./scripts/check_determinism.sh
 
 # The gate. Run this before every commit.
+#
+# The verdict line is CONDITIONAL, and that is the point. `check_fmt.sh` treats a missing
+# ocamlformat as a loud skip rather than a failure -- a deliberate asymmetry with
+# checker.sh, argued in that script's own header: veripb verifies a correctness property
+# so a missing one makes the run worthless, ocamlformat verifies a cosmetic one so
+# refusing to run the gate without it would block real work over whitespace. That
+# reasoning is sound and this does not overturn it.
+#
+# What it fixes is narrower: the banner announcing the skip scrolls past, and `check: ok`
+# was printed anyway -- so the ONE line a hurried human or a CI log reads said the gate
+# passed when part of it had not run. On 2026-09-18 the orchestrator hit exactly this,
+# having forgotten `eval "$$(opam env --switch=baguette)"`. A gate that reports a pass it
+# did not earn is this project's signature failure mode (D-0020, D-0030: a lane rejected
+# without the checker ever judging an inference is not a pass), and it does not stop being
+# that because the unearned part is only whitespace.
+#
+# Still exit 0 when ocamlformat is absent. The skip is allowed; claiming it did not happen
+# is not.
 check: fmt-check build lint determinism test
-	@echo "check: ok"
+	@if command -v ocamlformat >/dev/null 2>&1; then \
+	  echo "check: ok"; \
+	else \
+	  echo "=========================================================================="; \
+	  echo "check: ok EXCEPT formatting, which was NOT verified -- ocamlformat was not"; \
+	  echo "       on PATH, so fmt-check skipped. This is not a full gate pass."; \
+	  echo "       Fix: eval \"\$$(~/.local/bin/opam env --switch=baguette)\" and re-run."; \
+	  echo "=========================================================================="; \
+	fi
 
 # Solve one model and verify its proof end to end.
 #   make proof FZN=test/models/trivial_sat.fzn
