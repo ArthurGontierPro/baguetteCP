@@ -184,7 +184,7 @@ let test_store () =
      M2-T8/D-0026: a mutator takes ONE [Reason.justified], both halves together. This
      test is not exercising the trace, so its reason is [Reason.none] -- written out,
      because there is no longer a mutator that means it by omission. *)
-  let why = Reason.because Reason.none (Explanation.model_row 1) in
+  let why = Reason.because ~concludes:None Reason.none (Explanation.model_row 1) in
   check "store: prune applies"
     (match Store.set_lo s x 3 why with Store.Changed -> true | _ -> false);
   check "store: prune took effect" (Domain.lo (Store.get s x) = 3);
@@ -242,7 +242,7 @@ let test_store () =
   for lvl = 0 to 5 do
     snaps.(lvl) <- Store.snapshot s2;
     Store.new_level s2;
-    let r = Reason.because Reason.none (Explanation.model_row 1) in
+    let r = Reason.because ~concludes:None Reason.none (Explanation.model_row 1) in
     ignore (Store.set_lo s2 vars.(lvl mod 3) (lvl + 1) r);
     ignore (Store.remove s2 vars.((lvl + 1) mod 3) (9 - lvl) r)
   done;
@@ -262,7 +262,7 @@ let test_store () =
   Store.new_level s3;
   ignore
     (Store.set_lo s3 (Var.of_int 0) 4
-       (Reason.because Reason.none (Explanation.clause [ lit ])));
+       (Reason.because ~concludes:None Reason.none (Explanation.clause [ lit ])));
   let reason_count = Arena.length (Store.reasons s3) in
   check "I-T3: the reason was interned" (reason_count = 1);
   check "I-T3: the trail entry resolves to its reason"
@@ -430,7 +430,7 @@ let test_attribution () =
   let store =
     Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
   in
-  let r = Reason.because Reason.none (Explanation.model_row 1) in
+  let r = Reason.because ~concludes:None Reason.none (Explanation.model_row 1) in
   check "M2-T7: a fresh store has nobody running" (Store.running store = Store.no_prop);
 
   (* A mutation made by nobody -- Search's decision pushes and every direct call from a
@@ -472,7 +472,10 @@ let test_attribution () =
      [Reason.none] -- which is what the D-0018 point 3 line keys off, and what the old
      one-shot [conflict_facts] slot meant when nobody had armed it. M2-T8 removed the
      default: it is the same behaviour, now written down at the call site. *)
-  let c = Store.conflict store (Reason.because Reason.none (Explanation.model_row 2)) in
+  let c =
+    Store.conflict store
+      (Reason.because ~concludes:None Reason.none (Explanation.model_row 2))
+  in
   check "M2-T7: a conflict built outside a propagator is no_prop"
     (c.Store.c_prop = Store.no_prop);
   check "M2-T7: a conflict records no facts unless asked"
@@ -480,7 +483,7 @@ let test_attribution () =
   Store.with_running store 2 (fun () ->
       let c =
         Store.conflict store
-          (Reason.because
+          (Reason.because ~concludes:None
              [ Reason.at_least ~name:"x" ~decl:0 1 ]
              (Explanation.model_row 2))
       in
@@ -591,7 +594,7 @@ let test_reason () =
     Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 9; Domain.make 0 9 |]
   in
   let j =
-    Reason.because
+    Reason.because ~concludes:None
       [ Reason.at_least ~name:"x" ~decl:0 3 ]
       (Explanation.clause [ Lit.ge "x" 3 ])
   in
@@ -603,7 +606,7 @@ let test_reason () =
   Store.new_level store;
   ignore
     (Store.set_lo store (Var.of_int 0) 7
-       (Reason.because Reason.none (Explanation.model_row 1)));
+       (Reason.because ~concludes:None Reason.none (Explanation.model_row 1)));
   check "I-X6: the store really did move under the reason"
     (Domain.lo (Store.get store (Var.of_int 0)) = 7);
   check "I-X6: a reason materialised later renders the bound as of the pruning"
@@ -624,7 +627,7 @@ let test_bound_support () =
     Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 9; Domain.make 0 9 |]
   in
   let x = Var.of_int 0 in
-  let r n = Reason.because Reason.none (Explanation.model_row n) in
+  let r n = Reason.because ~concludes:None Reason.none (Explanation.model_row n) in
   let row_of_support sup =
     match Store.explanation store (Store.trail_entry store sup) with
     | Explanation.Model_row n -> n
@@ -677,7 +680,9 @@ let test_bound_support () =
   (* [Domain.fix] moves both bounds at once and must support both. *)
   let s2 = Store.create ~names:[| "z" |] ~domains:[| Domain.make 0 9 |] in
   let z = Var.of_int 0 in
-  ignore (Store.fix s2 z 4 (Reason.because Reason.none (Explanation.model_row 21)));
+  ignore
+    (Store.fix s2 z 4
+       (Reason.because ~concludes:None Reason.none (Explanation.model_row 21)));
   check "M2-T8: fix supports both bounds it moved"
     (Store.lo_support s2 z = 0 && Store.hi_support s2 z = 0 && Store.check_invariants s2)
 
@@ -703,22 +708,22 @@ let test_agreement () =
   let derived = fresh () in
   ignore
     (Store.set_lo derived (Var.of_int 1) 2
-       (Reason.because Reason.none (Explanation.model_row 1)));
+       (Reason.because ~concludes:None Reason.none (Explanation.model_row 1)));
   let expl = Explanation.clause [ Lit.ge "x" 1; Lit.le "y" 4 ] in
   check "D-0026: a reason over the justification's own variables agrees"
     (Store.agreement_holds plain
-       (Reason.because [ Reason.at_least ~name:"y" ~decl:0 2 ] expl));
+       (Reason.because ~concludes:None [ Reason.at_least ~name:"y" ~decl:0 2 ] expl));
   check "D-0026: an empty reason agrees with anything"
-    (Store.agreement_holds plain (Reason.because Reason.none expl));
+    (Store.agreement_holds plain (Reason.because ~concludes:None Reason.none expl));
   check "D-0026: a reason naming a variable the justification never mentions DISAGREES"
     (not
        (Store.agreement_holds plain
-          (Reason.because [ Reason.at_least ~name:"z" ~decl:0 2 ] expl)));
+          (Reason.because ~concludes:None [ Reason.at_least ~name:"z" ~decl:0 2 ] expl)));
   (* The disagreement is found even when the offending fact is one of several. *)
   check "D-0026: one stray fact among good ones still DISAGREES"
     (not
        (Store.agreement_holds plain
-          (Reason.because
+          (Reason.because ~concludes:None
              [
                Reason.at_least ~name:"x" ~decl:0 1;
                Reason.at_least ~name:"z" ~decl:0 5;
@@ -735,7 +740,7 @@ let test_agreement () =
      it is harmless to the proof. See the M2-T8 hand-back. *)
   check "D-0026: a stray fact that materialises to NOTHING is permitted (documented gap)"
     (Store.agreement_holds plain
-       (Reason.because [ Reason.at_least ~name:"z" ~decl:5 5 ] expl));
+       (Reason.because ~concludes:None [ Reason.at_least ~name:"z" ~decl:5 5 ] expl));
 
   (* THE CITE ARM, and the case that made the naive predicate wrong: a [Combine] that
      cites the id which established [y >= 2] contains no literal about [y] anywhere
@@ -756,14 +761,14 @@ let test_agreement () =
   in
   let cite_reason = [ Reason.at_least ~name:"y" ~decl:0 2 ] in
   check "D-0038/D-0026: a cited bound agrees, because the trail holds it up"
-    (Store.agreement_holds derived (Reason.because cite_reason cited));
+    (Store.agreement_holds derived (Reason.because ~concludes:None cite_reason cited));
   check "D-0038/D-0026: and the SAME pair disagrees when nothing established that bound"
-    (not (Store.agreement_holds plain (Reason.because cite_reason cited)));
+    (not (Store.agreement_holds plain (Reason.because ~concludes:None cite_reason cited)));
   (* The direction matters too: [y]'s LOWER bound is supported, its upper bound is not. *)
   check "D-0026: the support consulted is the one the fact's direction names"
     (not
        (Store.agreement_holds derived
-          (Reason.because [ Reason.at_most ~name:"y" ~decl:9 4 ] cited)));
+          (Reason.because ~concludes:None [ Reason.at_most ~name:"y" ~decl:9 4 ] cited)));
 
   (* A [Weaken] summand shares NO literal with the reason (declared-width chain versus
      the current bound), so this has to compare scopes and not literals. A check written
@@ -779,7 +784,9 @@ let test_agreement () =
   in
   check "D-0026: a reason agrees with a justification that only WEAKENS its variable"
     (Store.agreement_holds plain
-       (Reason.because [ Reason.at_least ~name:"x" ~decl:0 2 ] weaken_only)
+       (Reason.because ~concludes:None
+          [ Reason.at_least ~name:"x" ~decl:0 2 ]
+          weaken_only)
     && Reason.lits [ Reason.at_least ~name:"x" ~decl:0 2 ] <> Explanation.lits weaken_only
     );
 
@@ -788,19 +795,23 @@ let test_agreement () =
      it leaves a trace line over too short a tail -- an unconditional claim on a
      satisfiable model. *)
   check "I-P5/D-0026: a reason that OMITS a variable the derivation weakens DISAGREES"
-    (not (Store.agreement_holds plain (Reason.because Reason.none weaken_only)));
+    (not
+       (Store.agreement_holds plain
+          (Reason.because ~concludes:None Reason.none weaken_only)));
   check
     "I-P5/D-0026: naming a different variable does not substitute for the weakened one"
     (not
        (Store.agreement_holds plain
-          (Reason.because [ Reason.at_least ~name:"y" ~decl:0 2 ] weaken_only)));
+          (Reason.because ~concludes:None
+             [ Reason.at_least ~name:"y" ~decl:0 2 ]
+             weaken_only)));
 
   (* And it looks THROUGH a Deferred: a propagator's justification is a thunk, so a check
      that gave up on an unforced one would never fire in production. *)
   check "D-0026: the check forces a Deferred justification rather than passing it"
     (not
        (Store.agreement_holds plain
-          (Reason.because
+          (Reason.because ~concludes:None
              [ Reason.at_least ~name:"z" ~decl:0 2 ]
              (Explanation.deferred (fun () -> expl)))))
 
@@ -814,7 +825,7 @@ let disagreeing_push ~agree () =
   in
   let name = if agree then "x" else "z" in
   let j =
-    Reason.because
+    Reason.because ~concludes:None
       [ Reason.at_least ~name ~decl:0 3 ]
       (Explanation.clause [ Lit.ge "x" 1 ])
   in

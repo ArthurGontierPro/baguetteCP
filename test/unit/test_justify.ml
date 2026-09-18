@@ -411,7 +411,7 @@ let setup_int_lin_le ~x2_lo ~rhs dir tag =
   in
   (match
      Store.set_lo store (Var.of_int 1) x2_lo
-       (Reason.because Reason.none (Explanation.model_row c_bound))
+       (Reason.because ~concludes:None Reason.none (Explanation.model_row c_bound))
    with
   | Store.Conflict _ -> failwith "setup_int_lin_le: x2 >= x2_lo conflicts"
   | Store.Unchanged | Store.Changed -> ());

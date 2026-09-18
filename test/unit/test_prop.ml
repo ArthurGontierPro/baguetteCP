@@ -67,7 +67,7 @@ let placeholder_reason = Explanation.model_row 901
    [test_trace_facts] and the D-0026 tests at the end of this file). It has to be written
    out, which is the point of the collapse -- before M2-T8 [Store.set_lo] meant
    "no facts" silently and [set_lo_with_facts] was the opt-in. *)
-let placeholder_pruning = Reason.because Reason.none placeholder_reason
+let placeholder_pruning = Reason.because ~concludes:None Reason.none placeholder_reason
 
 let check name cond =
   if cond then Printf.printf "ok   %s\n" name
@@ -1021,13 +1021,13 @@ let build_int_lin_eq_multi dir =
   in
   (match
      Store.set_hi store (Var.of_int 1) 2
-       (Reason.because Reason.none (Explanation.model_row c_x2_le))
+       (Reason.because ~concludes:None Reason.none (Explanation.model_row c_x2_le))
    with
   | Store.Changed -> ()
   | _ -> failwith "build_int_lin_eq_multi: x2 <= 2 setup failed");
   (match
      Store.set_lo store (Var.of_int 1) 2
-       (Reason.because Reason.none (Explanation.model_row c_x2_ge))
+       (Reason.because ~concludes:None Reason.none (Explanation.model_row c_x2_ge))
    with
   | Store.Changed -> ()
   | _ -> failwith "build_int_lin_eq_multi: x2 >= 2 setup failed");
@@ -1085,7 +1085,7 @@ let build_int_le_multi dir =
   let prop = Int_le.make store (Var.of_int 0) (Var.of_int 1) ~row_id:model_row in
   (match
      Store.set_lo store (Var.of_int 0) 3
-       (Reason.because Reason.none (Explanation.model_row c_bound))
+       (Reason.because ~concludes:None Reason.none (Explanation.model_row c_bound))
    with
   | Store.Changed -> ()
   | _ -> failwith "build_int_le_multi: x >= 3 setup failed");
@@ -1137,7 +1137,7 @@ let build_int_lt_multi dir =
   let prop = Int_lt.make store (Var.of_int 0) (Var.of_int 1) ~row_id:model_row in
   (match
      Store.set_lo store (Var.of_int 0) 3
-       (Reason.because Reason.none (Explanation.model_row c_bound))
+       (Reason.because ~concludes:None Reason.none (Explanation.model_row c_bound))
    with
   | Store.Changed -> ()
   | _ -> failwith "build_int_lt_multi: x >= 3 setup failed");
@@ -1193,7 +1193,7 @@ let build_int_eq_multi dir =
   in
   (match
      Store.set_hi store (Var.of_int 1) 2
-       (Reason.because Reason.none (Explanation.model_row c_bound))
+       (Reason.because ~concludes:None Reason.none (Explanation.model_row c_bound))
    with
   | Store.Changed -> ()
   | _ -> failwith "build_int_eq_multi: y <= 2 setup failed");
@@ -1264,7 +1264,7 @@ let decision_scene_int_le () =
   let prop = Int_le.make store (Var.of_int 0) (Var.of_int 1) ~row_id:row in
   (match
      Store.set_lo store (Var.of_int 0) 3
-       (Reason.because Reason.none (Explanation.decision (Lit.ge "x" 3)))
+       (Reason.because ~concludes:None Reason.none (Explanation.decision (Lit.ge "x" 3)))
    with
   | Store.Changed -> ()
   | _ -> failwith "decision_scene_int_le: the decision did not move x's bound");
@@ -1289,7 +1289,7 @@ let decision_scene_int_lt () =
   let prop = Int_lt.make store (Var.of_int 0) (Var.of_int 1) ~row_id:row in
   (match
      Store.set_lo store (Var.of_int 0) 3
-       (Reason.because Reason.none (Explanation.decision (Lit.ge "x" 3)))
+       (Reason.because ~concludes:None Reason.none (Explanation.decision (Lit.ge "x" 3)))
    with
   | Store.Changed -> ()
   | _ -> failwith "decision_scene_int_lt: the decision did not move x's bound");
@@ -1317,7 +1317,7 @@ let decision_scene_int_eq () =
   in
   (match
      Store.set_hi store (Var.of_int 1) 2
-       (Reason.because Reason.none (Explanation.decision (Lit.le "y" 2)))
+       (Reason.because ~concludes:None Reason.none (Explanation.decision (Lit.le "y" 2)))
    with
   | Store.Changed -> ()
   | _ -> failwith "decision_scene_int_eq: the decision did not move y's bound");
@@ -1348,13 +1348,13 @@ let decision_scene_int_lin_eq () =
   (* x2 = 2, both bounds, by decision: two store pushes and not one .opb row. *)
   (match
      Store.set_hi store (Var.of_int 1) 2
-       (Reason.because Reason.none (Explanation.decision (Lit.le "x2" 2)))
+       (Reason.because ~concludes:None Reason.none (Explanation.decision (Lit.le "x2" 2)))
    with
   | Store.Changed -> ()
   | _ -> failwith "decision_scene_int_lin_eq: x2 <= 2 did not move");
   (match
      Store.set_lo store (Var.of_int 1) 2
-       (Reason.because Reason.none (Explanation.decision (Lit.ge "x2" 2)))
+       (Reason.because ~concludes:None Reason.none (Explanation.decision (Lit.ge "x2" 2)))
    with
   | Store.Changed -> ()
   | _ -> failwith "decision_scene_int_lin_eq: x2 >= 2 did not move");
@@ -1472,7 +1472,7 @@ let test_lin_eq_pairing () =
     in
     (match
        Store.set_lo store (Var.of_int 1) 2
-         (Reason.because Reason.none (Explanation.model_row c_bound))
+         (Reason.because ~concludes:None Reason.none (Explanation.model_row c_bound))
      with
     | Store.Changed -> ()
     | _ -> failwith "test_lin_eq_pairing: x2 >= 2 setup failed");
@@ -3570,7 +3570,7 @@ let test_ix6_justification_snapshot () =
          902 and a thunk that snapshotted keeps 901. *)
       ignore
         (Store.set_lo store (var 1) 2
-           (Reason.because Reason.none (Explanation.model_row 902)));
+           (Reason.because ~concludes:None Reason.none (Explanation.model_row 902)));
     (Explanation.to_string (Explanation.force (Store.explanation store e)), store)
   in
   let a, _ = scene ~move_after:false in
@@ -3674,7 +3674,7 @@ let test_ix6_cross_conflict_snapshot () =
          snapshotted keeps the entry it actually read. *)
       ignore
         (Store.set_hi store (var 0) 0
-           (Reason.because Reason.none (Explanation.model_row 902)));
+           (Reason.because ~concludes:None Reason.none (Explanation.model_row 902)));
     let rendered = render_deep c.Store.c_why in
     (* AFTER the render, deliberately: see the last paragraph of the comment above. This
        reads the memo rather than forcing anything. D-0013 step 5's shape is the
@@ -3763,7 +3763,7 @@ let test_d0026_linear_pairing () =
       (* (3) And the two halves are about the same pruning. *)
       check "D-0026 linear: the reason and the justification agree"
         (Store.agreement_holds store
-           (Reason.because e.Store.reason (Store.explanation store e)))
+           (Reason.because ~concludes:None e.Store.reason (Store.explanation store e)))
 
 (* The same row with every other term left at its declared bound: the reason's scope is
    still the other terms -- the propagator DID read them -- but not one of the facts
@@ -3792,7 +3792,7 @@ let test_d0026_all_declared () =
         (Reason.lits e.Store.reason = []);
       check "D-0026 declared: and the halves still agree"
         (Store.agreement_holds store
-           (Reason.because e.Store.reason (Store.explanation store e)))
+           (Reason.because ~concludes:None e.Store.reason (Store.explanation store e)))
 
 let () =
   print_endline "\npropagator unit tests";

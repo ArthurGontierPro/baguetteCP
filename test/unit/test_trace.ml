@@ -1182,7 +1182,7 @@ let var_by_name store name =
    pair [Store.apply]'s D-0026 agreement check passes trivially, so this scene behaves
    the same under BAGUETTE_DEBUG=1, where the I-S4 check itself is live. What the lines
    claim is still true of the model: x <> 3, x <> 2 and x >= 4 are all entailed by it. *)
-let factless = Reason.because Reason.none (Explanation.clause [])
+let factless = Reason.because ~concludes:None Reason.none (Explanation.clause [])
 
 (* [retire] is how many of the two hole lines to delete between the two emits, newest
    first: 0 is the control, 1 breaks I-S4 for one edge, 2 breaks it for both. Measured
