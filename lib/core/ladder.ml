@@ -142,15 +142,33 @@ type t = {
 
 (* The derivation of [lifted] from the model row's own explanation: one [pol] adding the
    ladder rows at their multipliers, divisor 1. Returns [e] untouched when there is
-   nothing to add, so a lift that found no rung writes no line. *)
-let derive (t : t) (e : Explanation.t) : Explanation.t =
+   nothing to add, so a lift that found no rung writes no line.
+
+   [~break:true] is THE BREAK LANE for this module and is wrong on purpose: it writes the
+   first rung at one more than its multiplier, so the [pol] derives a row that is not
+   [lifted]. It stays SOUND -- adding a larger positive multiple of a real .opb row is
+   still cutting planes -- which is exactly why it is worth having: the proof is
+   well-formed, every id it names is live, and the only thing wrong with it is the
+   ARITHMETIC. A checker that accepted it would be telling us that
+   [Pb_analysis.introduce]'s claim is not being compared against anything, and M1-T42,
+   M1-T51 and M2-T9's "Break A" are three occasions on which a well-formed but wrong
+   derivation went through. Reached only through [Search.config], never from the CLI. *)
+let derive ?(break = false) (t : t) (e : Explanation.t) : Explanation.t =
   match t.steps with
   | [] -> e
   | steps ->
+      let bump = ref break in
       Explanation.combine
         (Explanation.term 1 e
         :: List.map
-             (fun (_, m, cid) -> Explanation.term m (Explanation.model_row cid))
+             (fun (_, m, cid) ->
+               let m =
+                 if !bump then (
+                   bump := false;
+                   m + 1)
+                 else m
+               in
+               Explanation.term m (Explanation.model_row cid))
              steps)
         1
 
@@ -211,8 +229,7 @@ let lift ~(row : Learned.t) ~(pivot : Lit.t) ~(falsified : Lit.t -> bool)
             let l = tm.Learned.lit in
             match l.Lit.v with
             | Lit.Ge (n, v)
-              when String.equal n name
-                   && l.Lit.positive = positive
+              when String.equal n name && l.Lit.positive = positive
                    && (not (Lit.equal l pivot))
                    && not (falsified l) -> (
                 match path ~positive ~v ~k with
@@ -233,7 +250,9 @@ let lift ~(row : Learned.t) ~(pivot : Lit.t) ~(falsified : Lit.t -> bool)
            correctness -- but a reader following the line wants the substitutions in the
            order the argument makes them. *)
         let ordered =
-          List.sort (fun (a, _) (b, _) -> if positive then compare b a else compare a b) mults
+          List.sort
+            (fun (a, _) (b, _) -> if positive then compare b a else compare a b)
+            mults
         in
         let steps =
           List.filter_map
@@ -248,7 +267,5 @@ let lift ~(row : Learned.t) ~(pivot : Lit.t) ~(falsified : Lit.t -> bool)
               (fun acc (w, m, _) -> Learned.combine acc 1 (ladder_row ~name w) m)
               row steps
           in
-          let rows =
-            List.map (fun (w, _, cid) -> (cid, ladder_row ~name w)) steps
-          in
+          let rows = List.map (fun (w, _, cid) -> (cid, ladder_row ~name w)) steps in
           Some { lifted; steps; rows; rungs = List.length steps }

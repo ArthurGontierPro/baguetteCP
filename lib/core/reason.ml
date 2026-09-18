@@ -198,6 +198,15 @@ let to_string (t : t) =
        shape D-0026 removed when I-P5 collapsed into I-P4. A caller that concludes
        nothing writes [~concludes:None] and is seen doing it. It cost 13 call sites in
        [lib/] and 46 in [test/], which is the price of the property.
+
+       THE COST IS THE PROPERTY, so relaxing this into a defaulted [?concludes] NEEDS A
+       DECISION RECORD ARGUING THE POINT, not a cleanup commit. It will look like
+       ceremony -- 59 call sites writing out a value most of them could have inferred --
+       and it is the move D-0026 already reversed once, when a default that meant "no
+       facts" turned into prunings that justified nothing. A default here would mean "no
+       claim", and M1-T51 measured what an unstated claim costs: a [pol] truncated to
+       derive something strictly weaker than the bound the propagator set is ACCEPTED,
+       silently.
      - a [fact option] and not a [fact], because the [None] is principled rather than a
        coverage gap, and the partition is one the solver already draws:
 

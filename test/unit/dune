@@ -25,5 +25,6 @@
   test_interval
   test_analysis
   test_learned
-  test_learn)
+  test_learn
+  test_ladder)
  (libraries baguette_core baguette_proof baguette_flatzinc))

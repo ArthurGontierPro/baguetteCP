@@ -385,6 +385,11 @@ let asserts_at v lvl =
    elimination is the conflicting constraint itself: already on the page, already
    citable, and learning it would put a copy of a model row into the proof for nothing.
    See [analyse]'s [Nothing_to_learn]. *)
+(* DO NOT REINTRODUCE LITERAL COUNTING HERE. The criterion is stated in slack precisely
+   because Le Berre et al. (arXiv 2107.13085) show assertiveness gives NO BACKJUMP
+   GUARANTEE over PB constraints, and an optimisation that counts conflict-level literals
+   because it is cheaper or "matches the SAT solver" does not surface as a wrong answer --
+   it surfaces as worse backjumps, which nothing in this repo measures. *)
 let assertive_slack =
   let ok v = v.c_steps >= 1 && asserts_at v (v.c_conflict_level - 1) in
   { crit_name = "assertive-slack"; stop = ok; postcondition = ok }
@@ -511,7 +516,7 @@ exception Give_up of fallback
    nobody can read is a counter with no diagnosis behind it. *)
 let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row option)
     ~(name_of : int -> string) ~(ladder_id : string -> int -> int option)
-    ~(reduction : Reduce.t) ~(criterion : criterion) : result =
+    ~(break_ladder : bool) ~(reduction : Reduce.t) ~(criterion : criterion) : result =
   let conflict_level = Store.level store in
   let max_steps = Store.trail_length store + 1 in
   let level_of = level_of store in
@@ -592,7 +597,7 @@ let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row optio
               | None -> raise (Give_up e0)
               | Some lt -> (
                   match attempt lt.Ladder.lifted with
-                  | Ok o -> (o, Ladder.derive lt, Some lt)
+                  | Ok o -> (o, Ladder.derive ~break:break_ladder lt, Some lt)
                   | Error _ -> raise (Give_up e0)))
         in
         let a =
@@ -633,7 +638,9 @@ let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row optio
           | Some lt ->
               List.fold_left (fun acc (cid, lr) -> add acc cid lr) acc lt.Ladder.rows
         in
-        let lifts = match lift with None -> lifts | Some lt -> lifts + lt.Ladder.rungs in
+        let lifts =
+          match lift with None -> lifts | Some lt -> lifts + lt.Ladder.rungs
+        in
         (row', expl', pivots @ [ l ], antecedents, rows, lifts)
   in
   try

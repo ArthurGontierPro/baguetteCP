@@ -1,12 +1,15 @@
 % M2-L11. THE MODEL WHERE THE ORDER-ENCODING LADDER IS LOAD-BEARING FOR PB LEARNING.
 %
-% M2-L6 measured, honestly, that every PB row this solver learned over the whole suite
-% was the EMPTY CONTRADICTION -- 36 of 36 -- and gave the reason: our integer propagator
-% is stronger than PB propagation on the same row, because the strength is in the order
-% encoding's LADDER implications and those live in separate .opb rows (D-0028). A reason
-% row handed to conflict analysis without its ladder chain usually does not PB-propagate
-% the pivot the propagator legitimately deduced, so the analysis falls back before it can
-% reach a useful intermediate inequality.
+% M2-L6's finding: our integer propagator is STRONGER than PB propagation on the same
+% row, because the strength is in the order encoding's LADDER implications and those live
+% in separate .opb rows (D-0028). A reason row handed to conflict analysis without its
+% ladder chain often does not PB-propagate the pivot the propagator legitimately deduced,
+% so the analysis falls back before it can reach a useful intermediate inequality.
+%
+% (M2-L6 also reported "36 of 36 learned rows degenerate". That generalised one family --
+% the int_lin_eq models, where two halves of an equality add to 0 >= k in one elimination
+% -- to the whole suite; re-measured 2026-09-18 with M2-L11's own counter, 26 of those 36
+% carry literals. See lib/core/search.ml's [n_pb_nondegenerate].)
 %
 % lib/core/ladder.ml adds that chain as a row. This model is where the difference is
 % visible, measured 2026-09-18 with `--stats`:

@@ -257,18 +257,25 @@ type stats = {
          comparison lib/core/pb_analysis.ml's "why the PB row can propagate where the
          clause cannot" makes and does not assume. *)
   mutable n_pb_stronger : int;
-      (* ...of which convert where the SAME conflict's clause does not. This is test (a)
-         as a counter: the number of times this row did something M2-L3 could not. *)
+  (* ...of which convert where the SAME conflict's clause does not. This is test (a)
+     as a counter: the number of times this row did something M2-L3 could not. *)
   (* ------------------------------------------------------------------ M2-L11 *)
   mutable n_pb_nondegenerate : int;
       (* Learned PB rows that are NOT the empty contradiction, i.e. that still carry at
          least one literal. This is docs/ROADMAP.md M2-L11 test (b) and it is the number
-         the whole row turns on. M2-L6 measured [n_pb_stronger] at 36 of 36 and then said
-         plainly that every one of those 36 was the degenerate case -- a contradiction
-         derived in one elimination, strictly stronger than the clause it replaces and
-         yet useless as a propagation result. A counter that cannot tell the two apart
-         cannot report an improvement, so this one exists to be quoted BESIDE
-         [n_pb_stronger] and never instead of it. *)
+         the whole row turns on. A counter that cannot tell a contradiction from an
+         inequality cannot report an improvement, so this one exists to be quoted BESIDE
+         [n_pb_stronger] and never instead of it.
+
+         AND IT IMMEDIATELY CORRECTED THE RECORD. M2-L6 reported "pb-stronger 36 of 36,
+         and every one of those 36 is the degenerate case". That is not what the suite
+         says: re-measured 2026-09-18 over the same 38 models, 26 of those 36 carry
+         literals. The degenerate ones are the int_lin_eq family -- backjump_lineq_unsat
+         (3), near_limit_unsat (3), offset_unsat (4) -- where the two halves of an
+         equality add to 0 >= k in ONE elimination, which is exactly the family M2-L6's
+         own test (a) inspected. width_sat_depth alone contributes 24 non-degenerate rows,
+         of the shape `+2 a_ge_1 ... +2 a_ge_99 >= 98`. So the generalisation ran from one
+         family to the suite, and it stood because nothing counted. *)
   mutable n_pb_lifted : int;
       (* Analyses in which at least one elimination resolved against the model row PLUS a
          ladder chain (lib/core/ladder.ml) rather than the model row alone. 0 means this
@@ -545,7 +552,11 @@ let extract_assignment store : assignment =
                 numbers. That is what makes it the break lane for this row -- a test can
                 assert that the fixture's learned rows DISAPPEAR when the ladder is
                 withheld, which is the only way to show the chain is load-bearing rather
-                than decorative. *)
+                than decorative.
+   [break_ladder_mult] writes one ladder row at the WRONG multiplier on the [pol] while
+                still claiming the right conclusion, which is this row's proof-level
+                break. Wrong on purpose, sound but not the claimed row, and not
+                CLI-reachable. See [Ladder.derive]'s [~break]. *)
 type config = {
   learn : bool;
   policy : Learn.policy;
@@ -554,6 +565,7 @@ type config = {
   reduction : Reduce.t;
   pb_criterion : Pb_analysis.criterion;
   pb_ladder : bool;
+  break_ladder_mult : bool;
 }
 
 let default_config =
@@ -563,6 +575,7 @@ let default_config =
     break_i_s4 = false;
     pb = true;
     pb_ladder = true;
+    break_ladder_mult = false;
     reduction = Reduce.round_to_one;
     pb_criterion = Pb_analysis.assertive_slack;
   }
@@ -999,7 +1012,8 @@ let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_conve
         ~ladder_id:
           (if cfg.pb_ladder then Encoding.consistency_id ctx.Justify.encoding
            else fun _ _ -> None)
-        ~reduction:cfg.reduction ~criterion:cfg.pb_criterion
+        ~break_ladder:cfg.break_ladder_mult ~reduction:cfg.reduction
+        ~criterion:cfg.pb_criterion
     with
     | Pb_analysis.Fallback f ->
         stats.n_pb_fallback <- stats.n_pb_fallback + 1;
@@ -1023,10 +1037,9 @@ let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_conve
            terms left, and a degree the criterion already established is positive. *)
         if not (Learned.is_empty t.Pb_analysis.row) then
           stats.n_pb_nondegenerate <- stats.n_pb_nondegenerate + 1;
-        if t.Pb_analysis.ladder_rungs > 0 then begin
+        if t.Pb_analysis.ladder_rungs > 0 then (
           stats.n_pb_lifted <- stats.n_pb_lifted + 1;
-          stats.n_pb_rungs <- stats.n_pb_rungs + t.Pb_analysis.ladder_rungs
-        end;
+          stats.n_pb_rungs <- stats.n_pb_rungs + t.Pb_analysis.ladder_rungs);
         if List.length stats.pb_rows_rev < pb_reason_cap then
           stats.pb_rows_rev <- t :: stats.pb_rows_rev;
         stats.learned_rev <- cid :: stats.learned_rev)
