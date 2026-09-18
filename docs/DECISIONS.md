@@ -3092,6 +3092,55 @@ general. D-0044 already makes that distinction for the learned-object type and i
 here unchanged: the degeneracy is downstream of the order encoding, so nothing here
 generalises to a solver whose propagators and whose PB rows express the same strength.
 
+### AMENDED the same day, 2026-09-18: the figure this record was built on is wrong
+
+**The prediction above was anchored to M2-L6's headline — `pb-stronger` "36 of 36 learned
+rows, every one degenerate". That figure does not hold.** M2-L11 found it while building the
+counter this record asked for, and the orchestrator re-measured it independently on `main`
+*before* merging M2-L11, by counting the emitted `ia` rows across the 38-model suite rather
+than by reading any counter:
+
+| | |
+|---|---|
+| learned rows, suite-wide | **36** |
+| of those, **carrying terms** (non-degenerate) | **26** |
+| genuinely degenerate | **10** |
+
+The 10 are **exactly the `int_lin_eq` family** — `backjump_lineq_unsat` 3,
+`near_limit_unsat` 3, `offset_unsat` 4 — and `width_sat_depth` **alone** contributes 24
+non-degenerate rows of the shape `+2 a_ge_1 +2 a_ge_2 … >= k`.
+
+**How the error was made, because it is the reusable part.** M2-L6's test (a) inspected the
+`int_lin_eq` family, where the rows really are `0 >= k`. The conclusion was true of what was
+looked at and was then stated of the suite, and **nothing counted**, so nothing contradicted
+it. That is precisely the gap M2-L11's row existed to close — and the counter arrived one row
+too late to stop the claim being written into a decision record first.
+
+### What survives, and what is withdrawn
+
+- **WITHDRAWN**: "PB learning keeps producing degenerate rows" as a *suite-wide* claim. It
+  was never suite-wide. Most rows already carried literals.
+- **SURVIVES, and is now measured**: the mechanism. Where the reason is the model row
+  **without** its ladder chain, certain conflicts yield **no row at all** and fall back. On
+  the fixture built for it, the lift turns **2 fallbacks into 2 non-degenerate learned rows**
+  (`pb_ladder = false` gives 0 learned / 2 fallbacks). So the ladder chain was the missing
+  ingredient for *those* conflicts — the effect is real, it is just smaller and differently
+  located than the withdrawn figure implied.
+- **Also corrected** (M2-L11, in `pb_analysis.ml`'s header): `Postcondition_failed` was
+  called "the dominant non-`No_row` fallback". Of 50 fallbacks it is **2**; `No_pivot` is
+  **26** and `No_row` **21**. The dominant case is conflicts whose conflict-level literals all
+  rest on decisions, where there is simply nothing to resolve.
+
+### The lesson this record now carries
+
+D-0047 was written to stop the next session re-deriving a negative from zero. Written on an
+uncounted figure, it would instead have handed them **a wrong number with a decision record's
+authority** — worse than the commit message it was promoted from, because records are trusted
+more. **A headline figure with no counter behind it is a claim, not a measurement**, and a
+record inherits the confidence of whatever it cites. The orchestrator wrote this record citing
+M2-L6's number without re-measuring it; the number was checkable in about two minutes with
+`grep` over emitted proofs, which is how it was eventually checked.
+
 ## D-0048  Is a reified explanation a research output? D-0003's (a)-claim is coupled to an unrecorded answer
 
 **Status**: **OPEN — a question, not a decision.** Raised 2026-09-18 by the orchestrator out
@@ -3162,3 +3211,68 @@ model rows in one tree. If the reified form is ever going to demonstrate what it
 is the row where it does — and equally, if it is going to look like expensive ceremony, that
 is where it will. Deciding this *before* M4-T1 means the row is read as evidence; deciding
 it after means the row is read as a verdict already reached.
+
+## D-0049  The ladder chain as a row: the substitution rule, and why it lifts only non-falsified terms
+
+**Status**: **ACCEPTED**, implemented by M2-L11 (2026-09-18, agent-ladder), `lib/core/ladder.ml`.
+Written after the fact at the implementing session's request, because the row landed with
+four design choices in it that are not obvious from the code and that a later optimisation
+would plausibly undo.
+
+### The problem
+
+D-0028 encodes an integer variable as an order ladder, and the ladder implications live in
+**separate `.opb` rows** from the model row. So a `Linear` pruning's true reason is *model row
++ ladder chain*, while PB conflict analysis was resolving against the model row alone. The
+consequence M2-L6 measured: for conflicts of that shape, eliminating a pivot yields **no row
+at all** and the analysis falls back to the clause path.
+
+`3a + 2b <= 14` with `lo(b) = 4`: `Linear` deduces `a <= 2`, but the row alone has slack 6
+against pivot coefficient 3 and PB propagation on it deduces nothing. Lifted onto `L_1` (×3)
+and `L_2` (×6) the coefficient is 9 against the same slack 6, and it propagates.
+
+### The four decisions
+
+**1. The substitution rule is one rung, one term, degree-neutral.** One ladder row moves one
+term one rung. Degree-neutrality is what makes the lift checkable: a chain counted twice
+would move the degree, so the test asserts the degree is unchanged, the cited ids are
+duplicate-free, and the cited set equals the antecedent set. That is the double-counting guard
+M2-L11's test (c) demanded, and it is cheap precisely because of this rule.
+
+**2. Lift only *non-falsified* terms.** This is the one that looks like a missing case.
+Lifting a **falsified** term adds the same amount to the slack as it adds to the pivot
+coefficient — so it buys **nothing**, and leaves a larger absolute slack to reduce afterwards.
+A later session reading the code will see an unhandled case and be tempted to "complete" it.
+It is not incomplete; it is the argument. Anyone changing it must show a scene where lifting
+a falsified term strictly helps.
+
+**3. Retry, do not replace.** The bare model row is tried **first**, and the ladder lift runs
+only if that fails. So every conflict M2-L6 already handled takes M2-L6's derivation,
+unchanged, and the lift is reached only where the old path produced nothing. This is why the
+suite's artefacts move on exactly one model. It also means the lift can never make a proof
+worse — the worst case is that it is not reached.
+
+**4. I-S4 is discharged structurally, not by checking.** Ladder cids are **level-0 `.opb`
+rows**, retired by nothing, so a learned constraint that cites them still rests only on model
+rows. There is no new way for a learned row to depend on something that gets deleted under it.
+
+### What it bought, stated honestly
+
+On the fixture built for it (`test/models/ladder_lift_unsat.fzn`): 2 conflicts, **2 rows
+learned, 0 fallbacks, both non-degenerate, 2 rungs cited**; with the lift off, **0 learned, 2
+fallbacks**. Suite-wide it fires on **one model of 39**, converting 2 fallbacks into 2
+non-degenerate rows.
+
+**That is a small number and it should be read as one.** The large claim this row was expected
+to support — that PB learning was producing degenerate rows across the suite because the
+reason lacked its ladder chain — **turned out to rest on a mis-measurement**; see D-0047's
+amendment. What is established here is narrower and solid: where the reason genuinely lacks
+its chain, the analysis produced **nothing**, and now it produces a real inequality.
+
+### Where this is likely to be picked up next
+
+M2-L7 (`Saturate`) and M2-L4 (deletion) both touch this path. The lifted rows are
+non-degenerate but, on the fixture, **do not convert** to a propagating linear row
+(`pb-convert 0`), so the next honest question is not "lift more" but **what a learned PB row
+has to look like before `Learned.to_linear_row` accepts it**. That is a better-posed question
+than the one this row started from.

@@ -10,9 +10,8 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
-**Wave sixteen: M2-T17 (agent-size) is RELEASED and merged; M2-L11 (agent-ladder) is still running.**
-
-**`bench/**` is free again.** `lib/`, `bin/main.ml`, `test/**` remain held by agent-ladder.
+**Wave sixteen is COMPLETE: M2-L11 (agent-ladder) and M2-T17 (agent-size) are both merged,
+released and pushed. Every file is free.** The whole tree is unclaimed as of this line.
 
 The split is the usual one and it is forced. **agent-ladder holds all of `lib/`**, because
 M2-L11 changes what `Linear` hands to PB analysis: that is `lib/core/prop/linear.ml`,
@@ -2129,3 +2128,61 @@ the variant fixture exits 1; break (3) re-applied by hand exits 1 on `pol_prems 
 (4.0000 -> 4.0000)`. Gate after the merge is **1972 ok / 0 FAIL**, 280 matrix, 44 mutation,
 12 random, 38/38 models, determinism green — identical to the pre-merge baseline, as a
 `bench/`-only change should be. Peak RSS 9.6 MB.
+
+**2026-09-18 — M2-L11 (agent-ladder): the lift works, and it corrected the number it was
+built on**
+
+**Read this before you trust any `pb-*` figure you remember.** M2-L6's headline —
+`pb-stronger` **36 of 36** learned rows, every one degenerate — is **wrong**. Re-measured
+independently on `main` *before* M2-L11 merged, by counting emitted `ia` rows instead of
+reading a counter: **36 learned rows, 26 carrying terms, 10 degenerate.** The 10 are exactly
+the `int_lin_eq` family (`backjump_lineq_unsat` 3, `near_limit_unsat` 3, `offset_unsat` 4) —
+the family M2-L6's own test (a) inspected — and `width_sat_depth` **alone** contributes 24
+non-degenerate rows. The conclusion was true of what was looked at, then stated of the suite,
+and **nothing counted**, so nothing contradicted it. `pb-nondeg` is now that counter.
+
+**D-0047 was written on that wrong figure, by me, hours earlier, and is amended rather than
+deleted** — the amendment is the useful part. What is withdrawn: "PB learning keeps producing
+degenerate rows" as a suite-wide claim. What survives and is now measured: the *mechanism* —
+where the reason is the model row **without** its ladder chain, certain conflicts yield no row
+at all and fall back. The general lesson, which is why it is in a record and not just here:
+**a headline figure with no counter behind it is a claim, not a measurement**, and a decision
+record inherits the confidence of whatever it cites. That number was checkable in two minutes
+with `grep` over emitted proofs.
+
+**What the row delivered.** `lib/core/ladder.ml` lifts a `Linear` reason onto the ladder rungs
+that carry its strength (D-0028). On its fixture: 2 conflicts → 2 rows learned, 0 fallbacks,
+both non-degenerate, 2 rungs cited; with the lift off, 0 learned and 2 fallbacks. **Suite-wide
+it fires on one model of 39.** That is small, and D-0049 records it as small — the large claim
+it was expected to support was the mis-measurement above.
+
+**Three things a later session will want to undo, and should not.** All in D-0049:
+(1) the lift takes only **non-falsified** terms — lifting a falsified term adds the same
+amount to slack as to the pivot coefficient, so it buys nothing; it looks like a missing case
+and is actually the argument. (2) **Retry, not replace** — the bare row is tried first, so
+every conflict M2-L6 handled keeps M2-L6's derivation and the lift can never make a proof
+worse. (3) I-S4 is discharged **structurally**: ladder cids are level-0 `.opb` rows retired by
+nothing.
+
+**Test (d) was asserted for the first time, and `Linear` could not have asserted it.** The
+`Order_reason.weaken_declared` / `Encoding.expand_int_lin_le` coupling is checked in both
+currencies now; `summands_of_snap` discards the constant (`let lits, _ = …`), so a drift would
+have been **silent** until `Ladder` used it. The standing hazard entry for that coupling can
+now say it is covered.
+
+**Both module maps were missing six modules, not one.** `CLAUDE.md` and `ARCHITECTURE.md` §1
+both lacked the entire M2L learning vertical — `learned`, `learn`, `analysis`, `reduce`,
+`pb_analysis` — as well as `ladder`. §1 said "verified against the tree on 2026-09-18"; that
+verification checked the propagators and not `lib/core`'s root. Both maps are now correct and
+say so. Test binaries are **19** (was listed as 15), models **39** (was listed as 34).
+
+**Next**, in the order I would take them: **M2-L4** (deletion + retention policy, absorbs
+M2-T4) and **M2-L7** (`Saturate`, still needs its own decision record) are the open learning
+rows. But D-0049 ends on a better-posed question than either: the lifted rows are
+non-degenerate and still **do not convert** (`pb-convert 0` on the fixture), so the thing
+actually worth knowing is **what a learned PB row must look like before
+`Learned.to_linear_row` accepts it**. Someone should scope that before M2-L7.
+
+**Final gate on `main` after both merges**: **2064 ok / 0 FAIL**, 280 matrix, 44 mutation,
+12 random, **39/39 models**, determinism green, fmt and width lint clean, `check: ok`. Peak
+RSS 37.7 MB unit, 18.5 MB models. Nothing came near the cap.

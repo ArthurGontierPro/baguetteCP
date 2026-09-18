@@ -222,6 +222,25 @@ lib/core/       Baguette_core
                             core, not proof, because proof cannot see Explanation.
   trace.ml                  records what a branch learned so its nogood is plain RUP
                             (D-0018, M1-T13)
+  learned.ml                the LEARNED-CONSTRAINT type: a PB inequality of which a
+                            clause is the degree-1 case, plus its runtime instance and
+                            its proof-side introduction/deletion (M2-L1, D-0044)
+  learn.ml                  1UIP clause learning over order literals, its semantic
+                            minimisation, its `rup` derivation and the backjump it
+                            licenses (M2-L3)
+  analysis.ml               the implication graph and the cut, AS DATA. The criterion
+                            is a swappable record carrying its own postcondition
+                            (M2-L2)
+  reduce.ml                 REDUCTION as a named, swappable component: `division` and
+                            `roundToOne`, the pluggable field being outcome.derive
+                            (M2-L5)
+  pb_analysis.ml            PB conflict analysis: eliminate the pivot by linear
+                            combination + reduction, clause path as fallback. Stops on
+                            SLACK, never on counting conflict-level literals -- see the
+                            header, and do not "optimise" that back (M2-L6)
+  ladder.ml                 the order-encoding ladder chain AS A ROW, so a PB reason
+                            can propagate: lifts a Linear reason onto the ladder rungs
+                            that actually carry its strength (M2-L11, D-0028/D-0010)
   propagator.ml             the PROPAGATOR module type (51 lines — read it whole)
   engine.ml                 propagate-to-fixpoint loop and the queue (ARCH §5)
   search.ml                 DFS, branching, backtracking, every step proof-logged
@@ -246,14 +265,15 @@ lib/proof/      Baguette_proof
                             (I-X2: an id you receive is an id you must delete)
   checker.ml                resolves which veripb to use; mirrors scripts/checker.sh
 
-test/unit/                  test_core test_domain test_engine test_prop test_proof
-                            test_justify test_trace test_flatzinc test_compile
-                            test_endtoend test_matrix test_mutation test_output
-                            test_random test_interval
+test/unit/                  19 binaries: test_core test_domain test_engine test_prop
+                            test_proof test_justify test_trace test_flatzinc
+                            test_compile test_endtoend test_matrix test_mutation
+                            test_output test_random test_interval test_learned
+                            test_learn test_analysis test_ladder
   mem_guard.ml              NOT a test binary: the shared Gc-alarm heap guard every
-                            suite installs (M1-T53). All 15 announce arming under
+                            suite installs (M1-T53). All 19 announce arming under
                             BAGUETTE_TEST_HEAP_CAP_ANNOUNCE=1
-test/models/                34 .fzn models   test/expected/  their expected outputs
+test/models/                39 .fzn models   test/expected/  their expected outputs
 scripts/                    checker.sh verify_proof.sh run_model_tests.sh shrink.sh
                             mutate_proof.sh check_test_widths.py check_fmt.sh
                             bootstrap.sh

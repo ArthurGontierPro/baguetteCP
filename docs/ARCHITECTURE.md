@@ -7,7 +7,7 @@ freely — but changes to §4 (explanations) need a decision record.
 
 ## 1. Module map
 
-*Verified against the tree on 2026-09-18.* This section was stale for long enough that
+*Verified against the tree on 2026-09-18, and re-verified the same day after M2-L11.* **That first verification missed six modules** -- the whole M2L learning vertical (`learned`, `learn`, `analysis`, `reduce`, `pb_analysis`) plus `ladder` -- which is worth knowing about a map that says it was checked: it was checked against the propagators and not against `lib/core`'s root. They are listed below now. This section was stale for long enough that
 `CLAUDE.md` carried its own replacement map and told readers to trust that one over this —
 it listed three propagators that have never existed (`alldiff`, `element`, `clause`) and
 omitted eleven modules that do, including `reason.ml`, which half of `lib/core` now depends
@@ -40,6 +40,25 @@ lib/core/       Baguette_core
                             core, not proof, because proof cannot see Explanation
   trace.ml                  records what a branch learned so its nogood is plain RUP
                             (D-0018)
+  learned.ml                the LEARNED-CONSTRAINT type: a PB inequality of which a
+                            clause is the degree-1 case, plus its runtime instance and
+                            its proof-side introduction/deletion (M2-L1, D-0044)
+  learn.ml                  1UIP clause learning over order literals, its semantic
+                            minimisation, its `rup` derivation and the backjump it
+                            licenses (M2-L3)
+  analysis.ml               the implication graph and the cut, AS DATA. The criterion
+                            is a swappable record carrying its own postcondition
+                            (M2-L2)
+  reduce.ml                 REDUCTION as a named, swappable component: `division` and
+                            `roundToOne`, the pluggable field being outcome.derive
+                            (M2-L5)
+  pb_analysis.ml            PB conflict analysis: eliminate the pivot by linear
+                            combination + reduction, clause path as fallback. Stops on
+                            SLACK, never on counting conflict-level literals -- see the
+                            header, and do not "optimise" that back (M2-L6)
+  ladder.ml                 the order-encoding ladder chain AS A ROW, so a PB reason
+                            can propagate: lifts a Linear reason onto the ladder rungs
+                            that actually carry its strength (M2-L11, D-0028/D-0010)
   propagator.ml             the PROPAGATOR module type (65 lines -- read it whole)
   engine.ml                 propagate-to-fixpoint loop and the queue (section 5)
   search.ml                 DFS, branching, backtracking, every step proof-logged.
