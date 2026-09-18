@@ -676,19 +676,20 @@ let line_labelled text id =
 (* ---- resolving an id to its line WITHOUT a label (M2-T14) -------------------
 
    The check below wants to know that the id the index handed back names the line that
-   states the clause. It used to ask that of [line_labelled], i.e. by reading a label --
-   so under a format without labels it could not be asked at all, and the lane asserted
-   [false] on
-   purpose rather than pass vacuously. That is honest but it leaves a 2.0 run
+   states the clause. It used to ask that of [line_labelled], i.e. by reading a label.
+   Format 2.0 had no labels, so there the question could not be asked at all and the lane
+   asserted [false] on purpose rather than pass vacuously -- honest, but it left that run
    permanently one check red, and a run that is always red is a run people stop reading.
 
-   An id can be resolved by CONTENT instead. VeriPB numbers constraints itself: the
-   `f <n>` header loads n model rows as ids 1..n, and every rule that mints an id takes
-   the next one, in file order. Walking the file with that counter reproduces the
-   checker's own numbering and so answers the same question in either format. *)
+   D-0046 has since removed 2.0, so that particular bind is gone. The content-based
+   resolution below is kept anyway, and deliberately: it does not depend on labelling at
+   all, so it is the stronger check of the two and it cannot rot the way the label-based
+   one did. VeriPB numbers constraints itself -- the `f <n>` header loads n model rows as
+   ids 1..n, and every rule that mints an id takes the next one, in file order -- so
+   walking the file with that counter reproduces the checker's own numbering. *)
 
-(* The model-row count off the proof's own `f <n>` header. Both formats write it; 3.0
-   just adds a ` ;` terminator, which splitting on spaces discards. *)
+(* The model-row count off the proof's own `f <n>` header. 3.0 terminates it with ` ;`,
+   which splitting on spaces discards. *)
 let model_row_count text =
   let rec go = function
     | [] -> 0
