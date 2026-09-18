@@ -476,6 +476,26 @@ let report_stats (st : Search.stats) (outcome : Search.outcome) =
     "literals semantic minimisation removed from nogoods (M2-L3); 0 means it never fired";
   Printf.eprintf "stats: %-10s %10d lines  %s\n" "i-s4-cross" st.Search.i_s4_crossings
     "hole lines above level 0 a level-0 learned clause rests on -- data, not a fault";
+  (* M2-L6. [pb-fallback] is the one to read first: the clause path is PERMANENT
+     (D-0044), so a build in which PB analysis never succeeded would be green in every
+     other counter here. A rate of 1.00 means the PB path did nothing on this model. *)
+  Printf.eprintf "stats: %-10s %10d confl  %s\n" "pb-tried" st.Search.n_pb_attempts
+    "conflicts PB conflict analysis was asked about (M2-L6)";
+  Printf.eprintf "stats: %-10s %10d rows   %s\n" "pb-learned" st.Search.n_pb_learned
+    "...of which yielded a PB inequality, derived by pol and stated, at level 0";
+  Printf.eprintf "stats: %-10s %10d confl  %s (%.2f)\n" "pb-fallback"
+    st.Search.n_pb_fallback
+    "...of which fell back to the M2-L3 clause path -- rate in brackets"
+    (Search.stats_pb_fallback_rate st);
+  if Search.stats_pb_fallbacks st <> [] then
+    Printf.eprintf "stats: %-10s %10s        first fallback reason: %s\n" "pb-why" ""
+      (List.hd (Search.stats_pb_fallbacks st));
+  Printf.eprintf "stats: %-10s %10d pivots %s\n" "pb-steps" st.Search.n_pb_steps
+    "pivots eliminated by linear combination + reduction, over all analyses";
+  Printf.eprintf "stats: %-10s %10d rows   %s\n" "pb-convert" st.Search.n_pb_converts
+    "...learned PB rows Learned.to_linear_row accepts, i.e. which could propagate";
+  Printf.eprintf "stats: %-10s %10d rows   %s\n" "pb-stronger" st.Search.n_pb_stronger
+    "...of those, where the SAME conflict's clause does NOT convert. M2-L6 test (a)";
   if Search.stats_i_s4_broken st <> [] then
     Printf.eprintf "stats: I-S4 VIOLATED %d time(s); first: %s\n"
       (List.length (Search.stats_i_s4_broken st))
