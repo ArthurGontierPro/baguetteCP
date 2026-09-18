@@ -1,0 +1,11 @@
+pseudo-Boolean proof version 3.0
+f 4 ;
+@c7 rup +1 v0_ge_0 >= 1 ;
+@c12 rup +1 v0_ge_1 >= 1 ;
+@c13 rup +1 v1_ge_1 >= 1 ;
+@c9 rup +1 ~v0_ge_0 +1 v0_ge_1 +1 v1_ge_1 >= 1 ;
+@c14 pol @c7 v4_ge_1 + @c12 + v5_ge_1 + @c13 + @c9 + ;
+del id @c14 ;
+output NONE ;
+conclusion SAT ;
+end pseudo-Boolean proof ;
