@@ -1,0 +1,14 @@
+% An index whose declared domain is WIDER than the array, and a constant index, which is
+% the other half of the front end's decomposition.
+%
+% `i` is declared 0..5 over a 3-element array, so positions 0, 4 and 5 are out of range and
+% get the unit row lib/core/prop/element.ml posts for exactly that -- refuted by the
+% ordinary arithmetic, with no special case in the builder. `k` is a constant index, which
+% lib/flatzinc/compile.ml decomposes to an int_eq before the propagator ever sees it.
+var 0..5: i :: output_var;
+var 0..9: c :: output_var;
+var 0..9: k :: output_var;
+constraint array_int_element(i, [6, 2, 6], c);
+constraint array_int_element(2, [6, 2, 6], k);
+constraint int_le(c, 4);
+solve satisfy;

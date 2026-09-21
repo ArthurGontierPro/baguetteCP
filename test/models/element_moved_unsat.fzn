@@ -1,0 +1,19 @@
+% The negative half of element_range_unsat.fzn: the same refutation shape with a bound
+% that MOVED, where this row's pol is decorative and lib/core/prop/element.ml says so.
+%
+% Two element constraints share c. The first confines it to {1, 2}; the second then finds
+% every one of its own positions impossible -- but each exclusion rests on the upper bound
+% the first one pushed, not on a declared bound, so the counting sum is left holding
+% `c_ge_3` and is not contradicting. Cancelling it needs the line that STATES c <= 2,
+% which Explanation.t cannot name (D-0009's ADT gap), so it goes through
+% Explanation.clause; Search.rests_on_a_clause then routes the conflict the D-0022 way and
+% `conclusion UNSAT` cites the empty clause.
+%
+% "It cites the derivation" is only informative next to a case where it does not, which is
+% why this model exists beside the other one and why test_endtoend.ml asserts both.
+var 1..2: i :: output_var;
+var 1..2: j :: output_var;
+var 0..9: c :: output_var;
+constraint array_int_element(i, [1, 2], c);
+constraint array_int_element(j, [3, 4], c);
+solve satisfy;

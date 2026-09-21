@@ -1,0 +1,7 @@
+% A CONSTANT result, which is a View.Const and not a special case anywhere: the rows
+% collapse through Encoding.view_ge's Holds/Fails and the propagator reads and writes it
+% with the same calls it uses for a variable. as = [4, 2, 4, 6] and c = 4, so only
+% positions 1 and 3 survive and the index keeps an interior hole at 2.
+var 1..4: i :: output_var;
+constraint array_int_element(i, [4, 2, 4, 6], 4);
+solve satisfy;

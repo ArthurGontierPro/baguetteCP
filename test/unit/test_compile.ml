@@ -508,7 +508,15 @@ let evaluate (m : M.t) (assign : int array) =
             | [] -> true
             | v :: rest -> (not (List.mem v rest)) && distinct rest
           in
-          distinct vs)
+          distinct vs
+      (* M4-T3. This file's own reading of the relation, kept separate from
+         [Model.check_assignment]'s: the index is 1-based and must land inside the array,
+         and an out-of-range index makes the constraint FALSE rather than vacuous. Two
+         independent statements of one rule is the point -- [test_element_oracle] above
+         judges with [Model.check_assignment], this one judges the end-to-end solutions. *)
+      | M.Array_int_element (i, vs, c) ->
+          let k = operand i in
+          k >= 1 && k <= Array.length vs && vs.(k - 1) = operand c)
     m.M.constraints
 
 (* Brute force over the declared box: the independent oracle for the expected answer.
@@ -835,6 +843,173 @@ let test_reified () =
      constraint int_eq_reif(x,y,b);\n\
      solve satisfy;\n"
 
+(* --------------------------------------------------- M4-T3: array_int_element *)
+
+(* THE BRUTE-FORCE ORACLE, and the distinction lib/core/interval.ml's own tests make
+   between equality and containment.
+
+   Every total assignment over the DECLARED box is enumerated and judged by
+   [Model.check_assignment] -- which is written from docs/SPEC.md and from nothing in
+   lib/core/prop/, so it cannot agree with the propagator by construction -- and the
+   survivors are projected back onto each variable. That projection is the
+   domain-consistent closure of the WHOLE model.
+
+   For a model whose only constraint is the element, the closure and the propagator's
+   fixpoint must be EQUAL: lib/core/prop/element.ml declares [Domain], and D-0059 is
+   explicit that the tag is a claim the code is held to. With a second constraint in the
+   model, propagation to a fixpoint is not global domain consistency and only CONTAINMENT
+   is claimed -- asserting equality there would be asserting something false about
+   propagation in general rather than about this propagator. *)
+let closure_and_fixpoint src =
+  let m = build src in
+  let c = Compile.compile m in
+  let n = M.nvars m in
+  let decl = Array.init n (fun i -> Store.get c.Compile.store (Var.of_int i)) in
+  let acc = Array.make n [] in
+  let values = Array.make n 0 in
+  let rec go i =
+    if i = n then (
+      if M.check_assignment m values then
+        Array.iteri
+          (fun k v -> if not (List.mem v acc.(k)) then acc.(k) <- v :: acc.(k))
+          values)
+    else
+      Domain.iter
+        (fun v ->
+          values.(i) <- v;
+          go (i + 1))
+        decl.(i)
+  in
+  go 0;
+  let fixpoint =
+    match Engine.propagate c.Compile.engine c.Compile.store with
+    | Engine.Conflict _ -> None
+    | Engine.Fixpoint ->
+        Some
+          (Array.init n (fun i ->
+               Domain.to_list (Store.get c.Compile.store (Var.of_int i))))
+  in
+  (Array.map (List.sort compare) acc, fixpoint, c, m)
+
+let show l = String.concat "," (List.map string_of_int l)
+
+let test_element_oracle () =
+  (* Exact: the element is the whole model, so the fixpoint IS the closure. `c`'s
+     projection is {3, 5, 7} -- two interior HOLES, at 4 and 6, which a bounds-consistent
+     element would not punch. That is the assertion D-0059 says starts separating the
+     Bounds and Domain tags, and a propagator that only pushed bounds reddens here. *)
+  let closure, fixpoint, _, _ =
+    closure_and_fixpoint
+      "var 1..4: i;\n\
+       var 0..9: c;\n\
+       constraint array_int_element(i, [3, 7, 3, 5], c);\n\
+       solve satisfy;\n"
+  in
+  (match fixpoint with
+  | None -> check "element (a): the single-constraint scene is satisfiable" false
+  | Some f ->
+      check "element (a): index -- fixpoint EQUALS the domain-consistent closure"
+        (List.equal Int.equal f.(0) closure.(0));
+      if not (List.equal Int.equal f.(1) closure.(1)) then
+        fail "element (a): result -- fixpoint EQUALS the domain-consistent closure"
+          (Printf.sprintf "closure {%s}, fixpoint {%s}" (show closure.(1)) (show f.(1)))
+      else
+        check "element (a): result -- fixpoint EQUALS the domain-consistent closure" true;
+      check
+        "element (a): and the closure really has interior holes, so the scene is one a \
+         Bounds propagator would fail"
+        (List.equal Int.equal closure.(1) [ 3; 5; 7 ]));
+  (* Exact, and empty: every array value is outside c's declared range, so the closure is
+     empty and the propagator must refute rather than merely narrow. *)
+  let closure, fixpoint, _, _ =
+    closure_and_fixpoint
+      "var 1..3: i;\n\
+       var 0..4: c;\n\
+       constraint array_int_element(i, [7, 8, 9], c);\n\
+       solve satisfy;\n"
+  in
+  check "element (a): the closure of the out-of-range scene is empty" (closure.(0) = []);
+  check "element (a): and the propagator reports the conflict, not a narrowing"
+    (fixpoint = None);
+  (* Containment only: a second constraint is in the model. *)
+  let closure, fixpoint, _, _ =
+    closure_and_fixpoint
+      "var 1..4: i;\n\
+       var 0..9: c;\n\
+       constraint array_int_element(i, [3, 7, 3, 5], c);\n\
+       constraint int_le(c, 4);\n\
+       solve satisfy;\n"
+  in
+  match fixpoint with
+  | None -> check "element (a): the two-constraint scene is satisfiable" false
+  | Some f ->
+      check "element (a): index -- the fixpoint CONTAINS the closure (two constraints)"
+        (List.for_all (fun v -> List.mem v f.(0)) closure.(0));
+      check "element (a): result -- the fixpoint CONTAINS the closure (two constraints)"
+        (List.for_all (fun v -> List.mem v f.(1)) closure.(1))
+
+(* M4-T3's obligation (d): the index really is a VIEW.
+
+   D-0058 bought exactly one property and this is it -- there is no auxiliary variable
+   between the propagator and the index, so a value-level pruning lands in the index's
+   OWN domain with no channelling step at which to lose it. Two independent assertions,
+   because each fails differently:
+
+   1. the store holds exactly the model's variables. An auxiliary [p = i - 1] would be a
+      third one, and [Store.n_vars] would say so.
+   2. the pruning is an interior HOLE in `i`. A channelled auxiliary could carry the two
+      BOUNDS back to `i`, so a test that only checked lo/hi would pass against the shape
+      D-0058 rejected; a hole is what a bounds-consistent channel cannot carry, which is
+      why this is the assertion and not the bounds. *)
+let test_element_view () =
+  let src =
+    "var 1..4: i;\n\
+     var 0..9: c;\n\
+     constraint array_int_element(i, [3, 7, 3, 5], c);\n\
+     constraint int_le(c, 4);\n\
+     solve satisfy;\n"
+  in
+  let m = build src in
+  let c = Compile.compile m in
+  check "element (d): the model has exactly two variables" (M.nvars m = 2);
+  check
+    "element (d): and the store holds exactly those -- no auxiliary for the shifted \
+     index (D-0058)"
+    (Store.n_vars c.Compile.store = M.nvars m);
+  (match Engine.propagate c.Compile.engine c.Compile.store with
+  | Engine.Conflict _ -> check "element (d): the scene propagates without conflict" false
+  | Engine.Fixpoint ->
+      let d = Store.get c.Compile.store (Var.of_int 0) in
+      check "element (d): the index keeps both ends" (Domain.lo d = 1 && Domain.hi d = 3);
+      check "element (d): and the pruning is an interior HOLE in the index's OWN domain"
+        (Domain.is_hole d 2);
+      check "element (d): every trail entry names a model variable, never a third one"
+        (List.for_all
+           (fun (e : Store.entry) -> Var.to_int e.Store.var < M.nvars m)
+           (Store.trail_entries c.Compile.store)));
+  check
+    "element (d): the propagator declares DOMAIN consistency, and the oracle holds it to \
+     it (D-0059)"
+    (Baguette_core.Element.consistency = Baguette_core.Propagator.Domain)
+
+let test_element_shape () =
+  let three body =
+    Printf.sprintf "var 1..3: i;\nvar 0..3: c;\n%s\nsolve satisfy;\n" body
+  in
+  let n, _ = instances_and_rows (three "constraint array_int_element(i, [1,2,3], c);") in
+  check "element: one instance for one array_int_element" (n = 1);
+  (* A constant index never reaches the propagator: compile.ml decomposes it to the
+     int_eq shape, which is TWO Linear instances (D-0011) and no element at all. *)
+  let n, _ = instances_and_rows (three "constraint array_int_element(2, [1,2,3], c);") in
+  check
+    "element: a constant index decomposes to int_eq -- two Linear instances, no element \
+     instance"
+    (n = 2);
+  let n, rows =
+    instances_and_rows (three "constraint array_int_element(4, [1,2,3], c);")
+  in
+  check "element: an out-of-range constant index is one ground row" (n = 1 && rows >= 1)
+
 (* ------------------------------------------------------------------------- main *)
 
 let () =
@@ -849,6 +1024,9 @@ let () =
   test_rejections ();
   test_reified ();
   test_end_to_end ();
+  test_element_shape ();
+  test_element_oracle ();
+  test_element_view ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

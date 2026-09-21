@@ -159,6 +159,8 @@ module Linear = Baguette_core.Linear
 module Lin_eq = Baguette_core.Lin_eq
 module Ne = Baguette_core.Ne
 module Alldiff = Baguette_core.Alldiff
+module Element = Baguette_core.Element
+module View = Baguette_core.View
 
 (* M2-L12/D-0052: the clause propagator was widened to general order literals and its
    file renamed [Clause]. The Boolean face this front end builds is [Clause.make] plus
@@ -799,6 +801,77 @@ let compile (m : Model.t) : t =
     in
     decompose [] xs @ global
   in
+  (* ------------------------------------------------------------------------ M4-T3
+
+     `array_int_element(idx, as, c)`, with `as` a constant array and a 1-BASED index.
+
+     THE INDEX IS A VIEW (D-0058): [View.shift (View.of_var idx) (-1)] is the 0-based
+     array offset, and lib/core/prop/element.ml prunes through it straight into [idx]'s
+     own domain. There is no auxiliary variable and no channelling row -- which is the
+     whole of what M4-T0 bought and what the aux-variable shape would have cost, since a
+     channel is a bounds-consistent step and element's [Domain] claim would not survive
+     one.
+
+     A CONSTANT INDEX is decomposed here and never reaches the propagator, so that module
+     has one degenerate case instead of two: in range it is the equality `c = as[k]`,
+     which the ordinary [post_eq] path posts with the rows and the propagator M1 already
+     has; out of range it is the empty row `0 <= -1`, the same ground contradiction
+     [post_ne] gives `x - x <> 0` (lib/core/prop/ne.ml's `ne_self_unsat`), refuted by one
+     [pol] over a row the .opb really holds. A constant RESULT is not decomposed: it is a
+     [View.Const], which the propagator and [Encoding.view_ge] both handle as the
+     arithmetic they already are.
+
+     ONE [request_direct] CALL, and the one that is NOT here is the measured half.
+
+     The index's is ordinary and required: element.ml names [idx]'s [direct_lo_id],
+     [direct_hi_id] and [at_least_one_id] in every derivation, and D-0058 is explicit that
+     a view's `=` is the BASE's, so the request is for [idx] itself and never for the
+     view.
+
+     The RESULT gets none. It was requested here at first, on the argument that
+     lib/core/trace.ml's [derive_ahead] gates on [Encoding.has_direct] of the PRUNED
+     variable and that a result pruning would therefore need its [pol] written out ahead
+     of its trace line (I-X10, D-0040). MEASURED 2026-09-21: dropping the call reddens
+     NOTHING -- all six element models and a scene built specifically to need it (an
+     index HOLE punched by an `int_ne`, so the result's pruning rests on something
+     [Reason.t] cannot state) verify unchanged. The result's trace lines are RUP against
+     this constraint's own rows with no derivation ahead of them, which is the [Ne]
+     situation and the reason element is classified [Single_row] rather than
+     [Needs_derivation]. So the call is gone, and with it the result's whole direct
+     encoding -- width-proportional, which is exactly the cost D-0028 and D-0058 measure.
+     An argument for a proof line that no proof needs is the thing this project's rules
+     are about; it is recorded here rather than deleted so the next reader does not make
+     it again. *)
+  let post_array_int_element pos (idx : Model.operand) (values : int array)
+      (res : Model.operand) =
+    match idx with
+    | Model.Const k ->
+        if k < 1 || k > Array.length values then post_le pos [] (-1)
+        else
+          let terms, rhs = difference_terms res (Model.Const values.(k - 1)) ~offset:0 in
+          post_eq pos (normalise_terms terms) rhs
+    | Model.Var i ->
+        let iname = name_of pos i in
+        let index = View.shift (View.of_var (Var.of_int i)) (-1) in
+        let result =
+          match res with
+          | Model.Const c -> View.const c
+          | Model.Var j -> View.of_var (Var.of_int j)
+        in
+        Encoding.request_direct encoding iname;
+        let rows =
+          Element.post_rows encoding ~index_name:iname
+            ~imap:(Option.get (View.map_of index))
+            ~result:(View.to_encoding store result)
+            ~values
+            ~positions:(Element.declared_positions store ~pos:index)
+        in
+        let p = Element.make store encoding ~rows ~pos:index ~res:result ~values in
+        [
+          (fun id ->
+            Propagator.pack ~id (module Element : Propagator.S with type t = Element.t) p);
+        ]
+  in
 
   (* ------------------------------------------------------------- M2, Booleans *)
 
@@ -1296,6 +1369,7 @@ let compile (m : Model.t) : t =
           | Model.Int_div (x, y, q, aux) -> post_int_div pos x y q aux
           | Model.Int_abs (x, z, aux) -> post_int_abs pos x z aux
           | Model.All_different xs -> post_all_different pos xs
+          | Model.Array_int_element (i, vs, c) -> post_array_int_element pos i vs c
         with Checked.Overflow msg ->
           reject_row pos
             ~what:

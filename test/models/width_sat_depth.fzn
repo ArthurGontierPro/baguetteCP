@@ -21,8 +21,14 @@
 % carries both, and they are labelled.
 %
 % Kept at w = 99, not 999. At 999 this shape is a 1.7 MB proof (D-0028) and would
-% cost the gate more than the effect is worth; at 99 it is 43 ms end to end and the
+% cost the gate more than the effect is worth; at 99 it is ~160 ms end to end and the
 % Theta(w) depth is already plain (49 decision levels for a two-variable model).
+%
+% That figure was 43 ms when this header was written and is 150-170 ms now (five runs,
+% 2026-09-21, M4-T3; peak RSS 8.8 MB). D-0062 bisected the change to one commit and
+% ACCEPTED it, so this is the recorded new cost and not a regression to chase. The figure
+% is corrected rather than deleted because a number with a date on it is the only reason
+% the change was noticed at all.
 array [1..2] of int: sum_c = [1, 1];
 array [1..2] of int: diff_c = [-1, 1];
 var 0..99: a :: output_var;

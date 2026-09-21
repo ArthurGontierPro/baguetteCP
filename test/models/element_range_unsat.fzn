@@ -1,0 +1,18 @@
+% M4-T3's obligation (c): the model whose `conclusion UNSAT` cites the ELEMENT DERIVATION
+% itself, not the empty clause a D-0022 close would put there.
+%
+% Every array value is outside c's DECLARED range, so every per-position row degenerates
+% to the unit "i <> p" over the order encoding, and no exclusion carries a bound literal
+% that would have to be cancelled with an Explanation.clause. With no clause anywhere in
+% the tree, Search.rests_on_a_clause is false and the root conflict is cited directly.
+%
+% The checker does real work for it: each unit row is restated over the index's DIRECT
+% literal by a pol over its channelling halves -- one of the three needs a division by 2 --
+% and the at-least-one line then cancels all three to 0 >= 1. Corrupt any of it and veripb
+% rejects the CONCLUSION, which is what makes the pol load-bearing rather than decorative
+% (D-0057, D-0060). test/unit/test_endtoend.ml reads the cited id back out of the .pbp and
+% asserts it names a pol; it also asserts the negative half on element_moved_unsat.fzn.
+var 1..3: i :: output_var;
+var 0..4: c :: output_var;
+constraint array_int_element(i, [7, 8, 9], c);
+solve satisfy;
