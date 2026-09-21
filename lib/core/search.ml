@@ -2042,6 +2042,52 @@ let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
      path, before the conclusion. Doing it here rather than inside [Trace] keeps the
      rule "an id you receive is an id you delete" with the caller that owns the proof's
      shape. *)
+  (* M2-T10: the search-side half of the consistency oracle -- its TRACE.
+
+     [Engine.propagate] does the checking, at every fixpoint, which is every node of this
+     search. What it cannot do is say how much of the tree that came to, because the
+     engine does not know it is inside a search. This does, so it says so once per
+     [solve], on stderr, behind the same gate.
+
+     It matters that this line exists and is read. The whole failure mode of a brute-force
+     audit is a silent skip: a scope too wide for [Debug.consistency_cap] is passed over,
+     and a run that checked nothing looks exactly like a run that checked everything and
+     found nothing. So the line reports SKIPS next to checks, and a reader who sees
+     skipped>0 knows the verdict is partial. Nothing here fails on a skip -- a skip is a
+     budget, not a bug -- but it is not allowed to be invisible.
+
+     stderr and not the proof, not stdout: a model test compares stdout against
+     test/expected/, and an audit that changed the answer would be an audit that could
+     not be run over the suite it is meant to audit.
+
+     And behind BAGUETTE_CONSISTENCY_TRACE rather than BAGUETTE_CONSISTENCY, because
+     M1-T49 forbids stderr without --time and run_model_tests.sh enforces it per model:
+     printing this whenever the oracle was on failed all 57 models for printing it. The
+     oracle checks silently; this says how much it checked. See lib/core/debug.ml. *)
+  if Debug.consistency_enabled && Debug.consistency_trace then (
+    let nodes, checks, tuples, skipped = Engine.oracle_stats () in
+    Printf.eprintf
+      "M2-T10 consistency oracle: %d fixpoints audited, %d instance-checks, %d oracle \
+       tuples, %d instance-checks SKIPPED over the %d-tuple cap%s\n\
+       %!"
+      nodes checks tuples skipped Debug.consistency_cap
+      (if skipped > 0 then
+         " -- a SKIP IS NOT A PASS: raise BAGUETTE_CONSISTENCY_CAP to cover them"
+       else "");
+    (* And the breakdown, because the totals cannot distinguish "every declared level was
+       met" from "nothing carrying an obligation was ever reached". A run whose CHECKED
+       list is empty has audited nothing however many fixpoints it visited, and the second
+       list is what says which families that was and at which level -- [Value] and
+       [Checking] owe no support, deliberately (see [Engine.check_consistency]'s header),
+       so they belong on a line of their own and not in a failure. *)
+    let show label rows =
+      if rows = [] then Printf.eprintf "M2-T10   %s: (none)\n%!" label
+      else
+        Printf.eprintf "M2-T10   %s: %s\n%!" label
+          (String.concat ", " (List.map (fun (n, c) -> Printf.sprintf "%s x%d" n c) rows))
+    in
+    show "CHECKED" (Engine.oracle_checked_families ());
+    show "no obligation at its level" (Engine.oracle_unobliged_families ()));
   let retire_trace () =
     match Trace.permanent_ids trace with
     | [] -> ()

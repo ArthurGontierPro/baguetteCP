@@ -443,6 +443,335 @@ let check_fixpoint (t : t) (store : Store.t) : unit =
                        (Domain.change_to_string (Domain.classify ~old:e.old ~now:e.now))))))
     t.instances
 
+(* ============================================================ M2-T10: the consistency
+   oracle
+
+   docs/SPEC.md 2.2 makes the `consistency` tag normative and 3.2 spells out what a
+   propagator owes; [Propagator.consistency] makes the tag a constructor rather than a
+   string so a typo cannot claim a level. Until this function nothing anywhere CHECKED
+   the tag. The existing oracle -- test_random.ml's brute force -- checks SOUNDNESS: that
+   the answer the solver reaches agrees with enumeration of the whole declared box. A
+   propagator that prunes nothing at all is perfectly sound and passes every one of those
+   cases, while declaring [Domain]. That gap is what this closes.
+
+   ---------------------------------------------------------------------------
+   THE ASSERTION IS "AT LEAST", NEVER "EXACTLY"
+   ---------------------------------------------------------------------------
+
+   A propagator may be stronger than it declares. [Ne] is, and says so in its own header:
+   its algorithm is domain consistent for a disequality with distinct variables, and it
+   declares [Value] anyway because the level bounds what an explanation is allowed to
+   CLAIM (SPEC 3.2), and a conservative claim is the safe direction. So this function
+   never reports "stronger than declared". It reports only the one direction that is a
+   bug: a propagator that, at a fixpoint, leaves in a domain a value its own semantics
+   cannot support, while declaring a level that promised otherwise.
+
+   ---------------------------------------------------------------------------
+   WHERE THE SEMANTICS COME FROM, AND THE ONE THING THIS CANNOT SEE
+   ---------------------------------------------------------------------------
+
+   The oracle needs to know which total assignments satisfy the constraint. It does NOT
+   reimplement every constraint family to find out -- a second implementation is a second
+   thing to get wrong, and it would have to be extended by every session that adds a
+   propagator, which is exactly the discipline that let the tag go unchecked in the first
+   place. Instead it uses the propagator itself, at total assignments, where SPEC 3.2's
+   *checking* obligation pins the answer exactly:
+
+     "when all its variables are fixed, it MUST report failure iff the assignment
+      violates its constraint"
+
+   So: fix every variable of the instance's scope to a candidate tuple, run the
+   propagator, and read [Conflict] as "violates" and [Fixpoint] as "satisfies". That is a
+   total function of the propagator's own code, needs no table, and stays correct for a
+   propagator family written after this file.
+
+   The limitation is the exact dual, and it is stated here rather than discovered later:
+   **this cannot detect a wrong checking verdict.** A propagator whose total-assignment
+   answer is itself wrong is consistent with itself, and this oracle will call it
+   consistent. That failure is a SOUNDNESS failure, and soundness is what test_random.ml
+   and test_matrix.ml check against independent enumeration of the model text. The two
+   oracles are complementary and neither subsumes the other: brute force checks that the
+   propagator's semantics are right, this checks that its pruning matches its declared
+   strength given those semantics.
+
+   ---------------------------------------------------------------------------
+   WHAT EACH LEVEL OWES
+   ---------------------------------------------------------------------------
+
+   [Domain]   every remaining value of every variable in scope extends to an accepted
+              tuple over the OTHER variables' CURRENT DOMAINS. (docs/GLOSSARY.md,
+              "Domain consistent" = generalised arc consistent.)
+
+   [Bounds]   [lo] and [hi] of every variable in scope extend to an accepted tuple over
+              the other variables' INTERVALS -- [lo..hi] with holes ignored.
+
+              That relaxation is a reading, and it is the one docs/GLOSSARY.md's
+              "saying nothing about interior values" forces. It is bounds(Z), not
+              bounds(D). The difference is not cosmetic: over x,y in {0,2} with
+              x + y != 1 removed... concretely, `x + y = 1` with x,y in {0,2} has no
+              bounds(Z) pruning to make (x = 0 wants y = 1, and 1 IS in [0,2]) while
+              bounds(D) would empty both domains. [Linear], [Int_le], [Int_lt], [Pb]
+              and [Bool2int] all declare [Bounds] and all are bounds(Z); asserting
+              bounds(D) against them would report five findings that are not bugs.
+              SPEC 3.2 does not currently distinguish the two -- REPORTED, not decided
+              here (M2-T10).
+
+   [Value]    nothing. docs/GLOSSARY.md: "only ever removes values it can name, without
+              claiming anything about the values it leaves behind". A level that claims
+              nothing about what remains has no support obligation, and inventing one
+              for it would be this harness weakening a declaration into something it
+              does not say. What [Value] owes is soundness, and test_random.ml owns that.
+
+   [Checking] nothing, for the reason two sections up: the checking verdict is this
+              oracle's own axiom.
+
+   [Domain] implies bounds(Z) -- support over a subset implies support over the superset
+   -- so a [Domain] instance is checked at [Domain] only.
+
+   ---------------------------------------------------------------------------
+   COST, AND WHY IT IS GATED SEPARATELY
+   ---------------------------------------------------------------------------
+
+   Per support search the work is a product of domain sizes, and it runs per variable,
+   per value, per instance, per search node. It is brute force by construction and it is
+   exactly the shape that reaches this machine's shared 15 GB ceiling. So:
+
+     - it is behind BAGUETTE_CONSISTENCY, its own switch, not BAGUETTE_DEBUG
+       (lib/core/debug.ml says why the two are separate),
+     - every support search is bounded by [Debug.consistency_cap] tuples, and an
+       instance whose scope exceeds it is SKIPPED and COUNTED in [oracle_skipped]. A
+       skip is not a pass. A run that reports violations 0 and skips 300 has checked
+       nothing and the counters say so out loud,
+     - the scratch stores it builds are thrown away per tuple and never touch the live
+       store, its trail, its reason arena or the proof. The oracle cannot perturb the
+       search it is auditing, which also means a BAGUETTE_CONSISTENCY run answers the
+       same and emits the same proof as one without it. *)
+
+type violation = {
+  vi_id : int;
+  vi_name : string;
+  vi_declared : Propagator.consistency;
+  vi_level : string;  (** the obligation that failed: "domain" or "bounds" *)
+  vi_var : Var.t;
+  vi_var_name : string;
+  vi_value : int;
+  vi_scene : string;  (** the scope's domains as they stood, so the case is reproducible *)
+}
+
+let violation_to_string (v : violation) =
+  Printf.sprintf
+    "M2-T10: propagator #%d %s declares %s but is WEAKER than that: %s = %d survives at \
+     the fixpoint with no support.\n\
+    \  scene: %s\n\
+    \  no assignment of the other variables in scope, over %s, satisfies the constraint \
+     with %s = %d, so a %s-consistent propagator would have removed it."
+    v.vi_id v.vi_name
+    (Propagator.consistency_to_string v.vi_declared)
+    v.vi_var_name v.vi_value v.vi_scene
+    (if String.equal v.vi_level "bounds" then "their intervals" else "their domains")
+    v.vi_var_name v.vi_value v.vi_level
+
+exception Weaker_than_declared of violation
+
+(* Without this the escaping exception prints as [Weaker_than_declared(_)] and every word
+   of the message above is lost -- which is the whole value of it, since the reader is
+   looking at a crash from a search they cannot replay. Registering the printer is how a
+   payload-carrying exception stays legible when it reaches the top level. *)
+let () =
+  Printexc.register_printer (function
+    | Weaker_than_declared v -> Some (violation_to_string v)
+    | _ -> None)
+
+(* Counters, so a run can say how much it actually audited. [reset_oracle_stats] is for
+   tests that measure one scene; [propagate] never resets. *)
+let oracle_nodes = ref 0
+let oracle_checks = ref 0
+let oracle_tuples = ref 0
+let oracle_skipped = ref 0
+
+(* Per propagator FAMILY, because the totals alone cannot tell "every declared level was
+   met" from "no propagator carrying an obligation was ever reached". test_random.ml's
+   header makes this point at length and it applies here with more force: the oracle is
+   silent by construction on [Value] and [Checking], so a suite whose propagators were all
+   [Value] would report a clean audit over zero checks. The two tables below are what let
+   a reader tell the two apart -- one counts instances actually enumerated, the other
+   counts instances passed over BECAUSE THEIR LEVEL OWES NOTHING, by name and by level. *)
+let oracle_checked : (string, int) Hashtbl.t = Hashtbl.create 16
+let oracle_unobliged : (string, int) Hashtbl.t = Hashtbl.create 16
+
+let bump tbl key =
+  Hashtbl.replace tbl key (1 + Option.value ~default:0 (Hashtbl.find_opt tbl key))
+
+let histogram tbl = List.sort compare (Hashtbl.fold (fun k n acc -> (k, n) :: acc) tbl [])
+
+let reset_oracle_stats () =
+  oracle_nodes := 0;
+  oracle_checks := 0;
+  oracle_tuples := 0;
+  oracle_skipped := 0;
+  Hashtbl.reset oracle_checked;
+  Hashtbl.reset oracle_unobliged
+
+let oracle_stats () = (!oracle_nodes, !oracle_checks, !oracle_tuples, !oracle_skipped)
+let oracle_checked_families () = histogram oracle_checked
+let oracle_unobliged_families () = histogram oracle_unobliged
+
+(* The candidate values a variable offers, under the relaxation the level asks for. *)
+let oracle_values ~relaxed (d : Domain.t) =
+  if relaxed then List.init (Domain.hi d - Domain.lo d + 1) (fun i -> Domain.lo d + i)
+  else Domain.to_list d
+
+(* Does the propagator accept this total assignment of its scope?
+
+   Built on a SCRATCH store, not the live one, for three reasons that all matter. A hole
+   cannot be reached by [Store.fix] (I-D3: domains only shrink, and the bounds relaxation
+   above deliberately proposes values the live domain has removed). A [Conflict] on the
+   live store would enter its reason arena and could be read back by conflict analysis.
+   And a propagator that prunes on the way to failing would leave trail entries stamped
+   with its id at a level the search does not know about. A fresh store costs an array
+   copy per tuple and buys all three.
+
+   [with_running] because [Store.conflict] stamps [t.current_prop], and a propagator that
+   fails while nobody is marked as running would be attributed to [Store.no_prop]. *)
+let oracle_accepts (inst : Propagator.instance) ~names ~base ~(scope : Var.t array)
+    ~(tuple : int array) =
+  let domains = Array.copy base in
+  Array.iteri (fun k v -> domains.(Var.to_int v) <- Domain.singleton tuple.(k)) scope;
+  let scratch = Store.create ~names ~domains in
+  incr oracle_tuples;
+  match
+    Store.with_running scratch inst.Propagator.id (fun () -> inst.Propagator.run scratch)
+  with
+  | Propagator.Conflict _ -> false
+  | Propagator.Fixpoint -> true
+
+(* Is there an accepted tuple with [scope.(fixed_k)] held at [value]? Depth-first over
+   the other positions, stopping at the first witness. *)
+let oracle_supported inst ~names ~base ~scope ~choices ~fixed_k ~value =
+  let n = Array.length scope in
+  let tuple = Array.make n 0 in
+  tuple.(fixed_k) <- value;
+  let rec go k =
+    if k = n then oracle_accepts inst ~names ~base ~scope ~tuple
+    else if k = fixed_k then go (k + 1)
+    else
+      List.exists
+        (fun v ->
+          tuple.(k) <- v;
+          go (k + 1))
+        choices.(k)
+  in
+  go 0
+
+let oracle_scene ~names ~base ~(scope : Var.t array) =
+  String.concat ", "
+    (Array.to_list
+       (Array.map
+          (fun v ->
+            Printf.sprintf "%s in %s"
+              names.(Var.to_int v)
+              (Domain.to_string base.(Var.to_int v)))
+          scope))
+
+(* The obligation one instance carries at its declared level, or [None] for the levels
+   that carry none. [relaxed] is the bounds(Z) reading; [every_value] is the difference
+   between "all of the domain" and "just the two bounds". *)
+let oracle_obligation (c : Propagator.consistency) =
+  match c with
+  | Propagator.Domain -> Some ("domain", false, true)
+  | Propagator.Bounds -> Some ("bounds", true, false)
+  | Propagator.Value | Propagator.Checking -> None
+
+(* Check ONE instance against the store as it stands. Returns every violation found
+   rather than the first, so a report names all of them; the raising wrapper below is
+   what the gated hot path uses. *)
+let check_instance_consistency (inst : Propagator.instance) (store : Store.t) :
+    violation list =
+  match oracle_obligation inst.Propagator.inst_consistency with
+  | None ->
+      bump oracle_unobliged
+        (Printf.sprintf "%s (%s)" inst.Propagator.inst_name
+           (Propagator.consistency_to_string inst.Propagator.inst_consistency));
+      []
+  | Some (level, relaxed, every_value) ->
+      (* Dedup: a variable may appear twice in [inst_vars] (Ne's header names the case),
+         and enumerating it twice would let the oracle pick two different values for one
+         variable -- a "support" that is not an assignment at all. *)
+      let scope = Array.of_list (List.sort_uniq Var.compare inst.Propagator.inst_vars) in
+      let n = Array.length scope in
+      if n = 0 then []
+      else
+        let n_vars = Store.n_vars store in
+        let names = Array.init n_vars (fun i -> Store.name store (Var.of_int i)) in
+        let base = Array.init n_vars (fun i -> Store.get store (Var.of_int i)) in
+        let choices =
+          Array.map (fun v -> oracle_values ~relaxed base.(Var.to_int v)) scope
+        in
+        (* The budget is the largest support search this instance would run: the product
+           over all positions but the smallest. Overshooting the estimate is fine; what
+           must not happen is discovering the cost after paying it. *)
+        let sizes = Array.map List.length choices in
+        let product =
+          Array.fold_left
+            (fun acc s -> if acc > Debug.consistency_cap then acc else acc * s)
+            1 sizes
+        in
+        if product > Debug.consistency_cap then (
+          incr oracle_skipped;
+          [])
+        else (
+          incr oracle_checks;
+          bump oracle_checked (Printf.sprintf "%s (%s)" inst.Propagator.inst_name level);
+          let scene = oracle_scene ~names ~base ~scope in
+          let out = ref [] in
+          Array.iteri
+            (fun k v ->
+              let d = base.(Var.to_int v) in
+              let probes =
+                if every_value then Domain.to_list d
+                else if Domain.is_fixed d then [ Domain.lo d ]
+                else [ Domain.lo d; Domain.hi d ]
+              in
+              List.iter
+                (fun value ->
+                  if
+                    not
+                      (oracle_supported inst ~names ~base ~scope ~choices ~fixed_k:k
+                         ~value)
+                  then
+                    out :=
+                      {
+                        vi_id = inst.Propagator.id;
+                        vi_name = inst.Propagator.inst_name;
+                        vi_declared = inst.Propagator.inst_consistency;
+                        vi_level = level;
+                        vi_var = v;
+                        vi_var_name = names.(Var.to_int v);
+                        vi_value = value;
+                        vi_scene = scene;
+                      }
+                      :: !out)
+                probes)
+            scope;
+          List.rev !out)
+
+(* Every instance, against the store as it stands. The caller is responsible for calling
+   this AT A FIXPOINT: mid-pass the answer is meaningless, because a propagator that has
+   not been woken yet has not been given the chance the level promises. *)
+let check_consistency (t : t) (store : Store.t) : violation list =
+  incr oracle_nodes;
+  Array.fold_left
+    (fun acc inst -> acc @ check_instance_consistency inst store)
+    [] t.instances
+
+(* The gated hot-path form: first violation raises, with the scene in the message. Same
+   shape as [check_fixpoint] and for the same reason -- what it reports is something
+   nobody would otherwise notice, so it must not be quiet and recoverable. *)
+let check_consistency_exn (t : t) (store : Store.t) : unit =
+  match check_consistency t store with
+  | [] -> ()
+  | v :: _ -> raise (Weaker_than_declared v)
+
 (* Run every propagator to a joint fixpoint (invariant I-P2): a FIFO queue seeded with
    every instance, so nothing is skipped on the first pass, and thereafter re-fed only
    by the watchers of variables a run actually changed. *)
@@ -490,4 +819,15 @@ let propagate (t : t) (store : Store.t) : outcome =
            return: I-P2 says nothing about a [Conflict], and re-running propagators
            against a store that has already failed would be meaningless. *)
         if Debug.enabled then check_fixpoint t store;
+        (* M2-T10. Here and not in [Search]: "at a fixpoint" is a property this loop
+           knows and its caller can only assume, and this is the same return that I-P2
+           is checked on, for the same reason -- both are statements about the state the
+           engine has just finished producing. [Search] calls [propagate] exactly once
+           per node (see its [dfs]), so a per-fixpoint check IS a per-node check, and
+           the node count [oracle_nodes] reports is the search's own.
+
+           Not on the [Conflict] arm: a failed store is not a fixpoint, the domains are
+           whatever the failing propagator left behind, and "every remaining value has a
+           support" is not a claim any level makes about a scene with no solutions. *)
+        if Debug.consistency_enabled then check_consistency_exn t store;
         Fixpoint
