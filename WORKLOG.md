@@ -10,6 +10,41 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
+**Wave twenty is running: M2-L15 (agent-backjump) and M3-T2+M3-T4 (agent-reif).**
+
+**Two verticals, split by directory rather than by file this time.**
+
+**agent-backjump holds the LEARNING vertical**: `lib/core/{learn,pb_analysis,analysis,learned,
+retention,search}.ml` and `test/unit/{test_learn,test_analysis,test_pb,test_retention,
+test_ladder}.ml`. M2-L15 redoes the backjump calculation that M2-L13 invalidated —
+`pb_analysis.ml:757` hands it on by name.
+
+**agent-reif holds the REIFICATION vertical**: `lib/core/prop/**`, `lib/core/dune`,
+`lib/proof/**`, `lib/flatzinc/**`, `test/models/**`, `test/expected/**` and
+`test/unit/{test_proof,test_prop,test_compile,test_flatzinc,test_endtoend}.ml`. M3-T2 and
+M3-T4 go together because M3-T2's own row says to build it **through** M3-T4's dispatcher
+rather than writing five cases twice.
+
+**Where they could collide, and the rules that stop it:**
+
+- **`lib/core/dune`** is agent-reif's (it adds modules; agent-backjump adds none). If
+  agent-backjump needs a new module, it says so and I arbitrate.
+- **`lib/core/explanation.ml` is NEITHER agent's.** Its header forbids a new constructor
+  without a decision record and that is not suspended. If reified justification wants one,
+  route it to me.
+- **`lib/core/prop/pb.ml` is agent-reif's by directory but agent-backjump's by subject.**
+  Resolved: **agent-reif does not touch `pb.ml`, `clause.ml` or `linear.ml`** — it adds
+  reified propagators beside them. Agent-backjump may read all three and edit none.
+- **Node counts will move under both.** Neither may assert a suite-wide node total; the
+  current figure is **479 over 44 models** and it is agent-backjump's to move.
+
+**Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `dune-project`,
+`scripts/**`, `bench/**` and all merging, as standing.
+
+Wave nineteen (M2-L13, M2-L14) is merged, released and pushed; gate re-verified on `main`
+after the merge: **2256 ok / 0 FAIL, 280 matrix, 44 mutation, 44/44 models, `check: ok`**.
+
+
 **Wave nineteen is COMPLETE: M2-L13 and M2-L14 merged, released and pushed. Every file is free.**
 
 **Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `dune-project`,
