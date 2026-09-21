@@ -2677,7 +2677,6 @@ let test_view_veripb () =
       |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
       try Sys.rmdir dir with _ -> ())
 
-
 (* ------------------------------------------------------------------ *)
 (* M5-T1/M5-T2: optimisation                                           *)
 (*                                                                     *)
@@ -2688,8 +2687,8 @@ let test_view_veripb () =
 (*                                                                     *)
 (*   - `conclusion BOUNDS <lo>` is CHECKED. The project has been bitten *)
 (*     three times by a step the checker accepts whatever it derives    *)
-(*     (a `pol` under a clause-borne refutation), so "veripb said       *)
-(*     VERIFIED BOUNDS" is worth nothing until the claim has been shown *)
+(* (a `pol` under a clause-borne refutation), so "veripb said       *)
+   (*     VERIFIED BOUNDS" is worth nothing until the claim has been shown *)
 (*     to redden when the derivation is removed and when it is one unit *)
 (*     short. Both breaks are performed below.                         *)
 (*   - a `soli` constraint is NOT ours to delete, and the deletion is   *)
@@ -2732,7 +2731,7 @@ let test_m5_bounds_and_soli () =
       print_endline
         "FAIL M5: veripb not found -- `conclusion BOUNDS` was NOT checked, and neither \
          were its breaks. A missing checker is a failure, never a skip."
-  | Some checker ->
+  | Some checker -> (
       let dir = Filename.temp_file "baguette_m5" "" in
       Sys.remove dir;
       Sys.mkdir dir 0o700;
@@ -2781,7 +2780,8 @@ let test_m5_bounds_and_soli () =
       let ok, out = run "undeduced" "" "conclusion BOUNDS 2 2 ;" ~flags:"" in
       check "M5 BREAK: an underived lower bound is REFUSED" (not ok);
       check "M5 BREAK: ... on the judgement, at full strength"
-        (says out "Constraint not syntactically implied by any constraint in the database.");
+        (says out
+           "Constraint not syntactically implied by any constraint in the database.");
       (* BREAK 2: a derivation that is sound but one unit short, cited for the stronger
          claim. This is the break that distinguishes "the id is read" from "an id is
          present": break 1 alone would still pass if the checker merely searched the
@@ -2791,7 +2791,8 @@ let test_m5_bounds_and_soli () =
         (not ok);
       check "M5 BREAK: ... naming the hint, at full strength"
         (says out
-           "Expected constraint is not syntactically implied by the constraint at the hint.");
+           "Expected constraint is not syntactically implied by the constraint at the \
+            hint.");
       (* BREAK 3: claiming a better optimum than was ever exhibited. *)
       let ok, out = run "too_good" lb "conclusion BOUNDS 3 : @lb 3 ;" ~flags:"" in
       check "M5 BREAK: a lower bound above the best logged solution is REFUSED" (not ok);
@@ -2806,11 +2807,12 @@ let test_m5_bounds_and_soli () =
          --force-checked-deletion it is a hard failure. *)
       let body = lb ^ "\ndel id @s1 ;" in
       let ok, out = run "del_soli" body "conclusion BOUNDS 2 : @lb 2 ;" ~flags:"" in
-      check "M5: deleting the soli constraint still 'verifies' -- an acceptance that is \
-             not evidence" ok;
+      check
+        "M5: deleting the soli constraint still 'verifies' -- an acceptance that is not \
+         evidence"
+        ok;
       check "M5 BREAK: ... but the checker says the guarantee was weakened"
-        (says out
-           "Switching from stronger to weaker guarantee using unchecked deletion");
+        (says out "Switching from stronger to weaker guarantee using unchecked deletion");
       let ok, out = run "del_soli_c" body "conclusion BOUNDS 2 : @lb 2 ;" ~flags:"-c" in
       check "M5 BREAK: and under --force-checked-deletion it is REFUSED" (not ok);
       check "M5 BREAK: ... at full strength"
@@ -2854,7 +2856,7 @@ let test_m5_bounds_and_soli () =
       List.iter
         (fun f -> try Sys.remove f with _ -> ())
         (List.map (Filename.concat dir) (Array.to_list (Sys.readdir dir)));
-      (try Sys.rmdir dir with _ -> ())
+      try Sys.rmdir dir with _ -> ())
 
 (* Nothing in lib/ or bin/ emits `obju`. The trap above is avoided by construction, and
    this is what keeps that true: [Writer.objective_update] is kept because it carries the
@@ -2892,7 +2894,8 @@ let test_m5_no_obju_caller () =
         let tmp = Filename.temp_file "baguette_obju" "" in
         ignore
           (Sys.command
-             (Printf.sprintf "grep -rn 'objective_update' %s/lib %s/bin 2>/dev/null %s > %s"
+             (Printf.sprintf
+                "grep -rn 'objective_update' %s/lib %s/bin 2>/dev/null %s > %s"
                 (Filename.quote root) (Filename.quote root) pat (Filename.quote tmp)));
         let s = read_whole tmp in
         (try Sys.remove tmp with _ -> ());

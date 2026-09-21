@@ -386,7 +386,6 @@ let test_proof_comments_noop () =
   check "end-to-end: --proof-comments is still a no-op on a real model (M1-T48)"
     (without = with_)
 
-
 (* --------------------------------------------------------------- M5-T1/M5-T2
 
    Branch and bound, end to end and through the REAL front end: FlatZinc text ->
@@ -433,7 +432,10 @@ let fz_optimisation_model =
 
 let count_substring hay needle =
   let hl = String.length hay and nl = String.length needle in
-  let rec go i n = if i + nl > hl then n else go (i + 1) (if String.sub hay i nl = needle then n + 1 else n) in
+  let rec go i n =
+    if i + nl > hl then n
+    else go (i + 1) (if String.sub hay i nl = needle then n + 1 else n)
+  in
   if nl = 0 then 0 else go 0 0
 
 (* Every constraint id named by a `del` line, with repeats kept -- a `del range LO HI`
@@ -446,15 +448,26 @@ let deleted_ids proof =
       let line = String.trim line in
       let words = String.split_on_char ' ' line |> List.filter (fun w -> w <> "") in
       let label w =
-        let w = if String.length w > 0 && w.[String.length w - 1] = ';' then String.sub w 0 (String.length w - 1) else w in
-        if String.length w > 2 && String.sub w 0 2 = "@c" then int_of_string_opt (String.sub w 2 (String.length w - 2))
+        let w =
+          if String.length w > 0 && w.[String.length w - 1] = ';' then
+            String.sub w 0 (String.length w - 1)
+          else w
+        in
+        if String.length w > 2 && String.sub w 0 2 = "@c" then
+          int_of_string_opt (String.sub w 2 (String.length w - 2))
         else int_of_string_opt w
       in
       match words with
-      | "del" :: "id" :: rest -> List.iter (fun w -> match label w with Some i -> ids := i :: !ids | None -> ()) rest
+      | "del" :: "id" :: rest ->
+          List.iter
+            (fun w -> match label w with Some i -> ids := i :: !ids | None -> ())
+            rest
       | "del" :: "range" :: a :: b :: _ -> (
           match (label a, label b) with
-          | Some lo, Some hi -> for i = lo to hi - 1 do ids := i :: !ids done
+          | Some lo, Some hi ->
+              for i = lo to hi - 1 do
+                ids := i :: !ids
+              done
           | _ -> ())
       | _ -> ())
     (String.split_on_char '\n' proof);
@@ -482,15 +495,15 @@ let test_m5_branch_and_bound () =
     | None -> failwith "test_m5: Compile did not resolve `solve minimize y;`"
   in
   let printed = ref 0 in
+  let stats = Search.stats_create () in
   let check_asn assignment =
     let values = Array.make (Baguette_flatzinc.Model.nvars m) 0 in
     List.iter (fun (v, x) -> values.(Var.to_int v) <- x) assignment;
     Baguette_flatzinc.Model.check_assignment m values
   in
   let outcome =
-    Search.optimise
-      ~engine:compiled.Baguette_flatzinc.Compile.engine
-      ~store ~ctx ~check:check_asn ~objective
+    Search.optimise ~engine:compiled.Baguette_flatzinc.Compile.engine ~store ~ctx
+      ~check:check_asn ~objective ~stats
       ~on_solution:(fun _ -> incr printed)
       ()
   in
@@ -516,10 +529,10 @@ let test_m5_branch_and_bound () =
   let rec has_dup = function a :: (b :: _ as r) -> a = b || has_dup r | _ -> false in
   check "M5 e2e: no constraint id is deleted twice across the whole run (I-X2)"
     (not (has_dup sorted));
-  check "M5 e2e: there was something to check -- the run did delete ids"
-    (deleted <> []);
+  check "M5 e2e: there was something to check -- the run did delete ids" (deleted <> []);
   (* The `soli` ids: one per improving solution, none of them deleted. *)
-  check "M5 e2e: one objective id per improving solution, recorded apart from the live set"
+  check
+    "M5 e2e: one objective id per improving solution, recorded apart from the live set"
     (List.length objective_ids = 2);
   check "M5 e2e: `soli` appears once per improving solution in the proof"
     (count_substring proof "soli " = 2);
@@ -556,6 +569,40 @@ let test_m5_branch_and_bound () =
         "M5 e2e: the cited lower-bound id is NOT deleted -- it is discharged by the \
          conclusion (PROOF-FORMAT section 5), asserted rather than assumed"
         (List.for_all (fun id -> not (List.mem id deleted)) cited));
+  (* I-X4: THE PROOF IS APPEND-ONLY AND NEVER REWOUND. Branch and bound re-solves under a
+     tightened bound, and the hazard the invariant names is that the re-solve becomes
+     truncation -- a second pass overwriting the first pass's lines, or reusing its ids.
+     Neither can happen here, because the bound is installed on the node the search is
+     standing on and the search simply carries on; but "cannot happen" is what the two
+     halves of this suite exist to stop anyone from having to take on trust. The
+     observable form is that ids are minted strictly increasing and each is defined
+     exactly once: a rewind would show up as a repeat or a decrease. *)
+  let minted =
+    List.filter_map
+      (fun l ->
+        match String.split_on_char ' ' (String.trim l) with
+        | lbl :: _ when String.length lbl > 2 && String.sub lbl 0 2 = "@c" ->
+            int_of_string_opt (String.sub lbl 2 (String.length lbl - 2))
+        | _ -> None)
+      (String.split_on_char '\n' proof)
+  in
+  let rec increasing = function
+    | a :: (b :: _ as r) -> a < b && increasing r
+    | _ -> true
+  in
+  check
+    "M5 e2e: constraint ids are minted strictly increasing across the whole run -- the \
+     proof is append-only and no re-solve rewound it (I-X4)"
+    (minted <> [] && increasing minted);
+  (* SPEC 3.4 fixes the search as depth-first with RESTARTS DISABLED, and a re-solve
+     under a tightened bound is the obvious place to have smuggled one in. M1-T36's
+     identity is what says none was: on an exhausted tree nodes = 2 * decisions + 1 -
+     skipped exactly, which can only hold if every node was dispatched once. A restart
+     would re-walk a prefix of the tree and break it. *)
+  check
+    "M5 e2e: nodes = 2 * decisions + 1 - skipped on the exhausted tree -- the re-entry \
+     at a solution node is not a restart (SPEC 3.4)"
+    (Search.stats_consistent stats ~exhausted:true);
   (* And the product: the checker's verdict, under checked deletion, so that none of the
      above rests on an acceptance bought with a weakened guarantee. *)
   (match veripb_path () with
@@ -586,8 +633,6 @@ let test_m5_branch_and_bound () =
     (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ())
     (Array.to_list (Sys.readdir dir));
   try Sys.rmdir dir with _ -> ()
-
-
 
 (* ------------------------------------------------- M5: IS THE DERIVATION LOAD-BEARING?
 
@@ -643,9 +688,9 @@ let m5_emit dir name src =
     Baguette_flatzinc.Model.check_assignment m values
   in
   let outcome =
-    Search.optimise
-      ~engine:compiled.Baguette_flatzinc.Compile.engine
-      ~store ~ctx ~check:check_asn ~objective ~on_solution:(fun _ -> ())
+    Search.optimise ~engine:compiled.Baguette_flatzinc.Compile.engine ~store ~ctx
+      ~check:check_asn ~objective
+      ~on_solution:(fun _ -> ())
       ()
   in
   close_out oc;
@@ -686,7 +731,7 @@ let test_m5_derivation_is_load_bearing () =
       print_endline
         "FAIL M5 load-bearing: veripb not found, so NOTHING about the objective \
          derivation was established. A missing checker is a failure, never a skip."
-  | Some checker ->
+  | Some checker -> (
       let dir = Filename.temp_file "baguette_m5_lb" "" in
       Sys.remove dir;
       Sys.mkdir dir 0o700;
@@ -694,11 +739,15 @@ let test_m5_derivation_is_load_bearing () =
       let opb, _pbp, proof, _ = m5_emit dir "bb" fz_optimisation_model in
       let lines = String.split_on_char '\n' proof in
       let f_line =
-        List.find_opt (fun l -> String.length l > 1 && String.sub (String.trim l) 0 2 = "f ") lines
+        List.find_opt
+          (fun l -> String.length l > 1 && String.sub (String.trim l) 0 2 = "f ")
+          lines
       in
       let conclusion =
         List.find_opt
-          (fun l -> String.length (String.trim l) > 10 && String.sub (String.trim l) 0 10 = "conclusion")
+          (fun l ->
+            String.length (String.trim l) > 10
+            && String.sub (String.trim l) 0 10 = "conclusion")
           lines
       in
       (* Which id does the conclusion cite, and WHAT MINTED IT -- read back out of the
@@ -706,17 +755,20 @@ let test_m5_derivation_is_load_bearing () =
       let cited =
         match conclusion with
         | None -> None
-        | Some l ->
+        | Some l -> (
             String.split_on_char ' ' (String.trim l)
             |> List.filter_map (fun w ->
                    if String.length w > 2 && String.sub w 0 2 = "@c" then
                      int_of_string_opt (String.sub w 2 (String.length w - 2))
                    else None)
-            |> function id :: _ -> Some id | [] -> None
+            |> function
+            | id :: _ -> Some id
+            | [] -> None)
       in
       let minted_by id =
         List.find_map
-          (fun l -> match m5_minted l with Some (i, r) when i = id -> Some r | _ -> None)
+          (fun l ->
+            match m5_minted l with Some (i, r) when i = id -> Some r | _ -> None)
           lines
       in
       (match cited with
@@ -799,14 +851,18 @@ let test_m5_derivation_is_load_bearing () =
       let cited2 =
         List.find_map
           (fun l ->
-            if String.length (String.trim l) > 10 && String.sub (String.trim l) 0 10 = "conclusion"
+            if
+              String.length (String.trim l) > 10
+              && String.sub (String.trim l) 0 10 = "conclusion"
             then
               String.split_on_char ' ' (String.trim l)
               |> List.filter_map (fun w ->
                      if String.length w > 2 && String.sub w 0 2 = "@c" then
                        int_of_string_opt (String.sub w 2 (String.length w - 2))
                      else None)
-              |> function id :: _ -> Some id | [] -> None
+              |> function
+              | id :: _ -> Some id
+              | [] -> None
             else None)
           lines2
       in
@@ -817,7 +873,8 @@ let test_m5_derivation_is_load_bearing () =
       | Some id ->
           check "M5: the INF conclusion's cited id was minted by a `pol`"
             (List.find_map
-               (fun l -> match m5_minted l with Some (i, r) when i = id -> Some r | _ -> None)
+               (fun l ->
+                 match m5_minted l with Some (i, r) when i = id -> Some r | _ -> None)
                lines2
             = Some "pol");
           (* BREAK 3: corrupt that `pol` so it derives something sound but NOT a
@@ -832,7 +889,7 @@ let test_m5_derivation_is_load_bearing () =
                        longer a contradiction. *)
                     match String.split_on_char ' ' (String.trim l) with
                     | lbl :: "pol" :: a :: _ :: rest ->
-                        String.concat " " ((lbl :: "pol" :: a :: a :: rest))
+                        String.concat " " (lbl :: "pol" :: a :: a :: rest)
                     | _ -> l)
                 | _ -> l)
               lines2
@@ -849,8 +906,7 @@ let test_m5_derivation_is_load_bearing () =
       List.iter
         (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ())
         (Array.to_list (Sys.readdir dir));
-      try Sys.rmdir dir with _ -> ()
-
+      try Sys.rmdir dir with _ -> ())
 
 let () =
   print_endline "";

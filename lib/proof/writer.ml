@@ -329,6 +329,7 @@ let live_ids t = Hashtbl.fold (fun id _ acc -> id :: acc) t.live [] |> List.sort
    inferring it from the absence of a `del`. *)
 let objective_ids t =
   Hashtbl.fold (fun id _ acc -> id :: acc) t.objective [] |> List.sort compare
+
 let is_live t id = Hashtbl.mem t.live id
 
 (* The proof is append-only and is never rewound (invariant I-X4); once [conclusion]

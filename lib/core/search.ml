@@ -2454,7 +2454,9 @@ let optimise ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
   retire_learned ctx stats;
   retire_trace ctx trace;
   let sweep_all_but keep =
-    match List.filter (fun id -> Some id <> keep) (Writer.live_ids ctx.Justify.writer) with
+    match
+      List.filter (fun id -> Some id <> keep) (Writer.live_ids ctx.Justify.writer)
+    with
     | [] -> ()
     | ids -> Writer.delete_many ctx.Justify.writer ids
   in
