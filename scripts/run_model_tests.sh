@@ -38,6 +38,25 @@ is_pending() {
     | awk '{print $1}' | grep -qx "$1"
 }
 
+# M4-T1 found a PENDING line naming a model that does not exist -- written while the
+# model was planned, left behind when the reproducer became a unit check instead. Nothing
+# complained, because an entry that matches no model simply never fires. That is the same
+# silently-inert-config shape this project keeps meeting, so it is now an error: a PENDING
+# entry is a claim about a model, and a claim about a model that is not there is stale.
+check_pending_entries() {
+  [ -f "${PENDING}" ] || return 0
+  local missing=0 m
+  for m in $(grep -v '^[[:space:]]*#' "${PENDING}" 2>/dev/null | awk '{print $1}'); do
+    [ -n "${m}" ] || continue
+    if [ ! -f "${ROOT}/test/models/${m}.fzn" ]; then
+      echo "FAIL test/models/PENDING lists \`${m}\`, but test/models/${m}.fzn does not exist."
+      echo "     A PENDING entry is a claim about a model. Delete the line, or add the model."
+      missing=$((missing + 1))
+    fi
+  done
+  [ "${missing}" -eq 0 ]
+}
+
 pending_reason() {
   grep -v '^[[:space:]]*#' "${PENDING}" 2>/dev/null \
     | awk -v m="$1" '$1 == m { $1 = ""; sub(/^ +/, ""); print }'
@@ -136,11 +155,14 @@ echo
 echo "model tests: ${pass} passed, ${fail} failed, ${xfail} expected-fail, ${xpass} unexpected-pass, ${skip} skipped"
 
 if [ "${xfail}" -gt 0 ]; then
+
   echo "  ${xfail} model(s) are listed in test/models/PENDING and are not yet expected to"
   echo "  work. That file should be empty by M1-T11."
 fi
 if [ "${xpass}" -gt 0 ]; then
   echo "  ${xpass} model(s) pass but are still listed in test/models/PENDING. Remove them."
 fi
+
+check_pending_entries || fail=$((fail + 1))
 
 [ "${fail}" -eq 0 ] && [ "${xpass}" -eq 0 ]

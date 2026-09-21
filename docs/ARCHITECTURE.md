@@ -83,6 +83,10 @@ lib/core/       Baguette_core
                             MODEL: guarded linear rows over M3-reified Booleans, so every
                             pruning is Linear's and no Explanation constructor was needed
                             (M4-T4b, D-0060)
+    alldiff.ml              all_different_int, BOUNDS consistent, with the multi-row Hall
+                            justification. Stage 1 of two; M4-T2 sequences beside it.
+                            The row that proved Combine/Weaken/Model_row carry a real
+                            global (M4-T1, D-0061)
     linear.ml               int_lin_le. THE REFERENCE PROPAGATOR -- copy this shape
     lin_eq.ml               int_lin_eq (two model rows, see D-0011)
     ne.ml                   int_lin_ne and int_ne (VALUE consistency)

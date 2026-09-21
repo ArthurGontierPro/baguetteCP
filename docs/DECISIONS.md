@@ -4297,3 +4297,99 @@ instruction.
 fails on a non-zero exit, so a model listed as an expected failure still turns the determinism
 gate red. That is why the reproducer above had to be a unit check rather than a model, and it
 means PENDING is **currently unusable for any model that errors**.
+
+> **UPDATE 2026-09-21 (M4-T1, D-0061): the prediction above has landed.** `all_different` is
+> in, and the `Bounds`/`Domain` tag now **does** separating work — the oracle is clean at
+> `Bounds` and fires on a `Domain` flip with *"z = 1 survives at the fixpoint with no support"*.
+> Lane 9's argument no longer covers everything that ships, which is what it was pinned to
+> detect.
+
+## D-0061  The Hall derivation: the ADT carried it, and the one place it could not
+
+**Status**: **ACCEPTED**, implemented by M4-T1 (2026-09-21, agent-hall), `lib/core/prop/alldiff.ml`.
+`docs/EXPLANATION-REVIEW.md` §3 called this the row where the project's central claim first
+becomes falsifiable. **It was not falsified — with one honest exception, recorded below.**
+
+### The claim held: no new constructor
+
+**`lib/core/explanation.ml` and `lib/core/justify.ml` are both untouched.** `Combine`, `Weaken`
+and `Model_row` carried a derivation citing many model rows in one tree — exactly what D-0015
+built them for and D-0027 permitted. *Anticipation became evidence.*
+
+**`Combine`'s divisor is load-bearing, not decoration.** The m-ary at-most-one is built by
+induction as `((m−1)·A + m pairs) ÷ m`, because summing all pairs and dividing by `m−1` gives
+degree `⌈m/2⌉`, not `m−1`. `pair_amo` (`alldiff.ml:238`) recovers a per-value at-most-one from
+5 ids and `2d`.
+
+**Verified rather than reported**: `conclusion UNSAT : @c32`, and `@c32` really is
+`pol @c22 @c23 + @c27 + @c31 + @c18 + @c20 +` — six ids combined — with the checker answering
+`s VERIFIED UNSATISFIABLE`.
+
+### Where it creaked, and this is the finding
+
+> **The ADT can *name* a constraint id but cannot *ask* for one.**
+
+A Hall derivation over variables whose bounds have **moved** carries those bounds into the
+derived row as literals. Cancelling them needs *"the id of the line that establishes this bound
+fact"* — **D-0009's open gap verbatim**, with `Justify.defining_lit` sitting there as the lookup
+that still has **no caller**, because nothing in an `Explanation.t` *value* can request one.
+
+Citing the trail entry the way `Linear` does is **not** a substitute: a cited `Linear`
+explanation derives a row in the **ladder currency** (D-0010, `ladder.ml`), not the unit
+`x_ge_c >= 1` the counting needs.
+
+The stand-in is `Explanation.clause [lit]`, resolved through M2-T9's claim index to the trace
+line already stating that bound, minting nothing. **It is sound only at level 0**, and it makes
+the derivation rest on a clause — so `Search.rests_on_a_clause` routes that root conflict the
+D-0022 way and **the Hall `pol` is decorative for that one conflict** (`alldiff.ml:346`,
+`moved_bound_cancels`). Both cases are pinned by tests: `alldiff_hall_unsat` cites the `pol`,
+`alldiff_hall_moved_unsat` cites `rup >= 1`.
+
+**This is the concrete, costed case for closing D-0009** that the gap has lacked since it was
+opened.
+
+### Two design choices that exist because of earlier findings
+
+**The `.opb` posts `all_different` as pairwise disequality clause rows over order literals, not
+big-M rows** — and the reason is not size. It is that the at-most-one recovery must be a `pol`.
+A `rup` recovery also works, **and would make every `pol` in the file decorative**, which is
+exactly what D-0057 and D-0060 found twice by accident. Applied in advance this time.
+
+**`Trace.derive_ahead`** (`trace.ml:487`) is D-0040's own remedy implemented: a landed Hall
+pruning's trace line `rup +1 z_ge_3 +1 x_ge_3 +1 y_ge_3 >= 1` is **not RUP** — measured, the
+checker rejected it — and D-0040 says to emit the derivation as explicit `pol` lines ahead of
+it. Only `Trace` can. Gated on `Encoding.has_direct`, which over-triggers deliberately rather
+than threading a per-entry flag four modules must agree about.
+
+**Cost on pre-M4 proofs: zero.** All 64 pre-existing models byte-identical, with genuinely
+different binaries (`ca9ececce6` vs `81c8a6db64`).
+
+### D-0059's prediction lands
+
+D-0059 recorded that the `Bounds`/`Domain` tag **did no separating work**, because every
+`Bounds` instance was a single linear inequality — and named `all_different` as where that would
+change. **It has.** The oracle is clean at `Bounds` (`all_different_int (bounds) x7`, 0
+violations, 0 skips, re-verified here), and flipping the declaration to `Domain` with nothing
+else changed makes it fire: *"declares domain but is WEAKER than that: z = 1 survives at the
+fixpoint with no support."*
+
+### What this leaves for D-0004, which stays OPEN
+
+- Bounds consistency achieved and oracle-verified; stage 1 only, `propagate` is where M4-T2's
+  matching pass sequences.
+- The derivation shape, and that **no constructor was needed**.
+- **The ADT gap above** — the strongest argument yet for closing D-0009.
+- **The Hall *interval* is not chosen for size.** `contained` returns exactly the saturating set,
+  so no variable is named that the counting does not need — but the scan is `a` ascending then
+  `b` ascending and returns on the first push, so among several tight intervals it takes the
+  **lexicographically first, not the narrowest**. That is a size/quality lever nobody has
+  measured, and `EXPLANATION-REVIEW.md` §6 says it is exactly where the choice of Hall set is
+  the whole game.
+
+### A cost note for D-0028
+
+The direct-encoding preamble is **`3·n·w` `red` lines** (n = scope size, w = declared width):
+measured at 3 variables, w=2 → 32 `.pbp` lines, w=8 → 79. `max_direct_values = 100_000` is
+unreachable through the CLI because `max_order_width = 10_000` refuses first — but an
+`all_different` over a 10 000-wide declared domain would still write ~30 000 `red` lines **per
+variable**. **Nobody has decided whether a global should carry a tighter cap.**

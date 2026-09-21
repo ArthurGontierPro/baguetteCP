@@ -19,4 +19,3 @@
 # path. The fix is in lib/core/search.ml, which M4-T4b did not own; it was applied
 # locally and MEASURED (2427 unit checks ok, 64/64 models, this model's proof VERIFIED
 # SATISFIABLE), then reverted. Delete this line with the fix.
-arith_times_hole_sat  lib/core/search.ml NSat arm leaks level-0 pol intermediates (I-X2)
