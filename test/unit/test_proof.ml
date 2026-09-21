@@ -1850,6 +1850,83 @@ let test_reif_rows () =
     ~expected:"+2 r_ge_1 +1 x_ge_1 +1 x_ge_2 +1 x_ge_3 >= 2 ;"
     ~got:(Opb.constr_to_string bwd)
 
+(* ------------------------------------------------------------------ *)
+(* M3-T2: the SAME two rows, posted as ordinary int_lin_le rows        *)
+(*                                                                    *)
+(* lib/proof/encoding.ml's [add_int_lin_le_reif_rows] exists because a *)
+(* propagator cannot cite a row it cannot reproduce: [Linear] rebuilds *)
+(* its row from integer terms and a right-hand side (M2-L6), not from  *)
+(* literals. Its header claims the big-M form IS [reif_rows]'s pair.   *)
+(* This performs that claim instead of leaving it to be believed -- if *)
+(* the two ever drift, the .opb door would be saying two different     *)
+(* things, which is exactly what [reif_rows] was made pure and shared  *)
+(* to prevent.                                                        *)
+(* ------------------------------------------------------------------ *)
+
+(* A normalised row as a canonical string: the term ORDER differs between the two
+   constructions ([reif_rows] puts the reifier first, [expand_int_lin_le] appends its
+   rungs last) and a row is a sum, so order is not part of what is being compared. *)
+let canonical c =
+  let c = Opb.normalise c in
+  let terms =
+    List.sort compare
+      (List.map (fun (a, l) -> Printf.sprintf "%+d %s" a (Lit.to_string l)) (Opb.terms c))
+  in
+  String.concat " " terms ^ Printf.sprintf " >= %d ;" (Opb.rhs c)
+
+let same_rows name ~domains ~terms ~rhs =
+  (* Door one: [reif_rows], over the condition as literals. *)
+  let a = Encoding.create () in
+  List.iter (fun (x, lo, hi) -> Encoding.declare_int a x ~lo ~hi) domains;
+  Encoding.declare_bool a "r";
+  let fwd, bwd =
+    Encoding.reif_rows ~reifier:"r" ~cond:(Encoding.expand_int_lin_le a terms rhs)
+  in
+  (* Door two: the big-M rows M3-T2 posts, read back out of the encoding they were
+     committed to. *)
+  let b = Encoding.create () in
+  List.iter (fun (x, lo, hi) -> Encoding.declare_int b x ~lo ~hi) domains;
+  Encoding.declare_bool b "r";
+  let k_fwd, k_bwd = Encoding.reif_big_m b terms rhs in
+  let neg = List.map (fun (c, x) -> (-c, x)) terms in
+  let big_fwd = Encoding.expand_int_lin_le b (terms @ [ (k_fwd, "r") ]) (rhs + k_fwd) in
+  let big_bwd = Encoding.expand_int_lin_le b (neg @ [ (-k_bwd, "r") ]) (-rhs - 1) in
+  check_eq (name ^ " (FWD)") ~expected:(canonical fwd) ~got:(canonical big_fwd);
+  check_eq (name ^ " (BWD)") ~expected:(canonical bwd) ~got:(canonical big_bwd)
+
+let test_reif_big_m_rows () =
+  same_rows "reif big-M: r <-> x <= 1, x in [0,3]"
+    ~domains:[ ("x", 0, 3) ]
+    ~terms:[ (1, "x") ]
+    ~rhs:1;
+  same_rows "reif big-M: r <-> x + y <= 2"
+    ~domains:[ ("x", 0, 2); ("y", 0, 2) ]
+    ~terms:[ (1, "x"); (1, "y") ]
+    ~rhs:2;
+  same_rows "reif big-M: r <-> 2x - y <= 1, mixed signs"
+    ~domains:[ ("x", 0, 2); ("y", 0, 2) ]
+    ~terms:[ (2, "x"); (-1, "y") ]
+    ~rhs:1;
+  same_rows "reif big-M: r <-> x - y <= -1, domain not starting at 0"
+    ~domains:[ ("x", -1, 2); ("y", 1, 3) ]
+    ~terms:[ (1, "x"); (-1, "y") ]
+    ~rhs:(-1);
+  (* The big-Ms themselves, by eye against the header: x <= 1 over [0,3] has span
+     (0, 3), so K = hi - rhs = 2 and K' = rhs + 1 - lo = 2 -- and those are the k and
+     A-k+1 that [test_reif_rows] reads off the rendered pair above. *)
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:0 ~hi:3;
+  Encoding.declare_bool e "r";
+  let k_fwd, k_bwd = Encoding.reif_big_m e [ (1, "x") ] 1 in
+  check "reif big-M: the two constants are the smallest that work"
+    (k_fwd = 2 && k_bwd = 2);
+  (* A condition the declared domains already settle is not a reification, and the
+     big-M door refuses it on the same terms [reif_rows] does. *)
+  raises "reif big-M: an entailed condition is refused as constant" (fun () ->
+      Encoding.add_int_lin_le_reif_rows e [ (1, "x") ] 3 ~reifier:"r");
+  raises "reif big-M: a refuted condition is refused as constant" (fun () ->
+      Encoding.add_int_lin_le_reif_rows e [ (1, "x") ] (-1) ~reifier:"r")
+
 let test_reif_preconditions () =
   let e = Encoding.create () in
   Encoding.declare_int e "x" ~lo:0 ~hi:3;
@@ -2330,6 +2407,7 @@ let () =
   test_pol_states_its_conclusion ();
   test_learned_survives_the_backjump ();
   test_reif_rows ();
+  test_reif_big_m_rows ();
   test_reif_preconditions ();
   test_reif_emitted_text ();
   test_reif_veripb ();

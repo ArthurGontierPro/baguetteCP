@@ -88,10 +88,17 @@
    IDEMPOTENCE AT THE INTERFACE (I-P3). [propagate] re-dispatches once if the
    entailment piece has just fixed the reifier -- and only then. That is bounded by
    construction: the reifier is a bool, so it can be fixed at most once, and the second
-   pass takes an enforcement branch which cannot move it again. Without the re-dispatch
-   a call that decided the reifier would return [Fixpoint] with case 1 or 2 left
-   undone, which is a weaker propagator but not an unsound one; with it, re-running on
-   unchanged domains changes nothing, which is what I-P3 asks. *)
+   pass takes an enforcement branch which cannot move it again.
+
+   For BOTH authors shipped today the second pass provably prunes nothing, and it is
+   worth saying so rather than leaving the re-dispatch looking load-bearing. Case 3
+   fires because the current domains already entail the condition, so enforce-hold has
+   nothing left to take away from them; case 4 fires because they already refute it, so
+   enforce-not-hold has nothing either -- and the equality author's case 3 is stronger
+   still, firing only with every condition variable fixed. The re-dispatch is a guard
+   for a future author whose entailment test is cheaper than its enforcement, not a
+   path this suite exercises; even without it nothing would be lost but a queue
+   round-trip, since the reifier is in [vars] and the engine re-wakes on it. *)
 
 module Domain = Domain
 module Store = Store

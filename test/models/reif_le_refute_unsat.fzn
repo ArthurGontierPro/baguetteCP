@@ -1,0 +1,13 @@
+% M3-T2/M3-T4, case 4 (the ENTAILMENT piece) closing a refutation through its own pol.
+% Nothing in the model decides b: FWD's bound push on the reifier's own term does,
+% from x >= 3 and y <= 1, and the unit row then contradicts it. So the pol veripb
+% closes on is the one that cites FWD to derive `b <= 0` -- the contrapositive of case
+% 1, made by the same row.
+var 0..3: x :: output_var;
+var 0..3: y :: output_var;
+var bool: b :: output_var;
+constraint int_le_reif(x, y, b);
+constraint int_lin_le([-1], [x], -3);
+constraint int_lin_le([1], [y], 1);
+constraint int_lin_le([-1], [b], -1);
+solve satisfy;

@@ -1,0 +1,11 @@
+% M3-T2/M3-T4, case 3 (the entailment piece, other direction) through its own pol.
+% x <= 1 and y >= 2 entail x <= y, so BWD pushes the reifier TRUE, and the unit row
+% says false. The pol closing this one cites BWD.
+var 0..3: x :: output_var;
+var 0..3: y :: output_var;
+var bool: b :: output_var;
+constraint int_le_reif(x, y, b);
+constraint int_lin_le([1], [x], 1);
+constraint int_lin_le([-1], [y], -2);
+constraint int_lin_le([1], [b], 0);
+solve satisfy;

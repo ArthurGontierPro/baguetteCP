@@ -180,14 +180,19 @@ let not_hold p store =
   | [] ->
       if sum_of store p.p_terms <> p.p_rhs then Propagator.Fixpoint
       else
-        (* Every condition variable is fixed, so the nogood is the whole story and the
-           reason is the reifier's own fact: [Trace] still owes a line for it, unlike
-           [Ne]'s unreified conflict, because here the contradiction is conditional on
-           the reifier and a line with an empty tail would claim it outright. *)
+        (* [Ne]'s unreified conflict records NO facts, and can: with everything fixed
+           it is unconditional, so [Trace.conflict_line] writes no line and the clause
+           is the whole story. Here it is conditional -- on the reifier -- so a line IS
+           written, and then every premise has to be on it. Stating only the reifier's
+           fact was this module's first version and test/models/reif_eq_branch_unsat.fzn
+           is what caught it: the line came out as `rup ~b_ge_1 >= 1`, which is TRUE of
+           the model and not reverse-unit-propagable from it, and veripb said so. *)
+        let pairs = all_pairs store p.p_terms in
         Propagator.Conflict
           (Store.conflict store
-             (Reason.because ~concludes:None (reifier_fact p)
-                (explain p (all_pairs store p.p_terms))))
+             (Reason.because ~concludes:None
+                (reifier_fact p @ fixed_facts pairs)
+                (explain p pairs)))
   | [ idx ] -> (
       let tm = List.nth p.p_terms idx in
       let others = others_except p.p_terms idx in
