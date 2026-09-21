@@ -712,6 +712,31 @@ flatters it.
 
 ## 3f. The propagation hot path (M6-T1), 2026-09-21
 
+> ### CORRECTION, added by the orchestrator on merge — read before §3f's M6-T2 paragraph
+>
+> §3f hypothesises (and labels as a hypothesis, not a profile, because `perf` is unavailable
+> on this kernel) that M2-L13's ladder-suffix slack rule under `keep_all` retention drives
+> `width_sat_depth`'s allocation. **Measured directly, and the net effect is the opposite
+> way round:**
+>
+> | | wall, best of 5 | nodes |
+> |---|---|---|
+> | `BAGUETTE_PROPAGATE_LEARNED=on` (shipped) | **150 ms** | 53 |
+> | `BAGUETTE_PROPAGATE_LEARNED=off` | **590 ms** | 99 |
+>
+> **Learned-constraint propagation is worth ~4x on this model.** M2-L13 is *clawing the
+> regression back*, not causing it. The allocation may well still be concentrated in
+> `prop/pb.ml` — that part is untested — but it is buying a 4x speedup, so "spend the row
+> on `pb.ml`'s allocation" does not follow from it.
+>
+> **The consequence for the regression is that it is BIGGER than §3f reports, not smaller.**
+> The 43 ms in `width_sat_depth.fzn`'s header is against a tree that today costs 590 ms
+> without learned propagation. Whatever regressed did so by roughly an order of magnitude,
+> and M2-L13 recovered most of it. **That is now M6-T6 and it should not be guessed at again
+> — it needs a bisect, not a hypothesis.**
+
+
+
 The question this row exists to answer: is M6-T2 (domains/trail to `Bigarray`, for
 minor-GC pressure) or M6-T3 (buffered proof writing) worth doing, or is either a guess?
 Re-ran the full 64-model suite (`bench/run_bench.sh -o`, 5 repeats, load average 0.35-0.37,
