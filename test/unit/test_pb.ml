@@ -644,12 +644,19 @@ let test_break_backjump_on_pb () =
   (* The two facts that make the checker the only oracle. *)
   check "c: the ANSWER is unchanged -- still UNSAT"
     (broken.r_outcome = Search.Unsat && honest.r_outcome = Search.Unsat);
+  (* [skipped] is the counter a better backjump is supposed to buy (M2-L15 obligation
+     (d)), so it is reported HERE, beside the node count, on the one build in this tree
+     that moves it -- and that build is the unsound one. That juxtaposition is the whole
+     lesson: the counter cannot distinguish a backjump that is better from one that is
+     merely higher. *)
   check
     (Printf.sprintf
-       "c: and the TREE IS SMALLER -- %d nodes broken against %d honest. A wrong \
-        backjump looks like an improvement"
-       broken.r_stats.Search.nodes honest.r_stats.Search.nodes)
-    (broken.r_stats.Search.nodes < honest.r_stats.Search.nodes);
+       "c: and the TREE IS SMALLER -- %d nodes / %d skipped broken, against %d / %d \
+        honest. A wrong backjump looks like an improvement in both counters"
+       broken.r_stats.Search.nodes broken.r_stats.Search.skipped
+       honest.r_stats.Search.nodes honest.r_stats.Search.skipped)
+    (broken.r_stats.Search.nodes < honest.r_stats.Search.nodes
+    && broken.r_stats.Search.skipped > honest.r_stats.Search.skipped);
   (match veripb broken with
   | None -> ()
   | Some (ok, out) ->
