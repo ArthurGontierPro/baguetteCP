@@ -190,6 +190,19 @@ A propagator is *not* required to be domain-consistent. The consistency level of
 propagator MUST be documented in its module header, because it determines what its
 explanations may claim.
 
+**`Bounds` means bounds(Z), not bounds(D)** *(normative, added 2026-09-21)*. A propagator
+declaring `Bounds` MUST leave each variable's `lo` and `hi` supported when the *other*
+variables range over their **intervals** — their bounds read as a contiguous range, holes
+ignored. It is **not** required to find support within the actual domains.
+
+Two reasons this is the reading, both checkable rather than stylistic. `docs/GLOSSARY.md`
+defines `Bounds` as saying **nothing about interior values**, which forces the interval
+reading. And under bounds(D) the harness of M2-T10 would report `Linear`, `Int_le`, `Int_lt`,
+`Pb` and `Bool2int` as violations — **none of which is a bug**. The distinction was
+unspecified until the per-node consistency oracle made it load-bearing; it is now tested
+directly (`test/unit/test_consistency.ml` lane 4 and its control, on a scene where the two
+readings genuinely differ).
+
 ### 3.3 Explanations *(normative)*
 
 Every domain change and every failure carries an `Explanation`. An explanation is a

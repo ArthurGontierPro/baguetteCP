@@ -4132,3 +4132,75 @@ redden. **A break that reddens nothing is not a passing test, it is an absent on
   `No_direct_encoding` naming the *base*, so M4-T3 introduces the direct encoding for the base
   variable, not for the view.
 - **Not wired in.** No propagator or front-end path uses views yet — that is M4-T3's work.
+
+## D-0059  The consistency tag is now checked, and today it does no separating work
+
+**Status**: **ACCEPTED**, implemented by M2-T10 (2026-09-21, agent-oracle). The harness is the
+deliverable; **the coverage finding is the useful half** and it tells the next two rows exactly
+where they are the first real test.
+
+### The harness
+
+`Engine.check_consistency`, called from `propagate`'s Fixpoint arm — **in the engine, not
+search**. "At a fixpoint" is a property that loop knows and its caller can only assume, and
+search calls `propagate` once per node, so per-fixpoint **is** per-node.
+
+**Semantics come from the propagator itself, at total assignments**, where SPEC §3.2's
+*checking* obligation pins the answer exactly. So there is **no second implementation of any
+constraint family** — the classic way a consistency oracle rots — and a propagator written
+after this file is covered automatically. The dual limitation is stated in its header: a
+*wrong* checking verdict is invisible here. That is soundness, and `test_random.ml` owns it.
+
+Support searches run on **scratch stores**, so the audit cannot perturb the search, trail,
+reason arena or proof. Gated by `BAGUETTE_CONSISTENCY` (off by default, **+40%** solver time),
+with `BAGUETTE_CONSISTENCY_CAP` and a separately-gated trace — separate because M1-T49 forbids
+stderr without `--time` and `run_model_tests.sh` enforces it per model. Over-budget scopes are
+**skipped and counted**, and the trace says *"a SKIP IS NOT A PASS"*.
+
+### The result, and then the finding
+
+Over all 57 models, uncapped: **286 fixpoints, 8060 instance-checks, 101 456 oracle tuples,
+ZERO violations.** No propagator is weaker than it declares.
+
+> **But a probe forcing the `Domain` obligation onto *every* instance, regardless of what it
+> declares, also finds zero.** That is not the oracle being blind — it is a property of what
+> ships. **Every `Bounds` instance today is a single linear inequality** (`Linear` is
+> `int_lin_le`; `int_le`/`int_lt`/`lin_eq`/`int_eq` are all `Linear.t`; `Pb` and the learned
+> rows are single PB inequalities), and **for one inequality over finite domains, bounds
+> consistency *is* domain consistency** — the support for a value sits at an *end* of another
+> domain, never at a hole.
+
+So the `Bounds`/`Domain` distinction **does no separating work on anything currently shipped**.
+It starts doing so at a **product, a quotient, or an `all_different`** — that is, at M4-T4b's
+`int_times`/`int_div`/`int_abs` and at M4-T1. Pinned as lane 9: **a red there means a `Bounds`
+instance has appeared that this argument no longer covers.**
+
+### The lane that proves it tests the declaration, not soundness
+
+`ne.ml` declares `Value` deliberately, and **passes** — as it must. The control: a scene where
+`Ne` genuinely is weaker than domain-consistent (`2x ≠ 4` over `x ∈ 0..3`, posted unmerged, so
+`Ne` sees two unfixed terms, declines, and `x = 2` survives). **The same instance relabelled
+`Domain` — one field of the `Propagator.instance` record, no edit to `lib/core/prop/` — is
+caught, naming `x = 2`.** A third lane *measures* rather than assumes `ne.ml`'s header claim
+that on **distinct** variables it is stronger than it declares.
+
+### It caught a break nobody built for it
+
+Running the unit suite under the gate fired on `test_engine.ml`'s
+`test_hole_wake_starved_is_caught`, a lane that **predates M2-T10** and deliberately starves
+`eq_dom` of its hole wake. That lane now asserts the oracle's verdict as a third instrument
+beside the I-P2 re-run.
+
+### Normative consequence
+
+**SPEC §3.2 did not say whether `Bounds` meant bounds(Z) or bounds(D)**, and the oracle made
+the difference load-bearing. It now says **bounds(Z)**, for two checkable reasons: `GLOSSARY.md`
+defines `Bounds` as saying nothing about interior values, which forces it; and under bounds(D)
+the harness would report `Linear`, `Int_le`, `Int_lt`, `Pb` and `Bool2int` as violations, **none
+of which is a bug**. Tested directly, on a scene where the two readings differ.
+
+### Open, handed on
+
+`reif_lin_eq.ml` declares `Value` for `int_eq_reif` / `int_ne_reif`, so **the oracle is silent
+on it by design**. If that level is conservative rather than intended, the harness buys nothing
+there — a question for whoever owns D-0057.

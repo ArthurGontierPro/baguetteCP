@@ -283,13 +283,13 @@ lib/proof/      Baguette_proof
                             (I-X2: an id you receive is an id you must delete)
   checker.ml                resolves which veripb to use; mirrors scripts/checker.sh
 
-test/unit/                  21 binaries: test_core test_domain test_engine test_prop
+test/unit/                  22 binaries: test_core test_domain test_engine test_prop
                             test_proof test_justify test_trace test_flatzinc
                             test_compile test_endtoend test_matrix test_mutation
                             test_output test_random test_interval test_learned
-                            test_learn test_analysis test_ladder test_retention test_clause test_pb
+                            test_learn test_analysis test_ladder test_retention test_clause test_pb test_consistency
   mem_guard.ml              NOT a test binary: the shared Gc-alarm heap guard every
-                            suite installs (M1-T53). All 21 announce arming under
+                            suite installs (M1-T53). All 22 announce arming under
                             BAGUETTE_TEST_HEAP_CAP_ANNOUNCE=1
 test/models/                57 .fzn models   test/expected/  their expected outputs
 scripts/                    checker.sh verify_proof.sh run_model_tests.sh shrink.sh
