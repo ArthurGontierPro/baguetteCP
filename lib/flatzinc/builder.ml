@@ -41,12 +41,7 @@ let implemented =
 
 (* The rest of the SPEC 2.1 table, with the milestone that will bring it in. Listing
    these separately lets the error say "not yet" rather than "never". *)
-let planned =
-  [
-    ("all_different_int", "M4");
-    ("array_int_element", "M4");
-  ]
-
+let planned = [ ("all_different_int", "M4"); ("array_int_element", "M4") ]
 let implemented_list = String.concat ", " implemented
 
 type env = {
@@ -552,8 +547,7 @@ let build_constraint env (c : Ast.constraint_item) =
             in
             Model.Int_div (x, y, q, aux))
     | "int_abs" ->
-        cmp (fun x z ->
-            Model.Int_abs (x, z, { Model.x_sign = sign_bool x; y_ge = [] }))
+        cmp (fun x z -> Model.Int_abs (x, z, { Model.x_sign = sign_bool x; y_ge = [] }))
     | other -> unsupported_builtin pos other
   in
   { Model.k; Model.c_pos = pos }

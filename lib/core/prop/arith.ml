@@ -261,8 +261,16 @@ type aff = { a_terms : (int * int) list; a_const : int }
 
 let aff_var i = { a_terms = [ (1, i) ]; a_const = 0 }
 let aff_const n = { a_terms = []; a_const = n }
-let aff_scale k a = { a_terms = List.map (fun (c, i) -> (Checked.mul k c, i)) a.a_terms; a_const = Checked.mul k a.a_const }
-let aff_add a b = { a_terms = a.a_terms @ b.a_terms; a_const = Checked.add a.a_const b.a_const }
+
+let aff_scale k a =
+  {
+    a_terms = List.map (fun (c, i) -> (Checked.mul k c, i)) a.a_terms;
+    a_const = Checked.mul k a.a_const;
+  }
+
+let aff_add a b =
+  { a_terms = a.a_terms @ b.a_terms; a_const = Checked.add a.a_const b.a_const }
+
 let aff_neg a = aff_scale (-1) a
 
 (* ------------------------------------------------------------------- the guards *)
@@ -389,8 +397,14 @@ let times_rows ~bound ~(x : aff) ~(y : case) ~(z : aff) ~(sign : sign) ~ge : row
      anyone may write. *)
   (match (x.a_terms, z.a_terms) with
   | [ (1, xi) ], _ ->
-      let xb = let l, h = bound xi in Interval.make l h in
-      let yb = let l, h = case_bounds ~bound y in Interval.make l h in
+      let xb =
+        let l, h = bound xi in
+        Interval.make l h
+      in
+      let yb =
+        let l, h = case_bounds ~bound y in
+        Interval.make l h
+      in
       let p =
         if y = Case_var xi then Interval.square_bounds xb
         else Interval.product_bounds xb yb
@@ -403,10 +417,15 @@ let times_rows ~bound ~(x : aff) ~(y : case) ~(z : aff) ~(sign : sign) ~ge : row
      for a row -- a row only has to be true. *)
   (match x.a_terms with
   | [ (1, xi) ] when y <> Case_var xi -> (
-      let yb = let l, h = case_bounds ~bound y in Interval.make l h in
+      let yb =
+        let l, h = case_bounds ~bound y in
+        Interval.make l h
+      in
       let zb =
         match z.a_terms with
-        | [ (1, zi) ] -> let l, h = bound zi in Interval.make l h
+        | [ (1, zi) ] ->
+            let l, h = bound zi in
+            Interval.make l h
         | [] -> Interval.make z.a_const z.a_const
         | _ -> Interval.make min_int max_int
       in
@@ -494,7 +513,9 @@ let abs_rows ~bound ~(x : aff) ~(z : aff) ~(sign : sign) : row list =
   | [ (1, xi) ] ->
       let xl, xh = bound xi in
       let u = Stdlib.max (Checked.abs xl) (Checked.abs xh) in
-      let l = if xl <= 0 && 0 <= xh then 0 else Stdlib.min (Checked.abs xl) (Checked.abs xh) in
+      let l =
+        if xl <= 0 && 0 <= xh then 0 else Stdlib.min (Checked.abs xl) (Checked.abs xh)
+      in
       acc := emit ~bound ~guards:[] z u !acc;
       acc := emit ~bound ~guards:[] (aff_neg z) (Checked.neg l) !acc
   | [] ->

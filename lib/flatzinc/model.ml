@@ -507,13 +507,10 @@ let check_assignment (t : t) (values : int array) : bool =
        solution that assigned one of them a value its definition forbids would mean
        the decomposition and the store had parted company. *)
     | Int_times (a, b, c, aux) ->
-        Exact.(compare (mul (of_int (value a)) (of_int (value b))) (of_int (value c)))
-        = 0
+        Exact.(compare (mul (of_int (value a)) (of_int (value b))) (of_int (value c))) = 0
         && aux_holds a b aux
     | Int_div (a, b, c, aux) ->
-        value b <> 0
-        && value a / value b = value c
-        && aux_holds a b aux
+        value b <> 0 && value a / value b = value c && aux_holds a b aux
     | Int_abs (a, c, aux) -> value c = abs (value a) && aux_holds a a aux
   in
   let domains_ok =

@@ -49,6 +49,7 @@ module Reif_lin_le = Baguette_core.Reif_lin_le
 module Reif_lin_eq = Baguette_core.Reif_lin_eq
 module Flatzinc = Baguette_flatzinc
 module Compile = Baguette_flatzinc.Compile
+module Model = Baguette_flatzinc.Model
 
 (* M1-T53: the inner heap guard. test_prop.exe is the binary that reached 14.9 GB RSS on
    2026-09-16 and had to be killed by hand, so a guard that covered only test_output and
@@ -4250,7 +4251,6 @@ let run_veripb_rejects_saying ~name ~build ~saying =
       List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp; log ];
       try Sys.rmdir dir with _ -> ())
 
-
 (* ====================================================================== M4-T4b
 
    The arithmetic family: int_times, int_div, int_abs (lib/core/prop/arith.ml).
@@ -4293,7 +4293,7 @@ module Interval = Baguette_core.Interval
    very rounding it is checking. *)
 let ref_trunc_div x y =
   let m = abs x / abs y in
-  if (x < 0) <> (y < 0) then -m else m
+  if x < 0 <> (y < 0) then -m else m
 
 let ref_trunc_rem x y = x - (y * ref_trunc_div x y)
 
@@ -4307,12 +4307,11 @@ let test_arith_rounding () =
         if q <> ref_trunc_div x y then bad_q := (x, y) :: !bad_q;
         if r <> ref_trunc_rem x y then bad_r := (x, y) :: !bad_r;
         (* SPEC 2.1: x = y*q + r with |r| < |y|, and r takes the sign of x. *)
-        if x <> (y * q) + r || abs r >= abs y || (r <> 0 && (r < 0) <> (x < 0)) then
+        if x <> (y * q) + r || abs r >= abs y || (r <> 0 && r < 0 <> (x < 0)) then
           bad_id := (x, y) :: !bad_id)
     done
   done;
-  check "arith D-0033: div truncates toward zero over every sign combination"
-    (!bad_q = []);
+  check "arith D-0033: div truncates toward zero over every sign combination" (!bad_q = []);
   check "arith D-0033: the remainder takes the dividend's sign" (!bad_r = []);
   check "arith D-0033: x = y*q + r with |r| < |y| holds everywhere" (!bad_id = []);
   (* The four cases the decision record spells out by name. *)
@@ -4388,7 +4387,9 @@ let enumerate_scene sc ~family ~judge =
   let zlo, zhi = (sc.s_bound.(2).(0), sc.s_bound.(2).(1)) in
   let mismatch = ref [] in
   let one () =
-    (match sc.s_sign with Arith.Bit b -> a.(b) <- (if a.(0) >= 0 then 1 else 0) | _ -> ());
+    (match sc.s_sign with
+    | Arith.Bit b -> a.(b) <- (if a.(0) >= 0 then 1 else 0)
+    | _ -> ());
     List.iter (fun (v, b) -> a.(b) <- (if a.(1) >= v then 1 else 0)) sc.s_ge;
     let rows_ok = List.for_all (sat_row a) sc.s_rows in
     let in_rel =
@@ -4419,7 +4420,8 @@ let report name mismatch =
   | l ->
       List.iteri
         (fun i (x, y, z) ->
-          if i < 4 then Printf.printf "       rows and relation disagree at %d %d %d\n" x y z)
+          if i < 4 then
+            Printf.printf "       rows and relation disagree at %d %d %d\n" x y z)
         l
 
 let test_arith_rows_brute_force () =
@@ -4431,8 +4433,7 @@ let test_arith_rows_brute_force () =
       let sc = build_scene ~xlo ~xhi ~ylo ~yhi ~zlo:(-20) ~zhi:20 ~family:Arith.Times in
       enumerate_scene sc ~family:Arith.Times
         ~judge:
-          (report
-             (Printf.sprintf "arith int_times rows: relation iff rows, over %s" tag)))
+          (report (Printf.sprintf "arith int_times rows: relation iff rows, over %s" tag)))
     [
       (0, 4, 0, 4, "x,y in 0..4");
       (-4, -1, 1, 4, "x in -4..-1, y in 1..4");
@@ -4480,13 +4481,17 @@ let test_arith_overflow () =
      same wrapped arithmetic. *)
   let huge = max_int / 2 in
   let bound i =
-    if i = 0 then (0, huge) else if i = 1 then (1, 3) else if i = 2 then (0, 10) else (0, 1)
+    if i = 0 then (0, huge)
+    else if i = 1 then (1, 3)
+    else if i = 2 then (0, 10)
+    else (0, 1)
   in
   let raised =
     try
       ignore
         (Arith.times_rows ~bound ~x:(Arith.aff_var 0) ~y:(Arith.Case_var 1)
-           ~z:(Arith.aff_var 2) ~sign:Arith.Nonneg ~ge:[ (2, 3); (3, 4) ]
+           ~z:(Arith.aff_var 2) ~sign:Arith.Nonneg
+           ~ge:[ (2, 3); (3, 4) ]
           : Arith.row list);
       false
     with Checked.Overflow _ -> true
@@ -4528,11 +4533,7 @@ let arith_hull ~family ~xb ~yb ~zb =
     match !acc with
     | None -> acc := Some ((x, x), (y, y), (z, z))
     | Some ((a, b), (c, d), (e, f)) ->
-        acc :=
-          Some
-            ( (min a x, max b x),
-              (min c y, max d y),
-              (min e z, max f z) )
+        acc := Some ((min a x, max b x), (min c y, max d y), (min e z, max f z))
   in
   let xlo, xhi = xb and ylo, yhi = yb and zlo, zhi = zb in
   for x = xlo to xhi do
@@ -4570,7 +4571,8 @@ let test_arith_propagation () =
           (name ^ ": every bound contains the true hull (soundness)")
           (List.for_all (fun (g, w) -> contains g w) pairs);
         if exact then (
-          check (name ^ ": the box IS the hull (exactness is claimed here)")
+          check
+            (name ^ ": the box IS the hull (exactness is claimed here)")
             (List.for_all (fun (g, w) -> g = w) pairs);
           List.iter2
             (fun (a, b) (c, d) ->
@@ -4580,8 +4582,7 @@ let test_arith_propagation () =
   in
   (* int_abs: exact, always. *)
   scene ~name:"arith int_abs propagation, x straddling zero"
-    ~src:
-      "var -5..5: x;\nvar 0..7: z;\nconstraint int_abs(x, z);\nsolve satisfy;\n"
+    ~src:"var -5..5: x;\nvar 0..7: z;\nconstraint int_abs(x, z);\nsolve satisfy;\n"
     ~names:[ "x"; "z" ] ~family:Arith.Abs ~xb:(-5, 5) ~yb:(0, 7) ~zb:(0, 0) ~exact:true;
   scene ~name:"arith int_abs propagation, x strictly positive"
     ~src:"var 2..5: x;\nvar 0..9: z;\nconstraint int_abs(x, z);\nsolve satisfy;\n"
@@ -4592,32 +4593,47 @@ let test_arith_propagation () =
   (* int_times: exact once the sign of x is settled; containment otherwise. *)
   scene ~name:"arith int_times propagation, x non-negative"
     ~src:
-      "var 0..4: x;\nvar 2..3: y;\nvar 0..20: z;\nconstraint int_times(x, y, z);\n\
+      "var 0..4: x;\n\
+       var 2..3: y;\n\
+       var 0..20: z;\n\
+       constraint int_times(x, y, z);\n\
        solve satisfy;\n"
     ~names:[ "x"; "y"; "z" ] ~family:Arith.Times ~xb:(0, 4) ~yb:(2, 3) ~zb:(0, 20)
     ~exact:true;
   scene ~name:"arith int_times propagation, x strictly negative"
     ~src:
-      "var -4..-1: x;\nvar 1..3: y;\nvar -20..0: z;\nconstraint int_times(x, y, z);\n\
+      "var -4..-1: x;\n\
+       var 1..3: y;\n\
+       var -20..0: z;\n\
+       constraint int_times(x, y, z);\n\
        solve satisfy;\n"
     ~names:[ "x"; "y"; "z" ] ~family:Arith.Times ~xb:(-4, -1) ~yb:(1, 3) ~zb:(-20, 0)
     ~exact:true;
   scene ~name:"arith int_times propagation, x straddles zero"
     ~src:
-      "var -3..3: x;\nvar 1..2: y;\nvar -9..9: z;\nconstraint int_times(x, y, z);\n\
+      "var -3..3: x;\n\
+       var 1..2: y;\n\
+       var -9..9: z;\n\
+       constraint int_times(x, y, z);\n\
        solve satisfy;\n"
     ~names:[ "x"; "y"; "z" ] ~family:Arith.Times ~xb:(-3, 3) ~yb:(1, 2) ~zb:(-9, 9)
     ~exact:false;
   (* int_div: exact once y is fixed; containment otherwise. *)
   scene ~name:"arith int_div propagation, divisor fixed"
     ~src:
-      "var 0..7: x;\nvar 2..2: y;\nvar -9..9: q;\nconstraint int_div(x, y, q);\n\
+      "var 0..7: x;\n\
+       var 2..2: y;\n\
+       var -9..9: q;\n\
+       constraint int_div(x, y, q);\n\
        solve satisfy;\n"
     ~names:[ "x"; "y"; "q" ] ~family:Arith.Div ~xb:(0, 7) ~yb:(2, 2) ~zb:(-9, 9)
     ~exact:true;
   scene ~name:"arith int_div propagation, negative divisor fixed"
     ~src:
-      "var -7..7: x;\nvar -2..-2: y;\nvar -9..9: q;\nconstraint int_div(x, y, q);\n\
+      "var -7..7: x;\n\
+       var -2..-2: y;\n\
+       var -9..9: q;\n\
+       constraint int_div(x, y, q);\n\
        solve satisfy;\n"
     ~names:[ "x"; "y"; "q" ] ~family:Arith.Div ~xb:(-7, 7) ~yb:(-2, -2) ~zb:(-9, 9)
     ~exact:false;
@@ -4626,17 +4642,22 @@ let test_arith_propagation () =
      With the sign of the dividend settled too, it is exact. *)
   scene ~name:"arith int_div propagation, negative divisor and dividend sign both fixed"
     ~src:
-      "var -7..-1: x;\nvar -2..-2: y;\nvar -9..9: q;\nconstraint int_div(x, y, q);\n\
+      "var -7..-1: x;\n\
+       var -2..-2: y;\n\
+       var -9..9: q;\n\
+       constraint int_div(x, y, q);\n\
        solve satisfy;\n"
     ~names:[ "x"; "y"; "q" ] ~family:Arith.Div ~xb:(-7, -1) ~yb:(-2, -2) ~zb:(-9, 9)
     ~exact:true;
   scene ~name:"arith int_div propagation, divisor may be zero"
     ~src:
-      "var 1..7: x;\nvar 0..3: y;\nvar -9..9: q;\nconstraint int_div(x, y, q);\n\
+      "var 1..7: x;\n\
+       var 0..3: y;\n\
+       var -9..9: q;\n\
+       constraint int_div(x, y, q);\n\
        solve satisfy;\n"
     ~names:[ "x"; "y"; "q" ] ~family:Arith.Div ~xb:(1, 7) ~yb:(0, 3) ~zb:(-9, 9)
     ~exact:false
-
 
 (* ------------------------------------ D-0033's hardest test, put to the checker
 
@@ -4658,7 +4679,10 @@ let test_arith_propagation () =
    which is the design's answer to D-0029's asymmetry, not an accident. That case is
    the brute-force lane's, and [Model.check_assignment]'s. *)
 let arith_div_rounding_src =
-  "var -7..-7: x;\nvar 2..2: y;\nvar -5..5: q;\nconstraint int_div(x, y, q);\n\
+  "var -7..-7: x;\n\
+   var 2..2: y;\n\
+   var -5..5: q;\n\
+   constraint int_div(x, y, q);\n\
    solve satisfy;\n"
 
 let build_arith_rounding ~claim dir =
@@ -4771,10 +4795,10 @@ let test_arith_cites_its_own_row () =
           match Engine.propagate t.Compile.engine t.Compile.store with
           | Engine.Fixpoint ->
               check
-                (Printf.sprintf "%s: refuted at the root (its refutation is what is \
-                                 being read)" model)
+                (Printf.sprintf
+                   "%s: refuted at the root (its refutation is what is being read)" model)
                 false
-          | Engine.Conflict c ->
+          | Engine.Conflict c -> (
               let dir = Filename.temp_file "baguette_arith_cite" "" in
               Sys.remove dir;
               Sys.mkdir dir 0o700;
@@ -4828,12 +4852,104 @@ let test_arith_cites_its_own_row () =
                   (String.concat " " (List.map string_of_int roots))
                   text;
               (try Sys.remove pbp with _ -> ());
-              (try Sys.rmdir dir with _ -> ()))
+              try Sys.rmdir dir with _ -> ()))
         [
           ("arith_times_unsat.fzn", [ "x_ge_"; "z_ge_" ]);
           ("arith_abs_unsat.fzn", [ "x_ge_"; "z_ge_" ]);
           ("arith_div_zero_unsat.fzn", [ "x_ge_"; "X_INTRODUCED_arith" ]);
         ]
+
+(* ---------------------------- the oracle and the solver's predicate must agree
+
+   lib/flatzinc/model.ml's [check_assignment] deliberately does NOT call
+   [Arith.is_in_relation]: it restates the relation over its own exact arithmetic,
+   because an oracle that shares its subject's product is not independent (the [Exact]
+   note in that file, and D-0029). The roadmap row asked for one shared predicate and
+   this is the answer to it -- the anti-drift guarantee is kept by MEASUREMENT instead.
+
+   Every assignment of a small declared box, with the auxiliary Booleans at the values
+   their definitions force, judged by both. They must agree everywhere. Judged with the
+   auxiliaries WRONG as well, where the oracle must say no and the relation still says
+   yes: that half is what proves [check_assignment] is really checking them, and it is
+   the half a solution printed from a broken decomposition would otherwise slip past. *)
+let test_arith_oracle_agrees () =
+  let one ~name ~src ~family ~n_main =
+    let m = Flatzinc.Builder.of_string ~file:"test" src in
+    let nv = Model.nvars m in
+    let dom i =
+      match (Model.var m i).Model.v_dom with
+      | Model.Dbool -> (0, 1)
+      | Model.Drange (l, u) -> (l, u)
+      | Model.Dset _ -> (0, 0)
+    in
+    (* The auxiliaries, read back off the constraint the builder produced -- so the
+       test cannot disagree with the builder about which Booleans exist. *)
+    let aux =
+      match (List.hd m.Model.constraints).Model.k with
+      | Model.Int_times (_, _, _, a) | Model.Int_div (_, _, _, a) -> a
+      | Model.Int_abs (_, _, a) -> a
+      | _ -> failwith "test_arith_oracle_agrees: not an arithmetic constraint"
+    in
+    let values = Array.make nv 0 in
+    let disagree = ref 0 and aux_unchecked = ref 0 in
+    let rec go i =
+      if i >= n_main then (
+        (match aux.Model.x_sign with
+        | None -> ()
+        | Some b -> values.(b) <- (if values.(0) >= 0 then 1 else 0));
+        List.iter
+          (fun (v, b) -> values.(b) <- (if values.(1) >= v then 1 else 0))
+          aux.Model.y_ge;
+        let args = Array.to_list (Array.sub values 0 n_main) in
+        let rel = Arith.is_in_relation ~family ~args in
+        if Model.check_assignment m values <> rel then incr disagree;
+        (* Now flip one auxiliary, if there is one. The relation is unchanged and the
+           oracle must refuse the assignment. *)
+        let flip =
+          match aux.Model.x_sign with
+          | Some b -> Some b
+          | None -> ( match aux.Model.y_ge with (_, b) :: _ -> Some b | [] -> None)
+        in
+        match flip with
+        | None -> ()
+        | Some b ->
+            values.(b) <- 1 - values.(b);
+            if rel && Model.check_assignment m values then incr aux_unchecked;
+            values.(b) <- 1 - values.(b))
+      else
+        let lo, hi = dom i in
+        for v = lo to hi do
+          values.(i) <- v;
+          go (i + 1)
+        done
+    in
+    go 0;
+    check
+      (name ^ ": check_assignment and Arith.is_in_relation agree everywhere")
+      (!disagree = 0);
+    check
+      (name ^ ": check_assignment really checks the auxiliary definitions")
+      (!aux_unchecked = 0)
+  in
+  one ~name:"arith oracle int_times"
+    ~src:
+      "var -3..3: x;\n\
+       var -2..2: y;\n\
+       var -6..6: z;\n\
+       constraint int_times(x, y, z);\n\
+       solve satisfy;\n"
+    ~family:Arith.Times ~n_main:3;
+  one ~name:"arith oracle int_div"
+    ~src:
+      "var -5..5: x;\n\
+       var -2..2: y;\n\
+       var -5..5: q;\n\
+       constraint int_div(x, y, q);\n\
+       solve satisfy;\n"
+    ~family:Arith.Div ~n_main:3;
+  one ~name:"arith oracle int_abs"
+    ~src:"var -4..4: x;\nvar 0..4: z;\nconstraint int_abs(x, z);\nsolve satisfy;\n"
+    ~family:Arith.Abs ~n_main:2
 
 let () =
   print_endline "\npropagator unit tests";
@@ -4963,6 +5079,7 @@ let () =
   test_arith_rows_brute_force ();
   test_arith_propagation ();
   test_arith_overflow ();
+  test_arith_oracle_agrees ();
   test_arith_cites_its_own_row ();
   run_veripb
     ~name:"arith D-0033: the TRUNCATING bound -7 div 2 <= -3 is RUP over the posted rows"
@@ -4976,12 +5093,14 @@ let () =
   run_veripb ~name:"arith: the honest pol over the int_times row at v = 2"
     ~build:(build_arith_pol_break ~coeff:2);
   run_veripb_rejects_saying
-    ~name:"arith: a pol over that row deriving z >= 3x is REJECTED (the pol is not decorative)"
+    ~name:
+      "arith: a pol over that row deriving z >= 3x is REJECTED (the pol is not \
+       decorative)"
     ~build:(build_arith_pol_break ~coeff:3)
-    (* The judgement, whole, minus the derived id: "not contradicting" is what the
-       claim is about, and the id is a position in a file this scene may grow. It is
-       still a complete sentence and not a fragment -- an exit status could not tell
-       this from a parse error, and no other failure in this proof words itself so. *)
+      (* The judgement, whole, minus the derived id: "not contradicting" is what the
+         claim is about, and the id is a position in a file this scene may grow. It is
+         still a complete sentence and not a fragment -- an exit status could not tell
+         this from a parse error, and no other failure in this proof words itself so. *)
     ~saying:"is not contradicting, as specified by the hint.";
   test_no_single_row_refutes "arith_times_unsat" "arith_times_unsat.fzn";
   test_no_single_row_refutes "arith_abs_unsat" "arith_abs_unsat.fzn";

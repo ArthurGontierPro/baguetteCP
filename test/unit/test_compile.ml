@@ -422,6 +422,12 @@ let evaluate (m : M.t) (assign : int array) =
     | 1 -> true
     | n -> failwith (Printf.sprintf "test_compile: non-Boolean value %d for a bool" n)
   in
+  let arith_aux x y (aux : M.aux) =
+    (match aux.M.x_sign with
+    | None -> true
+    | Some b -> truth (M.Var b) = (operand x >= 0))
+    && List.for_all (fun (v, b) -> truth (M.Var b) = (operand y >= v)) aux.M.y_ge
+  in
   List.for_all
     (fun (c : M.constr) ->
       match c.M.k with
@@ -467,7 +473,21 @@ let evaluate (m : M.t) (assign : int array) =
       | M.Int_lin_le_reif (ts, r, b) -> truth b = (value ts <= r)
       | M.Int_le_reif (a, b, r) -> truth r = (operand a <= operand b)
       | M.Int_eq_reif (a, b, r) -> truth r = (operand a = operand b)
-      | M.Int_ne_reif (a, b, r) -> truth r = (operand a <> operand b))
+      | M.Int_ne_reif (a, b, r) -> truth r = (operand a <> operand b)
+      (* M4-T4b, and the rule once more: read off docs/SPEC.md 2.1, not off
+         [Model.check_assignment] and not off [Baguette_core.Arith.is_in_relation].
+         [Stdlib.(/)] truncates toward zero, which is what the spec asks for; y = 0 is
+         simply not in the relation, which is D-0033's "relational, not an error".
+
+         The auxiliary Booleans are checked here too. They are ordinary variables of
+         the model, so a brute-force enumeration reaches assignments that violate their
+         definitions, and an oracle that ignored them would call those solutions -- and
+         then disagree with [Model.check_assignment], which does not. *)
+      | M.Int_times (a, b, c, aux) ->
+          operand a * operand b = operand c && arith_aux a b aux
+      | M.Int_div (a, b, c, aux) ->
+          operand b <> 0 && operand a / operand b = operand c && arith_aux a b aux
+      | M.Int_abs (a, c, aux) -> operand c = abs (operand a) && arith_aux a a aux)
     m.M.constraints
 
 (* Brute force over the declared box: the independent oracle for the expected answer.
@@ -691,7 +711,39 @@ let test_end_to_end () =
        var 0..1: y;\n\
        var bool: b;\n\
        constraint int_le_reif(x,y,b);\n\
-       solve satisfy;\n"
+       solve satisfy;\n";
+  (* M4-T4b. [brute_force] enumerates the declared box, [evaluate]'s three new arms
+     judge it, and [Search.solve] has to agree -- including about the AUXILIARY
+     Booleans, which the enumeration also ranges over. An oracle branch nobody has seen
+     run is what D-0030 is about, so these lanes land with the arms they reach.
+
+     Domains are deliberately tiny: the enumeration is over every variable including
+     the auxiliaries, so a case variable of width w costs a factor of 2^w on its own. *)
+  run_model ~title:"e2e arith: int_times over two straddling factors"
+    ~src:
+      "var -2..2: x;\n\
+       var -1..1: y;\n\
+       var -2..2: z;\n\
+       constraint int_times(x,y,z);\n\
+       solve satisfy;\n";
+  run_model ~title:"e2e arith: int_div, divisor may be zero (D-0033)"
+    ~src:
+      "var -2..2: x;\n\
+       var -1..1: y;\n\
+       var -2..2: q;\n\
+       constraint int_div(x,y,q);\n\
+       solve satisfy;\n";
+  run_model ~title:"e2e arith: int_div whose only divisor is zero is UNSAT, not an error"
+    ~src:
+      "var 1..2: x;\n\
+       var 0..0: y;\n\
+       var 0..2: q;\n\
+       constraint int_div(x,y,q);\n\
+       solve satisfy;\n";
+  run_model ~title:"e2e arith: int_abs across zero"
+    ~src:"var -2..2: x;\nvar 0..2: z;\nconstraint int_abs(x,z);\nsolve satisfy;\n";
+  run_model ~title:"e2e arith: int_abs whose z cannot hold every |x| is still SAT"
+    ~src:"var -3..3: x;\nvar 0..1: z;\nconstraint int_abs(x,z);\nsolve satisfy;\n"
 
 (* ------------------------------------------------------- M3: the reified builtins *)
 

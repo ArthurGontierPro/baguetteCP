@@ -981,14 +981,10 @@ let compile (m : Model.t) : t =
      measures what is actually posted and [Model_row] names a row [Linear.pb_row] can
      reproduce. *)
   let aff_of (op : Model.operand) : Arith.aff =
-    match op with
-    | Model.Const n -> Arith.aff_const n
-    | Model.Var i -> Arith.aff_var i
+    match op with Model.Const n -> Arith.aff_const n | Model.Var i -> Arith.aff_var i
   in
   let case_of (op : Model.operand) : Arith.case =
-    match op with
-    | Model.Const n -> Arith.Case_const n
-    | Model.Var j -> Arith.Case_var j
+    match op with Model.Const n -> Arith.Case_const n | Model.Var j -> Arith.Case_var j
   in
   let bound i = bounds.(i) in
   (* The sign of the first operand, as [Arith] wants it. When the builder made a
@@ -1030,7 +1026,9 @@ let compile (m : Model.t) : t =
     List.concat_map
       (fun (r : Arith.row) ->
         let nterms = normalise_terms r.Arith.r_terms in
-        post_le_as ~pack ~what:("a row of this `" ^ builtin ^ "`") pos nterms r.Arith.r_rhs)
+        post_le_as ~pack
+          ~what:("a row of this `" ^ builtin ^ "`")
+          pos nterms r.Arith.r_rhs)
       rows
   in
   (* x * y = z. With y a constant this is the linear equality c*x = z and none of the
@@ -1047,12 +1045,11 @@ let compile (m : Model.t) : t =
           | Model.Const n -> ([], Checked.mul c n)
         in
         let tz, cz =
-          match z with Model.Var i -> ([ (-1, i) ], 0) | Model.Const n -> ([], Checked.neg n)
+          match z with
+          | Model.Var i -> ([ (-1, i) ], 0)
+          | Model.Const n -> ([], Checked.neg n)
         in
-        defs
-        @ post_eq pos
-            (normalise_terms (tx @ tz))
-            (Checked.neg (Checked.add cx cz))
+        defs @ post_eq pos (normalise_terms (tx @ tz)) (Checked.neg (Checked.add cx cz))
     | Model.Var _ ->
         let sign = arith_sign pos ~builtin x aux in
         defs
