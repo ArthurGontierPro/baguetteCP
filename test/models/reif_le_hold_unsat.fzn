@@ -1,0 +1,11 @@
+% M3-T2/M3-T4, case 1 (enforce-hold) closing a refutation. b is forced true by a
+% clause, so FWD's big-M term contributes its whole coefficient, the row's slack
+% becomes the condition's own, and `x <= y` is propagated against `y - x <= -1`.
+% The pol veripb checks is Linear's ordinary D-0013 combine over the FWD row.
+var 0..3: x :: output_var;
+var 0..3: y :: output_var;
+var bool: b :: output_var;
+constraint int_le_reif(x, y, b);
+constraint bool_clause([b], []);
+constraint int_lin_le([-1, 1], [x, y], -1);
+solve satisfy;

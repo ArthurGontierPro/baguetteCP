@@ -55,6 +55,19 @@ type cstr =
     (* `bool2int(b, x)`: x = b, with b Boolean and x an integer operand. *)
   | Bool_eq of operand * operand (* `bool_eq(a, b)`: a <-> b *)
   | Bool_not of operand * operand (* `bool_not(a, b)`: a <-> ~b *)
+  (* ------------------------------------------------------- M3, reified forms.
+
+     The reifier (the last operand of each) is Boolean; the constrained operands are
+     ordinary integers. SPEC 2.1's M3 row is exactly these four, and they share one
+     dispatcher on the solver side (lib/core/prop/reif.ml, roadmap M3-T4), so the two
+     comparison forms keep the two-operand shape the unreified builtins have rather
+     than being normalised to linear terms here -- compile.ml does that once, in the
+     one place that also posts the rows. *)
+  | Int_lin_le_reif of (int * int) list * int * operand
+    (* `int_lin_le_reif(as, bs, c, r)`: r <-> (sum as*bs <= c). *)
+  | Int_le_reif of operand * operand * operand (* r <-> (a <= b) *)
+  | Int_eq_reif of operand * operand * operand (* r <-> (a  = b) *)
+  | Int_ne_reif of operand * operand * operand (* r <-> (a <> b) *)
 
 type constr = { k : cstr; c_pos : Pos.t }
 type var_choice = Input_order | First_fail
@@ -147,6 +160,18 @@ let string_of_cstr t = function
       Printf.sprintf "%s <-> %s" (string_of_operand t a) (string_of_operand t b)
   | Bool_not (a, b) ->
       Printf.sprintf "%s <-> not %s" (string_of_operand t a) (string_of_operand t b)
+  | Int_lin_le_reif (ts, rhs, r) ->
+      Printf.sprintf "%s <-> (%s <= %d)" (string_of_operand t r)
+        (string_of_terms t ts) rhs
+  | Int_le_reif (a, b, r) ->
+      Printf.sprintf "%s <-> (%s <= %s)" (string_of_operand t r)
+        (string_of_operand t a) (string_of_operand t b)
+  | Int_eq_reif (a, b, r) ->
+      Printf.sprintf "%s <-> (%s = %s)" (string_of_operand t r) (string_of_operand t a)
+        (string_of_operand t b)
+  | Int_ne_reif (a, b, r) ->
+      Printf.sprintf "%s <-> (%s != %s)" (string_of_operand t r)
+        (string_of_operand t a) (string_of_operand t b)
 
 let to_string t =
   let b = Buffer.create 256 in
@@ -410,6 +435,12 @@ let check_assignment (t : t) (values : int array) : bool =
     | Bool2int (b, x) -> value x = if truth b then 1 else 0
     | Bool_eq (a, b) -> truth a = truth b
     | Bool_not (a, b) -> truth a <> truth b
+    (* M3: each re-evaluated as the equivalence it is, in both directions, from the
+       FlatZinc definition and from nothing in lib/core/prop/. *)
+    | Int_lin_le_reif (ts, rhs, r) -> truth r = (sum_cmp ts rhs <= 0)
+    | Int_le_reif (a, b, r) -> truth r = (value a <= value b)
+    | Int_eq_reif (a, b, r) -> truth r = (value a = value b)
+    | Int_ne_reif (a, b, r) -> truth r = (value a <> value b)
   in
   let domains_ok =
     let ok = ref true in

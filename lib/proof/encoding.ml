@@ -1063,3 +1063,146 @@ let define_reif_int_lin_le t w ~reifier terms rhs =
   define_reif t w ~reifier ~cond:(expand_int_lin_le t terms rhs)
 
 let retire_reif w r = Writer.delete_many w (reif_ids r)
+
+(* ---------------------------------------------------------------------------
+   M3-T2 / M3-T4: the same two rows, in the currency a propagator can cite
+   ---------------------------------------------------------------------------
+
+   [add_reif] above posts FWD and BWD as [Opb.constr] values built by [reif_rows] --
+   literals and big-M constants, assembled here. That is the right shape for
+   [define_reif] (a [red] body is literals) and the wrong one for M3-T2, because a
+   propagator does not cite a row by rebuilding it: [Linear] cites [Model_row row_id]
+   and reproduces the row from *integer terms and a right-hand side* ([Linear.pb_row],
+   M2-L6/D-0054, which test_learn.ml pins against every row the suite compiles).
+
+   So M3-T2 needs the two rows as ordinary [int_lin_le] rows. They are:
+
+     FWD   sum a_i x_i  +  K  b  <=  rhs + K       K  = hi - rhs
+     BWD  -sum a_i x_i  -  K' b  <=  -rhs - 1      K' = rhs + 1 - lo
+
+   where [(lo, hi)] is [linear_span] of the condition over the DECLARED domains. Read
+   FWD: at b = 1 it is the condition; at b = 0 it is `sum <= hi`, which every
+   assignment satisfies. Read BWD: at b = 0 it is `sum >= rhs + 1`, the negation; at
+   b = 1 it is `sum >= lo`, vacuous. Both big-Ms are the smallest that work, for the
+   reason [reif_rows] gives: a bigger one is sound but weakens what a [pol] over the
+   row can cut.
+
+   **These are not a second encoding of reification -- they are the SAME two rows.**
+   Expand FWD through [expand_int_lin_le] and normalise, and you get exactly
+   [reif_rows]'s FWD, coefficient for coefficient: the reifier is a bool on [0, 1]
+   (D-0007) whose single rung carries the whole big-M, and the normalised degree of
+   the condition IS [hi - rhs]. test/unit/test_proof.ml performs that comparison on
+   both rows rather than leaving this paragraph to be believed -- if the two ever drift
+   the .opb door would be saying two different things, which is precisely what
+   [reif_rows] was made pure and shared to prevent.
+
+   [Reif_constant] is raised on the same condition [reif_rows] raises it on, and from
+   the same numbers: [K <= 0] is a condition the declared domains already entail, and
+   [K' <= 0] one they already refute. A caller that wants to keep such a model posts
+   the reifier's value as a unit row instead -- lib/flatzinc/compile.ml does exactly
+   that, because a FlatZinc model is entitled to say something trivially true. *)
+
+(* [vac] is the value of [reifier] at which the row must say nothing. *)
+let guard_row terms rhs ~reifier ~big_m ~vac =
+  if vac = 1 then (terms @ [ (Arith.neg big_m, reifier) ], rhs)
+  else (terms @ [ (big_m, reifier) ], Arith.add rhs big_m)
+
+(* The two big-M constants of  reifier <-> (sum a_i x_i <= rhs),  smallest first as
+   above. Pure: it reads declared bounds and computes, and commits nothing. *)
+let reif_big_m t terms rhs =
+  let lo, hi = linear_span t terms in
+  (Arith.sub hi rhs, Arith.add (Arith.sub rhs lo) 1)
+
+(* The .opb door for a model-stated [int_lin_le_reif], as two int_lin_le rows.
+   Returns [(fwd_id, bwd_id, k_fwd, k_bwd)]: the ids to cite and the two big-Ms, which
+   the caller needs to build the [Linear.t] that cites them -- the propagator's terms
+   must be the row's terms or the citation names a constraint it cannot reproduce. *)
+let add_int_lin_le_reif_rows t terms rhs ~reifier =
+  check_lin_le_computable t terms rhs ~what:"Encoding.add_int_lin_le_reif_rows";
+  ensure_reif_bool t reifier;
+  let k_fwd, k_bwd = reif_big_m t terms rhs in
+  if k_fwd <= 0 then raise (Reif_constant (reifier, true));
+  if k_bwd <= 0 then raise (Reif_constant (reifier, false));
+  let neg = List.map (fun (a, x) -> (Arith.neg a, x)) terms in
+  let f_terms, f_rhs = guard_row terms rhs ~reifier ~big_m:k_fwd ~vac:0 in
+  let b_terms, b_rhs =
+    guard_row neg (Arith.sub (Arith.neg rhs) 1) ~reifier ~big_m:k_bwd ~vac:1
+  in
+  let fwd_id = add_int_lin_le t f_terms f_rhs in
+  let bwd_id = add_int_lin_le t b_terms b_rhs in
+  (fwd_id, bwd_id, k_fwd, k_bwd)
+
+(* ---------------------------------------------------------------------------
+   The equality family: four rows, and why it is not two
+   ---------------------------------------------------------------------------
+
+   `b <-> (sum = c)` is not one reification of one inequality, and D-0053 says so:
+   it needs both directions of the equality under [b], and the DISEQUALITY under
+   [~b]. The four rows, with [pos] saying whether [b] means "= c" ([int_eq_reif]) or
+   "<> c" ([int_ne_reif]):
+
+     LE   sum a x <= c          guarded, vacuous when the equality side is off
+     GE  -sum a x <= -c         guarded likewise
+     A    sum a x <= c - 1 + big_a * ne_aux    guarded, vacuous when the
+     B   -sum a x <= -c - 1 + big_b * ~ne_aux  disequality side is off
+
+   A and B are [expand_int_lin_ne]'s own pair with one more guard term, and the
+   auxiliary Boolean is the same .opb-only one a plain [int_lin_ne] uses: nothing
+   propagates over it and nothing cites A or B, exactly as lib/core/prop/ne.ml
+   describes for the unguarded pair. LE and GE ARE cited, so their ids come back.
+
+   **Why no [p] and [q].** D-0053 left open where the `p <-> (sum<=c)`,
+   `q <-> (sum>=c)`, `b <-> p /\ q` decomposition's two fresh reifiers should live.
+   The answer taken here is that they are not needed: the only thing the conjunction
+   buys is the direction `(sum = c) -> b`, and A/B already carry it -- they are the
+   contrapositive `~b -> (sum <> c)` written as PB rows, which is what
+   [add_int_lin_ne] has done since M1-T9. Two fresh reifiers would also have to be
+   fresh *store* variables, since something must propagate them, and
+   bin/main.ml's [assignment_values] rejects any solver variable outside the model's
+   own -- so the decomposition is not merely redundant here, it is not reachable
+   without a change on the other side of that bridge. *)
+let add_int_lin_eq_reif t terms rhs ~reifier ~pos =
+  check_lin_ne_computable t terms rhs ~what:"Encoding.add_int_lin_eq_reif";
+  ensure_reif_bool t reifier;
+  let lo, hi = linear_span t terms in
+  let k_le0 = Arith.sub hi rhs and k_ge0 = Arith.sub rhs lo in
+  let big_a = Arith.add k_le0 1 and big_b = Arith.add k_ge0 1 in
+  (* The declared domains already settle the equality: this is not a reification and
+     the caller decides what a fixed Boolean means in its model, exactly as
+     [reif_rows] refuses a constant condition. *)
+  if k_le0 < 0 || k_ge0 < 0 then raise (Reif_constant (reifier, not pos));
+  if k_le0 = 0 && k_ge0 = 0 then raise (Reif_constant (reifier, pos));
+  (* One direction of the equality may still be entailed on its own -- `hi = rhs` makes
+     `sum <= rhs` free -- and then the smallest big-M is zero, which would make the
+     guard TERM vanish and leave a row saying something unconditionally. One is the
+     smallest big-M that still has a guard term to cut against, and the row it produces
+     is `sum <= rhs` under the literal and `sum <= rhs + 1` without it, both of which
+     every assignment the declared domains allow already satisfies. *)
+  let k_le = Stdlib.max 1 k_le0 and k_ge = Stdlib.max 1 k_ge0 in
+  let neg = List.map (fun (a, x) -> (Arith.neg a, x)) terms in
+  (* The equality side is asserted at [b = 1] iff [pos]; so it must be vacuous at the
+     other value, and the disequality side at [pos]'s own. *)
+  let vac_eq = if pos then 0 else 1 in
+  let vac_ne = 1 - vac_eq in
+  let le_terms, le_rhs = guard_row terms rhs ~reifier ~big_m:k_le ~vac:vac_eq in
+  let ge_terms, ge_rhs =
+    guard_row neg (Arith.neg rhs) ~reifier ~big_m:k_ge ~vac:vac_eq
+  in
+  let aux = fresh_aux_name t "ne" in
+  declare_bool t aux;
+  let a_terms, a_rhs =
+    guard_row
+      (terms @ [ (Arith.neg big_a, aux) ])
+      (Arith.sub rhs 1) ~reifier ~big_m:big_a ~vac:vac_ne
+  in
+  let b_terms, b_rhs =
+    guard_row (neg @ [ (big_b, aux) ]) (Arith.neg lo) ~reifier ~big_m:big_b ~vac:vac_ne
+  in
+  (* A degenerate side is a row nothing can be derived from and every assignment
+     satisfies; it is posted anyway, because the .opb is the artefact a `conclusion SAT`
+     is checked against and a missing row there is a relaxation of the model. *)
+  let le_id = add_int_lin_le t le_terms le_rhs in
+  let ge_id = add_int_lin_le t ge_terms ge_rhs in
+  ignore (add_int_lin_le t a_terms a_rhs : cid);
+  ignore (add_int_lin_le t b_terms b_rhs : cid);
+  (le_id, ge_id, k_le, k_ge)

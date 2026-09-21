@@ -1,0 +1,12 @@
+% M3-T2: int_ne_reif, the entailment direction under the inverted literal. x and y are
+% pinned apart by unit rows, so the condition `x = y` is refuted from one side and the
+% reifier -- which means `x <> y` here -- is pushed TRUE. Same author, same three
+% pieces, opposite polarity.
+var 0..2: x :: output_var;
+var 0..2: y :: output_var;
+var bool: b :: output_var;
+constraint int_ne_reif(x, y, b);
+constraint int_lin_le([1], [x], 0);
+constraint int_lin_le([-1], [x], 0);
+constraint int_lin_le([-1], [y], -2);
+solve satisfy;

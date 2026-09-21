@@ -1,0 +1,19 @@
+% M3-T2: int_eq_reif, case 3, and the one piece of this milestone whose justification
+% is NOT a pol over a cited row. "The domains entail sum = c" is not a bounds fact --
+% it needs every term fixed -- so [Reif_lin_eq.entail_equal] pushes the reifier on a
+% NOGOOD, a Clause that is rup against the guarded disequality pair A/B in the .opb.
+% D-0053 left open whether this direction needs `p <-> (<=)`, `q <-> (>=)` and a
+% conjunction; it does not, and this model is where that is checked.
+%
+% x and y are each pinned to 2 by a pair of unit rows, so both terms of x - y are fixed
+% and the sum lands on 0. Satisfiable, so the rup is checked over a database that is
+% not already contradictory.
+var 0..3: x :: output_var;
+var 0..3: y :: output_var;
+var bool: b :: output_var;
+constraint int_eq_reif(x, y, b);
+constraint int_lin_le([1], [x], 2);
+constraint int_lin_le([-1], [x], -2);
+constraint int_lin_le([1], [y], 2);
+constraint int_lin_le([-1], [y], -2);
+solve satisfy;

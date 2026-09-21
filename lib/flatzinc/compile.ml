@@ -166,6 +166,8 @@ module Ne = Baguette_core.Ne
    so that every call site here keeps saying which builtin it is packing. *)
 module Bool_clause = Baguette_core.Clause
 module Bool2int = Baguette_core.Bool2int
+module Reif_lin_le = Baguette_core.Reif_lin_le
+module Reif_lin_eq = Baguette_core.Reif_lin_eq
 module Engine = Baguette_core.Engine
 module Encoding = Baguette_proof.Encoding
 module Lit = Baguette_proof.Lit
@@ -472,6 +474,34 @@ let pack_array_bool_and (p : Bool_clause.t) : pending =
 let pack_bool_eq (p : Bool_clause.t) : pending =
   pack_clause_as (module Bool_clause.Bool_eq : Propagator.S with type t = Bool_clause.t) p
 
+(* M3-T4: the reification dispatcher's four faces. One [Reif.t] per reified builtin,
+   packed under the builtin the model wrote (the [Ne] / [Ne.Int_ne] rule again), and
+   WITHOUT [~row:]: an instance here stands for two or four rows and [Propagator.pb_row]
+   promises exactly one, so the honest answer is the default [None] and M2-L6's clause
+   fallback. lib/core/prop/reif.ml's header carries the argument. *)
+let pack_reif_as (type a) (module P : Propagator.S with type t = a) (p : a) : pending =
+ fun id -> Propagator.pack ~id (module P) p
+
+let pack_int_lin_le_reif (p : Reif_lin_le.t) : pending =
+  pack_reif_as
+    (module Reif_lin_le.Int_lin_le_reif : Propagator.S with type t = Reif_lin_le.t)
+    p
+
+let pack_int_le_reif (p : Reif_lin_le.t) : pending =
+  pack_reif_as
+    (module Reif_lin_le.Int_le_reif : Propagator.S with type t = Reif_lin_le.t)
+    p
+
+let pack_int_eq_reif (p : Reif_lin_eq.t) : pending =
+  pack_reif_as
+    (module Reif_lin_eq.Int_eq_reif : Propagator.S with type t = Reif_lin_eq.t)
+    p
+
+let pack_int_ne_reif (p : Reif_lin_eq.t) : pending =
+  pack_reif_as
+    (module Reif_lin_eq.Int_ne_reif : Propagator.S with type t = Reif_lin_eq.t)
+    p
+
 let pack_bool_not (p : Bool_clause.t) : pending =
   pack_clause_as
     (module Bool_clause.Bool_not : Propagator.S with type t = Bool_clause.t)
@@ -626,6 +656,128 @@ let compile (m : Model.t) : t =
           | _ -> reject_non_bool_var pos ~builtin ~what (Model.var m i)));
     op
   in
+
+  (* ------------------------------------------------------------- M3, reification
+
+     Every reified builtin below is one call to [post_reif_le] or [post_reif_eq]. That
+     is roadmap M3-T4's whole claim made concrete on this side of the boundary: the
+     five propagation cases of `b <-> C` are the dispatcher's
+     (lib/core/prop/reif.ml), and what is left here is posting the rows and choosing
+     an author. `int_ne_reif` differs from `int_eq_reif` by ONE argument, [~positive],
+     and `int_le_reif` from `int_lin_le_reif` by nothing but [difference_terms].
+
+     The degenerate cases are not an afterthought. A FlatZinc model is entitled to say
+     `int_le_reif(x, y, b)` where the declared domains already settle `x <= y`, and
+     then `b <-> C` is not a reification: it is `b = 1`. [Encoding]'s reification doors
+     refuse such a condition by name ([Reif_constant], M3-T1's own check, which
+     [reif_rows] makes for the identical reason) rather than emit two rows one of which
+     no longer mentions the reifier, so the decision is made HERE, from the same
+     declared bounds, and the model keeps its meaning: a unit row fixing the reifier,
+     and one [Linear] instance over it. *)
+
+  (* The span of a normalised term list over the DECLARED domains -- the two numbers
+     every big-M below is computed from. Call [check_row] first: this is where the
+     products live that M1-T23's cap is sized for. *)
+  let term_span nterms =
+    List.fold_left
+      (fun (lo, hi) (c, i) ->
+        let l, u = bounds.(i) in
+        if c >= 0 then
+          (Checked.add lo (Checked.mul c l), Checked.add hi (Checked.mul c u))
+        else (Checked.add lo (Checked.mul c u), Checked.add hi (Checked.mul c l)))
+      (0, 0) nterms
+  in
+  (* The reifier as a variable index, with the two things that make it one checked
+     here rather than inside [Encoding]: it is a `var bool` (D-0007), and it does not
+     occur in its own condition. `b <-> C(b)` is not a definition -- [reif_rows] raises
+     [Reif_in_condition] for it -- and a term list mentioning the reifier would also
+     collide with the guard term the rows below append. *)
+  let reifier_index pos ~builtin nterms r =
+    match bool_operand pos ~builtin ~what:"the reifier" r with
+    | Model.Const n -> Either.Left (n = 1)
+    | Model.Var ri ->
+        if List.exists (fun (_, i) -> i = ri) nterms then
+          Error.failf pos
+            "builtin `%s`: the reifier `%s` also occurs in the constraint it reifies, so \
+             `b <-> C(b)` is not a definition"
+            builtin (Model.var m ri).Model.v_name;
+        Either.Right ri
+  in
+  (* One unit row and one [Linear] instance fixing a Boolean to [v]. The row is posted
+     because `conclusion SAT` re-checks the assignment against the .opb, so the .opb has
+     to be the model; the instance is posted because nothing else would establish the
+     value, and it justifies itself the ordinary D-0013 way over its own row. *)
+  let post_fixed_bool pos ri v =
+    let nterms = if v = 1 then [ (-1, ri) ] else [ (1, ri) ] in
+    let rhs = if v = 1 then -1 else 0 in
+    check_row pos ~what:"this reified constant" nterms rhs;
+    let row_id = Encoding.add_int_lin_le encoding (opb_terms pos nterms) rhs in
+    [ pack_linear (Linear.make ~row_id store (prop_terms nterms) rhs) ]
+  in
+  (* b <-> (sum a_i x_i <= rhs). Two rows, one instance. *)
+  let post_reif_le pos ~builtin ~pack nterms rhs r =
+    check_row pos ~what:"this reified linear inequality" nterms rhs;
+    match reifier_index pos ~builtin nterms r with
+    | Either.Left true -> post_le pos nterms rhs
+    | Either.Left false ->
+        post_le pos (negate_terms nterms) (Checked.sub (Checked.neg rhs) 1)
+    | Either.Right ri ->
+        let lo, hi = term_span nterms in
+        let k_fwd = Checked.sub hi rhs and k_bwd = Checked.add (Checked.sub rhs lo) 1 in
+        if k_fwd <= 0 then post_fixed_bool pos ri 1
+        else if k_bwd <= 0 then post_fixed_bool pos ri 0
+        else (
+          (* Both augmented rows, measured before either is posted -- the guard term is
+             a bool, so its contribution to the magnitude is its own coefficient. *)
+          check_row pos ~what:"this reified linear inequality"
+            (nterms @ [ (k_fwd, ri) ])
+            (Checked.add rhs k_fwd);
+          check_row pos ~what:"this reified linear inequality"
+            (negate_terms nterms @ [ (Checked.neg k_bwd, ri) ])
+            (Checked.sub (Checked.neg rhs) 1);
+          let fwd_id, bwd_id, k_fwd, k_bwd =
+            Encoding.add_int_lin_le_reif_rows encoding (opb_terms pos nterms) rhs
+              ~reifier:(name_of pos ri)
+          in
+          [
+            pack
+              (Reif_lin_le.make ~fwd_id ~bwd_id ~k_fwd ~k_bwd store (prop_terms nterms)
+                 rhs ~reifier:(Var.of_int ri));
+          ])
+  in
+  (* b <-> (sum a_i x_i = rhs) when [positive], b <-> (sum <> rhs) when not. Four rows
+     and one .opb-only auxiliary Boolean; one instance. *)
+  let post_reif_eq pos ~builtin ~pack ~positive nterms rhs r =
+    check_row pos ~what:"this reified linear equality" nterms rhs;
+    match reifier_index pos ~builtin nterms r with
+    | Either.Left b ->
+        if b = positive then post_eq pos nterms rhs
+        else post_ne pos nterms rhs ~pack:pack_lin_ne
+    | Either.Right ri ->
+        let lo, hi = term_span nterms in
+        let k_le = Checked.sub hi rhs and k_ge = Checked.sub rhs lo in
+        if k_le < 0 || k_ge < 0 then post_fixed_bool pos ri (if positive then 0 else 1)
+        else if k_le = 0 && k_ge = 0 then
+          post_fixed_bool pos ri (if positive then 1 else 0)
+        else (
+          let g = Stdlib.max 1 in
+          check_row pos ~what:"this reified linear equality"
+            (nterms @ [ (g k_le, ri) ])
+            (Checked.add rhs (g k_le));
+          check_row pos ~what:"this reified linear equality"
+            (negate_terms nterms @ [ (g k_ge, ri) ])
+            (Checked.add (Checked.neg rhs) (g k_ge));
+          let le_id, ge_id, k_le, k_ge =
+            Encoding.add_int_lin_eq_reif encoding (opb_terms pos nterms) rhs
+              ~reifier:(name_of pos ri) ~pos:positive
+          in
+          [
+            pack
+              (Reif_lin_eq.make ~le_id ~ge_id ~k_le ~k_ge ~positive store
+                 (prop_terms nterms) rhs ~reifier:(Var.of_int ri));
+          ])
+  in
+
 
   (* One clause -- a list of (operand, polarity) pairs -- as one .opb row and (unless it
      is already satisfied) one propagator instance.
@@ -842,6 +994,21 @@ let compile (m : Model.t) : t =
           | Model.Bool2int (b, x) -> post_bool2int pos b x
           | Model.Bool_eq (a, b) -> post_bool_eq pos a b
           | Model.Bool_not (a, b) -> post_bool_not pos a b
+          | Model.Int_lin_le_reif (terms, rhs, r) ->
+              post_reif_le pos ~builtin:"int_lin_le_reif" ~pack:pack_int_lin_le_reif
+                (normalise_terms terms) rhs r
+          | Model.Int_le_reif (a, b, r) ->
+              let terms, rhs = difference_terms a b ~offset:0 in
+              post_reif_le pos ~builtin:"int_le_reif" ~pack:pack_int_le_reif
+                (normalise_terms terms) rhs r
+          | Model.Int_eq_reif (a, b, r) ->
+              let terms, rhs = difference_terms a b ~offset:0 in
+              post_reif_eq pos ~builtin:"int_eq_reif" ~pack:pack_int_eq_reif
+                ~positive:true (normalise_terms terms) rhs r
+          | Model.Int_ne_reif (a, b, r) ->
+              let terms, rhs = difference_terms a b ~offset:0 in
+              post_reif_eq pos ~builtin:"int_ne_reif" ~pack:pack_int_ne_reif
+                ~positive:false (normalise_terms terms) rhs r
         with Checked.Overflow msg ->
           reject_row pos
             ~what:

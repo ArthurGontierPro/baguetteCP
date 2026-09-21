@@ -1,0 +1,13 @@
+% M3-T2: int_eq_reif, case 2 (enforce-not-hold), the piece that REMOVES A VALUE rather
+% than moving a bound -- which is why lib/core/prop/reif_lin_eq.ml declares VALUE and
+% not BOUNDS. b is forced false and y is pinned to 0, so x <> 0; the clause that
+% justifies the removal names b's own literal, without which it would be claiming the
+% disequality unconditionally.
+var 0..2: x :: output_var;
+var 0..2: y :: output_var;
+var bool: b :: output_var;
+constraint int_eq_reif(x, y, b);
+constraint bool_clause([], [b]);
+constraint int_lin_le([1], [y], 0);
+constraint int_lin_le([-1], [y], 0);
+solve satisfy;

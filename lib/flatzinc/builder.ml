@@ -11,7 +11,7 @@
    lands, move its builtin from [planned] to [implemented] in the same commit — that is
    the only place the front end's idea of "supported" is written down. *)
 
-(* SPEC 2.1, milestones M1 and M2. *)
+(* SPEC 2.1, milestones M1, M2 and M3. *)
 let implemented =
   [
     "int_lin_le";
@@ -28,16 +28,17 @@ let implemented =
     "bool2int";
     "bool_eq";
     "bool_not";
+    (* M3, the reified row (M3-T2 / M3-T4). *)
+    "int_lin_le_reif";
+    "int_le_reif";
+    "int_eq_reif";
+    "int_ne_reif";
   ]
 
 (* The rest of the SPEC 2.1 table, with the milestone that will bring it in. Listing
    these separately lets the error say "not yet" rather than "never". *)
 let planned =
   [
-    ("int_lin_le_reif", "M3");
-    ("int_eq_reif", "M3");
-    ("int_le_reif", "M3");
-    ("int_ne_reif", "M3");
     ("all_different_int", "M4");
     ("int_abs", "M4");
     ("int_times", "M4");
@@ -367,34 +368,57 @@ let build_constraint env (c : Ast.constraint_item) =
     | [ a; b ] -> make (operand env pos a) (operand env pos b)
     | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id
   in
+  (* `as`, `bs`, `c` folded into (terms, rhs) -- shared by the plain linear builtins
+     and by [int_lin_le_reif], which is the same three arguments with a reifier after
+     them. Folding it once is the M1-T7 rule that the row and the propagator read one
+     normalised list, applied one argument earlier. *)
+  let lin_terms ca va ra =
+    let coeffs =
+      List.map
+        (fun op -> as_const pos ~builtin:id ~what:"every coefficient" op)
+        (operands env pos ca)
+    in
+    let vars = operands env pos va in
+    let nc = List.length coeffs and nv = List.length vars in
+    if nc <> nv then
+      Error.failf pos
+        "builtin `%s`: the coefficient array has %d element(s) but the variable array \
+         has %d"
+        id nc nv;
+    let rhs0 = as_const pos ~builtin:id ~what:"the right-hand side" (operand env pos ra) in
+    let terms, rhs =
+      List.fold_left2
+        (fun (ts, r) coeff op ->
+          match op with
+          | Model.Var i -> ((coeff, i) :: ts, r)
+          | Model.Const n -> (ts, r - (coeff * n)))
+        ([], rhs0) coeffs vars
+    in
+    (List.rev terms, rhs)
+  in
+  let lin_reif make =
+    arity 4;
+    match c.Ast.c_args with
+    | [ ca; va; ra; r ] ->
+        let terms, rhs = lin_terms ca va ra in
+        make terms rhs (operand env pos r)
+    | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id
+  in
+  (* A reified comparison: the two operands of the unreified builtin, then the
+     reifier. Nothing here checks that the reifier is Boolean -- compile.ml does, where
+     the declarations are in hand. *)
+  let cmp_reif make =
+    arity 3;
+    match c.Ast.c_args with
+    | [ a; b; r ] -> make (operand env pos a) (operand env pos b) (operand env pos r)
+    | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id
+  in
   let lin make =
     arity 3;
     match c.Ast.c_args with
     | [ ca; va; ra ] ->
-        let coeffs =
-          List.map
-            (fun op -> as_const pos ~builtin:id ~what:"every coefficient" op)
-            (operands env pos ca)
-        in
-        let vars = operands env pos va in
-        let nc = List.length coeffs and nv = List.length vars in
-        if nc <> nv then
-          Error.failf pos
-            "builtin `%s`: the coefficient array has %d element(s) but the variable \
-             array has %d"
-            id nc nv;
-        let rhs0 =
-          as_const pos ~builtin:id ~what:"the right-hand side" (operand env pos ra)
-        in
-        let terms, rhs =
-          List.fold_left2
-            (fun (ts, r) coeff op ->
-              match op with
-              | Model.Var i -> ((coeff, i) :: ts, r)
-              | Model.Const n -> (ts, r - (coeff * n)))
-            ([], rhs0) coeffs vars
-        in
-        make (List.rev terms) rhs
+        let terms, rhs = lin_terms ca va ra in
+        make terms rhs
     | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id
   in
   (* M2: two arrays (`bool_clause`), and an array followed by a scalar (the two
@@ -429,6 +453,11 @@ let build_constraint env (c : Ast.constraint_item) =
     | "bool2int" -> cmp (fun b x -> Model.Bool2int (b, x))
     | "bool_eq" -> cmp (fun a b -> Model.Bool_eq (a, b))
     | "bool_not" -> cmp (fun a b -> Model.Bool_not (a, b))
+    | "int_lin_le_reif" ->
+        lin_reif (fun ts rhs r -> Model.Int_lin_le_reif (ts, rhs, r))
+    | "int_le_reif" -> cmp_reif (fun a b r -> Model.Int_le_reif (a, b, r))
+    | "int_eq_reif" -> cmp_reif (fun a b r -> Model.Int_eq_reif (a, b, r))
+    | "int_ne_reif" -> cmp_reif (fun a b r -> Model.Int_ne_reif (a, b, r))
     | other -> unsupported_builtin pos other
   in
   { Model.k; Model.c_pos = pos }
