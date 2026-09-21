@@ -4058,3 +4058,77 @@ door. `Encoding.define_reif` and `ensure_direct` still have **no production call
 reifier registry would need an `Encoding.t` and a `Writer.t` together at pruning time
 (`justify.ml:146`). That gap is unchanged, and now belongs to whoever wants a propagator to name
 a condition **the model never wrote**.
+
+## D-0058  A view is a rendering onto its base's literals, not a variable with literals of its own
+
+**Status**: **ACCEPTED**, implemented by M4-T0 (2026-09-21, agent-views), `lib/core/view.ml`.
+It answers in the **negative** the question M4-T0's own roadmap row left open — *"each view
+needs its own range literals"* — which matters because that premise is what M4-T3 would
+otherwise have inherited.
+
+### The decision
+
+A view `s·x + k` (s = ±1) gets **no PB variables of its own**:
+
+```
+y = x + 3 :   [y >= 5]  IS  x_ge_2
+z = 7 − x :   [z >= 5]  IS  ~x_ge_3     (a lower bound on the view is an upper bound on the base)
+```
+
+Both right-hand sides were **already expressible** — `Lit.t` carries a `positive` flag and
+`le x v` is `~(x >= v+1)` anyway — so the `.opb` does not change. Measured: all 57 models emit
+byte-identical `.opb`, `.pbp` and stdout against the previous `main`, with genuinely different
+binaries.
+
+### What decided it
+
+Minting `y_ge_v` costs, **per view and per unit of declared width**: one Boolean, one ladder
+rung, and one channelling row tying `y_ge_v` to `x_ge_(v−k)`.
+
+**The ladder rungs are not optional.** `PROOF-FORMAT.md` §3 measured that stripping them
+rejects **7 of 20** models, because nothing else makes a trace line RUP. And D-0028 already
+measured what declared width does here — a two-variable model at w=999999 emits a **29.8 MB**
+`pol` line. **A view is precisely the construct that multiplies that**, and it buys nothing:
+the two literal families would then have to be re-related by exactly the channelling that
+renaming makes unnecessary.
+
+**Rejected**: fresh literals per view, on that cost — and because the aux-variable failure
+M4-T0's row warns about (GCS "silently downgraded every value-pruning propagator behind it")
+has **the same shape one layer down**: an object that looks equivalent, costs consistency or
+size, and does it quietly.
+
+### One value, two readers
+
+`Lit.affine` in `view.ml` is the same record `Lit.view_ge` and `Encoding.view_ge` render from —
+not two copies of a rule. A propagator sees `View.lo/hi/mem/value` (O(1), allocation-free, no
+`Domain.t` built on the read path) and prunes with `View.set_lo/set_hi/remove/fix`, which are
+the base's ordinary `Store` mutators at the translated bound. The checker sees the **base's**
+literal.
+
+**The M2-T9 trap is avoided by construction, not by care**: a view has **no name**, so there is
+nothing to sanitise and no table to key on. (`Lit.sanitize` is non-injective; keying on rendered
+names is a silent bug, which M2-T9 found the hard way.) Pinned by a test where two bases `a-b`
+and `a_b` render the same OPB name and remain distinct literals.
+
+### The finding: two lanes could not see their own break
+
+Worth recording because it is this project's recurring failure and the session caught it in its
+own work:
+
+- The **hole** checks ran against a base already narrowed to two values, so every "hole"
+  assertion was passing against a **bound move**. The break reddened **0**.
+- The **constant-conflict** lane handed in `Reason.none`, under which `Store.conflict` and
+  `Store.unattributed_conflict` return the **identical value**. The break reddened **0**.
+
+Both were rewritten — a real interior hole, and a reason carrying a real fact — and both now
+redden. **A break that reddens nothing is not a passing test, it is an absent one.**
+
+### Downstream
+
+- **M4-T3 (`array_int_element`) is unblocked.** A 1-based index is
+  `View.shift (View.of_var i) (-1)`, pruning `i` directly through `View.set_lo`/`remove` with
+  **no channelling step at which to lose value consistency**. No `.opb` change for the index.
+- **Newly constrained**: a view's `=` is the **base's** `=`. `Encoding.view_eq` raises
+  `No_direct_encoding` naming the *base*, so M4-T3 introduces the direct encoding for the base
+  variable, not for the view.
+- **Not wired in.** No propagator or front-end path uses views yet — that is M4-T3's work.

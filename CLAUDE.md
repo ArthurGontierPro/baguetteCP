@@ -245,6 +245,9 @@ lib/core/       Baguette_core
                             learned constraint's lifetime. Policies are swappable
                             (`keep_all`, `fifo`, `lbd`) and the default is `keep_all`
                             BY MEASUREMENT, not by omission -- see D-0051 (M2-L4)
+  view.ml                   VIEWS (+-x + k) and constants-as-variables, as a RENDERING
+                            onto the base's order literals -- no PB variables of its
+                            own, no name, so no sanitize table (M4-T0, D-0058)
   propagator.ml             the PROPAGATOR module type (51 lines — read it whole)
   engine.ml                 propagate-to-fixpoint loop and the queue (ARCH §5)
   search.ml                 DFS, branching, backtracking, every step proof-logged
