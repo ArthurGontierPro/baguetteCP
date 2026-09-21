@@ -89,6 +89,23 @@ let unrendered_row () =
 let relabel (inst : Propagator.instance) level =
   { inst with Propagator.inst_consistency = level }
 
+(* Several lanes below run a DELIBERATELY WEAK propagator through [Engine.propagate], and
+   [Engine.propagate] raises when BAGUETTE_CONSISTENCY is set -- so under that gate the
+   scene never returns and the lane's own call to [check_consistency] is never reached.
+   That is the oracle doing exactly its job, so it is a PASS, not an uncaught exception.
+   test_engine.ml's [test_hole_wake_starved_is_caught] takes the same shape for the same
+   reason under BAGUETTE_DEBUG; the suite has to be green with the gate on and with it
+   off, and a deliberately-broken lane is where the two paths differ.
+
+   [propagate_for] runs the scene and reports which path it took. [`Caught] means the
+   gate fired first and the lane's assertions have already been proved, by the engine,
+   at the fixpoint. *)
+let propagate_for engine store =
+  match Engine.propagate engine store with
+  | Engine.Fixpoint -> `Fixpoint
+  | Engine.Conflict _ -> `Conflict
+  | exception Engine.Weaker_than_declared v -> `Caught v
+
 let names_of (vs : Engine.violation list) =
   List.map (fun (v : Engine.violation) -> (v.Engine.vi_var_name, v.Engine.vi_value)) vs
 
@@ -187,9 +204,15 @@ let test_the_break_is_caught () =
   let store, p = eq_scene () in
   let inst = pack_eq 0 (module Eq_lazy : Propagator.S with type t = Eq_lazy.t) p in
   let engine = Engine.create [ inst ] in
-  match Engine.propagate engine store with
-  | Engine.Conflict _ -> fail "lane 2: the scene conflicted, so it tests nothing"
-  | Engine.Fixpoint ->
+  match propagate_for engine store with
+  | `Conflict -> fail "lane 2: the scene conflicted, so it tests nothing"
+  | `Caught v ->
+      (* With the gate on, [Engine.propagate] refused to return the fixpoint at all. The
+         lane's claim is proved more strongly this way than by the hand call below: it was
+         the ENGINE that caught it, on the hot path, at the node. *)
+      check "2. THE BREAK: the gated hook in Engine.propagate refuses the fixpoint"
+        (v.Engine.vi_var_name = "x" || v.Engine.vi_var_name = "y")
+  | `Fixpoint ->
       let vs = Engine.check_consistency engine store in
       (* x = 1 has no y to match it and y = 2 has no x; a domain-consistent propagator
          removes both. This one removed neither. *)
@@ -387,15 +410,23 @@ let test_no_obligation_levels () =
   let store, p = eq_scene () in
   let inst = pack_eq 0 (module Eq_lazy : Propagator.S with type t = Eq_lazy.t) p in
   let engine = Engine.create [ inst ] in
-  match Engine.propagate engine store with
-  | Engine.Conflict _ -> fail "lane 5: the scene conflicted, so it tests nothing"
-  | Engine.Fixpoint ->
-      check "5a. Value carries no support obligation"
-        (Engine.check_instance_consistency (relabel inst Propagator.Value) store = []);
-      check "5b. Checking carries no support obligation"
-        (Engine.check_instance_consistency (relabel inst Propagator.Checking) store = []);
-      check "5c. and Domain on the very same instance still reports"
-        (Engine.check_instance_consistency (relabel inst Propagator.Domain) store <> [])
+  (* [relabel] is applied to the INSTANCE, but the engine holds the one that declares
+     [Domain], so under the gate [propagate] fires before the lane starts. Build the
+     fixpoint without the engine's hook by checking the relabelled instances directly
+     against the store the scene starts from -- the scene's propagator prunes nothing, so
+     the store at the fixpoint IS the store as created. *)
+  (match propagate_for engine store with
+  | `Conflict -> fail "lane 5: the scene conflicted, so it tests nothing"
+  | `Caught _ | `Fixpoint -> ());
+  let () =
+    check "5a. Value carries no support obligation"
+      (Engine.check_instance_consistency (relabel inst Propagator.Value) store = []);
+    check "5b. Checking carries no support obligation"
+      (Engine.check_instance_consistency (relabel inst Propagator.Checking) store = []);
+    check "5c. and Domain on the very same instance still reports"
+      (Engine.check_instance_consistency (relabel inst Propagator.Domain) store <> [])
+  in
+  ()
 
 (* ===================================================================== *)
 (* 6. The budget, and that a skip is not a pass.                         *)
@@ -441,23 +472,25 @@ let test_oracle_is_non_invasive () =
   let store, p = eq_scene () in
   let inst = pack_eq 0 (module Eq_lazy : Propagator.S with type t = Eq_lazy.t) p in
   let engine = Engine.create [ inst ] in
-  match Engine.propagate engine store with
-  | Engine.Conflict _ -> fail "lane 7: the scene conflicted, so it tests nothing"
-  | Engine.Fixpoint ->
-      let snap = Store.snapshot store in
-      let trail = Store.trail_length store in
-      let level = Store.level store in
-      let vs = Engine.check_consistency engine store in
-      check "7-pre: the lane audits something that actually reports" (vs <> []);
-      (* Every tuple the oracle tries runs a REAL propagator, which can prune and can
-         conflict. It does it on scratch stores, so none of that reaches here. If this
-         ever fails, a BAGUETTE_CONSISTENCY run and a plain run would answer differently
-         and emit different proofs, and the audit would be unusable over the suite it is
-         meant to audit. *)
-      check "7a. the audited store's domains are untouched"
-        (Store.same_domains store snap);
-      check "7b. its trail is untouched" (Store.trail_length store = trail);
-      check "7c. its decision level is untouched" (Store.level store = level)
+  (match propagate_for engine store with
+  | `Conflict -> fail "lane 7: the scene conflicted, so it tests nothing"
+  | `Caught _ | `Fixpoint -> ());
+  let () =
+    let snap = Store.snapshot store in
+    let trail = Store.trail_length store in
+    let level = Store.level store in
+    let vs = Engine.check_consistency engine store in
+    check "7-pre: the lane audits something that actually reports" (vs <> []);
+    (* Every tuple the oracle tries runs a REAL propagator, which can prune and can
+       conflict. It does it on scratch stores, so none of that reaches here. If this
+       ever fails, a BAGUETTE_CONSISTENCY run and a plain run would answer differently
+       and emit different proofs, and the audit would be unusable over the suite it is
+       meant to audit. *)
+    check "7a. the audited store's domains are untouched" (Store.same_domains store snap);
+    check "7b. its trail is untouched" (Store.trail_length store = trail);
+    check "7c. its decision level is untouched" (Store.level store = level)
+  in
+  ()
 
 (* ===================================================================== *)
 (* 8. The real propagators, at a real fixpoint, through the engine.      *)

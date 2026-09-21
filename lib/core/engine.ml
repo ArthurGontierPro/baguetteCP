@@ -573,6 +573,15 @@ let violation_to_string (v : violation) =
 
 exception Weaker_than_declared of violation
 
+(* Without this the escaping exception prints as [Weaker_than_declared(_)] and every word
+   of the message above is lost -- which is the whole value of it, since the reader is
+   looking at a crash from a search they cannot replay. Registering the printer is how a
+   payload-carrying exception stays legible when it reaches the top level. *)
+let () =
+  Printexc.register_printer (function
+    | Weaker_than_declared v -> Some (violation_to_string v)
+    | _ -> None)
+
 (* Counters, so a run can say how much it actually audited. [reset_oracle_stats] is for
    tests that measure one scene; [propagate] never resets. *)
 let oracle_nodes = ref 0

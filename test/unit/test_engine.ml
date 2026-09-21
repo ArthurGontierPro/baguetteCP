@@ -550,8 +550,27 @@ let test_hole_wake_starved_is_caught () =
      have and the test re-runs the check by hand -- which is the interesting shape,
      because it can also inspect the damage. With it ON, [propagate] runs the check
      itself and refuses to return at all; the suite has to stay green under
-     BAGUETTE_DEBUG=1, so that case is a pass here, not an uncaught exception. *)
+     BAGUETTE_DEBUG=1, so that case is a pass here, not an uncaught exception.
+
+     M2-T10 adds a THIRD path, under BAGUETTE_CONSISTENCY, and it is worth saying what it
+     means rather than just accommodating it. This scene starves [eq_dom] -- which
+     declares [Domain] -- of the wake it needs, so at the fixpoint [propagate] reports,
+     y = 2 has no support and a domain-consistent propagator would have removed it. That
+     is a violation of the DECLARED LEVEL, which is a different statement from I-P2's
+     "someone still has something to say", reached by a different route: I-P2 re-runs the
+     propagator, the oracle enumerates. This lane was not written for M2-T10 and M2-T10
+     did not know about it; the consistency oracle simply fires on it, which is the best
+     evidence available that it catches a starved propagator it was not built against.
+     See [Engine.check_consistency] and test/unit/test_consistency.ml. *)
   match Engine.propagate engine store with
+  | exception Engine.Weaker_than_declared v ->
+      let _, _, masked = Engine.stats () in
+      check "starved: the mask really did drop a wake" (masked > 0);
+      check
+        "starved: under BAGUETTE_CONSISTENCY the M2-T10 oracle refuses the \
+         fixpoint,          naming the unsupported value"
+        (v.Engine.vi_var_name = "y" && v.Engine.vi_value = 2
+        && v.Engine.vi_declared = Propagator.Domain)
   | exception Engine.Not_at_fixpoint msg ->
       let _, _, masked = Engine.stats () in
       check "starved: the mask really did drop a wake" (masked > 0);
