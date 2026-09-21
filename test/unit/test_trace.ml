@@ -1064,6 +1064,20 @@ let ix10_table =
        own facts -- the guard Booleans' facts included, which is what makes the big-M term
        vanish. No second constraint takes part and nothing is derived ahead of the line. *)
     ("arith.ml", Single_row);
+    (* M4-T1: all_different_int. THE FIRST [Needs_derivation] FAMILY, and the one the
+       classification above was written in anticipation of.
+
+       A Hall-interval pruning counts: it rests on one at-least-one line per Hall
+       variable and one at-most-one line per Hall value, recovered from the pairwise
+       disequality rows lib/proof/encoding.ml's [add_all_different] posts. Its trace line
+       is therefore NOT RUP against the .opb alone -- D-0040 measured 3.0.2 refusing
+       exactly that shape, and [test_ix10_derive_ahead] below re-measures it on this
+       propagator's own output rather than on a hand-written analogue.
+
+       What discharges I-X10 for it is lib/core/trace.ml's [derive_ahead]: the
+       cutting-planes derivation goes on the page immediately before the line, so the
+       line is RUP in sequence. D-0040's sentence, implemented. *)
+    ("alldiff.ml", Needs_derivation);
   ]
 
 (* (a) CLOSURE. OCaml cannot reflect over its own modules, so the only way to notice a
@@ -1106,24 +1120,34 @@ let test_ix10_closure () =
       (* A table that classified nothing would pass the two checks above vacuously. *)
       check "I-X10 closure: at least one family is classified Single_row"
         (List.exists (fun (_, c) -> c = Single_row) ix10_table);
-      (* And the limit of this gate, asserted rather than left in a comment.
-         [Needs_derivation] has no members today -- that IS I-X10's content, so the
-         assertion is meaningful and not bookkeeping. When M4-T1 arrives and classifies
-         itself, this reddens on purpose: the closure check can see a family arrive, but
-         it does NOT verify that such a family actually emits its pol/ia ahead of its
-         trace line. Whoever turns this red owes that stronger check (D-0040), and the
-         red line is how they find out. *)
-      let needs = List.filter (fun (_, c) -> c = Needs_derivation) ix10_table in
-      if needs <> [] then
+      (* THE DEBT THIS GATE USED TO RECORD, PAID (M4-T1).
+
+         Until alldiff.ml arrived, [Needs_derivation] had no members and this check said
+         so: "no family needs an explicit derivation yet -- when one does, this gate is
+         too weak and must be strengthened", with the note that whoever turned it red
+         owed the stronger check. It went red on M4-T1, exactly as written, and the
+         stronger check is [test_ix10_derive_ahead] below -- which takes a real
+         [Needs_derivation] pruning, asserts its trace line is REFUSED standalone (so the
+         obligation is real) and asserts a [pol] precedes it in the proof the solver
+         actually wrote (so the obligation is met).
+
+         What stays here is the closure half, restated so that it cannot pass vacuously
+         in either direction: a family classified [Needs_derivation] must be one the
+         content check below actually exercises. Today that is exactly `alldiff.ml`, and
+         a second such family reddens this until [test_ix10_derive_ahead] grows a scene
+         for it -- which is the same "visible event" the closure check exists to create,
+         one level up. *)
+      let needs =
+        List.map fst (List.filter (fun (_, c) -> c = Needs_derivation) ix10_table)
+      in
+      if needs <> [ "alldiff.ml" ] then
         Printf.printf
-          "     %s is/are classified Needs_derivation, and THIS GATE DOES NOT CHECK\n\
-          \     that the required pol/ia is emitted ahead of the trace line -- only that\n\
-          \     the family was classified. Build that check now; see D-0040.\n"
-          (String.concat ", " (List.map fst needs));
-      check
-        "I-X10 closure: no family needs an explicit derivation yet -- when one does, \
-         this gate is too weak and must be strengthened"
-        (needs = [])
+          "     Needs_derivation is now %s. test_ix10_derive_ahead below drives\n\
+          \     `alldiff.ml` and nothing else, so any other family here is classified\n\
+          \     but UNCHECKED: give it a scene there. See D-0040.\n"
+          (String.concat ", " needs);
+      check "I-X10 closure: every Needs_derivation family is one the content check drives"
+        (needs = [ "alldiff.ml" ])
 
 (* (b) CONTENT. The closure check is a name list; on its own it would pass forever even
    if I-X10 were false. This asserts the checker's actual verdict on the shape a
@@ -1209,6 +1233,138 @@ let test_ix10_content () =
       check "I-X10 content: a Hall bound move (M4-T1's shape) is REFUSED standalone" false
   | None -> check "I-X10 content: veripb is available for the refusal lane" false);
   (try Sys.remove opb with Sys_error _ -> ());
+  try Sys.rmdir dir with Sys_error _ -> ()
+
+(* (c) THE OBLIGATION ITSELF, on a [Needs_derivation] family's own output (M4-T1).
+
+   The closure check above can see a family arrive; it cannot see whether the family
+   does what the classification commits it to. D-0040's sentence is "emit that derivation
+   as explicit `pol` lines *ahead of* its trace line, so the line is RUP in sequence",
+   and this drives the real solver over a real model and asserts both halves of it:
+
+     REFUSED   the Hall pruning's own trace line, stated alone against this model's .opb,
+               is refused -- so there is an obligation, and it is this pruning's, not a
+               hand-written analogue of it ([test_ix10_content] above is the analogue,
+               and it is kept because it measures the shape on a satisfiable scene).
+     ORDERED   in the proof the solver actually wrote, a `pol` precedes that line.
+     ACCEPTED  and the whole proof verifies, which is what the two halves are for.
+
+   The model is test/models/alldiff_hall_trace_unsat.fzn, inline here for the reason
+   every scene in this file is inline: a test that reads the model directory tests
+   whatever is in the model directory.
+
+   x, y <= 2 makes {x, y} a Hall set for [1, 2] and pushes z and w up to 3..4; the
+   `z + w <= 5` row then refutes that, so the pruning LANDS and is on the trail when
+   [Trace.emit] runs. A Hall pruning that is never followed by a conflict writes no line
+   at all and would test nothing here. *)
+let ix10_hall_source =
+  {|var 1..4: x;
+var 1..4: y;
+var 1..4: z;
+var 1..4: w;
+constraint int_le(x, 2);
+constraint int_le(y, 2);
+constraint all_different_int([x, y, z, w]);
+constraint int_lin_le([1,1],[z,w],5);
+solve satisfy;
+|}
+
+(* The line the Hall pruning of z writes: its claim, disjoined with the negation of the
+   two bound facts it read. Pinned verbatim rather than searched for, so that a change
+   in what Alldiff records as its reason reddens here instead of silently retargeting
+   the check at some other line. *)
+let ix10_hall_line = "rup +1 z_ge_3 +1 x_ge_3 +1 y_ge_3 >= 1 ;"
+
+let test_ix10_derive_ahead () =
+  let dir = Filename.temp_file "baguette_ix10_ahead" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let opb = Filename.concat dir "ahead.opb" in
+  let pbp = Filename.concat dir "ahead.pbp" in
+  let m = F.Builder.of_string ~file:"ix10_hall" ix10_hall_source in
+  let comp = F.Compile.compile m in
+  let encoding = comp.F.Compile.encoding in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "ix10_hall" ] encoding oc;
+  close_out oc;
+  let n_model = Encoding.n_constraints encoding in
+  let oc = open_out pbp in
+  let writer = Writer.create ~audit:true oc in
+  Encoding.start_proof encoding writer;
+  let ctx = Justify.create ~writer ~encoding in
+  let independent (a : Search.assignment) =
+    let values = Array.make (F.Model.nvars m) 0 in
+    List.iter (fun (v, value) -> values.(Var.to_int v) <- value) a;
+    F.Model.check_assignment m values
+  in
+  let outcome =
+    Search.solve ~engine:comp.F.Compile.engine ~store:comp.F.Compile.store ~ctx
+      ~check:independent ()
+  in
+  close_out oc;
+  check "I-X10 ahead: the scene is UNSAT, so the Hall pruning's line is written"
+    (outcome = Search.Unsat);
+  let proof = read_file pbp in
+  let ls = List.map strip_label (lines_of proof) in
+  let index_of want =
+    let rec go i = function
+      | [] -> None
+      | l :: rest -> if String.equal l want then Some i else go (i + 1) rest
+    in
+    go 0 ls
+  in
+  (match index_of ix10_hall_line with
+  | None ->
+      Printf.printf "     the Hall trace line `%s` is not in the proof at all\n"
+        ix10_hall_line;
+      check "I-X10 ahead: the Hall pruning wrote its trace line" false
+  | Some i ->
+      check "I-X10 ahead: the Hall pruning wrote its trace line" true;
+      let pol_before =
+        List.exists
+          (fun (j, l) -> j < i && starts_with "pol " l)
+          (List.mapi (fun j l -> (j, l)) ls)
+      in
+      check
+        "I-X10 ahead: a pol precedes the Hall trace line (D-0040's ordering, emitted by \
+         Trace.derive_ahead)"
+        pol_before);
+  (* THE BREAK, and it is the same line: stated alone against this model's .opb, with no
+     derivation ahead of it, the checker must refuse it -- and refuse it on the JUDGEMENT
+     rather than on the grammar, which is what the wording below distinguishes. An exit
+     status cannot tell the two apart (M2-T14). *)
+  (match standalone ~dir ~opb ~n_model ix10_hall_line with
+  | Some false ->
+      check
+        "I-X10 ahead BREAK: the same line standalone is REFUSED, and on the checker's \
+         own judgement"
+        (contains
+           "not implied by reverse unit propagation (RUP) from core and derived database"
+           !last_veripb_log);
+      if
+        not
+          (contains
+             "not implied by reverse unit propagation (RUP) from core and derived \
+              database"
+             !last_veripb_log)
+      then Printf.printf "     veripb said: %s\n" !last_veripb_log
+  | Some true ->
+      Printf.printf
+        "     `%s` VERIFIED standalone against this .opb, so alldiff.ml has no I-X10\n\
+        \     obligation on this scene and the ordering check above proves nothing.\n"
+        ix10_hall_line;
+      check "I-X10 ahead BREAK: the same line standalone is REFUSED" false
+  | None ->
+      check "I-X10 ahead: veripb is available (a missing checker is a FAILURE)" false);
+  (* And the whole proof, which is the point of the ordering: with the derivation on the
+     page the line the break just saw refused verifies. *)
+  (match run_veripb ~dir ~opb proof with
+  | Some true -> check "I-X10 ahead: the full proof verifies (I-X1)" true
+  | Some false ->
+      Printf.printf "     veripb said: %s\n" !last_veripb_log;
+      check "I-X10 ahead: the full proof verifies (I-X1)" false
+  | None -> check "I-X10 ahead: veripb is available for the accept lane" false);
+  List.iter (fun f -> try Sys.remove f with Sys_error _ -> ()) [ opb; pbp ];
   try Sys.rmdir dir with Sys_error _ -> ()
 
 (* ================================================================== I-S4's gate =====
@@ -1501,6 +1657,7 @@ let () =
   List.iter run_fzn fzn_cases;
   test_ix10_closure ();
   test_ix10_content ();
+  test_ix10_derive_ahead ();
   test_is4_gate ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;

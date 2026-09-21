@@ -4963,6 +4963,287 @@ let test_arith_oracle_agrees () =
    model and does not honour test/models/PENDING, so a model that exits non-zero turns
    that gate red however it is listed. That is why the reproducer could not live in
    test/models/ in the first place. *)
+
+(* =========================================================== M4-T1: all_different ====
+
+   Four questions, and they are different ones.
+
+   (a) THE FILTERING, against brute force. For a pure `all_different_int` scope the
+       bounds-consistent fixpoint IS the tightest box containing every pairwise-distinct
+       assignment of the declared box, so the oracle can be written out and EQUALITY
+       asserted -- not containment. lib/core/prop/alldiff.ml declares [Bounds], and this
+       is what that declaration means. Containment alone would pass on a propagator that
+       pruned nothing.
+
+   (c) THE CITATION, established rather than assumed (D-0057, D-0060). With a refutation
+       resting on a clause, [Search.rests_on_a_clause] closes the root the D-0022 way and
+       every `pol` in the file becomes decorative. So one model's `conclusion UNSAT` is
+       asserted to cite a `pol` -- the Hall derivation itself -- and the other's to cite
+       the `rup >= 1`, which is the case alldiff.ml's [moved_bound_cancels] documents.
+       Both halves are asserted, because "it cites the derivation" is only informative
+       next to a case where it does not.
+
+   (b) THE BREAK. A Hall derivation over a set that is not tight derives a VALID but
+       vacuous row, and citing it as the contradiction is exactly the mistake a wrong
+       Hall set would make. The checker's judgement on it is asserted at full strength.
+
+   The scenes are hand-wired, as [build_search_case] above is, so that the derivation can
+   be built with a deliberately wrong argument -- something no .fzn can ask for. *)
+
+module Alldiff = Baguette_core.Alldiff
+
+let starts_with_str pre s =
+  String.length s >= String.length pre && String.sub s 0 (String.length pre) = pre
+
+(* The tightest box over the declared box that every pairwise-distinct assignment fits
+   in, i.e. the bounds-consistent fixpoint of a pure all_different. [None] when the scope
+   has no distinct assignment at all. *)
+let alldiff_hull (boxes : (int * int) list) =
+  let n = List.length boxes in
+  let arr = Array.of_list boxes in
+  let cur = Array.make n 0 in
+  let acc = Array.make n None in
+  let note () =
+    Array.iteri
+      (fun i v ->
+        acc.(i) <-
+          (match acc.(i) with
+          | None -> Some (v, v)
+          | Some (lo, hi) -> Some (min lo v, max hi v)))
+      cur
+  in
+  let distinct () =
+    let ok = ref true in
+    for i = 0 to n - 1 do
+      for j = i + 1 to n - 1 do
+        if cur.(i) = cur.(j) then ok := false
+      done
+    done;
+    !ok
+  in
+  let rec go i =
+    if i = n then (if distinct () then note ())
+    else
+      let lo, hi = arr.(i) in
+      for v = lo to hi do
+        cur.(i) <- v;
+        go (i + 1)
+      done
+  in
+  go 0;
+  if Array.exists Option.is_none acc then None
+  else Some (Array.to_list (Array.map Option.get acc))
+
+let alldiff_src boxes =
+  let decls =
+    List.mapi (fun i (lo, hi) -> Printf.sprintf "var %d..%d: v%d;" lo hi i) boxes
+  in
+  let names = List.mapi (fun i _ -> Printf.sprintf "v%d" i) boxes in
+  String.concat "\n" decls
+  ^ Printf.sprintf "\nconstraint all_different_int([%s]);\nsolve satisfy;\n"
+      (String.concat ", " names)
+
+let test_alldiff_filtering () =
+  let bad_sound = ref [] and bad_exact = ref [] and bad_refute = ref [] in
+  let scene boxes =
+    let names = List.mapi (fun i _ -> Printf.sprintf "v%d" i) boxes in
+    let got = arith_root_box (alldiff_src boxes) names in
+    match (got, alldiff_hull boxes) with
+    | None, None -> ()
+    | None, Some _ -> bad_refute := boxes :: !bad_refute
+    | Some _, None ->
+        (* Detecting emptiness at the root IS claimed: |H| > k over the whole scope is
+           the pigeonhole, and bounds consistency finds it. *)
+        bad_refute := boxes :: !bad_refute
+    | Some got, Some want ->
+        if not (List.for_all2 contains got want) then bad_sound := boxes :: !bad_sound
+        else if got <> want then bad_exact := boxes :: !bad_exact
+  in
+  (* Every scope of two or three variables over sub-intervals of 1..4, plus a handful of
+     four-variable ones. Exhaustive at n <= 3 rather than sampled: the whole scene space
+     is a few thousand root fixpoints over domains four values wide, which is well inside
+     the width rule, and a sampled oracle is one that can miss the case it exists for. *)
+  let intervals =
+    List.concat_map (fun lo -> List.init (5 - lo) (fun k -> (lo, lo + k))) [ 1; 2; 3; 4 ]
+  in
+  List.iter (fun a -> List.iter (fun b -> scene [ a; b ]) intervals) intervals;
+  List.iter
+    (fun a ->
+      List.iter (fun b -> List.iter (fun c -> scene [ a; b; c ]) intervals) intervals)
+    intervals;
+  List.iter
+    (fun boxes -> scene boxes)
+    [
+      [ (1, 2); (1, 2); (1, 4); (1, 4) ];
+      [ (1, 2); (1, 2); (1, 2); (1, 4) ];
+      [ (1, 4); (2, 3); (2, 3); (1, 4) ];
+      [ (1, 3); (1, 3); (1, 3); (1, 4) ];
+      [ (3, 4); (3, 4); (1, 4); (1, 4) ];
+    ];
+  let show what l =
+    if l <> [] then
+      Printf.printf "     %s: %s\n" what
+        (String.concat "; "
+           (List.map
+              (fun b ->
+                String.concat ","
+                  (List.map (fun (lo, hi) -> Printf.sprintf "%d..%d" lo hi) b))
+              (List.filteri (fun i _ -> i < 4) l)))
+  in
+  show "unsound scopes" !bad_sound;
+  show "not bounds consistent" !bad_exact;
+  show "disagreed about emptiness" !bad_refute;
+  check "alldiff (a): every root box CONTAINS the true hull (soundness)" (!bad_sound = []);
+  check "alldiff (a): the root box IS the hull -- bounds consistency, as declared"
+    (!bad_exact = []);
+  check "alldiff (a): refutes exactly the scopes with no distinct assignment"
+    (!bad_refute = [])
+
+(* ------------------------------------------------ the citation, and the wrong set *)
+
+(* The 3-in-2 pigeonhole, wired by hand so the derivation can be asked for with a Hall
+   set that is not the one the propagator would choose. Returns the pieces the two lanes
+   below need; nothing is solved, because what is under test is the DERIVATION, not the
+   search that would find it. *)
+let alldiff_scene dir ~file ~boxes =
+  let e = Encoding.create () in
+  let names = List.mapi (fun i _ -> Printf.sprintf "v%d" i) boxes in
+  List.iter2 (fun n (lo, hi) -> Encoding.declare_int e n ~lo ~hi) names boxes;
+  List.iter (Encoding.request_direct e) names;
+  let rows = Encoding.add_all_different e names in
+  let opb = Filename.concat dir (file ^ ".opb") in
+  let pbp = Filename.concat dir (file ^ ".pbp") in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ file ] e oc;
+  close_out oc;
+  let store = mk_store (List.map2 (fun n (lo, hi) -> (n, lo, hi)) names boxes) in
+  let p = Alldiff.make store e ~rows (List.mapi (fun i _ -> var i) boxes) in
+  let snaps = Array.to_list (Array.map (Alldiff.snap_of store) p.Alldiff.terms) in
+  let oc = open_out pbp in
+  (* audit:false: this scene mints ids and concludes without a [Search.solve] to sweep
+     them, so I-X2's owner is absent by construction. The invariant is under test in
+     every model run and in test_proof.ml; asserting it here would be asserting it
+     against a harness. *)
+  let w = Writer.create ~comments:true ~audit:false oc in
+  Encoding.start_proof e w;
+  let ctx = Justify.create ~writer:w ~encoding:e in
+  (p, snaps, ctx, w, oc, opb, pbp)
+
+(* [halls] is the Hall set the derivation is TOLD to use. The control passes the real
+   one; the break passes a set too small for the interval, which is what a wrong Hall
+   argument looks like from the inside. *)
+let build_alldiff_hall ~take_halls dir =
+  let boxes = [ (1, 2); (1, 2); (1, 2) ] in
+  let p, snaps, ctx, w, oc, opb, pbp = alldiff_scene dir ~file:"alldiff_hall" ~boxes in
+  let halls = take_halls snaps in
+  let y = List.nth snaps 2 in
+  let e = Alldiff.prune_expl p ~a:1 ~b:2 ~halls ~y ~lower:true ~level:0 in
+  let cid = Justify.emit ctx e in
+  Writer.conclusion w (Writer.Unsat (Some cid));
+  close_out oc;
+  (opb, pbp)
+
+(* (c) OBLIGATION 3, on the solver's own output rather than on a hand-built scene: which
+   line does `conclusion UNSAT` name, and what kind of line is it?
+
+   The two models are the pair alldiff.ml's header describes. In the first, no Hall
+   variable's bound has moved, so the derivation cancels to [0 >= 1] and IS the
+   contradiction -- the conclusion cites the `pol`. In the second the bounds moved, the
+   derivation has to cancel them with lines the claim index already holds, that makes it
+   rest on a clause, and [Search.rests_on_a_clause] closes the root with `rup >= 1`. *)
+let alldiff_conclusion_kind dir ~file src =
+  let m = Flatzinc.Builder.of_string ~file src in
+  let t = Compile.compile m in
+  let opb = Filename.concat dir (file ^ ".opb") in
+  let pbp = Filename.concat dir (file ^ ".pbp") in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ file ] t.Compile.encoding oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let w = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof t.Compile.encoding w;
+  let ctx = Justify.create ~writer:w ~encoding:t.Compile.encoding in
+  let check_sol (a : Search.assignment) =
+    let values = Array.make (Model.nvars m) 0 in
+    List.iter (fun (v, value) -> values.(Var.to_int v) <- value) a;
+    Model.check_assignment m values
+  in
+  let outcome =
+    Search.solve ~engine:t.Compile.engine ~store:t.Compile.store ~ctx ~check:check_sol ()
+  in
+  close_out oc;
+  let text = read_file pbp in
+  let ls = String.split_on_char '\n' text in
+  let cited =
+    List.fold_left
+      (fun acc l ->
+        match String.index_opt l ':' with
+        | Some i when contains_sub ~needle:"conclusion UNSAT" l ->
+            Some (String.trim (String.sub l (i + 1) (String.length l - i - 1)))
+        | _ -> acc)
+      None ls
+  in
+  (* The label the conclusion names, stripped of its trailing ` ;`, then the line that
+     minted it. *)
+  let label =
+    match cited with
+    | None -> None
+    | Some s -> (
+        match String.index_opt s ' ' with
+        | Some i -> Some (String.sub s 0 i)
+        | None -> Some s)
+  in
+  let minting =
+    match label with
+    | None -> None
+    | Some lab -> List.find_opt (fun l -> starts_with_str (lab ^ " ") (String.trim l)) ls
+  in
+  (outcome, opb, pbp, minting)
+
+let test_alldiff_conclusion () =
+  let dir = Filename.temp_file "baguette_alldiff_concl" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let clean =
+    "var 1..2: x;\n\
+     var 1..2: y;\n\
+     var 1..2: z;\n\
+     constraint all_different_int([x, y, z]);\n\
+     solve satisfy;\n"
+  in
+  let moved =
+    "var 1..4: a;\n\
+     var 1..4: b;\n\
+     var 1..4: c;\n\
+     var 1..4: d;\n\
+     constraint int_lin_le([-1,-1],[a,b],-7);\n\
+     constraint int_lin_le([-1,-1],[c,d],-7);\n\
+     constraint all_different_int([a, b, c, d]);\n\
+     solve satisfy;\n"
+  in
+  let outcome, _, _, minting = alldiff_conclusion_kind dir ~file:"concl_clean" clean in
+  check "alldiff (c): the clean pigeonhole is UNSAT" (outcome = Search.Unsat);
+  (match minting with
+  | None -> check "alldiff (c): the conclusion names a line this proof minted" false
+  | Some line ->
+      check "alldiff (c): the conclusion names a line this proof minted" true;
+      if not (contains_sub ~needle:" pol " (" " ^ String.trim line)) then
+        Printf.printf "     conclusion cites: %s\n" (String.trim line);
+      check
+        "alldiff (c): `conclusion UNSAT` cites the Hall DERIVATION -- a pol, not the \
+         empty clause"
+        (contains_sub ~needle:" pol " (" " ^ String.trim line)));
+  let outcome, _, _, minting = alldiff_conclusion_kind dir ~file:"concl_moved" moved in
+  check "alldiff (c): the moved-bounds pigeonhole is UNSAT" (outcome = Search.Unsat);
+  (match minting with
+  | None -> check "alldiff (c): the moved-bounds conclusion names a line" false
+  | Some line ->
+      check
+        "alldiff (c): with the bounds moved it cites `rup >= 1` instead -- the pol IS \
+         decorative there, and alldiff.ml says so"
+        (contains_sub ~needle:"rup >= 1" (String.trim line)));
+  try Sys.rmdir dir with _ -> ()
+
 let () =
   print_endline "\npropagator unit tests";
   test_soundness ();
@@ -5093,6 +5374,19 @@ let () =
   test_arith_overflow ();
   test_arith_oracle_agrees ();
   test_arith_cites_its_own_row ();
+  test_alldiff_filtering ();
+  test_alldiff_conclusion ();
+  run_veripb
+    ~name:
+      "alldiff (b) CONTROL: the Hall derivation over the TIGHT set is a contradiction \
+       the conclusion can cite"
+    ~build:(build_alldiff_hall ~take_halls:(fun s -> [ List.nth s 0; List.nth s 1 ]));
+  run_veripb_rejects_saying
+    ~name:
+      "alldiff (b) BREAK: the same derivation over a Hall set too small for the interval \
+       derives a VACUOUS row, and citing it is refused"
+    ~build:(build_alldiff_hall ~take_halls:(fun s -> [ List.nth s 0 ]))
+    ~saying:"is not contradicting, as specified by the hint.";
   run_veripb
     ~name:"arith D-0033: the TRUNCATING bound -7 div 2 <= -3 is RUP over the posted rows"
     ~build:(build_arith_rounding ~claim:"~q_ge_m2");

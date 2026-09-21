@@ -487,7 +487,18 @@ let evaluate (m : M.t) (assign : int array) =
           operand a * operand b = operand c && arith_aux a b aux
       | M.Int_div (a, b, c, aux) ->
           operand b <> 0 && operand a / operand b = operand c && arith_aux a b aux
-      | M.Int_abs (a, c, aux) -> operand c = abs (operand a) && arith_aux a a aux)
+      | M.Int_abs (a, c, aux) -> operand c = abs (operand a) && arith_aux a a aux
+      (* M4-T1. The RELATION, restated here rather than shared with
+         [Model.check_assignment] -- this oracle exists to disagree with the solver, and
+         all_different's decomposition into pairwise rows is exactly the thing it has to
+         be able to disagree about. *)
+      | M.All_different xs ->
+          let vs = List.map operand xs in
+          let rec distinct = function
+            | [] -> true
+            | v :: rest -> (not (List.mem v rest)) && distinct rest
+          in
+          distinct vs)
     m.M.constraints
 
 (* Brute force over the declared box: the independent oracle for the expected answer.

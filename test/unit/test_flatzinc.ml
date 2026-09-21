@@ -255,19 +255,24 @@ let test_rejections () =
   reject "reject: unknown builtin" ~line:2
     ~src:"var 1..3: x;\nconstraint frobnicate(x, 1);\nsolve satisfy;\n"
     ~needles:[ "unknown builtin"; "`frobnicate`"; "int_lin_le" ];
-  reject "reject: builtin from a later milestone" ~line:3
+  (* M4-T1: `all_different_int` was this lane's example until its propagator landed,
+     which is builder.ml's own rule working -- a builtin moves from [planned] to
+     [implemented] in the same commit as its propagator, and its lane moves with it.
+     `array_int_element` is the only "not yet" left, and it carries the wording below;
+     what `all_different_int` owes the front end now is arity. *)
+  reject "reject: all_different_int with the wrong arity" ~line:3
     ~src:
       "var 1..3: x;\n\
        var 1..3: y;\n\
-       constraint all_different_int([x, y]);\n\
+       constraint all_different_int([x, y], 2);\n\
        solve satisfy;\n"
-    ~needles:[ "unsupported builtin"; "`all_different_int`"; "M4" ];
+    ~needles:[ "`all_different_int`"; "expects 1 argument" ];
   (* `int_eq_reif` was this file's "builtin from a later milestone" lane until M3-T2
      implemented it. lib/flatzinc/builder.ml's header sets the rule -- a builtin moves
      from [planned] to [implemented] in the same commit as its propagator -- and this
      lane moves with it, from "not yet" to arity, which is what the front end still
-     owes a reified builtin. The "later milestone" wording is covered by the
-     `all_different_int` lane above; [test_compile.ml]'s [test_reified] is where the
+     owes a reified builtin. The "later milestone" wording is now covered by the
+     `array_int_element` lane below; [test_compile.ml]'s [test_reified] is where the
      four M3 builtins are checked to compile. *)
   reject "reject: a reified builtin with the wrong arity" ~line:3
     ~src:"var 1..3: x;\nvar bool: b;\nconstraint int_eq_reif(x, 2);\nsolve satisfy;\n"
@@ -275,7 +280,7 @@ let test_rejections () =
   (* M4-T4b. `int_abs`, `int_times` and `int_div` moved from [planned] to
      [implemented], so what the front end still owes them is arity -- the same move
      the `int_eq_reif` lane above records for M3. `array_int_element` is still the
-     "later milestone" case and `all_different_int` covers the wording. *)
+     "later milestone" case and its own lane below covers the wording. *)
   reject "reject: int_times with the wrong arity" ~line:2
     ~src:"var 1..3: x;\nconstraint int_times(x, 2);\nsolve satisfy;\n"
     ~needles:[ "`int_times`"; "expects 3 argument" ];
