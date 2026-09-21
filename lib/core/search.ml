@@ -2118,6 +2118,17 @@ let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
       if not (check assignment) then raise (Unsound_solution assignment);
       retire_learned ();
       retire_trace ();
+      (* I-X2, and the SAT path needs it for the same reason the NFail arm below does
+         (M4-T4b found this; the arithmetic family is simply the first thing in the tree
+         to nest this deeply at level 0 on a SAT path). A level-0 pruning whose D-0013
+         explanation NESTS -- a [Combine] citing a trail entry whose own explanation is a
+         [Combine] -- mints intermediate [pol] ids at level 0, and no [w] retires a
+         level-0 id. The audit then refuses the run with "constraint id(s) never
+         deleted". Unlike the refutation arm there is no cited contradiction to spare:
+         the conclusion is [Sat lits], which cites no constraint, so every live id goes. *)
+      (match Writer.live_ids ctx.Justify.writer with
+      | [] -> ()
+      | ids -> Writer.delete_many ctx.Justify.writer ids);
       let bindings = List.map (fun (v, x) -> (Store.name store v, x)) assignment in
       let lits = Encoding.assignment_lits ctx.Justify.encoding bindings in
       Writer.conclusion ctx.Justify.writer (Writer.Sat lits);

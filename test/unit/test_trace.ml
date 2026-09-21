@@ -1058,6 +1058,12 @@ let ix10_table =
        since M1-T9. Nothing here counts two constraints and nothing emits a derivation
        ahead of its trace line. *)
     ("reif_lin_eq.ml", Single_row);
+    (* M4-T4b: int_times, int_div, int_abs. Single_row, in exactly reif_lin_le.ml's sense:
+       every pruning is [Linear]'s over ONE of the guarded rows lib/flatzinc/compile.ml
+       posts for the constraint, and the trace line is RUP against that row with the line's
+       own facts -- the guard Booleans' facts included, which is what makes the big-M term
+       vanish. No second constraint takes part and nothing is derived ahead of the line. *)
+    ("arith.ml", Single_row);
   ]
 
 (* (a) CLOSURE. OCaml cannot reflect over its own modules, so the only way to notice a
