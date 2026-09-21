@@ -474,6 +474,43 @@ let record_citation t (w : Writer.t) ~citing ~citing_level ~cited ~cited_level ~
     (match i_s4_verdict c with Some m -> m | None -> "I-S4")
     (fun () -> i_s4_verdict c = None)
 
+(* I-X10 / D-0040, and the whole of what a [Needs_derivation] propagator family needs
+   from this module (M4-T1).
+
+   Every trace line is a [rup], and until M4 every one of them was RUP against the .opb
+   alone because every pruning followed from a SINGLE model constraint whose rows
+   unit-propagate the claim. A Hall-interval pruning does not: its claim is a counting
+   argument over n disequality rows, and D-0040 measured 3.0.2 refusing exactly that line
+   standalone. The record's own remedy is the one sentence this function implements --
+   "emit that derivation as explicit `pol` lines *ahead of* its trace line, so the line is
+   RUP in sequence". With the derivation on the page the line follows from it by unit
+   propagation, and nothing about the line itself changes.
+
+   WHICH ENTRIES. [Encoding.has_direct] on the pruned variable, and that test is the
+   D-0019 point 3 line rather than a convenience: this project materialises the direct
+   encoding for exactly the variables a global constraint reasons about
+   ([Encoding.request_direct], honoured by [start_proof]), so a variable that has one is a
+   variable whose bounds a counting propagator may have moved. It over-triggers -- an
+   [int_lin_le] pruning of an `all_different` variable also gets its [pol] written out
+   ahead of a line that did not need it -- and that is deliberate: the alternative is a
+   per-entry flag threaded from the propagator through [Store.entry], and a test that
+   costs one hashtable lookup and writes a redundant but VALID line is worth more than a
+   field four modules have to agree about. Every other variable in every model is
+   untouched, so no proof this suite had before M4-T1 changes by a byte.
+
+   A DECISION is skipped, and must be: nothing in the proof establishes one, and
+   [Justify.emit] refuses it outright (D-0009, M1-T50).
+
+   The id this mints is an ordinary [pol] at the entry's own level, so the same [w] that
+   retires the line retires it, and at level 0 [Search.solve]'s end-of-run sweep does
+   (I-X2). It is not recorded in [t.permanent_rev]: this module owns the lines it writes
+   through [emit_line], and an id [Justify] minted and memoised is [Justify]'s. *)
+let derive_ahead (ctx : Justify.ctx) store (e : Store.entry) name =
+  if Encoding.has_direct ctx.Justify.encoding name then
+    match Explanation.force (Store.explanation store e) with
+    | Explanation.Decision _ -> ()
+    | forced -> ignore (Justify.emit ctx forced : Writer.cid)
+
 (* Write every line the trail owes, oldest first, and leave the writer on the level it
    was on. [Search] emits the nogood straight after, at the branch's own level, so this
    must not move it -- the whole ordering D-0018 point 4 exists to protect
@@ -504,6 +541,14 @@ let emit (ctx : Justify.ctx) t store =
       | cs ->
           let facts = Reason.lits e.Store.reason in
           let level = Store.level_of_index store i in
+          (* The level is set here rather than inside the loop below so that the
+             derivation and the line it precedes are tagged together; the loop's own
+             [set_level] is then a no-op on the first claim and still does its job for a
+             settle that spans levels. *)
+          if !at <> level then (
+            Writer.set_level ctx.Justify.writer level;
+            at := level);
+          derive_ahead ctx store e name;
           List.iter
             (fun { claim; settled_over; hole } ->
               let facts, cited =

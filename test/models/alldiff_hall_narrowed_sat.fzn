@@ -1,0 +1,20 @@
+% The Hall set is formed by PROPAGATION, not by the declarations.
+%
+% All three variables are declared 1..4; two `int_le` rows narrow x and y to 1..2, and
+% only then is {x, y} a Hall set for [1, 2] and z pushed to 3..4.
+%
+% That is the case alldiff_hall_sat cannot reach: because x and y are no longer at their
+% declared upper bound, each one's at-least-one line has to be narrowed from its declared
+% range 1..4 down to the Hall interval before the counting works, and Alldiff.excl builds
+% that narrowing out of the direct encoding's d_hi/d_lo halves and the order ladder's own
+% rungs. The bound it rests on survives into the derived row as ~x_ge_3 rather than being
+% cited, which is what keeps the whole derivation globally valid (alldiff.ml's header,
+% point 2).
+var 1..4: x :: output_var;
+var 1..4: y :: output_var;
+var 1..4: z :: output_var;
+constraint int_le(x, 2);
+constraint int_le(y, 2);
+constraint int_le(z, 3);
+constraint all_different_int([x, y, z]);
+solve satisfy;

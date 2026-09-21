@@ -1,0 +1,13 @@
+% The other push direction: a Hall interval at the TOP of the range lowers hi(x).
+%
+% {y, z} is confined to 3..4, so [3, 4] is a Hall interval and x, declared 1..4, is
+% pushed down to 1..2 -- Alldiff's ~lower:false arm, whose telescoping channelling sum
+% ends on ~x_ge_3 instead of on x_ge_(b+1). Both arms are the same function of the same
+% snapshot and neither is the other's mirror by hand, but they are different arithmetic
+% and a model that exercises only one exercises only one.
+var 1..4: x :: output_var;
+var 3..4: y :: output_var;
+var 3..4: z :: output_var;
+constraint int_le(x, 1);
+constraint all_different_int([x, y, z]);
+solve satisfy;

@@ -1,0 +1,16 @@
+% all_different_int, the Hall-interval pruning that M4-T1 exists for.
+%
+% y and z are both confined to 1..2, so {y, z} is a Hall set for the interval [1, 2]:
+% two variables, two values, and between them they use both. x therefore cannot take
+% 1 or 2, and bounds propagation raises lo(x) to 3 at the ROOT, before any decision.
+% There is exactly one value left for x, so the model is satisfiable and the answer
+% is forced -- which is what makes the expected output worth diffing.
+%
+% The proof is the point: that one pruning's `pol` names, transitively, the at-least-one
+% line of y and of z, the at-most-one line of each of 1 and 2 over {x, y, z}, and the
+% forward channelling clauses of x at 1 and 2. See lib/core/prop/alldiff.ml's header.
+var 1..3: x :: output_var;
+var 1..2: y :: output_var;
+var 1..2: z :: output_var;
+constraint all_different_int([x, y, z]);
+solve satisfy;

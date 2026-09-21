@@ -37,11 +37,13 @@ let implemented =
     "int_abs";
     "int_times";
     "int_div";
+    (* M4, the first global (M4-T1). *)
+    "all_different_int";
   ]
 
 (* The rest of the SPEC 2.1 table, with the milestone that will bring it in. Listing
    these separately lets the error say "not yet" rather than "never". *)
-let planned = [ ("all_different_int", "M4"); ("array_int_element", "M4") ]
+let planned = [ ("array_int_element", "M4") ]
 let implemented_list = String.concat ", " implemented
 
 type env = {
@@ -437,6 +439,12 @@ let build_constraint env (c : Ast.constraint_item) =
     | [ a; b ] -> make (operands env pos a) (operands env pos b)
     | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id
   in
+  let one_array make =
+    arity 1;
+    match c.Ast.c_args with
+    | [ a ] -> make (operands env pos a)
+    | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id
+  in
   let array_scalar make =
     arity 2;
     match c.Ast.c_args with
@@ -519,6 +527,12 @@ let build_constraint env (c : Ast.constraint_item) =
     | "bool2int" -> cmp (fun b x -> Model.Bool2int (b, x))
     | "bool_eq" -> cmp (fun a b -> Model.Bool_eq (a, b))
     | "bool_not" -> cmp (fun a b -> Model.Bool_not (a, b))
+    (* M4-T1. One array argument, and the operands are kept exactly as written --
+       duplicates and constants included. `all_different_int([x, x])` is UNSAT and
+       `all_different_int([x, 1])` is `x <> 1`, and both fall out of the pairwise rows
+       lib/flatzinc/compile.ml posts with no special case, which is the same reason
+       [normalise_terms] is not applied to a linear row's duplicates here. *)
+    | "all_different_int" -> one_array (fun xs -> Model.All_different xs)
     | "int_lin_le_reif" -> lin_reif (fun ts rhs r -> Model.Int_lin_le_reif (ts, rhs, r))
     | "int_le_reif" -> cmp_reif (fun a b r -> Model.Int_le_reif (a, b, r))
     | "int_eq_reif" -> cmp_reif (fun a b r -> Model.Int_eq_reif (a, b, r))

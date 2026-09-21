@@ -158,6 +158,7 @@ module Propagator = Baguette_core.Propagator
 module Linear = Baguette_core.Linear
 module Lin_eq = Baguette_core.Lin_eq
 module Ne = Baguette_core.Ne
+module Alldiff = Baguette_core.Alldiff
 
 (* M2-L12/D-0052: the clause propagator was widened to general order literals and its
    file renamed [Clause]. The Boolean face this front end builds is [Clause.make] plus
@@ -672,6 +673,71 @@ let compile (m : Model.t) : t =
     [ pack (Ne.make store (prop_terms nterms) rhs) ]
   in
 
+  (* ---------------------------------------------------------- M4-T1, all_different
+
+     One [Alldiff] instance over the DISTINCT variable operands, plus the pairwise
+     clause rows [Encoding.add_all_different] posts for them, plus a request for the
+     direct encoding of each -- which [Encoding.start_proof] honours, because that is
+     the first moment a [Writer.t] exists and the Hall derivation names channelling ids
+     as data (lib/core/prop/alldiff.ml's header).
+
+     Two shapes reach here that the propagator deliberately does not handle, and each
+     is decomposed rather than special-cased inside it:
+
+     - A CONSTANT operand. `all_different([x, y, 3])` is `all_different([x, y])` plus
+       `x <> 3` and `y <> 3`, and the disequalities go through the ordinary [post_ne]
+       path so they get the rows and the propagator M1 already has for them. Nothing
+       in the .opb or in [Alldiff] then has to know that a value can be occupied by
+       something with no encoding of its own.
+     - A REPEATED variable. `all_different([x, y, x])` is unsatisfiable outright, and
+       [post_ne] over the normalised `x - x <> 0` is exactly the ground contradiction
+       that file's own header documents (`ne_self_unsat`). Passing the repeat through
+       to [Alldiff] instead would give it two snapshots with one name, and the Hall
+       set's "is this variable in the set" test is by name.
+
+     Two equal constants take the same route as a repeated variable, through the same
+     empty term list. *)
+  let post_all_different pos (xs : Model.operand list) =
+    let ne_pair a b =
+      post_ne pos
+        (normalise_terms (fst (difference_terms a b ~offset:0)))
+        (snd (difference_terms a b ~offset:0))
+        ~pack:pack_ne
+    in
+    let rec decompose seen = function
+      | [] -> []
+      | op :: rest ->
+          (* Every pair involving [op] that [Alldiff] will not cover: a pair with a
+             constant either way, and a pair of two occurrences of the same variable. *)
+          let here =
+            List.concat_map
+              (fun other ->
+                match (op, other) with
+                | Model.Var i, Model.Var j when i <> j -> []
+                | _ -> ne_pair op other)
+              rest
+          in
+          here @ decompose (op :: seen) rest
+    in
+    let vars_in_scope =
+      List.sort_uniq compare
+        (List.filter_map (function Model.Var i -> Some i | Model.Const _ -> None) xs)
+    in
+    let global =
+      if List.length vars_in_scope < 2 then []
+      else
+        let names = List.map (name_of pos) vars_in_scope in
+        List.iter (Encoding.request_direct encoding) names;
+        let rows = Encoding.add_all_different encoding names in
+        let p = Alldiff.make store encoding ~rows (List.map Var.of_int vars_in_scope) in
+        [
+          (fun id ->
+            Propagator.pack ~id (module Alldiff : Propagator.S with type t = Alldiff.t) p);
+        ]
+    in
+    decompose [] xs @ global
+  in
+
   (* ------------------------------------------------------------- M2, Booleans *)
 
   (* An operand a Boolean builtin requires to be Boolean. Checked *here*, not in
@@ -1167,6 +1233,7 @@ let compile (m : Model.t) : t =
           | Model.Int_times (x, y, z, aux) -> post_int_times pos x y z aux
           | Model.Int_div (x, y, q, aux) -> post_int_div pos x y q aux
           | Model.Int_abs (x, z, aux) -> post_int_abs pos x z aux
+          | Model.All_different xs -> post_all_different pos xs
         with Checked.Overflow msg ->
           reject_row pos
             ~what:

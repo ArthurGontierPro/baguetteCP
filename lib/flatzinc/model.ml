@@ -97,6 +97,12 @@ type cstr =
   | Int_times of operand * operand * operand * aux
   | Int_div of operand * operand * operand * aux
   | Int_abs of operand * operand * aux
+  (* M4-T1. `all_different_int(xs)`: the operands take pairwise distinct values.
+     Kept as the RELATION and not as its pairwise decomposition, for the reason the
+     comment above [Int_times] gives -- [check_assignment] must judge a solution
+     against what SPEC 2.1 says the constraint means, never against the shape
+     lib/flatzinc/compile.ml happens to post for it. *)
+  | All_different of operand list
 
 type constr = { k : cstr; c_pos : Pos.t }
 type var_choice = Input_order | First_fail
@@ -209,6 +215,9 @@ let string_of_cstr t = function
         (string_of_operand t b)
   | Int_abs (a, c, _) ->
       Printf.sprintf "%s = |%s|" (string_of_operand t c) (string_of_operand t a)
+  | All_different xs ->
+      Printf.sprintf "all_different([%s])"
+        (String.concat ", " (List.map (string_of_operand t) xs))
 
 let to_string t =
   let b = Buffer.create 256 in
@@ -512,6 +521,17 @@ let check_assignment (t : t) (values : int array) : bool =
     | Int_div (a, b, c, aux) ->
         value b <> 0 && value a / value b = value c && aux_holds a b aux
     | Int_abs (a, c, aux) -> value c = abs (value a) && aux_holds a a aux
+    (* M4-T1, the relation itself: no pair of operands shares a value. Written as the
+       quadratic scan and not as a sorted-list or hashtable test, because the oracle is
+       written to be obviously right (see the header) and because a scope this small is
+       not where the solver's time goes. *)
+    | All_different xs ->
+        let vs = List.map value xs in
+        let rec distinct = function
+          | [] -> true
+          | v :: rest -> (not (List.mem v rest)) && distinct rest
+        in
+        distinct vs
   in
   let domains_ok =
     let ok = ref true in
