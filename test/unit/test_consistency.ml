@@ -499,6 +499,68 @@ let test_real_propagators_meet_their_levels () =
         (vs = [])
 
 (* ===================================================================== *)
+(* 9. Why no SHIPPED propagator can fail the Bounds lane today.          *)
+(* ===================================================================== *)
+
+(* Measured, and it is the most useful thing this task found, so it is pinned here rather
+   than left in a report.
+
+   Run over test/models/ with the obligation forced to [Domain] for EVERY instance
+   regardless of what it declares, all 57 models are clean: 286 fixpoints, 8060
+   instance-checks, 101456 oracle tuples, zero violations. So on the shipped suite no
+   propagator is weaker than domain consistent, and the [Bounds]/[Domain] distinction the
+   oracle draws is not doing any separating work there.
+
+   That is not luck and it is not the harness being blind. It is a property of what is
+   shipped. Every [Bounds] instance in the tree today is a single linear INEQUALITY --
+   [Linear] is int_lin_le, and int_le, int_lt, lin_eq and int_eq are all [Linear.t] values
+   (lib/core/prop/int_le.ml's header), while [Pb] and the learned rows are single PB
+   inequalities. For one inequality over finite domains, bounds consistency IS domain
+   consistency: the support for x = v is found by putting every other variable at whichever
+   END of its domain minimises its contribution, and an end of a domain is always a real
+   value, never a hole. There is nothing for a hole to break.
+
+   So the two levels can only come apart at a propagator that is not a single inequality:
+   a product or a quotient ([int_times], [int_div], [int_abs] -- M4-T4b), an [all_different],
+   or a conjunction handled as one propagator rather than as two rows. THAT is why this
+   harness landing before them is worth anything, and it is why lane 4 uses a mock: there
+   is no shipped propagator that can exercise the bounds(Z) reading yet.
+
+   This lane asserts the theorem on one scene. A RED HERE IS INFORMATION, not a spurious
+   alarm: it means a [Bounds] instance has appeared that is genuinely weaker than domain
+   consistent, and the model suite's silence about the distinction has stopped being
+   explainable by the argument above. *)
+let test_shipped_bounds_is_not_separable_today () =
+  (* Holes everywhere, so a propagator that could be fooled by one would be. *)
+  let store = mk_store [ ("x", [ 0; 1; 4 ]); ("y", [ 0; 3; 4 ]); ("z", [ 0; 2; 4 ]) ] in
+  let lin =
+    Linear.make ~row_id:(unrendered_row ()) store
+      [ (2, var 0); (-1, var 1); (1, var 2) ]
+      3
+  in
+  let inst =
+    Propagator.pack ~id:0 (module Linear : Propagator.S with type t = Linear.t) lin
+  in
+  let engine = Engine.create [ inst ] in
+  match Engine.propagate engine store with
+  | Engine.Conflict _ -> fail "lane 9: the scene conflicted, so it tests nothing"
+  | Engine.Fixpoint ->
+      check "9-pre: holes survived the fixpoint, so the scene could separate the levels"
+        (Domain.has_holes (Store.get store (var 0))
+        || Domain.has_holes (Store.get store (var 1))
+        || Domain.has_holes (Store.get store (var 2)));
+      check "9a. int_lin_le meets its declared Bounds"
+        (Engine.check_consistency engine store = []);
+      let as_domain =
+        Engine.check_instance_consistency (relabel inst Propagator.Domain) store
+      in
+      describe_unexpected "lane 9" as_domain;
+      check
+        "9b. and it meets Domain too: one inequality's bounds consistency IS domain \
+         consistency, which is why no SHIPPED propagator can exercise lane 4's reading"
+        (as_domain = [])
+
+(* ===================================================================== *)
 
 let () =
   test_meets_its_level ();
@@ -510,5 +572,6 @@ let () =
   test_a_skip_is_counted_not_passed ();
   test_oracle_is_non_invasive ();
   test_real_propagators_meet_their_levels ();
+  test_shipped_bounds_is_not_separable_today ();
   Printf.printf "\ntest_consistency: %d checks, %d failures\n" !checks !failures;
   if !failures > 0 then exit 1

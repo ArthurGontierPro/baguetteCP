@@ -2064,16 +2064,30 @@ let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
      M1-T49 forbids stderr without --time and run_model_tests.sh enforces it per model:
      printing this whenever the oracle was on failed all 57 models for printing it. The
      oracle checks silently; this says how much it checked. See lib/core/debug.ml. *)
-  (if Debug.consistency_enabled && Debug.consistency_trace then
-     let nodes, checks, tuples, skipped = Engine.oracle_stats () in
-     Printf.eprintf
-       "M2-T10 consistency oracle: %d fixpoints audited, %d instance-checks, %d oracle \
-        tuples, %d instance-checks SKIPPED over the %d-tuple cap%s\n\
-        %!"
-       nodes checks tuples skipped Debug.consistency_cap
-       (if skipped > 0 then
-          " -- a SKIP IS NOT A PASS: raise BAGUETTE_CONSISTENCY_CAP to cover them"
-        else ""));
+  if Debug.consistency_enabled && Debug.consistency_trace then (
+    let nodes, checks, tuples, skipped = Engine.oracle_stats () in
+    Printf.eprintf
+      "M2-T10 consistency oracle: %d fixpoints audited, %d instance-checks, %d oracle \
+       tuples, %d instance-checks SKIPPED over the %d-tuple cap%s\n\
+       %!"
+      nodes checks tuples skipped Debug.consistency_cap
+      (if skipped > 0 then
+         " -- a SKIP IS NOT A PASS: raise BAGUETTE_CONSISTENCY_CAP to cover them"
+       else "");
+    (* And the breakdown, because the totals cannot distinguish "every declared level was
+       met" from "nothing carrying an obligation was ever reached". A run whose CHECKED
+       list is empty has audited nothing however many fixpoints it visited, and the second
+       list is what says which families that was and at which level -- [Value] and
+       [Checking] owe no support, deliberately (see [Engine.check_consistency]'s header),
+       so they belong on a line of their own and not in a failure. *)
+    let show label rows =
+      if rows = [] then Printf.eprintf "M2-T10   %s: (none)\n%!" label
+      else
+        Printf.eprintf "M2-T10   %s: %s\n%!" label
+          (String.concat ", " (List.map (fun (n, c) -> Printf.sprintf "%s x%d" n c) rows))
+    in
+    show "CHECKED" (Engine.oracle_checked_families ());
+    show "no obligation at its level" (Engine.oracle_unobliged_families ()));
   let retire_trace () =
     match Trace.permanent_ids trace with
     | [] -> ()

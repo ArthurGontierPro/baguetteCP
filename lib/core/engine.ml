@@ -580,13 +580,32 @@ let oracle_checks = ref 0
 let oracle_tuples = ref 0
 let oracle_skipped = ref 0
 
+(* Per propagator FAMILY, because the totals alone cannot tell "every declared level was
+   met" from "no propagator carrying an obligation was ever reached". test_random.ml's
+   header makes this point at length and it applies here with more force: the oracle is
+   silent by construction on [Value] and [Checking], so a suite whose propagators were all
+   [Value] would report a clean audit over zero checks. The two tables below are what let
+   a reader tell the two apart -- one counts instances actually enumerated, the other
+   counts instances passed over BECAUSE THEIR LEVEL OWES NOTHING, by name and by level. *)
+let oracle_checked : (string, int) Hashtbl.t = Hashtbl.create 16
+let oracle_unobliged : (string, int) Hashtbl.t = Hashtbl.create 16
+
+let bump tbl key =
+  Hashtbl.replace tbl key (1 + Option.value ~default:0 (Hashtbl.find_opt tbl key))
+
+let histogram tbl = List.sort compare (Hashtbl.fold (fun k n acc -> (k, n) :: acc) tbl [])
+
 let reset_oracle_stats () =
   oracle_nodes := 0;
   oracle_checks := 0;
   oracle_tuples := 0;
-  oracle_skipped := 0
+  oracle_skipped := 0;
+  Hashtbl.reset oracle_checked;
+  Hashtbl.reset oracle_unobliged
 
 let oracle_stats () = (!oracle_nodes, !oracle_checks, !oracle_tuples, !oracle_skipped)
+let oracle_checked_families () = histogram oracle_checked
+let oracle_unobliged_families () = histogram oracle_unobliged
 
 (* The candidate values a variable offers, under the relaxation the level asks for. *)
 let oracle_values ~relaxed (d : Domain.t) =
@@ -660,7 +679,11 @@ let oracle_obligation (c : Propagator.consistency) =
 let check_instance_consistency (inst : Propagator.instance) (store : Store.t) :
     violation list =
   match oracle_obligation inst.Propagator.inst_consistency with
-  | None -> []
+  | None ->
+      bump oracle_unobliged
+        (Printf.sprintf "%s (%s)" inst.Propagator.inst_name
+           (Propagator.consistency_to_string inst.Propagator.inst_consistency));
+      []
   | Some (level, relaxed, every_value) ->
       (* Dedup: a variable may appear twice in [inst_vars] (Ne's header names the case),
          and enumerating it twice would let the oracle pick two different values for one
@@ -689,6 +712,7 @@ let check_instance_consistency (inst : Propagator.instance) (store : Store.t) :
           [])
         else (
           incr oracle_checks;
+          bump oracle_checked (Printf.sprintf "%s (%s)" inst.Propagator.inst_name level);
           let scene = oracle_scene ~names ~base ~scope in
           let out = ref [] in
           Array.iteri
