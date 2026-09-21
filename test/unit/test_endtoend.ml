@@ -386,10 +386,213 @@ let test_proof_comments_noop () =
   check "end-to-end: --proof-comments is still a no-op on a real model (M1-T48)"
     (without = with_)
 
+
+(* --------------------------------------------------------------- M5-T1/M5-T2
+
+   Branch and bound, end to end and through the REAL front end: FlatZinc text ->
+   Builder -> Compile -> Search.optimise -> proof -> veripb, with the I-X2 audit on.
+
+   The models above go through this file's hand-built stores on purpose (the header says
+   why); this lane does not, because the thing being tested is the whole pipeline
+   including the .opb's `min:` line, which only [Compile] writes.
+
+   WHAT IT ASSERTS BEYOND "veripb said yes", and why each one needs asserting:
+
+   - THE AUDIT. [Writer.conclusion] runs the I-X2 audit and raises if the live set is
+     non-empty, so reaching the end at all is the check -- but the live set is asserted
+     empty here as well, because "no exception escaped" and "nothing leaked" are only
+     the same claim while the audit is on, and [Writer.create ~audit:true] is this
+     lane's doing rather than the library's default.
+
+   - EVERY DELETED ID IS DELETED ONCE. The audit CANNOT see a double delete (I-X2 says
+     so: a second forget is a no-op and the live set is empty either way). The proof
+     TEXT can, which is the route test_learned.ml takes for the same reason, and a
+     branch-and-bound run is where it matters most -- several solutions, several level-0
+     introductions and a sweep at the end.
+
+   - THE `soli` IDS ARE NOT DELETED. That is the whole of [Writer.improving]'s argument:
+     deleting one is an unchecked deletion that weakens the guarantee over the
+     conclusion that follows it. test_proof.ml performs the break; this asserts the
+     solver does not take it.
+
+   - THE LOWER-BOUND ID IS CITED AND NOT DELETED. docs/PROOF-FORMAT.md section 5 says it
+     "counts as discharged by the conclusion"; the task's obligation (c) is to assert
+     that rather than assume it, so the id in the conclusion line is read back and
+     checked against every `del` in the file. *)
+
+let fz_optimisation_model =
+  (* The same scene as test/models/opt_min_sat.fzn: two improving solutions, an optimum
+     strictly inside the declared domain, and a subtree that has to be refuted rather
+     than read off a bound. Repeated here rather than read from disk so that this lane
+     does not depend on the cwd -- test_proof.ml's `obju` gate shows what that costs. *)
+  "var 0..5: x :: output_var;\n\
+   var 0..5: y :: output_var;\n\
+   constraint int_lin_le([-1,-1],[x,y],-4);\n\
+   constraint int_lin_le([1,-2],[x,y],0);\n\
+   solve minimize y;\n"
+
+let count_substring hay needle =
+  let hl = String.length hay and nl = String.length needle in
+  let rec go i n = if i + nl > hl then n else go (i + 1) (if String.sub hay i nl = needle then n + 1 else n) in
+  if nl = 0 then 0 else go 0 0
+
+(* Every constraint id named by a `del` line, with repeats kept -- a `del range LO HI`
+   is expanded over its half-open interval (measured, M1-T22: HI survives). Repeats are
+   the point: this is the only instrument that can see a double delete. *)
+let deleted_ids proof =
+  let ids = ref [] in
+  List.iter
+    (fun line ->
+      let line = String.trim line in
+      let words = String.split_on_char ' ' line |> List.filter (fun w -> w <> "") in
+      let label w =
+        let w = if String.length w > 0 && w.[String.length w - 1] = ';' then String.sub w 0 (String.length w - 1) else w in
+        if String.length w > 2 && String.sub w 0 2 = "@c" then int_of_string_opt (String.sub w 2 (String.length w - 2))
+        else int_of_string_opt w
+      in
+      match words with
+      | "del" :: "id" :: rest -> List.iter (fun w -> match label w with Some i -> ids := i :: !ids | None -> ()) rest
+      | "del" :: "range" :: a :: b :: _ -> (
+          match (label a, label b) with
+          | Some lo, Some hi -> for i = lo to hi - 1 do ids := i :: !ids done
+          | _ -> ())
+      | _ -> ())
+    (String.split_on_char '\n' proof);
+  !ids
+
+let test_m5_branch_and_bound () =
+  let m = Baguette_flatzinc.Builder.of_string ~file:"m5" fz_optimisation_model in
+  let compiled = Baguette_flatzinc.Compile.compile m in
+  let dir = Filename.temp_file "baguette_m5_e2e" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let opb = Filename.concat dir "m5.opb" and pbp = Filename.concat dir "m5.pbp" in
+  let store = compiled.Baguette_flatzinc.Compile.store in
+  let encoding = compiled.Baguette_flatzinc.Compile.encoding in
+  let oc = open_out opb in
+  Encoding.write_opb encoding oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let writer = Writer.create ~audit:true oc in
+  Encoding.start_proof encoding writer;
+  let ctx = mk_ctx writer encoding in
+  let objective =
+    match compiled.Baguette_flatzinc.Compile.objective with
+    | Some o -> o
+    | None -> failwith "test_m5: Compile did not resolve `solve minimize y;`"
+  in
+  let printed = ref 0 in
+  let check_asn assignment =
+    let values = Array.make (Baguette_flatzinc.Model.nvars m) 0 in
+    List.iter (fun (v, x) -> values.(Var.to_int v) <- x) assignment;
+    Baguette_flatzinc.Model.check_assignment m values
+  in
+  let outcome =
+    Search.optimise
+      ~engine:compiled.Baguette_flatzinc.Compile.engine
+      ~store ~ctx ~check:check_asn ~objective
+      ~on_solution:(fun _ -> incr printed)
+      ()
+  in
+  let live_at_end = Writer.live_ids writer in
+  let objective_ids = Writer.objective_ids writer in
+  close_out oc;
+  let proof = read_file pbp in
+  (match outcome with
+  | Search.Opt (_, value) ->
+      check "M5 e2e: the optimum of `minimize y` is 2, and it is PROVED not merely found"
+        (value = 2)
+  | Search.Opt_unsat ->
+      incr failures;
+      print_endline "FAIL M5 e2e: a satisfiable optimisation model reported no solution");
+  check "M5 e2e: both improving solutions were reported to the caller (SPEC 2.2)"
+    (!printed = 2);
+  (* I-X2, first half: nothing leaked. *)
+  check "M5 e2e: the writer's live set is empty at the conclusion (I-X2)"
+    (live_at_end = []);
+  (* I-X2, second half, and the half the audit structurally cannot see. *)
+  let deleted = deleted_ids proof in
+  let sorted = List.sort compare deleted in
+  let rec has_dup = function a :: (b :: _ as r) -> a = b || has_dup r | _ -> false in
+  check "M5 e2e: no constraint id is deleted twice across the whole run (I-X2)"
+    (not (has_dup sorted));
+  check "M5 e2e: there was something to check -- the run did delete ids"
+    (deleted <> []);
+  (* The `soli` ids: one per improving solution, none of them deleted. *)
+  check "M5 e2e: one objective id per improving solution, recorded apart from the live set"
+    (List.length objective_ids = 2);
+  check "M5 e2e: `soli` appears once per improving solution in the proof"
+    (count_substring proof "soli " = 2);
+  check
+    "M5 e2e: NO `soli` constraint is deleted -- deleting one is an unchecked deletion \
+     that weakens the guarantee over the conclusion after it"
+    (List.for_all (fun id -> not (List.mem id deleted)) objective_ids);
+  (* The lower-bound id: cited by the conclusion, and discharged BY it rather than by a
+     `del` (docs/PROOF-FORMAT.md section 5). *)
+  let conclusion_line =
+    List.find_opt
+      (fun l -> String.length l > 10 && String.sub (String.trim l) 0 10 = "conclusion")
+      (String.split_on_char '\n' proof)
+  in
+  (match conclusion_line with
+  | None ->
+      incr failures;
+      print_endline "FAIL M5 e2e: the proof has no conclusion line"
+  | Some line ->
+      check "M5 e2e: the conclusion is `conclusion BOUNDS 2 : <id> 2`, both bounds equal"
+        (count_substring line "conclusion BOUNDS 2 : " = 1
+        && count_substring line " 2 ;" = 1);
+      (* The cited id, read back out of the line rather than assumed. *)
+      let cited =
+        String.split_on_char ' ' (String.trim line)
+        |> List.filter_map (fun w ->
+               if String.length w > 2 && String.sub w 0 2 = "@c" then
+                 int_of_string_opt (String.sub w 2 (String.length w - 2))
+               else None)
+      in
+      check "M5 e2e: the conclusion cites exactly one constraint (the lower bound)"
+        (List.length cited = 1);
+      check
+        "M5 e2e: the cited lower-bound id is NOT deleted -- it is discharged by the \
+         conclusion (PROOF-FORMAT section 5), asserted rather than assumed"
+        (List.for_all (fun id -> not (List.mem id deleted)) cited));
+  (* And the product: the checker's verdict, under checked deletion, so that none of the
+     above rests on an acceptance bought with a weakened guarantee. *)
+  (match veripb_path () with
+  | None ->
+      incr failures;
+      print_endline
+        "FAIL M5 e2e: veripb not found -- invariant I-X1 was NOT checked for the \
+         branch-and-bound proof. A missing checker is a failure, never a skip."
+  | Some veripb ->
+      let log = Filename.concat dir "log" in
+      let rc =
+        Sys.command
+          (Printf.sprintf "%s -c %s %s > %s 2>&1" (Filename.quote veripb)
+             (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
+      in
+      let out = read_file log in
+      let says needle =
+        let hl = String.length out and nl = String.length needle in
+        let rec go i = i + nl <= hl && (String.sub out i nl = needle || go (i + 1)) in
+        go 0
+      in
+      check "M5 e2e: veripb VERIFIES the branch-and-bound proof under checked deletion"
+        (rc = 0);
+      check "M5 e2e: ... and reports the bounds it verified, both equal to the optimum"
+        (says "VERIFIED BOUNDS 2 <= obj <= 2");
+      if rc <> 0 then Printf.printf "%s\n" out);
+  List.iter
+    (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ())
+    (Array.to_list (Sys.readdir dir));
+  try Sys.rmdir dir with _ -> ()
+
+
 let () =
   print_endline "";
   List.iter run_model models;
   test_proof_comments_noop ();
+  test_m5_branch_and_bound ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
