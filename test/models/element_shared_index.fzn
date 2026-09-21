@@ -1,0 +1,21 @@
+% Two element constraints on ONE index, which is the scene the M2-T10 consistency oracle
+% actually bites on -- and the first place in this tree where it does.
+%
+% D-0059 measured that the Bounds/Domain tag "does no separating work on anything
+% currently shipped", because every Bounds instance then in the tree was a single linear
+% inequality, and for one inequality bounds consistency IS domain consistency. It named
+% all_different and a product as the places that would change, and `element` is the other
+% one. Measured on this model 2026-09-21: with lib/core/prop/element.ml's interior-hole
+% removal disabled -- i.e. relabelled Bounds in all but the declaration -- the oracle
+% fires, naming `c = 4` and saying a domain-consistent propagator would have removed it.
+% That is D-0059's lane 9 going red on purpose, so the tag is now load-bearing.
+%
+% Run it with BAGUETTE_CONSISTENCY=1; the shared index is what makes the two constraints
+% inform each other, which is what gives the oracle more than a handful of tuples.
+var 1..4: i :: output_var;
+var 0..9: c :: output_var;
+var 0..9: d :: output_var;
+constraint array_int_element(i, [3, 7, 3, 5], c);
+constraint array_int_element(i, [8, 2, 6, 2], d);
+constraint int_lin_le([1,1],[c,d],11);
+solve satisfy;

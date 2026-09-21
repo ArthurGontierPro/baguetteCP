@@ -908,12 +908,179 @@ let test_m5_derivation_is_load_bearing () =
         (Array.to_list (Sys.readdir dir));
       try Sys.rmdir dir with _ -> ())
 
+(* ================================================== M4-T3: array_int_element ========
+
+   Obligations (b) and (c) of the row, and they are one lane because (c) is what makes
+   (b) mean anything: veripb accepts a [pol] whatever it derives, so a break that
+   corrupts a [pol] and stops establishes NOTHING. Only a later line that NEEDS the pol --
+   here `conclusion UNSAT : <its id>` -- turns the corruption into a rejection. That is
+   D-0057 and D-0060, twice found, and test_prop.ml's alldiff lane says the same thing
+   for the same reason.
+
+   Both halves are asserted, because "it cites the derivation" is only informative next
+   to a case where it does not. test/models/element_range_unsat.fzn is the positive case
+   and test/models/element_moved_unsat.fzn the negative one; the sources are restated
+   here rather than read from disk, the same way the alldiff lane does it. *)
+
+let el_solve dir name src =
+  let m = Baguette_flatzinc.Builder.of_string ~file:name src in
+  let compiled = Baguette_flatzinc.Compile.compile m in
+  let opb = Filename.concat dir (name ^ ".opb")
+  and pbp = Filename.concat dir (name ^ ".pbp") in
+  let oc = open_out opb in
+  Encoding.write_opb compiled.Baguette_flatzinc.Compile.encoding oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let writer = Writer.create ~audit:true oc in
+  Encoding.start_proof compiled.Baguette_flatzinc.Compile.encoding writer;
+  let ctx = mk_ctx writer compiled.Baguette_flatzinc.Compile.encoding in
+  let check_asn assignment =
+    let values = Array.make (Baguette_flatzinc.Model.nvars m) 0 in
+    List.iter (fun (v, x) -> values.(Var.to_int v) <- x) assignment;
+    Baguette_flatzinc.Model.check_assignment m values
+  in
+  let outcome =
+    Search.solve ~engine:compiled.Baguette_flatzinc.Compile.engine
+      ~store:compiled.Baguette_flatzinc.Compile.store ~ctx ~check:check_asn ()
+  in
+  close_out oc;
+  (opb, read_file pbp, outcome)
+
+(* The id `conclusion UNSAT` cites, and the line that minted it -- READ BACK OUT of the
+   file, never assumed. *)
+let el_cited_line proof =
+  let lines = String.split_on_char '\n' proof in
+  let cited =
+    List.fold_left
+      (fun acc l ->
+        if m5_says l "conclusion UNSAT" then
+          match String.index_opt l ':' with
+          | Some i ->
+              Some
+                (String.trim
+                   (List.hd
+                      (String.split_on_char ' '
+                         (String.trim (String.sub l (i + 1) (String.length l - i - 1))))))
+          | None -> acc
+        else acc)
+      None lines
+  in
+  match cited with
+  | None -> (lines, None, None)
+  | Some lbl ->
+      ( lines,
+        Some lbl,
+        List.find_opt (fun l -> m5_says (String.trim l ^ " ") (lbl ^ " ")) lines )
+
+(* Drop the last operand of a reverse-Polish [pol], which leaves a pol that is still
+   SOUND -- it derives something the database really entails -- but no longer
+   contradictory. That is precisely D-0057's failure mode, so it is the break worth
+   making: a proof that goes on being accepted after it is exactly a proof whose pol was
+   decorative. *)
+let el_drop_last_operand line =
+  let ws = String.split_on_char ' ' (String.trim line) in
+  let idx_last_op =
+    List.fold_left
+      (fun (i, best) w ->
+        ( i + 1,
+          if String.length w > 2 && String.sub w 0 2 = "@c" && i >= 2 then i else best ))
+      (0, -1) ws
+    |> snd
+  in
+  if idx_last_op < 3 then None
+  else
+    Some
+      (String.concat " "
+         (List.filteri (fun i _ -> i <> idx_last_op && i <> idx_last_op + 1) ws))
+
+let el_range_src =
+  "var 1..3: i;\n\
+   var 0..4: c;\n\
+   constraint array_int_element(i, [7, 8, 9], c);\n\
+   solve satisfy;\n"
+
+let el_moved_src =
+  "var 1..2: i;\n\
+   var 1..2: j;\n\
+   var 0..9: c;\n\
+   constraint array_int_element(i, [1, 2], c);\n\
+   constraint array_int_element(j, [3, 4], c);\n\
+   solve satisfy;\n"
+
+let test_element_derivation_is_load_bearing () =
+  match veripb_path () with
+  | None ->
+      incr failures;
+      print_endline
+        "FAIL M4-T3 load-bearing: veripb not found, so NOTHING about the element \
+         derivation was established. A missing checker is a failure, never a skip."
+  | Some checker -> (
+      let dir = Filename.temp_file "baguette_el_lb" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      (* ------------------------------------------------ (c) the positive half *)
+      let opb, proof, outcome = el_solve dir "elrange" el_range_src in
+      check "M4-T3 (c): the declared-range scene is UNSAT" (outcome = Search.Unsat);
+      let lines, cited, minting = el_cited_line proof in
+      check "M4-T3 (c): the conclusion names an id" (cited <> None);
+      (match minting with
+      | None -> check "M4-T3 (c): the conclusion names a line THIS proof minted" false
+      | Some line ->
+          check "M4-T3 (c): the conclusion names a line THIS proof minted" true;
+          if not (m5_says (" " ^ String.trim line) " pol ") then
+            Printf.printf "     conclusion cites: %s\n" (String.trim line);
+          check
+            "M4-T3 (c): `conclusion UNSAT` cites the ELEMENT DERIVATION -- a pol, not \
+             the empty clause a D-0022 close would put there"
+            (m5_says (" " ^ String.trim line) " pol "));
+      (* --------------------------------- (b) the break, on the very line it cites *)
+      (match minting with
+      | None -> ()
+      | Some line -> (
+          let ok, _ = m5_run_lines checker dir "elok" opb lines in
+          check "M4-T3 BREAK CONTROL: the unmodified proof is accepted" ok;
+          match el_drop_last_operand line with
+          | None ->
+              check
+                "M4-T3 BREAK: the cited pol has operands to drop (a one-operand pol \
+                 would make this lane vacuous)"
+                false
+          | Some broken ->
+              let lines2 = List.map (fun l -> if l = line then broken else l) lines in
+              check "M4-T3 BREAK CONTROL: the corruption really changed the file"
+                (lines2 <> lines);
+              let ok, out = m5_run_lines checker dir "elbad" opb lines2 in
+              check
+                "M4-T3 BREAK (b): a cited pol that is SOUND but no longer contradictory \
+                 is REFUSED"
+                (not ok);
+              check
+                "M4-T3 BREAK (b): ... at full strength -- the checker's own wording, not \
+                 an exit status and not a parse error"
+                (m5_says out "is not contradicting, as specified by the hint.")));
+      (* ------------------------------------------------ (c) the negative half *)
+      let _, proof, outcome = el_solve dir "elmoved" el_moved_src in
+      check "M4-T3 (c): the moved-bound scene is UNSAT" (outcome = Search.Unsat);
+      let _, _, minting = el_cited_line proof in
+      (match minting with
+      | None -> check "M4-T3 (c): the moved-bound conclusion names a line" false
+      | Some line ->
+          check
+            "M4-T3 (c): with the bound MOVED it cites `rup >= 1` instead -- the pol IS \
+             decorative there, and element.ml says so"
+            (m5_says (String.trim line) "rup >= 1"));
+      List.iter
+        (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ())
+        (Array.to_list (Sys.readdir dir));
+      try Sys.rmdir dir with _ -> ())
+
 let () =
   print_endline "";
   List.iter run_model models;
   test_proof_comments_noop ();
   test_m5_branch_and_bound ();
   test_m5_derivation_is_load_bearing ();
+  test_element_derivation_is_load_bearing ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

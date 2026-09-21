@@ -1,0 +1,16 @@
+% array_int_element, the ordinary case: both filtering rules do real work, and one of
+% them punches a hole (M4-T3).
+%
+%   as = [3, 7, 3, 5] and c <= 4, so position 2 (value 7) and position 4 (value 5) are
+%   impossible and the index is left with {1, 3}. The result is then confined to the
+%   values those positions carry -- {3} -- which is a bound push, not a hole.
+%
+% The hole is the OTHER direction, and it is in the index: removing position 2 leaves
+% dom(i) = {1, 3, 4} with an interior gap, and removing position 4 settles the upper
+% bound. That gap is in `i`'s OWN domain with no auxiliary variable between -- D-0058's
+% property, asserted directly in test/unit/test_compile.ml rather than inferred here.
+var 1..4: i :: output_var;
+var 0..9: c :: output_var;
+constraint array_int_element(i, [3, 7, 3, 5], c);
+constraint int_le(c, 4);
+solve satisfy;

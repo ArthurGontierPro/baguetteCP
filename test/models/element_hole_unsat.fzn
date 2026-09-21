@@ -1,0 +1,15 @@
+% The hole path, in both directions at once (M4-T3).
+%
+% as = [1, 3, 5] over i in 1..3, with c pinned to 2..4 and c <> 3. Position 1 (value 1) is
+% below the window and position 3 (value 5) above it, so both go by the ladder-walking
+% exclusion; position 2 asks for 3, which is a HOLE in c, so its exclusion is the one that
+% pairs the per-position rows off against the line int_ne punched -- the arm that cites
+% another propagator's derivation through Store.remover rather than re-deriving it.
+% Nothing is left, so the index is empty.
+var 1..3: i :: output_var;
+var 0..5: c :: output_var;
+constraint array_int_element(i, [1, 3, 5], c);
+constraint int_ne(c, 3);
+constraint int_le(c, 4);
+constraint int_lt(1, c);
+solve satisfy;

@@ -258,8 +258,13 @@ let test_rejections () =
   (* M4-T1: `all_different_int` was this lane's example until its propagator landed,
      which is builder.ml's own rule working -- a builtin moves from [planned] to
      [implemented] in the same commit as its propagator, and its lane moves with it.
-     `array_int_element` is the only "not yet" left, and it carries the wording below;
-     what `all_different_int` owes the front end now is arity. *)
+     What `all_different_int` owes the front end now is arity.
+
+     M4-T3 took the LAST entry out of [planned], so there is no longer a builtin in
+     SPEC 2.1 that the front end refuses as "not yet" and no lane can assert that
+     wording. [unsupported_builtin]'s [Some] arm is therefore unreachable from any model
+     -- deliberately kept, because the next row to widen the subset needs it -- and the
+     "unknown builtin" lane above is what still exercises the function. *)
   reject "reject: all_different_int with the wrong arity" ~line:3
     ~src:
       "var 1..3: x;\n\
@@ -287,9 +292,22 @@ let test_rejections () =
   reject "reject: int_abs with the wrong arity" ~line:2
     ~src:"var 1..3: x;\nconstraint int_abs(x);\nsolve satisfy;\n"
     ~needles:[ "`int_abs`"; "expects 2 argument" ];
-  reject "reject: array_int_element is still a later milestone" ~line:2
-    ~src:"var 1..3: x;\nconstraint array_int_element(x, [1, 2, 3], x);\nsolve satisfy;\n"
-    ~needles:[ "unsupported builtin"; "`array_int_element`"; "M4" ];
+  (* M4-T3. This lane was `array_int_element`'s "later milestone" case until its
+     propagator landed; it moves to arity like every other one before it. The second
+     lane is the one that is NOT just arity: SPEC 2.1 admits only a CONSTANT array, and
+     lib/flatzinc/builder.ml refuses a variable element through [as_const] -- here,
+     where the message can carry a source position and name the builtin, rather than
+     several layers down in compile.ml. *)
+  reject "reject: array_int_element with the wrong arity" ~line:2
+    ~src:"var 1..3: x;\nconstraint array_int_element(x, [1, 2, 3]);\nsolve satisfy;\n"
+    ~needles:[ "`array_int_element`"; "expects 3 argument" ];
+  reject "reject: array_int_element over a VARIABLE array" ~line:3
+    ~src:
+      "var 1..3: x;\n\
+       var 1..3: y;\n\
+       constraint array_int_element(x, [1, y, 3], x);\n\
+       solve satisfy;\n"
+    ~needles:[ "`array_int_element`"; "every element of the array"; "constant" ];
   reject "reject: missing semicolon" ~line:2 ~src:"var 1..3: x\nsolve satisfy;\n"
     ~needles:[ "expected"; "`;`" ];
   reject "reject: unexpected character" ~line:1 ~src:"var 1..3: x @ y;\nsolve satisfy;\n"
