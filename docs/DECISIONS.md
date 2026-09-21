@@ -4393,3 +4393,56 @@ measured at 3 variables, w=2 → 32 `.pbp` lines, w=8 → 79. `max_direct_values
 unreachable through the CLI because `max_order_width = 10_000` refuses first — but an
 `all_different` over a 10 000-wide declared domain would still write ~30 000 `red` lines **per
 variable**. **Nobody has decided whether a global should carry a tighter cap.**
+
+## D-0062  M2-L6's PB analysis costs an order of magnitude on width, and that is accepted
+
+**Status**: **ACCEPTED** — a cost decision, recorded because it was invisible for 392 commits
+and because two rows guessed at it wrongly before it was bisected (M6-T6, 2026-09-21).
+
+### The measurement
+
+`test/models/width_sat_depth.fzn` carries the comment *"at 99 it is 43 ms end to end"*. That was
+**essentially true when written** (18.6–23.4 ms at `83cc658`, the only commit that ever touched
+the model, so the comparison is like-for-like across the whole range).
+
+**One commit accounts for the jump: `aacbc8d`, "M2-L6: wire PB analysis into the search."** Its
+parent `f93ecd1` added the PB conflict-analysis machinery **without calling it**; `aacbc8d`
+turns it on. Found by `git bisect run` over 392 commits, 7 steps, 0 skipped.
+
+**Reproduced independently by the orchestrator, building both commits:**
+
+| | wall, best of 5 |
+|---|---|
+| `f93ecd1` — machinery present, not wired | **10 ms** |
+| `aacbc8d` — wired | **260 ms** |
+
+### Why it is accepted
+
+PB conflict analysis is a **deliberate feature finding real value on this exact model**:
+`pb-learned` 24 of 49, `pb-stronger` 24 — rows that propagate where the clause path cannot. And
+M2-L13 claws most of the cost back for the shipped configuration: today's default-on figure is
+~160 ms against ~590 ms with learned propagation off.
+
+So the sequence is: M2-L6 spent an order of magnitude to make PB rows available, and M2-L13
+spent a propagator to get most of it back. **Both halves were worth it, and neither was visible
+as a time cost while it happened**, because nothing watched absolute wall clock on this model.
+
+### The part worth carrying
+
+**Two rows guessed at this before anyone bisected it, and both guesses were wrong in the same
+direction.** M6-T1 hypothesised that M2-L13's ladder-suffix slack rule under `keep_all` drove
+the cost — it named the **mitigation** as the cause. That hypothesis survived into a benchmark
+section before measurement refuted it. And it is now **doubly** refuted: the regression predates
+`BAGUETTE_PROPAGATE_LEARNED` by **322 commits**, so M2-L13 could not have caused it under any
+reading.
+
+`perf` is unavailable on this kernel, which is *why* both attempts reached for a hypothesis.
+**When the profiler is missing, `git bisect` is the instrument — it needs no tooling this
+machine lacks, and it produced an exact commit in 7 steps.** Reach for it first next time.
+
+### Still owed
+
+`test/models/width_sat_depth.fzn`'s header comment is now wrong by 7–14× depending on the flag.
+It is a **cross-session request**, not done here, because `test/models/**` is held by the
+concurrent M5 row. Whoever releases it should fix the comment rather than delete it — a figure
+with a date on it is how this was caught at all.
