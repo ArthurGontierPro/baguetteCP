@@ -4525,3 +4525,95 @@ could not be autoproven."*
   only conclusion for an infeasible optimisation model. The checker names the replacement itself.
 - The objective must be a **variable**: a constant objective is refused, because `conclusion
   BOUNDS` needs a `min:` line and a constant has no order literals.
+
+## D-0064  `Explanation.Defining`: the ADT can now ask for a constraint id, and D-0044's table breaks at nine
+
+**Status**: **ACCEPTED**, implemented by M4-T7 (2026-09-21, agent-defid). **This is the first
+new `Explanation` constructor since the ADT was frozen**, and `explanation.ml`'s header requires
+this record to exist before it. The argument is therefore the substance here, not the code.
+
+### What was missing
+
+**D-0009 says a bound fact in a `pol` needs a constraint id, not a literal.** The ADT could say
+only the first half: it can *name* an id (`Model_row`) but could not *ask* for one.
+`Justify.defining_lit` (`justify.ml:275`) has existed since D-0009, is documented at `:95` as
+*"exactly what D-0009 needs"*, and **had no caller** — because nothing in an `Explanation.t`
+*value* could request one.
+
+D-0061 is the costed case. A Hall derivation over **moved** bounds carries those bounds into the
+derived row as literals, and cancelling them needs the establishing line.
+
+### The constructor, and why it is a summand
+
+`Defining of int * Lit.t` — *c copies of the id of the line that **establishes** this literal*.
+
+**It is a `summand`, not a `t`, for exactly the reason `Weaken` is**: arithmetic valid only
+inside a `Combine`'s sum, not a value anyone can hold. So no `Cut` can take one, `emit` can never
+be handed a bare one, and conflict analysis never has to decide what one means alone. The blast
+radius is the **7 `summand` match sites**, not the ~20 `t` sites.
+
+**Why nothing existing would do**: `Weaken lits` puts a literal in as the trivial axiom — it
+cancels a term and **costs one unit of degree per copy**. A conflict needs the term gone **and the
+degree kept**, which only citing the establishing line achieves. The two are the same arithmetic
+from the two different sources D-0013 already calls different operations. `Defining` is the half
+that was missing, and it sits beside `Weaken` rather than anywhere new.
+
+### Alternatives rejected, including the two that saved earlier rows
+
+- **Name the id from the propagator (`Model_row`)** — the M5-T1/D-0063 move. **Impossible in
+  principle**, not merely awkward: the id is `Justify` **claim-index state at emit time**, and the
+  propagator has no `ctx`. That is the whole content of *"can name an id but cannot ask for one"*.
+- **Put it in the model** — the M4-T4b/D-0060 move. Which bounds the root fixpoint derives is not
+  known at model time, so there is nothing static to post.
+- **Give `Deferred`'s thunk a resolver, or an ambient pointer on `ctx`.** The second is M1-T31's
+  deleted `model_id` returning under a new name; the first changes `Explanation.force`'s
+  signature, which `search.ml` and six others call.
+- **Restructure so no bound literal enters the row.** `excl` derives `~x_ge_lo(x) ∨ ~x_eq_v`; the
+  exclusion genuinely depends on the current bound. D-0061's reading is **confirmed, not worked
+  around**.
+- **Keep `Explanation.clause [lit]`.** It emits the same bytes at level 0 (measured) — but it is a
+  `Clause`, and `Search.rests_on_a_clause` reads the label.
+
+**The property that earns the label**: `Defining` always cites a **unit**, so its cancellation is
+**exact**. A `Clause` summand may cite a clause of any width, and its cancellation is not. That is
+why a root conflict may rest on a `Defining` where it may not rest on a `Clause`.
+
+### The effect, verified rather than reported
+
+| | `conclusion UNSAT` cites |
+|---|---|
+| before | `@c102`, which is **`rup >= 1`** — decorative |
+| after | `@c96` = `pol @c81 @c84 + @c88 + @c92 + @c64 + @c66 + @c93 2 * + @c94 2 * + @c95 +` |
+
+`@c93`/`@c94`/`@c95` are the one-literal `rup` lines establishing the three moved Hall bounds.
+`s VERIFIED UNSATISFIABLE`.
+
+**Blast radius, measured over all 78 models with genuinely different binaries**: exactly **one**
+artefact differs. (The implementing session reported this over 44 and understated its own
+coverage.)
+
+### It works above level 0, which the stand-in could not
+
+The test is now **per bound, by the level the bound was *established* at** (`alldiff.ml:179`).
+A bound the root fixpoint set is a consequence of the model, so its unit line stays true and
+citable at any depth; a bound a **decision** set is still not cited. Measured: four `pol` lines
+written at level 2 citing a level-0 unit the baseline binary cites nowhere.
+
+### A latent defect, bounded and not fixed
+
+The obvious routing rule (`Defining ⇒ false`) **reddened** `alldiff_hall_trace_unsat`: its
+conclusion cites an `int_lin_le` combine that folds in an alldiff entry. That conflict was being
+routed away by the **accidental presence of a `Clause`**, not by anything true about it. The rule
+is now: a `Defining` at the **top level** is the derivation's own cancellation and the `pol`
+closes; **below a `Term`** it belongs to another instance's row and D-0022's route is right — the
+same boundary, for the same reason, as `Explanation.top_weaken_owners`.
+
+> **The underlying defect is NOT fixed**: an `int_lin_le` conflict citing an alldiff entry with
+> **no** moved bound would still be mis-routed. **No shipped model reaches it.**
+> `lib/core/search.ml:1107`.
+
+### What this discharges
+
+D-0009's *"until `Explanation.t` can carry ids…"* consequence is **discharged on the `pol` side**,
+and D-0061's *"where it creaked"* section is **answered**. D-0044's no-new-constructor table held
+eight times and breaks here, on the ninth — deliberately, with the argument above.
