@@ -185,12 +185,122 @@ let test_exhaustive () =
   check "exhaustive: the sweep actually produced Holes changes" (!saw_holes > 0);
   Printf.printf "     (classified %d Bound and %d Holes changes)\n" !saw_bound !saw_holes
 
+(* ------------------------------------------------------------------ *)
+(* Domain.affine -- the materialising half of a view (M4-T0).          *)
+(*                                                                     *)
+(* A view's READ path does not come through here: [View.lo] and        *)
+(* friends translate one integer. This is the form that builds the      *)
+(* image domain, and the property that makes it usable at all is that   *)
+(* the map is a BIJECTION on values, so I-D2 (a bound is never a hole)  *)
+(* transports without settling. The reversal of the hole bitset under a *)
+(* negated view is the part that can silently be off by one, so it is   *)
+(* checked against the value set rather than against the bitset.        *)
+(* ------------------------------------------------------------------ *)
+
+let test_affine () =
+  let hole d v = changed (Domain.remove d v) in
+  (* 0..7 with interior holes at 2 and 5. *)
+  let d = hole (hole (Domain.make 0 7) 2) 5 in
+  check "affine: the source has the holes the rest of this test assumes"
+    (Domain.to_list d = [ 0; 1; 3; 4; 6; 7 ]);
+
+  (* A shift moves every value and nothing else. *)
+  let up = Domain.affine d ~negated:false ~offset:3 in
+  check "affine: a shift moves the bounds" (Domain.lo up = 3 && Domain.hi up = 10);
+  check "affine: a shift moves the holes with them"
+    (Domain.to_list up = List.map (fun v -> v + 3) (Domain.to_list d));
+  check "affine: a shift of 0 on an unnegated view is the identity"
+    (Domain.equal (Domain.affine d ~negated:false ~offset:0) d);
+
+  (* A negation reverses the value set, so the hole bitset is reversed too. This is
+     the off-by-one trap: the image of bit [i] is not at index [i]. *)
+  let mirror = Domain.affine d ~negated:true ~offset:10 in
+  check "affine: a negated view swaps the bounds"
+    (Domain.lo mirror = 3 && Domain.hi mirror = 10);
+  check "affine: a negated view reverses the value set"
+    (Domain.to_list mirror
+    = List.sort compare (List.map (fun v -> 10 - v) (Domain.to_list d)));
+  check "affine: a negated view's holes are where 10-v says they are"
+    (Domain.holes_list mirror = [ 5; 8 ]);
+
+  (* [x |-> -x + k] is an involution, so applying it twice must return the original
+     domain EXACTLY -- holes, bounds and all. A reversal that is off by one in the
+     bitset survives a bounds check and dies here. *)
+  check "affine: -(-x+k)+k is the identity, holes included"
+    (Domain.equal (Domain.affine mirror ~negated:true ~offset:10) d);
+
+  (* I-D2 transports: a bound of the image is never a hole of the image. Swept over
+     every subset of a six-value universe, both signs, a few offsets. Small on
+     purpose -- the suite shares a 15 GB machine. *)
+  let bad = ref None in
+  let rec subsets = function
+    | [] -> [ [] ]
+    | v :: rest ->
+        let r = subsets rest in
+        List.map (fun s -> v :: s) r @ r
+  in
+  let universe = [ 0; 1; 2; 3; 4; 5 ] in
+  let n_checked = ref 0 in
+  List.iter
+    (fun keep ->
+      match keep with
+      | [] | [ _ ] -> ()
+      | _ ->
+          let d0 =
+            List.fold_left
+              (fun acc v ->
+                if List.mem v keep then acc
+                else
+                  match Domain.remove acc v with
+                  | Domain.Changed d -> d
+                  | Domain.Unchanged -> acc
+                  | Domain.Failed -> acc)
+              (Domain.make (List.hd keep) (List.nth keep (List.length keep - 1)))
+              universe
+          in
+          List.iter
+            (fun (negated, offset) ->
+              let img = Domain.affine d0 ~negated ~offset in
+              incr n_checked;
+              let expect =
+                List.sort compare
+                  (List.map
+                     (fun v -> (if negated then -v else v) + offset)
+                     (Domain.to_list d0))
+              in
+              if Domain.to_list img <> expect then
+                if !bad = None then
+                  bad :=
+                    Some
+                      (Printf.sprintf
+                         "%s under (negated=%b, offset=%d) -> %s, wanted [%s]"
+                         (Domain.to_string d0) negated offset (Domain.to_string img)
+                         (String.concat ";" (List.map string_of_int expect)));
+              if Domain.is_hole img (Domain.lo img) || Domain.is_hole img (Domain.hi img)
+              then
+                if !bad = None then
+                  bad :=
+                    Some
+                      (Printf.sprintf "I-D2 broken on the image of %s"
+                         (Domain.to_string d0)))
+            [ (false, 0); (false, 4); (false, -3); (true, 0); (true, 7); (true, -2) ])
+    (subsets universe);
+  check "affine: the image is exactly the image of the value set, and keeps I-D2"
+    (match !bad with
+    | None -> true
+    | Some w ->
+        Printf.printf "     first offender: %s\n" w;
+        false);
+  check "affine: the sweep actually ran" (!n_checked > 100);
+  Printf.printf "     (swept %d affine images)\n" !n_checked
+
 let () =
   test_bound_moves ();
   test_interior_hole ();
   test_removal_at_a_bound_is_a_bound_change ();
   test_no_change_and_change_of ();
   test_exhaustive ();
+  test_affine ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
