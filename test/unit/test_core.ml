@@ -1046,11 +1046,11 @@ let test_view_link () =
     (View.equal (View.shift (View.negate up) 10) down);
 
   (* Direction 1: pruning the BASE moves the view. *)
-  ignore (Store.set_lo s x 2 why);
+  ignore (Store.set_lo s x 1 why);
   check "view (a): pruning the base raises an offset view's lower bound"
-    (View.lo s up = 5 && View.hi s up = 8);
+    (View.lo s up = 4 && View.hi s up = 8);
   check "view (a): pruning the base lowers a NEGATED view's upper bound"
-    (View.lo s down = 2 && View.hi s down = 5);
+    (View.lo s down = 2 && View.hi s down = 6);
 
   (* Direction 2: pruning the VIEW moves the base. On the negated view, [down >= 3]
      is [x <= 4] -- a lower bound on the view is an UPPER bound on the base, and a
@@ -1061,26 +1061,40 @@ let test_view_link () =
   check "view (a): ... and it moved the BASE's upper bound" (Domain.hi (Store.get s x) = 4);
   check "view (a): ... which the offset view sees at once" (View.hi s up = 7);
   check "view (a): an offset view's own prune moves the base's lower bound"
-    (match View.set_lo s up 6 why with
-    | Store.Changed -> Domain.lo (Store.get s x) = 3
+    (match View.set_lo s up 5 why with
+    | Store.Changed -> Domain.lo (Store.get s x) = 2
     | _ -> false);
 
-  (* Holes travel too, in both directions and through the reversal. *)
-  ignore (Store.remove s x 4 why);
+  (* Holes travel too, in both directions and through the reversal. The base is kept
+     wide enough here that removing 3 punches a real INTERIOR hole rather than moving
+     a bound -- an earlier draft of this test narrowed the base first, so every
+     "hole" check below passed against a bound move and could not see a reversal that
+     was off by one. *)
+  ignore (Store.remove s x 3 why);
+  check "view (a): the scene really has an interior hole, so the checks below can see"
+    (Domain.lo (Store.get s x) = 2
+    && Domain.hi (Store.get s x) = 4
+    && Domain.has_holes (Store.get s x)
+    && not (Domain.mem (Store.get s x) 3));
   check "view (a): a hole in the base is a hole in the offset view"
-    ((not (View.mem s up 7)) && View.mem s up 6);
+    ((not (View.mem s up 6)) && View.mem s up 5 && View.mem s up 7);
   check "view (a): a hole in the base is the MIRRORED hole in a negated view"
-    ((not (View.mem s down 3)) && View.mem s down 4);
+    ((not (View.mem s down 4)) && View.mem s down 3 && View.mem s down 5);
   check "view (a): the materialised view domain agrees with mem, both signs"
     (Domain.to_list (View.domain s up) = List.filter (View.mem s up) [ 3; 4; 5; 6; 7; 8 ]
     && Domain.to_list (View.domain s down)
        = List.filter (View.mem s down) [ 2; 3; 4; 5; 6; 7 ]);
+  check "view (a): ... and it really carries the hole, in both images"
+    (Domain.has_holes (View.domain s up)
+    && Domain.has_holes (View.domain s down)
+    && Domain.to_list (View.domain s up) = [ 5; 7 ]
+    && Domain.to_list (View.domain s down) = [ 3; 5 ]);
   check "view (a): size, is_fixed and value read through to the base"
     (View.size s up = Domain.size (Store.get s x)
     && View.is_fixed s up = Domain.is_fixed (Store.get s x));
-  ignore (Store.fix s x 3 why);
+  ignore (Store.fix s x 2 why);
   check "view (a): a fixed base gives every view its value"
-    (View.value s up = Some 6 && View.value s down = Some 4 && View.value s plain = Some 3)
+    (View.value s up = Some 5 && View.value s down = Some 5 && View.value s plain = Some 2)
 
 (* The cross-layer property: what a propagator sees and what the checker sees are one
    value. After [View.set_lo v n] the base's domain must ENTAIL the very literal
@@ -1221,13 +1235,25 @@ let test_view_constants () =
      domain -- [unattributed_conflict], with [Reason.none]. A constant that reached
      for [Store.conflict] instead would carry the pruning's own reason and so write a
      conflict line over too few facts, and it would do so only for constants. *)
+  (* The [Reason.justified] handed in here carries a REAL fact, which is what makes
+     this lane able to see the difference at all: with [Reason.none] on the way in,
+     [Store.conflict] and [Store.unattributed_conflict] return the same value and the
+     check passes against either. Measured -- the first draft used [Reason.none] and
+     reddened nothing when the arm was rewired. *)
   let x = Var.of_int 0 in
+  let with_facts =
+    Reason.because ~concludes:None
+      [ Reason.at_least ~name:"x" ~decl:0 3 ]
+      (Explanation.model_row 1)
+  in
   let from_var =
-    match Store.set_lo s x 9 why with Store.Conflict cf -> Some cf | _ -> None
+    match Store.set_lo s x 9 with_facts with Store.Conflict cf -> Some cf | _ -> None
   in
   let from_const =
-    match View.set_lo s c 8 why with Store.Conflict cf -> Some cf | _ -> None
+    match View.set_lo s c 8 with_facts with Store.Conflict cf -> Some cf | _ -> None
   in
+  check "view (d): the lane's own reason is non-empty, so it can see the difference"
+    (not (Reason.is_empty with_facts.Reason.reason));
   check "view (d): a constant's conflict is shaped exactly like a variable's"
     (match (from_var, from_const) with
     | Some a, Some b ->
