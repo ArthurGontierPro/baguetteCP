@@ -1,0 +1,13 @@
+% A repeated variable in an all_different scope: `all_different_int([x, y, x])` says x is
+% different from itself, so it is unsatisfiable however wide the domains are.
+%
+% lib/flatzinc/compile.ml decomposes it rather than handing the repeat to [Alldiff],
+% whose Hall-set membership test is by NAME and would see two snapshots of one variable.
+% The pair (x, x) becomes `x - x <> 0` through the ordinary post_ne path -- the ground
+% contradiction test/models/ne_self_unsat.fzn already documents -- and the rest of the
+% scope still becomes a global. So the refutation here is int_ne's, not Hall's, and that
+% is the point: the decomposition is where the degenerate shape is answered.
+var 1..3: x :: output_var;
+var 1..3: y :: output_var;
+constraint all_different_int([x, y, x]);
+solve satisfy;
