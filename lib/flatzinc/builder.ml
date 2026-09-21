@@ -385,7 +385,9 @@ let build_constraint env (c : Ast.constraint_item) =
         "builtin `%s`: the coefficient array has %d element(s) but the variable array \
          has %d"
         id nc nv;
-    let rhs0 = as_const pos ~builtin:id ~what:"the right-hand side" (operand env pos ra) in
+    let rhs0 =
+      as_const pos ~builtin:id ~what:"the right-hand side" (operand env pos ra)
+    in
     let terms, rhs =
       List.fold_left2
         (fun (ts, r) coeff op ->
@@ -453,8 +455,7 @@ let build_constraint env (c : Ast.constraint_item) =
     | "bool2int" -> cmp (fun b x -> Model.Bool2int (b, x))
     | "bool_eq" -> cmp (fun a b -> Model.Bool_eq (a, b))
     | "bool_not" -> cmp (fun a b -> Model.Bool_not (a, b))
-    | "int_lin_le_reif" ->
-        lin_reif (fun ts rhs r -> Model.Int_lin_le_reif (ts, rhs, r))
+    | "int_lin_le_reif" -> lin_reif (fun ts rhs r -> Model.Int_lin_le_reif (ts, rhs, r))
     | "int_le_reif" -> cmp_reif (fun a b r -> Model.Int_le_reif (a, b, r))
     | "int_eq_reif" -> cmp_reif (fun a b r -> Model.Int_eq_reif (a, b, r))
     | "int_ne_reif" -> cmp_reif (fun a b r -> Model.Int_ne_reif (a, b, r))

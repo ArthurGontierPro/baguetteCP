@@ -682,8 +682,7 @@ let compile (m : Model.t) : t =
     List.fold_left
       (fun (lo, hi) (c, i) ->
         let l, u = bounds.(i) in
-        if c >= 0 then
-          (Checked.add lo (Checked.mul c l), Checked.add hi (Checked.mul c u))
+        if c >= 0 then (Checked.add lo (Checked.mul c l), Checked.add hi (Checked.mul c u))
         else (Checked.add lo (Checked.mul c u), Checked.add hi (Checked.mul c l)))
       (0, 0) nterms
   in
@@ -759,7 +758,7 @@ let compile (m : Model.t) : t =
         if k_le < 0 || k_ge < 0 then post_fixed_bool pos ri (if positive then 0 else 1)
         else if k_le = 0 && k_ge = 0 then
           post_fixed_bool pos ri (if positive then 1 else 0)
-        else (
+        else
           let g = Stdlib.max 1 in
           check_row pos ~what:"this reified linear equality"
             (nterms @ [ (g k_le, ri) ])
@@ -775,9 +774,8 @@ let compile (m : Model.t) : t =
             pack
               (Reif_lin_eq.make ~le_id ~ge_id ~k_le ~k_ge ~positive store
                  (prop_terms nterms) rhs ~reifier:(Var.of_int ri));
-          ])
+          ]
   in
-
 
   (* One clause -- a list of (operand, polarity) pairs -- as one .opb row and (unless it
      is already satisfied) one propagator instance.

@@ -3933,7 +3933,6 @@ let test_conclusion_partition () =
      which no Reason.fact can spell"
     (match Trace.claims e_hole interior "a" with [ [ _; _ ] ] -> true | _ -> false)
 
-
 (* ------------------------------------------------------------------------------
    M3-T2 / M3-T4: the reification dispatcher, case by case
 
@@ -4033,11 +4032,11 @@ let test_reif_dispatch_cases () =
   seed st 0 3 3;
   seed st 1 1 1;
   seed st 2 1 1;
-  (match Reif_lin_le.propagate p st with
+  match Reif_lin_le.propagate p st with
   | Propagator.Conflict _ ->
       check "reif dispatch: checking -- b true with x > y is a conflict" true
   | Propagator.Fixpoint ->
-      check "reif dispatch: checking -- b true with x > y is a conflict" false)
+      check "reif dispatch: checking -- b true with x > y is a conflict" false
 
 let eq_store () = mk_store [ ("x", 0, 2); ("y", 0, 2); ("b", 0, 1) ]
 
@@ -4113,11 +4112,11 @@ let test_reif_eq_cases () =
   seed st 0 1 1;
   seed st 1 1 1;
   seed st 2 1 1;
-  (match Reif_lin_eq.propagate p st with
+  match Reif_lin_eq.propagate p st with
   | Propagator.Conflict _ ->
       check "reif ne: checking -- b true with x = y is a conflict" true
   | Propagator.Fixpoint ->
-      check "reif ne: checking -- b true with x = y is a conflict" false)
+      check "reif ne: checking -- b true with x = y is a conflict" false
 
 (* The reason half (D-0026 / I-P5): the nogoods [Reif_lin_eq] builds must NAME the
    reifier. Without that literal the clause claims the disequality unconditionally,
@@ -4139,7 +4138,6 @@ let test_reif_eq_names_its_reifier () =
       (Store.trail_entries st)
   in
   check "reif eq: every nogood names the reifier's own literal" named
-
 
 (* ------------------------------------------------------------------------------
    M3-T2: the equality author's justification, past the checker
@@ -4244,7 +4242,8 @@ let run_veripb_rejects_saying ~name ~build ~saying =
         let rec go i = i + n <= h && (String.sub hay i n = needle || go (i + 1)) in
         n = 0 || go 0
       in
-      check (name ^ " (rejected, and on the judgement veripb actually made)")
+      check
+        (name ^ " (rejected, and on the judgement veripb actually made)")
         (rc <> 0 && contains out saying);
       if rc <> 0 && not (contains out saying) then
         Printf.printf "     wanted: %s\n     got: %s\n" saying out;

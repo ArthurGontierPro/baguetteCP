@@ -86,11 +86,8 @@ let make ~fwd_id ~bwd_id ~k_fwd ~k_bwd store terms rhs ~reifier =
     | Propagator.Conflict c -> Propagator.Conflict c
     | Propagator.Fixpoint -> Linear.propagate bwd store
   in
-  Reif.make ~reifier ~positive:true
-    ~vars:(List.map snd terms)
-    ~hold:(Linear.propagate fwd)
-    ~not_hold:(Linear.propagate bwd)
-    ~entail:both store
+  Reif.make ~reifier ~positive:true ~vars:(List.map snd terms)
+    ~hold:(Linear.propagate fwd) ~not_hold:(Linear.propagate bwd) ~entail:both store
 
 (* The two named faces, in the [Ne] / [Ne.Int_ne] shape: one implementation, and an
    instance reports the builtin the model actually wrote. *)

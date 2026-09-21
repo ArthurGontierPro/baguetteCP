@@ -121,8 +121,7 @@ let make ~reifier ~positive ~vars ~hold ~not_hold ~entail store =
       (Printf.sprintf
          "Reif.make: `%s` is declared over %s, but a reifier must be a `var bool`, i.e. \
           the order encoding on [0, 1] (docs/DECISIONS.md D-0007)."
-         (Store.name store reifier)
-         (Domain.to_string d));
+         (Store.name store reifier) (Domain.to_string d));
   {
     r_b = reifier;
     r_positive = positive;
@@ -153,7 +152,7 @@ let propagate t store =
         | Propagator.Fixpoint ->
             (* The contrapositive just landed: the entailment piece decided the
                reifier, so the matching enforcement piece has not run yet. *)
-            if again && Option.is_some (decided ()) then go false
-            else Propagator.Fixpoint)
+            if again && Option.is_some (decided ()) then go false else Propagator.Fixpoint
+        )
   in
   go true

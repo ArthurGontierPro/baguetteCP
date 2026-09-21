@@ -205,8 +205,7 @@ let not_hold p store =
         else
           let fixed_others = List.map (fun o -> (o, value_of store o)) others in
           let j =
-            Reason.because
-              ~concludes:(removal_conclusion tm w d)
+            Reason.because ~concludes:(removal_conclusion tm w d)
               (moved_bound_fact tm w d @ fixed_facts fixed_others @ reifier_fact p)
               (explain p ((tm, w) :: fixed_others))
           in
@@ -225,7 +224,7 @@ let not_hold p store =
 let entail_equal p store =
   match unfixed_positions store p.p_terms ~limit:1 with
   | _ :: _ -> Propagator.Fixpoint
-  | [] ->
+  | [] -> (
       if sum_of store p.p_terms <> p.p_rhs then Propagator.Fixpoint
       else
         let pairs = all_pairs store p.p_terms in
@@ -235,14 +234,11 @@ let entail_equal p store =
             (if right = 1 then Reason.at_least ~name:p.p_bname ~decl:0 1
              else Reason.at_most ~name:p.p_bname ~decl:1 0)
         in
-        let j =
-          Reason.because ~concludes (fixed_facts pairs) (explain p pairs)
-        in
+        let j = Reason.because ~concludes (fixed_facts pairs) (explain p pairs) in
         let r =
-          if right = 1 then Store.set_lo store p.p_b 1 j
-          else Store.set_hi store p.p_b 0 j
+          if right = 1 then Store.set_lo store p.p_b 1 j else Store.set_hi store p.p_b 0 j
         in
-        (match r with
+        match r with
         | Store.Conflict e -> Propagator.Conflict e
         | Store.Changed | Store.Unchanged -> Propagator.Fixpoint)
 
@@ -302,9 +298,8 @@ let make ~le_id ~ge_id ~k_le ~k_ge ~positive store terms rhs ~reifier =
     | Propagator.Conflict c -> Propagator.Conflict c
     | Propagator.Fixpoint -> entail_equal p store
   in
-  Reif.make ~reifier ~positive
-    ~vars:(List.map snd terms)
-    ~hold:rows ~not_hold:(not_hold p) ~entail store
+  Reif.make ~reifier ~positive ~vars:(List.map snd terms) ~hold:rows
+    ~not_hold:(not_hold p) ~entail store
 
 let vars = Reif.vars
 let propagate = Reif.propagate

@@ -1185,9 +1185,7 @@ let add_int_lin_eq_reif t terms rhs ~reifier ~pos =
   let vac_eq = if pos then 0 else 1 in
   let vac_ne = 1 - vac_eq in
   let le_terms, le_rhs = guard_row terms rhs ~reifier ~big_m:k_le ~vac:vac_eq in
-  let ge_terms, ge_rhs =
-    guard_row neg (Arith.neg rhs) ~reifier ~big_m:k_ge ~vac:vac_eq
-  in
+  let ge_terms, ge_rhs = guard_row neg (Arith.neg rhs) ~reifier ~big_m:k_ge ~vac:vac_eq in
   let aux = fresh_aux_name t "ne" in
   declare_bool t aux;
   let a_terms, a_rhs =

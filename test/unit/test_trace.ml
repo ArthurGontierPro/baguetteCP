@@ -1034,6 +1034,30 @@ let ix10_table =
     (* Not a propagator: it renders bound-fact chains for a reason another propagator
        already justified, so it introduces no pruning of its own. *)
     ("order_reason.ml", Prunes_nothing);
+    (* M3-T4: the reification dispatcher. It owns no propagation -- it reads the
+       reifier and calls one of three author-supplied pieces, each of which is an
+       ordinary propagator that changes domains under its own justification. There is
+       no pruning here for I-X10 to have an opinion about; the two authors below are
+       where the question is answered. *)
+    ("reif.ml", Prunes_nothing);
+    (* M3-T2: b <-> (sum a x <= c). Single_row, and for the plainest possible reason:
+       every pruning is [Linear]'s, over ONE of the two big-M rows
+       [Encoding.add_int_lin_le_reif_rows] posts for the reified constraint, and the
+       trace line is RUP against that row with the line's own facts -- the reifier's
+       fact included, which is what makes the big-M term vanish. That includes the
+       prunings OF the reifier: dis-entailment is FWD's own bound push on FWD's own
+       reifier term, and entailment is BWD's. No second constraint takes part, and
+       nothing is derived ahead of the line. *)
+    ("reif_lin_le.ml", Single_row);
+    (* M3-T2: b <-> (sum a x = c), and int_ne_reif, its inverted literal. Single_row in
+       exactly the sense [ne.ml] is: one model constraint, several rows. The equality
+       side prunes from the guarded LE or GE row; the disequality side and the
+       entailment push are nogoods that are RUP against the guarded A/B pair -- which is
+       [Encoding.expand_int_lin_ne]'s own pair with a guard term, i.e. the same
+       "one constraint, two rows over an .opb-only auxiliary" standing [ne.ml] has had
+       since M1-T9. Nothing here counts two constraints and nothing emits a derivation
+       ahead of its trace line. *)
+    ("reif_lin_eq.ml", Single_row);
   ]
 
 (* (a) CLOSURE. OCaml cannot reflect over its own modules, so the only way to notice a

@@ -161,17 +161,17 @@ let string_of_cstr t = function
   | Bool_not (a, b) ->
       Printf.sprintf "%s <-> not %s" (string_of_operand t a) (string_of_operand t b)
   | Int_lin_le_reif (ts, rhs, r) ->
-      Printf.sprintf "%s <-> (%s <= %d)" (string_of_operand t r)
-        (string_of_terms t ts) rhs
+      Printf.sprintf "%s <-> (%s <= %d)" (string_of_operand t r) (string_of_terms t ts)
+        rhs
   | Int_le_reif (a, b, r) ->
-      Printf.sprintf "%s <-> (%s <= %s)" (string_of_operand t r)
-        (string_of_operand t a) (string_of_operand t b)
+      Printf.sprintf "%s <-> (%s <= %s)" (string_of_operand t r) (string_of_operand t a)
+        (string_of_operand t b)
   | Int_eq_reif (a, b, r) ->
       Printf.sprintf "%s <-> (%s = %s)" (string_of_operand t r) (string_of_operand t a)
         (string_of_operand t b)
   | Int_ne_reif (a, b, r) ->
-      Printf.sprintf "%s <-> (%s != %s)" (string_of_operand t r)
-        (string_of_operand t a) (string_of_operand t b)
+      Printf.sprintf "%s <-> (%s != %s)" (string_of_operand t r) (string_of_operand t a)
+        (string_of_operand t b)
 
 let to_string t =
   let b = Buffer.create 256 in

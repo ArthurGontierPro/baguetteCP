@@ -1918,8 +1918,7 @@ let test_reif_big_m_rows () =
   Encoding.declare_int e "x" ~lo:0 ~hi:3;
   Encoding.declare_bool e "r";
   let k_fwd, k_bwd = Encoding.reif_big_m e [ (1, "x") ] 1 in
-  check "reif big-M: the two constants are the smallest that work"
-    (k_fwd = 2 && k_bwd = 2);
+  check "reif big-M: the two constants are the smallest that work" (k_fwd = 2 && k_bwd = 2);
   (* A condition the declared domains already settle is not a reification, and the
      big-M door refuses it on the same terms [reif_rows] does. *)
   raises "reif big-M: an entailed condition is refused as constant" (fun () ->
