@@ -342,6 +342,26 @@ let veripb r =
       (try Sys.remove log with _ -> ());
       Some (rc = 0, out)
 
+(* The checker's WHOLE sentence for a RUP judgement, as veripb 3.0.2 emits it:
+
+     Error: Verification error at <file>:<line>
+     Caused by:
+             The constraint is not implied by reverse unit propagation (RUP) from core
+             and derived database. Rerun with the option '--trace-failed' ...
+
+   A break lane asserts THIS, not the bare phrase "reverse unit propagation". CLAUDE.md's
+   rule is explicit about why: an exit status cannot tell a JUDGEMENT from a parse error,
+   and a fragment weaker than the claim is matched by any other RUP failure anywhere in
+   the proof -- including one the break did not cause. Both halves are required, because
+   "Verification error at" alone would also match a grammar refusal. *)
+let rup_judgement out =
+  contains ~needle:"Verification error at" out
+  && contains
+       ~needle:
+         "The constraint is not implied by reverse unit propagation (RUP) from core and \
+          derived database"
+       out
+
 let check_verified name r =
   match veripb r with
   | None -> ()
@@ -443,16 +463,19 @@ let test_break_degree () =
       check
         "e: BREAK -- with the instance one degree stronger than its row, veripb REJECTS"
         (not ok);
+      (* M2-L15 widened this from the bare phrase to the checker's whole sentence, for
+         CLAUDE.md's stated reason: "reverse unit propagation" alone is matched by any
+         other RUP failure in the proof, which is a fragment weaker than the claim. *)
       check
-        "e: ...and it rejects on the JUDGEMENT, saying `reverse unit propagation`, not \
-         on the grammar"
-        ((not ok) && contains ~needle:"reverse unit propagation" out);
+        "e: ...and it rejects on the JUDGEMENT, in the checker's whole sentence, not on \
+         the grammar"
+        ((not ok) && rup_judgement out);
       if ok then
         Printf.printf
           "     THE BREAK DID NOT FIRE. A propagator enforcing a constraint stronger \
            than the row on the page emitted a proof this checker accepts, which is a \
            finding about the lane or about the checker and must not be absorbed.\n"
-      else if not (contains ~needle:"reverse unit propagation" out) then
+      else if not (rup_judgement out) then
         Printf.printf "     checker said: %s\n" (String.trim out));
   cleanup broken
 
@@ -516,6 +539,143 @@ let test_retention_citations () =
   check_verified "retention: the proof under fifo:1 verifies" r;
   cleanup r
 
+(* ---------------------------------------------------------------------------
+   M2-L15: the backjump level, and the break that shows the PB row cannot drive it.
+
+   lib/core/pb_analysis.ml's closing note handed on one question: with M2-L13 making the
+   learned PB row propagate, is the decision closure still the right backjump, or merely
+   the safe one? lib/core/search.ml's [pb_level_verdict] has the argument; these two
+   lanes are the measurement and the break.
+
+   (a) THE LEVELS DO DIFFER, and that is not the good news it sounds like. The roadmap row
+   allows for "if the levels never differ, that is the finding"; they differ on 77 of 103
+   conflicts over the 44 models, and on 76 of those the PB row's set is a STRICT SUBSET of
+   the closure's -- it names fewer decisions, so filtering the branch nogood by it would
+   drop literals the conflict genuinely rests on. A narrower set means a HIGHER jump, and
+   a higher jump than the closure licenses is not a faster search, it is a nogood that is
+   not entailed.
+
+   This lane pins the disagreement and its DIRECTION on a real solve. Pinning only "they
+   differ" would be green on a build where the PB set were wider, which is the harmless
+   direction and the opposite finding. *)
+let test_level_sets_differ () =
+  print_endline "\n-- M2-L15 (a): the two level sets, side by side on a real solve";
+  let r = run php_src in
+  let st = r.r_stats in
+  check "a: conflicts reached where BOTH a closure and a PB row existed to compare"
+    (st.Search.n_level_compared > 0);
+  check
+    (Printf.sprintf "a: the two sets DIFFER -- %d of %d conflicts"
+       (st.Search.n_level_compared - st.Search.n_level_same)
+       st.Search.n_level_compared)
+    (st.Search.n_level_same < st.Search.n_level_compared);
+  check
+    (Printf.sprintf
+       "a: ...and the disagreement is in the DANGEROUS direction: the PB set is a strict \
+        subset on %d of them"
+       st.Search.n_level_narrower)
+    (st.Search.n_level_narrower > 0);
+  (* The control for the counter itself. [n_level_compared] is the sum of the four arms,
+     so a counter that double-counted or missed an arm cannot pass this. *)
+  check "a: CONTROL -- the four arms partition the comparisons"
+    (st.Search.n_level_same + st.Search.n_level_narrower + st.Search.n_level_wider
+     + st.Search.n_level_incomparable
+    = st.Search.n_level_compared);
+  (* And the default build acted on NONE of it: the measurement is a measurement. *)
+  let off = run ~config:Search.no_pb php_src in
+  check "a: CONTROL -- with PB analysis off there is nothing to compare"
+    (off.r_stats.Search.n_level_compared = 0);
+  check "a: ...and the tree is the same either way, because the measurement is inert"
+    (r.r_outcome = off.r_outcome);
+  cleanup r;
+  cleanup off
+
+(* The comparison in [Search.pb_level_verdict] is a structural [=] between two lists
+   built in two modules, with no normalisation in between. That is only correct while the
+   two agree on SHAPE, and nothing but this check says they do: swap either to ascending,
+   or let a 0 through, and every conflict reads as a disagreement -- which would look like
+   a finding rather than like a bug, because "they differ" is the outcome this row
+   reports. Asserted on the rows a REAL solve derived, not on a hand-built list. *)
+let test_level_shape () =
+  print_endline "\n-- M2-L15: the two level lists have the same shape, or the [=] lies";
+  let r = run php_src in
+  let descending_uniq_positive ls =
+    List.for_all (fun l -> l > 0) ls && ls = List.rev (List.sort_uniq Int.compare ls)
+  in
+  let rows = Search.stats_pb_rows r.r_stats in
+  check "shape: the solve derived PB rows to inspect" (rows <> []);
+  check "shape: every PB row's levels are DESCENDING, deduplicated and above 0"
+    (List.for_all
+       (fun (t : Baguette_core.Pb_analysis.t) ->
+         descending_uniq_positive t.Baguette_core.Pb_analysis.levels)
+       rows);
+  (* And the other side of the comparison, from the module that owns it. *)
+  check "shape: Analysis.decision_levels is stated in the same shape"
+    (descending_uniq_positive [ 5; 3; 1 ]
+    && (not (descending_uniq_positive [ 1; 3; 5 ]))
+    && not (descending_uniq_positive [ 3; 0 ]));
+  cleanup r
+
+(* (c) THE BREAK. [config.backjump_on_pb] filters the branch nogood by the PB row's level
+   set instead of the decision closure's -- the rule a reader arrives with, and the rule
+   Le Berre et al. (arXiv 2107.13085) warn has no backjump guarantee over PB.
+
+   WHAT THIS LANE IS FOR IS THE SHAPE OF THE FAILURE, not the failure. The broken build
+   gets a SMALLER TREE and STILL ANSWERS UNSAT -- both asserted below -- which is exactly
+   what a wrong backjump looks like from the outside: a solver that got faster. Nothing in
+   the answer, the node count or any counter in [Search.stats] can tell it from an
+   improvement. The only oracle is the proof, because the nogood the filter emits is a
+   clause the checker cannot re-derive.
+
+   THE WORDING, at full strength. An exit status cannot tell a JUDGEMENT from a parse
+   error (M2-T14 found four lanes green on a grammar refusal), and the bare phrase
+   "reverse unit propagation" would be matched by any other RUP failure anywhere in the
+   proof -- including ones this row did not cause. So the claim asserted is the checker's
+   whole sentence for this judgement, `Verification failed.` together with the rule named
+   and the RUP judgement, and the CONTROL immediately above emits the same proof shape
+   from the same code path and is accepted. *)
+let test_break_backjump_on_pb () =
+  print_endline "\n-- M2-L15 (c): the break -- backjumping on the PB row's levels";
+  let honest = run php_src in
+  check_verified "c: CONTROL -- the closure-driven backjump's proof is ACCEPTED" honest;
+  let broken = run ~config:{ Search.default_config with backjump_on_pb = true } php_src in
+  check "c: the break really did take a different set on this model"
+    (broken.r_stats.Search.n_level_narrower > 0);
+  (* The two facts that make the checker the only oracle. *)
+  check "c: the ANSWER is unchanged -- still UNSAT"
+    (broken.r_outcome = Search.Unsat && honest.r_outcome = Search.Unsat);
+  (* [skipped] is the counter a better backjump is supposed to buy (M2-L15 obligation
+     (d)), so it is reported HERE, beside the node count, on the one build in this tree
+     that moves it -- and that build is the unsound one. That juxtaposition is the whole
+     lesson: the counter cannot distinguish a backjump that is better from one that is
+     merely higher. *)
+  check
+    (Printf.sprintf
+       "c: and the TREE IS SMALLER -- %d nodes / %d skipped broken, against %d / %d \
+        honest. A wrong backjump looks like an improvement in both counters"
+       broken.r_stats.Search.nodes broken.r_stats.Search.skipped
+       honest.r_stats.Search.nodes honest.r_stats.Search.skipped)
+    (broken.r_stats.Search.nodes < honest.r_stats.Search.nodes
+    && broken.r_stats.Search.skipped > honest.r_stats.Search.skipped);
+  (match veripb broken with
+  | None -> ()
+  | Some (ok, out) ->
+      check "c: BREAK -- with the nogood filtered by the PB row's levels, veripb REJECTS"
+        (not ok);
+      check
+        "c: ...and on the JUDGEMENT, in the checker's whole sentence -- the constraint \
+         is not implied by RUP from core and derived database -- not on the grammar"
+        ((not ok) && rup_judgement out);
+      if ok then
+        Printf.printf
+          "     THE BREAK DID NOT FIRE. A search that dropped decisions the conflict \
+           rests on from its nogood emitted a proof this checker accepts. That is a \
+           finding about the lane or about the checker and must not be absorbed.\n"
+      else if not (rup_judgement out) then
+        Printf.printf "     checker said: %s\n" (String.trim out));
+  cleanup honest;
+  cleanup broken
+
 let () =
   test_row_beats_clause ();
   test_order_literal_scene ();
@@ -524,6 +684,9 @@ let () =
   test_clause_is_degree_one ();
   test_php_scene ();
   test_break_degree ();
+  test_level_sets_differ ();
+  test_level_shape ();
+  test_break_backjump_on_pb ();
   test_retention_citations ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;

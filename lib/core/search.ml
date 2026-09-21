@@ -440,9 +440,58 @@ type stats = {
          what a real solve actually derived -- test (e) -- instead of on a scene built to
          make the oracle pass. Capped for the reason [bridges_rev] is. *)
   mutable pb_fallback_rev : string list;
-      (* Why, newest first, capped. A rate with no breakdown behind it cannot be acted
-         on, and the breakdown is what says whether the traffic is [No_row] (expected,
-         D-0044) or [Not_conflicting] (a finding about the reduction). *)
+  (* Why, newest first, capped. A rate with no breakdown behind it cannot be acted
+     on, and the breakdown is what says whether the traffic is [No_row] (expected,
+     D-0044) or [Not_conflicting] (a finding about the reduction). *)
+  (* ------------------------------------------------------------------ M2-L15 *)
+  mutable n_level_compared : int;
+      (* Conflicts at which BOTH a decision closure and a PB row were obtained, so the
+         two level sets could be put side by side. The denominator of everything below,
+         and it is neither [n_learned] nor [n_pb_learned]: a conflict that falls back has
+         no PB set, and one under no decision has no closure. *)
+  mutable n_level_same : int; (* ...and the two sets were equal *)
+  mutable n_level_narrower : int;
+      (* ...and the PB row's set is a STRICT SUBSET of the closure's. THIS IS THE TRAP,
+         and it is the only one of the four arms that is dangerous: a narrower set filters
+         MORE literals out of the branch nogood, so it licenses a HIGHER jump than the
+         closure justifies, and the clause that comes out is not entailed. Every one of
+         these is a conflict at which [config.backjump_on_pb] would emit an unprovable
+         nogood. See [pb_level_verdict]. *)
+  mutable n_level_wider : int;
+      (* ...and the closure's is a strict subset of the PB row's. Harmless as a backjump
+         -- it skips less -- and interesting as data: it means the row's literals were
+         falsified at levels the conflict does not actually rest on, which is what
+         "the levels a derived row names are not a dependency set" looks like from the
+         other side. *)
+  mutable n_level_incomparable : int;
+      (* ...and neither contains the other. Counted apart because "differ" would let a
+         reader assume the disagreement is one-directional, and it is not. *)
+  mutable n_level_assert_deeper : int;
+      (* Conflicts at which the PB row's own [asserting_level] -- the SAT solver's
+         backjump level, Le Berre et al.'s subject -- is strictly below the LOWEST level
+         the closure names, i.e. the row would resume beneath EVERY decision the conflict
+         actually rests on. That is the maximal over-jump and it is the figure the CDCL
+         instinct deserves to have put next to it.
+
+         Compared against the lowest and not the deepest ON PURPOSE. Against the deepest
+         it is near-vacuous: [assertive_slack]'s postcondition already guarantees the row
+         asserts at [conflict_level - 1], and the closure's deepest level is the conflict
+         level, so the comparison would read 103 of 103 over the suite and mean only that
+         the criterion did its job. Measured that way first; the number was 103 of 103,
+         and a counter that cannot come out false is decoration. *)
+  mutable n_level_pb_empty : int;
+      (* Conflicts at which the learned PB row names NO level at all -- the empty
+         contradiction [0 >= k] (see [n_pb_nondegenerate]), whose [levels] is [[]].
+
+         Split out of [n_level_narrower] because it is the same arm with a different
+         meaning and the worst case in it: filtering the branch nogood by the empty set
+         leaves the EMPTY CLAUSE, i.e. a claim that the model is unconditionally
+         unsatisfiable, emitted at a node where it is not. Folding it in with php's
+         genuine partial subsets would let a reader think the dangerous arm is uniform,
+         and it is not. *)
+  mutable level_diffs_rev : string list;
+      (* The disagreements, newest first, capped: one line each, closure set against PB
+         set. Capped for the reason [pb_fallback_rev] is. *)
 }
 
 let stats_create () =
@@ -489,6 +538,14 @@ let stats_create () =
     n_pb_rungs = 0;
     pb_rows_rev = [];
     pb_fallback_rev = [];
+    n_level_compared = 0;
+    n_level_same = 0;
+    n_level_narrower = 0;
+    n_level_wider = 0;
+    n_level_incomparable = 0;
+    n_level_assert_deeper = 0;
+    n_level_pb_empty = 0;
+    level_diffs_rev = [];
   }
 
 let stats_learned s = List.rev s.learned_rev
@@ -518,6 +575,11 @@ let stats_globals s = List.rev_map (fun g -> g.g_lit) s.globals_rev
 let pb_reason_cap = 64
 let stats_pb_fallbacks s = List.rev s.pb_fallback_rev
 let stats_pb_rows s = List.rev s.pb_rows_rev
+
+(* M2-L15: the disagreements, oldest first. Same shape and same cap as
+   [stats_pb_fallbacks], and read for the same reason -- a rate with no breakdown behind
+   it cannot be acted on. *)
+let stats_level_diffs s = List.rev s.level_diffs_rev
 
 (* The fraction of analysed conflicts that fell back to the clause path, in [0., 1.].
    [0.] when nothing was analysed -- which is honestly "no fallbacks happened", and a
@@ -711,9 +773,10 @@ let extract_assignment store : assignment =
                 succeeds, the derived inequality goes on the page ALONGSIDE the M2-L3
                 clause, not instead of it. That is not hedging. The clause is what the
                 search's nogood and backjump rest on -- through [Learn.levels], which come
-                from the decision closure and not from either learned object -- and M2-L3
-                owns a body of assertions about it that this row has no business
-                disturbing. What the PB row adds is a strictly stronger constraint on the
+                from the decision closure and not from either learned object, which M2-L15
+                re-asked after M2-L13 and MEASURED rather than left as a preference; see
+                [pb_level_verdict] -- and M2-L3 owns a body of assertions about it that
+                this row has no business disturbing. What the PB row adds is a strictly stronger constraint on the
                 page, under D-0044's same fork (ii): proof-only until M2-L4's retention
                 policy decides which learned objects earn a runtime instance. Off is the
                 state every M2-L3 measurement was taken in, so a comparison against those
@@ -763,6 +826,22 @@ type config = {
          is in lib/core/retention.ml's header. Swappable for the same reason [reduction]
          and [pb_criterion] are (D-0044): the interesting alternatives are not
          parameterisations of one another. *)
+  backjump_on_pb : bool;
+      (* M2-L15's BREAK, and the thing this row exists to refuse. OFF.
+
+         On, the branch nogood is filtered by the level set the LEARNED PB ROW names
+         ([Pb_analysis.levels]) instead of by the decision closure's
+         ([Learn.levels]). That is the rule a reader arrives with -- M2-L13 gave the PB
+         row a propagator, so surely the row can drive the backjump too -- and it is
+         unsound for a reason that has nothing to do with propagation: the nogood is a
+         clause over DECISIONS, and the row's levels are not a statement about which
+         decisions the conflict rests on. [stats.n_level_narrower] counts the conflicts
+         at which the two disagree in the dangerous direction, and on every one of those
+         this knob emits a clause the checker cannot re-derive.
+
+         Wrong on purpose and NOT CLI-reachable, exactly as [break_i_s4],
+         [break_ladder_mult] and [break_pb_degree] are. test/unit/test_pb.ml runs it and
+         asserts the rejection's wording. *)
   propagate_learned : bool;
       (* M2-L12. Whether a learned clause gets a runtime consumer: a unit becomes a
          global bound tightening applied at every node, a wider one becomes a
@@ -792,6 +871,7 @@ let default_config =
     reduction = Reduce.round_to_one;
     pb_criterion = Pb_analysis.assertive_slack;
     retention = Retention.default;
+    backjump_on_pb = false;
     propagate_learned = true;
   }
 
@@ -1252,6 +1332,80 @@ let register_learned_pb engine store ctx stats ~bump ~cid ~(row : Learned.t) =
           (Printf.sprintf "learned_pb instance #%d, %s (M2-L13)" id
              (Learned.to_string row))
 
+(* ---------------------------------------------------------------------------
+   M2-L15: THE BACKJUMP LEVEL, and why the decision closure is RIGHT and not merely safe
+   ---------------------------------------------------------------------------
+
+   lib/core/pb_analysis.ml's closing note handed this on by name: M2-L13 gave the learned
+   PB row a runtime propagator, so the sentence "that would change the calculation" had
+   stopped being hypothetical and the calculation was owed a redo. Here is the redo.
+
+   FIRST, WHAT THE BACKJUMP IS HERE, because the CDCL word is misleading. This solver does
+   not undo to a level and resume. [branch] is a recursive DFS, and the backjump is the
+   arm below that says [NFail (ng1, cid1) when not (mentions_level ng1 lvl)]: the sibling
+   of a decision is skipped exactly when the branch nogood does not name that decision's
+   level. So THE BACKJUMP IS A FILTER ON THE NOGOOD, and the level set that filter uses is
+   what [learn_at_conflict] returns.
+
+   SECOND, WHAT THE NOGOOD IS. It is a CLAUSE OVER DECISION LITERALS, emitted as a `rup`
+   and re-derived by the checker. Dropping level [j] from it is not a heuristic choice
+   about where to resume; it is ASSERTING that the conflict follows from the remaining
+   decisions alone. A wrong drop is not a slower search, it is a clause that is not
+   entailed -- and [emit_nogood] puts it on the page, where veripb refuses it.
+
+   THIRD, THE CURRENCY MISMATCH, which is the answer. The closure's level set answers "on
+   which decisions does this conflict rest?" -- [Analysis.decision_closure] resolves every
+   non-root node away at every level, so what is left is decisions, declared bounds and
+   factless prunings, and [Analysis.decision_levels] says at the point it is read why that
+   makes it a dependency set. [Pb_analysis.levels] answers "at which levels did this row's
+   literals become falsified?", and [Pb_analysis.asserting_level] answers a third question
+   again -- "how far down does this row still propagate?" -- which is the one Le Berre et
+   al. (arXiv 2107.13085) show carries NO backjump guarantee over PB. None of the three is
+   a rewording of another. Only the first is in the currency the nogood is stated in.
+
+   So the decision closure is not the safe choice among candidates. It is the only
+   candidate: the other two do not answer the question being asked.
+
+   WHAT M2-L13 DID CHANGE, and it is the part worth keeping. A learned PB instance's
+   pruning is an ordinary trail entry carrying reason facts ([Pb.reason_clause]), so
+   [Analysis.analyse ~scope:Everywhere] resolves straight through it and the closure it
+   returns already accounts for the row's antecedents -- at whatever levels those sit. The
+   calculation WAS redone by M2-L13, by the closure walk, without a line of code. What did
+   not change, and could not, is which set drives the filter.
+
+   [pb_level_verdict] is that argument as a MEASUREMENT rather than as this comment. It
+   puts the two sets side by side at every conflict where both exist and classifies the
+   disagreement, because "they never differ" and "they differ and the PB set is narrower"
+   are the two outcomes with opposite meanings and nothing here could previously tell them
+   apart. [config.backjump_on_pb] is the break that takes the narrower set, and the
+   checker is what says no. *)
+
+(* [closure] and [pb] are both descending, deduplicated, level 0 dropped -- see
+   [Analysis.decision_levels] and [Pb_analysis.row_levels], which agree on the shape
+   deliberately so that this comparison needs no normalisation. *)
+let pb_level_verdict stats ~(closure : int list) ~(pb : int list) ~asserting_level =
+  let subset a b = List.for_all (fun x -> List.mem x b) a in
+  stats.n_level_compared <- stats.n_level_compared + 1;
+  let show ls =
+    if ls = [] then "{}" else "{" ^ String.concat "," (List.map string_of_int ls) ^ "}"
+  in
+  if pb = [] then stats.n_level_pb_empty <- stats.n_level_pb_empty + 1;
+  if closure = pb then stats.n_level_same <- stats.n_level_same + 1
+  else (
+    if subset pb closure then stats.n_level_narrower <- stats.n_level_narrower + 1
+    else if subset closure pb then stats.n_level_wider <- stats.n_level_wider + 1
+    else stats.n_level_incomparable <- stats.n_level_incomparable + 1;
+    if List.length stats.level_diffs_rev < pb_reason_cap then
+      stats.level_diffs_rev <-
+        Printf.sprintf "closure %s vs pb %s (pb asserts at %d)" (show closure) (show pb)
+          asserting_level
+        :: stats.level_diffs_rev);
+  (* [closure] is descending, so its last element is the lowest level it names. *)
+  match List.rev closure with
+  | lowest :: _ when asserting_level < lowest ->
+      stats.n_level_assert_deeper <- stats.n_level_assert_deeper + 1
+  | _ -> ()
+
 (* M2-L6: PB conflict analysis, alongside the clause. [clause_converts] is whether the
    SAME conflict's M2-L3 clause would have converted, which is what makes [n_pb_stronger]
    a comparison rather than a count.
@@ -1267,9 +1421,12 @@ let register_learned_pb engine store ctx stats ~bump ~cid ~(row : Learned.t) =
    than left a paragraph: the derivation must cite constraint ids that are on the page at
    level 0. A [pol] citing a hole line across levels is the violation learn.ml's header
    says M2-L6's reduction steps are the first thing that could write. *)
+(* M2-L15: returns the level set the learned row names, paired with its own asserting
+   level -- [None] when no row was learned. The return value is DATA for
+   [pb_level_verdict]; the default build compares it and acts on none of it. *)
 let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_converts ~lbd
-    ~decl =
-  if not (cfg.learn && cfg.pb) then ()
+    ~decl : (int list * int) option =
+  if not (cfg.learn && cfg.pb) then None
   else (
     stats.n_pb_attempts <- stats.n_pb_attempts + 1;
     match
@@ -1285,7 +1442,8 @@ let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_conve
         stats.n_pb_fallback <- stats.n_pb_fallback + 1;
         if List.length stats.pb_fallback_rev < pb_reason_cap then
           stats.pb_fallback_rev <-
-            Pb_analysis.fallback_to_string f :: stats.pb_fallback_rev
+            Pb_analysis.fallback_to_string f :: stats.pb_fallback_rev;
+        None
     | Pb_analysis.Learned_row t ->
         Debug.check "I-S4: a PB derivation cites only model rows, which no `w` retires"
           (fun () ->
@@ -1328,7 +1486,8 @@ let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_conve
           register_learned_pb engine store ctx stats
             ~bump:(if cfg.break_pb_degree then 1 else 0)
             ~cid ~row:t.Pb_analysis.row;
-        ignore (Retention.reduce stats.db ctx))
+        ignore (Retention.reduce stats.db ctx);
+        Some (t.Pb_analysis.levels, t.Pb_analysis.asserting_level))
 
 (* ------------------------------------------------------- M2-L12: making it propagate
 
@@ -1517,7 +1676,7 @@ let rec learn_at_conflict engine store ctx trace stats cfg (c : Store.conflict) 
         ~decl:(Learned.decl_of_encoding ctx.Justify.encoding)
     with
     | None -> None
-    | Some l ->
+    | Some l -> (
         (* The break: the `w` first, the derivation second. *)
         if cfg.break_i_s4 then Justify.wipe_level ctx (Store.level store);
         let ss = Learn.supports store trace l in
@@ -1551,9 +1710,25 @@ let rec learn_at_conflict engine store ctx trace stats cfg (c : Store.conflict) 
         if cfg.propagate_learned then
           register_learned engine store ctx stats ~cid ~lits:(Learn.lits l);
         ignore (Retention.reduce stats.db ctx);
-        pb_at_conflict engine store ctx stats cfg c ~clause_converts ~lbd:(Learn.lbd l)
-          ~decl:(Learned.decl_of_encoding ctx.Justify.encoding);
-        Some (Learn.levels l)
+        let pb_levels =
+          pb_at_conflict engine store ctx stats cfg c ~clause_converts ~lbd:(Learn.lbd l)
+            ~decl:(Learned.decl_of_encoding ctx.Justify.encoding)
+        in
+        (* M2-L15. The comparison happens on EVERY build, including the default one that
+           acts on none of it: the whole finding of this row is a pair of numbers, and a
+           measurement taken only under the break knob is a measurement of the break. *)
+        let closure = Learn.levels l in
+        (match pb_levels with
+        | None -> ()
+        | Some (pb, asserting_level) ->
+            pb_level_verdict stats ~closure ~pb ~asserting_level);
+        match (cfg.backjump_on_pb, pb_levels) with
+        | false, _ | _, None -> Some closure
+        | true, Some (pb, _) ->
+            (* THE BREAK. See [config.backjump_on_pb]: the row's levels are not a
+               dependency set, so the nogood this filter produces claims the conflict
+               rests on fewer decisions than it does. *)
+            Some pb)
 
 and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list) : node =
   (* M2-L12 step 1: the learned units, applied before anything else at this node. See
