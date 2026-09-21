@@ -177,6 +177,9 @@ let verify_one_summand ?(strict = true) test_name store bounds idx coeff summand
      | Explanation.Term (c, _cited) ->
          expect (c = mag)
            (Printf.sprintf "%s: cited derived bound is scaled by abs(coeff) = %d" name mag)
+     | Explanation.Defining _ ->
+         expect false
+           (Printf.sprintf "%s: int_lin_le does not build a Defining summand" name)
    else
      let d = Store.get store (var idx) in
      let still_declared =
@@ -197,7 +200,10 @@ let verify_one_summand ?(strict = true) test_name store bounds idx coeff summand
          expect false
            (Printf.sprintf
               "%s: bound is still declared but the summand cites instead of weakening"
-              name));
+              name)
+     | Explanation.Defining _, _ ->
+         expect false
+           (Printf.sprintf "%s: int_lin_le does not build a Defining summand" name));
   !ok
 
 (* Verify a whole [Combine (summands, divisor)] against the row it came from:
@@ -3654,7 +3660,8 @@ let rec render_deep e =
            (List.map
               (function
                 | Explanation.Term (c, e) -> Printf.sprintf "%d*%s" c (render_deep e)
-                | Explanation.Weaken _ as w -> Explanation.summand_to_string w)
+                | (Explanation.Weaken _ | Explanation.Defining _) as w ->
+                    Explanation.summand_to_string w)
               summands))
         divisor
   | Explanation.Cut (a, b, c1, c2) ->
@@ -5137,7 +5144,7 @@ let build_alldiff_hall ~take_halls dir =
   let p, snaps, ctx, w, oc, opb, pbp = alldiff_scene dir ~file:"alldiff_hall" ~boxes in
   let halls = take_halls snaps in
   let y = List.nth snaps 2 in
-  let e = Alldiff.prune_expl p ~a:1 ~b:2 ~halls ~y ~lower:true ~level:0 in
+  let e = Alldiff.prune_expl p ~a:1 ~b:2 ~halls ~y ~lower:true in
   let cid = Justify.emit ctx e in
   Writer.conclusion w (Writer.Unsat (Some cid));
   close_out oc;
@@ -5198,7 +5205,35 @@ let alldiff_conclusion_kind dir ~file src =
     | None -> None
     | Some lab -> List.find_opt (fun l -> starts_with_str (lab ^ " ") (String.trim l)) ls
   in
-  (outcome, opb, pbp, minting)
+  (outcome, opb, pbp, minting, text, label)
+
+(* The ids a `pol` line cites, in order, read out of its reverse-Polish expression. The
+   3.0 label is stripped first: `@c96 pol ...` names the line's OWN id, which it does not
+   cite. *)
+let pol_cited body =
+  String.split_on_char ' ' (Writer.strip_label (String.trim body))
+  |> List.filter_map (fun t ->
+         let n = String.length t in
+         if n > 2 && String.sub t 0 2 = "@c" then
+           int_of_string_opt (String.sub t 2 (n - 2))
+         else None)
+
+(* The one-literal `rup` a cited id was minted by, or [None] if that id was minted by
+   something else. This is how obligation (a) is ESTABLISHED rather than asserted: the
+   conclusion names a line, that line is a `pol`, and every id the `pol` cites is looked
+   up in the file to see what put it there. *)
+let unit_rup_of ls id =
+  let want = Printf.sprintf "@c%d rup +1 " id in
+  List.find_map
+    (fun l ->
+      let l = String.trim l in
+      if starts_with_str want l && contains_sub ~needle:" >= 1 ;" l then
+        Some
+          (String.trim
+             (String.sub l (String.length want)
+                (String.length l - String.length want - String.length " >= 1 ;")))
+      else None)
+    ls
 
 let test_alldiff_conclusion () =
   let dir = Filename.temp_file "baguette_alldiff_concl" "" in
@@ -5221,7 +5256,9 @@ let test_alldiff_conclusion () =
      constraint all_different_int([a, b, c, d]);\n\
      solve satisfy;\n"
   in
-  let outcome, _, _, minting = alldiff_conclusion_kind dir ~file:"concl_clean" clean in
+  let outcome, _, _, minting, _, _ =
+    alldiff_conclusion_kind dir ~file:"concl_clean" clean
+  in
   check "alldiff (c): the clean pigeonhole is UNSAT" (outcome = Search.Unsat);
   (match minting with
   | None -> check "alldiff (c): the conclusion names a line this proof minted" false
@@ -5233,15 +5270,297 @@ let test_alldiff_conclusion () =
         "alldiff (c): `conclusion UNSAT` cites the Hall DERIVATION -- a pol, not the \
          empty clause"
         (contains_sub ~needle:" pol " (" " ^ String.trim line)));
-  let outcome, _, _, minting = alldiff_conclusion_kind dir ~file:"concl_moved" moved in
+  (* ---------------------------------------------------- M4-T7, obligation (a) ----
+
+     Until M4-T7 this lane asserted the OPPOSITE: with the bounds moved the derivation
+     cancelled them with [Explanation.clause], [Search.rests_on_a_clause] routed the
+     conflict the D-0022 way, and `conclusion UNSAT` cited `rup >= 1` -- so the Hall
+     `pol` was decorative for exactly the conflict the whole counting argument was
+     built for (D-0061). [Explanation.Defining] cites the same lines through the same
+     claim index and mints the same bytes; what it changes is that the derivation is no
+     longer a derivation resting on a clause, so the conflict closes on its own
+     arithmetic.
+
+     "Cites the pol" is not enough on its own -- a pol derives whatever it derives -- so
+     the ids are read back out of the file and looked up. *)
+  let outcome, opb, pbp, minting, text, label =
+    alldiff_conclusion_kind dir ~file:"concl_moved" moved
+  in
   check "alldiff (c): the moved-bounds pigeonhole is UNSAT" (outcome = Search.Unsat);
+  let ls = String.split_on_char '\n' text in
   (match minting with
-  | None -> check "alldiff (c): the moved-bounds conclusion names a line" false
+  | None -> check "alldiff (a): the moved-bounds conclusion names a line" false
   | Some line ->
       check
-        "alldiff (c): with the bounds moved it cites `rup >= 1` instead -- the pol IS \
-         decorative there, and alldiff.ml says so"
-        (contains_sub ~needle:"rup >= 1" (String.trim line)));
+        "alldiff (a): with the bounds moved `conclusion UNSAT` now cites the Hall POL, \
+         not `rup >= 1` -- the D-0061 stand-in is gone"
+        (contains_sub ~needle:" pol " (" " ^ String.trim line));
+      (* Read the cited ids back out and look each one up. The bound facts this
+         derivation cancels are a, b and c's lower bounds, every one of them moved to 3
+         by the two int_lin_le rows, and each is cited through a UNIT line -- which is
+         the property [Search.rests_on_a_clause] now reads off [Defining]. *)
+      let cited = pol_cited (String.trim line) in
+      let units = List.filter_map (fun id -> unit_rup_of ls id) cited in
+      let sorted = List.sort_uniq String.compare units in
+      if sorted <> [ "a_ge_3"; "b_ge_3"; "c_ge_3" ] then
+        Printf.printf "     cited units: %s\n" (String.concat " " sorted);
+      check
+        "alldiff (a): and the ids it cites really are the lines establishing the moved \
+         bounds -- a_ge_3, b_ge_3, c_ge_3, each a one-literal rup"
+        (sorted = [ "a_ge_3"; "b_ge_3"; "c_ge_3" ]);
+      check
+        "alldiff (a): the Hall pol carries the conflict, so nothing is a bare `rup >= 1`"
+        (not (List.exists (fun l -> String.trim l = "rup >= 1 ;") ls)));
+  (* (b) The derivation is accepted, and a WRONG defining id is not. The break is
+     performed on the solver's own artefact: the last id the conclusion's `pol` cites is
+     swapped for the first, so the row is cancelled against the wrong variable's bound.
+     The checker's judgement on that is named at full strength -- an exit status cannot
+     tell it from a parse error. *)
+  (match (veripb_path (), label, minting) with
+  | None, _, _ ->
+      incr failures;
+      Printf.printf
+        "FAIL alldiff (b): veripb not found -- the derivation was NOT checked.\n"
+  | Some veripb, Some lab, Some line ->
+      let run tag pbp =
+        let log = Filename.concat dir ("log" ^ tag) in
+        let rc =
+          Sys.command
+            (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
+               (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
+        in
+        let ic = open_in_bin log in
+        let out = really_input_string ic (in_channel_length ic) in
+        close_in ic;
+        (rc, out)
+      in
+      let rc, out = run "ok" pbp in
+      if rc <> 0 then Printf.printf "     checker said: %s\n" (String.trim out);
+      check "alldiff (b): 3.0.2 accepts the derivation the conclusion now rests on"
+        (rc = 0);
+      let cited = pol_cited (String.trim line) in
+      let first = List.hd cited and last = List.nth cited (List.length cited - 1) in
+      check "alldiff (b) premise: the id the break replaces IS a defining unit line"
+        (unit_rup_of ls last <> None);
+      let broken = Filename.concat dir "concl_moved_broken.pbp" in
+      let oc = open_out broken in
+      List.iteri
+        (fun i l ->
+          let l =
+            if starts_with_str (lab ^ " ") (String.trim l) then (
+              (* one substitution, the last cited id for the first *)
+              let want = Printf.sprintf "@c%d " last in
+              match String.index_opt l '@' with
+              | _ ->
+                  let n = String.length want in
+                  let b = Buffer.create (String.length l) in
+                  let rec go j =
+                    if j + n <= String.length l then
+                      if String.sub l j n = want then (
+                        Buffer.add_string b (Printf.sprintf "@c%d " first);
+                        Buffer.add_string b
+                          (String.sub l (j + n) (String.length l - j - n)))
+                      else (
+                        Buffer.add_char b l.[j];
+                        go (j + 1))
+                    else Buffer.add_string b (String.sub l j (String.length l - j))
+                  in
+                  go 0;
+                  Buffer.contents b)
+            else l
+          in
+          if i > 0 then output_char oc '\n';
+          output_string oc l)
+        ls;
+      close_out oc;
+      let rc, out = run "bad" broken in
+      let contains needle hay =
+        let n = String.length needle and h = String.length hay in
+        let rec go i = i + n <= h && (String.sub hay i n = needle || go (i + 1)) in
+        n = 0 || go 0
+      in
+      check "alldiff (b) BREAK: a WRONG defining id in the Hall pol is rejected" (rc <> 0);
+      check
+        "alldiff (b) BREAK: and the rejection is that JUDGEMENT -- \"is not \
+         contradicting, as specified by the hint.\" -- not a parse error"
+        (contains "is not contradicting, as specified by the hint." out);
+      if not (contains "is not contradicting, as specified by the hint." out) then
+        Printf.printf "     checker said: %s\n" (String.trim out)
+  | _ -> check "alldiff (b): the conclusion names a pol to break" false);
+  Sys.readdir dir
+  |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
+  try Sys.rmdir dir with _ -> ()
+
+(* ---------------------------------------------------- M4-T7, obligation (c) ----
+
+   The stand-in ([Explanation.clause]) was sound only at level 0 and lib/core/prop/
+   alldiff.ml switched the whole cancellation off under a decision, because a bound a
+   DECISION established is not a consequence of the model and a unit line for it would be
+   false. A bound the ROOT FIXPOINT established is a consequence of the model, and its
+   line stays true and citable however deep the search has gone -- so the test is now per
+   bound, and it is the level the bound was established at.
+
+   These two scenes differ in exactly that and in nothing else: the same three variables,
+   the same two bounds moved to the same values, the same Hall interval, the same pruning
+   -- once with the bounds set before the decision level is opened and once after. *)
+let alldiff_level_scene ~root_bounds =
+  let dir = Filename.temp_file "baguette_alldiff_level" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let boxes = [ (1, 4); (1, 4); (1, 4) ] in
+  let names = [ "v0"; "v1"; "v2" ] in
+  let e = Encoding.create () in
+  List.iter2 (fun n (lo, hi) -> Encoding.declare_int e n ~lo ~hi) names boxes;
+  List.iter (Encoding.request_direct e) names;
+  let rows = Encoding.add_all_different e names in
+  let store = mk_store (List.map2 (fun n (lo, hi) -> (n, lo, hi)) names boxes) in
+  let p = Alldiff.make store e ~rows [ var 0; var 1; var 2 ] in
+  let move () =
+    ignore (Store.set_hi store (var 0) 2 placeholder_pruning);
+    ignore (Store.set_hi store (var 1) 2 placeholder_pruning)
+  in
+  if root_bounds then (
+    move ();
+    Store.new_level store)
+  else (
+    Store.new_level store;
+    move ());
+  let snaps = Array.to_list (Array.map (Alldiff.snap_of store) p.Alldiff.terms) in
+  let halls = [ List.nth snaps 0; List.nth snaps 1 ] in
+  let y = List.nth snaps 2 in
+  (* Forcing reads the direct encoding's ids, so the proof has to have been started; the
+     lines themselves are never looked at by this lane. *)
+  let pbp = Filename.concat dir "level.pbp" in
+  let oc = open_out pbp in
+  let w = Writer.create ~comments:false ~audit:false oc in
+  Encoding.start_proof e w;
+  let expl = Explanation.force (Alldiff.prune_expl p ~a:1 ~b:2 ~halls ~y ~lower:true) in
+  close_out oc;
+  Sys.readdir dir
+  |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
+  (try Sys.rmdir dir with _ -> ());
+  let n_defining =
+    match expl with
+    | Explanation.Combine (summands, _) ->
+        List.length
+          (List.filter (function Explanation.Defining _ -> true | _ -> false) summands)
+    | _ -> -1
+  in
+  (Store.level store, n_defining)
+
+let test_alldiff_above_level_zero () =
+  let lvl, n = alldiff_level_scene ~root_bounds:true in
+  check "alldiff M4-T7 (c): the root-bounds scene really is asking above level 0" (lvl = 1);
+  check
+    "alldiff M4-T7 (c): a Hall bound the ROOT established is cancelled by its defining \
+     id even under a decision -- one Defining per moved Hall bound"
+    (n = 2);
+  let lvl, n = alldiff_level_scene ~root_bounds:false in
+  check "alldiff M4-T7 (c): the decision-bounds scene is at the same level" (lvl = 1);
+  check
+    "alldiff M4-T7 (c) CONTROL: a bound the DECISION established is not cited -- a unit \
+     line for it would be false, and the row keeps its literal instead"
+    (n = 0)
+
+(* The same claim end to end, on the solver's own artefact rather than on a scene: a
+   model whose root fixpoint moves a bound and whose every Hall inference then happens
+   under a decision. The level-0 unit line must be CITED by a `pol` written at a deeper
+   level -- read back out of the file, not assumed -- and the proof must still verify. *)
+let test_alldiff_cites_root_bound_under_decision () =
+  let dir = Filename.temp_file "baguette_alldiff_deep" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let src =
+    "var 1..4: a;\n\
+     var 1..4: b;\n\
+     var 1..4: c;\n\
+     var 1..4: d;\n\
+     constraint int_le(a, 2);\n\
+     constraint int_lin_le([1,1,1,1],[a,b,c,d],9);\n\
+     constraint all_different_int([a, b, c, d]);\n\
+     solve satisfy;\n"
+  in
+  let outcome, opb, pbp, _, text, _ = alldiff_conclusion_kind dir ~file:"deep" src in
+  check "alldiff M4-T7 (c): the branching model is UNSAT" (outcome = Search.Unsat);
+  let ls = String.split_on_char '\n' text in
+  (* Walk the file once, tracking the level marker, and record for every minted id the
+     level it was written at, plus the literal of every one-literal `rup`. *)
+  let level_of = Hashtbl.create 64 and unit_lit = Hashtbl.create 64 in
+  let lvl = ref 0 in
+  List.iter
+    (fun l ->
+      let t = String.trim l in
+      match String.split_on_char ' ' t with
+      | [ "%"; "level"; n ] -> (
+          match int_of_string_opt n with Some n -> lvl := n | None -> ())
+      | _ -> (
+          if starts_with_str "@c" t then
+            match String.index_opt t ' ' with
+            | None -> ()
+            | Some i -> (
+                match int_of_string_opt (String.sub t 2 (i - 2)) with
+                | None -> ()
+                | Some id -> (
+                    Hashtbl.replace level_of id !lvl;
+                    match unit_rup_of ls id with
+                    | Some lit -> Hashtbl.replace unit_lit id lit
+                    | None -> ()))))
+    ls;
+  (* A `pol` at level >= 1 that cites an id minted at level 0 by a one-literal `rup`.
+     Before M4-T7 there was no such citation to find: the cancellation was switched off
+     wholesale under a decision. *)
+  let hits = ref [] in
+  let lvl = ref 0 in
+  List.iter
+    (fun l ->
+      let t = String.trim l in
+      match String.split_on_char ' ' t with
+      | [ "%"; "level"; n ] -> (
+          match int_of_string_opt n with Some n -> lvl := n | None -> ())
+      | _ ->
+          if !lvl >= 1 && contains_sub ~needle:"pol " t && starts_with_str "@c" t then
+            List.iter
+              (fun id ->
+                match (Hashtbl.find_opt level_of id, Hashtbl.find_opt unit_lit id) with
+                | Some 0, Some lit -> hits := (!lvl, lit) :: !hits
+                | _ -> ())
+              (pol_cited t))
+    ls;
+  if !hits = [] then
+    Printf.printf "     no pol under a decision cites a level-0 unit line\n"
+  else
+    Printf.printf "     %d citation(s), e.g. level %d cites `%s`\n" (List.length !hits)
+      (fst (List.hd !hits))
+      (snd (List.hd !hits));
+  check
+    "alldiff M4-T7 (c): a Hall pol written UNDER A DECISION cites the level-0 unit line \
+     that establishes a root-moved bound -- read back out of the .pbp"
+    (!hits <> []);
+  check
+    "alldiff M4-T7 (c): and the bound it cites is the one the root fixpoint set (a <= 2)"
+    (List.exists (fun (_, lit) -> lit = "~a_ge_3") !hits);
+  (match veripb_path () with
+  | None ->
+      incr failures;
+      Printf.printf
+        "FAIL alldiff M4-T7 (c): veripb not found -- the proof was NOT checked.\n"
+  | Some veripb ->
+      let log = Filename.concat dir "log" in
+      let rc =
+        Sys.command
+          (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
+             (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
+      in
+      if rc <> 0 then (
+        let ic = open_in_bin log in
+        let out = really_input_string ic (in_channel_length ic) in
+        close_in ic;
+        Printf.printf "     checker said: %s\n" (String.trim out));
+      check
+        "alldiff M4-T7 (c): and 3.0.2 accepts the proof with those deeper citations in it"
+        (rc = 0));
+  Sys.readdir dir
+  |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
   try Sys.rmdir dir with _ -> ()
 
 let () =
@@ -5376,6 +5695,8 @@ let () =
   test_arith_cites_its_own_row ();
   test_alldiff_filtering ();
   test_alldiff_conclusion ();
+  test_alldiff_above_level_zero ();
+  test_alldiff_cites_root_bound_under_decision ();
   run_veripb
     ~name:
       "alldiff (b) CONTROL: the Hall derivation over the TIGHT set is a contradiction \

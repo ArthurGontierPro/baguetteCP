@@ -871,6 +871,186 @@ let test_defining_lit () =
   expect_ok "defining_lit: no exception" r
 
 (* ------------------------------------------------------------------ *)
+(* M4-T7 / D-0009: [Explanation.Defining], the summand that ASKS for   *)
+(*   a constraint id instead of naming one.                            *)
+(* ------------------------------------------------------------------ *)
+
+(* Until M4-T7 [defining_lit] above had no caller, because nothing in an
+   [Explanation.t] value could request an id. [Defining (c, l)] is that request. These
+   lanes pin the three things the constructor promises, and the fourth -- that citing a
+   bound the model does not imply is REFUSED, not quietly accepted -- is the veripb lane
+   further down, because only the checker can say it. *)
+let test_defining_summand () =
+  let s, r =
+    emitted (fun w ->
+        let _, ctx, row = build_ctx w in
+        let ids = ref (0, 0, 0) in
+        (* The line that establishes [x >= 2], written the way [Trace] writes it. *)
+        let unit_id = Justify.emit_rup_clause ctx ~origin:"trace" [ Lit.ge "x" 2 ] in
+        let before = Writer.last_id w in
+        let cited =
+          Justify.emit ctx
+            (Explanation.combine
+               [
+                 Explanation.term 1 (Explanation.model_row row);
+                 Explanation.defining 2 (Lit.ge "x" 2);
+               ]
+               1)
+        in
+        (* One line for the [Combine] itself and NOT ONE MORE: the [Defining] resolved
+           through the claim index and minted nothing, which is the difference between
+           citing a fact and restating it. *)
+        check "Defining: a summand whose literal is already stated mints no extra line"
+          (cited = before + 1);
+        (* No line states [x >= 3], so this one has to be written. It is still a UNIT,
+           which is the property [Search.rests_on_a_clause] reads off this constructor. *)
+        let before = Writer.last_id w in
+        let minted =
+          Justify.emit ctx
+            (Explanation.combine
+               [
+                 Explanation.term 1 (Explanation.model_row row);
+                 Explanation.defining 1 (Lit.ge "x" 3);
+               ]
+               1)
+        in
+        check "Defining: with nothing stating the literal it states it, as a unit"
+          (minted = before + 2);
+        (* The [Defining] that had nothing to cite minted its own unit line one id
+           ahead of the [pol]; it is this test's to retire (I-X2). *)
+        Writer.delete_many w [ unit_id; cited; minted - 1; minted ];
+        ids := (row, unit_id, cited);
+        !ids)
+  in
+  expect_ok "Defining: no exception" (Result.map ignore r);
+  (match r with
+  | Ok (row, unit_id, cited) ->
+      (* And it is the RIGHT id, asked by content rather than by two integers agreeing --
+         the same question [test_index_reuses_the_right_line] asks of the index. *)
+      check_eq "Defining: the pol cites the line that ESTABLISHES the literal"
+        ~expected:(Printf.sprintf "pol @c%d @c%d 2 * + ;" row unit_id)
+        ~got:(line_labelled s cited)
+  | Error _ -> ());
+  check "Defining: the line it had to mint is a one-literal rup"
+    (let want = "rup +1 x_ge_3 >= 1 ;" in
+     List.exists (fun l -> Writer.strip_label l = want) (String.split_on_char '\n' s))
+
+let test_defining_is_data () =
+  let e =
+    Explanation.combine
+      [ Explanation.weaken [ (1, Lit.ge "y" 1) ]; Explanation.defining 3 (Lit.ge "x" 2) ]
+      1
+  in
+  (* D-0035: a cited bound fact is a fact the derivation RESTS on, so it has to show up
+     in the reason set exactly as a weakened one does -- a derivation that named nothing
+     for it would write a trace line over too short a tail (I-P5). *)
+  check "Defining: the cited literal is in [Explanation.lits]"
+    (List.mem (Lit.ge "x" 2) (Explanation.lits e));
+  check "Defining: and its owner is in [owners]" (List.mem "x" (Explanation.owners e));
+  (* [top_weaken_owners] is what [Store.apply] compares against the reason (D-0026). A
+     cited variable owes the same account as a weakened one, and more of it. *)
+  check
+    "Defining: and in [top_weaken_owners], which is what Store checks the reason against"
+    (List.mem "x" (Explanation.top_weaken_owners e));
+  check "Defining: to_string names it as a citation, not as an axiom"
+    (Explanation.summand_to_string (Explanation.defining 3 (Lit.ge "x" 2))
+    = "3*defining(x_ge_2)");
+  (match Explanation.defining 0 (Lit.ge "x" 2) with
+  | exception Invalid_argument _ ->
+      check "Defining: a coefficient below 1 is refused" true
+  | _ -> check "Defining: a coefficient below 1 is refused" false);
+  let _, r =
+    emitted (fun w ->
+        let _, ctx, row = build_ctx w in
+        Justify.emit ctx
+          (Explanation.combine
+             [
+               Explanation.term 1 (Explanation.model_row row);
+               Explanation.defining 1 (Lit.ge "nosuchvar" 1);
+             ]
+             1))
+  in
+  check "Defining: a literal about an undeclared variable is refused HERE, not by veripb"
+    (match r with Error (Invalid_argument _) -> true | _ -> false)
+
+(* Like [run_veripb], but the proof MUST be rejected AND the rejection must be the
+   judgement this lane names, in the checker's own words. An exit status cannot tell a
+   judgement from a parse error (M2-T14). *)
+let run_veripb_rejects_saying ~name ~saying ~build =
+  match veripb_path () with
+  | None ->
+      incr failures;
+      Printf.printf
+        "FAIL %s: veripb not found -- the rejection was NOT checked. Install it and \
+         re-run; do not treat this as a pass.\n"
+        name
+  | Some veripb -> (
+      let dir = Filename.temp_file "baguette_justify_neg" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let opb, pbp = build dir in
+      let log = Filename.concat dir "log" in
+      let rc =
+        Sys.command
+          (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
+             (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
+      in
+      let out =
+        let ic = open_in_bin log in
+        let s = really_input_string ic (in_channel_length ic) in
+        close_in ic;
+        s
+      in
+      let contains needle hay =
+        let n = String.length needle and h = String.length hay in
+        let rec go i = i + n <= h && (String.sub hay i n = needle || go (i + 1)) in
+        n = 0 || go 0
+      in
+      check (name ^ " (veripb rejects it)") (rc <> 0);
+      check
+        (name ^ " (and the rejection is that judgement, in the checker's words)")
+        (contains saying out);
+      if not (contains saying out) then
+        Printf.printf "       checker said: %s\n" (String.trim out);
+      List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp; log ];
+      try Sys.rmdir dir with _ -> ())
+
+(* Model: x in [0,3] with the single row [x >= 2]. [~lit] is the bound the derivation
+   cites as established. At [x >= 2] that is true of the model and the line the
+   [Defining] states is sound; at [x >= 3] it is NOT a consequence -- x = 2 satisfies
+   the model -- which is exactly what a caller citing a DECISION-established bound would
+   be writing, and it is the whole reason lib/core/prop/alldiff.ml tests the level the
+   bound was established at rather than the level it is standing on. *)
+let build_defining_proof ~lit dir =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:0 ~hi:3;
+  let row = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "x" 2) ] 1) in
+  let opb = Filename.concat dir "defining.opb" in
+  let pbp = Filename.concat dir "defining.pbp" in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "x >= 2" ] e oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let w = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof e w;
+  let ctx = Justify.create ~writer:w ~encoding:e in
+  let before = Writer.last_id w in
+  let derived =
+    Justify.emit ctx
+      (Explanation.combine
+         [ Explanation.term 1 (Explanation.model_row row); Explanation.defining 1 lit ]
+         1)
+  in
+  (* Everything this scene minted is this scene's to retire (I-X2): the [pol], and the
+     unit line the [Defining] had to state because nothing else had. *)
+  for id = before + 1 to derived do
+    Writer.delete w id
+  done;
+  Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x", 2) ]));
+  close_out oc;
+  (opb, pbp)
+
+(* ------------------------------------------------------------------ *)
 (* M2-L0 / D-0043, test (a): the conclusion is what makes the CHECKER  *)
 (*   reject a `pol` that derives less than the pruning claimed.        *)
 (* ------------------------------------------------------------------ *)
@@ -1478,6 +1658,8 @@ let () =
   test_index_ignores_clause_order ();
   test_index_levels ();
   test_defining_lit ();
+  test_defining_summand ();
+  test_defining_is_data ();
   test_memoisation ();
   test_linear_states_its_own_terms ();
   test_deferred_linear ();
@@ -1492,6 +1674,19 @@ let () =
     ~build:build_int_lin_le_ok;
   run_veripb ~name:"justify: a real int_lin_le pruning (two-step bound, the D-0010 chain)"
     ~build:build_int_lin_le_gap;
+  run_veripb
+    ~name:
+      "Defining CONTROL: citing a bound the model does imply (x >= 2) is accepted end to \
+       end"
+    ~build:(build_defining_proof ~lit:(Lit.ge "x" 2));
+  run_veripb_rejects_saying
+    ~name:
+      "Defining BREAK: citing a bound the model does NOT imply (x >= 3) is refused -- \
+       the guard alldiff.ml applies is what keeps this line true"
+    ~build:(build_defining_proof ~lit:(Lit.ge "x" 3))
+    ~saying:
+      "The constraint is not implied by reverse unit propagation (RUP) from core and \
+       derived database.";
   test_d0013_conflict ();
   test_conclusion_rejects_a_weakened_pol ();
   test_reduce_pins_both_rules ();
