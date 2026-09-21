@@ -4250,6 +4250,393 @@ let run_veripb_rejects_saying ~name ~build ~saying =
       List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp; log ];
       try Sys.rmdir dir with _ -> ())
 
+
+(* ====================================================================== M4-T4b
+
+   The arithmetic family: int_times, int_div, int_abs (lib/core/prop/arith.ml).
+
+   Four things are checked here and they are deliberately different questions.
+
+   1. THE ROUNDING (docs/SPEC.md 2.1, D-0033). `x div y` truncates toward zero and the
+      remainder takes the dividend's sign. Pinned against a reference built from
+      non-negative division only, so that "OCaml's / does what we want" is measured
+      rather than assumed -- the same discipline test_interval.ml applies to
+      [div_floor]/[div_ceil].
+
+   2. THE DECOMPOSITION, by brute force. For every assignment of a small declared box,
+      with the auxiliary Booleans set to what their definitions say, EVERY posted row is
+      satisfied if and only if the triple is in the relation. That is both halves at
+      once: a lost solution would be a row satisfied by no assignment the relation
+      allows, and a kept non-solution would be a row set every assignment satisfies. It
+      needs no store, no engine and no proof, which is why it can afford to be
+      exhaustive.
+
+   3. THE PROPAGATION, against the true hull. Compile a model, run to a root fixpoint,
+      and compare the resulting box with the box brute force says is bounds consistent.
+      CONTAINMENT is asserted everywhere (a propagator that pruned outside the hull
+      would be unsound); EQUALITY only where lib/core/prop/arith.ml's header claims
+      exactness, which is int_abs always, int_times with the sign of x settled, and
+      int_div with y fixed. Asserting equality where only soundness is claimed is how a
+      test starts lying about a propagator.
+
+   4. THE OVERFLOW (I-X8, D-0029). A cushion whose arithmetic leaves the cap RAISES.
+
+   The veripb lanes for the family are the model tests (test/models/arith_*.fzn) plus
+   [test_arith_row_break] below, which breaks one row and watches the checker say so. *)
+
+module Arith = Baguette_core.Arith
+module Interval = Baguette_core.Interval
+
+(* A reference truncating division built from NON-NEGATIVE division only: magnitudes
+   divide, the sign of the quotient is the product of the signs, and the remainder is
+   what is left. Nothing here calls [/] on a negative operand, so it cannot inherit the
+   very rounding it is checking. *)
+let ref_trunc_div x y =
+  let m = abs x / abs y in
+  if (x < 0) <> (y < 0) then -m else m
+
+let ref_trunc_rem x y = x - (y * ref_trunc_div x y)
+
+let test_arith_rounding () =
+  let bad_q = ref [] and bad_r = ref [] and bad_id = ref [] in
+  for x = -12 to 12 do
+    for y = -12 to 12 do
+      if y <> 0 then (
+        let q = match Arith.trunc_div x y with Some q -> q | None -> max_int in
+        let r = match Arith.trunc_rem x y with Some r -> r | None -> max_int in
+        if q <> ref_trunc_div x y then bad_q := (x, y) :: !bad_q;
+        if r <> ref_trunc_rem x y then bad_r := (x, y) :: !bad_r;
+        (* SPEC 2.1: x = y*q + r with |r| < |y|, and r takes the sign of x. *)
+        if x <> (y * q) + r || abs r >= abs y || (r <> 0 && (r < 0) <> (x < 0)) then
+          bad_id := (x, y) :: !bad_id)
+    done
+  done;
+  check "arith D-0033: div truncates toward zero over every sign combination"
+    (!bad_q = []);
+  check "arith D-0033: the remainder takes the dividend's sign" (!bad_r = []);
+  check "arith D-0033: x = y*q + r with |r| < |y| holds everywhere" (!bad_id = []);
+  (* The four cases the decision record spells out by name. *)
+  check "arith D-0033: -7 div 2 = -3, not -4" (Arith.trunc_div (-7) 2 = Some (-3));
+  check "arith D-0033: -7 mod 2 = -1, not 1" (Arith.trunc_rem (-7) 2 = Some (-1));
+  check "arith D-0033: 7 div -2 = -3" (Arith.trunc_div 7 (-2) = Some (-3));
+  check "arith D-0033: -7 div -2 = 3" (Arith.trunc_div (-7) (-2) = Some 3);
+  check "arith D-0033: 7 mod -2 = 1 (the dividend's sign, not the divisor's)"
+    (Arith.trunc_rem 7 (-2) = Some 1);
+  (* Division by zero is relational, not an error: no answer, and no exception. *)
+  check "arith D-0033: div by zero has no quotient" (Arith.trunc_div 3 0 = None);
+  check "arith D-0033: div by zero has no remainder" (Arith.trunc_rem 3 0 = None);
+  check "arith D-0033: (x, 0, q) is in no division relation"
+    (not (Arith.is_in_relation ~family:Arith.Div ~args:[ 3; 0; 0 ]));
+  check "arith D-0033: 1 div 2 = 0 is a solution (Interval.quotient_filter says empty)"
+    (Arith.is_in_relation ~family:Arith.Div ~args:[ 1; 2; 0 ]
+    &&
+    match Interval.quotient_filter ~y:(Interval.make 2 2) ~z:(Interval.make 1 1) with
+    | Interval.Bounds b -> Interval.is_empty b
+    | _ -> false)
+
+(* ------------------------------------------------- 2. the rows, by brute force *)
+
+(* One scene: the declared box, the auxiliary layout, and the rows. Variable ids are
+   0 = x, 1 = y (or z for int_abs), 2 = z/q, then the auxiliaries in the order
+   lib/flatzinc/builder.ml creates them: the sign Boolean first, then the ladder from
+   the smallest value up. *)
+type scene = {
+  s_bound : int array array; (* per variable, [| lo; hi |] *)
+  s_sign : Arith.sign;
+  s_ge : (int * int) list;
+  s_rows : Arith.row list;
+}
+
+let sat_row (assign : int array) (r : Arith.row) =
+  List.fold_left (fun acc (c, i) -> acc + (c * assign.(i))) 0 r.Arith.r_terms
+  <= r.Arith.r_rhs
+
+let build_scene ~xlo ~xhi ~ylo ~yhi ~zlo ~zhi ~family =
+  (* int_abs has no case variable, so no ladder: its second slot is z, not y. *)
+  let n_ladder = if family = Arith.Abs then 0 else max 0 (yhi - ylo) in
+  let straddles = xlo < 0 && xhi >= 0 in
+  let sign_idx = if straddles then Some 3 else None in
+  let first_ladder = if straddles then 4 else 3 in
+  let ge = List.init n_ladder (fun k -> (ylo + 1 + k, first_ladder + k)) in
+  let nvars = first_ladder + n_ladder in
+  let bnd = Array.make nvars [| 0; 1 |] in
+  bnd.(0) <- [| xlo; xhi |];
+  bnd.(1) <- [| ylo; yhi |];
+  bnd.(2) <- [| zlo; zhi |];
+  let bound i = (bnd.(i).(0), bnd.(i).(1)) in
+  let sign =
+    match sign_idx with
+    | Some b -> Arith.Bit b
+    | None -> if xlo >= 0 then Arith.Nonneg else Arith.Neg
+  in
+  let x = Arith.aff_var 0 and y = Arith.Case_var 1 and z = Arith.aff_var 2 in
+  let rows =
+    match family with
+    | Arith.Times -> Arith.times_rows ~bound ~x ~y ~z ~sign ~ge
+    | Arith.Div -> Arith.div_rows ~bound ~x ~y ~q:z ~sign ~ge
+    | Arith.Abs -> Arith.abs_rows ~bound ~x ~z:(Arith.aff_var 1) ~sign
+  in
+  { s_bound = bnd; s_sign = sign; s_ge = ge; s_rows = rows }
+
+(* Every assignment of the box, with the auxiliaries set to what their definitions say
+   -- which is what the reified rows lib/flatzinc/compile.ml posts alongside force. *)
+let enumerate_scene sc ~family ~judge =
+  let n = Array.length sc.s_bound in
+  let a = Array.make n 0 in
+  let xlo, xhi = (sc.s_bound.(0).(0), sc.s_bound.(0).(1)) in
+  let ylo, yhi = (sc.s_bound.(1).(0), sc.s_bound.(1).(1)) in
+  let zlo, zhi = (sc.s_bound.(2).(0), sc.s_bound.(2).(1)) in
+  let mismatch = ref [] in
+  let one () =
+    (match sc.s_sign with Arith.Bit b -> a.(b) <- (if a.(0) >= 0 then 1 else 0) | _ -> ());
+    List.iter (fun (v, b) -> a.(b) <- (if a.(1) >= v then 1 else 0)) sc.s_ge;
+    let rows_ok = List.for_all (sat_row a) sc.s_rows in
+    let in_rel =
+      match family with
+      | Arith.Abs -> Arith.is_in_relation ~family ~args:[ a.(0); a.(1) ]
+      | _ -> Arith.is_in_relation ~family ~args:[ a.(0); a.(1); a.(2) ]
+    in
+    if rows_ok <> in_rel then mismatch := (a.(0), a.(1), a.(2)) :: !mismatch
+  in
+  for x = xlo to xhi do
+    a.(0) <- x;
+    for y = ylo to yhi do
+      a.(1) <- y;
+      if family = Arith.Abs then one ()
+      else
+        for z = zlo to zhi do
+          a.(2) <- z;
+          one ()
+        done
+    done
+  done;
+  judge !mismatch
+
+let report name mismatch =
+  check name (mismatch = []);
+  match mismatch with
+  | [] -> ()
+  | l ->
+      List.iteri
+        (fun i (x, y, z) ->
+          if i < 4 then Printf.printf "       rows and relation disagree at %d %d %d\n" x y z)
+        l
+
+let test_arith_rows_brute_force () =
+  (* int_times. Three boxes: non-negative, strictly negative, and straddling zero --
+     the last is the one with a sign Boolean, and it is where a mistaken guard
+     polarity hides. *)
+  List.iter
+    (fun (xlo, xhi, ylo, yhi, tag) ->
+      let sc = build_scene ~xlo ~xhi ~ylo ~yhi ~zlo:(-20) ~zhi:20 ~family:Arith.Times in
+      enumerate_scene sc ~family:Arith.Times
+        ~judge:
+          (report
+             (Printf.sprintf "arith int_times rows: relation iff rows, over %s" tag)))
+    [
+      (0, 4, 0, 4, "x,y in 0..4");
+      (-4, -1, 1, 4, "x in -4..-1, y in 1..4");
+      (-3, 3, -3, 3, "x,y in -3..3 (both straddle zero)");
+      (-3, 3, 0, 0, "y fixed at 0");
+      (2, 2, -3, 3, "x fixed at 2");
+    ];
+  (* int_div. The zero divisor is inside every box on purpose: SPEC 2.1 says it is
+     unsupported, not an error, and the brute force is what says that the rows agree. *)
+  List.iter
+    (fun (xlo, xhi, ylo, yhi, tag) ->
+      let sc = build_scene ~xlo ~xhi ~ylo ~yhi ~zlo:(-9) ~zhi:9 ~family:Arith.Div in
+      enumerate_scene sc ~family:Arith.Div
+        ~judge:
+          (report (Printf.sprintf "arith int_div rows: relation iff rows, over %s" tag)))
+    [
+      (0, 7, 0, 3, "x in 0..7, y in 0..3 (divisor may be zero)");
+      (-7, -1, 1, 3, "x in -7..-1, y in 1..3");
+      (-7, 7, -3, 3, "x,y straddle zero, divisor may be zero");
+      (-7, 7, 1, 1, "divisor fixed at 1");
+      (-7, 7, -2, -2, "divisor fixed at -2");
+    ];
+  (* int_abs: the second variable is z, so the box is (x, z). *)
+  List.iter
+    (fun (xlo, xhi, zlo, zhi, tag) ->
+      let sc = build_scene ~xlo ~xhi ~ylo:zlo ~yhi:zhi ~zlo:0 ~zhi:0 ~family:Arith.Abs in
+      enumerate_scene sc ~family:Arith.Abs
+        ~judge:
+          (report (Printf.sprintf "arith int_abs rows: relation iff rows, over %s" tag)))
+    [
+      (-5, 5, 0, 6, "x in -5..5, z in 0..6");
+      (-5, 5, 0, 3, "z too narrow to hold every |x|");
+      (1, 5, -2, 6, "x strictly positive");
+      (-5, -1, -2, 6, "x strictly negative");
+    ]
+
+(* ------------------------------------------------- 4. the cushion and the cap *)
+
+let test_arith_overflow () =
+  let limit = Checked.limit in
+  (* A declared box just inside the cap, and a multiplier that takes the cushion past
+     it. I-X8 / D-0029: this must RAISE, never wrap to a smaller cushion -- a wrapped
+     cushion is a row that is not vacuous where it must be, i.e. a row that prunes
+     values the model allows, with the .opb agreeing because it was folded from the
+     same wrapped arithmetic. *)
+  let huge = max_int / 2 in
+  let bound i =
+    if i = 0 then (0, huge) else if i = 1 then (1, 3) else if i = 2 then (0, 10) else (0, 1)
+  in
+  let raised =
+    try
+      ignore
+        (Arith.times_rows ~bound ~x:(Arith.aff_var 0) ~y:(Arith.Case_var 1)
+           ~z:(Arith.aff_var 2) ~sign:Arith.Nonneg ~ge:[ (2, 3); (3, 4) ]
+          : Arith.row list);
+      false
+    with Checked.Overflow _ -> true
+  in
+  ignore limit;
+  check "arith I-X8: a cushion that leaves the cap raises rather than wrapping" raised;
+  (* And the relation itself is total there: a product too large to compute is a
+     product too large to equal anything the declared box holds, so it answers false
+     rather than escaping. *)
+  check "arith: is_in_relation is total at the cap"
+    (not (Arith.is_in_relation ~family:Arith.Times ~args:[ max_int; max_int; 0 ]))
+
+(* ------------------------------------------------- 3. propagation vs the true hull *)
+
+(* The box left after one root fixpoint, for the named variables, or [None] if the
+   model is refuted outright. Goes through [Compile], so it exercises the whole path
+   the CLI takes: builder, auxiliary creation, row posting and instance packing. *)
+let arith_root_box src names =
+  let t = compile_src src in
+  let store = t.Compile.store in
+  match Engine.propagate t.Compile.engine store with
+  | Engine.Conflict _ -> None
+  | Engine.Fixpoint ->
+      Some
+        (List.map
+           (fun n ->
+             match Store.var_named store n with
+             | None -> (min_int, max_int)
+             | Some v ->
+                 let d = Store.get store v in
+                 (Domain.lo d, Domain.hi d))
+           names)
+
+(* The tightest box containing every solution in the declared box -- which, for a single
+   constraint, is exactly the bounds-consistent fixpoint. [None] when there is none. *)
+let arith_hull ~family ~xb ~yb ~zb =
+  let acc = ref None in
+  let note x y z =
+    match !acc with
+    | None -> acc := Some ((x, x), (y, y), (z, z))
+    | Some ((a, b), (c, d), (e, f)) ->
+        acc :=
+          Some
+            ( (min a x, max b x),
+              (min c y, max d y),
+              (min e z, max f z) )
+  in
+  let xlo, xhi = xb and ylo, yhi = yb and zlo, zhi = zb in
+  for x = xlo to xhi do
+    for y = ylo to yhi do
+      for z = zlo to zhi do
+        let ok =
+          match family with
+          | Arith.Abs -> Arith.is_in_relation ~family ~args:[ x; y ]
+          | _ -> Arith.is_in_relation ~family ~args:[ x; y; z ]
+        in
+        if ok then note x y z
+      done
+    done
+  done;
+  !acc
+
+let contains (a, b) (c, d) = a <= c && d <= b
+
+let test_arith_propagation () =
+  let scene ~name ~src ~names ~family ~xb ~yb ~zb ~exact =
+    let got = arith_root_box src names in
+    let want = arith_hull ~family ~xb ~yb ~zb in
+    match (got, want) with
+    | None, None -> check (name ^ ": refuted, and the relation has no solution here") true
+    | None, Some _ ->
+        check (name ^ ": refuted a model that HAS a solution -- unsound") false
+    | Some _, None ->
+        (* Not a defect: the family is not claimed to detect emptiness at the root. *)
+        check (name ^ ": survived a root fixpoint although the relation is empty") true
+    | Some got, Some (hx, hy, hz) ->
+        let want = [ hx; hy; hz ] in
+        let want = match family with Arith.Abs -> [ hx; hy ] | _ -> want in
+        let pairs = List.combine got want in
+        check
+          (name ^ ": every bound contains the true hull (soundness)")
+          (List.for_all (fun (g, w) -> contains g w) pairs);
+        if exact then (
+          check (name ^ ": the box IS the hull (exactness is claimed here)")
+            (List.for_all (fun (g, w) -> g = w) pairs);
+          List.iter2
+            (fun (a, b) (c, d) ->
+              if (a, b) <> (c, d) then
+                Printf.printf "       got %d..%d, hull %d..%d\n" a b c d)
+            got want)
+  in
+  (* int_abs: exact, always. *)
+  scene ~name:"arith int_abs propagation, x straddling zero"
+    ~src:
+      "var -5..5: x;\nvar 0..7: z;\nconstraint int_abs(x, z);\nsolve satisfy;\n"
+    ~names:[ "x"; "z" ] ~family:Arith.Abs ~xb:(-5, 5) ~yb:(0, 7) ~zb:(0, 0) ~exact:true;
+  scene ~name:"arith int_abs propagation, x strictly positive"
+    ~src:"var 2..5: x;\nvar 0..9: z;\nconstraint int_abs(x, z);\nsolve satisfy;\n"
+    ~names:[ "x"; "z" ] ~family:Arith.Abs ~xb:(2, 5) ~yb:(0, 9) ~zb:(0, 0) ~exact:true;
+  scene ~name:"arith int_abs propagation, z forces x away from zero"
+    ~src:"var -5..5: x;\nvar 3..4: z;\nconstraint int_abs(x, z);\nsolve satisfy;\n"
+    ~names:[ "x"; "z" ] ~family:Arith.Abs ~xb:(-5, 5) ~yb:(3, 4) ~zb:(0, 0) ~exact:true;
+  (* int_times: exact once the sign of x is settled; containment otherwise. *)
+  scene ~name:"arith int_times propagation, x non-negative"
+    ~src:
+      "var 0..4: x;\nvar 2..3: y;\nvar 0..20: z;\nconstraint int_times(x, y, z);\n\
+       solve satisfy;\n"
+    ~names:[ "x"; "y"; "z" ] ~family:Arith.Times ~xb:(0, 4) ~yb:(2, 3) ~zb:(0, 20)
+    ~exact:true;
+  scene ~name:"arith int_times propagation, x strictly negative"
+    ~src:
+      "var -4..-1: x;\nvar 1..3: y;\nvar -20..0: z;\nconstraint int_times(x, y, z);\n\
+       solve satisfy;\n"
+    ~names:[ "x"; "y"; "z" ] ~family:Arith.Times ~xb:(-4, -1) ~yb:(1, 3) ~zb:(-20, 0)
+    ~exact:true;
+  scene ~name:"arith int_times propagation, x straddles zero"
+    ~src:
+      "var -3..3: x;\nvar 1..2: y;\nvar -9..9: z;\nconstraint int_times(x, y, z);\n\
+       solve satisfy;\n"
+    ~names:[ "x"; "y"; "z" ] ~family:Arith.Times ~xb:(-3, 3) ~yb:(1, 2) ~zb:(-9, 9)
+    ~exact:false;
+  (* int_div: exact once y is fixed; containment otherwise. *)
+  scene ~name:"arith int_div propagation, divisor fixed"
+    ~src:
+      "var 0..7: x;\nvar 2..2: y;\nvar -9..9: q;\nconstraint int_div(x, y, q);\n\
+       solve satisfy;\n"
+    ~names:[ "x"; "y"; "q" ] ~family:Arith.Div ~xb:(0, 7) ~yb:(2, 2) ~zb:(-9, 9)
+    ~exact:true;
+  scene ~name:"arith int_div propagation, negative divisor fixed"
+    ~src:
+      "var -7..7: x;\nvar -2..-2: y;\nvar -9..9: q;\nconstraint int_div(x, y, q);\n\
+       solve satisfy;\n"
+    ~names:[ "x"; "y"; "q" ] ~family:Arith.Div ~xb:(-7, 7) ~yb:(-2, -2) ~zb:(-9, 9)
+    ~exact:false;
+  (* Fixing the divisor is NOT enough on its own -- see lib/core/prop/arith.ml's
+     "What each one achieves", where this scene is the measurement behind the claim.
+     With the sign of the dividend settled too, it is exact. *)
+  scene ~name:"arith int_div propagation, negative divisor and dividend sign both fixed"
+    ~src:
+      "var -7..-1: x;\nvar -2..-2: y;\nvar -9..9: q;\nconstraint int_div(x, y, q);\n\
+       solve satisfy;\n"
+    ~names:[ "x"; "y"; "q" ] ~family:Arith.Div ~xb:(-7, -1) ~yb:(-2, -2) ~zb:(-9, 9)
+    ~exact:true;
+  scene ~name:"arith int_div propagation, divisor may be zero"
+    ~src:
+      "var 1..7: x;\nvar 0..3: y;\nvar -9..9: q;\nconstraint int_div(x, y, q);\n\
+       solve satisfy;\n"
+    ~names:[ "x"; "y"; "q" ] ~family:Arith.Div ~xb:(1, 7) ~yb:(0, 3) ~zb:(-9, 9)
+    ~exact:false
+
 let () =
   print_endline "\npropagator unit tests";
   test_soundness ();
@@ -4373,6 +4760,11 @@ let () =
   test_reif_eq_names_its_reifier ();
   run_veripb ~name:"reif eq: the nogood behind a reified value removal"
     ~build:build_reif_eq_nogood;
+  (* ------------------------------------------------- M4-T4b: the arithmetic family *)
+  test_arith_rounding ();
+  test_arith_rows_brute_force ();
+  test_arith_propagation ();
+  test_arith_overflow ();
   run_veripb_rejects_saying
     ~name:"reif eq: the same nogood with the reifier's literal dropped"
     ~build:build_reif_eq_nogood_unreified

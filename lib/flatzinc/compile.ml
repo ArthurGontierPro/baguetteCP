@@ -168,6 +168,7 @@ module Bool_clause = Baguette_core.Clause
 module Bool2int = Baguette_core.Bool2int
 module Reif_lin_le = Baguette_core.Reif_lin_le
 module Reif_lin_eq = Baguette_core.Reif_lin_eq
+module Arith = Baguette_core.Arith
 module Engine = Baguette_core.Engine
 module Encoding = Baguette_proof.Encoding
 module Lit = Baguette_proof.Lit
@@ -510,6 +511,38 @@ let pack_bool_not (p : Bool_clause.t) : pending =
 let pack_bool2int (p : Bool2int.t) : pending =
  fun id -> Propagator.pack ~id (module Bool2int : Propagator.S with type t = Bool2int.t) p
 
+(* M4-T4b. Every row of the arithmetic family is a [Linear] over a row the .opb really
+   contains, so these pack exactly as [pack_linear] does -- [~row:] included, because
+   each one IS one row and M2-L6 can resolve it. What differs is only the [name] the
+   instance reports, which is the builtin the model wrote rather than `int_lin_le`;
+   lib/core/prop/arith.ml's faces exist for that and nothing else. *)
+let pack_arith_row (module P : Propagator.S with type t = Linear.t) (lin : Linear.t) :
+    pending =
+ fun id ->
+  Propagator.pack ~id ~row:(fun store -> Some (Linear.pb_row store lin)) (module P) lin
+
+let pack_times_row (p : Linear.t) : pending =
+  pack_arith_row (module Arith.Times_row : Propagator.S with type t = Linear.t) p
+
+let pack_div_row (p : Linear.t) : pending =
+  pack_arith_row (module Arith.Div_row : Propagator.S with type t = Linear.t) p
+
+let pack_abs_row (p : Linear.t) : pending =
+  pack_arith_row (module Arith.Abs_row : Propagator.S with type t = Linear.t) p
+
+(* A guard definition is a reification, so it packs like one -- without [~row:], for
+   the reason [pack_reif_as] gives. It reports the arithmetic builtin and not
+   `int_lin_le_reif`, because the model contains no reification: a reader sent looking
+   for one would not find it. *)
+let pack_times_guard (p : Reif_lin_le.t) : pending =
+  pack_reif_as (module Arith.Times_guard : Propagator.S with type t = Reif_lin_le.t) p
+
+let pack_div_guard (p : Reif_lin_le.t) : pending =
+  pack_reif_as (module Arith.Div_guard : Propagator.S with type t = Reif_lin_le.t) p
+
+let pack_abs_guard (p : Reif_lin_le.t) : pending =
+  pack_reif_as (module Arith.Abs_guard : Propagator.S with type t = Reif_lin_le.t) p
+
 let compile (m : Model.t) : t =
   (match m.Model.objective with
   | Model.Satisfy -> ()
@@ -609,10 +642,13 @@ let compile (m : Model.t) : t =
   in
 
   (* One row + one instance. [nterms] is the *same* normalised list on both sides. *)
-  let post_le pos nterms rhs =
-    check_row pos ~what:"this linear inequality" nterms rhs;
+  let post_le_as ~pack ~what pos nterms rhs =
+    check_row pos ~what nterms rhs;
     let row_id = Encoding.add_int_lin_le encoding (opb_terms pos nterms) rhs in
-    [ pack_linear (Linear.make ~row_id store (prop_terms nterms) rhs) ]
+    [ pack (Linear.make ~row_id store (prop_terms nterms) rhs) ]
+  in
+  let post_le pos nterms rhs =
+    post_le_as ~pack:pack_linear ~what:"this linear inequality" pos nterms rhs
   in
   (* Two rows + two instances (D-0011). The `>=` half is the negated row; [Lin_eq.make]
      builds its [Linear.t] from the same negation, so each instance's terms are exactly
@@ -922,6 +958,130 @@ let compile (m : Model.t) : t =
         post_eq pos (normalise_terms terms) rhs
   in
 
+  (* ---------------------------------------------------------------- M4, arithmetic
+
+     lib/core/prop/arith.ml's header is the specification of what is posted here and
+     why; this is the wiring. Three things about it are worth stating on this side of
+     the boundary.
+
+     First, the auxiliary Booleans are DEFINED BEFORE anything else, unconditionally,
+     for every auxiliary the constraint carries -- even on a path that then does not
+     use one. lib/flatzinc/builder.ml creates only the auxiliaries it expects to be
+     used, but the two decisions live in two files, and an auxiliary left undefined is
+     a free variable of the model that [Model.check_assignment] would then judge
+     against a definition nothing established. Posting the definition anyway makes the
+     agreement between the two files unnecessary rather than merely likely.
+
+     Second, a definition is an ordinary [int_lin_le_reif], posted through the very
+     same [post_reif_le] every reified builtin uses. There is no second reification
+     door and no second big-M to keep in step with [Encoding]'s.
+
+     Third, the rows themselves go through [Encoding.add_int_lin_le] and [Linear.make]
+     over the SAME normalised term list, exactly as [post_le] does, so M1-T23's cap
+     measures what is actually posted and [Model_row] names a row [Linear.pb_row] can
+     reproduce. *)
+  let aff_of (op : Model.operand) : Arith.aff =
+    match op with
+    | Model.Const n -> Arith.aff_const n
+    | Model.Var i -> Arith.aff_var i
+  in
+  let case_of (op : Model.operand) : Arith.case =
+    match op with
+    | Model.Const n -> Arith.Case_const n
+    | Model.Var j -> Arith.Case_var j
+  in
+  let bound i = bounds.(i) in
+  (* The sign of the first operand, as [Arith] wants it. When the builder made a
+     Boolean, that Boolean IS the answer. When it did not, the declared domain has to
+     settle the question on its own -- and if it does not, the two files have drifted
+     and this is a bug in one of them, so it says so rather than guessing a sign. *)
+  let arith_sign pos ~builtin (x : Model.operand) (aux : Model.aux) : Arith.sign =
+    match aux.Model.x_sign with
+    | Some b -> Arith.Bit b
+    | None -> (
+        match x with
+        | Model.Const n -> if n >= 0 then Arith.Nonneg else Arith.Neg
+        | Model.Var i ->
+            let lo, hi = bounds.(i) in
+            if lo >= 0 then Arith.Nonneg
+            else if hi < 0 then Arith.Neg
+            else
+              Error.failf pos
+                "internal: builtin `%s` needs a sign split on `%s` (declared %d..%d) but \
+                 the front end created no Boolean for it"
+                builtin names.(i) lo hi)
+  in
+  (* `b <-> e >= k`, as the [int_lin_le_reif] `b <-> (-e <= -k)`. *)
+  let post_ge_def pos ~builtin ~pack (e : Model.operand) k b =
+    let terms, rhs = difference_terms (Model.Const 0) e ~offset:(Checked.neg k) in
+    post_reif_le pos ~builtin ~pack (normalise_terms terms) rhs (Model.Var b)
+  in
+  let post_aux_defs pos ~builtin ~pack (x : Model.operand) (y : Model.operand)
+      (aux : Model.aux) =
+    let sign =
+      match aux.Model.x_sign with
+      | None -> []
+      | Some b -> post_ge_def pos ~builtin ~pack x 0 b
+    in
+    sign
+    @ List.concat_map (fun (v, b) -> post_ge_def pos ~builtin ~pack y v b) aux.Model.y_ge
+  in
+  let post_arith_rows pos ~builtin ~pack (rows : Arith.row list) =
+    List.concat_map
+      (fun (r : Arith.row) ->
+        let nterms = normalise_terms r.Arith.r_terms in
+        post_le_as ~pack ~what:("a row of this `" ^ builtin ^ "`") pos nterms r.Arith.r_rhs)
+      rows
+  in
+  (* x * y = z. With y a constant this is the linear equality c*x = z and none of the
+     machinery above is needed -- no ladder, no sign, no cushion -- so it takes that
+     path, and lib/flatzinc/builder.ml creates no auxiliary for it. *)
+  let post_int_times pos x y z aux =
+    let builtin = "int_times" in
+    let defs = post_aux_defs pos ~builtin ~pack:pack_times_guard x y aux in
+    match y with
+    | Model.Const c ->
+        let tx, cx =
+          match x with
+          | Model.Var i -> ([ (c, i) ], 0)
+          | Model.Const n -> ([], Checked.mul c n)
+        in
+        let tz, cz =
+          match z with Model.Var i -> ([ (-1, i) ], 0) | Model.Const n -> ([], Checked.neg n)
+        in
+        defs
+        @ post_eq pos
+            (normalise_terms (tx @ tz))
+            (Checked.neg (Checked.add cx cz))
+    | Model.Var _ ->
+        let sign = arith_sign pos ~builtin x aux in
+        defs
+        @ post_arith_rows pos ~builtin ~pack:pack_times_row
+            (Arith.times_rows ~bound ~x:(aff_of x) ~y:(case_of y) ~z:(aff_of z) ~sign
+               ~ge:aux.Model.y_ge)
+  in
+  (* q = x div y. There is no linear path here at any arity: truncation toward zero is
+     decided by the sign of x (D-0033), so even a constant divisor keeps its sign
+     split. A constant divisor only collapses the ladder to one case, which
+     [Arith.Case_const] already is. *)
+  let post_int_div pos x y q aux =
+    let builtin = "int_div" in
+    let defs = post_aux_defs pos ~builtin ~pack:pack_div_guard x y aux in
+    let sign = arith_sign pos ~builtin x aux in
+    defs
+    @ post_arith_rows pos ~builtin ~pack:pack_div_row
+        (Arith.div_rows ~bound ~x:(aff_of x) ~y:(case_of y) ~q:(aff_of q) ~sign
+           ~ge:aux.Model.y_ge)
+  in
+  let post_int_abs pos x z aux =
+    let builtin = "int_abs" in
+    let defs = post_aux_defs pos ~builtin ~pack:pack_abs_guard x x aux in
+    let sign = arith_sign pos ~builtin x aux in
+    defs
+    @ post_arith_rows pos ~builtin ~pack:pack_abs_row
+        (Arith.abs_rows ~bound ~x:(aff_of x) ~z:(aff_of z) ~sign)
+  in
+
   (* A ground constraint -- one whose term list is empty once constants are folded, such
      as `int_le(1, 2)` or an int_lin_le over an all-constant array -- is posted like any
      other, and deliberately so.
@@ -1007,6 +1167,9 @@ let compile (m : Model.t) : t =
               let terms, rhs = difference_terms a b ~offset:0 in
               post_reif_eq pos ~builtin:"int_ne_reif" ~pack:pack_int_ne_reif
                 ~positive:false (normalise_terms terms) rhs r
+          | Model.Int_times (x, y, z, aux) -> post_int_times pos x y z aux
+          | Model.Int_div (x, y, q, aux) -> post_int_div pos x y q aux
+          | Model.Int_abs (x, z, aux) -> post_int_abs pos x z aux
         with Checked.Overflow msg ->
           reject_row pos
             ~what:

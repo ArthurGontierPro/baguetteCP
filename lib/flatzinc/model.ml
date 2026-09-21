@@ -20,6 +20,15 @@ type operand = Const of int | Var of int
 (* Linear constraints are normalised: constant entries of the FlatZinc variable array are
    folded into the right-hand side, so [terms] only ever mentions real variables.
    A term list may repeat a variable index; propagators are free to merge. *)
+(* The auxiliary Booleans one M4 arithmetic constraint needs, as indices into [vars].
+
+   [x_sign], when present, is defined as `b <-> x >= 0` and splits the sign of the
+   first operand; it is absent when the declared domain of x settles the sign on its
+   own. [y_ge] maps a value v to the index of the Boolean defined as `b_v <-> y >= v`,
+   for each v strictly inside the declared domain of the case variable y; the two ends
+   need no Boolean. [Int_abs] uses only [x_sign] and always has [y_ge = []]. *)
+type aux = { x_sign : int option; y_ge : (int * int) list }
+
 type cstr =
   | Int_lin_le of (int * int) list * int (* sum coeff*x_i <= rhs *)
   | Int_lin_eq of (int * int) list * int (* sum coeff*x_i  = rhs *)
@@ -68,6 +77,26 @@ type cstr =
   | Int_le_reif of operand * operand * operand (* r <-> (a <= b) *)
   | Int_eq_reif of operand * operand * operand (* r <-> (a  = b) *)
   | Int_ne_reif of operand * operand * operand (* r <-> (a <> b) *)
+  (* ------------------------------------------------- M4, the arithmetic family.
+
+     `int_times(x, y, z)`: x * y = z. `int_div(x, y, q)`: q = x div y, truncating
+     toward zero, with y = 0 simply unsupported (docs/SPEC.md 2.1, D-0033).
+     `int_abs(x, z)`: z = |x|.
+
+     Each carries an [aux] because none of the three is linear, and the case split
+     that makes it linear needs Boolean variables that must exist in [vars] before
+     lib/flatzinc/compile.ml builds the store -- which is why the builder creates
+     them and the constraint carries their indices, rather than the compiler
+     inventing them where it is too late. lib/core/prop/arith.ml's header states
+     what rows they guard.
+
+     They are kept as their own constructors rather than decomposed away here so
+     that [check_assignment] below judges a solution against the RELATION, exactly
+     as docs/SPEC.md states it, and not against the decomposition. An oracle that
+     re-checked the decomposition would agree with a decomposition that is wrong. *)
+  | Int_times of operand * operand * operand * aux
+  | Int_div of operand * operand * operand * aux
+  | Int_abs of operand * operand * aux
 
 type constr = { k : cstr; c_pos : Pos.t }
 type var_choice = Input_order | First_fail
@@ -172,6 +201,14 @@ let string_of_cstr t = function
   | Int_ne_reif (a, b, r) ->
       Printf.sprintf "%s <-> (%s != %s)" (string_of_operand t r) (string_of_operand t a)
         (string_of_operand t b)
+  | Int_times (a, b, c, _) ->
+      Printf.sprintf "%s = %s * %s" (string_of_operand t c) (string_of_operand t a)
+        (string_of_operand t b)
+  | Int_div (a, b, c, _) ->
+      Printf.sprintf "%s = %s div %s" (string_of_operand t c) (string_of_operand t a)
+        (string_of_operand t b)
+  | Int_abs (a, c, _) ->
+      Printf.sprintf "%s = |%s|" (string_of_operand t c) (string_of_operand t a)
 
 let to_string t =
   let b = Buffer.create 256 in
@@ -413,6 +450,13 @@ let check_assignment (t : t) (values : int array) : bool =
           (Printf.sprintf
              "Model.check_assignment: a Boolean operand has the non-Boolean value %d" n)
   in
+  (* Each auxiliary Boolean against its own definition: `x_sign <-> x >= 0` and
+     `b_v <-> y >= v`. [Int_abs] passes its single operand for both, so its (empty)
+     [y_ge] is walked over no values at all. *)
+  let aux_holds x y (aux : aux) =
+    (match aux.x_sign with None -> true | Some b -> truth (Var b) = (value x >= 0))
+    && List.for_all (fun (v, b) -> truth (Var b) = (value y >= v)) aux.y_ge
+  in
   let holds (c : constr) =
     match c.k with
     | Int_lin_le (ts, rhs) -> sum_cmp ts rhs <= 0
@@ -441,6 +485,36 @@ let check_assignment (t : t) (values : int array) : bool =
     | Int_le_reif (a, b, r) -> truth r = (value a <= value b)
     | Int_eq_reif (a, b, r) -> truth r = (value a = value b)
     | Int_ne_reif (a, b, r) -> truth r = (value a <> value b)
+    (* M4. Written from docs/SPEC.md 2.1 and from nothing in lib/core/prop/, which is
+       the discipline this whole function is built on -- see the header. In particular
+       it does NOT call [Baguette_core.Arith.is_in_relation], although the roadmap row
+       for M4-T4b proposed one shared predicate: that predicate is the solver's, it
+       computes its product with [Checked] (the propagators' own arithmetic), and a
+       shared product is exactly the shape of agreement D-0029 was about and that the
+       [Exact] note above refuses. The anti-drift guarantee the row wanted is kept by
+       test, not by sharing: test_prop.ml enumerates small boxes and asserts the two
+       agree on every triple.
+
+       The multiplication goes through [Exact], so it cannot wrap. Division and
+       absolute value cannot overflow at any value the declared-bound cap admits
+       (|min_int| is the one exception and [Checked.bound_fits] refuses it), so they
+       are written natively -- [Stdlib.(/)] truncates toward zero, which is exactly
+       what SPEC 2.1 and D-0033 require, and [Stdlib.(mod)] is not consulted at all
+       here because the quotient alone decides the relation.
+
+       The auxiliary Booleans are checked too, against their own definitions. They are
+       ordinary variables of the model by the time a solution is printed, and a
+       solution that assigned one of them a value its definition forbids would mean
+       the decomposition and the store had parted company. *)
+    | Int_times (a, b, c, aux) ->
+        Exact.(compare (mul (of_int (value a)) (of_int (value b))) (of_int (value c)))
+        = 0
+        && aux_holds a b aux
+    | Int_div (a, b, c, aux) ->
+        value b <> 0
+        && value a / value b = value c
+        && aux_holds a b aux
+    | Int_abs (a, c, aux) -> value c = abs (value a) && aux_holds a a aux
   in
   let domains_ok =
     let ok = ref true in
