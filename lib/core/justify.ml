@@ -265,13 +265,10 @@ let defining_line ctx (lits : Lit.t list) : Writer.cid option =
    about [l] on its own -- so this is [defining_line] on the one-literal clause, and the
    answer is [None] exactly when no line has stated [l] outright.
 
-   It has no caller in [lib/] yet, and that is a fact about [Explanation.t] rather than
-   about this function: today's [Combine]/[Cut] carry no slot in which a cited id could
-   sit next to (or instead of) a [Weaken] axiom, which is the ADT gap D-0009 and D-0038
-   are both circling. What this function closes is the *lookup*; what remains open is
-   the ADT. The index is nonetheless load-bearing from the moment it lands, through
-   [emit_clause] below -- see M1-T59 -- so it is not mechanism-with-no-caller in the
-   sense M1-T51's [Writer.pol_concluding] was. *)
+   M4-T7 gave it its caller. [Explanation.Defining (c, l)] is the slot this comment said
+   [Combine]/[Cut] did not carry -- a summand that sits where a [Weaken] axiom would and
+   cites this lookup's answer instead -- so the ADT gap D-0009 and D-0038 were circling
+   is closed on the [pol] side. [emit_summand] below is the call. *)
 let defining_lit ctx (l : Lit.t) : Writer.cid option = defining_line ctx [ l ]
 
 let validate_lits ctx lits =
@@ -447,6 +444,35 @@ let emit_summand ~emit ctx = function
         invalid_arg
           (Printf.sprintf "Justify.emit: Combine term coefficient must be >= 1, got %d" c);
       let id = emit ctx e in
+      Pol.mul (Pol.id id) c
+  (* [Defining (c, l)] -- D-0009's other half (M4-T7, explanation.ml's header).
+
+     A [Weaken] puts [l] in as the trivial axiom, which cancels the term and costs one
+     unit of degree per copy; this cites the id of the line that ESTABLISHES [l], which
+     cancels the same term and keeps the degree. [defining_lit] is the lookup, and where
+     no line has stated [l] outright this states it -- [emit_clause] consults the index
+     once more and mints a one-literal [rup] only if it really is not there.
+
+     EITHER WAY THE CITED LINE IS A UNIT, and that is the property the rest of the system
+     reads off this constructor: a unit's cancellation is exact, so a derivation holding
+     one still derives what its arithmetic says, which is why [Search.rests_on_a_clause]
+     does not have to route a conflict carrying one away from its own [pol]. A [Clause]
+     summand cannot promise that, which is exactly what D-0061 recorded going wrong.
+
+     The soundness precondition -- that [l] is a consequence of the model rather than of
+     a decision -- belongs to the caller and cannot be checked here: the writer's current
+     level says where we are, not where the bound came from. [Alldiff] tests the level the
+     bound was ESTABLISHED at; a caller that does not is writing a false unit and the
+     checker will say so. *)
+  | Explanation.Defining (c, l) ->
+      if c < 1 then
+        invalid_arg
+          (Printf.sprintf
+             "Justify.emit: Combine defining coefficient must be >= 1, got %d" c);
+      validate_lits ctx [ l ];
+      let id =
+        match defining_lit ctx l with Some id -> id | None -> emit_clause ctx [ l ]
+      in
       Pol.mul (Pol.id id) c
   | Explanation.Weaken lits ->
       (match lits with

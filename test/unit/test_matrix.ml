@@ -408,7 +408,11 @@ let walk_explanation e =
     | Explanation.Combine (summands, _) ->
         List.iter
           (function
-            | Explanation.Term (_, e) -> go ~in_pol:true e | Explanation.Weaken _ -> ())
+            | Explanation.Term (_, e) -> go ~in_pol:true e
+            | Explanation.Weaken _ -> ()
+            (* M4-T7: a [Defining] cites an id, but one resolved at emit time rather
+               than named in the value, so there is nothing here to walk into. *)
+            | Explanation.Defining _ -> ())
           summands
     | Explanation.Deferred _ -> ()
   in

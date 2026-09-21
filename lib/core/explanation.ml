@@ -98,7 +98,43 @@
 
    With [Trivial] gone, [Justify.ctx] has no [model_id] field at all: the ambient row
    is not "discouraged", it is unrepresentable. Every row a derivation names, it names
-   with [Model_row]. *)
+   with [Model_row].
+
+   -------------------------------------------------------------------------------
+   M4-T7 / docs/DECISIONS.md D-0009: [Defining], and why it is a SUMMAND
+   -------------------------------------------------------------------------------
+
+   D-0009's sentence is "a bound fact in a [pol] needs a constraint id, not a literal",
+   and until now this type could say only the first half of it. [Weaken lits] puts a
+   bare literal into a [pol] as the TRIVIAL AXIOM [l >= 0] -- which asserts nothing and,
+   arithmetically, cancels the term at the cost of one unit of degree per copy.
+   [Defining (c, l)] is the other half: [c] copies of the id of the line that
+   ESTABLISHES [l], which cancels the same term and KEEPS the degree. The two are the
+   same shape of arithmetic with the two different sources D-0013 says are different
+   operations, and they now sit next to each other instead of one of them being a gap.
+
+   It is a [summand] and not a [t], for exactly the reason [Weaken] is: it is a piece of
+   arithmetic valid only inside a [Combine]'s sum, not a value anyone can point at and
+   say "this holds". Nobody may [emit] it on its own, no [Cut] may take it as an
+   operand, and conflict analysis never has to decide what a bare one means.
+
+   THE LINE IT CITES IS ALWAYS A UNIT, by construction: [Justify] resolves it through
+   [defining_lit], which is [defining_line] on the one-literal clause, and states [l]
+   outright as a unit if no line has. That is what makes it sound to cancel with, and it
+   is also the whole difference from the [Explanation.clause [lit]] stand-in M4-T1 used
+   (D-0061). A [Clause] summand may cite a clause of any width, whose cancellation does
+   NOT behave, which is why lib/core/search.ml's [rests_on_a_clause] conservatively
+   refuses to let a root conflict rest on one; a [Defining] cites a unit, the
+   cancellation is exact, and the row really does come out contradicting. The stand-in
+   was the right arithmetic wearing the wrong label, and the label is what the search
+   reads.
+
+   WHO MAY BUILD ONE. A caller must know that [l] is a consequence of the MODEL, not of
+   a decision -- a unit line for a decision-established bound would be a false claim and
+   the checker would refuse it (rightly). lib/core/prop/alldiff.ml's test is the level at
+   which the bound was established ([Store.lo_support] / [Store.level_of_index]), not the
+   level the solver is at now, which is the difference between "sound only at level 0"
+   and "sound for anything the root fixpoint established, at any level". *)
 
 module Lit = Baguette_proof.Lit
 
@@ -130,9 +166,14 @@ and summand =
   | Term of int * t
     (* coeff * (recursively emit this explanation and cite its resulting id). *)
   | Weaken of (int * Lit.t) list
-(* sum of coeff_i * axiom(lit_i): weakens a variable's contribution out of the
-   row it is added to. See the module header -- never meaningful outside a
-   [Combine]'s summand list. *)
+    (* sum of coeff_i * axiom(lit_i): weakens a variable's contribution out of the
+       row it is added to. See the module header -- never meaningful outside a
+       [Combine]'s summand list. *)
+  | Defining of int * Lit.t
+(* coeff * the id of the line that ESTABLISHES this literal -- D-0009's missing
+   half, resolved by [Justify.defining_lit] and always a UNIT line. Cancels the
+   same term [Weaken] would and keeps the degree. Like [Weaken], it is not a [t]:
+   see the module header. *)
 
 and thunk = { mutable forced : t option; mutable compute : unit -> t }
 
@@ -143,6 +184,13 @@ let clause lits = Clause lits
 let linear terms rhs = Linear (terms, rhs)
 let model_row id = Model_row id
 let weaken lits = Weaken lits
+
+(* [defining c l]: cite, [c] times, the line that establishes [l]. The coefficient is
+   checked here rather than inside [Justify] so that a caller building nonsense hears
+   about it where it built it -- the same bargain [combine] makes. *)
+let defining coeff lit =
+  if coeff < 1 then invalid_arg "Explanation.defining: coefficient must be >= 1";
+  Defining (coeff, lit)
 
 (* The guard that keeps M1-T50 from coming back by a different route.
 
@@ -226,6 +274,9 @@ let lits e =
   and go_summand = function
     | Term (_, e) -> go e
     | Weaken lits -> List.iter (fun (_, l) -> add l) lits
+    (* The literal a [Defining] cites is a bound fact the derivation RESTS on, so it
+       belongs in the reason set at least as much as a weakened one does (D-0035). *)
+    | Defining (_, l) -> add l
   in
   go e;
   List.rev !acc
@@ -267,6 +318,10 @@ let top_weaken_owners e =
         (List.concat_map
            (function
              | Weaken lits -> List.map (fun (_, l) -> Lit.owner l.Lit.v) lits
+             (* A cited bound fact is read by this derivation exactly as a weakened one
+                is, and the reason owes the same account of it -- more so, since the
+                derivation names the line that established it. *)
+             | Defining (_, l) -> [ Lit.owner l.Lit.v ]
              | Term _ -> [])
            summands)
   | _ -> []
@@ -297,6 +352,7 @@ and summand_to_string = function
       ^ String.concat " "
           (List.map (fun (c, l) -> Printf.sprintf "%d*%s" c (Lit.to_string l)) lits)
       ^ ")"
+  | Defining (c, l) -> Printf.sprintf "%d*defining(%s)" c (Lit.to_string l)
 
 (* ------------------------------------------------------------------- arena *)
 
