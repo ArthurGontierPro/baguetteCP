@@ -103,6 +103,17 @@ type cstr =
      against what SPEC 2.1 says the constraint means, never against the shape
      lib/flatzinc/compile.ml happens to post for it. *)
   | All_different of operand list
+  (* M4-T3. `array_int_element(idx, as, c)`: [as] is a CONSTANT array and the index is
+     1-BASED, so the relation is `as[idx] = c` with `idx` in `1..|as|`. The array is an
+     `int array` and not an `operand list` because SPEC 2.1's M4 row admits only the
+     constant form; a var-array element would be a different builtin with a different
+     propagator, and representing it as operands here would let the front end build one
+     nothing downstream can post.
+
+     The index bound is PART OF THE RELATION and not a side condition: `idx = 0` does not
+     make the constraint vacuous, it makes it false. [check_assignment] below says so,
+     which is what stops the decomposition from being graded against itself. *)
+  | Array_int_element of operand * int array * operand
 
 type constr = { k : cstr; c_pos : Pos.t }
 type var_choice = Input_order | First_fail
@@ -218,6 +229,10 @@ let string_of_cstr t = function
   | All_different xs ->
       Printf.sprintf "all_different([%s])"
         (String.concat ", " (List.map (string_of_operand t) xs))
+  | Array_int_element (i, vs, c) ->
+      Printf.sprintf "%s = [%s][%s]" (string_of_operand t c)
+        (String.concat ", " (List.map string_of_int (Array.to_list vs)))
+        (string_of_operand t i)
 
 let to_string t =
   let b = Buffer.create 256 in
@@ -532,6 +547,14 @@ let check_assignment (t : t) (values : int array) : bool =
           | v :: rest -> (not (List.mem v rest)) && distinct rest
         in
         distinct vs
+    (* M4-T3, the relation as SPEC 2.1 states it and not as lib/flatzinc/compile.ml
+       posts it: the index is 1-based, it must land inside the array, and the selected
+       constant must equal the result. The range test is written out rather than left to
+       [Array.get]'s own bounds check, because an out-of-range index must make this
+       return [false] and not raise. *)
+    | Array_int_element (i, vs, c) ->
+        let k = value i in
+        k >= 1 && k <= Array.length vs && vs.(k - 1) = value c
   in
   let domains_ok =
     let ok = ref true in

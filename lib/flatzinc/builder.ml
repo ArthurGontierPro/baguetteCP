@@ -39,11 +39,18 @@ let implemented =
     "int_div";
     (* M4, the first global (M4-T1). *)
     "all_different_int";
+    (* M4, the second (M4-T3). *)
+    "array_int_element";
   ]
 
 (* The rest of the SPEC 2.1 table, with the milestone that will bring it in. Listing
-   these separately lets the error say "not yet" rather than "never". *)
-let planned = [ ("array_int_element", "M4") ]
+   these separately lets the error say "not yet" rather than "never".
+
+   M4-T3 emptied this list: every builtin docs/SPEC.md 2.1 names is now implemented. It
+   stays, with its machinery, because the next row to widen the subset needs exactly
+   this and because an empty list is what [unsupported_builtin] must go on saying
+   "never" from. *)
+let planned : (string * string) list = []
 let implemented_list = String.concat ", " implemented
 
 type env = {
@@ -533,6 +540,30 @@ let build_constraint env (c : Ast.constraint_item) =
        lib/flatzinc/compile.ml posts with no special case, which is the same reason
        [normalise_terms] is not applied to a linear row's duplicates here. *)
     | "all_different_int" -> one_array (fun xs -> Model.All_different xs)
+    (* M4-T3. `array_int_element(idx, as, c)`, with `as` an array of CONSTANTS -- the
+       only form docs/SPEC.md 2.1 admits. [as_const] is what refuses a variable element,
+       and it refuses it HERE rather than in compile.ml so the message carries the
+       source position and names the builtin, the same division [lin_terms] makes for a
+       linear row's coefficients.
+
+       An empty array and an index whose declared domain misses `1..|as|` are both left
+       to fall through: lib/core/prop/element.ml posts a unit row per out-of-range
+       position, so both are refuted by the ordinary arithmetic rather than by a special
+       case here -- the same reason `all_different_int` above keeps its duplicates. *)
+    | "array_int_element" -> (
+        arity 3;
+        match c.Ast.c_args with
+        | [ ia; aa; ra ] ->
+            let idx = operand env pos ia in
+            let vs =
+              Array.of_list
+                (List.map
+                   (fun op ->
+                     as_const pos ~builtin:id ~what:"every element of the array" op)
+                   (operands env pos aa))
+            in
+            Model.Array_int_element (idx, vs, operand env pos ra)
+        | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
     | "int_lin_le_reif" -> lin_reif (fun ts rhs r -> Model.Int_lin_le_reif (ts, rhs, r))
     | "int_le_reif" -> cmp_reif (fun a b r -> Model.Int_le_reif (a, b, r))
     | "int_eq_reif" -> cmp_reif (fun a b r -> Model.Int_eq_reif (a, b, r))
