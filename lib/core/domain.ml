@@ -302,3 +302,38 @@ let to_string d =
     | hs ->
         Printf.sprintf "%d..%d \\ {%s}" d.lo d.hi
           (String.concat "," (List.map string_of_int hs))
+
+(* ---------------------------------------------------------------- views (M4-T0) *)
+
+(* The image of a domain under [x |-> (if negated then -x else x) + offset].
+
+   This is the materialising form, for printing, for tests and for a caller that
+   genuinely wants a [Domain.t] of a view. It is NOT the read path: [View.lo],
+   [View.hi] and [View.mem] translate a single integer in O(1) and allocate nothing,
+   which is what a propagator uses. Building a domain per read would make a view
+   cost more than the auxiliary variable it exists to avoid.
+
+   It is not [of_list] either, deliberately. [of_list] is documented in
+   docs/INVARIANTS.md I-X10 as unreachable from any model, and routing views through
+   it would quietly make that false; it is also O(size) in removals where this is one
+   pass over the bitset. The map is a bijection on values, so I-D2 (bounds are not
+   holes) transports with no settling: the image of a non-hole bound is a non-hole
+   bound. *)
+let affine d ~negated ~offset =
+  if negated && (d.lo = min_int || d.hi = min_int) then
+    raise (Bad_domain "affine: negating min_int");
+  let l = (if negated then -d.hi else d.lo) + offset
+  and h = (if negated then -d.lo else d.hi) + offset in
+  match d.holes with
+  | None -> { lo = l; hi = h; holes = None }
+  | Some hs when not negated ->
+      { lo = l; hi = h; holes = Some { hs with base = hs.base + offset; bits = Bytes.copy hs.bits } }
+  | Some hs ->
+      (* Old bit [i] stands for [hs.base + i], whose image is [offset - hs.base - i].
+         So the image's bitset is the old one reversed, over the mirrored base. *)
+      let base = offset - (hs.base + hs.span - 1) in
+      let bits = Bytes.make (Bytes.length hs.bits) '\000' in
+      for j = 0 to hs.span - 1 do
+        if get_bit hs.bits (hs.span - 1 - j) then set_bit bits j
+      done;
+      { lo = l; hi = h; holes = Some { base; span = hs.span; bits } }
