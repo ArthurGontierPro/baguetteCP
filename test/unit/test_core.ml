@@ -11,6 +11,7 @@ module Explanation = Baguette_core.Explanation
 module Reason = Baguette_core.Reason
 module Arena = Baguette_core.Explanation.Arena
 module Lit = Baguette_proof.Lit
+module View = Baguette_core.View
 
 (* M1-T53: the inner heap guard. test_prop.exe is the binary that reached 14.9 GB RSS on
    2026-09-16 and had to be killed by hand, so a guard that covered only test_output and
@@ -1006,6 +1007,267 @@ let test_agreement_is_wired () =
      its numbers agree with the bound it set"
     (run "--decision-with-a-conclusion" <> 0)
 
+(* ------------------------------------------------------------------ *)
+(* Views (M4-T0)                                                       *)
+(*                                                                     *)
+(* A view is [+/-x + k] over a store variable, or a constant. It has no *)
+(* domain, no store slot and no trail slot of its own; every operation  *)
+(* is a translation of one integer onto the BASE. The three things      *)
+(* below are the three ways that can be got wrong:                     *)
+(*                                                                     *)
+(*   (a) the link. Reading a view must see the base's LIVE domain and   *)
+(*       pruning a view must move the base -- both directions, and the  *)
+(*       negated sign is where an off-by-one hides.                    *)
+(*   (b) the trail. A view must not smuggle a second trail past I-T1 /  *)
+(* I-X4. The check is not "backtracking works" but "the entry     *)
+   (*       pushed is ONE ordinary entry against the base". *)
+(*   (d) constants. [Const c] must be a special case of the ARITHMETIC  *)
+(*       and of nothing else -- in particular its conflict must be the  *)
+(*       same VALUE a variable's failed narrowing produces.            *)
+(* ------------------------------------------------------------------ *)
+
+let view_store () =
+  Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 5; Domain.make 0 5 |]
+
+let view_why () = Reason.because ~concludes:None Reason.none (Explanation.model_row 1)
+
+let test_view_link () =
+  let s = view_store () in
+  let x = Var.of_int 0 in
+  let why = view_why () in
+  let plain = View.of_var x in
+  let up = View.shift plain 3 in
+  (* [7 - x], the reversed term, built by composition rather than by its own case. *)
+  let down = View.sub_from 7 plain in
+  check "view: an offset view's bounds are the image of the base's"
+    (View.lo s up = 3 && View.hi s up = 8);
+  check "view: a negated view SWAPS the bounds" (View.lo s down = 2 && View.hi s down = 7);
+  check "view: a view of a view stays flat -- -(x+3)+10 is 7-x"
+    (View.equal (View.shift (View.negate up) 10) down);
+
+  (* Direction 1: pruning the BASE moves the view. *)
+  ignore (Store.set_lo s x 1 why);
+  check "view (a): pruning the base raises an offset view's lower bound"
+    (View.lo s up = 4 && View.hi s up = 8);
+  check "view (a): pruning the base lowers a NEGATED view's upper bound"
+    (View.lo s down = 2 && View.hi s down = 6);
+
+  (* Direction 2: pruning the VIEW moves the base. On the negated view, [down >= 3]
+     is [x <= 4] -- a lower bound on the view is an UPPER bound on the base, and a
+     view that got this wrong would prune the base the wrong way round while still
+     looking self-consistent when read back through itself. *)
+  check "view (a): a prune through the view reports Changed"
+    (match View.set_lo s down 3 why with Store.Changed -> true | _ -> false);
+  check "view (a): ... and it moved the BASE's upper bound" (Domain.hi (Store.get s x) = 4);
+  check "view (a): ... which the offset view sees at once" (View.hi s up = 7);
+  check "view (a): an offset view's own prune moves the base's lower bound"
+    (match View.set_lo s up 5 why with
+    | Store.Changed -> Domain.lo (Store.get s x) = 2
+    | _ -> false);
+
+  (* Holes travel too, in both directions and through the reversal. The base is kept
+     wide enough here that removing 3 punches a real INTERIOR hole rather than moving
+     a bound -- an earlier draft of this test narrowed the base first, so every
+     "hole" check below passed against a bound move and could not see a reversal that
+     was off by one. *)
+  ignore (Store.remove s x 3 why);
+  check "view (a): the scene really has an interior hole, so the checks below can see"
+    (Domain.lo (Store.get s x) = 2
+    && Domain.hi (Store.get s x) = 4
+    && Domain.has_holes (Store.get s x)
+    && not (Domain.mem (Store.get s x) 3));
+  check "view (a): a hole in the base is a hole in the offset view"
+    ((not (View.mem s up 6)) && View.mem s up 5 && View.mem s up 7);
+  check "view (a): a hole in the base is the MIRRORED hole in a negated view"
+    ((not (View.mem s down 4)) && View.mem s down 3 && View.mem s down 5);
+  check "view (a): the materialised view domain agrees with mem, both signs"
+    (Domain.to_list (View.domain s up) = List.filter (View.mem s up) [ 3; 4; 5; 6; 7; 8 ]
+    && Domain.to_list (View.domain s down)
+       = List.filter (View.mem s down) [ 2; 3; 4; 5; 6; 7 ]);
+  check "view (a): ... and it really carries the hole, in both images"
+    (Domain.has_holes (View.domain s up)
+    && Domain.has_holes (View.domain s down)
+    && Domain.to_list (View.domain s up) = [ 5; 7 ]
+    && Domain.to_list (View.domain s down) = [ 3; 5 ]);
+  check "view (a): size, is_fixed and value read through to the base"
+    (View.size s up = Domain.size (Store.get s x)
+    && View.is_fixed s up = Domain.is_fixed (Store.get s x));
+  ignore (Store.fix s x 2 why);
+  check "view (a): a fixed base gives every view its value"
+    (View.value s up = Some 5 && View.value s down = Some 5 && View.value s plain = Some 2)
+
+(* The cross-layer property: what a propagator sees and what the checker sees are one
+   value. After [View.set_lo v n] the base's domain must ENTAIL the very literal
+   [Lit.view_ge] renders for [v >= n] -- so the pruning the solver made and the fact
+   the proof will claim cannot drift apart. Swept over both signs and a range of
+   offsets, because the sign flip is where the two could agree on a name and disagree
+   on a sense. *)
+let test_view_agrees_with_its_literal () =
+  let bad = ref None in
+  let n_checked = ref 0 in
+  let views = [ (false, 0); (false, 3); (false, -2); (true, 0); (true, 7); (true, -1) ] in
+  List.iter
+    (fun (negated, offset) ->
+      for n = -4 to 12 do
+        let s = view_store () in
+        let x = Var.of_int 0 in
+        let v =
+          let base = View.of_var x in
+          View.shift (if negated then View.negate base else base) offset
+        in
+        match View.set_lo s v n (view_why ()) with
+        | Store.Conflict _ -> ()
+        | Store.Unchanged | Store.Changed ->
+            incr n_checked;
+            let d = Store.get s x in
+            let l = Option.get (View.lit_ge s v n) in
+            let entailed =
+              if l.Lit.positive then Domain.lo d >= Lit.value l.Lit.v
+              else Domain.hi d <= Lit.value l.Lit.v - 1
+            in
+            (* And the solver's own reading of the view must agree with the bound
+               it was asked for. *)
+            if (not entailed) || View.lo s v < n then
+              if !bad = None then
+                bad :=
+                  Some
+                    (Printf.sprintf
+                       "view (negated=%b, offset=%d) >= %d: base %s, literal %s, view lo \
+                        %d"
+                       negated offset n (Domain.to_string d) (Lit.to_string l)
+                       (View.lo s v))
+      done)
+    views;
+  check
+    "view: after a prune, the base ENTAILS the literal the proof will name -- the \
+     solver's fact and the checker's fact are one value"
+    (match !bad with
+    | None -> true
+    | Some w ->
+        Printf.printf "     first offender: %s\n" w;
+        false);
+  check "view: the literal sweep actually ran" (!n_checked > 50);
+  Printf.printf "     (swept %d view prunings against their literals)\n" !n_checked
+
+let test_view_trail () =
+  let s = view_store () in
+  let x = Var.of_int 0 in
+  let why = view_why () in
+  let up = View.shift (View.of_var x) 3 in
+  let down = View.sub_from 7 (View.of_var x) in
+  let snap0 = Store.snapshot s in
+  Store.new_level s;
+  let before = Store.trail_length s in
+  ignore (View.set_lo s up 4 why);
+  check "view (b): a view prune pushes exactly ONE trail entry"
+    (Store.trail_length s = before + 1);
+  check "view (b): the entry it pushed is against the BASE variable"
+    (Var.equal (Store.trail_entry s (Store.trail_length s - 1)).Store.var x);
+  ignore (View.set_lo s down 3 why);
+  check "view (b): a negated view's prune is one entry too"
+    (Store.trail_length s = before + 2);
+  check "view (b): the two prunes together left the base at 1..4"
+    (Domain.lo (Store.get s x) = 1 && Domain.hi (Store.get s x) = 4);
+  let snap1 = Store.snapshot s in
+  Store.new_level s;
+  ignore (View.remove s up 5 why);
+  check "view (b): a hole punched through a view is a real INTERIOR hole in the base"
+    ((not (Domain.mem (Store.get s x) 2))
+    && Domain.has_holes (Store.get s x)
+    && Domain.lo (Store.get s x) = 1
+    && Domain.hi (Store.get s x) = 4);
+  check "I-T3: trail invariants hold after view prunes" (Store.check_invariants s);
+  Store.backtrack s;
+  check "view (b): one level back restores exactly, hole included"
+    (Store.same_domains s snap1);
+  check "view (b): ... and the view reads the restored value"
+    (View.mem s up 5 && View.lo s up = 4 && not (Domain.has_holes (Store.get s x)));
+  Store.backtrack_to s 0;
+  check "view (b): every domain restored exactly after a view-driven descent"
+    (Store.same_domains s snap0);
+  check "view (b): the view is back to its declared image"
+    (View.lo s up = 3 && View.hi s up = 8 && View.lo s down = 2 && View.hi s down = 7);
+  check "view (b): the trail is back where it started" (Store.trail_length s = 0);
+  check "I-S3: level restored after view prunes" (Store.level s = 0)
+
+let test_view_constants () =
+  let s = view_store () in
+  let why = view_why () in
+  let c = View.const 7 in
+  check "view (d): a constant reads as a one-value domain"
+    (View.lo s c = 7
+    && View.hi s c = 7
+    && View.size s c = 1
+    && View.is_fixed s c
+    && View.value s c = Some 7);
+  check "view (d): membership is equality" (View.mem s c 7 && not (View.mem s c 6));
+  check "view (d): the materialised domain is the singleton"
+    (Domain.equal (View.domain s c) (Domain.singleton 7));
+  check "view (d): a constant declares no variables to watch (I-T4)" (View.vars c = []);
+  check "view (d): shifting and negating a constant STAY constants -- no second path"
+    (View.equal (View.shift c 2) (View.const 9)
+    && View.equal (View.negate c) (View.const (-7))
+    && View.equal (View.sub_from 10 c) (View.const 3));
+
+  (* The narrowings. A constant answers the same question a variable does, with the
+     same three outcomes, and never touches the store. *)
+  let before = Store.trail_length s in
+  check "view (d): a narrowing that keeps the value is Unchanged"
+    (match View.set_lo s c 7 why with Store.Unchanged -> true | _ -> false);
+  check "view (d): an upper bound that keeps it is Unchanged too"
+    (match View.set_hi s c 9 why with Store.Unchanged -> true | _ -> false);
+  check "view (d): removing another value is Unchanged"
+    (match View.remove s c 6 why with Store.Unchanged -> true | _ -> false);
+  check "view (d): fixing it to its own value is Unchanged"
+    (match View.fix s c 7 why with Store.Unchanged -> true | _ -> false);
+  check "view (d): a narrowing that excludes it is a Conflict"
+    (match View.set_lo s c 8 why with Store.Conflict _ -> true | _ -> false);
+  check "view (d): so is an upper bound below it"
+    (match View.set_hi s c 6 why with Store.Conflict _ -> true | _ -> false);
+  check "view (d): so is removing its own value"
+    (match View.remove s c 7 why with Store.Conflict _ -> true | _ -> false);
+  check "view (d): so is fixing it elsewhere"
+    (match View.fix s c 5 why with Store.Conflict _ -> true | _ -> false);
+  check "view (d): none of that touched the trail" (Store.trail_length s = before);
+
+  (* The part that makes it "not a special case": the conflict a constant reports is
+     the SAME value the store itself produces when a variable's narrowing empties its
+     domain -- [unattributed_conflict], with [Reason.none]. A constant that reached
+     for [Store.conflict] instead would carry the pruning's own reason and so write a
+     conflict line over too few facts, and it would do so only for constants. *)
+  (* The [Reason.justified] handed in here carries a REAL fact, which is what makes
+     this lane able to see the difference at all: with [Reason.none] on the way in,
+     [Store.conflict] and [Store.unattributed_conflict] return the same value and the
+     check passes against either. Measured -- the first draft used [Reason.none] and
+     reddened nothing when the arm was rewired. *)
+  let x = Var.of_int 0 in
+  let with_facts =
+    Reason.because ~concludes:None
+      [ Reason.at_least ~name:"x" ~decl:0 3 ]
+      (Explanation.model_row 1)
+  in
+  let from_var =
+    match Store.set_lo s x 9 with_facts with Store.Conflict cf -> Some cf | _ -> None
+  in
+  let from_const =
+    match View.set_lo s c 8 with_facts with Store.Conflict cf -> Some cf | _ -> None
+  in
+  check "view (d): the lane's own reason is non-empty, so it can see the difference"
+    (not (Reason.is_empty with_facts.Reason.reason));
+  check "view (d): a constant's conflict is shaped exactly like a variable's"
+    (match (from_var, from_const) with
+    | Some a, Some b ->
+        a.Store.c_prop = b.Store.c_prop
+        && Reason.is_empty a.Store.c_reason
+        && Reason.is_empty b.Store.c_reason
+        && a.Store.c_why = b.Store.c_why
+    | _ -> false);
+
+  (* And a constant is a view like any other: the generic code path above it does not
+     ask whether it is one. *)
+  check "view (d): is_const classifies, it does not gate"
+    (View.is_const c && not (View.is_const (View.of_var x)))
+
 let () =
   match Array.to_list Sys.argv with
   | _ :: "--agreeing-push" :: _ -> disagreeing_push ~agree:true ()
@@ -1025,6 +1287,10 @@ let () =
       test_conclusion ();
       test_decision_concludes_nothing ();
       test_agreement_is_wired ();
+      test_view_link ();
+      test_view_agrees_with_its_literal ();
+      test_view_trail ();
+      test_view_constants ();
       if !failures > 0 then (
         Printf.printf "\n%d failure(s)\n" !failures;
         exit 1)

@@ -2378,6 +2378,305 @@ let report_checker () =
               "%s --version 2>&1 | grep -i version | head -1 | sed 's/^/*   /'"
               (Filename.quote p)))
 
+(* ------------------------------------------------------------------ *)
+(* Views (M4-T0)                                                       *)
+(*                                                                     *)
+(* A view [+/-x + k] gets NO PB variables of its own; it renders onto   *)
+(* its base's order literals. lib/proof/lit.ml's "Views" section        *)
+(* records the decision and what minting [y_ge_v] would have cost. The  *)
+(* tests here are the three halves of that claim:                      *)
+(*                                                                     *)
+(*   the names  -- the rendering is exactly the base's literal, and     *)
+(*                 PROOF-FORMAT section 3's scheme gains no second      *)
+(*                 spelling;                                           *)
+(*   the trim   -- [Encoding.view_ge] reaches [Holds]/[Fails] through   *)
+(*                 the SAME two comparisons [Encoding.ge] makes;        *)
+(*   the truth  -- veripb accepts a derivation written in a view's      *)
+(*                 literals over a model written in the base's, and     *)
+(*                 REJECTS one whose rendering is wrong (below).        *)
+(* ------------------------------------------------------------------ *)
+
+let up3 = Lit.shift Lit.identity 3 (* x + 3 *)
+let rev7 = Lit.flip (Lit.shift Lit.identity (-7)) (* 7 - x *)
+
+let test_view_lits () =
+  check "view lit: the identity view renders as the plain literal"
+    (Lit.to_string (Lit.view_ge "x" Lit.identity 3) = "x_ge_3");
+  check_eq "view lit: [x+3 >= 5] IS [x >= 2]" ~expected:"x_ge_2"
+    ~got:(Lit.to_string (Lit.view_ge "x" up3 5));
+  check_eq "view lit: [x+3 <= 5] IS [x <= 2], the negated order literal"
+    ~expected:"~x_ge_3"
+    ~got:(Lit.to_string (Lit.view_le "x" up3 5));
+  (* The sign flip turns a lower bound on the view into an UPPER bound on the base.
+     This is the step an implementation gets right for the offset and wrong for the
+     sense, so both directions are pinned. *)
+  check_eq "view lit: [7-x >= 5] IS [x <= 2]" ~expected:"~x_ge_3"
+    ~got:(Lit.to_string (Lit.view_ge "x" rev7 5));
+  check_eq "view lit: [7-x <= 5] IS [x >= 2]" ~expected:"x_ge_2"
+    ~got:(Lit.to_string (Lit.view_le "x" rev7 5));
+  check_eq "view lit: a view's equality is the base's, at the translated value"
+    ~expected:"x_eq_2"
+    ~got:(Lit.to_string (Lit.view_eq "x" up3 5));
+  check_eq "view lit: ... and through the mirror too" ~expected:"~x_eq_2"
+    ~got:(Lit.to_string (Lit.view_ne "x" rev7 5));
+  check "view lit: negative translated values still avoid '-'"
+    (Lit.to_string (Lit.view_ge "x" up3 1) = "x_ge_m2");
+
+  (* No new name exists, so there is nothing for [sanitize] to collide. That matters
+     because [sanitize] is NON-INJECTIVE and M2-T9 found that keying on rendered names
+     is a silent bug: these two distinct FlatZinc identifiers share one OPB name. A
+     view of each must still be two different facts. *)
+  let a = Lit.view_ge "a-b" up3 5 and b = Lit.view_ge "a_b" up3 5 in
+  check "view lit: two bases that COLLIDE under sanitize render the same OPB name"
+    (Lit.to_string a = Lit.to_string b);
+  check
+    "view lit: ... and are nonetheless distinct literals -- a view carries its base's \
+     identifier, not its rendered name"
+    (not (Lit.equal a b));
+  check "view lit: the transform is applied to the VALUE, so the owner is untouched"
+    (Lit.owner a.Lit.v = "a-b" && Lit.owner b.Lit.v = "a_b");
+
+  (* The algebra: a view of a view is a view, flat. *)
+  check "view lit: -(x-7) is 7-x"
+    (Lit.affine_equal rev7 (Lit.flip (Lit.shift Lit.identity (-7))));
+  check "view lit: shifting composes"
+    (Lit.affine_equal (Lit.shift up3 2) (Lit.shift Lit.identity 5));
+  check "view lit: flipping twice is the identity map"
+    (Lit.affine_equal (Lit.flip (Lit.flip up3)) up3);
+  check "view lit: apply and unapply are inverse, both signs"
+    (List.for_all
+       (fun a ->
+         List.for_all (fun v -> Lit.unapply a (Lit.apply a v) = v) [ -3; 0; 4; 9 ])
+       [ Lit.identity; up3; rev7 ]);
+  check "view lit: is_identity only of the identity"
+    (Lit.is_identity Lit.identity
+    && (not (Lit.is_identity up3))
+    && not (Lit.is_identity rev7))
+
+let test_view_encoding () =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:0 ~hi:5;
+  let up = Encoding.View ("x", up3) (* x+3, so 3..8 *) in
+  let rev = Encoding.View ("x", rev7) (* 7-x, so 2..7 *) in
+  let c = Encoding.view_const 4 in
+  let str = function
+    | Encoding.Holds -> "Holds"
+    | Encoding.Fails -> "Fails"
+    | Encoding.Cond l -> Lit.to_string l
+  in
+  check "view enc: a view's declared range is the image of the base's"
+    (Encoding.view_domain e up = (3, 8) && Encoding.view_domain e rev = (2, 7));
+  check "view enc: a constant's declared range is itself"
+    (Encoding.view_domain e c = (4, 4));
+
+  (* The trim: the constants of PROOF-FORMAT section 3 ("x >= l is the constant true,
+     x >= u+1 the constant false") reach a view through the base's declaration, not
+     through a second copy of the rule. *)
+  check_eq "view enc: at the view's own lower bound, [view >= lo] Holds" ~expected:"Holds"
+    ~got:(str (Encoding.view_ge e up 3));
+  check_eq "view enc: one past its upper bound, [view >= hi+1] Fails" ~expected:"Fails"
+    ~got:(str (Encoding.view_ge e up 9));
+  check_eq "view enc: in between, the base's literal" ~expected:"x_ge_2"
+    ~got:(str (Encoding.view_ge e up 5));
+  check_eq "view enc: a NEGATED view's lower bound Holds too" ~expected:"Holds"
+    ~got:(str (Encoding.view_ge e rev 2));
+  check_eq "view enc: ... and its upper bound Fails on the other side" ~expected:"Fails"
+    ~got:(str (Encoding.view_ge e rev 8));
+  check_eq "view enc: a negated view in between is a negated base literal"
+    ~expected:"~x_ge_3"
+    ~got:(str (Encoding.view_ge e rev 5));
+  check_eq "view enc: view_le mirrors view_ge" ~expected:"~x_ge_3"
+    ~got:(str (Encoding.view_le e up 5));
+  check_eq "view enc: view_lt/view_gt are the off-by-one spellings" ~expected:"x_ge_2"
+    ~got:(str (Encoding.view_gt e up 4));
+
+  (* A constant never reaches [find], so it is never [Undeclared] and contributes
+     nothing to the .opb. It is decided by comparing two integers. *)
+  check "view enc: a constant's bound is arithmetic, not a lookup"
+    (Encoding.view_ge e c 4 = Encoding.Holds
+    && Encoding.view_ge e c 5 = Encoding.Fails
+    && Encoding.view_le e c 4 = Encoding.Holds
+    && Encoding.view_le e c 3 = Encoding.Fails
+    && Encoding.view_eq e c 4 = Encoding.Holds
+    && Encoding.view_ne e c 4 = Encoding.Fails);
+  check "view enc: a view of an UNDECLARED base is refused, like the variable it is"
+    (match Encoding.view_ge e (Encoding.View ("nope", up3)) 5 with
+    | exception Encoding.Undeclared "nope" -> true
+    | _ -> false);
+  check "view enc: declaring nothing extra -- a view adds no constraint to the .opb"
+    (Encoding.n_constraints e = 4 (* x's four ladder rungs, and nothing else *));
+  check "view enc: a view's equality needs the BASE's direct encoding, and says so"
+    (match Encoding.view_eq e up 5 with
+    | exception Encoding.No_direct_encoding "x" -> true
+    | _ -> false);
+  (* Composition on the encoding side agrees with the core side. *)
+  check "view enc: view_shift and view_negate stay flat"
+    (Encoding.view_shift (Encoding.view_of_var "x") 3 = up
+    && Encoding.view_shift (Encoding.view_negate (Encoding.view_of_var "x")) 7 = rev
+    && Encoding.view_shift (Encoding.view_const 4) 3 = Encoding.view_const 7)
+
+(* --------------------------------------------------------------------------
+   (c) The checker's half.
+
+   The model is written entirely in the BASE's literals. The derivation is written
+   entirely in a VIEW's. If the rendering is the identity it claims to be, veripb
+   accepts; if it is off, veripb has to refuse, and the refusal has to be a JUDGEMENT
+   on the derivation rather than a complaint about the file.
+
+   Over a SATISFIABLE model, deliberately. A derivation checked against a database
+   that is already contradictory proves nothing about the derivation (D-0053 makes
+   the point for [red]; it is the same trap here, since anything at all is RUP from a
+   contradiction). So: x is pinned to 1 by two rows, the proof states four facts
+   about two views of x, and the conclusion is SAT with x = 1 -- which the derived
+   lines must therefore also satisfy.
+   -------------------------------------------------------------------------- *)
+let test_view_veripb () =
+  match veripb_path () with
+  | None ->
+      incr failures;
+      print_endline
+        ("FAIL M4-T0 views: " ^ Baguette_proof.Checker.not_found_message
+       ^ " -- a view rendering nothing checked is not a rendering, it is a hope.")
+  | Some veripb -> (
+      let dir = Filename.temp_file "baguette_view_veripb" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let log = Filename.concat dir "log" in
+      (* x in 0..5, pinned to 1 by two rows. Declared width 5: the order encoding is
+         width-proportional (D-0028) and this suite shares a 15 GB machine. *)
+      let model name =
+        let e = Encoding.create () in
+        Encoding.declare_int e "x" ~lo:0 ~hi:5;
+        ignore (Encoding.add_int_lin_le e [ (1, "x") ] 1);
+        ignore (Encoding.add_int_lin_le e [ (-1, "x") ] (-1));
+        let opb = Filename.concat dir (name ^ ".opb") in
+        let oc = open_out opb in
+        Encoding.write_opb e oc;
+        close_out oc;
+        (e, opb)
+      in
+      (* [lits] are emitted as one-literal [rup] clauses, then SAT with x = 1. *)
+      let proof name ~e ~lits =
+        let pbp = Filename.concat dir (name ^ ".pbp") in
+        let oc = open_out pbp in
+        let w = Writer.create ~comments:true ~audit:false oc in
+        Encoding.start_proof e w;
+        List.iter (fun l -> ignore (Writer.rup_clause w ~origin:"view" [ l ])) lits;
+        Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x", 1) ]));
+        close_out oc;
+        pbp
+      in
+      let says needle =
+        let out = try read_whole log with _ -> "" in
+        let n = String.length needle in
+        let rec go i =
+          i + n <= String.length out && (String.sub out i n = needle || go (i + 1))
+        in
+        go 0
+      in
+      let run opb pbp = run_checker ~checker:veripb ~opb ~pbp ~log = Some true in
+
+      (* The view under test: y = x+3 (so y = 4), z = 7-x (so z = 6). Every literal
+         below is produced by [Lit.view_ge]/[Lit.view_le] -- nothing is hand-written,
+         or the lane would be testing the test. *)
+      let e, opb = model "ok" in
+      let good =
+        [
+          Lit.view_ge "x" up3 4 (* y >= 4  IS  x >= 1 *);
+          Lit.view_le "x" up3 4 (* y <= 4  IS  x <= 1 *);
+          Lit.view_ge "x" rev7 6 (* z >= 6  IS  x <= 1 *);
+          Lit.view_le "x" rev7 6 (* z <= 6  IS  x >= 1 *);
+        ]
+      in
+      (* The renderings of [y >= 4] and [z <= 6] are the SAME literal, because both
+         say x >= 1. A rendering that minted per-view Booleans could not say that
+         without a channelling row. *)
+      check "M4-T0 (c): two views of one base render the same fact to one literal"
+        (Lit.equal (List.nth good 0) (List.nth good 3)
+        && Lit.equal (List.nth good 1) (List.nth good 2));
+      let good_prefix = [ List.nth good 0; List.nth good 1; List.nth good 2 ] in
+      let pbp = proof "ok" ~e ~lits:good in
+      check
+        "M4-T0 (c): veripb accepts a derivation written in TWO views' literals over a \
+         model written in the base's, on a SATISFIABLE model"
+        (run opb pbp);
+      if not (run opb pbp) then
+        Printf.printf "  model: %s\n  proof: %s\n%s\n" opb pbp
+          (try read_whole log with _ -> "");
+
+      (* A break lane. The three CORRECT view literals go in first and the wrong one
+         last, so that a rejection at the last line says more than "something was
+         refused": the three renderings before it were accepted, and it is this claim
+         the checker judged.
+
+         Asserted at full strength, which on VeriPB 3.0.2 means two things together.
+         The Rust checker does not quote the offending constraint back -- it says
+         "Verification error at <file>:<line>" and then names the judgement -- so an
+         assertion on the judgement alone would be matched by ANY RUP failure in the
+         proof, which is the weakness CLAUDE.md names. The lane therefore locates the
+         wrong literal's own line in the .pbp it wrote and requires the checker to
+         have failed on THAT line, on the RUP judgement, in the checker's full
+         sentence. A parse error, a dangling label or a refusal on the grammar names
+         neither. *)
+      let rejected_at name ~file ~wrong =
+        let e, opb = model file in
+        let pbp = proof file ~e ~lits:(good_prefix @ [ wrong ]) in
+        let lines = String.split_on_char '\n' (read_whole pbp) in
+        let rendered = Lit.to_string wrong in
+        let contains needle hay =
+          let n = String.length needle and h = String.length hay in
+          let rec go i = i + n <= h && (String.sub hay i n = needle || go (i + 1)) in
+          n = 0 || go 0
+        in
+        let line_of =
+          let rec go i = function
+            | [] -> 0
+            | l :: rest ->
+                if contains "rup" l && contains (" " ^ rendered ^ " ") (l ^ " ") then i
+                else go (i + 1) rest
+          in
+          go 1 lines
+        in
+        let judgement =
+          "The constraint is not implied by reverse unit propagation (RUP) from core and \
+           derived database."
+        in
+        let at = Printf.sprintf "%s:%d" pbp line_of in
+        if line_of = 0 then (
+          incr failures;
+          Printf.printf "FAIL %s -- the lane could not find %s in the proof it wrote\n"
+            name rendered)
+        else if run opb pbp then (
+          incr failures;
+          Printf.printf "FAIL %s (veripb ACCEPTED it)\n  model: %s\n  proof: %s\n" name
+            opb pbp)
+        else if says at && says judgement then Printf.printf "ok   %s\n" name
+        else (
+          incr failures;
+          Printf.printf
+            "FAIL %s -- it was rejected, but not as a RUP judgement on %s, so this lane \
+             cannot tell a JUDGEMENT from a parse error\n\
+             %s\n"
+            name at
+            (try read_whole log with _ -> ""))
+      in
+      (* Break 1: the offset dropped. [y >= 4] rendered as [x_ge_4] -- the mistake of
+         naming the view's own value on the base's ladder. In range, well-formed, and
+         FALSE here, so the checker must judge it rather than refuse to read it. *)
+      rejected_at "M4-T0 (c): veripb REJECTS a view literal whose offset was dropped"
+        ~file:"drop_offset" ~wrong:(Lit.ge "x" 4);
+      (* Break 2: the sense of the negated view off by one. [z >= 6] is [x <= 1], which
+         is [~x_ge_2]; [~x_ge_1] is [x <= 0]. This is the [le x v = ~(x >= v+1)] step,
+         and it is the error that stays IN RANGE -- the one a lane matching on an exit
+         status, or on a name that does not exist in the .opb, would never reach. *)
+      rejected_at
+        "M4-T0 (c): veripb REJECTS a negated view's literal that is off by one rung"
+        ~file:"off_by_a_rung"
+        ~wrong:(Lit.negate (Lit.ge "x" 1));
+      Sys.readdir dir
+      |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
+      try Sys.rmdir dir with _ -> ())
+
 let () =
   report_checker ();
   test_lits ();
@@ -2410,6 +2709,9 @@ let () =
   test_reif_preconditions ();
   test_reif_emitted_text ();
   test_reif_veripb ();
+  test_view_lits ();
+  test_view_encoding ();
+  test_view_veripb ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

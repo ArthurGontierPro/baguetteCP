@@ -1204,3 +1204,92 @@ let add_int_lin_eq_reif t terms rhs ~reifier ~pos =
   ignore (add_int_lin_le t a_terms a_rhs : cid);
   ignore (add_int_lin_le t b_terms b_rhs : cid);
   (le_id, ge_id, k_le, k_ge)
+
+(* ---------------------------------------------------------------------------
+   Views (M4-T0)
+   ---------------------------------------------------------------------------
+
+   A view is [s * x + k] over a DECLARED base variable, or a constant. It has no
+   declaration of its own, no ladder, no Boolean and no name: see lib/proof/lit.ml's
+   "Views" section for the decision and what the alternative costs.
+
+   This is the committing side of that rendering, in the sense encoding.ml's header
+   means: the pure transform lives in [Lit], and the trimming to [Holds]/[Fails] at
+   the base's DECLARED bounds happens here, because here is where the declaration is
+   known. That split is not cosmetic -- it is what makes a view's [cond] come out of
+   the same two comparisons a plain variable's does, rather than out of a second
+   copy of them that can drift.
+
+   A constant is not a special case of anything below it. [Const c >= n] is decided
+   by comparing two integers, which is what [ge] does for a declared variable whose
+   bounds happen to coincide; the constant simply has no ivar to look it up in. It
+   never reaches [find], so it is never [Undeclared], and it contributes nothing to
+   the .opb -- which is the whole point of admitting constants here rather than
+   declaring a width-1 variable for each of them. *)
+type view = Const of int | View of string * Lit.affine
+
+let view_of_var x = View (x, Lit.identity)
+let view_const c = Const c
+
+(* [v + k] and [-v], flattened: a view of a view is a view (Lit.shift / Lit.flip). *)
+let view_shift v k =
+  match v with
+  | Const c -> Const (Arith.add c k)
+  | View (x, a) -> View (x, { a with Lit.offset = Arith.add a.Lit.offset k })
+
+let view_negate = function
+  | Const c -> Const (Arith.neg c)
+  | View (x, a) ->
+      View (x, { Lit.negated = not a.Lit.negated; Lit.offset = Arith.neg a.Lit.offset })
+
+(* The declared bounds of a view, in the view's own units. Used by a caller that has
+   to state a view's declared range -- D-0010's chains are measured against the
+   DECLARED bound, and for a view that bound is the image of the base's. *)
+let view_domain t = function
+  | Const c -> (c, c)
+  | View (x, a) ->
+      let lo, hi = domain t x in
+      let l = Lit.apply a lo and h = Lit.apply a hi in
+      if a.Lit.negated then (h, l) else (l, h)
+
+(* The translation, in checked arithmetic. [n - offset] is the only subtraction a
+   view rendering performs, and a wrapped one would silently name a DIFFERENT
+   literal -- the exact failure D-0029 records, one layer down: the .opb row and the
+   solver would agree on a name neither of them means. So it raises, like every
+   other arithmetic on this side of the module (I-X8's discipline, applied to a
+   name rather than to a row). *)
+let view_base_value a n = Arith.sub n a.Lit.offset
+
+let view_ge t v value =
+  match v with
+  | Const c -> if c >= value then Holds else Fails
+  | View (x, a) ->
+      let d = view_base_value a value in
+      if a.Lit.negated then le t x (Arith.neg d) else ge t x d
+
+let view_le t v value =
+  match v with
+  | Const c -> if c <= value then Holds else Fails
+  | View (x, a) ->
+      let d = view_base_value a value in
+      if a.Lit.negated then ge t x (Arith.neg d) else le t x d
+
+let view_gt t v value = view_ge t v (Arith.add value 1)
+let view_lt t v value = view_le t v (Arith.sub value 1)
+
+(* [=] and [<>] on a view are the base's, at the translated value: the direct
+   encoding a view needs is the BASE's direct encoding, and asking for one the base
+   does not have raises [No_direct_encoding] naming the base -- which is the
+   variable the caller would have to introduce it for. *)
+let view_eq t v value =
+  match v with
+  | Const c -> if c = value then Holds else Fails
+  | View (x, a) ->
+      let d = view_base_value a value in
+      eq t x (if a.Lit.negated then Arith.neg d else d)
+
+let view_ne t v value =
+  match view_eq t v value with
+  | Holds -> Fails
+  | Fails -> Holds
+  | Cond l -> Cond (Lit.negate l)
