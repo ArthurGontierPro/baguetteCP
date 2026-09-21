@@ -318,6 +318,7 @@ work. The owning session picks it up.
 | M1-T14 is split in two along a contract stated in full in the dispatch, not merely a type (the D-0009 lesson): agent-compile owns `lib/flatzinc/compile.ml` only; agent-output owns `lib/flatzinc/output.ml` and the `check_assignment` addition to `lib/flatzinc/model.ml` only. Neither touches `bin/main.ml`, any `dune` file, or the other's files; the orchestrator owns the wiring and the integration | `lib/flatzinc/**` | orchestrator | standing |
 | M1-T7 is split across two sessions. The contract between them is the **existing** `Explanation.t` ADT in `lib/core/explanation.ml`, which neither may change: agent-core builds `Linear`/`Cut` values, agent-justify renders any of them. A change there is a cross-session request, not an edit | `lib/core/explanation.ml` | orchestrator | standing |
 | **This round's split (D-0018).** agent-trace owns the trace vertical in `lib/core/`; agent-ne owns the direct encoding and `int_ne`; agent-mutate owns the mutation harness. The contract between agent-trace and agent-ne is that `Encoding` and `Lit` may only be **added** to — `Encoding.is_declared`, `Lit.ge/le/eq/ne/negate/to_string/owner` keep their current signatures, since `justify.ml` compiles against them | `lib/proof/encoding.ml`, `lib/proof/lit.ml` | orchestrator | standing, this round |
+| **M6-T6 is done** (`bench/README.md` §3g, `WORKLOG.md` handoff above): please (1) mark M6-T6 `DONE` in `docs/ROADMAP.md`, and (2) update or remove `test/models/width_sat_depth.fzn`'s header comment ("at 99 it is 43 ms end to end") — it predates the regressing commit `aacbc8d` and is now off by ~7-14x depending on the flag. Both files are outside `bench/**`, which is all agent-bisect may touch | `docs/ROADMAP.md`, `test/models/width_sat_depth.fzn` | agent-bisect | standing |
 | `lib/core/explanation.ml` is **frozen again** this round. D-0018's derivation needs no new constructor: `Combine`/`Weaken`/`Model_row` already express it, and the new work is *where and when* they are emitted, not what they say. If the trace genuinely cannot be said with the current ADT, that is a cross-session request and a decision record, not an edit | `lib/core/explanation.ml` | orchestrator | standing, this round |
 | Each session builds into its own `--build-dir` (`dune build --build-dir=/tmp/baguette-build-<tag> <target>`). Three sessions share `_build/`'s global lock this round, so a bare `dune build` will fail for reasons that are not yours | — | orchestrator | standing, this round |
 | Clarifying this round's split: `lib/core/prop/linear.ml` belongs to **agent-trace**, not agent-ne. A D-0018 trace line states `claim ∨ ¬(reason)` where the reason is the *other terms' current bound literals* — knowledge only the propagator has, and which `Explanation.t` deliberately does not carry in that shape (`Weaken` holds the declared-width chain the `pol` needs, which is a different projection). agent-ne owns `lib/core/prop/ne.ml` and no other file in `prop/` | `lib/core/prop/linear.ml` | orchestrator | standing, this round |
@@ -483,6 +484,7 @@ work. The owning session picks it up.
 | M2-T14 | agent-fmt2 | 2026-09-18 | Format-2.0 vacuity sweep. Three more instances of the M2-L0 defect found and fixed (test_proof 3.0-only lanes resolving 2.2.2 via `$VERIPB`; D-0030's certification in test_mutation writing a 3.0 proof against an env-format `.opb`; 20 blanked-trace controls asserting on exit status alone). Test (c) now checks the claim index by content, so it runs under both formats. |
 | M2-L8 | agent-bench | 2026-09-18 | The learning benchmark. Third table in `bench/run_bench.sh` reporting learned / convertible / skipped / pb-tried / pb-learned / pb-fallback / fb% / pb-stronger **beside** `.opb` bytes, `.pbp` bytes and verify ms, per model and summed over the suite as counts only. Verdict widened from M1-T36's nodes-alone to all four tree counters. **`bench/run_bench.sh -c`** is the control the row demanded: three scenes, asserted in both directions, exit non-zero on a misclassification, watched fire against three broken classifiers. `-f`/`-F`/`BAGUETTE_PROOF_FORMAT` gone from `bench/` (D-0046). Suite: 86 clauses over 21 of 38 models, 13 convertible, 9 skips over 4 models, PB 86/36/50 = **58% fallback**. |
 | M2-T16 | agent-drop | 2026-09-18 | **Proof format 2.0 removed from the project entirely** (D-0046). `Writer` emits 3.0 and only 3.0; `V2_0`, `BAGUETTE_PROOF_FORMAT`, `default_format`, every `v3 t` branch, `Pol.to_string`, `Opb.write ?labels` and `Encoding.write_opb_for` are gone, and `Checker.find` / `scripts/checker.sh` resolve one checker. **Artefact bytes byte-identical across all 38 models** (`.opb`, `.pbp`, stdout), binary hashed on both sides and different. Unit checks 1986 → 1972, all 14 accounted for. History kept and marked: D-0023/24/25/30 and `PROOF-FORMAT.md` §2. |
+| M6-T6 | agent-bisect | 2026-09-21 | Bisected `width_sat_depth`'s regression: the 43 ms comment was true when written; the whole ~14x jump is one commit, `aacbc8d` (M2-L6 wired into `Search`), 18.6 ms parent -> 258.7 ms. `git bisect run`, 7 steps, 0 skipped. Recommend accepting as the cost of M2-L6's PB analysis, which M2-L13 already claws most of back. `bench/README.md` §3g, new `bench/width_sat_depth_bisect.sh`. |
 
 ## Handoff notes
 
@@ -2548,3 +2550,25 @@ licence for it. veripb rejected the trace line.
 
 **Gate on `main` after both merges**: **2332 ok / 0 FAIL**, 280 matrix, 44 mutation, 12 random,
 **57/57 models**, determinism + fmt + width lint clean, `check: ok`.
+
+**2026-09-21 — M6-T6 handoff (agent-bisect)**
+
+**Bisected, not hypothesised, per the row's instruction.** `width_sat_depth`'s "43 ms end to
+end" comment (`83cc658`) was essentially true when written (18.6-23.4 ms best of 5, measured
+directly at that commit in a worktree; the model itself never changed after that commit). The
+whole ~14x regression is **one commit**: `aacbc8d` ("M2-L6: wire PB analysis into the search,
+with the fallback rate on `--stats`") — its parent `f93ecd1` (PB analysis machinery added but
+not yet called) times at 18.6 ms, `aacbc8d` itself (wired into `Search` unconditionally) times
+at 258.7 ms. `git bisect run` over `83cc658..main`, 7 steps, 0 commits skipped (every commit
+built). Everything after `aacbc8d`, including M2-L12's flag and M2-L13's later ladder-suffix
+work (§3f), is refinement in both directions, not a second regression of the same size.
+
+**Recommendation: accept, don't chase.** M2-L6's PB analysis is finding real value on this
+exact model (`pb-learned 24/49`, `pb-stronger 24`) and M2-L13 already claws most of the cost
+back for the shipped (`BAGUETTE_PROPAGATE_LEARNED=on`) configuration. Full writeup, method and
+numbers: `bench/README.md` §3g. New script: `bench/width_sat_depth_bisect.sh`. Only `bench/**`
+touched — `git status` in the worktree clean otherwise, worktree left on `wave23-bisect`.
+
+**One loose thread for whoever owns `test/models/`**: `width_sat_depth.fzn`'s own header
+comment ("at 99 it is 43 ms end to end") is stale post-M2-L6/M2-L13 and should be updated or
+removed; that file is outside `bench/**` so this row did not touch it.
