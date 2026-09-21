@@ -504,8 +504,7 @@ let propagate_learned () =
    The unit word is the third field and it is `nodes`/`decs`/`levels`, never `us`, so
    that anything reading the timing report's `$4 == "us"` cannot pick these up as
    durations -- the same discipline `emitln` follows with its `lines` unit. *)
-let report_stats (st : Search.stats) (outcome : Search.outcome) =
-  let exhausted = match outcome with Search.Unsat -> true | Search.Sat _ -> false in
+let report_stats (st : Search.stats) ~exhausted =
   prerr_endline
     "stats: baguette search-tree counters (M1-T36). Counted by Search itself, not read";
   prerr_endline
@@ -728,15 +727,36 @@ let solve opts (m : Model.t) =
                what belongs to [search] is the DIFFERENCE across this call and not the
                total. Sampled inside the phase so that the two brackets nest. *)
             let e0 = Writer.emitted_us () and l0 = Writer.emitted_lines () in
+            let config =
+              {
+                Search.default_config with
+                retention = retention_policy ();
+                propagate_learned = propagate_learned ();
+              }
+            in
             let r =
-              Search.solve ~engine:compiled.Compile.engine ~store ~ctx ~check ~stats
-                ~config:
-                  {
-                    Search.default_config with
-                    retention = retention_policy ();
-                    propagate_learned = propagate_learned ();
-                  }
-                ()
+              match compiled.Compile.objective with
+              | None ->
+                  `Satisfy
+                    (Search.solve ~engine:compiled.Compile.engine ~store ~ctx ~check
+                       ~stats ~config ())
+              | Some objective ->
+                  (* M5-T1. Each improving solution is printed AS IT IS FOUND, which is
+                     the FlatZinc convention SPEC 2.2 describes -- a running report, so
+                     that a user who interrupts a long optimisation has still been told
+                     the best answer so far. The consequence for --time is that the
+                     solution printing of an optimisation run is inside the `search`
+                     phase and not inside `output`, where a satisfaction run's is; the
+                     `output` phase then holds only the final marker. That is the honest
+                     placement, since the printing really does happen there. *)
+                  `Optimise
+                    (Search.optimise ~engine:compiled.Compile.engine ~store ~ctx ~check
+                       ~stats ~config ~objective
+                       ~on_solution:(fun assignment ->
+                         print_string
+                           (Output.solution m (assignment_values m store assignment));
+                         flush stdout)
+                       ())
             in
             Timing.emit_us := Writer.emitted_us () - e0;
             Timing.emit_lines := Writer.emitted_lines () - l0;
@@ -747,13 +767,29 @@ let solve opts (m : Model.t) =
      anyway, after at_exit has already printed the report, and a number called "output"
      that excluded the write would be measuring string building only. It changes no
      byte of what is written. *)
+  let exhausted =
+    match outcome with
+    | `Satisfy Search.Unsat -> true
+    | `Satisfy (Search.Sat _) -> false
+    (* An optimisation run that reports an optimum has exhausted the space under the
+       last improving bound, and one that reports no solution has exhausted it outright.
+       Either way the search finished; there is no "stopped at the first answer" arm. *)
+    | `Optimise (Search.Opt _ | Search.Opt_unsat) -> true
+  in
   Timing.phase "output" (fun () ->
       (match outcome with
-      | Search.Sat assignment ->
+      | `Satisfy (Search.Sat assignment) ->
           print_string (Output.solution m (assignment_values m store assignment))
-      | Search.Unsat -> print_string Output.unsatisfiable);
+      | `Satisfy Search.Unsat -> print_string Output.unsatisfiable
+      (* SPEC 2.2: `==========` after the last solution when the search space is
+         exhausted. Every improving solution, including this one, has already been
+         printed by [on_solution] above, so what is left here is the marker that says
+         the last of them was optimal -- and it is printed only because the proof just
+         written establishes that. *)
+      | `Optimise (Search.Opt _) -> print_string Output.exhausted
+      | `Optimise Search.Opt_unsat -> print_string Output.unsatisfiable);
       flush stdout);
-  if opts.stats then report_stats stats outcome
+  if opts.stats then report_stats stats ~exhausted
 
 (* --------------------------------------------------------------------- main *)
 

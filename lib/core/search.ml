@@ -803,6 +803,106 @@ let extract_assignment store : assignment =
                 still claiming the right conclusion, which is this row's proof-level
                 break. Wrong on purpose, sound but not the claimed row, and not
                 CLI-reachable. See [Ladder.derive]'s [~break]. *)
+(* ------------------------------------------------------- M5-T1: BRANCH AND BOUND
+
+   The objective, and the incumbent, as data. Read this before [record_improving] and
+   before [optimise]; the whole of M5-T1's proof argument is here rather than spread
+   over the three of them.
+
+   THE SHAPE, IN ONE SENTENCE. A branch-and-bound bound is *exactly* an M2-L12 global
+   unit -- a permanent, decision-free bound tightening applied at the top of every node
+   -- whose supporting constraint happens to come from `soli` rather than from
+   [Learn.introduce]. Everything below reuses [type global], [global_of] and
+   [apply_globals] unchanged. No new [Explanation] constructor was needed and none was
+   added: the justification is [Explanation.clause [the bound literal]], which is what a
+   learned unit already uses, and it renders as one `rup`.
+
+   WHY THAT IS SOUND, measured against veripb 3.0.2 rather than argued. `soli <lits>`
+   logs an improving solution AND yields the id of the strictly-improving constraint the
+   checker builds for itself from the objective it read out of the .opb -- we never
+   assert that constraint, so we cannot assert it wrongly. On an objective variable
+   [obj] with declared domain [lo, hi], the .opb objective is the order encoding's own
+   sum, so the constraint the checker adds for an incumbent of value [v] is
+   "obj <= v - 1", and the single order literal ~obj_ge_v is RUP against it:
+
+       @s1 soli ... y_ge_1 y_ge_2 y_ge_3 y_ge_4 ~y_ge_5 ;
+           -> ConstraintId 11: 1 ~y_ge_1 1 ~y_ge_2 1 ~y_ge_3 1 ~y_ge_4 1 ~y_ge_5 >= 2
+       @b1 rup +1 ~y_ge_4 >= 1 ;                                          ACCEPTED
+
+   The `rup` needs the LADDER to get there -- negating it asserts y_ge_4, the ladder
+   rows @c5..@c7 propagate y_ge_3, y_ge_2, y_ge_1, and the improving constraint is then
+   falsified outright. That is one unit-propagation sweep over rows that are already in
+   the .opb, which is the reason this needs no `pol` and no new machinery.
+
+   `obju` IS NOT USED, AND THAT IS THE POINT. docs/PROOF-FORMAT.md line 136 files the
+   trap against M5: `obju ... ;` is refused with *"Proofgoal #1 could not be autoproven.
+   Please add an explicit subproof for proofgoal #1."* (re-measured on 3.0.2, 2026-09-21,
+   not quoted from the note). It is refused because an objective UPDATE changes the
+   function being minimised and owes a proof that the change is sound. Branch and bound
+   does not change the objective -- it tightens a BOUND on a fixed objective -- so the
+   rule it needs is `soli`, which owes no such goal. The trap is avoided by not being in
+   its way, and [test_proof.ml]'s [obju_needs_a_subproof] keeps the measurement honest by
+   performing it.
+
+   WHAT THE CONCLUSION RESTS ON, and why it is not decorative. `conclusion BOUNDS <lo>`
+   is CHECKED: 3.0.2 refuses a claim no database constraint syntactically implies, with
+   *"Constraint not syntactically implied by any constraint in the database."*, and
+   refuses a cited id that implies a weaker bound than claimed, with *"Expected
+   constraint is not syntactically implied by the constraint at the hint."* Both were
+   performed. So the lower bound is load-bearing, and there are exactly two ways this
+   search can produce one:
+
+     (1) THE TREE IS EXHAUSTED under the last improving constraint. The root refutation's
+         contradiction implies every bound, and it is what [Writer.Bounds]'s [lower_id]
+         cites. This is the ordinary case and the one the `pol`/`rup` machinery pays for.
+     (2) THE INCUMBENT SITS ON THE OBJECTIVE'S DECLARED FLOOR (or ceiling, maximising).
+         Then "obj <= v - 1" is already unsatisfiable as written -- the checker builds
+         `1 ~y_ge_1 1 ~y_ge_2 1 ~y_ge_3 >= 4` over three terms -- so the improving
+         constraint IS the contradiction and is cited directly. There is no literal
+         ~obj_ge_lo in the encoding to make a global out of, which is the mechanical
+         reason this case is separate rather than a shortcut.
+
+   Note which literal each direction needs. Minimising, the bound is [obj <= v - 1],
+   which the order encoding writes as [Lit.le obj (v - 1)] = ~obj_ge_v. Maximising, the
+   .opb objective is NEGATED (docs: "An objective is minimised; FlatZinc maximisation is
+   negated by the caller"), the checker's objective value is -v, and the bound is
+   [obj >= v + 1] = obj_ge_(v+1). The numbers reported in `conclusion BOUNDS` are in the
+   CHECKER's units -- negated under maximisation -- and [optimise] is where that is
+   applied, once. *)
+type direction = Minimise | Maximise
+
+type objective = {
+  o_var : Var.t;
+  o_name : string; (* the encoding's name for it: the literals are built from this *)
+  o_dir : direction;
+  o_decl_lo : int; (* DECLARED, not current: the floor case above is about this one *)
+  o_decl_hi : int;
+}
+
+(* The running state of a branch-and-bound search. Mutable and shared by reference
+   through [config], because it is the one thing in a solve that genuinely is mutable
+   search state: [stats] may not hold it (passing a [stats] must change no byte of the
+   emitted proof, and this changes every byte) and [trace] is about prunings. *)
+type bnb = {
+  b_obj : objective;
+  b_check : assignment -> bool;
+      (* I-S1, per improving solution and not merely per run. An optimisation search
+         prints several solutions and every one of them is a solution printed, so every
+         one of them is re-checked independently. *)
+  b_on_solution : assignment -> unit;
+      (* SPEC 2.2: each improving solution is printed as it is found, terminated by
+         `----------`. It is a callback and not a list because the FlatZinc convention
+         is a running report, not a summary -- a user who kills a long optimisation has
+         still been told the best answer found so far. *)
+  mutable b_best : (assignment * int) option;
+      (* the incumbent and its value IN MODEL UNITS (the objective variable's own
+         value), never the checker's negated units *)
+  mutable b_soli_ids : Writer.cid list; (* every id `soli` handed back, for I-X2 *)
+  mutable b_floor : Writer.cid option;
+      (* Case (2) above: the improving constraint that is itself the contradiction.
+         [Some] means the search is over and this is what the conclusion cites. *)
+}
+
 type config = {
   learn : bool;
   policy : Learn.policy;
@@ -842,6 +942,16 @@ type config = {
          Wrong on purpose and NOT CLI-reachable, exactly as [break_i_s4],
          [break_ladder_mult] and [break_pb_degree] are. test/unit/test_pb.ml runs it and
          asserts the rejection's wording. *)
+  bnb : bnb option;
+      (* M5-T1. [None] is a satisfaction search and is every pre-M5 caller's behaviour
+         unchanged: [dfs] returns [NSat] at the first solution exactly as it always did.
+         [Some] turns the same tree into a branch-and-bound search -- see [type bnb]
+         above and [record_improving] below.
+
+         It lives on [config] rather than being threaded as an argument because that is
+         what [config] is: the record that says how this solve behaves. It is NOT one of
+         the swappable components D-0044 is about, and it is not a break lane; it is the
+         one field here that carries mutable state, which [type bnb] justifies. *)
   propagate_learned : bool;
       (* M2-L12. Whether a learned clause gets a runtime consumer: a unit becomes a
          global bound tightening applied at every node, a wider one becomes a
@@ -873,6 +983,7 @@ let default_config =
     retention = Retention.default;
     backjump_on_pb = false;
     propagate_learned = true;
+    bnb = None;
   }
 
 let no_learning = { default_config with learn = false; pb = false }
@@ -1668,6 +1779,84 @@ let register_learned engine store ctx stats ~cid ~(lits : Lit.t list) =
               (Printf.sprintf "learned_clause instance #%d over %s (M2-L12)" id
                  (String.concat " " (List.map Lit.to_string (Clause.literals p)))))
 
+(* M5-T1: the solution node of a branch-and-bound search.
+
+   Called where a satisfaction search would have returned [NSat]. It logs the incumbent,
+   yields the strictly-improving constraint, and installs the bound as a global unit --
+   after which the node the solver is standing on is itself in conflict, because the
+   objective variable is fixed at a value the new bound excludes. That is the whole
+   trick, and it is why nothing else in [dfs] changes: the caller re-enters the node and
+   [apply_globals] reports the conflict, which the ordinary conflict path then handles
+   with the ordinary trace, learning, nogood and backjump.
+
+   [`Proved] is the floor case of [type bnb]'s note (2): the improving constraint is
+   already unsatisfiable, so no better solution exists and no search is needed to say so.
+
+   THE CHECK RUNS HERE, on every improving solution, because every one of them is
+   printed -- I-S1 is about solutions printed, and an optimisation run prints several. *)
+let record_improving ctx store stats (b : bnb) (asn : assignment) : [ `Continue | `Proved ]
+    =
+  if not (b.b_check asn) then raise (Unsound_solution asn);
+  let o = b.b_obj in
+  let d = Store.get store o.o_var in
+  (* Every variable is fixed at a solution node ([unfixed] returned nothing), so the two
+     bounds agree; asserted rather than assumed because the value read here is the one the
+     `soli` line and the conclusion are both built from, and a wrong one would be a wrong
+     BOUNDS claim rather than a crash. *)
+  if Domain.lo d <> Domain.hi d then
+    invalid_arg
+      (Printf.sprintf
+         "Search.record_improving: objective %s is not fixed at a solution node (%d..%d)"
+         o.o_name (Domain.lo d) (Domain.hi d));
+  let value = Domain.lo d in
+  b.b_on_solution asn;
+  let bindings = List.map (fun (v, x) -> (Store.name store v, x)) asn in
+  let lits = Encoding.assignment_lits ctx.Justify.encoding bindings in
+  (* `soli` and not `sol`: `sol` adds nothing, and the constraint this line yields is the
+     entire reason the bound below is derivable. It is also the reason the solution is
+     handed over in full -- the checker PROPAGATES a logged solution, which is what lets
+     it fill in the encoding auxiliaries (the `_neN` selectors of PROOF-FORMAT section 3)
+     that nothing in the solver knows a value for. See [Writer.verdict]'s note on why the
+     inline `conclusion SAT : <assignment>` form is unusable for the same reason. *)
+  (* AT LEVEL 0, for the reason [Learned.introduce] is at level 0 (D-0045's addendum):
+     the improving constraint holds everywhere in the tree from the moment it is derived,
+     and a `w` at the level the solution happened to be found at would retire it out from
+     under every later bound that rests on it. Found by measurement, not by foresight --
+     emitted at the current level, the checker refused the conclusion with "The claimed
+     upper bound of 2 mismatches the best recorded upper bound of 4", because wiping the
+     constraint took the recorded bound with it. *)
+  let cid =
+    Justify.with_level ctx 0 (fun () ->
+        Writer.improving ctx.Justify.writer ~origin:"M5-T1 improving solution" lits)
+  in
+  b.b_soli_ids <- cid :: b.b_soli_ids;
+  b.b_best <- Some (asn, value);
+  let at_limit, lit =
+    match o.o_dir with
+    | Minimise -> (value <= o.o_decl_lo, Lit.le o.o_name (value - 1))
+    | Maximise -> (value >= o.o_decl_hi, Lit.ge o.o_name (value + 1))
+  in
+  if at_limit then (
+    b.b_floor <- Some cid;
+    `Proved)
+  else
+    let decl = Learned.decl_of_encoding ctx.Justify.encoding in
+    match global_of store ~decl ~cid lit with
+    | Some g ->
+        stats.globals_rev <- g :: stats.globals_rev;
+        `Continue
+    | None ->
+        (* [global_of] declines a literal whose variable the STORE does not know or the
+           ENCODING does not declare. The objective variable is both, and [at_limit] has
+           already excluded the one value for which no order literal exists, so this arm
+           is unreachable -- and says so rather than silently dropping the bound, which
+           would turn optimisation into enumeration of every solution. *)
+        invalid_arg
+          (Printf.sprintf
+             "Search.record_improving: no order literal for the bound %s on objective %s \
+              (declared %d..%d, incumbent %d)"
+             (Lit.to_string lit) o.o_name o.o_decl_lo o.o_decl_hi value)
+
 let rec learn_at_conflict engine store ctx trace stats cfg (c : Store.conflict) =
   if not cfg.learn then None
   else
@@ -1793,10 +1982,36 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
           in
           let cid = emit_nogood ctx ng in
           NFail (ng, cid))
-  | Engine.Fixpoint ->
+  | Engine.Fixpoint -> (
       let cands = unfixed store in
-      if Array.length cands = 0 then NSat (extract_assignment store)
-      else branch engine store ctx trace stats cfg order decisions (order store cands)
+      if Array.length cands > 0 then
+        branch engine store ctx trace stats cfg order decisions (order store cands)
+      else
+        let asn = extract_assignment store in
+        match cfg.bnb with
+        | None -> NSat asn
+        | Some b -> (
+            (* M5-T1. The solution is logged and the bound installed; then THE SAME NODE
+               IS RE-ENTERED. [apply_globals] runs first at every node, the bound it now
+               carries excludes the value the objective variable is fixed at, and the
+               conflict that produces goes down the ordinary conflict path above -- trace,
+               bridges, learning, nogood, backjump -- with nothing in it aware that the
+               node it is refuting was a solution a moment ago.
+
+               This is a re-entry, NOT a restart. docs/SPEC.md 3.4 fixes the search as
+               depth-first with restarts disabled, and nothing here reopens a closed
+               level, re-takes a decision or returns to the root: the decision stack is
+               exactly as it was, the node is the one we are standing on, and the tree is
+               still traversed once, left to right. [stats.nodes] is deliberately NOT
+               incremented, because no node was dispatched -- M1-T36's identity counts
+               [branch]'s children and this is not one.
+
+               It terminates: the bound is strictly tighter than the incumbent, so the
+               re-entry conflicts rather than reaching [Fixpoint] again, and no second
+               solution can be found at the same node. *)
+            match record_improving ctx store stats b asn with
+            | `Proved -> NSat asn
+            | `Continue -> dfs engine store ctx trace stats cfg order decisions))
 
 (* Close out a level whose subtree is finished, leaving [ng] (filed below [lvl], so the
    wipe cannot touch it) as this frame's answer. D-0018 point 4's two lines, in the order
@@ -1952,36 +2167,18 @@ and explore_ge store engine ctx trace stats cfg order decisions v k lit =
 
 (* ------------------------------------------------------------------------------ API *)
 
-(* Depth-first search from the store's current decision level (I-S3: the level on
-   return equals the level on entry -- true here by construction, since every
-   [Store.new_level] this module calls is paired with exactly one [Store.backtrack]
-   before returning).
+(* The tree walk itself, shared by [solve] and [optimise] (M5-T1).
 
-   [?order] is the branching order and defaults to [spec_order], docs/SPEC.md 3.4's
-   normative first-fail/indomain_min: nothing outside the tests passes it, and the
-   default is byte-for-byte the tree this module has always built. [random_order] is
-   the fuzzer's (M2-T11); see the branching-order section above for what an order is
-   allowed to vary.
-
-   [engine] is shared, reusable state (its watcher table does not depend on the
-   store's contents); [store] and [ctx] carry the search's actual state. [check] is
-   the independent re-verification invariant I-S1 requires -- "every solution printed
-   satisfies every constraint, re-checked independently ... not by trusting the
-   propagators". There is deliberately no way to skip it: a caller without a real
-   model-level checker at hand (M1-T10 lands before the FlatZinc [Model.t] is wired to
-   the solver) still has to pass one, even if it is a small hand-written one, as the
-   tests below do.
-
-   On [Sat], the proof's [conclusion] cites the found assignment directly (never a
-   bare [sol], which the doc notes only works when deletion-checking was never turned
-   off -- the assignment form always works). On [Unsat], it cites the id of the
-   final, decision-free nogood. Both leave [Writer]'s audit-mode live set exactly as
-   it was before the call plus that one id, which [Writer.conclusion] itself retires
-   (invariant I-X2 -- see docs/PROOF-FORMAT.md section 5, "discharged by the
-   conclusion"). *)
-let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
-    ~(check : assignment -> bool) ?trace ?stats ?(order = spec_order)
-    ?(config = default_config) () : outcome =
+   It stops where the two part company: it runs the search, checks the invariants and
+   reports the oracle, and hands back the root node together with the [trace] and [stats]
+   it may have had to create. It writes NO conclusion and retires NOTHING -- which of the
+   live ids the conclusion is allowed to keep is exactly what differs between a
+   satisfaction answer and a bounds answer, so it belongs to the caller that writes the
+   conclusion. It takes no [check] for the same reason: a satisfaction search checks one
+   solution at the end, a branch-and-bound search checks every improving one as it is
+   found ([record_improving]), and neither is this function's business. *)
+let search_core ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx) ?trace ?stats
+    ?(order = spec_order) ?(config = default_config) () : node * Trace.t * stats =
   let entry_level = Store.level store in
   (* [?trace] exists so a caller can read back *which* rules in the emitted proof were
      D-0018 trace lines (test/unit/test_trace.ml checks each of them standalone against
@@ -2088,36 +2285,82 @@ let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
     in
     show "CHECKED" (Engine.oracle_checked_families ());
     show "no obligation at its level" (Engine.oracle_unobliged_families ()));
-  let retire_trace () =
-    match Trace.permanent_ids trace with
-    | [] -> ()
-    | ids -> Writer.delete_many ctx.Justify.writer ids
-  in
-  (* I-X2, and M2-L4 is what changed here. A learned constraint is introduced at level 0
-     (D-0045's addendum, [Learned.introduce]) precisely so that no backjump retires it,
-     which leaves exactly one party who can. Since M2-L4 that party is [stats.db] and not
-     this function: the sweep deletes what the database still HOLDS, so a constraint the
-     policy already evicted mid-search is not deleted a second time here.
+  (result, trace, stats)
 
-     Reading it off [stats_learned] -- every id ever introduced -- is the double delete,
-     and it is a double delete from ONE owner, which is the shape D-0045's warning about
-     two owners does not cover. lib/core/retention.ml section 1 is the record.
+(* The two I-X2 sweeps, lifted out of [solve] when [optimise] came to need the same two.
+   Their arguments are what they always closed over; the comments that were on them are
+   below, unchanged in substance. *)
 
-     Note what is still NOT done: they are not retired at the backjump. A learned clause
-     whose lifetime were a level's would be a learned clause that learned nothing. *)
-  let retire_learned () =
-    (* M2-L12: release the citations first. They are a statement about the SEARCH -- a
-       global or a registered instance will write a [rup] resting on this constraint at
-       the next node -- and there is no next node. [Retention.release_all] says this at
-       length; the double-delete and not-owned guards stay on. *)
-    Retention.release_all stats.db;
-    ignore (Retention.retire_all stats.db ctx)
+(* I-X2: the trace lines for prunings made at level 0 are the one class of rule this
+   search emits that no [w] retires -- they are deliberately outside every branch's
+   level, because a level-0 pruning outlives every branch and the checker needs it on
+   both sides of a backtrack (see [Trace]'s header). Retire them once, on every path,
+   before the conclusion. Doing it here rather than inside [Trace] keeps the rule "an id
+   you receive is an id you delete" with the caller that owns the proof's shape. *)
+let retire_trace ctx trace =
+  match Trace.permanent_ids trace with
+  | [] -> ()
+  | ids -> Writer.delete_many ctx.Justify.writer ids
+
+(* I-X2, and M2-L4 is what changed here. A learned constraint is introduced at level 0
+   (D-0045's addendum, [Learned.introduce]) precisely so that no backjump retires it,
+   which leaves exactly one party who can. Since M2-L4 that party is [stats.db] and not
+   this function: the sweep deletes what the database still HOLDS, so a constraint the
+   policy already evicted mid-search is not deleted a second time here.
+
+   Reading it off [stats_learned] -- every id ever introduced -- is the double delete,
+   and it is a double delete from ONE owner, which is the shape D-0045's warning about
+   two owners does not cover. lib/core/retention.ml section 1 is the record.
+
+   Note what is still NOT done: they are not retired at the backjump. A learned clause
+   whose lifetime were a level's would be a learned clause that learned nothing.
+
+   M2-L12: the citations are released first. They are a statement about the SEARCH -- a
+   global or a registered instance will write a [rup] resting on this constraint at the
+   next node -- and there is no next node. [Retention.release_all] says this at length;
+   the double-delete and not-owned guards stay on. *)
+let retire_learned ctx stats =
+  Retention.release_all stats.db;
+  ignore (Retention.retire_all stats.db ctx)
+
+(* Depth-first search from the store's current decision level (I-S3: the level on
+   return equals the level on entry -- true here by construction, since every
+   [Store.new_level] this module calls is paired with exactly one [Store.backtrack]
+   before returning).
+
+   [?order] is the branching order and defaults to [spec_order], docs/SPEC.md 3.4's
+   normative first-fail/indomain_min: nothing outside the tests passes it, and the
+   default is byte-for-byte the tree this module has always built. [random_order] is
+   the fuzzer's (M2-T11); see the branching-order section above for what an order is
+   allowed to vary.
+
+   [engine] is shared, reusable state (its watcher table does not depend on the
+   store's contents); [store] and [ctx] carry the search's actual state. [check] is
+   the independent re-verification invariant I-S1 requires -- "every solution printed
+   satisfies every constraint, re-checked independently ... not by trusting the
+   propagators". There is deliberately no way to skip it: a caller without a real
+   model-level checker at hand (M1-T10 lands before the FlatZinc [Model.t] is wired to
+   the solver) still has to pass one, even if it is a small hand-written one, as the
+   tests below do.
+
+   On [Sat], the proof's [conclusion] cites the found assignment directly (never a
+   bare [sol], which the doc notes only works when deletion-checking was never turned
+   off -- the assignment form always works). On [Unsat], it cites the id of the
+   final, decision-free nogood. Both leave [Writer]'s audit-mode live set exactly as
+   it was before the call plus that one id, which [Writer.conclusion] itself retires
+   (invariant I-X2 -- see docs/PROOF-FORMAT.md section 5, "discharged by the
+   conclusion"). *)
+let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
+    ~(check : assignment -> bool) ?trace ?stats ?(order = spec_order)
+    ?(config = default_config) () : outcome =
+  let result, trace, stats =
+    search_core ~engine ~store ~ctx ?trace ?stats ~order ~config ()
   in
   match result with
   | NSat assignment ->
       if not (check assignment) then raise (Unsound_solution assignment);
-      retire_learned ();
-      retire_trace ();
+      retire_learned ctx stats;
+      retire_trace ctx trace;
       (* I-X2, and the SAT path needs it for the same reason the NFail arm below does
          (M4-T4b found this; the arithmetic family is simply the first thing in the tree
          to nest this deeply at level 0 on a SAT path). A level-0 pruning whose D-0013
@@ -2140,17 +2383,146 @@ let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
           invalid_arg
             "Search.solve: the root nogood must be decision-free -- solve must be called \
              with no ambient decisions active");
-      retire_learned ();
+      retire_learned ctx stats;
       (* I-X2: the live set must be empty at [conclusion], and the contradiction cited
          by the conclusion is the one id that counts as discharged by it
          (docs/PROOF-FORMAT.md section 5). A root refutation's derivation leaves its
          intermediate steps behind -- they are at level 0, so no [w] retires them --
          so retire them explicitly here. Nothing references them again: the proof ends
          on the next line. *)
-      retire_trace ();
+      retire_trace ctx trace;
       let leftovers =
         List.filter (fun id -> id <> cid) (Writer.live_ids ctx.Justify.writer)
       in
       if leftovers <> [] then Writer.delete_many ctx.Justify.writer leftovers;
       Writer.conclusion ctx.Justify.writer (Writer.Unsat (Some cid));
       Unsat
+
+(* ------------------------------------------------------------------ M5-T1/M5-T2 *)
+
+(* What an optimisation run answers. The value is in MODEL units -- the objective
+   variable's own value, which is what SPEC 2.2's output prints -- and never the
+   checker's negated units, which exist only inside [optimise]. *)
+type opt_outcome =
+  | Opt of assignment * int (* proved optimal: the incumbent and its objective value *)
+  | Opt_unsat (* the model has no solution at all *)
+
+(* Branch and bound, and the `conclusion BOUNDS` that proves the answer optimal
+   (M5-T1 + M5-T2). Read [type bnb] first: the proof argument is there.
+
+   The relation to [solve] is that there is almost none -- the tree, the propagation, the
+   learning, the backjumping and every rule they emit are identical, and the whole of the
+   difference is [config.bnb], which turns the solution node from a stopping point into a
+   conflict. What is different HERE is only the conclusion, and it is different in one
+   way that matters: which live id survives the I-X2 sweep.
+
+   THE SWEEP, AND WHAT THE CONCLUSION IS ALLOWED TO KEEP. Every `soli` hands back an id
+   and every one of them is this function's to delete (ARCHITECTURE section 6, I-X2), so
+   they are swept here with everything else. Exactly one id is spared, and
+   docs/PROOF-FORMAT.md section 5 is the rule: "A contradiction consumed by
+   `conclusion UNSAT : <cid>`, and the lower-bound id in `BOUNDS`, count as discharged by
+   the conclusion, since they cannot be deleted before being referenced." That is asserted
+   rather than assumed -- [Writer.conclusion] forgets the id it cites, and the audit runs
+   at the end of it with the live set expected empty.
+
+   THE UPPER BOUND CARRIES NO ASSIGNMENT, deliberately. `conclusion BOUNDS <lo> : <id>
+   <hi> : <assignment>` is legal and 3.0.2 accepts it, but it is the same trap M1-T18
+   found on `conclusion SAT : <assignment>`: the assignment we hold is over the MODEL
+   variables, the .opb also carries encoding auxiliaries that nothing in the solver knows
+   a value for, and an inline assignment is not propagated -- every unmentioned variable
+   reads as false and an honest proof is REJECTED. A solution logged with `soli` IS
+   propagated, and [record_improving] has already logged this one, so the number alone is
+   both sufficient and safe. *)
+let optimise ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
+    ~(check : assignment -> bool) ~(objective : objective)
+    ~(on_solution : assignment -> unit) ?trace ?stats ?(order = spec_order)
+    ?(config = default_config) () : opt_outcome =
+  let b =
+    {
+      b_obj = objective;
+      b_check = check;
+      b_on_solution = on_solution;
+      b_best = None;
+      b_soli_ids = [];
+      b_floor = None;
+    }
+  in
+  let result, trace, stats =
+    search_core ~engine ~store ~ctx ?trace ?stats ~order
+      ~config:{ config with bnb = Some b } ()
+  in
+  retire_learned ctx stats;
+  retire_trace ctx trace;
+  let sweep_all_but keep =
+    match List.filter (fun id -> Some id <> keep) (Writer.live_ids ctx.Justify.writer) with
+    | [] -> ()
+    | ids -> Writer.delete_many ctx.Justify.writer ids
+  in
+  (* The root's answer, and the two shapes it can take. A nogood that still names a
+     decision cannot reach here -- [solve] refuses the same thing for the same reason --
+     and an [NSat] that did not come from the floor case would mean [dfs] stopped at a
+     solution while optimising, which is the one thing [config.bnb] exists to prevent. *)
+  let root_contradiction =
+    match result with
+    | NFail ([], cid) -> Some cid
+    | NFail (_ :: _, _) ->
+        invalid_arg
+          "Search.optimise: the root nogood must be decision-free -- optimise must be \
+           called with no ambient decisions active"
+    | NSat _ -> None
+  in
+  match (b.b_best, root_contradiction) with
+  | None, Some cid ->
+      (* No solution at all. `conclusion UNSAT` is NOT available here and the reason is
+         not a matter of taste: 3.0.2 refuses it over a formula carrying a `min:` line --
+         "'conclusion UNSAT' can only be used without an objective. Use 'conclusion
+         BOUNDS INF INF' for infeasible optimization problems." -- and an optimisation
+         model always carries one. So both bounds are INF, which is the honest reading
+         anyway: the minimum over an empty set of solutions is +INF from either side. The
+         contradiction is still cited, so I-X2 discharges exactly as it does on [solve]'s
+         refutation arm. *)
+      sweep_all_but (Some cid);
+      Writer.conclusion ctx.Justify.writer
+        (Writer.Bounds
+           { lower = None; lower_id = Some cid; upper = None; upper_assignment = [] });
+      Opt_unsat
+  | None, None ->
+      invalid_arg
+        "Search.optimise: the search returned a solution but recorded no incumbent -- \
+         record_improving did not run"
+  | Some (asn, value), _ ->
+      let lower_id =
+        match (root_contradiction, b.b_floor) with
+        | Some cid, _ ->
+            (* Case (1) of [type bnb]: the tree was exhausted under the last improving
+               constraint, so nothing better than the incumbent exists and the root
+               contradiction says so. A contradiction syntactically implies every bound,
+               which is what `conclusion BOUNDS <lo> : <cid>` needs of it. *)
+            Some cid
+        | None, (Some _ as floor) ->
+            (* Case (2): the incumbent sits on the objective's declared floor, the
+               improving constraint is itself unsatisfiable, and it is what implies the
+               bound. No search was needed and none was done. *)
+            floor
+        | None, None ->
+            invalid_arg
+              "Search.optimise: an incumbent with neither a root contradiction nor a \
+               floor constraint to establish its lower bound"
+      in
+      (* The checker minimises (docs: "An objective is minimised; FlatZinc maximisation
+         is negated by the caller"), so a maximisation's objective value on the page is
+         the negation of the model's. This is the single place that conversion happens
+         and the only place [Maximise] is read outside [record_improving]. *)
+      let page_value =
+        match objective.o_dir with Minimise -> value | Maximise -> -value
+      in
+      sweep_all_but lower_id;
+      Writer.conclusion ctx.Justify.writer
+        (Writer.Bounds
+           {
+             lower = Some page_value;
+             lower_id;
+             upper = Some page_value;
+             upper_assignment = [];
+           });
+      Opt (asn, value)
