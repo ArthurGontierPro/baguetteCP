@@ -588,11 +588,276 @@ let test_m5_branch_and_bound () =
   try Sys.rmdir dir with _ -> ()
 
 
+
+(* ------------------------------------------------- M5: IS THE DERIVATION LOAD-BEARING?
+
+   The question this project has had to ask three times, and has twice answered wrongly by
+   not asking. A refutation that rests on a clause makes every `pol` in the file
+   decorative, because veripb accepts a `pol` whatever it derives -- D-0057 and D-0060
+   both found deliberate breaks reddening nothing for exactly that reason. So "veripb said
+   VERIFIED BOUNDS" is not evidence that M5 proves optimality until the objective
+   derivation has been shown to be load-bearing, by breaking it and watching the checker
+   refuse.
+
+   M5's chain is in better shape than a `pol` chain, and the reason is structural rather
+   than lucky: the two rules it is made of are both CHECKED.
+
+     - the improving constraint is minted by `soli`, which the CHECKER builds for itself
+       from the objective it read out of the .opb. We never write it, so we cannot write
+       it wrongly.
+     - the bound it licenses is a `rup`, and a `rup` is verified by unit propagation. A
+       wrong one is refused where a wrong `pol` is waved through.
+
+   That is the argument. Below is the measurement, on the REAL emitted proof of
+   test/models/opt_min_sat.fzn, which is the ordinary branch-and-bound path.
+
+   And one more thing is established here, because the argument above does not reach it:
+   `conclusion BOUNDS` CHECKS THE ID IT CITES whatever minted that id. Across the five
+   optimisation models the cited id is minted three different ways -- `rup` (the root
+   empty clause, opt_min_sat), `soli` (the floor case, opt_floor_sat/opt_max_sat/
+   opt_ne_sat) and `pol` (the infeasible case, opt_unsat) -- and the `pol` one is the
+   shape the warning above is about. It is broken below too. *)
+
+let m5_emit dir name src =
+  let m = Baguette_flatzinc.Builder.of_string ~file:name src in
+  let compiled = Baguette_flatzinc.Compile.compile m in
+  let opb = Filename.concat dir (name ^ ".opb")
+  and pbp = Filename.concat dir (name ^ ".pbp") in
+  let store = compiled.Baguette_flatzinc.Compile.store in
+  let encoding = compiled.Baguette_flatzinc.Compile.encoding in
+  let oc = open_out opb in
+  Encoding.write_opb encoding oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let writer = Writer.create ~audit:true oc in
+  Encoding.start_proof encoding writer;
+  let ctx = mk_ctx writer encoding in
+  let objective =
+    match compiled.Baguette_flatzinc.Compile.objective with
+    | Some o -> o
+    | None -> failwith ("m5_emit: " ^ name ^ " has no objective")
+  in
+  let check_asn assignment =
+    let values = Array.make (Baguette_flatzinc.Model.nvars m) 0 in
+    List.iter (fun (v, x) -> values.(Var.to_int v) <- x) assignment;
+    Baguette_flatzinc.Model.check_assignment m values
+  in
+  let outcome =
+    Search.optimise
+      ~engine:compiled.Baguette_flatzinc.Compile.engine
+      ~store ~ctx ~check:check_asn ~objective ~on_solution:(fun _ -> ())
+      ()
+  in
+  close_out oc;
+  (opb, pbp, read_file pbp, outcome)
+
+(* Run the checker over a proof written out from [lines], and return (accepted, log). *)
+let m5_run_lines checker dir tag opb lines =
+  let pbp = Filename.concat dir (tag ^ ".pbp") in
+  let oc = open_out pbp in
+  List.iter (fun l -> output_string oc (l ^ "\n")) lines;
+  close_out oc;
+  let log = Filename.concat dir (tag ^ ".log") in
+  let rc =
+    Sys.command
+      (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote checker) (Filename.quote opb)
+         (Filename.quote pbp) (Filename.quote log))
+  in
+  (rc = 0, read_file log)
+
+let m5_says out needle =
+  let hl = String.length out and nl = String.length needle in
+  let rec go i = i + nl <= hl && (String.sub out i nl = needle || go (i + 1)) in
+  go 0
+
+(* The label a line defines, if it defines one: "@c13 rup ..." -> Some (13, "rup"). *)
+let m5_minted line =
+  match String.split_on_char ' ' (String.trim line) with
+  | lbl :: rule :: _ when String.length lbl > 2 && String.sub lbl 0 2 = "@c" -> (
+      match int_of_string_opt (String.sub lbl 2 (String.length lbl - 2)) with
+      | Some i -> Some (i, rule)
+      | None -> None)
+  | _ -> None
+
+let test_m5_derivation_is_load_bearing () =
+  match veripb_path () with
+  | None ->
+      incr failures;
+      print_endline
+        "FAIL M5 load-bearing: veripb not found, so NOTHING about the objective \
+         derivation was established. A missing checker is a failure, never a skip."
+  | Some checker ->
+      let dir = Filename.temp_file "baguette_m5_lb" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      (* ---------------------------------------------- the ordinary path, opt_min_sat *)
+      let opb, _pbp, proof, _ = m5_emit dir "bb" fz_optimisation_model in
+      let lines = String.split_on_char '\n' proof in
+      let f_line =
+        List.find_opt (fun l -> String.length l > 1 && String.sub (String.trim l) 0 2 = "f ") lines
+      in
+      let conclusion =
+        List.find_opt
+          (fun l -> String.length (String.trim l) > 10 && String.sub (String.trim l) 0 10 = "conclusion")
+          lines
+      in
+      (* Which id does the conclusion cite, and WHAT MINTED IT -- read back out of the
+         file, never assumed. *)
+      let cited =
+        match conclusion with
+        | None -> None
+        | Some l ->
+            String.split_on_char ' ' (String.trim l)
+            |> List.filter_map (fun w ->
+                   if String.length w > 2 && String.sub w 0 2 = "@c" then
+                     int_of_string_opt (String.sub w 2 (String.length w - 2))
+                   else None)
+            |> function id :: _ -> Some id | [] -> None
+      in
+      let minted_by id =
+        List.find_map
+          (fun l -> match m5_minted l with Some (i, r) when i = id -> Some r | _ -> None)
+          lines
+      in
+      (match cited with
+      | None ->
+          incr failures;
+          print_endline "FAIL M5 load-bearing: the conclusion cites no constraint"
+      | Some id ->
+          check
+            "M5 load-bearing: the conclusion's cited id was minted by a `rup` -- a \
+             CHECKED rule, not a `pol` the checker would wave through"
+            (minted_by id = Some "rup"));
+      (* BREAK 1. Delete each improving constraint as soon as it is introduced, so the
+         objective derivation is gone while every other line stays exactly where it was
+         and no id shifts. The first line that uses the bound must be refused. *)
+      let neutralised =
+        List.concat_map
+          (fun l ->
+            match m5_minted l with
+            | Some (i, "soli") -> [ l; Printf.sprintf "del id @c%d ;" i ]
+            | _ -> [ l ])
+          lines
+      in
+      let ok, out = m5_run_lines checker dir "neutralised" opb neutralised in
+      check
+        "M5 BREAK: with the improving constraints deleted, the proof is REFUSED -- the \
+         objective derivation is load-bearing, not decorative"
+        (not ok);
+      check "M5 BREAK: ... and it is refused on the JUDGEMENT, not on the grammar"
+        (m5_says out
+           "The constraint is not implied by reverse unit propagation (RUP) from core \
+            and derived database.");
+      (* BREAK 2, and the one that reaches the CONCLUSION rather than the first bound.
+         The model is SATISFIABLE, so the empty clause the conclusion cites cannot come
+         from the model rows: it exists only because the objective bound is in the
+         database. Asserted by deriving it against the .opb alone. *)
+      (match f_line with
+      | None ->
+          incr failures;
+          print_endline "FAIL M5 load-bearing: the proof has no `f` line to reuse"
+      | Some f ->
+          let ok, out =
+            m5_run_lines checker dir "no_objective" opb
+              [
+                "pseudo-Boolean proof version 3.0";
+                String.trim f;
+                "rup >= 1 ;";
+                "output NONE ;";
+                "conclusion UNSAT ;";
+                "end pseudo-Boolean proof ;";
+              ]
+          in
+          check
+            "M5 load-bearing: the contradiction the conclusion cites is NOT derivable \
+             from the model alone -- the model is satisfiable, so the refutation is the \
+             objective bound's and nothing else's"
+            (not ok);
+          check "M5 load-bearing: ... refused on the judgement"
+            (m5_says out
+               "The constraint is not implied by reverse unit propagation (RUP) from \
+                core and derived database."));
+      (* ------------------------------------- the `pol`-minted citation, opt_unsat's shape
+
+         An infeasible optimisation model concludes BOUNDS INF INF citing a `pol`, which
+         is exactly the shape the decorative-`pol` warning is about. It is NOT decorative:
+         the conclusion checks that the cited constraint really is a contradiction. *)
+      let opb2, _, proof2, outcome2 =
+        m5_emit dir "inf"
+          "var 0..3: x :: output_var;\n\
+           constraint int_lin_le([1],[x],1);\n\
+           constraint int_lin_le([-1],[x],-3);\n\
+           solve minimize x;\n"
+      in
+      check "M5: an infeasible optimisation model reports no solution"
+        (outcome2 = Search.Opt_unsat);
+      let lines2 = String.split_on_char '\n' proof2 in
+      check "M5: ... and concludes BOUNDS INF INF, the only conclusion available to it"
+        (List.exists
+           (fun l -> m5_says l "conclusion BOUNDS INF" && m5_says l "INF ;")
+           lines2);
+      let cited2 =
+        List.find_map
+          (fun l ->
+            if String.length (String.trim l) > 10 && String.sub (String.trim l) 0 10 = "conclusion"
+            then
+              String.split_on_char ' ' (String.trim l)
+              |> List.filter_map (fun w ->
+                     if String.length w > 2 && String.sub w 0 2 = "@c" then
+                       int_of_string_opt (String.sub w 2 (String.length w - 2))
+                     else None)
+              |> function id :: _ -> Some id | [] -> None
+            else None)
+          lines2
+      in
+      (match cited2 with
+      | None ->
+          incr failures;
+          print_endline "FAIL M5: the INF conclusion cites no constraint"
+      | Some id ->
+          check "M5: the INF conclusion's cited id was minted by a `pol`"
+            (List.find_map
+               (fun l -> match m5_minted l with Some (i, r) when i = id -> Some r | _ -> None)
+               lines2
+            = Some "pol");
+          (* BREAK 3: corrupt that `pol` so it derives something sound but NOT a
+             contradiction, leaving the claim unchanged. If the conclusion did not check
+             its citation this would sail through, which is the whole worry. *)
+          let corrupted =
+            List.map
+              (fun l ->
+                match m5_minted l with
+                | Some (i, "pol") when i = id -> (
+                    (* `pol @cA @cB +` -> `pol @cA @cA +`: still a valid derivation, no
+                       longer a contradiction. *)
+                    match String.split_on_char ' ' (String.trim l) with
+                    | lbl :: "pol" :: a :: _ :: rest ->
+                        String.concat " " ((lbl :: "pol" :: a :: a :: rest))
+                    | _ -> l)
+                | _ -> l)
+              lines2
+          in
+          check "M5 BREAK CONTROL: the corruption really changed the pol"
+            (corrupted <> lines2);
+          let ok, out = m5_run_lines checker dir "polbad" opb2 corrupted in
+          check
+            "M5 BREAK: a `pol` that derives something sound but not contradictory is \
+             REFUSED by the conclusion -- BOUNDS checks the id it cites"
+            (not ok);
+          check "M5 BREAK: ... at full strength, naming the citation"
+            (m5_says out "is not contradicting, as specified by the hint."));
+      List.iter
+        (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ())
+        (Array.to_list (Sys.readdir dir));
+      try Sys.rmdir dir with _ -> ()
+
+
 let () =
   print_endline "";
   List.iter run_model models;
   test_proof_comments_noop ();
   test_m5_branch_and_bound ();
+  test_m5_derivation_is_load_bearing ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
