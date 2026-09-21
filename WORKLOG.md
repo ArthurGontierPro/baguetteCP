@@ -35,6 +35,26 @@ demonstrates what it buys or looks like expensive ceremony. Decided before, M4-T
 evidence; decided after, it reads as a verdict already reached. **That is a question for the
 project's owner, and it is with them.**
 
+**Added to wave twenty-one: M2-T10 (agent-oracle), dispatched alongside.**
+
+**agent-oracle holds** `lib/core/{search,engine,debug}.ml`, `test/unit/dune`, a new
+`test/unit/test_consistency.ml`, and `test/unit/test_engine.ml`. M2-T10 is the per-node
+consistency harness: **nothing verifies the `consistency` tag that SPEC §2.2 makes
+normative**, and today's oracle checks soundness only.
+
+**It is dispatched now because the timing is unusually good**: `reif.ml`, `reif_lin_le.ml` and
+`reif_lin_eq.ml` landed yesterday, and `int_times`/`int_div`/`int_abs` plus `all_different` are
+next — six new declared consistency levels with nothing checking any of them.
+
+It reads `lib/core/prop/**` (agent-arith's) and must **edit none of it**. If it finds a
+propagator weaker than its declared level, that is a **finding to report, not to fix** — and
+weakening the test to match is forbidden.
+
+**M4-T1 goes out as wave twenty-two** the moment agent-arith releases `lib/core/prop/` and
+`lib/core/dune`. Nothing else blocks it: **D-0048 never did, and that claim is struck** — the
+dependency ran backwards, since M4-T1 is the evidence that would inform D-0048 rather than
+something waiting on it.
+
 **Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `dune-project`,
 `scripts/**`, `bench/**` and all merging, as standing.
 
