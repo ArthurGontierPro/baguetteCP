@@ -29,5 +29,6 @@
   test_ladder
   test_retention
   test_clause
-  test_pb)
+  test_pb
+  test_consistency)
  (libraries baguette_core baguette_proof baguette_flatzinc))
