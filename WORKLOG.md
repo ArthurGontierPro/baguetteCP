@@ -10,6 +10,38 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
+**Wave twenty-four is running: M4-T7 (agent-defid) and M4-T3 (agent-element).**
+
+**agent-defid holds** `lib/core/{explanation,justify}.ml`, `lib/core/prop/alldiff.ml`, and
+`test/unit/{test_justify,test_prop,test_trace}.ml`. M4-T7 closes the gap M4-T1 made concrete:
+`Justify.defining_lit` exists and has **no caller**, because nothing in an `Explanation.t`
+*value* can ask for one. **This is the row where `explanation.ml`'s no-new-constructor rule is
+most likely to be genuinely spent** — D-0044's table has held eight times, and if this breaks it,
+the argument is the deliverable as much as the code.
+
+**agent-element holds** `lib/core/prop/element.ml` (new), `lib/core/dune`, `lib/flatzinc/**`,
+`test/models/**`, `test/expected/**` and `test/unit/{test_compile,test_flatzinc,test_endtoend}.ml`.
+M4-T3 is `array_int_element`, **unblocked by M4-T0**: D-0058 settled that a 1-based index is
+`View.shift (View.of_var i) (-1)` and prunes the index directly, with **no channelling step at
+which to lose value consistency** — which is the failure GCS hit and M4-T0's row warns about.
+
+**They meet only at `lib/core/dune`**, which is agent-element's (it adds a module; agent-defid
+adds none). `lib/core/view.ml` is **read-only to both** — it landed in wave twenty-one and
+neither row should be changing it.
+
+**A standing note for both**: `test/models/width_sat_depth.fzn`'s header comment is stale
+(43 ms against ~160 ms today, D-0062) and `test/models/**` is agent-element's this wave. If it is
+convenient, fix the comment rather than delete it — a figure with a date on it is how the
+regression was caught at all.
+
+**Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `scripts/**`, `bench/**`,
+`lib/proof/**`, `lib/core/{search,engine,store,domain,var,view}.ml` and all merging.
+
+Wave twenty-three (M5-T1+T2, M6-T6) is merged, released and pushed. **M5 is open and every
+milestone M0–M5 now has its core rows done.** Baseline: **2608 ok / 0 FAIL, 280 matrix,
+44 mutation, 78/78 models**.
+
+
 **Wave twenty-three is running: M5-T1+M5-T2 (agent-bb) and M6-T6 (agent-bisect).**
 
 **agent-bb holds** `lib/core/{search,engine}.ml`, `lib/proof/{writer,encoding}.ml`,
