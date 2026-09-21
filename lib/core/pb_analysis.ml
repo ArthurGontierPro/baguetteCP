@@ -559,7 +559,22 @@ let cited_ids (e : Explanation.t) : int list =
         go b
     | Explanation.Deferred _ -> go (Explanation.force e)
     | Explanation.Decision _ | Explanation.Clause _ | Explanation.Linear _ -> ()
-  and summand = function Explanation.Term (_, e) -> go e | Explanation.Weaken _ -> () in
+  and summand = function
+    | Explanation.Term (_, e) -> go e
+    | Explanation.Weaken _ -> ()
+    (* M4-T7. A [Defining] cites the id of the line establishing a literal, resolved from
+       [Justify]'s claim index at emit time -- which is exactly the trace-line citation
+       the I-S4 discharge above says this module never makes, and which this function
+       could not report even if it did. Nothing here builds one; if that changes, the
+       discharge has to be rewritten before this case can. *)
+    | Explanation.Defining (_, l) ->
+        invalid_arg
+          (Printf.sprintf
+             "Pb_analysis.cited_ids: a Defining summand (%s) cites a line resolved at \
+              emit time, not a model row. See the I-S4 discharge in this module's \
+              header."
+             (Lit.to_string l))
+  in
   go e;
   !acc
 
