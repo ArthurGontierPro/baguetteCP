@@ -1104,17 +1104,44 @@ let wipe_after_nogood ctx ~lvl ~nogood =
 
    Either way the honest close is the one D-0018 already uses everywhere else: write the
    trace, then state the contradiction as a [rup] the checker verifies for itself. *)
-let rec rests_on_a_clause (e : Explanation.t) =
-  match Explanation.force e with
-  | Explanation.Clause _ -> true
-  | Explanation.Decision _ | Explanation.Model_row _ | Explanation.Linear _ -> false
-  | Explanation.Cut (a, b, _, _) -> rests_on_a_clause a || rests_on_a_clause b
-  | Explanation.Combine (summands, _) ->
-      List.exists
-        (function
-          | Explanation.Term (_, e) -> rests_on_a_clause e | Explanation.Weaken _ -> false)
-        summands
-  | Explanation.Deferred _ -> false (* [force] returns a non-deferred head *)
+let rests_on_a_clause (e : Explanation.t) =
+  let rec go ~cited (e : Explanation.t) =
+    match Explanation.force e with
+    | Explanation.Clause _ -> true
+    | Explanation.Decision _ | Explanation.Model_row _ | Explanation.Linear _ -> false
+    | Explanation.Cut (a, b, _, _) -> go ~cited:true a || go ~cited:true b
+    | Explanation.Combine (summands, _) ->
+        List.exists
+          (function
+            | Explanation.Term (_, e) -> go ~cited:true e
+            | Explanation.Weaken _ -> false
+            (* M4-T7 / D-0009, and [cited] exists for this case alone.
+
+               A [Defining] cancels a bound literal out of THE ROW ITS OWN [Combine] IS
+               BUILDING, citing a UNIT line ([Justify.defining_lit], which states the
+               literal outright if nothing has). At the top level that row is the one this
+               conflict claims is contradictory, the cancellation is exact -- the term goes
+               and the degree stays -- and the [pol] really does close, which is the whole
+               difference from a [Clause] summand: a clause may be any width and its
+               cancellation is not.
+
+               Beneath a [Term] it is a different row: one ANOTHER propagator instance
+               built, folded in here at this combine's own coefficient. A Hall row is a
+               counting argument over the direct encoding, not the per-variable
+               declared-range chain [Linear]'s division needs (D-0010,
+               lib/core/prop/linear.ml's header), so the citing combine is a sound [pol]
+               that does not close and D-0022's route is the right one --
+               test/models/alldiff_hall_trace_unsat.fzn is exactly that conflict. This is
+               the same top-level-only boundary, drawn for the same reason, as
+               [Explanation.top_weaken_owners]: nothing in the tree tells "my own
+               sub-derivation" from "someone else's cited one", so the question is only
+               well posed where the derivation is its own. Erring [true] is erring safe --
+               it costs the citation, never the refutation. *)
+            | Explanation.Defining _ -> cited)
+          summands
+    | Explanation.Deferred _ -> false (* [force] returns a non-deferred head *)
+  in
+  go ~cited:false e
 
 (* A root conflict whose derivation rests on a clause, closed the D-0018 way.
 
