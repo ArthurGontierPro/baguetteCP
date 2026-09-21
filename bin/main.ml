@@ -636,6 +636,34 @@ let report_stats (st : Search.stats) (outcome : Search.outcome) =
     "...learned by resolving against model row PLUS a ladder chain (M2-L11); 0 = M2-L6";
   Printf.eprintf "stats: %-10s %10d rungs  %s\n" "pb-rungs" st.Search.n_pb_rungs
     "order-encoding ladder rows those analyses cited, summed (D-0028)";
+  (* M2-L15. The backjump's own level set, against the one the learned PB row names.
+     REPORTED AND NOT ACTED ON: lib/core/search.ml's [pb_level_verdict] has the argument,
+     and the short form is that the nogood is a clause over DECISIONS, so only the
+     decision closure answers the question the filter asks. [lvl-narrow] is the dangerous
+     arm -- the PB set is a strict subset and would license a jump the closure does not --
+     and every count in it is a conflict at which [Search.backjump_on_pb] emits a clause
+     veripb refuses. [lvl-assert] is the SAT solver's backjump level looking deeper than
+     the closure's deepest decision, i.e. exactly the temptation Le Berre et al.
+     (arXiv 2107.13085) warn carries no guarantee over PB. *)
+  Printf.eprintf "stats: %-10s %10d confl  %s\n" "lvl-cmp" st.Search.n_level_compared
+    "conflicts where BOTH a decision closure and a PB row existed to compare (M2-L15)";
+  Printf.eprintf "stats: %-10s %10d confl  %s\n" "lvl-same" st.Search.n_level_same
+    "...at which the two level sets are EQUAL";
+  Printf.eprintf "stats: %-10s %10d confl  %s\n" "lvl-narrow" st.Search.n_level_narrower
+    "...at which the PB row's set is a STRICT SUBSET -- it would jump too high. UNSOUND";
+  Printf.eprintf "stats: %-10s %10d confl  %s\n" "lvl-wide" st.Search.n_level_wider
+    "...at which the closure's is the strict subset -- the row names levels it does not \
+     rest on";
+  Printf.eprintf "stats: %-10s %10d confl  %s\n" "lvl-incomp"
+    st.Search.n_level_incomparable "...at which neither set contains the other";
+  Printf.eprintf "stats: %-10s %10d confl  %s\n" "lvl-empty" st.Search.n_level_pb_empty
+    "...of those, where the PB row names NO level -- the empty contradiction. WORST CASE";
+  Printf.eprintf "stats: %-10s %10d confl  %s\n" "lvl-assert"
+    st.Search.n_level_assert_deeper
+    "...at which the PB row asserts BELOW EVERY decision the conflict rests on (M2-L15)";
+  if Search.stats_level_diffs st <> [] then
+    Printf.eprintf "stats: %-10s %10s        first disagreement: %s\n" "lvl-why" ""
+      (List.hd (Search.stats_level_diffs st));
   if Search.stats_i_s4_broken st <> [] then
     Printf.eprintf "stats: I-S4 VIOLATED %d time(s); first: %s\n"
       (List.length (Search.stats_i_s4_broken st))

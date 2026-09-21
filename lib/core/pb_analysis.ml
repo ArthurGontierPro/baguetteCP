@@ -391,6 +391,46 @@ let asserts_at v lvl =
          v.c_level_of tm.Learned.lit > lvl && tm.Learned.coeff > s)
        (Learned.terms v.c_row)
 
+(* ------------------------------------------------- M2-L15: the levels the ROW names
+
+   Two quantities, and the whole of M2-L15 is that neither is a dependency set. They are
+   computed here because this is where the frozen [view] is, and they are carried on [t]
+   as DATA for lib/core/search.ml to compare against the decision closure's. Nothing in
+   this module acts on them.
+
+   [row_levels] is the set of decision levels at which this row's literals became
+   falsified -- the PB analogue of [Analysis.cited_levels], level 0 dropped for the same
+   reason (a literal falsified at its declared bound is not a decision).
+
+   [asserting_level] is the PB analogue of [Analysis.backjump_level]: the DEEPEST level
+   the row still says something at, i.e. the smallest [lvl] with [asserts_at v lvl]. In a
+   SAT solver this number IS the backjump level. Here it is a number and nothing more,
+   and the reason is exactly Le Berre et al. (arXiv 2107.13085): over PB there is no
+   theorem taking "the row still propagates at [lvl]" to "the conflict does not rest on
+   the decisions between [lvl] and the conflict level". [assertive_slack] already refuses
+   to count literals for that reason; this refuses to backjump for it. *)
+let row_levels v =
+  List.rev
+    (List.sort_uniq Int.compare
+       (List.filter_map
+          (fun (tm : Learned.term) ->
+            let l = v.c_level_of tm.Learned.lit in
+            if l > 0 then Some l else None)
+          (Learned.terms v.c_row)))
+
+(* Scans UP from 0 and takes the first level that asserts, so the answer is the deepest
+   jump the row itself would license. [c_conflict_level] is returned when no lower level
+   does -- "this row licenses no jump at all", which is a real outcome and not a failure:
+   [assertive_slack] guarantees [conflict_level - 1] asserts, but [first_resolution]
+   guarantees nothing, and a row learned under it can land here. *)
+let asserting_level v =
+  let rec scan lvl =
+    if lvl >= v.c_conflict_level then v.c_conflict_level
+    else if asserts_at v lvl then lvl
+    else scan (lvl + 1)
+  in
+  scan 0
+
 (* THE criterion (docs/ROADMAP.md M2-L6 test (a2)). Stop as soon as the row would still
    say something after the conflict level is undone -- that is, as soon as it conflicts or
    propagates at [conflict_level - 1].
@@ -488,6 +528,15 @@ type t = {
       (** M2-L11: ladder rows cited across all eliminations, i.e. how much of the reason
           came from the order encoding rather than from the model row. 0 means this
           analysis is exactly the one M2-L6 would have produced. *)
+  levels : int list;
+      (** M2-L15: the decision levels this row's literals are falsified at, DESCENDING,
+          level 0 dropped -- the same shape and ordering as [Analysis.decision_levels] so
+          that the two can be compared without either side reordering. NOT A DEPENDENCY
+          SET. See [row_levels] above and lib/core/search.ml's [pb_level_verdict]. *)
+  asserting_level : int;
+      (** M2-L15: the deepest level this row still asserts at. The SAT solver's backjump
+          level, computed and deliberately not used. See [asserting_level] above. *)
+  conflict_level : int;  (** the level the conflict was found at, for the comparison *)
 }
 
 type result = Learned_row of t | Fallback of fallback
@@ -679,6 +728,7 @@ let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row optio
       if criterion.stop (view row steps) then
         if steps = 0 then raise (Give_up Nothing_to_learn)
         else
+          let v = view row steps in
           Learned_row
             {
               row;
@@ -690,6 +740,11 @@ let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row optio
               antecedents;
               antecedent_rows = rows;
               ladder_rungs = lifts;
+              (* M2-L15, from the FROZEN view and at the moment the criterion stopped --
+                 not recomputed later against a store that has moved (I-X6). *)
+              levels = row_levels v;
+              asserting_level = asserting_level v;
+              conflict_level;
             }
       else if steps >= max_steps then raise (Give_up (Diverged steps))
       else
@@ -753,9 +808,45 @@ let to_string (t : t) =
       builds a lib/core/prop/pb.ml slack propagator over the order literals the row
       already names, which always exists, and [Search.register_learned_pb] registers it
       with the retention citation M2-L4's policy needs.
-   3. BACKJUMPING ON THE PB ROW. This row deliberately does not: the backjump still rests
-      on lib/core/learn.ml's decision closure, because the levels a derived row names are
-      not a dependency set any more than a 1UIP cut's are, and M2-L3 has the argument
-      written out. **M2-L13 made the premise of the last sentence true** -- a PB row DOES
-      propagate at runtime now -- so "that would change the calculation" is no longer
-      hypothetical and is the open question this note hands on. *)
+   3. BACKJUMPING ON THE PB ROW. **ANSWERED, M2-L15, and the answer is that the decision
+      closure is RIGHT and not merely safe.** This note used to hand the question on,
+      because M2-L13 made a PB row propagate and "that would change the calculation" had
+      stopped being hypothetical. It did change the calculation -- just not on this side
+      of it. See D-0056 and lib/core/search.ml's [pb_level_verdict]; the short form is
+      three sentences.
+
+      The quantity this module can offer is [levels] and [asserting_level] above, and
+      neither is in the currency the backjump is stated in. lib/core/search.ml's backjump
+      is not "undo to level B and resume": it is a FILTER on the branch nogood, and the
+      nogood is a clause over DECISION literals that the checker RUP-verifies. Dropping a
+      level from it is claiming the conflict does not rest on that decision, which is a
+      claim about the decision closure and about nothing else. A PB row's [levels] answers
+      a different question -- at which levels its literals became falsified -- and
+      [asserting_level] answers a third, which is the one Le Berre et al. warn carries no
+      backjump guarantee at all.
+
+      What M2-L13 DID change is the closure, and it changed it in the right direction
+      without anyone writing code: a learned PB instance's pruning is a trail entry with
+      reason facts, so [Analysis.analyse ~scope:Everywhere] resolves straight through it
+      and the closure it returns already accounts for the row's antecedents. The
+      calculation was redone by the walk, not by this module.
+
+      MEASURED, not argued (M2-L15 test (a)), over the 44 models on 2026-09-21: 103
+      conflicts reach both analyses, the two level sets AGREE on 26 and differ on 77, and
+      on **76 of those 77 the PB set is a STRICT SUBSET of the closure's** -- it names
+      fewer decisions, so filtering the branch nogood by it drops literals the conflict
+      genuinely rests on and licenses a jump that is not justified. Three of the 76 are
+      the empty contradiction, whose [levels] is [[]]: filtering by it leaves the EMPTY
+      CLAUSE. Exactly one conflict goes the other way (width_sat_depth: the closure names
+      one level, {26}, and the row names all 26 -- harmless as a backjump, and the
+      clearest single picture of the currency mismatch there is).
+
+      And the CDCL instinct has a number too: on 76 of the 103, [asserting_level] is below
+      EVERY level the closure names, i.e. the row would resume beneath every decision the
+      conflict rests on. That is Le Berre et al.'s warning as a measurement.
+
+      [Search.backjump_on_pb] is the break that takes the narrower set. On the php scene
+      it gets a SMALLER TREE (20 nodes against 35) and still answers UNSAT -- a wrong
+      backjump looks like an improvement from everywhere except the proof -- and veripb
+      3.0.2 rejects its nogood. test/unit/test_pb.ml runs it and asserts the whole
+      sentence of the rejection. *)

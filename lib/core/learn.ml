@@ -85,6 +85,21 @@
    Nothing is skipped that a valid clause does not already refute, so there is no
    completeness obligation to discharge and no resume loop to bound.
 
+   **M2-L15 RE-ASKED THIS AND THE ANSWER STOOD, with numbers.** M2-L13 gave the learned PB
+   row a runtime propagator, which made lib/core/pb_analysis.ml's closing note's premise
+   true and its question live: with a row that propagates, is the closure still right or
+   only safe? Right, and the reason is the second bullet above generalised one step -- the
+   nogood is a clause over DECISIONS, and a PB row's levels answer a question about
+   falsification, not about dependence. Measured over the 44 models: the two sets differ on
+   77 of 103 conflicts and on 76 of those the PB set is a strict SUBSET, so the rule would
+   jump too high, not too low. [Search.backjump_on_pb] takes it and veripb rejects the
+   nogood. See lib/core/search.ml's [pb_level_verdict] and docs/DECISIONS.md D-0056.
+
+   What M2-L13 did change is [Analysis.analyse ~scope:Everywhere]'s own answer: a learned
+   PB instance's pruning is a trail entry with reason facts, so the walk resolves through
+   it and [l_closure] already accounts for the row's antecedents. The calculation was
+   redone by the walk.
+
    ---------------------------------------------------------------------------
    Semantic minimisation over order literals
    ---------------------------------------------------------------------------
