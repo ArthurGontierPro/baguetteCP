@@ -4204,3 +4204,96 @@ of which is a bug**. Tested directly, on a scene where the two readings differ.
 `reif_lin_eq.ml` declares `Value` for `int_eq_reif` / `int_ne_reif`, so **the oracle is silent
 on it by design**. If that level is conservative rather than intended, the harness buys nothing
 there — a question for whoever owns D-0057.
+
+## D-0060  `int_times` / `int_div` / `int_abs`: the case split lives in the model, not in the proof
+
+**Status**: **ACCEPTED**, implemented by M4-T4b (2026-09-21, agent-arith), `lib/core/prop/arith.ml`.
+
+### The design
+
+**For each value `v` of the case variable, the `.opb` carries ordinary linear rows guarded by
+big-M terms over Booleans defined by the M3 reification machinery.** So every instance *is* a
+`Linear` (or a `Reif_lin_le` for the guard definitions), every pruning is `Linear`'s own D-0013
+`Combine` over `Explanation.Model_row`, and it cites a row the `.opb` really contains.
+
+**No new `Explanation` constructor, and `justify.ml` unchanged.** `PROOF-FORMAT.md` §4's row for
+all three is "as `int_lin_le`". That is the point of putting the split in the model. D-0044's
+table holds again.
+
+All three declare **`Bounds`**. The six faces exist only so an instance reports `int_times` /
+`int_div` / `int_abs` rather than `int_lin_le` — the `Ne.Int_ne` device.
+
+### Exactness, as measured rather than as first claimed
+
+The propagation test compares a root fixpoint against the enumerated hull, and **it corrected
+the module header twice**:
+
+| | claim |
+|---|---|
+| `int_abs` | **exact** at the declared box and once the sign of `x` is settled. `z >= x` and `z >= -x` do **not** give `z >= 0` one row at a time |
+| `int_times` | **sound**; exact once the sign of `x` is settled — while `x` straddles, both sign families are cushioned |
+| `int_div` | **sound**; exact once `y` is fixed **and** the sign of `x` is settled. Fixing `y` alone is not enough: with `y = −2`, `x ∈ −7..7` gives `q ∈ −4..4` where the hull is `−3..3` — truncation's asymmetry |
+
+### A trap D-0033 does not warn about
+
+**`Interval.quotient_filter` is *wrong* for `int_div`, and is not called there.** It filters the
+exact relation `x·y = z`; for `x ∈ [1,1]`, `y ∈ [2,2]` it returns **empty**, while `1 div 2 = 0`
+is a solution. Asserted as a test. `Interval` is used only for the hull rows, never on the
+guarded-row path, which does no multiplication or division of bounds at all.
+
+### Division rounding, and why there is no rounding decision to get wrong
+
+Truncation toward zero, remainder taking the dividend's sign (D-0033) — and **the rows never
+divide.** `int_div` is stated as `0 <= x − vq <= |v|−1` for `x >= 0` and `−(|v|−1) <= x − vq <= 0`
+for `x <= −1`, guarded by `y = v` and the sign.
+
+**Division by zero needs no special case**: at `v = 0` the window `|v|−1` is `−1`, so the row
+reads `x <= −1` under `x >= 0` and `x >= 1` under `x <= −1`. Both signs refuted; `y = 0` is pruned
+like any other value.
+
+### Two tests that passed while broken, and were rebuilt
+
+Both are the vacuity failure this project keeps meeting, and both were caught by the session:
+
+- **The first pair of UNSAT models was hollow** — the hull rows alone refuted the declared box,
+  so one `.opb` line closed each proof and the propagator's own rows were never cited. Redesigned;
+  `test_no_single_row_refutes` now pins all three.
+- **The first `pol` control passed with the coefficient broken**, because veripb accepts any
+  `pol`. Rewritten so the broken instance *conflicts* where the honest row does not and its
+  derivation is claimed as `conclusion UNSAT` — the checker then says *"is not contradicting, as
+  specified by the hint."*
+
+The strongest lane: against the **real** `.opb` for `−7 div 2`, the truncating claim `q <= −3` is
+RUP and **accepted**, while the flooring claim `q <= −4` is **rejected** on the checker's full
+sentence. That is D-0033 tested against the artefact rather than against a comment.
+
+### A deliberate divergence from the row
+
+The row asked to anchor the family on **one `is_in_relation` shared with
+`Model.check_assignment`**. It was **not** shared: that predicate computes its product with
+`Checked`, i.e. the propagators' own arithmetic, and `model.ml`'s `Exact` note refuses exactly
+that on D-0029 grounds. The anti-drift guarantee is kept by **enumeration** instead.
+
+### The defect it found in existing code
+
+`Search.solve`'s `NFail` arm sweeps `Writer.live_ids` before its conclusion and says why — **no
+`w` retires a level-0 id** — while the `NSat` arm did not. A level-0 pruning whose D-0013
+explanation **nests** (a `Combine` citing a trail entry whose own explanation is a `Combine`)
+mints intermediate `pol` ids at level 0, and the audit refuses the run with *"constraint id(s)
+never deleted"*.
+
+Not an arithmetic defect: **the arithmetic family is simply the first thing in the tree to nest
+that deeply at level 0 on a SAT path.** Fixed by the orchestrator — unlike the refutation arm
+there is no cited contradiction to spare, since the conclusion is `Sat lits`, so every live id
+goes.
+
+The row pinned it as a check that **asserted the bug**, with instructions to **delete rather than
+re-bless** it once fixed. It went red on the fix exactly as predicted and was deleted per its own
+instruction.
+
+### Still open, and not this row's
+
+**`scripts/check_determinism.sh` does not honour `test/models/PENDING`.** It runs every `.fzn` and
+fails on a non-zero exit, so a model listed as an expected failure still turns the determinism
+gate red. That is why the reproducer above had to be a unit check rather than a model, and it
+means PENDING is **currently unusable for any model that errors**.

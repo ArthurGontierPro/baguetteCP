@@ -79,6 +79,10 @@ lib/core/       Baguette_core
                             Lit.t, reading LIVE domains and the order ladder. The
                             solving-side object of D-0054; D-0055 spends D-0044's
                             "no new propagator family" bet knowingly (M2-L13)
+    arith.ml                int_times / int_div / int_abs. The CASE SPLIT LIVES IN THE
+                            MODEL: guarded linear rows over M3-reified Booleans, so every
+                            pruning is Linear's and no Explanation constructor was needed
+                            (M4-T4b, D-0060)
     linear.ml               int_lin_le. THE REFERENCE PROPAGATOR -- copy this shape
     lin_eq.ml               int_lin_eq (two model rows, see D-0011)
     ne.ml                   int_lin_ne and int_ne (VALUE consistency)
