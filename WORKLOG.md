@@ -10,6 +10,32 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
+**Wave twenty-two is running: M4-T1 (agent-hall), ALONE.**
+
+**This row goes out solo deliberately.** Its own text says it is *"an experiment, not
+propagator number eight"* and to budget it as one; `docs/EXPLANATION-REVIEW.md` §3 calls it the
+row where the project's central claim first becomes falsifiable. Precedent: wave twelve
+dispatched M2-L3 alone for the same reason.
+
+**agent-hall holds** `lib/core/prop/**`, `lib/core/dune`, `lib/core/{explanation,justify}.ml`,
+`lib/proof/encoding.ml`, `lib/flatzinc/**`, `test/models/**`, `test/expected/**`, and
+`test/unit/{test_prop,test_justify,test_compile,test_flatzinc,test_trace,test_proof}.ml`.
+
+**`explanation.ml` is lent, not given.** Its header still forbids a new constructor without a
+decision record and **that is not suspended** — but this is the first row that might genuinely
+need one, so it holds the file and reports rather than being blocked by a boundary. `Combine`,
+`Weaken` and `Model_row` were built for exactly this; if they suffice, that is itself the
+result D-0027 anticipated.
+
+**Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `dune-project`,
+`scripts/**`, `bench/**`, `bin/main.ml`, `lib/core/{search,engine,store,domain,var,view}.ml`
+and all merging. I am doing **M6-T5** (`check_determinism.sh` ignoring `test/models/PENDING`)
+myself while this runs — `scripts/` only, no overlap.
+
+Wave twenty-one (M4-T0, M4-T4b, M2-T10) is merged, released and pushed. Baseline: **2549 ok /
+0 FAIL, 280 matrix, 44 mutation, 64/64 models**.
+
+
 **Wave twenty is COMPLETE: M2-L15 and M3-T2+M3-T4 merged, released and pushed.**
 
 **Wave twenty-one is running: M4-T0 (agent-views) and M4-T4b (agent-arith).**
