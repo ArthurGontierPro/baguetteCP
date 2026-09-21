@@ -265,6 +265,11 @@ lib/core/       Baguette_core
     clause.ml               clauses over ORDER literals (Bounds); the degree-1 face of
                             pb.ml, plus the bool_clause/array_bool_or/and/eq/not
                             family as Domain submodules (M2-L12)
+    reif.ml                 the REIFICATION DISPATCHER: author supplies enforce-hold /
+                            enforce-not-hold / entailment; framework does the collapse,
+                            the contrapositive and the polarity (M3-T4, D-0057)
+    reif_lin_le.ml          b <-> (sum a x <= c) as two big-M int_lin_le rows
+    reif_lin_eq.ml          int_eq_reif / int_ne_reif, one arg apart (D-0057)
     order_reason.ml         bound-fact chains in the order encoding (D-0010)
 
 lib/proof/      Baguette_proof
@@ -283,7 +288,7 @@ test/unit/                  21 binaries: test_core test_domain test_engine test_
   mem_guard.ml              NOT a test binary: the shared Gc-alarm heap guard every
                             suite installs (M1-T53). All 21 announce arming under
                             BAGUETTE_TEST_HEAP_CAP_ANNOUNCE=1
-test/models/                44 .fzn models   test/expected/  their expected outputs
+test/models/                57 .fzn models   test/expected/  their expected outputs
 scripts/                    checker.sh verify_proof.sh run_model_tests.sh shrink.sh
                             mutate_proof.sh check_test_widths.py check_fmt.sh
                             bootstrap.sh

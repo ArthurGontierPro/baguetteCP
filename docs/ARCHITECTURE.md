@@ -85,6 +85,9 @@ lib/core/       Baguette_core
     clause.ml               clauses over ORDER literals (Bounds); the degree-1 face of
                             pb.ml, plus the bool_clause/array_bool_or/and/eq/not family
                             as Domain submodules (M2-L12)
+    reif.ml                 the REIFICATION DISPATCHER (M3-T4, D-0057)
+    reif_lin_le.ml          b <-> (sum a x <= c) as two big-M int_lin_le rows
+    reif_lin_eq.ml          int_eq_reif / int_ne_reif, one arg apart
     order_reason.ml         bound-fact chains in the order encoding (D-0010)
 
 lib/proof/      Baguette_proof

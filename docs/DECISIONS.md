@@ -3943,3 +3943,100 @@ change is which set drives the filter.
 - **Do not reopen this by observing that the PB row "knows" which levels it depends on.** It
   knows where its literals were falsified. That is the narrower set, and narrower is unsound
   here. The 76/103 measurement is the counter-example, and `lvl-narrow` keeps it live.
+
+## D-0057  Reification: big-M `int_lin_le` rows, one dispatcher, and `int_eq_reif` without `p ∧ q`
+
+**Status**: **ACCEPTED**, implemented by M3-T2 + M3-T4 (2026-09-21, agent-reif). It closes the
+two things D-0053 left open and records a test-quality finding that is not about reification at
+all.
+
+### The dispatcher (M3-T4)
+
+`lib/core/prop/reif.ml`, 158 lines of which 45 are code. An author supplies three closures —
+**enforce-hold / enforce-not-hold / entailment** — all of type `Store.t -> Propagator.result`,
+which is the signature of `propagate` itself. So **the author's common piece is an existing
+propagator over an existing row, not new code.**
+
+The framework supplies: **the collapse** (reads the reifier once, runs at most one of the
+three); **the contrapositive** (an author writes only the forward form — case 3 is case 2's,
+case 4 is case 1's); and **the polarity** (`~positive` is the whole of `int_ne_reif`; neither
+author mentions the difference).
+
+It declares **no** consistency level and **no** `pb_row`: it has no propagation of its own, and
+an instance stands for 2 or 4 rows while `Propagator.pb_row` promises exactly one — the same
+answer `Ne` already gives. Prunings are stamped with the **dispatcher's** id, i.e. the builtin
+the model wrote.
+
+**Measured cost of a second builtin beyond the first of its kind: 21–22 lines**, none of them
+propagation and none of them justification. `int_ne_reif` against `int_eq_reif` is **one
+argument**.
+
+### The `<=` author needs no new propagation
+
+`b <-> (Σ a x <= c)` is **two ordinary `int_lin_le` rows** at the smallest big-M:
+
+```
+FWD   Σ a x + K  b <= c + K       K  = hi − c
+BWD  −Σ a x − K' b <= −c − 1      K' = c + 1 − lo
+```
+
+The five cases are two `Linear` instances over them. With `b` fixed each row *is* its side of
+the equivalence; with `b` open neither can touch a condition variable — the cushion is exactly
+the row's span — and the only term either can push is `b`.
+
+**These are literally M3-T1's rows**, and that is pinned rather than asserted:
+`test_reif_big_m_rows` compares the big-M expansion against `Encoding.reif_rows`' pair,
+normalised and canonicalised, on four shapes including mixed signs and a domain not starting at
+0 — identical, forward and backward. It also means the rows are in the form a propagator can
+**cite** (`Linear.pb_row`), which matters to the learning vertical.
+
+### `int_eq_reif` does not need `p ∧ q`, and the argument is two-sided
+
+D-0053 left this open: `b <-> (Σ = c)` seemed to need `p <-> (Σ<=c)`, `q <-> (Σ>=c)` and
+`b <-> p ∧ q`. It does not.
+
+1. **Redundant.** Four rows in the `.opb` (`Encoding.add_int_lin_eq_reif`): LE and GE guarded
+   to speak only when the reification literal is **true**, plus **A/B —
+   `expand_int_lin_ne`'s own pair over its `.opb`-only auxiliary with one extra guard term** —
+   speaking only when it is **false**. The conjunction's sole purpose was the direction
+   `(Σ = c) -> b`, and **A/B are already its contrapositive** `~b -> (Σ ≠ c)`, as PB rows.
+2. **Not reachable as stated.** `p`/`q` would have to be *propagated*, hence *store* variables,
+   and `bin/main.ml:390` (`assignment_values`) fails on any solver variable outside the model's
+   own. Adding them is a change on the far side of that bridge, not a change in `lib/`.
+
+So `p`/`q` live nowhere, and the four rows live in the **`.opb`** — which D-0053 forces for
+model-stated reification anyway, since `red` cannot give a model-declared reifier its meaning.
+
+**No new `Explanation` constructor was needed.** `Combine`/`Weaken`/`Model_row`/`Clause` cover
+both authors; `explanation.ml` untouched. D-0044's table holds again.
+
+### The finding that is not about reification: a `pol` nobody cites is decorative
+
+**The first two breaks reddened nothing** — a justification citing the wrong row, and a big-M
+one too small, both went unnoticed by the whole model suite.
+
+The cause: with the reifier forced by a `bool_clause`, `Search.rests_on_a_clause` closes the
+refutation the D-0022 way with `rup >= 1`, and **every `pol` in the file becomes decorative —
+veripb accepts a `pol` whatever it derives.** The four `<=` refutation models were rewritten to
+force their reifier with a **unit linear row**, so `conclusion UNSAT` cites a `pol` chain rooted
+at FWD/BWD and the citation is load-bearing.
+
+**This generalises.** A model whose refutation rests on a clause cannot test any `pol` the
+propagator emits. When you add a propagator and its justification, check that some model
+actually *cites* it — a green suite does not.
+
+### A real bug, found by the new branching model
+
+`test/models/reif_eq_branch_unsat.fzn` is **the first model in the suite where a reifier is
+decided by branching** rather than settled at level 0. The eq author's all-fixed conflict
+recorded only the reifier's fact — copying `Ne`'s `Reason.none` **without `Ne`'s licence for
+it** — so the trace line came out as `rup ~b_ge_1 >= 1`: true of the model, and not
+reverse-unit-propagable from it. veripb rejected. The reason now carries the fixed-value facts.
+
+### What is still not wired
+
+**Nothing new reaches search, and nothing needed to.** Every row here goes through the `.opb`
+door. `Encoding.define_reif` and `ensure_direct` still have **no production caller**, and a
+reifier registry would need an `Encoding.t` and a `Writer.t` together at pruning time
+(`justify.ml:146`). That gap is unchanged, and now belongs to whoever wants a propagator to name
+a condition **the model never wrote**.
