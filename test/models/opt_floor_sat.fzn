@@ -1,0 +1,9 @@
+% M5-T1 case (2): the optimum sits on the objective variable's DECLARED floor, so the
+% improving constraint "y <= -1" is already unsatisfiable as the checker writes it and
+% is itself the constraint `conclusion BOUNDS` cites. No search refutes anything here;
+% the first solution is the last. There is no order literal y_ge_0 to make a global
+% out of, which is the mechanical reason this case is separate rather than a shortcut.
+var 0..4: x :: output_var;
+var 0..4: y :: output_var;
+constraint int_lin_le([1,1],[x,y],6);
+solve minimize y;

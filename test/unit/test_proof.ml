@@ -2677,6 +2677,240 @@ let test_view_veripb () =
       |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
       try Sys.rmdir dir with _ -> ())
 
+(* ------------------------------------------------------------------ *)
+(* M5-T1/M5-T2: optimisation                                           *)
+(*                                                                     *)
+(* Every claim M5 rests on about `soli`, `obju` and `conclusion        *)
+(* BOUNDS` is made here by running the checker, which is this file's   *)
+(* charter. Two of them are the ones that decide whether the milestone *)
+(* proves anything at all:                                             *)
+(*                                                                     *)
+(*   - `conclusion BOUNDS <lo>` is CHECKED. The project has been bitten *)
+(*     three times by a step the checker accepts whatever it derives    *)
+(* (a `pol` under a clause-borne refutation), so "veripb said       *)
+   (*     VERIFIED BOUNDS" is worth nothing until the claim has been shown *)
+(*     to redden when the derivation is removed and when it is one unit *)
+(*     short. Both breaks are performed below.                         *)
+(*   - a `soli` constraint is NOT ours to delete, and the deletion is   *)
+(*     refused rather than merely inadvisable.                         *)
+(* ------------------------------------------------------------------ *)
+
+(* The scene, built through the project's own [Encoding] rather than typed out as OPB
+   text, so that a change to the order encoding moves this test with it.
+
+     x, y in 0..3,  x <= y,  x >= 2,  minimise y
+
+   The optimum is y = 2, and the point of the scene is that NO SINGLE ROW implies it:
+   the x <= y row alone says nothing about y's magnitude and the x >= 2 row mentions no
+   y at all. Their sum does -- the x literals cancel against the ladder-free `~x_ge_k`
+   of the first row and leave `y_ge_1 + y_ge_2 + y_ge_3 >= 2`, which is exactly the
+   objective. So a lower bound of 2 has to be DERIVED here, and [break_undeduced] below
+   is meaningful rather than vacuous. *)
+let m5_scene dir =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:0 ~hi:3;
+  Encoding.declare_int e "y" ~lo:0 ~hi:3;
+  let le = Encoding.add_int_lin_le e [ (1, "x"); (-1, "y") ] 0 in
+  let lo = Encoding.add_int_lin_le e [ (-1, "x") ] (-2) in
+  let terms, constant = Encoding.linear_terms_int_lin_le e [ (1, "y") ] in
+  Encoding.set_objective e (Opb.objective ~constant terms);
+  let opb = Filename.concat dir "m5.opb" in
+  let oc = open_out opb in
+  Encoding.write_opb e oc;
+  close_out oc;
+  let sol =
+    String.concat " "
+      (List.map Lit.to_string (Encoding.assignment_lits e [ ("x", 2); ("y", 2) ]))
+  in
+  (opb, Opb.n_checker_constraints (Encoding.constraints e), sol, le, lo)
+
+let test_m5_bounds_and_soli () =
+  match veripb_path () with
+  | None ->
+      incr failures;
+      print_endline
+        "FAIL M5: veripb not found -- `conclusion BOUNDS` was NOT checked, and neither \
+         were its breaks. A missing checker is a failure, never a skip."
+  | Some checker -> (
+      let dir = Filename.temp_file "baguette_m5" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let opb, f_count, sol, le, lo = m5_scene dir in
+      (* The lower-bound derivation: the two model rows added together. [2 d] on top of
+         it divides by two and rounds up, giving `y_ge_* >= 1` -- sound, and exactly one
+         unit short of the claim, which is the M1-T44 shape. *)
+      let lb = Printf.sprintf "@lb pol @c%d @c%d + ;" le lo in
+      let weak = Printf.sprintf "@weak pol @c%d @c%d + 2 d ;" le lo in
+      let run name body conclusion ~flags =
+        let pbp = Filename.concat dir (name ^ ".pbp") in
+        let oc = open_out pbp in
+        Printf.fprintf oc
+          "pseudo-Boolean proof version 3.0\n\
+           f %d ;\n\
+           @s1 soli %s ;\n\
+           %s\n\
+           output NONE ;\n\
+           %s\n\
+           end pseudo-Boolean proof ;\n"
+          f_count sol body conclusion;
+        close_out oc;
+        let log = Filename.concat dir (name ^ ".log") in
+        let rc =
+          Sys.command
+            (Printf.sprintf "%s %s %s %s > %s 2>&1" (Filename.quote checker) flags
+               (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
+        in
+        (rc = 0, read_whole log)
+      in
+      let says hay needle =
+        let hl = String.length hay and nl = String.length needle in
+        let rec go i = i + nl <= hl && (String.sub hay i nl = needle || go (i + 1)) in
+        go 0
+      in
+      (* THE CONTROL. Without it every rejection below could be a rejection of the
+         scene rather than of the break -- M2-T14 found four lanes green because a
+         malformed artefact was refused on the grammar. *)
+      let ok, out = run "control" lb "conclusion BOUNDS 2 : @lb 2 ;" ~flags:"" in
+      check "M5 control: the honest proof verifies, BOUNDS 2 <= obj <= 2" ok;
+      check "M5 control: ... and the checker says so in its own words"
+        (says out "VERIFIED BOUNDS 2 <= obj <= 2");
+      (* BREAK 1: the lower bound is claimed with nothing on the page that implies it.
+         If this were accepted, every `conclusion BOUNDS` this solver emits would be
+         decorative and M5-T2 would prove nothing. *)
+      let ok, out = run "undeduced" "" "conclusion BOUNDS 2 2 ;" ~flags:"" in
+      check "M5 BREAK: an underived lower bound is REFUSED" (not ok);
+      check "M5 BREAK: ... on the judgement, at full strength"
+        (says out
+           "Constraint not syntactically implied by any constraint in the database.");
+      (* BREAK 2: a derivation that is sound but one unit short, cited for the stronger
+         claim. This is the break that distinguishes "the id is read" from "an id is
+         present": break 1 alone would still pass if the checker merely searched the
+         database and found something. *)
+      let ok, out = run "one_short" weak "conclusion BOUNDS 2 : @weak 2 ;" ~flags:"" in
+      check "M5 BREAK: a lower bound one unit stronger than the cited id is REFUSED"
+        (not ok);
+      check "M5 BREAK: ... naming the hint, at full strength"
+        (says out
+           "Expected constraint is not syntactically implied by the constraint at the \
+            hint.");
+      (* BREAK 3: claiming a better optimum than was ever exhibited. *)
+      let ok, out = run "too_good" lb "conclusion BOUNDS 3 : @lb 3 ;" ~flags:"" in
+      check "M5 BREAK: a lower bound above the best logged solution is REFUSED" (not ok);
+      check "M5 BREAK: ... at full strength"
+        (says out
+           "The lower bound claimed for `conclusion BOUNDS` is larger than the best \
+            logged objective value.");
+      (* BREAK 4: deleting the `soli` constraint, which is what I-X2's sweep would do if
+         [Writer.improving]'s id were treated like any other. By default it is a WARNING
+         and the proof still verifies -- which is the dangerous part, and why this lane
+         asserts the warning text rather than the exit status. Under
+         --force-checked-deletion it is a hard failure. *)
+      let body = lb ^ "\ndel id @s1 ;" in
+      let ok, out = run "del_soli" body "conclusion BOUNDS 2 : @lb 2 ;" ~flags:"" in
+      check
+        "M5: deleting the soli constraint still 'verifies' -- an acceptance that is not \
+         evidence"
+        ok;
+      check "M5 BREAK: ... but the checker says the guarantee was weakened"
+        (says out "Switching from stronger to weaker guarantee using unchecked deletion");
+      let ok, out = run "del_soli_c" body "conclusion BOUNDS 2 : @lb 2 ;" ~flags:"-c" in
+      check "M5 BREAK: and under --force-checked-deletion it is REFUSED" (not ok);
+      check "M5 BREAK: ... at full strength"
+        (says out
+           "Checked deletion failed and `--force-checked-deletion` option used. \
+            Proofgoal with ID #1 could not be autoproven.");
+      (* The obju trap, docs/PROOF-FORMAT.md line 136, RE-MEASURED rather than quoted.
+         It is filed against M5 and M5-T1 does not hit it, because branch and bound
+         tightens a BOUND on a fixed objective and never updates the objective itself.
+         Measured here so that "we avoided it" is a statement about a live fact.
+
+         And the fact is narrower than the note says: the goal is autoproven when an
+         improving constraint is already on the page ("proofgoal #1 is RUP"), so the
+         trap fires on `obju` BEFORE any `soli` and not unconditionally. That is the
+         shape the note filed, and it is the shape asserted here. *)
+      let pbp = Filename.concat dir "obju.pbp" in
+      let oc = open_out pbp in
+      Printf.fprintf oc
+        "pseudo-Boolean proof version 3.0\n\
+         f %d ;\n\
+         obju new +1 y_ge_1 +1 y_ge_2 ;\n\
+         @s1 soli %s ;\n\
+         output NONE ;\n\
+         conclusion BOUNDS 2 2 ;\n\
+         end pseudo-Boolean proof ;\n"
+        f_count sol;
+      close_out oc;
+      let log = Filename.concat dir "obju.log" in
+      let rc =
+        Sys.command
+          (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote checker)
+             (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
+      in
+      let out = read_whole log in
+      check "M5: `obju` on a fresh objective is REFUSED (the trap M5 was warned about)"
+        (rc <> 0);
+      check "M5: ... with the wording docs/PROOF-FORMAT.md filed, re-measured"
+        (says out
+           "Proofgoal #1 could not be autoproven. Please add an explicit subproof for \
+            proofgoal #1.");
+      List.iter
+        (fun f -> try Sys.remove f with _ -> ())
+        (List.map (Filename.concat dir) (Array.to_list (Sys.readdir dir)));
+      try Sys.rmdir dir with _ -> ())
+
+(* Nothing in lib/ or bin/ emits `obju`. The trap above is avoided by construction, and
+   this is what keeps that true: [Writer.objective_update] is kept because it carries the
+   measurement and is what a future objective-reformulation row would reach for, but a
+   caller appearing in the solver is the event this check exists to make visible. Same
+   shape as test_mutation.ml's guard on [Writer.create_mutated]. *)
+let test_m5_no_obju_caller () =
+  (* dune runs a test with its cwd inside the build directory, which holds no lib/ or
+     bin/ to grep, so the SOURCE tree has to be located first -- the same problem
+     test_mutation.ml solves for scripts/mutate_proof.sh, solved the same way and with
+     the same override. Getting this wrong is not a false negative, it is a silently
+     inert check, so the resolution is asserted below before the grep is believed. *)
+  let rec ancestors dir =
+    let parent = Filename.dirname dir in
+    if parent = dir then [ dir ] else dir :: ancestors parent
+  in
+  let root =
+    let candidates =
+      (match Sys.getenv_opt "BAGUETTE_ROOT" with Some r -> [ r ] | None -> [])
+      @ ancestors (Sys.getcwd ())
+      @ ancestors (Filename.dirname Sys.executable_name)
+    in
+    List.find_opt
+      (fun d -> Sys.file_exists (Filename.concat d "lib/proof/writer.ml"))
+      candidates
+  in
+  match root with
+  | None ->
+      incr failures;
+      print_endline
+        "FAIL M5: the source tree was not found from the cwd, the executable's path or \
+         $BAGUETTE_ROOT, so the `obju` caller check did not run. This is not a pass."
+  | Some root ->
+      let grep pat =
+        let tmp = Filename.temp_file "baguette_obju" "" in
+        ignore
+          (Sys.command
+             (Printf.sprintf
+                "grep -rn 'objective_update' %s/lib %s/bin 2>/dev/null %s > %s"
+                (Filename.quote root) (Filename.quote root) pat (Filename.quote tmp)));
+        let s = read_whole tmp in
+        (try Sys.remove tmp with _ -> ());
+        s
+      in
+      (* The definition is certainly there, so an empty result means the grep did not
+         look rather than that it looked and found nothing. *)
+      check
+        "M5: the obju-caller search actually ran (it found the definition it looks past)"
+        (String.trim (grep "") <> "");
+      check
+        "M5: nothing under lib/ or bin/ calls Writer.objective_update, so no run can \
+         emit `obju`"
+        (String.trim (grep "| grep -v 'lib/proof/writer.ml'") = "")
+
 let () =
   report_checker ();
   test_lits ();
@@ -2712,6 +2946,8 @@ let () =
   test_view_lits ();
   test_view_encoding ();
   test_view_veripb ();
+  test_m5_bounds_and_soli ();
+  test_m5_no_obju_caller ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

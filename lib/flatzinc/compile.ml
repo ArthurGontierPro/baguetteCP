@@ -172,12 +172,21 @@ module Reif_lin_eq = Baguette_core.Reif_lin_eq
 module Arith = Baguette_core.Arith
 module Engine = Baguette_core.Engine
 module Encoding = Baguette_proof.Encoding
+module Opb = Baguette_proof.Opb
+module Search = Baguette_core.Search
 module Lit = Baguette_proof.Lit
 
 type t = {
   store : Baguette_core.Store.t;
   engine : Baguette_core.Engine.t;
   encoding : Baguette_proof.Encoding.t;
+  objective : Baguette_core.Search.objective option;
+      (* M5-T1. [None] is `solve satisfy;` and every pre-M5 model. [Some] is what
+         [bin/main.ml] hands to [Search.optimise], resolved HERE rather than there
+         because the declared bounds the branch-and-bound floor case turns on
+         (lib/core/search.ml, [type bnb] note (2)) are this module's -- they are the
+         bounds the .opb objective line was written against, not whatever the store's
+         have narrowed to by the time anyone asks. *)
 }
 
 (* ------------------------------------------------------------------- term handling *)
@@ -257,12 +266,23 @@ let reject_set_domain (v : Model.var) values =
     (Model.string_of_domain v.Model.v_dom)
     lo hi
 
-let reject_objective pos what operand_name =
+(* M5-T1 narrowed this from "every objective" to "an objective that is not a variable".
+
+   `solve minimize 3;` is legal FlatZinc and it is refused rather than answered, because
+   the artefact it would need cannot be built: `conclusion BOUNDS` requires the .opb to
+   carry a `min:` line (docs/SPEC.md section 4.3 -- "without one the checker raises
+   InvalidProof"), and a constant objective has no order literals to write one out of.
+   Answering it as a satisfaction problem and printing `==========` would be claiming an
+   optimality the proof does not contain, which is the one thing this project does not
+   do. A model that really wants it can introduce `var 3..3: obj` and minimise that. *)
+let reject_constant_objective pos what value =
   Error.failf pos
-    "unsupported solve goal `%s %s`: baguette searches for a solution only. Optimisation \
-     -- the objective line in the .opb and `conclusion BOUNDS` in the proof \
-     (docs/SPEC.md section 4.3) -- is roadmap M5. Use `solve satisfy;`."
-    what operand_name
+    "unsupported solve goal `%s %d`: the objective must be a VARIABLE. `conclusion \
+     BOUNDS` requires the .opb to carry a `min:` objective line (docs/SPEC.md section \
+     4.3), and that line is the objective variable's order encoding -- a constant has \
+     none, so there is nothing to write and nothing to prove optimal. Introduce `var \
+     %d..%d: obj;` and write `solve %s obj;`."
+    what value value value what
 
 let reject_search pos ~annotation =
   Error.failf pos
@@ -545,12 +565,20 @@ let pack_abs_guard (p : Reif_lin_le.t) : pending =
   pack_reif_as (module Arith.Abs_guard : Propagator.S with type t = Reif_lin_le.t) p
 
 let compile (m : Model.t) : t =
-  (match m.Model.objective with
-  | Model.Satisfy -> ()
-  | Model.Minimize op ->
-      reject_objective (operand_pos m op) "minimize" (Model.string_of_operand m op)
-  | Model.Maximize op ->
-      reject_objective (operand_pos m op) "maximize" (Model.string_of_operand m op));
+  (* M5-T1. Resolved to a model variable index and a direction, or refused. The
+     ENCODING half of it happens further down, once the variable is declared: an
+     objective line is the order encoding of that variable and cannot be written before
+     it exists. *)
+  let objective_var =
+    match m.Model.objective with
+    | Model.Satisfy -> None
+    | Model.Minimize (Model.Var i) -> Some (i, Baguette_core.Search.Minimise)
+    | Model.Maximize (Model.Var i) -> Some (i, Baguette_core.Search.Maximise)
+    | Model.Minimize (Model.Const n) ->
+        reject_constant_objective (operand_pos m (Model.Const n)) "minimize" n
+    | Model.Maximize (Model.Const n) ->
+        reject_constant_objective (operand_pos m (Model.Const n)) "maximize" n
+  in
   List.iter (check_search m) m.Model.search;
   check_name_collisions m;
 
@@ -602,6 +630,40 @@ let compile (m : Model.t) : t =
       | Model.Dbool -> Encoding.declare_bool encoding v.Model.v_name
       | _ -> Encoding.declare_int encoding v.Model.v_name ~lo ~hi)
     m.Model.vars;
+
+  (* M5-T1/M5-T2: the .opb `min:` line, which `conclusion BOUNDS` cannot do without.
+
+     It is the objective variable's own order encoding and nothing else -- under
+     SPEC 4.2, x = lo + sum_{v = lo+1}^{hi} [x >= v] -- so it is built by the same
+     substitution every linear row is built by, [linear_terms_int_lin_le] over the
+     single term (+/-1, obj). Writing it that way rather than by hand is the point:
+     if the order encoding's shape ever changes, the objective line changes with it
+     instead of silently disagreeing with the rows the search reasons over.
+
+     MAXIMISATION IS NEGATED HERE, once, and [lib/proof/opb.ml] states the convention
+     ("An objective is minimised; FlatZinc maximisation is negated by the caller").
+     The consequence is that the numbers in `conclusion BOUNDS` are the negation of the
+     model's objective value under `maximize`; [Search.optimise] applies the same sign
+     and is the only other place that knows about it. *)
+  let objective =
+    Option.map
+      (fun (i, dir) ->
+        let name = names.(i) in
+        let lo, hi = bounds.(i) in
+        let coeff = match dir with Search.Minimise -> 1 | Search.Maximise -> -1 in
+        let terms, constant =
+          Encoding.linear_terms_int_lin_le encoding [ (coeff, name) ]
+        in
+        Encoding.set_objective encoding (Opb.objective ~constant terms);
+        {
+          Search.o_var = Var.of_int i;
+          o_name = name;
+          o_dir = dir;
+          o_decl_lo = lo;
+          o_decl_hi = hi;
+        })
+      objective_var
+  in
 
   (* Every variable is declared before any row is added: a row's order-encoding
      expansion reads the declared bounds out of the encoding, so a row posted against
@@ -1243,4 +1305,4 @@ let compile (m : Model.t) : t =
       m.Model.constraints
   in
   let engine = Engine.create (List.mapi (fun id pending -> pending id) instances) in
-  { store; engine; encoding }
+  { store; engine; encoding; objective }

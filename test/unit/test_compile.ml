@@ -367,12 +367,22 @@ let test_rejections () =
     "var {1,3,5}: pick;\nconstraint int_le(pick,5);\nsolve satisfy;\n";
   expect_rejected "reject: a set domain says which variable" ~needles:[ "`pick`" ]
     "var {1,3,5}: pick;\nconstraint int_le(pick,5);\nsolve satisfy;\n";
-  expect_rejected "reject: minimize names the goal and the milestone"
-    ~needles:[ "minimize"; "M5" ]
+  (* M5-T1 landed the milestone these two used to name, so what asserted the rejection
+     now asserts that an objective over a VARIABLE compiles. The rejection did not
+     disappear, it narrowed: a CONSTANT objective is still refused, because `conclusion
+     BOUNDS` needs a `min:` line in the .opb and a constant has no order literals to
+     write one out of. The four together are what stop the narrowing from becoming a
+     silent widening -- I-M1's "a failing test is information" cuts both ways, and an
+     expectation deleted rather than replaced is the information being thrown away. *)
+  expect_accepted "accept: minimize over a variable compiles (M5-T1)"
     "var 0..3: x;\nconstraint int_le(x,3);\nsolve minimize x;\n";
-  expect_rejected "reject: maximize names the goal and the milestone"
-    ~needles:[ "maximize"; "M5" ]
+  expect_accepted "accept: maximize over a variable compiles (M5-T1)"
     "var 0..3: x;\nconstraint int_le(x,3);\nsolve maximize x;\n";
+  expect_rejected "reject: a CONSTANT objective says why it cannot be proved optimal"
+    ~needles:[ "minimize"; "VARIABLE"; "min:"; "4.3" ]
+    "var 0..3: x;\nconstraint int_le(x,3);\nsolve minimize 2;\n";
+  expect_rejected "reject: ... and the same for maximize" ~needles:[ "maximize"; "var " ]
+    "var 0..3: x;\nconstraint int_le(x,3);\nsolve maximize 2;\n";
   expect_rejected "reject: input_order is not what Search.solve implements"
     ~needles:[ "input_order"; "first_fail"; "indomain_min" ]
     "var 0..3: x;\n\

@@ -1,0 +1,9 @@
+% M5-T2: an infeasible OPTIMISATION problem. `conclusion UNSAT` is not available over a
+% formula carrying a `min:` line -- 3.0.2 refuses it and names the replacement itself:
+% "'conclusion UNSAT' can only be used without an objective. Use 'conclusion BOUNDS INF
+% INF' for infeasible optimization problems." So this model's proof ends BOUNDS INF INF
+% while the stdout is the ordinary =====UNSATISFIABLE=====.
+var 0..3: x :: output_var;
+constraint int_lin_le([1],[x],1);
+constraint int_lin_le([-1],[x],-3);
+solve minimize x;

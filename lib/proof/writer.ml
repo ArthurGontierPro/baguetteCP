@@ -247,6 +247,11 @@ type t = {
   mutable next_id : cid;
   live : (cid, entry) Hashtbl.t; (* id -> what introduced it, for audit failures *)
   model : (cid, unit) Hashtbl.t; (* ids fixed by the .opb, not an obligation *)
+  objective : (cid, entry) Hashtbl.t;
+      (* M5-T1: the objective-improving constraints `soli` handed back. Not an
+         obligation either, and for a sharper reason than [model]'s -- these are ids we
+         DID receive, and deleting one is an unchecked deletion that weakens the
+         checker's guarantee over the conclusion that follows it. See [improving]. *)
   tags : (cid, int) Hashtbl.t;
       (* Always on, rather than under [audit]: the level each live derived id was
          tagged with. VeriPB 3.0 has no level stack -- the checker used to keep this
@@ -280,6 +285,7 @@ let create ?(comments = false) ?audit oc =
     next_id = 0;
     live = Hashtbl.create 256;
     model = Hashtbl.create 64;
+    objective = Hashtbl.create 8;
     tags = Hashtbl.create 256;
     audit;
     comments;
@@ -317,6 +323,13 @@ let auditing t = t.audit
 let last_id t = t.next_id
 let live_count t = Hashtbl.length t.live
 let live_ids t = Hashtbl.fold (fun id _ acc -> id :: acc) t.live [] |> List.sort compare
+
+(* M5-T1. The ids [improving] handed back, which are discharged by the conclusion and
+   never deleted. Exposed so a test can assert they are still on the page rather than
+   inferring it from the absence of a `del`. *)
+let objective_ids t =
+  Hashtbl.fold (fun id _ acc -> id :: acc) t.objective [] |> List.sort compare
+
 let is_live t id = Hashtbl.mem t.live id
 
 (* The proof is append-only and is never rewound (invariant I-X4); once [conclusion]
@@ -1163,11 +1176,42 @@ let solution_excluding t ~origin lits =
   rule t (Printf.sprintf "%ssolx %s" (label_for t id) (lits_to_string lits));
   fresh t ~origin
 
-(* Improving solution for optimisation (M5). Adds the objective-bound constraint. *)
+(* Improving solution for optimisation (M5-T1). The checker reads the objective out of
+   the .opb, builds the strictly-improving constraint "obj <= <this solution's value> - 1"
+   for itself, and hands back its id -- we never write that constraint, so we cannot write
+   it wrongly.
+
+   THE ID IT RETURNS IS NOT YOURS TO DELETE, and this is the one place in the writer where
+   that is true of an id a rule hands back. Measured on 3.0.2, 2026-09-21: deleting a
+   `soli` constraint before the conclusion is an UNCHECKED deletion, and the checker says
+   so --
+
+     Warning: Switching from stronger to weaker guarantee using unchecked deletion. This
+     means that any solution after this deletion is not necessarily a solution for the
+     original problem.
+
+   -- while under --force-checked-deletion the same line is a hard failure ("Checked
+   deletion failed ... Proofgoal with ID #1 could not be autoproven"). Since `conclusion
+   BOUNDS` is checked AFTER that point, a proof that deletes its own `soli` constraints
+   and is then accepted has been accepted under a weakened guarantee: it is the same shape
+   as D-0053's `red` over a contradictory database, an acceptance that is not evidence.
+   Worse, deleting them silently discards the recorded objective value -- the first
+   version of M5-T1 did exactly that and the checker refused the conclusion outright with
+   "The claimed upper bound of 2 mismatches the best recorded upper bound of 4".
+
+   So the id is registered in [t.objective] and NOT in [t.live]: it is discharged by the
+   conclusion, for precisely the reason docs/PROOF-FORMAT.md section 5 already gives for
+   the contradiction `conclusion UNSAT` cites and for `BOUNDS`'s own lower-bound id --
+   "they cannot be deleted before being referenced". The audit reports them separately so
+   that "nothing was leaked" and "nothing was retired that could not be" stay distinct
+   claims rather than one silence. *)
 let improving t ~origin lits =
   let id = t.next_id + 1 in
   rule t (Printf.sprintf "%ssoli %s" (label_for t id) (lits_to_string lits));
-  fresh t ~origin
+  let id = fresh t ~origin in
+  forget t id;
+  if t.audit then Hashtbl.replace t.objective id { origin; level = t.level };
+  id
 
 (* Objective update (M5). [diff] gives the change, [`New] the whole new objective. *)
 let objective_update t ~origin kind terms =
@@ -1242,7 +1286,13 @@ type verdict =
        database for one -- accepted, but it is work we can spare it, and under the
        audit an undeleted contradiction id would fail I-X2 anyway. *)
   | Bounds of {
-      lower : int;
+      lower : int option;
+      (* [None] is INF, the same convention [upper] uses, and it is the ONLY conclusion
+         available for an infeasible optimisation problem. `conclusion UNSAT` is not:
+         3.0.2 refuses it outright over a formula that carries a `min:` line, and names
+         the replacement itself -- "'conclusion UNSAT' can only be used without an
+         objective. Use 'conclusion BOUNDS INF INF' for infeasible optimization
+         problems." Measured 2026-09-21 (M5-T2). *)
       lower_id : cid option; (* the constraint that establishes the lower bound *)
       upper : int option; (* None is INF: no solution was found *)
       upper_assignment : Lit.t list;
@@ -1264,7 +1314,10 @@ let conclusion ?(output = "NONE") t v =
       forget t id
   | Bounds { lower; lower_id; upper; upper_assignment } ->
       let b = Buffer.create 64 in
-      Buffer.add_string b (Printf.sprintf "conclusion BOUNDS %d" lower);
+      Buffer.add_string b
+        (match lower with
+        | None -> "conclusion BOUNDS INF"
+        | Some l -> Printf.sprintf "conclusion BOUNDS %d" l);
       (match lower_id with
       | Some id ->
           Buffer.add_string b (Printf.sprintf " : %s" (cite t id));
