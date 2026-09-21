@@ -272,6 +272,19 @@ let test_rejections () =
   reject "reject: a reified builtin with the wrong arity" ~line:3
     ~src:"var 1..3: x;\nvar bool: b;\nconstraint int_eq_reif(x, 2);\nsolve satisfy;\n"
     ~needles:[ "`int_eq_reif`"; "expects 3 argument" ];
+  (* M4-T4b. `int_abs`, `int_times` and `int_div` moved from [planned] to
+     [implemented], so what the front end still owes them is arity -- the same move
+     the `int_eq_reif` lane above records for M3. `array_int_element` is still the
+     "later milestone" case and `all_different_int` covers the wording. *)
+  reject "reject: int_times with the wrong arity" ~line:2
+    ~src:"var 1..3: x;\nconstraint int_times(x, 2);\nsolve satisfy;\n"
+    ~needles:[ "`int_times`"; "expects 3 argument" ];
+  reject "reject: int_abs with the wrong arity" ~line:2
+    ~src:"var 1..3: x;\nconstraint int_abs(x);\nsolve satisfy;\n"
+    ~needles:[ "`int_abs`"; "expects 2 argument" ];
+  reject "reject: array_int_element is still a later milestone" ~line:2
+    ~src:"var 1..3: x;\nconstraint array_int_element(x, [1, 2, 3], x);\nsolve satisfy;\n"
+    ~needles:[ "unsupported builtin"; "`array_int_element`"; "M4" ];
   reject "reject: missing semicolon" ~line:2 ~src:"var 1..3: x\nsolve satisfy;\n"
     ~needles:[ "expected"; "`;`" ];
   reject "reject: unexpected character" ~line:1 ~src:"var 1..3: x @ y;\nsolve satisfy;\n"
@@ -522,6 +535,30 @@ let test_width_cap_boundary () =
      (M1-T23) cannot be what fires -- and the needles below check the message is the
      width one, not the overflow one. A single over-the-cap rejection proves nothing on
      its own: the pair, and the wording, are what locate the boundary. *)
+  (* M4-T4b: each of the three, in the shape whose auxiliaries differ -- a case
+     variable, a constant case variable, and a sign that the declaration settles. *)
+  accepts_compile "arith: int_times over two variables"
+    ~src:
+      "var -2..2: x;\n\
+       var -2..2: y;\n\
+       var -4..4: z;\n\
+       constraint int_times(x, y, z);\n\
+       solve satisfy;\n";
+  accepts_compile "arith: int_times with a constant factor (the linear path)"
+    ~src:"var -2..2: x;\nvar -6..6: z;\nconstraint int_times(x, 3, z);\nsolve satisfy;\n";
+  accepts_compile "arith: int_div with a constant divisor"
+    ~src:"var -5..5: x;\nvar -5..5: q;\nconstraint int_div(x, 2, q);\nsolve satisfy;\n";
+  accepts_compile "arith: int_div with a divisor whose domain contains zero"
+    ~src:
+      "var -5..5: x;\n\
+       var -2..2: y;\n\
+       var -5..5: q;\n\
+       constraint int_div(x, y, q);\n\
+       solve satisfy;\n";
+  accepts_compile "arith: int_abs with the sign settled by the declaration"
+    ~src:"var 1..5: x;\nvar 0..5: z;\nconstraint int_abs(x, z);\nsolve satisfy;\n";
+  accepts_compile "arith: int_abs over a constant"
+    ~src:"var 0..9: z;\nconstraint int_abs(-4, z);\nsolve satisfy;\n";
   accepts_compile "width cap: compile accepts a domain at the cap"
     ~src:(Printf.sprintf "var 0..%d: x :: output_var;\nsolve satisfy;\n" cap);
   reject_compile "width cap: compile refuses a domain one over the cap" ~line:1

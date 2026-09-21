@@ -1,0 +1,8 @@
+% |x| >= 3 once x <= -3, which is the int_abs row `z + x >= 0`, and z <= 2 contradicts
+% it. The declared box is satisfiable on its own, so the refutation is a derivation.
+var -5..5: x :: output_var;
+var 0..5: z :: output_var;
+constraint int_abs(x, z);
+constraint int_le(x, -3);
+constraint int_le(z, 2);
+solve satisfy;

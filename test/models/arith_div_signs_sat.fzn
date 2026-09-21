@@ -1,0 +1,11 @@
+% The other three sign combinations of D-0033, in one model: 7 div -2 = -3,
+% -7 div -2 = 3, and the remainder taking the dividend's sign is what makes 7 div -2
+% differ from a flooring solver's -4.
+var 7..7: a :: output_var;
+var -2..-2: b :: output_var;
+var -5..5: p :: output_var;
+var -7..-7: c :: output_var;
+var 0..5: r :: output_var;
+constraint int_div(a, b, p);
+constraint int_div(c, b, r);
+solve satisfy;

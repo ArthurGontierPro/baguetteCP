@@ -1,0 +1,11 @@
+% D-0033: dividing by zero is UNSATISFIABLE with a proof, not an error and not an abort.
+% y is declared 0..1 so the zero case is GUARDED rather than constant -- the row that
+% refutes it is vacuous until the guard Boolean is settled, which `int_le(y, 0)` and the
+% guard's own reified definition do. The window |v| - 1 is -1 at v = 0, so the row then
+% says x <= -1 and x is at least 1.
+var 1..3: x :: output_var;
+var 0..1: y :: output_var;
+var 0..3: q :: output_var;
+constraint int_div(x, y, q);
+constraint int_le(y, 0);
+solve satisfy;

@@ -10,3 +10,13 @@
 # Empty since M1-T11: every model in test/models/ solves, matches its expected output
 # and has a proof veripb accepts. Keep it that way -- a new model that does not work
 # belongs here with a reason, not commented out of the suite.
+
+# M4-T4b, 2026-09-21. NOT an arithmetic defect: Search.solve's NSat arm does not sweep
+# Writer.live_ids the way its NFail arm does, so a level-0 pruning whose D-0013
+# explanation nests (a Combine citing an entry whose own explanation is a Combine) leaks
+# the intermediate `pol` ids -- no `w` retires level 0 -- and the I-X2 audit refuses the
+# run. The arithmetic family is simply the first to nest that deeply at level 0 on a SAT
+# path. The fix is in lib/core/search.ml, which M4-T4b did not own; it was applied
+# locally and MEASURED (2427 unit checks ok, 64/64 models, this model's proof VERIFIED
+# SATISFIABLE), then reverted. Delete this line with the fix.
+arith_times_hole_sat  lib/core/search.ml NSat arm leaks level-0 pol intermediates (I-X2)

@@ -33,19 +33,15 @@ let implemented =
     "int_le_reif";
     "int_eq_reif";
     "int_ne_reif";
+    (* M4, the arithmetic row (M4-T4b). *)
+    "int_abs";
+    "int_times";
+    "int_div";
   ]
 
 (* The rest of the SPEC 2.1 table, with the milestone that will bring it in. Listing
    these separately lets the error say "not yet" rather than "never". *)
-let planned =
-  [
-    ("all_different_int", "M4");
-    ("int_abs", "M4");
-    ("int_times", "M4");
-    ("int_div", "M4");
-    ("array_int_element", "M4");
-  ]
-
+let planned = [ ("all_different_int", "M4"); ("array_int_element", "M4") ]
 let implemented_list = String.concat ", " implemented
 
 type env = {
@@ -55,6 +51,12 @@ type env = {
   mutable vars_rev : Model.var list;
   mutable nvars : int;
   mutable outputs_rev : Model.output_item list;
+  (* M4-T4b: how many auxiliary Booleans the arithmetic family has introduced so far.
+     It only ever goes up, so the names it makes are unique among themselves; a
+     collision with a name the model itself declares is caught by
+     lib/flatzinc/compile.ml's [check_name_collisions], which is where the diagnostic
+     can say which declaration it clashed with. *)
+  mutable naux : int;
 }
 
 let new_env () =
@@ -65,6 +67,7 @@ let new_env () =
     vars_rev = [];
     nvars = 0;
     outputs_rev = [];
+    naux = 0;
   }
 
 let new_var env name dom pos =
@@ -440,6 +443,67 @@ let build_constraint env (c : Ast.constraint_item) =
     | [ a; r ] -> make (operands env pos a) (operand env pos r)
     | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id
   in
+  (* ---------------------------------------------------------------- M4-T4b
+
+     The arithmetic family is the first one whose front end CREATES variables. The
+     reason is structural and is stated in lib/core/prop/arith.ml's header: x * y = z
+     has no linear row, the case split that gives it one is guarded by Booleans, and
+     lib/flatzinc/compile.ml builds the store from [Model.vars] as a fixed array --
+     so a Boolean invented there would arrive after the store exists. The builder is
+     the last place early enough.
+
+     Only the auxiliaries that will actually be USED are created. An auxiliary that
+     no row mentions would be a free variable of the model, and
+     [Model.check_assignment] checks each one against its own definition, so a free
+     one could be assigned a value its definition forbids and turn a correct solution
+     into an I-S1 failure. The three rules below therefore have to agree with the
+     paths compile.ml takes, and compile.ml is written to make that agreement cheap:
+     it posts the definition of every auxiliary the constraint carries before it
+     chooses a path, so an auxiliary is never left undefined even if a path stops
+     using it. *)
+  let var_bounds i =
+    match List.nth_opt (List.rev env.vars_rev) i with
+    | Some { Model.v_dom = Model.Dbool; _ } -> (0, 1)
+    | Some { Model.v_dom = Model.Drange (l, u); _ } -> (l, u)
+    | Some { Model.v_dom = Model.Dset (n :: ns); _ } ->
+        (List.fold_left Stdlib.min n ns, List.fold_left Stdlib.max n ns)
+    | Some { Model.v_dom = Model.Dset []; _ } | None ->
+        Error.failf pos "internal: builtin `%s` mentions variable index %d" id i
+  in
+  let fresh_bool () =
+    let n = env.naux in
+    env.naux <- n + 1;
+    new_var env (Printf.sprintf "X_INTRODUCED_arith_%d" n) Model.Dbool pos
+  in
+  (* `b <-> x >= 0`, and only when the declared domain of x leaves the sign open. *)
+  let sign_bool (x : Model.operand) =
+    match x with
+    | Model.Const _ -> None
+    | Model.Var i ->
+        let lo, hi = var_bounds i in
+        if lo >= 0 || hi < 0 then None else Some (fresh_bool ())
+  in
+  (* `b_v <-> y >= v` for every v strictly inside y's declared domain, smallest first.
+     Written as a loop and not [List.init], because [List.init]'s evaluation order is
+     unspecified and [fresh_bool] has a side effect: a proof whose variable numbering
+     changes between runs is a proof nobody can diff. *)
+  let ladder_bools (y : Model.operand) =
+    match y with
+    | Model.Const _ -> []
+    | Model.Var j ->
+        let lo, hi = var_bounds j in
+        let acc = ref [] in
+        for v = lo + 1 to hi do
+          acc := (v, fresh_bool ()) :: !acc
+        done;
+        List.rev !acc
+  in
+  let arity3 f =
+    arity 3;
+    match c.Ast.c_args with
+    | [ a; b; r ] -> f (operand env pos a) (operand env pos b) (operand env pos r)
+    | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id
+  in
   let k =
     match id with
     | "int_lin_le" -> lin (fun ts r -> Model.Int_lin_le (ts, r))
@@ -459,6 +523,31 @@ let build_constraint env (c : Ast.constraint_item) =
     | "int_le_reif" -> cmp_reif (fun a b r -> Model.Int_le_reif (a, b, r))
     | "int_eq_reif" -> cmp_reif (fun a b r -> Model.Int_eq_reif (a, b, r))
     | "int_ne_reif" -> cmp_reif (fun a b r -> Model.Int_ne_reif (a, b, r))
+    (* M4. `int_times(x, c, z)` with a constant second factor is c*x = z, an ordinary
+       linear equality, so it needs neither ladder nor sign and gets neither.
+       `int_div` keeps its sign split whatever the divisor is, because truncation
+       toward zero is what the sign decides (D-0033); it drops both auxiliaries only
+       when both operands are constants and the quotient is a number. *)
+    | "int_times" ->
+        arity3 (fun x y z ->
+            let aux =
+              match y with
+              | Model.Const _ -> { Model.x_sign = None; y_ge = [] }
+              | Model.Var _ ->
+                  let x_sign = sign_bool x in
+                  { Model.x_sign; y_ge = ladder_bools y }
+            in
+            Model.Int_times (x, y, z, aux))
+    | "int_div" ->
+        arity3 (fun x y q ->
+            let aux =
+              match (x, y) with
+              | Model.Const _, Model.Const _ -> { Model.x_sign = None; y_ge = [] }
+              | _ -> { Model.x_sign = sign_bool x; y_ge = ladder_bools y }
+            in
+            Model.Int_div (x, y, q, aux))
+    | "int_abs" ->
+        cmp (fun x z -> Model.Int_abs (x, z, { Model.x_sign = sign_bool x; y_ge = [] }))
     | other -> unsupported_builtin pos other
   in
   { Model.k; Model.c_pos = pos }

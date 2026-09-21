@@ -1,0 +1,8 @@
+% int_abs with x straddling zero, so the sign Boolean really exists and the search has
+% to settle it. z is pinned, x is not: the answer is the negative branch.
+var -4..4: x :: output_var;
+var 0..5: z :: output_var;
+constraint int_abs(x, z);
+constraint int_eq(z, 3);
+constraint int_le(x, 0);
+solve satisfy;
