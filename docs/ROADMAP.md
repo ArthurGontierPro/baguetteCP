@@ -201,8 +201,8 @@ M4-T2 (Régin) is the row most likely to reach for it; it should not.
 
 | ID | Task | Status | Notes |
 |---|---|---|---|
-| M5-T1 | Branch and bound, `obju` / `o` / `core` rules | TODO | |
-| M5-T2 | `conclusion BOUNDS` for proved optimality | TODO | |
+| M5-T1 | Branch and bound, `obju` / `o` / `core` rules  **DONE 2026-09-21** (agent-bb). **A branch-and-bound bound is exactly an M2-L12 global unit**: `soli` yields the strictly-improving constraint the *checker* builds from the `.opb` objective, and `~obj_ge_v` is RUP against it through the ladder rows — so `type global`/`global_of`/`apply_globals` are reused unchanged and **no new `Explanation` constructor was needed**. **Not a restart and not a re-solve**, asserted rather than argued: M1-T36's identity `nodes = 2·decisions + 1 − skipped` holds exactly on the exhausted tree, which a re-walked prefix would break; I-X4 asserted by ids minting strictly increasing. **M5 emits no `obju`**, with a gate that asserts the grep found the definition it looks past — it initially passed by not looking and its own guard caught it. D-0063 |
+| M5-T2 | `conclusion BOUNDS` for proved optimality  **DONE 2026-09-21** (agent-bb). `conclusion BOUNDS 2 : @c32 2`, and veripb 3.0.2 answers **`s VERIFIED BOUNDS 2 <= obj <= 2`** — verified by the orchestrator under **`--force-checked-deletion`** as well as the default, so the lower bound is checked and not rubber-stamped. **Two rules learned from the checker** (D-0063): a `soli` must be introduced at **level 0** or a `w` retires it; and **a `soli` id is not ours to delete** — an unchecked deletion, hard failure under `-c` — so `Writer` keeps those ids apart from the live set and I-X2 stays exact. **The decorative-`pol` obligation met on real proofs**, cited ids read back out of each `.pbp`, three mint shapes, four breaks. **M5's own chain contains no `pol`**: the bound is a `rup`, verified by unit propagation, so a wrong one is refused where a wrong `pol` is waved through — structurally safer than D-0057/D-0060's footing. 2608 ok / 0 FAIL, 78/78 models |
 | M5-T3 | MiniZinc challenge instances as a regression set | TODO | |
 
 ## M6 — performance

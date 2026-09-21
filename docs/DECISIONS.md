@@ -4446,3 +4446,82 @@ machine lacks, and it produced an exact commit in 7 steps.** Reach for it first 
 It is a **cross-session request**, not done here, because `test/models/**` is held by the
 concurrent M5 row. Whoever releases it should fix the comment rather than delete it — a figure
 with a date on it is how this was caught at all.
+
+## D-0063  A `soli` constraint is discharged by the conclusion and must never be deleted
+
+**Status**: **ACCEPTED**, implemented by M5-T1/M5-T2 (2026-09-21, agent-bb). It extends
+`PROOF-FORMAT.md` §5's carve-out and **narrows I-X2's scope**, on measurement rather than
+reading.
+
+### Branch and bound is an M2-L12 global unit
+
+A bound found by branch and bound is **exactly** a level-0 global unit. `soli` yields the
+strictly-improving constraint that the **checker** builds from the `.opb` objective, and the
+single order literal `~obj_ge_v` is RUP against it through the ladder rows. So `type global`,
+`global_of` and `apply_globals` are reused unchanged, the solution node is re-entered,
+`apply_globals` conflicts because the objective is fixed at an excluded value, and the ordinary
+trace / learning / nogood / backjump path does the rest.
+
+**No new `Explanation` constructor was needed.** D-0044's table holds again.
+
+`conclusion BOUNDS 2 : @c32 2`, and the checker answers `s VERIFIED BOUNDS 2 <= obj <= 2` —
+verified under **`--force-checked-deletion`** as well as the default, so the lower bound is
+genuinely checked.
+
+### The two rules, both learned from the checker
+
+1. **A `soli` must be introduced at level 0.** Emitted at the level the solution was found at, a
+   `w` retires it and the checker says *"The claimed upper bound of 2 mismatches the best
+   recorded upper bound of 4."*
+2. **A `soli` id is not ours to delete.** Deleting one is an **unchecked deletion** — *"Switching
+   from stronger to weaker guarantee"* — which verifies with a warning by default and is a **hard
+   failure under `-c`**. It is discharged by the conclusion, so `Writer` records these ids apart
+   from the live set and I-X2's audit stays exact.
+
+### It is not a restart, and that is asserted rather than argued
+
+SPEC §3.4 disables restarts and D-0045 asks whether that survives learning. **Branch and bound is
+neither a restart nor a re-solve**: the bound is installed on the node the search is standing on,
+which is re-entered once; the decision stack is untouched, no closed level reopened, no decision
+re-taken.
+
+Asserted, not asserted-by-prose: **M1-T36's identity `nodes = 2·decisions + 1 − skipped` holds
+exactly on the exhausted branch-and-bound tree**, which a re-walked prefix would break. **I-X4**
+likewise: constraint ids mint strictly increasing across the whole run, so nothing was rewound.
+Backtracking stays deletion, never truncation.
+
+### The decorative-`pol` obligation, and why M5 is structurally safer
+
+Met on real proofs rather than constructed ones: the cited id was read back out of each emitted
+`.pbp` and looked up. Three mint shapes across five models — `rup` (ordinary), `soli`
+(floor/ceiling), `pol` (infeasible) — each broken, including deleting every improving constraint
+as it is introduced, and a satisfiable model where the empty clause the conclusion cites cannot
+come from the model rows.
+
+> **M5's own chain contains no `pol`.** The bound is a `rup`, *verified by unit propagation*. A
+> wrong one is **refused**, where a wrong `pol` is waved through. That is the opposite footing
+> from D-0057 and D-0060, and it is a property of the shape rather than of the tests.
+
+### `obju`: not emitted, and the filed trap is confirmed but its narrowing is NOT
+
+**M5 emits no `obju` at all** — branch and bound tightens a bound on a *fixed* objective and never
+updates the objective. A gate asserts nothing under `lib/` or `bin/` calls
+`Writer.objective_update`, **and asserts the grep found the definition it looks past**, so it
+cannot pass by not looking. It initially did exactly that; its own guard caught it.
+
+`PROOF-FORMAT.md` line 136's trap is **confirmed**: `obju` before any `soli` gives *"Proofgoal #1
+could not be autoproven."*
+
+> **Reported but NOT reproduced**: agent-bb reports the trap is narrower than filed — that after a
+> `soli` the goal *is* autoproven. The orchestrator's minimal two-line fixture gives the **same
+> failure** in both orders. That may be a difference in the fixture (the minimal `soli` sets the
+> *worst* objective value, not an improving one, so it may establish nothing useful) rather than a
+> wrong report. **The doc keeps its existing warning**, and the narrowing needs a reproducible
+> case before it is recorded as measured.
+
+### Still owed to SPEC
+
+- `conclusion UNSAT` is **refused** over a formula carrying a `min:` line; `BOUNDS INF INF` is the
+  only conclusion for an infeasible optimisation model. The checker names the replacement itself.
+- The objective must be a **variable**: a constant objective is refused, because `conclusion
+  BOUNDS` needs a `min:` line and a constant has no order literals.

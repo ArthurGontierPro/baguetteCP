@@ -299,7 +299,7 @@ test/unit/                  22 binaries: test_core test_domain test_engine test_
   mem_guard.ml              NOT a test binary: the shared Gc-alarm heap guard every
                             suite installs (M1-T53). All 22 announce arming under
                             BAGUETTE_TEST_HEAP_CAP_ANNOUNCE=1
-test/models/                73 .fzn models   test/expected/  their expected outputs
+test/models/                78 .fzn models   test/expected/  their expected outputs
 scripts/                    checker.sh verify_proof.sh run_model_tests.sh shrink.sh
                             mutate_proof.sh check_test_widths.py check_fmt.sh
                             bootstrap.sh
