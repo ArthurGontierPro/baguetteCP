@@ -835,6 +835,110 @@ identical across two `--proof`-less runs; its wall time varied 145.7-171.8 ms ov
 runs (a 15% spread, in line with the harness's own noise discipline in §2). `git status`
 in this worktree is clean throughout -- only `bench/README.md` (this section) changed.
 
+## 3g. The bisect (M6-T6), 2026-09-21
+
+§3f's correction said the regression needs a bisect, not another hypothesis. This is it,
+via `git bisect` plus wall-clock timing in a worktree (`perf` still unavailable on this
+kernel). Script: `bench/width_sat_depth_bisect.sh [N]` -- times the *current checkout's*
+`bin/main.exe` against `width_sat_depth.fzn`, best-of-N, with and without
+`BAGUETTE_PROPAGATE_LEARNED`. It does not itself check out other commits; that part was
+done by hand because old commits need a fresh `dune build` and some don't build at all
+(reported below).
+
+**Was the 43 ms claim ever true?** Essentially yes. `test/models/width_sat_depth.fzn` has
+exactly one commit in its history (`83cc658`, M1-T30, the commit that added the comment) --
+the model itself (width, constraints) has never changed since, so a before/after comparison
+across the regression is like-for-like. Built and measured at `83cc658` in this worktree:
+solve-only wall clock (process exec through `.pbp` flush, no `veripb`), best of 5,
+**18.6-23.4 ms**. That is not exactly 43 ms -- plausibly a slower run, a warm-vs-cold
+process, or a different machine when the comment was written -- but it is the same order
+of magnitude, not an order of magnitude off, so the claim was true in substance: this
+model was a few-tens-of-milliseconds fixture before the regression. (Separately, wall time
+*including* invoking `veripb` is ~170 ms even at `83cc658`, because the `veripb` process
+itself has a ~170 ms fixed startup cost on this machine unrelated to the model -- so
+whatever "end to end" meant in the original comment, it cannot have included checker
+invocation, or 43 ms would have been impossible even then. That checker floor is itself
+worth flagging next to §3/§3a's 4.7-4.9 ms *solver* process floor -- they are not the same
+number and should not be conflated.)
+
+**The commit.** `git log --follow -- test/models/width_sat_depth.fzn` shows only `83cc658`
+touched the file, so the search range for the regression is `83cc658..main` (498 commits
+total, 392 of them after `83cc658`). `BAGUETTE_PROPAGATE_LEARNED` does not exist until
+`3fc22cd` (M2-L12, 322 commits after `83cc658`), so bisecting has two phases: plain runs
+(no flag, since none exists yet) from `83cc658` to just before `3fc22cd`, then flag-aware
+runs after. Timing at `3fc22cd~1` and `3fc22cd` both showed ~260-270 ms already, so the
+regression predates M2-L12 entirely and the bisect only needed the plain-run phase.
+
+`git bisect start 7dc26d4 83cc658` (bad, good) then `git bisect run` against a script that
+builds `bin/` fresh, times 3 runs, and calls a result under 60 ms good / at or above bad
+(60 ms sits comfortably between the ~20 ms floor side and the ~260 ms regressed side seen
+in the initial probes). 7 steps, all commits built cleanly -- **0 skipped**. Result:
+
+```
+aacbc8d22f54ed9443e1796c5804f0ab7e641e4e is the first bad commit
+M2-L6: wire PB analysis into the search, with the fallback rate on --stats
+```
+
+Confirmed directly (not just via the bisect's 3-run samples) by checking out the commit
+and its parent side by side and re-measuring best of 5:
+
+| commit | subject | best of 5 |
+|---|---|---|
+| `f93ecd1` (parent) | M2-L6: PB conflict analysis -- the loop, the slack criterion, the fallback | **18.6 ms** |
+| `aacbc8d` | M2-L6: wire PB analysis into the search, with the fallback rate on `--stats` | **258.7 ms** |
+
+A single commit, a **~14x** jump, matching §3f's headline ratio almost exactly. `f93ecd1`
+adds the PB conflict-analysis *machinery* (`lib/core/pb_analysis.ml`) without calling it
+from search, so it changes nothing yet; `aacbc8d` is the commit that wires it into
+`Search`'s conflict handling unconditionally (`lib/core/search.ml`, `lib/core/engine.ml`,
+per its own commit message) -- from that point every conflict pays PB analysis's cost, not
+just the 1UIP clause path. `--stats` at `aacbc8d` on this model: `pb-tried 49`,
+`pb-learned 24`, `pb-fallback 25 (0.51)`, `nodes 99` -- the 99-node figure already matches
+today's `BAGUETTE_PROPAGATE_LEARNED=off` count exactly, so the tree shape was already at
+its regressed size here; `f93ecd1` predates `--stats` being wired at all, so its own node
+count could not be read back for direct comparison, only inferred from wall time.
+
+**Does the rest of the range matter?** After `aacbc8d` (258 ms), plain-run timings at
+`3fc22cd~1` and `3fc22cd` (M2-L12, 70 commits later) sit at ~260-270 ms -- flat, no further
+regression accumulating between the M2-L6 wiring and M2-L12's mitigation. `3fc22cd` onward
+is where `BAGUETTE_PROPAGATE_LEARNED` starts existing and where M2-L13's later ladder-
+suffix work (§3f) brought the *default-on* number down to today's 150-172 ms while the
+*off* number drifted up somewhat further to 590 ms (more conflicts being analysed / more
+learned rows accumulating as later M2-L features landed) -- but the single 14x step is at
+`aacbc8d`, and everything after it is refinement in both directions, not a second
+regression of the same size.
+
+**Is it worth fixing?** No -- recommend closing this as accepted cost, not a bug to chase.
+PB conflict analysis (M2-L6) is a deliberate, documented feature: a stronger, PB-strength
+justification alongside the M2-L3 clause, and per its own commit message and `--stats`
+output it is finding real value on this exact model (`pb-learned 24`, `pb-stronger 24` --
+24 of the 49 conflicts produce a PB row that propagates where the same conflict's clause
+does not). The cost is inherent to running that analysis on every conflict, not an
+accident; M2-L13 already claws most of it back for the shipped (`on`) configuration
+(§3f: 150-172 ms today vs the 590 ms this row's mechanism produces with propagation off).
+`width_sat_depth`'s own gate cost is still milliseconds in absolute terms and `bench/` is
+explicitly not a commit gate. The one concrete ask that follows from this row: fix the
+model's own header comment (`test/models/width_sat_depth.fzn`, "at 99 it is 43 ms end to
+end") to stop citing a number from before this and other M2-L work landed -- but `lib/`,
+`bin/`, `test/`, `scripts/` and `docs/` are outside this row's ownership (`bench/**` only),
+so that edit is left for whichever session owns `test/models/`.
+
+**Method.** N=5 throughout (best-of-5, per `bench/README.md` §2's discipline), wall clock
+via `date +%s.%N` around the whole process (`ulimit -v 4000000` on every run, per
+CLAUDE.md), `BAGUETTE_PROPAGATE_LEARNED` used from `3fc22cd` onward, plain runs (no flag)
+before it. Spread at the regressed end was ~15-20 ms over 5 runs (~6-8%); at the fast end,
+~0.5-5 ms over 5 runs, both in line with §2's noise discipline. The ~4.7-4.9 ms process
+floor (§3/§3a) is well under every number quoted here (18.6 ms is the smallest), so none of
+these measurements are floor-bound, but it does not explain the gap either. **0 commits
+skipped** -- every commit the bisect touched built cleanly with `dune build --root . bin/`.
+Peak RSS stayed trivial throughout (`width_sat_depth` is an 8.5 MB peak per §3f; nothing in
+this row's runs approached the 4 GB `ulimit`).
+
+**Housekeeping.** All checkouts during the bisect were inside this worktree
+(`.claude/worktrees/agent-bisect`); `main` and other worktrees were never touched. The
+worktree was returned to `wave23-bisect` and `_build/` removed before finishing; `git
+status` there is clean except for this section and the new `bench/width_sat_depth_bisect.sh`.
+
 ## 4. What the columns are *not*
 
 - **`lvl` is not a node count, and since M1-T36 it no longer has to pretend to be.**
