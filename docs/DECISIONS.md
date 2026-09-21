@@ -3861,3 +3861,85 @@ nothing.
 - **Backjumping still rests on the clause's decision closure** (`pb_analysis.ml:757`), whose own
   note said "a PB row that propagates at runtime would change that calculation". It does now.
   That question is open and is the natural successor row.
+
+## D-0056  The backjump rests on the decision closure, and a PB row cannot supply one
+
+**Status**: **ACCEPTED, and it closes the question `pb_analysis.ml:757` handed on.** Answered
+by M2-L15 (2026-09-21, agent-backjump), verified in the tree by the orchestrator. The short
+version: **the decision closure is not the safe candidate among several — it is the only one in
+the right currency.**
+
+### Why the question was live
+
+M2-L6 wrote, in `pb_analysis.ml`, that it deliberately does not backjump on the PB row: the
+backjump rests on `learn.ml`'s decision closure, "because the levels a derived row names are
+not a dependency set any more than a 1UIP cut's are". It then noted that **M2-L13 made the
+premise of its last sentence true** — a PB row does propagate at runtime now — so *"that would
+change the calculation"* stopped being hypothetical.
+
+### The answer: three different questions, and only one of them is the backjump's
+
+The backjump in this solver is **not** "undo to level B and resume". `search.ml:branch` is a
+recursive DFS, and the backjump is the arm `NFail (ng1, cid1) when not (mentions_level ng1 lvl)`:
+**a sibling is skipped exactly when the branch nogood does not name that level.**
+
+So the backjump is a **filter on the nogood**, and the nogood is a clause over **decision**
+literals that veripb RUP-verifies. Dropping a level asserts *the conflict does not rest on that
+decision* — a claim about the decision closure and nothing else.
+
+| | answers |
+|---|---|
+| `Learn`'s decision closure | which decisions the conflict rests on — **the backjump's question** |
+| `Pb_analysis.levels` | at which levels this row's literals became falsified |
+| `asserting_level` | how far down the row still propagates — Le Berre et al.'s subject, the one with **no** backjump guarantee over PB |
+
+Neither of the last two is a rewording of the first.
+
+### The levels differ, and in the dangerous direction — measured
+
+Over the 44-model suite, independently reproduced by the orchestrator:
+
+| | conflicts |
+|---|---|
+| both analyses produced a set | **103** |
+| sets equal | 26 |
+| **PB set a strict SUBSET of the closure's** | **76** |
+| PB set wider | 1 |
+| incomparable | 0 |
+| PB row is the empty contradiction, level set `{}` | 3 |
+
+**Narrower is the unsafe direction**: filtering by a set that names fewer decisions drops
+literals the conflict genuinely rests on, licensing a jump that is not justified. The 3
+empty-contradiction cases are the limit — filtering by `{}` leaves **the empty clause**. The
+single wider case is the clearest picture of the mismatch: `width_sat_depth`, closure `{26}`,
+one decision, while the PB row names all 26 levels.
+
+### The break is the evidence, and the checker catches it
+
+With `config.backjump_on_pb` filtering the nogood by the PB set: the tree is **smaller** (20
+nodes / 3 skipped against 35 / 0 honest), the answer is still UNSAT, every `Search.stats`
+counter is plausible — **and veripb rejects.** A wrong backjump here is a soundness bug that
+does not look like one from inside the solver; it looks like an improvement.
+
+Asserted at full strength on the checker's whole sentence, and M2-L15 also widened M2-L13's
+existing degree break from the bare fragment *"reverse unit propagation"* — which any other RUP
+failure would match — to the same sentence.
+
+### What M2-L13 genuinely did change
+
+The note was right to flag something. A learned PB instance's pruning is an ordinary trail
+entry carrying reason facts (`prop/pb.ml:reason_clause`), so `Analysis.analyse ~scope:Everywhere`
+resolves straight through it and **the closure already accounts for the row's antecedents**. The
+calculation *was* redone by M2-L13 — by the closure walk, without a line of code. What could not
+change is which set drives the filter.
+
+### Consequences
+
+- **The measurement ships and is inert.** The default build compares the two sets and acts on
+  neither: 479 nodes, 242 decisions, 15 skipped, unchanged and asserted as a control. `lvl-cmp`,
+  `lvl-same`, `lvl-narrow`, `lvl-wide`, `lvl-incomp`, `lvl-empty` are on `--stats`.
+- **`skipped` moves only on the unsound build.** If a future row makes it move on the honest
+  one, that is a real result — and it will not come from this direction.
+- **Do not reopen this by observing that the PB row "knows" which levels it depends on.** It
+  knows where its literals were falsified. That is the narrower set, and narrower is unsound
+  here. The 76/103 measurement is the counter-example, and `lvl-narrow` keeps it live.
