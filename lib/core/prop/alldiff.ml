@@ -79,14 +79,16 @@
       [add_all_different] posts the pairwise CLAUSE rows rather than big-M rows precisely
       to make that recovery five ids and one division.
 
-   2. **A current bound appears as a literal in the derived row, not as a cited id.**
-      [excl] derives ~x_ge_lo(x) \/ ~x_eq_v rather than ~x_eq_v, so the final row is the
+   2. **A current bound appears as a literal in the derived row, and is cancelled by the
+      id of the line that establishes it where there is one.** [excl] derives
+      ~x_ge_lo(x) \/ ~x_eq_v rather than ~x_eq_v, so before cancellation the row is the
       globally valid `~<bound facts> \/ <the pruning>` shape lib/core/prop/ne.ml's clause
-      already has, and it is sound at any level with no citation of anything the search
-      established. The alternative -- citing the trail entry that moved the bound, as
-      [Linear] does -- does not fit: a cited [Linear] explanation derives a statement in
-      the order encoding's ladder currency (D-0010, lib/core/ladder.ml's header), not the
-      unit x_ge_c >= 1 this counting argument needs.
+      already has, sound at any level. Citing the trail entry the way [Linear] does still
+      does not fit -- a cited [Linear] derives a statement in the order encoding's ladder
+      currency (D-0010, lib/core/ladder.ml's header), not the unit x_ge_c >= 1 the
+      counting needs -- which is why M4-T7 gave [Explanation] the one thing that does:
+      [Defining], a summand carrying the id of the UNIT line that states the fact. See
+      [moved_bound_cancels] below.
 
    3. **[Weaken] is used for its D-0009 meaning and twice over.** Once to drop the
       excluded values the pruning does not need ([Lit.eq y v] as the trivial axiom
@@ -95,9 +97,12 @@
       literal axiom ~x_eq_v >= 0, and writing it as a [Weaken] summand rather than
       special-casing it keeps the counting uniform.
 
-   Nothing here needed a new [Explanation] constructor. [Combine] (with its divisor,
-   which [pair_amo] and [amo] both need and neither could fake), [Weaken] and
-   [Model_row] carried the whole derivation.
+   3'. **One new [Explanation] summand, and it is the only thing in this file that is
+      not [Combine]/[Weaken]/[Model_row].** M4-T1 built the whole derivation without one
+      (D-0061) and got everything except the cancellation in item 2, where it had to fall
+      back on [Explanation.clause [lit]]. M4-T7 replaced that stand-in with
+      [Explanation.defining], whose record is D-0009's own: see explanation.ml's header
+      for why it is a summand rather than a [t].
 
    ---------------------------------------------------------------------------
    Snapshotting and I-X6
@@ -125,6 +130,14 @@ type snap = {
   s_dhi : int;
   s_lo : int;
   s_hi : int;
+  (* Whether each current bound was established AT THE ROOT -- i.e. the trail entry
+     supporting it belongs to level 0, or it has never moved off the declared bound.
+     This is what decides whether [moved_bound_cancels] may cite a line for it, and it
+     is a fact about where the bound CAME FROM, not about the level the solver is at
+     now: a root-established bound is a consequence of the model and stays citable
+     however deep the search has gone. *)
+  s_lo_root : bool;
+  s_hi_root : bool;
 }
 
 type term = { x : Var.t; name : string; decl_lo : int; decl_hi : int }
@@ -163,6 +176,13 @@ let make store enc ~rows vars =
 
 let vars t = Array.to_list (Array.map (fun tm -> tm.x) t.terms)
 
+(* The level the trail entry supporting this bound was pushed at, or 0 for a bound that
+   has never moved. [Store.level_of_index] counts the open level marks at or below the
+   entry, so this is the level the bound BELONGS to and not the one in force now. *)
+let established_at_root store v ~lower =
+  let sup = if lower then Store.lo_support store v else Store.hi_support store v in
+  sup = Store.no_support || Store.level_of_index store sup = 0
+
 let snap_of store tm =
   let d = Store.get store tm.x in
   {
@@ -172,6 +192,8 @@ let snap_of store tm =
     s_dhi = tm.decl_hi;
     s_lo = Domain.lo d;
     s_hi = Domain.hi d;
+    s_lo_root = established_at_root store tm.x ~lower:true;
+    s_hi_root = established_at_root store tm.x ~lower:false;
   }
 
 (* ------------------------------------------------------------------ explanations *)
@@ -338,65 +360,76 @@ let core_summands t ~a ~b ~halls ~extra =
       (range a b)
 
 (* The bound literals [alo_window] leaves in the row, cancelled by the lines that
-   already state those bounds -- and the one place in this module where the reified
-   explanation ADT does not reach, so read this before changing it.
+   already state those bounds. Until M4-T7 this was the one place in this module where
+   the reified explanation ADT did not reach; read this and explanation.ml's [Defining]
+   section together before changing it.
 
    [alo_window] narrows a Hall variable's at-least-one line with one [excl] per declared
    value outside the interval, and each [excl] carries the bound it rests on into the sum
    as a literal: [a - decl_lo] copies of ~x_ge_lo(x), and [decl_hi - b] of x_ge_(hi(x)+1).
-   For a PRUNING that is exactly right -- the derived row is then the globally valid
-   "the pruning, disjoined with the bounds it read", which is the shape [Ne] already has.
-   For a CONFLICT it is not enough: lib/core/search.ml cites a root conflict's derivation
-   to `conclusion UNSAT`, and a row with literals left in it is not contradicting, which
-   3.0.2 says in as many words ("The constraint with ID n is not contradicting, as
-   specified by the hint") and which M1-T17 already found from the other end.
+   For a PRUNING, leaving them there is already right -- the derived row is then the
+   globally valid "the pruning, disjoined with the bounds it read", which is the shape
+   [Ne] already has. For a CONFLICT it is not enough: lib/core/search.ml cites a root
+   conflict's derivation to `conclusion UNSAT`, and a row with literals left in it is not
+   contradicting, which 3.0.2 says in as many words ("The constraint with ID n is not
+   contradicting, as specified by the hint") and which M1-T17 already found from the
+   other end.
 
-   Cancelling them needs the ONE THING [Explanation.t] cannot say: "the id of the line
-   that establishes this bound fact". That is D-0009's open ADT gap verbatim, and
-   [Justify.defining_lit] is the lookup built for it that still has no caller --
-   [Model_row] can name an id but nothing in the value can ASK for one. So the cancellation
-   goes through [Explanation.clause], whose [Justify.emit_clause] consults the M2-T9 claim
-   index and hands back the trace line that already states the bound, minting nothing.
-   Two consequences, and both are findings rather than details:
+   Cancelling them needs "the id of the line that establishes this bound fact" -- D-0009's
+   open ADT gap, which M4-T7 closed with [Explanation.defining]. It resolves through
+   [Justify.defining_lit] to the UNIT line already stating the bound (the trace line, in
+   practice), minting one only if there is none, and the cancellation is exact: the term
+   goes and the degree stays. Two things follow, and both are the row's point:
 
-   - it is sound only at LEVEL 0, where a bound fact is a consequence of the model rather
-     than of a decision, so [moved] is empty under a decision and the pure form is what is
-     emitted there. That is not a loss: only a root conflict's derivation is cited as a
-     contradiction, and under a decision D-0018's nogood is what closes the branch.
-   - a conflict that needs it does rest on a clause, so [Search.rests_on_a_clause] routes
-     it the D-0022 way and this module's [pol] is decorative FOR THAT CONFLICT (D-0057).
-     It is not decorative for a conflict that needs no cancellation -- every Hall variable
-     still at its declared bounds -- and test/models/alldiff_hall_unsat.fzn is that case,
-     with `conclusion UNSAT` citing the Hall [pol] itself. *)
-let states lit = Explanation.clause [ lit ]
+   - the derivation no longer contains an [Explanation.Clause], so
+     [Search.rests_on_a_clause] is false for it and `conclusion UNSAT` cites THIS
+     module's [pol] rather than the D-0022 empty clause. M4-T1's stand-in
+     ([Explanation.clause [lit]]) was the same arithmetic wearing a label the search reads
+     as "not numeric", which is D-0061's recorded cost.
+   - the test is now PER BOUND and is the level the bound was ESTABLISHED at, not the
+     level the solver is at. A bound the root fixpoint set is a consequence of the model,
+     so its unit line is true and citable at any depth; a bound a decision set is not, and
+     a unit line for it would be false. M4-T1 could only say "level 0 or nothing" and
+     switched the whole cancellation off under a decision; this says it bound by bound, so
+     a Hall inference made three decisions deep still cancels whatever the root
+     established. [snap.s_lo_root]/[s_hi_root] carry the test, snapshotted with everything
+     else the derivation reads (I-X6).
+
+   A bound that is neither -- moved under a decision -- is simply not cancelled, and the
+   row keeps its literal, which is exactly the sound shape the first paragraph describes. *)
 
 (* The Hall variables' share: one copy of ~x_ge_lo(x) per declared value below the
    interval and one of x_ge_(hi(x)+1) per declared value above it, which is exactly how
-   many [excl] summands [alo_window] added in each direction. *)
-let moved_bound_cancels ~a ~b ~halls ~level =
-  if level > 0 then []
-  else
-    List.concat_map
-      (fun s ->
-        let below = Stdlib.max 0 (a - s.s_dlo) and above = Stdlib.max 0 (s.s_dhi - b) in
-        (if below > 0 then [ Explanation.term below (states (Lit.ge s.s_name s.s_lo)) ]
-         else [])
-        @
-        if above > 0 then [ Explanation.term above (states (Lit.le s.s_name s.s_hi)) ]
-        else [])
-      halls
+   many [excl] summands [alo_window] added in each direction. A Hall variable's window is
+   inside [a, b], so [below > 0] implies its lo really has moved and [Lit.ge] below names
+   a literal the encoding has (likewise [above] and [Lit.le]). *)
+let moved_bound_cancels ~a ~b ~halls =
+  List.concat_map
+    (fun s ->
+      let below = Stdlib.max 0 (a - s.s_dlo) and above = Stdlib.max 0 (s.s_dhi - b) in
+      (if below > 0 && s.s_lo_root then
+         [ Explanation.defining below (Lit.ge s.s_name s.s_lo) ]
+       else [])
+      @
+      if above > 0 && s.s_hi_root then
+        [ Explanation.defining above (Lit.le s.s_name s.s_hi) ]
+      else [])
+    halls
 
 (* The pruned variable's own share, and it is ONE copy in ONE direction: the telescoping
    channelling sum leaves ~y_ge_lo(y) on a lower push and y_ge_(hi(y)+1) on an upper one,
    and nothing else of y's survives. [y] has no [alo_window] -- that asymmetry is the
    whole reason its terms are what the derivation is left holding -- so it must not be
-   handed to [moved_bound_cancels], which counts a Hall variable's [excl] summands. *)
-let target_cancel ~y ~lower ~level =
-  if level > 0 then []
-  else if lower then
-    if y.s_lo > y.s_dlo then [ Explanation.term 1 (states (Lit.ge y.s_name y.s_lo)) ]
+   handed to [moved_bound_cancels], which counts a Hall variable's [excl] summands.
+
+   The same per-bound root test as above, and for the same reason. *)
+let target_cancel ~y ~lower =
+  if lower then
+    if y.s_lo > y.s_dlo && y.s_lo_root then
+      [ Explanation.defining 1 (Lit.ge y.s_name y.s_lo) ]
     else []
-  else if y.s_hi < y.s_dhi then [ Explanation.term 1 (states (Lit.le y.s_name y.s_hi)) ]
+  else if y.s_hi < y.s_dhi && y.s_hi_root then
+    [ Explanation.defining 1 (Lit.le y.s_name y.s_hi) ]
   else []
 
 (* A pruning: raise lo(y) past the Hall interval, or lower hi(y) below it.
@@ -422,12 +455,12 @@ let prune_summands t ~a ~b ~halls ~y ~lower =
       (fun v -> cite (cid_of "d_fwd" (Encoding.direct_fwd_id t.enc y.s_name v)))
       keep
 
-let prune_expl t ~a ~b ~halls ~y ~lower ~level =
+let prune_expl t ~a ~b ~halls ~y ~lower =
   Explanation.deferred (fun () ->
       Explanation.combine
         (prune_summands t ~a ~b ~halls ~y ~lower
-        @ moved_bound_cancels ~a ~b ~halls ~level
-        @ target_cancel ~y ~lower ~level)
+        @ moved_bound_cancels ~a ~b ~halls
+        @ target_cancel ~y ~lower)
         1)
 
 (* ---------------------------------------------------------------------- reasons *)
@@ -473,7 +506,6 @@ exception Moved
    is the kind of thing that is sound by luck -- containment computed from wider, older
    bounds is a subset of the true one -- which is not a property worth resting on. *)
 let pass t store =
-  let level = Store.level store in
   let snaps = Array.to_list (Array.map (snap_of store) t.terms) in
   let los = List.sort_uniq compare (List.map (fun s -> s.s_lo) snaps) in
   let his = List.sort_uniq compare (List.map (fun s -> s.s_hi) snaps) in
@@ -488,7 +520,7 @@ let pass t store =
              (if lower then Reason.at_least ~name:y.s_name ~decl:y.s_dlo bound
               else Reason.at_most ~name:y.s_name ~decl:y.s_dhi bound))
         (prune_reason halls y ~lower)
-        (prune_expl t ~a ~b ~halls ~y ~lower ~level)
+        (prune_expl t ~a ~b ~halls ~y ~lower)
     in
     match
       if lower then Store.set_lo store x bound j else Store.set_hi store x bound j
