@@ -3208,6 +3208,24 @@ Either direction is fine; leaving it implicit is not.
 
 **It should not be settled by a profiler**, which is what will happen by default.
 
+### AMENDED 2026-09-21: the goal is stated, and this record blocks nothing
+
+The project's owner has stated the goal plainly: **implement explanation in a proof-logging
+solver.** Not produce a research artefact. That settles the half of this record that was
+speculative — the exportability argument (a `Combine` tree can be printed, diffed and shipped
+where a closure cannot) is **not a reason this project holds**, so it must not be cited as one.
+
+What survives is narrow and technical, and it is not a question anyone needs to answer now:
+**if** a future session proposes replacing the reified cutting-planes expression with a
+closure on runtime grounds, it needs a measurement, because D-0026 layered reasons-as-data
+under justifications-as-expression deliberately. That is a guard against an unexamined
+refactor, nothing more.
+
+**This record was briefly cited as a blocker on M4-T1. That was an orchestrator error and it
+is struck.** The dependency ran backwards: M4-T1 is the first derivation that actually
+exercises `Combine`/`Weaken`/`Model_row`, so it is the **evidence** that would inform this
+question, not something waiting on it. Nothing blocks M4-T1.
+
 ### Bearing on scheduled work
 
 **M4-T1 is where this stops being abstract** and is the reason for raising it now rather
