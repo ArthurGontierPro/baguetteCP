@@ -84,9 +84,7 @@ let map_of = function Const _ -> None | Affine { map; _ } -> Some map
 (* True when the view is its base unchanged, so a caller may treat it as the variable
    itself. Purely an optimisation hook: every function below is already correct on
    the identity view. *)
-let is_plain_var = function
-  | Const _ -> false
-  | Affine { map; _ } -> Lit.is_identity map
+let is_plain_var = function Const _ -> false | Affine { map; _ } -> Lit.is_identity map
 
 let equal a b =
   match (a, b) with
@@ -148,8 +146,7 @@ let size store = function
 let domain store = function
   | Const c -> Domain.singleton c
   | Affine { base; map } ->
-      Domain.affine (Store.get store base)
-        ~negated:map.Lit.negated ~offset:map.Lit.offset
+      Domain.affine (Store.get store base) ~negated:map.Lit.negated ~offset:map.Lit.offset
 
 (* --------------------------------------------------------------------- writes *)
 

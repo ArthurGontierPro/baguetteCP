@@ -327,7 +327,11 @@ let affine d ~negated ~offset =
   match d.holes with
   | None -> { lo = l; hi = h; holes = None }
   | Some hs when not negated ->
-      { lo = l; hi = h; holes = Some { hs with base = hs.base + offset; bits = Bytes.copy hs.bits } }
+      {
+        lo = l;
+        hi = h;
+        holes = Some { hs with base = hs.base + offset; bits = Bytes.copy hs.bits };
+      }
   | Some hs ->
       (* Old bit [i] stands for [hs.base + i], whose image is [offset - hs.base - i].
          So the image's bitset is the old one reversed, over the mirrored base. *)
