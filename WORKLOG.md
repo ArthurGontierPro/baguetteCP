@@ -27,6 +27,24 @@ need one, so it holds the file and reports rather than being blocked by a bounda
 `Weaken` and `Model_row` were built for exactly this; if they suffice, that is itself the
 result D-0027 anticipated.
 
+**Added alongside wave twenty-two: M6-T1 (agent-prof).**
+
+**agent-prof holds `bench/**` and nothing else** — `lib/`, `bin/`, `test/` and `scripts/` are
+**read-only** to it. M6-T1 is "profile; establish the propagation hot path", and it is a
+measurement row: if it finds a hot spot it **reports** it, it does not fix it. That is what
+keeps it disjoint from agent-hall, which holds most of `lib/`.
+
+**It is no longer premature, which it was when I declined it in wave seventeen.** The suite is
+64 models with genuinely hard ones (`php_wide_unsat` is 1439 nodes unlearned), and PB
+propagation, arithmetic and reification have all landed since. There is now something to
+profile. It also has to land before M6-T2 (domains/trail to `Bigarray`) and M6-T3 (buffered
+proof writing), or both of those are guesses.
+
+**The trap it must not fall into is already measured**: `bench/README.md` §3 and §3a found that
+most models sit at the **process floor**, where the timing column measures `exec` and not this
+solver. §3b already split propagation from emission (M1-T47). It must build on those rather
+than rediscover them.
+
 **Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `dune-project`,
 `scripts/**`, `bench/**`, `bin/main.ml`, `lib/core/{search,engine,store,domain,var,view}.ml`
 and all merging. I am doing **M6-T5** (`check_determinism.sh` ignoring `test/models/PENDING`)
