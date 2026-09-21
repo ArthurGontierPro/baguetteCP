@@ -10,6 +10,33 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
+**Wave twenty-three is running: M5-T1+M5-T2 (agent-bb) and M6-T6 (agent-bisect).**
+
+**agent-bb holds** `lib/core/{search,engine}.ml`, `lib/proof/{writer,encoding}.ml`,
+`bin/main.ml`, `lib/flatzinc/**`, `test/models/**`, `test/expected/**` and
+`test/unit/{test_proof,test_endtoend,test_output,test_compile,test_flatzinc,test_matrix}.ml`.
+M5-T1 and M5-T2 go together because `conclusion BOUNDS` is the proof half of branch and bound;
+splitting them would put the search and its conclusion in different branches.
+
+**It is not starting from nothing**: `Ast.solve_kind` and `Model.objective` already carry
+`Minimize`/`Maximize`, `Writer.obju` exists at `writer.ml:1183`, and the `Bounds` conclusion
+variant at `:1244`. **`PROOF-FORMAT.md` line 136 already records the trap**: `obju` *"needs
+explicit subproofs — Proofgoal #1 could not be autoproven"*, measured and filed against M5.
+
+**agent-bisect holds `bench/**` and nothing else**, read-only over the rest. M6-T6 is the
+`width_sat_depth` regression: the model's own header says 43 ms, it is 160 ms shipped and
+**590 ms with learned propagation off**, so the tree underneath costs roughly **14×** what the
+comment claims. M6-T1 hypothesised M2-L13 as the cause; measurement showed it is the
+**mitigation** (worth ~4×). **The row says bisect, not hypothesise** — `perf` is unavailable on
+this kernel, so the tool is `git bisect` plus a wall-clock harness, in its own worktree.
+
+**Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `dune-project`,
+`scripts/**`, `lib/core/prop/**` and all merging.
+
+Wave twenty-two (M4-T1, M6-T1) is merged, released and pushed. Baseline: **2564 ok / 0 FAIL,
+280 matrix, 44 mutation, 73/73 models**.
+
+
 **Wave twenty-two is running: M4-T1 (agent-hall), ALONE.**
 
 **This row goes out solo deliberately.** Its own text says it is *"an experiment, not
