@@ -710,6 +710,105 @@ the top of the tree and a learned clause has almost no subtree left to prune. A 
 datapoint from a model that *can* show the effect is worth more than another shape that
 flatters it.
 
+## 3f. The propagation hot path (M6-T1), 2026-09-21
+
+The question this row exists to answer: is M6-T2 (domains/trail to `Bigarray`, for
+minor-GC pressure) or M6-T3 (buffered proof writing) worth doing, or is either a guess?
+Re-ran the full 64-model suite (`bench/run_bench.sh -o`, 5 repeats, load average 0.35-0.37,
+so the warning did not fire) rather than trusting §3b's 30-model, 2026-09-18 figures, which
+predate PB slack-over-the-ladder (M2-L13), reification (M3-T2/M3-T4) and arithmetic
+(M4-T4b).
+
+**Which models carry signal.** Of 64, **10** have `inmain` CPU above 2 ms, clearly
+separated from the rest, which sit at 400 us-1.5 ms of solver work under a 4.7-4.9 ms
+process floor (`wall us` 7.6-10.5 ms, i.e. still §3a's floor-bound majority): `width_sat_depth`
+157 ms, `php_wide_unsat` 54 ms, `php_escape_sat` 44 ms, `colour_unsat` 44 ms,
+`width_root_unsat` 33 ms, `php_unsat` 30 ms, `php_decoy_unsat` 15 ms, `arith_times_sat`
+5.7 ms, `chain_sat` 2.2 ms, `ladder_lift_unsat` 2.0 ms. The other 54 are floor-bound; a
+timing claim about them is a claim about `exec`, exactly as §3 found.
+
+**Emission is not the hot path, confirmed a second way.** On every signal model, `emit`
+(`Writer`'s own output calls, `clkovh` not yet subtracted) is 2-4% of `inmain`:
+`width_sat_depth` 827 us of 156963 us, `php_wide_unsat` 1646 us of 54438 us, `colour_unsat`
+1491 us of 43559 us, `php_escape_sat` 1737 us of 44205 us. That reproduces §3b's finding on
+a suite more than twice the size and on models that actually conflict, not just the two
+width fixtures §3b had. Stronger evidence still: re-running `width_sat_depth` and the other
+signal models **with no `--proof` flag at all** (so `Writer` never opens, no rule body is
+ever rendered) changes allocated words by under 1% (`width_sat_depth`: 38 816 928 words
+with `--proof`, 38 589 514 without; `colour_unsat`: 2 618 098 vs 2 570 547; `php_wide_unsat`:
+3 353 908 vs 3 324 084). **Proof writing is not on the hot path of any signal model. M6-T3
+is not supported by this measurement — do not spend the row.** (`width_root_unsat` is the
+one exception and for a different reason: its allocation drops from 2.3M to 0.66M words
+without `--proof`, but that is `Encoding.write_opb` -- stating the 126 kB problem, before
+`search` even opens -- not proof *emission*, and §3a already named `.opb` as that model's
+cost.)
+
+**Minor-GC pressure is real, and concentrated on one model.** `OCAMLRUNPARAM='v=0x400'`
+(the OCaml runtime's own verbose-GC summary, no code change) over the signal models:
+
+```
+model               allocated words   minor GCs   inmain (from --time)
+width_sat_depth        38 816 928         154          156 963 us
+php_wide_unsat           3 353 908          17           54 438 us
+php_escape_sat           2 687 884          14           44 205 us
+colour_unsat              2 618 098          13           43 559 us
+width_root_unsat          2 315 005          12           32 777 us
+trivial_sat                   8 279           0              422 us
+```
+
+`width_sat_depth` allocates **11-15x** what the next-heaviest signal model does, for a
+53-node tree (fewer nodes than `php_wide_unsat`'s 77) that is only declared `var 0..99` --
+the model's own header comment (`test/models/width_sat_depth.fzn:24`) still says "at 99 it
+is 43 ms end to end", written before M2-L13. Measured now: **150-172 ms**, a **3.5-4x**
+regression from that comment, reproducible over three separate runs (145.7, 171.8, 156.6 ms)
+and stable in the harness's own 5-repeat minimum (156.8 ms, 6% spread). **That comment is
+a stale figure and this is the re-measurement**, flagged rather than quoted uncritically as
+CLAUDE.md requires.
+
+The likely mechanism, read from the commit that best fits the shape rather than from new
+instrumentation (no `perf` is installed for this WSL2 kernel -- see "Method" below): M2-L13
+step 4 (`6a685a0`, 2026-09-18, same day as §3b) made the PB propagator's slack rule
+`lib/core/prop/pb.ml` read the **whole suffix of a variable's ladder rungs** rather than one
+coefficient -- "falsifying `[x>=3]` falsifies `[x>=5]` with it" -- which is what halved
+`width_sat_depth`'s node count (99 -> 53, its own commit message) but makes each slack
+recomputation `O(width)` rather than `O(1)`. Retention defaults to `keep_all`
+(`stats: retention keep-all: 27 added, 0 evicted`, this run), so all 26 learned PB/clause
+rows from this model's 26 conflicts stay live as engine propagator instances for the rest
+of search, each re-invoked to fixpoint on every subsequent domain change. A growing set of
+`O(width)`-per-call propagators, run to fixpoint at every one of 53 nodes over a domain of
+100, is consistent with both the allocation figure and the 154 minor collections, but this
+is a **hypothesis from the commit log and the stats counters, not a code-level attribution**
+-- see "Method" for what could not be checked.
+
+**So: is M6-T2 worth it?** Partially supported, narrower than "domains/trail everywhere".
+Peak RSS stays trivial throughout (8.5 MB for `width_sat_depth` alone, `/usr/bin/time -v`)
+-- this is allocation *rate*, not a memory ceiling, exactly M6-T2's stated concern. But the
+evidence points at PB-row/learned-instance churn under `keep_all` retention interacting with
+an `O(width)` ladder-suffix read, not obviously at `Store`'s domain or trail representation,
+which is what M6-T2 as scoped (`Bigarray`/`Bytes` for domains/trail) would touch. Moving
+domains/trail to `Bigarray` would reduce *some* minor-GC pressure suite-wide, but the 11-15x
+outlier that makes this row's case would very likely survive it unless the PB propagator's
+own per-call allocation moves too, which is a different row's scope
+(`lib/core/prop/pb.ml`, not `lib/core/{domain,store}.ml`). Recommend: re-scope or split
+before spending M6-T2 -- the domains/trail change and the PB-propagator-under-`keep_all`
+question are not the same fix.
+
+**Method, and what it cannot see.** `bench/run_bench.sh -o` for the wall/internal/learning
+tables (the harness's own self-checks passed: emit/propag split moves, `.opb` path-independence).
+`OCAMLRUNPARAM='v=0x400'` for GC counters -- the OCaml runtime's built-in verbose-GC summary,
+no instrumentation added to `lib/` or `bin/`, so it is exact for what it reports (whole-process
+totals) but attributes nothing to a call site. `perf` is absent for this machine's WSL2 kernel
+(`6.18.33.2-microsoft-standard-WSL2` has no matching `linux-tools` package here) so no
+sampling profile or flamegraph was possible; the `O(width)`-in-`pb.ml` mechanism above is
+read from the M2-L13 commit message and the `--stats` counters, not confirmed by a profiler.
+A future session with `perf` available, or `landmarks`/manual counters added to
+`lib/core/prop/pb.ml` (out of scope here -- `lib/` is read-only to this row), could confirm
+or refute it directly.
+
+**Reproducibility.** `width_sat_depth`'s allocated-word count and minor-GC count were
+identical across two `--proof`-less runs; its wall time varied 145.7-171.8 ms over three
+runs (a 15% spread, in line with the harness's own noise discipline in §2). `git status`
+in this worktree is clean throughout -- only `bench/README.md` (this section) changed.
 
 ## 4. What the columns are *not*
 
