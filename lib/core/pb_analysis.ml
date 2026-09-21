@@ -812,8 +812,10 @@ let to_string (t : t) =
       closure is RIGHT and not merely safe.** This note used to hand the question on,
       because M2-L13 made a PB row propagate and "that would change the calculation" had
       stopped being hypothetical. It did change the calculation -- just not on this side
-      of it. See D-0056 and lib/core/search.ml's [pb_level_verdict]; the short form is
-      three sentences.
+      of it. See lib/core/search.ml's [pb_level_verdict], which has the argument in full.
+      A DECISION RECORD IS OWED for this and is not written here: M2-L15 does not own
+      docs/DECISIONS.md and a number pinned from a worktree is a number a concurrent
+      session may already have taken.
 
       The quantity this module can offer is [levels] and [asserting_level] above, and
       neither is in the currency the backjump is stated in. lib/core/search.ml's backjump

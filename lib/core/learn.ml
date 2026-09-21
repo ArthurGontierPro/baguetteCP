@@ -93,7 +93,8 @@
    falsification, not about dependence. Measured over the 44 models: the two sets differ on
    77 of 103 conflicts and on 76 of those the PB set is a strict SUBSET, so the rule would
    jump too high, not too low. [Search.backjump_on_pb] takes it and veripb rejects the
-   nogood. See lib/core/search.ml's [pb_level_verdict] and docs/DECISIONS.md D-0056.
+   nogood. See lib/core/search.ml's [pb_level_verdict]; the decision record is owed and
+   is noted in M2-L15's handoff rather than numbered from a worktree.
 
    What M2-L13 did change is [Analysis.analyse ~scope:Everywhere]'s own answer: a learned
    PB instance's pruning is a trail entry with reason facts, so the walk resolves through
