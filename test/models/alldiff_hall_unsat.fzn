@@ -1,0 +1,18 @@
+% The Hall pigeonhole, at the root, with every variable at its declared bounds.
+%
+% Three variables in two values. The Hall interval [1, 2] contains all three, so the
+% counting argument in lib/core/prop/alldiff.ml cancels completely and derives the
+% EMPTY contradiction -- there is no bound fact left over to disjoin it with, because
+% no bound has moved.
+%
+% This model is M4-T1's obligation (c): its `conclusion UNSAT` cites the id of the Hall
+% derivation itself, not the empty clause a D-0022 close would put there. That is only
+% true because no part of the derivation is an Explanation.Clause (Search.rests_on_a_clause
+% would route it the other way), which is why lib/proof/encoding.ml posts all_different
+% as pairwise CLAUSE rows and alldiff.ml recovers each at-most-one line by `pol`.
+% test/unit/test_prop.ml asserts the citation, so this is checked and not assumed.
+var 1..2: x :: output_var;
+var 1..2: y :: output_var;
+var 1..2: z :: output_var;
+constraint all_different_int([x, y, z]);
+solve satisfy;

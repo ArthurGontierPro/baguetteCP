@@ -1,0 +1,25 @@
+% The pigeonhole again, but reached by PROPAGATION rather than by the declarations, and
+% therefore the case where M4-T1's `pol` goes decorative.
+%
+% a + b >= 7 and c + d >= 7 over 1..4 force all four variables into 3..4, so [3, 4] is a
+% Hall interval holding four variables and two values. Unlike alldiff_hall_unsat, every
+% one of those bounds MOVED, so each at-least-one line has to be narrowed and the Hall
+% derivation carries the four bound literals into its row. Cancelling them needs "the id
+% of the line that establishes this bound fact", which Explanation.t cannot say (D-0009's
+% open ADT gap), so lib/core/prop/alldiff.ml cancels them with Explanation.clause instead
+% -- the claim index hands back the trace line that already states each one, minting
+% nothing -- and Search.rests_on_a_clause then closes the root the D-0022 way.
+%
+% So `conclusion UNSAT` here cites `rup >= 1`, not the Hall pol: the derivation is still
+% checked (it is on the page, and the empty clause is RUP only because it is), but it is
+% not what the conclusion rests on. alldiff_hall_unsat is the model that shows the other
+% case, and the pair is the evidence M4-T1 was asked for. test/unit/test_prop.ml asserts
+% both citations, so neither is a claim about output nobody reads.
+var 1..4: a :: output_var;
+var 1..4: b :: output_var;
+var 1..4: c :: output_var;
+var 1..4: d :: output_var;
+constraint int_lin_le([-1,-1],[a,b],-7);
+constraint int_lin_le([-1,-1],[c,d],-7);
+constraint all_different_int([a, b, c, d]);
+solve satisfy;

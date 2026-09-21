@@ -1,0 +1,15 @@
+% all_different under DECISIONS, which is the arm where the Hall derivation is NOT what
+% closes the branch -- D-0018's nogood is -- and where [Alldiff]'s bound-fact cancellation
+% is deliberately switched off, because a bound established by a decision is not a
+% consequence of the model and a `rup` unit for it would be false.
+%
+% Four variables over 1..4 that must be pairwise different sum to 10, so `<= 9` is
+% unsatisfiable; no interval is a Hall set at the root, so the solver has to branch, and
+% every Hall inference in this proof is made and used under at least one decision.
+var 1..4: a :: output_var;
+var 1..4: b :: output_var;
+var 1..4: c :: output_var;
+var 1..4: d :: output_var;
+constraint int_lin_le([1,1,1,1],[a,b,c,d],9);
+constraint all_different_int([a, b, c, d]);
+solve satisfy;

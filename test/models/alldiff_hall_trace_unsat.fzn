@@ -1,0 +1,24 @@
+% I-X10 and D-0040, as a model: a Hall pruning that LANDS, and is then followed by a
+% conflict, so its trace line is written and has to be checked.
+%
+% x, y <= 2 makes {x, y} a Hall set for [1, 2], which pushes both z and w to 3..4; the
+% `z + w <= 5` row then contradicts that. The trace line for the pruning of z is
+%
+%     rup +1 z_ge_3 +1 x_ge_3 +1 y_ge_3 >= 1 ;
+%
+% and D-0040 measured 3.0.2 REFUSING exactly that shape standalone -- it is a counting
+% argument over the pairwise rows, not unit propagation. It verifies here only because
+% lib/core/trace.ml's [derive_ahead] writes the Hall `pol` immediately before it, which
+% is the "explicit pol ahead of its trace line" D-0040 requires and the obligation
+% test/unit/test_trace.ml's I-X10 gate now checks rather than merely classifies.
+%
+% Deleting that one call reddens this model, and test_trace.ml performs that break.
+var 1..4: x :: output_var;
+var 1..4: y :: output_var;
+var 1..4: z :: output_var;
+var 1..4: w :: output_var;
+constraint int_le(x, 2);
+constraint int_le(y, 2);
+constraint all_different_int([x, y, z, w]);
+constraint int_lin_le([1,1],[z,w],5);
+solve satisfy;

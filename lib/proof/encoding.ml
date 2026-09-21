@@ -202,6 +202,26 @@ type t = {
          (M1-T9's disequality rows need one each). Only ever increases, so a name
          handed out once is never handed out again even after a failed candidate.
          See [fresh_aux_name]. *)
+  mutable direct_wanted_rev : string list;
+      (* M4-T1. The variables a propagator has declared it will need the DIRECT
+         encoding for, recorded at compile time and materialised by [start_proof].
+
+         Why a request list and not [ensure_direct] at the point of use: the direct
+         encoding is written with [red], which needs a [Writer.t], and a propagator
+         has none -- [Propagator.propagate] takes a [Store.t] and nothing else, and
+         that is not an oversight (lib/core/propagator.ml). An [Explanation.t] is a
+         VALUE naming constraint ids (D-0027 point 1, [Explanation.Model_row]), so
+         the ids it names must already exist when the propagator builds it. So the
+         materialisation happens once, at the top of the proof, for the variables
+         [Compile] says will need it, and the propagator reads the ids back out.
+
+         Declared order, not request order, so that the .pbp is byte-identical
+         whatever order [Compile] walks the constraints in ([alldiff_direct_vars]
+         below sorts by declaration). The determinism lane is what would catch a
+         regression here. *)
+  alo : (string, cid) Hashtbl.t;
+      (* x -> the id of the at-least-one line [derive_at_least_one] wrote for it,
+         populated by [start_proof] alongside the direct encoding itself. *)
 }
 
 let create () =
@@ -212,6 +232,8 @@ let create () =
     n = 0;
     objective = None;
     n_aux = 0;
+    direct_wanted_rev = [];
+    alo = Hashtbl.create 16;
   }
 
 let find t x =
@@ -482,6 +504,52 @@ let retire_direct t w x =
 let retire_all_direct t w = List.iter (fun x -> retire_direct t w x) (vars t)
 
 (* ---------------------------------------------------------------------------
+   M4-T1: the direct encoding a global constraint asks for up front
+   --------------------------------------------------------------------------- *)
+
+(* "This variable's propagator will cite direct-encoding ids." Called by
+   lib/flatzinc/compile.ml for every `all_different_int` scope, before the .opb is
+   written; honoured by [start_proof], which is the first moment a [Writer.t] exists.
+
+   Idempotent, and it does NOT write anything: a request recorded twice materialises
+   once. It raises [Direct_too_large] here rather than at [start_proof] so the refusal
+   names the constraint's own variable at compile time, where the diagnostic can carry
+   a source position -- [max_direct_values] is the width refusal this module's header
+   points at, and a propagator that needs a direct encoding on a domain that wide is a
+   design problem, not a budget problem. *)
+let request_direct t x =
+  let v = find t x in
+  let size = v.hi - v.lo + 1 in
+  if size > max_direct_values then raise (Direct_too_large (x, size));
+  if not (List.mem x t.direct_wanted_rev) then
+    t.direct_wanted_rev <- x :: t.direct_wanted_rev
+
+let direct_requested t = List.filter (fun x -> List.mem x t.direct_wanted_rev) (vars t)
+
+(* The ids a Hall derivation names with [Explanation.Model_row]. Each is [None] exactly
+   when the line does not exist, and every [None] here is a CONSTANT, not a gap:
+
+     - [direct_lo_id] at [v = lo]   -- "x_eq_lo -> x >= lo" is the constant true;
+     - [direct_hi_id] at [v = hi]   -- "x_eq_hi -> x <= hi" is the constant true;
+     - [consistency_id] outside (lo, hi) -- the ladder rung does not exist.
+
+   A caller that adds nothing for a [None] is therefore adding nothing where the
+   arithmetic needs nothing. [direct_fwd_id] is always present for an in-domain value,
+   which is why it has no such case. *)
+let direct_lo_id t x value =
+  match (find t x).direct with None -> None | Some d -> Hashtbl.find_opt d.d_lo value
+
+let direct_hi_id t x value =
+  match (find t x).direct with None -> None | Some d -> Hashtbl.find_opt d.d_hi value
+
+let direct_fwd_id t x value =
+  match (find t x).direct with None -> None | Some d -> Hashtbl.find_opt d.d_fwd value
+
+(* The at-least-one line for [x], derived from the channelling by [start_proof].
+   [None] when no direct encoding was requested for [x]. *)
+let at_least_one_id t x = Hashtbl.find_opt t.alo x
+
+(* ---------------------------------------------------------------------------
    Assignments
    --------------------------------------------------------------------------- *)
 
@@ -528,8 +596,30 @@ let assignment_lits t bindings =
 let write_opb ?(comments = []) t oc =
   Opb.write ?objective:t.objective oc ~comments ~constraints:(constraints t)
 
-(* Start the proof. Must be called after the .opb is complete (invariant I-X5). *)
-let start_proof t w = Writer.header w ~n_model_constraints:t.n
+(* Start the proof. Must be called after the .opb is complete (invariant I-X5).
+
+   M4-T1: and then materialise every direct encoding [request_direct] asked for, with
+   its at-least-one line. Three things about doing it HERE rather than on demand:
+
+   - it is the first moment a [Writer.t] exists, and [red] needs one;
+   - it is before the first decision, so the lines sit at level 0 and no [w] retires
+     them out from under a derivation that names them (I-S4);
+   - the ids are then stable for the whole search, which is what lets a propagator's
+     [Explanation] name them as data instead of resolving them at emit time (I-X6).
+
+   PROOF-FORMAT section 3 is normative on the ORDER inside [ensure_direct] and on the
+   at-least-one line being *derived* rather than asserted; neither is re-argued here.
+   The `red` lines are written over a database that is not yet contradictory, which is
+   the condition D-0053 says a `red` must be verified under. Nothing retires these ids
+   in this module: lib/core/search.ml sweeps [Writer.live_ids] on both the SAT and the
+   UNSAT arm, so I-X2 is discharged there with every other level-0 line. *)
+let start_proof t w =
+  Writer.header w ~n_model_constraints:t.n;
+  List.iter
+    (fun x ->
+      ignore (ensure_direct t w x);
+      Hashtbl.replace t.alo x (derive_at_least_one t w x))
+    (direct_requested t)
 
 (* ---------------------------------------------------------------------------
    M1-T7c: expanding an integer linear term into a PB row over the order
@@ -745,6 +835,66 @@ let ne_clause_lits ~name ~decl_lo ~decl_hi value =
 let ne_clause t x value =
   let v = find t x in
   ne_clause_lits ~name:x ~decl_lo:v.lo ~decl_hi:v.hi value
+
+(* ---------------------------------------------------------------------------
+   M4-T1: all_different_int, as pairwise disequality CLAUSES over the order encoding
+   ---------------------------------------------------------------------------
+
+   One .opb row per (unordered pair of variables, shared declared value):
+
+       x <> v  \/  z <> v        i.e.   ~x_ge_v \/ x_ge_(v+1) \/ ~z_ge_v \/ z_ge_(v+1)
+
+   spelled with [ne_clause_lits] on each side, so the constant halves drop at the
+   declared bounds exactly as they do for `int_ne`.
+
+   WHY NOT [add_int_lin_ne] PER PAIR, which is the obvious reuse and was the first
+   shape tried. Two reasons, and the second is the one that decided it:
+
+   1. Size. The big-M pair is 2 rows plus a fresh Boolean per pair, but each row is a
+      full-width order-encoding expansion of `x - z`; the clause form is one row per
+      shared value, each of at most four literals, and no auxiliary variable at all.
+
+   2. **The Hall justification has to recover a per-value at-most-one line, and it has
+      to recover it by [pol].** From this clause form the recovery is five ids and one
+      division (lib/core/prop/alldiff.ml, [pair_amo]); from the big-M pair it is a
+      derivation that must first re-establish "x_eq_v pins every rung of x's ladder",
+      which is the variable's whole declared width, twice, per pair, per value. The
+      cheap route is a [rup] -- and a [rup] is exactly what must NOT be in this
+      derivation: lib/core/search.ml's [rests_on_a_clause] routes any conflict whose
+      derivation rests on an [Explanation.Clause] the D-0022 way, so `conclusion UNSAT`
+      would cite the empty clause and every [pol] in the Hall tree would be decorative
+      (D-0057, and again in D-0060). A derivation nothing checks is not evidence, and
+      this row exists to produce evidence.
+
+   Faithfulness is the same argument [ne_clause_lits] already makes: "x <> v" as a
+   clause over order literals introduces no name and no channelling, so the .opb still
+   speaks only about the model's own variables and a [conclusion SAT] assignment over
+   them decides every row. A pair whose two variables are both declared fixed at [v]
+   yields the EMPTY clause, which is the false row -- the right answer, and the same
+   degeneracy [ne_clause_lits]'s own header records.
+
+   Returns, for each pair and value, the id of that row, keyed by the two variable
+   names in the order given and the value. The caller (lib/flatzinc/compile.ml) hands
+   the list to the propagator, which names the ids with [Explanation.Model_row]. *)
+let add_all_different t (names : string list) : ((string * string * int) * cid) list =
+  let rec pairs = function
+    | [] -> []
+    | x :: rest -> List.map (fun z -> (x, z)) rest @ pairs rest
+  in
+  List.concat_map
+    (fun (x, z) ->
+      let vx = find t x and vz = find t z in
+      let lo = Stdlib.max vx.lo vz.lo and hi = Stdlib.min vx.hi vz.hi in
+      List.init
+        (Stdlib.max 0 (hi - lo + 1))
+        (fun i ->
+          let v = lo + i in
+          let lits =
+            ne_clause_lits ~name:x ~decl_lo:vx.lo ~decl_hi:vx.hi v
+            @ ne_clause_lits ~name:z ~decl_lo:vz.lo ~decl_hi:vz.hi v
+          in
+          ((x, z, v), add_constraint t (Opb.clause lits))))
+    (pairs names)
 
 (* The least and greatest values [sum a_i x_i] can take over the declared domains.
    Zero coefficients contribute nothing, as everywhere else in this module. *)
