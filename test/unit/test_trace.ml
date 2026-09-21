@@ -1064,6 +1064,17 @@ let ix10_table =
        own facts -- the guard Booleans' facts included, which is what makes the big-M term
        vanish. No second constraint takes part and nothing is derived ahead of the line. *)
     ("arith.ml", Single_row);
+    (* M4-T3: array_int_element. Single_row on the Ne precedent -- "one model constraint"
+       is a rule about the CONSTRAINT, not the row count. array_int_element is one
+       constraint posted as 2n rows, the way int_lin_ne is one posted as two big-M rows
+       whose selector the checker's own unit propagation fills in. Negate an index
+       pruning: one row plus the result's ladder refutes it. Negate a result pruning:
+       each disagreeing position is excluded by its own row and the index's ladder has
+       nothing left. MEASURED for the result side -- it has no direct encoding, so
+       Trace.derive_ahead never fires for it, and all seven element models plus a scene
+       built to defeat it verify with nothing written ahead of their lines (I-S4/D-0039:
+       RUP against the .opb plus EARLIER TRACE LINES, not a second model constraint). *)
+    ("element.ml", Single_row);
     (* M4-T1: all_different_int. THE FIRST [Needs_derivation] FAMILY, and the one the
        classification above was written in anticipation of.
 

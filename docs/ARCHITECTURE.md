@@ -87,6 +87,8 @@ lib/core/       Baguette_core
                             justification. Stage 1 of two; M4-T2 sequences beside it.
                             The row that proved Combine/Weaken/Model_row carry a real
                             global (M4-T1, D-0061)
+    element.ml              array_int_element, DOMAIN consistent; the index is a
+                            VIEW rather than an auxiliary (M4-T3, D-0058)
     linear.ml               int_lin_le. THE REFERENCE PROPAGATOR -- copy this shape
     lin_eq.ml               int_lin_eq (two model rows, see D-0011)
     ne.ml                   int_lin_ne and int_ne (VALUE consistency)

@@ -369,7 +369,7 @@ let implies_out t p = restate t (row_out t p) p
 (* ---- shape 1: why a position is impossible ---- *)
 
 (* [~idx_eq_p \/ c_ge_(hi+1)], for as[p] above the result's current window. *)
-let excl_above t p ~hi =
+let excl_above t p ~bhi:hi =
   let w = t.values.(p) in
   Explanation.combine
     (Explanation.term 1 (implies_ge t p)
@@ -384,7 +384,7 @@ let excl_above t p ~hi =
     1
 
 (* [~idx_eq_p \/ ~c_ge_lo], for as[p] below it. *)
-let excl_below t p ~lo =
+let excl_below t p ~blo:lo =
   let w = t.values.(p) in
   Explanation.combine
     (Explanation.term 1 (implies_le t p)
@@ -492,10 +492,10 @@ let pos_gone t store p =
     let w = t.values.(p) in
     let rlo = View.lo store t.res and rhi = View.hi store t.res in
     if w > rhi then
-      ( later (fun () -> excl_above t p ~hi:rhi),
+      ( later (fun () -> excl_above t p ~bhi:rhi),
         if w > t.rdhi then R_none else R_res_hi rhi )
     else if w < rlo then
-      ( later (fun () -> excl_below t p ~lo:rlo),
+      ( later (fun () -> excl_below t p ~blo:rlo),
         if w < t.rdlo then R_none else R_res_lo rlo )
     else if not (View.mem store t.res w) then
       match hole_line t store w with
