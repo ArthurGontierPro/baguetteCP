@@ -1,0 +1,9 @@
+% x * y = z with both factors straddling zero and z pinned negative, so the solution
+% needs one factor from each sign region -- the case the four guarded families exist for.
+var -3..3: x :: output_var;
+var -3..3: y :: output_var;
+var -9..9: z :: output_var;
+constraint int_times(x, y, z);
+constraint int_eq(z, -6);
+constraint int_le(x, -1);
+solve satisfy;

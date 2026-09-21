@@ -1,0 +1,8 @@
+% docs/SPEC.md 2.1 / D-0033: -7 div 2 is -3, not -4. A solver that floored would report
+% q = -4 here, and the int_eq below would make the model UNSAT for it.
+var -7..-7: x :: output_var;
+var 2..2: y :: output_var;
+var -5..5: q :: output_var;
+constraint int_div(x, y, q);
+constraint int_eq(q, -3);
+solve satisfy;

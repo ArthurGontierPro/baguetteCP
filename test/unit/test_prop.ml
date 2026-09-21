@@ -4637,6 +4637,204 @@ let test_arith_propagation () =
     ~names:[ "x"; "y"; "q" ] ~family:Arith.Div ~xb:(1, 7) ~yb:(0, 3) ~zb:(-9, 9)
     ~exact:false
 
+
+(* ------------------------------------ D-0033's hardest test, put to the checker
+
+   The decision record asks for more than "the right rounding produces an accepted
+   proof": it asks to watch the WRONG rounding produce a REJECTED one. The model is
+   `-7 div 2`, whose answer is -3 under truncation toward zero and -4 under flooring,
+   and the two claims below differ by exactly that one step.
+
+   Both proofs are checked against the SAME .opb -- the real one, built by the real
+   front end from the real model -- so what is being measured is whether the posted
+   rows say the truncating thing, not whether a hand-written row does. The rejection
+   is asserted on the checker's full sentence: an exit status cannot tell a judgement
+   from a parse error, and "reverse unit propagation" alone would match any other RUP
+   failure in any proof.
+
+   Note what this test can and cannot see. It cannot see a mistake made in BOTH the
+   rows and the propagator at once, because they are built from one [Arith.row] list
+   and there is no second statement of the rounding to disagree with the first --
+   which is the design's answer to D-0029's asymmetry, not an accident. That case is
+   the brute-force lane's, and [Model.check_assignment]'s. *)
+let arith_div_rounding_src =
+  "var -7..-7: x;\nvar 2..2: y;\nvar -5..5: q;\nconstraint int_div(x, y, q);\n\
+   solve satisfy;\n"
+
+let build_arith_rounding ~claim dir =
+  let t = compile_src arith_div_rounding_src in
+  let e = t.Compile.encoding in
+  let opb = Filename.concat dir "round.opb" in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "-7 div 2 (D-0033)" ] e oc;
+  close_out oc;
+  let n = Opb.n_checker_constraints (Encoding.constraints e) in
+  let pbp = Filename.concat dir "round.pbp" in
+  let oc = open_out pbp in
+  Printf.fprintf oc
+    "pseudo-Boolean proof version 3.0\n\
+     f %d ;\n\
+     rup +1 %s >= 1 ;\n\
+     output NONE ;\n\
+     conclusion NONE ;\n\
+     end pseudo-Boolean proof ;\n"
+    n claim;
+  close_out oc;
+  (opb, pbp)
+
+(* ------------------------------------ the pol has to be load-bearing
+
+   A refutation that rests on a clause is closed the D-0022 way with `rup >= 1`, and
+   then every `pol` in the file is decorative: veripb accepts a `pol` whatever it
+   derives, because a `pol` is a derivation and derivations are sound by construction.
+   **A control that emits a wrong `pol` and stops is therefore useless** -- the first
+   version of this test did exactly that and passed with the coefficient broken. What
+   makes a `pol` load-bearing is a later line that needs it to say something, and the
+   strongest such line is `conclusion UNSAT : @cid`, which demands that @cid be
+   contradictory.
+
+   So the scene makes the WRONG propagator CONFLICT where the honest row does not. The
+   .opb keeps `z - 2x >= 0`, the int_times row at v = 2; the [Linear] instance citing
+   it is built over `z - 3x >= 0`. With x >= 2 and z <= 5 the honest row is satisfied
+   (z >= 4) and the broken one is not (z >= 6), so the broken instance reports a
+   conflict, its D-0013 derivation over the honest row derives something that is NOT
+   contradictory, and the checker says so. With the honest coefficient the same code
+   path prunes instead of conflicting, which is the positive half. *)
+let build_arith_pol_break ~coeff dir =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:1 ~hi:3;
+  Encoding.declare_int e "z" ~lo:0 ~hi:5;
+  (* The honest int_times row at v = 2: z - 2x >= 0, i.e. -z + 2x <= 0. *)
+  let row_id = Encoding.add_int_lin_le e [ (-1, "z"); (2, "x") ] 0 in
+  let x_ge_2 = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "x" 2) ] 1) in
+  let opb = Filename.concat dir "polbreak.opb" in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "z - 2x >= 0, the int_times row at v = 2" ] e oc;
+  close_out oc;
+  let store =
+    Store.create ~names:[| "x"; "z" |] ~domains:[| Domain.make 1 3; Domain.make 0 5 |]
+  in
+  (match
+     Store.set_lo store (Var.of_int 0) 2
+       (Reason.because ~concludes:None Reason.none (Explanation.model_row x_ge_2))
+   with
+  | Store.Changed -> ()
+  | _ -> failwith "build_arith_pol_break: x >= 2 setup failed");
+  let lin = Linear.make ~row_id store [ (-1, Var.of_int 1); (coeff, Var.of_int 0) ] 0 in
+  let pbp = Filename.concat dir "polbreak.pbp" in
+  let oc = open_out pbp in
+  let w = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof e w;
+  let ctx = Justify.create ~writer:w ~encoding:e in
+  (match Linear.propagate lin store with
+  | Propagator.Conflict c ->
+      (* The broken instance. Its refutation is emitted and CLAIMED, which is the only
+         way the checker is asked what the pol actually derived. *)
+      let id = Justify.emit ctx (Explanation.force c.Store.c_why) in
+      Writer.conclusion w (Writer.Unsat (Some id))
+  | Propagator.Fixpoint ->
+      (* The honest instance. It prunes lo(z) to 4; the pruning's own derivation is
+         emitted and the proof concludes nothing, which is what an accepted control
+         needs to be. *)
+      let entry =
+        match
+          List.find_opt
+            (fun (en : Store.entry) -> Var.equal en.Store.var (Var.of_int 1))
+            (Store.trail_entries store)
+        with
+        | Some en -> en
+        | None -> failwith "build_arith_pol_break: z's bound was never pushed"
+      in
+      let id = Justify.emit ctx (Explanation.force (Store.explanation store entry)) in
+      Writer.delete w id;
+      Writer.rule w "output NONE";
+      Writer.rule w "conclusion NONE";
+      Writer.rule w "end pseudo-Boolean proof");
+  close_out oc;
+  (opb, pbp)
+
+(* ------------------------------------ the refutation really does cite an arith row *)
+
+let test_arith_cites_its_own_row () =
+  match bool_models_dir with
+  | None ->
+      incr failures;
+      Printf.printf
+        "FAIL arith citation: test/models was not found, so the citation check did NOT \
+         run. Do not treat this as a pass.\n"
+  | Some dir_models ->
+      List.iter
+        (fun (model, needle) ->
+          let src = read_file (Filename.concat dir_models model) in
+          let t = compile_src src in
+          let e = t.Compile.encoding in
+          match Engine.propagate t.Compile.engine t.Compile.store with
+          | Engine.Fixpoint ->
+              check
+                (Printf.sprintf "%s: refuted at the root (its refutation is what is \
+                                 being read)" model)
+                false
+          | Engine.Conflict c ->
+              let dir = Filename.temp_file "baguette_arith_cite" "" in
+              Sys.remove dir;
+              Sys.mkdir dir 0o700;
+              let pbp = Filename.concat dir "c.pbp" in
+              let oc = open_out pbp in
+              let w = Writer.create ~comments:false ~audit:false oc in
+              Encoding.start_proof e w;
+              let ctx = Justify.create ~writer:w ~encoding:e in
+              let id = Justify.emit ctx (Explanation.force c.Store.c_why) in
+              Writer.conclusion w (Writer.Unsat (Some id));
+              close_out oc;
+              let text = read_file pbp in
+              (* The id the final `pol` is rooted in, as the proof text spells it, and
+                 the .opb row it names. Read out rather than hard-coded: an id is a
+                 position in a file this task changes, and a test pinned to one says
+                 nothing the day the encoding posts a row more. What is asserted is
+                 that the row is an ARITH row -- it mentions both of the constraint's
+                 own variables, which no ladder row and no int_le row does. *)
+              let roots =
+                let acc = ref [] in
+                let n = String.length text in
+                for j = 0 to n - 7 do
+                  if String.sub text j 6 = "pol @c" then (
+                    let k = ref (j + 6) in
+                    while !k < n && text.[!k] >= '0' && text.[!k] <= '9' do
+                      incr k
+                    done;
+                    if !k > j + 6 then
+                      acc := int_of_string (String.sub text (j + 6) (!k - j - 6)) :: !acc)
+                done;
+                !acc
+              in
+              let rows = Encoding.constraints e in
+              let row_text n =
+                if n >= 1 && n <= List.length rows then
+                  Opb.constr_to_string (List.nth rows (n - 1))
+                else ""
+              in
+              let is_arith n =
+                List.for_all (fun nd -> contains_sub ~needle:nd (row_text n)) needle
+              in
+              check
+                (Printf.sprintf
+                   "%s: the refutation chain is rooted in an arith row, not a \
+                    clause-backed `rup >= 1`"
+                   model)
+                (List.exists is_arith roots
+                && not (contains_sub ~needle:"rup >= 1 ;" text));
+              if not (List.exists is_arith roots) then
+                Printf.printf "     roots: %s\n     proof:\n%s\n"
+                  (String.concat " " (List.map string_of_int roots))
+                  text;
+              (try Sys.remove pbp with _ -> ());
+              (try Sys.rmdir dir with _ -> ()))
+        [
+          ("arith_times_unsat.fzn", [ "x_ge_"; "z_ge_" ]);
+          ("arith_abs_unsat.fzn", [ "x_ge_"; "z_ge_" ]);
+          ("arith_div_zero_unsat.fzn", [ "x_ge_"; "X_INTRODUCED_arith" ]);
+        ]
+
 let () =
   print_endline "\npropagator unit tests";
   test_soundness ();
@@ -4765,6 +4963,29 @@ let () =
   test_arith_rows_brute_force ();
   test_arith_propagation ();
   test_arith_overflow ();
+  test_arith_cites_its_own_row ();
+  run_veripb
+    ~name:"arith D-0033: the TRUNCATING bound -7 div 2 <= -3 is RUP over the posted rows"
+    ~build:(build_arith_rounding ~claim:"~q_ge_m2");
+  run_veripb_rejects_saying
+    ~name:"arith D-0033: the FLOORING bound -7 div 2 <= -4 is refused by the checker"
+    ~build:(build_arith_rounding ~claim:"~q_ge_m3")
+    ~saying:
+      "The constraint is not implied by reverse unit propagation (RUP) from core and \
+       derived database.";
+  run_veripb ~name:"arith: the honest pol over the int_times row at v = 2"
+    ~build:(build_arith_pol_break ~coeff:2);
+  run_veripb_rejects_saying
+    ~name:"arith: a pol over that row deriving z >= 3x is REJECTED (the pol is not decorative)"
+    ~build:(build_arith_pol_break ~coeff:3)
+    (* The judgement, whole, minus the derived id: "not contradicting" is what the
+       claim is about, and the id is a position in a file this scene may grow. It is
+       still a complete sentence and not a fragment -- an exit status could not tell
+       this from a parse error, and no other failure in this proof words itself so. *)
+    ~saying:"is not contradicting, as specified by the hint.";
+  test_no_single_row_refutes "arith_times_unsat" "arith_times_unsat.fzn";
+  test_no_single_row_refutes "arith_abs_unsat" "arith_abs_unsat.fzn";
+  test_no_single_row_refutes "arith_div_zero_unsat" "arith_div_zero_unsat.fzn";
   run_veripb_rejects_saying
     ~name:"reif eq: the same nogood with the reifier's literal dropped"
     ~build:build_reif_eq_nogood_unreified
