@@ -1,0 +1,12 @@
+% M5-T1, and the reason `soli` carries the whole assignment rather than the conclusion
+% carrying it inline. int_lin_ne puts an ENCODING AUXILIARY in the .opb (the `_neN`
+% selector of PROOF-FORMAT section 3) that nothing in the solver knows a value for. An
+% inline `conclusion BOUNDS ... : <assignment>` would read it as false and the honest
+% proof would be REJECTED -- M1-T18's finding on `conclusion SAT : <assignment>`, which
+% applies here unchanged. A solution logged with `soli` IS propagated, so the checker
+% fills the selector in itself. This model is what would fail if that ever changed.
+var 0..4: x :: output_var;
+var 0..4: y :: output_var;
+constraint int_lin_le([-1,-1],[x,y],-3);
+constraint int_lin_ne([1,1],[x,y],4);
+solve minimize y;

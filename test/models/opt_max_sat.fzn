@@ -1,0 +1,10 @@
+% M5-T1: the same scene maximised, which is the NEGATED objective line in the .opb
+% ("An objective is minimised; FlatZinc maximisation is negated by the caller") and
+% therefore the negated numbers in `conclusion BOUNDS`. The optimum y = 5 is the
+% declared ceiling, so this one also exercises the floor/ceiling case from the
+% maximising side.
+var 0..5: x :: output_var;
+var 0..5: y :: output_var;
+constraint int_lin_le([-1,-1],[x,y],-4);
+constraint int_lin_le([1,-2],[x,y],0);
+solve maximize y;

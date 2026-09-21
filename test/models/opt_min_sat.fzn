@@ -1,0 +1,15 @@
+% M5-T1: branch and bound, minimisation, with a real tree under it.
+%
+% x + y >= 4 and x <= 2y. Minimising y: y = 1 forces x >= 3 and x <= 2, so the
+% search has to refute y <= 1 rather than read the answer off a bound, and the
+% optimum y = 2 is strictly inside the declared domain -- which is what puts this
+% model on the ORDINARY branch-and-bound path (lib/core/search.ml, [type bnb]
+% case (1)) rather than the floor shortcut opt_floor_sat.fzn takes.
+%
+% Two improving solutions are printed before `==========`, so this is also the
+% model that pins SPEC 2.2's separator convention for optimisation.
+var 0..5: x :: output_var;
+var 0..5: y :: output_var;
+constraint int_lin_le([-1,-1],[x,y],-4);
+constraint int_lin_le([1,-2],[x,y],0);
+solve minimize y;
