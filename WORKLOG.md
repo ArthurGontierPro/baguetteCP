@@ -10,33 +10,30 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
-**Wave twenty is running: M2-L15 (agent-backjump) and M3-T2+M3-T4 (agent-reif).**
+**Wave twenty is COMPLETE: M2-L15 and M3-T2+M3-T4 merged, released and pushed.**
 
-**Two verticals, split by directory rather than by file this time.**
+**Wave twenty-one is running: M4-T0 (agent-views) and M4-T4b (agent-arith).**
 
-**agent-backjump holds the LEARNING vertical**: `lib/core/{learn,pb_analysis,analysis,learned,
-retention,search}.ml` and `test/unit/{test_learn,test_analysis,test_pb,test_retention,
-test_ladder}.ml`. M2-L15 redoes the backjump calculation that M2-L13 invalidated —
-`pb_analysis.ml:757` hands it on by name.
+**agent-views holds the VARIABLE layer**: `lib/core/{var,store,domain}.ml`, `lib/proof/{lit,encoding}.ml`,
+and `test/unit/{test_core,test_domain,test_proof}.ml`. M4-T0 is views (`±x + k`) and
+constants-as-variables. Its row opens a proof-side question — **each view needs its own range
+literals** — which is why it holds `lit.ml` and `encoding.ml`.
 
-**agent-reif holds the REIFICATION vertical**: `lib/core/prop/**`, `lib/core/dune`,
-`lib/proof/**`, `lib/flatzinc/**`, `test/models/**`, `test/expected/**` and
-`test/unit/{test_proof,test_prop,test_compile,test_flatzinc,test_endtoend}.ml`. M3-T2 and
-M3-T4 go together because M3-T2's own row says to build it **through** M3-T4's dispatcher
-rather than writing five cases twice.
+**agent-arith holds the PROPAGATOR layer**: `lib/core/prop/**` (new modules only — it may
+**read** every existing propagator and **edit none**), `lib/core/dune`, `lib/flatzinc/**`,
+`test/models/**`, `test/expected/**`, `test/unit/{test_prop,test_interval,test_compile,test_flatzinc}.ml`.
+M4-T4b is `int_times`/`int_div`/`int_abs` over M4-T4a's `interval.ml`.
 
-**Where they could collide, and the rules that stop it:**
+**`lib/core/explanation.ml` and `lib/core/justify.ml` are NEITHER agent's.** A new constructor
+needs a decision record and that is not suspended; arithmetic justification is exactly where one
+would be wanted. Route it to me.
 
-- **`lib/core/dune`** is agent-reif's (it adds modules; agent-backjump adds none). If
-  agent-backjump needs a new module, it says so and I arbitrate.
-- **`lib/core/explanation.ml` is NEITHER agent's.** Its header forbids a new constructor
-  without a decision record and that is not suspended. If reified justification wants one,
-  route it to me.
-- **`lib/core/prop/pb.ml` is agent-reif's by directory but agent-backjump's by subject.**
-  Resolved: **agent-reif does not touch `pb.ml`, `clause.ml` or `linear.ml`** — it adds
-  reified propagators beside them. Agent-backjump may read all three and edit none.
-- **Node counts will move under both.** Neither may assert a suite-wide node total; the
-  current figure is **479 over 44 models** and it is agent-backjump's to move.
+**M4-T1 IS NOT DISPATCHED, and the reason is not technical.** Its blockers M1-T31 and M2-T17 are
+both DONE. But the row says **D-0048 should be closed before it, not after** — is a reified
+explanation a research output? — because that is the row where the reified form either
+demonstrates what it buys or looks like expensive ceremony. Decided before, M4-T1 reads as
+evidence; decided after, it reads as a verdict already reached. **That is a question for the
+project's owner, and it is with them.**
 
 **Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `dune-project`,
 `scripts/**`, `bench/**` and all merging, as standing.
@@ -2425,3 +2422,38 @@ that calculation". It does now, and nobody has redone that calculation.
 
 **Gate on `main`**: 2256 ok / 0 FAIL, 280 matrix, 44 mutation, 12 random, 44/44 models verified
 by veripb 3.0.2, determinism + fmt + width lint clean. Peak RSS 38.7 MB.
+
+**2026-09-21 — wave twenty: the backjump answered, and M3 opened**
+
+**M2-L15 (D-0056): the decision closure is RIGHT, not merely safe.** The backjump here is a
+**filter on the nogood**, not an undo-to-level — a sibling is skipped exactly when the branch
+nogood does not name that level, and that nogood is a clause over **decision** literals veripb
+RUP-verifies. `Pb_analysis.levels` and `asserting_level` answer different questions. The levels
+**do** differ: over 44 models, 103 conflicts compared, 26 equal, **76 where the PB set is a
+strict SUBSET**, 1 wider, 3 empty-contradiction (level set `{}`, filtering by which leaves the
+empty clause). Narrower is the unsound direction. **The break reddens**: `backjump_on_pb` gives
+a *smaller* tree with the right answer and plausible counters — and veripb rejects. **Do not
+reopen this** by observing that a PB row "knows" its levels: it knows where its literals were
+*falsified*, which is the narrower set.
+
+**M3-T2 + M3-T4 (D-0057): all four reified builtins, through one dispatcher.** An author
+supplies three closures of type `Store.t -> Propagator.result` — the signature of `propagate`
+itself — so the author's piece is an existing propagator over an existing row. Second builtin
+costs **21–22 lines**; `int_ne_reif` is `int_eq_reif` with one argument. Both things D-0053 left
+open are closed: the `<=` rows are pinned as identical to `Encoding.reif_rows`, and
+`int_eq_reif` needs **no `p ∧ q`**.
+
+**The finding to carry, and it is not about reification.** Two deliberate breaks — a
+justification citing the wrong row, a big-M one too small — **reddened NOTHING**. With the
+reifier forced by a `bool_clause`, `Search.rests_on_a_clause` closes the refutation the D-0022
+way and **every `pol` in the file is decorative**, because veripb accepts a `pol` whatever it
+derives. **When you add a propagator and its justification, check that some model actually
+CITES it — a green suite does not.** The four models were rewritten to force the reifier with a
+unit linear row.
+
+**A real bug fell out of it**: `reif_eq_branch_unsat` is the first model where a reifier is
+decided by *branching*, and it caught a reason copying `Ne`'s `Reason.none` without `Ne`'s
+licence for it. veripb rejected the trace line.
+
+**Gate on `main` after both merges**: **2332 ok / 0 FAIL**, 280 matrix, 44 mutation, 12 random,
+**57/57 models**, determinism + fmt + width lint clean, `check: ok`.
