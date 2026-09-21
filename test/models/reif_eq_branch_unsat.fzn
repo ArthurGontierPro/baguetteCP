@@ -1,0 +1,19 @@
+% M3-T2: the reifier decided BY SEARCH, not by a row -- which is the only state in
+% which the reifier's literal is load-bearing in a trace line.
+%
+% Every other reified model in this directory settles its reifier at level 0, from a
+% clause or a unit row, and then `~b_ge_1` is derivable by unit propagation on its own:
+% a reason that dropped the reifier's fact would still produce a rup veripb accepts.
+% Measured, and the reason this model exists (see the M3-T2 report): dropping it
+% reddens NOTHING without this file and reddens this file with it.
+%
+% b <-> (x = y) and b <-> (x <> y) at once is unsatisfiable, and nothing about it is
+% visible to bounds propagation at level 0: with x and y both open on [0, 1], neither
+% reification's entailment piece can fire, so first-fail's declaration-order tiebreak
+% branches on b and every conflict below sits under that decision. Widths are 2.
+var bool: b :: output_var;
+var 0..1: x :: output_var;
+var 0..1: y :: output_var;
+constraint int_eq_reif(x, y, b);
+constraint int_ne_reif(x, y, b);
+solve satisfy;

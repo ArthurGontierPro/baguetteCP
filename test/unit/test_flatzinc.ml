@@ -262,9 +262,16 @@ let test_rejections () =
        constraint all_different_int([x, y]);\n\
        solve satisfy;\n"
     ~needles:[ "unsupported builtin"; "`all_different_int`"; "M4" ];
-  reject "reject: reified builtin from M3" ~line:3
-    ~src:"var 1..3: x;\nvar bool: b;\nconstraint int_eq_reif(x, 2, b);\nsolve satisfy;\n"
-    ~needles:[ "`int_eq_reif`"; "M3" ];
+  (* `int_eq_reif` was this file's "builtin from a later milestone" lane until M3-T2
+     implemented it. lib/flatzinc/builder.ml's header sets the rule -- a builtin moves
+     from [planned] to [implemented] in the same commit as its propagator -- and this
+     lane moves with it, from "not yet" to arity, which is what the front end still
+     owes a reified builtin. The "later milestone" wording is covered by the
+     `all_different_int` lane above; [test_compile.ml]'s [test_reified] is where the
+     four M3 builtins are checked to compile. *)
+  reject "reject: a reified builtin with the wrong arity" ~line:3
+    ~src:"var 1..3: x;\nvar bool: b;\nconstraint int_eq_reif(x, 2);\nsolve satisfy;\n"
+    ~needles:[ "`int_eq_reif`"; "expects 3 argument" ];
   reject "reject: missing semicolon" ~line:2 ~src:"var 1..3: x\nsolve satisfy;\n"
     ~needles:[ "expected"; "`;`" ];
   reject "reject: unexpected character" ~line:1 ~src:"var 1..3: x @ y;\nsolve satisfy;\n"

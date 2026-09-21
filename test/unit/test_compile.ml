@@ -458,7 +458,16 @@ let evaluate (m : M.t) (assign : int array) =
          that reach them land together. Confirmed by inverting each arm in turn and
          watching those models fail. *)
       | M.Int_lin_ne (ts, r) -> value ts <> r
-      | M.Int_ne (a, b) -> operand a <> operand b)
+      | M.Int_ne (a, b) -> operand a <> operand b
+      (* M3-T2. Same rule again: read off the FlatZinc definition of each reified
+         builtin, as an equivalence in both directions, and NOT off
+         [Model.check_assignment] or off lib/core/prop/reif*.ml. The `_reif` row of
+         SPEC 2.1's M3 table is exactly these four, and [test_reified]'s run_model
+         lanes below are what reach them. *)
+      | M.Int_lin_le_reif (ts, r, b) -> truth b = (value ts <= r)
+      | M.Int_le_reif (a, b, r) -> truth r = (operand a <= operand b)
+      | M.Int_eq_reif (a, b, r) -> truth r = (operand a = operand b)
+      | M.Int_ne_reif (a, b, r) -> truth r = (operand a <> operand b))
     m.M.constraints
 
 (* Brute force over the declared box: the independent oracle for the expected answer.
@@ -633,7 +642,125 @@ let test_end_to_end () =
      into a zero coefficient and the empty false sum (see compile.ml's header), so the
      solver reaches UNSAT by a route that shares nothing with the oracle's reading. *)
   run_model ~title:"e2e unsat: int_ne(x, x) is false for every x"
-    ~src:"var 1..3: x;\nconstraint int_ne(x,x);\nsolve satisfy;\n"
+    ~src:"var 1..3: x;\nconstraint int_ne(x,x);\nsolve satisfy;\n";
+
+  (* M3-T2, against the independent oracle and against veripb. Five lanes, one per
+     dispatcher case plus the two degenerate conditions [Encoding]'s doors refuse by
+     name -- a model that says something trivially true is still a model, and what
+     compile does with it is answer, not raise. *)
+  run_model ~title:"e2e reif: the reifier is decided by the domains (refuted)"
+    ~src:
+      "var 0..3: x;\n\
+       var 0..3: y;\n\
+       var bool: b;\n\
+       constraint int_le_reif(x,y,b);\n\
+       constraint int_lin_le([-1],[x],-3);\n\
+       constraint int_lin_le([1],[y],1);\n\
+       solve satisfy;\n";
+  run_model ~title:"e2e reif: int_eq_reif with the equality entailed"
+    ~src:
+      "var 0..2: x;\n\
+       var 0..2: y;\n\
+       var bool: b;\n\
+       constraint int_eq_reif(x,y,b);\n\
+       constraint int_lin_le([1],[x],1);\n\
+       constraint int_lin_le([-1],[x],-1);\n\
+       constraint int_lin_le([1],[y],1);\n\
+       constraint int_lin_le([-1],[y],-1);\n\
+       solve satisfy;\n";
+  run_model ~title:"e2e reif: int_ne_reif is the same author, inverted"
+    ~src:
+      "var 0..2: x;\n\
+       var 0..2: y;\n\
+       var bool: b;\n\
+       constraint int_ne_reif(x,y,b);\n\
+       constraint int_lin_le([1],[y],0);\n\
+       constraint int_lin_le([-1],[y],0);\n\
+       constraint bool_clause([b],[]);\n\
+       solve satisfy;\n";
+  run_model ~title:"e2e reif: a condition the declared domains already entail"
+    ~src:
+      "var 0..1: x;\n\
+       var 2..3: y;\n\
+       var bool: b;\n\
+       constraint int_le_reif(x,y,b);\n\
+       solve satisfy;\n";
+  run_model ~title:"e2e reif: a condition the declared domains already refute"
+    ~src:
+      "var 2..3: x;\n\
+       var 0..1: y;\n\
+       var bool: b;\n\
+       constraint int_le_reif(x,y,b);\n\
+       solve satisfy;\n"
+
+(* ------------------------------------------------------- M3: the reified builtins *)
+
+(* The front end's half of M3-T2: the four builtins are compiled, the two things that
+   can be wrong about a reifier are positioned diagnostics, and a condition the declared
+   domains already settle keeps its meaning instead of raising out of [Encoding]. *)
+let test_reified () =
+  expect_accepted "accept: int_lin_le_reif compiles (M3-T2)"
+    "var 0..3: x;\n\
+     var 0..3: y;\n\
+     var bool: b;\n\
+     constraint int_lin_le_reif([1,-1],[x,y],0,b);\n\
+     solve satisfy;\n";
+  expect_accepted "accept: int_le_reif compiles (M3-T2)"
+    "var 0..3: x;\n\
+     var 0..3: y;\n\
+     var bool: b;\n\
+     constraint int_le_reif(x,y,b);\n\
+     solve satisfy;\n";
+  expect_accepted "accept: int_eq_reif compiles (M3-T2)"
+    "var 0..3: x;\n\
+     var 0..3: y;\n\
+     var bool: b;\n\
+     constraint int_eq_reif(x,y,b);\n\
+     solve satisfy;\n";
+  expect_accepted "accept: int_ne_reif compiles (M3-T2)"
+    "var 0..3: x;\n\
+     var 0..3: y;\n\
+     var bool: b;\n\
+     constraint int_ne_reif(x,y,b);\n\
+     solve satisfy;\n";
+  (* A reifier is a `var bool` (D-0007), and the diagnostic says which variable. *)
+  expect_rejected "reject: a non-Boolean reifier names the variable and the builtin"
+    ~needles:[ "int_le_reif"; "`r`" ]
+    "var 0..3: x;\n\
+     var 0..3: y;\n\
+     var 0..3: r;\n\
+     constraint int_le_reif(x,y,r);\n\
+     solve satisfy;\n";
+  (* b <-> C(b) is not a definition -- [Encoding.reif_rows] raises [Reif_in_condition]
+     for the same shape, and compile refuses it earlier, with a position. *)
+  expect_rejected "reject: a reifier occurring in its own condition"
+    ~needles:[ "int_lin_le_reif"; "`b`"; "not a definition" ]
+    "var 0..3: x;\n\
+     var bool: b;\n\
+     constraint int_lin_le_reif([1,1],[x,b],2,b);\n\
+     solve satisfy;\n";
+  (* The degenerate cases. `x <= y` is entailed by the declared domains, so this is not
+     a reification at all: [Encoding]'s doors refuse such a condition by name, and
+     compile answers with a unit row fixing the reifier rather than propagating the
+     exception. The two run_model lanes below are what check the ANSWER. *)
+  expect_accepted "accept: a condition the declared domains entail fixes the reifier"
+    "var 0..1: x;\n\
+     var 2..3: y;\n\
+     var bool: b;\n\
+     constraint int_le_reif(x,y,b);\n\
+     solve satisfy;\n";
+  expect_accepted "accept: a condition the declared domains refute fixes the reifier"
+    "var 2..3: x;\n\
+     var 0..1: y;\n\
+     var bool: b;\n\
+     constraint int_le_reif(x,y,b);\n\
+     solve satisfy;\n";
+  expect_accepted "accept: an equality the declared domains settle fixes the reifier"
+    "var 1..1: x;\n\
+     var 1..1: y;\n\
+     var bool: b;\n\
+     constraint int_eq_reif(x,y,b);\n\
+     solve satisfy;\n"
 
 (* ------------------------------------------------------------------------- main *)
 
@@ -647,6 +774,7 @@ let () =
   test_ground_constraints ();
   test_disequalities ();
   test_rejections ();
+  test_reified ();
   test_end_to_end ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;

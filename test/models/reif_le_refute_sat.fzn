@@ -1,0 +1,17 @@
+% M3-T2/M3-T4, case 4 of the dispatcher: the domains REFUTE the condition, so the
+% reifier is pushed false. Nothing fixes b in the model -- FWD's own bound push on the
+% reifier's term is what decides it, which is the entailment piece reading one row.
+%
+%   x >= 3, y <= 1  =>  min(x - y) = 2 > 0  =>  (x <= y) is impossible  =>  b = false
+%
+% Satisfiable ON PURPOSE. D-0053 measured that veripb 3.0.2 accepts every `red` line
+% over a contradictory database, and the same caution applies to reading any acceptance
+% as evidence: a reified pruning verified only inside a refutation is verified against a
+% database that was already going to close. Widths are 5 and 2 (D-0028).
+var 0..4: x :: output_var;
+var 0..4: y :: output_var;
+var bool: b :: output_var;
+constraint int_le_reif(x, y, b);
+constraint int_lin_le([-1], [x], -3);
+constraint int_lin_le([1], [y], 1);
+solve satisfy;

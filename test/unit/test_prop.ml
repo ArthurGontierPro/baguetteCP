@@ -44,6 +44,9 @@ module Checked = Baguette_core.Checked
    which propagator it is about. What the widening ADDED is tested in test_clause.ml. *)
 module Bool_clause = Baguette_core.Clause
 module Bool2int = Baguette_core.Bool2int
+module Reif = Baguette_core.Reif
+module Reif_lin_le = Baguette_core.Reif_lin_le
+module Reif_lin_eq = Baguette_core.Reif_lin_eq
 module Flatzinc = Baguette_flatzinc
 module Compile = Baguette_flatzinc.Compile
 
@@ -3930,6 +3933,323 @@ let test_conclusion_partition () =
      which no Reason.fact can spell"
     (match Trace.claims e_hole interior "a" with [ [ _; _ ] ] -> true | _ -> false)
 
+(* ------------------------------------------------------------------------------
+   M3-T2 / M3-T4: the reification dispatcher, case by case
+
+   White-box, over a hand-built store, because the point of these checks is WHICH of
+   the dispatcher's five cases ran -- a model test can only see the answer. The row
+   ids are made up and said to be so (the M1-T31 rule): nothing here forces an
+   explanation, so no [Model_row] is ever rendered; the model tests in test/models/
+   are where the pol and the rup meet veripb.
+
+   Layout throughout: x = var 0, y = var 1, b = var 2.
+   ------------------------------------------------------------------------------ *)
+
+let reif_le_of store =
+  (* b <-> (x - y <= 0) over x, y in [0, 4]: span is (-4, 4), so K = 4 - 0 = 4 and
+     K' = 0 + 1 - (-4) = 5. *)
+  Reif_lin_le.make ~fwd_id:9901 ~bwd_id:9902 ~k_fwd:4 ~k_bwd:5 store
+    [ (1, var 0); (-1, var 1) ]
+    0 ~reifier:(var 2)
+
+let le_store () = mk_store [ ("x", 0, 4); ("y", 0, 4); ("b", 0, 1) ]
+let dom store i = Store.get store (var i)
+
+(* Narrow a variable to [lo, hi] as if an earlier propagator had done it, on the
+   file's standard placeholder reason. *)
+let seed store i lo hi =
+  ignore (Store.set_lo store (var i) lo placeholder_pruning);
+  ignore (Store.set_hi store (var i) hi placeholder_pruning)
+
+let test_reif_dispatch_cases () =
+  (* Case 1, enforce-hold: b true, so the FWD row is the condition and x <= y. *)
+  let st = le_store () in
+  let p = reif_le_of st in
+  seed st 2 1 1;
+  seed st 1 0 1;
+  (match Reif_lin_le.propagate p st with
+  | Propagator.Fixpoint ->
+      check "reif dispatch case 1: b true enforces the condition (x <= 1)"
+        (Domain.hi (dom st 0) = 1)
+  | Propagator.Conflict _ -> check "reif dispatch case 1: unexpected conflict" false);
+  (* I-P3 at the interface: a second call on unchanged domains changes nothing. *)
+  let snap = Store.snapshot st in
+  (match Reif_lin_le.propagate p st with
+  | Propagator.Fixpoint ->
+      check "reif dispatch case 1: idempotent at the interface (I-P3)"
+        (Store.same_domains st snap)
+  | Propagator.Conflict _ -> check "reif dispatch case 1: idempotence conflict" false);
+
+  (* Case 2, enforce-not-hold: b false, so the BWD row is x - y >= 1. *)
+  let st = le_store () in
+  let p = reif_le_of st in
+  seed st 2 0 0;
+  seed st 1 3 4;
+  (match Reif_lin_le.propagate p st with
+  | Propagator.Fixpoint ->
+      check "reif dispatch case 2: b false enforces the negation (x >= 4)"
+        (Domain.lo (dom st 0) = 4)
+  | Propagator.Conflict _ -> check "reif dispatch case 2: unexpected conflict" false);
+
+  (* Case 3, entailment: the domains entail x <= y, so b is pushed TRUE. Nothing in
+     the model fixes b; this is BWD's own bound push on the reifier's term. *)
+  let st = le_store () in
+  let p = reif_le_of st in
+  seed st 0 0 1;
+  seed st 1 2 4;
+  (match Reif_lin_le.propagate p st with
+  | Propagator.Fixpoint ->
+      check "reif dispatch case 3: an entailed condition fixes the reifier true"
+        (Domain.value (dom st 2) = Some 1)
+  | Propagator.Conflict _ -> check "reif dispatch case 3: unexpected conflict" false);
+
+  (* Case 4, dis-entailment: the domains refute x <= y, so b is pushed FALSE. *)
+  let st = le_store () in
+  let p = reif_le_of st in
+  seed st 0 3 4;
+  seed st 1 0 1;
+  (match Reif_lin_le.propagate p st with
+  | Propagator.Fixpoint ->
+      check "reif dispatch case 4: a refuted condition fixes the reifier false"
+        (Domain.value (dom st 2) = Some 0)
+  | Propagator.Conflict _ -> check "reif dispatch case 4: unexpected conflict" false);
+
+  (* Case 5: neither decided. NOTHING moves -- and in particular the reified rows must
+     not prune a condition variable while the reifier is open, which is the property
+     the big-M constants being the smallest that work is there to buy. *)
+  let st = le_store () in
+  let p = reif_le_of st in
+  let snap = Store.snapshot st in
+  (match Reif_lin_le.propagate p st with
+  | Propagator.Fixpoint ->
+      check "reif dispatch case 5: an undecided reifier prunes nothing"
+        (Store.same_domains st snap)
+  | Propagator.Conflict _ -> check "reif dispatch case 5: unexpected conflict" false);
+
+  (* Checking (SPEC 3.2): every variable fixed, the equivalence violated, conflict. *)
+  let st = le_store () in
+  let p = reif_le_of st in
+  seed st 0 3 3;
+  seed st 1 1 1;
+  seed st 2 1 1;
+  match Reif_lin_le.propagate p st with
+  | Propagator.Conflict _ ->
+      check "reif dispatch: checking -- b true with x > y is a conflict" true
+  | Propagator.Fixpoint ->
+      check "reif dispatch: checking -- b true with x > y is a conflict" false
+
+let eq_store () = mk_store [ ("x", 0, 2); ("y", 0, 2); ("b", 0, 1) ]
+
+let reif_eq_of ?(positive = true) store =
+  (* b <-> (x - y = 0) over [0, 2]^2: span (-2, 2), so k_le = 2 and k_ge = 2. *)
+  Reif_lin_eq.make ~le_id:9903 ~ge_id:9904 ~k_le:2 ~k_ge:2 ~positive store
+    [ (1, var 0); (-1, var 1) ]
+    0 ~reifier:(var 2)
+
+let test_reif_eq_cases () =
+  (* enforce-hold: b true, so both rows are in force and x = y at bounds. *)
+  let st = eq_store () in
+  let p = reif_eq_of st in
+  seed st 2 1 1;
+  seed st 1 1 1;
+  (match Reif_lin_eq.propagate p st with
+  | Propagator.Fixpoint ->
+      check "reif eq: b true enforces x = y"
+        (Domain.lo (dom st 0) = 1 && Domain.hi (dom st 0) = 1)
+  | Propagator.Conflict _ -> check "reif eq: b true, unexpected conflict" false);
+
+  (* enforce-not-hold: b false and y fixed, so the value pass REMOVES y's value from x.
+     This is the piece that makes the declared level VALUE and not BOUNDS. *)
+  let st = eq_store () in
+  let p = reif_eq_of st in
+  seed st 2 0 0;
+  seed st 1 1 1;
+  (match Reif_lin_eq.propagate p st with
+  | Propagator.Fixpoint ->
+      check "reif eq: b false removes the forbidden value, punching a hole"
+        (not (Domain.mem (dom st 0) 1))
+  | Propagator.Conflict _ -> check "reif eq: b false, unexpected conflict" false);
+
+  (* entailment, the direction D-0053 said would need `p /\ q`: every term fixed and
+     the sum on the mark, so the reifier is pushed true on a nogood. *)
+  let st = eq_store () in
+  let p = reif_eq_of st in
+  seed st 0 1 1;
+  seed st 1 1 1;
+  (match Reif_lin_eq.propagate p st with
+  | Propagator.Fixpoint ->
+      check "reif eq: a fixed, satisfied equality fixes the reifier true"
+        (Domain.value (dom st 2) = Some 1)
+  | Propagator.Conflict _ -> check "reif eq: entailment, unexpected conflict" false);
+
+  (* dis-entailment from the bounds, which the LE row does on its own. *)
+  let st = eq_store () in
+  let p = reif_eq_of st in
+  seed st 0 2 2;
+  seed st 1 0 0;
+  (match Reif_lin_eq.propagate p st with
+  | Propagator.Fixpoint ->
+      check "reif eq: bounds that refute the equality fix the reifier false"
+        (Domain.value (dom st 2) = Some 0)
+  | Propagator.Conflict _ -> check "reif eq: dis-entailment, unexpected conflict" false);
+
+  (* The polarity flip is the WHOLE of int_ne_reif: same author, same three pieces,
+     [~positive:false]. The same fixed, satisfied equality now fixes the reifier
+     FALSE, because here the reifier means "x <> y". *)
+  let st = eq_store () in
+  let p = reif_eq_of ~positive:false st in
+  seed st 0 1 1;
+  seed st 1 1 1;
+  (match Reif_lin_eq.propagate p st with
+  | Propagator.Fixpoint ->
+      check "reif ne: the inverted literal is fixed false by the same entailment"
+        (Domain.value (dom st 2) = Some 0)
+  | Propagator.Conflict _ -> check "reif ne: entailment, unexpected conflict" false);
+
+  (* Checking, on the disequality side. *)
+  let st = eq_store () in
+  let p = reif_eq_of ~positive:false st in
+  seed st 0 1 1;
+  seed st 1 1 1;
+  seed st 2 1 1;
+  match Reif_lin_eq.propagate p st with
+  | Propagator.Conflict _ ->
+      check "reif ne: checking -- b true with x = y is a conflict" true
+  | Propagator.Fixpoint ->
+      check "reif ne: checking -- b true with x = y is a conflict" false
+
+(* The reason half (D-0026 / I-P5): the nogoods [Reif_lin_eq] builds must NAME the
+   reifier. Without that literal the clause claims the disequality unconditionally,
+   which is the failure [Ne] shipped between M1-T9 and M1-T17 one level up, and which
+   no amount of green model tests would show while the reifier happens to be false. *)
+let test_reif_eq_names_its_reifier () =
+  let st = eq_store () in
+  let p = reif_eq_of st in
+  seed st 2 0 0;
+  seed st 1 1 1;
+  ignore (Reif_lin_eq.propagate p st);
+  let named =
+    List.exists
+      (fun e ->
+        let why = Store.explanation st e in
+        List.exists
+          (fun (l : Lit.t) -> String.equal (Lit.owner l.Lit.v) "b")
+          (Explanation.lits why))
+      (Store.trail_entries st)
+  in
+  check "reif eq: every nogood names the reifier's own literal" named
+
+(* ------------------------------------------------------------------------------
+   M3-T2: the equality author's justification, past the checker
+
+   [Reif_lin_eq]'s enforce-not-hold and entailment pieces do NOT justify with a pol
+   over a cited row: their explanation is an [Explanation.Clause], a nogood that is rup
+   against the guarded A/B pair. Measured, and the reason these lanes exist: NO model in
+   test/models/ renders one. Every reified conflict in the suite rests on a clause, so
+   [Search] closes it the D-0022 way with `rup >= 1` and the nogood itself is never
+   emitted; the trace lines that do appear are built from the REASON half, which
+   test/models/reif_eq_branch_unsat.fzn covers. So the justification half is checked
+   here, against veripb, or it is not checked at all.
+
+   The scene holds b and y in the STORE ONLY and not as .opb rows -- the discipline
+   [bool_clause_scene] above spells out and the reason its controls are controls: with
+   the .opb saying nothing about b, a nogood that has dropped b's literal is no longer
+   entailed, and veripb can tell.
+   ------------------------------------------------------------------------------ *)
+
+let reif_eq_veripb_scene () =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:0 ~hi:2;
+  Encoding.declare_int e "y" ~lo:0 ~hi:2;
+  Encoding.declare_bool e "b";
+  let le_id, ge_id, k_le, k_ge =
+    Encoding.add_int_lin_eq_reif e [ (1, "x"); (-1, "y") ] 0 ~reifier:"b" ~pos:true
+  in
+  let store =
+    Store.create ~names:[| "x"; "y"; "b" |]
+      ~domains:[| Domain.make 0 2; Domain.make 0 2; Domain.make 0 1 |]
+  in
+  let prop =
+    Reif_lin_eq.make ~le_id ~ge_id ~k_le ~k_ge ~positive:true store
+      [ (1, var 0); (-1, var 1) ]
+      0 ~reifier:(var 2)
+  in
+  (* b := false and y := 1, as a decision and an earlier propagator would leave them. *)
+  ignore (Store.set_hi store (var 2) 0 placeholder_pruning);
+  ignore (Store.set_lo store (var 1) 1 placeholder_pruning);
+  ignore (Store.set_hi store (var 1) 1 placeholder_pruning);
+  (e, store, prop)
+
+(* x = 0, y = 1, b = false, and the disequality's own auxiliary at 0: a solution of
+   every row the four-row encoding posts, which is what `conclusion SAT` re-checks. *)
+let reif_eq_sol = [ ("x", 0); ("y", 1); ("b", 0); ("$ne0", 0) ]
+
+let build_reif_eq_nogood dir =
+  let e, store, prop = reif_eq_veripb_scene () in
+  (match Reif_lin_eq.propagate prop store with
+  | Propagator.Conflict _ -> failwith "build_reif_eq_nogood: conflicted"
+  | Propagator.Fixpoint -> ());
+  let entry = List.hd (Store.trail_entries store) in
+  let expl = Explanation.force (Store.explanation store entry) in
+  write_and_emit dir "reif_eq_nogood" e ~expl ~model_id:0 ~sol:reif_eq_sol
+
+(* The control that matters, and the break the model suite cannot see: the same nogood
+   with the REIFIER'S OWN LITERAL dropped. It claims `x <> y` outright, which is false
+   of this model at b = 1, so it is not rup -- and that is the one thing separating a
+   reified disequality from an unreified one. *)
+let build_reif_eq_nogood_unreified dir =
+  let e, _, _ = reif_eq_veripb_scene () in
+  let lits v =
+    Encoding.ne_clause_lits ~name:"x" ~decl_lo:0 ~decl_hi:2 v
+    @ Encoding.ne_clause_lits ~name:"y" ~decl_lo:0 ~decl_hi:2 v
+  in
+  write_and_emit dir "reif_eq_unreified" e
+    ~expl:(Explanation.clause (lits 1))
+    ~model_id:0 ~sol:reif_eq_sol
+
+(* A rejection lane asserts the checker's WORDING, at full strength (CLAUDE.md, and
+   M2-T14's four lanes that were green because a malformed artefact was refused on the
+   grammar). An exit status cannot tell a judgement from a parse error, and the bare
+   phrase "reverse unit propagation" would match any other RUP failure anywhere in the
+   proof -- so the whole sentence is what is matched. *)
+let run_veripb_rejects_saying ~name ~build ~saying =
+  match veripb_path () with
+  | None ->
+      incr failures;
+      Printf.printf
+        "FAIL %s: veripb not found -- invariant I-X1 was NOT checked. Install it (see \
+         docs/PROOF-FORMAT.md) and re-run; do not treat this as a pass.\n"
+        name
+  | Some veripb -> (
+      let dir = Filename.temp_file "baguette_reif_veripb_neg" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let opb, pbp = build dir in
+      let log = Filename.concat dir "log" in
+      let rc =
+        Sys.command
+          (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
+             (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
+      in
+      let out =
+        let ic = open_in_bin log in
+        let s = really_input_string ic (in_channel_length ic) in
+        close_in ic;
+        s
+      in
+      let contains hay needle =
+        let n = String.length needle and h = String.length hay in
+        let rec go i = i + n <= h && (String.sub hay i n = needle || go (i + 1)) in
+        n = 0 || go 0
+      in
+      check
+        (name ^ " (rejected, and on the judgement veripb actually made)")
+        (rc <> 0 && contains out saying);
+      if rc <> 0 && not (contains out saying) then
+        Printf.printf "     wanted: %s\n     got: %s\n" saying out;
+      List.iter (fun f -> try Sys.remove f with _ -> ()) [ opb; pbp; log ];
+      try Sys.rmdir dir with _ -> ())
+
 let () =
   print_endline "\npropagator unit tests";
   test_soundness ();
@@ -4046,6 +4366,19 @@ let () =
   test_ix6_cross_conflict_snapshot ();
   test_no_single_row_refutes "bool_reif_unsat" "bool_reif_unsat.fzn";
   test_no_single_row_refutes "bool_channel_unsat" "bool_channel_unsat.fzn";
+
+  (* ------------------------------------------- M3-T2 / M3-T4: reification *)
+  test_reif_dispatch_cases ();
+  test_reif_eq_cases ();
+  test_reif_eq_names_its_reifier ();
+  run_veripb ~name:"reif eq: the nogood behind a reified value removal"
+    ~build:build_reif_eq_nogood;
+  run_veripb_rejects_saying
+    ~name:"reif eq: the same nogood with the reifier's literal dropped"
+    ~build:build_reif_eq_nogood_unreified
+    ~saying:
+      "The constraint is not implied by reverse unit propagation (RUP) from core and \
+       derived database.";
   if !failures > 0 then (
     Printf.printf "\n%d FAILURE(S)\n" !failures;
     exit 1)

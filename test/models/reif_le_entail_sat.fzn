@@ -1,0 +1,12 @@
+% M3-T2/M3-T4, case 3: the domains ENTAIL the condition, so the reifier is pushed true.
+% This is BWD's bound push on the reifier's term -- the contrapositive of case 2, which
+% the dispatcher gets from the position the piece sits in and not from a second rule.
+%
+%   x <= 1, y >= 2  =>  max(x - y) = -1 <= 0  =>  (x <= y) holds  =>  b = true
+var 0..3: x :: output_var;
+var 0..3: y :: output_var;
+var bool: b :: output_var;
+constraint int_le_reif(x, y, b);
+constraint int_lin_le([1], [x], 1);
+constraint int_lin_le([-1], [y], -2);
+solve satisfy;

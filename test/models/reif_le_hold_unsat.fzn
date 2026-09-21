@@ -1,0 +1,19 @@
+% M3-T2/M3-T4, case 1 (enforce-hold) closing a refutation THROUGH ITS OWN POL.
+%
+% b is forced true by a unit linear row and NOT by a bool_clause, and that choice is
+% the whole point of this model. With a clause in the dependency closure,
+% Search.rests_on_a_clause routes the conflict to D-0022's empty-clause close and the
+% `pol` lines this propagator emits become decorative -- veripb accepts a pol whatever
+% it derives, so a pol citing the WRONG row would still verify. With every reason a
+% row, the close is the pol chain itself, and the citation is load-bearing: swapping
+% FWD for BWD here is rejected (measured; see the M3-T2 report).
+%
+% b true => FWD's big-M term contributes its whole coefficient => x <= y, against
+% y - x <= -1.
+var 0..3: x :: output_var;
+var 0..3: y :: output_var;
+var bool: b :: output_var;
+constraint int_le_reif(x, y, b);
+constraint int_lin_le([-1], [b], -1);
+constraint int_lin_le([-1, 1], [x, y], -1);
+solve satisfy;

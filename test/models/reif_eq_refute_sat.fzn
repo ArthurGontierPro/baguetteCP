@@ -1,0 +1,10 @@
+% M3-T2: int_eq_reif, case 4. The LE row's push on the reifier refutes the equality
+% from one side (min(x - y) = 1 > 0), so b is false and the disequality side comes into
+% force -- which it already satisfies.
+var 0..3: x :: output_var;
+var 0..3: y :: output_var;
+var bool: b :: output_var;
+constraint int_eq_reif(x, y, b);
+constraint int_lin_le([-1], [x], -2);
+constraint int_lin_le([1], [y], 1);
+solve satisfy;

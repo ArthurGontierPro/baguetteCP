@@ -1,0 +1,10 @@
+% M3-T2: the general reified linear inequality, three terms and a coefficient that is
+% not 1. b is forced true, so enforce-hold PRUNES rather than merely checking:
+% 2x + y - z <= 0 with z <= 3 leaves slack 3, hence x <= 1 and y <= 3.
+var 0..3: x :: output_var;
+var 0..3: y :: output_var;
+var 0..3: z :: output_var;
+var bool: b :: output_var;
+constraint int_lin_le_reif([2, 1, -1], [x, y, z], 0, b);
+constraint bool_clause([b], []);
+solve satisfy;

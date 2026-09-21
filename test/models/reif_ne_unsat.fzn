@@ -1,0 +1,11 @@
+% M3-T2: int_ne_reif is int_eq_reif with the reification literal inverted -- one
+% argument, [~positive], and not one line of propagation anywhere. b is forced true, so
+% the condition `x = y` must be FALSE while two linear rows force x = y.
+var 0..1: x :: output_var;
+var 0..1: y :: output_var;
+var bool: b :: output_var;
+constraint int_ne_reif(x, y, b);
+constraint bool_clause([b], []);
+constraint int_lin_le([1, -1], [x, y], 0);
+constraint int_lin_le([-1, 1], [x, y], 0);
+solve satisfy;

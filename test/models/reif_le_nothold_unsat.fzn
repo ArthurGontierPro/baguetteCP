@@ -1,0 +1,11 @@
+% M3-T2/M3-T4, case 2 (enforce-not-hold) closing a refutation through its own pol.
+% b is forced false by a unit linear row -- see reif_le_hold_unsat.fzn for why that is
+% not a bool_clause -- so BWD's guard vanishes and the row is x - y >= 1, against
+% x - y <= 0.
+var 0..3: x :: output_var;
+var 0..3: y :: output_var;
+var bool: b :: output_var;
+constraint int_le_reif(x, y, b);
+constraint int_lin_le([1], [b], 0);
+constraint int_lin_le([1, -1], [x, y], 0);
+solve satisfy;
