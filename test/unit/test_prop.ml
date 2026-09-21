@@ -4951,6 +4951,83 @@ let test_arith_oracle_agrees () =
     ~src:"var -4..4: x;\nvar 0..4: z;\nconstraint int_abs(x, z);\nsolve satisfy;\n"
     ~family:Arith.Abs ~n_main:2
 
+(* ------------------------- a KNOWN DEFECT, pinned: Search.solve's SAT arm and I-X2
+
+   **This check asserts that something is WRONG. Delete it the day it goes red.**
+
+   [Search.solve]'s NFail arm sweeps [Writer.live_ids] before its conclusion, and says
+   why: "a root refutation's derivation leaves its intermediate steps behind -- they
+   are at level 0, so no [w] retires them". Its NSat arm does not sweep. A level-0
+   pruning whose D-0013 explanation NESTS -- a [Combine] citing a trail entry whose own
+   explanation is a [Combine] -- mints exactly such intermediates, the emitting site
+   retires only the id it was handed, and the two below it stay live. The CLI's audit
+   then refuses the run:
+
+     baguette: INTERNAL -- proof audit failed (I-X2): 2 constraint id(s) never deleted
+       id 51 from combine(6 summand(s), / 1) (level 0)
+       id 52 from combine(2 summand(s), / 6) (level 0)
+
+   The model below is the smallest reproducer found. It is NOT an arithmetic defect:
+   the arithmetic family is simply the first thing in this tree whose explanations nest
+   that deeply at level 0 on a SAT path, and it was not reproducible from int_lin_le
+   chains, from a divisor, or from the hole path on their own. The fix is three lines in
+   lib/core/search.ml, which M4-T4b does not own; it was applied locally and measured
+   (the whole unit suite ok, every model passing, this proof VERIFIED SATISFIABLE) and
+   then reverted.
+
+   It is pinned HERE rather than as a model in test/models/ because
+   scripts/check_determinism.sh runs every model and does not honour
+   test/models/PENDING -- so a model that exits non-zero turns that gate red however it
+   is listed, which is a second thing worth someone's attention. *)
+let test_ix2_sat_arm_known_defect () =
+  let src =
+    "var 1..4: x;\n\
+     var 1..4: y;\n\
+     var 1..16: z;\n\
+     constraint int_times(x, y, z);\n\
+     constraint int_ne(z, 12);\n\
+     constraint int_lin_le([-1], [z], -10);\n\
+     solve satisfy;\n"
+  in
+  let t = compile_src src in
+  let dir = Filename.temp_file "baguette_ix2" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let pbp = Filename.concat dir "m.pbp" in
+  let oc = open_out pbp in
+  (* [~audit:true], and the symptom is that [Writer.conclusion] RAISES out of
+     [Search.solve] -- which is exactly what the CLI does and why the run exits 4.
+     [Writer.live_ids] is NOT the thing to look at: it is already empty by then, and
+     the audit's own accounting is what still holds the two ids. *)
+  let w = Writer.create ~comments:false ~audit:true oc in
+  Encoding.start_proof t.Compile.encoding w;
+  let ctx = Justify.create ~writer:w ~encoding:t.Compile.encoding in
+  let outcome =
+    try
+      `Solved
+        (Search.solve ~engine:t.Compile.engine ~store:t.Compile.store ~ctx
+           ~check:(fun _ -> true)
+           ())
+    with Writer.Audit_failed r -> `Audit r
+  in
+  close_out oc;
+  (try Sys.remove pbp with _ -> ());
+  (try Sys.rmdir dir with _ -> ());
+  check
+    "I-X2 KNOWN DEFECT (lib/core/search.ml NSat arm): a SAT run whose level-0 D-0013 \
+     explanation nests leaves its intermediate pol ids undeleted, and the audit refuses \
+     it. THIS CHECK ASSERTS A BUG -- when it goes red the defect is fixed and it must be \
+     DELETED, not re-blessed"
+    (match outcome with
+    | `Audit r -> contains_sub ~needle:"never deleted" r
+    | `Solved _ -> false);
+  match outcome with
+  | `Audit _ -> ()
+  | `Solved _ ->
+      print_endline
+        "       the run now completes: Search.solve's SAT arm retires them. Delete \
+         test_ix2_sat_arm_known_defect."
+
 let () =
   print_endline "\npropagator unit tests";
   test_soundness ();
@@ -5080,6 +5157,7 @@ let () =
   test_arith_propagation ();
   test_arith_overflow ();
   test_arith_oracle_agrees ();
+  test_ix2_sat_arm_known_defect ();
   test_arith_cites_its_own_row ();
   run_veripb
     ~name:"arith D-0033: the TRUNCATING bound -7 div 2 <= -3 is RUP over the posted rows"
