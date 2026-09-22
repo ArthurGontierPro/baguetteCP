@@ -383,23 +383,61 @@ let test_rejections () =
     "var 0..3: x;\nconstraint int_le(x,3);\nsolve minimize 2;\n";
   expect_rejected "reject: ... and the same for maximize" ~needles:[ "maximize"; "var " ]
     "var 0..3: x;\nconstraint int_le(x,3);\nsolve maximize 2;\n";
-  expect_rejected "reject: input_order is not what Search.solve implements"
-    ~needles:[ "input_order"; "first_fail"; "indomain_min" ]
+  (* M7-T2 IMPLEMENTED these three, so the expectation moved from "rejected" to
+     "accepted AND honoured". The rejection did not disappear -- it narrowed onto the
+     tail that is still not implemented, which the four [expect_rejected]s below hold,
+     and what the annotation actually DOES is asserted on the decision itself in
+     [test_search_annotations]. An expectation deleted rather than replaced is the
+     information thrown away (I-M1), so all three now sit here as acceptances. *)
+  expect_accepted "accept: input_order is implemented (M7-T2)"
     "var 0..3: x;\n\
      constraint int_le(x,3);\n\
      solve :: int_search([x],input_order,indomain_min,complete) satisfy;\n";
-  expect_rejected "reject: indomain_max is not what Search.solve implements"
-    ~needles:[ "indomain_max"; "indomain_min" ]
+  expect_accepted "accept: indomain_max is implemented (M7-T2)"
     "var 0..3: x;\n\
      constraint int_le(x,3);\n\
      solve :: int_search([x],first_fail,indomain_max,complete) satisfy;\n";
-  expect_rejected "reject: seq_search is recursed into, not waved through"
-    ~needles:[ "input_order" ]
+  expect_accepted "accept: seq_search mixing the two variable choices (M7-T2)"
     "var 0..3: x;\n\
      var 0..3: y;\n\
      constraint int_le(x,y);\n\
      solve :: \
      seq_search([int_search([x],first_fail,indomain_min,complete),int_search([y],input_order,indomain_min,complete)]) \
+     satisfy;\n";
+  (* M7-T2 obligation (d): the tail is REFUSED BY NAME, not silently replaced. These
+     four are the strategies the MiniZinc-challenge census found beyond the implemented
+     set, most frequent first (smallest 56, indomain_split 64, largest 12, dom_w_deg 4).
+     Each needle is the strategy's own name: a message that does not name it is not the
+     message docs/SPEC.md 3.4 asks for. *)
+  expect_rejected "reject (d): `smallest` is named, not silently replaced"
+    ~needles:[ "smallest"; "first_fail"; "input_order" ]
+    "var 0..3: x;\n\
+     constraint int_le(x,3);\n\
+     solve :: int_search([x],smallest,indomain_min,complete) satisfy;\n";
+  expect_rejected "reject (d): `largest` is named" ~needles:[ "largest" ]
+    "var 0..3: x;\n\
+     constraint int_le(x,3);\n\
+     solve :: int_search([x],largest,indomain_min,complete) satisfy;\n";
+  expect_rejected "reject (d): `indomain_split` is named"
+    ~needles:[ "indomain_split"; "indomain_min"; "indomain_max" ]
+    "var 0..3: x;\n\
+     constraint int_le(x,3);\n\
+     solve :: int_search([x],first_fail,indomain_split,complete) satisfy;\n";
+  (* And a whole annotation FORM that is not implemented. Before M7-T2 this one fell
+     into [search_of_annot]'s catch-all and was SILENTLY DROPPED -- the model was
+     accepted and searched by the default, which is the one outcome docs/SPEC.md 3.4
+     forbids. It is named and refused now. *)
+  expect_rejected "reject (d): an unimplemented *_search FORM is named, not dropped"
+    ~needles:[ "float_search"; "int_search"; "3.4" ]
+    "var 0..3: x;\n\
+     constraint int_le(x,3);\n\
+     solve :: float_search([x],first_fail,indomain_min,complete) satisfy;\n";
+  expect_rejected "reject (d): ... and so is priority_search"
+    ~needles:[ "priority_search" ]
+    "var 0..3: x;\n\
+     constraint int_le(x,3);\n\
+     solve :: \
+     priority_search([x],[int_search([x],first_fail,indomain_min,complete)],smallest,complete) \
      satisfy;\n";
   expect_accepted "accept: first_fail + indomain_min matches what is implemented"
     "var 0..3: x;\n\
@@ -576,9 +614,15 @@ let assignment_array (m : M.t) (a : Search.assignment) =
   List.iter (fun (v, value) -> arr.(Var.to_int v) <- value) a;
   arr
 
-let run_model ~title ~src =
+(* [?order] defaults to the model's OWN compiled annotation, which is what bin/main.ml
+   passes (`?order:compiled.Compile.order` at its two Search call sites). So an
+   annotated model run through here is searched the way the annotation says and its
+   proof is checked in that shape -- M7-T2 obligation (c). [~order] overrides it, and
+   exists for the break lane below. *)
+let run_model_with ?order ?mutate ?(expect_reject = false) ~title ~src () =
   let m = build src in
   let c = Compile.compile m in
+  let order = match order with Some o -> Some o | None -> c.Compile.order in
   let expected = brute_force m in
   let expect_sat = expected <> None in
   let dir = Filename.temp_file "baguette_compile" "" in
@@ -600,7 +644,7 @@ let run_model ~title ~src =
   let outcome =
     Search.solve ~engine:c.Compile.engine ~store:c.Compile.store ~ctx
       ~check:(fun a -> evaluate m (assignment_array m a))
-      ()
+      ?order ()
   in
   close_out oc;
   check
@@ -617,6 +661,17 @@ let run_model ~title ~src =
         (List.length a = M.nvars m)
   | Search.Unsat ->
       check (Printf.sprintf "%s: agrees with brute force (UNSAT)" title) (not expect_sat));
+  (* M7-T2 break lane: rewrite the emitted proof before the checker sees it. The
+     mutation runs on the REAL proof of an annotated run, so what it corrupts is a line
+     the annotated tree actually produced -- a lane that mutated a hand-written proof
+     would prove nothing about this tree. *)
+  (match mutate with
+  | None -> ()
+  | Some f ->
+      let lines = String.split_on_char '\n' (read_file pbp) in
+      let oc = open_out pbp in
+      List.iter (fun l -> output_string oc (l ^ "\n")) (f lines);
+      close_out oc);
   (match veripb_path () with
   | None ->
       incr failures;
@@ -630,14 +685,34 @@ let run_model ~title ~src =
           (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
              (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
       in
-      check (Printf.sprintf "%s: veripb accepts the proof (I-X1)" title) (rc = 0);
-      if rc <> 0 then
-        Printf.printf "  veripb said:\n%s\n  model:\n%s\n  proof:\n%s\n" (read_file log)
-          (read_file opb) (read_file pbp));
+      if expect_reject then (
+        (* The break lane. An exit status alone cannot tell a JUDGEMENT from a parse
+           error (CLAUDE.md, "A lane that asserts a rejection must assert the checker's
+           WORDING"), so the wording is asserted too and the log is printed when it is
+           not what was expected. *)
+        let out = read_file log in
+        check
+          (Printf.sprintf "%s: veripb REJECTS the proof" title)
+          (rc <> 0
+          && (contains ~needle:"reverse unit propagation" out
+             || contains ~needle:"Failed to check" out
+             || contains ~needle:"not implied" out));
+        if rc = 0 then
+          Printf.printf "  veripb ACCEPTED a proof this lane requires it to reject.\n")
+      else (
+        check (Printf.sprintf "%s: veripb accepts the proof (I-X1)" title) (rc = 0);
+        if rc <> 0 then
+          Printf.printf "  veripb said:\n%s\n  model:\n%s\n  proof:\n%s\n" (read_file log)
+            (read_file opb) (read_file pbp)));
   List.iter
     (fun f -> try Sys.remove f with _ -> ())
     [ opb; pbp; Filename.concat dir "log" ];
   try Sys.rmdir dir with _ -> ()
+
+(* The pre-M7-T2 shape, kept so that every existing end-to-end call site reads exactly as
+   it did. It takes the model's own compiled order, which for an unannotated model is
+   [None] and therefore [Search.solve]'s own default. *)
+let run_model ~title ~src = run_model_with ~title ~src ()
 
 let test_end_to_end () =
   (* SAT. Offset domains and a mix of constraint kinds, so the answer depends on the
@@ -1102,6 +1177,272 @@ let test_element_defining_level_rule () =
       | Engine.Fixpoint ->
           check "element (d) scene B: the scene is UNSAT one level deeper too" false)
 
+(* ----------------------------------------- 5b. M7-T2: the annotation, HONOURED
+
+   docs/SPEC.md 3.4 says a search annotation MUST be honoured when present. Until M7-T2
+   the only way to honour it was to refuse the model; now it is implemented, and
+   "implemented" is a claim about WHICH VARIABLE GETS BRANCHED ON, not about the answer.
+   Two strategies that agree on every test are not tested -- a solver that ignored the
+   annotation entirely would pass a suite that only checked answers, because the answer
+   set does not depend on the order at all.
+
+   So every assertion here is on the DECISION: [Compile.t.order] is called directly with
+   the store and a candidate array, and its [d_var] / [d_split] / [d_high_first] are
+   asserted. *)
+
+let decision_of ?cands src =
+  let m = build src in
+  let c = Compile.compile m in
+  let order =
+    match c.Compile.order with
+    | Some o -> o
+    | None -> failwith "decision_of: this model was expected to carry a search annotation"
+  in
+  let cands =
+    match cands with
+    | Some idxs -> Array.of_list (List.map Var.of_int idxs)
+    | None -> Search.unfixed c.Compile.store
+  in
+  (m, c, order c.Compile.store cands)
+
+(* The scene for obligation (a). Two variables that every strategy can tell apart:
+
+     wide   0..7   declared first, WIDEST domain
+     narrow 0..1   declared second, NARROWEST domain
+
+   input_order must pick [wide] (it is first in the annotation's array); first_fail must
+   pick [narrow] (its domain has 2 values against 8). The two provably disagree, on the
+   same model, differing in one token of the annotation. Neither constraint prunes, so
+   both variables are still unfixed when the order is asked. *)
+let scene ?(vars = "wide,narrow") ?(vsel = "input_order") ?(valsel = "indomain_min") () =
+  Printf.sprintf
+    "var 0..7: wide;\n\
+     var 0..1: narrow;\n\
+     constraint int_le(wide,7);\n\
+     constraint int_le(narrow,1);\n\
+     solve :: int_search([%s],%s,%s,complete) satisfy;\n"
+    vars vsel valsel
+
+let test_search_annotations () =
+  print_endline "";
+  (* --- (a) the variable choice. The two strategies disagree, and each is right. *)
+  let _, _, d_in = decision_of (scene ~vsel:"input_order" ()) in
+  let _, _, d_ff = decision_of (scene ~vsel:"first_fail" ()) in
+  check "(a) input_order picks the FIRST variable of the annotation array (wide)"
+    (Var.to_int d_in.Search.d_var = 0);
+  check "(a) first_fail picks the SMALLEST-domain variable (narrow)"
+    (Var.to_int d_ff.Search.d_var = 1);
+  check "(a) ... and those are different variables, on one and the same model"
+    (Var.to_int d_in.Search.d_var <> Var.to_int d_ff.Search.d_var);
+  (* input_order reads the ANNOTATION's order, not declaration order. This is the
+     assertion that fails if [phase.p_vars] is ever rebuilt from the store instead of
+     from the array the annotation wrote: with the array reversed, input_order must
+     follow it, and first_fail must NOT move. *)
+  let _, _, d_in_rev = decision_of (scene ~vars:"narrow,wide" ~vsel:"input_order" ()) in
+  let _, _, d_ff_rev = decision_of (scene ~vars:"narrow,wide" ~vsel:"first_fail" ()) in
+  check "(a) input_order follows the ARRAY order, not declaration order"
+    (Var.to_int d_in_rev.Search.d_var = 1);
+  check "(a) ... while first_fail is indifferent to it"
+    (Var.to_int d_ff_rev.Search.d_var = 1);
+  (* --- (a) the value choice, on the SAME variable, so only the split can differ.
+     indomain_min splits at lo and takes the low side first (that branch fixes x = lo);
+     indomain_max splits at hi-1 and takes the HIGH side first (that branch fixes
+     x = hi). Both halves have to move: "the same split, other side first" would be a
+     different strategy, and asserting only [d_high_first] would not see it. *)
+  let _, _, d_min = decision_of (scene ~vars:"wide" ~valsel:"indomain_min" ()) in
+  let _, _, d_max = decision_of (scene ~vars:"wide" ~valsel:"indomain_max" ()) in
+  check "(a) indomain_min splits at lo, low side first"
+    (Var.to_int d_min.Search.d_var = 0
+    && d_min.Search.d_split = 0 && not d_min.Search.d_high_first);
+  check "(a) indomain_max splits at hi-1, HIGH side first"
+    (Var.to_int d_max.Search.d_var = 0
+    && d_max.Search.d_split = 6 && d_max.Search.d_high_first);
+  check "(a) ... so the two value choices really do differ on the same variable"
+    (d_min.Search.d_split <> d_max.Search.d_split
+    && d_min.Search.d_high_first <> d_max.Search.d_high_first);
+
+  (* --- (b) seq_search composes: the SECOND annotation is consulted only once the
+     first has no unfixed variable left.
+
+     The phases are given in the order [b] then [a], against declaration order [a] then
+     [b], so "consult the first phase" and "take the lowest-indexed variable" give
+     different answers and the assertion can tell them apart. The candidate array is the
+     handle: [order] is documented to receive the UNFIXED variables, so dropping b from
+     it is exactly the state "b is fixed", with no store surgery and nothing faked about
+     what the order sees. *)
+  let seq_src =
+    "var 0..3: a;\n\
+     var 0..3: b;\n\
+     var 0..3: spare;\n\
+     constraint int_le(a,3);\n\
+     constraint int_le(b,3);\n\
+     constraint int_le(spare,3);\n\
+     solve :: \
+     seq_search([int_search([b],input_order,indomain_min,complete),int_search([a],input_order,indomain_min,complete)]) \
+     satisfy;\n"
+  in
+  let _, _, d1 = decision_of ~cands:[ 0; 1; 2 ] seq_src in
+  check "(b) seq_search takes the FIRST phase while it still has an unfixed variable (b)"
+    (Var.to_int d1.Search.d_var = 1);
+  let _, _, d2 = decision_of ~cands:[ 0; 2 ] seq_src in
+  check "(b) ... and only then the second phase (a)" (Var.to_int d2.Search.d_var = 0);
+  (* And the fallback, which is the part of SPEC 3.4 that has to be written down: a
+     variable no annotation mentions still has to be branched on, so when every phase is
+     exhausted the order is [spec_order]. `spare` is in neither phase. *)
+  let _, _, d3 = decision_of ~cands:[ 2 ] seq_src in
+  check "(b) a variable no phase mentions falls back to SPEC 3.4's default"
+    (Var.to_int d3.Search.d_var = 2 && d3.Search.d_split = 0 && not d3.Search.d_high_first)
+
+(* --- (c) and its break. Changing the search changes the TREE and therefore the PROOF,
+   so the annotation's real test is the checker.
+
+   The models branch (2x + 2y = 5 is UNSAT by parity, which bounds propagation cannot
+   see, so the refutation is the search's and not the root's), and each is run under the
+   annotation it carries.
+
+   THE BREAK. The hazard [Search.sequence] introduces is that a phase names variables by
+   index and does not itself know which are still unfixed: drop the filter against the
+   candidate array and the order hands back a decision on an ALREADY FIXED variable. That
+   is not a worse search, it is an unsound proof -- the push is not narrowing, so the
+   two child nogoods no longer resolve on one literal. [bad_order] is that mistake made
+   deliberately, and the checker must refuse the result. *)
+let test_search_annotated_proofs () =
+  print_endline "";
+  let parity_unsat vsel valsel =
+    Printf.sprintf
+      "var 0..3: x;\n\
+       var 0..3: y;\n\
+       constraint int_lin_eq([2,2],[x,y],5);\n\
+       solve :: int_search([x,y],%s,%s,complete) satisfy;\n"
+      vsel valsel
+  in
+  run_model ~title:"(c) annotated UNSAT: input_order + indomain_min"
+    ~src:(parity_unsat "input_order" "indomain_min");
+  run_model ~title:"(c) annotated UNSAT: input_order + indomain_max"
+    ~src:(parity_unsat "input_order" "indomain_max");
+  run_model ~title:"(c) annotated UNSAT: first_fail + indomain_max"
+    ~src:(parity_unsat "first_fail" "indomain_max");
+  run_model ~title:"(c) annotated SAT: 2x + 2y = 6 under indomain_max"
+    ~src:
+      "var 0..3: x;\n\
+       var 0..3: y;\n\
+       constraint int_lin_eq([2,2],[x,y],6);\n\
+       solve :: int_search([y,x],input_order,indomain_max,complete) satisfy;\n";
+  run_model ~title:"(c) annotated UNSAT under seq_search, two phases"
+    ~src:
+      "var 0..3: x;\n\
+       var 0..3: y;\n\
+       constraint int_lin_eq([2,2],[x,y],5);\n\
+       solve :: \
+       seq_search([int_search([y],input_order,indomain_max,complete),int_search([x],first_fail,indomain_min,complete)]) \
+       satisfy;\n";
+  (* The break. [bad_order] is [Search.sequence] with its liveness filter removed: it
+     returns the first variable of the phase whatever its domain now is. *)
+  (* --- BREAK 1: the order itself. [Search.branch] holds the decision contract -- a
+     split must lie in [lo, hi) so that BOTH branches strictly narrow -- and an order
+     that hands back an already-fixed variable violates it. This is where a mis-order is
+     caught, and it is caught BEFORE the proof: the run raises rather than emitting a
+     tree the checker would have to judge.
+
+     That is the honest finding and it is why BREAK 2 exists as well. Search order is
+     not a soundness property -- any tree that partitions is refutable, so an order that
+     merely chooses BADLY produces a different proof that veripb still accepts. What
+     veripb can catch is a proof line that does not follow, so BREAK 2 corrupts one. *)
+  let fired = ref false in
+  let bad_order (store : Store.t) (cands : Var.t array) =
+    if !fired then Search.spec_order store cands
+    else (
+      fired := true;
+      let v = Var.of_int 0 in
+      let d = Store.get store v in
+      { Search.d_var = v; d_split = Domain.lo d; d_high_first = false })
+  in
+  let colouring ann =
+    Printf.sprintf
+      "var 2..2: x;\n\
+       var 0..1: a;\n\
+       var 0..1: b;\n\
+       var 0..1: c;\n\
+       constraint int_le(x,2);\n\
+       constraint int_ne(a,b);\n\
+       constraint int_ne(b,c);\n\
+       constraint int_ne(a,c);\n\
+       solve :: %s satisfy;\n"
+      ann
+  in
+  let ann_min = "int_search([a,b,c],input_order,indomain_min,complete)" in
+  let ann_max = "int_search([a,b,c],input_order,indomain_max,complete)" in
+  (match
+     try
+       run_model_with ~order:bad_order ~title:"(c) BREAK 1 (should not be reached)"
+         ~src:(colouring ann_min) ();
+       `No_raise
+     with Invalid_argument msg -> `Raised msg
+   with
+  | `Raised msg ->
+      check "(c) BREAK 1: a decision on an already-fixed variable is REFUSED, by name"
+        (contains ~needle:"Search.branch" msg
+        && contains ~needle:"outside" msg
+        && contains ~needle:"strictly narrow" msg)
+  | `No_raise ->
+      fail "(c) BREAK 1: a decision on an already-fixed variable is REFUSED, by name"
+        "the run completed; the decision contract did not fire");
+
+  (* --- BREAK 2: the checker, over the annotated tree's OWN proof, and over a
+     SATISFIABLE model -- which is the whole design of this lane.
+
+     Measured while writing it, on the annotated UNSAT models above: with the database
+     already contradictory, veripb 3.0.2 ACCEPTS a `rup` clause with a literal removed
+     and ACCEPTS one with a literal's polarity flipped. That is the same vacuity D-0053
+     records for `red`, here for `rup`: everything is RUP once the database is
+     contradictory, so a break lane over an UNSAT model tests nothing. The model below is
+     SAT, and it backtracks before it succeeds (indomain_max tries the value the
+     disequalities refuse), so its proof carries real decision nogoods that the final
+     `sol` has to be consistent with.
+
+     The mutation flips the polarity of the single literal in a UNIT nogood. Removing a
+     literal instead was measured and is NOT enough even here -- both weakenings this
+     lane tried were still RUP-derivable. The assertion is on the checker's WORDING at
+     full strength (CLAUDE.md: an exit status cannot tell a judgement from a parse
+     error). *)
+  let backtracking_sat ann =
+    Printf.sprintf
+      "var 0..2: a;\n\
+       var 0..2: b;\n\
+       constraint int_lin_le([1,1],[a,b],2);\n\
+       constraint int_lin_le([-1,-1],[a,b],-2);\n\
+       constraint int_ne(a,b);\n\
+       constraint int_ne(a,2);\n\
+       solve :: %s satisfy;\n"
+      ann
+  in
+  let flip_a_unit_nogood lines =
+    let flipped = ref false in
+    let flip line =
+      match String.split_on_char ' ' line with
+      | [ id; "rup"; "+1"; lit; ">="; "1"; ";" ] when not !flipped ->
+          flipped := true;
+          let lit' =
+            if String.length lit > 0 && lit.[0] = '~' then
+              String.sub lit 1 (String.length lit - 1)
+            else "~" ^ lit
+          in
+          String.concat " " [ id; "rup"; "+1"; lit'; ">="; "1"; ";" ]
+      | _ -> line
+    in
+    (* Last such line, not the first: the earlier units are the ones the search has
+       already resolved away, and the final one is the one the solution must respect. *)
+    List.rev (List.map flip (List.rev lines))
+  in
+  run_model_with ~title:"(c) annotated UNSAT: graph colouring under indomain_max"
+    ~src:(colouring ann_max) ();
+  let ann_ab_max = "int_search([a,b],input_order,indomain_max,complete)" in
+  run_model_with ~title:"(c) annotated SAT that backtracks first, under indomain_max"
+    ~src:(backtracking_sat ann_ab_max) ();
+  run_model_with ~expect_reject:true ~mutate:flip_a_unit_nogood
+    ~title:"(c) BREAK 2: a unit nogood of the annotated tree, flipped, is REFUSED"
+    ~src:(backtracking_sat ann_ab_max) ()
+
 (* ------------------------------------------------------------------------- main *)
 
 let () =
@@ -1120,6 +1461,8 @@ let () =
   test_element_oracle ();
   test_element_view ();
   test_element_defining_level_rule ();
+  test_search_annotations ();
+  test_search_annotated_proofs ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
