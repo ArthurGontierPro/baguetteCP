@@ -16,6 +16,16 @@ module Encoding = Baguette_proof.Encoding
 
 (* M1-T53: the inner heap guard; see mem_guard.ml for what it cannot see. *)
 let () = Mem_guard.install ()
+
+(* M7-T1. Sampled HERE, before any test can touch the refs, because every other
+   assertion about the limits sets them explicitly and would therefore pass against a
+   build whose SHIPPED DEFAULT was still the refusal. Measured that gap by putting the
+   cap back: scripts/check_unlimited.sh reddened and not one unit assertion did. *)
+let m7_shipped_defaults =
+  ( !Encoding.order_width_limit,
+    !Encoding.direct_values_limit,
+    !Encoding.width_warn_threshold )
+
 let failures = ref 0
 
 let check name cond =
@@ -2911,6 +2921,152 @@ let test_m5_no_obju_caller () =
          emit `obju`"
         (String.trim (grep "| grep -v 'lib/proof/writer.ml'") = "")
 
+(* =====================================================================
+   M7-T1: the limits are options, and the cost is counted
+   =====================================================================
+
+   The refusal that used to guard the order encoding came from a 15 GB laptop. It is
+   gone from the default build. What is NOT gone is D-0028's actual cost -- proof size
+   and checker time -- so the module now COUNTS what it minted and says so. These
+   assertions pin the option's shape and the counter's arithmetic; the end-to-end
+   behaviour (a wide model solving, veripb accepting its proof, the warning's text, the
+   refusal's wording under a flag) is scripts/check_unlimited.sh. *)
+
+let m7_eq name ~expected ~actual =
+  if expected = actual then check name true
+  else check (Printf.sprintf "%s -- expected %S, got %S" name expected actual) false
+
+let m7_contains ~needle hay =
+  let n = String.length needle and h = String.length hay in
+  let rec go i = i + n <= h && (String.sub hay i n = needle || go (i + 1)) in
+  n = 0 || go 0
+
+let with_limits f =
+  let sw = !Encoding.order_width_limit
+  and sd = !Encoding.direct_values_limit
+  and sn = !Encoding.width_warn_threshold
+  and ss = !Encoding.warn_sink in
+  Fun.protect
+    ~finally:(fun () ->
+      Encoding.order_width_limit := sw;
+      Encoding.direct_values_limit := sd;
+      Encoding.width_warn_threshold := sn;
+      Encoding.warn_sink := ss)
+    f
+
+let test_m7_limits_are_options () =
+  with_limits (fun () ->
+      (* The SHIPPED defaults, as the module was loaded: no refusal, and a warning
+         threshold at the old cap. This is the assertion that fails if someone puts the
+         hardware-derived refusal back. *)
+      (match m7_shipped_defaults with
+      | None, None, Some n when n = Encoding.max_order_width ->
+          check "M7-T1: the shipped default refuses nothing and warns at the old cap" true
+      | w, d, t ->
+          check
+            (Printf.sprintf
+               "M7-T1: shipped defaults are wrong -- width %s, direct %s, warn %s"
+               (Encoding.limit_string w) (Encoding.limit_string d)
+               (Encoding.limit_string t))
+            false);
+      (* Parsing. A value that is neither an integer nor `none` must RAISE. A mistyped
+         budget that silently means "no budget" is the failure this row is about, and
+         it is the one failure a limit-parsing function can have that nobody notices. *)
+      let parses s = Encoding.limit_of_string ~what:"t" s in
+      check "M7-T1: `none` is no limit" (parses "none" = None);
+      check "M7-T1: `unlimited` is no limit" (parses "unlimited" = None);
+      check "M7-T1: `off` is no limit" (parses "off" = None);
+      check "M7-T1: the empty string is no limit" (parses "" = None);
+      check "M7-T1: whitespace and case do not matter" (parses "  NoNe " = None);
+      check "M7-T1: an integer is a limit" (parses "10000" = Some 10_000);
+      check "M7-T1: zero is a limit, and a real one" (parses "0" = Some 0);
+      List.iter
+        (fun bad ->
+          check
+            (Printf.sprintf "M7-T1: %S is an ERROR, not a silent `none`" bad)
+            (match parses bad with
+            | _ -> false
+            | exception Encoding.Bad_limit ("t", b) -> b = bad
+            | exception _ -> false))
+        [ "-1"; "-3"; "1e4"; "10 000"; "ten"; "10000x"; "0x10"; "0b11"; "1_0000" ];
+
+      (* -1 in particular: the neighbouring convention spells `none` that way, which
+         would make -3 the only negative that is an error. That is precisely the trap. *)
+
+      (* The default. *)
+      Encoding.order_width_limit := None;
+      Encoding.direct_values_limit := None;
+      check "M7-T1: no width limit by default"
+        (Encoding.current_order_width_limit () = None);
+      check "M7-T1: no direct-values limit by default"
+        (Encoding.current_direct_values_limit () = None);
+      m7_eq "M7-T1: and it renders as `unlimited`" ~expected:"unlimited"
+        ~actual:(Encoding.order_width_limit_string ());
+      m7_eq "M7-T1: a set limit renders as its number" ~expected:"77"
+        ~actual:
+          (Encoding.order_width_limit := Some 77;
+           Encoding.order_width_limit_string ());
+      Encoding.order_width_limit := None;
+
+      (* The direct encoding, which had the second number. Under no limit a domain
+         far past [max_direct_values] is requested without complaint; under a limit of
+         one, the smallest domain there is is refused. Both halves, because a limit
+         that is never seen to bite is not a limit. *)
+      let e = Encoding.create () in
+      Encoding.declare_int e "d" ~lo:0 ~hi:5;
+      check "M7-T1: request_direct is accepted with no limit"
+        (match Encoding.request_direct e "d" with _ -> true | exception _ -> false);
+      Encoding.direct_values_limit := Some 1;
+      let e2 = Encoding.create () in
+      Encoding.declare_int e2 "d" ~lo:0 ~hi:5;
+      check "M7-T1: and refused under --max-direct-values=1"
+        (match Encoding.request_direct e2 "d" with
+        | _ -> false
+        | exception Encoding.Direct_too_large ("d", 6) -> true
+        | exception _ -> false);
+      Encoding.direct_values_limit := None;
+      m7_eq "M7-T1: max_direct_values keeps its value as the SUGGESTED limit"
+        ~expected:"100000"
+        ~actual:(string_of_int Encoding.max_direct_values))
+
+let test_m7_encoding_cost () =
+  with_limits (fun () ->
+      Encoding.order_width_limit := None;
+      Encoding.width_warn_threshold := None;
+      let e = Encoding.create () in
+      let c0 = Encoding.cost e in
+      check "M7-T1: an empty encoding cost nothing" (c0.Encoding.c_ladder_clauses = 0);
+      check "M7-T1: and names no widest variable" (c0.Encoding.c_widest = None);
+      Encoding.declare_int e "a" ~lo:0 ~hi:5;
+      Encoding.declare_int e "b" ~lo:(-4) ~hi:4;
+      Encoding.declare_int e "c" ~lo:7 ~hi:7;
+      let c = Encoding.cost e in
+      (* 4 + 7 + 0. The ladder is w - 1 clauses per variable and the counter is the SUM
+         -- which is the number the per-variable cap never bounded, and said so in its
+         own comment: a thousand variables at width 9 999 was always ten million
+         clauses and always slipped through. *)
+      m7_eq "M7-T1: the ladder total is the sum over variables" ~expected:"11"
+        ~actual:(string_of_int c.Encoding.c_ladder_clauses);
+      check "M7-T1: which is what the encoding actually minted"
+        (c.Encoding.c_ladder_clauses = Encoding.n_constraints e);
+      check "M7-T1: the widest variable is named, so a reader knows what to narrow"
+        (c.Encoding.c_widest = Some ("b", -4, 4));
+      m7_eq "M7-T1: and its width is reported" ~expected:"8"
+        ~actual:(string_of_int (Encoding.widest_width c.Encoding.c_widest));
+      check "M7-T1: a width-0 declaration does not become the widest"
+        (c.Encoding.c_widest <> Some ("c", 7, 7));
+      (* The warning is a function of the threshold and nothing else. *)
+      let buf = Buffer.create 64 in
+      Encoding.set_warn_sink (Buffer.add_string buf);
+      Encoding.width_warn_threshold := Some 3;
+      let e2 = Encoding.create () in
+      Encoding.declare_int e2 "narrow" ~lo:0 ~hi:3;
+      check "M7-T1: at the threshold, nothing is said" (Buffer.contents buf = "");
+      Encoding.declare_int e2 "over" ~lo:0 ~hi:4;
+      check "M7-T1: one over it, the encoding reports itself" (Buffer.contents buf <> "");
+      check "M7-T1: naming the variable a reader must act on"
+        (m7_contains ~needle:"`over`" (Buffer.contents buf)))
+
 let () =
   report_checker ();
   test_lits ();
@@ -2948,6 +3104,8 @@ let () =
   test_view_veripb ();
   test_m5_bounds_and_soli ();
   test_m5_no_obju_caller ();
+  test_m7_limits_are_options ();
+  test_m7_encoding_cost ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

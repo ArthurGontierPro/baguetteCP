@@ -354,7 +354,7 @@ let reject_declared_bound (v : Model.var) lo hi =
    legal and the refusal is a deliberate choice about proof size. *)
 let reject_declared_width (v : Model.var) lo hi =
   Error.failf v.Model.v_pos
-    "variable `%s` is declared over %d..%d, a width of %d, and baguette's limit is %d. \
+    "variable `%s` is declared over %d..%d, a width of %d, and baguette's limit is %s. \
      Every integer variable is given the order encoding eagerly, so a declared width of \
      w costs w-1 ladder clauses in the .opb before any constraint is posted, and makes \
      every justification that cancels this variable's contribution Theta(w) literals \
@@ -362,8 +362,11 @@ let reject_declared_width (v : Model.var) lo hi =
      29.8 MB proof line, for a model that is infeasible by inspection -- a proof the \
      checker accepts and nobody can store or review. This model is legal FlatZinc; the \
      limit is baguette's, and refusing is deliberate rather than a defect. Narrow the \
-     declared domain, or rescale the model so the same question fits a smaller one."
-    v.Model.v_name lo hi (hi - lo) Encoding.max_order_width
+     declared domain, or rescale the model so the same question fits a smaller one. \
+     M7-T1: this refusal is OFF by default; you are seeing it because a width limit was \
+     asked for with --max-order-width or BAGUETTE_MAX_ORDER_WIDTH."
+    v.Model.v_name lo hi (hi - lo)
+    (Encoding.order_width_limit_string ())
 
 let reject_row pos ~what ~magnitude =
   Error.failf pos
