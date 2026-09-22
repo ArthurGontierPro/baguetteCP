@@ -4526,6 +4526,17 @@ could not be autoproven."*
 - The objective must be a **variable**: a constant objective is refused, because `conclusion
   BOUNDS` needs a `min:` line and a constant has no order literals.
 
+> **UPDATE 2026-09-22 (M4-T8): the second consumer landed, and it moved a conflict.**
+> `element.ml` swapped all four `Explanation.term c (Explanation.clause [l])` stand-ins for
+> `Defining`, and `element_moved_unsat`'s `conclusion UNSAT` went from citing `rup >= 1` to
+> citing a `pol`. **One artefact changed across 85 models.** Two things that row learned and
+> that a third consumer should not rediscover: **`Search.rests_on_a_clause` is not a usable
+> signal for the level rule** — it cannot distinguish *"cancelled"* from *"correctly omitted,
+> and nothing else happens to be a `Clause`"*, since both give `false`; inspect the forced
+> `Combine`'s summand list instead. And **`Defining`'s multiplicity changes the shape of a
+> `pol` line** (`@c31 2 *`), so any test that mutates proof text by token must handle a scaled
+> summand or it produces a **parse error** rather than the judgement it meant to provoke.
+
 ## D-0064  `Explanation.Defining`: the ADT can now ask for a constraint id, and D-0044's table breaks at nine
 
 **Status**: **ACCEPTED**, implemented by M4-T7 (2026-09-21, agent-defid). **This is the first
