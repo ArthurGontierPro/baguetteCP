@@ -4672,3 +4672,90 @@ same boundary, for the same reason, as `Explanation.top_weaken_owners`.
 D-0009's *"until `Explanation.t` can carry ids…"* consequence is **discharged on the `pol` side**,
 and D-0061's *"where it creaked"* section is **answered**. D-0044's no-new-constructor table held
 eight times and breaks here, on the ninth — deliberately, with the argument above.
+
+## D-0065  The hardware limits become options, defaulting off — and D-0041's objection is answered, not ignored
+
+**Status**: **ACCEPTED**, implemented by M7-T1 (2026-09-22, agent-unlimit). **Amends D-0041**,
+which forbade exactly this, and amends `SPEC.md` §3.1's normative MUST. The argument is the
+substance here; the code is small.
+
+### Why
+
+The project was built on a 15 GB laptop and its limits reflect that machine, not the problem.
+M7 runs the MiniZinc Challenge corpus on a 192-core / 2 TB node. A refusal calibrated to the
+dev box is not a property of constraint programming.
+
+### Three kinds of limit, and only one of them is a flag
+
+M7-T1's brief named two — RAM, and proof-size/checker-time. **The implementing session found a
+third and it is the one most likely to be lost:**
+
+| kind | example | option? |
+|---|---|---|
+| the machine is small | suite `MEM_CAP_KB` | yes — and it is about **gate time on a shared dev box**, not solver capability |
+| the artefact may be unusable | `max_order_width`, `max_direct_values` | yes, **defaulting off**, with a diagnostic that always fires |
+| **the arithmetic does not exist** | a width not representable as a native int | **NO. Never.** Without it `declare_int` sits in a 2^64 loop |
+
+> **A limit that exists because the machine is small is an option; a limit that exists because
+> the arithmetic does not exist is not.**
+
+Someone will read "M7-T1 removed the width limits" and try to remove the third. That sentence is
+in `SPEC.md` §3.1 for them.
+
+### How D-0041's objection is answered rather than overridden
+
+D-0041 forbade a run-time knob because *"a knob would make the accepted language
+environment-dependent, so two runs of the same binary on the same `.fzn` could disagree about
+whether it is a legal model."* **That objection is correct as stated.**
+
+It is answered because **the default is now unlimited**. The accepted language is *fixed and
+maximal*; two default runs always agree; the knob can only **restrict**, making it an operator's
+self-imposed budget rather than part of the language.
+
+**D-0041's own arrangement was the weaker one on its own terms**: the accepted language depended
+on a **compiled-in constant**, so two *builds* could disagree about legality, with no way for a
+reader to see which constant was in force. What D-0041 was really protecting — that a reader
+must never be unable to tell *why* a model was refused — is preserved, because the refusal names
+the limit and says it was asked for.
+
+### The refusal goes; the signal does not
+
+This was the row's central instruction and it was met by **a warning that fires unasked**, not
+only a `--stats` counter — *"a counter nobody asked for is a counter nobody reads."* The
+threshold is the old cap, 10 000: that number's one remaining job is to mark where the artefacts
+stopped fitting in a code review.
+
+The diagnostic explains D-0028 to a reader who has never heard of it — it says what the order
+encoding *is*, that a width of w costs w−1 clauses, names the count, and says the proof grows
+with the **declared** domain rather than with difficulty. That was asked for explicitly:
+"Encoded 4 000 000 ladder clauses" means nothing to someone who has not been told why.
+
+`--stats` additionally reports `ladder` — **the aggregate the per-variable cap never bounded, as
+its own comment admitted** — plus `widest`, naming the single variable to narrow first.
+
+### Measured
+
+**85 models × {stdout, stderr, exit code, `.opb`, `.pbp`} = 425 artefacts, 0 differing**, with
+genuinely different binaries. Independently re-verified by the orchestrator across the merge
+(340-artefact comparison, 0 differing, `6639381e5c02` → `3b1d28efb752`). Removing a ceiling
+changed nothing about what an in-bounds model emits.
+
+A width-30 000 model — refused outright before — now solves and **veripb 3.0.2 accepts its
+proof**. Verified independently at width 20 000: `s VERIFIED SATISFIABLE`.
+
+### The vacuity gap it found in its own work
+
+**With the cap put back, the shell lane reddened and not one unit assertion did** — because
+every unit test sets the limit explicitly, so none observed the *shipped default*. A suite can
+test a setting exhaustively and never test what ships. Closed by sampling the refs at module
+load, before any test can touch them.
+
+That is this project's signature failure mode occurring inside the row written to prevent it —
+the same shape as the width lint's own history, and as D-0058's two blind lanes.
+
+### What did NOT change, deliberately
+
+`scripts/check_test_widths.py` is untouched. It enforces **suite hygiene about gate time**, with
+three memory-ceiling incidents behind it. The solver's capability limit was a different thing
+wearing the same number, and separating them is what this row is. The over-wide test model lives
+in a `mktemp -d` and is deleted; nothing wide is committed.

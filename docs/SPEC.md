@@ -158,21 +158,51 @@ and every row it appears in expands to one literal per interior value. Both arte
 therefore Θ(declared width) per variable before the search has done anything at all — and
 this holds even for a model that is refuted on its declared bounds having pruned nothing.
 
-**A declared width limit** *(normative — D-0041, which supersedes the "no such limit
-exists" of D-0028 part 3 and D-0031)*. The solver MUST NOT silently answer a model whose
-declared width it cannot encode. Every declared domain MUST be checked against an
-implementation limit on `hi - lo`, and a model exceeding it MUST be rejected with a
-positioned diagnostic naming the variable and the limit, exiting non-zero. It MUST NOT be
-accepted and answered, and **the limit MUST NOT be adjustable at run time** — a knob would
-make the accepted language environment-dependent, so two runs of the same binary on the
-same `.fzn` could disagree about whether it is a legal model, which is the one thing a
-normative statement must not allow.
+**A declared width limit** *(normative — D-0065, 2026-09-22, which amends D-0041; D-0041
+in turn superseded the "no such limit exists" of D-0028 part 3 and D-0031)*.
 
-This refuses models the FlatZinc standard allows, and that is deliberate: the model is
-legal and the answer would be correct; what is unacceptable is the artefact. The limit is
-separate from §2.1's arithmetic limit **in justification, in value, and in the exit code it
-reports**. That one refuses models whose arithmetic cannot be *computed* and is a soundness
-requirement; this one refuses models whose proof cannot be *stored*. §2.1's limit bounds
+The solver **MUST NOT silently answer** a model whose declared width makes its proof
+impractical. That requirement is unchanged and is the durable half of D-0041.
+
+**The solver MUST NOT refuse such a model by default.** A declared domain exceeding an
+implementation-defined **reporting threshold** MUST produce a diagnostic on stderr naming
+the variable, its width, and the clause count it minted. The diagnostic MUST NOT appear on
+stdout, and stdout MUST be byte-identical with and without it.
+
+An implementation MUST provide a means of **restoring** the refusal. When a limit is in
+force, a model exceeding it MUST be rejected with a positioned diagnostic naming the
+variable and the limit, exiting non-zero as a model error rather than an invariant failure.
+
+**Why this amends D-0041 rather than overriding it.** D-0041 forbade a run-time knob on
+this ground, and the objection was correct as stated:
+
+> a knob would make the accepted language environment-dependent, so two runs of the same
+> binary on the same `.fzn` could disagree about whether it is a legal model, which is the
+> one thing a normative statement must not allow.
+
+The amendment answers it rather than ignoring it, because **the default is now unlimited**.
+The accepted language is therefore *fixed and maximal*: every legal FlatZinc model is
+accepted by a default build, and two default runs always agree. The knob can only
+**restrict**, which makes it an operator's self-imposed resource budget rather than part of
+the language. D-0041's own arrangement was in fact the weaker one on its own terms — the
+accepted language depended on a **compiled-in constant**, so two *builds* could disagree
+about legality, with no way for a reader to see which constant was in force.
+
+What D-0041 was really protecting is that a reader must never be unable to tell why a model
+was refused. That is preserved: the refusal names the limit and says it was asked for.
+
+**A declared width that is not representable as a native integer is refused
+unconditionally, and no option disables it.** This is an arithmetic refusal in the family of
+§2.1's overflow cap, not a resource budget: the ladder does not exist to be built. *A limit
+that exists because the machine is small is an option; a limit that exists because the
+arithmetic does not exist is not.*
+
+This deliberately accepts models whose *artefact* may be unusable. The model is legal and
+the answer is correct; what may be unacceptable is the proof, and the diagnostic is how the
+user learns that before discovering it at the checker. The limit remains separate from
+§2.1's arithmetic limit **in justification, in value, and in the exit code it reports**.
+That one refuses models whose arithmetic cannot be *computed* and is a soundness
+requirement; this one bounds models whose proof cannot be *stored*. §2.1's limit bounds
 width only incidentally, at 5.7 × 10^17.
 
 ### 3.2 Propagation
