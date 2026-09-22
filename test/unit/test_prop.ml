@@ -5563,6 +5563,423 @@ let test_alldiff_cites_root_bound_under_decision () =
   |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
   try Sys.rmdir dir with _ -> ()
 
+(* ============================================================= M4-T2: Regin ==========
+
+   Stage 2 of the same propagator, and the four questions M4-T1's lane asks, re-asked at
+   the level this row declares.
+
+   (a) THE FILTERING, against brute force, at DOMAIN and therefore value by value rather
+       than bound by bound. The oracle is the set of values that extend to a pairwise-
+       distinct assignment of the other variables' CURRENT domains, and EQUALITY is
+       asserted: a propagator that pruned only bounds would pass a containment test, and
+       that propagator is exactly what this row replaced.
+
+   (b) THE TAG, by performing the break in the suite. [Bounds_only] is this propagator
+       with stage 2 removed and the [Domain] declaration left in place -- the flip M4-T1
+       used to demonstrate its own tag, in the direction M4-T2 turns it -- and the M2-T10
+       oracle must report it. A tag nothing can make fail is a tag that says nothing.
+
+   (c)/(d) THE CITATION on the solver's own artefact: a model no bounds-consistent
+       all_different can refute, whose `conclusion UNSAT` names the Regin pol, with every
+       id that pol cites looked up in the .pbp rather than assumed, and a WRONG id in it
+       rejected by 3.0.2 in the checker's own words.
+
+   (e) THE STAGING: above the cutoff the cheap pass returns without an idempotence claim,
+       so a single [propagate] leaves the matching work undone and the next one does it. *)
+
+(* Every value of every named variable at the root fixpoint, rather than just the two
+   bounds -- which is the whole difference between what M4-T1 could be asked and what
+   this row can. *)
+let arith_root_domains src names =
+  let t = compile_src src in
+  let store = t.Compile.store in
+  match Engine.propagate t.Compile.engine store with
+  | Engine.Conflict _ -> None
+  | Engine.Fixpoint ->
+      Some
+        (List.map
+           (fun n ->
+             match Store.var_named store n with
+             | None -> []
+             | Some v -> Domain.to_list (Store.get store v))
+           names)
+
+(* The domain-consistent fixpoint of a pure all_different over [boxes] minus [holes]:
+   per variable, the values that appear in at least one pairwise-distinct assignment.
+   [None] when there is no distinct assignment at all. *)
+let alldiff_support (doms : int list list) =
+  let arr = Array.of_list doms in
+  let n = Array.length arr in
+  let cur = Array.make n 0 in
+  let acc = Array.make n [] in
+  let distinct k =
+    let ok = ref true in
+    for i = 0 to k - 1 do
+      if cur.(i) = cur.(k) then ok := false
+    done;
+    !ok
+  in
+  let any = ref false in
+  let rec go i =
+    if i = n then (
+      any := true;
+      Array.iteri (fun k v -> if not (List.mem v acc.(k)) then acc.(k) <- v :: acc.(k)) cur)
+    else
+      List.iter
+        (fun v ->
+          cur.(i) <- v;
+          if distinct i then go (i + 1))
+        arr.(i)
+  in
+  go 0;
+  if not !any then None else Some (Array.to_list (Array.map (List.sort compare) acc))
+
+(* [boxes] declares the variables; [holes] is (index, value) pairs punched by an
+   `int_ne`, which is the only way a .fzn in this subset can ask for a domain with a gap
+   (SPEC 2.1 has no set domains, and compile.ml's [reject_set_domain] says so). Holes are
+   what makes the scope interesting here: they are what a value set that is not an
+   interval looks like from the inside, and they are what stage 2 itself creates. *)
+let regin_src boxes holes =
+  let decls =
+    List.mapi (fun i (lo, hi) -> Printf.sprintf "var %d..%d: v%d;" lo hi i) boxes
+  in
+  let nes = List.map (fun (i, v) -> Printf.sprintf "constraint int_ne(v%d, %d);" i v) holes in
+  let names = List.mapi (fun i _ -> Printf.sprintf "v%d" i) boxes in
+  String.concat "\n" (decls @ nes)
+  ^ Printf.sprintf "\nconstraint all_different_int([%s]);\nsolve satisfy;\n"
+      (String.concat ", " names)
+
+let test_regin_filtering () =
+  let bad_sound = ref [] and bad_exact = ref [] and bad_refute = ref [] in
+  let scene boxes holes =
+    let names = List.mapi (fun i _ -> Printf.sprintf "v%d" i) boxes in
+    let declared =
+      List.mapi
+        (fun i (lo, hi) ->
+          List.filter
+            (fun v -> not (List.mem (i, v) holes))
+            (List.init (hi - lo + 1) (fun k -> lo + k)))
+        boxes
+    in
+    let label =
+      String.concat ","
+        (List.map (fun d -> "{" ^ String.concat " " (List.map string_of_int d) ^ "}")
+           declared)
+    in
+    match (arith_root_domains (regin_src boxes holes) names, alldiff_support declared) with
+    | None, None -> ()
+    | None, Some _ | Some _, None -> bad_refute := label :: !bad_refute
+    | Some got, Some want ->
+        if not (List.for_all2 (fun g w -> List.for_all (fun v -> List.mem v g) w) got want)
+        then bad_sound := label :: !bad_sound
+        else if got <> want then bad_exact := label :: !bad_exact
+  in
+  (* Exhaustive over every two- and three-variable scope of sub-intervals of 1..4, then
+     the same three-variable scopes with one hole punched in each variable in turn. Four
+     values wide and at most three variables is well inside the memory rule's single-
+     digit domains, and it is the whole space rather than a sample. *)
+  let intervals =
+    List.concat_map (fun lo -> List.init (5 - lo) (fun k -> (lo, lo + k))) [ 1; 2; 3; 4 ]
+  in
+  List.iter (fun a -> List.iter (fun b -> scene [ a; b ] []) intervals) intervals;
+  List.iter
+    (fun a ->
+      List.iter (fun b -> List.iter (fun c -> scene [ a; b; c ] []) intervals) intervals)
+    intervals;
+  let wide = [ (1, 4); (1, 4); (1, 4) ] in
+  for i = 0 to 2 do
+    for v = 2 to 3 do
+      scene wide [ (i, v) ];
+      scene wide [ (i, v); ((i + 1) mod 3, v) ]
+    done
+  done;
+  List.iter
+    (fun (boxes, holes) -> scene boxes holes)
+    [
+      (* The canonical case bounds consistency cannot see: two variables saturate the
+         INTERIOR of a third's range, so the pruning is a pair of holes and no bound
+         moves at all. *)
+      ([ (2, 3); (2, 3); (1, 4) ], []);
+      ([ (2, 3); (2, 3); (1, 4); (1, 4) ], []);
+      (* A tight set whose value set is NOT an interval, which is the shape an interval
+         Hall argument cannot even state. *)
+      ([ (1, 4); (1, 4); (1, 4) ], [ (0, 2); (0, 3); (1, 2); (1, 3) ]);
+      ([ (1, 4); (1, 4); (1, 4); (1, 4) ], [ (0, 2); (0, 3); (1, 2); (1, 3) ]);
+      (* The pigeonhole over a non-interval value set: three variables, two values. *)
+      ([ (1, 4); (1, 4); (1, 4) ], [ (0, 2); (0, 3); (1, 2); (1, 3); (2, 2); (2, 3) ]);
+    ];
+  let show what l =
+    if l <> [] then
+      Printf.printf "     %s: %s\n" what
+        (String.concat "; " (List.filteri (fun i _ -> i < 4) l))
+  in
+  show "unsound scopes" !bad_sound;
+  show "not domain consistent" !bad_exact;
+  show "disagreed about emptiness" !bad_refute;
+  check "regin (a): every root domain CONTAINS every supported value (soundness)"
+    (!bad_sound = []);
+  check
+    "regin (a): the root domain IS the support set -- DOMAIN consistency, as declared, \
+     value by value"
+    (!bad_exact = []);
+  check "regin (a): refutes exactly the scopes with no distinct assignment"
+    (!bad_refute = [])
+
+(* ------------------------------------------------------------------ (b) THE TAG *)
+
+(* This propagator with stage 2 removed and the [Domain] declaration left standing. It is
+   the only thing in the suite that can make the M2-T10 oracle's verdict on
+   `all_different_int` false, and it exists so that "the oracle is clean at domain" is a
+   statement with a control. *)
+module Bounds_only : Propagator.S with type t = Alldiff.t = struct
+  type t = Alldiff.t
+
+  let name = "all_different_int"
+  let consistency = Propagator.Domain
+  let vars = Alldiff.vars
+
+  let propagate p store =
+    try
+      ignore (Alldiff.stage_bounds p store ~moved:false : bool);
+      Propagator.Fixpoint
+    with Alldiff.Found c -> Propagator.Conflict c
+end
+
+let regin_oracle_scene ~staged =
+  let boxes = [ (2, 3); (2, 3); (1, 4) ] in
+  let names = [ "v0"; "v1"; "v2" ] in
+  let e = Encoding.create () in
+  List.iter2 (fun n (lo, hi) -> Encoding.declare_int e n ~lo ~hi) names boxes;
+  List.iter (Encoding.request_direct e) names;
+  let rows = Encoding.add_all_different e names in
+  let store = mk_store (List.map2 (fun n (lo, hi) -> (n, lo, hi)) names boxes) in
+  let p = Alldiff.make store e ~rows [ var 0; var 1; var 2 ] in
+  let inst =
+    if staged then Propagator.pack ~id:0 (module Alldiff : Propagator.S with type t = Alldiff.t) p
+    else Propagator.pack ~id:0 (module Bounds_only) p
+  in
+  let engine = Engine.create [ inst ] in
+  match Engine.propagate engine store with
+  | Engine.Conflict _ -> ([], [])
+  | Engine.Fixpoint ->
+      ( Engine.check_consistency engine store,
+        Domain.to_list (Store.get store (var 2)) )
+
+let test_regin_consistency_oracle () =
+  let vios, dom = regin_oracle_scene ~staged:true in
+  check "regin (b): stage 2 leaves v2 over {1, 4} -- the interior of the Hall interval is gone"
+    (dom = [ 1; 4 ]);
+  if vios <> [] then
+    Printf.printf "     %s\n" (String.concat "\n     " (List.map Engine.violation_to_string vios));
+  check
+    "regin (b): the M2-T10 oracle checks all_different_int AT DOMAIN and finds no \
+     violation" (vios = []);
+  let vios, dom = regin_oracle_scene ~staged:false in
+  check "regin (b) BREAK premise: with stage 2 removed v2 keeps its interior values"
+    (dom = [ 1; 2; 3; 4 ]);
+  check
+    "regin (b) BREAK: and the oracle FIRES on it -- `declares domain but is WEAKER than \
+     that`, which is what makes the tag a claim rather than a label"
+    (List.exists
+       (fun v ->
+         contains_sub ~needle:"declares domain but is WEAKER than that"
+           (Engine.violation_to_string v))
+       vios)
+
+(* --------------------------------------------------------------- (e) THE STAGING *)
+
+(* A scope where stage 1 has something to say on the first call AND stage 2 still has
+   something to say after it. With the cutoff driven to 0 the first [propagate] must
+   return having done only the cheap pass -- that is the "no idempotence claim" -- and
+   the second must finish the job. With the shipped cutoff both happen in one call, which
+   is why no model in this suite takes the staged branch. *)
+let regin_staging_scene ~cutoff =
+  let boxes = [ (2, 3); (2, 3); (2, 5); (1, 6) ] in
+  let names = [ "v0"; "v1"; "v2"; "v3" ] in
+  let e = Encoding.create () in
+  List.iter2 (fun n (lo, hi) -> Encoding.declare_int e n ~lo ~hi) names boxes;
+  List.iter (Encoding.request_direct e) names;
+  let rows = Encoding.add_all_different e names in
+  let store = mk_store (List.map2 (fun n (lo, hi) -> (n, lo, hi)) names boxes) in
+  let p = Alldiff.make ~cutoff store e ~rows [ var 0; var 1; var 2; var 3 ] in
+  let step () =
+    let r = Alldiff.propagate p store in
+    ( (match r with Propagator.Fixpoint -> true | Propagator.Conflict _ -> false),
+      Domain.to_list (Store.get store (var 3)) )
+  in
+  let ok1, d1 = step () in
+  let ok2, d2 = step () in
+  (ok1 && ok2, d1, d2)
+
+let test_regin_staging () =
+  let ok, d1, d2 = regin_staging_scene ~cutoff:0 in
+  check "regin (e): neither call conflicts" ok;
+  check
+    "regin (e): over the cutoff the first call returns after the CHEAP pass and makes no \
+     idempotence claim -- v3 still holds every value"
+    (d1 = [ 1; 2; 3; 4; 5; 6 ]);
+  check
+    "regin (e): and the next call, with the cheap pass now saying nothing, runs the \
+     matching and takes the Hall interval's INTERIOR out of v3 -- a pruning with no \
+     bound move in it at all"
+    (d2 = [ 1; 4; 5; 6 ]);
+  let ok, d1, d2 = regin_staging_scene ~cutoff:Alldiff.default_cutoff in
+  check "regin (e) CONTROL: neither call conflicts at the shipped cutoff" ok;
+  check
+    "regin (e) CONTROL: at or below the cutoff both stages run in ONE call, which is the \
+     branch every model in this suite takes"
+    (d1 = [ 1; 4; 5; 6 ] && d2 = [ 1; 4; 5; 6 ])
+
+(* ------------------------------------------------------- (c)/(d) THE CITATION *)
+
+(* Three variables over 1..4 with 2 and 3 taken out of each by an `int_ne`: three
+   variables and two values, so it is the pigeonhole -- but over the value SET {1, 4},
+   which is not an interval, so no Hall INTERVAL contains a surplus of variables and
+   stage 1 cannot refute it. Every id is read back out of the file. *)
+let regin_unsat_src =
+  "var 1..4: a;\n\
+   var 1..4: b;\n\
+   var 1..4: c;\n\
+   constraint int_ne(a, 2);\n\
+   constraint int_ne(a, 3);\n\
+   constraint int_ne(b, 2);\n\
+   constraint int_ne(b, 3);\n\
+   constraint int_ne(c, 2);\n\
+   constraint int_ne(c, 3);\n\
+   constraint all_different_int([a, b, c]);\n\
+   solve satisfy;\n"
+
+let test_regin_conclusion () =
+  let dir = Filename.temp_file "baguette_regin_concl" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let outcome, opb, pbp, minting, text, label =
+    alldiff_conclusion_kind dir ~file:"regin_unsat" regin_unsat_src
+  in
+  check "regin (c): the non-interval pigeonhole is UNSAT" (outcome = Search.Unsat);
+  let ls = String.split_on_char '\n' text in
+  (match minting with
+  | None -> check "regin (d): the conclusion names a line this proof minted" false
+  | Some line ->
+      check
+        "regin (d): `conclusion UNSAT` cites the REGIN derivation -- a pol, not the \
+         D-0022 empty clause"
+        (contains_sub ~needle:" pol " (" " ^ String.trim line));
+      (* Established, not asserted: the ids the pol cites are looked up, and the ones
+         that are one-literal `rup`s are the lines establishing the three variables'
+         HOLES -- which is the thing an interval Hall argument never had to cancel. *)
+      let rec cited_units seen id =
+        if List.mem id seen then (seen, [])
+        else
+          let seen = id :: seen in
+          match unit_rup_of ls id with
+          | Some u -> (seen, [ u ])
+          | None -> (
+              match
+                List.find_opt
+                  (fun l -> starts_with_str (Printf.sprintf "@c%d pol " id) (String.trim l))
+                  ls
+              with
+              | None -> (seen, [])
+              | Some l ->
+                  List.fold_left
+                    (fun (seen, acc) c ->
+                      let seen, us = cited_units seen c in
+                      (seen, acc @ us))
+                    (seen, []) (pol_cited (String.trim l)))
+      in
+      let ids = pol_cited (String.trim line) in
+      let _, units =
+        List.fold_left
+          (fun (seen, acc) c ->
+            let seen, us = cited_units seen c in
+            (seen, acc @ us))
+          ([], []) ids
+      in
+      let sorted = List.sort_uniq String.compare units in
+      let want =
+        [ "~a_eq_2"; "~a_eq_3"; "~b_eq_2"; "~b_eq_3"; "~c_eq_2"; "~c_eq_3" ]
+      in
+      if sorted <> want then Printf.printf "     cited units: %s\n" (String.concat " " sorted);
+      check
+        "regin (d): and the units it cites really are the lines establishing the six \
+         HOLES the counting had to cancel"
+        (sorted = want));
+  (match (veripb_path (), label, minting) with
+  | None, _, _ ->
+      incr failures;
+      Printf.printf "FAIL regin (c): veripb not found -- the derivation was NOT checked.\n"
+  | Some veripb, Some lab, Some line ->
+      let run tag pbp =
+        let log = Filename.concat dir ("log" ^ tag) in
+        let rc =
+          Sys.command
+            (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
+               (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
+        in
+        let ic = open_in_bin log in
+        let out = really_input_string ic (in_channel_length ic) in
+        close_in ic;
+        (rc, out)
+      in
+      let rc, out = run "ok" pbp in
+      if rc <> 0 then Printf.printf "     checker said: %s\n" (String.trim out);
+      check "regin (c): 3.0.2 accepts the Regin derivation the conclusion rests on" (rc = 0);
+      (* THE BREAK, on the solver's own artefact: one variable's at-least-one line in the
+         conclusion's pol is SWAPPED for another variable's, so the counting is over a
+         Hall set that names one variable twice and one not at all -- which is exactly
+         what a wrong Hall set looks like from inside the arithmetic. It is a swap and
+         not a deletion on purpose: deleting an operand leaves a dangling `+` and the
+         checker refuses it on the GRAMMAR, and a lane that accepted that would be
+         reporting a parse error as a judgement (M2-T14). The row here stays well formed
+         and VALID and stops being a contradiction, which is the claim under test. *)
+      let ids = pol_cited (String.trim line) in
+      let first = List.hd ids and second = List.nth ids 1 in
+      let broken = Filename.concat dir "regin_unsat_broken.pbp" in
+      let oc = open_out broken in
+      List.iteri
+        (fun i l ->
+          let l =
+            if starts_with_str (lab ^ " ") (String.trim l) then (
+              let want = Printf.sprintf "@c%d " first in
+              let n = String.length want in
+              let b = Buffer.create (String.length l) in
+              let rec go j =
+                if j + n <= String.length l then
+                  if String.sub l j n = want then (
+                    Buffer.add_string b (Printf.sprintf "@c%d " second);
+                    Buffer.add_string b (String.sub l (j + n) (String.length l - j - n)))
+                  else (
+                    Buffer.add_char b l.[j];
+                    go (j + 1))
+                else Buffer.add_string b (String.sub l j (String.length l - j))
+              in
+              go 0;
+              Buffer.contents b)
+            else l
+          in
+          if i > 0 then output_char oc '\n';
+          output_string oc l)
+        ls;
+      close_out oc;
+      let rc, out = run "bad" broken in
+      check "regin (c) BREAK premise: the broken pol differs from the honest one"
+        (read_file broken <> text);
+      check
+        "regin (c) BREAK: a Regin pol over a Hall set that names one variable twice is \
+         rejected" (rc <> 0);
+      let saying = "is not contradicting, as specified by the hint." in
+      if not (contains_sub ~needle:saying out) then
+        Printf.printf "     checker said: %s\n" (String.trim out);
+      check
+        "regin (c) BREAK: and the rejection is that JUDGEMENT -- \"is not contradicting, \
+         as specified by the hint.\" -- not a parse error"
+        (contains_sub ~needle:saying out)
+  | _ -> check "regin (c): the conclusion names a pol to break" false);
+  Sys.readdir dir
+  |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
+  try Sys.rmdir dir with _ -> ()
+
 let () =
   print_endline "\npropagator unit tests";
   test_soundness ();
@@ -5697,6 +6114,10 @@ let () =
   test_alldiff_conclusion ();
   test_alldiff_above_level_zero ();
   test_alldiff_cites_root_bound_under_decision ();
+  test_regin_filtering ();
+  test_regin_consistency_oracle ();
+  test_regin_staging ();
+  test_regin_conclusion ();
   run_veripb
     ~name:
       "alldiff (b) CONTROL: the Hall derivation over the TIGHT set is a contradiction \

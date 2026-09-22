@@ -594,12 +594,46 @@ let prune_summands t ~a ~b ~halls ~y ~lower =
       (fun v -> cite (cid_of "d_fwd" (Encoding.direct_fwd_id t.enc y.s_name v)))
       keep
 
+(* THE OTHER END OF AN EMPTYING PUSH (M4-T2, and a defect M4-T1 shipped latent).
+
+   [pass]'s pigeonhole arm pushes a CONTAINED variable's lower bound to [b + 1], which is
+   past its current upper bound, and relies on [Store.apply]'s [Failed] arm to turn that
+   into the conflict. For the conflict to be PROVABLE the row has to come out [0 >= 1],
+   and the telescoping channelling sum leaves [y_ge_(b+1)] in it. M4-T1's reading was
+   that this literal is the constant false and drops -- which is true exactly when
+   [b + 1 > decl_hi(y)], and that is what every model M4-T1 and M4-T7 reached happened to
+   satisfy. It is NOT true when y's upper bound has MOVED: then [b + 1] is a literal the
+   encoding really has, the row derives the perfectly valid [y >= b + 1] instead of a
+   contradiction, and 3.0.2 answers "the constraint with ID n is not contradicting".
+   Measured, on the first model whose Regin holes let an `int_lin_le` settle a bound past
+   them.
+
+   What closes it is the ladder: the rungs [y_ge_(u+1) -> y_ge_u] for u in
+   [hi(y) + 1 .. b] telescope to [~y_ge_(b+1) + y_ge_(hi(y)+1) >= 1], which turns the
+   residue into [y_ge_(hi(y)+1)], and the line stating y's own upper bound cancels that
+   exactly -- D-0064's [Defining], and its per-bound root test, once more.
+
+   The test [b + 1 > y.s_hi] is what tells the two arms apart and is not a heuristic: in
+   the [n = k] arm the pushed variable is NOT contained, so its upper bound is strictly
+   above [b] and the residue IS the pruning and must stay; in the [n > k] arm it is
+   contained, so the push always oversteps. Only the lower direction needs this, because
+   [pass] only ever empties a domain downward-out-of ([push ~lower:true]); the mirror
+   case is written out in this comment rather than in code because nothing reaches it. *)
+let overshoot_cancel t ~b ~y ~lower =
+  if lower && b + 1 > y.s_hi && y.s_hi < y.s_dhi && y.s_hi_root then
+    List.map
+      (fun u -> cite (cid_of "ladder rung" (Encoding.consistency_id t.enc y.s_name u)))
+      (range (y.s_hi + 1) b)
+    @ [ Explanation.defining 1 (Lit.le y.s_name y.s_hi) ]
+  else []
+
 let prune_expl t ~a ~b ~halls ~y ~lower =
   Explanation.deferred (fun () ->
       Explanation.combine
         (prune_summands t ~a ~b ~halls ~y ~lower
         @ hall_cancels ~keep:(fun v -> a <= v && v <= b) ~halls
-        @ target_cancel ~y ~lower)
+        @ target_cancel ~y ~lower
+        @ overshoot_cancel t ~b ~y ~lower)
         1)
 
 (* ------------------------------------------------------ M4-T2: a VALUE is removed

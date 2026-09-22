@@ -1177,6 +1177,16 @@ let mixes_currencies encoding (summands : Explanation.summand list) =
   in
   List.exists order_model_row summands && List.exists counting_term summands
 
+(* Does this derivation ask the claim index for an id at its own top level? See the
+   root-conflict arm in [dfs], which is the only caller and states why it matters. *)
+let top_defining (e : Explanation.t) =
+  match Explanation.force e with
+  | Explanation.Combine (summands, _) ->
+      List.exists
+        (function Explanation.Defining _ -> true | _ -> false)
+        summands
+  | _ -> false
+
 let rests_on_a_clause encoding (e : Explanation.t) =
   let rec go ~cited (e : Explanation.t) =
     match Explanation.force e with
@@ -2063,7 +2073,30 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
           let cid =
             if rests_on_a_clause ctx.Justify.encoding e then
               close_root_conflict ctx trace store c
-            else Justify.emit ctx e
+            else (
+              (* M4-T2. A [Defining] resolves through the claim index to "the UNIT line
+                 already stating the bound (the trace line, in practice)" -- D-0064's own
+                 words -- and mints one only if there is none. On THIS arm there is no
+                 trace: nothing has been branched on, so nothing wrote one, the claim
+                 index is empty, and every [Defining] falls through to a minted
+                 `rup <lit> >= 1`. That line is only accepted if the model entails the
+                 bound by unit propagation alone, which is a property of the model and
+                 not something the propagator can promise. It held for every bound M4-T1
+                 and M4-T7 reached; M4-T2 reached one it does not hold for -- a bound the
+                 `int_lin_le` row sets only after Regin's holes let it settle past them --
+                 and 3.0.2 refused the minted line, correctly.
+
+                 So write the branch's trace first, which is what the design assumed all
+                 along: every landed pruning's line goes on the page, the claim index
+                 holds it, and the [Defining] cites a line that is there rather than
+                 minting one. The lines are globally valid and decision-free (there are
+                 no decisions here), so this changes nothing about what the proof says --
+                 only about what it contains.
+
+                 Gated on the derivation actually HAVING a [Defining] at its top level,
+                 so a root conflict that cites nothing keeps the shape it had. *)
+              if top_defining e then Trace.emit ctx trace store;
+              Justify.emit ctx e)
           in
           NFail ([], cid)
       | _ ->
