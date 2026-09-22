@@ -4658,9 +4658,14 @@ is now: a `Defining` at the **top level** is the derivation's own cancellation a
 closes; **below a `Term`** it belongs to another instance's row and D-0022's route is right — the
 same boundary, for the same reason, as `Explanation.top_weaken_owners`.
 
-> **The underlying defect is NOT fixed**: an `int_lin_le` conflict citing an alldiff entry with
-> **no** moved bound would still be mis-routed. **No shipped model reaches it.**
-> `lib/core/search.ml:1107`.
+> **~~The underlying defect is NOT fixed~~ — FIXED 2026-09-22 by M4-T2.** The old rule read the
+> *presence* of a `Clause`/`Defining`; what it stood in for is the **currency** the cited row is
+> stated in. `Encoding.is_direct_row` now records the ids minted for the direct encoding and
+> `Search.mixes_currencies` asks directly — a top-level `Combine` adding an order-currency `.opb`
+> row to a direct-currency counting row cited as a `Term` is a sound `pol` that does not close,
+> and `Defining` can then say what is true of it. **A model that reaches the case this paragraph
+> said nothing reaches is now shipped**: with the currency test disabled, 3.0.2 says *"not
+> contradicting, as specified by the hint."*
 
 ### What this discharges
 
