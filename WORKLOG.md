@@ -10,65 +10,7 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
-**Wave twenty-six is running: M7-T1 (agent-unlimit), M7-T2 (agent-annot), M7-T3 (agent-mznlib).**
-
-**M7 is a change of footing.** The solver has never seen input it did not author. The
-corpus is on `fataepyc-07` (`/scratch/arthur/mzn-challenge`, 19 years), the toolchain is
-built there (`/scratch/arthur/baguette`, gate green at 2705 ok / 85 models in 24 s), and
-MiniZinc 2.10.1 is at `/scratch/arthur/mzn`.
-
-**agent-unlimit (M7-T1)** holds `lib/proof/encoding.ml`, `bin/main.ml`, `Makefile`,
-`scripts/**`, `test/unit/{test_proof,test_matrix}.ml`.
-
-**agent-annot (M7-T2)** holds `lib/flatzinc/**`, `lib/core/search.ml`, and
-`test/unit/{test_flatzinc,test_compile,test_endtoend}.ml`.
-
-**agent-mznlib (M7-T3)** holds a **new** `mznlib/` and `tools/` and nothing under `lib/`
-at all — it writes MiniZinc redefinitions and a `.msc`, and measures. It may **read**
-everything.
-
-**The one thing I do not want lost in M7-T1.** The 15 GB ceiling was a laptop fact and it
-goes. But **two of the limits are not about RAM**: D-0028's width cost is proof size and
-checker time, and `max_order_width` was also a *diagnostic* — it told you your model would
-emit an encoding nobody can check. **Removing the refusal must not remove the signal.** A
-default build should run the model and *say* what it cost, not fail silently or succeed
-silently.
-
-**Docs are mine, and both T1 and T2 need SPEC changes** — §3.4 fixes the default search
-strategy and says an annotation MUST be honoured, and the width sections describe refusals
-that are becoming options. Neither agent edits `docs/**`; they report and I amend.
-
-**Hardware**: 92 concurrent runs, 32 GB each. That is M7-T4's budget, not a licence for the
-unit suite — `make check` stays fast because people run it.
-
-Wave twenty-five (M4-T2, M4-T8) is merged, released and pushed. **D-0004 is CLOSED** and
-every builtin in SPEC §2.1 is implemented. Baseline: **2705 ok / 0 FAIL, 280 matrix,
-44 mutation, 85/85 models**.
-
-
-**Wave twenty-five is running: M4-T2 (agent-regin) and M4-T8 (agent-elemdef).**
-
-**agent-regin holds** `lib/core/prop/alldiff.ml`, `lib/core/{explanation,justify,search}.ml`,
-`lib/proof/encoding.ml`, and `test/unit/{test_prop,test_justify,test_trace,test_matrix,test_random}.ml`.
-M4-T2 is Régin — **the second stage of M4-T1's propagator, not a second propagator**;
-`alldiff.ml`'s `stage_bounds` is named for the split and `propagate` is where the matching pass
-sequences. Its row calls the proof story **research-grade**, and D-0004 stays OPEN.
-
-**It also owns the latent defect D-0064 left bounded** (`search.ml:1107`): an `int_lin_le`
-conflict citing an alldiff entry with **no** moved bound would still be mis-routed by
-`rests_on_a_clause`. No shipped model reaches it. That is squarely Régin's subject matter, which
-is why `search.ml` goes here rather than to the smaller row.
-
-**agent-elemdef holds** `lib/core/prop/element.ml` and
-`test/unit/{test_endtoend,test_compile,test_flatzinc}.ml`, plus `test/models/**`. M4-T8 is the
-swap M4-T3 could not make: it branched before D-0064, so it stands in with
-`Explanation.term c (Explanation.clause [l])`, which `explanation.ml`'s header calls **"the right
-arithmetic wearing the wrong label"**.
-
-**Conditions for M4-T2 are as good as they will get**: M4-T1 proved `Combine`/`Weaken`/`Model_row`
-carry a real global (D-0061), and D-0064 gave the ADT the piece that was missing. If Régin needs
-more than that, **the argument is the deliverable** — `explanation.ml`'s no-new-constructor rule
-stands, and it has now been spent exactly once in nine rows.
+**Wave twenty-six is COMPLETE: M7-T1, M7-T2 and M7-T3 all merged, released and pushed.**
 
 **Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `scripts/**`, `bench/**`,
 `bin/main.ml`, `lib/flatzinc/**`, `lib/core/dune` and all merging.
@@ -2675,3 +2617,49 @@ touched — `git status` in the worktree clean otherwise, worktree left on `wave
 **One loose thread for whoever owns `test/models/`**: `width_sat_depth.fzn`'s own header
 comment ("at 99 it is 43 ms end to end") is stale post-M2-L6/M2-L13 and should be updated or
 removed; that file is outside `bench/**` so this row did not touch it.
+
+**2026-09-22 — wave twenty-six: the solver meets input it did not author**
+
+**All three M7 rows landed.** Gate on `main`: **2832 ok / 0 FAIL, 280 matrix, 44 mutation,
+85 passed + 1 expected-fail, `check: ok`**.
+
+**M7-T1 (D-0065)**: the hardware limits are options, defaulting off. A width-20 000 model now
+solves and **veripb accepts its proof**; 425 artefacts across 85 models unchanged. It amended
+D-0041's normative MUST *by answering its objection* — the default being unlimited makes the
+accepted language fixed and maximal, so the knob can only restrict. **A third category of limit
+was found that my brief missed**: representability. *A limit that exists because the machine is
+small is an option; a limit that exists because the arithmetic does not exist is not.*
+
+**M7-T2 (D-0066)**: **70% of the corpus runs past the front end.** The census says the next best
+buy is `smallest` + `indomain_split` **together, +71 instances to 94%** — and that `dom_w_deg`
+occurs 4 times in source and **zero** times after flattening. SPEC was right and the code was
+wrong. A pre-existing silence closed: unrecognised annotations were being **dropped** and the
+model searched by the default.
+
+**M7-T3 (D-0067)**: **112 → 300 instances flatten into the subset**, `all_different_int` survives
+in 66, and the Hall path is shown working end to end.
+
+**THE THREE FINDINGS THAT OUTLIVE THIS WAVE:**
+
+1. **`rup` is vacuous over a contradictory database (D-0066).** A literal removed, and a
+   polarity flipped, are **both accepted** on an UNSAT model's proof. **26 lanes across 9 files
+   assert a RUP rejection** and those files are dominated by UNSAT models. How many are testing
+   nothing is **unknown** — that audit is **M7-T5**. This is D-0053's `red` finding one rule
+   over, and the more consequential one.
+2. **A correct answer whose proof is rejected (M7-T6).** Nine variables, five constraints, **no
+   global**. Shown **pre-existing** by rerunning the same 2001 fuzz seeds with the global
+   decomposed — 3 failures native, 5 decomposed, overlapping but different. Shipped as a
+   `PENDING` model so it is visible on every run. **M1-T44's shape**, and note it can only be
+   *seen* on a satisfiable model because of finding 1.
+3. **The blocker is no longer width — it is set-literal domains**, which no `mznlib` can reach.
+   And the width that remains is mostly **the objective variable**, wide by construction on any
+   optimisation model, which deserves its own answer rather than a bigger limit.
+
+**A process note worth keeping.** Two branches were granted scoped edits in each other's files,
+in both directions, because routing through the owner would have left a branch whose gate is red
+— and a red-gated branch is one the orchestrator merges **on trust**. Both merged with **no
+conflicts**. The precision made it work: each agent reported exact line ranges, and I diffed them
+before merging.
+
+**Stale figures to re-measure, not quote**: M7-T3's 78-refusal breakdown predates M7-T1's merge,
+so its width refusals are already gone.

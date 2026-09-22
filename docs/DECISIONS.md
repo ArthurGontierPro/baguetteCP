@@ -4898,6 +4898,28 @@ in 2.10.1 — the hole-y domains survive verbatim, so **no `mznlib` can work aro
 is the single biggest thing between this library and real instances, and it is bigger than the
 width cap M7-T1 just removed.
 
+### The refusal counts above are already stale, and the residual wall splits two ways
+
+M7-T3 branched before M7-T1 merged, so **every width refusal it counted is now gone by
+default** — M7-T1 made the width limit unlimited-by-default, so those instances should now
+flatten *and* run (with the cost warning). The two rows compose, and the measurement predates
+the composition. **Re-measure before quoting the 78-refusal breakdown.**
+
+What remains after that is a cleaner split than "the width cap":
+
+- **Set-literal domains on `X_INTRODUCED_*` variables — 20 instances.** Unreachable from
+  `mznlib`, and the real remaining wall.
+- **Width on the OBJECTIVE variable — ~8 instances** (`multi-knapsack`, `wordpress`,
+  `wmsmc-int`, `vrp`, `unit-commitment`, `team-assignment`, `roster-sickness`, `spot5`). The
+  objective's declared range is **MiniZinc's own bound on the sum**, so it is wide *almost by
+  construction on any optimisation model*.
+
+That second case is worth its own treatment rather than being absorbed into "raise the width
+limit". An objective is not a decision variable the search branches on in the usual way — it is
+a bound being tightened (D-0063) — so paying full order-encoding width for it is close to pure
+waste. Whoever takes it should ask whether the objective needs a ladder at all, not how wide a
+ladder it may have.
+
 ### What the library deliberately does not define
 
 `int_pow` with a variable exponent, and everything float, are left undefined so the front end
