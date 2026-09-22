@@ -81,7 +81,7 @@ let exit_internal = 4
 let usage () =
   prerr_endline
     "usage: baguette MODEL.fzn [--proof PREFIX] [--proof-comments] [--all] [--time] \
-     [--stats]";
+     [--stats] [--max-order-width N] [--max-direct-values N] [--width-warn N]";
   prerr_endline "";
   prerr_endline "  --proof PREFIX    write PREFIX.opb and PREFIX.pbp (SPEC 4.1); verify";
   prerr_endline "                    them with: veripb PREFIX.opb PREFIX.pbp";
@@ -106,6 +106,34 @@ let usage () =
   prerr_endline "                    unlike --time it is safe to leave on while timing.";
   prerr_endline "                    stdout is byte-identical with and without it.";
   prerr_endline "";
+  prerr_endline "  --max-order-width N   refuse any variable whose DECLARED width";
+  prerr_endline "                    exceeds N. DEFAULT: none -- the default build has no";
+  prerr_endline "                    width refusal at all (M7-T1). Until M7 this was a";
+  prerr_endline "                    hard cap of 10000, and that number came from the";
+  prerr_endline "                    15 GB laptop baguette was written on, not from the";
+  prerr_endline "                    problem. `none` restores the default. 10000 restores";
+  prerr_endline "                    the old behaviour exactly.";
+  prerr_endline "  --max-direct-values N  refuse a direct encoding over more than N";
+  prerr_endline "                    values. DEFAULT: none (was 100000, same reason).";
+  prerr_endline "  --width-warn N    warn on stderr when a single declared width exceeds";
+  prerr_endline "                    N. DEFAULT: 10000 -- the OLD CAP, which now reports";
+  prerr_endline "                    instead of refusing. The order encoding is written";
+  prerr_endline "                    out in full, one Boolean per value, so the proof";
+  prerr_endline "                    grows with the declared domain rather than with the";
+  prerr_endline
+    "                    difficulty; a wide domain can make a proof nobody can";
+  prerr_endline
+    "                    store or check. `none` silences it. Silencing it does";
+  prerr_endline "                    not make the cost go away, only the sentence.";
+  prerr_endline "";
+  prerr_endline
+    "  BAGUETTE_MAX_ORDER_WIDTH, BAGUETTE_MAX_DIRECT_VALUES, BAGUETTE_WIDTH_WARN";
+  prerr_endline "                    the same three, as environment variables. A flag on";
+  prerr_endline "                    the command line wins over the environment. Each";
+  prerr_endline
+    "                    takes an integer or `none`; anything else is an error";
+  prerr_endline "                    rather than a silent `none`.";
+  prerr_endline "";
   prerr_endline
     "  BAGUETTE_RETENTION=off|fifo:N|lbd:N  the learned-constraint retention policy";
   prerr_endline
@@ -114,7 +142,26 @@ let usage () =
   prerr_endline "  is on by default here even though the library's own default is off.";
   exit exit_usage
 
+(* A limit from the command line or the environment. A value that is neither an integer
+   nor `none` is a usage error and not a silent `none`: a mistyped budget that quietly
+   means "no budget" is exactly the failure this row exists to stop. *)
+let set_limit what r v =
+  match Encoding.limit_of_string ~what v with
+  | l -> r := l
+  | exception Encoding.Bad_limit (what, v) ->
+      Printf.eprintf
+        "%s: %S is not a limit. Give a non-negative integer, or `none` for no limit.\n"
+        what v;
+      usage ()
+
 let parse_args argv =
+  (* The environment first, the command line second, so a flag beats an env var. *)
+  (try Encoding.limits_from_env ()
+   with Encoding.Bad_limit (what, v) ->
+     Printf.eprintf
+       "%s: %S is not a limit. Give a non-negative integer, or `none` for no limit.\n"
+       what v;
+     usage ());
   let model = ref None in
   let proof_prefix = ref None in
   let proof_comments = ref false in
@@ -141,6 +188,23 @@ let parse_args argv =
       | "--stats" ->
           stats := true;
           go (i + 1)
+      (* M7-T1. The three tunables whose DEFAULT is now off. They mutate Encoding's refs
+         rather than riding in [options], because the front end consults them during
+         [Compile.compile] and the .opb writer consults them again later: there is no
+         single call site to thread them through, and a ref that the CLI sets once,
+         before anything is compiled, is honest about that. *)
+      | "--max-order-width" ->
+          if i + 1 >= Array.length argv then usage ();
+          set_limit "--max-order-width" Encoding.order_width_limit argv.(i + 1);
+          go (i + 2)
+      | "--max-direct-values" ->
+          if i + 1 >= Array.length argv then usage ();
+          set_limit "--max-direct-values" Encoding.direct_values_limit argv.(i + 1);
+          go (i + 2)
+      | "--width-warn" ->
+          if i + 1 >= Array.length argv then usage ();
+          set_limit "--width-warn" Encoding.width_warn_threshold argv.(i + 1);
+          go (i + 2)
       | "-h" | "--help" -> usage ()
       | arg when String.length arg > 0 && arg.[0] = '-' ->
           Printf.eprintf "unknown option: %s\n" arg;
@@ -504,6 +568,39 @@ let propagate_learned () =
    The unit word is the third field and it is `nodes`/`decs`/`levels`, never `us`, so
    that anything reading the timing report's `$4 == "us"` cannot pick these up as
    durations -- the same discipline `emitln` follows with its `lines` unit. *)
+(* M7-T1. What the encoding cost, on stderr under --stats.
+
+   This is the counter half of the diagnostic that replaced the width refusal. The
+   warning half fires in Encoding.declare_int and does not wait to be asked; this half
+   is here because the TOTAL is the number the per-variable cap never bounded, and said
+   so in its own comment: a thousand variables at width 9 999 was always ten million
+   clauses and always slipped through.
+
+   Written for a reader who has not read D-0028, per the same rule as the warning. *)
+let report_encoding_cost (c : Encoding.cost) =
+  prerr_endline
+    "stats: encoding cost (M7-T1). Baguette writes every integer variable out as one";
+  prerr_endline
+    "stats: Boolean per value (`x >= v`) before any constraint is posted, so the size of";
+  prerr_endline
+    "stats: the proof follows the DECLARED domains, not the difficulty of the problem.";
+  Printf.eprintf "stats: %-10s %10d cls    order-ladder clauses, over all variables\n"
+    "ladder" c.Encoding.c_ladder_clauses;
+  Printf.eprintf "stats: %-10s %10d lines  .opb constraints (ids minted)\n" "opb"
+    c.Encoding.c_constraints;
+  Printf.eprintf "stats: %-10s %10d vals   materialised into direct encodings\n" "direct"
+    c.Encoding.c_direct_values;
+  (match c.Encoding.c_widest with
+  | None ->
+      Printf.eprintf "stats: %-10s %10s        no integer variable declared\n" "widest"
+        "-"
+  | Some (x, lo, hi) ->
+      Printf.eprintf
+        "stats: %-10s %10d wide   `%s` over %d..%d -- the one to narrow first\n" "widest"
+        (hi - lo) x lo hi);
+  Printf.eprintf "stats: %-10s %10s        --max-order-width, --width-warn\n" "limits"
+    (Encoding.order_width_limit_string ())
+
 let report_stats (st : Search.stats) ~exhausted =
   prerr_endline
     "stats: baguette search-tree counters (M1-T36). Counted by Search itself, not read";
@@ -680,6 +777,7 @@ let solve opts (m : Model.t) =
   let compiled = Timing.phase "compile" (fun () -> Compile.compile m) in
   let store = compiled.Compile.store in
   let encoding = compiled.Compile.encoding in
+  if opts.stats then report_encoding_cost (Encoding.cost encoding);
   (* I-X5: the .opb is complete and on disk before any proof rule can cite it. The
      comment names the BASENAME, not the path -- M1-T37, see this file's header. *)
   Timing.phase "opb" (fun () ->
@@ -872,12 +970,14 @@ let () =
              because [declare_int] raises before the Hashtbl and before the ladder loop.
              Nothing was allocated and nothing was written. *)
           Printf.eprintf
-            "baguette: INTERNAL -- the encoding refused to declare `%s` over %d..%d, a \
-             width of %d, past Encoding.max_order_width = %d (D-0041, I-X8).\n"
-            x lo hi (hi - lo) Encoding.max_order_width;
+            "baguette: INTERNAL -- the encoding refused to declare `%s` over %d..%d, \
+             past the width limit in force, which is %s (D-0041, I-X8; M7-T1 made it an \
+             option, default none).\n"
+            x lo hi
+            (Encoding.order_width_limit_string ());
           prerr_endline
             "  lib/flatzinc/compile.ml checks every declared width against that same \
-             constant and";
+             limit and";
           prerr_endline
             "  rejects an over-wide model with a positioned diagnostic and exit 3, so no \
              model this";
