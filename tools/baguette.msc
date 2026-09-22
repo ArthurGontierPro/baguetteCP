@@ -1,0 +1,14 @@
+{
+  "id": "org.baguette.baguette",
+  "name": "baguette",
+  "description": "baguette CP solver -- FlatZinc subset SPEC 2.1, VeriPB 3.0 proof",
+  "version": "0.1.0",
+  "mznlib": "../mznlib",
+  "executable": "../_build/default/bin/main.exe",
+  "supportsMzn": false,
+  "supportsFzn": true,
+  "needsSolns2Out": true,
+  "tags": ["cp", "int", "proof"],
+  "stdFlags": [],
+  "extraFlags": []
+}
