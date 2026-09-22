@@ -837,7 +837,7 @@ let solve opts (m : Model.t) =
               | None ->
                   `Satisfy
                     (Search.solve ~engine:compiled.Compile.engine ~store ~ctx ~check
-                       ~stats ~config ())
+                       ~stats ~config ?order:compiled.Compile.order ())
               | Some objective ->
                   (* M5-T1. Each improving solution is printed AS IT IS FOUND, which is
                      the FlatZinc convention SPEC 2.2 describes -- a running report, so
@@ -849,7 +849,7 @@ let solve opts (m : Model.t) =
                      placement, since the printing really does happen there. *)
                   `Optimise
                     (Search.optimise ~engine:compiled.Compile.engine ~store ~ctx ~check
-                       ~stats ~config ~objective
+                       ~stats ~config ~objective ?order:compiled.Compile.order
                        ~on_solution:(fun assignment ->
                          print_string
                            (Output.solution m (assignment_values m store assignment));

@@ -189,6 +189,15 @@ type t = {
          (lib/core/search.ml, [type bnb] note (2)) are this module's -- they are the
          bounds the .opb objective line was written against, not whatever the store's
          have narrowed to by the time anyone asks. *)
+  order : Baguette_core.Search.order option;
+      (* M7-T2. [None] is a model with no search annotation, and it is not merely a
+         default: it is the same value [Search.solve]'s [?order] already defaults to
+         ([spec_order]), so an unannotated model branches byte-for-byte as it did before
+         this field existed. [Some] is the annotation, HONOURED -- docs/SPEC.md 3.4 says
+         it must be, and until M7-T2 the only way to honour it was to refuse the model.
+         Resolved here, beside the objective, for the same reason: the annotation names
+         model variable INDICES, and this module is the one that promises the store is
+         built in [Model.vars] order. *)
 }
 
 (* ------------------------------------------------------------------- term handling *)
@@ -286,14 +295,21 @@ let reject_constant_objective pos what value =
      %d..%d: obj;` and write `solve %s obj;`."
     what value value value what
 
+(* M7-T2 kept this, and that is the point of it. [Search] now implements input_order and
+   first_fail over indomain_min and indomain_max, which is what the MiniZinc challenge
+   corpus overwhelmingly asks for -- but the tail (smallest, largest, dom_w_deg,
+   indomain_split, indomain_median, ...) is NOT implemented, and a model asking for one
+   is refused BY NAME rather than quietly given something else. docs/SPEC.md section 3.4
+   says the annotation MUST be honoured when present; silently substituting a strategy
+   solves a different problem and reports it as this one's answer. *)
 let reject_search pos ~annotation =
   Error.failf pos
-    "unsupported search annotation %s: `Search.solve` implements first_fail variable \
-     selection with indomain_min branching, which is docs/SPEC.md section 3.4's default. \
-     Any other strategy would be silently ignored rather than honoured, so it is \
-     rejected (docs/SPEC.md section 3.4 says the annotation MUST be honoured when \
-     present). Remove the annotation, or write `int_search(..., first_fail, \
-     indomain_min, complete)`."
+    "unsupported search annotation %s: baguette implements the `input_order` and \
+     `first_fail` variable choices over the `indomain_min` and `indomain_max` value \
+     choices, and `seq_search` over those. It does not implement this one, and \
+     docs/SPEC.md section 3.4 says the annotation MUST be honoured when present -- so it \
+     is rejected rather than silently replaced by a strategy that would solve a \
+     different problem. Remove the annotation, or write one of the implemented forms."
     annotation
 
 (* M2-T1 / M2-T2. The Boolean row's builtins take `var bool` arguments, and a `var bool`
@@ -383,27 +399,57 @@ let reject_row pos ~what ~magnitude =
     | None -> "larger than a 63-bit int can hold")
     Checked.limit
 
-(* [Model.search] is a list of annotations; [Seq] nests. Nothing here changes how the
-   search runs -- [Search.solve] is not parameterised -- so the only useful thing to do
-   with an annotation is to check that it asks for what is actually implemented. *)
-let rec check_search (m : Model.t) (s : Model.search) =
+(* M7-T2. [Model.search] is a list of annotations and [Seq] nests, so the whole thing
+   flattens to a list of [Search.phase] consulted in order -- which is exactly
+   `seq_search`'s meaning, and it is why nesting needs no representation here: a
+   `seq_search` inside a `seq_search` is the concatenation of their phases.
+
+   A variable the annotation never mentions still has to be branched on, and
+   [Search.sequence] falls back to [Search.spec_order] for those. That fallback is the
+   one place where an annotated model's search is NOT the annotation, and it is what
+   docs/SPEC.md section 3.4 has to say out loud.
+
+   The annotation's array carries MODEL variable indices, and this module's contract is
+   that the store is built in [Model.vars] order (see the module header), so the index is
+   the [Var.t]. Nothing else in this file may assume that; this is the place that
+   promises it. *)
+let rec phases_of_search (m : Model.t) (s : Model.search) :
+    Baguette_core.Search.phase list =
   match s with
-  | Model.Seq subs -> List.iter (check_search m) subs
-  | Model.Int_search (_, vc, vl) ->
+  | Model.Seq subs -> List.concat_map (phases_of_search m) subs
+  | Model.Int_search (idxs, vc, vl) ->
       let pos = search_pos m s in
-      let vc_name =
+      List.iter
+        (fun i ->
+          if i < 0 || i >= Model.nvars m then
+            Error.failf pos "search annotation names variable index %d, out of range" i)
+        idxs;
+      let p_var =
         match vc with
-        | Model.Input_order -> "input_order"
-        | Model.First_fail -> "first_fail"
+        | Model.Input_order -> Baguette_core.Search.input_order
+        | Model.First_fail -> Baguette_core.Search.first_fail
       in
-      let vl_name =
+      let p_val =
         match vl with
-        | Model.Indomain_min -> "indomain_min"
-        | Model.Indomain_max -> "indomain_max"
+        | Model.Indomain_min -> Baguette_core.Search.indomain_min
+        | Model.Indomain_max -> Baguette_core.Search.indomain_max
       in
-      if vc <> Model.First_fail || vl <> Model.Indomain_min then
-        reject_search pos
-          ~annotation:(Printf.sprintf "`int_search(..., %s, %s, ...)`" vc_name vl_name)
+      [
+        {
+          Baguette_core.Search.p_vars = Array.of_list (List.map Var.of_int idxs);
+          p_var;
+          p_val;
+        };
+      ]
+
+(* [None] when the model carries no search annotation, which must stay
+   indistinguishable from the pre-M7-T2 behaviour: [Search.solve]'s [?order] then
+   defaults to [spec_order], the same function, rather than to a [sequence] with an empty
+   phase list that would merely delegate to it. Same tree, same proof. *)
+let order_of_model (m : Model.t) : Baguette_core.Search.order option =
+  match List.concat_map (phases_of_search m) m.Model.search with
+  | [] -> None
+  | phases -> Some (Baguette_core.Search.sequence phases)
 
 (* --------------------------------------------------------------------- declaration *)
 
@@ -584,7 +630,7 @@ let compile (m : Model.t) : t =
     | Model.Maximize (Model.Const n) ->
         reject_constant_objective (operand_pos m (Model.Const n)) "maximize" n
   in
-  List.iter (check_search m) m.Model.search;
+  let search_order = order_of_model m in
   check_name_collisions m;
 
   (* Variables, in Model.vars order, into both the store and the encoding. Read the
@@ -1382,4 +1428,4 @@ let compile (m : Model.t) : t =
       m.Model.constraints
   in
   let engine = Engine.create (List.mapi (fun id pending -> pending id) instances) in
-  { store; engine; encoding; objective }
+  { store; engine; encoding; objective; order = search_order }
