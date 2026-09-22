@@ -1010,6 +1010,98 @@ let test_element_shape () =
   in
   check "element: an out-of-range constant index is one ground row" (n = 1 && rows >= 1)
 
+(* M4-T8 obligation (d): D-0064's level rule, demonstrated rather than asserted.
+
+   A bound the ROOT fixpoint sets stays citable via [Explanation.Defining] at any
+   search depth; one a DECISION sets is not, and lib/core/prop/element.ml's
+   [established_at_root] is the per-literal check that draws that line (mirroring
+   lib/core/prop/alldiff.ml:179's function of the same name -- alldiff.ml is
+   read-only to this task, so this is element.ml's own copy, not a shared one).
+
+   The check below reads the forced [Explanation.Combine]'s own summand list rather
+   than going through [Search.rests_on_a_clause]: that function answers a narrower
+   question ("would a root-conflict CLOSE its own pol"), and a [Defining] OMITTED
+   (scene B, below) looks identical to it as "no Clause present either" -- both give
+   [false] -- so it cannot tell "omitted" from "cancelled". Looking for the actual
+   [Defining (_, Lit.le "c" 2)] summand is the direct question this test asks.
+
+   Both scenes are the IDENTICAL model -- test/models/element_moved_unsat.fzn's own
+   source, restated -- and reach the identical conflict; what differs is only the LEVEL
+   it is reached at. [established_at_root] does not care whether a genuine decision
+   literal sits on the trail, only where the support that moved the bound was pushed
+   (lib/core/store.ml's [level_of_index]), so scene B pushes one bare level with
+   [Store.new_level] before propagating and never resolves it -- the cheapest honest way
+   to make every trail entry this run produces belong to level 1 rather than level 0,
+   without hand-building a [Reason.justified] this test does not otherwise need. *)
+
+(* A live proof writer, so [Encoding.at_least_one_id] and friends have an id to hand
+   back when the conflict's explanation is forced -- without one, [Element]'s [need]
+   raises exactly as it should (see its own comment), which is right for a
+   propagate-only test elsewhere but not for one that deliberately forces the
+   derivation here. The temp file is discarded; nothing about this test reads it back,
+   only the constraint ids [start_proof] mints as a side effect of writing it. *)
+let with_proof m f =
+  let c = Compile.compile m in
+  let dir = Filename.temp_file "baguette_el_lvl" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let oc = open_out (Filename.concat dir "p.pbp") in
+  let writer = Writer.create ~audit:true oc in
+  Encoding.start_proof c.Compile.encoding writer;
+  let result = f c in
+  close_out oc;
+  (try Sys.remove (Filename.concat dir "p.pbp") with _ -> ());
+  (try Sys.rmdir dir with _ -> ());
+  result
+
+(* Whether the conflict's own top-level combine cites [Explanation.Defining] on
+   exactly the literal this scene's residue would cancel: [c]'s moved upper bound,
+   "c <= 2". Top level only -- residue_cancel's summands land directly in
+   [no_position_conflict]'s own [Combine], never nested inside a [Term]. *)
+let cites_defining_le (e : Baguette_core.Explanation.t) ~name ~bound =
+  match Baguette_core.Explanation.force e with
+  | Baguette_core.Explanation.Combine (summands, _) ->
+      List.exists
+        (function
+          | Baguette_core.Explanation.Defining (_, l) ->
+              Baguette_proof.Lit.equal l (Baguette_proof.Lit.le name bound)
+          | _ -> false)
+        summands
+  | _ -> false
+
+let test_element_defining_level_rule () =
+  let src_a =
+    "var 1..2: i;\n\
+     var 1..2: j;\n\
+     var 0..9: c;\n\
+     constraint array_int_element(i, [1, 2], c);\n\
+     constraint array_int_element(j, [3, 4], c);\n\
+     solve satisfy;\n"
+  in
+  let m_a = build src_a in
+  with_proof m_a (fun ca ->
+      match Engine.propagate ca.Compile.engine ca.Compile.store with
+      | Engine.Conflict c ->
+          check
+            "element (d) scene A: at the ROOT, `conclusion UNSAT`'s own derivation cites \
+             Defining(c <= 2) -- the moved bound IS cancelled exactly"
+            (cites_defining_le c.Store.c_why ~name:"c" ~bound:2)
+      | Engine.Fixpoint ->
+          check "element (d) scene A: the root scene is UNSAT, not a fixpoint" false);
+  let m_b = build src_a in
+  with_proof m_b (fun cb ->
+      Store.new_level cb.Compile.store;
+      match Engine.propagate cb.Compile.engine cb.Compile.store with
+      | Engine.Conflict c ->
+          check
+            "element (d) scene B: the IDENTICAL conflict, reached one level deeper, does \
+             NOT cite Defining(c <= 2) -- a bound this run only ever set at level 1 is \
+             not cited, D-0064's level rule holding exactly where scene A shows it not \
+             holding"
+            (not (cites_defining_le c.Store.c_why ~name:"c" ~bound:2))
+      | Engine.Fixpoint ->
+          check "element (d) scene B: the scene is UNSAT one level deeper too" false)
+
 (* ------------------------------------------------------------------------- main *)
 
 let () =
@@ -1027,6 +1119,7 @@ let () =
   test_element_shape ();
   test_element_oracle ();
   test_element_view ();
+  test_element_defining_level_rule ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
