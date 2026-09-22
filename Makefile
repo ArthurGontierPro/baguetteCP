@@ -7,18 +7,39 @@
 # finding to report -- a test that needs more than 4 GB is a test with a wide declared
 # domain, and the order encoding is width-proportional (D-0028). Raise MEM_CAP_KB only
 # with a reason you are willing to write into WORKLOG.md.
+#
+# M7-T1: this cap survives the un-limiting, and deliberately. It is about GATE TIME on a
+# shared development box, not about what the solver can do -- the solver's own width and
+# direct-encoding refusals are gone by default (lib/proof/encoding.ml), and nothing here
+# constrains a run on the corpus node. People only run gates they can afford, so `make
+# check` stays cheap.
+#
+# It is now switchable off as well as up:
+#
+#   make test MEM_CAP_KB=16000000   # a bigger cap
+#   make test MEM_CAP_KB=none       # no ulimit at all (the 2 TB node)
+#
+# On the dev box, a run that dies against the default is still a FINDING to report and
+# not a cap to raise.
 MEM_CAP_KB ?= 4000000
 
-.PHONY: build test unit models check fmt fmt-check lint determinism clean proof bootstrap bench
+# `ulimit -v N &&`, or a no-op when MEM_CAP_KB is none/unlimited/0. Recipes say $(CAP)
+# where they used to say the bare `ulimit -v ... &&`.
+CAP := $(if $(filter none unlimited 0,$(MEM_CAP_KB)),:,ulimit -v $(MEM_CAP_KB)) &&
+
+# Passed down so a script invoked from a recipe agrees with the recipe.
+export BAGUETTE_MEM_CAP_KB = $(MEM_CAP_KB)
+
+.PHONY: build test unit models check fmt fmt-check lint determinism unlimit clean proof bootstrap bench
 
 build:
 	dune build
 
 unit:
-	ulimit -v $(MEM_CAP_KB) && dune runtest --force
+	$(CAP) dune runtest --force
 
 models: build
-	ulimit -v $(MEM_CAP_KB) && ./scripts/run_model_tests.sh
+	$(CAP) ./scripts/run_model_tests.sh
 
 # Unit tests and model tests. Model tests include proof checking with veripb.
 test: unit models
@@ -55,8 +76,20 @@ lint:
 # stored digest: a committed hash would be wrong on the next legitimate proof change
 # (M1-T29 moved 14 of 34 .pbp files, correctly) and would train people to re-bless it.
 determinism: build
-	ulimit -v $(MEM_CAP_KB) && ./scripts/check_determinism.sh --self-test
-	ulimit -v $(MEM_CAP_KB) && ./scripts/check_determinism.sh
+	$(CAP) ./scripts/check_determinism.sh --self-test
+	$(CAP) ./scripts/check_determinism.sh
+
+# M7-T1. The un-limiting lane: the width refusal is gone from the default build, the
+# DIAGNOSTIC that replaced it fires, and the refusal is still reachable by flag and by
+# environment variable. Needs bin/main.exe, hence `build`. Self-test first, as `lint`,
+# `fmt-check` and `determinism` do -- a guard nobody has watched fail is not yet a guard.
+#
+# Its over-wide model is generated into a temp directory and deleted: test/models/ is
+# still forbidden a wide domain by `lint`, and that rule is about gate time rather than
+# about what the solver can do. Measured cost of this target: ~3 s, one veripb run.
+unlimit: build
+	$(CAP) ./scripts/check_unlimited.sh --self-test
+	$(CAP) ./scripts/check_unlimited.sh
 
 # The gate. Run this before every commit.
 #
@@ -77,7 +110,7 @@ determinism: build
 #
 # Still exit 0 when ocamlformat is absent. The skip is allowed; claiming it did not happen
 # is not.
-check: fmt-check build lint determinism test
+check: fmt-check build lint determinism unlimit test
 	@if command -v ocamlformat >/dev/null 2>&1; then \
 	  echo "check: ok"; \
 	else \
@@ -92,7 +125,7 @@ check: fmt-check build lint determinism test
 #   make proof FZN=test/models/trivial_sat.fzn
 proof: build
 	@test -n "$(FZN)" || { echo "usage: make proof FZN=path/to/model.fzn"; exit 2; }
-	ulimit -v $(MEM_CAP_KB) && ./scripts/verify_proof.sh "$(FZN)"
+	$(CAP) ./scripts/verify_proof.sh "$(FZN)"
 
 bootstrap:
 	./scripts/bootstrap.sh
@@ -107,4 +140,4 @@ clean:
 # Read bench/README.md first -- in particular, on the current models 23 of the 38 rows
 # are at the process floor, so their timing columns measure exec and not this solver.
 bench: build
-	ulimit -v $(MEM_CAP_KB) && ./bench/run_bench.sh $(ARGS)
+	$(CAP) ./bench/run_bench.sh $(ARGS)

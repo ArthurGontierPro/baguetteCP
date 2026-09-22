@@ -42,9 +42,16 @@ MEM_CAP_KB="${BAGUETTE_MEM_CAP_KB:-4000000}"
 
 # The suites already apply this; a script invoked directly must too (CLAUDE.md, and three
 # memory-ceiling incidents on 2026-09-16).
-_cur="$(ulimit -v)"
-if [ "${_cur}" = "unlimited" ] || { [ "${_cur}" -gt "${MEM_CAP_KB}" ] 2>/dev/null; }; then
-  ulimit -v "${MEM_CAP_KB}" 2>/dev/null || true
+#
+# M7-T1: BAGUETTE_MEM_CAP_KB=none skips it entirely, matching run_model_tests.sh and
+# verify_proof.sh, which already had that escape. This cap is about GATE TIME on a shared
+# 15 GB development box; it is not a statement about what the solver can do, and the
+# corpus node sets `none`. On the dev box a run that dies against it is a finding.
+if [ "${MEM_CAP_KB}" != "none" ]; then
+  _cur="$(ulimit -v)"
+  if [ "${_cur}" = "unlimited" ] || { [ "${_cur}" -gt "${MEM_CAP_KB}" ] 2>/dev/null; }; then
+    ulimit -v "${MEM_CAP_KB}" 2>/dev/null || true
+  fi
 fi
 
 # M6-T5: the same reading of test/models/PENDING that scripts/run_model_tests.sh uses
