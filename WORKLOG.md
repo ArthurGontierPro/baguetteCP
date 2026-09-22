@@ -10,6 +10,42 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
+**Wave twenty-six is running: M7-T1 (agent-unlimit), M7-T2 (agent-annot), M7-T3 (agent-mznlib).**
+
+**M7 is a change of footing.** The solver has never seen input it did not author. The
+corpus is on `fataepyc-07` (`/scratch/arthur/mzn-challenge`, 19 years), the toolchain is
+built there (`/scratch/arthur/baguette`, gate green at 2705 ok / 85 models in 24 s), and
+MiniZinc 2.10.1 is at `/scratch/arthur/mzn`.
+
+**agent-unlimit (M7-T1)** holds `lib/proof/encoding.ml`, `bin/main.ml`, `Makefile`,
+`scripts/**`, `test/unit/{test_proof,test_matrix}.ml`.
+
+**agent-annot (M7-T2)** holds `lib/flatzinc/**`, `lib/core/search.ml`, and
+`test/unit/{test_flatzinc,test_compile,test_endtoend}.ml`.
+
+**agent-mznlib (M7-T3)** holds a **new** `mznlib/` and `tools/` and nothing under `lib/`
+at all — it writes MiniZinc redefinitions and a `.msc`, and measures. It may **read**
+everything.
+
+**The one thing I do not want lost in M7-T1.** The 15 GB ceiling was a laptop fact and it
+goes. But **two of the limits are not about RAM**: D-0028's width cost is proof size and
+checker time, and `max_order_width` was also a *diagnostic* — it told you your model would
+emit an encoding nobody can check. **Removing the refusal must not remove the signal.** A
+default build should run the model and *say* what it cost, not fail silently or succeed
+silently.
+
+**Docs are mine, and both T1 and T2 need SPEC changes** — §3.4 fixes the default search
+strategy and says an annotation MUST be honoured, and the width sections describe refusals
+that are becoming options. Neither agent edits `docs/**`; they report and I amend.
+
+**Hardware**: 92 concurrent runs, 32 GB each. That is M7-T4's budget, not a licence for the
+unit suite — `make check` stays fast because people run it.
+
+Wave twenty-five (M4-T2, M4-T8) is merged, released and pushed. **D-0004 is CLOSED** and
+every builtin in SPEC §2.1 is implemented. Baseline: **2705 ok / 0 FAIL, 280 matrix,
+44 mutation, 85/85 models**.
+
+
 **Wave twenty-five is running: M4-T2 (agent-regin) and M4-T8 (agent-elemdef).**
 
 **agent-regin holds** `lib/core/prop/alldiff.ml`, `lib/core/{explanation,justify,search}.ml`,
