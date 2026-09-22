@@ -977,21 +977,39 @@ let el_cited_line proof =
    contradictory. That is precisely D-0057's failure mode, so it is the break worth
    making: a proof that goes on being accepted after it is exactly a proof whose pol was
    decorative. *)
+(* M4-T8: a summand may be scaled ("@cN k *") rather than added bare ("@cN"), which
+   [Defining]'s multiplicity introduces and the older Clause-only lines this helper was
+   first written against never did. Dropping only the id and the immediately-following
+   token left a dangling "k *" for a scaled summand -- a syntax error, not the "sound
+   but not contradictory" pol this break wants -- so the coefficient, if present, is
+   consumed too. *)
 let el_drop_last_operand line =
-  let ws = String.split_on_char ' ' (String.trim line) in
+  let ws = Array.of_list (String.split_on_char ' ' (String.trim line)) in
+  let n = Array.length ws in
+  let is_id w = String.length w > 2 && String.sub w 0 2 = "@c" in
   let idx_last_op =
-    List.fold_left
-      (fun (i, best) w ->
-        ( i + 1,
-          if String.length w > 2 && String.sub w 0 2 = "@c" && i >= 2 then i else best ))
-      (0, -1) ws
-    |> snd
+    let best = ref (-1) in
+    for i = 2 to n - 1 do
+      if is_id ws.(i) then best := i
+    done;
+    !best
   in
-  if idx_last_op < 3 then None
+  if idx_last_op < 0 then None
   else
-    Some
-      (String.concat " "
-         (List.filteri (fun i _ -> i <> idx_last_op && i <> idx_last_op + 1) ws))
+    let j = ref (idx_last_op + 1) in
+    if
+      !j + 1 < n
+      && (match int_of_string_opt ws.(!j) with Some _ -> true | None -> false)
+      && ws.(!j + 1) = "*"
+    then j := !j + 2;
+    if !j >= n then None
+    else
+      let last_dropped = !j in
+      Some
+        (String.concat " "
+           (List.filteri
+              (fun i _ -> i < idx_last_op || i > last_dropped)
+              (Array.to_list ws)))
 
 let el_range_src =
   "var 1..3: i;\n\
@@ -1058,17 +1076,73 @@ let test_element_derivation_is_load_bearing () =
                 "M4-T3 BREAK (b): ... at full strength -- the checker's own wording, not \
                  an exit status and not a parse error"
                 (m5_says out "is not contradicting, as specified by the hint.")));
-      (* ------------------------------------------------ (c) the negative half *)
-      let _, proof, outcome = el_solve dir "elmoved" el_moved_src in
-      check "M4-T3 (c): the moved-bound scene is UNSAT" (outcome = Search.Unsat);
-      let _, _, minting = el_cited_line proof in
+      (* ---------------------------------- (c) the negative half, INVERTED by M4-T8
+
+         M4-T3 wrote this half asserting `rup >= 1`, deliberately, so that it would go
+         red exactly when the swap to [Explanation.Defining] (D-0064) landed -- see
+         docs/ROADMAP.md's M4-T8 row and lib/core/prop/element.ml's
+         [established_at_root]. The bound `element_moved_src` moves is one element1's
+         OWN root-level fixpoint sets (unconditionally, no decision anywhere in this
+         scene), so it is establish_at_root-true and now gets the same exact
+         [Defining] cancellation as the declared-range half above: the residue
+         cancels, `Search.rests_on_a_clause` no longer trips, and `conclusion UNSAT`
+         cites element.ml's own [pol] (Route A) rather than the empty clause (Route
+         B). This is the CONTROL half of that assertion, not a fresh one -- it is the
+         same model, still exercised, with the expectation flipped and a break added,
+         exactly like (b) above did for the positive half. *)
+      let opb, proof, outcome = el_solve dir "elmoved" el_moved_src in
+      check "M4-T3/M4-T8 (c): the moved-bound scene is UNSAT" (outcome = Search.Unsat);
+      let lines, cited, minting = el_cited_line proof in
+      check "M4-T8 (c): the moved-bound conclusion names an id" (cited <> None);
       (match minting with
-      | None -> check "M4-T3 (c): the moved-bound conclusion names a line" false
+      | None ->
+          check "M4-T8 (c): the moved-bound conclusion names a line THIS proof minted"
+            false
       | Some line ->
+          check "M4-T8 (c): the moved-bound conclusion names a line THIS proof minted"
+            true;
+          if not (m5_says (" " ^ String.trim line) " pol ") then
+            Printf.printf "     conclusion cites: %s\n" (String.trim line);
           check
-            "M4-T3 (c): with the bound MOVED it cites `rup >= 1` instead -- the pol IS \
-             decorative there, and element.ml says so"
-            (m5_says (String.trim line) "rup >= 1"));
+            "M4-T8 (c): with the bound MOVED, `conclusion UNSAT` now cites element.ml's \
+             OWN pol (Route A) -- D-0064's Defining cancels it exactly, where the old \
+             Clause stand-in could not, and element.ml's [pol] is no longer decorative \
+             for this scene"
+            (m5_says (" " ^ String.trim line) " pol ");
+          check
+            "M4-T8 (c): ... and it is NOT `rup >= 1` -- the empty-clause Route B this \
+             scene used to take before the swap"
+            (not (m5_says (String.trim line) "rup >= 1")));
+      (* ------------------------- M4-T8 obligation (b): the break, on this cited line
+
+         Same recipe as the positive half's BREAK above: drop the pol's last operand,
+         which leaves it SOUND but no longer contradictory, and check that `conclusion
+         UNSAT` -- which now names this line -- is refused, at the checker's full
+         wording rather than an exit status. *)
+      (match minting with
+      | None -> ()
+      | Some line -> (
+          let ok, _ = m5_run_lines checker dir "elmovedok" opb lines in
+          check "M4-T8 BREAK CONTROL: the unmodified moved-bound proof is accepted" ok;
+          match el_drop_last_operand line with
+          | None ->
+              check
+                "M4-T8 BREAK: the cited pol has operands to drop (a one-operand pol \
+                 would make this lane vacuous)"
+                false
+          | Some broken ->
+              let lines2 = List.map (fun l -> if l = line then broken else l) lines in
+              check "M4-T8 BREAK CONTROL: the corruption really changed the file"
+                (lines2 <> lines);
+              let ok, out = m5_run_lines checker dir "elmovedbad" opb lines2 in
+              check
+                "M4-T8 BREAK (b): a cited pol that is SOUND but no longer contradictory \
+                 is REFUSED"
+                (not ok);
+              check
+                "M4-T8 BREAK (b): ... at full strength -- the checker's own wording, not \
+                 an exit status and not a parse error"
+                (m5_says out "is not contradicting, as specified by the hint.")));
       List.iter
         (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ())
         (Array.to_list (Sys.readdir dir));
