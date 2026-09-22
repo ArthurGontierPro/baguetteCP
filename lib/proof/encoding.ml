@@ -168,9 +168,43 @@ end
    would shift every id after it. We never emit one; see [add_equality]. *)
 exception Equality_in_opb
 
-(* Above this many values we refuse to materialise a direct encoding: the proof would
-   be larger than the search. A propagator that needs it on a domain this big is a
-   design problem, not a budget problem. *)
+(* ---------------------------------------------------------------------------
+   The limits, and why they are OPTIONS now (M7-T1)
+   ---------------------------------------------------------------------------
+
+   Until M7-T1 the two numbers below were hard refusals, and they were hard because
+   the machine baguette was written on had 15 GB of RAM shared by every session. That
+   is a fact about a laptop, not about the problem, and the MiniZinc corpus runs on a
+   node with two terabytes. So the DEFAULT BUILD REFUSES NOTHING on width: both limits
+   start as [None].
+
+   What survives the removal, because it was never about RAM:
+
+   D-0028 makes the order encoding width-proportional, and that cost is PROOF SIZE and
+   CHECKER TIME. A 2 TB machine does not repeal it. The refusal was also doing a second
+   job -- it TOLD YOU. A model whose encoding nobody could check said so, loudly, at
+   the door.
+
+   The refusal goes; the signal does not. [declare_int] now encodes the wide domain and
+   REPORTS what it cost: a warning on stderr the first time a single declaration crosses
+   [width_warn_threshold] (which starts at the old cap, 10 000), and counters on [t] that
+   bin/main.ml prints under --stats. A silent success would be exactly as wrong as the
+   silent failure, and this module is still the one that mints the cost, so it is still
+   the one that has to say so.
+
+   Both limits stay REACHABLE, defaulting off:
+
+     --max-order-width=N     BAGUETTE_MAX_ORDER_WIDTH=N     (N, or "none")
+     --max-direct-values=N   BAGUETTE_MAX_DIRECT_VALUES=N   (N, or "none")
+     --width-warn=N          BAGUETTE_WIDTH_WARN=N          (N, or "none" to silence)
+
+   The old constants keep their names and their values. They are no longer the limit;
+   they are the limit YOU GET IF YOU ASK FOR ONE, and the derivation of 10 000 in the
+   [max_order_width] comment below is still the derivation of that default. *)
+
+(* Above this many values a REQUESTED direct-encoding limit refuses to materialise one:
+   the proof would be larger than the search. Not enforced unless
+   [direct_values_limit] is set. *)
 let max_direct_values = 100_000
 
 type dvar = {
@@ -210,6 +244,17 @@ type t = {
      answer it (an [Explanation.Model_row] carries an id and nothing else). Ids are
      minted by [Writer] in one ascending sequence and never reused, so an entry stays
      correct after [retire_direct] drops the [dvar] itself. *)
+  (* M7-T1. What the encoding COST, accumulated as it is minted. These exist because
+     the width refusal was also a diagnostic: with the refusal gone by default, this is
+     what is left to tell a reader that their model asked for an encoding nobody can
+     check. [ladder_clauses] is the order-ladder total over every [declare_int]
+     (D-0028's width-proportional cost, summed across variables -- the per-variable cap
+     never bounded it, and said so); [widest] is the single worst declaration, which is
+     the one a reader can act on; [direct_values] counts the values materialised into
+     direct encodings. Printed by bin/main.ml under --stats. *)
+  mutable ladder_clauses : int;
+  mutable widest : (string * int * int) option; (* name, lo, hi *)
+  mutable direct_values : int;
   direct_cids : (cid, unit) Hashtbl.t;
   mutable direct_wanted_rev : string list;
       (* M4-T1. The variables a propagator has declared it will need the DIRECT
@@ -244,6 +289,9 @@ let create () =
     direct_cids = Hashtbl.create 64;
     direct_wanted_rev = [];
     alo = Hashtbl.create 16;
+    ladder_clauses = 0;
+    widest = None;
+    direct_values = 0;
   }
 
 let find t x =
@@ -335,28 +383,182 @@ let objective t = t.objective
    that it must name a variable to blame for a total nobody variable caused. *)
 let max_order_width = 10_000
 
+(* ---------------------------------------------------------------------------
+   The live limits. [None] is the default and means "do not refuse". (M7-T1)
+   --------------------------------------------------------------------------- *)
+
+let order_width_limit : int option ref = ref None
+let direct_values_limit : int option ref = ref None
+
+(* The threshold at which an accepted-but-expensive declaration REPORTS itself. It
+   starts at the old cap on purpose: 10 000 is where the artefacts stopped fitting in
+   a code review, which is exactly the fact worth telling someone, and is now the only
+   job that number does by default. [None] silences the warning. *)
+let width_warn_threshold : int option ref = ref (Some max_order_width)
+
+(* Where a warning goes. A ref so a test can capture it; the default writes to stderr,
+   never to stdout -- stdout is the FlatZinc solution stream and nothing may share it. *)
+let warn_sink : (string -> unit) ref =
+  ref (fun s ->
+      prerr_string s;
+      flush stderr)
+
+let set_warn_sink f = warn_sink := f
+let current_order_width_limit () = !order_width_limit
+let current_direct_values_limit () = !direct_values_limit
+let limit_string = function None -> "unlimited" | Some n -> string_of_int n
+let order_width_limit_string () = limit_string !order_width_limit
+let direct_values_limit_string () = limit_string !direct_values_limit
+
+(* "none" / "unlimited" / "off" / "" clear a limit; a non-negative integer sets one.
+   Anything else raises, because a mistyped budget that silently means "no budget" is
+   the failure mode this whole row is about. In particular "-1" is NOT a spelling of
+   "none" here: the neighbouring convention would make "-3" the only negative that is
+   an error, which is precisely the trap. *)
+exception Bad_limit of string * string
+
+let limit_of_string ~what s =
+  match String.trim (String.lowercase_ascii s) with
+  | "" | "none" | "unlimited" | "off" -> None
+  | t -> (
+      (* DECIMAL DIGITS ONLY, checked before [int_of_string_opt]. OCaml's parser accepts
+         "0x10" as 16, "0b11" as 3 and "1_0000" as 10 000, and a budget flag that reads
+         a hex literal the user did not intend to write is the same silent surprise as
+         one that reads a typo as "no budget". Found by test_proof.ml, which asserted
+         "0x10" was an error and was right that it should be. *)
+      let decimal =
+        String.length t > 0
+        && String.for_all (function '0' .. '9' -> true | _ -> false) t
+      in
+      if not decimal then raise (Bad_limit (what, s))
+      else
+        match int_of_string_opt t with
+        | Some n when n >= 0 -> Some n
+        | _ -> raise (Bad_limit (what, s)))
+
+let limits_from_env () =
+  let get name r =
+    match Sys.getenv_opt name with
+    | None -> ()
+    | Some v -> r := limit_of_string ~what:name v
+  in
+  get "BAGUETTE_MAX_ORDER_WIDTH" order_width_limit;
+  get "BAGUETTE_MAX_DIRECT_VALUES" direct_values_limit;
+  get "BAGUETTE_WIDTH_WARN" width_warn_threshold
+
 (* [lo <= hi] is a precondition. [hi - lo] is not always representable -- min_int..0 is
    a legal pair of 63-bit ints whose width is not one -- so the comparison never
-   subtracts unless it has established that it may. Anything this refuses really does
-   exceed the cap: in the mixed-sign branch, [hi - lo >= hi] and [hi - lo >= -lo]. *)
-let order_width_exceeds ~lo ~hi =
-  if lo >= 0 || hi < 0 then
-    (* Same sign: hi - lo cannot overflow. *)
-    hi - lo > max_order_width
+   subtracts unless it has established that it may. Anything this reports really does
+   exceed [n]: in the mixed-sign branch, [hi - lo >= hi] and [hi - lo >= -lo]. *)
+let width_exceeds ~lo ~hi n =
+  if n < 0 then true
+  else if lo >= 0 || hi < 0 then (* Same sign: hi - lo cannot overflow. *)
+    hi - lo > n
   else
-    (* lo < 0 <= hi. Once both magnitudes are inside the cap, hi - lo is at most
-       2 * max_order_width, so the last test is safe to evaluate. *)
-    hi > max_order_width || lo < -max_order_width || hi - lo > max_order_width
+    (* lo < 0 <= hi. Once both magnitudes are inside [n], hi - lo is at most 2n, so the
+       last test is safe to evaluate. *)
+    hi > n || lo < -n || hi - lo > n
+
+(* The width as an int, when it is one. min_int..max_int has width 2^64 - 1 and simply
+   is not a number here; [lo < 0 <= hi] makes [max_int + lo] safe to form. *)
+let width_opt ~lo ~hi =
+  if lo >= 0 || hi < 0 then Some (hi - lo)
+  else if hi <= max_int + lo then Some (hi - lo)
+  else None
+
+(* True when this declaration will be refused. Two independent reasons, and only one of
+   them is a budget:
+
+   1. the width is not REPRESENTABLE, so there is no ladder to build and no count to
+      report. This is an arithmetic refusal in the family of [Unrepresentable], it is
+      unconditional, and it is what stops a limitless [declare_int] sitting in a 2^64
+      loop. M7-T1 did not remove it and must not.
+   2. a limit has been ASKED FOR and this exceeds it. Off by default. *)
+let order_width_exceeds ~lo ~hi =
+  match width_opt ~lo ~hi with
+  | None -> true
+  | Some _ -> (
+      match !order_width_limit with None -> false | Some n -> width_exceeds ~lo ~hi n)
+
+(* The direct encoding's limit, same shape. [size <= 0] means [hi - lo + 1] wrapped,
+   which is the representability refusal again and is not optional. *)
+let check_direct_size x size =
+  if size <= 0 then raise (Direct_too_large (x, size))
+  else
+    match !direct_values_limit with
+    | Some n when size > n -> raise (Direct_too_large (x, size))
+    | _ -> ()
+
+(* ---------------------------------------------------------------------------
+   What the encoding cost (M7-T1)
+   ---------------------------------------------------------------------------
+
+   The counters the width refusal used to make unnecessary. bin/main.ml prints them
+   under --stats; the per-declaration warning above fires without waiting for them. *)
+
+type cost = {
+  c_ladder_clauses : int; (* order-ladder clauses, summed over every declaration *)
+  c_widest : (string * int * int) option; (* the single widest declared domain *)
+  c_direct_values : int; (* values materialised into direct encodings *)
+  c_constraints : int; (* .opb lines, i.e. ids minted *)
+}
+
+let cost t =
+  {
+    c_ladder_clauses = t.ladder_clauses;
+    c_widest = t.widest;
+    c_direct_values = t.direct_values;
+    c_constraints = t.n;
+  }
+
+let widest_width = function None -> 0 | Some (_, lo, hi) -> hi - lo
+
+(* The diagnostic the refusal used to be (M7-T1).
+
+   Written for a reader who has never heard of D-0028, because that reader is exactly
+   the one this fires for: someone who handed baguette a real model and has no idea
+   why it is now writing a gigabyte. It therefore says what the encoding IS, what the
+   number MEANS, and what to do -- not just a count. Under 200 words, on stderr, once
+   per offending declaration. *)
+let warn_wide_declaration x ~lo ~hi ~clauses =
+  let msg =
+    Printf.sprintf
+      "baguette: warning: variable `%s` is declared over %d..%d, a width of %d.\n\
+      \  Baguette proves what it computes, and it does that by giving every integer\n\
+      \  variable a Boolean \"order encoding\": one Boolean per value, meaning `x >= v`,\n\
+      \  written out in full before any constraint is posted. So a declared width of w\n\
+      \  costs w-1 clauses -- %d of them for this one variable -- and every proof step\n\
+      \  that has to cancel this variable out is that many terms long. The proof file\n\
+      \  grows with the DECLARED domain, not with how hard the problem is.\n\
+      \  Baguette will encode it. It may still produce a proof too large to store or\n\
+      \  for veripb to check. If that matters: narrow the declared domain, or rescale\n\
+      \  the model. To refuse such a model outright instead of warning, set\n\
+      \  --max-order-width=%d (or BAGUETTE_MAX_ORDER_WIDTH=%d). To silence this,\n\
+      \  --width-warn=none (or BAGUETTE_WIDTH_WARN=none).\n"
+      x lo hi (hi - lo) clauses max_order_width max_order_width
+  in
+  !warn_sink msg
 
 let declare_int t x ~lo ~hi =
   if lo > hi then raise (Empty_domain x);
   (* Before the Hashtbl and before the ladder: a refused declaration leaves no trace
-     in [t] and costs no allocation. M1-T54. *)
+     in [t] and costs no allocation. M1-T54, and still true of the two refusals that
+     survive M7-T1 -- a width that is not representable, and a limit someone asked for. *)
   if order_width_exceeds ~lo ~hi then raise (Width_too_large (x, lo, hi));
   (match Hashtbl.find_opt t.ints x with
   | Some v when v.lo = lo && v.hi = hi -> raise Exit (* idempotent redeclaration *)
   | Some _ -> raise (Redeclared x)
   | None -> ());
+  (* [order_width_exceeds] has established that hi - lo is representable. *)
+  let width = hi - lo in
+  let clauses = if width >= 1 then width - 1 else 0 in
+  t.ladder_clauses <- t.ladder_clauses + clauses;
+  (match t.widest with
+  | Some (_, wlo, whi) when whi - wlo >= width -> ()
+  | _ -> t.widest <- Some (x, lo, hi));
+  (match !width_warn_threshold with
+  | Some n when width_exceeds ~lo ~hi n -> warn_wide_declaration x ~lo ~hi ~clauses
+  | _ -> ());
   let v = { name = x; lo; hi; consistency = Hashtbl.create 16; direct = None } in
   Hashtbl.replace t.ints x v;
   t.decl_rev <- x :: t.decl_rev;
@@ -423,7 +625,8 @@ let ensure_direct t w x =
   | Some d -> d
   | None ->
       let size = v.hi - v.lo + 1 in
-      if size > max_direct_values then raise (Direct_too_large (x, size));
+      check_direct_size x size;
+      t.direct_values <- t.direct_values + size;
       let d =
         { d_lo = Hashtbl.create 16; d_hi = Hashtbl.create 16; d_fwd = Hashtbl.create 16 }
       in
@@ -537,7 +740,7 @@ let retire_all_direct t w = List.iter (fun x -> retire_direct t w x) (vars t)
 let request_direct t x =
   let v = find t x in
   let size = v.hi - v.lo + 1 in
-  if size > max_direct_values then raise (Direct_too_large (x, size));
+  check_direct_size x size;
   if not (List.mem x t.direct_wanted_rev) then
     t.direct_wanted_rev <- x :: t.direct_wanted_rev
 
