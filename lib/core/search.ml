@@ -1182,9 +1182,7 @@ let mixes_currencies encoding (summands : Explanation.summand list) =
 let top_defining (e : Explanation.t) =
   match Explanation.force e with
   | Explanation.Combine (summands, _) ->
-      List.exists
-        (function Explanation.Defining _ -> true | _ -> false)
-        summands
+      List.exists (function Explanation.Defining _ -> true | _ -> false) summands
   | _ -> false
 
 let rests_on_a_clause encoding (e : Explanation.t) =
@@ -1196,42 +1194,42 @@ let rests_on_a_clause encoding (e : Explanation.t) =
     | Explanation.Combine (summands, _) ->
         ((not cited) && mixes_currencies encoding summands)
         || List.exists
-          (function
-            | Explanation.Term (_, e) -> go ~cited:true e
-            | Explanation.Weaken _ -> false
-            (* M4-T7 / D-0009, and [cited] exists for this case alone.
+             (function
+               | Explanation.Term (_, e) -> go ~cited:true e
+               | Explanation.Weaken _ -> false
+               (* M4-T7 / D-0009, and [cited] exists for this case alone.
 
-               A [Defining] cancels a bound literal out of THE ROW ITS OWN [Combine] IS
-               BUILDING, citing a UNIT line ([Justify.defining_lit], which states the
-               literal outright if nothing has). At the top level that row is the one this
-               conflict claims is contradictory, the cancellation is exact -- the term goes
-               and the degree stays -- and the [pol] really does close, which is the whole
-               difference from a [Clause] summand: a clause may be any width and its
-               cancellation is not.
+                  A [Defining] cancels a bound literal out of THE ROW ITS OWN [Combine] IS
+                  BUILDING, citing a UNIT line ([Justify.defining_lit], which states the
+                  literal outright if nothing has). At the top level that row is the one this
+                  conflict claims is contradictory, the cancellation is exact -- the term goes
+                  and the degree stays -- and the [pol] really does close, which is the whole
+                  difference from a [Clause] summand: a clause may be any width and its
+                  cancellation is not.
 
-               Beneath a [Term] it is a different row: one ANOTHER propagator instance
-               built, folded in here at this combine's own coefficient. A Hall row is a
-               counting argument over the direct encoding, not the per-variable
-               declared-range chain [Linear]'s division needs (D-0010,
-               lib/core/prop/linear.ml's header), so the citing combine is a sound [pol]
-               that does not close and D-0022's route is the right one --
-               test/models/alldiff_hall_trace_unsat.fzn is exactly that conflict. This is
-               the same top-level-only boundary, drawn for the same reason, as
-               [Explanation.top_weaken_owners]: nothing in the tree tells "my own
-               sub-derivation" from "someone else's cited one", so the question is only
-               well posed where the derivation is its own. Erring [true] is erring safe --
-               it costs the citation, never the refutation. *)
-            (* M4-T7 / D-0009. A [Defining] cancels a bound literal out of the row its
-               own [Combine] is building, citing a UNIT line ([Justify.defining_lit],
-               which states the literal outright if nothing has): the term goes, the
-               degree stays, and the [pol] closes. D-0064 had to answer [cited] here,
-               because the presence of a [Defining] was the only thing standing between
-               a cited counting row and a conclusion that cites it. [mixes_currencies]
-               above now asks that question directly, so this arm can say what is
-               actually true about a [Defining], which is that it never makes a
-               derivation clausal. *)
-            | Explanation.Defining _ -> false)
-          summands
+                  Beneath a [Term] it is a different row: one ANOTHER propagator instance
+                  built, folded in here at this combine's own coefficient. A Hall row is a
+                  counting argument over the direct encoding, not the per-variable
+                  declared-range chain [Linear]'s division needs (D-0010,
+                  lib/core/prop/linear.ml's header), so the citing combine is a sound [pol]
+                  that does not close and D-0022's route is the right one --
+                  test/models/alldiff_hall_trace_unsat.fzn is exactly that conflict. This is
+                  the same top-level-only boundary, drawn for the same reason, as
+                  [Explanation.top_weaken_owners]: nothing in the tree tells "my own
+                  sub-derivation" from "someone else's cited one", so the question is only
+                  well posed where the derivation is its own. Erring [true] is erring safe --
+                  it costs the citation, never the refutation. *)
+               (* M4-T7 / D-0009. A [Defining] cancels a bound literal out of the row its
+                  own [Combine] is building, citing a UNIT line ([Justify.defining_lit],
+                  which states the literal outright if nothing has): the term goes, the
+                  degree stays, and the [pol] closes. D-0064 had to answer [cited] here,
+                  because the presence of a [Defining] was the only thing standing between
+                  a cited counting row and a conclusion that cites it. [mixes_currencies]
+                  above now asks that question directly, so this arm can say what is
+                  actually true about a [Defining], which is that it never makes a
+                  derivation clausal. *)
+               | Explanation.Defining _ -> false)
+             summands
     | Explanation.Deferred _ -> false (* [force] returns a non-deferred head *)
   in
   go ~cited:false e
@@ -2110,7 +2108,48 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
              the one place it can go: after everything its [rup] rests on and before
              anything that retires them. *)
           Trace.emit ctx trace store;
-          let _ : Writer.cid option = Trace.conflict_line ctx trace c in
+          (match Trace.conflict_line ctx trace c with
+          | Some _ -> ()
+          | None -> (
+              (* M4-T2 / D-0040, the same remedy [Trace.derive_ahead] applies to a
+                 PRUNING, applied to a conflict.
+
+                 A conflict states itself one of two ways. With bound facts,
+                 [Trace.conflict_line] writes `rup ~fact ... >= 1` -- "these bounds are
+                 jointly impossible" -- and the nogood unit-propagates along it. With
+                 NO facts it writes nothing, and until M4-T2 nothing else did either: the
+                 nogood was left to reach the contradiction by unit propagation over the
+                 model rows alone. For a disequality conflicting with everything fixed
+                 that works, which is why it shipped; for a COUNTING conflict it does
+                 not, and 3.0.2 refuses the nogood.
+
+                 A factless conflict is exactly the shape [Store.apply]'s [Failed] arm
+                 produces -- the pigeonhole, realised as a pruning that empties a domain,
+                 which lib/core/prop/alldiff.ml's [pass] and [regin_pass] both use
+                 BECAUSE a `rup` over its facts would be a counting argument claimed as
+                 reverse unit propagation. So the derivation is the statement, and it is
+                 emitted here: under a decision it does not close to [0 >= 1] (the bounds
+                 a decision set are not cancelled, by D-0037), and what it derives instead
+                 is "not all of these bounds hold" -- which is a row, derived rather than
+                 asserted, that the nogood's [rup] can propagate against.
+
+                 Found by the M4-T2 random sweep, on a branch whose Regin conflict left
+                 the nogood with nothing to propagate along. *)
+              match Explanation.force c.Store.c_why with
+              | Explanation.Combine _ | Explanation.Cut _ ->
+                  ignore (Justify.emit ctx c.Store.c_why : Writer.cid)
+              | _ ->
+                  (* A conflict whose derivation IS a clause already states itself in the
+                     currency the nogood propagates in -- [int_ne] with every variable
+                     fixed is the case, and its nogood has always been RUP without help.
+                     Emitting it here would put a redundant line on the page and, worse,
+                     would state that clause in the claim index, which changes what a
+                     LATER [Explanation.Clause] resolves to and so changes proofs that
+                     have nothing to do with this. Measured: it made one int_lin_ne
+                     nogood standalone-RUP, which test_matrix.ml's own check is there to
+                     forbid. What needs stating is a conflict whose derivation is
+                     ARITHMETIC, and that is what this arm selects. *)
+                  ()));
           (* M1-T55: and then the bridge for any decision on this path that settled past
              a hole, which is the step the nogood's own [rup] needs and has until now
              been left to find for itself. It goes after the trace (D-0021) and before

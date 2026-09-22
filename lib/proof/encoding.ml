@@ -198,10 +198,10 @@ type t = {
   mutable n : int; (* ids 1..n have been assigned *)
   mutable objective : Opb.objective option;
   mutable n_aux : int;
-      (* How many auxiliary variables this encoding has minted of its own accord
-         (M1-T9's disequality rows need one each). Only ever increases, so a name
-         handed out once is never handed out again even after a failed candidate.
-         See [fresh_aux_name]. *)
+  (* How many auxiliary variables this encoding has minted of its own accord
+     (M1-T9's disequality rows need one each). Only ever increases, so a name
+     handed out once is never handed out again even after a failed candidate.
+     See [fresh_aux_name]. *)
   (* Every id this module minted for a DIRECT-ENCODING line: the three channelling
      halves of every [ensure_direct], and every [derive_at_least_one]. M4-T2 added it
      for [is_direct_row], whose one caller is lib/core/search.ml's [rests_on_a_clause]
@@ -433,17 +433,17 @@ let ensure_direct t w x =
         let zl = Lit.eq x value in
         let origin = Printf.sprintf "channel %s=%d" x value in
         (* ~x_eq_v \/ x_ge_v, only when x >= v is not the constant true *)
-        (if value > v.lo then
-           let c = Opb.clause [ Lit.negate zl; Lit.ge x value ] in
-           let id = Writer.red w ~origin ~witness:[ (z value, Writer.Zero) ] c in
-           Hashtbl.replace t.direct_cids id ();
-           Hashtbl.replace d.d_lo value id);
+        if value > v.lo then (
+          let c = Opb.clause [ Lit.negate zl; Lit.ge x value ] in
+          let id = Writer.red w ~origin ~witness:[ (z value, Writer.Zero) ] c in
+          Hashtbl.replace t.direct_cids id ();
+          Hashtbl.replace d.d_lo value id);
         (* ~x_eq_v \/ ~x_ge_(v+1), only when x >= v+1 is not the constant false *)
-        (if value < v.hi then
-           let c = Opb.clause [ Lit.negate zl; Lit.le x value ] in
-           let id = Writer.red w ~origin ~witness:[ (z value, Writer.Zero) ] c in
-           Hashtbl.replace t.direct_cids id ();
-           Hashtbl.replace d.d_hi value id);
+        if value < v.hi then (
+          let c = Opb.clause [ Lit.negate zl; Lit.le x value ] in
+          let id = Writer.red w ~origin ~witness:[ (z value, Writer.Zero) ] c in
+          Hashtbl.replace t.direct_cids id ();
+          Hashtbl.replace d.d_hi value id);
         (* x_eq_v \/ ~x_ge_v \/ x_ge_(v+1) *)
         let body =
           [ zl ]

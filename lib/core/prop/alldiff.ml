@@ -156,11 +156,7 @@ module Encoding = Baguette_proof.Encoding
        [Reason] alongside, which is what keeps the trace line true (I-P5). The price is
        that the derivation now contains a [Clause], so a ROOT conflict resting on one
        closes the D-0022 way -- see lib/core/search.ml's [rests_on_a_clause]. *)
-type gone =
-  | Gone_below
-  | Gone_above
-  | Gone_hole_root
-  | Gone_hole of Reason.t
+type gone = Gone_below | Gone_above | Gone_hole_root | Gone_hole of Reason.t
 
 type snap = {
   s_var : Var.t;
@@ -262,8 +258,7 @@ let remover_index store ~var value =
     else
       let e = Store.trail_entry store i in
       if
-        Var.equal e.Store.var var
-        && Domain.mem e.Store.old value
+        Var.equal e.Store.var var && Domain.mem e.Store.old value
         && not (Domain.mem e.Store.now value)
       then Some i
       else go (i - 1)
@@ -438,14 +433,25 @@ let excl t s v =
    exactly one [x_eq_v] term and leaves the degree at 1, and none of them is a new
    constructor: M4-T1 spent [Combine]/[Weaken]/[Model_row], M4-T7 spent [Defining], and
    this row spends nothing. *)
+(* How many cancellations of each kind this process has built. Not diagnostics: the
+   [Gone_hole] branch is the one only a DECISION can reach, and a test that cannot tell
+   whether its sweep reached it is a test that reports coverage it does not have
+   (test/unit/test_prop.ml's Regin sweep is the caller). Two int refs, incremented where
+   the choice is made, is the only thing that can say so exactly -- reading it off the
+   .pbp is a proxy, and a proxy that silently stops matching is worse than no check. *)
+let root_hole_cancels = ref 0
+let deep_hole_cancels = ref 0
+
 let exclude_summand t s v g =
   match g with
   | Gone_below | Gone_above -> Explanation.term 1 (excl t s v)
-  | Gone_hole_root -> Explanation.defining 1 (Lit.ne s.s_name v)
+  | Gone_hole_root ->
+      incr root_hole_cancels;
+      Explanation.defining 1 (Lit.ne s.s_name v)
   | Gone_hole r ->
+      incr deep_hole_cancels;
       Explanation.term 1
-        (Explanation.clause
-           (Lit.ne s.s_name v :: List.map Lit.negate (Reason.lits r)))
+        (Explanation.clause (Lit.ne s.s_name v :: List.map Lit.negate (Reason.lits r)))
 
 (* The at-least-one line for a Hall variable, narrowed from its DECLARED range to the
    Hall interval:  sum_{v in [a,b] and decl(x)} x_eq_v >= 1, plus the bound literals
@@ -542,8 +548,7 @@ let hall_cancels ~keep ~halls =
   List.concat_map
     (fun s ->
       let count want =
-        List.length
-          (List.filter (fun (v, g) -> (not (keep v)) && g = want) s.s_gone)
+        List.length (List.filter (fun (v, g) -> (not (keep v)) && g = want) s.s_gone)
       in
       let below = count Gone_below and above = count Gone_above in
       (if below > 0 && s.s_lo_root then
@@ -707,8 +712,7 @@ let hall_facts ~keep halls =
          the tail that the derivation does not read. For an interval value set there are
          no excluded holes at all, which is why stage 1's reasons are unchanged. *)
       @ List.concat_map
-          (fun (v, g) ->
-            match g with Gone_hole r when not (keep v) -> r | _ -> [])
+          (fun (v, g) -> match g with Gone_hole r when not (keep v) -> r | _ -> [])
           s.s_gone)
     halls
 
@@ -908,7 +912,8 @@ let remove_one t store ~halls ~vals ~y_tm value =
   let d = Store.get store y_tm.x in
   let keep v = List.mem v vals in
   let j =
-    Reason.because ~concludes:(removal_conclusion y d value)
+    Reason.because
+      ~concludes:(removal_conclusion y d value)
       (remove_reason ~keep halls y)
       (remove_expl t ~vals ~halls ~y ~value)
   in
@@ -926,8 +931,7 @@ let regin_pass t store =
     let doms = Array.map (fun tm -> Store.get store tm.x) t.terms in
     let values =
       Array.of_list
-        (List.sort_uniq compare
-           (List.concat_map Domain.to_list (Array.to_list doms)))
+        (List.sort_uniq compare (List.concat_map Domain.to_list (Array.to_list doms)))
     in
     let nv = Array.length values in
     let holds i vi = Domain.mem doms.(i) values.(vi) in
@@ -950,9 +954,9 @@ let regin_pass t store =
     in
     let failed = ref None in
     for i = 0 to n - 1 do
-      if Option.is_none !failed then (
+      if Option.is_none !failed then
         let seen = Array.make (Stdlib.max 1 nv) false in
-        if not (augment i seen) then failed := Some (i, seen))
+        if not (augment i seen) then failed := Some (i, seen)
     done;
     let snaps_of pick =
       List.filter_map
@@ -960,7 +964,7 @@ let regin_pass t store =
         (range 0 (n - 1))
     in
     match !failed with
-    | Some (x0, seen) ->
+    | Some (x0, seen) -> (
         (* No matching saturates the scope. [seen] is the value set B the failed
            augmenting search reached; every one of those values is matched (an unmatched
            one would have ended the search successfully), and A is those variables
@@ -982,7 +986,7 @@ let regin_pass t store =
           Reason.because ~concludes:None Reason.none (conflict_expl t ~vals ~halls)
         in
         (* Must fail: the bound is one past the variable's own upper bound. *)
-        (match Store.set_lo store x0_tm.x (Domain.hi doms.(x0) + 1) j with
+        match Store.set_lo store x0_tm.x (Domain.hi doms.(x0) + 1) j with
         | Store.Conflict c -> raise (Found c)
         | Store.Changed | Store.Unchanged ->
             invalid_arg
@@ -1015,7 +1019,7 @@ let regin_pass t store =
                        (range 0 (nv - 1)))
                 (range 0 (n - 1))
             in
-            if not free_reachable then (
+            if not free_reachable then
               let vals =
                 List.sort_uniq compare
                   (List.filter_map
@@ -1031,16 +1035,22 @@ let regin_pass t store =
                         if Domain.mem doms.(y) v then
                           remove_one t store ~halls ~vals ~y_tm:t.terms.(y) v)
                       vals)
-                (range 0 (n - 1))))
+                (range 0 (n - 1)))
           (range 0 (n - 1)))
 
 (* Stage 1, unchanged: Hall intervals over bounds. Returns whether it moved anything, so
    [propagate] can decide whether to go on to stage 2. *)
 let rec stage_bounds t store ~moved =
-  if try pass t store with Moved -> true then stage_bounds t store ~moved:true else moved
+  if try pass t store with Moved -> true then stage_bounds t store ~moved:true
+  else moved
 
 let rec stage_regin t store =
-  if try regin_pass t store; false with Moved -> true then stage_regin t store
+  if
+    try
+      regin_pass t store;
+      false
+    with Moved -> true
+  then stage_regin t store
 
 (* THE STAGING, and it is a measurement of GCS's rather than a choice of ours
    (docs/GCS-COMPARISON.md section 3, docs/ROADMAP.md M4-T2): above 256 var-value pairs
