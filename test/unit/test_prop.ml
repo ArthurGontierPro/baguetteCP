@@ -5996,6 +5996,76 @@ let test_regin_conclusion () =
   |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
   try Sys.rmdir dir with _ -> ()
 
+(* ------------------------------- the routing defect D-0064 bounded and left open ----
+
+   D-0064: "an int_lin_le conflict citing an alldiff entry with NO moved bound would
+   still be mis-routed. No shipped model reaches it. lib/core/search.ml:1107."
+
+   This is a model that reaches it, and it is four lines. x and y are declared 1..2, so
+   the Hall set {x, y} is at its declared bounds and the derivation has no [Defining] in
+   it anywhere; z is pushed to 3..4 and the `z <= 2` row then conflicts, citing z's
+   alldiff entry as a [Term]. The old rule looked for a [Clause] or a [Defining], found
+   neither, and called the pol closing -- so `conclusion UNSAT` cited a row that is not
+   contradicting. Measured with genuinely different binaries: without
+   [mixes_currencies] the conclusion cites @c42 and 3.0.2 answers "The constraint with
+   ID 42 is not contradicting, as specified by the hint."
+
+   What is asserted is the ROUTE and the verdict, not the id: the conflict's pol adds an
+   order-currency .opb row to a direct-currency counting row, so it does not close, and
+   D-0022's `rup >= 1` is the honest answer. *)
+let regin_mixed_src =
+  "var 1..2: x;\n\
+   var 1..2: y;\n\
+   var 1..4: z;\n\
+   constraint all_different_int([x, y, z]);\n\
+   constraint int_lin_le([1],[z],2);\n\
+   solve satisfy;\n"
+
+let test_regin_mixed_currency () =
+  let dir = Filename.temp_file "baguette_regin_mixed" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let outcome, opb, pbp, minting, _, _ =
+    alldiff_conclusion_kind dir ~file:"mixed" regin_mixed_src
+  in
+  check "regin D-0064: the no-moved-bound scene is UNSAT" (outcome = Search.Unsat);
+  (match minting with
+  | None ->
+      check
+        "regin D-0064: the conclusion is the D-0022 empty clause, not a pol that does \
+         not close"
+        false
+  | Some line ->
+      if not (contains_sub ~needle:"rup >= 1" (String.trim line)) then
+        Printf.printf "     conclusion cites: %s\n" (String.trim line);
+      check
+        "regin D-0064: a conflict mixing an order-currency model row with a counting row \
+         is routed the D-0022 way -- `rup >= 1`, not a pol that does not close"
+        (contains_sub ~needle:"rup >= 1" (String.trim line)));
+  (match veripb_path () with
+  | None ->
+      incr failures;
+      Printf.printf "FAIL regin D-0064: veripb not found -- the proof was NOT checked.\n"
+  | Some veripb ->
+      let log = Filename.concat dir "log" in
+      let rc =
+        Sys.command
+          (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
+             (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
+      in
+      if rc <> 0 then (
+        let ic = open_in_bin log in
+        let out = really_input_string ic (in_channel_length ic) in
+        close_in ic;
+        Printf.printf "     checker said: %s\n" (String.trim out));
+      check
+        "regin D-0064: and 3.0.2 accepts it, where the old routing made it \"not \
+         contradicting\""
+        (rc = 0));
+  Sys.readdir dir
+  |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
+  try Sys.rmdir dir with _ -> ()
+
 (* ------------------------------------------------ (c) UNDER A DECISION, at random
 
    Every lane above reasons at the ROOT, and the branch of [gone] that only a decision
@@ -6304,6 +6374,7 @@ let () =
   test_regin_consistency_oracle ();
   test_regin_staging ();
   test_regin_conclusion ();
+  test_regin_mixed_currency ();
   test_regin_random_proofs ();
   run_veripb
     ~name:
