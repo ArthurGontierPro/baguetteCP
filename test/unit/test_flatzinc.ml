@@ -452,6 +452,30 @@ let raises_width_too_large f =
    of a lint nobody has learned to wave through. *)
 let width_over lo hi = E.order_width_exceeds ~lo ~hi
 
+(* ------------------------------------------------------------------ M7-T1
+   The cap became an OPTION, so this block became a pair: an INVERSION and a CONTROL.
+
+   Until M7-T1 the width cap was a refusal in the default build, and everything below
+   asserted it. The refusal came from the 15 GB laptop baguette was written on, the
+   corpus now runs on a 2 TB node, and D-0028's real cost -- proof size and checker
+   time -- is not repealed by either machine. So [max_order_width] stops being a
+   THRESHOLD and becomes a SUGGESTED LIMIT: the same 10 000, reachable on request.
+
+   Both halves are kept, deliberately:
+
+     INVERSION  with the default (no limit) the declaration that used to be refused is
+                now ACCEPTED, and builds its whole ladder. This is the change.
+     CONTROL    with [order_width_limit := Some cap] every assertion the old build made
+                still holds, unchanged, word for word. This is what proves the option
+                RESTORES the old behaviour rather than approximating it.
+
+   Deleting either half would leave a reader unable to tell which one moved. *)
+
+let with_width_limit lim f =
+  let saved = !E.order_width_limit in
+  E.order_width_limit := lim;
+  Fun.protect ~finally:(fun () -> E.order_width_limit := saved) f
+
 (* The only two [declare_int] calls in this file, and the only two lines in the tree
    that ask for a wide ladder on purpose. Both are marked for the width lint, because
    the width is not incidental here: it IS the subject. Measured cost of the pair, with
@@ -472,6 +496,119 @@ let declare_one_over e =
      ladder got before anyone noticed. *)
   E.n_constraints e
 
+(* ------------------------------------------------------------ the INVERSION *)
+(* The default build. No limit is set, and the declaration that M1-T54 refused is
+   encoded. The clause count is the half that matters: it shows the ladder was really
+   built, rather than the refusal having been replaced by some quieter decline. *)
+let test_width_cap_default () =
+  with_width_limit None (fun () ->
+      check "M7-T1: the default build sets no width limit"
+        (E.current_order_width_limit () = None);
+      check_str "M7-T1: and says so" ~expected:"unlimited"
+        ~actual:(E.order_width_limit_string ());
+      (match raises_width_too_large (fun () -> declare_one_over (E.create ())) with
+      | `Accepted ->
+          Printf.printf
+            "ok   M7-T1: width %d, one over the OLD cap, is now encoded not refused\n"
+            (cap + 1)
+      | `Refused (x, lo, hi) ->
+          incr failures;
+          Printf.printf
+            "FAIL M7-T1: the default build still refuses %s over %d..%d on width\n" x lo
+            hi
+      | `Other s ->
+          incr failures;
+          Printf.printf "FAIL M7-T1: declaring one over the old cap raised %s\n" s);
+      let over = declare_one_over (E.create ()) in
+      check_str "M7-T1: and builds its whole ladder" ~expected:(string_of_int cap)
+        ~actual:(string_of_int over);
+      (* The predicate agrees with the door. *)
+      check "M7-T1: order_width_exceeds is false one over the old cap"
+        (not (width_over 0 (cap + 1)));
+      check "M7-T1: and false for a width the old cap refused by three orders"
+        (not (width_over 0 10_000_000));
+      (* THE ONE REFUSAL THAT IS NOT AN OPTION. A width that is not representable as a
+         native int has no ladder to build and no count to report; [declare_int] would
+         sit in a 2^64 loop. That is an ARITHMETIC refusal, in the family of
+         [Unrepresentable], and no flag turns it off. A future session reading "M7-T1
+         removed the width limits" will try to remove this one too. *)
+      check "M7-T1: min_int..max_int is STILL refused with no limit set -- the width is"
+        (width_over min_int max_int);
+      check "M7-T1: not representable, which is arithmetic, not a budget"
+        (width_over min_int (min_int + cap + 1) = false);
+      match
+        raises_width_too_large (fun () ->
+            let e = E.create () in
+            (* An unrepresentable width IS the subject here, and it allocates
+               nothing: declare_int refuses before the ladder. The marker below is
+               for scripts/check_test_widths.py, which reads one line at a time. *)
+            E.declare_int e "huge" ~lo:min_int ~hi:max_int (* width-ok: M7-T1 *);
+            E.n_constraints e)
+      with
+      | `Refused ("huge", _, _) ->
+          Printf.printf
+            "ok   M7-T1: declare_int refuses an unrepresentable width with no limit set\n"
+      | `Refused (x, _, _) ->
+          incr failures;
+          Printf.printf "FAIL M7-T1: refused, but named %s\n" x
+      | `Accepted ->
+          incr failures;
+          Printf.printf "FAIL M7-T1: declare_int ACCEPTED min_int..max_int\n"
+      | `Other s ->
+          incr failures;
+          Printf.printf "FAIL M7-T1: min_int..max_int raised %s, not Width_too_large\n" s)
+
+(* M7-T1: the warning that replaced the refusal. The default build must not be silent
+   about an expensive encoding -- a silent success is as wrong as a silent failure -- so
+   this captures the sink and asserts the text a reader actually sees. *)
+let test_width_warning () =
+  with_width_limit None (fun () ->
+      let buf = Buffer.create 512 in
+      let saved_sink = !E.warn_sink in
+      let saved_warn = !E.width_warn_threshold in
+      E.set_warn_sink (Buffer.add_string buf);
+      E.width_warn_threshold := Some cap;
+      (let e = E.create () in
+       E.declare_int e "wide" ~lo:0 ~hi:(cap + 1) (* width-ok: M7-T1, the subject *));
+      let msg = Buffer.contents buf in
+      E.set_warn_sink saved_sink;
+      E.width_warn_threshold := saved_warn;
+      check "M7-T1: an over-wide declaration warns" (msg <> "");
+      List.iter
+        (fun needle ->
+          check
+            (Printf.sprintf "M7-T1: the warning says %S" needle)
+            (contains ~needle msg))
+        [
+          "warning";
+          "`wide`";
+          Printf.sprintf "a width of %d" (cap + 1);
+          "one Boolean per value";
+          "Baguette will encode it";
+          "too large to store";
+          "--max-order-width";
+          "--width-warn=none";
+        ];
+      (* Silenceable, and silencing it is the only thing that changes. *)
+      let buf2 = Buffer.create 16 in
+      E.set_warn_sink (Buffer.add_string buf2);
+      E.width_warn_threshold := None;
+      (let e = E.create () in
+       E.declare_int e "wide" ~lo:0 ~hi:(cap + 1) (* width-ok: M7-T1, the subject *));
+      E.set_warn_sink saved_sink;
+      E.width_warn_threshold := saved_warn;
+      check "M7-T1: --width-warn=none silences it" (Buffer.contents buf2 = "");
+      (* And under the threshold nothing is said at all. *)
+      let buf3 = Buffer.create 16 in
+      E.set_warn_sink (Buffer.add_string buf3);
+      (let e = E.create () in
+       E.declare_int e "narrow" ~lo:0 ~hi:9);
+      E.set_warn_sink saved_sink;
+      check "M7-T1: a narrow declaration says nothing" (Buffer.contents buf3 = ""))
+
+(* -------------------------------------------------------------- the CONTROL *)
+(* Every assertion the pre-M7 build made, unchanged, under an explicit limit. If this
+   passes, --max-order-width=10000 is the old build and not an approximation of it. *)
 let test_width_cap_boundary () =
   (* ------------------------------------------------------------------ the constant *)
   (* width_root_unsat.fzn is at w = 999 and is load-bearing: a cap that refuses it
@@ -582,6 +719,11 @@ let test_width_cap_boundary () =
     ~src:"var 1..5: x;\nvar 0..5: z;\nconstraint int_abs(x, z);\nsolve satisfy;\n";
   accepts_compile "arith: int_abs over a constant"
     ~src:"var 0..9: z;\nconstraint int_abs(-4, z);\nsolve satisfy;\n";
+  ()
+
+(* M7-T1: the compile-level half of the CONTROL, lifted out of [test_rejections] so it
+   can be run under an explicit limit. Every assertion is the pre-M7 one, unchanged. *)
+let test_width_cap_compile () =
   accepts_compile "width cap: compile accepts a domain at the cap"
     ~src:(Printf.sprintf "var 0..%d: x :: output_var;\nsolve satisfy;\n" cap);
   reject_compile "width cap: compile refuses a domain one over the cap" ~line:1
@@ -593,6 +735,9 @@ let test_width_cap_boundary () =
         Printf.sprintf "0..%d" (cap + 1);
         Printf.sprintf "a width of %d" (cap + 1);
         Printf.sprintf "baguette's limit is %d" cap;
+        (* M7-T1: the message now says the refusal is opt-in, and it is telling the
+           truth -- this test had to ASK for the limit to see it at all. *)
+        "M7-T1: this refusal is OFF by default";
         "order encoding";
         "legal FlatZinc";
         "Narrow the declared domain";
@@ -638,6 +783,21 @@ let test_width_cap_boundary () =
   check "width cap: the width message does not mention the arithmetic limit"
     (not (contains ~needle:"arithmetic limit" width_only_msg))
 
+(* M7-T1, the compile-level INVERSION: the .fzn that [reject_compile] refuses above,
+   under the default build, compiles. Same source text, opposite verdict, and the only
+   difference between them is the limit. *)
+let test_width_cap_compile_default () =
+  with_width_limit None (fun () ->
+      accepts_compile "M7-T1: compile accepts the domain one over the old cap"
+        ~src:(Printf.sprintf "var 0..%d: x :: output_var;\nsolve satisfy;\n" (cap + 1));
+      accepts_compile "M7-T1: compile accepts -5001..5000"
+        ~src:"var -5001..5000: x :: output_var;\nsolve satisfy;\n";
+      (* The ARITHMETIC cap is untouched by M7-T1 and still refuses, first and with its
+         own wording. A session removing "the width limits" must not take this with it. *)
+      reject_compile "M7-T1: the arithmetic cap still refuses, default build" ~line:1
+        ~src:"var 0..1000000000000000000: x :: output_var;\nsolve satisfy;\n"
+        ~needles:[ "`x`"; "arithmetic limit" ])
+
 (* ============================================================================== main *)
 
 let () =
@@ -658,7 +818,13 @@ let () =
   test_misc_accepts ();
   test_constant_folding ();
   test_rejections ();
-  test_width_cap_boundary ();
+  (* M7-T1. The inversion first -- it is the change -- then the control, which runs
+     every pre-M7 assertion under an explicit --max-order-width=10000. *)
+  test_width_cap_default ();
+  test_width_warning ();
+  test_width_cap_compile_default ();
+  with_width_limit (Some cap) test_width_cap_boundary;
+  with_width_limit (Some cap) test_width_cap_compile;
   check_str "error rendering carries file:line:col" ~expected:"<t>:2:12: error: boom"
     ~actual:(F.Error.to_string { F.Error.pos = F.Pos.make "<t>" 2 12; msg = "boom" });
   if !failures > 0 then (
