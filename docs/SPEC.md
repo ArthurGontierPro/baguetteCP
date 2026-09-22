@@ -248,9 +248,35 @@ in this project is aimed at.
 
 ### 3.4 Search
 
-Default: first-fail variable selection, min-value branching, depth-first, with restarts
-disabled. `seq_search`, `int_search` with `input_order`/`first_fail` and
-`indomain_min`/`indomain_max` MUST be honoured when present.
+**Default.** A model with no search annotation is searched by first-fail variable selection
+with min-value branching, depth-first, restarts disabled.
+
+**Annotations** *(normative; the honouring requirement predates M7-T2, which brought the
+implementation into compliance with it)*. `int_search` and `bool_search` with the variable
+choices `input_order` and `first_fail` and the value choices `indomain_min` and
+`indomain_max`, and `seq_search` over those, MUST be honoured.
+
+- `input_order` selects the first still-unfixed variable **in the order the annotation's
+  array wrote it**, not declaration order.
+- `indomain_min` branches `x = lo` first; `indomain_max` branches `x = hi` first.
+- `seq_search` consults its annotations in order and uses the first whose variables are not
+  all fixed.
+
+**Variables no annotation mentions.** An annotation need not cover every variable. When every
+annotation's variables are fixed and a decision is still required, the default above is used.
+This is the one respect in which an annotated model's search is not the annotation.
+
+**Anything else MUST be refused**, with a diagnostic naming it — including `smallest`,
+`largest`, `anti_first_fail`, `indomain_split`, `indomain_median`, `indomain_random`,
+`float_search`, `set_search` and `priority_search`. It MUST NOT be silently ignored or
+replaced: **substituting a strategy solves a different problem and reports it as this one's
+answer.** Before M7-T2 an unrecognised annotation was silently dropped and the model searched
+by the default, which is exactly what this forbids.
+
+**The `int_search` exploration argument (`complete`, `bbs`, `lds`) is ignored**, and that is
+sound rather than an omission: the search is complete, so ignoring an incompleteness
+annotation can only explore *more* of the tree than asked, never less. The answer and the
+proof stay honest.
 
 Every branching decision and every backtrack MUST be reflected in the proof.
 
