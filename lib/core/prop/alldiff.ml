@@ -123,6 +123,45 @@ module Encoding = Baguette_proof.Encoding
 (* A variable, and the five numbers any part of the derivation may ask about it. The
    declared pair is frozen at [make] time for D-0010's reason ([Order_reason]'s header);
    the current pair is frozen per pruning. *)
+(* Why a DECLARED value is no longer available to a variable, and therefore how the
+   derivation is allowed to cancel its [x_eq_v] term out of that variable's
+   at-least-one line. (M4-T2.)
+
+   The Hall counting needs, per Hall variable, [sum_{v in S and decl(x)} x_eq_v >= 1]
+   for the Hall value set [S], and it gets there from the declared-range at-least-one
+   line by cancelling one term per declared value outside [S]. Each cancellation has to
+   name a line that ESTABLISHES that the value is gone, at DEGREE-preserving strength --
+   a [Weaken] axiom cancels the term but costs the degree (D-0009), so there is no
+   weakening shortcut here and the four cases below are the whole of what is available.
+
+   [Gone_below]/[Gone_above] are M4-T1's case: the value is outside the variable's
+   current window and [excl] derives the globally valid `~<the bound> \/ ~x_eq_v` from
+   the channelling and the ladder rungs.
+
+   The other two are interior HOLES, which bounds consistency never had to look at and
+   which Regin both reads and creates. A hole has no ladder chain to it; what states it
+   is the trail entry that punched it, and lib/core/trace.ml writes that entry's line as
+   `x <= v-1 \/ x >= v+1 \/ ~<facts>` in the ORDER encoding. Two ids of the channelling
+   turn that into the direct encoding's currency, which is why both cases are expressible
+   without a new constructor:
+
+     - [Gone_hole_root]: the hole was established at LEVEL 0, so `~x_eq_v >= 1` is a
+       consequence of the model on its own and [Explanation.defining] cites it as a unit
+       -- exactly D-0064's per-bound rule, applied per hole. The cancellation is exact,
+       nothing is left in the row, and a root conflict built on it still closes.
+     - [Gone_hole facts]: the hole rests on a decision, so the unit would be FALSE. What
+       is globally valid is the implication, and [Explanation.clause] states it:
+       `~x_eq_v \/ ~facts`, RUP against the hole's own trace line plus two channelling
+       halves. The facts stay in the derived row and are carried into the pruning's
+       [Reason] alongside, which is what keeps the trace line true (I-P5). The price is
+       that the derivation now contains a [Clause], so a ROOT conflict resting on one
+       closes the D-0022 way -- see lib/core/search.ml's [rests_on_a_clause]. *)
+type gone =
+  | Gone_below
+  | Gone_above
+  | Gone_hole_root
+  | Gone_hole of Reason.t
+
 type snap = {
   s_var : Var.t;
   s_name : string;
@@ -138,6 +177,12 @@ type snap = {
      however deep the search has gone. *)
   s_lo_root : bool;
   s_hi_root : bool;
+  (* Every DECLARED value this variable can no longer take, ascending, with the reason
+     the derivation may cite for it. Snapshotted with everything else (I-X6): the hole
+     entries close over the trail as it stood at the pruning, and the thunk never looks
+     again. For a hole-free domain -- every domain M4-T1 ever saw -- this is two runs of
+     [Gone_below]/[Gone_above] and costs no trail walk at all. *)
+  s_gone : (int * gone) list;
 }
 
 type term = { x : Var.t; name : string; decl_lo : int; decl_hi : int }
@@ -183,6 +228,56 @@ let established_at_root store v ~lower =
   let sup = if lower then Store.lo_support store v else Store.hi_support store v in
   sup = Store.no_support || Store.level_of_index store sup = 0
 
+let range a b = List.init (Stdlib.max 0 (b - a + 1)) (fun i -> a + i)
+
+(* The trail POSITION of the entry that took [value] out of [var], or [None].
+
+   [Store.remover] answers the same question with the entry, and the entry is not enough
+   here: what decides whether a hole may be cited as a unit is the LEVEL it was
+   established at, and [Store.entry] does not carry one ([Store.level_of_index] counts
+   the level marks at or below a position instead). Same rule, same "a value leaves a
+   domain once and stays gone until the backtrack that pops the entry that removed it",
+   so this finds at most one and stops at the first hit.
+
+   [None] is a hole with no trail entry behind it -- a declared gap, which
+   lib/flatzinc/compile.ml's [reject_set_domain] refuses, so no model reaches it. *)
+let remover_index store ~var value =
+  let rec go i =
+    if i < 0 then None
+    else
+      let e = Store.trail_entry store i in
+      if
+        Var.equal e.Store.var var
+        && Domain.mem e.Store.old value
+        && not (Domain.mem e.Store.now value)
+      then Some i
+      else go (i - 1)
+  in
+  go (Store.trail_length store - 1)
+
+let hole_cite store var value =
+  match remover_index store ~var value with
+  | Some i when Store.level_of_index store i = 0 -> Gone_hole_root
+  | Some i -> Gone_hole (Store.trail_entry store i).Store.reason
+  | None -> Gone_hole Reason.none
+
+(* [s_gone], ascending: below the window, then the holes inside it, then above. The
+   order is what makes an [alo_over] over an INTERVAL value set emit exactly the
+   summands M4-T1's [alo_window] emitted, in the same order, so stage 1's proofs are
+   unchanged byte for byte. *)
+let gone_of store tm d =
+  let lo = Domain.lo d and hi = Domain.hi d in
+  let holes =
+    if not (Domain.has_holes d) then []
+    else
+      List.filter_map
+        (fun v -> if Domain.mem d v then None else Some (v, hole_cite store tm.x v))
+        (range lo hi)
+  in
+  List.map (fun v -> (v, Gone_below)) (range tm.decl_lo (lo - 1))
+  @ holes
+  @ List.map (fun v -> (v, Gone_above)) (range (hi + 1) tm.decl_hi)
+
 let snap_of store tm =
   let d = Store.get store tm.x in
   {
@@ -194,11 +289,10 @@ let snap_of store tm =
     s_hi = Domain.hi d;
     s_lo_root = established_at_root store tm.x ~lower:true;
     s_hi_root = established_at_root store tm.x ~lower:false;
+    s_gone = gone_of store tm d;
   }
 
 (* ------------------------------------------------------------------ explanations *)
-
-let range a b = List.init (Stdlib.max 0 (b - a + 1)) (fun i -> a + i)
 
 (* An id this derivation must name, or a legible failure. [None] here means the proof
    line does not exist, which happens for exactly one reason: no proof is being written,
@@ -324,6 +418,20 @@ let excl t s v =
       1
   else invalid_arg "Alldiff.excl: the value is inside the current window"
 
+(* One cancellation, per [gone]'s four cases -- see that type for the argument. Every
+   one of them is a SUMMAND of the at-least-one line's [Combine], every one cancels
+   exactly one [x_eq_v] term and leaves the degree at 1, and none of them is a new
+   constructor: M4-T1 spent [Combine]/[Weaken]/[Model_row], M4-T7 spent [Defining], and
+   this row spends nothing. *)
+let exclude_summand t s v g =
+  match g with
+  | Gone_below | Gone_above -> Explanation.term 1 (excl t s v)
+  | Gone_hole_root -> Explanation.defining 1 (Lit.ne s.s_name v)
+  | Gone_hole r ->
+      Explanation.term 1
+        (Explanation.clause
+           (Lit.ne s.s_name v :: List.map Lit.negate (Reason.lits r)))
+
 (* The at-least-one line for a Hall variable, narrowed from its DECLARED range to the
    Hall interval:  sum_{v in [a,b] and decl(x)} x_eq_v >= 1, plus the bound literals
    [excl] carried in.
@@ -333,11 +441,22 @@ let excl t s v =
    asserted). Adding one [excl] per declared value outside [a, b] cancels that value's
    term against a unit and leaves the degree at 1. Every such value is outside the
    variable's current window too, because a Hall variable's window is inside [a, b]. *)
-let alo_window t s ~a ~b =
-  let outside = List.filter (fun v -> v < a || v > b) (range s.s_dlo s.s_dhi) in
+(* M4-T2 generalised this from an INTERVAL to an arbitrary value set, which is the
+   whole of what Regin needs from the derivation: a matching-based Hall set saturates a
+   SET of values that need not be contiguous, and everything else about the counting is
+   unchanged. [keep] is membership of that set.
+
+   The excluded values are read off [s_gone] rather than recomputed, because the
+   *reason* each one is gone is what decides which line cancels it. For an interval
+   [keep] this is value-for-value and order-for-order what M4-T1 computed: a Hall
+   variable's window is inside the interval, so every declared value outside the
+   interval is outside the window too, and no hole of its is ever excluded. *)
+let alo_over t s ~keep =
   Explanation.combine
     (cite (cid_of "at-least-one" (Encoding.at_least_one_id t.enc s.s_name))
-    :: List.map (fun v -> Explanation.term 1 (excl t s v)) outside)
+    :: List.filter_map
+         (fun (v, g) -> if keep v then None else Some (exclude_summand t s v g))
+         s.s_gone)
     1
 
 (* The counting argument itself: one at-least-one per Hall variable, one at-most-one per
@@ -348,16 +467,17 @@ let alo_window t s ~a ~b =
    A value only one variable in scope can take gets a literal axiom instead of an
    at-most-one line: "at most one of {x} takes v" IS ~x_eq_v >= 0, and a value no
    variable can take gets nothing, because there is no term to cancel. *)
-let core_summands t ~a ~b ~halls ~extra =
+let core_summands t ~vals ~halls ~extra =
   let all = halls @ Option.to_list extra in
-  List.map (fun s -> Explanation.term 1 (alo_window t s ~a ~b)) halls
+  let keep v = List.mem v vals in
+  List.map (fun s -> Explanation.term 1 (alo_over t s ~keep)) halls
   @ List.concat_map
       (fun v ->
         match List.filter (fun s -> s.s_dlo <= v && v <= s.s_dhi) all with
         | [] -> []
         | [ s ] -> [ Explanation.weaken [ (1, Lit.negate (Lit.eq s.s_name v)) ] ]
         | ss -> [ Explanation.term 1 (amo t ss v) ])
-      (range a b)
+      vals
 
 (* The bound literals [alo_window] leaves in the row, cancelled by the lines that
    already state those bounds. Until M4-T7 this was the one place in this module where
@@ -403,10 +523,14 @@ let core_summands t ~a ~b ~halls ~extra =
    many [excl] summands [alo_window] added in each direction. A Hall variable's window is
    inside [a, b], so [below > 0] implies its lo really has moved and [Lit.ge] below names
    a literal the encoding has (likewise [above] and [Lit.le]). *)
-let moved_bound_cancels ~a ~b ~halls =
+let hall_cancels ~keep ~halls =
   List.concat_map
     (fun s ->
-      let below = Stdlib.max 0 (a - s.s_dlo) and above = Stdlib.max 0 (s.s_dhi - b) in
+      let count want =
+        List.length
+          (List.filter (fun (v, g) -> (not (keep v)) && g = want) s.s_gone)
+      in
+      let below = count Gone_below and above = count Gone_above in
       (if below > 0 && s.s_lo_root then
          [ Explanation.defining below (Lit.ge s.s_name s.s_lo) ]
        else [])
@@ -449,7 +573,7 @@ let prune_summands t ~a ~b ~halls ~y ~lower =
     if lower then (range y.s_lo b, range (Stdlib.max a y.s_dlo) (y.s_lo - 1))
     else (range a y.s_hi, range (y.s_hi + 1) (Stdlib.min b y.s_dhi))
   in
-  core_summands t ~a ~b ~halls ~extra:(Some y)
+  core_summands t ~vals:(range a b) ~halls ~extra:(Some y)
   @ List.map (fun v -> Explanation.weaken [ (1, Lit.eq y.s_name v) ]) drop
   @ List.map
       (fun v -> cite (cid_of "d_fwd" (Encoding.direct_fwd_id t.enc y.s_name v)))
@@ -459,8 +583,42 @@ let prune_expl t ~a ~b ~halls ~y ~lower =
   Explanation.deferred (fun () ->
       Explanation.combine
         (prune_summands t ~a ~b ~halls ~y ~lower
-        @ moved_bound_cancels ~a ~b ~halls
+        @ hall_cancels ~keep:(fun v -> a <= v && v <= b) ~halls
         @ target_cancel ~y ~lower)
+        1)
+
+(* ------------------------------------------------------ M4-T2: a VALUE is removed
+
+   The same counting, stopped one step earlier. After [core_summands] over a tight set
+   [halls] saturating the value set [vals], with [y] joining the at-most-one lines and
+   contributing no at-least-one, the row is
+
+     sum_{w in vals and decl(y)} ~y_eq_w  >=  |vals and decl(y)|   (+ what [halls]
+                                                                    could not cancel)
+
+   -- "y takes NONE of the Hall values". M4-T1 turned that into a BOUND by adding the
+   forward channelling clause for the values it kept, which telescopes; a domain-
+   consistent pruning wants one value instead, so every other value is dropped by a
+   literal axiom ([Weaken], D-0009's own direction: it cancels the term and costs the one
+   unit of degree that term was carrying) and what is left is
+
+     ~y_eq_value >= 1   (+ the same leftovers)
+
+   which is the pruning, disjoined with the facts it rests on -- the [Ne] shape, sound at
+   any level. Nothing here is new machinery: it is [core_summands] plus [Weaken]. *)
+let remove_summands t ~vals ~halls ~y ~value =
+  let mine = List.filter (fun w -> y.s_dlo <= w && w <= y.s_dhi) vals in
+  core_summands t ~vals ~halls ~extra:(Some y)
+  @ List.filter_map
+      (fun w ->
+        if w = value then None else Some (Explanation.weaken [ (1, Lit.eq y.s_name w) ]))
+      mine
+
+let remove_expl t ~vals ~halls ~y ~value =
+  let keep v = List.mem v vals in
+  Explanation.deferred (fun () ->
+      Explanation.combine
+        (remove_summands t ~vals ~halls ~y ~value @ hall_cancels ~keep ~halls)
         1)
 
 (* ---------------------------------------------------------------------- reasons *)
@@ -469,19 +627,40 @@ let prune_expl t ~a ~b ~halls ~y ~lower =
    facts. [Reason.lit_of_fact] drops the ones sitting at a declared bound, which is the
    same test [excl] makes when it decides whether a value is outside the window -- the
    two cannot disagree because both read the same snapshot. *)
-let hall_facts halls =
+let hall_facts ~keep halls =
   List.concat_map
     (fun s ->
       [
         Reason.at_least ~name:s.s_name ~decl:s.s_dlo s.s_lo;
         Reason.at_most ~name:s.s_name ~decl:s.s_dhi s.s_hi;
-      ])
+      ]
+      (* M4-T2. A hole the derivation had to cancel with [Gone_hole] leaves that hole's
+         OWN facts in the row, so they are facts this pruning rests on and the trace
+         line's tail owes them (I-P5). Only the EXCLUDED holes: a hole inside the value
+         set is never cancelled, contributes nothing, and naming it would put a fact in
+         the tail that the derivation does not read. For an interval value set there are
+         no excluded holes at all, which is why stage 1's reasons are unchanged. *)
+      @ List.concat_map
+          (fun (v, g) ->
+            match g with Gone_hole r when not (keep v) -> r | _ -> [])
+          s.s_gone)
     halls
 
-let prune_reason halls y ~lower =
+let prune_reason ~keep halls y ~lower =
   (if lower then Reason.at_least ~name:y.s_name ~decl:y.s_dlo y.s_lo
    else Reason.at_most ~name:y.s_name ~decl:y.s_dhi y.s_hi)
-  :: hall_facts halls
+  :: hall_facts ~keep halls
+
+(* A value removal reads no bound of [y] -- the counting is over DECLARED domains and
+   [y]'s window never enters the row. Both of [y]'s bounds are named anyway, and that is
+   deliberate rather than sloppy: the derivation's top level weakens [y]'s own [y_eq_w]
+   terms away, so [Explanation.top_weaken_owners] names [y] and D-0026's agreement check
+   requires the reason to name it too. A tail with a fact the derivation did not need is
+   a WEAKER trace line, which is sound; a tail missing one is I-P5. *)
+let remove_reason ~keep halls y =
+  Reason.at_least ~name:y.s_name ~decl:y.s_dlo y.s_lo
+  :: Reason.at_most ~name:y.s_name ~decl:y.s_dhi y.s_hi
+  :: hall_facts ~keep halls
 
 (* ------------------------------------------------------------------- propagation *)
 
@@ -519,7 +698,7 @@ let pass t store =
           (Some
              (if lower then Reason.at_least ~name:y.s_name ~decl:y.s_dlo bound
               else Reason.at_most ~name:y.s_name ~decl:y.s_dhi bound))
-        (prune_reason halls y ~lower)
+        (prune_reason ~keep:(fun v -> a <= v && v <= b) halls y ~lower)
         (prune_expl t ~a ~b ~halls ~y ~lower)
     in
     match

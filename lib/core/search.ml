@@ -1104,14 +1104,88 @@ let wipe_after_nogood ctx ~lvl ~nogood =
 
    Either way the honest close is the one D-0018 already uses everywhere else: write the
    trace, then state the contradiction as a [rup] the checker verifies for itself. *)
-let rests_on_a_clause (e : Explanation.t) =
+(* Is this derivation's row stated in the DIRECT encoding's currency -- a counting
+   argument over x_eq_v -- rather than in the order encoding's ladder currency? (M4-T2.)
+
+   The two vocabularies are not interchangeable and a [pol] that adds a row from one to a
+   row from the other derives something valid that is neither side's claim
+   (lib/core/prop/linear.ml's header states the contract its division depends on; D-0010
+   and lib/core/ladder.ml state the other). Nothing in an [Explanation.t] says which row
+   a sub-derivation concludes -- that is D-0064's "nothing in the tree tells my own
+   sub-derivation from someone else's cited one" -- but the LINES it names do say it, and
+   [Encoding.is_direct_row] is the lookup. A derivation that names a channelling half or
+   an at-least-one line is a counting row; one that names only .opb model rows and ladder
+   rungs is not.
+
+   The pairwise disequality rows [Encoding.add_all_different] posts are clauses over
+   ORDER literals and are deliberately not counted (see [is_direct_row]'s own comment):
+   [Ne] cites them without leaving the ladder. *)
+let rec is_counting_row encoding (e : Explanation.t) =
+  match Explanation.force e with
+  | Explanation.Model_row id -> Encoding.is_direct_row encoding id
+  | Explanation.Clause lits -> List.exists (fun (l : Lit.t) -> Lit.is_direct l.Lit.v) lits
+  | Explanation.Linear (terms, _) ->
+      List.exists (fun (_, (l : Lit.t)) -> Lit.is_direct l.Lit.v) terms
+  | Explanation.Decision _ -> false
+  | Explanation.Cut (a, b, _, _) ->
+      is_counting_row encoding a || is_counting_row encoding b
+  | Explanation.Combine (summands, _) ->
+      List.exists
+        (function
+          | Explanation.Term (_, e) -> is_counting_row encoding e
+          | Explanation.Weaken lits ->
+              List.exists (fun (_, (l : Lit.t)) -> Lit.is_direct l.Lit.v) lits
+          | Explanation.Defining (_, (l : Lit.t)) -> Lit.is_direct l.Lit.v)
+        summands
+  | Explanation.Deferred _ -> false (* [force] returns a non-deferred head *)
+
+(* Does this [Combine] mix the two currencies at its own top level? (M4-T2, and the fix
+   for the defect D-0064 bounded and left open at this line.)
+
+   D-0064's rule was structural in the wrong place: it read the PRESENCE of a [Defining]
+   (or, before it, of a [Clause]) and routed on that. What it was standing in for is the
+   question above -- and the case that proves it is the one D-0064 wrote down and could
+   not fix: an [int_lin_le] conflict that folds in an [all_different] entry with NO moved
+   bound has no [Defining] and no [Clause] anywhere, so the old rule called it closing,
+   `conclusion UNSAT` cited a row that is not contradicting, and 3.0.2 would have said
+   so. No shipped model reached it, which is why it shipped.
+
+   Asked directly the question is decidable from the ids: a top-level [Combine] that adds
+   an ORDER-currency model row (its own .opb row -- what [Linear], [Lin_eq], [Ne] and
+   every M1 propagator build from) to a DIRECT-currency counting row cited as a [Term] is
+   a sound [pol] that does not close, and D-0022's route is the right one.
+
+   TOP LEVEL ONLY, the same boundary and the same reason as [Explanation.top_weaken_owners]
+   and as D-0064's: the question is only well posed about the row this conflict itself
+   claims is contradictory. Inside [pair_amo] an order-currency .opb disequality row and a
+   direct-currency channelling half are added together on purpose -- that is what the
+   division is for -- so a recursive reading would answer "mixed" about every correct Hall
+   derivation there is.
+
+   Erring [true] is erring safe: it costs the citation, never the refutation. *)
+let mixes_currencies encoding (summands : Explanation.summand list) =
+  let order_model_row = function
+    | Explanation.Term (_, e) -> (
+        match Explanation.force e with
+        | Explanation.Model_row id -> not (Encoding.is_direct_row encoding id)
+        | _ -> false)
+    | _ -> false
+  in
+  let counting_term = function
+    | Explanation.Term (_, e) -> is_counting_row encoding e
+    | _ -> false
+  in
+  List.exists order_model_row summands && List.exists counting_term summands
+
+let rests_on_a_clause encoding (e : Explanation.t) =
   let rec go ~cited (e : Explanation.t) =
     match Explanation.force e with
     | Explanation.Clause _ -> true
     | Explanation.Decision _ | Explanation.Model_row _ | Explanation.Linear _ -> false
     | Explanation.Cut (a, b, _, _) -> go ~cited:true a || go ~cited:true b
     | Explanation.Combine (summands, _) ->
-        List.exists
+        ((not cited) && mixes_currencies encoding summands)
+        || List.exists
           (function
             | Explanation.Term (_, e) -> go ~cited:true e
             | Explanation.Weaken _ -> false
@@ -1137,7 +1211,16 @@ let rests_on_a_clause (e : Explanation.t) =
                sub-derivation" from "someone else's cited one", so the question is only
                well posed where the derivation is its own. Erring [true] is erring safe --
                it costs the citation, never the refutation. *)
-            | Explanation.Defining _ -> cited)
+            (* M4-T7 / D-0009. A [Defining] cancels a bound literal out of the row its
+               own [Combine] is building, citing a UNIT line ([Justify.defining_lit],
+               which states the literal outright if nothing has): the term goes, the
+               degree stays, and the [pol] closes. D-0064 had to answer [cited] here,
+               because the presence of a [Defining] was the only thing standing between
+               a cited counting row and a conclusion that cites it. [mixes_currencies]
+               above now asks that question directly, so this arm can say what is
+               actually true about a [Defining], which is that it never makes a
+               derivation clausal. *)
+            | Explanation.Defining _ -> false)
           summands
     | Explanation.Deferred _ -> false (* [force] returns a non-deferred head *)
   in
@@ -1978,7 +2061,8 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
              call. Nothing is learned here either -- a conflict under no decision is
              already the strongest nogood there is. *)
           let cid =
-            if rests_on_a_clause e then close_root_conflict ctx trace store c
+            if rests_on_a_clause ctx.Justify.encoding e then
+              close_root_conflict ctx trace store c
             else Justify.emit ctx e
           in
           NFail ([], cid)

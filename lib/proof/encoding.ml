@@ -202,6 +202,15 @@ type t = {
          (M1-T9's disequality rows need one each). Only ever increases, so a name
          handed out once is never handed out again even after a failed candidate.
          See [fresh_aux_name]. *)
+  (* Every id this module minted for a DIRECT-ENCODING line: the three channelling
+     halves of every [ensure_direct], and every [derive_at_least_one]. M4-T2 added it
+     for [is_direct_row], whose one caller is lib/core/search.ml's [rests_on_a_clause]
+     -- see that function for why "which currency is this row stated in" is the
+     question a root conflict has to answer, and why the id is the only thing that can
+     answer it (an [Explanation.Model_row] carries an id and nothing else). Ids are
+     minted by [Writer] in one ascending sequence and never reused, so an entry stays
+     correct after [retire_direct] drops the [dvar] itself. *)
+  direct_cids : (cid, unit) Hashtbl.t;
   mutable direct_wanted_rev : string list;
       (* M4-T1. The variables a propagator has declared it will need the DIRECT
          encoding for, recorded at compile time and materialised by [start_proof].
@@ -232,6 +241,7 @@ let create () =
     n = 0;
     objective = None;
     n_aux = 0;
+    direct_cids = Hashtbl.create 64;
     direct_wanted_rev = [];
     alo = Hashtbl.create 16;
   }
@@ -426,11 +436,13 @@ let ensure_direct t w x =
         (if value > v.lo then
            let c = Opb.clause [ Lit.negate zl; Lit.ge x value ] in
            let id = Writer.red w ~origin ~witness:[ (z value, Writer.Zero) ] c in
+           Hashtbl.replace t.direct_cids id ();
            Hashtbl.replace d.d_lo value id);
         (* ~x_eq_v \/ ~x_ge_(v+1), only when x >= v+1 is not the constant false *)
         (if value < v.hi then
            let c = Opb.clause [ Lit.negate zl; Lit.le x value ] in
            let id = Writer.red w ~origin ~witness:[ (z value, Writer.Zero) ] c in
+           Hashtbl.replace t.direct_cids id ();
            Hashtbl.replace d.d_hi value id);
         (* x_eq_v \/ ~x_ge_v \/ x_ge_(v+1) *)
         let body =
@@ -441,6 +453,7 @@ let ensure_direct t w x =
         let id =
           Writer.red w ~origin ~witness:[ (z value, Writer.One) ] (Opb.clause body)
         in
+        Hashtbl.replace t.direct_cids id ();
         Hashtbl.replace d.d_fwd value id
       done;
       v.direct <- Some d;
@@ -459,9 +472,13 @@ let derive_at_least_one t w x =
   let d = direct t x in
   let ids = List.init (v.hi - v.lo + 1) (fun i -> Hashtbl.find d.d_fwd (v.lo + i)) in
   Writer.comment w "at-least-one for %s, derived from the channelling" x;
-  Writer.pol w
-    ~origin:(Printf.sprintf "at-least-one %s" x)
-    (Writer.Pol.sum (List.map Writer.Pol.id ids))
+  let id =
+    Writer.pol w
+      ~origin:(Printf.sprintf "at-least-one %s" x)
+      (Writer.Pol.sum (List.map Writer.Pol.id ids))
+  in
+  Hashtbl.replace t.direct_cids id ();
+  id
 
 (* at-most-one for a pair a < b: take
        ~x_eq_a \/ ~x_ge_(a+1)        (a < hi, since a < b <= hi)
@@ -548,6 +565,22 @@ let direct_fwd_id t x value =
 (* The at-least-one line for [x], derived from the channelling by [start_proof].
    [None] when no direct encoding was requested for [x]. *)
 let at_least_one_id t x = Hashtbl.find_opt t.alo x
+
+(* Is this id one of the DIRECT-ENCODING lines this module wrote? (M4-T2.)
+
+   The question it answers is not "who minted this" but "which currency is the row that
+   cites it stated in". The order encoding's ladder and the direct encoding's x_eq_v
+   family are two different vocabularies, and a [pol] whose operands come from the second
+   derives a statement about values, not about the per-variable declared-range chain a
+   [Linear] row's division needs (D-0010, lib/core/prop/linear.ml's header). So a
+   derivation that names any of these ids is a COUNTING row, and lib/core/search.ml's
+   [rests_on_a_clause] uses exactly that to decide how a root conflict citing it closes.
+
+   The pairwise disequality rows [add_all_different] posts are deliberately NOT here:
+   they are clauses over ORDER literals, so a derivation may cite one without leaving the
+   ladder currency -- and [Ne] does. What marks the counting row is the channelling and
+   the at-least-one line, which is why those are what this records. *)
+let is_direct_row t id = Hashtbl.mem t.direct_cids id
 
 (* ---------------------------------------------------------------------------
    Assignments
