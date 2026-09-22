@@ -190,19 +190,34 @@ type term = { x : Var.t; name : string; decl_lo : int; decl_hi : int }
 type t = {
   terms : term array;
   enc : Encoding.t;
+  (* The var-value-pair count above which [propagate] returns after stage 1 -- see the
+     staging comment at the bottom of this file. *)
+  cutoff : int;
   (* (x, z, v) -> the id of the .opb row "x <> v \/ z <> v", both orders of the pair
      present so a lookup never has to know which way [add_all_different] listed it. *)
   rows : (string * string * int, int) Hashtbl.t;
 }
 
 let name = "all_different_int"
-let consistency = Propagator.Bounds
+
+(* DOMAIN, as of M4-T2, and the enumeration argument at [regin_pass] is what earns it:
+   every value with no support is witnessed by a Hall set that this scans for, so the
+   fixpoint leaves no unsupported value behind. The M2-T10 oracle
+   (BAGUETTE_CONSISTENCY=1) holds this declaration to that, at every search node.
+
+   It is also what tells [Engine] to wake this instance on an interior HOLE and not only
+   on a bound move ([trigger_of_consistency]): a bounds-only trigger would starve a pass
+   that reads [Domain.mem], which is precisely what the old [Bounds] tag would now buy. *)
+let consistency = Propagator.Domain
+
+(* GCS's measured threshold, in var-value pairs. *)
+let default_cutoff = 256
 
 (* [rows] is what [Encoding.add_all_different] returned, and the encoding is the live
    one: see the module header on I-X6. Reads each variable's domain, so it must be
    called before anything has narrowed it -- the same requirement, for the same D-0010
    reason, that [Linear.make] and [Ne.make] state. *)
-let make store enc ~rows vars =
+let make ?(cutoff = default_cutoff) store enc ~rows vars =
   let tbl = Hashtbl.create (2 * List.length rows) in
   List.iter
     (fun ((x, z, v), cid) ->
@@ -217,7 +232,7 @@ let make store enc ~rows vars =
            { x; name = Store.name store x; decl_lo = Domain.lo d; decl_hi = Domain.hi d })
          vars)
   in
-  { terms; enc; rows = tbl }
+  { terms; enc; cutoff; rows = tbl }
 
 let vars t = Array.to_list (Array.map (fun tm -> tm.x) t.terms)
 
@@ -621,6 +636,23 @@ let remove_expl t ~vals ~halls ~y ~value =
         (remove_summands t ~vals ~halls ~y ~value @ hall_cancels ~keep ~halls)
         1)
 
+(* THE PIGEONHOLE over a value SET, which is the M4-T2 shape of the sentence this
+   module's header already makes about an interval: with no [extra] at all and one more
+   variable than there are values, every term of the core sum cancels and the degree does
+   not, so the row is [0 >= 1].
+
+   [halls] here is the WHOLE violating set -- |halls| = |vals| + 1 -- and that one
+   difference is the whole difference between a pruning and a refutation. It is reported
+   the way [pass] reports its own: handed to a mutator that must fail, so
+   [Store.apply]'s [Failed] arm pairs it with [Reason.none] and no `rup` conflict line
+   claims a counting argument as reverse unit propagation (I-X10, D-0040). *)
+let conflict_expl t ~vals ~halls =
+  let keep v = List.mem v vals in
+  Explanation.deferred (fun () ->
+      Explanation.combine
+        (core_summands t ~vals ~halls ~extra:None @ hall_cancels ~keep ~halls)
+        1)
+
 (* ---------------------------------------------------------------------- reasons *)
 
 (* A Hall variable is in the set because BOTH its bounds are where they are, so both are
@@ -758,11 +790,247 @@ let pass t store =
    so that cheaper propagators react first. Nothing about the interface below has to
    change for it: [consistency] would become [Domain] and this loop would keep its shape.
    It is not written, and this comment is not a promise that it is nearly written. *)
-let rec stage_bounds t store =
-  if try pass t store with Moved -> true then stage_bounds t store
+(* ================================================== M4-T2: stage 2, Regin's matching
+
+   THE FILTERING. Build the value graph (a variable on one side, a value on the other,
+   an edge when the value is in the variable's current domain) and take a maximum
+   matching. An edge that lies in NO maximum matching is a value no solution of the
+   constraint can give that variable, and removing all of them is domain consistency.
+
+   THE JUSTIFICATION, which is the part this row exists to settle. D-0004 has said since
+   2026-09-14 that Regin's pruning "does not have an obvious cheap justification". It
+   has one, it is the SAME counting argument M4-T1 already built, and the bridge is a
+   fact about matchings rather than anything new about proofs:
+
+     Let M be a matching saturating the variables, u a variable, v = M(u), and let
+     K be {u} together with every variable reachable from u in the digraph
+     "x -> x' when M(x') is in dom(x)". If no variable of K has a FREE value (one M
+     leaves unmatched) in its domain, then for every x in K and every w in dom(x), w is
+     M(x') for some x' -- and x' is reachable from x, hence in K. So
+
+         N(K) = M(K)   and   |N(K)| = |K|
+
+     -- K is a HALL SET, and its value set N(K) is exactly the set M matches it to. Any
+     y outside K therefore takes none of those values.
+
+     And conversely: if (y, v) is in no maximum matching then, writing u = M^-1(v), u can
+     reach neither y nor a free value (either would be an augmenting alternating walk
+     giving a matching that contains (y, v)), so the K built from u is tight, contains v
+     in its value set, and excludes y. **Every Regin pruning is witnessed by a Hall set**,
+     and enumerating K over every u is therefore COMPLETE -- which is what lets this
+     declare [Domain] rather than "stronger than bounds by an amount nobody measured".
+
+   So the derivation is [core_summands] over that K and that value set: one at-least-one
+   line per member of K, one at-most-one line per value of N(K) over K + {y}, and the
+   whole of K cancels. The only thing M4-T1's version could not do is the one thing a
+   non-interval value set forces -- narrowing a Hall variable's at-least-one line past an
+   interior HOLE -- and [gone] above is that, in the existing ADT.
+
+   **No new [Explanation] constructor.** The no-new-constructor rule has been spent once
+   in nine rows (D-0064) and is not spent here.
+
+   THE CONFLICT is the same statement one member short. If no matching saturates the
+   variables, the failed augmenting search from the first unmatched variable x0 has
+   visited a set of values B, every one of them matched (or it would have augmented) to a
+   variable it then visited; so A = {x0} + the variables matching B has N(A) = B and
+   |A| = |B| + 1. Removing B from x0 empties x0's domain -- dom(x0) is inside B -- and the
+   emptying is what makes the conflict provable, for the reason [pass] states above at
+   length: [Store.apply]'s [Failed] arm pairs the derivation with [Reason.none] so no
+   `rup` conflict line claims the counting argument as reverse unit propagation.
+
+   THE ALGORITHM is Kuhn's augmenting path and a reachability sweep per variable, which
+   is O(n^2 d) per pass rather than Regin's O(n^2 d) matching plus one Tarjan SCC pass.
+   Deliberately, and for M4-T1's reason restated: this row is an experiment about the
+   JUSTIFICATION, the models it may ship are bounded to single/low-double-digit domains
+   by the memory rule, and the SCC decomposition is an OPTIMISATION of the enumeration
+   above -- the strongly connected components ARE the sets K, found once instead of n
+   times. An implementation whose completeness is the paragraph above is worth more here
+   than one whose completeness is a citation. *)
+
+(* D-0043's conclusion for a value removal. Same rule as lib/core/prop/ne.ml's
+   [removal_conclusion] and for the same reason: removing a value AT a bound settles that
+   bound past any holes above (below) it and concludes the bound it landed on, while
+   removing an interior value concludes `x <> v`, which is a two-literal clause and not a
+   [Reason.fact] in either direction. *)
+let removal_conclusion y d w =
+  if w = Domain.lo d then (
+    let v = ref (w + 1) in
+    while !v <= Domain.hi d && Domain.is_hole d !v do
+      incr v
+    done;
+    Some (Reason.at_least ~name:y.s_name ~decl:y.s_dlo !v))
+  else if w = Domain.hi d then (
+    let v = ref (w - 1) in
+    while !v >= Domain.lo d && Domain.is_hole d !v do
+      decr v
+    done;
+    Some (Reason.at_most ~name:y.s_name ~decl:y.s_dhi !v))
+  else None
+
+(* One removal, with both halves of D-0026 built from the same snapshot, returning
+   through [Found]/[Moved] exactly as [pass]'s [push] does. *)
+let remove_one t store ~halls ~vals ~y_tm value =
+  let y = snap_of store y_tm in
+  let d = Store.get store y_tm.x in
+  let keep v = List.mem v vals in
+  let j =
+    Reason.because ~concludes:(removal_conclusion y d value)
+      (remove_reason ~keep halls y)
+      (remove_expl t ~vals ~halls ~y ~value)
+  in
+  match Store.remove store y_tm.x value j with
+  | Store.Conflict c -> raise (Found c)
+  | Store.Changed -> raise Moved
+  | Store.Unchanged -> ()
+
+(* One Regin pass. Raises [Moved] as soon as one removal lands, for the reason [pass]
+   gives: every set it reasons about is then computed from a CURRENT snapshot rather than
+   one an earlier removal in the same pass has invalidated. *)
+let regin_pass t store =
+  let n = Array.length t.terms in
+  if n > 0 then (
+    let doms = Array.map (fun tm -> Store.get store tm.x) t.terms in
+    let values =
+      Array.of_list
+        (List.sort_uniq compare
+           (List.concat_map Domain.to_list (Array.to_list doms)))
+    in
+    let nv = Array.length values in
+    let holds i vi = Domain.mem doms.(i) values.(vi) in
+    (* [mval.(i)] is the index of the value matched to variable [i], [mvar.(vi)] the
+       variable matched to value [vi]; [-1] is unmatched on both sides. *)
+    let mval = Array.make n (-1) and mvar = Array.make (Stdlib.max 1 nv) (-1) in
+    let rec augment i seen =
+      let rec go vi =
+        if vi >= nv then false
+        else if (not (holds i vi)) || seen.(vi) then go (vi + 1)
+        else (
+          seen.(vi) <- true;
+          if mvar.(vi) = -1 || augment mvar.(vi) seen then (
+            mvar.(vi) <- i;
+            mval.(i) <- vi;
+            true)
+          else go (vi + 1))
+      in
+      go 0
+    in
+    let failed = ref None in
+    for i = 0 to n - 1 do
+      if Option.is_none !failed then (
+        let seen = Array.make (Stdlib.max 1 nv) false in
+        if not (augment i seen) then failed := Some (i, seen))
+    done;
+    let snaps_of pick =
+      List.filter_map
+        (fun i -> if pick i then Some (snap_of store t.terms.(i)) else None)
+        (range 0 (n - 1))
+    in
+    match !failed with
+    | Some (x0, seen) ->
+        (* No matching saturates the scope. [seen] is the value set B the failed
+           augmenting search reached; every one of those values is matched (an unmatched
+           one would have ended the search successfully), and A is those variables
+           together with x0, so N(A) = B and |A| = |B| + 1. *)
+        let vals =
+          List.filter_map
+            (fun vi -> if seen.(vi) then Some values.(vi) else None)
+            (range 0 (nv - 1))
+        in
+        let halls =
+          snap_of store t.terms.(x0)
+          :: List.filter_map
+               (fun vi ->
+                 if seen.(vi) then Some (snap_of store t.terms.(mvar.(vi))) else None)
+               (range 0 (nv - 1))
+        in
+        let x0_tm = t.terms.(x0) in
+        let j =
+          Reason.because ~concludes:None Reason.none (conflict_expl t ~vals ~halls)
+        in
+        (* Must fail: the bound is one past the variable's own upper bound. *)
+        (match Store.set_lo store x0_tm.x (Domain.hi doms.(x0) + 1) j with
+        | Store.Conflict c -> raise (Found c)
+        | Store.Changed | Store.Unchanged ->
+            invalid_arg
+              "Alldiff.regin_pass: the emptying push did not fail, so the pigeonhole \
+               derivation would be attached to a change that landed")
+    | None ->
+        List.iter
+          (fun u ->
+            (* [ink]: {u} and everything reachable from it. *)
+            let ink = Array.make n false in
+            ink.(u) <- true;
+            let stack = ref [ u ] in
+            while !stack <> [] do
+              let i = List.hd !stack in
+              stack := List.tl !stack;
+              for j = 0 to n - 1 do
+                if (not ink.(j)) && mval.(j) >= 0 && holds i mval.(j) then (
+                  ink.(j) <- true;
+                  stack := j :: !stack)
+              done
+            done;
+            (* A free value anywhere in the set means it is not tight: the set can
+               absorb one more value than it has members. *)
+            let free_reachable =
+              List.exists
+                (fun i ->
+                  ink.(i)
+                  && List.exists
+                       (fun vi -> mvar.(vi) = -1 && holds i vi)
+                       (range 0 (nv - 1)))
+                (range 0 (n - 1))
+            in
+            if not free_reachable then (
+              let vals =
+                List.sort_uniq compare
+                  (List.filter_map
+                     (fun i -> if ink.(i) then Some values.(mval.(i)) else None)
+                     (range 0 (n - 1)))
+              in
+              let halls = snaps_of (fun i -> ink.(i)) in
+              List.iter
+                (fun y ->
+                  if not ink.(y) then
+                    List.iter
+                      (fun v ->
+                        if Domain.mem doms.(y) v then
+                          remove_one t store ~halls ~vals ~y_tm:t.terms.(y) v)
+                      vals)
+                (range 0 (n - 1))))
+          (range 0 (n - 1)))
+
+(* Stage 1, unchanged: Hall intervals over bounds. Returns whether it moved anything, so
+   [propagate] can decide whether to go on to stage 2. *)
+let rec stage_bounds t store ~moved =
+  if try pass t store with Moved -> true then stage_bounds t store ~moved:true else moved
+
+let rec stage_regin t store =
+  if try regin_pass t store; false with Moved -> true then stage_regin t store
+
+(* THE STAGING, and it is a measurement of GCS's rather than a choice of ours
+   (docs/GCS-COMPARISON.md section 3, docs/ROADMAP.md M4-T2): above 256 var-value pairs
+   the cheap pass returns WITHOUT an idempotence claim, so the propagators that are
+   cheaper than a matching get to react to what it inferred before the matching work is
+   paid for; at or below the cutoff both stages run in one call, because the staging
+   itself costs a wake-up that a small instance does not earn back.
+
+   "Without an idempotence claim" is about this CALL and not about I-P3. The instance
+   watches its own variables, so the prunings stage 1 just made re-enqueue it
+   ([Engine.watchers_of_new_entries]), and at the engine's fixpoint -- which is the state
+   I-P2 and the M2-T10 consistency oracle are both statements about -- stage 1 has
+   nothing left to say and stage 2 has run. [Engine.check_fixpoint] is what would catch
+   it if that were not so, and it re-runs this function directly.
+
+   The cutoff is a field rather than a constant so that a test can drive both branches;
+   it is NOT re-measured here, and no model in this suite comes within two orders of
+   magnitude of it, so every shipped proof takes the both-stages-in-one-call branch. *)
+let pair_count t store =
+  Array.fold_left (fun acc tm -> acc + Domain.size (Store.get store tm.x)) 0 t.terms
 
 let propagate t store =
   try
-    stage_bounds t store;
+    let moved = stage_bounds t store ~moved:false in
+    if (not moved) || pair_count t store <= t.cutoff then stage_regin t store;
     Propagator.Fixpoint
   with Found c -> Propagator.Conflict c
