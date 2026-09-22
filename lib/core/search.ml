@@ -673,12 +673,86 @@ let first_fail store cands =
   done;
   !best
 
+(* Input order (docs/SPEC.md 3.4): the FIRST unfixed variable in the order the caller
+   handed them over. [unfixed] builds its array by ascending store index, and
+   `lib/flatzinc/compile.ml` builds the store in `Model.vars` order, so at the top level
+   that is declaration order; inside a [phase] below it is the order the annotation's
+   array wrote, which is the order `int_search(vs, input_order, ...)` actually means. *)
+let input_order _store cands = cands.(0)
+
 (* docs/SPEC.md 3.4, and the default of [solve]: first-fail, min-value branching. This is
-   the normative strategy and the only one the CLI can reach; `lib/flatzinc/compile.ml`
-   rejects an annotation asking for anything else rather than silently ignoring it. *)
+   the normative default -- what a model with NO search annotation gets, and what
+   [sequence] below falls back to for the variables an annotation did not mention. *)
 let spec_order store cands =
   let v = first_fail store cands in
   { d_var = v; d_split = Domain.lo (Store.get store v); d_high_first = false }
+
+(* ------------------------------------------------------- M7-T2: annotated search
+
+   A FlatZinc `int_search`/`bool_search` annotation is two independent choices -- which
+   variable, then how to split it -- over a NAMED SUBSET of the variables, and
+   `seq_search` is a list of those consulted in order. So the order is factored the same
+   way: a [var_select] picks from candidates, a [val_select] turns the pick into a
+   decision, and a [phase] pairs them with the subset they govern.
+
+   Splitting the value choice out is what makes obligation (a) of M7-T2 testable at all:
+   [indomain_min] and [indomain_max] produce DIFFERENT decisions on the same variable, and
+   a test can assert on the decision rather than on the answer.
+
+   These constructors live in `core` and not in `flatzinc` because [order] is core's type
+   and the dependency runs one way (CLAUDE.md, "Where things are"). `compile.ml` supplies
+   the subsets; it does not get to define what an order is. *)
+
+type var_select = Store.t -> Var.t array -> Var.t
+type val_select = Store.t -> Var.t -> decision
+
+(* [d_split] must lie in [lo, hi) ([type decision]); both of these are in range because a
+   candidate is by construction unfixed, so [hi > lo].
+
+   indomain_min splits at [lo] and takes the LOW side first -- that branch fixes [x = lo].
+   indomain_max splits at [hi - 1] and takes the HIGH side first -- that branch fixes
+   [x = hi]. Neither is "the other one reversed": the split point moves too, because
+   trying the largest value first is only one decision if the branch that assumes it
+   fixes the variable. *)
+let indomain_min store v =
+  { d_var = v; d_split = Domain.lo (Store.get store v); d_high_first = false }
+
+let indomain_max store v =
+  { d_var = v; d_split = Domain.hi (Store.get store v) - 1; d_high_first = true }
+
+(* One `int_search(...)` annotation. [p_vars] is the annotation's array, IN THE ORDER IT
+   WAS WRITTEN, which is what [input_order] reads; it may name a variable twice and may
+   omit variables entirely, and neither is this type's problem. *)
+type phase = { p_vars : Var.t array; p_var : var_select; p_val : val_select }
+
+(* `seq_search`: consult each phase in turn, and take the first whose subset still holds
+   an unfixed variable. That IS the composition rule -- a later annotation is reached only
+   once every variable of every earlier one is fixed -- and it is M7-T2 obligation (b).
+
+   [fallback] is what happens when no phase has an unfixed variable left but the search
+   still needs a decision, which is the ordinary case: a FlatZinc annotation is not
+   obliged to mention every variable, and the solver must still be able to branch on the
+   ones it did not. [Search] would otherwise have no decision to make and the model would
+   be answered wrong, so the fallback is not optional and not a default -- it is stated.
+   `compile.ml` passes [spec_order], and docs/SPEC.md 3.4 needs to say so. *)
+let sequence ?(fallback = spec_order) (phases : phase list) : order =
+ fun store cands ->
+  let live = Hashtbl.create (2 * Array.length cands) in
+  Array.iter (fun v -> Hashtbl.replace live (Var.to_int v) ()) cands;
+  let rec go = function
+    | [] -> fallback store cands
+    | ph :: rest -> (
+        let sub =
+          Array.of_seq
+            (Seq.filter
+               (fun v -> Hashtbl.mem live (Var.to_int v))
+               (Array.to_seq ph.p_vars))
+        in
+        match Array.length sub with
+        | 0 -> go rest
+        | _ -> ph.p_val store (ph.p_var store sub))
+  in
+  go phases
 
 (* A branching order driven by [r], for the fuzzer (test/unit/test_random.ml). Every
    draw comes from [r], so one seed reproduces one whole tree. Three draws per decision
