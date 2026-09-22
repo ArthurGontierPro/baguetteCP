@@ -635,51 +635,70 @@ exception Moved
 
 let live_positions t store = List.filter (fun p -> View.mem store t.pos p) t.decl_pos
 
-(* A bound the SEARCH established, stated as the trace line that already states it.
+(* A bound the SEARCH established, cited by [Explanation.Defining] (D-0064,
+   docs/DECISIONS.md D-0064; lib/core/explanation.ml's header, "[Defining], and why it
+   is a SUMMAND"). M4-T3 branched before that constructor existed and stood in with
+   [Explanation.term c (Explanation.clause [l])] -- the right arithmetic wearing the
+   wrong label, per explanation.ml's own words -- which cancels the term but, because a
+   [Clause] may be any width, is not an EXACT cancellation, and trips
+   [Search.rests_on_a_clause] into routing every conflict that uses it the D-0022 way
+   (`conclusion UNSAT` citing the empty clause, this module's own [pol] left decorative).
+   [Explanation.defining] cites a UNIT line and is exact, so a root conflict built only
+   from [Defining] summands closes on its own [pol].
 
-   This is the one thing [Explanation.t] cannot say -- "the id of the line that
-   establishes this fact" is D-0009's open ADT gap verbatim -- so it goes through
-   [Explanation.clause], whose [Justify.emit_clause] consults the M2-T9 claim index and
-   hands back the existing line, minting nothing. lib/core/prop/alldiff.ml's
-   [moved_bound_cancels] reaches for it in the same position and the trade is the same,
-   so it is worth stating twice:
+   [established_at_root] mirrors lib/core/prop/alldiff.ml:179's function of the same
+   name (that module is M4-T2's, not duplicated here as a shared function, since
+   alldiff.ml is read-only to this task): the level the trail entry supporting a bound
+   was pushed at, or 0 for a bound that has never moved. A bound the ROOT fixpoint set
+   is a consequence of the model and stays true and citable at ANY search depth; one a
+   DECISION set is not (D-0064's level rule) -- so, unlike the old blanket "only at
+   [Store.level store] = 0", the check below is per LITERAL, not per conflict, and it
+   fires above level 0 exactly when the specific bound cited happened to be a root one.
+   Every call site below computes it EAGERLY, never inside an [Explanation.deferred]
+   thunk: the support arrays this reads are live store state that a later backtrack can
+   invalidate, the same reason alldiff.ml's [snap_of] snapshots [s_lo_root]/[s_hi_root]
+   before wrapping anything in [deferred]. *)
+let established_at_root store v ~lower =
+  let sup = if lower then Store.lo_support store v else Store.hi_support store v in
+  sup = Store.no_support || Store.level_of_index store sup = 0
 
-   - sound only at LEVEL 0, where a bound is a consequence of the model rather than of a
-     decision. Every caller below is guarded on the level and returns the uncancelled
-     derivation under a decision -- not a loss, because only a ROOT conflict's derivation
-     is cited as a contradiction and under a decision D-0018's nogood closes the branch.
-   - a conflict that needs it DOES rest on a clause, so [Search.rests_on_a_clause] routes
-     it the D-0022 way and this module's [pol] is decorative FOR THAT CONFLICT (D-0057).
-     It is not decorative for a conflict that needs no cancellation -- every position
-     excluded by the result's own DECLARED range -- and test/models/element_range_unsat.fzn
-     is that case, with `conclusion UNSAT` citing this module's [pol] itself.
-
-   Why citing the derivation instead is NOT available, which is the half worth recording
-   because it is the obvious fix and it does not work: [Store.hi_reasons] would hand back
-   the explanation that moved the bound, and adding it is exactly what
-   lib/core/prop/linear.ml's [explain_cross_conflict] does. But a [Linear] explanation
-   derives a statement in the order encoding's LADDER currency (D-0010, lib/core/ladder.ml)
-   -- a sum over every rung of the variable -- whereas every residue here is a SINGLE
-   order literal. The two do not cancel. alldiff.ml's header records the same finding from
-   the direct-encoding side; this is the bound-literal side of it. *)
-let states lit = Explanation.clause [ lit ]
-
-(* One cancelling line per copy of each residue literal. The values are read off the
-   residues rather than from the store, so the line cancelled is the bound the exclusion
-   actually read, and the multiplicity is the number of exclusions that read it. *)
-let residue_cancel t ~dead ~level =
-  if level > 0 then []
-  else
-    let rn = match t.rname with Some x -> x | None -> "" in
-    let group sel lit_of =
-      match List.filter_map (fun (_, r) -> sel r) dead with
-      | [] -> []
-      | v :: _ as vs -> [ Explanation.term (List.length vs) (states (lit_of v)) ]
-    in
-    group (function R_res_hi h -> Some h | _ -> None) (fun h -> Lit.le rn h)
-    @ group (function R_res_lo l -> Some l | _ -> None) (fun l -> Lit.ge rn l)
-    @ group (function R_idx_lo l -> Some l | _ -> None) (fun l -> Lit.ge t.iname l)
-    @ group (function R_idx_hi h -> Some h | _ -> None) (fun h -> Lit.le t.iname h)
+(* One cancelling line per copy of each residue literal, when established at root;
+   otherwise the group contributes nothing and the residue's term stays in the
+   at-least-one row uncancelled -- not a loss, because only a ROOT conflict's derivation
+   is cited as a contradiction, and under a decision D-0018's nogood closes the branch
+   regardless. The values are read off the residues rather than from the store, so the
+   line cancelled is the bound the exclusion actually read, and the multiplicity is the
+   number of exclusions that read it. Called EAGERLY (see above), never inside the
+   [Explanation.deferred] its caller wraps around the combine. *)
+let residue_cancel t store ~dead =
+  let rn = match t.rname with Some x -> x | None -> "" in
+  let group sel lit_of var_opt ~lower =
+    match List.filter_map (fun (_, r) -> sel r) dead with
+    | [] -> []
+    | vs -> (
+        match var_opt with
+        | None -> []
+        | Some var ->
+            if established_at_root store var ~lower then
+              [ Explanation.defining (List.length vs) (lit_of (List.hd vs)) ]
+            else [])
+  in
+  group
+    (function R_res_hi h -> Some h | _ -> None)
+    (fun h -> Lit.le rn h)
+    (View.base_var t.res) ~lower:false
+  @ group
+      (function R_res_lo l -> Some l | _ -> None)
+      (fun l -> Lit.ge rn l)
+      (View.base_var t.res) ~lower:true
+  @ group
+      (function R_idx_lo l -> Some l | _ -> None)
+      (fun l -> Lit.ge t.iname l)
+      (Some t.ibase) ~lower:true
+  @ group
+      (function R_idx_hi h -> Some h | _ -> None)
+      (fun h -> Lit.le t.iname h)
+      (Some t.ibase) ~lower:false
 
 (* Every declared position is impossible, so the at-least-one line has nothing left and
    the sum IS [0 >= 1] -- once the bound literals the exclusions carried are cancelled.
@@ -692,15 +711,15 @@ let residue_cancel t ~dead ~level =
    arrangement through [Store.apply]'s [Failed] arm; saying it here is the same thing
    said where it can be read. *)
 let no_position_conflict t store =
-  let level = Store.level store in
   let dead = dead_positions t store ~live:[] in
+  let cancel = residue_cancel t store ~dead in
   Store.conflict store
     (Reason.because ~concludes:None Reason.none
        (Explanation.deferred (fun () ->
             Explanation.combine
               (cite (need "at-least-one" (Encoding.at_least_one_id t.enc t.iname))
                :: List.map (fun (e, _) -> Explanation.term 1 e) dead
-              @ residue_cancel t ~dead ~level)
+              @ cancel)
               1)))
 
 (* The three ways a pruning of the RESULT can run into a bound the result already has.
@@ -712,43 +731,62 @@ let no_position_conflict t store =
 (* Pushing lo(c) to [a] against hi(c) = [h < a]: [c_ge_a] against [~c_ge_(h+1)], joined
    by the rungs between them. Above the declared range there is no [c_ge_a] at all and
    the derivation is already [0 >= 1]. *)
-let lo_push_conflict t ~expl ~a ~h ~level =
+let lo_push_conflict t store ~expl ~a ~h =
+  let cite_defining =
+    Option.is_some t.rname && a <= t.rdhi
+    && established_at_root store (Option.get (View.base_var t.res)) ~lower:false
+  in
   Explanation.deferred (fun () ->
-      if level > 0 || Option.is_none t.rname || a > t.rdhi then expl
+      if not cite_defining then expl
       else
         let rn = Option.get t.rname in
         Explanation.combine
           (Explanation.term 1 expl
-          :: Explanation.term 1 (states (Lit.le rn h))
+          :: Explanation.defining 1 (Lit.le rn h)
           :: List.map (fun u -> cite (res_rung t u)) (range (h + 1) (a - 1)))
           1)
 
-let hi_push_conflict t ~expl ~b ~l ~level =
+let hi_push_conflict t store ~expl ~b ~l =
+  let cite_defining =
+    Option.is_some t.rname && b >= t.rdlo
+    && established_at_root store (Option.get (View.base_var t.res)) ~lower:true
+  in
   Explanation.deferred (fun () ->
-      if level > 0 || Option.is_none t.rname || b < t.rdlo then expl
+      if not cite_defining then expl
       else
         let rn = Option.get t.rname in
         Explanation.combine
           (Explanation.term 1 expl
-          :: Explanation.term 1 (states (Lit.ge rn l))
+          :: Explanation.defining 1 (Lit.ge rn l)
           :: List.map (fun u -> cite (res_rung t u)) (range (b + 1) (l - 1)))
           1)
 
 (* Removing the last value: [~c_ge_v \/ c_ge_(v+1)] against the two lines that pin
    [c = v]. Either half is absent at a declared bound, where the residue it would cancel
-   is the constant false and the derivation is that much closer to [0 >= 1] already. *)
-let hole_conflict t ~expl ~v ~level =
+   is the constant false and the derivation is that much closer to [0 >= 1] already; a
+   half whose bound was established under a DECISION rather than the root is treated the
+   same way -- omitted, not cited (D-0064's level rule), which is why the two halves are
+   checked independently rather than gating the whole function on one level. *)
+let hole_conflict t store ~expl ~v =
+  let lo_ok, hi_ok =
+    match t.rname with
+    | None -> (false, false)
+    | Some _ ->
+        let rv = Option.get (View.base_var t.res) in
+        ( v > t.rdlo && established_at_root store rv ~lower:true,
+          v < t.rdhi && established_at_root store rv ~lower:false )
+  in
   Explanation.deferred (fun () ->
-      if level > 0 || Option.is_none t.rname then expl
-      else
-        let rn = Option.get t.rname in
-        let halves =
-          (if v > t.rdlo then [ Explanation.term 1 (states (Lit.ge rn v)) ] else [])
-          @ if v < t.rdhi then [ Explanation.term 1 (states (Lit.le rn v)) ] else []
-        in
-        match halves with
-        | [] -> expl
-        | _ -> Explanation.combine (Explanation.term 1 expl :: halves) 1)
+      match t.rname with
+      | None -> expl
+      | Some rn -> (
+          let halves =
+            (if lo_ok then [ Explanation.defining 1 (Lit.ge rn v) ] else [])
+            @ if hi_ok then [ Explanation.defining 1 (Lit.le rn v) ] else []
+          in
+          match halves with
+          | [] -> expl
+          | _ -> Explanation.combine (Explanation.term 1 expl :: halves) 1))
 
 let conflict_of store why =
   Store.conflict store (Reason.because ~concludes:None Reason.none why)
@@ -786,7 +824,6 @@ let filter_index t store =
 let filter_result t store =
   let live = live_positions t store in
   if live = [] then raise (Found (no_position_conflict t store));
-  let level = Store.level store in
   let vals = List.map (fun p -> t.values.(p)) live in
   let a = List.fold_left Stdlib.min (List.hd vals) vals in
   let b = List.fold_left Stdlib.max (List.hd vals) vals in
@@ -802,7 +839,7 @@ let filter_result t store =
      in
      match View.set_lo store t.res a (justified ~concludes expl) with
      | Store.Conflict _ ->
-         raise (Found (conflict_of store (lo_push_conflict t ~expl ~a ~h ~level)))
+         raise (Found (conflict_of store (lo_push_conflict t store ~expl ~a ~h)))
      | Store.Changed -> raise Moved
      | Store.Unchanged -> ());
   (if b < View.hi store t.res then
@@ -813,7 +850,7 @@ let filter_result t store =
      in
      match View.set_hi store t.res b (justified ~concludes expl) with
      | Store.Conflict _ ->
-         raise (Found (conflict_of store (hi_push_conflict t ~expl ~b ~l ~level)))
+         raise (Found (conflict_of store (hi_push_conflict t store ~expl ~b ~l)))
      | Store.Changed -> raise Moved
      | Store.Unchanged -> ());
   (* Interior values no live position carries -- the half of DOMAIN consistency that
@@ -830,7 +867,7 @@ let filter_result t store =
             let expl = hole_expl t store ~live ~v in
             match View.remove store t.res v (justified ~concludes:None expl) with
             | Store.Conflict _ ->
-                raise (Found (conflict_of store (hole_conflict t ~expl ~v ~level)))
+                raise (Found (conflict_of store (hole_conflict t store ~expl ~v)))
             | Store.Changed -> raise Moved
             | Store.Unchanged -> ())
         (range (Domain.lo d + 1) (Domain.hi d - 1))
