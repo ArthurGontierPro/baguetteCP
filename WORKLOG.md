@@ -10,6 +10,48 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
+**AN OVERNIGHT CORPUS RUN IS IN FLIGHT ON `fataepyc-07`. Do not re-launch it; read it.**
+
+Launched 2026-09-22 ~16:05 from `/scratch/arthur/corpus_run.sh`, **detached (`setsid nohup`)**,
+64-way parallel, 32 GB ulimit per job. It survives the SSH session that started it.
+
+- **results**: `/scratch/arthur/corpus-out/results.tsv` — TSV, one line per instance:
+  `id <TAB> outcome <TAB> fzn-bytes <TAB> pbp-bytes <TAB> detail`
+- **per-instance logs**: `/scratch/arthur/corpus-out/log/`
+- **completion marker**: a final `DONE-<epoch>` line in `results.tsv`. **If that line is absent
+  the run was cut off**, and the file is partial — say so rather than reporting the total.
+- 436 instances queued (every `.mzn` in the corpus, smallest data file each).
+
+**It flattens with the M7-T3 library** (`MZN_SOLVER_PATH=/scratch/arthur/baguette/tools`), so
+constraints stay high-level, and it runs the node's `main` at `b6fa825` — M7-T1's unlimited
+defaults and M7-T2's annotations both in.
+
+**Every solved instance has its proof checked by veripb 3.0.2**, and `PROOF-REJECTED` is its own
+bucket, never folded into a failure. That bucket is the point.
+
+**At 232 of 436 the distribution was**: `REFUSED-MODEL` 186, `FLATTEN-FAIL` 25,
+`REFUSED-LIMIT` 14, **`PROOF-REJECTED` 3**, `SOLVE-ERR-134` 2, `OK-PROOF-VERIFIED` 2. **Read
+that as provisional**: it is the first half of an alphabetical walk, so it is 2008–2012-heavy
+and the early years are the least likely to flatten at all.
+
+**Three things already visible, for whoever picks this up:**
+
+1. **`PROOF-REJECTED` is not rare.** Three in the first 232, against two verified. **M7-T6 is
+   not an exotic corner** — and remember D-0066: on an UNSAT instance the same defect is
+   *accepted silently*, so this bucket is a **lower bound**.
+2. **`REFUSED-MODEL` (exit 2) dominates at 186.** That is the front end refusing a builtin or a
+   declaration, and D-0067 says the residual wall is **set-literal domains**. Worth confirming
+   from the logs before anyone builds anything.
+3. **Some `FLATTEN-FAIL` is the harness, not the corpus** — e.g. *"no function or predicate with
+   this signature found: `int_search(array[int] of var int,string,string,string)`"*, which is a
+   2008-era annotation syntax MiniZinc 2.10.1 no longer accepts. **Do not count those as
+   unsupported instances.** Separate harness failures from solver findings before quoting any
+   number.
+
+**SOLVE-ERR-134 is SIGABRT** (134 = 128+6) and is unexplained — two instances. That is worth a
+look on its own; an abort is not a refusal.
+
+
 **Wave twenty-six is COMPLETE: M7-T1, M7-T2 and M7-T3 all merged, released and pushed.**
 
 **Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `scripts/**`, `bench/**`,
