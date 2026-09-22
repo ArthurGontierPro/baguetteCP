@@ -4822,3 +4822,85 @@ so a bad order yields a *different* proof the checker still accepts. That is why
 obligation (a) asserts on the **decision** — `d_var`, `d_split`, `d_high_first` — and never on
 the answer. Two strategies that agree on every test are not tested, and a proof that verifies
 says nothing about whether the order was honoured.
+
+## D-0067  Keeping constraints high-level: 112 → 300 instances, and a pre-existing RUP defect it surfaced
+
+**Status**: **ACCEPTED**, implemented by M7-T3 (2026-09-22, agent-mznlib). `mznlib/`,
+`tools/baguette.msc`. The library is the deliverable; **the defect it found is the more
+important result** and is M7-T6.
+
+### What the library buys
+
+Flattening against a library that declares what baguette actually supports, rather than an
+empty one that decomposes everything:
+
+| | empty lib | baguette lib |
+|---|---|---|
+| flatten at all | 301 | 300 |
+| **flatten into baguette's subset** | **112** | **300** |
+| `all_different_int` rows surviving | **0** | **903**, across 66 instances |
+
+On the **112 instances supported under both** — where nothing new had to be decomposed, so
+the comparison is like-for-like — keeping constraints native is a clear win: `2022_sudoku_opt`
+**6520 rows → 76** (576 KB → 70 KB), `2013_ghoulomb` 6910 → **162**, `2023_sudoku_fixed`
+1474 → **48**.
+
+**The Hall path works end to end**, on a controlled pigeonhole instance: `.fzn` 1412 → 651 B,
+`.pbp` 19 532 → 9 435 B, **both `s VERIFIED UNSATISFIABLE`**. That is D-0061's derivation
+paying for itself on real input.
+
+### A correction to my own figure
+
+I cited 15 K → 88 K on `accap` as the cost of decomposition. Re-measured: 15 177 → 89 903
+(empty) → **89 918 (baguette lib)**. **The library does not help that instance at all** — its
+blowup is `diffn`, for which baguette has no propagator, so std's decomposition stands either
+way. **The figure is real but it is a propagator gap, not a library gap**, and I had drawn the
+wrong conclusion from it.
+
+### The defect: a correct answer whose proof is rejected
+
+`test/models/rup_level0_nogood_sat.fzn` — **nine variables, five constraints, no global at
+all.** The solver answers `xs = [1,1,9,1,1,1,2,1,1]`, which satisfies every constraint by
+inspection. veripb 3.0.2 rejects the proof at the **level-0 backtrack nogood**:
+
+> The constraint is not implied by reverse unit propagation (RUP) from core and derived
+> database.
+
+**Reproduced independently by the orchestrator on `main`.**
+
+**It is pre-existing, and that was established rather than assumed.** The same 2001 fuzz seeds
+gave **3 RUP failures with `all_different` native and 5 with it decomposed** to pairwise
+`int_ne` — overlapping but not identical sets. So the defect is upstream of the global
+entirely, which is why the reproducer above has no global in it.
+
+**This is M1-T44's shape**, which this project once called its highest-priority open defect:
+the answer is right, every step looks valid, and the *artefact* is what is wrong. It is
+**M7-T6**, and the model is in `PENDING` rather than absent, so it is visible on every run.
+
+> Note the interaction with **D-0066**: `rup` is vacuous over a contradictory database, so a
+> rejection like this one can only be *seen* on a **satisfiable** model. This reproducer is
+> SAT. A UNSAT instance of the same bug would have been accepted silently.
+
+### A second, degenerate defect
+
+A model with **no variables and no constraints** solves and emits a proof veripb rejects —
+*"No solution has been logged in the proof and no solution has been given in the conclusion."*
+Both library arms. Degenerate, but real, and it is folded into M7-T6.
+
+### The blocker is no longer width — it is set-literal domains
+
+Of 78 refusals: **20 are set-literal domains**, 16 width. `var {1,2,3,4,5,6,8,9,10,11,12}: x;`
+is refused because `Encoding.declare_int` takes only `~lo` and `~hi`. **MiniZinc emits these
+routinely**, and neither `--only-range-domains` nor `mzn_opt_only_range_domains` has any effect
+in 2.10.1 — the hole-y domains survive verbatim, so **no `mznlib` can work around it**.
+
+`lib/core/domain.ml` already carries holes; the gap is in the *encoding*, not the domain. That
+is the single biggest thing between this library and real instances, and it is bigger than the
+width cap M7-T1 just removed.
+
+### What the library deliberately does not define
+
+`int_pow` with a variable exponent, and everything float, are left undefined so the front end
+**names them and exits non-zero** rather than the library emitting a wrong decomposition.
+`cumulative`, `diffn`, `table`, `regular`, `circuit`, `global_cardinality` have no baguette
+propagator, so std's decomposition stands — that is where the remaining inflation lives.
