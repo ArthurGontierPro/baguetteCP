@@ -1,13 +1,23 @@
 (* all_different_int: the variables take pairwise distinct values.
 
-   Consistency level: BOUNDS (docs/SPEC.md 3.2, docs/GLOSSARY.md). This propagator reads
-   and writes lo/hi only; it never punches a hole. That is stage 1 of the two-stage
-   design docs/ROADMAP.md M4-T1/M4-T2 and docs/GCS-COMPARISON.md section 3 both specify --
-   "one constraint, one propagator, the consistency tag choosing the shape" -- and the
-   second stage (Regin, domain-consistent) is deliberately NOT here. D-0004 is the record
-   and it is OPEN: bounds first, precisely so that the matching/SCC pass has a working,
-   proof-logged baseline to be evaluated against. [stage_bounds] below is named for that
-   split, and [propagate] is the one place a second stage would be sequenced.
+   Consistency level: DOMAIN (docs/SPEC.md 3.2, docs/GLOSSARY.md), as of M4-T2. ONE
+   propagator, ONE consistency tag, TWO STAGES -- the design docs/ROADMAP.md M4-T1/M4-T2
+   and docs/GCS-COMPARISON.md section 3 both specify:
+
+     stage 1  [stage_bounds]  Hall intervals over lo/hi. Reads and writes bounds only.
+     stage 2  [stage_regin]   a maximum matching over the value graph, which prunes
+                              VALUES and therefore punches holes.
+
+   [propagate] sequences them and is where the staging rule lives. The tag is what tells
+   [Engine] to wake this instance on an interior hole and not only on a bound move, and
+   the M2-T10 oracle (BAGUETTE_CONSISTENCY=1) is what holds the declaration to its word
+   at every search node.
+
+   D-0004 asked whether Regin's pruning has a justification at all. IT DOES, it is the
+   same counting argument as stage 1 over a value SET rather than an interval, and the
+   existing [Explanation] ADT expresses it with NO NEW CONSTRUCTOR -- see [regin_pass]
+   for the matching fact that bridges the two, and [gone] for the one thing an interval
+   never forced.
 
    ---------------------------------------------------------------------------
    Filtering: Hall intervals
@@ -822,12 +832,6 @@ let pass t store =
     los;
   false
 
-(* Stage 1 of the two-stage design (D-0004, GCS-COMPARISON section 3): Hall intervals
-   over bounds. A second stage -- the matching/SCC pass M4-T2 owns -- would be sequenced
-   after this one *in this function*, and would run only when this pass inferred nothing,
-   so that cheaper propagators react first. Nothing about the interface below has to
-   change for it: [consistency] would become [Domain] and this loop would keep its shape.
-   It is not written, and this comment is not a promise that it is nearly written. *)
 (* ================================================== M4-T2: stage 2, Regin's matching
 
    THE FILTERING. Build the value graph (a variable on one side, a value on the other,
