@@ -4759,3 +4759,66 @@ the same shape as the width lint's own history, and as D-0058's two blind lanes.
 three memory-ceiling incidents behind it. The solver's capability limit was a different thing
 wearing the same number, and separating them is what this row is. The over-wide test model lives
 in a `mktemp -d` and is deleted; nothing wide is committed.
+
+## D-0066  `rup` is vacuous over a contradictory database, and 26 lanes may be testing nothing
+
+**Status**: **ACCEPTED as a measurement; the audit it demands is M7-T5 and is NOT done.**
+Found by M7-T2 (2026-09-22, agent-annot) while building a break lane, and **re-verified
+independently by the orchestrator** before recording.
+
+### The measurement
+
+Take `test/models/ne_eq_unsat.fzn`'s honest proof, which the checker accepts. Corrupt one
+`rup` line two ways:
+
+| corruption to `@c5 rup +1 y_ge_2 +1 x_ge_2 >= 1` | veripb 3.0.2 says |
+|---|---|
+| **a literal removed** (`+1 x_ge_2 >= 1`) | **`s VERIFIED UNSATISFIABLE`** |
+| **a literal's polarity flipped** (`+1 ~y_ge_2 …`) | **`s VERIFIED UNSATISFIABLE`** |
+
+Both are **accepted**. The reason is not a checker bug: **over a contradictory database
+everything is RUP**, because unit propagation reaches a conflict from any claim at all.
+
+> **Any break lane that asserts a `rup` rejection over an UNSAT model is testing nothing.**
+
+### This is D-0053's finding, one rule over
+
+D-0053 recorded that **`red` is vacuous over a contradictory database** — a `red` line is
+accepted with a wrong witness or no witness at all. This is the same vacuity for **`rup`**,
+and it is the more consequential of the two: `rup` is everywhere in these proofs, and most
+models in this suite are UNSAT.
+
+`CLAUDE.md`'s proof-discipline list already says *"verify a `red` over a **satisfiable**
+model, or you have tested nothing."* **The same sentence is now needed for `rup`.**
+
+### The exposure, measured but not yet audited
+
+**26 lanes across 9 files** assert a RUP rejection: `test_prop` (4), `test_pb` (6),
+`test_trace` (5), `test_learn` (3), `test_matrix` (3), `test_endtoend` (2), `test_proof` (1),
+`test_justify` (1), `test_random` (1). Several of those files are dominated by UNSAT models —
+`test_prop` mentions `_unsat` 23 times, `test_proof` 9, `test_learn` 8.
+
+**How many of the 26 are vacuous is unknown.** A lane is only vacuous if its corrupted proof
+is over a *contradictory* database; a lane over a SAT model, or one asserting a **judgement**
+rather than a RUP failure, is unaffected. **Nobody has checked which is which**, and the
+number is not guessable — M2-T14 looked for exactly this shape from a different direction and
+found four.
+
+**That audit is M7-T5.** It is not done, and this record exists so the gap is visible rather
+than implied.
+
+### What a correct lane looks like
+
+M7-T2's own BREAK 2 is the pattern: it flips a unit nogood's polarity over a **satisfiable**
+model, and the checker then says *"The constraint is not implied by reverse unit propagation
+(RUP)…"* for a real reason. Its BREAK 1 is the other correct pattern — it does not reach the
+checker at all, because `Search.branch` refuses the malformed order first, and the lane
+asserts *that* wording instead.
+
+### A second-order point worth keeping
+
+**A merely wrong search order is not a proof defect.** Any tree that partitions is refutable,
+so a bad order yields a *different* proof the checker still accepts. That is why M7-T2's
+obligation (a) asserts on the **decision** — `d_var`, `d_split`, `d_high_first` — and never on
+the answer. Two strategies that agree on every test are not tested, and a proof that verifies
+says nothing about whether the order was honoured.
