@@ -10,6 +10,38 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
+**Wave twenty-five is running: M4-T2 (agent-regin) and M4-T8 (agent-elemdef).**
+
+**agent-regin holds** `lib/core/prop/alldiff.ml`, `lib/core/{explanation,justify,search}.ml`,
+`lib/proof/encoding.ml`, and `test/unit/{test_prop,test_justify,test_trace,test_matrix,test_random}.ml`.
+M4-T2 is Régin — **the second stage of M4-T1's propagator, not a second propagator**;
+`alldiff.ml`'s `stage_bounds` is named for the split and `propagate` is where the matching pass
+sequences. Its row calls the proof story **research-grade**, and D-0004 stays OPEN.
+
+**It also owns the latent defect D-0064 left bounded** (`search.ml:1107`): an `int_lin_le`
+conflict citing an alldiff entry with **no** moved bound would still be mis-routed by
+`rests_on_a_clause`. No shipped model reaches it. That is squarely Régin's subject matter, which
+is why `search.ml` goes here rather than to the smaller row.
+
+**agent-elemdef holds** `lib/core/prop/element.ml` and
+`test/unit/{test_endtoend,test_compile,test_flatzinc}.ml`, plus `test/models/**`. M4-T8 is the
+swap M4-T3 could not make: it branched before D-0064, so it stands in with
+`Explanation.term c (Explanation.clause [l])`, which `explanation.ml`'s header calls **"the right
+arithmetic wearing the wrong label"**.
+
+**Conditions for M4-T2 are as good as they will get**: M4-T1 proved `Combine`/`Weaken`/`Model_row`
+carry a real global (D-0061), and D-0064 gave the ADT the piece that was missing. If Régin needs
+more than that, **the argument is the deliverable** — `explanation.ml`'s no-new-constructor rule
+stands, and it has now been spent exactly once in nine rows.
+
+**Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `scripts/**`, `bench/**`,
+`bin/main.ml`, `lib/flatzinc/**`, `lib/core/dune` and all merging.
+
+Wave twenty-four (M4-T7, M4-T3) is merged, released and pushed. **Every builtin in SPEC §2.1 is
+now implemented** — `planned` is empty. Baseline: **2663 ok / 0 FAIL, 280 matrix, 44 mutation,
+85/85 models**.
+
+
 **Wave twenty-four is running: M4-T7 (agent-defid) and M4-T3 (agent-element).**
 
 **agent-defid holds** `lib/core/{explanation,justify}.ml`, `lib/core/prop/alldiff.ml`, and
