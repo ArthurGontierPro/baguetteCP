@@ -81,7 +81,11 @@ declarative data, justifications stay the reified cutting-planes expression. The
 reasoning is recorded there, as this record asked.
 
 ## D-0004  all_different justification strategy
-Status: OPEN — M4
+Status: **CLOSED — ACCEPTED, 2026-09-22 by M4-T2.** Régin's pruning **does** have a
+cutting-planes justification, and **the existing ADT expresses it with no new constructor.**
+The resolution is recorded at the bottom of this record.
+
+*(Original status line, kept: OPEN — M4)*
 Date: 2026-09-14
 
 Context: Hall-interval pruning for bounds-consistent `all_different` has a known
@@ -90,6 +94,41 @@ have an obvious cheap one.
 
 Decision: pending. M4-T1 does bounds consistency first precisely so that M4-T2 can be
 evaluated against a working baseline.
+
+### RESOLUTION, 2026-09-22 (M4-T2, agent-regin)
+
+**The bridge is a fact about matchings, not about proofs.** With `M` a matching saturating the
+variables, `u` a variable, and `K = {u} ∪ reach(u)` in the digraph *"x → x′ when M(x′) ∈ dom(x)"*:
+if no member of `K` has a free value in its domain, then every `w ∈ dom(x)` for `x ∈ K` is `M(x′)`
+for some `x′` reachable from `x`, so `N(K) = M(K)` and `|N(K)| = |K|` — **K is a Hall set**.
+Conversely an edge `(y,v)` in no maximum matching gives exactly such a `K`. So **every Régin
+pruning is witnessed by a Hall set**, and enumerating `K` over every `u` is **complete** — which
+is what earns the `Domain` tag rather than merely asserting it.
+
+**So the justification is M4-T1's counting argument over a value SET rather than an interval**,
+stopped one step earlier: instead of telescoping the excluded values into a bound, weaken away
+all but one and the row is `~y_eq_v >= 1`. `core_summands` is parameterised by `~vals`, and
+stage 1 emits **byte-identical** summands.
+
+**Where it could have stopped being expressible, and did not**: narrowing a Hall variable's
+at-least-one line past an **interior hole** — something an interval never forces. Both level
+cases are in the existing ADT: a **root-established** hole uses `Defining` (exact cancellation,
+the `pol` still closes), and a hole **under a decision** uses `Explanation.clause` with the facts
+carried into the pruning's `Reason` so the trace line stays true. **`explanation.ml` and
+`justify.ml` are untouched.**
+
+> **D-0044's no-new-constructor table held eight times, broke once (D-0064), and does NOT break
+> here — on the row that was supposed to be the hard one.** D-0061 predicted the ADT would carry
+> it; that prediction is confirmed.
+
+**What stays open, and is not this record's:**
+
+- **The staging cutoff (256 var-value pairs) is adopted from GCS and NOT re-measured here.** Every
+  model in this suite is two orders of magnitude below it, so the staged branch is exercised only
+  by a test that lowers the cutoff.
+- **The Hall-set choice lever D-0061 flagged is still unmeasured, and now has a second dimension**:
+  `regin_pass` takes the first tight set it finds per `u`, not the smallest — alongside M4-T1's
+  interval scan taking the lexicographically first tight interval, not the narrowest.
 
 ## D-0005  Domains decline to punch holes in enormous ranges
 Status: DECIDED — the cap here covers the domain bitset only. The proof-side width cost
