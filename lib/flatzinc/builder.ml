@@ -643,6 +643,22 @@ let rec search_of_annot env pos (a : Ast.expr) =
       Some (Model.Seq (List.filter_map (search_of_annot env pos) subs))
   | Ast.Call ("seq_search", _) ->
       Error.failf pos "`seq_search` expects a single array of search annotations"
+  | Ast.Call (nm, _)
+    when nm = "priority_search"
+         || (String.length nm > 7 && String.sub nm (String.length nm - 7) 7 = "_search")
+    ->
+      (* M7-T2. `float_search`, `set_search` and `priority_search` used to fall into the
+         catch-all below and be SILENTLY DROPPED -- the one shape of failure this project
+         does not accept, because a dropped search annotation is a different search than
+         the model asked for and docs/SPEC.md 3.4 says it MUST be honoured. They are
+         named and refused instead. This arm is reached only for a `*_search` the arms
+         above did not recognise; `int_search` and `bool_search` never get here. *)
+      Error.failf pos
+        "unsupported search annotation `%s`: baguette implements `int_search`, \
+         `bool_search` and `seq_search`. docs/SPEC.md section 3.4 says a search \
+         annotation MUST be honoured when present, so one that cannot be honoured is \
+         rejected rather than ignored."
+        nm
   | _ ->
       (* Not a search annotation. Annotations that are not search strategies (for
          example `var_is_introduced`, `defines_var`) carry no obligation for the solver
