@@ -1229,6 +1229,24 @@ let test_ix10_content () =
       check
         "I-X10 content: veripb is available (a missing checker is a FAILURE, not a skip)"
         false);
+  (* M4-T2. The same scene, the same invariant, the shape stage 2 emits: a HOLE, which
+     is what domain consistency prunes and what bounds consistency never had to state.
+     I-X10 records this measurement; this is the measurement. *)
+  let regin_hole = "rup +1 ~z_ge_3 +1 z_ge_4 >= 1 ;" in
+  (match standalone ~dir ~opb ~n_model regin_hole with
+  | Some false ->
+      check
+        "I-X10 content: a Regin HOLE (M4-T2's shape) is REFUSED standalone, for the same \
+         reason and on the same scene as the bound move"
+        true
+  | Some true ->
+      Printf.printf
+        "     `%s` VERIFIED against hall.opb. I-X10 says a pruning resting on three\n\
+        \     disequalities at once is not RUP from the model alone, whether it states a\n\
+        \     bound or a hole. See docs/DECISIONS.md D-0040.\n"
+        regin_hole;
+      check "I-X10 content: a Regin HOLE (M4-T2's shape) is REFUSED standalone" false
+  | None -> check "I-X10 content: veripb is available for the hole lane" false);
   (match standalone ~dir ~opb ~n_model hall_move with
   | Some false ->
       check
@@ -1286,12 +1304,53 @@ solve satisfy;
    the check at some other line. *)
 let ix10_hall_line = "rup +1 z_ge_3 +1 x_ge_3 +1 y_ge_3 >= 1 ;"
 
-let test_ix10_derive_ahead () =
+(* M4-T2's own scene, for the stage that punches HOLES.
+
+   x, y, w in 2..4 saturate {2, 3, 4}, which is the INTERIOR of z's and q's range, so the
+   pruning is a run of holes and moves no bound at all -- the canonical case no
+   bounds-consistent all_different can make. The `z + q <= 5` row then refutes what is
+   left ({1, 5} each, and neither pair of distinct values fits), so the hole prunings are
+   on the trail when [Trace.emit] runs; a pruning that is never followed by a conflict
+   writes no line and would test nothing.
+
+   THE HALL SET HAS THREE MEMBERS, and that is not padding. Measured on the two-variable
+   version of this scene: the hole line IS standalone-RUP there, because with the pruned
+   variable fixed at the Hall value the pairwise .opb rows unit-propagate both Hall
+   variables onto the one remaining value and the row between them is then falsified --
+   three single-row propagations, which is exactly what RUP does. At three the same
+   chain stalls on a two-literal clause. So the two-variable case would have shown a
+   `pol` preceding a line that never needed one. *)
+let ix10_regin_source =
+  {|var 2..4: x;
+var 2..4: y;
+var 2..4: w;
+var 1..5: z;
+var 1..5: q;
+constraint all_different_int([x, y, w, z, q]);
+constraint int_lin_le([1,1],[z,q],5);
+solve satisfy;
+|}
+
+(* The line the Regin pruning of z writes for the middle Hall value: `z <> 3` as the
+   two-literal clause the order encoding states it with ([Trace.hole_clause]), with an
+   EMPTY tail -- x, y and w are at their declared bounds, so no fact materialises
+   (reason.ml's [lit_of_fact]) and the claim is unconditional. That makes it the
+   strongest version of I-X10's point: a true, unconditional consequence of the model
+   that the checker still will not take without the derivation ahead of it. It is the
+   same string docs/INVARIANTS.md I-X10 records as measured. *)
+let ix10_regin_line = "rup +1 ~z_ge_3 +1 z_ge_4 >= 1 ;"
+
+let test_ix10_derive_ahead ~tag ~src ~claim () =
   let dir = Filename.temp_file "baguette_ix10_ahead" "" in
   Sys.remove dir;
   Sys.mkdir dir 0o700;
   let opb = Filename.concat dir "ahead.opb" in
   let pbp = Filename.concat dir "ahead.pbp" in
+  let ix10_hall_line = claim in
+  let ix10_hall_source = src in
+  (* Every verdict in this lane is tagged with the scene, so the two runs are told apart
+     in the output and a failure names which shape failed. *)
+  let check name cond = check (name ^ " " ^ tag) cond in
   let m = F.Builder.of_string ~file:"ix10_hall" ix10_hall_source in
   let comp = F.Compile.compile m in
   let encoding = comp.F.Compile.encoding in
@@ -1668,7 +1727,10 @@ let () =
   List.iter run_fzn fzn_cases;
   test_ix10_closure ();
   test_ix10_content ();
-  test_ix10_derive_ahead ();
+  test_ix10_derive_ahead ~tag:"(M4-T1, a bound move)" ~src:ix10_hall_source
+    ~claim:ix10_hall_line ();
+  test_ix10_derive_ahead ~tag:"(M4-T2, a hole)" ~src:ix10_regin_source
+    ~claim:ix10_regin_line ();
   test_is4_gate ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
