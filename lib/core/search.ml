@@ -1026,6 +1026,21 @@ type config = {
          what [config] is: the record that says how this solve behaves. It is NOT one of
          the swappable components D-0044 is about, and it is not a break lane; it is the
          one field here that carries mutable state, which [type bnb] justifies. *)
+  break_bridge_levels : bool;
+      (* M7-T6/D-0070's BREAK, and the defect this row fixed. OFF.
+
+         On, the nogood is filtered by [Learn.levels] ALONE, which is what this module
+         did before M7-T6: the decision literals a [bridges] line rests on are no longer
+         held back from the filter. It is wrong for a reason that is invisible in the
+         answer -- the solver's own reasoning is unchanged and the assignment it returns
+         is still correct -- so the ONLY oracle for it is the checker, and per D-0066 the
+         checker is an oracle for it only on a SATISFIABLE model. On an UNSAT one the
+         database is contradictory and every [rup] is vacuously accepted, which is why
+         this defect survived to M7.
+
+         Wrong on purpose and NOT CLI-reachable, exactly as [break_i_s4],
+         [break_ladder_mult], [break_pb_degree] and [backjump_on_pb] are.
+         test/unit/test_learn.ml runs it over a SAT model and asserts the rejection. *)
   propagate_learned : bool;
       (* M2-L12. Whether a learned clause gets a runtime consumer: a unit becomes a
          global bound tightening applied at every node, a wider one becomes a
@@ -1057,6 +1072,7 @@ let default_config =
     retention = Retention.default;
     backjump_on_pb = false;
     propagate_learned = true;
+    break_bridge_levels = false;
     bnb = None;
   }
 
@@ -1509,7 +1525,21 @@ let aligned store (e : Store.entry) (l : Lit.t) =
    the second puts the decision settle inside the invariant audit it was previously
    outside of. [test/unit/test_matrix.ml]'s [bridge_derivation] is the test that reads
    them. *)
-let bridges (ctx : Justify.ctx) trace stats store (decisions : Lit.t list) =
+let bridges (ctx : Justify.ctx) trace stats store (decisions : Lit.t list) : Lit.t list =
+  (* M7-T6/D-0070: the decision literals the lines emitted below rest on. A bridge is
+     stated as "claim \/ ~l \/ ~ancestors", and its own [rup] reaches [claim] only once
+     [l] and every ancestor are asserted -- by the hole line at [v] (route 1) or by the
+     disequality's .opb rows (route 2), both of which need those decisions on the trail.
+     So a nogood that drops one of them stops entailing this line, and its [rup] fails
+     at the nogood rather than here. The caller unions this back into the nogood; see
+     [dfs]'s conflict arm. *)
+  let protected = ref [] in
+  let protect ls =
+    List.iter
+      (fun l ->
+        if not (List.exists (Lit.equal l) !protected) then protected := l :: !protected)
+      ls
+  in
   let rec go entries rev_decisions ancestors =
     match (entries, rev_decisions) with
     | [], _ | _, [] -> ()
@@ -1546,6 +1576,7 @@ let bridges (ctx : Justify.ctx) trace stats store (decisions : Lit.t list) =
                     Printf.sprintf "M1-T55: %s settled onto %s" (Lit.to_string l)
                       (Lit.to_string claim)
                   in
+                  protect (l :: ancestors);
                   let cid = Justify.emit_rup_clause ctx ~origin lits in
                   let level = Writer.current_level ctx.Justify.writer in
                   let cited, unnamed =
@@ -1577,7 +1608,8 @@ let bridges (ctx : Justify.ctx) trace stats store (decisions : Lit.t list) =
                     }));
           go es ls (l :: ancestors)
   in
-  go (decision_entries store) (List.rev decisions) []
+  go (decision_entries store) (List.rev decisions) [];
+  !protected
 
 (* M2-L3: take the cut, discharge I-S4, put the learned clause on the page, and report
    the decision levels the conflict actually rests on.
@@ -2228,14 +2260,34 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
              a hole, which is the step the nogood's own [rup] needs and has until now
              been left to find for itself. It goes after the trace (D-0021) and before
              the nogood, at the nogood's own level, so the same [w] retires both. *)
-          bridges ctx trace stats store decisions;
+          let protected = bridges ctx trace stats store decisions in
           let keep = learn_at_conflict engine store ctx trace stats cfg c in
           let all = levelled_nogood decisions ~top:(Store.level store) in
           let ng =
             match keep with
             | None -> minimise stats cfg.policy all
             | Some ls ->
-                minimise stats cfg.policy (List.filter (fun (_, l) -> List.mem l ls) all)
+                (* M7-T6/D-0070. [ls] is [Learn.levels] -- the decision levels the 1UIP
+                   walk says the conflict rests on -- and filtering by it is what makes
+                   the nogood the cut's clause rather than the whole stack. It is right
+                   about the IMPLICATION GRAPH and wrong about the PROOF whenever a
+                   decision push SETTLED past a hole: the graph records the decision as
+                   the literal the branch assumed ([x >= b]), everything downstream
+                   propagated from the bound the trail landed on ([x >= m]), and the step
+                   between them is not an edge, so no ancestor that punched the hole ever
+                   enters the walk. [bridges] has just written that step down as a line
+                   conditioned on exactly those ancestors, so dropping their levels
+                   leaves the nogood no longer entailing its own bridge, and 3.0.2
+                   rejects the nogood -- at the nogood, several inferences away from the
+                   settle. Keeping them costs a weaker clause on the SETTLE PATHS ONLY;
+                   [protected] is empty on every path with no hole split, which is almost
+                   all of them, and the filter is then exactly what it was. *)
+                let kept (lit, l) =
+                  List.mem l ls
+                  || (not cfg.break_bridge_levels)
+                     && List.exists (fun p -> Lit.equal lit (Lit.negate p)) protected
+                in
+                minimise stats cfg.policy (List.filter kept all)
           in
           let cid = emit_nogood ctx ng in
           NFail (ng, cid))
@@ -2392,7 +2444,7 @@ and explore_le store engine ctx trace stats cfg order decisions v k lit =
       Trace.emit ctx trace store;
       (* M1-T55: the ancestors only -- this push did not land, so it has no trail entry
          and nothing to bridge, and [bridges] drops it for exactly that reason. *)
-      bridges ctx trace stats store decisions;
+      ignore (bridges ctx trace stats store decisions : Lit.t list);
       let ng =
         minimise stats cfg.policy (levelled_nogood (Lit.negate lit :: decisions) ~top:lvl)
       in
@@ -2414,7 +2466,7 @@ and explore_ge store engine ctx trace stats cfg order decisions v k lit =
   | Store.Conflict _ ->
       Trace.emit ctx trace store;
       (* M1-T55: as in [explore_le] -- the ancestors only. *)
-      bridges ctx trace stats store decisions;
+      ignore (bridges ctx trace stats store decisions : Lit.t list);
       let ng = minimise stats cfg.policy (levelled_nogood (lit :: decisions) ~top:lvl) in
       let cid = emit_nogood ctx ng in
       NFail (ng, cid)
