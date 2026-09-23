@@ -93,8 +93,10 @@
 #
 # ---------------------------------------------------------------- completion
 #
-# The last line of a COMPLETE run is `DONE-<epoch>\t<attempted>\t<total>`. Its
-# absence means the run is partial, and `report` says so in as many words rather
+# The last line of a COMPLETE run is `DONE-<epoch>\t<recorded>\t<corpus-size>`, and
+# it is written only when every SELECTED instance has a row -- so an ONLY run of 103
+# is complete at 103 and does not need the other 333. The marker's absence means
+# the run is partial, and `report` says so in as many words rather
 # than printing a total that looks whole. A partial table read as a total is how
 # D-0068's numbers became D-0069's correction.
 
@@ -445,18 +447,28 @@ main() {
   # the skip costs one pass over the table rather than one grep per instance.
   grep -av '^DONE-' "$OUT/results.tsv" | cut -f1 | sort -u > "$OUT/.done.ids"
 
+  # Two different reasons to skip an instance, and they must not be conflated:
+  # ALREADY RECORDED (resumption) and NOT SELECTED (the ONLY filter). The first
+  # draft printed one number for both and reported "333 already recorded" for a
+  # run whose results file was empty -- the harness misdescribing its own scope,
+  # which is the failure mode this whole file exists to make impossible.
   : > "$OUT/todo.lst"
+  : > "$OUT/.selected.ids"
   local mzn id
   while IFS= read -r mzn; do
     id="$(instance_id "$mzn")"
-    grep -qxF "$id" "$OUT/.done.ids" && continue
     if [ -n "$ONLY" ] && ! grep -qxF "$id" "$ONLY"; then continue; fi
+    printf '%s\n' "$id" >> "$OUT/.selected.ids"
+    grep -qxF "$id" "$OUT/.done.ids" && continue
     printf '%s\n' "$mzn" >> "$OUT/todo.lst"
   done < "$OUT/all.lst"
 
-  local todo
+  local todo selected
   todo="$(wc -l < "$OUT/todo.lst")"
-  echo "corpus_run: $total instances, $todo to run, $((total - todo)) already recorded."
+  selected="$(wc -l < "$OUT/.selected.ids")"
+  [ "$selected" -gt 0 ] || die "the ONLY filter selected none of the $total instances"
+  echo "corpus_run: $total in the corpus, $selected selected, $((selected - todo)) \
+already recorded, $todo to run."
   echo "corpus_run: PAR=$PAR MEM_KB=$MEM_KB checker=$VERIPB"
 
   if [ "$todo" -gt 0 ]; then
@@ -467,12 +479,16 @@ main() {
   # The marker goes down only if every instance in all.lst now has a row. A run
   # killed part-way leaves no marker, and `report` then says PARTIAL rather than
   # printing a number that looks whole.
+  # Completeness is judged against what was SELECTED, not against the corpus: a
+  # deliberate ONLY run of 103 instances is complete when it has 103 rows. The
+  # marker carries both numbers so the scope is never in doubt afterwards.
   local recorded
-  recorded="$(grep -av '^DONE-' "$OUT/results.tsv" | cut -f1 | sort -u | wc -l)"
-  if [ "$recorded" -ge "$total" ]; then
+  recorded="$(grep -av '^DONE-' "$OUT/results.tsv" | cut -f1 | sort -u \
+    | grep -cxF -f "$OUT/.selected.ids")"
+  if [ "$recorded" -ge "$selected" ]; then
     printf 'DONE-%s\t%s\t%s\n' "$(date +%s)" "$recorded" "$total" >> "$OUT/results.tsv"
   else
-    echo "corpus_run: PARTIAL -- $recorded of $total recorded, no DONE marker written."
+    echo "corpus_run: PARTIAL -- $recorded of $selected recorded, no DONE marker written."
     echo "corpus_run: re-run with the same arguments to finish; nothing is recomputed."
   fi
   report
