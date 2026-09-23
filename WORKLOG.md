@@ -363,7 +363,6 @@ worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 uni
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M7-T13 | `lib/core/**`, `test/unit/test_trace.ml`, `test/unit/test_learn.ml`, `test/models/PENDING`, new `test/models/` + `test/expected/` | agent-tpp | 2026-09-23 |
-| M7-T14 + wave-28 corpus run | `scripts/**` only; read-only elsewhere | agent-harness2 | 2026-09-23 |
 | M7-T15 | `mznlib/**`, `tools/**`, new `test/models/` + `test/expected/`; **`scripts/corpus_run.sh` data-pairing is agent-harness2's** | agent-flatten | 2026-09-23 |
 | M2-T16 | **everything except `bench/**`** — the 2.0 removal lands atomically | agent-drop | 2026-09-18 |
 | M2-L8 | `bench/**` only; read-only over `lib/` and `test/` | agent-bench | 2026-09-18 |
@@ -590,6 +589,7 @@ work. The owning session picks it up.
 | M2-L8 | agent-bench | 2026-09-18 | The learning benchmark. Third table in `bench/run_bench.sh` reporting learned / convertible / skipped / pb-tried / pb-learned / pb-fallback / fb% / pb-stronger **beside** `.opb` bytes, `.pbp` bytes and verify ms, per model and summed over the suite as counts only. Verdict widened from M1-T36's nodes-alone to all four tree counters. **`bench/run_bench.sh -c`** is the control the row demanded: three scenes, asserted in both directions, exit non-zero on a misclassification, watched fire against three broken classifiers. `-f`/`-F`/`BAGUETTE_PROOF_FORMAT` gone from `bench/` (D-0046). Suite: 86 clauses over 21 of 38 models, 13 convertible, 9 skips over 4 models, PB 86/36/50 = **58% fallback**. |
 | M2-T16 | agent-drop | 2026-09-18 | **Proof format 2.0 removed from the project entirely** (D-0046). `Writer` emits 3.0 and only 3.0; `V2_0`, `BAGUETTE_PROOF_FORMAT`, `default_format`, every `v3 t` branch, `Pol.to_string`, `Opb.write ?labels` and `Encoding.write_opb_for` are gone, and `Checker.find` / `scripts/checker.sh` resolve one checker. **Artefact bytes byte-identical across all 38 models** (`.opb`, `.pbp`, stdout), binary hashed on both sides and different. Unit checks 1986 → 1972, all 14 accounted for. History kept and marked: D-0023/24/25/30 and `PROOF-FORMAT.md` §2. |
 | M6-T6 | agent-bisect | 2026-09-21 | Bisected `width_sat_depth`'s regression: the 43 ms comment was true when written; the whole ~14x jump is one commit, `aacbc8d` (M2-L6 wired into `Search`), 18.6 ms parent -> 258.7 ms. `git bisect run`, 7 steps, 0 skipped. Recommend accepting as the cost of M2-L6's PB analysis, which M2-L13 already claws most of back. `bench/README.md` §3g, new `bench/width_sat_depth_bisect.sh`. |
+| M7-T14 + M7-T15 (pairing half) | agent-harness2 | 2026-09-23 | `corpus_run.sh` derives `--max-heap-mb` from its own `MEM_KB` (half, 15625 MB at 32 GB) and exit 5 gets its own `REFUSED-RESOURCE` bucket; data pairing searches one level down and a model with no data anywhere is `NO-DATA`, not `FLATTEN-FAIL`. Wave-28 corpus run launched at `/scratch/arthur/corpus-out-w29` |
 
 ## Handoff notes
 
@@ -2971,3 +2971,54 @@ would now look identical to an implementation.
 **For the next session.** The corpus counts in D-0069 are lower bounds (the id-collision
 amendment), so "43 of 49 instances" is a floor, not a measurement. The remaining
 `indomain_median` instances stay refused until M7-T12.
+
+## M7-T14 + M7-T15 handoff, 2026-09-23 (agent-harness2)
+
+**M7-T14 is done and it is one line of arithmetic plus a bucket.** `corpus_run.sh` now
+derives `--max-heap-mb` from its own `MEM_KB` (`HEAP_MB=auto`, the default) and passes it.
+**The headroom is HALF** -- 32 GB of `ulimit -v` becomes 15625 MB of heap limit -- because
+the two are different quantities: `ulimit -v` caps the whole virtual address space, while
+`--max-heap-mb` reads the OCaml *major heap* from `Gc.quick_stat`, and the gap holds the
+minor heap, the malloc arena, the proof writer's buffers, fragmentation and the transient
+cost of a major-heap growth step. The margin is round rather than calibrated on purpose:
+the flag's entire value is that the solver stops first with a diagnostic instead of losing
+the race to the kernel, so a tight margin that sometimes loses that race buys nothing. **If
+a later run refuses instances at 15 GB that would have solved in 28, raise it THEN with
+that measurement.** No default was added to the solver (D-0065, D-0071 stand). **Exit 5 is
+its own bucket, `REFUSED-RESOURCE`** -- folding it into `SOLVE-ERR-*` would discard the
+distinction the flag exists to create.
+
+**M7-T15's pairing half: the predicted defect is not the one that is there.** The row said
+the ~12 `symbol error: variable \`n' is undefined` rows were the harness picking the
+smallest `.dzn` and getting a data file that does not fit. I re-ran all 50 `FLATTEN-FAIL`
+through the candidate loop instead of reading the messages, and **all 19 such rows were
+offered ZERO data files.** The mis-pairing never happened. What is actually there:
+
+- **20 `NO-DATA`**, and **every single one is under `2026/`** -- the corpus carries next
+  year's Challenge models without their unpublished data. MiniZinc's own words are *"did
+  you forget to specify a data file?"*, a sentence about the harness, and it was being
+  filed against the model. That is D-0069 one level down, in the file written to prevent
+  it. Now an input-side bucket, gated on there having been no candidates: if data existed
+  and every candidate was refused, that stays `FLATTEN-FAIL` and is an honest finding.
+- **2 recovered**: `2021_perfect_square` and `2023_travelling-thief_ttp` keep data in a
+  `data/` SUBDIRECTORY the old glob walked past. `data_candidates` now uses
+  `find -maxdepth 2` and sorts by size across both levels. Both reach the solver.
+- **1 more** flattens with no data file at all, which is now a real outcome rather than an
+  artefact of an empty directory.
+- **27 remain `FLATTEN-FAIL` and are genuinely ours**: **16 `is_output`**, **8 `no function
+  or predicate with this signature`**, 1 index-set mismatch, 1 `maximum of empty set`, 1
+  other. M7-T15's two named sub-counts survive the correction unchanged, so **agent-flatten's
+  half of the row is unaffected** -- 16 and 8 are still 16 and 8.
+
+**Wave-28 corpus run launched**: `/scratch/arthur/corpus-out-w29` on `fataepyc-07`, tip
+`f5e09db` (main `2748fe2` + this branch's `scripts/` only), binary
+`2cf890143e3a0870d0ef0f2fb70550d1` -- wave 27's was `605ede27`, so the build is real.
+`PAR=64`, 32 GB/job, `setsid nohup`, log `/scratch/arthur/w29-corpus.log`. It will take
+hours. `corpus-out`, `corpus-out-m7t10` and `corpus-out-w28` were not touched.
+
+**Read the new run with `scripts/corpus_run.sh --report /scratch/arthur/corpus-out-w29`**,
+and expect two new buckets in it: `REFUSED-RESOURCE` (M7-T14 working) and a much larger
+`NO-DATA` (M7-T15's correction). **`FLATTEN-FAIL` will drop from 50 to about 27 without a
+single model being fixed** -- that is the harness stopping mis-attribution, not progress,
+and it must not be quoted as progress. Likewise ~168 of the 436 are addressed by M7-T9 and
+M7-T11, which wave 27 could not see.

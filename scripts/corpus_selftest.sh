@@ -91,6 +91,85 @@ else
   echo "ok   instance_id -> distinct per model file ($a, $b)"
 fi
 
+# ------------------------------------------------- M7-T14: MEM_KB -> --max-heap-mb
+#
+# The derivation is the whole of M7-T14 and it is one arithmetic expression, so the
+# thing that can go wrong with it is a units error: KB read as MB, or MB as KB,
+# would pass a limit a thousandfold wrong in either direction and the symptom would
+# be either every instance refused or the guard never firing -- and the SECOND of
+# those looks exactly like the clean run we are trying to distinguish it from. So
+# the units are asserted against the real default, not against a round number.
+expect_eq() {
+  local name="$1" want="$2" got="$3"
+  if [ "$want" = "$got" ]; then
+    echo "ok   $name -> $got"
+  else
+    echo "FAIL $name: expected '$want', got '$got'."
+    fails=$((fails + 1))
+  fi
+}
+
+# 32 GB of address space (the default and the cap) -> 15625 MB of OCaml major heap.
+expect_eq "heap_mb_from_mem_kb at the 32 GB default" 15625 "$(heap_mb_from_mem_kb 32000000)"
+expect_eq "heap_mb_from_mem_kb at 4 GB" 2048 "$(heap_mb_from_mem_kb 4194304)"
+# No limit to derive from, and no limit invented: the empty string is what run_one
+# tests to decide whether to pass the flag at all.
+expect_eq "heap_mb_from_mem_kb with no MEM_KB" "" "$(heap_mb_from_mem_kb '')"
+expect_eq "heap_mb_from_mem_kb with junk" "" "$(heap_mb_from_mem_kb 'unlimited')"
+expect_eq "heap_mb_from_mem_kb below one MB of headroom" "" "$(heap_mb_from_mem_kb 512)"
+# The margin is the point of the flag: the derived heap limit must be strictly less
+# than the ulimit it is derived from, in the SAME units, or the guard loses the race
+# to the kernel and we are back to an uncatchable exit 134.
+if [ "$(( $(heap_mb_from_mem_kb 32000000) * 1024 ))" -lt 32000000 ]; then
+  echo "ok   the derived heap limit leaves headroom below the ulimit"
+else
+  echo "FAIL the derived heap limit is not below MEM_KB. The kernel would refuse the"
+  echo "     mapping before the guard fired, and M7-T14 would have changed nothing."
+  fails=$((fails + 1))
+fi
+
+# ------------------------------------------------- M7-T15: model/data pairing
+#
+# `corpus_run.sh` took the SMALLEST .dzn in the family, which is a preference that
+# was being applied as a verdict: about a dozen of wave 27's FLATTEN-FAIL rows are
+# a data file that does not define the model's parameters, i.e. the harness's own
+# choice recorded against the corpus (D-0069's mistake, one level down). The fix is
+# that the smallest is tried FIRST and the others after it, so what is asserted
+# here is the ORDER and the BOUND.
+DD="$D/family"
+mkdir -p "$DD"
+printf 'x' > "$DD/tiny.dzn"                  # 1 byte   -- first
+printf '%0100d' 0 > "$DD/small.dzn"          # 100 B    -- second
+printf '%01000d' 0 > "$DD/medium.json"       # 1000 B   -- third
+printf '%010000d' 0 > "$DD/large.dzn"        # 10000 B  -- fourth
+got="$(data_candidates "$DD" 4 | xargs -n1 basename | tr '\n' ' ')"
+expect_eq "data_candidates orders smallest-first" \
+  "tiny.dzn small.dzn medium.json large.dzn " "$got"
+expect_eq "data_candidates keeps the old first choice first" \
+  "tiny.dzn" "$(data_candidates "$DD" 4 | head -1 | xargs basename)"
+expect_eq "data_candidates honours DATA_TRIES" 2 "$(data_candidates "$DD" 2 | wc -l)"
+# A family with no data files must yield NO candidates rather than an error or a
+# spurious one: run_one appends the bare-model attempt itself, and that attempt is
+# what gives a data-free model an honest outcome instead of a pairing failure.
+mkdir -p "$D/emptyfamily"
+expect_eq "data_candidates on a family with no data" 0 \
+  "$(data_candidates "$D/emptyfamily" 4 | wc -l)"
+
+# THE MEASURED DEFECT, not the predicted one. Re-running wave 27's 50 FLATTEN-FAIL
+# showed all 19 "variable ... must be defined" rows were offered ZERO data files,
+# and 2021_perfect_square's data sits in a `data/` SUBDIRECTORY that the old glob
+# walked straight past. One level down must be found, and must still sort by size
+# with the siblings rather than after them.
+mkdir -p "$DD/data"
+printf '%00000000050d' 0 > "$DD/data/mid.dzn"   # 50 B -- between tiny and small
+expect_eq "data_candidates finds data/ one level down, sorted by size with the rest" \
+  "tiny.dzn mid.dzn small.dzn medium.json " \
+  "$(data_candidates "$DD" 4 | xargs -n1 basename | tr '\n' ' ')"
+# A directory is not a data file, and must not be offered as one.
+mkdir -p "$D/dirfamily/notdata.dzn"
+expect_eq "data_candidates ignores a directory named like a data file" 0 \
+  "$(data_candidates "$D/dirfamily" 4 | wc -l)"
+
 if [ "$fails" -eq 0 ]; then
   echo "corpus self-test: PASS"
   exit 0
