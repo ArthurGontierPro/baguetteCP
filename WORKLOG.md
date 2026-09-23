@@ -373,7 +373,7 @@ needs it, that is a `## Cross-session requests` row, not an edit.
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M7-T6 | `lib/core/**` (trace/learn/search nogood path), `test/unit/test_trace.ml`, `test/unit/test_learn.ml`, `test/models/PENDING` | agent-rup | 2026-09-23 |
+| M7-T6 | `lib/core/**` (trace/learn/search nogood path), **`lib/proof/writer.ml` (granted 2026-09-23 for the empty-model `sol` line — unclaimed, and agent-guard holds `encoding.ml` not this)**, `test/unit/test_trace.ml`, `test/unit/test_learn.ml`, `test/unit/test_proof.ml` is NOT yours (agent-guard), `test/models/PENDING` | agent-rup | 2026-09-23 |
 | M7-T8 | `lib/proof/encoding.ml`, `bin/main.ml`, `test/unit/test_proof.ml` | agent-guard | 2026-09-23 |
 | M7-T10 + M7-T4 | `scripts/**` and `tools/**` only; read-only over `lib/`, `test/`, `bin/` | agent-harness | 2026-09-23 |
 
