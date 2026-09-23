@@ -3061,3 +3061,24 @@ holes, an index pruning carries the result's; only the first is reproduced).
 is not a single-row consequence. It now has a second member and the header says so, because a
 comment that was true when written and is false now is exactly what M1-T63 asked not to be
 allowed to drift.
+
+## The in-flight `corpus-out-w29` run predates M7-T13 — read its `PROOF-REJECTED` accordingly
+
+**2026-09-23.** The run at `/scratch/arthur/corpus-out-w29` launched from node tip `f5e09db`
+(= `main` at `2748fe2` plus wave-29's `scripts/` only). **M7-T13 merged after it started.**
+
+So that run still carries the `array_int_element` hole-citation defect, and **`2012_tpp` will
+appear in its `PROOF-REJECTED` bucket.** That is not a regression and not a new finding — it is
+the fix arriving after the measurement. D-0075 verified `2012_tpp` directly, on the node, with
+both binaries hashed (`2cf89014…` refuses at `.pbp:21217`; `44985cac…` gives
+`s VERIFIED BOUNDS 190 <= obj <= 190`).
+
+**What w29 still measures honestly**: wave 28's effect on the refusal buckets — M7-T9's three
+strategies and M7-T11's set domains, together ~168 of 436 instances — plus the `NO-DATA` and
+`REFUSED-RESOURCE` reclassifications. Those are what it was launched for and they are
+unaffected.
+
+**What needs a further run**: the proof buckets. A wave-29 run, from a tip that includes
+M7-T13, is the first that can state a corpus-wide `PROOF-REJECTED` figure. **Do not quote w29's
+proof numbers as current** — quote its refusal numbers, and say the proof column is one fix
+behind.
