@@ -4823,6 +4823,56 @@ obligation (a) asserts on the **decision** — `d_var`, `d_split`, `d_high_first
 the answer. Two strategies that agree on every test are not tested, and a proof that verifies
 says nothing about whether the order was honoured.
 
+
+### AMENDED 2026-09-23 by M7-T5 (agent-vacuity). The measurement stands. **The inference drawn from it — by me, the orchestrator, in this record's title and in M7-T5's brief — does not.**
+
+**The audit found 0 vacuous lanes of 15.** (The "26" was a grep of the wording string; in those
+nine files it has 27 occurrences — 12 explanatory comments, 7 shared wording constants, 8
+inline assertion sites — resolving to **15 distinct lanes**. All 15 sound, 0 vacuous, 0
+unreachable, every verdict from a run rather than a read.)
+
+**The logical error, plainly.** I wrote that a break lane asserting a `rup` rejection over an
+UNSAT model "is testing nothing" and "goes green whether the code is right or wrong". That is
+backwards. If a corrupted `rup` line is **accepted**, then a lane asserting **rejection**
+goes **RED**. This vacuity cannot hide inside a rejection lane; it makes the lane **fail
+loudly**. The failure mode I generalised from D-0053 — where `red`'s vacuity does silently
+green a lane — does not transfer, because the two lanes assert opposite outcomes. I did not
+check the direction before writing 26 lanes' worth of suspicion into the roadmap.
+
+**And obligation (b) was wrong medicine.** The row instructed that every vacuous lane be
+"rebuilt over a satisfiable model". Measured:
+
+| model | `rup` flips accepted |
+|---|---|
+| `ne_eq_unsat` (UNSAT) | **8 of 8** — total |
+| `chain_sat` (**satisfiable**, branches, 0..9) | **3 of 15 still accepted** |
+
+**Vacuity is a property of the LINE, not of the model's answer.** A `rup` line is checkable
+only if it is load-bearing for a *later* line; a satisfiable model makes that more likely, not
+certain. **A lane rebuilt on my advice alone would have been just as vacuous** — and would
+have carried a decision record saying it was fixed.
+
+**What the audit shipped instead**, and it is the better deliverable: a **census in
+`test/unit/test_mutation.ml`** — six checks re-measuring both rows of that table on every run
+(controls, the total vacuity on UNSAT, the accepted flip on SAT, the refused flip on SAT, and
+its full wording). The numbers now redden when they change, rather than the record quietly
+rotting. It also raised `test_learn.ml`'s `rejection_wordings` to the checker's whole sentence
+— its own comment claimed full strength while the constant matched less.
+
+**Method note worth keeping**: the audit flipped a literal's polarity rather than dropping
+one. A **dropped** literal can leave a claim that is genuinely stronger and genuinely implied,
+so its acceptance is ambiguous; a **flip** is a different claim, so acceptance is
+unambiguous. D-0066's original measurement used both and read them as equivalent.
+
+**What survives unchanged**: the measurement itself, and its consequence for *proof
+confidence* — on `ne_eq_unsat` all 8 `rup` lines are uncheckable, so a defect of D-0070's
+class is invisible there. That is why D-0068's 1-in-11 rejection rate is a lower bound, and
+that reasoning was never affected by the error above. **What is withdrawn** is the claim that
+existing rejection lanes were at risk.
+
+Corrected by M7-T5 / **D-0073**. This record's title is left as written, per the append-only
+discipline; it is wrong, and this paragraph is its correction.
+
 ## D-0067  Keeping constraints high-level: 112 → 300 instances, and a pre-existing RUP defect it surfaced
 
 **Status**: **ACCEPTED**, implemented by M7-T3 (2026-09-22, agent-mznlib). `mznlib/`,
