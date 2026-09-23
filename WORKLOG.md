@@ -362,7 +362,6 @@ worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 uni
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M7-T13 | `lib/core/**`, `test/unit/test_trace.ml`, `test/unit/test_learn.ml`, `test/models/PENDING`, new `test/models/` + `test/expected/` | agent-tpp | 2026-09-23 |
 | M7-T15 | `mznlib/**`, `tools/**`, new `test/models/` + `test/expected/`; **`scripts/corpus_run.sh` data-pairing is agent-harness2's** | agent-flatten | 2026-09-23 |
 | M2-T16 | **everything except `bench/**`** — the 2.0 removal lands atomically | agent-drop | 2026-09-18 |
 | M2-L8 | `bench/**` only; read-only over `lib/` and `test/` | agent-bench | 2026-09-18 |
@@ -3024,3 +3023,41 @@ and expect two new buckets in it: `REFUSED-RESOURCE` (M7-T14 working) and a much
 single model being fixed** -- that is the harness stopping mis-attribution, not progress,
 and it must not be quoted as progress. Likewise ~168 of the 436 are addressed by M7-T9 and
 M7-T11, which wave 27 could not see.
+## M7-T13 handoff, 2026-09-23 (agent-tpp)
+
+**D-0074's second RUP defect is found, reduced, fixed and the instance re-checked.** It is
+**not** D-0070's shape. `lib/core/prop/element.ml` is DOMAIN consistent (D-0059) and its rule 2
+reads `dom(idx)` **holes included**, while `Reason.t` holds only bound facts — so the trace
+line for a result push named the index's bounds and nothing else, and when every bound was
+still at its declared value it named **nothing** and came out as the bare `rup +1 z_ge_1 >= 1 ;`,
+which is not merely unprovable but false. `bound_facts`'s own comment discharged the gap by
+claiming the checker re-derives the hole "from the hole's own earlier trace line"; a hole's
+trace line has a **tail**, and `rup` cannot fire it unless that tail is falsified. Fixed by
+citing the reason of the trail entry that punched the hole — `trace.ml`'s `settle_facts`
+technique one step earlier — in **both** directions (a result pruning carries the index's
+holes, an index pruning carries the result's; only the first is reproduced).
+
+**Three things the next session should carry.**
+
+1. **The reproducer is deliberately over-built and the comment in the file says why.** Trace
+   lines are written only when a branch **fails**, so the defective line is checked only if
+   the branch that made the push goes on to fail, **deeper** than the push. Strip `q1/q2/q3`
+   or the `int_search` annotation and the model is satisfied at level 1 and the defect is
+   invisible. If you reduce a proof defect from the corpus, the failure and the decision
+   order are part of the reduction, not scaffolding around it.
+
+2. **The general shape, and it is now three for three** (M1-T44, D-0070, D-0075): *a
+   propagator whose consistency level is stronger than its reason language is a proof defect
+   waiting for an instance.* `element` is the tree's first `Domain` propagator. `alldiff` is
+   safe today only because it is `Bounds` and genuinely reads a window — an accident of its
+   consistency level, which **M4-T2's second stage would end**. Anything that makes a
+   propagator read a hole needs a reason that can say why the hole is there.
+
+3. **Do not quote a rate from the next corpus run.** `2012_tpp` was visible only because it is
+   satisfiable (D-0066 as amended). Every UNSAT instance of this defect was accepted silently
+   and some still may be.
+
+**Also corrected**: `lib/core/trace.ml:44` said the settle line was "the only kind here" that
+is not a single-row consequence. It now has a second member and the header says so, because a
+comment that was true when written and is false now is exactly what M1-T63 asked not to be
+allowed to drift.

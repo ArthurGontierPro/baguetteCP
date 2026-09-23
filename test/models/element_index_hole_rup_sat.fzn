@@ -1,0 +1,58 @@
+% M7-T13 / D-0075: A CORRECT ANSWER WHOSE PROOF THE CHECKER REJECTED. FIXED; this model
+% is an ordinary passing model test and its proof is verified on every run. It is the
+% SECOND RUP defect -- D-0070 was the first and this is not its shape.
+%
+% Reduced from `2012_tpp` (MiniZinc Challenge 2012), whose 38.5 MB proof veripb 3.0.2
+% refused at an element result push with "The constraint is not implied by reverse unit
+% propagation (RUP) from core and derived database". Six variables, six constraints, no
+% global; every declared domain is three values wide.
+%
+% THE DEFECT. `array_int_element` is DOMAIN consistent, so rule 2 -- dom(c) := { a[p] :
+% p in dom(idx) } -- reads the index's LIVE domain, HOLES INCLUDED. Its reason could not:
+% Reason.t has only bound facts, so the trace line for the result push named the index's
+% bounds and nothing else. Here `y >= 2` fixes y at 2, int_ne(idx,y) punches the INTERIOR
+% hole idx <> 2, and element then reads dom(idx) = {1,3} and pushes z >= 1. Both of the
+% index's bounds and both of the result's were still at their DECLARED values, so every
+% fact was dropped and the line came out as the bare unit
+%
+%     rup +1 z_ge_1 >= 1 ;
+%
+% -- which is not merely unprovable, it is FALSE: idx = 2 gives z = a[2] = 0. The
+% checker was right and the solver was wrong, and only about the artefact: nothing on
+% this path feeds back into the search (see D-0075).
+%
+% THE FIX is in lib/core/prop/element.ml: a pruning that read a hole now carries the
+% reason of the trail entry that PUNCHED the hole, which is bound facts and does fit on a
+% clause tail. The line becomes `rup +1 z_ge_1 +1 ~y_ge_2 >= 1 ;`, which is RUP against
+% int_ne's own earlier line. That is lib/core/trace.ml's [settle_facts] technique applied
+% one step earlier.
+%
+% WHY THE MODEL LOOKS OVER-BUILT. q1/q2/q3 are not decoration. Trace lines are written
+% only when a BRANCH FAILS (trace.ml, "lazy, not eager"), so the defective line is only
+% ever emitted -- and only ever checked -- if the branch that made the push goes on to
+% fail. The three pairwise-distinct q's under the linear row are the cheapest failure
+% that is driven by SEARCH rather than by propagation, and they fail at a level DEEPER
+% than the element push, so the push's line is on the trail the failure walks. Remove
+% them and the model is satisfied at level 1, no trace is written, and the defect is
+% invisible. The search annotation is load-bearing for the same reason: input_order with
+% indomain_max is what makes `y >= 2` the first decision, and an interior hole is what
+% a bound-value decision cannot produce.
+%
+% The model is SATISFIABLE, and that is not incidental either. Per D-0066 as amended a
+% rup line is checkable only over a database that is not already contradictory, so the
+% UNSAT instances of this defect were being accepted silently. A regression for it has
+% to be SAT.
+array [1..3] of int: a = [1,0,2];
+var 1..2: y :: output_var;
+var 1..3: idx :: output_var;
+var 0..2: z :: output_var;
+var 1..3: q1 :: output_var;
+var 1..3: q2 :: output_var;
+var 1..3: q3 :: output_var;
+constraint array_int_element(idx,a,z);
+constraint int_ne(idx,y);
+constraint int_ne(q1,q2);
+constraint int_ne(q1,q3);
+constraint int_ne(q2,q3);
+constraint int_lin_le([1,1,1,1],[q1,q2,q3,y],7);
+solve :: int_search([y,idx,q1,q2,q3,z], input_order, indomain_max) satisfy;
