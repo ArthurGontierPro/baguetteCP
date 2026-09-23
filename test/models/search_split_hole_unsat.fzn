@@ -1,0 +1,26 @@
+% M7-T9. `indomain_split` bisecting a domain WITH AN INTERIOR HOLE, and the split
+% point landing exactly ON the hole -- the case a naive midpoint gets wrong and the
+% one M1-T55's bridges exist for.
+%
+% int_ne(x, 2) leaves x with lo = 1, hi = 4 and a hole at 2. The RANGE midpoint is
+% 1 + (4 - 1) / 2 = 2, which is the hole; the VALUE median of {1, 3, 4} is 3, which
+% is what `indomain_median` would want and what this must NOT do. Pushing x <= 2
+% makes Domain.settle walk the bound past the hole to x <= 1, so the decision lands
+% strictly STRONGER than the order literal its nogood negates -- the exact shape
+% test_hole_split_sweep in test/unit/test_engine.ml sweeps.
+%
+% The int_lin_ne rows forbid every reachable value of x + y, so the model is UNSAT
+% and the search must explore BOTH sides of the hole split before it can say so.
+% int_lin_ne is value-consistent, so none of them prunes at the root: the refutation
+% is a real tree, not a root conflict.
+var 1..4: x :: output_var;
+var 1..4: y :: output_var;
+constraint int_ne(x, 2);
+constraint int_lin_ne([1, 1], [x, y], 2);
+constraint int_lin_ne([1, 1], [x, y], 3);
+constraint int_lin_ne([1, 1], [x, y], 4);
+constraint int_lin_ne([1, 1], [x, y], 5);
+constraint int_lin_ne([1, 1], [x, y], 6);
+constraint int_lin_ne([1, 1], [x, y], 7);
+constraint int_lin_ne([1, 1], [x, y], 8);
+solve :: int_search([x, y], input_order, indomain_split, complete) satisfy;

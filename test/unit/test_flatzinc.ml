@@ -344,10 +344,12 @@ let test_rejections () =
     ~needles:[ "declared more than once" ];
   reject "reject: empty domain" ~line:1 ~src:"var 3..1: x;\nsolve satisfy;\n"
     ~needles:[ "empty domain" ];
+  (* M7-T9 shipped `smallest`; the example moved to `anti_first_fail`, which is still
+     unsupported. Same assertion, same strength -- see test_search_strategies below. *)
   reject "reject: unsupported search strategy" ~line:2
     ~src:
       "var 1..3: x;\n\
-       solve :: int_search([x], smallest, indomain_random, complete) satisfy;\n"
+       solve :: int_search([x], anti_first_fail, indomain_random, complete) satisfy;\n"
     ~needles:[ "unsupported variable-selection strategy"; "input_order" ];
   reject "reject: array initialiser length mismatch" ~line:1
     ~src:"array [1..3] of int: w = [1, 2];\nsolve satisfy;\n"
@@ -951,16 +953,337 @@ let test_search_constants () =
   (* The strategy checks are NOT relaxed by an empty array: 3.4 says an unsupported
      strategy MUST be refused, and an array that happens to hold only constants does not
      change what the annotation asked for. *)
+  (* M7-T9 shipped `smallest`, which this assertion used to use as its example of an
+     unsupported strategy. The assertion is unchanged in strength -- `anti_first_fail` is
+     still unsupported and still must be refused; only the example moved. *)
   reject "M7-T7: an all-constant array does not excuse an unsupported strategy" ~line:2
     ~src:
       "var 1..3: x;\n\
-       solve :: int_search([1, 2], smallest, indomain_min, complete) satisfy;\n"
+       solve :: int_search([1, 2], anti_first_fail, indomain_min, complete) satisfy;\n"
     ~needles:[ "unsupported variable-selection strategy" ];
   reject "M7-T7: ... nor an unsupported value choice" ~line:2
     ~src:
       "var 1..3: x;\n\
        solve :: int_search([1, x], input_order, indomain_random, complete) satisfy;\n"
     ~needles:[ "unsupported value-choice strategy" ]
+
+(* ====================================== M7-T9: smallest, largest, indomain_split
+
+   Three of the four strategies docs/ROADMAP.md M7-T9 sized. The fourth,
+   `indomain_median`, is REFUSED and its refusal is asserted below beside them --
+   `lib/flatzinc/builder.ml` carries the argument, and the short version is that a
+   baguette decision is one order literal, so assigning an interior value is not a
+   value-choice change but a change to the decision shape.
+
+   EVERY ASSERTION HERE IS ON THE DECISION, NOT ON THE ANSWER, and for these four that
+   is not a stylistic preference: a value choice cannot change the answer at all (the
+   search is complete either way), and a variable choice changes only the order the
+   leaves are visited in. A test that checked the solution could not tell any of these
+   apart from `input_order`, from each other, or from the annotation being dropped on
+   the floor -- which is the failure docs/SPEC.md 3.4 exists to forbid. *)
+
+(* The four-way model. FIVE variables, chosen so that the four variable-selection
+   strategies pick FOUR DIFFERENT ONES, and so that the reading of `largest` this project
+   did NOT take picks a fifth:
+
+     index  name  domain  size  lo  hi
+       0    w     4..8      5    4   8
+       1    x     0..6      7    0   6
+       2    y     2..3      2    2   3
+       3    z     5..9      5    5   9
+       4    u     7..8      2    7   8
+
+   input_order -> w  (first in the annotation's array)
+   first_fail  -> y  (smallest domain; ties with u at 2, broken by array order)
+   smallest    -> x  (smallest domain MINIMUM, 0)
+   largest     -> z  (largest domain MAXIMUM, 9)
+
+   and the rejected reading of `largest` -- "the largest domain minimum" -- would pick
+   u (lo = 7), which is why u is in the model. Without it `largest` and "largest lo"
+   agree and the assertion would be evidence of nothing. *)
+let quad vsel valsel =
+  Printf.sprintf
+    "var 4..8: w;\n\
+     var 0..6: x;\n\
+     var 2..3: y;\n\
+     var 5..9: z;\n\
+     var 7..8: u;\n\
+     constraint int_le(w, 8);\n\
+     constraint int_le(x, 6);\n\
+     constraint int_le(y, 3);\n\
+     constraint int_le(z, 9);\n\
+     constraint int_le(u, 8);\n\
+     solve :: int_search([w, x, y, z, u], %s, %s, complete) satisfy;\n"
+    vsel valsel
+
+let picks name src expect_idx =
+  match F.Error.catch (fun () -> decision_of src) with
+  | Error e ->
+      incr failures;
+      Printf.printf "FAIL %s: refused: %s\n" name (F.Error.to_string e)
+  | Ok None ->
+      incr failures;
+      Printf.printf "FAIL %s: the annotation was dropped entirely\n" name
+  | Ok (Some d) ->
+      if Var.to_int d.Search.d_var = expect_idx then Printf.printf "ok   %s\n" name
+      else (
+        incr failures;
+        Printf.printf "FAIL %s: decided variable index %d, expected %d\n" name
+          (Var.to_int d.Search.d_var) expect_idx)
+
+let test_search_strategies () =
+  (* (a) The four variable selections, on ONE model, each naming a different variable.
+     Run as a group so that a change which collapsed two of them would fail loudly
+     rather than pass three assertions and one tautology. *)
+  picks "M7-T9: input_order decides w (the array's first element)"
+    (quad "input_order" "indomain_min")
+    0;
+  picks "M7-T9: first_fail decides y (the smallest domain)"
+    (quad "first_fail" "indomain_min")
+    2;
+  picks "M7-T9: smallest decides x (the smallest domain MINIMUM)"
+    (quad "smallest" "indomain_min")
+    1;
+  picks "M7-T9: largest decides z (the largest domain MAXIMUM, not the largest minimum)"
+    (quad "largest" "indomain_min")
+    3;
+  (* (b) The three value choices, all on the SAME variable, so that the only thing that
+     varies is the split. `smallest` pins the variable to x (0..6), and:
+
+       indomain_min   splits at lo = 0,        low side first
+       indomain_max   splits at hi - 1 = 5,    high side first
+       indomain_split splits at the RANGE MIDPOINT 0 + (6 - 0) / 2 = 3, low side first
+
+     3 is distinct from both, which is what makes this evidence rather than a
+     coincidence: a build that quietly aliased indomain_split to either of the other two
+     would fail here. *)
+  let vals name valsel expect_split expect_high =
+    match F.Error.catch (fun () -> decision_of (quad "smallest" valsel)) with
+    | Error e ->
+        incr failures;
+        Printf.printf "FAIL %s: refused: %s\n" name (F.Error.to_string e)
+    | Ok None ->
+        incr failures;
+        Printf.printf "FAIL %s: the annotation was dropped entirely\n" name
+    | Ok (Some d) ->
+        check name
+          (Var.to_int d.Search.d_var = 1
+          && d.Search.d_split = expect_split
+          && d.Search.d_high_first = expect_high)
+  in
+  vals "M7-T9: indomain_min splits x at lo, low-first" "indomain_min" 0 false;
+  vals "M7-T9: indomain_max splits x at hi - 1, high-first" "indomain_max" 5 true;
+  vals "M7-T9: indomain_split bisects x at the range midpoint, low-first" "indomain_split"
+    3 false;
+  (* (c) INDOMAIN_SPLIT ON A DOMAIN WITH HOLES -- the one place a naive implementation is
+     quietly wrong, and the reason this assertion runs the engine first.
+
+     `var 0..6: x` with `int_ne(x, 3)` propagates to lo = 0, hi = 6 and an INTERIOR HOLE
+     at 3. Two answers are then available and they differ:
+
+       the RANGE midpoint          lo + (hi - lo) / 2                   = 3   <- correct
+       the MEDIAN of the VALUES    {0,1,2,4,5,6}, lower middle element  = 2
+
+     The second is `indomain_median`'s quantity, not `indomain_split`'s: MiniZinc says
+     "bisect the domain", which is the interval bisection Gecode's INT_VAL_SPLIT_MIN
+     performs. So 3 is the assertion, and it also happens to land ON the hole -- which is
+     legal and is the M1-T55 case: [Domain.settle] walks the pushed bound past 3 to 2, so
+     the decision lands strictly stronger than the order literal its nogood negates.
+     test/models/search_split_hole_unsat.fzn is that case end to end with its proof
+     checked, and test_hole_split_sweep in test/unit/test_engine.ml is the exhaustive
+     sweep over every such shape. *)
+  (match
+     F.Error.catch (fun () ->
+         let m =
+           F.Builder.of_string ~file:"<t>"
+             "var 0..6: x;\n\
+              var 0..6: y;\n\
+              constraint int_ne(x, 3);\n\
+              constraint int_le(y, 6);\n\
+              solve :: int_search([x, y], input_order, indomain_split, complete) satisfy;\n"
+         in
+         let c = F.Compile.compile m in
+         let store = c.F.Compile.store in
+         let outcome = Baguette_core.Engine.propagate c.F.Compile.engine store in
+         let d0 = Baguette_core.Store.get store (Var.of_int 0) in
+         let order =
+           match c.F.Compile.order with Some o -> o | None -> Search.spec_order
+         in
+         (outcome, d0, order store [| Var.of_int 0; Var.of_int 1 |]))
+   with
+  | Error e ->
+      incr failures;
+      Printf.printf "FAIL M7-T9 (c): the holey model was refused: %s\n"
+        (F.Error.to_string e)
+  | Ok (_, d0, d) ->
+      check "M7-T9 (c): int_ne left an interior hole to split across"
+        (Baguette_core.Domain.lo d0 = 0
+        && Baguette_core.Domain.hi d0 = 6
+        && (not (Baguette_core.Domain.mem d0 3))
+        && Baguette_core.Domain.size d0 = 6);
+      check
+        "M7-T9 (c): indomain_split takes the RANGE midpoint 3 across a hole, not the \
+         value median 2"
+        (Var.to_int d.Search.d_var = 0
+        && d.Search.d_split = 3 && not d.Search.d_high_first));
+  (* (d) `indomain_median` is refused, and the diagnostic must say WHY rather than just
+     that it is unsupported -- the reason is the deliverable for this case, because a
+     reader who hits it on a real model would otherwise re-derive the analysis. The
+     needles pin the three load-bearing claims: that it is an interior value, that the
+     sibling branch is a disjunction, and that the successor row is named. *)
+  reject "M7-T9: indomain_median is refused, with its actual reason" ~line:2
+    ~src:
+      "var 1..9: x;\n\
+       solve :: int_search([x], input_order, indomain_median, complete) satisfy;\n"
+    ~needles:[ "indomain_median"; "INTERIOR"; "disjunction"; "M7-T12"; "indomain_split" ];
+  (* And the two strategies that remain unsupported are still refused, at full strength.
+     `anti_first_fail` and `indomain_random` are the rest of what MiniZinc defines; they
+     must not have been swept into a catch-all while the four above were added. *)
+  reject "M7-T9: anti_first_fail is still refused" ~line:2
+    ~src:
+      "var 1..9: x;\n\
+       solve :: int_search([x], anti_first_fail, indomain_min, complete) satisfy;\n"
+    ~needles:[ "unsupported variable-selection strategy"; "anti_first_fail" ];
+  reject "M7-T9: indomain_random is still refused" ~line:2
+    ~src:
+      "var 1..9: x;\n\
+       solve :: int_search([x], input_order, indomain_random, complete) satisfy;\n"
+    ~needles:[ "unsupported value-choice strategy"; "indomain_random" ]
+
+(* ============================== M7-T9: what indomain_split COSTS in the proof
+
+   docs/ROADMAP.md's M7-T9 row predicted that `indomain_split` would be CHEAPER to
+   justify than `indomain_min`, on the argument that it branches on an ORDER LITERAL and
+   the order encoding is built out of exactly those (D-0028). The row asked for the claim
+   to be measured rather than asserted. It is measured here, and IT DOES NOT HOLD -- on
+   this model `indomain_split` is DEARER, and the reason the prediction failed is more
+   useful than the prediction.
+
+   THE PREDICTION IS ABOUT THE WRONG QUANTITY. Every decision this solver makes is
+   already one order literal: `Search.branch` writes `x_ge_(k+1)` for `indomain_min`,
+   `indomain_max` and `indomain_split` alike, and neither the bridge (M1-T55) nor the
+   nogood is shaped by where k sits inside [lo, hi). So the PER-DECISION cost of the three
+   is identical by construction, and there was never a saving available there. What a
+   value choice changes is the TREE: how many decisions get made, and how deep.
+
+   So the comparison is a tree comparison wearing proof-sized units, and which way it goes
+   is a property of the model, not of the encoding. Two models, both measured while
+   writing this:
+
+     (i)  every sum of x + y forbidden (a flat refutation -- the first decision on x
+          fixes it, which wipes y whatever the decision was). The two searches are
+          isomorphic: 271 derivation lines and 45 opened levels EACH at width 16, and the
+          proofs differ by 105 bytes of literal spelling and nothing else.
+     (ii) the model below, whose only solution sits at the TOP of x's domain. Here
+          `indomain_min` walks a spine and finds it last; `indomain_split` bisects, which
+          costs internal nodes the spine does not have, and the low half it explores first
+          is entirely fruitless. Split loses.
+
+   The honest general statement is therefore: `indomain_split` costs the same per
+   decision and a different number of decisions, and on a model whose answer the spine
+   reaches early the bisection's extra internal nodes are a NET LOSS in proof size. The
+   assertion below is on the DIRECTION, with both numbers printed, so that a future
+   session that flips it learns something rather than merely going red. *)
+
+let cmp_src valsel =
+  let b = Buffer.create 1024 in
+  Buffer.add_string b "var 0..15: x :: output_var;\nvar 0..15: y :: output_var;\n";
+  (* Every sum from 0 to 29 forbidden, so x = y = 15 is the one solution -- and it is the
+     LAST value `indomain_min` reaches. int_lin_ne is value-consistent, so none of these
+     rows prunes anything until one of the two variables is fixed: the tree is real. *)
+  for s = 0 to 29 do
+    Buffer.add_string b (Printf.sprintf "constraint int_lin_ne([1, 1], [x, y], %d);\n" s)
+  done;
+  Buffer.add_string b
+    (Printf.sprintf "solve :: int_search([x, y], input_order, %s, complete) satisfy;\n"
+       valsel);
+  Buffer.contents b
+
+(* Solve one of them to a real .opb/.pbp pair, run veripb over it, and report the two
+   sizes. [None] for the checker is a FAILURE at the call site, never a skip (M1-T18). *)
+let cmp_run dir tag valsel =
+  let m = F.Builder.of_string ~file:tag (cmp_src valsel) in
+  let c = F.Compile.compile m in
+  let opb = Filename.concat dir (tag ^ ".opb")
+  and pbp = Filename.concat dir (tag ^ ".pbp") in
+  let oc = open_out opb in
+  Baguette_proof.Encoding.write_opb c.F.Compile.encoding oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let writer = Baguette_proof.Writer.create ~audit:true oc in
+  Baguette_proof.Encoding.start_proof c.F.Compile.encoding writer;
+  let ctx = Baguette_core.Justify.create ~writer ~encoding:c.F.Compile.encoding in
+  let check_asn assignment =
+    let values = Array.make (F.Model.nvars m) 0 in
+    List.iter (fun (v, x) -> values.(Var.to_int v) <- x) assignment;
+    F.Model.check_assignment m values
+  in
+  let order = match c.F.Compile.order with Some o -> o | None -> Search.spec_order in
+  let outcome =
+    Search.solve ~engine:c.F.Compile.engine ~store:c.F.Compile.store ~ctx ~check:check_asn
+      ~order ()
+  in
+  close_out oc;
+  let ic = open_in_bin pbp in
+  let proof = really_input_string ic (in_channel_length ic) in
+  close_in ic;
+  let lines = String.split_on_char '\n' proof in
+  (* A DERIVATION LINE is one that mints a constraint id, which in this writer's output
+     is the labelled form `@cN <rule> ...`. Counting those rather than all lines keeps
+     comments, deletions and the header out of the number. *)
+  let derivations =
+    List.length
+      (List.filter (fun l -> String.length l > 2 && l.[0] = '@' && l.[1] = 'c') lines)
+  in
+  (outcome, opb, pbp, String.length proof, derivations)
+
+let test_split_vs_min_proof_size () =
+  let dir = Filename.temp_file "baguette_m7t9" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let o_min, opb_min, pbp_min, bytes_min, der_min = cmp_run dir "min" "indomain_min" in
+  let o_spl, opb_spl, pbp_spl, bytes_spl, der_spl =
+    cmp_run dir "split" "indomain_split"
+  in
+  (* Same problem, same answer, whichever way the tree was walked. A value choice that
+     changed the ANSWER would be a soundness bug, not a heuristic. *)
+  let sat = function Search.Sat _ -> true | _ -> false in
+  check "M7-T9: indomain_min and indomain_split agree on the answer"
+    (sat o_min && sat o_spl);
+  (* Both proofs are checked. A size comparison between two artefacts nobody verified
+     would be a comparison of two guesses. *)
+  (match Baguette_proof.Checker.find () with
+  | None ->
+      incr failures;
+      print_endline
+        "FAIL M7-T9: veripb not found -- NEITHER proof in the size comparison was \
+         checked. Do not treat this as a pass."
+  | Some veripb ->
+      let run opb pbp =
+        Sys.command
+          (Printf.sprintf "%s %s %s > /dev/null 2>&1" (Filename.quote veripb)
+             (Filename.quote opb) (Filename.quote pbp))
+        = 0
+      in
+      check "M7-T9: veripb accepts the indomain_min proof" (run opb_min pbp_min);
+      check "M7-T9: veripb accepts the indomain_split proof" (run opb_spl pbp_spl));
+  Printf.printf
+    "     M7-T9 proof cost, x,y in 0..15, only solution at the top of x:\n\
+    \       indomain_min   %d bytes, %d derivation lines\n\
+    \       indomain_split %d bytes, %d derivation lines\n"
+    bytes_min der_min bytes_spl der_spl;
+  (* THE FINDING, asserted. If this goes red, indomain_split has become the cheaper of
+     the two on this model -- which would be a real change in the search or the learning
+     and is worth understanding before the assertion is flipped. Do not flip it to match
+     new numbers without saying what moved. *)
+  check
+    "M7-T9: indomain_split's proof is NOT cheaper than indomain_min's -- the roadmap's \
+     prediction is refuted"
+    (bytes_spl >= bytes_min && der_spl >= der_min);
+  List.iter
+    (fun f -> try Sys.remove f with _ -> ())
+    [ opb_min; pbp_min; opb_spl; pbp_spl ];
+  try Sys.rmdir dir with _ -> ()
 
 (* ============================================================================== main *)
 
@@ -983,6 +1306,8 @@ let () =
   test_constant_folding ();
   test_rejections ();
   test_search_constants ();
+  test_search_strategies ();
+  test_split_vs_min_proof_size ();
   (* M7-T1. The inversion first -- it is the change -- then the control, which runs
      every pre-M7 assertion under an explicit --max-order-width=10000. *)
   test_width_cap_default ();

@@ -1,0 +1,21 @@
+% M7-T9. `largest` selects the variable with the largest value in its domain, read
+% as the domain MAXIMUM (the MiniZinc spec's literal wording, and Gecode's
+% INT_VAR_MAX_MAX). The model discriminates that reading from the other plausible
+% one -- "the largest domain minimum" -- because the two name different variables:
+%
+%   p  0..9   lo 0  hi 9        q  6..7   lo 6  hi 7        r  1..8   lo 1  hi 8
+%
+% largest (max hi)  -> p          "largest lo" would pick q.
+%
+% The annotation writes the array as [q, r, p] so that `input_order` picks q and
+% `first_fail` picks q too (it has the smallest domain): every strategy this project
+% supports names a DIFFERENT first variable here except those two, and neither of
+% them is p. So the answer below is evidence that `largest` ran.
+%
+% With indomain_max the chosen variable is fixed to its maximum, so the answer says
+% which one was chosen: p = 9 here, and q = 6, r = 1 follow from p + q + r = 16.
+var 0..9: p :: output_var;
+var 6..7: q :: output_var;
+var 1..8: r :: output_var;
+constraint int_lin_eq([1, 1, 1], [p, q, r], 16);
+solve :: int_search([q, r, p], largest, indomain_max, complete) satisfy;

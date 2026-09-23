@@ -680,6 +680,55 @@ let first_fail store cands =
    array wrote, which is the order `int_search(vs, input_order, ...)` actually means. *)
 let input_order _store cands = cands.(0)
 
+(* ------------------------------------------------- M7-T9: `smallest` and `largest`
+
+   WHICH READING OF THE MINIZINC SPEC THESE TAKE, AND WHY. The spec's wording is
+   "smallest: choose the variable with the smallest value in its domain" and "largest:
+   choose the variable with the largest value in its domain". Read literally, "the
+   smallest value in its domain" is that variable's domain MINIMUM and "the largest value
+   in its domain" is its domain MAXIMUM, so the two are not the same comparison run
+   backwards: [smallest] minimises over the candidates' domain minima, [largest]
+   MAXIMISES over their domain maxima. That is also what Gecode's `INT_VAR_MIN_MIN` and
+   `INT_VAR_MAX_MAX` do, which is what the MiniZinc-to-Gecode backend maps these two onto,
+   so the literal reading and the reference implementation agree.
+
+   The reading NOT taken, and it is the plausible one: "largest" as the variable with the
+   largest domain MINIMUM, i.e. [smallest] with the comparison flipped and the projection
+   left alone. Nothing in the spec supports it, it disagrees with Gecode, and on a
+   candidate set whose domains are nested it gives a different variable -- so it is a
+   different search, not a different spelling of the same one.
+
+   Both read the CURRENT domain, not the declared one: [Store.get] is the live domain and
+   every candidate is unfixed by construction ([unfixed]), so neither is looking at a
+   bound the search has already pruned away. Ties go to the earliest candidate, which is
+   the order the caller handed them over -- [input_order]'s rule, for the same reason.
+
+   Neither touches the hole set. A domain's minimum and maximum are its bounds whatever
+   holes sit between them ([Domain.lo] / [Domain.hi] are total and I-D2 keeps both
+   members), so unlike [indomain_median] below there is nothing here that a lazily
+   allocated hole set can make wrong. *)
+let smallest store cands =
+  let best = ref cands.(0) in
+  let blo = ref (Domain.lo (Store.get store cands.(0))) in
+  for i = 1 to Array.length cands - 1 do
+    let lo = Domain.lo (Store.get store cands.(i)) in
+    if lo < !blo then (
+      best := cands.(i);
+      blo := lo)
+  done;
+  !best
+
+let largest store cands =
+  let best = ref cands.(0) in
+  let bhi = ref (Domain.hi (Store.get store cands.(0))) in
+  for i = 1 to Array.length cands - 1 do
+    let hi = Domain.hi (Store.get store cands.(i)) in
+    if hi > !bhi then (
+      best := cands.(i);
+      bhi := hi)
+  done;
+  !best
+
 (* docs/SPEC.md 3.4, and the default of [solve]: first-fail, min-value branching. This is
    the normative default -- what a model with NO search annotation gets, and what
    [sequence] below falls back to for the variables an annotation did not mention. *)
@@ -719,6 +768,50 @@ let indomain_min store v =
 
 let indomain_max store v =
   { d_var = v; d_split = Domain.hi (Store.get store v) - 1; d_high_first = true }
+
+(* ------------------------------------------------------- M7-T9: `indomain_split`
+
+   MiniZinc: "bisect the variable's domain, excluding the upper half first". So the split
+   point is the midpoint of the domain's RANGE and the LOW side goes first -- which is
+   this type's native shape, and the only value choice here that is not an assignment in
+   disguise: [indomain_min]/[indomain_max] are splits whose first branch happens to fix
+   the variable, and this one's first branch deliberately does not.
+
+   THE MIDPOINT IS THE RANGE MIDPOINT, NOT THE MEDIAN VALUE, and that is the spec's
+   reading rather than a convenience: "bisect the domain" is the interval bisection
+   Gecode's `INT_VAL_SPLIT_MIN` performs ("values not greater than the mean of the
+   smallest and largest value"), and it stays the range midpoint when the domain has
+   holes. [indomain_median] is the one that counts values, which is why the two are
+   different annotations and not spellings of one.
+
+   [lo + (hi - lo) / 2] rather than [(lo + hi) / 2]: OCaml's [/] truncates toward zero, so
+   the second form rounds the WRONG WAY on a domain straddling zero ([(-5 + 0) / 2 = -2],
+   not [-3]), and it can overflow where this cannot. [hi > lo] on any candidate ([unfixed]
+   admits only domains of size > 1), so the result lies in [lo, hi) as [type decision]
+   requires, and both branches are non-empty because [lo] is a member of the low side and
+   [hi] of the high side (I-D2).
+
+   HOLES ARE NOT A SPECIAL CASE HERE, and it is worth saying why, because they are one for
+   [indomain_median]. The midpoint may land ON a hole, in which case [Domain.settle] walks
+   the pushed bound past it and the decision lands strictly stronger than the order literal
+   its nogood negates. That is the exact shape M1-T45 investigated and M1-T55 closed: see
+   [bridges] below, and [test_hole_split_sweep] in test/unit/test_engine.ml, which forces
+   every such shape and checks each proof. The normative default already makes this
+   decision, so [indomain_split] adds no case the search did not have.
+
+   WHAT IT COSTS IN THE PROOF -- MEASURED, not assumed. The row that opened this
+   (docs/ROADMAP.md M7-T9) predicted the justification would be CHEAPER than
+   [indomain_min]'s because the branch is an order literal and the order encoding is built
+   out of exactly those (D-0028). The prediction is about the wrong quantity. Both
+   branchings emit the SAME per-decision lines: [branch] writes one order literal
+   [x_ge_(k+1)] either way, and neither the bridge nor the nogood is shaped by where [k]
+   sits. What differs is the TREE -- how many decisions there are -- and bisection is the
+   asymptotically smaller one on a wide domain. See the numbers in test_flatzinc.ml's
+   [test_split_vs_min_proof_size]. *)
+let indomain_split store v =
+  let d = Store.get store v in
+  let lo = Domain.lo d and hi = Domain.hi d in
+  { d_var = v; d_split = lo + ((hi - lo) / 2); d_high_first = false }
 
 (* One `int_search(...)` annotation. [p_vars] is the annotation's array, IN THE ORDER IT
    WAS WRITTEN, which is what [input_order] reads; it may name a variable twice and may
