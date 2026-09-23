@@ -5958,3 +5958,173 @@ identical 31/29 split under the old and new libraries. The four new model tests
 pass with their proofs accepted by veripb 3.0.2.
 
 Follows D-0067 (the library) and D-0074 (the run that counted this).
+
+## D-0077  A `global_cardinality` propagator: the counting row lives in the ORDER encoding, and the interval capacity is what the decomposition cannot reach
+
+**Status**: **ACCEPTED**, implemented by M7-T16 (2026-09-23, agent-gcc).
+`lib/core/prop/gcc.ml`, `lib/flatzinc/{model,builder,compile}.ml`,
+`mznlib/fzn_global_cardinality.mzn`, four model lanes.
+
+### What was built, and what was deliberately not
+
+Two filtering rules, both bounds-level reasoning.
+
+**Rule A -- interval capacity.** For an interval `[a, b]` all of whose values are in the
+cover, `cap = sum_v (hi(c_v) - const_v)` and `H = { i : [lo_i, hi_i] inside [a, b] }`.
+`|H| = cap` pushes every other variable out of `[a, b]`; `|H| > cap` refutes. **With every
+capacity 1 this IS all_different's Hall rule**, which is the sense in which gcc is
+all_different's generalisation and this module is shaped on `alldiff.ml`.
+
+**Rule C -- the count bounds.** `hi(c_v) := may_v`, `lo(c_v) := must_v`, over possible and
+certain takers. This is what makes the propagator a checker, and it is also how a
+shortfall becomes a refutation: too few possible takers empties the count's domain.
+
+**Not built, and named rather than omitted**: no flow (domain consistency is Regin's
+argument and is a later row, as stage 2 was for all_different); and no interval
+LOWER-capacity rule -- its per-value case is exactly what the decomposition's own linear
+row already propagates, so it would not earn its justification in the row whose thesis is
+that the global infers what the decomposition cannot. The line its interval case needs is
+written out in `gcc.ml`'s header so the next stage starts from a sentence.
+
+### The counting row cannot live in the direct encoding, and that turned out to be a gift
+
+A tally is naturally `sum_i x_i_eq_v`, which is what `alldiff`'s Hall derivation counts
+over. **It is not available: the direct encoding does not exist when the `.opb` is
+written.** `Encoding.start_proof` introduces it with `red` (PROOF-FORMAT §3), so a model
+row naming `x_eq_v` names variables the model file has never heard of. `all_different`
+does not meet this because its model rows are pairwise disequalities over ORDER literals;
+a counting row has nowhere to hide.
+
+The identity `[x = v] = x_ge_v - x_ge_(v+1)` makes the same tally linear in literals the
+`.opb` already has. Three consequences, all of them wins:
+
+1. **This global requests no direct encoding at all** -- no `x_eq_v` variables, no
+   channelling clauses, no at-least-one line, none of the width-proportional machinery
+   D-0028 charges for. `all_different` pays for all of it.
+2. **"x lands in `[a, b]`" telescopes** to `x_ge_a - x_ge_(b+1)`, so the at-least-one line
+   a Hall argument needs is not derived from the channelling -- it is the variable's two
+   bound facts.
+3. **The pruning needs no channelling telescope either.** What the counting leaves is
+   already a statement about order literals.
+
+### A bound a DECISION moved has no unit line, and none is derivable
+
+This is the finding that cost the most and is the one to carry forward. The derivation
+wants `x >= lo(x)` at UNIT strength, and D-0064's `Explanation.defining` supplies it for a
+root-established bound. Under a decision there is no such line: **a decision is not an
+assumption in this proof format**, nothing states it, and `Justify.defining_lit`'s minted
+`rup ~n1_ge_1 >= 1` is refused by 3.0.2 with *"not implied by reverse unit propagation"*.
+Measured, on `test/models/gcc_search_sat.fzn`'s first branch.
+
+The resolution is `alldiff.ml`'s and it generalises: **do not ask for the unit.** Sum
+LADDER CHAINS, which are globally valid and free, and let the bound literal stay in the
+row. What comes out is `<the pruning> \/ ~<the bounds it read>` -- the `Ne` shape, sound at
+any level -- and the pruning's `Reason` carries the same bounds, which is what makes the
+trace line true (I-P5) and RUP. `bound_cancels` removes a literal where, and only where,
+the bound is a root one, which is the case that matters: a ROOT conflict must derive
+`0 >= 1`, and a row with literals left in it is not contradicting.
+
+**A corollary worth stating on its own**: the degree of "x lands in `[a, b]`" is two units
+and the ladder gives away one. The missing unit is the bound fact, and it cannot be
+conjured. Any future propagator that needs a decision-dependent fact at unit strength
+needs the direct encoding's at-least-one line, or it needs this trick.
+
+### The overshoot, which `alldiff` shipped latent and this row met
+
+`alldiff.ml`'s `overshoot_cancel` has a counterpart here and it was written only after
+3.0.2 said *"the constraint with ID 48 is not contradicting"*. The conflict arm pushes a
+confined variable past its own upper bound; when the interval's top is at or above that
+variable's DECLARED top the residue is the constant false and the row is `0 >= 1` for
+nothing -- and that is the case every model with declared-narrow variables reaches. When
+only the CURRENT top is inside, the residue is a real literal, the row derives a perfectly
+valid `u >= 4`, and the refutation is not a refutation.
+`test/models/gcc_hall_narrowed_unsat.fzn` exists to keep that closed: its variables are
+declared `1..4` and narrowed to `2..3` by linear rows, which is the only shape that
+exercises it.
+
+### NO NEW `Explanation` CONSTRUCTOR
+
+`Combine`/`Weaken`/`Model_row`/`Defining` throughout, plus `Model_row` on the ladder rungs.
+D-0044's bet is not spent. `Weaken` is used in **both** of its directions and the sign is
+what decides which: cancelling a NEGATIVE term costs nothing, cancelling a positive one
+costs the unit of degree D-0009 describes. `Combine`'s divisor does real work in exactly
+one place -- `ladder_at_most`/`ladder_at_least`, where a single division rounds the degree
+up to 1 and turns a bound on the count's ladder into the one literal about it.
+
+### The declaration is `Checking`, and that is a measured under-claim
+
+The filtering is bounds-level reasoning, but the tag is `Propagator.Checking`, which is
+what the M2-T10 oracle holds a propagator to. Bounds consistency for gcc is
+Quimper/Katriel's algorithm, not the capacity-Hall rules here, and with VARIABLE counts it
+additionally has to reach a fixpoint between the count bounds and the interval capacities;
+nothing in the module proves that it does. `all_different` could declare `Bounds` at stage
+1 because Hall intervals ARE bounds consistency for all_different (Puget) -- there is no
+such theorem for what is written here, and **a declaration the oracle falsifies is a crash
+at a search node, not a warning**. What `Checking` does oblige, rule C delivers.
+
+### The numbers, both ways
+
+Native gcc against the per-value decomposition, hand-written in the shape
+`std/fzn_global_cardinality.mzn` produces (one `int_eq_reif` + `bool2int` per variable per
+cover value, summed against the count by an `int_lin_eq`). Same solver, same checker,
+same machine; both sides `s VERIFIED`.
+
+| model | `.opb` | `.pbp` | lines | `pol` | `rup` |
+|---|---|---|---|---|---|
+| `gcc_search_sat` (SAT, under search) | **575 B** | **1 169 B** | **45** | 15 | 5 |
+| the same, decomposed | 3 236 B | 26 340 B | 697 | 0 | 520 |
+| `gcc_capacity_unsat` (UNSAT) | **311 B** | **170 B** | **9** | 3 | 0 |
+| the same, decomposed | 2 957 B | 6 535 B | 188 | 0 | 133 |
+| `gcc_capacity_sat` (SAT, settled at the root) | **523 B** | 191 B | 8 | 0 | 0 |
+| the same, decomposed | 3 497 B | 384 B | 8 | 0 | 0 |
+
+**22x on the proof and 15x on the line count** where there is a search to do, 38x and 21x
+on the refutation. The `.opb` is 5-10x smaller in every row, which is the direct encoding
+the decomposition needs and this does not.
+
+**Read the `pol`/`rup` columns as well as the sizes, and this is the more interesting
+half.** The decomposed proofs are **entirely `rup`** -- 520 lines and 133 lines of it,
+zero `pol`. Per D-0066-as-amended a `rup` line is checkable only when it is load-bearing
+for a later line, so most of what the decomposition emits is a proof artefact the checker
+walks past. gcc's proof is 15 `pol` against 5 `rup`: a `pol` is *computed* by the checker
+and cannot be vacuous. **The decomposition is not merely larger, it is larger in the
+currency that proves less.**
+
+Caveat, stated rather than buried: the two sides of the search rows do not explore the
+same tree, because the propagators differ -- that is the point of the comparison, not a
+confound, but it means the ratio is a property of this model and not a constant.
+
+### The lane that would have proved nothing
+
+`gcc_capacity_sat.fzn` is the model the row was designed around -- gcc prunes at the root
+what the decomposition cannot -- and **its proof contains no gcc reasoning at all**. A
+propagation emits its justification only when a later line needs it (`trace.ml`'s deferred
+explanations), so a model the propagator settles at the root verifies a proof that is a
+header and a `sol` line. **The same is true of `test/models/alldiff_hall_sat.fzn`**, which
+has been green since M4-T1 and whose proof contains the `red` lines of the direct encoding
+and not one step of the Hall derivation.
+
+That is D-0053's shape in a new dress and it is worth a sentence of its own: *a green lane
+over a model your propagator settles at the root is not evidence that its justification is
+right.* `gcc_search_sat.fzn` is the answer here -- a search annotation that branches on the
+counts, smallest value first, makes the first three guesses wrong, and each failure's
+nogood rests on the derivation that reached it. 15 `pol` lines over a SATISFIABLE model,
+which is the condition D-0053 insists on and which a refutation lane cannot supply.
+
+### Three refusals, with a source position
+
+A cover and counts of different lengths; a count that is a literal constant rather than a
+variable (the rows subtract the count's ladder and a constant has none -- declare it on a
+single value, which IS supported and is what every model lane uses); and the same variable
+twice in the array, whose tally contribution would be 2 where every cancellation assumes
+1. `all_different` can let a repeat through because its pairwise decomposition refutes it;
+there is no such decomposition here, so it is refused rather than mis-counted.
+
+### D-0076's condition has expired
+
+M7-T15 bridged 1.x's two-argument `global_cardinality` onto std's three-argument predicate
+and let std decompose it, and argued the case in the form *"std decomposes it either way
+and we have no propagator"*. That was the right argument and it names its own expiry
+condition. `mznlib/fzn_global_cardinality.mzn` now declares the inner predicate bodyless,
+so the same bridge lands on the propagator; **nothing about the bridge itself had to
+change.**
