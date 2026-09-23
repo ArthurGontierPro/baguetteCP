@@ -395,7 +395,7 @@ not just the session that caused it.
   over a **satisfiable** model, or you have tested nothing. This bites any row that emits
   `red` after a conflict, not just M3.
 - **`rup` is vacuous over a contradictory database too, and a satisfiable model is not the
-  cure it is for `red`.** Measured on 3.0.2 (D-0066, D-0072): on `ne_eq_unsat` **all 8**
+  cure it is for `red`.** Measured on 3.0.2 (D-0066, D-0073): on `ne_eq_unsat` **all 8**
   `rup` lines accept a flipped literal, and on the **satisfiable** `chain_sat` **3 of 15**
   still do. What makes a `rup` line real is being load-bearing for a **later** line, not
   the model's answer — so pin a `rup` break to a measured line, never to a model.
