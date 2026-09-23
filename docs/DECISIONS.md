@@ -5384,3 +5384,129 @@ available.
   function, and an exception from there would unwind through code that never agreed to
   handle it — including the proof writer, mid-line. The synchronous check raises, because it
   knows where it is; the wording and the status are identical either way.
+
+---
+
+## D-0072  Set domains: the holes go in the .opb as ladder rows, and in the solver as propagators
+
+**Status**: **ACCEPTED** (M7-T11, 2026-09-23, agent-holes). Removes
+`Compile.reject_set_domain`, which refused `var {1,3,5}: x`. It was not weakened; the
+thing it protected against was fixed.
+
+### What the refusal was protecting
+
+Its message named the gap precisely, which is why it was worth keeping until this row:
+`Encoding.declare_int` took only `~lo` and `~hi`, so the holes of a set domain had no
+representation in the `.opb`. Encoding the hull instead would have been a **relaxation** —
+the solver could report UNSAT and hand veripb a refutation of an `.opb` that is
+satisfiable, and veripb would accept it, because veripb only ever sees the `.opb`. That
+is the one failure mode this project will not ship, and it is invisible to the checker,
+so nothing downstream could have caught it.
+
+### The ladder convention, confirmed
+
+`docs/PROOF-FORMAT.md` §3 is normative and the loop at the bottom of
+`Encoding.declare_int` agrees with it literally:
+
+- `x_ge_v` exists for `lo < v <= hi` and means `x >= v`;
+- the rung written for each `lo < v < hi` is `+1 ~x_ge_(v+1) +1 x_ge_v >= 1`, i.e.
+  **`x >= v+1 -> x >= v`** — **downward**.
+
+Confirmed two ways rather than read once: by the spec section, and by dumping a real
+`.opb` (`var {1,3,5}` → `@c1 +1 ~x_ge_3 +1 x_ge_2 >= 1`, and so on).
+
+### The hole row
+
+`x = h` is the conjunction `x >= h` AND NOT `x >= h+1`, so the row that forbids exactly
+that assignment and nothing else is the **mirror** of the rung at the same value:
+
+```
++1 ~x_ge_h +1 x_ge_(h+1) >= 1        i.e.  x >= h  ->  x >= h+1      (UPWARD)
+```
+
+**The polarity is the whole soundness argument, and getting it backwards is silently
+unsound rather than loudly wrong**: writing the ladder's own direction there
+(`x >= h+1 -> x >= h`) is already implied by the ladder, forbids nothing, and leaves the
+`.opb` a relaxation that the checker cannot see. `test_proof.ml`'s
+`test_m7t11_hole_rows` and `test_compile.ml`'s `test_set_domain_holes` both match the
+emitted text literally, and both match a ladder rung as well, so a change that collapsed
+the two shapes into one could not pass.
+
+A hole is required to be **strictly interior** (`lo < h < hi`), which costs nothing
+because `Compile` takes the hull to be the min and max of the value set, so both ends are
+always present. Out-of-range holes raise `Encoding.Hole_out_of_range` rather than being
+filtered: a silently dropped hole is a value the `.opb` admits and the store does not,
+which is this decision running backwards.
+
+### The half that the hole row alone does NOT buy, and the measurement that showed it
+
+The first implementation put the holes into the store as well, via `Domain.of_list`. It
+is **wrong, and silently so**. A hole that is in the declared domain but behind no
+propagator has no trail entry — `Store.remover` returns `None`, and
+`lib/core/trace.ml`'s header is explicit that this is the `var {1,3,5}` case — so nothing
+in the proof ever claims it. `int_eq(x, 4)` over `{1,3,5}` is the smallest instance: the
+domain wipeout happens because 4 is a hole, but `Lin_eq`'s justification is a `pol` over
+two model rows that is satisfied at `x = 4`. Measured, veripb 3.0.2:
+
+```
+The constraint with ID 9 is not contradicting, as specified by the hint.
+```
+
+Three further shapes (`int_eq` against a `4..4` variable, against a `1..5` variable
+pinned to 4, and against a second set domain `{2,4}`) failed the same way, and one failed
+earlier still with `Justify.emit: Combine's Weaken summand must be non-empty`.
+
+This is the same root cause D-0070 fixed from the other end: the implication graph has no
+edge for a `settle`, so a bound that walks over a hole is disconnected from the reasoning
+that put the hole there. D-0070's fix is `Search.bridges`, and a bridge needs the hole to
+have been *derived*. A declared hole never is.
+
+**So the store gets the hull, and each hole is posted as its own `Ne` instance**
+(`x <> h`, the single term `(+1, x)` with right-hand side `h`). Every hole pruning is then
+an ordinary logged pruning with an ordinary trail entry, and M1-T55's bridge and D-0070's
+nogood filter apply to it unchanged. Nothing new was added to the explanation vocabulary
+and no propagator was written.
+
+### Why the hole row and the `Ne` instance are not redundant
+
+`Ne` **cites no row id**; its justification is a self-contained `rup` over order literals
+(its module header says why). The clause that `rup` has to land on for `x <> h` **is** the
+hole row. So `Compile` deliberately does *not* call `Encoding.add_int_lin_ne` for a hole:
+that would mint an auxiliary Boolean and two rows where one clause does the job.
+`test_set_domain_holes` asserts the absence of the auxiliary, so "one clause per hole" is
+a property of the artefact rather than of the intention.
+
+### Case (d): `{0, 1000}` is BUDGETED, not refused
+
+**Decision: budgeted.** A set domain is never worse than **twice** the ladder of its own
+hull, because a hole must be strictly interior and there are at most `hi - lo - 1` of
+those. Holes therefore add a constant factor, not an order of magnitude, to a cost the
+hull already pays and already passes through two caps: `Encoding.max_order_width` (10 000,
+D-0041) and M7-T8's `--max-encoding-clauses` (D-0071). A third refusal keyed on the ratio
+of holes to values would fire on models the existing caps already admit at the same cost,
+and would be the only cap in this module keyed on something other than size.
+
+Hole rows are counted into `ladder_clauses`, so M7-T8's **predictive** check sees them
+before anything is allocated — an unbudgeted allocation path is exactly what D-0071
+exists to prevent. `test_m7t11_hole_rows` pins this: hull `1..5` with holes `{2,4}` is 5
+clauses, a budget of 5 admits it, a budget of 4 refuses it and leaves the encoding
+untouched.
+
+`test/models/set_domain_wide_sat.fzn` carries the shape at `{0,200}` — 2 values, 199
+holes, 199 + 199 rows — with a width justification in its header, the way
+`width_root_unsat.fzn` does.
+
+### Evidence
+
+- (a) `set_domain_sat.fzn` — `{1,3,5}` bounded to `(1,5)` answers `x = 3`, which only the
+  holes can force. `s VERIFIED SATISFIABLE`.
+- (b) `set_domain_hole_unsat.fzn` — the only value satisfying the constraints is 4, a
+  hole. UNSAT, `s VERIFIED UNSATISFIABLE`. Over a relaxed `.opb` this would be a
+  refutation of a satisfiable model.
+- (c) `test_set_domain_holes` asserts on the **emitted** `.opb` text, both polarities,
+  and the absence of an auxiliary; `test_m7t11_hole_rows` asserts the budget.
+- (d) `set_domain_wide_sat.fzn`, `s VERIFIED SATISFIABLE`.
+
+Two of the four are **satisfiable**, per D-0053/D-0066: `red` and `rup` are both vacuous
+over a contradictory database, so a suite of UNSAT lanes alone would be evidence of
+nothing.
