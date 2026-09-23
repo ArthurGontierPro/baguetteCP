@@ -5958,3 +5958,187 @@ identical 31/29 split under the old and new libraries. The four new model tests
 pass with their proofs accepted by veripb 3.0.2.
 
 Follows D-0067 (the library) and D-0074 (the run that counted this).
+
+## D-0077  The assignment decision: a disjunctive sibling is discharged by DERIVATION, not by resolution
+Status: DECIDED
+Date: 2026-09-23
+Task: M7-T12 (agent-decision, wave 30).
+Touches: `lib/core/search.ml`, `lib/flatzinc/{model,builder,compile}.ml`, `docs/SPEC.md`
+section 3.4, `test/unit/{test_learn,test_compile,test_flatzinc}.ml`, three new models.
+Follows D-0019 (a disequality is a two-literal clause, not a direct-encoding literal),
+D-0018 (the trace, and what a line may mention), D-0070 and D-0075 (a right answer with a
+wrong emitted line), D-0053 and D-0066-as-amended-by-D-0073 (which answers a break lane
+may be checked over). Closes M7-T12 and lifts SPEC 3.4's `indomain_median` refusal.
+
+### The problem, stated once
+
+A baguette decision was a SINGLE ORDER LITERAL: `x <= k` on one side, `x >= k+1` on the
+other. `indomain_min` and `indomain_max` are exact under that **by accident of sitting at
+a domain boundary** -- `x <= lo` *is* `x = lo`, and `x != lo` collapses to the single
+literal `x >= lo+1`. An interior `m` has neither property. `x = m` is two literals
+(`x >= m AND x <= m`), and its sibling `x != m` is a **disjunction**
+`x <= m-1 \/ x >= m+1` (D-0019).
+
+That is not a value-choice problem. A nogood is a clause of NEGATED ASSUMPTIONS, and the
+negation of a disjunctive assumption is a conjunction, which no clause can hold. So the
+sibling of an assignment cannot be named in a nogood at all, and `combine_nogoods`
+resolving two children on exactly one literal has nothing to resolve. M7-T9 refused
+`indomain_median` for exactly this reason rather than substituting a bisection, and that
+refusal was correct.
+
+### What was built, in three moves
+
+**1. The `x = m` branch is TWO STACKED ORDINARY DECISIONS**, `x >= m` at one level and
+`x <= m` at the next. Not one level with two pushes. This is the single most important
+choice in the row, and it is what kept the blast radius small: every existing invariant
+holds verbatim. Each push is the first trail entry of its own level, so
+`check_decision_landed` is untouched; `levelled_nogood` still reads one literal per level;
+`bridges` still pairs decision entries with decision literals one to one; `Trace` still
+skips both pushes because both are level starts. **No nogood machinery changed.**
+
+**2. The failed branch's nogood is WEAKENED, and weakening is the whole proof
+obligation.** The child's nogood `ng` names `x <= m-1` at the lower level and `x >= m+1`
+at the upper -- the negations of the two decisions. Re-level those two onto the node's own
+level, add whichever `ng` did not name, keep everything else, and the result
+
+    C1  =  (ng's outer literals)  \/  x <= m-1  \/  x >= m+1
+
+is a **SUPERSET of `ng` as a set of literals**. A superset of a RUP clause is RUP:
+negating it asserts everything negating `ng` asserts, so the same unit propagation reaches
+the same contradiction. That is the entire argument, and it needs nothing about this
+search.
+
+Its ONE precondition is that the literals dropped are exactly the two the assignment put
+there -- i.e. that a nogood is everywhere a set of negated decisions tagged with their
+levels. That is true (`levelled_nogood` builds it that way; `minimise`, the `Learn.levels`
+filter and `combine_nogoods` only ever remove from it) and it is now a `Debug.check`
+rather than a paragraph, because if it ever stopped being true the drop would STRENGTHEN
+C1 instead of weakening it, the hole below would be punched on a clause the node does not
+entail, and on an UNSAT instance nothing would say so (D-0066).
+
+**3. THE SIBLING IS NOT A SIBLING.** C1 is globally valid, and under the decisions in
+force at this node it says exactly `x <> m`. So `x <> m` is not an assumption to branch
+under: it is a DERIVED FACT at the node that already exists. The value is removed from the
+domain at the node's own level, with C1 as the pruning's justification and the active
+decisions as its reason, and `dfs` is RE-ENTERED on the unchanged decision stack. M5-T1's
+branch-and-bound re-entry is the same move and carries the same argument: no level is
+reopened, no decision is re-taken, the tree is still traversed once, left to right.
+
+### THE RESOLVENT, AND WHY THE BACKJUMP IS SOUND
+
+**There is no resolvent, and that is the answer rather than a gap.**
+
+The node's nogood is whatever the re-entry returns, **unresolved and unmodified**. Three
+facts make the unmodified clause the right one to hand up:
+
+  - it is valid under the outer decisions, because that is what a nogood is;
+  - it names no literal of either assignment level, because those levels were CLOSED
+    before the re-entry began and the re-entry's decision stack is the outer one. There
+    is no level for such a literal to be tagged with;
+  - therefore the `mentions_level` test the frame above applies to it -- the test that
+    licenses a backjump -- is evaluated over exactly the assumption set the clause is
+    valid under, which is the property that test has always needed and the only one it
+    has ever needed.
+
+So the backjump level is `filed_at`, computed by the unmodified rule, and it is sound for
+the unmodified reason. The disjunctive sibling is discharged by DERIVATION, not by
+RESOLUTION. **A change to `combine_nogoods` was the row's stated scope and turned out not
+to be needed; saying which half of a row's premise was wrong is the record's job.**
+
+The second arm is the backjump THROUGH an assignment: the child's nogood names neither
+assignment level, so it refutes the node whatever the variable takes, no clause is written
+about the assignment and the value is never removed. That arm is where an unsound
+resolvent would live if this shape had one, since it is the only place the assignment's
+levels are discharged with nothing emitted about them; `test_learn.ml`'s M7-T12 (d)
+asserts on the spectator being decided exactly ONCE.
+
+### HOW THE TWO BRANCHES ARE WRITTEN
+
+- **`x = m`**: nothing at all for the decisions. Two levels open and two trail entries
+  land, and D-0018's rule that a decision gets no line applies to both because both are
+  level starts. The subtree's trace, bridges, learned clause and nogood are byte for byte
+  what they would be under any other pair of decisions.
+- **`x <> m`**: no decision line either, because it is not a decision. What appears is
+  ONE clause -- C1, a `rup`, filed at the node's own level -- and then the ordinary trace
+  line for an ordinary pruning, `rup +1 ~x_ge_m +1 x_ge_(m+1) +1 ~d1 ... >= 1`, whose tail
+  is the decisions in force. That line is C1 weakened by any decision C1 had already
+  minimised away, so it is RUP against C1 and never stronger than it.
+
+**C1's LIFETIME is the one new I-X2 obligation.** The re-entry's every line rests on it:
+the hole's line is RUP against it, every later pruning that reads the hole cites the
+hole's reason (D-0075's mechanism, unchanged), and the re-entry's nogood is RUP along that
+chain. C1 is filed at the node's level, so the frame owning that level wipes it on the way
+out -- after the re-entry has returned. At level 0 nothing wipes, so `Search` records those
+ids and `retire_assign_clauses` deletes them at the end of the search, beside `Trace`'s
+permanent lines and `Retention`'s learned ones. Those two sentences are the whole of it.
+
+### I-X10 GAINS ITS FIRST EXCEPTION, STATED
+
+`trace.ml`'s header says "**no decision ever appears in a trace line**, and every line is
+globally valid on its own". The hole's line breaks the first clause and keeps the second:
+it names the active decisions in its tail, and it is globally valid because it is C1
+weakened. This is the only line in `lib/` that does. The alternative -- stating `x <> m`
+with an empty tail -- is **D-0075's defect exactly**, a line that is not merely underived
+but false, and it is what `break_assign_facts` produces.
+
+### WHAT WAS MEASURED RATHER THAN PREDICTED
+
+**The D-0075 break lane was GREEN on the first model it was written against, and the
+model was the bug.** Trace lines are written lazily, only when a branch fails, so the
+hole's line is emitted -- and therefore checked -- only if the re-entry that follows the
+hole goes on to fail deeper. The first nested scene's re-entry succeeded immediately, no
+trace was written, and an empty tail was invisible. A third exclusion row fixed it. This
+is D-0075's own note about its reproducer's `q1/q2/q3`, rediscovered from the other side,
+and it is the reason `median_assign_under_decision_sat.fzn`'s header argues for every row
+it contains.
+
+Both breaks redden at the checker's full wording ("The constraint is not implied by
+reverse unit propagation (RUP) from core and derived database"), over SATISFIABLE scenes,
+each with a control proving the unbroken scene verifies.
+
+### THE DISPATCH, AND WHY IT MATTERS
+
+`indomain_median` returns an `Assign` only for a STRICTLY INTERIOR median. At the lower
+bound it returns `indomain_min`'s decision and at the upper bound `indomain_max`'s,
+because there the one-literal shape is exact. A domain of two values always lands at the
+boundary. So the new machinery is reached only where it is genuinely needed, and every
+model whose medians all sit at a boundary emits the proof it emitted before. That is not
+an optimisation: it keeps the new shape's blast radius equal to its necessity.
+
+The median is the LOWER median -- the value at index `(size-1)/2` of the domain's values
+ascending, Gecode's `INT_VAL_MED`. It counts VALUES, which is exactly what distinguishes
+it from `indomain_split`'s range midpoint; over `0..6` with `3` removed the two are 2 and
+3, and `test_flatzinc.ml` asserts both on the same domain.
+
+### THE STATS IDENTITY
+
+M1-T36's `nodes = 2 * decisions + 1 - skipped` gains one term and stays an EQUALITY. An
+assignment bumps `decisions` by 2 and dispatches ONE child, so it contributes 1 node where
+the equation expects 4: `- 3 * assigns`. `skipped` is NOT bumped on the backjump arm --
+an assignment has no sibling to skip, and those three nodes are already subtracted --
+which was found by the identity failing, not by reading. `assign_backjumps` counts that
+arm instead.
+
+### WHAT THIS DOES NOT DO, AND WHAT IT OPENS
+
+**Staged, deliberately.** `all_different`'s value-graph branching and M4's element rows
+were named as the real reasons to build this, and neither is wired to it. What they need
+is the SHAPE -- an assignment decision with a disjunctive sibling, and a contract saying
+what its refutation is -- and that is here and is general: nothing in `branch_assign`
+knows about medians, and `Search.Assign` is an ordinary `choice` any order may return.
+What is NOT here is a value-graph criterion, a matching-based order, or an assignment over
+the DIRECT encoding. The last is the one to check before assuming this generalises: a
+direct-encoding assignment would claim `x = m` as a single literal, and D-0019 point 3's
+test for when that is forced applies to it and not to this.
+
+**`combine_nogoods` is untouched**, so a decision shape whose two children are BOTH
+explored and must resolve on two literals is still not expressible. This row did not need
+one and does not provide one.
+
+### SPEC 3.4 WAS CHANGED, AND IT IS A NORMATIVE DOCUMENT
+
+The `indomain_median` refusal paragraph is gone, replaced by the strategy's definition and
+by the dispatch. The refusal genuinely went away -- it was not weakened into an acceptance
+-- and the sentence it stood under is untouched: substituting a strategy still solves a
+different problem, and `anti_first_fail`, `indomain_random`, `float_search`, `set_search`
+and `priority_search` are still refused by name, at full strength, with their own lanes.
