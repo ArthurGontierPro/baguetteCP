@@ -1,0 +1,13 @@
+% M7-T11 / D-0072 test (a): a set domain solves, and its proof verifies.
+%
+% `var {1,3,5}` is the hull 1..5 in the store plus two [Ne] instances, one per hole,
+% and two hole rows in the .opb -- `~x_ge_2 \/ x_ge_3` and `~x_ge_4 \/ x_ge_5`, the
+% MIRROR polarity of the ladder rung at the same value (the ladder says
+% `x >= v+1 -> x >= v`; a hole says `x >= h -> x >= h+1`).
+%
+% The bounds alone leave 2, 3 and 4; only 3 survives the holes, so the answer is
+% evidence that the holes are enforced and not merely declared.
+var {1,3,5}: x :: output_var;
+constraint int_lt(1, x);
+constraint int_lt(x, 5);
+solve satisfy;

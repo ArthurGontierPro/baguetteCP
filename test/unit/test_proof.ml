@@ -3322,6 +3322,65 @@ let test_m7t8_resource_guard () =
         ~expected:"unlimited"
         ~got:(Encoding.heap_limit_string ()))
 
+(* ------------------------------------------- M7-T11 / D-0072: declared-domain holes *)
+
+(* Two things, and the second is the one D-0071 exists to make non-optional.
+
+   1. THE POLARITY. The ladder rung at v is `x >= v+1 -> x >= v` (PROOF-FORMAT section
+      3); the hole row at h is its MIRROR, `x >= h -> x >= h+1`, because `x = h` is
+      `x >= h` AND NOT `x >= h+1`. Emitting the ladder's own direction there would be
+      implied by the ladder and forbid nothing -- an .opb that is still a relaxation of
+      the declared domain, which veripb cannot notice, so nothing but this assertion
+      would.
+
+   2. THE BUDGET. Hole rows are new encoding output and are counted into
+      [c_ladder_clauses], so M7-T8's predictive check sees them BEFORE it allocates
+      anything. An allocation path the budget cannot see is exactly what D-0071 is for.
+      Hull 1..5 is 3 rungs and the two holes are 2 more, so a budget of 5 fits and a
+      budget of 4 does not -- and the one that does not must leave the encoding
+      untouched, the property every other refusal in [declare_int] has. *)
+let test_m7t11_hole_rows () =
+  let saved = !Encoding.encoding_budget in
+  Encoding.encoding_budget := None;
+  let e = Encoding.create () in
+  Encoding.declare_int_with_holes e "x" ~holes:[ 2; 4 ] ~lo:1 ~hi:5;
+  let c = Encoding.cost e in
+  check "M7-T11: 3 ladder rungs + 2 hole rows are 5 encoding clauses"
+    (c.Encoding.c_ladder_clauses = 5 && Encoding.n_constraints e = 5);
+  let text =
+    String.concat "\n" (List.map Opb.constr_to_string (Encoding.constraints e))
+  in
+  check "M7-T11: the hole row is the MIRROR of the rung at the same value"
+    (m7_contains text ~needle:"+1 ~x_ge_2 +1 x_ge_3 >= 1"
+    && m7_contains text ~needle:"+1 ~x_ge_4 +1 x_ge_5 >= 1"
+    && m7_contains text ~needle:"+1 ~x_ge_3 +1 x_ge_2 >= 1");
+  (* A hole that is not strictly interior has no rung to hang on. Loud, not filtered:
+     a silently dropped hole is a value the .opb admits and the store does not. *)
+  let e2 = Encoding.create () in
+  (match Encoding.declare_int_with_holes e2 "y" ~holes:[ 1 ] ~lo:1 ~hi:5 with
+  | () -> check "M7-T11: a hole at the hull's bound is refused" false
+  | exception Encoding.Hole_out_of_range (v, h) ->
+      check "M7-T11: a hole at the hull's bound is refused, naming it" (v = "y" && h = 1));
+  check "M7-T11: the refused declaration allocated nothing" (Encoding.n_constraints e2 = 0);
+  (* The budget, on the total including the holes. *)
+  Encoding.encoding_budget := Some 5;
+  let e3 = Encoding.create () in
+  (match Encoding.declare_int_with_holes e3 "x" ~holes:[ 2; 4 ] ~lo:1 ~hi:5 with
+  | () -> check "M7-T11: a budget of 5 admits 3 rungs and 2 holes" true
+  | exception Encoding.Encoding_too_large _ ->
+      check "M7-T11: a budget of 5 admits 3 rungs and 2 holes" false);
+  Encoding.encoding_budget := Some 4;
+  let e4 = Encoding.create () in
+  (match Encoding.declare_int_with_holes e4 "x" ~holes:[ 2; 4 ] ~lo:1 ~hi:5 with
+  | () ->
+      check "M7-T11: a budget of 4 refuses them -- the holes ARE counted (D-0071)" false
+  | exception Encoding.Encoding_too_large o ->
+      check "M7-T11: a budget of 4 refuses them -- the holes ARE counted (D-0071)"
+        (o.Encoding.o_adds = 5 && o.Encoding.o_already = 0));
+  check "M7-T11: the over-budget declaration allocated nothing"
+    (Encoding.n_constraints e4 = 0 && (Encoding.cost e4).Encoding.c_ladder_clauses = 0);
+  Encoding.encoding_budget := saved
+
 let () =
   report_checker ();
   test_lits ();
@@ -3362,6 +3421,7 @@ let () =
   test_m7_limits_are_options ();
   test_m7_encoding_cost ();
   test_m7t8_resource_guard ();
+  test_m7t11_hole_rows ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
