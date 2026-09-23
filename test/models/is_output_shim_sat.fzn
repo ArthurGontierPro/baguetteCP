@@ -1,0 +1,36 @@
+% is_output_shim_sat -- M7-T15
+%
+% FLATTENED ARTEFACT. Source: mznlib/test/is_output_shim_sat.mzn, flattened by
+% MiniZinc 2.10.1 against mznlib/ (MZN_SOLVER_PATH=tools). Regenerate with
+%   minizinc -c --solver baguette mznlib/test/is_output_shim_sat.mzn -o <this>
+% and re-attach this header; do not hand-edit the body.
+%
+% WHAT IT PINS. `a' is annotated `:: is_output' in the source and `z' is not.
+% mznlib/compat_mzn1.mzn can only declare `is_output' inert -- the two ways of
+% aliasing it onto `add_to_output' were measured and neither works on 2.10.1 --
+% so MiniZinc falls back to its default output, which annotates BOTH `a' and
+% `z'. This model is the pin on that: the expected output lists z AND a. The
+% deviation is a SUPERSET, never a dropped variable, and if a future library
+% change turned it into a subset this test is what would say so.
+%
+% Note also that `is_output' survives into the FlatZinc as an annotation on the
+% variable declarations; the front end must tolerate it, and does.
+%
+% Unique solution: three distinct values in 1..4 summing to 6 and strictly
+% increasing are 1, 2, 3; z = 3 - a[1] = 2.
+
+predicate all_different_int(array [int] of var int: x);
+array [1..3] of int: X_INTRODUCED_20_ = [1,1,1];
+array [1..2] of int: X_INTRODUCED_21_ = [1,-1];
+array [1..2] of int: X_INTRODUCED_22_ = [1,1];
+var 1..4: X_INTRODUCED_16_:: is_output;
+var 1..4: X_INTRODUCED_17_:: is_output;
+var 1..4: X_INTRODUCED_18_:: is_output;
+var 1..4: z:: output_var;
+array [1..3] of var int: a:: output_array([1..3]):: is_output = [X_INTRODUCED_16_,X_INTRODUCED_17_,X_INTRODUCED_18_];
+constraint all_different_int(a);
+constraint int_lin_eq(X_INTRODUCED_20_,[X_INTRODUCED_16_,X_INTRODUCED_17_,X_INTRODUCED_18_],6);
+constraint int_lin_le(X_INTRODUCED_21_,[X_INTRODUCED_16_,X_INTRODUCED_17_],-1);
+constraint int_lin_le(X_INTRODUCED_21_,[X_INTRODUCED_17_,X_INTRODUCED_18_],-1);
+constraint int_lin_eq(X_INTRODUCED_22_,[z,X_INTRODUCED_16_],3);
+solve  satisfy;
