@@ -1304,7 +1304,7 @@ let forced_order (wanted : (Var.t * int * bool) list) store cands =
     | (v, k, hf) :: rest ->
         let d = Store.get store v in
         if Array.exists (fun c -> c = v) cands && k >= Domain.lo d && k < Domain.hi d then
-          { Search.d_var = v; d_split = k; d_high_first = hf }
+          Search.Split { Search.d_var = v; d_split = k; d_high_first = hf }
         else pick rest
   in
   pick wanted

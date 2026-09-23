@@ -828,7 +828,9 @@ let decision_of ?cands src =
         | Some idxs -> Array.of_list (List.map Var.of_int idxs)
         | None -> Search.unfixed c.F.Compile.store
       in
-      Some (order c.F.Compile.store cands)
+      (* M7-T12: see test_compile.ml's [decision_of] -- the value choices asserted on
+         here are all [Split]s and [as_split] is where that stops being an assumption. *)
+      Some (Search.as_split (order c.F.Compile.store cands))
 
 let test_search_constants () =
   (* (a) MIXED array. Three variables, declared wide/narrow/mid, and the annotation
@@ -1109,7 +1111,7 @@ let test_search_strategies () =
          let order =
            match c.F.Compile.order with Some o -> o | None -> Search.spec_order
          in
-         (outcome, d0, order store [| Var.of_int 0; Var.of_int 1 |]))
+         (outcome, d0, Search.as_split (order store [| Var.of_int 0; Var.of_int 1 |])))
    with
   | Error e ->
       incr failures;

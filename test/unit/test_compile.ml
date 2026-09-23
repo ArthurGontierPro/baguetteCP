@@ -1255,7 +1255,9 @@ let decision_of ?cands src =
     | Some idxs -> Array.of_list (List.map Var.of_int idxs)
     | None -> Search.unfixed c.Compile.store
   in
-  (m, c, order c.Compile.store cands)
+  (* M7-T12: every value choice this file exercises is a [Split]; [as_split] says so
+     rather than letting an [Assign] be silently mis-read. *)
+  (m, c, Search.as_split (order c.Compile.store cands))
 
 (* The scene for obligation (a). Two variables that every strategy can tell apart:
 
@@ -1407,7 +1409,7 @@ let test_search_annotated_proofs () =
       fired := true;
       let v = Var.of_int 0 in
       let d = Store.get store v in
-      { Search.d_var = v; d_split = Domain.lo d; d_high_first = false })
+      Search.Split { Search.d_var = v; d_split = Domain.lo d; d_high_first = false })
   in
   let colouring ann =
     Printf.sprintf

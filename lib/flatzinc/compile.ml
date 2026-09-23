@@ -436,6 +436,10 @@ let rec phases_of_search (m : Model.t) (s : Model.search) :
         | Model.Indomain_min -> Baguette_core.Search.indomain_min
         | Model.Indomain_max -> Baguette_core.Search.indomain_max
         | Model.Indomain_split -> Baguette_core.Search.indomain_split
+        (* M7-T12. The only value choice that can return an [Assign]; see
+           [Search.indomain_median] for the dispatch and D-0077 for why the shape
+           exists. *)
+        | Model.Indomain_median -> Baguette_core.Search.indomain_median
       in
       [
         {

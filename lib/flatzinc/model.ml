@@ -122,7 +122,7 @@ type constr = { k : cstr; c_pos : Pos.t }
    catch-all arm on either of these types anywhere, deliberately, because a catch-all is
    how an unsupported strategy becomes a wrong search instead of a refusal. *)
 type var_choice = Input_order | First_fail | Smallest | Largest
-type val_choice = Indomain_min | Indomain_max | Indomain_split
+type val_choice = Indomain_min | Indomain_max | Indomain_split | Indomain_median
 type search = Int_search of int list * var_choice * val_choice | Seq of search list
 type objective = Satisfy | Minimize of operand | Maximize of operand
 

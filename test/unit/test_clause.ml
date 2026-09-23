@@ -258,11 +258,12 @@ let test_of_lits_declines () =
 let rev_order store cands =
   let best = ref cands.(0) in
   Array.iter (fun v -> if Var.to_int v > Var.to_int !best then best := v) cands;
-  {
-    Search.d_var = !best;
-    d_split = Domain.lo (Store.get store !best);
-    d_high_first = false;
-  }
+  Search.Split
+    {
+      Search.d_var = !best;
+      d_split = Domain.lo (Store.get store !best);
+      d_high_first = false;
+    }
 
 type run = {
   r_outcome : Search.outcome;
