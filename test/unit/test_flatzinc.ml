@@ -798,6 +798,170 @@ let test_width_cap_compile_default () =
         ~src:"var 0..1000000000000000000: x :: output_var;\nsolve satisfy;\n"
         ~needles:[ "`x`"; "arithmetic limit" ])
 
+(* =========================================== M7-T7: constants in a search array
+
+   `int_search([x, 3, y], ...)` used to refuse the WHOLE MODEL. It does not any more: a
+   constant in the array is a variable with nothing left to decide, so it is skipped and
+   the annotation is honoured over the variables that remain (docs/SPEC.md 3.4).
+
+   These assertions are on the DECISION, not on the answer, for the reason
+   test_compile.ml states at length: a solver that dropped the annotation entirely and
+   searched by [spec_order] would answer every one of these models correctly. The
+   decision is the only thing that distinguishes honouring the annotation from ignoring
+   it, so the decision is what is checked. *)
+
+module Search = Baguette_core.Search
+module Var = Baguette_core.Var
+
+(* The order [Compile] built for [src], applied to [cands] (model variable indices).
+   [None] means the model carries no usable annotation at all. *)
+let decision_of ?cands src =
+  let m = F.Builder.of_string ~file:"<t>" src in
+  let c = F.Compile.compile m in
+  match c.F.Compile.order with
+  | None -> None
+  | Some order ->
+      let cands =
+        match cands with
+        | Some idxs -> Array.of_list (List.map Var.of_int idxs)
+        | None -> Search.unfixed c.F.Compile.store
+      in
+      Some (order c.F.Compile.store cands)
+
+let test_search_constants () =
+  (* (a) MIXED array. Three variables, declared wide/narrow/mid, and the annotation
+     writes `[3, narrow, 7, wide]` -- two constants among two variables, with a constant
+     FIRST so that a naive "skip only trailing constants" would still fail.
+
+       wide    0..7   declared first
+       narrow  0..1   declared second
+       mid     0..5   declared third, NOT named by the annotation
+
+     `input_order` must pick the first still-unfixed element OF THE ANNOTATION'S ARRAY.
+     With the constants removed that array is [narrow; wide], so the decision must be on
+     [narrow] (index 1) -- which is neither declaration order (that would be [wide],
+     index 0) nor first-fail-over-everything. And [indomain_max] must split it at
+     hi - 1 = 0, high side first. *)
+  let mixed vsel valsel =
+    Printf.sprintf
+      "var 0..7: wide;\n\
+       var 0..1: narrow;\n\
+       var 0..5: mid;\n\
+       constraint int_le(wide, 7);\n\
+       constraint int_le(narrow, 1);\n\
+       constraint int_le(mid, 5);\n\
+       solve :: int_search([3, narrow, 7, wide], %s, %s, complete) satisfy;\n"
+      vsel valsel
+  in
+  (match F.Error.catch (fun () -> decision_of (mixed "input_order" "indomain_max")) with
+  | Error e ->
+      incr failures;
+      Printf.printf "FAIL M7-T7 (a): a mixed search array was refused: %s\n"
+        (F.Error.to_string e)
+  | Ok None ->
+      incr failures;
+      print_endline
+        "FAIL M7-T7 (a): the mixed array left no annotation at all; the variables in it \
+         must still be searched"
+  | Ok (Some d) ->
+      check "M7-T7 (a): input_order over [3, narrow, 7, wide] decides `narrow`"
+        (Var.to_int d.Search.d_var = 1);
+      check "M7-T7 (a): ... and indomain_max splits it high-first at hi - 1"
+        (d.Search.d_split = 0 && d.Search.d_high_first));
+  (* The same array under [first_fail] must pick [narrow] too -- but that is not evidence
+     on its own, so the discriminating case is [wide] made narrowest of the two NAMED
+     variables while [mid] (unnamed, narrower still) is a candidate. first_fail over the
+     ANNOTATION'S subset must pick from {wide, narrow}, never [mid]. *)
+  (match
+     F.Error.catch (fun () ->
+         decision_of ~cands:[ 0; 1; 2 ]
+           "var 0..7: wide;\n\
+            var 0..1: narrow;\n\
+            var 0..5: mid;\n\
+            constraint int_le(wide, 7);\n\
+            constraint int_le(narrow, 1);\n\
+            constraint int_le(mid, 5);\n\
+            solve :: int_search([3, wide, 7], input_order, indomain_min, complete) \
+            satisfy;\n")
+   with
+  | Error e ->
+      incr failures;
+      Printf.printf "FAIL M7-T7 (a2): refused: %s\n" (F.Error.to_string e)
+  | Ok None ->
+      incr failures;
+      print_endline "FAIL M7-T7 (a2): the annotation was dropped entirely"
+  | Ok (Some d) ->
+      check
+        "M7-T7 (a2): a single variable among constants is still the annotation's subset"
+        (Var.to_int d.Search.d_var = 0
+        && d.Search.d_split = 0 && not d.Search.d_high_first));
+  (* (b) ALL-CONSTANT array. The phase is empty, which is legal: it contributes no
+     decision, and `seq_search` falls through to the NEXT phase. Here the second phase
+     names [mid], so the decision must be on [mid] (index 2) -- not on [wide] (index 0),
+     which is what a fallback to [spec_order]'s declaration-order-ish pick would look
+     like if the empty phase had swallowed the sequence. *)
+  (match
+     F.Error.catch (fun () ->
+         decision_of ~cands:[ 0; 1; 2 ]
+           "var 0..7: wide;\n\
+            var 0..1: narrow;\n\
+            var 0..5: mid;\n\
+            constraint int_le(wide, 7);\n\
+            constraint int_le(narrow, 1);\n\
+            constraint int_le(mid, 5);\n\
+            solve :: seq_search([int_search([1, 2, 3], input_order, indomain_min, \
+            complete), int_search([mid], input_order, indomain_max, complete)]) satisfy;\n")
+   with
+  | Error e ->
+      incr failures;
+      Printf.printf "FAIL M7-T7 (b): an all-constant search array was refused: %s\n"
+        (F.Error.to_string e)
+  | Ok None ->
+      incr failures;
+      print_endline "FAIL M7-T7 (b): the whole seq_search was dropped"
+  | Ok (Some d) ->
+      check "M7-T7 (b): an all-constant phase makes no decision; seq_search falls through"
+        (Var.to_int d.Search.d_var = 2);
+      check "M7-T7 (b): ... and the phase that DID fire is the one that chose the value"
+        (d.Search.d_split = 4 && d.Search.d_high_first));
+  (* (b2) An all-constant array as the ONLY annotation: no phase can fire, so every
+     decision comes from docs/SPEC.md 3.4's default. It must not raise and must not
+     deadlock -- [Search.sequence]'s fallback is what carries it. *)
+  (match
+     F.Error.catch (fun () ->
+         decision_of ~cands:[ 0; 1 ]
+           "var 0..7: wide;\n\
+            var 0..1: narrow;\n\
+            constraint int_le(wide, 7);\n\
+            constraint int_le(narrow, 1);\n\
+            solve :: int_search([1, 2, 3], input_order, indomain_max, complete) satisfy;\n")
+   with
+  | Error e ->
+      incr failures;
+      Printf.printf "FAIL M7-T7 (b2): refused: %s\n" (F.Error.to_string e)
+  | Ok None ->
+      (* Legal too: no phase can ever fire, so "no annotation" and "one empty phase" are
+         the same search. Either shape passes; a raise or a wrong decision does not. *)
+      check "M7-T7 (b2): an only-constants annotation searches by the 3.4 default" true
+  | Ok (Some d) ->
+      (* [spec_order] = first_fail + indomain_min: [narrow] (index 1), low side first. *)
+      check "M7-T7 (b2): an only-constants annotation searches by the 3.4 default"
+        (Var.to_int d.Search.d_var = 1
+        && d.Search.d_split = 0 && not d.Search.d_high_first));
+  (* The strategy checks are NOT relaxed by an empty array: 3.4 says an unsupported
+     strategy MUST be refused, and an array that happens to hold only constants does not
+     change what the annotation asked for. *)
+  reject "M7-T7: an all-constant array does not excuse an unsupported strategy" ~line:2
+    ~src:
+      "var 1..3: x;\n\
+       solve :: int_search([1, 2], smallest, indomain_min, complete) satisfy;\n"
+    ~needles:[ "unsupported variable-selection strategy" ];
+  reject "M7-T7: ... nor an unsupported value choice" ~line:2
+    ~src:
+      "var 1..3: x;\n\
+       solve :: int_search([1, x], input_order, indomain_random, complete) satisfy;\n"
+    ~needles:[ "unsupported value-choice strategy" ]
+
 (* ============================================================================== main *)
 
 let () =
@@ -818,6 +982,7 @@ let () =
   test_misc_accepts ();
   test_constant_folding ();
   test_rejections ();
+  test_search_constants ();
   (* M7-T1. The inversion first -- it is the change -- then the control, which runs
      every pre-M7 assertion under an explicit --max-order-width=10000. *)
   test_width_cap_default ();
