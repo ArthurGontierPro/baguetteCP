@@ -404,10 +404,17 @@ let emit_line (ctx : Justify.ctx) ~origin ~claim ~facts =
    no trail entry behind it, which within M1 means a *declared* domain with a gap
    ([Domain.of_list], for `var {1,3,5}: x`). **What refuses that is named rather than
    implied, so this and [Store.remover]'s header cannot drift apart (M1-T63):**
-   `reject_set_domain` in lib/flatzinc/compile.ml refuses `Model.Dset` unconditionally,
-   and `Domain.of_list` has no caller anywhere in `lib/`. Saying only that SPEC 2.1 "does
-   not admit" a set domain was the weaker form -- a subset can be widened, whereas the
-   gate is a line of code someone has to delete. This module cites nothing rather than
+   `Domain.of_list` has no caller anywhere in `lib/`. That is now the WHOLE gate, and it
+   is load-bearing: M7-T11 (D-0072) deleted `reject_set_domain`, which this comment used
+   to name as the primary one. A `var {1,3,5}: x` no longer reaches the store as a domain
+   with gaps at all -- `compile.ml` gives the store the HULL and posts each hole as its
+   own `Ne` instance, so every hole now has a trail entry behind it and [Store.remover]
+   returns [Some]. That is not a nicety: M7-T11 first tried loading the holes into the
+   store via [Domain.of_list], and veripb rejected four refutations, because a conflict
+   resting on a trail-less hole is justified by a `pol` over model rows that is not
+   contradictory. Saying only that SPEC 2.1 "does not admit" a set domain was the weaker
+   form -- a subset can be widened, whereas the gate is a line of code someone has to
+   delete. **If you give [Domain.of_list] a caller in `lib/`, read D-0072 first.** This module cites nothing rather than
    raising: the line is then exactly
    as strong as the one it wrote before M1-T57, so an encoding that grows declared holes
    degrades to the old behaviour instead of aborting the solve -- and the .opb would have

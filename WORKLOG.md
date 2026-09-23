@@ -2894,4 +2894,8 @@ minted. **If you ever make declared holes go into the store directly, D-0070's b
 will not cover them.**
 
 Case (d) is **budgeted, not refused** (a set domain is at most twice its hull's ladder).
-One cross-session request is open above, on `lib/core/trace.ml`'s stale header sentence.
+One cross-session request was open above, on `lib/core/trace.ml`'s stale header sentence.
+**CLOSED 2026-09-23 by the orchestrator**: the comment now names `Domain.of_list`'s lack of
+a caller as the WHOLE gate, records that M7-T11 first tried loading holes into the store and
+veripb rejected four refutations for it, and tells anyone who would give `Domain.of_list` a
+caller to read D-0072 first.
