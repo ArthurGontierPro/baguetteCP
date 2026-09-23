@@ -104,6 +104,12 @@ exception Direct_too_large of string * int
    to report that case. See [max_order_width] and M1-T54. *)
 exception Width_too_large of string * int * int
 
+(* A hole handed to [declare_int] that is not strictly inside the declared hull, so the
+   clause that would punch it has no rung to hang on. Loud rather than filtered: a hole
+   silently dropped is a value the .opb still admits and the store does not, which is
+   the relaxation this whole mechanism exists to prevent (M7-T11, D-0072). *)
+exception Hole_out_of_range of string * int
+
 (* A row whose arithmetic cannot be carried out in a native int, so committing it to
    the .opb would write a different constraint from the one the caller posted. See the
    header, M1-T32. Loud by design: D-0029's "overflow raises; it never wraps and never
@@ -222,6 +228,12 @@ type ivar = {
   hi : int;
   (* v -> id of the consistency constraint  x_ge_(v+1) -> x_ge_v,  for lo < v < hi *)
   consistency : (int, cid) Hashtbl.t;
+  (* h -> id of the HOLE clause  x_ge_h -> x_ge_(h+1),  for each declared hole h.
+     Keyed separately from [consistency] because the two are indexed by the same
+     integers and mean opposite implications: at the same value h, [consistency] holds
+     the downward rung and this holds the upward one. Merging the tables would make a
+     hole overwrite its own ladder rung. See [declare_int] (M7-T11). *)
+  hole_rows : (int, cid) Hashtbl.t;
   mutable direct : dvar option;
 }
 
@@ -843,7 +855,38 @@ let warn_wide_declaration x ~lo ~hi ~clauses =
   in
   !warn_sink msg
 
-let declare_int t x ~lo ~hi =
+(* THE HOLE CLAUSE (M7-T11, D-0072), and the direction of it is the whole soundness
+   argument, so it is stated here rather than left to be re-derived.
+
+   The ladder's convention, PROOF-FORMAT section 3 and the loop at the bottom of this
+   function: [x_ge_v] means `x >= v`, it exists for lo < v <= hi, and the rung written
+   for each lo < v < hi is
+
+     1 ~x_ge_(v+1) 1 x_ge_v >= 1        i.e.  x >= v+1  ->  x >= v      (DOWNWARD)
+
+   `x = h` is therefore the conjunction  x >= h  AND  NOT x >= h+1. To make it
+   unsatisfiable in the .opb, and nothing else with it, forbid exactly that pair:
+
+     1 ~x_ge_h 1 x_ge_(h+1) >= 1        i.e.  x >= h  ->  x >= h+1      (UPWARD)
+
+   The two are the same shape and OPPOSITE polarity, which is the trap the roadmap row
+   warns about: writing the ladder's direction here would say `x >= h+1 -> x >= h`,
+   which is already implied and forbids nothing, leaving the .opb a relaxation of the
+   declared domain and every refutation against it worthless.
+
+   Each hole clause removes exactly one assignment of x and touches no other variable,
+   so the .opb's solution set over x is precisely the declared value set: the hull is
+   untouched at both ends because a hole is required to be strictly interior (a value
+   removed at a bound is not a hole, it is a narrower hull, and [Compile] takes the
+   hull to be min..max of the value set).
+
+   Cost: one clause per hole, and since a hole must be strictly inside (lo, hi) there
+   are at most hi - lo - 1 of them -- the same count as the ladder itself. So a set
+   domain costs at most twice its hull's ladder and never a different order of
+   magnitude, which is why holes are BUDGETED (counted into [ladder_clauses], and so
+   into M7-T8's predictive check below) rather than separately refused. *)
+
+let declare_int_gen t x ~holes ~lo ~hi =
   if lo > hi then raise (Empty_domain x);
   (* Before the Hashtbl and before the ladder: a refused declaration leaves no trace
      in [t] and costs no allocation. M1-T54, and still true of the two refusals that
@@ -855,7 +898,18 @@ let declare_int t x ~lo ~hi =
   | None -> ());
   (* [order_width_exceeds] has established that hi - lo is representable. *)
   let width = hi - lo in
-  let clauses = if width >= 1 then width - 1 else 0 in
+  let ladder = if width >= 1 then width - 1 else 0 in
+  (* Sorted and deduplicated so the .opb is byte-identical whatever order the caller
+     produced the holes in (the determinism gate), and validated before anything is
+     minted so a bad hole leaves [t] untouched, exactly as a refused width does. *)
+  let holes = List.sort_uniq Stdlib.compare holes in
+  List.iter (fun h -> if h <= lo || h >= hi then raise (Hole_out_of_range (x, h))) holes;
+  let n_holes = List.length holes in
+  (* Hole rows ARE order-ladder rows: same literals, same shape, minted by this same
+     function, and they must be counted against M7-T8's budget for the reason D-0071
+     gives -- an allocation path the budget cannot see is the thing that budget exists
+     to prevent. [clauses] is what this declaration adds to the .opb. *)
+  let clauses = ladder + n_holes in
   (* M7-T8. Both guards, BEFORE the ladder loop and before [t] is touched, so an
      overrun leaves the encoding exactly as it was -- the property M1-T54 gave the
      width refusal, kept here for the same reason: the caller can name the variable
@@ -867,9 +921,18 @@ let declare_int t x ~lo ~hi =
   | Some (_, wlo, whi) when whi - wlo >= width -> ()
   | _ -> t.widest <- Some (x, lo, hi));
   (match !width_warn_threshold with
-  | Some n when width_exceeds ~lo ~hi n -> warn_wide_declaration x ~lo ~hi ~clauses
+  | Some n when width_exceeds ~lo ~hi n -> warn_wide_declaration x ~lo ~hi ~clauses:ladder
   | _ -> ());
-  let v = { name = x; lo; hi; consistency = Hashtbl.create 16; direct = None } in
+  let v =
+    {
+      name = x;
+      lo;
+      hi;
+      consistency = Hashtbl.create 16;
+      hole_rows = Hashtbl.create 4;
+      direct = None;
+    }
+  in
   Hashtbl.replace t.ints x v;
   t.decl_rev <- x :: t.decl_rev;
   (* docs/PROOF-FORMAT.md section 3: for each lo < v < hi,
@@ -877,12 +940,33 @@ let declare_int t x ~lo ~hi =
   for value = lo + 1 to hi - 1 do
     let c = Opb.clause [ Lit.negate (Lit.ge x (value + 1)); Lit.ge x value ] in
     Hashtbl.replace v.consistency value (add_constraint t c)
-  done
+  done;
+  (* The hole rows, after the whole ladder, in ascending order. See the comment above
+     this function for why the polarity is the ladder's mirror and not its copy. *)
+  List.iter
+    (fun h ->
+      let c = Opb.clause [ Lit.negate (Lit.ge x h); Lit.ge x (h + 1) ] in
+      Hashtbl.replace v.hole_rows h (add_constraint t c))
+    holes
 
-let declare_int t x ~lo ~hi = try declare_int t x ~lo ~hi with Exit -> ()
+let declare_int_gen t x ~holes ~lo ~hi =
+  try declare_int_gen t x ~holes ~lo ~hi with Exit -> ()
+
+(* The hull-only declaration, which is every caller but a FlatZinc set domain. Kept as
+   its own name rather than an optional [?holes] argument because an optional labelled
+   parameter with no positional parameter after it cannot be erased, so the whole tree
+   of existing call sites would have needed a trailing [()]. *)
+let declare_int t x ~lo ~hi = declare_int_gen t x ~holes:[] ~lo ~hi
+
+(* [var {1,3,5}: x]: the hull lo..hi plus the values strictly inside it that the
+   declaration excludes. M7-T11. *)
+let declare_int_with_holes t x ~holes ~lo ~hi = declare_int_gen t x ~holes ~lo ~hi
 
 (* A FlatZinc [var bool] is the order encoding on [0, 1]: one variable, b_ge_1. *)
 let declare_bool t x = declare_int t x ~lo:0 ~hi:1
+
+(* The id of the hole clause  x >= h -> x >= h+1,  if [h] was declared a hole. *)
+let hole_id t x h = Hashtbl.find_opt (find t x).hole_rows h
 
 (* x >= value *)
 let ge t x value =
