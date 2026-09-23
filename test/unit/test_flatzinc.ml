@@ -344,10 +344,12 @@ let test_rejections () =
     ~needles:[ "declared more than once" ];
   reject "reject: empty domain" ~line:1 ~src:"var 3..1: x;\nsolve satisfy;\n"
     ~needles:[ "empty domain" ];
+  (* M7-T9 shipped `smallest`; the example moved to `anti_first_fail`, which is still
+     unsupported. Same assertion, same strength -- see test_search_strategies below. *)
   reject "reject: unsupported search strategy" ~line:2
     ~src:
       "var 1..3: x;\n\
-       solve :: int_search([x], smallest, indomain_random, complete) satisfy;\n"
+       solve :: int_search([x], anti_first_fail, indomain_random, complete) satisfy;\n"
     ~needles:[ "unsupported variable-selection strategy"; "input_order" ];
   reject "reject: array initialiser length mismatch" ~line:1
     ~src:"array [1..3] of int: w = [1, 2];\nsolve satisfy;\n"
@@ -951,16 +953,204 @@ let test_search_constants () =
   (* The strategy checks are NOT relaxed by an empty array: 3.4 says an unsupported
      strategy MUST be refused, and an array that happens to hold only constants does not
      change what the annotation asked for. *)
+  (* M7-T9 shipped `smallest`, which this assertion used to use as its example of an
+     unsupported strategy. The assertion is unchanged in strength -- `anti_first_fail` is
+     still unsupported and still must be refused; only the example moved. *)
   reject "M7-T7: an all-constant array does not excuse an unsupported strategy" ~line:2
     ~src:
       "var 1..3: x;\n\
-       solve :: int_search([1, 2], smallest, indomain_min, complete) satisfy;\n"
+       solve :: int_search([1, 2], anti_first_fail, indomain_min, complete) satisfy;\n"
     ~needles:[ "unsupported variable-selection strategy" ];
   reject "M7-T7: ... nor an unsupported value choice" ~line:2
     ~src:
       "var 1..3: x;\n\
        solve :: int_search([1, x], input_order, indomain_random, complete) satisfy;\n"
     ~needles:[ "unsupported value-choice strategy" ]
+
+(* ====================================== M7-T9: smallest, largest, indomain_split
+
+   Three of the four strategies docs/ROADMAP.md M7-T9 sized. The fourth,
+   `indomain_median`, is REFUSED and its refusal is asserted below beside them --
+   `lib/flatzinc/builder.ml` carries the argument, and the short version is that a
+   baguette decision is one order literal, so assigning an interior value is not a
+   value-choice change but a change to the decision shape.
+
+   EVERY ASSERTION HERE IS ON THE DECISION, NOT ON THE ANSWER, and for these four that
+   is not a stylistic preference: a value choice cannot change the answer at all (the
+   search is complete either way), and a variable choice changes only the order the
+   leaves are visited in. A test that checked the solution could not tell any of these
+   apart from `input_order`, from each other, or from the annotation being dropped on
+   the floor -- which is the failure docs/SPEC.md 3.4 exists to forbid. *)
+
+(* The four-way model. FIVE variables, chosen so that the four variable-selection
+   strategies pick FOUR DIFFERENT ONES, and so that the reading of `largest` this project
+   did NOT take picks a fifth:
+
+     index  name  domain  size  lo  hi
+       0    w     4..8      5    4   8
+       1    x     0..6      7    0   6
+       2    y     2..3      2    2   3
+       3    z     5..9      5    5   9
+       4    u     7..8      2    7   8
+
+   input_order -> w  (first in the annotation's array)
+   first_fail  -> y  (smallest domain; ties with u at 2, broken by array order)
+   smallest    -> x  (smallest domain MINIMUM, 0)
+   largest     -> z  (largest domain MAXIMUM, 9)
+
+   and the rejected reading of `largest` -- "the largest domain minimum" -- would pick
+   u (lo = 7), which is why u is in the model. Without it `largest` and "largest lo"
+   agree and the assertion would be evidence of nothing. *)
+let quad vsel valsel =
+  Printf.sprintf
+    "var 4..8: w;\n\
+     var 0..6: x;\n\
+     var 2..3: y;\n\
+     var 5..9: z;\n\
+     var 7..8: u;\n\
+     constraint int_le(w, 8);\n\
+     constraint int_le(x, 6);\n\
+     constraint int_le(y, 3);\n\
+     constraint int_le(z, 9);\n\
+     constraint int_le(u, 8);\n\
+     solve :: int_search([w, x, y, z, u], %s, %s, complete) satisfy;\n"
+    vsel valsel
+
+let picks name src expect_idx =
+  match F.Error.catch (fun () -> decision_of src) with
+  | Error e ->
+      incr failures;
+      Printf.printf "FAIL %s: refused: %s\n" name (F.Error.to_string e)
+  | Ok None ->
+      incr failures;
+      Printf.printf "FAIL %s: the annotation was dropped entirely\n" name
+  | Ok (Some d) ->
+      if Var.to_int d.Search.d_var = expect_idx then Printf.printf "ok   %s\n" name
+      else (
+        incr failures;
+        Printf.printf "FAIL %s: decided variable index %d, expected %d\n" name
+          (Var.to_int d.Search.d_var) expect_idx)
+
+let test_search_strategies () =
+  (* (a) The four variable selections, on ONE model, each naming a different variable.
+     Run as a group so that a change which collapsed two of them would fail loudly
+     rather than pass three assertions and one tautology. *)
+  picks "M7-T9: input_order decides w (the array's first element)"
+    (quad "input_order" "indomain_min")
+    0;
+  picks "M7-T9: first_fail decides y (the smallest domain)"
+    (quad "first_fail" "indomain_min")
+    2;
+  picks "M7-T9: smallest decides x (the smallest domain MINIMUM)"
+    (quad "smallest" "indomain_min")
+    1;
+  picks "M7-T9: largest decides z (the largest domain MAXIMUM, not the largest minimum)"
+    (quad "largest" "indomain_min")
+    3;
+  (* (b) The three value choices, all on the SAME variable, so that the only thing that
+     varies is the split. `smallest` pins the variable to x (0..6), and:
+
+       indomain_min   splits at lo = 0,        low side first
+       indomain_max   splits at hi - 1 = 5,    high side first
+       indomain_split splits at the RANGE MIDPOINT 0 + (6 - 0) / 2 = 3, low side first
+
+     3 is distinct from both, which is what makes this evidence rather than a
+     coincidence: a build that quietly aliased indomain_split to either of the other two
+     would fail here. *)
+  let vals name valsel expect_split expect_high =
+    match F.Error.catch (fun () -> decision_of (quad "smallest" valsel)) with
+    | Error e ->
+        incr failures;
+        Printf.printf "FAIL %s: refused: %s\n" name (F.Error.to_string e)
+    | Ok None ->
+        incr failures;
+        Printf.printf "FAIL %s: the annotation was dropped entirely\n" name
+    | Ok (Some d) ->
+        check name
+          (Var.to_int d.Search.d_var = 1
+          && d.Search.d_split = expect_split
+          && d.Search.d_high_first = expect_high)
+  in
+  vals "M7-T9: indomain_min splits x at lo, low-first" "indomain_min" 0 false;
+  vals "M7-T9: indomain_max splits x at hi - 1, high-first" "indomain_max" 5 true;
+  vals "M7-T9: indomain_split bisects x at the range midpoint, low-first" "indomain_split"
+    3 false;
+  (* (c) INDOMAIN_SPLIT ON A DOMAIN WITH HOLES -- the one place a naive implementation is
+     quietly wrong, and the reason this assertion runs the engine first.
+
+     `var 0..6: x` with `int_ne(x, 3)` propagates to lo = 0, hi = 6 and an INTERIOR HOLE
+     at 3. Two answers are then available and they differ:
+
+       the RANGE midpoint          lo + (hi - lo) / 2                   = 3   <- correct
+       the MEDIAN of the VALUES    {0,1,2,4,5,6}, lower middle element  = 2
+
+     The second is `indomain_median`'s quantity, not `indomain_split`'s: MiniZinc says
+     "bisect the domain", which is the interval bisection Gecode's INT_VAL_SPLIT_MIN
+     performs. So 3 is the assertion, and it also happens to land ON the hole -- which is
+     legal and is the M1-T55 case: [Domain.settle] walks the pushed bound past 3 to 2, so
+     the decision lands strictly stronger than the order literal its nogood negates.
+     test/models/search_split_hole_unsat.fzn is that case end to end with its proof
+     checked, and test_hole_split_sweep in test/unit/test_engine.ml is the exhaustive
+     sweep over every such shape. *)
+  (match
+     F.Error.catch (fun () ->
+         let m =
+           F.Builder.of_string ~file:"<t>"
+             "var 0..6: x;\n\
+              var 0..6: y;\n\
+              constraint int_ne(x, 3);\n\
+              constraint int_le(y, 6);\n\
+              solve :: int_search([x, y], input_order, indomain_split, complete) \
+              satisfy;\n"
+         in
+         let c = F.Compile.compile m in
+         let store = c.F.Compile.store in
+         let outcome = Baguette_core.Engine.propagate c.F.Compile.engine store in
+         let d0 = Baguette_core.Store.get store (Var.of_int 0) in
+         let order =
+           match c.F.Compile.order with Some o -> o | None -> Search.spec_order
+         in
+         (outcome, d0, order store [| Var.of_int 0; Var.of_int 1 |]))
+   with
+  | Error e ->
+      incr failures;
+      Printf.printf "FAIL M7-T9 (c): the holey model was refused: %s\n"
+        (F.Error.to_string e)
+  | Ok (_, d0, d) ->
+      check "M7-T9 (c): int_ne left an interior hole to split across"
+        (Baguette_core.Domain.lo d0 = 0
+        && Baguette_core.Domain.hi d0 = 6
+        && (not (Baguette_core.Domain.mem d0 3))
+        && Baguette_core.Domain.size d0 = 6);
+      check
+        "M7-T9 (c): indomain_split takes the RANGE midpoint 3 across a hole, not the \
+         value median 2"
+        (Var.to_int d.Search.d_var = 0 && d.Search.d_split = 3
+       && not d.Search.d_high_first));
+  (* (d) `indomain_median` is refused, and the diagnostic must say WHY rather than just
+     that it is unsupported -- the reason is the deliverable for this case, because a
+     reader who hits it on a real model would otherwise re-derive the analysis. The
+     needles pin the three load-bearing claims: that it is an interior value, that the
+     sibling branch is a disjunction, and that the successor row is named. *)
+  reject "M7-T9: indomain_median is refused, with its actual reason" ~line:2
+    ~src:
+      "var 1..9: x;\n\
+       solve :: int_search([x], input_order, indomain_median, complete) satisfy;\n"
+    ~needles:
+      [ "indomain_median"; "INTERIOR"; "disjunction"; "M7-T12"; "indomain_split" ];
+  (* And the two strategies that remain unsupported are still refused, at full strength.
+     `anti_first_fail` and `indomain_random` are the rest of what MiniZinc defines; they
+     must not have been swept into a catch-all while the four above were added. *)
+  reject "M7-T9: anti_first_fail is still refused" ~line:2
+    ~src:
+      "var 1..9: x;\n\
+       solve :: int_search([x], anti_first_fail, indomain_min, complete) satisfy;\n"
+    ~needles:[ "unsupported variable-selection strategy"; "anti_first_fail" ];
+  reject "M7-T9: indomain_random is still refused" ~line:2
+    ~src:
+      "var 1..9: x;\n\
+       solve :: int_search([x], input_order, indomain_random, complete) satisfy;\n"
+    ~needles:[ "unsupported value-choice strategy"; "indomain_random" ]
 
 (* ============================================================================== main *)
 
@@ -983,6 +1173,7 @@ let () =
   test_constant_folding ();
   test_rejections ();
   test_search_constants ();
+  test_search_strategies ();
   (* M7-T1. The inversion first -- it is the change -- then the control, which runs
      every pre-M7 assertion under an explicit --max-order-width=10000. *)
   test_width_cap_default ();
