@@ -362,8 +362,8 @@ worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 uni
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M7-T9 | `lib/core/search.ml`, `lib/flatzinc/builder.ml`, `test/unit/test_flatzinc.ml`, new `test/models/` + `test/expected/` | agent-strategy | 2026-09-23 |
-| M7-T11 | `lib/flatzinc/compile.ml`, `lib/proof/encoding.ml`, `test/unit/test_compile.ml`, `test/unit/test_proof.ml`, new `test/models/` + `test/expected/` | agent-holes | 2026-09-23 |
+| M7-T9 | `lib/core/search.ml`, `lib/flatzinc/builder.ml`, **`lib/flatzinc/model.ml`**, **`compile.ml`'s `phases_of_search` match arms (~:428-435) ONLY**, `test/unit/test_flatzinc.ml`, new `test/models/` + `test/expected/` | agent-strategy | 2026-09-23 |
+| M7-T11 | **`lib/flatzinc/compile.ml` — `reject_set_domain` (~:266) and its call site (~:466) ONLY; `phases_of_search` belongs to M7-T9**, `lib/proof/encoding.ml`, `lib/core/domain.ml`, `test/unit/test_compile.ml`, `test/unit/test_proof.ml`, new `test/models/` + `test/expected/` | agent-holes | 2026-09-23 |
 | M7-T5 | `test/unit/**` EXCEPT the four files above; read-only over `lib/` | agent-vacuity | 2026-09-23 |
 | M2-T16 | **everything except `bench/**`** — the 2.0 removal lands atomically | agent-drop | 2026-09-18 |
 | M2-L8 | `bench/**` only; read-only over `lib/` and `test/` | agent-bench | 2026-09-18 |
