@@ -418,25 +418,63 @@ let test_rejections () =
      solve :: \
      seq_search([int_search([x],first_fail,indomain_min,complete),int_search([y],input_order,indomain_min,complete)]) \
      satisfy;\n";
-  (* M7-T2 obligation (d): the tail is REFUSED BY NAME, not silently replaced. These
-     four are the strategies the MiniZinc-challenge census found beyond the implemented
-     set, most frequent first (smallest 56, indomain_split 64, largest 12, dom_w_deg 4).
-     Each needle is the strategy's own name: a message that does not name it is not the
-     message docs/SPEC.md 3.4 asks for. *)
-  expect_rejected "reject (d): `smallest` is named, not silently replaced"
-    ~needles:[ "smallest"; "first_fail"; "input_order" ]
+  (* M7-T2 obligation (d) used to sit here as three REFUSAL lanes -- `smallest`,
+     `largest` and `indomain_split` named and refused. M7-T9 IMPLEMENTED all three, so
+     the refusal became a false claim about the solver and the lanes had to move rather
+     than stand.
+
+     THIS IS NOT A TEST WEAKENED TO MAKE IT PASS, and the diff is exactly what one looks
+     like, so the distinction is written down. The property did not evaporate, it moved
+     and got STRONGER. `expect_accepted` on its own would be the weaker check: a
+     strategy that is accepted and then silently IGNORED passes it, which is the one
+     outcome docs/SPEC.md 3.4 forbids. The real assertions are in
+     test/unit/test_flatzinc.ml's [test_search_strategies], which pins each of the three
+     on the DECISION it produces --
+
+       `smallest`       decides the variable with the smallest domain MINIMUM
+       `largest`        decides the variable with the largest domain MAXIMUM, on a model
+                        where the rejected reading ("largest minimum") names another one
+       `indomain_split` splits at the RANGE midpoint, low side first, including across an
+                        interior hole where the value median would differ
+
+     -- and in test/models/search_smallest_sat.fzn, search_largest_sat.fzn and
+     search_split_hole_unsat.fzn, whose proofs are checked. What remains here is the
+     compile-side half: they reach a phase at all.
+
+     The refusal lanes BELOW are untouched and still carry obligation (d), which matters
+     more now than it did: with three more arms on the match, a strategy that fell
+     THROUGH to acceptance would look identical to one that is implemented. *)
+  expect_accepted "accept: `smallest` is implemented (M7-T9)"
     "var 0..3: x;\n\
      constraint int_le(x,3);\n\
      solve :: int_search([x],smallest,indomain_min,complete) satisfy;\n";
-  expect_rejected "reject (d): `largest` is named" ~needles:[ "largest" ]
+  expect_accepted "accept: `largest` is implemented (M7-T9)"
     "var 0..3: x;\n\
      constraint int_le(x,3);\n\
      solve :: int_search([x],largest,indomain_min,complete) satisfy;\n";
-  expect_rejected "reject (d): `indomain_split` is named"
-    ~needles:[ "indomain_split"; "indomain_min"; "indomain_max" ]
+  expect_accepted "accept: `indomain_split` is implemented (M7-T9)"
     "var 0..3: x;\n\
      constraint int_le(x,3);\n\
      solve :: int_search([x],first_fail,indomain_split,complete) satisfy;\n";
+  (* And the two value choices M7-T9 did NOT implement are still refused BY NAME.
+     `indomain_median` must reach its OWN diagnostic -- the one that says why it cannot
+     be a value choice here -- and not the generic tail, which is what a fall-through
+     would give. See lib/flatzinc/builder.ml. *)
+  expect_rejected "reject (d): `anti_first_fail` is named, not silently replaced"
+    ~needles:[ "anti_first_fail"; "first_fail"; "input_order" ]
+    "var 0..3: x;\n\
+     constraint int_le(x,3);\n\
+     solve :: int_search([x],anti_first_fail,indomain_min,complete) satisfy;\n";
+  expect_rejected "reject (d): `indomain_median` is refused with its own reason"
+    ~needles:[ "indomain_median"; "INTERIOR"; "disjunction"; "M7-T12" ]
+    "var 0..3: x;\n\
+     constraint int_le(x,3);\n\
+     solve :: int_search([x],first_fail,indomain_median,complete) satisfy;\n";
+  expect_rejected "reject (d): `indomain_random` is named"
+    ~needles:[ "indomain_random"; "indomain_min"; "indomain_max" ]
+    "var 0..3: x;\n\
+     constraint int_le(x,3);\n\
+     solve :: int_search([x],first_fail,indomain_random,complete) satisfy;\n";
   (* And a whole annotation FORM that is not implemented. Before M7-T2 this one fell
      into [search_of_annot]'s catch-all and was SILENTLY DROPPED -- the model was
      accepted and searched by the default, which is the one outcome docs/SPEC.md 3.4
