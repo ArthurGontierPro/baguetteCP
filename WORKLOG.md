@@ -376,6 +376,7 @@ needs it, that is a `## Cross-session requests` row, not an edit.
 | M7-T7 | `lib/flatzinc/builder.ml`, `test/unit/test_flatzinc.ml`, new `test/models/` + `test/expected/` | agent-search | 2026-09-23 |
 | M7-T6 | `lib/core/**` (trace/learn/search nogood path), `test/unit/test_trace.ml`, `test/unit/test_learn.ml`, `test/models/PENDING` | agent-rup | 2026-09-23 |
 | M7-T8 | `lib/proof/encoding.ml`, `bin/main.ml`, `test/unit/test_proof.ml` | agent-guard | 2026-09-23 |
+| M7-T10 + M7-T4 | `scripts/**` and `tools/**` only; read-only over `lib/`, `test/`, `bin/` | agent-harness | 2026-09-23 |
 
 _(M2-L3 released 2026-09-18 by agent-learn3 — see `## Completed` and `## M2-L3 handoff`.)_
 
