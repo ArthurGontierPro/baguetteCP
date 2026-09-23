@@ -604,14 +604,35 @@ let rec search_of_annot env pos (a : Ast.expr) =
   | Ast.Call ((("int_search" | "bool_search") as nm), args) -> (
       match args with
       | vs :: vsel :: valsel :: _rest ->
+          (* M7-T7. A CONSTANT IN THE SEARCH ARRAY IS SKIPPED, NOT REFUSED.
+
+             This used to `Error.failf` on the first [Model.Const], killing the whole
+             model. That was wrong twice over. A constant there is a variable with
+             nothing left to decide -- MiniZinc's flattener writes one whenever it fixes
+             a variable it had already named in the annotation -- so there is no
+             decision to skip: the annotation asks for a search over that array, and a
+             search over that array never branches on a fixed element. SKIPPING IT IS
+             HONOURING IT, which is what docs/SPEC.md 3.4 requires; refusing the model is
+             not a stricter reading of 3.4, it is a different answer to a question 3.4
+             does not ask. And it was expensive: over the 436-instance corpus of D-0068
+             this single check accounted for 143 of 278 refusals, more than every other
+             cause combined.
+
+             An array of ALL constants therefore yields an EMPTY index list, and that is
+             a legal phase rather than an error. `compile.ml`'s [phases_of_search] builds
+             a phase with an empty [p_vars], and [Search.sequence] skips any phase with
+             no unfixed candidate -- so an all-constant phase falls through to the next
+             `seq_search` phase, and if there is none, to [Search.spec_order], exactly as
+             3.4's "variables no annotation mentions" paragraph says. Nothing downstream
+             indexes the array, so an empty one is not a degenerate case there.
+
+             The strategy checks below are deliberately NOT skipped when the array is
+             empty: 3.4 says an unsupported strategy MUST be refused, and whether the
+             array happens to be all-constant in this instance does not change what the
+             annotation asks for. *)
           let idxs =
-            List.map
-              (fun op ->
-                match op with
-                | Model.Var i -> i
-                | Model.Const _ ->
-                    Error.failf pos
-                      "`%s`: the search array must contain variables, not constants" nm)
+            List.filter_map
+              (fun op -> match op with Model.Var i -> Some i | Model.Const _ -> None)
               (operands env pos vs)
           in
           let vc =
