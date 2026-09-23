@@ -387,11 +387,20 @@ validate_fzn() {
 #   * **1 instance** (`2021_perfect_square`) keeps its data in a `data/`
 #     SUBDIRECTORY, which this function only ever globbed past. That is the real
 #     harness defect and `-maxdepth 2` below fixes it.
-#   * **18 instances** have no data file anywhere under the family. MiniZinc says so
+#   * **the rest** have no data file anywhere under the family. MiniZinc says so
 #     in as many words -- *"did you forget to specify a data file?"* -- and the
 #     harness was filing that sentence under `FLATTEN-FAIL`, i.e. against the model.
 #     It is not a model defect; it is the harness running a parametric model with no
 #     parameters. See `run_one`, which now buckets it `NO-DATA`.
+#
+# RE-MEASURED with both fixes in place, same 50 instances: **20 NO-DATA** -- and all
+# twenty are under `2026/`, i.e. the corpus carries next year's models without their
+# (unpublished) data; **2 now reach the solver** on data found one level down
+# (`2021_perfect_square`, `2023_travelling-thief_ttp`, both TIMEOUT-SOLVE at 20 s);
+# **1 more** flattens bare; **27 remain FLATTEN-FAIL** and are genuinely ours -- 16
+# `is_output`, 8 `no function or predicate with this signature`, 1 index-set
+# mismatch, 1 `maximum of empty set`, 1 other. Those 27 are M7-T15's actual work,
+# and the two counts it names (16 and 8) survive the correction unchanged.
 #
 # Sorted by size across both levels, because the preference is for the smallest
 # INSTANCE and not for a particular directory.
