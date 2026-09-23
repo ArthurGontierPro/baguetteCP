@@ -363,7 +363,6 @@ worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 uni
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M7-T9 | `lib/core/search.ml`, `lib/flatzinc/builder.ml`, `test/unit/test_flatzinc.ml`, new `test/models/` + `test/expected/` | agent-strategy | 2026-09-23 |
-| M7-T11 | `lib/flatzinc/compile.ml`, `lib/proof/encoding.ml`, `test/unit/test_compile.ml`, `test/unit/test_proof.ml`, new `test/models/` + `test/expected/` | agent-holes | 2026-09-23 |
 | M7-T5 | `test/unit/**` EXCEPT the four files above; read-only over `lib/` | agent-vacuity | 2026-09-23 |
 | M2-T16 | **everything except `bench/**`** — the 2.0 removal lands atomically | agent-drop | 2026-09-18 |
 | M2-L8 | `bench/**` only; read-only over `lib/` and `test/` | agent-bench | 2026-09-18 |
@@ -503,6 +502,7 @@ work. The owning session picks it up.
 **UPDATE 2026-09-16 (orchestrator): this is now ENFORCED, not requested.** Two further test binaries had to be killed at the ceiling after sessions were warned, so warning is evidently not a control. `make`, `scripts/run_model_tests.sh` and `scripts/verify_proof.sh` apply `ulimit -v 4000000` themselves; `CLAUDE.md` carries the rule where every session reads it first. The cap is verified to bite (5 GB allocation -> `MemoryError`, 100 MB fine, gate peaks at 18.5 MB). **A bare `dune runtest --root .` in a worktree is still uncapped** — that is M1-T53, and until it lands, wrap your runs yourself: `(ulimit -v 4000000; timeout 900 dune runtest --root .)`. A run that dies against the cap is a finding to report, not a cap to raise.
 
 | **D-0069's and D-0068's tables need correcting, and `docs/DECISIONS.md` is not mine (`scripts/**`, `tools/**` only).** M7-T10's re-run changes the numbers both records publish. (a) The cause was an **instance-ID collision**, not a non-atomic capture: the id was `<year>_<family>` and a family holds many `.mzn` files, so up to fifteen jobs shared one output path. Temp-plus-rename alone would not have fixed it. (b) **101 of the 436 rows are void**, not 22 -- every row of the 18 colliding ids -- and the run covered **353 distinct instances**, not 436. (c) D-0068's headline **`OK-PROOF-VERIFIED` 8 becomes 17**: `2010_bacp` alone is **8 verified proofs and 7 timeouts**, recorded as 15 model refusals. (d) D-0069's row "a torn `.fzn` -- 13" should read 26 suspect rows over 101 void ones, and its "no `solve` item / no such file: 9" resolves to 5 genuine `REFUSED-LIMIT` (set-literal domain, M6-T2) and 4 genuine `REFUSED-MODEL` (`bool_search` with a constant in the array, M7-T7). **`REFUSED-MODEL` 248 and the M7-T7 count of 143 are both lower bounds until the void rows are re-run.** Corrected data: `fataepyc-07:/scratch/arthur/corpus-out-m7t10/results.tsv` | `docs/DECISIONS.md`, `docs/ROADMAP.md` | agent-harness | raised 2026-09-23, **open** |
+| **`lib/core/trace.ml`'s header (~line 407) is now stale, and it is not mine.** It says "`reject_set_domain` in lib/flatzinc/compile.ml refuses `Model.Dset` unconditionally" as the named gate for why a declared hole with no trail entry cannot arise. **M7-T11 deleted `reject_set_domain`** (D-0072). The property the comment depends on still HOLDS, by a different gate: `Compile` gives the store the hull and posts one `Ne` instance per hole, so every hole has a trail entry and `Domain.of_list` still has no caller in `lib/`. The sentence needs to name the new gate instead. Nothing is broken today; the comment is the thing M1-T63 asked not to be allowed to drift. | `lib/core/trace.ml` | agent-holes | raised 2026-09-23, **open** |
 
 ## Completed
 
@@ -582,6 +582,7 @@ work. The owning session picks it up.
 | M2-L2 | agent-cut | 2026-09-18 | **The cut, as data** — learns nothing, backjumps nowhere, so it was oracle-tested before anything depends on it. The criterion is a record carrying its **own postcondition**; three ship (`one_uip`, `conflict_side`, `decision_cut`), and `conflict_side`'s two-conflict-level cut is **accepted**, with an explicit check that `one_uip`'s postcondition is false of it — the line that would have reddened had 1UIP been written as an invariant of the cut, which is exactly what D-0044's amendment warned about and what M2-L6 needs. Holes load-bearing and measured: strip the folded `int_ne` facts and the cut is brute-force SAT. +64 checks. Merged as `a229509` |
 | M1-T66 | agent-bridge | 2026-09-18 | **Row NOT closed — the prize is out of reach in M1, and here is the proof.** The bridge's absence is now observable at the **derivation** rather than by grepping proof text: `Search.bridges` files a `Search.bridge` per settle (decision, literal assumed, bound settled onto, holes crossed, and which line states each hole at which level) and one `Trace.record_citation` per named hole, so a **decision** settle enters the I-S4 audit it was entirely outside of before (`Trace.emit` skips level-start entries, so a decision push writes no line and recorded no citation). Two scenes in `test_matrix.ml` read those records. Measured with `bridges` made a no-op: `bridge_derivation` reddens **at the derivation**, with a message saying the settle step is missing — while **veripb still accepts the proof**. That is route 1 answered in the negative and answered *analytically*: the settle is re-derivable from the page by two routes, the hole's own trace line (M1-T56) and, under it, `int_lin_ne`'s big-M `.opb` rows (I-X10) which no `w` can retire. `br_unnamed` is empty in both scenes, i.e. the page always names the hole. **No proof bytes change.** +15 unit checks (1723 -> 1738), 34/34, peak RSS 36 MB. Commits `7ae1843`, `6d08c4b` on `wave11-bridge` |
 | M2-L1 | agent-learned | 2026-09-18 | `Learned.t` (PB inequality over `Lit.t`, clause = degree-1 case), its runtime instance as a **`Linear` instance** registered through the new `Engine.add`, and its proof-side introduction/deletion through the new `Writer.with_level`. D-0044's central claim **converted**: measured green on all 27 scenes. D-0045's prediction **measured before fixing**, in both formats. 1766 unit checks, 34/34, determinism clean. |
+| M7-T11 | agent-holes | 2026-09-23 | Set domains accepted: one order-ladder row per hole in the `.opb` (the MIRROR of the rung, D-0072), hull in the store, one `Ne` instance per hole. `reject_set_domain` removed, not weakened |
 
 | M2-L3 | agent-learn3 | 2026-09-18 | 1UIP clause learning over order literals, proof-only (**D-0044 fork (ii)**), with conflict-directed backjumping over the **decision closure** and its `rup` derivation at level 0. **I-S4's cross-level debt is discharged** and the check is wider than the invariant's wording. Backjump measured: 31 -> 9 nodes on `backjump_unsat.fzn`. **M1-T66 stays OPEN**: with `Search.bridges` disabled, 35/35 models still pass and no checker rejects — a learned clause citing across levels did NOT make the bridge load-bearing. 1833 unit checks, 267 matrix, 44 mutation, 35/35 models, determinism 35/35 byte-identical |
 | M2-T14 | agent-fmt2 | 2026-09-18 | Format-2.0 vacuity sweep. Three more instances of the M2-L0 defect found and fixed (test_proof 3.0-only lanes resolving 2.2.2 via `$VERIPB`; D-0030's certification in test_mutation writing a 3.0 proof against an env-format `.opb`; 20 blanked-trace controls asserting on exit status alone). Test (c) now checks the claim index by content, so it runs under both formats. |
@@ -2847,3 +2848,25 @@ that rejects nothing, so both polarities are asserted.
 **Before the next full run**, note it needs about 14 GB of `log/` per 436 instances, and
 that `report` will refuse to total a run with no `DONE-` line. Re-running is cheap:
 re-invoke with the same arguments and only the missing rows are computed.
+
+## M7-T11 handoff
+
+`var {1,3,5}: x` now compiles. **The ladder is DOWNWARD** (`x_ge_v` means `x >= v`; the
+rung is `x >= v+1 -> x >= v`), so a hole row is its **mirror**,
+`+1 ~x_ge_h +1 x_ge_(h+1) >= 1` — one clause, emitted by
+`Encoding.declare_int_with_holes` and counted into `ladder_clauses`, so M7-T8's
+predictive budget sees it. Getting that polarity backwards is silently unsound, which is
+why both `test_compile.ml` and `test_proof.ml` match the emitted text literally and match
+a ladder rung beside it.
+
+**The half that is easy to get wrong**: the hole row alone is not enough. Holes put into
+the store with `Domain.of_list` have no trail entry, so nothing in the proof ever claims
+them and a conflict resting on one is justified by a `pol` that is not contradictory —
+veripb rejected four such refutations before this was moved. Same root cause as D-0070.
+So `Compile` gives the store the **hull** and posts one **`Ne` instance per hole**; `Ne`
+cites no row id and its `rup` lands on the hole row itself, so no auxiliary Boolean is
+minted. **If you ever make declared holes go into the store directly, D-0070's bridge
+will not cover them.**
+
+Case (d) is **budgeted, not refused** (a set domain is at most twice its hull's ladder).
+One cross-session request is open above, on `lib/core/trace.ml`'s stale header sentence.
