@@ -41,6 +41,8 @@ let implemented =
     "all_different_int";
     (* M4, the second (M4-T3). *)
     "array_int_element";
+    (* M7-T16, the third: all_different's generalisation. *)
+    "fzn_global_cardinality";
   ]
 
 (* The rest of the SPEC 2.1 table, with the milestone that will bring it in. Listing
@@ -540,6 +542,28 @@ let build_constraint env (c : Ast.constraint_item) =
        lib/flatzinc/compile.ml posts with no special case, which is the same reason
        [normalise_terms] is not applied to a linear row's duplicates here. *)
     | "all_different_int" -> one_array (fun xs -> Model.All_different xs)
+    (* M7-T16. `fzn_global_cardinality(xs, cover, counts)`. The COVER is an array of
+       constants -- SPEC 2.1's form and the only one lib/core/prop/gcc.ml's counting
+       rows can be built over -- and [as_const] refuses a variable cover HERE rather
+       than in compile.ml so the message carries a source position, the same division
+       `array_int_element` below makes for its array.
+
+       The counts are ordinary operands: a count fixed to a number is a variable
+       declared on one value, which the propagator handles as the degenerate case.
+       compile.ml refuses a literal constant there and says why. *)
+    | "fzn_global_cardinality" -> (
+        arity 3;
+        match c.Ast.c_args with
+        | [ xa; ca; na ] ->
+            let cover =
+              Array.of_list
+                (List.map
+                   (fun op ->
+                     as_const pos ~builtin:id ~what:"every value of the cover" op)
+                   (operands env pos ca))
+            in
+            Model.Global_cardinality (operands env pos xa, cover, operands env pos na)
+        | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
     (* M4-T3. `array_int_element(idx, as, c)`, with `as` an array of CONSTANTS -- the
        only form docs/SPEC.md 2.1 admits. [as_const] is what refuses a variable element,
        and it refuses it HERE rather than in compile.ml so the message carries the
