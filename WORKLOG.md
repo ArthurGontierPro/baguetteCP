@@ -366,6 +366,17 @@ worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 uni
 | M2-L8 | `bench/**` only; read-only over `lib/` and `test/` | agent-bench | 2026-09-18 |
 | M2-L6 | all of `lib/`, `test/unit/test_learn.ml`, `test/unit/test_analysis.ml`, `test/unit/dune`, new files under `test/models/` + `test/expected/` | agent-pb | 2026-09-18 |
 
+**Wave twenty-seven, dispatched 2026-09-23 from `24336ee`.** Three rows, one worktree each
+(`wave27-search` / `wave27-rup` / `wave27-guard`), files disjoint. All three are children of
+D-0068, the first full corpus run. `lib/proof/encoding.ml` goes to agent-guard; if agent-rup
+needs it, that is a `## Cross-session requests` row, not an edit.
+
+| Task | Files being touched | Session | Since |
+|---|---|---|---|
+| M7-T7 | `lib/flatzinc/builder.ml`, `test/unit/test_flatzinc.ml`, new `test/models/` + `test/expected/` | agent-search | 2026-09-23 |
+| M7-T6 | `lib/core/**` (trace/learn/search nogood path), `test/unit/test_trace.ml`, `test/unit/test_learn.ml`, `test/models/PENDING` | agent-rup | 2026-09-23 |
+| M7-T8 | `lib/proof/encoding.ml`, `bin/main.ml`, `test/unit/test_proof.ml` | agent-guard | 2026-09-23 |
+
 _(M2-L3 released 2026-09-18 by agent-learn3 — see `## Completed` and `## M2-L3 handoff`.)_
 
 _(M2-T14 released 2026-09-18 by agent-fmt2 — see `## Completed` and `## M2-T14 handoff`.)_
