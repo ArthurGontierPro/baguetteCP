@@ -21,6 +21,22 @@
 % inner predicate keeps the outer one's argument handling (cover as an array of
 % par int, the open form) exactly as std defines it.
 %
+% THE COUNTS NEED A DECLARED DOMAIN, and that is why this file has a body at all.
+%
+% std's `global_cardinality' takes `array [int] of var int: counts', and a model that
+% passes it a freshly introduced array gets variables with NO domain.  Under the
+% decomposition that did not matter: the `sum(bool2int(...)) = counts[i]' rows let
+% MiniZinc infer 0..length(x) and the declaration came out bounded.  Keep the global
+% whole and those rows are gone, so the count arrives at the front end as `var int' and
+% is REFUSED -- docs/SPEC.md 2.1 requires a finite declared domain, and that refusal is
+% right.  MEASURED on 2008_debruijn_binary, which is the instance this whole bridge
+% exists for.
+%
+% So `fzn_global_cardinality' states the bound the decomposition used to imply and hands
+% the constraint to `baguette_global_cardinality', which is the bodyless one.  The bounds
+% are not a heuristic: a tally over |x| variables is between 0 and |x| by definition, so
+% nothing is lost and nothing is assumed.
+%
 % THE FRONT END REFUSES three shapes rather than mis-counting them, and all
 % three are refusals with a source position (lib/flatzinc/compile.ml's
 % post_global_cardinality says why): a cover and counts of different lengths, a
@@ -28,8 +44,16 @@
 % twice in the array.
 %-----------------------------------------------------------------------------%
 
-predicate fzn_global_cardinality(
+predicate baguette_global_cardinality(
   array [int] of var int: x,
   array [int] of int: cover,
   array [int] of var int: counts,
 );
+
+predicate fzn_global_cardinality(
+  array [int] of var int: x,
+  array [int] of int: cover,
+  array [int] of var int: counts,
+) =
+  forall (i in index_set(counts)) (counts[i] >= 0 /\ counts[i] <= length(x))
+  /\ baguette_global_cardinality(x, cover, counts);

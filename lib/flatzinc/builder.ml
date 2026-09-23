@@ -41,8 +41,16 @@ let implemented =
     "all_different_int";
     (* M4, the second (M4-T3). *)
     "array_int_element";
-    (* M7-T16, the third: all_different's generalisation. *)
+    (* M7-T16, the third: all_different's generalisation. TWO SPELLINGS, and the second
+       is not a synonym for convenience: mznlib/fzn_global_cardinality.mzn has to give
+       `fzn_global_cardinality' a BODY, because std hands it counts declared `var int'
+       with no domain and the decomposition this replaces was what used to imply their
+       0..|x| bound. That body states the bound and calls the bodyless
+       `baguette_global_cardinality', which is what reaches the .fzn from MiniZinc. The
+       fzn_ name stays accepted because the test models are written in it and because a
+       hand-written .fzn should not have to know about the library's internals. *)
     "fzn_global_cardinality";
+    "baguette_global_cardinality";
   ]
 
 (* The rest of the SPEC 2.1 table, with the milestone that will bring it in. Listing
@@ -551,7 +559,7 @@ let build_constraint env (c : Ast.constraint_item) =
        The counts are ordinary operands: a count fixed to a number is a variable
        declared on one value, which the propagator handles as the degenerate case.
        compile.ml refuses a literal constant there and says why. *)
-    | "fzn_global_cardinality" -> (
+    | "fzn_global_cardinality" | "baguette_global_cardinality" -> (
         arity 3;
         match c.Ast.c_args with
         | [ xa; ca; na ] ->
