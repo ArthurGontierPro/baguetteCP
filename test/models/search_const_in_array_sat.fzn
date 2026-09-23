@@ -1,0 +1,29 @@
+% M7-T7. A SEARCH ARRAY THAT MIXES VARIABLES AND CONSTANTS -- the shape that D-0068
+% measured as 143 of the 278 corpus refusals, more than every other cause combined.
+%
+% Provenance and honesty. This is a HAND-SHRUNK reconstruction of the MiniZinc Challenge
+% roster/scheduling shape that hits this: four task starts that must be pairwise
+% distinct and pairwise ordered, annotated with an `int_search` over the whole slot
+% array -- where two slots were fixed by the data and so came out of the flattener as
+% INTEGER LITERALS, not variables. The corpus lives on fataepyc-07 (D-0068) and is not
+% reachable from this checkout, and the original instances declare domains far wider
+% than CLAUDE.md's wide-domain rule permits in a test, so the family's shape was
+% reproduced at width 5 rather than an instance copied. What it reproduces exactly is
+% the thing under test: `int_search([t1, 3, t2, t3, 1, t4], ...)`.
+%
+% Before M7-T7 the front end refused this model outright, on the first literal, with
+% "the search array must contain variables, not constants". It now skips the literals
+% and searches [t1, t2, t3, t4] in the order the annotation wrote them, which is what
+% docs/SPEC.md 3.4 means by honouring the annotation.
+%
+% input_order + indomain_min over [t1, t2, t3, t4] forces exactly one answer and it is
+% the lexicographically least: t1 = 1, then t2 > t1 and distinct gives 2, then t3
+% distinct from both gives 3, then t4 > t3 and distinct gives 4.
+var 1..5: t1 :: output_var;
+var 1..5: t2 :: output_var;
+var 1..5: t3 :: output_var;
+var 1..5: t4 :: output_var;
+constraint all_different_int([t1, t2, t3, t4]);
+constraint int_lin_le([1, -1], [t1, t2], -1);
+constraint int_lin_le([1, -1], [t3, t4], -1);
+solve :: int_search([t1, 3, t2, t3, 1, t4], input_order, indomain_min, complete) satisfy;
