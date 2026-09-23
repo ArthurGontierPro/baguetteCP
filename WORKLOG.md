@@ -375,7 +375,6 @@ needs it, that is a `## Cross-session requests` row, not an edit.
 |---|---|---|---|
 | M7-T7 | `lib/flatzinc/builder.ml`, `test/unit/test_flatzinc.ml`, new `test/models/` + `test/expected/` | agent-search | 2026-09-23 |
 | M7-T6 | `lib/core/**` (trace/learn/search nogood path), `test/unit/test_trace.ml`, `test/unit/test_learn.ml`, `test/models/PENDING` | agent-rup | 2026-09-23 |
-| M7-T8 | `lib/proof/encoding.ml`, `bin/main.ml`, `test/unit/test_proof.ml` | agent-guard | 2026-09-23 |
 
 _(M2-L3 released 2026-09-18 by agent-learn3 — see `## Completed` and `## M2-L3 handoff`.)_
 
@@ -583,6 +582,7 @@ work. The owning session picks it up.
 | M2-L8 | agent-bench | 2026-09-18 | The learning benchmark. Third table in `bench/run_bench.sh` reporting learned / convertible / skipped / pb-tried / pb-learned / pb-fallback / fb% / pb-stronger **beside** `.opb` bytes, `.pbp` bytes and verify ms, per model and summed over the suite as counts only. Verdict widened from M1-T36's nodes-alone to all four tree counters. **`bench/run_bench.sh -c`** is the control the row demanded: three scenes, asserted in both directions, exit non-zero on a misclassification, watched fire against three broken classifiers. `-f`/`-F`/`BAGUETTE_PROOF_FORMAT` gone from `bench/` (D-0046). Suite: 86 clauses over 21 of 38 models, 13 convertible, 9 skips over 4 models, PB 86/36/50 = **58% fallback**. |
 | M2-T16 | agent-drop | 2026-09-18 | **Proof format 2.0 removed from the project entirely** (D-0046). `Writer` emits 3.0 and only 3.0; `V2_0`, `BAGUETTE_PROOF_FORMAT`, `default_format`, every `v3 t` branch, `Pol.to_string`, `Opb.write ?labels` and `Encoding.write_opb_for` are gone, and `Checker.find` / `scripts/checker.sh` resolve one checker. **Artefact bytes byte-identical across all 38 models** (`.opb`, `.pbp`, stdout), binary hashed on both sides and different. Unit checks 1986 → 1972, all 14 accounted for. History kept and marked: D-0023/24/25/30 and `PROOF-FORMAT.md` §2. |
 | M6-T6 | agent-bisect | 2026-09-21 | Bisected `width_sat_depth`'s regression: the 43 ms comment was true when written; the whole ~14x jump is one commit, `aacbc8d` (M2-L6 wired into `Search`), 18.6 ms parent -> 258.7 ms. `git bisect run`, 7 steps, 0 skipped. Recommend accepting as the cost of M2-L6's PB analysis, which M2-L13 already claws most of back. `bench/README.md` §3g, new `bench/width_sat_depth_bisect.sh`. |
+| M7-T8 | agent-guard | 2026-09-23 | The graceful resource guard (D-0069). `--max-encoding-clauses` bounds `ladder_clauses + direct_values` **before** the loop that allocates it; `--max-heap-mb` is a `Gc` alarm plus a synchronous read. Both default `none` (D-0065 untouched, no width refusal reinstated); both end in **exit 5**, distinct from 0/2/3/4, with a diagnostic naming the declaration that crossed the budget and the widest domain to narrow. 430 artefacts over 86 models, 0 differing against the parent commit's binary |
 
 ## Handoff notes
 
@@ -2716,3 +2716,42 @@ before merging.
 
 **Stale figures to re-measure, not quote**: M7-T3's 78-refusal breakdown predates M7-T1's merge,
 so its width refusals are already gone.
+
+## M7-T8 handoff
+
+**What landed** (branch `wave27-guard`, commits `353d69e`, `5151f2f`; NOT merged to main).
+`lib/proof/encoding.ml` gains a resource guard, `bin/main.ml` exposes it and maps it to a new
+exit status, `test/unit/test_proof.ml` gains 22 lanes, `docs/DECISIONS.md` gains **D-0069**.
+Nothing else was touched; `lib/flatzinc/builder.ml` and `lib/core/**` were never needed.
+
+**The shape, in one line each.** `--max-encoding-clauses N` (default `none`) bounds the
+aggregate `ladder_clauses + direct_values`, checked in `declare_int` and `ensure_direct`
+*before* the loop that allocates, so a refusal leaves the encoding byte-identical.
+`--max-heap-mb N` (default `none`) is a `Gc` alarm in `mem_guard.ml`'s shape plus a
+synchronous read at each declaration. Both are diagnosed and both end in **exit 5**.
+
+**Three things the next session should know.**
+
+1. **`Gc.quick_stat ().heap_words` is 0 until the first major cycle completes** on this
+   switch (OCaml 5.1.1, native, measured 2026-09-23). `Gc.stat` is exact but walks the heap.
+   That is why the *alarm* is the reliable half of the reactive guard and the synchronous
+   read is opportunistic, and why any test of the synchronous half must `Gc.full_major ()`
+   first. `test/unit/mem_guard.ml` is alarm-only and unaffected -- but do not read
+   `quick_stat` synchronously anywhere else without reading D-0069 first.
+2. **Do not give either budget a default.** D-0065 and the user's standing instruction both
+   say the normal build restricts nothing, and any number here would be a property of the
+   machine that measured it. The shipped defaults are sampled at module load in
+   `test_proof.ml` (`m7t8_shipped_defaults`) precisely so a later session cannot set one
+   without a lane going red -- D-0065's own vacuity lesson, applied again.
+3. **The corpus harness (M7-T4) should bucket exit 5 on its own.** That is the point:
+   D-0068's `SOLVE-ERR-134` folded "this machine ran out" together with "this proof is
+   wrong". `--stats` now prints `budget` and `heap` beside `ladder`/`direct` in the same
+   units, so a run that ends in 5 can be re-run with a number rather than a guess.
+
+**Still open, deliberately.** The guard bounds the encoding and the heap; it does not bound
+*proof size on disk* or *checker time*, which D-0065 named as the cost a 2 TB machine does
+not repeal. A `--max-proof-bytes` would live in `lib/proof/writer.ml` and is a different row.
+And `lib/flatzinc/compile.ml` still pre-checks only the per-variable width, not the
+aggregate, so an aggregate overrun surfaces from `Encoding` rather than with a source
+position -- acceptable, since the message names the variable, but a positioned version would
+be better and belongs to whoever owns `compile.ml` next.
