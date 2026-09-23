@@ -1,0 +1,27 @@
+% global_cardinality under SEARCH: the lane that puts the derivations on the page.
+%
+% This is the model that answers D-0053's question for this row. A propagation only
+% emits its justification when a later line needs it (lib/core/trace.ml's deferred
+% explanations), so a model the propagator settles at the ROOT verifies a proof with no
+% gcc reasoning in it at all -- which is true of test/models/alldiff_hall_sat.fzn as
+% well, and is worth knowing before anyone reads a green lane as evidence.
+%
+% The search annotation is what makes this one different. Branching on the COUNTS first,
+% smallest value first, makes the first guesses wrong: n1 = 0 forces every x to 2, which
+% overruns n2; n1 = 1 and n1 = 2 fail the same way one step later. Each failure is a gcc
+% conflict, each backjump's nogood rests on the derivation that reached it, and the
+% proof carries the `pol` lines to prove it -- over a SATISFIABLE model, which is the
+% condition D-0053 insists on and which a refutation lane cannot supply.
+%
+% Both count rules are exercised, and under DECISIONS, which is the case the derivation
+% cannot cite a unit line for: what it cites instead is the ladder, and the bound
+% literals stay in the row. See lib/core/prop/gcc.ml's [bound_cancels].
+var 0..3: n1 :: output_var;
+var 0..3: n2 :: output_var;
+var 1..2: a :: output_var;
+var 1..2: b :: output_var;
+var 1..2: c :: output_var;
+var 1..2: d :: output_var;
+var 1..2: e :: output_var;
+constraint fzn_global_cardinality([a,b,c,d,e],[1,2],[n1,n2]);
+solve :: int_search([n1,n2,a,b,c,d,e], input_order, indomain_min, complete) satisfy;

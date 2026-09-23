@@ -1,0 +1,24 @@
+% global_cardinality, the interval-capacity REFUTATION: five variables confined to
+% 1..2 against a total capacity of four.
+%
+% The counting is rule A's conflict arm -- |H| > cap -- and it is reported the way
+% all_different reports its pigeonhole: by pushing one surplus variable out of the
+% interval it is confined to, so that [Store.apply]'s Failed arm pairs the derivation
+% with Reason.none and no `rup` line claims a counting argument as reverse unit
+% propagation (I-X10, D-0040). What closes the root is gcc.ml's own `pol`, which really
+% does derive 0 >= 1.
+%
+% Note D-0066 as amended while reading this lane: a `rup` line over an UNSAT model can
+% be vacuous. This refutation is NOT rup -- it is the `pol` cited by `conclusion UNSAT`,
+% which the checker must actually evaluate -- which is why the lane is worth having on
+% an unsatisfiable model at all. The pruning half of the same argument is checked over
+% a SATISFIABLE model by gcc_capacity_sat.fzn, per D-0053.
+var 1..2: v;
+var 1..2: w;
+var 1..2: x;
+var 1..2: y;
+var 1..2: z;
+var 2..2: c1;
+var 2..2: c2;
+constraint fzn_global_cardinality([v, w, x, y, z], [1, 2], [c1, c2]);
+solve satisfy;
