@@ -175,7 +175,18 @@ function ann: int_search(
 % kept whole FOR.  That propagator is the better answer and belongs on the
 % roadmap; until it exists there is nothing to protect here, and refusing the
 % bridge would only keep the instance from reaching the solver at all.
+%
+% The include is NOT optional and is not decoration. redefinitions.mzn is
+% included into EVERY model, so every body in it must type-check in every
+% model -- including the models that never mention global_cardinality and
+% never include globals.mzn, which is most of them. Without the line below the
+% bridge's own body cannot resolve the three-argument predicate and the type
+% error is reported against the library, killing twelve instances that have
+% nothing to do with cardinality. Measured, not feared: that is exactly what
+% the first version of this file did.
 %-----------------------------------------------------------------------------%
+
+include "global_cardinality.mzn";
 
 predicate global_cardinality(
   array [$X] of var int: x,
