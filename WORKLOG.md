@@ -362,7 +362,6 @@ worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 uni
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M7-T12 | `lib/core/search.ml`, `lib/core/analysis.ml`, `lib/core/learn.ml`, `lib/flatzinc/builder.ml`, `lib/flatzinc/model.ml`, `compile.ml`'s `phases_of_search` ONLY, `test/unit/test_learn.ml`, `test/unit/test_analysis.ml` | agent-decision | 2026-09-23 |
 | M7-T16 | `lib/core/prop/gcc.ml` (new), `lib/core/prop/dune`, `lib/core/dune`, `compile.ml`'s constraint-posting region ONLY, `test/unit/test_prop.ml`, `mznlib/**` | agent-gcc | 2026-09-23 |
 | M2-T16 | **everything except `bench/**`** — the 2.0 removal lands atomically | agent-drop | 2026-09-18 |
 | M2-L8 | `bench/**` only; read-only over `lib/` and `test/` | agent-bench | 2026-09-18 |
@@ -510,6 +509,7 @@ work. The owning session picks it up.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M7-T12 | agent-decision | 2026-09-23 | The ASSIGNMENT decision shape (`Search.Assign`) and `indomain_median` over it -- **D-0077**. The sibling is discharged by DERIVATION, not RESOLUTION: `combine_nogoods` is untouched. `SPEC.md` 3.4 CHANGED (normative): the refusal is lifted, not weakened. Three models (two SAT), four `test_learn.ml` lanes including two breaks that redden at full wording |
 | M7-T15 | agent-flatten | 2026-09-23 | `FLATTEN-FAIL`: 22 of the 24 instances this row owns now flatten. 24 of the 50 were one thing -- a MiniZinc 1.x dialect -- not a missing global; `mznlib/compat_mzn1.mzn`, four model tests, `mznlib/test/check_mznlib.sh`, D-0076 |
 | M0-T1 | setup | 2026-09-14 | Project skeleton, docs, dune files, test harness, `.claude/` setup |
 | M0-T2 | orchestrator | 2026-09-14 | opam 2.5.2 + OCaml 5.1.1 switch `baguette`; bootstrap.sh rewritten to fetch the opam binary |
@@ -3138,3 +3138,48 @@ defined` instances are still agent-harness2's data-pairing row, untouched here.
 four hits in `lib/proof/encoding.ml` at lines 1024 and 1026 (`~lo:v.lo ~hi:v.hi`),
 identical before and after this branch. Either the lines want a `(* width-ok: *)`
 marker or the checker wants to stop matching a field access.
+
+## M7-T12 handoff, 2026-09-23 (agent-decision)
+
+`indomain_median` works and is no longer refused; **`docs/SPEC.md` 3.4 changed, and it is a
+normative document** -- the refusal paragraph is replaced by the strategy's definition and by
+the two decision shapes. It was lifted because the shape now exists, not weakened into an
+acceptance; every other strategy is still refused by name at full strength.
+
+**The one thing to know before touching `Search`.** There are now two decision shapes, and the
+new one's `x = m` branch is **two stacked ORDINARY decisions** (`x >= m` then `x <= m`). That
+was chosen precisely so that `check_decision_landed`, `levelled_nogood`, `bridges` and
+`combine_nogoods` all hold verbatim -- **nothing in the nogood machinery changed**. The
+sibling `x <> m` is **not a branch**: the failed child's nogood is weakened into
+`... \/ x <= m-1 \/ x >= m+1` (a superset of a RUP clause is RUP, and that is the entire
+proof obligation), the value is removed, and the SAME NODE is re-entered, exactly as M5-T1's
+branch-and-bound re-entry does. So there is no resolvent, and `filed_at` and the backjump are
+unchanged.
+
+**Two things a later row will trip over.** (1) `I-X10` has its first exception: the hole's
+trace line NAMES THE ACTIVE DECISIONS in its tail. It has to -- stating `x <> m` with an empty
+tail is D-0075's defect in a new place, and `break_assign_facts` is the lane. (2) The
+assignment clause must stay LIVE for the whole re-entry; it is filed at the node's level and
+wiped by the frame that owns it, and at level 0 `retire_assign_clauses` owns it instead.
+
+**Measured, not predicted, and worth repeating**: the D-0075 break lane was GREEN on its first
+model. Trace lines are lazy, so a hole's line is only written if the branch AFTER the hole
+fails deeper. If you write a lane about a line, check the branch that carries it fails.
+
+**Staged.** The shape is general -- nothing in `branch_assign` knows about medians -- but
+`all_different`'s value-graph branching and M4's element rows are NOT wired to it, and a
+decision whose two children are both explored and must resolve on TWO literals is still not
+expressible. `lib/core/analysis.ml` and `lib/core/learn.ml` were claimed and turned out not to
+need a line; `test/unit/test_analysis.ml` likewise.
+
+**Files I touched outside my claim, additively**: `test/unit/test_compile.ml`,
+`test/unit/test_flatzinc.ml`, `test/unit/test_engine.ml`, `test/unit/test_clause.ml`. An
+`order` now returns a `Search.choice`, so those four either construct one (`Search.Split {..}`)
+or unwrap one (`Search.as_split`); the two that asserted the `indomain_median` REFUSAL now
+assert which SHAPE of decision the annotation produces instead.
+
+Branch `wave30-decision`, four commits, not merged. Gate: `check_fmt.sh` clean,
+`check_test_widths.py` (self-test + run) clean, `check_determinism.sh` (self-test + run) clean,
+`check_unlimited.sh` clean, `dune runtest --root . --force` **2934 ok / 0 failures** (53
+mutation checks among them), `run_model_tests.sh` **103 passed, 0 failed**. Peak RSS 39.8 MB
+(unit) and 18.5 MB (models), both far under the cap.
