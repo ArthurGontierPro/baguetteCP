@@ -362,6 +362,8 @@ worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 uni
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M7-T12 | `lib/core/search.ml`, `lib/core/analysis.ml`, `lib/core/learn.ml`, `lib/flatzinc/builder.ml`, `lib/flatzinc/model.ml`, `compile.ml`'s `phases_of_search` ONLY, `test/unit/test_learn.ml`, `test/unit/test_analysis.ml` | agent-decision | 2026-09-23 |
+| M7-T16 | `lib/core/prop/gcc.ml` (new), `lib/core/prop/dune`, `lib/core/dune`, `compile.ml`'s constraint-posting region ONLY, `test/unit/test_prop.ml`, `mznlib/**` | agent-gcc | 2026-09-23 |
 | M2-T16 | **everything except `bench/**`** — the 2.0 removal lands atomically | agent-drop | 2026-09-18 |
 | M2-L8 | `bench/**` only; read-only over `lib/` and `test/` | agent-bench | 2026-09-18 |
 | M2-L6 | all of `lib/`, `test/unit/test_learn.ml`, `test/unit/test_analysis.ml`, `test/unit/dune`, new files under `test/models/` + `test/expected/` | agent-pb | 2026-09-18 |
