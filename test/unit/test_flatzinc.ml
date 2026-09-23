@@ -1100,8 +1100,7 @@ let test_search_strategies () =
               var 0..6: y;\n\
               constraint int_ne(x, 3);\n\
               constraint int_le(y, 6);\n\
-              solve :: int_search([x, y], input_order, indomain_split, complete) \
-              satisfy;\n"
+              solve :: int_search([x, y], input_order, indomain_split, complete) satisfy;\n"
          in
          let c = F.Compile.compile m in
          let store = c.F.Compile.store in
@@ -1125,8 +1124,8 @@ let test_search_strategies () =
       check
         "M7-T9 (c): indomain_split takes the RANGE midpoint 3 across a hole, not the \
          value median 2"
-        (Var.to_int d.Search.d_var = 0 && d.Search.d_split = 3
-       && not d.Search.d_high_first));
+        (Var.to_int d.Search.d_var = 0
+        && d.Search.d_split = 3 && not d.Search.d_high_first));
   (* (d) `indomain_median` is refused, and the diagnostic must say WHY rather than just
      that it is unsupported -- the reason is the deliverable for this case, because a
      reader who hits it on a real model would otherwise re-derive the analysis. The
@@ -1136,8 +1135,7 @@ let test_search_strategies () =
     ~src:
       "var 1..9: x;\n\
        solve :: int_search([x], input_order, indomain_median, complete) satisfy;\n"
-    ~needles:
-      [ "indomain_median"; "INTERIOR"; "disjunction"; "M7-T12"; "indomain_split" ];
+    ~needles:[ "indomain_median"; "INTERIOR"; "disjunction"; "M7-T12"; "indomain_split" ];
   (* And the two strategies that remain unsupported are still refused, at full strength.
      `anti_first_fail` and `indomain_random` are the rest of what MiniZinc defines; they
      must not have been swept into a catch-all while the four above were added. *)
@@ -1194,8 +1192,7 @@ let cmp_src valsel =
      LAST value `indomain_min` reaches. int_lin_ne is value-consistent, so none of these
      rows prunes anything until one of the two variables is fixed: the tree is real. *)
   for s = 0 to 29 do
-    Buffer.add_string b
-      (Printf.sprintf "constraint int_lin_ne([1, 1], [x, y], %d);\n" s)
+    Buffer.add_string b (Printf.sprintf "constraint int_lin_ne([1, 1], [x, y], %d);\n" s)
   done;
   Buffer.add_string b
     (Printf.sprintf "solve :: int_search([x, y], input_order, %s, complete) satisfy;\n"
@@ -1215,9 +1212,7 @@ let cmp_run dir tag valsel =
   let oc = open_out pbp in
   let writer = Baguette_proof.Writer.create ~audit:true oc in
   Baguette_proof.Encoding.start_proof c.F.Compile.encoding writer;
-  let ctx =
-    Baguette_core.Justify.create ~writer ~encoding:c.F.Compile.encoding
-  in
+  let ctx = Baguette_core.Justify.create ~writer ~encoding:c.F.Compile.encoding in
   let check_asn assignment =
     let values = Array.make (F.Model.nvars m) 0 in
     List.iter (fun (v, x) -> values.(Var.to_int v) <- x) assignment;
@@ -1225,8 +1220,8 @@ let cmp_run dir tag valsel =
   in
   let order = match c.F.Compile.order with Some o -> o | None -> Search.spec_order in
   let outcome =
-    Search.solve ~engine:c.F.Compile.engine ~store:c.F.Compile.store ~ctx
-      ~check:check_asn ~order ()
+    Search.solve ~engine:c.F.Compile.engine ~store:c.F.Compile.store ~ctx ~check:check_asn
+      ~order ()
   in
   close_out oc;
   let ic = open_in_bin pbp in
@@ -1238,9 +1233,7 @@ let cmp_run dir tag valsel =
      comments, deletions and the header out of the number. *)
   let derivations =
     List.length
-      (List.filter
-         (fun l -> String.length l > 2 && l.[0] = '@' && l.[1] = 'c')
-         lines)
+      (List.filter (fun l -> String.length l > 2 && l.[0] = '@' && l.[1] = 'c') lines)
   in
   (outcome, opb, pbp, String.length proof, derivations)
 

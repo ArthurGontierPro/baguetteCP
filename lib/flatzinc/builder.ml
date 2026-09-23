@@ -686,11 +686,12 @@ let rec search_of_annot env pos (a : Ast.expr) =
                 Error.failf pos
                   "`%s`: unsupported value-choice strategy `indomain_median`; it assigns \
                    an INTERIOR domain value, and a baguette decision is one order \
-                   literal (`x <= k` / `x >= k+1`), so `x = m` needs two literals and its \
-                   sibling `x != m` is a disjunction -- which the nogood resolution in \
-                   `Search.combine_nogoods` cannot take. Refused rather than approximated \
-                   by a bisection: SPEC 3.4 forbids substituting a strategy. See M7-T12. \
-                   SPEC 3.4 supports indomain_min, indomain_max and indomain_split"
+                   literal (`x <= k` / `x >= k+1`), so `x = m` needs two literals and \
+                   its sibling `x != m` is a disjunction -- which the nogood resolution \
+                   in `Search.combine_nogoods` cannot take. Refused rather than \
+                   approximated by a bisection: SPEC 3.4 forbids substituting a \
+                   strategy. See M7-T12. SPEC 3.4 supports indomain_min, indomain_max \
+                   and indomain_split"
                   nm
             | e ->
                 Error.failf pos
