@@ -53,6 +53,13 @@
 #   REFUSED-MODEL      exit 2, front end. The refusing message is PRESERVED in the
 #                      detail column: that column is what D-0069 classified by.
 #   REFUSED-LIMIT      exit 3, a declared resource limit
+#   REFUSED-RESOURCE   exit 5, a declared BUDGET was exhausted (M7-T8's guard).
+#                      Its own bucket, and that is the whole point of M7-T14: this
+#                      is the solver stopping deliberately and naming what to
+#                      narrow, which is a DIAGNOSTIC. `SOLVE-ERR-134` is the OCaml
+#                      runtime aborting on an allocation it could not make, which
+#                      names nothing. Folding the two together would throw away the
+#                      difference the flag was added to create.
 #   TIMEOUT-SOLVE      exceeded $SOLVE_TIMEOUT
 #   SOLVE-ERR-<rc>     any other exit, rc kept (134 = SIGABRT/OOM, see D-0068)
 #
@@ -74,16 +81,55 @@
 #   OUT      output directory                          (default $2)
 #   PAR      parallel jobs, hard-capped at 92          (default 32)
 #   MEM_KB   per-job address-space cap, capped 32 GB   (default 32000000)
+#   HEAP_MB  --max-heap-mb passed to the solver; `auto` derives it from MEM_KB,
+#            `none` passes nothing                       (default auto)
 #   SOLVE_TIMEOUT / FLATTEN_TIMEOUT / CHECK_TIMEOUT    (default 300 / 120 / 900)
 #   MZN      the minizinc binary                       (default: PATH)
 #   BAGUETTE the solver binary            (default: _build/default/bin/main.exe)
 #   VERIPB   the checker; resolved by scripts/checker.sh if unset
 #   ONLY     a file of instance ids to run, one per line -- for re-running suspects
+#   DATA_TRIES  how many data files to try before giving up  (default 4)
 #   KEEP     1 to keep every .fzn/.opb/.pbp, not only the interesting ones
 #
 # `PAR` and `MEM_KB` are capped rather than trusted: 92 jobs at 32 GB is the node's
 # documented ceiling (M7-T4) and a harness that lets a typo exceed it takes the node
 # down for everyone.
+#
+# ------------------------------------------------ telling the solver its budget
+#
+# M7-T14 / D-0074. The wave-27 run produced **15 `SOLVE-ERR-134`** -- OCaml's
+# `Fatal error: allocation failure during minor GC`, which cannot be caught, names
+# no variable, and leaves nothing to narrow -- and **zero exit 5**. M7-T8's guard
+# was present the whole time and never armed, because its limits default to `none`.
+#
+# That default is CORRECT and stays (D-0065, D-0071): any default heap figure is a
+# property of the machine doing the measuring, not of the solver, so it does not
+# belong in the solver. But this harness IS the machine doing the measuring -- it
+# chose `MEM_KB` and imposes it with `ulimit -v`. Knowing a limit and not passing
+# it on is discarding the diagnostic we already paid for.
+#
+# So `HEAP_MB=auto` derives the flag from `MEM_KB`. The two are NOT the same
+# quantity and the derivation must not pretend they are:
+#
+#   * `ulimit -v` caps the process's whole VIRTUAL ADDRESS SPACE -- the executable,
+#     every stack, the C malloc arena, the proof writer's buffers, and whatever the
+#     runtime has reserved but not populated.
+#   * `--max-heap-mb` is read from `Gc.quick_stat`, i.e. the OCaml MAJOR HEAP only.
+#
+# The major heap is therefore always strictly less than the address space, by an
+# amount that is neither constant nor small: OCaml 5's allocator reserves in large
+# aligned regions, the minor heap and fragmentation sit outside the figure, and a
+# major-heap growth step can transiently need considerably more space than the
+# heap it ends up reporting.
+#
+# **HEADROOM: the derived limit is HALF of MEM_KB** (32 GB -> 15625 MB). The number
+# is round rather than calibrated, and deliberately so -- the flag's entire value is
+# that the solver stops FIRST, with a diagnostic, instead of the kernel refusing a
+# mapping and the runtime aborting. A tight margin that occasionally loses that race
+# buys nothing: the instances this fires on are ones we were going to lose anyway,
+# and the only question is whether we lose them with information or without. If a
+# later run shows instances refused at 15 GB that would have solved in 28, raise it
+# THEN, with that measurement, and record it -- do not guess it wider now.
 #
 # ---------------------------------------------------------------- resumption
 #
@@ -115,6 +161,8 @@ MZN="${MZN:-minizinc}"
 BAGUETTE="${BAGUETTE:-$ROOT/_build/default/bin/main.exe}"
 KEEP="${KEEP:-0}"
 ONLY="${ONLY:-}"
+HEAP_MB="${HEAP_MB:-auto}"
+DATA_TRIES="${DATA_TRIES:-4}"
 
 PAR_MAX=92
 MEM_KB_MAX=32000000
@@ -122,6 +170,20 @@ MEM_KB_MAX=32000000
 die() {
   echo "corpus_run: $*" >&2
   exit 1
+}
+
+# ------------------------------------------------- MEM_KB -> --max-heap-mb (M7-T14)
+#
+# Half the address-space cap, in MB. See "telling the solver its budget" above for
+# why the two quantities differ and why the margin is this wide. Prints nothing
+# when there is no limit to derive, so the caller can test for the empty string.
+heap_mb_from_mem_kb() {
+  local kb="${1:-}"
+  case "$kb" in
+    '' | *[!0-9]*) return 0 ;;
+  esac
+  [ "$kb" -ge 2048 ] || return 0
+  echo $(( kb / 1024 / 2 ))
 }
 
 # ---------------------------------------------------------------- preflight
@@ -180,6 +242,19 @@ preflight() {
     echo "corpus_run: MEM_KB=$MEM_KB exceeds 32 GB; capping at $MEM_KB_MAX." >&2
     MEM_KB=$MEM_KB_MAX
   fi
+
+  # M7-T14. Resolved AFTER the cap above, so the flag always describes the ulimit
+  # actually imposed rather than the one that was asked for.
+  case "$HEAP_MB" in
+    auto) HEAP_MB="$(heap_mb_from_mem_kb "$MEM_KB")" ;;
+    none | '') HEAP_MB="" ;;
+    *[!0-9]*) die "HEAP_MB must be a number of MB, 'auto' or 'none' (got '$HEAP_MB')" ;;
+  esac
+
+  case "$DATA_TRIES" in
+    '' | *[!0-9]*) die "DATA_TRIES must be a number (got '$DATA_TRIES')" ;;
+  esac
+  [ "$DATA_TRIES" -ge 1 ] || die "DATA_TRIES must be at least 1"
 
   mkdir -p "$OUT/log" "$OUT/work" || die "cannot create $OUT"
   require_local_fs "$OUT"
@@ -278,6 +353,32 @@ validate_fzn() {
   return 0
 }
 
+# ------------------------------------------------- pairing a model with its data
+#
+# M7-T15 / D-0074. The wave-27 run has 50 `FLATTEN-FAIL`, and about a dozen of them
+# read `symbol error: variable \`n\' is undefined`. Those are NOT model defects:
+# this harness took the SMALLEST `.dzn` in the family directory, and a family can
+# hold data files for more than one model -- or an include-fragment that defines
+# none of the parameters the model it was handed asks for. The harness's own choice
+# then lands in the corpus's column, which is D-0069's mistake in a new place, and
+# this file exists to make exactly that impossible.
+#
+# So the smallest is a PREFERENCE, not a verdict. `data_candidates` lists the data
+# files smallest-first -- preserving D-0068's reason for preferring the smallest,
+# which is that the corpus should measure the solver rather than the instance size
+# -- and `run_one` tries them in turn until one flattens. A model that needs no data
+# at all is tried too, LAST, so that "flattens bare" is a real outcome and not an
+# artefact of the directory happening to be empty.
+#
+# Bounded by DATA_TRIES (default 4) because flattening is the expensive step: a
+# family with forty data files must not cost forty flattens to conclude that none
+# of them fit.
+data_candidates() {
+  local dir="$1" limit="${2:-4}"
+  ls -S "$dir"/*.dzn "$dir"/*.json 2>/dev/null | tac | head -n "$limit"
+  return 0
+}
+
 # ---------------------------------------------------------------- one instance
 
 emit() {
@@ -290,39 +391,83 @@ emit() {
 
 run_one() {
   local mzn="$1" id L W dat rc sz pbp reason detail
+  local c ndata tried ok first_err
+  local -a cands=()
   id="$(instance_id "$mzn")"
   L="$OUT/log/$id"
   W="$OUT/work/$id"
 
-  # Smallest data file, as D-0068 did, so the corpus measures the solver rather
-  # than the instance size. Recorded in the log so it is never in doubt which one.
-  dat="$(ls -S "$(dirname "$mzn")"/*.dzn "$(dirname "$mzn")"/*.json 2>/dev/null | tail -1)"
-  printf 'model=%s\ndata=%s\n' "$mzn" "${dat:-<none>}" > "$L.inst"
-
   ulimit -v "$MEM_KB" 2>/dev/null
 
-  # Flatten to a private .part beside the destination and rename. Same directory,
-  # so the rename is within one filesystem; preflight has already refused to run
-  # anywhere that rename is not atomic.
-  rm -f "$W.fzn.part" "$L.fzn"
-  timeout "$FLATTEN_TIMEOUT" "$MZN" -c --solver baguette "$mzn" ${dat:+"$dat"} \
-    -o "$W.fzn.part" > "$L.mzn.err" 2>&1
-  rc=$?
-  if [ "$rc" -eq 124 ]; then
-    emit "$id" "FLATTEN-TIMEOUT" - - "exceeded ${FLATTEN_TIMEOUT}s"
+  # M7-T15. Data files smallest-first, then the bare model last. See
+  # `data_candidates` above for why this is a preference and not a verdict.
+  while IFS= read -r c; do
+    [ -n "$c" ] && cands+=("$c")
+  done < <(data_candidates "$(dirname "$mzn")" "$DATA_TRIES")
+  ndata=${#cands[@]}
+  cands+=("")
+
+  : > "$L.mzn.err"
+  printf 'model=%s\n' "$mzn" > "$L.inst"
+  dat=""
+  ok=0
+  tried=0
+  first_err=""
+
+  for c in "${cands[@]}"; do
+    tried=$((tried + 1))
+    # Flatten to a private .part beside the destination and rename. Same directory,
+    # so the rename is within one filesystem; preflight has already refused to run
+    # anywhere that rename is not atomic.
+    rm -f "$W.fzn.part" "$L.fzn"
+    timeout "$FLATTEN_TIMEOUT" "$MZN" -c --solver baguette "$mzn" ${c:+"$c"} \
+      -o "$W.fzn.part" > "$L.mzn.err" 2>&1
+    rc=$?
+    if [ "$rc" -eq 124 ]; then
+      # A timeout ends the search rather than costing DATA_TRIES x FLATTEN_TIMEOUT.
+      # It is a statement about the MODEL -- MiniZinc got far enough to spend the
+      # whole budget, so it is not the "this data file does not fit" failure, which
+      # is refused in milliseconds.
+      printf 'data=%s\nresult=flatten-timeout\n' "${c:-<none>}" >> "$L.inst"
+      emit "$id" "FLATTEN-TIMEOUT" - - \
+        "exceeded ${FLATTEN_TIMEOUT}s with data ${c:-<none>}"
+      rm -f "$W.fzn.part"
+      return
+    fi
+    if [ "$rc" -eq 0 ] && [ -s "$W.fzn.part" ]; then
+      dat="$c"
+      ok=1
+      break
+    fi
+    if [ "$rc" -eq 0 ] && [ -z "$c" ] && [ "$ndata" -eq 0 ]; then
+      # No data beside the model, and flattening bare produced nothing. Same
+      # judgement the first draft made, kept: this is a corpus shape, not a defect.
+      printf 'data=<none>\nresult=no-data\n' >> "$L.inst"
+      emit "$id" "NO-DATA" - - "no .dzn or .json beside $mzn"
+      rm -f "$W.fzn.part"
+      return
+    fi
+    printf 'rejected=%s\t%s\n' "${c:-<none>}" \
+      "$(head -c 200 "$L.mzn.err" | tr '\t\n\r' '   ')" >> "$L.inst"
+    [ -n "$first_err" ] || first_err="$(head -c 200 "$L.mzn.err")"
+  done
+
+  if [ "$ok" -ne 1 ]; then
+    # Every candidate was refused, including the bare model. The detail reports the
+    # FIRST candidate's message -- the smallest data file, i.e. what the previous
+    # runs reported -- so the column stays comparable, with the count of candidates
+    # appended so a reader can tell a genuine model failure from a pairing failure
+    # without opening the log.
+    emit "$id" "FLATTEN-FAIL" - - \
+      "[$((tried - 1)) data file(s) tried, all refused] $first_err"
     rm -f "$W.fzn.part"
     return
   fi
-  if [ "$rc" -ne 0 ]; then
-    emit "$id" "FLATTEN-FAIL" - - "$(head -c 200 "$L.mzn.err")"
-    rm -f "$W.fzn.part"
-    return
-  fi
-  if [ -z "$dat" ] && [ ! -s "$W.fzn.part" ]; then
-    emit "$id" "NO-DATA" - - "no .dzn or .json beside $mzn"
-    rm -f "$W.fzn.part"
-    return
-  fi
+
+  # Recorded in the log so it is never in doubt which data file was used, and --
+  # since M7-T15 -- how many were rejected before it.
+  printf 'data=%s\ncandidates=%s\nused_candidate=%s\n' \
+    "${dat:-<none>}" "$ndata" "$tried" >> "$L.inst"
   mv -f "$W.fzn.part" "$L.fzn" || {
     emit "$id" "INPUT-INVALID" - - "could not rename the flattened model into place"
     return
@@ -337,7 +482,8 @@ run_one() {
   sz="$(stat -c%s "$L.fzn")"
 
   rm -f "$L.opb" "$L.pbp"
-  timeout "$SOLVE_TIMEOUT" "$BAGUETTE" --proof "$L" "$L.fzn" > "$L.out" 2> "$L.err"
+  timeout "$SOLVE_TIMEOUT" "$BAGUETTE" ${HEAP_MB:+--max-heap-mb "$HEAP_MB"} \
+    --proof "$L" "$L.fzn" > "$L.out" 2> "$L.err"
   rc=$?
   detail="$(head -c 200 "$L.err")"
   case "$rc" in
@@ -349,6 +495,15 @@ run_one() {
       ;;
     3)
       emit "$id" "REFUSED-LIMIT" "$sz" - "$detail"
+      cleanup_one "$L" keepfzn
+      return
+      ;;
+    5)
+      # M7-T14. A declared budget was exhausted and the solver said so. This is the
+      # bucket the --max-heap-mb below exists to create; keeping it apart from
+      # SOLVE-ERR-134 is the entire deliverable, because the two look identical in a
+      # total and are opposites in what they tell you.
+      emit "$id" "REFUSED-RESOURCE" "$sz" - "$detail"
       cleanup_one "$L" keepfzn
       return
       ;;
@@ -435,7 +590,8 @@ report() {
 main() {
   preflight
   export OUT MZN BAGUETTE MEM_KB SOLVE_TIMEOUT FLATTEN_TIMEOUT CHECK_TIMEOUT KEEP
-  export -f run_one instance_id validate_fzn emit cleanup_one
+  export HEAP_MB DATA_TRIES
+  export -f run_one instance_id validate_fzn emit cleanup_one data_candidates
 
   find "$CORPUS" -mindepth 3 -name '*.mzn' | sort > "$OUT/all.lst"
   local total
@@ -469,7 +625,8 @@ main() {
   [ "$selected" -gt 0 ] || die "the ONLY filter selected none of the $total instances"
   echo "corpus_run: $total in the corpus, $selected selected, $((selected - todo)) \
 already recorded, $todo to run."
-  echo "corpus_run: PAR=$PAR MEM_KB=$MEM_KB checker=$VERIPB"
+  echo "corpus_run: PAR=$PAR MEM_KB=$MEM_KB --max-heap-mb=${HEAP_MB:-<not passed>} \
+DATA_TRIES=$DATA_TRIES checker=$VERIPB"
 
   if [ "$todo" -gt 0 ]; then
     xargs -a "$OUT/todo.lst" -P "$PAR" -I{} bash -c 'run_one "$@"' _ {} \
