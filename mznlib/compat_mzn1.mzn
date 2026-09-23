@@ -169,12 +169,17 @@ function ann: int_search(
 % SIGNATURE BRIDGE onto the standard library's own predicate -- we spell the
 % implicit cover out and hand the call straight to std.
 %
-% It is therefore not us shattering a global: whatever std decomposes
-% `global_cardinality' into, it would have decomposed the 1.x call into as
-% well, and baguette has no global_cardinality propagator for the call to be
-% kept whole FOR.  That propagator is the better answer and belongs on the
-% roadmap; until it exists there is nothing to protect here, and refusing the
-% bridge would only keep the instance from reaching the solver at all.
+% It is therefore not us shattering a global: whatever std does with
+% `global_cardinality', it would have done with the 1.x call as well.
+%
+% UPDATED BY M7-T16 (D-0077), and this is the whole of the change: the call no
+% longer decomposes.  mznlib/fzn_global_cardinality.mzn now declares the inner
+% predicate bodyless, so std's three-argument `global_cardinality' reaches
+% lib/core/prop/gcc.ml intact and the bridge below hands 1.x's spelling to the
+% propagator rather than to a cloud of reified equalities.  D-0076 said the
+% decomposition was right only for as long as there was no propagator to keep
+% the constraint whole FOR; that condition has expired, and nothing about the
+% bridge itself had to change for it to expire.
 %
 % The include is NOT optional and is not decoration. redefinitions.mzn is
 % included into EVERY model, so every body in it must type-check in every
