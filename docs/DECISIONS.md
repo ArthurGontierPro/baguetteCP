@@ -5658,3 +5658,84 @@ the same defect is accepted silently. **This record makes that note quantitative
 `ne_eq_unsat` it is not "some" lines, it is **all** of them.
 
 Amends D-0066. Closes M7-T5.
+
+## D-0074  The wave-27 corpus run: 33 verified, the search-array wall is gone, and `2012_tpp` is a SECOND defect
+
+**2026-09-23.** The first run on the M7-T4 harness, 436 **distinct** instances, complete
+(`DONE-1790169395  436  436`), binary hashed `605ede27…` at `ea5fc4c`. **That tip is wave 27
+only** — M7-T9 and M7-T11 merged after launch and are *not* in these numbers. That matters for
+reading every line below.
+
+| outcome | count |
+|---|---|
+| `TIMEOUT-SOLVE` (300 s) | 155 |
+| `REFUSED-MODEL` | 107 |
+| `REFUSED-LIMIT` | 74 |
+| `FLATTEN-FAIL` | 50 |
+| **`OK-PROOF-VERIFIED`** | **33** |
+| `SOLVE-ERR-134` | 15 |
+| **`PROOF-REJECTED`** | **1** |
+| `FLATTEN-TIMEOUT` | 1 |
+
+### M7-T7 worked completely, and that is a measurement now
+
+**Search-array refusals: 0.** Not "reduced" — the string appears nowhere in 436 results,
+against 143 occurrences before. D-0068's headline was the one prediction this project made
+that survived contact with the corpus intact. `OK-PROOF-VERIFIED` **8 → 33**.
+
+**Do not read 33 as 8 + 25.** D-0069's amendment applies: that run had 353 distinct ids over
+436 rows, this one has 436 distinct instances, so 83 of these models had never been measured.
+The like-for-like claim is narrower and still strong: *the single check M7-T7 removed was
+worth more than every other refusal cause combined, as predicted.*
+
+### The two biggest remaining buckets are ALREADY FIXED on `main`, and this run cannot see it
+
+- **`REFUSED-MODEL` 107, of which 94 are search strategies** — 52 `indomain_split`, 35
+  `smallest`, 6 `largest`, 1 `bool_search` `smallest`. **M7-T9 shipped all of those**, hours
+  after this run launched.
+- **`REFUSED-LIMIT` 74, of which 74 are set domains.** Every single one. **M7-T11 shipped
+  that**, also after launch.
+
+So **~168 of the 436 are addressed by code already on `main`** and unmeasured. The next run is
+not a re-measurement, it is the first measurement of wave 28. **Nobody should quote 33 as the
+current figure.**
+
+What genuinely remains in `REFUSED-MODEL` after wave 28 is small: 6 `indomain_median`
+(M7-T12, refused **by design**), 2 `anti_first_fail`, 1 bare `indomain`, 2 `var int` with no
+declared domain.
+
+### `2012_tpp` is STILL REJECTED, and that is the most informative bit in the run
+
+M7-T6 / D-0070 fixed the settle-past-a-hole defect and its reproducer verifies. **`2012_tpp`
+does not**: 38.5 MB proof, *"The constraint is not implied by reverse unit propagation (RUP)
+from core and derived database."* Same wording, same instance, after the fix.
+
+**So there is a second RUP defect.** D-0070's account was right about what it explained — the
+reproducer was reduced from this corpus and the fix is real — but it was **not the whole of
+what `2012_tpp` hits**. I recorded on merge that M7-T6 did not claim to be the only cause;
+this is that caveat cashing out, not a surprise. Opened as **M7-T13**.
+
+Note what makes this visible at all: `2012_tpp` is a **satisfiable** instance. Per D-0066 as
+amended, a `rup` line is checkable only when it is load-bearing for a later line, so the UNSAT
+instances of this second defect are still being accepted silently. **1 of 34 proofs rejected
+is a lower bound and always was.**
+
+### The resource guard is present and did nothing, by design
+
+**15 `SOLVE-ERR-134`** (OCaml allocation-failure aborts), up from 9 — more instances now reach
+the solver at all. **0 exit-5.** M7-T8's guard shipped with both limits defaulting to `none`
+(D-0071, on D-0065's reasoning that any default is a property of the measuring machine), so it
+was never armed. That is the designed behaviour and not a defect — **but a harness that runs
+under a 32 GB `ulimit` and does not tell the solver about it is throwing away the diagnostic
+it paid for.** Opened as **M7-T14**: the harness should pass `--max-heap-mb` derived from its
+own `MEM_KB`, turning 15 aborts into 15 diagnostics naming what to narrow.
+
+### The frontier moved
+
+`TIMEOUT-SOLVE` is now the largest bucket at **155**, and after wave 28 lands it will grow
+again as refusals convert into attempts. **That is the next real wall, and it is a different
+kind of problem from every wave so far** — not a refusal to fix or an artefact to correct, but
+search and propagation strength. No row is open for it yet and none should be opened until the
+wave-28 run says which instances time out and how close they get.
+
+Follows D-0068, D-0069 (as amended), D-0070. Opens M7-T13 and M7-T14.
