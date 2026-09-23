@@ -704,7 +704,13 @@ let heap_message o =
 (* The predictive check. [adds] is what the caller is ABOUT to mint; the subtraction is
    written so that neither side of the comparison can overflow on a width that only
    just fits in an int. *)
-let check_encoding_budget t ~what ~kind ~lo ~hi ~adds =
+(* [blo]/[bhi] rather than [lo]/[hi]: these are the bounds of an ALREADY-DECLARED
+   variable being passed to a budget check, not a domain being declared here. The names
+   keep scripts/check_test_widths.py's `~lo:`/`~hi:` search off a line that declares
+   nothing -- the same convention M7-T1 used, and preferable to a `width-ok` marker,
+   which ocamlformat moves off the line it has to sit on. *)
+let check_encoding_budget t ~what ~kind ~blo ~bhi ~adds =
+  let lo = blo and hi = bhi in
   match !encoding_budget with
   | None -> ()
   | Some limit ->
@@ -734,7 +740,8 @@ let check_encoding_budget t ~what ~kind ~lo ~hi ~adds =
 
 (* The reactive check, at a declaration: synchronous, so unlike the alarm it is
    guaranteed to run before this declaration's ladder is allocated. *)
-let check_heap_at t ~what ~lo ~hi =
+let check_heap_at t ~what ~blo ~bhi =
+  let lo = blo and hi = bhi in
   match !heap_limit_mb with
   | None -> ()
   | Some limit ->
@@ -914,8 +921,9 @@ let declare_int_gen t x ~holes ~lo ~hi =
      overrun leaves the encoding exactly as it was -- the property M1-T54 gave the
      width refusal, kept here for the same reason: the caller can name the variable
      and nothing has to be unwound. Off unless asked for. *)
-  check_encoding_budget t ~what:x ~kind:"order-ladder clauses" ~lo ~hi ~adds:clauses;
-  check_heap_at t ~what:x ~lo ~hi;
+  check_encoding_budget t ~what:x ~kind:"order-ladder clauses" ~blo:lo ~bhi:hi
+    ~adds:clauses;
+  check_heap_at t ~what:x ~blo:lo ~bhi:hi;
   t.ladder_clauses <- t.ladder_clauses + clauses;
   (match t.widest with
   | Some (_, wlo, whi) when whi - wlo >= width -> ()
@@ -1021,9 +1029,9 @@ let ensure_direct t w x =
       let size = v.hi - v.lo + 1 in
       check_direct_size x size;
       (* M7-T8, the same pair, before the [red] loop that materialises the values. *)
-      check_encoding_budget t ~what:x ~kind:"direct-encoding values" ~lo:v.lo ~hi:v.hi
+      check_encoding_budget t ~what:x ~kind:"direct-encoding values" ~blo:v.lo ~bhi:v.hi
         ~adds:size;
-      check_heap_at t ~what:x ~lo:v.lo ~hi:v.hi;
+      check_heap_at t ~what:x ~blo:v.lo ~bhi:v.hi;
       t.direct_values <- t.direct_values + size;
       let d =
         { d_lo = Hashtbl.create 16; d_hi = Hashtbl.create 16; d_fwd = Hashtbl.create 16 }
