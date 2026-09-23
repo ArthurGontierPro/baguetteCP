@@ -362,7 +362,6 @@ worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 uni
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M7-T16 | `lib/core/prop/gcc.ml` (new), `lib/core/prop/dune`, `lib/core/dune`, `compile.ml`'s constraint-posting region ONLY, **`model.ml`'s constraint constructor + its two match arms and `builder.ml`'s builtin-dispatch arm (~:542) — ADDITIVE ONLY**, `test/unit/test_prop.ml`, `mznlib/**`. **M7-T12 merged and changed `Search.order` to return a `choice` — rebase onto `main`; four test files gained `Search.Split {...}` / `Search.as_split`** | agent-gcc | 2026-09-23 |
 | M2-T16 | **everything except `bench/**`** — the 2.0 removal lands atomically | agent-drop | 2026-09-18 |
 | M2-L8 | `bench/**` only; read-only over `lib/` and `test/` | agent-bench | 2026-09-18 |
 | M2-L6 | all of `lib/`, `test/unit/test_learn.ml`, `test/unit/test_analysis.ml`, `test/unit/dune`, new files under `test/models/` + `test/expected/` | agent-pb | 2026-09-18 |
@@ -598,7 +597,43 @@ work. The owning session picks it up.
 | M6-T6 | agent-bisect | 2026-09-21 | Bisected `width_sat_depth`'s regression: the 43 ms comment was true when written; the whole ~14x jump is one commit, `aacbc8d` (M2-L6 wired into `Search`), 18.6 ms parent -> 258.7 ms. `git bisect run`, 7 steps, 0 skipped. Recommend accepting as the cost of M2-L6's PB analysis, which M2-L13 already claws most of back. `bench/README.md` §3g, new `bench/width_sat_depth_bisect.sh`. |
 | M7-T14 + M7-T15 (pairing half) | agent-harness2 | 2026-09-23 | `corpus_run.sh` derives `--max-heap-mb` from its own `MEM_KB` (half, 15625 MB at 32 GB) and exit 5 gets its own `REFUSED-RESOURCE` bucket; data pairing searches one level down and a model with no data anywhere is `NO-DATA`, not `FLATTEN-FAIL`. Wave-28 corpus run launched at `/scratch/arthur/corpus-out-w29` |
 
+| M7-T16 | `lib/core/prop/gcc.ml` (new), `lib/flatzinc/{model,builder,compile}.ml`, `mznlib/**`, `test/unit/{test_trace,test_compile}.ml`, four `test/models/gcc_*` + expected, `docs/DECISIONS.md`, `docs/ARCHITECTURE.md`, `CLAUDE.md` | agent-gcc | released 2026-09-23 -- **D-0077**, branch `wave30-gcc` |
+
 ## Handoff notes
+
+### M7-T16 handoff
+
+**A `global_cardinality` propagator** (`lib/core/prop/gcc.ml`, **D-0077**, branch
+`wave30-gcc`, NOT merged). Rule A is all_different's Hall interval generalised to
+capacities and is the inference the per-value decomposition cannot reach; rule C bounds
+the count variables and is what makes it a checker. Declared `Checking`, not `Bounds`,
+and the header argues it at length. **No new `Explanation` constructor.**
+
+**Three things the next session should know, in order of how much they will cost:**
+
+1. **`Trace.derive_ahead` under-triggers**, and gcc is the first family to show it. It
+   fires on `Encoding.has_direct` of the pruned variable; gcc's rows are over the ORDER
+   encoding and it names no direct literal, so every gcc trace line went out as a bare
+   `rup` and 3.0.2 refused them. `compile.ml` buys the trigger back with a
+   `request_direct` it does not otherwise want. **That stopgap is the whole reason the
+   real instance's proof came out 13% BIGGER** (`2008_debruijn_binary`: `.fzn` 13 886 ->
+   8 578 B, `.opb` 69 643 -> 63 128 B, `.pbp` 25 202 -> 28 552 B, all of the excess in
+   `red` lines). There is a `## Cross-session requests` row against `lib/core/trace.ml`
+   and `lib/proof/encoding.ml`. **Fixing it is what settles this row's headline number.**
+2. **D-0010's currency bites any global whose pruning concludes ONE order literal.** A
+   bound is worth its whole prefix of the ladder; summed against a `Linear` row, a single
+   literal is short by the rungs beneath it and the checker says "not contradicting".
+   `Gcc.ladder_lift` is the fix. `all_different` never showed it because its derivations
+   still reach `Explanation.clause` often enough that root conflicts take the D-0022
+   route and the arithmetic is never evaluated -- luck, not design.
+3. **A propagator emits its justification only when a later line needs it**, so a model
+   it settles at the ROOT verifies a proof with no reasoning in it at all.
+   `test/models/alldiff_hall_sat.fzn` has been green since M4-T1 on exactly that basis.
+   `gcc_search_sat.fzn` is the lane that does not have that hole -- SAT, under a search
+   annotation that makes the first guesses wrong.
+
+**Gate on the branch**: 2916 unit checks 0 FAIL, 104 model tests 0 fail, fmt clean, width
+lint clean, determinism clean. Peak RSS 40 MB (`dune runtest`), 18 MB (model tests).
 
 Newest at the bottom. Two or three lines: what changed, what surprised you, what the next
 session should know before touching the same area.
