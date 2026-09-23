@@ -1,0 +1,30 @@
+% search_string_sat -- M7-T15
+%
+% FLATTENED ARTEFACT. Source: mznlib/test/search_string_sat.mzn, flattened by
+% MiniZinc 2.10.1 against mznlib/ (MZN_SOLVER_PATH=tools). Regenerate with
+%   minizinc -c --solver baguette mznlib/test/search_string_sat.mzn -o <this>
+% and re-attach this header; do not hand-edit the body.
+%
+% WHAT IT PINS. The source writes MiniZinc 1.x's string-valued search
+% annotation, int_search(a, "first_fail", "indomain_split", "complete"), which
+% 2.x has no signature for; mznlib/compat_mzn1.mzn maps each string onto the
+% 2.x annotation of the same name. The `solve' line below must therefore read
+% first_fail, indomain_split, complete -- the strategies the model asked for.
+% A shim that quietly fell back to input_order/indomain_min would still solve
+% this, which is exactly why the mapping asserts on an unknown string rather
+% than defaulting, and why the annotation is visible in this file.
+%
+% Unique solution: a = [1, 2, 3], as in is_output_shim_sat.
+
+predicate all_different_int(array [int] of var int: x);
+array [1..3] of int: X_INTRODUCED_20_ = [1,1,1];
+array [1..2] of int: X_INTRODUCED_21_ = [1,-1];
+var 1..4: X_INTRODUCED_16_;
+var 1..4: X_INTRODUCED_17_;
+var 1..4: X_INTRODUCED_18_;
+array [1..3] of var int: a:: output_array([1..3]) = [X_INTRODUCED_16_,X_INTRODUCED_17_,X_INTRODUCED_18_];
+constraint all_different_int(a);
+constraint int_lin_eq(X_INTRODUCED_20_,[X_INTRODUCED_16_,X_INTRODUCED_17_,X_INTRODUCED_18_],6);
+constraint int_lin_le(X_INTRODUCED_21_,[X_INTRODUCED_16_,X_INTRODUCED_17_],-1);
+constraint int_lin_le(X_INTRODUCED_21_,[X_INTRODUCED_17_,X_INTRODUCED_18_],-1);
+solve :: int_search(a,first_fail,indomain_split,complete) satisfy;

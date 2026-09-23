@@ -5844,3 +5844,117 @@ because it is `Bounds` and genuinely reads a window; **that is an accident of it
 level and not a property of the code**, and M4-T2's second stage would end it.
 
 Follows D-0070, D-0074, D-0066 (as amended), D-0059. Closes M7-T13.
+---
+
+## D-0076  `FLATTEN-FAIL` was mostly a 2008-2010 dialect, not a missing global
+
+**Status**: **ACCEPTED**, implemented by M7-T15 (2026-09-23, agent-flatten).
+`mznlib/compat_mzn1.mzn`, `mznlib/test/`, four model tests.
+
+### What the 50 actually were
+
+D-0074's run left 50 instances that never reached the solver. The row that opened
+M7-T15 read the bucket as "16 shim + 8 a missing global + 12 harness + 2 models'
+own". Re-read from the per-instance logs, the second bucket is **not a global**:
+all eight are
+
+```
+int_search(array[int] of var int, string, string, string)
+```
+
+— MiniZinc **1.x's string-valued search annotation**, which 2.x has no signature
+for. Together with `is_output`, 24 of the 50 are one thing: a Challenge archive
+written against a MiniZinc the current compiler no longer speaks. **Nothing in
+this row is a propagator gap and only one line of it decomposes anything.**
+
+| bucket | count | after M7-T15 |
+|---|---|---|
+| `is_output` undefined | 16 | **14 flatten**; 2 hit a further, pre-existing incompatibility |
+| string-valued `int_search` | 8 | **8 flatten** (one also needed the gcc bridge below) |
+| `maximum of empty set` | 2 | unchanged, and **confirmed the models' own** |
+| harness data pairing | ~20 | not this row (M7-T14's file, agent-harness2) |
+
+**22 of the 24 this row owns now flatten**, measured on `fataepyc-07` against the
+committed library, not inferred from a local test.
+
+### `is_output` cannot be aliased, and the residue is stated rather than hidden
+
+`is_output` is 1.x's "this declaration belongs in the solution output". 2.x's
+`add_to_output` has exactly that meaning, and the natural move is to alias onto
+it. **Both spellings were measured on 2.10.1 and neither works**: `ann: is_output
+= add_to_output;` type-checks and is inert — the compiler recognises
+`add_to_output` by the identifier written at the *declaration site*, not by the
+value it denotes — and `annotation is_output = add_to_output;` is rejected, leaving
+the identifier undefined. A bare `annotation is_output;` is all that is available.
+
+So output falls back to MiniZinc's default, which prints every top-level variable:
+a **superset** of what the model asked for. That is worth stating plainly because
+the failure it is *not* is the dangerous one. A variable the model asked for and we
+silently dropped would be a wrong answer in the FlatZinc output format with nothing
+to signal it; a variable printed that nobody asked for is noise.
+`test/models/is_output_shim_sat.fzn` pins the superset so a future change cannot
+turn it into a subset unnoticed.
+
+### The one decomposition, and why it was right *here*
+
+`2008_debruijn_binary` calls `global_cardinality(x, counts)`, 1.x's two-argument
+form whose cover is the index set of `counts`. The shim spells the cover out and
+hands the call to std's three-argument predicate, which decomposes it.
+
+D-0067's rule is to keep a global whole for the propagator that wants it. **There
+is no such propagator**: baguette has no `global_cardinality`, so there is nothing
+here to keep the constraint whole *for*, and std would have decomposed the 2.x
+spelling of the same call identically. Refusing the bridge would not have preserved
+a global; it would only have kept the instance from reaching the solver. A
+`global_cardinality` propagator is the better answer and is a roadmap item, not a
+reason to withhold the bridge. **This is the shape of argument a future
+decomposition should have to make** — "std decomposes it either way and we have no
+propagator", not "it was easier".
+
+### The failure this row met, which is a property of `mznlib/` and not of this shim
+
+The first version of the bridge called std's three-argument predicate **without
+including `global_cardinality.mzn`**. `redefinitions.mzn` is pulled into *every*
+model, so every body in it must type-check in every model — including the majority
+that never include `globals.mzn`. The unresolved call was reported as a type error
+**against the library**, and **twelve instances with nothing to do with cardinality
+went from flattening to `FLATTEN-FAIL`**. The confirmation run over all 24 read
+`ok=12` before the include and `ok=22` after it.
+
+**It was caught only because the confirmation run was done over all 24 together
+rather than bucket by bucket**, which is the practice worth keeping: the per-bucket
+runs were all green, because each bucket's models happened to include
+`globals.mzn`.
+
+**The repo's gate cannot see this class of bug at all.** Everything under `test/`
+consumes FlatZinc, and this defect lives on the MiniZinc side of the boundary.
+`mznlib/test/check_mznlib.sh` is the answer: it flattens `bare.mzn`, which includes
+nothing, and re-flattens each provenance model to check it still yields the body
+committed under `test/models/`. It needs a MiniZinc binary, which the dev
+environment does not have, so it is **run by hand and is not in `make check`** —
+and with no flattener it FAILS rather than skipping, for the reason
+`scripts/checker.sh` gives about a missing checker.
+
+### The three residual failures, confirmed not ours
+
+Each was re-run **under Gecode's own library**, with only `annotation is_output;`
+supplied, and fails identically there:
+
+- `2021_yumi-dynamic`, `2022_yumi-static` — *maximum of empty set is undefined*,
+  in the model's own par declarations.
+- `2009_p1f` — the model defines `predicate circuit(...)` itself, which has since
+  entered the standard library; 2.10 calls the overload ambiguous. Shadowing std's
+  `circuit` from `mznlib/` to paper over this would be exactly the wrong trade.
+- `2009_search_stress2` — the model's own `assert` on `dom(x)`, which 2.x no longer
+  satisfies.
+
+A 2009 model that the 2026 compiler rejects on the model's own terms stays
+`FLATTEN-FAIL`. The corpus is the subject of the measurement and is not edited.
+
+### Cost
+
+No regression: a 60-instance sample of instances that already flattened gives an
+identical 31/29 split under the old and new libraries. The four new model tests
+pass with their proofs accepted by veripb 3.0.2.
+
+Follows D-0067 (the library) and D-0074 (the run that counted this).
