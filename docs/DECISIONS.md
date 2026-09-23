@@ -5998,9 +5998,12 @@ a counting row has nowhere to hide.
 The identity `[x = v] = x_ge_v - x_ge_(v+1)` makes the same tally linear in literals the
 `.opb` already has. Three consequences, all of them wins:
 
-1. **This global requests no direct encoding at all** -- no `x_eq_v` variables, no
-   channelling clauses, no at-least-one line, none of the width-proportional machinery
-   D-0028 charges for. `all_different` pays for all of it.
+1. **The derivation names no direct literal at all** -- no channelling clauses, no
+   at-least-one line, none of the width-proportional machinery D-0028 charges for, which
+   `all_different` pays for in full. (`compile.ml` does still call `request_direct` for
+   the gcc scope, and *not* for the derivation: see the `derive_ahead` defect below.
+   That call is a stopgap and is the one thing standing between this row and "no direct
+   encoding".)
 2. **"x lands in `[a, b]`" telescopes** to `x_ge_a - x_ge_(b+1)`, so the at-least-one line
    a Hall argument needs is not derived from the channelling -- it is the variable's two
    bound facts.
@@ -6041,6 +6044,41 @@ valid `u >= 4`, and the refutation is not a refutation.
 `test/models/gcc_hall_narrowed_unsat.fzn` exists to keep that closed: its variables are
 declared `1..4` and narrowed to `2..3` by linear rows, which is the only shape that
 exercises it.
+
+### Two defects the I-X10 gate found, and neither was in the counting
+
+**(1) `Trace.derive_ahead` under-triggers.** It fires on `Encoding.has_direct` of the
+pruned variable, and its own comment describes that as deliberately OVER-triggering --
+an `int_lin_le` pruning of an `all_different` variable gets a `pol` it did not need. It
+also UNDER-triggers, and gcc is the first family to show it: gcc's rows are over the
+order encoding and it names no direct literal anywhere, so `has_direct` was false for its
+whole scope and **every gcc trace line went out as a bare `rup`**, which 3.0.2 refused.
+Bought back by requesting the direct encoding for the gcc scope purely to arm the
+trigger, spelled out at the call site. It costs the width-proportional `red` lines
+(D-0028) for an encoding nothing reads, so it is a stopgap: the real fix is a marker that
+says "this pruning needs its derivation ahead" as a property of the propagator, which
+`trace.ml`'s comment already names ("a per-entry flag threaded from the propagator through
+`Store.entry`"). Filed as a cross-session request against `lib/core/trace.ml` and
+`lib/proof/encoding.ml`.
+
+**(2) D-0010's CURRENCY, and this one would have shipped silently.** What the counting
+leaves is a single order literal, `y_ge_(b+1) >= 1`. That is a true statement of the new
+bound and it is **not** what another propagator can combine with: an order literal is 0/1,
+so a bound is worth its whole prefix of the ladder, which is the substitution
+`encoding.ml` performs on the model side and `order_reason.ml` exists to restate. A
+`Linear` row summed against the single literal is short by exactly the rungs beneath it,
+and 3.0.2 answers *"the constraint with ID n is not contradicting"*. Measured on a gcc
+capacity push of `u` to 5 consumed by `int_lin_le([1],[u],4)` at the ROOT.
+
+**Why `all_different` never showed it**, and this is worth writing down because it is
+luck rather than design: alldiff's derivations still reach `Explanation.clause` often
+enough that `search.ml`'s `rests_on_a_clause` routes those root conflicts the D-0022 way,
+where `conclusion UNSAT` cites the empty clause and **nothing the checker does depends on
+the Hall arithmetic being right** -- which is the sentence alldiff.ml's own header already
+makes about `Explanation.Clause`, arriving from the other side. gcc's derivation is
+`Defining` all the way down, so it takes the numeric route, and the numeric route is where
+the currency matters. `Gcc.ladder_lift` is the fix: W copies of the single-literal
+derivation plus one chain per rung beneath the pushed bound.
 
 ### NO NEW `Explanation` CONSTRUCTOR
 
