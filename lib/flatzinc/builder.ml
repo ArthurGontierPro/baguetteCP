@@ -639,20 +639,63 @@ let rec search_of_annot env pos (a : Ast.expr) =
             match vsel with
             | Ast.Ident "input_order" -> Model.Input_order
             | Ast.Ident "first_fail" -> Model.First_fail
+            (* M7-T9. `smallest` selects the variable with the smallest value in its
+               domain, `largest` the one with the largest -- read on the domain MINIMUM
+               and the domain MAXIMUM respectively, which is the MiniZinc spec's literal
+               wording and what Gecode's INT_VAR_MIN_MIN / INT_VAR_MAX_MAX do.
+               `Search.smallest` / `Search.largest` carry the argument in full. *)
+            | Ast.Ident "smallest" -> Model.Smallest
+            | Ast.Ident "largest" -> Model.Largest
             | e ->
                 Error.failf pos
                   "`%s`: unsupported variable-selection strategy `%s`; SPEC 3.4 supports \
-                   input_order and first_fail"
+                   input_order, first_fail, smallest and largest"
                   nm (Ast.string_of_expr e)
           in
           let vl =
             match valsel with
             | Ast.Ident "indomain_min" -> Model.Indomain_min
             | Ast.Ident "indomain_max" -> Model.Indomain_max
+            (* M7-T9. `indomain_split` bisects, excluding the upper half first -- the
+               range midpoint, low branch first. See `Search.indomain_split`. *)
+            | Ast.Ident "indomain_split" -> Model.Indomain_split
+            (* M7-T9, AND THE DIAGNOSTIC IS THE DELIVERABLE HERE. `indomain_median` is
+               refused, and NOT because nobody got to it: it is the one value choice of
+               the four M7-T9 sized that the decision shape cannot express, and a reader
+               who hits this on a real model should learn that in one line rather than
+               rediscover it.
+
+               `Search.decision` is a single order-literal split: the low branch is
+               `x <= k`, the high branch is `x >= k+1`. `indomain_min` and `indomain_max`
+               are EXACT under that by accident of sitting at a boundary -- `x <= lo` is
+               `x = lo` and its sibling `x >= lo+1` is `x != lo`. An INTERIOR value has
+               neither property: `x = m` is `x >= m AND x <= m`, two literals, and its
+               sibling `x != m` is a DISJUNCTION `x <= m-1 OR x >= m+1` (D-0019). Both
+               halves of the search's proof contract assume otherwise --
+               `check_decision_landed` (one trail entry opens a level) and
+               `combine_nogoods` (the two children resolve on exactly one literal) -- so
+               this is a change to the decision shape, not a fifth constructor.
+
+               Substituting a bisection at the median would be accepted by every test
+               here and by the checker, because every proof it emitted would still be
+               valid; the only symptom would be a search exploring a tree the model did
+               not ask for. SPEC 3.4 forbids exactly that, and refusing is the correct
+               answer rather than the fallback. M7-T12 is the row that lifts the
+               restriction. *)
+            | Ast.Ident "indomain_median" ->
+                Error.failf pos
+                  "`%s`: unsupported value-choice strategy `indomain_median`; it assigns \
+                   an INTERIOR domain value, and a baguette decision is one order \
+                   literal (`x <= k` / `x >= k+1`), so `x = m` needs two literals and its \
+                   sibling `x != m` is a disjunction -- which the nogood resolution in \
+                   `Search.combine_nogoods` cannot take. Refused rather than approximated \
+                   by a bisection: SPEC 3.4 forbids substituting a strategy. See M7-T12. \
+                   SPEC 3.4 supports indomain_min, indomain_max and indomain_split"
+                  nm
             | e ->
                 Error.failf pos
                   "`%s`: unsupported value-choice strategy `%s`; SPEC 3.4 supports \
-                   indomain_min and indomain_max"
+                   indomain_min, indomain_max and indomain_split"
                   nm (Ast.string_of_expr e)
           in
           Some (Model.Int_search (idxs, vc, vl))
