@@ -1234,6 +1234,217 @@ let test_oracle_primitives () =
       entails ~title:"e: conflict + 2 * reduce(reason)" ~premises:[ conflict; row ]
         ~conclusion:combined
 
+(* ============================================================== (M7-T6) the settle gap
+
+   D-0070. A decision push that SETTLES past a hole lands on a bound strictly stronger
+   than the literal the branch assumed. [Search.bridges] writes that step down as a line
+
+       rup <the settled bound> \/ ~<the assumed literal> \/ ~<each ancestor decision>
+
+   and its own [rup] reaches the settled bound only once the ancestors are asserted --
+   by the hole's own trace line, or by the disequality's .opb rows, both of which need
+   them. The implication graph has no edge for the settle, so [Learn.levels] never names
+   the levels those ancestors sit at, and filtering the nogood by [Learn.levels] alone
+   drops exactly the literals the bridge rests on. The nogood then no longer entails its
+   own bridge and 3.0.2 refuses it -- at the nogood, several inferences away from the
+   settle that caused it.
+
+   THE MODEL IS SATISFIABLE ON PURPOSE. D-0066: `rup` is vacuous over a contradictory
+   database, so the same break on an UNSAT model is ACCEPTED and this lane would be
+   testing nothing. It is test/models/rup_level0_nogood_sat.fzn, which is the shape
+   M7-T3 reduced out of the MiniZinc corpus. *)
+let settle_src =
+  "var 1..11: x0;\n\
+   var 1..11: x1;\n\
+   var 1..11: x2;\n\
+   var 1..11: x3;\n\
+   var 1..11: x4;\n\
+   var 1..11: x5;\n\
+   var 1..11: x6;\n\
+   var 1..11: x7;\n\
+   var 1..11: x8;\n\
+   var bool: b0;\n\
+   var bool: b1;\n\
+   constraint int_ne(x3,x6);\n\
+   constraint int_ne(x6,x7);\n\
+   constraint int_lin_eq([-2,1,-1,1],[x7,x2,x8,x0],7);\n\
+   constraint int_lin_le_reif([-2,-2],[x3,x6],-9,b0);\n\
+   constraint int_lin_le_reif([2,1,-1,-1],[x7,x1,x0,x2],6,b1);\n\
+   solve satisfy;\n"
+
+(* The line the checker stopped at, as it names it: "Verification error at <path>:<n>".
+   Pinning it is what separates "some `rup` in this proof failed" from "THIS one did",
+   and CLAUDE.md is explicit that "reverse unit propagation" on its own is too weak a
+   match -- every other RUP failure in the same proof would satisfy it. *)
+let failing_line out proof =
+  (* Hand-rolled rather than [Str], because test/unit/dune is a contention hotspot
+     (CLAUDE.md) and adding a library to it for one line is not worth the conflict. *)
+  let marker = "Verification error at " in
+  let find_marker () =
+    let n = String.length out and m = String.length marker in
+    let rec go i =
+      if i + m > n then None
+      else if String.sub out i m = marker then Some (i + m)
+      else go (i + 1)
+    in
+    go 0
+  in
+  match find_marker () with
+  | None -> None
+  | Some start -> (
+      (* ...<path>:<line>, and the line number is the trailing run of digits on it. *)
+      let stop = ref start in
+      let n = String.length out in
+      while !stop < n && out.[!stop] <> '\n' do
+        incr stop
+      done;
+      let tail = String.sub out start (!stop - start) in
+      match String.rindex_opt tail ':' with
+      | None -> None
+      | Some c -> (
+          let digits = String.sub tail (c + 1) (String.length tail - c - 1) in
+          match int_of_string_opt (String.trim digits) with
+          | None -> None
+          | Some k -> (
+              let lines = String.split_on_char '\n' proof in
+              match List.nth_opt lines (k - 1) with None -> None | Some l -> Some (k, l)))
+      )
+
+let test_settle_bridge_survives_the_filter () =
+  print_endline "\n-- M7-T6/D-0070: the nogood keeps what its bridge rests on --";
+  (* The honest side: the default build, over a SAT model, accepted. *)
+  let r, dir, opb, pbp = run settle_src in
+  check "M7-T6: the model is satisfiable (the answer was never in doubt)"
+    (match r.r_outcome with Search.Sat _ -> true | _ -> false);
+  check
+    "M7-T6: the search took a decision that settled past a hole, so the lane is \
+     exercising the settle path and not something incidental"
+    (r.r_stats.Search.n_bridges > 0);
+  check
+    "M7-T6: the solution is logged with a non-empty `sol` line (the control for the \
+     empty-model lane below)"
+    (contains ~needle:"\nsol x" r.r_proof || contains ~needle:"\nsol ~x" r.r_proof);
+  expect_accepted ~title:"M7-T6: the default build's proof" ~dir ~opb ~pbp;
+  cleanup dir [ opb; pbp ];
+  (* The break: filter the nogood by [Learn.levels] alone, as this module did before. *)
+  let b, bdir, bopb, bpbp =
+    run
+      ~config:{ Search.default_config with Search.break_bridge_levels = true }
+      settle_src
+  in
+  check
+    "M7-T6 break: the ANSWER is unchanged -- this defect is in the artefact, not in the \
+     search"
+    (match (b.r_outcome, r.r_outcome) with
+    | Search.Sat x, Search.Sat y -> x = y
+    | _ -> false);
+  (match veripb ~dir:bdir ~opb:bopb ~pbp:bpbp with
+  | None ->
+      incr failures;
+      Printf.printf
+        "FAIL M7-T6 break: veripb not found -- the break was NOT checked. Do not treat \
+         this as a pass.\n"
+  | Some (true, _) ->
+      incr failures;
+      Printf.printf
+        "FAIL M7-T6 break: the break was performed and veripb ACCEPTED the proof anyway. \
+         The protection this test exists for is not load-bearing; say so rather than \
+         deleting the test.\n"
+  | Some (false, out) -> (
+      check "M7-T6 break: veripb rejects the proof" true;
+      check
+        "M7-T6 break: the rejection is the RUP judgement, at full wording -- not a parse \
+         error and not an exit status"
+        (rejection_recognised out);
+      (* And it is the NOGOOD that failed, not some other `rup` in the same proof. A
+         nogood is a clause over negated DECISION literals plus what the branch
+         established; a bridge line, the other thing on this page that could fail this
+         way, is the one that carries the settled bound POSITIVE and its own assumed
+         literal negated. So the line is pinned by being a `rup` that the honest proof
+         does NOT contain -- the two proofs differ in exactly the nogoods. *)
+      match failing_line out b.r_proof with
+      | None ->
+          incr failures;
+          Printf.printf
+            "FAIL M7-T6 break: veripb rejected but named no line, so the lane cannot say \
+             WHICH step it judged. It said:\n\
+             %s\n"
+            out
+      | Some (n, l) ->
+          check
+            (Printf.sprintf
+               "M7-T6 break: the rejected line %d is a `rup`, which is what a nogood is \
+                emitted as"
+               n)
+            (contains ~needle:" rup " l);
+          check
+            "M7-T6 break: the rejected line is one the DEFAULT build does not emit, so \
+             the break is what put it there"
+            (not (contains ~needle:(String.trim l) r.r_proof))));
+  cleanup bdir [ bopb; bpbp ]
+
+(* ======================================================== (M7-T6) the empty model
+
+   D-0070, second half, and a DIFFERENT bug from the one above: a model that declares no
+   variables produced `conclusion SAT` with no `sol` line before it, because
+   [Writer.conclusion] guarded the `sol` on the literal list being non-empty. 3.0.2
+   refuses the whole proof. Two of the three corpus rejections D-0068 measured are this,
+   not the settle gap. *)
+let empty_src = "solve satisfy;\n"
+
+let test_empty_model_logs_its_solution () =
+  print_endline "\n-- M7-T6/D-0070: a model with no variables still logs its solution --";
+  let r, dir, opb, pbp = run empty_src in
+  check "M7-T6 empty: the model is satisfiable"
+    (match r.r_outcome with Search.Sat _ -> true | _ -> false);
+  (* The writer renders it as `sol  ;` -- [Printf.sprintf "sol %s"] over an empty
+     literal string, then [rule]'s own " ;". 3.0.2 accepts that; the check is that the
+     line is THERE and carries no literals, not what its whitespace looks like. *)
+  let sol_lines =
+    List.filter
+      (fun l -> String.length l >= 3 && String.sub l 0 3 = "sol")
+      (String.split_on_char '\n' r.r_proof)
+  in
+  check "M7-T6 empty: the proof carries exactly one `sol` line" (List.length sol_lines = 1);
+  check
+    "M7-T6 empty: and it carries no literals, which is the honest line for a model whose \
+     encoding has no variables"
+    (match sol_lines with
+    | [ l ] ->
+        String.for_all
+          (fun c -> not ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c = '~'))
+          (String.sub l 3 (String.length l - 3))
+    | _ -> false);
+  expect_accepted ~title:"M7-T6 empty: the empty model's proof" ~dir ~opb ~pbp;
+  (* The break, by mutating bytes: take the `sol ;` line back out and watch the checker
+     say the thing this bug said. The wording is pinned at full strength; an exit status
+     would not tell this judgement from a parse error. *)
+  let bpbp = Filename.concat dir "broken.pbp" in
+  let oc = open_out bpbp in
+  List.iter
+    (fun l ->
+      if not (String.length l >= 3 && String.sub l 0 3 = "sol") then
+        output_string oc (l ^ "\n"))
+    (List.filter (fun l -> l <> "") (String.split_on_char '\n' r.r_proof));
+  close_out oc;
+  (match veripb ~dir ~opb ~pbp:bpbp with
+  | None ->
+      incr failures;
+      Printf.printf
+        "FAIL M7-T6 empty break: veripb not found -- the break was NOT checked. Do not \
+         treat this as a pass.\n"
+  | Some (true, _) ->
+      incr failures;
+      Printf.printf
+        "FAIL M7-T6 empty break: the `sol` line was removed and veripb ACCEPTED the \
+         proof anyway.\n"
+  | Some (false, out) ->
+      check "M7-T6 empty break: veripb rejects a `conclusion SAT` with nothing logged"
+        true;
+      check "M7-T6 empty break: at the checker's own full wording, not on an exit status"
+        (contains ~needle:"No solution has been logged in the proof" out));
+  cleanup dir [ opb; pbp; bpbp ]
+
 let () =
   test_minimise_pure ();
   test_minimise_break_in_a_proof ();
@@ -1253,6 +1464,8 @@ let () =
   test_oracle ();
   test_oracle_primitives ();
   test_pb_determinism ();
+  test_settle_bridge_survives_the_filter ();
+  test_empty_model_logs_its_solution ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

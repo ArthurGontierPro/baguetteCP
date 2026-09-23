@@ -1,5 +1,6 @@
-% M7-T6: A CORRECT ANSWER WHOSE PROOF THE CHECKER REJECTS. This model is listed in
-% test/models/PENDING and is expected to fail until that row lands.
+% M7-T6 / D-0070: A CORRECT ANSWER WHOSE PROOF THE CHECKER REJECTED. FIXED; this model
+% is an ordinary passing model test and its proof is verified on every run. What follows
+% is the shape it was reduced to, kept because it is the regression.
 %
 % Nine variables, five constraints, NO global constraint. The solver answers
 % xs = [1,1,9,1,1,1,2,1,1], which satisfies every constraint by inspection
@@ -16,9 +17,14 @@
 % global entirely. This reproducer has no global at all, which is why it is the
 % one to debug.
 %
-% This is M1-T44's shape, which this project once called its highest-priority
-% open defect: the answer is right, every step looks valid, and the artefact is
-% the thing that is wrong. Do not fix it by adjusting the expected output.
+% This is M1-T44's shape: the answer is right, every step looks valid, and the artefact
+% is the thing that is wrong. THE CAUSE (D-0070): the level-6 decision `x7 >= 2` settled
+% past the hole int_ne(x6,x7) punches at x7 = 2 and landed on x7 >= 3. Search.bridges
+% writes that settle down as a line conditioned on every ancestor decision, but the
+% implication graph has no edge for a settle, so Learn.levels never names those
+% ancestors' levels and the nogood filtered by Learn.levels dropped them -- leaving the
+% nogood no longer entailing its own bridge. Fixed in lib/core/search.ml; the break lane
+% is test/unit/test_learn.ml's [test_settle_bridge_survives_the_filter].
 var 1..11: x0;
 var 1..11: x1;
 var 1..11: x2;

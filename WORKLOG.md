@@ -373,7 +373,6 @@ needs it, that is a `## Cross-session requests` row, not an edit.
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M7-T6 | `lib/core/**` (trace/learn/search nogood path), **`lib/proof/writer.ml` (granted 2026-09-23 for the empty-model `sol` line — unclaimed, and agent-guard holds `encoding.ml` not this)**, `test/unit/test_trace.ml`, `test/unit/test_learn.ml`, `test/unit/test_proof.ml` is NOT yours (agent-guard), `test/models/PENDING` | agent-rup | 2026-09-23 |
 | M7-T8 | `lib/proof/encoding.ml`, `bin/main.ml`, `test/unit/test_proof.ml` | agent-guard | 2026-09-23 |
 | M7-T10 + M7-T4 | `scripts/**` and `tools/**` only; read-only over `lib/`, `test/`, `bin/` | agent-harness | 2026-09-23 |
 
@@ -394,6 +393,8 @@ explanation literature and added `docs/EXPLANATION-REVIEW.md` plus seven rows un
 `bench/` or `scripts/`, and committed nothing — `WORKLOG.md` and `docs/**` are
 orchestrator-held, so route or revert these two files as you see fit. `bench/**` was left
 alone throughout (M2-L8 / agent-bench is live).
+
+| M7-T6 | `lib/core/search.ml`, `lib/proof/writer.ml`, `test/unit/test_learn.ml`, `test/models/{rup_level0_nogood_sat,empty_model_sat}.fzn` + expected, `test/models/PENDING`, `docs/DECISIONS.md` | agent-rup | released 2026-09-23 — D-0070 |
 
 ## Cross-session requests
 
@@ -2735,3 +2736,45 @@ worth doing and the assertions will not change. (2) Both new models are SAT on p
 proof check is over a satisfiable model rather than a contradictory database (D-0053).
 `docs/ROADMAP.md`'s M7-T7 row is still marked TODO — it is a contention hotspot and not in my
 claimed file set, so the orchestrator should flip it on merge.
+## M7-T6 handoff
+
+**The level-0 nogood RUP defect is FIXED, and it was neither the nogood machinery nor the
+checker.** `docs/DECISIONS.md` **D-0070** has the full account; the three sentences that
+matter here:
+
+- **The cause is a decision push that SETTLES past a hole.** The trail lands on a bound
+  strictly stronger than the literal the branch assumed (`x7 >= 2` assumed, `x7 >= 3`
+  recorded, because `int_ne` punched a hole at 2). `Search.bridges` already wrote that
+  step down — conditioned on *every* ancestor decision, which its own `rup` needs — but
+  **the implication graph has no edge for a settle**, so `Learn.levels` never named those
+  ancestors' levels and M2-L3's nogood filter dropped exactly the literals the bridge
+  rests on. `bridges` now returns those literals and the filter keeps them.
+- **Proof-only, never a wrong answer.** `bridges` is pure emission, and a nogood carrying
+  more literals mentions more levels, so the repaired build skips *fewer* siblings. The
+  break lane asserts the returned assignment is identical with the break on and off.
+- **The empty-model rejection was a DIFFERENT bug** — `lib/proof/writer.ml`'s `conclusion`
+  guarded the `sol` line on the literal list being non-empty, a mechanical carry-over from
+  M1-T18 (26d3ab2). Fixed; `test/models/empty_model_sat.fzn` is the model test.
+
+**What the next session should know.**
+
+1. **`test/models/PENDING` now lists no models.** `rup_level0_nogood_sat` passes with its
+   proof verified. 87 models, 0 pending. Keep it that way.
+2. **D-0066 is still the trap, and it is now the most important thing on this page.** This
+   defect survived to M7 only because `rup` is vacuous over a contradictory database, so
+   every UNSAT instance of it was accepted silently. D-0068's "1 substantive rejection in
+   11 proofs" was never the true rate. **The next nogood rejection you see: look for a
+   settle past a hole first.** It is invisible in the answer, invisible on UNSAT models,
+   and its symptom appears several inferences downstream of its cause.
+3. **`break_bridge_levels` is the new break knob** on `Search.config` (off, not
+   CLI-reachable). It restores the old filter. Measured with it flipped: **exactly one of
+   87 model proofs differs** and it is the reproducer — so the fix costs nothing on the
+   other 86, byte-for-byte.
+4. **The deeper repair is still open and is worth a row.** The right fix would make the
+   settle a real edge in the implication graph (`lib/core/analysis.ml`), so
+   `Learn.levels` reports the ancestors itself instead of the nogood filter being told to
+   hold them back. What shipped is correct and cheap; it is not that.
+
+Gate at `8afbcc1`: **2824 unit checks ok, 0 FAIL** (`dune runtest --root . --force`),
+**87/87 models, 0 failed, 0 expected-fail**, `fmt: clean`. Peak RSS of the model run
+**18.5 MB**.
