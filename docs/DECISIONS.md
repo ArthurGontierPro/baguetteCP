@@ -6132,6 +6132,35 @@ Caveat, stated rather than buried: the two sides of the search rows do not explo
 same tree, because the propagators differ -- that is the point of the comparison, not a
 confound, but it means the ratio is a property of this model and not a constant.
 
+### On the REAL instance the proof came out BIGGER, and the cause is named
+
+`2008_debruijn_binary` (`02_03.dzn`), on `fataepyc-07`, both binaries hashed and
+distinct, both proofs `s VERIFIED SATISFIABLE`, **answers byte-identical**.
+
+| | decomposed (`main`) | native gcc |
+|---|---|---|
+| `.fzn` | 13 886 B, 78 constraints | **8 578 B, 45 constraints** |
+| `.opb` | 69 643 B, 504 rows | **63 128 B, 412 rows** |
+| `.pbp` | **25 202 B, 195 lines** | 28 552 B, 235 lines |
+| of which `red` | 176 lines, 18 320 B | 208 lines, 21 508 B |
+| `pol` | 8 | 16 |
+
+**The model shrinks by 38%, the `.opb` by 9%, and the proof GROWS by 13%.** That is the
+opposite of what this row set out to show and it goes here rather than in a footnote.
+
+**The cause is not the counting argument; it is the `derive_ahead` stopgap above.** The
+whole of the excess is `red` lines -- 32 more of them, 3 188 bytes -- and every one is a
+direct-encoding introduction for a variable *whose derivation never names a direct
+literal*. `compile.ml` requests that encoding only to arm `Trace.derive_ahead`'s
+`has_direct` trigger. The `pol` count doubles (8 -> 16), which is the counting argument
+actually appearing, and it costs a few hundred bytes.
+
+So the prediction stands with a condition attached: **the native global is smaller in
+every artefact the propagator controls, and larger in the one the stopgap controls.**
+Fixing the trigger is what settles it, and that is the cross-session request, not a
+further propagator change. Anyone quoting the controlled numbers above should quote this
+row beside them.
+
 ### The lane that would have proved nothing
 
 `gcc_capacity_sat.fzn` is the model the row was designed around -- gcc prunes at the root
