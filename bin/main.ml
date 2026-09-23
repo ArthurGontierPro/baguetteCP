@@ -78,10 +78,21 @@ let exit_usage = 2
 let exit_unsupported = 3
 let exit_internal = 4
 
+(* M7-T8 / D-0071. A RESOURCE overrun: the run asked for more of the machine than the
+   budget it was given allows. Distinct from all four above on purpose. It is not 3,
+   because the model is legal FlatZinc that a bigger budget would answer; it is not 4,
+   because no invariant failed; and it is emphatically not the exit 134 of the OCaml
+   runtime's own `Fatal error: allocation failure`, which is what D-0068's corpus run
+   saw nine times and could not tell apart from a crash. The number lives in
+   [Encoding] because the Gc alarm exits with it directly, and this binding is here so
+   that a reader of this table sees all five. *)
+let exit_resource = Encoding.exit_resource
+
 let usage () =
   prerr_endline
     "usage: baguette MODEL.fzn [--proof PREFIX] [--proof-comments] [--all] [--time] \
-     [--stats] [--max-order-width N] [--max-direct-values N] [--width-warn N]";
+     [--stats] [--max-order-width N] [--max-direct-values N] [--width-warn N] \
+     [--max-encoding-clauses N] [--max-heap-mb N]";
   prerr_endline "";
   prerr_endline "  --proof PREFIX    write PREFIX.opb and PREFIX.pbp (SPEC 4.1); verify";
   prerr_endline "                    them with: veripb PREFIX.opb PREFIX.pbp";
@@ -126,9 +137,36 @@ let usage () =
     "                    store or check. `none` silences it. Silencing it does";
   prerr_endline "                    not make the cost go away, only the sentence.";
   prerr_endline "";
+  prerr_endline "  --max-encoding-clauses N  stop before the encoding grows past N";
+  prerr_endline "                    clauses-and-values in TOTAL, over every variable";
+  prerr_endline "                    (M7-T8). DEFAULT: none. Unlike --max-order-width";
+  prerr_endline "                    this bounds the AGGREGATE, which is the thing that";
+  prerr_endline "                    actually grows: a thousand variables of width 9999";
+  prerr_endline "                    is ten million clauses and no per-variable cap sees";
+  prerr_endline "                    it. Checked before each declaration allocates, so";
+  prerr_endline "                    nothing is half-built; the diagnostic names the";
+  prerr_endline "                    declaration that crossed it and the widest domain";
+  prerr_endline "                    to narrow. Exit status 5.";
+  prerr_endline "  --max-heap-mb N   stop when the OCaml heap passes N MB (M7-T8).";
+  prerr_endline "                    DEFAULT: none. The backstop for what the clause";
+  prerr_endline "                    budget cannot predict -- the search's own trail,";
+  prerr_endline "                    learned constraints, the proof writer. Checked at";
+  prerr_endline "                    each declaration AND from a Gc alarm -- the alarm";
+  prerr_endline "                    is the reliable half, because the heap figure is";
+  prerr_endline "                    only refreshed at a major-GC boundary, so a run too";
+  prerr_endline "                    short to complete one reads 0. Exit status 5.";
+  prerr_endline "                    Without it an over-large run ends in the OCaml";
+  prerr_endline "                    runtime's `Fatal error: allocation failure`, exit";
+  prerr_endline "                    134, which cannot be caught and names nothing.";
+  prerr_endline "";
+  prerr_endline "  exit status       0 solved (SAT or UNSAT), 2 usage or bad model,";
+  prerr_endline "                    3 unsupported model, 4 internal invariant failure,";
+  prerr_endline "                    5 a resource budget above was exhausted.";
+  prerr_endline "";
   prerr_endline
-    "  BAGUETTE_MAX_ORDER_WIDTH, BAGUETTE_MAX_DIRECT_VALUES, BAGUETTE_WIDTH_WARN";
-  prerr_endline "                    the same three, as environment variables. A flag on";
+    "  BAGUETTE_MAX_ORDER_WIDTH, BAGUETTE_MAX_DIRECT_VALUES, BAGUETTE_WIDTH_WARN,";
+  prerr_endline "  BAGUETTE_MAX_ENCODING_CLAUSES, BAGUETTE_MAX_HEAP_MB";
+  prerr_endline "                    the same five, as environment variables. A flag on";
   prerr_endline "                    the command line wins over the environment. Each";
   prerr_endline
     "                    takes an integer or `none`; anything else is an error";
@@ -204,6 +242,17 @@ let parse_args argv =
       | "--width-warn" ->
           if i + 1 >= Array.length argv then usage ();
           set_limit "--width-warn" Encoding.width_warn_threshold argv.(i + 1);
+          go (i + 2)
+      (* M7-T8, the same shape and for the same reason: consulted deep inside
+         [Compile] and again by the Gc alarm, with no single call site to thread
+         through. Default none, per D-0065. *)
+      | "--max-encoding-clauses" ->
+          if i + 1 >= Array.length argv then usage ();
+          set_limit "--max-encoding-clauses" Encoding.encoding_budget argv.(i + 1);
+          go (i + 2)
+      | "--max-heap-mb" ->
+          if i + 1 >= Array.length argv then usage ();
+          set_limit "--max-heap-mb" Encoding.heap_limit_mb argv.(i + 1);
           go (i + 2)
       | "-h" | "--help" -> usage ()
       | arg when String.length arg > 0 && arg.[0] = '-' ->
@@ -599,7 +648,30 @@ let report_encoding_cost (c : Encoding.cost) =
         "stats: %-10s %10d wide   `%s` over %d..%d -- the one to narrow first\n" "widest"
         (hi - lo) x lo hi);
   Printf.eprintf "stats: %-10s %10s        --max-order-width, --width-warn\n" "limits"
-    (Encoding.order_width_limit_string ())
+    (Encoding.order_width_limit_string ());
+  (* M7-T8. The two budgets whose exhaustion is exit 5, printed beside the total they
+     bound so a reader comparing "ladder + direct" against "budget" is reading two
+     numbers in the same units, on adjacent lines. *)
+  Printf.eprintf
+    "stats: %-10s %10s        --max-encoding-clauses (bounds ladder+direct)\n" "budget"
+    (Encoding.encoding_budget_string ());
+  Printf.eprintf "stats: %-10s %10s        --max-heap-mb (MB of OCaml heap)\n" "heap"
+    (Encoding.heap_limit_string ())
+
+(* M7-T8. A resource overrun can fire at a DECLARATION, before any file exists, or at
+   [ensure_direct], which runs inside [start_proof] with the .opb already on disk and
+   the .pbp part-written. The guard cannot tell a reader which from inside [Encoding],
+   and half a proof that veripb happens to parse is the worst outcome available here,
+   so the binary says the cautious thing whenever --proof was asked for. *)
+let warn_partial_proof opts =
+  match opts.proof_prefix with
+  | None -> ()
+  | Some p ->
+      Printf.eprintf
+        "  A proof was requested: %s.opb / %s.pbp are INCOMPLETE -- the run stopped while\n\
+        \  writing them. Do not check them and do not keep them; they are not a proof of\n\
+        \  anything. Re-run with a larger budget, or with none.\n"
+        p p
 
 let report_stats (st : Search.stats) ~exhausted =
   prerr_endline
@@ -905,6 +977,11 @@ let () =
      numbers are being asked for; --time is the only thing in the tree that opens it. *)
   Writer.time_emission := opts.time;
   if opts.time then at_exit Timing.report;
+  (* M7-T8. As early as possible and after the options are read: the alarm is the
+     backstop for everything the clause budget cannot predict, so it wants to be armed
+     before the first allocation that is not argument parsing. Installs nothing at all
+     unless --max-heap-mb was asked for. *)
+  Encoding.install_heap_guard ();
   if not (Sys.file_exists opts.model) then (
     Printf.eprintf "no such file: %s\n" opts.model;
     exit exit_usage);
@@ -951,6 +1028,24 @@ let () =
              be right, but the proof is not one we are entitled to stand behind. *)
           Printf.eprintf "baguette: INTERNAL -- proof audit failed (I-X2): %s\n" msg;
           exit exit_internal
+      | exception Encoding.Encoding_too_large o ->
+          (* M7-T8 / D-0071. The predictive guard. Not exit 3: this model is legal and
+             a larger budget answers it. Not exit 4: nothing is broken. The whole point
+             of the row is that a harness can tell this apart from both, and from the
+             exit 134 it replaces. [Encoding] refuses before it allocates, so there is
+             no partial encoding and no partial proof to warn about. *)
+          prerr_string (Encoding.overrun_message o);
+          warn_partial_proof opts;
+          flush stderr;
+          exit exit_resource
+      | exception Encoding.Heap_too_large o ->
+          (* The reactive guard, caught synchronously at a declaration. Its sibling --
+             the Gc alarm -- cannot come through here: it fires at an arbitrary point
+             and exits with this same status itself. Same wording either way. *)
+          prerr_string (Encoding.heap_message o);
+          warn_partial_proof opts;
+          flush stderr;
+          exit exit_resource
       | exception Encoding.Width_too_large (x, lo, hi) ->
           (* M1-T54 / D-0041. The sibling of the [Unrepresentable] arm below, and exit 4
              for the same reason: lib/flatzinc/compile.ml refuses an over-wide declared

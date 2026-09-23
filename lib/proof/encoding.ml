@@ -278,6 +278,19 @@ type t = {
          populated by [start_proof] alongside the direct encoding itself. *)
 }
 
+(* The encoding the CLI is currently building, for the REACTIVE guard alone (M7-T8).
+
+   A [Gc] alarm fires from wherever the allocation happened to be; it has no [t] in
+   hand and cannot be given one. Its diagnostic still has to name a variable, because
+   "out of memory" is not a diagnostic. So [create] parks the encoding here and the
+   alarm reads the counters back out. Nothing else may read it -- every other caller
+   already holds the [t] it means, and a second, ambient handle on the encoding is
+   exactly the kind of shared mutable state this library does not otherwise have.
+
+   Last [create] wins, which is right: the CLI makes one, and a test that makes several
+   is describing the one it is currently filling. *)
+let live : t option ref = ref None
+
 let create () =
   {
     ints = Hashtbl.create 64;
@@ -293,6 +306,11 @@ let create () =
     widest = None;
     direct_values = 0;
   }
+
+let create () =
+  let t = create () in
+  live := Some t;
+  t
 
 let find t x =
   match Hashtbl.find_opt t.ints x with Some v -> v | None -> raise (Undeclared x)
@@ -513,6 +531,292 @@ let cost t =
 
 let widest_width = function None -> 0 | Some (_, lo, hi) -> hi - lo
 
+(* ---------------------------------------------------------------------------
+   The graceful resource guard (M7-T8, D-0071) -- on top of D-0065, not against it
+   ---------------------------------------------------------------------------
+
+   D-0068's first full corpus run had 9 of 436 instances die with exit 134, and all
+   nine were the same death: `Fatal error: allocation failure during minor GC`, the
+   OCaml runtime aborting against a 32 GB per-job cap, on wide-domain models. In every
+   one of the nine, M7-T1's width WARNING had already fired, and fired correctly. The
+   warning did its job; the failure mode did not.
+
+   This is D-0065's consequence, and the fix is NOT to put the declared-width refusal
+   back. Declared width is still the wrong proxy -- it bounds one variable, and D-0065
+   showed a width-30 000 model solving and verifying. What was missing is a graceful
+   END: a model whose encoding does not fit should say what did not fit and what to
+   narrow, with an exit status a harness can bucket, instead of an abort.
+
+   PREDICTIVE AND REACTIVE, and the reason for both
+   ------------------------------------------------
+
+   A [Gc] alarm on its own would not have caught the nine. It is the mechanism
+   test/unit/mem_guard.ml has used since M1-T53 and the shape here is deliberately
+   its shape, but an alarm runs at the END OF A MAJOR GC CYCLE, and the abort those
+   nine hit is a MINOR-heap allocation failure: the interval in which a run goes from
+   "fine" to "the runtime gave up" can contain no major cycle at all. A guard that
+   only watches cannot promise to act before the allocation it is watching for.
+
+   A predictive bound can. The thing that actually grew in all nine is known exactly,
+   because this module mints it: [ladder_clauses + direct_values], the size of the
+   encoding in clauses and materialised values. It is computable BEFORE the ladder
+   loop runs, it is deterministic, it costs one comparison per declaration, and it is
+   the AGGREGATE that [max_order_width]'s own comment admits the per-variable cap
+   never bounded ("a thousand variables at w = 9 999 is still ten million clauses.
+   That gap is deliberate and left open rather than papered over here -- an aggregate
+   budget is a different check in a different place"). This is that different place.
+
+   So: the budget is the guard, and the heap watch is the backstop for what the budget
+   cannot see -- the search's own allocation, the trail, learned constraints, the
+   proof writer's buffers. They are not alternatives. Neither is a refusal: both are
+   off by default (below), and the heap watch cannot refuse a model at all, only end
+   the run it is already in.
+
+   WHERE IT FIRES. [declare_int] and [ensure_direct], BEFORE the loop that allocates,
+   so a refused declaration leaves no trace and costs no allocation -- the same
+   property M1-T54 gave the width refusal and the same sentence guards it. Plus a
+   [Gc] alarm, installed by bin/main.ml, which fires wherever it fires.
+
+   WHAT IT SAYS. A count is not a diagnostic. Both messages name the declaration that
+   crossed the line, what it would have added, what was already minted, the budget in
+   force, and -- separately -- the widest domain declared so far, which is the one a
+   reader can act on. "Out of memory" tells a reader nothing; "`q` over 1..1000000 is
+   the widest declared domain; narrow it first" tells them what to type. *)
+
+(* The budget, in encoding clauses-and-values. [None] is the DEFAULT and means no
+   budget, per D-0065: the default build refuses nothing, the accepted language is
+   fixed and maximal, and a limit that exists because a machine is small is an option.
+   There is no measurement that would justify a default here -- the number would be a
+   property of whichever node the measuring was done on, which is the whole reason
+   D-0065 removed the last one. What IS measured is the cost of having the guard: the
+   85-model suite's largest encoding is under 3000 clauses and the check is one
+   comparison per declaration, so an unset budget changes no artefact and no timing. *)
+let encoding_budget : int option ref = ref None
+
+(* The heap watch, in MB of OCaml heap. [None] is the default, same argument. *)
+let heap_limit_mb : int option ref = ref None
+
+(* The exit status a resource overrun ends in. It is DISTINCT from every other status
+   this project uses -- 0 solved (SAT or UNSAT), 2 usage / bad model, 3 a model this
+   solver does not support, 4 an internal invariant failure -- because a harness that
+   cannot tell "your machine ran out" from "this proof is wrong" will bucket them
+   together, and D-0068's SOLVE-ERR-134 bucket is precisely what that looks like.
+   Named here rather than in bin/main.ml because the [Gc] alarm below exits directly
+   and must use the same number. *)
+let exit_resource = 5
+
+type overrun = {
+  o_what : string; (* the variable whose declaration crossed the budget *)
+  o_kind : string; (* "order-ladder clauses" / "direct-encoding values" *)
+  o_lo : int;
+  o_hi : int;
+  o_adds : int; (* what this declaration would add *)
+  o_already : int; (* the encoding size before it *)
+  o_limit : int;
+  o_widest : (string * int * int) option; (* the widest declaration so far *)
+}
+
+(* The predictive guard fired: nothing was allocated for [o_what]. *)
+exception Encoding_too_large of overrun
+
+(* The reactive guard fired synchronously, at a declaration. Same fields, with
+   [o_already] in heap WORDS, [o_limit] in MB, [o_adds] the encoding size so far. *)
+exception Heap_too_large of overrun
+
+let encoding_size t = t.ladder_clauses + t.direct_values
+let word_bytes = Sys.word_size / 8
+
+(* Compared in WORDS, not in megabytes, and mem_guard.ml does the same. Rounding the
+   heap down to a whole MB first would make --max-heap-mb=0 -- the smallest budget
+   there is, and so the only one a test can cross without declaring a wide domain
+   (CLAUDE.md forbids that outright) -- compare 0 with 0 and never fire. A budget that
+   cannot be tripped on purpose is a budget nobody has tested.
+
+   WHAT THIS READS, AND WHEN IT IS STALE. Measured on this switch (OCaml 5.1.1,
+   NATIVE, 2026-09-23): [Gc.quick_stat ().heap_words] is **0 until the first major
+   cycle completes**, and only then starts tracking the shared heap. [Gc.stat] is
+   exact but walks the heap, which is not something to do per declaration.
+
+   That is not a hole, and it is why the guard has two halves that look redundant:
+
+   - the [Gc] ALARM runs at the end of a major cycle, which is exactly the moment the
+     number is fresh. It is the reliable half.
+   - the SYNCHRONOUS check at each declaration is opportunistic: it reads whatever the
+     last major cycle left, so on a run small enough that none has finished it reads 0
+     -- correctly, because a run with no completed major cycle is holding at most a
+     minor heap. It earns its place by being the only check that is guaranteed to run
+     BEFORE a particular declaration's ladder, which is what M7-T8 asks for.
+
+   A test therefore forces a major cycle before asserting on the synchronous half.
+   Exposed for that, and for no other reason. *)
+let heap_words () = (Gc.quick_stat ()).Gc.heap_words
+let heap_words_now = heap_words
+let words_of_mb mb = mb * 1024 * 1024 / word_bytes
+let mb_of_words w = w * word_bytes / 1024 / 1024
+
+let narrow_this = function
+  | None -> "  No integer variable has been declared yet.\n"
+  | Some (x, lo, hi) ->
+      Printf.sprintf
+        "  Narrow this first: `%s`, declared over %d..%d -- a width of %d, the widest in\n\
+        \  this model. The encoding is written out in full, one Boolean per value, so that\n\
+        \  width is paid whether or not the search ever visits it (D-0028).\n"
+        x lo hi (hi - lo)
+
+let overrun_message o =
+  Printf.sprintf
+    "baguette: the encoding budget is exhausted, and nothing further was allocated \
+     (M7-T8).\n\
+    \  Declaring `%s` over %d..%d needs %d more %s, on top of the %d already minted -- a\n\
+    \  total of %d, past the budget of %d asked for with --max-encoding-clauses.\n\
+     %s  Raise the budget with --max-encoding-clauses=N, or remove it with `none` (which \
+     is\n\
+    \  the default -- this limit only exists because you asked for it).\n"
+    o.o_what o.o_lo o.o_hi o.o_adds o.o_kind o.o_already (o.o_already + o.o_adds)
+    o.o_limit (narrow_this o.o_widest)
+
+let heap_message o =
+  Printf.sprintf
+    "baguette: the heap budget is exhausted, and the run is stopping here (M7-T8).\n\
+    \  The OCaml heap has reached %d MB (%d words), past the %d MB asked for with\n\
+    \  --max-heap-mb. The encoding built so far is %d clauses and values%s.\n\
+     %s  Raise the budget with --max-heap-mb=N, or remove it with `none` (the default). \
+     Note\n\
+    \  that without a budget this run does not get faster -- it ends in the OCaml \
+     runtime's\n\
+    \  own `Fatal error: allocation failure`, which cannot be caught and names nothing.\n"
+    (mb_of_words o.o_already) o.o_already o.o_limit o.o_adds
+    (if o.o_what = "" then "" else Printf.sprintf ", most recently for `%s`" o.o_what)
+    (narrow_this o.o_widest)
+
+(* The predictive check. [adds] is what the caller is ABOUT to mint; the subtraction is
+   written so that neither side of the comparison can overflow on a width that only
+   just fits in an int. *)
+let check_encoding_budget t ~what ~kind ~lo ~hi ~adds =
+  match !encoding_budget with
+  | None -> ()
+  | Some limit ->
+      let already = encoding_size t in
+      if adds > limit - already then
+        (* The declaration being refused is itself a candidate for "the one to narrow",
+           and on the first declaration it is the only candidate there is: [t.widest] is
+           still empty because nothing has been committed. A diagnostic that refuses `a`
+           and then says no variable has been declared is true and useless. *)
+        let widest =
+          match t.widest with
+          | Some (_, wlo, whi) when whi - wlo >= hi - lo -> t.widest
+          | _ -> Some (what, lo, hi)
+        in
+        raise
+          (Encoding_too_large
+             {
+               o_what = what;
+               o_kind = kind;
+               o_lo = lo;
+               o_hi = hi;
+               o_adds = adds;
+               o_already = already;
+               o_limit = limit;
+               o_widest = widest;
+             })
+
+(* The reactive check, at a declaration: synchronous, so unlike the alarm it is
+   guaranteed to run before this declaration's ladder is allocated. *)
+let check_heap_at t ~what ~lo ~hi =
+  match !heap_limit_mb with
+  | None -> ()
+  | Some limit ->
+      let w = heap_words () in
+      if w > words_of_mb limit then
+        (* The declaration being attempted counts as a candidate for "the one to
+           narrow": it has not reached [t.widest] yet, and on the very first
+           declaration it is the only thing there is to name. A diagnostic that says
+           "no integer variable has been declared yet" while refusing a declaration
+           would be technically true and useless. *)
+        let widest =
+          match t.widest with
+          | Some (_, wlo, whi) when whi - wlo >= hi - lo -> t.widest
+          | _ -> Some (what, lo, hi)
+        in
+        raise
+          (Heap_too_large
+             {
+               o_what = what;
+               o_kind = "MB of OCaml heap";
+               o_lo = lo;
+               o_hi = hi;
+               o_adds = encoding_size t;
+               o_already = w;
+               o_limit = limit;
+               o_widest = widest;
+             })
+
+(* The reactive backstop, as a [Gc] alarm -- mem_guard.ml's shape (M1-T53), in the
+   solver rather than in a test binary.
+
+   It EXITS rather than raising, and that is not a shortcut: an alarm runs at the end
+   of a major cycle, at whatever point in whatever function the mutator had reached,
+   and an exception thrown from there would unwind through code that never agreed to
+   handle it -- including the proof writer, mid-line. An unfinished .pbp that ends in a
+   truncated rule is worse than no .pbp, so the run stops where it stands, having said
+   so. The synchronous check above is the one that raises, because it knows where it
+   is.
+
+   Idempotent under repeated firing (the alarm is deleted first), and installing it
+   twice is harmless. [None] installs nothing at all, so the default build does not
+   even pay for the alarm. *)
+let install_heap_guard () =
+  match !heap_limit_mb with
+  | None -> ()
+  | Some limit ->
+      let alarm = ref None in
+      let check () =
+        let w = heap_words () in
+        if w > words_of_mb limit then (
+          (match !alarm with
+          | Some a ->
+              Gc.delete_alarm a;
+              alarm := None
+          | None -> ());
+          let size, widest, what =
+            match !live with
+            | None -> (0, None, "")
+            | Some t -> (encoding_size t, t.widest, "")
+          in
+          !warn_sink
+            (heap_message
+               {
+                 o_what = what;
+                 o_kind = "MB of OCaml heap";
+                 o_lo = 0;
+                 o_hi = 0;
+                 o_adds = size;
+                 o_already = w;
+                 o_limit = limit;
+                 o_widest = widest;
+               });
+          exit exit_resource)
+      in
+      alarm := Some (Gc.create_alarm check)
+
+(* M7-T8's two join the other three, through the SAME entry point rather than a second
+   one bin/main.ml would have to remember to call. A budget nobody reads is a budget
+   nobody has. *)
+let limits_from_env () =
+  limits_from_env ();
+  let get name r =
+    match Sys.getenv_opt name with
+    | None -> ()
+    | Some v -> r := limit_of_string ~what:name v
+  in
+  get "BAGUETTE_MAX_ENCODING_CLAUSES" encoding_budget;
+  get "BAGUETTE_MAX_HEAP_MB" heap_limit_mb
+
+let current_encoding_budget () = !encoding_budget
+let current_heap_limit_mb () = !heap_limit_mb
+let encoding_budget_string () = limit_string !encoding_budget
+let heap_limit_string () = limit_string !heap_limit_mb
+
 (* The diagnostic the refusal used to be (M7-T1).
 
    Written for a reader who has never heard of D-0028, because that reader is exactly
@@ -552,6 +856,12 @@ let declare_int t x ~lo ~hi =
   (* [order_width_exceeds] has established that hi - lo is representable. *)
   let width = hi - lo in
   let clauses = if width >= 1 then width - 1 else 0 in
+  (* M7-T8. Both guards, BEFORE the ladder loop and before [t] is touched, so an
+     overrun leaves the encoding exactly as it was -- the property M1-T54 gave the
+     width refusal, kept here for the same reason: the caller can name the variable
+     and nothing has to be unwound. Off unless asked for. *)
+  check_encoding_budget t ~what:x ~kind:"order-ladder clauses" ~lo ~hi ~adds:clauses;
+  check_heap_at t ~what:x ~lo ~hi;
   t.ladder_clauses <- t.ladder_clauses + clauses;
   (match t.widest with
   | Some (_, wlo, whi) when whi - wlo >= width -> ()
@@ -626,6 +936,10 @@ let ensure_direct t w x =
   | None ->
       let size = v.hi - v.lo + 1 in
       check_direct_size x size;
+      (* M7-T8, the same pair, before the [red] loop that materialises the values. *)
+      check_encoding_budget t ~what:x ~kind:"direct-encoding values" ~lo:v.lo ~hi:v.hi
+        ~adds:size;
+      check_heap_at t ~what:x ~lo:v.lo ~hi:v.hi;
       t.direct_values <- t.direct_values + size;
       let d =
         { d_lo = Hashtbl.create 16; d_hi = Hashtbl.create 16; d_fwd = Hashtbl.create 16 }

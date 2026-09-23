@@ -5200,3 +5200,125 @@ empty-model lane removes the `sol` line by byte mutation and pins *"No solution 
 logged in the proof"* the same way.
 
 Follows D-0066, D-0067 and D-0068. Closes M7-T6.
+## D-0071  The graceful resource guard: predictive AND reactive, both defaulting to off
+
+**Status**: **ACCEPTED**, implemented by M7-T8 (2026-09-23, agent-guard). Sits directly on
+top of **D-0065** and does not amend it. **D-0068** is why it exists.
+
+### The problem, exactly
+
+D-0068's first full corpus run lost **9 of 436 instances to exit 134**, and all nine were
+the same death: `Fatal error: allocation failure during minor GC` — the OCaml runtime
+aborting against a 32 GB per-job cap, on wide-domain models. In every one of the nine,
+**M7-T1's width warning had already fired, and fired correctly.** The warning did its job.
+The failure mode did not.
+
+That abort is the worst possible ending. It cannot be caught, it names nothing, and its
+exit status is indistinguishable from a crash — so a harness folds "this machine ran out"
+into the same bucket as "this proof is wrong", which is precisely what `SOLVE-ERR-134` was.
+
+### What this is NOT
+
+**The declared-width refusal does not come back.** D-0065's argument is untouched and still
+correct: declared width is the wrong proxy for the real cost, it bounds one variable rather
+than the model, and a width-30 000 model demonstrably solves and verifies. This row does not
+restrict what the solver attempts. It makes the *ending* graceful.
+
+### Predictive or reactive: both, and they are not redundant
+
+| | predictive: `--max-encoding-clauses` | reactive: `--max-heap-mb` |
+|---|---|---|
+| bounds | `ladder_clauses + direct_values` | live OCaml heap |
+| where | `declare_int`, `ensure_direct`, **before the allocating loop** | a `Gc` alarm, plus a synchronous read at each declaration |
+| cost when unset | nothing: one `None` match per declaration | nothing: no alarm is installed at all |
+| catches | the nine | everything the nine are not: the trail, learned constraints, the writer |
+
+**A `Gc` alarm alone would not have caught the nine.** It is mem_guard.ml's mechanism
+(M1-T53) and the shape here is deliberately its shape, but an alarm runs **at the end of a
+major cycle**, and the abort in question is a **minor**-heap allocation failure: the window
+between "fine" and "the runtime gave up" need contain no major cycle. A guard that only
+watches cannot promise to act before the allocation it is watching for. The row said so —
+*"the guard must act BEFORE the allocation"* — and that rules reactive-only out.
+
+**A predictive bound can, and the quantity is already minted here.** `lib/proof/encoding.ml`
+computes the encoding's size; the check is one comparison per declaration, deterministic,
+and made before the ladder loop, so a refused declaration leaves the encoding byte-identical
+to what it was (M1-T54's property, kept for M1-T54's reason).
+
+And this is the **aggregate** `max_order_width`'s own comment admitted no per-variable cap
+ever bounded: *"a thousand variables at w = 9 999 is still ten million clauses. That gap is
+deliberate and left open rather than papered over here — an aggregate budget is a different
+check in a different place."* This is that different place.
+
+The heap watch is kept as the backstop for what no encoding-size prediction can see. Neither
+is a refusal by declared width, and the heap watch cannot refuse a model at all — only end
+the run it is already in.
+
+### A measurement that changes how the reactive half is described
+
+On this switch (**OCaml 5.1.1, native**, 2026-09-23), `Gc.quick_stat ().heap_words` **reads
+0 until the first major cycle completes**. `Gc.stat` is exact but walks the heap, which is
+not a per-declaration cost.
+
+This is not a hole, but it inverts the naive reading of which half is reliable:
+
+- the **alarm** fires at end-of-major-cycle, which is exactly when the figure is fresh — the
+  reliable half;
+- the **synchronous** check reads whatever the last cycle left, so on a run too short to
+  complete one it reads 0, **correctly**: such a run holds at most a minor heap. It earns
+  its place by being the only check guaranteed to run before a *particular* declaration.
+
+`test/unit/mem_guard.ml` is unaffected — it is alarm-only — but any future session tempted
+to read `quick_stat` synchronously should read this paragraph first.
+
+### The default is OFF, and no measurement would justify otherwise
+
+Both budgets default to `None`. This is D-0065's rule and the user's standing instruction:
+the normal build has no restrictions and restrictions live behind options. A default here
+would be a number calibrated to whichever machine measured it — which is the exact defect
+D-0065 removed. There is no measurement that argues for one, and inventing one out of
+caution would be reinstating D-0041 under a new name.
+
+What *is* measured is that having the guard costs nothing:
+
+- **86 models × {stdout, stderr, exit code, `.opb`, `.pbp`} = 430 artefacts, 0 differing**,
+  against a binary built from the parent commit (md5 `9bad5e8e` → `e9ef0277`, so the two
+  sides really are different binaries — D-0068's own caveat about comparisons that used the
+  same binary).
+- the largest encoding in the 85-model suite is **1996 clauses** (`width_root_unsat`, w=999,
+  the deliberate one); the next largest is 196. Nothing in the suite is within three orders
+  of magnitude of a budget anyone would set.
+
+### Exit status 5, and why a fifth number
+
+0 solved (SAT or UNSAT), 2 usage or bad model, 3 unsupported model, 4 internal invariant
+failure, **5 resource budget exhausted**. It is not 3, because the model is legal FlatZinc
+that a larger budget answers; not 4, because no invariant failed; and emphatically not 134.
+A bucket a harness cannot separate is the defect D-0068 reported, so the separation is the
+deliverable.
+
+### The diagnostic
+
+"Out of memory" is not a diagnostic. Both messages name the declaration that crossed the
+line, what it would have added, what was already minted, the budget in force, and —
+separately, because it need not be the same variable — **the widest declared domain, which
+is the one a reader can act on**. When the crossing declaration is the first one, it names
+itself rather than saying no variable has been declared yet; that sentence was written,
+observed to be true and useless, and replaced.
+
+Under `--proof`, the binary additionally says the `.opb`/`.pbp` are incomplete and must not
+be checked or kept. The overrun can fire at `ensure_direct`, which runs inside `start_proof`
+with files already open, and half a proof that veripb happens to parse is the worst outcome
+available.
+
+### What was deliberately not done
+
+- **No wide-domain test model.** CLAUDE.md forbids one outright and `width_root_unsat.fzn`
+  at w=999 already covers deliberate width. The guard is tripped by setting the **option**
+  low on an ordinary model, which also tests the option — a wide model would not.
+- **No default, no aggregate check in `compile.ml`.** `lib/flatzinc/builder.ml` and
+  `lib/core/**` were another session's during this wave; nothing here needed them.
+- **The alarm exits rather than raising.** It fires at an arbitrary point in an arbitrary
+  function, and an exception from there would unwind through code that never agreed to
+  handle it — including the proof writer, mid-line. The synchronous check raises, because it
+  knows where it is; the wording and the status are identical either way.
