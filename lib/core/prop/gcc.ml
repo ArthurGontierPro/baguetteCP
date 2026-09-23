@@ -359,8 +359,7 @@ let cite id = Explanation.term 1 (Explanation.model_row id)
 let fact_summand ~root ~why lit =
   if root then Explanation.defining 1 lit
   else
-    Explanation.term 1
-      (Explanation.clause (lit :: List.map Lit.negate (Reason.lits why)))
+    Explanation.term 1 (Explanation.clause (lit :: List.map Lit.negate (Reason.lits why)))
 
 (* The ladder chain `x_ge_j - x_ge_m >= 0` for j < m, as a plain sum of the consistency
    rows: [Encoding.consistency_id x u] is `x_ge_u - x_ge_(u+1) >= 0`, so summing
@@ -424,9 +423,9 @@ let high_row t k =
   let above = c.cdhi - k.k_hi in
   Explanation.combine
     (cite c.le_cid
-    :: List.map
-         (fun kk -> Explanation.weaken [ (1, Lit.negate (Lit.ge c.cname kk)) ])
-         (range (c.cdlo + 1) k.k_hi)
+     :: List.map
+          (fun kk -> Explanation.weaken [ (1, Lit.negate (Lit.ge c.cname kk)) ])
+          (range (c.cdlo + 1) k.k_hi)
     @ List.concat_map
         (fun kk -> rung_summands t c.cname ~from_:(k.k_hi + 1) ~to_:kk)
         (range (k.k_hi + 1) c.cdhi)
@@ -455,8 +454,7 @@ let alo_summands t s ~a ~b =
   if b' < s.s_dhi then rung_summands t s.s_name ~from_:(s.s_hi + 1) ~to_:(b' + 1) else []
 
 let alo_leftovers s ~a ~b =
-  ( (if clip_lo s ~a > s.s_dlo then 1 else 0),
-    if clip_hi s ~b < s.s_dhi then 1 else 0 )
+  ((if clip_lo s ~a > s.s_dlo then 1 else 0), if clip_hi s ~b < s.s_dhi then 1 else 0)
 
 (* `I_i >= 0` for a variable the pruning does not care about: free, because it is the
    ladder.  The two degenerate ends are literal axioms rather than a chain, for the same
@@ -505,8 +503,61 @@ let cap_summands t ~a ~b ~snaps ~halls ~caps ~extra =
    `b + 1 > hi(y)`, which is not a heuristic: in the |H| = cap arm the pushed variable is
    NOT confined, so its upper bound is strictly above b and the residue IS the pruning
    and must stay. *)
-let prune_expl t ~a ~b ~snaps ~halls ~caps ~y ~lower =
+(* D-0010's CURRENCY, and gcc is the first global that had to pay it.
+
+   What the counting leaves is a single order literal -- `y_ge_(b+1) >= 1` for a lower
+   push.  That is a true and sufficient statement of the new bound, and it is NOT what
+   another propagator can combine with.  lib/core/prop/order_reason.ml's header says why
+   in one sentence: an order literal is 0/1, so `a * y_ge_b` tops out at `a` and not at
+   `a * b`; a bound is worth its whole prefix of the ladder, `sum_{k = dlo+1}^{b} y_ge_k`,
+   which is the substitution lib/proof/encoding.ml performs on the model side.  A
+   [Linear] row summed against the single literal is short by exactly the rungs beneath
+   it, and 3.0.2 answers "the constraint with ID n is not contradicting".
+
+   MEASURED, and it is the defect this row shipped first: a gcc capacity push of `u` to 5
+   consumed by `int_lin_le([1],[u],4)` at the ROOT.  all_different does not show it for a
+   reason that is luck rather than design -- its derivations still reach
+   [Explanation.clause] often enough that lib/core/search.ml's [rests_on_a_clause] routes
+   those root conflicts the D-0022 way, where the empty clause is cited and the
+   arithmetic is never evaluated.  gcc's derivation is [Defining] all the way down, so
+   the numeric route is the one it takes, and the numeric route is where the currency
+   matters.
+
+   The lift is the same shape both ways: take W copies of the single-literal derivation
+   and add, for every rung beneath (above) the pushed bound, the chain that relates it to
+   that bound.  The lower rungs' coefficients come out at 1, the pushed literal's excess
+   cancels, and the right-hand side is W -- which is the ladder statement
+   [Order_reason.weaken_declared] would have built.
+
+   Only for a push that MOVES a bound.  An emptying push already derives 0 >= 1 and a
+   contradiction is in no currency at all. *)
+let ladder_lift t ~y ~lower ~bound base =
+  if lower then
+    let w = bound - y.s_dlo in
+    if w < 2 then base
+    else
+      Explanation.combine
+        (Explanation.term w base
+        :: List.map
+             (fun k -> Explanation.term 1 (rung_line t y.s_name ~from_:k ~to_:bound))
+             (range (y.s_dlo + 1) (bound - 1)))
+        1
+  else
+    let w = y.s_dhi - bound in
+    if w < 2 then base
+    else
+      Explanation.combine
+        (Explanation.term w base
+        :: List.map
+             (fun k ->
+               Explanation.term 1 (rung_line t y.s_name ~from_:(bound + 1) ~to_:k))
+             (range (bound + 2) y.s_dhi))
+        1
+
+let prune_expl t ~a ~b ~snaps ~halls ~caps ~y ~lower ~bound =
+  let moves = if lower then bound <= y.s_hi else bound >= y.s_lo in
   Explanation.deferred (fun () ->
+      let finish e = if moves then ladder_lift t ~y ~lower ~bound e else e in
       let a' = clip_lo y ~a and b' = clip_hi y ~b in
       let low_side = a' > y.s_dlo and high_side = b' < y.s_dhi in
       let want_low = lower || a - 1 < y.s_lo in
@@ -520,18 +571,19 @@ let prune_expl t ~a ~b ~snaps ~halls ~caps ~y ~lower =
           rung_summands t y.s_name ~from_:(y.s_hi + 1) ~to_:(b' + 1)
         else []
       in
-      Explanation.combine
-        (cap_summands t ~a ~b ~snaps ~halls ~caps ~extra:(Some y)
-        @ bound_cancels
-            ~lo_of:(fun s -> fst (alo_leftovers s ~a ~b))
-            ~hi_of:(fun s -> snd (alo_leftovers s ~a ~b))
-            halls
-        @ y_low @ y_high
-        @ bound_cancels
-            ~lo_of:(fun _ -> if low_side && want_low then 1 else 0)
-            ~hi_of:(fun _ -> if high_side && want_high then 1 else 0)
-            [ y ])
-        1)
+      finish
+      @@ Explanation.combine
+           (cap_summands t ~a ~b ~snaps ~halls ~caps ~extra:(Some y)
+           @ bound_cancels
+               ~lo_of:(fun s -> fst (alo_leftovers s ~a ~b))
+               ~hi_of:(fun s -> snd (alo_leftovers s ~a ~b))
+               halls
+           @ y_low @ y_high
+           @ bound_cancels
+               ~lo_of:(fun _ -> if low_side && want_low then 1 else 0)
+               ~hi_of:(fun _ -> if high_side && want_high then 1 else 0)
+               [ y ])
+           1)
 
 (* Every variable in scope is named, and that is deliberate rather than lazy: rule A's
    top level weakens the indicator of every x that is neither confined nor the target,
@@ -601,8 +653,7 @@ let free_summands t s v =
    the two leftovers for [bound_cancels], and the degree the lower rule needs is the
    arithmetic's own.  This function exists to say so; deleting it would leave the reader
    hunting for the missing summand. *)
-let fixed_leftovers s v =
-  ((if v > s.s_dlo then 1 else 0), if v < s.s_dhi then 1 else 0)
+let fixed_leftovers s v = ((if v > s.s_dlo then 1 else 0), if v < s.s_dhi then 1 else 0)
 
 (* The ladder step both count rules end with, in its two directions.
 
@@ -622,8 +673,7 @@ let ladder_at_most t ~c ~may =
       1 )
   else
     ( List.map
-        (fun j ->
-          Explanation.term 1 (rung_line t c.cname ~from_:j ~to_:(may + 1)))
+        (fun j -> Explanation.term 1 (rung_line t c.cname ~from_:j ~to_:(may + 1)))
         (range (c.cdlo + 1) may)
       @ List.map
           (fun kk -> Explanation.weaken [ (1, Lit.ge c.cname kk) ])
@@ -736,7 +786,7 @@ let pass t store =
               (if lower then Reason.at_least ~name:y.s_name ~decl:y.s_dlo bound
                else Reason.at_most ~name:y.s_name ~decl:y.s_dhi bound))
          (scope_facts ~snaps ~caps:caps_ab)
-         (prune_expl t ~a ~b ~snaps ~halls ~caps:caps_ab ~y ~lower))
+         (prune_expl t ~a ~b ~snaps ~halls ~caps:caps_ab ~y ~lower ~bound))
   in
   List.iter
     (fun a ->
@@ -744,30 +794,26 @@ let pass t store =
         (fun b ->
           if b >= a then
             let found = List.map (fun v -> Hashtbl.find_opt cover_at v) (range a b) in
-            if List.for_all Option.is_some found then (
+            if List.for_all Option.is_some found then
               let caps_ab = List.filter_map Fun.id found in
               let cap =
-                List.fold_left
-                  (fun acc k -> acc + k.k_hi - k.k_cov.cconst)
-                  0 caps_ab
+                List.fold_left (fun acc k -> acc + k.k_hi - k.k_cov.cconst) 0 caps_ab
               in
               if cap >= 0 then
                 (* Variables whose DECLARED range is inside [a, b] consume their unit of
                    capacity by the model row's own constant folding, so they must be in
                    the confined set rather than outside it; ordering them first is what
                    makes that so whenever there is room for them at all. *)
-                let all_in =
-                  List.filter (fun s -> a <= s.s_lo && s.s_hi <= b) snaps
-                in
+                let all_in = List.filter (fun s -> a <= s.s_lo && s.s_hi <= b) snaps in
                 let folded, rest =
                   List.partition (fun s -> a <= s.s_dlo && s.s_dhi <= b) all_in
                 in
                 let ordered = folded @ rest in
                 let n = List.length ordered in
-                if n > cap then (
+                if n > cap then
                   let halls = List.filteri (fun i _ -> i < cap) ordered in
                   let y = List.nth ordered cap in
-                  push ~a ~b ~halls ~caps_ab ~y ~lower:true y.s_var (b + 1))
+                  push ~a ~b ~halls ~caps_ab ~y ~lower:true y.s_var (b + 1)
                 else if n = cap then
                   List.iter
                     (fun y ->
@@ -776,12 +822,11 @@ let pass t store =
                           (List.exists (fun s -> String.equal s.s_name y.s_name) ordered)
                       then
                         if a <= y.s_lo && y.s_lo <= b then
-                          push ~a ~b ~halls:ordered ~caps_ab ~y ~lower:true y.s_var
-                            (b + 1)
+                          push ~a ~b ~halls:ordered ~caps_ab ~y ~lower:true y.s_var (b + 1)
                         else if a <= y.s_hi && y.s_hi <= b then
                           push ~a ~b ~halls:ordered ~caps_ab ~y ~lower:false y.s_var
                             (a - 1))
-                    snaps))
+                    snaps)
         his)
     los;
   false

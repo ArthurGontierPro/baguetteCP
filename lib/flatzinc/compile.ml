@@ -972,8 +972,8 @@ let compile (m : Model.t) : t =
             | Model.Const _ ->
                 Error.failf pos
                   "builtin `fzn_global_cardinality`: the count at position %d is a \
-                   constant. The row subtracts the count's order literals and a \
-                   constant has none; declare it as a variable on a single value"
+                   constant. The row subtracts the count's order literals and a constant \
+                   has none; declare it as a variable on a single value"
                   j
           in
           let cname = name_of pos ci in
@@ -995,9 +995,7 @@ let compile (m : Model.t) : t =
                 (if v > lo then [ (1, Lit.ge nm v) ] else [])
                 @ if v + 1 <= hi then [ (-1, Lit.ge nm (v + 1)) ] else [])
               dv
-            @ List.init
-                (max 0 (cdhi - cdlo))
-                (fun k -> (-1, Lit.ge cname (cdlo + 1 + k)))
+            @ List.init (max 0 (cdhi - cdlo)) (fun k -> (-1, Lit.ge cname (cdlo + 1 + k)))
           in
           let ge_cid, le_cid =
             Encoding.add_equality encoding terms (cdlo - ones - const_v)
@@ -1005,9 +1003,33 @@ let compile (m : Model.t) : t =
           (v, Var.of_int ci, const_v, ge_cid, le_cid))
         counts
     in
-    let p =
-      Gcc.make store encoding ~cover:cover_rows (List.map Var.of_int movable)
-    in
+    (* ONE [request_direct] CALL, AND IT IS NOT FOR THE DERIVATION.
+
+       Nothing in lib/core/prop/gcc.ml names a direct literal -- the whole point of the
+       order-encoded counting rows above is that it does not have to (D-0077). The call
+       is here because lib/core/trace.ml's [derive_ahead] triggers on
+       [Encoding.has_direct] of the PRUNED variable, and that test is a PROXY for "this
+       variable is in a counting global's scope": the project materialises the direct
+       encoding for exactly the variables a global reasons about, so `has_direct` has so
+       far been the same set. gcc is the first family for which it is not.
+
+       Without the call, gcc's trace lines go out as bare `rup` with no `pol` ahead of
+       them, and 3.0.2 refuses them -- MEASURED, not feared, on a scene where a gcc
+       pruning lands under a decision and is cited by the nogood that closes the branch.
+       That is I-X10 failing, and the classification in test/unit/test_trace.ml says gcc
+       is [Needs_derivation] precisely so that it cannot fail quietly.
+
+       The honest fix is a first-class marker -- "this pruning needs its derivation
+       written ahead" as a property of the propagator rather than of the encoding -- and
+       trace.ml's own comment already names it ("the alternative is a per-entry flag
+       threaded from the propagator through Store.entry"). That is a change to
+       lib/core/trace.ml and lib/proof/encoding.ml, neither of which M7-T16 owns; it is
+       filed under `## Cross-session requests`. Until then this call buys the trigger,
+       and what it costs is the direct encoding's width-proportional `red` lines for the
+       gcc scope (D-0028) -- real, and the reason it is spelled out here rather than
+       slipped in beside the propagator. *)
+    List.iter (fun i -> Encoding.request_direct encoding (name_of pos i)) movable;
+    let p = Gcc.make store encoding ~cover:cover_rows (List.map Var.of_int movable) in
     [ (fun id -> Propagator.pack ~id (module Gcc : Propagator.S with type t = Gcc.t) p) ]
   in
   (* ------------------------------------------------------------------------ M4-T3
