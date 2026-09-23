@@ -1452,6 +1452,230 @@ let test_empty_model_logs_its_solution () =
         (contains ~needle:"No solution has been logged in the proof" out));
   cleanup dir [ opb; pbp; bpbp ]
 
+(* ============================== M7-T12 / D-0077: the ASSIGNMENT decision
+
+   The second decision shape and its proof obligations. Read D-0077 and
+   [Search.branch_assign]'s header before changing anything here; the three things these
+   lanes assert are the three the record argues, and each has a break beside it.
+
+   EVERY ASSERTION IS ON THE DECISION SEQUENCE, never on the answer. A value choice
+   cannot change the answer at all -- the search is complete either way -- so a test that
+   checked the solution could not tell `indomain_median` from `indomain_min`, from the
+   two-nested-splits substitution M7-T9 refused, or from the annotation being dropped on
+   the floor. That is the failure docs/SPEC.md 3.4 exists to forbid.
+
+   TWO OF THE THREE SCENES ARE SATISFIABLE, and that is D-0053 and D-0066-as-amended
+   rather than a preference: over a contradictory database both `red` and `rup` can be
+   accepted vacuously, so a break lane on an UNSAT scene can redden for the wrong reason
+   or not at all. The UNSAT scene here is the backjump one, whose assertion is about
+   which siblings were NOT explored -- a fact about the search, which the checker is not
+   the oracle for. *)
+
+(* x + y = 5 over 0..4, with y <> 3. Root propagation leaves both in 1..4 and nothing
+   fixed. x's lower median is 2, strictly interior, so the first decision is an ASSIGN;
+   x = 2 forces y = 3 and fails; the node is re-entered with 2 removed and x's lower
+   median is then 3, interior again, which is the answer. test/models/median_assign_sat.fzn
+   is this scene end to end through the CLI. *)
+let median_sat_src =
+  "var 0..4: x;\n\
+   var 0..4: y;\n\
+   constraint int_lin_eq([1,1],[x,y],5);\n\
+   constraint int_ne(y,3);\n\
+   solve satisfy;\n"
+
+(* An assignment INSIDE an assignment, so the inner one's clause has a real tail and the
+   hole it punches is not globally valid. Every exclusion is an `int_lin_ne`, which is
+   VALUE consistent and so invisible to root propagation; the contradictions have to be
+   found by branching. test/models/median_assign_under_decision_sat.fzn is the twin. *)
+let median_nested_src =
+  "var 0..4: x;\n\
+   var 0..2: u;\n\
+   var 0..2: v;\n\
+   constraint int_lin_le([1,1,1],[x,u,v],3);\n\
+   constraint int_lin_ne([1,1,1],[x,u,v],1);\n\
+   constraint int_lin_ne([1,1,1],[x,u,v],2);\n\
+   constraint int_lin_ne([1,1,1],[x,u,v],3);\n\
+   solve satisfy;\n"
+
+(* [backjump_src] with its two Boolean spectators replaced by ONE five-wide spectator, so
+   that the spectator's decision is an assignment rather than a split. Nothing below
+   depends on s, so the refutation of x <> y /\ x = y names neither of the assignment's
+   levels -- which is the backjump arm. *)
+let median_backjump_src =
+  "var 0..4: s;\n\
+   var 0..3: x;\n\
+   var 0..3: y;\n\
+   constraint int_ne(x, y);\n\
+   constraint int_eq(x, y);\n\
+   solve satisfy;\n"
+
+(* input_order + indomain_median, which is what
+   `int_search(..., input_order, indomain_median, complete)` compiles to -- built here
+   rather than read off the annotation so the scenes above stay ordinary `solve satisfy`
+   models and the decision sequence is recorded at the one place it is produced. *)
+let median_order log store cands =
+  let v = Search.input_order store cands in
+  let c = Search.indomain_median store v in
+  log := c :: !log;
+  c
+
+(* The same, but median ONLY on the first-declared variable and indomain_min elsewhere.
+   [median_backjump_src]'s point is a spectator assignment over a subtree branched the
+   ordinary way, so the two value choices must be told apart by variable. *)
+let spectator_median_order log store cands =
+  let v = Search.input_order store cands in
+  let c =
+    if String.equal (Store.name store v) "s" then Search.indomain_median store v
+    else Search.indomain_min store v
+  in
+  log := c :: !log;
+  c
+
+let choices_of log = List.rev !log
+
+let describe (c : Search.choice) =
+  match c with
+  | Search.Assign a -> Printf.sprintf "assign(%d)" a.Search.a_value
+  | Search.Split d ->
+      Printf.sprintf "split(%d,%s)" d.Search.d_split
+        (if d.Search.d_high_first then "hi" else "lo")
+
+let describe_all cs = String.concat " " (List.map describe cs)
+
+(* (a) THE DECISION SEQUENCE. Two assignments, at the two medians the re-entry produces,
+   and the second median is the one the two-nested-splits construction cannot reach: after
+   x = 2 fails, the remaining values are {1,3,4} and their lower median is 3. A nested
+   split would have recursed into {1} first (M7-T9's drift), so this sequence is exactly
+   what distinguishes the shape this row built from the substitution it refused. *)
+let test_m7t12_decision_sequence () =
+  let log = ref [] in
+  let r, dir, opb, pbp = run ~order:(median_order log) median_sat_src in
+  let cs = choices_of log in
+  (match r.r_outcome with
+  | Search.Sat _ ->
+      check "M7-T12 (a): the scene is satisfiable, as the break lanes need" true
+  | Search.Unsat ->
+      incr failures;
+      print_endline "FAIL M7-T12 (a): median_sat_src must be SAT");
+  let want = "assign(2) assign(3)" in
+  let got = describe_all cs in
+  if String.equal got want then
+    check "M7-T12 (a): the decision sequence is assign(2) then assign(3)" true
+  else (
+    incr failures;
+    Printf.printf
+      "FAIL M7-T12 (a): the decision sequence is %s, want %s. A sequence of splits is \
+       the two-nested-splits substitution M7-T9 refused, not this shape.\n"
+      got want);
+  check "M7-T12 (a): both are interior assignments, neither is a split"
+    (List.for_all (function Search.Assign _ -> true | _ -> false) cs);
+  (* M1-T36's identity, with M7-T12's term. An assignment takes two decisions and
+     dispatches one child, so a shape that quietly explored a sibling would break this
+     before it broke anything in the proof. *)
+  check "M7-T12 (a): the node/decision identity holds with the assignment term"
+    (r.r_stats.Search.nodes
+    = (2 * r.r_stats.Search.decisions)
+      + 1 - r.r_stats.Search.skipped
+      - (3 * r.r_stats.Search.assigns));
+  check_eq "M7-T12 (a): ... and it counted two assignments" r.r_stats.Search.assigns 2;
+  expect_accepted ~title:"M7-T12 (a)" ~dir ~opb ~pbp;
+  cleanup dir [ opb; pbp ]
+
+(* (b) THE ASSIGNMENT CLAUSE, AND THE BREAK THAT STRENGTHENS IT.
+
+   The clause a failed assignment branch is weakened into is sound because it is a
+   SUPERSET of the child's nogood. [break_assign_clause] drops its upper half, which
+   makes it a strengthening instead, and the checker must refuse it. Over a SATISFIABLE
+   scene, per D-0053/D-0066: on an UNSAT one the database is contradictory and the `rup`
+   would be accepted vacuously. *)
+let test_m7t12_clause_break () =
+  let log = ref [] in
+  let r, dir, opb, pbp =
+    run
+      ~config:{ Search.default_config with break_assign_clause = true }
+      ~order:(median_order log) median_sat_src
+  in
+  check "M7-T12 (b): the break does not change the ANSWER -- only the proof is wrong"
+    (match r.r_outcome with Search.Sat _ -> true | Search.Unsat -> false);
+  expect_rejected ~title:"M7-T12 (b) BREAK: the assignment clause loses its upper half"
+    ~dir ~opb ~pbp;
+  cleanup dir [ opb; pbp ];
+  (* The control: the same scene, the same order, the break off. Without this the lane
+     above would pass just as well if the scene's proof never verified at all. *)
+  let log = ref [] in
+  let _, dir, opb, pbp = run ~order:(median_order log) median_sat_src in
+  expect_accepted ~title:"M7-T12 (b) CONTROL: unbroken, the same scene verifies" ~dir ~opb
+    ~pbp;
+  cleanup dir [ opb; pbp ]
+
+(* (c) THE HOLE'S TAIL, AND THE D-0075 BREAK.
+
+   The hole an assignment punches is an ordinary logged pruning, and its trace line must
+   carry the decisions in force -- otherwise it states `x <> m` unconditionally, which is
+   false at every other node. [break_assign_facts] empties that tail.
+
+   THE SCENE HAS TO NEST. At the root the tail is empty honestly, so the break is
+   invisible there; [median_nested_src] takes its second assignment inside the first, and
+   that is the one whose line the checker can refuse. The control below is what says the
+   scene reaches the nested case at all. *)
+let test_m7t12_hole_tail_break () =
+  let log = ref [] in
+  let r, dir, opb, pbp = run ~order:(median_order log) median_nested_src in
+  let cs = choices_of log in
+  check "M7-T12 (c): the nested scene really does take an assignment under an assignment"
+    (match cs with Search.Assign _ :: Search.Assign _ :: _ -> true | _ -> false);
+  check "M7-T12 (c): ... and it is satisfiable, which is what makes the break checkable"
+    (match r.r_outcome with Search.Sat _ -> true | Search.Unsat -> false);
+  expect_accepted ~title:"M7-T12 (c) CONTROL: the nested scene verifies unbroken" ~dir
+    ~opb ~pbp;
+  cleanup dir [ opb; pbp ];
+  let log = ref [] in
+  let _, dir, opb, pbp =
+    run
+      ~config:{ Search.default_config with break_assign_facts = true }
+      ~order:(median_order log) median_nested_src
+  in
+  expect_rejected
+    ~title:"M7-T12 (c) BREAK: the hole's trace line states no facts (D-0075)" ~dir ~opb
+    ~pbp;
+  cleanup dir [ opb; pbp ]
+
+(* (d) THE BACKJUMP THROUGH AN ASSIGNMENT.
+
+   An assignment opens two levels and dispatches one child. When that child's nogood
+   names NEITHER of them it refutes the node whatever the assigned variable is, and the
+   re-entry must not happen: the value is not removed, no assignment clause is written,
+   and both levels are skipped. This is the arm where an unsound resolvent would live if
+   this shape had one -- it is the only place the assignment's own levels are discharged
+   without a clause being emitted about them.
+
+   [median_backjump_src]'s s is a spectator: nothing below it depends on it, so the
+   refutation of `x <> y /\ x = y` names only x's and y's levels. The assertions are that
+   the spectator was decided exactly ONCE (a re-entry would decide it again, on a domain
+   with 2 removed) and that the skip count went up by the assignment's two levels. *)
+let test_m7t12_backjump_through_assignment () =
+  let log = ref [] in
+  let r, dir, opb, pbp = run ~order:(spectator_median_order log) median_backjump_src in
+  let cs = choices_of log in
+  check "M7-T12 (d): the spectator is assigned its interior median 2"
+    (match cs with Search.Assign a :: _ -> a.Search.a_value = 2 | _ -> false);
+  check "M7-T12 (d): the search is UNSAT, so the whole tree was closed"
+    (r.r_outcome = Search.Unsat);
+  check_eq
+    "M7-T12 (d): the spectator was decided exactly ONCE -- the re-entry with 2 removed \
+     never happened, which is what a backjump through the assignment means"
+    (List.length (List.filter (function Search.Assign _ -> true | _ -> false) cs))
+    1;
+  check "M7-T12 (d): the assignment was discharged by the BACKJUMP arm, not by a clause"
+    (r.r_stats.Search.assign_backjumps >= 1);
+  check "M7-T12 (d): the node/decision identity still holds across the backjump"
+    (r.r_stats.Search.nodes
+    = (2 * r.r_stats.Search.decisions)
+      + 1 - r.r_stats.Search.skipped
+      - (3 * r.r_stats.Search.assigns));
+  expect_accepted ~title:"M7-T12 (d): the refutation verifies" ~dir ~opb ~pbp;
+  cleanup dir [ opb; pbp ]
+
 let () =
   test_minimise_pure ();
   test_minimise_break_in_a_proof ();
@@ -1473,6 +1697,10 @@ let () =
   test_pb_determinism ();
   test_settle_bridge_survives_the_filter ();
   test_empty_model_logs_its_solution ();
+  test_m7t12_decision_sequence ();
+  test_m7t12_clause_break ();
+  test_m7t12_hole_tail_break ();
+  test_m7t12_backjump_through_assignment ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

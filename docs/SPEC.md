@@ -254,8 +254,8 @@ with min-value branching, depth-first, restarts disabled.
 **Annotations** *(normative; the honouring requirement predates M7-T2, which brought the
 implementation into compliance with it)*. `int_search` and `bool_search` with the variable
 choices `input_order`, `first_fail`, `smallest` and `largest`, and the value choices
-`indomain_min`, `indomain_max` and `indomain_split`, and `seq_search` over those, MUST be
-honoured.
+`indomain_min`, `indomain_max`, `indomain_split` and `indomain_median`, and `seq_search`
+over those, MUST be honoured.
 
 - `input_order` selects the first still-unfixed variable **in the order the annotation's
   array wrote it**, not declaration order.
@@ -267,6 +267,11 @@ honoured.
   where `mid` is computed from the current bounds. It is defined on the range and not on the
   value count, so on a domain with holes the midpoint may itself be a hole; that is correct
   and is not a degenerate case.
+- `indomain_median` assigns the variable its **median value** — `x = m` first, then
+  `x != m`, with the median recomputed over what remains. The median is the **lower
+  median**, the value at index `(size-1)/2` of the current domain's values in ascending
+  order. It counts **values**, which is what distinguishes it from `indomain_split`: over
+  `0..6` with `3` removed the median is `2` and the range midpoint is `3`.
 - `seq_search` consults its annotations in order and uses the first whose variables are not
   all fixed. A phase whose array contains only fixed elements contributes no decision and is
   skipped, which is this clause rather than an exception to it.
@@ -280,23 +285,35 @@ annotation's variables are fixed and a decision is still required, the default a
 This is the one respect in which an annotated model's search is not the annotation.
 
 **Anything else MUST be refused**, with a diagnostic naming it — including
-`anti_first_fail`, `indomain_median`, `indomain_random`, `float_search`, `set_search` and
+`anti_first_fail`, `indomain_random`, `float_search`, `set_search` and
 `priority_search`. It MUST NOT be silently ignored or replaced: **substituting a strategy
 solves a different problem and reports it as this one's answer.** Before M7-T2 an
 unrecognised annotation was silently dropped and the model searched by the default, which is
 exactly what this forbids.
 
-`indomain_median` is refused for a structural reason and not merely because it is unbuilt,
-and its diagnostic says so. A decision here is a **single order literal** — `x <= k` on one
-side, `x >= k+1` on the other. `indomain_min` and `indomain_max` are exact under that only
-**by accident of sitting at the domain boundary**: `x <= lo` *is* `x = lo`, and `x != lo`
-collapses to the single literal `x >= lo+1`. For an interior value `m`, `x = m` needs two
-literals and its sibling `x != m` is a **disjunction** (`x <= m-1 OR x >= m+1`) — which is
-precisely what the one-trail-entry-per-level and single-resolution-literal invariants exist
-to exclude. Honouring it therefore requires a second decision shape and a change to the
-nogood-resolution contract (roadmap M7-T12), not a fifth value-choice constructor. **Refusing
-is the compliant answer**; a near-equivalent substitution would satisfy this section's letter
-and violate the sentence above it.
+**There are two decision shapes**, and `indomain_median` is why. A decision is normally a
+**single order literal** — `x <= k` on one side, `x >= k+1` on the other — and
+`indomain_min`, `indomain_max` and `indomain_split` are all exactly that. `indomain_min` and
+`indomain_max` are assignments only **by accident of sitting at the domain boundary**:
+`x <= lo` *is* `x = lo`, and `x != lo` collapses to the single literal `x >= lo+1`. For an
+interior value `m` neither holds: `x = m` needs two literals, and its sibling `x != m` is a
+**disjunction** (`x <= m-1 OR x >= m+1`), which no nogood can name because the negation of a
+disjunction is not a clause.
+
+The second shape (roadmap M7-T12, **D-0077**) is therefore an **assignment decision**: the
+`x = m` side is two stacked ordinary decisions, and the `x != m` side is **not a branch at
+all**. The failed side's nogood is weakened into `... OR x <= m-1 OR x >= m+1`, which is a
+globally valid clause; the value is removed from the domain and the **same node is
+re-entered**, as a branch-and-bound improvement already does. The node's nogood is then the
+re-entry's own, unresolved, and it names neither assignment level — so the backjump rule is
+unchanged. An assignment decision is used **only for a strictly interior median**; at either
+bound `indomain_median` makes the ordinary one-literal decision.
+
+Until M7-T12 `indomain_median` was **refused** for this reason, and that was the compliant
+answer at the time: a near-equivalent substitution — bisecting at the median, or nesting two
+splits — would have satisfied this section's letter and violated the sentence above it,
+while emitting proofs that were all perfectly valid. What changed is the decision shape, not
+the standard for substitution.
 
 **The `int_search` exploration argument (`complete`, `bbs`, `lds`) is ignored**, and that is
 sound rather than an omission: the search is complete, so ignoring an incompleteness

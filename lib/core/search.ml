@@ -277,6 +277,23 @@ type stats = {
       (* Siblings NOT explored because the branch's nogood was already false without
          this level's decision. The M1-T36 identity is stated over it below; a backjump
          that reported no skip would be a backjump that did not happen. *)
+  mutable assigns : int;
+      (* M7-T12: assignment decisions taken ([branch_assign]). Counted separately from
+         [decisions] because such a decision is NOT a binary internal node: it opens two
+         levels, dispatches ONE child, and continues as a re-entry of the node it was
+         taken at rather than as a sibling. The M1-T36 identity is corrected by exactly
+         [3 * assigns] below and stays an equality. *)
+  mutable assign_backjumps : int;
+      (* M7-T12: assignment decisions discharged by the backjump arm -- the child's nogood
+         named neither assignment level, so the node was refuted outright and the value
+         was never removed. NOT a [skipped]; see [branch_assign]'s backjump arm. *)
+  mutable assign_clauses_rev : Writer.cid list;
+      (* M7-T12: the assignment clauses emitted at LEVEL 0, newest first, and the whole
+         of who owns them (I-X2). An assignment clause is filed at the level of the node
+         that took the decision, so at every level above 0 the frame owning that level
+         wipes it on the way out, exactly as it wipes a child nogood. Level 0 is never
+         wiped, so those are retired by [retire_assign_clauses] at the end of the search,
+         beside the trace's own permanent lines. *)
   mutable n_learned : int; (* 1UIP clauses put on the page *)
   mutable n_converts : int;
       (* ...of which [Learned.to_linear_row] would accept, i.e. of which could have been
@@ -502,6 +519,9 @@ let stats_create () =
     n_bridges = 0;
     bridges_rev = [];
     skipped = 0;
+    assigns = 0;
+    assign_backjumps = 0;
+    assign_clauses_rev = [];
     n_learned = 0;
     lbd_hist = Array.make lbd_buckets 0;
     width_hist = Array.make lbd_buckets 0;
@@ -607,7 +627,15 @@ let record_bridge s b =
    With learning off [skipped] is 0 and this is M1-T36's equation unaltered. A version
    that merely relaxed the equality to an inequality would have stopped catching the
    off-by-one it exists for, on every search. *)
-let stats_expected_nodes s = (2 * s.decisions) + 1 - s.skipped
+(* M7-T12 widens it by exactly one more term, on the same principle. An assignment
+   decision bumps [decisions] by 2 (it opens two levels, [x >= m] and [x <= m], each a
+   real decision the nogood machinery sees) but dispatches ONE child: the sibling is a
+   RE-ENTRY of the same node, which -- as M5-T1 already established for the
+   branch-and-bound re-entry -- is not a node [branch] dispatched and is not counted.
+   So an assignment contributes 1 node where the equation expects 4, and [3 * assigns]
+   is the correction. With no [indomain_median] in the model [assigns] is 0 and this is
+   the M2-L3 equation unaltered. *)
+let stats_expected_nodes s = (2 * s.decisions) + 1 - s.skipped - (3 * s.assigns)
 
 let stats_consistent s ~exhausted =
   if exhausted then s.nodes = stats_expected_nodes s
@@ -656,9 +684,46 @@ let unfixed store =
    [d_split = hi - 1] with the high side first. *)
 type decision = { d_var : Var.t; d_split : int; d_high_first : bool }
 
-(* An order is asked for a decision given the store and the non-empty array of unfixed
+(* ------------------------------------------------- M7-T12: THE SECOND DECISION SHAPE
+
+   An ASSIGNMENT decision: "try [a_var = a_value], and if that fails carry on with
+   [a_var <> a_value]". [a_value] must be strictly interior to the variable's current
+   domain -- [lo < a_value < hi] and a member of it -- because at a boundary the shape
+   is not needed: [x <= lo] IS [x = lo] and its sibling collapses to the single literal
+   [x >= lo + 1], which is what [type decision] above already expresses exactly.
+   [indomain_median] dispatches on that and is the only producer today.
+
+   WHY THIS IS A SECOND TYPE AND NOT A THIRD FIELD. [type decision] is one order
+   literal, and its two branches disagree about exactly that literal. An assignment
+   disagrees about TWO: [x = m] is [x >= m /\ x <= m], and its sibling [x <> m] is the
+   DISJUNCTION [x <= m-1 \/ x >= m+1] (D-0019). The sibling is therefore not an
+   assumption a nogood can name, and that -- not the propagation and not the search --
+   is the whole of M7-T12. See [branch_assign] for how it is discharged, and D-0077.
+
+   WHAT IT IS NOT. It is NOT two nested splits. [x >= m] then [x <= m] gives the same
+   first branch, but its siblings are [x <= m-1] and [x >= m+1] explored SEPARATELY,
+   and the value choice at each is then made over a domain that is not the one the
+   annotation is about -- M7-T9 measured that drift and refused to ship it as
+   [indomain_median]. This shape explores ONE child and then RE-ENTERS the same node
+   with the value removed, so the next value choice sees the whole remaining domain. *)
+type assign = { a_var : Var.t; a_value : int }
+
+(* What an order may ask for. [Split] is every value choice that predates M7-T12. *)
+type choice = Split of decision | Assign of assign
+
+(* An order is asked for a choice given the store and the non-empty array of unfixed
    variables. *)
-type order = Store.t -> Var.t array -> decision
+type order = Store.t -> Var.t array -> choice
+
+(* The [Split] a caller knows it is going to get. Tests that assert on a value choice's
+   [d_split]/[d_high_first] go through this; an [Assign] has neither and saying so is
+   better than a field that lies. *)
+let as_split = function
+  | Split d -> d
+  | Assign a ->
+      invalid_arg
+        (Printf.sprintf
+           "Search.as_split: an assignment decision (value %d) is not a split" a.a_value)
 
 (* First-fail (docs/SPEC.md 3.4): the unfixed variable (domain size > 1) with the
    smallest domain, ties broken by declaration order (the store's variable index). *)
@@ -734,7 +799,7 @@ let largest store cands =
    [sequence] below falls back to for the variables an annotation did not mention. *)
 let spec_order store cands =
   let v = first_fail store cands in
-  { d_var = v; d_split = Domain.lo (Store.get store v); d_high_first = false }
+  Split { d_var = v; d_split = Domain.lo (Store.get store v); d_high_first = false }
 
 (* ------------------------------------------------------- M7-T2: annotated search
 
@@ -753,7 +818,7 @@ let spec_order store cands =
    the subsets; it does not get to define what an order is. *)
 
 type var_select = Store.t -> Var.t array -> Var.t
-type val_select = Store.t -> Var.t -> decision
+type val_select = Store.t -> Var.t -> choice
 
 (* [d_split] must lie in [lo, hi) ([type decision]); both of these are in range because a
    candidate is by construction unfixed, so [hi > lo].
@@ -764,10 +829,10 @@ type val_select = Store.t -> Var.t -> decision
    trying the largest value first is only one decision if the branch that assumes it
    fixes the variable. *)
 let indomain_min store v =
-  { d_var = v; d_split = Domain.lo (Store.get store v); d_high_first = false }
+  Split { d_var = v; d_split = Domain.lo (Store.get store v); d_high_first = false }
 
 let indomain_max store v =
-  { d_var = v; d_split = Domain.hi (Store.get store v) - 1; d_high_first = true }
+  Split { d_var = v; d_split = Domain.hi (Store.get store v) - 1; d_high_first = true }
 
 (* ------------------------------------------------------- M7-T9: `indomain_split`
 
@@ -811,7 +876,37 @@ let indomain_max store v =
 let indomain_split store v =
   let d = Store.get store v in
   let lo = Domain.lo d and hi = Domain.hi d in
-  { d_var = v; d_split = lo + ((hi - lo) / 2); d_high_first = false }
+  Split { d_var = v; d_split = lo + ((hi - lo) / 2); d_high_first = false }
+
+(* ------------------------------------------------------ M7-T12: `indomain_median`
+
+   MiniZinc: "assign the variable its median value". THE MEDIAN IS A VALUE COUNT, not a
+   range midpoint -- that is [indomain_split] above, and the two are different
+   annotations because a domain with holes tells them apart. The median here is the
+   LOWER median, the value at index [(size - 1) / 2] of the domain's values in
+   ascending order, which is Gecode's `INT_VAL_MED` ("median value, rounding downwards")
+   and is what docs/SPEC.md 3.4 now states.
+
+   THE DISPATCH IS THE POINT. At a boundary the median is expressible as an ordinary
+   one-literal split and the assignment shape is not used:
+
+     - [m = lo]: [x <= lo] is [x = lo] and its sibling is the single literal
+       [x >= lo + 1]. That is [indomain_min]'s decision exactly, and a domain of size 2
+       always lands here (lower median of two values is the smaller).
+     - [m = hi]: symmetrically [indomain_max]'s.
+     - otherwise: [Assign], the shape this row exists for.
+
+   So the assignment machinery is reached only where it is genuinely needed, and every
+   model whose medians all sit at a boundary emits the proof it would have emitted
+   before. That is not an optimisation; it is what keeps the new shape's blast radius
+   equal to its necessity. *)
+let indomain_median store v =
+  let d = Store.get store v in
+  let values = Domain.to_list d in
+  let m = List.nth values ((List.length values - 1) / 2) in
+  if m = Domain.lo d then Split { d_var = v; d_split = m; d_high_first = false }
+  else if m = Domain.hi d then Split { d_var = v; d_split = m - 1; d_high_first = true }
+  else Assign { a_var = v; a_value = m }
 
 (* One `int_search(...)` annotation. [p_vars] is the annotation's array, IN THE ORDER IT
    WAS WRITTEN, which is what [input_order] reads; it may name a variable twice and may
@@ -903,11 +998,12 @@ let random_order r store cands =
   let v = cands.(Random.State.full_int r (Array.length cands)) in
   let d = Store.get store v in
   let lo = Domain.lo d and hi = Domain.hi d in
-  {
-    d_var = v;
-    d_split = lo + Random.State.full_int r (hi - lo);
-    d_high_first = Random.State.bool r;
-  }
+  Split
+    {
+      d_var = v;
+      d_split = lo + Random.State.full_int r (hi - lo);
+      d_high_first = Random.State.bool r;
+    }
 
 let extract_assignment store : assignment =
   List.init (Store.n_vars store) (fun i ->
@@ -1119,6 +1215,26 @@ type config = {
          what [config] is: the record that says how this solve behaves. It is NOT one of
          the swappable components D-0044 is about, and it is not a break lane; it is the
          one field here that carries mutable state, which [type bnb] justifies. *)
+  break_assign_clause : bool;
+      (* M7-T12/D-0077's FIRST BREAK. OFF.
+
+         On, the assignment clause is emitted with only its LOWER half -- `x <= m-1`
+         and not `x >= m+1`. That is a STRENGTHENING of the child's nogood rather than
+         a weakening, so it is no longer a superset of a RUP clause and is simply false:
+         it claims the failed branch refuted everything at or above m. The hole is then
+         punched on a clause the node does not entail, and every line the re-entry writes
+         rests on it. Wrong on purpose and NOT CLI-reachable, like the two below. *)
+  break_assign_facts : bool;
+      (* M7-T12/D-0077's SECOND BREAK, and the one worth the most. OFF.
+
+         On, the hole the assignment punches carries [Reason.none] instead of the active
+         decisions, so [Trace] writes its line with an EMPTY TAIL: a bare `x <> m`,
+         asserted unconditionally. That is D-0075's defect exactly, in a new place --
+         the solver's reasoning is unchanged and the answer it returns is still right,
+         and the only thing that can see it is the checker, over a SATISFIABLE model
+         (D-0053, D-0066 as D-0073 amends it). At the ROOT the tail is empty honestly,
+         so this break is invisible there and the lane that exercises it has to take its
+         assignment under at least one decision. *)
   break_bridge_levels : bool;
       (* M7-T6/D-0070's BREAK, and the defect this row fixed. OFF.
 
@@ -1165,6 +1281,8 @@ let default_config =
     retention = Retention.default;
     backjump_on_pb = false;
     propagate_learned = true;
+    break_assign_clause = false;
+    break_assign_facts = false;
     break_bridge_levels = false;
     bnb = None;
   }
@@ -2111,6 +2229,35 @@ let register_learned engine store ctx stats ~cid ~(lits : Lit.t list) =
 
    THE CHECK RUNS HERE, on every improving solution, because every one of them is
    printed -- I-S1 is about solutions printed, and an optimisation run prints several. *)
+(* ------------------------------------------------------- M7-T12: the assignment's
+   own two helpers. Both are about the SIBLING, which is where this shape lives or dies.
+
+   [fact_of_decision] turns an active decision literal back into the [Reason.fact] that
+   states it. It is the same conversion [global_of] does at the other end and for the
+   same reason: [Reason.t] is bound facts, and [Reason.lit_of_fact] is THE one place a
+   reason becomes a literal (D-0026), so a decision that is to appear in a trace line's
+   tail has to arrive as a fact and not as a literal.
+
+   It always materialises, and that is a property of [branch] rather than luck: a
+   decision strictly narrows its variable ([check_decision_landed]), so [x >= k] has
+   [k > declared lo] and [x <= k] has [k < declared hi], which is exactly
+   [lit_of_fact]'s test. [None] is returned rather than asserted for a literal the
+   encoding has no declared bounds for, because an over-stated reason is a weaker line
+   and a missing one is an unsound one -- see the caller, which refuses to punch the
+   hole at all if any decision failed to convert. *)
+let fact_of_decision (decl : string -> (int * int) option) (l : Lit.t) :
+    Reason.fact option =
+  if not (Lit.is_order l.Lit.v) then None
+  else
+    let nm = Lit.owner l.Lit.v in
+    let k = Lit.value l.Lit.v in
+    match decl nm with
+    | None -> None
+    | Some (lo, hi) ->
+        Some
+          (if l.Lit.positive then Reason.at_least ~name:nm ~decl:lo k
+           else Reason.at_most ~name:nm ~decl:hi (k - 1))
+
 let record_improving ctx store stats (b : bnb) (asn : assignment) : [ `Continue | `Proved ]
     =
   if not (b.b_check asn) then raise (Unsound_solution asn);
@@ -2422,7 +2569,13 @@ and close_level ctx ~lvl ~nogood =
   Writer.set_level ctx.Justify.writer (lvl - 1);
   wipe_after_nogood ctx ~lvl ~nogood
 
-and branch engine store ctx trace stats cfg order decisions (dec : decision) : node =
+and branch engine store ctx trace stats cfg order decisions (c : choice) : node =
+  match c with
+  | Split dec -> branch_split engine store ctx trace stats cfg order decisions dec
+  | Assign a -> branch_assign engine store ctx trace stats cfg order decisions a
+
+and branch_split engine store ctx trace stats cfg order decisions (dec : decision) : node
+    =
   let v = dec.d_var in
   let d = Store.get store v in
   let k = dec.d_split in
@@ -2503,6 +2656,215 @@ and branch engine store ctx trace stats cfg order decisions (dec : decision) : n
    pruning (a line). [Store] asserts the same thing from its side via
    [is_level_start]; this check is the search's half, because the only way the two can
    disagree is a push here that did not actually change the domain. *)
+(* ------------------------------------------------ M7-T12: THE ASSIGNMENT DECISION
+
+   docs/DECISIONS.md D-0077 is the record; this is the code it describes. Read the
+   record before changing anything here -- the sibling's soundness is an argument about
+   which constraint is live when, and it is not visible from the control flow alone.
+
+   THE PROBLEM. [x = m] for an interior [m] is TWO order literals, and its sibling
+   [x <> m] is the DISJUNCTION [x <= m-1 \/ x >= m+1] (D-0019). A nogood is a clause of
+   negated assumptions, so a disjunctive assumption cannot appear in one: its negation
+   is a conjunction. [combine_nogoods] resolving two children on exactly one literal is
+   therefore not merely inconvenient here, it has nothing to resolve.
+
+   THE ANSWER, AND IT IS NOT A NEW RESOLUTION RULE. The sibling is not a sibling.
+
+     - The [x = m] branch is TWO ordinary decisions on two stacked levels -- [x >= m] at
+       [lvl_a], [x <= m] at [lvl_b]. Every invariant holds unchanged: each push is the
+       first trail entry of its own level ([check_decision_landed]), each opens exactly
+       one level, [bridges] pairs the decision entries with the decision literals one to
+       one, and [levelled_nogood] still reads one literal per level. NOTHING in the
+       nogood machinery had to change, which is the whole reason for stacking rather
+       than pushing both bounds at one level.
+
+     - When that branch fails, its nogood [ng] is WEAKENED into
+
+           C1  =  (ng, minus its literals at lvl_a and lvl_b)  \/  x <= m-1  \/  x >= m+1
+
+       and emitted at the node's own level [p]. [ng]'s literal at [lvl_a] is exactly
+       [x <= m-1] and its literal at [lvl_b] is exactly [x >= m+1] -- the negations of
+       the two decisions -- so C1 is [ng] with those two RE-LEVELLED onto [p], plus
+       whichever of them [ng] did not name. **C1 is therefore a SUPERSET of [ng] as a
+       set of literals, and a superset of a RUP clause is RUP**: negating it asserts
+       everything negating [ng] asserts, so the same unit propagation reaches the same
+       contradiction. That is the only proof obligation the weakening has, and it is
+       discharged by the shape rather than by anything about this search.
+
+     - C1 is globally valid, and under the decisions in force at this node it says
+       exactly [x <> m]. So the [x <> m] "branch" is not a branch under an assumption at
+       all: it is THE SAME NODE with one more DERIVED fact. The hole is punched at level
+       [p], with C1 as its justification and the active decisions as its reason, and
+       [dfs] is RE-ENTERED on the unchanged decision stack. M5-T1's branch-and-bound
+       re-entry is the same move and the same argument: no level is reopened, no
+       decision is re-taken, the tree is still traversed once.
+
+   WHAT THE RESOLVENT IS. There is none, and that is the answer rather than a gap. The
+   node's nogood is whatever the re-entry returns, UNRESOLVED and unmodified. It is
+   valid under the outer decisions because that is what a nogood is; it names no literal
+   of [lvl_a] or [lvl_b] because those levels were closed before the re-entry began and
+   its decision stack is the outer one; and so the backjump test [mentions_level] the
+   frame above applies to it is evaluated over exactly the assumption set it is valid
+   under. The disjunctive sibling is discharged by DERIVATION, not by RESOLUTION, and
+   that is why no change to [combine_nogoods] was needed.
+
+   WHAT THE RE-ENTRY'S PROOF RESTS ON. C1 must be LIVE for as long as the re-entry runs:
+   the hole's own trace line is C1 weakened by the decisions' facts, every later line
+   that reads the hole cites the hole's reason (D-0075), and the re-entry's nogood is
+   RUP along that chain. C1 is filed at [p], so the frame that owns [p] wipes it on the
+   way out -- after the re-entry has returned. At [p = 0] nothing wipes, so this function
+   records the id and [retire_assign_clauses] deletes it at the end of the search. Those
+   two sentences are the whole of C1's lifetime.
+
+   WHY THE HOLE'S REASON IS EVERY ACTIVE DECISION. The line [Trace] writes for the hole
+   entry is [claim \/ negated facts] -- here [x <= m-1 \/ x >= m+1 \/ ~d1 \/ ... ] --
+   which is C1 weakened by any decision C1 had already minimised away. A weaker line is
+   RUP against C1 and never unsound (D-0075's own trade). Stating NO facts would be the
+   D-0075 defect exactly: a bare [x <> m] is false at any node where the assumption that
+   refuted [x = m] does not hold. This is also the one place in this module where a
+   trace line mentions a decision, and I-X10 gains its first stated exception -- see
+   D-0077. *)
+and branch_assign engine store ctx trace stats cfg order decisions (a : assign) : node =
+  let v = a.a_var in
+  let m = a.a_value in
+  let d = Store.get store v in
+  if not (Domain.mem d m && Domain.lo d < m && m < Domain.hi d) then
+    invalid_arg
+      (Printf.sprintf
+         "Search.branch_assign: %s = %d is not a strictly interior member of %s -- a \
+          boundary assignment is an ordinary split and must be issued as one"
+         (Store.name store v) m (Domain.to_string d));
+  let name = Store.name store v in
+  (* The assumption's two literals, and its negation's two. [Lit.le x (m-1)] is
+     [~(x >= m)] and [Lit.ge x (m+1)] is [~(x <= m)] by construction of [Lit]. *)
+  let dec_ge = Lit.ge name m and dec_le = Lit.le name m in
+  let p = Store.level store in
+  stats.decisions <- stats.decisions + 2;
+  stats.assigns <- stats.assigns + 1;
+  let depth = List.length decisions + 2 in
+  if depth > stats.max_depth then stats.max_depth <- depth;
+  let push what outcome lvl =
+    (match (outcome : Store.outcome) with
+    | Store.Changed -> ()
+    | Store.Unchanged | Store.Conflict _ ->
+        invalid_arg
+          (Printf.sprintf "Search.branch_assign: the %s push of %s = %d did not narrow"
+             what (Store.name store v) m));
+    check_decision_landed store lvl outcome
+  in
+  Store.new_level store;
+  let lvl_a = Store.level store in
+  Writer.set_level ctx.Justify.writer lvl_a;
+  push "lower"
+    (Store.set_lo store v m
+       (Reason.because ~concludes:None Reason.none (Explanation.decision dec_ge)))
+    lvl_a;
+  Store.new_level store;
+  let lvl_b = Store.level store in
+  Writer.set_level ctx.Justify.writer lvl_b;
+  (* One child dispatched, for two decisions taken. [stats_expected_nodes] carries the
+     correction; see [stats.assigns]. *)
+  stats.nodes <- stats.nodes + 1;
+  push "upper"
+    (Store.set_hi store v m
+       (Reason.because ~concludes:None Reason.none (Explanation.decision dec_le)))
+    lvl_b;
+  let r = dfs engine store ctx trace stats cfg order (dec_le :: dec_ge :: decisions) in
+  Store.backtrack store;
+  Store.backtrack store;
+  match r with
+  | NSat asn ->
+      Justify.wipe_level ctx lvl_a;
+      NSat asn
+  | NFail (ng, cid) when not (mentions_level ng lvl_a || mentions_level ng lvl_b) ->
+      (* THE BACKJUMP THROUGH THE ASSIGNMENT. [ng] names neither assignment level, so it
+         refutes this node whatever the variable takes: no clause is written about the
+         assignment, no value is removed and the node does NOT re-enter.
+
+         [stats.skipped] is deliberately NOT bumped, and that is the identity rather than
+         an omission. [skipped] counts a SIBLING a backjump did not dispatch, and an
+         assignment has no sibling to dispatch -- it dispatches one child on both arms,
+         and the three nodes the equation expects and never sees are already subtracted
+         by [3 * assigns]. Counting a skip here as well would subtract them twice.
+         [assign_backjumps] is the counter for this arm, because it is worth measuring
+         and is not the same quantity. *)
+      stats.assign_backjumps <- stats.assign_backjumps + 1;
+      close_level ctx ~lvl:lvl_a ~nogood:cid;
+      NFail (ng, cid)
+  | NFail (ng, _cid) ->
+      let neg_ge = Lit.negate dec_ge and neg_le = Lit.negate dec_le in
+      (* THE WEAKENING'S ONE PRECONDITION, ASSERTED RATHER THAN ARGUED.
+         C1 is sound because it is a SUPERSET of [ng], and it is a superset only if the
+         literals dropped here are exactly the two the assignment put at [lvl_a] and
+         [lvl_b]. That holds because a nogood is, everywhere in this module, a set of
+         NEGATED DECISIONS tagged with the level each decision was taken at --
+         [levelled_nogood] builds it that way, and [minimise], the [kept] filter and
+         [combine_nogoods] only ever REMOVE from it. If some future nogood carried a
+         non-decision literal at a decision's level, dropping it would STRENGTHEN C1
+         instead of weakening it, the hole would be punched on a clause the node does not
+         entail, and on an UNSAT instance nothing would say so (D-0066). Hence a check
+         and not a comment. *)
+      Debug.check
+        "M7-T12: the child nogood's literals at the assignment's own levels are exactly \
+         the two negated assignment decisions" (fun () ->
+          List.for_all
+            (fun (l, lv) ->
+              if lv = lvl_a then Lit.equal l neg_ge
+              else if lv = lvl_b then Lit.equal l neg_le
+              else lv <= p)
+            ng);
+      let c1 =
+        let base = List.filter (fun (_, l) -> l <> lvl_a && l <> lvl_b) ng in
+        (* Deduplicated keeping the DEEPEST level, so [filed_at] is [p] whatever the
+           child handed over. Neither half can actually collide with [base] -- an
+           ancestor decision [x >= m] would have made [m] the domain's lower bound and
+           an ancestor [x <= m] its upper, and the interiority check above rules both
+           out -- but a clause whose filing level depended on that argument would be a
+           clause one refactor away from outliving its own wipe. *)
+        let add acc (lit, lv) =
+          match List.partition (fun (o, _) -> Lit.equal o lit) acc with
+          | [], _ -> acc @ [ (lit, lv) ]
+          | (_, lv') :: _, rest -> rest @ [ (lit, Stdlib.max lv lv') ]
+        in
+        let halves =
+          if cfg.break_assign_clause then [ (neg_ge, p) ]
+          else [ (neg_ge, p); (neg_le, p) ]
+        in
+        let joined = List.fold_left add [] (base @ halves) in
+        List.stable_sort (fun (_, i) (_, j) -> Stdlib.compare j i) joined
+      in
+      Debug.check "M7-T12: the assignment clause is filed at the node's own level"
+        (fun () -> filed_at c1 = p);
+      Writer.set_level ctx.Justify.writer p;
+      let cid1 = emit_nogood ctx c1 in
+      if p = 0 then stats.assign_clauses_rev <- cid1 :: stats.assign_clauses_rev;
+      wipe_after_nogood ctx ~lvl:lvl_a ~nogood:cid1;
+      (* The hole, as an ordinary logged pruning of the node it is punched at. *)
+      let decl = Learned.decl_of_encoding ctx.Justify.encoding in
+      let facts =
+        if cfg.break_assign_facts then Reason.none
+        else List.filter_map (fact_of_decision decl) decisions
+      in
+      if (not cfg.break_assign_facts) && List.length facts <> List.length decisions then
+        failwith
+          "Search.branch_assign: an active decision literal does not convert to a reason \
+           fact, so the hole's trace line would understate what it rests on (D-0075). \
+           Refusing to punch it.";
+      (match
+         Store.remove store v m
+           (Reason.because ~concludes:None facts (Explanation.clause (List.map fst c1)))
+       with
+      | Store.Changed -> ()
+      | Store.Unchanged | Store.Conflict _ ->
+          invalid_arg "Search.branch_assign: removing the assigned value did not narrow");
+      Debug.check
+        "M7-T12/I-X2: the assignment clause is live while its sibling is explored"
+        (fun () ->
+          let w = ctx.Justify.writer in
+          (not (Writer.auditing w)) || Writer.is_live w cid1);
+      (* THE RE-ENTRY. Same node, same decisions, same level -- one value fewer. *)
+      dfs engine store ctx trace stats cfg order decisions
+
 and check_decision_landed store lvl outcome =
   Debug.check "D-0018: a decision is the first trail entry of its own level" (fun () ->
       (match (outcome : Store.outcome) with
@@ -2699,6 +3061,17 @@ let search_core ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx) ?tr
    both sides of a backtrack (see [Trace]'s header). Retire them once, on every path,
    before the conclusion. Doing it here rather than inside [Trace] keeps the rule "an id
    you receive is an id you delete" with the caller that owns the proof's shape. *)
+(* M7-T12 / I-X2: the assignment clauses filed at level 0. Every other one dies with
+   the level of the node that took the decision; nothing wipes level 0, so these are
+   this function's, and it is the only owner they have. Recorded newest first and
+   deleted in one [del], like the trace's permanent lines below. *)
+let retire_assign_clauses ctx stats =
+  match stats.assign_clauses_rev with
+  | [] -> ()
+  | ids ->
+      Writer.delete_many ctx.Justify.writer (List.rev ids);
+      stats.assign_clauses_rev <- []
+
 let retire_trace ctx trace =
   match Trace.permanent_ids trace with
   | [] -> ()
@@ -2762,6 +3135,7 @@ let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
   | NSat assignment ->
       if not (check assignment) then raise (Unsound_solution assignment);
       retire_learned ctx stats;
+      retire_assign_clauses ctx stats;
       retire_trace ctx trace;
       (* I-X2, and the SAT path needs it for the same reason the NFail arm below does
          (M4-T4b found this; the arithmetic family is simply the first thing in the tree
@@ -2792,6 +3166,7 @@ let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
          intermediate steps behind -- they are at level 0, so no [w] retires them --
          so retire them explicitly here. Nothing references them again: the proof ends
          on the next line. *)
+      retire_assign_clauses ctx stats;
       retire_trace ctx trace;
       let leftovers =
         List.filter (fun id -> id <> cid) (Writer.live_ids ctx.Justify.writer)
@@ -2854,6 +3229,7 @@ let optimise ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
       ~config:{ config with bnb = Some b } ()
   in
   retire_learned ctx stats;
+  retire_assign_clauses ctx stats;
   retire_trace ctx trace;
   let sweep_all_but keep =
     match

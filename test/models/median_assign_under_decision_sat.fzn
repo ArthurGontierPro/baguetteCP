@@ -1,0 +1,42 @@
+% M7-T12 / D-0077: an ASSIGNMENT decision taken UNDER another one, over a SATISFIABLE
+% model. This is the lane that tests the assignment clause's TAIL, and the hole's.
+%
+% `median_assign_sat.fzn` takes its assignments at the root, where the clause a failed
+% branch is weakened into has no tail at all -- `x <= 1 \/ x >= 3` is globally valid on
+% its own, and so is the hole line that follows it. That is the easy half. Here the
+% second assignment sits inside the first, so its clause carries the outer assignment's
+% two literals and the hole's own trace line carries them in its tail. A version of this
+% row that punched the hole and stated only `u <> 1` would be D-0075's defect exactly --
+% a line that is not merely underived but FALSE, since u = 1 is fine for other x -- and
+% this is the shape that sees it. test_learn.ml's M7-T12 (c) is the same scene with that
+% tail deliberately emptied, and veripb refuses it.
+%
+% TWO THINGS HERE LOOK OVER-BUILT AND ARE NOT, and both are D-0075's lesson repeated.
+%
+% First, every exclusion is an `int_lin_ne`, which is VALUE consistent and therefore
+% prunes nothing until one variable is left. Root propagation sees none of it, so the
+% contradictions have to be found by branching -- which is what makes the medians
+% interior and the assignments reachable at all.
+%
+% Second, `int_lin_ne(...) != 1` is what makes the defect VISIBLE. Trace lines are
+% written lazily, only when a branch fails (`trace.ml`), so the hole's line is emitted --
+% and therefore checked -- only if the re-entry that follows the hole goes on to fail
+% deeper. Without the `!= 1` row the re-entry succeeds immediately, no trace is written,
+% and an empty tail is invisible. That was measured here, not predicted: the first
+% version of the break lane was GREEN against the three-row model.
+%
+% The shape. x is capped at 0..3 by the sum row; its lower median is 1 and is strictly
+% interior, so x = 1 is an ASSIGN. Under it u's lower median is 1, also interior, so that
+% is a second ASSIGN whose clause is filed at x's own level. Every branch under x = 1
+% fails, so x = 1 is removed and the node re-entered, and so on until x = 0, u = 0 and
+% v = 0 -- the only assignment whose sum, 0, none of the three rows excludes.
+%
+% Declared domains are five and three values wide.
+var 0..4: x :: output_var;
+var 0..2: u :: output_var;
+var 0..2: v :: output_var;
+constraint int_lin_le([1, 1, 1], [x, u, v], 3);
+constraint int_lin_ne([1, 1, 1], [x, u, v], 1);
+constraint int_lin_ne([1, 1, 1], [x, u, v], 2);
+constraint int_lin_ne([1, 1, 1], [x, u, v], 3);
+solve :: int_search([x, u, v], input_order, indomain_median, complete) satisfy;

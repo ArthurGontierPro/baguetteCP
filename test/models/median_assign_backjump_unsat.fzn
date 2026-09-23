@@ -1,0 +1,32 @@
+% M7-T12 / D-0077: conflicts BELOW an assignment decision, and the backjump through it.
+%
+% This is the lane that catches an unsound resolvent -- or, here, an unsound decision to
+% do no resolution at all. An assignment decision opens TWO levels and dispatches ONE
+% child. Whatever comes back must either refute the node outright (both levels skipped,
+% the sibling re-entry never taken) or be weakened into the assignment clause and the
+% node re-entered. Getting that wrong is not a wrong answer: it is a proof that cites a
+% constraint it has already wiped, or one that never reaches the empty clause.
+%
+% The shape. `x` is UNCONSTRAINED, so it is branched first by median -- lower median of
+% 0..4 is 2, strictly interior, so an assignment -- and nothing below it ever depends on
+% it. Underneath, p, q and r are 0..1 with the sum forced into {1, 2} and both values
+% excluded, so the subtree is unsatisfiable for reasons that mention only p, q and r.
+% Every exclusion is an `int_lin_ne`, which is VALUE consistent, so none of it is visible
+% to root propagation.
+%
+% The search therefore takes an assignment on x, refutes the subtree under it, weakens
+% that refutation onto x, removes the value, re-enters, and repeats until x is exhausted
+% -- and then reports UNSAT. `s VERIFIED UNSATISFIABLE` over that is the assertion: every
+% assignment clause on the page has to be RUP at the moment it is written, and every one
+% of them has to still be live when the re-entry that rests on it is checked.
+%
+% Declared domains are five and two values wide.
+var 0..4: x :: output_var;
+var 0..1: p :: output_var;
+var 0..1: q :: output_var;
+var 0..1: r :: output_var;
+constraint int_lin_le([1, 1, 1], [p, q, r], 2);
+constraint int_lin_le([-1, -1, -1], [p, q, r], -1);
+constraint int_lin_ne([1, 1, 1], [p, q, r], 1);
+constraint int_lin_ne([1, 1, 1], [p, q, r], 2);
+solve :: int_search([x, p, q, r], input_order, indomain_median, complete) satisfy;
