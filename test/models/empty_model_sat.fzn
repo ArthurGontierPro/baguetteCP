@@ -1,0 +1,12 @@
+% M7-T6 / D-0070, the second half. A model that declares no variables and posts no
+% constraints. The answer is trivially "satisfiable, with nothing to print", and the
+% proof used to say `conclusion SAT` with no `sol` line before it -- veripb 3.0.2
+% refuses the whole file with "No solution has been logged in the proof and no solution
+% has been given in the conclusion".
+%
+% It is a DIFFERENT bug from the level-0 nogood this row is named for, and it lives in
+% lib/proof/writer.ml's [conclusion]: the `sol` line was guarded on the literal list
+% being non-empty, which is a carry-over from the shape M1-T18 replaced. D-0068 measured
+% it as two of the corpus's three rejections (2013_javarouting, 2013_rubik -- both
+% 97-byte proofs).
+solve satisfy;
