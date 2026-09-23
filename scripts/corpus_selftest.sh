@@ -155,6 +155,21 @@ mkdir -p "$D/emptyfamily"
 expect_eq "data_candidates on a family with no data" 0 \
   "$(data_candidates "$D/emptyfamily" 4 | wc -l)"
 
+# THE MEASURED DEFECT, not the predicted one. Re-running wave 27's 50 FLATTEN-FAIL
+# showed all 19 "variable ... must be defined" rows were offered ZERO data files,
+# and 2021_perfect_square's data sits in a `data/` SUBDIRECTORY that the old glob
+# walked straight past. One level down must be found, and must still sort by size
+# with the siblings rather than after them.
+mkdir -p "$DD/data"
+printf '%00000000050d' 0 > "$DD/data/mid.dzn"   # 50 B -- between tiny and small
+expect_eq "data_candidates finds data/ one level down, sorted by size with the rest" \
+  "tiny.dzn mid.dzn small.dzn medium.json " \
+  "$(data_candidates "$DD" 4 | xargs -n1 basename | tr '\n' ' ')"
+# A directory is not a data file, and must not be offered as one.
+mkdir -p "$D/dirfamily/notdata.dzn"
+expect_eq "data_candidates ignores a directory named like a data file" 0 \
+  "$(data_candidates "$D/dirfamily" 4 | wc -l)"
+
 if [ "$fails" -eq 0 ]; then
   echo "corpus self-test: PASS"
   exit 0

@@ -45,7 +45,10 @@
 # Input-side -- these blame the HARNESS or the corpus, never the solver:
 #   FLATTEN-FAIL       minizinc exited non-zero
 #   FLATTEN-TIMEOUT    minizinc exceeded $FLATTEN_TIMEOUT
-#   NO-DATA            no .dzn/.json data file beside the model
+#   NO-DATA            no .dzn/.json data file under the model's family, and the
+#                      model needs parameters -- MiniZinc says "did you forget to
+#                      specify a data file?" and that sentence is about the HARNESS.
+#                      18 of wave 27's 50 FLATTEN-FAIL were this (M7-T15)
 #   INPUT-INVALID      the .fzn is missing, empty, truncated, NUL-bearing, or has
 #                      other than exactly one `solve` item. Detail says which.
 #
@@ -373,9 +376,29 @@ validate_fzn() {
 # Bounded by DATA_TRIES (default 4) because flattening is the expensive step: a
 # family with forty data files must not cost forty flattens to conclude that none
 # of them fit.
+#
+# **MEASURED CORRECTION, and it is the more important half.** The row that opened
+# this predicted the dozen `symbol error: variable \`n\' is undefined` rows were the
+# smallest `.dzn` being the WRONG data file. They were not. Re-running all 50
+# `FLATTEN-FAIL` through the candidate loop shows that **all 19 of them were offered
+# ZERO data files**: there is no `.dzn` or `.json` beside the model at all. Two
+# distinct things were hiding under one message, and only one is a pairing bug:
+#
+#   * **1 instance** (`2021_perfect_square`) keeps its data in a `data/`
+#     SUBDIRECTORY, which this function only ever globbed past. That is the real
+#     harness defect and `-maxdepth 2` below fixes it.
+#   * **18 instances** have no data file anywhere under the family. MiniZinc says so
+#     in as many words -- *"did you forget to specify a data file?"* -- and the
+#     harness was filing that sentence under `FLATTEN-FAIL`, i.e. against the model.
+#     It is not a model defect; it is the harness running a parametric model with no
+#     parameters. See `run_one`, which now buckets it `NO-DATA`.
+#
+# Sorted by size across both levels, because the preference is for the smallest
+# INSTANCE and not for a particular directory.
 data_candidates() {
   local dir="$1" limit="${2:-4}"
-  ls -S "$dir"/*.dzn "$dir"/*.json 2>/dev/null | tac | head -n "$limit"
+  find "$dir" -maxdepth 2 -type f \( -name '*.dzn' -o -name '*.json' \) \
+    -printf '%s\t%p\n' 2>/dev/null | sort -n -k1,1 | head -n "$limit" | cut -f2-
   return 0
 }
 
@@ -453,6 +476,22 @@ run_one() {
   done
 
   if [ "$ok" -ne 1 ]; then
+    # M7-T15, and this is the D-0069 case. No data file exists anywhere under the
+    # family, and MiniZinc's complaint is literally "did you forget to specify a
+    # data file?" -- it is telling us the HARNESS under-specified the run. Recording
+    # that against the model would put the instrument's gap in the subject's column,
+    # which is the whole thing this file was written to prevent. It is an input-side
+    # bucket. Gated on ndata == 0: if candidates existed and all were refused, the
+    # data WAS there and did not fit, which is a different and honest finding.
+    if [ "$ndata" -eq 0 ] \
+      && grep -qa 'did you forget to specify a data file' "$L.mzn.err"; then
+      printf 'data=<none>\nresult=no-data\n' >> "$L.inst"
+      emit "$id" "NO-DATA" - - \
+        "no .dzn/.json under $(dirname "$mzn") and the model needs parameters: \
+$(head -c 120 "$L.mzn.err" | tr '\t\n\r' '   ')"
+      rm -f "$W.fzn.part"
+      return
+    fi
     # Every candidate was refused, including the bare model. The detail reports the
     # FIRST candidate's message -- the smallest data file, i.e. what the previous
     # runs reported -- so the column stays comparable, with the count of candidates
