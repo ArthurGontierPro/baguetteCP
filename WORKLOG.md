@@ -362,7 +362,6 @@ worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 uni
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M7-T13 | `lib/core/**`, `test/unit/test_trace.ml`, `test/unit/test_learn.ml`, `test/models/PENDING`, new `test/models/` + `test/expected/` | agent-tpp | 2026-09-23 |
 | M7-T14 + wave-28 corpus run | `scripts/**` only; read-only elsewhere | agent-harness2 | 2026-09-23 |
 | M7-T15 | `mznlib/**`, `tools/**`, new `test/models/` + `test/expected/`; **`scripts/corpus_run.sh` data-pairing is agent-harness2's** | agent-flatten | 2026-09-23 |
 | M2-T16 | **everything except `bench/**`** — the 2.0 removal lands atomically | agent-drop | 2026-09-18 |
@@ -590,6 +589,7 @@ work. The owning session picks it up.
 | M2-L8 | agent-bench | 2026-09-18 | The learning benchmark. Third table in `bench/run_bench.sh` reporting learned / convertible / skipped / pb-tried / pb-learned / pb-fallback / fb% / pb-stronger **beside** `.opb` bytes, `.pbp` bytes and verify ms, per model and summed over the suite as counts only. Verdict widened from M1-T36's nodes-alone to all four tree counters. **`bench/run_bench.sh -c`** is the control the row demanded: three scenes, asserted in both directions, exit non-zero on a misclassification, watched fire against three broken classifiers. `-f`/`-F`/`BAGUETTE_PROOF_FORMAT` gone from `bench/` (D-0046). Suite: 86 clauses over 21 of 38 models, 13 convertible, 9 skips over 4 models, PB 86/36/50 = **58% fallback**. |
 | M2-T16 | agent-drop | 2026-09-18 | **Proof format 2.0 removed from the project entirely** (D-0046). `Writer` emits 3.0 and only 3.0; `V2_0`, `BAGUETTE_PROOF_FORMAT`, `default_format`, every `v3 t` branch, `Pol.to_string`, `Opb.write ?labels` and `Encoding.write_opb_for` are gone, and `Checker.find` / `scripts/checker.sh` resolve one checker. **Artefact bytes byte-identical across all 38 models** (`.opb`, `.pbp`, stdout), binary hashed on both sides and different. Unit checks 1986 → 1972, all 14 accounted for. History kept and marked: D-0023/24/25/30 and `PROOF-FORMAT.md` §2. |
 | M6-T6 | agent-bisect | 2026-09-21 | Bisected `width_sat_depth`'s regression: the 43 ms comment was true when written; the whole ~14x jump is one commit, `aacbc8d` (M2-L6 wired into `Search`), 18.6 ms parent -> 258.7 ms. `git bisect run`, 7 steps, 0 skipped. Recommend accepting as the cost of M2-L6's PB analysis, which M2-L13 already claws most of back. `bench/README.md` §3g, new `bench/width_sat_depth_bisect.sh`. |
+| M7-T13 | agent-tpp | 2026-09-23 | **The SECOND RUP defect, D-0075.** `element` is DOMAIN consistent and reads the index's HOLES; `Reason.t` states only BOUNDS, so a result push's trace line named the bounds and nothing else — and where every bound was still declared it named NOTHING and claimed, unconditionally, something the model does not entail. Fixed by citing the reason of the trail entry that PUNCHED the hole, both directions. Reproducer `test/models/element_index_hole_rup_sat.fzn` (6 vars, no global, domains 3 wide, SAT). **`2012_tpp` verifies**, checked on the node with both binaries hashed. Proof-only. |
 
 ## Handoff notes
 
@@ -2971,3 +2971,42 @@ would now look identical to an implementation.
 **For the next session.** The corpus counts in D-0069 are lower bounds (the id-collision
 amendment), so "43 of 49 instances" is a floor, not a measurement. The remaining
 `indomain_median` instances stay refused until M7-T12.
+
+## M7-T13 handoff, 2026-09-23 (agent-tpp)
+
+**D-0074's second RUP defect is found, reduced, fixed and the instance re-checked.** It is
+**not** D-0070's shape. `lib/core/prop/element.ml` is DOMAIN consistent (D-0059) and its rule 2
+reads `dom(idx)` **holes included**, while `Reason.t` holds only bound facts — so the trace
+line for a result push named the index's bounds and nothing else, and when every bound was
+still at its declared value it named **nothing** and came out as the bare `rup +1 z_ge_1 >= 1 ;`,
+which is not merely unprovable but false. `bound_facts`'s own comment discharged the gap by
+claiming the checker re-derives the hole "from the hole's own earlier trace line"; a hole's
+trace line has a **tail**, and `rup` cannot fire it unless that tail is falsified. Fixed by
+citing the reason of the trail entry that punched the hole — `trace.ml`'s `settle_facts`
+technique one step earlier — in **both** directions (a result pruning carries the index's
+holes, an index pruning carries the result's; only the first is reproduced).
+
+**Three things the next session should carry.**
+
+1. **The reproducer is deliberately over-built and the comment in the file says why.** Trace
+   lines are written only when a branch **fails**, so the defective line is checked only if
+   the branch that made the push goes on to fail, **deeper** than the push. Strip `q1/q2/q3`
+   or the `int_search` annotation and the model is satisfied at level 1 and the defect is
+   invisible. If you reduce a proof defect from the corpus, the failure and the decision
+   order are part of the reduction, not scaffolding around it.
+
+2. **The general shape, and it is now three for three** (M1-T44, D-0070, D-0075): *a
+   propagator whose consistency level is stronger than its reason language is a proof defect
+   waiting for an instance.* `element` is the tree's first `Domain` propagator. `alldiff` is
+   safe today only because it is `Bounds` and genuinely reads a window — an accident of its
+   consistency level, which **M4-T2's second stage would end**. Anything that makes a
+   propagator read a hole needs a reason that can say why the hole is there.
+
+3. **Do not quote a rate from the next corpus run.** `2012_tpp` was visible only because it is
+   satisfiable (D-0066 as amended). Every UNSAT instance of this defect was accepted silently
+   and some still may be.
+
+**Also corrected**: `lib/core/trace.ml:44` said the settle line was "the only kind here" that
+is not a single-row consequence. It now has a second member and the header says so, because a
+comment that was true when written and is false now is exactly what M1-T63 asked not to be
+allowed to drift.

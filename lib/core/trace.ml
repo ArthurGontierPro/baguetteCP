@@ -41,7 +41,10 @@
    - a bound the settle strengthened past a hole claims the recorded bound and cites
      the hole's facts as well as the propagator's, so the line is RUP against the
      hole's own line. That one line is therefore **not** a consequence of a single
-     model row, and it is the only kind here that is not. It is still decision-free and
+     model row. **M7-T13/D-0075 gave it a second member**: a pruning that READ a hole --
+     `element` is DOMAIN consistent, so its rule 2 reads `dom(idx)` holes included -- now
+     cites the hole-puncher's reason the same way, by the same argument and with the same
+     I-S4 obligation. It is still decision-free and
      still globally valid; what it needs from the database is a line this module wrote
      itself, earlier, for an earlier trail entry.
 
