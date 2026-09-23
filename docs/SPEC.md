@@ -253,25 +253,50 @@ with min-value branching, depth-first, restarts disabled.
 
 **Annotations** *(normative; the honouring requirement predates M7-T2, which brought the
 implementation into compliance with it)*. `int_search` and `bool_search` with the variable
-choices `input_order` and `first_fail` and the value choices `indomain_min` and
-`indomain_max`, and `seq_search` over those, MUST be honoured.
+choices `input_order`, `first_fail`, `smallest` and `largest`, and the value choices
+`indomain_min`, `indomain_max` and `indomain_split`, and `seq_search` over those, MUST be
+honoured.
 
 - `input_order` selects the first still-unfixed variable **in the order the annotation's
   array wrote it**, not declaration order.
+- `smallest` selects the unfixed variable with the smallest **current domain minimum**;
+  `largest` the one with the largest **current domain maximum**. Both read the live domain,
+  not the declared one.
 - `indomain_min` branches `x = lo` first; `indomain_max` branches `x = hi` first.
+- `indomain_split` bisects at the **range midpoint** — `x <= mid` first, then `x > mid` —
+  where `mid` is computed from the current bounds. It is defined on the range and not on the
+  value count, so on a domain with holes the midpoint may itself be a hole; that is correct
+  and is not a degenerate case.
 - `seq_search` consults its annotations in order and uses the first whose variables are not
-  all fixed.
+  all fixed. A phase whose array contains only fixed elements contributes no decision and is
+  skipped, which is this clause rather than an exception to it.
+
+**A constant in a search array is skipped, not refused** (M7-T7). Flattening produces them
+routinely, and a search over an array never branches on a fixed element, so skipping is what
+honouring the annotation means here. An array of only constants is a legal empty phase.
 
 **Variables no annotation mentions.** An annotation need not cover every variable. When every
 annotation's variables are fixed and a decision is still required, the default above is used.
 This is the one respect in which an annotated model's search is not the annotation.
 
-**Anything else MUST be refused**, with a diagnostic naming it — including `smallest`,
-`largest`, `anti_first_fail`, `indomain_split`, `indomain_median`, `indomain_random`,
-`float_search`, `set_search` and `priority_search`. It MUST NOT be silently ignored or
-replaced: **substituting a strategy solves a different problem and reports it as this one's
-answer.** Before M7-T2 an unrecognised annotation was silently dropped and the model searched
-by the default, which is exactly what this forbids.
+**Anything else MUST be refused**, with a diagnostic naming it — including
+`anti_first_fail`, `indomain_median`, `indomain_random`, `float_search`, `set_search` and
+`priority_search`. It MUST NOT be silently ignored or replaced: **substituting a strategy
+solves a different problem and reports it as this one's answer.** Before M7-T2 an
+unrecognised annotation was silently dropped and the model searched by the default, which is
+exactly what this forbids.
+
+`indomain_median` is refused for a structural reason and not merely because it is unbuilt,
+and its diagnostic says so. A decision here is a **single order literal** — `x <= k` on one
+side, `x >= k+1` on the other. `indomain_min` and `indomain_max` are exact under that only
+**by accident of sitting at the domain boundary**: `x <= lo` *is* `x = lo`, and `x != lo`
+collapses to the single literal `x >= lo+1`. For an interior value `m`, `x = m` needs two
+literals and its sibling `x != m` is a **disjunction** (`x <= m-1 OR x >= m+1`) — which is
+precisely what the one-trail-entry-per-level and single-resolution-literal invariants exist
+to exclude. Honouring it therefore requires a second decision shape and a change to the
+nogood-resolution contract (roadmap M7-T12), not a fifth value-choice constructor. **Refusing
+is the compliant answer**; a near-equivalent substitution would satisfy this section's letter
+and violate the sentence above it.
 
 **The `int_search` exploration argument (`complete`, `bbs`, `lds`) is ignored**, and that is
 sound rather than an omission: the search is complete, so ignoring an incompleteness
