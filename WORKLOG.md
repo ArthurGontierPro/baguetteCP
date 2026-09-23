@@ -2847,3 +2847,29 @@ that rejects nothing, so both polarities are asserted.
 **Before the next full run**, note it needs about 14 GB of `log/` per 436 instances, and
 that `report` will refuse to total a run with no `DONE-` line. Re-running is cheap:
 re-invoke with the same arguments and only the missing rows are computed.
+
+## Node trap: `eval "$(opam env)"` silently no-ops over non-interactive ssh
+
+**2026-09-23, found by agent-harness while launching the wave-28 corpus run.** On
+`fataepyc-07`, `ssh host 'eval "$(opam env)"; dune build …'` does **nothing** — `opam` is not
+on the default non-interactive `PATH`, so the `eval` expands to empty, `dune` is never found,
+and **the previously built binary stays in place**. The build appears to scroll past and the
+run then measures the *old* solver.
+
+Use `PATH=$HOME/.local/bin:$PATH` before `opam env` in any non-interactive ssh command.
+
+**This is the third instance of one failure mode in this project**: a before/after comparison
+whose two sides unknowingly used the same binary (CLAUDE.md records the first two, both on
+2026-09-17). It was caught here only because the launch brief required hashing the binary on
+both sides. **Hash the binary, every time** — the failure is silent by construction, and in
+this case the wrong hash (`edd7d8ff…`, three days old) was the only evidence anything was
+wrong. The correct build hashes `605ede271e0df93745b96b04acb8dc25`.
+
+Wave-28 corpus run: `/scratch/arthur/corpus-out-w28`, `PAR=64` (matched to the previous run so
+the `TIMEOUT-SOLVE` column stays load-comparable), 436 **distinct** instances. Read it with
+`scripts/corpus_run.sh --report /scratch/arthur/corpus-out-w28`.
+
+**Do not subtract this run's `REFUSED-MODEL` from D-0068's 248.** That run had 353 distinct
+ids over 436 rows; this one has 436 distinct instances, so 83 of these models were never
+measured before. They are new measurements, not deltas. The only like-for-like comparisons
+are the 103 re-run suspects (17 verified) and `2012_tpp`, a single named instance.
