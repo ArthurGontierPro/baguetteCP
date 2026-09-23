@@ -362,7 +362,6 @@ worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 uni
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M7-T9 | `lib/core/search.ml`, `lib/flatzinc/builder.ml`, **`lib/flatzinc/model.ml`**, **`compile.ml`'s `phases_of_search` match arms ONLY** (M7-T11 has merged and touched `reject_set_domain`/`bounds_of_domain`/`instances` in the same file — rebase onto `main` before you finish), `test/unit/test_flatzinc.ml`, new `test/models/` + `test/expected/` | agent-strategy | 2026-09-23 |
 | M7-T5 | `test/unit/**` EXCEPT the four files above; read-only over `lib/` | agent-vacuity | 2026-09-23 |
 | M2-T16 | **everything except `bench/**`** — the 2.0 removal lands atomically | agent-drop | 2026-09-18 |
 | M2-L8 | `bench/**` only; read-only over `lib/` and `test/` | agent-bench | 2026-09-18 |
@@ -589,6 +588,7 @@ work. The owning session picks it up.
 | M2-L8 | agent-bench | 2026-09-18 | The learning benchmark. Third table in `bench/run_bench.sh` reporting learned / convertible / skipped / pb-tried / pb-learned / pb-fallback / fb% / pb-stronger **beside** `.opb` bytes, `.pbp` bytes and verify ms, per model and summed over the suite as counts only. Verdict widened from M1-T36's nodes-alone to all four tree counters. **`bench/run_bench.sh -c`** is the control the row demanded: three scenes, asserted in both directions, exit non-zero on a misclassification, watched fire against three broken classifiers. `-f`/`-F`/`BAGUETTE_PROOF_FORMAT` gone from `bench/` (D-0046). Suite: 86 clauses over 21 of 38 models, 13 convertible, 9 skips over 4 models, PB 86/36/50 = **58% fallback**. |
 | M2-T16 | agent-drop | 2026-09-18 | **Proof format 2.0 removed from the project entirely** (D-0046). `Writer` emits 3.0 and only 3.0; `V2_0`, `BAGUETTE_PROOF_FORMAT`, `default_format`, every `v3 t` branch, `Pol.to_string`, `Opb.write ?labels` and `Encoding.write_opb_for` are gone, and `Checker.find` / `scripts/checker.sh` resolve one checker. **Artefact bytes byte-identical across all 38 models** (`.opb`, `.pbp`, stdout), binary hashed on both sides and different. Unit checks 1986 → 1972, all 14 accounted for. History kept and marked: D-0023/24/25/30 and `PROOF-FORMAT.md` §2. |
 | M6-T6 | agent-bisect | 2026-09-21 | Bisected `width_sat_depth`'s regression: the 43 ms comment was true when written; the whole ~14x jump is one commit, `aacbc8d` (M2-L6 wired into `Search`), 18.6 ms parent -> 258.7 ms. `git bisect run`, 7 steps, 0 skipped. Recommend accepting as the cost of M2-L6's PB analysis, which M2-L13 already claws most of back. `bench/README.md` §3g, new `bench/width_sat_depth_bisect.sh`. |
+| M7-T9 | agent-strategy | 2026-09-23 | **Three of the four search strategies the corpus asks for**: `smallest` and `largest` (variable selection on the current domain MINIMUM / MAXIMUM), `indomain_split` (bisect at the RANGE midpoint, low half first). **`indomain_median` is REFUSED, deliberately**, with a diagnostic that gives the structural reason and names M7-T12. Measured: `indomain_split`'s proof is **NOT** cheaper than `indomain_min`'s -- the roadmap's prediction is refuted. 95 models, 2902 unit checks, determinism clean |
 
 ## Handoff notes
 
@@ -2899,3 +2899,59 @@ One cross-session request was open above, on `lib/core/trace.ml`'s stale header 
 a caller as the WHOLE gate, records that M7-T11 first tried loading holes into the store and
 veripb rejected four refutations for it, and tells anyone who would give `Domain.of_list` a
 caller to read D-0072 first.
+
+
+## M7-T9 handoff
+
+**What landed.** `smallest`, `largest` and `indomain_split` in `lib/core/search.ml`, wired
+through `Model.var_choice` / `Model.val_choice` (new constructors), `Builder.search_of_annot`
+and the two match arms in `Compile.phases_of_search`. `docs/SPEC.md` 3.4 was updated by the
+orchestrator ahead of the code and the two agree; check it rather than this note if they ever
+diverge.
+
+**The readings taken, because both were ambiguous.** `smallest` = the unfixed variable with
+the smallest domain MINIMUM; `largest` = the largest domain MAXIMUM. Not one comparison run
+backwards: the projection moves too. That is the MiniZinc spec's literal wording and matches
+Gecode's `INT_VAR_MIN_MIN` / `INT_VAR_MAX_MAX`. `test/models/search_largest_sat.fzn` exists
+to discriminate it from the plausible alternative ("largest domain minimum"), which names a
+different variable there. `indomain_split` = the RANGE midpoint `lo + (hi - lo) / 2` -- NOT
+`(lo + hi) / 2`, which truncates the wrong way on a domain straddling zero -- and not the
+value median, which is `indomain_median`'s quantity and differs as soon as the domain has
+holes.
+
+**`indomain_median` is refused and that is the correct answer, not a shortfall.** A decision
+in this solver is a SINGLE order literal. `indomain_min` / `indomain_max` are exact under
+that only **by accident of sitting at the domain boundary**: `x <= lo` *is* `x = lo` and
+`x != lo` collapses to `x >= lo+1`. For an interior `m`, `x = m` needs two literals and its
+sibling `x != m` is a DISJUNCTION -- which `check_decision_landed` (one trail entry opens a
+level) and `combine_nogoods` (children resolve on exactly one literal) exist to exclude.
+There is also no stateless `val_select` that recovers it: the two-nested-splits construction
+drifts, because the child node's median is not the parent's. **M7-T12** is the row.
+Substituting a bisection would have been invisible -- every proof it emitted would still
+verify, and only the tree would be wrong.
+
+**The measurement the row asked for, and it REFUTES the prediction.** The roadmap expected
+`indomain_split` to be cheaper to justify because it branches on an order literal. That is
+the wrong quantity: `Search.branch` writes one order literal for every value choice, so the
+per-decision cost of all three is identical by construction and there was never a saving
+there. What changes is the TREE. Two models, both measured: on a flat refutation the two
+searches are isomorphic (271 derivation lines, 45 levels EACH at width 16, proofs differing
+by 105 bytes of literal spelling); on the shipped comparison, whose only solution sits at the
+top of `x`'s domain, `indomain_min` is **14846 bytes / 240 derivation lines** and
+`indomain_split` **15332 / 251** -- split is DEARER, because the bisection pays for internal
+nodes the spine does not have and explores a fruitless low half first.
+`test_split_vs_min_proof_size` in `test/unit/test_flatzinc.ml` asserts the DIRECTION with
+both numbers printed, and checks both proofs with veripb. A future session that flips it
+should say what moved rather than adjust the assertion.
+
+**Three lanes in `test/unit/test_compile.ml` were flipped from refusal to acceptance** and
+the file says at length why that is not a weakened test: the property moved to
+`test_flatzinc.ml`'s decision-sequence assertions, which are strictly stronger than "is not
+refused" (a strategy accepted and then IGNORED passes `expect_accepted`). Three refusal lanes
+were added in their place -- `anti_first_fail`, `indomain_random`, and `indomain_median` on
+its OWN diagnostic -- because with three more arms on the match, a fall-through to acceptance
+would now look identical to an implementation.
+
+**For the next session.** The corpus counts in D-0069 are lower bounds (the id-collision
+amendment), so "43 of 49 instances" is a floor, not a measurement. The remaining
+`indomain_median` instances stay refused until M7-T12.
