@@ -364,7 +364,6 @@ worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 uni
 |---|---|---|---|
 | M7-T13 | `lib/core/**`, `test/unit/test_trace.ml`, `test/unit/test_learn.ml`, `test/models/PENDING`, new `test/models/` + `test/expected/` | agent-tpp | 2026-09-23 |
 | M7-T14 + wave-28 corpus run | `scripts/**` only; read-only elsewhere | agent-harness2 | 2026-09-23 |
-| M7-T15 | `mznlib/**`, `tools/**`, new `test/models/` + `test/expected/`; **`scripts/corpus_run.sh` data-pairing is agent-harness2's** | agent-flatten | 2026-09-23 |
 | M2-T16 | **everything except `bench/**`** — the 2.0 removal lands atomically | agent-drop | 2026-09-18 |
 | M2-L8 | `bench/**` only; read-only over `lib/` and `test/` | agent-bench | 2026-09-18 |
 | M2-L6 | all of `lib/`, `test/unit/test_learn.ml`, `test/unit/test_analysis.ml`, `test/unit/dune`, new files under `test/models/` + `test/expected/` | agent-pb | 2026-09-18 |
@@ -509,6 +508,7 @@ work. The owning session picks it up.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M7-T15 | agent-flatten | 2026-09-23 | `FLATTEN-FAIL`: 22 of the 24 instances this row owns now flatten. 24 of the 50 were one thing -- a MiniZinc 1.x dialect -- not a missing global; `mznlib/compat_mzn1.mzn`, four model tests, `mznlib/test/check_mznlib.sh`, D-0075 |
 | M0-T1 | setup | 2026-09-14 | Project skeleton, docs, dune files, test harness, `.claude/` setup |
 | M0-T2 | orchestrator | 2026-09-14 | opam 2.5.2 + OCaml 5.1.1 switch `baguette`; bootstrap.sh rewritten to fetch the opam binary |
 | M0-T3 | all | 2026-09-14 | Everything compiles; 253 unit checks pass |
@@ -2971,3 +2971,58 @@ would now look identical to an implementation.
 **For the next session.** The corpus counts in D-0069 are lower bounds (the id-collision
 amendment), so "43 of 49 instances" is a floor, not a measurement. The remaining
 `indomain_median` instances stay refused until M7-T12.
+
+
+## M7-T15 handoff, 2026-09-23 (agent-flatten)
+
+**Branch `wave29-flatten`, pushed, not merged.** Four commits: the shims, the tests,
+the include fix plus `mznlib/test/check_mznlib.sh`, and D-0075.
+
+**The row's premise was half wrong, and that is the main finding.** The 8
+"no function or predicate with this signature found" instances are **not** a
+missing global: every one is `int_search(array[int] of var int, string, string,
+string)`, MiniZinc **1.x's string-valued search annotation**. With `is_output`,
+**24 of the 50 are one dialect problem**, and only a single line of the fix
+decomposes anything.
+
+**Counts, measured on `fataepyc-07` against the committed library, not inferred:**
+
+| bucket | was | now |
+|---|---|---|
+| `is_output` | 16 fail | **14 flatten** |
+| string `int_search` | 8 fail | **8 flatten** |
+| `maximum of empty set` | 2 fail | 2 fail, **confirmed the models' own** |
+
+The 3 residual (`2009_p1f`, `2009_search_stress2`, plus the 2 yumi) were each re-run
+**under Gecode's library** with only `annotation is_output;` supplied and fail
+identically there. They are 2009 models the 2026 compiler rejects on the models' own
+terms. The corpus is not edited.
+
+**Read `mznlib/compat_mzn1.mzn` before touching it.** Two things in it are
+counter-intuitive and both are measured, not guessed: `is_output` **cannot** be
+aliased onto `add_to_output` (both spellings tried, one inert, one rejected), so
+output is a superset of what the model asked for -- the safe direction, pinned by
+`test/models/is_output_shim_sat.fzn`; and the `include "global_cardinality.mzn"`
+line is **load-bearing**, because `redefinitions.mzn` reaches every model and a body
+that cannot type-check there is a type error reported against the library. Omitting
+it cost **twelve unrelated instances** and the confirmation run read `ok=12` instead
+of `ok=22`.
+
+**The trap for whoever edits `mznlib/` next.** Nothing in `make check` can see a
+`mznlib` defect -- the whole of `test/` consumes FlatZinc, and `mznlib` lives on the
+other side of the boundary. Run `MZN=<minizinc> mznlib/test/check_mznlib.sh` on a
+machine that has a flattener, and **re-flatten instances TOGETHER, not bucket by
+bucket**: every per-bucket run of mine was green while the library was broken for
+twelve other instances, because each bucket's models happened to include
+`globals.mzn`.
+
+**What the next session should pick up.** A `global_cardinality` propagator is now
+the honest answer to the one thing this row decomposed -- the bridge exists only
+because there is no propagator for the call to be kept whole for (D-0067's rule,
+applied rather than waived). And the ~20 `symbol error: variable ... must be
+defined` instances are still agent-harness2's data-pairing row, untouched here.
+
+**Out of scope but wrong**: `scripts/check_test_widths.py` fails on `main` today --
+four hits in `lib/proof/encoding.ml` at lines 1024 and 1026 (`~lo:v.lo ~hi:v.hi`),
+identical before and after this branch. Either the lines want a `(* width-ok: *)`
+marker or the checker wants to stop matching a field access.
