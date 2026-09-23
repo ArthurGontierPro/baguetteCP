@@ -5739,3 +5739,108 @@ search and propagation strength. No row is open for it yet and none should be op
 wave-28 run says which instances time out and how close they get.
 
 Follows D-0068, D-0069 (as amended), D-0070. Opens M7-T13 and M7-T14.
+
+## D-0075  The SECOND RUP defect: a propagator that reads a HOLE and states only BOUNDS
+
+**Status**: **ACCEPTED and FIXED** (M7-T13, 2026-09-23, agent-tpp). Closes the row D-0074
+opened. It is **not** D-0070's shape, and saying which it is not is half the record.
+
+### The defect, in one paragraph
+
+`array_int_element` is **DOMAIN** consistent, so its rule 2 — `dom(c) := { as[p] : p in
+dom(idx) }` — reads the index's **live domain, holes included**. Its *reason* could not:
+`Reason.t` holds bound facts and nothing else, and `element.ml`'s `bound_facts` said so in
+its own comment — "the index's HOLES are not here and cannot be" — discharging the gap with
+the claim that the checker "re-derives the hole itself, from this constraint's own rows or
+**from the hole's own earlier trace line**". **That second half is false as stated.** A
+hole's trace line is a clause with its own TAIL, the facts the propagator that punched the
+hole read. `rup` is unit propagation, and a line only fires once its tail is falsified — and
+negating a line that never mentions those facts does not falsify them. So the result push's
+`rup` is not derivable, and the checker says so several inferences downstream of where the
+wrong thing was written, exactly as in D-0070.
+
+### The reproducer, which is the deliverable D-0074 asked for first
+
+`test/models/element_index_hole_rup_sat.fzn`: **six variables, six constraints, no global,
+every declared domain three values wide**, reduced from `2012_tpp`'s 188 KB / 38.5 MB. The
+model is satisfiable and the answer is right. `y >= 2` fixes `y` at 2, `int_ne(idx,y)` punches
+the **interior** hole `idx <> 2`, and `element` reads `dom(idx) = {1,3}` over `a = [1,0,2]`
+and pushes `z >= 1`. Both of the index's bounds and both of the result's were **still at their
+declared values**, so `Reason.lit_of_fact` dropped every one of them and the line came out as
+
+```
+rup +1 z_ge_1 >= 1 ;
+```
+
+— a bare unit, with no tail at all, which is not merely unprovable but **false**: `idx = 2`
+gives `z = a[2] = 0`. That is the strongest form the defect takes and the reason this
+reduction is worth more than the 38.5 MB it came from.
+
+Two things about the model look over-built and are not. **q1/q2/q3** are the failure: trace
+lines are written only when a branch fails (`trace.ml`, "lazy, not eager"), so the defective
+line is emitted — and therefore checked — only if the branch that made the push goes on to
+fail, and it must fail **deeper** than the push so the push is on the trail the failure walks.
+Delete them and the model is satisfied at level 1, no trace is written, and the defect is
+invisible. **The search annotation** is load-bearing too: `input_order`/`indomain_max` is what
+makes `y >= 2` the first decision, and only a decision that leaves an interior gap produces
+the hole — a bound-value decision cannot.
+
+### The fix
+
+The facts travel. For each hole the pruning read, `element.ml` now cites the **reason of the
+trail entry that punched the hole** (`Store.remover` → `entry.reason`), which is bound facts
+and does fit on a clause tail. The line becomes `rup +1 z_ge_1 +1 ~y_ge_2 >= 1 ;`, RUP against
+`int_ne`'s own earlier line. This is `trace.ml`'s `settle_facts` technique applied **one step
+earlier**: there the line for a bound that *settled over* a hole cites the hole's facts, here
+the line for a pruning that *read* a hole cites them.
+
+Both directions are fixed, because both filtering rules read a domain and not a window: a
+**result** pruning carries the INDEX's holes (rule 2 reads `dom(idx)`), an **index** pruning
+carries the RESULT's (rule 1 reads `dom(c)`). Only the first is reproduced; the second is the
+same mechanism and was fixed with it rather than left for a second rejection to find.
+
+The collection is over the whole current window rather than over the holes the pruning
+provably leaned on. **An over-stated reason is a weaker line, never an unsound one** — the
+same trade `bound_facts` already makes for reading both views' bounds unconditionally.
+
+A price this pays knowingly: such a line is **no longer a consequence of a single model row**,
+so I-X10's enumeration gains a second member of the kind `trace.ml`'s header already names
+("that one line is therefore **not** a consequence of a single model row, and it is the only
+kind here that is not" — it is now not the only kind). The line is still decision-free in
+I-X10's sense and still globally valid; what it needs from the database is a line `trace.ml`
+wrote itself, earlier, for an earlier trail entry.
+
+### It is a wrong ARTEFACT, never a wrong ANSWER
+
+Same argument D-0070 makes, and it holds for the same reason: nothing here feeds back into the
+search. `bound_facts` and the new hole facts are consumed by `Trace` to write lines and by
+conflict analysis to build a nogood; the *pruning itself* is made by rule 1 and rule 2 reading
+the live domains, which were and are correct — `dom(idx) = {1,3}` really does force `z >= 1`.
+Measured, not argued: on the reproducer and on `2012_tpp` the **answer is byte-identical**
+before and after (`2012_tpp`'s solution file is 27059 bytes either way, `obj = 190`), and only
+the proof differs. The defect could never have produced a wrong answer, and — the other half —
+it could never have been *caught* by one.
+
+### `2012_tpp` verifies, and that was checked rather than inferred
+
+Both sides built on the node, **both binaries hashed**: at `2748fe2` (`2cf89014…`) veripb 3.0.2
+still refuses at `.pbp:21217`, the same line D-0074 reported; with this patch (`44985cac…`) the
+same instance gives **`s VERIFIED BOUNDS 190 <= obj <= 190`**. The proof grew by 10 KB on 38.5 MB.
+
+### What this does NOT license anyone to conclude
+
+`2012_tpp` was visible because it is **satisfiable**. Per D-0066 as amended a `rup` line is
+checkable only where it is load-bearing for a later line over a database that is not already
+contradictory, so **every UNSAT instance of this same defect has been accepted silently**, here
+and in the corpus. One rejection in 34 proofs was a lower bound before this fix and the next
+run's number will be a lower bound too. **Do not quote a rate.**
+
+And the general lesson, which is the third time this project has paid for it (M1-T44, D-0070,
+this): **a propagator whose consistency level is stronger than its reason language is a proof
+defect waiting for an instance.** `element` is the first `Domain`-consistent propagator in the
+tree (D-0059), and it read holes from the day it shipped while `Reason.t` could only say
+bounds. The next `Domain` propagator inherits the same gap. `alldiff` does not, today, only
+because it is `Bounds` and genuinely reads a window; **that is an accident of its consistency
+level and not a property of the code**, and M4-T2's second stage would end it.
+
+Follows D-0070, D-0074, D-0066 (as amended), D-0059. Closes M7-T13.

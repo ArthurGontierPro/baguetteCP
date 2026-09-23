@@ -161,6 +161,16 @@
    .opb plus earlier trace lines", the same support a settle line already leans on. It is
    not a second model constraint in I-X10's sense.
 
+   **M7-T13 / D-0075 amends the paragraph above.** "all seven element models plus a scene
+   built to defeat it ... verify" was true of those scenes and false in general: the scene
+   that defeats it needs the hole's own trace line to carry a TAIL (a hole punched under a
+   decision, not at level 0) AND the pruning that reads the hole to fail deeper, so that a
+   line is written for it at all. `2012_tpp` is that scene and
+   test/models/element_index_hole_rup_sat.fzn is it reduced. The repair is on the REASON
+   side ([index_hole_facts]/[result_hole_facts]), so the cost is that such a line is no
+   longer a single-row consequence -- I-X10 gains a second member of the kind
+   lib/core/trace.ml's header already names for a settle.
+
    The index side is not measured the same way and cannot easily be: [has_direct] is true
    for the index, because the derivations genuinely cite its direct ids, so
    [derive_ahead] writes a [pol] ahead of every index line whether or not one is needed.
@@ -588,10 +598,13 @@ let hole_expl t store ~live ~v =
    read both -- and an over-stated fact is a weaker trace line, never an unsound one,
    where an under-stated one is I-P5. [Reason.lit_of_fact] drops whichever are still at
    their declared value. The index's HOLES are not here and cannot be -- [Reason.t] has no
-   fact for one -- and that is the gap I-X10 has to be discharged around: the checker
-   re-derives the hole itself, from this constraint's own rows or from the hole's own
-   earlier trace line, rather than being told about it on this line's tail. See the I-X10
-   section of the module header, where it is measured. *)
+   fact for one. **The discharge that used to be written here was WRONG and D-0075 is the
+   record of it** -- it said the checker re-derives the hole from this constraint's own
+   rows or "from the hole's own earlier trace line", and the second half does not hold: a
+   hole's trace line has a TAIL, and `rup` cannot fire it unless that tail is falsified.
+   What closes the gap is [index_hole_facts]/[result_hole_facts] below, which put the
+   PUNCHER's reason on this line's tail. Read them before the I-X10 section of the module
+   header, whose measurement did not reach this case. *)
 let bound_facts t store =
   let d = Store.get store t.ibase in
   let idx =
@@ -888,8 +901,7 @@ let filter_result t store =
   let b = List.fold_left Stdlib.max (List.hd vals) vals in
   let facts = add_facts (bound_facts t store) (index_hole_facts t store) in
   let justified ~concludes expl =
-    Reason.because ~concludes facts
-      (Explanation.deferred (fun () -> expl))
+    Reason.because ~concludes facts (Explanation.deferred (fun () -> expl))
   in
   (if a > View.lo store t.res then
      let h = View.hi store t.res in
