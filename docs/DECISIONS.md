@@ -5060,6 +5060,68 @@ happens to remain parseable is a real possibility. They are a lower-priority re-
 here so it is not forgotten.
 
 Follows D-0068. Opens M7-T9 and M7-T10.
+
+### AMENDED 2026-09-23, same day, by M7-T10 (agent-harness). The mechanism above is WRONG, and the correction is bigger than the original finding.
+
+**I diagnosed a torn write and named the cause as non-atomic capture. It is not.** The cause
+is an **instance-ID collision**. The node harness keyed each instance on `<year>_<family>`,
+but a family directory holds many `.mzn` files — `2010/bacp/` holds **fifteen** — so up to
+fifteen concurrent jobs flattened to the *same* `log/<id>.fzn`, read each other's
+half-written bytes, and `rm -f`'d it from under one another. The torn `lete)` fragment I
+found was a real symptom of a different disease.
+
+**The fix I prescribed would have made it worse.** Temp-plus-rename alone lets one job win
+*cleanly* — and the other fourteen then silently measure the wrong model, with no torn file
+left behind to notice. I would have converted a visible corruption into an invisible one and
+recorded that as a fix. The harness needs unique ids **and** atomic rename; either alone is a
+trap.
+
+**The scope was 22 rows in my count. It is 101.** Every row of the 18 colliding ids is void,
+and **D-0068's "436 instances" was really 353 distinct ids**. So these numbers in D-0068 and
+in the table above are wrong and are superseded:
+
+| claim | published | actual |
+|---|---|---|
+| instances in the corpus run | 436 | **353 distinct ids** |
+| rows that are void | 13 | **101** |
+| `OK-PROOF-VERIFIED` | 8 | **17** (measured over the 103 re-run) |
+| the cause | non-atomic capture | **id collision** |
+
+**What the re-run actually found**, with unique ids and atomic flatten (103 instances,
+complete, `fataepyc-07:/scratch/arthur/corpus-out-m7t10/results.tsv`):
+
+- `2010_bacp`: 15 `REFUSED-MODEL` → **8 `OK-PROOF-VERIFIED` + 7 `TIMEOUT-SOLVE`**
+- `2011_bacp`: 5 `TIMEOUT` → 1 verified + 4 timeouts
+- `2013_javarouting`'s *"no such file"* (5) was a sibling job's cleanup `rm`; they are
+  genuine **`REFUSED-LIMIT`** — set-literal domains (M6-T2)
+- `2013_rubik`'s *"no solve item"* (4) was the shared file truncated mid-write; they are
+  genuine **`REFUSED-MODEL`** — a constant in a `bool_search` array (M7-T7)
+- a 1-row `Fatal error: exception End_of_file` nobody had counted at all
+- `PROOF-REJECTED` unchanged in these families at 2, both the degenerate 97-byte case
+
+**`REFUSED-MODEL` 248 and M7-T7's headline 143 are therefore LOWER BOUNDS** until the void
+rows are re-run. M7-T7 is still almost certainly the highest-value row; the number attached
+to it is not yet a measurement.
+
+### What this says about the rule D-0069 proposed
+
+The rule was right and I applied it to myself too late. I wrote that *"a measurement's own
+failure modes look exactly like findings about the subject"* — and then diagnosed the
+measurement's failure mode from the single artefact it left lying around, without asking how
+that artefact came to exist. **One torn file is evidence of tearing; it is not evidence of
+what tore it.** The distinguishing question — *can two jobs address the same path?* — costs
+one `ls` of a family directory, and I did not ask it.
+
+So the rule gains a clause: a harness fix must be validated against the mechanism, not
+against the symptom. `scripts/corpus_run.sh` now carries `--self-test`, which needs no
+corpus, node, solver or checker — and which caught **two live bugs in its own validator while
+that validator was being written**, including a first version that *accepted* the real
+`2010_bacp` shape. That is the argument for it existing, and it is the same argument as this
+amendment.
+
+**Not corrected, deliberately**: D-0068's own text stands as written, with this record as its
+correction, per the append-only discipline. The 8 verified proofs it reports were real; there
+were simply 9 more it could not see.
 ---
 
 ## D-0070  The level-0 nogood RUP defect: a decision that settles past a hole, and a filter that cannot see it
