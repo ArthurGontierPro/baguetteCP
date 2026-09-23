@@ -4926,3 +4926,82 @@ ladder it may have.
 **names them and exits non-zero** rather than the library emitting a wrong decomposition.
 `cumulative`, `diffn`, `table`, `regular`, `circuit`, `global_cardinality` have no baguette
 propagator, so std's decomposition stands — that is where the remaining inflation lives.
+
+## D-0068  The first full corpus run: 8 proofs verified, and the blocker is not what anyone predicted
+
+**Status**: **MEASUREMENT**, 2026-09-22/23. 436 MiniZinc Challenge instances (every `.mzn`,
+smallest data file each), flattened with M7-T3's library, solved by `main` at `b6fa825`, **every
+solved instance's proof checked by veripb 3.0.2**. 64-way parallel, 32 GB per job.
+
+### The result
+
+| outcome | count |
+|---|---|
+| `REFUSED-MODEL` (front end, exit 2) | **248** |
+| `TIMEOUT-SOLVE` (300 s) | 87 |
+| `FLATTEN-FAIL` | 51 |
+| `REFUSED-LIMIT` (exit 3) | 30 |
+| `SOLVE-ERR-134` (SIGABRT) | 9 |
+| **`OK-PROOF-VERIFIED`** | **8** |
+| **`PROOF-REJECTED`** | **3** |
+
+**Eight real MiniZinc Challenge instances solved with a proof veripb accepts**, including
+`2013_nonogram` (62 MB proof), `2015_roster` (42 MB) and `2023_roster` (28 MB). That is the
+first time this solver has produced a checked proof for input it did not author.
+
+### The blocker is a one-line over-strictness, and it is 10× the predicted one
+
+Classifying all 278 refusals by cause:
+
+| cause | instances |
+|---|---|
+| **"the search array must contain variables, not constants"** | **143** |
+| unsupported value-choice strategy | 30 |
+| parse: "expected a type but found the identifier" | 16 |
+| **set-literal domain** | **14** |
+
+**D-0067 predicted set-literal domains were the biggest wall. At full corpus scale they are
+14, and the dominant cause is 143** — an over-strict check at `lib/flatzinc/builder.ml:614`
+that refuses the whole model if the search array contains **any constant**.
+
+**A constant in a search array is not a problem**: it is a variable with nothing left to
+decide, and flattening produces them routinely. Skipping it *honours* the annotation exactly,
+as SPEC §3.4 requires; refusing does not. That is **M7-T7**, and it is worth more than every
+other refusal cause combined.
+
+The lesson is the one this project keeps relearning: **a sample of 78 ranked the causes wrongly**.
+D-0067's ranking came from the instances that flattened under an older build; the full corpus
+inverted it.
+
+### `PROOF-REJECTED` is 3, but only 1 is the real defect
+
+- `2013_javarouting` and `2013_rubik` — **97-byte proofs**. These are the *degenerate* case
+  already folded into M7-T6: a model with nothing in it emits a proof with no logged solution.
+- **`2012_tpp` — a 38 MB proof, genuinely rejected.** That is the substantive RUP defect.
+
+So the earlier provisional reading — "3 rejected against 2 verified, M7-T6 is not exotic" — was
+**too pessimistic**. The real rate is 1 substantive rejection in 11 proofs. **It is still a
+lower bound** (D-0066: the same defect on an UNSAT instance is accepted silently), but it is not
+1-in-4.
+
+### Removing the width refusal turned a refusal into a crash
+
+All 9 `SOLVE-ERR-134` are **`Fatal error: allocation failure during minor GC`** — OOM against
+the 32 GB cap — on wide-domain models where **M7-T1's warning fired first and correctly**.
+
+D-0065 replaced a refusal-by-declared-width with a warning, on the grounds that declared width
+was the wrong proxy for the real cost. That was right, and this is its consequence: the models
+it now accepts can **exhaust memory and abort** rather than failing gracefully. The warning did
+its job; the failure mode did not.
+
+**That argues for what D-0065 did not provide: a graceful resource guard.** Not a refusal by
+declared width — that proxy is still wrong — but a real bound with a diagnostic, so an
+over-large encoding ends in a message rather than `Fatal error`. **M7-T8.**
+
+### Harness caveats, so these numbers are not over-read
+
+- **51 `FLATTEN-FAIL` are not all unsupported instances.** Many are 2008-era `int_search`
+  signatures MiniZinc 2.10.1 no longer accepts — a *corpus age* problem, not a solver one.
+- **87 timeouts are at 300 s**, an arbitrary budget, on the *smallest* data file of each family.
+  They say nothing about difficulty.
+- One data file per family; the corpus has 1604.
