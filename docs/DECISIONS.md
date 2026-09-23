@@ -5510,3 +5510,101 @@ holes, 199 + 199 rows — with a width justification in its header, the way
 Two of the four are **satisfiable**, per D-0053/D-0066: `red` and `rup` are both vacuous
 over a contradictory database, so a suite of UNSAT lanes alone would be evidence of
 nothing.
+
+## D-0073  The `rup` audit: none of the 26 lanes was vacuous, and D-0066's remedy was wrong
+
+**Status**: **ACCEPTED**, implemented by M7-T5 (2026-09-23, agent-vacuity).
+`test/unit/test_mutation.ml`, `test/unit/test_learn.ml`, `CLAUDE.md`. Amends **D-0066**.
+
+### The audit, by name
+
+D-0066 counted **26 lanes across 9 files** asserting a `rup` rejection and said how many
+were vacuous was unknown. The 26 is a grep of the string *"reverse unit propagation"*.
+Of the **27** occurrences that string now has in those nine files, **twelve are comments
+explaining the rule**, **seven are shared wording constants**, and **eight are inline
+assertion or diagnostic sites**. Resolved into distinct lanes — one lane being one test
+that asserts the checker rejects on the RUP judgement — that is **fifteen lanes**, four of
+which fan out over scene tables (`test_trace` 9 executed checks, `test_matrix` 13,
+`test_proof` 4). Every one was run and its verdict taken from the run, not from reading:
+
+| file | lane | verdict |
+|---|---|---|
+| `test_prop` | `arith D-0033: the FLOORING bound -7 div 2 <= -4 is refused` | **sound** — model SAT, rejection observed |
+| `test_prop` | `reif eq: the same nogood with the reifier's literal dropped` | **sound** |
+| `test_prop` | two further occurrences at `:4221`, `:4680` | comments, not lanes |
+| `test_pb` | `e: ...rejects on the JUDGEMENT, in the checker's whole sentence` (`break_pb_degree`, PHP 5→4) | **sound** |
+| `test_pb` | `c: ...and on the JUDGEMENT...` (`backjump_on_pb`) | **sound** |
+| `test_pb` | `rup_judgement` definition + three comment occurrences | constant / comments |
+| `test_trace` | blanked-trace judgement, the scene table (`:569`) — 5 executed | **sound** |
+| `test_trace` | blanked-trace judgement, the settle scenes (`:894`) — 2 executed | **sound** |
+| `test_trace` | `I-X10 ahead BREAK: the same line standalone is REFUSED` (`:1412`) — 2 executed | **sound** |
+| `test_matrix` | blanked-trace judgement, the instance table (`:1065`) — 13 executed | **sound** |
+| `test_learn` | `a2 BREAK: weakest-threshold minimisation` | **sound** |
+| `test_learn` | `b BREAK: derivation after the \`w\` retiring its level` | **sound** |
+| `test_learn` | `M7-T6 break: the rejection is the RUP judgement, at full wording` | **sound** |
+| `test_endtoend` | `M5 BREAK: ...refused on the JUDGEMENT, not on the grammar` | **sound** — model SAT |
+| `test_endtoend` | `M5 load-bearing: ...refused on the judgement` | **sound** — model SAT |
+| `test_proof` | `rejected_at`, the three view breaks — 4 executed | **sound** — model SAT, and it pins `file:line` as well as the judgement |
+| `test_justify` | `Defining BREAK: citing a bound the model does NOT imply (x >= 3)` | **sound** |
+| `test_random` | `:724` | **not a lane** — it classifies an observed rejection into a known-bug bucket, and every bucket is asserted EMPTY |
+
+**Counts: vacuous 0, sound 15, unreachable 0.** Nothing was rebuilt, because there was
+nothing to rebuild.
+
+### Why the premise was wrong, and it is worth stating
+
+D-0066 reasoned: *over a contradictory database everything is RUP, so a break lane
+asserting a `rup` rejection over an UNSAT model goes green whether the code is right or
+wrong.* **The second half does not follow from the first.** If the corrupted line is
+accepted, a lane asserting *rejection* goes **RED**, not green. Vacuity of this kind
+cannot hide in a rejection lane; it makes the lane fail loudly. Every one of the fifteen
+observes a real rejection today, each with an honest control that verifies.
+
+### What the audit did find, and it is larger
+
+**The exposure is on the ACCEPTANCE side, and satisfiability is not the cure.** M7-T5 put
+D-0066's own remedy — *"verify over a satisfiable model"*, which is the right rule for
+`red` (D-0053) — to the checker, by flipping one literal's polarity in **every** eligible
+`rup` line of two real proofs:
+
+| model | answer | eligible `rup` lines | flips ACCEPTED |
+|---|---|---|---|
+| `ne_eq_unsat` | UNSAT | 8 | **8** — total |
+| `chain_sat` | **SAT** | 15 | **3** |
+
+**A satisfiable model does not make a `rup` line load-bearing.** `chain_sat` is
+satisfiable, branches, and still has three lines whose claim the checker owes nothing to.
+Conversely twelve of its fifteen *are* load-bearing and refuse the flip on the RUP
+judgement. **Vacuity is a property of the LINE, not of the model's answer** — the line has
+to matter to a *later* line, which is `test_mutation.ml`'s own trap 3 stated one level up.
+A lane rebuilt over a SAT model on D-0066's advice alone would have been just as vacuous.
+
+The polarity flip is used rather than the dropped literal on purpose: dropping a literal
+can leave a claim that is genuinely stronger and genuinely implied, so its acceptance is
+ambiguous. A flip is a different claim, and accepting it is vacuity and nothing else.
+
+### What was built
+
+The census is **six checks in `test/unit/test_mutation.ml`**, run on every suite run, that
+re-measure the table above rather than quoting it — control, the total vacuity on the
+UNSAT model, the accepted flip on the SAT model, the refused flip on the SAT model, and
+the checker's full wording on that refusal. If the checker changes, the numbers change and
+the lane reddens instead of the record rotting.
+
+`test/unit/test_learn.ml`'s `rejection_wordings` was raised from *"is not implied by
+reverse unit propagation"* to the checker's whole sentence — its own comment already
+claimed full strength and the constant did not match it. Both break lanes still recognise
+their rejection.
+
+`CLAUDE.md`'s proof-discipline list gains the `rup` sentence beside the `red` one, stating
+the **measured** remedy (pin the line) rather than the assumed one (pick a SAT model).
+
+### No defect in `lib/` was uncovered
+
+This was the outcome the row most wanted and it did not arrive: the fifteen lanes were
+real, so none was hiding a live bug. The nearest thing is not new — D-0070's level-0
+nogood RUP defect, already open as M7-T6, and D-0066's own note that on an UNSAT instance
+the same defect is accepted silently. **This record makes that note quantitative**: on
+`ne_eq_unsat` it is not "some" lines, it is **all** of them.
+
+Amends D-0066. Closes M7-T5.
