@@ -609,6 +609,64 @@ let bound_facts t store =
           Reason.at_most ~name:rn ~decl:t.rdhi (View.hi store t.res);
         ]
 
+(* ------------------------------------------------------------------ hole facts
+
+   M7-T13 / D-0075. [bound_facts] above says the index's HOLES "are not here and cannot
+   be", and that the checker re-derives them "from this constraint's own rows or from the
+   hole's own earlier trace line". The second half of that sentence is FALSE as stated,
+   and `2012_tpp` is where it was caught. A hole's own trace line is a clause with its own
+   TAIL -- the facts the propagator that punched the hole read. [rup] is unit propagation,
+   so that line only fires once its tail is falsified, and the tail is not falsified by
+   negating a line that never mentions it. The reproducer is
+   `test/models/element_index_hole_rup_sat.fzn`, where the result push had NO tail at all
+   (every bound still at its declared value) and the line said, unconditionally, something
+   the model does not entail.
+
+   So the facts have to travel. [Reason.t] still has no fact for a hole -- and a hole fact
+   could not go on a clause tail anyway, since the negation of `x <> v` is the CONJUNCTION
+   `x >= v /\ x <= v` and a clause tail holds literals. What travels instead is the reason
+   of the trail entry that PUNCHED the hole, which is bound facts and does fit. That is
+   lib/core/trace.ml's [settle_facts] technique, applied one step earlier: there the line
+   for a settled bound cites the hole's facts, here the line for a pruning that READ a hole
+   cites them.
+
+   Which holes: rule 2 (the result's bounds) reads dom(idx), so a result pruning carries
+   the INDEX's holes; rule 1 reads dom(c), so an index pruning carries the RESULT's. Both
+   are collected over the whole current window rather than over the holes the pruning
+   provably leaned on -- an over-stated reason is a weaker line, never an unsound one, the
+   same trade [bound_facts] makes. [None] from [Store.remover] is a declared hole, which
+   `lib/` cannot produce (see [Store.remover]'s header and D-0072); citing nothing there
+   is what trace.ml does and leaves the line exactly as strong as it was. *)
+let add_facts acc fs =
+  List.fold_left (fun acc f -> if List.mem f acc then acc else acc @ [ f ]) acc fs
+
+let remover_facts store ~var v =
+  match Store.remover store ~before:(Store.trail_length store) ~var v with
+  | None -> []
+  | Some e -> e.Store.reason
+
+let holes_of d =
+  List.filter (fun v -> not (Domain.mem d v)) (range (Domain.lo d + 1) (Domain.hi d - 1))
+
+(* The facts behind the INDEX's interior holes: what a RESULT pruning read beyond bounds. *)
+let index_hole_facts t store =
+  let d = Store.get store t.ibase in
+  List.fold_left
+    (fun acc v -> add_facts acc (remover_facts store ~var:t.ibase v))
+    [] (holes_of d)
+
+(* The facts behind the RESULT's interior holes: what an INDEX pruning read beyond bounds.
+   Over the result's BASE domain, so no view value has to be translated back -- the facts
+   are the same either way and this needs no [View] inverse. *)
+let result_hole_facts t store =
+  match View.base_var t.res with
+  | None -> []
+  | Some rv ->
+      let d = Store.get store rv in
+      List.fold_left
+        (fun acc v -> add_facts acc (remover_facts store ~var:rv v))
+        [] (holes_of d)
+
 (* D-0043's conclusion for a value removal, on the INDEX's base variable: a removal at a
    bound settles and concludes the bound it settled to, an interior one concludes a
    two-literal clause, which is not a [Reason.fact] and is [None]. The same partition
@@ -811,7 +869,8 @@ let filter_index t store =
              has to cancel it. *)
           let expl, _ = pos_gone t store p in
           let j =
-            Reason.because ~concludes:(removal_conclusion t d bw) (bound_facts t store)
+            Reason.because ~concludes:(removal_conclusion t d bw)
+              (add_facts (bound_facts t store) (result_hole_facts t store))
               (Explanation.deferred (fun () -> expl))
           in
           match View.remove store t.pos p j with
@@ -827,8 +886,9 @@ let filter_result t store =
   let vals = List.map (fun p -> t.values.(p)) live in
   let a = List.fold_left Stdlib.min (List.hd vals) vals in
   let b = List.fold_left Stdlib.max (List.hd vals) vals in
+  let facts = add_facts (bound_facts t store) (index_hole_facts t store) in
   let justified ~concludes expl =
-    Reason.because ~concludes (bound_facts t store)
+    Reason.because ~concludes facts
       (Explanation.deferred (fun () -> expl))
   in
   (if a > View.lo store t.res then
