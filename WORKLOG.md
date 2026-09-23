@@ -373,7 +373,6 @@ needs it, that is a `## Cross-session requests` row, not an edit.
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M7-T7 | `lib/flatzinc/builder.ml`, `test/unit/test_flatzinc.ml`, new `test/models/` + `test/expected/` | agent-search | 2026-09-23 |
 | M7-T6 | `lib/core/**` (trace/learn/search nogood path), `test/unit/test_trace.ml`, `test/unit/test_learn.ml`, `test/models/PENDING` | agent-rup | 2026-09-23 |
 | M7-T8 | `lib/proof/encoding.ml`, `bin/main.ml`, `test/unit/test_proof.ml` | agent-guard | 2026-09-23 |
 
@@ -583,6 +582,7 @@ work. The owning session picks it up.
 | M2-L8 | agent-bench | 2026-09-18 | The learning benchmark. Third table in `bench/run_bench.sh` reporting learned / convertible / skipped / pb-tried / pb-learned / pb-fallback / fb% / pb-stronger **beside** `.opb` bytes, `.pbp` bytes and verify ms, per model and summed over the suite as counts only. Verdict widened from M1-T36's nodes-alone to all four tree counters. **`bench/run_bench.sh -c`** is the control the row demanded: three scenes, asserted in both directions, exit non-zero on a misclassification, watched fire against three broken classifiers. `-f`/`-F`/`BAGUETTE_PROOF_FORMAT` gone from `bench/` (D-0046). Suite: 86 clauses over 21 of 38 models, 13 convertible, 9 skips over 4 models, PB 86/36/50 = **58% fallback**. |
 | M2-T16 | agent-drop | 2026-09-18 | **Proof format 2.0 removed from the project entirely** (D-0046). `Writer` emits 3.0 and only 3.0; `V2_0`, `BAGUETTE_PROOF_FORMAT`, `default_format`, every `v3 t` branch, `Pol.to_string`, `Opb.write ?labels` and `Encoding.write_opb_for` are gone, and `Checker.find` / `scripts/checker.sh` resolve one checker. **Artefact bytes byte-identical across all 38 models** (`.opb`, `.pbp`, stdout), binary hashed on both sides and different. Unit checks 1986 → 1972, all 14 accounted for. History kept and marked: D-0023/24/25/30 and `PROOF-FORMAT.md` §2. |
 | M6-T6 | agent-bisect | 2026-09-21 | Bisected `width_sat_depth`'s regression: the 43 ms comment was true when written; the whole ~14x jump is one commit, `aacbc8d` (M2-L6 wired into `Search`), 18.6 ms parent -> 258.7 ms. `git bisect run`, 7 steps, 0 skipped. Recommend accepting as the cost of M2-L6's PB analysis, which M2-L13 already claws most of back. `bench/README.md` §3g, new `bench/width_sat_depth_bisect.sh`. |
+| M7-T7 | agent-search | 2026-09-23 | **Constants in a search array are skipped, not refused** — the D-0068 blocker, 143 of 278 corpus refusals. `List.map` + `Error.failf` in `builder.ml`'s `int_search`/`bool_search` arm becomes `List.filter_map`. An all-constant array is now an EMPTY but legal phase: `Search.sequence` skips a phase with no unfixed candidate, so it falls through to the next `seq_search` phase or to `spec_order`, which is exactly SPEC §3.4's "variables no annotation mentions" paragraph. Strategy checks deliberately NOT relaxed for an empty array. Tests: `test_search_constants` in `test_flatzinc.ml` (6 decision-level assertions + 2 rejections, all on `d_var`/`d_split`/`d_high_first`), and two models, `search_const_in_array_sat` (mixed) and `search_all_const_sat` (all-constant first phase of a `seq_search`), both proof-checked. Gate: 2817 unit checks 0 FAIL, 87 model tests 0 failed, determinism 88/88 byte-identical, fmt clean, width lint clean, peak RSS 74.7 MB. |
 
 ## Handoff notes
 
@@ -2716,3 +2716,21 @@ before merging.
 
 **Stale figures to re-measure, not quote**: M7-T3's 78-refusal breakdown predates M7-T1's merge,
 so its width refusals are already gone.
+
+**2026-09-23 — agent-search (M7-T7)**
+The refusal on a constant in a search array is gone: `lib/flatzinc/builder.ml` filters
+constants out of the index list instead of failing. Nothing downstream needed a change —
+`compile.ml`'s `phases_of_search` already builds a phase from whatever list it gets, and
+`Search.sequence` already skips a phase with no unfixed candidate, so an ALL-constant array
+is a legal empty phase that `seq_search` falls through. That is the right reading of SPEC
+§3.4: the annotation asks for a search over that array, and a search over that array never
+branches on a fixed element, so skipping honours it.
+Two things for whoever picks this up. (1) **I could not ship a literal corpus instance for
+obligation (d).** `/scratch/arthur/corpus-out/` is on `fataepyc-07` and does not exist in this
+checkout, and no `minizinc` binary is on this machine either, so `test/models/search_const_in_array_sat.fzn`
+is a HAND-SHRUNK reconstruction of the roster/scheduling shape at width 5 — the model header
+says so in full. If someone re-runs the corpus, replacing it with a real (shrunk) instance is
+worth doing and the assertions will not change. (2) Both new models are SAT on purpose, so the
+proof check is over a satisfiable model rather than a contradictory database (D-0053).
+`docs/ROADMAP.md`'s M7-T7 row is still marked TODO — it is a contention hotspot and not in my
+claimed file set, so the orchestrator should flip it on merge.
