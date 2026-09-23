@@ -1,36 +1,42 @@
 % M7-T12 / D-0077: an ASSIGNMENT decision taken UNDER another one, over a SATISFIABLE
-% model. This is the lane that tests the assignment clause's TAIL.
+% model. This is the lane that tests the assignment clause's TAIL, and the hole's.
 %
 % `median_assign_sat.fzn` takes its assignments at the root, where the clause a failed
 % branch is weakened into has no tail at all -- `x <= 1 \/ x >= 3` is globally valid on
-% its own. That is the easy half. Here the second assignment sits inside the first, so
-% its clause carries the outer assignment's two literals, and the hole's own trace line
-% carries them in its tail. A version of this row that punched the hole and stated only
-% `u <> 1` would be D-0075's defect exactly -- a line that is not merely underived but
-% FALSE, since u = 1 is perfectly fine for other values of x -- and this model sees it.
+% its own, and so is the hole line that follows it. That is the easy half. Here the
+% second assignment sits inside the first, so its clause carries the outer assignment's
+% two literals and the hole's own trace line carries them in its tail. A version of this
+% row that punched the hole and stated only `u <> 1` would be D-0075's defect exactly --
+% a line that is not merely underived but FALSE, since u = 1 is fine for other x -- and
+% this is the shape that sees it. test_learn.ml's M7-T12 (c) is the same scene with that
+% tail deliberately emptied, and veripb refuses it.
 %
-% The shape. Nothing is fixed by root propagation; every exclusion below is an
-% `int_lin_ne`, which is VALUE consistent and therefore prunes only once one variable is
-% left. So the contradictions have to be found by branching, which is the point.
+% TWO THINGS HERE LOOK OVER-BUILT AND ARE NOT, and both are D-0075's lesson repeated.
 %
-%   x over 0..3 (sum <= 3 caps it), lower median 1, strictly interior -> ASSIGN x = 1
-%   u over 0..2, lower median 1, strictly interior -> ASSIGN u = 1, at level 2
-%   v is then forced empty (v <= 1, and v = 0 and v = 1 are both excluded) -> the branch
-%     fails, and the clause `u <= 0 \/ u >= 2 \/ x <= 0 \/ x >= 2` is emitted AT LEVEL 2
-%     with the outer assignment's two literals as its tail
-%   u = 1 is removed and the node is RE-ENTERED; u's domain is now {0, 2}, whose lower
-%     median 0 IS the lower bound, so the value choice returns an ordinary Split and no
-%     assignment machinery is used
-%   u = 0 gives v = 0 and the sum 1, which nothing excludes
+% First, every exclusion is an `int_lin_ne`, which is VALUE consistent and therefore
+% prunes nothing until one variable is left. Root propagation sees none of it, so the
+% contradictions have to be found by branching -- which is what makes the medians
+% interior and the assignments reachable at all.
 %
-% So one model covers both arms of the median dispatch and both halves of the
-% assignment: a clause with a tail, and a re-entry that finds the answer.
+% Second, `int_lin_ne(...) != 1` is what makes the defect VISIBLE. Trace lines are
+% written lazily, only when a branch fails (`trace.ml`), so the hole's line is emitted --
+% and therefore checked -- only if the re-entry that follows the hole goes on to fail
+% deeper. Without the `!= 1` row the re-entry succeeds immediately, no trace is written,
+% and an empty tail is invisible. That was measured here, not predicted: the first
+% version of the break lane was GREEN against the three-row model.
 %
-% Declared domains are four and three values wide.
+% The shape. x is capped at 0..3 by the sum row; its lower median is 1 and is strictly
+% interior, so x = 1 is an ASSIGN. Under it u's lower median is 1, also interior, so that
+% is a second ASSIGN whose clause is filed at x's own level. Every branch under x = 1
+% fails, so x = 1 is removed and the node re-entered, and so on until x = 0, u = 0 and
+% v = 0 -- the only assignment whose sum, 0, none of the three rows excludes.
+%
+% Declared domains are five and three values wide.
 var 0..4: x :: output_var;
 var 0..2: u :: output_var;
 var 0..2: v :: output_var;
 constraint int_lin_le([1, 1, 1], [x, u, v], 3);
+constraint int_lin_ne([1, 1, 1], [x, u, v], 1);
 constraint int_lin_ne([1, 1, 1], [x, u, v], 2);
 constraint int_lin_ne([1, 1, 1], [x, u, v], 3);
 solve :: int_search([x, u, v], input_order, indomain_median, complete) satisfy;

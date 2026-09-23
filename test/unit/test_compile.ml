@@ -456,20 +456,24 @@ let test_rejections () =
     "var 0..3: x;\n\
      constraint int_le(x,3);\n\
      solve :: int_search([x],first_fail,indomain_split,complete) satisfy;\n";
-  (* And the two value choices M7-T9 did NOT implement are still refused BY NAME.
-     `indomain_median` must reach its OWN diagnostic -- the one that says why it cannot
-     be a value choice here -- and not the generic tail, which is what a fall-through
-     would give. See lib/flatzinc/builder.ml. *)
+  (* M7-T12: `indomain_median` is no longer refused. It WAS refused here, and the
+     refusal was correct until the decision shape could express an interior assignment;
+     M7-T12 built that shape (D-0077) rather than substituting a bisection, so the
+     refusal genuinely went away instead of being weakened into an acceptance. What the
+     compile layer owes is only that the annotation reaches a value choice at all --
+     what that value choice DECIDES is asserted in test_flatzinc.ml. *)
+  expect_accepted "accept: `indomain_median` is implemented (M7-T12)"
+    "var 0..3: x;\n\
+     constraint int_le(x,3);\n\
+     solve :: int_search([x],first_fail,indomain_median,complete) satisfy;\n";
+  (* And the value choice nobody has implemented is still refused BY NAME, and so is the
+     unimplemented variable choice: neither may have been swept into a catch-all while
+     `indomain_median` was added. See lib/flatzinc/builder.ml. *)
   expect_rejected "reject (d): `anti_first_fail` is named, not silently replaced"
     ~needles:[ "anti_first_fail"; "first_fail"; "input_order" ]
     "var 0..3: x;\n\
      constraint int_le(x,3);\n\
      solve :: int_search([x],anti_first_fail,indomain_min,complete) satisfy;\n";
-  expect_rejected "reject (d): `indomain_median` is refused with its own reason"
-    ~needles:[ "indomain_median"; "INTERIOR"; "disjunction"; "M7-T12" ]
-    "var 0..3: x;\n\
-     constraint int_le(x,3);\n\
-     solve :: int_search([x],first_fail,indomain_median,complete) satisfy;\n";
   expect_rejected "reject (d): `indomain_random` is named"
     ~needles:[ "indomain_random"; "indomain_min"; "indomain_max" ]
     "var 0..3: x;\n\

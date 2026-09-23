@@ -283,6 +283,10 @@ type stats = {
          levels, dispatches ONE child, and continues as a re-entry of the node it was
          taken at rather than as a sibling. The M1-T36 identity is corrected by exactly
          [3 * assigns] below and stays an equality. *)
+  mutable assign_backjumps : int;
+      (* M7-T12: assignment decisions discharged by the backjump arm -- the child's nogood
+         named neither assignment level, so the node was refuted outright and the value
+         was never removed. NOT a [skipped]; see [branch_assign]'s backjump arm. *)
   mutable assign_clauses_rev : Writer.cid list;
       (* M7-T12: the assignment clauses emitted at LEVEL 0, newest first, and the whole
          of who owns them (I-X2). An assignment clause is filed at the level of the node
@@ -516,6 +520,7 @@ let stats_create () =
     bridges_rev = [];
     skipped = 0;
     assigns = 0;
+    assign_backjumps = 0;
     assign_clauses_rev = [];
     n_learned = 0;
     lbd_hist = Array.make lbd_buckets 0;
@@ -1210,6 +1215,26 @@ type config = {
          what [config] is: the record that says how this solve behaves. It is NOT one of
          the swappable components D-0044 is about, and it is not a break lane; it is the
          one field here that carries mutable state, which [type bnb] justifies. *)
+  break_assign_clause : bool;
+      (* M7-T12/D-0077's FIRST BREAK. OFF.
+
+         On, the assignment clause is emitted with only its LOWER half -- `x <= m-1`
+         and not `x >= m+1`. That is a STRENGTHENING of the child's nogood rather than
+         a weakening, so it is no longer a superset of a RUP clause and is simply false:
+         it claims the failed branch refuted everything at or above m. The hole is then
+         punched on a clause the node does not entail, and every line the re-entry writes
+         rests on it. Wrong on purpose and NOT CLI-reachable, like the two below. *)
+  break_assign_facts : bool;
+      (* M7-T12/D-0077's SECOND BREAK, and the one worth the most. OFF.
+
+         On, the hole the assignment punches carries [Reason.none] instead of the active
+         decisions, so [Trace] writes its line with an EMPTY TAIL: a bare `x <> m`,
+         asserted unconditionally. That is D-0075's defect exactly, in a new place --
+         the solver's reasoning is unchanged and the answer it returns is still right,
+         and the only thing that can see it is the checker, over a SATISFIABLE model
+         (D-0053, D-0066 as D-0073 amends it). At the ROOT the tail is empty honestly,
+         so this break is invisible there and the lane that exercises it has to take its
+         assignment under at least one decision. *)
   break_bridge_levels : bool;
       (* M7-T6/D-0070's BREAK, and the defect this row fixed. OFF.
 
@@ -1256,6 +1281,8 @@ let default_config =
     retention = Retention.default;
     backjump_on_pb = false;
     propagate_learned = true;
+    break_assign_clause = false;
+    break_assign_facts = false;
     break_bridge_levels = false;
     bnb = None;
   }
@@ -2750,10 +2777,18 @@ and branch_assign engine store ctx trace stats cfg order decisions (a : assign) 
       Justify.wipe_level ctx lvl_a;
       NSat asn
   | NFail (ng, cid) when not (mentions_level ng lvl_a || mentions_level ng lvl_b) ->
-      (* The ordinary backjump, and it is ordinary: [ng] names neither assignment level,
-         so it refutes this node whatever [x] is and there is nothing to assign around.
-         Two levels skipped rather than one. *)
-      stats.skipped <- stats.skipped + 2;
+      (* THE BACKJUMP THROUGH THE ASSIGNMENT. [ng] names neither assignment level, so it
+         refutes this node whatever the variable takes: no clause is written about the
+         assignment, no value is removed and the node does NOT re-enter.
+
+         [stats.skipped] is deliberately NOT bumped, and that is the identity rather than
+         an omission. [skipped] counts a SIBLING a backjump did not dispatch, and an
+         assignment has no sibling to dispatch -- it dispatches one child on both arms,
+         and the three nodes the equation expects and never sees are already subtracted
+         by [3 * assigns]. Counting a skip here as well would subtract them twice.
+         [assign_backjumps] is the counter for this arm, because it is worth measuring
+         and is not the same quantity. *)
+      stats.assign_backjumps <- stats.assign_backjumps + 1;
       close_level ctx ~lvl:lvl_a ~nogood:cid;
       NFail (ng, cid)
   | NFail (ng, _cid) ->
@@ -2791,7 +2826,11 @@ and branch_assign engine store ctx trace stats cfg order decisions (a : assign) 
           | [], _ -> acc @ [ (lit, lv) ]
           | (_, lv') :: _, rest -> rest @ [ (lit, Stdlib.max lv lv') ]
         in
-        let joined = List.fold_left add [] (base @ [ (neg_ge, p); (neg_le, p) ]) in
+        let halves =
+          if cfg.break_assign_clause then [ (neg_ge, p) ]
+          else [ (neg_ge, p); (neg_le, p) ]
+        in
+        let joined = List.fold_left add [] (base @ halves) in
         List.stable_sort (fun (_, i) (_, j) -> Stdlib.compare j i) joined
       in
       Debug.check "M7-T12: the assignment clause is filed at the node's own level"
@@ -2802,8 +2841,11 @@ and branch_assign engine store ctx trace stats cfg order decisions (a : assign) 
       wipe_after_nogood ctx ~lvl:lvl_a ~nogood:cid1;
       (* The hole, as an ordinary logged pruning of the node it is punched at. *)
       let decl = Learned.decl_of_encoding ctx.Justify.encoding in
-      let facts = List.filter_map (fact_of_decision decl) decisions in
-      if List.length facts <> List.length decisions then
+      let facts =
+        if cfg.break_assign_facts then Reason.none
+        else List.filter_map (fact_of_decision decl) decisions
+      in
+      if (not cfg.break_assign_facts) && List.length facts <> List.length decisions then
         failwith
           "Search.branch_assign: an active decision literal does not convert to a reason \
            fact, so the hole's trace line would understate what it rests on (D-0075). \

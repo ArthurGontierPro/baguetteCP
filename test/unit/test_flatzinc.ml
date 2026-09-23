@@ -829,8 +829,26 @@ let decision_of ?cands src =
         | None -> Search.unfixed c.F.Compile.store
       in
       (* M7-T12: see test_compile.ml's [decision_of] -- the value choices asserted on
-         here are all [Split]s and [as_split] is where that stops being an assumption. *)
+         here are all [Split]s and [as_split] is where that stops being an assumption.
+         [choice_of] below is the one that does not assume it. *)
       Some (Search.as_split (order c.F.Compile.store cands))
+
+(* M7-T12: the same, without the [Split] assumption. `indomain_median` is the only value
+   choice that can return an [Assign], and the assertion this file owes for it is which
+   of the two it returned -- so the [as_split] above would throw away exactly the thing
+   under test. *)
+let choice_of ?cands src =
+  let m = F.Builder.of_string ~file:"<t>" src in
+  let c = F.Compile.compile m in
+  match c.F.Compile.order with
+  | None -> None
+  | Some order ->
+      let cands =
+        match cands with
+        | Some idxs -> Array.of_list (List.map Var.of_int idxs)
+        | None -> Search.unfixed c.F.Compile.store
+      in
+      Some (order c.F.Compile.store cands)
 
 let test_search_constants () =
   (* (a) MIXED array. Three variables, declared wide/narrow/mid, and the annotation
@@ -1128,16 +1146,91 @@ let test_search_strategies () =
          value median 2"
         (Var.to_int d.Search.d_var = 0
         && d.Search.d_split = 3 && not d.Search.d_high_first));
-  (* (d) `indomain_median` is refused, and the diagnostic must say WHY rather than just
-     that it is unsupported -- the reason is the deliverable for this case, because a
-     reader who hits it on a real model would otherwise re-derive the analysis. The
-     needles pin the three load-bearing claims: that it is an interior value, that the
-     sibling branch is a disjunction, and that the successor row is named. *)
-  reject "M7-T9: indomain_median is refused, with its actual reason" ~line:2
-    ~src:
-      "var 1..9: x;\n\
-       solve :: int_search([x], input_order, indomain_median, complete) satisfy;\n"
-    ~needles:[ "indomain_median"; "INTERIOR"; "disjunction"; "M7-T12"; "indomain_split" ];
+  (* (d) `indomain_median`, WHICH M7-T9 REFUSED AND M7-T12 BUILT (D-0077).
+     Asserted on the DECISION, and specifically on WHICH SHAPE of decision, because that
+     is the whole of what this row changed: an interior median is an [Assign] and a
+     boundary median is an ordinary [Split]. A test that checked only the answer, or only
+     that the model compiled, could not tell this apart from `indomain_min`. *)
+  (match
+     F.Error.catch (fun () ->
+         choice_of
+           "var 1..9: x;\n\
+            solve :: int_search([x], input_order, indomain_median, complete) satisfy;\n")
+   with
+  | Error e ->
+      incr failures;
+      Printf.printf "FAIL M7-T12 (d): indomain_median was refused: %s\n"
+        (F.Error.to_string e)
+  | Ok None | Ok (Some (Search.Split _)) ->
+      incr failures;
+      print_endline
+        "FAIL M7-T12 (d): indomain_median over 1..9 must ASSIGN the median 5, not split"
+  | Ok (Some (Search.Assign a)) ->
+      check "M7-T12 (d): indomain_median over 1..9 assigns the LOWER MEDIAN 5"
+        (Var.to_int a.Search.a_var = 0 && a.Search.a_value = 5));
+  (* The boundary arm, and it is not a nicety: the assignment machinery must be reached
+     only where the one-literal shape genuinely cannot express the median. Over 1..2 the
+     lower median is 1, which IS the lower bound, so `x <= 1` already IS `x = 1` and its
+     sibling is the single literal `x >= 2` -- exactly [indomain_min]'s decision. *)
+  (match
+     F.Error.catch (fun () ->
+         choice_of
+           "var 1..2: x;\n\
+            solve :: int_search([x], input_order, indomain_median, complete) satisfy;\n")
+   with
+  | Error e ->
+      incr failures;
+      Printf.printf "FAIL M7-T12 (d): the boundary median was refused: %s\n"
+        (F.Error.to_string e)
+  | Ok None | Ok (Some (Search.Assign _)) ->
+      incr failures;
+      print_endline
+        "FAIL M7-T12 (d): a median AT THE LOWER BOUND must be an ordinary Split, not an \
+         assignment -- the two-level shape is for interior values only"
+  | Ok (Some (Search.Split d)) ->
+      check
+        "M7-T12 (d): a median at the lower bound is the ordinary one-literal split, the \
+         same decision indomain_min makes"
+        (Var.to_int d.Search.d_var = 0
+        && d.Search.d_split = 1 && not d.Search.d_high_first));
+  (* And the value-median/range-midpoint distinction, over the SAME holey domain (c)
+     uses -- which is why this one runs the ENGINE first, exactly as (c) does: the hole
+     is put there by `int_ne`'s propagation and is not in the declared domain. 0..6 with
+     3 removed has values {0,1,2,4,5,6}, whose lower median is 2, where (c) has just
+     asserted that `indomain_split` takes the range midpoint 3. The two annotations must
+     disagree here or one of them is reading the wrong quantity -- and 2 is strictly
+     interior, so this is also an ASSIGN across a hole. *)
+  (match
+     F.Error.catch (fun () ->
+         let m =
+           F.Builder.of_string ~file:"<t>"
+             "var 0..6: x;\n\
+              var 0..6: y;\n\
+              constraint int_ne(x, 3);\n\
+              constraint int_le(y, 6);\n\
+              solve :: int_search([x, y], input_order, indomain_median, complete) satisfy;\n"
+         in
+         let c = F.Compile.compile m in
+         let store = c.F.Compile.store in
+         ignore (Baguette_core.Engine.propagate c.F.Compile.engine store);
+         let order =
+           match c.F.Compile.order with Some o -> o | None -> Search.spec_order
+         in
+         order store [| Var.of_int 0; Var.of_int 1 |])
+   with
+  | Error e ->
+      incr failures;
+      Printf.printf "FAIL M7-T12 (d): the holey median model was refused: %s\n"
+        (F.Error.to_string e)
+  | Ok (Search.Assign a) ->
+      check
+        "M7-T12 (d): indomain_median counts VALUES across a hole -- the lower median of \
+         {0,1,2,4,5,6} is 2, where indomain_split takes the range midpoint 3"
+        (Var.to_int a.Search.a_var = 0 && a.Search.a_value = 2)
+  | Ok (Search.Split _) ->
+      incr failures;
+      print_endline
+        "FAIL M7-T12 (d): the holey median must be an interior assignment at 2");
   (* And the two strategies that remain unsupported are still refused, at full strength.
      `anti_first_fail` and `indomain_random` are the rest of what MiniZinc defines; they
      must not have been swept into a catch-all while the four above were added. *)
