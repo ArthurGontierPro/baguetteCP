@@ -266,7 +266,14 @@ let veripb ~dir ~opb ~pbp =
    different RUP failure elsewhere in the proof would match it and the lane would report
    the wrong break. Asserting the wording at all is what separates "the checker said no"
    from "the checker judged this step": a file that failed to parse says neither. *)
-let rejection_wordings = [ "is not implied by reverse unit propagation" ]
+(* M7-T5 raised this from "is not implied by reverse unit propagation" to the whole
+   sentence: the comment above already said FULL strength, and the constant did not
+   match the comment. Re-measured against both break lanes on 2026-09-23. *)
+let rejection_wordings =
+  [
+    "The constraint is not implied by reverse unit propagation (RUP) from core and \
+     derived database";
+  ]
 
 let rejection_recognised out =
   List.exists (fun w -> contains ~needle:w out) rejection_wordings

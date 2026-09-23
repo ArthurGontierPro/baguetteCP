@@ -1030,6 +1030,234 @@ let drop_line_is_a_grammar_lane =
 
 (* ------------------------------------------------------------------ *)
 
+(* ================================================================== *)
+(* M7-T5 / D-VACNUM: the `rup` vacuity census                          *)
+(*                                                                    *)
+(* D-0066 measured that a `rup` line of an UNSAT model's proof can be  *)
+(* corrupted -- a literal dropped, a literal's polarity flipped -- and *)
+(* the checker still says `s VERIFIED UNSATISFIABLE`, because over a   *)
+(* contradictory database everything is RUP. It drew from that the     *)
+(* rule that had worked for `red` (D-0053): verify over a SATISFIABLE  *)
+(* model. M7-T5 put that rule to the checker rather than believing it, *)
+(* and it is WRONG for `rup`. On chain_sat -- satisfiable, answered    *)
+(* SAT, nine-wide domains -- a polarity flip is accepted on some of    *)
+(* its `rup` lines and refused on others. Satisfiability is not the    *)
+(* discriminator; being LOAD-BEARING FOR A LATER LINE is, which is     *)
+(* trap 3 in this file's own header stated one level up.               *)
+(*                                                                    *)
+(* So this census asserts four things on each of two models, one UNSAT *)
+(* and one SAT, and the pair is the point:                             *)
+(*                                                                    *)
+(*   1. the honest proof verifies (without this the rest is noise);     *)
+(*   2. SOME `rup` line tolerates a polarity flip -- the D-0066        *)
+(*      exposure, on the page and re-measured on every run rather than *)
+(*      remembered from a decision record;                             *)
+(*   3. SOME `rup` line does NOT -- so a lane pinned to such a line is *)
+(*      a real test;                                                   *)
+(*   4. and that refusal is the RUP JUDGEMENT at the checker's full    *)
+(*      wording, not a parse error and not an exit status.             *)
+(*                                                                    *)
+(* (2) holding on the SAT model is the correction to D-0066: a lane    *)
+(* rebuilt over a satisfiable model on that advice alone would have    *)
+(* been just as vacuous, and this check is what says so.               *)
+(*                                                                    *)
+(* The mutation is the POLARITY FLIP and not the dropped literal, on   *)
+(* purpose. Dropping a literal can leave a claim that is genuinely     *)
+(* stronger and genuinely implied, so its acceptance is ambiguous --   *)
+(* trap 2 in this file's header, again. A flip yields a DIFFERENT      *)
+(* claim, which the database owes nothing to; accepting it is          *)
+(* vacuity and nothing else.                                           *)
+(* ================================================================== *)
+
+module F = Baguette_flatzinc
+module Compile = Baguette_flatzinc.Compile
+
+let rup_judgement_sentence =
+  "The constraint is not implied by reverse unit propagation (RUP) from core and derived \
+   database"
+
+(* Solve a FlatZinc source through the real pipeline and leave the .opb/.pbp pair
+   behind. [fired] is true because the census corrupts the TEXT afterwards -- no
+   emitter knob is armed here, so the banner check that guards [emitter_lane] does not
+   apply and the record is used only to carry the two paths to [check_proof]. *)
+let solve_fzn ~dir ~name src =
+  let m = F.Builder.of_string ~file:"census" src in
+  let c = Compile.compile m in
+  let opb = Filename.concat dir (name ^ ".opb")
+  and pbp = Filename.concat dir (name ^ ".pbp") in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "M7-T5 census: " ^ name ] c.Compile.encoding oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let writer = Writer.create ~audit:true oc in
+  Encoding.start_proof c.Compile.encoding writer;
+  let ctx = Justify.create ~writer ~encoding:c.Compile.encoding in
+  let stats = Search.stats_create () in
+  let outcome =
+    Search.solve ~engine:c.Compile.engine ~store:c.Compile.store ~ctx
+      ~check:(fun _ -> true)
+      ~stats ()
+  in
+  close_out oc;
+  ({ pbp; opb; fired = true }, outcome)
+
+(* A `rup` line with at least one literal on it. The rule name may be preceded by a
+   label (`@c5 rup ...`), and `rup >= 1 ;` -- the empty clause D-0022 closes with -- has
+   no literal to flip and is not eligible. *)
+let is_rup_with_a_literal l =
+  let ws = List.filter (fun w -> w <> "") (String.split_on_char ' ' (String.trim l)) in
+  let rec rule = function
+    | w :: rest when String.length w > 1 && w.[0] = '@' -> rule rest
+    | w :: _ -> w
+    | [] -> ""
+  in
+  rule ws = "rup" && List.exists (fun w -> w = "+1") ws
+
+let flip_polarity lit =
+  if String.length lit > 0 && lit.[0] = '~' then String.sub lit 1 (String.length lit - 1)
+  else "~" ^ lit
+
+(* Flip the FIRST literal's polarity on the [n]th eligible `rup` line, 1-based.
+   Returns the path written, or [None] when there is no such line. *)
+let flip_nth_rup ~proof ~out ~n =
+  let lines = String.split_on_char '\n' (read_file proof) in
+  let seen = ref 0 and hit = ref false in
+  let rewrite l =
+    let ws = Array.of_list (String.split_on_char ' ' l) in
+    let len = Array.length ws in
+    let rec go i =
+      if i + 1 >= len then false
+      else if ws.(i) = "+1" then (
+        ws.(i + 1) <- flip_polarity ws.(i + 1);
+        true)
+      else go (i + 1)
+    in
+    if go 0 then (
+      hit := true;
+      String.concat " " (Array.to_list ws))
+    else l
+  in
+  let out_lines =
+    List.map
+      (fun l ->
+        if is_rup_with_a_literal l then (
+          incr seen;
+          if !seen = n then rewrite l else l)
+        else l)
+      lines
+  in
+  if not !hit then None
+  else
+    let oc = open_out out in
+    output_string oc (String.concat "\n" out_lines);
+    close_out oc;
+    Some out
+
+type census = { n_rup : int; accepted : int; judged : int; judgement : bool; other : int }
+
+let census_of ~dir ~name ~src =
+  let b, outcome = solve_fzn ~dir ~name src in
+  let v, out = check_proof b in
+  check
+    (Printf.sprintf
+       "census/%s CONTROL: the honest proof is accepted (a census over a proof that does \
+        not verify measures nothing)"
+       name)
+    (v = Accepted);
+  if v <> Accepted then show out;
+  let n_rup =
+    List.length
+      (List.filter is_rup_with_a_literal (String.split_on_char '\n' (read_file b.pbp)))
+  in
+  let accepted = ref 0 and judged = ref 0 and other = ref 0 and judgement = ref false in
+  for i = 1 to n_rup do
+    let mpbp = Filename.concat dir (Printf.sprintf "%s_flip%d.pbp" name i) in
+    match flip_nth_rup ~proof:b.pbp ~out:mpbp ~n:i with
+    | None -> ()
+    | Some _ -> (
+        let v, out = check_proof { b with pbp = mpbp } in
+        (match v with
+        | Accepted -> incr accepted
+        | Rejected_on_derivation ->
+            incr judged;
+            if contains out rup_judgement_sentence then judgement := true
+        | _ -> incr other);
+        try Sys.remove mpbp with _ -> ())
+  done;
+  ( outcome,
+    {
+      n_rup;
+      accepted = !accepted;
+      judged = !judged;
+      judgement = !judgement;
+      other = !other;
+    } )
+
+(* D-0066's own model, verbatim from test/models/ne_eq_unsat.fzn: x <> y and x = y over
+   1..2. The refutation rests on clauses, so the file is `rup`-heavy, and the database
+   is contradictory well before the end. *)
+let census_unsat_src =
+  "var 1..2: x :: output_var;\n\
+   var 1..2: y :: output_var;\n\
+   constraint int_ne(x, y);\n\
+   constraint int_eq(x, y);\n\
+   solve satisfy;\n"
+
+(* test/models/chain_sat.fzn: a + b + c = 6, b = a + 1, c = b + 1 over 0..9. SATISFIABLE,
+   and it branches -- the shape D-0018 says is the only one that can catch a regression
+   in the branch-level derivation. Domains are single-digit; see CLAUDE.md on width. *)
+let census_sat_src =
+  "array [1..3] of int: ones = [1, 1, 1];\n\
+   array [1..2] of int: diff = [1, -1];\n\
+   var 0..9: a :: output_var;\n\
+   var 0..9: b :: output_var;\n\
+   var 0..9: c :: output_var;\n\
+   constraint int_lin_eq(ones, [a, b, c], 6);\n\
+   constraint int_lin_eq(diff, [b, a], 1);\n\
+   constraint int_lin_eq(diff, [c, b], 1);\n\
+   solve satisfy;\n"
+
+let census ~dir =
+  print_endline "";
+  let outcome_u, u = census_of ~dir ~name:"census_unsat" ~src:census_unsat_src in
+  check "census/census_unsat: the model really is UNSAT" (outcome_u = Search.Unsat);
+  Printf.printf
+    "note: census_unsat -- %d eligible `rup` lines, %d polarity flips ACCEPTED, %d \
+     refused on the judgement, %d refused without one\n"
+    u.n_rup u.accepted u.judged u.other;
+  check
+    "census (UNSAT): D-0066 holds and is re-measured here -- a polarity flip in a `rup` \
+     line is ACCEPTED, so a lane pinned to such a line tests nothing"
+    (u.accepted > 0);
+  check
+    (Printf.sprintf
+       "census (UNSAT): and it is TOTAL on this model -- all %d of %d flips accepted. \
+        Every `rup` line in this proof could say something else and the checker would \
+        not notice"
+       u.accepted u.n_rup)
+    (u.n_rup > 0 && u.accepted = u.n_rup);
+
+  let outcome_s, s = census_of ~dir ~name:"census_sat" ~src:census_sat_src in
+  check "census/census_sat: the model really is SAT"
+    (match outcome_s with Search.Sat _ -> true | _ -> false);
+  Printf.printf
+    "note: census_sat -- %d eligible `rup` lines, %d polarity flips ACCEPTED, %d refused \
+     on the judgement, %d refused without one\n"
+    s.n_rup s.accepted s.judged s.other;
+  check
+    "census (SAT): THE CORRECTION TO D-0066 -- a polarity flip is ACCEPTED on a \
+     SATISFIABLE model too, so `rebuild the lane over a SAT model' is not by itself a \
+     cure for `rup' the way it is for `red'"
+    (s.accepted > 0);
+  check
+    "census (SAT): and some `rup` lines ARE load-bearing -- the flip is refused there, \
+     which is what a real `rup` break lane has to be pinned to"
+    (s.judged > 0);
+  check
+    "census (SAT): ... at the checker's full wording, so the lane can tell a JUDGEMENT \
+     from a parse error"
+    s.judgement
+
 let run () =
   (* Without the script nothing below can check anything, and a run that quietly
      reports "waiting" lanes would read as if the harness had merely found nothing to
@@ -1261,6 +1489,8 @@ let run () =
           "harness: nothing under lib/ or bin/ names Writer.create_mutated, so no normal \
            run can arm a knob"
           (rc <> 0));
+
+    census ~dir;
 
     (* The corrupted proofs are the ones we expected to be bad, so they are thrown away
        on success and kept when there is something to look at -- GCS's rule, and
