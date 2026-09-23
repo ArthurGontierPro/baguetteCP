@@ -5005,3 +5005,58 @@ over-large encoding ends in a message rather than `Fatal error`. **M7-T8.**
 - **87 timeouts are at 300 s**, an arbitrary budget, on the *smallest* data file of each family.
   They say nothing about difficulty.
 - One data file per family; the corpus has 1604.
+
+## D-0069  The corpus's refusals, classified properly: four strategies, and a harness that blamed the solver
+
+**2026-09-23.** D-0068 counted 248 `REFUSED-MODEL` outcomes over 436 instances and
+classified them by the error's leading words. That was enough to find M7-T7 (143 of them
+are one over-strict check) but not enough to scope what comes after it. Classified
+properly, by the *thing the model actually wanted*:
+
+| cause | instances | row |
+|---|---|---|
+| a constant in the search array | 143 | M7-T7 |
+| `smallest` variable-selection | 25 | M7-T9 |
+| `indomain_split` value-choice | 13 | M7-T9 |
+| **a torn `.fzn` — the harness's own bug** | **13** | **M7-T10** |
+| `indomain_median` value-choice | 6 | M7-T9 |
+| `largest` variable-selection | 5 | M7-T9 |
+| set-literal domains | 14 | M6-T2 |
+| no `solve` item / no such file | 9 | M7-T10, suspected same cause |
+
+**Two findings, and the second is the uncomfortable one.**
+
+**First: the strategy tail is finite, and short.** Beyond what M7-T2 already supports, the
+corpus asks for **exactly four** strategies — `smallest`, `largest`, `indomain_split`,
+`indomain_median` — and nothing else. Not "a long tail of annotations"; four named things,
+all four defined in the MiniZinc spec, all four mechanical. That turns an open-ended row
+into a closed one, which is why M7-T9 exists as a single row.
+
+**Second: the harness was filing its own failures under the solver's name.** Thirteen
+instances were recorded as the front end refusing the model. The front end was right to
+refuse them — `2010_bacp.fzn` genuinely ends with a partial duplicate line, `lete) minimize
+objective;`, spliced after a correct `solve` item. The file is **torn**: the flattener's
+output was captured non-atomically with 64 jobs in flight. The solver behaved perfectly and
+the measurement blamed it anyway.
+
+This is the third time this project has been misled by an instrument rather than by the
+thing measured — M2-L12 measured learning as worth nothing on a suite whose largest search
+was 99 nodes, D-0067 predicted set-literal domains were the biggest wall from a 78-instance
+sample when at full scale they are 14 against 143, and now this. The recurring shape is not
+carelessness in any one case; it is that **a measurement's own failure modes look exactly
+like findings about the subject**, and nothing in a results table distinguishes them.
+
+**So the rule, and it is cheap to follow**: every bucket that attributes a failure to the
+solver must be gated on a check that the *input was well-formed*. A torn or truncated
+`.fzn` is its own outcome, never `REFUSED-MODEL`. Flatten to a temp path and rename into
+place; `/scratch` is ext4, so rename is atomic. M7-T10 carries this, and M7-T4 must
+inherit it rather than rediscover it.
+
+**What this does not change**: the eight verified proofs are unaffected — they are
+successes, and the harness's non-atomicity can only manufacture failures, not successes. The
+`PROOF-REJECTED` bucket is likewise unaffected, since a torn input cannot produce a 38 MB
+proof. **But the 87 `TIMEOUT-SOLVE` have not been audited for this**, and a torn file that
+happens to remain parseable is a real possibility. They are a lower-priority re-run, noted
+here so it is not forgotten.
+
+Follows D-0068. Opens M7-T9 and M7-T10.
