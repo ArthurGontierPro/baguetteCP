@@ -107,7 +107,12 @@ let test_variable_identity () =
       match v.M.v_dom with
       | M.Dbool -> (0, 1)
       | M.Drange (l, u) -> (l, u)
-      | M.Dset _ -> (min_int, max_int)
+      (* M7-T11: a set domain reaches the store as its HULL. The holes are taken out
+         by the [Ne] instances D-0072 posts, not by the declared domain -- see
+         lib/flatzinc/compile.ml's [Store.create] for why putting them in the domain
+         directly produces a refutation veripb rejects. *)
+      | M.Dset (n :: ns) -> (List.fold_left min n ns, List.fold_left max n ns)
+      | M.Dset [] -> (min_int, max_int)
     in
     if Domain.lo d <> lo || Domain.hi d <> hi then domains_agree := false
   done;
@@ -362,11 +367,20 @@ let test_rejections () =
     "var 0..3: x;\nvar 0..3: y;\nconstraint int_lin_ne([1,1],[x,y],2);\nsolve satisfy;\n";
   expect_accepted "accept: int_ne is compiled rather than rejected (M1-T11)"
     "var 0..3: x;\nvar 0..3: y;\nconstraint int_ne(x,y);\nsolve satisfy;\n";
-  expect_rejected "reject: a set domain names the variable and what is missing"
-    ~needles:[ "holes"; "relaxation"; "hull" ]
+  (* These two asserted `reject_set_domain`'s wording until M7-T11. THE REFUSAL WAS NOT
+     WEAKENED TO MAKE THEM PASS -- it was removed because what it protected against was
+     fixed. Its message named the gap exactly ("the holes in a set domain have no
+     representation in the .opb", so the hull would be a RELAXATION); D-0072 gives the
+     holes a representation, one order-ladder row each, and posts a [Ne] instance per
+     hole so every hole pruning is logged. With the .opb no longer a relaxation the
+     refusal has nothing left to protect, so what asserted it now asserts acceptance,
+     and [test_set_domain_holes] below asserts the artefact that replaced it. *)
+  expect_accepted "accept: a set domain compiles rather than being refused (M7-T11)"
     "var {1,3,5}: pick;\nconstraint int_le(pick,5);\nsolve satisfy;\n";
-  expect_rejected "reject: a set domain says which variable" ~needles:[ "`pick`" ]
-    "var {1,3,5}: pick;\nconstraint int_le(pick,5);\nsolve satisfy;\n";
+  expect_accepted
+    "accept: a set domain whose holes outnumber its values compiles (M7-T11 case (d): \
+     budgeted, not refused)"
+    "var {0,20}: pick;\nconstraint int_le(pick,20);\nsolve satisfy;\n";
   (* M5-T1 landed the milestone these two used to name, so what asserted the rejection
      now asserts that an objective over a VARIABLE compiles. The rejection did not
      disappear, it narrowed: a CONSTANT objective is still refused, because `conclusion
@@ -1443,6 +1457,69 @@ let test_search_annotated_proofs () =
     ~title:"(c) BREAK 2: a unit nogood of the annotated tree, flipped, is REFUSED"
     ~src:(backtracking_sat ann_ab_max) ()
 
+(* -------------------------------------------- set domains: the holes, in the .opb *)
+
+(* M7-T11 / D-0072 test (c). Asserted on the EMITTED ARTEFACT -- the text
+   [Encoding.write_opb] produces, which is byte-for-byte the .opb the CLI writes and
+   the checker reads -- and not on a counter, because a counter that says "2 holes" is
+   satisfied by two rows of the wrong polarity.
+
+   THE POLARITY IS THE WHOLE POINT. PROOF-FORMAT section 3 fixes the ladder as
+
+     +1 ~x_ge_(v+1) +1 x_ge_v >= 1        x >= v+1 -> x >= v      (downward)
+
+   and `x = h` is `x >= h` AND NOT `x >= h+1`, so the row that forbids it is the
+   MIRROR of the rung at the same value:
+
+     +1 ~x_ge_h +1 x_ge_(h+1) >= 1        x >= h -> x >= h+1      (upward)
+
+   Writing the ladder's own direction there would be implied by the ladder and forbid
+   nothing, leaving the .opb a relaxation of the declared domain -- and veripb would
+   then happily verify refutations of a model nobody wrote. So both rows are matched
+   literally, and the ladder rows are matched too, so that a change which collapsed the
+   two into one shape could not pass. *)
+let opb_text src =
+  let c = Compile.compile (build src) in
+  let file = Filename.temp_file "baguette_holes" ".opb" in
+  let oc = open_out file in
+  Encoding.write_opb c.Compile.encoding oc;
+  close_out oc;
+  let ic = open_in file in
+  let n = in_channel_length ic in
+  let text = really_input_string ic n in
+  close_in ic;
+  Sys.remove file;
+  (c, text)
+
+let contains hay needle =
+  let nh = String.length hay and nn = String.length needle in
+  let rec go i = i + nn <= nh && (String.sub hay i nn = needle || go (i + 1)) in
+  nn = 0 || go 0
+
+let test_set_domain_holes () =
+  let c, text = opb_text "var {1,3,5}: x;\nconstraint int_le(x,5);\nsolve satisfy;\n" in
+  check "M7-T11: the hull's ladder rung at 2 is in the .opb, DOWNWARD"
+    (contains text "+1 ~x_ge_3 +1 x_ge_2 >= 1");
+  check "M7-T11: the hole at 2 is in the .opb, UPWARD -- the mirror of that rung"
+    (contains text "+1 ~x_ge_2 +1 x_ge_3 >= 1");
+  check "M7-T11: the hole at 4 is in the .opb, UPWARD"
+    (contains text "+1 ~x_ge_4 +1 x_ge_5 >= 1");
+  (* One clause per hole and nothing else: [Encoding.add_int_lin_ne] would have minted
+     an auxiliary Boolean named `ne<n>` and two rows instead. Its absence is what makes
+     "one clause per hole" a property of the artefact. *)
+  check "M7-T11: a hole costs no auxiliary Boolean" (not (contains text "ne1_ge_1"));
+  (* Hull 1..5 is 3 ladder rows; 2 holes are 2 more; the model row is 1. *)
+  check "M7-T11: 3 ladder + 2 hole + 1 model row"
+    (Encoding.n_constraints c.Compile.encoding = 6);
+  (* One [Ne] instance per hole, and one [Linear] for the model row (D-0011). *)
+  check "M7-T11: one propagator instance per hole"
+    (Engine.n_instances c.Compile.engine = 3);
+  (* And a domain with no holes gains nothing: the mechanism is off unless asked for. *)
+  let c2, text2 = opb_text "var 1..5: x;\nconstraint int_le(x,5);\nsolve satisfy;\n" in
+  check "M7-T11: a range domain is unchanged -- 3 ladder + 1 model row"
+    (Encoding.n_constraints c2.Compile.encoding = 4
+    && not (contains text2 "+1 ~x_ge_2 +1 x_ge_3 >= 1"))
+
 (* ------------------------------------------------------------------------- main *)
 
 let () =
@@ -1463,6 +1540,7 @@ let () =
   test_element_defining_level_rule ();
   test_search_annotations ();
   test_search_annotated_proofs ();
+  test_set_domain_holes ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

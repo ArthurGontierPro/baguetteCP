@@ -1,0 +1,23 @@
+% M7-T11 / D-0072 test (b): THE lane that catches the relaxation bug.
+%
+% The only value satisfying the constraints is 4, and 4 is a HOLE of `{1,3,5}`. So
+% the model is UNSAT for one reason and one reason only: the hole. If the .opb carried
+% the hull 1..5 instead of the holes -- which is what `reject_set_domain` refused to
+% let happen, and what this row had to remove the need for rather than relax -- the
+% .opb would be SATISFIABLE at x = 4 and this refutation would be a proof of something
+% false. veripb rejects a refutation of a satisfiable .opb, so the fact that it
+% ACCEPTS this one is the soundness evidence.
+%
+% It was also rejected, once, for real: the first implementation put the holes into
+% `Domain.of_list` instead of behind a propagator, the conflict was then justified by a
+% `pol` that is not contradictory without the hole, and veripb said "The constraint
+% with ID 9 is not contradicting, as specified by the hint."
+%
+% D-0053/D-0066: `rup` and `red` are both vacuous over a contradictory database, so
+% this lane does not stand alone -- set_domain_sat.fzn and set_domain_wide_sat.fzn are
+% SATISFIABLE models over the same mechanism, and a relaxed .opb would show up there as
+% a solution the checker refuses to certify.
+var {1,3,5}: x :: output_var;
+constraint int_lt(3, x);
+constraint int_lt(x, 5);
+solve satisfy;

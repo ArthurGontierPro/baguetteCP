@@ -263,19 +263,19 @@ let rec search_pos (m : Model.t) (s : Model.search) =
    there, and exit non-zero. Each one asserts on its message in test_compile.ml, so
    the wording is part of the tested surface, not decoration. *)
 
-let reject_set_domain (v : Model.var) values =
-  let lo = List.fold_left min (List.hd values) values in
-  let hi = List.fold_left max (List.hd values) values in
-  Error.failf v.Model.v_pos
-    "variable `%s` is declared over the set domain %s, which baguette cannot encode: \
-     `Encoding.declare_int` takes only ~lo and ~hi, so the holes in a set domain have no \
-     representation in the .opb. Encoding the hull %d..%d instead would be a \
-     *relaxation* -- the solver could then report UNSAT and hand veripb a proof against \
-     an .opb that is satisfiable -- so the model is rejected instead. Missing: a \
-     hole-removal constraint in the encoding (the direct encoding, roadmap M1-T9/M4)."
-    v.Model.v_name
-    (Model.string_of_domain v.Model.v_dom)
-    lo hi
+(* M7-T11 REMOVED `reject_set_domain`, which used to refuse `var {1,3,5}: x` here.
+
+   It was not weakened; the thing it was protecting against was fixed. Its message said
+   exactly what was missing -- "`Encoding.declare_int` takes only ~lo and ~hi, so the
+   holes in a set domain have no representation in the .opb" -- and so encoding the hull
+   instead would have been a RELAXATION: the solver could report UNSAT and hand veripb a
+   refutation of an .opb that is satisfiable.
+
+   [Encoding.declare_int_with_holes] now gives the holes a representation, one clause
+   each, in the same order ladder and of the mirror polarity. See that function's header
+   for the direction and why getting it backwards would be silently unsound, and D-0072
+   for the decision. With the holes in the .opb the hull is no longer a relaxation, so
+   the refusal has nothing left to protect. *)
 
 (* M5-T1 narrowed this from "every objective" to "an objective that is not a variable".
 
@@ -463,7 +463,31 @@ let bounds_of_domain (v : Model.var) =
       else (lo, hi)
   | Model.Dset [] ->
       Error.failf v.Model.v_pos "variable `%s` has an empty domain" v.Model.v_name
-  | Model.Dset values -> reject_set_domain v values
+  | Model.Dset values ->
+      (* The HULL of the value set. The holes inside it are [holes_of_domain] below,
+         and the two are computed apart because everything between here and
+         [Store.create] -- the arithmetic cap, the width cap, the .opb `min:` line --
+         is about the hull and nothing else. M7-T11. *)
+      ( List.fold_left min (List.hd values) values,
+        List.fold_left max (List.hd values) values )
+
+(* The values strictly inside the declared hull that the declaration excludes. Empty for
+   every domain but a set literal, and by construction never contains [lo] or [hi]: the
+   hull is the min and max of the value set, so both ends are present. M7-T11. *)
+let holes_of_domain (v : Model.var) =
+  match v.Model.v_dom with
+  | Model.Dbool | Model.Drange _ | Model.Dset [] -> []
+  | Model.Dset values ->
+      let lo, hi = bounds_of_domain v in
+      let present = List.sort_uniq Stdlib.compare values in
+      let rec go v present acc =
+        if v > hi then List.rev acc
+        else
+          match present with
+          | p :: rest when p = v -> go (v + 1) rest acc
+          | _ -> go (v + 1) present (v :: acc)
+      in
+      go lo present [] |> List.filter (fun h -> h > lo && h < hi)
 
 (* The .opb's Boolean variable names come from [Lit.sanitize], which maps every
    character outside [A-Za-z0-9_] to '_'. Two distinct FlatZinc identifiers can collide
@@ -670,6 +694,19 @@ let compile (m : Model.t) : t =
       if Encoding.order_width_exceeds ~lo ~hi then reject_declared_width v lo hi)
     m.Model.vars;
   let names = Array.map (fun (v : Model.var) -> v.Model.v_name) m.Model.vars in
+  (* The store gets the HULL, holes and all, and the holes are then taken out by a
+     propagator rather than being baked into the declared domain (M7-T11, D-0072).
+
+     [Domain.of_list] would put them in directly and that was the first thing tried. It
+     is WRONG, and silently so: a hole that is in the store but in no propagator has no
+     trail entry behind it ([Store.remover] returns [None] -- lib/core/trace.ml's header
+     is explicit about this being the `var {1,3,5}` case), so nothing in the proof ever
+     claims it. A conflict that only arises because of a hole -- `int_eq(x, 4)` over
+     `{1,3,5}` is the smallest one -- is then justified by a [pol] over the two model
+     rows that is not contradictory without the hole, and veripb rejects the refutation:
+     measured, "The constraint with ID 9 is not contradicting, as specified by the hint."
+     Putting the hole behind a [Ne] instance instead means every hole pruning is an
+     ordinary logged pruning with an ordinary trail entry. *)
   let store =
     Store.create ~names ~domains:(Array.map (fun (lo, hi) -> Domain.make lo hi) bounds)
   in
@@ -679,6 +716,12 @@ let compile (m : Model.t) : t =
       let lo, hi = bounds.(i) in
       match v.Model.v_dom with
       | Model.Dbool -> Encoding.declare_bool encoding v.Model.v_name
+      | Model.Dset (_ :: _) ->
+          (* M7-T11: one clause per hole, of the mirror polarity to the ladder rung at
+             the same value. [Encoding] validates that each hole is strictly interior
+             and counts the clauses against M7-T8's encoding budget. *)
+          Encoding.declare_int_with_holes encoding v.Model.v_name
+            ~holes:(holes_of_domain v) ~lo ~hi
       | _ -> Encoding.declare_int encoding v.Model.v_name ~lo ~hi)
     m.Model.vars;
 
@@ -1427,5 +1470,28 @@ let compile (m : Model.t) : t =
             ~magnitude:None)
       m.Model.constraints
   in
+  (* M7-T11: the declared holes of a set domain, as propagator instances.
+
+     One [Ne] per hole, over the single term (+1, x) with right-hand side the hole, so
+     the instance's whole job is "x <> h". [Ne] cites no row id (its header says why)
+     and justifies itself with a self-contained [rup] over order literals -- and the
+     clause that [rup] has to land on is exactly the hole row
+     [Encoding.declare_int_with_holes] has already put in the .opb, so no disequality
+     row and no auxiliary Boolean is minted for it. That is what keeps D-0072's "one
+     clause per hole" true of the artefact and not just of the intention:
+     [Encoding.add_int_lin_ne] would have cost an aux variable and two rows instead.
+
+     These come BEFORE the model's own constraints so that a declared hole is pruned
+     before anything reasons about the variable, and because a fixed order is what the
+     determinism gate checks. *)
+  let hole_instances =
+    List.concat_map
+      (fun (i, (v : Model.var)) ->
+        List.map
+          (fun h -> pack_lin_ne (Ne.make store [ (1, Var.of_int i) ] h))
+          (holes_of_domain v))
+      (Array.to_list (Array.mapi (fun i v -> (i, v)) m.Model.vars))
+  in
+  let instances = hole_instances @ instances in
   let engine = Engine.create (List.mapi (fun id pending -> pending id) instances) in
   { store; engine; encoding; objective; order = search_order }

@@ -1,0 +1,16 @@
+% M7-T11 / D-0072 test (d): a set domain whose holes VASTLY outnumber its values.
+%
+% WIDTH IS THE SUBJECT HERE, which is the exception CLAUDE.md allows and the reason
+% this header exists (the same justification width_root_unsat.fzn carries). `{0,200}`
+% is two values and 199 holes, so it costs 199 ladder rows plus 199 hole rows: a set
+% domain is never worse than TWICE the ladder of its own hull, because a hole must be
+% strictly interior and there are at most hi-lo-1 of those. That is the whole of the
+% case-(d) argument -- holes add a constant factor, not an order of magnitude, so they
+% are BUDGETED by the caps the hull already passes through (Encoding.max_order_width
+% and M7-T8's --max-encoding-clauses) and are NOT separately refused. D-0072.
+%
+% 200 rather than the roadmap's 1000 to keep the suite's cost honest: the shape is
+% identical and the argument does not depend on the number. Measured: .opb 12 kB.
+var {0,200}: x :: output_var;
+constraint int_lt(0, x);
+solve satisfy;
