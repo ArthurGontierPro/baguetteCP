@@ -5005,3 +5005,144 @@ over-large encoding ends in a message rather than `Fatal error`. **M7-T8.**
 - **87 timeouts are at 300 s**, an arbitrary budget, on the *smallest* data file of each family.
   They say nothing about difficulty.
 - One data file per family; the corpus has 1604.
+
+---
+
+## D-0070  The level-0 nogood RUP defect: a decision that settles past a hole, and a filter that cannot see it
+
+**Status**: **ACCEPTED and FIXED** (M7-T6, 2026-09-23, agent-rup). Closes the row D-0067
+opened and D-0068 sized. A second, unrelated bug folded into the same row is recorded in
+part 3 below.
+
+### The defect
+
+`test/models/rup_level0_nogood_sat.fzn` — nine variables, five constraints, **no global**
+— is satisfiable, the solver answers `xs = [1,1,9,1,1,1,2,1,1]`, and every constraint is
+satisfied by inspection. veripb 3.0.2 nevertheless refused the proof at the level-7
+backtrack nogood with *"The constraint is not implied by reverse unit propagation (RUP)
+from core and derived database."* M1-T44's shape exactly: right answer, valid-looking
+steps, wrong artefact.
+
+### The cause, in one paragraph
+
+`int_ne(x6, x7)` with `x6` fixed at 2 punches a **hole** in `x7`'s domain at 2. The
+level-6 decision pushes `set_lo x7 2`, `Domain.settle` walks the bound over the hole, and
+the trail records **`x7 >= 3`** while the branch literal is **`x7 >= 2`**. That gap is
+M1-T55's, and M1-T55 already writes it down: `Search.bridges` emits
+
+```
+rup 1 x7_ge_3  1 ~x7_ge_2  1 ~<each ancestor decision> >= 1 ;
+```
+
+conditioned on **every** ancestor, because its own `rup` reaches `x7_ge_3` only by the
+hole's trace line or by the disequality's `.opb` rows, and both of those need the
+ancestors asserted. Then M2-L3's nogood filter runs:
+
+```ocaml
+(* lib/core/search.ml, dfs's conflict arm *)
+| Some ls -> minimise stats cfg.policy (List.filter (fun (_, l) -> List.mem l ls) all)
+```
+
+`ls` is `Learn.levels` — the decision levels the 1UIP walk says the conflict rests on.
+**The implication graph has no edge for a settle.** It records the decision as the
+literal the branch *assumed* (`x7 >= 2`); everything downstream propagated from the bound
+the trail *landed on* (`x7 >= 3`); nothing connects the two, so no ancestor that punched
+the hole ever enters the walk and none of their levels appear in `ls`. The filter then
+drops exactly the literals the bridge rests on. The bridge stops being unit under the
+negated nogood, and the nogood's `rup` fails — **at the nogood, several inferences away
+from the settle that caused it**, which is why three earlier readings of this symptom
+looked at the nogood machinery and found nothing wrong with it.
+
+This also explains D-0067's puzzling asymmetry — the same 2001 fuzz seeds giving **3**
+RUP failures with `all_different` native and **5** with it decomposed to pairwise
+`int_ne`. Overlapping but not identical, because the two produce different *settle*
+patterns over the same underlying gap. The defect was never in the global; it is upstream
+of every propagator that punches a hole.
+
+### It is a wrong ARTEFACT, never a wrong ANSWER
+
+Stated explicitly because M1-T44 had the same shape and someone will ask. The defect is
+**proof-only**, and the reason is that nothing here feeds back into the search:
+
+- `bridges` is pure emission — it writes lines and touches no domain, no trail and no
+  decision.
+- The filter's output is the nogood *clause*. Under-filtering it makes the clause
+  **stronger than the branch supports in the artefact**, but the solver's own pruning was
+  done by propagators from real reasons; the nogood is consumed only to skip a sibling
+  (`mentions_level`) and to file a backjump level. A nogood carrying *more* literals
+  mentions *more* levels, so the repaired build skips *fewer* siblings — strictly less
+  pruning, never more.
+- The break lane asserts this rather than arguing it: with the break on and off, the
+  returned assignment is **identical**, and only the proof differs.
+
+### The fix
+
+`Search.bridges` now **returns the decision literals its lines rest on**, and the nogood
+filter keeps a literal that is either in `Learn.levels` *or* one a bridge rests on. On
+every path where no decision settled past a hole, the returned list is empty and the
+filter is byte-for-byte what it was.
+
+**Measured, not argued.** Flipping the new `break_bridge_levels` knob back to the
+pre-M7-T6 filter and re-running all 87 models: **exactly one** of the 87 `.pbp` files
+differs, `rup_level0_nogood_sat.pbp`, and it is the only one that fails. The other 86 are
+byte-identical. So the fix pays for itself in one model and costs nothing anywhere else.
+
+### What D-0066 means for the blast radius
+
+D-0068's headline rate — 1 substantive rejection in 11 proofs over 436 instances — was
+**never the true rate and cannot be**. `rup` is vacuous over a contradictory database
+(D-0066), so every UNSAT instance of this same defect has been **accepted silently** all
+along, and most models in this suite and in that corpus are UNSAT. The rate we could see
+was the rate on the satisfiable ones. Two consequences the next person should carry:
+
+1. **Proofs that were passing were changed by this fix**, and that is the expected
+   direction — some of them were passing vacuously. The 86-of-87 byte-identical
+   measurement above bounds how many.
+2. **A settle-past-a-hole is the thing to look at first** the next time a nogood is
+   rejected. It is invisible in the answer, invisible on UNSAT models, and its symptom
+   appears at a line that looks correct.
+
+### Part 3: the empty model, which is a DIFFERENT bug
+
+Folded into the same row, and it is not the same defect. A model with no variables and no
+constraints emitted `conclusion SAT` with **no `sol` line before it**, and 3.0.2 refused
+the whole file: *"No solution has been logged in the proof and no solution has been given
+in the conclusion."* D-0068 measured this as **two of the corpus's three rejections**
+(`2013_javarouting`, `2013_rubik` — both 97-byte proofs).
+
+The cause is one guard in `lib/proof/writer.ml`'s `conclusion`:
+
+```ocaml
+(match v with Sat (_ :: _ as lits) -> solution t lits | _ -> ());
+```
+
+`git log -S` places it in **26d3ab2 (M1-T18)**, and reading that commit settles which of
+the two readings it is. M1-T18 replaced `Sat [] -> "conclusion SAT"` /
+`Sat lits -> "conclusion SAT : <lits>"`, where the empty case meant *"no assignment to
+inline"* and skipping it was right. The `_ :: _` was that case split **carried over
+mechanically** onto the new `sol` line, where it is not right: `conclusion SAT` *requires*
+a logged solution. It was **not** suppressing an empty assignment on a non-empty model —
+the other reading, under which removing the guard would turn a silent skip into a *wrong*
+`sol` line. `Search.solve` builds these literals with `Encoding.assignment_lits` over the
+assignment of **every** store variable, so the list is empty exactly when the encoding has
+no variables, which is exactly when the `.opb` has none either and the empty assignment is
+the complete one. A bare `sol ;` is accepted by 3.0.2; measured.
+
+So the fix is `Sat lits -> solution t lits`, and `test/models/empty_model_sat.fzn` is the
+model test. The **control** matters as much as the lane: `test/unit/test_learn.ml` asserts
+both that the empty model's proof verifies *and* that a model with variables still emits
+its full `sol` line with its literals — otherwise the lane would have shown only that a
+bare `sol ;` parses.
+
+### Break lanes
+
+`Search.config.break_bridge_levels`, not CLI-reachable, exactly as `break_i_s4`,
+`break_ladder_mult`, `break_pb_degree` and `backjump_on_pb` are. It restores the
+pre-M7-T6 filter. `test/unit/test_learn.ml` runs it over a **satisfiable** model — D-0066
+makes that mandatory, not stylistic — and pins the rejection at the checker's full
+wording *and* at the line number it names, because CLAUDE.md is right that *"reverse unit
+propagation"* alone would be matched by any other RUP failure in the same proof. The
+empty-model lane removes the `sol` line by byte mutation and pins *"No solution has been
+logged in the proof"* the same way.
+
+Follows D-0066, D-0067 and D-0068. Closes M7-T6.
