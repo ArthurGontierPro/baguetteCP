@@ -31,6 +31,10 @@
 % so this is the only way a model carrying them can flatten.
 include "nosets.mzn";
 
+% MiniZinc 1.x compatibility shims (is_output, string-valued search annotations).
+% Shims only -- nothing in that file decomposes anything.
+include "compat_mzn1.mzn";
+
 %-----------------------------------------------------------------------------%
 % Integer arithmetic
 %-----------------------------------------------------------------------------%
