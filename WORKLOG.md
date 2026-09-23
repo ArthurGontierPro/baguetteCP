@@ -362,6 +362,9 @@ worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 uni
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M7-T13 | `lib/core/**`, `test/unit/test_trace.ml`, `test/unit/test_learn.ml`, `test/models/PENDING`, new `test/models/` + `test/expected/` | agent-tpp | 2026-09-23 |
+| M7-T14 + wave-28 corpus run | `scripts/**` only; read-only elsewhere | agent-harness2 | 2026-09-23 |
+| M7-T15 | `mznlib/**`, `tools/**`, new `test/models/` + `test/expected/`; **`scripts/corpus_run.sh` data-pairing is agent-harness2's** | agent-flatten | 2026-09-23 |
 | M2-T16 | **everything except `bench/**`** — the 2.0 removal lands atomically | agent-drop | 2026-09-18 |
 | M2-L8 | `bench/**` only; read-only over `lib/` and `test/` | agent-bench | 2026-09-18 |
 | M2-L6 | all of `lib/`, `test/unit/test_learn.ml`, `test/unit/test_analysis.ml`, `test/unit/dune`, new files under `test/models/` + `test/expected/` | agent-pb | 2026-09-18 |
