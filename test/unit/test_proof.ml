@@ -26,6 +26,12 @@ let m7_shipped_defaults =
     !Encoding.direct_values_limit,
     !Encoding.width_warn_threshold )
 
+(* M7-T8, for exactly the same reason and it is not duplication: these are two more
+   refs whose SHIPPED value no other assertion in this file can see, because every
+   assertion about them sets them first. D-0065's own session found that gap inside the
+   row written to prevent it; this is the cheap insurance against finding it a third
+   time. Sampled before any test runs. *)
+let m7t8_shipped_defaults = (!Encoding.encoding_budget, !Encoding.heap_limit_mb)
 let failures = ref 0
 
 let check name cond =
@@ -2945,13 +2951,19 @@ let with_limits f =
   let sw = !Encoding.order_width_limit
   and sd = !Encoding.direct_values_limit
   and sn = !Encoding.width_warn_threshold
-  and ss = !Encoding.warn_sink in
+  and ss = !Encoding.warn_sink
+  (* M7-T8's two, restored by the same helper: a lane that left a budget set behind it
+     would make every later lane in this file quietly conditional on it. *)
+  and sb = !Encoding.encoding_budget
+  and sh = !Encoding.heap_limit_mb in
   Fun.protect
     ~finally:(fun () ->
       Encoding.order_width_limit := sw;
       Encoding.direct_values_limit := sd;
       Encoding.width_warn_threshold := sn;
-      Encoding.warn_sink := ss)
+      Encoding.warn_sink := ss;
+      Encoding.encoding_budget := sb;
+      Encoding.heap_limit_mb := sh)
     f
 
 let test_m7_limits_are_options () =
@@ -3067,6 +3079,249 @@ let test_m7_encoding_cost () =
       check "M7-T1: naming the variable a reader must act on"
         (m7_contains ~needle:"`over`" (Buffer.contents buf)))
 
+(* ------------------------------------------------------------------ *)
+(* M7-T8 / D-0069: the graceful resource guard                          *)
+(* ------------------------------------------------------------------ *)
+
+(* D-0068's corpus run lost 9 of 436 instances to `Fatal error: allocation failure
+   during minor GC` -- an OCaml runtime abort, exit 134, that names nothing and cannot
+   be caught. These lanes assert the three things that replace it: that the DEFAULT
+   build still refuses nothing (D-0065 is not being quietly reinstated), that a budget
+   asked for is a budget enforced BEFORE anything is allocated, and that what comes out
+   the other end is a diagnostic naming a variable rather than a count.
+
+   There is deliberately NO wide-domain test model here. CLAUDE.md forbids one outright
+   and it would not be a better test: setting the OPTION low on an ordinary model tests
+   the option as well as the guard, which a wide model would not. *)
+let test_m7t8_resource_guard () =
+  with_limits (fun () ->
+      (* ---- the shipped default, sampled before any lane touched the refs ---- *)
+      (match m7t8_shipped_defaults with
+      | None, None ->
+          check "M7-T8: the shipped default has NO encoding budget and NO heap budget"
+            true
+      | b, h ->
+          check
+            (Printf.sprintf
+               "M7-T8: shipped defaults are wrong -- budget %s, heap %s (D-0065: the \
+                default build restricts nothing)"
+               (Encoding.limit_string b) (Encoding.limit_string h))
+            false);
+
+      (* ---- an ordinary model does not trip the default build ---- *)
+      Encoding.encoding_budget := None;
+      Encoding.heap_limit_mb := None;
+      let ordinary () =
+        let e = Encoding.create () in
+        Encoding.declare_int e "x" ~lo:0 ~hi:9;
+        Encoding.declare_int e "y" ~lo:(-5) ~hi:5;
+        Encoding.declare_bool e "b";
+        e
+      in
+      (match ordinary () with
+      | e ->
+          let c = Encoding.cost e in
+          check "M7-T8: the default build encodes an ordinary model without a murmur"
+            (c.Encoding.c_ladder_clauses = 8 + 9 + 0)
+      | exception ex ->
+          check
+            (Printf.sprintf "M7-T8: the DEFAULT build tripped its own guard: %s"
+               (Printexc.to_string ex))
+            false);
+
+      (* ---- the option changes the threshold, and it is the aggregate ----
+
+         Two variables of width 10, nine ladder clauses each. Eighteen is enough and
+         seventeen is not: the bound is on the TOTAL, which is the number no
+         per-variable cap ever saw (max_order_width's own comment says so). *)
+      let build_two budget =
+        Encoding.encoding_budget := budget;
+        let e = Encoding.create () in
+        Encoding.declare_int e "x" ~lo:0 ~hi:9;
+        Encoding.declare_int e "y" ~lo:0 ~hi:9;
+        e
+      in
+      (match build_two (Some 16) with
+      | e ->
+          check "M7-T8: a budget of exactly the encoding's size is not exceeded"
+            ((Encoding.cost e).Encoding.c_ladder_clauses = 16)
+      | exception _ ->
+          check "M7-T8: a budget of exactly the encoding's size is not exceeded" false);
+      (match build_two (Some 15) with
+      | _ ->
+          check
+            "M7-T8: one clause below the total is refused (the budget is an AGGREGATE, \
+             not per variable)"
+            false
+      | exception Encoding.Encoding_too_large o ->
+          check "M7-T8: one clause below the total raises Encoding_too_large" true;
+          check "M7-T8: the overrun names the declaration that crossed it"
+            (o.Encoding.o_what = "y");
+          check "M7-T8: it reports what that declaration would add" (o.Encoding.o_adds = 8);
+          check "M7-T8: and what had already been minted" (o.Encoding.o_already = 8);
+          check "M7-T8: and the budget in force" (o.Encoding.o_limit = 15)
+      | exception ex ->
+          check
+            (Printf.sprintf "M7-T8: wrong exception: %s" (Printexc.to_string ex))
+            false);
+
+      (* ---- nothing was allocated ----
+
+         The refusal happens before [t] is touched, so the encoding is exactly what it
+         was. This is the property that makes the diagnostic trustworthy: there is no
+         half-built ladder behind it and nothing to unwind. *)
+      Encoding.encoding_budget := Some 15;
+      let e = Encoding.create () in
+      Encoding.declare_int e "x" ~lo:0 ~hi:9;
+      let before = Encoding.cost e and vars_before = Encoding.vars e in
+      (try Encoding.declare_int e "y" ~lo:0 ~hi:9
+       with Encoding.Encoding_too_large _ -> ());
+      let after = Encoding.cost e in
+      check "M7-T8: a refused declaration allocates nothing and leaves no trace"
+        (after.Encoding.c_ladder_clauses = before.Encoding.c_ladder_clauses
+        && after.Encoding.c_constraints = before.Encoding.c_constraints
+        && Encoding.vars e = vars_before
+        && not (Encoding.is_declared e "y"));
+
+      (* ---- the diagnostic ----
+
+         "Out of memory" is not a diagnostic. The message has to name the variable that
+         crossed the line, the widest declared domain (which is the one a reader can
+         act on, and need not be the same variable), and the flag that relaxes it. *)
+      let msg =
+        match build_two (Some 15) with
+        | _ -> "no overrun was raised"
+        | exception Encoding.Encoding_too_large o -> Encoding.overrun_message o
+        | exception ex -> Printexc.to_string ex
+      in
+      List.iter
+        (fun (what, needle) ->
+          check
+            (Printf.sprintf "M7-T8: the diagnostic states %s (%S)" what needle)
+            (m7_contains msg ~needle))
+        [
+          ("which variable crossed the budget", "Declaring `y`");
+          ("that declaration's domain", "0..9");
+          ("what it would have added", "8 more order-ladder clauses");
+          ("what was already minted", "on top of the 8 already minted");
+          ("the total and the budget", "total of 16, past the budget of 15");
+          ("what to narrow first", "Narrow this first: `x`");
+          ("WHY width costs, for a reader who has not read D-0028", "D-0028");
+          ("the flag that relaxes it", "--max-encoding-clauses=N");
+          ("that the default is no budget", "the default");
+          ("that nothing was allocated", "nothing further was allocated");
+        ];
+
+      (* ---- the direct encoding is bounded by the same budget ----
+
+         [ensure_direct] materialises hi - lo + 1 values with [red] and is the other
+         thing in this module that grows without a per-variable cap in the default
+         build. Same budget, same exception, same "before the loop" placement. *)
+      Encoding.encoding_budget := Some 9;
+      let e = Encoding.create () in
+      Encoding.declare_int e "x" ~lo:0 ~hi:5;
+      (* five ladder clauses so far; the direct encoding wants six more values *)
+      (* [emitted], not [text]: [text] drops the outcome, and a lane that asserted on
+         the proof text alone would pass whether or not the guard fired. *)
+      (match
+         snd
+           (emitted (fun w ->
+                Writer.header w ~n_model_constraints:1;
+                ignore (Encoding.ensure_direct e w "x")))
+       with
+      | Error (Encoding.Encoding_too_large o) ->
+          check "M7-T8: the direct encoding is bounded by the same budget"
+            (o.Encoding.o_kind = "direct-encoding values"
+            && o.Encoding.o_adds = 6 && o.Encoding.o_already = 4);
+          check "M7-T8: and the direct overrun names its own variable"
+            (o.Encoding.o_what = "x")
+      | Ok () -> check "M7-T8: the direct encoding is bounded by the same budget" false
+      | Error ex ->
+          check
+            (Printf.sprintf "M7-T8: direct-encoding budget, wrong exception: %s"
+               (Printexc.to_string ex))
+            false);
+
+      (* ---- the reactive half ----
+
+         [Gc.quick_stat ().heap_words] is 0 until the first major cycle completes on
+         this switch (OCaml 5.1.1 native, measured 2026-09-23 -- see encoding.ml), so
+         this forces one first. Asserting the reading is non-zero is not a formality:
+         without it, the lane below would pass against a guard that could never fire. *)
+      Encoding.encoding_budget := None;
+      Gc.full_major ();
+      check "M7-T8: the heap reading is live after a major cycle"
+        (Encoding.heap_words_now () > 0);
+      Encoding.heap_limit_mb := Some 0;
+      let hmsg =
+        match
+          let e = Encoding.create () in
+          Encoding.declare_int e "z" ~lo:0 ~hi:3;
+          "no overrun was raised"
+        with
+        | s -> s
+        | exception Encoding.Heap_too_large o ->
+            check "M7-T8: a heap budget below the live heap raises Heap_too_large" true;
+            check "M7-T8: the heap overrun names the declaration it stopped at"
+              (o.Encoding.o_what = "z");
+            check "M7-T8: and the budget in force" (o.Encoding.o_limit = 0);
+            Encoding.heap_message o
+        | exception ex -> Printexc.to_string ex
+      in
+      List.iter
+        (fun (what, needle) ->
+          check
+            (Printf.sprintf "M7-T8: the heap diagnostic states %s (%S)" what needle)
+            (m7_contains hmsg ~needle))
+        [
+          ("the budget it crossed", "past the 0 MB asked for");
+          ("how much encoding exists", "clauses and values");
+          ("what to narrow first", "Narrow this first: `z`");
+          ("the flag that relaxes it", "--max-heap-mb=N");
+          ( "what happens WITHOUT the budget, which is the thing being replaced",
+            "Fatal error: allocation failure" );
+        ];
+      (* A heap budget above the live heap does not fire. Otherwise the lane above
+         would be satisfied by a guard that fires unconditionally. *)
+      Encoding.heap_limit_mb := Some 1_000_000;
+      (match
+         let e = Encoding.create () in
+         Encoding.declare_int e "z" ~lo:0 ~hi:3;
+         Encoding.cost e
+       with
+      | c ->
+          check "M7-T8: a heap budget above the live heap does NOT fire"
+            (c.Encoding.c_ladder_clauses = 2)
+      | exception ex ->
+          check
+            (Printf.sprintf "M7-T8: a roomy heap budget fired anyway: %s"
+               (Printexc.to_string ex))
+            false);
+
+      (* ---- the exit status is a bucket of its own ----
+
+         A harness that cannot tell "this machine ran out" from "this proof is wrong"
+         will fold them together, which is what D-0068's SOLVE-ERR-134 bucket was.
+         0 solved, 2 usage, 3 unsupported, 4 internal, 5 resource. *)
+      check "M7-T8: the resource exit status is 5" (Encoding.exit_resource = 5);
+      check "M7-T8: and it collides with none of the other four"
+        (not (List.mem Encoding.exit_resource [ 0; 1; 2; 3; 4 ]));
+
+      (* ---- the budgets parse like every other limit ---- *)
+      check "M7-T8: `none` is how you spell no budget"
+        (Encoding.limit_of_string ~what:"--max-encoding-clauses" "none" = None);
+      check "M7-T8: a mistyped budget is an error, not a silent `none`"
+        (match Encoding.limit_of_string ~what:"--max-heap-mb" "8GB" with
+        | _ -> false
+        | exception Encoding.Bad_limit _ -> true);
+      Encoding.encoding_budget := Some 4242;
+      check_eq "M7-T8: the budget reports itself for --stats" ~expected:"4242"
+        ~got:(Encoding.encoding_budget_string ());
+      Encoding.heap_limit_mb := None;
+      check_eq "M7-T8: an unset heap budget reports itself as unlimited"
+        ~expected:"unlimited"
+        ~got:(Encoding.heap_limit_string ()))
+
 let () =
   report_checker ();
   test_lits ();
@@ -3106,6 +3361,7 @@ let () =
   test_m5_no_obju_caller ();
   test_m7_limits_are_options ();
   test_m7_encoding_cost ();
+  test_m7t8_resource_guard ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
