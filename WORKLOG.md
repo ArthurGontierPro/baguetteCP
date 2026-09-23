@@ -363,7 +363,6 @@ worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 uni
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M7-T9 | `lib/core/search.ml`, `lib/flatzinc/builder.ml`, **`lib/flatzinc/model.ml`**, **`compile.ml`'s `phases_of_search` match arms ONLY** (M7-T11 has merged and touched `reject_set_domain`/`bounds_of_domain`/`instances` in the same file — rebase onto `main` before you finish), `test/unit/test_flatzinc.ml`, new `test/models/` + `test/expected/` | agent-strategy | 2026-09-23 |
-| M7-T5 | `test/unit/**` EXCEPT the four files above; read-only over `lib/` | agent-vacuity | 2026-09-23 |
 | M2-T16 | **everything except `bench/**`** — the 2.0 removal lands atomically | agent-drop | 2026-09-18 |
 | M2-L8 | `bench/**` only; read-only over `lib/` and `test/` | agent-bench | 2026-09-18 |
 | M2-L6 | all of `lib/`, `test/unit/test_learn.ml`, `test/unit/test_analysis.ml`, `test/unit/dune`, new files under `test/models/` + `test/expected/` | agent-pb | 2026-09-18 |
@@ -589,6 +588,7 @@ work. The owning session picks it up.
 | M2-L8 | agent-bench | 2026-09-18 | The learning benchmark. Third table in `bench/run_bench.sh` reporting learned / convertible / skipped / pb-tried / pb-learned / pb-fallback / fb% / pb-stronger **beside** `.opb` bytes, `.pbp` bytes and verify ms, per model and summed over the suite as counts only. Verdict widened from M1-T36's nodes-alone to all four tree counters. **`bench/run_bench.sh -c`** is the control the row demanded: three scenes, asserted in both directions, exit non-zero on a misclassification, watched fire against three broken classifiers. `-f`/`-F`/`BAGUETTE_PROOF_FORMAT` gone from `bench/` (D-0046). Suite: 86 clauses over 21 of 38 models, 13 convertible, 9 skips over 4 models, PB 86/36/50 = **58% fallback**. |
 | M2-T16 | agent-drop | 2026-09-18 | **Proof format 2.0 removed from the project entirely** (D-0046). `Writer` emits 3.0 and only 3.0; `V2_0`, `BAGUETTE_PROOF_FORMAT`, `default_format`, every `v3 t` branch, `Pol.to_string`, `Opb.write ?labels` and `Encoding.write_opb_for` are gone, and `Checker.find` / `scripts/checker.sh` resolve one checker. **Artefact bytes byte-identical across all 38 models** (`.opb`, `.pbp`, stdout), binary hashed on both sides and different. Unit checks 1986 → 1972, all 14 accounted for. History kept and marked: D-0023/24/25/30 and `PROOF-FORMAT.md` §2. |
 | M6-T6 | agent-bisect | 2026-09-21 | Bisected `width_sat_depth`'s regression: the 43 ms comment was true when written; the whole ~14x jump is one commit, `aacbc8d` (M2-L6 wired into `Search`), 18.6 ms parent -> 258.7 ms. `git bisect run`, 7 steps, 0 skipped. Recommend accepting as the cost of M2-L6's PB analysis, which M2-L13 already claws most of back. `bench/README.md` §3g, new `bench/width_sat_depth_bisect.sh`. |
+| M7-T5 | agent-vacuity | 2026-09-23 | The `rup` audit — all 15 lanes classified from RUNS: **vacuous 0, sound 15, unreachable 0**. D-0073; the `rup` vacuity census in `test_mutation.ml`; `CLAUDE.md`'s `rup` bullet |
 
 ## Handoff notes
 
@@ -2899,3 +2899,19 @@ One cross-session request was open above, on `lib/core/trace.ml`'s stale header 
 a caller as the WHOLE gate, records that M7-T11 first tried loading holes into the store and
 veripb rejected four refutations for it, and tells anyone who would give `Domain.of_list` a
 caller to read D-0072 first.
+
+**2026-09-23 — agent-vacuity, M7-T5 handoff**
+The audit came back **empty in the direction it was pointed and full in the other one**.
+None of D-0066's 26 lanes is vacuous — the 26 is a grep of a wording string, it resolves
+into **15 lanes**, and every one was run and observed a real rejection with an honest
+control. The premise does not follow: an accepted corrupted `rup` makes a lane asserting
+rejection go **red**, not green, so this vacuity cannot hide in a rejection lane.
+What IS true, and is the thing to carry forward: **D-0066's remedy is wrong.** Verifying
+over a satisfiable model cures `red` (D-0053) and does **not** cure `rup` — `chain_sat` is
+satisfiable and 3 of its 15 `rup` lines still accept a flipped literal, while `ne_eq_unsat`
+accepts one on **all 8**. What makes a `rup` line real is being load-bearing for a *later*
+line. `test_mutation.ml` now re-measures both numbers on every run (the census), so the
+next session should not re-derive them; D-0073 has the table. No defect in `lib/` was
+uncovered — the nearest is D-0070/M7-T6, already open, and D-0073 quantifies D-0066's note
+about it. `test_learn.ml`'s `rejection_wordings` was raised to the checker's whole sentence;
+it had said full strength in its comment and matched less.
