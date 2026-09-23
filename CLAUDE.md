@@ -267,6 +267,8 @@ lib/core/       Baguette_core
                             justification. Stage 1 of two; M4-T2 sequences beside it.
                             The row that proved Combine/Weaken/Model_row carry a real
                             global (M4-T1, D-0061)
+    gcc.ml                  global_cardinality by interval CAPACITY -- alldiff generalised;
+                            counting rows over the ORDER encoding (M7-T16, D-0078)
     element.ml              array_int_element over a constant array, DOMAIN consistent.
                             The index is a VIEW, not an auxiliary (D-0058), and the
                             pruning is an interior hole in its own domain (M4-T3)

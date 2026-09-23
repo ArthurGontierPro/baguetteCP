@@ -1,0 +1,29 @@
+% global_cardinality, the interval-capacity pruning that M7-T16 exists for, and the
+% one thing the per-value decomposition cannot reach.
+%
+% w, x, y and z are all confined to 1..2, and the cover says that value 1 is taken
+% exactly twice and value 2 exactly twice. So {w, x, y, z} uses up the whole capacity
+% of the interval [1, 2] -- four variables against a capacity of four -- and t can
+% therefore take neither 1 nor 2. lo(t) is raised to 3 at the ROOT, before any
+% decision.
+%
+% THE DECOMPOSITION GETS NOTHING HERE, which is the point. Its rows are one per value:
+% `how many of the five take 1` = 2, and the same for 2. Five variables can take 1 and
+% only two must, so no per-value row forces anything about t; the inference is a sum
+% ACROSS the two values and no row of the decomposition mentions both. See
+% lib/core/prop/gcc.ml's header, rule A.
+%
+% Satisfiable, and t's value is forced once u pins it, so the expected output is worth
+% diffing. The proof is the real deliverable: the pruning's `pol` names both counting
+% rows of the cover, both bound facts of each of w, x, y, z, and the ladder chain that
+% drops the other variables' indicators.
+var 1..2: w :: output_var;
+var 1..2: x :: output_var;
+var 1..2: y :: output_var;
+var 1..2: z :: output_var;
+var 1..6: t :: output_var;
+var 2..2: c1;
+var 2..2: c2;
+constraint fzn_global_cardinality([w, x, y, z, t], [1, 2], [c1, c2]);
+constraint int_le(t, 3);
+solve satisfy;

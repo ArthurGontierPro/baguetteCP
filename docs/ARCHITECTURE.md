@@ -89,6 +89,9 @@ lib/core/       Baguette_core
                             global (M4-T1, D-0061)
     element.ml              array_int_element, DOMAIN consistent; the index is a
                             VIEW rather than an auxiliary (M4-T3, D-0058)
+    gcc.ml                  global_cardinality: all_different's generalisation, by
+                            interval CAPACITY. Counting rows over the ORDER encoding,
+                            so it needs no direct encoding at all (M7-T16, D-0078)
     linear.ml               int_lin_le. THE REFERENCE PROPAGATOR -- copy this shape
     lin_eq.ml               int_lin_eq (two model rows, see D-0011)
     ne.ml                   int_lin_ne and int_ne (VALUE consistency)

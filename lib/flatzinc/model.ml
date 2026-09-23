@@ -103,6 +103,23 @@ type cstr =
      against what SPEC 2.1 says the constraint means, never against the shape
      lib/flatzinc/compile.ml happens to post for it. *)
   | All_different of operand list
+  (* M7-T16. `fzn_global_cardinality(xs, cover, counts)`: for each position i,
+     `counts[i]` is exactly how many of `xs` take the value `cover[i]`. The cover is an
+     array of CONSTANTS (SPEC 2.1's form, and the only one lib/core/prop/gcc.ml's model
+     rows can be built over); the counts are operands, so a fixed cardinality is the
+     degenerate case rather than a different constructor.
+
+     Kept as the RELATION for the reason [All_different] is: [check_assignment] must
+     judge a solution against what the constraint MEANS, never against the rows
+     lib/flatzinc/compile.ml happens to post. That matters more here than anywhere,
+     because the whole point of M7-T16 is that the propagator infers things the
+     decomposition does not -- an oracle written against the decomposition could not
+     tell a stronger propagator from a wrong one.
+
+     Note what the relation does NOT say: nothing constrains an `xs` to take a cover
+     value at all. `global_cardinality` is the OPEN form; the closed form is a different
+     builtin. *)
+  | Global_cardinality of operand list * int array * operand list
   (* M4-T3. `array_int_element(idx, as, c)`: [as] is a CONSTANT array and the index is
      1-BASED, so the relation is `as[idx] = c` with `idx` in `1..|as|`. The array is an
      `int array` and not an `operand list` because SPEC 2.1's M4 row admits only the
@@ -234,6 +251,11 @@ let string_of_cstr t = function
   | All_different xs ->
       Printf.sprintf "all_different([%s])"
         (String.concat ", " (List.map (string_of_operand t) xs))
+  | Global_cardinality (xs, cover, counts) ->
+      Printf.sprintf "global_cardinality([%s], [%s], [%s])"
+        (String.concat ", " (List.map (string_of_operand t) xs))
+        (String.concat ", " (List.map string_of_int (Array.to_list cover)))
+        (String.concat ", " (List.map (string_of_operand t) counts))
   | Array_int_element (i, vs, c) ->
       Printf.sprintf "%s = [%s][%s]" (string_of_operand t c)
         (String.concat ", " (List.map string_of_int (Array.to_list vs)))
@@ -552,6 +574,14 @@ let check_assignment (t : t) (values : int array) : bool =
           | v :: rest -> (not (List.mem v rest)) && distinct rest
         in
         distinct vs
+    (* M7-T16, the relation as SPEC 2.1 states it: a tally per cover value, compared
+       against that position's count. Written as the obvious scan for [All_different]'s
+       reason -- this is the oracle, so it is written to be obviously right. *)
+    | Global_cardinality (xs, cover, counts) ->
+        let vs = List.map value xs in
+        List.for_all2
+          (fun cv cnt -> List.length (List.filter (fun v -> v = cv) vs) = value cnt)
+          (Array.to_list cover) counts
     (* M4-T3, the relation as SPEC 2.1 states it and not as lib/flatzinc/compile.ml
        posts it: the index is 1-based, it must land inside the array, and the selected
        constant must equal the result. The range test is written out rather than left to

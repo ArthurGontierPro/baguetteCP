@@ -610,7 +610,16 @@ let evaluate (m : M.t) (assign : int array) =
          judges with [Model.check_assignment], this one judges the end-to-end solutions. *)
       | M.Array_int_element (i, vs, c) ->
           let k = operand i in
-          k >= 1 && k <= Array.length vs && vs.(k - 1) = operand c)
+          k >= 1 && k <= Array.length vs && vs.(k - 1) = operand c
+      (* M7-T16. Again this file's own reading, for the reason above: a tally per cover
+         value, compared against that position's count. Written as the obvious scan
+         rather than shared with [Model.check_assignment], so that the two would have to
+         be wrong in the same way to agree. *)
+      | M.Global_cardinality (xs, cover, counts) ->
+          let vs = List.map operand xs in
+          List.for_all2
+            (fun cv cnt -> List.length (List.filter (fun v -> v = cv) vs) = operand cnt)
+            (Array.to_list cover) counts)
     m.M.constraints
 
 (* Brute force over the declared box: the independent oracle for the expected answer.

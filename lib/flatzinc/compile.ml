@@ -160,6 +160,7 @@ module Lin_eq = Baguette_core.Lin_eq
 module Ne = Baguette_core.Ne
 module Alldiff = Baguette_core.Alldiff
 module Element = Baguette_core.Element
+module Gcc = Baguette_core.Gcc
 module View = Baguette_core.View
 
 (* M2-L12/D-0052: the clause propagator was widened to general order literals and its
@@ -900,6 +901,141 @@ let compile (m : Model.t) : t =
     in
     decompose [] xs @ global
   in
+  (* ------------------------------------------------------------------------ M7-T16
+
+     `fzn_global_cardinality(xs, cover, counts)`: the COUNTING ROWS
+     lib/core/prop/gcc.ml's derivations are built over, and the propagator instance.
+
+     THE ROWS ARE OVER THE ORDER ENCODING, and that is forced rather than chosen. A
+     tally is naturally a sum over the DIRECT encoding, but the direct encoding does not
+     exist when the .opb is written -- [Encoding.start_proof] introduces it later, with
+     `red` (PROOF-FORMAT section 3) -- so a model row naming `x_eq_v` would name
+     variables the model file has never heard of. The identity
+     `[x = v] = x_ge_v - x_ge_(v+1)` makes the same tally linear in literals the .opb
+     already has, and gcc.ml's header says what that buys: no direct encoding is
+     requested for this constraint at all, which is the width-proportional cost
+     all_different pays and this does not.
+
+     WHAT IS FOLDED AND WHAT IS A TERM. An x that is FIXED -- a constant operand, or a
+     variable declared on a single value -- has no order literal at its own value, so it
+     is not a term of any row and not a variable of the propagator; it is counted once,
+     into that value's [const_v], which both the row's right-hand side and every count
+     in gcc.ml subtract and add back respectively. Likewise a variable whose declared
+     domain STARTS at v contributes the constant 1 rather than a literal, which is
+     [ones].
+
+     THREE REFUSALS, all of them here rather than in the propagator, because this is
+     where a source position is in hand:
+
+       - a cover and a counts array of different lengths;
+       - a count that is not a variable. The rows subtract the count's ladder, and a
+         constant has none; the model should declare it as a one-value variable, which
+         IS supported and is what every model test for this row uses;
+       - the same variable twice in [xs]. Its tally contribution would be 2 and every
+         cancellation in gcc.ml assumes 1. all_different can let a repeat through
+         because its pairwise decomposition refutes it; there is no such decomposition
+         here, so it is refused rather than mis-counted. *)
+  let post_global_cardinality pos (xs : Model.operand list) (cover : int array)
+      (counts : Model.operand list) =
+    if Array.length cover <> List.length counts then
+      Error.failf pos
+        "builtin `fzn_global_cardinality`: the cover has %d values but there are %d \
+         counts; they must match position for position"
+        (Array.length cover) (List.length counts);
+    let decl i =
+      let d = Store.get store (Var.of_int i) in
+      (Domain.lo d, Domain.hi d)
+    in
+    let fixed_value = function
+      | Model.Const n -> Some n
+      | Model.Var i ->
+          let lo, hi = decl i in
+          if lo = hi then Some lo else None
+    in
+    let movable =
+      List.filter_map
+        (fun op ->
+          match op with
+          | Model.Var i when Option.is_none (fixed_value op) -> Some i
+          | _ -> None)
+        xs
+    in
+    if List.length (List.sort_uniq compare movable) <> List.length movable then
+      Error.failf pos
+        "builtin `fzn_global_cardinality`: the same variable appears more than once in \
+         the array. Its contribution to a tally would be more than one, which every \
+         cancellation in lib/core/prop/gcc.ml assumes it is not";
+    let consts = List.filter_map fixed_value xs in
+    let cover_rows =
+      List.mapi
+        (fun j cnt ->
+          let v = cover.(j) in
+          let ci =
+            match cnt with
+            | Model.Var i -> i
+            | Model.Const _ ->
+                Error.failf pos
+                  "builtin `fzn_global_cardinality`: the count at position %d is a \
+                   constant. The row subtracts the count's order literals and a constant \
+                   has none; declare it as a variable on a single value"
+                  j
+          in
+          let cname = name_of pos ci in
+          let cdlo, cdhi = decl ci in
+          let dv =
+            List.filter
+              (fun i ->
+                let lo, hi = decl i in
+                lo <= v && v <= hi)
+              movable
+          in
+          let const_v = List.length (List.filter (fun n -> n = v) consts) in
+          let ones = List.length (List.filter (fun i -> fst (decl i) = v) dv) in
+          let terms =
+            List.concat_map
+              (fun i ->
+                let nm = name_of pos i in
+                let lo, hi = decl i in
+                (if v > lo then [ (1, Lit.ge nm v) ] else [])
+                @ if v + 1 <= hi then [ (-1, Lit.ge nm (v + 1)) ] else [])
+              dv
+            @ List.init (max 0 (cdhi - cdlo)) (fun k -> (-1, Lit.ge cname (cdlo + 1 + k)))
+          in
+          let ge_cid, le_cid =
+            Encoding.add_equality encoding terms (cdlo - ones - const_v)
+          in
+          (v, Var.of_int ci, const_v, ge_cid, le_cid))
+        counts
+    in
+    (* ONE [request_direct] CALL, AND IT IS NOT FOR THE DERIVATION.
+
+       Nothing in lib/core/prop/gcc.ml names a direct literal -- the whole point of the
+       order-encoded counting rows above is that it does not have to (D-0078). The call
+       is here because lib/core/trace.ml's [derive_ahead] triggers on
+       [Encoding.has_direct] of the PRUNED variable, and that test is a PROXY for "this
+       variable is in a counting global's scope": the project materialises the direct
+       encoding for exactly the variables a global reasons about, so `has_direct` has so
+       far been the same set. gcc is the first family for which it is not.
+
+       Without the call, gcc's trace lines go out as bare `rup` with no `pol` ahead of
+       them, and 3.0.2 refuses them -- MEASURED, not feared, on a scene where a gcc
+       pruning lands under a decision and is cited by the nogood that closes the branch.
+       That is I-X10 failing, and the classification in test/unit/test_trace.ml says gcc
+       is [Needs_derivation] precisely so that it cannot fail quietly.
+
+       The honest fix is a first-class marker -- "this pruning needs its derivation
+       written ahead" as a property of the propagator rather than of the encoding -- and
+       trace.ml's own comment already names it ("the alternative is a per-entry flag
+       threaded from the propagator through Store.entry"). That is a change to
+       lib/core/trace.ml and lib/proof/encoding.ml, neither of which M7-T16 owns; it is
+       filed under `## Cross-session requests`. Until then this call buys the trigger,
+       and what it costs is the direct encoding's width-proportional `red` lines for the
+       gcc scope (D-0028) -- real, and the reason it is spelled out here rather than
+       slipped in beside the propagator. *)
+    List.iter (fun i -> Encoding.request_direct encoding (name_of pos i)) movable;
+    let p = Gcc.make store encoding ~cover:cover_rows (List.map Var.of_int movable) in
+    [ (fun id -> Propagator.pack ~id (module Gcc : Propagator.S with type t = Gcc.t) p) ]
+  in
   (* ------------------------------------------------------------------------ M4-T3
 
      `array_int_element(idx, as, c)`, with `as` a constant array and a 1-BASED index.
@@ -1468,6 +1604,8 @@ let compile (m : Model.t) : t =
           | Model.Int_div (x, y, q, aux) -> post_int_div pos x y q aux
           | Model.Int_abs (x, z, aux) -> post_int_abs pos x z aux
           | Model.All_different xs -> post_all_different pos xs
+          | Model.Global_cardinality (xs, cover, counts) ->
+              post_global_cardinality pos xs cover counts
           | Model.Array_int_element (i, vs, c) -> post_array_int_element pos i vs c
         with Checked.Overflow msg ->
           reject_row pos

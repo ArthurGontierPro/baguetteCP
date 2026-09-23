@@ -1,0 +1,43 @@
+% global_cardinality, the interval-capacity REFUTATION with every part of the
+% derivation actually exercised -- and the model that found the defect the header of
+% lib/core/prop/gcc.ml calls the overshoot.
+%
+% p, q, r, s and u are declared 1..4 and NARROWED to 2..3 by linear rows, so their
+% windows are confined to the interval [2, 3] while their DECLARED ranges are not. w is
+% left wide. The cover gives [2, 3] a total capacity of four and five variables are
+% confined to it, so the counting refutes the model: |H| = 5 > cap = 4.
+%
+% Why the narrowing matters, and why this model exists beside gcc_capacity_unsat.fzn
+% where everything is declared narrow. With declared-narrow variables every bound
+% literal the derivation would lean on is a CONSTANT, the whole argument is two model
+% rows added together, and none of the machinery is touched. Here:
+%   - each confined variable contributes two ladder chains and leaves its two bound
+%     literals in the row, which [bound_cancels] then removes because the linear rows
+%     established them at the ROOT;
+%   - w is in the rows but confined to nothing, so its indicator is dropped by the free
+%     ladder line [drop_summands] builds;
+%   - the surplus variable is pushed past its own upper bound while its DECLARED top is
+%     still above the interval, so the residue is a real literal and the row derives a
+%     valid `u >= 4` instead of a contradiction unless the overshoot chain closes it.
+%     3.0.2 said so in as many words -- "the constraint with ID 48 is not contradicting"
+%     -- which is how that half of the derivation came to be written.
+var 1..4: p;
+var 1..4: q;
+var 1..4: r;
+var 1..4: s;
+var 1..4: u;
+var 1..4: w;
+var 2..2: c2;
+var 2..2: c3;
+constraint int_lin_le([-1],[p],-2);
+constraint int_lin_le([1],[p],3);
+constraint int_lin_le([-1],[q],-2);
+constraint int_lin_le([1],[q],3);
+constraint int_lin_le([-1],[r],-2);
+constraint int_lin_le([1],[r],3);
+constraint int_lin_le([-1],[s],-2);
+constraint int_lin_le([1],[s],3);
+constraint int_lin_le([-1],[u],-2);
+constraint int_lin_le([1],[u],3);
+constraint fzn_global_cardinality([p,q,r,s,u,w],[2,3],[c2,c3]);
+solve satisfy;

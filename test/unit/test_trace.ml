@@ -1089,6 +1089,23 @@ let ix10_table =
        cutting-planes derivation goes on the page immediately before the line, so the
        line is RUP in sequence. D-0040's sentence, implemented. *)
     ("alldiff.ml", Needs_derivation);
+    (* M7-T16: global_cardinality. [Needs_derivation], for all_different's reason and
+       one more.
+
+       Its pruning counts ACROSS values: one at-least-one per confined variable and one
+       counting row per cover value of the interval, summed. That is several model
+       constraints by any reading, so the trace line is not RUP against the .opb alone
+       and lib/core/trace.ml's [derive_ahead] is what discharges I-X10 for it, exactly
+       as for alldiff.ml.
+
+       The extra reason is worth recording because it is not alldiff's. gcc's derivation
+       leans on BOUND FACTS that no unit line states -- a decision is not an assumption
+       in this format -- so the chains it sums leave those bounds in the row as literals
+       (D-0077). The line it writes is therefore `the pruning \/ ~the bounds it read`,
+       which is RUP only in sequence, after the pol that derives it. A future reading of
+       this row as Single_row on the grounds that "the counting rows are two" would be
+       wrong on both counts. *)
+    ("gcc.ml", Needs_derivation);
   ]
 
 (* (a) CLOSURE. OCaml cannot reflect over its own modules, so the only way to notice a
@@ -1151,14 +1168,14 @@ let test_ix10_closure () =
       let needs =
         List.map fst (List.filter (fun (_, c) -> c = Needs_derivation) ix10_table)
       in
-      if needs <> [ "alldiff.ml" ] then
+      if needs <> [ "alldiff.ml"; "gcc.ml" ] then
         Printf.printf
           "     Needs_derivation is now %s. test_ix10_derive_ahead below drives\n\
-          \     `alldiff.ml` and nothing else, so any other family here is classified\n\
-          \     but UNCHECKED: give it a scene there. See D-0040.\n"
+          \     `alldiff.ml` and `gcc.ml` and nothing else, so any other family here is\n\
+          \     classified but UNCHECKED: give it a scene there. See D-0040.\n"
           (String.concat ", " needs);
       check "I-X10 closure: every Needs_derivation family is one the content check drives"
-        (needs = [ "alldiff.ml" ])
+        (needs = [ "alldiff.ml"; "gcc.ml" ])
 
 (* (b) CONTENT. The closure check is a name list; on its own it would pass forever even
    if I-X10 were false. This asserts the checker's actual verdict on the shape a
@@ -1340,7 +1357,61 @@ solve satisfy;
    same string docs/INVARIANTS.md I-X10 records as measured. *)
 let ix10_regin_line = "rup +1 ~z_ge_3 +1 z_ge_4 >= 1 ;"
 
-let test_ix10_derive_ahead ~tag ~src ~claim () =
+(* M7-T16's scene, and it exists because gcc BROKE the trigger rather than the rule.
+
+   p is confined to 2..3 by two linear rows and r, t to 2..3 by their sum, so the cover's
+   capacity over [2, 3] -- one 2 and two 3s -- is exactly used up by {p, r, t}. q is
+   free, and the pruning the lane pins is the one that pushes q OUT of [2, 3]:
+   `q >= 4 \/ ~(the five bounds the counting read)`. `int_ne(q, 1)` then makes the
+   branch that takes q the other way fail, so a conflict happens, [Trace.emit] runs and
+   the line goes on the page -- while the model itself stays SATISFIABLE, which is where
+   a rejected line is visible at all (D-0053, D-0066-as-amended).
+
+   WHAT THIS FOUND. lib/core/trace.ml's [derive_ahead] triggers on
+   [Encoding.has_direct] of the pruned variable, which its own comment describes as
+   deliberately over-triggering. It also UNDER-triggers, and gcc is the first family to
+   show it: gcc's counting rows are over the ORDER encoding and it names no direct
+   literal anywhere, so `has_direct` was false for its whole scope and every one of its
+   trace lines went out as a bare `rup`. 3.0.2 refused them. The proxy is repaired in
+   lib/flatzinc/compile.ml by requesting the direct encoding for the gcc scope purely to
+   arm the trigger -- stated there in full, and filed as a cross-session request, because
+   the real fix is a marker that says "this pruning needs its derivation ahead" without
+   also minting an encoding nobody reads. *)
+let ix10_gcc_source =
+  {|var 1..4: q;
+var 1..4: p;
+var 2..4: r;
+var 2..4: t;
+var 1..1: c2;
+var 2..2: c3;
+constraint int_lin_le([1],[p],3);
+constraint int_lin_le([-1],[p],-2);
+constraint int_lin_le([1,1],[r,t],5);
+constraint fzn_global_cardinality([q,p,r,t],[2,3],[c2,c3]);
+constraint int_ne(q,1);
+solve :: int_search([q,p,r,t], input_order, indomain_min, complete) satisfy;
+|}
+
+(* The line the capacity pruning of r writes: its claim, disjoined with the negation of
+   the bounds its counting read. Pinned verbatim for [ix10_hall_line]'s reason -- a
+   change in what Gcc records as its reason must redden here rather than silently
+   retarget the check at some other line. *)
+let ix10_gcc_line =
+  "rup +1 q_ge_4 +1 ~q_ge_2 +1 ~p_ge_2 +1 p_ge_4 +1 r_ge_4 +1 t_ge_4 >= 1 ;"
+
+(* [outcome]: what the scene must answer.
+
+   The two M4 scenes are UNSAT, and the assertion below reads that as "a conflict
+   happened, so [Trace.emit] ran and the line was written".  M7-T16's scene is SAT, and
+   deliberately: a gcc pruning that feeds a ROOT conflict is consumed as a `pol` and
+   never gets a trace line at all, so the only way to see one is a conflict UNDER a
+   decision, which means a branch that fails inside a model that does not.  Nothing is
+   dropped by saying so -- the substance of this lane is the three checks that follow
+   (the line was written, a `pol` precedes it, the whole proof verifies) plus the BREAK,
+   and all four are asserted for every scene.  If anything, a SAT scene is the stronger
+   place to stand: D-0053 and D-0066-as-amended both say a proof defect over an UNSAT
+   model can be accepted silently. *)
+let test_ix10_derive_ahead ~tag ~src ~claim ~outcome () =
   let dir = Filename.temp_file "baguette_ix10_ahead" "" in
   Sys.remove dir;
   Sys.mkdir dir 0o700;
@@ -1367,13 +1438,21 @@ let test_ix10_derive_ahead ~tag ~src ~claim () =
     List.iter (fun (v, value) -> values.(Var.to_int v) <- value) a;
     F.Model.check_assignment m values
   in
+  let expect = outcome in
   let outcome =
     Search.solve ~engine:comp.F.Compile.engine ~store:comp.F.Compile.store ~ctx
       ~check:independent ()
   in
   close_out oc;
-  check "I-X10 ahead: the scene is UNSAT, so the Hall pruning's line is written"
-    (outcome = Search.Unsat);
+  check
+    (Printf.sprintf
+       "I-X10 ahead: the scene answered %s as the lane requires, so a conflict happened \
+        and the pruning's line is written"
+       (if outcome = Search.Unsat then "UNSAT" else "SAT"))
+    (match (outcome, expect) with
+    | Search.Unsat, `Unsat -> true
+    | Search.Sat _, `Sat -> true
+    | _ -> false);
   let proof = read_file pbp in
   let ls = List.map strip_label (lines_of proof) in
   let index_of want =
@@ -1728,9 +1807,11 @@ let () =
   test_ix10_closure ();
   test_ix10_content ();
   test_ix10_derive_ahead ~tag:"(M4-T1, a bound move)" ~src:ix10_hall_source
-    ~claim:ix10_hall_line ();
+    ~claim:ix10_hall_line ~outcome:`Unsat ();
   test_ix10_derive_ahead ~tag:"(M4-T2, a hole)" ~src:ix10_regin_source
-    ~claim:ix10_regin_line ();
+    ~claim:ix10_regin_line ~outcome:`Unsat ();
+  test_ix10_derive_ahead ~tag:"(M7-T16, a gcc capacity push)" ~src:ix10_gcc_source
+    ~claim:ix10_gcc_line ~outcome:`Sat ();
   test_is4_gate ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
