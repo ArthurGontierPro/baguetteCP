@@ -1152,6 +1152,146 @@ let test_search_strategies () =
        solve :: int_search([x], input_order, indomain_random, complete) satisfy;\n"
     ~needles:[ "unsupported value-choice strategy"; "indomain_random" ]
 
+(* ============================== M7-T9: what indomain_split COSTS in the proof
+
+   docs/ROADMAP.md's M7-T9 row predicted that `indomain_split` would be CHEAPER to
+   justify than `indomain_min`, on the argument that it branches on an ORDER LITERAL and
+   the order encoding is built out of exactly those (D-0028). The row asked for the claim
+   to be measured rather than asserted. It is measured here, and IT DOES NOT HOLD -- on
+   this model `indomain_split` is DEARER, and the reason the prediction failed is more
+   useful than the prediction.
+
+   THE PREDICTION IS ABOUT THE WRONG QUANTITY. Every decision this solver makes is
+   already one order literal: `Search.branch` writes `x_ge_(k+1)` for `indomain_min`,
+   `indomain_max` and `indomain_split` alike, and neither the bridge (M1-T55) nor the
+   nogood is shaped by where k sits inside [lo, hi). So the PER-DECISION cost of the three
+   is identical by construction, and there was never a saving available there. What a
+   value choice changes is the TREE: how many decisions get made, and how deep.
+
+   So the comparison is a tree comparison wearing proof-sized units, and which way it goes
+   is a property of the model, not of the encoding. Two models, both measured while
+   writing this:
+
+     (i)  every sum of x + y forbidden (a flat refutation -- the first decision on x
+          fixes it, which wipes y whatever the decision was). The two searches are
+          isomorphic: 271 derivation lines and 45 opened levels EACH at width 16, and the
+          proofs differ by 105 bytes of literal spelling and nothing else.
+     (ii) the model below, whose only solution sits at the TOP of x's domain. Here
+          `indomain_min` walks a spine and finds it last; `indomain_split` bisects, which
+          costs internal nodes the spine does not have, and the low half it explores first
+          is entirely fruitless. Split loses.
+
+   The honest general statement is therefore: `indomain_split` costs the same per
+   decision and a different number of decisions, and on a model whose answer the spine
+   reaches early the bisection's extra internal nodes are a NET LOSS in proof size. The
+   assertion below is on the DIRECTION, with both numbers printed, so that a future
+   session that flips it learns something rather than merely going red. *)
+
+let cmp_src valsel =
+  let b = Buffer.create 1024 in
+  Buffer.add_string b "var 0..15: x :: output_var;\nvar 0..15: y :: output_var;\n";
+  (* Every sum from 0 to 29 forbidden, so x = y = 15 is the one solution -- and it is the
+     LAST value `indomain_min` reaches. int_lin_ne is value-consistent, so none of these
+     rows prunes anything until one of the two variables is fixed: the tree is real. *)
+  for s = 0 to 29 do
+    Buffer.add_string b
+      (Printf.sprintf "constraint int_lin_ne([1, 1], [x, y], %d);\n" s)
+  done;
+  Buffer.add_string b
+    (Printf.sprintf "solve :: int_search([x, y], input_order, %s, complete) satisfy;\n"
+       valsel);
+  Buffer.contents b
+
+(* Solve one of them to a real .opb/.pbp pair, run veripb over it, and report the two
+   sizes. [None] for the checker is a FAILURE at the call site, never a skip (M1-T18). *)
+let cmp_run dir tag valsel =
+  let m = F.Builder.of_string ~file:tag (cmp_src valsel) in
+  let c = F.Compile.compile m in
+  let opb = Filename.concat dir (tag ^ ".opb")
+  and pbp = Filename.concat dir (tag ^ ".pbp") in
+  let oc = open_out opb in
+  Baguette_proof.Encoding.write_opb c.F.Compile.encoding oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let writer = Baguette_proof.Writer.create ~audit:true oc in
+  Baguette_proof.Encoding.start_proof c.F.Compile.encoding writer;
+  let ctx =
+    Baguette_core.Justify.create ~writer ~encoding:c.F.Compile.encoding
+  in
+  let check_asn assignment =
+    let values = Array.make (F.Model.nvars m) 0 in
+    List.iter (fun (v, x) -> values.(Var.to_int v) <- x) assignment;
+    F.Model.check_assignment m values
+  in
+  let order = match c.F.Compile.order with Some o -> o | None -> Search.spec_order in
+  let outcome =
+    Search.solve ~engine:c.F.Compile.engine ~store:c.F.Compile.store ~ctx
+      ~check:check_asn ~order ()
+  in
+  close_out oc;
+  let ic = open_in_bin pbp in
+  let proof = really_input_string ic (in_channel_length ic) in
+  close_in ic;
+  let lines = String.split_on_char '\n' proof in
+  (* A DERIVATION LINE is one that mints a constraint id, which in this writer's output
+     is the labelled form `@cN <rule> ...`. Counting those rather than all lines keeps
+     comments, deletions and the header out of the number. *)
+  let derivations =
+    List.length
+      (List.filter
+         (fun l -> String.length l > 2 && l.[0] = '@' && l.[1] = 'c')
+         lines)
+  in
+  (outcome, opb, pbp, String.length proof, derivations)
+
+let test_split_vs_min_proof_size () =
+  let dir = Filename.temp_file "baguette_m7t9" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let o_min, opb_min, pbp_min, bytes_min, der_min = cmp_run dir "min" "indomain_min" in
+  let o_spl, opb_spl, pbp_spl, bytes_spl, der_spl =
+    cmp_run dir "split" "indomain_split"
+  in
+  (* Same problem, same answer, whichever way the tree was walked. A value choice that
+     changed the ANSWER would be a soundness bug, not a heuristic. *)
+  let sat = function Search.Sat _ -> true | _ -> false in
+  check "M7-T9: indomain_min and indomain_split agree on the answer"
+    (sat o_min && sat o_spl);
+  (* Both proofs are checked. A size comparison between two artefacts nobody verified
+     would be a comparison of two guesses. *)
+  (match Baguette_proof.Checker.find () with
+  | None ->
+      incr failures;
+      print_endline
+        "FAIL M7-T9: veripb not found -- NEITHER proof in the size comparison was \
+         checked. Do not treat this as a pass."
+  | Some veripb ->
+      let run opb pbp =
+        Sys.command
+          (Printf.sprintf "%s %s %s > /dev/null 2>&1" (Filename.quote veripb)
+             (Filename.quote opb) (Filename.quote pbp))
+        = 0
+      in
+      check "M7-T9: veripb accepts the indomain_min proof" (run opb_min pbp_min);
+      check "M7-T9: veripb accepts the indomain_split proof" (run opb_spl pbp_spl));
+  Printf.printf
+    "     M7-T9 proof cost, x,y in 0..15, only solution at the top of x:\n\
+    \       indomain_min   %d bytes, %d derivation lines\n\
+    \       indomain_split %d bytes, %d derivation lines\n"
+    bytes_min der_min bytes_spl der_spl;
+  (* THE FINDING, asserted. If this goes red, indomain_split has become the cheaper of
+     the two on this model -- which would be a real change in the search or the learning
+     and is worth understanding before the assertion is flipped. Do not flip it to match
+     new numbers without saying what moved. *)
+  check
+    "M7-T9: indomain_split's proof is NOT cheaper than indomain_min's -- the roadmap's \
+     prediction is refuted"
+    (bytes_spl >= bytes_min && der_spl >= der_min);
+  List.iter
+    (fun f -> try Sys.remove f with _ -> ())
+    [ opb_min; pbp_min; opb_spl; pbp_spl ];
+  try Sys.rmdir dir with _ -> ()
+
 (* ============================================================================== main *)
 
 let () =
@@ -1174,6 +1314,7 @@ let () =
   test_rejections ();
   test_search_constants ();
   test_search_strategies ();
+  test_split_vs_min_proof_size ();
   (* M7-T1. The inversion first -- it is the change -- then the control, which runs
      every pre-M7 assertion under an explicit --max-order-width=10000. *)
   test_width_cap_default ();

@@ -1,0 +1,17 @@
+% M7-T9. `smallest` selects the variable with the smallest value in its DOMAIN
+% MINIMUM. Written so the annotation is observable in the ANSWER, which a search
+% annotation usually is not: the constraints below admit several solutions and
+% indomain_min fixes whichever variable the annotation picks first to its minimum,
+% so the printed solution differs between `smallest` and `input_order`.
+%
+%   a  2..6   lo 2      b  0..6   lo 0      c  3..6   lo 3
+%
+% `smallest` picks b (lo 0) and indomain_min fixes b = 0; a + c is then forced to 9
+% with a <= c, so a = 3 (its own minimum given a >= 3 from a + c = 9, c <= 6) and
+% c = 6. `input_order` would pick a first and fix a = 2, giving b = 1, c = 6.
+var 2..6: a :: output_var;
+var 0..6: b :: output_var;
+var 3..6: c :: output_var;
+constraint int_lin_eq([1, 1, 1], [a, b, c], 9);
+constraint int_le(a, c);
+solve :: int_search([a, b, c], smallest, indomain_min, complete) satisfy;
