@@ -1303,8 +1303,26 @@ type verdict =
    formula, so we claim nothing about one. *)
 let conclusion ?(output = "NONE") t v =
   (* [sol] first: it is a derivation rule and [output] must be the line immediately
-     before [conclusion] (SPEC section 4.3). *)
-  (match v with Sat (_ :: _ as lits) -> solution t lits | _ -> ());
+     before [conclusion] (SPEC section 4.3).
+
+     M7-T6/D-0070: EVERY [Sat], including one with no literals. The [_ :: _] guard this
+     line used to carry was a mechanical carry-over from the shape M1-T18 replaced --
+     [Sat [] -> "conclusion SAT"] against [Sat lits -> "conclusion SAT : <lits>"], where
+     the empty case meant "no assignment to inline" and skipping it was right. It was
+     not right for [sol]: `conclusion SAT` REQUIRES a logged solution, so the empty case
+     emitted a conclusion resting on nothing and 3.0.2 refused the whole proof with "No
+     solution has been logged in the proof and no solution has been given in the
+     conclusion". It is reachable from a model that declares no variables, which is two
+     of the three corpus rejections D-0068 measured.
+
+     It is not the other reading -- an empty assignment on a NON-EMPTY model, where a
+     bare `sol ;` would be a wrong line rather than a missing one. [Search.solve] builds
+     these literals with [Encoding.assignment_lits] over the assignment of EVERY store
+     variable, so the list is empty exactly when the encoding has no variables, which is
+     exactly when the .opb has none either and the empty assignment is the complete one.
+     test/unit/test_proof.ml's control lane asserts the non-empty side rather than
+     leaving that as an argument. *)
+  (match v with Sat lits -> solution t lits | _ -> ());
   rule t (Printf.sprintf "output %s" output);
   (match v with
   | Sat _ -> rule t "conclusion SAT"
