@@ -825,7 +825,16 @@ let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row optio
         loop row' expl' (steps + 1) pivots' antecedents' rows' lifts'
     in
     loop row0 expl0 0 [] [ conflict_row.Propagator.r_cid ] [ row0 ] 0
-  with Give_up f -> Fallback f
+  with
+  | Give_up f -> Fallback f
+  (* M6-T9. The combination and the ladder lift were already wrapped (above), but the
+     SLACK of a combined row is a sum too, and the criterion asks for it on every step
+     ([slack_at] via [stop]/[asserts_at]). On 2014_rectangle-packing (MiniZinc
+     Challenge) that sum passed 2^62 and the raise reached bin/main.ml's
+     internal-overflow arm, exit 4, ending the run -- the opposite of the rule this
+     module states: overflow is a fallback, never an abandoned solve. Anything that
+     overflows anywhere in the walk is now that fallback. *)
+  | Checked.Overflow m -> Fallback (Overflow m)
 
 (* ------------------------------------------------------- the proof side *)
 
