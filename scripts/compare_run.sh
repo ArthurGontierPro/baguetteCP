@@ -29,8 +29,18 @@
 # Phase A therefore flattens with all three libraries even on a single-solver pass
 # (`SOLVERS=chuffed`), which is also what makes `$OUT/flatten.tsv` -- and from it
 # bench/corpus/shared_set.lst -- a property of the corpus rather than of the run. The
-# choice is recorded in `$OUT/pair.tsv`; a solver whose library then refuses that
-# instance gets `FLATTEN-FAIL` for it. That is a library-coverage fact, not an answer.
+# choice is recorded in `$OUT/pair.tsv` (every attempt in `log/<id>.pair`); a solver
+# whose library then refuses that instance gets `FLATTEN-FAIL` for it. That is a
+# library-coverage fact, not an answer.
+#
+# **The rule is deterministic only up to FLATTEN_TIMEOUT**, and that was MEASURED, not
+# foreseen: `2025_gt-sort` (whose flatten is heavy -- a 1.5 MB .ozn) paired
+# `n7_ub20_75.0_BEST.json` in the Chuffed pass and `n9_ub10_50.0_BEST.json` in the GCS
+# pass, because on a loaded node the smaller one's flatten crossed the timeout in one
+# run and not the other. Hence `PAIRS`: a run that is to be compared with an earlier
+# one, or with bench/corpus/answers.tsv, pins its data from that file instead of
+# re-deriving it, and `--answers` marks an instance whose runs paired differently
+# DISPUTED rather than pinning either.
 #
 # Each library: baguette's mznlib via tools/baguette.msc (D-0067), Chuffed's own
 # `share/minizinc/chuffed` via the bundle's chuffed.msc, GCS's `minizinc/mznlib` via
@@ -123,6 +133,10 @@
 #   BAGUETTE_MZN_ID / CHUFFED_MZN_ID / GCS_MZN_ID   the solver ids flattened for
 #   EXTRA_MSC_DIR  prepended to MZN_SOLVER_PATH (the self-test's shims)
 #   ONLY        a file of instance ids; KEEP=1 keeps every artefact; DATA_TRIES (4)
+#   PAIRS       a TSV whose column 1 is the id and whose LAST column is the data file
+#               (`<none>` = bare): a run's pair.tsv, or bench/corpus/answers.tsv.
+#               Listed ids use THAT data instead of searching. Use it for any run
+#               meant to be compared with a pinned answer (see "the instance").
 #   COMPAT      1 (default) passes COMPAT_MZN (mznlib/compat_mzn1.mzn) to the chuffed
 #               and gcs flattens; 0 does not. See "the 1.x shims".
 #
@@ -156,6 +170,7 @@ EXTRA_MSC_DIR="${EXTRA_MSC_DIR:-}"
 KEEP="${KEEP:-0}"
 ONLY="${ONLY:-}"
 DATA_TRIES="${DATA_TRIES:-4}"
+PAIRS="${PAIRS:-}"
 COMPAT="${COMPAT:-1}"
 COMPAT_MZN="${COMPAT_MZN:-$ROOT/mznlib/compat_mzn1.mzn}"
 
@@ -287,8 +302,12 @@ flatten_with() {
   # The MiniZinc 1.x LANGUAGE shims (see "the 1.x shims" in the header): baguette's
   # library includes them itself, the other two get the same file as a second model.
   [ "$COMPAT" = 1 ] && [ "$solver" != baguette ] && compat="$COMPAT_MZN"
-  timeout -k 10 "$FLATTEN_TIMEOUT" "$MZN" -c --solver "$(mzn_id_of "$solver")" "$mzn" \
-    ${compat:+"$compat"} ${dat:+"$dat"} -o "$dst.part" > "$dst.err" 2>&1
+  # --no-output-ozn: with `-o X.part` MiniZinc cannot derive the .ozn's name from the
+  # .fzn's, and writes `<model>.ozn` BESIDE THE MODEL -- i.e. into the shared corpus.
+  # Found on the node 2026-10-01: 412 stray .ozn files under mzn-challenge/. Nothing
+  # here reads an .ozn (the solvers print FlatZinc output directly).
+  timeout -k 10 "$FLATTEN_TIMEOUT" "$MZN" -c --no-output-ozn --solver "$(mzn_id_of "$solver")" \
+    "$mzn" ${compat:+"$compat"} ${dat:+"$dat"} -o "$dst.part" > "$dst.err" 2>&1
   rc=$?
   if [ "$rc" -eq 0 ] && [ -s "$dst.part" ]; then
     mv -f "$dst.part" "$dst" || {
@@ -340,6 +359,16 @@ pair_one() {
   done < <(data_candidates "$(dirname "$mzn")" "$DATA_TRIES")
   ndata=${#cands[@]}
   cands+=("")
+  # PAIRS pins the data file instead of searching for it (see "the instance").
+  local pinned=""
+  if [ -n "$PAIRS" ]; then
+    pinned="$(awk -F'\t' -v i="$id" '$1 == i {d = $NF} END {print d}' "$PAIRS")"
+    if [ -n "$pinned" ]; then
+      cands=("$([ "$pinned" = "<none>" ] || printf '%s' "$pinned")")
+    fi
+  fi
+  : > "$OUT/log/$id.pair"
+  [ -n "$pinned" ] && printf 'pinned\t%s\tfrom %s\n' "$pinned" "$PAIRS" >> "$OUT/log/$id.pair"
   declare -A res=() det=()
   for c in "${cands[@]}"; do
     ok_any=0
@@ -348,6 +377,8 @@ pair_one() {
       rc=$?
       res[$s]=$rc
       det[$s]="$msg"
+      printf '%s\t%s\trc=%s\t%s\n' "${c:-<none>}" "$s" "$rc" "$(flat "$msg")" \
+        >> "$OUT/log/$id.pair"
       [ "$rc" -eq 0 ] && ok_any=1
       [ -n "$first_err" ] || [ "$rc" -eq 0 ] || first_err="$msg"
     done
@@ -522,6 +553,7 @@ preflight() {
   command -v python3 >/dev/null 2>&1 || die "python3 is required (tools/compare/compare.py)"
   [ -f "$TOOL" ] || die "$TOOL is missing"
   [ "$COMPAT" != 1 ] || [ -f "$COMPAT_MZN" ] || die "COMPAT=1 but $COMPAT_MZN is missing"
+  [ -z "$PAIRS" ] || [ -f "$PAIRS" ] || die "PAIRS=$PAIRS does not exist"
   command -v "$MZN" >/dev/null 2>&1 || die "minizinc not found (MZN=$MZN)"
   MZN="$(command -v "$MZN")"
   [ -n "$CHUFFED" ] || CHUFFED="$(dirname "$MZN")/fzn-chuffed"
@@ -615,7 +647,7 @@ main() {
   write_conf
   export OUT MZN BAGUETTE CHUFFED GCS GCS_PROVE MEM_KB PROOF_CAP_KB SOLVE_TIMEOUT
   export FLATTEN_TIMEOUT CHECK_TIMEOUT KEEP DATA_TRIES SOLVERS PAIR_SOLVERS TOOL VERIPB
-  export BAGUETTE_MZN_ID CHUFFED_MZN_ID GCS_MZN_ID COMPAT COMPAT_MZN
+  export BAGUETTE_MZN_ID CHUFFED_MZN_ID GCS_MZN_ID COMPAT COMPAT_MZN PAIRS
   export -f pair_one solve_one flatten_with check_input emit_input_failures instance_id
   export -f validate_fzn data_candidates emit flat mzn_id_of now_ns secs has_row
 

@@ -229,6 +229,17 @@ nd="$(awk -F'\t' '$3 == "NO-DATA"' "$D/out-nd/results.tsv" | wc -l)"
   && echo "ok   NO-DATA found after 300 lines of warnings, for all 3 solvers" \
   || fail "a data-less model whose 'did you forget' follows 300 warnings got $nd NO-DATA rows, not 3: $(cut -f2,3 "$D/out-nd/results.tsv" | tr '\n' ' ')"
 
+# The corpus is READ-ONLY to the harness. MiniZinc writes `<model>.ozn` beside the
+# model unless told not to (it did, 412 times, on the node); only a real minizinc can
+# show it, so with the stub this is vacuous and says so.
+if [ "$MZN" = "$D/bin/minizinc" ]; then
+  echo "     (corpus write check vacuous with the stub minizinc; it runs on the node)"
+elif [ -z "$(find "$D/corpus" -type f ! -name '*.mzn')" ]; then
+  echo "ok   the run wrote nothing into the corpus directory"
+else
+  fail "the run wrote into the corpus: $(find "$D/corpus" -type f ! -name '*.mzn' | tr '\n' ' ')"
+fi
+
 # Every status the harness can assign that this corpus reaches, listed once.
 echo "     statuses reached: $(grep -v '^DONE-' "$R" | cut -f3 | sort -u | tr '\n' ' ')"
 echo "     verdicts reached: $(grep -v '^DONE-' "$R" | cut -f10 | sort -u | tr '\n' ' ')"
