@@ -542,6 +542,7 @@ work. The owning session picks it up.
 | **M7-T16 cannot post a `global_cardinality` propagator without three additive lines in `lib/flatzinc/model.ml` and `lib/flatzinc/builder.ml`, both held by agent-decision for M7-T12.** What is needed: one constructor `Global_cardinality of operand list * int list * operand list` in `model.ml` plus its two `match` arms (~`:234` pretty-print, ~`:548` vars-of), and one dispatch arm for `"fzn_global_cardinality"` in `builder.ml` (~`:542`, beside `all_different_int`). None of it touches what M7-T12 is doing (`search.ml`/`analysis.ml`/`learn.ml`/`phases_of_search`). **Without it the row ships unit tests only** — no `.fzn` model test, and the M7-T15 1.x bridge cannot route `global_cardinality` to the propagator, which is half the deliverable. Requested of the orchestrator; `lib/core/prop/gcc.ml`, its `.opb` rows and its justification proceed meanwhile | `lib/flatzinc/model.ml`, `lib/flatzinc/builder.ml` | agent-gcc | **GRANTED and CLOSED 2026-09-23** by the orchestrator, additive-only in the named regions. Its note is worth keeping: the partition was wrong because these front-end files seam by REGION, not by file -- `model.ml` carries both the search-annotation types and the constraint type, `builder.ml` both `search_of_annot` and the builtin dispatch, so two rows sharing neither concern still collide if whole files are handed out |
 
 | **`Trace.derive_ahead`'s trigger is a proxy, and gcc is the first family it gets wrong.** It fires on `Encoding.has_direct` of the pruned variable, which its own comment calls deliberately OVER-triggering. It also UNDER-triggers: `lib/core/prop/gcc.ml`'s counting rows are over the ORDER encoding and it names no direct literal anywhere, so `has_direct` was false for its whole scope and **every gcc trace line went out as a bare `rup`, which 3.0.2 refused**. M7-T16 buys the trigger back by calling `Encoding.request_direct` for the gcc scope purely to arm it (stated in full at the call site in `compile.ml`) -- which mints the width-proportional `red` lines of an encoding nothing reads, D-0028's own cost. **The real fix is the one `trace.ml`'s comment already names**: a per-entry flag threaded from the propagator, so "this pruning needs its derivation ahead" is a property of the propagator and not of the encoding. Neither file is M7-T16's. See D-0078 | `lib/core/trace.ml`, `lib/proof/encoding.ml` | agent-gcc | raised 2026-09-23, **open** |
+| **`global_cardinality_low_up` does not reach the gcc propagator (M7-T18 found, not needed by any of the nine).** std's `fzn_global_cardinality_low_up` decomposes into `count` sums. A new `mznlib/fzn_global_cardinality_low_up.mzn` would route it, with each count declared on its own bounds: `predicate fzn_global_cardinality_low_up(array [int] of var int: xs, array [int] of int: cover, array [int] of int: lower_bound, array [int] of int: upper_bound) = let { array [index_set(cover)] of var int: c = [ let { var max(0, lower_bound[i])..min(length(xs), upper_bound[i]): ci } in ci | i in index_set(cover) ] } in baguette_global_cardinality(xs, cover, c);` (plus `include "fzn_global_cardinality.mzn";` for the bodyless declaration). Equal bounds then become one-value counts, which D-0082 measured identical to constants. Needs a model lane over the `_low_up` form when it lands | `mznlib/**` | agent-gcc2 | raised 2026-10-01, **open** |
 
 ## Completed
 
@@ -633,6 +634,7 @@ work. The owning session picks it up.
 | M7-T14 + M7-T15 (pairing half) | agent-harness2 | 2026-09-23 | `corpus_run.sh` derives `--max-heap-mb` from its own `MEM_KB` (half, 15625 MB at 32 GB) and exit 5 gets its own `REFUSED-RESOURCE` bucket; data pairing searches one level down and a model with no data anywhere is `NO-DATA`, not `FLATTEN-FAIL`. Wave-28 corpus run launched at `/scratch/arthur/corpus-out-w29` |
 
 | M7-T16 | `lib/core/prop/gcc.ml` (new), `lib/flatzinc/{model,builder,compile}.ml`, `mznlib/**`, `test/unit/{test_trace,test_compile}.ml`, four `test/models/gcc_*` + expected, `docs/DECISIONS.md`, `docs/ARCHITECTURE.md`, `CLAUDE.md` | agent-gcc | released 2026-09-23 -- **D-0078**, branch `wave30-gcc` |
+| M7-T17 + M7-T18 | agent-gcc2 | 2026-10-01 | Derive-ahead fires on `Store.entry.ahead`, set by alldiff/gcc at the pruning call (`Store.deriving_ahead`); gcc's `request_direct` stopgap deleted; 80/80 global-free proofs byte-identical, debruijn `.pbp` 28 552 -> 24 542 B. Constant gcc counts are `View.const k`, byte-identical to `var k..k`; the nine corpus instances all compile and all TIMEOUT at 300 s. D-0082 |
 
 ## Handoff notes
 
@@ -3257,3 +3259,35 @@ Branch `wave30-decision`, four commits, not merged. Gate: `check_fmt.sh` clean,
 `check_unlimited.sh` clean, `dune runtest --root . --force` **2934 ok / 0 failures** (53
 mutation checks among them), `run_model_tests.sh` **103 passed, 0 failed**. Peak RSS 39.8 MB
 (unit) and 18.5 MB (models), both far under the cap.
+
+## M7-T17 + M7-T18 handoff
+
+Branch `wave31-gcc2`, not merged. **D-0082** has the measurements.
+
+1. **Derive-ahead is a property of the propagator now.** `Store.entry.ahead` is stamped by
+   `Store.apply` from a slot only `Store.deriving_ahead` sets; `Alldiff` (Hall moves, Regin
+   holes) and `Gcc` (rule A pushes only) make their pruning calls under it, and
+   `Trace.derive_ahead` reads nothing else. **A new `Needs_derivation` family must call
+   `Store.deriving_ahead` at its pruning call or its lines go out bare** -- the I-X10
+   table in `test_trace.ml` is still the gate that makes you notice, and
+   `test_ix10_derive_ahead` is the content check. M7-T16's gcc `request_direct` is gone;
+   alldiff's and the element index's stay (their derivations cite direct ids). Every
+   global-free model's proof is byte-identical; element now writes no derivation ahead of
+   any line and verifies.
+2. **Model tests barely see the trigger.** Dropping gcc's `deriving_ahead` reddened none
+   of M7-T16's four gcc models -- only test_trace's scene and the new
+   `gcc_const_counts_sat`, which is that scene as a model. Keep that lane.
+3. **Constant gcc counts** are `View.const k`; the `.opb`/`.pbp` are byte-identical to the
+   `var k..k` twin. The nine D-0079 refusals all compile now and all TIMEOUT at 300 s --
+   the TIME blocker, not a proof one. `_closed` reaches the propagator; `_low_up` does not
+   (cross-session request filed, with the line).
+4. **Two requests can be closed by the orchestrator**: the `Trace.derive_ahead` proxy
+   request (agent-gcc, 2026-09-23) is done here; the trace.ml-header `reject_set_domain`
+   request (agent-holes, 2026-09-23) was already done in `b400d062` -- the trace.ml
+   sentence had been fixed, and its twin in `Store.remover`'s header, which still named
+   `reject_set_domain`, is fixed in `bf3479f` (verified against `compile.ml`: hull in the
+   store, one `Ne` per hole).
+
+Gate: `check_fmt.sh` clean, width lint clean, determinism (109 models) clean,
+`check_unlimited.sh` ok, `dune runtest --root . --force` **2943 ok / 0 FAIL**,
+`run_model_tests.sh` **109 passed, 0 failed**. Peak RSS 40.3 MB (unit), 18.7 MB (models).

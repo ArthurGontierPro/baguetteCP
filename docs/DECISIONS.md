@@ -6440,3 +6440,97 @@ built on the node and Chuffed from the MiniZinc 2.10.1 bundle, M7-T17/M7-T18 on 
 M7-T19 on the ten refusals. The comparison can start once (a) Chuffed and GCS run under one
 harness that checks agreement between solvers — the first external oracle this solver has
 ever had — and (b) baguette reports at a time limit instead of being killed.
+
+## D-0082  Derive-ahead is a property of the PROPAGATOR (M7-T17), and a constant gcc count is a VIEW (M7-T18)
+
+**Status**: **DECIDED and MEASURED**, 2026-10-01, agent-gcc2, branch `wave31-gcc2`.
+Closes the cross-session request M7-T16 filed against `lib/core/trace.ml` (D-0078's
+defect (1)) and the nine `fzn_global_cardinality` refusals of D-0079.
+
+### M7-T17 — the trigger
+
+**Before.** `Trace.derive_ahead` wrote a pruning's derivation (`Justify.emit` of its
+forced explanation) ahead of its trace line iff `Encoding.has_direct` held for the pruned
+variable. That was a proxy for "this variable is in a counting global's scope", wrong both
+ways: it over-triggered (any `int_lin_le` pruning of an all_different variable, and every
+element INDEX pruning, got a `pol` nobody needed) and it under-triggered (gcc names no
+direct literal, so M7-T16 had to `request_direct` the gcc scope purely to arm it, minting
+the width-proportional `red` lines of an encoding nothing read).
+
+**After.** `Store.entry` carries `ahead : bool`, stamped by `Store.apply` from a slot that
+only `Store.deriving_ahead` sets, around a call. The PROPAGATOR makes the pruning call
+under it: `Alldiff` for its Hall bound moves and its Regin holes, `Gcc` for rule A's
+capacity pushes (rule C's count bounds are RUP against one row and never had a derivation
+ahead; they still do not). `Trace.derive_ahead` reads `e.ahead` and nothing else; the
+decision-skip and the level/ownership rules (the `pol` is minted at the entry's level and
+retired by the same `w`, I-X2) are unchanged. The engine is not involved. The trace.ml
+header's lead -- answer it from the entry's `prop` with no new field -- does not work:
+`prop` is an instance id, and nothing `Trace` can see maps an id to its family; one
+immediate field per entry is cheaper than threading the instance table through `Search`.
+
+The `request_direct` stopgap in `compile.ml`'s gcc region is DELETED. The two that remain
+are for the derivation, as their comments say: `all_different`'s (its Hall `pol` cites
+`x_eq_v` lines) and the element INDEX's (its derivations cite `direct_lo_id` /
+`direct_hi_id` / `at_least_one_id`).
+
+**The four measurements.**
+
+1. **Byte identity.** Model suite, before (`e59f214`) and after, every `.opb` and `.pbp`
+   hashed: **205 of 214 identical**. All 107 `.opb` are identical. The 9 that differ are
+   all `.pbp` of models with a global, and all shrink: `alldiff_hall_moved_unsat` 3612 ->
+   3405, `alldiff_hall_trace_unsat` 4291 -> 4244, `alldiff_search_unsat` 21751 -> 19524,
+   `element_index_hole_rup_sat` 3316 -> 3264, `element_moved_unsat` 981 -> 932,
+   `gcc_capacity_sat` 2311 -> 191, `gcc_capacity_unsat` 1426 -> 170,
+   `gcc_hall_narrowed_unsat` 4608 -> 610, `gcc_search_sat` 2514 -> 1169. Of the 80 models
+   with no global, **every** proof is byte-identical, which is the promise the trace.ml
+   comment made.
+2. **Lanes.** Every alldiff / element / gcc model verifies (109/109 with M7-T18's two new
+   ones), and so do the three `test_ix10_derive_ahead` scenes. Element now has NO
+   derivation ahead of any line, index side included, and verifies -- `Single_row`, as
+   the I-X10 table classified it, measured on both sides for the first time
+   (`element_index_hole_rup_sat` is SAT).
+3. **`2008_debruijn_binary` on `fataepyc-07`** (flatten with the clone's `tools/`, solve,
+   veripb 3.0.2): before `e59f214` (binary `b9394d8d9e576f0eb1c2673bcfda9e47`) `.pbp`
+   **28 552 B**, 208 `red`; after `26dc38f` (binary `74e11dbf72bb54079727259c5dba378c`)
+   **24 542 B**, 176 `red`, `.opb` 63 145 B both sides, both `s VERIFIED SATISFIABLE`.
+   That is **below the pre-gcc decomposition's 25 202 B** (D-0078) -- the native
+   propagator's proof is now smaller than the decomposition's, not 13% larger.
+4. **The break lanes still redden, and the trigger is load-bearing.** Performed: (a)
+   rule A's pushes made WITHOUT `deriving_ahead` -> test_trace's gcc scene reddens on
+   exactly two checks ("a pol precedes the Hall trace line", "the full proof verifies");
+   its standalone BREAK ("the same line standalone is REFUSED, and on the checker's own
+   judgement") stays green, as it must. Not one model test of M7-T16's four noticed; the
+   new `gcc_const_counts_sat` does ("not implied by reverse unit propagation"). (b)
+   alldiff's two wrappers removed -> both alldiff scenes redden on "the full proof
+   verifies", and `alldiff_hall_trace_unsat` is rejected by veripb.
+
+### M7-T18 — constant counts
+
+A constant count is the count VIEW `View.const k` (D-0058); `Gcc.cover.cx` is a `View.t`.
+The argument that the artefacts are exactly as valid is one observation: the propagator and
+the rows read a count only through `cdlo`, `cdhi`, its current bounds and its ladder, and a
+constant is `var k..k` with all four identical -- `cdlo = cdhi = k`, an EMPTY ladder. So
+the `.opb` row is `sum (x indicators) = k - ones - const_v`, the constant on the DEGREE
+side, which is the row a one-value count variable already got; every derivation's ladder
+range is empty; rule C's attempted narrowing goes through `View.set_lo`/`set_hi`, whose
+`Const` arm returns `Store.unattributed_conflict` -- the value `Store.apply`'s `Failed` arm
+gives the one-value variable. `scope_facts` names no fact for a constant, which has no
+name. **Measured**: `gcc_const_counts_sat` / `_unsat` against their `var k..k` twins give
+`.opb` and `.pbp` byte-identical apart from comment lines; `test_compile.ml` pins the
+`.opb` half, the instance count, and that no gcc-scope variable has a direct encoding.
+
+Lanes: `gcc_const_counts_sat` (SAT; the M7-T16 I-X10 scene with constants, so the
+across-values capacity push lands under a decision, its `pol` ahead of it) and
+`gcc_const_counts_unsat` (UNSAT under search, every branch closed by the constant
+capacities).
+
+**The nine corpus instances**, on `fataepyc-07`, binary `74e11dbf72bb54079727259c5dba378c`,
+300 s solve, `ulimit -v 32000000`, 5 at a time: **9 TIMEOUT, 0 refused, 0 rejected**
+(`2014/2016/2018/2023_elitserien_handball`, `2016/2018_oocsp_racks`,
+`2019/2020_lot-sizing_lot_sizing_cp`, `2025_mondoku_mondoku-gcc-model-balance`). All nine
+flatten (283 KB to 5.7 MB of `.fzn`) and compile; none solves in 300 s, so none has a proof
+to check. That is D-0079's TIME blocker, now reached by nine more instances.
+
+`global_cardinality_closed` reaches the propagator through std's own definition.
+`global_cardinality_low_up` does NOT (std decomposes it into `count` sums); the `mznlib`
+line that would route it is filed as a cross-session request. None of the nine needs it.

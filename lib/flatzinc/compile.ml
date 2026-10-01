@@ -924,13 +924,13 @@ let compile (m : Model.t) : t =
      domain STARTS at v contributes the constant 1 rather than a literal, which is
      [ones].
 
-     THREE REFUSALS, all of them here rather than in the propagator, because this is
+     TWO REFUSALS, both of them here rather than in the propagator, because this is
      where a source position is in hand:
 
        - a cover and a counts array of different lengths;
-       - a count that is not a variable. The rows subtract the count's ladder, and a
-         constant has none; the model should declare it as a one-value variable, which
-         IS supported and is what every model test for this row uses;
+       - (M7-T16 refused a CONSTANT count here as well. M7-T18 lifted that: a constant
+         is the count view [View.const k], whose row is the one-value variable's row
+         with an empty ladder, and it is no longer refused);
        - the same variable twice in [xs]. Its tally contribution would be 2 and every
          cancellation in gcc.ml assumes 1. all_different can let a repeat through
          because its pairwise decomposition refutes it; there is no such decomposition
@@ -970,18 +970,15 @@ let compile (m : Model.t) : t =
       List.mapi
         (fun j cnt ->
           let v = cover.(j) in
-          let ci =
+          (* M7-T18: a CONSTANT count is the count VIEW [View.const k] (D-0058), and its
+             row is the one-value variable's row: [cdlo = cdhi = k], so the ladder term
+             below is empty and [k] sits on the degree side. See gcc.ml's header,
+             "Constant counts". *)
+          let cview, cname, (cdlo, cdhi) =
             match cnt with
-            | Model.Var i -> i
-            | Model.Const _ ->
-                Error.failf pos
-                  "builtin `fzn_global_cardinality`: the count at position %d is a \
-                   constant. The row subtracts the count's order literals and a constant \
-                   has none; declare it as a variable on a single value"
-                  j
+            | Model.Var i -> (View.of_var (Var.of_int i), name_of pos i, decl i)
+            | Model.Const k -> (View.const k, "", (k, k))
           in
-          let cname = name_of pos ci in
-          let cdlo, cdhi = decl ci in
           let dv =
             List.filter
               (fun i ->
@@ -1004,35 +1001,20 @@ let compile (m : Model.t) : t =
           let ge_cid, le_cid =
             Encoding.add_equality encoding terms (cdlo - ones - const_v)
           in
-          (v, Var.of_int ci, const_v, ge_cid, le_cid))
+          (v, cview, const_v, ge_cid, le_cid))
         counts
     in
-    (* ONE [request_direct] CALL, AND IT IS NOT FOR THE DERIVATION.
+    (* NO [request_direct] CALL (M7-T17, D-0082).
 
        Nothing in lib/core/prop/gcc.ml names a direct literal -- the whole point of the
-       order-encoded counting rows above is that it does not have to (D-0078). The call
-       is here because lib/core/trace.ml's [derive_ahead] triggers on
-       [Encoding.has_direct] of the PRUNED variable, and that test is a PROXY for "this
-       variable is in a counting global's scope": the project materialises the direct
-       encoding for exactly the variables a global reasons about, so `has_direct` has so
-       far been the same set. gcc is the first family for which it is not.
-
-       Without the call, gcc's trace lines go out as bare `rup` with no `pol` ahead of
-       them, and 3.0.2 refuses them -- MEASURED, not feared, on a scene where a gcc
-       pruning lands under a decision and is cited by the nogood that closes the branch.
-       That is I-X10 failing, and the classification in test/unit/test_trace.ml says gcc
-       is [Needs_derivation] precisely so that it cannot fail quietly.
-
-       The honest fix is a first-class marker -- "this pruning needs its derivation
-       written ahead" as a property of the propagator rather than of the encoding -- and
-       trace.ml's own comment already names it ("the alternative is a per-entry flag
-       threaded from the propagator through Store.entry"). That is a change to
-       lib/core/trace.ml and lib/proof/encoding.ml, neither of which M7-T16 owns; it is
-       filed under `## Cross-session requests`. Until then this call buys the trigger,
-       and what it costs is the direct encoding's width-proportional `red` lines for the
-       gcc scope (D-0028) -- real, and the reason it is spelled out here rather than
-       slipped in beside the propagator. *)
-    List.iter (fun i -> Encoding.request_direct encoding (name_of pos i)) movable;
+       order-encoded counting rows above is that it does not have to (D-0078). M7-T16
+       requested the direct encoding here anyway, purely to arm lib/core/trace.ml's
+       [derive_ahead], which then triggered on [Encoding.has_direct] of the pruned
+       variable; without it gcc's trace lines went out as bare `rup` and 3.0.2 refused
+       them. That cost the scope's width-proportional `red` lines (+13% on
+       `2008_debruijn_binary`). The trigger is now [Store.entry]'s [ahead], set by
+       gcc.ml's rule A at its own pruning call through [Store.deriving_ahead], so the
+       encoding nothing read is gone with the call. *)
     let p = Gcc.make store encoding ~cover:cover_rows (List.map Var.of_int movable) in
     [ (fun id -> Propagator.pack ~id (module Gcc : Propagator.S with type t = Gcc.t) p) ]
   in
@@ -1064,8 +1046,8 @@ let compile (m : Model.t) : t =
      view.
 
      The RESULT gets none. It was requested here at first, on the argument that
-     lib/core/trace.ml's [derive_ahead] gates on [Encoding.has_direct] of the PRUNED
-     variable and that a result pruning would therefore need its [pol] written out ahead
+     lib/core/trace.ml's [derive_ahead] gated on [Encoding.has_direct] of the PRUNED
+     variable (it no longer does: M7-T17, D-0082) and that a result pruning would therefore need its [pol] written out ahead
      of its trace line (I-X10, D-0040). MEASURED 2026-09-21: dropping the call reddens
      NOTHING -- all six element models and a scene built specifically to need it (an
      index HOLE punched by an `int_ne`, so the result's pruning rests on something

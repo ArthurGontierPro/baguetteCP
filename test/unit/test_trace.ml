@@ -1071,7 +1071,9 @@ let ix10_table =
        pruning: one row plus the result's ladder refutes it. Negate a result pruning:
        each disagreeing position is excluded by its own row and the index's ladder has
        nothing left. MEASURED for the result side -- it has no direct encoding, so
-       Trace.derive_ahead never fires for it, and all seven element models plus a scene
+       Trace.derive_ahead never fired for it -- and, since M7-T17 (D-0082) moved the
+       trigger onto the propagator and element never sets it, for the INDEX side too:
+       all seven element models plus a scene
        built to defeat it verify with nothing written ahead of their lines (I-S4/D-0039:
        RUP against the .opb plus EARLIER TRACE LINES, not a second model constraint). *)
     ("element.ml", Single_row);
@@ -1367,16 +1369,20 @@ let ix10_regin_line = "rup +1 ~z_ge_3 +1 z_ge_4 >= 1 ;"
    the line goes on the page -- while the model itself stays SATISFIABLE, which is where
    a rejected line is visible at all (D-0053, D-0066-as-amended).
 
-   WHAT THIS FOUND. lib/core/trace.ml's [derive_ahead] triggers on
-   [Encoding.has_direct] of the pruned variable, which its own comment describes as
-   deliberately over-triggering. It also UNDER-triggers, and gcc is the first family to
+   WHAT THIS FOUND. lib/core/trace.ml's [derive_ahead] triggered on
+   [Encoding.has_direct] of the pruned variable, which its own comment described as
+   deliberately over-triggering. It also UNDER-triggered, and gcc was the first family to
    show it: gcc's counting rows are over the ORDER encoding and it names no direct
    literal anywhere, so `has_direct` was false for its whole scope and every one of its
-   trace lines went out as a bare `rup`. 3.0.2 refused them. The proxy is repaired in
-   lib/flatzinc/compile.ml by requesting the direct encoding for the gcc scope purely to
-   arm the trigger -- stated there in full, and filed as a cross-session request, because
-   the real fix is a marker that says "this pruning needs its derivation ahead" without
-   also minting an encoding nobody reads. *)
+   trace lines went out as a bare `rup`. 3.0.2 refused them. M7-T16 bought the trigger
+   back by requesting the direct encoding for the gcc scope; M7-T17 (D-0082) replaced
+   the proxy with the marker it was standing in for, [Store.entry]'s [ahead], set by
+   gcc.ml's rule A through [Store.deriving_ahead], and dropped the request.
+
+   THIS IS THE LANE THAT SEES THE MARKER. Measured 2026-10-01: turning rule A's
+   [~ahead:true] into [false] reddens exactly two checks here -- "a pol precedes" and
+   "the full proof verifies" -- and NOT ONE model test, so this scene is the only thing
+   in the suite that would notice. *)
 let ix10_gcc_source =
   {|var 1..4: q;
 var 1..4: p;

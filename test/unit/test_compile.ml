@@ -1573,6 +1573,51 @@ let test_set_domain_holes () =
     (Encoding.n_constraints c2.Compile.encoding = 4
     && not (contains text2 "+1 ~x_ge_2 +1 x_ge_3 >= 1"))
 
+(* M7-T18 / M7-T17 (D-0082): global_cardinality with CONSTANT counts, and no direct
+   encoding for its scope.
+
+   A constant count is [View.const k], and lib/core/prop/gcc.ml's header argues its
+   counting row is the one-value variable's row with an empty ladder. That is checked
+   here as the artefact rather than as the argument: the .opb a constant-count model
+   writes is BYTE-IDENTICAL to the one its `var k..k` twin writes, and the twin is the
+   form every M7-T16 lane was already built on. Same instance count, too, so the
+   constant reaches the propagator rather than being decomposed away.
+
+   And the M7-T16 stopgap stays gone: nothing in the gcc scope has a direct encoding,
+   because derive-ahead no longer needs one to fire (M7-T17). *)
+let test_gcc_constant_counts () =
+  let body =
+    "var 1..3: x1;\n\
+     var 1..3: x2;\n\
+     var 1..3: x3;\n\
+     var 1..3: x4;\n\
+     constraint int_lin_le([1,1],[x1,x2],4);\n"
+  in
+  let const_src =
+    body
+    ^ "constraint fzn_global_cardinality([x1,x2,x3,x4],[1,2,3],[1,1,2]);\n\
+       solve satisfy;\n"
+  in
+  let twin_src =
+    "var 1..1: n1;\nvar 1..1: n2;\nvar 2..2: n3;\n" ^ body
+    ^ "constraint fzn_global_cardinality([x1,x2,x3,x4],[1,2,3],[n1,n2,n3]);\n\
+       solve satisfy;\n"
+  in
+  match (opb_text const_src, opb_text twin_src) with
+  | exception Baguette_flatzinc.Error.Error _ ->
+      check "M7-T18: a constant gcc count is accepted (it was refused until M7-T18)" false
+  | (c, text), (c', text') ->
+      check "M7-T18: a constant gcc count is accepted (it was refused until M7-T18)" true;
+      check "M7-T18: the constant-count .opb is byte-identical to its var k..k twin's"
+        (String.equal text text');
+      check "M7-T18: ... and compiles to the same number of instances"
+        (Engine.n_instances c.Compile.engine = Engine.n_instances c'.Compile.engine);
+      check
+        "M7-T17: no variable of the gcc scope has a direct encoding (the stopgap is gone)"
+        (List.for_all
+           (fun x -> not (Encoding.has_direct c.Compile.encoding x))
+           [ "x1"; "x2"; "x3"; "x4" ])
+
 (* ------------------------------------------------------------------------- main *)
 
 let () =
@@ -1594,6 +1639,7 @@ let () =
   test_search_annotations ();
   test_search_annotated_proofs ();
   test_set_domain_holes ();
+  test_gcc_constant_counts ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

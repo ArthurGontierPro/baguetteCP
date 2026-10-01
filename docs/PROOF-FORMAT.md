@@ -434,6 +434,7 @@ it emits. The table below is the index; it is maintained as propagators land.
 | `bool_clause` | `Domain` | `rup` |
 | `all_different` | *TBD* | Hall-set reasoning; see M4 and D-0004 |
 | `element` | *TBD* | M4 |
+| `global_cardinality` | checking (bounds-level reasoning) | `pol` over the **order-encoded** counting rows `sum_i (x_i_ge_v - x_i_ge_(v+1)) = c_v - const_v` (no direct encoding is requested, D-0078); a constant count is the degree-side constant of the same row (M7-T18, D-0082). Rule A (interval capacity, the Hall rule generalised) sums one row per cover value of the interval and is **not** RUP against the `.opb` alone (I-X10), so its derivation goes on the page **ahead of** its trace line: the propagator makes the push under `Store.deriving_ahead`, the entry carries `ahead = true`, and `Trace.derive_ahead` writes the `pol` first. **That flag, set by the propagator, is the whole trigger** (M7-T17, D-0082) — it was `Encoding.has_direct` of the pruned variable until then. Rule C (count bounds) is RUP against its value's one row and is written bare |
 
 ### The trace line *(D-0018, D-0021 — normative)*
 

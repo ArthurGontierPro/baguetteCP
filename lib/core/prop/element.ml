@@ -153,7 +153,7 @@
        all of this constraint.
 
    MEASURED, not argued, for the second one: the result has no direct encoding at all, so
-   [Trace.derive_ahead] does not fire for a result pruning, and all seven element models
+   [Trace.derive_ahead] did not fire for a result pruning even under the old trigger, and all seven element models
    plus a scene built to defeat it -- an index HOLE punched by an `int_ne`, so the result
    pruning rests on something [Reason.t] has no fact for -- verify with nothing written
    ahead of their lines. The hole case works because the hole's OWN trace line is already
@@ -171,10 +171,13 @@
    longer a single-row consequence -- I-X10 gains a second member of the kind
    lib/core/trace.ml's header already names for a settle.
 
-   The index side is not measured the same way and cannot easily be: [has_direct] is true
-   for the index, because the derivations genuinely cite its direct ids, so
-   [derive_ahead] writes a [pol] ahead of every index line whether or not one is needed.
-   Its over-triggering is deliberate and its own comment says so.
+   The index side is now measured the same way (M7-T17, D-0082). Until then
+   [derive_ahead] fired on [has_direct], which is true for the index because the
+   derivations genuinely cite its direct ids, so a [pol] went ahead of every index line
+   whether or not one was needed. The trigger is now [Store.entry]'s [ahead], which this
+   module never sets, and every element model -- `element_index_hole_rup_sat`, SAT,
+   among them -- verifies with nothing written ahead of an index line either. That is
+   [Single_row] measured on both sides.
 
    ---------------------------------------------------------------------------
    Snapshotting and I-X6

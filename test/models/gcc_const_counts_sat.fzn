@@ -1,0 +1,29 @@
+% global_cardinality with CONSTANT counts, under SEARCH (M7-T18, D-0082).
+%
+% M7-T16 refused a constant count; M7-T18 makes it the count VIEW [View.const k], whose
+% counting row is the one-value variable's row with an empty ladder (see
+% lib/core/prop/gcc.ml, "Constant counts"). Satisfiable, per D-0053, and built so the
+% COUNTING derivation is on the page under a decision rather than settled at the root
+% (the M7-T16 handoff's point about alldiff_hall_sat).
+%
+% It is test/unit/test_trace.ml's [ix10_gcc_source] with the counts written as the
+% constants they always were (one 2, two 3s). p is confined to 2..3 by two linear rows
+% and r, t by their sum, so {p, r, t} use up the cover's whole capacity over [2, 3] and
+% rule A pushes q OUT of [2, 3] -- a sum ACROSS two cover values, and so a line that is
+% not RUP against the .opb alone (I-X10). indomain_min tries q = 1 first; int_ne(q, 1)
+% refutes it, the branch fails, and the capacity push's trace line goes on the page with
+% its `pol` written ahead of it (M7-T17).
+%
+% MEASURED, and the reason this lane exists rather than a simpler one: make rule A's
+% pushes WITHOUT [Store.deriving_ahead] and this proof is refused by 3.0.2 ("not implied
+% by reverse unit propagation"); gcc_search_sat and gcc_const_counts_unsat still verify.
+var 1..4: q :: output_var;
+var 1..4: p :: output_var;
+var 2..4: r :: output_var;
+var 2..4: t :: output_var;
+constraint int_lin_le([1],[p],3);
+constraint int_lin_le([-1],[p],-2);
+constraint int_lin_le([1,1],[r,t],5);
+constraint fzn_global_cardinality([q,p,r,t],[2,3],[1,2]);
+constraint int_ne(q,1);
+solve :: int_search([q,p,r,t], input_order, indomain_min, complete) satisfy;

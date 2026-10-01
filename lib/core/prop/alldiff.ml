@@ -781,8 +781,12 @@ let pass t store =
         (prune_reason ~keep:(fun v -> a <= v && v <= b) halls y ~lower)
         (prune_expl t ~a ~b ~halls ~y ~lower)
     in
+    (* [deriving_ahead]: a Hall pruning counts several disequality rows, so its trace
+       line is RUP only after its derivation (I-X10, D-0040). M7-T17 / D-0082 made this
+       the trigger; it used to be [Encoding.has_direct] of [x]. *)
     match
-      if lower then Store.set_lo store x bound j else Store.set_hi store x bound j
+      Store.deriving_ahead store (fun () ->
+          if lower then Store.set_lo store x bound j else Store.set_hi store x bound j)
     with
     | Store.Conflict c -> raise (Found c)
     | Store.Changed -> raise Moved
@@ -921,7 +925,8 @@ let remove_one t store ~halls ~vals ~y_tm value =
       (remove_reason ~keep halls y)
       (remove_expl t ~vals ~halls ~y ~value)
   in
-  match Store.remove store y_tm.x value j with
+  (* A Regin hole counts too: [deriving_ahead], as for a Hall bound move. *)
+  match Store.deriving_ahead store (fun () -> Store.remove store y_tm.x value j) with
   | Store.Conflict c -> raise (Found c)
   | Store.Changed -> raise Moved
   | Store.Unchanged -> ()

@@ -556,9 +556,9 @@ let build_constraint env (c : Ast.constraint_item) =
        than in compile.ml so the message carries a source position, the same division
        `array_int_element` below makes for its array.
 
-       The counts are ordinary operands: a count fixed to a number is a variable
-       declared on one value, which the propagator handles as the degenerate case.
-       compile.ml refuses a literal constant there and says why. *)
+       The counts are ordinary operands, a literal constant included: compile.ml
+       makes a constant count the count view [View.const k] (M7-T18, D-0082), whose
+       row is the one-value variable's row, so nothing here distinguishes the two. *)
     | "fzn_global_cardinality" | "baguette_global_cardinality" -> (
         arity 3;
         match c.Ast.c_args with
