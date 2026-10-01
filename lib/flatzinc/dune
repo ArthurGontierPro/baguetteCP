@@ -5,8 +5,11 @@
 ; translation lives on this side of the boundary because core must not depend on
 ; flatzinc (ARCHITECTURE section 1, "Dependency direction").
 ;
-; model.ml, lexer.ml, parser.ml, builder.ml and output.ml still reference nothing from
-; core or proof, so the parser remains testable without the solver.
+; model.ml, lexer.ml, parser.ml and output.ml still reference nothing from core or
+; proof, so the parser remains testable without the solver. builder.ml does, since
+; M7-T19 (D-0083): its bounds inference for a `var int` with no domain computes through
+; core's Checked and Interval, which the dependency direction permits and the parser
+; does not need.
 ;
 ; No menhir stanza: enabling one requires `(using menhir X.Y)` in dune-project, which is
 ; owned elsewhere. lexer.ml/parser.ml are hand written; see the header of lexer.ml.
