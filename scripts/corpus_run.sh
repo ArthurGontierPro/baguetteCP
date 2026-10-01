@@ -63,7 +63,20 @@
 #                      runtime aborting on an allocation it could not make, which
 #                      names nothing. Folding the two together would throw away the
 #                      difference the flag was added to create.
-#   TIMEOUT-SOLVE      exceeded $SOLVE_TIMEOUT
+#   TIMEOUT-SOLVE      exceeded $SOLVE_TIMEOUT -- killed by `timeout`, nothing
+#                      learned from the run
+#   UNKNOWN-LIMIT      M6-T9: the solver stopped ITSELF at `--time-limit` (in
+#                      SOLVER_ARGS), exit 0 with a `limit:` line on stderr, and its
+#                      `conclusion NONE` proof was CHECKED and accepted. Not a
+#                      success and not TIMEOUT-SOLVE: the run answered nothing, but
+#                      it is a verified record of everything it derived. The detail
+#                      column is the compact stats summary (see `limit_detail`). A
+#                      stopped run whose proof is refused is PROOF-REJECTED, as
+#                      any other.
+#   SOLVED-NOPROOF     M6-T9, NO_PROOF=1 only: exit 0, no proof requested. A
+#                      MEASUREMENT row (config b of D-0080), never a success; it
+#                      carries the same compact detail. A stopped run under
+#                      NO_PROOF=1 is UNKNOWN-NOPROOF.
 #   SOLVE-ERR-<rc>     any other exit, rc kept (134 = SIGABRT/OOM, see D-0068)
 #
 # Proof-side:
@@ -71,6 +84,9 @@
 #   PROOF-REJECTED     solved, veripb REJECTED. Its own bucket. Never a failure
 #                      bucket, never merged, and the proof is KEPT for inspection.
 #   TIMEOUT-CHECK      veripb exceeded $CHECK_TIMEOUT -- says nothing either way
+#   CHECK-ERR-<rc>     M6-T9: veripb exited non-zero WITHOUT "Verification error"
+#                      -- it crashed or was killed, it did not judge. Never folded
+#                      into PROOF-REJECTED, which is gated on that wording.
 #   NO-PROOF           solver exited 0 but emitted no .pbp. A result without a
 #                      checked proof is not a result, so this is not a success.
 #
@@ -93,6 +109,14 @@
 #   ONLY     a file of instance ids to run, one per line -- for re-running suspects
 #   DATA_TRIES  how many data files to try before giving up  (default 4)
 #   KEEP     1 to keep every .fzn/.opb/.pbp, not only the interesting ones
+#   SOLVER_ARGS  extra solver arguments, word-split, placed before the model (M6-T9;
+#            e.g. "--time-limit 280 --stats --time"). Non-empty, each instance's
+#            solver stderr is also kept as $OUT/err/<id>.err
+#   NO_PROOF 1 to run the solver WITHOUT --proof and skip the checker (M6-T9,
+#            measurement only: the solver still writes its proof to a temporary
+#            file, so this removes the checker and the artefact, not the logging)
+#   RSS      1 to record the solver's peak RSS via /usr/bin/time when it
+#            exists; the figure goes into the compact detail as rss= (MB). Default 0
 #
 # `PAR` and `MEM_KB` are capped rather than trusted: 92 jobs at 32 GB is the node's
 # documented ceiling (M7-T4) and a harness that lets a typo exceed it takes the node
@@ -166,6 +190,9 @@ KEEP="${KEEP:-0}"
 ONLY="${ONLY:-}"
 HEAP_MB="${HEAP_MB:-auto}"
 DATA_TRIES="${DATA_TRIES:-4}"
+SOLVER_ARGS="${SOLVER_ARGS:-}"
+NO_PROOF="${NO_PROOF:-0}"
+RSS="${RSS:-0}"
 
 PAR_MAX=92
 MEM_KB_MAX=32000000
@@ -421,6 +448,42 @@ emit() {
     "$(printf '%s' "$5" | tr '\t\n\r' '   ' | cut -c1-200)"
 }
 
+# M6-T9. The one-line summary of a run that printed `--stats`/`--time`/`limit:` on
+# stderr -- including a run `timeout` killed, whose SIGTERM handler prints
+# `limit: killed phase=...` (so TIMEOUT-SOLVE rows now say where they were), compact enough for emit's 200-character detail column. Fields that the
+# run did not print are simply absent. Units: cpu and the phase split in seconds,
+# rss in MB.
+limit_detail() {
+  local err="$1" rss="${2:-}"
+  awk -v rss="$rss" '
+    /^limit: (reached|killed)/ {
+      for (i = 3; i <= NF; i++) { split($i, kv, "="); lim[kv[1]] = kv[2] }
+      havelim = 1
+      if ($2 == "killed") killed = 1
+    }
+    /^stats: / && NF >= 3 { st[$2] = $3 }
+    /^time: / && $4 == "us" { tm[$2] = $3 }
+    END {
+      if (havelim && killed) {
+        out = sprintf("killed-in=%s n=%s d=%s c=%s l=%s pbl=%s cpu=%s",
+          lim["phase"], lim["nodes"], lim["decisions"], lim["conflicts"],
+          lim["learned"], lim["pb-learned"], lim["cpu"])
+      } else if (havelim) {
+        out = sprintf("n=%s d=%s c=%s l=%s pbl=%s db=%s inc=%s cpu=%s",
+          lim["nodes"], lim["decisions"], lim["conflicts"], lim["learned"],
+          lim["pb-learned"], lim["db"], lim["incumbent"], lim["cpu"])
+      } else if ("nodes" in st) {
+        out = sprintf("n=%s d=%s c=%s l=%s pbl=%s", st["nodes"], st["decisions"],
+          st["conflicts"], st["learned"], st["pb-learned"])
+      } else out = "no-stats"
+      split("parse compile search emit propag", ph, " ")
+      for (j = 1; j <= 5; j++)
+        if (ph[j] in tm) out = out sprintf(" %s=%.1f", ph[j], tm[ph[j]] / 1e6)
+      if (rss != "") out = out sprintf(" rss=%d", rss / 1024)
+      print out
+    }' "$err"
+}
+
 run_one() {
   local mzn="$1" id L W dat rc sz pbp reason detail
   local c ndata tried ok first_err
@@ -452,7 +515,10 @@ run_one() {
     # so the rename is within one filesystem; preflight has already refused to run
     # anywhere that rename is not atomic.
     rm -f "$W.fzn.part" "$L.fzn"
-    timeout "$FLATTEN_TIMEOUT" "$MZN" -c --solver baguette "$mzn" ${c:+"$c"} \
+    # --no-output-ozn: without it `minizinc -c -o X.part` also writes <model>.ozn NEXT
+    # TO THE MODEL, i.e. the harness writes into its own input (412 stray .ozn files on
+    # the node by wave 31, requested by agent-compare/M6-T4). Nothing here reads them.
+    timeout "$FLATTEN_TIMEOUT" "$MZN" -c --no-output-ozn --solver baguette "$mzn" ${c:+"$c"} \
       -o "$W.fzn.part" > "$L.mzn.err" 2>&1
     rc=$?
     if [ "$rc" -eq 124 ]; then
@@ -530,10 +596,27 @@ $(head -c 120 "$L.mzn.err" | tr '\t\n\r' '   ')"
   sz="$(stat -c%s "$L.fzn")"
 
   rm -f "$L.opb" "$L.pbp"
-  timeout "$SOLVE_TIMEOUT" "$BAGUETTE" ${HEAP_MB:+--max-heap-mb "$HEAP_MB"} \
-    --proof "$L" "$L.fzn" > "$L.out" 2> "$L.err"
+  # M6-T9: SOLVER_ARGS (word-split on purpose), NO_PROOF and the RSS wrapper. With
+  # all three at their defaults this is the pre-M6-T9 command exactly. The wrapper
+  # sits OUTSIDE `timeout`, so a kill still lands on the solver and GNU time
+  # passes timeout's 124 through; the RSS it reports is the reaped descendant's.
+  local -a proofargs=(--proof "$L") wrap=()
+  [ "$NO_PROOF" = "1" ] && proofargs=()
+  [ "$RSS" = "1" ] && [ -x /usr/bin/time ] && wrap=(/usr/bin/time -q -f '%M' -o "$L.rss")
+  rm -f "$L.rss"
+  # shellcheck disable=SC2086
+  "${wrap[@]}" timeout "$SOLVE_TIMEOUT" "$BAGUETTE" ${HEAP_MB:+--max-heap-mb "$HEAP_MB"} \
+    ${SOLVER_ARGS} "${proofargs[@]}" "$L.fzn" > "$L.out" 2> "$L.err"
   rc=$?
   detail="$(head -c 200 "$L.err")"
+  local stopped=0 rsskb="" sdetail=""
+  if [ -n "$SOLVER_ARGS" ]; then
+    mkdir -p "$OUT/err"
+    cp -f "$L.err" "$OUT/err/$id.err" 2>/dev/null
+    [ -s "$L.rss" ] && rsskb="$(tail -1 "$L.rss" | tr -dc 0-9)"
+    sdetail="$(limit_detail "$L.err" "$rsskb")"
+    [ "$rc" -eq 0 ] && grep -q '^limit: reached' "$L.err" && stopped=1
+  fi
   case "$rc" in
     0) ;;
     2)
@@ -556,7 +639,7 @@ $(head -c 120 "$L.mzn.err" | tr '\t\n\r' '   ')"
       return
       ;;
     124)
-      emit "$id" "TIMEOUT-SOLVE" "$sz" - "exceeded ${SOLVE_TIMEOUT}s"
+      emit "$id" "TIMEOUT-SOLVE" "$sz" - "exceeded ${SOLVE_TIMEOUT}s${sdetail:+ $sdetail}"
       cleanup_one "$L"
       return
       ;;
@@ -567,6 +650,16 @@ $(head -c 120 "$L.mzn.err" | tr '\t\n\r' '   ')"
       ;;
   esac
 
+  if [ "$NO_PROOF" = "1" ]; then
+    if [ "$stopped" = "1" ]; then
+      emit "$id" "UNKNOWN-NOPROOF" "$sz" - "$sdetail"
+    else
+      emit "$id" "SOLVED-NOPROOF" "$sz" - "$sdetail"
+    fi
+    cleanup_one "$L"
+    return
+  fi
+
   if [ ! -s "$L.pbp" ] || [ ! -s "$L.opb" ]; then
     emit "$id" "NO-PROOF" "$sz" 0 "solver exited 0 but emitted no proof"
     cleanup_one "$L" keepfzn
@@ -574,17 +667,45 @@ $(head -c 120 "$L.mzn.err" | tr '\t\n\r' '   ')"
   fi
   pbp="$(stat -c%s "$L.pbp")"
 
-  if timeout "$CHECK_TIMEOUT" "$VERIPB" "$L.opb" "$L.pbp" > "$L.vp" 2>&1; then
-    emit "$id" "OK-PROOF-VERIFIED" "$sz" "$pbp" "$(tail -1 "$L.vp")"
+  # M6-T9. The status is taken HERE. It used to be read with `rc=$?` after this
+  # `if ... fi`, which is the status of the if-statement -- 0 whenever the
+  # condition failed and no branch ran -- so the TIMEOUT-CHECK arm below could never
+  # fire and every checker timeout was filed as PROOF-REJECTED. Wave 31's sweep
+  # found it: three "rejections" whose .vp held only the banner, one of which
+  # re-ran to `timeout`'s 124 at exactly 900 s.
+  timeout "$CHECK_TIMEOUT" "$VERIPB" "$L.opb" "$L.pbp" > "$L.vp" 2>&1
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    # M6-T9. A stopped run's proof concludes NONE and the checker must say so; if
+    # it ever says more, the row still lands here but the detail leads with it.
+    if [ "$stopped" = "1" ]; then
+      grep -q 'VERIFIED NO CONCLUSION' "$L.vp" \
+        || sdetail="CHECKER-CONCLUDED-MORE-THAN-NONE: $(tail -1 "$L.vp") $sdetail"
+      emit "$id" "UNKNOWN-LIMIT" "$sz" "$pbp" "$sdetail"
+      cleanup_one "$L"
+      return
+    fi
+    emit "$id" "OK-PROOF-VERIFIED" "$sz" "$pbp" \
+      "$(tail -1 "$L.vp")${sdetail:+ $sdetail}"
     cleanup_one "$L"
     return
   fi
-  rc=$?
   if [ "$rc" -eq 124 ]; then
     # Not a rejection. A checker that ran out of time has said nothing about the
     # proof, and folding it into PROOF-REJECTED would manufacture a defect.
     emit "$id" "TIMEOUT-CHECK" "$sz" "$pbp" "veripb exceeded ${CHECK_TIMEOUT}s"
     cleanup_one "$L"
+    return
+  fi
+  # M6-T9. A checker that exits non-zero WITHOUT its judgement wording did not
+  # judge: wave 31's sweep had three veripb runs end on nothing but the banner line,
+  # and they were filed as PROOF-REJECTED -- a harness/checker failure wearing the
+  # solver's name, the exact D-0069 failure mode. A rejection is now gated on the
+  # checker saying "Verification error"; anything else is CHECK-ERR-<rc>, and the
+  # artefacts are kept for both.
+  if ! grep -aq 'Verification error' "$L.vp"; then
+    emit "$id" "CHECK-ERR-$rc" "$sz" "$pbp" \
+      "checker exited $rc without a verdict: $(tail -c 150 "$L.vp" | tr '\t\n\r' '   ')"
     return
   fi
   # The bucket the run exists for. The artefacts are kept unconditionally, even
@@ -638,8 +759,8 @@ report() {
 main() {
   preflight
   export OUT MZN BAGUETTE MEM_KB SOLVE_TIMEOUT FLATTEN_TIMEOUT CHECK_TIMEOUT KEEP
-  export HEAP_MB DATA_TRIES
-  export -f run_one instance_id validate_fzn emit cleanup_one data_candidates
+  export HEAP_MB DATA_TRIES SOLVER_ARGS NO_PROOF RSS
+  export -f run_one instance_id validate_fzn emit cleanup_one data_candidates limit_detail
 
   find "$CORPUS" -mindepth 3 -name '*.mzn' | sort > "$OUT/all.lst"
   local total
@@ -674,7 +795,8 @@ main() {
   echo "corpus_run: $total in the corpus, $selected selected, $((selected - todo)) \
 already recorded, $todo to run."
   echo "corpus_run: PAR=$PAR MEM_KB=$MEM_KB --max-heap-mb=${HEAP_MB:-<not passed>} \
-DATA_TRIES=$DATA_TRIES checker=$VERIPB"
+DATA_TRIES=$DATA_TRIES checker=$VERIPB${SOLVER_ARGS:+ SOLVER_ARGS=$SOLVER_ARGS}\
+$([ "$NO_PROOF" = "1" ] && echo ' NO_PROOF=1')$([ "$RSS" = "1" ] && echo ' RSS=1')"
 
   if [ "$todo" -gt 0 ]; then
     xargs -a "$OUT/todo.lst" -P "$PAR" -I{} bash -c 'run_one "$@"' _ {} \

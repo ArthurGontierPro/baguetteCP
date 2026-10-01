@@ -582,6 +582,27 @@ work. The owning session picks it up.
 | **`scripts/corpus_run.sh` writes into the corpus.** `minizinc -c ... -o "$W.fzn.part"` cannot derive the `.ozn` name from a `.part` path, so MiniZinc writes `<model>.ozn` BESIDE THE MODEL: 412 stray `.ozn` files under `fataepyc-07:/scratch/arthur/mzn-challenge/` on 2026-10-01 (hours 14-16 UTC), from that script and from compare_run.sh before its fix. They are inert (no data glob matches `.ozn`) but the corpus is meant to be read-only. Fix: add `--no-output-ozn` to the flatten call (verified on 2.10.1, M6-T4's `flatten_with`). Then the orchestrator may `find /scratch/arthur/mzn-challenge -name '*.ozn' -delete` once no run is flattening | `scripts/corpus_run.sh` (agent-perf's this wave), the node corpus | agent-compare | raised 2026-10-01; **half CLOSED 2026-10-01** by the orchestrator: the 412 stray `.ozn` files were deleted from the corpus clone (all untracked and gitignored, `git ls-files '*.ozn'` empty before deleting); the `--no-output-ozn` line is routed to agent-perf, who holds `corpus_run.sh` this wave |
 | **Put `scripts/compare_selftest.sh` in the gate.** It needs only a built `bin/main.exe`, veripb and python3 (a stub `minizinc` and two shims stand in for the rest), runs in seconds, and is the only thing that proves the harness can report a DISAGREE. A `make check` line beside `corpus_selftest.sh` | `Makefile` (orchestrator's) | agent-compare | raised 2026-10-01; **CLOSED 2026-10-01** by the orchestrator: `make check` now runs a `selftests` target (`corpus_selftest.sh` + `compare_selftest.sh`), between `unlimit` and `test` |
 
+| **M6-T9 / D-0080, the largest measured lever, PROPOSED**: `Justify`'s memo is an association list scanned with `==` on every `emit` (`find_memo`), and `wipe_level` filters all of it per backtrack. Its header says the list is "small"; on 2011 costas-array 15 it averaged 13 000 entries -- 1.05e9 list steps, 7.0 s of a 15 s run, 61 % self time in a 60 s profile. `bench/m6t9/justify-memo.patch` keeps identity equality but buckets by a shallow structural hash that never enters a `Deferred` (the header's mutable-key trap) and indexes entries by level for the wipe: costas 60-node prefix 15.32 s -> 3.72 s with a BYTE-IDENTICAL proof, the 107 suite models byte-identical. Corpus numbers: D-0080 config (e) | `lib/core/justify.ml` | agent-perf | open |
+
+| **M6-T9 / D-0080: 26 PROOF-REJECTED the sweep made visible** (they timed out before, so were never checked). 23 are one shape: `rup +1 ~<v>_eq_<k> >= 1 ;` -- a direct-encoding hole with an EMPTY tail at a decision level > 0, the first such line in its proof, right after `Trace.derive_ahead`'s `pol`s: D-0075's "bare `x <> m`" shape, on element indices and `mapget*` variables (spot5 x3, traveling-tppv x3, javarouting/java-routing x10, mario x2, portal, stable-goods, peaceable-queens x2, project-planning). 3 are multi-literal `rup`s in `baguette_global_cardinality` models (generalized-peacable-queens, chessboard, compression). The pre-fix binary rejects the same proofs at the same line numbers. Artefacts: `fataepyc-07:/scratch/arthur/perf-out-{a,a2}/log/<id>.{fzn,opb,pbp,vp}`; list in D-0080 | `lib/core/trace.ml`, `lib/core/prop/{element,gcc}.ml` | agent-perf | open |
+
+| **M6-T9 / D-0080**: `Analysis.scan_support` walks the trail comparing `Store.name` STRINGS (`String.equal (Store.name store e.var) name`) though `support_of` already holds the `Var.t` from `Store.var_named`. 2016 prize-collecting: ~60 % self time in `Analysis.go` + `caml_string_equal` + `Store.name` + `Store.trail_entry`. Compare `Var.equal` instead | `lib/core/analysis.ml` | agent-perf | open |
+
+| **M6-T9 / D-0080**: `Store.var_named` is a LINEAR scan and its header says it is "only ever called from the debug-gated agreement check" -- it is on the hot path of `Pb_analysis` and `Analysis.support_of` now (11 % self on 2018 rotating-workforce). A name -> var index built once | `lib/core/store.ml` | agent-perf | open |
+
+| **M6-T9 / D-0080**: compile on wide models -- `Bytes.map` (literal-name sanitisation) + string hashing per literal: 2009 black-hole compiles in 73 s, 2018 rotating-workforce 28.5 s, 2012 amaze2 and 2017 opd never reach the search inside 280 s | `lib/proof/lit.ml`, `lib/proof/encoding.ml` | agent-perf | open |
+
+| **M6-T9 / D-0080**: the learned-PB-row propagator and learned-row combination are the next tier: 2017 tc-graph-color ~45 % self in `Pb.*`, 2008 trucking ~50 % in `Lit.var_compare`/`List.sort`/`Lit.var_equal`/`Learned` | `lib/core/prop/pb.ml`, `lib/core/learned.ml` | agent-perf | open |
+
+| **M6-T9**: SPEC 2.2 does not list `=====UNKNOWN=====`; `--time-limit` prints it (the FlatZinc standard's marker) when it stops with nothing printed. Please add it to the marker list, with the stopped optimisation case (improving solutions printed, no `==========`) | `docs/SPEC.md` | agent-perf | open |
+
+| **M6-T9**: `--time-limit` measures process CPU (`Sys.time`) because `bin/` links no wall clock. If wall time is wanted, `bin/dune` needs `unix` | `bin/dune` | agent-perf | open |
+
+| **M6-T9**: `Search.conclude_stopped` writes `output NONE` / `conclusion NONE` / `end` through `Writer.rule` and then repeats `Writer.conclusion`'s epilogue (finished, flush, audit) by hand, because `Writer.verdict` has no NONE arm. A `Writer.No_conclusion` verdict would make it one call | `lib/proof/writer.ml` | agent-perf | open |
+
+| **M6-T9**: `corpus_selftest.sh` has no lane for the three classifications this wave added or repaired -- `UNKNOWN-LIMIT`, `CHECK-ERR-<rc>`, and `TIMEOUT-CHECK` (unreachable before `2dda188`). A fake solver printing `limit: reached` and a fake checker exiting 124 / exiting 1 with and without "Verification error" would pin all three | `scripts/corpus_selftest.sh` | agent-perf | open |
+
+
 ## Completed
 
 | Task | Session | Date | Summary |
@@ -676,6 +697,8 @@ work. The owning session picks it up.
 | M7-T19 | agent-cover | 2026-10-01 | `indomain` -> `indomain_min`; `anti_first_fail` (largest size, first_fail's tie-break); bounds inference for undomained `var int` (11 rules incl. a case split), refusing only when unbounded; SPEC 2.1/3.4 amended; D-0083. 9/10 corpus instances past the front end, 1 SAT verified, 0 rejected. Branch `wave31-cover`. |
 | M7-T20 | orchestrator | 2026-10-01 | `Justify.emit_combine` drops a `Weaken []` summand (a single-value variable has nothing to weaken) instead of dying with `Invalid_argument`; `fixed_var_root_unsat` / `fixed_var_sat` lanes, proofs checked. Closes M7-T19's first cross-session request |
 | M6-T4 (+ M5-T3) | `scripts/compare_run.sh` (new), `scripts/compare_selftest.sh` (new), `tools/compare/compare.py` (new), `bench/README.md` (§8, appended), `bench/corpus/{shared_set.lst,answers.tsv}` (new), `docs/DECISIONS.md` (D-0081), `docs/ROADMAP.md` (M6-T4 row) | agent-compare | released 2026-10-01 -- **D-0081**, branch `wave31-compare`, not merged. 0 DISAGREE over 164 agreeing instances |
+
+| M6-T9 | agent-perf | 2026-10-02 | **D-0080**. `--time-limit S` + `Search.config.stop`: a stopped run ends `conclusion NONE` and veripb accepts it (142 corpus runs); `BAGUETTE_PB_ANALYSIS`, `BAGUETTE_NODE_LIMIT`, SIGTERM `limit: killed` line; `corpus_run.sh` `SOLVER_ARGS`/`NO_PROOF`/`RSS`/`UNKNOWN-LIMIT`/`--no-output-ozn`, and two repaired classifications (`TIMEOUT-CHECK` never fired; rejection gated on the checker's wording). Shipped fix: `Pb_analysis.falsified_at` one-pass (57 → 73 verified, median nodes/s 1.44 → 10.8, byte-identical proofs) and overflow-as-fallback in the PB walk. Gate on `249d37d`: 2953 ok / 0 FAIL (peak 40.9 MB), 107/107 models (18.5 MB), selftest PASS, w30 report byte-identical. Branch `wave31-perf`, not merged |
 
 ## Handoff notes
 
@@ -3394,3 +3417,32 @@ bench/corpus/answers.tsv` -- without `PAIRS` the data choice can drift (it did o
 script's group leaves solvers running -- kill by the `compare-out-<name>` path in their
 args. (5) Two cross-session requests: `--no-output-ozn` for corpus_run.sh, and the
 self-test in the gate.
+## M6-T9 handoff, 2026-10-01 (agent-perf)
+
+**What changed.** `--time-limit S` (process CPU, node-granular, `Search.config.stop`): a
+stopped run sweeps every live id and ends `conclusion NONE`, raises `Search.Stopped` with the
+incumbent, prints `=====UNKNOWN=====` if nothing was printed, one `limit:` line on stderr, exit
+0 -- and veripb ACCEPTS it, so every timed-out instance is now a checked proof of what it
+derived. `BAGUETTE_PB_ANALYSIS=off`, `BAGUETTE_NODE_LIMIT=N` (the deterministic stop: use it
+to byte-compare two builds), `stats: conflicts`, a SIGTERM `limit: killed phase=...` line.
+`corpus_run.sh`: `SOLVER_ARGS`, `NO_PROOF`, `RSS`, `UNKNOWN-LIMIT`, `--no-output-ozn`, and two
+repaired classifications (below). The one shipped speed fix is `Pb_analysis.falsified_at`
+(O(trail^2) -> one pass, memoised): corpus 57 -> 73 verified, median nodes/s 1.44 -> 10.8,
+byte-identical proofs. Plus: an overflow in PB analysis's slack sum is now a fallback, not
+exit 4. D-0080 is the record.
+
+**Read before trusting an old corpus table.** `corpus_run.sh` read the checker's status after
+`if ...; fi`, so `TIMEOUT-CHECK` could never fire and every checker timeout was filed
+`PROOF-REJECTED` (fixed `2dda188`; w30 had none, so D-0079 is unaffected). A rejection now
+also requires the checker's own "Verification error".
+
+**The next lever is not mine.** `Justify`'s memo scan (`bench/m6t9/justify-memo.patch`,
+4.1x on costas with byte-identical proofs; its corpus run, config (e), was cut off with node access and needs re-running: `bench/m6t9/sweep3.sh`) is the orchestrator's file;
+then `Analysis.scan_support`'s string compare, `Store.var_named`, the PB-row propagator, and
+compile on wide models. All filed under `## Cross-session requests` with the numbers.
+
+**The 26 rejections are real and pre-existing** -- 23 of them D-0075's bare `x <> m` shape on
+element / `mapget` indices. The artefacts are kept on the node; do not delete
+`/scratch/arthur/perf-out-{a,a2}/log`.
+
+Branch `wave31-perf`, not merged. Gate on the final tip: see the Completed row.

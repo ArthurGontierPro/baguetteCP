@@ -1,0 +1,14 @@
+ 14.55% [.] Baguette_proof.Lit.var_compare_433 - - 
+ 12.06% [.] Stdlib.List.part_610 - - 
+ 10.49% [.] Baguette_proof.Lit.var_equal_477 - - 
+ 8.57% [.] caml_apply2 - - 
+ 7.84% [.] caml_tuplify2 - - 
+ 7.10% [.] Baguette_core.Learned.fun_1732 - - 
+ 7.05% [.] Stdlib.List.rev_append_310 - - 
+ 5.39% [.] Stdlib.@_dps_861 - - 
+ 4.37% [.] caml_string_compare - - 
+ 4.00% [.] Baguette_core.Pb.fun_1125 - - 
+ 2.54% [.] Stdlib.List.fold_left_379 - - 
+ 1.34% [.] caml_initialize - - 
+ 1.17% [.] oldify_one - - 
+ 1.07% [.] do_some_marking - - 

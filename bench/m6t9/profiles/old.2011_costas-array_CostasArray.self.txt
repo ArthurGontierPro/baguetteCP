@@ -1,0 +1,8 @@
+ 23.24% [.] Baguette_core.Justify.go_1013 - - 
+ 17.62% [.] caml_apply2 - - 
+ 17.34% [.] Baguette_core.Pb_analysis.down_435 - - 
+ 13.99% [.] Baguette_core.Store.trail_entry_987 - - 
+ 7.35% [.] Stdlib.Int.equal_294 - - 
+ 4.43% [.] Baguette_core.Store.go_656 - - 
+ 3.81% [.] caml_string_equal - - 
+ 2.31% [.] Baguette_core.Alldiff.go_1122 - - 

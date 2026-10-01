@@ -1,0 +1,16 @@
+# M6-T9 (D-0080). The 60 s profiled runs on fataepyc-07, transcribed from the node's
+# /scratch/arthur/perf-out-prof/<tag>.<id>.err before ssh access was cut (2026-10-01).
+# NEW = 66c0944c60105a4e42334bdcad6d3cf7 (ca9c6b2), OLD = a04c77fda02664ee74a40d9480acda92 (5955d31).
+# Run: OCAMLRUNPARAM=v=0x400 perf record -m 32 -F 499 --call-graph dwarf,8192 -- \
+#      main.exe <id>.fzn --time-limit 60 --stats --time --proof <prefix>   (7 in parallel)
+new.2008_trucking            limit: cpu=63.74s nodes=559 decisions=307 conflicts=251 learned=249 pb-learned=239 db=488 maxdepth=16 incumbent=220 | rss_kb=172116 wall=63.77 | compile 0.003s search 63.73s emit 0.031s | minor_words 20487540036 minor_collections 78205 major_collections 97 top_heap_words 21255404
+new.2009_black-hole          limit: cpu=76.88s nodes=1 decisions=0 conflicts=0 learned=0 | rss_kb=913496 wall=77.01 | compile 73.24s search 0.069s | minor_words 2033173787 minor_collections 10428 major_collections 115 top_heap_words 115823576
+new.2011_costas-array        limit: cpu=60.51s nodes=404 decisions=205 conflicts=198 learned=154 pb-learned=31 db=185 maxdepth=18 | rss_kb=138272 wall=60.54 | compile 0.055s search 60.26s emit 1.41s | minor_words 1247293833 minor_collections 4776 major_collections 31 top_heap_words 16982974
+new.2016_prize-collecting_pc limit: cpu=62.68s nodes=12 decisions=7 conflicts=4 learned=4 | rss_kb=486728 wall=62.76 | compile 5.17s search 56.80s emit 0.057s | minor_words 819482184 minor_collections 3347 major_collections 47 top_heap_words 63468689
+new.2017_tc-graph-color      limit: cpu=60.15s nodes=9054 decisions=4535 conflicts=4518 learned=2609 db=2609 maxdepth=44 | rss_kb=137500 wall=60.18 | compile 0.67s search 59.41s emit 0.89s | minor_words 5395512966 minor_collections 20677 major_collections 128 top_heap_words 16771380
+new.2018_rotating-workforce  limit: cpu=74.15s nodes=2 decisions=1 conflicts=0 | rss_kb=5998136 wall=74.95 | compile 28.51s search 19.02s emit 0.001s | minor_words 6147622904 minor_collections 23472 major_collections 28 top_heap_words 772860535
+old.2011_costas-array        limit: cpu=63.45s nodes=167 decisions=86 conflicts=80 learned=59 pb-learned=11 db=70 maxdepth=18 | rss_kb=129088 wall=63.47 | compile 0.055s search 63.20s emit 0.61s | minor_words 1382182361 minor_collections 5285 major_collections 20 top_heap_words 15639486
+
+# Reproducer for the escaped overflow (D-0080 finding 2), binary ad30bc546206af2169d63f9fe4528acf (aa32015):
+2014_rectangle-packing  before the fix: exit 4, "4597186724412080606 + 16360095104669326 overflows", backtrace Checked.fail <- Pb_analysis.slack_at <- asserts_at <- analyse.loop
+                        after the fix:  limit: cpu=280.11s nodes=3923 decisions=1968 conflicts=1954 learned=1954 pb-learned=0, pb-fallback 1954 (1.00); veripb: s VERIFIED NO CONCLUSION, vrc=0

@@ -109,6 +109,30 @@ type outcome = Sat of assignment | Unsat
    must not paper over this by pretending UNSAT or silently retrying. *)
 exception Unsound_solution of assignment
 
+(* M6-T9. A run stopped by its caller's [config.stop] -- in practice `--time-limit` --
+   before the search answered. It is NOT an outcome of the search, it is the absence of
+   one, which is why it is an exception and not a third [outcome] constructor: every
+   caller that matches [Sat | Unsat] keeps meaning exactly what it meant.
+
+   By the time it is raised the proof has ALREADY ENDED, validly: everything the search
+   derived is on the page (its learned constraints included), every id this solve was
+   handed has been deleted (I-X2), and the last three lines are `output NONE`,
+   `conclusion NONE`, `end pseudo-Boolean proof`. veripb accepts that and reports
+   `VERIFIED NO CONCLUSION` -- so a stopped run still yields a CHECKED record of every
+   line it wrote, which is the evidence M6-T9 exists to produce.
+
+   [best] is an optimisation run's incumbent and its objective value in model units,
+   [None] for a satisfaction run or an optimisation run that found nothing. It is
+   reported, not concluded: every improving solution has already been printed by
+   [b_on_solution] as it was found, and claiming it as a BOUNDS upper bound would need a
+   lower bound the search never derived. *)
+exception Stopped of { best : (assignment * int) option }
+
+(* Internal: raised at node entry by [dfs] when [config.stop] says so, and caught by
+   [search_core], which re-raises it with the state the finaliser needs. Never escapes
+   this module. *)
+exception Limit_hit
+
 (* One node's outcome, before it has been reported to its own caller: a solution, or a
    nogood -- the clause already asserted into the proof (its [Writer.cid] is still
    live) together with the literals it states, so the caller can drop its own most
@@ -268,6 +292,10 @@ type global = {
 
 type stats = {
   mutable nodes : int;
+  mutable conflicts : int;
+      (* M6-T9: nodes whose propagation (or a learned unit) failed, at ANY level, the
+         root's included. Read by --stats and by the --time-limit summary line; nothing
+         inside the search reads it. *)
   mutable decisions : int;
   mutable max_depth : int;
   mutable n_bridges : int;
@@ -514,6 +542,7 @@ type stats = {
 let stats_create () =
   {
     nodes = 0;
+    conflicts = 0;
     decisions = 0;
     max_depth = 0;
     n_bridges = 0;
@@ -1269,6 +1298,15 @@ type config = {
          Wrong on purpose and NOT CLI-reachable, exactly as [break_i_s4],
          [break_ladder_mult], [break_pb_degree] and [backjump_on_pb] are.
          test/unit/test_learn.ml runs it over a SAT model and asserts the rejection. *)
+  stop : unit -> bool;
+      (* M6-T9. Asked once at the entry of every node; [true] stops the search there and
+         [solve]/[optimise] end the proof with `conclusion NONE` and raise [Stopped].
+         Default [never]: the search is byte-for-byte what it was. NODE granularity,
+         deliberately -- a node is the one place the store, the trail and the proof are
+         all in a state the finaliser can sweep, and a check inside propagation or
+         conflict analysis would have to unwind a half-written derivation. The cost is
+         that a single node that takes longer than the remaining budget overruns it; the
+         CLI's caller keeps its own wall-clock `timeout` above `--time-limit` for that. *)
   propagate_learned : bool;
       (* M2-L12. Whether a learned clause gets a runtime consumer: a unit becomes a
          global bound tightening applied at every node, a wider one becomes a
@@ -1304,6 +1342,7 @@ let default_config =
     break_assign_facts = false;
     break_bridge_levels = false;
     bnb = None;
+    stop = (fun () -> false);
   }
 
 let no_learning = { default_config with learn = false; pb = false }
@@ -2409,6 +2448,7 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
      Before [Engine.propagate] and not after: a bound in force at the start of the round
      is one every propagator sees, and [Engine.propagate] enqueues every instance on
      entry anyway, so nothing has to be woken for it. *)
+  if cfg.stop () then raise Limit_hit;
   let trail_before = Store.trail_length store in
   match
     count_learned_activity stats store ~since:trail_before
@@ -2417,6 +2457,7 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
       | None -> Engine.propagate engine store)
   with
   | Engine.Conflict c -> (
+      stats.conflicts <- stats.conflicts + 1;
       (* M2-T7: [c] carries the reporting instance's id ([c.Store.c_prop]) as well as its
          explanation and its bound facts. M2-L3's resolution starts from exactly this
          constraint. *)
@@ -2960,6 +3001,10 @@ and explore_ge store engine ctx trace stats cfg order decisions v k lit =
    conclusion. It takes no [check] for the same reason: a satisfaction search checks one
    solution at the end, a branch-and-bound search checks every improving one as it is
    found ([record_improving]), and neither is this function's business. *)
+(* M6-T9: [Limit_hit] with what [conclude_stopped] needs and [search_core] alone holds --
+   the trace it may have created privately, and the stats with the retention database. *)
+exception Interrupted of Trace.t * stats
+
 let search_core ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx) ?trace ?stats
     ?(order = spec_order) ?(config = default_config) () : node * Trace.t * stats =
   let entry_level = Store.level store in
@@ -3005,7 +3050,10 @@ let search_core ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx) ?tr
   stats.pb_inst_ids_rev <- [];
   stats.clause_inst_ids_rev <- [];
   stats.nodes <- stats.nodes + 1;
-  let result = dfs engine store ctx trace stats config order [] in
+  let result =
+    try dfs engine store ctx trace stats config order []
+    with Limit_hit -> raise (Interrupted (trace, stats))
+  in
   Debug.check "I-S3: decision level on return equals level on entry" (fun () ->
       Store.level store = entry_level);
   (* M1-T36's identity, stated above [type stats]. [Unsat] means the tree was
@@ -3117,6 +3165,33 @@ let retire_learned ctx stats =
   Retention.release_all stats.db;
   ignore (Retention.retire_all stats.db ctx)
 
+(* M6-T9. The proof's end when [config.stop] fired: the same three I-X2 sweeps as the
+   other two endings, then every id still live -- the prunings and nogoods of the levels
+   the interrupted branch had open, which no [w] will now retire -- and then
+   `conclusion NONE`, which cites nothing and so discharges nothing.
+
+   The store is left at whatever level the search had reached. Nothing reads it again:
+   the caller's next act is to report and exit, and [Search] already does not support a
+   second solve on the same engine (see [search_core]).
+
+   The three lines are written through [Writer.rule] because [Writer.verdict] has no
+   NONE arm and lib/proof/writer.ml is not this row's file; the tests already conclude
+   NONE this way (test_engine.ml, test_prop.ml). What [Writer.conclusion] does after its
+   last line -- mark the proof finished, flush, run the I-X2 audit -- is repeated here so
+   that a stopped run is audited exactly as a finished one is. *)
+let conclude_stopped ctx trace stats =
+  let w = ctx.Justify.writer in
+  retire_learned ctx stats;
+  retire_assign_clauses ctx stats;
+  retire_trace ctx trace;
+  (match Writer.live_ids w with [] -> () | ids -> Writer.delete_many w ids);
+  Writer.rule w "output NONE";
+  Writer.rule w "conclusion NONE";
+  Writer.rule w "end pseudo-Boolean proof";
+  w.Writer.finished <- true;
+  flush w.Writer.oc;
+  Writer.check_audit w
+
 (* Depth-first search from the store's current decision level (I-S3: the level on
    return equals the level on entry -- true here by construction, since every
    [Store.new_level] this module calls is paired with exactly one [Store.backtrack]
@@ -3148,7 +3223,10 @@ let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
     ~(check : assignment -> bool) ?trace ?stats ?(order = spec_order)
     ?(config = default_config) () : outcome =
   let result, trace, stats =
-    search_core ~engine ~store ~ctx ?trace ?stats ~order ~config ()
+    try search_core ~engine ~store ~ctx ?trace ?stats ~order ~config ()
+    with Interrupted (trace, stats) ->
+      conclude_stopped ctx trace stats;
+      raise (Stopped { best = None })
   in
   match result with
   | NSat assignment ->
@@ -3244,8 +3322,14 @@ let optimise ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
     }
   in
   let result, trace, stats =
-    search_core ~engine ~store ~ctx ?trace ?stats ~order
-      ~config:{ config with bnb = Some b } ()
+    try
+      search_core ~engine ~store ~ctx ?trace ?stats ~order
+        ~config:{ config with bnb = Some b } ()
+    with Interrupted (trace, stats) ->
+      (* The `soli` ids are live and [conclude_stopped]'s last sweep takes them with
+         everything else: nothing cites them, since NONE concludes nothing. *)
+      conclude_stopped ctx trace stats;
+      raise (Stopped { best = b.b_best })
   in
   retire_learned ctx stats;
   retire_assign_clauses ctx stats;

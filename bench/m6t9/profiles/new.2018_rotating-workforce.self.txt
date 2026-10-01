@@ -1,0 +1,23 @@
+ 11.47% [.] Baguette_core.Store.go_997 - - 
+ 7.15% [.] Stdlib.Bytes.map_449 - - 
+ 6.56% [.] caml_apply2 - - 
+ 5.87% [.] Baguette_proof.Lit.fun_962 - - 
+ 4.42% [.] compare_val - - 
+ 4.24% [.] do_some_marking - - 
+ 3.06% [.] __printf_buffer - - 
+ --2.70%--__printf_buffer
+ 3.04% [.] caml_hash_mix_string - - 
+ 2.97% [.] __memmove_avx_unaligned_erms - - 
+ --2.83%--__memmove_avx_unaligned_erms
+ 2.85% [.] Stdlib.Int.equal_294 - - 
+ 2.13% [.] caml_hash - - 
+ 1.86% [.] caml_alloc_string - - 
+ 1.85% [.] oldify_one - - 
+ 1.81% [.] CamlinternalFormat.strput_acc_4490 - - 
+ 1.78% [.] caml_c_call - - 
+ 1.68% [.] caml_shared_try_alloc - - 
+ 1.61% [.] pool_sweep - - 
+ 1.46% [.] caml_compare - - 
+ 1.31% [.] Stdlib.Buffer.add_string_657 - - 
+ 1.27% [.] CamlinternalFormat.make_printf_3509 - - 
+ 1.05% [.] parse_format - - 
