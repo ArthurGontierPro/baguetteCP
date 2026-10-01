@@ -1232,6 +1232,23 @@ silently dropped), the objective (`min:V` proved, `min:best=V` best known), the 
 that established it, and the data file. A later baguette run that contradicts a row is a
 finding, not a reason to edit the row.
 
+**Three things a first run on the node taught, each now in the script.** (a) The
+2008-2010 models are MiniZinc 1.x (`:: is_output`, string-valued search annotations);
+baguette's mznlib shims them in `compat_mzn1.mzn`, the 2.10.1 standard library does not,
+so with `COMPAT=1` (default) that same language-only file is handed to the Chuffed and
+GCS flattens — without it 22 of the 88 pilot instances were `FLATTEN-FAIL` for both.
+(b) `minizinc -c -o X.part` writes `<model>.ozn` *into the corpus*; `--no-output-ozn`
+stops it, and the self-test checks the corpus is untouched. (c) The data pairing is
+deterministic only up to `FLATTEN_TIMEOUT` — `2025_gt-sort` paired differently in two
+passes on a loaded node — so **any run meant to be checked against `answers.tsv` pins
+its data from it**:
+
+```sh
+PAIRS=bench/corpus/answers.tsv ONLY=bench/corpus/shared_set.lst SOLVERS=baguette \
+  scripts/compare_run.sh /scratch/arthur/mzn-challenge /scratch/arthur/compare-out-<name>
+scripts/compare_run.sh --report /scratch/arthur/compare-out-<name> --pinned bench/corpus/answers.tsv
+```
+
 `scripts/compare_selftest.sh` (`compare_run.sh --self-test`) runs a three-model corpus
 through the real harness, real baguette and real veripb, with a stub `minizinc` when none
 is installed and two shims for Chuffed and GCS — the GCS shim deliberately answers UNSAT to
