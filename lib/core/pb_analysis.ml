@@ -326,15 +326,53 @@ let falsified_now store (l : Lit.t) =
    is the reason. A literal falsified by the declared domain alone has no entry and is
    therefore never a pivot, which is right: nothing propagated it. *)
 let falsified_at store (l : Lit.t) =
-  if not (falsified_now store l) then Store.no_support
-  else
-    let n = Store.trail_length store in
-    let rec go i =
-      if i >= n then Store.no_support
-      else if falsified_before store ~at:(i + 1) l then i
-      else go (i + 1)
-    in
-    go 0
+  (* M6-T9. ONE pass over the trail, not the O(trail^2) of asking [falsified_before] at
+     every position (each of which scanned the trail again). Measured on a real
+     instance (MiniZinc Challenge 2011 costas-array, 15.dzn): PB analysis was 5.8 s of a
+     15 s run at 0.44 s a conflict, nearly all of it here. The answer is the SAME
+     position the quadratic form returned, case for case, and the proof artefacts of
+     the whole model suite are byte-identical across the change (D-0080):
+
+       - [v] has no trail entry: the domain is the store's, constant over the trail, so
+         the first position (0) if it falsifies [l], else none;
+       - the NEWEST entry's [now] does not falsify [l]: not falsified now, none;
+       - the OLDEST entry's [old] already falsifies [l]: position 0, exactly as before.
+         The header above says "no_support" for this declared-domain case; the code
+         this replaces returned 0 here, and so does this -- a behaviour change is not
+         this row's to make (a DECISIONS entry would be);
+       - otherwise the first entry on [v] whose [now] falsifies [l]. Between two
+         entries on [v] the reconstructed domain does not move, so no other position
+         can be the first. *)
+  match l.Lit.v with
+  | Lit.Eq _ -> Store.no_support
+  | Lit.Ge (name, k) -> (
+      match Store.var_named store name with
+      | None -> Store.no_support
+      | Some v ->
+          let n = Store.trail_length store in
+          let fals (d : Domain.t) =
+            if l.Lit.positive then Domain.hi d < k else Domain.lo d >= k
+          in
+          if n = 0 then Store.no_support
+          else
+            let first = ref (-1) and last = ref (-1) in
+            for i = 0 to n - 1 do
+              if Var.equal (Store.trail_entry store i).Store.var v then (
+                if !first < 0 then first := i;
+                last := i)
+            done;
+            if !first < 0 then if fals (Store.get store v) then 0 else Store.no_support
+            else if not (fals (Store.trail_entry store !last).Store.now) then
+              Store.no_support
+            else if fals (Store.trail_entry store !first).Store.old then 0
+            else
+              let rec go i =
+                if i > !last then Store.no_support
+                else
+                  let e = Store.trail_entry store i in
+                  if Var.equal e.Store.var v && fals e.Store.now then i else go (i + 1)
+              in
+              go !first)
 
 (* The decision level at which [l] became falsified; 0 when it is falsified by the
    declared domain or not falsified at all. *)
@@ -602,7 +640,25 @@ let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row optio
     ~(break_ladder : bool) ~(reduction : Reduce.t) ~(criterion : criterion) : result =
   let conflict_level = Store.level store in
   let max_steps = Store.trail_length store + 1 in
-  let level_of = level_of store in
+  (* M6-T9. The trail does not move while [analyse] runs, so [falsified_at] is a pure
+     function of the literal for the whole call; asked once per term per step by the
+     pivot and once per term per criterion check by [level_of], it is memoised here.
+     [Lit.t] holds no closure and nothing mutable, so structural hashing is sound; the
+     table is only ever looked up, never iterated, so no emitted byte depends on its
+     order. *)
+  let fat_memo : (Lit.t, int) Hashtbl.t = Hashtbl.create 64 in
+  let falsified_at store l =
+    match Hashtbl.find_opt fat_memo l with
+    | Some i -> i
+    | None ->
+        let i = falsified_at store l in
+        Hashtbl.add fat_memo l i;
+        i
+  in
+  let level_of l =
+    let at = falsified_at store l in
+    if at = Store.no_support then 0 else Store.level_of_index store at
+  in
   let view row steps =
     {
       c_row = row;
