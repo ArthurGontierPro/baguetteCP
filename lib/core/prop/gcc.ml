@@ -178,6 +178,12 @@
    other term clears for free ([free_e], one ladder rung), and [ladder_at_least] does
    the same division the other way up.
 
+   THE TWO ARE NOT ALIKE ON THE PAGE (M7-T21, D-0084). The upper push's trace line is
+   RUP against [ge_cid] alone; the lower push's is NOT, because those free ladder rungs
+   are second constraints unit propagation cannot sum. So the lower push is made under
+   [Store.deriving_ahead] and its derivation is written ahead of its line, as rule A's
+   is -- see the comment at [apply] in [pass].
+
    ---------------------------------------------------------------------------
    What is NOT here, and why
    ---------------------------------------------------------------------------
@@ -817,13 +823,13 @@ let rule_c t store ~snaps ~caps ~apply =
       let must = c.cconst + List.length fixed in
       let facts = scope_facts ~snaps:dv ~caps:[ k ] in
       if may < k.k_hi then
-        apply ~lower:false c.cx may
+        apply ~ahead:false ~lower:false c.cx may
           (Reason.because
              ~concludes:(Some (Reason.at_most ~name:c.cname ~decl:c.cdhi may))
              facts
              (c_upper_expl t ~k ~poss ~gone ~may));
       if must > k.k_lo then
-        apply ~lower:true c.cx must
+        apply ~ahead:true ~lower:true c.cx must
           (Reason.because
              ~concludes:(Some (Reason.at_least ~name:c.cname ~decl:c.cdlo must))
              (facts @ if k.k_lo_root then [] else k.k_lo_why)
@@ -841,11 +847,21 @@ let pass t store =
   let caps = Array.to_list (Array.map (csnap_of store) t.cov) in
   (* [~ahead] is M7-T17's trigger (D-0082): rule A's capacity push sums a counting row
      per cover value of the interval, so its trace line is RUP only after its
-     derivation and the push is made under [Store.deriving_ahead]. Rule C's is not: its
-     line is RUP against the ONE counting row of its own value plus the count's ladder,
-     and it never had a derivation written ahead of it -- the count variables had no
-     direct encoding to arm the old [has_direct] trigger -- so it stays [false] and its
-     lines do not change. *)
+     derivation and the push is made under [Store.deriving_ahead].
+
+     Rule C is SPLIT, and M7-T21 (D-0084) is why. This comment used to say rule C's line
+     "is RUP against the ONE counting row of its own value plus the count's ladder", and
+     that is true of the UPPER push only. The upper line clears every indicator with a
+     bound fact the variable's own ladder propagates, so unit propagation reaches it. The
+     LOWER push reads the `<=` row, in which every OTHER variable's indicator
+     `x_ge_v - x_ge_(v+1)` appears negated, and unit propagation treats its two literals
+     independently: it cannot see that the indicator is never negative, because that is
+     the ladder rung `x_ge_(v+1) -> x_ge_v`, a second constraint. With two or more other
+     variables holding v strictly inside their window the row keeps slack and never
+     fires, and 3.0.2 refused the line (test/models/gcc_count_lower_rup_sat.fzn; with one
+     such variable it verifies, which is why no M7-T16 scene saw it). So the lower push
+     runs under [deriving_ahead], and [c_lower_expl]'s [free_summands] -- exactly those
+     rungs -- go on the page ahead of it. *)
   let apply ?(ahead = false) ~lower x bound j =
     (* Through [View] so that rule C's count may be a constant (M7-T18); rule A's [x] is
        always [View.of_var], whose mutators ARE [Store]'s. *)
@@ -857,7 +873,7 @@ let pass t store =
     | Store.Changed -> raise Moved
     | Store.Unchanged -> ()
   in
-  rule_c t store ~snaps ~caps ~apply:(apply ~ahead:false);
+  rule_c t store ~snaps ~caps ~apply:(fun ~ahead -> apply ~ahead);
   let cover_at = Hashtbl.create 16 in
   List.iter (fun k -> Hashtbl.replace cover_at k.k_cov.cv k) caps;
   let los = List.sort_uniq compare (List.map (fun s -> s.s_lo) snaps) in

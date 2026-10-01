@@ -1,0 +1,46 @@
+% M7-T21 / D-0084: A CORRECT ANSWER WHOSE PROOF THE CHECKER REJECTED. FIXED; this model
+% is an ordinary passing model test and its proof is verified on every run. It is the
+% gcc shape of D-0080's 26 corpus rejections (generalized-peacable-queens, chessboard,
+% compression: a MULTI-literal `rup` in a model with global_cardinality), found by a
+% random sweep of small gcc models rather than reduced from one of them -- the node was
+% unreachable -- so which of the three it explains is for the node to confirm.
+%
+% THE DEFECT. lib/core/prop/gcc.ml's rule C LOWER push -- lo(n) := the number of scope
+% variables FIXED to the value -- wrote its trace line as a bare `rup`, and gcc.ml's own
+% comment said that line "is RUP against the ONE counting row of its own value plus the
+% count's ladder". It is not, once two or more OTHER scope variables hold the value
+% strictly inside their window. The `<=` counting row speaks of each indicator as
+% `x_ge_v - x_ge_(v+1)` over ORDER literals, and unit propagation treats the two
+% literals independently: it cannot see that the indicator is never negative (that is
+% the ladder rung `x_ge_(v+1) -> x_ge_v`, a SECOND constraint), so with y, z both free
+% around 2 the row has slack and never fires. Here x = 2 (indomain_median) pushes
+% n >= 1 and the line
+%
+%     rup +1 n_ge_1 +1 ~x_ge_2 +1 x_ge_3 >= 1 ;
+%
+% is TRUE but not RUP; 3.0.2 refuses it. With ONE other variable it verifies (the slack
+% forces both literals and the rung then conflicts), which is why M7-T16's scenes, each
+% with at most one such variable, never saw it.
+%
+% THE FIX makes the lower push under [Store.deriving_ahead], so lib/core/trace.ml's
+% [derive_ahead] writes [c_lower_expl]'s `pol` -- which cites exactly those ladder rungs
+% ([free_summands]) -- ahead of the line. The upper push stays bare: its line IS RUP,
+% because every indicator it clears is pinned by a bound fact the ladder propagates.
+%
+% q1/q2/q3 are the D-0075 model's trick: a pigeonhole the SEARCH must discover, failing
+% deeper than the push, so the lazy trace line is written at all. SAT because a rup over
+% a contradictory database is vacuous (D-0066); the UNSAT twin is
+% gcc_count_lower_rup_unsat.fzn.
+var 1..3: x :: output_var;
+var 1..3: y :: output_var;
+var 1..3: z :: output_var;
+var 0..3: n :: output_var;
+var 1..3: q1 :: output_var;
+var 1..3: q2 :: output_var;
+var 1..3: q3 :: output_var;
+constraint fzn_global_cardinality([x,y,z],[2],[n]);
+constraint int_ne(q1,q2);
+constraint int_ne(q1,q3);
+constraint int_ne(q2,q3);
+constraint int_lin_le([1,1,1,1],[q1,q2,q3,n],6);
+solve :: int_search([x,q1,q2,q3,y,z,n], input_order, indomain_median) satisfy;
