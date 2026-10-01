@@ -132,6 +132,17 @@ the `output` annotation, one assignment per line, terminated by `----------`; `=
 after the last solution when the search space is exhausted; `=====UNSATISFIABLE=====`
 when the model has no solution.
 
+**A stopped run** *(normative, M6-T9 / M6-T10, 2026-10-02)*. A run may stop before the
+search space is exhausted, by `--time-limit` or by a node limit. It then prints
+`=====UNKNOWN=====` if it has printed no solution — the FlatZinc standard's marker for
+"nothing proved". On an optimisation model every improving solution has already been
+printed as it was found (§3.4 / M5-T1), so a stopped optimisation run ends after its last
+`----------` with **no** `==========`: the incumbent stands, its optimality is not claimed.
+The proof of a stopped run ends with `conclusion NONE` (§4.3) and must still be accepted by
+the checker; it proves every line it contains and nothing about the answer. A stopped run
+exits 0, and says what it was doing on stderr (`limit:`), which is how a harness tells it
+from a run killed from outside.
+
 **How a value is rendered** *(normative)*. Until now this section gave the line shape and
 the markers but never said what goes on the right of the `=`, so the rule lived only in
 `lib/flatzinc/output.ml` and in `test/expected/bool_out_sat.out`. It is stated here

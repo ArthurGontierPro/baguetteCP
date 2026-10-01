@@ -723,6 +723,7 @@ work. The owning session picks it up.
 | M6-T4 (+ M5-T3) | `scripts/compare_run.sh` (new), `scripts/compare_selftest.sh` (new), `tools/compare/compare.py` (new), `bench/README.md` (§8, appended), `bench/corpus/{shared_set.lst,answers.tsv}` (new), `docs/DECISIONS.md` (D-0081), `docs/ROADMAP.md` (M6-T4 row) | agent-compare | released 2026-10-01 -- **D-0081**, branch `wave31-compare`, not merged. 0 DISAGREE over 164 agreeing instances |
 
 | M6-T9 | agent-perf | 2026-10-02 | **D-0080**. `--time-limit S` + `Search.config.stop`: a stopped run ends `conclusion NONE` and veripb accepts it (142 corpus runs); `BAGUETTE_PB_ANALYSIS`, `BAGUETTE_NODE_LIMIT`, SIGTERM `limit: killed` line; `corpus_run.sh` `SOLVER_ARGS`/`NO_PROOF`/`RSS`/`UNKNOWN-LIMIT`/`--no-output-ozn`, and two repaired classifications (`TIMEOUT-CHECK` never fired; rejection gated on the checker's wording). Shipped fix: `Pb_analysis.falsified_at` one-pass (57 → 73 verified, median nodes/s 1.44 → 10.8, byte-identical proofs) and overflow-as-fallback in the PB walk. Gate on `249d37d`: 2953 ok / 0 FAIL (peak 40.9 MB), 107/107 models (18.5 MB), selftest PASS, w30 report byte-identical. Branch `wave31-perf`, not merged |
+| M6-T10 | orchestrator | 2026-10-02 | `Justify` memo as hash buckets (351 artefacts byte-identical), `--time-limit` on the wall clock (`wall=` field), SPEC 2.2 stopped-run rule. Closes three of M6-T9's requests |
 
 ## Handoff notes
 
@@ -3470,3 +3471,23 @@ element / `mapget` indices. The artefacts are kept on the node; do not delete
 `/scratch/arthur/perf-out-{a,a2}/log`.
 
 Branch `wave31-perf`, not merged. Gate on the final tip: see the Completed row.
+
+## M6-T10 handoff, 2026-10-02 (orchestrator)
+
+Applied agent-perf's `justify-memo.patch` unchanged except for formatting: the memo keyed by
+physical identity is now bucketed by a shallow structural hash (`shallow_hash` never descends
+into a `Deferred`, whose thunk is the mutable trap `justify.ml`'s header names), and
+`wipe_level` removes exactly the keys each level inserted. **Byte identity is the evidence**:
+every `.opb`, `.pbp` and stdout of the 117-model suite hashed before and after, 351 files,
+zero differences. Local timing cannot see the lever (the whole suite runs in under 4 s); the
+corpus figure needs the node, config (e) of `bench/m6t9/sweep3.sh`.
+
+`--time-limit` is wall-clock now (`Unix.gettimeofday`, `bin/dune` links `unix` for that one
+call); `--time`'s numbers are still process CPU, and main.ml's clock comment says why the two
+want different clocks. The `limit:` lines gained `wall=` next to `cpu=`; `corpus_run.sh`'s awk
+reads keys by name so nothing moved there. If a later row wants the `wall` figure in the
+harness's detail column, that is one more key in `summarise_limit`'s sprintf.
+
+SPEC 2.2 gained the stopped-run paragraph (normative): `=====UNKNOWN=====` when nothing was
+printed, a stopped optimisation ends after its last `----------` with no `==========`, the
+proof ends `conclusion NONE` and must verify, exit 0.

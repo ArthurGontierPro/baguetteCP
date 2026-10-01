@@ -118,10 +118,12 @@ let usage () =
   prerr_endline "                    unlike --time it is safe to leave on while timing.";
   prerr_endline "                    stdout is byte-identical with and without it.";
   prerr_endline "  --time-limit S    stop the search after S seconds (M6-T9). Checked at";
-  prerr_endline "                    the entry of every search node, against the";
-  prerr_endline "                    PROCESS CPU clock (Sys.time: this binary links no";
-  prerr_endline "                    wall clock), counted from process start, so parse";
-  prerr_endline "                    and compile are inside it. One slow node can";
+  prerr_endline "                    the entry of every search node, against the WALL";
+  prerr_endline
+    "                    clock (Unix.gettimeofday, M6-T10 -- the clock an outer";
+  prerr_endline "                    `timeout` uses, so under load the stop wins the race";
+  prerr_endline "                    the CPU clock lost), counted from process start, so";
+  prerr_endline "                    parse and compile are inside it. One slow node can";
   prerr_endline "                    overrun it; keep an outer `timeout` above it. On";
   prerr_endline "                    expiry: stdout is `=====UNKNOWN=====` if no solution";
   prerr_endline
@@ -326,11 +328,13 @@ let parse_args argv =
    The clock is CPU time, not wall time
    ---------------------------------------------------------------------------
 
-   [Sys.time] is the only clock reachable from here: bin/dune links baguette_core,
-   baguette_proof and baguette_flatzinc and nothing else, `unix` is not among them, and
-   dune files are not this task's to edit. That turns out to be the better instrument
-   rather than a compromise, and both halves of that were measured on this switch rather
-   than assumed:
+   Every number [--time] reports is [Sys.time], process CPU. (The one exception is the
+   --time-limit CHECK and the `wall=` field beside `cpu=` on the `limit:` lines: M6-T10
+   made the limit wall-clock -- bin/dune now links `unix` for Unix.gettimeofday and
+   nothing else -- because the harnesses kill on wall time and a CPU limit under load
+   loses that race and leaves no stats behind. A limit and a measurement want different
+   clocks.) For the measurements, CPU is the better instrument rather than a compromise,
+   and both halves of that were measured on this switch rather than assumed:
 
      * RESOLUTION. The smallest non-zero delta of [Sys.time] over 2000 consecutive
        samples is exactly 1e-6 s. It is NOT the 10 ms CLK_TCK granularity of times(2)
@@ -925,6 +929,12 @@ let report_stats (st : Search.stats) ~exhausted =
       (if exhausted then "=" else "<=")
       (Search.stats_expected_nodes st)
 
+(* M6-T10. The wall clock --time-limit is checked against, counted from this module's
+   initialisation, i.e. process start to within the runtime's own start-up. [Sys.time]
+   stays the clock of every measurement (see the clock comment above). *)
+let wall_start = Unix.gettimeofday ()
+let wall () = Unix.gettimeofday () -. wall_start
+
 (* M6-T9. One line, always (not gated on --stats), so that a results file built from
    stderr alone can say what a stopped run was doing. Space-separated `key=value`
    fields after the `limit:` tag; scripts/corpus_run.sh copies it into its detail
@@ -932,11 +942,11 @@ let report_stats (st : Search.stats) ~exhausted =
    moment of the report, the same clock the limit was checked against. *)
 let report_limit opts (st : Search.stats) ~best =
   Printf.eprintf
-    "limit: reached time-limit=%s cpu=%.2fs nodes=%d decisions=%d conflicts=%d \
-     learned=%d pb-learned=%d db=%d maxdepth=%d incumbent=%s\n\
+    "limit: reached time-limit=%s cpu=%.2fs wall=%.2fs nodes=%d decisions=%d \
+     conflicts=%d learned=%d pb-learned=%d db=%d maxdepth=%d incumbent=%s\n\
      %!"
     (match opts.time_limit with None -> "none" | Some s -> Printf.sprintf "%gs" s)
-    (Sys.time ()) st.Search.nodes st.Search.decisions st.Search.conflicts
+    (Sys.time ()) (wall ()) st.Search.nodes st.Search.decisions st.Search.conflicts
     st.Search.n_learned st.Search.n_pb_learned
     (* HELD at the stop, not now: the stop's own I-X2 sweep has emptied the database
        by the time this prints, so [Retention.size] would read 0 on every run. *)
@@ -995,12 +1005,12 @@ let solve opts (m : Model.t) =
     (Sys.Signal_handle
        (fun _ ->
          Printf.eprintf
-           "limit: killed signal=TERM phase=%s cpu=%.2fs nodes=%d decisions=%d \
-            conflicts=%d learned=%d pb-learned=%d maxdepth=%d\n\
+           "limit: killed signal=TERM phase=%s cpu=%.2fs wall=%.2fs nodes=%d \
+            decisions=%d conflicts=%d learned=%d pb-learned=%d maxdepth=%d\n\
             %!"
-           !Timing.current (Sys.time ()) stats.Search.nodes stats.Search.decisions
-           stats.Search.conflicts stats.Search.n_learned stats.Search.n_pb_learned
-           stats.Search.max_depth;
+           !Timing.current (Sys.time ()) (wall ()) stats.Search.nodes
+           stats.Search.decisions stats.Search.conflicts stats.Search.n_learned
+           stats.Search.n_pb_learned stats.Search.max_depth;
          exit 143));
   let outcome =
     Fun.protect
@@ -1025,7 +1035,7 @@ let solve opts (m : Model.t) =
                   (let by_time =
                      match opts.time_limit with
                      | None -> fun () -> false
-                     | Some s -> fun () -> Sys.time () >= s
+                     | Some s -> fun () -> wall () >= s
                    in
                    match node_limit () with
                    | None -> by_time
