@@ -804,6 +804,44 @@ let c_lower_expl t ~k ~fixed ~others ~must =
         @ tail)
         divisor)
 
+(* THE EMPTYING PUSH OF RULE C, and it is rule A's "one more line" again (M7-T21, D-0084).
+
+   A rule C push that EMPTIES the count -- lo(c) := must above hi(c), or hi(c) := may
+   below lo(c) -- is reported by [Store.apply]'s [Failed] arm with the push's own
+   derivation, so that derivation must be CONTRADICTING. [ladder_at_least] and
+   [ladder_at_most] only make it so when the bound overshoots the count's DECLARED range;
+   when it overshoots only the CURRENT one, what they derive is the perfectly valid
+   `c >= must` (resp. `c <= may`) and 3.0.2 answers "The constraint with ID n is not
+   contradicting" (test/models/gcc_count_empty_root_unsat.fzn: a count that a SECOND gcc
+   pinned to 0 at the root). What closes it is the count's own opposite bound, walked to
+   by its rungs and cited as the unit line that states it -- [Explanation.defining], and
+   only where that bound was established at the root, which is the only place the
+   conflict must close (a deeper one leaves the literal in the row, which the nogood
+   propagates on, exactly as [bound_cancels] already argues). [deferred] because the
+   rung ids exist only once the proof has started; the root test was taken eagerly in
+   the [csnap]. *)
+let close_lower t ~k ~must expl =
+  let c = k.k_cov in
+  if must > k.k_hi && must <= c.cdhi && k.k_hi < c.cdhi && k.k_hi_root then
+    Explanation.deferred (fun () ->
+        Explanation.combine
+          (Explanation.term 1 expl
+           :: rung_summands t c.cname ~from_:(k.k_hi + 1) ~to_:must
+          @ [ Explanation.defining 1 (Lit.le c.cname k.k_hi) ])
+          1)
+  else expl
+
+let close_upper t ~k ~may expl =
+  let c = k.k_cov in
+  if may < k.k_lo && may >= c.cdlo && k.k_lo > c.cdlo && k.k_lo_root then
+    Explanation.deferred (fun () ->
+        Explanation.combine
+          (Explanation.term 1 expl
+           :: rung_summands t c.cname ~from_:(may + 1) ~to_:k.k_lo
+          @ [ Explanation.defining 1 (Lit.ge c.cname k.k_lo) ])
+          1)
+  else expl
+
 (* ------------------------------------------------------------------------ propagation *)
 
 exception Found of Store.conflict
@@ -827,13 +865,13 @@ let rule_c t store ~snaps ~caps ~apply =
           (Reason.because
              ~concludes:(Some (Reason.at_most ~name:c.cname ~decl:c.cdhi may))
              facts
-             (c_upper_expl t ~k ~poss ~gone ~may));
+             (close_upper t ~k ~may (c_upper_expl t ~k ~poss ~gone ~may)));
       if must > k.k_lo then
         apply ~ahead:true ~lower:true c.cx must
           (Reason.because
              ~concludes:(Some (Reason.at_least ~name:c.cname ~decl:c.cdlo must))
              (facts @ if k.k_lo_root then [] else k.k_lo_why)
-             (c_lower_expl t ~k ~fixed ~others ~must)))
+             (close_lower t ~k ~must (c_lower_expl t ~k ~fixed ~others ~must))))
     caps;
   ignore store
 
