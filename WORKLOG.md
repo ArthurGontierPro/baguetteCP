@@ -395,6 +395,41 @@ alone throughout (M2-L8 / agent-bench is live).
 
 | M7-T6 | `lib/core/search.ml`, `lib/proof/writer.ml`, `test/unit/test_learn.ml`, `test/models/{rup_level0_nogood_sat,empty_model_sat}.fzn` + expected, `test/models/PENDING`, `docs/DECISIONS.md` | agent-rup | released 2026-09-23 — D-0070 |
 
+
+**Wave thirty-one, dispatched 2026-10-01 from `f7d06b0` (orchestrator).** Goal: **the
+comparison against Chuffed and GCS can START.** D-0079 records the wave-30 corpus run that
+set the agenda — 58 verified, 0 rejected, **273 timeouts of 436**. Four rows, one worktree
+each (`wave31-perf` / `wave31-compare` / `wave31-gcc2` / `wave31-cover`). `fataepyc-07`
+(192 cores, 2 TB) is reserved for this wave: agent-perf may run up to **64** jobs, agent-compare
+up to **48** across its three solvers, the two others a handful. Every agent builds in its OWN
+node clone under `/scratch/arthur/baguette-<tag>`, never in `/scratch/arthur/baguette`, which is
+the orchestrator's and runs `main` only. Non-interactive ssh needs
+`PATH=$HOME/.local/bin:$PATH` before `opam env` (see "Node trap" below) and **hash the binary**
+on both sides of any comparison. Decision-record ids are pre-assigned so appends do not
+collide: **D-0080** agent-perf, **D-0081** agent-compare, **D-0082** agent-gcc2, **D-0083**
+agent-cover.
+
+Seams by REGION, as wave 30 learned the hard way: `lib/flatzinc/builder.ml` — the builtin
+dispatch arm for `fzn_global_cardinality` is agent-gcc2's; the `search_of_annot` strategy arms
+and the declaration/domain code are agent-cover's. `lib/core/search.ml` — the variable-selection
+functions (`first_fail` and its neighbours, ~`:720-810`) are agent-cover's; the solve loop and
+everything else is agent-perf's. `lib/flatzinc/compile.ml` — the gcc region and every
+`request_direct` call site are agent-gcc2's; the variable-declaration/bounds region is
+agent-cover's. `lib/core/engine.ml` is agent-perf's and **read-only to agent-gcc2**: the
+derive-ahead flag travels on the store entry, set by the propagator at its pruning call, not
+through the engine.
+
+| Task | Files being touched | Session | Since |
+|---|---|---|---|
+| M6-T9 | `bin/main.ml`, `lib/core/search.ml` (all but the variable-selection functions), `lib/core/engine.ml`, `lib/core/retention.ml`, `lib/core/pb_analysis.ml`, `lib/core/learn.ml`, `test/unit/{test_engine,test_endtoend,test_output}.ml`, `test/models/*` (new lanes only), `bench/**`, `scripts/corpus_run.sh` (**additive only**: a `SOLVER_ARGS` pass-through and the classification of a clean `--time-limit` exit; `scripts/corpus_selftest.sh` stays green and `--report` on `corpus-out-w30` stays byte-identical), `docs/DECISIONS.md` (D-0080, append); node clone `/scratch/arthur/baguette-perf`, runs under `/scratch/arthur/perf-out-*` | agent-perf | 2026-10-01 |
+| M6-T4 (+ M5-T3 absorbed) | `scripts/compare_run.sh` (new), `scripts/compare_selftest.sh` (new), `scripts/corpus_run.sh` **read-only** (copy what you need; it is agent-perf's this wave), `tools/**`, `bench/README.md` (new section, append), `bench/corpus/**` (new), `docs/DECISIONS.md` (D-0081, append); node: `/scratch/arthur/gcs`, `/scratch/arthur/baguette-compare`, `/scratch/arthur/compare-out-*` | agent-compare | 2026-10-01 |
+| M7-T17 + M7-T18 | `lib/core/trace.ml`, `lib/core/store.ml`, `lib/core/propagator.ml`, `lib/core/prop/{gcc,alldiff,element}.ml`, `lib/proof/encoding.ml`, `lib/flatzinc/compile.ml` (gcc region + `request_direct` sites), `lib/flatzinc/builder.ml` (gcc dispatch arm), `test/unit/{test_trace,test_prop,test_compile}.ml`, `test/models/gcc_*` + expected, `docs/PROOF-FORMAT.md` (§4 gcc row), `docs/DECISIONS.md` (D-0082, append); node clone `/scratch/arthur/baguette-gcc2` | agent-gcc2 | 2026-10-01 |
+| M7-T19 | `lib/flatzinc/builder.ml` (`search_of_annot` arms + declaration/domain code), `lib/flatzinc/model.ml`, `lib/flatzinc/compile.ml` (declaration/bounds region), `lib/core/search.ml` (variable-selection functions only), `docs/SPEC.md` (§2.1, §3.4), `test/unit/{test_flatzinc,test_compile}.ml`, new `test/models/*` + expected, `docs/DECISIONS.md` (D-0083, append); node clone `/scratch/arthur/baguette-cover` | agent-cover | 2026-10-01 |
+
+**Orchestrator holds** `WORKLOG.md`, `docs/ROADMAP.md`, `CLAUDE.md`, `Makefile`,
+`lib/core/dune`, `lib/*/dune`,
+`lib/core/explanation.ml`, `lib/core/justify.ml`, `/scratch/arthur/baguette` on the node, and all
+merging. A need for any of these is a `## Cross-session requests` row.
 ## Cross-session requests
 
 Need a change in a file someone else has claimed? Write it here and move on to other

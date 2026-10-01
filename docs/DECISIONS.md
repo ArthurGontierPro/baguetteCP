@@ -6378,3 +6378,65 @@ and we have no propagator"*. That was the right argument and it names its own ex
 condition. `mznlib/fzn_global_cardinality.mzn` now declares the inner predicate bodyless,
 so the same bridge lands on the propagator; **nothing about the bridge itself had to
 change.**
+
+## D-0079  The wave-30 corpus run: 58 verified, 0 rejected, and the blocker is now TIME
+
+**Status**: **MEASUREMENT**, recorded 2026-10-01 by the orchestrator from
+`/scratch/arthur/corpus-out-w30` on `fataepyc-07`. The run is complete
+(`DONE-1790256627  436  436`, finished 2026-09-24), `PAR=64`, 32 GB per job,
+`--max-heap-mb 15625`, 300 s solve timeout, 120 s flatten timeout, every solved instance's
+proof checked by veripb 3.0.2. The binary was the wave-30 tip: the `fzn_global_cardinality`
+refusals below carry M7-T16's own wording, so the gcc propagator was in. It is the baseline
+a comparison against Chuffed and GCS starts from, and it set wave 31's agenda.
+
+### The result
+
+| outcome | wave 30 | wave 27 (D-0074) |
+|---|---|---|
+| `TIMEOUT-SOLVE` (300 s) | **273** | 155 |
+| `REFUSED-RESOURCE` | 58 | — (bucket did not exist) |
+| **`OK-PROOF-VERIFIED`** | **58** | 33 |
+| `NO-DATA` | 20 | — (was inside `FLATTEN-FAIL`) |
+| `REFUSED-MODEL` | 10 | 107 |
+| `REFUSED-LIMIT` | 9 | 74 |
+| `FLATTEN-FAIL` | 4 | 50 |
+| `SOLVE-ERR-134` | 3 | 15 |
+| `FLATTEN-TIMEOUT` | 1 | 1 |
+| **`PROOF-REJECTED`** | **0** | 1 |
+
+### What it says
+
+1. **Every proof the solver produced was accepted.** 58 of 58, `2012_tpp` among them at
+   38.5 MB, so D-0070 and D-0075 were the whole of the bucket. The caveat is D-0066's: an
+   UNSAT instance accepts a defective `rup` silently, so the SAT instances are the evidence
+   and the UNSAT ones are not. The proofs range from 120 bytes to 82 MB (`2013_rubik_5-cube`);
+   ten are above 20 MB. Proof size is a comparison axis against GCS and these are its
+   first real numbers.
+2. **The front end is no longer the wall.** `REFUSED-MODEL` went 248 → 107 → 10, and the
+   ten are three messages in full: value choice `indomain` ×4, variable selection
+   `anti_first_fail` ×2, `var int` with no domain ×4 — **M7-T19**. The 9 `REFUSED-LIMIT` are
+   ONE message, `fzn_global_cardinality` with a constant count — **M7-T18**.
+3. **The wall is time: 273 of 436, 63%.** Nothing in the roadmap says where the time goes
+   on an instance this project did not write: M6-T1 profiled the hand-written suite, where
+   emission was 2–4% and only 10 of 64 models carried signal at all. Worse, the solver
+   cannot say what it was doing when `timeout` killed it — there is no `--time-limit`, so a
+   timed-out run leaves no stats, no incumbent and no proof. **M6-T9** is the diagnosis;
+   the fix is whatever the diagnosis names, and not before.
+4. **The 58 `REFUSED-RESOURCE` are D-0028's cost, not a defect.** 54 are a declared width
+   between 10 000 and 40 million (`2018_steiner-tree`'s objective is `0..40330252`); 4 are
+   the heap budget (`2009_prop_stress`, `2013_l2p`, `2016_carpet-cutting`,
+   `2018_test-scheduling`). The 3 `SOLVE-ERR-134` have the same shape — widths 144 400,
+   605 284 and 78 million — and abort before the heap guard fires. These are out of reach
+   without a different encoding of wide domains. That is a decision this record does not
+   take; the instances stay in the comparison set as what they are.
+5. The input side is the corpus's: `NO-DATA` 20, `FLATTEN-FAIL` 4 (the models' own, M7-T15
+   confirmed each under Gecode's library), `FLATTEN-TIMEOUT` 1 (`2025_gt-sort`, a JSON
+   data file).
+
+### What follows
+
+Wave 31 (2026-10-01): M6-T9 the time diagnosis, M6-T4 the three-solver harness with GCS
+built on the node and Chuffed from the MiniZinc 2.10.1 bundle, M7-T17/M7-T18 on gcc,
+M7-T19 on the ten refusals. The comparison can start once (a) Chuffed and GCS run under one
+harness that checks agreement between solvers — the first external oracle this solver has
+ever had — and (b) baguette reports at a time limit instead of being killed.
