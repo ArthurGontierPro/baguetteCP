@@ -39,8 +39,20 @@ annotations beyond those listed in §3.4, and multi-objective optimisation.
 The solver MUST accept FlatZinc 2.x files restricted to:
 
 **Types**: `bool`, `int`, `var bool`, `var int`, `array[int] of ...` of those.
-Integer variables MUST have a finite declared domain. A `var int` with no domain is
-rejected with a diagnostic; it is not defaulted to a machine-word range.
+Integer variables MUST have a finite domain, declared or **inferred** *(amended
+2026-10-01, M7-T19, D-0083)*. A `var int` declared with no domain is given the domain its
+model's own constraints imply, by interval reasoning over the bound-carrying builtins
+(`int_lin_eq`, `int_lin_le`, `int_eq`, `int_le`, `int_lt`, `bool2int`, `int_abs`,
+`int_times`, `int_div`, `array_int_element` and `global_cardinality`'s counts; D-0083 lists
+the rule for each). The inference MUST be sound: every value the variable takes in any
+solution lies in the inferred domain, and every step MUST be computed under the arithmetic
+limit below, deriving nothing rather than wrapping. A declared domain is never changed by
+it. A variable the inference leaves unbounded on either side MUST be rejected with a
+positioned diagnostic naming it, saying that inference was tried and what its
+neighbouring variables' bounds were; it is **not** defaulted to a machine-word range or to
+any other range. An inferred domain is then a declared domain for every other purpose of
+this specification, the width limits of §3.1 included. An alias `var int: x = y;` declares
+no variable and needs no domain of its own.
 
 **Builtins**, by milestone (see `docs/ROADMAP.md`):
 
@@ -253,16 +265,25 @@ with min-value branching, depth-first, restarts disabled.
 
 **Annotations** *(normative; the honouring requirement predates M7-T2, which brought the
 implementation into compliance with it)*. `int_search` and `bool_search` with the variable
-choices `input_order`, `first_fail`, `smallest` and `largest`, and the value choices
-`indomain_min`, `indomain_max`, `indomain_split` and `indomain_median`, and `seq_search`
-over those, MUST be honoured.
+choices `input_order`, `first_fail`, `anti_first_fail`, `smallest` and `largest`, and the
+value choices `indomain`, `indomain_min`, `indomain_max`, `indomain_split` and
+`indomain_median`, and `seq_search` over those, MUST be honoured. (`anti_first_fail` and
+`indomain` added 2026-10-01, M7-T19, D-0083.)
 
 - `input_order` selects the first still-unfixed variable **in the order the annotation's
   array wrote it**, not declaration order.
+- `first_fail` selects the unfixed variable with the **smallest** current domain (its
+  value count), and `anti_first_fail` the one with the **largest**. Both break a tie the
+  same way: toward the **earliest** candidate, in the order `input_order` reads. So
+  `anti_first_fail` is `first_fail` with the size comparison reversed and the tie-break
+  unchanged, not `first_fail`'s ordering reversed.
 - `smallest` selects the unfixed variable with the smallest **current domain minimum**;
   `largest` the one with the largest **current domain maximum**. Both read the live domain,
   not the declared one.
 - `indomain_min` branches `x = lo` first; `indomain_max` branches `x = hi` first.
+  `indomain`, which the MiniZinc specification defines as assigning values in ascending
+  order, IS `indomain_min`: the same decision at every node, so honouring one honours the
+  other.
 - `indomain_split` bisects at the **range midpoint** — `x <= mid` first, then `x > mid` —
   where `mid` is computed from the current bounds. It is defined on the range and not on the
   value count, so on a domain with holes the midpoint may itself be a hole; that is correct
@@ -285,8 +306,9 @@ annotation's variables are fixed and a decision is still required, the default a
 This is the one respect in which an annotated model's search is not the annotation.
 
 **Anything else MUST be refused**, with a diagnostic naming it — including
-`anti_first_fail`, `indomain_random`, `float_search`, `set_search` and
-`priority_search`. It MUST NOT be silently ignored or replaced: **substituting a strategy
+`occurrence`, `most_constrained`, `max_regret`, `dom_w_deg`, `indomain_random`,
+`indomain_middle`, `indomain_reverse_split`, `indomain_interval`, `float_search`,
+`set_search` and `priority_search`. It MUST NOT be silently ignored or replaced: **substituting a strategy
 solves a different problem and reports it as this one's answer.** Before M7-T2 an
 unrecognised annotation was silently dropped and the model searched by the default, which is
 exactly what this forbids.
