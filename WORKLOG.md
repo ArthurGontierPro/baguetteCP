@@ -542,6 +542,8 @@ work. The owning session picks it up.
 | **M7-T16 cannot post a `global_cardinality` propagator without three additive lines in `lib/flatzinc/model.ml` and `lib/flatzinc/builder.ml`, both held by agent-decision for M7-T12.** What is needed: one constructor `Global_cardinality of operand list * int list * operand list` in `model.ml` plus its two `match` arms (~`:234` pretty-print, ~`:548` vars-of), and one dispatch arm for `"fzn_global_cardinality"` in `builder.ml` (~`:542`, beside `all_different_int`). None of it touches what M7-T12 is doing (`search.ml`/`analysis.ml`/`learn.ml`/`phases_of_search`). **Without it the row ships unit tests only** — no `.fzn` model test, and the M7-T15 1.x bridge cannot route `global_cardinality` to the propagator, which is half the deliverable. Requested of the orchestrator; `lib/core/prop/gcc.ml`, its `.opb` rows and its justification proceed meanwhile | `lib/flatzinc/model.ml`, `lib/flatzinc/builder.ml` | agent-gcc | **GRANTED and CLOSED 2026-09-23** by the orchestrator, additive-only in the named regions. Its note is worth keeping: the partition was wrong because these front-end files seam by REGION, not by file -- `model.ml` carries both the search-annotation types and the constraint type, `builder.ml` both `search_of_annot` and the builtin dispatch, so two rows sharing neither concern still collide if whole files are handed out |
 
 | **`Trace.derive_ahead`'s trigger is a proxy, and gcc is the first family it gets wrong.** It fires on `Encoding.has_direct` of the pruned variable, which its own comment calls deliberately OVER-triggering. It also UNDER-triggers: `lib/core/prop/gcc.ml`'s counting rows are over the ORDER encoding and it names no direct literal anywhere, so `has_direct` was false for its whole scope and **every gcc trace line went out as a bare `rup`, which 3.0.2 refused**. M7-T16 buys the trigger back by calling `Encoding.request_direct` for the gcc scope purely to arm it (stated in full at the call site in `compile.ml`) -- which mints the width-proportional `red` lines of an encoding nothing reads, D-0028's own cost. **The real fix is the one `trace.ml`'s comment already names**: a per-entry flag threaded from the propagator, so "this pruning needs its derivation ahead" is a property of the propagator and not of the encoding. Neither file is M7-T16's. See D-0078 | `lib/core/trace.ml`, `lib/proof/encoding.ml` | agent-gcc | raised 2026-09-23, **open** |
+| **`scripts/corpus_run.sh` writes into the corpus.** `minizinc -c ... -o "$W.fzn.part"` cannot derive the `.ozn` name from a `.part` path, so MiniZinc writes `<model>.ozn` BESIDE THE MODEL: 412 stray `.ozn` files under `fataepyc-07:/scratch/arthur/mzn-challenge/` on 2026-10-01 (hours 14-16 UTC), from that script and from compare_run.sh before its fix. They are inert (no data glob matches `.ozn`) but the corpus is meant to be read-only. Fix: add `--no-output-ozn` to the flatten call (verified on 2.10.1, M6-T4's `flatten_with`). Then the orchestrator may `find /scratch/arthur/mzn-challenge -name '*.ozn' -delete` once no run is flattening | `scripts/corpus_run.sh` (agent-perf's this wave), the node corpus | agent-compare | raised 2026-10-01, **open** |
+| **Put `scripts/compare_selftest.sh` in the gate.** It needs only a built `bin/main.exe`, veripb and python3 (a stub `minizinc` and two shims stand in for the rest), runs in seconds, and is the only thing that proves the harness can report a DISAGREE. A `make check` line beside `corpus_selftest.sh` | `Makefile` (orchestrator's) | agent-compare | raised 2026-10-01, **open** |
 
 ## Completed
 
@@ -633,6 +635,7 @@ work. The owning session picks it up.
 | M7-T14 + M7-T15 (pairing half) | agent-harness2 | 2026-09-23 | `corpus_run.sh` derives `--max-heap-mb` from its own `MEM_KB` (half, 15625 MB at 32 GB) and exit 5 gets its own `REFUSED-RESOURCE` bucket; data pairing searches one level down and a model with no data anywhere is `NO-DATA`, not `FLATTEN-FAIL`. Wave-28 corpus run launched at `/scratch/arthur/corpus-out-w29` |
 
 | M7-T16 | `lib/core/prop/gcc.ml` (new), `lib/flatzinc/{model,builder,compile}.ml`, `mznlib/**`, `test/unit/{test_trace,test_compile}.ml`, four `test/models/gcc_*` + expected, `docs/DECISIONS.md`, `docs/ARCHITECTURE.md`, `CLAUDE.md` | agent-gcc | released 2026-09-23 -- **D-0078**, branch `wave30-gcc` |
+| M6-T4 (+ M5-T3) | `scripts/compare_run.sh` (new), `scripts/compare_selftest.sh` (new), `tools/compare/compare.py` (new), `bench/README.md` (§8, appended), `bench/corpus/{shared_set.lst,answers.tsv}` (new), `docs/DECISIONS.md` (D-0081), `docs/ROADMAP.md` (M6-T4 row) | agent-compare | released 2026-10-01 -- **D-0081**, branch `wave31-compare`, not merged. 0 DISAGREE over 164 agreeing instances |
 
 ## Handoff notes
 
@@ -3257,3 +3260,26 @@ Branch `wave30-decision`, four commits, not merged. Gate: `check_fmt.sh` clean,
 `check_unlimited.sh` clean, `dune runtest --root . --force` **2934 ok / 0 failures** (53
 mutation checks among them), `run_model_tests.sh` **103 passed, 0 failed**. Peak RSS 39.8 MB
 (unit) and 18.5 MB (models), both far under the cap.
+
+## M6-T4 handoff, 2026-10-01 (agent-compare)
+
+Branch `wave31-compare`, not merged; pushed to `fataepyc-07:/scratch/arthur/baguette.git`.
+**What exists**: `scripts/compare_run.sh <corpus> <out>` runs baguette, Chuffed and GCS on
+one instance set, each flattened by its own library, and judges AGREE/DISAGREE per
+instance; `--report` prints DISAGREE first; `--answers`/`--shared` build
+`bench/corpus/answers.tsv` (387 pinned) and `shared_set.lst` (411). Self-test passes on the
+laptop (stub minizinc) and on the node (real minizinc). **The result (D-0081)**: 0
+DISAGREE; baguette 59/59 pilot proofs verified; GCS had 2 proofs REJECTED by veripb with
+the answers agreeing (a GCS finding, artefacts in `compare-out-pilot/log/`).
+
+**What the next session should know.** (1) To check a baguette change against the
+regression set: `PAIRS=bench/corpus/answers.tsv ONLY=bench/corpus/shared_set.lst
+SOLVERS=baguette scripts/compare_run.sh <corpus> <out>` then `--report <out> --pinned
+bench/corpus/answers.tsv` -- without `PAIRS` the data choice can drift (it did once, on
+`2025_gt-sort`, D-0081). (2) GCS with `--prove` writes GBs a minute; `PROOF_CAP_KB`
+(16 GB) turns that into `CAPPED`, its own status. (3) On the node, GCS is
+`/scratch/arthur/gcs/build/fzn-glasgow` (pass `GCS=`), and its `glasgow.msc` sits beside it.
+(4) Stopping a run: `timeout` puts each solver in its own process group, so killing the
+script's group leaves solvers running -- kill by the `compare-out-<name>` path in their
+args. (5) Two cross-session requests: `--no-output-ozn` for corpus_run.sh, and the
+self-test in the gate.
