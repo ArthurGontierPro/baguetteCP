@@ -491,6 +491,19 @@ let emit_summand ~emit ctx = function
         (List.tl lits)
 
 let emit_combine ~emit ~claim ctx summands divisor =
+  (* A [Weaken []] summand is a variable with NOTHING to weaken: declared on a single
+     value (`var 7..7`), it has no order literal at all -- its whole contribution to the
+     row is the constant the encoding already folded into the degree -- so
+     [Order_reason.weaken_declared] builds an empty chain for it. D-0013's arithmetic is
+     unchanged by a summand of zero axioms, and the division step still lands on the unit
+     coefficient. It is dropped here rather than refused: refusing it was the
+     `Invalid_argument` M7-T19 reproduced with `var 1..3: x; var 7..7: s;
+     constraint int_le(s, x);` at the ROOT (exit 2 on a legal model, found 2026-10-01).
+     [emit_summand]'s own check below stays, for a [Weaken []] that reaches it any other
+     way. *)
+  let summands =
+    List.filter (function Explanation.Weaken [] -> false | _ -> true) summands
+  in
   (match summands with
   | [] -> invalid_arg "Justify.emit: Combine must have at least one summand"
   | _ -> ());

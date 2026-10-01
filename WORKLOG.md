@@ -638,6 +638,7 @@ work. The owning session picks it up.
 | M7-T16 | `lib/core/prop/gcc.ml` (new), `lib/flatzinc/{model,builder,compile}.ml`, `mznlib/**`, `test/unit/{test_trace,test_compile}.ml`, four `test/models/gcc_*` + expected, `docs/DECISIONS.md`, `docs/ARCHITECTURE.md`, `CLAUDE.md` | agent-gcc | released 2026-09-23 -- **D-0078**, branch `wave30-gcc` |
 | M7-T17 + M7-T18 | agent-gcc2 | 2026-10-01 | Derive-ahead fires on `Store.entry.ahead`, set by alldiff/gcc at the pruning call (`Store.deriving_ahead`); gcc's `request_direct` stopgap deleted; 80/80 global-free proofs byte-identical, debruijn `.pbp` 28 552 -> 24 542 B. Constant gcc counts are `View.const k`, byte-identical to `var k..k`; the nine corpus instances all compile and all TIMEOUT at 300 s. D-0082 |
 | M7-T19 | agent-cover | 2026-10-01 | `indomain` -> `indomain_min`; `anti_first_fail` (largest size, first_fail's tie-break); bounds inference for undomained `var int` (11 rules incl. a case split), refusing only when unbounded; SPEC 2.1/3.4 amended; D-0083. 9/10 corpus instances past the front end, 1 SAT verified, 0 rejected. Branch `wave31-cover`. |
+| M7-T20 | orchestrator | 2026-10-01 | `Justify.emit_combine` drops a `Weaken []` summand (a single-value variable has nothing to weaken) instead of dying with `Invalid_argument`; `fixed_var_root_unsat` / `fixed_var_sat` lanes, proofs checked. Closes M7-T19's first cross-session request |
 
 ## Handoff notes
 
@@ -3320,3 +3321,17 @@ infers to width 660040). `connect` is still refused, correctly: its floorplan va
 are bounded below, minimised, and bounded above by nothing. Two cross-session requests filed:
 a pre-existing Justify crash on singleton-declared variables in root-UNSAT linear rows, and
 `lib/flatzinc/dune`'s now-false comment.
+
+## M7-T20 handoff, 2026-10-01 (orchestrator)
+
+`Justify.emit_combine` filters `Explanation.Weaken []` out of its summands before folding.
+The case is a variable declared on one value: no order literal, so `Order_reason.weaken_declared`
+builds an empty chain, and D-0013's derivation has nothing to weaken for it because its
+constant already sits in the row's degree. The `emit_summand` check stays for a `Weaken []`
+reached any other way. **M7-T19's bounds inference makes single-value domains common** (a
+variable defined by a row whose other terms are fixed), so this would have surfaced on the
+corpus immediately. Verified: `fixed_var_root_unsat` (one `pol`, `s VERIFIED UNSATISFIABLE`)
+and `fixed_var_sat`; 117/117 model tests. What I did not do: audit every other
+`weaken_declared` caller (`bool2int.ml`, `lin_eq`, `ne`) for a width-1 sibling that reaches
+`emit_summand` outside a `Combine` — none of the 117 models does, and the invariant there is
+unchanged so it would still say so loudly.
