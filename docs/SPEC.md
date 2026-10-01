@@ -43,8 +43,9 @@ Integer variables MUST have a finite domain, declared or **inferred** *(amended
 2026-10-01, M7-T19, D-0083)*. A `var int` declared with no domain is given the domain its
 model's own constraints imply, by interval reasoning over the bound-carrying builtins
 (`int_lin_eq`, `int_lin_le`, `int_eq`, `int_le`, `int_lt`, `bool2int`, `int_abs`,
-`int_times`, `int_div`, `array_int_element` and `global_cardinality`'s counts; D-0083 lists
-the rule for each). The inference MUST be sound: every value the variable takes in any
+`int_times`, `int_div`, `array_int_element`, `global_cardinality`'s counts, and a case
+split over `int_eq_reif` under two-literal `bool_clause` implications; D-0083 lists the rule
+for each). The inference MUST be sound: every value the variable takes in any
 solution lies in the inferred domain, and every step MUST be computed under the arithmetic
 limit below, deriving nothing rather than wrapping. A declared domain is never changed by
 it. A variable the inference leaves unbounded on either side MUST be rejected with a
