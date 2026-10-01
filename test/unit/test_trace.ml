@@ -1417,7 +1417,10 @@ let ix10_gcc_line =
    and all four are asserted for every scene.  If anything, a SAT scene is the stronger
    place to stand: D-0053 and D-0066-as-amended both say a proof defect over an UNSAT
    model can be accepted silently. *)
-let test_ix10_derive_ahead ~tag ~src ~claim ~outcome () =
+(* [use_order]: run the scene under its own search annotation, which main.exe does and
+   this lane historically did not (M7-T21's scene needs indomain_median to reach its
+   line). Off by default so the three older scenes run exactly as they were measured. *)
+let test_ix10_derive_ahead ?(use_order = false) ~tag ~src ~claim ~outcome () =
   let dir = Filename.temp_file "baguette_ix10_ahead" "" in
   Sys.remove dir;
   Sys.mkdir dir 0o700;
@@ -1447,7 +1450,9 @@ let test_ix10_derive_ahead ~tag ~src ~claim ~outcome () =
   let expect = outcome in
   let outcome =
     Search.solve ~engine:comp.F.Compile.engine ~store:comp.F.Compile.store ~ctx
-      ~check:independent ()
+      ~check:independent
+      ?order:(if use_order then comp.F.Compile.order else None)
+      ()
   in
   close_out oc;
   check
@@ -1520,6 +1525,143 @@ let test_ix10_derive_ahead ~tag ~src ~claim ~outcome () =
       check "I-X10 ahead: the full proof verifies (I-X1)" false
   | None -> check "I-X10 ahead: veripb is available for the accept lane" false);
   List.iter (fun f -> try Sys.remove f with Sys_error _ -> ()) [ opb; pbp ];
+  try Sys.rmdir dir with Sys_error _ -> ()
+
+(* ============================================================ M7-T21 / D-0084 =====
+
+   Two of D-0080's corpus shapes, each reduced to a SAT scene and pinned to the LINE the
+   defect wrote (D-0066/D-0073: a rup is checked by being load-bearing, not by the
+   model's answer). Both scenes are test/models/ models as well; the model test only
+   says the proof verifies, and these lanes say WHICH line carried the defect.
+
+   ELEMENT. An index hole another propagator punched under a decision (int_ne(i, j) with
+   j = 3), read by an element derivation that a second element's factless conflict
+   forces. The derivation's summand for that hole used to be the bare unit `~i_eq_3`;
+   it now carries the puncher's facts. The break rewrites the pinned line back to the
+   bare unit -- byte for byte what the pre-fix binary emitted there, measured -- and the
+   checker must refuse THAT line, by number, on the RUP judgement.
+
+   GCC. Rule C's lower push, whose line is not RUP against its one counting row once two
+   other scope variables hold the value strictly inside their window. The shape is the
+   I-X10 one -- a line that needs its derivation ahead of it -- so it runs through
+   [test_ix10_derive_ahead] below, whose break is "the line standalone is refused".
+   Measured 2026-10-02 with gcc.ml's lower push back at [~ahead:false]: the lane's "a pol
+   precedes" and "the full proof verifies" checks redden. *)
+let m7t21_element_source =
+  {|array [1..4] of int: as = [1,2,3,4];
+array [1..5] of int: bs = [1,3,3,4,1];
+var 1..4: i :: output_var;
+var 1..4: c :: output_var;
+var 1..5: j :: output_var;
+constraint int_ne(i,j);
+constraint array_int_element(i,as,c);
+constraint array_int_element(j,bs,c);
+solve :: int_search([j,i,c], input_order, indomain_median) satisfy;
+|}
+
+let m7t21_element_line = "rup +1 ~i_eq_3 +1 ~j_ge_3 +1 j_ge_4 >= 1 ;"
+let m7t21_element_bare = "rup +1 ~i_eq_3 >= 1 ;"
+
+let m7t21_gcc_source =
+  {|var 1..3: x;
+var 1..3: y;
+var 1..3: z;
+var 0..3: n;
+var 1..3: q1;
+var 1..3: q2;
+var 1..3: q3;
+constraint fzn_global_cardinality([x,y,z],[2],[n]);
+constraint int_ne(q1,q2);
+constraint int_ne(q1,q3);
+constraint int_ne(q2,q3);
+constraint int_lin_le([1,1,1,1],[q1,q2,q3,n],6);
+solve :: int_search([x,q1,q2,q3,y,z,n], input_order, indomain_median) satisfy;
+|}
+
+let m7t21_gcc_line = "rup +1 n_ge_1 +1 ~x_ge_2 +1 x_ge_3 >= 1 ;"
+
+let test_m7t21_element () =
+  let tag = "(M7-T21 element foreign hole)" in
+  let check name cond = check (name ^ " " ^ tag) cond in
+  let dir = Filename.temp_file "baguette_m7t21" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let opb = Filename.concat dir "m7t21.opb" in
+  let pbp = Filename.concat dir "m7t21.pbp" in
+  let m = F.Builder.of_string ~file:"m7t21_element" m7t21_element_source in
+  let comp = F.Compile.compile m in
+  let encoding = comp.F.Compile.encoding in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "m7t21_element" ] encoding oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let writer = Writer.create ~audit:true oc in
+  Encoding.start_proof encoding writer;
+  let ctx = Justify.create ~writer ~encoding in
+  let independent (a : Search.assignment) =
+    let values = Array.make (F.Model.nvars m) 0 in
+    List.iter (fun (v, value) -> values.(Var.to_int v) <- value) a;
+    F.Model.check_assignment m values
+  in
+  let outcome =
+    Search.solve ~engine:comp.F.Compile.engine ~store:comp.F.Compile.store ~ctx
+      ~check:independent ?order:comp.F.Compile.order ()
+  in
+  close_out oc;
+  check "the scene is SATISFIABLE, so a rup here is not vacuous (D-0066)"
+    (match outcome with Search.Sat _ -> true | _ -> false);
+  let proof = read_file pbp in
+  let raw = lines_of proof in
+  let index_of want =
+    let rec go i = function
+      | [] -> None
+      | l :: rest -> if String.equal (strip_label l) want then Some i else go (i + 1) rest
+    in
+    go 0 raw
+  in
+  check "no bare `~i_eq_3` unit is written anywhere (the defect's own line)"
+    (index_of m7t21_element_bare = None);
+  (match index_of m7t21_element_line with
+  | None ->
+      Printf.printf "     the pinned line `%s` is not in the proof\n" m7t21_element_line;
+      check "the foreign-hole summand is written with its puncher's facts" false
+  | Some i -> (
+      check "the foreign-hole summand is written with its puncher's facts" true;
+      (match run_veripb ~dir ~opb proof with
+      | Some true -> check "the full proof verifies (I-X1)" true
+      | Some false ->
+          Printf.printf "     veripb said: %s\n" !last_veripb_log;
+          check "the full proof verifies (I-X1)" false
+      | None -> check "veripb is available (a missing checker is a FAILURE)" false);
+      (* THE BREAK: the pre-fix line, in the same slot, with the same label. *)
+      let broken =
+        String.concat "\n"
+          (List.mapi
+             (fun j l -> if j = i then label_prefix l ^ m7t21_element_bare else l)
+             raw)
+      in
+      let wording =
+        "not implied by reverse unit propagation (RUP) from core and derived database"
+      in
+      match run_veripb ~dir ~opb broken with
+      | Some false ->
+          let at = Printf.sprintf "check.pbp:%d" (i + 1) in
+          check "BREAK: the bare unit is REFUSED on the RUP judgement, at full wording"
+            (contains wording !last_veripb_log);
+          check
+            (Printf.sprintf "BREAK: and the refused line is the pinned one (%s)" at)
+            (contains at !last_veripb_log);
+          if not (contains wording !last_veripb_log && contains at !last_veripb_log) then
+            Printf.printf "     veripb said: %s\n" !last_veripb_log
+      | Some true ->
+          check
+            "BREAK: the bare unit is REFUSED -- veripb ACCEPTED it, so the scene no \
+             longer exercises the defect"
+            false
+      | None -> check "veripb is available for the break" false));
+  List.iter (fun f -> try Sys.remove f with Sys_error _ -> ()) [ opb; pbp ];
+  (try Sys.remove (Filename.concat dir "check.pbp") with Sys_error _ -> ());
+  (try Sys.remove (Filename.concat dir "check.log") with Sys_error _ -> ());
   try Sys.rmdir dir with Sys_error _ -> ()
 
 (* ================================================================== I-S4's gate =====
@@ -1818,6 +1960,9 @@ let () =
     ~claim:ix10_regin_line ~outcome:`Unsat ();
   test_ix10_derive_ahead ~tag:"(M7-T16, a gcc capacity push)" ~src:ix10_gcc_source
     ~claim:ix10_gcc_line ~outcome:`Sat ();
+  test_ix10_derive_ahead ~use_order:true ~tag:"(M7-T21, a gcc rule C lower push)"
+    ~src:m7t21_gcc_source ~claim:m7t21_gcc_line ~outcome:`Sat ();
+  test_m7t21_element ();
   test_is4_gate ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
