@@ -221,6 +221,9 @@ let domain_of_base pos name (bt : Ast.base_type) =
      int_div(x, y, q)          |q| <= max|x| (|y| >= 1 wherever the relation holds)
      array_int_element(i,a,c)  i in 1..|a|, c in min(a)..max(a)
      global_cardinality counts each in 0..|xs|
+     case split                if c then x = e1 else x = e2, written as int_eq_reif
+                               under two-literal bool_clause implications: x in the
+                               hull of e1's and e2's bounds
    Everything else (reified forms, int_ne, all_different, clauses) implies no bound and
    is not read. At most [infer_max_passes] passes, stopping at the first pass that changes
    nothing: every intermediate state is sound, so the cap costs precision, never
@@ -242,6 +245,11 @@ type fact =
   | F_abs of Model.operand * int (* x, z *)
   | F_times of Model.operand * Model.operand * int (* x, y, z *)
   | F_div of Model.operand * int (* x, q *)
+  (* The case split's two inputs (rule "case split" below). [F_reif_eq (x, e, p)]:
+     `p -> x = e`, from `int_eq_reif`. [F_imp ((c, pol), p)]: the literal `c = pol`
+     implies `p`, from a two-literal `bool_clause`. Neither bounds anything alone. *)
+  | F_reif_eq of int * Model.operand * int
+  | F_imp of (int * bool) * int
 
 let fact_vars = function
   | F_lin (ts, _, _) -> List.map snd ts
@@ -252,6 +260,9 @@ let fact_vars = function
         (function Model.Var i -> Some i | Model.Const _ -> None)
         [ x; y; Model.Var z ]
   | F_div (x, q) -> ( match x with Model.Var i -> [ i; q ] | Model.Const _ -> [ q ])
+  | F_reif_eq (x, e, _) -> (
+      match e with Model.Var j -> [ x; j ] | Model.Const _ -> [ x ])
+  | F_imp _ -> []
 
 (* Merge repeated variables and drop zero coefficients; the constant part goes to the
    rhs. Checked, because the folding is arithmetic on model integers. *)
@@ -323,6 +334,34 @@ let facts_of env (c : Ast.constraint_item) : fact list =
         | Some j, v :: rest ->
             F_range (j, List.fold_left min v rest, List.fold_left max v rest) :: idx
         | _ -> idx)
+    | "int_eq_reif", [ a; b; r ] -> (
+        match var_of (op r) with
+        | None -> []
+        | Some p ->
+            let a = op a and b = op b in
+            List.filter_map Fun.id
+              [
+                Option.map (fun x -> F_reif_eq (x, b, p)) (var_of a);
+                Option.map (fun y -> F_reif_eq (y, a, p)) (var_of b);
+              ])
+    | "bool_clause", [ pa; na ] -> (
+        (* Only the two-literal clauses, and only their implications OF A POSITIVE
+           literal -- the case split reads `... -> p`, never `... -> not p`. A constant
+           literal makes the clause trivial (true) or drops out (false). *)
+        let lits ops truth =
+          List.fold_left
+            (fun acc o ->
+              match (acc, o) with
+              | None, _ -> None
+              | Some _, Model.Const n when n <> 0 = truth -> None
+              | Some l, Model.Const _ -> Some l
+              | Some l, Model.Var i -> Some (i :: l))
+            (Some []) ops
+        in
+        match (lits (ops pa) true, lits (ops na) false) with
+        | Some [ a; b ], Some [] -> [ F_imp ((a, false), b); F_imp ((b, false), a) ]
+        | Some [ a ], Some [ c ] -> [ F_imp ((c, true), a) ]
+        | _ -> [])
     | ("fzn_global_cardinality" | "baguette_global_cardinality"), [ xa; _; na ] ->
         let n = List.length (ops xa) in
         List.filter_map
@@ -447,13 +486,73 @@ let infer_bounds (vars : Model.var array) (undomained : int list) (facts : fact 
             raise_lo q (C.neg m);
             lower_hi q m
         | _ -> ())
+    | F_reif_eq _ | F_imp _ -> ()
+  in
+  (* THE CASE SPLIT. MiniZinc writes `if c then x = e1 else x = e2 endif` as
+       int_eq_reif(x, e1, p1)   int_eq_reif(x, e2, p2)
+       bool_clause([p1], [c])   bool_clause([c, p2], [])
+     and nothing else bounds x. Every solution has c true or c false; on the true side
+     p1 holds and x = e1, on the false side p2 holds and x = e2. So x lies in the HULL of
+     what the two sides imply, and only when BOTH sides imply a two-sided bound. A side
+     whose implied bounds cross is impossible, and the other side alone bounds x. The
+     literal c itself counts as implied on its true side (c may be a reifier). *)
+  let reif_by_p = Hashtbl.create 64 and imp = Hashtbl.create 64 in
+  List.iter
+    (function
+      | F_reif_eq (x, e, p) -> if free.(x) then Hashtbl.add reif_by_p p (x, e)
+      | F_imp (lit, p) -> Hashtbl.add imp lit p
+      | _ -> ())
+    facts;
+  let cases =
+    List.sort_uniq compare (Hashtbl.fold (fun (c, _) _ acc -> c :: acc) imp [])
+  in
+  let side c pol =
+    (* x -> the bounds the side implies for x, intersected over its reifiers *)
+    let tbl = Hashtbl.create 8 in
+    let ps = Hashtbl.find_all imp (c, pol) @ if pol then [ c ] else [] in
+    List.iter
+      (fun p ->
+        List.iter
+          (fun (x, e) ->
+            match bounds_of e with
+            | Some l, Some u ->
+                let l, u =
+                  match Hashtbl.find_opt tbl x with
+                  | Some (l0, u0) -> (max l l0, min u u0)
+                  | None -> (l, u)
+                in
+                Hashtbl.replace tbl x (l, u)
+            | _ -> ())
+          (Hashtbl.find_all reif_by_p p))
+      ps;
+    tbl
+  in
+  let case_split c =
+    let t = side c true and f = side c false in
+    let hull x (l1, u1) (l2, u2) =
+      match (l1 > u1, l2 > u2) with
+      | true, true -> () (* both sides impossible: the model is UNSAT; derive nothing *)
+      | true, false ->
+          raise_lo x l2;
+          lower_hi x u2
+      | false, true ->
+          raise_lo x l1;
+          lower_hi x u1
+      | false, false ->
+          raise_lo x (min l1 l2);
+          lower_hi x (max u1 u2)
+    in
+    Hashtbl.iter
+      (fun x bt -> match Hashtbl.find_opt f x with Some bf -> hull x bt bf | None -> ())
+      t
   in
   let pass = ref 0 in
   changed := true;
   while !changed && !pass < infer_max_passes do
     changed := false;
     incr pass;
-    List.iter (fun f -> try apply f with C.Overflow _ | Invalid_argument _ -> ()) facts
+    List.iter (fun f -> try apply f with C.Overflow _ | Invalid_argument _ -> ()) facts;
+    List.iter case_split cases
   done;
   (lo, hi)
 

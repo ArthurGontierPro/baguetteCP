@@ -1425,6 +1425,39 @@ let test_m7_t19 () =
      solve satisfy;\n"
     "s"
     (M.Drange (6, 7));
+  (* The case split: `if c then x = e else x = 0`, as MiniZinc writes it (seen in
+     2025_work-task-variation). x is in the hull of e's bounds and 0. *)
+  let ite extra =
+    "var bool: c;\n\
+     var bool: p1;\n\
+     var bool: p2;\n\
+     var 2..5: e;\n\
+     var int: x;\n\
+     constraint int_eq_reif(x, e, p1);\n\
+     constraint int_eq_reif(x, 0, p2);\n\
+     constraint bool_clause([p1], [c]);\n" ^ extra ^ "solve satisfy;\n"
+  in
+  infer_dom "M7-T19 (c): case split -- if c then x = e else x = 0 gives the hull 0..5"
+    (ite "constraint bool_clause([c, p2], []);\n")
+    "x"
+    (M.Drange (0, 5));
+  reject "M7-T19 (c): case split -- one side alone bounds nothing" ~line:5 ~src:(ite "")
+    ~needles:[ "`x`"; "could not bound it" ];
+  infer_dom "M7-T19 (c): case split -- an impossible side leaves the other alone"
+    "var bool: c;\n\
+     var bool: p1;\n\
+     var bool: p2;\n\
+     var bool: p3;\n\
+     var int: x;\n\
+     constraint int_eq_reif(x, 1, p1);\n\
+     constraint int_eq_reif(x, 2, p3);\n\
+     constraint int_eq_reif(x, 7, p2);\n\
+     constraint bool_clause([p1], [c]);\n\
+     constraint bool_clause([p3], [c]);\n\
+     constraint bool_clause([c, p2], []);\n\
+     solve satisfy;\n"
+    "x"
+    (M.Drange (7, 7));
   (* An alias needs no domain of its own and is no longer refused. *)
   infer_dom "M7-T19 (c): `var int: s = x;` is an alias, not an undomained variable"
     "var 1..3: x;\nvar int: s = x;\nsolve satisfy;\n" "x"
