@@ -1171,3 +1171,69 @@ self-check, which runs before any measurement: `.opb` bytes are a property of th
 not of the path it was given. The scenes live in different directories, so if that ever
 broke, every control row would differ for a reason unrelated to what it tests — and the
 self-check says so and exits non-zero first.
+
+## 8. The comparison harness: baguette against Chuffed and GCS (M6-T4, D-0081)
+
+`scripts/compare_run.sh <corpus-root> <out-dir>` runs every instance of a MiniZinc
+Challenge-shaped corpus (`<root>/<year>/<family>/*.mzn` + `.dzn`/`.json`) through
+**baguette, Chuffed and the Glasgow Constraint Solver**, each flattened with **its own
+library**, and compares the answers. It is baguette's first external oracle: a
+`DISAGREE` that involves baguette is a soundness finding, and `--report` prints that list
+before anything else. It is not a benchmark in §2's sense — one run per cell, wall clock
+on a shared node — and its timing columns are only ever compared within one run.
+
+**The instance is fixed before any solver sees it.** The data file is the smallest
+candidate (scripts/corpus_run.sh's order, bare model last) that *at least one* of the three
+libraries flattens, chosen once per instance and recorded in `pair.tsv`. The rule never
+depends on `SOLVERS`, so a Chuffed-only pass and a three-solver pilot pin the same
+instance, and `flatten.tsv` records every library's verdict on every instance whichever
+solvers ran.
+
+**Every run is annotation-driven.** baguette follows the annotation (SPEC §3.4, no
+restarts); Chuffed runs without `-f` (free search off), with `-a` on optimisation only;
+GCS runs without `-f`, `--restarts` at its default 0, with `-i` on optimisation only and
+`--prove` (both proof-logging solvers' proofs are checked by veripb 3.0.2).
+
+| file | one row per | columns |
+|---|---|---|
+| `results.tsv` | (instance, solver) | `id solver status wall_s objective nsols fzn_bytes opb_bytes pbp_bytes check_verdict check_s detail`, then `DONE-<epoch> <rows> <selected>` |
+| `pair.tsv` | instance | `id model PAIRED/FLATTEN-FAIL/NO-DATA data` |
+| `flatten.tsv` | (instance, library) | `id solver OK/FLATTEN-FAIL/INPUT-INVALID/NO-DATA bytes sense objname detail` |
+| `run.conf` | run | every binary's path **and md5**, the commits, the timeouts, the checker |
+
+`status` is one of `SAT UNSAT OPT UNKNOWN TIMEOUT CAPPED REFUSED ERROR` (solver-side,
+reachable only once the flattened file passed the input gate) or `FLATTEN-FAIL NO-DATA
+INPUT-INVALID` (input-side, never the solver's). `CAPPED` is the harness's own
+`PROOF_CAP_KB` file-size cap (`ulimit -f`) firing — GCS's proofs grow by gigabytes a
+minute — and is kept apart so it can never read as a solver error. `objective` is `-` for
+satisfaction, else `min:V`/`max:V` with V the last printed value. `check_verdict` is
+`VERIFIED`, `VERIFIED-WEAK` (accepted, but the conclusion does not establish the printed
+status), `REJECTED` (classified by veripb's *wording*: `Verification error at` + a
+non-grammar `Caused by`), `CHECK-ERROR`, `TIMEOUT-CHECK`, `NO-PROOF`, `NOT-CHECKED` (the run
+was killed, so its proof is a prefix) or `-` (Chuffed logs no proof).
+
+**Reading a report** (`scripts/compare_run.sh --report <out>... [--pinned answers.tsv]`):
+
+1. `run: COMPLETE` or `***PARTIAL***` — a partial table's counts are lower bounds.
+2. `== DISAGREE` — per instance, every solver's status/objective and the reason: a
+   solution against an UNSAT, two different proved optima, or an incumbent better than a
+   proved optimum. `SOUNDNESS(baguette)` marks the ones baguette is party to.
+3. `== proofs not cleanly verified` — REJECTED, VERIFIED-WEAK, CHECK-ERROR; artefacts kept.
+4. `== against the pinned answers` (with `--pinned`) — `PIN-MISMATCH` rows: a run that
+   contradicts `bench/corpus/answers.tsv`. This is M5-T3's regression check.
+5. status × solver, proof verdict × solver, and `AGREE/DISAGREE/INCOMPLETE` counts.
+6. On the instances **every** listed solver solved: median and mean wall seconds, median
+   proof bytes and check seconds; and PAR2 over all instances (unsolved = 2 × timeout).
+
+`bench/corpus/shared_set.lst` is `--shared` over a run's `flatten.tsv`: the instances all
+three libraries flatten. `bench/corpus/answers.tsv` is `--answers` over the pilot and the
+Chuffed pass: the agreed answer per instance (`SAT`/`UNSAT`/`OPT`, or `DISPUTED`, never
+silently dropped), the objective (`min:V` proved, `min:best=V` best known), the solver(s)
+that established it, and the data file. A later baguette run that contradicts a row is a
+finding, not a reason to edit the row.
+
+`scripts/compare_selftest.sh` (`compare_run.sh --self-test`) runs a three-model corpus
+through the real harness, real baguette and real veripb, with a stub `minizinc` when none
+is installed and two shims for Chuffed and GCS — the GCS shim deliberately answers UNSAT to
+everything — and asserts SAT, UNSAT, OPT, REFUSED, NO-PROOF, two `DISAGREE`s, one `AGREE`,
+resumption and a `PIN-MISMATCH`. It fails, never skips, without baguette or veripb.
