@@ -909,7 +909,10 @@ let report_limit opts (st : Search.stats) ~best =
     (Option.value opts.time_limit ~default:0.)
     (Sys.time ()) st.Search.nodes st.Search.decisions st.Search.conflicts
     st.Search.n_learned st.Search.n_pb_learned
-    (Retention.size (Search.stats_db st))
+    (* HELD at the stop, not now: the stop's own I-X2 sweep has emptied the database
+       by the time this prints, so [Retention.size] would read 0 on every run. *)
+    (let db = Search.stats_db st in
+     Retention.n_added db - Retention.n_evicted db)
     st.Search.max_depth
     (match best with None -> "none" | Some (_, v) -> string_of_int v)
 
