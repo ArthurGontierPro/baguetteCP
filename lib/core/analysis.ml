@@ -316,13 +316,17 @@ let establishes (e : Store.entry) ~is_lower ~value =
   if is_lower then Domain.lo e.Store.old < value && Domain.lo e.Store.now >= value
   else Domain.hi e.Store.old > value && Domain.hi e.Store.now <= value
 
-let scan_support store ~before ~name ~is_lower ~value =
+(* [v] is [Store.var_named store name]. M6-T11 (D-0085): the scan used to compare
+   [String.equal (Store.name store e.var) name] at every entry -- D-0080 measured ~60 % of
+   2016 prize-collecting's self time in it. [Store.name_rep] maps each entry's variable to
+   the first variable of its name, so the integer test below holds on exactly the entries
+   the string test did, duplicate names included. *)
+let scan_support store ~before ~v ~is_lower ~value =
   let rec go i =
     if i < 0 then Store.no_support
     else
       let e = Store.trail_entry store i in
-      if
-        String.equal (Store.name store e.Store.var) name && establishes e ~is_lower ~value
+      if Var.equal (Store.name_rep store e.Store.var) v && establishes e ~is_lower ~value
       then i
       else go (i - 1)
   in
@@ -344,7 +348,7 @@ let support_of store ~before fact =
         fast <> Store.no_support && fast < before
         && establishes (Store.trail_entry store fast) ~is_lower ~value
       then (fast, true)
-      else (scan_support store ~before ~name ~is_lower ~value, false)
+      else (scan_support store ~before ~v ~is_lower ~value, false)
 
 let same_slot a b =
   String.equal (Reason.fact_owner a.fact) (Reason.fact_owner b.fact)
