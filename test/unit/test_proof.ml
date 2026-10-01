@@ -3381,6 +3381,78 @@ let test_m7t11_hole_rows () =
     (Encoding.n_constraints e4 = 0 && (Encoding.cost e4).Encoding.c_ladder_clauses = 0);
   Encoding.encoding_budget := saved
 
+(* ------------------------------------------------------------------ *)
+(* M6-T12: [Writer.No_conclusion], the conclusion of a stopped run     *)
+(* ------------------------------------------------------------------ *)
+
+let test_no_conclusion () =
+  (* The three lines, in full and in order, at the end of the proof. *)
+  let s, r =
+    emitted (fun w ->
+        Writer.header w ~n_model_constraints:1;
+        Writer.conclusion w Writer.No_conclusion;
+        Writer.is_finished w)
+  in
+  check "No_conclusion: the writer is finished afterwards"
+    (match r with Ok true -> true | _ -> false);
+  let lines = String.split_on_char '\n' s |> List.filter (fun l -> l <> "") in
+  let n = List.length lines in
+  check_eq "No_conclusion: the last three lines"
+    ~expected:"output NONE ;|conclusion NONE ;|end pseudo-Boolean proof ;"
+    ~got:(String.concat "|" (List.filteri (fun i _ -> i >= n - 3) lines));
+  (* The I-X2 audit runs, as it does for every other verdict. *)
+  let _, r =
+    emitted ~audit:true (fun w ->
+        Writer.header w ~n_model_constraints:1;
+        let _leaked = Writer.pol w ~origin:"leaked reason" (Pol.id 1) in
+        Writer.conclusion w Writer.No_conclusion)
+  in
+  check "No_conclusion: an undeleted id fails the audit"
+    (match r with Error (Writer.Audit_failed _) -> true | _ -> false);
+  let _, r =
+    emitted ~audit:true (fun w ->
+        Writer.header w ~n_model_constraints:1;
+        let id = Writer.pol w ~origin:"reason" (Pol.id 1) in
+        Writer.delete w id;
+        Writer.conclusion w Writer.No_conclusion)
+  in
+  check "No_conclusion: a deleted id passes the audit"
+    (match r with Ok () -> true | _ -> false);
+  (* And the checker's own verdict, wording at full strength. *)
+  match veripb_path () with
+  | None ->
+      incr failures;
+      print_endline
+        ("FAIL No_conclusion: " ^ Baguette_proof.Checker.not_found_message
+       ^ " -- a missing checker is a failure, never a skip.")
+  | Some veripb -> (
+      let dir = Filename.temp_file "baguette_noconc" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let opb = Filename.concat dir "m.opb" and pbp = Filename.concat dir "m.pbp" in
+      write_lines opb [ "* #variable= 1 #constraint= 1"; "1 x1 >= 0 ;" ];
+      let oc = open_out pbp in
+      let w = Writer.create ~audit:true oc in
+      Writer.header w ~n_model_constraints:1;
+      Writer.conclusion w Writer.No_conclusion;
+      close_out oc;
+      let log = Filename.concat dir "log" in
+      (match run_checker ~checker:veripb ~opb ~pbp ~log with
+      | Some ok ->
+          check "No_conclusion: veripb accepts the proof" ok;
+          let out = read_whole log in
+          let has sub =
+            let ls = String.length sub and lo = String.length out in
+            let rec go i = i + ls <= lo && (String.sub out i ls = sub || go (i + 1)) in
+            go 0
+          in
+          check "No_conclusion: veripb says VERIFIED NO CONCLUSION"
+            (has "s VERIFIED NO CONCLUSION")
+      | None -> failwith "checker vanished between find and run");
+      Sys.readdir dir
+      |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
+      try Sys.rmdir dir with _ -> ())
+
 let () =
   report_checker ();
   test_lits ();
@@ -3406,6 +3478,7 @@ let () =
   test_v3_del_pair_spelling ();
   test_v3_wipe_level_against_checker ();
   test_v3_veripb ();
+  test_no_conclusion ();
   test_pol_states_its_conclusion ();
   test_learned_survives_the_backjump ();
   test_reif_rows ();

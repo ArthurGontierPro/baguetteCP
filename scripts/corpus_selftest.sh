@@ -170,6 +170,100 @@ mkdir -p "$D/dirfamily/notdata.dzn"
 expect_eq "data_candidates ignores a directory named like a data file" 0 \
   "$(data_candidates "$D/dirfamily" 4 | wc -l)"
 
+# ------------------------------------------------- M6-T12: the checker-side buckets
+#
+# run_one's tail classifies what the solver and the checker did. Four of those
+# outcomes are reached only by a particular PAIR of exit status and wording, and
+# TIMEOUT-CHECK was unreachable for a whole wave (the status was read after an
+# `if ... fi`, i.e. it was the if-statement's, so every checker timeout was filed
+# as PROOF-REJECTED and nothing said so). A bucket nobody has seen reached is not
+# yet a bucket, so each is driven end to end through run_one with a fake
+# flattener, a fake solver and a fake checker -- no minizinc, no veripb, no corpus.
+#
+# The fakes read FAKE_SOLVER and FAKE_CHECKER from the environment, so one script
+# serves every lane. Each lane asserts the bucket name EXACTLY and fails loudly,
+# naming the bucket it got, if it is not reached.
+FK="$D/fake"
+mkdir -p "$FK/c/2010/fam" "$FK/out/log" "$FK/out/work" "$FK/out/err"
+
+cat > "$FK/mzn" <<'EOF'
+#!/usr/bin/env bash
+# fake minizinc: write the good model to whatever follows -o
+while [ $# -gt 0 ]; do
+  [ "$1" = "-o" ] && { cp "$FAKE_FZN" "$2"; exit 0; }
+  shift
+done
+exit 1
+EOF
+cat > "$FK/solver" <<'EOF'
+#!/usr/bin/env bash
+# fake baguette: a proof pair under --proof PREFIX, and a stderr per FAKE_SOLVER
+prefix=""
+while [ $# -gt 0 ]; do
+  [ "$1" = "--proof" ] && { prefix="$2"; shift; }
+  shift
+done
+[ -n "$prefix" ] && { echo "* fake opb" > "$prefix.opb"; echo "fake pbp" > "$prefix.pbp"; }
+case "$FAKE_SOLVER" in
+  limit)
+    echo "limit: reached nodes=5 decisions=4 conflicts=0 learned=0 pb-learned=0 db=0 incumbent=none cpu=0.1" >&2
+    echo "=====UNKNOWN====="
+    ;;
+  *) echo "----------" ;;
+esac
+exit 0
+EOF
+cat > "$FK/checker" <<'EOF'
+#!/usr/bin/env bash
+echo "Running VeriPB version fake"
+case "$FAKE_CHECKER" in
+  hang) exec sleep 30 ;;
+  err1) echo "something broke before any verdict"; exit 1 ;;
+  reject1) echo "Verification error"; echo "Caused by: fake rejection"; exit 1 ;;
+  nonconc) echo "s VERIFIED NO CONCLUSION"; exit 0 ;;
+esac
+exit 0
+EOF
+chmod +x "$FK/mzn" "$FK/solver" "$FK/checker"
+printf '%s\n' "$good" > "$FK/good.fzn"
+
+# $1 name, $2 FAKE_SOLVER, $3 FAKE_CHECKER, $4 the bucket that MUST be reached,
+# $5 text the detail column must contain.
+expect_bucket() {
+  local name="$1" fs="$2" fc="$3" want="$4" need="${5:-}" row got detail
+  row="$(
+    MZN="$FK/mzn" BAGUETTE="$FK/solver" VERIPB="$FK/checker" \
+      OUT="$FK/out" FAKE_FZN="$FK/good.fzn" FAKE_SOLVER="$fs" FAKE_CHECKER="$fc" \
+      SOLVER_ARGS="--time-limit 1" HEAP_MB="" MEM_KB=4000000 KEEP=0 NO_PROOF=0 RSS=0 \
+      DATA_TRIES=1 SOLVE_TIMEOUT=30 FLATTEN_TIMEOUT=30 CHECK_TIMEOUT=1 \
+      run_one "$FK/c/2010/fam/m.mzn"
+  )"
+  got="$(printf '%s' "$row" | cut -f2)"
+  detail="$(printf '%s' "$row" | cut -f5)"
+  if [ "$got" != "$want" ]; then
+    echo "FAIL $name: expected bucket '$want', reached '$got' (row: $row)."
+    echo "     The bucket is not reached, so nothing here has ever seen it fire."
+    fails=$((fails + 1))
+    return
+  fi
+  case "$detail" in
+    *"$need"*) echo "ok   $name -> $got" ;;
+    *)
+      echo "FAIL $name: reached '$got' but the detail '$detail' lacks '$need'."
+      fails=$((fails + 1))
+      ;;
+  esac
+}
+
+expect_bucket "a clean --time-limit stop, checker says NO CONCLUSION" \
+  limit nonconc UNKNOWN-LIMIT "n=5 d=4"
+expect_bucket "a checker that exceeds CHECK_TIMEOUT (exit 124)" \
+  plain hang TIMEOUT-CHECK "exceeded"
+expect_bucket "a checker that exits 1 with no verdict wording" \
+  plain err1 CHECK-ERR-1 "without a verdict"
+expect_bucket "a checker that exits 1 WITH 'Verification error' (not CHECK-ERR-1)" \
+  plain reject1 PROOF-REJECTED "fake rejection"
+
 if [ "$fails" -eq 0 ]; then
   echo "corpus self-test: PASS"
   exit 0

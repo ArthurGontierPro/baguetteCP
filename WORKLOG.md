@@ -724,6 +724,7 @@ work. The owning session picks it up.
 
 | M6-T9 | agent-perf | 2026-10-02 | **D-0080**. `--time-limit S` + `Search.config.stop`: a stopped run ends `conclusion NONE` and veripb accepts it (142 corpus runs); `BAGUETTE_PB_ANALYSIS`, `BAGUETTE_NODE_LIMIT`, SIGTERM `limit: killed` line; `corpus_run.sh` `SOLVER_ARGS`/`NO_PROOF`/`RSS`/`UNKNOWN-LIMIT`/`--no-output-ozn`, and two repaired classifications (`TIMEOUT-CHECK` never fired; rejection gated on the checker's wording). Shipped fix: `Pb_analysis.falsified_at` one-pass (57 → 73 verified, median nodes/s 1.44 → 10.8, byte-identical proofs) and overflow-as-fallback in the PB walk. Gate on `249d37d`: 2953 ok / 0 FAIL (peak 40.9 MB), 107/107 models (18.5 MB), selftest PASS, w30 report byte-identical. Branch `wave31-perf`, not merged |
 | M6-T10 | orchestrator | 2026-10-02 | `Justify` memo as hash buckets (351 artefacts byte-identical), `--time-limit` on the wall clock (`wall=` field), SPEC 2.2 stopped-run rule. Closes three of M6-T9's requests |
+| M6-T12 | agent-tidy | 2026-10-02 | `Writer.No_conclusion` verdict; `Search.conclude_stopped` is one `Writer.conclusion` call (hand-written epilogue deleted), a `test_proof.ml` lane asserts the three lines, the audit and veripb's `s VERIFIED NO CONCLUSION`. `corpus_selftest.sh`: four end-to-end `run_one` lanes with fake flattener/solver/checker (UNKNOWN-LIMIT, TIMEOUT-CHECK, CHECK-ERR-1, PROOF-REJECTED). Byte-identical proofs (468 files incl. stdout, md5 of the set `6f18acfb...`). Gate: 2993 ok / 0 FAIL, 117/117 models, selftest PASS. Branch `wave32-tidy`, not merged |
 
 ## Handoff notes
 
@@ -3491,3 +3492,14 @@ harness's detail column, that is one more key in `summarise_limit`'s sprintf.
 SPEC 2.2 gained the stopped-run paragraph (normative): `=====UNKNOWN=====` when nothing was
 printed, a stopped optimisation ends after its last `----------` with no `==========`, the
 proof ends `conclusion NONE` and must verify, exit 0.
+## M6-T12 handoff
+
+agent-tidy, branch `wave32-tidy` (not merged). `Writer.verdict` gained `No_conclusion`;
+`Search.conclude_stopped` now ends with `Writer.conclusion w Writer.No_conclusion`, so a stopped
+run gets the same finish/flush/I-X2 audit as every other verdict from one place. Emitted bytes
+unchanged: all 117 models, each solved to the end and under `--time-limit 0.001`, hashed before
+(binary md5 `fd432a57...`) and after (`28055b6e...`), 0 differences. `corpus_selftest.sh` now drives
+`run_one` through fakes for UNKNOWN-LIMIT, TIMEOUT-CHECK (a real `timeout` on a hanging checker),
+CHECK-ERR-1 and PROOF-REJECTED; reintroducing the `rc=$?`-after-`if` bug turns two lanes red.
+Next session: a new `Writer.verdict` arm needs no change in `Search`; the fakes read
+`FAKE_SOLVER`/`FAKE_CHECKER`, extend `expect_bucket` for further buckets.
