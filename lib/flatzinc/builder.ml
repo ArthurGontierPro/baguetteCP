@@ -2,8 +2,9 @@
 
    This is where the normative rules of SPEC 2.1 are enforced:
 
-   - a `var int` with no declared domain is rejected with a diagnostic, never defaulted
-     to a machine-word range;
+   - a `var int` with no declared domain is given the domain the model's own constraints
+     imply ([infer_domains], M7-T19, D-0083), and is rejected with a diagnostic if they
+     imply none -- never defaulted to a machine-word range;
    - a builtin outside the implemented set is a hard error that names the builtin,
      never a silent skip.
 
@@ -76,6 +77,11 @@ type env = {
      lib/flatzinc/compile.ml's [check_name_collisions], which is where the diagnostic
      can say which declaration it clashed with. *)
   mutable naux : int;
+  (* M7-T19 (D-0083): the variables declared `var int` with NO domain, newest first. Each
+     holds a placeholder domain until [infer_domains] replaces it; one that inference
+     cannot bound is refused by [refuse_unbounded], exactly as SPEC 2.1 refused all of
+     them before. *)
+  mutable undomained_rev : int list;
 }
 
 let new_env () =
@@ -87,6 +93,7 @@ let new_env () =
     nvars = 0;
     outputs_rev = [];
     naux = 0;
+    undomained_rev = [];
   }
 
 let new_var env name dom pos =
@@ -161,19 +168,368 @@ let as_const pos ~builtin ~what (op : Model.operand) =
 
 let sorted_uniq ns = List.sort_uniq compare ns
 
+(* [Ast.Tint] -- `var int` with no domain -- is not a domain and never reaches here: the
+   two declaration sites route it to [new_undomained_var] (M7-T19, D-0083). *)
 let domain_of_base pos name (bt : Ast.base_type) =
   match bt with
   | Ast.Tbool -> Model.Dbool
   | Ast.Tint ->
-      Error.failf pos
-        "`%s` is declared `var int` with no domain; SPEC 2.1 requires every integer \
-         variable to have a finite declared domain (write for example `var 0..10: %s;`)"
-        name name
+      Error.failf pos "internal: `%s` (`var int`, no domain) reached [domain_of_base]"
+        name
   | Ast.Trange (l, u) ->
       if l > u then Error.failf pos "`%s` has the empty domain %d..%d" name l u
       else Model.Drange (l, u)
   | Ast.Tset [] -> Error.failf pos "`%s` has an empty domain" name
   | Ast.Tset ns -> Model.Dset (sorted_uniq ns)
+
+(* ------------------------------------------- M7-T19: bounds inference (D-0083)
+
+   docs/SPEC.md 2.1, as amended 2026-10-01: a `var int` declared with NO domain is given
+   the domain its model's own constraints IMPLY, and is refused only if they imply none.
+   MiniZinc 2.10 writes these for sums of bounded terms it did not bother to bound
+   (D-0079 counted four corpus instances refused for it).
+
+   WHY INFERENCE AND NOT A DEFAULT RANGE. The order encoding is width-proportional
+   (D-0028): a default of, say, -10^6..10^6 is two million ladder clauses paid BLIND, for
+   every such variable, whatever the model needs. An inferred bound is the width the model
+   itself licenses, and nothing the model does not.
+
+   WHY IT IS SOUND. Every rule below derives a bound that EVERY SOLUTION of the one
+   constraint it reads satisfies, so the inferred domain contains every value the variable
+   takes in any solution of the model: declaring it removes no solution, and the encoded
+   model has exactly the solutions of the FlatZinc one. That is the obligation, and it is
+   the front end's, like the rest of compile.ml's encoding -- veripb checks the proof
+   against the .opb the inferred domain is written into, and cannot see the inference.
+   Every arithmetic step is [Baguette_core.Checked] (D-0029: a wrapped bound is a wrong
+   domain with an accepted proof); a step that would overflow derives NOTHING for that
+   constraint on that pass, it never wraps and never guesses.
+
+   A bound only ever TIGHTENS, and only on an undomained variable; a declared domain is
+   read, never changed. If inference crosses the bounds (lo > hi) the model has no
+   solution at all, and any domain is then sound: the variable is declared on the hull
+   hi..lo of the two crossed bounds and the solver proves the UNSAT as it would any
+   other.
+
+   THE RULES (each one line in D-0083). Terms with a constant operand are folded into the
+   right-hand side first, and a variable repeated in a row has its coefficients merged.
+     int_lin_eq / int_lin_le   solve the row for each term, given the bounds the OTHER
+                               terms need (eq: both sides; le: one side)
+     int_eq / int_le / int_lt  as the rows a-b = 0, a-b <= 0, a-b <= -1
+     bool2int(b, x)            x in 0..1
+     int_abs(x, z)             z >= 0; z <= max|x|; x in -hi(z)..hi(z)
+     int_times(x, y, z)        z in the four-corner product of x and y (Interval)
+     int_div(x, y, q)          |q| <= max|x| (|y| >= 1 wherever the relation holds)
+     array_int_element(i,a,c)  i in 1..|a|, c in min(a)..max(a)
+     global_cardinality counts each in 0..|xs|
+   Everything else (reified forms, int_ne, all_different, clauses) implies no bound and
+   is not read. At most [infer_max_passes] passes, stopping at the first pass that changes
+   nothing: every intermediate state is sound, so the cap costs precision, never
+   soundness. *)
+
+let undomained_placeholder = Model.Drange (0, 0)
+
+let new_undomained_var env name pos =
+  let i = new_var env name undomained_placeholder pos in
+  env.undomained_rev <- i :: env.undomained_rev;
+  i
+
+let infer_max_passes = 64
+
+(* What one constraint says about bounds, over variable indices. *)
+type fact =
+  | F_lin of (int * int) list * int * bool (* merged terms, rhs, is_equality *)
+  | F_range of int * int * int (* var, lo, hi *)
+  | F_abs of Model.operand * int (* x, z *)
+  | F_times of Model.operand * Model.operand * int (* x, y, z *)
+  | F_div of Model.operand * int (* x, q *)
+
+let fact_vars = function
+  | F_lin (ts, _, _) -> List.map snd ts
+  | F_range (v, _, _) -> [ v ]
+  | F_abs (x, z) -> ( match x with Model.Var i -> [ i; z ] | Model.Const _ -> [ z ])
+  | F_times (x, y, z) ->
+      List.filter_map
+        (function Model.Var i -> Some i | Model.Const _ -> None)
+        [ x; y; Model.Var z ]
+  | F_div (x, q) -> ( match x with Model.Var i -> [ i; q ] | Model.Const _ -> [ q ])
+
+(* Merge repeated variables and drop zero coefficients; the constant part goes to the
+   rhs. Checked, because the folding is arithmetic on model integers. *)
+let lin_fact (terms : (int * Model.operand) list) rhs eq =
+  let module C = Baguette_core.Checked in
+  let tbl = Hashtbl.create 8 and order = ref [] in
+  let rhs =
+    List.fold_left
+      (fun r (a, op) ->
+        match op with
+        | Model.Const n -> C.sub r (C.mul a n)
+        | Model.Var i ->
+            (match Hashtbl.find_opt tbl i with
+            | Some c -> Hashtbl.replace tbl i (C.add c a)
+            | None ->
+                order := i :: !order;
+                Hashtbl.replace tbl i a);
+            r)
+      rhs terms
+  in
+  let ts =
+    List.filter_map
+      (fun i ->
+        let a = Hashtbl.find tbl i in
+        if a = 0 then None else Some (a, i))
+      (List.rev !order)
+  in
+  F_lin (ts, rhs, eq)
+
+(* The bound-carrying constraints, read straight from the syntax. A constraint this
+   cannot resolve contributes nothing here: the real pass ([build_constraint]) resolves it
+   again and reports the error there, with the message it has always had. *)
+let facts_of env (c : Ast.constraint_item) : fact list =
+  let pos = c.Ast.c_pos in
+  let op e = operand env pos e and ops e = operands env pos e in
+  let const e =
+    match operand env pos e with Model.Const n -> n | Model.Var _ -> raise Not_found
+  in
+  let var_of = function Model.Var i -> Some i | Model.Const _ -> None in
+  try
+    match (c.Ast.c_id, c.Ast.c_args) with
+    | ("int_lin_eq" | "int_lin_le"), [ ca; va; ra ] ->
+        let coeffs =
+          List.map (function Model.Const n -> n | _ -> raise Not_found) (ops ca)
+        in
+        let vs = ops va in
+        if List.length coeffs <> List.length vs then []
+        else [ lin_fact (List.combine coeffs vs) (const ra) (c.Ast.c_id = "int_lin_eq") ]
+    | "int_eq", [ a; b ] -> [ lin_fact [ (1, op a); (-1, op b) ] 0 true ]
+    | "int_le", [ a; b ] -> [ lin_fact [ (1, op a); (-1, op b) ] 0 false ]
+    | "int_lt", [ a; b ] -> [ lin_fact [ (1, op a); (-1, op b) ] (-1) false ]
+    | "bool2int", [ _; x ] -> (
+        match var_of (op x) with Some i -> [ F_range (i, 0, 1) ] | None -> [])
+    | "int_abs", [ x; z ] -> (
+        match var_of (op z) with Some j -> [ F_abs (op x, j) ] | None -> [])
+    | "int_times", [ x; y; z ] -> (
+        match var_of (op z) with Some j -> [ F_times (op x, op y, j) ] | None -> [])
+    | "int_div", [ x; _; q ] -> (
+        match var_of (op q) with Some j -> [ F_div (op x, j) ] | None -> [])
+    | "array_int_element", [ ia; aa; ra ] -> (
+        let vs =
+          List.map (function Model.Const n -> n | _ -> raise Not_found) (ops aa)
+        in
+        let n = List.length vs in
+        let idx =
+          match var_of (op ia) with Some i when n > 0 -> [ F_range (i, 1, n) ] | _ -> []
+        in
+        match (var_of (op ra), vs) with
+        | Some j, v :: rest ->
+            F_range (j, List.fold_left min v rest, List.fold_left max v rest) :: idx
+        | _ -> idx)
+    | ("fzn_global_cardinality" | "baguette_global_cardinality"), [ xa; _; na ] ->
+        let n = List.length (ops xa) in
+        List.filter_map
+          (fun o -> Option.map (fun i -> F_range (i, 0, n)) (var_of o))
+          (ops na)
+    | _ -> []
+  with Not_found | Error.Error _ | Baguette_core.Checked.Overflow _ -> []
+
+(* The fixpoint. [lo]/[hi] are over EVERY variable; a declared one starts at its declared
+   bounds and is never written. Returns the final bounds and the facts, which
+   [refuse_unbounded] reads to name a variable's neighbours. *)
+let infer_bounds (vars : Model.var array) (undomained : int list) (facts : fact list) =
+  let module C = Baguette_core.Checked in
+  let n = Array.length vars in
+  let lo = Array.make n None and hi = Array.make n None in
+  let free = Array.make n false in
+  List.iter (fun i -> free.(i) <- true) undomained;
+  Array.iteri
+    (fun i (v : Model.var) ->
+      if not free.(i) then (
+        let l, u =
+          match v.Model.v_dom with
+          | Model.Dbool -> (0, 1)
+          | Model.Drange (l, u) -> (l, u)
+          | Model.Dset (x :: xs) -> (List.fold_left min x xs, List.fold_left max x xs)
+          | Model.Dset [] -> (0, -1)
+        in
+        lo.(i) <- Some l;
+        hi.(i) <- Some u))
+    vars;
+  let changed = ref false in
+  let raise_lo i b =
+    if free.(i) then
+      match lo.(i) with
+      | Some l when l >= b -> ()
+      | _ ->
+          lo.(i) <- Some b;
+          changed := true
+  in
+  let lower_hi i b =
+    if free.(i) then
+      match hi.(i) with
+      | Some u when u <= b -> ()
+      | _ ->
+          hi.(i) <- Some b;
+          changed := true
+  in
+  let bounds_of = function
+    | Model.Const k -> (Some k, Some k)
+    | Model.Var i -> (lo.(i), hi.(i))
+  in
+  let mag l u = max (C.abs l) (C.abs u) in
+  (* sum a*x <= rhs (and >= rhs when [eq]). For each term, the least and greatest the
+     OTHER terms can contribute: a running total plus a count of the terms that cannot
+     contribute, so a row is O(length), not O(length^2) -- work-task-variation has a row
+     with hundreds of terms. *)
+  let lin ts rhs eq =
+    let contrib (a, i) ~least =
+      let want_lo = a > 0 = least in
+      match if want_lo then lo.(i) else hi.(i) with
+      | Some b -> Some (C.mul a b)
+      | None -> None
+    in
+    let total least =
+      List.fold_left
+        (fun (s, missing) t ->
+          match contrib t ~least with
+          | Some c -> (C.add s c, missing)
+          | None -> (s, missing + 1))
+        (0, 0) ts
+    in
+    let min_s, min_miss = total true in
+    let max_s, max_miss = if eq then total false else (0, 0) in
+    List.iter
+      (fun ((a, i) as t) ->
+        if free.(i) then (
+          (* a*x_i <= rhs - (least of the rest) *)
+          let own = contrib t ~least:true in
+          let rest_miss = min_miss - if own = None then 1 else 0 in
+          (if rest_miss = 0 then
+             let rest = match own with Some c -> C.sub min_s c | None -> min_s in
+             let u = C.sub rhs rest in
+             if a > 0 then lower_hi i (C.floordiv u a) else raise_lo i (C.ceildiv u a));
+          if eq then
+            (* a*x_i >= rhs - (greatest of the rest) *)
+            let own = contrib t ~least:false in
+            let rest_miss = max_miss - if own = None then 1 else 0 in
+            if rest_miss = 0 then
+              let rest = match own with Some c -> C.sub max_s c | None -> max_s in
+              let l = C.sub rhs rest in
+              if a > 0 then raise_lo i (C.ceildiv l a) else lower_hi i (C.floordiv l a)))
+      ts
+  in
+  let apply = function
+    | F_lin (ts, rhs, eq) -> lin ts rhs eq
+    | F_range (i, l, u) ->
+        raise_lo i l;
+        lower_hi i u
+    | F_abs (x, z) -> (
+        raise_lo z 0;
+        (match bounds_of x with Some l, Some u -> lower_hi z (mag l u) | _ -> ());
+        match (x, hi.(z)) with
+        | Model.Var i, Some u ->
+            raise_lo i (C.neg u);
+            lower_hi i u
+        | _ -> ())
+    | F_times (x, y, z) -> (
+        match (bounds_of x, bounds_of y) with
+        | (Some xl, Some xu), (Some yl, Some yu) when xl <= xu && yl <= yu ->
+            let p =
+              Baguette_core.Interval.product_bounds
+                (Baguette_core.Interval.make xl xu)
+                (Baguette_core.Interval.make yl yu)
+            in
+            raise_lo z p.Baguette_core.Interval.lo;
+            lower_hi z p.Baguette_core.Interval.hi
+        | _ -> ())
+    | F_div (x, q) -> (
+        match bounds_of x with
+        | Some l, Some u ->
+            let m = mag l u in
+            raise_lo q (C.neg m);
+            lower_hi q m
+        | _ -> ())
+  in
+  let pass = ref 0 in
+  changed := true;
+  while !changed && !pass < infer_max_passes do
+    changed := false;
+    incr pass;
+    List.iter (fun f -> try apply f with C.Overflow _ | Invalid_argument _ -> ()) facts
+  done;
+  (lo, hi)
+
+(* Replace each undomained variable's placeholder with its inferred domain, and return
+   the ones inference could not bound, with what [refuse_unbounded] needs to say why. *)
+let infer_domains env (cs : Ast.constraint_item list) =
+  if env.undomained_rev = [] then None
+  else
+    let undomained = List.rev env.undomained_rev in
+    let vars = Array.of_list (List.rev env.vars_rev) in
+    let facts = List.concat_map (facts_of env) cs in
+    let lo, hi = infer_bounds vars undomained facts in
+    let unbounded =
+      List.filter
+        (fun i ->
+          match (lo.(i), hi.(i)) with
+          | Some l, Some u ->
+              (* lo > hi: no solution exists, so any domain is sound; see above. The
+                 HULL of the two crossed bounds is used, u..l, which has at least two
+                 values. (A singleton would be just as sound; it is avoided because a
+                 root-UNSAT row over a singleton-declared variable currently crashes
+                 [Justify.emit] -- a pre-existing defect filed as a cross-session
+                 request by M7-T19, reproducible with a DECLARED `var 7..7`.) *)
+              let l, u = if l > u then (u, l) else (l, u) in
+              vars.(i) <- { (vars.(i)) with Model.v_dom = Model.Drange (l, u) };
+              false
+          | _ -> true)
+        undomained
+    in
+    env.vars_rev <- List.rev (Array.to_list vars);
+    match unbounded with [] -> None | _ -> Some (unbounded, vars, facts, lo, hi)
+
+let refuse_unbounded (unbounded, (vars : Model.var array), facts, lo, hi) =
+  let i = List.hd unbounded in
+  let v = vars.(i) in
+  let show = function Some b -> string_of_int b | None -> "none" in
+  let mentions = List.filter (fun f -> List.mem i (fact_vars f)) facts in
+  let neigh =
+    List.sort_uniq compare
+      (List.filter (fun j -> j <> i) (List.concat_map fact_vars mentions))
+  in
+  let describe j =
+    let nm = vars.(j).Model.v_name in
+    match (lo.(j), hi.(j)) with
+    | Some l, Some u -> Printf.sprintf "`%s` (%d..%d)" nm l u
+    | l, u -> Printf.sprintf "`%s` (unbounded: lower %s, upper %s)" nm (show l) (show u)
+  in
+  let rec take k = function x :: r when k > 0 -> x :: take (k - 1) r | _ -> [] in
+  let shown = take 6 neigh in
+  let neigh_s =
+    match neigh with
+    | [] -> "it shares no bound-carrying constraint with any variable"
+    | _ ->
+        Printf.sprintf
+          "its neighbours in the %d bound-carrying constraint(s) that mention it are %s%s"
+          (List.length mentions)
+          (String.concat ", " (List.map describe shown))
+          (let more = List.length neigh - List.length shown in
+           if more > 0 then Printf.sprintf " and %d more" more else "")
+  in
+  let others = List.length unbounded - 1 in
+  Error.failf v.Model.v_pos
+    "`%s` is declared `var int` with no domain, and bounds inference over the model's \
+     constraints (docs/SPEC.md section 2.1, D-0083) could not bound it: inferred lower \
+     bound %s, upper bound %s; %s.%s SPEC 2.1 requires every integer variable to have a \
+     finite domain, declared or inferred, and does not default one to a machine-word \
+     range (write for example `var 0..10: %s;`)"
+    v.Model.v_name
+    (show lo.(i))
+    (show hi.(i))
+    neigh_s
+    (if others > 0 then
+       Printf.sprintf " %d other undomained variable(s) could not be bounded either."
+         others
+     else "")
+    v.Model.v_name
 
 let check_par_domain pos name (bt : Ast.base_type) n =
   match bt with
@@ -191,10 +547,9 @@ let check_par_domain pos name (bt : Ast.base_type) n =
    that is left is an operand, which for a folded parameter is an indistinguishable
    [Model.Const 1].
 
-   Deliberately total, rather than a detour through [domain_of_base]: that one *rejects*
-   a `var int` with no domain, which is right for a scalar declaration but would newly
-   reject `array [1..2] of var int: xs = [x, y];`, whose elements carry their own
-   declared domains. *)
+   Deliberately total, rather than a detour through [domain_of_base]: that one has no
+   answer for a `var int` with no domain (M7-T19 routes those to inference instead), and
+   `array [1..2] of var int: xs = [x, y];` has elements that carry their own domains. *)
 let out_ty_of_base (bt : Ast.base_type) =
   match bt with
   | Ast.Tbool -> Model.Obool
@@ -264,13 +619,14 @@ let add_par_scalar env (d : Ast.decl) bt =
 
 let add_var_scalar env (d : Ast.decl) bt =
   let pos = d.Ast.d_pos and name = d.Ast.d_name in
-  (* Run the domain check even when the declaration is an alias: SPEC 2.1 rejects a
-     `var int` without a domain unconditionally. *)
-  let dom = domain_of_base pos name bt in
+  (* M7-T19 (D-0083). An ALIAS needs no domain of its own -- it is its target -- so a
+     `var int: x = y;` is no longer refused; a fresh undomained variable waits for
+     [infer_domains]. Every other base type is checked here as before. *)
   let op =
-    match d.Ast.d_value with
-    | Some e -> operand env pos e
-    | None -> Model.Var (new_var env name dom pos)
+    match (d.Ast.d_value, bt) with
+    | Some e, _ -> operand env pos e
+    | None, Ast.Tint -> Model.Var (new_undomained_var env name pos)
+    | None, _ -> Model.Var (new_var env name (domain_of_base pos name bt) pos)
   in
   check_bool_alias pos name bt op;
   bind_scalar env pos name op;
@@ -332,14 +688,17 @@ let add_var_array env (d : Ast.decl) ix bt =
                is unknown"
               name
         | Ast.Ix_range (l, u) ->
-            let dom = domain_of_base pos name bt in
             let len = u - l + 1 in
             if len < 0 then
               Error.failf pos "array `%s` has the empty index set %d..%d" name l u;
             let a = Array.make (max len 0) (Model.Const 0) in
             for k = 0 to len - 1 do
+              let nm = Printf.sprintf "%s[%d]" name (l + k) in
               a.(k) <-
-                Model.Var (new_var env (Printf.sprintf "%s[%d]" name (l + k)) dom pos)
+                Model.Var
+                  (match bt with
+                  | Ast.Tint -> new_undomained_var env nm pos
+                  | _ -> new_var env nm (domain_of_base pos name bt) pos)
             done;
             a)
   in
@@ -671,6 +1030,10 @@ let rec search_of_annot env pos (a : Ast.expr) =
             match vsel with
             | Ast.Ident "input_order" -> Model.Input_order
             | Ast.Ident "first_fail" -> Model.First_fail
+            (* M7-T19 (D-0083). The LARGEST current domain first, ties to the earliest
+               candidate -- [first_fail]'s tie-break, unchanged. See
+               `Search.anti_first_fail`. *)
+            | Ast.Ident "anti_first_fail" -> Model.Anti_first_fail
             (* M7-T9. `smallest` selects the variable with the smallest value in its
                domain, `largest` the one with the largest -- read on the domain MINIMUM
                and the domain MAXIMUM respectively, which is the MiniZinc spec's literal
@@ -681,12 +1044,18 @@ let rec search_of_annot env pos (a : Ast.expr) =
             | e ->
                 Error.failf pos
                   "`%s`: unsupported variable-selection strategy `%s`; SPEC 3.4 supports \
-                   input_order, first_fail, smallest and largest"
+                   input_order, first_fail, anti_first_fail, smallest and largest"
                   nm (Ast.string_of_expr e)
           in
           let vl =
             match valsel with
-            | Ast.Ident "indomain_min" -> Model.Indomain_min
+            (* M7-T19 (D-0083). Bare `indomain` is the MiniZinc specification's
+               "assign values in ascending order", which is `indomain_min`'s branching
+               exactly -- `x = lo` first, the rest of the domain as the sibling, and the
+               next decision on that variable takes the new minimum. It is the SAME
+               search, not an approximation of one, so mapping the spelling is honouring
+               the annotation (SPEC 3.4) rather than substituting for it. *)
+            | Ast.Ident ("indomain_min" | "indomain") -> Model.Indomain_min
             | Ast.Ident "indomain_max" -> Model.Indomain_max
             (* M7-T9. `indomain_split` bisects, excluding the upper half first -- the
                range midpoint, low branch first. See `Search.indomain_split`. *)
@@ -704,7 +1073,8 @@ let rec search_of_annot env pos (a : Ast.expr) =
             | e ->
                 Error.failf pos
                   "`%s`: unsupported value-choice strategy `%s`; SPEC 3.4 supports \
-                   indomain_min, indomain_max, indomain_split and indomain_median"
+                   indomain (as indomain_min), indomain_min, indomain_max, \
+                   indomain_split and indomain_median"
                   nm (Ast.string_of_expr e)
           in
           Some (Model.Int_search (idxs, vc, vl))
@@ -743,7 +1113,13 @@ let rec search_of_annot env pos (a : Ast.expr) =
 let build (m : Ast.model) : Model.t =
   let env = new_env () in
   List.iter (add_decl env) m.Ast.decls;
+  (* M7-T19 (D-0083): infer the undomained variables' domains BEFORE the constraints are
+     built, because the arithmetic family sizes its auxiliaries from domains. One that
+     stays unbounded is refused AFTER, so a malformed constraint still reports its own
+     error first. *)
+  let unbounded = infer_domains env m.Ast.constraints in
   let constraints = List.map (build_constraint env) m.Ast.constraints in
+  Option.iter refuse_unbounded unbounded;
   let objective =
     match m.Ast.solve with
     | Ast.Satisfy -> Model.Satisfy

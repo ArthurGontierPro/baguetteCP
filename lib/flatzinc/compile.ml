@@ -429,6 +429,7 @@ let rec phases_of_search (m : Model.t) (s : Model.search) :
         match vc with
         | Model.Input_order -> Baguette_core.Search.input_order
         | Model.First_fail -> Baguette_core.Search.first_fail
+        | Model.Anti_first_fail -> Baguette_core.Search.anti_first_fail
         | Model.Smallest -> Baguette_core.Search.smallest
         | Model.Largest -> Baguette_core.Search.largest
       in

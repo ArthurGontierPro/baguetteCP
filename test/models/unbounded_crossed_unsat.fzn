@@ -1,0 +1,11 @@
+% M7-T19 (D-0083). Inference CROSSES s's bounds: s = x + y over x, y in 1..3 gives
+% s <= 6, and 7 <= s gives s >= 7. No solution exists, so any domain is sound, and the
+% builder declares s on the hull 6..7 of the two crossed bounds. The solver then
+% refutes the model with a proof, as it would any UNSAT model -- the crossing is not a
+% refusal and not an error.
+var 1..3: x;
+var 1..3: y;
+var int: s :: output_var;
+constraint int_lin_eq([1, 1, -1], [x, y, s], 0);
+constraint int_le(7, s);
+solve satisfy;

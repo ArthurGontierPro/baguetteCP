@@ -1,0 +1,19 @@
+% M7-T19 (D-0083). `s` and `t` are declared `var int` with NO domain, which SPEC 2.1
+% refused until M7-T19. Bounds inference gives s the domain its defining row implies,
+% s = x + y over x, y in 1..3, so s in 2..6, and t, bounded above by s and below by 4,
+% the domain 4..6. `c` is bounded by bool2int alone, to 0..1.
+%
+% The search assigns s its MAXIMUM first, so the first answer is s = 6: the inferred
+% upper bound is the value tried, which it would not be if inference had widened it,
+% and it would be refused if inference had failed.
+var 1..3: x :: output_var;
+var 1..3: y :: output_var;
+var int: s :: output_var;
+var int: t :: output_var;
+var bool: b;
+var int: c :: output_var;
+constraint int_lin_eq([1, 1, -1], [x, y, s], 0);
+constraint int_le(t, s);
+constraint int_le(4, t);
+constraint bool2int(b, c);
+solve :: int_search([s, t], input_order, indomain_max, complete) satisfy;

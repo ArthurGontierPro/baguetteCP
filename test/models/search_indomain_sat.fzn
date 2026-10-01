@@ -1,0 +1,9 @@
+% M7-T19 (D-0083). Bare `indomain` is the MiniZinc specification's "assign values in
+% ascending order", which is indomain_min's branching exactly: x = lo first. The root
+% leaves x in 2..5, so the first solution is x = 2 -- indomain_max would give 5, and
+% the answer distinguishes the two. y follows from x + y = 7.
+var 0..5: x :: output_var;
+var 0..5: y :: output_var;
+constraint int_le(2, x);
+constraint int_lin_eq([1, 1], [x, y], 7);
+solve :: int_search([x], input_order, indomain, complete) satisfy;
