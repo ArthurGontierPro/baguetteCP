@@ -197,6 +197,10 @@ let usage () =
     "  BAGUETTE_PB_ANALYSIS=on|off  off is the clause path only: no PB conflict analysis";
   prerr_endline
     "                    (M6-T9, a measurement knob; Search.no_pb). Default on.";
+  prerr_endline
+    "  BAGUETTE_NODE_LIMIT=N  stop as --time-limit does, past N search nodes (M6-T9):";
+  prerr_endline
+    "                    the deterministic stop, for byte-comparing two builds.";
   prerr_endline "  BAGUETTE_PROOF_AUDIT=0 disables the constraint-id audit (I-X2), which";
   prerr_endline "  is on by default here even though the library's own default is off.";
   exit exit_usage
@@ -432,7 +436,12 @@ module Timing = struct
   (* Free when timing is off: one dereference and the call itself. A phase whose body
      raises records nothing, which is why the report prints an `other` row instead of
      pretending the rows always add up. *)
+  (* M6-T9: the phase in flight, for the SIGTERM line in [solve]. One store per phase,
+     on or off; it is read by nothing else. *)
+  let current = ref "startup"
+
   let phase name f =
+    current := name;
     if not !on then f ()
     else
       let t0 = now () in
@@ -631,6 +640,26 @@ let pb_analysis () =
         (Printf.sprintf
            "baguette: BAGUETTE_PB_ANALYSIS=%S is not a setting. Use on or off." v);
       exit 2
+
+(* M6-T9. BAGUETTE_NODE_LIMIT=N stops the search exactly as --time-limit does, at the
+   first node entry past N nodes. A MEASUREMENT knob: a CPU-time stop lands on a
+   different node on every run, so two binaries cannot be compared byte for byte under
+   it; a node stop lands on the same node every time, so "the proofs of the same N-node
+   prefix are identical" is a checkable claim about a performance change. Anything but
+   a non-negative integer FAILS, as with the other knobs. *)
+let node_limit () =
+  match Sys.getenv_opt "BAGUETTE_NODE_LIMIT" with
+  | None -> None
+  | Some v -> (
+      match int_of_string_opt v with
+      | Some n when n >= 0 -> Some n
+      | _ ->
+          prerr_endline
+            (Printf.sprintf
+               "baguette: BAGUETTE_NODE_LIMIT=%S is not a node count. Use a non-negative \
+                integer."
+               v);
+          exit 2)
 
 (* [Search.config.propagate_learned], from the environment, for the same reason and with
    the same discipline as [retention_policy] above: M2-L12 has to be able to measure a
@@ -903,10 +932,10 @@ let report_stats (st : Search.stats) ~exhausted =
    moment of the report, the same clock the limit was checked against. *)
 let report_limit opts (st : Search.stats) ~best =
   Printf.eprintf
-    "limit: reached time-limit=%gs cpu=%.2fs nodes=%d decisions=%d conflicts=%d \
+    "limit: reached time-limit=%s cpu=%.2fs nodes=%d decisions=%d conflicts=%d \
      learned=%d pb-learned=%d db=%d maxdepth=%d incumbent=%s\n\
      %!"
-    (Option.value opts.time_limit ~default:0.)
+    (match opts.time_limit with None -> "none" | Some s -> Printf.sprintf "%gs" s)
     (Sys.time ()) st.Search.nodes st.Search.decisions st.Search.conflicts
     st.Search.n_learned st.Search.n_pb_learned
     (* HELD at the stop, not now: the stop's own I-X2 sweep has emptied the database
@@ -955,6 +984,24 @@ let solve opts (m : Model.t) =
      up under a flag is a counter no test exercises. --stats decides whether it is
      PRINTED, not whether it is kept. *)
   let stats = Search.stats_create () in
+  (* M6-T9. An outer `timeout` kills with SIGTERM, and a killed run used to leave
+     nothing behind: at_exit never ran, so a TIMEOUT-SOLVE row could not say what the
+     run was doing. This handler writes the same counters as the `limit:` line, tagged
+     `killed`, and exits 143 (128 + SIGTERM); at_exit then prints --time as usual. It
+     does NOT end the proof: a signal lands at an arbitrary point, possibly mid-line,
+     and only [Search]'s node-entry stop can conclude NONE soundly. The partial .pbp is
+     not a proof and the harness does not check it. *)
+  Sys.set_signal Sys.sigterm
+    (Sys.Signal_handle
+       (fun _ ->
+         Printf.eprintf
+           "limit: killed signal=TERM phase=%s cpu=%.2fs nodes=%d decisions=%d \
+            conflicts=%d learned=%d pb-learned=%d maxdepth=%d\n\
+            %!"
+           !Timing.current (Sys.time ()) stats.Search.nodes stats.Search.decisions
+           stats.Search.conflicts stats.Search.n_learned stats.Search.n_pb_learned
+           stats.Search.max_depth;
+         exit 143));
   let outcome =
     Fun.protect
       ~finally:(fun () ->
@@ -975,9 +1022,14 @@ let solve opts (m : Model.t) =
                 propagate_learned = propagate_learned ();
                 pb = pb_analysis ();
                 stop =
-                  (match opts.time_limit with
-                  | None -> fun () -> false
-                  | Some s -> fun () -> Sys.time () >= s);
+                  (let by_time =
+                     match opts.time_limit with
+                     | None -> fun () -> false
+                     | Some s -> fun () -> Sys.time () >= s
+                   in
+                   match node_limit () with
+                   | None -> by_time
+                   | Some n -> fun () -> stats.Search.nodes > n || by_time ());
               }
             in
             let r =

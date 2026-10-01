@@ -446,20 +446,26 @@ emit() {
 }
 
 # M6-T9. The one-line summary of a run that printed `--stats`/`--time`/`limit:` on
-# stderr, compact enough for emit's 200-character detail column. Fields that the
+# stderr -- including a run `timeout` killed, whose SIGTERM handler prints
+# `limit: killed phase=...` (so TIMEOUT-SOLVE rows now say where they were), compact enough for emit's 200-character detail column. Fields that the
 # run did not print are simply absent. Units: cpu and the phase split in seconds,
 # rss in MB.
 limit_detail() {
   local err="$1" rss="${2:-}"
   awk -v rss="$rss" '
-    /^limit: reached/ {
+    /^limit: (reached|killed)/ {
       for (i = 3; i <= NF; i++) { split($i, kv, "="); lim[kv[1]] = kv[2] }
       havelim = 1
+      if ($2 == "killed") killed = 1
     }
     /^stats: / && NF >= 3 { st[$2] = $3 }
     /^time: / && $4 == "us" { tm[$2] = $3 }
     END {
-      if (havelim) {
+      if (havelim && killed) {
+        out = sprintf("killed-in=%s n=%s d=%s c=%s l=%s pbl=%s cpu=%s",
+          lim["phase"], lim["nodes"], lim["decisions"], lim["conflicts"],
+          lim["learned"], lim["pb-learned"], lim["cpu"])
+      } else if (havelim) {
         out = sprintf("n=%s d=%s c=%s l=%s pbl=%s db=%s inc=%s cpu=%s",
           lim["nodes"], lim["decisions"], lim["conflicts"], lim["learned"],
           lim["pb-learned"], lim["db"], lim["incumbent"], lim["cpu"])
