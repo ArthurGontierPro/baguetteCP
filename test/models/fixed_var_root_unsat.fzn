@@ -1,0 +1,9 @@
+% M7-T20 (2026-10-01). A variable declared on a SINGLE value has no order literal, so
+% the D-0013 derivation of a root conflict over a row it sits in has nothing to weaken
+% for it: its summand is `Weaken []`. Until M7-T20 Justify refused that summand with
+% an Invalid_argument and the solver died with exit 2 on this legal model. The
+% two-value twin (`var 7..8: s`) always worked, which is why 115 models never saw it.
+var 1..3: x;
+var 7..7: s;
+constraint int_le(s, x);
+solve satisfy;

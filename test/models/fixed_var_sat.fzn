@@ -1,0 +1,7 @@
+% M7-T20 (2026-10-01). The SAT side of fixed_var_root_unsat: the single-value variable
+% prunes x at the root (x >= 7) and the search finds the solution. Both the pruning's
+% trace line and the proof must be fine with a variable that has no ladder.
+var 1..9: x :: output_var;
+var 7..7: s;
+constraint int_le(s, x);
+solve satisfy;
