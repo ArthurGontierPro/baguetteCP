@@ -664,7 +664,15 @@ $(head -c 120 "$L.mzn.err" | tr '\t\n\r' '   ')"
   fi
   pbp="$(stat -c%s "$L.pbp")"
 
-  if timeout "$CHECK_TIMEOUT" "$VERIPB" "$L.opb" "$L.pbp" > "$L.vp" 2>&1; then
+  # M6-T9. The status is taken HERE. It used to be read with `rc=$?` after this
+  # `if ... fi`, which is the status of the if-statement -- 0 whenever the
+  # condition failed and no branch ran -- so the TIMEOUT-CHECK arm below could never
+  # fire and every checker timeout was filed as PROOF-REJECTED. Wave 31's sweep
+  # found it: three "rejections" whose .vp held only the banner, one of which
+  # re-ran to `timeout`'s 124 at exactly 900 s.
+  timeout "$CHECK_TIMEOUT" "$VERIPB" "$L.opb" "$L.pbp" > "$L.vp" 2>&1
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
     # M6-T9. A stopped run's proof concludes NONE and the checker must say so; if
     # it ever says more, the row still lands here but the detail leads with it.
     if [ "$stopped" = "1" ]; then
@@ -679,7 +687,6 @@ $(head -c 120 "$L.mzn.err" | tr '\t\n\r' '   ')"
     cleanup_one "$L"
     return
   fi
-  rc=$?
   if [ "$rc" -eq 124 ]; then
     # Not a rejection. A checker that ran out of time has said nothing about the
     # proof, and folding it into PROOF-REJECTED would manufacture a defect.
