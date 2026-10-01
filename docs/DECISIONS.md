@@ -6440,3 +6440,176 @@ built on the node and Chuffed from the MiniZinc 2.10.1 bundle, M7-T17/M7-T18 on 
 M7-T19 on the ten refusals. The comparison can start once (a) Chuffed and GCS run under one
 harness that checks agreement between solvers — the first external oracle this solver has
 ever had — and (b) baguette reports at a time limit instead of being killed.
+
+## D-0080  Where the 300 s go: a stopped run is now a checked proof, and the time is in quadratic bookkeeping, not in search
+
+**Status**: **MEASUREMENT + one shipped fix**, recorded 2026-10-01 by agent-perf (M6-T9),
+branch `wave31-perf`. Every number below is from `fataepyc-07`, MiniZinc 2.10.1 flattening,
+veripb 3.0.2 checking, `corpus_run.sh` at `PAR=64`, 32 GB per job, `--max-heap-mb 15625`,
+`SOLVE_TIMEOUT=300`, `SOLVER_ARGS="--time-limit 280 --stats --time"`, `RSS=1`. The instance
+set is the 273 wave-30 `TIMEOUT-SOLVE` ids plus the 58 wave-30 `OK-PROOF-VERIFIED` ids (the
+timing reference), 331 in all; configs (a)-(d) are COMPLETE (their `DONE-` markers are in the copies under
+`bench/m6t9/results/<cfg>.tsv`; originals in `/scratch/arthur/perf-out-<cfg>/`); config (e)
+is NOT (below). Binaries, hashed on the node:
+
+| tag | commit | md5 of `main.exe` | what it is |
+|---|---|---|---|
+| OLD | `5955d31` | `a04c77fda02664ee74a40d9480acda92` | `main` + `--time-limit` only (no fix) |
+| NEW | `ca9c6b2` | `66c0944c60105a4e42334bdcad6d3cf7` | OLD + the `Pb_analysis.falsified_at` fix + SIGTERM line + `BAGUETTE_NODE_LIMIT` |
+| MEMO | `ca9c6b2` + `bench/m6t9/justify-memo.patch` | `2e49df4f53a86c43ef9e6b72150d4566` | NEW + the PROPOSED `Justify` memo (not on any branch: `justify.ml` is the orchestrator's) |
+
+### What M6-T9 added, so that the numbers exist at all
+
+* **`--time-limit S`** (process CPU seconds, `Sys.time`: `bin/` links no wall clock, a
+  request is filed). Checked at every node entry through `Search.config.stop`; on expiry the
+  search sweeps every live id (I-X2) and ends `output NONE` / `conclusion NONE`, and raises
+  `Search.Stopped` with the incumbent. stdout is `=====UNKNOWN=====` when nothing was printed,
+  otherwise the improving solutions already printed and no `==========`; stderr gets one
+  `limit: reached ...` line; exit 0. **veripb accepts the stopped proof — `VERIFIED NO
+  CONCLUSION` — on 142 stopped runs of config NEW (a'), and those 142 are this project's
+  first checked record of what a timed-out run derived, learned constraints included.**
+  `test_endtoend` pins it on a 4-into-3 pigeonhole stopped at node 7 and an optimisation run
+  stopped after its first incumbent, with the break: `conclusion UNSAT` in place of NONE is
+  refused, "There is no contradicting constraint in the database."
+* `BAGUETTE_PB_ANALYSIS=off` (config d), `BAGUETTE_NODE_LIMIT=N` (the deterministic stop that
+  makes two builds byte-comparable), a `stats: conflicts` counter, and a SIGTERM handler that
+  prints `limit: killed phase=... nodes=...` so a `TIMEOUT-SOLVE` row says where it was.
+* `corpus_run.sh`, additively: `SOLVER_ARGS`, `NO_PROOF=1`, `RSS=1`, the `UNKNOWN-LIMIT` bucket
+  with a compact stats detail. Selftest green; `--report corpus-out-w30` byte-identical (md5
+  `69a2120379138e415cb625bc90b24817` before and after).
+
+### Two harness defects the sweep found (both fixed, both D-0069's failure mode)
+
+1. **TIMEOUT-CHECK could never fire.** `rc=$?` was read *after* `if timeout ... veripb ...;
+   then ...; fi`, which is the if-statement's status — 0 when the condition failed. Every
+   checker timeout since M7-T4 was filed as `PROOF-REJECTED`. Config OLD has four such rows
+   (`2013_league`, `2014_openshop`, `2023_test-scheduling`, `2025_skill-allocation`, `.vp` =
+   the banner only); one was re-run and exits 124 at 900.09 s. Fixed in `2dda188`.
+2. **A rejection is now gated on the checker's wording** ("Verification error"); a non-zero
+   exit without it is `CHECK-ERR-<rc>`. (Config NEW ran with this gate and the rc bug, so its
+   9 `CHECK-ERR-0` are checker timeouts; configs c and d ran with both fixes and say
+   `TIMEOUT-CHECK`.)
+
+### The sweep
+
+`fin` = `OK-PROOF-VERIFIED` (or `SOLVED-NOPROOF` for b). nodes/s is over the runs that stopped
+at the limit (n in brackets); `search`/`emit` are the summed `--time` rows over every row that
+printed them; `emit` is a LOWER bound (it excludes building each line, M1-T47).
+
+| config | binary | fin | stopped & checked | killed (TIMEOUT-SOLVE) | REJECTED | nodes/s min / p25 / **median** / p75 / max | RSS median / max (MB) | emit / search |
+|---|---|---|---|---|---|---|---|---|
+| (a) default | OLD | 57 | 122 | 137 | 15 (11 real + 4 checker timeouts) | 0.00 / 0.65 / **1.44** / 10.6 / 61 (122) | 228 / 19672 | 0.2 % |
+| (a') default | NEW | **73** | 142 | 78 | 26 | 0.01 / 2.46 / **10.8** / 21.9 / 62 (142) | 369 / 13401 | 0.6 % |
+| (b) no `--proof` | NEW | 74 | 179 | 76 | — | 0.00 / 2.17 / **10.5** / 21.5 / 64 (179) | 378 / 16633 | 0.6 % |
+| (c) `lbd:16` | NEW | 73 | 146 | 73 | 26 | 0.00 / 2.14 / **10.7** / 21.5 / 62 (146) | 370 / 13403 | 0.6 % |
+| (d) PB analysis off | NEW | 72 | 157 | 48 | 27 (+27 TIMEOUT-CHECK) | 0.01 / 3.35 / **15.5** / 28.4 / 65 (157) | 317 / 13402 | 0.7 % |
+| (e) proposed memo | MEMO | **not measured** — in flight (~31 of 331 rows, no `DONE-`) when node access was cut; its `results.tsv` was not copied. Needs the node | | | | | | |
+
+Per instance, against (a') on the runs stopped in both: (b) nodes/s ratio median **1.007**
+(n=138) — writing the `.pbp` to disk rather than to a temporary file costs nothing measurable,
+and note what (b) is NOT: without `--proof` the CLI still logs to a temporary file
+(`bin/main.ml`'s header, SPEC 1), so no config here measures "no proof logging". (c) ratio
+**1.00** (n=141), and on the 73 instances solved in both, summed search 1641 s vs 1651 s,
+`.pbp` bytes median ratio 1.000: **retention is not where the time is, and D-0051's
+`keep_all` default stands on corpus evidence now, not only on the hand-written suite.**
+(d) PB analysis off: per-instance nodes/s ratio **1.04** (n=134, min 0.89, max 36.5); 72 solved
+(3 gained: `2008_trucking`, `2008_shortest_path`, `2013_radiation`; 4 lost: `2014_solbat_sb`,
+`2016_java-auto-gen_plusexample_6`, `2016_nfc`, `2022_nfc`); killed 78 → 48. So with fix #1 in,
+**D-0062's order of magnitude is gone on the corpus**: PB analysis now costs ~4 % per node at
+the median, buys a different 4 instances than it loses, and the long tail (max 36.5×, and 30
+fewer kills) is where it still hurts. (The higher distribution median, 15.5, is a different
+SET of stopped runs; the per-instance ratio is the comparison.)
+
+### Where the time goes: six 60 s profiles (NEW binary unless marked)
+
+`perf record -F 499 --call-graph dwarf`, self time (the dwarf call chains did not unwind
+through OCaml frames, so attribution is by symbol); full tables in `bench/m6t9/profiles/`.
+
+| instance | shape | nodes in 60 s | top self-time symbols (module) |
+|---|---|---|---|
+| 2011 costas-array 15 | narrow, alldiff | 404 (OLD: 167) | **61 % `Justify.go`** (the memo scan), 6 % `Alldiff.go`, 4 % `Store.trail_entry` |
+| 2011 costas-array 15, OLD | — | 167 | 23 % `Justify.go`, **17 % `Pb_analysis.down`** + 14 % `Store.trail_entry` + 17 % `caml_apply2` (the O(trail²) scan) |
+| 2016 prize-collecting | fewest nodes/s | 12 | **21 % `Analysis.go`** + 16 % `caml_string_equal` + 10 % `Store.name` + 12 % `Store.trail_entry` (`Analysis.scan_support`: a trail scan comparing NAMES) |
+| 2008 trucking | optimisation, PB-heavy | 559 | 15 % `Lit.var_compare` + 12 % `List.part` (sort) + 10 % `Lit.var_equal` + 7 % `Learned.fun` (learned-row combination); 4 % `Pb` |
+| 2017 tc-graph-color | most learned (2609 in 60 s) | 9054 | **~45 % `Pb.*`** (the learned-PB-row propagator: `Pb.fun`, `Pb.status`, `List.fold_left`) |
+| 2018 rotating-workforce | wide, 6 GB | 2 | compile 28.5 s; then 11 % `Store.go` (`Store.var_named`, a LINEAR name lookup) + `Bytes.map`/`Lit.fun` (name sanitisation) |
+| 2009 black-hole | wide | 1 (compile 73 s) | `Bytes.map` 15 % + `Lit.fun` 10 % + hashing 12 % + **GC ~28 %** — all in COMPILE |
+
+GC (`OCAMLRUNPARAM=v=0x400` on the same runs): costas 4776 minor / 31 major collections in
+60 s, no GC symbol at ≥ 1 %; tc-graph-color 2.7 %; trucking 3.6 % (20.5 G minor words);
+rotating-workforce 9 %; only the compile-bound black-hole is GC-heavy. `OCAMLRUNPARAM=s=1M` on
+costas' 30-node prefix was SLOWER (6.82 s vs 5.47 s user) and `s>=4M` cannot start under
+`ulimit -v 4000000` (OCaml 5 reserves minor heaps for every potential domain). **GC tuning is
+not a lever on search**; it may be one on compile, not measured.
+
+What is NOT where the time goes: emission (≤ 0.6 % of search, `emit` row), the engine's
+enqueue-everything at each node (costas 30-node prefix: all propagation 0.7 s of 5.5 s),
+retention (config c), and — by the profiles — M2-T6's self-wake (the engine is not hot).
+
+### The fix candidates, ranked by the numbers
+
+| # | candidate | file (owner) | evidence | status |
+|---|---|---|---|---|
+| 1 | `Pb_analysis.falsified_at` asked `falsified_before` at every trail position, each a trail scan: O(trail²) per literal per term per step | `pb_analysis.ml` (mine) | costas: PB analysis 5.8 s of 15 s → 0.06 s; 31-node prefix 10.98 s → 6.10 s, **proof byte-identical** (5.6 MB, VERIFIED); suite 107/107 `.opb`/`.pbp`/`.out` byte-identical; corpus: fin 57 → **73**, median nodes/s **1.44 → 10.8**, killed 137 → 78, summed search on the 57 solved-in-both **2217 s → 590 s**, 0 lost | **SHIPPED** `51d926e` |
+| 2 | `Justify`'s memo is an association list scanned with `==` on every emit; its header says the list is "small" — on costas it averaged 13 000 entries: 1.05 × 10⁹ steps, 7.0 s of 15 s | `justify.ml` (orchestrator) | patch `bench/m6t9/justify-memo.patch` (identity buckets under a shallow hash that never enters a `Deferred`): costas 60-node prefix **15.32 s → 3.72 s**, proof byte-identical; suite 107/107 byte-identical; corpus: NOT MEASURED (config e was cut off) | **PROPOSED**, cross-session request |
+| 3 | `Analysis.scan_support` compares `Store.name` STRINGS along the trail | `analysis.ml` (unclaimed) | prize-collecting ~60 % self in `Analysis.go`/`string_equal`/`Store.name`/`trail_entry` | request: compare `Var.t` |
+| 4 | the learned-PB-row propagator and learned-row combination | `prop/pb.ml`, `learned.ml` | tc-graph-color ~45 % `Pb.*`; trucking ~50 % sort/compare in `Learned` | request; needs its own design (watched slack) |
+| 5 | `Store.var_named` is linear; its header says "only ever called from the debug-gated agreement check" — it is on the PB-analysis and `Analysis` hot path | `store.ml` (agent-gcc2 this wave) | rotating-workforce 11 % | request: an index |
+| 6 | compile on wide models: name sanitisation (`Bytes.map`) and hashing per literal | `lit.ml`/`encoding.ml` | black-hole compile 73 s, rotating-workforce 28.5 s, 2012 amaze2 > 280 s | request |
+| — | `Trace.derive_ahead` writes a `pol` for EVERY pruning of a direct-encoded variable | `trace.ml` (agent-gcc2, M7-T17) | costas: 5910 of 6042 derive-aheads were `Combine` emits; their cost is #2's scan, not their own | M7-T17 is already this |
+| — | GC parameters | `bin/main.ml` | see above: slower or unstartable | rejected by measurement |
+| — | retention policy | `retention.ml` | config (c): ratio 1.00 | D-0051 stands, not amended |
+
+**Proposed, not shipped (SPEC §3.4 territory):** none of the above changes the search order
+or which solution is found first — #1 and #2 are byte-identical by measurement. The ones that
+would (incremental waking in place of enqueue-all, restarts per D-0045) are not supported by
+these profiles as the next lever, so no SPEC proposal is made here.
+
+### Findings that are not about speed
+
+1. **26 `PROOF-REJECTED` in config (a'), 23 of one shape**: `rup +1 ~<v>_eq_<k> >= 1 ;` — a
+   direct-encoding hole with an EMPTY tail, at a decision level > 0, the FIRST such line in its
+   proof (on 2015_spot5 there are 2497 rups before it and no bare `_eq_` unit among them),
+   preceded by `Trace.derive_ahead`'s `pol`s. That is D-0075's defect shape ("a bare `x <> m`,
+   asserted unconditionally") on element indices (`spot5`, `traveling-tppv`, `mario`, `portal`,
+   `stable-goods`, `peaceable-queens`) and `mapget*` (`javarouting`/`java-routing` ×10). The
+   other 3 are multi-literal `rup`s in models with `baguette_global_cardinality`
+   (`generalized-peacable-queens`, `chessboard`, `compression`). Every one was invisible
+   before: the instance timed out, so its proof was never checked. Neither fix here caused them:
+   the OLD binary (config a) rejects 10 of these same proofs at the SAME line numbers, and
+   the rest are instances OLD never reached the line on. With PB analysis OFF (config d) the
+   same 26 are rejected plus `2025_stripboard` (`.pbp` 1 554 045 299 bytes, "not implied by
+   reverse unit propagation"; under OLD it failed at L846552 on
+   `rup +1 ~X_INTRODUCED_340__eq_2 >= 1 ;`, the same shape) -- so PB analysis is not the
+   cause either. Artefacts kept on the node: `/scratch/arthur/perf-out-{a,a2,d}/log/<id>.{fzn,
+   opb,pbp,vp}`.
+2. **An overflow escaped the D-0029 cap** on `2014_rectangle-packing` and `2016_maximum-dag`
+   (exit 4, config a'): `Pb_analysis.slack_at` summing a combined row, outside the
+   Overflow-to-fallback wrapping the combination already had. Fixed (`aa32015`): the same
+   instance now ends `UNKNOWN-LIMIT` at 3923 nodes, VERIFIED NO CONCLUSION. No small unit lane
+   was found (1900 fuzzed 0..1 models under the cap did not reach it); the corpus instance is
+   the reproducer.
+3. **Killed runs are slow NODES, not slow searches**: of NEW's 78 `TIMEOUT-SOLVE`, 59 report
+   `killed-in=search` with as few as 1–30 nodes, i.e. single nodes taking more than the 20 s
+   between the limit and the kill. The other 19 printed nothing, and the handler is installed
+   after compile and the `.opb` write, so those were killed in parse/compile/`.opb`.
+
+### Not measured — needs the node (access was cut 2026-10-01 before these could run)
+
+* **Config (e)**, the proposed `Justify` memo over the corpus: the run was in flight (about
+  31 of 331 rows, no `DONE-` marker) and its `results.tsv` was not copied. Re-run with
+  `bench/m6t9/sweep3.sh` (binary MEMO above). Until then #2's evidence is the costas prefix
+  and the suite, not the corpus.
+* The failing line of `2025_stripboard` under config (d): its `.vp` was not copied.
+* GC parameters on the COMPILE phase (black-hole, rotating-workforce), and M2-T6's self-wake
+  guard measured directly: neither was run; the profiles above only say they are not where the
+  SEARCH time is.
+
+### Gate on the final tip
+
+`dune runtest --root . --force` **2953 ok / 0 FAIL**, peak RSS 40.9 MB; `run_model_tests.sh`
+**107 passed / 0 failed** on binary `cad68e390e727a1b7906aabc8704eab6` (tip `249d37d`), peak RSS
+18.5 MB; `corpus_selftest.sh` PASS; `@fmt` clean. Every sweep config, profile script and
+summariser is in `bench/m6t9/` (`sweep*.sh`, `prof.sh`, `repro.sh`, `summarise.py`,
+`compare.py`), the per-config `results.tsv` in `bench/m6t9/results/`, the profile tables and
+GC lines in `bench/m6t9/profiles/`.

@@ -1,0 +1,332 @@
+2008_debruijn_binary	SOLVED-NOPROOF	8596	-	n=5 d=4 c=0 l=0 pbl=0 parse=0.0 compile=0.0 search=0.0 emit=0.0 propag=0.0 rss=6
+2009_still_life	SOLVED-NOPROOF	38239	-	n=92 d=46 c=46 l=41 pbl=16 parse=0.0 compile=0.0 search=0.1 emit=0.0 propag=0.1 rss=10
+2009_rectangle-packing_rect_packing	SOLVED-NOPROOF	84224	-	n=17 d=11 c=5 l=5 pbl=1 parse=0.0 compile=0.0 search=0.0 emit=0.0 propag=0.0 rss=9
+2009_roster_roster_model	SOLVED-NOPROOF	447	-	n=1 d=0 c=1 l=0 pbl=0 parse=0.0 compile=0.0 search=0.0 emit=0.0 propag=0.0 rss=6
+2008_search_stress	SOLVED-NOPROOF	4187	-	n=10367 d=5183 c=5184 l=0 pbl=0 parse=0.0 compile=0.0 search=0.9 emit=0.1 propag=0.7 rss=12
+2010_bacp_bacp-12	SOLVED-NOPROOF	373791	-	n=57 d=51 c=6 l=6 pbl=0 parse=0.0 compile=0.5 search=0.2 emit=0.0 propag=0.2 rss=30
+2009_search_stress2	SOLVED-NOPROOF	3924	-	n=10079 d=5039 c=5040 l=0 pbl=0 parse=0.0 compile=0.0 search=0.9 emit=0.1 propag=0.8 rss=15
+2010_bacp_bacp-8	SOLVED-NOPROOF	373675	-	n=169 d=152 c=17 l=17 pbl=0 parse=0.0 compile=0.5 search=0.3 emit=0.0 propag=0.3 rss=34
+2010_bacp_bacp-1	SOLVED-NOPROOF	373027	-	n=54 d=46 c=8 l=8 pbl=0 parse=0.0 compile=0.5 search=0.3 emit=0.0 propag=0.3 rss=30
+2010_bacp_bacp-2	SOLVED-NOPROOF	373303	-	n=81 d=51 c=29 l=29 pbl=0 parse=0.0 compile=0.5 search=0.6 emit=0.0 propag=0.6 rss=34
+2011_bacp_bacp-9	SOLVED-NOPROOF	373429	-	n=267 d=215 c=52 l=52 pbl=1 parse=0.0 compile=0.5 search=0.7 emit=0.0 propag=0.7 rss=37
+2010_bacp_bacp-4	SOLVED-NOPROOF	374308	-	n=310 d=245 c=65 l=65 pbl=0 parse=0.0 compile=0.5 search=0.9 emit=0.0 propag=0.9 rss=40
+2008_slow_convergence	SOLVED-NOPROOF	111561	-	n=103 d=102 c=0 l=0 pbl=0 parse=0.0 compile=1.6 search=0.1 emit=0.0 propag=0.1 rss=229
+2010_bacp_bacp-6	SOLVED-NOPROOF	373270	-	n=176 d=119 c=57 l=57 pbl=1 parse=0.0 compile=0.5 search=1.3 emit=0.0 propag=1.3 rss=39
+2010_filters_filter	SOLVED-NOPROOF	76360	-	n=1247 d=695 c=552 l=546 pbl=0 parse=0.0 compile=0.1 search=2.0 emit=0.1 propag=1.9 rss=48
+2009_fillomino	SOLVED-NOPROOF	248322	-	n=558 d=289 c=268 l=268 pbl=0 parse=0.0 compile=0.5 search=2.1 emit=0.1 propag=1.9 rss=52
+2011_fillomino	SOLVED-NOPROOF	247388	-	n=558 d=289 c=268 l=268 pbl=0 parse=0.0 compile=0.5 search=2.0 emit=0.1 propag=1.9 rss=52
+2011_roster_roster_model	SOLVED-NOPROOF	500257	-	n=557 d=402 c=155 l=155 pbl=1 parse=0.0 compile=1.4 search=1.2 emit=0.0 propag=1.2 rss=63
+2010_bacp_bacp-11	SOLVED-NOPROOF	373180	-	n=139 d=95 c=44 l=44 pbl=1 parse=0.0 compile=0.5 search=2.4 emit=0.0 propag=2.4 rss=39
+2012_mspsp	SOLVED-NOPROOF	866877	-	n=212 d=186 c=26 l=22 pbl=7 parse=0.2 compile=0.2 search=1.8 emit=0.0 propag=1.8 rss=105
+2008_nmseq	SOLVED-NOPROOF	139332	-	n=127 d=64 c=62 l=62 pbl=0 parse=0.0 compile=0.2 search=6.4 emit=0.1 propag=6.3 rss=37
+2012_filters_filter	SOLVED-NOPROOF	63616	-	n=2675 d=1399 c=1276 l=1274 pbl=0 parse=0.0 compile=0.1 search=6.4 emit=0.1 propag=6.3 rss=60
+2011_grid-colouring_GridColoring	SOLVED-NOPROOF	102443	-	n=3090 d=1673 c=1417 l=1407 pbl=0 parse=0.0 compile=0.0 search=14.7 emit=0.3 propag=14.4 rss=51
+2010_grid_colouring_GridColoring	SOLVED-NOPROOF	102443	-	n=3090 d=1673 c=1417 l=1407 pbl=0 parse=0.0 compile=0.0 search=14.7 emit=0.3 propag=14.4 rss=51
+2013_filters_filter	SOLVED-NOPROOF	120751	-	n=945 d=823 c=122 l=122 pbl=0 parse=0.0 compile=0.1 search=0.6 emit=0.0 propag=0.6 rss=40
+2013_javarouting_empty	SOLVED-NOPROOF	344	-	n=1 d=0 c=0 l=0 pbl=0 parse=0.0 compile=0.0 search=0.0 emit=0.0 propag=0.0 rss=6
+2010_bacp_bacp-10	SOLVED-NOPROOF	372856	-	n=704 d=391 c=312 l=312 pbl=1 parse=0.0 compile=0.5 search=17.9 emit=0.1 propag=17.8 rss=55
+2008_rcpsp	SOLVED-NOPROOF	3635421	-	n=246 d=158 c=88 l=80 pbl=1 parse=0.2 compile=3.2 search=15.2 emit=0.3 propag=14.9 rss=785
+2012_tpp	SOLVED-NOPROOF	188387	-	n=4843 d=4294 c=549 l=512 pbl=0 parse=0.0 compile=0.4 search=17.7 emit=0.6 propag=17.2 rss=63
+2012_amaze	SOLVED-NOPROOF	127765	-	n=2567 d=1309 c=1258 l=1258 pbl=0 parse=0.0 compile=0.1 search=26.4 emit=0.3 propag=26.0 rss=64
+2009_open_stacks_open_stacks_01	SOLVED-NOPROOF	205693	-	n=2211 d=1114 c=1097 l=489 pbl=0 parse=0.0 compile=0.0 search=29.9 emit=0.9 propag=29.0 rss=72
+2008_radiation	SOLVED-NOPROOF	180625	-	n=888 d=576 c=312 l=306 pbl=281 parse=0.0 compile=0.2 search=33.6 emit=0.2 propag=33.4 rss=193
+2013_fjsp	SOLVED-NOPROOF	6327015	-	n=118 d=89 c=29 l=21 pbl=2 parse=11.2 compile=9.1 search=14.1 emit=0.8 propag=13.3 rss=1922
+2010_sugiyama_sugiyama2	SOLVED-NOPROOF	66596	-	n=4049 d=2033 c=2016 l=1689 pbl=592 parse=0.0 compile=0.0 search=59.2 emit=1.1 propag=58.1 rss=111
+2012_solbat_sb	SOLVED-NOPROOF	1387250	-	n=828 d=428 c=399 l=399 pbl=9 parse=0.1 compile=6.6 search=64.6 emit=0.8 propag=63.8 rss=196
+2010_solbat_sb	SOLVED-NOPROOF	1387249	-	n=736 d=372 c=363 l=363 pbl=0 parse=0.1 compile=6.6 search=94.9 emit=0.6 propag=94.3 rss=202
+2013_nonogram_non	SOLVED-NOPROOF	118425	-	n=1459 d=731 c=727 l=256 pbl=48 parse=0.0 compile=0.0 search=164.6 emit=2.1 propag=162.6 rss=112
+2008_trucking	UNKNOWN-NOPROOF	4441	-	n=1227 d=652 c=574 l=572 pbl=523 db=1095 inc=220 cpu=280.04s parse=0.0 compile=0.0 search=280.0 emit=0.1 propag=279.9 rss=388
+2010_costas_array_CostasArray	UNKNOWN-NOPROOF	34307	-	n=2516 d=1261 c=1254 l=1048 pbl=266 db=1314 inc=none cpu=280.19s parse=0.0 compile=0.0 search=280.0 emit=5.7 propag=274.3 rss=223
+2011_costas-array_CostasArray	UNKNOWN-NOPROOF	40380	-	n=1758 d=881 c=876 l=725 pbl=196 db=921 inc=none cpu=280.24s parse=0.0 compile=0.1 search=280.0 emit=5.3 propag=274.7 rss=216
+2011_open-stacks_open_stacks_01	UNKNOWN-NOPROOF	218651	-	n=4087 d=2062 c=2024 l=7 pbl=0 db=7 inc=8 cpu=280.06s parse=0.0 compile=0.1 search=279.9 emit=4.2 propag=275.8 rss=186
+2011_depot-placement_depot_placement	UNKNOWN-NOPROOF	35889	-	n=5109 d=2600 c=2508 l=2140 pbl=54 db=2194 inc=164 cpu=280.29s parse=0.0 compile=0.0 search=280.1 emit=3.0 propag=277.1 rss=283
+2011_bacp_bacp-19	UNKNOWN-NOPROOF	372853	-	n=5220 d=2613 c=2606 l=2606 pbl=0 db=2606 inc=none cpu=280.15s parse=0.0 compile=0.5 search=279.6 emit=0.4 propag=279.2 rss=183
+2011_bacp_bacp-22	UNKNOWN-NOPROOF	373107	-	n=5053 d=2534 c=2518 l=2518 pbl=0 db=2518 inc=none cpu=280.20s parse=0.0 compile=0.5 search=279.7 emit=0.3 propag=279.4 rss=117
+2011_bacp_bacp-28	UNKNOWN-NOPROOF	372205	-	n=5953 d=2985 c=2967 l=2967 pbl=0 db=2967 inc=none cpu=280.19s parse=0.0 compile=0.5 search=279.7 emit=0.3 propag=279.3 rss=132
+2010_bacp_bacp-21	UNKNOWN-NOPROOF	372370	-	n=5323 d=2669 c=2653 l=2653 pbl=0 db=2653 inc=none cpu=280.23s parse=0.0 compile=0.5 search=279.7 emit=0.6 propag=279.1 rss=186
+2010_bacp_bacp-27	UNKNOWN-NOPROOF	372844	-	n=6106 d=3079 c=3026 l=3026 pbl=0 db=3026 inc=none cpu=280.29s parse=0.0 compile=0.5 search=279.8 emit=0.4 propag=279.4 rss=162
+2010_bacp_bacp-18	UNKNOWN-NOPROOF	373526	-	n=6338 d=3202 c=3135 l=3135 pbl=0 db=3135 inc=none cpu=280.29s parse=0.0 compile=0.5 search=279.8 emit=0.6 propag=279.2 rss=200
+2011_bacp_bacp-24	UNKNOWN-NOPROOF	373442	-	n=5760 d=2888 c=2871 l=2871 pbl=0 db=2871 inc=none cpu=280.28s parse=0.0 compile=0.5 search=279.8 emit=0.3 propag=279.4 rss=133
+2010_bacp_bacp-14	UNKNOWN-NOPROOF	373154	-	n=6035 d=3026 c=3008 l=3008 pbl=0 db=3008 inc=none cpu=280.27s parse=0.0 compile=0.5 search=279.8 emit=0.5 propag=279.3 rss=184
+2011_solbat_sb	UNKNOWN-NOPROOF	1387251	-	n=2650 d=1336 c=1313 l=1313 pbl=26 db=1339 inc=none cpu=280.16s parse=0.1 compile=6.6 search=273.4 emit=2.1 propag=271.2 rss=310
+2010_bacp_bacp-16	UNKNOWN-NOPROOF	372808	-	n=5427 d=2720 c=2706 l=2706 pbl=1 db=2707 inc=none cpu=280.35s parse=0.0 compile=0.5 search=279.8 emit=0.7 propag=279.2 rss=177
+2010_bacp_bacp-23	UNKNOWN-NOPROOF	372797	-	n=6062 d=3035 c=3026 l=3026 pbl=0 db=3026 inc=none cpu=280.34s parse=0.0 compile=0.5 search=279.8 emit=0.5 propag=279.3 rss=222
+2011_pattern-set-mining_pattern_set_mining	UNKNOWN-NOPROOF	694823	-	n=3067 d=1537 c=1529 l=1525 pbl=0 db=1525 inc=38 cpu=280.09s parse=0.1 compile=0.1 search=279.9 emit=0.4 propag=279.6 rss=169
+2010_bacp_bacp-25	UNKNOWN-NOPROOF	373629	-	n=8904 d=4469 c=4434 l=4434 pbl=0 db=4434 inc=none cpu=280.53s parse=0.0 compile=0.5 search=280.0 emit=0.7 propag=279.3 rss=185
+2013_rubik_empty	SOLVED-NOPROOF	332	-	n=1 d=0 c=0 l=0 pbl=0 parse=0.0 compile=0.0 search=0.0 emit=0.0 propag=0.0 rss=6
+2008_shortest_path	UNKNOWN-NOPROOF	25633	-	n=455 d=258 c=196 l=133 pbl=114 db=247 inc=88 cpu=281.00s parse=0.0 compile=0.0 search=280.7 emit=0.8 propag=279.9 rss=1461
+2010_rcpsp_max	UNKNOWN-NOPROOF	2780907	-	n=7327 d=3743 c=3583 l=3582 pbl=0 db=3582 inc=95 cpu=280.46s parse=0.2 compile=2.5 search=277.7 emit=2.6 propag=275.2 rss=1077
+2012_project-planning_ProjectPlannertest_12_8	UNKNOWN-NOPROOF	781316	-	n=9750 d=5039 c=4710 l=1662 pbl=0 db=1662 inc=63 cpu=280.11s parse=0.1 compile=3.9 search=276.1 emit=2.5 propag=273.6 rss=287
+2009_vrp	UNKNOWN-NOPROOF	76532	-	n=693 d=557 c=135 l=92 pbl=84 db=176 inc=851 cpu=282.28s parse=0.0 compile=0.1 search=282.1 emit=0.1 propag=282.1 rss=939
+2012_parity-learning	UNKNOWN-NOPROOF	56568	-	n=11134 d=5574 c=5559 l=5559 pbl=740 db=6299 inc=none cpu=281.24s parse=0.0 compile=0.0 search=281.2 emit=1.3 propag=279.9 rss=220
+2012_project-planning_ProjectPlannertest_13_6	UNKNOWN-NOPROOF	896463	-	n=6900 d=4074 c=2825 l=1904 pbl=3 db=1907 inc=54 cpu=280.21s parse=0.1 compile=5.3 search=274.8 emit=1.8 propag=273.0 rss=294
+2012_project-planning_ProjectPlannertest_13_8	UNKNOWN-NOPROOF	896918	-	n=16368 d=8437 c=7930 l=622 pbl=0 db=622 inc=71 cpu=280.08s parse=0.1 compile=5.0 search=275.0 emit=4.3 propag=270.7 rss=335
+2012_project-planning_ProjectPlannertest_14_8	UNKNOWN-NOPROOF	1123862	-	n=6944 d=3597 c=3346 l=1051 pbl=0 db=1051 inc=78 cpu=280.07s parse=0.1 compile=6.7 search=273.2 emit=2.3 propag=270.9 rss=335
+2012_radiation	UNKNOWN-NOPROOF	509953	-	n=1130 d=570 c=559 l=557 pbl=527 db=1084 inc=none cpu=280.09s parse=0.0 compile=1.0 search=279.0 emit=0.6 propag=278.5 rss=670
+2014_stochastic-fjsp_fjsp-a1-s4_fjsp-t8-j2-m3-a1_det	SOLVED-NOPROOF	73263	-	n=178 d=126 c=52 l=30 pbl=0 parse=0.0 compile=0.2 search=0.2 emit=0.0 propag=0.2 rss=40
+2012_pattern-set-mining-k2_pattern_set_mining_k2	UNKNOWN-NOPROOF	1238522	-	n=3349 d=1684 c=1664 l=1659 pbl=0 db=1659 inc=52 cpu=280.17s parse=0.1 compile=0.1 search=280.0 emit=0.6 propag=279.4 rss=162
+2012_still-life-wastage_still-life	UNKNOWN-NOPROOF	373114	-	n=4444 d=2394 c=2049 l=2042 pbl=116 db=2158 inc=42 cpu=280.28s parse=0.0 compile=0.2 search=279.9 emit=1.7 propag=278.2 rss=235
+2014_stochastic-fjsp_fjsp-a1-s5_fjsp-t8-j2-m3-a1_det	SOLVED-NOPROOF	87099	-	n=416 d=328 c=88 l=56 pbl=1 parse=0.0 compile=0.2 search=0.5 emit=0.0 propag=0.5 rss=63
+2012_project-planning_ProjectPlannertest_16_7	UNKNOWN-NOPROOF	1542361	-	n=5672 d=3048 c=2623 l=523 pbl=1 db=524 inc=82 cpu=280.09s parse=0.1 compile=13.6 search=266.3 emit=4.5 propag=261.8 rss=452
+2014_stochastic-fjsp_fjsp-a1-s6_fjsp-t8-j2-m3-a1_det	SOLVED-NOPROOF	99868	-	n=566 d=434 c=132 l=82 pbl=2 parse=0.0 compile=0.2 search=1.3 emit=0.0 propag=1.3 rss=88
+2012_vrp	UNKNOWN-NOPROOF	84659	-	n=723 d=595 c=127 l=81 pbl=73 db=154 inc=913 cpu=281.17s parse=0.0 compile=0.1 search=281.0 emit=0.1 propag=280.9 rss=940
+2009_nonogram_non	UNKNOWN-NOPROOF	1893349	-	n=15 d=7 c=7 l=7 pbl=0 db=7 inc=none cpu=284.38s parse=0.2 compile=1.1 search=278.7 emit=0.6 propag=278.1 rss=734
+2012_project-planning_ProjectPlannertest_17_9	UNKNOWN-NOPROOF	1776836	-	n=2147 d=1416 c=730 l=725 pbl=0 db=725 inc=100 cpu=280.15s parse=0.1 compile=16.2 search=263.8 emit=0.8 propag=263.0 rss=442
+2011_table-layout_TableLayout	UNKNOWN-NOPROOF	132699	-	n=366 d=346 c=19 l=16 pbl=12 db=28 inc=2530 cpu=286.98s parse=0.0 compile=0.2 search=286.7 emit=0.1 propag=286.7 rss=480
+2011_nonogram_non	UNKNOWN-NOPROOF	1837454	-	n=18 d=9 c=8 l=8 pbl=0 db=8 inc=none cpu=289.54s parse=0.2 compile=1.1 search=284.2 emit=0.6 propag=283.5 rss=709
+2014_rectangle-packing_rect_packing	SOLVE-ERR-4	2428775	-	stats: encoding cost (M7-T1). Baguette writes every integer variable out as one stats: Boolean per value (`x >= v`) before any constraint is posted, so the size of stats: the proof follows the DECLARE
+2012_nonogram_non	UNKNOWN-NOPROOF	1849388	-	n=16 d=8 c=7 l=6 pbl=4 db=10 inc=none cpu=291.73s parse=0.2 compile=1.1 search=286.1 emit=0.6 propag=285.5 rss=732
+2012_pattern-set-mining-k1_pattern_set_mining_k1	UNKNOWN-NOPROOF	3020892	-	n=453 d=227 c=225 l=222 pbl=0 db=222 inc=17 cpu=281.06s parse=0.3 compile=0.6 search=280.2 emit=0.2 propag=280.1 rss=325
+2015_grid-colouring_GridColoring	SOLVED-NOPROOF	120104	-	n=2350 d=1394 c=956 l=944 pbl=0 parse=0.0 compile=0.0 search=7.9 emit=0.2 propag=7.7 rss=37
+2013_rubik_4-cube	SOLVED-NOPROOF	1120122	-	n=1369 d=704 c=664 l=663 pbl=0 parse=0.1 compile=0.1 search=14.3 emit=0.3 propag=14.0 rss=98
+2013_javarouting_trip_6_3	UNKNOWN-NOPROOF	344159	-	n=1700 d=853 c=846 l=645 pbl=0 db=645 inc=124 cpu=280.06s parse=0.0 compile=1.1 search=278.9 emit=1.7 propag=277.2 rss=301
+2012_fast-food_fastfood	UNKNOWN-NOPROOF	253219	-	n=283 d=145 c=137 l=129 pbl=0 db=129 inc=1124 cpu=297.89s parse=0.0 compile=8.0 search=289.6 emit=0.3 propag=289.3 rss=2767
+2012_amaze2	UNKNOWN-NOPROOF	4016978	-	n=1 d=0 c=0 l=0 pbl=0 db=0 inc=none cpu=298.23s parse=0.3 compile=297.9 search=0.0 emit=0.0 propag=0.0 rss=1526
+2015_gfd-schedule	SOLVED-NOPROOF	1307682	-	n=409 d=239 c=169 l=169 pbl=0 parse=0.1 compile=7.0 search=5.5 emit=0.1 propag=5.4 rss=253
+2013_javarouting_trip_7_1	UNKNOWN-NOPROOF	481982	-	n=888 d=448 c=439 l=304 pbl=0 db=304 inc=139 cpu=280.62s parse=0.0 compile=2.0 search=278.5 emit=1.4 propag=277.2 rss=396
+2014_solbat_sb	SOLVED-NOPROOF	1648111	-	n=87 d=46 c=41 l=41 pbl=29 parse=0.1 compile=12.3 search=5.0 emit=0.0 propag=5.0 rss=154
+2008_pentominoes-int	TIMEOUT-SOLVE	35716	-	exceeded 300s killed-in=search n=10 d=9 c=1 l=0 pbl=0 cpu=300.02s parse=0.0 compile=0.1 rss=438
+2011_prize-collecting_pc	TIMEOUT-SOLVE	541039	-	exceeded 300s killed-in=search n=29 d=19 c=10 l=9 pbl=0 cpu=299.99s parse=0.0 compile=3.3 rss=509
+2011_vrp	TIMEOUT-SOLVE	224829	-	exceeded 300s killed-in=search n=1207 d=1175 c=32 l=8 pbl=0 cpu=300.02s parse=0.0 compile=0.5 rss=760
+2011_cyclic-rcpsp_rcmsp	TIMEOUT-SOLVE	529854	-	exceeded 300s killed-in=search n=145 d=85 c=60 l=52 pbl=6 cpu=299.99s parse=0.0 compile=1.7 rss=563
+2009_black-hole	TIMEOUT-SOLVE	2158617	-	exceeded 300s killed-in=search n=12 d=11 c=0 l=0 pbl=0 cpu=300.01s parse=0.2 compile=100.9 rss=926
+2011_black-hole	TIMEOUT-SOLVE	2154262	-	exceeded 300s killed-in=search n=5 d=4 c=1 l=0 pbl=0 cpu=300.05s parse=0.2 compile=77.7 rss=1046
+2011_pentominoes_pentominoes-int	TIMEOUT-SOLVE	299569	-	exceeded 300s killed-in=search n=1 d=0 c=0 l=0 pbl=0 cpu=300.01s parse=0.1 compile=5.4 rss=2368
+2012_league	TIMEOUT-SOLVE	81187	-	exceeded 300s killed-in=search n=30 d=23 c=7 l=5 pbl=1 cpu=300.07s parse=0.0 compile=0.5 rss=385
+2011_fast-food_fastfood	TIMEOUT-SOLVE	555013	-	exceeded 300s killed-in=search n=139 d=79 c=60 l=58 pbl=0 cpu=300.08s parse=0.0 compile=18.1 rss=4967
+2013_javarouting_trip_7_2	UNKNOWN-NOPROOF	468627	-	n=916 d=462 c=453 l=331 pbl=0 db=331 inc=134 cpu=280.75s parse=0.0 compile=1.9 search=278.7 emit=1.2 propag=277.5 rss=384
+2011_wwtpp-real_wwtpp	TIMEOUT-SOLVE	292222	-	exceeded 300s killed-in=search n=5 d=3 c=2 l=2 pbl=0 cpu=300.05s parse=0.0 compile=32.6 rss=7793
+2016_filters_filter	SOLVED-NOPROOF	76360	-	n=1262 d=710 c=552 l=546 pbl=0 parse=0.0 compile=0.1 search=2.0 emit=0.1 propag=1.9 rss=48
+2013_javarouting_trip_8_1	UNKNOWN-NOPROOF	630179	-	n=497 d=254 c=242 l=183 pbl=0 db=183 inc=175 cpu=281.51s parse=0.1 compile=3.2 search=278.1 emit=1.0 propag=277.1 rss=548
+2016_java-auto-gen_plusexample_6	SOLVED-NOPROOF	23041	-	n=284 d=169 c=115 l=103 pbl=34 parse=0.0 compile=0.0 search=1.1 emit=0.0 propag=1.0 rss=24
+2013_celar	UNKNOWN-NOPROOF	260437	-	n=64 d=39 c=24 l=24 pbl=0 db=24 inc=36377 cpu=297.04s parse=0.0 compile=13.2 search=283.4 emit=0.1 propag=283.2 rss=3530
+2013_black-hole	TIMEOUT-SOLVE	2154263	-	exceeded 300s killed-in=search n=10 d=9 c=0 l=0 pbl=0 cpu=300.05s parse=0.2 compile=86.6 rss=925
+2016_maximum-dag	SOLVE-ERR-4	68254	-	stats: encoding cost (M7-T1). Baguette writes every integer variable out as one stats: Boolean per value (`x >= v`) before any constraint is posted, so the size of stats: the proof follows the DECLARE
+2013_javarouting_trip_8_5	UNKNOWN-NOPROOF	630136	-	n=527 d=269 c=257 l=167 pbl=0 db=167 inc=115 cpu=281.53s parse=0.1 compile=3.2 search=278.1 emit=1.1 propag=277.0 rss=543
+2012_carpet-cutting_cc_base	TIMEOUT-SOLVE	70865016	-	exceeded 300s no-stats rss=2182
+2011_carpet-cutting_cc_base	TIMEOUT-SOLVE	75225649	-	exceeded 300s no-stats rss=2288
+2013_mario	UNKNOWN-NOPROOF	160734	-	n=572 d=381 c=190 l=128 pbl=0 db=128 inc=0 cpu=283.16s parse=0.0 compile=0.3 search=282.8 emit=0.5 propag=282.3 rss=250
+2016_nfc	SOLVED-NOPROOF	5939	-	n=129 d=66 c=63 l=12 pbl=8 parse=0.0 compile=0.0 search=11.2 emit=0.0 propag=11.1 rss=103
+2014_stochastic-fjsp_fjsp-a1-s2_fjsp-t15-j3-m3-a1_det	SOLVED-NOPROOF	199547	-	n=3830 d=2484 c=1346 l=1291 pbl=23 parse=0.0 compile=0.3 search=36.8 emit=0.3 propag=36.5 rss=165
+2013_league	TIMEOUT-SOLVE	205255	-	exceeded 300s killed-in=search n=1124 d=583 c=541 l=535 pbl=97 cpu=300.01s parse=0.0 compile=16.4 rss=4068
+2013_nmseq	TIMEOUT-SOLVE	3455744	-	exceeded 300s killed-in=search n=8 d=4 c=4 l=3 pbl=0 cpu=300.02s parse=0.2 compile=149.0 rss=2592
+2013_pattern-set-mining_pattern_set_mining	UNKNOWN-NOPROOF	1800155	-	n=37 d=19 c=17 l=17 pbl=0 db=17 inc=0 cpu=292.81s parse=0.1 compile=0.4 search=292.3 emit=0.0 propag=292.2 rss=258
+2013_rubik_5-cube	SOLVED-NOPROOF	1496593	-	n=4696 d=2441 c=2254 l=2254 pbl=0 parse=0.1 compile=0.1 search=93.6 emit=1.2 propag=92.4 rss=206
+2016_gfd-schedule_gfd-schedule2	SOLVED-NOPROOF	2491220	-	n=1561 d=873 c=688 l=666 pbl=0 parse=0.7 compile=15.2 search=68.3 emit=2.4 propag=65.8 rss=409
+2015_roster_roster_model	SOLVED-NOPROOF	193138	-	n=5283 d=3249 c=2033 l=2008 pbl=0 parse=0.0 compile=0.2 search=92.1 emit=0.6 propag=91.6 rss=103
+2013_pentominoes-int	TIMEOUT-SOLVE	299565	-	exceeded 300s killed-in=search n=1 d=0 c=0 l=0 pbl=0 cpu=300.02s parse=0.1 compile=5.4 rss=2367
+2013_proteindesign12_wcsp	TIMEOUT-SOLVE	1285115	-	exceeded 300s killed-in=search n=1 d=0 c=0 l=0 pbl=0 cpu=299.98s parse=0.3 compile=14.3 rss=4067
+2014_fillomino	SOLVED-NOPROOF	416843	-	n=7837 d=3932 c=3904 l=3903 pbl=0 parse=0.0 compile=1.7 search=244.2 emit=2.3 propag=241.9 rss=311
+2013_radiation	UNKNOWN-NOPROOF	235644	-	n=2933 d=1973 c=959 l=951 pbl=808 db=1759 inc=none cpu=280.11s parse=0.0 compile=0.3 search=279.7 emit=0.7 propag=279.0 rss=706
+2013_vrp	UNKNOWN-NOPROOF	53001	-	n=710 d=479 c=230 l=191 pbl=182 db=373 inc=606 cpu=280.07s parse=0.0 compile=0.0 search=280.0 emit=0.1 propag=279.8 rss=1053
+2014_amaze_amaze3	UNKNOWN-NOPROOF	213065	-	n=6968 d=3760 c=3207 l=3207 pbl=1 db=3208 inc=none cpu=280.31s parse=0.0 compile=0.4 search=279.9 emit=0.9 propag=279.0 rss=174
+2014_mqueens_mqueens2	UNKNOWN-NOPROOF	946141	-	n=7129 d=3568 c=3560 l=3559 pbl=1 db=3560 inc=8 cpu=280.39s parse=0.1 compile=0.1 search=280.2 emit=2.8 propag=277.4 rss=367
+2014_mario	UNKNOWN-NOPROOF	160771	-	n=567 d=378 c=188 l=103 pbl=0 db=103 inc=0 cpu=280.73s parse=0.0 compile=0.3 search=280.4 emit=0.4 propag=280.0 rss=220
+2013_rcpsp	UNKNOWN-NOPROOF	3116963	-	n=3743 d=1905 c=1837 l=1835 pbl=0 db=1835 inc=78 cpu=280.10s parse=0.2 compile=3.9 search=275.9 emit=1.2 propag=274.7 rss=1479
+2013_rubik_6-cube	UNKNOWN-NOPROOF	1873406	-	n=8135 d=4228 c=3906 l=3904 pbl=0 db=3904 inc=none cpu=280.46s parse=0.1 compile=0.2 search=280.1 emit=2.0 propag=278.1 rss=321
+2013_rubik_7-cube	UNKNOWN-NOPROOF	2250406	-	n=7125 d=3741 c=3383 l=3383 pbl=0 db=3383 inc=none cpu=280.40s parse=0.2 compile=0.2 search=280.0 emit=1.7 propag=278.3 rss=370
+2013_rubik_8-cube	UNKNOWN-NOPROOF	2627574	-	n=6367 d=3332 c=3034 l=3034 pbl=0 db=3034 inc=none cpu=280.31s parse=0.2 compile=0.2 search=279.8 emit=1.8 propag=278.0 rss=367
+2014_openshop	UNKNOWN-NOPROOF	200421	-	n=9158 d=4718 c=4439 l=4436 pbl=0 db=4436 inc=1056 cpu=280.73s parse=0.0 compile=24.2 search=256.3 emit=0.8 propag=255.5 rss=4379
+2014_multi-knapsack_mknapsack	UNKNOWN-NOPROOF	8204	-	n=8001 d=4088 c=3912 l=3912 pbl=3895 db=7807 inc=none cpu=281.91s parse=0.0 compile=0.0 search=281.9 emit=0.3 propag=281.6 rss=372
+2014_spot5	UNKNOWN-NOPROOF	120502	-	n=2174 d=1125 c=1048 l=351 pbl=0 db=351 inc=20084 cpu=280.74s parse=0.0 compile=0.2 search=280.5 emit=0.9 propag=279.6 rss=194
+2014_stochastic-fjsp_fjsp-a1-s3_fjsp-t20-j4-m3-a1_det	UNKNOWN-NOPROOF	492687	-	n=9188 d=4732 c=4455 l=4454 pbl=12 db=4466 inc=452 cpu=280.61s parse=0.0 compile=0.9 search=279.7 emit=0.5 propag=279.1 rss=432
+2014_stochastic-vrp_vrp-s2-v2-c7_vrp-v2-c7_det	UNKNOWN-NOPROOF	355386	-	n=5548 d=2782 c=2765 l=2673 pbl=0 db=2673 inc=none cpu=280.28s parse=0.0 compile=1.7 search=278.5 emit=5.4 propag=273.1 rss=236
+2014_stochastic-vrp_vrp-s3-v2-c6_vrp-v2-c6_det	UNKNOWN-NOPROOF	427702	-	n=5997 d=3010 c=2986 l=1742 pbl=0 db=1742 inc=339 cpu=280.27s parse=0.0 compile=2.4 search=277.8 emit=4.5 propag=273.3 rss=237
+2014_stochastic-vrp_vrp-s3-v2-c7_vrp-v2-c7_det	UNKNOWN-NOPROOF	534239	-	n=4695 d=2355 c=2339 l=2263 pbl=0 db=2263 inc=none cpu=280.25s parse=0.0 compile=4.2 search=275.9 emit=4.8 propag=271.1 rss=266
+2014_stochastic-vrp_vrp-s4-v2-c6_vrp-v2-c6_det	UNKNOWN-NOPROOF	571213	-	n=4879 d=2461 c=2417 l=1667 pbl=0 db=1667 inc=388 cpu=280.12s parse=0.0 compile=4.8 search=275.2 emit=3.8 propag=271.5 rss=265
+2014_stochastic-vrp_vrp-s5-v2-c8_vrp-v2-c8_det	UNKNOWN-NOPROOF	1092441	-	n=1653 d=871 c=781 l=767 pbl=0 db=767 inc=615 cpu=280.16s parse=0.1 compile=16.0 search=264.0 emit=2.7 propag=261.3 rss=485
+2014_traveling-tppv_ttppv	UNKNOWN-NOPROOF	319865	-	n=1753 d=880 c=872 l=754 pbl=19 db=773 inc=86 cpu=280.09s parse=0.0 compile=1.1 search=278.8 emit=3.8 propag=275.0 rss=205
+2015_costas-array_CostasArray	UNKNOWN-NOPROOF	46975	-	n=1252 d=628 c=623 l=511 pbl=105 db=616 inc=none cpu=280.13s parse=0.0 compile=0.1 search=279.9 emit=4.9 propag=275.0 rss=237
+2015_cvrp	UNKNOWN-NOPROOF	443085	-	n=810 d=423 c=386 l=384 pbl=0 db=384 inc=43 cpu=280.38s parse=0.0 compile=3.1 search=277.2 emit=3.5 propag=273.7 rss=292
+2015_freepizza	UNKNOWN-NOPROOF	111883	-	n=10184 d=5107 c=5076 l=5070 pbl=0 db=5070 inc=210 cpu=280.75s parse=0.0 compile=0.1 search=280.6 emit=1.6 propag=279.0 rss=233
+2014_smelt	UNKNOWN-NOPROOF	14625958	-	n=156 d=115 c=40 l=34 pbl=0 db=34 inc=2068 cpu=280.64s parse=142.1 compile=52.1 search=86.4 emit=1.1 propag=85.2 rss=8068
+2015_multi-knapsack_mknapsack_global	UNKNOWN-NOPROOF	10066	-	n=1214 d=621 c=592 l=592 pbl=576 db=1168 inc=none cpu=280.14s parse=0.0 compile=0.1 search=280.0 emit=0.1 propag=279.9 rss=279
+2015_open_stacks_open_stacks_01	UNKNOWN-NOPROOF	221046	-	n=3920 d=1990 c=1929 l=159 pbl=0 db=159 inc=5 cpu=280.10s parse=0.0 compile=0.0 search=280.0 emit=4.7 propag=275.3 rss=171
+2015_project-planning_ProjectPlannertest_12_7	UNKNOWN-NOPROOF	782224	-	n=10648 d=5523 c=5124 l=1569 pbl=0 db=1569 inc=63 cpu=280.08s parse=0.1 compile=3.9 search=276.0 emit=2.8 propag=273.2 rss=295
+2015_project-planning_ProjectPlannertest_14_7	UNKNOWN-NOPROOF	1123886	-	n=4517 d=2338 c=2178 l=1186 pbl=0 db=1186 inc=78 cpu=280.06s parse=0.1 compile=6.7 search=273.3 emit=1.8 propag=271.5 rss=328
+2015_radiation	UNKNOWN-NOPROOF	374093	-	n=1350 d=680 c=669 l=669 pbl=646 db=1315 inc=none cpu=280.15s parse=0.0 compile=0.7 search=279.4 emit=0.7 propag=278.8 rss=765
+2015_spot5	UNKNOWN-NOPROOF	77975	-	n=9741 d=4931 c=4809 l=710 pbl=0 db=710 inc=87 cpu=280.16s parse=0.0 compile=0.0 search=280.0 emit=7.8 propag=272.2 rss=441
+2015_project-planning_ProjectPlannertest_15_6	UNKNOWN-NOPROOF	1329441	-	n=3020 d=1843 c=1176 l=1136 pbl=0 db=1136 inc=76 cpu=280.06s parse=0.1 compile=9.6 search=270.3 emit=1.2 propag=269.1 rss=332
+2014_cyclic-rcpsp_rcmsp	TIMEOUT-SOLVE	490391	-	exceeded 300s killed-in=search n=68 d=44 c=24 l=16 pbl=4 cpu=300.04s parse=0.0 compile=1.4 rss=456
+2014_jp-encoding	TIMEOUT-SOLVE	1417698	-	exceeded 300s killed-in=search n=247 d=179 c=68 l=57 pbl=0 cpu=300.07s parse=0.1 compile=29.0 rss=1070
+2015_opd	UNKNOWN-NOPROOF	9481243	-	n=4217 d=4211 c=5 l=5 pbl=0 db=5 inc=96 cpu=284.21s parse=29.7 compile=1.1 search=253.3 emit=0.5 propag=252.8 rss=1281
+2016_depot-placement_depot_placement	UNKNOWN-NOPROOF	36023	-	n=5585 d=2804 c=2780 l=2434 pbl=53 db=2487 inc=164 cpu=280.20s parse=0.0 compile=0.0 search=280.0 emit=2.8 propag=277.3 rss=300
+2015_project-planning_ProjectPlannertest_16_6	UNKNOWN-NOPROOF	1542301	-	n=3280 d=2076 c=1203 l=882 pbl=3 db=885 inc=76 cpu=280.04s parse=0.1 compile=13.0 search=266.9 emit=1.2 propag=265.7 rss=383
+2015_triangular	UNKNOWN-NOPROOF	53332	-	n=6416 d=3225 c=3190 l=3188 pbl=2922 db=6110 inc=19 cpu=281.18s parse=0.0 compile=0.0 search=281.2 emit=0.3 propag=280.9 rss=378
+2016_diameterc-mst_dcmst	UNKNOWN-NOPROOF	365826	-	n=8466 d=4242 c=4223 l=4223 pbl=0 db=4223 inc=none cpu=280.56s parse=0.0 compile=0.9 search=279.6 emit=1.4 propag=278.1 rss=284
+2016_java-auto-gen_pizza_8_3	UNKNOWN-NOPROOF	810024	-	n=1544 d=846 c=697 l=694 pbl=53 db=747 inc=27 cpu=280.20s parse=0.1 compile=2.6 search=277.5 emit=1.2 propag=276.3 rss=498
+2015_project-planning_ProjectPlannertest_16_8	UNKNOWN-NOPROOF	1545614	-	n=5499 d=3019 c=2479 l=598 pbl=1 db=599 inc=82 cpu=280.07s parse=0.1 compile=13.2 search=266.7 emit=1.9 propag=264.8 rss=400
+2014_ship-schedule_ship-schedule.cp	TIMEOUT-SOLVE	533357	-	exceeded 300s killed-in=search n=3 d=2 c=0 l=0 pbl=0 cpu=300.08s parse=0.1 compile=57.5 rss=6775
+2016_java-auto-gen_binpack_11	UNKNOWN-NOPROOF	558608	-	n=854 d=435 c=418 l=418 pbl=0 db=418 inc=3 cpu=283.48s parse=0.0 compile=1.8 search=281.6 emit=0.6 propag=281.0 rss=181
+2016_java-auto-gen_projplan1_15_15	UNKNOWN-NOPROOF	268863	-	n=294 d=173 c=120 l=120 pbl=0 db=120 inc=5 cpu=282.27s parse=0.0 compile=0.5 search=281.7 emit=0.0 propag=281.7 rss=76
+2016_java-auto-gen_routing_7	UNKNOWN-NOPROOF	2015184	-	n=282 d=146 c=135 l=93 pbl=1 db=94 inc=118 cpu=281.10s parse=0.1 compile=26.6 search=254.2 emit=0.5 propag=253.7 rss=1737
+2019_stochastic-vrp_vrp-s4-v2-c3_svrp-v2-c3_det	SOLVED-NOPROOF	244163	-	n=499 d=313 c=186 l=111 pbl=2 parse=0.0 compile=0.8 search=6.3 emit=0.2 propag=6.1 rss=72
+2015_is_model	TIMEOUT-SOLVE	189273	-	exceeded 300s killed-in=search n=1 d=0 c=0 l=0 pbl=0 cpu=300.04s parse=0.0 compile=26.4 rss=9348
+2016_mrcpsp	UNKNOWN-NOPROOF	11369070	-	n=311 d=256 c=54 l=47 pbl=2 db=49 inc=30 cpu=283.69s parse=45.5 compile=16.0 search=221.9 emit=1.0 propag=221.0 rss=3454
+2016_celar	UNKNOWN-NOPROOF	155441	-	n=100 d=57 c=42 l=42 pbl=0 db=42 inc=32279 cpu=292.81s parse=0.0 compile=7.8 search=284.7 emit=0.2 propag=284.5 rss=2413
+2015_nmseq	TIMEOUT-SOLVE	2418781	-	exceeded 300s killed-in=search n=8 d=4 c=4 l=3 pbl=0 cpu=300.00s parse=0.2 compile=67.3 rss=1644
+2016_rcpsp-wet	UNKNOWN-NOPROOF	1387104	-	n=535 d=301 c=233 l=191 pbl=27 db=218 inc=282 cpu=280.17s parse=0.1 compile=0.7 search=279.4 emit=0.1 propag=279.2 rss=457
+2016_solbat_sb	UNKNOWN-NOPROOF	1648111	-	n=944 d=480 c=463 l=463 pbl=33 db=496 inc=none cpu=280.89s parse=0.1 compile=10.7 search=270.1 emit=0.9 propag=269.2 rss=243
+2015_p1f	TIMEOUT-SOLVE	5290507	-	exceeded 300s no-stats rss=672
+2016_tpp	UNKNOWN-NOPROOF	355239	-	n=15594 d=14984 c=609 l=574 pbl=0 db=574 inc=178 cpu=280.93s parse=0.0 compile=1.5 search=279.3 emit=6.3 propag=273.0 rss=178
+2017_community-detection	UNKNOWN-NOPROOF	187547	-	n=5160 d=2655 c=2504 l=2504 pbl=6 db=2510 inc=53 cpu=280.34s parse=0.0 compile=0.3 search=280.0 emit=0.5 propag=279.5 rss=366
+2015_tdtsp	TIMEOUT-SOLVE	344622	-	exceeded 300s killed-in=search n=19 d=18 c=1 l=0 pbl=0 cpu=300.06s parse=0.0 compile=61.1 rss=9067
+2016_prize-collecting_pc	UNKNOWN-NOPROOF	671336	-	n=30 d=20 c=9 l=9 pbl=0 db=9 inc=none cpu=295.48s parse=0.0 compile=5.4 search=290.0 emit=0.1 propag=290.0 rss=642
+2016_zephyrus	TIMEOUT-SOLVE	794855	-	exceeded 300s killed-in=search n=146 d=95 c=51 l=51 pbl=1 cpu=300.08s parse=0.1 compile=32.3 rss=6390
+2017_crosswords_crossword_opt	TIMEOUT-SOLVE	1040744	-	exceeded 300s killed-in=search n=4 d=3 c=0 l=0 pbl=0 cpu=300.04s parse=0.4 compile=28.1 rss=10251
+2020_radiation	SOLVED-NOPROOF	168156	-	n=119 d=67 c=52 l=43 pbl=25 parse=0.0 compile=0.2 search=1.2 emit=0.0 propag=1.1 rss=58
+2020_bnn-planner_inventory_4_8s	SOLVED-NOPROOF	2700439	-	n=31 d=15 c=16 l=15 pbl=0 parse=0.2 compile=0.6 search=47.4 emit=0.0 propag=47.4 rss=233
+2017_hrc	UNKNOWN-NOPROOF	507462	-	n=4603 d=2493 c=2109 l=2103 pbl=0 db=2103 inc=none cpu=280.23s parse=0.0 compile=0.5 search=279.7 emit=2.6 propag=277.1 rss=260
+2017_groupsplitter_group	TIMEOUT-SOLVE	5247566	-	exceeded 300s killed-in=search n=1 d=0 c=0 l=0 pbl=0 cpu=300.00s parse=1.7 compile=8.1 rss=3943
+2017_jp-encoding	UNKNOWN-NOPROOF	1868074	-	n=237 d=207 c=29 l=20 pbl=0 db=20 inc=10485 cpu=281.37s parse=0.1 compile=57.2 search=223.9 emit=0.1 propag=223.9 rss=1610
+2020_soccer-computational_ecp	SOLVED-NOPROOF	782368	-	n=406 d=355 c=50 l=50 pbl=9 parse=0.1 compile=1.5 search=10.3 emit=0.0 propag=10.2 rss=228
+2017_opd	UNKNOWN-NOPROOF	17354526	-	n=444 d=443 c=0 l=0 pbl=0 db=0 inc=none cpu=280.04s parse=223.3 compile=2.4 search=54.3 emit=0.0 propag=54.3 rss=1400
+2017_mario	TIMEOUT-SOLVE	515631	-	exceeded 300s killed-in=search n=814 d=813 c=1 l=0 pbl=0 cpu=300.03s parse=0.0 compile=3.4 rss=454
+2017_ma-path-finding_mapf	TIMEOUT-SOLVE	79039350	-	exceeded 300s no-stats rss=3089
+2019_zephyrus	SOLVED-NOPROOF	785369	-	n=487 d=281 c=206 l=178 pbl=6 parse=0.1 compile=32.2 search=119.9 emit=0.1 propag=119.8 rss=6119
+2020_bnn-planner_sysadmin_4_2s	SOLVED-NOPROOF	302307	-	n=1491 d=1055 c=435 l=435 pbl=0 parse=0.0 compile=0.2 search=168.2 emit=0.4 propag=167.8 rss=132
+2017_opt-cryptanalysis_mznc2017_aes_opt	UNKNOWN-NOPROOF	134268	-	n=1123 d=597 c=525 l=108 pbl=0 db=108 inc=24 cpu=280.11s parse=0.0 compile=0.1 search=279.8 emit=0.5 propag=279.3 rss=235
+2017_rcpsp-wet	TIMEOUT-SOLVE	1235979	-	exceeded 300s killed-in=search n=3335 d=1766 c=1569 l=1002 pbl=48 cpu=300.02s parse=0.1 compile=0.6 rss=1347
+2017_tc-graph-color_tcgc2	UNKNOWN-NOPROOF	248977	-	n=17875 d=8959 c=8915 l=5303 pbl=0 db=5303 inc=none cpu=280.84s parse=0.0 compile=0.7 search=280.1 emit=1.8 propag=278.3 rss=233
+2017_traveling-tppv_ttppv	UNKNOWN-NOPROOF	320090	-	n=1987 d=999 c=987 l=911 pbl=9 db=920 inc=92 cpu=280.36s parse=0.0 compile=1.1 search=279.1 emit=3.9 propag=275.2 rss=204
+2018_concert-hall-cap	UNKNOWN-NOPROOF	207366	-	n=7838 d=4461 c=3376 l=3367 pbl=0 db=3367 inc=39050 cpu=280.35s parse=0.0 compile=0.6 search=279.7 emit=0.6 propag=279.1 rss=352
+2017_tdtsp	UNKNOWN-NOPROOF	346218	-	n=19 d=18 c=0 l=0 pbl=0 db=0 inc=12766 cpu=280.56s parse=0.0 compile=60.7 search=219.2 emit=0.0 propag=219.2 rss=7185
+2018_neighbours_neighbours-rect	UNKNOWN-NOPROOF	153092	-	n=9066 d=4615 c=4450 l=4448 pbl=7 db=4455 inc=63 cpu=280.64s parse=0.0 compile=0.0 search=280.6 emit=1.1 propag=279.4 rss=193
+2018_racp	UNKNOWN-NOPROOF	1424309	-	n=6186 d=3335 c=2850 l=2850 pbl=8 db=2858 inc=none cpu=280.26s parse=0.1 compile=0.5 search=279.6 emit=2.8 propag=276.7 rss=484
+2018_seat-moving	UNKNOWN-NOPROOF	1201647	-	n=3034 d=1544 c=1489 l=1466 pbl=1 db=1467 inc=735 cpu=280.24s parse=0.1 compile=16.6 search=263.5 emit=1.7 propag=261.8 rss=412
+2018_soccer-computational_ecp	UNKNOWN-NOPROOF	660856	-	n=6546 d=3908 c=2637 l=2637 pbl=39 db=2676 inc=none cpu=280.22s parse=0.0 compile=1.1 search=279.0 emit=1.1 propag=278.0 rss=341
+2018_opt-cryptanalysis_mznc2017_aes_opt	UNKNOWN-NOPROOF	159502	-	n=641 d=358 c=282 l=106 pbl=0 db=106 inc=32 cpu=281.72s parse=0.0 compile=0.1 search=281.4 emit=0.2 propag=281.1 rss=258
+2019_accap	UNKNOWN-NOPROOF	80941	-	n=6365 d=3426 c=2938 l=2930 pbl=39 db=2969 inc=120 cpu=280.23s parse=0.0 compile=0.1 search=280.1 emit=0.7 propag=279.3 rss=167
+2018_gfd-schedule_gfd-schedule2	UNKNOWN-NOPROOF	7782740	-	n=67 d=61 c=5 l=5 pbl=0 db=5 inc=2117 cpu=281.73s parse=7.5 compile=254.9 search=19.3 emit=0.1 propag=19.2 rss=1225
+2018_mapping	UNKNOWN-NOPROOF	161508	-	n=161 d=86 c=74 l=73 pbl=19 db=92 inc=1100 cpu=282.89s parse=0.0 compile=32.4 search=250.4 emit=0.7 propag=249.7 rss=9002
+2021_steiner-systems	SOLVED-NOPROOF	858595	-	n=65 d=50 c=14 l=14 pbl=0 parse=0.1 compile=0.3 search=0.5 emit=0.0 propag=0.5 rss=52
+2019_amaze_amaze3	UNKNOWN-NOPROOF	230845	-	n=9924 d=5281 c=4642 l=4642 pbl=1 db=4643 inc=none cpu=280.59s parse=0.0 compile=0.4 search=280.1 emit=1.3 propag=278.9 rss=184
+2021_opt-cryptoanalysis_mznc2017_aes_opt	SOLVED-NOPROOF	33967	-	n=129 d=65 c=64 l=1 pbl=0 parse=0.0 compile=0.0 search=3.6 emit=0.0 propag=3.6 rss=25
+2019_fox-geese-corn_foxgeesecorn	UNKNOWN-NOPROOF	500222	-	n=7270 d=4434 c=2835 l=2627 pbl=125 db=2752 inc=27 cpu=280.19s parse=0.0 compile=1.0 search=279.1 emit=1.3 propag=277.8 rss=253
+2017_rel2onto	UNKNOWN-NOPROOF	6161287	-	n=46 d=44 c=1 l=1 pbl=0 db=1 inc=none cpu=284.35s parse=0.5 compile=187.1 search=95.8 emit=0.1 propag=95.7 rss=4665
+2021_pentominoes-zayenz_pentominoes	SOLVED-NOPROOF	203503	-	n=21 d=20 c=0 l=0 pbl=0 parse=0.0 compile=0.2 search=2.8 emit=0.0 propag=2.8 rss=141
+2022_nfc	SOLVED-NOPROOF	5947	-	n=103 d=65 c=38 l=15 pbl=6 parse=0.0 compile=0.0 search=0.8 emit=0.0 propag=0.8 rss=34
+2019_hrc	UNKNOWN-NOPROOF	547492	-	n=5178 d=2988 c=2189 l=2186 pbl=0 db=2186 inc=none cpu=280.40s parse=0.0 compile=0.5 search=279.8 emit=2.8 propag=277.1 rss=276
+2019_kidney-exchange_ccmcp	UNKNOWN-NOPROOF	239516	-	n=2076 d=1692 c=864 l=857 pbl=1 db=858 inc=none cpu=280.16s parse=0.0 compile=0.7 search=279.4 emit=1.7 propag=277.7 rss=147
+2019_median-string_median_string_dp	UNKNOWN-NOPROOF	919755	-	n=4296 d=2166 c=2129 l=2129 pbl=0 db=2129 inc=12 cpu=280.16s parse=0.1 compile=6.5 search=273.6 emit=1.9 propag=271.7 rss=370
+2019_multi-knapsack_mknapsack_global	UNKNOWN-NOPROOF	8463	-	n=2950 d=1481 c=1468 l=1468 pbl=1466 db=2934 inc=none cpu=280.24s parse=0.0 compile=0.1 search=280.1 emit=0.2 propag=279.9 rss=523
+2019_stochastic-vrp_vrp-s2-v2-c8_vrp-v2-c8_det	UNKNOWN-NOPROOF	434535	-	n=3600 d=1821 c=1778 l=1744 pbl=0 db=1744 inc=340 cpu=280.13s parse=0.0 compile=2.8 search=277.2 emit=6.0 propag=271.2 rss=249
+2019_stochastic-vrp_vrp-s3-v2-c7_vrp-v2-c7_det	UNKNOWN-NOPROOF	534239	-	n=4651 d=2334 c=2316 l=2240 pbl=0 db=2240 inc=none cpu=280.17s parse=0.0 compile=3.9 search=276.1 emit=4.7 propag=271.4 rss=265
+2019_stochastic-vrp_vrp-s2-v2-c9_vrp-v2-c9_det	UNKNOWN-NOPROOF	522020	-	n=2437 d=1248 c=1188 l=1154 pbl=0 db=1154 inc=353 cpu=280.29s parse=0.0 compile=3.6 search=276.5 emit=5.4 propag=271.1 rss=280
+2019_stochastic-vrp_vrp-s5-v2-c6_vrp-v2-c6_det	UNKNOWN-NOPROOF	715420	-	n=4375 d=2212 c=2162 l=1703 pbl=0 db=1703 inc=438 cpu=280.19s parse=0.1 compile=6.6 search=273.4 emit=3.1 propag=270.3 rss=313
+2018_vrplc_vrplc_service	UNKNOWN-NOPROOF	1215676	-	n=24 d=15 c=8 l=8 pbl=0 db=8 inc=none cpu=297.19s parse=0.1 compile=21.4 search=275.6 emit=0.9 propag=274.6 rss=901
+2017_steelmillslab	TIMEOUT-SOLVE	5678644	-	exceeded 300s killed-in=search n=111 d=102 c=9 l=8 pbl=0 cpu=300.03s parse=0.4 compile=246.9 rss=2260
+2019_triangular	UNKNOWN-NOPROOF	53546	-	n=6450 d=3239 c=3210 l=3208 pbl=2988 db=6196 inc=19 cpu=281.26s parse=0.0 compile=0.0 search=281.2 emit=0.3 propag=281.0 rss=384
+2018_cargo_cargo_coarsePiles	TIMEOUT-SOLVE	1489194	-	exceeded 300s killed-in=search n=447 d=440 c=7 l=6 pbl=0 cpu=300.03s parse=0.1 compile=103.3 rss=16633
+2021_neighbours_neighbours-rect	SOLVED-NOPROOF	103194	-	n=3753 d=1894 c=1859 l=1857 pbl=7 parse=0.0 compile=0.0 search=21.5 emit=0.4 propag=21.1 rss=60
+2019_steelmillslab	UNKNOWN-NOPROOF	5678630	-	n=26 d=20 c=5 l=5 pbl=0 db=5 inc=none cpu=281.27s parse=0.4 compile=273.9 search=6.8 emit=0.0 propag=6.8 rss=1904
+2018_proteindesign12_wcsp	TIMEOUT-SOLVE	1279984	-	exceeded 300s killed-in=search n=1 d=0 c=0 l=0 pbl=0 cpu=300.03s parse=0.4 compile=4.1 rss=1917
+2018_team-assignment_model	TIMEOUT-SOLVE	110398	-	exceeded 300s killed-in=search n=51 d=35 c=16 l=16 pbl=3 cpu=300.02s parse=0.0 compile=4.7 rss=1189
+2018_rotating-workforce	TIMEOUT-SOLVE	599908	-	exceeded 300s killed-in=search n=22 d=21 c=1 l=0 pbl=0 cpu=300.04s parse=0.1 compile=30.3 rss=4068
+2023_pennies-opt_pennies	SOLVED-NOPROOF	308572	-	n=49 d=30 c=18 l=18 pbl=1 parse=0.0 compile=0.8 search=0.3 emit=0.0 propag=0.3 rss=69
+2023_speck-optimisation_SPECK-Optimisation	SOLVED-NOPROOF	170262	-	n=9 d=5 c=4 l=3 pbl=0 parse=0.0 compile=0.1 search=0.0 emit=0.0 propag=0.0 rss=16
+2023_sudoku_fixed	SOLVED-NOPROOF	27042	-	n=1 d=0 c=0 l=0 pbl=0 parse=0.0 compile=3.3 search=0.8 emit=0.0 propag=0.8 rss=96
+2019_groupsplitter_group	TIMEOUT-SOLVE	6235882	-	exceeded 300s killed-in=search n=1 d=0 c=0 l=0 pbl=0 cpu=300.04s parse=2.2 compile=10.3 rss=5299
+2019_stack-cuttingstock_stack-cutstock-cumu	UNKNOWN-NOPROOF	68310	-	n=287 d=158 c=128 l=123 pbl=38 db=161 inc=16 cpu=292.36s parse=0.0 compile=1.3 search=291.1 emit=0.1 propag=291.0 rss=460
+2020_bnn-planner_sysadmin_5_4s	UNKNOWN-NOPROOF	832887	-	n=1411 d=1175 c=235 l=235 pbl=0 db=235 inc=none cpu=280.45s parse=0.1 compile=0.7 search=279.7 emit=0.3 propag=279.4 rss=282
+2019_code-generator_unison	TIMEOUT-SOLVE	55339462	-	exceeded 300s no-stats rss=1457
+2020_minimal-decision-sets_sparse_mds	UNKNOWN-NOPROOF	1286663	-	n=1325 d=858 c=466 l=460 pbl=0 db=460 inc=113 cpu=280.21s parse=0.1 compile=3.8 search=276.1 emit=1.2 propag=274.9 rss=360
+2019_liner-sf-repositioning_fm3_0	TIMEOUT-SOLVE	65101	-	exceeded 300s killed-in=search n=1 d=0 c=0 l=0 pbl=0 cpu=300.07s parse=0.0 compile=57.2 rss=13795
+2020_cable_tree_wiring_ctw	UNKNOWN-NOPROOF	191377	-	n=248 d=200 c=47 l=23 pbl=2 db=25 inc=49161 cpu=286.62s parse=0.0 compile=0.4 search=286.2 emit=1.5 propag=284.7 rss=310
+2019_rotating-workforce	TIMEOUT-SOLVE	374535	-	exceeded 300s killed-in=search n=23 d=22 c=1 l=0 pbl=0 cpu=300.05s parse=0.0 compile=7.2 rss=1177
+2019_ptv_pax_model	TIMEOUT-SOLVE	456841	-	exceeded 300s killed-in=search n=671 d=558 c=112 l=112 pbl=45 cpu=300.06s parse=0.0 compile=1.2 rss=1037
+2020_p1f-pjs	UNKNOWN-NOPROOF	2749454	-	n=195 d=116 c=78 l=76 pbl=0 db=76 inc=none cpu=280.52s parse=0.2 compile=117.3 search=162.5 emit=0.7 propag=161.8 rss=593
+2019_rcpsp-wet-diverse	TIMEOUT-SOLVE	10021253	-	exceeded 300s killed-in=search n=174 d=133 c=41 l=39 pbl=7 cpu=300.01s parse=0.7 compile=10.9 rss=4636
+2020_bnn-planner_navigation_5x5_10s	UNKNOWN-NOPROOF	1203200	-	n=63 d=48 c=14 l=14 pbl=0 db=14 inc=none cpu=292.89s parse=0.1 compile=1.0 search=291.7 emit=0.0 propag=291.7 rss=481
+2020_bnn-planner_cellda_y_10s	UNKNOWN-NOPROOF	7916310	-	n=77 d=49 c=27 l=23 pbl=9 db=32 inc=6 cpu=292.10s parse=0.6 compile=3.8 search=287.7 emit=0.1 propag=287.6 rss=1220
+2020_pillars-and-planks_pillars-planks-solution	UNKNOWN-NOPROOF	438837	-	n=8723 d=4449 c=4273 l=4211 pbl=31 db=4242 inc=none cpu=280.57s parse=0.0 compile=1.1 search=279.4 emit=1.9 propag=277.5 rss=257
+2019_nside_full	TIMEOUT-SOLVE	29429401	-	exceeded 300s no-stats rss=808
+2024_neighbours_neighbours-rect	SOLVED-NOPROOF	30620	-	n=101 d=50 c=51 l=49 pbl=3 parse=0.0 compile=0.0 search=0.1 emit=0.0 propag=0.0 rss=9
+2020_hoist-benchmark	TIMEOUT-SOLVE	115509	-	exceeded 300s killed-in=search n=4 d=3 c=1 l=1 pbl=0 cpu=299.99s parse=0.0 compile=2.0 rss=500
+2020_is_model	TIMEOUT-SOLVE	251653	-	exceeded 300s killed-in=search n=1 d=0 c=0 l=0 pbl=0 cpu=300.01s parse=0.0 compile=23.1 rss=9559
+2020_racp	UNKNOWN-NOPROOF	971518	-	n=7357 d=3911 c=3445 l=3444 pbl=10 db=3454 inc=712 cpu=280.46s parse=0.1 compile=0.3 search=280.1 emit=2.9 propag=277.2 rss=413
+2020_pentominoes_pentominoes-int	TIMEOUT-SOLVE	299569	-	exceeded 300s killed-in=search n=1 d=0 c=0 l=0 pbl=0 cpu=300.06s parse=0.1 compile=5.5 rss=2364
+2020_collaborative-construction_macc	TIMEOUT-SOLVE	24742622	-	exceeded 300s no-stats rss=904
+2024_word-equations_word_equations_01_track_123-int	SOLVED-NOPROOF	434	-	n=1 d=0 c=1 l=0 pbl=0 parse=0.0 compile=0.0 search=0.0 emit=0.0 propag=0.0 rss=6
+2020_code-generator_unison	TIMEOUT-SOLVE	67356448	-	exceeded 300s no-stats rss=1746
+2024_monitor-placement-1id_monitor_1id	SOLVED-NOPROOF	47693	-	n=18 d=11 c=7 l=2 pbl=0 parse=0.0 compile=0.0 search=0.0 emit=0.0 propag=0.0 rss=7
+2020_sdn-chain_model	UNKNOWN-NOPROOF	4791636	-	n=964 d=962 c=1 l=1 pbl=0 db=1 inc=none cpu=280.22s parse=0.4 compile=82.4 search=197.4 emit=0.0 propag=197.4 rss=1240
+2020_skill-allocation_skill_allocation_only	UNKNOWN-NOPROOF	5467545	-	n=1 d=0 c=0 l=0 pbl=0 db=0 inc=none cpu=282.39s parse=0.4 compile=282.0 search=0.0 emit=0.0 propag=0.0 rss=1200
+2020_stable-goods_stable-goods-solution	UNKNOWN-NOPROOF	582494	-	n=1677 d=841 c=835 l=382 pbl=37 db=419 inc=5421 cpu=280.10s parse=0.0 compile=2.3 search=277.7 emit=0.9 propag=276.8 rss=403
+2023_roster_roster_model	SOLVED-NOPROOF	332706	-	n=3088 d=1853 c=1234 l=1224 pbl=0 parse=0.0 compile=0.7 search=90.6 emit=0.3 propag=90.2 rss=87
+2020_whirlpool_whirlpool-x	TIMEOUT-SOLVE	90109	-	exceeded 300s killed-in=search n=10 d=9 c=1 l=0 pbl=0 cpu=300.05s parse=0.0 compile=0.3 rss=580
+2021_carpet-cutting_cc_base	TIMEOUT-SOLVE	19296726	-	exceeded 300s no-stats rss=732
+2021_community-detection	UNKNOWN-NOPROOF	598051	-	n=84 d=72 c=11 l=9 pbl=0 db=9 inc=6846 cpu=285.23s parse=0.0 compile=7.1 search=277.7 emit=0.0 propag=277.7 rss=1776
+2021_java-routing_trip_6_2	UNKNOWN-NOPROOF	344602	-	n=1710 d=857 c=852 l=635 pbl=0 db=635 inc=116 cpu=280.10s parse=0.0 compile=1.1 search=278.9 emit=1.6 propag=277.3 rss=286
+2025_hitori	SOLVED-NOPROOF	554212	-	n=828 d=459 c=369 l=369 pbl=0 parse=0.0 compile=1.8 search=3.9 emit=0.1 propag=3.7 rss=132
+2021_java-routing_trip_7_4	UNKNOWN-NOPROOF	481966	-	n=937 d=472 c=464 l=340 pbl=0 db=340 inc=120 cpu=280.83s parse=0.0 compile=1.9 search=278.8 emit=1.3 propag=277.5 rss=393
+2021_java-routing_trip_7_5	UNKNOWN-NOPROOF	481951	-	n=998 d=502 c=495 l=340 pbl=0 db=340 inc=101 cpu=280.66s parse=0.0 compile=1.9 search=278.6 emit=1.3 propag=277.3 rss=391
+2021_java-routing_trip_8_2	UNKNOWN-NOPROOF	611659	-	n=521 d=266 c=254 l=180 pbl=0 db=180 inc=164 cpu=280.96s parse=0.0 compile=3.2 search=277.6 emit=1.0 propag=276.6 rss=546
+2021_java-routing_trip_8_3	UNKNOWN-NOPROOF	611628	-	n=471 d=241 c=229 l=180 pbl=0 db=180 inc=171 cpu=280.49s parse=0.0 compile=3.2 search=277.2 emit=1.1 propag=276.1 rss=570
+2025_products-and-shelves_product-and-shelves	SOLVED-NOPROOF	2252598	-	n=8040 d=7908 c=132 l=131 pbl=0 parse=0.2 compile=7.4 search=72.1 emit=0.3 propag=71.9 rss=284
+2021_monomatch	UNKNOWN-NOPROOF	2832109	-	n=3153 d=1592 c=1560 l=1560 pbl=0 db=1560 inc=none cpu=280.16s parse=0.2 compile=0.2 search=279.7 emit=0.8 propag=278.9 rss=268
+2021_peacable_queens_peaceable_queens_mznc2021	UNKNOWN-NOPROOF	559536	-	n=4137 d=2096 c=2040 l=1939 pbl=59 db=1998 inc=6 cpu=280.16s parse=0.0 compile=0.3 search=279.8 emit=2.3 propag=277.5 rss=272
+2021_seat-moving	UNKNOWN-NOPROOF	1598002	-	n=3372 d=1723 c=1648 l=952 pbl=0 db=952 inc=none cpu=280.26s parse=0.1 compile=28.6 search=251.4 emit=2.3 propag=249.1 rss=495
+2022_accap	UNKNOWN-NOPROOF	131919	-	n=2310 d=1305 c=1004 l=986 pbl=80 db=1066 inc=132 cpu=280.11s parse=0.0 compile=0.2 search=279.8 emit=0.5 propag=279.3 rss=228
+2021_physician-scheduling	UNKNOWN-NOPROOF	3657969	-	n=608 d=386 c=221 l=198 pbl=0 db=198 inc=none cpu=280.67s parse=0.3 compile=28.7 search=251.4 emit=0.2 propag=251.2 rss=593
+2021_perfect_square	UNKNOWN-NOPROOF	280515	-	n=16264 d=9143 c=7120 l=7120 pbl=0 db=7120 inc=none cpu=281.88s parse=0.0 compile=1.0 search=280.8 emit=1.0 propag=279.8 rss=641
+2022_generalized-peacable-queens_peaceable_queens	UNKNOWN-NOPROOF	523197	-	n=1757 d=968 c=788 l=65 pbl=1 db=66 inc=2 cpu=280.23s parse=0.0 compile=0.2 search=279.7 emit=1.4 propag=278.3 rss=2146
+2022_rotating-workforce-scheduling	UNKNOWN-NOPROOF	485012	-	n=1202 d=647 c=554 l=553 pbl=2 db=555 inc=none cpu=280.08s parse=0.0 compile=1.0 search=278.9 emit=0.5 propag=278.5 rss=238
+2022_gfd-schedule_gfd-schedule2	UNKNOWN-NOPROOF	7109511	-	n=114 d=64 c=49 l=49 pbl=0 db=49 inc=8904 cpu=280.34s parse=6.3 compile=219.3 search=54.6 emit=0.1 propag=54.5 rss=1286
+2022_spot5	UNKNOWN-NOPROOF	182653	-	n=14888 d=7495 c=7392 l=382 pbl=0 db=382 inc=154 cpu=280.13s parse=0.0 compile=0.1 search=279.9 emit=6.8 propag=273.1 rss=354
+2022_stripboard	UNKNOWN-NOPROOF	738773	-	n=1039 d=1783 c=901 l=901 pbl=6 db=907 inc=none cpu=280.21s parse=0.1 compile=2.9 search=277.0 emit=2.1 propag=274.9 rss=1463
+2022_traveling-tppv_ttppv	UNKNOWN-NOPROOF	1502896	-	n=196 d=117 c=78 l=6 pbl=0 db=6 inc=none cpu=281.13s parse=0.1 compile=31.9 search=248.2 emit=0.8 propag=247.3 rss=694
+2022_vaccine	UNKNOWN-NOPROOF	900758	-	n=3182 d=1633 c=1548 l=1528 pbl=44 db=1572 inc=123 cpu=280.41s parse=0.1 compile=1.9 search=278.4 emit=2.1 propag=276.4 rss=504
+2023_chessboard	UNKNOWN-NOPROOF	442319	-	n=5878 d=2945 c=2932 l=2257 pbl=0 db=2257 inc=41 cpu=280.28s parse=0.0 compile=0.2 search=279.8 emit=2.5 propag=277.3 rss=356
+2022_triangular	UNKNOWN-NOPROOF	53546	-	n=6112 d=3070 c=3041 l=3039 pbl=2836 db=5875 inc=19 cpu=281.17s parse=0.0 compile=0.0 search=281.1 emit=0.3 propag=280.9 rss=375
+2023_evm-super-compilation_evmopt-generic	UNKNOWN-NOPROOF	526342	-	n=9481 d=4966 c=4514 l=4482 pbl=0 db=4482 inc=none cpu=280.71s parse=0.0 compile=2.1 search=278.5 emit=2.1 propag=276.4 rss=333
+2021_p1f-pjs	TIMEOUT-SOLVE	5618527	-	exceeded 300s no-stats rss=665
+2023_gametes	UNKNOWN-NOPROOF	2598993	-	n=9313 d=5617 c=3695 l=1207 pbl=0 db=1207 inc=none cpu=280.11s parse=0.2 compile=85.5 search=194.4 emit=3.9 propag=190.5 rss=544
+2023_multi-agent-graph-coverage_graph-scan-revised	UNKNOWN-NOPROOF	303712	-	n=2109 d=1096 c=1012 l=982 pbl=0 db=982 inc=341 cpu=280.11s parse=0.0 compile=3.9 search=276.1 emit=4.1 propag=272.0 rss=737
+2023_kidney-exchange_ccmcp	UNKNOWN-NOPROOF	239680	-	n=1465 d=1201 c=668 l=567 pbl=0 db=567 inc=1069 cpu=280.44s parse=0.0 compile=0.7 search=279.7 emit=1.2 propag=278.5 rss=142
+2022_diameterc-mst_dcmst	TIMEOUT-SOLVE	470039	-	exceeded 300s killed-in=search n=131 d=71 c=60 l=47 pbl=14 cpu=300.02s parse=0.0 compile=0.8 rss=444
+2022_blocks-world_blocks	TIMEOUT-SOLVE	4085159	-	exceeded 300s killed-in=search n=58 d=57 c=1 l=0 pbl=0 cpu=300.05s parse=0.3 compile=76.6 rss=1890
+2022_roster-sickness_bool-model-sickness	TIMEOUT-SOLVE	211007	-	exceeded 300s killed-in=search n=13 d=10 c=3 l=3 pbl=0 cpu=300.07s parse=0.0 compile=2.7 rss=1065
+2023_mrcpsp	UNKNOWN-NOPROOF	11910213	-	n=151 d=117 c=33 l=32 pbl=0 db=32 inc=61 cpu=284.49s parse=70.6 compile=20.3 search=193.3 emit=0.7 propag=192.7 rss=3570
+2023_table-layout_TableLayout	UNKNOWN-NOPROOF	723839	-	n=3032 d=3000 c=31 l=31 pbl=0 db=31 inc=9012 cpu=282.94s parse=0.1 compile=0.5 search=282.2 emit=0.2 propag=282.0 rss=558
+2023_valve-network	UNKNOWN-NOPROOF	1630358	-	n=1527 d=766 c=760 l=757 pbl=0 db=757 inc=16 cpu=280.37s parse=0.1 compile=3.1 search=277.1 emit=1.5 propag=275.7 rss=421
+2023_test-scheduling	UNKNOWN-NOPROOF	1068243	-	n=3756 d=1892 c=1863 l=1863 pbl=0 db=1863 inc=none cpu=280.89s parse=0.3 compile=37.0 search=243.4 emit=0.8 propag=242.6 rss=6400
+2022_sudoku_opt	TIMEOUT-SOLVE	70485	-	exceeded 300s killed-in=search n=7 d=6 c=1 l=0 pbl=0 cpu=300.08s parse=0.0 compile=67.7 rss=633
+2024_accap	UNKNOWN-NOPROOF	89888	-	n=5327 d=2790 c=2536 l=2517 pbl=128 db=2645 inc=162 cpu=280.24s parse=0.0 compile=0.1 search=280.1 emit=0.7 propag=279.4 rss=201
+2022_team-assignment_model	TIMEOUT-SOLVE	86938	-	exceeded 300s killed-in=search n=107 d=65 c=42 l=40 pbl=4 cpu=300.06s parse=0.0 compile=3.9 rss=1012
+2024_compression	UNKNOWN-NOPROOF	184379	-	n=10071 d=5203 c=4867 l=4862 pbl=1 db=4863 inc=25 cpu=280.68s parse=0.0 compile=0.4 search=280.3 emit=2.2 propag=278.1 rss=250
+2024_concert-hall-cap	UNKNOWN-NOPROOF	277102	-	n=999 d=685 c=313 l=301 pbl=0 db=301 inc=33347 cpu=280.81s parse=0.0 compile=0.9 search=279.9 emit=0.1 propag=279.8 rss=272
+2024_fox-geese-corn_foxgeesecorn	UNKNOWN-NOPROOF	409514	-	n=9664 d=5687 c=3976 l=3934 pbl=7 db=3941 inc=32 cpu=280.41s parse=0.0 compile=0.8 search=279.5 emit=1.0 propag=278.6 rss=237
+2022_yumi-static	TIMEOUT-SOLVE	1557809	-	exceeded 300s killed-in=search n=137 d=118 c=19 l=19 pbl=1 cpu=300.08s parse=0.1 compile=35.5 rss=5484
+2023_roster-shifts-bool_bool-model	TIMEOUT-SOLVE	3093127	-	exceeded 300s killed-in=search n=55 d=50 c=5 l=3 pbl=0 cpu=300.03s parse=0.2 compile=2.2 rss=1040
+2024_harmony	UNKNOWN-NOPROOF	2250780	-	n=382 d=212 c=169 l=161 pbl=15 db=176 inc=54 cpu=280.44s parse=0.4 compile=89.6 search=190.3 emit=0.2 propag=190.1 rss=8388
+2024_word-equations_word_equations_01_track_140-int	SOLVED-NOPROOF	3800609	-	n=122 d=61 c=61 l=61 pbl=5 parse=0.3 compile=254.7 search=9.8 emit=0.5 propag=9.3 rss=872
+2024_community-detection	UNKNOWN-NOPROOF	226166	-	n=131 d=110 c=20 l=18 pbl=0 db=18 inc=-8214 cpu=290.83s parse=0.0 compile=72.8 search=217.0 emit=0.1 propag=216.9 rss=4451
+2023_vrplc_vrplc_service	TIMEOUT-SOLVE	1642929	-	exceeded 300s killed-in=search n=34 d=21 c=13 l=12 pbl=0 cpu=300.01s parse=0.1 compile=26.4 rss=838
+2024_peacable_queens_peaceable_queens_mznc2021	UNKNOWN-NOPROOF	391568	-	n=5100 d=2565 c=2534 l=2418 pbl=86 db=2504 inc=5 cpu=280.19s parse=0.0 compile=0.1 search=280.0 emit=2.8 propag=277.2 rss=256
+2023_code-generator_unison	TIMEOUT-SOLVE	69451488	-	exceeded 300s no-stats rss=1811
+2024_portal	UNKNOWN-NOPROOF	678878	-	n=4889 d=2452 c=2436 l=2149 pbl=0 db=2149 inc=none cpu=280.30s parse=0.1 compile=1.3 search=278.6 emit=3.5 propag=275.1 rss=448
+2023_yumi-static	TIMEOUT-SOLVE	1558059	-	exceeded 300s killed-in=search n=149 d=125 c=24 l=24 pbl=0 cpu=300.03s parse=0.1 compile=34.2 rss=5426
+2024_cable-tree-wiring_ctw	TIMEOUT-SOLVE	1316370	-	exceeded 300s killed-in=search n=19 d=17 c=2 l=0 pbl=0 cpu=300.08s parse=0.1 compile=22.9 rss=3721
+2022_ma-path-finding_mapf	TIMEOUT-SOLVE	145340307	-	exceeded 300s no-stats rss=6570
+2024_tiny-cvrp_TinyCVRP_ExactlyOneSolution	UNKNOWN-NOPROOF	470277	-	n=6924 d=4310 c=2613 l=2598 pbl=4 db=2602 inc=530 cpu=280.23s parse=0.0 compile=1.8 search=278.3 emit=3.3 propag=275.1 rss=341
+2024_triangular	UNKNOWN-NOPROOF	36351	-	n=6811 d=3414 c=3396 l=3394 pbl=3216 db=6610 inc=17 cpu=281.45s parse=0.0 compile=0.0 search=281.4 emit=0.3 propag=281.2 rss=349
+2024_graph-clear_graph_clear_cp	TIMEOUT-SOLVE	1342036	-	exceeded 300s killed-in=search n=4631 d=4584 c=47 l=45 pbl=41 cpu=300.03s parse=0.1 compile=5.0 rss=679
+2024_network_50_cstr_efm_cstr	UNKNOWN-NOPROOF	780591	-	n=1157 d=671 c=485 l=317 pbl=0 db=317 inc=2 cpu=283.12s parse=0.1 compile=0.8 search=282.2 emit=0.8 propag=281.4 rss=1303
+2024_hoist-benchmark	TIMEOUT-SOLVE	433614	-	exceeded 300s killed-in=search n=103 d=56 c=47 l=47 pbl=4 cpu=300.07s parse=0.0 compile=16.5 rss=3805
+2024_word-equations_word_equations_02_track_8-int	UNKNOWN-NOPROOF	3496748	-	n=1019 d=537 c=481 l=481 pbl=17 db=498 inc=none cpu=280.05s parse=0.3 compile=213.5 search=66.2 emit=2.0 propag=64.3 rss=1134
+2024_word-equations_word_equations_03_track_133-int	TIMEOUT-SOLVE	9345380	-	exceeded 300s no-stats rss=723
+2024_word-equations_word_equations_03_track_31-int	TIMEOUT-SOLVE	24453685	-	exceeded 300s no-stats rss=795
+2025_black-hole	TIMEOUT-SOLVE	2154270	-	exceeded 300s killed-in=search n=3 d=2 c=1 l=0 pbl=0 cpu=299.99s parse=0.2 compile=87.6 rss=1048
+2025_fbd1_FBD1	UNKNOWN-NOPROOF	7817	-	n=518 d=260 c=257 l=172 pbl=98 db=270 inc=46 cpu=284.09s parse=0.0 compile=0.1 search=283.9 emit=4.3 propag=279.6 rss=482
+2025_EchoSched_JSP0	TIMEOUT-SOLVE	607643	-	exceeded 300s killed-in=search n=152 d=147 c=5 l=4 pbl=0 cpu=299.98s parse=0.0 compile=52.2 rss=10579
+2025_carpet-cutting_cc_base	TIMEOUT-SOLVE	14373662	-	exceeded 300s no-stats rss=694
+2024_yumi-dynamic	TIMEOUT-SOLVE	186726098	-	exceeded 300s no-stats rss=5454
+2025_ihtc-2024-kletzander_model4_opt	TIMEOUT-SOLVE	51867173	-	exceeded 300s no-stats rss=11419
+2025_is_model	TIMEOUT-SOLVE	103496	-	exceeded 300s killed-in=search n=2 d=1 c=0 l=0 pbl=0 cpu=300.03s parse=0.0 compile=6.4 rss=5998
+2025_ihtc-2024-marte_model	TIMEOUT-SOLVE	33115763	-	exceeded 300s no-stats rss=11860
+2025_proteindesign12_wcsp	TIMEOUT-SOLVE	1235310	-	exceeded 300s killed-in=search n=1 d=0 c=0 l=0 pbl=0 cpu=300.06s parse=0.3 compile=4.0 rss=2124
+2025_skill-allocation_skill_allocation_only	UNKNOWN-NOPROOF	2359756	-	n=4380 d=2504 c=1875 l=1875 pbl=0 db=1875 inc=2 cpu=280.14s parse=0.2 compile=40.0 search=240.0 emit=0.8 propag=239.2 rss=1150
+2025_stripboard	TIMEOUT-SOLVE	267515	-	exceeded 300s killed-in=search n=2934 d=4217 c=2090 l=2086 pbl=5 cpu=300.07s parse=0.0 compile=0.7 rss=1309
+2025_tsptw	TIMEOUT-SOLVE	329727	-	exceeded 300s killed-in=search n=189 d=102 c=87 l=86 pbl=6 cpu=300.05s parse=0.0 compile=2.8 rss=705
+DONE-1790867510	331	436

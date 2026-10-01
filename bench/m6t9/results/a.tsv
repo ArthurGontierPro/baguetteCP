@@ -1,0 +1,332 @@
+2008_debruijn_binary	OK-PROOF-VERIFIED	8595	28552	s VERIFIED SATISFIABLE n=5 d=4 c=0 l=0 pbl=0 parse=0.0 compile=0.0 search=0.0 emit=0.0 propag=0.0 rss=6
+2009_roster_roster_model	OK-PROOF-VERIFIED	446	120	s VERIFIED UNSATISFIABLE n=1 d=0 c=1 l=0 pbl=0 parse=0.0 compile=0.0 search=0.0 emit=0.0 propag=0.0 rss=6
+2009_still_life	OK-PROOF-VERIFIED	38238	541494	s VERIFIED BOUNDS -16 <= obj <= -16 n=92 d=46 c=46 l=41 pbl=16 parse=0.0 compile=0.0 search=0.2 emit=0.0 propag=0.2 rss=10
+2009_rectangle-packing_rect_packing	OK-PROOF-VERIFIED	84223	39064	s VERIFIED SATISFIABLE n=17 d=11 c=5 l=5 pbl=1 parse=0.0 compile=0.0 search=0.2 emit=0.0 propag=0.2 rss=9
+2008_search_stress	OK-PROOF-VERIFIED	4186	8799890	s VERIFIED UNSATISFIABLE n=10367 d=5183 c=5184 l=0 pbl=0 parse=0.0 compile=0.0 search=0.9 emit=0.1 propag=0.7 rss=12
+2009_search_stress2	OK-PROOF-VERIFIED	3923	10023755	s VERIFIED UNSATISFIABLE n=10079 d=5039 c=5040 l=0 pbl=0 parse=0.0 compile=0.0 search=1.0 emit=0.1 propag=0.8 rss=15
+2008_slow_convergence	OK-PROOF-VERIFIED	111560	1260292	s VERIFIED SATISFIABLE n=103 d=102 c=0 l=0 pbl=0 parse=0.0 compile=1.6 search=0.1 emit=0.0 propag=0.1 rss=375
+2010_filters_filter	OK-PROOF-VERIFIED	76359	3756885	s VERIFIED BOUNDS 15 <= obj <= 15 n=1247 d=695 c=552 l=546 pbl=0 parse=0.0 compile=0.1 search=2.0 emit=0.1 propag=1.9 rss=55
+2012_filters_filter	OK-PROOF-VERIFIED	63615	7242662	s VERIFIED BOUNDS 18 <= obj <= 18 n=2675 d=1399 c=1276 l=1274 pbl=0 parse=0.0 compile=0.1 search=6.8 emit=0.1 propag=6.7 rss=63
+2008_nmseq	OK-PROOF-VERIFIED	139331	4906081	s VERIFIED SATISFIABLE n=127 d=64 c=62 l=62 pbl=0 parse=0.0 compile=0.2 search=11.3 emit=0.1 propag=11.2 rss=37
+2010_bacp_bacp-8	OK-PROOF-VERIFIED	373674	538515	s VERIFIED BOUNDS 30 <= obj <= 30 n=169 d=152 c=17 l=17 pbl=0 parse=0.0 compile=0.5 search=11.5 emit=0.0 propag=11.5 rss=34
+2010_grid_colouring_GridColoring	OK-PROOF-VERIFIED	102442	16799660	s VERIFIED BOUNDS 3 <= obj <= 3 n=3090 d=1673 c=1417 l=1407 pbl=0 parse=0.0 compile=0.0 search=14.0 emit=0.3 propag=13.7 rss=51
+2011_grid-colouring_GridColoring	OK-PROOF-VERIFIED	102442	16799660	s VERIFIED BOUNDS 3 <= obj <= 3 n=3090 d=1673 c=1417 l=1407 pbl=0 parse=0.0 compile=0.0 search=14.3 emit=0.3 propag=14.1 rss=51
+2010_bacp_bacp-12	OK-PROOF-VERIFIED	373790	406645	s VERIFIED BOUNDS 30 <= obj <= 30 n=57 d=51 c=6 l=6 pbl=0 parse=0.0 compile=0.5 search=15.1 emit=0.0 propag=15.1 rss=30
+2009_fillomino	OK-PROOF-VERIFIED	248321	8249246	s VERIFIED SATISFIABLE n=558 d=289 c=268 l=268 pbl=0 parse=0.0 compile=0.5 search=19.3 emit=0.1 propag=19.2 rss=54
+2011_fillomino	OK-PROOF-VERIFIED	247387	8249246	s VERIFIED SATISFIABLE n=558 d=289 c=268 l=268 pbl=0 parse=0.0 compile=0.5 search=20.5 emit=0.1 propag=20.4 rss=52
+2010_bacp_bacp-1	OK-PROOF-VERIFIED	373026	399139	s VERIFIED BOUNDS 28 <= obj <= 28 n=54 d=46 c=8 l=8 pbl=0 parse=0.0 compile=0.5 search=21.9 emit=0.0 propag=21.9 rss=30
+2012_amaze	OK-PROOF-VERIFIED	127764	33108736	s VERIFIED BOUNDS 481 <= obj <= 481 n=2567 d=1309 c=1258 l=1258 pbl=0 parse=0.0 compile=0.1 search=38.2 emit=0.3 propag=37.8 rss=64
+2010_bacp_bacp-2	OK-PROOF-VERIFIED	373302	751106	s VERIFIED BOUNDS 29 <= obj <= 29 n=81 d=51 c=29 l=29 pbl=0 parse=0.0 compile=0.5 search=48.5 emit=0.0 propag=48.5 rss=36
+2012_mspsp	OK-PROOF-VERIFIED	866876	2253463	s VERIFIED BOUNDS 15 <= obj <= 15 n=212 d=186 c=26 l=22 pbl=7 parse=0.2 compile=0.2 search=81.8 emit=0.0 propag=81.7 rss=103
+2011_bacp_bacp-9	OK-PROOF-VERIFIED	373428	1039252	s VERIFIED BOUNDS 38 <= obj <= 38 n=267 d=215 c=52 l=52 pbl=1 parse=0.0 compile=0.5 search=90.8 emit=0.0 propag=90.8 rss=37
+2012_tpp	OK-PROOF-VERIFIED	188386	38523542	s VERIFIED BOUNDS 190 <= obj <= 190 n=4843 d=4294 c=549 l=512 pbl=0 parse=0.0 compile=0.4 search=41.8 emit=0.6 propag=41.2 rss=63
+2011_roster_roster_model	OK-PROOF-VERIFIED	500256	1210377	s VERIFIED BOUNDS 18 <= obj <= 18 n=557 d=402 c=155 l=155 pbl=1 parse=0.0 compile=1.4 search=97.2 emit=0.0 propag=97.2 rss=64
+2013_filters_filter	OK-PROOF-VERIFIED	120750	1351011	s VERIFIED BOUNDS 10 <= obj <= 10 n=945 d=823 c=122 l=122 pbl=0 parse=0.0 compile=0.1 search=0.6 emit=0.0 propag=0.5 rss=46
+2009_open_stacks_open_stacks_01	OK-PROOF-VERIFIED	205692	45543868	s VERIFIED BOUNDS 9 <= obj <= 9 n=2211 d=1114 c=1097 l=489 pbl=0 parse=0.0 compile=0.0 search=102.7 emit=0.9 propag=101.9 rss=70
+2013_javarouting_empty	OK-PROOF-VERIFIED	343	104	s VERIFIED SATISFIABLE n=1 d=0 c=0 l=0 pbl=0 parse=0.0 compile=0.0 search=0.0 emit=0.0 propag=0.0 rss=6
+2010_bacp_bacp-11	OK-PROOF-VERIFIED	373179	748905	s VERIFIED BOUNDS 30 <= obj <= 30 n=139 d=95 c=44 l=44 pbl=1 parse=0.0 compile=0.5 search=123.4 emit=0.0 propag=123.4 rss=37
+2010_sugiyama_sugiyama2	OK-PROOF-VERIFIED	66595	63138739	s VERIFIED BOUNDS 2 <= obj <= 2 n=4049 d=2033 c=2016 l=1689 pbl=592 parse=0.0 compile=0.0 search=128.9 emit=1.1 propag=127.8 rss=109
+2010_bacp_bacp-6	OK-PROOF-VERIFIED	373269	936731	s VERIFIED BOUNDS 26 <= obj <= 26 n=176 d=119 c=57 l=57 pbl=1 parse=0.0 compile=0.5 search=139.6 emit=0.0 propag=139.6 rss=37
+2010_bacp_bacp-4	OK-PROOF-VERIFIED	374307	1469581	s VERIFIED BOUNDS 44 <= obj <= 44 n=310 d=245 c=65 l=65 pbl=0 parse=0.0 compile=0.5 search=179.6 emit=0.0 propag=179.5 rss=39
+2010_bacp_bacp-16	UNKNOWN-LIMIT	372807	2966280	n=312 d=161 c=150 l=150 pbl=1 db=151 inc=none cpu=280.06s parse=0.0 compile=0.5 search=279.5 emit=0.0 propag=279.5 rss=48
+2011_bacp_bacp-28	UNKNOWN-LIMIT	372204	808707	n=183 d=101 c=81 l=81 pbl=0 db=81 inc=none cpu=280.44s parse=0.0 compile=0.5 search=279.9 emit=0.0 propag=279.9 rss=45
+2010_bacp_bacp-10	UNKNOWN-LIMIT	372855	4673863	n=618 d=343 c=274 l=274 pbl=1 db=275 inc=none cpu=280.44s parse=0.0 compile=0.5 search=279.9 emit=0.1 propag=279.8 rss=51
+2011_solbat_sb	UNKNOWN-LIMIT	1387250	5708099	n=122 d=68 c=53 l=53 pbl=8 db=61 inc=none cpu=280.22s parse=0.1 compile=6.4 search=273.5 emit=0.1 propag=273.4 rss=138
+2010_bacp_bacp-23	UNKNOWN-LIMIT	372796	917513	n=150 d=79 c=70 l=70 pbl=0 db=70 inc=none cpu=280.98s parse=0.0 compile=0.5 search=280.4 emit=0.0 propag=280.4 rss=40
+2011_bacp_bacp-19	UNKNOWN-LIMIT	372852	1084780	n=159 d=83 c=75 l=75 pbl=0 db=75 inc=none cpu=281.04s parse=0.0 compile=0.5 search=280.5 emit=0.0 propag=280.5 rss=48
+2010_bacp_bacp-18	UNKNOWN-LIMIT	373525	1485573	n=195 d=103 c=91 l=91 pbl=0 db=91 inc=none cpu=281.11s parse=0.0 compile=0.5 search=280.6 emit=0.0 propag=280.5 rss=43
+2010_bacp_bacp-25	UNKNOWN-LIMIT	373628	1444970	n=250 d=132 c=117 l=117 pbl=0 db=117 inc=none cpu=281.69s parse=0.0 compile=0.5 search=281.1 emit=0.0 propag=281.1 rss=43
+2011_bacp_bacp-22	UNKNOWN-LIMIT	373106	973668	n=211 d=113 c=97 l=97 pbl=0 db=97 inc=none cpu=281.73s parse=0.0 compile=0.5 search=281.2 emit=0.0 propag=281.2 rss=46
+2011_bacp_bacp-24	UNKNOWN-LIMIT	373441	904539	n=192 d=104 c=87 l=87 pbl=0 db=87 inc=none cpu=282.13s parse=0.0 compile=0.5 search=281.6 emit=0.0 propag=281.5 rss=45
+2008_trucking	UNKNOWN-LIMIT	4440	48853011	n=1155 d=617 c=537 l=535 pbl=490 db=1025 inc=220 cpu=280.33s parse=0.0 compile=0.0 search=280.3 emit=0.1 propag=280.2 rss=367
+2010_bacp_bacp-27	UNKNOWN-LIMIT	372843	934381	n=200 d=107 c=92 l=92 pbl=0 db=92 inc=none cpu=282.55s parse=0.0 compile=0.5 search=282.0 emit=0.0 propag=282.0 rss=46
+2010_bacp_bacp-21	UNKNOWN-LIMIT	372369	2554215	n=295 d=154 c=140 l=140 pbl=0 db=140 inc=none cpu=282.92s parse=0.0 compile=0.5 search=282.4 emit=0.0 propag=282.3 rss=51
+2010_bacp_bacp-14	UNKNOWN-LIMIT	373153	1354400	n=231 d=120 c=110 l=110 pbl=0 db=110 inc=none cpu=283.57s parse=0.0 compile=0.5 search=283.0 emit=0.0 propag=283.0 rss=43
+2011_pattern-set-mining_pattern_set_mining	UNKNOWN-LIMIT	694822	7235289	n=460 d=235 c=224 l=224 pbl=0 db=224 inc=19 cpu=283.12s parse=0.1 compile=0.1 search=282.9 emit=0.1 propag=282.9 rss=73
+2012_amaze2	UNKNOWN-LIMIT	4016977	102	n=1 d=0 c=0 l=0 pbl=0 db=0 inc=none cpu=282.82s parse=0.3 compile=276.8 search=0.0 emit=0.0 propag=0.0 rss=1768
+2013_rubik_empty	OK-PROOF-VERIFIED	331	104	s VERIFIED SATISFIABLE n=1 d=0 c=0 l=0 pbl=0 parse=0.0 compile=0.0 search=0.0 emit=0.0 propag=0.0 rss=6
+2008_radiation	UNKNOWN-LIMIT	180624	10867748	n=212 d=110 c=101 l=101 pbl=94 db=195 inc=none cpu=284.19s parse=0.0 compile=0.2 search=283.8 emit=0.1 propag=283.8 rss=97
+2012_parity-learning	UNKNOWN-LIMIT	56567	56641634	n=6732 d=3371 c=3360 l=3360 pbl=454 db=3814 inc=none cpu=280.35s parse=0.0 compile=0.0 search=280.3 emit=0.8 propag=279.6 rss=132
+2009_black-hole	UNKNOWN-LIMIT	2158616	8290999	n=13 d=12 c=0 l=0 pbl=0 db=0 inc=none cpu=288.22s parse=0.2 compile=73.0 search=211.6 emit=0.0 propag=211.6 rss=974
+2010_costas_array_CostasArray	UNKNOWN-LIMIT	34306	135941679	n=1117 d=561 c=555 l=461 pbl=105 db=566 inc=none cpu=280.06s parse=0.0 compile=0.0 search=279.9 emit=2.9 propag=277.0 rss=151
+2008_shortest_path	UNKNOWN-LIMIT	25632	6032519	n=131 d=113 c=17 l=13 pbl=8 db=21 inc=188 cpu=289.84s parse=0.0 compile=0.0 search=289.8 emit=0.0 propag=289.8 rss=115
+2011_costas-array_CostasArray	UNKNOWN-LIMIT	40379	120904580	n=743 d=374 c=368 l=291 pbl=66 db=357 inc=none cpu=281.07s parse=0.0 compile=0.1 search=280.8 emit=2.4 propag=278.4 rss=163
+2012_pattern-set-mining-k2_pattern_set_mining_k2	UNKNOWN-LIMIT	1238521	5197326	n=243 d=123 c=119 l=114 pbl=0 db=114 inc=38 cpu=283.18s parse=0.1 compile=0.1 search=283.0 emit=0.0 propag=282.9 rss=67
+2013_rubik_4-cube	OK-PROOF-VERIFIED	1120121	20374082	s VERIFIED SATISFIABLE n=1369 d=704 c=664 l=663 pbl=0 parse=0.1 compile=0.1 search=12.4 emit=0.3 propag=12.1 rss=100
+2012_project-planning_ProjectPlannertest_14_8	UNKNOWN-LIMIT	1123861	2988372	n=171 d=113 c=57 l=53 pbl=0 db=53 inc=83 cpu=280.80s parse=0.1 compile=6.7 search=273.8 emit=0.0 propag=273.7 rss=199
+2011_open-stacks_open_stacks_01	UNKNOWN-LIMIT	218650	175201048	n=4074 d=2056 c=2017 l=7 pbl=0 db=7 inc=8 cpu=280.07s parse=0.0 compile=0.1 search=279.9 emit=4.1 propag=275.8 rss=186
+2012_project-planning_ProjectPlannertest_12_8	UNKNOWN-LIMIT	781315	8598501	n=665 d=386 c=278 l=211 pbl=0 db=211 inc=63 cpu=284.93s parse=0.1 compile=3.9 search=280.8 emit=0.2 propag=280.6 rss=156
+2009_vrp	TIMEOUT-SOLVE	76531	-	exceeded 300s no-stats rss=150
+2011_depot-placement_depot_placement	TIMEOUT-SOLVE	35888	-	exceeded 300s no-stats rss=87
+2011_prize-collecting_pc	TIMEOUT-SOLVE	541038	-	exceeded 300s no-stats rss=513
+2011_table-layout_TableLayout	TIMEOUT-SOLVE	132698	-	exceeded 300s no-stats rss=136
+2011_vrp	TIMEOUT-SOLVE	224828	-	exceeded 300s no-stats rss=780
+2008_pentominoes-int	TIMEOUT-SOLVE	35715	-	exceeded 300s no-stats rss=487
+2010_solbat_sb	TIMEOUT-SOLVE	1387248	-	exceeded 300s no-stats rss=173
+2011_cyclic-rcpsp_rcmsp	TIMEOUT-SOLVE	529853	-	exceeded 300s no-stats rss=546
+2011_black-hole	TIMEOUT-SOLVE	2154261	-	exceeded 300s no-stats rss=1082
+2011_fast-food_fastfood	TIMEOUT-SOLVE	555012	-	exceeded 300s no-stats rss=4416
+2011_pentominoes_pentominoes-int	TIMEOUT-SOLVE	299568	-	exceeded 300s no-stats rss=2583
+2012_league	TIMEOUT-SOLVE	81186	-	exceeded 300s no-stats rss=298
+2009_nonogram_non	TIMEOUT-SOLVE	1893348	-	exceeded 300s no-stats rss=556
+2011_nonogram_non	TIMEOUT-SOLVE	1837453	-	exceeded 300s no-stats rss=532
+2010_rcpsp_max	TIMEOUT-SOLVE	2780906	-	exceeded 300s no-stats rss=1031
+2012_fast-food_fastfood	TIMEOUT-SOLVE	253218	-	exceeded 300s no-stats rss=2447
+2011_wwtpp-real_wwtpp	TIMEOUT-SOLVE	292221	-	exceeded 300s no-stats rss=9426
+2012_pattern-set-mining-k1_pattern_set_mining_k1	UNKNOWN-LIMIT	3020891	51934903	n=217 d=109 c=107 l=104 pbl=0 db=104 inc=11 cpu=280.90s parse=0.3 compile=0.6 search=279.8 emit=0.1 propag=279.7 rss=304
+2012_nonogram_non	TIMEOUT-SOLVE	1849387	-	exceeded 300s no-stats rss=547
+2014_stochastic-fjsp_fjsp-a1-s4_fjsp-t8-j2-m3-a1_det	OK-PROOF-VERIFIED	73262	1531882	s VERIFIED BOUNDS 242 <= obj <= 242 n=178 d=126 c=52 l=30 pbl=0 parse=0.0 compile=0.2 search=2.9 emit=0.0 propag=2.9 rss=55
+2012_solbat_sb	UNKNOWN-LIMIT	1387249	2446117	n=66 d=45 c=20 l=20 pbl=5 db=25 inc=none cpu=283.32s parse=0.1 compile=6.5 search=276.6 emit=0.0 propag=276.6 rss=123
+2012_project-planning_ProjectPlannertest_13_8	UNKNOWN-LIMIT	896917	14928333	n=1344 d=806 c=537 l=277 pbl=0 db=277 inc=71 cpu=284.33s parse=0.1 compile=5.0 search=279.0 emit=0.3 propag=278.8 rss=196
+2014_stochastic-fjsp_fjsp-a1-s5_fjsp-t8-j2-m3-a1_det	OK-PROOF-VERIFIED	87098	4306437	s VERIFIED BOUNDS 328 <= obj <= 328 n=416 d=328 c=88 l=56 pbl=1 parse=0.0 compile=0.2 search=5.5 emit=0.0 propag=5.5 rss=84
+2012_radiation	UNKNOWN-LIMIT	509952	2391467	n=44 d=26 c=17 l=17 pbl=17 db=34 inc=none cpu=284.50s parse=0.0 compile=1.0 search=282.8 emit=0.0 propag=282.8 rss=187
+2015_grid-colouring_GridColoring	OK-PROOF-VERIFIED	120103	10323094	s VERIFIED BOUNDS 3 <= obj <= 3 n=2350 d=1394 c=956 l=944 pbl=0 parse=0.0 compile=0.0 search=7.6 emit=0.2 propag=7.4 rss=39
+2012_project-planning_ProjectPlannertest_13_6	TIMEOUT-SOLVE	896462	-	exceeded 300s no-stats rss=166
+2012_carpet-cutting_cc_base	TIMEOUT-SOLVE	70865015	-	exceeded 300s no-stats rss=2182
+2011_carpet-cutting_cc_base	TIMEOUT-SOLVE	75225648	-	exceeded 300s no-stats rss=2288
+2012_project-planning_ProjectPlannertest_16_7	TIMEOUT-SOLVE	1542360	-	exceeded 300s no-stats rss=217
+2008_rcpsp	UNKNOWN-LIMIT	3635420	17317240	n=215 d=144 c=70 l=66 pbl=1 db=67 inc=53 cpu=293.07s parse=0.2 compile=3.1 search=285.5 emit=0.3 propag=285.2 rss=1127
+2014_stochastic-fjsp_fjsp-a1-s6_fjsp-t8-j2-m3-a1_det	OK-PROOF-VERIFIED	99867	6970957	s VERIFIED BOUNDS 348 <= obj <= 348 n=566 d=434 c=132 l=82 pbl=2 parse=0.0 compile=0.2 search=21.3 emit=0.0 propag=21.3 rss=103
+2012_project-planning_ProjectPlannertest_17_9	TIMEOUT-SOLVE	1776835	-	exceeded 300s no-stats rss=258
+2012_still-life-wastage_still-life	UNKNOWN-LIMIT	373113	52187618	n=818 d=549 c=268 l=262 pbl=26 db=288 inc=42 cpu=281.70s parse=0.0 compile=0.2 search=281.5 emit=0.2 propag=281.3 rss=82
+2013_rubik_5-cube	OK-PROOF-VERIFIED	1496592	82021736	s VERIFIED SATISFIABLE n=4696 d=2441 c=2254 l=2254 pbl=0 parse=0.1 compile=0.1 search=94.3 emit=1.2 propag=93.0 rss=207
+2012_vrp	TIMEOUT-SOLVE	84658	-	exceeded 300s no-stats rss=162
+2013_black-hole	TIMEOUT-SOLVE	2154262	-	exceeded 300s no-stats rss=956
+2013_celar	TIMEOUT-SOLVE	260436	-	exceeded 300s no-stats rss=3097
+2013_fjsp	TIMEOUT-SOLVE	6327014	-	exceeded 300s no-stats rss=2382
+2016_filters_filter	OK-PROOF-VERIFIED	76359	3758722	s VERIFIED BOUNDS 15 <= obj <= 15 n=1262 d=710 c=552 l=546 pbl=0 parse=0.0 compile=0.1 search=2.0 emit=0.1 propag=1.9 rss=54
+2013_javarouting_trip_6_3	TIMEOUT-SOLVE	344158	-	exceeded 300s no-stats rss=150
+2013_javarouting_trip_7_1	TIMEOUT-SOLVE	481981	-	exceeded 300s no-stats rss=228
+2013_javarouting_trip_7_2	TIMEOUT-SOLVE	468626	-	exceeded 300s no-stats rss=220
+2016_java-auto-gen_plusexample_6	OK-PROOF-VERIFIED	23040	5062367	s VERIFIED BOUNDS -43 <= obj <= -43 n=284 d=169 c=115 l=103 pbl=34 parse=0.0 compile=0.0 search=11.9 emit=0.0 propag=11.9 rss=24
+2013_javarouting_trip_8_1	TIMEOUT-SOLVE	630178	-	exceeded 300s no-stats rss=322
+2013_javarouting_trip_8_5	UNKNOWN-LIMIT	630135	7647245	n=31 d=22 c=8 l=8 pbl=0 db=8 inc=none cpu=298.77s parse=0.1 compile=3.2 search=294.4 emit=0.1 propag=294.3 rss=337
+2015_roster_roster_model	OK-PROOF-VERIFIED	193137	43910617	s VERIFIED BOUNDS 0 <= obj <= 0 n=5283 d=3249 c=2033 l=2008 pbl=0 parse=0.0 compile=0.2 search=155.7 emit=0.5 propag=155.2 rss=105
+2016_nfc	OK-PROOF-VERIFIED	5938	31421323	s VERIFIED BOUNDS 848 <= obj <= 848 n=129 d=66 c=63 l=12 pbl=8 parse=0.0 compile=0.0 search=13.7 emit=0.0 propag=13.7 rss=101
+2013_radiation	UNKNOWN-LIMIT	235643	6395554	n=137 d=70 c=66 l=66 pbl=65 db=131 inc=none cpu=282.45s parse=0.0 compile=0.3 search=281.8 emit=0.1 propag=281.7 rss=133
+2013_nonogram_non	UNKNOWN-LIMIT	118424	60545048	n=1410 d=708 c=701 l=250 pbl=47 db=297 inc=none cpu=280.29s parse=0.0 compile=0.0 search=280.2 emit=2.0 propag=278.1 rss=111
+2013_pattern-set-mining_pattern_set_mining	UNKNOWN-LIMIT	1800154	11523862	n=35 d=18 c=16 l=16 pbl=0 db=16 inc=0 cpu=284.98s parse=0.1 compile=0.4 search=284.3 emit=0.0 propag=284.2 rss=270
+2014_amaze_amaze3	UNKNOWN-LIMIT	213064	58519757	n=6717 d=3633 c=3083 l=3083 pbl=1 db=3084 inc=none cpu=280.23s parse=0.0 compile=0.4 search=279.8 emit=0.8 propag=279.0 rss=168
+2013_rubik_8-cube	UNKNOWN-LIMIT	2627573	137691185	n=6524 d=3412 c=3111 l=3111 pbl=0 db=3111 inc=none cpu=280.25s parse=0.2 compile=0.2 search=279.7 emit=1.9 propag=277.8 rss=371
+2013_rubik_7-cube	UNKNOWN-LIMIT	2250405	130382761	n=7048 d=3701 c=3346 l=3346 pbl=0 db=3346 inc=none cpu=280.33s parse=0.2 compile=0.2 search=279.9 emit=1.7 propag=278.2 rss=365
+2013_rubik_6-cube	UNKNOWN-LIMIT	1873405	146663056	n=8301 d=4311 c=3989 l=3987 pbl=0 db=3987 inc=none cpu=280.48s parse=0.1 compile=0.2 search=280.1 emit=2.0 propag=278.1 rss=326
+2014_mqueens_mqueens2	UNKNOWN-LIMIT	946140	53885282	n=2097 d=1051 c=1045 l=1044 pbl=1 db=1045 inc=8 cpu=280.07s parse=0.1 compile=0.1 search=279.9 emit=0.9 propag=278.9 rss=160
+2013_mario	TIMEOUT-SOLVE	160733	-	exceeded 300s no-stats rss=159
+2013_nmseq	TIMEOUT-SOLVE	3455743	-	exceeded 300s no-stats rss=2954
+2013_pentominoes-int	TIMEOUT-SOLVE	299564	-	exceeded 300s no-stats rss=2570
+2015_gfd-schedule	UNKNOWN-LIMIT	1307681	1553228	n=97 d=66 c=30 l=30 pbl=0 db=30 inc=none cpu=280.23s parse=0.1 compile=7.4 search=272.2 emit=0.0 propag=272.2 rss=210
+2014_traveling-tppv_ttppv	PROOF-REJECTED	319864	11907530	 The constraint is not implied by reverse unit propagation (RUP) from core and derived database. Rerun with the option '--trace-failed' to see the propagations.
+2013_proteindesign12_wcsp	TIMEOUT-SOLVE	1285114	-	exceeded 300s no-stats rss=4123
+2014_stochastic-vrp_vrp-s2-v2-c7_vrp-v2-c7_det	UNKNOWN-LIMIT	355385	13070317	n=332 d=174 c=157 l=152 pbl=0 db=152 inc=none cpu=280.70s parse=0.0 compile=1.7 search=278.7 emit=0.3 propag=278.4 rss=127
+2014_spot5	PROOF-REJECTED	120501	19250054	 The constraint is not implied by reverse unit propagation (RUP) from core and derived database. Rerun with the option '--trace-failed' to see the propagations.
+2013_vrp	TIMEOUT-SOLVE	53000	-	exceeded 300s no-stats rss=82
+2014_rectangle-packing_rect_packing	UNKNOWN-LIMIT	2428774	1857133	n=46 d=24 c=21 l=21 pbl=0 db=21 inc=none cpu=285.53s parse=0.2 compile=1.6 search=281.6 emit=0.0 propag=281.6 rss=412
+2014_cyclic-rcpsp_rcmsp	TIMEOUT-SOLVE	490390	-	exceeded 300s no-stats rss=535
+2014_stochastic-vrp_vrp-s3-v2-c7_vrp-v2-c7_det	UNKNOWN-LIMIT	534238	10374797	n=252 d=134 c=117 l=113 pbl=0 db=113 inc=none cpu=283.87s parse=0.0 compile=3.9 search=279.6 emit=0.3 propag=279.3 rss=175
+2014_stochastic-vrp_vrp-s3-v2-c6_vrp-v2-c6_det	UNKNOWN-LIMIT	427701	10401483	n=364 d=191 c=172 l=167 pbl=0 db=167 inc=none cpu=284.77s parse=0.0 compile=2.4 search=282.0 emit=0.2 propag=281.8 rss=130
+2014_stochastic-vrp_vrp-s4-v2-c6_vrp-v2-c6_det	UNKNOWN-LIMIT	571212	7966994	n=278 d=145 c=132 l=129 pbl=0 db=129 inc=none cpu=285.83s parse=0.0 compile=4.7 search=280.7 emit=0.2 propag=280.5 rss=163
+2014_jp-encoding	TIMEOUT-SOLVE	1417697	-	exceeded 300s no-stats rss=1022
+2014_mario	TIMEOUT-SOLVE	160770	-	exceeded 300s no-stats rss=153
+2015_opd	UNKNOWN-LIMIT	9481242	50454987	n=4184 d=4179 c=4 l=4 pbl=0 db=4 inc=97 cpu=280.03s parse=29.5 compile=1.1 search=248.6 emit=0.4 propag=248.2 rss=1289
+2015_costas-array_CostasArray	UNKNOWN-LIMIT	46974	108219109	n=519 d=262 c=256 l=212 pbl=38 db=250 inc=none cpu=280.81s parse=0.0 compile=0.1 search=280.5 emit=2.0 propag=278.5 rss=186
+2015_project-planning_ProjectPlannertest_12_7	UNKNOWN-LIMIT	782223	11654765	n=1012 d=547 c=464 l=176 pbl=0 db=176 inc=63 cpu=282.18s parse=0.1 compile=3.9 search=278.0 emit=0.2 propag=277.8 rss=156
+2015_cvrp	UNKNOWN-LIMIT	443084	61518238	n=381 d=210 c=170 l=168 pbl=0 db=168 inc=43 cpu=283.95s parse=0.0 compile=3.1 search=280.4 emit=1.5 propag=278.9 rss=270
+2014_stochastic-fjsp_fjsp-a1-s2_fjsp-t15-j3-m3-a1_det	UNKNOWN-LIMIT	199546	10810314	n=1188 d=726 c=461 l=442 pbl=7 db=449 inc=198 cpu=289.49s parse=0.0 compile=0.3 search=288.8 emit=0.1 propag=288.7 rss=132
+2014_stochastic-vrp_vrp-s5-v2-c8_vrp-v2-c8_det	UNKNOWN-LIMIT	1092440	5236431	n=83 d=50 c=32 l=32 pbl=0 db=32 inc=none cpu=293.76s parse=0.1 compile=15.5 search=277.2 emit=0.1 propag=277.1 rss=280
+2014_stochastic-fjsp_fjsp-a1-s3_fjsp-t20-j4-m3-a1_det	UNKNOWN-LIMIT	492686	8677983	n=2059 d=1087 c=971 l=970 pbl=0 db=970 inc=452 cpu=286.77s parse=0.0 compile=0.9 search=284.8 emit=0.1 propag=284.7 rss=327
+2014_solbat_sb	TIMEOUT-SOLVE	1648110	-	exceeded 300s no-stats rss=126
+2014_ship-schedule_ship-schedule.cp	TIMEOUT-SOLVE	533356	-	exceeded 300s no-stats rss=11105
+2015_radiation	UNKNOWN-LIMIT	374092	3186944	n=70 d=38 c=31 l=31 pbl=31 db=62 inc=none cpu=282.41s parse=0.0 compile=0.7 search=281.2 emit=0.0 propag=281.2 rss=150
+2015_is_model	TIMEOUT-SOLVE	189272	-	exceeded 300s no-stats rss=8812
+2015_spot5	PROOF-REJECTED	77974	33365899	 The constraint is not implied by reverse unit propagation (RUP) from core and derived database. Rerun with the option '--trace-failed' to see the propagations.
+2015_freepizza	UNKNOWN-LIMIT	111882	93739248	n=9832 d=4931 c=4900 l=4894 pbl=0 db=4894 inc=210 cpu=280.76s parse=0.0 compile=0.1 search=280.6 emit=1.6 propag=279.0 rss=228
+2015_nmseq	TIMEOUT-SOLVE	2418780	-	exceeded 300s no-stats rss=1829
+2015_project-planning_ProjectPlannertest_14_7	UNKNOWN-LIMIT	1123885	2241517	n=132 d=93 c=38 l=34 pbl=0 db=34 inc=83 cpu=293.11s parse=0.1 compile=6.7 search=286.0 emit=0.0 propag=285.9 rss=178
+2015_open_stacks_open_stacks_01	UNKNOWN-LIMIT	221045	192417363	n=3769 d=1915 c=1853 l=153 pbl=0 db=153 inc=5 cpu=280.10s parse=0.0 compile=0.0 search=280.0 emit=4.4 propag=275.5 rss=170
+2014_smelt	TIMEOUT-SOLVE	14625957	-	exceeded 300s no-stats rss=11013
+2015_p1f	TIMEOUT-SOLVE	5290506	-	exceeded 300s no-stats rss=699
+2014_fillomino	UNKNOWN-LIMIT	416842	141275263	n=7118 d=3569 c=3548 l=3547 pbl=0 db=3547 inc=none cpu=280.86s parse=0.0 compile=1.6 search=279.1 emit=2.0 propag=277.1 rss=286
+2015_project-planning_ProjectPlannertest_15_6	UNKNOWN-LIMIT	1329440	61335170	n=2985 d=1826 c=1158 l=1118 pbl=0 db=1118 inc=76 cpu=280.04s parse=0.1 compile=9.8 search=269.8 emit=1.2 propag=268.5 rss=330
+2015_project-planning_ProjectPlannertest_16_6	TIMEOUT-SOLVE	1542300	-	exceeded 300s no-stats rss=217
+2015_project-planning_ProjectPlannertest_16_8	TIMEOUT-SOLVE	1545613	-	exceeded 300s no-stats rss=213
+2014_multi-knapsack_mknapsack	UNKNOWN-LIMIT	8203	42746396	n=7639 d=3898 c=3740 l=3740 pbl=3724 db=7464 inc=none cpu=281.80s parse=0.0 compile=0.0 search=281.8 emit=0.3 propag=281.5 rss=367
+2015_triangular	UNKNOWN-LIMIT	53331	52291144	n=6088 d=3058 c=3029 l=3027 pbl=2784 db=5811 inc=19 cpu=281.02s parse=0.0 compile=0.0 search=281.0 emit=0.3 propag=280.7 rss=363
+2015_tdtsp	TIMEOUT-SOLVE	344621	-	exceeded 300s no-stats rss=11229
+2013_rcpsp	UNKNOWN-LIMIT	3116962	7211556	n=181 d=98 c=82 l=81 pbl=0 db=81 inc=78 cpu=284.02s parse=0.2 compile=3.9 search=274.9 emit=0.1 propag=274.8 rss=1091
+2016_diameterc-mst_dcmst	UNKNOWN-LIMIT	365825	10200568	n=734 d=373 c=360 l=360 pbl=0 db=360 inc=none cpu=280.45s parse=0.0 compile=0.9 search=279.4 emit=0.1 propag=279.3 rss=75
+2016_celar	TIMEOUT-SOLVE	155440	-	exceeded 300s no-stats rss=2148
+2016_depot-placement_depot_placement	TIMEOUT-SOLVE	36022	-	exceeded 300s no-stats rss=87
+2016_java-auto-gen_binpack_11	UNKNOWN-LIMIT	558607	35207883	n=865 d=441 c=423 l=423 pbl=0 db=423 inc=3 cpu=280.33s parse=0.0 compile=1.8 search=278.2 emit=0.6 propag=277.6 rss=175
+2016_gfd-schedule_gfd-schedule2	TIMEOUT-SOLVE	2491219	-	exceeded 300s no-stats rss=215
+2016_java-auto-gen_pizza_8_3	TIMEOUT-SOLVE	810023	-	exceeded 300s no-stats rss=174
+2016_java-auto-gen_projplan1_15_15	UNKNOWN-LIMIT	268862	2371261	n=279 d=164 c=114 l=114 pbl=0 db=114 inc=5 cpu=281.76s parse=0.0 compile=0.5 search=281.1 emit=0.0 propag=281.0 rss=84
+2015_multi-knapsack_mknapsack_global	UNKNOWN-LIMIT	10065	18013851	n=1174 d=602 c=571 l=571 pbl=555 db=1126 inc=none cpu=280.41s parse=0.0 compile=0.1 search=280.1 emit=0.1 propag=280.1 rss=269
+2016_java-auto-gen_routing_7	TIMEOUT-SOLVE	2015183	-	exceeded 300s no-stats rss=1611
+2016_maximum-dag	TIMEOUT-SOLVE	68253	-	exceeded 300s no-stats rss=63
+2016_mrcpsp	TIMEOUT-SOLVE	11369069	-	exceeded 300s no-stats rss=2582
+2016_prize-collecting_pc	UNKNOWN-LIMIT	671335	10280544	n=30 d=20 c=9 l=9 pbl=0 db=9 inc=none cpu=298.11s parse=0.0 compile=5.2 search=292.2 emit=0.1 propag=292.1 rss=635
+2016_solbat_sb	UNKNOWN-LIMIT	1648110	12446960	n=242 d=128 c=113 l=113 pbl=12 db=125 inc=none cpu=280.50s parse=0.1 compile=10.1 search=270.1 emit=0.2 propag=269.9 rss=184
+2017_community-detection	UNKNOWN-LIMIT	187546	2114164	n=206 d=118 c=87 l=87 pbl=0 db=87 inc=none cpu=282.49s parse=0.0 compile=0.3 search=282.2 emit=0.0 propag=282.1 rss=39
+2017_traveling-tppv_ttppv	PROOF-REJECTED	320089	8047268	 The constraint is not implied by reverse unit propagation (RUP) from core and derived database. Rerun with the option '--trace-failed' to see the propagations.
+2016_rcpsp-wet	TIMEOUT-SOLVE	1387103	-	exceeded 300s no-stats rss=177
+2017_opd	UNKNOWN-LIMIT	17354525	103	n=1 d=0 c=0 l=0 pbl=0 db=0 inc=none cpu=282.55s parse=278.3 compile=2.5 search=0.0 emit=0.0 propag=0.0 rss=562
+2016_zephyrus	TIMEOUT-SOLVE	794854	-	exceeded 300s no-stats rss=5959
+2016_tpp	UNKNOWN-LIMIT	355238	238653413	n=14703 d=14114 c=588 l=558 pbl=0 db=558 inc=187 cpu=282.11s parse=0.0 compile=1.5 search=280.4 emit=5.9 propag=274.4 rss=175
+2017_hrc	UNKNOWN-LIMIT	507461	118045488	n=3182 d=1713 c=1468 l=1462 pbl=0 db=1462 inc=none cpu=280.04s parse=0.0 compile=0.5 search=279.5 emit=1.8 propag=277.7 rss=196
+2017_crosswords_crossword_opt	TIMEOUT-SOLVE	1040743	-	exceeded 300s n=2 d=1 c=0 l=0 pbl=0 db=0 inc=none cpu=299.78s parse=0.4 compile=27.4 search=163.1 emit=0.0 propag=163.1 rss=11003
+2017_groupsplitter_group	TIMEOUT-SOLVE	5247565	-	exceeded 300s no-stats rss=4307
+2018_neighbours_neighbours-rect	UNKNOWN-LIMIT	153091	93230313	n=8986 d=4573 c=4412 l=4410 pbl=7 db=4417 inc=63 cpu=280.52s parse=0.0 compile=0.0 search=280.5 emit=1.1 propag=279.3 rss=185
+2017_jp-encoding	TIMEOUT-SOLVE	1868073	-	exceeded 300s no-stats rss=1655
+2017_mario	TIMEOUT-SOLVE	515630	-	exceeded 300s no-stats rss=454
+2018_rotating-workforce	UNKNOWN-LIMIT	599907	33238591	n=21 d=20 c=0 l=0 pbl=0 db=0 inc=none cpu=282.00s parse=0.1 compile=28.9 search=227.4 emit=0.0 propag=227.4 rss=5841
+2017_opt-cryptanalysis_mznc2017_aes_opt	TIMEOUT-SOLVE	134267	-	exceeded 300s no-stats rss=174
+2017_rcpsp-wet	TIMEOUT-SOLVE	1235978	-	exceeded 300s no-stats rss=228
+2018_soccer-computational_ecp	UNKNOWN-LIMIT	660855	671921	n=242 d=238 c=3 l=3 pbl=0 db=3 inc=none cpu=286.66s parse=0.0 compile=1.1 search=284.9 emit=0.0 propag=284.9 rss=184
+2017_steelmillslab	TIMEOUT-SOLVE	5678643	-	exceeded 300s no-stats rss=2459
+2017_rel2onto	TIMEOUT-SOLVE	6161286	-	exceeded 300s no-stats rss=6098
+2018_concert-hall-cap	TIMEOUT-SOLVE	207365	-	exceeded 300s no-stats rss=239
+2017_tdtsp	TIMEOUT-SOLVE	346217	-	exceeded 300s no-stats rss=11203
+2018_cargo_cargo_coarsePiles	TIMEOUT-SOLVE	1489193	-	exceeded 300s no-stats rss=19672
+2019_fox-geese-corn_foxgeesecorn	UNKNOWN-LIMIT	500221	30189600	n=3536 d=2523 c=1012 l=922 pbl=36 db=958 inc=24 cpu=280.79s parse=0.0 compile=1.0 search=279.7 emit=0.4 propag=279.2 rss=113
+2019_amaze_amaze3	UNKNOWN-LIMIT	230844	66653155	n=9409 d=5019 c=4389 l=4389 pbl=1 db=4390 inc=none cpu=280.51s parse=0.0 compile=0.4 search=280.0 emit=1.2 propag=278.8 rss=177
+2018_gfd-schedule_gfd-schedule2	TIMEOUT-SOLVE	7782739	-	exceeded 300s no-stats rss=1312
+2017_tc-graph-color_tcgc2	UNKNOWN-LIMIT	248976	151969396	n=17197 d=8620 c=8576 l=5089 pbl=0 db=5089 inc=none cpu=280.74s parse=0.0 compile=0.7 search=280.0 emit=1.7 propag=278.2 rss=229
+2018_mapping	TIMEOUT-SOLVE	161507	-	exceeded 300s no-stats rss=6600
+2018_opt-cryptanalysis_mznc2017_aes_opt	TIMEOUT-SOLVE	159501	-	exceeded 300s no-stats rss=216
+2018_proteindesign12_wcsp	TIMEOUT-SOLVE	1279983	-	exceeded 300s no-stats rss=1860
+2021_opt-cryptoanalysis_mznc2017_aes_opt	OK-PROOF-VERIFIED	33966	1128349	s VERIFIED BOUNDS 2 <= obj <= 2 n=129 d=65 c=64 l=1 pbl=0 parse=0.0 compile=0.0 search=3.7 emit=0.0 propag=3.6 rss=24
+2018_racp	UNKNOWN-LIMIT	1424308	20095960	n=757 d=407 c=349 l=349 pbl=3 db=352 inc=none cpu=282.59s parse=0.1 compile=0.5 search=281.3 emit=0.4 propag=280.9 rss=261
+2021_pentominoes-zayenz_pentominoes	OK-PROOF-VERIFIED	203502	17591617	s VERIFIED SATISFIABLE n=21 d=20 c=0 l=0 pbl=0 parse=0.0 compile=0.2 search=2.7 emit=0.0 propag=2.7 rss=145
+2019_kidney-exchange_ccmcp	UNKNOWN-LIMIT	239515	55748893	n=1715 d=1365 c=660 l=658 pbl=1 db=659 inc=none cpu=280.17s parse=0.0 compile=0.7 search=279.3 emit=1.2 propag=278.1 rss=138
+2018_team-assignment_model	TIMEOUT-SOLVE	110397	-	exceeded 300s no-stats rss=1193
+2019_hrc	UNKNOWN-LIMIT	547491	106251432	n=3257 d=1962 c=1294 l=1294 pbl=0 db=1294 inc=none cpu=280.07s parse=0.0 compile=0.5 search=279.5 emit=1.7 propag=277.8 rss=185
+2017_ma-path-finding_mapf	TIMEOUT-SOLVE	79039349	-	exceeded 300s no-stats rss=3088
+2018_vrplc_vrplc_service	TIMEOUT-SOLVE	1215675	-	exceeded 300s no-stats rss=916
+2019_stack-cuttingstock_stack-cutstock-cumu	UNKNOWN-LIMIT	68309	4901079	n=116 d=71 c=44 l=41 pbl=4 db=45 inc=17 cpu=285.73s parse=0.0 compile=1.3 search=283.0 emit=0.0 propag=283.0 rss=500
+2019_accap	UNKNOWN-LIMIT	80940	128961477	n=5905 d=3169 c=2735 l=2727 pbl=39 db=2766 inc=120 cpu=280.15s parse=0.0 compile=0.1 search=279.9 emit=0.7 propag=279.2 rss=160
+2019_liner-sf-repositioning_fm3_0	TIMEOUT-SOLVE	65100	-	exceeded 300s no-stats rss=13400
+2022_nfc	OK-PROOF-VERIFIED	5946	3807905	s VERIFIED BOUNDS 784 <= obj <= 784 n=103 d=65 c=38 l=15 pbl=6 parse=0.0 compile=0.0 search=2.0 emit=0.0 propag=2.0 rss=34
+2019_steelmillslab	UNKNOWN-LIMIT	5678629	2263104	n=17 d=14 c=2 l=2 pbl=0 db=2 inc=none cpu=283.04s parse=0.4 compile=269.8 search=5.1 emit=0.0 propag=5.0 rss=2290
+2019_groupsplitter_group	TIMEOUT-SOLVE	6235881	-	exceeded 300s no-stats rss=5738
+2019_ptv_pax_model	TIMEOUT-SOLVE	456840	-	exceeded 300s no-stats rss=216
+2018_seat-moving	UNKNOWN-LIMIT	1201646	143205650	n=2269 d=1161 c=1107 l=1087 pbl=0 db=1087 inc=736 cpu=285.36s parse=0.1 compile=17.6 search=267.2 emit=1.3 propag=265.9 rss=376
+2019_stochastic-vrp_vrp-s2-v2-c8_vrp-v2-c8_det	UNKNOWN-LIMIT	434534	13413002	n=211 d=118 c=92 l=90 pbl=0 db=90 inc=348 cpu=286.75s parse=0.0 compile=2.5 search=283.9 emit=0.3 propag=283.6 rss=159
+2021_neighbours_neighbours-rect	OK-PROOF-VERIFIED	103193	28843132	s VERIFIED BOUNDS -39 <= obj <= -39 n=3753 d=1894 c=1859 l=1857 pbl=7 parse=0.0 compile=0.0 search=23.0 emit=0.4 propag=22.7 rss=58
+2019_code-generator_unison	TIMEOUT-SOLVE	55339461	-	exceeded 300s no-stats rss=1458
+2019_rotating-workforce	TIMEOUT-SOLVE	374534	-	exceeded 300s no-stats rss=1464
+2019_rcpsp-wet-diverse	TIMEOUT-SOLVE	10021252	-	exceeded 300s no-stats rss=945
+2019_nside_full	TIMEOUT-SOLVE	29429400	-	exceeded 300s no-stats rss=804
+2021_steiner-systems	OK-PROOF-VERIFIED	858594	665056	s VERIFIED SATISFIABLE n=65 d=50 c=14 l=14 pbl=0 parse=0.1 compile=0.3 search=23.0 emit=0.0 propag=23.0 rss=52
+2019_median-string_median_string_dp	UNKNOWN-LIMIT	919754	35615349	n=1426 d=723 c=702 l=702 pbl=0 db=702 inc=12 cpu=294.14s parse=0.1 compile=5.4 search=288.2 emit=0.6 propag=287.7 rss=268
+2020_radiation	OK-PROOF-VERIFIED	168155	2102394	s VERIFIED BOUNDS 338 <= obj <= 338 n=119 d=67 c=52 l=43 pbl=25 parse=0.0 compile=0.2 search=43.1 emit=0.0 propag=43.1 rss=64
+2020_bnn-planner_inventory_4_8s	OK-PROOF-VERIFIED	2700438	6345653	s VERIFIED BOUNDS 17 <= obj <= 17 n=31 d=15 c=16 l=15 pbl=0 parse=0.2 compile=0.5 search=211.2 emit=0.0 propag=211.1 rss=256
+2019_stochastic-vrp_vrp-s2-v2-c9_vrp-v2-c9_det	UNKNOWN-LIMIT	522019	9864481	n=114 d=67 c=46 l=44 pbl=0 db=44 inc=none cpu=282.58s parse=0.0 compile=3.7 search=278.4 emit=0.2 propag=278.1 rss=196
+2019_stochastic-vrp_vrp-s4-v2-c3_svrp-v2-c3_det	OK-PROOF-VERIFIED	244162	13082795	s VERIFIED BOUNDS 117 <= obj <= 117 n=499 d=313 c=186 l=111 pbl=2 parse=0.0 compile=0.8 search=270.1 emit=0.3 propag=269.9 rss=76
+2019_stochastic-vrp_vrp-s3-v2-c7_vrp-v2-c7_det	UNKNOWN-LIMIT	534238	10225548	n=247 d=131 c=115 l=111 pbl=0 db=111 inc=none cpu=285.19s parse=0.0 compile=3.8 search=280.9 emit=0.2 propag=280.7 rss=175
+2019_stochastic-vrp_vrp-s5-v2-c6_vrp-v2-c6_det	UNKNOWN-LIMIT	715419	7624335	n=254 d=133 c=120 l=117 pbl=0 db=117 inc=none cpu=285.23s parse=0.1 compile=6.7 search=278.0 emit=0.2 propag=277.8 rss=195
+2023_speck-optimisation_SPECK-Optimisation	OK-PROOF-VERIFIED	170261	129468	s VERIFIED BOUNDS 1 <= obj <= 1 n=9 d=5 c=4 l=3 pbl=0 parse=0.0 compile=0.1 search=0.0 emit=0.0 propag=0.0 rss=16
+2023_pennies-opt_pennies	OK-PROOF-VERIFIED	308571	878373	s VERIFIED BOUNDS -5 <= obj <= -5 n=49 d=30 c=18 l=18 pbl=1 parse=0.0 compile=0.8 search=18.6 emit=0.0 propag=18.6 rss=69
+2023_sudoku_fixed	OK-PROOF-VERIFIED	27041	885857	s VERIFIED SATISFIABLE n=1 d=0 c=0 l=0 pbl=0 parse=0.0 compile=3.2 search=0.8 emit=0.0 propag=0.8 rss=97
+2019_triangular	UNKNOWN-LIMIT	53545	50825296	n=5828 d=2928 c=2899 l=2897 pbl=2705 db=5602 inc=19 cpu=280.95s parse=0.0 compile=0.0 search=280.9 emit=0.2 propag=280.7 rss=346
+2019_zephyrus	TIMEOUT-SOLVE	785368	-	exceeded 300s no-stats rss=7252
+2020_bnn-planner_navigation_5x5_10s	UNKNOWN-LIMIT	1203199	6985326	n=55 d=44 c=10 l=10 pbl=0 db=10 inc=none cpu=284.70s parse=0.1 compile=1.0 search=283.0 emit=0.0 propag=282.9 rss=515
+2020_bnn-planner_cellda_y_10s	TIMEOUT-SOLVE	7916309	-	exceeded 300s no-stats rss=1013
+2020_bnn-planner_sysadmin_4_2s	UNKNOWN-LIMIT	302306	71440268	n=1030 d=742 c=287 l=287 pbl=0 db=287 inc=none cpu=280.02s parse=0.0 compile=0.2 search=279.7 emit=0.2 propag=279.5 rss=118
+2020_bnn-planner_sysadmin_5_4s	UNKNOWN-LIMIT	832886	22372943	n=281 d=241 c=39 l=39 pbl=0 db=39 inc=none cpu=284.64s parse=0.1 compile=0.6 search=283.5 emit=0.1 propag=283.5 rss=244
+2020_cable_tree_wiring_ctw	TIMEOUT-SOLVE	191376	-	exceeded 300s no-stats rss=248
+2020_code-generator_unison	TIMEOUT-SOLVE	67356447	-	exceeded 300s no-stats rss=1745
+2020_minimal-decision-sets_sparse_mds	UNKNOWN-LIMIT	1286662	3441697	n=83 d=77 c=5 l=3 pbl=0 db=3 inc=219 cpu=282.14s parse=0.1 compile=3.8 search=277.9 emit=0.0 propag=277.9 rss=133
+2020_p1f-pjs	UNKNOWN-LIMIT	2749453	29592018	n=194 d=116 c=77 l=75 pbl=0 db=75 inc=none cpu=280.23s parse=0.2 compile=104.0 search=174.5 emit=0.7 propag=173.8 rss=590
+2020_hoist-benchmark	TIMEOUT-SOLVE	115508	-	exceeded 300s no-stats rss=663
+2020_collaborative-construction_macc	TIMEOUT-SOLVE	24742621	-	exceeded 300s no-stats rss=903
+2020_sdn-chain_model	UNKNOWN-LIMIT	4791635	1794186	n=931 d=929 c=1 l=1 pbl=0 db=1 inc=none cpu=280.17s parse=0.3 compile=98.6 search=178.8 emit=0.0 propag=178.7 rss=1265
+2020_is_model	TIMEOUT-SOLVE	251652	-	exceeded 300s no-stats rss=8928
+2020_soccer-computational_ecp	UNKNOWN-LIMIT	782367	2772425	n=338 d=321 c=16 l=16 pbl=1 db=17 inc=none cpu=285.49s parse=0.1 compile=1.5 search=283.1 emit=0.0 propag=283.0 rss=265
+2024_neighbours_neighbours-rect	OK-PROOF-VERIFIED	30619	245524	s VERIFIED BOUNDS -17 <= obj <= -17 n=101 d=50 c=51 l=49 pbl=3 parse=0.0 compile=0.0 search=0.1 emit=0.0 propag=0.1 rss=9
+2020_racp	UNKNOWN-LIMIT	971517	5190588	n=280 d=158 c=121 l=121 pbl=0 db=121 inc=none cpu=293.28s parse=0.1 compile=0.3 search=292.6 emit=0.1 propag=292.5 rss=130
+2020_pentominoes_pentominoes-int	TIMEOUT-SOLVE	299568	-	exceeded 300s no-stats rss=2578
+2021_monomatch	UNKNOWN-LIMIT	2832108	921944	n=65 d=51 c=13 l=13 pbl=0 db=13 inc=none cpu=285.81s parse=0.2 compile=0.2 search=285.2 emit=0.0 propag=285.2 rss=126
+2020_pillars-and-planks_pillars-planks-solution	UNKNOWN-LIMIT	438836	24857576	n=2104 d=1084 c=1019 l=1004 pbl=13 db=1017 inc=none cpu=296.54s parse=0.0 compile=1.1 search=295.2 emit=0.4 propag=294.8 rss=115
+2024_word-equations_word_equations_01_track_123-int	OK-PROOF-VERIFIED	433	120	s VERIFIED UNSATISFIABLE n=1 d=0 c=1 l=0 pbl=0 parse=0.0 compile=0.0 search=0.0 emit=0.0 propag=0.0 rss=6
+2020_skill-allocation_skill_allocation_only	UNKNOWN-LIMIT	5467544	1525600	n=67 d=65 c=1 l=1 pbl=0 db=1 inc=none cpu=295.17s parse=0.4 compile=233.6 search=57.1 emit=0.0 propag=57.0 rss=1317
+2020_whirlpool_whirlpool-x	TIMEOUT-SOLVE	90108	-	exceeded 300s no-stats rss=598
+2020_stable-goods_stable-goods-solution	TIMEOUT-SOLVE	582493	-	exceeded 300s no-stats rss=171
+2021_community-detection	TIMEOUT-SOLVE	598050	-	exceeded 300s no-stats rss=1359
+2021_java-routing_trip_6_2	TIMEOUT-SOLVE	344601	-	exceeded 300s no-stats rss=160
+2021_java-routing_trip_7_4	TIMEOUT-SOLVE	481965	-	exceeded 300s no-stats rss=234
+2021_java-routing_trip_7_5	TIMEOUT-SOLVE	481950	-	exceeded 300s no-stats rss=225
+2022_accap	UNKNOWN-LIMIT	131918	62894464	n=814 d=498 c=315 l=302 pbl=45 db=347 inc=134 cpu=281.64s parse=0.0 compile=0.2 search=281.2 emit=0.1 propag=281.0 rss=171
+2021_carpet-cutting_cc_base	TIMEOUT-SOLVE	19296725	-	exceeded 300s no-stats rss=738
+2021_java-routing_trip_8_2	TIMEOUT-SOLVE	611658	-	exceeded 300s no-stats rss=333
+2022_generalized-peacable-queens_peaceable_queens	PROOF-REJECTED	523196	937892238	 The constraint is not implied by reverse unit propagation (RUP) from core and derived database. Rerun with the option '--trace-failed' to see the propagations.
+2021_java-routing_trip_8_3	TIMEOUT-SOLVE	611627	-	exceeded 300s no-stats rss=333
+2022_spot5	PROOF-REJECTED	182652	236096764	 The constraint is not implied by reverse unit propagation (RUP) from core and derived database. Rerun with the option '--trace-failed' to see the propagations.
+2021_peacable_queens_peaceable_queens_mznc2021	TIMEOUT-SOLVE	559535	-	exceeded 300s no-stats rss=49
+2021_p1f-pjs	TIMEOUT-SOLVE	5618526	-	exceeded 300s no-stats rss=673
+2019_multi-knapsack_mknapsack_global	UNKNOWN-LIMIT	8462	39399655	n=2531 d=1273 c=1257 l=1257 pbl=1255 db=2512 inc=none cpu=280.32s parse=0.0 compile=0.1 search=280.1 emit=0.2 propag=279.9 rss=439
+2021_physician-scheduling	TIMEOUT-SOLVE	3657968	-	exceeded 300s no-stats rss=355
+2024_monitor-placement-1id_monitor_1id	OK-PROOF-VERIFIED	47692	17167	s VERIFIED BOUNDS 52 <= obj <= 52 n=18 d=11 c=7 l=2 pbl=0 parse=0.0 compile=0.0 search=0.0 emit=0.0 propag=0.0 rss=7
+2022_traveling-tppv_ttppv	PROOF-REJECTED	1502895	43125915	 The constraint is not implied by reverse unit propagation (RUP) from core and derived database. Rerun with the option '--trace-failed' to see the propagations.
+2025_hitori	OK-PROOF-VERIFIED	554211	7479586	s VERIFIED BOUNDS -17 <= obj <= -17 n=828 d=459 c=369 l=369 pbl=0 parse=0.0 compile=1.9 search=4.4 emit=0.1 propag=4.3 rss=132
+2022_diameterc-mst_dcmst	TIMEOUT-SOLVE	470038	-	exceeded 300s no-stats rss=102
+2022_blocks-world_blocks	TIMEOUT-SOLVE	4085158	-	exceeded 300s no-stats rss=1870
+2023_chessboard	PROOF-REJECTED	442318	53382428	 The constraint is not implied by reverse unit propagation (RUP) from core and derived database. Rerun with the option '--trace-failed' to see the propagations.
+2022_gfd-schedule_gfd-schedule2	TIMEOUT-SOLVE	7109510	-	exceeded 300s no-stats rss=1172
+2022_triangular	UNKNOWN-LIMIT	53545	49638268	n=5687 d=2858 c=2828 l=2826 pbl=2639 db=5465 inc=19 cpu=280.92s parse=0.0 compile=0.0 search=280.9 emit=0.2 propag=280.7 rss=333
+2022_rotating-workforce-scheduling	TIMEOUT-SOLVE	485011	-	exceeded 300s no-stats rss=109
+2022_roster-sickness_bool-model-sickness	TIMEOUT-SOLVE	211006	-	exceeded 300s no-stats rss=776
+2022_vaccine	UNKNOWN-LIMIT	900757	15650101	n=419 d=234 c=184 l=169 pbl=1 db=170 inc=none cpu=288.95s parse=0.1 compile=1.8 search=285.8 emit=0.3 propag=285.6 rss=381
+2022_stripboard	TIMEOUT-SOLVE	738772	-	exceeded 300s no-stats rss=1252
+2022_sudoku_opt	TIMEOUT-SOLVE	70484	-	exceeded 300s no-stats rss=646
+2022_team-assignment_model	TIMEOUT-SOLVE	86937	-	exceeded 300s no-stats rss=946
+2022_yumi-static	TIMEOUT-SOLVE	1557808	-	exceeded 300s no-stats rss=4525
+2023_kidney-exchange_ccmcp	TIMEOUT-SOLVE	239679	-	exceeded 300s no-stats rss=94
+2023_gametes	UNKNOWN-LIMIT	2598992	115849136	n=4389 d=2890 c=1498 l=885 pbl=0 db=885 inc=none cpu=280.02s parse=0.2 compile=87.3 search=191.9 emit=2.1 propag=189.8 rss=483
+2023_mrcpsp	TIMEOUT-SOLVE	11910212	-	exceeded 300s no-stats rss=4439
+2023_evm-super-compilation_evmopt-generic	UNKNOWN-LIMIT	526341	148994464	n=9251 d=4851 c=4399 l=4367 pbl=0 db=4367 inc=none cpu=280.54s parse=0.0 compile=2.1 search=278.3 emit=2.1 propag=276.2 rss=317
+2022_ma-path-finding_mapf	TIMEOUT-SOLVE	145340306	-	exceeded 300s no-stats rss=6616
+2023_code-generator_unison	TIMEOUT-SOLVE	69451487	-	exceeded 300s no-stats rss=1811
+2023_roster_roster_model	UNKNOWN-LIMIT	332705	27225895	n=2844 d=1669 c=1174 l=1164 pbl=0 db=1164 inc=8 cpu=280.54s parse=0.0 compile=0.7 search=279.7 emit=0.3 propag=279.4 rss=81
+2023_roster-shifts-bool_bool-model	TIMEOUT-SOLVE	3093126	-	exceeded 300s no-stats rss=767
+2023_valve-network	UNKNOWN-LIMIT	1630357	2097184	n=36 d=21 c=14 l=13 pbl=0 db=13 inc=0 cpu=286.79s parse=0.1 compile=3.6 search=282.6 emit=0.0 propag=282.5 rss=184
+2025_products-and-shelves_product-and-shelves	OK-PROOF-VERIFIED	2252597	12939446	s VERIFIED BOUNDS 6 <= obj <= 6 n=8040 d=7908 c=132 l=131 pbl=0 parse=0.2 compile=8.0 search=74.6 emit=0.3 propag=74.3 rss=280
+2021_seat-moving	UNKNOWN-LIMIT	1598001	262135151	n=3466 d=1768 c=1697 l=983 pbl=0 db=983 inc=none cpu=280.10s parse=0.1 compile=28.4 search=251.0 emit=2.3 propag=248.7 rss=495
+2023_vrplc_vrplc_service	UNKNOWN-LIMIT	1642928	31265319	n=32 d=19 c=12 l=12 pbl=0 db=12 inc=none cpu=282.38s parse=0.1 compile=26.4 search=252.9 emit=0.7 propag=252.2 rss=944
+2023_yumi-static	TIMEOUT-SOLVE	1558058	-	exceeded 300s no-stats rss=4513
+2023_table-layout_TableLayout	UNKNOWN-LIMIT	723838	89385313	n=3032 d=3000 c=31 l=31 pbl=0 db=31 inc=9012 cpu=284.96s parse=0.1 compile=0.5 search=283.3 emit=0.2 propag=283.1 rss=551
+2024_accap	UNKNOWN-LIMIT	89887	207939889	n=4334 d=2289 c=2044 l=2025 pbl=114 db=2139 inc=162 cpu=280.09s parse=0.0 compile=0.1 search=279.8 emit=0.5 propag=279.3 rss=182
+2024_cable-tree-wiring_ctw	TIMEOUT-SOLVE	1316369	-	exceeded 300s no-stats rss=5216
+2024_community-detection	TIMEOUT-SOLVE	226165	-	exceeded 300s no-stats rss=4423
+2023_multi-agent-graph-coverage_graph-scan-revised	UNKNOWN-LIMIT	303711	187111019	n=2046 d=1068 c=977 l=947 pbl=0 db=947 inc=341 cpu=280.11s parse=0.0 compile=3.5 search=273.8 emit=3.8 propag=270.0 rss=944
+2024_compression	PROOF-REJECTED	184378	107981983	 The constraint is not implied by reverse unit propagation (RUP) from core and derived database. Rerun with the option '--trace-failed' to see the propagations.
+2021_perfect_square	UNKNOWN-LIMIT	280514	101462811	n=17303 d=9748 c=7554 l=7554 pbl=0 db=7554 inc=none cpu=281.85s parse=0.0 compile=1.0 search=279.6 emit=1.0 propag=278.5 rss=672
+2024_fox-geese-corn_foxgeesecorn	UNKNOWN-LIMIT	409513	27407754	n=5183 d=3439 c=1743 l=1728 pbl=6 db=1734 inc=32 cpu=280.22s parse=0.0 compile=0.8 search=279.3 emit=0.4 propag=278.9 rss=130
+2024_concert-hall-cap	TIMEOUT-SOLVE	277101	-	exceeded 300s no-stats rss=247
+2024_graph-clear_graph_clear_cp	TIMEOUT-SOLVE	1342035	-	exceeded 300s no-stats rss=539
+2024_peacable_queens_peaceable_queens_mznc2021	UNKNOWN-LIMIT	391567	8379102	n=398 d=216 c=181 l=143 pbl=8 db=151 inc=4 cpu=284.70s parse=0.0 compile=0.1 search=284.5 emit=0.1 propag=284.3 rss=58
+2024_harmony	TIMEOUT-SOLVE	2250779	-	exceeded 300s no-stats rss=9968
+2024_portal	PROOF-REJECTED	678877	209665809	 The constraint is not implied by reverse unit propagation (RUP) from core and derived database. Rerun with the option '--trace-failed' to see the propagations.
+2024_hoist-benchmark	TIMEOUT-SOLVE	433613	-	exceeded 300s no-stats rss=4801
+2024_triangular	UNKNOWN-LIMIT	36350	48221938	n=6818 d=3418 c=3399 l=3397 pbl=3218 db=6615 inc=17 cpu=281.39s parse=0.0 compile=0.0 search=281.4 emit=0.3 propag=281.1 rss=343
+2013_league	PROOF-REJECTED	205254	39485715	
+2014_openshop	PROOF-REJECTED	200420	166636960	
+2024_word-equations_word_equations_01_track_140-int	TIMEOUT-SOLVE	3800608	-	exceeded 300s no-stats rss=650
+2024_word-equations_word_equations_02_track_8-int	TIMEOUT-SOLVE	3496747	-	exceeded 300s no-stats rss=938
+2024_network_50_cstr_efm_cstr	TIMEOUT-SOLVE	780590	-	exceeded 300s no-stats rss=696
+2025_fbd1_FBD1	UNKNOWN-LIMIT	7816	287763935	n=402 d=202 c=199 l=140 pbl=77 db=217 inc=46 cpu=280.32s parse=0.0 compile=0.1 search=280.0 emit=3.3 propag=276.7 rss=475
+2025_black-hole	TIMEOUT-SOLVE	2154269	-	exceeded 300s no-stats rss=1064
+2024_word-equations_word_equations_03_track_133-int	TIMEOUT-SOLVE	9345379	-	exceeded 300s no-stats rss=833
+2025_EchoSched_JSP0	TIMEOUT-SOLVE	607642	-	exceeded 300s no-stats rss=10571
+2025_carpet-cutting_cc_base	TIMEOUT-SOLVE	14373661	-	exceeded 300s no-stats rss=682
+2024_word-equations_word_equations_03_track_31-int	TIMEOUT-SOLVE	24453684	-	exceeded 300s no-stats rss=793
+2025_is_model	TIMEOUT-SOLVE	103495	-	exceeded 300s no-stats rss=5985
+2025_proteindesign12_wcsp	TIMEOUT-SOLVE	1235309	-	exceeded 300s no-stats rss=2126
+2025_tsptw	TIMEOUT-SOLVE	329726	-	exceeded 300s no-stats rss=693
+2025_ihtc-2024-kletzander_model4_opt	TIMEOUT-SOLVE	51867172	-	exceeded 300s no-stats rss=11462
+2025_ihtc-2024-marte_model	TIMEOUT-SOLVE	33115762	-	exceeded 300s no-stats rss=11860
+2024_tiny-cvrp_TinyCVRP_ExactlyOneSolution	UNKNOWN-LIMIT	470276	26294557	n=976 d=653 c=322 l=322 pbl=1 db=323 inc=none cpu=288.59s parse=0.0 compile=1.9 search=286.5 emit=0.4 propag=286.1 rss=123
+2024_yumi-dynamic	TIMEOUT-SOLVE	186726097	-	exceeded 300s no-stats rss=5445
+2025_stripboard	PROOF-REJECTED	267514	630713603	 The constraint is not implied by reverse unit propagation (RUP) from core and derived database. Rerun with the option '--trace-failed' to see the propagations.
+2023_test-scheduling	PROOF-REJECTED	1068242	38472497	
+2025_skill-allocation_skill_allocation_only	PROOF-REJECTED	2359755	127105637	
+DONE-1790863136	331	436
