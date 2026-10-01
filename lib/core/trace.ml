@@ -496,17 +496,29 @@ let record_citation t (w : Writer.t) ~citing ~citing_level ~cited ~cited_level ~
    RUP in sequence". With the derivation on the page the line follows from it by unit
    propagation, and nothing about the line itself changes.
 
-   WHICH ENTRIES. [Encoding.has_direct] on the pruned variable, and that test is the
-   D-0019 point 3 line rather than a convenience: this project materialises the direct
-   encoding for exactly the variables a global constraint reasons about
-   ([Encoding.request_direct], honoured by [start_proof]), so a variable that has one is a
-   variable whose bounds a counting propagator may have moved. It over-triggers -- an
-   [int_lin_le] pruning of an `all_different` variable also gets its [pol] written out
-   ahead of a line that did not need it -- and that is deliberate: the alternative is a
-   per-entry flag threaded from the propagator through [Store.entry], and a test that
-   costs one hashtable lookup and writes a redundant but VALID line is worth more than a
-   field four modules have to agree about. Every other variable in every model is
-   untouched, so no proof this suite had before M4-T1 changes by a byte.
+   WHICH ENTRIES. Those with [Store.entry]'s [ahead] set, and nothing else (M7-T17,
+   D-0082). Whether a pruning's line is RUP against the .opb alone is a property of HOW
+   the pruning was inferred, so it is the PROPAGATOR that says so, at its own pruning
+   call, through [Store.deriving_ahead]: today all_different's Hall moves and Regin
+   holes, and gcc's rule A capacity pushes -- the [Needs_derivation] families of
+   test/unit/test_trace.ml's I-X10 table, and only the prunings of theirs that count.
+
+   The trigger used to be [Encoding.has_direct] of the pruned variable, a proxy for "this
+   variable is in a counting global's scope". It was wrong both ways. It OVER-triggered:
+   an [int_lin_le] pruning of an all_different variable got its [pol] written ahead of a
+   line that did not need one, and so did every element INDEX pruning, which is
+   [Single_row] and verifies without it (measured, D-0082). It UNDER-triggered: gcc's
+   counting rows are over the ORDER encoding and name no direct literal, so its lines
+   went out bare and 3.0.2 refused them, and M7-T16 bought the trigger back by
+   requesting a direct encoding nothing read (D-0078; +13% on `2008_debruijn_binary`,
+   all of it `red`). The flag costs one immediate field per trail entry and four call
+   sites, and the encoding is no longer consulted here at all. A proof of a model with no
+   global constraint is byte-identical across the change (measured over the model suite,
+   D-0082): no other family ever sets the flag.
+
+   A [Needs_derivation] family whose pruning does NOT run under [deriving_ahead] writes
+   a bare [rup] the checker refuses -- test/unit/test_trace.ml's [test_ix10_derive_ahead]
+   is the lane that reddens (measured by removing the call, D-0082).
 
    A DECISION is skipped, and must be: nothing in the proof establishes one, and
    [Justify.emit] refuses it outright (D-0009, M1-T50).
@@ -515,8 +527,8 @@ let record_citation t (w : Writer.t) ~citing ~citing_level ~cited ~cited_level ~
    retires the line retires it, and at level 0 [Search.solve]'s end-of-run sweep does
    (I-X2). It is not recorded in [t.permanent_rev]: this module owns the lines it writes
    through [emit_line], and an id [Justify] minted and memoised is [Justify]'s. *)
-let derive_ahead (ctx : Justify.ctx) store (e : Store.entry) name =
-  if Encoding.has_direct ctx.Justify.encoding name then
+let derive_ahead (ctx : Justify.ctx) store (e : Store.entry) =
+  if e.Store.ahead then
     match Explanation.force (Store.explanation store e) with
     | Explanation.Decision _ -> ()
     | forced -> ignore (Justify.emit ctx forced : Writer.cid)
@@ -558,7 +570,7 @@ let emit (ctx : Justify.ctx) t store =
           if !at <> level then (
             Writer.set_level ctx.Justify.writer level;
             at := level);
-          derive_ahead ctx store e name;
+          derive_ahead ctx store e;
           List.iter
             (fun { claim; settled_over; hole } ->
               let facts, cited =

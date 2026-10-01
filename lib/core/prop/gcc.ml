@@ -765,21 +765,29 @@ let rule_c t store ~snaps ~caps ~apply =
 let pass t store =
   let snaps = Array.to_list (Array.map (snap_of store) t.terms) in
   let caps = Array.to_list (Array.map (csnap_of store) t.cov) in
-  let apply ~lower x bound j =
-    match
+  (* [~ahead] is M7-T17's trigger (D-0082): rule A's capacity push sums a counting row
+     per cover value of the interval, so its trace line is RUP only after its
+     derivation and the push is made under [Store.deriving_ahead]. Rule C's is not: its
+     line is RUP against the ONE counting row of its own value plus the count's ladder,
+     and it never had a derivation written ahead of it -- the count variables had no
+     direct encoding to arm the old [has_direct] trigger -- so it stays [false] and its
+     lines do not change. *)
+  let apply ?(ahead = false) ~lower x bound j =
+    let prune () =
       if lower then Store.set_lo store x bound j else Store.set_hi store x bound j
-    with
+    in
+    match if ahead then Store.deriving_ahead store prune else prune () with
     | Store.Conflict c -> raise (Found c)
     | Store.Changed -> raise Moved
     | Store.Unchanged -> ()
   in
-  rule_c t store ~snaps ~caps ~apply;
+  rule_c t store ~snaps ~caps ~apply:(apply ~ahead:false);
   let cover_at = Hashtbl.create 16 in
   List.iter (fun k -> Hashtbl.replace cover_at k.k_cov.cv k) caps;
   let los = List.sort_uniq compare (List.map (fun s -> s.s_lo) snaps) in
   let his = List.sort_uniq compare (List.map (fun s -> s.s_hi) snaps) in
   let push ~a ~b ~halls ~caps_ab ~y ~lower x bound =
-    apply ~lower x bound
+    apply ~ahead:true ~lower x bound
       (Reason.because
          ~concludes:
            (Some

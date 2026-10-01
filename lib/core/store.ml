@@ -109,6 +109,13 @@ type entry = {
   reason : Reason.t;
   concludes : Reason.fact option;
   prop : int;
+  ahead : bool;
+      (* M7-T17 (D-0082). "This pruning's derivation must be on the page AHEAD of its
+         trace line", as a property of the PROPAGATOR that made it, not of the encoding
+         of the variable it moved. lib/core/trace.ml's [derive_ahead] reads it and
+         nothing else does. Stamped by [apply] off [current_ahead], which only
+         [deriving_ahead] sets -- and only a [Needs_derivation] propagator (I-X10,
+         test/unit/test_trace.ml's table) calls that, around its own pruning call. *)
   sup_lo : int;
   sup_hi : int;
 }
@@ -146,6 +153,9 @@ type t = {
      necessary. One mutable field remains, and unlike the slot it is written and cleared
      by the same wrapper in the same call. *)
   mutable current_prop : int;
+  (* M7-T17. True only inside [deriving_ahead]; [apply] copies it into [entry.ahead].
+     Written and restored by the same wrapper in the same call, like [current_prop]. *)
+  mutable current_ahead : bool;
 }
 
 (* A conflict, with the identity of the propagator that reported it.
@@ -182,6 +192,7 @@ let dummy_entry =
     reason = Reason.none;
     concludes = None;
     prop = no_prop;
+    ahead = false;
     sup_lo = no_support;
     sup_hi = no_support;
   }
@@ -202,6 +213,7 @@ let create ~names ~domains =
     marks = Array.make 16 dummy_mark;
     n_levels = 0;
     current_prop = no_prop;
+    current_ahead = false;
   }
 
 let n_vars t = Array.length t.domains
@@ -252,6 +264,30 @@ let with_running t id f =
   let saved = t.current_prop in
   t.current_prop <- id;
   Fun.protect ~finally:(fun () -> t.current_prop <- saved) f
+
+(* ------------------------------------------ derivation ahead (M7-T17, D-0082) *)
+
+(* Run [f] with every change it makes stamped [ahead = true]: lib/core/trace.ml will
+   write the change's derivation (its forced [Explanation.t], through [Justify.emit])
+   immediately before the change's trace line, so a line that is NOT RUP against the
+   .opb alone -- a counting argument over several model constraints, I-X10 -- is RUP in
+   sequence (D-0040).
+
+   The CALLER is the propagator, at its own pruning call, and that is the point of the
+   design. Until M7-T17 the trigger was [Encoding.has_direct] of the pruned variable, a
+   proxy for "this variable is in a counting global's scope" that over-triggered (an
+   [int_lin_le] pruning of an all_different variable got a [pol] it did not need) and,
+   once gcc's order-encoded rows arrived, UNDER-triggered (D-0078). Whether a pruning
+   needs its derivation ahead is decided by HOW it was inferred, which only the
+   propagator knows, and only at the moment it prunes.
+
+   Not through the engine (lib/core/engine.ml sets [current_prop], not this): the
+   engine runs every family the same way and has no way to know. Restored rather than
+   cleared, and under [Fun.protect], for [with_running]'s reasons. *)
+let deriving_ahead t f =
+  let saved = t.current_ahead in
+  t.current_ahead <- true;
+  Fun.protect ~finally:(fun () -> t.current_ahead <- saved) f
 
 (* ------------------------------------------------------------- trail growth *)
 
@@ -541,6 +577,7 @@ let apply t v (r : Domain.result) (j : Reason.justified) =
           reason = j.reason;
           concludes = j.concludes;
           prop = t.current_prop;
+          ahead = t.current_ahead;
           sup_lo = t.lo_sup.(i);
           sup_hi = t.hi_sup.(i);
         };
