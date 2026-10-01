@@ -344,7 +344,7 @@ def report(outdirs, pinned=None, timeout=None):
             print("run: ***PARTIAL*** -- no DONE marker. Every count below is a lower bound")
             print("     and must not be reported as a total.")
         for k in ("solvers", "solve_timeout", "baguette_md5", "chuffed_md5", "gcs_md5",
-                  "minizinc_md5", "veripb", "baguette_commit", "gcs_commit"):
+                  "minizinc_md5", "veripb", "harness_commit", "baguette_commit", "gcs_commit", "compat"):
             if k in conf:
                 print("  %s = %s" % (k, conf[k]))
         if timeout is None and conf.get("solve_timeout"):

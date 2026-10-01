@@ -592,7 +592,7 @@ write_conf() {
     echo "minizinc_md5=$(hash_of "$MZN")"
     echo "baguette=$BAGUETTE"
     echo "baguette_md5=$(hash_of "$BAGUETTE")"
-    echo "baguette_commit=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo -)"
+    echo "harness_commit=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo -)"
     echo "chuffed=$CHUFFED"
     echo "chuffed_md5=$(hash_of "$CHUFFED")"
     echo "gcs=$GCS"
