@@ -138,6 +138,48 @@ module Encoding = Baguette_proof.Encoding
 
 type memo_entry = { cid : Writer.cid; level : int }
 
+(* M6-T9 (a cross-session PROPOSAL, D-0080). The memo keyed by physical identity, as
+   before, but bucketed by a SHALLOW structural hash so a lookup is O(bucket) and not
+   O(every explanation emitted since the last wipe). The hash never descends into a
+   [Deferred] (its [thunk] is mutable, which is the trap the header names), nor into a
+   [Cut]/[Term] operand beyond its constructor, so forcing a thunk cannot move a key.
+   Equality inside a bucket is still [==], so the memo's meaning is unchanged. [by_level]
+   records which keys each level inserted, so [wipe_level] removes exactly those. *)
+and memo_table = {
+  tbl : (int, (Explanation.t * memo_entry) list) Hashtbl.t;
+  by_level : (int, Explanation.t list) Hashtbl.t;
+}
+
+let shallow_tag (e : Explanation.t) =
+  match e with
+  | Explanation.Decision _ -> 0
+  | Explanation.Clause _ -> 1
+  | Explanation.Linear _ -> 2
+  | Explanation.Cut _ -> 3
+  | Explanation.Model_row i -> 4 + (16 * i)
+  | Explanation.Combine _ -> 5
+  | Explanation.Deferred _ -> 6
+
+let shallow_hash (e : Explanation.t) =
+  match e with
+  | Explanation.Decision l -> Hashtbl.hash (0, l)
+  | Explanation.Clause ls -> Hashtbl.hash (1, ls)
+  | Explanation.Linear (ts, r) -> Hashtbl.hash (2, ts, r)
+  | Explanation.Cut (a, b, c1, c2) ->
+      Hashtbl.hash (3, shallow_tag a, shallow_tag b, c1, c2)
+  | Explanation.Model_row i -> Hashtbl.hash (4, i)
+  | Explanation.Combine (ss, d) ->
+      Hashtbl.hash
+        ( 5,
+          d,
+          List.map
+            (function
+              | Explanation.Term (c, t) -> Hashtbl.hash (c, shallow_tag t)
+              | Explanation.Weaken ls -> Hashtbl.hash (1, ls)
+              | Explanation.Defining (c, l) -> Hashtbl.hash (2, c, l))
+            ss )
+  | Explanation.Deferred _ -> 6
+
 (* A claim that is already on the page: the id of the line stating it and the level that
    line was written at. See the module header's "claim index". *)
 type stated = { s_cid : Writer.cid; s_level : int }
@@ -145,7 +187,7 @@ type stated = { s_cid : Writer.cid; s_level : int }
 type ctx = {
   writer : Writer.t;
   encoding : Encoding.t;
-  memo : (Explanation.t * memo_entry) list ref;
+  memo : memo_table;
       (* Boxed behind a ref for the same reason it always was -- it is proof state,
          shared by every view of the same writer -- although since M1-T31 removed
          [for_constraint] there is only ever one view. *)
@@ -156,7 +198,12 @@ type ctx = {
 }
 
 let create ~writer ~encoding =
-  { writer; encoding; memo = ref []; stated = Hashtbl.create 64 }
+  {
+    writer;
+    encoding;
+    memo = { tbl = Hashtbl.create 1024; by_level = Hashtbl.create 16 };
+    stated = Hashtbl.create 64;
+  }
 
 (* The writer a [ctx] emits through. [Learned] needs it to put a constraint on the page
    with a rule this module has no [Explanation.t] for -- a learned constraint is not a
@@ -169,11 +216,17 @@ let find_memo ctx (e : Explanation.t) =
     | [] -> None
     | (k, m) :: rest -> if k == e then Some m else go rest
   in
-  go !(ctx.memo)
+  match Hashtbl.find_opt ctx.memo.tbl (shallow_hash e) with
+  | None -> None
+  | Some bucket -> go bucket
 
 let remember ctx (e : Explanation.t) (cid : Writer.cid) : Writer.cid =
   let level = Writer.current_level ctx.writer in
-  ctx.memo := (e, { cid; level }) :: !(ctx.memo);
+  let h = shallow_hash e in
+  let bucket = Option.value (Hashtbl.find_opt ctx.memo.tbl h) ~default:[] in
+  Hashtbl.replace ctx.memo.tbl h ((e, { cid; level }) :: bucket);
+  Hashtbl.replace ctx.memo.by_level level
+    (e :: Option.value (Hashtbl.find_opt ctx.memo.by_level level) ~default:[]);
   cid
 
 (* Backtracking: wipe the writer's level and drop the memo entries it invalidated, in
@@ -181,7 +234,25 @@ let remember ctx (e : Explanation.t) (cid : Writer.cid) : Writer.cid =
    [Writer.wipe_level] directly when a [ctx] is in play. *)
 let wipe_level ctx level =
   Writer.wipe_level ctx.writer level;
-  ctx.memo := List.filter (fun (_, (m : memo_entry)) -> m.level < level) !(ctx.memo);
+  let doomed =
+    Hashtbl.fold
+      (fun l es acc -> if l >= level then (l, es) :: acc else acc)
+      ctx.memo.by_level []
+  in
+  List.iter
+    (fun (l, es) ->
+      Hashtbl.remove ctx.memo.by_level l;
+      List.iter
+        (fun e ->
+          let h = shallow_hash e in
+          match Hashtbl.find_opt ctx.memo.tbl h with
+          | None -> ()
+          | Some bucket -> (
+              match List.filter (fun (_, (m : memo_entry)) -> m.level < level) bucket with
+              | [] -> Hashtbl.remove ctx.memo.tbl h
+              | b -> Hashtbl.replace ctx.memo.tbl h b))
+        es)
+    doomed;
   Hashtbl.filter_map_inplace
     (fun _ (s : stated) -> if s.s_level < level then Some s else None)
     ctx.stated
