@@ -1283,6 +1283,10 @@ let () =
           prerr_endline "  and a checker would accept it (D-0029, SPEC 2.1).";
           exit exit_internal
       | exception Checked.Overflow msg ->
+          (* M6-T9: under OCAMLRUNPARAM=b, say WHERE. The arm exists because the cap
+             has a hole, and the only way to find the hole is the raise site; wave 31's
+             sweep reached this on 2014_rectangle-packing with nothing to go on. *)
+          if Printexc.backtrace_status () then prerr_string (Printexc.get_backtrace ());
           (* M1-T34. D-0029 decided that overflow RAISES rather than wrapping or quietly
              declining, and put a compile-time cap in front of the raise so that no model
              the CLI accepts can reach it. This arm is what happens if that cap is ever
