@@ -924,13 +924,13 @@ let compile (m : Model.t) : t =
      domain STARTS at v contributes the constant 1 rather than a literal, which is
      [ones].
 
-     THREE REFUSALS, all of them here rather than in the propagator, because this is
+     TWO REFUSALS, both of them here rather than in the propagator, because this is
      where a source position is in hand:
 
        - a cover and a counts array of different lengths;
-       - a count that is not a variable. The rows subtract the count's ladder, and a
-         constant has none; the model should declare it as a one-value variable, which
-         IS supported and is what every model test for this row uses;
+       - (M7-T16 refused a CONSTANT count here as well. M7-T18 lifted that: a constant
+         is the count view [View.const k], whose row is the one-value variable's row
+         with an empty ladder, and it is no longer refused);
        - the same variable twice in [xs]. Its tally contribution would be 2 and every
          cancellation in gcc.ml assumes 1. all_different can let a repeat through
          because its pairwise decomposition refutes it; there is no such decomposition
@@ -970,18 +970,15 @@ let compile (m : Model.t) : t =
       List.mapi
         (fun j cnt ->
           let v = cover.(j) in
-          let ci =
+          (* M7-T18: a CONSTANT count is the count VIEW [View.const k] (D-0058), and its
+             row is the one-value variable's row: [cdlo = cdhi = k], so the ladder term
+             below is empty and [k] sits on the degree side. See gcc.ml's header,
+             "Constant counts". *)
+          let cview, cname, (cdlo, cdhi) =
             match cnt with
-            | Model.Var i -> i
-            | Model.Const _ ->
-                Error.failf pos
-                  "builtin `fzn_global_cardinality`: the count at position %d is a \
-                   constant. The row subtracts the count's order literals and a constant \
-                   has none; declare it as a variable on a single value"
-                  j
+            | Model.Var i -> (View.of_var (Var.of_int i), name_of pos i, decl i)
+            | Model.Const k -> (View.const k, "", (k, k))
           in
-          let cname = name_of pos ci in
-          let cdlo, cdhi = decl ci in
           let dv =
             List.filter
               (fun i ->
@@ -1004,7 +1001,7 @@ let compile (m : Model.t) : t =
           let ge_cid, le_cid =
             Encoding.add_equality encoding terms (cdlo - ones - const_v)
           in
-          (v, Var.of_int ci, const_v, ge_cid, le_cid))
+          (v, cview, const_v, ge_cid, le_cid))
         counts
     in
     (* NO [request_direct] CALL (M7-T17, D-0082).

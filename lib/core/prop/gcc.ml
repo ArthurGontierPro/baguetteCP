@@ -1,7 +1,8 @@
 (* global_cardinality(x, cover, counts): for each i, [counts.(i)] is the number of
    variables of [x] taking the value [cover.(i)].  The cover is a list of CONSTANTS; the
-   counts are variables, and a fixed cardinality is the degenerate case (a variable
-   declared on one value), not a different shape.
+   counts are VIEWS -- a variable, or a constant (M7-T18) -- and a fixed cardinality is
+   the degenerate case of the arithmetic, not a different shape.  See "Constant counts"
+   below.
 
    gcc is all_different's generalisation -- all_different is gcc with every count in
    {0, 1} -- so this module is shaped on lib/core/prop/alldiff.ml and its rule A below
@@ -200,6 +201,51 @@
       [Clause].  D-0044's bet is not spent here.
 
    ---------------------------------------------------------------------------
+   Constant counts (M7-T18, D-0082)
+   ---------------------------------------------------------------------------
+
+   M7-T16 refused `fzn_global_cardinality(xs, cover, [2, 1])` and asked the model to
+   declare `var 2..2: n` instead.  That is the COMMON case of the constraint -- every
+   closed form and `global_cardinality_low_up` with equal bounds flattens to it -- and
+   the wave-30 corpus run lost nine instances to the refusal (D-0079).
+
+   A constant count k is [View.const k] (D-0058), and the argument that it changes
+   NOTHING in either artefact is one observation applied twice: everything here reads a
+   count only through [cdlo], [cdhi], its current bounds and its ladder
+   `c_ge_(cdlo+1) .. c_ge_cdhi`, and a constant is the one-value variable `var k..k: c`
+   with those four things identical -- [cdlo = cdhi = k], current bounds k, and an EMPTY
+   ladder.
+
+     - THE .opb ROW.  compile.ml's row is `sum (x indicators) - sum (c's ladder) =
+       cdlo - ones - const_v`.  For a one-value variable the ladder sum is empty and the
+       row reads `sum (x indicators) = k - ones - const_v`: k is a literal constant on the
+       DEGREE side, which is the second of the two forms the task named, and it is not a
+       new row shape -- it is byte-for-byte the row the one-value variable already got,
+       which every M7-T16 model lane was built on.  No PB variable is declared for the
+       constant, so the .opb has none of its own (a view has no PB variables, D-0058).
+     - THE DERIVATIONS.  Every place a count enters a derivation is a [range (cdlo+1) ..]
+       over its ladder ([high_row], [ladder_at_most], [ladder_at_least]), empty here, or a
+       bound fact guarded by `k_hi < cdhi` / `k_lo > cdlo`, false here.  So [high_row] is
+       [le_cid] cited alone -- `- tally >= const_v - k`, exact -- and rule A's capacity
+       `hi(c) - const_v` is `k - const_v`.  Rule C's two tests `may < hi(c)` and
+       `must > lo(c)` can then only fire as a SHORTFALL or a SURPLUS, and both
+       derivations take the "0 >= cdlo - may" / "must > cdhi" arm, which needs no ladder
+       either.  The pruning attempt goes through [View.set_hi]/[View.set_lo], whose
+       [Const] arm reports [View.fail]: [Store.unattributed_conflict], the same value
+       [Store.apply]'s [Failed] arm returns for the one-value variable, derivation
+       included.
+     - THE REASONS.  A one-value variable's facts are all at its declared bounds, so
+       [Reason.lits] already drops every one of them; for a constant [scope_facts] names
+       none at all, because there is no name to put in a reason's scope.  The trace
+       lines are therefore the same lines.
+
+   So a constant count and `var k..k` give the same .opb rows and the same proof lines.
+   MEASURED (D-0082): `gcc_const_counts_sat`/`_unsat` and their one-value-variable twins
+   write byte-identical .opb and .pbp files apart from comment lines -- the twin's
+   one-value variables have no order literal, so not even a name differs -- and
+   test/unit/test_compile.ml pins the .opb half as a check.
+
+   ---------------------------------------------------------------------------
    Snapshotting and I-X6
    ---------------------------------------------------------------------------
 
@@ -220,7 +266,16 @@ type term = { x : Var.t; name : string; decl_lo : int; decl_hi : int }
 
 type cover = {
   cv : int;
-  cx : Var.t;
+  (* The count, as a VIEW (D-0058): [View.of_var c] for a count variable, [View.const k]
+     for a constant count (M7-T18).  A constant is the one-value variable's arithmetic
+     with no store slot behind it -- [cdlo = cdhi = k], an empty ladder, and a narrowing
+     that excludes [k] reported as [View.fail]'s conflict, which is the value
+     [Store.apply]'s [Failed] arm returns for the one-value variable.  See "Constant
+     counts" in the header. *)
+  cx : View.t;
+  (* The count's FlatZinc name, for its order literals.  For a constant it is never
+     rendered: every ladder range below is [cdlo+1 .. cdhi], empty when the two agree,
+     and [count_facts] names no fact for a constant. *)
   cname : string;
   cdlo : int;
   cdhi : int;
@@ -240,7 +295,7 @@ let consistency = Propagator.Checking
 
 let vars t =
   Array.to_list (Array.map (fun tm -> tm.x) t.terms)
-  @ Array.to_list (Array.map (fun c -> c.cx) t.cov)
+  @ List.concat_map (fun c -> View.vars c.cx) (Array.to_list t.cov)
 
 let make store enc ~cover vars_x =
   let terms =
@@ -255,13 +310,13 @@ let make store enc ~cover vars_x =
     Array.of_list
       (List.map
          (fun (cv, cx, cconst, ge_cid, le_cid) ->
-           let d = Store.get store cx in
            {
              cv;
              cx;
-             cname = Store.name store cx;
-             cdlo = Domain.lo d;
-             cdhi = Domain.hi d;
+             cname =
+               (match View.base_var cx with Some b -> Store.name store b | None -> "");
+             cdlo = View.lo store cx;
+             cdhi = View.hi store cx;
              cconst;
              ge_cid;
              le_cid;
@@ -326,17 +381,31 @@ let snap_of store tm =
     s_hi_why = support_reason store tm.x ~lower:false;
   }
 
+(* A constant count never moves: both bounds are its declared ones, established "at the
+   root" in [established_at_root]'s sense (no support entry), with nothing behind them. *)
 let csnap_of store c =
-  let d = Store.get store c.cx in
-  {
-    k_cov = c;
-    k_lo = Domain.lo d;
-    k_hi = Domain.hi d;
-    k_lo_root = established_at_root store c.cx ~lower:true;
-    k_hi_root = established_at_root store c.cx ~lower:false;
-    k_lo_why = support_reason store c.cx ~lower:true;
-    k_hi_why = support_reason store c.cx ~lower:false;
-  }
+  match View.base_var c.cx with
+  | None ->
+      {
+        k_cov = c;
+        k_lo = c.cdlo;
+        k_hi = c.cdhi;
+        k_lo_root = true;
+        k_hi_root = true;
+        k_lo_why = Reason.none;
+        k_hi_why = Reason.none;
+      }
+  | Some x ->
+      let d = Store.get store x in
+      {
+        k_cov = c;
+        k_lo = Domain.lo d;
+        k_hi = Domain.hi d;
+        k_lo_root = established_at_root store x ~lower:true;
+        k_hi_root = established_at_root store x ~lower:false;
+        k_lo_why = support_reason store x ~lower:true;
+        k_hi_why = support_reason store x ~lower:false;
+      }
 
 (* ---------------------------------------------------------------------- explanations *)
 
@@ -603,11 +672,16 @@ let scope_facts ~snaps ~caps =
     snaps
   @ List.concat_map
       (fun k ->
-        [
-          Reason.at_most ~name:k.k_cov.cname ~decl:k.k_cov.cdhi k.k_hi;
-          Reason.at_least ~name:k.k_cov.cname ~decl:k.k_cov.cdlo k.k_cov.cdlo;
-        ]
-        @ if k.k_hi_root then [] else k.k_hi_why)
+        if View.is_const k.k_cov.cx then
+          (* A constant has no literal and no name; it was read, but there is no fact
+             about it that the proof could negate, and its bounds never moved. *)
+          []
+        else
+          [
+            Reason.at_most ~name:k.k_cov.cname ~decl:k.k_cov.cdhi k.k_hi;
+            Reason.at_least ~name:k.k_cov.cname ~decl:k.k_cov.cdlo k.k_cov.cdlo;
+          ]
+          @ if k.k_hi_root then [] else k.k_hi_why)
       caps
 
 (* ----------------------------------------------------------- rule C: the count bounds *)
@@ -773,8 +847,10 @@ let pass t store =
      direct encoding to arm the old [has_direct] trigger -- so it stays [false] and its
      lines do not change. *)
   let apply ?(ahead = false) ~lower x bound j =
+    (* Through [View] so that rule C's count may be a constant (M7-T18); rule A's [x] is
+       always [View.of_var], whose mutators ARE [Store]'s. *)
     let prune () =
-      if lower then Store.set_lo store x bound j else Store.set_hi store x bound j
+      if lower then View.set_lo store x bound j else View.set_hi store x bound j
     in
     match if ahead then Store.deriving_ahead store prune else prune () with
     | Store.Conflict c -> raise (Found c)
@@ -787,7 +863,7 @@ let pass t store =
   let los = List.sort_uniq compare (List.map (fun s -> s.s_lo) snaps) in
   let his = List.sort_uniq compare (List.map (fun s -> s.s_hi) snaps) in
   let push ~a ~b ~halls ~caps_ab ~y ~lower x bound =
-    apply ~ahead:true ~lower x bound
+    apply ~ahead:true ~lower (View.of_var x) bound
       (Reason.because
          ~concludes:
            (Some

@@ -1,0 +1,21 @@
+% global_cardinality with CONSTANT counts: a refutation the constants DRIVE, and one
+% that needs SEARCH to reach (M7-T18, D-0082).
+%
+% One 1, one 2, two 3s over x1..x4, with x1 + x2 <= 4 and x3 + x4 <= 4. A 3 can only
+% sit beside a 1, so the two 3s need two 1s if they are in different pairs, and sum to 6
+% if they are in the same one. UNSAT, and nothing prunes at the root: neither linear row
+% excludes a value on its own, and gcc's capacities are not yet tight. Every branch is
+% closed by the constant counts -- rule A's capacity push (the 1 is used up) feeding a
+% linear row, or rule C's shortfall on the 3s -- so the refutation rests on the
+% constants throughout.
+%
+% D-0066: `rup` lines over an UNSAT model can be vacuous, so this lane is the
+% refutation's half; the pruning half over a satisfiable model is gcc_const_counts_sat.
+var 1..3: x1;
+var 1..3: x2;
+var 1..3: x3;
+var 1..3: x4;
+constraint int_lin_le([1,1],[x1,x2],4);
+constraint int_lin_le([1,1],[x3,x4],4);
+constraint fzn_global_cardinality([x1,x2,x3,x4],[1,2,3],[1,1,2]);
+solve :: int_search([x1,x2,x3,x4], input_order, indomain_min, complete) satisfy;
