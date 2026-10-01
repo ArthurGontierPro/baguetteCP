@@ -569,9 +569,11 @@ def shared(outdirs):
         for l in read(os.path.join(od, "flatten.tsv")).splitlines():
             f = l.split("\t")
             if len(f) >= 3:
-                ok.setdefault(f[0], {})[f[1]] = f[2]
+                ok.setdefault(f[0], {}).setdefault(f[1], set()).add(f[2])
+    # Shared = every library flattened it in EVERY table that tried: a flatten that
+    # crossed FLATTEN_TIMEOUT in one run and not another is not dependably shared.
     for i in sorted(ok):
-        if all(ok[i].get(s) == "OK" for s in SOLVERS):
+        if all(ok[i].get(s) == {"OK"} for s in SOLVERS):
             print(i)
     return 0
 
