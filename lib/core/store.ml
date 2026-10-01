@@ -661,9 +661,11 @@ let trail_entry t i =
    first hit.
 
    [None] means a hole with no trail entry behind it, i.e. a *declared* domain with a gap
-   ([Domain.of_list], for `var {1,3,5}: x`, which docs/SPEC.md 2.1 does not admit and
-   lib/flatzinc/compile.ml's [reject_set_domain] refuses). Callers cite nothing rather
-   than raising; lib/core/trace.ml's [remover] header argues why.
+   ([Domain.of_list], for `var {1,3,5}: x`). Nothing in `lib/` produces one: M7-T11
+   (D-0072) deleted [reject_set_domain], and lib/flatzinc/compile.ml now gives the store
+   the HULL of a set domain and posts one [Ne] instance per hole, so every hole has a
+   trail entry behind it; [Domain.of_list] has no caller in `lib/`. Callers cite nothing
+   rather than raising; lib/core/trace.ml's [remover] header argues why.
 
    Shared: [Trace] and [Linear] had a copy each ([remover] and [find_removal]), with the
    two off-by-one conventions that invites. This is the [before]-is-exclusive one. *)
