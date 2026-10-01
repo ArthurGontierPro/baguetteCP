@@ -30,7 +30,7 @@ CAP := $(if $(filter none unlimited 0,$(MEM_CAP_KB)),:,ulimit -v $(MEM_CAP_KB)) 
 # Passed down so a script invoked from a recipe agrees with the recipe.
 export BAGUETTE_MEM_CAP_KB = $(MEM_CAP_KB)
 
-.PHONY: build test unit models check fmt fmt-check lint determinism unlimit clean proof bootstrap bench
+.PHONY: build test unit models check fmt fmt-check lint determinism unlimit selftests clean proof bootstrap bench
 
 build:
 	dune build
@@ -91,6 +91,15 @@ unlimit: build
 	$(CAP) ./scripts/check_unlimited.sh --self-test
 	$(CAP) ./scripts/check_unlimited.sh
 
+# M7-T4 / M6-T4. The two measurement harnesses carry their own self-tests, because a
+# harness's failures look exactly like findings about the solver (D-0069) and nothing in
+# `test/` exercises a shell script. Both run without minizinc: corpus_selftest.sh tests
+# the id and bucket logic alone, compare_selftest.sh stubs the flattener when it is
+# absent and says so rather than skipping.
+selftests: build
+	$(CAP) ./scripts/corpus_selftest.sh
+	$(CAP) ./scripts/compare_selftest.sh
+
 # The gate. Run this before every commit.
 #
 # The verdict line is CONDITIONAL, and that is the point. `check_fmt.sh` treats a missing
@@ -110,7 +119,7 @@ unlimit: build
 #
 # Still exit 0 when ocamlformat is absent. The skip is allowed; claiming it did not happen
 # is not.
-check: fmt-check build lint determinism unlimit test
+check: fmt-check build lint determinism unlimit selftests test
 	@if command -v ocamlformat >/dev/null 2>&1; then \
 	  echo "check: ok"; \
 	else \
