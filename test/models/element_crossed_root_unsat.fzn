@@ -1,0 +1,34 @@
+% M7-T21 / D-0084: A REFUTATION THE CHECKER REJECTED, found by a random sweep of small
+% element models (seed 9044). FIXED; an ordinary passing model test whose proof is
+% verified on every run.
+%
+% THE DEFECT. x4 is the INDEX of the second element and the RESULT of the third; x6 the
+% other way round. The root conflict in the third excludes a position whose value is an
+% interior hole in its result x4, and [excl_hole] cites that hole by its remover's
+% explanation -- here the SECOND element's INDEX removal, which (1) concluded in the
+% direct currency `~x4_eq_2` where [excl_hole] pairs off ORDER literals, and (2) kept the
+% root-established residue `x6_ge_5` its own exclusion carried. The conclusion row was
+% `3 ~x4_ge_3 3 x4_ge_2 3 x6_ge_5 3 ~x4_eq_2 >= 4`, and 3.0.2 answered "The constraint
+% with ID 121 is not contradicting, as specified by the hint."
+%
+% THE FIX is in lib/core/prop/element.ml's [filter_index]: an interior index removal's
+% explanation cancels its root-established residue and is restated over the order
+% encoding through the forward channelling line ([in_order_currency]) -- the form every
+% other hole in the store is stated in. No SAT twin: the defect is in a ROOT conflict's
+% closing row. The break is measured: the pre-fix binary is rejected at `conclusion`.
+var 1..5: x0 :: output_var;
+var 1..5: x1 :: output_var;
+var 1..5: x2 :: output_var;
+var 1..5: x3 :: output_var;
+var 1..5: x4 :: output_var;
+var 1..5: x5 :: output_var;
+var 1..5: x6 :: output_var;
+constraint array_int_element(x1,[2,3,5,1,3],x0);
+constraint array_int_element(x4,[2,5,2,1,4],x6);
+constraint array_int_element(x6,[1,2,2,2,5],x4);
+constraint int_ne(x4,x0);
+constraint int_ne(x6,x3);
+constraint int_ne(x6,x2);
+constraint int_ne(x2,x4);
+constraint int_lin_le([-1,1,1],[x5,x6,x2],0);
+solve :: int_search([x3,x0,x4,x6,x1,x5,x2], largest, indomain_max, complete) satisfy;

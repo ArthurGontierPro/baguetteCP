@@ -924,6 +924,24 @@ let hole_conflict t store ~expl ~v =
 let conflict_of store why =
   Store.conflict store (Reason.because ~concludes:None Reason.none why)
 
+(* M7-T21 / D-0084. An INTERIOR index removal states `idx <> p` the way every other hole
+   in the store is stated -- over the ORDER encoding, `~idx_ge_p \/ idx_ge_(p+1)` -- and
+   not in this module's working currency [~idx_eq_p]. The forward channelling line
+   [idx_eq_p \/ ~idx_ge_p \/ idx_ge_(p+1)] converts one into the other exactly.
+
+   The trail entry's explanation is a CONTRACT with whoever embeds it, and the one
+   embedder is [excl_hole]: when this index is ANOTHER element's RESULT, that instance
+   excludes a position by citing this hole's remover's explanation and pairing it off
+   against its own two order-literal rows. Handed `~idx_eq_p` instead, nothing cancelled
+   and a root conflict did not close (test/models/element_crossed_root_unsat.fzn: two
+   elements, each one's index the other's result). [pos_gone]'s own derivations are
+   untouched: they build [~idx_eq_p] directly and never read this entry's explanation.
+   A removal AT a bound is a bound move, which no one embeds, and keeps its form. *)
+let in_order_currency t bw expl =
+  match Encoding.direct_fwd_id t.enc t.iname bw with
+  | None -> expl
+  | Some fwd -> Explanation.combine [ Explanation.term 1 expl; cite fwd ] 1
+
 (* Rule 1: dom(idx) := { p : as[p] in dom(c) }. *)
 let filter_index t store =
   let n = Array.length t.values in
@@ -938,15 +956,23 @@ let filter_index t store =
           if View.size store t.pos <= 1 then raise (Found (no_position_conflict t store));
           let d = Store.get store t.ibase in
           let bw = base_of t p in
-          (* The residue is DISCARDED for a pruning, and that is the whole point of it
-             being tracked separately: the derived row keeps its bound literal and is the
-             globally valid "pruning disjoined with the bounds it read". Only a conflict
-             has to cancel it. *)
-          let expl, _ = pos_gone t store p in
+          (* The residue is cancelled where the ROOT established it and kept where a
+             decision did: kept, the derived row is the globally valid "pruning
+             disjoined with the bounds it read"; cancelled, a root derivation is exact,
+             which is what [excl_hole] needs when it embeds this entry's explanation in
+             another instance's root conflict (M7-T21, D-0084; see [alo_of]). *)
+          let expl, r = pos_gone t store p in
+          let cancel = residue_cancel t store ~dead:[ (expl, r) ] in
+          let concludes = removal_conclusion t d bw in
           let j =
-            Reason.because ~concludes:(removal_conclusion t d bw)
+            Reason.because ~concludes
               (add_facts (bound_facts t store) (result_hole_facts t store))
-              (Explanation.deferred (fun () -> expl))
+              (Explanation.deferred (fun () ->
+                   let exact =
+                     if cancel = [] then expl
+                     else Explanation.combine (Explanation.term 1 expl :: cancel) 1
+                   in
+                   if concludes = None then in_order_currency t bw exact else exact))
           in
           match View.remove store t.pos p j with
           | Store.Conflict c -> raise (Found c)
