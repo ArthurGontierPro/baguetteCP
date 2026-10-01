@@ -106,7 +106,8 @@ else
   MZN="$D/bin/minizinc"
   cat > "$MZN" <<'S'
 #!/usr/bin/env bash
-# Stub: `--solvers` lists the ids the harness asks for; `-c ... MODEL -o OUT` copies.
+# Stub: `--solvers` lists the ids the harness asks for; `-c ... MODEL -o OUT` copies
+# the FIRST .mzn (a second one is the COMPAT shim file, which the stub ignores).
 if [ "${1:-}" = --solvers ]; then
   echo "org.baguette.baguette org.selftest.chuffed-shim org.selftest.gcs-shim"
   exit 0
@@ -117,7 +118,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -o) out="$2"; shift ;;
     --solver) shift ;;
-    *.mzn) model="$1" ;;
+    *.mzn) [ -n "$model" ] || model="$1" ;;
   esac
   shift
 done

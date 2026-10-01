@@ -40,6 +40,22 @@
 # `prep` makes the objective an output variable in each flattened file -- the same
 # edit for all three, so "the last printed objective" exists for every solver.
 #
+# ---------------------------------------------------------------- the 1.x shims
+#
+# The 2008-2010 Challenge models are MiniZinc 1.x: `:: is_output` and string-valued
+# search annotations (`int_search(x, "first_fail", "indomain_min", "complete")`).
+# MiniZinc 2.10.1's standard library defines neither, so Chuffed's and GCS's libraries
+# refuse them at type-checking (`undefined identifier is_output`, `no function or
+# predicate with this signature found: int_search(..., string, ...)`), while baguette's
+# mznlib carries mznlib/compat_mzn1.mzn and flattens them. Measured on the first pilot
+# attempt: 22 of 88 pilot instances were FLATTEN-FAIL for both other solvers for this
+# reason alone, all of them 2008-2010 models. So with COMPAT=1 (default) that SAME file is
+# passed to the other two flattens as a second model file. It is language
+# compatibility only -- one inert annotation and a string -> ann mapping onto the
+# standard annotations, plus a 2-argument `global_cardinality` that forwards to the
+# solver's OWN global -- and decomposes nothing, so each solver still flattens with its
+# own library. COMPAT=0 restores the strict behaviour.
+#
 # ---------------------------------------------------------------- the run
 #
 # Every solver runs under `timeout -k 30 $SOLVE_TIMEOUT`, `ulimit -v $MEM_KB` and
@@ -107,6 +123,8 @@
 #   BAGUETTE_MZN_ID / CHUFFED_MZN_ID / GCS_MZN_ID   the solver ids flattened for
 #   EXTRA_MSC_DIR  prepended to MZN_SOLVER_PATH (the self-test's shims)
 #   ONLY        a file of instance ids; KEEP=1 keeps every artefact; DATA_TRIES (4)
+#   COMPAT      1 (default) passes COMPAT_MZN (mznlib/compat_mzn1.mzn) to the chuffed
+#               and gcs flattens; 0 does not. See "the 1.x shims".
 #
 # Results are APPENDED and resumed by (id, solver); the last line of a complete run is
 # `DONE-<epoch> <rows> <selected>`. `--report` refuses to call a table without it whole.
@@ -138,6 +156,8 @@ EXTRA_MSC_DIR="${EXTRA_MSC_DIR:-}"
 KEEP="${KEEP:-0}"
 ONLY="${ONLY:-}"
 DATA_TRIES="${DATA_TRIES:-4}"
+COMPAT="${COMPAT:-1}"
+COMPAT_MZN="${COMPAT_MZN:-$ROOT/mznlib/compat_mzn1.mzn}"
 
 TOTAL_MAX=48
 MEM_KB_MAX=32000000
@@ -262,10 +282,13 @@ has_row() { # id solver
 # Flatten $1 (mzn) with $2's library and data $3 ('' = bare) into $4. Prints the
 # failure message on failure. rc 0 ok, 1 refused, 124 timeout.
 flatten_with() {
-  local mzn="$1" solver="$2" dat="$3" dst="$4" rc
+  local mzn="$1" solver="$2" dat="$3" dst="$4" rc compat=""
   rm -f "$dst.part" "$dst"
+  # The MiniZinc 1.x LANGUAGE shims (see "the 1.x shims" in the header): baguette's
+  # library includes them itself, the other two get the same file as a second model.
+  [ "$COMPAT" = 1 ] && [ "$solver" != baguette ] && compat="$COMPAT_MZN"
   timeout -k 10 "$FLATTEN_TIMEOUT" "$MZN" -c --solver "$(mzn_id_of "$solver")" "$mzn" \
-    ${dat:+"$dat"} -o "$dst.part" > "$dst.err" 2>&1
+    ${compat:+"$compat"} ${dat:+"$dat"} -o "$dst.part" > "$dst.err" 2>&1
   rc=$?
   if [ "$rc" -eq 0 ] && [ -s "$dst.part" ]; then
     mv -f "$dst.part" "$dst" || {
@@ -494,6 +517,7 @@ preflight() {
   [ -d "$CORPUS" ] || die "corpus root $CORPUS does not exist"
   command -v python3 >/dev/null 2>&1 || die "python3 is required (tools/compare/compare.py)"
   [ -f "$TOOL" ] || die "$TOOL is missing"
+  [ "$COMPAT" != 1 ] || [ -f "$COMPAT_MZN" ] || die "COMPAT=1 but $COMPAT_MZN is missing"
   command -v "$MZN" >/dev/null 2>&1 || die "minizinc not found (MZN=$MZN)"
   MZN="$(command -v "$MZN")"
   [ -n "$CHUFFED" ] || CHUFFED="$(dirname "$MZN")/fzn-chuffed"
@@ -571,6 +595,7 @@ write_conf() {
     echo "gcs_md5=$(hash_of "$GCS")"
     echo "gcs_commit=$(git -C "$(dirname "$GCS")" rev-parse --short HEAD 2>/dev/null || echo -)"
     echo "gcs_prove=$GCS_PROVE"
+    echo "compat=$COMPAT ${COMPAT_MZN} $(hash_of "$COMPAT_MZN")"
     echo "veripb=$VERIPB $("$VERIPB" --version 2>/dev/null | tail -1)"
   } > "$OUT/run.conf.part" && mv -f "$OUT/run.conf.part" "$OUT/run.conf"
 }
@@ -586,7 +611,7 @@ main() {
   write_conf
   export OUT MZN BAGUETTE CHUFFED GCS GCS_PROVE MEM_KB PROOF_CAP_KB SOLVE_TIMEOUT
   export FLATTEN_TIMEOUT CHECK_TIMEOUT KEEP DATA_TRIES SOLVERS PAIR_SOLVERS TOOL VERIPB
-  export BAGUETTE_MZN_ID CHUFFED_MZN_ID GCS_MZN_ID
+  export BAGUETTE_MZN_ID CHUFFED_MZN_ID GCS_MZN_ID COMPAT COMPAT_MZN
   export -f pair_one solve_one flatten_with check_input emit_input_failures instance_id
   export -f validate_fzn data_candidates emit flat mzn_id_of now_ns secs has_row
 
