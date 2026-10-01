@@ -545,6 +545,9 @@ work. The owning session picks it up.
 | **`global_cardinality_low_up` does not reach the gcc propagator (M7-T18 found, not needed by any of the nine).** std's `fzn_global_cardinality_low_up` decomposes into `count` sums. A new `mznlib/fzn_global_cardinality_low_up.mzn` would route it, with each count declared on its own bounds: `predicate fzn_global_cardinality_low_up(array [int] of var int: xs, array [int] of int: cover, array [int] of int: lower_bound, array [int] of int: upper_bound) = let { array [index_set(cover)] of var int: c = [ let { var max(0, lower_bound[i])..min(length(xs), upper_bound[i]): ci } in ci | i in index_set(cover) ] } in baguette_global_cardinality(xs, cover, c);` (plus `include "fzn_global_cardinality.mzn";` for the bodyless declaration). Equal bounds then become one-value counts, which D-0082 measured identical to constants. Needs a model lane over the `_low_up` form when it lands | `mznlib/**` | agent-gcc2 | raised 2026-10-01, **open** |
 | **(agent-cover, M7-T19) A root-UNSAT linear row over a SINGLETON-declared variable crashes the solver** — `Fatal error: exception Invalid_argument("Justify.emit: Combine's Weaken summand must be non-empty")` (`lib/core/justify.ml:479`), exit 2, on `main` as well as `wave31-cover`, with or without `--proof`. Smallest repro: `var 1..3: x; var 7..7: s; constraint int_le(s, x); solve satisfy;`. Also `int_lin_eq([1,-1],[x,s],0)` and `int_lin_le` shapes with `s` in `7..7`; `var 7..8` is fine and verifies UNSAT. A crash, not a wrong answer, but on a valid model. Not fixed: `justify.ml` is the orchestrator's and the fault may be in `linear.ml`. M7-T19's crossed-bounds inference declares the hull (>= 2 values) partly to stay off it. | **CLOSED 2026-10-01** by M7-T20 (orchestrator, merged `8394a43`): `Justify.emit_combine` drops a `Weaken []` summand -- a single-value variable has nothing to weaken; `fixed_var_root_unsat` / `fixed_var_sat` lanes |
 | **(agent-cover, M7-T19) `lib/flatzinc/dune`'s comment is now false**: it says `builder.ml` references nothing from core. Since M7-T19 it uses `Baguette_core.Checked` and `Interval` for bounds inference (D-0083), which the dependency order permits. One-sentence comment change, orchestrator-held file. | **CLOSED 2026-10-01** by the orchestrator: the comment now says builder.ml uses core's Checked and Interval since M7-T19 |
+| **`Trace.derive_ahead`'s trigger is a proxy, and gcc is the first family it gets wrong.** It fires on `Encoding.has_direct` of the pruned variable, which its own comment calls deliberately OVER-triggering. It also UNDER-triggers: `lib/core/prop/gcc.ml`'s counting rows are over the ORDER encoding and it names no direct literal anywhere, so `has_direct` was false for its whole scope and **every gcc trace line went out as a bare `rup`, which 3.0.2 refused**. M7-T16 buys the trigger back by calling `Encoding.request_direct` for the gcc scope purely to arm it (stated in full at the call site in `compile.ml`) -- which mints the width-proportional `red` lines of an encoding nothing reads, D-0028's own cost. **The real fix is the one `trace.ml`'s comment already names**: a per-entry flag threaded from the propagator, so "this pruning needs its derivation ahead" is a property of the propagator and not of the encoding. Neither file is M7-T16's. See D-0078 | `lib/core/trace.ml`, `lib/proof/encoding.ml` | agent-gcc | raised 2026-09-23, **open** |
+| **`scripts/corpus_run.sh` writes into the corpus.** `minizinc -c ... -o "$W.fzn.part"` cannot derive the `.ozn` name from a `.part` path, so MiniZinc writes `<model>.ozn` BESIDE THE MODEL: 412 stray `.ozn` files under `fataepyc-07:/scratch/arthur/mzn-challenge/` on 2026-10-01 (hours 14-16 UTC), from that script and from compare_run.sh before its fix. They are inert (no data glob matches `.ozn`) but the corpus is meant to be read-only. Fix: add `--no-output-ozn` to the flatten call (verified on 2.10.1, M6-T4's `flatten_with`). Then the orchestrator may `find /scratch/arthur/mzn-challenge -name '*.ozn' -delete` once no run is flattening | `scripts/corpus_run.sh` (agent-perf's this wave), the node corpus | agent-compare | raised 2026-10-01, **open** |
+| **Put `scripts/compare_selftest.sh` in the gate.** It needs only a built `bin/main.exe`, veripb and python3 (a stub `minizinc` and two shims stand in for the rest), runs in seconds, and is the only thing that proves the harness can report a DISAGREE. A `make check` line beside `corpus_selftest.sh` | `Makefile` (orchestrator's) | agent-compare | raised 2026-10-01, **open** |
 
 ## Completed
 
@@ -639,6 +642,7 @@ work. The owning session picks it up.
 | M7-T17 + M7-T18 | agent-gcc2 | 2026-10-01 | Derive-ahead fires on `Store.entry.ahead`, set by alldiff/gcc at the pruning call (`Store.deriving_ahead`); gcc's `request_direct` stopgap deleted; 80/80 global-free proofs byte-identical, debruijn `.pbp` 28 552 -> 24 542 B. Constant gcc counts are `View.const k`, byte-identical to `var k..k`; the nine corpus instances all compile and all TIMEOUT at 300 s. D-0082 |
 | M7-T19 | agent-cover | 2026-10-01 | `indomain` -> `indomain_min`; `anti_first_fail` (largest size, first_fail's tie-break); bounds inference for undomained `var int` (11 rules incl. a case split), refusing only when unbounded; SPEC 2.1/3.4 amended; D-0083. 9/10 corpus instances past the front end, 1 SAT verified, 0 rejected. Branch `wave31-cover`. |
 | M7-T20 | orchestrator | 2026-10-01 | `Justify.emit_combine` drops a `Weaken []` summand (a single-value variable has nothing to weaken) instead of dying with `Invalid_argument`; `fixed_var_root_unsat` / `fixed_var_sat` lanes, proofs checked. Closes M7-T19's first cross-session request |
+| M6-T4 (+ M5-T3) | `scripts/compare_run.sh` (new), `scripts/compare_selftest.sh` (new), `tools/compare/compare.py` (new), `bench/README.md` (§8, appended), `bench/corpus/{shared_set.lst,answers.tsv}` (new), `docs/DECISIONS.md` (D-0081), `docs/ROADMAP.md` (M6-T4 row) | agent-compare | released 2026-10-01 -- **D-0081**, branch `wave31-compare`, not merged. 0 DISAGREE over 164 agreeing instances |
 
 ## Handoff notes
 
@@ -3335,3 +3339,25 @@ and `fixed_var_sat`; 117/117 model tests. What I did not do: audit every other
 `weaken_declared` caller (`bool2int.ml`, `lin_eq`, `ne`) for a width-1 sibling that reaches
 `emit_summand` outside a `Combine` — none of the 117 models does, and the invariant there is
 unchanged so it would still say so loudly.
+## M6-T4 handoff, 2026-10-01 (agent-compare)
+
+Branch `wave31-compare`, not merged; pushed to `fataepyc-07:/scratch/arthur/baguette.git`.
+**What exists**: `scripts/compare_run.sh <corpus> <out>` runs baguette, Chuffed and GCS on
+one instance set, each flattened by its own library, and judges AGREE/DISAGREE per
+instance; `--report` prints DISAGREE first; `--answers`/`--shared` build
+`bench/corpus/answers.tsv` (387 pinned) and `shared_set.lst` (411). Self-test passes on the
+laptop (stub minizinc) and on the node (real minizinc). **The result (D-0081)**: 0
+DISAGREE; baguette 59/59 pilot proofs verified; GCS had 2 proofs REJECTED by veripb with
+the answers agreeing (a GCS finding, artefacts in `compare-out-pilot/log/`).
+
+**What the next session should know.** (1) To check a baguette change against the
+regression set: `PAIRS=bench/corpus/answers.tsv ONLY=bench/corpus/shared_set.lst
+SOLVERS=baguette scripts/compare_run.sh <corpus> <out>` then `--report <out> --pinned
+bench/corpus/answers.tsv` -- without `PAIRS` the data choice can drift (it did once, on
+`2025_gt-sort`, D-0081). (2) GCS with `--prove` writes GBs a minute; `PROOF_CAP_KB`
+(16 GB) turns that into `CAPPED`, its own status. (3) On the node, GCS is
+`/scratch/arthur/gcs/build/fzn-glasgow` (pass `GCS=`), and its `glasgow.msc` sits beside it.
+(4) Stopping a run: `timeout` puts each solver in its own process group, so killing the
+script's group leaves solvers running -- kill by the `compare-out-<name>` path in their
+args. (5) Two cross-session requests: `--no-output-ozn` for corpus_run.sh, and the
+self-test in the gate.
