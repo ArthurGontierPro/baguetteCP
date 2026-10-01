@@ -334,6 +334,9 @@ def fnum(x):
 def report(outdirs, pinned=None, timeout=None):
     ok = True
     allrows = []
+    # Duplicates are judged WITHIN one table: the same (id, solver) in two runs passed
+    # together is two measurements, not a collision.
+    dups = 0
     for od in outdirs:
         rows, done = load(od)
         conf = load_conf(od)
@@ -349,16 +352,19 @@ def report(outdirs, pinned=None, timeout=None):
                 print("  %s = %s" % (k, conf[k]))
         if timeout is None and conf.get("solve_timeout"):
             timeout = float(conf["solve_timeout"])
+        k = [(r["id"], r["solver"]) for r in rows]
+        dups += len(k) - len(set(k))
         allrows += rows
     if timeout is None:
         timeout = 300.0
-    keys = [(r["id"], r["solver"]) for r in allrows]
-    dups = len(keys) - len(set(keys))
-    by = {}
+    by, every = {}, {}
     for r in allrows:
         by.setdefault(r["id"], {})[r["solver"]] = r
+        every.setdefault(r["id"], []).append(r)
     solvers = [s for s in SOLVERS if any(s in v for v in by.values())]
-    verdicts = {i: agreement(list(v.values())) for i, v in by.items()}
+    # Agreement over EVERY row of an instance, so tables passed together are judged
+    # together (the pilot's chuffed row and the Chuffed pass's both count).
+    verdicts = {i: agreement(every[i]) for i in by}
 
     dis = sorted(i for i, (v, _) in verdicts.items() if v == "DISAGREE")
     print()
