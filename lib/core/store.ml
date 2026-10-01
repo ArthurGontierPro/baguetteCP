@@ -137,6 +137,11 @@ type entry = {
 type t = {
   domains : Domain.t array;
   names : string array;
+  (* M6-T11 (D-0085): the name -> variable index behind [var_named] and [name_rep],
+     built on first use rather than in [create], because [Engine.oracle_accepts] builds a
+     scratch store per tuple and never asks for a name. Names are fixed at creation
+     ([names] is a private copy nothing writes), so the index never goes stale. *)
+  by_name : ((string, int) Hashtbl.t * int array) Lazy.t;
   reasons : Explanation.Arena.t;
   lo_sup : int array;
   hi_sup : int array;
@@ -199,12 +204,32 @@ let dummy_entry =
 
 let dummy_mark = { trail_mark = 0; reason_mark = 0 }
 
+(* The first index bearing each name, and per index the first index bearing ITS name.
+   "First" is what the linear scan [var_named] used to return, so a model with two
+   variables of one name (nothing in [Compile] produces one; a hand-built test store
+   could) still gets the same answer. *)
+let build_name_index names =
+  let tbl = Hashtbl.create ((2 * Array.length names) + 1) in
+  let rep =
+    Array.mapi
+      (fun i nm ->
+        match Hashtbl.find_opt tbl nm with
+        | Some j -> j
+        | None ->
+            Hashtbl.add tbl nm i;
+            i)
+      names
+  in
+  (tbl, rep)
+
 let create ~names ~domains =
   if Array.length names <> Array.length domains then
     invalid_arg "Store.create: names and domains differ in length";
+  let names = Array.copy names in
   {
     domains = Array.copy domains;
-    names = Array.copy names;
+    names;
+    by_name = lazy (build_name_index names);
     reasons = Explanation.Arena.create ();
     lo_sup = Array.make (Stdlib.max 1 (Array.length domains)) no_support;
     hi_sup = Array.make (Stdlib.max 1 (Array.length domains)) no_support;
@@ -309,9 +334,21 @@ let push_mark t m =
 
 (* ----------------------------------------------------------------- mutation *)
 
-(* The variable of that name, or [None]. Linear in the variable count and only ever
-   called from the debug-gated agreement check, so no index is kept for it. *)
+(* The variable of that name (the lowest-numbered, should two share it), or [None].
+
+   M6-T11 (D-0085). This header used to say the lookup was linear and "only ever called
+   from the debug-gated agreement check, so no index is kept for it". Both halves had
+   stopped being true: [Pb_analysis], [Analysis.support_of], [Learn], [Pb] and [Search]
+   all call it on the conflict path, and D-0080 measured it at 11 % of a 60 s profile on
+   2018 rotating-workforce. It is now one hash lookup into an index built on first use.
+   [var_named_scan] is the old definition, kept as the specification the index is tested
+   against (test_core.ml). *)
 let var_named t name =
+  match Hashtbl.find_opt (fst (Lazy.force t.by_name)) name with
+  | Some i -> Some (Var.of_int i)
+  | None -> None
+
+let var_named_scan t name =
   let n = Array.length t.names in
   let rec go i =
     if i >= n then None
@@ -319,6 +356,13 @@ let var_named t name =
     else go (i + 1)
   in
   go 0
+
+(* [var_named t (name t v)], in O(1): the variable whose NAME a trail scan is really
+   comparing against. [Var.equal (name_rep t a) (name_rep t b)] iff
+   [String.equal (name t a) (name t b)], which is what lets [Analysis.scan_support]
+   compare integers along the trail instead of strings (M6-T11). With unique names --
+   every store [Compile] builds -- it is the identity. *)
+let name_rep t v = Var.of_int (snd (Lazy.force t.by_name)).(Var.to_int v)
 
 (* The predicate, public and unconditional, so that a test can assert it directly rather
    than only through an environment variable read at module initialisation. A check that
