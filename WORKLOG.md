@@ -430,6 +430,39 @@ through the engine.
 `lib/core/dune`, `lib/*/dune`,
 `lib/core/explanation.ml`, `lib/core/justify.ml`, `/scratch/arthur/baguette` on the node, and all
 merging. A need for any of these is a `## Cross-session requests` row.
+
+**TWO OVERNIGHT RUNS ARE IN FLIGHT ON `fataepyc-07`, launched 2026-10-01 ~17:30 by the
+orchestrator, detached (`setsid nohup`), from `/scratch/arthur/baguette` at `main` =
+`56ae463`, binary md5 `b37ec100a31e27e598edbc334c0f183c`. Do not re-launch them; read them.**
+ssh access to the node was cut for the night right after the launch, so nothing below was
+watched past its first two log lines.
+
+1. **The wave-31 corpus run**: `scripts/corpus_run.sh` over all 436, `PAR=64`, 300 s,
+   veripb 3.0.2 on every solved instance. Results `/scratch/arthur/corpus-out-w31/results.tsv`,
+   log `/scratch/arthur/w31-corpus.log`. Read it with
+   `scripts/corpus_run.sh --report /scratch/arthur/corpus-out-w31`. It measures what wave 31
+   merged so far — M7-T17/T18 (gcc, constant counts), M7-T19 (ten refusals, bounds
+   inference), M7-T20 (single-value crash) — against D-0079's wave-30 table. **It does NOT
+   contain M6-T9's `--time-limit`** (agent-perf's branch was not merged at launch), so its
+   timeouts are still `TIMEOUT-SOLVE` with no stats.
+2. **The first full three-solver comparison**: `scripts/compare_run.sh` over all 436,
+   `SOLVERS="baguette chuffed gcs"`, `PAR=16` per solver, 300 s, `GCS_PROVE=1` (GCS proofs
+   on, 16 GB file cap), `PAIRS=bench/corpus/answers.tsv` so every instance uses the pinned
+   data file. Results `/scratch/arthur/compare-out-w31/results.tsv`, log
+   `/scratch/arthur/w31-compare.log`. Read it with
+   `scripts/compare_run.sh --report /scratch/arthur/compare-out-w31 --pinned bench/corpus/answers.tsv`.
+   **The `DISAGREE` list and any `PIN-MISMATCH` come first**: a disagreement involving
+   baguette is a soundness finding (D-0081: 0 over 164 so far).
+
+Both honour the `DONE-<epoch>` rule: no marker, partial table, say so. At launch the node
+also carried agent-perf's last jobs (load ~64), so the two runs' `TIMEOUT` columns are
+load-comparable with each other but slightly pessimistic against wave 30's.
+
+**Wave-31 merge state at that moment**: `wave31-gcc2` (M7-T17+T18), `wave31-cover` (M7-T19),
+`wave31-justify` (M7-T20, orchestrator) and `wave31-compare` (M6-T4) are merged into `main`
+and gate-green (117 models, selftests included); `wave31-perf` (M6-T9) is still live and
+merges next. Node clones `/scratch/arthur/baguette-{perf,compare,gcc2,cover}` and the
+`perf-out-*` / `compare-out-pilot` directories are the agents' and hold their raw data.
 ## Cross-session requests
 
 Need a change in a file someone else has claimed? Write it here and move on to other
