@@ -179,6 +179,30 @@
    among them -- verifies with nothing written ahead of an index line either. That is
    [Single_row] measured on both sides.
 
+   **M7-T21 / D-0084 amends it again, three times, and none of the three is about a trace
+   line.** Each is about a DERIVATION that some other line embeds, which is how D-0080's
+   corpus rejections were invisible to every lane above: the trace lines were right.
+
+     - A FOREIGN INDEX HOLE ([index_hole_clause]). The [pos_gone] arm for a position the
+       index lost to someone else wrote the bare unit [~idx_eq_p]. That is RUP only for a
+       level-0 hole. Under a decision it is the corpus's 23-of-26 shape
+       `rup +1 ~<v>_eq_<k> >= 1 ;`, written when a second element's factless conflict
+       forces this instance's [hole_expl] through [excl_hole]. It now carries the
+       puncher's facts. test/models/element_foreign_hole_rup_sat.fzn.
+     - ROOT RESIDUE ([alo_of]'s [cancel], [filter_index]). A pruning derivation kept
+       every residue literal, so one embedded in another instance's ROOT conflict left
+       literals nothing counted. Root-established residue is now cancelled where the
+       derivation is built. test/models/element_shared_result_root_unsat.fzn.
+     - CURRENCY ([in_order_currency]). An interior index removal concluded [~idx_eq_p],
+       while [excl_hole] -- reached when this index is another instance's RESULT -- pairs
+       off ORDER literals. It now concludes `~idx_ge_p \/ idx_ge_(p+1)`, like every other
+       hole in the store. test/models/element_crossed_root_unsat.fzn.
+
+   What is still OPEN: [excl_hole] trusts the remover's derivation to conclude the hole in
+   the order currency. An element result that is also in an all_different scope can have
+   a hole punched by Regin, whose derivation concludes over the direct encoding; that
+   case is not reduced or measured here (D-0084, "not verified").
+
    ---------------------------------------------------------------------------
    Snapshotting and I-X6
    ---------------------------------------------------------------------------
