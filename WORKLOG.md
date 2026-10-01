@@ -463,6 +463,30 @@ load-comparable with each other but slightly pessimistic against wave 30's.
 and gate-green (117 models, selftests included); `wave31-perf` (M6-T9) is still live and
 merges next. Node clones `/scratch/arthur/baguette-{perf,compare,gcc2,cover}` and the
 `perf-out-*` / `compare-out-pilot` directories are the agents' and hold their raw data.
+
+**Wave thirty-two, dispatched 2026-10-02 from `5a9b84c` (orchestrator).** Wave 31 is fully
+merged (M7-T17/18/19/20, M6-T4, M6-T9), gate-green at 117 models. The node is UNREACHABLE
+until the user reconnects, so every row below starts from local reproducers and local
+measurements, and names what it will measure on the node later. Rows: M6-T10 (orchestrator,
+`wave32-memo`), M6-T11 (agent-speed, `wave32-speed`), M6-T12 (agent-tidy, `wave32-tidy`),
+M7-T21 (agent-rup2, `wave32-rup2`). Decision ids pre-assigned: **D-0084** agent-rup2, **D-0085**
+agent-speed, **D-0086** orchestrator (M6-T10) if it needs one, agent-tidy none.
+
+Seams: `lib/core/store.ml` is agent-speed's (the `var_named` index); if agent-rup2 needs a
+store change it is a cross-session row. `lib/core/trace.ml`, `lib/core/prop/element.ml` and
+`lib/core/prop/gcc.ml` are agent-rup2's. `lib/proof/writer.ml` and `lib/core/search.ml`'s
+`conclude_stopped` are agent-tidy's; `lib/proof/{lit,encoding}.ml` agent-speed's. `bin/**` and
+`lib/core/justify.ml` the orchestrator's.
+
+| Task | Files being touched | Session | Since |
+|---|---|---|---|
+| M6-T10 | `lib/core/justify.ml`, `bin/main.ml`, `bin/dune`, `docs/SPEC.md` §2.2, `test/unit/test_justify.ml` | orchestrator | 2026-10-02 |
+| M6-T11 | `lib/core/analysis.ml`, `lib/core/store.ml`, `lib/proof/lit.ml`, `lib/proof/encoding.ml`, (`lib/core/learned.ml`, `lib/core/prop/pb.ml` only for a local fix), `test/unit/{test_analysis,test_core,test_proof}.ml`, `bench/**`, `docs/DECISIONS.md` (D-0085, append) | agent-speed | 2026-10-02 |
+| M6-T12 | `lib/proof/writer.ml`, `lib/core/search.ml` (`conclude_stopped` only), `scripts/corpus_selftest.sh`, `test/unit/test_proof.ml` | agent-tidy | 2026-10-02 |
+| M7-T21 | `lib/core/prop/element.ml`, `lib/core/prop/gcc.ml`, `lib/core/trace.ml`, `lib/core/order_reason.ml`, `test/unit/{test_trace,test_prop}.ml`, new `test/models/*` + expected, `docs/PROOF-FORMAT.md` §4 rows, `docs/DECISIONS.md` (D-0084, append) | agent-rup2 | 2026-10-02 |
+
+**Orchestrator holds** `WORKLOG.md`, `docs/ROADMAP.md`, `CLAUDE.md`, `Makefile`, `lib/*/dune`,
+`lib/core/explanation.ml`, `scripts/corpus_run.sh`, `scripts/compare_run.sh`, and all merging.
 ## Cross-session requests
 
 Need a change in a file someone else has claimed? Write it here and move on to other
@@ -582,25 +606,25 @@ work. The owning session picks it up.
 | **`scripts/corpus_run.sh` writes into the corpus.** `minizinc -c ... -o "$W.fzn.part"` cannot derive the `.ozn` name from a `.part` path, so MiniZinc writes `<model>.ozn` BESIDE THE MODEL: 412 stray `.ozn` files under `fataepyc-07:/scratch/arthur/mzn-challenge/` on 2026-10-01 (hours 14-16 UTC), from that script and from compare_run.sh before its fix. They are inert (no data glob matches `.ozn`) but the corpus is meant to be read-only. Fix: add `--no-output-ozn` to the flatten call (verified on 2.10.1, M6-T4's `flatten_with`). Then the orchestrator may `find /scratch/arthur/mzn-challenge -name '*.ozn' -delete` once no run is flattening | `scripts/corpus_run.sh` (agent-perf's this wave), the node corpus | agent-compare | raised 2026-10-01; **half CLOSED 2026-10-01** by the orchestrator: the 412 stray `.ozn` files were deleted from the corpus clone (all untracked and gitignored, `git ls-files '*.ozn'` empty before deleting); the `--no-output-ozn` line is routed to agent-perf, who holds `corpus_run.sh` this wave |
 | **Put `scripts/compare_selftest.sh` in the gate.** It needs only a built `bin/main.exe`, veripb and python3 (a stub `minizinc` and two shims stand in for the rest), runs in seconds, and is the only thing that proves the harness can report a DISAGREE. A `make check` line beside `corpus_selftest.sh` | `Makefile` (orchestrator's) | agent-compare | raised 2026-10-01; **CLOSED 2026-10-01** by the orchestrator: `make check` now runs a `selftests` target (`corpus_selftest.sh` + `compare_selftest.sh`), between `unlimit` and `test` |
 
-| **M6-T9 / D-0080, the largest measured lever, PROPOSED**: `Justify`'s memo is an association list scanned with `==` on every `emit` (`find_memo`), and `wipe_level` filters all of it per backtrack. Its header says the list is "small"; on 2011 costas-array 15 it averaged 13 000 entries -- 1.05e9 list steps, 7.0 s of a 15 s run, 61 % self time in a 60 s profile. `bench/m6t9/justify-memo.patch` keeps identity equality but buckets by a shallow structural hash that never enters a `Deferred` (the header's mutable-key trap) and indexes entries by level for the wipe: costas 60-node prefix 15.32 s -> 3.72 s with a BYTE-IDENTICAL proof, the 107 suite models byte-identical. Corpus numbers: D-0080 config (e) | `lib/core/justify.ml` | agent-perf | open |
+| **M6-T9 / D-0080, the largest measured lever, PROPOSED**: `Justify`'s memo is an association list scanned with `==` on every `emit` (`find_memo`), and `wipe_level` filters all of it per backtrack. Its header says the list is "small"; on 2011 costas-array 15 it averaged 13 000 entries -- 1.05e9 list steps, 7.0 s of a 15 s run, 61 % self time in a 60 s profile. `bench/m6t9/justify-memo.patch` keeps identity equality but buckets by a shallow structural hash that never enters a `Deferred` (the header's mutable-key trap) and indexes entries by level for the wipe: costas 60-node prefix 15.32 s -> 3.72 s with a BYTE-IDENTICAL proof, the 107 suite models byte-identical. Corpus numbers: D-0080 config (e) | `lib/core/justify.ml` | agent-perf | **taken 2026-10-02** by M6-T10 (orchestrator), wave 32 |
 
-| **M6-T9 / D-0080: 26 PROOF-REJECTED the sweep made visible** (they timed out before, so were never checked). 23 are one shape: `rup +1 ~<v>_eq_<k> >= 1 ;` -- a direct-encoding hole with an EMPTY tail at a decision level > 0, the first such line in its proof, right after `Trace.derive_ahead`'s `pol`s: D-0075's "bare `x <> m`" shape, on element indices and `mapget*` variables (spot5 x3, traveling-tppv x3, javarouting/java-routing x10, mario x2, portal, stable-goods, peaceable-queens x2, project-planning). 3 are multi-literal `rup`s in `baguette_global_cardinality` models (generalized-peacable-queens, chessboard, compression). The pre-fix binary rejects the same proofs at the same line numbers. Artefacts: `fataepyc-07:/scratch/arthur/perf-out-{a,a2}/log/<id>.{fzn,opb,pbp,vp}`; list in D-0080 | `lib/core/trace.ml`, `lib/core/prop/{element,gcc}.ml` | agent-perf | open |
+| **M6-T9 / D-0080: 26 PROOF-REJECTED the sweep made visible** (they timed out before, so were never checked). 23 are one shape: `rup +1 ~<v>_eq_<k> >= 1 ;` -- a direct-encoding hole with an EMPTY tail at a decision level > 0, the first such line in its proof, right after `Trace.derive_ahead`'s `pol`s: D-0075's "bare `x <> m`" shape, on element indices and `mapget*` variables (spot5 x3, traveling-tppv x3, javarouting/java-routing x10, mario x2, portal, stable-goods, peaceable-queens x2, project-planning). 3 are multi-literal `rup`s in `baguette_global_cardinality` models (generalized-peacable-queens, chessboard, compression). The pre-fix binary rejects the same proofs at the same line numbers. Artefacts: `fataepyc-07:/scratch/arthur/perf-out-{a,a2}/log/<id>.{fzn,opb,pbp,vp}`; list in D-0080 | `lib/core/trace.ml`, `lib/core/prop/{element,gcc}.ml` | agent-perf | **taken 2026-10-02** by M7-T21 (agent-rup2), wave 32 |
 
-| **M6-T9 / D-0080**: `Analysis.scan_support` walks the trail comparing `Store.name` STRINGS (`String.equal (Store.name store e.var) name`) though `support_of` already holds the `Var.t` from `Store.var_named`. 2016 prize-collecting: ~60 % self time in `Analysis.go` + `caml_string_equal` + `Store.name` + `Store.trail_entry`. Compare `Var.equal` instead | `lib/core/analysis.ml` | agent-perf | open |
+| **M6-T9 / D-0080**: `Analysis.scan_support` walks the trail comparing `Store.name` STRINGS (`String.equal (Store.name store e.var) name`) though `support_of` already holds the `Var.t` from `Store.var_named`. 2016 prize-collecting: ~60 % self time in `Analysis.go` + `caml_string_equal` + `Store.name` + `Store.trail_entry`. Compare `Var.equal` instead | `lib/core/analysis.ml` | agent-perf | **taken 2026-10-02** by M6-T11 (agent-speed), wave 32 |
 
-| **M6-T9 / D-0080**: `Store.var_named` is a LINEAR scan and its header says it is "only ever called from the debug-gated agreement check" -- it is on the hot path of `Pb_analysis` and `Analysis.support_of` now (11 % self on 2018 rotating-workforce). A name -> var index built once | `lib/core/store.ml` | agent-perf | open |
+| **M6-T9 / D-0080**: `Store.var_named` is a LINEAR scan and its header says it is "only ever called from the debug-gated agreement check" -- it is on the hot path of `Pb_analysis` and `Analysis.support_of` now (11 % self on 2018 rotating-workforce). A name -> var index built once | `lib/core/store.ml` | agent-perf | **taken 2026-10-02** by M6-T11 (agent-speed), wave 32 |
 
-| **M6-T9 / D-0080**: compile on wide models -- `Bytes.map` (literal-name sanitisation) + string hashing per literal: 2009 black-hole compiles in 73 s, 2018 rotating-workforce 28.5 s, 2012 amaze2 and 2017 opd never reach the search inside 280 s | `lib/proof/lit.ml`, `lib/proof/encoding.ml` | agent-perf | open |
+| **M6-T9 / D-0080**: compile on wide models -- `Bytes.map` (literal-name sanitisation) + string hashing per literal: 2009 black-hole compiles in 73 s, 2018 rotating-workforce 28.5 s, 2012 amaze2 and 2017 opd never reach the search inside 280 s | `lib/proof/lit.ml`, `lib/proof/encoding.ml` | agent-perf | **taken 2026-10-02** by M6-T11 (agent-speed), wave 32 |
 
-| **M6-T9 / D-0080**: the learned-PB-row propagator and learned-row combination are the next tier: 2017 tc-graph-color ~45 % self in `Pb.*`, 2008 trucking ~50 % in `Lit.var_compare`/`List.sort`/`Lit.var_equal`/`Learned` | `lib/core/prop/pb.ml`, `lib/core/learned.ml` | agent-perf | open |
+| **M6-T9 / D-0080**: the learned-PB-row propagator and learned-row combination are the next tier: 2017 tc-graph-color ~45 % self in `Pb.*`, 2008 trucking ~50 % in `Lit.var_compare`/`List.sort`/`Lit.var_equal`/`Learned` | `lib/core/prop/pb.ml`, `lib/core/learned.ml` | agent-perf | **taken 2026-10-02** by M6-T11 (agent-speed), as a stretch, wave 32 |
 
-| **M6-T9**: SPEC 2.2 does not list `=====UNKNOWN=====`; `--time-limit` prints it (the FlatZinc standard's marker) when it stops with nothing printed. Please add it to the marker list, with the stopped optimisation case (improving solutions printed, no `==========`) | `docs/SPEC.md` | agent-perf | open |
+| **M6-T9**: SPEC 2.2 does not list `=====UNKNOWN=====`; `--time-limit` prints it (the FlatZinc standard's marker) when it stops with nothing printed. Please add it to the marker list, with the stopped optimisation case (improving solutions printed, no `==========`) | `docs/SPEC.md` | agent-perf | **taken 2026-10-02** by M6-T10 (orchestrator), wave 32 |
 
-| **M6-T9**: `--time-limit` measures process CPU (`Sys.time`) because `bin/` links no wall clock. If wall time is wanted, `bin/dune` needs `unix` | `bin/dune` | agent-perf | open |
+| **M6-T9**: `--time-limit` measures process CPU (`Sys.time`) because `bin/` links no wall clock. If wall time is wanted, `bin/dune` needs `unix` | `bin/dune` | agent-perf | **taken 2026-10-02** by M6-T10 (orchestrator), wave 32 |
 
-| **M6-T9**: `Search.conclude_stopped` writes `output NONE` / `conclusion NONE` / `end` through `Writer.rule` and then repeats `Writer.conclusion`'s epilogue (finished, flush, audit) by hand, because `Writer.verdict` has no NONE arm. A `Writer.No_conclusion` verdict would make it one call | `lib/proof/writer.ml` | agent-perf | open |
+| **M6-T9**: `Search.conclude_stopped` writes `output NONE` / `conclusion NONE` / `end` through `Writer.rule` and then repeats `Writer.conclusion`'s epilogue (finished, flush, audit) by hand, because `Writer.verdict` has no NONE arm. A `Writer.No_conclusion` verdict would make it one call | `lib/proof/writer.ml` | agent-perf | **taken 2026-10-02** by M6-T12 (agent-tidy), wave 32 |
 
-| **M6-T9**: `corpus_selftest.sh` has no lane for the three classifications this wave added or repaired -- `UNKNOWN-LIMIT`, `CHECK-ERR-<rc>`, and `TIMEOUT-CHECK` (unreachable before `2dda188`). A fake solver printing `limit: reached` and a fake checker exiting 124 / exiting 1 with and without "Verification error" would pin all three | `scripts/corpus_selftest.sh` | agent-perf | open |
+| **M6-T9**: `corpus_selftest.sh` has no lane for the three classifications this wave added or repaired -- `UNKNOWN-LIMIT`, `CHECK-ERR-<rc>`, and `TIMEOUT-CHECK` (unreachable before `2dda188`). A fake solver printing `limit: reached` and a fake checker exiting 124 / exiting 1 with and without "Verification error" would pin all three | `scripts/corpus_selftest.sh` | agent-perf | **taken 2026-10-02** by M6-T12 (agent-tidy), wave 32 |
 
 
 ## Completed
