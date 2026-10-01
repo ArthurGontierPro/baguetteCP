@@ -569,19 +569,99 @@ let pos_gone t store p =
 (* [sum_{p live} idx_eq_p \/ <lits> >= 1]: the declared at-least-one line, narrowed by
    one [pos_gone] per dead position. Each cancels its own term and leaves the degree at
    1, exactly as alldiff.ml's [alo_window] does over a Hall interval. *)
+(* A bound the SEARCH established, cited by [Explanation.Defining] (D-0064,
+   docs/DECISIONS.md D-0064; lib/core/explanation.ml's header, "[Defining], and why it
+   is a SUMMAND"). M4-T3 branched before that constructor existed and stood in with
+   [Explanation.term c (Explanation.clause [l])] -- the right arithmetic wearing the
+   wrong label, per explanation.ml's own words -- which cancels the term but, because a
+   [Clause] may be any width, is not an EXACT cancellation, and trips
+   [Search.rests_on_a_clause] into routing every conflict that uses it the D-0022 way
+   (`conclusion UNSAT` citing the empty clause, this module's own [pol] left decorative).
+   [Explanation.defining] cites a UNIT line and is exact, so a root conflict built only
+   from [Defining] summands closes on its own [pol].
+
+   [established_at_root] mirrors lib/core/prop/alldiff.ml:179's function of the same
+   name (that module is M4-T2's, not duplicated here as a shared function, since
+   alldiff.ml is read-only to this task): the level the trail entry supporting a bound
+   was pushed at, or 0 for a bound that has never moved. A bound the ROOT fixpoint set
+   is a consequence of the model and stays true and citable at ANY search depth; one a
+   DECISION set is not (D-0064's level rule) -- so, unlike the old blanket "only at
+   [Store.level store] = 0", the check below is per LITERAL, not per conflict, and it
+   fires above level 0 exactly when the specific bound cited happened to be a root one.
+   Every call site below computes it EAGERLY, never inside an [Explanation.deferred]
+   thunk: the support arrays this reads are live store state that a later backtrack can
+   invalidate, the same reason alldiff.ml's [snap_of] snapshots [s_lo_root]/[s_hi_root]
+   before wrapping anything in [deferred]. *)
+let established_at_root store v ~lower =
+  let sup = if lower then Store.lo_support store v else Store.hi_support store v in
+  sup = Store.no_support || Store.level_of_index store sup = 0
+
+(* One cancelling line per copy of each residue literal, when established at root;
+   otherwise the group contributes nothing and the residue's term stays in the
+   at-least-one row uncancelled -- not a loss, because only a ROOT conflict's derivation
+   is cited as a contradiction, and under a decision D-0018's nogood closes the branch
+   regardless. The values are read off the residues rather than from the store, so the
+   line cancelled is the bound the exclusion actually read, and the multiplicity is the
+   number of exclusions that read it. Called EAGERLY (see above), never inside the
+   [Explanation.deferred] its caller wraps around the combine. *)
+let residue_cancel t store ~dead =
+  let rn = match t.rname with Some x -> x | None -> "" in
+  let group sel lit_of var_opt ~lower =
+    match List.filter_map (fun (_, r) -> sel r) dead with
+    | [] -> []
+    | vs -> (
+        match var_opt with
+        | None -> []
+        | Some var ->
+            if established_at_root store var ~lower then
+              [ Explanation.defining (List.length vs) (lit_of (List.hd vs)) ]
+            else [])
+  in
+  group
+    (function R_res_hi h -> Some h | _ -> None)
+    (fun h -> Lit.le rn h)
+    (View.base_var t.res) ~lower:false
+  @ group
+      (function R_res_lo l -> Some l | _ -> None)
+      (fun l -> Lit.ge rn l)
+      (View.base_var t.res) ~lower:true
+  @ group
+      (function R_idx_lo l -> Some l | _ -> None)
+      (fun l -> Lit.ge t.iname l)
+      (Some t.ibase) ~lower:true
+  @ group
+      (function R_idx_hi h -> Some h | _ -> None)
+      (fun h -> Lit.le t.iname h)
+      (Some t.ibase) ~lower:false
+
 let dead_positions t store ~live =
   List.filter_map
     (fun p -> if List.mem p live then None else Some (pos_gone t store p))
     t.decl_pos
 
-let alo_of t ~dead =
+(* M7-T21 / D-0084: [cancel] is [residue_cancel] over the same [dead], computed EAGERLY
+   by the caller. A pruning's derivation used to keep every residue literal its
+   exclusions carried, root-established or not, on the argument that "only a ROOT
+   conflict's derivation is cited as a contradiction". That is true of THIS module's
+   conflicts and false of a derivation EMBEDDED in one: [excl_hole] cites the remover of
+   a result hole by its explanation, which is another element instance's [hole_expl] when
+   two elements share a result, and that instance's residue then arrives uncounted in a
+   root conflict that must close. 3.0.2: "The constraint with ID n is not contradicting"
+   (test/models/element_shared_result_root_unsat.fzn). Cancelling the root-established
+   residue HERE makes a pruning derivation at the root exact, so whatever embeds it gets
+   exactly `~idx_eq_p` or `c <> v` and nothing else. Above the root it cancels only what
+   the root established, which leaves the row stronger and still globally valid. *)
+let alo_of t ~dead ~cancel =
   Explanation.deferred (fun () ->
       Explanation.combine
         (cite (need "at-least-one" (Encoding.at_least_one_id t.enc t.iname))
-        :: List.map (fun (e, _) -> Explanation.term 1 e) dead)
+         :: List.map (fun (e, _) -> Explanation.term 1 e) dead
+        @ cancel)
         1)
 
-let alo t store ~live = alo_of t ~dead:(dead_positions t store ~live)
+let alo t store ~live =
+  let dead = dead_positions t store ~live in
+  alo_of t ~dead ~cancel:(residue_cancel t store ~dead)
 
 (* [~idx_eq_p \/ ~c_ge_(b+1)] for a live position whose value is at most [b]. *)
 let at_most_from t p ~b =
@@ -599,17 +679,19 @@ let at_least_from t p ~a =
 
 let push_hi_expl t store ~live ~b =
   let dead = dead_positions t store ~live in
+  let cancel = residue_cancel t store ~dead in
   Explanation.deferred (fun () ->
       Explanation.combine
-        (Explanation.term 1 (alo_of t ~dead)
+        (Explanation.term 1 (alo_of t ~dead ~cancel)
         :: List.map (fun p -> Explanation.term 1 (at_most_from t p ~b)) live)
         (List.length live))
 
 let push_lo_expl t store ~live ~a =
   let dead = dead_positions t store ~live in
+  let cancel = residue_cancel t store ~dead in
   Explanation.deferred (fun () ->
       Explanation.combine
-        (Explanation.term 1 (alo_of t ~dead)
+        (Explanation.term 1 (alo_of t ~dead ~cancel)
         :: List.map (fun p -> Explanation.term 1 (at_least_from t p ~a)) live)
         (List.length live))
 
@@ -619,6 +701,7 @@ let push_lo_expl t store ~live ~a =
    D-0009's weakening, used exactly as alldiff.ml's [pair_amo] uses it. *)
 let hole_expl t store ~live ~v =
   let dead = dead_positions t store ~live in
+  let cancel = residue_cancel t store ~dead in
   let below = List.filter (fun p -> t.values.(p) < v) live in
   let above = List.filter (fun p -> t.values.(p) > v) live in
   let na = List.length below and nb = List.length above in
@@ -629,7 +712,7 @@ let hole_expl t store ~live ~v =
   let pad k lit = if k > 0 then [ Explanation.weaken [ (k, lit) ] ] else [] in
   Explanation.deferred (fun () ->
       Explanation.combine
-        (Explanation.term 1 (alo_of t ~dead)
+        (Explanation.term 1 (alo_of t ~dead ~cancel)
          :: List.map (fun p -> Explanation.term 1 (at_most_from t p ~b:(v - 1))) below
         @ List.map (fun p -> Explanation.term 1 (at_least_from t p ~a:(v + 1))) above
         @ pad (m - na) (Lit.negate (Lit.ge rn v))
@@ -749,71 +832,6 @@ exception Found of Store.conflict
 exception Moved
 
 let live_positions t store = List.filter (fun p -> View.mem store t.pos p) t.decl_pos
-
-(* A bound the SEARCH established, cited by [Explanation.Defining] (D-0064,
-   docs/DECISIONS.md D-0064; lib/core/explanation.ml's header, "[Defining], and why it
-   is a SUMMAND"). M4-T3 branched before that constructor existed and stood in with
-   [Explanation.term c (Explanation.clause [l])] -- the right arithmetic wearing the
-   wrong label, per explanation.ml's own words -- which cancels the term but, because a
-   [Clause] may be any width, is not an EXACT cancellation, and trips
-   [Search.rests_on_a_clause] into routing every conflict that uses it the D-0022 way
-   (`conclusion UNSAT` citing the empty clause, this module's own [pol] left decorative).
-   [Explanation.defining] cites a UNIT line and is exact, so a root conflict built only
-   from [Defining] summands closes on its own [pol].
-
-   [established_at_root] mirrors lib/core/prop/alldiff.ml:179's function of the same
-   name (that module is M4-T2's, not duplicated here as a shared function, since
-   alldiff.ml is read-only to this task): the level the trail entry supporting a bound
-   was pushed at, or 0 for a bound that has never moved. A bound the ROOT fixpoint set
-   is a consequence of the model and stays true and citable at ANY search depth; one a
-   DECISION set is not (D-0064's level rule) -- so, unlike the old blanket "only at
-   [Store.level store] = 0", the check below is per LITERAL, not per conflict, and it
-   fires above level 0 exactly when the specific bound cited happened to be a root one.
-   Every call site below computes it EAGERLY, never inside an [Explanation.deferred]
-   thunk: the support arrays this reads are live store state that a later backtrack can
-   invalidate, the same reason alldiff.ml's [snap_of] snapshots [s_lo_root]/[s_hi_root]
-   before wrapping anything in [deferred]. *)
-let established_at_root store v ~lower =
-  let sup = if lower then Store.lo_support store v else Store.hi_support store v in
-  sup = Store.no_support || Store.level_of_index store sup = 0
-
-(* One cancelling line per copy of each residue literal, when established at root;
-   otherwise the group contributes nothing and the residue's term stays in the
-   at-least-one row uncancelled -- not a loss, because only a ROOT conflict's derivation
-   is cited as a contradiction, and under a decision D-0018's nogood closes the branch
-   regardless. The values are read off the residues rather than from the store, so the
-   line cancelled is the bound the exclusion actually read, and the multiplicity is the
-   number of exclusions that read it. Called EAGERLY (see above), never inside the
-   [Explanation.deferred] its caller wraps around the combine. *)
-let residue_cancel t store ~dead =
-  let rn = match t.rname with Some x -> x | None -> "" in
-  let group sel lit_of var_opt ~lower =
-    match List.filter_map (fun (_, r) -> sel r) dead with
-    | [] -> []
-    | vs -> (
-        match var_opt with
-        | None -> []
-        | Some var ->
-            if established_at_root store var ~lower then
-              [ Explanation.defining (List.length vs) (lit_of (List.hd vs)) ]
-            else [])
-  in
-  group
-    (function R_res_hi h -> Some h | _ -> None)
-    (fun h -> Lit.le rn h)
-    (View.base_var t.res) ~lower:false
-  @ group
-      (function R_res_lo l -> Some l | _ -> None)
-      (fun l -> Lit.ge rn l)
-      (View.base_var t.res) ~lower:true
-  @ group
-      (function R_idx_lo l -> Some l | _ -> None)
-      (fun l -> Lit.ge t.iname l)
-      (Some t.ibase) ~lower:true
-  @ group
-      (function R_idx_hi h -> Some h | _ -> None)
-      (fun h -> Lit.le t.iname h)
-      (Some t.ibase) ~lower:false
 
 (* Every declared position is impossible, so the at-least-one line has nothing left and
    the sum IS [0 >= 1] -- once the bound literals the exclusions carried are cancelled.
