@@ -84,6 +84,9 @@
 #   PROOF-REJECTED     solved, veripb REJECTED. Its own bucket. Never a failure
 #                      bucket, never merged, and the proof is KEPT for inspection.
 #   TIMEOUT-CHECK      veripb exceeded $CHECK_TIMEOUT -- says nothing either way
+#   CHECK-ERR-<rc>     M6-T9: veripb exited non-zero WITHOUT "Verification error"
+#                      -- it crashed or was killed, it did not judge. Never folded
+#                      into PROOF-REJECTED, which is gated on that wording.
 #   NO-PROOF           solver exited 0 but emitted no .pbp. A result without a
 #                      checked proof is not a result, so this is not a success.
 #
@@ -682,6 +685,17 @@ $(head -c 120 "$L.mzn.err" | tr '\t\n\r' '   ')"
     # proof, and folding it into PROOF-REJECTED would manufacture a defect.
     emit "$id" "TIMEOUT-CHECK" "$sz" "$pbp" "veripb exceeded ${CHECK_TIMEOUT}s"
     cleanup_one "$L"
+    return
+  fi
+  # M6-T9. A checker that exits non-zero WITHOUT its judgement wording did not
+  # judge: wave 31's sweep had three veripb runs end on nothing but the banner line,
+  # and they were filed as PROOF-REJECTED -- a harness/checker failure wearing the
+  # solver's name, the exact D-0069 failure mode. A rejection is now gated on the
+  # checker saying "Verification error"; anything else is CHECK-ERR-<rc>, and the
+  # artefacts are kept for both.
+  if ! grep -aq 'Verification error' "$L.vp"; then
+    emit "$id" "CHECK-ERR-$rc" "$sz" "$pbp" \
+      "checker exited $rc without a verdict: $(tail -c 150 "$L.vp" | tr '\t\n\r' '   ')"
     return
   fi
   # The bucket the run exists for. The artefacts are kept unconditionally, even
