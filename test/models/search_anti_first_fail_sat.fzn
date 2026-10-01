@@ -1,0 +1,22 @@
+% M7-T19 (D-0083). `anti_first_fail` selects the unfixed variable with the LARGEST
+% current domain, ties to the earliest in the annotation's array (first_fail's rule).
+%
+%   p  0..9   size 10           q  8..10  size 3, hi 10     r  0..3  size 4, lo 0
+%
+% With p + q + r = 12 the root propagates p to 0..4 (q >= 8): sizes p 5, q 3, r 4.
+% The array is written [q, r, p], and every other supported strategy picks q or r:
+%
+%   first_fail  -> q (smallest domain)    input_order -> q (first written)
+%   largest     -> q (largest max, 10)    smallest    -> r (smallest min, earliest)
+%   anti_first_fail -> p (largest domain, 5)
+%
+% With indomain_max the chosen variable takes its maximum, so the answer names it:
+% p = 4 forces q = 8, r = 0. Measured 2026-10-01: first_fail, input_order and largest
+% answer p = 0, q = 10, r = 2, and smallest answers p = 1, q = 8, r = 3. So this answer
+% is evidence that anti_first_fail ran. Its tie-break (earliest candidate, first_fail's
+% rule) is pinned by test_flatzinc.ml, where a hand-built store can tie on purpose.
+var 0..9: p :: output_var;
+var 8..10: q :: output_var;
+var 0..3: r :: output_var;
+constraint int_lin_eq([1, 1, 1], [p, q, r], 12);
+solve :: int_search([q, r, p], anti_first_fail, indomain_max, complete) satisfy;

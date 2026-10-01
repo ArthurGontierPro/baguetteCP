@@ -738,6 +738,25 @@ let first_fail store cands =
   done;
   !best
 
+(* Anti-first-fail (docs/SPEC.md 3.4, M7-T19, D-0083): the unfixed variable with the
+   LARGEST domain, measured exactly as [first_fail] measures it ([Domain.size], the live
+   value count, holes excluded). TIES ARE BROKEN BY [first_fail]'s RULE: the comparison is
+   strict, so the EARLIEST candidate in the array the caller handed over wins -- at the top
+   level that is declaration order, inside a phase the annotation's array order. It is
+   [first_fail] with the comparison reversed and NOTHING else changed; in particular it is
+   not "first_fail's ordering reversed", which would also reverse the tie-break and pick
+   the LAST of several equally large domains. *)
+let anti_first_fail store cands =
+  let best = ref cands.(0) in
+  let bsize = ref (Domain.size (Store.get store cands.(0))) in
+  for i = 1 to Array.length cands - 1 do
+    let size = Domain.size (Store.get store cands.(i)) in
+    if size > !bsize then (
+      best := cands.(i);
+      bsize := size)
+  done;
+  !best
+
 (* Input order (docs/SPEC.md 3.4): the FIRST unfixed variable in the order the caller
    handed them over. [unfixed] builds its array by ascending store index, and
    `lib/flatzinc/compile.ml` builds the store in `Model.vars` order, so at the top level

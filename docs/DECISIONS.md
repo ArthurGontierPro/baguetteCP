@@ -6534,3 +6534,124 @@ to check. That is D-0079's TIME blocker, now reached by nine more instances.
 `global_cardinality_closed` reaches the propagator through std's own definition.
 `global_cardinality_low_up` does NOT (std decomposes it into `count` sums); the `mznlib`
 line that would route it is filed as a cross-session request. None of the nine needs it.
+## D-0083  The ten corpus refusals: `indomain` is `indomain_min`, `anti_first_fail` is first_fail reversed, and an undomained `var int` gets the domain its constraints imply
+
+**Status**: DECIDED, 2026-10-01, agent-cover (wave 31, M7-T19).
+**Touches**: `lib/flatzinc/{builder,model,compile}.ml`, `lib/core/search.ml` (the
+variable-selection functions), `docs/SPEC.md` §2.1 and §3.4,
+`test/unit/{test_flatzinc,test_compile}.ml`, five new models.
+**Follows** D-0079 (the wave-30 corpus run, whose ten `REFUSED-MODEL` were exactly these
+three messages), D-0077 (the precedent for lifting a §3.4 refusal: build the real thing,
+never a near-equivalent), D-0029 (the arithmetic limit), D-0028/D-0065 (the order encoding
+is width-proportional; the width limits are options).
+
+### 1. Bare `indomain` — mapped to `indomain_min`
+
+The MiniZinc specification defines `indomain` as "assign values in ascending order". That
+is `indomain_min`'s branching at every node — `x = lo` first, the rest as the sibling, the
+next decision on that variable taking the new minimum — so it is the **same search**, not a
+substitute for one, and §3.4's ban on substitution does not bite. The builder maps the
+spelling onto `Model.Indomain_min`; no constructor was added, because a second constructor
+for the same decision is a place for the two to drift.
+
+### 2. `anti_first_fail` — a new selector, `first_fail` with the comparison reversed
+
+The unfixed variable with the **largest** current domain (`Domain.size`, the live value
+count — first_fail's measure). **Ties go to the earliest candidate**, which is
+`first_fail`'s rule unchanged (both comparisons are strict). The alternative reading,
+"first_fail's ordering reversed", would also reverse the tie-break and pick the LAST of
+several equally large domains; nothing in the MiniZinc specification asks for that, and
+Gecode's `INT_VAR_SIZE_MAX` takes the first. `test_flatzinc.ml` pins the tie-break on a
+hand-built store and through an annotation whose array order differs from declaration
+order; `search_anti_first_fail_sat.fzn` is a model on which every other supported
+selection gives a different first answer (measured).
+
+### 3. `var int` with no domain — inferred, and refused only when inference fails
+
+**Why inference and not a default range.** A default range is width-proportional cost paid
+BLIND (D-0028): `-10^6..10^6` is two million ladder rungs per variable whatever the model
+needs, and every corpus instance that has one undomained variable has dozens. The bound the
+model's own constraints imply is the width the model licenses and no more.
+
+**Why refusing stays.** A variable no constraint bounds has no width to encode; any range
+would be a guess, and a guess that is too narrow is a different model answered with a
+verified proof. So §2.1 still refuses — now with a message that names the variable, says
+inference was tried, gives the bound it reached on each side, and lists the variable's
+neighbours with what inference knew about each.
+
+**Soundness obligation.** Every rule derives a bound that every solution of the one
+constraint it reads satisfies, so the inferred domain contains every value the variable
+takes in any solution, and the encoded model has exactly the FlatZinc model's solutions.
+This is a front-end obligation, like the rest of the encoding: veripb checks the proof
+against the `.opb`, into which the inferred domain is written as a declaration, and cannot
+see the inference. Every step is `Baguette_core.Checked`; an overflowing step derives
+nothing for that constraint on that pass. A declared domain is read and never tightened.
+
+**The rules shipped** (constant operands folded into the rhs, repeated variables merged):
+
+- `int_lin_eq`: for each term, solve the row given the other terms' bounds — both sides.
+- `int_lin_le`: the same, one side (`a*x <= rhs - least(rest)`), floor/ceil rounding outward.
+- `int_eq(a, b)` / `int_le(a, b)` / `int_lt(a, b)`: as the rows `a-b = 0`, `a-b <= 0`, `a-b <= -1`.
+- `bool2int(b, x)`: `x in 0..1`.
+- `int_abs(x, z)`: `z >= 0`; `z <= max|x|`; `x in -hi(z)..hi(z)`.
+- `int_times(x, y, z)`: `z` in the four-corner product (`Interval.product_bounds`).
+- `int_div(x, y, q)`: `|q| <= max|x|` (wherever the relation holds `|y| >= 1`).
+- `array_int_element(i, a, c)`: `i in 1..|a|`, `c in min(a)..max(a)`.
+- `global_cardinality` (both spellings): each count in `0..|xs|`.
+- **Case split** on a Boolean `c`: `if c then x = e1 else x = e2`, which MiniZinc writes as
+  `int_eq_reif(x, e1, p1)`, `int_eq_reif(x, e2, p2)`, `bool_clause([p1],[c])`,
+  `bool_clause([c,p2],[])`. Each side's implied equalities are intersected; `x` is in the
+  hull of the two sides, only when both are two-sided, and a side whose bounds cross is
+  impossible and drops out. Added after the first node run: it is the whole of
+  `2025_work-task-variation`'s 469 undomained variables (`run_cost`), and no listed rule
+  reaches them.
+- Nothing else is read: other reified forms, `int_ne`, `all_different`, and clauses other
+  than the two-literal implications above imply no bound.
+
+At most 64 passes over the facts, stopping at the first pass that changes nothing; every
+intermediate state is sound, so the cap costs precision and never soundness. If inference
+CROSSES a variable's bounds (`lo > hi`) the model has no solution, any domain is sound, and
+the variable is declared on the hull `hi..lo` (`unbounded_crossed_unsat.fzn`). The hull and
+not a singleton because a root-UNSAT linear row over a singleton-declared variable crashes
+`Justify.emit` today — a pre-existing defect, reproducible with a declared `var 7..7`, filed
+as a cross-session request rather than fixed here.
+
+An alias `var int: x = y;` declares nothing and is no longer refused. An inferred domain
+is a declared domain for every other purpose, so a wide one meets the width limits of §3.1
+honestly; D-0065 says those are options, and a wide inferred domain is the order
+encoding's real cost, not inference's fault.
+
+**Where it runs.** In `Builder.build`, after the declarations and BEFORE the constraints are
+built, because the arithmetic family sizes its auxiliaries from domains; the refusal fires
+AFTER the constraints are built, so a malformed constraint still reports its own error
+first. It reads the syntax directly (`facts_of`), and only runs when some variable is
+undomained, so a model without one is untouched — byte-identical artefacts.
+
+`builder.ml` now references `Baguette_core` (`Checked`, `Interval`), which the dependency
+order permits (`flatzinc -> core`) but `lib/flatzinc/dune`'s comment says it does not do;
+that comment is the orchestrator's and is a cross-session request.
+
+### The ten instances, measured 2026-10-01 on `fataepyc-07`
+
+Branch tip `c6112f1` (binary md5 `10e0f406d5afc52ad5ab4a2f498c62a6` on the node), flattened
+with MiniZinc 2.10.1 and baguette's library, 300 s solve timeout, `--max-heap-mb 15625`,
+`ulimit -v 32000000`, veripb 3.0.2 on every solved run. Output under
+`/scratch/arthur/cover-out-w31`.
+
+| Instance | Before (w30) | After | Proof |
+|---|---|---|---|
+| `2008_quasigroup7` | REFUSED `indomain` | SAT in 0.12 s | VERIFIED |
+| `2010_ghoulomb` | REFUSED `indomain` | TIMEOUT 300 s | — |
+| `2013_ghoulomb` | REFUSED `indomain` | TIMEOUT 300 s | — |
+| `2010_depot_placement` | REFUSED `indomain` | TIMEOUT 300 s | — |
+| `2013_on-call-rostering_oc-roster` | REFUSED `anti_first_fail` | TIMEOUT 300 s | — |
+| `2018_on-call-rostering_oc-roster` | REFUSED `anti_first_fail` | TIMEOUT 300 s (width warning, 28 800) | — |
+| `2010_wwtp_real_wwtpp` | REFUSED no domain | TIMEOUT 300 s; all inferred (widest warned 10 440–22 500) | — |
+| `2010_wwtp_random_wwtpp` | REFUSED no domain | TIMEOUT 300 s; all inferred (68 width warnings, widest 20 959) | — |
+| `2025_work-task-variation` | REFUSED no domain | all 469 inferred (case split; `cost` 0..660040, warned); then REFUSED-LIMIT on `fzn_global_cardinality` with a constant count — **M7-T18's** refusal, not this one | — |
+| `2021_connect_connect__0086_02` | REFUSED no domain | still REFUSED, new wording: `fplen` has lower bound 54938 and NO upper bound | — |
+
+`connect` is a correct refusal, not a missing rule: `fplen`, `fpwid` and `FPCOST` are bounded
+below and minimised, and no constraint bounds them above — the model's own solution set is
+unbounded in them. Bounding from the objective would need an incumbent first, and is a
+different decision. Zero proofs rejected.

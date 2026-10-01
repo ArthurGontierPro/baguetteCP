@@ -543,6 +543,8 @@ work. The owning session picks it up.
 
 | **`Trace.derive_ahead`'s trigger is a proxy, and gcc is the first family it gets wrong.** It fires on `Encoding.has_direct` of the pruned variable, which its own comment calls deliberately OVER-triggering. It also UNDER-triggers: `lib/core/prop/gcc.ml`'s counting rows are over the ORDER encoding and it names no direct literal anywhere, so `has_direct` was false for its whole scope and **every gcc trace line went out as a bare `rup`, which 3.0.2 refused**. M7-T16 buys the trigger back by calling `Encoding.request_direct` for the gcc scope purely to arm it (stated in full at the call site in `compile.ml`) -- which mints the width-proportional `red` lines of an encoding nothing reads, D-0028's own cost. **The real fix is the one `trace.ml`'s comment already names**: a per-entry flag threaded from the propagator, so "this pruning needs its derivation ahead" is a property of the propagator and not of the encoding. Neither file is M7-T16's. See D-0078 | `lib/core/trace.ml`, `lib/proof/encoding.ml` | agent-gcc | raised 2026-09-23, **open** |
 | **`global_cardinality_low_up` does not reach the gcc propagator (M7-T18 found, not needed by any of the nine).** std's `fzn_global_cardinality_low_up` decomposes into `count` sums. A new `mznlib/fzn_global_cardinality_low_up.mzn` would route it, with each count declared on its own bounds: `predicate fzn_global_cardinality_low_up(array [int] of var int: xs, array [int] of int: cover, array [int] of int: lower_bound, array [int] of int: upper_bound) = let { array [index_set(cover)] of var int: c = [ let { var max(0, lower_bound[i])..min(length(xs), upper_bound[i]): ci } in ci | i in index_set(cover) ] } in baguette_global_cardinality(xs, cover, c);` (plus `include "fzn_global_cardinality.mzn";` for the bodyless declaration). Equal bounds then become one-value counts, which D-0082 measured identical to constants. Needs a model lane over the `_low_up` form when it lands | `mznlib/**` | agent-gcc2 | raised 2026-10-01, **open** |
+| **(agent-cover, M7-T19) A root-UNSAT linear row over a SINGLETON-declared variable crashes the solver** — `Fatal error: exception Invalid_argument("Justify.emit: Combine's Weaken summand must be non-empty")` (`lib/core/justify.ml:479`), exit 2, on `main` as well as `wave31-cover`, with or without `--proof`. Smallest repro: `var 1..3: x; var 7..7: s; constraint int_le(s, x); solve satisfy;`. Also `int_lin_eq([1,-1],[x,s],0)` and `int_lin_le` shapes with `s` in `7..7`; `var 7..8` is fine and verifies UNSAT. A crash, not a wrong answer, but on a valid model. Not fixed: `justify.ml` is the orchestrator's and the fault may be in `linear.ml`. M7-T19's crossed-bounds inference declares the hull (>= 2 values) partly to stay off it. | |
+| **(agent-cover, M7-T19) `lib/flatzinc/dune`'s comment is now false**: it says `builder.ml` references nothing from core. Since M7-T19 it uses `Baguette_core.Checked` and `Interval` for bounds inference (D-0083), which the dependency order permits. One-sentence comment change, orchestrator-held file. | |
 
 ## Completed
 
@@ -635,6 +637,7 @@ work. The owning session picks it up.
 
 | M7-T16 | `lib/core/prop/gcc.ml` (new), `lib/flatzinc/{model,builder,compile}.ml`, `mznlib/**`, `test/unit/{test_trace,test_compile}.ml`, four `test/models/gcc_*` + expected, `docs/DECISIONS.md`, `docs/ARCHITECTURE.md`, `CLAUDE.md` | agent-gcc | released 2026-09-23 -- **D-0078**, branch `wave30-gcc` |
 | M7-T17 + M7-T18 | agent-gcc2 | 2026-10-01 | Derive-ahead fires on `Store.entry.ahead`, set by alldiff/gcc at the pruning call (`Store.deriving_ahead`); gcc's `request_direct` stopgap deleted; 80/80 global-free proofs byte-identical, debruijn `.pbp` 28 552 -> 24 542 B. Constant gcc counts are `View.const k`, byte-identical to `var k..k`; the nine corpus instances all compile and all TIMEOUT at 300 s. D-0082 |
+| M7-T19 | agent-cover | 2026-10-01 | `indomain` -> `indomain_min`; `anti_first_fail` (largest size, first_fail's tie-break); bounds inference for undomained `var int` (11 rules incl. a case split), refusing only when unbounded; SPEC 2.1/3.4 amended; D-0083. 9/10 corpus instances past the front end, 1 SAT verified, 0 rejected. Branch `wave31-cover`. |
 
 ## Handoff notes
 
@@ -3291,3 +3294,29 @@ Branch `wave31-gcc2`, not merged. **D-0082** has the measurements.
 Gate: `check_fmt.sh` clean, width lint clean, determinism (109 models) clean,
 `check_unlimited.sh` ok, `dune runtest --root . --force` **2943 ok / 0 FAIL**,
 `run_model_tests.sh` **109 passed, 0 failed**. Peak RSS 40.3 MB (unit), 18.7 MB (models).
+## M7-T19 handoff, 2026-10-01 (agent-cover)
+
+Branch `wave31-cover`, not merged. Three widenings of the front end, D-0083, SPEC 2.1 and 3.4
+amended in place. (1) Bare `indomain` maps to `Model.Indomain_min` in the builder (same
+search, no new constructor). (2) `Model.Anti_first_fail` / `Search.anti_first_fail`: largest
+`Domain.size`, ties to the EARLIEST candidate, which is first_fail's rule — not "first_fail's
+order reversed", which the roadmap row's wording suggested and which would flip the tie.
+(3) A `var int` with no domain gets a placeholder, and `Builder.infer_domains` runs after the
+declarations and before the constraints: an interval fixpoint (<= 64 passes, all
+`Checked`, overflow derives nothing) over facts read straight from the syntax. Declared
+domains are never tightened. Crossed bounds -> the model is UNSAT -> hull declared. Still
+unbounded -> refused after the constraints are built, naming the variable, its bounds and
+its neighbours. Models without an undomained variable are untouched (determinism: 113
+models byte-identical).
+
+Gate: `dune runtest --root . --force` 2969 ok / 0 FAIL, `run_model_tests.sh` 113 passed /
+0 failed (six new lanes: `search_anti_first_fail_sat`, `search_indomain_sat`,
+`unbounded_inferred_{sat,unsat}`, `unbounded_crossed_unsat`, `unbounded_case_split_sat`),
+fmt, width lint and determinism clean. Peak RSS 40.6 MB (unit), 18.5 MB (models).
+
+Corpus (D-0083's table): 9 of 10 are past the front end — quasigroup7 SAT verified, 7
+timeouts, work-task-variation now stops at M7-T18's constant-count gcc refusal (its `cost`
+infers to width 660040). `connect` is still refused, correctly: its floorplan variables
+are bounded below, minimised, and bounded above by nothing. Two cross-session requests filed:
+a pre-existing Justify crash on singleton-declared variables in root-UNSAT linear rows, and
+`lib/flatzinc/dune`'s now-false comment.

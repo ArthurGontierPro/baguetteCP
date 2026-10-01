@@ -469,11 +469,21 @@ let test_rejections () =
   (* And the value choice nobody has implemented is still refused BY NAME, and so is the
      unimplemented variable choice: neither may have been swept into a catch-all while
      `indomain_median` was added. See lib/flatzinc/builder.ml. *)
-  expect_rejected "reject (d): `anti_first_fail` is named, not silently replaced"
-    ~needles:[ "anti_first_fail"; "first_fail"; "input_order" ]
+  (* M7-T19 (D-0083): `anti_first_fail` and bare `indomain` are implemented. The
+     refusal below moved to `dom_w_deg`, at the same strength. *)
+  expect_accepted "accept: `anti_first_fail` is implemented (M7-T19)"
     "var 0..3: x;\n\
      constraint int_le(x,3);\n\
      solve :: int_search([x],anti_first_fail,indomain_min,complete) satisfy;\n";
+  expect_accepted "accept: bare `indomain` is implemented, as indomain_min (M7-T19)"
+    "var 0..3: x;\n\
+     constraint int_le(x,3);\n\
+     solve :: int_search([x],first_fail,indomain,complete) satisfy;\n";
+  expect_rejected "reject (d): `dom_w_deg` is named, not silently replaced"
+    ~needles:[ "dom_w_deg"; "first_fail"; "anti_first_fail"; "input_order" ]
+    "var 0..3: x;\n\
+     constraint int_le(x,3);\n\
+     solve :: int_search([x],dom_w_deg,indomain_min,complete) satisfy;\n";
   expect_rejected "reject (d): `indomain_random` is named"
     ~needles:[ "indomain_random"; "indomain_min"; "indomain_max" ]
     "var 0..3: x;\n\

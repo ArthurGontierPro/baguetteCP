@@ -1,0 +1,16 @@
+% M7-T19 (D-0083), the case-split rule. `x` has no declared domain and nothing bounds it
+% but `if c then x = e else x = 0`, written as MiniZinc writes it (seen in
+% 2025_work-task-variation): two int_eq_reif under two-literal bool_clause implications.
+% Every solution has c true (x = e, so 2..5) or c false (x = 0), so x is inferred on the
+% hull 0..5. The search takes x's maximum first and the answer is x = 5: the inferred
+% upper bound, reached through the c-true side.
+var bool: c :: output_var;
+var bool: p1;
+var bool: p2;
+var 2..5: e :: output_var;
+var int: x :: output_var;
+constraint int_eq_reif(x, e, p1);
+constraint int_eq_reif(x, 0, p2);
+constraint bool_clause([p1], [c]);
+constraint bool_clause([c, p2], []);
+solve :: int_search([x], input_order, indomain_max, complete) satisfy;

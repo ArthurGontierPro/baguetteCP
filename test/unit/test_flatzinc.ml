@@ -246,11 +246,25 @@ let test_constant_folding () =
 (* ========================================================================= rejections *)
 
 let test_rejections () =
-  (* SPEC 2.1, normative: no defaulting to a machine-word range. *)
+  (* SPEC 2.1, normative: no defaulting to a machine-word range. M7-T19 (D-0083) gave an
+     undomained `var int` bounds INFERENCE first; one that nothing bounds is still
+     refused, and the message now says inference was tried. These two models have no
+     constraint at all, so the refusal is exactly as unconditional as it was. *)
   reject "reject: var int with no domain" ~line:1 ~src:"var int: x;\nsolve satisfy;\n"
-    ~needles:[ "error"; "`x`"; "no domain"; "finite declared domain"; "<test>:1:1" ];
+    ~needles:
+      [
+        "error";
+        "`x`";
+        "no domain";
+        "bounds inference";
+        "could not bound it";
+        "finite domain";
+        "machine-word range";
+        "<test>:1:1";
+      ];
   reject "reject: var int with no domain inside an array" ~line:1
-    ~src:"array [1..2] of var int: xs;\nsolve satisfy;\n" ~needles:[ "no domain" ];
+    ~src:"array [1..2] of var int: xs;\nsolve satisfy;\n"
+    ~needles:[ "`xs[1]`"; "no domain"; "could not bound it" ];
   (* SPEC 2.1, normative: name the builtin, never skip it. *)
   reject "reject: unknown builtin" ~line:2
     ~src:"var 1..3: x;\nconstraint frobnicate(x, 1);\nsolve satisfy;\n"
@@ -344,12 +358,13 @@ let test_rejections () =
     ~needles:[ "declared more than once" ];
   reject "reject: empty domain" ~line:1 ~src:"var 3..1: x;\nsolve satisfy;\n"
     ~needles:[ "empty domain" ];
-  (* M7-T9 shipped `smallest`; the example moved to `anti_first_fail`, which is still
-     unsupported. Same assertion, same strength -- see test_search_strategies below. *)
+  (* M7-T9 shipped `smallest`, M7-T19 `anti_first_fail`; the example moved to
+     `occurrence`, which is still unsupported. Same assertion, same strength -- see
+     test_search_strategies below. *)
   reject "reject: unsupported search strategy" ~line:2
     ~src:
       "var 1..3: x;\n\
-       solve :: int_search([x], anti_first_fail, indomain_random, complete) satisfy;\n"
+       solve :: int_search([x], occurrence, indomain_random, complete) satisfy;\n"
     ~needles:[ "unsupported variable-selection strategy"; "input_order" ];
   reject "reject: array initialiser length mismatch" ~line:1
     ~src:"array [1..3] of int: w = [1, 2];\nsolve satisfy;\n"
@@ -974,12 +989,13 @@ let test_search_constants () =
      strategy MUST be refused, and an array that happens to hold only constants does not
      change what the annotation asked for. *)
   (* M7-T9 shipped `smallest`, which this assertion used to use as its example of an
-     unsupported strategy. The assertion is unchanged in strength -- `anti_first_fail` is
-     still unsupported and still must be refused; only the example moved. *)
+     unsupported strategy, and M7-T19 `anti_first_fail`, its next example. The assertion
+     is unchanged in strength -- `dom_w_deg` is still unsupported and still must be
+     refused; only the example moved. *)
   reject "M7-T7: an all-constant array does not excuse an unsupported strategy" ~line:2
     ~src:
       "var 1..3: x;\n\
-       solve :: int_search([1, 2], anti_first_fail, indomain_min, complete) satisfy;\n"
+       solve :: int_search([1, 2], dom_w_deg, indomain_min, complete) satisfy;\n"
     ~needles:[ "unsupported variable-selection strategy" ];
   reject "M7-T7: ... nor an unsupported value choice" ~line:2
     ~src:
@@ -1232,18 +1248,277 @@ let test_search_strategies () =
       print_endline
         "FAIL M7-T12 (d): the holey median must be an interior assignment at 2");
   (* And the two strategies that remain unsupported are still refused, at full strength.
-     `anti_first_fail` and `indomain_random` are the rest of what MiniZinc defines; they
-     must not have been swept into a catch-all while the four above were added. *)
-  reject "M7-T9: anti_first_fail is still refused" ~line:2
+     `dom_w_deg` and `indomain_random` are among the rest of what MiniZinc defines; they
+     must not have been swept into a catch-all while the four above were added (M7-T19
+     shipped `anti_first_fail`, which used to stand here). *)
+  (* M7-T19 shipped `anti_first_fail`; the example moved to `dom_w_deg`, which is still
+     unsupported. Same assertion, same strength. *)
+  reject "M7-T9: dom_w_deg is still refused" ~line:2
     ~src:
       "var 1..9: x;\n\
-       solve :: int_search([x], anti_first_fail, indomain_min, complete) satisfy;\n"
-    ~needles:[ "unsupported variable-selection strategy"; "anti_first_fail" ];
+       solve :: int_search([x], dom_w_deg, indomain_min, complete) satisfy;\n"
+    ~needles:[ "unsupported variable-selection strategy"; "dom_w_deg" ];
   reject "M7-T9: indomain_random is still refused" ~line:2
     ~src:
       "var 1..9: x;\n\
        solve :: int_search([x], input_order, indomain_random, complete) satisfy;\n"
     ~needles:[ "unsupported value-choice strategy"; "indomain_random" ]
+
+(* ================================================ M7-T19: the corpus refusals (D-0083)
+
+   Three widenings of the accepted subset, each the corpus run of D-0079 asked for. *)
+
+let infer_dom name src var expect =
+  match F.Error.catch (fun () -> F.Builder.of_string ~file:"<t>" src) with
+  | Error e ->
+      incr failures;
+      Printf.printf "FAIL %s: refused: %s\n" name (F.Error.to_string e)
+  | Ok m -> (
+      match M.find_var m var with
+      | None ->
+          incr failures;
+          Printf.printf "FAIL %s: no variable `%s`\n" name var
+      | Some i ->
+          let got = (M.var m i).M.v_dom in
+          if got = expect then Printf.printf "ok   %s\n" name
+          else (
+            incr failures;
+            Printf.printf "FAIL %s: `%s` has domain %s, expected %s\n" name var
+              (M.string_of_domain got) (M.string_of_domain expect)))
+
+let test_m7_t19 () =
+  (* (a) `indomain` IS `indomain_min`: the builder maps the spelling, so the model it
+     produces is the same model, and the decision is the same decision. *)
+  let ann vl =
+    Printf.sprintf
+      "var 0..5: x;\nsolve :: int_search([x], input_order, %s, complete) satisfy;\n" vl
+  in
+  (match
+     F.Error.catch (fun () ->
+         ( (F.Builder.of_string ~file:"<t>" (ann "indomain")).M.search,
+           (F.Builder.of_string ~file:"<t>" (ann "indomain_min")).M.search ))
+   with
+  | Ok (a, b) ->
+      check "M7-T19 (a): `indomain` builds the same search as `indomain_min`"
+        (a = b && a = [ M.Int_search ([ 0 ], M.Input_order, M.Indomain_min) ])
+  | Error e ->
+      incr failures;
+      Printf.printf "FAIL M7-T19 (a): refused: %s\n" (F.Error.to_string e));
+  (* (b) anti_first_fail on the M7-T9 quad: sizes w 5, x 7, y 2, z 5, u 2, so the
+     largest domain is x. *)
+  picks "M7-T19 (b): anti_first_fail decides x (the largest domain)"
+    (quad "anti_first_fail" "indomain_min")
+    1;
+  (* (b2) ITS TIE-BREAK IS first_fail's: the earliest candidate wins. In the phase the
+     candidates are the ANNOTATION's order, so writing [a, c, b] with b and c tied at
+     size 5 must pick c -- the earliest in the array, not the earliest declared (b) and
+     not the last of the tied ones (which a reversed first_fail ordering would give). *)
+  picks "M7-T19 (b2): anti_first_fail breaks a tie toward the earliest in the array"
+    "var 0..2: a;\n\
+     var 0..4: b;\n\
+     var 0..4: c;\n\
+     solve :: int_search([a, c, b], anti_first_fail, indomain_min, complete) satisfy;\n"
+    2;
+  (* (b3) The selector itself, on a hand-built store, with no front end in the way. *)
+  let store =
+    Baguette_core.Store.create ~names:[| "p"; "q"; "r"; "s" |]
+      ~domains:
+        [|
+          Baguette_core.Domain.make 0 3;
+          Baguette_core.Domain.make 0 6;
+          Baguette_core.Domain.make 1 7;
+          Baguette_core.Domain.make 0 1;
+        |]
+  in
+  let pick cands =
+    Var.to_int (Search.anti_first_fail store (Array.of_list (List.map Var.of_int cands)))
+  in
+  check "M7-T19 (b3): anti_first_fail picks the largest of distinct sizes"
+    (pick [ 0; 3; 1 ] = 1);
+  check "M7-T19 (b3): ... and the first of tied sizes, in the order given"
+    (pick [ 0; 1; 2 ] = 1 && pick [ 2; 1; 0 ] = 2);
+  check "M7-T19 (b3): first_fail on the same store picks the smallest"
+    (Var.to_int
+       (Search.first_fail store (Array.of_list (List.map Var.of_int [ 0; 1; 3 ])))
+    = 3);
+  (* (c) BOUNDS INFERENCE, one assertion per rule, each the EXACT domain. A rule that
+     derived something weaker would fail as surely as one that derived something wrong. *)
+  infer_dom "M7-T19 (c): int_lin_eq defines s = x + y over 1..3 -> 2..6"
+    "var 1..3: x;\n\
+     var 1..3: y;\n\
+     var int: s;\n\
+     constraint int_lin_eq([1, 1, -1], [x, y, s], 0);\n\
+     solve satisfy;\n"
+    "s"
+    (M.Drange (2, 6));
+  infer_dom "M7-T19 (c): a negative, non-unit coefficient rounds OUTWARD"
+    "var 0..7: x;\n\
+     var int: s;\n\
+     constraint int_lin_eq([1, -2], [x, s], 1);\n\
+     solve satisfy;\n"
+    "s"
+    (M.Drange (0, 3));
+  infer_dom "M7-T19 (c): int_lin_le from both sides of two rows"
+    "var 0..4: x;\n\
+     var int: s;\n\
+     constraint int_lin_le([1, 1], [x, s], 9);\n\
+     constraint int_lin_le([-1, -1], [x, s], -2);\n\
+     solve satisfy;\n"
+    "s"
+    (M.Drange (-2, 9));
+  infer_dom "M7-T19 (c): int_le / int_lt and a CHAIN through another undomained var"
+    "var 3..5: x;\n\
+     var int: s;\n\
+     var int: t;\n\
+     constraint int_lt(t, s);\n\
+     constraint int_le(s, x);\n\
+     constraint int_le(x, t);\n\
+     constraint int_le(1, t);\n\
+     solve satisfy;\n"
+    "t"
+    (M.Drange (3, 4));
+  infer_dom "M7-T19 (c): int_eq aliases a bounded variable"
+    "var 2..4: x;\nvar int: s;\nconstraint int_eq(x, s);\nsolve satisfy;\n" "s"
+    (M.Drange (2, 4));
+  infer_dom "M7-T19 (c): bool2int gives 0..1"
+    "var bool: b;\nvar int: s;\nconstraint bool2int(b, s);\nsolve satisfy;\n" "s"
+    (M.Drange (0, 1));
+  infer_dom "M7-T19 (c): int_abs gives 0..max|x|"
+    "var -5..3: x;\nvar int: z;\nconstraint int_abs(x, z);\nsolve satisfy;\n" "z"
+    (M.Drange (0, 5));
+  infer_dom "M7-T19 (c): int_times gives the four-corner product"
+    "var -2..3: x;\n\
+     var 1..4: y;\n\
+     var int: z;\n\
+     constraint int_times(x, y, z);\n\
+     solve satisfy;\n"
+    "z"
+    (M.Drange (-8, 12));
+  infer_dom "M7-T19 (c): int_div gives |q| <= max|x|"
+    "var -3..7: x;\n\
+     var -2..2: y;\n\
+     var int: q;\n\
+     constraint int_div(x, y, q);\n\
+     solve satisfy;\n"
+    "q"
+    (M.Drange (-7, 7));
+  infer_dom "M7-T19 (c): array_int_element gives the array's value range"
+    "var 1..3: i;\n\
+     var int: c;\n\
+     constraint array_int_element(i, [4, -1, 9], c);\n\
+     solve satisfy;\n"
+    "c"
+    (M.Drange (-1, 9));
+  infer_dom "M7-T19 (c): an element INDEX with no domain is 1..|a|"
+    "var int: i;\n\
+     var 0..9: c;\n\
+     constraint array_int_element(i, [4, -1, 9], c);\n\
+     solve satisfy;\n"
+    "i"
+    (M.Drange (1, 3));
+  infer_dom "M7-T19 (c): crossed bounds declare the hull (the model is UNSAT)"
+    "var 1..3: x;\n\
+     var 1..3: y;\n\
+     var int: s;\n\
+     constraint int_lin_eq([1, 1, -1], [x, y, s], 0);\n\
+     constraint int_le(7, s);\n\
+     solve satisfy;\n"
+    "s"
+    (M.Drange (6, 7));
+  (* The case split: `if c then x = e else x = 0`, as MiniZinc writes it (seen in
+     2025_work-task-variation). x is in the hull of e's bounds and 0. *)
+  let ite extra =
+    "var bool: c;\n\
+     var bool: p1;\n\
+     var bool: p2;\n\
+     var 2..5: e;\n\
+     var int: x;\n\
+     constraint int_eq_reif(x, e, p1);\n\
+     constraint int_eq_reif(x, 0, p2);\n\
+     constraint bool_clause([p1], [c]);\n" ^ extra ^ "solve satisfy;\n"
+  in
+  infer_dom "M7-T19 (c): case split -- if c then x = e else x = 0 gives the hull 0..5"
+    (ite "constraint bool_clause([c, p2], []);\n")
+    "x"
+    (M.Drange (0, 5));
+  reject "M7-T19 (c): case split -- one side alone bounds nothing" ~line:5 ~src:(ite "")
+    ~needles:[ "`x`"; "could not bound it" ];
+  infer_dom "M7-T19 (c): case split -- an impossible side leaves the other alone"
+    "var bool: c;\n\
+     var bool: p1;\n\
+     var bool: p2;\n\
+     var bool: p3;\n\
+     var int: x;\n\
+     constraint int_eq_reif(x, 1, p1);\n\
+     constraint int_eq_reif(x, 2, p3);\n\
+     constraint int_eq_reif(x, 7, p2);\n\
+     constraint bool_clause([p1], [c]);\n\
+     constraint bool_clause([p3], [c]);\n\
+     constraint bool_clause([c, p2], []);\n\
+     solve satisfy;\n"
+    "x"
+    (M.Drange (7, 7));
+  (* An alias needs no domain of its own and is no longer refused. *)
+  infer_dom "M7-T19 (c): `var int: s = x;` is an alias, not an undomained variable"
+    "var 1..3: x;\nvar int: s = x;\nsolve satisfy;\n" "x"
+    (M.Drange (1, 3));
+  (* A declared domain is READ, never tightened, however much the constraints imply. *)
+  infer_dom "M7-T19 (c): a declared domain is not tightened by inference"
+    "var 0..9: x;\n\
+     var int: s;\n\
+     constraint int_lin_eq([1, -1], [x, s], 0);\n\
+     constraint int_le(x, 2);\n\
+     solve satisfy;\n"
+    "x"
+    (M.Drange (0, 9));
+  (* (d) The refusal that remains: a variable inference cannot bound, at full strength --
+     it names the variable, says inference was tried, and lists its neighbours with what
+     inference knew about them. Positioned on the DECLARATION, line 2. *)
+  reject "M7-T19 (d): one-sided inference is still a refusal" ~line:2
+    ~src:"var 1..3: x;\nvar int: z;\nconstraint int_le(x, z);\nsolve satisfy;\n"
+    ~needles:
+      [
+        "`z`";
+        "no domain";
+        "bounds inference";
+        "could not bound it";
+        "inferred lower bound 1, upper bound none";
+        "`x` (1..3)";
+        "machine-word range";
+      ];
+  reject "M7-T19 (d): an unbounded neighbour is named as unbounded" ~line:2
+    ~src:
+      "var 1..3: x;\n\
+       var int: z;\n\
+       var int: w;\n\
+       constraint int_lin_eq([1, 1, -1], [x, w, z], 0);\n\
+       solve satisfy;\n"
+    ~needles:[ "`z`"; "`w` (unbounded"; "1 other undomained variable" ];
+  (* A reified row implies no bound -- it may be false -- and must not be read as one. *)
+  reject "M7-T19 (d): a reified comparison is not read as a bound" ~line:2
+    ~src:
+      "var bool: r;\n\
+       var int: z;\n\
+       constraint int_le_reif(z, 3, r);\n\
+       constraint int_le_reif(0, z, r);\n\
+       solve satisfy;\n"
+    ~needles:[ "`z`"; "could not bound it"; "shares no bound-carrying constraint" ];
+  (* (e) The OTHER strategies stay refused by name, at full strength. *)
+  reject "M7-T19 (e): max_regret is still refused, and the list names anti_first_fail"
+    ~line:2
+    ~src:
+      "var 1..9: x;\n\
+       solve :: int_search([x], max_regret, indomain_min, complete) satisfy;\n"
+    ~needles:
+      [ "unsupported variable-selection strategy"; "`max_regret`"; "anti_first_fail" ];
+  reject
+    "M7-T19 (e): indomain_reverse_split is still refused, and the list names indomain"
+    ~line:2
+    ~src:
+      "var 1..9: x;\n\
+       solve :: int_search([x], input_order, indomain_reverse_split, complete) satisfy;\n"
+    ~needles:
+      [ "unsupported value-choice strategy"; "`indomain_reverse_split`"; "indomain (as" ]
 
 (* ============================== M7-T9: what indomain_split COSTS in the proof
 
@@ -1402,6 +1677,7 @@ let () =
   test_rejections ();
   test_search_constants ();
   test_search_strategies ();
+  test_m7_t19 ();
   test_split_vs_min_proof_size ();
   (* M7-T1. The inversion first -- it is the change -- then the control, which runs
      every pre-M7 assertion under an explicit --max-order-width=10000. *)

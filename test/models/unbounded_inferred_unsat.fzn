@@ -1,0 +1,14 @@
+% M7-T19 (D-0083). `s` has no declared domain; inference gives it 2..6 from its
+% defining row s = x + y over x, y in 1..3. The five int_ne below remove every value
+% of that inferred domain, so the model is UNSAT -- and the inferred domain is the
+% .opb's declaration of s, so the refutation veripb checks runs over it.
+var 1..3: x;
+var 1..3: y;
+var int: s :: output_var;
+constraint int_lin_eq([1, 1, -1], [x, y, s], 0);
+constraint int_ne(s, 2);
+constraint int_ne(s, 3);
+constraint int_ne(s, 4);
+constraint int_ne(s, 5);
+constraint int_ne(s, 6);
+solve satisfy;

@@ -137,8 +137,13 @@ type constr = { k : cstr; c_pos : Pos.t }
 (* M7-T2, extended by M7-T9. The strategies docs/SPEC.md 3.4 admits, one constructor
    each. A strategy that is NOT here is refused by [Builder.search_of_annot]; there is no
    catch-all arm on either of these types anywhere, deliberately, because a catch-all is
-   how an unsupported strategy becomes a wrong search instead of a refusal. *)
-type var_choice = Input_order | First_fail | Smallest | Largest
+   how an unsupported strategy becomes a wrong search instead of a refusal.
+
+   M7-T19 (D-0083) added [Anti_first_fail]: the LARGEST current domain first, ties broken
+   by [First_fail]'s rule. FlatZinc's bare `indomain` has no constructor of its own: it
+   means ascending-value assignment, which is [Indomain_min]'s branching exactly, so the
+   builder maps the spelling onto it rather than adding a synonym here. *)
+type var_choice = Input_order | First_fail | Anti_first_fail | Smallest | Largest
 type val_choice = Indomain_min | Indomain_max | Indomain_split | Indomain_median
 type search = Int_search of int list * var_choice * val_choice | Seq of search list
 type objective = Satisfy | Minimize of operand | Maximize of operand
