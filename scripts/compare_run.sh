@@ -364,7 +364,12 @@ pair_one() {
   if [ -n "$PAIRS" ]; then
     pinned="$(awk -F'\t' -v i="$id" '$1 == i {d = $NF} END {print d}' "$PAIRS")"
     if [ -n "$pinned" ]; then
-      cands=("$([ "$pinned" = "<none>" ] || printf '%s' "$pinned")")
+      # answers.tsv stores data relative to the corpus root; pair.tsv absolute.
+      case "$pinned" in
+        "<none>") cands=("") ;;
+        /*) cands=("$pinned") ;;
+        *) cands=("$CORPUS/$pinned") ;;
+      esac
     fi
   fi
   : > "$OUT/log/$id.pair"
@@ -647,7 +652,7 @@ main() {
   write_conf
   export OUT MZN BAGUETTE CHUFFED GCS GCS_PROVE MEM_KB PROOF_CAP_KB SOLVE_TIMEOUT
   export FLATTEN_TIMEOUT CHECK_TIMEOUT KEEP DATA_TRIES SOLVERS PAIR_SOLVERS TOOL VERIPB
-  export BAGUETTE_MZN_ID CHUFFED_MZN_ID GCS_MZN_ID COMPAT COMPAT_MZN PAIRS
+  export BAGUETTE_MZN_ID CHUFFED_MZN_ID GCS_MZN_ID COMPAT COMPAT_MZN PAIRS CORPUS
   export -f pair_one solve_one flatten_with check_input emit_input_failures instance_id
   export -f validate_fzn data_candidates emit flat mzn_id_of now_ns secs has_row
 

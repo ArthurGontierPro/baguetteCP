@@ -506,6 +506,17 @@ def pin_mismatch(pin, r):
     return ""
 
 
+def relative_data(model, dat):
+    """The data path relative to the corpus root, which is three levels above the
+    model (<root>/<year>/<family>/<model>.mzn), so the pin survives a moved corpus."""
+    if dat in ("-", "<none>", ""):
+        return dat
+    root = os.path.dirname(os.path.dirname(os.path.dirname(model)))
+    if dat.startswith(root + "/"):
+        return dat[len(root) + 1:]
+    return dat
+
+
 def answers(outdirs, outpath):
     by, data = {}, {}
     for od in outdirs:
@@ -513,13 +524,15 @@ def answers(outdirs, outpath):
         for r in rows:
             by.setdefault(r["id"], []).append(r)
         for i, p in load_pairs(od).items():
-            data.setdefault(i, set()).add(p["data"])
+            data.setdefault(i, set()).add(relative_data(p["model"], p["data"]))
     lines = ["# M6-T4 / M5-T3: the pinned answer per instance. A later run that disagrees",
              "# with a row here is a FINDING (compare_run.sh --report OUT --pinned THIS).",
              "# answer: SAT | UNSAT | OPT | DISPUTED.  objective: '-' for satisfaction,",
              "# min:V / max:V a proved optimum, min:best=V a best-known incumbent (answer SAT).",
-             "# by: the solver(s) whose PROVED result establishes it.  data: the data file",
-             "# (pairing is a function of the instance only; '<none>' = the bare model).",
+             "# by: the solver(s) whose result establishes it (a proved answer; for best=V, the",
+             "# incumbents).  data: the data file RELATIVE TO THE CORPUS ROOT, '<none>' = bare.",
+             "# Pairing is deterministic only up to FLATTEN_TIMEOUT, so a run to be checked",
+             "# against this file pins its data from it: PAIRS=bench/corpus/answers.tsv.",
              "id\tanswer\tobjective\tby\tdata"]
     n = 0
     for i in sorted(by):
