@@ -207,6 +207,28 @@ grep -q 'PIN-MISMATCH 2099_opt baguette' "$D/r2.txt" \
   && echo "ok   a run contradicting a pinned optimum is reported PIN-MISMATCH" \
   || fail "a contradicted pin was not reported"
 
+# NO-DATA, when MiniZinc's "did you forget to specify a data file?" comes after pages of
+# warnings: the first Chuffed pass filed two such instances as FLATTEN-FAIL because only
+# the first 200 bytes were searched. Always a stub here -- the point is the message
+# SHAPE, which a real minizinc only produces for a real parametric model.
+mkdir -p "$D/nd/2099/nd" "$D/out-nd"
+printf 'int: n;\nvar 1..n: NEEDSDATA :: output_var;\nsolve satisfy;\n' > "$D/nd/2099/nd/nd.mzn"
+cat > "$D/bin/minizinc-nd" <<'S'
+#!/usr/bin/env bash
+[ "${1:-}" = --solvers ] && { echo "org.baguette.baguette org.selftest.chuffed-shim org.selftest.gcs-shim"; exit 0; }
+for i in $(seq 1 300); do echo "Warning: variable \`n$i' shadows variable with the same name" >&2; done
+echo "Error: type error: variable \`n' must be defined (did you forget to specify a data file?)" >&2
+exit 1
+S
+chmod +x "$D/bin/minizinc-nd"
+env MZN="$D/bin/minizinc-nd" BAGUETTE="$BAGUETTE" CHUFFED="$D/bin/chuffed-shim" GCS="$D/bin/gcs-shim" \
+  GCS_MSC_DIR="$D/msc" CHUFFED_MZN_ID=org.selftest.chuffed-shim GCS_MZN_ID=org.selftest.gcs-shim \
+  "$ROOT/scripts/compare_run.sh" "$D/nd" "$D/out-nd" > "$D/run-nd.log" 2>&1
+nd="$(awk -F'\t' '$3 == "NO-DATA"' "$D/out-nd/results.tsv" | wc -l)"
+[ "$nd" = 3 ] \
+  && echo "ok   NO-DATA found after 300 lines of warnings, for all 3 solvers" \
+  || fail "a data-less model whose 'did you forget' follows 300 warnings got $nd NO-DATA rows, not 3: $(cut -f2,3 "$D/out-nd/results.tsv" | tr '\n' ' ')"
+
 # Every status the harness can assign that this corpus reaches, listed once.
 echo "     statuses reached: $(grep -v '^DONE-' "$R" | cut -f3 | sort -u | tr '\n' ' ')"
 echo "     verdicts reached: $(grep -v '^DONE-' "$R" | cut -f10 | sort -u | tr '\n' ' ')"

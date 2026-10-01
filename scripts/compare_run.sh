@@ -303,6 +303,10 @@ flatten_with() {
     echo "flatten exceeded ${FLATTEN_TIMEOUT}s"
     return 124
   }
+  # MiniZinc's "did you forget to specify a data file?" can follow pages of warnings,
+  # so it is looked for in the WHOLE message, not in the 200 bytes kept. Two instances
+  # of the first Chuffed pass were FLATTEN-FAIL instead of NO-DATA for exactly that.
+  grep -qa 'did you forget to specify a data file' "$dst.err" && printf '[needs-data] '
   head -c 200 "$dst.err"
   [ "$rc" -eq 0 ] && echo " (minizinc exited 0 but wrote nothing)"
   return 1
@@ -356,7 +360,7 @@ pair_one() {
   rm -f "$W".*.fzn.err
   if [ "$found" -ne 1 ]; then
     local st="FLATTEN-FAIL" why="[$ndata data file(s) + bare, no library flattened any] $first_err"
-    if [ "$ndata" -eq 0 ] && printf '%s' "$first_err" | grep -qa 'did you forget to specify a data file'; then
+    if [ "$ndata" -eq 0 ] && [ "${first_err#\[needs-data\] }" != "$first_err" ]; then
       st="NO-DATA"
       why="no .dzn/.json under $(dirname "$mzn") and the model needs parameters"
     fi
