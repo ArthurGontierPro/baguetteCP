@@ -454,6 +454,47 @@ let hole_line t store w =
       Option.map (Store.explanation store)
         (Store.remover store ~before:(Store.trail_length store) ~var:rv w)
 
+(* M7-T21 / D-0084. An interior INDEX hole that this propagator did not punch, as the
+   clause a summand may cite.
+
+   Before M7-T21 this was the bare unit [~idx_eq_p], asserted as a [rup]. That unit is
+   RUP only when the hole is a consequence of the model alone, which is true of a hole
+   punched at LEVEL 0 and false of one punched under a decision: the hole's own trace
+   line is `~idx_ge_p \/ idx_ge_(p+1) \/ ~<the puncher's facts>`, and with nothing
+   assumed but [idx_eq_p] those facts are not falsified, so unit propagation never fires
+   it. 3.0.2 refuses the line, `test/models/element_foreign_hole_rup_sat.fzn` is the
+   scene, and it is the 23-of-26 shape D-0080 found in the corpus (`rup +1 ~<v>_eq_<k>
+   >= 1 ;` at a level > 0, empty tail). The line is reached only when ANOTHER element's
+   derivation embeds this one -- [excl_hole] cites the result hole's remover's
+   explanation, which is this module's [hole_expl] -- and that derivation is forced, which
+   a factless conflict does at search.ml's D-0040 arm.
+
+   The repair is alldiff.ml's [Gone_hole] arm, verbatim in kind: carry the PUNCHER's
+   facts into the clause, `~idx_eq_p \/ ~facts`, which is RUP against the hole's own
+   trace line plus the channelling halves (assume idx_eq_p and the facts; the halves set
+   idx_ge_p and ~idx_ge_(p+1); the hole's line is then falsified). The leftover literals
+   stay in the row, which is the same globally valid "pruning disjoined with what it
+   read" every other arm of [pos_gone] already derives. A level-0 hole keeps the bare unit
+   -- it is RUP there, and keeping it leaves every proof that never reaches a deep foreign
+   hole byte-identical. The remover is found EAGERLY, here, at pruning time (I-X6). *)
+let index_hole_clause t store bp =
+  let unit = Lit.negate (Lit.eq t.iname bp) in
+  let rec find i =
+    if i < 0 then None
+    else
+      let e = Store.trail_entry store i in
+      if
+        Var.equal e.Store.var t.ibase && Domain.mem e.Store.old bp
+        && not (Domain.mem e.Store.now bp)
+      then Some i
+      else find (i - 1)
+  in
+  match find (Store.trail_length store - 1) with
+  | Some i when Store.level_of_index store i > 0 ->
+      let r = (Store.trail_entry store i).Store.reason in
+      Explanation.clause (unit :: List.map Lit.negate (Reason.lits r))
+  | Some _ | None -> Explanation.clause [ unit ]
+
 (* WHAT A SHAPE-1 LINE LEAVES BEHIND, so that a conflict can cancel it.
 
    Each arm of [pos_gone] derives [~idx_eq_p] disjoined with AT MOST ONE bound literal --
@@ -521,7 +562,7 @@ let pos_gone t store p =
       let dlo = Domain.lo d and dhi = Domain.hi d in
       if bp < dlo then (later (fun () -> idx_excl_below t p ~blo:dlo), R_idx_lo dlo)
       else if bp > dhi then (later (fun () -> idx_excl_above t p ~bhi:dhi), R_idx_hi dhi)
-      else (Explanation.clause [ Lit.negate (Lit.eq t.iname bp) ], R_none)
+      else (index_hole_clause t store bp, R_none)
 
 (* ---- shape 2: what the live positions force about the result ---- *)
 
