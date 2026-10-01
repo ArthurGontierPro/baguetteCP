@@ -1297,6 +1297,11 @@ type verdict =
       upper : int option; (* None is INF: no solution was found *)
       upper_assignment : Lit.t list;
     }
+  | No_conclusion
+(* M6-T12. `conclusion NONE`: the run was stopped (--time-limit, M6-T9) and claims
+   nothing. veripb 3.0.2 accepts it as "VERIFIED NO CONCLUSION". It cites no id, so
+   it discharges nothing: the caller retires what is live first, and the I-X2 audit
+   then runs exactly as it does for a finished run. *)
 
 (* [output NONE] is required by the checker before [conclusion]; the doc's rule table
    does not mention it. NONE is the honest guarantee: we do not emit an output
@@ -1326,6 +1331,7 @@ let conclusion ?(output = "NONE") t v =
   rule t (Printf.sprintf "output %s" output);
   (match v with
   | Sat _ -> rule t "conclusion SAT"
+  | No_conclusion -> rule t "conclusion NONE"
   | Unsat None -> rule t "conclusion UNSAT"
   | Unsat (Some id) ->
       rule t (Printf.sprintf "conclusion UNSAT : %s" (cite t id));

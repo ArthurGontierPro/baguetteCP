@@ -3174,23 +3174,16 @@ let retire_learned ctx stats =
    the caller's next act is to report and exit, and [Search] already does not support a
    second solve on the same engine (see [search_core]).
 
-   The three lines are written through [Writer.rule] because [Writer.verdict] has no
-   NONE arm and lib/proof/writer.ml is not this row's file; the tests already conclude
-   NONE this way (test_engine.ml, test_prop.ml). What [Writer.conclusion] does after its
-   last line -- mark the proof finished, flush, run the I-X2 audit -- is repeated here so
-   that a stopped run is audited exactly as a finished one is. *)
+   The three lines, the finish, the flush and the I-X2 audit are all
+   [Writer.conclusion Writer.No_conclusion] (M6-T12), so a stopped run is audited exactly
+   as a finished one is. *)
 let conclude_stopped ctx trace stats =
   let w = ctx.Justify.writer in
   retire_learned ctx stats;
   retire_assign_clauses ctx stats;
   retire_trace ctx trace;
   (match Writer.live_ids w with [] -> () | ids -> Writer.delete_many w ids);
-  Writer.rule w "output NONE";
-  Writer.rule w "conclusion NONE";
-  Writer.rule w "end pseudo-Boolean proof";
-  w.Writer.finished <- true;
-  flush w.Writer.oc;
-  Writer.check_audit w
+  Writer.conclusion w Writer.No_conclusion
 
 (* Depth-first search from the store's current decision level (I-S3: the level on
    return equals the level on entry -- true here by construction, since every
