@@ -515,7 +515,10 @@ run_one() {
     # so the rename is within one filesystem; preflight has already refused to run
     # anywhere that rename is not atomic.
     rm -f "$W.fzn.part" "$L.fzn"
-    timeout "$FLATTEN_TIMEOUT" "$MZN" -c --solver baguette "$mzn" ${c:+"$c"} \
+    # --no-output-ozn: without it `minizinc -c -o X.part` also writes <model>.ozn NEXT
+    # TO THE MODEL, i.e. the harness writes into its own input (412 stray .ozn files on
+    # the node by wave 31, requested by agent-compare/M6-T4). Nothing here reads them.
+    timeout "$FLATTEN_TIMEOUT" "$MZN" -c --no-output-ozn --solver baguette "$mzn" ${c:+"$c"} \
       -o "$W.fzn.part" > "$L.mzn.err" 2>&1
     rc=$?
     if [ "$rc" -eq 124 ]; then
