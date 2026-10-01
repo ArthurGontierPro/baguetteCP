@@ -6440,3 +6440,141 @@ built on the node and Chuffed from the MiniZinc 2.10.1 bundle, M7-T17/M7-T18 on 
 M7-T19 on the ten refusals. The comparison can start once (a) Chuffed and GCS run under one
 harness that checks agreement between solvers — the first external oracle this solver has
 ever had — and (b) baguette reports at a time limit instead of being killed.
+
+## D-0081  The comparison harness, and baguette's first external oracle: no disagreement on 164 instances
+
+**Status**: **MEASUREMENT + TOOL**, recorded 2026-10-01 by agent-compare (M6-T4, absorbing
+M5-T3), wave 31, branch `wave31-compare`. Runs on `fataepyc-07` under
+`/scratch/arthur/compare-out-{pilot,chuffed,gcs-noproof}`; every one has its `DONE-` marker
+and a `run.conf` hashing every binary. Harness: `scripts/compare_run.sh`,
+`scripts/compare_selftest.sh`, `tools/compare/compare.py`; how to read it: `bench/README.md` §8.
+
+### Setup facts
+
+| | |
+|---|---|
+| MiniZinc | 2.10.1 bundle, `/scratch/arthur/mzn/MiniZincIDE-2.10.1-x86_64-linux-gnu/`, `minizinc` md5 `4dcf37f1e8305d0814d6347b9db1d151` |
+| **baguette** | `main` at `e59f214` (the wave-31 claim commit; `wave31-compare` adds no `lib/`/`bin/`/`mznlib/` change), built in `/scratch/arthur/baguette-compare`, `main.exe` md5 **`b9394d8d9e576f0eb1c2673bcfda9e47`**; flattened with `tools/baguette.msc` → `mznlib/` (D-0067); `--max-heap-mb 15625 --proof` |
+| **Chuffed** | **0.14.0** (the bundle's `chuffed.msc`; `fzn-chuffed` has no `--version`), `fzn-chuffed` md5 `d30798695fa151c08caf956a774589d2`; flattened with its own `share/minizinc/chuffed`; **no `-f`** (free search OFF, annotation honoured), restarts at Chuffed's default, `-a` on optimisation only. Logs no proof |
+| **GCS** | `github.com/ciaranm/glasgow-constraint-solver` at **`5882c2943480db38fd66760858e3b6196ad7b7cc`** (2026-10-01), `/scratch/arthur/gcs`. `cmake --preset release` (Release, `-march=native`, g++ 15.2) and `cmake --build --preset release --target fzn-glasgow`: built first time, **no Boost** (CMake fetches Catch2, cxxopts, nlohmann/json, gch::small_vector; libxml2 was present). `fzn-glasgow` md5 `ebffdc089f351bbedbd02c12bca6e00d` |
+| GCS entry point | `minizinc/fzn_glasgow.cc` → `build/fzn-glasgow`; the build writes `build/glasgow.msc` (id `com.github.ciaranm.glasgow-constraint-solver`, mznlib `minizinc/mznlib`, **`inputType: JSON`** — MiniZinc hands it JSON FlatZinc). `MZN_SOLVER_PATH=build/` makes `minizinc --solver` find it |
+| GCS flags | `-i` on optimisation only; no `-f`; `--restarts` left at 0 (off); **proof logging `--prove --proof-files-basename <b>`** → `<b>.opb`, `<b>.pbp` (+ `.scp`, `.varmap`) |
+| **Proof formats, and who checks whom** | baguette: `pseudo-Boolean proof version 3.0`. **GCS: `pseudo-Boolean proof version 3.0`** (first line of its `.pbp`). Both are checked by **`~/.cargo/bin/veripb`, VeriPB 3.0.2 (Rust)**. No Python VeriPB was needed and none was installed; `~/.local/bin/veripb` stays broken and unused. Verdict by wording: `s VERIFIED …` accepted; `Verification error at …` + a non-grammar `Caused by` rejected |
+
+### The harness, in one paragraph
+
+Per instance, the data file is chosen **once**, independent of which solvers run: the
+smallest candidate (corpus_run.sh's order, bare last) that at least one of the three
+libraries flattens. Then each solver flattens with its own library, atomically, the
+flattened file passes `validate_fzn`/JSON parse before any solver-blaming bucket is
+reachable (D-0069), the objective is made an output variable identically for all three,
+and each run gets `timeout`, `ulimit -v 32000000` and a `ulimit -f` proof cap (16 GB). The
+agreement verdict per instance — `AGREE`, `DISAGREE` (solution vs UNSAT, two different
+proved optima, or an incumbent better than a proved optimum), `INCOMPLETE` — is computed
+from the table, and `--report` prints `DISAGREE` first. The self-test reaches SAT, UNSAT,
+OPT, REFUSED, NO-PROOF, NO-DATA and two `DISAGREE`s against a deliberately wrong GCS shim,
+and fails rather than skips without baguette or veripb.
+
+### The pilot: 88 instances × 3 solvers, 300 s
+
+The 58 `OK-PROOF-VERIFIED`, 10 `REFUSED-MODEL` and first 20 `TIMEOUT-SOLVE` of D-0079.
+`PAR=10` per solver. **All 88 paired the SAME data file as `corpus-out-w30`** (checked
+id by id), and all three libraries flattened all 88.
+
+| status | baguette | chuffed | gcs (proof on) |
+|---|---|---|---|
+| OPT | 42 | 58 | 34 |
+| SAT | 13 | 19 | 18 |
+| UNSAT | 4 | 5 | 4 |
+| TIMEOUT | 19 | 6 | 1 |
+| CAPPED (16 GB proof cap) | 0 | 0 | **28** |
+| REFUSED | 10 | 0 | 0 |
+| ERROR | 0 | 0 | 3 |
+| proofs VERIFIED | **59 / 59** | — | 44 |
+| proofs REJECTED | **0** | — | **2** |
+| TIMEOUT-CHECK (900 s) | 0 | — | 10 |
+
+**Agreement: 77 AGREE, 0 DISAGREE, 11 INCOMPLETE.** On the 38 instances all three solved:
+median wall **baguette 4.97 s, Chuffed 0.12 s, GCS 0.17 s** (means 37.3 / 0.17 / 17.2); median
+proof 2.9 MB (baguette) vs 6.0 MB (GCS), median check 0.57 s vs 1.22 s. PAR2 over all 88:
+baguette 229.5, Chuffed 41.9, GCS 235.9. baguette solved 59 = D-0079's 58 plus
+`2010_bacp_bacp-10` (a `TIMEOUT-SOLVE` in wave 30, OPT here in 287.9 s -- inside the 300 s by 12 s, so a timing margin, not a change), and none that
+Chuffed did not. Its 10 REFUSED are D-0079's 10 `indomain` refusals.
+
+### The single-solver passes: all 436, 300 s
+
+| status | Chuffed (`PAR=16`) | GCS, proof OFF (`PAR=16`) |
+|---|---|---|
+| OPT | 219 | 111 |
+| SAT | 44 | 31 |
+| UNSAT | 10 | 7 |
+| TIMEOUT | 139 | 259 |
+| ERROR | 0 | 3 |
+| FLATTEN-FAIL | 4 | 5 |
+| NO-DATA | 20 | 20 |
+| **solved** | **273** | **149** |
+
+Chuffed's median over its 273 is 1.41 s, PAR2 238.1; GCS's over its 149 is 13.4 s, PAR2
+411.3. The GCS pass ran **without** proof logging, because the pilot showed GCS's proofs
+dominating its time: 28 of 88 pilot runs hit the 16 GB cap after a median 157 s, and with
+proofs off the same 88 give 41 OPT instead of 34. So the GCS pass measures the solver, and
+the pilot measures its proofs.
+
+### What it found
+
+1. **The oracle found nothing against baguette.** Over the pilot plus both passes, **164
+   instances AGREE and 0 DISAGREE**; baguette is party to 61 of the agreeing pins
+   (45 with both others, 16 with Chuffed alone). That is the measurement: on every
+   instance where baguette proved something, two independent solvers that share none of
+   its code reached the same answer, and veripb accepted all 59 of its proofs.
+2. **GCS's proofs were rejected twice by veripb 3.0.2, with the answers agreeing.**
+   `2014_stochastic-fjsp_fjsp-a1-s4_fjsp-t8-j2-m3-a1_det` (OPT 242 by all three):
+   *"not implied by reverse unit propagation"* at `.pbp:17336`, 13.9 GB proof.
+   `2019_stochastic-vrp_vrp-s4-v2-c3_svrp-v2-c3_det` (OPT 117 by all three): *"The
+   propagated assignment does not satisfy the constraint with ID 9457"* at
+   `.pbp:262034`, 38 MB — **reproduced by hand on a fresh flatten with neither the
+   COMPAT file nor the objective injection** (both instances already output their
+   objective), so it is not the harness's doing. Both artefacts are kept under
+   `compare-out-pilot/log/`. They are findings about GCS `5882c294` (or about the one
+   checker, which D-0046 made the sole oracle), not about baguette.
+3. **GCS errors**: `Integer overflow` on `2010_wwtp_random_wwtpp`, `2010_wwtp_real_wwtpp`,
+   `2025_work-task-variation`; it also substitutes `dom_w_deg` for the `largest` variable
+   heuristic it does not know (a warning), so "annotation-driven" is approximate for GCS
+   there.
+4. **The shared set is 411 of 436** (`bench/corpus/shared_set.lst`): 20 NO-DATA (all
+   `2026/`, as D-0074 found), 4 that no library flattens (`2009_p1f` ambiguous `circuit`,
+   `2016_cryptanalysis_step1_aes` index-set mismatch, `2021_yumi-dynamic` max of empty set,
+   `2024_train-scheduling_trains`), and `2025_gt-sort`, whose flatten crosses the 120 s
+   timeout for baguette's and (in one run) GCS's library.
+5. **`bench/corpus/answers.tsv` pins 387 instances** — 223 OPT, 10 UNSAT, 44 SAT
+   (satisfaction), 110 SAT with a best-known objective — 0 DISPUTED; 127 rest on Chuffed
+   alone and 4 on GCS alone. It is M5-T3's regression set: a later run that contradicts a
+   row is reported `PIN-MISMATCH` by `--report --pinned`.
+
+### Three corrections the first runs forced, each now in the script
+
+* **MiniZinc 1.x models** (2008-2010: `:: is_output`, string-valued `int_search`) are
+  refused by the 2.10.1 standard library and shimmed by baguette's `mznlib/compat_mzn1.mzn`.
+  The first pilot attempt had 22/88 `FLATTEN-FAIL` for Chuffed and GCS on that alone; it
+  was stopped and re-run with `COMPAT=1`, which passes the same language-only file to their
+  flattens. It decomposes nothing; their globals are still theirs. **A deviation from "each
+  solver flattens with only its own library", stated rather than hidden**; `COMPAT=0`
+  restores the strict form.
+* **`minizinc -c -o X.part` writes `<model>.ozn` into the corpus directory** — 412 stray
+  `.ozn` files under `/scratch/arthur/mzn-challenge/` today, from this harness and from
+  `scripts/corpus_run.sh`, which has the same `-o .part` pattern (cross-session request
+  filed). `--no-output-ozn` stops it. The files are inert (no data glob matches them) and
+  were left in place for the orchestrator to remove.
+* **Pairing is deterministic only up to `FLATTEN_TIMEOUT`**: `2025_gt-sort` paired two
+  different data files in the Chuffed and GCS passes. `--answers` caught it (DISPUTED), the
+  GCS row was re-run with `PAIRS` pinned to the Chuffed pass's choice, and `PAIRS` is now
+  how any later run is made comparable with `answers.tsv`. Also fixed on the way: NO-DATA
+  is detected in MiniZinc's whole message, not its first 200 bytes (two 2026 instances).
+
+### What is not done
+
+GCS's proof-logging comparison covers the pilot only; a full-corpus GCS pass with proofs
+would spend most of its time writing and checking multi-GB proofs (10 of the 56 pilot
+proofs that were checked did not finish in 900 s; one 15 GB proof did). The pilot did not include
+baguette on the other 348 instances — D-0079 is that run, and `PAIRS=bench/corpus/answers.tsv`
+makes the next one directly comparable.
