@@ -6537,3 +6537,28 @@ undomained, so a model without one is untouched — byte-identical artefacts.
 `builder.ml` now references `Baguette_core` (`Checked`, `Interval`), which the dependency
 order permits (`flatzinc -> core`) but `lib/flatzinc/dune`'s comment says it does not do;
 that comment is the orchestrator's and is a cross-session request.
+
+### The ten instances, measured 2026-10-01 on `fataepyc-07`
+
+Branch tip `c6112f1` (binary md5 `10e0f406d5afc52ad5ab4a2f498c62a6` on the node), flattened
+with MiniZinc 2.10.1 and baguette's library, 300 s solve timeout, `--max-heap-mb 15625`,
+`ulimit -v 32000000`, veripb 3.0.2 on every solved run. Output under
+`/scratch/arthur/cover-out-w31`.
+
+| Instance | Before (w30) | After | Proof |
+|---|---|---|---|
+| `2008_quasigroup7` | REFUSED `indomain` | SAT in 0.12 s | VERIFIED |
+| `2010_ghoulomb` | REFUSED `indomain` | TIMEOUT 300 s | — |
+| `2013_ghoulomb` | REFUSED `indomain` | TIMEOUT 300 s | — |
+| `2010_depot_placement` | REFUSED `indomain` | TIMEOUT 300 s | — |
+| `2013_on-call-rostering_oc-roster` | REFUSED `anti_first_fail` | TIMEOUT 300 s | — |
+| `2018_on-call-rostering_oc-roster` | REFUSED `anti_first_fail` | TIMEOUT 300 s (width warning, 28 800) | — |
+| `2010_wwtp_real_wwtpp` | REFUSED no domain | TIMEOUT 300 s; all inferred (widest warned 10 440–22 500) | — |
+| `2010_wwtp_random_wwtpp` | REFUSED no domain | TIMEOUT 300 s; all inferred (68 width warnings, widest 20 959) | — |
+| `2025_work-task-variation` | REFUSED no domain | all 469 inferred (case split; `cost` 0..660040, warned); then REFUSED-LIMIT on `fzn_global_cardinality` with a constant count — **M7-T18's** refusal, not this one | — |
+| `2021_connect_connect__0086_02` | REFUSED no domain | still REFUSED, new wording: `fplen` has lower bound 54938 and NO upper bound | — |
+
+`connect` is a correct refusal, not a missing rule: `fplen`, `fpwid` and `FPCOST` are bounded
+below and minimised, and no constraint bounds them above — the model's own solution set is
+unbounded in them. Bounding from the objective would need an incumbent first, and is a
+different decision. Zero proofs rejected.
