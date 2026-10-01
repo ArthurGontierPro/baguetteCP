@@ -68,6 +68,7 @@ type options = {
   all_solutions : bool;
   time : bool;
   stats : bool;
+  time_limit : float option;
 }
 
 (* Exit codes. 0 covers both SAT and UNSAT: an UNSAT model is a successful run that
@@ -92,7 +93,7 @@ let usage () =
   prerr_endline
     "usage: baguette MODEL.fzn [--proof PREFIX] [--proof-comments] [--all] [--time] \
      [--stats] [--max-order-width N] [--max-direct-values N] [--width-warn N] \
-     [--max-encoding-clauses N] [--max-heap-mb N]";
+     [--max-encoding-clauses N] [--max-heap-mb N] [--time-limit S]";
   prerr_endline "";
   prerr_endline "  --proof PREFIX    write PREFIX.opb and PREFIX.pbp (SPEC 4.1); verify";
   prerr_endline "                    them with: veripb PREFIX.opb PREFIX.pbp";
@@ -116,6 +117,21 @@ let usage () =
   prerr_endline "                    three int increments per node and no clock reads, so";
   prerr_endline "                    unlike --time it is safe to leave on while timing.";
   prerr_endline "                    stdout is byte-identical with and without it.";
+  prerr_endline "  --time-limit S    stop the search after S seconds (M6-T9). Checked at";
+  prerr_endline "                    the entry of every search node, against the";
+  prerr_endline "                    PROCESS CPU clock (Sys.time: this binary links no";
+  prerr_endline "                    wall clock), counted from process start, so parse";
+  prerr_endline "                    and compile are inside it. One slow node can";
+  prerr_endline "                    overrun it; keep an outer `timeout` above it. On";
+  prerr_endline "                    expiry: stdout is `=====UNKNOWN=====` if no solution";
+  prerr_endline
+    "                    was printed, and otherwise just the solutions already";
+  prerr_endline "                    printed (an optimisation run prints each improving";
+  prerr_endline "                    one as found) WITHOUT `==========`; stderr carries";
+  prerr_endline "                    one `limit: ` summary line, plus --stats/--time as";
+  prerr_endline "                    usual; the proof ends `conclusion NONE`, which";
+  prerr_endline "                    veripb checks and reports as VERIFIED NO CONCLUSION.";
+  prerr_endline "                    Exit status 0: a stopped run is not a failure.";
   prerr_endline "";
   prerr_endline "  --max-order-width N   refuse any variable whose DECLARED width";
   prerr_endline "                    exceeds N. DEFAULT: none -- the default build has no";
@@ -159,7 +175,8 @@ let usage () =
   prerr_endline "                    runtime's `Fatal error: allocation failure`, exit";
   prerr_endline "                    134, which cannot be caught and names nothing.";
   prerr_endline "";
-  prerr_endline "  exit status       0 solved (SAT or UNSAT), 2 usage or bad model,";
+  prerr_endline "  exit status       0 solved (SAT or UNSAT) or stopped by --time-limit,";
+  prerr_endline "                    2 usage or bad model,";
   prerr_endline "                    3 unsupported model, 4 internal invariant failure,";
   prerr_endline "                    5 a resource budget above was exhausted.";
   prerr_endline "";
@@ -176,6 +193,10 @@ let usage () =
     "  BAGUETTE_RETENTION=off|fifo:N|lbd:N  the learned-constraint retention policy";
   prerr_endline
     "                    (M2-L4). Default `off`: measured, see lib/core/retention.ml.";
+  prerr_endline
+    "  BAGUETTE_PB_ANALYSIS=on|off  off is the clause path only: no PB conflict analysis";
+  prerr_endline
+    "                    (M6-T9, a measurement knob; Search.no_pb). Default on.";
   prerr_endline "  BAGUETTE_PROOF_AUDIT=0 disables the constraint-id audit (I-X2), which";
   prerr_endline "  is on by default here even though the library's own default is off.";
   exit exit_usage
@@ -206,6 +227,7 @@ let parse_args argv =
   let all_solutions = ref false in
   let time = ref false in
   let stats = ref false in
+  let time_limit = ref None in
   let rec go i =
     if i >= Array.length argv then ()
     else
@@ -226,6 +248,16 @@ let parse_args argv =
       | "--stats" ->
           stats := true;
           go (i + 1)
+      | "--time-limit" ->
+          if i + 1 >= Array.length argv then usage ();
+          (match float_of_string_opt argv.(i + 1) with
+          | Some s when s >= 0. && Float.is_finite s -> time_limit := Some s
+          | _ ->
+              Printf.eprintf
+                "--time-limit: %S is not a number of seconds. Give a non-negative number.\n"
+                argv.(i + 1);
+              usage ());
+          go (i + 2)
       (* M7-T1. The three tunables whose DEFAULT is now off. They mutate Encoding's refs
          rather than riding in [options], because the front end consults them during
          [Compile.compile] and the .opb writer consults them again later: there is no
@@ -274,6 +306,7 @@ let parse_args argv =
         all_solutions = !all_solutions;
         time = !time;
         stats = !stats;
+        time_limit = !time_limit;
       }
 
 (* --------------------------------------------------------- timing (M1-T35) *)
@@ -583,6 +616,22 @@ let retention_policy () =
           | "lbd", Some n -> Retention.lbd ~cap:n
           | _ -> bad v))
 
+(* [Search.config.pb], from the environment (M6-T9), with the same discipline as the two
+   knobs either side of it. `off` is [Search.no_pb]: every conflict goes down the M2-L3
+   clause path and PB conflict analysis is never asked. It exists so that D-0062's cost --
+   an order of magnitude on width_sat_depth, accepted when PB analysis was wired in --
+   can be measured on real instances rather than argued about. A measurement knob, not a
+   user-facing choice; anything but on/off/unset FAILS. *)
+let pb_analysis () =
+  match Sys.getenv_opt "BAGUETTE_PB_ANALYSIS" with
+  | None | Some "on" -> true
+  | Some "off" -> false
+  | Some v ->
+      prerr_endline
+        (Printf.sprintf
+           "baguette: BAGUETTE_PB_ANALYSIS=%S is not a setting. Use on or off." v);
+      exit 2
+
 (* [Search.config.propagate_learned], from the environment, for the same reason and with
    the same discipline as [retention_policy] above: M2-L12 has to be able to measure a
    build in which every learned constraint is proof-only, which is what this project was
@@ -683,6 +732,8 @@ let report_stats (st : Search.stats) ~exhausted =
     "search-tree nodes visited: the root, plus every child Search.branch dispatched";
   Printf.eprintf "stats: %-10s %10d decs   %s\n" "decisions" st.Search.decisions
     "decisions taken: one per internal node (Search.branch calls)";
+  Printf.eprintf "stats: %-10s %10d nodes  %s\n" "conflicts" st.Search.conflicts
+    "nodes whose propagation failed, root included (M6-T9)";
   Printf.eprintf "stats: %-10s %10d levels %s\n" "maxdepth" st.Search.max_depth
     "deepest decision stack reached: the depth of the TREE, not of the proof";
   Printf.eprintf "stats: %-10s %10d %-6s %s\n" "exhausted"
@@ -845,6 +896,23 @@ let report_stats (st : Search.stats) ~exhausted =
       (if exhausted then "=" else "<=")
       (Search.stats_expected_nodes st)
 
+(* M6-T9. One line, always (not gated on --stats), so that a results file built from
+   stderr alone can say what a stopped run was doing. Space-separated `key=value`
+   fields after the `limit:` tag; scripts/corpus_run.sh copies it into its detail
+   column, so a field renamed here is a column renamed there. [cpu_s] is Sys.time at the
+   moment of the report, the same clock the limit was checked against. *)
+let report_limit opts (st : Search.stats) ~best =
+  Printf.eprintf
+    "limit: reached time-limit=%gs cpu=%.2fs nodes=%d decisions=%d conflicts=%d \
+     learned=%d pb-learned=%d db=%d maxdepth=%d incumbent=%s\n\
+     %!"
+    (Option.value opts.time_limit ~default:0.)
+    (Sys.time ()) st.Search.nodes st.Search.decisions st.Search.conflicts
+    st.Search.n_learned st.Search.n_pb_learned
+    (Retention.size (Search.stats_db st))
+    st.Search.max_depth
+    (match best with None -> "none" | Some (_, v) -> string_of_int v)
+
 let solve opts (m : Model.t) =
   let compiled = Timing.phase "compile" (fun () -> Compile.compile m) in
   let store = compiled.Compile.store in
@@ -902,31 +970,38 @@ let solve opts (m : Model.t) =
                 Search.default_config with
                 retention = retention_policy ();
                 propagate_learned = propagate_learned ();
+                pb = pb_analysis ();
+                stop =
+                  (match opts.time_limit with
+                  | None -> fun () -> false
+                  | Some s -> fun () -> Sys.time () >= s);
               }
             in
             let r =
-              match compiled.Compile.objective with
-              | None ->
-                  `Satisfy
-                    (Search.solve ~engine:compiled.Compile.engine ~store ~ctx ~check
-                       ~stats ~config ?order:compiled.Compile.order ())
-              | Some objective ->
-                  (* M5-T1. Each improving solution is printed AS IT IS FOUND, which is
-                     the FlatZinc convention SPEC 2.2 describes -- a running report, so
-                     that a user who interrupts a long optimisation has still been told
-                     the best answer so far. The consequence for --time is that the
-                     solution printing of an optimisation run is inside the `search`
-                     phase and not inside `output`, where a satisfaction run's is; the
-                     `output` phase then holds only the final marker. That is the honest
-                     placement, since the printing really does happen there. *)
-                  `Optimise
-                    (Search.optimise ~engine:compiled.Compile.engine ~store ~ctx ~check
-                       ~stats ~config ~objective ?order:compiled.Compile.order
-                       ~on_solution:(fun assignment ->
-                         print_string
-                           (Output.solution m (assignment_values m store assignment));
-                         flush stdout)
-                       ())
+              try
+                match compiled.Compile.objective with
+                | None ->
+                    `Satisfy
+                      (Search.solve ~engine:compiled.Compile.engine ~store ~ctx ~check
+                         ~stats ~config ?order:compiled.Compile.order ())
+                | Some objective ->
+                    (* M5-T1. Each improving solution is printed AS IT IS FOUND, which is
+                       the FlatZinc convention SPEC 2.2 describes -- a running report, so
+                       that a user who interrupts a long optimisation has still been told
+                       the best answer so far. The consequence for --time is that the
+                       solution printing of an optimisation run is inside the `search`
+                       phase and not inside `output`, where a satisfaction run's is; the
+                       `output` phase then holds only the final marker. That is the honest
+                       placement, since the printing really does happen there. *)
+                    `Optimise
+                      (Search.optimise ~engine:compiled.Compile.engine ~store ~ctx ~check
+                         ~stats ~config ~objective ?order:compiled.Compile.order
+                         ~on_solution:(fun assignment ->
+                           print_string
+                             (Output.solution m (assignment_values m store assignment));
+                           flush stdout)
+                         ())
+              with Search.Stopped { best } -> `Stopped best
             in
             Timing.emit_us := Writer.emitted_us () - e0;
             Timing.emit_lines := Writer.emitted_lines () - l0;
@@ -945,7 +1020,9 @@ let solve opts (m : Model.t) =
        last improving bound, and one that reports no solution has exhausted it outright.
        Either way the search finished; there is no "stopped at the first answer" arm. *)
     | `Optimise (Search.Opt _ | Search.Opt_unsat) -> true
+    | `Stopped _ -> false
   in
+  (match outcome with `Stopped best -> report_limit opts stats ~best | _ -> ());
   Timing.phase "output" (fun () ->
       (match outcome with
       | `Satisfy (Search.Sat assignment) ->
@@ -957,7 +1034,15 @@ let solve opts (m : Model.t) =
          the last of them was optimal -- and it is printed only because the proof just
          written establishes that. *)
       | `Optimise (Search.Opt _) -> print_string Output.exhausted
-      | `Optimise Search.Opt_unsat -> print_string Output.unsatisfiable);
+      | `Optimise Search.Opt_unsat -> print_string Output.unsatisfiable
+      (* M6-T9. The FlatZinc standard's marker for "stopped with nothing to report";
+         SPEC 2.2 does not list it yet (a request is filed). A stopped run that DID
+         print solutions -- an optimisation run's improving ones -- prints nothing
+         more: their `----------` lines are already out, and the absence of
+         `==========` is exactly the statement that the last one is not proved
+         optimal. *)
+      | `Stopped None -> print_string "=====UNKNOWN=====\n"
+      | `Stopped (Some _) -> ());
       flush stdout);
   if opts.stats then report_stats stats ~exhausted
 

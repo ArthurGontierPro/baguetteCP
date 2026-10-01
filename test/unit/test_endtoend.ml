@@ -1148,6 +1148,227 @@ let test_element_derivation_is_load_bearing () =
         (Array.to_list (Sys.readdir dir));
       try Sys.rmdir dir with _ -> ())
 
+let check_bool_m6 name cond = check name cond
+
+(* veripb 3.0.2's refusal of a `conclusion UNSAT` the database does not support. Measured
+   2026-10-01 on the M6-T9 stopped pigeonhole proof, not recalled. *)
+let m6_unsat_wording = "There is no contradicting constraint in the database."
+
+(* ------------------------------------------------------------ M6-T9 time limit *)
+
+(* M6-T9: a search STOPPED by [config.stop] -- the hook `--time-limit` drives -- ends its
+   proof with `conclusion NONE`, and that proof is CHECKED. The stop here is a node
+   counter, not a clock, so the lane is deterministic: the stop fires at the same node on
+   every machine. What is asserted, and why each needs asserting:
+
+   1. The run raises [Search.Stopped] and NOT an answer -- and the CONTROL (same model,
+      no stop) does answer, so the stop really interrupted a search that had more to do.
+   2. Learned constraints are on the page (the evidence a stopped run exists to keep),
+      and the I-X2 audit (on) passed: every id the stopped solve received was deleted.
+   3. veripb -c accepts it and says VERIFIED NO CONCLUSION.
+   4. THE BREAK: the same proof with `conclusion NONE` replaced by `conclusion UNSAT` is
+      REFUSED, in the checker's wording. Without this, (3) could be a checker that
+      accepts anything over this file; with it, the stopped proof is known to claim no
+      more than it derived -- the contradiction the full search reaches is not on it. *)
+let m6_pigeons =
+  (* 4 pigeons, 3 holes, 0/1 cells (D-0028: hardness from structure, never width). *)
+  let b = Buffer.create 512 in
+  for p = 1 to 4 do
+    for h = 1 to 3 do
+      Buffer.add_string b (Printf.sprintf "var 0..1: x%d%d :: output_var;\n" p h)
+    done
+  done;
+  for p = 1 to 4 do
+    Buffer.add_string b
+      (Printf.sprintf "constraint int_lin_eq([1,1,1],[x%d1,x%d2,x%d3],1);\n" p p p)
+  done;
+  for h = 1 to 3 do
+    Buffer.add_string b
+      (Printf.sprintf "constraint int_lin_le([1,1,1,1],[x1%d,x2%d,x3%d,x4%d],1);\n" h h h
+         h)
+  done;
+  Buffer.add_string b "solve satisfy;\n";
+  Buffer.contents b
+
+let m6_setup dir name src =
+  let m = Baguette_flatzinc.Builder.of_string ~file:name src in
+  let compiled = Baguette_flatzinc.Compile.compile m in
+  let opb = Filename.concat dir (name ^ ".opb")
+  and pbp = Filename.concat dir (name ^ ".pbp") in
+  let encoding = compiled.Baguette_flatzinc.Compile.encoding in
+  let oc = open_out opb in
+  Encoding.write_opb encoding oc;
+  close_out oc;
+  let poc = open_out pbp in
+  let writer = Writer.create ~audit:true poc in
+  Encoding.start_proof encoding writer;
+  let ctx = mk_ctx writer encoding in
+  let check_asn assignment =
+    let values = Array.make (Baguette_flatzinc.Model.nvars m) 0 in
+    List.iter (fun (v, x) -> values.(Var.to_int v) <- x) assignment;
+    Baguette_flatzinc.Model.check_assignment m values
+  in
+  (compiled, opb, pbp, poc, writer, ctx, check_asn)
+
+let m6_veripb veripb dir opb pbp =
+  let log = Filename.concat dir "m6.log" in
+  let rc =
+    Sys.command
+      (Printf.sprintf "%s -c %s %s > %s 2>&1" (Filename.quote veripb) (Filename.quote opb)
+         (Filename.quote pbp) (Filename.quote log))
+  in
+  (rc, read_file log)
+
+let m6_says out needle =
+  let hl = String.length out and nl = String.length needle in
+  let rec go i = i + nl <= hl && (String.sub out i nl = needle || go (i + 1)) in
+  go 0
+
+let m6_after n =
+  let k = ref 0 in
+  fun () ->
+    incr k;
+    !k > n
+
+let test_m6_time_limit () =
+  match veripb_path () with
+  | None ->
+      incr failures;
+      print_endline
+        "FAIL M6-T9: veripb not found -- the stopped proofs were NOT checked. A missing \
+         checker is a failure, never a skip."
+  | Some veripb -> (
+      let dir = Filename.temp_file "baguette_m6" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      (* (1) control: unstopped, the pigeons are refuted. *)
+      (let compiled, _, _, poc, _, ctx, check = m6_setup dir "ctl" m6_pigeons in
+       let stats = Search.stats_create () in
+       let r =
+         Search.solve ~engine:compiled.Baguette_flatzinc.Compile.engine
+           ~store:compiled.Baguette_flatzinc.Compile.store ~ctx ~check ~stats ()
+       in
+       close_out poc;
+       check_bool_m6 "M6-T9 CONTROL: unstopped, 4 pigeons in 3 holes is UNSAT"
+         (r = Search.Unsat);
+       check_bool_m6
+         (Printf.sprintf
+            "M6-T9 CONTROL: ... and the full search takes more than the 6 nodes the \
+             stopped run is allowed (%d)"
+            stats.Search.nodes)
+         (stats.Search.nodes > 6));
+      (* (1)-(4) the stopped satisfaction run. *)
+      (let compiled, opb, pbp, poc, writer, ctx, check = m6_setup dir "stop" m6_pigeons in
+       let stats = Search.stats_create () in
+       let config = { Search.default_config with Search.stop = m6_after 6 } in
+       let r =
+         match
+           Search.solve ~engine:compiled.Baguette_flatzinc.Compile.engine
+             ~store:compiled.Baguette_flatzinc.Compile.store ~ctx ~check ~stats ~config ()
+         with
+         | _ -> `Answered
+         | exception Search.Stopped { best = None } -> `Stopped
+         | exception Search.Stopped { best = Some _ } -> `Stopped_with_incumbent
+       in
+       let live = Writer.live_ids writer in
+       close_out poc;
+       check_bool_m6 "M6-T9: the stopped satisfaction run raises Stopped, no incumbent"
+         (r = `Stopped);
+       check_bool_m6
+         "M6-T9: ... AT the 7th node: [stop] is asked on entry, after the node is counted"
+         (stats.Search.nodes = 7);
+       check_bool_m6
+         (Printf.sprintf "M6-T9: ... having learned something to keep (%d learned)"
+            stats.Search.n_learned)
+         (stats.Search.n_learned > 0);
+       check_bool_m6 "M6-T9: ... every id it received is deleted (I-X2, audit on)"
+         (live = []);
+       let proof = read_file pbp in
+       check_bool_m6 "M6-T9: ... and the proof ENDS output NONE / conclusion NONE / end"
+         (m6_says proof "output NONE ;\nconclusion NONE ;\nend pseudo-Boolean proof ;\n");
+       let rc, out = m6_veripb veripb dir opb pbp in
+       check_bool_m6 "M6-T9: veripb -c accepts the stopped proof" (rc = 0);
+       check_bool_m6 "M6-T9: ... and says VERIFIED NO CONCLUSION"
+         (m6_says out "VERIFIED NO CONCLUSION");
+       if rc <> 0 then print_endline out;
+       (* (4) the break. *)
+       let broken =
+         let needle = "conclusion NONE ;" in
+         let i =
+           let rec find i =
+             if i + String.length needle > String.length proof then 0
+             else if String.sub proof i (String.length needle) = needle then i
+             else find (i + 1)
+           in
+           find 0
+         in
+         String.sub proof 0 i ^ "conclusion UNSAT ;"
+         ^ String.sub proof
+             (i + String.length needle)
+             (String.length proof - i - String.length needle)
+       in
+       let pbp2 = Filename.concat dir "broken.pbp" in
+       let oc = open_out pbp2 in
+       output_string oc broken;
+       close_out oc;
+       let rc2, out2 = m6_veripb veripb dir opb pbp2 in
+       check_bool_m6
+         "M6-T9 BREAK: the stopped proof with `conclusion UNSAT` in place of NONE is \
+          REFUSED -- the stopped run's database is not already contradictory"
+         (rc2 <> 0);
+       check_bool_m6
+         "M6-T9 BREAK: ... at full strength, the checker's own wording for an unproved \
+          UNSAT claim"
+         (m6_says out2 m6_unsat_wording);
+       if not (m6_says out2 m6_unsat_wording) then print_endline out2);
+      (* The optimisation run, stopped at the first node after its first incumbent. *)
+      (let compiled, opb, pbp, poc, writer, ctx, check =
+         m6_setup dir "opt" fz_optimisation_model
+       in
+       let objective =
+         match compiled.Baguette_flatzinc.Compile.objective with
+         | Some o -> o
+         | None -> failwith "M6-T9: no objective"
+       in
+       let printed = ref [] in
+       let config =
+         { Search.default_config with Search.stop = (fun () -> !printed <> []) }
+       in
+       let r =
+         match
+           Search.optimise ~engine:compiled.Baguette_flatzinc.Compile.engine
+             ~store:compiled.Baguette_flatzinc.Compile.store ~ctx ~check ~objective
+             ~config
+             ~on_solution:(fun a -> printed := a :: !printed)
+             ()
+         with
+         | _ -> None
+         | exception Search.Stopped { best } -> Some best
+       in
+       let live = Writer.live_ids writer in
+       close_out poc;
+       (match r with
+       | Some (Some (_, v)) ->
+           check_bool_m6
+             (Printf.sprintf
+                "M6-T9 opt: stopped with the incumbent it printed (%d), which is NOT the \
+                 optimum 2 -- so the stop interrupted a search with more to do"
+                v)
+             (List.length !printed = 1 && v > 2)
+       | _ ->
+           check_bool_m6 "M6-T9 opt: the stopped run raises Stopped with an incumbent"
+             false);
+       check_bool_m6 "M6-T9 opt: every id deleted, the soli ids included (I-X2)"
+         (live = []);
+       let rc, out = m6_veripb veripb dir opb pbp in
+       check_bool_m6 "M6-T9 opt: veripb -c accepts the stopped optimisation proof"
+         (rc = 0 && m6_says out "VERIFIED NO CONCLUSION");
+       if rc <> 0 then print_endline out);
+      List.iter
+        (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ())
+        (Array.to_list (Sys.readdir dir));
+      try Sys.rmdir dir with _ -> ())
+
 let () =
   print_endline "";
   List.iter run_model models;
@@ -1155,6 +1376,7 @@ let () =
   test_m5_branch_and_bound ();
   test_m5_derivation_is_load_bearing ();
   test_element_derivation_is_load_bearing ();
+  test_m6_time_limit ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
