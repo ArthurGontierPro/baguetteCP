@@ -59,10 +59,34 @@ on a SAT model, and a sweep's clean run is not proof of absence.
 | `elem 667`, `mix 166` | UNSAT, `conclusion` "not contradicting": element result-hole derivation embedded with uncancelled root residue | fixed; `element_shared_result_root_unsat.fzn` |
 | `elem 9044` | UNSAT, `conclusion` "not contradicting": crossed index/result, index removal stated in the direct currency | fixed; `element_crossed_root_unsat.fzn` |
 | `gcc 419`, `mix 1619`, `mix 1948` | UNSAT, `conclusion` "not contradicting": gcc rule C emptying push against a root count bound | fixed; `gcc_count_empty_root_unsat.fzn` |
-| `gcc 565`, `mix 11984`, `mix 12008`, `mix 12062`, `ad 25920` | UNSAT, root `rup +1 <lit> >= 1 ;` refused: a nested `Defining` minted with no root trace on the page | OPEN, `search.ml` request (D-0084 item 4a) |
-| `ad 24319`, `ad 25012` | UNSAT, `conclusion` "not contradicting": all_different Regin removal in the direct currency | OPEN, `alldiff.ml` request (item 4b) |
-| `ad 25203`, `ad 25705` (+1) | CRASH exit 2, `Alldiff: ladder rung has no constraint id` | OPEN, `alldiff.ml` request (item 4c) |
+| `gcc 565`, `mix 11984`, `mix 12008`, `mix 12062`, `ad 25920` | UNSAT, root `rup +1 <lit> >= 1 ;` refused: a nested `Defining` minted with no root trace on the page | fixed (M7-T22, D-0086 (a)); `root_nested_defining_{gcc,alldiff}_unsat.fzn` |
+| `ad 24319`, `ad 25012` | UNSAT, `conclusion` "not contradicting": all_different Regin removal in the direct currency | fixed (M7-T22, D-0086 (b)); `alldiff_regin_hole_element_unsat.fzn` |
+| `ad 25203`, `ad 25705` (+1) | CRASH exit 2, `Alldiff: ladder rung has no constraint id` | fixed (M7-T22, D-0086 (c)); `alldiff_overshoot_decl_top_unsat.fzn`, and its sibling `alldiff_pigeonhole_narrow_{unsat,sat}.fzn` |
 
 The element foreign-index-hole shape (23 of the 26 corpus rejections) was NOT found by
 this sweep; it was built by hand (`element_foreign_hole_rup_sat.fzn`), which needs an
 interior `indomain_median` guess and a second element sharing the result.
+
+## Acceptance run (M7-T22, D-0086, 2026-10-02)
+
+Seeds 1..30000 of every mode, before and after M7-T22's three fixes:
+
+| Mode | Models | Before: rejected / crash | After: rejected / crash |
+|---|---|---|---|
+| `gcc`  | 30 000 | 5 / 0  | 0 / 0 |
+| `elem` | 30 000 | 0 / 0  | 0 / 0 |
+| `mix`  | 30 000 | 4 / 0  | 0 / 0 |
+| `ad`   | 30 000 | 25 / 27 | 0 / 0 |
+
+Before = the wave-32 tip `43b68bb`, binary sha256 `a57f296130906c3e7d9744f83f07928235828280bcc40b5661ccceb94f686ab4`; after = `wave33-root`
+at the M7-T22 (b) commit, sha256 `7443a8a24907e9050c3df2dcd8de1f19048957d653d23931b997c089ae97be4b` (the later commits touch no source).
+Every seed in the table above passes. Reproduce exactly, from the worktree root, with the
+binary built by `dune build --root . bin/` (check its hash first):
+
+```sh
+(ulimit -v 4000000; for m in gcc elem mix ad; do nice python3 bench/fuzz/run.py $m 1 30000 /tmp/fuzz-acc-$m || echo "$m: NOT CLEAN"; done)
+```
+
+Each mode prints `summary: ok=30000` and nothing else. Peak RSS of a mode's run: 51 MB
+(`gcc`). The caution above stands: most of these are UNSAT, so a clean run is evidence
+against refusals and crashes, not proof that every accepted `rup` is load-bearing.
