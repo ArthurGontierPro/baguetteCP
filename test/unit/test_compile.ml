@@ -1013,6 +1013,10 @@ let test_reified () =
 let closure_and_fixpoint src =
   let m = build src in
   let c = Compile.compile m in
+  (* M6-T8 (D-0091): the D-0026 agreement check forces every justification at push
+     time, and element needs a proof started for its ids; the CLI always has one. *)
+  Baguette_proof.Encoding.start_proof c.Compile.encoding
+    (Baguette_proof.Writer.create (open_out "/dev/null"));
   let n = M.nvars m in
   let decl = Array.init n (fun i -> Store.get c.Compile.store (Var.of_int i)) in
   let acc = Array.make n [] in
@@ -1121,6 +1125,10 @@ let test_element_view () =
   in
   let m = build src in
   let c = Compile.compile m in
+  (* M6-T8 (D-0091): the D-0026 agreement check forces every justification at push
+     time, and element needs a proof started for its ids; the CLI always has one. *)
+  Baguette_proof.Encoding.start_proof c.Compile.encoding
+    (Baguette_proof.Writer.create (open_out "/dev/null"));
   check "element (d): the model has exactly two variables" (M.nvars m = 2);
   check
     "element (d): and the store holds exactly those -- no auxiliary for the shifted \

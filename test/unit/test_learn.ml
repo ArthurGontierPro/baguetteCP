@@ -466,14 +466,25 @@ let test_i_s4_ordering () =
   expect_accepted ~title:"b: the correctly-ordered proof" ~dir ~opb ~pbp;
   cleanup dir [ opb; pbp ];
   (* The break: the `w` first, the derivation second. *)
-  let rb, dirb, opbb, pbpb =
-    run ~config:{ Search.default_config with Search.break_i_s4 = true } settle_src
-  in
-  check "b BREAK: the solver's own I-S4 check reports the violation"
-    (Search.stats_i_s4_broken rb.r_stats <> []);
-  expect_rejected ~title:"b BREAK: derivation after the `w` retiring its level" ~dir:dirb
-    ~opb:opbb ~pbp:pbpb;
-  cleanup dirb [ opbb; pbpb ]
+  (* M6-T8 (D-0091): under BAGUETTE_DEBUG the I-S4 debug gate in Search stops the run on
+     this deliberate violation before any proof is written, which is the gate doing its
+     job; the lane asserts THAT instead of the checker's verdict it cannot reach. *)
+  if Baguette_core.Debug.enabled then
+    check "b BREAK (BAGUETTE_DEBUG): the debug gate stops the run on the I-S4 violation"
+      (match
+         run ~config:{ Search.default_config with Search.break_i_s4 = true } settle_src
+       with
+      | exception Failure m -> String.length m > 0
+      | _ -> false)
+  else
+    let rb, dirb, opbb, pbpb =
+      run ~config:{ Search.default_config with Search.break_i_s4 = true } settle_src
+    in
+    check "b BREAK: the solver's own I-S4 check reports the violation"
+      (Search.stats_i_s4_broken rb.r_stats <> []);
+    expect_rejected ~title:"b BREAK: derivation after the `w` retiring its level"
+      ~dir:dirb ~opb:opbb ~pbp:pbpb;
+    cleanup dirb [ opbb; pbpb ]
 
 (* The other half of the I-S4 debt, and it is a finding rather than a check: the level-0
    learned clause DOES rest on hole lines filed above level 0, which is precisely the
