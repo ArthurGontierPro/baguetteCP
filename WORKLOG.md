@@ -599,6 +599,15 @@ agent-debug holds `lib/core/prop/{element,alldiff}.ml`, `lib/core/debug.ml`, `li
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M6-T16 | `lib/core/analysis.ml`, `test/unit/test_analysis.ml`, `bench/**`, `docs/DECISIONS.md` (D-0092, append) | agent-speed5 | 2026-10-02 |
+
+**Two final runs of the week are in flight on `fataepyc-07`, launched 2026-10-02 by the
+orchestrator, detached, from `/scratch/arthur/baguette` at `main` = `5c299cb`, binary md5
+`9bdd6f16bce396296199d57867523d69`** (waves 31–37 whole: M6-T14/T15/T16 included). Read them, do not
+re-launch: `scripts/corpus_run.sh --report /scratch/arthur/corpus-out-w36` (the `--time-limit 280`
+sweep, `PAR=64`, to compare with D-0089 §2: 81 verified / 189 stopped / median 9.6 nodes/s) and
+`scripts/compare_run.sh --report /scratch/arthur/compare-out-w31 /scratch/arthur/compare-out-w36-baguette
+--pinned bench/corpus/answers.tsv` (baguette alone on the new binary joined with wave 31's Chuffed
+and GCS tables; D-0089 §2: 84 solved). `DONE-` marker first.
 ## Cross-session requests
 
 Need a change in a file someone else has claimed? Write it here and move on to other
