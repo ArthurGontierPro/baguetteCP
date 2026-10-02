@@ -272,6 +272,9 @@ lib/core/       Baguette_core
     element.ml              array_int_element over a constant array, DOMAIN consistent.
                             The index is a VIEW, not an auxiliary (D-0058), and the
                             pruning is an interior hole in its own domain (M4-T3)
+    maxmin.ml               array_int_maximum / array_int_minimum (and int_max/int_min as
+                            the two-element case), BOUNDS consistent over one clause row per
+                            value; minimum is maximum over negated views (M4-T9, D-0095)
     linear.ml               int_lin_le. THE REFERENCE PROPAGATOR — copy this shape.
     lin_eq.ml               int_lin_eq (two model rows, see D-0011)
     ne.ml                   int_lin_ne and int_ne (VALUE consistency)
