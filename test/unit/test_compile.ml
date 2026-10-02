@@ -1716,6 +1716,24 @@ let test_maxmin () =
   in
   check "M4-T9: int_min(a,b,m) writes the same .opb as array_int_minimum(m,[a,b])"
     (String.equal t1 t2);
+  (* D-0083's rule for the result: an undomained `var int` maximum is bounded by the
+     hull of its operands (measured need: 2010_filters_filter's objective). *)
+  let inferred src =
+    match build src with
+    | exception Baguette_flatzinc.Error.Error _ -> None
+    | m ->
+        Array.to_list m.M.vars
+        |> List.find_map (fun (v : M.var) ->
+               if v.M.v_name = "r" then
+                 match v.M.v_dom with M.Drange (l, u) -> Some (l, u) | _ -> None
+               else None)
+  in
+  let ab = "var 1..3: a;\nvar 2..5: b;\nvar int: r;\n" in
+  check "M4-T9 D-0083: an undomained maximum is inferred to the hull 2..5"
+    (inferred (ab ^ "constraint array_int_maximum(r,[a,b]);\nsolve satisfy;\n")
+    = Some (2, 5));
+  check "M4-T9 D-0083: an undomained int_min is inferred to the hull 1..3"
+    (inferred (ab ^ "constraint int_min(a,b,r);\nsolve satisfy;\n") = Some (1, 3));
   (match build (decl ^ "constraint array_int_maximum(m,[]);\nsolve satisfy;\n") with
   | exception Baguette_flatzinc.Error.Error _ ->
       check "M4-T9: an empty array is refused with a positioned error" true

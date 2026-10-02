@@ -257,6 +257,10 @@ type fact =
      implies `p`, from a two-literal `bool_clause`. Neither bounds anything alone. *)
   | F_reif_eq of int * Model.operand * int
   | F_imp of (int * bool) * int
+  (* M4-T9. [F_hull (is_max, m, xs)]: m = max xs (resp. min), the half the [F_lin] rows
+     `m >= x_i` (resp. <=) do not carry -- m is at most the largest upper bound, and only
+     once EVERY x has one (resp. at least the smallest lower bound). *)
+  | F_hull of bool * int * Model.operand list
 
 let fact_vars = function
   | F_lin (ts, _, _) -> List.map snd ts
@@ -270,6 +274,8 @@ let fact_vars = function
   | F_reif_eq (x, e, _) -> (
       match e with Model.Var j -> [ x; j ] | Model.Const _ -> [ x ])
   | F_imp _ -> []
+  | F_hull (_, m, xs) ->
+      m :: List.filter_map (function Model.Var i -> Some i | Model.Const _ -> None) xs
 
 (* Merge repeated variables and drop zero coefficients; the constant part goes to the
    rhs. Checked, because the folding is arithmetic on model integers. *)
@@ -319,6 +325,23 @@ let facts_of env (c : Ast.constraint_item) : fact list =
         if List.length coeffs <> List.length vs then []
         else [ lin_fact (List.combine coeffs vs) (const ra) (c.Ast.c_id = "int_lin_eq") ]
     | "int_eq", [ a; b ] -> [ lin_fact [ (1, op a); (-1, op b) ] 0 true ]
+    (* M4-T9, D-0083's rule for maximum / minimum: the rows m >= x_i (resp. <=) as linear
+       facts, and the hull. Before M4-T9 the decomposition's own rows were what bounded a
+       `var int` result; keeping the constraint whole must not lose that (measured on
+       2010_filters_filter, whose objective is a maximum with no declared domain). *)
+    | (("array_int_maximum" | "array_int_minimum" | "int_max" | "int_min") as b), args
+      -> (
+        let is_max = b = "array_int_maximum" || b = "int_max" in
+        let m, xs =
+          match (b, args) with
+          | ("array_int_maximum" | "array_int_minimum"), [ ma; xa ] -> (op ma, ops xa)
+          | ("int_max" | "int_min"), [ x; y; z ] -> (op z, [ op x; op y ])
+          | _ -> raise Not_found
+        in
+        let sign = if is_max then 1 else -1 in
+        List.map (fun x -> lin_fact [ (sign, x); (-sign, m) ] 0 false) xs
+        @
+        match var_of m with Some i when xs <> [] -> [ F_hull (is_max, i, xs) ] | _ -> [])
     | "int_le", [ a; b ] -> [ lin_fact [ (1, op a); (-1, op b) ] 0 false ]
     | "int_lt", [ a; b ] -> [ lin_fact [ (1, op a); (-1, op b) ] (-1) false ]
     | "bool2int", [ _; x ] -> (
@@ -493,6 +516,15 @@ let infer_bounds (vars : Model.var array) (undomained : int list) (facts : fact 
             raise_lo q (C.neg m);
             lower_hi q m
         | _ -> ())
+    | F_hull (is_max, m, xs) -> (
+        let side = List.map (fun x -> (if is_max then snd else fst) (bounds_of x)) xs in
+        if List.for_all Option.is_some side then
+          let vs = List.filter_map Fun.id side in
+          match vs with
+          | [] -> ()
+          | v :: rest ->
+              if is_max then lower_hi m (List.fold_left max v rest)
+              else raise_lo m (List.fold_left min v rest))
     | F_reif_eq _ | F_imp _ -> ()
   in
   (* THE CASE SPLIT. MiniZinc writes `if c then x = e1 else x = e2 endif` as

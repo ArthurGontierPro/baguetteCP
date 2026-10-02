@@ -92,6 +92,10 @@ lib/core/       Baguette_core
     gcc.ml                  global_cardinality: all_different's generalisation, by
                             interval CAPACITY. Counting rows over the ORDER encoding,
                             so it needs no direct encoding at all (M7-T16, D-0078)
+    maxmin.ml               array_int_maximum / array_int_minimum (and int_max/int_min):
+                            the DISJUNCTION m <= max x as one clause row per threshold,
+                            beside n Linear rows m >= x_i; min is max over negated
+                            views (M4-T9, D-0095)
     linear.ml               int_lin_le. THE REFERENCE PROPAGATOR -- copy this shape
     lin_eq.ml               int_lin_eq (two model rows, see D-0011)
     ne.ml                   int_lin_ne and int_ne (VALUE consistency)
