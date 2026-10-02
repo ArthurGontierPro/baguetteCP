@@ -608,6 +608,32 @@ sweep, `PAR=64`, to compare with D-0089 §2: 81 verified / 189 stopped / median 
 `scripts/compare_run.sh --report /scratch/arthur/compare-out-w31 /scratch/arthur/compare-out-w36-baguette
 --pinned bench/corpus/answers.tsv` (baguette alone on the new binary joined with wave 31's Chuffed
 and GCS tables; D-0089 §2: 84 solved). `DONE-` marker first.
+
+**Wave thirty-eight, dispatched 2026-10-02 (orchestrator): efficiency and coverage, from the
+2026-10-02 census of globals in the corpus (maximum/minimum 94 models, the counting family 123,
+cumulative/disjunctive 69, table 37, diffn 29, circuit 28, regular 26).** Five rows, one worktree
+each. Decision ids pre-assigned: **D-0093** the orchestrator's w36 measurement, **D-0094** agent-wake,
+**D-0095** agent-maxmin, **D-0096** agent-cumulative (the design record), **D-0097** agent-count if
+needed, agent-wipe none. The node is reachable; a handful of jobs each (two corpus runs may still be
+finishing there).
+
+Seams. `lib/core/engine.ml` and `lib/core/propagator.ml` are agent-wake's; `bin/main.ml`'s
+`--stats` printing region and the `limit:` lines are agent-wake's too (the counters it adds must
+print), the rest of `bin/main.ml` is the orchestrator's. `lib/proof/writer.ml` and `lib/core/justify.ml`
+are agent-wipe's for `wipe_level` ONLY. `lib/flatzinc/{model,builder,compile}.ml` dispatch arms and
+`lib/core/dune` are agent-maxmin's this wave; agent-cumulative files a cross-session request for its
+three arms and its dune line, as M7-T16 did. `mznlib/`: agent-count owns the counting-family files
+and their `mznlib/test/` sources; agent-maxmin owns `redefinitions.mzn`'s `int_max`/`int_min` lines
+and new `fzn_array_int_maximum/minimum` files; agent-cumulative owns `fzn_cumulative*.mzn` if it
+gets that far. Nobody edits `mznlib/test/check_mznlib.sh` itself (it iterates `*.mzn`).
+
+| Task | Files being touched | Session | Since |
+|---|---|---|---|
+| M2-T6 | `lib/core/engine.ml`, `lib/core/propagator.ml`, `bin/main.ml` (stats region + `limit:` lines), `scripts/corpus_run.sh` (additive: new `limit:` keys in `summarise_limit`), `test/unit/{test_engine,test_endtoend}.ml`, `docs/ARCHITECTURE.md` §5, `docs/DECISIONS.md` (D-0094, append), `bench/**` | agent-wake | 2026-10-02 |
+| M6-T17 | `lib/proof/writer.ml` (`wipe_level`), `lib/core/justify.ml` (`wipe_level`), `test/unit/{test_proof,test_justify}.ml` | agent-wipe | 2026-10-02 |
+| M4-T9 | `lib/core/prop/maxmin.ml` (new), `lib/core/dune`, `lib/flatzinc/{model,builder,compile}.ml` (its arms), `mznlib/redefinitions.mzn` (`int_max`/`int_min`), `mznlib/fzn_array_int_maximum.mzn` + `_minimum` (new), `mznlib/test/*max*|*min*.mzn`, `test/unit/{test_prop,test_compile}.ml`, new `test/models/*`, `docs/PROOF-FORMAT.md` §4 row, `docs/DECISIONS.md` (D-0095, append) | agent-maxmin | 2026-10-02 |
+| M4-T10 | `docs/DECISIONS.md` (D-0096, append) FIRST; then `lib/core/prop/cumulative.ml` (new), `mznlib/fzn_cumulative*.mzn`, `mznlib/test/*cumul*.mzn`, `test/unit/test_prop.ml` (its own scenes), new `test/models/*`, `docs/PROOF-FORMAT.md` §4 row; dispatch arms and dune line by request | agent-cumulative | 2026-10-02 |
+| M7-T23 | `mznlib/fzn_count*.mzn`, `mznlib/fzn_exactly*.mzn`, `mznlib/fzn_at_most*.mzn`, `mznlib/fzn_at_least*.mzn`, `mznlib/fzn_among*.mzn` (new), `mznlib/test/*count*|*exactly*|*among*|*at_*.mzn`, new `test/models/*` + expected, `docs/DECISIONS.md` (D-0097, append, only if a decision is taken) | agent-count | 2026-10-02 |
 ## Cross-session requests
 
 Need a change in a file someone else has claimed? Write it here and move on to other
