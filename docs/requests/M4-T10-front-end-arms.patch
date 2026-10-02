@@ -197,7 +197,7 @@ index 85d07ab..09f0a69 100644
  
  (* Brute force over the declared box: the independent oracle for the expected answer.
 diff --git a/test/unit/test_trace.ml b/test/unit/test_trace.ml
-index 13a0d88..d446032 100644
+index 13a0d88..a5358ab 100644
 --- a/test/unit/test_trace.ml
 +++ b/test/unit/test_trace.ml
 @@ -1108,6 +1108,15 @@ let ix10_table =
@@ -242,8 +242,8 @@ index 13a0d88..d446032 100644
     in the suite that would notice. *)
 +(* M4-T10 (D-0096). test/models/cumulative_sat.fzn: five tasks, cap 2, one at r = 2,
 +   searched latest-first. [ix10_cumul_line] is an upper push (`s2 <= 1`, given
-+   `s2 <= 2` and `s3 >= 3`) that 3.0.2 refuses standalone, measured 2026-10-02 -- two of
-+   the lane's eleven derive-ahead lines are. *)
++   `s2 <= 2`; s0's compulsory part at t = 2 is declared, so it has no literal) that
++   3.0.2 refuses standalone, measured 2026-10-02. *)
 +let ix10_cumul_source =
 +  {|var 0..2: s0 :: output_var;
 +var 0..4: s1 :: output_var;
@@ -254,7 +254,7 @@ index 13a0d88..d446032 100644
 +solve :: int_search([s3,s4,s2,s1,s0], input_order, indomain_max, complete) satisfy;
 +|}
 +
-+let ix10_cumul_line = "rup +1 ~s2_ge_2 +1 s2_ge_3 +1 ~s3_ge_3 >= 1 ;"
++let ix10_cumul_line = "rup +1 ~s2_ge_2 +1 s2_ge_3 >= 1 ;"
 +
  let ix10_gcc_source =
    {|var 1..4: q;

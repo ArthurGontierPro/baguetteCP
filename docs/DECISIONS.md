@@ -8028,3 +8028,67 @@ The header says what is implemented; the tag says what is proved.
 mutations; (ii) the machinery is gcc's (alo/drop/ladder-lift/derive-ahead), already shipped and
 measured; (iii) 18 corpus models reach it, 14 of them inside the width wall, with today's
 decomposition costing n*H reified Booleans the new rows do not.
+
+### D-0096 addendum (same day): what deliverable 2 measured, and the one request it depends on
+
+**The hand example on the updated checker.** Re-run on the checker of record after its
+2026-10-02 update (Rust source d5644ca4, still "3.0.2"): the same five verdicts. Rejections
+now read "Checking error at <file>:<line>", and the RUP sentence is longer but still contains
+"not implied by reverse unit propagation (RUP) from core and derived database", which is what
+test/unit/test_prop.ml and test_trace.ml match.
+
+**Four defects found by running it, all fixed in `cumulative.ml` (my file):**
+
+1. **Exponential reasons.** The first draft copied gcc's habit of appending each bound's
+   SUPPORT reason to a push's facts. Time-table pushes rest on earlier pushes of the same
+   instance, so the copies compounded: a six-task unit-capacity scene (horizon 8) spent over
+   5 s on eleven nodes. Not needed here (no `fact_summand` clause is ever built); removed,
+   0.075 s for the whole 239-node refutation.
+2. **A quadratic ladder lift.** gcc's D-0010 lift cites the chain k -> b for every rung under
+   the bound: O(w^2) citations in one line. On 2008_rcpsp (start widths ~160) that was
+   553 750 pol lines averaging 5.7 KB, 3.17 GB of a 3.37 GB proof. Rewritten as one unit per
+   rung summed once: O(w), the same statement. **gcc.ml has the same lift** and the same
+   cost at width; not changed (not this row's file).
+3. **Over-wide reasons.** Naming both bounds of every task in the row made every nogood as
+   long as the row. The non-compulsory tasks' clearing reads no bound, so it is now a
+   sub-derivation and the reason names only the compulsory tasks and the target.
+4. **Unlifted reasons.** A decision's bound is now named at its WINDOW literal
+   (`s_i >= t - d_i + 1`, `s_i <= t`), Schutt et al.'s pointwise explanation, rather than at
+   its current value; a root bound is still walked to and cancelled.
+
+**The defect that is NOT in my files, and that decides whether this row is a win.** An
+overload is reported, as alldiff and gcc report theirs, as a push that empties a domain, so
+`Store.apply`'s `Failed` arm pairs it with `Reason.none` -- and with no facts,
+`Learn.at_conflict` has nothing to resolve: **1UIP learning never runs on a cumulative (or
+alldiff, or gcc) conflict.** On 2008_rcpsp the committed propagator therefore learned 3 clauses
+in 30 591 conflicts and lost to the decomposition it replaces. The cure is a conflict that
+carries its facts AND puts its derivation ahead of `rup ~facts >= 1` (which is a counting
+argument, not RUP): a `c_ahead` field on `Store.conflict`, stamped from `deriving_ahead`
+exactly as `entry.ahead` is, and three lines in `Trace.conflict_line` that emit the
+derivation first when it is set. `store.ml` and `trace.ml` are not this row's; the change is
+filed as `docs/requests/M4-T10-conflict-learning.patch` together with the 12-line
+`cumulative.ml` hunk that uses it.
+
+**Corpus trials on fataepyc-07** (280 s search limit, veripb 900 s, the w35 data file; `main`
+is the node's main checkout at 5c299cb; `branch` is this branch's HEAD with the front-end
+arms applied; `+learn` adds the conflict-learning patch):
+
+| instance | main | branch | branch + learn |
+|---|---|---|---|
+| 2008_rcpsp | **optimal 53** in 13.0 s, 246 nodes; .opb 87 MB, .pbp 17.8 MB; VERIFIED BOUNDS | limit, incumbent 54, 225k nodes; .opb 1.4 MB, .pbp 2.8 GB; VERIFIED | **optimal 53 in 0.6 s**, 238 nodes; .opb 1.4 MB, .pbp 5.3 MB; VERIFIED BOUNDS |
+| 2010_rcpsp_max | limit, 95, 10.4k nodes; .pbp 174 MB; **veripb > 900 s** | limit, 95; .pbp 2.4 GB; VERIFIED | limit, 95, 14.6k nodes; .opb 6.9 MB (vs 69 MB), .pbp 818 MB; **VERIFIED** |
+| 2013_rcpsp | limit, 78, 8.5k nodes; **veripb > 900 s** | limit, 78; .pbp 2.4 GB; VERIFIED | limit, 78, 14.5k nodes; .opb 1.1 MB (vs 110 MB), .pbp 328 MB; **VERIFIED** |
+| 2011_cyclic-rcpsp | limit, 540, 3.9k nodes; VERIFIED | limit, 542 | limit, 540, 4.9k nodes; VERIFIED |
+| 2017_rcpsp-wet | limit, 220, 4.4k nodes; VERIFIED | limit, 220 | limit, 220, 5.0k nodes; VERIFIED |
+| 2023_vrplc | UNKNOWN; VERIFIED NO CONCLUSION | same | same |
+
+Every proof of every variant that finished checking was accepted. The `.fzn` of 2008_rcpsp is
+8.3 KB instead of 3.6 MB (zero Booleans instead of 14 328).
+
+**Recommendation for the merge.** Grant the front-end patch AND the conflict-learning patch
+together. Without the second, routing `fzn_cumulative` to the propagator makes 2008_rcpsp
+WORSE (optimal-and-verified becomes a limit at 54); with it, 2008_rcpsp is 20x faster and two
+TIMEOUT-CHECK instances become checkable. If the conflict-learning patch is refused, the
+mznlib routing should not merge either -- say so rather than ship the regression. The patch
+also gives alldiff and gcc conflicts something to learn from, but they would have to opt in
+(report their pigeonhole with facts under `deriving_ahead`); that is not measured here.
