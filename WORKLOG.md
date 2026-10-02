@@ -663,6 +663,22 @@ re-measurement runs on a throwaway node copy.
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M7-T24 | `lib/core/prop/gcc.ml`, `test/unit/{test_prop,test_trace}.ml`, new `test/models/gcc_*` + expected, `docs/PROOF-FORMAT.md` (§4 gcc row), `docs/DECISIONS.md` (D-0099, append) | agent-gcc3 | 2026-10-02 |
+
+**Wave forty, dispatched 2026-10-02 (orchestrator), after waves 38 and 39 merged whole (`main`
+`1df8d81`, 153 models).** Two rows: M7-T25 (agent-elearn, `wave40-elearn`) and M4-T5 reopened
+(agent-hints, `wave40-hints`, design first). Decision ids pre-assigned: **D-0101** agent-elearn,
+**D-0102** agent-hints. Seams: agent-elearn holds `lib/core/prop/element.ml`, `test/unit/{test_prop,
+test_trace,test_learn}.ml` (its own scenes), new `test/models/*`, `docs/PROOF-FORMAT.md` §4 element
+row; agent-hints holds `lib/core/trace.ml`, `lib/core/justify.ml` (**granted for this row**),
+`lib/proof/writer.ml`, `lib/core/learn.ml` (the nogood's `rup`), `test/unit/{test_proof,test_justify}.ml`,
+`bench/**` — but writes NO solver code before D-0102's measurement is in. Node clones
+`/scratch/arthur/baguette-elearn`, `/scratch/arthur/baguette-hints`; a handful of jobs each. The
+checker of record is VeriPB source `d5644ca4` (D-0100); rejection header "Checking error at".
+
+| Task | Files being touched | Session | Since |
+|---|---|---|---|
+| M7-T25 | `lib/core/prop/element.ml`, `test/unit/{test_prop,test_trace,test_learn}.ml` (own scenes), new `test/models/*` + expected, `docs/PROOF-FORMAT.md` (§4 element row), `docs/DECISIONS.md` (D-0101, append) | agent-elearn | 2026-10-02 |
+| M4-T5 | `docs/DECISIONS.md` (D-0102, append) FIRST; then `lib/core/trace.ml`, `lib/core/justify.ml`, `lib/proof/writer.ml`, `lib/core/learn.ml`, `test/unit/{test_proof,test_justify,test_trace}.ml`, `bench/**` | agent-hints | 2026-10-02 |
 ## Cross-session requests
 
 Need a change in a file someone else has claimed? Write it here and move on to other
