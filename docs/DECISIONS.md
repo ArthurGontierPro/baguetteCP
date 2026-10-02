@@ -7845,3 +7845,70 @@ proposals in D-0085/D-0087: a watched-slack PB/linear propagation, and a priorit
 default `first_fail` in place of a per-node scan over all variables. The one constant-factor lead
 left is that the `wipe_level` tables in `Justify`/`Writer` are generic `Hashtbl`s, folded or
 filtered whole at every backtrack. It is filed as a request, because those files are not this row's.
+
+## D-0097  M7-T23: the counting family stays with std's decomposition; the one-value gcc route was measured and withdrawn
+
+**Date.** 2026-10-02. **Row.** M7-T23 (agent-count, `wave38-count`), from the 2026-10-02 census.
+
+**The route that was built.** MiniZinc 2.10.1's std sends every counting predicate through ONE
+predicate. `count`/`count_eq` call `fzn_count_eq` directly, `fzn_count_eq_par` delegates to it,
+and the function `count(xs, v)` declares `var 0..|xs|: n` and calls it. `count_leq/geq/lt/gt/neq`
+are `z = count(xs, v)` followed by `z OP n`. Careful with the direction: `count_leq(xs, v, n)` is
+`n <= count`. `exactly`, `at_most` and `at_least` are `n OP count(xs, v)`. So a single
+`mznlib/fzn_count_eq.mzn` (commit 04514a9) that dispatched on `is_fixed(value)` routed the whole
+family. A constant value went to `fzn_global_cardinality(xs, [v], [n])`. A variable value kept
+std's body. `among` was left to std, because no corpus model calls it (`grep 'among *('` finds 0
+of 436 instances). It flattened cleanly: `check_mznlib.sh` reported 17 ok and 0 failed with ten
+new sources. Re-flattening the whole corpus with the route and without it gave the same status on
+all 436 instances (410 OK, 25 FAIL, 1 TIMEOUT, which are exactly wave 35's 4 FLATTEN-FAIL,
+20 NO-DATA and 1 FLATTEN-TIMEOUT). The number of models carrying a gcc call rose from 42 to 69,
+and the number of calls from 318 to 1380. No newly routed model hit the front end's
+duplicate-variable refusal.
+
+**Why it was withdrawn.** It was measured on the node and it is worse. The binary was the same
+for both sides (sha256 `2bbdd45a…`, built from `main` 5c299cb and from the branch, with `lib/`
+unchanged). OLD was std's flatten and NEW was the routed one, with `--time-limit 120` and
+`ulimit -v 32000000`:
+
+| instance (w35) | OLD | NEW |
+|---|---|---|
+| 2012_amaze (OK-PROOF-VERIFIED) | optimum 481 proved, 2567 nodes, proof 33 MB | no solution, 133576 nodes, 706 MB |
+| 2015_roster (OK-PROOF-VERIFIED) | optimum 0 proved, 5283 nodes, 44 MB | no solution, 258 nodes, 1.81 GB, RSS 11.8 GB |
+| 2013_oc-roster (UNKNOWN-LIMIT) | 6 solutions, 692 nodes, 172 MB | 8 solutions, 2712 nodes, 728 MB, wall 185 s |
+
+veripb accepted all six proofs (`BOUNDS` on the two OLD optima, `NO CONCLUSION` on the rest). A
+wider run over 12 more newly routed instances, without proofs, gave the following:
+- 3 NEW runs died at the 32 GB cap: 2011_roster, 2012_league and 2019_ptv. OLD ran all three
+  under 2 GB.
+- 2 lost the solution OLD found: 2015_gfd-schedule and 2023_roster.
+- 2 found fewer solutions: 2016_gfd2 went from 10 to 1, and 2022_gfd2 from 14 to 5 at 10.9 GB.
+- 5 were roughly neutral: the two peacable_queens, 2018_gfd2, and the two amaze3 (UNKNOWN on
+  both sides).
+- Not one was better.
+
+**The reason, and it is structural.** `lib/core/prop/gcc.ml` reasons on BOUNDS. It reads lo/hi,
+writes lo/hi and never makes an interior hole (its header says so). Its value is the
+interval-capacity rule, which works ACROSS cover values. A one-value cover has nothing to reason
+across, so the route gains nothing. It also loses something. Std's `int_eq_reif` + `bool2int` +
+`int_lin_eq` decomposition removes an interior `v` from the other variables once the count is
+saturated, and gcc cannot. MiniZinc's CSE also keeps the reified booleans that other constraints
+share, so routing removed one `int_lin_eq` per count and nothing else. A guarded variant was tried
+too. It routed only when `v` is never strictly interior to any `x`'s declared domain, which is the
+case where bounds reasoning loses nothing. It was no better: amaze still found no solution
+(43059 nodes, 802 MB), roster still found none (126 nodes, 1.81 GB, 11.4 GB RSS), and oc-roster
+found 7 solutions (1137 nodes, 339 MB). That points at the gcc propagator's cost per
+propagation and the size of its justifications as well as at its strength. A roster node costs
+about 7 MB of proof.
+
+**What is in the tree.** No `mznlib` counting file. The ten lanes `test/models/{count,exactly,at_most,at_least}_*`
+stay, as unedited flattener output of 04514a9's route with headers that say so. They are valid
+one-value-cover `baguette_global_cardinality` tests, plus std's variable-value decomposition, and
+every proof is checked. `mznlib/test/count_std_guard_sat.mzn` pins the decision with
+`MUST-EMIT: int_eq_reif` and `MUST-NOT-EMIT: baguette_global_cardinality`. **To reopen this**, gcc
+first needs to make interior holes for a saturated or forced cover value (domain-level filtering
+of one value is cheap, and it is what the decomposition does now), and its per-propagation proof
+volume needs bounding. Then re-run this measurement. Commit 04514a9's `fzn_count_eq.mzn` is the
+route, ready to restore. Merging separate `count(xs, v_i, n_i)` calls over the SAME `xs` into one
+multi-value gcc is what would actually use the interval-capacity rule (oc-roster counts every
+staff member over one array). MiniZinc's library cannot do that merge, and only the front end
+could.

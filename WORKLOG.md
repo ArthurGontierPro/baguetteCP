@@ -786,6 +786,7 @@ work. The owning session picks it up.
 | **M6-T8 / D-0091**: under `BAGUETTE_DEBUG=1`, `test_learn.exe` dies in `test_i_s4_ordering`'s `b BREAK` lane (`break_i_s4 = true`) on `invariant violated: I-S4 ... ALREADY RETIRED`. That is `Search`'s own `Debug.check` CATCHING the deliberate break, which is correct; the lane assumes the flag is off. Measured fix: when `Baguette_core.Debug.enabled`, the lane asserts that `run ~config:{... break_i_s4 = true} settle_src` raises `Failure`, and otherwise it runs the existing lane unchanged. The binary is then clean: 167 ok with the flag, 169 ok without. The patch is the D-0091 handoff's. | `test/unit/test_learn.ml` | agent-debug | **CLOSED 2026-10-02** by the orchestrator at the merge: edit applied, both binaries clean with and without the flag |
 | **M6-T8 / D-0091**, for information at merge: the agreement predicate is in `lib/core/store.ml`, so the D-0026 fix had to go there. The edit is confined to `agreement_holds` and three helpers just above it (`at_root`, `root_holds`, `reverse_owners`). agent-speed4's `store.ml` hunks (entry type, `dummy_entry`, `push_entry`/`apply` position) are elsewhere and should merge without conflict. | `lib/core/store.ml` | agent-debug | FYI |
 | **M6-T16 / D-0092**: after M6-T16 mario's profile is flat (top `caml_apply2` 7.0 %, `Alldiff.go` 4.7 %, `caml_hash` 4.1 %, `compare_val` 3.6 %). The one constant-factor lead left: `Writer.wipe_level` (`lib/proof/writer.ml:727`) `Hashtbl.fold`s the WHOLE `t.tags` table and sorts it at every backtrack, and `Justify.wipe_level` (`lib/core/justify.ml:235`) folds all of `memo.by_level`. Both are generic polymorphic `Hashtbl`s (about 2.1–2.5 % inclusive each, partial DWARF unwinds). A per-level bucket would make a wipe proportional to what it deletes. This is for whoever holds `writer.ml`/`justify.ml`, with byte identity as the contract. Beyond that, the remaining work is design-level (D-0085/D-0087). | agent-speed5 | 2026-10-02 |
+| **M7-T23 / D-0097**, for whoever holds `lib/core/prop/gcc.ml` next: routing one-value counts (`count`/`exactly`/`at_most`/`at_least`) to gcc was measured on the node and is a regression. 2 of 3 trials lost a proved optimum, 3 of 12 more died at the 32 GB cap, and none was better. Two gcc gaps are the cause. (1) gcc never makes an interior hole, so a saturated or forced cover value cannot be removed from or fixed on a variable whose domain has it strictly inside. Std's decomposition does that, and it is the cheap single-value case of domain filtering. (2) Per-propagation proof volume: 2015_roster with the route writes 1.81 GB of proof in 258 nodes (about 7 MB per node) at 11.8 GB RSS. With both fixed, commit 04514a9's `mznlib/fzn_count_eq.mzn` restores the route, and D-0097's table is the measurement to re-run. A second lead, which only the front end can follow: merge `count(xs, v_i, n_i)` calls over the SAME `xs` into one multi-value gcc. That is what would use the interval-capacity rule (oc-roster counts every staff member over one array). | `lib/core/prop/gcc.ml`, `lib/flatzinc/compile.ml` | agent-count | OPEN |
 
 ## Completed
 
@@ -893,6 +894,7 @@ work. The owning session picks it up.
 | M6-T15 | agent-speed4 | 2026-10-02 | **D-0090**. `Store.entry.pos`, the entry's own trail position, makes `Trace.position_of` O(1) with no second map and no new wipe rule. The old walk stays one wave as the `BAGUETTE_DEBUG` cross-check and test_trace's oracle. `add_fact` and `settle_facts` use reversed accumulators. 396/396 artefacts byte-identical. Node, 55 s: 2014_mario 1697 -> 2575 nodes, 2023_chessboard 3003 -> 3027. |
 | M6-T8 | agent-debug | 2026-10-02 | **D-0091**. The four element `BAGUETTE_DEBUG` fatals were one call (`Element.no_position_conflict`) and class (c): D-0026's reverse arm required an empty reason to name a top-level `Defining` the ROOT holds. `Store.reverse_owners` now exempts that case, and only when `Store.root_holds` confirms it. test_prop's propagate-only alldiff scenes start a proof. 132/132 models pass under the flag; 21/23 unit binaries are clean, and `test_compile` and `test_learn` are requested. 396 artefacts byte-identical. Finding: element conflicts carry `Reason.none` at every depth, so they never learn a 1UIP clause (explanation quality, not soundness). |
 | M6-T16 | agent-speed5 | 2026-10-02 | **D-0092**. `Analysis.Frontier` is persistent cells plus a per-bound monomorphic `String` table, and it replaces the per-step `add_node` fold (`List.map` + `@`). `Analysis.Uniq` replaces `List.mem`/`@` for antecedents, and `folds` is a reversed accumulator. `add_node` stays as the reference, and `test_analysis` compares the two. 396 artefacts byte-identical. Node: mario 1.40x, chessboard 1.07x (a first per-step tuple-Hashtbl version was 0.91x on chessboard and was replaced). Profile now flat. |
+| M7-T23 | agent-count | 2026-10-02 | **D-0097. Built, measured, WITHDRAWN.** One `mznlib/fzn_count_eq.mzn` (04514a9) routed the whole counting family to gcc. It flattened clean on 436/436 with the same status as std, and gcc carriers went from 42 to 69 models, but it was worse on the node: 2012_amaze and 2015_roster lost their proved optima, 3 more died at the 32 GB cap, and none was better. gcc is bounds-level, so a one-value cover loses interior-value pruning and gains no cross-value reasoning. `among`: 0 corpus callers. Ten lanes kept as one-value gcc tests. `count_std_guard_sat.mzn` pins std. Request filed for gcc interior holes |
 
 ## Handoff notes
 
@@ -3831,3 +3833,20 @@ header no longer says otherwise.
   spread over Search, Justify, Writer and Alldiff. The last constant-factor lead is the
   `wipe_level` whole-table folds in Writer/Justify, filed as a request. After that, D-0085/D-0087's
   design proposals are what remains.
+
+## M7-T23 handoff, 2026-10-02 (agent-count)
+
+- **The counting family stays with std's decomposition (D-0097).** The route works mechanically.
+  Std funnels `count`/`count_eq`, the `count(xs, v)` function, `count_leq/geq/lt/gt/neq`,
+  `exactly`, `at_most` and `at_least` through `fzn_count_eq`, so a single shadow with an
+  `is_fixed(value)` dispatch routes them all. It flattened 436/436 with the same status as std.
+  But it is a regression on the solver: gcc is bounds-only, so a one-value cover loses
+  `x != v` for an interior `v`. A guard that routes only bound-valued `v` was no better. Commit
+  04514a9 holds the route, ready to restore once gcc makes interior holes (request filed).
+- **Trap: std's relational counts read backwards.** `count_leq(xs, v, n)` is `n <= count` and
+  `count_geq` is `n >= count`. Delegate to std's wrappers rather than restating them.
+- The ten `test/models/{count,exactly,at_most,at_least}_*` lanes are unedited flattener output
+  of the withdrawn route. They remain gcc tests, and their headers say where they came from.
+  `mznlib/test/count_std_guard_sat.mzn` makes `check_mznlib.sh` fail if anyone re-adds the
+  route without flipping its directives. On the node, `/scratch/arthur/count-flat/{old,new,guard}`
+  hold the three whole-corpus flattens.
