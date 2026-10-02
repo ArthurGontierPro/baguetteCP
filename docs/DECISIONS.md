@@ -7845,3 +7845,185 @@ proposals in D-0085/D-0087: a watched-slack PB/linear propagation, and a priorit
 default `first_fail` in place of a per-node scan over all variables. The one constant-factor lead
 left is that the `wipe_level` tables in `Justify`/`Writer` are generic `Hashtbl`s, folded or
 filtered whole at every backtrack. It is filed as a request, because those files are not this row's.
+
+## D-0096  M4-T10: `cumulative` as time-table filtering over ORDER-literal capacity rows; disjunctive is its unit case. GO, for fixed durations, resources and capacity
+
+**Date.** 2026-10-02. **Row.** M4-T10 (agent-cumulative, `wave38-cumulative`). **Status.**
+ACCEPTED as the design for deliverable 2.
+
+### 1. The census: 69 names, 63 files, 18 that a fixed-shape propagator would reach
+
+The 2026-10-02 census counted 53 models naming `cumulative` and 16 naming `disjunctive`; six
+name both, so it is **63 distinct `.mzn` files** (`grep -l -E '\bcumulative\b|\bdisjunctive\b'
+/scratch/arthur/mzn-challenge/*/*/*.mzn`). Each was flattened on `fataepyc-07` against the data
+file its wave-35 corpus run used (`corpus-out-w35/log/<id>.inst`), with baguette's `mznlib` plus
+a TRACING copy of std's `fzn_cumulative` / `fzn_disjunctive` / `fzn_disjunctive_strict` that
+prints, per call, the task count, the horizon `late - early` (std's own two numbers), the widest
+start window, whether durations / resources / capacity are fixed, and which branch std takes.
+Artefacts: `/scratch/arthur/cumul/{census.tsv,lib/,*.fzn,*.log}`.
+
+| class | models | what they are |
+|---|---|---|
+| does not flatten | 7 | 5 `2026_*` with no data file in the corpus (NO-DATA), `2021_yumi-dynamic`, `2024_train-scheduling` (FLATTEN-FAIL in w35 too) |
+| predicate never posted | 10 | the word is in the model but no call survives flattening: ghoulomb x2, pattern-set-mining x4, yumi-static x2, evm-super-compilation, cvrptw |
+| **every call reachable** (fixed d, r, cap, time-indexed) | **12** | `2008_rcpsp` (OK-PROOF-VERIFIED today), `2010_rcpsp_max`, `2013_rcpsp` (TIMEOUT-CHECK), `2011`/`2014_cyclic-rcpsp`, `2016`/`2017_rcpsp-wet`, `2019_rcpsp-wet-diverse`, `2018`/`2023_vrplc` (UNKNOWN-LIMIT), `2024_aircraft-disassembly`, `2025_ihtc-kletzander` (REFUSED-RESOURCE on OTHER variables: max declared widths 193 M and 7 461) |
+| some calls reachable | 6 | `2012_mspsp`, `2014_smelt`, `2025_ihtc-marte`, cargo x3 (cargo's own calls are one task-based plus two time-indexed, and the model is REFUSED-RESOURCE on a width of 2.4e5 elsewhere) |
+| variable d, r or cap only | 22 | **the larger class, and not this row.** Resource as a 0/1 machine choice (`fjsp`, `gfd-schedule` x3, `test`-style cap-1 calls in `mspsp`, `unison` x3); variable durations (`mrcpsp` x2, `carpet-cutting` x5, `nside`, `stack-cuttingstock`, `stripboard` x2); variable capacity (`rect_packing` x2, `racp` x2) |
+| task-based only (H > 5000) | 6 | `largecumulative` x2 (H ~ 1e6), `test-scheduling` x2, `openshop` (H ~ 7000), `yumi-dynamic 2024` |
+
+**Shape.** std's `fzn_cumulative` is TIME-INDEXED (`cumulative_time`: per t, `b >= sum_i
+((s_i <= t /\ t < s_i + d_i) * r_i)`) whenever `late - early <= 5000`, and task-based otherwise.
+Of the 46 models that post a call, **40 have only time-indexed cumulative calls or pairwise
+disjunctive ones**; 9 have a task-based call (the 6 above and cargo x3). std's
+`fzn_disjunctive`/`_strict` do **not** go through cumulative at all: they are the pairwise
+`s_i + d_i <= s_j \/ s_j + d_j <= s_i`, one reified disjunction per pair.
+
+**The width wall.** D-0028 already bounds what the order encoding can carry, and it bounds
+the time-indexed decomposition by the same number: a start variable of window w has w order
+literals whichever way the capacity is written, and H is at most the widest window plus a
+duration. So "within the wall" is the same test as "time-indexed and not refused for another
+variable": of the 18 reachable models, **14** have every declared width under ~15 000 and are
+candidates (`2008_rcpsp` H=171, `2010_rcpsp_max` 178, `2013_rcpsp` 253, cyclic-rcpsp 45/43,
+rcpsp-wet 68/65, rcpsp-wet-diverse 68, vrplc ~120, mspsp 40, smelt 1010, marte 25); 4 are
+refused on another variable (aircraft, kletzander, cargo x2-3) and a cumulative propagator does
+not change that. What the decomposition costs today, measured: `2008_rcpsp` flattens to
+**14 328 Booleans and 20 070 constraints**, almost all of them the time-indexed decomposition's
+`s_i <= t /\ t < s_i + d_i` reifications.
+
+### 2. What the `.opb` holds: one capacity row per time point, over ORDER literals, and no auxiliary at all
+
+The brief proposed the decomposition's rows: a Boolean `o_it` per task and time, reified as
+`s_i <= t /\ s_i >= t - d_i + 1`, and `sum_i r_i o_it <= cap`. **Not adopted**, because the
+order encoding already says "task i covers t" without a new variable. It is gcc's identity
+(D-0078) applied to an interval instead of a value:
+
+    [s_i in [a_i, t]]  =  s_i_ge_(a_i) - s_i_ge_(t+1),     a_i = t - d_i + 1
+
+-- the indicator of a window, which telescopes. So the capacity row at t is LINEAR in literals
+the `.opb` already has:
+
+    sum_i r_i (s_i_ge_(a_i') - s_i_ge_(b_i'+1))  <=  cap - (folded constants)
+
+with each end clipped to the declared range exactly as gcc clips (`s_ge_lo` is the constant 1,
+`s_ge_(hi+1)` the constant 0; a task whose DECLARED window lies inside [a_i, t] is a constant and
+is folded into the right-hand side, gcc's `cconst`). Consequences:
+
+- **no `o_it`, no reification rows, no direct encoding**: zero Booleans where std's
+  decomposition spends n*H of them plus three rows each;
+- a row is posted only for a t where the tasks that MAY cover it (by declared windows) carry
+  more than `cap`; any other row is satisfied by every assignment and no derivation would cite
+  it. So the `.opb` holds <= H rows of <= 2n literals per call -- for `2008_rcpsp`, <= 684 rows;
+- the ladder is in the `.opb` already (D-0031) and the derivation cites it, as gcc's does.
+
+### 3. The proof story, worked against the checker
+
+**Time-table filtering.** Task i's COMPULSORY PART is `[hi(s_i), lo(s_i) + d_i - 1]`: at any
+t in it, i covers t whatever it does. Let `C_t` be the resource of the tasks other than j whose
+compulsory part contains t. If `C_t + r_j > cap`, j cannot cover t: `s_j <= t - d_j \/
+s_j >= t + 1`; when `lo(s_j)` is in `[t - d_j + 1, t]` the first disjunct is false and the push
+is `lo(s_j) := t + 1` (the upper push is its mirror). The sweep for j walks t from `lo(s_j)`
+over `[lo(s_j), lo(s_j) + d_j - 1]` and pushes at the first overloaded t; the propagator loops
+to a fixpoint, so pushes chain.
+
+**The derivation is gcc's rule A with a coefficient per task.** In `>=` form the row at t is
+`- sum_i r_i I_i >= - cap`. Then:
+
+1. for each compulsory task i (other than j): add `r_i` times its at-least-one `I_i >= 1` --
+   its two bound facts walked onto `a_i'` and `t+1` by ladder chains, gcc's `alo_summands`;
+   root bounds are `Defining`, a decision's are left in the row and carried by the Reason
+   (D-0064);
+2. for every other task k: add `r_k` times `I_k >= 0`, which is FREE -- the rung chain from
+   `a_k'` to `b_k'+1`, gcc's `drop_summands`;
+3. what is left is `- r_j I_j >= C_t - cap`, i.e. `r_j ~s_j_ge_(a_j') + r_j s_j_ge_(t+1) >=
+   C_t - cap + r_j`; one division by `r_j` rounds the degree to 1 exactly when
+   `C_t + r_j > cap`, which is the test the propagator made;
+4. j's own lower bound fact, walked down to `a_j'`, cancels the first literal; what remains is
+   `s_j_ge_(t+1)`, then D-0010's ladder lift (gcc's `ladder_lift`) puts the bound in the
+   currency other propagators sum against.
+
+That is `Combine` over `Model_row` (the capacity row, the rungs), `Defining` and `Clause`
+(bound facts) and a divisor -- **no new `Explanation` constructor** (D-0044's bet unspent).
+
+**Overload is reported the way gcc reports |H| > cap.** If the compulsory parts alone exceed cap
+at t, one compulsory task j is pushed out of t (`lo := t + 1`, past its own `hi`), with j left
+out of `C_t` -- the same derivation, which is then an emptying push. Its residue `s_j_ge_(t+1)`
+is closed by j's own upper bound fact (gcc's "one more line"), so [Store.apply]'s `Failed` arm
+pairs it with a derivation and no `rup` conflict line claims a counting argument (I-X10, D-0040).
+
+**The worked example, run on VeriPB 3.0.2.** Four tasks, `cap = 2`, `s_A in 0..4 (d 3, r 2)`,
+`s_B, s_C in 0..4 (d 2, r 1)`, `s_D in 0..6 (d 2, r 1)`, and three model rows standing for
+whatever set the bounds: `s_A >= 1`, `s_A <= 2`, `s_D >= 2`. A's compulsory part is [2, 3] at
+r = 2 = cap. The model is **satisfiable** (brute force: 3 solutions, e.g. A=1 B=4 C=4 D=6;
+`min s_D = 5`). The `.opb` holds the 14 rungs, the time rows t = 0..6 generated by the rule of
+section 2, and the three facts; the two rows the proof cites are
+
+    @row2 +2 sA_ge_3 -1 sB_ge_1 +1 sB_ge_3 -1 sC_ge_1 +1 sC_ge_3 -1 sD_ge_1 +1 sD_ge_3 >= 0 ;
+    @row3 -2 sA_ge_1 +2 sA_ge_4 -1 sB_ge_2 +1 sB_ge_4 -1 sC_ge_2 +1 sC_ge_4 -1 sD_ge_2 +1 sD_ge_4 >= -2 ;
+
+and the proof is
+
+    @p1 pol @row2 @fAhi 2 * + @lB1 + @lB2 + @lC1 + @lC2 + @fDlo + @lD1 + ;
+    ia +1 sD_ge_3 >= 1 : @p1 ;
+    rup +1 sD_ge_3 >= 1 ;
+    @p2 pol @row3 @fAlo 2 * + @lA3 2 * + @fAhi 2 * + @lB2 + @lB3 + @lC2 + @lC3 + @p1 + @lD2 + ;
+    ia +1 sD_ge_4 >= 1 : @p2 ;
+    rup +1 sD_ge_4 >= 1 ;
+
+-- push 1 at t = 2 (A compulsory by both facts; B and C dropped by their rungs; D's fact
+walked to `sD_ge_1`), push 2 at t = 3 citing push 1 as D's lower fact. Verdicts:
+
+| proof | 3.0.2 |
+|---|---|
+| as above | `s VERIFIED NO CONCLUSION` |
+| the bare trace line `rup +1 sD_ge_3 >= 1` with no derivation ahead | REFUSED: *"not implied by reverse unit propagation"* |
+| push 1 without A's upper fact (`@fAhi 2 *`) | REFUSED at the `ia`: *"not syntactically implied by the constraint at the hint"* |
+| push 1 without B's drop (`@lB1 @lB2`) | REFUSED at the `ia`, same wording |
+| push 1 claiming one step too far (`sD_ge_4`) | REFUSED at the `ia`, same wording |
+
+The refused bare `rup` is the I-X10 finding for this family: with two non-compulsory tasks
+(B, C) the row keeps slack 1 under unit propagation, because "an indicator is never negative" is
+the ladder, a second constraint. With ONE non-compulsory task it would propagate -- which is
+exactly how gcc's rule C lower push hid in M7-T16's scenes (D-0084). So:
+
+**Derive-ahead (I-X10, M7-T17/D-0082).** `cumulative.ml` is a **`Needs_derivation`** family;
+every push it makes is made under `Store.deriving_ahead`, so `Trace.derive_ahead` writes the
+`pol` before the trace line. A lane must have at least two non-compulsory tasks in some
+pushing row, or it cannot tell a derived line from a lucky `rup`; and a lane settled at the
+root proves nothing (M7-T16 lesson 3) -- `cumulative_sat.fzn` searches with first guesses wrong.
+
+### 4. Consistency level
+
+**`Checking`.** Time-table filtering is not bounds consistency for `cumulative` (bounds
+consistency is NP-hard for it), and it is not even idempotent in one sweep -- the propagator
+loops to its own fixpoint, and that fixpoint is "no task overlaps an overloaded point of the
+compulsory profile at its current bounds", nothing stronger. What `Checking` obliges (D-0059,
+SPEC 3.2) it does deliver: with every start fixed, every task's compulsory part is its whole
+interval, so an overload at any t is a profile of fixed tasks exceeding cap and is reported.
+The header says what is implemented; the tag says what is proved.
+
+### 5. Scope: what is in deliverable 2 and what is not
+
+- **In**: `cumulative(s, d, r, cap)` with `d`, `r`, `cap` FIXED and `r_i, d_i >= 0`, every
+  start a variable (a fixed start is the one-value variable, D-0058 territory, and folds);
+  `disjunctive(s, d)` and `disjunctive_strict(s, d)` with fixed durations as `cap = 1`,
+  `r_i = 1` -- one propagator, one `Model` constructor. `disjunctive_strict` is routed only when
+  every duration is >= 1 (a zero-duration task is still constrained under strict, and time-table
+  ignores it); `disjunctive` with a zero duration is exactly cumulative's semantics (std's own
+  `Tasks` filter drops `d = 0`).
+- **Out, and said so**: energetic reasoning, edge-finding, not-first/not-last, detectable
+  precedences -- a later row each. Variable resources, durations or capacity (22 models): the
+  library falls back to std's decomposition with an `is_fixed` test, so nothing is lost; a
+  variable CAPACITY is the cheapest next step (its ladder enters the row as gcc's count does).
+  Task-based instances (H > 5000): the rows are H per call, and H that large is the width wall.
+- **A strength note on disjunctive.** For `cap = 1` the pairwise decomposition propagates
+  precedences that time-table alone does not see before compulsory parts appear. Routing
+  disjunctive to the propagator trades that strength for n^2 fewer reified disjunctions; it is
+  measured on the lanes and recorded in the M4-T10 handoff rather than assumed.
+
+### 6. GO
+
+**GO for deliverable 2**, on three grounds: (i) the derivation is `Combine` over rows the
+`.opb` can hold without any new variable, and the checker accepts it and refuses its four
+mutations; (ii) the machinery is gcc's (alo/drop/ladder-lift/derive-ahead), already shipped and
+measured; (iii) 18 corpus models reach it, 14 of them inside the width wall, with today's
+decomposition costing n*H reified Booleans the new rows do not.
