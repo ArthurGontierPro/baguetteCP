@@ -55,6 +55,10 @@ let implemented =
     (* M4-T9: maximum / minimum, kept whole by mznlib/redefinitions-2.0.mzn (D-0095). *)
     "array_int_maximum";
     "array_int_minimum";
+    (* ...and their two-element case, FlatZinc's own `int_max(x, y, z)` (z = max(x, y)),
+       which is the same instance over [x; y]. *)
+    "int_max";
+    "int_min";
   ]
 
 (* The rest of the SPEC 2.1 table, with the milestone that will bring it in. Listing
@@ -1047,6 +1051,11 @@ let build_constraint env (c : Ast.constraint_item) =
        the array, which is MiniZinc's argument order (std/flatzinc_builtins.mzn). An
        empty array is refused here, with the position, because it has no maximum and
        lib/core/prop/maxmin.ml would have nothing to post. *)
+    (* `int_max(x, y, z)` / `int_min(x, y, z)`: z = max(x, y). The two-element case, so
+       it IS the array form over [x; y] -- one constructor, one propagator, and the
+       result last, which is FlatZinc's order for these two. *)
+    | "int_max" -> arity3 (fun x y z -> Model.Array_int_maximum (z, [ x; y ]))
+    | "int_min" -> arity3 (fun x y z -> Model.Array_int_minimum (z, [ x; y ]))
     | ("array_int_maximum" | "array_int_minimum") as which -> (
         arity 2;
         match c.Ast.c_args with

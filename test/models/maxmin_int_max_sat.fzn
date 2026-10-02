@@ -1,0 +1,16 @@
+% FlatZinc's two-element int_max and int_min, which ARE array_int_maximum /
+% array_int_minimum over [x, y] -- one constructor, one propagator (M4-T9, D-0095).
+%
+% hi = max(a, b) in 3..4 and lo = min(a, b) in 1..4, with b <= a. At the root both
+% positions can reach 3, so nothing is settled. Branching on a, smallest first: a = 1
+% leaves b = 1 and no position at 3 (a Maxmin conflict); a = 2 fails the same way, and
+% on the way the MINIMUM's mirror rule (lo(lo) >= min lo(x), C_v over the negated views:
+% `lo_ge_2 \/ ~a_ge_2 \/ ~b_ge_2`) is on the page and measured load-bearing.
+var 0..4: a :: output_var;
+var 0..4: b :: output_var;
+var 3..4: hi :: output_var;
+var 1..4: lo :: output_var;
+constraint int_max(a, b, hi);
+constraint int_min(a, b, lo);
+constraint int_le(b, a);
+solve :: int_search([a, b], input_order, indomain_min, complete) satisfy;

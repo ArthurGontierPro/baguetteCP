@@ -1,0 +1,24 @@
+% array_int_maximum, UNSATISFIABLE, and R3 is what closes every branch (M4-T9, D-0095).
+%
+% m = max(a, b, c) with a = b = c, and p \/ q \/ r where each selector says "that x is
+% STRICTLY below m". No selector is decided at the root, so nothing is settled there.
+% Whichever selector the search makes true, its row gives hi(x) <= hi(m) - 1, the
+% equalities carry that to every x, and R3 (hi(m) <= max_i hi(x_i), the clause
+% C_v = ~[m >= v] \/ [a >= v] \/ [b >= v] \/ [c >= v]) pulls hi(m) down one step -- and
+% round again until a domain empties. Without R3 the linear rows m >= x_i alone never
+% move hi(m) and this branch is not refuted: the per-value rows are the derivation.
+var 0..4: m :: output_var;
+var 0..4: a :: output_var;
+var 0..4: b :: output_var;
+var 0..4: c :: output_var;
+var bool: p :: output_var;
+var bool: q :: output_var;
+var bool: r :: output_var;
+constraint array_int_maximum(m, [a, b, c]);
+constraint int_eq(a, b);
+constraint int_eq(b, c);
+constraint int_lin_le_reif([1, -1], [a, m], -1, p);
+constraint int_lin_le_reif([1, -1], [b, m], -1, q);
+constraint int_lin_le_reif([1, -1], [c, m], -1, r);
+constraint bool_clause([p, q, r], []);
+solve :: int_search([p, q, r, m, a, b, c], input_order, indomain_min, complete) satisfy;
