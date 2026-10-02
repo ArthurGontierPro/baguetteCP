@@ -366,13 +366,23 @@ let prune_expl t ~row ~halls ~others ~y ~lower ~bound =
       let low_side = a' > y.s_dlo and high_side = b' < y.s_dhi in
       let want_low = lower || a - 1 < y.s_lo in
       let want_high = (not lower) || time + 1 > y.s_hi in
+      (* The row with every non-compulsory, non-target task CLEARED, as a
+         sub-derivation of its own: a consequence of the model alone, since a free
+         `I_k >= 0` is a ladder chain or a literal axiom and reads no bound of k.  That
+         is why those tasks are not in the pruning's reason (see [push]), and why the
+         clearing sits one level down: D-0026's reverse check asks the reason to name
+         every variable weakened at the TOP level, which is right for a weakening that
+         stands for a bound the pruning read and is not what these are. *)
+      let free =
+        match List.concat_map (fun s -> drop_summands t s ~time) others with
+        | [] -> cite 1 row.cid
+        | drops -> Explanation.term 1 (Explanation.combine (cite 1 row.cid :: drops) 1)
+      in
       let counted =
         Explanation.combine
-          (cite 1 row.cid
-           :: List.concat_map
-                (fun s -> alo_summands t s ~time @ alo_cancels s ~time)
-                halls
-          @ List.concat_map (fun s -> drop_summands t s ~time) others)
+          (free
+          :: List.concat_map (fun s -> alo_summands t s ~time @ alo_cancels s ~time) halls
+          )
           y.s_task.res
       in
       let y_low =
@@ -400,10 +410,11 @@ let prune_expl t ~row ~halls ~others ~y ~lower ~bound =
       in
       if moves then ladder_lift t ~y ~lower ~bound e else e)
 
-(* Every task of the row is named, at both bounds, for gcc's reason: the derivation
-   weakens the indicator of every task that is neither compulsory nor the target, and
-   D-0026's reverse agreement check requires the reason to name them all.  A fact the
-   derivation did not need weakens the trace line, which is sound.
+(* The facts a push rests on: both bounds of every task COMPULSORY at the point and of
+   the target -- and nothing about the other tasks of the row, whose clearing reads no
+   bound (see [prune_expl]'s [free]).  This is a departure from gcc, which names its
+   whole scope, and it is measured: on 2008_rcpsp every trace line carried both bounds
+   of all ~30 tasks, and the 1UIP nogoods resolved from them were correspondingly long.
 
    UNLIKE gcc, the facts of a bound's SUPPORT are not appended.  gcc needs them for its
    [fact_summand] clause `l \/ ~facts(support)`; nothing here cites a non-root bound by
@@ -459,7 +470,7 @@ let pass t store =
           (Some
              (if lower then Reason.at_least ~name:j.s_name ~decl:j.s_dlo bound
               else Reason.at_most ~name:j.s_name ~decl:j.s_dhi bound))
-        (scope_facts in_scope)
+        (scope_facts (j :: halls))
         (prune_expl t ~row ~halls ~others ~y:j ~lower ~bound)
     in
     let prune () =
