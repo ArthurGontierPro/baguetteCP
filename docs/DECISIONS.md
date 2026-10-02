@@ -7436,3 +7436,63 @@ the `.mzn` is a file nobody has type-checked.
 3. Re-run D-0081's shared-set comparison (`scripts/compare_run.sh`) with the final binary and
    read the median: (i) moves only annotated instances with many unannotated variables, (ii)
    moves compile-dominated wide instances.
+
+---
+
+## D-0088  M6-T14: per-variable trail histories replace the support and remover scans
+
+**Mechanism.** `Store` keeps, per variable, the trail positions of its live entries in
+increasing order: `lo_hist` (the entries that raised its lower bound), `hi_hist` (the ones that
+lowered its upper bound) and `all_hist` (every entry on it). `apply` pushes onto them where it
+already writes `lo_sup`/`hi_sup`, and `undo_to` pops them as it pops the entry, which is always
+the newest, so always the top. By I-D3 each entry's `old` is its predecessor's `now`, and bounds
+and domains only shrink. So "which entry established `x >= v`" is the FIRST lower-bound move
+whose `now` reaches `v`, and that entry counts only if its `old` does not already reach `v`.
+"Which entry removed value `u`" is likewise the first entry whose `now` lacks `u`, and it
+counts only if its `old` held `u`. Each is a binary search, and each answer is unique among
+live entries, so "strictly below `before`" is one comparison, not a search.
+`Store.bound_support` replaces `Analysis.scan_support`'s downward walk. That walk ran once per
+fact per resolution step, so the cost was quadratic in trail depth. `bound_support` keeps the
+walk's `name_rep` semantics: with duplicate names it takes the max over the class, which is
+built lazily and only exists when some name is shared, i.e. never in a `Compile` store.
+`Store.remover` gets the same treatment, and so does `Pb_analysis.falsified_at`, whose scan
+compares `Var.equal` and so uses `Store.var_support` on the exact variable. `Store.establishes`
+now holds the one predicate (moved from `Analysis`, which re-exports it), so the history search
+and the scan share it, including its `>=`/`<=` asymmetry.
+All three scans (`Analysis.scan_support`, `Store.remover_scan`, `Pb_analysis.falsified_at_scan`)
+survive for one wave as `BAGUETTE_DEBUG` cross-checks and as the unit tests' oracles. Delete
+them next wave.
+
+**Cost.** One int per trail entry in `all_hist`, plus one per bound move in `lo_hist`/`hi_hist`
+(two for a `fix`). The arrays are allocated on a variable's first move and doubled when full.
+A lookup is O(log moves of that variable) instead of O(|trail|).
+`check_invariants` asserts that each history is sorted, names live entries on its own variable
+that moved its bound, has the O(1) array's answer at its top, and that the `all_hist` lengths
+sum to the trail length.
+
+**Byte identity.** `bench/m6t11/byte_identity.sh` over the suite (132 models, 396 artefacts):
+**BYTE-IDENTICAL** for both commits. OLD is `main`'s base (md5 `c7d41e10…`). NEW is `5c29c62`
+(md5 `57f2ee14…`, support history only) and `08d01b2` (md5 `acd28dc2…`, plus `remover`). Under
+`BAGUETTE_DEBUG=1` none of the three cross-checks fires on any suite model. Four element models
+die on a PRE-EXISTING D-0026 agreement check, and the OLD binary dies the same way (filed as a
+cross-session request).
+
+**On the node** (fataepyc-07, `--time-limit 55`, the node under a running sweep; OLD =
+`/scratch/arthur/baguette` md5 `8b8d4718…`, NEW = `08d01b2` md5 `df3a0c6f…`):
+
+| instance | OLD nodes / 55 s | NEW nodes / 55 s | ratio |
+|---|---|---|---|
+| 2014_mario | 262 | 1494 | 5.7x |
+| 2023_chessboard | 1486 | 1806 | 1.22x |
+
+The support history alone (`5c29c62`) gave 520 and 1785. Neither instance finishes within
+300 s on NEW: mario reaches 5989 nodes, chessboard 6654 nodes and 2523 learned. Both 55 s proofs
+are `s VERIFIED NO CONCLUSION` under veripb 3.0.2 (278 s and 14 s).
+
+**What remains in the profile** (60 s `perf record -g` on NEW). `Store.name_rep`,
+`Store.trail_entry` and `Analysis.go` are gone from the top. On 2014_mario, 40 % of self time is
+`Trace.position_of`, a linear walk over `done_` by physical identity, and 5 % is `@`, from
+`Trace.add_fact`'s `acc @ [l]`. Both are in `lib/core/trace.ml`, which is not this row's file
+(filed). On 2023_chessboard nothing dominates: the GC (`do_some_marking`, `oldify_one`,
+`pool_sweep`, `caml_shared_try_alloc`, about 21 % together), `compare_val`, `List.map` and
+`Pb.status`, each 3–5 %. That is allocation, not a walk.

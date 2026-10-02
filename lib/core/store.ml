@@ -145,6 +145,24 @@ type t = {
   reasons : Explanation.Arena.t;
   lo_sup : int array;
   hi_sup : int array;
+  (* M6-T14 (D-0088): the bound HISTORIES. [lo_hist.(i)] holds, in increasing order, the
+     trail positions of the live entries that RAISED variable [i]'s lower bound, the
+     first [lo_hn.(i)] cells of it; [hi_hist]/[hi_hn] likewise for the entries that
+     LOWERED its upper bound. Pushed by [apply] exactly when [lo_sup]/[hi_sup] is written,
+     popped by [undo_to] exactly when it is restored, so the top of a history IS the
+     array's answer and the history is the rest of the chain. One int per bound move,
+     in total; a variable's array is allocated on its first move. See [bound_support]. *)
+  lo_hist : int array array;
+  lo_hn : int array;
+  hi_hist : int array array;
+  hi_hn : int array;
+  (* M6-T14: the same for EVERY live entry on the variable, bound move or hole, behind
+     [remover]. One more int per trail entry. *)
+  all_hist : int array array;
+  all_hn : int array;
+  (* The [name_rep] classes with more than one member, or [None] when names are unique
+     (every store [Compile] builds). Lazy for the same reason [by_name] is. *)
+  classes : int list array option Lazy.t;
   mutable trail : entry array;
   mutable trail_len : int;
   mutable marks : mark array;
@@ -222,17 +240,40 @@ let build_name_index names =
   in
   (tbl, rep)
 
+(* Per representative, every variable of its name, ascending -- built only when some name
+   is shared, which only a hand-built test store does. *)
+let build_classes (_, rep) =
+  let n = Array.length rep in
+  let shared = ref false in
+  Array.iteri (fun i r -> if r <> i then shared := true) rep;
+  if not !shared then None
+  else
+    let cls = Array.make n [] in
+    for i = n - 1 downto 0 do
+      cls.(rep.(i)) <- i :: cls.(rep.(i))
+    done;
+    Some cls
+
 let create ~names ~domains =
   if Array.length names <> Array.length domains then
     invalid_arg "Store.create: names and domains differ in length";
   let names = Array.copy names in
+  let by_name = lazy (build_name_index names) in
+  let nv = Stdlib.max 1 (Array.length domains) in
   {
     domains = Array.copy domains;
     names;
-    by_name = lazy (build_name_index names);
+    by_name;
     reasons = Explanation.Arena.create ();
-    lo_sup = Array.make (Stdlib.max 1 (Array.length domains)) no_support;
-    hi_sup = Array.make (Stdlib.max 1 (Array.length domains)) no_support;
+    lo_sup = Array.make nv no_support;
+    hi_sup = Array.make nv no_support;
+    lo_hist = Array.make nv [||];
+    lo_hn = Array.make nv 0;
+    hi_hist = Array.make nv [||];
+    hi_hn = Array.make nv 0;
+    all_hist = Array.make nv [||];
+    all_hn = Array.make nv 0;
+    classes = lazy (build_classes (Lazy.force by_name));
     trail = Array.make 64 dummy_entry;
     trail_len = 0;
     marks = Array.make 16 dummy_mark;
@@ -323,6 +364,17 @@ let push_entry t e =
     t.trail <- bigger);
   t.trail.(t.trail_len) <- e;
   t.trail_len <- t.trail_len + 1
+
+(* Push trail position [at] onto variable [i]'s history [h]/[hn]. Positions only grow
+   along the trail, so the history stays sorted. *)
+let push_hist (h : int array array) (hn : int array) i at =
+  let n = hn.(i) in
+  if n = Array.length h.(i) then (
+    let bigger = Array.make (Stdlib.max 4 (2 * n)) no_support in
+    Array.blit h.(i) 0 bigger 0 n;
+    h.(i) <- bigger);
+  h.(i).(n) <- at;
+  hn.(i) <- n + 1
 
 let push_mark t m =
   if t.n_levels = Array.length t.marks then (
@@ -612,6 +664,7 @@ let apply t v (r : Domain.result) (j : Reason.justified) =
       check_conclusion t v ~old ~now:d j;
       let why = Explanation.Arena.add t.reasons why in
       let at = t.trail_len in
+      push_hist t.all_hist t.all_hn i at;
       push_entry t
         {
           var = v;
@@ -629,8 +682,12 @@ let apply t v (r : Domain.result) (j : Reason.justified) =
          keeps whatever supported it, which is what the saved fields above restore. Both
          are tested: [Domain.fix] moves both, [Domain.remove] of an interior value moves
          neither. *)
-      if Domain.lo d > Domain.lo old then t.lo_sup.(i) <- at;
-      if Domain.hi d < Domain.hi old then t.hi_sup.(i) <- at;
+      if Domain.lo d > Domain.lo old then (
+        t.lo_sup.(i) <- at;
+        push_hist t.lo_hist t.lo_hn i at);
+      if Domain.hi d < Domain.hi old then (
+        t.hi_sup.(i) <- at;
+        push_hist t.hi_hist t.hi_hn i at);
       t.domains.(i) <- d;
       Changed
 
@@ -658,6 +715,11 @@ let undo_to t target =
     t.domains.(i) <- e.old;
     t.lo_sup.(i) <- e.sup_lo;
     t.hi_sup.(i) <- e.sup_hi;
+    (* M6-T14: the entry being popped is the newest on the trail, so if it moved a bound
+       it is the top of that bound's history. *)
+    t.all_hn.(i) <- t.all_hn.(i) - 1;
+    if Domain.lo e.now > Domain.lo e.old then t.lo_hn.(i) <- t.lo_hn.(i) - 1;
+    if Domain.hi e.now < Domain.hi e.old then t.hi_hn.(i) <- t.hi_hn.(i) - 1;
     t.trail.(t.trail_len - 1) <- dummy_entry;
     t.trail_len <- t.trail_len - 1
   done
@@ -736,6 +798,63 @@ let trail_entry t i =
    already narrowed the variable (which unit tests do deliberately), so the guard stays
    at the call site where the declared bound lives -- [Linear.snapshot_source] already
    makes exactly that test before asking. *)
+(* ------------------------------------- which entry established a value (M6-T14) *)
+
+(* Did [e] establish [value] in this direction? True for at most one live entry per
+   (variable, direction, value), by I-D3's monotonicity. Moved here from
+   lib/core/analysis.ml, which re-exports it, so that the history search below and the
+   scan it replaced share ONE predicate -- the direction asymmetry ([>=] on a lower
+   bound, [<=] on an upper) included. *)
+let establishes (e : entry) ~is_lower ~value =
+  if is_lower then Domain.lo e.old < value && Domain.lo e.now >= value
+  else Domain.hi e.old > value && Domain.hi e.now <= value
+
+(* The live entry on variable index [i] that established [value], or [no_support]. Along
+   [i]'s lower-bound history the [now] lower bounds strictly increase and each entry's
+   [old] lower bound is its predecessor's [now] (no other entry moved it in between), so
+   the entries partition the values above the declared bound into consecutive intervals
+   (old, now]: the one containing [value] is the FIRST whose [now] reaches it, found by
+   binary search, and it establishes [value] iff its [old] does not already reach it --
+   which can fail only for the first entry, when the declared bound already does.
+   Symmetric on the upper bound. O(log moves of [i]). *)
+let member_support t i ~is_lower ~value =
+  let h, n =
+    if is_lower then (t.lo_hist.(i), t.lo_hn.(i)) else (t.hi_hist.(i), t.hi_hn.(i))
+  in
+  let reaches (d : Domain.t) =
+    if is_lower then Domain.lo d >= value else Domain.hi d <= value
+  in
+  (* first j in [0, n) with reaches now(h.(j)), or n *)
+  let lo = ref 0 and hi = ref n in
+  while !lo < !hi do
+    let mid = (!lo + !hi) lsr 1 in
+    if reaches t.trail.(h.(mid)).now then hi := mid else lo := mid + 1
+  done;
+  if !lo = n then no_support
+  else
+    let at = h.(!lo) in
+    if establishes t.trail.(at) ~is_lower ~value then at else no_support
+
+(* [member_support] on one exact variable, for [Pb_analysis.falsified_at], which compares
+   [Var.equal] rather than [name_rep]. *)
+let var_support t v ~is_lower ~value = member_support t (Var.to_int v) ~is_lower ~value
+
+(* The trail position, strictly below [before], of the newest entry ON ANY VARIABLE OF
+   [v]'s NAME that established [value] in this direction, or [no_support] -- exactly what
+   the downward scan [Analysis.scan_support] returns (it compares [name_rep]), in
+   O(log moves) instead of O(|trail|) per call. Each member has at most one live
+   establishing entry, so "strictly below [before]" is a test on that one entry, not a
+   search. With unique names the class is [v] alone. *)
+let bound_support t ~before v ~is_lower ~value =
+  let below at = if at <> no_support && at < before then at else no_support in
+  let r = Var.to_int (name_rep t v) in
+  match Lazy.force t.classes with
+  | None -> below (member_support t r ~is_lower ~value)
+  | Some cls ->
+      List.fold_left
+        (fun acc i -> Stdlib.max acc (below (member_support t i ~is_lower ~value)))
+        no_support cls.(r)
+
 (* The entry that took [value] out of [var]'s domain, looking back from trail position
    [before] (exclusive). A value leaves a domain once and stays gone until the backtrack
    that pops the entry that removed it, so there is at most one and this finds it at the
@@ -750,7 +869,7 @@ let trail_entry t i =
 
    Shared: [Trace] and [Linear] had a copy each ([remover] and [find_removal]), with the
    two off-by-one conventions that invites. This is the [before]-is-exclusive one. *)
-let remover t ~before ~var value =
+let remover_scan t ~before ~var value =
   let rec go i =
     if i < 0 then None
     else
@@ -760,6 +879,34 @@ let remover t ~before ~var value =
       else go (i - 1)
   in
   go (Stdlib.min (before - 1) (t.trail_len - 1))
+
+(* M6-T14 (D-0088): [remover_scan]'s answer from [var]'s entry history in O(log entries
+   on [var]) rather than O(|trail|) per call -- the walk that was left at the top of
+   2014_mario's profile once [bound_support] had removed the bound one. Along that history
+   each entry's [old] is its predecessor's [now] and domains only shrink (I-D3), so
+   "[value] is gone from [now]" is false then true: the first entry where it turns true
+   is the only one that can have removed it, found by binary search; it did iff its [old]
+   still held [value] (false only for the first entry, when the declared domain never
+   did), and the scan finds it iff it lies strictly below [before]. The scan stays one
+   wave as the [BAGUETTE_DEBUG] cross-check and test_core's oracle. *)
+let remover t ~before ~var value =
+  let i = Var.to_int var in
+  let h = t.all_hist.(i) and n = t.all_hn.(i) in
+  let lo = ref 0 and hi = ref n in
+  while !lo < !hi do
+    let mid = (!lo + !hi) lsr 1 in
+    if Domain.mem t.trail.(h.(mid)).now value then lo := mid + 1 else hi := mid
+  done;
+  let r =
+    if !lo = n then None
+    else
+      let at = h.(!lo) in
+      let e = t.trail.(at) in
+      if at < before && Domain.mem e.old value then Some e else None
+  in
+  Debug.check "M6-T14: remover's history agrees with the trail scan" (fun () ->
+      Option.equal ( == ) r (remover_scan t ~before ~var value));
+  r
 
 (* The values [Domain.settle] walked a bound over on its way to [cur]: the maximal run of
    holes immediately below (above) it in [old]. It stops at the first value [old] still
@@ -872,7 +1019,43 @@ let check_invariants t =
             || Domain.hi e.now <> Domain.hi t.domains.(i)
           then ok_support := false)
     t.hi_sup;
-  ok_marks && !ok_reasons && ok_domains && !ok_support
+  (* M6-T14: each history is sorted, names live entries on its variable that moved its
+     bound, and its top is the O(1) array's answer -- the property that makes
+     [bound_support] and [lo_support] two readings of one chain. *)
+  let ok_hist = ref true in
+  let hist_ok h hn sup moved =
+    Array.iteri
+      (fun i n ->
+        let top = if n = 0 then no_support else h.(i).(n - 1) in
+        if top <> sup.(i) then ok_hist := false;
+        for j = 0 to n - 1 do
+          let at = h.(i).(j) in
+          if at < 0 || at >= t.trail_len || (j > 0 && at <= h.(i).(j - 1)) then
+            ok_hist := false
+          else
+            let e = t.trail.(at) in
+            if Var.to_int e.var <> i || not (moved e) then ok_hist := false
+        done)
+      hn
+  in
+  hist_ok t.lo_hist t.lo_hn t.lo_sup (fun e -> Domain.lo e.now > Domain.lo e.old);
+  hist_ok t.hi_hist t.hi_hn t.hi_sup (fun e -> Domain.hi e.now < Domain.hi e.old);
+  (* and the entry history holds exactly the live entries, each under its own variable *)
+  let total = ref 0 in
+  Array.iteri
+    (fun i n ->
+      total := !total + n;
+      for j = 0 to n - 1 do
+        let at = t.all_hist.(i).(j) in
+        if
+          at < 0 || at >= t.trail_len
+          || (j > 0 && at <= t.all_hist.(i).(j - 1))
+          || Var.to_int t.trail.(at).var <> i
+        then ok_hist := false
+      done)
+    t.all_hn;
+  if !total <> t.trail_len then ok_hist := false;
+  ok_marks && !ok_reasons && ok_domains && !ok_support && !ok_hist
 
 let to_string t =
   String.concat " "

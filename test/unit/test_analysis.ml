@@ -502,6 +502,25 @@ let test_scene2_scan_fallback () =
         "scene 2: and the downward-scan fallback runs, because the O(1) answer is the \
          wrong entry for a frozen fact"
         (t.Analysis.scanned_supports >= 1);
+      (* M6-T14 (D-0088): the fallback is the bound history now; on this real
+         propagated trail it must answer what the downward scan answers, everywhere. *)
+      let n = Store.trail_length store in
+      let agree = ref true in
+      List.iter
+        (fun v ->
+          List.iter
+            (fun is_lower ->
+              for value = -1 to 5 do
+                for before = 0 to n + 1 do
+                  if
+                    Store.bound_support store ~before v ~is_lower ~value
+                    <> Analysis.scan_support store ~before ~v ~is_lower ~value
+                  then agree := false
+                done
+              done)
+            [ true; false ])
+        [ vx; vy; vv ];
+      check "scene 2: the bound history agrees with the trail scan on every query" !agree;
       check "scene 2: the cut is over the two assumptions"
         (Reason.to_string (Analysis.facts t) = "v>=3 x>=2");
       check "scene 2: oracle -- model + cut is UNSAT by brute force"

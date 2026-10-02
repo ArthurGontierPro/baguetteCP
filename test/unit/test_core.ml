@@ -1306,6 +1306,125 @@ let test_var_named_index () =
            (Store.var_named s (Store.name s v)))
        (List.init n Fun.id))
 
+(* M6-T14 (D-0088): [Store.bound_support] (binary search over a variable's bound
+   history) against [Analysis.scan_support] (the downward trail walk it replaced), for
+   EVERY (representative, direction, value, before) over a hand-built trail on which
+   bounds move at several positions -- a duplicated name included, since the scan
+   compares [name_rep] -- then again after each undo and after re-pushing. Also
+   [Pb_analysis.falsified_at] against the scan it replaced, on every literal. *)
+let test_bound_history () =
+  let names = [| "x"; "y"; "x"; "z" |] in
+  let s = Store.create ~names ~domains:(Array.make 4 (Domain.make 0 9)) in
+  let why = Reason.because ~concludes:None Reason.none (Explanation.model_row 1) in
+  let x = Var.of_int 0 and y = Var.of_int 1 and x' = Var.of_int 2 and z = Var.of_int 3 in
+  let reps = [ x; y; z ] in
+  let all_agree tag =
+    let ok = ref true and bad = ref "" in
+    let n = Store.trail_length s in
+    List.iter
+      (fun v ->
+        List.iter
+          (fun is_lower ->
+            for value = -1 to 11 do
+              for before = 0 to n + 1 do
+                let h = Store.bound_support s ~before v ~is_lower ~value in
+                let sc =
+                  Baguette_core.Analysis.scan_support s ~before ~v ~is_lower ~value
+                in
+                if h <> sc then (
+                  ok := false;
+                  bad :=
+                    Printf.sprintf "%s %s %d before %d: history %d scan %d"
+                      (Store.name s v)
+                      (if is_lower then ">=" else "<=")
+                      value before h sc)
+              done
+            done)
+          [ true; false ])
+      reps;
+    let lits =
+      List.concat_map
+        (fun nm ->
+          List.concat_map
+            (fun k -> [ Lit.ge nm k; Lit.negate (Lit.ge nm k) ])
+            (List.init 13 (fun k -> k - 1)))
+        [ "x"; "y"; "z"; "w" ]
+    in
+    List.iter
+      (fun l ->
+        let a = Baguette_core.Pb_analysis.falsified_at s l in
+        let b = Baguette_core.Pb_analysis.falsified_at_scan s l in
+        if a <> b then (
+          ok := false;
+          bad :=
+            Printf.sprintf "falsified_at %s: history %d scan %d" (Lit.to_string l) a b))
+      lits;
+    List.iter
+      (fun var ->
+        for value = -1 to 11 do
+          for before = -1 to n + 1 do
+            let a = Store.remover s ~before ~var value in
+            let b = Store.remover_scan s ~before ~var value in
+            if not (Option.equal ( == ) a b) then (
+              ok := false;
+              bad :=
+                Printf.sprintf "remover %s %d before %d" (Store.name s var) value before)
+          done
+        done)
+      [ x; y; x'; z ];
+    check
+      (Printf.sprintf "bound history = trail scan, every case (%s)%s" tag
+         (if !ok then "" else " -- " ^ !bad))
+      !ok;
+    check
+      (Printf.sprintf "bound history: check_invariants (%s)" tag)
+      (Store.check_invariants s)
+  in
+  all_agree "empty trail";
+  ignore (Store.set_lo s x 2 why);
+  (* 0 *)
+  ignore (Store.set_hi s z 6 why);
+  (* 1 *)
+  Store.new_level s;
+  ignore (Store.set_hi s x 8 why);
+  (* 2 *)
+  ignore (Store.remove s x 5 why);
+  (* 3: interior hole, moves no bound *)
+  ignore (Store.set_lo s y 3 why);
+  (* 4 *)
+  ignore (Store.set_lo s x 4 why);
+  (* 5 *)
+  ignore (Store.set_lo s x' 3 why);
+  (* 6: the other variable named x *)
+  all_agree "level 1";
+  Store.new_level s;
+  ignore (Store.fix s x 6 why);
+  (* 7: moves both bounds; 5 is a hole so lo settles past it *)
+  ignore (Store.set_hi s x' 7 why);
+  (* 8 *)
+  ignore (Store.set_lo s y 5 why);
+  (* 9 *)
+  all_agree "level 2";
+  check
+    "bound history: a fact weaker than the current bound (x >= 4 while x = 6) is \
+     established by the 2 -> 4 entry, not by lo_support's"
+    (Store.lo_support s x = 7
+    && Store.bound_support s ~before:10 x ~is_lower:true ~value:4 = 5);
+  check "bound history: the duplicate-named x' wins when it is the newer establisher"
+    (Store.bound_support s ~before:7 x ~is_lower:true ~value:3 = 6);
+  check "bound history: below the establishing entry there is no support"
+    (Store.bound_support s ~before:5 x ~is_lower:true ~value:4 = Store.no_support);
+  check "bound history: a value the declared bound already holds has no support"
+    (Store.bound_support s ~before:10 x ~is_lower:true ~value:0 = Store.no_support
+    && Store.bound_support s ~before:10 z ~is_lower:false ~value:9 = Store.no_support);
+  Store.backtrack s;
+  all_agree "after one undo";
+  ignore (Store.set_hi s x 5 why);
+  ignore (Store.set_lo s z 1 why);
+  all_agree "re-pushed after undo";
+  Store.backtrack_to s 0;
+  all_agree "back at level 0"
+
 let () =
   match Array.to_list Sys.argv with
   | _ :: "--agreeing-push" :: _ -> disagreeing_push ~agree:true ()
@@ -1330,6 +1449,7 @@ let () =
       test_view_trail ();
       test_view_constants ();
       test_var_named_index ();
+      test_bound_history ();
       if !failures > 0 then (
         Printf.printf "\n%d failure(s)\n" !failures;
         exit 1)

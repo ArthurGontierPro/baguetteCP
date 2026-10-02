@@ -325,7 +325,7 @@ let falsified_now store (l : Lit.t) =
    most recently falsified conflict-level literal) and to find the entry whose instance
    is the reason. A literal falsified by the declared domain alone has no entry and is
    therefore never a pivot, which is right: nothing propagated it. *)
-let falsified_at store (l : Lit.t) =
+let falsified_at_scan store (l : Lit.t) =
   (* M6-T9. ONE pass over the trail, not the O(trail^2) of asking [falsified_before] at
      every position (each of which scanned the trail again). Measured on a real
      instance (MiniZinc Challenge 2011 costas-array, 15.dzn): PB analysis was 5.8 s of a
@@ -373,6 +373,36 @@ let falsified_at store (l : Lit.t) =
                   if Var.equal e.Store.var v && fals e.Store.now then i else go (i + 1)
               in
               go !first)
+
+(* M6-T14 (D-0088): the same position as [falsified_at_scan] above, case for case, from
+   [v]'s bound history in O(log moves) instead of one pass over the whole trail per
+   literal. [fals] reads only the bounds, so the scan's cases collapse: not falsified
+   now -> none; otherwise the first bound-mover on [v] whose [now] falsifies, which
+   [Store.var_support] returns unless the declared bound already falsified (the scan's
+   "position 0" cases, a moverless [v] included). An empty trail is the scan's own
+   [none] and is kept. The scan stays one wave as the [BAGUETTE_DEBUG] cross-check. *)
+let falsified_at store (l : Lit.t) =
+  let at =
+    match l.Lit.v with
+    | Lit.Eq _ -> Store.no_support
+    | Lit.Ge (name, k) -> (
+        match Store.var_named store name with
+        | None -> Store.no_support
+        | Some v ->
+            let d = Store.get store v in
+            let fals_now = if l.Lit.positive then Domain.hi d < k else Domain.lo d >= k in
+            if Store.trail_length store = 0 || not fals_now then Store.no_support
+            else
+              let at =
+                if l.Lit.positive then
+                  Store.var_support store v ~is_lower:false ~value:(k - 1)
+                else Store.var_support store v ~is_lower:true ~value:k
+              in
+              if at = Store.no_support then 0 else at)
+  in
+  Debug.check "M6-T14: falsified_at agrees with the trail scan" (fun () ->
+      at = falsified_at_scan store l);
+  at
 
 (* The decision level at which [l] became falsified; 0 when it is falsified by the
    declared domain or not falsified at all. *)
