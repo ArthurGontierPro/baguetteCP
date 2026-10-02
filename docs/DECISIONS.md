@@ -7873,8 +7873,9 @@ Artefacts: `/scratch/arthur/cumul/{census.tsv,lib/,*.fzn,*.log}`.
 
 **Shape.** std's `fzn_cumulative` is TIME-INDEXED (`cumulative_time`: per t, `b >= sum_i
 ((s_i <= t /\ t < s_i + d_i) * r_i)`) whenever `late - early <= 5000`, and task-based otherwise.
-Of the 46 models that post a call, **40 have only time-indexed cumulative calls or pairwise
-disjunctive ones**; 9 have a task-based call (the 6 above and cargo x3). std's
+Of the 46 models that post a call, **38 have only time-indexed cumulative calls or pairwise
+disjunctive ones**; 8 have a task-based call (largecumulative x2, test-scheduling x2,
+yumi-dynamic 2024, cargo x3), and openshop's calls are pairwise disjunctive at H ~ 7000. std's
 `fzn_disjunctive`/`_strict` do **not** go through cumulative at all: they are the pairwise
 `s_i + d_i <= s_j \/ s_j + d_j <= s_i`, one reified disjunction per pair.
 
