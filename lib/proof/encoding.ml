@@ -237,8 +237,26 @@ type ivar = {
   mutable direct : dvar option;
 }
 
+(* M6-T11 (D-0085). The two tables keyed on a FlatZinc identifier, specialised to
+   [string]: the generic [Hashtbl] compares keys with the polymorphic [compare] (a C call
+   per probe, D-0080's "hashing per literal" on wide compiles, and [find] runs on every
+   literal [ge]/[le]/[eq] commits). Same hash function as the generic table
+   ([Hashtbl.hash]) and the same resizing, so the same bucket layout and iteration order;
+   nothing iterates these two anyway. *)
+module Names = Hashtbl.Make (struct
+  type t = string
+
+  let equal = String.equal
+  let hash (s : string) = Hashtbl.hash s
+end)
+
 type t = {
-  ints : (string, ivar) Hashtbl.t;
+  ints : ivar Names.t;
+  taken : unit Names.t;
+      (* M6-T11 (D-0085). [Lit.sanitize k] for every key [k] of [ints], kept beside it at
+         the one place [ints] grows, so [fresh_aux_name] reads it instead of rebuilding
+         it from all of [ints] on every call (O(vars) per auxiliary, O(vars * rows) per
+         compile). Never shrinks, because [ints] never does. *)
   mutable decl_rev : string list;
   mutable rev_constraints : Opb.constr list;
   mutable n : int; (* ids 1..n have been assigned *)
@@ -305,7 +323,8 @@ let live : t option ref = ref None
 
 let create () =
   {
-    ints = Hashtbl.create 64;
+    ints = Names.create 64;
+    taken = Names.create 64;
     decl_rev = [];
     rev_constraints = [];
     n = 0;
@@ -325,9 +344,9 @@ let create () =
   t
 
 let find t x =
-  match Hashtbl.find_opt t.ints x with Some v -> v | None -> raise (Undeclared x)
+  match Names.find_opt t.ints x with Some v -> v | None -> raise (Undeclared x)
 
-let is_declared t x = Hashtbl.mem t.ints x
+let is_declared t x = Names.mem t.ints x
 
 let domain t x =
   let v = find t x in
@@ -899,7 +918,7 @@ let declare_int_gen t x ~holes ~lo ~hi =
      in [t] and costs no allocation. M1-T54, and still true of the two refusals that
      survive M7-T1 -- a width that is not representable, and a limit someone asked for. *)
   if order_width_exceeds ~lo ~hi then raise (Width_too_large (x, lo, hi));
-  (match Hashtbl.find_opt t.ints x with
+  (match Names.find_opt t.ints x with
   | Some v when v.lo = lo && v.hi = hi -> raise Exit (* idempotent redeclaration *)
   | Some _ -> raise (Redeclared x)
   | None -> ());
@@ -941,7 +960,8 @@ let declare_int_gen t x ~holes ~lo ~hi =
       direct = None;
     }
   in
-  Hashtbl.replace t.ints x v;
+  Names.replace t.ints x v;
+  Names.replace t.taken (Lit.sanitize x) ();
   t.decl_rev <- x :: t.decl_rev;
   (* docs/PROOF-FORMAT.md section 3: for each lo < v < hi,
         1 ~x_ge_(v+1) 1 x_ge_v >= 1        i.e.  x >= v+1 -> x >= v. *)
@@ -1564,11 +1584,9 @@ let linear_span t terms =
    declared before any row is posted, which lib/flatzinc/compile.ml's header states
    as a requirement of its own and which [add_int_lin_le] already relies on. *)
 let fresh_aux_name t prefix =
-  let taken = Hashtbl.create 64 in
-  Hashtbl.iter (fun k _ -> Hashtbl.replace taken (Lit.sanitize k) ()) t.ints;
   let rec go i =
     let cand = Printf.sprintf "$%s%d" prefix i in
-    if Hashtbl.mem t.ints cand || Hashtbl.mem taken (Lit.sanitize cand) then go (i + 1)
+    if Names.mem t.ints cand || Names.mem t.taken (Lit.sanitize cand) then go (i + 1)
     else (
       t.n_aux <- i + 1;
       cand)
@@ -1814,7 +1832,7 @@ let reif_rows ~reifier ~cond =
    as something else, because then [b_ge_1] is one rung of a longer ladder and the two
    rows above would be saying something other than what the caller means. *)
 let ensure_reif_bool t reifier =
-  match Hashtbl.find_opt t.ints reifier with
+  match Names.find_opt t.ints reifier with
   | None -> declare_bool t reifier
   | Some v ->
       if not (v.lo = 0 && v.hi = 1) then raise (Reif_not_boolean (reifier, v.lo, v.hi))

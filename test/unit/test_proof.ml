@@ -91,6 +91,56 @@ let test_lits () =
 (* Opb                                                                 *)
 (* ------------------------------------------------------------------ *)
 
+(* M6-T11 (D-0085). [Lit.var_name] / [Lit.to_string] / [Lit.sanitize] / [Lit.is_renamed]
+   are built without [Printf] and without copying a clean identifier now; the names are
+   NORMATIVE (PROOF-FORMAT section 3), so the reference below is the old definition
+   verbatim and every rendering must match it byte for byte -- negative values, [min_int]
+   (whose negation is itself), the empty name, '$'-aux names, dotted and non-ASCII names.
+   Break: dropping the [m] for a negative value fails the first check on [-3]. *)
+let test_lit_rendering_is_the_reference () =
+  let ref_sanitize name =
+    String.map
+      (function ('a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_') as c -> c | _ -> '_')
+      name
+  in
+  let ref_suffix v = if v < 0 then "m" ^ string_of_int (-v) else string_of_int v in
+  let ref_var_name = function
+    | Lit.Ge (x, v) -> Printf.sprintf "%s_ge_%s" (ref_sanitize x) (ref_suffix v)
+    | Lit.Eq (x, v) -> Printf.sprintf "%s_eq_%s" (ref_sanitize x) (ref_suffix v)
+  in
+  let ref_to_string (l : Lit.t) =
+    if l.Lit.positive then ref_var_name l.Lit.v else "~" ^ ref_var_name l.Lit.v
+  in
+  let names =
+    [
+      "x"; ""; "X_INTRODUCED_12_"; "$ne0"; "a.b"; "a-b"; "q[3]"; "\xc3\xa9t\xc3\xa9"; "_";
+    ]
+  in
+  let values = [ 0; 1; -3; 7; -10; 99; max_int; min_int; min_int + 1 ] in
+  let all_ok = ref true in
+  List.iter
+    (fun x ->
+      if not (String.equal (Lit.sanitize x) (ref_sanitize x)) then all_ok := false;
+      if Lit.is_renamed x <> not (String.equal (ref_sanitize x) x) then all_ok := false;
+      List.iter
+        (fun v ->
+          List.iter
+            (fun pv ->
+              if not (String.equal (Lit.var_name pv) (ref_var_name pv)) then
+                all_ok := false;
+              List.iter
+                (fun (l : Lit.t) ->
+                  if not (String.equal (Lit.to_string l) (ref_to_string l)) then
+                    all_ok := false)
+                [ Lit.pos pv; Lit.neg pv ])
+            [ Lit.Ge (x, v); Lit.Eq (x, v) ])
+        values)
+    names;
+  check "lit rendering: var_name/to_string/sanitize/is_renamed match the reference"
+    !all_ok;
+  check "lit rendering: a negative value keeps its m"
+    (String.equal (Lit.to_string (Lit.le "x" (-4))) "~x_ge_m3")
+
 let test_opb () =
   let c = Opb.ge [ (1, Lit.ge "x" 1); (-2, Lit.le "y" 3) ] 1 in
   check_eq "opb: renders a constraint" ~expected:"+1 x_ge_1 -2 ~y_ge_4 >= 1 ;"
@@ -3422,6 +3472,7 @@ let () =
   test_m7_encoding_cost ();
   test_m7t8_resource_guard ();
   test_m7t11_hole_rows ();
+  test_lit_rendering_is_the_reference ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
