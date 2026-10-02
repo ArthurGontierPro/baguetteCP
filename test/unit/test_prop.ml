@@ -6743,6 +6743,342 @@ let test_maxmin_veripb () =
     ~name:"maxmin R3 BREAK: the honest hi(m) <= 3 WITHOUT the per-value rows is refused"
     ~build:(build_maxmin_r3 ~clauses:false ~claim:"+1 ~m_ge_4")
     ~saying:maxmin_rup_refusal
+(* ================================================================ M4-T10, D-0096
+
+   cumulative (and disjunctive as its cap = 1 case), lib/core/prop/cumulative.ml.
+
+   Every scene here is HAND-BUILT -- store, encoding, capacity rows, engine -- so none of
+   it needs lib/flatzinc/'s dispatch arm, which is a cross-session request this wave.
+   Declared widths are single digits and horizons under 10 (D-0028). *)
+
+module Cumulative = Baguette_core.Cumulative
+
+(* [tasks] is (variable index, duration, resource). *)
+let cumul_scene decls ~cap tasks =
+  let e = Encoding.create () in
+  List.iter (fun (n, lo, hi) -> Encoding.declare_int e n ~lo ~hi) decls;
+  let store = mk_store decls in
+  let p =
+    Cumulative.make store e ~cap
+      (List.map (fun (i, d, r) -> (Cumulative.Start (var i), d, r)) tasks)
+  in
+  (store, e, p)
+
+(* The relation, written as the obvious scan over every integer time and NOT over the
+   rows [make] posts -- an oracle phrased in the propagator's own terms could not tell a
+   wrong row from a right one. *)
+let cumul_holds ~cap tasks (values : int list) =
+  let starts = List.map (fun (i, d, r) -> (List.nth values i, d, r)) tasks in
+  let lo = List.fold_left (fun a (s, _, _) -> min a s) max_int starts in
+  let hi = List.fold_left (fun a (s, d, _) -> max a (s + d)) min_int starts in
+  starts = []
+  || List.for_all
+       (fun t ->
+         List.fold_left
+           (fun a (s, d, r) -> if s <= t && t < s + d then a + r else a)
+           0 starts
+         <= cap)
+       (List.init (hi - lo) (fun k -> lo + k))
+
+let cumul_random_case rng =
+  let n = 2 + Random.State.int rng 3 in
+  let cap = 1 + Random.State.int rng 3 in
+  let decls =
+    List.init n (fun i ->
+        let lo = Random.State.int rng 2 in
+        (Printf.sprintf "s%d" i, lo, lo + 1 + Random.State.int rng 4))
+  in
+  let tasks =
+    List.init n (fun i -> (i, 1 + Random.State.int rng 3, 1 + Random.State.int rng cap))
+  in
+  (decls, cap, tasks)
+
+(* I-P1 (no supported value removed) and conflict-only-when-unsat, by brute force over
+   the declared box, on 300 seeded scenes -- plus I-P2: a second run at the fixpoint
+   changes nothing. The last check is that the scenes PRUNE at all: a soundness harness
+   whose propagator never moved a bound would pass vacuously. *)
+let test_cumulative_soundness () =
+  let rng = Random.State.make [| 9601 |] in
+  let unsound = ref [] and refuted_sat = ref [] and not_idem = ref [] in
+  let pruned = ref 0 and conflicts = ref 0 in
+  for k = 1 to 300 do
+    let decls, cap, tasks = cumul_random_case rng in
+    let store, _, p = cumul_scene decls ~cap tasks in
+    let ranges = List.map (fun (_, lo, hi) -> (lo, hi)) decls in
+    let sols = List.filter (cumul_holds ~cap tasks) (cartesian ranges) in
+    match Cumulative.propagate p store with
+    | Propagator.Conflict _ ->
+        incr conflicts;
+        if sols <> [] then refuted_sat := k :: !refuted_sat
+    | Propagator.Fixpoint ->
+        List.iteri
+          (fun i (lo, hi) ->
+            let d = Store.get store (var i) in
+            if Domain.lo d > lo || Domain.hi d < hi then incr pruned;
+            for v = lo to hi do
+              if List.exists (fun s -> List.nth s i = v) sols && not (Domain.mem d v) then
+                unsound := k :: !unsound
+            done)
+          ranges;
+        let snap = Store.snapshot store in
+        (match Cumulative.propagate p store with
+        | Propagator.Fixpoint -> ()
+        | Propagator.Conflict _ -> not_idem := k :: !not_idem);
+        if not (Store.same_domains store snap) then not_idem := k :: !not_idem
+  done;
+  check "cumulative: I-P1, no supported start value removed (300 scenes)" (!unsound = []);
+  check "cumulative: a conflict only where the box has no solution" (!refuted_sat = []);
+  check "cumulative: I-P2, a second run at the fixpoint changes nothing" (!not_idem = []);
+  check
+    (Printf.sprintf "cumulative: the scenes are not vacuous (%d bounds moved, %d refuted)"
+       !pruned !conflicts)
+    (!pruned > 20 && !conflicts > 5)
+
+(* I-P3: with every start fixed, a conflict iff the assignment overloads some time. The
+   declared boxes are the wide ones, so [make] posts its rows over them and the fixing
+   comes after, as [test_checking] does for the linear family. *)
+let test_cumulative_checking () =
+  let rng = Random.State.make [| 9602 |] in
+  let wrong = ref [] and violated = ref 0 in
+  for k = 1 to 300 do
+    let decls, cap, tasks = cumul_random_case rng in
+    let store, _, p = cumul_scene decls ~cap tasks in
+    let values =
+      List.map (fun (_, lo, hi) -> lo + Random.State.int rng (hi - lo + 1)) decls
+    in
+    List.iteri (fun i v -> ignore (Store.fix store (var i) v placeholder_pruning)) values;
+    let holds = cumul_holds ~cap tasks values in
+    if not holds then incr violated;
+    match Cumulative.propagate p store with
+    | Propagator.Conflict _ -> if holds then wrong := k :: !wrong
+    | Propagator.Fixpoint -> if not holds then wrong := k :: !wrong
+  done;
+  check
+    (Printf.sprintf
+       "cumulative: I-P3, all starts fixed -> conflict iff overloaded (300, %d violated)"
+       !violated)
+    (!wrong = [] && !violated > 30)
+
+(* The rows [make] posts: only where the may-load exceeds the capacity, over ORDER
+   literals only (no `o_it`, no direct encoding), with the clipped ends folded. D-0096's
+   four tasks, whose row at t = 2 is quoted there; pinned here by its text. *)
+let test_cumulative_rows () =
+  let decls = [ ("sA", 0, 4); ("sB", 0, 4); ("sC", 0, 4); ("sD", 0, 6) ] in
+  let _, e, _ = cumul_scene decls ~cap:2 [ (0, 3, 2); (1, 2, 1); (2, 2, 1); (3, 2, 1) ] in
+  let rows = List.map Opb.constr_to_string (Encoding.constraints e) in
+  let ladder = 3 + 3 + 3 + 5 in
+  check
+    (Printf.sprintf "cumulative rows: the ladder plus 7 capacity rows (got %d lines)"
+       (List.length rows))
+    (List.length rows = ladder + 7);
+  let has s = List.exists (fun r -> String.equal (String.trim r) s) rows in
+  check "cumulative rows: D-0096's row at t = 2, byte for byte"
+    (has
+       "+2 sA_ge_3 -1 sB_ge_1 +1 sB_ge_3 -1 sC_ge_1 +1 sC_ge_3 -1 sD_ge_1 +1 sD_ge_3 >= \
+        0 ;");
+  check "cumulative rows: D-0096's row at t = 3, byte for byte"
+    (has
+       "-2 sA_ge_1 +2 sA_ge_4 -1 sB_ge_2 +1 sB_ge_4 -1 sC_ge_2 +1 sC_ge_4 -1 sD_ge_2 +1 \
+        sD_ge_4 >= -2 ;");
+  check "cumulative rows: no direct literal anywhere"
+    (not (List.exists (fun r -> contains_sub ~needle:"_eq_" r) rows))
+
+(* The same scene with D-0096's three facts as linear rows, propagated at the root by
+   the engine: A's compulsory part [2, 3] at r = 2 = cap pushes D off 2 and then off 3,
+   so lo(sD) = 4 -- and NOT 5, which is what the brute force says is the true lower
+   bound. Time-table stops there because no compulsory part covers 4; that is what the
+   [Checking] tag does not promise, pinned so a stronger rule is a visible change. *)
+let test_cumulative_timetable_fixpoint () =
+  let decls = [ ("sA", 0, 4); ("sB", 0, 4); ("sC", 0, 4); ("sD", 0, 6) ] in
+  let e = Encoding.create () in
+  List.iter (fun (n, lo, hi) -> Encoding.declare_int e n ~lo ~hi) decls;
+  let store = mk_store decls in
+  let facts = [ ([ (-1, 0) ], -1); ([ (1, 0) ], 2); ([ (-1, 3) ], -2) ] in
+  let lins =
+    List.mapi
+      (fun k (terms, rhs) ->
+        let row =
+          Encoding.add_int_lin_le e
+            (List.map
+               (fun (a, i) ->
+                 ( a,
+                   let n, _, _ = List.nth decls i in
+                   n ))
+               terms)
+            rhs
+        in
+        pack_linear ~id:k
+          (Linear.make ~row_id:row store (List.map (fun (a, i) -> (a, var i)) terms) rhs))
+      facts
+  in
+  let p =
+    Cumulative.make store e ~cap:2
+      (List.map
+         (fun (i, d, r) -> (Cumulative.Start (var i), d, r))
+         [ (0, 3, 2); (1, 2, 1); (2, 2, 1); (3, 2, 1) ])
+  in
+  let engine =
+    Engine.create
+      (lins
+      @ [
+          Propagator.pack ~id:3
+            (module Cumulative : Propagator.S with type t = Cumulative.t)
+            p;
+        ])
+  in
+  (match Engine.propagate engine store with
+  | Engine.Fixpoint -> check "cumulative fixpoint: the D-0096 scene propagates" true
+  | _ -> check "cumulative fixpoint: the D-0096 scene propagates" false);
+  let d = Store.get store (var 3) in
+  check
+    (Printf.sprintf "cumulative fixpoint: lo(sD) = 4 by two time-table pushes (got %d)"
+       (Domain.lo d))
+    (Domain.lo d = 4)
+
+(* End to end with search, proof and checker. [order] is an input-order phase over the
+   variables as listed; the value choice is the scene's. Returns what [run_veripb]
+   needs and the outcome, which the caller checks. *)
+let cumul_search_case dir ~file ~decls ~cap ~tasks ~vars ~value =
+  let e = Encoding.create () in
+  List.iter (fun (n, lo, hi) -> Encoding.declare_int e n ~lo ~hi) decls;
+  let store = mk_store decls in
+  let p =
+    Cumulative.make store e ~cap
+      (List.map (fun (i, d, r) -> (Cumulative.Start (var i), d, r)) tasks)
+  in
+  let opb = Filename.concat dir (file ^ ".opb") in
+  let pbp = Filename.concat dir (file ^ ".pbp") in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ file ] e oc;
+  close_out oc;
+  let engine =
+    Engine.create
+      [
+        Propagator.pack ~id:0
+          (module Cumulative : Propagator.S with type t = Cumulative.t)
+          p;
+      ]
+  in
+  let order =
+    Search.sequence
+      [
+        {
+          Search.p_vars = Array.of_list (List.map var vars);
+          p_var = Search.input_order;
+          p_val = value;
+        };
+      ]
+  in
+  let oc = open_out pbp in
+  let w = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof e w;
+  let ctx = Justify.create ~writer:w ~encoding:e in
+  let check_sol asn =
+    cumul_holds ~cap tasks (List.mapi (fun i _ -> List.assoc (var i) asn) decls)
+  in
+  let outcome = Search.solve ~engine ~store ~ctx ~check:check_sol ~order () in
+  close_out oc;
+  (outcome, opb, pbp, Encoding.n_constraints e)
+
+(* The SAT lane: five tasks, cap 2, one task at r = 2 (so the division by r_j does real
+   work), searched latest-first so the first guesses are wrong. Found by a seeded
+   search over random scenes for one whose proof FAILS when every cumulative derivation
+   is replaced by its bare capacity row -- i.e. one whose derivations are load-bearing
+   (D-0066/D-0073), measured with a mutant binary on 2026-10-02. *)
+let cumul_sat_decls =
+  [ ("s0", 0, 2); ("s1", 0, 4); ("s2", 0, 4); ("s3", 0, 3); ("s4", 0, 3) ]
+
+let cumul_sat_tasks = [ (0, 3, 1); (1, 1, 1); (2, 1, 2); (3, 2, 1); (4, 2, 1) ]
+
+(* The UNSAT lane: D-0096's four tasks with the horizon cut to 6, which no packing fits
+   (any two-unit task in the three free points covers the middle one). Refuted by the
+   capacity alone, under search. *)
+let cumul_unsat_decls = [ ("sa", 0, 3); ("sb", 0, 4); ("sc", 0, 4); ("sd", 0, 4) ]
+let cumul_unsat_tasks = [ (0, 3, 2); (1, 2, 1); (2, 2, 1); (3, 2, 1) ]
+
+(* A rup line of [pbp] stated ALONE against [opb] (with [n] model constraints): refused
+   on the RUP judgement, or accepted, or no checker. *)
+let cumul_standalone ~dir ~opb ~n line =
+  match veripb_path () with
+  | None -> None
+  | Some veripb ->
+      let p = Filename.concat dir "standalone.pbp" in
+      let oc = open_out p in
+      Printf.fprintf oc
+        "pseudo-Boolean proof version 3.0\n\
+         f %d ;\n\
+         %s\n\
+         output NONE ;\n\
+         conclusion NONE ;\n\
+         end pseudo-Boolean proof ;\n"
+        n line;
+      close_out oc;
+      let log = Filename.concat dir "standalone.log" in
+      let rc =
+        Sys.command
+          (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
+             (Filename.quote opb) (Filename.quote p) (Filename.quote log))
+      in
+      Some (rc = 0, read_file log)
+
+let test_cumulative_search () =
+  let mkdir () =
+    let dir = Filename.temp_file "baguette_cumul" "" in
+    Sys.remove dir;
+    Sys.mkdir dir 0o700;
+    dir
+  in
+  let sat_dir = mkdir () in
+  let outcome, opb, pbp, n =
+    cumul_search_case sat_dir ~file:"cumul_sat" ~decls:cumul_sat_decls ~cap:2
+      ~tasks:cumul_sat_tasks ~vars:[ 3; 4; 2; 1; 0 ] ~value:Search.indomain_max
+  in
+  check "cumulative search: the SAT lane finds a solution"
+    (match outcome with Search.Sat _ -> true | _ -> false);
+  (* I-X10's obligation, on this lane's own output: some trace line the solver wrote
+     after a cumulative [pol] is REFUSED when stated alone -- so the derivation ahead of
+     it is load-bearing -- and the full proof below verifies. Read before [run_veripb],
+     which removes its directory. *)
+  let ls = List.map Writer.strip_label (String.split_on_char '\n' (read_file pbp)) in
+  (* Only a rup the derive-ahead path wrote -- the line right after a [pol] -- counts:
+     a nogood is refused standalone by design and would make this pass vacuously. *)
+  let is_ s l = String.length l > 4 && String.sub l 0 4 = s in
+  let rec after_pol = function
+    | a :: (b :: _ as rest) ->
+        if is_ "pol " a && is_ "rup " b then b :: after_pol rest else after_pol rest
+    | _ -> []
+  in
+  let rups = after_pol ls in
+  let refused =
+    List.exists
+      (fun l ->
+        match cumul_standalone ~dir:sat_dir ~opb ~n l with
+        | Some (false, log) ->
+            contains_sub
+              ~needle:
+                "not implied by reverse unit propagation (RUP) from core and derived \
+                 database"
+              log
+        | _ -> false)
+      rups
+  in
+  check
+    (Printf.sprintf
+       "cumulative search: at least one of the SAT lane's %d rup lines is REFUSED \
+        standalone, on the RUP judgement (I-X10: the pol ahead of it carries it)"
+       (List.length rups))
+    refused;
+  run_veripb ~name:"cumulative search: the SAT lane's proof verifies" ~build:(fun _ ->
+      (opb, pbp));
+  let unsat_dir = mkdir () in
+  let outcome, opb, pbp, _ =
+    cumul_search_case unsat_dir ~file:"cumul_unsat" ~decls:cumul_unsat_decls ~cap:2
+      ~tasks:cumul_unsat_tasks ~vars:[ 1; 2; 3; 0 ] ~value:Search.indomain_min
+  in
+  check "cumulative search: the UNSAT lane is refuted"
+    (match outcome with Search.Unsat -> true | _ -> false);
+  run_veripb ~name:"cumulative search: the UNSAT lane's refutation verifies"
+    ~build:(fun _ -> (opb, pbp))
 
 let () =
   print_endline "\npropagator unit tests";
@@ -6930,6 +7266,12 @@ let () =
   test_maxmin_rules ();
   test_maxmin_brute_force ();
   test_maxmin_veripb ();
+  (* M4-T10, D-0096: cumulative. *)
+  test_cumulative_soundness ();
+  test_cumulative_checking ();
+  test_cumulative_rows ();
+  test_cumulative_timetable_fixpoint ();
+  test_cumulative_search ();
   if !failures > 0 then (
     Printf.printf "\n%d FAILURE(S)\n" !failures;
     exit 1)

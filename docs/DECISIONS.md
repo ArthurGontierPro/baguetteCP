@@ -8513,3 +8513,249 @@ enforcement question for whoever owns `--time-limit`, not gcc's.
 
 **§4 row**: `docs/PROOF-FORMAT.md`'s `global_cardinality` row now states both rules, their
 currencies and their ahead/bare split, and the reasons' scope.
+## D-0096  M4-T10: `cumulative` as time-table filtering over ORDER-literal capacity rows; disjunctive is its unit case. GO, for fixed durations, resources and capacity
+
+**Date.** 2026-10-02. **Row.** M4-T10 (agent-cumulative, `wave38-cumulative`). **Status.**
+ACCEPTED as the design for deliverable 2.
+
+### 1. The census: 69 names, 63 files, 18 that a fixed-shape propagator would reach
+
+The 2026-10-02 census counted 53 models naming `cumulative` and 16 naming `disjunctive`; six
+name both, so it is **63 distinct `.mzn` files** (`grep -l -E '\bcumulative\b|\bdisjunctive\b'
+/scratch/arthur/mzn-challenge/*/*/*.mzn`). Each was flattened on `fataepyc-07` against the data
+file its wave-35 corpus run used (`corpus-out-w35/log/<id>.inst`), with baguette's `mznlib` plus
+a TRACING copy of std's `fzn_cumulative` / `fzn_disjunctive` / `fzn_disjunctive_strict` that
+prints, per call, the task count, the horizon `late - early` (std's own two numbers), the widest
+start window, whether durations / resources / capacity are fixed, and which branch std takes.
+Artefacts: `/scratch/arthur/cumul/{census.tsv,lib/,*.fzn,*.log}`.
+
+| class | models | what they are |
+|---|---|---|
+| does not flatten | 7 | 5 `2026_*` with no data file in the corpus (NO-DATA), `2021_yumi-dynamic`, `2024_train-scheduling` (FLATTEN-FAIL in w35 too) |
+| predicate never posted | 10 | the word is in the model but no call survives flattening: ghoulomb x2, pattern-set-mining x4, yumi-static x2, evm-super-compilation, cvrptw |
+| **every call reachable** (fixed d, r, cap, time-indexed) | **12** | `2008_rcpsp` (OK-PROOF-VERIFIED today), `2010_rcpsp_max`, `2013_rcpsp` (TIMEOUT-CHECK), `2011`/`2014_cyclic-rcpsp`, `2016`/`2017_rcpsp-wet`, `2019_rcpsp-wet-diverse`, `2018`/`2023_vrplc` (UNKNOWN-LIMIT), `2024_aircraft-disassembly`, `2025_ihtc-kletzander` (REFUSED-RESOURCE on OTHER variables: max declared widths 193 M and 7 461) |
+| some calls reachable | 6 | `2012_mspsp`, `2014_smelt`, `2025_ihtc-marte`, cargo x3 (cargo's own calls are one task-based plus two time-indexed, and the model is REFUSED-RESOURCE on a width of 2.4e5 elsewhere) |
+| variable d, r or cap only | 22 | **the larger class, and not this row.** Resource as a 0/1 machine choice (`fjsp`, `gfd-schedule` x3, `test`-style cap-1 calls in `mspsp`, `unison` x3); variable durations (`mrcpsp` x2, `carpet-cutting` x5, `nside`, `stack-cuttingstock`, `stripboard` x2); variable capacity (`rect_packing` x2, `racp` x2) |
+| task-based only (H > 5000) | 6 | `largecumulative` x2 (H ~ 1e6), `test-scheduling` x2, `openshop` (H ~ 7000), `yumi-dynamic 2024` |
+
+**Shape.** std's `fzn_cumulative` is TIME-INDEXED (`cumulative_time`: per t, `b >= sum_i
+((s_i <= t /\ t < s_i + d_i) * r_i)`) whenever `late - early <= 5000`, and task-based otherwise.
+Of the 46 models that post a call, **38 have only time-indexed cumulative calls or pairwise
+disjunctive ones**; 8 have a task-based call (largecumulative x2, test-scheduling x2,
+yumi-dynamic 2024, cargo x3), and openshop's calls are pairwise disjunctive at H ~ 7000. std's
+`fzn_disjunctive`/`_strict` do **not** go through cumulative at all: they are the pairwise
+`s_i + d_i <= s_j \/ s_j + d_j <= s_i`, one reified disjunction per pair.
+
+**The width wall.** D-0028 already bounds what the order encoding can carry, and it bounds
+the time-indexed decomposition by the same number: a start variable of window w has w order
+literals whichever way the capacity is written, and H is at most the widest window plus a
+duration. So "within the wall" is the same test as "time-indexed and not refused for another
+variable": of the 18 reachable models, **14** have every declared width under ~15 000 and are
+candidates (`2008_rcpsp` H=171, `2010_rcpsp_max` 178, `2013_rcpsp` 253, cyclic-rcpsp 45/43,
+rcpsp-wet 68/65, rcpsp-wet-diverse 68, vrplc ~120, mspsp 40, smelt 1010, marte 25); 4 are
+refused on another variable (aircraft, kletzander, cargo x2-3) and a cumulative propagator does
+not change that. What the decomposition costs today, measured: `2008_rcpsp` flattens to
+**14 328 Booleans and 20 070 constraints**, almost all of them the time-indexed decomposition's
+`s_i <= t /\ t < s_i + d_i` reifications.
+
+### 2. What the `.opb` holds: one capacity row per time point, over ORDER literals, and no auxiliary at all
+
+The brief proposed the decomposition's rows: a Boolean `o_it` per task and time, reified as
+`s_i <= t /\ s_i >= t - d_i + 1`, and `sum_i r_i o_it <= cap`. **Not adopted**, because the
+order encoding already says "task i covers t" without a new variable. It is gcc's identity
+(D-0078) applied to an interval instead of a value:
+
+    [s_i in [a_i, t]]  =  s_i_ge_(a_i) - s_i_ge_(t+1),     a_i = t - d_i + 1
+
+-- the indicator of a window, which telescopes. So the capacity row at t is LINEAR in literals
+the `.opb` already has:
+
+    sum_i r_i (s_i_ge_(a_i') - s_i_ge_(b_i'+1))  <=  cap - (folded constants)
+
+with each end clipped to the declared range exactly as gcc clips (`s_ge_lo` is the constant 1,
+`s_ge_(hi+1)` the constant 0; a task whose DECLARED window lies inside [a_i, t] is a constant and
+is folded into the right-hand side, gcc's `cconst`). Consequences:
+
+- **no `o_it`, no reification rows, no direct encoding**: zero Booleans where std's
+  decomposition spends n*H of them plus three rows each;
+- a row is posted only for a t where the tasks that MAY cover it (by declared windows) carry
+  more than `cap`; any other row is satisfied by every assignment and no derivation would cite
+  it. So the `.opb` holds <= H rows of <= 2n literals per call -- for `2008_rcpsp`, <= 684 rows;
+- the ladder is in the `.opb` already (D-0031) and the derivation cites it, as gcc's does.
+
+### 3. The proof story, worked against the checker
+
+**Time-table filtering.** Task i's COMPULSORY PART is `[hi(s_i), lo(s_i) + d_i - 1]`: at any
+t in it, i covers t whatever it does. Let `C_t` be the resource of the tasks other than j whose
+compulsory part contains t. If `C_t + r_j > cap`, j cannot cover t: `s_j <= t - d_j \/
+s_j >= t + 1`; when `lo(s_j)` is in `[t - d_j + 1, t]` the first disjunct is false and the push
+is `lo(s_j) := t + 1` (the upper push is its mirror). The sweep for j walks t from `lo(s_j)`
+over `[lo(s_j), lo(s_j) + d_j - 1]` and pushes at the first overloaded t; the propagator loops
+to a fixpoint, so pushes chain.
+
+**The derivation is gcc's rule A with a coefficient per task.** In `>=` form the row at t is
+`- sum_i r_i I_i >= - cap`. Then:
+
+1. for each compulsory task i (other than j): add `r_i` times its at-least-one `I_i >= 1` --
+   its two bound facts walked onto `a_i'` and `t+1` by ladder chains, gcc's `alo_summands`;
+   root bounds are `Defining`, a decision's are left in the row and carried by the Reason
+   (D-0064);
+2. for every other task k: add `r_k` times `I_k >= 0`, which is FREE -- the rung chain from
+   `a_k'` to `b_k'+1`, gcc's `drop_summands`;
+3. what is left is `- r_j I_j >= C_t - cap`, i.e. `r_j ~s_j_ge_(a_j') + r_j s_j_ge_(t+1) >=
+   C_t - cap + r_j`; one division by `r_j` rounds the degree to 1 exactly when
+   `C_t + r_j > cap`, which is the test the propagator made;
+4. j's own lower bound fact, walked down to `a_j'`, cancels the first literal; what remains is
+   `s_j_ge_(t+1)`, then D-0010's ladder lift (gcc's `ladder_lift`) puts the bound in the
+   currency other propagators sum against.
+
+That is `Combine` over `Model_row` (the capacity row, the rungs), `Defining` and `Clause`
+(bound facts) and a divisor -- **no new `Explanation` constructor** (D-0044's bet unspent).
+
+**Overload is reported the way gcc reports |H| > cap.** If the compulsory parts alone exceed cap
+at t, one compulsory task j is pushed out of t (`lo := t + 1`, past its own `hi`), with j left
+out of `C_t` -- the same derivation, which is then an emptying push. Its residue `s_j_ge_(t+1)`
+is closed by j's own upper bound fact (gcc's "one more line"), so [Store.apply]'s `Failed` arm
+pairs it with a derivation and no `rup` conflict line claims a counting argument (I-X10, D-0040).
+
+**The worked example, run on VeriPB 3.0.2.** Four tasks, `cap = 2`, `s_A in 0..4 (d 3, r 2)`,
+`s_B, s_C in 0..4 (d 2, r 1)`, `s_D in 0..6 (d 2, r 1)`, and three model rows standing for
+whatever set the bounds: `s_A >= 1`, `s_A <= 2`, `s_D >= 2`. A's compulsory part is [2, 3] at
+r = 2 = cap. The model is **satisfiable** (brute force: 3 solutions, e.g. A=1 B=4 C=4 D=6;
+`min s_D = 5`). The `.opb` holds the 14 rungs, the time rows t = 0..6 generated by the rule of
+section 2, and the three facts; the two rows the proof cites are
+
+    @row2 +2 sA_ge_3 -1 sB_ge_1 +1 sB_ge_3 -1 sC_ge_1 +1 sC_ge_3 -1 sD_ge_1 +1 sD_ge_3 >= 0 ;
+    @row3 -2 sA_ge_1 +2 sA_ge_4 -1 sB_ge_2 +1 sB_ge_4 -1 sC_ge_2 +1 sC_ge_4 -1 sD_ge_2 +1 sD_ge_4 >= -2 ;
+
+and the proof is
+
+    @p1 pol @row2 @fAhi 2 * + @lB1 + @lB2 + @lC1 + @lC2 + @fDlo + @lD1 + ;
+    ia +1 sD_ge_3 >= 1 : @p1 ;
+    rup +1 sD_ge_3 >= 1 ;
+    @p2 pol @row3 @fAlo 2 * + @lA3 2 * + @fAhi 2 * + @lB2 + @lB3 + @lC2 + @lC3 + @p1 + @lD2 + ;
+    ia +1 sD_ge_4 >= 1 : @p2 ;
+    rup +1 sD_ge_4 >= 1 ;
+
+-- push 1 at t = 2 (A compulsory by both facts; B and C dropped by their rungs; D's fact
+walked to `sD_ge_1`), push 2 at t = 3 citing push 1 as D's lower fact. Verdicts:
+
+| proof | 3.0.2 |
+|---|---|
+| as above | `s VERIFIED NO CONCLUSION` |
+| the bare trace line `rup +1 sD_ge_3 >= 1` with no derivation ahead | REFUSED: *"not implied by reverse unit propagation"* |
+| push 1 without A's upper fact (`@fAhi 2 *`) | REFUSED at the `ia`: *"not syntactically implied by the constraint at the hint"* |
+| push 1 without B's drop (`@lB1 @lB2`) | REFUSED at the `ia`, same wording |
+| push 1 claiming one step too far (`sD_ge_4`) | REFUSED at the `ia`, same wording |
+
+The refused bare `rup` is the I-X10 finding for this family: with two non-compulsory tasks
+(B, C) the row keeps slack 1 under unit propagation, because "an indicator is never negative" is
+the ladder, a second constraint. With ONE non-compulsory task it would propagate -- which is
+exactly how gcc's rule C lower push hid in M7-T16's scenes (D-0084). So:
+
+**Derive-ahead (I-X10, M7-T17/D-0082).** `cumulative.ml` is a **`Needs_derivation`** family;
+every push it makes is made under `Store.deriving_ahead`, so `Trace.derive_ahead` writes the
+`pol` before the trace line. A lane must have at least two non-compulsory tasks in some
+pushing row, or it cannot tell a derived line from a lucky `rup`; and a lane settled at the
+root proves nothing (M7-T16 lesson 3) -- `cumulative_sat.fzn` searches with first guesses wrong.
+
+### 4. Consistency level
+
+**`Checking`.** Time-table filtering is not bounds consistency for `cumulative` (bounds
+consistency is NP-hard for it), and it is not even idempotent in one sweep -- the propagator
+loops to its own fixpoint, and that fixpoint is "no task overlaps an overloaded point of the
+compulsory profile at its current bounds", nothing stronger. What `Checking` obliges (D-0059,
+SPEC 3.2) it does deliver: with every start fixed, every task's compulsory part is its whole
+interval, so an overload at any t is a profile of fixed tasks exceeding cap and is reported.
+The header says what is implemented; the tag says what is proved.
+
+### 5. Scope: what is in deliverable 2 and what is not
+
+- **In**: `cumulative(s, d, r, cap)` with `d`, `r`, `cap` FIXED and `r_i, d_i >= 0`, every
+  start a variable (a fixed start is the one-value variable, D-0058 territory, and folds);
+  `disjunctive(s, d)` and `disjunctive_strict(s, d)` with fixed durations as `cap = 1`,
+  `r_i = 1` -- one propagator, one `Model` constructor. `disjunctive_strict` is routed only when
+  every duration is >= 1 (a zero-duration task is still constrained under strict, and time-table
+  ignores it); `disjunctive` with a zero duration is exactly cumulative's semantics (std's own
+  `Tasks` filter drops `d = 0`).
+- **Out, and said so**: energetic reasoning, edge-finding, not-first/not-last, detectable
+  precedences -- a later row each. Variable resources, durations or capacity (22 models): the
+  library falls back to std's decomposition with an `is_fixed` test, so nothing is lost; a
+  variable CAPACITY is the cheapest next step (its ladder enters the row as gcc's count does).
+  Task-based instances (H > 5000): the rows are H per call, and H that large is the width wall.
+- **A strength note on disjunctive.** For `cap = 1` the pairwise decomposition propagates
+  precedences that time-table alone does not see before compulsory parts appear. Routing
+  disjunctive to the propagator trades that strength for n^2 fewer reified disjunctions; it is
+  measured on the lanes and recorded in the M4-T10 handoff rather than assumed.
+
+### 6. GO
+
+**GO for deliverable 2**, on three grounds: (i) the derivation is `Combine` over rows the
+`.opb` can hold without any new variable, and the checker accepts it and refuses its four
+mutations; (ii) the machinery is gcc's (alo/drop/ladder-lift/derive-ahead), already shipped and
+measured; (iii) 18 corpus models reach it, 14 of them inside the width wall, with today's
+decomposition costing n*H reified Booleans the new rows do not.
+
+### D-0096 addendum (same day): what deliverable 2 measured, and the one request it depends on
+
+**The hand example on the updated checker.** Re-run on the checker of record after its
+2026-10-02 update (Rust source d5644ca4, still "3.0.2"): the same five verdicts. Rejections
+now read "Checking error at <file>:<line>", and the RUP sentence is longer but still contains
+"not implied by reverse unit propagation (RUP) from core and derived database", which is what
+test/unit/test_prop.ml and test_trace.ml match.
+
+**Four defects found by running it, all fixed in `cumulative.ml` (my file):**
+
+1. **Exponential reasons.** The first draft copied gcc's habit of appending each bound's
+   SUPPORT reason to a push's facts. Time-table pushes rest on earlier pushes of the same
+   instance, so the copies compounded: a six-task unit-capacity scene (horizon 8) spent over
+   5 s on eleven nodes. Not needed here (no `fact_summand` clause is ever built); removed,
+   0.075 s for the whole 239-node refutation.
+2. **A quadratic ladder lift.** gcc's D-0010 lift cites the chain k -> b for every rung under
+   the bound: O(w^2) citations in one line. On 2008_rcpsp (start widths ~160) that was
+   553 750 pol lines averaging 5.7 KB, 3.17 GB of a 3.37 GB proof. Rewritten as one unit per
+   rung summed once: O(w), the same statement. **gcc.ml has the same lift** and the same
+   cost at width; not changed (not this row's file).
+3. **Over-wide reasons.** Naming both bounds of every task in the row made every nogood as
+   long as the row. The non-compulsory tasks' clearing reads no bound, so it is now a
+   sub-derivation and the reason names only the compulsory tasks and the target.
+4. **Unlifted reasons.** A decision's bound is now named at its WINDOW literal
+   (`s_i >= t - d_i + 1`, `s_i <= t`), Schutt et al.'s pointwise explanation, rather than at
+   its current value; a root bound is still walked to and cancelled.
+
+**The defect that is NOT in my files, and that decides whether this row is a win.** An
+overload is reported, as alldiff and gcc report theirs, as a push that empties a domain, so
+`Store.apply`'s `Failed` arm pairs it with `Reason.none` -- and with no facts,
+`Learn.at_conflict` has nothing to resolve: **1UIP learning never runs on a cumulative (or
+alldiff, or gcc) conflict.** On 2008_rcpsp the committed propagator therefore learned 3 clauses
+in 30 591 conflicts and lost to the decomposition it replaces. The cure is a conflict that
+carries its facts AND puts its derivation ahead of `rup ~facts >= 1` (which is a counting
+argument, not RUP): a `c_ahead` field on `Store.conflict`, stamped from `deriving_ahead`
+exactly as `entry.ahead` is, and three lines in `Trace.conflict_line` that emit the
+derivation first when it is set. `store.ml` and `trace.ml` are not this row's; the change is
+filed as `docs/requests/M4-T10-conflict-learning.patch` together with the 12-line
+`cumulative.ml` hunk that uses it.
+
+**Corpus trials on fataepyc-07** (280 s search limit, veripb 900 s, the w35 data file; `main`
+is the node's main checkout at 5c299cb; `branch` is this branch's HEAD with the front-end
+arms applied; `+learn` adds the conflict-learning patch):
+
+| instance | main | branch | branch + learn |
+|---|---|---|---|
+| 2008_rcpsp | **optimal 53** in 13.0 s, 246 nodes; .opb 87 MB, .pbp 17.8 MB; VERIFIED BOUNDS | limit, incumbent 54, 225k nodes; .opb 1.4 MB, .pbp 2.8 GB; VERIFIED | **optimal 53 in 0.6 s**, 238 nodes; .opb 1.4 MB, .pbp 5.3 MB; VERIFIED BOUNDS |
+| 2010_rcpsp_max | limit, 95, 10.4k nodes; .pbp 174 MB; **veripb > 900 s** | limit, 95; .pbp 2.4 GB; VERIFIED | limit, 95, 14.6k nodes; .opb 6.9 MB (vs 69 MB), .pbp 818 MB; **VERIFIED** |
+| 2013_rcpsp | limit, 78, 8.5k nodes; **veripb > 900 s** | limit, 78; .pbp 2.4 GB; VERIFIED | limit, 78, 14.5k nodes; .opb 1.1 MB (vs 110 MB), .pbp 328 MB; **VERIFIED** |
+| 2011_cyclic-rcpsp | limit, 540, 3.9k nodes; VERIFIED | limit, 542 | limit, 540, 4.9k nodes; VERIFIED |
+| 2017_rcpsp-wet | limit, 220, 4.4k nodes; VERIFIED | limit, 220 | limit, 220, 5.0k nodes; VERIFIED |
+| 2023_vrplc | UNKNOWN; VERIFIED NO CONCLUSION | same | same |
+
+Every proof of every variant that finished checking was accepted. The `.fzn` of 2008_rcpsp is
+8.3 KB instead of 3.6 MB (zero Booleans instead of 14 328).
+
+**Recommendation for the merge.** Grant the front-end patch AND the conflict-learning patch
+together. Without the second, routing `fzn_cumulative` to the propagator makes 2008_rcpsp
+WORSE (optimal-and-verified becomes a limit at 54); with it, 2008_rcpsp is 20x faster and two
+TIMEOUT-CHECK instances become checkable. If the conflict-learning patch is refused, the
+mznlib routing should not merge either -- say so rather than ship the regression. The patch
+also gives alldiff and gcc conflicts something to learn from, but they would have to opt in
+(report their pigeonhole with facts under `deriving_ahead`); that is not measured here.
