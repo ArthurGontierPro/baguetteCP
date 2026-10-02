@@ -94,11 +94,48 @@ type instance = {
   inst_row : Store.t -> pb_row option;
       (* M2-L6. See [pb_row] above. [pack] defaults it to "no row", so a propagator
          family that has not been taught its own row is not silently credited with one. *)
+  inst_idempotent : bool;
+      (* M2-T6. The CLAIM that one call of [run] reaches this instance's own fixpoint:
+         run it again straight after, with nothing else having moved, and it prunes
+         nothing and does not fail. [Engine] uses it to skip re-waking an instance off
+         its own prunings (GCS's self-wake veto), and only HONOURS it when the scope
+         has no aliased variable -- see [Engine.honours_claim]. A wrong claim is
+         invisible in the answer and in the proof and visible only in pruning lost
+         (GCS #889: 767 -> 1 089 375 nodes), so under BAGUETTE_DEBUG every honoured
+         claim is re-run and checked at the moment it is relied on
+         ([Engine.check_claim]). The default is [false]: an instance that has not
+         stated the claim is re-woken, which is never unsound, only slower. *)
 }
 
 let no_row : Store.t -> pb_row option = fun _ -> None
 
-let pack (type a) ?(row = no_row) ~id (module P : S with type t = a) (p : a) : instance =
+(* M2-T6. Which families make the single-call idempotence claim, by the [name] they are
+   packed under, until the packing sites pass [~idempotent] themselves.
+
+   ONLY [Linear] and its two thin faces, and the argument is [linear.ml]'s own header
+   (lines 22-29): the slack is computed once from every term's MINIMUM contribution, the
+   push on term i reads only the other terms' minima, and tightening x_i's upper bound
+   (a_i > 0) or lower bound (a_i < 0) never moves x_i's own minimum -- so after one pass
+   no term's bound can move again. That argument is about DISTINCT variables; with one
+   variable in two terms of opposite sign, tightening it through one term moves the
+   other term's minimum. That is the aliased-scope case, and [Engine] refuses the claim
+   for it rather than trusting this table.
+
+   Every `int_lin_le` instance in a compiled model is packed under that name
+   ([Compile.pack_linear], both halves of an `int_lin_eq` included). The arithmetic rows
+   ([Arith.Times_row] and friends) are [Linear.t] too and would qualify, but they share
+   their names with the arithmetic guard faces, which are reifications and do not; a
+   name table cannot tell them apart, so they are left unclaimed, which is the safe side.
+   [Pb] (a learned row over order LITERALS, several of which may be rungs of one
+   variable's ladder -- aliasing by construction), [Ne], the clause family, [Reif],
+   [Alldiff] (two stages, the second deliberately not claiming), [Gcc], [Element] and
+   [Bool2int] make no claim. A name added here is a claim made for every instance packed
+   under it; prove it in the family's header first. *)
+let idempotent_families = [ "int_lin_le"; "int_le"; "int_lt" ]
+let claims_idempotence name = List.mem name idempotent_families
+
+let pack (type a) ?(row = no_row) ?idempotent ~id (module P : S with type t = a) (p : a) :
+    instance =
   {
     id;
     inst_name = P.name;
@@ -106,4 +143,6 @@ let pack (type a) ?(row = no_row) ~id (module P : S with type t = a) (p : a) : i
     inst_vars = P.vars p;
     run = (fun store -> P.propagate p store);
     inst_row = row;
+    inst_idempotent =
+      (match idempotent with Some b -> b | None -> claims_idempotence P.name);
   }

@@ -158,10 +158,14 @@ type counters = {
   mutable c_contra : int;
   mutable c_wakes : int;
   mutable c_masked : int;
+  mutable c_vetoed : int;
+      (** M2-T6 deliverable 2: self-wakes dropped because the instance's idempotence
+          claim is honoured ([honours_claim]). Counted apart from [c_masked]: a mask
+          drops a wake by KIND of change, the veto by WHO made it. *)
 }
 
 let counters_create () =
-  { c_runs = 0; c_effectful = 0; c_contra = 0; c_wakes = 0; c_masked = 0 }
+  { c_runs = 0; c_effectful = 0; c_contra = 0; c_wakes = 0; c_masked = 0; c_vetoed = 0 }
 
 (* Off unless asked for: BAGUETTE_WAKE_STATS=1 prints the counters to stderr at exit.
    stderr, not stdout, so that scripts/run_model_tests.sh's diff against
@@ -188,7 +192,44 @@ type t = {
      answer for an unknown reader is always "wake it". *)
   mutable triggers : trigger array;
   ctr : counters;  (** M2-T6: this engine's run counters, see [counters]. *)
+  mutable veto : bool array;
+      (** M2-T6: id -> whether this instance's own prunings may skip re-waking it, i.e.
+          [honours_claim]. Indexed by id like [triggers], grown by [add] like it, and an
+          id with no entry is [false]: an unknown instance is re-woken. *)
 }
+
+(* M2-T6: THE SELF-WAKE VETO, and the aliased-scope rule that guards it.
+
+   Before this, a propagator that pruned was re-queued by its own prunings -- every
+   watcher of a variable it moved, itself included -- so every effectful run of an
+   idempotent propagator was followed by one that could not possibly do anything. GCS
+   does not re-wake a propagator from its own changes when it has claimed idempotence,
+   and that is the first of its two guards this copies.
+
+   A claim ([Propagator.inst_idempotent]) is HONOURED only when the instance's scope
+   names no variable twice. That is GCS's second guard -- it downgrades claims from
+   aliased scopes at install time -- and it is not decoration: an idempotence argument
+   is an argument over distinct variables ([linear.ml]'s is: "tightening hi(x_i) never
+   moves lo(x_i)"), and once one variable stands in two places, moving it through one
+   occurrence changes what the other occurrence reads. Then the very run the veto would
+   skip is the one with something left to say. [inst_vars] is the scope as the instance
+   reports it; a duplicate there is the alias. [Compile] merges duplicate linear terms,
+   so a compiled model reaches this only through a family that keeps them, but the rule
+   is checked here, per instance, and not assumed of the front end.
+
+   A claim that is honoured but WRONG loses pruning silently -- the answer can still be
+   right and the proof still verifies, since every line written was derived correctly --
+   so it ships with [check_claim] below, in the same commit, under BAGUETTE_DEBUG. *)
+let has_alias (vars : Var.t list) =
+  let sorted = List.sort Var.compare vars in
+  let rec dup = function
+    | a :: (b :: _ as rest) -> Var.compare a b = 0 || dup rest
+    | _ -> false
+  in
+  dup sorted
+
+let honours_claim (inst : Propagator.instance) =
+  inst.Propagator.inst_idempotent && not (has_alias inst.Propagator.inst_vars)
 
 let create ?(trigger = default_trigger) (instances : Propagator.instance list) : t =
   let watchers = Hashtbl.create 64 in
@@ -211,10 +252,24 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
     (fun (inst : Propagator.instance) ->
       if inst.Propagator.id >= 0 then triggers.(inst.Propagator.id) <- trigger inst)
     instances;
-  { instances = Array.of_list instances; watchers; triggers; ctr = counters_create () }
+  let veto = Array.make (Array.length triggers) false in
+  List.iter
+    (fun (inst : Propagator.instance) ->
+      if inst.Propagator.id >= 0 then veto.(inst.Propagator.id) <- honours_claim inst)
+    instances;
+  {
+    instances = Array.of_list instances;
+    watchers;
+    triggers;
+    ctr = counters_create ();
+    veto;
+  }
 
 let n_instances t = Array.length t.instances
 let counters t = t.ctr
+
+(* Whether instance [id]'s idempotence claim is honoured by this engine. *)
+let vetoes_self t id = id >= 0 && id < Array.length t.veto && t.veto.(id)
 
 (* ------------------------------------------------- registering a LEARNED constraint *)
 
@@ -270,7 +325,12 @@ let add ?(trigger = default_trigger) (t : t) (inst : Propagator.instance) =
     let grown = Array.make (inst.Propagator.id + 1) wake_on_any in
     Array.blit t.triggers 0 grown 0 (Array.length t.triggers);
     t.triggers <- grown);
-  t.triggers.(inst.Propagator.id) <- trigger inst
+  t.triggers.(inst.Propagator.id) <- trigger inst;
+  if Array.length t.veto <= inst.Propagator.id then (
+    let grown = Array.make (inst.Propagator.id + 1) false in
+    Array.blit t.veto 0 grown 0 (Array.length t.veto);
+    t.veto <- grown);
+  t.veto.(inst.Propagator.id) <- honours_claim inst
 
 (* The variables an instance watches, or [None] if this engine has no such instance.
 
@@ -334,7 +394,12 @@ let trigger_of t id =
    - Classification is per ENTRY, not per variable: one entry is one [Domain] operation,
      so its change is a [Bound] or a [Holes] but never both, and a watcher that wants
      bounds only cannot lose a bound move that happened to be bundled with a hole. *)
-let watchers_of_new_entries t store ~since =
+let watchers_of_new_entries ?self t store ~since =
+  (* M2-T6: [self] is the instance that pushed these entries. When its claim is
+     honoured, its own id is dropped from every entry's watcher list -- a subsequence
+     again, never a reordering, for the reason the bullet above gives for the mask. *)
+  let vetoed = match self with Some id -> vetoes_self t id | None -> false in
+  let self_id = match self with Some id -> id | None -> -1 in
   let acc = ref [] in
   for i = Store.trail_length store - 1 downto since do
     let e : Store.entry = Store.trail_entry store i in
@@ -344,7 +409,8 @@ let watchers_of_new_entries t store ~since =
         let change = Domain.classify ~old:e.old ~now:e.now in
         List.iter
           (fun id ->
-            if wakes_on (trigger_of t id) change then (
+            if vetoed && id = self_id then t.ctr.c_vetoed <- t.ctr.c_vetoed + 1
+            else if wakes_on (trigger_of t id) change then (
               incr wakes;
               t.ctr.c_wakes <- t.ctr.c_wakes + 1;
               acc := id :: !acc)
@@ -483,6 +549,49 @@ let check_fixpoint (t : t) (store : Store.t) : unit =
                        (Domain.to_string e.now)
                        (Domain.change_to_string (Domain.classify ~old:e.old ~now:e.now))))))
     t.instances
+
+(* M2-T6: the CLAIM RE-CHECKER, GCS's companion to the veto ("re-runs every honoured
+   idempotence claim ... and aborts if it infers anything").
+
+   Called by [propagate] under BAGUETTE_DEBUG at the exact moment a claim is relied on:
+   an honoured instance has just returned [Fixpoint] having pruned, and the veto is
+   about to skip the re-wake its own prunings would have caused. So run it once more,
+   right now, with nothing else having moved, and require that it prunes nothing and
+   does not fail. Anything else is a wrong claim, and it raises [Not_at_fixpoint] with
+   the instance named -- the same exception as I-P2's re-run, because it is the same
+   statement made earlier and about one propagator: "this one still had something to
+   say".
+
+   [check_fixpoint] at the end of the loop would also see most wrong claims, but not
+   all of them: a later run of some other propagator can wake the claimant for an
+   unrelated reason and so cover the lost pruning up, at this node, while leaving the
+   order of the trail (and so the proof) depending on luck. Checking at the claim is the
+   only check that cannot be covered up. A re-run that prunes nothing writes nothing to
+   the trail, the reason arena or the proof, so a BAGUETTE_DEBUG run answers and proves
+   byte-identically to a plain one; the re-run is not counted in [counters]. *)
+let check_claim (inst : Propagator.instance) (store : Store.t) : unit =
+  let before = Store.trail_length store in
+  let fail what =
+    raise
+      (Not_at_fixpoint
+         (Printf.sprintf
+            "M2-T6: propagator #%d %s claims single-call idempotence, and the engine \
+             skipped re-waking it off its own prunings on the strength of that claim -- \
+             but run again at once, with nothing else changed, it %s. The claim is wrong \
+             for this instance (see Propagator.idempotent_families and the family's own \
+             header); remove it rather than this check."
+            inst.Propagator.id inst.Propagator.inst_name what))
+  in
+  match
+    Store.with_running store inst.Propagator.id (fun () -> inst.Propagator.run store)
+  with
+  | Propagator.Conflict _ -> fail "reported a CONFLICT"
+  | Propagator.Fixpoint ->
+      if Store.trail_length store > before then
+        let e : Store.entry = Store.trail_entry store before in
+        fail
+          (Printf.sprintf "pruned %s from %s to %s" (Store.name store e.var)
+             (Domain.to_string e.old) (Domain.to_string e.now))
 
 (* ============================================================ M2-T10: the consistency
    oracle
@@ -852,9 +961,10 @@ let propagate (t : t) (store : Store.t) : outcome =
           conflict := Some c
       | Propagator.Fixpoint ->
           check_attribution t inst store ~since:before ~conflict:None;
-          if Store.trail_length store > before then
-            t.ctr.c_effectful <- t.ctr.c_effectful + 1;
-          let woken = watchers_of_new_entries t store ~since:before in
+          let pruned = Store.trail_length store > before in
+          if pruned then t.ctr.c_effectful <- t.ctr.c_effectful + 1;
+          if pruned && Debug.enabled && vetoes_self t id then check_claim inst store;
+          let woken = watchers_of_new_entries ~self:id t store ~since:before in
           List.iter enqueue woken
     done;
     match !conflict with

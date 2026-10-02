@@ -1563,11 +1563,11 @@ let test_hole_split_with_settled_ancestor () =
 
 (* Two propagators on disjoint variables: [x <= 2] over x in 0..4 prunes on its first
    run (EFFECTFUL), [y <= 9] over y in 0..4 never prunes. The queue is seeded with both,
-   so the first pass is one effectful run and one empty one; [x <= 2]'s own pruning of
-   x then wakes it once more (the self-wake M2-T6's second deliverable is about), and
-   that run is empty too. [expected_runs] is the one number the wake discipline is
-   allowed to move. *)
-let counters_expected_runs = 3
+   so the first pass is one effectful run and one empty one. Before M2-T6's veto,
+   [x <= 2]'s own pruning of x then woke it once more, for a third, empty run; Linear's
+   idempotence claim is honoured now (no aliased variable), so that wake is VETOED and
+   counted as such, and the count is 2. *)
+let counters_expected_runs = 2
 
 let test_counters_effectful_and_not () =
   let store = mk_store [ ("x", 0, 4); ("y", 0, 4) ] in
@@ -1591,6 +1591,10 @@ let test_counters_effectful_and_not () =
        c.Engine.c_effectful)
     (c.Engine.c_effectful = 1);
   check "counters: no run contradicted" (c.Engine.c_contra = 0);
+  check
+    (Printf.sprintf "counters: exactly one self-wake was vetoed (got %d)"
+       c.Engine.c_vetoed)
+    (c.Engine.c_vetoed = 1);
   (* The audit does not count: re-running every propagator for I-P2 is not a run of the
      fixpoint loop, and a BAGUETTE_DEBUG run must report the same figures. *)
   Engine.check_fixpoint engine store;
@@ -1610,6 +1614,124 @@ let test_counters_contradicting () =
   check "counters: the failing run is one run, contradicting, not effectful"
     (c.Engine.c_runs = 1 && c.Engine.c_contra = 1 && c.Engine.c_effectful = 0)
 
+(* ===================================================================== *)
+(* M2-T6 deliverable 2: the self-wake veto, the aliased-scope rule and    *)
+(* the claim re-checker.                                                  *)
+(* ===================================================================== *)
+
+(* One variable in two terms of opposite sign: 2x - x <= 2 over x in 0..4, i.e. x <= 2.
+   One Linear pass gets only to x <= 3 (the -x term's minimum moves when x's upper
+   bound does), a second to x <= 2. Linear claims idempotence by family; the engine must
+   REFUSE the claim here, re-wake the instance off its own pruning, and reach x <= 2. *)
+let test_aliased_scope_refuses_the_claim () =
+  let store = mk_store [ ("x", 0, 4) ] in
+  let lin = Linear.make ~row_id:(unrendered_row ()) store [ (2, var 0); (-1, var 0) ] 2 in
+  let inst = pack_linear 0 lin in
+  check "alias: Linear's family claims idempotence" inst.Propagator.inst_idempotent;
+  check "alias: and the engine refuses a claim over an aliased scope"
+    (not (Engine.honours_claim inst));
+  let engine = Engine.create [ inst ] in
+  check "alias: so the instance is not vetoed" (not (Engine.vetoes_self engine 0));
+  (match Engine.propagate engine store with
+  | Engine.Conflict _ ->
+      incr failures;
+      Printf.printf "FAIL alias: unexpected conflict\n"
+  | Engine.Fixpoint -> ());
+  check
+    (Printf.sprintf "alias: the re-wakes reach x <= 2 (hi = %d)"
+       (Domain.hi (Store.get store (var 0))))
+    (Domain.hi (Store.get store (var 0)) = 2);
+  check "alias: and that is a genuine fixpoint (I-P2)"
+    (raises_not_at_fixpoint engine store = None);
+  (* The control: the SAME scene with the alias rule defeated by hand, by reporting a
+     de-aliased scope ([inst_vars] = [x] once) so that the claim is honoured. The second
+     pass is skipped and the pruning to x <= 2 is lost -- the failure the rule exists to
+     prevent, and one only the I-P2 re-run (or, under BAGUETTE_DEBUG, the claim
+     re-checker) can see. *)
+  let store' = mk_store [ ("x", 0, 4) ] in
+  let lin' =
+    Linear.make ~row_id:(unrendered_row ()) store' [ (2, var 0); (-1, var 0) ] 2
+  in
+  let forced = { (pack_linear 0 lin') with Propagator.inst_vars = [ var 0 ] } in
+  let engine' = Engine.create [ forced ] in
+  check "alias control: a de-aliased scope IS vetoed" (Engine.vetoes_self engine' 0);
+  match Engine.propagate engine' store' with
+  | exception Engine.Not_at_fixpoint msg ->
+      check "alias control: under BAGUETTE_DEBUG the claim re-checker refuses it"
+        (contains "M2-T6" msg && contains "int_lin_le" msg)
+  | Engine.Conflict _ ->
+      incr failures;
+      Printf.printf "FAIL alias control: unexpected conflict\n"
+  | Engine.Fixpoint ->
+      check "alias control: without the rule, the pruning to x <= 2 is LOST"
+        (Domain.hi (Store.get store' (var 0)) = 3);
+      check "alias control: and the I-P2 re-run sees it"
+        (raises_not_at_fixpoint engine' store' <> None)
+
+(* A deliberately WRONG claim: [Step_down] moves hi(x) down by one per call towards 1,
+   so it needs several calls, and is packed claiming it needs one. GCS #889 is this
+   shape. The claim re-checker must name it; the plain engine must visibly stop short. *)
+module Step_down = struct
+  type t = Var.t
+
+  let name = "step_down"
+  let consistency = Propagator.Bounds
+  let vars x = [ x ]
+
+  let propagate x store =
+    let d = Store.get store x in
+    if Domain.hi d <= 1 then Propagator.Fixpoint
+    else
+      match Store.set_hi store x (Domain.hi d - 1) no_facts_placeholder with
+      | Store.Conflict e -> Propagator.Conflict e
+      | Store.Changed | Store.Unchanged -> Propagator.Fixpoint
+end
+
+let test_wrong_claim_is_caught () =
+  let store = mk_store [ ("x", 0, 4) ] in
+  let inst =
+    Propagator.pack ~idempotent:true ~id:0
+      (module Step_down : Propagator.S with type t = Step_down.t)
+      (var 0)
+  in
+  let engine = Engine.create [ inst ] in
+  check "wrong claim: an unaliased claim is honoured" (Engine.vetoes_self engine 0);
+  match Engine.propagate engine store with
+  | exception Engine.Not_at_fixpoint msg ->
+      check "wrong claim: under BAGUETTE_DEBUG, propagate refuses at the claim itself"
+        (contains "M2-T6" msg && contains "step_down" msg)
+  | Engine.Conflict _ ->
+      incr failures;
+      Printf.printf "FAIL wrong claim: unexpected conflict\n"
+  | Engine.Fixpoint ->
+      check "wrong claim: the vetoed engine stops after one step (hi = 3)"
+        (Domain.hi (Store.get store (var 0)) = 3);
+      (match Engine.check_claim inst store with
+      | () ->
+          incr failures;
+          Printf.printf "FAIL wrong claim: Engine.check_claim did not fire\n"
+      | exception Engine.Not_at_fixpoint msg ->
+          check "wrong claim: Engine.check_claim names the instance"
+            (contains "M2-T6" msg && contains "step_down" msg));
+      ();
+      (* The same propagator WITHOUT the claim is simply re-woken until it settles. *)
+      let store' = mk_store [ ("x", 0, 4) ] in
+      let honest =
+        Propagator.pack ~id:0
+          (module Step_down : Propagator.S with type t = Step_down.t)
+          (var 0)
+      in
+      let engine' = Engine.create [ honest ] in
+      (match Engine.propagate engine' store' with
+      | Engine.Conflict _ ->
+          incr failures;
+          Printf.printf "FAIL wrong claim control: unexpected conflict\n"
+      | Engine.Fixpoint -> ());
+      check "wrong claim control: unclaimed, it is re-woken down to hi = 1"
+        (Domain.hi (Store.get store' (var 0)) = 1);
+      let c = Engine.counters engine' in
+      check "wrong claim control: and nothing was vetoed" (c.Engine.c_vetoed = 0)
+
 let () =
   test_fixpoint_tightens_and_settles ();
   test_conflict_carries_explanation ();
@@ -1626,6 +1748,8 @@ let () =
   test_check_fixpoint_is_quiet_on_real_fixpoints ();
   test_counters_effectful_and_not ();
   test_counters_contradicting ();
+  test_aliased_scope_refuses_the_claim ();
+  test_wrong_claim_is_caught ();
   test_search_finds_and_verifies_a_solution ();
   test_search_exhausts_and_reports_unsat ();
   test_audit_empty_at_conclusion ();
