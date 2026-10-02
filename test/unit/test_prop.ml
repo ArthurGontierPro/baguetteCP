@@ -5183,6 +5183,180 @@ let test_alldiff_filtering () =
   check "alldiff (a): refutes exactly the scopes with no distinct assignment"
     (!bad_refute = [])
 
+(* ------------------------------------------- global_cardinality, M7-T24 (D-0099) *)
+
+(* gcc had no brute-force sweep here, which I-P1 asks of every propagator; M7-T24 adds
+   one together with the two single-value rules it is mostly about.  Every scope of two
+   or three variables over sub-intervals of 1..3, cover [2] or [1, 2], constant counts
+   (the cases a routed one-value count produces, D-0097) and one count VARIABLE.  At the
+   root fixpoint every solution must survive VALUE BY VALUE -- the new rule (a) punches
+   interior holes, so a box comparison would not see an unsound hole -- and a refutation
+   must mean there is no solution.  Then the two rules are asserted to FIRE: a sweep that
+   only checks soundness passes for a propagator that does nothing. *)
+let gcc_root_domains src names =
+  with_proof_sink (compile_src src) @@ fun t ->
+  let store = t.Compile.store in
+  match Engine.propagate t.Compile.engine store with
+  | Engine.Conflict _ -> None
+  | Engine.Fixpoint ->
+      Some
+        (List.map
+           (fun n ->
+             match Store.var_named store n with
+             | None -> invalid_arg ("gcc sweep: no variable " ^ n)
+             | Some v -> Store.get store v)
+           names)
+
+let gcc_src ~boxes ~cover ~counts =
+  let decls =
+    List.mapi (fun i (lo, hi) -> Printf.sprintf "var %d..%d: v%d;" lo hi i) boxes
+  in
+  let names = List.mapi (fun i _ -> Printf.sprintf "v%d" i) boxes in
+  let ints l = String.concat "," (List.map string_of_int l) in
+  String.concat "\n" decls
+  ^ Printf.sprintf
+      "\nconstraint fzn_global_cardinality([%s],[%s],[%s]);\nsolve satisfy;\n"
+      (String.concat "," names) (ints cover) counts
+
+(* Every assignment of the box satisfying the cardinalities, [counts] given as the
+   allowed interval per cover value. *)
+let gcc_solutions ~boxes ~cover ~allowed =
+  let arr = Array.of_list boxes and n = List.length boxes in
+  let cur = Array.make n 0 and sols = ref [] in
+  let rec go i =
+    if i = n then (
+      let ok =
+        List.for_all2
+          (fun v (lo, hi) ->
+            let k = Array.fold_left (fun a x -> if x = v then a + 1 else a) 0 cur in
+            lo <= k && k <= hi)
+          cover allowed
+      in
+      if ok then sols := Array.copy cur :: !sols)
+    else
+      let lo, hi = arr.(i) in
+      for v = lo to hi do
+        cur.(i) <- v;
+        go (i + 1)
+      done
+  in
+  go 0;
+  !sols
+
+let test_gcc_sweep () =
+  let bad_sound = ref [] and bad_refute = ref [] and scenes = ref 0 in
+  let scene ~boxes ~cover ~counts ~allowed =
+    incr scenes;
+    let names = List.mapi (fun i _ -> Printf.sprintf "v%d" i) boxes in
+    let src = gcc_src ~boxes ~cover ~counts in
+    let sols = gcc_solutions ~boxes ~cover ~allowed in
+    match gcc_root_domains src names with
+    | None -> if sols <> [] then bad_refute := src :: !bad_refute
+    | Some doms ->
+        if
+          not
+            (List.for_all
+               (fun sol ->
+                 List.for_all2 (fun d v -> Domain.mem d v) doms (Array.to_list sol))
+               sols)
+        then bad_sound := src :: !bad_sound
+  in
+  let intervals =
+    List.concat_map (fun lo -> List.init (4 - lo) (fun k -> (lo, lo + k))) [ 1; 2; 3 ]
+  in
+  let scopes =
+    List.concat_map (fun a -> List.map (fun b -> [ a; b ]) intervals) intervals
+    @ List.concat_map
+        (fun a ->
+          List.concat_map (fun b -> List.map (fun c -> [ a; b; c ]) intervals) intervals)
+        intervals
+  in
+  List.iter
+    (fun boxes ->
+      for k = 0 to 3 do
+        scene ~boxes ~cover:[ 2 ] ~counts:(string_of_int k) ~allowed:[ (k, k) ]
+      done;
+      List.iter
+        (fun (k1, k2) ->
+          scene ~boxes ~cover:[ 1; 2 ]
+            ~counts:(Printf.sprintf "%d,%d" k1 k2)
+            ~allowed:[ (k1, k1); (k2, k2) ])
+        [ (0, 1); (1, 1); (1, 0); (0, 2); (2, 1) ])
+    scopes;
+  (* One count variable: the forced rule reads its LOWER bound, the saturation rule its
+     upper one. *)
+  List.iter
+    (fun (boxes, (clo, chi)) ->
+      let n = List.length boxes in
+      let names = List.mapi (fun i _ -> Printf.sprintf "v%d" i) boxes in
+      let decls =
+        List.mapi (fun i (lo, hi) -> Printf.sprintf "var %d..%d: v%d;" lo hi i) boxes
+      in
+      let src =
+        String.concat "\n" decls
+        ^ Printf.sprintf
+            "\n\
+             var %d..%d: c;\n\
+             constraint fzn_global_cardinality([%s],[2],[c]);\n\
+             solve satisfy;\n"
+            clo chi (String.concat "," names)
+      in
+      incr scenes;
+      let sols = gcc_solutions ~boxes ~cover:[ 2 ] ~allowed:[ (clo, chi) ] in
+      ignore n;
+      match gcc_root_domains src names with
+      | None -> if sols <> [] then bad_refute := src :: !bad_refute
+      | Some doms ->
+          if
+            not
+              (List.for_all
+                 (fun sol ->
+                   List.for_all2 (fun d v -> Domain.mem d v) doms (Array.to_list sol))
+                 sols)
+          then bad_sound := src :: !bad_sound)
+    (List.concat_map
+       (fun boxes -> List.map (fun c -> (boxes, c)) [ (0, 1); (1, 2); (2, 3); (0, 3) ])
+       scopes);
+  let show what l =
+    if l <> [] then
+      Printf.printf "     %s (%d), first: %s\n" what (List.length l)
+        (String.escaped (List.hd l))
+  in
+  show "unsound root domains" !bad_sound;
+  show "refuted a satisfiable scope" !bad_refute;
+  check
+    (Printf.sprintf
+       "gcc (M7-T24): every solution survives the root fixpoint VALUE BY VALUE (I-P1), \
+        %d scenes"
+       !scenes)
+    (!bad_sound = []);
+  check "gcc (M7-T24): a root refutation means the scope has no solution"
+    (!bad_refute = []);
+  (* The two rules FIRE. (a): v0 is fixed to 2 and the count is 1, so 2 leaves v1 and
+     v2 as an interior hole. (b): v0 cannot take 2 and two 2s are demanded, so both
+     candidates are fixed. *)
+  (match
+     gcc_root_domains
+       (gcc_src ~boxes:[ (2, 2); (1, 3); (1, 3) ] ~cover:[ 2 ] ~counts:"1")
+       [ "v0"; "v1"; "v2" ]
+   with
+  | Some [ _; d1; d2 ] ->
+      check "gcc rule (a): a saturated value is an interior HOLE in every other variable"
+        ((not (Domain.mem d1 2))
+        && Domain.mem d1 1 && Domain.mem d1 3
+        && (not (Domain.mem d2 2))
+        && Domain.mem d2 1 && Domain.mem d2 3)
+  | _ -> check "gcc rule (a): the saturation scene reached a fixpoint" false);
+  match
+    gcc_root_domains
+      (gcc_src ~boxes:[ (3, 3); (1, 3); (1, 3) ] ~cover:[ 2 ] ~counts:"2")
+      [ "v0"; "v1"; "v2" ]
+  with
+  | Some [ _; d1; d2 ] ->
+      check "gcc rule (b): a forced value FIXES its candidates"
+        (Domain.lo d1 = 2 && Domain.hi d1 = 2 && Domain.lo d2 = 2 && Domain.hi d2 = 2)
+  | _ -> check "gcc rule (b): the forced scene reached a fixpoint" false
+
 (* ------------------------------------------------ the citation, and the wrong set *)
 
 (* The 3-in-2 pigeonhole, wired by hand so the derivation can be asked for with a Hall
@@ -6702,6 +6876,7 @@ let () =
   test_arith_oracle_agrees ();
   test_arith_cites_its_own_row ();
   test_alldiff_filtering ();
+  test_gcc_sweep ();
   test_alldiff_conclusion ();
   test_alldiff_above_level_zero ();
   test_alldiff_cites_root_bound_under_decision ();
