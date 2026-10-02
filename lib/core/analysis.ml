@@ -395,43 +395,79 @@ let add_node nodes n =
   if !found then out else out @ [ n ]
 
 (* [add_node] above is the SPECIFICATION of the frontier merge and stays as the reference
-   a test compares against; [merge_nodes] is what [analyse] runs (M6-T16, D-0092).
+   a test compares against; [Frontier] is what [analyse] runs (M6-T16, D-0092).
 
    [List.fold_left (fun acc f -> add_node acc (mk f)) rest facts] is O(|rest| * |facts|)
    per resolution step: every [add_node] maps the whole frontier and then appends with
-   [@]. On 2014_mario that was the top of the profile after M6-T15 (D-0090). This is the
-   same sequence in O(|rest| + |facts|):
+   [@]. On 2014_mario that was the top of the profile after M6-T15 (D-0090). [Frontier]
+   computes the same sequence with one hash lookup per incoming fact:
 
-     - every slot of [rest] keeps its position, holding the [stronger] of itself and every
-       later node for that slot, folded in arrival order -- exactly what repeated
-       [add_node] computes, including the tie: [stronger m n] keeps the EXISTING [m] when
-       the values are equal;
-     - a node whose slot is new is appended after all of [rest], in first-arrival order;
-       later nodes for that slot merge into it in place and do not move it. FIRST
-       OCCURRENCE WINS the position; [stronger] decides the content.
+     - the frontier is a list of CELLS in frontier order, and a per-bound table from the
+       variable's name to its cell, so "is this slot already in the frontier?" is O(1);
+     - a fact whose slot is present merges INTO the cell, in place, as the [stronger] of
+       the two -- and on a tie [stronger m n] keeps the EXISTING [m], exactly as
+       [add_node] does;
+     - a fact whose slot is new gets a new cell appended after every existing one, in
+       first-arrival order; later facts for that slot merge into it and do not move it.
+       FIRST OCCURRENCE WINS the position; [stronger] decides the content;
+     - [remove] (the node a resolution step expands) drops the cell AND its table entry,
+       so a later fact on that slot is a new slot appended at the end -- which is what
+       [List.filter] followed by [add_node] did.
 
-   It relies on [rest] holding at most one node per slot, which every frontier
-   [analyse] builds does (each is the output of this merge, or a [List.filter] of one).
-   [mk] is applied to [facts] in order, once each, so [mk_node]'s counters and its
+   A first version (in this same row) rebuilt a polymorphic [(string * bool) Hashtbl]
+   from the whole frontier at every step. It was byte-identical and 1.36x on mario, and
+   0.91x on 2023_chessboard: [caml_hash] and [compare_val] on the tuple keys, re-hashing
+   every frontier node every step, cost more than the short [String.equal] scans they
+   replaced. The table here persists across the walk, is keyed on the bare name with a
+   monomorphic [String] table per bound direction, and hashes only incoming facts.
+
+   [mk] is applied to the facts in order, once each, so [mk_node]'s counters and its
    [Bad] exception fire in the same order as before. *)
-let merge_nodes rest facts ~mk =
-  let key n = (Reason.fact_owner n.fact, Reason.fact_is_lower n.fact) in
-  let tbl = Hashtbl.create ((2 * (List.length rest + List.length facts)) + 1) in
-  List.iter (fun m -> Hashtbl.replace tbl (key m) m) rest;
-  let fresh = ref [] in
-  List.iter
-    (fun f ->
-      let n = mk f in
-      let k = key n in
-      match Hashtbl.find_opt tbl k with
-      | Some m -> Hashtbl.replace tbl k (stronger m n)
-      | None ->
-          Hashtbl.replace tbl k n;
-          fresh := k :: !fresh)
-    facts;
-  List.rev_append
-    (List.rev_map (fun m -> Hashtbl.find tbl (key m)) rest)
-    (List.rev_map (fun k -> Hashtbl.find tbl k) !fresh)
+module Frontier = struct
+  module H = Hashtbl.Make (struct
+    type t = string
+
+    let equal = String.equal
+    let hash (s : string) = Hashtbl.hash s
+  end)
+
+  type cell = { mutable cur : node }
+  type t = { lo : cell H.t; hi : cell H.t; mutable cells : cell list }
+
+  let create () = { lo = H.create 64; hi = H.create 64; cells = [] }
+  let table f n = if Reason.fact_is_lower n.fact then f.lo else f.hi
+  let nodes f = List.map (fun c -> c.cur) f.cells
+
+  let add_all f facts ~mk =
+    let fresh = ref [] in
+    List.iter
+      (fun x ->
+        let n = mk x in
+        let tbl = table f n and name = Reason.fact_owner n.fact in
+        match H.find_opt tbl name with
+        | Some c -> c.cur <- stronger c.cur n
+        | None ->
+            let c = { cur = n } in
+            H.replace tbl name c;
+            fresh := c :: !fresh)
+      facts;
+    if !fresh <> [] then f.cells <- f.cells @ List.rev !fresh
+
+  (* Drop [n]'s cell, as [analyse]'s [List.filter] on slot AND value did. The frontier
+     holds one cell per slot, so this removes [n]'s slot whenever [n] is in it. *)
+  let remove f n =
+    let hit = ref false in
+    f.cells <-
+      List.filter
+        (fun c ->
+          let m = c.cur in
+          if same_slot m n && fact_value m.fact = fact_value n.fact then (
+            hit := true;
+            false)
+          else true)
+        f.cells;
+    if !hit then H.remove (table f n) (Reason.fact_owner n.fact)
+end
 
 (* An insertion-ordered set of ints: [to_list] is the elements in FIRST-OCCURRENCE order,
    which is what [if not (List.mem p l) then l @ [ p ]] produced, in O(1) per [add]
@@ -522,7 +558,9 @@ let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
         else match acc with Some m when m.support >= n.support -> acc | _ -> Some n)
       None nodes
   in
-  let rec loop nodes =
+  let frontier = Frontier.create () in
+  let rec loop () =
+    let nodes = Frontier.nodes frontier in
     if criterion.stop { v_nodes = nodes; v_conflict_level = conflict_level } then nodes
     else
       match best_expandable nodes with
@@ -533,15 +571,12 @@ let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
           let at = n.support in
           let e = Store.trail_entry store at in
           add_antecedent e.Store.prop;
-          let rest =
-            List.filter
-              (fun m -> not (same_slot m n && fact_value m.fact = fact_value n.fact))
-              nodes
-          in
+          Frontier.remove frontier n;
           let added =
             e.Store.reason @ hole_facts e ~at ~is_lower:(Reason.fact_is_lower n.fact)
           in
-          loop (merge_nodes rest added ~mk:(mk_node ~before:at))
+          Frontier.add_all frontier added ~mk:(mk_node ~before:at);
+          loop ()
   in
   try
     if c.Store.c_prop <> Store.no_prop && vars_of c.Store.c_prop = None then
@@ -550,10 +585,9 @@ let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
            (Misattributed
               { at = -1; claimed = c.Store.c_prop; var = "<the conflicting row>" }));
     add_antecedent c.Store.c_prop;
-    let start =
-      merge_nodes [] c.Store.c_reason ~mk:(mk_node ~before:(Store.trail_length store))
-    in
-    let nodes = loop start in
+    Frontier.add_all frontier c.Store.c_reason
+      ~mk:(mk_node ~before:(Store.trail_length store));
+    let nodes = loop () in
     let stopped = criterion.stop { v_nodes = nodes; v_conflict_level = conflict_level } in
     let factless =
       List.filter_map

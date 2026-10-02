@@ -644,12 +644,13 @@ let test_lits_are_the_negated_cut () =
     = "~b_ge_3 ~e_ge_3 e_ge_4")
 
 (* M6-T16 (D-0092). [analyse] no longer folds [add_node] (map + [@] per fact) or builds
-   its antecedents with [List.mem]/[@]; it runs [merge_nodes] and [Uniq]. The contract is
+   its antecedents with [List.mem]/[@]; it runs [Frontier] and [Uniq]. The contract is
    that every consumer sees the SAME SEQUENCE, so each is compared against the old shape,
    rebuilt here literally, on a hand-built frontier that exercises every case: a merge
    that strengthens in place, a merge that keeps the existing node on a tie and on a
    weaker fact, a new slot, a new slot merged again later (it must not move), both bounds
-   of one variable as distinct slots, and an empty [rest]. *)
+   of one variable as distinct slots, an empty [rest], and a resolution step's removal
+   followed by a fact on the removed slot (it must come back at the END). *)
 let test_merge_nodes_is_the_add_node_fold () =
   let node ?(support = 0) ?(level = 0) fact =
     { Analysis.fact; level; support; implied_by = Store.no_prop; root = false }
@@ -689,8 +690,14 @@ let test_merge_nodes_is_the_add_node_fold () =
     calls := n.Analysis.support :: !calls;
     n
   in
-  let got = Analysis.merge_nodes rest incoming ~mk in
-  check "M6-T16: merge_nodes gives exactly the add_node fold's sequence"
+  let frontier_of rest ns ~mk =
+    let f = Analysis.Frontier.create () in
+    Analysis.Frontier.add_all f rest ~mk:Fun.id;
+    Analysis.Frontier.add_all f ns ~mk;
+    f
+  in
+  let got = Analysis.Frontier.nodes (frontier_of rest incoming ~mk) in
+  check "M6-T16: Frontier gives exactly the add_node fold's sequence"
     (render got = render (reference rest incoming));
   check "M6-T16: ...which is the hand-computed one (not two agreeing wrong answers)"
     (render got = "a>=4@10 b<=3@16 c>=1@3 d>=6@15 a<=7@13 e>=1@17"
@@ -700,9 +707,31 @@ let test_merge_nodes_is_the_add_node_fold () =
   check "M6-T16: mk is applied once per fact, in order"
     (List.rev !calls = List.map (fun n -> n.Analysis.support) incoming);
   check "M6-T16: from an empty frontier too (the conflict's own reason)"
-    (render (Analysis.merge_nodes [] incoming ~mk:Fun.id) = render (reference [] incoming));
+    (render (Analysis.Frontier.nodes (frontier_of [] incoming ~mk:Fun.id))
+    = render (reference [] incoming));
   check "M6-T16: and with nothing incoming the frontier is unchanged"
-    (render (Analysis.merge_nodes rest [] ~mk:Fun.id) = render rest)
+    (render (Analysis.Frontier.nodes (frontier_of rest [] ~mk:Fun.id)) = render rest);
+  (* A resolution step: expand b (now b<=3@16), then resolve onto facts that include a
+     WEAKER b and a stronger c. The old shape: filter b out, fold add_node. *)
+  let f = frontier_of rest incoming ~mk:Fun.id in
+  let before = Analysis.Frontier.nodes f in
+  let b = List.find (fun n -> Reason.fact_owner n.Analysis.fact = "b") before in
+  let step = [ le "b" 4 ~support:20; ge "c" 2 ~support:21; ge "f" 1 ~support:22 ] in
+  Analysis.Frontier.remove f b;
+  Analysis.Frontier.add_all f step ~mk:Fun.id;
+  let old_rest =
+    List.filter
+      (fun m ->
+        not
+          (Reason.fact_owner m.Analysis.fact = "b"
+          && Reason.fact_is_lower m.Analysis.fact = false
+          && Reason.fact_value m.Analysis.fact = 3))
+      before
+  in
+  check "M6-T16: a removed slot that comes back is appended at the end, as before"
+    (render (Analysis.Frontier.nodes f) = render (reference old_rest step)
+    && render (Analysis.Frontier.nodes f)
+       = "a>=4@10 c>=2@21 d>=6@15 a<=7@13 e>=1@17 b<=4@20 f>=1@22")
 
 let test_uniq_is_the_list_mem_append () =
   let seq = [ 4; 1; 4; 7; 1; 0; 9; 7; 3; 4; 0; 12 ] in
