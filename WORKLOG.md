@@ -786,6 +786,8 @@ work. The owning session picks it up.
 | **M6-T8 / D-0091**: under `BAGUETTE_DEBUG=1`, `test_learn.exe` dies in `test_i_s4_ordering`'s `b BREAK` lane (`break_i_s4 = true`) on `invariant violated: I-S4 ... ALREADY RETIRED`. That is `Search`'s own `Debug.check` CATCHING the deliberate break, which is correct; the lane assumes the flag is off. Measured fix: when `Baguette_core.Debug.enabled`, the lane asserts that `run ~config:{... break_i_s4 = true} settle_src` raises `Failure`, and otherwise it runs the existing lane unchanged. The binary is then clean: 167 ok with the flag, 169 ok without. The patch is the D-0091 handoff's. | `test/unit/test_learn.ml` | agent-debug | **CLOSED 2026-10-02** by the orchestrator at the merge: edit applied, both binaries clean with and without the flag |
 | **M6-T8 / D-0091**, for information at merge: the agreement predicate is in `lib/core/store.ml`, so the D-0026 fix had to go there. The edit is confined to `agreement_holds` and three helpers just above it (`at_root`, `root_holds`, `reverse_owners`). agent-speed4's `store.ml` hunks (entry type, `dummy_entry`, `push_entry`/`apply` position) are elsewhere and should merge without conflict. | `lib/core/store.ml` | agent-debug | FYI |
 | **M6-T16 / D-0092**: after M6-T16 mario's profile is flat (top `caml_apply2` 7.0 %, `Alldiff.go` 4.7 %, `caml_hash` 4.1 %, `compare_val` 3.6 %). The one constant-factor lead left: `Writer.wipe_level` (`lib/proof/writer.ml:727`) `Hashtbl.fold`s the WHOLE `t.tags` table and sorts it at every backtrack, and `Justify.wipe_level` (`lib/core/justify.ml:235`) folds all of `memo.by_level`. Both are generic polymorphic `Hashtbl`s (about 2.1–2.5 % inclusive each, partial DWARF unwinds). A per-level bucket would make a wipe proportional to what it deletes. This is for whoever holds `writer.ml`/`justify.ml`, with byte identity as the contract. Beyond that, the remaining work is design-level (D-0085/D-0087). | agent-speed5 | 2026-10-02 |
+| **M2-T6 / D-0094**: every-instance SEEDING is 75–85 % of propagator runs (s4 628/node, mario 1 575/node, chessboard 5 090/node), and it is the real wake lever. The self-wake veto saves under 2 %. An incremental seed has to cover the watchers of trail entries since the last fixpoint plus newly `Engine.add`ed instances. It needs `Store` to report the trail's **low-water mark** since the engine last asked: after a backjump the engine sees a short trail and cannot locate the restore point. Proposed as a new row. It also has to check that no propagator reads mutable state that is off the trail. | `lib/core/store.ml` (+ `engine.ml`, `search.ml`) | agent-wake | open |
+| **M2-T6 / D-0094**: `Propagator.pack` now takes `?idempotent`. Its default is a by-name table (`int_lin_le`/`int_le`/`int_lt`). Please pass `~idempotent:true` at `Compile.pack_linear`, and at `pack_arith_row` for the ROW faces only (`Arith.Times_row`/`Div_row`/`Abs_row`, which are `Linear.t`). The guard faces share those names and are reifications, which is why the table cannot claim them. Then the table can go. The engine's aliased-scope rule still applies. | `lib/flatzinc/compile.ml` | agent-wake | open |
 
 ## Completed
 
@@ -893,6 +895,7 @@ work. The owning session picks it up.
 | M6-T15 | agent-speed4 | 2026-10-02 | **D-0090**. `Store.entry.pos`, the entry's own trail position, makes `Trace.position_of` O(1) with no second map and no new wipe rule. The old walk stays one wave as the `BAGUETTE_DEBUG` cross-check and test_trace's oracle. `add_fact` and `settle_facts` use reversed accumulators. 396/396 artefacts byte-identical. Node, 55 s: 2014_mario 1697 -> 2575 nodes, 2023_chessboard 3003 -> 3027. |
 | M6-T8 | agent-debug | 2026-10-02 | **D-0091**. The four element `BAGUETTE_DEBUG` fatals were one call (`Element.no_position_conflict`) and class (c): D-0026's reverse arm required an empty reason to name a top-level `Defining` the ROOT holds. `Store.reverse_owners` now exempts that case, and only when `Store.root_holds` confirms it. test_prop's propagate-only alldiff scenes start a proof. 132/132 models pass under the flag; 21/23 unit binaries are clean, and `test_compile` and `test_learn` are requested. 396 artefacts byte-identical. Finding: element conflicts carry `Reason.none` at every depth, so they never learn a 1UIP clause (explanation quality, not soundness). |
 | M6-T16 | agent-speed5 | 2026-10-02 | **D-0092**. `Analysis.Frontier` is persistent cells plus a per-bound monomorphic `String` table, and it replaces the per-step `add_node` fold (`List.map` + `@`). `Analysis.Uniq` replaces `List.mem`/`@` for antecedents, and `folds` is a reversed accumulator. `add_node` stays as the reference, and `test_analysis` compares the two. 396 artefacts byte-identical. Node: mario 1.40x, chessboard 1.07x (a first per-step tuple-Hashtbl version was 0.91x on chessboard and was replaced). Profile now flat. |
+| M2-T6 | agent-wake | 2026-10-02 | **D-0094**. Per-engine `props`/`eff`/`contra` (+`wakes`/`masked`/`vetoed`/`seeded`) under `--stats` and on both `limit:` lines, and in `corpus_run.sh`'s detail. The self-wake veto ships with the aliased-scope rule and, in the same commit, the `BAGUETTE_DEBUG` claim re-checker (`Engine.check_claim`). Suite stdout is identical on 132/132, 1 proof changed, and all verify. The veto does not pay: seeding is 75–85 % of runs |
 
 ## Handoff notes
 
@@ -3831,3 +3834,22 @@ header no longer says otherwise.
   spread over Search, Justify, Writer and Alldiff. The last constant-factor lead is the
   `wipe_level` whole-table folds in Writer/Justify, filed as a request. After that, D-0085/D-0087's
   design proposals are what remains.
+
+## M2-T6 handoff, 2026-10-02 (agent-wake)
+
+- **Counters** (`Engine.counters`, per engine): `props` are runs off the queue, `eff` are
+  `Fixpoint` runs that grew the trail, and `contra` are `Conflict` runs (disjoint from `eff`).
+  There are also `wakes`/`masked`/`vetoed`/`seeded`. Each is a `stats:` line under `--stats`.
+  `props=`/`eff=`/`contra=` are on both `limit:` lines, and `corpus_run.sh` copies them into the
+  detail column. The audits do not count. Baseline on s4: 727 runs/node, 3.4 % effectful,
+  against GCS's 103/node and 22 %.
+- **Veto**: `Propagator.inst_idempotent`, claimed by name for `int_lin_le`/`int_le`/`int_lt`
+  only, and honoured only on an unaliased scope. Under `BAGUETTE_DEBUG`, `Engine.check_claim`
+  re-runs it at every point the veto relies on it. Suite stdout is identical on 132/132, 1 proof
+  changed (`root_nested_defining_gcc_unsat`), and all verify. The model suite is green under
+  `BAGUETTE_DEBUG=1`, and `bench/m2t6/identity.sh OLD NEW` reproduces the comparison.
+- **What the next session should know**: the veto is not a speed-up (runs/node within ±2 %).
+  Every-instance seeding per `propagate` is 75–85 % of all runs, and that is the lever. It
+  needs a trail low-water mark from `Store`, filed under Cross-session requests with the
+  `compile.ml` `~idempotent` request. My `## Active claims` row is left for the orchestrator to
+  clear at merge, so that two sessions do not edit adjacent rows of that table.
