@@ -1,12 +1,16 @@
 % count_unsat -- M7-T23 (D-0097)
 %
-% FLATTENED ARTEFACT. Source: mznlib/test/count_unsat.mzn, flattened by MiniZinc 2.10.1
-% against mznlib/ (MZN_SOLVER_PATH=tools) on 2026-10-02. Regenerate with
-%   minizinc -c --solver baguette mznlib/test/count_unsat.mzn -o <this>
-% and re-attach this header; do not hand-edit the body.
+% FLATTENED ARTEFACT OF A WITHDRAWN ROUTE. Flattened by MiniZinc 2.10.1 on
+% 2026-10-02 from mznlib/test/count_unsat.mzn against the mznlib/ of commit 04514a9,
+% whose mznlib/fzn_count_eq.mzn routed the counting family to the gcc
+% propagator. D-0097 measured that route on the corpus and WITHDREW it (one-value
+% covers lose the decomposition's interior-value pruning and gain no cross-value
+% reasoning), so neither file is in the tree any more. The body is unedited
+% flattener output and the lane stays as a solver test; regenerate it only from
+% 04514a9's mznlib/.
 %
-% WHAT IT PINS: mznlib/fzn_count_eq.mzn routes the counting family to the gcc
-% propagator. This lane is
+% WHAT IT PINS: one-value-cover baguette_global_cardinality calls as that route
+% emitted them. This lane is
 %   count(x, 1, n) with n >= 2, count(x, 2) >= 2, count_eq(x, 3, 1) over four
 %   variables: five tallies for four slots, so the counts close it.
 %
