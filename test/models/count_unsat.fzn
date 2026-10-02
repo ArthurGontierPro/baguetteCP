@@ -1,0 +1,31 @@
+% count_unsat -- M7-T23 (D-0097)
+%
+% FLATTENED ARTEFACT. Source: mznlib/test/count_unsat.mzn, flattened by MiniZinc 2.10.1
+% against mznlib/ (MZN_SOLVER_PATH=tools) on 2026-10-02. Regenerate with
+%   minizinc -c --solver baguette mznlib/test/count_unsat.mzn -o <this>
+% and re-attach this header; do not hand-edit the body.
+%
+% WHAT IT PINS: mznlib/fzn_count_eq.mzn routes the counting family to the gcc
+% propagator. This lane is
+%   count(x, 1, n) with n >= 2, count(x, 2) >= 2, count_eq(x, 3, 1) over four
+%   variables: five tallies for four slots, so the counts close it.
+%
+
+predicate baguette_global_cardinality(array [int] of var int: x,array [int] of int: cover,array [int] of var int: counts);
+array [1..1] of int: X_INTRODUCED_21_ = [1];
+array [1..1] of int: X_INTRODUCED_24_ = [2];
+array [1..1] of int: X_INTRODUCED_26_ = [3];
+var 1..3: X_INTRODUCED_16_;
+var 1..3: X_INTRODUCED_17_;
+var 1..3: X_INTRODUCED_18_;
+var 1..3: X_INTRODUCED_19_;
+var 2..4: n:: output_var;
+var 2..4: X_INTRODUCED_22_ ::var_is_introduced ;
+array [1..4] of var int: x:: output_array([1..4]) = [X_INTRODUCED_16_,X_INTRODUCED_17_,X_INTRODUCED_18_,X_INTRODUCED_19_];
+array [1..1] of var int: X_INTRODUCED_20_ ::var_is_introduced  = [n];
+array [1..1] of var int: X_INTRODUCED_23_ ::var_is_introduced  = [X_INTRODUCED_22_];
+array [1..1] of var int: X_INTRODUCED_25_ ::var_is_introduced  = [1];
+constraint baguette_global_cardinality(x,X_INTRODUCED_21_,X_INTRODUCED_20_);
+constraint baguette_global_cardinality(x,X_INTRODUCED_24_,X_INTRODUCED_23_);
+constraint baguette_global_cardinality(x,X_INTRODUCED_26_,X_INTRODUCED_25_);
+solve  satisfy;
