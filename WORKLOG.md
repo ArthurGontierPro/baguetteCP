@@ -3538,8 +3538,8 @@ Branch `wave32-rup2`, not merged. **D-0084** is the record; read it, not this.
 - **A random sweep is the cheapest lane this family has had.** ~20 000 small models (3-7
   variables, domains 1..5) over element, gcc, int_ne, int_lin_le, all_different, every proof
   checked: it found the gcc shape in 300 models and four root-conflict defects besides. The
-  generator lived in the session scratchpad; it is 60 lines of Python worth putting in
-  `scripts/` (not done: not in this row's files).
+  generator is now committed: `bench/fuzz/` (`gen.py`, `run.py`, `README.md` with the seeds
+  of every shape it found); run it under `ulimit -v 4000000`, never from `make check`.
 - **Three cross-session requests filed** (D-0084 item 4): `search.ml`'s root arm only emits the
   root trace on a TOP-level `Defining`; all_different's Regin removal concludes in the direct
   currency; an all_different `ladder rung has no constraint id` crash. The first two have
