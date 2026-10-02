@@ -558,6 +558,21 @@ evidence, the width-lint hatch) and two design-level performance proposals in D-
 watched slack for `Pb.propagate`, and a priority structure for the un-annotated default
 `first_fail` over every variable (still linear per node). Those two are SPEC §3.4-adjacent and
 need a record before code.
+
+**Wave thirty-five, dispatched 2026-10-02 (orchestrator), node reachable again.** One row,
+M6-T14 (agent-speed3, `wave35-speed3`), from a `perf` profile the orchestrator took on the node
+of two of the 26 formerly-rejected instances (`/scratch/arthur/prof-2014_mario.data`,
+`/scratch/arthur/prof-2023_chessboard.data`; their `.fzn` are kept under
+`/scratch/arthur/corpus-out-w35-rejected/log/`). Decision id pre-assigned: **D-0088** for this row;
+**D-0089** is reserved for the orchestrator's measurement record of the w31/w35 runs. Nothing else
+is live. agent-speed3 holds `lib/core/store.ml`, `lib/core/analysis.ml`, `lib/core/pb_analysis.ml`
+(if it reads supports the same way), `test/unit/{test_core,test_analysis}.ml`, `bench/**`,
+`docs/DECISIONS.md` (D-0088, append). Node clone `/scratch/arthur/baguette-speed3`; a handful of
+jobs only — the w35 corpus sweep and the baguette-only comparison are still running there.
+
+| Task | Files being touched | Session | Since |
+|---|---|---|---|
+| M6-T14 | `lib/core/store.ml`, `lib/core/analysis.ml`, `lib/core/pb_analysis.ml` (if needed), `test/unit/{test_core,test_analysis}.ml`, `bench/**`, `docs/DECISIONS.md` (D-0088, append) | agent-speed3 | 2026-10-02 |
 ## Cross-session requests
 
 Need a change in a file someone else has claimed? Write it here and move on to other
