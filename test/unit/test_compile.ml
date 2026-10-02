@@ -1368,7 +1368,48 @@ let test_search_annotations () =
      exhausted the order is [spec_order]. `spare` is in neither phase. *)
   let _, _, d3 = decision_of ~cands:[ 2 ] seq_src in
   check "(b) a variable no phase mentions falls back to SPEC 3.4's default"
-    (Var.to_int d3.Search.d_var = 2 && d3.Search.d_split = 0 && not d3.Search.d_high_first)
+    (Var.to_int d3.Search.d_var = 2 && d3.Search.d_split = 0 && not d3.Search.d_high_first);
+  (* M6-T13/D-0087: the STAGED form [Search.dfs] now asks first must give the decision the
+     full order gives on [Search.unfixed] -- in each of the three states above, built here
+     by declaring a variable as a singleton rather than by trimming the candidate array,
+     because the staged form reads the STORE and has no candidate array to trim. And it
+     must exist at all: a [sequence] order with no staged form would still be correct, but
+     every node would pay for every variable again, which is the regression this row
+     removed, so its absence is a failure and not a fallback. *)
+  let staged_agrees label ~a ~b ~expect ~want =
+    let src =
+      Printf.sprintf
+        "var %s: a;\n\
+         var %s: b;\n\
+         var 0..3: spare;\n\
+         constraint int_le(spare,3);\n\
+         solve :: \
+         seq_search([int_search([b],input_order,indomain_min,complete),int_search([a],input_order,indomain_min,complete)]) \
+         satisfy;\n"
+        a b
+    in
+    let c = Compile.compile (build src) in
+    let store = c.Compile.store in
+    let order = Option.get c.Compile.order in
+    let full = Search.as_split (order store (Search.unfixed store)) in
+    match Search.staged_of order with
+    | None -> check (label ^ ": a seq_search order carries its staged form") false
+    | Some st ->
+        let ok =
+          match (expect, st store) with
+          | `Phase, Some ch -> Search.as_split ch = full
+          | `Fallback, None -> true
+          | _ -> false
+        in
+        check
+          (label ^ ": the staged form agrees with the full order on [unfixed]")
+          (ok && Var.to_int full.Search.d_var = want)
+  in
+  staged_agrees "(M6-T13) first phase live" ~a:"0..3" ~b:"0..3" ~expect:`Phase ~want:1;
+  staged_agrees "(M6-T13) first phase exhausted" ~a:"0..3" ~b:"2..2" ~expect:`Phase
+    ~want:0;
+  staged_agrees "(M6-T13) every phase exhausted" ~a:"1..1" ~b:"2..2" ~expect:`Fallback
+    ~want:2
 
 (* --- (c) and its break. Changing the search changes the TREE and therefore the PROOF,
    so the annotation's real test is the checker.

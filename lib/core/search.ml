@@ -694,13 +694,25 @@ let stats_consistent s ~exhausted =
    [dfs] reports a solution exactly when the array is empty, so a strategy decides the
    *shape* of the tree and never which leaves it has. *)
 let unfixed store =
+  (* M6-T13: two passes over the domains -- count, then fill -- instead of consing a list
+     and copying it, so a node allocates the one array it returns and nothing else. Same
+     array, same ascending store-index order. *)
   let n = Store.n_vars store in
-  let acc = ref [] in
-  for i = n - 1 downto 0 do
-    let v = Var.of_int i in
-    if Domain.size (Store.get store v) > 1 then acc := v :: !acc
+  let k = ref 0 in
+  for i = 0 to n - 1 do
+    if Domain.size (Store.get store (Var.of_int i)) > 1 then incr k
   done;
-  Array.of_list !acc
+  if !k = 0 then [||]
+  else
+    let out = Array.make !k (Var.of_int 0) in
+    let j = ref 0 in
+    for i = 0 to n - 1 do
+      let v = Var.of_int i in
+      if Domain.size (Store.get store v) > 1 then (
+        out.(!j) <- v;
+        incr j)
+    done;
+    out
 
 (* One decision. [d_split] is read as: the low branch is [x <= d_split], the high branch
    is [x >= d_split + 1], and the single order literal [x_ge_(d_split+1)] is the one thing
@@ -971,24 +983,89 @@ type phase = { p_vars : Var.t array; p_var : var_select; p_val : val_select }
    ones it did not. [Search] would otherwise have no decision to make and the model would
    be answered wrong, so the fallback is not optional and not a default -- it is stated.
    `compile.ml` passes [spec_order], and docs/SPEC.md 3.4 needs to say so. *)
+(* ------------------------------------------------- M6-T13: the STAGED form of an order
+
+   THE COST THIS REMOVES. [dfs] used to build [unfixed store] -- a scan of EVERY variable
+   in the store -- at every node, and [sequence] then put every one of those candidates in
+   a [Hashtbl] so it could ask which of a phase's variables were live. So a node cost
+   O(store), constrained or not: on a 7-variable pigeonhole padded with 2000 unconstrained
+   variables (bench/m6t11/gen.py ne 7 2000) the run was GC and [Hashtbl.replace] for
+   variables no phase names and no propagator watches (D-0085's request, D-0087).
+
+   WHY IT IS THE SAME ANSWER. [dfs] only ever hands an order [unfixed store], and against
+   THAT array "[v] is a candidate" is exactly "[Domain.size (Store.get store v) > 1]" --
+   [unfixed]'s own test. So a phase's live subset can be read off the store directly, in
+   the phase's own array order, with no candidate array at all; the fallback is reached
+   exactly when every phase is exhausted, and it is then handed [unfixed store], the very
+   array it was handed before. Which variable is chosen, how ties break, and which value
+   is tried first are untouched -- SPEC 3.4 is not reopened, and byte identity of every
+   artefact over the suite is the evidence (D-0087).
+
+   WHY THE ORDER TYPE DID NOT CHANGE. [order] is a plain function that tests, the fuzzer
+   and compile.ml all construct, and [sequence]'s closure is still a complete [order] --
+   called with ANY candidate array (test_compile.ml's [decision_of ~cands] passes subsets
+   that are not [unfixed store]) it filters by membership in that array exactly as it
+   always did. The staged form is extra: [sequence] records it against its closure in
+   [staged_orders], keyed by PHYSICAL identity through an ephemeron (so a dropped order is
+   collectable), and [dfs] asks [staged_of] -- one [==] per node after the first. An order
+   with no staged form takes the old path, unchanged. *)
+type staged = Store.t -> choice option
+
+let staged_orders : (order, staged) Ephemeron.K1.Bucket.t = Ephemeron.K1.Bucket.make ()
+
+(* A one-entry cache in front of the bucket: a solve asks about the same order at every
+   node, so after the first node this is a single physical comparison. *)
+let staged_cache : (order * staged option) option ref = ref None
+
+let staged_of (o : order) : staged option =
+  match !staged_cache with
+  | Some (o', s) when o' == o -> s
+  | _ ->
+      let s = Ephemeron.K1.Bucket.find staged_orders o in
+      staged_cache := Some (o, s);
+      s
+
 let sequence ?(fallback = spec_order) (phases : phase list) : order =
- fun store cands ->
-  let live = Hashtbl.create (2 * Array.length cands) in
-  Array.iter (fun v -> Hashtbl.replace live (Var.to_int v) ()) cands;
-  let rec go = function
-    | [] -> fallback store cands
-    | ph :: rest -> (
-        let sub =
-          Array.of_seq
-            (Seq.filter
-               (fun v -> Hashtbl.mem live (Var.to_int v))
-               (Array.to_seq ph.p_vars))
-        in
-        match Array.length sub with
-        | 0 -> go rest
-        | _ -> ph.p_val store (ph.p_var store sub))
+  let full store cands =
+    let live = Hashtbl.create (2 * Array.length cands) in
+    Array.iter (fun v -> Hashtbl.replace live (Var.to_int v) ()) cands;
+    let rec go = function
+      | [] -> fallback store cands
+      | ph :: rest -> (
+          let sub =
+            Array.of_seq
+              (Seq.filter
+                 (fun v -> Hashtbl.mem live (Var.to_int v))
+                 (Array.to_seq ph.p_vars))
+          in
+          match Array.length sub with
+          | 0 -> go rest
+          | _ -> ph.p_val store (ph.p_var store sub))
+    in
+    go phases
   in
-  go phases
+  (* The staged form: [None] means "no phase has a live variable", and [dfs] then does
+     what it always did with [unfixed store] -- solution if empty, [full] otherwise, which
+     reaches [fallback] with that same array. A variable outside the store is never a
+     candidate of [unfixed], so it is not live here either. *)
+  let staged store =
+    let n = Store.n_vars store in
+    let is_live v =
+      let i = Var.to_int v in
+      i >= 0 && i < n && Domain.size (Store.get store v) > 1
+    in
+    let rec go = function
+      | [] -> None
+      | ph :: rest -> (
+          let sub = Array.of_seq (Seq.filter is_live (Array.to_seq ph.p_vars)) in
+          match Array.length sub with
+          | 0 -> go rest
+          | _ -> Some (ph.p_val store (ph.p_var store sub)))
+    in
+    go phases
+  in
+  Ephemeron.K1.Bucket.add staged_orders full staged;
+  full
 
 (* A branching order driven by [r], for the fuzzer (test/unit/test_random.ml). Every
    draw comes from [r], so one seed reproduces one whole tree. Three draws per decision
@@ -2625,35 +2702,42 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
           let cid = emit_nogood ctx ng in
           NFail (ng, cid))
   | Engine.Fixpoint -> (
-      let cands = unfixed store in
-      if Array.length cands > 0 then
-        branch engine store ctx trace stats cfg order decisions (order store cands)
-      else
-        let asn = extract_assignment store in
-        match cfg.bnb with
-        | None -> NSat asn
-        | Some b -> (
-            (* M5-T1. The solution is logged and the bound installed; then THE SAME NODE
-               IS RE-ENTERED. [apply_globals] runs first at every node, the bound it now
-               carries excludes the value the objective variable is fixed at, and the
-               conflict that produces goes down the ordinary conflict path above -- trace,
-               bridges, learning, nogood, backjump -- with nothing in it aware that the
-               node it is refuting was a solution a moment ago.
+      (* M6-T13: a staged order ([sequence]) answers from the store when one of its phases
+         has a live variable, and the O(store) candidate array is built only when it does
+         not -- see [staged_of]. Every other order is asked exactly as before. *)
+      let early = match staged_of order with Some st -> st store | None -> None in
+      match early with
+      | Some c -> branch engine store ctx trace stats cfg order decisions c
+      | None -> (
+          let cands = unfixed store in
+          if Array.length cands > 0 then
+            branch engine store ctx trace stats cfg order decisions (order store cands)
+          else
+            let asn = extract_assignment store in
+            match cfg.bnb with
+            | None -> NSat asn
+            | Some b -> (
+                (* M5-T1. The solution is logged and the bound installed; then THE SAME NODE
+                   IS RE-ENTERED. [apply_globals] runs first at every node, the bound it now
+                   carries excludes the value the objective variable is fixed at, and the
+                   conflict that produces goes down the ordinary conflict path above -- trace,
+                   bridges, learning, nogood, backjump -- with nothing in it aware that the
+                   node it is refuting was a solution a moment ago.
 
-               This is a re-entry, NOT a restart. docs/SPEC.md 3.4 fixes the search as
-               depth-first with restarts disabled, and nothing here reopens a closed
-               level, re-takes a decision or returns to the root: the decision stack is
-               exactly as it was, the node is the one we are standing on, and the tree is
-               still traversed once, left to right. [stats.nodes] is deliberately NOT
-               incremented, because no node was dispatched -- M1-T36's identity counts
-               [branch]'s children and this is not one.
+                   This is a re-entry, NOT a restart. docs/SPEC.md 3.4 fixes the search as
+                   depth-first with restarts disabled, and nothing here reopens a closed
+                   level, re-takes a decision or returns to the root: the decision stack is
+                   exactly as it was, the node is the one we are standing on, and the tree is
+                   still traversed once, left to right. [stats.nodes] is deliberately NOT
+                   incremented, because no node was dispatched -- M1-T36's identity counts
+                   [branch]'s children and this is not one.
 
-               It terminates: the bound is strictly tighter than the incumbent, so the
-               re-entry conflicts rather than reaching [Fixpoint] again, and no second
-               solution can be found at the same node. *)
-            match record_improving ctx store stats b asn with
-            | `Proved -> NSat asn
-            | `Continue -> dfs engine store ctx trace stats cfg order decisions))
+                   It terminates: the bound is strictly tighter than the incumbent, so the
+                   re-entry conflicts rather than reaching [Fixpoint] again, and no second
+                   solution can be found at the same node. *)
+                match record_improving ctx store stats b asn with
+                | `Proved -> NSat asn
+                | `Continue -> dfs engine store ctx trace stats cfg order decisions)))
 
 (* Close out a level whose subtree is finished, leaving [ng] (filed below [lvl], so the
    wipe cannot touch it) as this frame's answer. D-0018 point 4's two lines, in the order
