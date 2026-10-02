@@ -7093,3 +7093,124 @@ shape at least):
 What a fix here cannot promise: these instances were rejected at the FIRST bad line, so a
 proof that now passes that line may meet a later one of another family (the sweep's item
 4 kinds among them).
+## D-0085  D-0080's levers #3-#6 shipped as constant-factor changes: every artefact byte-identical, the learned-PB-row work is the one that moves locally
+
+**Status**: **SHIPPED (four levers) + MEASUREMENT (local only) + PROPOSALS**, recorded
+2026-10-02 by agent-speed (M6-T11), branch `wave32-speed`. The node `fataepyc-07` was
+unreachable for the whole task, so every number below is LOCAL (12-core WSL2 laptop, load
+average 1-5 from the other wave-32 sessions, which is why each figure is a minimum of 5 and
+why ratios inside +-10 % are read as noise). What to measure on the node is at the end.
+
+### The binaries, and the byte-identity verdict
+
+`bench/m6t11/byte_identity.sh OLD NEW [extra.fzn ...]` runs both with `--proof` over every
+`test/models/*.fzn` plus extras and diffs the md5 of every `.opb`, `.pbp` and stdout+exit
+code. Run with five generated extras (`bench/m6t11/gen.py`: `ne 7 0`, `ne 7 2000`,
+`wide 400 300 400`, `knap 8 2 3 1`, `knap 10 2 3 1`; the knapsacks and the wide model
+declare wide domains, so they live under `/tmp` and are never committed, D-0028):
+
+| tag | commit | md5 of `main.exe` | vs BASE |
+|---|---|---|---|
+| BASE | `f52ed18` (wave-32 claim, = `main`) | `fd432a570606be1d05d25a89f3d12685` | -- (self-run also identical: the script is deterministic) |
+| L5 | `f56a1c4` | `82d10ff34d341327e5f9eb3fa611a8dc` | **366 / 366 artefacts identical over 122 models** |
+| L3 | `6523695` | `224090958732f13b6015d20683ef69db` | **366 / 366 identical** |
+| L6 | `1b46fdb` | `90df5300e8ba7ce3181b59db7427c8b5` | **366 / 366 identical** |
+| L4 = tip | `ab9cc5b` | `7a8b5e2c3b86cdc19e3eec5a21aa189b` | **366 / 366 identical**; also the `.pbp` of `knap 12 3 3 1` under `BAGUETTE_NODE_LIMIT=100` (md5 `3bdf307a...`, same on both) |
+
+Byte identity is the evidence that nothing in SPEC 3.4 moved: same search order, same
+learned rows, same proof lines. Builds are reproducible (the same tree rebuilt gives the
+same md5).
+
+### The levers, two sentences each
+
+* **#5 `Store.var_named`** -- was a linear scan whose header claimed a debug-only caller;
+  `Pb_analysis`, `Analysis.support_of`, `Learn`, `Pb` and `Search` call it on the conflict
+  path. Now a hash index built LAZILY on first use (`Engine.oracle_accepts` creates a
+  scratch store per tuple and never asks), keeping the FIRST index per name as the scan
+  did; `var_named_scan` is kept as the specification and `test_core` pins the two together
+  on a store with a duplicated name (break: a last-wins index fails all four checks).
+* **#3 `Analysis.scan_support`** -- compared `String.equal (Store.name e.var) name` at every
+  trail entry. It now compares `Store.name_rep e.var` (the first variable bearing that name,
+  an O(1) array read) with the `Var.t` `support_of` already holds: the same entries match,
+  duplicate names included.
+* **#6 compile on wide models** -- `Lit.sanitize` returns a clean identifier itself instead
+  of `String.map`-copying it; `var_name`/`to_string` write into one right-sized buffer
+  instead of `Printf.sprintf` plus a second concatenation for `~`; `var_compare` skips the C
+  compare on a physically equal identifier. `Encoding.fresh_aux_name` rebuilt the sanitised
+  name set of EVERY declared variable on EVERY auxiliary (O(vars) per `int_lin_ne`, so
+  O(vars x rows) per compile) and now reads a set kept beside `ints`; both identifier tables
+  are a `string`-specialised `Hashtbl.Make` (same hash, so same layout; no polymorphic
+  `compare` per probe). The names are NORMATIVE and unchanged: `test_proof` checks every
+  rendering against the old definitions copied verbatim (negative values, `min_int`, `$`,
+  dots, non-ASCII, empty name).
+* **#4, the local part** -- `Learned.combine`'s cancel stage `List.partition`ed the WHOLE
+  remainder per variable and appended with `acc @ keep` (quadratic per combination; it is
+  also what `Ladder.lift` calls); the group is the sorted prefix, so a `span` takes it.
+  `Pb.propagate` computed every open term's ladder-effective coefficient by walking every
+  term (O(n^2) per pass); terms are now grouped once per pass by (variable, polarity) in
+  term order and each query walks only its group, with the same test and the same
+  `Checked.add` sequence, so the same sums and the same overflow.
+
+### Local before/after (seconds, minimum of 5, `--proof` on; `bench/m6t11/timing.sh`)
+
+Per lever (each row is the lever ALONE against the binary before it), CPU user+sys:
+
+| model | what it stresses | #5 | #3 | #6 | #4 |
+|---|---|---|---|---|---|
+| `width_sat_depth` | learned rows over one 99-rung ladder | 0.09 -> 0.10 | 0.10 -> 0.10 | 0.11 -> 0.10 | **0.10 -> 0.05 (2.0x)** |
+| `knap 8 2 3 1` | PB learning, combination | 0.84 -> 0.81 | 0.74 -> 0.73 | 0.88 -> 0.80 | **0.77 -> 0.54 (1.43x)** |
+| `knap 10 2 3 1` | same, longer | 5.85 -> 5.70 | 5.61 -> 5.47 | 5.81 -> 5.78 | **5.49 -> 4.41 (1.24x)** |
+| `knap 12 3 3 1`, 100 nodes | trucking-like: the learned rows are long | 4.75 -> 4.64 | 5.21 -> 4.30 (1.21x, not reproduced elsewhere: read as noise) | 4.79 -> 4.76 | **4.59 -> 1.83 (2.51x)** |
+| `ne 7 0` | 8-into-7 pigeonhole by `int_ne` | 1.92 -> 1.85 | 1.57 -> 1.66 | 1.97 -> 1.80 | 1.80 -> 1.77 |
+| `ne 7 2000` | the same behind 2000 unconstrained variables | 4.92 -> 4.83 | 4.52 -> 4.59 | 4.89 -> 5.06 | 4.57 -> 4.59 |
+| `wide 400 300 400` | compile: 400 vars x 301 values, 400 aux Booleans | 6.13 -> 6.24 | 6.51 -> 6.43 | **6.39 -> 5.09 (1.26x)** | 4.89 -> 4.64 |
+
+All four together, BASE -> tip: `width_sat_depth` 0.09 -> 0.05 (1.8x), `knap 8` 1.57x,
+`knap 10` 1.24x, `knap 12 @100` **4.91 -> 1.82 (2.70x)**, `ne 7` 0.99x, `ne 7 pad` 1.08x,
+`wide` 1.22x. On `wide`, `--time`'s own phases (3 runs each): `compile` ~2.0 s -> ~1.55 s,
+`opb` ~2.1 s -> ~1.85 s.
+
+**What this says.** #4 is the lever that moves anything locally: the knapsack at 100
+nodes reproduces D-0080's trucking profile (`Learned.cancel` 40 % inclusive, `Lit.var_compare`
+11 % self) and is 2.7x faster with it. #6 moves a generated wide compile by ~1.25x, not
+more, because the rest of that compile is in `Opb.normalise`/`Opb.var_names` (string-keyed
+generic tables over rendered names, a request below) and in the GC. **#3 and #5 move
+nothing measurable locally**: no local model makes `scan_support` fall through to its scan
+often, and the suite's stores are small enough that a linear `var_named` is cheap (2000
+padding variables did not show it either: the padded pigeonhole's time is in `Search`
+per-node work over all variables, not in name lookup). They are shipped on D-0080's
+profile evidence, which names them at ~60 % and 11 %, and the node is where they are judged.
+
+### What #4 turned out to be, and what is left of it
+
+Two quadratic loops, both local, both fixed above. After them the knapsack profile is
+~40 % `Pb.propagate` -- the survey of every term and the group walk on every pass, with
+no early exit -- plus `compare_val`/`caml_hash` (~12 %) from generic-`Hashtbl` probes on
+the search path. A sorted-thresholds-with-running-sums version of `effective` was tried
+(exact: every partial sum is bounded by the group total, so when the total does not
+overflow the order does not matter; 209 170 large-row queries cross-checked equal) and
+REJECTED by measurement: 1.83 s -> 2.7 s on `knap 12 @100`, because building the arrays
+costs more per pass than the walks it saves. **Proposed, not shipped, design territory:**
+watched slack for `Pb` (a counter maintained on bound events instead of a survey per
+call) -- it changes when the propagator runs, so it needs its own argument that the
+fixpoint and the trace lines are the same, and it is the next tier for tc-graph-color.
+
+### Node measurement plan (D-0080's six instances, `bench/m6t9/prof.sh` with OLD = BASE, NEW = tip)
+
+Same recipe as D-0080: `perf record -F 499 --call-graph dwarf` for 60 s, `--time-limit 60
+--stats --time --proof`, nodes in 60 s and the self-time table, both binaries hashed; then
+the corpus sweep of config (a') (`bench/m6t9/sweep.sh`, `BAGUETTE=` the tip) for fin /
+nodes/s / killed against D-0080's (a') row, and `BAGUETTE_NODE_LIMIT` pairs to re-confirm
+byte identity on the corpus instances themselves. What the profiles predict:
+
+| instance | lever | D-0080 says | prediction |
+|---|---|---|---|
+| 2016 prize-collecting | #3 (+#5) | 21 % `Analysis.go` + 16 % `string_equal` + 10 % `Store.name` + 12 % `trail_entry` | the 26 % of string compare and name fetch goes; the scan itself (O(trail)) stays: **1.3-1.5x nodes/s** (12 -> ~16-18 in 60 s) |
+| 2018 rotating-workforce | #5, #6 | compile 28.5 s; 11 % `Store.go` (`var_named`); `Bytes.map`/`Lit.fun` | `var_named` share to ~0; compile **-15 to -30 %** |
+| 2009 black-hole | #6 | compile 73 s: `Bytes.map` 15 % + `Lit.fun` 10 % + hashing 12 % + GC 28 % | compile **73 s -> ~50-60 s**; GC and `Opb` remain |
+| 2008 trucking | #4 | ~50 % `var_compare`/`List.part`/`var_equal`/`Learned` | the knapsack reproduces this shape at 2.5x: **1.5-2.5x nodes/s** |
+| 2017 tc-graph-color | #4 | ~45 % `Pb.*` | the group walk removes the n^2; the survey stays: **1.2-1.6x** |
+| 2011 costas-array 15 | none (control) | 61 % `Justify.go` (lever #2, not this task) | **~1.0x**; anything else is noise or a regression |
+
+Also on the node: 2012 amaze2 and 2017 opd (never reached the search in 280 s) under
+`--time` -- whether `compile` now finishes, and how much of it is `opb`.

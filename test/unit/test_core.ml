@@ -1268,6 +1268,44 @@ let test_view_constants () =
   check "view (d): is_const classifies, it does not gate"
     (View.is_const c && not (View.is_const (View.of_var x)))
 
+(* M6-T11 (D-0085): [Store.var_named] is a hash index now, built on first use; the
+   linear scan it replaced is kept as [var_named_scan] and is the specification. On a
+   hand-built store WITH a duplicated name -- which [Compile] never produces, so this is
+   the only place the "first index wins" rule is exercised -- every name asked, present
+   or absent, gets the scan's answer, and [name_rep] agrees with comparing the strings
+   for every pair of variables. Break: an index built with [Hashtbl.replace] (last index
+   wins) answers [Some 3] for "x" where the scan says [Some 0], and fails the first check. *)
+let test_var_named_index () =
+  let names = [| "x"; "y"; "a.b"; "x"; "z"; "" |] in
+  let s = Store.create ~names ~domains:(Array.map (fun _ -> Domain.make 0 3) names) in
+  let asked = [ "x"; "y"; "a.b"; "z"; ""; "a_b"; "w"; "X" ] in
+  check "var_named index: agrees with the linear scan on every name, duplicates included"
+    (List.for_all
+       (fun nm ->
+         Option.equal Var.equal (Store.var_named s nm) (Store.var_named_scan s nm))
+       asked);
+  check "var_named index: a duplicated name answers its FIRST variable"
+    (Option.equal Var.equal (Store.var_named s "x") (Some (Var.of_int 0)));
+  let n = Array.length names in
+  let ok = ref true in
+  for i = 0 to n - 1 do
+    for j = 0 to n - 1 do
+      let a = Var.of_int i and b = Var.of_int j in
+      let by_rep = Var.equal (Store.name_rep s a) (Store.name_rep s b) in
+      let by_str = String.equal (Store.name s a) (Store.name s b) in
+      if by_rep <> by_str then ok := false
+    done
+  done;
+  check "name_rep: equal reps iff equal names, over every pair" !ok;
+  check "name_rep: is var_named of the variable's own name"
+    (List.for_all
+       (fun i ->
+         let v = Var.of_int i in
+         Option.equal Var.equal
+           (Some (Store.name_rep s v))
+           (Store.var_named s (Store.name s v)))
+       (List.init n Fun.id))
+
 let () =
   match Array.to_list Sys.argv with
   | _ :: "--agreeing-push" :: _ -> disagreeing_push ~agree:true ()
@@ -1291,6 +1329,7 @@ let () =
       test_view_agrees_with_its_literal ();
       test_view_trail ();
       test_view_constants ();
+      test_var_named_index ();
       if !failures > 0 then (
         Printf.printf "\n%d failure(s)\n" !failures;
         exit 1)

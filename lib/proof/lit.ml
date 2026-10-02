@@ -17,16 +17,49 @@ let negate l = { l with positive = not l.positive }
 (* OPB names allow no '-', so negative values get an 'm' prefix. *)
 let int_suffix v = if v < 0 then "m" ^ string_of_int (-v) else string_of_int v
 
+(* M6-T11 (D-0085): the NAMES below are exactly what they were; only how they are built
+   changed. [sanitize] returns its argument when no character needs rewriting -- every
+   identifier [Compile] has ever been handed that is not a [X_INTRODUCED_...] with a dot
+   or a [$]-aux -- instead of copying it through [String.map] (D-0080: [Bytes.map] 15 % of
+   2009 black-hole's compile). [var_name] and [to_string] write the name into one buffer
+   of the right length instead of going through [Printf.sprintf]'s format interpreter and
+   a second concatenation for the [~]. *)
+let ident_char = function
+  | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> true
+  | _ -> false
+
+let needs_sanitize name =
+  let n = String.length name in
+  let rec go i = i < n && ((not (ident_char (String.unsafe_get name i))) || go (i + 1)) in
+  go 0
+
 let sanitize name =
-  String.map
-    (function ('a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_') as c -> c | _ -> '_')
-    name
+  if needs_sanitize name then String.map (fun c -> if ident_char c then c else '_') name
+  else name
+
+(* [neg ^ sanitize x ^ mid ^ int_suffix v], in one allocation. [mid] is "_ge_"/"_eq_". *)
+let render ~neg x mid v =
+  let x = sanitize x in
+  let digits = string_of_int (abs v) in
+  let lx = String.length x and ld = String.length digits in
+  let p = if neg then 1 else 0 in
+  let m = if v < 0 then 1 else 0 in
+  let b = Bytes.create (p + lx + 4 + m + ld) in
+  if neg then Bytes.unsafe_set b 0 '~';
+  Bytes.unsafe_blit_string x 0 b p lx;
+  Bytes.unsafe_blit_string mid 0 b (p + lx) 4;
+  if v < 0 then Bytes.unsafe_set b (p + lx + 4) 'm';
+  Bytes.unsafe_blit_string digits 0 b (p + lx + 4 + m) ld;
+  Bytes.unsafe_to_string b
 
 let var_name = function
-  | Ge (x, v) -> Printf.sprintf "%s_ge_%s" (sanitize x) (int_suffix v)
-  | Eq (x, v) -> Printf.sprintf "%s_eq_%s" (sanitize x) (int_suffix v)
+  | Ge (x, v) -> render ~neg:false x "_ge_" v
+  | Eq (x, v) -> render ~neg:false x "_eq_" v
 
-let to_string l = if l.positive then var_name l.v else "~" ^ var_name l.v
+let to_string l =
+  match l.v with
+  | Ge (x, v) -> render ~neg:(not l.positive) x "_ge_" v
+  | Eq (x, v) -> render ~neg:(not l.positive) x "_eq_" v
 
 (* x >= v, as a literal. *)
 let ge x v = pos (Ge (x, v))
@@ -50,7 +83,9 @@ let bool_false x = le x 0
 let var_compare a b =
   match (a, b) with
   | Ge (x, i), Ge (y, j) | Eq (x, i), Eq (y, j) ->
-      let c = String.compare x y in
+      (* [x == y] first (M6-T11): literals of one variable share its identifier string,
+         so the common case skips the C call. Same order: [String.compare x x = 0]. *)
+      let c = if x == y then 0 else String.compare x y in
       if c <> 0 then c else Int.compare i j
   | Ge _, Eq _ -> -1
   | Eq _, Ge _ -> 1
@@ -71,7 +106,7 @@ let is_direct = function Ge _ -> false | Eq _ -> true
 
 (* True when [sanitize] had to rewrite the identifier, i.e. the .opb name and the
    FlatZinc name differ and the mapping must be dumped as a comment. *)
-let is_renamed x = String.equal (sanitize x) x = false
+let is_renamed x = needs_sanitize x
 let pp fmt l = Format.pp_print_string fmt (to_string l)
 
 (* ---------------------------------------------------------------------------
