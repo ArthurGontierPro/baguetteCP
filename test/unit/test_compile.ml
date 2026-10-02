@@ -629,7 +629,15 @@ let evaluate (m : M.t) (assign : int array) =
           let vs = List.map operand xs in
           List.for_all2
             (fun cv cnt -> List.length (List.filter (fun v -> v = cv) vs) = operand cnt)
-            (Array.to_list cover) counts)
+            (Array.to_list cover) counts
+      (* M4-T9, written apart from [Model.check_assignment] for the same reason: m is a
+         member of the values and bounds every one of them. *)
+      | M.Array_int_maximum (mo, xs) ->
+          let vs = List.map operand xs in
+          List.mem (operand mo) vs && List.for_all (fun v -> v <= operand mo) vs
+      | M.Array_int_minimum (mo, xs) ->
+          let vs = List.map operand xs in
+          List.mem (operand mo) vs && List.for_all (fun v -> v >= operand mo) vs)
     m.M.constraints
 
 (* Brute force over the declared box: the independent oracle for the expected answer.

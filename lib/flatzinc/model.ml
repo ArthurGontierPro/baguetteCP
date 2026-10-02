@@ -120,6 +120,13 @@ type cstr =
      value at all. `global_cardinality` is the OPEN form; the closed form is a different
      builtin. *)
   | Global_cardinality of operand list * int array * operand list
+  (* M4-T9. `array_int_maximum(m, xs)` / `array_int_minimum(m, xs)`: m is the largest
+     (resp. smallest) of [xs], which must be non-empty. Kept as the RELATION for
+     [All_different]'s reason: lib/flatzinc/compile.ml posts n linear rows plus a
+     per-value clause family for it (lib/core/prop/maxmin.ml's header), and the oracle
+     must judge a solution against what the constraint means, not against those. *)
+  | Array_int_maximum of operand * operand list
+  | Array_int_minimum of operand * operand list
   (* M4-T3. `array_int_element(idx, as, c)`: [as] is a CONSTANT array and the index is
      1-BASED, so the relation is `as[idx] = c` with `idx` in `1..|as|`. The array is an
      `int array` and not an `operand list` because SPEC 2.1's M4 row admits only the
@@ -261,6 +268,12 @@ let string_of_cstr t = function
         (String.concat ", " (List.map (string_of_operand t) xs))
         (String.concat ", " (List.map string_of_int (Array.to_list cover)))
         (String.concat ", " (List.map (string_of_operand t) counts))
+  | Array_int_maximum (m, xs) ->
+      Printf.sprintf "%s = max([%s])" (string_of_operand t m)
+        (String.concat ", " (List.map (string_of_operand t) xs))
+  | Array_int_minimum (m, xs) ->
+      Printf.sprintf "%s = min([%s])" (string_of_operand t m)
+        (String.concat ", " (List.map (string_of_operand t) xs))
   | Array_int_element (i, vs, c) ->
       Printf.sprintf "%s = [%s][%s]" (string_of_operand t c)
         (String.concat ", " (List.map string_of_int (Array.to_list vs)))
@@ -592,6 +605,13 @@ let check_assignment (t : t) (values : int array) : bool =
        constant must equal the result. The range test is written out rather than left to
        [Array.get]'s own bounds check, because an out-of-range index must make this
        return [false] and not raise. *)
+    (* M4-T9, the relation as written: m is one of the values and none exceeds it (resp.
+       is below it). An empty array has no maximum, so it is never satisfied -- the front
+       end refuses one before it gets here. *)
+    | Array_int_maximum (m, xs) ->
+        xs <> [] && value m = List.fold_left (fun a x -> max a (value x)) min_int xs
+    | Array_int_minimum (m, xs) ->
+        xs <> [] && value m = List.fold_left (fun a x -> min a (value x)) max_int xs
     | Array_int_element (i, vs, c) ->
         let k = value i in
         k >= 1 && k <= Array.length vs && vs.(k - 1) = value c

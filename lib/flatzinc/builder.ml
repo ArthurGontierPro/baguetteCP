@@ -52,6 +52,9 @@ let implemented =
        hand-written .fzn should not have to know about the library's internals. *)
     "fzn_global_cardinality";
     "baguette_global_cardinality";
+    (* M4-T9: maximum / minimum, kept whole by mznlib/redefinitions-2.0.mzn (D-0095). *)
+    "array_int_maximum";
+    "array_int_minimum";
   ]
 
 (* The rest of the SPEC 2.1 table, with the milestone that will bring it in. Listing
@@ -1040,6 +1043,22 @@ let build_constraint env (c : Ast.constraint_item) =
        to fall through: lib/core/prop/element.ml posts a unit row per out-of-range
        position, so both are refuted by the ordinary arithmetic rather than by a special
        case here -- the same reason `all_different_int` above keeps its duplicates. *)
+    (* M4-T9. `array_int_maximum(m, xs)` / `array_int_minimum(m, xs)`: m first, then
+       the array, which is MiniZinc's argument order (std/flatzinc_builtins.mzn). An
+       empty array is refused here, with the position, because it has no maximum and
+       lib/core/prop/maxmin.ml would have nothing to post. *)
+    | ("array_int_maximum" | "array_int_minimum") as which -> (
+        arity 2;
+        match c.Ast.c_args with
+        | [ ma; xa ] -> (
+            let m = operand env pos ma and xs = operands env pos xa in
+            if xs = [] then
+              Error.failf pos "builtin `%s`: the array is empty, so it has no %s" which
+                (if which = "array_int_maximum" then "maximum" else "minimum");
+            match which with
+            | "array_int_maximum" -> Model.Array_int_maximum (m, xs)
+            | _ -> Model.Array_int_minimum (m, xs))
+        | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
     | "array_int_element" -> (
         arity 3;
         match c.Ast.c_args with

@@ -6315,6 +6315,261 @@ let test_regin_random_proofs () =
         (!sat > 0 && !unsat > 0);
       try Sys.rmdir dir with _ -> ())
 
+(* ====================================================================== M4-T9
+
+   array_int_maximum / array_int_minimum (lib/core/prop/maxmin.ml, D-0095). The instance
+   is the DISJUNCTIVE half, `m <= max_i x_i`; the `m >= x_i` rows are [Linear]'s. Four
+   questions, each a different one:
+
+   1. Each rule on a hand-built store: the bound it moves, the clause it cites (C_v,
+      literal for literal), the facts on its trace line, and the D-0026 agreement of the
+      two halves.
+   2. I-P1 / I-P2 / I-P3 and the declared BOUNDS level, by brute force over every
+      sub-box of a small scope, for both directions.
+   3. The checker: the R3 line is RUP against the posted rows over a SATISFIABLE model
+      (D-0053); the same line one unit stronger is refused on the RUP judgement; and the
+      same honest line against an .opb holding only the linear rows is refused too --
+      which is what makes the per-value rows, and not the ladder, the thing that carries
+      hi(m). *)
+
+module Maxmin = Baguette_core.Maxmin
+module View = Baguette_core.View
+
+let mm_clause e =
+  match Explanation.force e with Explanation.Clause ls -> Some ls | _ -> None
+
+let mm_entry_of store before v =
+  List.find_opt
+    (fun (e : Store.entry) -> Var.equal e.Store.var v)
+    (List.filteri
+       (fun i _ -> i < Store.trail_length store - before)
+       (Store.trail_entries store))
+
+let mm_make store ~dir m xs =
+  Maxmin.make store ~dir
+    (View.of_var (var m))
+    (List.map (function `V i -> View.of_var (var i) | `C k -> View.const k) xs)
+
+let test_maxmin_rules () =
+  let lits ls = String.concat " " (List.map Lit.to_string ls) in
+  let scene ~title ~dir ~bounds ~m ~xs ~setup ~pushed ~expect_bound ~clause ~facts =
+    let store = mk_store bounds in
+    let p = mm_make store ~dir m xs in
+    List.iter
+      (fun (i, lo, hi) ->
+        ignore (Store.set_lo store (var i) lo placeholder_pruning);
+        ignore (Store.set_hi store (var i) hi placeholder_pruning))
+      setup;
+    let before = Store.trail_length store in
+    match Maxmin.propagate p store with
+    | Propagator.Conflict c -> (
+        check (title ^ ": the outcome") (pushed = None);
+        match mm_clause c.Store.c_why with
+        | Some ls -> check (title ^ ": the conflict cites C_v") (lits ls = clause)
+        | None -> check (title ^ ": the conflict is a clause") false)
+    | Propagator.Fixpoint -> (
+        match pushed with
+        | None -> check (title ^ ": expected a conflict") false
+        | Some v -> (
+            let d = Store.get store (var v) in
+            check (title ^ ": the bound moved") (expect_bound d);
+            match mm_entry_of store before (var v) with
+            | None -> check (title ^ ": an entry was pushed") false
+            | Some e ->
+                let ex = Store.explanation store e in
+                check
+                  (title ^ ": the explanation is C_v, literal for literal")
+                  (Option.map lits (mm_clause ex) = Some clause);
+                check
+                  (title ^ ": the trace line's facts are the bounds read")
+                  (lits (Reason.lits e.Store.reason) = facts);
+                check
+                  (title ^ ": D-0026, the reason and the clause agree")
+                  (Store.agreement_holds store
+                     (Reason.because ~concludes:None e.Store.reason ex))))
+  in
+  let b3 = [ ("m", 0, 5); ("a", 0, 5); ("b", 0, 5) ] in
+  scene ~title:"maxmin R3 (hi(m) <= max hi(x))" ~dir:Maxmin.Max ~bounds:b3 ~m:0
+    ~xs:[ `V 1; `V 2 ]
+    ~setup:[ (1, 0, 2); (2, 0, 3) ]
+    ~pushed:(Some 0)
+    ~expect_bound:(fun d -> Domain.hi d = 3)
+    ~clause:"~m_ge_4 a_ge_4 b_ge_4" ~facts:"~a_ge_4 ~b_ge_4";
+  scene ~title:"maxmin R4 (the only reacher takes lo(m))" ~dir:Maxmin.Max ~bounds:b3 ~m:0
+    ~xs:[ `V 1; `V 2 ]
+    ~setup:[ (0, 3, 5); (1, 0, 2) ]
+    ~pushed:(Some 2)
+    ~expect_bound:(fun d -> Domain.lo d = 3)
+    ~clause:"~m_ge_3 a_ge_3 b_ge_3" ~facts:"m_ge_3 ~a_ge_3";
+  scene ~title:"maxmin conflict (max hi(x) < lo(m))" ~dir:Maxmin.Max ~bounds:b3 ~m:0
+    ~xs:[ `V 1; `V 2 ]
+    ~setup:[ (0, 4, 5); (1, 0, 3); (2, 0, 2) ]
+    ~pushed:None
+    ~expect_bound:(fun _ -> true)
+    ~clause:"~m_ge_4 a_ge_4 b_ge_4" ~facts:"";
+  (* The mirror through negated views: lo(m) >= min lo(x), and the clause is C_v in the
+     mirror, over the BASE's literals -- `~[m <= 1] \/ [a <= 1] \/ [b <= 1]`. *)
+  scene ~title:"maxmin minimum R3 (lo(m) >= min lo(x))" ~dir:Maxmin.Min ~bounds:b3 ~m:0
+    ~xs:[ `V 1; `V 2 ]
+    ~setup:[ (1, 3, 5); (2, 2, 5) ]
+    ~pushed:(Some 0)
+    ~expect_bound:(fun d -> Domain.lo d = 2)
+    ~clause:"m_ge_2 ~a_ge_2 ~b_ge_2" ~facts:"a_ge_2 b_ge_2";
+  scene ~title:"maxmin minimum R4" ~dir:Maxmin.Min ~bounds:b3 ~m:0
+    ~xs:[ `V 1; `V 2 ]
+    ~setup:[ (0, 0, 2); (1, 3, 5) ]
+    ~pushed:(Some 2)
+    ~expect_bound:(fun d -> Domain.hi d = 2)
+    ~clause:"m_ge_3 ~a_ge_3 ~b_ge_3" ~facts:"~m_ge_3 a_ge_3";
+  (* A constant operand folds: max(a, 3) never needs a literal for the 3, and with
+     a <= 2 the maximum is the constant. C_4 has no literal for it at all. *)
+  scene ~title:"maxmin constant operand" ~dir:Maxmin.Max
+    ~bounds:[ ("m", 0, 5); ("a", 0, 5) ]
+    ~m:0
+    ~xs:[ `V 1; `C 3 ]
+    ~setup:[ (1, 0, 2) ]
+    ~pushed:(Some 0)
+    ~expect_bound:(fun d -> Domain.hi d = 3)
+    ~clause:"~m_ge_4 a_ge_4" ~facts:"~a_ge_4";
+  (* The rows: thresholds [max(dlo m, Lx + 1), min(dhi m, max(Hx + 1, dlo m))]. *)
+  let store = mk_store [ ("m", 0, 6); ("a", 1, 3); ("b", 2, 4) ] in
+  let p = mm_make store ~dir:Maxmin.Max 0 [ `V 1; `V 2 ] in
+  check "maxmin rows: one per threshold 3..5, folded"
+    (List.map lits (Maxmin.rows p)
+    = [ "~m_ge_3 a_ge_3 b_ge_3"; "~m_ge_4 b_ge_4"; "~m_ge_5" ]);
+  let store = mk_store [ ("m", 5, 6); ("a", 1, 3) ] in
+  let p = mm_make store ~dir:Maxmin.Max 0 [ `V 1 ] in
+  check "maxmin rows: dlo m above every x is the empty clause"
+    (List.map lits (Maxmin.rows p) = [ "" ]);
+  raises "maxmin: make refuses an empty array" (fun () ->
+      ignore (mm_make (mk_store [ ("m", 0, 1) ]) ~dir:Maxmin.Max 0 []))
+
+(* I-P1 (sound), bounds(Z) at the declared level, I-P2 (a second run moves nothing) and
+   I-P3 (checking), against the instance's own relation `m <= max x` (resp. >= min), over
+   every sub-box of m, a, b in 0..3, for both directions -- 1000 scenes each. *)
+let test_maxmin_brute_force () =
+  let rel dir mv xv =
+    match dir with
+    | Maxmin.Max -> mv <= List.fold_left max min_int xv
+    | Maxmin.Min -> mv >= List.fold_left min max_int xv
+  in
+  let boxes =
+    List.concat_map (fun lo -> List.init (4 - lo) (fun k -> (lo, lo + k))) [ 0; 1; 2; 3 ]
+  in
+  let bad = ref 0 and scenes = ref 0 in
+  List.iter
+    (fun dir ->
+      List.iter
+        (fun bm ->
+          List.iter
+            (fun ba ->
+              List.iter
+                (fun bb ->
+                  incr scenes;
+                  let box = [| bm; ba; bb |] in
+                  let store = mk_store [ ("m", 0, 3); ("a", 0, 3); ("b", 0, 3) ] in
+                  let p = mm_make store ~dir 0 [ `V 1; `V 2 ] in
+                  Array.iteri
+                    (fun i (lo, hi) ->
+                      ignore (Store.set_lo store (var i) lo placeholder_pruning);
+                      ignore (Store.set_hi store (var i) hi placeholder_pruning))
+                    box;
+                  let tuples =
+                    List.filter
+                      (function [ m; a; b ] -> rel dir m [ a; b ] | _ -> false)
+                      (cartesian (Array.to_list box))
+                  in
+                  match Maxmin.propagate p store with
+                  | Propagator.Conflict _ -> if tuples <> [] then incr bad
+                  | Propagator.Fixpoint -> (
+                      let cur = Array.init 3 (fun i -> Store.get store (var i)) in
+                      (* I-P1: every surviving tuple of the box is still in the box. *)
+                      let inside t =
+                        List.for_all2
+                          (fun d v -> Domain.lo d <= v && v <= Domain.hi d)
+                          (Array.to_list cur) t
+                      in
+                      if not (List.for_all inside tuples) then incr bad;
+                      (* BOUNDS: each bound has a support within the others' intervals. *)
+                      Array.iteri
+                        (fun i d ->
+                          List.iter
+                            (fun v ->
+                              if
+                                not
+                                  (List.exists
+                                     (fun t -> inside t && List.nth t i = v)
+                                     tuples)
+                              then incr bad)
+                            [ Domain.lo d; Domain.hi d ])
+                        cur;
+                      (* I-P2. *)
+                      let snap = Store.snapshot store in
+                      match Maxmin.propagate p store with
+                      | Propagator.Conflict _ -> incr bad
+                      | Propagator.Fixpoint ->
+                          if not (Store.same_domains store snap) then incr bad))
+                boxes)
+            boxes)
+        boxes)
+    [ Maxmin.Max; Maxmin.Min ];
+  check
+    (Printf.sprintf
+       "maxmin I-P1/I-P2/I-P3 and bounds(Z), %d scenes over both directions: no violation"
+       !scenes)
+    (!bad = 0 && !scenes = 2000)
+
+(* The checker. m, a, b in 0..5 with the posted rows of max(m, [a, b]) and the unit
+   facts a <= 2, b <= 3 -- SATISFIABLE (m = 3, a = 0, b = 3), so a RUP line here is not
+   vacuous (D-0053, D-0066). [~clauses:false] keeps only the two linear rows. *)
+let build_maxmin_r3 ~clauses ~claim dir =
+  let e = Encoding.create () in
+  List.iter (fun n -> Encoding.declare_int e n ~lo:0 ~hi:5) [ "m"; "a"; "b" ];
+  ignore (Encoding.add_int_lin_le e [ (1, "a"); (-1, "m") ] 0 : int);
+  ignore (Encoding.add_int_lin_le e [ (1, "b"); (-1, "m") ] 0 : int);
+  (if clauses then
+     let store = mk_store [ ("m", 0, 5); ("a", 0, 5); ("b", 0, 5) ] in
+     let p = mm_make store ~dir:Maxmin.Max 0 [ `V 1; `V 2 ] in
+     List.iter
+       (fun ls ->
+         ignore
+           (Encoding.add_constraint e (Opb.ge (List.map (fun l -> (1, l)) ls) 1) : int))
+       (Maxmin.rows p));
+  ignore (Encoding.add_constraint e (Opb.ge [ (1, Lit.le "a" 2) ] 1) : int);
+  ignore (Encoding.add_constraint e (Opb.ge [ (1, Lit.le "b" 3) ] 1) : int);
+  let opb = Filename.concat dir "maxmin.opb" and pbp = Filename.concat dir "maxmin.pbp" in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "m = max(a, b); a <= 2; b <= 3" ] e oc;
+  close_out oc;
+  let n = Opb.n_checker_constraints (Encoding.constraints e) in
+  let oc = open_out pbp in
+  Printf.fprintf oc
+    "pseudo-Boolean proof version 3.0\n\
+     f %d ;\n\
+     rup %s >= 1 ;\n\
+     output NONE ;\n\
+     conclusion NONE ;\n\
+     end pseudo-Boolean proof ;\n"
+    n claim;
+  close_out oc;
+  (opb, pbp)
+
+let maxmin_rup_refusal =
+  "The constraint is not implied by reverse unit propagation (RUP) from core and derived \
+   database."
+
+let test_maxmin_veripb () =
+  run_veripb ~name:"maxmin R3: hi(m) <= 3 is RUP against the posted rows"
+    ~build:(build_maxmin_r3 ~clauses:true ~claim:"+1 ~m_ge_4");
+  run_veripb_rejects_saying
+    ~name:"maxmin R3 BREAK: hi(m) <= 2, one unit stronger, is refused"
+    ~build:(build_maxmin_r3 ~clauses:true ~claim:"+1 ~m_ge_3")
+    ~saying:maxmin_rup_refusal;
+  run_veripb_rejects_saying
+    ~name:"maxmin R3 BREAK: the honest hi(m) <= 3 WITHOUT the per-value rows is refused"
+    ~build:(build_maxmin_r3 ~clauses:false ~claim:"+1 ~m_ge_4")
+    ~saying:maxmin_rup_refusal
+
 let () =
   print_endline "\npropagator unit tests";
   test_soundness ();
@@ -6497,6 +6752,9 @@ let () =
     ~saying:
       "The constraint is not implied by reverse unit propagation (RUP) from core and \
        derived database.";
+  test_maxmin_rules ();
+  test_maxmin_brute_force ();
+  test_maxmin_veripb ();
   if !failures > 0 then (
     Printf.printf "\n%d FAILURE(S)\n" !failures;
     exit 1)
