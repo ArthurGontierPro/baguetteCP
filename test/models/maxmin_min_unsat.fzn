@@ -1,0 +1,16 @@
+% array_int_minimum, UNSATISFIABLE: maxmin_unsat's mirror (M4-T9, D-0095). The minimum is
+% the SAME propagator over negated views (lib/core/prop/maxmin.ml, D-0058), so its rows
+% are C_v in the mirror -- `~[m <= v] \/ [a <= v] \/ [b <= v]`, i.e. over the bases' own
+% literals -- and the rule that closes each branch is lo(m) >= min_i lo(x_i), pushed one
+% step a round by a selector saying "that x is strictly above m".
+var 0..4: m :: output_var;
+var 0..4: a :: output_var;
+var 0..4: b :: output_var;
+var bool: p :: output_var;
+var bool: q :: output_var;
+constraint array_int_minimum(m, [a, b]);
+constraint int_eq(a, b);
+constraint int_lin_le_reif([-1, 1], [a, m], -1, p);
+constraint int_lin_le_reif([-1, 1], [b, m], -1, q);
+constraint bool_clause([p, q], []);
+solve :: int_search([p, q, m, a, b], input_order, indomain_min, complete) satisfy;

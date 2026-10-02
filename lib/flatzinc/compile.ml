@@ -161,6 +161,7 @@ module Ne = Baguette_core.Ne
 module Alldiff = Baguette_core.Alldiff
 module Element = Baguette_core.Element
 module Gcc = Baguette_core.Gcc
+module Maxmin = Baguette_core.Maxmin
 module View = Baguette_core.View
 
 (* M2-L12/D-0052: the clause propagator was widened to general order literals and its
@@ -1019,6 +1020,56 @@ let compile (m : Model.t) : t =
     let p = Gcc.make store encoding ~cover:cover_rows (List.map Var.of_int movable) in
     [ (fun id -> Propagator.pack ~id (module Gcc : Propagator.S with type t = Gcc.t) p) ]
   in
+  (* ------------------------------------------------------------------------ M4-T9
+
+     `array_int_maximum(m, xs)` / `array_int_minimum(m, xs)`, as lib/core/prop/maxmin.ml's
+     header splits it (D-0095):
+
+       - the CONJUNCTIVE half, one ordinary `int_lin_le` row and [Linear] instance per
+         operand: `x_i - m <= 0` for a maximum, `m - x_i <= 0` for a minimum. These are
+         the model rows R1/R2 are justified against, by [Linear]'s pol and nothing new;
+       - the DISJUNCTIVE half, the per-value clause family [Maxmin.rows] lists, one
+         `>= 1` row each over ORDER literals the .opb already has, and one [Maxmin]
+         instance whose every explanation is one of those rows restated.
+
+     Constants are views ([View.const]) on the propagator side and folded right-hand
+     sides on the row side, so `int_max(x, 3, m)` needs no case of its own. Rows are
+     posted in a fixed order -- linear rows in operand order, then the clauses in
+     increasing threshold -- because the order they are appended is the order of the ids
+     the proof cites. *)
+  let post_maxmin pos ~(dir : Maxmin.dir) (mo : Model.operand) (xs : Model.operand list) =
+    let linear =
+      List.concat_map
+        (fun x ->
+          let a, b = match dir with Maxmin.Max -> (x, mo) | Maxmin.Min -> (mo, x) in
+          let terms, rhs = difference_terms a b ~offset:0 in
+          post_le pos (normalise_terms terms) rhs)
+        xs
+    in
+    let view = function
+      | Model.Var i -> View.of_var (Var.of_int i)
+      | Model.Const k -> View.const k
+    in
+    let p = Maxmin.make store ~dir (view mo) (List.map view xs) in
+    List.iter
+      (fun lits ->
+        ignore
+          (Encoding.add_constraint encoding (Opb.ge (List.map (fun l -> (1, l)) lits) 1)
+            : int))
+      (Maxmin.rows p);
+    let pack id =
+      match dir with
+      | Maxmin.Max ->
+          Propagator.pack ~id
+            (module Maxmin.Maximum : Propagator.S with type t = Maxmin.t)
+            p
+      | Maxmin.Min ->
+          Propagator.pack ~id
+            (module Maxmin.Minimum : Propagator.S with type t = Maxmin.t)
+            p
+    in
+    linear @ [ pack ]
+  in
   (* ------------------------------------------------------------------------ M4-T3
 
      `array_int_element(idx, as, c)`, with `as` a constant array and a 1-BASED index.
@@ -1590,6 +1641,8 @@ let compile (m : Model.t) : t =
           | Model.Global_cardinality (xs, cover, counts) ->
               post_global_cardinality pos xs cover counts
           | Model.Array_int_element (i, vs, c) -> post_array_int_element pos i vs c
+          | Model.Array_int_maximum (mo, xs) -> post_maxmin pos ~dir:Maxmin.Max mo xs
+          | Model.Array_int_minimum (mo, xs) -> post_maxmin pos ~dir:Maxmin.Min mo xs
         with Checked.Overflow msg ->
           reject_row pos
             ~what:

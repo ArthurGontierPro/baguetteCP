@@ -1108,6 +1108,13 @@ let ix10_table =
        this row as Single_row on the grounds that "the counting rows are two" would be
        wrong on both counts. *)
     ("gcc.ml", Needs_derivation);
+    (* M4-T9: array_int_maximum / array_int_minimum (D-0095). Single_row on the clause.ml
+       precedent, and literally: the .opb holds the disjunction as one clause per
+       threshold v, C_v = ~[m >= v] \/ [x_1 >= v] \/ ... \/ [x_n >= v], and every pruning
+       and conflict this instance reports cites exactly one C_v, restated. The m >= x_i
+       half is [Linear]'s rows. test_prop.ml measures the honest R3 line accepted and the
+       same line refused on an .opb without the C_v rows. *)
+    ("maxmin.ml", Single_row);
   ]
 
 (* (a) CLOSURE. OCaml cannot reflect over its own modules, so the only way to notice a

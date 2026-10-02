@@ -629,7 +629,15 @@ let evaluate (m : M.t) (assign : int array) =
           let vs = List.map operand xs in
           List.for_all2
             (fun cv cnt -> List.length (List.filter (fun v -> v = cv) vs) = operand cnt)
-            (Array.to_list cover) counts)
+            (Array.to_list cover) counts
+      (* M4-T9, written apart from [Model.check_assignment] for the same reason: m is a
+         member of the values and bounds every one of them. *)
+      | M.Array_int_maximum (mo, xs) ->
+          let vs = List.map operand xs in
+          List.mem (operand mo) vs && List.for_all (fun v -> v <= operand mo) vs
+      | M.Array_int_minimum (mo, xs) ->
+          let vs = List.map operand xs in
+          List.mem (operand mo) vs && List.for_all (fun v -> v >= operand mo) vs)
     m.M.constraints
 
 (* Brute force over the declared box: the independent oracle for the expected answer.
@@ -1677,6 +1685,88 @@ let test_gcc_constant_counts () =
            (fun x -> not (Encoding.has_direct c.Compile.encoding x))
            [ "x1"; "x2"; "x3"; "x4" ])
 
+(* M4-T9 (D-0095): array_int_maximum / array_int_minimum and FlatZinc's int_max / int_min.
+
+   Shape: n [Linear] rows plus ONE maxmin instance, and int_max(x, y, z) is the array form
+   over [x, y] -- the same .opb byte for byte. Then the degenerate operands the front end
+   lets through (a constant, a repeat, m inside its own array, a constant result, a
+   ground model), each solved, re-checked against brute force (I-S1) and its proof
+   checked. An empty array is refused with a position. *)
+let test_maxmin () =
+  let decl = "var 0..3: a;\nvar 0..3: b;\nvar 0..3: c;\nvar 0..3: m;\n" in
+  let n, rows =
+    instances_and_rows
+      (decl ^ "constraint array_int_maximum(m,[a,b,c]);\nsolve satisfy;\n")
+  in
+  check "M4-T9: array_int_maximum over 3 is 3 linear rows + 1 maxmin instance" (n = 4);
+  (* 3 ladders of 2 clauses each for a, b, c, m (4 x 2), 3 linear rows, and C_1..C_3. *)
+  check
+    (Printf.sprintf "M4-T9: ... and its .opb is ladders + 3 linear rows + C_1..C_3 (%d)"
+       rows)
+    (rows = (4 * 2) + 3 + 3);
+  let _, t1 = opb_text (decl ^ "constraint int_max(a,b,m);\nsolve satisfy;\n")
+  and _, t2 =
+    opb_text (decl ^ "constraint array_int_maximum(m,[a,b]);\nsolve satisfy;\n")
+  in
+  check "M4-T9: int_max(a,b,m) writes the same .opb as array_int_maximum(m,[a,b])"
+    (String.equal t1 t2);
+  let _, t1 = opb_text (decl ^ "constraint int_min(a,b,m);\nsolve satisfy;\n")
+  and _, t2 =
+    opb_text (decl ^ "constraint array_int_minimum(m,[a,b]);\nsolve satisfy;\n")
+  in
+  check "M4-T9: int_min(a,b,m) writes the same .opb as array_int_minimum(m,[a,b])"
+    (String.equal t1 t2);
+  (* D-0083's rule for the result: an undomained `var int` maximum is bounded by the
+     hull of its operands (measured need: 2010_filters_filter's objective). *)
+  let inferred src =
+    match build src with
+    | exception Baguette_flatzinc.Error.Error _ -> None
+    | m ->
+        Array.to_list m.M.vars
+        |> List.find_map (fun (v : M.var) ->
+               if v.M.v_name = "r" then
+                 match v.M.v_dom with M.Drange (l, u) -> Some (l, u) | _ -> None
+               else None)
+  in
+  let ab = "var 1..3: a;\nvar 2..5: b;\nvar int: r;\n" in
+  check "M4-T9 D-0083: an undomained maximum is inferred to the hull 2..5"
+    (inferred (ab ^ "constraint array_int_maximum(r,[a,b]);\nsolve satisfy;\n")
+    = Some (2, 5));
+  check "M4-T9 D-0083: an undomained int_min is inferred to the hull 1..3"
+    (inferred (ab ^ "constraint int_min(a,b,r);\nsolve satisfy;\n") = Some (1, 3));
+  (match build (decl ^ "constraint array_int_maximum(m,[]);\nsolve satisfy;\n") with
+  | exception Baguette_flatzinc.Error.Error _ ->
+      check "M4-T9: an empty array is refused with a positioned error" true
+  | _ -> check "M4-T9: an empty array is refused with a positioned error" false);
+  List.iter
+    (fun (title, body) ->
+      run_model ~title:("M4-T9 " ^ title) ~src:(decl ^ body ^ "solve satisfy;\n"))
+    [
+      ( "max with a constant operand, SAT",
+        "constraint array_int_maximum(m,[a,2]);\nconstraint int_le(a,1);\n" );
+      ( "max with a constant operand, UNSAT",
+        "constraint array_int_maximum(m,[a,2]);\nconstraint int_le(m,1);\n" );
+      ( "min with a repeated operand",
+        "constraint array_int_minimum(m,[a,a,b]);\n\
+         constraint int_lin_le([-1],[m],-2);\n\
+         constraint int_le(b,2);\n" );
+      ( "m inside its own array",
+        "constraint array_int_maximum(m,[m,a]);\nconstraint int_lt(m,a);\n" );
+      ( "a constant result",
+        "constraint array_int_maximum(3,[a,b,c]);\n\
+         constraint int_lt(a,3);\n\
+         constraint int_lt(b,3);\n" );
+      ( "a constant result, UNSAT",
+        "constraint array_int_minimum(2,[a,b]);\nconstraint int_lt(a,2);\n" );
+      ("ground and false", "constraint array_int_maximum(3,[1,2]);\n");
+      ("ground and true", "constraint array_int_minimum(1,[1,2]);\n");
+      ( "max = min forces equality",
+        "constraint array_int_maximum(m,[a,b,c]);\n\
+         constraint array_int_minimum(m,[a,b,c]);\n\
+         constraint int_ne(a,0);\n\
+         constraint int_lin_le([1,1,1],[a,b,c],5);\n" );
+    ]
+
 (* ------------------------------------------------------------------------- main *)
 
 let () =
@@ -1699,6 +1789,7 @@ let () =
   test_search_annotated_proofs ();
   test_set_domain_holes ();
   test_gcc_constant_counts ();
+  test_maxmin ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

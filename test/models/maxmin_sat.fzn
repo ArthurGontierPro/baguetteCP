@@ -1,0 +1,21 @@
+% array_int_maximum under SEARCH, SATISFIABLE: the lane that puts the disjunction's
+% derivations on the page (M4-T9, D-0095).
+%
+% m = max(a, b, c) with m in 4..5 and c <= 3 by declaration, so at the root a and b are
+% the only positions that can reach lo(m) = 4 and nothing is settled. Branching on a,
+% smallest value first, makes the first four guesses wrong: a = 0 forces b <= 0 through
+% b <= a, which leaves NO position able to reach 4 -- a Maxmin conflict at threshold 4
+% (C_4 = a_ge_4 \/ b_ge_4, the row at dlo m, which has no m literal). a = 1, 2, 3 fail
+% the same way; R4 on the way down forces b >= 4 whenever a is the one that drops out,
+% and R3 (hi(m) <= max hi(x)) narrows m once a is fixed. Each failure's nogood is learned
+% from those lines, so they are load-bearing over a satisfiable model (D-0053), which a
+% refutation lane cannot supply: measured, the R3 line
+% `~m_ge_5 \/ a_ge_5 \/ b_ge_5` is refused with a literal flipped.
+var 4..5: m :: output_var;
+var 0..5: a :: output_var;
+var 0..5: b :: output_var;
+var 0..3: c :: output_var;
+constraint array_int_maximum(m, [a, b, c]);
+constraint int_le(b, a);
+constraint int_lin_le([1, 1, 1], [a, b, c], 6);
+solve :: int_search([a, b, c, m], input_order, indomain_min, complete) satisfy;

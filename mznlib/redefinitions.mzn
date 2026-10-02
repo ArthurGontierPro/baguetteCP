@@ -21,10 +21,11 @@
 % the propagator and its justification are the point.
 %
 % std/redefinitions.mzn is a two-line comment, so shadowing it costs nothing.
-% The versioned std/redefinitions-2.*.mzn files are NOT shadowed: they already
-% map the _nonshifted and 2d_nonshifted element forms, array_int_maximum /
-% array_int_minimum, bool_clause_reif and int_pow_fixed onto the builtins this
-% file defines.
+% The versioned std/redefinitions-2.*.mzn files are NOT shadowed, with one
+% exception: they map the _nonshifted and 2d_nonshifted element forms,
+% bool_clause_reif and int_pow_fixed onto the builtins this file defines.  The
+% exception is redefinitions-2.0.mzn, shadowed by M4-T9 so that
+% array_int_maximum / array_int_minimum stay whole (see that file).
 %-----------------------------------------------------------------------------%
 
 % var set of int -> array of var bool.  baguette has no set variables at all,
@@ -41,11 +42,13 @@ include "compat_mzn1.mzn";
 
 predicate int_plus(var int: x, var int: y, var int: z) = x + y = z;
 
-predicate int_max(var int: x, var int: y, var int: z) =
-  z >= x /\ z >= y /\ (z = x \/ z = y);
+% M4-T9 (D-0095): the two-element case of array_int_maximum / array_int_minimum,
+% which redefinitions-2.0.mzn keeps whole for lib/core/prop/maxmin.ml.  The
+% decomposition this replaces (z >= x /\ z >= y /\ (z = x \/ z = y)) reached the
+% front end as two reified equalities and a clause.
+predicate int_max(var int: x, var int: y, var int: z) = array_int_maximum(z, [x, y]);
 
-predicate int_min(var int: x, var int: y, var int: z) =
-  z <= x /\ z <= y /\ (z = x \/ z = y);
+predicate int_min(var int: x, var int: y, var int: z) = array_int_minimum(z, [x, y]);
 
 % x = y*q + z with q = x div y, truncating toward zero -- which is exactly what
 % baguette's int_div does (SPEC 2.1, "Integer division, modulo and absolute

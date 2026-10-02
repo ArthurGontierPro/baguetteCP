@@ -7904,3 +7904,133 @@ sgm+1 **8.94 s → 6.45 s**.
    for the un-annotated `first_fail` (D-0087).
 4. **The width wall** is 69 instances and untouched; `connect` is the one remaining front-end
    refusal.
+## D-0095  M4-T9: `array_int_maximum` / `array_int_minimum` as a propagator over one clause row per threshold
+
+**Date.** 2026-10-02. **Row.** M4-T9 (agent-maxmin, `wave38-maxmin`). **Census.** 94 of 436
+MiniZinc Challenge models name `maximum`/`minimum`; every one was decomposed into reified rows.
+
+**The split.** `m = max_i x_i` is `(/\_i m >= x_i) /\ m <= max_i x_i`, and the two halves are
+posted differently.
+
+- The **conjunctive** half is `n` ordinary `int_lin_le` rows `x_i - m <= 0`, one `Linear`
+  instance each. These ARE the model rows. They carry two rules with `Linear`'s `pol` and nothing
+  new: **R1** `lo(m) >= lo(x_i)` and **R2** `hi(x_i) <= hi(m)`.
+- The **disjunctive** half, `m <= max_i x_i`, is one new instance (`lib/core/prop/maxmin.ml`,
+  name `array_int_maximum` / `array_int_minimum`) with two rules and a conflict:
+  - **R3** `hi(m) <= H` where `H = max_i hi(x_i)`;
+  - **R4** `lo(x_j) >= lo(m)` when `j` is the only position with `hi(x_j) >= lo(m)`;
+  - **conflict** when `H < lo(m)`.
+
+**What the `.opb` holds for the disjunction.** One clause per threshold `v`:
+
+    C_v :  ~[m >= v] \/ [x_1 >= v] \/ ... \/ [x_n >= v]
+
+Over all `v` this is exactly `m <= max x` in the order encoding. Literals the declared bounds
+settle are folded. A constant-false literal is dropped. A constant-true one makes the clause
+vacuous, and a vacuous clause is not posted. So the posted thresholds are
+`v in [max(dlo m, Lx + 1), min(dhi m, max(Hx + 1, dlo m))]`, where `Lx`/`Hx` are the largest
+declared lower/upper bound of any `x`. Below `Lx + 1`, some `x` is `>= v` by declaration. Above
+`dhi m`, the antecedent is false. Above `Hx + 1`, the clause is the unit `~[m >= v]`, and the
+ladder already gets that from `C_(Hx+1)`. When `dlo m > Hx`, the single row is the empty clause.
+
+**Justification: every Maxmin explanation is one posted row, restated.**
+
+- R3 cites `C_(H+1)`. Its facts are `x_i <= H`, and it claims `m <= H`.
+- R4 cites `C_(lo m)`. Its facts are `m >= lo m` and `x_i <= lo m - 1` for `i <> j`, and it
+  claims `x_j >= lo m`.
+- The conflict cites `C_v` at `v = max(H + 1, dlo m)`.
+
+Each such `v` lies in the posted range. The proof: R3 has `lo(m) <= H < hi(m)`, so
+`dlo m < v <= dhi m`, `v >= Lx + 1` because `H >= every lo(x)`, and `v <= Hx + 1`. R4 has every
+`x` either unable to reach `lo m` or below it on `lo`, so `Lx < lo m <= Hx`. The conflict has
+`H >= Lx` and `v <= lo(m)`. `Maxmin.expl_at` raises rather than render a threshold outside the
+range. Each fact is the negation of one literal of the clause, so the trace line and the clause
+agree literal for literal. That is D-0026's check: clean under `BAGUETTE_DEBUG=1`, asserted on
+hand-built stores in test_prop.ml. The explanation is `Explanation.clause C_v`, the `clause.ml`
+(M2-L12) shape. **No new `Explanation` constructor, no row id, nothing `Deferred`.** The clause
+for each threshold is built once at `make` and shared, so Justify's memo on physical identity
+fires. I-X10: **Single_row**, classified in test_trace.ml's closure gate.
+
+**The worked derivation of the `hi(m)` clause, against the checker.** The scene is `m, a, b in
+0..5`, the posted rows of `m = max(a, b)`, and the units `a <= 2`, `b <= 3`. It is
+SATISFIABLE (m = 3), so a RUP line here is not vacuous (D-0053, D-0066).
+
+1. R3 says `hi(m) <= 3`. The line `rup +1 ~m_ge_4 >= 1` is ACCEPTED. Negating it gives `m >= 4`.
+   `C_4` then needs `a_ge_4 \/ b_ge_4`, and the two units falsify both, so the clause propagation
+   is the whole derivation.
+2. One unit stronger, `rup +1 ~m_ge_3 >= 1`, is REFUSED with the checker's RUP judgement in full
+   ("The constraint is not implied by reverse unit propagation (RUP) from core and derived
+   database.").
+3. The honest line from (1) against an `.opb` holding only the two linear rows is REFUSED with the
+   same judgement. Neither `m >= x_i` nor the ladder gives `hi(m)`. **The per-value rows are the
+   derivation.**
+
+These are three lanes in test_prop.ml (`test_maxmin_veripb`).
+
+**Why per value and not a selector per position.** The alternative is `b_i -> m <= x_i` (big-M)
+plus `\/_i b_i`, which is the shape of `int_lin_ne`'s `_neN` selector. It was not taken:
+
+- it needs `n` auxiliary 0-1 variables, which the solver must search on or keep in step;
+- each big-M row expands both `m` and `x_i` over their whole ladders, so it is not smaller;
+- its prunings are RUP only through two rows and the ladder, where here every one is a single row.
+
+**Minimum is the same propagator over negated views (D-0058).** `m = min x <=> -m = max(-x)`.
+`make ~dir:Min` negates every view, and from then on there is one code path. A negated view's
+`>= v` literal IS the base's `<= -v` literal, so a minimum's rows are `C_v` in the mirror over the
+bases' own literals, and no second encoding exists. A constant operand is a `View.Const` whose
+literals all fold. `int_max(x, y, z)` / `int_min(x, y, z)` are accepted by the front end as the
+array form over `[x, y]`. They write a byte-identical `.opb` (test_compile.ml).
+
+**Consistency: BOUNDS, for the instance's own relation `m <= max x`.** For that relation R3 and R4
+are bounds(Z). The evidence:
+
+- a brute force over all 2000 sub-boxes of `m, a, b in 0..3`, both directions, checking I-P1,
+  I-P2, I-P3 and support of every bound;
+- `BAGUETTE_CONSISTENCY=1` over the four model lanes audits `array_int_maximum`/`_minimum` at
+  `bounds` 20 times with no violation.
+
+The engine fixpoint with R1/R2 is the textbook bounds rule set for max.
+
+**MiniZinc.** std has no `fzn_array_int_maximum`. `maximum`, `minimum`, `max(array)` and
+`min(array)` lower to `array_int_maximum`/`array_int_minimum`, and std's
+`redefinitions-2.0.mzn` is what gives those two a body (a chain of `int_max` auxiliaries). So
+`mznlib/redefinitions-2.0.mzn` SHADOWS it. It declares both bodyless and keeps the rest of std's
+file verbatim (`bool_clause_reif` and the float forms). `redefinitions.mzn`'s `int_max`/`int_min`
+become `array_int_maximum(z, [x, y])`. The orchestrator's brief named
+`mznlib/fzn_array_int_maximum.mzn`. **That file would be dead, and it was not written.**
+`check_mznlib.sh` on fataepyc-07 (MiniZinc 2.10.1) reports **10 ok, 0 failed**. Three new sources
+carry `MUST-EMIT: array_int_maximum`/`_minimum`, `MUST-NOT-EMIT: int_eq_reif` and `SOLVES-AS`.
+
+**D-0083 inference.** Keeping the constraint whole removed the rows that used to bound an
+undomained result. `2010_filters_filter`'s objective is `var int` and was REFUSED at first. The
+builder now infers from the `m >= x_i` linear facts, plus `F_hull`: `m <= max hi(x)` once every
+`x` has an upper bound, mirrored for min. docs/SPEC.md 2.1's list of bound-carrying builtins
+needs `array_int_maximum`/`_minimum` and `int_max`/`int_min` added, and that is filed as a
+request.
+
+**Measured on the corpus** (fataepyc-07, `--time-limit 120 --stats --proof`,
+`ulimit -v 32000000`, veripb 3.0.2). `main` is `/scratch/arthur/baguette/_build/default/bin/main.exe`
+at `5c299cb`, sha256 `2bbdd45a…`, flattened with main's mznlib. Mine is `cd6d47e`, sha256
+`4ea426bb…`.
+
+| instance | max/min calls (mine) | main: nodes, wall, .pbp | mine: nodes, wall, .pbp | outcome, both | veripb, both |
+|---|---|---|---|---|---|
+| 2008_radiation | 160 | 888, 13.8 s, 37.1 MB | 775, 7.9 s, 25.9 MB | optimum 370 | VERIFIED BOUNDS 370 |
+| 2009_open_stacks_01 | 1 | 2211, 20.9 s, 44.9 MB | 2281, 18.8 s, 43.2 MB | optimum 9 | VERIFIED BOUNDS 9 |
+| 2010_filters_filter | 1 | 1247, 2.0 s, 3.76 MB | 1247, 2.0 s, 3.79 MB | optimum 15 | VERIFIED BOUNDS 15 |
+| 2010_depot_placement | 1 | 5338, 120 s limit, 202 MB | 5308, 120 s limit, 200 MB | incumbent 106 at the limit, 10 solutions | VERIFIED NO CONCLUSION |
+
+On radiation, the flattened model goes from 1028 constraints to 388. Its `.opb` goes from 13539
+rows to 23939, because the per-value clauses are many and short, but it is 0.7 % smaller in
+bytes. filters is node-identical, and depot is within 1 % on nodes: main already flattened its one `maximum` without reified
+equalities. **Not measured:** the width cost of `C_v` on a wide `m`. The rows are at most
+`dhi m - dlo m + 1` clauses of width `n + 1`, which is the same order as `m`'s own ladder
+(D-0028), but no corpus instance here exercises a wide one.
+
+**PROOF-FORMAT section 4 gets one sentence:** `m >= x_i` is `n` `int_lin_le` rows; the
+disjunction is one `.opb` clause per threshold, `~[m >= v] \/ [x_1 >= v] \/ ... \/ [x_n >= v]`,
+and every pruning of the `maxmin` instance is `rup` of exactly one of them, restated.
+
+**What would reverse this.** A corpus instance with a wide `m`, where the `C_v` family costs
+more than the selector encoding's `2n` big-M rows, would reverse it. Then the comparison above
+would have to be measured rather than argued.
