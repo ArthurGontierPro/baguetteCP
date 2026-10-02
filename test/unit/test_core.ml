@@ -816,6 +816,83 @@ let test_agreement () =
              [ Reason.at_least ~name:"z" ~decl:0 2 ]
              (Explanation.deferred (fun () -> expl)))))
 
+(* ------------------------------------- M6-T8 / D-0091: the reverse arm and a ROOT Defining
+
+   Four suite models died under BAGUETTE_DEBUG on this arm, every one at an element
+   no-position conflict: a deliberately EMPTY reason (no conflict line -- the counting
+   argument is not RUP) beside a derivation whose top level cancels a residue bound with
+   [Explanation.Defining], which D-0064 lets a propagator build only for a bound the ROOT
+   established. The arm used to require the reason to name every top-level [Defining]
+   exactly as it does a [Weaken]. A root-held fact is in no branch's dependency, so it is
+   now exempt -- WHEN THE STORE SAYS SO, which is what each pair below pins: the same
+   reason and the same justification, with only the level the bound was set at changed,
+   give opposite answers. *)
+let test_agreement_root_defining () =
+  let x = Var.of_int 0 in
+  let mk () =
+    Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 9; Domain.make 0 9 |]
+  in
+  let set_hi_x st k =
+    ignore
+      (Store.set_hi st x k
+         (Reason.because ~concludes:None Reason.none (Explanation.model_row 1)))
+  in
+  (* x <= 3 set at the ROOT. *)
+  let root = mk () in
+  set_hi_x root 3;
+  (* x <= 3 set at LEVEL 1 -- the bound a decision's consequence would be. *)
+  let deep = mk () in
+  Store.new_level deep;
+  set_hi_x deep 3;
+  let defining l =
+    Explanation.combine
+      [ Explanation.term 1 (Explanation.model_row 7); Explanation.defining 1 l ]
+      1
+  in
+  let none e = Reason.because ~concludes:None Reason.none e in
+  let cites_x = defining (Lit.le "x" 3) in
+  check
+    "D-0091: a root-held Defining needs no fact in the reason (the four models' shape)"
+    (Store.agreement_holds root (none cites_x));
+  check
+    "D-0091: ... and it is the STORE that says root -- the same pair at level 1 DISAGREES"
+    (not (Store.agreement_holds deep (none cites_x)));
+  check "D-0091: at level 1, naming the variable is what makes it agree"
+    (Store.agreement_holds deep
+       (Reason.because ~concludes:None [ Reason.at_most ~name:"x" ~decl:9 3 ] cites_x));
+  check "D-0091: through a Deferred, as a propagator hands it over"
+    (Store.agreement_holds root (none (Explanation.deferred (fun () -> cites_x))));
+  (* The literal must be one the root actually HOLDS: x <= 2 is stronger than the store's
+     x <= 3, so it is no root fact and the reason still owes it. *)
+  check "D-0091: a Defining STRONGER than the root bound is not exempt"
+    (not (Store.agreement_holds root (none (defining (Lit.le "x" 2)))));
+  check "D-0091: nor one in the direction the root never moved (x >= 1 at lo = 0)"
+    (not (Store.agreement_holds root (none (defining (Lit.ge "x" 1)))));
+  (* A declared bound counts as root-held: nothing moved it. y >= 0 holds at declaration;
+     a literal AT its declaration ([Lit.ge "y" 0]) is the constant true. *)
+  check "D-0091: a bound at its declaration is root-held"
+    (Store.agreement_holds root (none (defining (Lit.le "y" 9))));
+  (* What stays exactly as it was. *)
+  check "D-0091: a WEAKEN of a root-held variable is still owed by the reason (I-P5)"
+    (not
+       (Store.agreement_holds root
+          (none
+             (Explanation.combine
+                [
+                  Explanation.term 1 (Explanation.model_row 7);
+                  Explanation.weaken [ (1, Lit.le "x" 3) ];
+                ]
+                1))));
+  check "D-0091: a DIRECT-literal Defining is not exempted (no caller needs it)"
+    (not (Store.agreement_holds root (none (defining (Lit.ne "x" 5)))));
+  check "D-0091: a Defining on a variable the store does not know is not exempted"
+    (not (Store.agreement_holds root (none (defining (Lit.le "z" 3)))));
+  check "D-0091: Store.root_holds agrees with the arm on the order literal it read"
+    (Store.root_holds root (Lit.le "x" 3)
+    && (not (Store.root_holds deep (Lit.le "x" 3)))
+    && Store.root_holds root (Lit.le "x" 4)
+    && not (Store.root_holds root (Lit.le "x" 2)))
+
 (* ---------------------------------------------------------------------------
    M2-L0 / D-0043, test (b): the agreement check becomes EXACT.
 
@@ -1441,6 +1518,7 @@ let () =
       test_reason ();
       test_bound_support ();
       test_agreement ();
+      test_agreement_root_defining ();
       test_conclusion ();
       test_decision_concludes_nothing ();
       test_agreement_is_wired ();

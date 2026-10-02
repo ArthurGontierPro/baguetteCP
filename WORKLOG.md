@@ -747,6 +747,9 @@ work. The owning session picks it up.
 | **M6-T14 / D-0088**: after the support and remover histories, 40 % of 2014_mario's self time is `Trace.position_of`, a linear walk over `done_` by physical identity, run once per entry a settle reaches. Another 5 % is `Stdlib.@`, from `Trace.add_fact`'s `acc @ [l]`, which is quadratic in the fact count. A per-entry position (the trail index is known where `done_` is written), or a physical-key table, makes the first O(1). | `lib/core/trace.ml` | agent-speed3 | **taken 2026-10-02** by M6-T15 (agent-speed4, wave 36) |
 | **M6-T14**: under `BAGUETTE_DEBUG=1`, four suite models die on the D-0026 agreement check (`reason [-] vs justification combine(...)`): `alldiff_regin_hole_element_unsat`, `element_crossed_root_unsat`, `element_moved_unsat`, `element_shared_result_root_unsat`. The base binary (`main` before M6-T14) dies the same way, so this predates M6-T14. Some element (or Regin) pruning records `Reason.none` while its justification is a full derivation. | `lib/core/prop/element.ml` (or `alldiff.ml`) | agent-speed3 | **taken 2026-10-02** by M6-T8 (agent-debug, wave 36) |
 | **M6-T15 / D-0090**: once `Trace.position_of` is gone, the top symbol on 2014_mario is `Stdlib.@` at 9.3 % self. A DWARF call graph puts 83 % of it under an anonymous function in `Analysis`, almost certainly the node merge at `lib/core/analysis.ml:395` (`out @ [ n ]` after a `List.map ... same_slot`, which is quadratic in the frontier; `Analysis.same_slot` and `fun_1270` are another 2.9 % and 2.8 %). `add_antecedent` at :407 has the same `@ [ p ]` shape. An indexed frontier, or a reversed list, would make it linear. Byte identity is the proof, as for M6-T14 and M6-T15. | `lib/core/analysis.ml` | agent-speed4 | **taken 2026-10-02** by M6-T16 (agent-speed5, wave 37) |
+| **M6-T8 / D-0091**: under `BAGUETTE_DEBUG=1`, `test_compile.exe` dies in `test_element_oracle` (via `closure_and_fixpoint`) and then `test_element_view` on `Element: at-least-one has no constraint id`. These scenes propagate an element with no proof started, and the D-0026 check forces every justification at push time. Element's `need` raising is the guard doing its job; the HARNESS is the problem. Measured fix: after `let c = Compile.compile m in` in both `closure_and_fixpoint` and `test_element_view`, add `Encoding.start_proof c.Compile.encoding (Writer.create (open_out "/dev/null"));` (or a shared sink like test_prop.ml's `sink_proof`). The binary is then clean: 221 ok with the flag, 221 ok without. | `test/unit/test_compile.ml` | agent-debug | open |
+| **M6-T8 / D-0091**: under `BAGUETTE_DEBUG=1`, `test_learn.exe` dies in `test_i_s4_ordering`'s `b BREAK` lane (`break_i_s4 = true`) on `invariant violated: I-S4 ... ALREADY RETIRED`. That is `Search`'s own `Debug.check` CATCHING the deliberate break, which is correct; the lane assumes the flag is off. Measured fix: when `Baguette_core.Debug.enabled`, the lane asserts that `run ~config:{... break_i_s4 = true} settle_src` raises `Failure`, and otherwise it runs the existing lane unchanged. The binary is then clean: 167 ok with the flag, 169 ok without. The patch is the D-0091 handoff's. | `test/unit/test_learn.ml` | agent-debug | open |
+| **M6-T8 / D-0091**, for information at merge: the agreement predicate is in `lib/core/store.ml`, so the D-0026 fix had to go there. The edit is confined to `agreement_holds` and three helpers just above it (`at_root`, `root_holds`, `reverse_owners`). agent-speed4's `store.ml` hunks (entry type, `dummy_entry`, `push_entry`/`apply` position) are elsewhere and should merge without conflict. | `lib/core/store.ml` | agent-debug | FYI |
 
 ## Completed
 
@@ -852,6 +855,7 @@ work. The owning session picks it up.
 | M6-T13 | agent-speed2 | 2026-10-02 | **D-0087**. (i) `Search.sequence` records a STAGED form (ephemeron, physical key) that `dfs` asks first; `unfixed store` is built only when every phase is exhausted -- `ne 7 2000` 3.49 -> 1.28 s cpu, padding-independent. (ii) `Opb.Names` string-specialised tables (still keyed on the RENDERED name), no `Printf` per term -- wide 400x300 1.21x. Both byte-identical, 411 artefacts / 137 models (`e3a4a689` -> `c7d41e10`). (iii) `mznlib/fzn_global_cardinality_low_up.mzn`, lanes `gcc_low_up_{sat,unsat}` (hand-written, proofs VERIFIED), `check_mznlib.sh` MUST-EMIT/MUST-NOT-EMIT/SOLVES-AS -- UNFLATTENED-UNTESTED |
 | M6-T14 | agent-speed3 | 2026-10-02 | **D-0088**. Per-variable trail histories (`lo_hist`/`hi_hist`/`all_hist`) in `Store`. `bound_support`, `remover` and `Pb_analysis.falsified_at` are binary searches. The scans remain one wave as `BAGUETTE_DEBUG` cross-checks. 396 artefacts byte-identical. Node, 55 s: 2014_mario 262 -> 1494 nodes, 2023_chessboard 1486 -> 1806. |
 | M6-T15 | agent-speed4 | 2026-10-02 | **D-0090**. `Store.entry.pos`, the entry's own trail position, makes `Trace.position_of` O(1) with no second map and no new wipe rule. The old walk stays one wave as the `BAGUETTE_DEBUG` cross-check and test_trace's oracle. `add_fact` and `settle_facts` use reversed accumulators. 396/396 artefacts byte-identical. Node, 55 s: 2014_mario 1697 -> 2575 nodes, 2023_chessboard 3003 -> 3027. |
+| M6-T8 | agent-debug | 2026-10-02 | **D-0091**. The four element `BAGUETTE_DEBUG` fatals were one call (`Element.no_position_conflict`) and class (c): D-0026's reverse arm required an empty reason to name a top-level `Defining` the ROOT holds. `Store.reverse_owners` now exempts that case, and only when `Store.root_holds` confirms it. test_prop's propagate-only alldiff scenes start a proof. 132/132 models pass under the flag; 21/23 unit binaries are clean, and `test_compile` and `test_learn` are requested. 396 artefacts byte-identical. Finding: element conflicts carry `Reason.none` at every depth, so they never learn a 1UIP clause (explanation quality, not soundness). |
 
 ## Handoff notes
 
@@ -3736,3 +3740,38 @@ header no longer says otherwise.
   which predates M6-T14, so OLD was built from `6b277a7` in `/scratch/arthur/baguette-speed4`.
 - Next on mario: `Stdlib.@` at 9.3 %, now from `Analysis`'s node merge (`analysis.ml:395`).
   Filed as a request.
+## M6-T8 handoff, 2026-10-02 (agent-debug)
+
+- **D-0091.** The four element models that died under `BAGUETTE_DEBUG=1` all died at one call,
+  `Element.no_position_conflict`, and the class is (c). The reason is `Reason.none` on purpose,
+  and the derivation cancels a ROOT-established residue with a top-level `Defining`. The
+  reverse arm of the D-0026 check required the reason to name that variable. It now exempts a
+  top-level order-literal `Defining`, but only when `Store.root_holds` confirms the store holds
+  the bound at level 0. Every `Weaken`, every decision-level `Defining` and every direct-literal
+  `Defining` is still required. Tests: `test_core`'s `test_agreement_root_defining` and
+  `test_prop`'s `test_d0091_element_root_defining`. Putting the old arm back fails 4 checks.
+- **Merge note.** The predicate lives in `lib/core/store.ml`, which agent-speed4 holds for the
+  entry position. My hunk is only `agreement_holds` plus `at_root`/`root_holds`/`reverse_owners`.
+  Their hunks are elsewhere in the file.
+- **Still open:** two unit binaries die under the flag because of their harnesses, and the
+  files are not mine (requests filed). `test_compile` needs `start_proof` in two element
+  scenes. In `test_learn`, the `break_i_s4` lane is correctly caught by the debug gate and
+  should assert that. The patch:
+
+```diff
+@@ -466,6 +466,12 @@ let test_i_s4_ordering () =
+   (* The break: the `w` first, the derivation second. *)
++  if Baguette_core.Debug.enabled then
++    check "b BREAK (BAGUETTE_DEBUG): the debug gate stops the run on the I-S4 violation"
++      (match run ~config:{ Search.default_config with Search.break_i_s4 = true } settle_src with
++      | exception Failure m -> String.length m > 0
++      | _ -> false)
++  else
+   let rb, dirb, opbb, pbpb =
+```
+
+- **A finding for whoever does explanation quality next.** Element's conflicts carry
+  `Reason.none` at every depth. Under a decision, `Learn.at_conflict` sees an empty cut and
+  returns `None`, so the search falls back to the full decision nogood. That is sound, but an
+  element conflict never learns a 1UIP clause. Fixing it needs a `pol` ahead of a real
+  conflict line (D-0039's move, in `trace.ml`).

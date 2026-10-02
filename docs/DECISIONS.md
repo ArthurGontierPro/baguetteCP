@@ -7656,3 +7656,95 @@ come from `Trace`. A DWARF call-graph sample attributes 83 % of it to an anonymo
 `Analysis`. That is almost certainly `lib/core/analysis.ml:395`'s node merge, `out @ [ n ]`
 after a `List.map` with `same_slot`, which is quadratic in the frontier. Filed as a request,
 because `analysis.ml` is not this row's file.
+## D-0091  M6-T8: `BAGUETTE_DEBUG=1` is clean on every model; the four element fatals were the agreement check over-reading a ROOT `Defining`
+
+**Status**: **SHIPPED** on `wave36-debug`, 2026-10-02 (agent-debug). Two unit binaries
+(`test_compile`, `test_learn`) still need a harness edit in files this row does not hold.
+Both are filed as requests, and both edits were measured to make their binary clean.
+Every artefact is byte-identical: 396 over 132 models, base `acd28dc2…` against new
+`a9fcf487…`. The predicate only runs under `Debug.enabled`.
+
+### The four models: one call, classification (c)
+
+| Model | Fatal | Class | Fix |
+|---|---|---|---|
+| `alldiff_regin_hole_element_unsat` | D-0026 reverse arm: `reason [-]` vs a combine whose top level is `2*defining(~x4_ge_4)` | (c) | predicate |
+| `element_crossed_root_unsat` | same, `defining(x6_ge_4) + defining(~x6_ge_5)` | (c) | predicate |
+| `element_moved_unsat` | same, `2*defining(~c_ge_3)` | (c) | predicate |
+| `element_shared_result_root_unsat` | same, `2*defining(~x1_ge_5)` | (c) | predicate |
+
+The backtraces show that all four fatals come from one call:
+`Element.no_position_conflict`, reached from `filter_index`'s emptying removal at the root.
+Its reason is `Reason.none` on purpose. `Trace.conflict_line` would write a `rup` over the
+reason's facts, and the counting argument is not RUP once a hole is involved. Its derivation
+cancels each root-established residue bound with a top-level `Explanation.Defining`
+(`residue_cancel`, M7-T21/D-0084). `Explanation.top_weaken_owners` counted a `Defining` exactly
+like a `Weaken`, so the reverse arm required the empty reason to name that variable.
+
+The reverse arm exists for I-P5. If a reason omits a variable the derivation read, the trace
+line ends up over too short a tail, and a learned clause built from it is not entailed. That
+harm cannot happen for a fact the ROOT holds. D-0064's construction rule lets a `Defining`
+cite only a model consequence (`established_at_root` in element and alldiff, `root` in gcc).
+Its unit line sits at level 0 and is never wiped, and `Analysis` drops root nodes from every
+cut. A fact like that is in no branch's dependency, so a reason that leaves it out is not
+short in the I-P5 sense. D-0038 says the same thing for the forward arm: a bound the
+derivation cites *by id* does not have to appear as a literal. So the check was wrong about
+what "uses" means for this term, and neither propagator was at fault.
+
+**The fix is in the predicate, and the store decides it.** `Store.reverse_owners` is
+`top_weaken_owners` minus each top-level `Defining` on an order literal that `Store.root_holds`
+confirms. That means the current bound implies the literal, and the entry supporting the bound
+was pushed at level 0 or never moved. The arm still requires every `Weaken`, every `Defining`
+on a bound set under a decision (the D-0064 violation), and every direct-literal `Defining`. No
+caller in `lib/` needs the direct-literal case, and settling whether a hole is root-held would
+need `remover`. `test_core.ml` (`test_agreement_root_defining`, 11 checks) pins the arm with
+pairs that differ only in the level the bound was set at. `test_prop.ml`
+(`test_d0091_element_root_defining`, 6 checks) asserts the predicate on
+`element_moved_unsat`'s real conflict. It also shows the scene exercises the arm: the
+`Defining` on `c` is present, and the empty reason does not name `c`. As a break, putting the
+old arm back fails 4 of these checks.
+
+`store.ml` is held by agent-speed4 for the entry position. This row's edit is limited to
+`agreement_holds` and the three helpers above it (`at_root`, `root_holds`, `reverse_owners`),
+and speed4's hunks are elsewhere in the file.
+
+### No fix was a (b), but there is a (b)-shaped finding
+
+No reason in these four was incomplete in a way that could make a learned clause unsound. One
+sentence is still worth keeping. **Element's conflicts carry `Reason.none` at every depth.**
+That under-states what their dead-position terms read: the bounds and holes of the index and
+the result. The D-0026 check cannot see this, because it does not look inside `Term`s. It is
+sound only because of two guards, neither of which exists for this case. `Trace.conflict_line`
+writes nothing over an empty tail. `Learn.at_conflict` returns `None` on an empty cut: the
+1UIP postcondition `count <= 1` holds vacuously, and `ls = []` declines. The search then falls
+back to the full decision nogood. So an element conflict under a decision never yields a 1UIP
+clause. That is an explanation-quality gap in D-0054's sense (the reason is not *useful* to
+propagation), not a soundness defect. Closing it needs a conflict line that `rup` can check:
+an explicit `pol` before the line, which is D-0039's move. That means work in `trace.ml`, and
+it is not done here.
+
+### The harness fatals
+
+Each of these was hidden behind an earlier death in the same binary.
+
+- **`test_prop`** (fixed). `arith_root_box`, `arith_root_domains`, the Regin oracle scene and
+  the staging scene propagate alldiff with no proof started. The D-0026 check forces every
+  justification at push time, so alldiff's `need` raised (`d_fwd`/`at-least-one has no
+  constraint id`). The guard did its job; the harness was the problem. Fix: `sink_proof` /
+  `with_proof_sink` start a proof into `/dev/null`, as the CLI always does. The binary now
+  gives 518 ok with the flag and 518 ok without it.
+- **`test_compile`** (requested). `test_element_oracle` and `test_element_view` have the same
+  element shape. Two `Encoding.start_proof` lines make the binary clean: 221 ok with the flag,
+  221 without.
+- **`test_learn`** (requested). Under the flag, the `b BREAK` lane of `test_i_s4_ordering`
+  (`break_i_s4 = true`) is stopped by `Search`'s own I-S4 `Debug.check`. **The debug gate is
+  catching the break**, which is right. The lane assumes the flag is off. The measured patch
+  makes the lane assert the `Failure` when `Debug.enabled`, and makes no other change: 167 ok
+  with the flag, 169 without.
+
+### What `BAGUETTE_DEBUG=1` now covers end to end
+
+All 132 model tests pass under the flag. 21 of the 23 unit binaries run clean under it, and the
+other two run clean once their requested edits land. Nothing was weakened. No check, test or
+expected output was relaxed to pass. The one predicate change narrows a requirement only where
+the store proves it cannot matter.
