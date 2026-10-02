@@ -8146,3 +8146,123 @@ claim re-checker ran on every honoured claim in the suite and never fired. The u
 `Compile.pack_linear` and `pack_arith_row`, the latter honest only for the row faces. This is a
 cross-session request, because `compile.ml` is not this row's file. (b) The incremental seeding
 above.
+
+## D-0098  M6-T18: the propagation queue is seeded from what changed, and the skip is exact
+
+**Date.** 2026-10-02. **Row.** M6-T18 (agent-seed, `wave39-seed`). It closes both of D-0094's
+requests. Commits: `13d14e0` (low-water mark), `f2be1f0` (incremental seed), `64cfab1`
+(idempotence at the packing site), `ef4989a` (the end-of-call reset).
+
+**The design.** `Engine.propagate` still walks one seed slot per instance in id order ahead of
+the FIFO, but it now runs only the DIRTY slots. A slot is dirty when one of three things holds.
+(a) The instance watches a variable that a trail entry above the last joint fixpoint still on
+the trail moved. M2-T5's trigger mask applies to this. (b) The instance is not BORN at that
+fixpoint. That covers an `Engine.add`ed learned row, and an instance born after a fixpoint that a
+backjump has since returned to. (c) A run earlier in the same call woke the instance before its
+slot came up. Under the full seed that wake was deduplicated against the queued slot, so running
+it at its slot is what the old engine did. A wake for a slot already passed goes to the FIFO, as
+before.
+
+The skip is **exact**, not an approximation. A clean instance's watched domains are the ones it
+reached a fixpoint on (by (a) and (c)). It was at its fixpoint there (by (b) and I-P2 at that
+return). Its output is a function of its watched domains (D-0034, audited below). So the run the
+full seed made at that slot pruned nothing, wrote nothing and woke nothing. Every run that IS made
+happens in the same order, on the same domains, as under the full seed. That is why the whole
+suite's proofs come out byte-identical (below) and not merely equivalent.
+
+**The low-water mark.** `Store.register_low_water` / `take_low_water` give each reader the
+minimum `trail_len` reached since its last read, reset on read. It is maintained in `undo_to`,
+the only place the trail shrinks, and there is one slot per reader so that two engines on one
+store cannot steal each other's pops. The engine records every `Fixpoint` return as
+`(trail length, epoch)`. At the next call it drops the records above the low-water mark, because
+the store's domains are a function of the trail, so a record is still the store's state exactly
+when no pop has gone below it. The top record left is the base of the seed. **No assumption
+about where `Search` pops to is needed**: a pop to a position that is not a fixpoint just leaves
+more trail to scan.
+
+**The bug the measurement found.** The first version read the mark only at the start of a call.
+The mark then stood at that call's starting length, below the fixpoint the call recorded at its
+end, so the next call dropped that record and fell back to the full seed. On mario that was 461
+of 667 calls. The fallback was conservative and never wrong: the suite was byte-identical and the
+debug run was clean, and the first node run showed mario's runs/node unchanged. The mark is now
+also reset at the end of each call (`propagate` never pops). `test_engine`'s "seed after
+pruning" case fails on the first version and passes on the fix.
+
+**The audit (D-0034: the watch is the declaration of what an instance reads).** Every family was
+read for state its output depends on outside the current domains of its own `vars`:
+
+| family | `vars` | reads beyond watched domains | persistent state that changes output | verdict |
+|---|---|---|---|---|
+| `Linear` (`int_lin_le`, `int_le`, `int_lt`, both rows of `int_lin_eq`/`int_eq`) | every term's var, zero coefficients included | `lo/hi_reasons` (explanation only); declared bounds frozen at `make` | none | OK |
+| `Arith` row faces (`Times/Div/Abs_row`) | `Linear.vars` | none | none | OK |
+| `Arith` guard faces, `Reif`, `Reif_lin_le`, `Reif_lin_eq` | the reifier and every condition var | none | none | OK |
+| `Ne`, `Int_ne` | term vars (zero coefficients dropped, and never read) | none | none | OK |
+| `Bool2int` | `[b; x]` | none | none | OK |
+| `Bool_clause` family, `Learned_clause` | `Pb.vars` | none | none | OK |
+| `Pb` (`Learned_pb`, `Learned.pb_instance`) | each atom literal's var | none (no watched-literal pointers, no counters kept) | none; the learned database and `Retention` are never read by `propagate` | OK |
+| `Alldiff` | term vars | trail/level reads for the explanation only | diagnostic counters nobody reads | OK |
+| `Gcc` | term vars and every count view's base | trail/level reads for the explanation only; count bounds frozen | none | OK |
+| `Element` | both views' bases | trail/level reads for the explanation only; the array is constant | none | OK |
+| `Maxmin` | every view's base | none | none | OK |
+
+No family needed a watch it lacked, and none is seeded unconditionally. The objective bound is not
+propagator state. `record_improving` turns an improvement into a learned unit, and `apply_globals`
+pushes it as a trail entry at every node, so it is seen by (a). An instance whose views are all
+constants has `vars = []`. It runs at the first call, is born there, and is never dirty again,
+which is correct because its output depends on nothing. Alldiff's self-wake (stage 2 deferred to
+the next run) is unchanged: a self-wake goes to the FIFO exactly as before.
+
+**The safety net.** Under `BAGUETTE_DEBUG`, `check_skip` re-runs every skipped slot and requires
+that it prunes nothing and does not fail. It raises `Not_at_fixpoint` and names the instance.
+`check_fixpoint` still re-runs every instance at the end. It has teeth: with the trail scan
+deleted (seeding by birth only), it fired on 50 of the 136 models. `test_engine` adds `Peek`,
+which reads a variable it does not watch. Plain, its pruning is lost and the I-P2 re-run sees it.
+Under the flag, `check_skip` names it. The control with the full seed prunes. **Verdict over the
+suite under the flag:** 136/136 models and the unit suite with 0 FAIL, and `check_skip` never
+fired.
+
+**Idempotence at the packing site.** `Compile.pack_linear` and `pack_arith_row` pass
+`~idempotent:true`. `pack_arith_row` packs only the ROW faces, which are `Linear.t`. The guard
+faces are packed as reifications and make no claim. `Propagator.pack`'s default is now `false`,
+and `idempotent_families`/`claims_idempotence` are gone. A test that packs `Linear` directly is
+now unclaimed, which is the safe side. `test_engine`'s helper passes the flag as `Compile` does.
+
+**Counters.** `c_seeded` now counts seed slots actually run, and the new `c_skipped` counts the
+slots passed over, so `c_seeded + c_skipped` is the old `c_seeded`. `bin/main.ml`'s `seeded`
+label still reads "every instance, every propagate", and `skipped` is not printed. That is a
+request, since it is not this row's file.
+
+**Before and after** (fataepyc-07, `--time-limit 55 --stats --proof`, `ulimit -v 32000000`,
+two runs each. OLD is `44925ed` (= `149b7e1` + the claim), md5 `55fee913…`. NEW is `ef4989a`,
+md5 `8c666ce6…`. Figures are per node.)
+
+| instance | props/node OLD → NEW | eff/node OLD → NEW | seeded/node OLD → NEW | nodes in 55 s OLD → NEW |
+|---|---|---|---|---|
+| s4 (2014_stochastic-fjsp, completes) | 742.6 → **158.6** | 27.3 → 27.3 | 627.8 → **25.4** | 178 → 178 (complete) |
+| 2014_mario | 2121.8, 2109.1 → **854.5, 876.4** | 33.9 → 33.9, 34.1 | 1597.5, 1590.7 → **331.9, 340.7** | 3745, 3683 → 3714, 3826 |
+| 2023_chessboard | 6491.7, 6382.9 → **1943.9, 1943.9** | 138.7, 138.4 → 138.7 | 5094.0, 5047.7 → **518.5, 518.5** | 3302, 3065 → 3387, 3387 |
+
+Runs per node fall by 4.7x on s4, 2.4x on mario and 3.3x on chessboard. Effectful runs per node
+do not move, which is the exactness claim showing in the counters. The seed's share of runs falls
+from 75–85 % to 16 %, 39 % and 27 %. What is left is the watchers of each decision and its
+backjump's assertion, plus learned rows re-born after a backjump.
+
+**Nodes in 55 s do not move beyond run-to-run noise** (mario −1 %/+4 %, chessboard +3 %/+10 %
+against an OLD pair that itself differs by 7 %). The removed runs were the cheapest runs the
+engine makes, because a clean propagator that prunes nothing returns early. So D-0094's "the lever
+is the seeding" was right about the count of runs and wrong about time. The node rate is held by
+something else: conflict analysis, proof writing, or the effectful runs themselves. A profile is
+the next step, and a smaller propagator count is not. This row makes GCS-comparable counts honest:
+s4 is now 158.6 runs/node against GCS's 103.
+
+The answers are identical on all six pairs: stdout is byte-identical, s4 reaches 242, and the
+incumbents at the stop are 0 and 41. The s4 `.pbp` is byte-identical too. veripb (the
+`~/.cargo/bin` 3.0.2 build) on every NEW proof: s4 `VERIFIED BOUNDS 242 <= obj <= 242` on both
+runs, chessboard `VERIFIED NO CONCLUSION` on both runs (23 s, 99 MB), and mario `VERIFIED NO CONCLUSION` on both runs (789 s and 863 s, 203 MB). The checker binary was swapped to source `d5644ca4` on the node at about the time these checks started. Acceptance wording is the same on both builds.
+
+**Suite verdict** (`bench/m2t6/identity.sh` over 136 models, OLD `44925ed` md5 `43d404da…`, NEW
+`ef4989a` md5 `5e2ca6e8…`, local): **stdout identical on 136/136, `.opb` identical on 136/136,
+`.pbp` identical on 136/136 (0 proofs changed), and all 136 NEW proofs verify.** The search order
+is unchanged (SPEC §3.4), and no SAT model's first solution moved. The model suite is 136/136
+both plain and under `BAGUETTE_DEBUG=1`. The unit suite is 3279 ok / 0 FAIL plain and 3270 ok /
+0 FAIL under the flag (some tests branch on the flag), with peak RSS 41 MB.
