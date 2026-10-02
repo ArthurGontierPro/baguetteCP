@@ -222,11 +222,32 @@ decision **D-0003**; do not build past M3 without settling it.
 
 ## 5. Propagation loop
 
-A priority queue of propagator ids, ordered by cost class (cheap bounds propagators
-before `all_different`). `engine.ml` pops, runs, applies the resulting changes to the
-trail, and re-queues the propagators watching the changed variables.
+As of M2-T6 (D-0094) `engine.ml` uses a **FIFO** queue of propagator ids. There is no
+cost-class ordering yet. Each `propagate` call, made once per search node, seeds the queue
+with **every** instance. The loop then pops an id and runs that instance, bracketed by
+`Store.with_running` so that each trail entry is stamped with its author (M2-T7). It checks
+that attribution and then re-queues the watchers of each variable the run changed. The trail
+is diffed from the run's starting position, and the walk preserves wake order. Two filters
+drop wakes:
 
-Failure aborts the loop and hands the failing explanation to `search.ml`.
+- the **trigger mask** (M2-T5, D-0034) drops a wake by the KIND of change. A `Bounds`
+  instance is not woken by an interior hole.
+- the **self-wake veto** (M2-T6) drops a wake by WHO made the change. An instance whose
+  idempotence claim (`Propagator.inst_idempotent`) is honoured is not re-woken by its own
+  prunings. A claim is honoured only when the instance's scope names no variable twice (the
+  aliased-scope rule).
+
+Failure aborts the loop and hands the failing `Store.conflict` to `search.ml`. On a
+fixpoint under `BAGUETTE_DEBUG`, `check_fixpoint` re-runs every instance and requires
+nothing to move (I-P2). Every honoured claim is also re-run at the moment the veto relies
+on it (`check_claim`). Under `BAGUETTE_CONSISTENCY` the M2-T10 oracle checks each declared
+level.
+
+The engine counts, per engine, runs, effectful runs, contradicting runs, wakes, masked
+wakes, vetoed wakes and seeded runs (`Engine.counters`, printed under `--stats`). Seeding
+accounts for 75–85 % of runs on the measured instances (D-0094). That makes seeding only
+the watchers of what changed since the last fixpoint the next lever. It needs a trail
+low-water mark from `Store`.
 
 ## 6. Proof writing
 

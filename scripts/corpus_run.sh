@@ -476,6 +476,13 @@ limit_detail() {
         out = sprintf("n=%s d=%s c=%s l=%s pbl=%s", st["nodes"], st["decisions"],
           st["conflicts"], st["learned"], st["pb-learned"])
       } else out = "no-stats"
+      # M2-T6: the engine propagation counters (GCS propagations / effectful /
+      # contradicting), from either `limit:` line or, failing that, `--stats`.
+      # Appended only when printed, so an older binary yields the older detail.
+      if (havelim && ("props" in lim))
+        out = out sprintf(" props=%s eff=%s contra=%s", lim["props"], lim["eff"], lim["contra"])
+      else if ("props" in st)
+        out = out sprintf(" props=%s eff=%s contra=%s", st["props"], st["eff"], st["contra"])
       split("parse compile search emit propag", ph, " ")
       for (j = 1; j <= 5; j++)
         if (ph[j] in tm) out = out sprintf(" %s=%.1f", ph[j], tm[ph[j]] / 1e6)

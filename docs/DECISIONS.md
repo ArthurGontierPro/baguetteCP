@@ -8034,3 +8034,115 @@ and every pruning of the `maxmin` instance is `rup` of exactly one of them, rest
 **What would reverse this.** A corpus instance with a wide `m`, where the `C_v` family costs
 more than the selector encoding's `2n` big-M rows, would reverse it. Then the comparison above
 would have to be measured rather than argued.
+## D-0094  M2-T6: propagation counters under `--stats`, and the self-wake veto with its two guards
+
+**Date.** 2026-10-02. **Row.** M2-T6, reopened (agent-wake, `wave38-wake`). Commits `1dd1724`
+(counters), `262c8db` (veto, aliased-scope rule, claim re-checker), `621c350` (`vetoed`/`seeded`).
+
+**The counters, defined so that they compare with GCS's `-s` output.** Per engine
+(`Engine.counters`, created with the engine, and a solve builds one engine in `Compile.compile`),
+counted by the fixpoint loop in `Engine.propagate` and never read from the proof (M1-T36's rule):
+
+- `props`: propagator runs taken off the queue. This is GCS `propagations`.
+- `eff`: runs that returned `Fixpoint` and grew the trail, i.e. changed at least one domain. This
+  is GCS `effectfulPropagations`.
+- `contra`: runs that returned `Conflict`. This is GCS `contradictingPropagations`. A run that
+  pruned and then failed counts here and not in `eff`, so the two are disjoint and
+  `props - eff - contra` is the runs that did nothing.
+- `wakes` and `masked` are the M2-T5 pair, now per engine. `vetoed` counts self-wakes the veto
+  dropped. It counts per trail ENTRY, so it is an upper bound on the runs saved, because the
+  queue dedupes. `seeded` counts the runs that `propagate`'s every-instance seeding enqueued.
+
+The re-run audits (`check_fixpoint`, `check_claim`, the M2-T10 oracle) are not counted, so a
+`BAGUETTE_DEBUG` run reports the same figures as a plain one. Under `--stats` each counter is a
+`stats:` line. `props=`, `eff=` and `contra=` are on both `limit:` lines (`report_limit` and the
+SIGTERM handler), and `scripts/corpus_run.sh`'s `limit_detail` appends them to the detail column
+when the run printed them.
+
+**Baseline** (node fataepyc-07, `/scratch/arthur/tmp-guess/s4.fzn` = 2014_stochastic-fjsp…det,
+OLD = `1dd1724`). On `2014_stochastic-fjsp…det` the baseline was 129 403 runs over 178 nodes,
+**727.0 runs/node**, of which 4 464 were effectful (25.1/node, **3.4 %**) and 47 contradicting.
+GCS on the same instance did 308.6 M runs over 3.0 M nodes, 103/node, with 22 % effectful. Per
+node, baguette does 7x GCS's runs, and 97 % of those runs change nothing.
+
+**The discipline.** It copies GCS's two guards and not its claim/replay engine.
+
+1. *Self-wake veto.* `Propagator.instance` has a new field `inst_idempotent`, which claims that
+   one call reaches the instance's own fixpoint. When that claim is honoured, `Engine.propagate`
+   passes `~self:id` to `watchers_of_new_entries`, and the running instance's own id is dropped
+   from the wake lists of the entries it just pushed. Dropping it gives a subsequence of the old
+   list and never a reordering. `pack ?idempotent` defaults to `Propagator.claims_idempotence`.
+   That is a table by packed name holding **`int_lin_le`, `int_le` and `int_lt` only**, and
+   `linear.ml:22-29` is its argument. The arithmetic rows are `Linear.t` too, but they share their
+   names with the arithmetic guard faces, which are reifications, so they are left unclaimed.
+   `Pb` rows run over literals that can be rungs of one ladder, so they alias by construction and
+   are unclaimed. Every other family is unclaimed as well.
+2. *Aliased-scope rule.* A claim is honoured (`Engine.honours_claim`) only if `inst_vars` names no
+   variable twice. The rule is decided per instance when the instance is registered (`create` and
+   `add`), and `Compile`'s merging of duplicate terms is not assumed. The idempotence argument is
+   over distinct variables. With x in two terms of opposite sign, moving x through one term moves
+   the other term's minimum. `test_engine`'s `2x - x <= 2` scene shows it: honoured, it stops at
+   x <= 3, and refused, it reaches x <= 2.
+3. *Claim re-checker.* This shipped in the same commit as the veto, which is GCS #889's lesson.
+   Under `BAGUETTE_DEBUG`, when an honoured instance has just pruned and its self-wake is about to
+   be skipped, `Engine.check_claim` runs it once more at that point. If the re-run prunes or
+   fails, it raises `Not_at_fixpoint` and names the instance. `check_fixpoint` at the end of the
+   loop catches most wrong claims too. It cannot catch one whose loss a later, unrelated wake
+   happens to cover up. A re-run that prunes nothing writes nothing, so a debug run answers and
+   proves byte-identically. Tests: a deliberately wrong claim (`Step_down`) is caught both by
+   `check_claim` and inside `propagate` under debug, and its unclaimed control settles.
+
+**Before and after** (fataepyc-07, two runs each, `--time-limit 55 --stats --proof`,
+`ulimit -v 32000000`; OLD `1dd1724` md5 `08d33b1f…`, NEW `621c350` md5 `2db35c28…`. OLD is
+main plus the counters, and it is byte-identical to main on all 396 suite artefacts per
+`bench/m6t11/byte_identity.sh`. main itself cannot report the counters.)
+
+| instance | runs/node OLD → NEW | effectful/node OLD → NEW | nodes in 55 s OLD → NEW |
+|---|---|---|---|
+| 2014_stochastic-fjsp (s4, solves in 0.5 s) | 727.0 → 742.6 | 25.1 → 27.3 | 178 → 178 (complete) |
+| 2014_mario | 2082.0, 2085.2 → 2076.9, 2077.2 | 33.7 → 33.8 | 3584, 3602 → 3539, 3547 |
+| 2023_chessboard | 6455.4, 6451.1 → 6476.5, 6463.8 | 137.4 → 138.3 | 3290, 3278 → 3283, 3256 |
+
+The answers are the same on all six pairs: stdout is byte-identical, s4 reaches optimum 242,
+and the incumbents at the stop are 0 and 41. veripb 3.0.2 on every NEW proof: s4
+`VERIFIED BOUNDS 242 <= obj <= 242`, both runs; chessboard `VERIFIED NO CONCLUSION`, both runs (22 s,
+100 MB); mario `VERIFIED NO CONCLUSION`, both runs (745 s and 767 s, 210 MB).
+
+**The veto does not pay at our scale, and the measurement says why.** Of NEW's runs, **`seeded` is
+84.5 % on s4, 75.8 % on mario and 78.6 % on chessboard**: 628, 1 575 and 5 090 seeded runs per node,
+against 16.6, 4.2 and 3.2 vetoed wake entries per node. `propagate` enqueues **every** instance on
+every call, and `Search` calls it once per node. A veto can save at most one run per effectful
+run of a claimant, and effectful runs are 2–4 % of the total. That is GCS-COMPARISON §1.3's
+caveat, measured here. On s4 the veto even costs 2 % more runs and 9 % more effectful runs,
+because of the queue's dedupe. Before the veto, a claimant re-woken by itself was already in the
+queue when a second propagator woke it, so it kept its early place and absorbed both changes in
+one run. With the veto it is enqueued at the back, after other runs, and its pruning lands in a
+different interleaving. The fixpoint is the same and the order is not. On mario and chessboard
+the change is within the run-to-run noise. The veto stays in, because it makes the API honest
+(the claim is stated, checked and counted) and because GCS-COMPARISON §1.3 calls it the
+prerequisite for the rest. It is not a speed-up.
+
+**The lever is the seeding.** It is not this row's veto. A propagate that seeds only the watchers
+of the trail entries since the last fixpoint, plus instances added since then, would remove the
+75–85 %. That needs `Store` to report the trail's low-water mark since the engine last looked,
+because after a backjump the engine sees a short trail and cannot tell where the restore point
+was. `store.ml` is not this row's file. It also needs every input a propagator reads to be on the
+trail. That holds for domains. It has to be checked for any propagator that keeps mutable
+internal state, such as an objective bound. The I-P2 re-run under `BAGUETTE_DEBUG` is the
+instrument that would catch a miss. This is filed as a cross-session request and proposed as a
+new row.
+
+**Suite verdict** (`bench/m2t6/identity.sh main NEW` over 132 models): **stdout byte-identical
+on all 132**, `.opb` identical on all 132, **1 proof changed**, and **all 132 NEW proofs verify**.
+The changed proof is `root_nested_defining_gcc_unsat`, 18 → 20 lines. A different propagator
+reports the root conflict first, so the refutation is a `rup` pair plus a `pol` in place of one
+`pol`. It ends in `s VERIFIED UNSATISFIABLE`. The search order is unchanged (SPEC §3.4): the
+domains at each fixpoint are the same, so branching is the same, and no SAT model's first
+solution moved. The model suite is 132/132, both plain and under `BAGUETTE_DEBUG=1`, so the
+claim re-checker ran on every honoured claim in the suite and never fired. The unit suite under
+`BAGUETTE_DEBUG=1` has 0 FAIL.
+
+**Left open.** There are two items. (a) The name table should become `~idempotent:true` at
+`Compile.pack_linear` and `pack_arith_row`, the latter honest only for the row faces. This is a
+cross-session request, because `compile.ml` is not this row's file. (b) The incremental seeding
+above.

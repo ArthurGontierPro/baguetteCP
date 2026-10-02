@@ -790,6 +790,8 @@ work. The owning session picks it up.
 | **M4-T9 / D-0095**: `CLAUDE.md`'s module map needs one line under `lib/core/prop/`: `maxmin.ml  array_int_maximum / array_int_minimum (and int_max/int_min): the disjunction m <= max x as one clause row per threshold, beside n Linear rows m >= x_i; min is max over negated views (M4-T9, D-0095)`. `docs/ARCHITECTURE.md` section 1 already has it | `CLAUDE.md` | agent-maxmin | **CLOSED 2026-10-02** by the orchestrator at the merge |
 | **M4-T9 / D-0095**: `docs/SPEC.md` 2.1 is normative and now lags the front end twice. (a) The M4 builtins row should name `array_int_maximum`, `array_int_minimum`, `int_max`, `int_min` (and `global_cardinality`, which M7-T16 never added). (b) The D-0083 list of bound-carrying builtins should name the same four: `builder.ml` now infers an undomained result from `m >= x_i` plus the hull `m <= max hi(x)` (mirrored for min), MEASURED needed on `2010_filters_filter`'s objective | `docs/SPEC.md` | agent-maxmin | **CLOSED 2026-10-02** by the orchestrator at the merge |
 | **M4-T9**, for information at merge: `test/unit/test_trace.ml`'s I-X10 closure table gained ONE row, `("maxmin.ml", Single_row)`, appended after `gcc.ml`. The gate reddens without it, and it was not in any session's claim. agent-cumulative's `cumulative.ml` row will land at the same spot, so expect a trivial conflict there. Also outside the brief's file list: NEW `mznlib/redefinitions-2.0.mzn` (std has no `fzn_array_int_maximum`, see D-0095) and a two-line edit to `mznlib/redefinitions.mzn`'s header comment saying so. `lib/core/dune` needed NO edit (`include_subdirs unqualified`) | `test/unit/test_trace.ml`, `mznlib/` | agent-maxmin | for information |
+| **M2-T6 / D-0094**: every-instance SEEDING is 75–85 % of propagator runs (s4 628/node, mario 1 575/node, chessboard 5 090/node), and it is the real wake lever. The self-wake veto saves under 2 %. An incremental seed has to cover the watchers of trail entries since the last fixpoint plus newly `Engine.add`ed instances. It needs `Store` to report the trail's **low-water mark** since the engine last asked: after a backjump the engine sees a short trail and cannot locate the restore point. Proposed as a new row. It also has to check that no propagator reads mutable state that is off the trail. | `lib/core/store.ml` (+ `engine.ml`, `search.ml`) | agent-wake | open |
+| **M2-T6 / D-0094**: `Propagator.pack` now takes `?idempotent`. Its default is a by-name table (`int_lin_le`/`int_le`/`int_lt`). Please pass `~idempotent:true` at `Compile.pack_linear`, and at `pack_arith_row` for the ROW faces only (`Arith.Times_row`/`Div_row`/`Abs_row`, which are `Linear.t`). The guard faces share those names and are reifications, which is why the table cannot claim them. Then the table can go. The engine's aliased-scope rule still applies. | `lib/flatzinc/compile.ml` | agent-wake | open |
 
 ## Completed
 
@@ -898,6 +900,7 @@ work. The owning session picks it up.
 | M6-T8 | agent-debug | 2026-10-02 | **D-0091**. The four element `BAGUETTE_DEBUG` fatals were one call (`Element.no_position_conflict`) and class (c): D-0026's reverse arm required an empty reason to name a top-level `Defining` the ROOT holds. `Store.reverse_owners` now exempts that case, and only when `Store.root_holds` confirms it. test_prop's propagate-only alldiff scenes start a proof. 132/132 models pass under the flag; 21/23 unit binaries are clean, and `test_compile` and `test_learn` are requested. 396 artefacts byte-identical. Finding: element conflicts carry `Reason.none` at every depth, so they never learn a 1UIP clause (explanation quality, not soundness). |
 | M6-T16 | agent-speed5 | 2026-10-02 | **D-0092**. `Analysis.Frontier` is persistent cells plus a per-bound monomorphic `String` table, and it replaces the per-step `add_node` fold (`List.map` + `@`). `Analysis.Uniq` replaces `List.mem`/`@` for antecedents, and `folds` is a reversed accumulator. `add_node` stays as the reference, and `test_analysis` compares the two. 396 artefacts byte-identical. Node: mario 1.40x, chessboard 1.07x (a first per-step tuple-Hashtbl version was 0.91x on chessboard and was replaced). Profile now flat. |
 | M4-T9 | agent-maxmin | 2026-10-02 | **D-0095**. `lib/core/prop/maxmin.ml`: the disjunction `m <= max x` as one propagator (R3 `hi(m) <= max hi(x)`, R4 the unique reacher, conflict) over one `.opb` clause per threshold, `~[m>=v] \/ [x_1>=v] \/ ...`; every explanation is `Explanation.clause` of one posted row (no new constructor, I-X10 Single_row). `m >= x_i` is `n` `Linear` rows. Minimum = same instance over negated views; `int_max`/`int_min` = the two-element array form. mznlib shadows std `redefinitions-2.0.mzn`; D-0083 inference for the result. Corpus: radiation 888 -> 775 nodes, 13.8 -> 7.9 s, all proofs verified |
+| M2-T6 | agent-wake | 2026-10-02 | **D-0094**. Per-engine `props`/`eff`/`contra` (+`wakes`/`masked`/`vetoed`/`seeded`) under `--stats` and on both `limit:` lines, and in `corpus_run.sh`'s detail. The self-wake veto ships with the aliased-scope rule and, in the same commit, the `BAGUETTE_DEBUG` claim re-checker (`Engine.check_claim`). Suite stdout is identical on 132/132, 1 proof changed, and all verify. The veto does not pay: seeding is 75–85 % of runs |
 
 ## Handoff notes
 
@@ -3862,3 +3865,21 @@ header no longer says otherwise.
   node, 10 ok. Corpus: radiation 888 -> 775 nodes and 13.8 -> 7.9 s. The other three are within a
   few % of main. Every proof is verified.
 
+## M2-T6 handoff, 2026-10-02 (agent-wake)
+
+- **Counters** (`Engine.counters`, per engine): `props` are runs off the queue, `eff` are
+  `Fixpoint` runs that grew the trail, and `contra` are `Conflict` runs (disjoint from `eff`).
+  There are also `wakes`/`masked`/`vetoed`/`seeded`. Each is a `stats:` line under `--stats`.
+  `props=`/`eff=`/`contra=` are on both `limit:` lines, and `corpus_run.sh` copies them into the
+  detail column. The audits do not count. Baseline on s4: 727 runs/node, 3.4 % effectful,
+  against GCS's 103/node and 22 %.
+- **Veto**: `Propagator.inst_idempotent`, claimed by name for `int_lin_le`/`int_le`/`int_lt`
+  only, and honoured only on an unaliased scope. Under `BAGUETTE_DEBUG`, `Engine.check_claim`
+  re-runs it at every point the veto relies on it. Suite stdout is identical on 132/132, 1 proof
+  changed (`root_nested_defining_gcc_unsat`), and all verify. The model suite is green under
+  `BAGUETTE_DEBUG=1`, and `bench/m2t6/identity.sh OLD NEW` reproduces the comparison.
+- **What the next session should know**: the veto is not a speed-up (runs/node within ±2 %).
+  Every-instance seeding per `propagate` is 75–85 % of all runs, and that is the lever. It
+  needs a trail low-water mark from `Store`, filed under Cross-session requests with the
+  `compile.ml` `~idempotent` request. My `## Active claims` row is left for the orchestrator to
+  clear at merge, so that two sessions do not edit adjacent rows of that table.

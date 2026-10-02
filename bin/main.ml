@@ -929,6 +929,33 @@ let report_stats (st : Search.stats) ~exhausted =
       (if exhausted then "=" else "<=")
       (Search.stats_expected_nodes st)
 
+(* M2-T6. The engine's propagation counters, on stderr under --stats: the three GCS
+   prints under `-s` (propagations, effectfulPropagations, contradictingPropagations),
+   defined in [Engine.counters] so that the two solvers' figures can be divided by the
+   same thing. Counted by the engine, not read from the proof (M1-T36). *)
+module Engine = Baguette_core.Engine
+
+let report_engine_counters (c : Engine.counters) ~nodes =
+  let per n = if nodes > 0 then float_of_int n /. float_of_int nodes else 0.0 in
+  Printf.eprintf
+    "stats: %-10s %10d runs   propagator runs taken off the queue (%.1f/node)\n" "props"
+    c.Engine.c_runs (per c.Engine.c_runs);
+  Printf.eprintf
+    "stats: %-10s %10d runs   ...that returned Fixpoint having changed a domain \
+     (%.1f/node)\n"
+    "eff" c.Engine.c_effectful (per c.Engine.c_effectful);
+  Printf.eprintf "stats: %-10s %10d runs   ...that returned Conflict\n" "contra"
+    c.Engine.c_contra;
+  Printf.eprintf "stats: %-10s %10d wakes  watcher wakes delivered to the queue\n" "wakes"
+    c.Engine.c_wakes;
+  Printf.eprintf "stats: %-10s %10d wakes  ...dropped by the M2-T5 trigger mask\n"
+    "masked" c.Engine.c_masked;
+  Printf.eprintf "stats: %-10s %10d wakes  ...dropped by the M2-T6 self-wake veto\n"
+    "vetoed" c.Engine.c_vetoed;
+  Printf.eprintf
+    "stats: %-10s %10d runs   ...of the props, SEEDED (every instance, every propagate)\n"
+    "seeded" c.Engine.c_seeded
+
 (* M6-T10. The wall clock --time-limit is checked against, counted from this module's
    initialisation, i.e. process start to within the runtime's own start-up. [Sys.time]
    stays the clock of every measurement (see the clock comment above). *)
@@ -940,10 +967,12 @@ let wall () = Unix.gettimeofday () -. wall_start
    fields after the `limit:` tag; scripts/corpus_run.sh copies it into its detail
    column, so a field renamed here is a column renamed there. [cpu_s] is Sys.time at the
    moment of the report, the same clock the limit was checked against. *)
-let report_limit opts (st : Search.stats) ~best =
+let report_limit opts (st : Search.stats) ~(engine : Engine.t) ~best =
+  let c = Engine.counters engine in
   Printf.eprintf
     "limit: reached time-limit=%s cpu=%.2fs wall=%.2fs nodes=%d decisions=%d \
-     conflicts=%d learned=%d pb-learned=%d db=%d maxdepth=%d incumbent=%s\n\
+     conflicts=%d learned=%d pb-learned=%d db=%d maxdepth=%d incumbent=%s props=%d \
+     eff=%d contra=%d\n\
      %!"
     (match opts.time_limit with None -> "none" | Some s -> Printf.sprintf "%gs" s)
     (Sys.time ()) (wall ()) st.Search.nodes st.Search.decisions st.Search.conflicts
@@ -954,6 +983,7 @@ let report_limit opts (st : Search.stats) ~best =
      Retention.n_added db - Retention.n_evicted db)
     st.Search.max_depth
     (match best with None -> "none" | Some (_, v) -> string_of_int v)
+    c.Engine.c_runs c.Engine.c_effectful c.Engine.c_contra
 
 let solve opts (m : Model.t) =
   let compiled = Timing.phase "compile" (fun () -> Compile.compile m) in
@@ -1006,11 +1036,15 @@ let solve opts (m : Model.t) =
        (fun _ ->
          Printf.eprintf
            "limit: killed signal=TERM phase=%s cpu=%.2fs wall=%.2fs nodes=%d \
-            decisions=%d conflicts=%d learned=%d pb-learned=%d maxdepth=%d\n\
+            decisions=%d conflicts=%d learned=%d pb-learned=%d maxdepth=%d props=%d \
+            eff=%d contra=%d\n\
             %!"
            !Timing.current (Sys.time ()) (wall ()) stats.Search.nodes
            stats.Search.decisions stats.Search.conflicts stats.Search.n_learned
-           stats.Search.n_pb_learned stats.Search.max_depth;
+           stats.Search.n_pb_learned stats.Search.max_depth
+           (Engine.counters compiled.Compile.engine).Engine.c_runs
+           (Engine.counters compiled.Compile.engine).Engine.c_effectful
+           (Engine.counters compiled.Compile.engine).Engine.c_contra;
          exit 143));
   let outcome =
     Fun.protect
@@ -1087,7 +1121,9 @@ let solve opts (m : Model.t) =
     | `Optimise (Search.Opt _ | Search.Opt_unsat) -> true
     | `Stopped _ -> false
   in
-  (match outcome with `Stopped best -> report_limit opts stats ~best | _ -> ());
+  (match outcome with
+  | `Stopped best -> report_limit opts stats ~engine:compiled.Compile.engine ~best
+  | _ -> ());
   Timing.phase "output" (fun () ->
       (match outcome with
       | `Satisfy (Search.Sat assignment) ->
@@ -1109,7 +1145,11 @@ let solve opts (m : Model.t) =
       | `Stopped None -> print_string "=====UNKNOWN=====\n"
       | `Stopped (Some _) -> ());
       flush stdout);
-  if opts.stats then report_stats stats ~exhausted
+  if opts.stats then (
+    report_stats stats ~exhausted;
+    report_engine_counters
+      (Engine.counters compiled.Compile.engine)
+      ~nodes:stats.Search.nodes)
 
 (* --------------------------------------------------------------------- main *)
 
