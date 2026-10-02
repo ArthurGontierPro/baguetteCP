@@ -7845,3 +7845,62 @@ proposals in D-0085/D-0087: a watched-slack PB/linear propagation, and a priorit
 default `first_fail` in place of a per-node scan over all variables. The one constant-factor lead
 left is that the `wipe_level` tables in `Justify`/`Writer` are generic `Hashtbl`s, folded or
 filtered whole at every backtrack. It is filed as a request, because those files are not this row's.
+
+## D-0093  The week's final binary on the corpus: 87 verified + 25 unchecked solves, 92 in the comparison, PAR2 within 1 % of GCS
+
+**Status**: **MEASUREMENT**, recorded 2026-10-02 (evening) by the orchestrator from two complete
+runs on `fataepyc-07` (`DONE-` markers checked), binary md5 `9bdd6f16bce396296199d57867523d69` =
+`main` at `5c299cb`: waves 31–37 whole — M6-T9/T10/T11/T13/T14/T15/T16 on speed, M7-T17..T22 on
+proofs and coverage, M6-T4's harness. Statistic: PAR2 and the 1-shifted geometric mean (D-0089
+addendum). Same protocol as D-0089 §2, same node, the node otherwise idle.
+
+### Corpus with `--time-limit 280` (`corpus-out-w36`, `PAR=64`) against D-0089 §2
+
+| outcome | wave 35 (`9ff90da`) | **final (`5c299cb`)** | note |
+|---|---|---|---|
+| **`OK-PROOF-VERIFIED`** | 81 | **87** | 6 new, 0 lost |
+| `TIMEOUT-CHECK` | 12 | **25** | solved, proof not checked within 900 s: **solved total 93 → 112** |
+| `UNKNOWN-LIMIT` | 189 | 178 | stopped itself; every proof accepted |
+| `TIMEOUT-SOLVE` | 60 | 51 | killed from outside, in one slow node or before the handler |
+| `REFUSED-RESOURCE` / `-LIMIT` / `SOLVE-ERR` / `REFUSED-MODEL` | 64 / 2 / 2 / 1 | 66 / 2 / 1 / 1 | the width wall (D-0028), unchanged in kind |
+| `NO-DATA` / `FLATTEN-FAIL` / `FLATTEN-TIMEOUT` | 20 / 4 / 1 | 20 / 4 / 1 | the corpus's |
+| **`PROOF-REJECTED`** | 0 | **0** | over 265 checked proofs |
+
+Nodes/s on the stopped runs: p25 2.15 → **5.39**, median 9.6 → **18.1**, p75 21.6 → 29.4,
+max 161 → 174. (Before wave 31 the median was 1.44, D-0080.)
+
+### Baguette through the comparison harness (`compare-out-w36-baguette`), joined with wave 31's Chuffed and GCS
+
+| | start of week (`56ae463`) | `9ff90da` | **final (`5c299cb`)** | Chuffed | GCS (proofs) |
+|---|---|---|---|---|---|
+| solved (SAT / UNSAT / OPT) | 60 | 84 | **92** (20 / 5 / 67) | 272 | 94 |
+| proofs verified / rejected / check-timeout | 60 / 0 / 0 | 83 / 0 / 1 | **89 / 0 / 3** | — | 46 / 15 / 32 |
+| PAR2 over 436 | 524.3 | 492.6 | **483.6** | 240.5 | 478.9 |
+| sgm+1 wall, instances all three solved | 8.51 s (40) | 7.26 s (51) | **6.23 s** (53) | 0.20 s | 2.44 s |
+| sgm+1 `.pbp`, same set | 3.5 MB | 8.5 MB | 9.9 MB | — | 40.0 MB |
+| sgm+1 check, same set (n verified) | 0.88 s (40) | 2.33 s (50) | 2.44 s (51) | — | 7.45 s (43) |
+
+Agreement: **133 AGREE, 0 DISAGREE**, 0 mismatches against the pinned answers. Pairwise on
+instances both solved: baguette/Chuffed n=92, sgm+1 **9.38 s vs 0.48 s**; baguette/GCS n=53,
+**6.23 s vs 2.44 s**. Week over week on the 83 instances both of today's binaries solved:
+sgm+1 **8.94 s → 6.45 s**.
+
+### What it says
+
+1. **Correctness held through seven speed changes**: 0 rejected over 265 + 92 checked proofs,
+   0 disagreements, and every change was byte-identical on the suite except M2-T6 (not yet
+   merged) by design.
+2. **Coverage**: 60 → 92 in the comparison, 58 → 87 verified on the corpus, plus 25 solved
+   instances whose proofs the checker cannot finish in 900 s — the **check column is now the
+   bottleneck the solve column used to be**: 25 solved-but-unchecked against 12 before, and
+   `.pbp` sizes on the common set grew (3.5 → 9.9 MB sgm+1) as the solver reaches deeper
+   searches. M4-T5's RUP hints (O(hints) checking) are the row this names; until then a
+   `CHECK_TIMEOUT` of 900 s under-reports what was solved.
+3. **Speed**: PAR2 within 1 % of GCS-with-proofs; 2.6× GCS and 47× Chuffed in sgm+1 on the
+   common set (pairwise 20× Chuffed). The stopped runs' median nodes/s went 1.44 → 9.6 → 18.1
+   across the week. The profile is flat (D-0092); what remains is design-level: M2-T6's wake
+   discipline (727 vs 103 propagator runs per node against GCS, measured on
+   `2014_stochastic-fjsp…det`), watched slack for `Pb.propagate` (D-0085), a priority structure
+   for the un-annotated `first_fail` (D-0087).
+4. **The width wall** is 69 instances and untouched; `connect` is the one remaining front-end
+   refusal.

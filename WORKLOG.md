@@ -600,7 +600,7 @@ agent-debug holds `lib/core/prop/{element,alldiff}.ml`, `lib/core/debug.ml`, `li
 |---|---|---|---|
 | M6-T16 | `lib/core/analysis.ml`, `test/unit/test_analysis.ml`, `bench/**`, `docs/DECISIONS.md` (D-0092, append) | agent-speed5 | 2026-10-02 |
 
-**Two final runs of the week are in flight on `fataepyc-07`, launched 2026-10-02 by the
+**READ 2026-10-02 evening — D-0093.** **Two final runs of the week were launched on `fataepyc-07` on 2026-10-02 by the
 orchestrator, detached, from `/scratch/arthur/baguette` at `main` = `5c299cb`, binary md5
 `9bdd6f16bce396296199d57867523d69`** (waves 31–37 whole: M6-T14/T15/T16 included). Read them, do not
 re-launch: `scripts/corpus_run.sh --report /scratch/arthur/corpus-out-w36` (the `--time-limit 280`

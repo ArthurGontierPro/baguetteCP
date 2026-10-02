@@ -126,6 +126,23 @@ chacune, là où baguette n'écrit une ligne de trace que pour une branche qui �
 proof logging coûte à GCS un facteur 2,7 en temps ici. Sur le corpus, le facteur 4 en
 géomoyenne mélange ces deux effets ; il est le plus fort là où l'apprentissage paie.
 
+## Mise à jour du soir : le binaire de fin de semaine
+
+Mêmes runs sur `main` à `5c299cb` (M6-T14, M6-T15, M6-T16 en plus), record D-0093 :
+
+| | début de semaine | `9ff90da` | **fin de semaine** | Chuffed | GCS |
+|---|---|---|---|---|---|
+| résolues sur 436 | 60 | 84 | **92** | 272 | 94 |
+| preuves vérifiées / rejetées | 60 / 0 | 83 / 0 | **89 / 0** | — | 46 / 15 |
+| PAR2 sur 436 | 524,3 | 492,6 | **483,6** | 240,5 | 478,9 |
+| temps, géomoyenne +1, instances communes aux trois | 8,51 s | 7,26 s | **6,23 s** | 0,20 s | 2,44 s |
+
+Zéro désaccord sur 133 instances d'accord. Dans le harnais corpus avec `--time-limit`, 87 preuves
+vérifiées contre 81, et 25 instances résolues dont la preuve dépasse les 900 s de vérification,
+contre 12 : la colonne de vérification devient le goulot que la colonne de résolution était, ce
+qui désigne les hints RUP (M4-T5). Nœuds par seconde médians des runs arrêtés : 1,44 en début
+de semaine, 9,6 hier, **18,1** ce soir.
+
 ## Prochaines mesures
 
 Un nouveau run `--time-limit` et une nouvelle comparaison sur le binaire final de la
