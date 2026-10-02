@@ -179,6 +179,30 @@
    among them -- verifies with nothing written ahead of an index line either. That is
    [Single_row] measured on both sides.
 
+   **M7-T21 / D-0084 amends it again, three times, and none of the three is about a trace
+   line.** Each is about a DERIVATION that some other line embeds, which is how D-0080's
+   corpus rejections were invisible to every lane above: the trace lines were right.
+
+     - A FOREIGN INDEX HOLE ([index_hole_clause]). The [pos_gone] arm for a position the
+       index lost to someone else wrote the bare unit [~idx_eq_p]. That is RUP only for a
+       level-0 hole. Under a decision it is the corpus's 23-of-26 shape
+       `rup +1 ~<v>_eq_<k> >= 1 ;`, written when a second element's factless conflict
+       forces this instance's [hole_expl] through [excl_hole]. It now carries the
+       puncher's facts. test/models/element_foreign_hole_rup_sat.fzn.
+     - ROOT RESIDUE ([alo_of]'s [cancel], [filter_index]). A pruning derivation kept
+       every residue literal, so one embedded in another instance's ROOT conflict left
+       literals nothing counted. Root-established residue is now cancelled where the
+       derivation is built. test/models/element_shared_result_root_unsat.fzn.
+     - CURRENCY ([in_order_currency]). An interior index removal concluded [~idx_eq_p],
+       while [excl_hole] -- reached when this index is another instance's RESULT -- pairs
+       off ORDER literals. It now concludes `~idx_ge_p \/ idx_ge_(p+1)`, like every other
+       hole in the store. test/models/element_crossed_root_unsat.fzn.
+
+   What is still OPEN: [excl_hole] trusts the remover's derivation to conclude the hole in
+   the order currency. An element result that is also in an all_different scope can have
+   a hole punched by Regin, whose derivation concludes over the direct encoding; that
+   case is not reduced or measured here (D-0084, "not verified").
+
    ---------------------------------------------------------------------------
    Snapshotting and I-X6
    ---------------------------------------------------------------------------
@@ -454,6 +478,47 @@ let hole_line t store w =
       Option.map (Store.explanation store)
         (Store.remover store ~before:(Store.trail_length store) ~var:rv w)
 
+(* M7-T21 / D-0084. An interior INDEX hole that this propagator did not punch, as the
+   clause a summand may cite.
+
+   Before M7-T21 this was the bare unit [~idx_eq_p], asserted as a [rup]. That unit is
+   RUP only when the hole is a consequence of the model alone, which is true of a hole
+   punched at LEVEL 0 and false of one punched under a decision: the hole's own trace
+   line is `~idx_ge_p \/ idx_ge_(p+1) \/ ~<the puncher's facts>`, and with nothing
+   assumed but [idx_eq_p] those facts are not falsified, so unit propagation never fires
+   it. 3.0.2 refuses the line, `test/models/element_foreign_hole_rup_sat.fzn` is the
+   scene, and it is the 23-of-26 shape D-0080 found in the corpus (`rup +1 ~<v>_eq_<k>
+   >= 1 ;` at a level > 0, empty tail). The line is reached only when ANOTHER element's
+   derivation embeds this one -- [excl_hole] cites the result hole's remover's
+   explanation, which is this module's [hole_expl] -- and that derivation is forced, which
+   a factless conflict does at search.ml's D-0040 arm.
+
+   The repair is alldiff.ml's [Gone_hole] arm, verbatim in kind: carry the PUNCHER's
+   facts into the clause, `~idx_eq_p \/ ~facts`, which is RUP against the hole's own
+   trace line plus the channelling halves (assume idx_eq_p and the facts; the halves set
+   idx_ge_p and ~idx_ge_(p+1); the hole's line is then falsified). The leftover literals
+   stay in the row, which is the same globally valid "pruning disjoined with what it
+   read" every other arm of [pos_gone] already derives. A level-0 hole keeps the bare unit
+   -- it is RUP there, and keeping it leaves every proof that never reaches a deep foreign
+   hole byte-identical. The remover is found EAGERLY, here, at pruning time (I-X6). *)
+let index_hole_clause t store bp =
+  let unit = Lit.negate (Lit.eq t.iname bp) in
+  let rec find i =
+    if i < 0 then None
+    else
+      let e = Store.trail_entry store i in
+      if
+        Var.equal e.Store.var t.ibase && Domain.mem e.Store.old bp
+        && not (Domain.mem e.Store.now bp)
+      then Some i
+      else find (i - 1)
+  in
+  match find (Store.trail_length store - 1) with
+  | Some i when Store.level_of_index store i > 0 ->
+      let r = (Store.trail_entry store i).Store.reason in
+      Explanation.clause (unit :: List.map Lit.negate (Reason.lits r))
+  | Some _ | None -> Explanation.clause [ unit ]
+
 (* WHAT A SHAPE-1 LINE LEAVES BEHIND, so that a conflict can cancel it.
 
    Each arm of [pos_gone] derives [~idx_eq_p] disjoined with AT MOST ONE bound literal --
@@ -521,26 +586,106 @@ let pos_gone t store p =
       let dlo = Domain.lo d and dhi = Domain.hi d in
       if bp < dlo then (later (fun () -> idx_excl_below t p ~blo:dlo), R_idx_lo dlo)
       else if bp > dhi then (later (fun () -> idx_excl_above t p ~bhi:dhi), R_idx_hi dhi)
-      else (Explanation.clause [ Lit.negate (Lit.eq t.iname bp) ], R_none)
+      else (index_hole_clause t store bp, R_none)
 
 (* ---- shape 2: what the live positions force about the result ---- *)
 
 (* [sum_{p live} idx_eq_p \/ <lits> >= 1]: the declared at-least-one line, narrowed by
    one [pos_gone] per dead position. Each cancels its own term and leaves the degree at
    1, exactly as alldiff.ml's [alo_window] does over a Hall interval. *)
+(* A bound the SEARCH established, cited by [Explanation.Defining] (D-0064,
+   docs/DECISIONS.md D-0064; lib/core/explanation.ml's header, "[Defining], and why it
+   is a SUMMAND"). M4-T3 branched before that constructor existed and stood in with
+   [Explanation.term c (Explanation.clause [l])] -- the right arithmetic wearing the
+   wrong label, per explanation.ml's own words -- which cancels the term but, because a
+   [Clause] may be any width, is not an EXACT cancellation, and trips
+   [Search.rests_on_a_clause] into routing every conflict that uses it the D-0022 way
+   (`conclusion UNSAT` citing the empty clause, this module's own [pol] left decorative).
+   [Explanation.defining] cites a UNIT line and is exact, so a root conflict built only
+   from [Defining] summands closes on its own [pol].
+
+   [established_at_root] mirrors lib/core/prop/alldiff.ml:179's function of the same
+   name (that module is M4-T2's, not duplicated here as a shared function, since
+   alldiff.ml is read-only to this task): the level the trail entry supporting a bound
+   was pushed at, or 0 for a bound that has never moved. A bound the ROOT fixpoint set
+   is a consequence of the model and stays true and citable at ANY search depth; one a
+   DECISION set is not (D-0064's level rule) -- so, unlike the old blanket "only at
+   [Store.level store] = 0", the check below is per LITERAL, not per conflict, and it
+   fires above level 0 exactly when the specific bound cited happened to be a root one.
+   Every call site below computes it EAGERLY, never inside an [Explanation.deferred]
+   thunk: the support arrays this reads are live store state that a later backtrack can
+   invalidate, the same reason alldiff.ml's [snap_of] snapshots [s_lo_root]/[s_hi_root]
+   before wrapping anything in [deferred]. *)
+let established_at_root store v ~lower =
+  let sup = if lower then Store.lo_support store v else Store.hi_support store v in
+  sup = Store.no_support || Store.level_of_index store sup = 0
+
+(* One cancelling line per copy of each residue literal, when established at root;
+   otherwise the group contributes nothing and the residue's term stays in the
+   at-least-one row uncancelled -- not a loss, because only a ROOT conflict's derivation
+   is cited as a contradiction, and under a decision D-0018's nogood closes the branch
+   regardless. The values are read off the residues rather than from the store, so the
+   line cancelled is the bound the exclusion actually read, and the multiplicity is the
+   number of exclusions that read it. Called EAGERLY (see above), never inside the
+   [Explanation.deferred] its caller wraps around the combine. *)
+let residue_cancel t store ~dead =
+  let rn = match t.rname with Some x -> x | None -> "" in
+  let group sel lit_of var_opt ~lower =
+    match List.filter_map (fun (_, r) -> sel r) dead with
+    | [] -> []
+    | vs -> (
+        match var_opt with
+        | None -> []
+        | Some var ->
+            if established_at_root store var ~lower then
+              [ Explanation.defining (List.length vs) (lit_of (List.hd vs)) ]
+            else [])
+  in
+  group
+    (function R_res_hi h -> Some h | _ -> None)
+    (fun h -> Lit.le rn h)
+    (View.base_var t.res) ~lower:false
+  @ group
+      (function R_res_lo l -> Some l | _ -> None)
+      (fun l -> Lit.ge rn l)
+      (View.base_var t.res) ~lower:true
+  @ group
+      (function R_idx_lo l -> Some l | _ -> None)
+      (fun l -> Lit.ge t.iname l)
+      (Some t.ibase) ~lower:true
+  @ group
+      (function R_idx_hi h -> Some h | _ -> None)
+      (fun h -> Lit.le t.iname h)
+      (Some t.ibase) ~lower:false
+
 let dead_positions t store ~live =
   List.filter_map
     (fun p -> if List.mem p live then None else Some (pos_gone t store p))
     t.decl_pos
 
-let alo_of t ~dead =
+(* M7-T21 / D-0084: [cancel] is [residue_cancel] over the same [dead], computed EAGERLY
+   by the caller. A pruning's derivation used to keep every residue literal its
+   exclusions carried, root-established or not, on the argument that "only a ROOT
+   conflict's derivation is cited as a contradiction". That is true of THIS module's
+   conflicts and false of a derivation EMBEDDED in one: [excl_hole] cites the remover of
+   a result hole by its explanation, which is another element instance's [hole_expl] when
+   two elements share a result, and that instance's residue then arrives uncounted in a
+   root conflict that must close. 3.0.2: "The constraint with ID n is not contradicting"
+   (test/models/element_shared_result_root_unsat.fzn). Cancelling the root-established
+   residue HERE makes a pruning derivation at the root exact, so whatever embeds it gets
+   exactly `~idx_eq_p` or `c <> v` and nothing else. Above the root it cancels only what
+   the root established, which leaves the row stronger and still globally valid. *)
+let alo_of t ~dead ~cancel =
   Explanation.deferred (fun () ->
       Explanation.combine
         (cite (need "at-least-one" (Encoding.at_least_one_id t.enc t.iname))
-        :: List.map (fun (e, _) -> Explanation.term 1 e) dead)
+         :: List.map (fun (e, _) -> Explanation.term 1 e) dead
+        @ cancel)
         1)
 
-let alo t store ~live = alo_of t ~dead:(dead_positions t store ~live)
+let alo t store ~live =
+  let dead = dead_positions t store ~live in
+  alo_of t ~dead ~cancel:(residue_cancel t store ~dead)
 
 (* [~idx_eq_p \/ ~c_ge_(b+1)] for a live position whose value is at most [b]. *)
 let at_most_from t p ~b =
@@ -558,17 +703,19 @@ let at_least_from t p ~a =
 
 let push_hi_expl t store ~live ~b =
   let dead = dead_positions t store ~live in
+  let cancel = residue_cancel t store ~dead in
   Explanation.deferred (fun () ->
       Explanation.combine
-        (Explanation.term 1 (alo_of t ~dead)
+        (Explanation.term 1 (alo_of t ~dead ~cancel)
         :: List.map (fun p -> Explanation.term 1 (at_most_from t p ~b)) live)
         (List.length live))
 
 let push_lo_expl t store ~live ~a =
   let dead = dead_positions t store ~live in
+  let cancel = residue_cancel t store ~dead in
   Explanation.deferred (fun () ->
       Explanation.combine
-        (Explanation.term 1 (alo_of t ~dead)
+        (Explanation.term 1 (alo_of t ~dead ~cancel)
         :: List.map (fun p -> Explanation.term 1 (at_least_from t p ~a)) live)
         (List.length live))
 
@@ -578,6 +725,7 @@ let push_lo_expl t store ~live ~a =
    D-0009's weakening, used exactly as alldiff.ml's [pair_amo] uses it. *)
 let hole_expl t store ~live ~v =
   let dead = dead_positions t store ~live in
+  let cancel = residue_cancel t store ~dead in
   let below = List.filter (fun p -> t.values.(p) < v) live in
   let above = List.filter (fun p -> t.values.(p) > v) live in
   let na = List.length below and nb = List.length above in
@@ -588,7 +736,7 @@ let hole_expl t store ~live ~v =
   let pad k lit = if k > 0 then [ Explanation.weaken [ (k, lit) ] ] else [] in
   Explanation.deferred (fun () ->
       Explanation.combine
-        (Explanation.term 1 (alo_of t ~dead)
+        (Explanation.term 1 (alo_of t ~dead ~cancel)
          :: List.map (fun p -> Explanation.term 1 (at_most_from t p ~b:(v - 1))) below
         @ List.map (fun p -> Explanation.term 1 (at_least_from t p ~a:(v + 1))) above
         @ pad (m - na) (Lit.negate (Lit.ge rn v))
@@ -709,71 +857,6 @@ exception Moved
 
 let live_positions t store = List.filter (fun p -> View.mem store t.pos p) t.decl_pos
 
-(* A bound the SEARCH established, cited by [Explanation.Defining] (D-0064,
-   docs/DECISIONS.md D-0064; lib/core/explanation.ml's header, "[Defining], and why it
-   is a SUMMAND"). M4-T3 branched before that constructor existed and stood in with
-   [Explanation.term c (Explanation.clause [l])] -- the right arithmetic wearing the
-   wrong label, per explanation.ml's own words -- which cancels the term but, because a
-   [Clause] may be any width, is not an EXACT cancellation, and trips
-   [Search.rests_on_a_clause] into routing every conflict that uses it the D-0022 way
-   (`conclusion UNSAT` citing the empty clause, this module's own [pol] left decorative).
-   [Explanation.defining] cites a UNIT line and is exact, so a root conflict built only
-   from [Defining] summands closes on its own [pol].
-
-   [established_at_root] mirrors lib/core/prop/alldiff.ml:179's function of the same
-   name (that module is M4-T2's, not duplicated here as a shared function, since
-   alldiff.ml is read-only to this task): the level the trail entry supporting a bound
-   was pushed at, or 0 for a bound that has never moved. A bound the ROOT fixpoint set
-   is a consequence of the model and stays true and citable at ANY search depth; one a
-   DECISION set is not (D-0064's level rule) -- so, unlike the old blanket "only at
-   [Store.level store] = 0", the check below is per LITERAL, not per conflict, and it
-   fires above level 0 exactly when the specific bound cited happened to be a root one.
-   Every call site below computes it EAGERLY, never inside an [Explanation.deferred]
-   thunk: the support arrays this reads are live store state that a later backtrack can
-   invalidate, the same reason alldiff.ml's [snap_of] snapshots [s_lo_root]/[s_hi_root]
-   before wrapping anything in [deferred]. *)
-let established_at_root store v ~lower =
-  let sup = if lower then Store.lo_support store v else Store.hi_support store v in
-  sup = Store.no_support || Store.level_of_index store sup = 0
-
-(* One cancelling line per copy of each residue literal, when established at root;
-   otherwise the group contributes nothing and the residue's term stays in the
-   at-least-one row uncancelled -- not a loss, because only a ROOT conflict's derivation
-   is cited as a contradiction, and under a decision D-0018's nogood closes the branch
-   regardless. The values are read off the residues rather than from the store, so the
-   line cancelled is the bound the exclusion actually read, and the multiplicity is the
-   number of exclusions that read it. Called EAGERLY (see above), never inside the
-   [Explanation.deferred] its caller wraps around the combine. *)
-let residue_cancel t store ~dead =
-  let rn = match t.rname with Some x -> x | None -> "" in
-  let group sel lit_of var_opt ~lower =
-    match List.filter_map (fun (_, r) -> sel r) dead with
-    | [] -> []
-    | vs -> (
-        match var_opt with
-        | None -> []
-        | Some var ->
-            if established_at_root store var ~lower then
-              [ Explanation.defining (List.length vs) (lit_of (List.hd vs)) ]
-            else [])
-  in
-  group
-    (function R_res_hi h -> Some h | _ -> None)
-    (fun h -> Lit.le rn h)
-    (View.base_var t.res) ~lower:false
-  @ group
-      (function R_res_lo l -> Some l | _ -> None)
-      (fun l -> Lit.ge rn l)
-      (View.base_var t.res) ~lower:true
-  @ group
-      (function R_idx_lo l -> Some l | _ -> None)
-      (fun l -> Lit.ge t.iname l)
-      (Some t.ibase) ~lower:true
-  @ group
-      (function R_idx_hi h -> Some h | _ -> None)
-      (fun h -> Lit.le t.iname h)
-      (Some t.ibase) ~lower:false
-
 (* Every declared position is impossible, so the at-least-one line has nothing left and
    the sum IS [0 >= 1] -- once the bound literals the exclusions carried are cancelled.
 
@@ -865,6 +948,24 @@ let hole_conflict t store ~expl ~v =
 let conflict_of store why =
   Store.conflict store (Reason.because ~concludes:None Reason.none why)
 
+(* M7-T21 / D-0084. An INTERIOR index removal states `idx <> p` the way every other hole
+   in the store is stated -- over the ORDER encoding, `~idx_ge_p \/ idx_ge_(p+1)` -- and
+   not in this module's working currency [~idx_eq_p]. The forward channelling line
+   [idx_eq_p \/ ~idx_ge_p \/ idx_ge_(p+1)] converts one into the other exactly.
+
+   The trail entry's explanation is a CONTRACT with whoever embeds it, and the one
+   embedder is [excl_hole]: when this index is ANOTHER element's RESULT, that instance
+   excludes a position by citing this hole's remover's explanation and pairing it off
+   against its own two order-literal rows. Handed `~idx_eq_p` instead, nothing cancelled
+   and a root conflict did not close (test/models/element_crossed_root_unsat.fzn: two
+   elements, each one's index the other's result). [pos_gone]'s own derivations are
+   untouched: they build [~idx_eq_p] directly and never read this entry's explanation.
+   A removal AT a bound is a bound move, which no one embeds, and keeps its form. *)
+let in_order_currency t bw expl =
+  match Encoding.direct_fwd_id t.enc t.iname bw with
+  | None -> expl
+  | Some fwd -> Explanation.combine [ Explanation.term 1 expl; cite fwd ] 1
+
 (* Rule 1: dom(idx) := { p : as[p] in dom(c) }. *)
 let filter_index t store =
   let n = Array.length t.values in
@@ -879,15 +980,23 @@ let filter_index t store =
           if View.size store t.pos <= 1 then raise (Found (no_position_conflict t store));
           let d = Store.get store t.ibase in
           let bw = base_of t p in
-          (* The residue is DISCARDED for a pruning, and that is the whole point of it
-             being tracked separately: the derived row keeps its bound literal and is the
-             globally valid "pruning disjoined with the bounds it read". Only a conflict
-             has to cancel it. *)
-          let expl, _ = pos_gone t store p in
+          (* The residue is cancelled where the ROOT established it and kept where a
+             decision did: kept, the derived row is the globally valid "pruning
+             disjoined with the bounds it read"; cancelled, a root derivation is exact,
+             which is what [excl_hole] needs when it embeds this entry's explanation in
+             another instance's root conflict (M7-T21, D-0084; see [alo_of]). *)
+          let expl, r = pos_gone t store p in
+          let cancel = residue_cancel t store ~dead:[ (expl, r) ] in
+          let concludes = removal_conclusion t d bw in
           let j =
-            Reason.because ~concludes:(removal_conclusion t d bw)
+            Reason.because ~concludes
               (add_facts (bound_facts t store) (result_hole_facts t store))
-              (Explanation.deferred (fun () -> expl))
+              (Explanation.deferred (fun () ->
+                   let exact =
+                     if cancel = [] then expl
+                     else Explanation.combine (Explanation.term 1 expl :: cancel) 1
+                   in
+                   if concludes = None then in_order_currency t bw exact else exact))
           in
           match View.remove store t.pos p j with
           | Store.Conflict c -> raise (Found c)

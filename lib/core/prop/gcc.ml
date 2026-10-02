@@ -178,6 +178,12 @@
    other term clears for free ([free_e], one ladder rung), and [ladder_at_least] does
    the same division the other way up.
 
+   THE TWO ARE NOT ALIKE ON THE PAGE (M7-T21, D-0084). The upper push's trace line is
+   RUP against [ge_cid] alone; the lower push's is NOT, because those free ladder rungs
+   are second constraints unit propagation cannot sum. So the lower push is made under
+   [Store.deriving_ahead] and its derivation is written ahead of its line, as rule A's
+   is -- see the comment at [apply] in [pass].
+
    ---------------------------------------------------------------------------
    What is NOT here, and why
    ---------------------------------------------------------------------------
@@ -798,6 +804,44 @@ let c_lower_expl t ~k ~fixed ~others ~must =
         @ tail)
         divisor)
 
+(* THE EMPTYING PUSH OF RULE C, and it is rule A's "one more line" again (M7-T21, D-0084).
+
+   A rule C push that EMPTIES the count -- lo(c) := must above hi(c), or hi(c) := may
+   below lo(c) -- is reported by [Store.apply]'s [Failed] arm with the push's own
+   derivation, so that derivation must be CONTRADICTING. [ladder_at_least] and
+   [ladder_at_most] only make it so when the bound overshoots the count's DECLARED range;
+   when it overshoots only the CURRENT one, what they derive is the perfectly valid
+   `c >= must` (resp. `c <= may`) and 3.0.2 answers "The constraint with ID n is not
+   contradicting" (test/models/gcc_count_empty_root_unsat.fzn: a count that a SECOND gcc
+   pinned to 0 at the root). What closes it is the count's own opposite bound, walked to
+   by its rungs and cited as the unit line that states it -- [Explanation.defining], and
+   only where that bound was established at the root, which is the only place the
+   conflict must close (a deeper one leaves the literal in the row, which the nogood
+   propagates on, exactly as [bound_cancels] already argues). [deferred] because the
+   rung ids exist only once the proof has started; the root test was taken eagerly in
+   the [csnap]. *)
+let close_lower t ~k ~must expl =
+  let c = k.k_cov in
+  if must > k.k_hi && must <= c.cdhi && k.k_hi < c.cdhi && k.k_hi_root then
+    Explanation.deferred (fun () ->
+        Explanation.combine
+          (Explanation.term 1 expl
+           :: rung_summands t c.cname ~from_:(k.k_hi + 1) ~to_:must
+          @ [ Explanation.defining 1 (Lit.le c.cname k.k_hi) ])
+          1)
+  else expl
+
+let close_upper t ~k ~may expl =
+  let c = k.k_cov in
+  if may < k.k_lo && may >= c.cdlo && k.k_lo > c.cdlo && k.k_lo_root then
+    Explanation.deferred (fun () ->
+        Explanation.combine
+          (Explanation.term 1 expl
+           :: rung_summands t c.cname ~from_:(may + 1) ~to_:k.k_lo
+          @ [ Explanation.defining 1 (Lit.ge c.cname k.k_lo) ])
+          1)
+  else expl
+
 (* ------------------------------------------------------------------------ propagation *)
 
 exception Found of Store.conflict
@@ -817,17 +861,17 @@ let rule_c t store ~snaps ~caps ~apply =
       let must = c.cconst + List.length fixed in
       let facts = scope_facts ~snaps:dv ~caps:[ k ] in
       if may < k.k_hi then
-        apply ~lower:false c.cx may
+        apply ~ahead:false ~lower:false c.cx may
           (Reason.because
              ~concludes:(Some (Reason.at_most ~name:c.cname ~decl:c.cdhi may))
              facts
-             (c_upper_expl t ~k ~poss ~gone ~may));
+             (close_upper t ~k ~may (c_upper_expl t ~k ~poss ~gone ~may)));
       if must > k.k_lo then
-        apply ~lower:true c.cx must
+        apply ~ahead:true ~lower:true c.cx must
           (Reason.because
              ~concludes:(Some (Reason.at_least ~name:c.cname ~decl:c.cdlo must))
              (facts @ if k.k_lo_root then [] else k.k_lo_why)
-             (c_lower_expl t ~k ~fixed ~others ~must)))
+             (close_lower t ~k ~must (c_lower_expl t ~k ~fixed ~others ~must))))
     caps;
   ignore store
 
@@ -841,11 +885,21 @@ let pass t store =
   let caps = Array.to_list (Array.map (csnap_of store) t.cov) in
   (* [~ahead] is M7-T17's trigger (D-0082): rule A's capacity push sums a counting row
      per cover value of the interval, so its trace line is RUP only after its
-     derivation and the push is made under [Store.deriving_ahead]. Rule C's is not: its
-     line is RUP against the ONE counting row of its own value plus the count's ladder,
-     and it never had a derivation written ahead of it -- the count variables had no
-     direct encoding to arm the old [has_direct] trigger -- so it stays [false] and its
-     lines do not change. *)
+     derivation and the push is made under [Store.deriving_ahead].
+
+     Rule C is SPLIT, and M7-T21 (D-0084) is why. This comment used to say rule C's line
+     "is RUP against the ONE counting row of its own value plus the count's ladder", and
+     that is true of the UPPER push only. The upper line clears every indicator with a
+     bound fact the variable's own ladder propagates, so unit propagation reaches it. The
+     LOWER push reads the `<=` row, in which every OTHER variable's indicator
+     `x_ge_v - x_ge_(v+1)` appears negated, and unit propagation treats its two literals
+     independently: it cannot see that the indicator is never negative, because that is
+     the ladder rung `x_ge_(v+1) -> x_ge_v`, a second constraint. With two or more other
+     variables holding v strictly inside their window the row keeps slack and never
+     fires, and 3.0.2 refused the line (test/models/gcc_count_lower_rup_sat.fzn; with one
+     such variable it verifies, which is why no M7-T16 scene saw it). So the lower push
+     runs under [deriving_ahead], and [c_lower_expl]'s [free_summands] -- exactly those
+     rungs -- go on the page ahead of it. *)
   let apply ?(ahead = false) ~lower x bound j =
     (* Through [View] so that rule C's count may be a constant (M7-T18); rule A's [x] is
        always [View.of_var], whose mutators ARE [Store]'s. *)
@@ -857,7 +911,7 @@ let pass t store =
     | Store.Changed -> raise Moved
     | Store.Unchanged -> ()
   in
-  rule_c t store ~snaps ~caps ~apply:(apply ~ahead:false);
+  rule_c t store ~snaps ~caps ~apply:(fun ~ahead -> apply ~ahead);
   let cover_at = Hashtbl.create 16 in
   List.iter (fun k -> Hashtbl.replace cover_at k.k_cov.cv k) caps;
   let los = List.sort_uniq compare (List.map (fun s -> s.s_lo) snaps) in

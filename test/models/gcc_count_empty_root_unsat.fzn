@@ -1,0 +1,34 @@
+% M7-T21 / D-0084: A REFUTATION THE CHECKER REJECTED, found by a random sweep of small
+% gcc models (seed 419) while reproducing D-0080's corpus rejections. FIXED; this model
+% is an ordinary passing model test and its proof is verified on every run.
+%
+% THE DEFECT. The second gcc says no variable of its scope takes 1, and n0_0 -- the
+% FIRST gcc's count of 1s -- is in that scope, so the root pins n0_0 <= 0. The first
+% gcc's rule C lower push then needs n0_0 >= 1 (a scope variable is fixed to 1): the
+% push EMPTIES the count, and [Store.apply]'s [Failed] arm reports it with the push's
+% own derivation. That derivation concluded the valid `n0_0 >= 1` -- it only reaches a
+% contradiction when the overshoot is past the count's DECLARED range, and here it is
+% past the current one -- so the conclusion row was `n0_0_ge_1 >= 1` and 3.0.2 answered
+% "The constraint with ID 38 is not contradicting, as specified by the hint."
+%
+% THE FIX is gcc.ml's [close_lower]/[close_upper]: an emptying rule C push walks to the
+% count's opposite bound by its rungs and cites it as a unit line when the root
+% established it -- rule A's "the emptying push needs one more line", applied to rule
+% C. No SAT twin: the defect is in a ROOT conflict's closing row. The break is measured
+% (the pre-fix binary is rejected at the `conclusion` line).
+var 1..3: x0 :: output_var;
+var 1..3: x1 :: output_var;
+var 1..3: x2 :: output_var;
+var 1..3: x3 :: output_var;
+var 1..3: x4 :: output_var;
+var 0..1: n0_0 :: output_var;
+var 1..3: n0_1 :: output_var;
+constraint fzn_global_cardinality([x4,x0,x2,x3],[1,2,3],[n0_0,n0_1,1]);
+constraint fzn_global_cardinality([x0,x2,n0_0,x1],[1],[0]);
+constraint int_ne(x3,x0);
+constraint int_ne(x0,x4);
+constraint int_ne(x4,x2);
+constraint int_ne(x3,x2);
+constraint int_lin_le([1,1,-1],[x4,x2,x1],1);
+constraint int_lin_le([1,2],[x0,x3],5);
+solve :: int_search([x2,n0_0,n0_1,x1,x0,x3,x4], largest, indomain_max, complete) satisfy;

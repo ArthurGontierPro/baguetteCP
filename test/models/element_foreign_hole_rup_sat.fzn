@@ -1,0 +1,41 @@
+% M7-T21 / D-0084: A CORRECT ANSWER WHOSE PROOF THE CHECKER REJECTED. FIXED; this model
+% is an ordinary passing model test and its proof is verified on every run. It is the
+% THIRD element RUP defect (D-0075 was the second) and the shape D-0080 found on 23 of
+% the 26 corpus rejections: `rup +1 ~<idx>_eq_<k> >= 1 ;`, a bare direct-encoding unit
+% at a decision level > 0. Three variables, three constraints, no global.
+%
+% THE DEFECT. int_ne(i,j) with j = 3 punches the INTERIOR hole i <> 3 -- a hole in an
+% element INDEX that element itself did not punch. Element 1 then pushes the result
+% hole c <> 3 (rule 2), and its derivation excludes position 3 by
+% lib/core/prop/element.ml's [pos_gone] "the index's own reason" arm, which wrote the
+% bare clause `~i_eq_3`. Element 2 then finds its last position (bs[3] = 3) dead in
+% that hole: a factless conflict, whose derivation search.ml's D-0040 arm EMITS, and
+% that derivation embeds element 1's through [excl_hole]. So the bare unit went on the
+% page as
+%
+%     rup +1 ~i_eq_3 >= 1 ;
+%
+% -- which is FALSE as a consequence of the model: i = 3, c = 3, j = 2 is this model's
+% own solution. It held only under the decisions (j = 3), and a rup line may not
+% mention them except through the facts it carries.
+%
+% THE FIX carries the hole PUNCHER's facts into the clause, alldiff.ml's [Gone_hole]
+% arm in kind: `rup +1 ~i_eq_3 +1 ~j_ge_3 +1 j_ge_4 >= 1 ;`, RUP against int_ne's own
+% trace line for the hole. A level-0 hole keeps the bare unit, which is RUP there.
+%
+% WHY THESE CHOICES ARE LOAD-BEARING. indomain_median is what makes j = 3 the first
+% guess: an interior index hole needs the int_ne partner at an interior value, which a
+% bound-value decision on j cannot produce before j's other values are gone. int_ne is
+% posted FIRST so the engine runs it before element 2 (otherwise element 2 fixes c from
+% j and the conflict is int_ne's, with no element derivation in it). The model is SAT
+% because over an UNSAT model the defective line is accepted silently (D-0066; the twin
+% element_foreign_hole_rup_unsat.fzn is measured to do exactly that).
+array [1..4] of int: as = [1,2,3,4];
+array [1..5] of int: bs = [1,3,3,4,1];
+var 1..4: i :: output_var;
+var 1..4: c :: output_var;
+var 1..5: j :: output_var;
+constraint int_ne(i,j);
+constraint array_int_element(i,as,c);
+constraint array_int_element(j,bs,c);
+solve :: int_search([j,i,c], input_order, indomain_median) satisfy;

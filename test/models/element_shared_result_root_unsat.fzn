@@ -1,0 +1,30 @@
+% M7-T21 / D-0084: A REFUTATION THE CHECKER REJECTED, found by a random sweep of small
+% element models (seed 667) while reproducing D-0080's corpus rejections. FIXED; this
+% model is an ordinary passing model test and its proof is verified on every run.
+%
+% THE DEFECT. Two array_int_element instances share BOTH the index x3 and the result
+% x1. The root fixpoint ends in a no-position conflict in one of them, whose [pol]
+% must close to 0 >= 1. It cancels its OWN residue bound literals exactly
+% ([residue_cancel]), but one of its exclusions is a result HOLE, and [excl_hole] cites
+% that hole by its remover's explanation -- the OTHER instance's [hole_expl], which kept
+% every residue literal its own exclusions carried (here x1_ge_5, twice, from the two
+% positions whose value 5 is above x1's bound). Nothing counted those, so the
+% conclusion's row was `2 x1_ge_5 >= 1` and 3.0.2 answered "The constraint with ID 84
+% is not contradicting, as specified by the hint."
+%
+% THE FIX cancels root-established residue inside every element PRUNING derivation's
+% at-least-one line ([alo_of]'s [cancel]), so a derivation made at the root is exact and
+% whatever embeds it inherits nothing. There is no SAT twin: the defect is in a ROOT
+% conflict's closing row, which only an UNSAT model has. The break is measured (the
+% pre-fix binary is rejected at the `conclusion` line), not argued.
+var 1..5: x0 :: output_var;
+var 1..5: x1 :: output_var;
+var 1..5: x2 :: output_var;
+var 1..5: x3 :: output_var;
+constraint array_int_element(x3,[3,3,2,1,4],x1);
+constraint array_int_element(x3,[2,2,5,4,5],x1);
+constraint int_ne(x0,x2);
+constraint int_ne(x1,x0);
+constraint int_ne(x0,x3);
+constraint int_ne(x3,x1);
+solve :: int_search([x3,x1,x0,x2], first_fail, indomain_split, complete) satisfy;

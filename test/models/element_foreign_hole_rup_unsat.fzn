@@ -1,0 +1,19 @@
+% M7-T21 / D-0084: the UNSAT twin of element_foreign_hole_rup_sat.fzn. The same search
+% path reaches the same line, `rup +1 ~i_eq_3 +1 ~j_ge_3 +1 j_ge_4 >= 1 ;` -- and with
+% the fix removed it writes the bare `rup +1 ~i_eq_3 >= 1 ;` and veripb 3.0.2 ACCEPTS the
+% whole refutation anyway (measured 2026-10-02). That is D-0066's warning made concrete:
+% over a contradictory model a wrong rup is invisible, which is why the regression for
+% this defect is the SAT twin and this one only guards that the fix does not break a
+% refutation. The two int_lin_ne rows remove the SAT twin's two solutions,
+% (i,c,j) = (3,3,2) and (1,1,5), without touching the propagation before the line.
+array [1..4] of int: as = [1,2,3,4];
+array [1..5] of int: bs = [1,3,3,4,1];
+var 1..4: i :: output_var;
+var 1..4: c :: output_var;
+var 1..5: j :: output_var;
+constraint int_ne(i,j);
+constraint array_int_element(i,as,c);
+constraint array_int_element(j,bs,c);
+constraint int_lin_ne([1,1],[i,j],5);
+constraint int_lin_ne([1,1],[i,j],6);
+solve :: int_search([j,i,c], input_order, indomain_median) satisfy;

@@ -1,0 +1,20 @@
+% M7-T21 / D-0084: the UNSAT twin of gcc_count_lower_rup_sat.fzn -- the q's sum to 6
+% whatever they take, so `<= 5` refutes, by search, along the same path. The same rule C
+% lower line is written (with one more fact, n <= 2, the linear row having read it) and
+% with the fix removed 3.0.2 refuses it here too (measured 2026-10-02): this database is
+% not yet contradictory at that line, which is the only thing that makes a rup
+% checkable (D-0066/D-0073). The SAT twin is still the regression; this one guards the
+% refutation.
+var 1..3: x :: output_var;
+var 1..3: y :: output_var;
+var 1..3: z :: output_var;
+var 0..3: n :: output_var;
+var 1..3: q1 :: output_var;
+var 1..3: q2 :: output_var;
+var 1..3: q3 :: output_var;
+constraint fzn_global_cardinality([x,y,z],[2],[n]);
+constraint int_ne(q1,q2);
+constraint int_ne(q1,q3);
+constraint int_ne(q2,q3);
+constraint int_lin_le([1,1,1,1],[q1,q2,q3,n],5);
+solve :: int_search([x,q1,q2,q3,y,z,n], input_order, indomain_median) satisfy;

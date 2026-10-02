@@ -626,6 +626,9 @@ work. The owning session picks it up.
 
 | **M6-T9**: `corpus_selftest.sh` has no lane for the three classifications this wave added or repaired -- `UNKNOWN-LIMIT`, `CHECK-ERR-<rc>`, and `TIMEOUT-CHECK` (unreachable before `2dda188`). A fake solver printing `limit: reached` and a fake checker exiting 124 / exiting 1 with and without "Verification error" would pin all three | `scripts/corpus_selftest.sh` | agent-perf | **taken 2026-10-02** by M6-T12 (agent-tidy), wave 32 |
 
+| **M7-T21 / D-0084 item 4a**: the root arm of `dfs` (`decisions = []`) runs `Trace.emit` before `Justify.emit` only when `top_defining e`. A `Defining` NESTED under a `Term` (gcc's `bound_cancels`, alldiff's `Gone_hole_root`, and now element's root residue cancels inside an embedded derivation) then resolves to a MINTED `rup <lit> >= 1` with no root trace on the page, which 3.0.2 refuses. Measured: making the guard unconditional (`if true || top_defining e`) fixed all four sweep instances and changed no model test outcome; reverted. Reproducer (UNSAT, refused at line 4 `rup +1 ~n0_1_ge_2 >= 1 ;`): `var 1..4: x0..x6; var 0..1: n0_0; var 1..2: n0_1; var 0..1: n1_0; fzn_global_cardinality([x3,x6,x2,x1,x0],[2,3],[n0_0,n0_1]); fzn_global_cardinality([x4,n0_1,x2,x6],[1],[n1_0]); int_ne(x0,x3); int_ne(x1,x6); int_ne(x4,x1); int_lin_le([2,2,2],[x2,x1,x6],9); int_lin_le([1,1],[x5,x0],3); solve :: int_search([x1,x3,x6,x5,n0_1,x0,x4,n0_0,n1_0,x2], input_order, indomain_median, complete) satisfy;` | `lib/core/search.ml` (root arm, ~L2502) | agent-rup2 | open |
+| **M7-T21 / D-0084 item 4b**: all_different's Regin removal ([remove_one]) concludes `~y_eq_v`; every other hole's trail-entry explanation now concludes the ORDER clause `~y_ge_v \/ y_ge_(v+1)` (the one its trace line claims), and element's `excl_hole` relies on that when an element RESULT is in an all_different scope. Measured: restating an interior Regin removal through `Encoding.direct_fwd_id` (combine the explanation with that row, divisor 1) fixed both sweep instances and kept 124/124 models; reverted. Reproducer (UNSAT, `conclusion` "not contradicting"): `var 1..5: x0..x4; all_different_int([x3,x0,x4,x1]); array_int_element(x4,[2,5,3,4,2],x3); array_int_element(x3,[4,3,5,3,5],x4); int_ne(x0,x3); int_lin_le([2,-1],[x4,x0],1); solve :: int_search([x0,x4,x1,x2,x3], smallest, indomain_max, complete) satisfy;` | `lib/core/prop/alldiff.ml` | agent-rup2 | open |
+| **M7-T21 / D-0084 item 4c**: a solver CRASH, exit 2, pre-existing (the wave-32 base binary too): `Invalid_argument("Alldiff: ladder rung has no constraint id ...")` on three sweep models mixing all_different and element. Reproducer: `var 1..4: x0..x6; all_different_int([x6,x2,x3,x5]); all_different_int([x3,x1,x5]); array_int_element(x6,[1,4,2,2],x5); array_int_element(x3,[1,3,1,3],x6); array_int_element(x3,[4,4,3,2],x2); int_ne(x3,x1); int_lin_le([1,-1,2],[x3,x0,x2],7); int_lin_le([-1,2],[x2,x0],4); solve :: int_search([x1,x6,x2,x4,x0,x3,x5], smallest, indomain_split, complete) satisfy;` Not investigated | `lib/core/prop/alldiff.ml` | agent-rup2 | open |
 
 ## Completed
 
@@ -725,6 +728,7 @@ work. The owning session picks it up.
 | M6-T9 | agent-perf | 2026-10-02 | **D-0080**. `--time-limit S` + `Search.config.stop`: a stopped run ends `conclusion NONE` and veripb accepts it (142 corpus runs); `BAGUETTE_PB_ANALYSIS`, `BAGUETTE_NODE_LIMIT`, SIGTERM `limit: killed` line; `corpus_run.sh` `SOLVER_ARGS`/`NO_PROOF`/`RSS`/`UNKNOWN-LIMIT`/`--no-output-ozn`, and two repaired classifications (`TIMEOUT-CHECK` never fired; rejection gated on the checker's wording). Shipped fix: `Pb_analysis.falsified_at` one-pass (57 → 73 verified, median nodes/s 1.44 → 10.8, byte-identical proofs) and overflow-as-fallback in the PB walk. Gate on `249d37d`: 2953 ok / 0 FAIL (peak 40.9 MB), 107/107 models (18.5 MB), selftest PASS, w30 report byte-identical. Branch `wave31-perf`, not merged |
 | M6-T10 | orchestrator | 2026-10-02 | `Justify` memo as hash buckets (351 artefacts byte-identical), `--time-limit` on the wall clock (`wall=` field), SPEC 2.2 stopped-run rule. Closes three of M6-T9's requests |
 | M6-T12 | agent-tidy | 2026-10-02 | `Writer.No_conclusion` verdict; `Search.conclude_stopped` is one `Writer.conclusion` call (hand-written epilogue deleted), a `test_proof.ml` lane asserts the three lines, the audit and veripb's `s VERIFIED NO CONCLUSION`. `corpus_selftest.sh`: four end-to-end `run_one` lanes with fake flattener/solver/checker (UNKNOWN-LIMIT, TIMEOUT-CHECK, CHECK-ERR-1, PROOF-REJECTED). Byte-identical proofs (468 files incl. stdout, md5 of the set `6f18acfb...`). Gate: 2993 ok / 0 FAIL, 117/117 models, selftest PASS. Branch `wave32-tidy`, not merged |
+| M7-T21 | agent-rup2 | 2026-10-02 | **D-0084**. The 23 bare `~<v>_eq_<k>` units: element's [pos_gone] foreign-index-hole arm, a derivation summand forced through another element's `excl_hole` by a factless conflict; it now carries the puncher's facts (alldiff's [Gone_hole] shape). The 3 gcc rups: rule C's LOWER push is not single-row RUP; it is now derived ahead. Plus three ROOT-conflict closures the random sweep found (element residue, element currency, gcc emptying push). Seven new models, two test_trace lanes with measured breaks. UNVERIFIED on the 26 until the node returns (D-0084 lists them by shape). Gate: 2998 unit checks ok / 0 FAIL, 124/124 models, peak RSS 40.5 MB |
 
 ## Handoff notes
 
@@ -3503,3 +3507,26 @@ unchanged: all 117 models, each solved to the end and under `--time-limit 0.001`
 CHECK-ERR-1 and PROOF-REJECTED; reintroducing the `rc=$?`-after-`if` bug turns two lanes red.
 Next session: a new `Writer.verdict` arm needs no change in `Search`; the fakes read
 `FAKE_SOLVER`/`FAKE_CHECKER`, extend `expect_bucket` for further buckets.
+## M7-T21 handoff, 2026-10-02 (agent-rup2)
+
+Branch `wave32-rup2`, not merged. **D-0084** is the record; read it, not this.
+
+- **Both corpus shapes were DERIVATIONS embedded in another line, not trace lines.** Every
+  trace-line lane was green because the trace lines were right. Element's foreign-index-hole
+  summand was a bare `~idx_eq_p` (now `~idx_eq_p \/ ~<puncher's facts>`, bare only at level
+  0); gcc rule C's lower push needed its derivation ahead (`~ahead:true`). Reproducers:
+  `element_foreign_hole_rup_sat.fzn`, `gcc_count_lower_rup_sat.fzn` (+ `_unsat` twins);
+  `test_trace.ml` pins both lines and its breaks were measured red with the fixes reverted.
+- **Tomorrow, on the node:** re-run the 26 of `bench/m6t9/results/a2.tsv` marked
+  `PROOF-REJECTED` (plus `2025_stripboard` from `d.tsv`) with the binary hashed. D-0084 lists
+  them by shape. A gcc instance whose rejected line is NOT `rup +1 <count>_ge_k +1 ~<x>_ge_v
+  +1 <x>_ge_(v+1) ...` is a second gcc defect. A passed line may expose a later one.
+- **A random sweep is the cheapest lane this family has had.** ~20 000 small models (3-7
+  variables, domains 1..5) over element, gcc, int_ne, int_lin_le, all_different, every proof
+  checked: it found the gcc shape in 300 models and four root-conflict defects besides. The
+  generator lived in the session scratchpad; it is 60 lines of Python worth putting in
+  `scripts/` (not done: not in this row's files).
+- **Three cross-session requests filed** (D-0084 item 4): `search.ml`'s root arm only emits the
+  root trace on a TOP-level `Defining`; all_different's Regin removal concludes in the direct
+  currency; an all_different `ladder rung has no constraint id` crash. The first two have
+  measured one-line fixes in the request text.
