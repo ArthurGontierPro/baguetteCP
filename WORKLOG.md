@@ -589,6 +589,16 @@ measurement record of the w31/w35 runs). Seams: agent-speed4 holds `lib/core/tra
 |---|---|---|---|
 | M6-T15 | `lib/core/trace.ml`, `lib/core/store.ml` (entry position only, if needed), `test/unit/test_trace.ml`, `bench/**`, `docs/DECISIONS.md` (D-0090, append) | agent-speed4 | 2026-10-02 |
 | M6-T8 | `lib/core/prop/element.ml`, `lib/core/prop/alldiff.ml`, `lib/core/debug.ml`, `lib/core/engine.ml` (agreement-check call site only), `test/unit/{test_prop,test_core}.ml`, `docs/DECISIONS.md` (D-0091, append) | agent-debug | 2026-10-02 |
+
+**Wave thirty-seven, dispatched 2026-10-02 (orchestrator), beside agent-debug (M6-T8).** One row,
+M6-T16 (agent-speed5, `wave37-speed5`), from D-0090's request. Decision id pre-assigned:
+**D-0092**. agent-speed5 holds `lib/core/analysis.ml`, `test/unit/test_analysis.ml`, `bench/**`;
+agent-debug holds `lib/core/prop/{element,alldiff}.ml`, `lib/core/debug.ml`, `lib/core/engine.ml`
+(call site), `test/unit/{test_prop,test_core}.ml`. Node clone `/scratch/arthur/baguette-speed5`.
+
+| Task | Files being touched | Session | Since |
+|---|---|---|---|
+| M6-T16 | `lib/core/analysis.ml`, `test/unit/test_analysis.ml`, `bench/**`, `docs/DECISIONS.md` (D-0092, append) | agent-speed5 | 2026-10-02 |
 ## Cross-session requests
 
 Need a change in a file someone else has claimed? Write it here and move on to other
@@ -736,7 +746,7 @@ work. The owning session picks it up.
 | **M7-T22 / D-0086**: element.ml's header paragraph "What is still OPEN: [excl_hole] trusts the remover's derivation to conclude the hole in the order currency ... Regin ... not reduced or measured here" is now stale -- all_different's interior Regin removal concludes the order clause since M7-T22 (b) (`alldiff.ml` [in_order_currency]; lane `alldiff_regin_hole_element_unsat`). Comment-only edit; element.ml was not in M7-T22's write set for comments. | `lib/core/prop/element.ml` (header, ~L201) | agent-root | **CLOSED 2026-10-02** by the orchestrator at the merge: the header paragraph now states the settled convention |
 | **M6-T14 / D-0088**: after the support and remover histories, 40 % of 2014_mario's self time is `Trace.position_of`, a linear walk over `done_` by physical identity, run once per entry a settle reaches. Another 5 % is `Stdlib.@`, from `Trace.add_fact`'s `acc @ [l]`, which is quadratic in the fact count. A per-entry position (the trail index is known where `done_` is written), or a physical-key table, makes the first O(1). | `lib/core/trace.ml` | agent-speed3 | **taken 2026-10-02** by M6-T15 (agent-speed4, wave 36) |
 | **M6-T14**: under `BAGUETTE_DEBUG=1`, four suite models die on the D-0026 agreement check (`reason [-] vs justification combine(...)`): `alldiff_regin_hole_element_unsat`, `element_crossed_root_unsat`, `element_moved_unsat`, `element_shared_result_root_unsat`. The base binary (`main` before M6-T14) dies the same way, so this predates M6-T14. Some element (or Regin) pruning records `Reason.none` while its justification is a full derivation. | `lib/core/prop/element.ml` (or `alldiff.ml`) | agent-speed3 | **taken 2026-10-02** by M6-T8 (agent-debug, wave 36) |
-| **M6-T15 / D-0090**: once `Trace.position_of` is gone, the top symbol on 2014_mario is `Stdlib.@` at 9.3 % self. A DWARF call graph puts 83 % of it under an anonymous function in `Analysis`, almost certainly the node merge at `lib/core/analysis.ml:395` (`out @ [ n ]` after a `List.map ... same_slot`, which is quadratic in the frontier; `Analysis.same_slot` and `fun_1270` are another 2.9 % and 2.8 %). `add_antecedent` at :407 has the same `@ [ p ]` shape. An indexed frontier, or a reversed list, would make it linear. Byte identity is the proof, as for M6-T14 and M6-T15. | `lib/core/analysis.ml` | agent-speed4 | open |
+| **M6-T15 / D-0090**: once `Trace.position_of` is gone, the top symbol on 2014_mario is `Stdlib.@` at 9.3 % self. A DWARF call graph puts 83 % of it under an anonymous function in `Analysis`, almost certainly the node merge at `lib/core/analysis.ml:395` (`out @ [ n ]` after a `List.map ... same_slot`, which is quadratic in the frontier; `Analysis.same_slot` and `fun_1270` are another 2.9 % and 2.8 %). `add_antecedent` at :407 has the same `@ [ p ]` shape. An indexed frontier, or a reversed list, would make it linear. Byte identity is the proof, as for M6-T14 and M6-T15. | `lib/core/analysis.ml` | agent-speed4 | **taken 2026-10-02** by M6-T16 (agent-speed5, wave 37) |
 
 ## Completed
 
