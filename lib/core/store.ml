@@ -118,6 +118,12 @@ type entry = {
          test/unit/test_trace.ml's table) calls that, around its own pruning call. *)
   sup_lo : int;
   sup_hi : int;
+  pos : int;
+      (* M6-T15 (D-0090). The trail position this entry was pushed at, [-1] for
+         [dummy_entry]. [apply] is the only constructor and pushes the record it builds at
+         exactly this position, and no entry is ever re-pushed, so an entry occupies one
+         trail position for its whole life. lib/core/trace.ml's [position_of] reads it to
+         answer in O(1) what it used to answer by walking [done_]. *)
 }
 
 (* [lo_sup]/[hi_sup] are indexed by variable and hold the trail position of the entry
@@ -218,6 +224,7 @@ let dummy_entry =
     ahead = false;
     sup_lo = no_support;
     sup_hi = no_support;
+    pos = -1;
   }
 
 let dummy_mark = { trail_mark = 0; reason_mark = 0 }
@@ -358,6 +365,8 @@ let deriving_ahead t f =
 (* ------------------------------------------------------------- trail growth *)
 
 let push_entry t e =
+  Debug.check "M6-T15: an entry is pushed at its own [pos]" (fun () ->
+      e.pos = t.trail_len);
   if t.trail_len = Array.length t.trail then (
     let bigger = Array.make (2 * Array.length t.trail) dummy_entry in
     Array.blit t.trail 0 bigger 0 t.trail_len;
@@ -677,6 +686,7 @@ let apply t v (r : Domain.result) (j : Reason.justified) =
           ahead = t.current_ahead;
           sup_lo = t.lo_sup.(i);
           sup_hi = t.hi_sup.(i);
+          pos = at;
         };
       (* The support of a bound this entry moved is this entry. A bound it left alone
          keeps whatever supported it, which is what the saved fields above restore. Both
