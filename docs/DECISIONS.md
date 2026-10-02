@@ -6964,3 +6964,132 @@ with MiniZinc 2.10.1 and baguette's library, 300 s solve timeout, `--max-heap-mb
 below and minimised, and no constraint bounds them above — the model's own solution set is
 unbounded in them. Bounding from the objective would need an incumbent first, and is a
 different decision. Zero proofs rejected.
+
+## D-0084  The 26 corpus rejections: a derivation one propagator EMBEDS in another, in two families
+Status: DECIDED (element and gcc fixed and measured locally; the 26 node instances UNVERIFIED until the node returns)
+Date: 2026-10-02
+Task: M7-T21 (agent-rup2, wave 32).
+Touches: `lib/core/prop/element.ml`, `lib/core/prop/gcc.ml`, `test/unit/test_trace.ml`,
+`docs/PROOF-FORMAT.md` §4 (element, gcc rows), seven new models.
+Follows D-0075 (element's hole facts), D-0040/D-0082 (derive-ahead, the propagator's flag),
+D-0064 (root-established bounds cited by `Defining`), D-0066/D-0073 (a rup is checked by
+being load-bearing, and a SAT model is where a wrong one is visible).
+
+### Shape 1 -- the 23 bare units: a foreign index hole, under a decision
+
+**The defect.** `element.ml`'s [pos_gone] excludes each dead position by one derivation. For
+a position the index lost to ANOTHER propagator (an `int_ne`, another element sharing the
+index), the arm was `Explanation.clause [~idx_eq_p]` -- a bare unit, emitted as
+`rup +1 ~<idx>_eq_<p> >= 1 ;`. That unit is RUP only when the hole is a consequence of the
+model: the hole's own trace line is `~idx_ge_p \/ idx_ge_(p+1) \/ ~<the puncher's facts>`,
+and with only `idx_eq_p` assumed those facts are not falsified, so unit propagation never
+fires it. At level 0 the facts are root facts and it holds; under a decision it does not.
+The line is written only when the derivation is FORCED, and the path is: a second element
+whose result is this one's result hits a factless conflict, `search.ml`'s D-0040 arm emits
+the conflict's `pol`, and that `pol` embeds this instance's [hole_expl] through
+[excl_hole]. That is exactly D-0080's description -- a bare direct-encoding unit, empty
+tail, level > 0, the first such line in its proof, after a run of `pol`s (they are the
+conflict's derivation, not `derive_ahead`'s) -- and it is the ONLY site in `lib/` that
+writes a bare `~x_eq_k` unit (alldiff's root case cites the unit through `Defining`; its
+deep case carries the facts already). The trace lines were never wrong, which is why every
+lane D-0075 added stayed green.
+
+**Is it D-0075's shape?** Its sibling, not the same line. D-0075 was a TRACE line whose tail
+lacked a hole's facts; this is a DERIVATION summand that lacked them. The repair is the
+same idea -- carry the puncher's reason -- and its exact precedent is alldiff's
+[Gone_hole] arm: [index_hole_clause] is `~idx_eq_p \/ ~<puncher's facts>`, RUP against the
+hole's own trace line plus the channelling halves, and the bare unit only for a level-0
+hole, so a proof that never reaches a deep foreign hole is byte-identical.
+
+**Reproducer.** `test/models/element_foreign_hole_rup_sat.fzn` (three variables, SAT;
+`int_ne(i,j)` with `j = 3` by `indomain_median`, two elements sharing the result). Pre-fix
+it writes `@c70 rup +1 ~i_eq_3 >= 1 ;` at line 54 and 3.0.2 refuses it ("not implied by
+reverse unit propagation (RUP) from core and derived database"); post-fix the line is
+`rup +1 ~i_eq_3 +1 ~j_ge_3 +1 j_ge_4 >= 1 ;` and the proof verifies. The UNSAT twin
+(`element_foreign_hole_rup_unsat.fzn`) reaches the same line, and pre-fix 3.0.2 ACCEPTED the
+bare unit there -- D-0066 measured once more. `test_trace.ml`'s M7-T21 element lane pins
+the line, rewrites it back to the bare unit in place, and asserts the refusal at that line
+number with full wording; with the fix reverted its "no bare unit" and "written with its
+puncher's facts" checks redden (measured).
+
+### Shape 2 -- the 3 gcc multi-literal rups: rule C's LOWER push is not single-row
+
+**The defect.** gcc's rule C pushes `lo(n) := #{scope variables fixed to v}`, and
+`gcc.ml` wrote its trace line bare, saying it "is RUP against the ONE counting row of its
+own value plus the count's ladder". The `<=` row carries every OTHER variable's indicator
+negated, `~x_ge_v + x_ge_(v+1) - 1`, and unit propagation treats the two literals
+independently: it cannot see the indicator is never negative, because that is the rung
+`x_ge_(v+1) -> x_ge_v`, a second constraint. With two or more other variables holding v
+strictly inside their window the row keeps slack and never fires, so the line -- e.g.
+`rup +1 n_ge_1 +1 ~x_ge_2 +1 x_ge_3 >= 1 ;`, multi-literal, in a gcc model -- is true and
+not RUP. With exactly one such variable the slack forces both literals and the rung
+conflicts, which is why no M7-T16 scene saw it. The UPPER push is genuinely single-row
+(every indicator it clears is pinned by a bound fact the ladder propagates).
+
+**The fix.** The lower push runs under `Store.deriving_ahead`, so `Trace.derive_ahead`
+writes [c_lower_expl] -- whose [free_summands] ARE those rungs -- ahead of the line. One
+flag, D-0082's mechanism, no new constructor.
+
+**Reproducer.** `test/models/gcc_count_lower_rup_sat.fzn` (gcc over three variables, SAT,
+the D-0075 pigeonhole to fail deeper). Pre-fix: refused at line 8, the bare rule C line.
+Found by a random sweep (12 of 300 small gcc models, all this shape), not reduced from the
+corpus, so which of the three corpus instances it explains is for the node to confirm.
+`test_trace.ml` runs it through [test_ix10_derive_ahead] (now able to honour a scene's
+search annotation); with `~ahead:false` restored its "a pol precedes" and "the full proof
+verifies" checks redden (measured). The UNSAT twin is refused pre-fix too: its database is
+not yet contradictory at that line.
+
+### Found on the way: four ROOT-conflict defects, three fixed here
+
+The sweep (about 20 000 small models over element, gcc, int_ne, int_lin_le and
+all_different, every proof checked) found refutations whose `conclusion UNSAT` row is "not
+contradicting". All are pre-existing (the wave-32 base binary is rejected identically) and
+UNSAT-only, so none is among the 26. Each is a derivation EMBEDDED in a root conflict
+carrying something the embedder did not count:
+
+1. **Element, shared result** (`element_shared_result_root_unsat.fzn`). [excl_hole] cites a
+   result hole by its remover's explanation, another instance's [hole_expl], which kept
+   its root-established residue. Fix: every element pruning derivation cancels
+   root-established residue where it is built ([alo_of]'s [cancel], and [filter_index]).
+2. **Element, crossed index/result** (`element_crossed_root_unsat.fzn`). The embedded
+   remover was an INDEX removal, which concluded `~idx_eq_p` where [excl_hole] pairs off
+   ORDER literals. Fix: an interior index removal is restated over the order encoding by
+   the forward channelling line ([in_order_currency]). **The contract this states: a hole's
+   trail-entry explanation concludes the hole in the ORDER currency, the clause the trace
+   line claims.** Ne and element now keep it; all_different's Regin removal does not
+   (item 4).
+3. **gcc, emptying rule C push** (`gcc_count_empty_root_unsat.fzn`). A push that empties the
+   count against a bound the root set past the declared one derived the valid `n >= 1`,
+   not `0 >= 1`. Fix: [close_lower]/[close_upper] walk the rungs to the opposite bound and
+   cite it by `Defining` -- rule A's "one more line" for rule C.
+4. **NOT FIXED, cross-session:** (a) `search.ml`'s root arm emits the root trace only when
+   the conflict's derivation has a TOP-level `Defining`; a nested one mints
+   `rup <lit> >= 1` with nothing on the page to propagate from (four sweep instances;
+   always emitting the trace there fixed all four, measured and reverted); (b)
+   all_different's Regin removal concludes `~y_eq_v` -- measured: restating it through
+   `Encoding.direct_fwd_id` fixed both sweep instances and kept 124/124 models, reverted;
+   (c) an `Alldiff: ladder rung has no constraint id` CRASH (exit 2) on three sweep
+   models mixing all_different and element, pre-existing. Requests filed in WORKLOG.
+
+### Not verified until the node returns
+
+The 26 of config (a'), by shape, for tomorrow's run to tick off (binary hashed, one per
+shape at least):
+
+- **bare `~<v>_eq_<k>` unit, element shape 1 (23):** `2014_spot5`, `2015_spot5`,
+  `2022_spot5`; `2014_traveling-tppv_ttppv`, `2017_traveling-tppv_ttppv`,
+  `2022_traveling-tppv_ttppv`; `2013_mario`, `2014_mario`; `2024_portal`;
+  `2020_stable-goods_stable-goods-solution`; `2021_peacable_queens_peaceable_queens_mznc2021`,
+  `2024_peacable_queens_peaceable_queens_mznc2021`; `2012_project-planning_ProjectPlannertest_12_8`;
+  `2013_javarouting_trip_{6_3,7_1,7_2,8_1,8_5}`, `2021_java-routing_trip_{6_2,7_4,7_5,8_2,8_3}`.
+  Plus `2025_stripboard` of config (d), same shape. The `mapget*` variables are expected to
+  be element INDICES (MiniZinc's `mapget` over a constant array flattens to
+  `array_int_element`); no `.fzn` of those models exists locally to confirm it.
+- **gcc multi-literal rup, shape 2 (3):** `2022_generalized-peacable-queens_peaceable_queens`,
+  `2023_chessboard`, `2024_compression`. Expected: rule C lower lines
+  (`rup +1 <count>_ge_k +1 ~<x>_ge_v +1 <x>_ge_(v+1) ...`); if the rejected line there is
+  NOT of that form, it is a second gcc defect this record does not explain.
+
+What a fix here cannot promise: these instances were rejected at the FIRST bad line, so a
+proof that now passes that line may meet a later one of another family (the sweep's item
+4 kinds among them).
