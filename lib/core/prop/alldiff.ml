@@ -598,9 +598,19 @@ let target_cancel ~y ~lower =
        ~y_ge_lo(y) + y_ge_(b+1) >= 1 for a lower push and ~y_ge_a + y_ge_(hi(y)+1) >= 1
        for an upper one. Those are the bound the propagator just set, disjoined with the
        bound it read -- again the [Ne] shape, and globally valid. *)
+(* CAPPED AT y's DECLARED TOP (M7-T22, D-0086 (c)). [pass]'s pigeonhole arm pushes a
+   CONTAINED y to [b + 1], and [b] is the interval's end -- some variable's upper bound,
+   not necessarily one y's declared domain reaches. The values of [y.s_lo .. b] above
+   [decl_hi(y)] have no forward channelling clause (y takes none of them by declaration),
+   and the core sum leaves no [~y_eq_v] for them to cancel either ([core_summands] filters
+   the at-most-one lines by declared domain), so the telescope stops at [decl_hi(y)] and
+   its residue [y_ge_(decl_hi+1)] is the constant false. Uncapped it asked for a
+   [direct_fwd_id] that does not exist: exit 2 on `var 1..3: a, b, c; var 1..2: d;
+   all_different_int([a, b, c, d])`, the four-variable pigeonhole. *)
 let prune_summands t ~a ~b ~halls ~y ~lower =
   let keep, drop =
-    if lower then (range y.s_lo b, range (Stdlib.max a y.s_dlo) (y.s_lo - 1))
+    if lower then
+      (range y.s_lo (Stdlib.min b y.s_dhi), range (Stdlib.max a y.s_dlo) (y.s_lo - 1))
     else (range a y.s_hi, range (y.s_hi + 1) (Stdlib.min b y.s_dhi))
   in
   core_summands t ~vals:(range a b) ~halls ~extra:(Some y)
@@ -633,9 +643,17 @@ let prune_summands t ~a ~b ~halls ~y ~lower =
    above [b] and the residue IS the pruning and must stay; in the [n > k] arm it is
    contained, so the push always oversteps. Only the lower direction needs this, because
    [pass] only ever empties a domain downward-out-of ([push ~lower:true]); the mirror
-   case is written out in this comment rather than in code because nothing reaches it. *)
+   case is written out in this comment rather than in code because nothing reaches it.
+
+   [b < y.s_dhi] (M7-T22, D-0086 (c)) is the first paragraph's own condition, which the
+   guard did not state: the residue [y_ge_(b+1)] is a literal the encoding has only when
+   [b + 1 <= decl_hi(y)]. Past it the residue is the constant false, there is nothing to
+   cancel, and the ladder has no rung [y_ge_(decl_hi+1) -> y_ge_decl_hi] to cite -- the
+   `Alldiff: ladder rung has no constraint id` crash (exit 2) the bench/fuzz sweep found on
+   models where an element constraint had shaved y's upper bound below a Hall interval
+   reaching y's declared top. *)
 let overshoot_cancel t ~b ~y ~lower =
-  if lower && b + 1 > y.s_hi && y.s_hi < y.s_dhi && y.s_hi_root then
+  if lower && b + 1 > y.s_hi && b < y.s_dhi && y.s_hi < y.s_dhi && y.s_hi_root then
     List.map
       (fun u -> cite (cid_of "ladder rung" (Encoding.consistency_id t.enc y.s_name u)))
       (range (y.s_hi + 1) b)
