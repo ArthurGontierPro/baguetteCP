@@ -44,24 +44,46 @@ let map_terms f c = { c with terms = List.map f c.terms }
    right-hand side. Callers that build constraints by concatenation want this;
    [write] does not apply it for them, because the emission order and the exact
    shape of a model constraint are things a proof step may depend on. *)
+(* M6-T13 (D-0087): the name-keyed tables below are [Names], a [string]-specialised
+   [Hashtbl] -- [String.equal] instead of the polymorphic [compare] the generic table
+   probes with (D-0085 measured [compare_val]/[caml_hash] ~10 % self on a wide compile),
+   and [Hashtbl.hash] exactly as before. THE KEY IS STILL THE RENDERED NAME, and that is
+   deliberate: [Lit.sanitize] is not injective, so two distinct [Lit.pbvar]s can render to
+   one OPB variable, and merging them by name is what these functions have always done.
+   Keying on the [pbvar] would be faster still and would change that semantics; it is not
+   done without an argument that no two live owners collide (D-0087). Nothing here
+   iterates a table -- every output order comes from an explicit list -- so swapping the
+   table cannot move a byte. *)
+module Names = Hashtbl.Make (struct
+  type t = string
+
+  let equal = String.equal
+  let hash (s : string) = Hashtbl.hash s
+end)
+
 let normalise c =
-  let coef = Hashtbl.create 16 in
+  let coef = Names.create 16 in
   let order = ref [] in
   let rhs = ref c.rhs in
   List.iter
     (fun (a, (l : Lit.t)) ->
       let key = Lit.var_name l.Lit.v in
-      if not (Hashtbl.mem coef key) then order := (key, l.Lit.v) :: !order;
-      let prev = try fst (Hashtbl.find coef key) with Not_found -> 0 in
+      let prev =
+        match Names.find_opt coef key with
+        | Some (p, _) -> p
+        | None ->
+            order := (key, l.Lit.v) :: !order;
+            0
+      in
       (* a * ~v = a - a * v, so the constant a moves to the right-hand side. *)
       let delta = if l.Lit.positive then a else -a in
       if not l.Lit.positive then rhs := !rhs - a;
-      Hashtbl.replace coef key (prev + delta, l.Lit.v))
+      Names.replace coef key (prev + delta, l.Lit.v))
     c.terms;
   let terms =
     List.rev !order
     |> List.filter_map (fun (key, _) ->
-           let a, v = Hashtbl.find coef key in
+           let a, v = Names.find coef key in
            if a = 0 then None
            else if a > 0 then Some (a, Lit.pos v)
            else (
@@ -74,11 +96,19 @@ let normalise c =
 (* The constraint without its terminating " ;". VeriPB 3.0's [red] rule ends at the
    first ";", so its witness has to come before one: `red <body> : <witness> ;`. Every
    other use wants the terminator, which is what [constr_to_string] is. *)
+(* [Printf.sprintf "%+d %s " a name], without the format interpreter (M6-T13): "%+d"
+   is the decimal with its sign always written, so "+" for [a >= 0] -- "+0" included --
+   and [string_of_int]'s own "-" otherwise. *)
+let add_term b a l =
+  if a >= 0 then Buffer.add_char b '+';
+  Buffer.add_string b (string_of_int a);
+  Buffer.add_char b ' ';
+  Buffer.add_string b (Lit.to_string l);
+  Buffer.add_char b ' '
+
 let constr_body c =
   let b = Buffer.create 64 in
-  List.iter
-    (fun (a, l) -> Buffer.add_string b (Printf.sprintf "%+d %s " a (Lit.to_string l)))
-    c.terms;
+  List.iter (fun (a, l) -> add_term b a l) c.terms;
   Buffer.add_string b (match c.rel with Ge -> ">= " | Eq -> "= ");
   Buffer.add_string b (string_of_int c.rhs);
   Buffer.contents b
@@ -93,23 +123,21 @@ let objective ?(constant = 0) terms = { obj_terms = terms; obj_constant = consta
 let objective_to_string o =
   let b = Buffer.create 64 in
   Buffer.add_string b "min: ";
-  List.iter
-    (fun (a, l) -> Buffer.add_string b (Printf.sprintf "%+d %s " a (Lit.to_string l)))
-    o.obj_terms;
+  List.iter (fun (a, l) -> add_term b a l) o.obj_terms;
   if o.obj_constant <> 0 then Buffer.add_string b (Printf.sprintf "%+d " o.obj_constant);
   Buffer.add_string b ";";
   Buffer.contents b
 
 let var_names constraints =
-  let seen = Hashtbl.create 64 in
+  let seen = Names.create 64 in
   let order = ref [] in
   List.iter
     (fun c ->
       List.iter
         (fun (_, (l : Lit.t)) ->
           let n = Lit.var_name l.Lit.v in
-          if not (Hashtbl.mem seen n) then (
-            Hashtbl.replace seen n ();
+          if not (Names.mem seen n) then (
+            Names.add seen n ();
             order := n :: !order))
         c.terms)
     constraints;
@@ -119,15 +147,15 @@ let var_names constraints =
    rewritten by [Lit.sanitize] and the mapping is dumped as comments at the head of
    the .opb, so that a proof can still be grepped against the model. *)
 let rename_comments constraints =
-  let seen = Hashtbl.create 8 in
+  let seen = Names.create 8 in
   let acc = ref [] in
   List.iter
     (fun c ->
       List.iter
         (fun (_, (l : Lit.t)) ->
           let x = Lit.owner l.Lit.v in
-          if Lit.is_renamed x && not (Hashtbl.mem seen x) then (
-            Hashtbl.replace seen x ();
+          if Lit.is_renamed x && not (Names.mem seen x) then (
+            Names.add seen x ();
             acc := Printf.sprintf "name %s -> %s" x (Lit.sanitize x) :: !acc))
         c.terms)
     constraints;
@@ -149,10 +177,10 @@ let write ?objective:obj oc ~comments ~constraints =
     | Some o -> var_names [ { terms = o.obj_terms; rel = Ge; rhs = 0 } ]
   in
   let nvars =
-    let seen = Hashtbl.create 64 in
-    List.iter (fun n -> Hashtbl.replace seen n ()) names;
-    List.iter (fun n -> Hashtbl.replace seen n ()) obj_names;
-    Hashtbl.length seen
+    let seen = Names.create 64 in
+    List.iter (fun n -> Names.replace seen n ()) names;
+    List.iter (fun n -> Names.replace seen n ()) obj_names;
+    Names.length seen
   in
   Printf.fprintf oc "* #variable= %d #constraint= %d\n" nvars
     (n_checker_constraints constraints);

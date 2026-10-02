@@ -169,6 +169,21 @@ let test_opb () =
   check_eq "opb: normalise moves negative coefficients right"
     ~expected:"+2 ~x_ge_1 >= 1 ;"
     ~got:(Opb.constr_to_string (Opb.normalise (Opb.ge [ (-2, Lit.ge "x" 1) ] (-1))));
+  (* M6-T13/D-0087: normalise merges by RENDERED name, and [Lit.sanitize] is not
+     injective -- "a.b" and "a_b" are two [pbvar]s and one OPB variable. The merge is the
+     current semantics and this pins it, so that keying the table on [Lit.pbvar] (faster,
+     and wrong without an argument) shows up here. The zero coefficient and "+0" in
+     [constr_body]'s sign rule are pinned beside it, because M6-T13 rewrote "%+d". *)
+  check_eq "opb: normalise merges two pbvars that render to one name (sanitize collision)"
+    ~expected:"+3 a_b_ge_1 >= 2 ;"
+    ~got:
+      (Opb.constr_to_string
+         (Opb.normalise (Opb.ge [ (1, Lit.ge "a.b" 1); (2, Lit.ge "a_b" 1) ] 2)));
+  check_eq "opb: a zero coefficient is written +0, a negative one with its own sign"
+    ~expected:"+0 x_ge_1 -4 ~y_eq_m2 >= -1 ;"
+    ~got:
+      (Opb.constr_to_string
+         (Opb.ge [ (0, Lit.ge "x" 1); (-4, Lit.negate (Lit.eq "y" (-2))) ] (-1)));
   check_eq "opb: objective line" ~expected:"min: +1 x_ge_1 +1 x_ge_2 ;"
     ~got:
       (Opb.objective_to_string (Opb.objective [ (1, Lit.ge "x" 1); (1, Lit.ge "x" 2) ]))

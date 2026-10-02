@@ -1,0 +1,27 @@
+% gcc_low_up_unsat -- M6-T13 (D-0087)
+%
+% HAND-WRITTEN, NOT A FLATTENED ARTEFACT: the twin of gcc_low_up_sat.fzn (whose
+% header says what it stands for), with sum(x) >= 10. Exactly two 3s (the constant
+% count) and at most one 2 (count(2)'s upper bound 1) leave the other two slots summing
+% to at most 1 + 2, so sum(x) <= 9. UNSAT, and the refutation rests on a low_up UPPER
+% bound below |x| as well as on the constant: lift count(2)'s bound and x = [2, 2, 3, 3]
+% is an answer, lift the constant and [1, 3, 3, 3] is.
+%
+% D-0066: this lane is the refutation half; the pruning half over a satisfiable model
+% is gcc_low_up_sat.
+
+array [1..2] of int: X_INTRODUCED_8_ = [1,-1];
+array [1..4] of int: X_INTRODUCED_9_ = [-1,-1,-1,-1];
+var 1..3: X_INTRODUCED_0_;
+var 1..3: X_INTRODUCED_1_;
+var 1..3: X_INTRODUCED_2_;
+var 1..3: X_INTRODUCED_3_;
+var 1..2: X_INTRODUCED_5_ ::var_is_introduced;
+var 0..1: X_INTRODUCED_6_ ::var_is_introduced;
+array [1..4] of var int: x:: output_array([1..4]) = [X_INTRODUCED_0_,X_INTRODUCED_1_,X_INTRODUCED_2_,X_INTRODUCED_3_];
+constraint baguette_global_cardinality([X_INTRODUCED_0_,X_INTRODUCED_1_,X_INTRODUCED_2_,X_INTRODUCED_3_],[1,2,3],[X_INTRODUCED_5_,X_INTRODUCED_6_,2]);
+constraint int_lin_le(X_INTRODUCED_8_,[X_INTRODUCED_0_,X_INTRODUCED_1_],0);
+constraint int_lin_le(X_INTRODUCED_8_,[X_INTRODUCED_1_,X_INTRODUCED_2_],0);
+constraint int_lin_le(X_INTRODUCED_8_,[X_INTRODUCED_2_,X_INTRODUCED_3_],0);
+constraint int_lin_le(X_INTRODUCED_9_,[X_INTRODUCED_0_,X_INTRODUCED_1_,X_INTRODUCED_2_,X_INTRODUCED_3_],-10);
+solve  satisfy;

@@ -760,6 +760,7 @@ work. The owning session picks it up.
 | M7-T21 | agent-rup2 | 2026-10-02 | **D-0084**. The 23 bare `~<v>_eq_<k>` units: element's [pos_gone] foreign-index-hole arm, a derivation summand forced through another element's `excl_hole` by a factless conflict; it now carries the puncher's facts (alldiff's [Gone_hole] shape). The 3 gcc rups: rule C's LOWER push is not single-row RUP; it is now derived ahead. Plus three ROOT-conflict closures the random sweep found (element residue, element currency, gcc emptying push). Seven new models, two test_trace lanes with measured breaks. UNVERIFIED on the 26 until the node returns (D-0084 lists them by shape). Gate: 2998 unit checks ok / 0 FAIL, 124/124 models, peak RSS 40.5 MB |
 | M6-T11 | agent-speed | 2026-10-02 | **D-0085**. D-0080's #5 (`Store.var_named` lazy index + `name_rep`), #3 (`scan_support` on `Var.t`), #6 (`Lit` rendering without `Printf`/copies; `Encoding` aux-name set + string tables), #4's two local quadratics (`Learned.combine` cancel, `Pb` effective). 366/366 artefacts byte-identical per lever (`bench/m6t11/byte_identity.sh`), tip binary `7a8b5e2c3b86cdc19e3eec5a21aa189b` vs BASE `fd432a57...`. Gate: `dune runtest --force` 2993 ok / 0 FAIL, peak RSS 40.1 MB; `run_model_tests.sh` 117/117, peak RSS 18.5 MB. Branch `wave32-speed`, not merged |
 | M7-T22 | agent-root | 2026-10-02 | **D-0086**. (a) `Search.dfs`'s root arm writes the root trace when the derivation CONTAINS a `Defining`/`Linear`/`Clause` leaf (walk, not top level); byte-identical over all models, test_matrix's depth-0 lanes unchanged. (b) alldiff's interior Regin removal concludes `~y_ge_v \/ y_ge_(v+1)` (`in_order_currency`, d_fwd row, divisor 1). (c) the pigeonhole push no longer telescopes past y's declared top -- the `ladder rung` crash and a `d_fwd` crash on a 4-variable pigeonhole. Sweep 4 x 30 000: 34 rej + 27 crash -> 0 + 0. Lanes `root_nested_defining_{gcc,alldiff}_unsat`, `alldiff_regin_hole_element_unsat`, `alldiff_pigeonhole_narrow_{unsat,sat}`, `alldiff_overshoot_decl_top_unsat` |
+| M6-T13 | agent-speed2 | 2026-10-02 | **D-0087**. (i) `Search.sequence` records a STAGED form (ephemeron, physical key) that `dfs` asks first; `unfixed store` is built only when every phase is exhausted -- `ne 7 2000` 3.49 -> 1.28 s cpu, padding-independent. (ii) `Opb.Names` string-specialised tables (still keyed on the RENDERED name), no `Printf` per term -- wide 400x300 1.21x. Both byte-identical, 411 artefacts / 137 models (`e3a4a689` -> `c7d41e10`). (iii) `mznlib/fzn_global_cardinality_low_up.mzn`, lanes `gcc_low_up_{sat,unsat}` (hand-written, proofs VERIFIED), `check_mznlib.sh` MUST-EMIT/MUST-NOT-EMIT/SOLVES-AS -- UNFLATTENED-UNTESTED |
 
 ## Handoff notes
 
@@ -3594,3 +3595,22 @@ header no longer says otherwise.
   OPEN paragraph (request filed). Commit attribution used the session's configured
   `Co-Authored-By` line.
 
+## M6-T13 handoff, 2026-10-02 (agent-speed2)
+
+- **Three commits on `wave34-speed2`, one per item, D-0087.** (i) a `seq_search` order now has
+  a staged form `dfs` asks before building the O(store) candidate array; the `order` type and
+  every order's answer on any array are unchanged, and orders without a staged form
+  (`spec_order`, `random_order`, tests' own) take the old path. If you add a new composing
+  order, give it a staged form the same way or it pays O(store) per node. (ii) `Opb`'s name
+  tables are `Opb.Names` (string `Hashtbl.Make`); the key is STILL the rendered name --
+  keying on `Lit.pbvar` is the next speed step and needs the non-injective-`sanitize`
+  argument first (test_proof pins the collision). Both items byte-identical over the suite.
+- **(iii) is UNFLATTENED-UNTESTED.** No MiniZinc here. On a node run
+  `MZN=/path/to/minizinc mznlib/test/check_mznlib.sh` and expect `mznlib: 7 ok, 0 failed`;
+  the two `gcc_low_up_src_*` sources are checked by directive (the call is emitted, the
+  `int_eq_reif` decomposition is not, the flattened model solves and verifies), not by byte
+  comparison, because the committed lanes were written by hand.
+- **Left for the orchestrator:** the `## Active claims` row and the three request rows
+  (`padded pigeonhole`, `Opb.normalise`, `global_cardinality_low_up`) still say taken/claimed;
+  they are yours to close. Node plan in D-0087's last section. Local gate: dune runtest
+  --force 0 FAIL, 132/132 model tests, fmt/lint/determinism/unlimit/selftests green.

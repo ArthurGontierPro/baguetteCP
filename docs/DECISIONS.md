@@ -7314,3 +7314,125 @@ the pre-fix binary exits 2 on all three.
 Before: `43b68bb`, binary sha256 `a57f296130906c3e7d9744f83f07928235828280bcc40b5661ccceb94f686ab4`.
 After: `wave33-root` at M7-T22 (b), sha256 `7443a8a24907e9050c3df2dcd8de1f19048957d653d23931b997c089ae97be4b`.
 120 000 models, no new failing shape. The invocation is in `bench/fuzz/README.md`.
+
+## D-0087  M6-T13: Search's per-node cost stops scaling with the store, Opb's name tables are string-specialised, and global_cardinality_low_up is routed to gcc (unflattened)
+
+**Status**: **SHIPPED (i), (ii) byte-identical; (iii) UNFLATTENED-UNTESTED**, 2026-10-02,
+agent-speed2 (M6-T13), branch `wave34-speed2`. The node `fataepyc-07` was unreachable, so
+every number is LOCAL (WSL2 laptop), minimum of 3 runs, `--proof` on, `ulimit -v 4000000`.
+Ratios inside +-10 % are noise. Closes D-0085's two leftover requests and M7-T18's mznlib one.
+
+### Binaries and the byte-identity verdict
+
+`bench/m6t11/byte_identity.sh` (unchanged), every `test/models/*.fzn` plus the generated
+extras `ne 7 {0,200,2000}`, `wide 400 300 400`, `knap 10 2 3 1` under `/tmp`:
+
+| step | binary md5 | verdict |
+|---|---|---|
+| base (`bcfa43e`) | `e3a4a689aa43c10ddfa67b074c42c84a` | -- |
+| (i) | `f00d22d9b28c5b56b246fa2743c7f365` | base -> (i): 399 artefacts / 133 models BYTE-IDENTICAL |
+| (ii) | `c7d41e10b48b57387e9ae457953a66a0` | (i) -> (ii): 399 / 133 BYTE-IDENTICAL |
+| (iii) | `c7d41e10b48b57387e9ae457953a66a0` | no OCaml changed; base -> final: 411 artefacts / 137 models BYTE-IDENTICAL |
+
+### (i) `Search`: the staged form of a `seq_search` order
+
+**Before.** At every node `dfs` built `unfixed store` (a scan of every store variable, list
+then array) and `sequence` put every candidate in a fresh `Hashtbl` to ask which of a
+phase's variables were live. Per-node cost O(store), constrained or not.
+
+**After.** `sequence` records a STAGED form of its closure in `Search.staged_orders`, an
+`Ephemeron.K1.Bucket` keyed by physical identity (a dropped order stays collectable), with a
+one-entry cache in front, so `dfs` pays one `==` per node to find it. The staged form reads a
+phase's live subset straight off the store (`Domain.size > 1`, `unfixed`'s own test, and an
+out-of-store variable is never live) in the phase's array order; `dfs` builds
+`unfixed store` only when every phase is exhausted, and then does exactly what it did
+before. `unfixed` itself counts then fills (no list).
+
+**Why it is the same search.** `dfs` only ever hands an order `unfixed store`, and against
+that array "v is a candidate" is "Domain.size v > 1". So the staged answer equals the full
+order's answer on `unfixed store` in every state; the fallback is reached in exactly the same
+states with exactly the same array. SPEC 3.4 is untouched: which variable, which tie-break,
+which value. The `order` TYPE did not change, and `sequence`'s closure is still a complete
+order on ANY candidate array (test_compile's `decision_of ~cands` passes subsets that are not
+`unfixed store`, and still gets the membership semantics). Orders with no staged form
+(`spec_order`, `random_order`, the tests' own) take the old path unchanged.
+test_compile.ml checks staged-vs-full agreement in the three states (first phase live, first
+exhausted, all exhausted) and that a seq_search order HAS a staged form, since losing it would
+be silent: correct and O(store) again.
+
+**Not done, and why.** The unannotated default (`spec_order` = first_fail over everything)
+is still O(unfixed) per node: choosing a minimum over all live variables is the heuristic,
+and making it sub-linear needs a priority structure restored on backtrack -- a different row,
+and one whose tie-break (earliest index among equals) would have to be re-proved, not just
+re-measured. Padding variables that ARE live are still candidates there by SPEC 3.4.
+
+| model (local, min of 3) | before | after | ratio |
+|---|---|---|---|
+| `ne 7 0` cpu | 1.24 s | 1.35 s | noise |
+| `ne 7 200` cpu | 1.49 s | 1.23 s | 1.21x |
+| `ne 7 2000` cpu | 3.49 s | 1.28 s | 2.73x |
+| `timing.sh` ne7_pad2000 wall | 3.32 s | 1.18 s | 2.81x |
+| `timing.sh` ne7 / knap8 / knap10 / knap12_nl100 wall | 1.40 / 0.43 / 3.41 / 1.47 | 1.22 / 0.40 / 3.39 / 1.47 | 1.15x / 1.07x / 1.01x / 1.00x |
+
+The padded run is now padding-independent (1.35 / 1.23 / 1.28 s at 0 / 200 / 2000). A
+3 % knap10 slowdown seen once against the (i)-only binary was layout: the two profiles were
+symbol-for-symbol the same (`Pb` 30 %, no `Search` symbol above 0.04 %), and the final
+binary measures 1.01x.
+
+### (ii) `Opb`: string-specialised name tables, no `Printf` per term
+
+`normalise`, `var_names`, `rename_comments` and `write`'s variable count use `Opb.Names`, a
+`Hashtbl.Make` over `String.equal` and `Hashtbl.hash` (Encoding.Names' shape) in place of the
+polymorphic table and its `compare_val` probe; `normalise` does one `find_opt` where it did
+`mem` + `find`. `constr_body` and `objective_to_string` write `"%+d %s "` by hand ("+" for
+`a >= 0`, "+0" included). **The key is still the RENDERED name.** `Lit.sanitize` is not
+injective ("a.b" and "a_b" are two `pbvar`s and one OPB variable) and merging by name is the
+current semantics; keying on `Lit.pbvar` would be faster and would change it, so it was not
+done -- it needs an argument that no two live owners of one model collide, which nobody has
+made. test_proof.ml pins the collision (`+1 a.b_ge_1 +2 a_b_ge_1` normalises to `+3 a_b_ge_1`)
+and the sign rule. No table is iterated: every output order is an explicit list, so swapping
+the table cannot move a byte.
+
+| `gen.py wide 400 300 400` (min of 3, wall) | before (i) | after (ii) | ratio |
+|---|---|---|---|
+| local | 3.67 s | 3.28 s | 1.12x |
+| `timing.sh` base -> final | 3.73 s | 3.08 s | 1.21x |
+
+`compare_val` leaves the wide profile; what remains is GC and `caml_string_equal`/`caml_hash`
+over rendered names (`Lit.render` per term) -- the pbvar key is the next step and it is the
+argument above, not a table.
+
+### (iii) `mznlib/fzn_global_cardinality_low_up.mzn`
+
+The predicate is M7-T18's request text with one word changed: the counts array is
+`array [int] of var int`, not `array [index_set(cover)]`, because the comprehension is 1-based
+and a direct call with a cover not indexed from 1 would be an index-set mismatch (std's
+`global_cardinality_low_up` passes `array1d(cover)`, where the two agree). Each count is
+`var max(0, lbound[i])..min(length(x), ubound[i])`; equal bounds flatten to a constant, which
+the front end takes as a view (D-0082). The `include "fzn_global_cardinality.mzn";` is
+load-bearing (it declares `baguette_global_cardinality`).
+
+**UNFLATTENED-UNTESTED.** There is no MiniZinc on this machine. What exists: the lanes
+`test/models/gcc_low_up_{sat,unsat}.fzn`, HAND-WRITTEN as the flattener would emit them (one
+`baguette_global_cardinality` call, counts `var 1..2`, `var 0..1` and the constant `2`), both
+proofs VERIFIED (sat: unique `x = [1, 2, 3, 3]`; unsat: the refutation needs a low_up upper
+bound and the constant); their provenance sources `mznlib/test/gcc_low_up_src_{sat,unsat}.mzn`,
+named apart from the lanes so `check_mznlib.sh` does not byte-compare a hand-written body; and
+three new directives in `check_mznlib.sh` -- `MUST-EMIT`, `MUST-NOT-EMIT`, `SOLVES-AS` (solve
+the flattened model, verify its proof, diff against `test/expected/<name>.out`) -- exercised
+here with a fake flattener in both directions (copying the lane: 7 ok; copying a decomposition:
+both low_up sources FAIL on all three directives). Until someone runs, on a node with a
+flattener,
+
+    MZN=/path/to/minizinc mznlib/test/check_mznlib.sh
+
+the `.mzn` is a file nobody has type-checked.
+
+### Node plan (fataepyc-07 unreachable)
+
+1. `MZN=<minizinc> mznlib/test/check_mznlib.sh` -- the (iii) validation; expect `mznlib: 7 ok, 0 failed`.
+2. `bench/m6t11/byte_identity.sh` base vs final over the suite plus the corpus instances that
+   carry a `seq_search`/`int_search` annotation, then `bench/m6t11/timing.sh` base vs final.
+3. Re-run D-0081's shared-set comparison (`scripts/compare_run.sh`) with the final binary and
+   read the median: (i) moves only annotated instances with many unannotated variables, (ii)
+   moves compile-dominated wide instances.
