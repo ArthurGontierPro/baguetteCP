@@ -233,12 +233,24 @@ let combine (a : t) (ca : int) (b : t) (cb : int) : t =
   (* Net each pseudo-Boolean variable, keeping both polarities so the constant that
      falls out of the cancellation can be counted exactly once per variable. *)
   let sorted = List.sort (fun (_, l1) (_, l2) -> Lit.var_compare l1.Lit.v l2.Lit.v) raw in
-  let rec cancel acc dropped = function
-    | [] -> (acc, dropped)
+  (* M6-T11 (D-0085): [sorted] is sorted by [Lit.var_compare], so the terms of [l]'s
+     variable are exactly the maximal PREFIX that is [var_equal] to [l] -- [span] takes it
+     in one pass, where a [List.partition] over the whole remainder made the stage
+     quadratic (D-0080: 2008 trucking ~50 % in [var_compare]/[var_equal]/[Learned]). Both
+     halves come out in the order [partition] gave them, and [acc] is built reversed and
+     reversed once instead of by [acc @ keep], so the terms reach [make] in the same order
+     and every [Checked] operation runs on the same operands in the same sequence. *)
+  let span v group =
+    let rec go mine = function
+      | ((_, m) as x) :: rest when Lit.var_equal v m.Lit.v -> go (x :: mine) rest
+      | rest -> (List.rev mine, rest)
+    in
+    go [] group
+  in
+  let rec cancel racc dropped = function
+    | [] -> (List.rev racc, dropped)
     | (_, l) :: _ as group ->
-        let mine, others =
-          List.partition (fun (_, m) -> Lit.var_equal l.Lit.v m.Lit.v) group
-        in
+        let mine, others = span l.Lit.v group in
         let side positive =
           List.fold_left
             (fun s (c, m) -> if m.Lit.positive = positive then Checked.add s c else s)
@@ -254,7 +266,7 @@ let combine (a : t) (ca : int) (b : t) (cb : int) : t =
               (Checked.sub n m, { Lit.v = l.Lit.v; Lit.positive = false });
             ]
         in
-        cancel (acc @ keep) (Checked.add dropped m) others
+        cancel (List.rev_append keep racc) (Checked.add dropped m) others
   in
   let terms, dropped = cancel [] 0 sorted in
   make terms (Checked.sub degree dropped)

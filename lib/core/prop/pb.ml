@@ -403,6 +403,36 @@ let effective surveyed (tm : term) =
       else acc)
     0 surveyed
 
+(* [effective], for every term of one pass, without the O(n) walk per term (M6-T11,
+   D-0085). D-0080 put ~45 % of 2017 tc-graph-color's self time in [Pb.*], and on a
+   generated knapsack locally this walk ([effective]'s fold under the [forceable] filter)
+   is the hot path: a pass over an n-term learned row was O(n^2).
+
+   The terms [effective] can add for [tm] are the non-falsified terms of [tm]'s own
+   (variable, polarity). So the pass groups those once, IN TERM ORDER, and each query
+   walks only its group with [effective]'s own test, adding through [Checked.add] from 0
+   in the same order: the same addends in the same sequence, so the same sum and the same
+   overflow, by construction. Below [group_from] terms the walk is cheaper than the
+   table, and the plain [effective] runs; the two agree, so the cut-off is free to move. *)
+let group_from = 12
+
+let effective_of surveyed =
+  if List.length surveyed < group_from then effective surveyed
+  else
+    let groups = Hashtbl.create 16 in
+    let key (a : atom) = (2 * Var.to_int a.x) + if a.positive then 1 else 0 in
+    List.iter
+      (fun ((u, st) as us) ->
+        if st <> Unsat_lit then
+          let k = key u.a in
+          Hashtbl.replace groups k
+            (us :: Option.value (Hashtbl.find_opt groups k) ~default:[]))
+      (List.rev surveyed);
+    fun (tm : term) ->
+      match Hashtbl.find_opt groups (key tm.a) with
+      | None -> 0
+      | Some group -> effective group tm
+
 (* Of the forceable literals of one variable at one polarity, keep the STRONGEST claim:
    the largest threshold among the positive ones, the smallest among the negative. The
    others are implied by it through the domain, so forcing them too would move no bound
@@ -434,8 +464,9 @@ let rec propagate t store =
   let slack = slack_of t.degree surveyed in
   if slack < 0 then conflict_of t store surveyed
   else
+    let effective = effective_of surveyed in
     let forceable =
-      List.filter (fun (tm, st) -> st = Open && effective surveyed tm > slack) surveyed
+      List.filter (fun (tm, st) -> st = Open && effective tm > slack) surveyed
     in
     let forced = List.filter (strongest forceable) forceable in
     if forced = [] then Propagator.Fixpoint
