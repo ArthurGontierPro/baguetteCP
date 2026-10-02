@@ -2367,6 +2367,19 @@ let test_propagators_raise_on_overflow () =
 
 let compile_src src = Compile.compile (Flatzinc.Builder.of_string ~file:"test" src)
 
+(* A proof STARTED into /dev/null, as the CLI always starts one. M6-T8 (D-0091): the
+   alldiff and element derivations name ids [Encoding.start_proof] mints, and under
+   BAGUETTE_DEBUG the D-0026 agreement check FORCES every justification at push time, so a
+   propagate-only scene without a proof died on "Alldiff: d_fwd has no constraint id" --
+   a harness the debug gate could not run, not a propagator defect (the [need] raising is
+   the guard it is meant to be). One channel for the whole binary, never read. *)
+let devnull = lazy (open_out "/dev/null")
+let sink_proof e = Encoding.start_proof e (Writer.create (Lazy.force devnull))
+
+let with_proof_sink t f =
+  sink_proof t.Compile.encoding;
+  f t
+
 let contains_sub ~needle haystack =
   let n = String.length needle and h = String.length haystack in
   n = 0
@@ -4578,9 +4591,10 @@ let test_arith_overflow () =
 
 (* The box left after one root fixpoint, for the named variables, or [None] if the
    model is refuted outright. Goes through [Compile], so it exercises the whole path
-   the CLI takes: builder, auxiliary creation, row posting and instance packing. *)
+   the CLI takes: builder, auxiliary creation, row posting and instance packing -- and,
+   since M6-T8, a started proof ([with_proof_sink]). *)
 let arith_root_box src names =
-  let t = compile_src src in
+  with_proof_sink (compile_src src) @@ fun t ->
   let store = t.Compile.store in
   match Engine.propagate t.Compile.engine store with
   | Engine.Conflict _ -> None
@@ -5654,7 +5668,7 @@ let test_alldiff_cites_root_bound_under_decision () =
    bounds -- which is the whole difference between what M4-T1 could be asked and what
    this row can. *)
 let arith_root_domains src names =
-  let t = compile_src src in
+  with_proof_sink (compile_src src) @@ fun t ->
   let store = t.Compile.store in
   match Engine.propagate t.Compile.engine store with
   | Engine.Conflict _ -> None
@@ -5831,6 +5845,7 @@ let regin_oracle_scene ~staged =
     else Propagator.pack ~id:0 (module Bounds_only) p
   in
   let engine = Engine.create [ inst ] in
+  sink_proof e (* M6-T8, D-0091: see [sink_proof] *);
   match Engine.propagate engine store with
   | Engine.Conflict _ -> ([], [])
   | Engine.Fixpoint ->
@@ -5877,6 +5892,7 @@ let regin_staging_scene ~cutoff =
   let rows = Encoding.add_all_different e names in
   let store = mk_store (List.map2 (fun n (lo, hi) -> (n, lo, hi)) names boxes) in
   let p = Alldiff.make ~cutoff store e ~rows [ var 0; var 1; var 2; var 3 ] in
+  sink_proof e (* M6-T8, D-0091: see [sink_proof] *);
   let step () =
     let r = Alldiff.propagate p store in
     ( (match r with Propagator.Fixpoint -> true | Propagator.Conflict _ -> false),
