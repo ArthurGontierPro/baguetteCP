@@ -1936,6 +1936,147 @@ let test_is4_gate () =
   check "I-S4 level half: the same edge the other way round is clean"
     (Trace.i_s4_verdict { cross with Trace.cited_level = 1 } = None)
 
+(* M6-T15 (D-0090). [Trace.position_of] answers from [Store.entry.pos] in O(1) where it
+   used to walk [done_]; [Trace.add_fact_rev] conses where [add_fact] appended. Both must
+   give the answers the old code gave. The scene: lines written at levels 0, 1 and 2, the
+   level-2 lines wiped by a backtrack, the level re-pushed with DIFFERENT entries and the
+   trace re-emitted, and every entry asked for its position at every step -- against
+   [Trace.position_of_scan], the old walk, and against the position it must have. Tiny
+   domains (D-0028). The proof is never concluded or checked: what is under test is the
+   bookkeeping, and the I-X1 lanes above check the lines. *)
+let m6t15_source =
+  {|
+var 0..6: x :: output_var;
+var 0..6: y :: output_var;
+constraint int_ne(x, y);
+solve satisfy;
+|}
+
+module Lit = Baguette_proof.Lit
+
+let test_m6t15_position_of () =
+  let pbp = Filename.temp_file "baguette_m6t15" ".pbp" in
+  let m = F.Builder.of_string ~file:"m6t15" m6t15_source in
+  let comp = F.Compile.compile m in
+  let store = comp.F.Compile.store in
+  let encoding = comp.F.Compile.encoding in
+  let oc = open_out pbp in
+  let writer = Writer.create ~audit:false oc in
+  Encoding.start_proof encoding writer;
+  let ctx = Justify.create ~writer ~encoding in
+  let trace = Trace.create () in
+  let x = Option.get (var_by_name store "x") and y = Option.get (var_by_name store "y") in
+  let ok r = r = Store.Changed in
+  let top () = Store.trail_entry store (Store.trail_length store - 1) in
+  let push f =
+    let changed = ok (f ()) in
+    check "M6-T15 scene: the pruning changed the store" changed;
+    top ()
+  in
+  let agree tag e =
+    check
+      (Printf.sprintf "M6-T15 %s: position_of agrees with the walk over done_" tag)
+      (Trace.position_of trace e = Trace.position_of_scan trace e)
+  in
+  let expect tag e want =
+    agree tag e;
+    check
+      (Printf.sprintf "M6-T15 %s: position_of = %s" tag
+         (match want with None -> "None" | Some i -> string_of_int i))
+      (Trace.position_of trace e = want)
+  in
+  (* Level 0: one hole. *)
+  let e0 = push (fun () -> Store.remove store x 3 factless) in
+  (* Level 1: a decision, then a hole. *)
+  Store.new_level store;
+  let e1 = push (fun () -> Store.set_lo store x 1 factless) in
+  let e2 = push (fun () -> Store.remove store y 4 factless) in
+  (* Level 2: a decision, then a bound move. *)
+  Store.new_level store;
+  let e3 = push (fun () -> Store.set_hi store y 5 factless) in
+  let e4 = push (fun () -> Store.set_lo store x 2 factless) in
+  check "M6-T15 scene: each entry carries its own trail position"
+    (List.mapi (fun i (e : Store.entry) -> e.Store.pos = i) [ e0; e1; e2; e3; e4 ]
+    |> List.for_all Fun.id);
+  (* Nothing written yet: every answer is None. *)
+  List.iteri
+    (fun i e -> expect (Printf.sprintf "before any emit, e%d" i) e None)
+    [ e0; e1; e2; e3; e4 ];
+  Trace.emit ctx trace store;
+  List.iteri
+    (fun i e -> expect (Printf.sprintf "after the first emit, e%d" i) e (Some i))
+    [ e0; e1; e2; e3; e4 ];
+  check "M6-T15: the level-0 hole has its line" (Trace.lines_at trace e0 <> []);
+  check "M6-T15: a decision has no line" (Trace.lines_at trace e1 = []);
+  check "M6-T15: the level-1 hole has its line" (Trace.lines_at trace e2 <> []);
+  check "M6-T15: the level-2 bound move has its line" (Trace.lines_at trace e4 <> []);
+  check "M6-T15: the level-1 hole line is found by its value"
+    (Trace.hole_line_of trace e2 4 <> None);
+  check "M6-T15: dummy_entry is at no position"
+    (Trace.position_of trace Store.dummy_entry = None);
+  agree "dummy_entry" Store.dummy_entry;
+  (* Wipe level 2. Until the trace is re-emitted the popped entries are still where the
+     walk found them -- the old behaviour, and the new one must reproduce it. *)
+  Store.backtrack store;
+  List.iteri
+    (fun i e -> expect (Printf.sprintf "after the wipe, e%d" i) e (Some i))
+    [ e0; e1; e2; e3; e4 ];
+  (* Re-push level 2 with different entries at the same positions, plus one more. *)
+  Store.new_level store;
+  let f3 = push (fun () -> Store.set_hi store y 3 factless) in
+  let f4 = push (fun () -> Store.remove store x 5 factless) in
+  let f5 = push (fun () -> Store.set_lo store x 2 factless) in
+  check "M6-T15 scene: the re-pushed entries reuse positions 3 and 4"
+    (f3.Store.pos = 3 && f4.Store.pos = 4 && f5.Store.pos = 5);
+  (* Before the re-emit: the old entries still occupy done_, the new ones do not. *)
+  expect "re-pushed, not yet emitted, old e3" e3 (Some 3);
+  expect "re-pushed, not yet emitted, new f3" f3 None;
+  expect "re-pushed, not yet emitted, new f5" f5 None;
+  Trace.emit ctx trace store;
+  List.iteri
+    (fun i e -> expect (Printf.sprintf "after the re-emit, e%d" i) e (Some i))
+    [ e0; e1; e2 ];
+  expect "after the re-emit, the wiped e3" e3 None;
+  expect "after the re-emit, the wiped e4" e4 None;
+  expect "after the re-emit, f3" f3 (Some 3);
+  expect "after the re-emit, f4" f4 (Some 4);
+  expect "after the re-emit, f5" f5 (Some 5);
+  check "M6-T15: the wiped bound move's lines are gone with it"
+    (Trace.lines_at trace e4 = []);
+  check "M6-T15: the re-pushed hole's line is found"
+    (Trace.hole_line_of trace f4 5 <> None);
+  (* Back to level 0 and re-emit: only e0 survives. *)
+  Store.backtrack_to store 0;
+  Trace.emit ctx trace store;
+  expect "back at level 0, e0" e0 (Some 0);
+  List.iter
+    (fun (tag, e) -> expect ("back at level 0, " ^ tag) e None)
+    [ ("e1", e1); ("e2", e2); ("f3", f3); ("f4", f4); ("f5", f5) ];
+  close_out oc;
+  (try Sys.remove pbp with _ -> ());
+  (* [add_fact_rev] against the old [acc @ [l]] on the same input: same list, same order,
+     first occurrence kept. *)
+  let old_add_fact acc l = if List.exists (Lit.equal l) acc then acc else acc @ [ l ] in
+  let a = Lit.ge "x" 2 and b = Lit.le "y" 4 and c = Lit.ne "x" 3 and d = Lit.ge "y" 1 in
+  let cases =
+    [
+      ([], [ a; b; a; c ]);
+      ([ b; a ], [ c; a; d; b; c ]);
+      ([ a; b; c ], []);
+      ([ a; a ], [ a; d ]);
+      ([], [ Lit.negate a; a; Lit.negate a ]);
+    ]
+  in
+  List.iteri
+    (fun k (base, adds) ->
+      let want = List.fold_left old_add_fact base adds in
+      let got = List.rev (List.fold_left Trace.add_fact_rev (List.rev base) adds) in
+      check
+        (Printf.sprintf "M6-T15 add_fact_rev case %d: same facts in the same order (%s)" k
+           (String.concat " " (List.map Lit.to_string got)))
+        (List.equal Lit.equal want got))
+    cases
+
 let () =
   print_endline "";
   (match veripb with
@@ -1964,6 +2105,7 @@ let () =
     ~src:m7t21_gcc_source ~claim:m7t21_gcc_line ~outcome:`Sat ();
   test_m7t21_element ();
   test_is4_gate ();
+  test_m6t15_position_of ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

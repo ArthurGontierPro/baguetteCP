@@ -426,18 +426,43 @@ let emit_line (ctx : Justify.ctx) ~origin ~claim ~facts =
 (* Append a fact if it is not already in the tail. The propagator's own facts keep their
    order and are never rewritten, so every line for a pruning that did not settle comes
    out unchanged; only the hole facts are appended, and a hole whose fact the propagator
-   already read is not stated twice. *)
-let add_fact acc l = if List.exists (Lit.equal l) acc then acc else acc @ [ l ]
+   already read is not stated twice.
 
-(* The trail position this module last wrote lines for [e] at, by physical identity --
-   the same key [resync] uses, and for the same reason. [n_done] has already been bumped
-   past the entry [emit] is working on, so every position a settle can reach has been
-   (re)remembered in this pass or an earlier one and the array agrees with the trail. *)
-let position_of t (e : Store.entry) =
+   M6-T15 (D-0090): the accumulator is held REVERSED -- newest fact first -- so an append
+   is a cons rather than [acc @ [l]] (5 % of 2014_mario's profile, D-0088). The dedup asks
+   the same question of the same set of literals, so first-occurrence semantics are
+   unchanged, and [settle_facts] reverses once at the end, so the order the line is written
+   in is exactly the old one. *)
+let add_fact_rev racc l = if List.exists (Lit.equal l) racc then racc else l :: racc
+
+(* The old walk, kept one wave as [position_of]'s [BAGUETTE_DEBUG] cross-check and as
+   test_trace's oracle (M6-T15, D-0090). Remove it with the check. *)
+let position_of_scan t (e : Store.entry) =
   let rec go i =
     if i >= t.n_done then None else if t.done_.(i) == e then Some i else go (i + 1)
   in
   go 0
+
+(* The trail position this module last wrote lines for [e] at, by physical identity --
+   the same key [resync] uses, and for the same reason. [n_done] has already been bumped
+   past the entry [emit] is working on, so every position a settle can reach has been
+   (re)remembered in this pass or an earlier one and the array agrees with the trail.
+
+   M6-T15 (D-0090): O(1) rather than a walk over [done_] (39.5 % of 2014_mario's profile,
+   D-0088). [done_.(i)] is only ever set to the entry at trail position [i] ([remember]'s
+   one caller is [emit], with [Store.trail_entry store i]), and an entry sits at exactly
+   one trail position for its whole life, its [Store.entry.pos]. So [e] can be in
+   [done_.(0 .. n_done-1)] only at [e.pos], and the walk's first hit -- its only hit -- is
+   [e.pos] iff [done_.(e.pos) == e]. There is no second mapping to keep in step: the wipe
+   is still [resync] lowering [n_done] and [remember] overwriting a slot, and an entry a
+   backtrack popped can still be "found" at its old slot until that slot is refilled,
+   exactly as the walk found it. The [None] case is the same test failing. *)
+let position_of t (e : Store.entry) =
+  let p = e.Store.pos in
+  let r = if p >= 0 && p < t.n_done && t.done_.(p) == e then Some p else None in
+  Debug.check "M6-T15: Trace.position_of agrees with the walk over done_" (fun () ->
+      r = position_of_scan t e);
+  r
 
 (* The id of the line this module wrote for [v]'s removal, if it wrote one. [None] covers
    the two honest cases: a remover whose change was a *bound* move that happened to
@@ -460,17 +485,29 @@ let hole_line_of t (e : Store.entry) v =
    same [Store.remover] lookup, and because a fact taken from a hole whose line this
    module cannot name is precisely the case I-S4 has nothing to say about. *)
 let settle_facts t store ~before ~var holes base =
-  List.fold_left
-    (fun (acc, cited) v ->
-      match Store.remover store ~before ~var v with
-      | None -> (acc, cited)
-      | Some e ->
-          let acc = List.fold_left add_fact acc (Reason.lits e.Store.reason) in
-          let cited =
-            match hole_line_of t e v with None -> cited | Some w -> cited @ [ (v, w) ]
-          in
-          (acc, cited))
-    (base, []) holes
+  match holes with
+  | [] -> (base, [])
+  | _ ->
+      (* Both accumulators reversed, reversed once at the end (M6-T15): same order out. *)
+      let racc, rcited =
+        List.fold_left
+          (fun (racc, rcited) v ->
+            match Store.remover store ~before ~var v with
+            | None -> (racc, rcited)
+            | Some e ->
+                let racc =
+                  List.fold_left add_fact_rev racc (Reason.lits e.Store.reason)
+                in
+                let rcited =
+                  match hole_line_of t e v with
+                  | None -> rcited
+                  | Some w -> (v, w) :: rcited
+                in
+                (racc, rcited))
+          (List.rev base, [])
+          holes
+      in
+      (List.rev racc, List.rev rcited)
 
 (* Record one I-S4 edge and, under BAGUETTE_DEBUG, fail at the citation rather than at
    the checker. [Debug.check] is the live gate; [i_s4_violations] is the same verdict as
