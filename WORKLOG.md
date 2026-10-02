@@ -362,6 +362,7 @@ worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 uni
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M6-T17 | agent-wipe | 2026-10-02 | `Writer.wipe_level` and `Justify.wipe_level` (memo and stated index) walk per-level buckets instead of folding whole tables; same `del` lines, same order. 396 artefacts byte-identical over 132 models. |
 | M2-T16 | **everything except `bench/**`** — the 2.0 removal lands atomically | agent-drop | 2026-09-18 |
 | M2-L8 | `bench/**` only; read-only over `lib/` and `test/` | agent-bench | 2026-09-18 |
 | M2-L6 | all of `lib/`, `test/unit/test_learn.ml`, `test/unit/test_analysis.ml`, `test/unit/dune`, new files under `test/models/` + `test/expected/` | agent-pb | 2026-09-18 |
@@ -3831,3 +3832,9 @@ header no longer says otherwise.
   spread over Search, Justify, Writer and Alldiff. The last constant-factor lead is the
   `wipe_level` whole-table folds in Writer/Justify, filed as a request. After that, D-0085/D-0087's
   design proposals are what remains.
+
+## M6-T17 handoff (agent-wipe, 2026-10-02)
+
+- `Writer` keeps `by_lvl` (ids per tag level, newest first) and `by_hi`; `wipe_level l` walks l..by_hi, keeps ids still in `tags`, sorts only the doomed set, and emits the same `del` runs. `Justify` does the same for `memo.by_level` (`memo_hi`) and a new `stated_by_level` (`stated_hi`) replacing the `filter_map_inplace` over `stated`.
+- The old whole-table fold is kept in `Writer.wipe_level` as a BAGUETTE_DEBUG cross-check (own flag read: proof cannot see core's Debug). Remove it next wave once nothing has tripped.
+- Byte identity: OLD (merge-base 767ac0f) 10e75851260de26094133a2291da42e5, NEW 347954e8c5ae8b1ae781397937c5a463, 396 artefacts, 0 differences. Local timings are noise-level (the win only shows at depth); node mario in 55 s: nodes 3592 -> 3864 (+7.6 %).
