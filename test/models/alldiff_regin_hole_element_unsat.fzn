@@ -1,0 +1,27 @@
+% M7-T22 / D-0086 (b): A ROOT REFUTATION THE CHECKER REJECTED, from M7-T21's random sweep
+% (`bench/fuzz/gen.py ad 24319`, shrunk greedily; ad 25012 is the same shape). FIXED; an
+% ordinary passing model test whose proof is verified on every run.
+%
+% THE DEFECT. x3 is both an element RESULT and in the all_different scope. Regin punches
+% an interior hole in x3, and that removal's explanation concluded the DIRECT literal
+% ~x3_eq_v, while every other hole in the store -- and the hole's own trace line -- is the
+% ORDER clause ~x3_ge_v \/ x3_ge_(v+1). Element's [excl_hole] embeds the remover's
+% explanation and pairs it off against two order-literal rows; handed the direct literal,
+% nothing cancelled, the root conflict's row kept its literals, and 3.0.2 answered "The
+% constraint with ID n is not contradicting, as specified by the hint" at the
+% `conclusion` line (line 112 of the unshrunk seed).
+%
+% THE FIX is alldiff.ml's [in_order_currency]: an interior Regin removal adds its value's
+% forward channelling line, divisor 1, and concludes the order clause. No SAT twin: the
+% defect is in a root conflict's closing row (a scratch search of 20 000 SAT-biased
+% all_different + element models found no instance under a decision). The break is a
+% REFUSAL, so D-0066's vacuity cannot hide it; measured on the binary of the (c) commit,
+% rejected at line 43, `conclusion UNSAT : @c<n> ;`.
+var 4..5: x0 :: output_var;
+var 1..1: x1 :: output_var;
+var 2..4: x3 :: output_var;
+var 3..5: x4 :: output_var;
+constraint all_different_int([x3,x0,x4,x1]);
+constraint array_int_element(x4,[2,5,3,4,2],x3);
+constraint int_lin_le([2,-1],[x4,x0],1);
+solve :: int_search([x0,x4,x1,x3], smallest, indomain_max, complete) satisfy;

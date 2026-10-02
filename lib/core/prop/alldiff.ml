@@ -19,6 +19,13 @@
    for the matching fact that bridges the two, and [gone] for the one thing an interval
    never forced.
 
+   ONE CURRENCY FOR A HOLE (M7-T22, D-0086). Whatever this module derives internally, the
+   explanation it attaches to a trail entry that punches an INTERIOR hole concludes the
+   ORDER clause `~y_ge_v \/ y_ge_(v+1)` -- the clause the entry's trace line claims, and
+   the one every other propagator's hole concludes -- not the direct literal [~y_eq_v]
+   its counting naturally ends on. [in_order_currency] is the conversion and its comment
+   is the argument; docs/PROOF-FORMAT.md section 4's all_different row is the contract.
+
    ---------------------------------------------------------------------------
    Filtering: Hall intervals
    ---------------------------------------------------------------------------
@@ -931,17 +938,41 @@ let removal_conclusion y d w =
     Some (Reason.at_most ~name:y.s_name ~decl:y.s_dhi !v))
   else None
 
+(* M7-T22 / D-0086 (b). An INTERIOR Regin removal states `y <> v` the way every other
+   hole in the store is stated -- over the ORDER encoding, `~y_ge_v \/ y_ge_(v+1)`, the
+   clause its own trace line claims -- and not in this module's working currency
+   [~y_eq_v]. The forward channelling line [y_eq_v \/ ~y_ge_v \/ y_ge_(v+1)] converts one
+   into the other exactly: added to [~y_eq_v >= 1 (+ leftovers)], the [y_eq_v] terms pair
+   off and the degree drops by the one unit they carried, divisor 1.
+
+   The trail entry's explanation is a CONTRACT with whoever embeds it, and the embedder
+   that reads it is element.ml's [excl_hole]: when an element RESULT sits in this scope,
+   that instance excludes a position by citing the result hole's remover and pairing it
+   off against its own two ORDER-literal rows. Handed [~y_eq_v], nothing cancelled and a
+   root conflict did not close (bench/fuzz ad 24319, ad 25012;
+   test/models/alldiff_regin_hole_element_unsat.fzn). The convention lives HERE, not as a
+   bridge in [excl_hole], for the reason element.ml's own [in_order_currency] gives: one
+   currency for every hole means an embedder never has to know which propagator punched
+   it. This module's own derivations never read this entry's explanation -- [gone_of]
+   cites a hole by its level ([Gone_hole_root]) or its facts ([Gone_hole]) -- so they are
+   untouched. A removal AT a bound is a bound move, which no one embeds, and keeps its
+   form, exactly as in element.ml. *)
+let in_order_currency t y value expl =
+  match Encoding.direct_fwd_id t.enc y.s_name value with
+  | None -> expl
+  | Some fwd -> Explanation.combine [ Explanation.term 1 expl; cite fwd ] 1
+
 (* One removal, with both halves of D-0026 built from the same snapshot, returning
    through [Found]/[Moved] exactly as [pass]'s [push] does. *)
 let remove_one t store ~halls ~vals ~y_tm value =
   let y = snap_of store y_tm in
   let d = Store.get store y_tm.x in
   let keep v = List.mem v vals in
+  let concludes = removal_conclusion y d value in
+  let expl = remove_expl t ~vals ~halls ~y ~value in
   let j =
-    Reason.because
-      ~concludes:(removal_conclusion y d value)
-      (remove_reason ~keep halls y)
-      (remove_expl t ~vals ~halls ~y ~value)
+    Reason.because ~concludes (remove_reason ~keep halls y)
+      (if Option.is_none concludes then in_order_currency t y value expl else expl)
   in
   (* A Regin hole counts too: [deriving_ahead], as for a Hall bound move. *)
   match Store.deriving_ahead store (fun () -> Store.remove store y_tm.x value j) with
