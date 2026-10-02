@@ -1,0 +1,29 @@
+% gcc_low_up_sat -- M6-T13 (D-0087)
+%
+% HAND-WRITTEN, NOT A FLATTENED ARTEFACT. It is what MiniZinc WOULD emit for
+% mznlib/test/gcc_low_up_src_sat.mzn against mznlib/ once
+% mznlib/fzn_global_cardinality_low_up.mzn routes global_cardinality_low_up: each count
+% declared on max(0, lbound)..min(|x|, ubound), the equal-bounds count as the constant
+% 2, and ONE baguette_global_cardinality call. The machine that wrote it has no
+% MiniZinc; `MZN=<minizinc> mznlib/test/check_mznlib.sh` checks the flattener really
+% emits this shape and that it solves to test/expected/gcc_low_up_sat.out.
+%
+% x in 1..3, non-decreasing; count(1) in 1..2, count(2) in 0..1, count(3) = 2; and
+% sum(x) >= 9. Two 3s and at least one 1 leave one slot, which must be a 2 for the sum,
+% so the unique solution is x = [1, 2, 3, 3]. The UNSAT twin asks sum(x) >= 10.
+
+array [1..2] of int: X_INTRODUCED_8_ = [1,-1];
+array [1..4] of int: X_INTRODUCED_9_ = [-1,-1,-1,-1];
+var 1..3: X_INTRODUCED_0_;
+var 1..3: X_INTRODUCED_1_;
+var 1..3: X_INTRODUCED_2_;
+var 1..3: X_INTRODUCED_3_;
+var 1..2: X_INTRODUCED_5_ ::var_is_introduced;
+var 0..1: X_INTRODUCED_6_ ::var_is_introduced;
+array [1..4] of var int: x:: output_array([1..4]) = [X_INTRODUCED_0_,X_INTRODUCED_1_,X_INTRODUCED_2_,X_INTRODUCED_3_];
+constraint baguette_global_cardinality([X_INTRODUCED_0_,X_INTRODUCED_1_,X_INTRODUCED_2_,X_INTRODUCED_3_],[1,2,3],[X_INTRODUCED_5_,X_INTRODUCED_6_,2]);
+constraint int_lin_le(X_INTRODUCED_8_,[X_INTRODUCED_0_,X_INTRODUCED_1_],0);
+constraint int_lin_le(X_INTRODUCED_8_,[X_INTRODUCED_1_,X_INTRODUCED_2_],0);
+constraint int_lin_le(X_INTRODUCED_8_,[X_INTRODUCED_2_,X_INTRODUCED_3_],0);
+constraint int_lin_le(X_INTRODUCED_9_,[X_INTRODUCED_0_,X_INTRODUCED_1_,X_INTRODUCED_2_,X_INTRODUCED_3_],-9);
+solve  satisfy;
