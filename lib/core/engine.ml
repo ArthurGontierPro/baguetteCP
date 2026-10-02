@@ -1144,6 +1144,16 @@ let propagate (t : t) (store : Store.t) : outcome =
       in_queue.(id) <- false;
       run_one id
     done;
+    (* Reset the low-water mark HERE, at the end of the call, and not only at its start:
+       the next call must see the pops since this call RETURNED. Read only at the start,
+       the mark would still stand at this call's starting length, below every fixpoint
+       recorded at the end of it, and the next call would drop that record and fall back
+       to the full seed -- conservative, so never wrong, but it threw away most of the
+       gain on mario until it was measured (D-0098). [propagate] never pops, so this
+       read loses nothing. *)
+    (match t.seen with
+    | Some (s, h) when s == store -> ignore (Store.take_low_water store h)
+    | _ -> ());
     match !conflict with
     | Some c -> Conflict c
     | None ->

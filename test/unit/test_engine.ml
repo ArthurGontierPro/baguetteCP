@@ -1824,6 +1824,35 @@ let test_seed_runs_what_changed () =
   Engine.set_incremental engine false;
   step "with the incremental seed off, every instance runs" [ 1; 1; 1; 1 ]
 
+(* The regression D-0098 records: a call whose own runs PUSH entries must still leave the
+   next call an incremental seed. With the low-water mark read only at the start of a
+   call, it stood below the fixpoint that call recorded, and every call after a pruning
+   one fell back to the full seed -- invisible to every test above, whose root calls
+   prune nothing. *)
+let test_seed_after_a_pruning_call () =
+  let store = mk_store [ ("x", 0, 9); ("y", 0, 9); ("z", 0, 9) ] in
+  let lin = Linear.make ~row_id:(unrendered_row ()) store [ (1, var 0); (1, var 1) ] 5 in
+  let probe = { Probe.pv = var 2; count = 0 } in
+  let engine = Engine.create [ pack_linear 0 lin; pack_probe 1 probe ] in
+  ignore (Engine.propagate engine store);
+  check "seed after pruning: the root call pruned" (Store.trail_length store = 2);
+  let c = Engine.counters engine in
+  let seeded0 = c.Engine.c_seeded in
+  decide store (var 2) 4;
+  ignore (Engine.propagate engine store);
+  check
+    (Printf.sprintf "seed after pruning: a decision on z seeds one slot (%d)"
+       (c.Engine.c_seeded - seeded0))
+    (c.Engine.c_seeded - seeded0 = 1);
+  Store.backtrack store;
+  decide store (var 2) 3;
+  let seeded1 = c.Engine.c_seeded in
+  ignore (Engine.propagate engine store);
+  check
+    (Printf.sprintf "seed after pruning: and again after a backtrack (%d)"
+       (c.Engine.c_seeded - seeded1))
+    (c.Engine.c_seeded - seeded1 = 1)
+
 (* Prunes [py] to 0 once hi(px) <= 3, but WATCHES only [py]: a propagator that reads a
    variable it does not watch, which D-0034 says must not exist. The incremental seed
    skips it after a decision on x, and the safety net must say so. *)
@@ -1961,6 +1990,7 @@ let () =
   test_aliased_scope_refuses_the_claim ();
   test_wrong_claim_is_caught ();
   test_seed_runs_what_changed ();
+  test_seed_after_a_pruning_call ();
   test_seed_starved_reader_is_caught ();
   test_seed_is_exact ();
   test_search_finds_and_verifies_a_solution ();
