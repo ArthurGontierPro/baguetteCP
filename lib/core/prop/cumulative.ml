@@ -491,6 +491,18 @@ let pass t store =
         (push_facts ~time ~halls ~y:j ~lower)
         (prune_expl t ~row ~halls ~others ~y:j ~lower ~bound)
     in
+    let empties = if lower then bound > j.s_hi else bound < j.s_lo in
+    if empties then
+      (* OVERLOAD, reported WITH its facts so that 1UIP learning has a reason to
+         resolve from, and under [deriving_ahead] so that [Trace.conflict_line] writes
+         the derivation ahead of `rup ~facts >= 1` (store.ml's [c_ahead]). The push
+         that would empty the domain derives exactly that clause. *)
+      raise
+        (Found
+           (Store.deriving_ahead store (fun () ->
+                Store.conflict store
+                  (Reason.because ~concludes:None why.Reason.reason
+                     why.Reason.justification))));
     let prune () =
       if lower then Store.set_lo store j.s_task.x bound why
       else Store.set_hi store j.s_task.x bound why

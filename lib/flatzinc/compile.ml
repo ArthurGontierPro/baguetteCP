@@ -162,6 +162,7 @@ module Alldiff = Baguette_core.Alldiff
 module Element = Baguette_core.Element
 module Gcc = Baguette_core.Gcc
 module Maxmin = Baguette_core.Maxmin
+module Cumulative = Baguette_core.Cumulative
 module View = Baguette_core.View
 
 (* M2-L12/D-0052: the clause propagator was widened to general order literals and its
@@ -1076,6 +1077,49 @@ let compile (m : Model.t) : t =
     in
     linear @ [ pack ]
   in
+  (* ------------------------------------------------------------------------ M4-T10
+
+     `baguette_cumulative(s, d, r, cap)` (D-0096). The capacity rows are built and
+     posted by [Cumulative.make] itself -- one row per time point whose may-load exceeds
+     the capacity, over the starts' ORDER literals, no auxiliary -- so this arm only
+     maps operands and refuses negative constants with a position. *)
+  let post_cumulative pos (ss : Model.operand list) (ds : int array) (rs : int array) cap
+      =
+    if cap < 0 then
+      Error.failf pos
+        "builtin `baguette_cumulative`: the capacity is %d; it must be >= 0 (mznlib \
+         routes a negative or variable capacity to std's decomposition)"
+        cap;
+    Array.iter
+      (fun d ->
+        if d < 0 then
+          Error.failf pos
+            "builtin `baguette_cumulative`: a duration is %d; it must be >= 0" d)
+      ds;
+    Array.iter
+      (fun r ->
+        if r < 0 then
+          Error.failf pos
+            "builtin `baguette_cumulative`: a resource is %d; it must be >= 0" r)
+      rs;
+    let specs =
+      List.mapi
+        (fun i s ->
+          ( (match s with
+            | Model.Const n -> Cumulative.Fixed n
+            | Model.Var v -> Cumulative.Start (Var.of_int v)),
+            ds.(i),
+            rs.(i) ))
+        ss
+    in
+    let p = Cumulative.make store encoding ~cap specs in
+    [
+      (fun id ->
+        Propagator.pack ~id
+          (module Cumulative : Propagator.S with type t = Cumulative.t)
+          p);
+    ]
+  in
   (* ------------------------------------------------------------------------ M4-T3
 
      `array_int_element(idx, as, c)`, with `as` a constant array and a 1-BASED index.
@@ -1646,6 +1690,7 @@ let compile (m : Model.t) : t =
           | Model.All_different xs -> post_all_different pos xs
           | Model.Global_cardinality (xs, cover, counts) ->
               post_global_cardinality pos xs cover counts
+          | Model.Cumulative (ss, ds, rs, cap) -> post_cumulative pos ss ds rs cap
           | Model.Array_int_element (i, vs, c) -> post_array_int_element pos i vs c
           | Model.Array_int_maximum (mo, xs) -> post_maxmin pos ~dir:Maxmin.Max mo xs
           | Model.Array_int_minimum (mo, xs) -> post_maxmin pos ~dir:Maxmin.Min mo xs

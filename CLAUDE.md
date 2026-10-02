@@ -275,6 +275,10 @@ lib/core/       Baguette_core
     maxmin.ml               array_int_maximum / array_int_minimum (and int_max/int_min as
                             the two-element case), BOUNDS consistent over one clause row per
                             value; minimum is maximum over negated views (M4-T9, D-0095)
+    cumulative.ml           cumulative (and disjunctive as cap 1, r 1): time-table filtering
+                            over gcc's window indicators, one capacity row per time point,
+                            CHECKING; the first Needs_derivation family whose CONFLICTS carry
+                            facts, so they can be learned from (M4-T10, D-0096)
     linear.ml               int_lin_le. THE REFERENCE PROPAGATOR — copy this shape.
     lin_eq.ml               int_lin_eq (two model rows, see D-0011)
     ne.ml                   int_lin_ne and int_ne (VALUE consistency)

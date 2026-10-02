@@ -127,6 +127,13 @@ type cstr =
      must judge a solution against what the constraint means, not against those. *)
   | Array_int_maximum of operand * operand list
   | Array_int_minimum of operand * operand list
+  (* M4-T10 (D-0096). `baguette_cumulative(s, d, r, cap)`: at every time point the tasks
+     running there -- task i over [s_i, s_i + d_i - 1] -- use at most [cap], task i using
+     [r_i]. Durations, resources and the capacity are CONSTANTS (the only form
+     lib/core/prop/cumulative.ml's rows are built over; mznlib routes the rest to std's
+     decomposition). `disjunctive` reaches it as cap = 1, r_i = 1. Kept as the RELATION
+     for [All_different]'s reason. *)
+  | Cumulative of operand list * int array * int array * int
   (* M4-T3. `array_int_element(idx, as, c)`: [as] is a CONSTANT array and the index is
      1-BASED, so the relation is `as[idx] = c` with `idx` in `1..|as|`. The array is an
      `int array` and not an `operand list` because SPEC 2.1's M4 row admits only the
@@ -274,6 +281,11 @@ let string_of_cstr t = function
   | Array_int_minimum (m, xs) ->
       Printf.sprintf "%s = min([%s])" (string_of_operand t m)
         (String.concat ", " (List.map (string_of_operand t) xs))
+  | Cumulative (ss, ds, rs, cap) ->
+      let ints a = String.concat ", " (List.map string_of_int (Array.to_list a)) in
+      Printf.sprintf "cumulative([%s], [%s], [%s], %d)"
+        (String.concat ", " (List.map (string_of_operand t) ss))
+        (ints ds) (ints rs) cap
   | Array_int_element (i, vs, c) ->
       Printf.sprintf "%s = [%s][%s]" (string_of_operand t c)
         (String.concat ", " (List.map string_of_int (Array.to_list vs)))
@@ -600,6 +612,22 @@ let check_assignment (t : t) (values : int array) : bool =
         List.for_all2
           (fun cv cnt -> List.length (List.filter (fun v -> v = cv) vs) = value cnt)
           (Array.to_list cover) counts
+    (* M4-T10, the relation as std's fzn_cumulative states it: a task with a zero
+       duration or a zero resource uses nothing, and the load at every task's start
+       (where the maximum is reached) is within the capacity; with no array at all the
+       constraint is true, with one it also asks cap >= 0. *)
+    | Cumulative (ss, ds, rs, cap) ->
+        let tasks =
+          List.filteri
+            (fun i _ -> ds.(i) > 0 && rs.(i) > 0)
+            (List.mapi (fun i s -> (value s, ds.(i), rs.(i))) ss)
+        in
+        let load t =
+          List.fold_left
+            (fun acc (s, d, r) -> if s <= t && t < s + d then acc + r else acc)
+            0 tasks
+        in
+        (ss = [] || cap >= 0) && List.for_all (fun (s, _, _) -> load s <= cap) tasks
     (* M4-T3, the relation as SPEC 2.1 states it and not as lib/flatzinc/compile.ml
        posts it: the index is 1-based, it must land inside the array, and the selected
        constant must equal the result. The range test is written out rather than left to

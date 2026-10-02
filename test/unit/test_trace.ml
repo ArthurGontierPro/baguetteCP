@@ -1115,6 +1115,15 @@ let ix10_table =
        half is [Linear]'s rows. test_prop.ml measures the honest R3 line accepted and the
        same line refused on an .opb without the C_v rows. *)
     ("maxmin.ml", Single_row);
+    (* M4-T10 (D-0096): cumulative. [Needs_derivation], for gcc's reason with a
+       coefficient per task: a time-table push sums the time point's capacity row with
+       an at-least-one per compulsory task and a free ladder chain per other task, and
+       "an indicator is never negative" is the ladder, which unit propagation cannot sum.
+       Measured in D-0096 (four tasks, two of them neither compulsory nor the target: the
+       bare line is refused) and on the scene below. With unit capacity and resources
+       the lines are often RUP anyway once their full tails are on them -- measured, not
+       a reason to reclassify. *)
+    ("cumulative.ml", Needs_derivation);
   ]
 
 (* (a) CLOSURE. OCaml cannot reflect over its own modules, so the only way to notice a
@@ -1177,14 +1186,15 @@ let test_ix10_closure () =
       let needs =
         List.map fst (List.filter (fun (_, c) -> c = Needs_derivation) ix10_table)
       in
-      if needs <> [ "alldiff.ml"; "gcc.ml" ] then
+      if needs <> [ "alldiff.ml"; "gcc.ml"; "cumulative.ml" ] then
         Printf.printf
           "     Needs_derivation is now %s. test_ix10_derive_ahead below drives\n\
-          \     `alldiff.ml` and `gcc.ml` and nothing else, so any other family here is\n\
-          \     classified but UNCHECKED: give it a scene there. See D-0040.\n"
+          \     `alldiff.ml`, `gcc.ml` and `cumulative.ml` and nothing else, so any\n\
+          \     other family here is classified but UNCHECKED: give it a scene there.\n\
+          \     See D-0040.\n"
           (String.concat ", " needs);
       check "I-X10 closure: every Needs_derivation family is one the content check drives"
-        (needs = [ "alldiff.ml"; "gcc.ml" ])
+        (needs = [ "alldiff.ml"; "gcc.ml"; "cumulative.ml" ])
 
 (* (b) CONTENT. The closure check is a name list; on its own it would pass forever even
    if I-X10 were false. This asserts the checker's actual verdict on the shape a
@@ -1390,6 +1400,22 @@ let ix10_regin_line = "rup +1 ~z_ge_3 +1 z_ge_4 >= 1 ;"
    [~ahead:true] into [false] reddens exactly two checks here -- "a pol precedes" and
    "the full proof verifies" -- and NOT ONE model test, so this scene is the only thing
    in the suite that would notice. *)
+(* M4-T10 (D-0096). test/models/cumulative_sat.fzn: five tasks, cap 2, one at r = 2,
+   searched latest-first. [ix10_cumul_line] is an upper push (`s2 <= 1`, given
+   `s2 <= 2`; s0's compulsory part at t = 2 is declared, so it has no literal) that
+   3.0.2 refuses standalone, measured 2026-10-02. *)
+let ix10_cumul_source =
+  {|var 0..2: s0 :: output_var;
+var 0..4: s1 :: output_var;
+var 0..4: s2 :: output_var;
+var 0..3: s3 :: output_var;
+var 0..3: s4 :: output_var;
+constraint baguette_cumulative([s0,s1,s2,s3,s4],[3,1,1,2,2],[1,1,2,1,1],2);
+solve :: int_search([s3,s4,s2,s1,s0], input_order, indomain_max, complete) satisfy;
+|}
+
+let ix10_cumul_line = "rup +1 ~s2_ge_2 +1 s2_ge_3 >= 1 ;"
+
 let ix10_gcc_source =
   {|var 1..4: q;
 var 1..4: p;
@@ -2136,6 +2162,8 @@ let () =
     ~src:m7t21_gcc_source ~claim:m7t21_gcc_line ~outcome:`Sat ();
   test_ix10_derive_ahead ~use_order:true ~tag:"(M7-T24, a gcc saturation hole)"
     ~src:m7t24_hole_source ~claim:m7t24_hole_line ~outcome:`Sat ();
+  test_ix10_derive_ahead ~use_order:true ~tag:"(M4-T10, a cumulative time-table push)"
+    ~src:ix10_cumul_source ~claim:ix10_cumul_line ~outcome:`Sat ();
   test_m7t21_element ();
   test_is4_gate ();
   test_m6t15_position_of ();

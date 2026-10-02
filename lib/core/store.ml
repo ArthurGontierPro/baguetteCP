@@ -219,7 +219,19 @@ type t = {
    then writes no line, because a line over an empty tail claims an unconditional
    contradiction, which is false. The conflict is built from the same
    [Reason.justified] value a pruning is, so the two halves arrive together here too. *)
-type conflict = { c_prop : int; c_why : Explanation.t; c_reason : Reason.t }
+type conflict = {
+  c_prop : int;
+  c_why : Explanation.t;
+  c_reason : Reason.t;
+  c_ahead : bool;
+      (* M4-T10 (D-0096). "This conflict's derivation must be on the page AHEAD of its
+         reason line", the conflict's twin of [entry.ahead]: stamped by [conflict] off
+         [current_ahead], which only [deriving_ahead] sets. [Trace.conflict_line] reads
+         it. A [Needs_derivation] family that reports a conflict WITH its facts -- so
+         that 1UIP learning has a reason to resolve from -- must put the counting
+         argument ahead of `rup ~facts >= 1`, which is not reverse unit propagation. *)
+}
+
 type outcome = Unchanged | Changed | Conflict of conflict
 
 let dummy_entry =
@@ -668,7 +680,12 @@ let check_conclusion t v ~old ~now (j : Reason.justified) =
    see [Reason.none]. *)
 let conflict t (j : Reason.justified) =
   check_agreement t j;
-  { c_prop = t.current_prop; c_why = j.justification; c_reason = j.reason }
+  {
+    c_prop = t.current_prop;
+    c_why = j.justification;
+    c_reason = j.reason;
+    c_ahead = t.current_ahead;
+  }
 
 (* The one documented exception to the agreement check, for [apply]'s [Failed] arm alone.
 
@@ -685,7 +702,7 @@ let conflict t (j : Reason.justified) =
    this file. Found by turning the check on: this arm was the only false positive left in
    the suite once non-materialising facts were skipped. *)
 let unattributed_conflict t why =
-  { c_prop = t.current_prop; c_why = why; c_reason = Reason.none }
+  { c_prop = t.current_prop; c_why = why; c_reason = Reason.none; c_ahead = false }
 
 (* The D-0026 agreement check.
 

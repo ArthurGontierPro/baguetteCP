@@ -637,7 +637,23 @@ let evaluate (m : M.t) (assign : int array) =
           List.mem (operand mo) vs && List.for_all (fun v -> v <= operand mo) vs
       | M.Array_int_minimum (mo, xs) ->
           let vs = List.map operand xs in
-          List.mem (operand mo) vs && List.for_all (fun v -> v >= operand mo) vs)
+          List.mem (operand mo) vs && List.for_all (fun v -> v >= operand mo) vs
+      (* M4-T10. This file's own reading: at every integer time, the tasks with a
+         positive duration and resource running there sum to at most cap. Scanned over
+         the whole span rather than at the starts, so the two oracles differ in shape. *)
+      | M.Cumulative (ss, ds, rs, cap) ->
+          let tasks = List.mapi (fun i s -> (operand s, ds.(i), rs.(i))) ss in
+          let tasks = List.filter (fun (_, d, r) -> d > 0 && r > 0) tasks in
+          let lo = List.fold_left (fun a (s, _, _) -> min a s) max_int tasks in
+          let hi = List.fold_left (fun a (s, d, _) -> max a (s + d)) min_int tasks in
+          (ss = [] || cap >= 0)
+          && List.for_all
+               (fun t ->
+                 List.fold_left
+                   (fun a (s, d, r) -> if s <= t && t < s + d then a + r else a)
+                   0 tasks
+                 <= cap)
+               (if tasks = [] then [] else List.init (hi - lo) (fun k -> lo + k)))
     m.M.constraints
 
 (* Brute force over the declared box: the independent oracle for the expected answer.

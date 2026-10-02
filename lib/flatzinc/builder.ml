@@ -59,6 +59,9 @@ let implemented =
        which is the same instance over [x; y]. *)
     "int_max";
     "int_min";
+    (* M4-T10 (D-0096): cumulative, and disjunctive as its unit case, through
+       mznlib/fzn_cumulative.mzn and mznlib/fzn_disjunctive*.mzn. *)
+    "baguette_cumulative";
   ]
 
 (* The rest of the SPEC 2.1 table, with the milestone that will bring it in. Listing
@@ -1068,6 +1071,31 @@ let build_constraint env (c : Ast.constraint_item) =
                    (operands env pos ca))
             in
             Model.Global_cardinality (operands env pos xa, cover, operands env pos na)
+        | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
+    (* M4-T10 (D-0096). `baguette_cumulative(s, d, r, cap)`: the durations, resources
+       and capacity are CONSTANTS, refused here with a position otherwise, as the cover
+       of `fzn_global_cardinality` is. The starts are ordinary operands. *)
+    | "baguette_cumulative" -> (
+        arity 4;
+        match c.Ast.c_args with
+        | [ sa; da; ra; ca ] ->
+            let consts what e =
+              Array.of_list
+                (List.map
+                   (fun op -> as_const pos ~builtin:id ~what op)
+                   (operands env pos e))
+            in
+            let ss = operands env pos sa in
+            let ds = consts "every duration" da and rs = consts "every resource" ra in
+            let cap =
+              as_const pos ~builtin:id ~what:"the capacity" (operand env pos ca)
+            in
+            if Array.length ds <> List.length ss || Array.length rs <> List.length ss then
+              Error.failf pos
+                "builtin `%s`: %d starts, %d durations and %d resources; they must match \
+                 position for position"
+                id (List.length ss) (Array.length ds) (Array.length rs);
+            Model.Cumulative (ss, ds, rs, cap)
         | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
     (* M4-T3. `array_int_element(idx, as, c)`, with `as` an array of CONSTANTS -- the
        only form docs/SPEC.md 2.1 admits. [as_const] is what refuses a variable element,

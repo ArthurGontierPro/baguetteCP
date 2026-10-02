@@ -663,6 +663,10 @@ let conflict_line (ctx : Justify.ctx) t (c : Store.conflict) =
   match Reason.lits c.Store.c_reason with
   | [] -> None
   | facts ->
+      (* M4-T10 (D-0096): a conflict made under [Store.deriving_ahead] has its
+         derivation written first, so the `rup` below is RUP in sequence -- the conflict
+         twin of [derive_ahead] for an entry. *)
+      if c.Store.c_ahead then ignore (Justify.emit ctx c.Store.c_why : Writer.cid);
       let cid =
         Justify.emit_rup_clause ctx
           ~origin:(Printf.sprintf "trace: conflict from %d fact(s)" (List.length facts))
