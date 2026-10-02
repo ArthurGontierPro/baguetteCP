@@ -199,10 +199,13 @@ def verdict(rc, vpf, status):
         if l.strip().startswith("Caused by"):
             caused = " ".join(x.strip() for x in ls[i + 1:i + 3])
             break
-    # The JUDGEMENT wording of 3.0.2 is "Verification error at <file>:<line>" followed by
-    # "Caused by: <reason>". A reason that is about the grammar is a parse failure and
-    # says nothing about soundness (M2-T14), so it is CHECK-ERROR, not REJECTED.
-    if "Verification error" in t and caused and not GRAMMAR_RE.search(caused):
+    # The JUDGEMENT wording of 3.0.2 is "Checking error at <file>:<line>" (VeriPB source
+    # d5644ca4 on; "Verification error at" in the June 2026 build, D-0100 -- both
+    # recognised) followed by "Caused by: <reason>". A reason that is about the grammar
+    # is a parse failure and says nothing about soundness (M2-T14), so it is
+    # CHECK-ERROR, not REJECTED.
+    if ("Verification error" in t or "Checking error" in t) and caused \
+            and not GRAMMAR_RE.search(caused):
         print("REJECTED\t%s" % flat(caused))
         return 0
     first = next((l for l in ls if l.strip().startswith("Error")), ls[-1] if ls else "")

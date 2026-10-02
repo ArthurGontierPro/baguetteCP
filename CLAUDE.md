@@ -430,7 +430,10 @@ Several sessions share this checkout, so staging discipline matters more than us
 The toolchain is installed and working:
 
 - opam 2.5.2 at `~/.local/bin/opam`, switch `baguette` on OCaml 5.1.1
-- **The checker is VeriPB 3.0.2** (the Rust build) at `~/.cargo/bin/veripb`, and the
+- **The checker is VeriPB 3.0.2** (the Rust build, **source `d5644ca4` of 2026-09-04 since
+  D-0100** — the June build `78db9573` falsely rejected valid `rup` steps and is kept only as
+  `veripb-3.0.2-78db9573`; a rejection now reads *"Checking error at"*, the June build said
+  *"Verification error at"*, and every classifier recognises both) at `~/.cargo/bin/veripb`, and the
   solver emits `pseudo-Boolean proof version 3.0`. It is the **only** checker: D-0046
   removed format 2.0 and with it the Python VeriPB this project used to keep alongside.
   `scripts/checker.sh` is the single place that resolves which binary runs, and it

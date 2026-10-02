@@ -344,18 +344,25 @@ let veripb r =
 
 (* The checker's WHOLE sentence for a RUP judgement, as veripb 3.0.2 emits it:
 
-     Error: Verification error at <file>:<line>
+     Error: Checking error at <file>:<line>
      Caused by:
              The constraint is not implied by reverse unit propagation (RUP) from core
              and derived database. Rerun with the option '--trace-failed' ...
+
+   The header read "Verification error at" in the build from source 78db9573 (June 2026)
+   and reads "Checking error at" from d5644ca4 on (D-0100, 2026-10-02: the checker of
+   record moved past the trailhead fix the GCS authors pointed at); both builds are kept
+   on both machines, so both headers are recognised. The sentence after "Caused by" is
+   the same prefix in both.
 
    A break lane asserts THIS, not the bare phrase "reverse unit propagation". CLAUDE.md's
    rule is explicit about why: an exit status cannot tell a JUDGEMENT from a parse error,
    and a fragment weaker than the claim is matched by any other RUP failure anywhere in
    the proof -- including one the break did not cause. Both halves are required, because
-   "Verification error at" alone would also match a grammar refusal. *)
+   the header alone would also match a grammar refusal. *)
 let rup_judgement out =
-  contains ~needle:"Verification error at" out
+  (contains ~needle:"Verification error at" out
+  || contains ~needle:"Checking error at" out)
   && contains
        ~needle:
          "The constraint is not implied by reverse unit propagation (RUP) from core and \

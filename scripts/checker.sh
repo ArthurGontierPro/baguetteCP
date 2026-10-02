@@ -18,7 +18,10 @@
 # 1. $VERIPB, if set and non-empty. An explicit choice always wins, and a $VERIPB
 #    that does not resolve is an ERROR -- never a silent fall-through to something
 #    else, because the whole point of setting it is to pin the checker.
-# 2. $HOME/.cargo/bin/veripb -- the checker of record (VeriPB 3.0.2, the Rust
+# 2. $HOME/.cargo/bin/veripb -- the checker of record (VeriPB 3.0.2, the Rust build from
+#    source d5644ca4 of 2026-09-04 since D-0100; the June build 78db9573 is kept beside it
+#    as veripb-3.0.2-78db9573 and is NOT the checker of record: it rejected valid RUP
+#    steps, see D-0100), the Rust
 #    implementation). See docs/DECISIONS.md D-0023.
 # 3. `veripb` on PATH.
 #

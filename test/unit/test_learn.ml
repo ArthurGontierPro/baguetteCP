@@ -1290,15 +1290,16 @@ let settle_src =
    constraint int_lin_le_reif([2,1,-1,-1],[x7,x1,x0,x2],6,b1);\n\
    solve satisfy;\n"
 
-(* The line the checker stopped at, as it names it: "Verification error at <path>:<n>".
+(* The line the checker stopped at, as it names it: "Checking error at <path>:<n>"
+   (from VeriPB source d5644ca4 on; "Verification error at" in the June 2026 build --
+   D-0100, both recognised).
    Pinning it is what separates "some `rup` in this proof failed" from "THIS one did",
    and CLAUDE.md is explicit that "reverse unit propagation" on its own is too weak a
    match -- every other RUP failure in the same proof would satisfy it. *)
 let failing_line out proof =
   (* Hand-rolled rather than [Str], because test/unit/dune is a contention hotspot
      (CLAUDE.md) and adding a library to it for one line is not worth the conflict. *)
-  let marker = "Verification error at " in
-  let find_marker () =
+  let find_marker marker =
     let n = String.length out and m = String.length marker in
     let rec go i =
       if i + m > n then None
@@ -1307,7 +1308,12 @@ let failing_line out proof =
     in
     go 0
   in
-  match find_marker () with
+  let found =
+    match find_marker "Checking error at " with
+    | Some _ as r -> r
+    | None -> find_marker "Verification error at "
+  in
+  match found with
   | None -> None
   | Some start -> (
       (* ...<path>:<line>, and the line number is the trailing run of digits on it. *)

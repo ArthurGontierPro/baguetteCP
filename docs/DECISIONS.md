@@ -8212,3 +8212,59 @@ route, ready to restore. Merging separate `count(xs, v_i, n_i)` calls over the S
 multi-value gcc is what would actually use the interval-capacity rule (oc-roster counts every
 staff member over one array). MiniZinc's library cannot do that merge, and only the front end
 could.
+
+## D-0100  The checker of record moves to VeriPB source `d5644ca4`: the June build falsely rejected valid `rup` steps
+
+**Status**: **DECIDED and DONE**, 2026-10-02 (orchestrator). Amends D-0046's "veripb 3.0.2 is
+the sole oracle" with WHICH 3.0.2, and D-0089 §1's reading of GCS's rejected proofs.
+
+### What happened
+
+The GCS authors answered the report of `docs/reports/2026-10-02-gcs-rejected-proofs.md` within
+the hour: *update your veripb past `4c4b92c7` (2026-06-22), "never reset trailhead to higher
+position than current"; until that commit, `move to core` randomly removed watches so `rup`
+would not always work.* Both machines ran a Rust VeriPB built from `~/veripb-dev` at
+`78db9573` (2026-06-18) — four days BEFORE that fix. So the oracle this project has trusted
+since D-0046 had a known **false-rejection** defect: a valid `rup` step could be refused after a
+`core` move. Its version string, `3.0.2`, did not change across the fix, which is why nothing
+here noticed.
+
+### What was done
+
+- Both checkouts moved to upstream `main` at **`d5644ca4`** (2026-09-04, 180 commits later, the
+  fix included), rebuilt with `cargo install --path . --force` (the node needed `rustup update
+  stable`: 1.86 → 1.99). The June binaries are kept beside the new ones as
+  `~/.cargo/bin/veripb-3.0.2-78db9573` on both machines and are **not** the checker of record.
+  `scripts/checker.sh` and `CLAUDE.md` say so.
+- **The rejection header changed**: `Error: Checking error at <file>:<line>` where the June
+  build said `Verification error at`; the `Caused by` sentence is the same prefix with a longer
+  tail. Three lanes asserted the old header at full strength (`test_pb`'s `rup_judgement`, twice,
+  and `test_learn`'s M7-T6 break, which parses the line number out of it) and went red — the
+  rule "assert the checker's wording at full strength" working exactly as intended, catching a
+  checker change. They now recognise both headers, as do `corpus_run.sh`'s and `compare.py`'s
+  classifiers (otherwise every rejection by the new build would have been `CHECK-ERR-1`), and
+  `corpus_selftest.sh` gained a fake checker printing the new header so the bucket is pinned.
+- Acceptance wording (`s VERIFIED ...`) did not change: the 132 node models and the local suite
+  pass under the new build without edits.
+
+### What it changes in the record
+
+- **D-0089 §1 / the GCS report**: the 15 `REJECTED` and 1 checker panic are re-checked with the
+  new build (`/scratch/arthur/gcs-recheck/`); the verdicts replace §1's table in a follow-up
+  addendum. Until they are in, "GCS's proofs are rejected" is NOT a claim this project makes —
+  the checker was the suspect the authors named, and D-0046 said a checker bug would be
+  invisible here. It was.
+- **Baguette's own history is unaffected in the safe direction**: a false REJECTION cannot have
+  hidden a defect, only invented one. Every rejection this project chased (D-0070, D-0075,
+  D-0084, D-0086) was reproduced on a small model, fixed at the source, and its lane goes red
+  with the fix reverted — those were real. What the June build could not have produced is a
+  false ACCEPT, so the 0-rejected figures of D-0089/D-0093 stand, and the trailhead defect
+  (lost watches → missed propagations) only ever made RUP fail, never succeed wrongly.
+- The 25 `TIMEOUT-CHECK` instances of D-0093 are being re-solved and checked with a 3 h budget
+  (`corpus-out-w36-longcheck`); runs started after the swap use the new build.
+
+### Rule
+
+The checker of record is named by **source commit**, not by version string, from now on:
+`scripts/checker.sh` carries it, and a change of it is a decision record. `bootstrap.sh` should
+pin it too (request to whoever next touches it).

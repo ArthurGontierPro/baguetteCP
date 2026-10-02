@@ -105,7 +105,8 @@
 #   VERIFIED       veripb exit 0 and an `s VERIFIED ...` line
 #   VERIFIED-WEAK  accepted, but the conclusion does not establish the printed status
 #                  (UNSAT without UNSATISFIABLE, OPT without BOUNDS a <= obj <= a)
-#   REJECTED       "Verification error at ..." + a "Caused by" that is not a grammar
+#   REJECTED       "Checking error at ..." (or the June build's "Verification error at",
+#                  D-0100) + a "Caused by" that is not a grammar
 #                  complaint -- the wording, not the exit status (CLAUDE.md, M2-T14)
 #   CHECK-ERROR    anything else the checker said; TIMEOUT-CHECK  CHECK_TIMEOUT
 #   NO-PROOF       clean exit, no .opb/.pbp;  NOT-CHECKED  the run did not finish

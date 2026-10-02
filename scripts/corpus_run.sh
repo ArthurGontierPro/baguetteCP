@@ -84,7 +84,7 @@
 #   PROOF-REJECTED     solved, veripb REJECTED. Its own bucket. Never a failure
 #                      bucket, never merged, and the proof is KEPT for inspection.
 #   TIMEOUT-CHECK      veripb exceeded $CHECK_TIMEOUT -- says nothing either way
-#   CHECK-ERR-<rc>     M6-T9: veripb exited non-zero WITHOUT "Verification error"
+#   CHECK-ERR-<rc>     M6-T9: veripb exited non-zero WITHOUT "Verification error"/"Checking error"
 #                      -- it crashed or was killed, it did not judge. Never folded
 #                      into PROOF-REJECTED, which is gated on that wording.
 #   NO-PROOF           solver exited 0 but emitted no .pbp. A result without a
@@ -710,7 +710,9 @@ $(head -c 120 "$L.mzn.err" | tr '\t\n\r' '   ')"
   # solver's name, the exact D-0069 failure mode. A rejection is now gated on the
   # checker saying "Verification error"; anything else is CHECK-ERR-<rc>, and the
   # artefacts are kept for both.
-  if ! grep -aq 'Verification error' "$L.vp"; then
+  # Both headers: "Verification error" (VeriPB source 78db9573, June 2026) and
+  # "Checking error" (d5644ca4 on, the checker of record since D-0100, 2026-10-02).
+  if ! grep -aqE 'Verification error|Checking error' "$L.vp"; then
     emit "$id" "CHECK-ERR-$rc" "$sz" "$pbp" \
       "checker exited $rc without a verdict: $(tail -c 150 "$L.vp" | tr '\t\n\r' '   ')"
     return

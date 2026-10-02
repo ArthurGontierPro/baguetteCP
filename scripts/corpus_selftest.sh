@@ -220,6 +220,7 @@ case "$FAKE_CHECKER" in
   hang) exec sleep 30 ;;
   err1) echo "something broke before any verdict"; exit 1 ;;
   reject1) echo "Verification error"; echo "Caused by: fake rejection"; exit 1 ;;
+  reject2) echo "Checking error"; echo "Caused by: fake rejection (new header)"; exit 1 ;;
   nonconc) echo "s VERIFIED NO CONCLUSION"; exit 0 ;;
 esac
 exit 0
@@ -263,6 +264,8 @@ expect_bucket "a checker that exits 1 with no verdict wording" \
   plain err1 CHECK-ERR-1 "without a verdict"
 expect_bucket "a checker that exits 1 WITH 'Verification error' (not CHECK-ERR-1)" \
   plain reject1 PROOF-REJECTED "fake rejection"
+expect_bucket "a checker that exits 1 WITH 'Checking error' (the d5644ca4 header, D-0100)" \
+  plain reject2 PROOF-REJECTED "new header"
 
 if [ "$fails" -eq 0 ]; then
   echo "corpus self-test: PASS"
