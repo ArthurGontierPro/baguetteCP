@@ -43,8 +43,12 @@ let mk_store bounds =
 
 let var i = Var.of_int i
 
+(* [~idempotent:true] as [Compile.pack_linear] packs it (M6-T18 moved the claim from a
+   by-name table to the packing site). *)
 let pack_linear id (lin : Linear.t) : Propagator.instance =
-  Propagator.pack ~id (module Linear : Propagator.S with type t = Linear.t) lin
+  Propagator.pack ~id ~idempotent:true
+    (module Linear : Propagator.S with type t = Linear.t)
+    lin
 
 let pack_ne id (ne : Ne.t) : Propagator.instance =
   Propagator.pack ~id (module Ne : Propagator.S with type t = Ne.t) ne
@@ -1732,6 +1736,241 @@ let test_wrong_claim_is_caught () =
       let c = Engine.counters engine' in
       check "wrong claim control: and nothing was vetoed" (c.Engine.c_vetoed = 0)
 
+(* ===================================================================== *)
+(* M6-T18: the incremental seed.                                          *)
+(* ===================================================================== *)
+
+(* A propagator that prunes nothing and counts its runs: which instances a [propagate]
+   call actually runs is then read straight off the counts. *)
+module Probe = struct
+  type t = { pv : Var.t; mutable count : int }
+
+  let name = "probe"
+  let consistency = Propagator.Bounds
+  let vars p = [ p.pv ]
+
+  let propagate p _store =
+    p.count <- p.count + 1;
+    Propagator.Fixpoint
+end
+
+let pack_probe id p =
+  Propagator.pack ~id (module Probe : Propagator.S with type t = Probe.t) p
+
+let decide store v k =
+  Store.new_level store;
+  ignore (Store.set_hi store v k no_facts_placeholder)
+
+let test_seed_runs_what_changed () =
+  let store = mk_store [ ("x", 0, 9); ("y", 0, 9); ("z", 0, 9) ] in
+  let probes = Array.init 3 (fun i -> { Probe.pv = var i; count = 0 }) in
+  let engine = Engine.create (Array.to_list (Array.mapi pack_probe probes)) in
+  let all = ref (Array.to_list probes) in
+  let counts () = List.map (fun p -> p.Probe.count) !all in
+  let reset () = List.iter (fun p -> p.Probe.count <- 0) !all in
+  let last_seeded = ref 0 in
+  let step what expect =
+    reset ();
+    (match Engine.propagate engine store with
+    | Engine.Fixpoint -> ()
+    | Engine.Conflict _ -> failwith "seed: unexpected conflict");
+    (* Under BAGUETTE_DEBUG the re-checkers run every instance too (uncounted by the
+       engine, counted by a probe), so there the engine's own [c_seeded] is compared. *)
+    let seeded = (Engine.counters engine).Engine.c_seeded in
+    let ran = seeded - !last_seeded in
+    last_seeded := seeded;
+    let got = counts () in
+    if Baguette_core.Debug.enabled then
+      check
+        (Printf.sprintf "seed: %s seeds %d" what ran)
+        (ran = List.fold_left ( + ) 0 expect)
+    else
+      check
+        (Printf.sprintf "seed: %s runs [%s]" what
+           (String.concat ";" (List.map string_of_int got)))
+        (got = expect)
+  in
+  step "the first call seeds everything" [ 1; 1; 1 ];
+  let c = Engine.counters engine in
+  check "seed: three seeded, none skipped"
+    (c.Engine.c_seeded = 3 && c.Engine.c_skipped = 0);
+  step "a call with nothing changed" [ 0; 0; 0 ];
+  check "seed: and skips all three slots" (c.Engine.c_skipped = 3);
+  decide store (var 0) 5;
+  step "a decision on x runs only x's watcher" [ 1; 0; 0 ];
+  decide store (var 1) 5;
+  step "a decision on y below it runs only y's watcher" [ 0; 1; 0 ];
+  Store.backtrack store;
+  step "a backtrack RESTORES, so the parent's fixpoint stands and nothing runs"
+    [ 0; 0; 0 ];
+  Store.backtrack_to store 0;
+  decide store (var 2) 4;
+  step "after a pop to the root, a decision on z runs only z's watcher" [ 0; 0; 1 ];
+  (* A pop and a push back to the SAME length: [trail_length] alone cannot see it. *)
+  Store.backtrack store;
+  decide store (var 0) 4;
+  step "pop-then-push to the same length is seen by the low-water mark" [ 1; 0; 0 ];
+  (* [Engine.add]: a new instance has never run, so it runs although nothing moved. *)
+  let late = { Probe.pv = var 1; count = 0 } in
+  Engine.add engine (pack_probe (Engine.next_id engine) late);
+  all := !all @ [ late ];
+  step "after Engine.add, only the new instance runs" [ 0; 0; 0; 1 ];
+  step "the added instance is now born, so a quiet call runs nothing" [ 0; 0; 0; 0 ];
+  (* A backjump to a fixpoint OLDER than the one it was born at: it never ran there. *)
+  Store.backtrack_to store 0;
+  step "a backjump below its birth re-seeds the added instance" [ 0; 0; 0; 1 ];
+  step "and once born again it is quiet" [ 0; 0; 0; 0 ];
+  (* The control: the full seed, as before M6-T18. *)
+  Engine.set_incremental engine false;
+  step "with the incremental seed off, every instance runs" [ 1; 1; 1; 1 ]
+
+(* The regression D-0098 records: a call whose own runs PUSH entries must still leave the
+   next call an incremental seed. With the low-water mark read only at the start of a
+   call, it stood below the fixpoint that call recorded, and every call after a pruning
+   one fell back to the full seed -- invisible to every test above, whose root calls
+   prune nothing. *)
+let test_seed_after_a_pruning_call () =
+  let store = mk_store [ ("x", 0, 9); ("y", 0, 9); ("z", 0, 9) ] in
+  let lin = Linear.make ~row_id:(unrendered_row ()) store [ (1, var 0); (1, var 1) ] 5 in
+  let probe = { Probe.pv = var 2; count = 0 } in
+  let engine = Engine.create [ pack_linear 0 lin; pack_probe 1 probe ] in
+  ignore (Engine.propagate engine store);
+  check "seed after pruning: the root call pruned" (Store.trail_length store = 2);
+  let c = Engine.counters engine in
+  let seeded0 = c.Engine.c_seeded in
+  decide store (var 2) 4;
+  ignore (Engine.propagate engine store);
+  check
+    (Printf.sprintf "seed after pruning: a decision on z seeds one slot (%d)"
+       (c.Engine.c_seeded - seeded0))
+    (c.Engine.c_seeded - seeded0 = 1);
+  Store.backtrack store;
+  decide store (var 2) 3;
+  let seeded1 = c.Engine.c_seeded in
+  ignore (Engine.propagate engine store);
+  check
+    (Printf.sprintf "seed after pruning: and again after a backtrack (%d)"
+       (c.Engine.c_seeded - seeded1))
+    (c.Engine.c_seeded - seeded1 = 1)
+
+(* Prunes [py] to 0 once hi(px) <= 3, but WATCHES only [py]: a propagator that reads a
+   variable it does not watch, which D-0034 says must not exist. The incremental seed
+   skips it after a decision on x, and the safety net must say so. *)
+module Peek = struct
+  type t = { px : Var.t; py : Var.t }
+
+  let name = "peek"
+  let consistency = Propagator.Bounds
+  let vars p = [ p.py ]
+
+  let propagate p store =
+    if Domain.hi (Store.get store p.px) <= 3 then
+      match Store.set_hi store p.py 0 no_facts_placeholder with
+      | Store.Conflict e -> Propagator.Conflict e
+      | Store.Changed | Store.Unchanged -> Propagator.Fixpoint
+    else Propagator.Fixpoint
+end
+
+let test_seed_starved_reader_is_caught () =
+  let scene () =
+    let store = mk_store [ ("x", 0, 9); ("y", 0, 9) ] in
+    let engine =
+      Engine.create
+        [
+          Propagator.pack ~id:0
+            (module Peek : Propagator.S with type t = Peek.t)
+            { Peek.px = var 0; py = var 1 };
+        ]
+    in
+    ignore (Engine.propagate engine store);
+    decide store (var 0) 3;
+    (store, engine)
+  in
+  let store, engine = scene () in
+  (match Engine.propagate engine store with
+  | exception Engine.Not_at_fixpoint msg ->
+      check "starved reader: under BAGUETTE_DEBUG the skip check names it"
+        (contains "M6-T18" msg && contains "peek" msg)
+  | Engine.Conflict _ -> check "starved reader: unexpected conflict" false
+  | Engine.Fixpoint ->
+      check "starved reader: without the flag, the pruning is lost (y stays 9)"
+        (Domain.hi (Store.get store (var 1)) = 9);
+      check "starved reader: and the I-P2 re-run sees it"
+        (raises_not_at_fixpoint engine store <> None));
+  let store, engine = scene () in
+  Engine.set_incremental engine false;
+  match Engine.propagate engine store with
+  | Engine.Fixpoint ->
+      check "starved reader control: the full seed prunes y to 0"
+        (Domain.hi (Store.get store (var 1)) = 0)
+  | _ -> check "starved reader control: unexpected outcome" false
+
+(* EXACTNESS: the incremental seed is the full seed with its no-op runs removed, so over
+   the same decisions and backtracks the two engines push the same trail -- same
+   entries, same order, same credited instance -- and report the same outcome. *)
+let test_seed_is_exact () =
+  let build () =
+    let store = mk_store [ ("x", 0, 9); ("y", 0, 9); ("z", 0, 9); ("w", 0, 9) ] in
+    let row terms rhs = Linear.make ~row_id:(unrendered_row ()) store terms rhs in
+    let rows =
+      [
+        row [ (1, var 0); (1, var 1) ] 10;
+        row [ (1, var 1); (1, var 2) ] 8;
+        row [ (1, var 0); (-1, var 2) ] 2;
+        row [ (-1, var 1); (-1, var 3) ] (-9);
+        row [ (1, var 2); (1, var 3) ] 12;
+        row [ (-1, var 0); (-1, var 3) ] (-7);
+      ]
+    in
+    (store, Engine.create (List.mapi pack_linear rows))
+  in
+  let s_inc, e_inc = build () in
+  let s_full, e_full = build () in
+  Engine.set_incremental e_full false;
+  let dump store =
+    List.init (Store.trail_length store) (fun i ->
+        let e : Store.entry = Store.trail_entry store i in
+        Printf.sprintf "%d:%s:%d" (Var.to_int e.Store.var)
+          (Domain.to_string e.Store.now)
+          e.Store.prop)
+  in
+  let same = ref true in
+  let both f =
+    f s_inc;
+    f s_full;
+    let o1 = Engine.propagate e_inc s_inc and o2 = Engine.propagate e_full s_full in
+    let kind = function Engine.Fixpoint -> "fix" | Engine.Conflict _ -> "conflict" in
+    if kind o1 <> kind o2 || dump s_inc <> dump s_full then same := false
+  in
+  let lo v k s =
+    Store.new_level s;
+    ignore (Store.set_lo s (var v) k no_facts_placeholder)
+  in
+  let hi v k s =
+    Store.new_level s;
+    ignore (Store.set_hi s (var v) k no_facts_placeholder)
+  in
+  let back n s = Store.backtrack_to s (Store.level s - n) in
+  both (fun _ -> ());
+  both (hi 0 6);
+  both (lo 1 3);
+  both (hi 2 4);
+  both (back 2);
+  both (lo 3 6);
+  both (hi 1 4);
+  both (back 3);
+  both (lo 2 3);
+  both (hi 3 5);
+  both (back 1);
+  both (lo 0 4);
+  check "seed exactness: incremental and full seeds push identical trails" !same;
+  let ci = Engine.counters e_inc and cf = Engine.counters e_full in
+  check
+    (Printf.sprintf
+       "seed exactness: same effectful runs (%d vs %d), fewer runs (%d vs %d)"
+       ci.Engine.c_effectful cf.Engine.c_effectful ci.Engine.c_runs cf.Engine.c_runs)
+    (ci.Engine.c_effectful = cf.Engine.c_effectful && ci.Engine.c_runs < cf.Engine.c_runs)
+
 let () =
   test_fixpoint_tightens_and_settles ();
   test_conflict_carries_explanation ();
@@ -1750,6 +1989,10 @@ let () =
   test_counters_contradicting ();
   test_aliased_scope_refuses_the_claim ();
   test_wrong_claim_is_caught ();
+  test_seed_runs_what_changed ();
+  test_seed_after_a_pruning_call ();
+  test_seed_starved_reader_is_caught ();
+  test_seed_is_exact ();
   test_search_finds_and_verifies_a_solution ();
   test_search_exhausts_and_reports_unsat ();
   test_audit_empty_at_conclusion ();

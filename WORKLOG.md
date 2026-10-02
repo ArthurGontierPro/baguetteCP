@@ -328,7 +328,12 @@ file it held is free.
 
 **Wave fifteen is running: M2-T16 (agent-drop) and M2-L8 (agent-bench).**
 
-**M2-T16 is RELEASED, 2026-09-18 (agent-drop).** Moved to `## Completed`; handoff notes at
+**M2-T16 is RELEASED, 2026-09-18 (agent-drop).** Moved to `
+| **M6-T18 / D-0098**: `bin/main.ml`'s `stats: seeded` label still reads "every instance, every propagate". Since M6-T18 it counts the seed slots actually RUN. Please relabel it (e.g. "...of the props, from the SEED (dirty slots only, M6-T18)") and add a `stats: skipped` line for `Engine.counters.c_skipped` (clean slots passed over; `seeded + skipped` = the old figure). Not a correctness item | `bin/main.ml` | agent-seed (M6-T18) | open |
+| **M6-T18 / D-0098**, for information at merge: both M2-T6 / D-0094 requests above are DONE on `wave39-seed` (the incremental seed, and `~idempotent:true` at `Compile.pack_linear`/`pack_arith_row` with the by-name table retired). `Propagator.pack`'s default is now `false`: a NEW packing site of a `Linear.t` must pass `~idempotent:true` itself, or it is merely unclaimed (safe, slower) | -- | agent-seed (M6-T18) | info |
+| **M6-T18 / D-0098**: nodes/55 s did not move although runs/node fell 2.4-4.7x, so the node rate is held by something other than propagator runs. A profile of NEW (`wave39-seed`) on mario and chessboard is the next measurement, before any further wake/seed work | -- (measurement) | agent-seed (M6-T18) | open |
+
+## Completed`; handoff notes at
 the bottom of the file. Every file except `bench/**` is free again. M2-L8 (agent-bench) is
 still running. Note for whoever merges: `Makefile`'s `bench` comment now says `ARGS="-r 9"`
 and `23 of the 38 rows`, replacing a `-F 2.0` example for a flag agent-bench removed.
@@ -927,6 +932,7 @@ work. The owning session picks it up.
 | M4-T9 | agent-maxmin | 2026-10-02 | **D-0095**. `lib/core/prop/maxmin.ml`: the disjunction `m <= max x` as one propagator (R3 `hi(m) <= max hi(x)`, R4 the unique reacher, conflict) over one `.opb` clause per threshold, `~[m>=v] \/ [x_1>=v] \/ ...`; every explanation is `Explanation.clause` of one posted row (no new constructor, I-X10 Single_row). `m >= x_i` is `n` `Linear` rows. Minimum = same instance over negated views; `int_max`/`int_min` = the two-element array form. mznlib shadows std `redefinitions-2.0.mzn`; D-0083 inference for the result. Corpus: radiation 888 -> 775 nodes, 13.8 -> 7.9 s, all proofs verified |
 | M2-T6 | agent-wake | 2026-10-02 | **D-0094**. Per-engine `props`/`eff`/`contra` (+`wakes`/`masked`/`vetoed`/`seeded`) under `--stats` and on both `limit:` lines, and in `corpus_run.sh`'s detail. The self-wake veto ships with the aliased-scope rule and, in the same commit, the `BAGUETTE_DEBUG` claim re-checker (`Engine.check_claim`). Suite stdout is identical on 132/132, 1 proof changed, and all verify. The veto does not pay: seeding is 75–85 % of runs |
 | M7-T23 | agent-count | 2026-10-02 | **D-0097. Built, measured, WITHDRAWN.** One `mznlib/fzn_count_eq.mzn` (04514a9) routed the whole counting family to gcc. It flattened clean on 436/436 with the same status as std, and gcc carriers went from 42 to 69 models, but it was worse on the node: 2012_amaze and 2015_roster lost their proved optima, 3 more died at the 32 GB cap, and none was better. gcc is bounds-level, so a one-value cover loses interior-value pruning and gains no cross-value reasoning. `among`: 0 corpus callers. Ten lanes kept as one-value gcc tests. `count_std_guard_sat.mzn` pins std. Request filed for gcc interior holes |
+| M6-T18 | agent-seed | 2026-10-02 | **D-0098**. `Engine.propagate` runs only DIRTY seed slots: the watchers (trigger-masked) of trail entries above the last fixpoint still on the trail, found via `Store`'s per-reader low-water mark (`register_low_water`/`take_low_water`, kept in `undo_to`); instances not born at that fixpoint (`Engine.add`, or a backjump below their birth); and slots woken before they came up. The skip is EXACT: 136/136 identical in stdout, `.opb` AND `.pbp`, all verify; `check_skip` (every skipped slot re-run under `BAGUETTE_DEBUG`) never fired over the suite. Runs/node s4 742.6->158.6, mario 2122->855, chessboard 6492->1944, eff/node unchanged, nodes/55 s within noise. `~idempotent:true` at `pack_linear`/`pack_arith_row`, the by-name table retired. Audit: no propagator lacked a watch |
 
 ## Handoff notes
 
@@ -3925,3 +3931,24 @@ header no longer says otherwise.
   `mznlib/test/count_std_guard_sat.mzn` makes `check_mznlib.sh` fail if anyone re-adds the
   route without flipping its directives. On the node, `/scratch/arthur/count-flat/{old,new,guard}`
   hold the three whole-corpus flattens.
+
+## M6-T18 handoff, 2026-10-02 (agent-seed)
+
+- **What changed**: `Engine.propagate` walks the same id-ordered seed slots but runs only the dirty
+  ones (D-0098 has the three rules). The base is the newest recorded `Fixpoint` state still on the
+  trail, and `Store.take_low_water` (per reader, kept in `undo_to`) says which records survive.
+  Skipping is exact, so trail, proof and search are the old engine's minus its no-op runs:
+  `bench/m2t6/identity.sh` is byte-identical on stdout/`.opb`/`.pbp` over 136/136.
+  `Engine.set_incremental false` restores the full seed (tests only).
+- **What to know**: (1) A propagator whose output depends on anything but its watched domains is
+  now a BUG that loses pruning silently, and `BAGUETTE_DEBUG`'s `check_skip` is what names it. New
+  families must keep D-0034's rule. The audit of every current family is in D-0098. (2) Read the
+  low-water mark at the END of a call as well as at the start. The first version did not, and
+  silently fell back to the full seed on most calls; `test_engine`'s "seed after pruning" pins it.
+  (3) The idempotence claim is now made at the packing site, and `pack`'s default is `false`.
+  (4) Fewer runs did NOT buy nodes: mario/chessboard nodes in 55 s are within noise, so profile
+  before more wake work. Two requests are filed: a `bin/main.ml` stats label, and the profile.
+- Gate: 3279 ok / 0 FAIL plain and 3270 ok / 0 FAIL under `BAGUETTE_DEBUG=1` (`dune runtest
+  --force`). Models are 136/136 both ways, and peak RSS is 41 MB. These ran BEFORE the coordinator's
+  veripb update (78db9573 -> d5644ca4). Its wording change breaks three rejection lanes that are not
+  this row's (test_mutation x2, test_learn's M7-T6 break). The orchestrator is fixing those.

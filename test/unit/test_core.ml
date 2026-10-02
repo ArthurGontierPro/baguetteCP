@@ -1502,6 +1502,47 @@ let test_bound_history () =
   Store.backtrack_to s 0;
   all_agree "back at level 0"
 
+(* M6-T18: the trail's LOW-WATER MARK, per reader. [Engine.propagate] needs to know how
+   far a backtrack reached since it last looked, and [trail_length] cannot say: a pop
+   followed by pushes back to (or past) the same length leaves no trace in it. *)
+let test_low_water () =
+  let s =
+    Store.create ~names:[| "x"; "y" |] ~domains:[| Domain.make 0 9; Domain.make 0 9 |]
+  in
+  let x = Var.of_int 0 and y = Var.of_int 1 in
+  let r = Reason.because ~concludes:None Reason.none (Explanation.model_row 1) in
+  ignore (Store.set_hi s x 8 r);
+  let a = Store.register_low_water s in
+  check "low water: a new reader starts at the current length"
+    (Store.take_low_water s a = 1);
+  Store.new_level s;
+  ignore (Store.set_hi s x 7 r);
+  ignore (Store.set_hi s y 7 r);
+  Store.new_level s;
+  ignore (Store.set_hi s x 6 r);
+  check "low water: pushes alone do not lower it" (Store.take_low_water s a = 1);
+  check "low water: and a read resets it to the current length"
+    (Store.take_low_water s a = Store.trail_length s && Store.trail_length s = 4);
+  let b = Store.register_low_water s in
+  (* Pop BELOW the previous read, then push back past it: the mark is the minimum. *)
+  Store.backtrack s;
+  Store.backtrack s;
+  check "low water: trail back at 1" (Store.trail_length s = 1);
+  Store.new_level s;
+  ignore (Store.set_hi s y 5 r);
+  ignore (Store.set_hi s x 5 r);
+  ignore (Store.set_lo s x 1 r);
+  ignore (Store.set_lo s y 1 r);
+  check "low water: grown back past the last read" (Store.trail_length s = 5);
+  check "low water: push, pop below, push again -- the mark is the minimum"
+    (Store.take_low_water s a = 1);
+  check "low water: a second reader sees the same pop, unstolen by the first's read"
+    (Store.take_low_water s b = 1);
+  check "low water: both reset"
+    (Store.take_low_water s a = 5 && Store.take_low_water s b = 5);
+  Store.backtrack_to s 0;
+  check "low water: a pop to the root reaches 1" (Store.take_low_water s a = 1)
+
 let () =
   match Array.to_list Sys.argv with
   | _ :: "--agreeing-push" :: _ -> disagreeing_push ~agree:true ()
@@ -1528,6 +1569,7 @@ let () =
       test_view_constants ();
       test_var_named_index ();
       test_bound_history ();
+      test_low_water ();
       if !failures > 0 then (
         Printf.printf "\n%d failure(s)\n" !failures;
         exit 1)

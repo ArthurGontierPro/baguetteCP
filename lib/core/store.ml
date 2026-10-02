@@ -185,6 +185,16 @@ type t = {
   (* M7-T17. True only inside [deriving_ahead]; [apply] copies it into [entry.ahead].
      Written and restored by the same wrapper in the same call, like [current_prop]. *)
   mutable current_ahead : bool;
+  (* M6-T18. The trail's LOW-WATER MARKS, one per registered reader: reader [r]'s slot is
+     the smallest [trail_len] reached since [r] last called [take_low_water]. Maintained by
+     [undo_to], the only place the trail shrinks, and reset to the current length on
+     read. [Engine.propagate] reads it to find how far a backtrack reached since it last
+     looked: the trail being short tells it a pop happened, but not how far, and a pop
+     followed by pushes back to the same length leaves no trace in [trail_len] at all.
+     One slot PER READER rather than one per store because a read resets the mark, so
+     two engines on one store (a unit test's shape, never a solve's) sharing a slot
+     would each steal the other's pops. See [register_low_water]. *)
+  mutable low_water : int array;
 }
 
 (* A conflict, with the identity of the propagator that reported it.
@@ -287,6 +297,7 @@ let create ~names ~domains =
     n_levels = 0;
     current_prop = no_prop;
     current_ahead = false;
+    low_water = [||];
   }
 
 let n_vars t = Array.length t.domains
@@ -788,7 +799,29 @@ let undo_to t target =
     if Domain.hi e.now < Domain.hi e.old then t.hi_hn.(i) <- t.hi_hn.(i) - 1;
     t.trail.(t.trail_len - 1) <- dummy_entry;
     t.trail_len <- t.trail_len - 1
+  done;
+  let lw = t.low_water in
+  for r = 0 to Array.length lw - 1 do
+    if t.trail_len < lw.(r) then lw.(r) <- t.trail_len
   done
+
+(* M6-T18: a new low-water reader, whose mark starts at the CURRENT trail length -- the
+   reader has seen nothing yet, so nothing has been popped from under it. Returns the
+   handle [take_low_water] takes. *)
+let register_low_water t =
+  let r = Array.length t.low_water in
+  t.low_water <- Array.append t.low_water [| t.trail_len |];
+  r
+
+(* M6-T18: reader [r]'s minimum trail length since its previous call (or since it
+   registered), and reset its mark to the current length. Every trail position below the
+   returned value has been on the trail, UNCHANGED, throughout; every position at or
+   above it may have been popped and pushed again. The trail shrinks only in [undo_to],
+   which lowers every reader's mark, so the mark is exact, not an estimate. *)
+let take_low_water t r =
+  let m = t.low_water.(r) in
+  t.low_water.(r) <- t.trail_len;
+  m
 
 let backtrack t =
   if t.n_levels = 0 then invalid_arg "Store.backtrack: already at level 0";

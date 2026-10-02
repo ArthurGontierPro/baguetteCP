@@ -541,7 +541,7 @@ type pending = int -> Propagator.instance
    teaching [Linear] its own PB row is taught once, here, and reaches all of them. *)
 let pack_linear (lin : Linear.t) : pending =
  fun id ->
-  Propagator.pack ~id
+  Propagator.pack ~id ~idempotent:true
     ~row:(fun store -> Some (Linear.pb_row store lin))
     (module Linear : Propagator.S with type t = Linear.t)
     lin
@@ -625,7 +625,13 @@ let pack_bool2int (p : Bool2int.t) : pending =
 let pack_arith_row (module P : Propagator.S with type t = Linear.t) (lin : Linear.t) :
     pending =
  fun id ->
-  Propagator.pack ~id ~row:(fun store -> Some (Linear.pb_row store lin)) (module P) lin
+  (* M6-T18: a ROW face is [Linear] and makes [pack_linear]'s idempotence claim; the
+     guard faces below are reifications and do not (lib/core/propagator.ml, above
+     [pack]). *)
+  Propagator.pack ~id ~idempotent:true
+    ~row:(fun store -> Some (Linear.pb_row store lin))
+    (module P)
+    lin
 
 let pack_times_row (p : Linear.t) : pending =
   pack_arith_row (module Arith.Times_row : Propagator.S with type t = Linear.t) p

@@ -223,31 +223,54 @@ decision **D-0003**; do not build past M3 without settling it.
 ## 5. Propagation loop
 
 As of M2-T6 (D-0094) `engine.ml` uses a **FIFO** queue of propagator ids. There is no
-cost-class ordering yet. Each `propagate` call, made once per search node, seeds the queue
-with **every** instance. The loop then pops an id and runs that instance, bracketed by
-`Store.with_running` so that each trail entry is stamped with its author (M2-T7). It checks
-that attribution and then re-queues the watchers of each variable the run changed. The trail
-is diffed from the run's starting position, and the walk preserves wake order. Two filters
-drop wakes:
+cost-class ordering yet. Each `propagate` call, made once per search node, walks one **seed
+slot** per instance in id order, ahead of the FIFO. As of M6-T18 (D-0098) it runs only the
+**dirty** slots:
+
+- the instance watches a variable that a trail entry above the last joint fixpoint moved,
+  after the trigger mask has been applied;
+- the instance is not yet **born** at that fixpoint. This covers an instance added with
+  `Engine.add`, and an instance born after a fixpoint that a backjump has since returned to;
+- a run earlier in the same call woke the instance before its slot came up.
+
+The engine records each `Fixpoint` return as a (trail length, epoch) pair. The trail's
+**low-water mark** comes from `Store.take_low_water`, which is per reader and maintained in
+`undo_to`. It tells the engine which of those records are still prefixes of the store's
+trail.
+
+Skipping a clean slot is **exact**. The instance's watched domains are the ones it last
+reached a fixpoint on, and its output depends on nothing else (D-0034, and the audit in
+D-0098). So the run that the old full seed made at that slot pruned nothing. Every run that
+is made happens in the same order, on the same domains, as under the full seed. Trail,
+proof and search are therefore byte-identical, and the no-op runs are gone.
+
+The loop pops an id and runs that instance, bracketed by `Store.with_running` so that each
+trail entry is stamped with its author (M2-T7). It checks that attribution and then
+re-queues the watchers of each variable the run changed. The trail is diffed from the run's
+starting position, and the walk preserves wake order. Two filters drop wakes:
 
 - the **trigger mask** (M2-T5, D-0034) drops a wake by the KIND of change. A `Bounds`
   instance is not woken by an interior hole.
 - the **self-wake veto** (M2-T6) drops a wake by WHO made the change. An instance whose
   idempotence claim (`Propagator.inst_idempotent`) is honoured is not re-woken by its own
   prunings. A claim is honoured only when the instance's scope names no variable twice (the
-  aliased-scope rule).
+  aliased-scope rule). A claim is made at the packing site, `Compile.pack_linear` and
+  `pack_arith_row` (D-0098). It is no longer looked up in a table by name.
 
-Failure aborts the loop and hands the failing `Store.conflict` to `search.ml`. On a
-fixpoint under `BAGUETTE_DEBUG`, `check_fixpoint` re-runs every instance and requires
-nothing to move (I-P2). Every honoured claim is also re-run at the moment the veto relies
-on it (`check_claim`). Under `BAGUETTE_CONSISTENCY` the M2-T10 oracle checks each declared
-level.
+Failure aborts the loop and hands the failing `Store.conflict` to `search.ml`.
+`BAGUETTE_DEBUG` adds three checks:
 
-The engine counts, per engine, runs, effectful runs, contradicting runs, wakes, masked
-wakes, vetoed wakes and seeded runs (`Engine.counters`, printed under `--stats`). Seeding
-accounts for 75–85 % of runs on the measured instances (D-0094). That makes seeding only
-the watchers of what changed since the last fixpoint the next lever. It needs a trail
-low-water mark from `Store`.
+- every skipped seed slot is re-run, and it must prune nothing (`check_skip`);
+- every honoured claim is re-run at the moment the veto relies on it (`check_claim`);
+- on a fixpoint, `check_fixpoint` re-runs every instance and requires that nothing moves
+  (I-P2).
+
+Under `BAGUETTE_CONSISTENCY` the M2-T10 oracle checks each declared level.
+
+`Engine.counters` keeps the following per engine, and `--stats` prints them: runs,
+effectful runs, contradicting runs, wakes, masked wakes, vetoed wakes, seeded runs (seed
+slots actually run) and skipped slots (`c_skipped`, not printed). D-0094 measured seeding
+at 75–85 % of runs. The before and after for the incremental seed are in D-0098.
 
 ## 6. Proof writing
 

@@ -159,8 +159,15 @@ type counters = {
   mutable c_wakes : int;
   mutable c_masked : int;
   mutable c_seeded : int;
-      (** runs SEEDED: [propagate] enqueues every instance on entry, so this grows by
-          [n_instances] per call. [c_runs - c_seeded] is the runs that came from wakes. *)
+      (** runs taken from the SEED: every [propagate] call walks one seed slot per
+          instance, in id order, and runs the slots that are DIRTY (M6-T18: watching a
+          change since the last joint fixpoint, woken before their slot came up, or not
+          yet established). [c_runs - c_seeded] is the runs that came from wakes. Before
+          M6-T18 every slot was run, so this grew by [n_instances] per call. *)
+  mutable c_skipped : int;
+      (** M6-T18: seed slots passed over as CLEAN -- the run the pre-M6-T18 engine made
+          there and that, by [propagate]'s argument, could prune nothing.
+          [c_seeded + c_skipped] is the old [c_seeded]. *)
   mutable c_vetoed : int;
       (** M2-T6 deliverable 2: self-wakes dropped because the instance's idempotence
           claim is honoured ([honours_claim]). Counted apart from [c_masked]: a mask
@@ -175,6 +182,7 @@ let counters_create () =
     c_wakes = 0;
     c_masked = 0;
     c_seeded = 0;
+    c_skipped = 0;
     c_vetoed = 0;
   }
 
@@ -207,7 +215,24 @@ type t = {
       (** M2-T6: id -> whether this instance's own prunings may skip re-waking it, i.e.
           [honours_claim]. Indexed by id like [triggers], grown by [add] like it, and an
           id with no entry is [false]: an unknown instance is re-woken. *)
+  mutable born : int array;
+      (** M6-T18: id -> the [epoch] of the first [Fixpoint] return after which this
+          instance has been at its fixpoint, or [unborn] until there has been one. An
+          instance is known to be at its fixpoint at a recorded fixpoint state only if
+          it was born at or before that state's epoch. Grown by [add] with [unborn]. *)
+  mutable epoch : int;  (** M6-T18: the number of [Fixpoint] returns so far. *)
+  mutable fixpoints : (int * int) list;
+      (** M6-T18: the joint fixpoints this engine has returned whose state is still the
+          store's, as [(trail length, epoch)], most recent first and strictly decreasing
+          in length. See [propagate]. *)
+  mutable seen : (Store.t * int) option;
+      (** M6-T18: the store [propagate] last ran on, and its low-water handle. *)
+  mutable incremental : bool;
+      (** M6-T18: [false] makes every call seed every instance, as before M6-T18. For
+          tests that compare the two; a solve never sets it. *)
 }
+
+let unborn = max_int
 
 (* M2-T6: THE SELF-WAKE VETO, and the aliased-scope rule that guards it.
 
@@ -274,8 +299,14 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
     triggers;
     ctr = counters_create ();
     veto;
+    born = Array.make (Array.length triggers) unborn;
+    epoch = 0;
+    fixpoints = [];
+    seen = None;
+    incremental = true;
   }
 
+let set_incremental t b = t.incremental <- b
 let n_instances t = Array.length t.instances
 let counters t = t.ctr
 
@@ -341,7 +372,15 @@ let add ?(trigger = default_trigger) (t : t) (inst : Propagator.instance) =
     let grown = Array.make (inst.Propagator.id + 1) false in
     Array.blit t.veto 0 grown 0 (Array.length t.veto);
     t.veto <- grown);
-  t.veto.(inst.Propagator.id) <- honours_claim inst
+  t.veto.(inst.Propagator.id) <- honours_claim inst;
+  (* M6-T18: a new instance has never run, so it is at its fixpoint at no state: it is
+     seeded by the next [propagate] whatever else changed, and after any later backjump
+     to a fixpoint older than the one it is born at. *)
+  if Array.length t.born <= inst.Propagator.id then (
+    let grown = Array.make (inst.Propagator.id + 1) unborn in
+    Array.blit t.born 0 grown 0 (Array.length t.born);
+    t.born <- grown);
+  t.born.(inst.Propagator.id) <- unborn
 
 (* The variables an instance watches, or [None] if this engine has no such instance.
 
@@ -589,8 +628,8 @@ let check_claim (inst : Propagator.instance) (store : Store.t) : unit =
             "M2-T6: propagator #%d %s claims single-call idempotence, and the engine \
              skipped re-waking it off its own prunings on the strength of that claim -- \
              but run again at once, with nothing else changed, it %s. The claim is wrong \
-             for this instance (see Propagator.idempotent_families and the family's own \
-             header); remove it rather than this check."
+             for this instance (see the comment above Propagator.pack, the packing site \
+             and the family's own header); remove it rather than this check."
             inst.Propagator.id inst.Propagator.inst_name what))
   in
   match
@@ -933,13 +972,126 @@ let check_consistency_exn (t : t) (store : Store.t) : unit =
   | [] -> ()
   | v :: _ -> raise (Weaker_than_declared v)
 
-(* Run every propagator to a joint fixpoint (invariant I-P2): a FIFO queue seeded with
-   every instance, so nothing is skipped on the first pass, and thereafter re-fed only
-   by the watchers of variables a run actually changed. *)
+(* M6-T18: THE INCREMENTAL SEED, and why it is the full seed with the no-op runs removed.
+
+   Until M6-T18 [propagate] enqueued every instance, in id order, on every call, and then
+   fed the FIFO with the watchers of what each run changed. D-0094 measured the seed at
+   75-85 % of all runs, and nearly all of those runs change nothing: at a search node only
+   the decision and its consequences are new, and a propagator that watches none of it is
+   still at the fixpoint it reached at the parent.
+
+   This engine walks the same seed -- one SLOT per instance, in id order, ahead of the
+   FIFO -- and runs a slot only if its instance is DIRTY:
+
+   (a) it watches a variable that a trail entry ABOVE THE LAST VALID FIXPOINT moved, with
+       M2-T5's trigger mask applied ([seed_dirty]);
+   (b) it is not known to be at its fixpoint at that fixpoint: not BORN at or before it
+       (a learned constraint [add]ed since, or one born after a fixpoint a backjump has
+       now gone back to); or
+   (c) a run earlier in this call woke it before its slot came up. The full seed had it in
+       the queue already, so the wake was deduplicated and it ran AT ITS SLOT; marking it
+       dirty does exactly that. A wake for a slot already passed goes to the FIFO, as it
+       did before.
+
+   A clean slot is skipped. Skipping is exact, not approximate: a clean instance's watched
+   domains are what they were at a joint fixpoint (nothing above it moved them, by (a) and
+   (c)), it was at its fixpoint there (by (b) and I-P2 at that return), and its output is
+   a function of its watched domains (D-0034; the audit is D-0098's table). So the full
+   seed's run at that slot would have pruned nothing, written nothing and woken nothing,
+   and every run that IS made happens in the same order, on the same domains, as before.
+   The trail, the proof and the search are the old engine's, minus its no-op runs.
+
+   Which fixpoint is "the last valid one" is the low-water mark's job. [fixpoints] holds
+   the [(trail length, epoch)] of every [Fixpoint] return whose state is still a prefix of
+   the store's trail. The store's domains are a function of the trail, so a recorded state
+   is still the store's exactly when no pop has gone below its length -- and
+   [Store.take_low_water] says how far the pops went since the last call. Drop the records
+   above it; the top one left is a joint fixpoint of the current trail, and everything
+   above it is what changed. No assumption about where [Search] pops to is needed: a pop
+   to a non-fixpoint position just leaves a little more of the trail to scan.
+
+   BAGUETTE_DEBUG checks the argument where it is relied on: every skipped slot is run
+   ([check_skip]) and must prune nothing, and [check_fixpoint] still re-runs everything at
+   the end. A starved instance is caught at the slot it was skipped at, before any later
+   wake could cover it up. *)
+
+let seed_dirty t store ~since ~(dirty : bool array) =
+  let n = Array.length dirty in
+  for i = Store.trail_length store - 1 downto since do
+    let e : Store.entry = Store.trail_entry store i in
+    match Hashtbl.find_opt t.watchers e.var with
+    | None -> ()
+    | Some ids ->
+        let change = Domain.classify ~old:e.old ~now:e.now in
+        List.iter
+          (fun id ->
+            if id >= 0 && id < n && wakes_on (trigger_of t id) change then
+              dirty.(id) <- true)
+          ids
+  done
+
+(* M6-T18: under BAGUETTE_DEBUG, the run a skipped slot would have made under the old
+   full seed, made after all, and required to do nothing. Same exception and same
+   no-write property as [check_claim]; not counted. *)
+let check_skip (inst : Propagator.instance) (store : Store.t) : unit =
+  let before = Store.trail_length store in
+  let fail what =
+    raise
+      (Not_at_fixpoint
+         (Printf.sprintf
+            "M6-T18: propagator #%d %s was skipped by the incremental seed as CLEAN -- \
+             none of its watched variables moved since a joint fixpoint it was at -- but \
+             run at its seed slot it %s. Either it reads something it does not watch \
+             (D-0034: the watch is the declaration of what it reads; see D-0098's audit) \
+             or the seed's low-water bookkeeping is wrong. Fix the watch, not this \
+             check."
+            inst.Propagator.id inst.Propagator.inst_name what))
+  in
+  match
+    Store.with_running store inst.Propagator.id (fun () -> inst.Propagator.run store)
+  with
+  | Propagator.Conflict _ -> fail "reported a CONFLICT"
+  | Propagator.Fixpoint ->
+      if Store.trail_length store > before then
+        let e : Store.entry = Store.trail_entry store before in
+        fail
+          (Printf.sprintf "pruned %s from %s to %s" (Store.name store e.var)
+             (Domain.to_string e.old) (Domain.to_string e.now))
+
+(* Run every propagator to a joint fixpoint (invariant I-P2): the seed slots in id order
+   (only the dirty ones run, see above), then the FIFO, re-fed only by the watchers of
+   variables a run actually changed. *)
 let propagate (t : t) (store : Store.t) : outcome =
   let n = n_instances t in
   if n = 0 then Fixpoint
   else
+    let dirty = Array.make n false in
+    (* The epoch of the fixpoint the seed is relative to, or -1 when there is none and
+       every slot is dirty. *)
+    let since_epoch =
+      match t.seen with
+      | Some (s, h) when s == store && t.incremental -> (
+          let lw = Store.take_low_water store h in
+          let rec drop = function
+            | (len, _) :: rest when len > lw -> drop rest
+            | l -> l
+          in
+          t.fixpoints <- drop t.fixpoints;
+          match t.fixpoints with
+          | [] -> -1
+          | (since, e) :: _ ->
+              seed_dirty t store ~since ~dirty;
+              for id = 0 to n - 1 do
+                if t.born.(id) > e then dirty.(id) <- true
+              done;
+              e)
+      | _ ->
+          t.seen <-
+            (if t.incremental then Some (store, Store.register_low_water store) else None);
+          t.fixpoints <- [];
+          -1
+    in
+    if since_epoch < 0 then Array.fill dirty 0 n true;
     let in_queue = Array.make n false in
     let queue = Queue.create () in
     let enqueue id =
@@ -947,14 +1099,12 @@ let propagate (t : t) (store : Store.t) : outcome =
         in_queue.(id) <- true;
         Queue.push id queue)
     in
-    Array.iter
-      (fun (inst : Propagator.instance) -> enqueue inst.Propagator.id)
-      t.instances;
-    t.ctr.c_seeded <- t.ctr.c_seeded + Queue.length queue;
+    (* Seed slots below [cursor] have been passed; a wake for one at or above it is a
+       wake the full seed's queue would have deduplicated (rule (c) above). *)
+    let cursor = ref 0 in
+    let wake id = if id >= !cursor && id < n then dirty.(id) <- true else enqueue id in
     let conflict = ref None in
-    while Option.is_none !conflict && not (Queue.is_empty queue) do
-      let id = Queue.pop queue in
-      in_queue.(id) <- false;
+    let run_one id =
       let inst = t.instances.(id) in
       let before = Store.trail_length store in
       incr runs;
@@ -977,8 +1127,33 @@ let propagate (t : t) (store : Store.t) : outcome =
           if pruned then t.ctr.c_effectful <- t.ctr.c_effectful + 1;
           if pruned && Debug.enabled && vetoes_self t id then check_claim inst store;
           let woken = watchers_of_new_entries ~self:id t store ~since:before in
-          List.iter enqueue woken
+          List.iter wake woken
+    in
+    while Option.is_none !conflict && !cursor < n do
+      let id = !cursor in
+      incr cursor;
+      if dirty.(id) then (
+        t.ctr.c_seeded <- t.ctr.c_seeded + 1;
+        run_one id)
+      else (
+        t.ctr.c_skipped <- t.ctr.c_skipped + 1;
+        if Debug.enabled then check_skip t.instances.(id) store)
     done;
+    while Option.is_none !conflict && not (Queue.is_empty queue) do
+      let id = Queue.pop queue in
+      in_queue.(id) <- false;
+      run_one id
+    done;
+    (* Reset the low-water mark HERE, at the end of the call, and not only at its start:
+       the next call must see the pops since this call RETURNED. Read only at the start,
+       the mark would still stand at this call's starting length, below every fixpoint
+       recorded at the end of it, and the next call would drop that record and fall back
+       to the full seed -- conservative, so never wrong, but it threw away most of the
+       gain on mario until it was measured (D-0098). [propagate] never pops, so this
+       read loses nothing. *)
+    (match t.seen with
+    | Some (s, h) when s == store -> ignore (Store.take_low_water store h)
+    | _ -> ());
     match !conflict with
     | Some c -> Conflict c
     | None ->
@@ -986,6 +1161,20 @@ let propagate (t : t) (store : Store.t) : outcome =
            return: I-P2 says nothing about a [Conflict], and re-running propagators
            against a store that has already failed would be meaningless. *)
         if Debug.enabled then check_fixpoint t store;
+        (* M6-T18: record this state as a joint fixpoint. Every instance is at its
+           fixpoint here (I-P2); one not known at the fixpoint the seed started from is
+           born now. A record at the same length is the same state, so it is replaced. *)
+        if t.incremental then (
+          let e = t.epoch + 1 in
+          t.epoch <- e;
+          for id = 0 to n - 1 do
+            if t.born.(id) > since_epoch then t.born.(id) <- e
+          done;
+          let len = Store.trail_length store in
+          t.fixpoints <-
+            (match t.fixpoints with
+            | (l, _) :: rest when l = len -> (len, e) :: rest
+            | l -> (len, e) :: l));
         (* M2-T10. Here and not in [Search]: "at a fixpoint" is a property this loop
            knows and its caller can only assume, and this is the same return that I-P2
            is checked on, for the same reason -- both are statements about the state the

@@ -109,33 +109,27 @@ type instance = {
 
 let no_row : Store.t -> pb_row option = fun _ -> None
 
-(* M2-T6. Which families make the single-call idempotence claim, by the [name] they are
-   packed under, until the packing sites pass [~idempotent] themselves.
+(* M2-T6 / M6-T18. The single-call idempotence claim is made AT THE PACKING SITE, by
+   passing [~idempotent:true], and nowhere else. It used to be a table by packed name
+   ([int_lin_le], [int_le], [int_lt]); a name could not tell the arithmetic ROW faces
+   ([Arith.Times_row] and friends, which are [Linear.t] and qualify) from the arithmetic
+   GUARD faces (reifications, which do not), because they share their builtin names. The
+   packing site knows which one it is packing, so the claim lives there now:
+   [Compile.pack_linear] and [Compile.pack_arith_row] claim it, every other site does not.
 
-   ONLY [Linear] and its two thin faces, and the argument is [linear.ml]'s own header
-   (lines 22-29): the slack is computed once from every term's MINIMUM contribution, the
-   push on term i reads only the other terms' minima, and tightening x_i's upper bound
-   (a_i > 0) or lower bound (a_i < 0) never moves x_i's own minimum -- so after one pass
-   no term's bound can move again. That argument is about DISTINCT variables; with one
-   variable in two terms of opposite sign, tightening it through one term moves the
-   other term's minimum. That is the aliased-scope case, and [Engine] refuses the claim
-   for it rather than trusting this table.
-
-   Every `int_lin_le` instance in a compiled model is packed under that name
-   ([Compile.pack_linear], both halves of an `int_lin_eq` included). The arithmetic rows
-   ([Arith.Times_row] and friends) are [Linear.t] too and would qualify, but they share
-   their names with the arithmetic guard faces, which are reifications and do not; a
-   name table cannot tell them apart, so they are left unclaimed, which is the safe side.
-   [Pb] (a learned row over order LITERALS, several of which may be rungs of one
-   variable's ladder -- aliasing by construction), [Ne], the clause family, [Reif],
-   [Alldiff] (two stages, the second deliberately not claiming), [Gcc], [Element] and
-   [Bool2int] make no claim. A name added here is a claim made for every instance packed
-   under it; prove it in the family's header first. *)
-let idempotent_families = [ "int_lin_le"; "int_le"; "int_lt" ]
-let claims_idempotence name = List.mem name idempotent_families
-
-let pack (type a) ?(row = no_row) ?idempotent ~id (module P : S with type t = a) (p : a) :
-    instance =
+   The argument for [Linear] is its own header (linear.ml:22-29): the slack is computed
+   once from every term's MINIMUM contribution, the push on term i reads only the other
+   terms' minima, and tightening x_i's upper bound (a_i > 0) or lower bound (a_i < 0)
+   never moves x_i's own minimum -- so after one pass no term's bound can move again.
+   That argument is about DISTINCT variables, and [Engine.honours_claim] refuses the
+   claim for an aliased scope rather than trusting the packing site. [Pb] (aliasing by
+   construction: several literals can be rungs of one ladder), [Ne], the clause family,
+   [Reif], [Alldiff] (two stages, the second deliberately not claiming), [Gcc],
+   [Element], [Maxmin] and [Bool2int] make no claim. The default is [false]: an instance
+   whose packing site says nothing is re-woken off its own prunings, which is never
+   unsound, only slower. *)
+let pack (type a) ?(row = no_row) ?(idempotent = false) ~id (module P : S with type t = a)
+    (p : a) : instance =
   {
     id;
     inst_name = P.name;
@@ -143,6 +137,5 @@ let pack (type a) ?(row = no_row) ?idempotent ~id (module P : S with type t = a)
     inst_vars = P.vars p;
     run = (fun store -> P.propagate p store);
     inst_row = row;
-    inst_idempotent =
-      (match idempotent with Some b -> b | None -> claims_idempotence P.name);
+    inst_idempotent = idempotent;
   }
