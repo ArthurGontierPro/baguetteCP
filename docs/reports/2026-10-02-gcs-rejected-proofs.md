@@ -4,6 +4,13 @@
 Everything here is reproducible from the commands in §4; the artefacts are kept on
 `fataepyc-07` under `/scratch/arthur/compare-out-w31/log/<instance>.gcs.{opb,pbp,vp,out,err,scp,varmap}`.*
 
+> **Update, 2026-10-02 evening.** The GCS authors pointed out that our VeriPB build (Rust,
+> source `78db9573`, 2026-06-18) predates `4c4b92c7` (2026-06-22, "never reset trailhead to
+> higher position than current"), before which `move to core` could drop watches and make a
+> valid `rup` step fail. Both machines now run source `d5644ca4` (2026-09-04); the 16 proofs
+> below are being re-checked with it and this report will be revised with the new verdicts
+> (D-0100). Until then the table is a report on the June checker as much as on GCS.
+
 ## 1. Summary
 
 While comparing three solvers on the MiniZinc Challenge corpus (436 models, 2008–2026, one
