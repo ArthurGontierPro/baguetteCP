@@ -343,8 +343,10 @@ def report(outdirs, pinned=None, timeout=None):
     # Duplicates are judged WITHIN one table: the same (id, solver) in two runs passed
     # together is two measurements, not a collision.
     dups = 0
+    tables = []  # (outdir, rows), in the order given: the regression section below
     for od in outdirs:
         rows, done = load(od)
+        tables.append((od, rows))
         conf = load_conf(od)
         print("== %s" % od)
         if done:
@@ -368,6 +370,33 @@ def report(outdirs, pinned=None, timeout=None):
         by.setdefault(r["id"], {})[r["solver"]] = r
         every.setdefault(r["id"], []).append(r)
     solvers = [s for s in SOLVERS if any(s in v for v in by.values())]
+    # Regressions between two tables of the SAME solver (2026-10-02, after the user asked
+    # whether fewer passing proofs were being let through): when a solver appears in two
+    # or more of the tables passed, the first is the baseline and the last the candidate.
+    # An instance SOLVED in the baseline and not in the candidate, or VERIFIED and no
+    # longer, is a regression, listed by name like a DISAGREE and failing the report's
+    # exit status. Gains are counted beside it so the two cannot be confused.
+    for s in solvers:
+        with_s = [(od, {r["id"]: r for r in rows if r["solver"] == s}) for od, rows in tables]
+        with_s = [(od, m) for od, m in with_s if m]
+        if len(with_s) < 2:
+            continue
+        (od0, a), (od1, b) = with_s[0], with_s[-1]
+        lost_solved = sorted(i for i, r in a.items()
+                             if solved(r) and i in b and not solved(b[i]))
+        lost_verified = sorted(i for i, r in a.items()
+                               if r["check_verdict"] == "VERIFIED" and i in b
+                               and b[i]["check_verdict"] != "VERIFIED")
+        gained = sum(1 for i, r in b.items() if solved(r) and i in a and not solved(a[i]))
+        print()
+        print("== regressions for %s, %s -> %s: %d solved LOST, %d verified LOST, %d solved gained"
+              % (s, od0, od1, len(lost_solved), len(lost_verified), gained))
+        for i in lost_solved:
+            print("  LOST-SOLVED   %s: %s -> %s" % (i, a[i]["status"], b[i]["status"]))
+        for i in lost_verified:
+            print("  LOST-VERIFIED %s: %s -> %s" % (i, a[i]["check_verdict"], b[i]["check_verdict"]))
+        if lost_solved or lost_verified:
+            ok = False
     # Agreement over EVERY row of an instance, so tables passed together are judged
     # together (the pilot's chuffed row and the Chuffed pass's both count).
     verdicts = {i: agreement(every[i]) for i in by}
