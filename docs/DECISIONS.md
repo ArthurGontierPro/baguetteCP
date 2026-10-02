@@ -7656,3 +7656,79 @@ come from `Trace`. A DWARF call-graph sample attributes 83 % of it to an anonymo
 `Analysis`. That is almost certainly `lib/core/analysis.ml:395`'s node merge, `out @ [ n ]`
 after a `List.map` with `same_slot`, which is quadratic in the frontier. Filed as a request,
 because `analysis.ml` is not this row's file.
+
+## D-0092  M6-T16: `Analysis` merges its frontier and accumulates its antecedents in linear time
+
+**Date.** 2026-10-02. **Row.** M6-T16 (agent-speed5, `wave37-speed5`), from D-0090's request.
+
+**The finding.** After M6-T15, `Stdlib.@` was the top self-time symbol on 2014_mario (9.3 %), and
+83 % of it was in `Analysis`. Each resolution step folded `add_node` over the facts it added.
+`add_node` maps the whole frontier with `same_slot` and then appends with `out @ [ n ]`, so one
+step costs O(|frontier| x |facts|). `add_antecedent` used `List.mem` and then `@`, and `folds`
+was appended with `@` as well.
+
+**Mechanism.**
+- `Analysis.Frontier` holds a list of mutable CELLS in frontier order, plus one monomorphic
+  `Hashtbl.Make(String)` table per bound direction that maps a variable's name to its cell. The
+  table lives for one `analyse` call. An incoming fact whose slot is already present merges into
+  that cell in place, as `stronger existing new`. On a tie this keeps the existing node, exactly as
+  `add_node` did. A fact on a new slot gets a new cell, appended after every existing cell in
+  first-arrival order. Later facts on that slot merge into the cell and do not move it.
+  **Position goes to the first occurrence; `stronger` decides the content.** `Frontier.remove` is
+  the expansion step's `List.filter` on slot and value. It also drops the cell's table entry, so a
+  later fact on the expanded slot is treated as a new slot and goes at the end, as before. `mk_node`
+  still runs once per fact, in order, so its counters and its `Bad` exception fire in the same order.
+- `Analysis.Uniq` is an insertion-ordered int set (a `Hashtbl` beside a reversed list). It returns
+  elements in first-occurrence order, which is what `List.mem`/`@` produced. `folds` is a reversed
+  accumulator, reversed once at the end.
+- `add_node` stays as the SPECIFICATION. `test_analysis` builds a frontier by hand that covers every
+  case: in-place strengthening, a tie, a weaker fact, a new slot merged again later, both bounds of
+  one variable, an empty frontier, and remove-then-re-add. It checks that the sequence matches the
+  `add_node` fold and a hand-written expected string. A second check compares `Uniq` with the old
+  `List.mem`/`@` and with a literal list. To show the tests can fail, three mutants were built.
+  Swapping the tie made 3 checks fail. Dropping fresh cells crashed the binary. Dropping the table
+  removal in `remove` failed the re-add check, and two scene-2 checks failed with it.
+
+**A first version was rejected, and the reason is the lesson.** The first version rebuilt a
+polymorphic `(string * bool) Hashtbl` from the whole frontier at every step. It was byte-identical
+(NEW md5 `d7c7d33d…`) and gave 1.36x on mario, but **0.91x on 2023_chessboard**, reproduced three
+times (3004/2996/3019 old vs 2713/2740/2736 new). In chessboard's profile, `caml_hash` (4.8 %),
+`compare_val` (3.1 %) and `caml_hash_mix_string` (2.5 %) replaced the `same_slot`/`String.equal`
+scans. Re-hashing every frontier node on every step with tuple keys and polymorphic compare cost
+more than chessboard's short scans. The persistent table with monomorphic keys hashes only incoming
+facts.
+
+**Byte identity.** `bench/m6t11/byte_identity.sh` reports **BYTE-IDENTICAL, 396 artefacts over
+132 models**. OLD is `63ca870` (local md5 `8f84d6f6…`) and NEW is `47a4e2c` (local md5 `34f25113…`).
+
+**On the node** (fataepyc-07, `--time-limit 55 --stats --proof`, `ulimit -v 32000000`, two rounds
+of four jobs each). Both binaries were built from `/scratch/arthur/baguette-speed5{,-base}`. OLD is
+`63ca870` (md5 `71b2f9f3…`, the same md5 as D-0090's NEW) and NEW is `47a4e2c` (md5 `59eb7654…`).
+
+| instance | OLD nodes / 55 s (r1, r2) | NEW nodes / 55 s (r1, r2) | ratio |
+|---|---|---|---|
+| 2014_mario | 2534, 2581 | 3576, 3569 | 1.40x |
+| 2023_chessboard | 3037, 3048 | 3250, 3253 | 1.07x |
+
+veripb 3.0.2 on the NEW r1 proofs: chessboard `s VERIFIED NO CONCLUSION` (22 s, 105 MB). mario:
+`s VERIFIED NO CONCLUSION` (732 s, 206 MB).
+
+**What remains** (60 s `perf record -g -F 999` on NEW, 2014_mario). `Stdlib.@` fell from 9.3 % to
+about 1.0 % (`@_dps` 0.79 %, `@` 0.22 %). All of `Analysis` together is about 1.6 % inclusive. The
+top four self-time symbols are now `caml_apply2` 7.0 % (closure dispatch, under
+`Search.branch_split`), `Alldiff.go` 4.7 %, `caml_hash` 4.1 % and `compare_val` 3.6 %. Next come
+`Hashtbl.do_bucket` 3.0 %, `Store.trail_entry` 2.7 %, GC (`oldify_one`, `do_some_marking`,
+`caml_shared_try_alloc`, each about 2 %) and `Store.remover` 2.1 %. A DWARF sample gives only
+partial unwinds. Where it does unwind, the generic hashing (`caml_hash`, `compare_val`,
+`Hashtbl.do_bucket`/`fold`/`filter_map_inplace`) sits under `Justify`'s memo and
+`Justify.wipe_level`/`Writer.wipe_level` (about 2.1–2.5 % inclusive each). It does not sit under
+`Analysis`.
+
+**The profile is now flat.** No symbol is above 7 %, and the leaders are generic runtime costs:
+closure application, polymorphic hashing and compare, and GC. They are spread over `Search`,
+`Justify`, `Writer` and `Alldiff`, with no single quadratic hotspot left. This is the point where
+constant-factor work stops paying for itself one row at a time. What remains are the design-level
+proposals in D-0085/D-0087: a watched-slack PB/linear propagation, and a priority structure for the
+default `first_fail` in place of a per-node scan over all variables. The one constant-factor lead
+left is that the `wipe_level` tables in `Justify`/`Writer` are generic `Hashtbl`s, folded or
+filtered whole at every backtrack. It is filed as a request, because those files are not this row's.

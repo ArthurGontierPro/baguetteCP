@@ -747,6 +747,7 @@ work. The owning session picks it up.
 | **M6-T14 / D-0088**: after the support and remover histories, 40 % of 2014_mario's self time is `Trace.position_of`, a linear walk over `done_` by physical identity, run once per entry a settle reaches. Another 5 % is `Stdlib.@`, from `Trace.add_fact`'s `acc @ [l]`, which is quadratic in the fact count. A per-entry position (the trail index is known where `done_` is written), or a physical-key table, makes the first O(1). | `lib/core/trace.ml` | agent-speed3 | **taken 2026-10-02** by M6-T15 (agent-speed4, wave 36) |
 | **M6-T14**: under `BAGUETTE_DEBUG=1`, four suite models die on the D-0026 agreement check (`reason [-] vs justification combine(...)`): `alldiff_regin_hole_element_unsat`, `element_crossed_root_unsat`, `element_moved_unsat`, `element_shared_result_root_unsat`. The base binary (`main` before M6-T14) dies the same way, so this predates M6-T14. Some element (or Regin) pruning records `Reason.none` while its justification is a full derivation. | `lib/core/prop/element.ml` (or `alldiff.ml`) | agent-speed3 | **taken 2026-10-02** by M6-T8 (agent-debug, wave 36) |
 | **M6-T15 / D-0090**: once `Trace.position_of` is gone, the top symbol on 2014_mario is `Stdlib.@` at 9.3 % self. A DWARF call graph puts 83 % of it under an anonymous function in `Analysis`, almost certainly the node merge at `lib/core/analysis.ml:395` (`out @ [ n ]` after a `List.map ... same_slot`, which is quadratic in the frontier; `Analysis.same_slot` and `fun_1270` are another 2.9 % and 2.8 %). `add_antecedent` at :407 has the same `@ [ p ]` shape. An indexed frontier, or a reversed list, would make it linear. Byte identity is the proof, as for M6-T14 and M6-T15. | `lib/core/analysis.ml` | agent-speed4 | **taken 2026-10-02** by M6-T16 (agent-speed5, wave 37) |
+| **M6-T16 / D-0092**: after M6-T16 mario's profile is flat (top `caml_apply2` 7.0 %, `Alldiff.go` 4.7 %, `caml_hash` 4.1 %, `compare_val` 3.6 %). The one constant-factor lead left: `Writer.wipe_level` (`lib/proof/writer.ml:727`) `Hashtbl.fold`s the WHOLE `t.tags` table and sorts it at every backtrack, and `Justify.wipe_level` (`lib/core/justify.ml:235`) folds all of `memo.by_level`. Both are generic polymorphic `Hashtbl`s (about 2.1–2.5 % inclusive each, partial DWARF unwinds). A per-level bucket would make a wipe proportional to what it deletes. This is for whoever holds `writer.ml`/`justify.ml`, with byte identity as the contract. Beyond that, the remaining work is design-level (D-0085/D-0087). | agent-speed5 | 2026-10-02 |
 
 ## Completed
 
@@ -852,6 +853,7 @@ work. The owning session picks it up.
 | M6-T13 | agent-speed2 | 2026-10-02 | **D-0087**. (i) `Search.sequence` records a STAGED form (ephemeron, physical key) that `dfs` asks first; `unfixed store` is built only when every phase is exhausted -- `ne 7 2000` 3.49 -> 1.28 s cpu, padding-independent. (ii) `Opb.Names` string-specialised tables (still keyed on the RENDERED name), no `Printf` per term -- wide 400x300 1.21x. Both byte-identical, 411 artefacts / 137 models (`e3a4a689` -> `c7d41e10`). (iii) `mznlib/fzn_global_cardinality_low_up.mzn`, lanes `gcc_low_up_{sat,unsat}` (hand-written, proofs VERIFIED), `check_mznlib.sh` MUST-EMIT/MUST-NOT-EMIT/SOLVES-AS -- UNFLATTENED-UNTESTED |
 | M6-T14 | agent-speed3 | 2026-10-02 | **D-0088**. Per-variable trail histories (`lo_hist`/`hi_hist`/`all_hist`) in `Store`. `bound_support`, `remover` and `Pb_analysis.falsified_at` are binary searches. The scans remain one wave as `BAGUETTE_DEBUG` cross-checks. 396 artefacts byte-identical. Node, 55 s: 2014_mario 262 -> 1494 nodes, 2023_chessboard 1486 -> 1806. |
 | M6-T15 | agent-speed4 | 2026-10-02 | **D-0090**. `Store.entry.pos`, the entry's own trail position, makes `Trace.position_of` O(1) with no second map and no new wipe rule. The old walk stays one wave as the `BAGUETTE_DEBUG` cross-check and test_trace's oracle. `add_fact` and `settle_facts` use reversed accumulators. 396/396 artefacts byte-identical. Node, 55 s: 2014_mario 1697 -> 2575 nodes, 2023_chessboard 3003 -> 3027. |
+| M6-T16 | agent-speed5 | 2026-10-02 | **D-0092**. `Analysis.Frontier` is persistent cells plus a per-bound monomorphic `String` table, and it replaces the per-step `add_node` fold (`List.map` + `@`). `Analysis.Uniq` replaces `List.mem`/`@` for antecedents, and `folds` is a reversed accumulator. `add_node` stays as the reference, and `test_analysis` compares the two. 396 artefacts byte-identical. Node: mario 1.40x, chessboard 1.07x (a first per-step tuple-Hashtbl version was 0.91x on chessboard and was replaced). Profile now flat. |
 
 ## Handoff notes
 
@@ -3736,3 +3738,22 @@ header no longer says otherwise.
   which predates M6-T14, so OLD was built from `6b277a7` in `/scratch/arthur/baguette-speed4`.
 - Next on mario: `Stdlib.@` at 9.3 %, now from `Analysis`'s node merge (`analysis.ml:395`).
   Filed as a request.
+
+## M6-T16 handoff, 2026-10-02 (agent-speed5)
+
+- `Analysis.analyse` now runs `Analysis.Frontier`: mutable cells in frontier order, plus one
+  `Hashtbl.Make(String)` table per bound direction. The table lives for one `analyse`. `Uniq` holds
+  the antecedents, and `folds` is a reversed accumulator. The semantics are those of `add_node`:
+  first occurrence keeps the position, `stronger` decides the content, and a tie keeps the existing
+  node. Expanding a node removes its slot, so a later fact on that slot is appended at the end.
+  `add_node` stays as the specification, and test_analysis compares the two on a hand-built
+  frontier.
+- Byte identity is 396/396 (OLD `8f84d6f6`, NEW `34f25113`). On the node, mario goes from about
+  2550 to about 3570 nodes in 55 s and chessboard from about 3040 to about 3250. **Trap**: a
+  polymorphic `(string * bool) Hashtbl` rebuilt every step was byte-identical but 0.91x on
+  chessboard, because `caml_hash` and `compare_val` cost more than the short scans. Use monomorphic
+  keys and hash only what is new.
+- The mario profile is now flat: no symbol is above 7 %, and generic hashing, closures and GC are
+  spread over Search, Justify, Writer and Alldiff. The last constant-factor lead is the
+  `wipe_level` whole-table folds in Writer/Justify, filed as a request. After that, D-0085/D-0087's
+  design proposals are what remains.
