@@ -83,7 +83,8 @@
 #   OK-PROOF-VERIFIED  solved AND veripb accepted the proof. The only success.
 #   PROOF-REJECTED     solved, veripb REJECTED. Its own bucket. Never a failure
 #                      bucket, never merged, and the proof is KEPT for inspection.
-#   TIMEOUT-CHECK      veripb exceeded $CHECK_TIMEOUT -- says nothing either way
+#   TIMEOUT-CHECK      veripb exceeded $CHECK_TIMEOUT -- says nothing either way; the
+#                      .opb/.pbp are KEPT so a longer check can settle it (2026-10-02)
 #   CHECK-ERR-<rc>     M6-T9: veripb exited non-zero WITHOUT "Verification error"/"Checking error"
 #                      -- it crashed or was killed, it did not judge. Never folded
 #                      into PROOF-REJECTED, which is gated on that wording.
@@ -700,8 +701,12 @@ $(head -c 120 "$L.mzn.err" | tr '\t\n\r' '   ')"
   if [ "$rc" -eq 124 ]; then
     # Not a rejection. A checker that ran out of time has said nothing about the
     # proof, and folding it into PROOF-REJECTED would manufacture a defect.
+    # The artefacts are KEPT (2026-10-02): an unchecked proof is the one thing a
+    # longer check can still settle, and when wave 36 left 25 solved instances in
+    # this bucket their proofs were already gone, so re-checking them meant
+    # re-solving under a different load -- and 7 of the first 10 did not even
+    # finish that time. Disk is the price: these proofs run 30 MB to 2.4 GB each.
     emit "$id" "TIMEOUT-CHECK" "$sz" "$pbp" "veripb exceeded ${CHECK_TIMEOUT}s"
-    cleanup_one "$L"
     return
   fi
   # M6-T9. A checker that exits non-zero WITHOUT its judgement wording did not
