@@ -643,8 +643,81 @@ let test_lits_are_the_negated_cut () =
     (String.concat " " (List.map Lit.to_string (Analysis.lits t))
     = "~b_ge_3 ~e_ge_3 e_ge_4")
 
+(* M6-T16 (D-0092). [analyse] no longer folds [add_node] (map + [@] per fact) or builds
+   its antecedents with [List.mem]/[@]; it runs [merge_nodes] and [Uniq]. The contract is
+   that every consumer sees the SAME SEQUENCE, so each is compared against the old shape,
+   rebuilt here literally, on a hand-built frontier that exercises every case: a merge
+   that strengthens in place, a merge that keeps the existing node on a tie and on a
+   weaker fact, a new slot, a new slot merged again later (it must not move), both bounds
+   of one variable as distinct slots, and an empty [rest]. *)
+let test_merge_nodes_is_the_add_node_fold () =
+  let node ?(support = 0) ?(level = 0) fact =
+    { Analysis.fact; level; support; implied_by = Store.no_prop; root = false }
+  in
+  let ge ?support name value = node ?support (Reason.At_least { name; value; decl = 0 })
+  and le ?support name value = node ?support (Reason.At_most { name; value; decl = 9 }) in
+  let render ns =
+    String.concat " "
+      (List.map
+         (fun n ->
+           Printf.sprintf "%s@%d"
+             (Reason.fact_to_string n.Analysis.fact)
+             n.Analysis.support)
+         ns)
+  in
+  (* The supports tag each node, so a tie that kept the wrong one of two equal facts
+     shows up in the rendering. *)
+  let rest = [ ge "a" 2 ~support:1; le "b" 5 ~support:2; ge "c" 1 ~support:3 ] in
+  let incoming =
+    [
+      ge "a" 4 ~support:10 (* strengthens a's slot in place *);
+      le "b" 5 ~support:11 (* a tie: the existing b@2 stays *);
+      ge "d" 3 ~support:12 (* new slot *);
+      le "a" 7 ~support:13 (* the OTHER bound of a: a distinct, new slot *);
+      ge "c" 0 ~support:14 (* weaker: c@3 stays *);
+      ge "d" 6 ~support:15 (* strengthens the new d slot; d must not move *);
+      le "b" 3 ~support:16 (* strengthens b *);
+      ge "e" 1 ~support:17;
+      le "a" 8 ~support:18 (* weaker upper bound: a<=7 stays *);
+      ge "e" 1
+        ~support:19 (* a tie on a fresh slot that nothing later touches: e@17 stays *);
+    ]
+  in
+  let reference rest ns = List.fold_left Analysis.add_node rest ns in
+  let calls = ref [] in
+  let mk n =
+    calls := n.Analysis.support :: !calls;
+    n
+  in
+  let got = Analysis.merge_nodes rest incoming ~mk in
+  check "M6-T16: merge_nodes gives exactly the add_node fold's sequence"
+    (render got = render (reference rest incoming));
+  check "M6-T16: ...which is the hand-computed one (not two agreeing wrong answers)"
+    (render got = "a>=4@10 b<=3@16 c>=1@3 d>=6@15 a<=7@13 e>=1@17"
+    ||
+    (Printf.printf "     got: %s\n" (render got);
+     false));
+  check "M6-T16: mk is applied once per fact, in order"
+    (List.rev !calls = List.map (fun n -> n.Analysis.support) incoming);
+  check "M6-T16: from an empty frontier too (the conflict's own reason)"
+    (render (Analysis.merge_nodes [] incoming ~mk:Fun.id) = render (reference [] incoming));
+  check "M6-T16: and with nothing incoming the frontier is unchanged"
+    (render (Analysis.merge_nodes rest [] ~mk:Fun.id) = render rest)
+
+let test_uniq_is_the_list_mem_append () =
+  let seq = [ 4; 1; 4; 7; 1; 0; 9; 7; 3; 4; 0; 12 ] in
+  let reference =
+    List.fold_left (fun l p -> if List.mem p l then l else l @ [ p ]) [] seq
+  in
+  let u = Analysis.Uniq.create () in
+  List.iter (Analysis.Uniq.add u) seq;
+  check "M6-T16: Uniq keeps first-occurrence order, as List.mem/@ did"
+    (Analysis.Uniq.to_list u = reference && reference = [ 4; 1; 7; 0; 9; 3; 12 ])
+
 let () =
   test_scene1_shape ();
+  test_merge_nodes_is_the_add_node_fold ();
+  test_uniq_is_the_list_mem_append ();
   test_oracle_non_vacuous ();
   test_oracle_every_criterion ();
   test_oracle_can_fail ();

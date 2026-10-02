@@ -394,6 +394,61 @@ let add_node nodes n =
   in
   if !found then out else out @ [ n ]
 
+(* [add_node] above is the SPECIFICATION of the frontier merge and stays as the reference
+   a test compares against; [merge_nodes] is what [analyse] runs (M6-T16, D-0092).
+
+   [List.fold_left (fun acc f -> add_node acc (mk f)) rest facts] is O(|rest| * |facts|)
+   per resolution step: every [add_node] maps the whole frontier and then appends with
+   [@]. On 2014_mario that was the top of the profile after M6-T15 (D-0090). This is the
+   same sequence in O(|rest| + |facts|):
+
+     - every slot of [rest] keeps its position, holding the [stronger] of itself and every
+       later node for that slot, folded in arrival order -- exactly what repeated
+       [add_node] computes, including the tie: [stronger m n] keeps the EXISTING [m] when
+       the values are equal;
+     - a node whose slot is new is appended after all of [rest], in first-arrival order;
+       later nodes for that slot merge into it in place and do not move it. FIRST
+       OCCURRENCE WINS the position; [stronger] decides the content.
+
+   It relies on [rest] holding at most one node per slot, which every frontier
+   [analyse] builds does (each is the output of this merge, or a [List.filter] of one).
+   [mk] is applied to [facts] in order, once each, so [mk_node]'s counters and its
+   [Bad] exception fire in the same order as before. *)
+let merge_nodes rest facts ~mk =
+  let key n = (Reason.fact_owner n.fact, Reason.fact_is_lower n.fact) in
+  let tbl = Hashtbl.create ((2 * (List.length rest + List.length facts)) + 1) in
+  List.iter (fun m -> Hashtbl.replace tbl (key m) m) rest;
+  let fresh = ref [] in
+  List.iter
+    (fun f ->
+      let n = mk f in
+      let k = key n in
+      match Hashtbl.find_opt tbl k with
+      | Some m -> Hashtbl.replace tbl k (stronger m n)
+      | None ->
+          Hashtbl.replace tbl k n;
+          fresh := k :: !fresh)
+    facts;
+  List.rev_append
+    (List.rev_map (fun m -> Hashtbl.find tbl (key m)) rest)
+    (List.rev_map (fun k -> Hashtbl.find tbl k) !fresh)
+
+(* An insertion-ordered set of ints: [to_list] is the elements in FIRST-OCCURRENCE order,
+   which is what [if not (List.mem p l) then l @ [ p ]] produced, in O(1) per [add]
+   instead of O(length). [analyse]'s antecedent list (M6-T16). *)
+module Uniq = struct
+  type t = { seen : (int, unit) Hashtbl.t; mutable rev : int list }
+
+  let create () = { seen = Hashtbl.create 16; rev = [] }
+
+  let add u p =
+    if not (Hashtbl.mem u.seen p) then (
+      Hashtbl.replace u.seen p ();
+      u.rev <- p :: u.rev)
+
+  let to_list u = List.rev u.rev
+end
+
 exception Bad of error
 
 let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
@@ -401,11 +456,10 @@ let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
   let conflict_level = Store.level store in
   let max_resolutions = Store.trail_length store + 1 in
   let o1 = ref 0 and scanned = ref 0 and resolutions = ref 0 in
-  let antecedents = ref [] and folds = ref [] in
-  let add_antecedent p =
-    if p <> Store.no_prop && not (List.mem p !antecedents) then
-      antecedents := !antecedents @ [ p ]
-  in
+  (* Both accumulate in arrival order; [folds] is kept reversed and turned round once at
+     the end (M6-T16). *)
+  let antecedents = Uniq.create () and folds_rev = ref [] in
+  let add_antecedent p = if p <> Store.no_prop then Uniq.add antecedents p in
   (* The one place [entry.prop] is READ rather than carried. An id that names no
      instance, or an instance that does not watch the variable the entry changed, is a
      corrupt graph and stops the walk -- it does not produce a cut with a wrong
@@ -449,16 +503,14 @@ let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
         | Some (r : Store.entry) ->
             check_attr ~at ~prop:r.Store.prop ~var:r.Store.var;
             add_antecedent r.Store.prop;
-            folds :=
-              !folds
-              @ [
-                  {
-                    fold_var = Store.name store e.Store.var;
-                    fold_value = h;
-                    fold_prop = r.Store.prop;
-                    fold_into = at;
-                  };
-                ];
+            folds_rev :=
+              {
+                fold_var = Store.name store e.Store.var;
+                fold_value = h;
+                fold_prop = r.Store.prop;
+                fold_into = at;
+              }
+              :: !folds_rev;
             r.Store.reason)
       holes
   in
@@ -489,8 +541,7 @@ let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
           let added =
             e.Store.reason @ hole_facts e ~at ~is_lower:(Reason.fact_is_lower n.fact)
           in
-          loop
-            (List.fold_left (fun acc f -> add_node acc (mk_node ~before:at f)) rest added)
+          loop (merge_nodes rest added ~mk:(mk_node ~before:at))
   in
   try
     if c.Store.c_prop <> Store.no_prop && vars_of c.Store.c_prop = None then
@@ -500,9 +551,7 @@ let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
               { at = -1; claimed = c.Store.c_prop; var = "<the conflicting row>" }));
     add_antecedent c.Store.c_prop;
     let start =
-      List.fold_left
-        (fun acc f -> add_node acc (mk_node ~before:(Store.trail_length store) f))
-        [] c.Store.c_reason
+      merge_nodes [] c.Store.c_reason ~mk:(mk_node ~before:(Store.trail_length store))
     in
     let nodes = loop start in
     let stopped = criterion.stop { v_nodes = nodes; v_conflict_level = conflict_level } in
@@ -523,8 +572,8 @@ let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
         conflict_prop = c.Store.c_prop;
         criterion_name = criterion.crit_name;
         stopped_by_criterion = stopped;
-        antecedents = !antecedents;
-        folds = !folds;
+        antecedents = Uniq.to_list antecedents;
+        folds = List.rev !folds_rev;
         factless;
         resolutions = !resolutions;
         o1_supports = !o1;
