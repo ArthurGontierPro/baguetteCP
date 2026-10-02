@@ -279,11 +279,19 @@ let rung_summands t ~c x ~from_ ~to_ =
 
 (* [c] x `I_i >= 1` for a compulsory task, as far as the ladder takes it; its two
    leftovers are its own bounds, which [cancels] removes where they are root ones. *)
+(* LIFTED (Schutt et al.'s pointwise explanation): a bound a DECISION moved is not
+   walked onto the window by a chain and named at its current value; the window literal
+   itself is left in the row and named in the reason -- `s_i >= a_i'` and `s_i <= b_i'`,
+   which is exactly what "compulsory at t" needs and no more.  A root bound is still
+   walked to and cancelled ([alo_cancels]), because a root contradiction must close to
+   0 >= 1.  Measured on 2008_rcpsp: see D-0096's addendum. *)
 let alo_summands t s ~time =
   let c = s.s_task.res and a', b' = window s ~time in
-  (if a' > s.s_dlo then rung_summands t ~c s.s_name ~from_:a' ~to_:s.s_lo else [])
+  (if a' > s.s_dlo && s.s_lo_root then rung_summands t ~c s.s_name ~from_:a' ~to_:s.s_lo
+   else [])
   @
-  if b' < s.s_dhi then rung_summands t ~c s.s_name ~from_:(s.s_hi + 1) ~to_:(b' + 1)
+  if b' < s.s_dhi && s.s_hi_root then
+    rung_summands t ~c s.s_name ~from_:(s.s_hi + 1) ~to_:(b' + 1)
   else []
 
 let alo_cancels s ~time =
@@ -386,11 +394,12 @@ let prune_expl t ~row ~halls ~others ~y ~lower ~bound =
           y.s_task.res
       in
       let y_low =
-        if low_side && want_low then rung_summands t ~c:1 y.s_name ~from_:a' ~to_:y.s_lo
+        if low_side && want_low && y.s_lo_root then
+          rung_summands t ~c:1 y.s_name ~from_:a' ~to_:y.s_lo
         else []
       in
       let y_high =
-        if high_side && want_high then
+        if high_side && want_high && y.s_hi_root then
           rung_summands t ~c:1 y.s_name ~from_:(y.s_hi + 1) ~to_:(b' + 1)
         else []
       in
@@ -410,9 +419,10 @@ let prune_expl t ~row ~halls ~others ~y ~lower ~bound =
       in
       if moves then ladder_lift t ~y ~lower ~bound e else e)
 
-(* The facts a push rests on: both bounds of every task COMPULSORY at the point and of
-   the target -- and nothing about the other tasks of the row, whose clearing reads no
-   bound (see [prune_expl]'s [free]).  This is a departure from gcc, which names its
+(* The facts a push rests on: the window literals of every task COMPULSORY at the
+   point and of the target ([side_facts]: lifted for a decision's bound, the bound
+   itself for a root one) -- and nothing about the other tasks of the row, whose
+   clearing reads no bound (see [prune_expl]'s [free]).  This is a departure from gcc, which names its
    whole scope, and it is measured: on 2008_rcpsp every trace line carried both bounds
    of all ~30 tasks, and the 1UIP nogoods resolved from them were correspondingly long.
 
@@ -423,14 +433,22 @@ let prune_expl t ~row ~halls ~others ~y ~lower ~bound =
    rests on earlier pushes of the same instance, each reason copied its supports'
    reasons, and on a six-task unit-capacity scene (horizon 8) eleven search nodes took
    over five seconds before the copies were removed. *)
-let scope_facts snaps =
-  List.concat_map
-    (fun s ->
-      [
-        Reason.at_least ~name:s.s_name ~decl:s.s_dlo s.s_lo;
-        Reason.at_most ~name:s.s_name ~decl:s.s_dhi s.s_hi;
-      ])
-    snaps
+let side_facts s ~time ~low ~high =
+  let a', b' = window s ~time in
+  (if low && a' > s.s_dlo then
+     [ Reason.at_least ~name:s.s_name ~decl:s.s_dlo (if s.s_lo_root then s.s_lo else a') ]
+   else [])
+  @
+  if high && b' < s.s_dhi then
+    [ Reason.at_most ~name:s.s_name ~decl:s.s_dhi (if s.s_hi_root then s.s_hi else b') ]
+  else []
+
+let push_facts ~time ~halls ~y ~lower =
+  let a = time - y.s_task.dur + 1 in
+  let want_low = lower || a - 1 < y.s_lo in
+  let want_high = (not lower) || time + 1 > y.s_hi in
+  side_facts y ~time ~low:want_low ~high:want_high
+  @ List.concat_map (fun s -> side_facts s ~time ~low:true ~high:true) halls
 
 (* --------------------------------------------------------------------- the sweep *)
 
@@ -470,7 +488,7 @@ let pass t store =
           (Some
              (if lower then Reason.at_least ~name:j.s_name ~decl:j.s_dlo bound
               else Reason.at_most ~name:j.s_name ~decl:j.s_dhi bound))
-        (scope_facts (j :: halls))
+        (push_facts ~time ~halls ~y:j ~lower)
         (prune_expl t ~row ~halls ~others ~y:j ~lower ~bound)
     in
     let prune () =
