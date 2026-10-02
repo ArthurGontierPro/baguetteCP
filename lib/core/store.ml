@@ -416,6 +416,43 @@ let var_named_scan t name =
    every store [Compile] builds -- it is the identity. *)
 let name_rep t v = Var.of_int (snd (Lazy.force t.by_name)).(Var.to_int v)
 
+(* Whether trail position [i] was pushed at level 0. [level_of_index] answers the general
+   question further down; this is its level-0 case, by I-T2 (the marks are monotone, so
+   [i] precedes every mark iff it precedes the first). *)
+let at_root t i = t.n_levels = 0 || i < t.marks.(0).trail_mark
+
+(* Whether the store holds the ORDER literal [l] at the ROOT: the current bound implies it
+   and the entry supporting that bound, if any, was pushed at level 0. A bound still at
+   its declaration counts -- nothing moved it, so nothing a decision did holds it up.
+   Mirrors [established_at_root] in lib/core/prop/element.ml and alldiff.ml, which decide
+   whether a [Defining] may be BUILT; this decides whether one may go unnamed. A direct
+   literal answers [false]; see [agreement_holds]. *)
+let root_holds t (l : Lit.t) =
+  match l.Lit.v with
+  | Lit.Eq _ -> false
+  | Lit.Ge (x, k) -> (
+      match var_named t x with
+      | None -> false
+      | Some v ->
+          let root sup = sup = no_support || at_root t sup in
+          if l.Lit.positive then Domain.lo (get t v) >= k && root (lo_support t v)
+          else Domain.hi (get t v) <= k - 1 && root (hi_support t v))
+
+(* [Explanation.top_weaken_owners] less every top-level [Defining] the root holds: the
+   variables the reverse arm of [agreement_holds] requires the reason to name. *)
+let reverse_owners t e =
+  match Explanation.force e with
+  | Explanation.Combine (summands, _) ->
+      List.sort_uniq String.compare
+        (List.concat_map
+           (function
+             | Explanation.Weaken lits -> List.map (fun (_, l) -> Lit.owner l.Lit.v) lits
+             | Explanation.Defining (_, l) ->
+                 if root_holds t l then [] else [ Lit.owner l.Lit.v ]
+             | Explanation.Term _ -> [])
+           summands)
+  | _ -> []
+
 (* The predicate, public and unconditional, so that a test can assert it directly rather
    than only through an environment variable read at module initialisation. A check that
    only runs under [BAGUETTE_DEBUG] is a check the suite cannot see fail; test_core.ml
@@ -450,7 +487,28 @@ let name_rep t v = Var.of_int (snd (Lazy.force t.by_name)).(Var.to_int v)
    must be named by the reason ([Explanation.top_weaken_owners] says why top level). This
    is the I-P5 direction: a derivation that read a variable and weakened it away has a
    pruning that depends on it, and a reason that omits it writes a trace line over too
-   short a tail. *)
+   short a tail.
+
+   **The reverse arm and a ROOT [Defining]** (M6-T8, D-0091). A top-level
+   [Explanation.Defining (c, l)] used to count exactly as a [Weaken] does, on the argument
+   that the derivation reads [l]'s variable "and the reason owes the same account of it".
+   That is right for a literal a branch rests on and wrong for one the ROOT established,
+   and the difference is D-0064's own construction rule: a [Defining] may cite only a
+   consequence of the MODEL (element.ml's and alldiff.ml's [established_at_root], gcc.ml's
+   [root]). A reason is the list of facts a BRANCH rests on -- what a trace line assumes
+   on its tail and what a learned clause negates -- and a root-established fact is in no
+   branch's dependency: its unit line is on the page at level 0 and is never wiped, so a
+   trace line that omits it is no shorter in the sense I-P5 means, and [Analysis] drops a
+   root node from every cut anyway. Demanding it of the reason fired on every element
+   no-position conflict whose residue cancellation cites a root bound (four suite models,
+   found by turning BAGUETTE_DEBUG on) while the proofs verified.
+
+   So a top-level [Defining] on an ORDER literal is exempt exactly when the STORE says the
+   bound is root-held -- checked here, not taken on the propagator's word. A [Defining] of a
+   bound a decision set (the D-0064 violation) is still required, and so is every
+   [Weaken]. A [Defining] on a DIRECT literal (alldiff's hole units) is not exempted: no
+   caller in [lib/] needs it to be, and deciding whether a hole is root-held needs
+   [remover], which is not this check's business to call. *)
 let agreement_holds t (j : Reason.justified) =
   let mentioned = Explanation.owners j.justification in
   let supported fact =
@@ -467,9 +525,7 @@ let agreement_holds t (j : Reason.justified) =
       || List.mem (Reason.fact_owner fact) mentioned
       || supported fact)
     j.reason
-  && List.for_all
-       (fun o -> List.mem o named)
-       (Explanation.top_weaken_owners j.justification)
+  && List.for_all (fun o -> List.mem o named) (reverse_owners t j.justification)
 
 (* D-0043's half of the same question, and the one M2-T8 could not ask.
 

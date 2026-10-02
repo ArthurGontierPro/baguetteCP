@@ -3810,6 +3810,69 @@ let test_d0026_all_declared () =
         (Store.agreement_holds store
            (Reason.because ~concludes:None e.Store.reason (Store.explanation store e)))
 
+(* M6-T8 / D-0091: the four BAGUETTE_DEBUG fatals, on the real propagator.
+
+   test/models/element_moved_unsat.fzn's source (the smallest of the four models; the other
+   three die at the same call -- [Element.no_position_conflict] out of [filter_index]). Its
+   root fixpoint ends in a no-position conflict whose reason is [Reason.none], deliberately
+   (element.ml says why: the counting argument is not RUP, so no conflict line may be
+   written), and whose derivation cancels c's moved upper bound with a top-level
+   [Defining]. The predicate is asserted directly on the conflict, so BAGUETTE_DEBUG is not
+   the only thing that can see the answer; and the scene is shown to EXERCISE the arm --
+   the Defining is there, and its variable is one the empty reason does not name -- or a
+   pass here would say nothing. One level deeper element builds no Defining (D-0064's
+   level rule, test_compile.ml's scene B), and the pair agrees there too. *)
+let element_moved_src =
+  "var 1..2: i;\n\
+   var 1..2: j;\n\
+   var 0..9: c;\n\
+   constraint array_int_element(i, [1, 2], c);\n\
+   constraint array_int_element(j, [3, 4], c);\n\
+   solve satisfy;\n"
+
+let element_moved_conflict ~deeper =
+  let t = compile_src element_moved_src in
+  let path = Filename.temp_file "baguette_m6t8" ".pbp" in
+  let oc = open_out path in
+  Encoding.start_proof t.Compile.encoding (Writer.create oc);
+  if deeper then Store.new_level t.Compile.store;
+  let r = Engine.propagate t.Compile.engine t.Compile.store in
+  let out =
+    match r with
+    | Engine.Conflict c ->
+        (* Forced here, while the writer is open: the derivation names start_proof's ids. *)
+        ignore (Explanation.force c.Store.c_why);
+        Some (t.Compile.store, c)
+    | Engine.Fixpoint -> None
+  in
+  close_out oc;
+  (try Sys.remove path with _ -> ());
+  out
+
+let test_d0091_element_root_defining () =
+  match element_moved_conflict ~deeper:false with
+  | None -> check "D-0091 element: the root scene is a conflict" false
+  | Some (store, c) -> (
+      check "D-0091 element: the conflict's reason is empty, as element.ml means it"
+        (Reason.is_empty c.Store.c_reason);
+      check
+        "D-0091 element: the derivation's top level cites Defining on c -- the arm IS \
+         exercised (the old reverse arm required the reason to name c)"
+        (List.mem "c" (Explanation.top_weaken_owners c.Store.c_why));
+      check "D-0091 element: and the bound it cites is root-held in the store"
+        (Store.root_holds store (Lit.le "c" 2));
+      check "D-0091 element: the reason and the justification AGREE"
+        (Store.agreement_holds store
+           (Reason.because ~concludes:None c.Store.c_reason c.Store.c_why));
+      match element_moved_conflict ~deeper:true with
+      | None -> check "D-0091 element: the level-1 scene is a conflict too" false
+      | Some (store1, c1) ->
+          check "D-0091 element: one level deeper, no Defining is built"
+            (not (List.mem "c" (Explanation.top_weaken_owners c1.Store.c_why)));
+          check "D-0091 element: and the pair agrees there as well"
+            (Store.agreement_holds store1
+               (Reason.because ~concludes:None c1.Store.c_reason c1.Store.c_why)))
+
 (* ---------------------------------------------------------------------------
    M2-L0 / D-0043, test (c): the conclusion tracks the split lib/core/trace.ml
    already draws.
@@ -6348,6 +6411,7 @@ let () =
   (* ---------------------------------------------- M2-T8 / D-0026: the two halves *)
   test_d0026_linear_pairing ();
   test_d0026_all_declared ();
+  test_d0091_element_root_defining ();
   test_ix6_justification_snapshot ();
   test_ix6_cross_conflict_snapshot ();
   test_no_single_row_refutes "bool_reif_unsat" "bool_reif_unsat.fzn";
