@@ -360,13 +360,7 @@ type snap = {
   s_hi_root : bool;
 }
 
-type csnap = {
-  k_cov : cover;
-  k_lo : int;
-  k_hi : int;
-  k_lo_root : bool;
-  k_hi_root : bool;
-}
+type csnap = { k_cov : cover; k_lo : int; k_hi : int; k_lo_root : bool; k_hi_root : bool }
 
 let established_at_root store v ~lower =
   let sup = if lower then Store.lo_support store v else Store.hi_support store v in
@@ -392,13 +386,7 @@ let snap_of store tm =
 let csnap_of store c =
   match View.base_var c.cx with
   | None ->
-      {
-        k_cov = c;
-        k_lo = c.cdlo;
-        k_hi = c.cdhi;
-        k_lo_root = true;
-        k_hi_root = true;
-      }
+      { k_cov = c; k_lo = c.cdlo; k_hi = c.cdhi; k_lo_root = true; k_hi_root = true }
   | Some x ->
       let d = Store.get store x in
       {
@@ -550,8 +538,7 @@ let alo_leftovers s ~a ~b =
    reason [alo_summands] has two guards. *)
 let drop_summands t s ~a ~b =
   let a' = clip_lo s ~a and b' = clip_hi s ~b in
-  if a' > s.s_dlo && b' < s.s_dhi then
-    rung_summands t s.s_name ~from_:a' ~to_:(b' + 1)
+  if a' > s.s_dlo && b' < s.s_dhi then rung_summands t s.s_name ~from_:a' ~to_:(b' + 1)
   else if a' <= s.s_dlo && b' < s.s_dhi then
     [ Explanation.weaken [ (1, Lit.le s.s_name b') ] ]
   else if a' > s.s_dlo && b' >= s.s_dhi then
