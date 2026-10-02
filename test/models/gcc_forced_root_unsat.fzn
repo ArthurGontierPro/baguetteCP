@@ -1,0 +1,13 @@
+% UNSAT twin of gcc_forced_sat.fzn, closed at the ROOT by rule (b) (M7-T24, D-0099).
+% x <= 1 leaves y and z as the only candidates for the two 2s the count demands; rule (b)
+% fixes both, and y + z <= 3 refutes them. The conflict is a ROOT one, so it closes
+% through the pushes' own derivations summed as a `pol` chain to 0 >= 1 -- the lane where
+% rule (b)'s cutting-planes derivation, which its trace line does not need written
+% ahead, is put on the page and its arithmetic checked.
+var 1..3: x :: output_var;
+var 1..3: y :: output_var;
+var 1..3: z :: output_var;
+constraint fzn_global_cardinality([x,y,z],[2],[2]);
+constraint int_lin_le([1],[x],1);
+constraint int_lin_le([1,1],[y,z],3);
+solve :: int_search([x,y,z], input_order, indomain_min, complete) satisfy;

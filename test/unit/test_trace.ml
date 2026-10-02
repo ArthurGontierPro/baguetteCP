@@ -1587,6 +1587,30 @@ solve :: int_search([x,q1,q2,q3,y,z,n], input_order, indomain_median) satisfy;
 
 let m7t21_gcc_line = "rup +1 n_ge_1 +1 ~x_ge_2 +1 x_ge_3 >= 1 ;"
 
+(* M7-T24 / D-0099: gcc's rule (a), a SATURATED value removed as an interior HOLE.
+
+   test/models/gcc_saturate_hole_sat.fzn verbatim. x = 2 saturates the value 2 (its
+   count is the constant 1) and gcc removes 2 from y, strictly inside y's window, stating
+   it in the ORDER currency D-0086 (b) makes the one convention for a hole -- which is
+   what int_lin_ne's settle over that hole, a few lines later, reads. The line is pinned
+   because the break below must be about THIS line: with z and w both still holding 2
+   inside their windows the counting row keeps slack, so the line is not RUP against the
+   .opb alone (measured, the break), and it is load-bearing for the refutation of x = 2
+   in a SATISFIABLE model. Without the derivation ahead of it the proof does not
+   verify. *)
+let m7t24_hole_source =
+  {|var 1..3: x;
+var 1..3: y;
+var 1..3: z;
+var 1..3: w;
+constraint fzn_global_cardinality([x,y,z,w],[2],[1]);
+constraint int_lin_ne([1,1],[x,y],3);
+constraint int_lin_ne([1,1],[x,y],5);
+solve :: int_search([x,y,z,w], input_order, indomain_median, complete) satisfy;
+|}
+
+let m7t24_hole_line = "rup +1 ~y_ge_2 +1 y_ge_3 +1 ~x_ge_2 +1 x_ge_3 >= 1 ;"
+
 let test_m7t21_element () =
   let tag = "(M7-T21 element foreign hole)" in
   let check name cond = check (name ^ " " ^ tag) cond in
@@ -2110,6 +2134,8 @@ let () =
     ~claim:ix10_gcc_line ~outcome:`Sat ();
   test_ix10_derive_ahead ~use_order:true ~tag:"(M7-T21, a gcc rule C lower push)"
     ~src:m7t21_gcc_source ~claim:m7t21_gcc_line ~outcome:`Sat ();
+  test_ix10_derive_ahead ~use_order:true ~tag:"(M7-T24, a gcc saturation hole)"
+    ~src:m7t24_hole_source ~claim:m7t24_hole_line ~outcome:`Sat ();
   test_m7t21_element ();
   test_is4_gate ();
   test_m6t15_position_of ();

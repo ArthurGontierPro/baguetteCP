@@ -14,8 +14,11 @@
    Consistency level, and why the declaration is [Checking]
    ---------------------------------------------------------------------------
 
-   The filtering is bounds-level REASONING -- it reads lo/hi and writes lo/hi and never
-   looks at an interior hole -- but the tag is [Propagator.Checking], which is the level
+   The filtering is bounds-level REASONING -- it reads lo/hi and writes lo/hi -- with ONE
+   exception since M7-T24: rule (a) writes an interior hole for a saturated value, and
+   rule (b) reads [Domain.mem] to refuse a candidate whose window holds the value around
+   a hole (see "The two single-value rules" below).  The tag is [Propagator.Checking],
+   which is the level
    the M2-T10 oracle (BAGUETTE_CONSISTENCY=1) holds a propagator to.  That is not
    modesty for its own sake:
 
@@ -193,9 +196,9 @@
 
    2. **No interval LOWER-capacity rule.**  Its per-value case -- when the number of
       possible takers of v equals the count's lower bound, every one of them must take v
-      -- is exactly what the decomposition's own linear row already propagates, so it
-      would not earn its justification HERE, in the row whose thesis is that the global
-      infers what the decomposition cannot.  Its interval case does earn it, and needs
+      -- IS here since M7-T24, as rule (b): this sentence used to say it was the
+      decomposition's job, and once a one-value count is routed to gcc (D-0097) there is
+      no decomposition row left to do it.  Its interval case still is not, and needs
       one line this module does not build: `one variable takes at most one value of
       [a, b]`.  Over the order encoding that line is free as well (the indicators over
       [a, b] telescope to x_ge_a - x_ge_(b+1) <= 1, which is two literal axioms), so the
@@ -294,7 +297,18 @@ type cover = {
   le_cid : int; (* ... and at most *)
 }
 
-type t = { terms : term array; cov : cover array; enc : Encoding.t }
+type t = {
+  terms : term array;
+  cov : cover array;
+  enc : Encoding.t;
+  (* M7-T24 (D-0099): the HIGH_v row of a cover value, one [Explanation.t] VALUE per
+     (value, upper bound of its count, whether that bound is a root one) -- the three
+     things [high_row] reads.  Every rule-A and rule-(a) derivation that sums the same
+     row hands [Justify] the same value, so its memo (M6-T10, keyed on physical
+     identity) writes the row once per level instead of once per push.  [deferred],
+     because the rungs it cites exist only once the proof has started. *)
+  hrows : (int * int * bool, Explanation.t) Hashtbl.t;
+}
 
 let name = "global_cardinality"
 let consistency = Propagator.Checking
@@ -329,7 +343,7 @@ let make store enc ~cover vars_x =
            })
          cover)
   in
-  { terms; cov; enc }
+  { terms; cov; enc; hrows = Hashtbl.create 16 }
 
 (* ------------------------------------------------------------------------ snapshots *)
 
@@ -347,28 +361,13 @@ type snap = {
      instead and carries the facts in the [Reason] (D-0064, and alldiff's [Gone_hole]). *)
   s_lo_root : bool;
   s_hi_root : bool;
-  s_lo_why : Reason.t;
-  s_hi_why : Reason.t;
 }
 
-type csnap = {
-  k_cov : cover;
-  k_lo : int;
-  k_hi : int;
-  k_lo_root : bool;
-  k_hi_root : bool;
-  k_lo_why : Reason.t;
-  k_hi_why : Reason.t;
-}
+type csnap = { k_cov : cover; k_lo : int; k_hi : int; k_lo_root : bool; k_hi_root : bool }
 
 let established_at_root store v ~lower =
   let sup = if lower then Store.lo_support store v else Store.hi_support store v in
   sup = Store.no_support || Store.level_of_index store sup = 0
-
-let support_reason store v ~lower =
-  let sup = if lower then Store.lo_support store v else Store.hi_support store v in
-  if sup = Store.no_support then Reason.none
-  else (Store.trail_entry store sup).Store.reason
 
 let range a b = List.init (Stdlib.max 0 (b - a + 1)) (fun i -> a + i)
 
@@ -383,8 +382,6 @@ let snap_of store tm =
     s_hi = Domain.hi d;
     s_lo_root = established_at_root store tm.x ~lower:true;
     s_hi_root = established_at_root store tm.x ~lower:false;
-    s_lo_why = support_reason store tm.x ~lower:true;
-    s_hi_why = support_reason store tm.x ~lower:false;
   }
 
 (* A constant count never moves: both bounds are its declared ones, established "at the
@@ -392,15 +389,7 @@ let snap_of store tm =
 let csnap_of store c =
   match View.base_var c.cx with
   | None ->
-      {
-        k_cov = c;
-        k_lo = c.cdlo;
-        k_hi = c.cdhi;
-        k_lo_root = true;
-        k_hi_root = true;
-        k_lo_why = Reason.none;
-        k_hi_why = Reason.none;
-      }
+      { k_cov = c; k_lo = c.cdlo; k_hi = c.cdhi; k_lo_root = true; k_hi_root = true }
   | Some x ->
       let d = Store.get store x in
       {
@@ -409,8 +398,6 @@ let csnap_of store c =
         k_hi = Domain.hi d;
         k_lo_root = established_at_root store x ~lower:true;
         k_hi_root = established_at_root store x ~lower:false;
-        k_lo_why = support_reason store x ~lower:true;
-        k_hi_why = support_reason store x ~lower:false;
       }
 
 (* ---------------------------------------------------------------------- explanations *)
@@ -427,15 +414,6 @@ let cid_of what = function
 
 let cite id = Explanation.term 1 (Explanation.model_row id)
 
-(* A fact the derivation needs at UNIT strength.  Root-established: the unit line itself
-   ([Explanation.defining], resolved by [Justify.defining_lit]).  Otherwise: the
-   globally valid implication `l \/ ~facts`, whose leftover literals stay in the row and
-   are carried by the pruning's [Reason]. *)
-let fact_summand ~root ~why lit =
-  if root then Explanation.defining 1 lit
-  else
-    Explanation.term 1 (Explanation.clause (lit :: List.map Lit.negate (Reason.lits why)))
-
 (* The ladder chain `x_ge_j - x_ge_m >= 0` for j < m, as a plain sum of the consistency
    rows: [Encoding.consistency_id x u] is `x_ge_u - x_ge_(u+1) >= 0`, so summing
    u = j .. m-1 telescopes.  Every key it asks for is strictly inside the declared
@@ -446,6 +424,24 @@ let rung_summands t x ~from_ ~to_ =
     (range from_ (to_ - 1))
 
 let rung_line t x ~from_ ~to_ = Explanation.combine (rung_summands t x ~from_ ~to_) 1
+
+(* A SUM OF CHAINS, as one weighted list of rungs (M7-T24, D-0099).  Several derivations
+   below add one chain per rung of a ladder -- `x_ge_k - x_ge_m >= 0` for every k of a
+   range -- and they used to do it as one nested [rung_line] per k, which is one more
+   [pol] line per k and O(width^2) ids in all.  The sum is linear, so it is the same
+   constraint when every rung u is cited ONCE with the number of chains that contain it,
+   [weight u]: O(width) ids, no intermediate line.  A weight below 1 cites nothing. *)
+let rung_weighted t x ~from_ ~to_ ~weight =
+  List.filter_map
+    (fun u ->
+      let w = weight u in
+      if w < 1 then None
+      else
+        Some
+          (Explanation.term w
+             (Explanation.model_row
+                (cid_of "ladder rung" (Encoding.consistency_id t.enc x u)))))
+    (range from_ (to_ - 1))
 
 (* A bound fact the derivation LEANS ON, cancelled where it can be and left in the row
    where it cannot.
@@ -496,19 +492,33 @@ let bound_cancels ~lo_of ~hi_of snaps =
 let high_row t k =
   let c = k.k_cov in
   let above = c.cdhi - k.k_hi in
-  Explanation.combine
-    (cite c.le_cid
-     :: List.map
-          (fun kk -> Explanation.weaken [ (1, Lit.negate (Lit.ge c.cname kk)) ])
-          (range (c.cdlo + 1) k.k_hi)
-    @ List.concat_map
-        (fun kk -> rung_summands t c.cname ~from_:(k.k_hi + 1) ~to_:kk)
-        (range (k.k_hi + 1) c.cdhi)
-    @
-    if above > 0 && k.k_hi < c.cdhi && k.k_hi_root then
-      [ Explanation.defining above (Lit.le c.cname k.k_hi) ]
-    else [])
-    1
+  (* A constant count (cdlo = cdhi: an empty ladder) clears nothing and the row IS
+     [le_cid]: cite it rather than restate it as a one-id [pol] line (M7-T24, measured
+     on the first saturation scene). *)
+  if c.cdlo = c.cdhi then Explanation.model_row c.le_cid
+  else
+    Explanation.combine
+      (cite c.le_cid
+       :: List.map
+            (fun kk -> Explanation.weaken [ (1, Lit.negate (Lit.ge c.cname kk)) ])
+            (range (c.cdlo + 1) k.k_hi)
+      @ List.concat_map
+          (fun kk -> rung_summands t c.cname ~from_:(k.k_hi + 1) ~to_:kk)
+          (range (k.k_hi + 1) c.cdhi)
+      @
+      if above > 0 && k.k_hi < c.cdhi && k.k_hi_root then
+        [ Explanation.defining above (Lit.le c.cname k.k_hi) ]
+      else [])
+      1
+
+let high_row_shared t k =
+  let key = (k.k_cov.cv, k.k_hi, k.k_hi_root) in
+  match Hashtbl.find_opt t.hrows key with
+  | Some e -> e
+  | None ->
+      let e = Explanation.deferred (fun () -> high_row t k) in
+      Hashtbl.replace t.hrows key e;
+      e
 
 (* ------------------------------------------------------------------- rule A: capacity *)
 
@@ -536,8 +546,7 @@ let alo_leftovers s ~a ~b =
    reason [alo_summands] has two guards. *)
 let drop_summands t s ~a ~b =
   let a' = clip_lo s ~a and b' = clip_hi s ~b in
-  if a' > s.s_dlo && b' < s.s_dhi then
-    [ Explanation.term 1 (rung_line t s.s_name ~from_:a' ~to_:(b' + 1)) ]
+  if a' > s.s_dlo && b' < s.s_dhi then rung_summands t s.s_name ~from_:a' ~to_:(b' + 1)
   else if a' <= s.s_dlo && b' < s.s_dhi then
     [ Explanation.weaken [ (1, Lit.le s.s_name b') ] ]
   else if a' > s.s_dlo && b' >= s.s_dhi then
@@ -554,7 +563,7 @@ let cap_summands t ~a ~b ~snaps ~halls ~caps ~extra =
   in
   let in_scope s = List.exists (fun v -> declares s v) (range a b) in
   List.concat_map (fun s -> alo_summands t s ~a ~b) halls
-  @ List.map (fun k -> Explanation.term 1 (high_row t k)) caps
+  @ List.map (fun k -> Explanation.term 1 (high_row_shared t k)) caps
   @ List.concat_map
       (fun s -> if named s || not (in_scope s) then [] else drop_summands t s ~a ~b)
       snaps
@@ -611,22 +620,21 @@ let ladder_lift t ~y ~lower ~bound base =
     let w = bound - y.s_dlo in
     if w < 2 then base
     else
+      (* The chains k -> bound for k = dlo+1 .. bound-1: rung u lies in u - dlo of them. *)
       Explanation.combine
         (Explanation.term w base
-        :: List.map
-             (fun k -> Explanation.term 1 (rung_line t y.s_name ~from_:k ~to_:bound))
-             (range (y.s_dlo + 1) (bound - 1)))
+        :: rung_weighted t y.s_name ~from_:(y.s_dlo + 1) ~to_:bound ~weight:(fun u ->
+               u - y.s_dlo))
         1
   else
     let w = y.s_dhi - bound in
     if w < 2 then base
     else
+      (* The chains bound+1 -> k for k = bound+2 .. dhi: rung u lies in dhi - u of them. *)
       Explanation.combine
         (Explanation.term w base
-        :: List.map
-             (fun k ->
-               Explanation.term 1 (rung_line t y.s_name ~from_:(bound + 1) ~to_:k))
-             (range (bound + 2) y.s_dhi))
+        :: rung_weighted t y.s_name ~from_:(bound + 1) ~to_:y.s_dhi ~weight:(fun u ->
+               y.s_dhi - u))
         1
 
 let prune_expl t ~a ~b ~snaps ~halls ~caps ~y ~lower ~bound =
@@ -660,21 +668,36 @@ let prune_expl t ~a ~b ~snaps ~halls ~caps ~y ~lower ~bound =
                [ y ])
            1)
 
-(* Every variable in scope is named, and that is deliberate rather than lazy: rule A's
-   top level weakens the indicator of every x that is neither confined nor the target,
-   so D-0026's reverse agreement check ([Explanation.top_weaken_owners]) requires the
-   reason to name them all.  A tail with a fact the derivation did not need is a weaker
-   trace line, which is sound; a tail missing one is I-P5.  The counts are named at
-   their upper bound, which is the only one rule A reads. *)
+(* The variables the counting READ are named, and only those (M7-T24, D-0099).
+
+   Rule A's top level weakens the indicator of every x that is neither confined nor the
+   target, so D-0026's reverse agreement check ([Explanation.top_weaken_owners]) requires
+   the reason to name every x the HIGH rows mention -- the x that DECLARE a value of
+   [a, b], [in_scope] below.  An x that declares no value of the interval appears in no
+   row the derivation cites, and naming it only made the trace line weaker and longer.
+   The counts are named at their upper bound, which is the only one rule A reads.
+
+   EACH FACT IS THE BOUND ITSELF, never the reason behind it.  Until M7-T24 this function
+   also appended the trail reason of every bound that a decision-level entry had set
+   ([s_lo_why]/[s_hi_why], taken from [Store.lo_support]), on the argument of a
+   [fact_summand] that cited such a bound as the clause `l \/ ~why`.  Nothing called
+   [fact_summand]: every derivation here leaves a non-root bound's literal in the row
+   ([bound_cancels]), so the trace line needs the bound's own literal in its tail and
+   nothing more.  What the appending did instead was unfold the implication DAG into a
+   tree -- a gcc reason carried the reasons of the gcc prunings beneath it, which carried
+   theirs -- and on 2015_roster (D-0097's routed flatten) that is where 1.81 GB of the
+   proof went: 926 `rup` lines held 99.998 % of the bytes, the longest 168 MB, one literal
+   repeated 854 545 times in it, and the 11.8 GB of RSS was the same lists being copied.
+   [pol] lines were 30 KB in all.  See D-0099. *)
+let in_scope_of ~a ~b s = List.exists (fun v -> declares s v) (range a b)
+
 let scope_facts ~snaps ~caps =
   List.concat_map
     (fun s ->
       [
         Reason.at_least ~name:s.s_name ~decl:s.s_dlo s.s_lo;
         Reason.at_most ~name:s.s_name ~decl:s.s_dhi s.s_hi;
-      ]
-      @ (if s.s_lo_root then [] else s.s_lo_why)
-      @ if s.s_hi_root then [] else s.s_hi_why)
+      ])
     snaps
   @ List.concat_map
       (fun k ->
@@ -686,8 +709,7 @@ let scope_facts ~snaps ~caps =
           [
             Reason.at_most ~name:k.k_cov.cname ~decl:k.k_cov.cdhi k.k_hi;
             Reason.at_least ~name:k.k_cov.cname ~decl:k.k_cov.cdlo k.k_cov.cdlo;
-          ]
-          @ if k.k_hi_root then [] else k.k_hi_why)
+          ])
       caps
 
 (* ----------------------------------------------------------- rule C: the count bounds *)
@@ -752,9 +774,9 @@ let ladder_at_most t ~c ~may =
         (range (c.cdlo + 1) c.cdhi),
       1 )
   else
-    ( List.map
-        (fun j -> Explanation.term 1 (rung_line t c.cname ~from_:j ~to_:(may + 1)))
-        (range (c.cdlo + 1) may)
+    ( (* The chains j -> may+1 for j = cdlo+1 .. may: rung u lies in u - cdlo. *)
+      rung_weighted t c.cname ~from_:(c.cdlo + 1) ~to_:(may + 1) ~weight:(fun u ->
+          u - c.cdlo)
       @ List.map
           (fun kk -> Explanation.weaken [ (1, Lit.ge c.cname kk) ])
           (range (may + 2) c.cdhi),
@@ -770,9 +792,8 @@ let ladder_at_least t ~c ~must =
     ( List.map
         (fun kk -> Explanation.weaken [ (1, Lit.negate (Lit.ge c.cname kk)) ])
         (range (c.cdlo + 1) (must - 1))
-      @ List.map
-          (fun kk -> Explanation.term 1 (rung_line t c.cname ~from_:must ~to_:kk))
-          (range (must + 1) c.cdhi),
+      (* The chains must -> kk for kk = must+1 .. cdhi: rung u lies in cdhi - u. *)
+      @ rung_weighted t c.cname ~from_:must ~to_:c.cdhi ~weight:(fun u -> c.cdhi - u),
       c.cdhi - must + 1 )
 
 let c_upper_expl t ~k ~poss ~gone ~may =
@@ -842,6 +863,108 @@ let close_upper t ~k ~may expl =
           1)
   else expl
 
+(* ------------------------------------------- M7-T24: the two single-value rules *)
+
+(* RULE (a) -- A SATURATED VALUE IS REMOVED FROM EVERYONE ELSE (M7-T24, D-0099).
+
+   When the variables FIXED to v already number hi(c_v) - const_v, no other x may take v.
+   This is rule A on the singleton interval [v, v]: its confined set H is exactly the x
+   fixed to v, its capacity is hi(c_v) - const_v, and |H| = cap is the saturation.  Rule A
+   already pushed a BOUND off v when v sat at one -- but only when both v in [los] and v in
+   [his] made [v, v] a candidate interval, which a zero-capacity value nobody is fixed to
+   never is -- and it never touched a v strictly INSIDE a window, which is the one
+   inference D-0097 measured std's decomposition making and gcc not.
+
+   So [pass] enumerates the singletons per cover value, and the outcome has two shapes and
+   one derivation:
+
+     - v at a bound of y: rule A's own push, [prune_expl] over [v, v], unchanged;
+     - v strictly inside y's window: the same counting, STOPPED one step earlier.  After
+       [cap_summands] over [v, v] with y as the extra variable the row is
+         y_ge_(v+1) - y_ge_v >= 0,   i.e.   ~y_ge_v + y_ge_(v+1) >= 1
+       -- which is precisely the ORDER clause D-0086 (b) makes the one convention for a
+       hole, so the entry needs no currency bridge: an embedder citing this hole through
+       [Store.remover] (D-0084 shape 1) gets the order clause it expects.  Its non-root
+       facts -- the fixed variables' bounds, the count's upper bound -- are literals left in
+       the row, exactly as in rule A, and the reason names them.
+
+   Not RUP alone (the free rungs that drop every other x are second constraints, as in
+   rule C's lower push), so the removal is made under [Store.deriving_ahead]. *)
+let hole_expl t ~v ~snaps ~halls ~caps ~y =
+  Explanation.deferred (fun () ->
+      Explanation.combine
+        (cap_summands t ~a:v ~b:v ~snaps ~halls ~caps ~extra:(Some y)
+        @ bound_cancels
+            ~lo_of:(fun s -> fst (alo_leftovers s ~a:v ~b:v))
+            ~hi_of:(fun s -> snd (alo_leftovers s ~a:v ~b:v))
+            halls)
+        1)
+
+(* RULE (b) -- A FORCED VALUE FIXES ITS CANDIDATES (M7-T24, D-0099).
+
+   When the x whose window still holds v number exactly lo(c_v) - const_v and some of them
+   are not yet fixed to v, every one of them must take v.  The header's "What is NOT here"
+   point 2 called this the decomposition's job; once a one-value count is ROUTED to gcc
+   (D-0097) there is no decomposition row left to do it, and that is why it is here now.
+
+   THE DERIVATION is rule C's upper one with the target's indicator kept and the count's
+   ladder paid for from BELOW instead of bounded:
+
+     [ge_cid]       sum_{D_v} e_i - sum_{k = cdlo+1}^{cdhi} c_ge_k  >=  cdlo - const_v
+     count, k <= lo(c):  the chains k -> lo(c) and lo(c) - cdlo copies of the fact
+                         c_ge_lo(c), which adds back lo(c) - cdlo units of degree
+     count, k > lo(c):   the free axiom c_ge_k >= 0
+     x that cannot take v ([zero_summands]): free, from the bound that excludes it
+     every other candidate ([cost_summands]): -e_i >= -1, one unit each
+
+   leaving e_y >= lo(c) - const_v - (|candidates| - 1) = 1, i.e. y_ge_v + ~y_ge_(v+1) >= 2:
+   both bounds at once.  Each push keeps one of the two literals by adding the trivial
+   axiom of the other ([Weaken]), and [ladder_lift] puts it in D-0010's currency as every
+   other bound move of this module.  A candidate must still HOLD v: one whose window
+   contains v around a hole would be fixed onto the hole, and the emptying would carry a
+   derivation that is not contradicting, so the rule waits for rule C to see it.
+
+   NOT made ahead, and for rule C's UPPER push's reason: the trace line is RUP against
+   [ge_cid] alone.  Assume the push false and the facts true; the ladder sets every
+   literal the bounds decide, the target's indicator falls to 0, and the row's slack is
+   the other candidates' indicators at most 1 each -- one short.  Unlike rule (a), no
+   indicator the row needs is held up by a rung unit propagation cannot sum, because every
+   free one appears POSITIVELY.  The derivation is still written wherever a later [pol]
+   consumes the push (a root conflict, test/models/gcc_forced_root_unsat.fzn). *)
+let forced_expl t ~k ~v ~poss ~gone ~y ~lower =
+  let c = k.k_cov in
+  let lo = k.k_lo in
+  Explanation.deferred (fun () ->
+      let others = List.filter (fun s -> not (String.equal s.s_name y.s_name)) poss in
+      let keep_low = lower in
+      let base =
+        Explanation.combine
+          (cite c.ge_cid
+           :: rung_weighted t c.cname ~from_:(c.cdlo + 1) ~to_:lo ~weight:(fun u ->
+                  u - c.cdlo)
+          @ (if lo > c.cdlo && k.k_lo_root then
+               [ Explanation.defining (lo - c.cdlo) (Lit.ge c.cname lo) ]
+             else [])
+          @ List.map
+              (fun kk -> Explanation.weaken [ (1, Lit.ge c.cname kk) ])
+              (range (lo + 1) c.cdhi)
+          @ List.concat_map (fun s -> zero_summands t s v) gone
+          @ bound_cancels
+              ~lo_of:(fun s -> if v < s.s_lo then 1 else 0)
+              ~hi_of:(fun s -> if v > s.s_hi then 1 else 0)
+              gone
+          @ List.concat_map (fun s -> cost_summands s v) others
+          @
+          if keep_low then
+            if v < y.s_dhi then [ Explanation.weaken [ (1, Lit.ge y.s_name (v + 1)) ] ]
+            else []
+          else if v > y.s_dlo then
+            [ Explanation.weaken [ (1, Lit.negate (Lit.ge y.s_name v)) ] ]
+          else [])
+          1
+      in
+      ladder_lift t ~y ~lower ~bound:v base)
+
 (* ------------------------------------------------------------------------ propagation *)
 
 exception Found of Store.conflict
@@ -870,7 +993,7 @@ let rule_c t store ~snaps ~caps ~apply =
         apply ~ahead:true ~lower:true c.cx must
           (Reason.because
              ~concludes:(Some (Reason.at_least ~name:c.cname ~decl:c.cdlo must))
-             (facts @ if k.k_lo_root then [] else k.k_lo_why)
+             facts
              (close_lower t ~k ~must (c_lower_expl t ~k ~fixed ~others ~must))))
     caps;
   ignore store
@@ -923,9 +1046,74 @@ let pass t store =
            (Some
               (if lower then Reason.at_least ~name:y.s_name ~decl:y.s_dlo bound
                else Reason.at_most ~name:y.s_name ~decl:y.s_dhi bound))
-         (scope_facts ~snaps ~caps:caps_ab)
+         (scope_facts ~snaps:(List.filter (in_scope_of ~a ~b) snaps) ~caps:caps_ab)
          (prune_expl t ~a ~b ~snaps ~halls ~caps:caps_ab ~y ~lower ~bound))
   in
+  (* M7-T24, rules (a) and (b): one cover value at a time, before the interval search,
+     because each is O(n) per value and they are what a ROUTED one-value count needs. *)
+  List.iter
+    (fun k ->
+      let c = k.k_cov in
+      let v = c.cv in
+      let dv = List.filter (fun s -> declares s v) snaps in
+      let is_fixed s = s.s_lo = v && s.s_hi = v in
+      let holds s = s.s_lo <= v && v <= s.s_hi in
+      let fixed = List.filter is_fixed dv in
+      (* (a) saturated *)
+      if c.cconst + List.length fixed = k.k_hi then
+        List.iter
+          (fun y ->
+            if not (is_fixed y) then
+              if y.s_lo = v then
+                push ~a:v ~b:v ~halls:fixed ~caps_ab:[ k ] ~y ~lower:true y.s_var (v + 1)
+              else if y.s_hi = v then
+                push ~a:v ~b:v ~halls:fixed ~caps_ab:[ k ] ~y ~lower:false y.s_var (v - 1)
+              else if y.s_lo < v && v < y.s_hi && Domain.mem (Store.get store y.s_var) v
+              then
+                let j =
+                  Reason.because ~concludes:None
+                    (scope_facts ~snaps:dv ~caps:[ k ])
+                    (hole_expl t ~v ~snaps ~halls:fixed ~caps:[ k ] ~y)
+                in
+                match
+                  Store.deriving_ahead store (fun () -> Store.remove store y.s_var v j)
+                with
+                | Store.Conflict cf -> raise (Found cf)
+                | Store.Changed -> raise Moved
+                | Store.Unchanged -> ())
+          dv;
+      (* (b) forced *)
+      let poss = List.filter holds dv in
+      let gone = List.filter (fun s -> not (holds s)) dv in
+      if
+        c.cconst + List.length poss = k.k_lo
+        && List.length fixed < List.length poss
+        && List.for_all (fun s -> Domain.mem (Store.get store s.s_var) v) poss
+      then
+        List.iter
+          (fun y ->
+            if not (is_fixed y) then
+              let lower = y.s_lo < v in
+              let facts =
+                scope_facts ~snaps:dv ~caps:[]
+                @
+                if View.is_const c.cx then []
+                else
+                  [
+                    Reason.at_least ~name:c.cname ~decl:c.cdlo k.k_lo;
+                    Reason.at_most ~name:c.cname ~decl:c.cdhi k.k_hi;
+                  ]
+              in
+              apply ~ahead:false ~lower (View.of_var y.s_var) v
+                (Reason.because
+                   ~concludes:
+                     (Some
+                        (if lower then Reason.at_least ~name:y.s_name ~decl:y.s_dlo v
+                         else Reason.at_most ~name:y.s_name ~decl:y.s_dhi v))
+                   facts
+                   (forced_expl t ~k ~v ~poss ~gone ~y ~lower)))
+          poss)
+    caps;
   List.iter
     (fun a ->
       List.iter
