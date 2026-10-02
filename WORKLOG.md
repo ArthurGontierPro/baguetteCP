@@ -927,6 +927,7 @@ work. The owning session picks it up.
 | M4-T9 | agent-maxmin | 2026-10-02 | **D-0095**. `lib/core/prop/maxmin.ml`: the disjunction `m <= max x` as one propagator (R3 `hi(m) <= max hi(x)`, R4 the unique reacher, conflict) over one `.opb` clause per threshold, `~[m>=v] \/ [x_1>=v] \/ ...`; every explanation is `Explanation.clause` of one posted row (no new constructor, I-X10 Single_row). `m >= x_i` is `n` `Linear` rows. Minimum = same instance over negated views; `int_max`/`int_min` = the two-element array form. mznlib shadows std `redefinitions-2.0.mzn`; D-0083 inference for the result. Corpus: radiation 888 -> 775 nodes, 13.8 -> 7.9 s, all proofs verified |
 | M2-T6 | agent-wake | 2026-10-02 | **D-0094**. Per-engine `props`/`eff`/`contra` (+`wakes`/`masked`/`vetoed`/`seeded`) under `--stats` and on both `limit:` lines, and in `corpus_run.sh`'s detail. The self-wake veto ships with the aliased-scope rule and, in the same commit, the `BAGUETTE_DEBUG` claim re-checker (`Engine.check_claim`). Suite stdout is identical on 132/132, 1 proof changed, and all verify. The veto does not pay: seeding is 75–85 % of runs |
 | M7-T23 | agent-count | 2026-10-02 | **D-0097. Built, measured, WITHDRAWN.** One `mznlib/fzn_count_eq.mzn` (04514a9) routed the whole counting family to gcc. It flattened clean on 436/436 with the same status as std, and gcc carriers went from 42 to 69 models, but it was worse on the node: 2012_amaze and 2015_roster lost their proved optima, 3 more died at the 32 GB cap, and none was better. gcc is bounds-level, so a one-value cover loses interior-value pruning and gains no cross-value reasoning. `among`: 0 corpus callers. Ten lanes kept as one-value gcc tests. `count_std_guard_sat.mzn` pins std. Request filed for gcc interior holes |
+| M7-T24 | agent-gcc3 | 2026-10-02 | **D-0099.** gcc's proof volume was in the REASONS, not the derivations: `scope_facts` appended the trail reason behind every non-root bound (for a `fact_summand` nothing called), unfolding the implication DAG -- 99.998 % of 2015_roster's 1.81 GB. Bounded (bounds only, interval-scoped, weighted rung sums, shared HIGH rows): 7.03 MB -> 10.3 KB per node, 11.8 GB -> 184 MB RSS. Rules (a) saturated value -> interior hole / bound push, (b) forced value -> fix candidates; lanes `gcc_saturate_hole_{sat,unsat}`, `gcc_forced_sat`, `gcc_forced_root_unsat`, a test_trace break, gcc's first I-P1 sweep (3276 scenes). Count route re-measured: still worse on roster, so it stays withdrawn |
 
 ## Handoff notes
 
@@ -3925,3 +3926,22 @@ header no longer says otherwise.
   `mznlib/test/count_std_guard_sat.mzn` makes `check_mznlib.sh` fail if anyone re-adds the
   route without flipping its directives. On the node, `/scratch/arthur/count-flat/{old,new,guard}`
   hold the three whole-corpus flattens.
+
+## M7-T24 handoff, 2026-10-02 (agent-gcc3)
+
+**gcc's two single-value rules and its proof volume** (`lib/core/prop/gcc.ml`, **D-0099**, branch
+`wave39-gcc3`, NOT merged).
+- **The volume was never in the `pol` lines.** On 2015_roster's routed flatten 926 `rup` trace lines
+  held 99.998 % of 1.81 GB, one of them 168 MB. `scope_facts` was appending the trail reason behind
+  every non-root bound, unfolding the DAG into a tree. A reason now names bounds only: 10.3 KB per
+  node, 184 MB RSS. **When a proof is huge, histogram it by rule before believing a story about which
+  derivation is big** (`awk` over `$2` after the `@c` label).
+- **Rule (a)** is rule A on `[v, v]`, enumerated per cover value. It ends in a bound push at a bound
+  and in the order-clause hole (made ahead) when v is interior. **Rule (b)** fixes candidates and its
+  line is bare: it is RUP against the `>=` row.
+- Re-measured, the count route **stays withdrawn**: amaze recovers its optimum but is 1.8x slower,
+  oc-roster is better, and roster still loses the optimum std proves in 30 s. The next gap is a
+  hypothesis, not measured: rule C's upper push and rule (b) count takers by WINDOW, not by value. A
+  holed candidate still counts. Closing it means citing the hole's line through `Store.remover`.
+- Node artefacts are in `/scratch/arthur/gcc3/` (`route/` is the throwaway mznlib, `runs/{old,new}`
+  holds 15 runs with `.vp` files, `vol/` holds the before/after histograms).

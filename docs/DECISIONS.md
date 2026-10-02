@@ -8212,3 +8212,129 @@ route, ready to restore. Merging separate `count(xs, v_i, n_i)` calls over the S
 multi-value gcc is what would actually use the interval-capacity rule (oc-roster counts every
 staff member over one array). MiniZinc's library cannot do that merge, and only the front end
 could.
+
+## D-0099  M7-T24: gcc's two single-value rules, and the proof volume was in the reasons, not the derivations
+
+**Date.** 2026-10-02. **Row.** M7-T24 (agent-gcc3, `wave39-gcc3`), from D-0097's request.
+
+**Where the bytes went.** D-0097 put 2015_roster's routed run at 1.81 GB of proof in 258 nodes and
+11.8 GB RSS, and guessed that rule A's derivation cites too much. It does not. Measured on the
+node (`main`'s binary 2bbdd45a, D-0097's routed flatten, `--time-limit 60 --proof`), the `.pbp`
+broke down as **926 `rup` lines holding 1 813 733 753 bytes (99.998 %)** against 485 `pol` lines
+holding 29 727 bytes. The longest single `rup` line was 168 MB, and one literal appeared 854 545
+times inside it. The cause was `scope_facts`: for every bound a decision-level entry had set, it
+appended that entry's whole trail reason (`s_lo_why`/`s_hi_why` from `Store.lo_support`). The
+argument for it was a `fact_summand` that cited such a bound as the clause `l \/ ~why`. **Nothing
+called `fact_summand`.** Every derivation leaves a non-root bound's literal in the row
+(`bound_cancels`), so the trace line needs that literal and nothing behind it. Appending turned the
+implication DAG into a tree: a gcc reason carried the reasons of the gcc prunings beneath it, and
+those carried theirs. The RSS was the same lists being copied.
+
+**The bound.** (1) A reason names the bounds the counting read and never the reasons behind them.
+The dead `fact_summand`, the `*_why` fields and `support_reason` are gone. (2) Rule A names only the
+variables that declare a value of the interval (`in_scope_of`). Those are exactly the ones the HIGH
+rows mention, so D-0026's reverse check (`top_weaken_owners`) still holds. (3) Sums of chains
+(`ladder_lift`, `ladder_at_most`, `ladder_at_least`) are now one weighted rung list, each rung cited
+once with the number of chains that contain it. That is O(width) ids instead of O(width²), and it
+drops the intermediate `pol` line per chain. `drop_summands` inlines its chain the same way. (4) The
+HIGH_v row is one shared `Explanation.t` per (value, count's upper bound, root-ness), so `Justify`'s
+physical-identity memo (M6-T10) writes it once per level rather than once per push. For a constant
+count it is `Model_row le_cid` itself, not a one-id `pol`. Measured on the same instance and flatten
+at 60 s:
+
+| binary | nodes | proof | per node | RSS | veripb |
+|---|---|---|---|---|---|
+| `main` 2bbdd45a | 258 | 1.81 GB | 7.03 MB | 11.8 GB | (D-0097: NO CONCLUSION) |
+| (1)-(4) only, 52e94146 | 22 486 | 128 MB (rup 120 MB, pol 7.1 MB) | 5.7 KB | 43 MB | NO CONCLUSION |
+| + rules (a)/(b), 294fb3c6 | 32 713, incumbent 4 | 338 MB (rup 286 MB in 1.49 M lines, pol 50 MB) | 10.3 KB | 184 MB | NO CONCLUSION |
+
+The last row costs more per node than the middle one because the new rules prune more: about 45
+trace lines per node, almost all under 50 literals. No single line is large any more. The longest
+`rup` is 1 545 bytes and the longest `pol` 211.
+
+**Rule (a): a saturated value is removed.** If the x fixed to v number `hi(c_v) - const_v`, no
+other x may take v. This is rule A on the singleton `[v, v]`. Its confined set is the fixed x and
+its capacity is `hi(c_v) - const_v`. Rule A only reaches `[v, v]` when v is in both `los` and `his`,
+which a zero-capacity value with nobody fixed to it never is, and it never touched a v strictly
+inside a window. So `pass` enumerates the singletons per cover value. The rule has two outcomes and
+one derivation:
+- If v is at a bound of y, the push is rule A's own (`prune_expl` over `[v, v]`, unchanged).
+- If v is strictly interior, the push is the same counting stopped one step early (`hole_expl`). It
+  concludes the ORDER clause `~y_ge_v \/ y_ge_(v+1)`. That is D-0086 (b)'s single hole currency, so
+  an embedder that cites the hole through `Store.remover` (D-0084 shape 1) needs no bridge. Because
+  the hole is made under `Store.deriving_ahead`, its line is not RUP alone.
+
+Worked against 3.0.2 on `gcc_saturate_hole_sat` (x, y, z, w ∈ 1..3, exactly one 2):
+- `@c6` is the `<=` row `-x2 +x3 -y2 +y3 -z2 +z3 -w2 +w3 >= -1`. `@c3` and `@c4` are the rungs of z
+  and w at 2.
+- `pol @c6 @c3 + @c4 +` gives `-x2 +x3 -y2 +y3 >= -1`, which normalises to
+  `~x_ge_2 + x_ge_3 + ~y_ge_2 + y_ge_3 >= 1`. That is the trace line
+  `rup +1 ~y_ge_2 +1 y_ge_3 +1 ~x_ge_2 +1 x_ge_3 >= 1` that follows it.
+- On its own against the `.opb`, the checker refuses that line ("not implied by reverse unit
+  propagation"). z and w both still hold 2 inside their windows, so the row keeps slack.
+  `test_trace.ml` pins the line and asserts the break.
+
+int_lin_ne then settles y over the hole, so the refutation of x = 2 rests on it, in a SATISFIABLE
+model.
+
+**Rule (b): a forced value fixes its candidates.** If the x whose window holds v number exactly
+`lo(c_v) - const_v` and some are not yet fixed, each one takes v. The header used to call this the
+decomposition's job. Once a count is routed there is no decomposition row left to do it. The
+derivation is rule C's upper one with the target's indicator kept and the count's ladder paid for
+from below:
+- start from `[ge_cid]`;
+- add the chains k → lo(c) and `lo(c) - cdlo` copies of `c_ge_lo(c)`;
+- add `c_ge_k >= 0` above lo(c);
+- add `zero_summands` for the x that cannot take v;
+- add `cost_summands` for the other candidates.
+
+That leaves `e_y >= 1`, which is both bounds. Each push adds the trivial axiom of the literal it
+drops, then goes through `ladder_lift`. A candidate whose window holds v around a HOLE disables the
+rule, because fixing onto a hole would empty with a derivation that does not contradict. Worked on
+`gcc_forced_root_unsat` (x ≤ 1 at the root, two 2s among x, y, z): `pol @c4 x_ge_3 + @c8 + ~z_ge_2 +
+z_ge_3 + y_ge_3 +` gives `y_ge_2 >= 1`. Here `@c4` is the `>=` row and `@c8` is the root unit
+`~x_ge_2`. The z twin and `y + z <= 3` sum to `0 >= 1`, which the conclusion cites. The trace line is
+RUP against the `>=` row by the argument for rule C's upper push: every free indicator appears
+positively. So it is written bare, not ahead.
+
+**Lanes.**
+- `gcc_saturate_hole_sat`/`_unsat` and `gcc_forced_sat`/`gcc_forced_root_unsat`, with every proof
+  checked.
+- The `test_trace` derive-ahead scene "(M7-T24, a gcc saturation hole)", which asserts the line, the
+  `pol` before it, the refused break and the verified whole.
+- gcc's first I-P1 brute-force sweep in `test_prop.ml`. It covers 3 276 root scenes, checked value by
+  value because rule (a) punches holes, and asserts that both rules fire. Making rule (a)'s
+  saturation test off by one reddens three of its four checks, which was measured and reverted.
+
+I-X10 classification is unchanged (`Needs_derivation`). There is no new `Explanation` constructor.
+
+**The re-measurement** (node, `--time-limit 120 --stats --proof`, `ulimit -v 32000000`, veripb on
+every proof). OLD is std's decomposition with `main`'s binary 2bbdd45a. NEW is commit 04514a9's
+`fzn_count_eq.mzn` restored in a throwaway mznlib copy, with this branch's binary 294fb3c6. The
+re-flattened `.fzn` files are byte-identical to D-0097's apart from comments.
+
+| instance | OLD | NEW (this row) | NEW in D-0097 |
+|---|---|---|---|
+| 2012_amaze | optimum 481 proved, 2 567 nodes, 16 s, 33 MB, BOUNDS | optimum 481 proved, 3 700 nodes, 29 s, 45 MB, BOUNDS | no solution, 133 576 nodes, 706 MB |
+| 2015_roster | optimum 0 proved, 5 283 nodes, 30 s, 44 MB, BOUNDS | best 3 (2 sols), 60 382 nodes, 639 MB, 333 MB RSS, NO CONCLUSION | no solution, 258 nodes, 1.81 GB, 11.8 GB RSS |
+| 2013_oc-roster (min) | 6 sols, best 8, 667 nodes, 168 MB | 8 sols, best 6, 2 422 nodes, 295 MB, wall 195 s | 8 sols, 2 712 nodes, 728 MB, wall 185 s |
+| 2014/2016/2018/2023 elitserien_handball | UNKNOWN, 79/81/78/78 nodes, 70.6/69.9/63.7/63.7 MB, ~0.9 GB RSS | UNKNOWN, 77/78/78/76 nodes, 62.7/62.9/62.9/57.6 MB, ~0.87 GB RSS | -- |
+
+All 14 proofs verified (`BOUNDS` on the four optima, `NO CONCLUSION` on the rest).
+
+**Verdict: the table does not flip, and the route stays withdrawn.**
+- amaze is no longer lost, but it is 1.8× slower.
+- oc-roster is better: objective 6 against 8.
+- roster still loses a proved optimum that std reaches in 30 s.
+- The handball instances are neutral, with proofs 1–10 % smaller.
+
+The remaining gap is a HYPOTHESIS and was not measured: rule C's upper push and rule (b) count
+possible takers by WINDOW. A candidate whose window holds v around a hole (roster's
+`int_ne_reif`-heavy model punches many) still counts. Std's decomposition counts it exactly.
+Closing that needs the clearing `-e_i >= 0` for a holed x, which means citing the hole's own line
+through `Store.remover`. That is the D-0084 shape-1 machinery, and it is the next row's, not this
+one's. oc-roster overran its 120 s limit by 75 s on both this run and D-0097's, which is an
+enforcement question for whoever owns `--time-limit`, not gcc's.
+
+**§4 row**: `docs/PROOF-FORMAT.md`'s `global_cardinality` row now states both rules, their
+currencies and their ahead/bare split, and the reasons' scope.

@@ -14,8 +14,11 @@
    Consistency level, and why the declaration is [Checking]
    ---------------------------------------------------------------------------
 
-   The filtering is bounds-level REASONING -- it reads lo/hi and writes lo/hi and never
-   looks at an interior hole -- but the tag is [Propagator.Checking], which is the level
+   The filtering is bounds-level REASONING -- it reads lo/hi and writes lo/hi -- with ONE
+   exception since M7-T24: rule (a) writes an interior hole for a saturated value, and
+   rule (b) reads [Domain.mem] to refuse a candidate whose window holds the value around
+   a hole (see "The two single-value rules" below).  The tag is [Propagator.Checking],
+   which is the level
    the M2-T10 oracle (BAGUETTE_CONSISTENCY=1) holds a propagator to.  That is not
    modesty for its own sake:
 
@@ -193,9 +196,9 @@
 
    2. **No interval LOWER-capacity rule.**  Its per-value case -- when the number of
       possible takers of v equals the count's lower bound, every one of them must take v
-      -- is exactly what the decomposition's own linear row already propagates, so it
-      would not earn its justification HERE, in the row whose thesis is that the global
-      infers what the decomposition cannot.  Its interval case does earn it, and needs
+      -- IS here since M7-T24, as rule (b): this sentence used to say it was the
+      decomposition's job, and once a one-value count is routed to gcc (D-0097) there is
+      no decomposition row left to do it.  Its interval case still is not, and needs
       one line this module does not build: `one variable takes at most one value of
       [a, b]`.  Over the order encoding that line is free as well (the indicators over
       [a, b] telescope to x_ge_a - x_ge_(b+1) <= 1, which is two literal axioms), so the
