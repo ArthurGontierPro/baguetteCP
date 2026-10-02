@@ -1,0 +1,11 @@
+% cumulative refuted by the CAPACITY alone (M4-T10, D-0096): D-0096's four tasks with the
+% horizon cut to 6. A (duration 3, resource 2 = cap) leaves three free points, and three
+% two-unit tasks cannot share them -- any two-unit task in three points covers the
+% middle one. Refuted under search, every node closed by a time-table push that empties
+% a domain (the overload is reported as a push, never a rup conflict line).
+var 0..3: sa :: output_var;
+var 0..4: sb :: output_var;
+var 0..4: sc :: output_var;
+var 0..4: sd :: output_var;
+constraint baguette_cumulative([sa,sb,sc,sd],[3,2,2,2],[2,1,1,1],2);
+solve :: int_search([sb,sc,sd,sa], input_order, indomain_min, complete) satisfy;

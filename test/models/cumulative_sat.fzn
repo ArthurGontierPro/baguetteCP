@@ -1,0 +1,18 @@
+% cumulative under SEARCH: the lane that puts time-table derivations on the page (M4-T10,
+% D-0096). Five tasks, capacity 2, task s2 at resource 2 so the division by r_j in
+% lib/core/prop/cumulative.ml's derivation does real work. Searched latest-first, which
+% makes the first guesses wrong: two conflicts before the solution.
+%
+% Chosen, by a seeded search over random scenes, as one whose proof is REFUSED when
+% every cumulative derivation is replaced by its bare capacity row -- measured with a
+% mutant binary on 2026-10-02 -- so the pol lines here are load-bearing, over a
+% SATISFIABLE model (D-0053, D-0066/D-0073). test/unit/test_trace.ml pins one of its
+% lines as refused standalone (I-X10). Written by hand in the shape
+% mznlib/fzn_cumulative.mzn flattens to; mznlib/test/cumul_src_sat.mzn is its source.
+var 0..2: s0 :: output_var;
+var 0..4: s1 :: output_var;
+var 0..4: s2 :: output_var;
+var 0..3: s3 :: output_var;
+var 0..3: s4 :: output_var;
+constraint baguette_cumulative([s0,s1,s2,s3,s4],[3,1,1,2,2],[1,1,2,1,1],2);
+solve :: int_search([s3,s4,s2,s1,s0], input_order, indomain_max, complete) satisfy;
