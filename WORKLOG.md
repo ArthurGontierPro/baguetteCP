@@ -431,7 +431,8 @@ through the engine.
 `lib/core/explanation.ml`, `lib/core/justify.ml`, `/scratch/arthur/baguette` on the node, and all
 merging. A need for any of these is a `## Cross-session requests` row.
 
-**TWO OVERNIGHT RUNS ARE IN FLIGHT ON `fataepyc-07`, launched 2026-10-01 ~17:30 by the
+**READ 2026-10-02 — D-0089 records both runs and the three that followed on the new binary.**
+**TWO OVERNIGHT RUNS WERE LAUNCHED ON `fataepyc-07` on 2026-10-01 ~17:30 by the
 orchestrator, detached (`setsid nohup`), from `/scratch/arthur/baguette` at `main` =
 `56ae463`, binary md5 `b37ec100a31e27e598edbc334c0f183c`. Do not re-launch them; read them.**
 ssh access to the node was cut for the night right after the launch, so nothing below was
@@ -537,7 +538,7 @@ What landed since D-0079, in the order it matters for the comparison:
   `CHECK-ERR-<rc>`, `TIMEOUT-CHECK` buckets; the three-solver harness with agreement checking
   (0 DISAGREE over 164, D-0081); GCS built on the node, Chuffed from the bundle.
 
-**The node's to-do list, in order, for whoever has access first:**
+**The node's to-do list, in order, for whoever has access first** — *done 2026-10-02 except item 5's `prof.sh` (the sweep ran; D-0089): the reports are read, the node is on `main`, `check_mznlib.sh` says 7 ok, the 27 verify, the comparison ran*:
 1. `scripts/corpus_run.sh --report /scratch/arthur/corpus-out-w31` and
    `scripts/compare_run.sh --report /scratch/arthur/compare-out-w31 --pinned bench/corpus/answers.tsv`
    (check the `DONE-` marker; DISAGREE / PIN-MISMATCH first).

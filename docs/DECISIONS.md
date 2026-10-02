@@ -7496,3 +7496,100 @@ are `s VERIFIED NO CONCLUSION` under veripb 3.0.2 (278 s and 14 s).
 (filed). On 2023_chessboard nothing dominates: the GC (`do_some_marking`, `oldify_one`,
 `pool_sweep`, `caml_shared_try_alloc`, about 21 % together), `compare_val`, `List.map` and
 `Pb.status`, each 3–5 %. That is allocation, not a walk.
+
+## D-0089  The first three-solver comparison, and the wave-31..34 tip on the corpus: 84 solved, 0 rejected, 0 disagreements
+
+**Status**: **MEASUREMENT**, recorded 2026-10-02 by the orchestrator from five runs on
+`fataepyc-07`, all complete (`DONE-` markers checked), all with veripb 3.0.2 on every proof
+baguette or GCS produced. Chuffed 0.14.0 (`d3079869…`, the MiniZinc 2.10.1 bundle, annotation
+search, no free search); GCS commit `5882c294` (`ebffdc08…`, `--prove`, 16 GB proof-file cap);
+Chuffed and GCS flatten with THEIR libraries plus `mznlib/compat_mzn1.mzn` for the 1.x models
+(D-0081). The pinned data pairing is `bench/corpus/answers.tsv`. Harness: `scripts/compare_run.sh`
+(M6-T4) and `scripts/corpus_run.sh` (M7-T4, with M6-T9's `UNKNOWN-LIMIT`).
+
+### 1. The overnight runs (2026-10-01 → 02), binary `b37ec100…` = `main` at `56ae463`
+
+Wave 31 merged except M6-T9, so no `--time-limit`. The node also carried agent-perf's sweep,
+so the `TIMEOUT` columns of these two runs are pessimistic against D-0079's.
+
+**Corpus (`corpus-out-w31`)**: `TIMEOUT-SOLVE` 291, `REFUSED-RESOURCE` 58, **`OK-PROOF-VERIFIED`
+58**, `NO-DATA` 20, `FLATTEN-FAIL` 4, `SOLVE-ERR-134` 3, `REFUSED-MODEL` 1 (`connect`, bounded
+below only), `FLATTEN-TIMEOUT` 1, **`PROOF-REJECTED` 0**.
+
+**Three solvers (`compare-out-w31`)**, 436 × 3:
+
+| status | baguette | Chuffed | GCS (proofs on) |
+|---|---|---|---|
+| SAT / UNSAT / OPT | 15 / 4 / 41 = **60** | 44 / 10 / 218 = **272** | 29 / 6 / 59 = **94** |
+| TIMEOUT (300 s) | 289 | 139 | 40 |
+| CAPPED (16 GB proof) | 0 | 0 | **273** |
+| REFUSED | 59 | 0 | 0 |
+| ERROR | 3 | 0 | 4 |
+| proofs verified / rejected / check-timeout / check-error | **60 / 0 / 0 / 0** | — | 46 / **15** / 32 / 1 |
+
+Agreement: **114 AGREE, 0 DISAGREE**, 0 mismatches against the pinned answers. On the 40
+instances all three solved: median wall baguette **5.87 s**, Chuffed **0.12 s**, GCS **0.22 s**;
+PAR2 over 436: 524 / 240 / 479; median `.pbp` baguette 2.9 MB vs GCS 6.0 MB; median check
+0.52 s vs 1.22 s.
+
+**GCS's 15 rejected proofs** are a finding about GCS or about the one checker, not about this
+project, and every one of them is on an instance where all three solvers agree on the optimum:
+`2011_prize-collecting_pc`, `2011/2012/2014_ship-schedule`, `2013_mario`, `2014_mario`,
+`2013_proteindesign12_wcsp`, `2014_smelt`, `2014_stochastic-fjsp…det`, `2023_table-layout`,
+`2025_atsp`, `2025_mondoku…balance` ("not implied by reverse unit propagation"); `2015_is_model`,
+`2019_stochastic-vrp…det`, `2025_is_model` ("the propagated assignment does not satisfy the
+constraint"); plus `2013_fjsp` where the checker itself aborted (rc 134). Artefacts under
+`/scratch/arthur/compare-out-w31/log/`. GCS with proofs on hits the 16 GB cap on 273 of 436;
+GCS with proofs OFF solves 149 (D-0081).
+
+### 2. The wave-31..34 tip, binary `8b8d4718…` = `main` at `9ff90da` (2026-10-02, node otherwise idle)
+
+**The 27 formerly-rejected instances (`corpus-out-w35-rejected`, `--time-limit 280`)**: 26
+`UNKNOWN-LIMIT` — every stopped proof **VERIFIED NO CONCLUSION** — and `2025_stripboard`, the
+one whose 1.5 GB proof was rejected under D-0080's config (d), now **solved to proved optimality**
+(`s VERIFIED BOUNDS 90 <= obj <= 90`, 1.65 GB). **0 `PROOF-REJECTED`**: D-0084's two fixes held
+on the real instances. The 26 run at 2–20 nodes/s, which is what opened M6-T14.
+
+**Corpus with `--time-limit 280` (`corpus-out-w35`)**, `PAR=64`:
+
+| outcome | count | note |
+|---|---|---|
+| **`OK-PROOF-VERIFIED`** | **81** | 58 → 81; **23 new, 0 lost** against wave 30 |
+| `UNKNOWN-LIMIT` | 189 | stopped itself, proof checked: **all accepted** |
+| `TIMEOUT-SOLVE` | 60 | killed from outside: 49 in a single slow node, 11 before the handler (parse/compile/.opb) |
+| `TIMEOUT-CHECK` | 12 | solved, but veripb exceeded 900 s on proofs of 31–163+ MB |
+| `REFUSED-RESOURCE` | 64 | widths 10 000 – 78 million (58 → 64: inference bounded four `var int`s wide) |
+| `REFUSED-LIMIT` / `SOLVE-ERR-134` / `REFUSED-MODEL` | 2 / 2 / 1 | all width-shaped except `connect` |
+| `NO-DATA` / `FLATTEN-FAIL` / `FLATTEN-TIMEOUT` | 20 / 4 / 1 | the corpus's |
+| **`PROOF-REJECTED`** | **0** | over 270 checked proofs |
+
+Nodes/s on the 189 stopped runs: min 0.004, p25 2.15, **median 9.6**, p75 21.6, max 161.
+
+**Baguette alone through the comparison harness (`compare-out-w35-baguette`, no time limit)**:
+**84 solved** (21 SAT, 5 UNSAT, 58 OPT), 83 proofs verified + 1 check timeout, 258 TIMEOUT,
+67 REFUSED. Joined with the wave-31 Chuffed and GCS tables: **127 AGREE, 0 DISAGREE, 0 pin
+mismatches**. On the 51 instances all three solved:
+
+| solver | median wall | mean | PAR2 (436) | median `.pbp` | median check |
+|---|---|---|---|---|---|
+| baguette | **4.22 s** | 33.5 s | 492.6 | 8.2 MB | 1.42 s |
+| Chuffed | 0.12 s | 0.26 s | 240.5 | — | — |
+| GCS (proofs) | 0.42 s | 17.0 s | 478.9 | 23.3 MB | 4.13 s |
+
+### 3. What it says
+
+1. **The oracle is clean.** Over every instance any two solvers both answered, 0 disagreements and
+   0 pinned-answer mismatches; over 353 checked baguette proofs today, 0 rejected. The 26 defects
+   D-0080 surfaced are gone on the instances that surfaced them.
+2. **Coverage**: 58 → 81 solved under the corpus harness, 60 → 84 under the comparison harness,
+   with nothing lost. Chuffed solves 272, GCS 94 with proofs (149 without). Baguette's PAR2 is
+   now within 3 % of GCS-with-proofs; both are twice Chuffed's.
+3. **Speed is still the gap**: 35× Chuffed and 10× GCS at the median on the common set, and the
+   median stopped run does 9.6 nodes/s. The profile behind the slow quartile is in `Trace`
+   (D-0088, M6-T15) now that `Analysis`'s scans are gone (M6-T14, merged after these runs — so
+   every figure here is BEFORE M6-T14's 5.7× on mario).
+4. **Proof size is a strength**: a third of GCS's at the median, checked three times faster.
+   But 12 solved instances could not be checked within 900 s, and the proofs of the 189 stopped
+   runs are tens of MB each: M4-T5's RUP hints are the row that would move the check column.
+5. **The width wall** (64 + 2 + 2 instances) is D-0028's and untouched; a different encoding of
+   wide domains is a decision not yet taken.
