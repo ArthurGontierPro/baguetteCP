@@ -7496,3 +7496,67 @@ are `s VERIFIED NO CONCLUSION` under veripb 3.0.2 (278 s and 14 s).
 (filed). On 2023_chessboard nothing dominates: the GC (`do_some_marking`, `oldify_one`,
 `pool_sweep`, `caml_shared_try_alloc`, about 21 % together), `compare_val`, `List.map` and
 `Pb.status`, each 3–5 %. That is allocation, not a walk.
+
+## D-0090  M6-T15: `Trace.position_of` from the entry's own trail position, `add_fact` by a reversed accumulator
+
+**Mechanism.** `Store.entry` gains one immutable field, `pos`: the trail position the entry
+was pushed at (`-1` for `dummy_entry`). `apply` is the only constructor, and it pushes the
+record it builds at exactly `trail_len`. No entry is ever re-pushed, so an entry occupies one
+trail position for its whole life. `push_entry` asserts `e.pos = trail_len` under
+`BAGUETTE_DEBUG`. `Trace.position_of` becomes `if 0 <= p < n_done && done_.(p) == e then Some p
+else None` with `p = e.pos`. No second data structure is needed. `remember` is the only writer
+of `done_`, and it is called only from `emit`, with `done_.(i) <- Store.trail_entry store i`. So
+an entry can be in `done_.(0 .. n_done-1)` only at its own `pos`. The walk's first hit is
+therefore its only hit, and it is `e.pos` exactly when `done_.(e.pos) == e`. The `None` case is
+that same test failing.
+
+**Wipe rule.** Unchanged, because there is nothing new to wipe. `resync` still lowers `n_done`
+to the common prefix with the trail, and `remember` still overwrites a slot when it is
+refilled. Between a backtrack and the next `emit`, a popped entry is still "found" at its old
+slot. The walk found it there too, and the new code reproduces that (the unit scene checks
+it). **No line is written twice for one entry at different levels.** An entry has one `pos`,
+and its level is `Store.level_of_index store pos`. A refilled slot holds a DIFFERENT entry, and
+`remember` clears that slot's `line_ids` first.
+
+**`add_fact`.** It is now `add_fact_rev`, which conses onto a reversed accumulator.
+`settle_facts` reverses `base` once, folds, and reverses once at the end. It does the same for
+its `cited` list, which also appended with `@`. The dedup still asks `List.exists Lit.equal`
+over the same set, so first-occurrence semantics and the written order are unchanged. With no
+settled-over holes, `settle_facts` returns `base` itself, as the fold over `[]` did.
+
+**Cross-check, one wave.** The old walk survives as `Trace.position_of_scan`. Under
+`BAGUETTE_DEBUG` it is compared with `position_of` at every call. `test_trace` adds a scene that
+writes lines at levels 0, 1 and 2, wipes level 2, re-pushes it with different entries, re-emits,
+and then backtracks to 0. It checks every entry's position against both the walk and the
+expected value at each step: 60+ checks, plus 5 `add_fact_rev` cases checked against the old
+`acc @ [l]`. Mutation: dropping the `done_.(p) == e` guard turns 7 of those checks red. Under
+`BAGUETTE_DEBUG=1` the cross-check fires nowhere: 0 hits over the 132 suite models and 0 in
+`dune runtest --force`. The debug fatals that remain are pre-existing and belong to M6-T8: the
+four element models' D-0026 check and one `test_learn` I-S4 lane.
+
+**Byte identity.** `bench/m6t11/byte_identity.sh` reports **BYTE-IDENTICAL, 396 artefacts over
+132 models**. OLD is `6b277a7` (md5 `acd28dc2…`) and NEW is `89991e0` (md5 `8f84d6f6…`).
+
+**On the node** (fataepyc-07, `--time-limit 55`, `ulimit -v 32000000`, four jobs at once).
+Both binaries were built in `/scratch/arthur/baguette-speed4`: OLD is `6b277a7` (md5
+`df3a0c6f…`, the same md5 as D-0088's NEW) and NEW is `89991e0` (md5 `71b2f9f3…`). The
+`/scratch/arthur/baguette` checkout is at `f61aaa6`, which predates M6-T14 (md5 `8b8d4718…`), so
+it was not used as OLD.
+
+| instance | OLD nodes / 55 s | NEW nodes / 55 s | ratio |
+|---|---|---|---|
+| 2014_mario | 1697 | 2575 | 1.52x |
+| 2023_chessboard | 3003 | 3027 | 1.01x |
+
+Peak RSS on NEW is 596 MB for mario and 373 MB for chessboard. veripb 3.0.2 gives `s VERIFIED NO
+CONCLUSION` on both NEW proofs (mario in 488 s, chessboard in 20 s). Chessboard was never
+trace-bound, as D-0088 already noted, so 1.01x is expected.
+
+**What remains** (60 s `perf record -g` on NEW, 2014_mario, 2696 nodes). `Trace.go` is gone from
+the profile. The top four self-time symbols are `Stdlib.@` (9.3 %), `caml_apply2` (4.7 %),
+`caml_shared_try_alloc` (4.2 %) and `oldify_one` (4.2 %). Next come `do_some_marking` 3.6 %,
+`pool_sweep` 3.2 %, `Alldiff.go` 3.1 % and `Analysis.same_slot` 2.9 %. The remaining `@` does not
+come from `Trace`. A DWARF call-graph sample attributes 83 % of it to an anonymous function in
+`Analysis`. That is almost certainly `lib/core/analysis.ml:395`'s node merge, `out @ [ n ]`
+after a `List.map` with `same_slot`, which is quadratic in the frontier. Filed as a request,
+because `analysis.ml` is not this row's file.

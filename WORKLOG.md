@@ -735,6 +735,7 @@ work. The owning session picks it up.
 | **M7-T22 / D-0086**: element.ml's header paragraph "What is still OPEN: [excl_hole] trusts the remover's derivation to conclude the hole in the order currency ... Regin ... not reduced or measured here" is now stale -- all_different's interior Regin removal concludes the order clause since M7-T22 (b) (`alldiff.ml` [in_order_currency]; lane `alldiff_regin_hole_element_unsat`). Comment-only edit; element.ml was not in M7-T22's write set for comments. | `lib/core/prop/element.ml` (header, ~L201) | agent-root | **CLOSED 2026-10-02** by the orchestrator at the merge: the header paragraph now states the settled convention |
 | **M6-T14 / D-0088**: after the support and remover histories, 40 % of 2014_mario's self time is `Trace.position_of`, a linear walk over `done_` by physical identity, run once per entry a settle reaches. Another 5 % is `Stdlib.@`, from `Trace.add_fact`'s `acc @ [l]`, which is quadratic in the fact count. A per-entry position (the trail index is known where `done_` is written), or a physical-key table, makes the first O(1). | `lib/core/trace.ml` | agent-speed3 | **taken 2026-10-02** by M6-T15 (agent-speed4, wave 36) |
 | **M6-T14**: under `BAGUETTE_DEBUG=1`, four suite models die on the D-0026 agreement check (`reason [-] vs justification combine(...)`): `alldiff_regin_hole_element_unsat`, `element_crossed_root_unsat`, `element_moved_unsat`, `element_shared_result_root_unsat`. The base binary (`main` before M6-T14) dies the same way, so this predates M6-T14. Some element (or Regin) pruning records `Reason.none` while its justification is a full derivation. | `lib/core/prop/element.ml` (or `alldiff.ml`) | agent-speed3 | **taken 2026-10-02** by M6-T8 (agent-debug, wave 36) |
+| **M6-T15 / D-0090**: once `Trace.position_of` is gone, the top symbol on 2014_mario is `Stdlib.@` at 9.3 % self. A DWARF call graph puts 83 % of it under an anonymous function in `Analysis`, almost certainly the node merge at `lib/core/analysis.ml:395` (`out @ [ n ]` after a `List.map ... same_slot`, which is quadratic in the frontier; `Analysis.same_slot` and `fun_1270` are another 2.9 % and 2.8 %). `add_antecedent` at :407 has the same `@ [ p ]` shape. An indexed frontier, or a reversed list, would make it linear. Byte identity is the proof, as for M6-T14 and M6-T15. | `lib/core/analysis.ml` | agent-speed4 | open |
 
 ## Completed
 
@@ -839,6 +840,7 @@ work. The owning session picks it up.
 | M7-T22 | agent-root | 2026-10-02 | **D-0086**. (a) `Search.dfs`'s root arm writes the root trace when the derivation CONTAINS a `Defining`/`Linear`/`Clause` leaf (walk, not top level); byte-identical over all models, test_matrix's depth-0 lanes unchanged. (b) alldiff's interior Regin removal concludes `~y_ge_v \/ y_ge_(v+1)` (`in_order_currency`, d_fwd row, divisor 1). (c) the pigeonhole push no longer telescopes past y's declared top -- the `ladder rung` crash and a `d_fwd` crash on a 4-variable pigeonhole. Sweep 4 x 30 000: 34 rej + 27 crash -> 0 + 0. Lanes `root_nested_defining_{gcc,alldiff}_unsat`, `alldiff_regin_hole_element_unsat`, `alldiff_pigeonhole_narrow_{unsat,sat}`, `alldiff_overshoot_decl_top_unsat` |
 | M6-T13 | agent-speed2 | 2026-10-02 | **D-0087**. (i) `Search.sequence` records a STAGED form (ephemeron, physical key) that `dfs` asks first; `unfixed store` is built only when every phase is exhausted -- `ne 7 2000` 3.49 -> 1.28 s cpu, padding-independent. (ii) `Opb.Names` string-specialised tables (still keyed on the RENDERED name), no `Printf` per term -- wide 400x300 1.21x. Both byte-identical, 411 artefacts / 137 models (`e3a4a689` -> `c7d41e10`). (iii) `mznlib/fzn_global_cardinality_low_up.mzn`, lanes `gcc_low_up_{sat,unsat}` (hand-written, proofs VERIFIED), `check_mznlib.sh` MUST-EMIT/MUST-NOT-EMIT/SOLVES-AS -- UNFLATTENED-UNTESTED |
 | M6-T14 | agent-speed3 | 2026-10-02 | **D-0088**. Per-variable trail histories (`lo_hist`/`hi_hist`/`all_hist`) in `Store`. `bound_support`, `remover` and `Pb_analysis.falsified_at` are binary searches. The scans remain one wave as `BAGUETTE_DEBUG` cross-checks. 396 artefacts byte-identical. Node, 55 s: 2014_mario 262 -> 1494 nodes, 2023_chessboard 1486 -> 1806. |
+| M6-T15 | agent-speed4 | 2026-10-02 | **D-0090**. `Store.entry.pos`, the entry's own trail position, makes `Trace.position_of` O(1) with no second map and no new wipe rule. The old walk stays one wave as the `BAGUETTE_DEBUG` cross-check and test_trace's oracle. `add_fact` and `settle_facts` use reversed accumulators. 396/396 artefacts byte-identical. Node, 55 s: 2014_mario 1697 -> 2575 nodes, 2023_chessboard 3003 -> 3027. |
 
 ## Handoff notes
 
@@ -3708,3 +3710,18 @@ header no longer says otherwise.
 - Next on mario: `Trace.position_of` (40 % self) and `Trace.add_fact`'s `@`. Both are filed
   as a request against `trace.ml`. Chessboard is GC- and allocation-bound, with no walk left.
   The orchestrator still has to close the `## Active claims` row and the two new request rows.
+
+## M6-T15 handoff, 2026-10-02 (agent-speed4)
+
+- `Store.entry` has a new immutable `pos` field, the trail position the entry was pushed at.
+  `Trace.position_of` is now one array probe (`done_.(e.pos) == e`) and gives exactly the walk's
+  answer, including stale slots after a backtrack, because `done_.(i)` only ever holds the entry
+  at trail position `i`. `Trace.position_of_scan` is the old walk, and it is the
+  `BAGUETTE_DEBUG` cross-check for ONE wave. Delete it next wave together with M6-T14's scans.
+  `add_fact` is now `add_fact_rev`, and `settle_facts` reverses once at the end.
+- The proof is byte identity: 396/396 artefacts (OLD `acd28dc2`, NEW `8f84d6f6`). Under debug the
+  cross-check fires nowhere in the suite. On the node, mario goes from 1697 to 2575 nodes in 55 s
+  and chessboard is flat. Both NEW proofs verify. `/scratch/arthur/baguette` is at `f61aaa6`,
+  which predates M6-T14, so OLD was built from `6b277a7` in `/scratch/arthur/baguette-speed4`.
+- Next on mario: `Stdlib.@` at 9.3 %, now from `Analysis`'s node merge (`analysis.ml:395`).
+  Filed as a request.
