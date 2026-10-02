@@ -394,6 +394,97 @@ let add_node nodes n =
   in
   if !found then out else out @ [ n ]
 
+(* [add_node] above is the SPECIFICATION of the frontier merge and stays as the reference
+   a test compares against; [Frontier] is what [analyse] runs (M6-T16, D-0092).
+
+   [List.fold_left (fun acc f -> add_node acc (mk f)) rest facts] is O(|rest| * |facts|)
+   per resolution step: every [add_node] maps the whole frontier and then appends with
+   [@]. On 2014_mario that was the top of the profile after M6-T15 (D-0090). [Frontier]
+   computes the same sequence with one hash lookup per incoming fact:
+
+     - the frontier is a list of CELLS in frontier order, and a per-bound table from the
+       variable's name to its cell, so "is this slot already in the frontier?" is O(1);
+     - a fact whose slot is present merges INTO the cell, in place, as the [stronger] of
+       the two -- and on a tie [stronger m n] keeps the EXISTING [m], exactly as
+       [add_node] does;
+     - a fact whose slot is new gets a new cell appended after every existing one, in
+       first-arrival order; later facts for that slot merge into it and do not move it.
+       FIRST OCCURRENCE WINS the position; [stronger] decides the content;
+     - [remove] (the node a resolution step expands) drops the cell AND its table entry,
+       so a later fact on that slot is a new slot appended at the end -- which is what
+       [List.filter] followed by [add_node] did.
+
+   A first version (in this same row) rebuilt a polymorphic [(string * bool) Hashtbl]
+   from the whole frontier at every step. It was byte-identical and 1.36x on mario, and
+   0.91x on 2023_chessboard: [caml_hash] and [compare_val] on the tuple keys, re-hashing
+   every frontier node every step, cost more than the short [String.equal] scans they
+   replaced. The table here persists across the walk, is keyed on the bare name with a
+   monomorphic [String] table per bound direction, and hashes only incoming facts.
+
+   [mk] is applied to the facts in order, once each, so [mk_node]'s counters and its
+   [Bad] exception fire in the same order as before. *)
+module Frontier = struct
+  module H = Hashtbl.Make (struct
+    type t = string
+
+    let equal = String.equal
+    let hash (s : string) = Hashtbl.hash s
+  end)
+
+  type cell = { mutable cur : node }
+  type t = { lo : cell H.t; hi : cell H.t; mutable cells : cell list }
+
+  let create () = { lo = H.create 64; hi = H.create 64; cells = [] }
+  let table f n = if Reason.fact_is_lower n.fact then f.lo else f.hi
+  let nodes f = List.map (fun c -> c.cur) f.cells
+
+  let add_all f facts ~mk =
+    let fresh = ref [] in
+    List.iter
+      (fun x ->
+        let n = mk x in
+        let tbl = table f n and name = Reason.fact_owner n.fact in
+        match H.find_opt tbl name with
+        | Some c -> c.cur <- stronger c.cur n
+        | None ->
+            let c = { cur = n } in
+            H.replace tbl name c;
+            fresh := c :: !fresh)
+      facts;
+    if !fresh <> [] then f.cells <- f.cells @ List.rev !fresh
+
+  (* Drop [n]'s cell, as [analyse]'s [List.filter] on slot AND value did. The frontier
+     holds one cell per slot, so this removes [n]'s slot whenever [n] is in it. *)
+  let remove f n =
+    let hit = ref false in
+    f.cells <-
+      List.filter
+        (fun c ->
+          let m = c.cur in
+          if same_slot m n && fact_value m.fact = fact_value n.fact then (
+            hit := true;
+            false)
+          else true)
+        f.cells;
+    if !hit then H.remove (table f n) (Reason.fact_owner n.fact)
+end
+
+(* An insertion-ordered set of ints: [to_list] is the elements in FIRST-OCCURRENCE order,
+   which is what [if not (List.mem p l) then l @ [ p ]] produced, in O(1) per [add]
+   instead of O(length). [analyse]'s antecedent list (M6-T16). *)
+module Uniq = struct
+  type t = { seen : (int, unit) Hashtbl.t; mutable rev : int list }
+
+  let create () = { seen = Hashtbl.create 16; rev = [] }
+
+  let add u p =
+    if not (Hashtbl.mem u.seen p) then (
+      Hashtbl.replace u.seen p ();
+      u.rev <- p :: u.rev)
+
+  let to_list u = List.rev u.rev
+end
+
 exception Bad of error
 
 let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
@@ -401,11 +492,10 @@ let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
   let conflict_level = Store.level store in
   let max_resolutions = Store.trail_length store + 1 in
   let o1 = ref 0 and scanned = ref 0 and resolutions = ref 0 in
-  let antecedents = ref [] and folds = ref [] in
-  let add_antecedent p =
-    if p <> Store.no_prop && not (List.mem p !antecedents) then
-      antecedents := !antecedents @ [ p ]
-  in
+  (* Both accumulate in arrival order; [folds] is kept reversed and turned round once at
+     the end (M6-T16). *)
+  let antecedents = Uniq.create () and folds_rev = ref [] in
+  let add_antecedent p = if p <> Store.no_prop then Uniq.add antecedents p in
   (* The one place [entry.prop] is READ rather than carried. An id that names no
      instance, or an instance that does not watch the variable the entry changed, is a
      corrupt graph and stops the walk -- it does not produce a cut with a wrong
@@ -449,16 +539,14 @@ let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
         | Some (r : Store.entry) ->
             check_attr ~at ~prop:r.Store.prop ~var:r.Store.var;
             add_antecedent r.Store.prop;
-            folds :=
-              !folds
-              @ [
-                  {
-                    fold_var = Store.name store e.Store.var;
-                    fold_value = h;
-                    fold_prop = r.Store.prop;
-                    fold_into = at;
-                  };
-                ];
+            folds_rev :=
+              {
+                fold_var = Store.name store e.Store.var;
+                fold_value = h;
+                fold_prop = r.Store.prop;
+                fold_into = at;
+              }
+              :: !folds_rev;
             r.Store.reason)
       holes
   in
@@ -470,7 +558,9 @@ let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
         else match acc with Some m when m.support >= n.support -> acc | _ -> Some n)
       None nodes
   in
-  let rec loop nodes =
+  let frontier = Frontier.create () in
+  let rec loop () =
+    let nodes = Frontier.nodes frontier in
     if criterion.stop { v_nodes = nodes; v_conflict_level = conflict_level } then nodes
     else
       match best_expandable nodes with
@@ -481,16 +571,12 @@ let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
           let at = n.support in
           let e = Store.trail_entry store at in
           add_antecedent e.Store.prop;
-          let rest =
-            List.filter
-              (fun m -> not (same_slot m n && fact_value m.fact = fact_value n.fact))
-              nodes
-          in
+          Frontier.remove frontier n;
           let added =
             e.Store.reason @ hole_facts e ~at ~is_lower:(Reason.fact_is_lower n.fact)
           in
-          loop
-            (List.fold_left (fun acc f -> add_node acc (mk_node ~before:at f)) rest added)
+          Frontier.add_all frontier added ~mk:(mk_node ~before:at);
+          loop ()
   in
   try
     if c.Store.c_prop <> Store.no_prop && vars_of c.Store.c_prop = None then
@@ -499,12 +585,9 @@ let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
            (Misattributed
               { at = -1; claimed = c.Store.c_prop; var = "<the conflicting row>" }));
     add_antecedent c.Store.c_prop;
-    let start =
-      List.fold_left
-        (fun acc f -> add_node acc (mk_node ~before:(Store.trail_length store) f))
-        [] c.Store.c_reason
-    in
-    let nodes = loop start in
+    Frontier.add_all frontier c.Store.c_reason
+      ~mk:(mk_node ~before:(Store.trail_length store));
+    let nodes = loop () in
     let stopped = criterion.stop { v_nodes = nodes; v_conflict_level = conflict_level } in
     let factless =
       List.filter_map
@@ -523,8 +606,8 @@ let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
         conflict_prop = c.Store.c_prop;
         criterion_name = criterion.crit_name;
         stopped_by_criterion = stopped;
-        antecedents = !antecedents;
-        folds = !folds;
+        antecedents = Uniq.to_list antecedents;
+        folds = List.rev !folds_rev;
         factless;
         resolutions = !resolutions;
         o1_supports = !o1;
