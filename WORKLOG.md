@@ -631,7 +631,6 @@ gets that far. Nobody edits `mznlib/test/check_mznlib.sh` itself (it iterates `*
 |---|---|---|---|
 | M2-T6 | `lib/core/engine.ml`, `lib/core/propagator.ml`, `bin/main.ml` (stats region + `limit:` lines), `scripts/corpus_run.sh` (additive: new `limit:` keys in `summarise_limit`), `test/unit/{test_engine,test_endtoend}.ml`, `docs/ARCHITECTURE.md` §5, `docs/DECISIONS.md` (D-0094, append), `bench/**` | agent-wake | 2026-10-02 |
 | M6-T17 | `lib/proof/writer.ml` (`wipe_level`), `lib/core/justify.ml` (`wipe_level`), `test/unit/{test_proof,test_justify}.ml` | agent-wipe | 2026-10-02 |
-| M4-T9 | `lib/core/prop/maxmin.ml` (new), `lib/core/dune`, `lib/flatzinc/{model,builder,compile}.ml` (its arms), `mznlib/redefinitions.mzn` (`int_max`/`int_min`), `mznlib/fzn_array_int_maximum.mzn` + `_minimum` (new), `mznlib/test/*max*|*min*.mzn`, `test/unit/{test_prop,test_compile}.ml`, new `test/models/*`, `docs/PROOF-FORMAT.md` §4 row, `docs/DECISIONS.md` (D-0095, append) | agent-maxmin | 2026-10-02 |
 | M4-T10 | `docs/DECISIONS.md` (D-0096, append) FIRST; then `lib/core/prop/cumulative.ml` (new), `mznlib/fzn_cumulative*.mzn`, `mznlib/test/*cumul*.mzn`, `test/unit/test_prop.ml` (its own scenes), new `test/models/*`, `docs/PROOF-FORMAT.md` §4 row; dispatch arms and dune line by request | agent-cumulative | 2026-10-02 |
 | M7-T23 | `mznlib/fzn_count*.mzn`, `mznlib/fzn_exactly*.mzn`, `mznlib/fzn_at_most*.mzn`, `mznlib/fzn_at_least*.mzn`, `mznlib/fzn_among*.mzn` (new), `mznlib/test/*count*|*exactly*|*among*|*at_*.mzn`, new `test/models/*` + expected, `docs/DECISIONS.md` (D-0097, append, only if a decision is taken) | agent-count | 2026-10-02 |
 ## Cross-session requests
@@ -786,6 +785,9 @@ work. The owning session picks it up.
 | **M6-T8 / D-0091**: under `BAGUETTE_DEBUG=1`, `test_learn.exe` dies in `test_i_s4_ordering`'s `b BREAK` lane (`break_i_s4 = true`) on `invariant violated: I-S4 ... ALREADY RETIRED`. That is `Search`'s own `Debug.check` CATCHING the deliberate break, which is correct; the lane assumes the flag is off. Measured fix: when `Baguette_core.Debug.enabled`, the lane asserts that `run ~config:{... break_i_s4 = true} settle_src` raises `Failure`, and otherwise it runs the existing lane unchanged. The binary is then clean: 167 ok with the flag, 169 ok without. The patch is the D-0091 handoff's. | `test/unit/test_learn.ml` | agent-debug | **CLOSED 2026-10-02** by the orchestrator at the merge: edit applied, both binaries clean with and without the flag |
 | **M6-T8 / D-0091**, for information at merge: the agreement predicate is in `lib/core/store.ml`, so the D-0026 fix had to go there. The edit is confined to `agreement_holds` and three helpers just above it (`at_root`, `root_holds`, `reverse_owners`). agent-speed4's `store.ml` hunks (entry type, `dummy_entry`, `push_entry`/`apply` position) are elsewhere and should merge without conflict. | `lib/core/store.ml` | agent-debug | FYI |
 | **M6-T16 / D-0092**: after M6-T16 mario's profile is flat (top `caml_apply2` 7.0 %, `Alldiff.go` 4.7 %, `caml_hash` 4.1 %, `compare_val` 3.6 %). The one constant-factor lead left: `Writer.wipe_level` (`lib/proof/writer.ml:727`) `Hashtbl.fold`s the WHOLE `t.tags` table and sorts it at every backtrack, and `Justify.wipe_level` (`lib/core/justify.ml:235`) folds all of `memo.by_level`. Both are generic polymorphic `Hashtbl`s (about 2.1–2.5 % inclusive each, partial DWARF unwinds). A per-level bucket would make a wipe proportional to what it deletes. This is for whoever holds `writer.ml`/`justify.ml`, with byte identity as the contract. Beyond that, the remaining work is design-level (D-0085/D-0087). | agent-speed5 | 2026-10-02 |
+| **M4-T9 / D-0095**: `CLAUDE.md`'s module map needs one line under `lib/core/prop/`: `maxmin.ml  array_int_maximum / array_int_minimum (and int_max/int_min): the disjunction m <= max x as one clause row per threshold, beside n Linear rows m >= x_i; min is max over negated views (M4-T9, D-0095)`. `docs/ARCHITECTURE.md` section 1 already has it | `CLAUDE.md` | agent-maxmin | open |
+| **M4-T9 / D-0095**: `docs/SPEC.md` 2.1 is normative and now lags the front end twice. (a) The M4 builtins row should name `array_int_maximum`, `array_int_minimum`, `int_max`, `int_min` (and `global_cardinality`, which M7-T16 never added). (b) The D-0083 list of bound-carrying builtins should name the same four: `builder.ml` now infers an undomained result from `m >= x_i` plus the hull `m <= max hi(x)` (mirrored for min), MEASURED needed on `2010_filters_filter`'s objective | `docs/SPEC.md` | agent-maxmin | open |
+| **M4-T9**, for information at merge: `test/unit/test_trace.ml`'s I-X10 closure table gained ONE row, `("maxmin.ml", Single_row)`, appended after `gcc.ml`. The gate reddens without it, and it was not in any session's claim. agent-cumulative's `cumulative.ml` row will land at the same spot, so expect a trivial conflict there. Also outside the brief's file list: NEW `mznlib/redefinitions-2.0.mzn` (std has no `fzn_array_int_maximum`, see D-0095) and a two-line edit to `mznlib/redefinitions.mzn`'s header comment saying so. `lib/core/dune` needed NO edit (`include_subdirs unqualified`) | `test/unit/test_trace.ml`, `mznlib/` | agent-maxmin | for information |
 
 ## Completed
 
@@ -893,6 +895,7 @@ work. The owning session picks it up.
 | M6-T15 | agent-speed4 | 2026-10-02 | **D-0090**. `Store.entry.pos`, the entry's own trail position, makes `Trace.position_of` O(1) with no second map and no new wipe rule. The old walk stays one wave as the `BAGUETTE_DEBUG` cross-check and test_trace's oracle. `add_fact` and `settle_facts` use reversed accumulators. 396/396 artefacts byte-identical. Node, 55 s: 2014_mario 1697 -> 2575 nodes, 2023_chessboard 3003 -> 3027. |
 | M6-T8 | agent-debug | 2026-10-02 | **D-0091**. The four element `BAGUETTE_DEBUG` fatals were one call (`Element.no_position_conflict`) and class (c): D-0026's reverse arm required an empty reason to name a top-level `Defining` the ROOT holds. `Store.reverse_owners` now exempts that case, and only when `Store.root_holds` confirms it. test_prop's propagate-only alldiff scenes start a proof. 132/132 models pass under the flag; 21/23 unit binaries are clean, and `test_compile` and `test_learn` are requested. 396 artefacts byte-identical. Finding: element conflicts carry `Reason.none` at every depth, so they never learn a 1UIP clause (explanation quality, not soundness). |
 | M6-T16 | agent-speed5 | 2026-10-02 | **D-0092**. `Analysis.Frontier` is persistent cells plus a per-bound monomorphic `String` table, and it replaces the per-step `add_node` fold (`List.map` + `@`). `Analysis.Uniq` replaces `List.mem`/`@` for antecedents, and `folds` is a reversed accumulator. `add_node` stays as the reference, and `test_analysis` compares the two. 396 artefacts byte-identical. Node: mario 1.40x, chessboard 1.07x (a first per-step tuple-Hashtbl version was 0.91x on chessboard and was replaced). Profile now flat. |
+| M4-T9 | agent-maxmin | 2026-10-02 | **D-0095**. `lib/core/prop/maxmin.ml`: the disjunction `m <= max x` as one propagator (R3 `hi(m) <= max hi(x)`, R4 the unique reacher, conflict) over one `.opb` clause per threshold, `~[m>=v] \/ [x_1>=v] \/ ...`; every explanation is `Explanation.clause` of one posted row (no new constructor, I-X10 Single_row). `m >= x_i` is `n` `Linear` rows. Minimum = same instance over negated views; `int_max`/`int_min` = the two-element array form. mznlib shadows std `redefinitions-2.0.mzn`; D-0083 inference for the result. Corpus: radiation 888 -> 775 nodes, 13.8 -> 7.9 s, all proofs verified |
 
 ## Handoff notes
 
@@ -3831,3 +3834,24 @@ header no longer says otherwise.
   spread over Search, Justify, Writer and Alldiff. The last constant-factor lead is the
   `wipe_level` whole-table folds in Writer/Justify, filed as a request. After that, D-0085/D-0087's
   design proposals are what remains.
+
+## M4-T9 handoff, 2026-10-02 (agent-maxmin)
+
+- `lib/core/prop/maxmin.ml` is the DISJUNCTIVE half of `m = max x`, i.e. `m <= max x`. The `.opb`
+  holds it as one clause per threshold, `C_v = ~[m>=v] \/ [x_1>=v] \/ ...`. Every pruning
+  (R3 `hi(m) <= max hi(x)`, R4 the unique reacher) and every conflict is `Explanation.clause` of
+  exactly one posted row, so there is no new constructor and it is I-X10 Single_row. `m >= x_i`
+  is `n` plain `Linear` rows. Minimum is the same instance over negated views. `int_max`/`int_min`
+  are the two-element array form in the builder, and `redefinitions.mzn` routes them there too.
+- **mznlib trap:** std has NO `fzn_array_int_maximum`. The body lives in std's
+  `redefinitions-2.0.mzn`, so `mznlib/redefinitions-2.0.mzn` now shadows that file. It keeps
+  `bool_clause_reif` and the float forms verbatim. Anyone else who shadows a versioned
+  redefinitions file must keep the rest of it.
+- **Inference trap:** a whole constraint loses the rows that used to bound an undomained result.
+  `2010_filters_filter`'s objective was REFUSED until `builder.ml` learnt `F_hull`. Expect the
+  same for cumulative/count results. SPEC 2.1 is behind on this; it is filed.
+- Gate: 3217 ok / 0 FAIL (`dune runtest --force`), model tests 136/136, peak RSS 41 MB (unit) and
+  18 MB (models). `BAGUETTE_DEBUG=1 test_prop.exe` is clean, and so is `check_mznlib.sh` on the
+  node, 10 ok. Corpus: radiation 888 -> 775 nodes and 13.8 -> 7.9 s. The other three are within a
+  few % of main. Every proof is verified.
+
