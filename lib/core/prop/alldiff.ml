@@ -19,6 +19,13 @@
    for the matching fact that bridges the two, and [gone] for the one thing an interval
    never forced.
 
+   ONE CURRENCY FOR A HOLE (M7-T22, D-0086). Whatever this module derives internally, the
+   explanation it attaches to a trail entry that punches an INTERIOR hole concludes the
+   ORDER clause `~y_ge_v \/ y_ge_(v+1)` -- the clause the entry's trace line claims, and
+   the one every other propagator's hole concludes -- not the direct literal [~y_eq_v]
+   its counting naturally ends on. [in_order_currency] is the conversion and its comment
+   is the argument; docs/PROOF-FORMAT.md section 4's all_different row is the contract.
+
    ---------------------------------------------------------------------------
    Filtering: Hall intervals
    ---------------------------------------------------------------------------
@@ -598,9 +605,19 @@ let target_cancel ~y ~lower =
        ~y_ge_lo(y) + y_ge_(b+1) >= 1 for a lower push and ~y_ge_a + y_ge_(hi(y)+1) >= 1
        for an upper one. Those are the bound the propagator just set, disjoined with the
        bound it read -- again the [Ne] shape, and globally valid. *)
+(* CAPPED AT y's DECLARED TOP (M7-T22, D-0086 (c)). [pass]'s pigeonhole arm pushes a
+   CONTAINED y to [b + 1], and [b] is the interval's end -- some variable's upper bound,
+   not necessarily one y's declared domain reaches. The values of [y.s_lo .. b] above
+   [decl_hi(y)] have no forward channelling clause (y takes none of them by declaration),
+   and the core sum leaves no [~y_eq_v] for them to cancel either ([core_summands] filters
+   the at-most-one lines by declared domain), so the telescope stops at [decl_hi(y)] and
+   its residue [y_ge_(decl_hi+1)] is the constant false. Uncapped it asked for a
+   [direct_fwd_id] that does not exist: exit 2 on `var 1..3: a, b, c; var 1..2: d;
+   all_different_int([a, b, c, d])`, the four-variable pigeonhole. *)
 let prune_summands t ~a ~b ~halls ~y ~lower =
   let keep, drop =
-    if lower then (range y.s_lo b, range (Stdlib.max a y.s_dlo) (y.s_lo - 1))
+    if lower then
+      (range y.s_lo (Stdlib.min b y.s_dhi), range (Stdlib.max a y.s_dlo) (y.s_lo - 1))
     else (range a y.s_hi, range (y.s_hi + 1) (Stdlib.min b y.s_dhi))
   in
   core_summands t ~vals:(range a b) ~halls ~extra:(Some y)
@@ -633,9 +650,17 @@ let prune_summands t ~a ~b ~halls ~y ~lower =
    above [b] and the residue IS the pruning and must stay; in the [n > k] arm it is
    contained, so the push always oversteps. Only the lower direction needs this, because
    [pass] only ever empties a domain downward-out-of ([push ~lower:true]); the mirror
-   case is written out in this comment rather than in code because nothing reaches it. *)
+   case is written out in this comment rather than in code because nothing reaches it.
+
+   [b < y.s_dhi] (M7-T22, D-0086 (c)) is the first paragraph's own condition, which the
+   guard did not state: the residue [y_ge_(b+1)] is a literal the encoding has only when
+   [b + 1 <= decl_hi(y)]. Past it the residue is the constant false, there is nothing to
+   cancel, and the ladder has no rung [y_ge_(decl_hi+1) -> y_ge_decl_hi] to cite -- the
+   `Alldiff: ladder rung has no constraint id` crash (exit 2) the bench/fuzz sweep found on
+   models where an element constraint had shaved y's upper bound below a Hall interval
+   reaching y's declared top. *)
 let overshoot_cancel t ~b ~y ~lower =
-  if lower && b + 1 > y.s_hi && y.s_hi < y.s_dhi && y.s_hi_root then
+  if lower && b + 1 > y.s_hi && b < y.s_dhi && y.s_hi < y.s_dhi && y.s_hi_root then
     List.map
       (fun u -> cite (cid_of "ladder rung" (Encoding.consistency_id t.enc y.s_name u)))
       (range (y.s_hi + 1) b)
@@ -913,17 +938,41 @@ let removal_conclusion y d w =
     Some (Reason.at_most ~name:y.s_name ~decl:y.s_dhi !v))
   else None
 
+(* M7-T22 / D-0086 (b). An INTERIOR Regin removal states `y <> v` the way every other
+   hole in the store is stated -- over the ORDER encoding, `~y_ge_v \/ y_ge_(v+1)`, the
+   clause its own trace line claims -- and not in this module's working currency
+   [~y_eq_v]. The forward channelling line [y_eq_v \/ ~y_ge_v \/ y_ge_(v+1)] converts one
+   into the other exactly: added to [~y_eq_v >= 1 (+ leftovers)], the [y_eq_v] terms pair
+   off and the degree drops by the one unit they carried, divisor 1.
+
+   The trail entry's explanation is a CONTRACT with whoever embeds it, and the embedder
+   that reads it is element.ml's [excl_hole]: when an element RESULT sits in this scope,
+   that instance excludes a position by citing the result hole's remover and pairing it
+   off against its own two ORDER-literal rows. Handed [~y_eq_v], nothing cancelled and a
+   root conflict did not close (bench/fuzz ad 24319, ad 25012;
+   test/models/alldiff_regin_hole_element_unsat.fzn). The convention lives HERE, not as a
+   bridge in [excl_hole], for the reason element.ml's own [in_order_currency] gives: one
+   currency for every hole means an embedder never has to know which propagator punched
+   it. This module's own derivations never read this entry's explanation -- [gone_of]
+   cites a hole by its level ([Gone_hole_root]) or its facts ([Gone_hole]) -- so they are
+   untouched. A removal AT a bound is a bound move, which no one embeds, and keeps its
+   form, exactly as in element.ml. *)
+let in_order_currency t y value expl =
+  match Encoding.direct_fwd_id t.enc y.s_name value with
+  | None -> expl
+  | Some fwd -> Explanation.combine [ Explanation.term 1 expl; cite fwd ] 1
+
 (* One removal, with both halves of D-0026 built from the same snapshot, returning
    through [Found]/[Moved] exactly as [pass]'s [push] does. *)
 let remove_one t store ~halls ~vals ~y_tm value =
   let y = snap_of store y_tm in
   let d = Store.get store y_tm.x in
   let keep v = List.mem v vals in
+  let concludes = removal_conclusion y d value in
+  let expl = remove_expl t ~vals ~halls ~y ~value in
   let j =
-    Reason.because
-      ~concludes:(removal_conclusion y d value)
-      (remove_reason ~keep halls y)
-      (remove_expl t ~vals ~halls ~y ~value)
+    Reason.because ~concludes (remove_reason ~keep halls y)
+      (if Option.is_none concludes then in_order_currency t y value expl else expl)
   in
   (* A Regin hole counts too: [deriving_ahead], as for a Hall bound move. *)
   match Store.deriving_ahead store (fun () -> Store.remove store y_tm.x value j) with

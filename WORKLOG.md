@@ -645,6 +645,7 @@ work. The owning session picks it up.
 | **M7-T21 / D-0084 item 4c**: a solver CRASH, exit 2, pre-existing (the wave-32 base binary too): `Invalid_argument("Alldiff: ladder rung has no constraint id ...")` on three sweep models mixing all_different and element. Reproducer: `var 1..4: x0..x6; all_different_int([x6,x2,x3,x5]); all_different_int([x3,x1,x5]); array_int_element(x6,[1,4,2,2],x5); array_int_element(x3,[1,3,1,3],x6); array_int_element(x3,[4,4,3,2],x2); int_ne(x3,x1); int_lin_le([1,-1,2],[x3,x0,x2],7); int_lin_le([-1,2],[x2,x0],4); solve :: int_search([x1,x6,x2,x4,x0,x3,x5], smallest, indomain_split, complete) satisfy;` Not investigated | `lib/core/prop/alldiff.ml` | agent-rup2 | **taken 2026-10-02** by M7-T22 (agent-root, wave 33) |
 | **M6-T11 / D-0085**: `Opb.normalise` and `Opb.var_names` key generic `Hashtbl`s on RENDERED names (`Lit.var_name` per term, then a polymorphic-compare probe), one table per constraint. On a generated wide compile they are the largest remaining share after M6-T11 (`Opb.write` ~9 %, `normalise` ~9 % inclusive, plus `compare_val`/`caml_hash` ~10 % self). A `string`-specialised `Hashtbl.Make` (as `Encoding.Names`) is byte-safe; keying on `Lit.pbvar` instead is NOT without an argument, because `sanitize` is non-injective and merging by rendered name is the current semantics | `lib/proof/opb.ml` | agent-speed | open |
 | **M6-T11 / D-0085**: on the padded pigeonhole (`bench/m6t11/gen.py ne 7 2000`) the time is in `Search` per-node work over ALL variables (`Search.unfixed`, `Hashtbl.replace` under `branch_split`), not in name lookup -- unconstrained variables cost per node. Worth a look when `search.ml` is free | `lib/core/search.ml` | agent-speed | open |
+| **M7-T22 / D-0086**: element.ml's header paragraph "What is still OPEN: [excl_hole] trusts the remover's derivation to conclude the hole in the order currency ... Regin ... not reduced or measured here" is now stale -- all_different's interior Regin removal concludes the order clause since M7-T22 (b) (`alldiff.ml` [in_order_currency]; lane `alldiff_regin_hole_element_unsat`). Comment-only edit; element.ml was not in M7-T22's write set for comments. | `lib/core/prop/element.ml` (header, ~L201) | agent-root | open |
 
 ## Completed
 
@@ -746,6 +747,7 @@ work. The owning session picks it up.
 | M6-T12 | agent-tidy | 2026-10-02 | `Writer.No_conclusion` verdict; `Search.conclude_stopped` is one `Writer.conclusion` call (hand-written epilogue deleted), a `test_proof.ml` lane asserts the three lines, the audit and veripb's `s VERIFIED NO CONCLUSION`. `corpus_selftest.sh`: four end-to-end `run_one` lanes with fake flattener/solver/checker (UNKNOWN-LIMIT, TIMEOUT-CHECK, CHECK-ERR-1, PROOF-REJECTED). Byte-identical proofs (468 files incl. stdout, md5 of the set `6f18acfb...`). Gate: 2993 ok / 0 FAIL, 117/117 models, selftest PASS. Branch `wave32-tidy`, not merged |
 | M7-T21 | agent-rup2 | 2026-10-02 | **D-0084**. The 23 bare `~<v>_eq_<k>` units: element's [pos_gone] foreign-index-hole arm, a derivation summand forced through another element's `excl_hole` by a factless conflict; it now carries the puncher's facts (alldiff's [Gone_hole] shape). The 3 gcc rups: rule C's LOWER push is not single-row RUP; it is now derived ahead. Plus three ROOT-conflict closures the random sweep found (element residue, element currency, gcc emptying push). Seven new models, two test_trace lanes with measured breaks. UNVERIFIED on the 26 until the node returns (D-0084 lists them by shape). Gate: 2998 unit checks ok / 0 FAIL, 124/124 models, peak RSS 40.5 MB |
 | M6-T11 | agent-speed | 2026-10-02 | **D-0085**. D-0080's #5 (`Store.var_named` lazy index + `name_rep`), #3 (`scan_support` on `Var.t`), #6 (`Lit` rendering without `Printf`/copies; `Encoding` aux-name set + string tables), #4's two local quadratics (`Learned.combine` cancel, `Pb` effective). 366/366 artefacts byte-identical per lever (`bench/m6t11/byte_identity.sh`), tip binary `7a8b5e2c3b86cdc19e3eec5a21aa189b` vs BASE `fd432a57...`. Gate: `dune runtest --force` 2993 ok / 0 FAIL, peak RSS 40.1 MB; `run_model_tests.sh` 117/117, peak RSS 18.5 MB. Branch `wave32-speed`, not merged |
+| M7-T22 | agent-root | 2026-10-02 | **D-0086**. (a) `Search.dfs`'s root arm writes the root trace when the derivation CONTAINS a `Defining`/`Linear`/`Clause` leaf (walk, not top level); byte-identical over all models, test_matrix's depth-0 lanes unchanged. (b) alldiff's interior Regin removal concludes `~y_ge_v \/ y_ge_(v+1)` (`in_order_currency`, d_fwd row, divisor 1). (c) the pigeonhole push no longer telescopes past y's declared top -- the `ladder rung` crash and a `d_fwd` crash on a 4-variable pigeonhole. Sweep 4 x 30 000: 34 rej + 27 crash -> 0 + 0. Lanes `root_nested_defining_{gcc,alldiff}_unsat`, `alldiff_regin_hole_element_unsat`, `alldiff_pigeonhole_narrow_{unsat,sat}`, `alldiff_overshoot_decl_top_unsat` |
 
 ## Handoff notes
 
@@ -3559,3 +3561,24 @@ which of the six instances should move and by how much. Rerun `bench/m6t11/timin
 filed), then watched slack for `Pb` (design, proposed in D-0085; a sorted-sums `effective`
 was tried and was slower). `Store.var_named` is on the hot path now and indexed -- its
 header no longer says otherwise.
+
+## M7-T22 handoff, 2026-10-02 (agent-root)
+
+- **Three root-conflict defects fixed (D-0086), one commit each on `wave33-root`.** (a) the
+  root arm of `dfs` gates the root trace on `root_needs_trace` -- a WALK of the derivation for a
+  leaf written as `rup` (`Defining`, `Linear`, `Clause`) -- not on a top-level `Defining`.
+  Unconditional was measured and rejected: it fails six test_matrix depth-0 checks and adds
+  uncited lines to 11 proofs. A new constructor that renders as `rup` belongs in that walk.
+  (b) all_different's interior Regin removal concludes the ORDER clause, as every hole now
+  does; the convention is the hole's, not the embedder's (element's `excl_hole` unchanged).
+  (c) the pigeonhole push's telescope stops at y's declared top; the `ladder rung` crash and a
+  sibling `d_fwd` crash on `var 1..3: a,b,c; var 1..2: d; all_different` were the same bug.
+- **The sweep is clean**: 30 000 seeds x 4 modes on the final binary, 0 rejected, 0 crashes
+  (before: 34 rejected, 27 crashes). Invocation and hashes in `bench/fuzz/README.md`.
+  No new failing shape. Most models are UNSAT: none of the three fixes has a SAT lane in
+  which the fixed line is load-bearing except (c)'s `alldiff_pigeonhole_narrow_sat`; (a) and
+  (b) are root-conflict defects by construction and their break evidence is a REFUSAL.
+- **Not done here:** the D-0084 request rows still say "taken"; element.ml's header has a stale
+  OPEN paragraph (request filed). Commit attribution used the session's configured
+  `Co-Authored-By` line.
+

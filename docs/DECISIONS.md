@@ -7214,3 +7214,103 @@ byte identity on the corpus instances themselves. What the profiles predict:
 
 Also on the node: 2012 amaze2 and 2017 opd (never reached the search in 280 s) under
 `--time` -- whether `compile` now finishes, and how much of it is `opb`.
+
+## D-0086  Three root-conflict defects from the sweep: the root trace is gated on a WALK, a hole has one currency, a telescope stops at the declared top
+Status: DECIDED (all three fixed; 120 000 sweep models clean)
+Date: 2026-10-02
+Task: M7-T22 (agent-root, wave 33), from D-0084 item 4's three cross-session requests.
+Touches: `lib/core/search.ml` (the root arm of `dfs` and `root_needs_trace`),
+`lib/core/prop/alldiff.ml`, `docs/PROOF-FORMAT.md` §4 (all_different row), `bench/fuzz/README.md`,
+six new models.
+Follows D-0064 (`Defining`), D-0084 (embedded derivations; element's `in_order_currency`),
+D-0066/D-0073 (a `rup` is checked by being load-bearing).
+
+### (a) The root arm writes the root trace when the derivation CONTAINS a `rup` leaf
+
+**The defect.** With no decision on the stack, `dfs` justifies a numeric root conflict by
+its own `pol`, and wrote the root trace first only when `top_defining e` -- a `Defining` at the
+derivation's TOP level. A `Defining` nested under a `Term` (gcc's `bound_cancels`, alldiff's
+`Gone_hole_root`, element's root-residue cancels) asks the claim index exactly the same way,
+found it empty, and minted `rup <lit> >= 1` with nothing on the page to propagate from.
+3.0.2 refused it: gcc 565, 1948, 12008, 23043, 26887; mix 11984, 12008, 12062, 24788;
+seven `ad` seeds (25920 among them).
+
+**Why the guard existed.** M4-T2 added the trace write so a `Defining` cites a line that is
+there; it gated it so a root conflict that consults nothing kept its proof byte for byte.
+That reason is still good: `test_matrix`'s depth-0 lanes pin "no trace and no nogood" and
+"blanking the trace breaks the proof", and an unconditional write fails six of their checks
+(measured) and puts 2..8 uncited lines on 11 of 124 model proofs (all root UNSAT, all still
+verify).
+
+**The rule.** `root_needs_trace` walks the whole derivation -- every `Term`, both sides of
+every `Cut`, through `Deferred` -- and answers true on any leaf `Justify` writes as a `rup`
+against the page: `Defining`, `Linear`, `Clause` (the last never reaches it, being routed to
+`close_root_conflict`, which writes the trace itself; true anyway, since erring true costs
+lines and erring false costs the proof). Including `Linear` is not speculative: it renders
+as `rup` and needs the page just as a minted `Defining` does. Measured: byte-identical
+`.opb`/`.pbp`/stdout over every model (hashed before and after, with and without the
+`Linear` arm), `test_matrix` unchanged.
+
+Rejected: "unconditional" (above), and "contains a `Defining`" alone (leaves a nested
+`Linear` the same hole). The cost of the walk is a list of constructors to keep in step
+with justify.ml; the comment on `root_needs_trace` names it.
+
+Lanes `root_nested_defining_gcc_unsat` (gcc 565 shrunk; pre-fix refused at line 4,
+`rup +1 ~n0_1_ge_2 >= 1 ;`, "not implied by reverse unit propagation") and
+`root_nested_defining_alldiff_unsat` (ad 25920 shrunk; line 31, `rup +1 ~x1_eq_3 >= 1 ;`).
+No SAT lane can exist: the arm is reached only by the refutation itself. The break is a
+REFUSAL, which D-0066's vacuity cannot produce.
+
+### (b) An interior Regin removal concludes the ORDER clause
+
+**The defect.** `remove_one`'s explanation ended on `~y_eq_v`; the hole's trace line, and
+every other propagator's hole (element's since D-0084), is `~y_ge_v \/ y_ge_(v+1)`. Element's
+`excl_hole` embeds the remover's explanation and pairs it off against two order-literal rows,
+so with an element RESULT in an all_different scope nothing cancelled and a root conflict's
+row was "not contradicting" (18 `ad` seeds, 24319 and 25012 among them).
+
+**The rule.** The convention belongs to the hole, not to its embedder: alldiff's
+`in_order_currency` adds the value's forward channelling row `y_eq_v \/ ~y_ge_v \/ y_ge_(v+1)`,
+divisor 1, to an INTERIOR removal (a removal at a bound is a bound move and keeps its form) --
+element.ml's own function, one module over. Bridging in `excl_hole` instead was rejected:
+it would make every future embedder learn which propagator punched a hole. Alldiff's own
+derivations never read the entry's explanation (`gone_of` cites holes by level or facts), so
+they are untouched. Measured: byte-identical over every model without all_different;
+`alldiff_search_unsat`'s proof gains the cited row and verifies.
+
+Lane `alldiff_regin_hole_element_unsat` (ad 24319 shrunk; the binary of the (c) commit is
+refused at line 43, `conclusion UNSAT`, "not contradicting"). No SAT lane: a scratch search
+of 20 000 SAT-biased all_different + element models found no instance under a decision; the
+break is again a refusal.
+
+### (c) The pigeonhole push's telescope stops at y's declared top
+
+**The defect.** Neither a View nor an unmaterialised ladder: the rung asked for exists in no
+encoding. `pass`'s pigeonhole arm pushes a contained y to `b + 1`, with `b` some variable's
+upper bound. `overshoot_cancel` cancelled the residue `y_ge_(b+1)` by rungs from `hi(y)+1` to
+`b` -- but when `b >= decl_hi(y)` that residue is the constant false and the rung
+`y_ge_(decl_hi+1) -> y_ge_decl_hi` is not a row (its own comment states the condition; its
+guard did not). Element was only the route that moved y's upper bound below the interval
+end at the root (27 `ad` crashes). Reducing it found the sibling: `prune_summands`'s
+telescope ran over `[lo(y) .. b]` regardless of y's declaration, so the plain pigeonhole
+`var 1..3: a,b,c; var 1..2: d; all_different_int([a,b,c,d])` crashed with
+`d_fwd has no constraint id` -- exit 2 on a four-variable legal model.
+
+**The rule.** Both telescopes are capped at `decl_hi(y)`; the overshoot cancel runs only
+when `b < decl_hi(y)`. Byte-identical over every existing model. Lanes
+`alldiff_pigeonhole_narrow_unsat`, `alldiff_pigeonhole_narrow_sat` (the push under a
+decision in a satisfiable model) and `alldiff_overshoot_decl_top_unsat` (ad 25203 shrunk);
+the pre-fix binary exits 2 on all three.
+
+### The sweep (bench/fuzz, seeds 1..30000 per mode)
+
+| Mode | Before: rejected / crash | After: rejected / crash |
+|---|---|---|
+| gcc  | 5 / 0  | 0 / 0 |
+| elem | 0 / 0  | 0 / 0 |
+| mix  | 4 / 0  | 0 / 0 |
+| ad   | 25 / 27 | 0 / 0 |
+
+Before: `43b68bb`, binary sha256 `a57f296130906c3e7d9744f83f07928235828280bcc40b5661ccceb94f686ab4`.
+After: `wave33-root` at M7-T22 (b), sha256 `7443a8a24907e9050c3df2dcd8de1f19048957d653d23931b997c089ae97be4b`.
+120 000 models, no new failing shape. The invocation is in `bench/fuzz/README.md`.
