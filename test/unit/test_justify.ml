@@ -795,6 +795,32 @@ let test_index_ignores_clause_order () =
   in
   expect_ok "index: clause order, no exception" r
 
+(* M6-T17: per-level bookkeeping. Stated clauses at levels 1, 2, 3; wipe 2 drops 2 and 3
+   only; mint again at 2; wipe 1 drops everything. *)
+let test_wipe_levels_scene () =
+  let _, r =
+    emitted (fun w ->
+        let _, ctx, _ = build_ctx w in
+        Writer.set_level w 1;
+        let l1 = Justify.emit_rup_clause ctx ~origin:"t" [ Lit.ge "x" 1 ] in
+        Writer.set_level w 2;
+        let l2 = Justify.emit_rup_clause ctx ~origin:"t" [ Lit.ge "x" 2 ] in
+        Writer.set_level w 3;
+        let l3 = Justify.emit_rup_clause ctx ~origin:"t" [ Lit.ge "x" 3 ] in
+        Justify.wipe_level ctx 2;
+        check "scene: level 1 survives a wipe of 2"
+          (Writer.is_live w l1 && (not (Writer.is_live w l2)) && not (Writer.is_live w l3));
+        Writer.set_level w 2;
+        let again = Justify.emit ctx (Explanation.clause [ Lit.ge "x" 2 ]) in
+        check "scene: a wiped clause is re-derived" (again <> l2 && Writer.is_live w again);
+        let kept = Justify.emit ctx (Explanation.clause [ Lit.ge "x" 1 ]) in
+        check "scene: the surviving level-1 line is handed back" (kept = l1);
+        Justify.wipe_level ctx 1;
+        check "scene: wipe 1 retires the rest"
+          ((not (Writer.is_live w l1)) && not (Writer.is_live w again)))
+  in
+  expect_ok "scene" r
+
 let test_index_levels () =
   let _, r =
     emitted (fun w ->
@@ -1657,6 +1683,7 @@ let () =
   test_index_is_structural ();
   test_index_ignores_clause_order ();
   test_index_levels ();
+  test_wipe_levels_scene ();
   test_defining_lit ();
   test_defining_summand ();
   test_defining_is_data ();
