@@ -307,29 +307,52 @@ let drop_summands t s ~time =
     [ Explanation.weaken [ (c, Lit.ge s.s_name a') ] ]
   else []
 
-(* D-0010's currency: gcc's [ladder_lift], with its per-rung chains summed into ONE
-   [Combine] instead of one nested line each -- the same arithmetic, fewer lines. *)
+(* D-0010's currency: gcc's [ladder_lift] restated in LINEAR size.
+
+   The lift turns the single literal a push concludes into the ladder statement another
+   propagator sums against: for a lower push to b, `sum_{k = dlo+1}^{b} y_ge_k >= w`
+   with w = b - dlo (the leftover fact literals scaled alongside).  gcc builds it as w
+   copies of the base plus, for every rung k beneath b, the whole chain k -> b: that is
+   sum_k (b - k) = O(w^2) rung citations in ONE line.  MEASURED on 2008_rcpsp (starts of
+   width ~160): 553 750 pol lines averaging 5.7 KB, 3.17 GB of the 3.37 GB proof.
+
+   Here the units are walked down one rung at a time instead -- u_b = base,
+   u_k = u_(k+1) + rung_k, which is `y_ge_k \/ leftovers >= 1` -- and summed once.  The
+   statement is the same, and it is w short lines plus one of w terms: O(w).  [Justify]
+   memoises by physical identity, so each u_k is written once although it is cited
+   twice.  The upper lift is the mirror: u_(b+1) = base, u_(k+1) = u_k + rung_k is
+   `~y_ge_(k+1) \/ leftovers >= 1`. *)
+let rung_cite t x u = cite 1 (cid_of "ladder rung" (Encoding.consistency_id t.enc x u))
+
 let ladder_lift t ~y ~lower ~bound base =
+  let sum us = Explanation.combine (List.map (Explanation.term 1) us) 1 in
+  let step prev u =
+    Explanation.combine [ Explanation.term 1 prev; rung_cite t y.s_name u ] 1
+  in
   if lower then
     let w = bound - y.s_dlo in
     if w < 2 then base
     else
-      Explanation.combine
-        (Explanation.term w base
-        :: List.concat_map
-             (fun k -> rung_summands t ~c:1 y.s_name ~from_:k ~to_:bound)
-             (range (y.s_dlo + 1) (bound - 1)))
-        1
+      (* k = bound - 1 down to dlo + 1; u_k uses rung k (y_ge_(k+1) -> y_ge_k). *)
+      let rec walk k prev acc =
+        if k <= y.s_dlo then acc
+        else
+          let u = step prev k in
+          walk (k - 1) u (u :: acc)
+      in
+      sum (base :: walk (bound - 1) base [])
   else
     let w = y.s_dhi - bound in
     if w < 2 then base
     else
-      Explanation.combine
-        (Explanation.term w base
-        :: List.concat_map
-             (fun k -> rung_summands t ~c:1 y.s_name ~from_:(bound + 1) ~to_:k)
-             (range (bound + 2) y.s_dhi))
-        1
+      (* k = bound + 2 up to dhi; u_k uses rung k - 1 (y_ge_k -> y_ge_(k-1)). *)
+      let rec walk k prev acc =
+        if k > y.s_dhi then acc
+        else
+          let u = step prev (k - 1) in
+          walk (k + 1) u (u :: acc)
+      in
+      sum (base :: walk (bound + 2) base [])
 
 (* The push of [y] off [time]: [lower] is `y >= time + 1`, otherwise
    `y <= time - d_y`.  [halls] are the OTHER tasks compulsory at [time], [others] every
