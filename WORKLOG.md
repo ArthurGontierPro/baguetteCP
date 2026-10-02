@@ -513,6 +513,51 @@ bookkeeping — NOT the solve loop's proof logic), `lib/proof/opb.ml`, `mznlib/*
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M6-T13 | `lib/core/search.ml` (variable selection + candidate bookkeeping), `lib/proof/opb.ml`, `mznlib/**`, `test/unit/{test_proof,test_compile,test_engine}.ml`, new `test/models/*` + expected, `bench/**`, `docs/DECISIONS.md` (D-0087, append) | agent-speed2 | 2026-10-02 |
+
+**State at the end of 2026-10-02 (orchestrator).** Waves 31 to 34 are merged whole, every merge
+gate-green under `make check` (now including the two harness self-tests): **132 model tests,
+3015 unit checks, 0 FAIL, peak RSS ~75 MB.** Nothing is live; every worktree branch is merged.
+`fataepyc-07` was unreachable the whole day, so every wave-32/33/34 figure is LOCAL and the two
+overnight runs (above, `corpus-out-w31`, `compare-out-w31`) are still unread.
+
+What landed since D-0079, in the order it matters for the comparison:
+- **Speed**, all byte-identical proofs: `Pb_analysis.falsified_at` O(trail) (median nodes/s 1.44 →
+  10.8 on the corpus, D-0080); `Justify` memo buckets (costas prefix 15.3 s → 3.7 s, D-0080);
+  `var_named` index, `Var.equal` in `scan_support`, literal naming without copies, two quadratic
+  loops in `Learned`/`Pb` (knapsack 2.7×, D-0085); per-node work independent of store size,
+  string-keyed `Opb` tables (padded pigeonhole 2.7×, wide compile 1.2×, D-0087).
+- **Proof soundness**: the 26 corpus `PROOF-REJECTED` (two shapes, D-0084), three root-conflict
+  defects and a pigeonhole crash from the random sweep (D-0086); `bench/fuzz/` sweeps 120 000
+  models with 0 rejected / 0 crashes on the current binary. A `Justify` crash on single-value
+  variables (M7-T20).
+- **Coverage**: gcc constant counts, `indomain`, `anti_first_fail`, bounds inference for undomained
+  `var int`, `global_cardinality_low_up` routed (UNFLATTENED-UNTESTED: `mznlib/test/check_mznlib.sh`
+  on the node, expect `7 ok`).
+- **Instrumentation**: `--time-limit` on the wall clock with `conclusion NONE`; `UNKNOWN-LIMIT`,
+  `CHECK-ERR-<rc>`, `TIMEOUT-CHECK` buckets; the three-solver harness with agreement checking
+  (0 DISAGREE over 164, D-0081); GCS built on the node, Chuffed from the bundle.
+
+**The node's to-do list, in order, for whoever has access first:**
+1. `scripts/corpus_run.sh --report /scratch/arthur/corpus-out-w31` and
+   `scripts/compare_run.sh --report /scratch/arthur/compare-out-w31 --pinned bench/corpus/answers.tsv`
+   (check the `DONE-` marker; DISAGREE / PIN-MISMATCH first).
+2. `cd /scratch/arthur/baguette && git pull --ff-only origin main` (origin is the bare
+   `/scratch/arthur/baguette.git`; push `main` there first from a machine that can) and rebuild
+   with the opam PATH line; hash the binary.
+3. `MZN=<minizinc> mznlib/test/check_mznlib.sh` → `7 ok, 0 failed`, or M6-T13 (iii) is wrong.
+4. Re-run the 26 ids of D-0084 (`bench/m6t9/results/a2.tsv`, `PROOF-REJECTED` rows) plus
+   `2025_stripboard` with the new binary: every one should verify or stop at a DIFFERENT, later
+   line, which is then a new finding.
+5. `bench/m6t9/prof.sh` OLD=`b37ec100…` NEW=current on D-0080's six instances; then the config (a')
+   sweep with `SOLVER_ARGS="--time-limit 280 --stats --time"` over all 436 → the new `UNKNOWN-LIMIT`
+   / verified split against D-0079's 58.
+6. The full three-solver comparison on the new binary, `PAIRS=bench/corpus/answers.tsv`.
+
+**Open and NOT taken**: 14 older cross-session rows (agent-xreview's review items, M2-T11's
+evidence, the width-lint hatch) and two design-level performance proposals in D-0085/D-0087 —
+watched slack for `Pb.propagate`, and a priority structure for the un-annotated default
+`first_fail` over every variable (still linear per node). Those two are SPEC §3.4-adjacent and
+need a record before code.
 ## Cross-session requests
 
 Need a change in a file someone else has claimed? Write it here and move on to other
