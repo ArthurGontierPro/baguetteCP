@@ -718,6 +718,8 @@ work. The owning session picks it up.
 | **M6-T11 / D-0085**: `Opb.normalise` and `Opb.var_names` key generic `Hashtbl`s on RENDERED names (`Lit.var_name` per term, then a polymorphic-compare probe), one table per constraint. On a generated wide compile they are the largest remaining share after M6-T11 (`Opb.write` ~9 %, `normalise` ~9 % inclusive, plus `compare_val`/`caml_hash` ~10 % self). A `string`-specialised `Hashtbl.Make` (as `Encoding.Names`) is byte-safe; keying on `Lit.pbvar` instead is NOT without an argument, because `sanitize` is non-injective and merging by rendered name is the current semantics | `lib/proof/opb.ml` | agent-speed | **taken 2026-10-02** by M6-T13 (agent-speed2, wave 34) **CLOSED 2026-10-02**: merged, D-0087 |
 | **M6-T11 / D-0085**: on the padded pigeonhole (`bench/m6t11/gen.py ne 7 2000`) the time is in `Search` per-node work over ALL variables (`Search.unfixed`, `Hashtbl.replace` under `branch_split`), not in name lookup -- unconstrained variables cost per node. Worth a look when `search.ml` is free | `lib/core/search.ml` | agent-speed | **taken 2026-10-02** by M6-T13 (agent-speed2, wave 34) **CLOSED 2026-10-02**: merged, D-0087 |
 | **M7-T22 / D-0086**: element.ml's header paragraph "What is still OPEN: [excl_hole] trusts the remover's derivation to conclude the hole in the order currency ... Regin ... not reduced or measured here" is now stale -- all_different's interior Regin removal concludes the order clause since M7-T22 (b) (`alldiff.ml` [in_order_currency]; lane `alldiff_regin_hole_element_unsat`). Comment-only edit; element.ml was not in M7-T22's write set for comments. | `lib/core/prop/element.ml` (header, ~L201) | agent-root | **CLOSED 2026-10-02** by the orchestrator at the merge: the header paragraph now states the settled convention |
+| **M6-T14 / D-0088**: after the support and remover histories, 40 % of 2014_mario's self time is `Trace.position_of`, a linear walk over `done_` by physical identity, run once per entry a settle reaches. Another 5 % is `Stdlib.@`, from `Trace.add_fact`'s `acc @ [l]`, which is quadratic in the fact count. A per-entry position (the trail index is known where `done_` is written), or a physical-key table, makes the first O(1). | `lib/core/trace.ml` | agent-speed3 | open |
+| **M6-T14**: under `BAGUETTE_DEBUG=1`, four suite models die on the D-0026 agreement check (`reason [-] vs justification combine(...)`): `alldiff_regin_hole_element_unsat`, `element_crossed_root_unsat`, `element_moved_unsat`, `element_shared_result_root_unsat`. The base binary (`main` before M6-T14) dies the same way, so this predates M6-T14. Some element (or Regin) pruning records `Reason.none` while its justification is a full derivation. | `lib/core/prop/element.ml` (or `alldiff.ml`) | agent-speed3 | open |
 
 ## Completed
 
@@ -821,6 +823,7 @@ work. The owning session picks it up.
 | M6-T11 | agent-speed | 2026-10-02 | **D-0085**. D-0080's #5 (`Store.var_named` lazy index + `name_rep`), #3 (`scan_support` on `Var.t`), #6 (`Lit` rendering without `Printf`/copies; `Encoding` aux-name set + string tables), #4's two local quadratics (`Learned.combine` cancel, `Pb` effective). 366/366 artefacts byte-identical per lever (`bench/m6t11/byte_identity.sh`), tip binary `7a8b5e2c3b86cdc19e3eec5a21aa189b` vs BASE `fd432a57...`. Gate: `dune runtest --force` 2993 ok / 0 FAIL, peak RSS 40.1 MB; `run_model_tests.sh` 117/117, peak RSS 18.5 MB. Branch `wave32-speed`, not merged |
 | M7-T22 | agent-root | 2026-10-02 | **D-0086**. (a) `Search.dfs`'s root arm writes the root trace when the derivation CONTAINS a `Defining`/`Linear`/`Clause` leaf (walk, not top level); byte-identical over all models, test_matrix's depth-0 lanes unchanged. (b) alldiff's interior Regin removal concludes `~y_ge_v \/ y_ge_(v+1)` (`in_order_currency`, d_fwd row, divisor 1). (c) the pigeonhole push no longer telescopes past y's declared top -- the `ladder rung` crash and a `d_fwd` crash on a 4-variable pigeonhole. Sweep 4 x 30 000: 34 rej + 27 crash -> 0 + 0. Lanes `root_nested_defining_{gcc,alldiff}_unsat`, `alldiff_regin_hole_element_unsat`, `alldiff_pigeonhole_narrow_{unsat,sat}`, `alldiff_overshoot_decl_top_unsat` |
 | M6-T13 | agent-speed2 | 2026-10-02 | **D-0087**. (i) `Search.sequence` records a STAGED form (ephemeron, physical key) that `dfs` asks first; `unfixed store` is built only when every phase is exhausted -- `ne 7 2000` 3.49 -> 1.28 s cpu, padding-independent. (ii) `Opb.Names` string-specialised tables (still keyed on the RENDERED name), no `Printf` per term -- wide 400x300 1.21x. Both byte-identical, 411 artefacts / 137 models (`e3a4a689` -> `c7d41e10`). (iii) `mznlib/fzn_global_cardinality_low_up.mzn`, lanes `gcc_low_up_{sat,unsat}` (hand-written, proofs VERIFIED), `check_mznlib.sh` MUST-EMIT/MUST-NOT-EMIT/SOLVES-AS -- UNFLATTENED-UNTESTED |
+| M6-T14 | agent-speed3 | 2026-10-02 | **D-0088**. Per-variable trail histories (`lo_hist`/`hi_hist`/`all_hist`) in `Store`. `bound_support`, `remover` and `Pb_analysis.falsified_at` are binary searches. The scans remain one wave as `BAGUETTE_DEBUG` cross-checks. 396 artefacts byte-identical. Node, 55 s: 2014_mario 262 -> 1494 nodes, 2023_chessboard 1486 -> 1806. |
 
 ## Handoff notes
 
@@ -3674,3 +3677,19 @@ header no longer says otherwise.
   (`padded pigeonhole`, `Opb.normalise`, `global_cardinality_low_up`) still say taken/claimed;
   they are yours to close. Node plan in D-0087's last section. Local gate: dune runtest
   --force 0 FAIL, 132/132 model tests, fmt/lint/determinism/unlimit/selftests green.
+
+## M6-T14 handoff, 2026-10-02 (agent-speed3)
+
+- `Store` now keeps three per-variable stacks of trail positions: lower-bound moves, upper-bound
+  moves, and every entry. `apply` pushes them and `undo_to` pops them, and `check_invariants`
+  asserts them. `Store.bound_support` replaces `Analysis.scan_support` in `support_of`, and
+  `Store.remover` and `Pb_analysis.falsified_at` are binary searches over the same stacks.
+  The three old scans (`Analysis.scan_support`, `Store.remover_scan`,
+  `Pb_analysis.falsified_at_scan`) are `BAGUETTE_DEBUG` cross-checks and the unit tests'
+  oracles for ONE wave. Delete them next wave, and move their comments onto the new functions.
+- The proof is byte identity: 396/396 artefacts over 132 models for both commits. On the node,
+  2014_mario goes from 262 to 1494 nodes in 55 s and 2023_chessboard from 1486 to 1806.
+  Neither finishes in 300 s. The 55 s proofs verify.
+- Next on mario: `Trace.position_of` (40 % self) and `Trace.add_fact`'s `@`. Both are filed
+  as a request against `trace.ml`. Chessboard is GC- and allocation-bound, with no walk left.
+  The orchestrator still has to close the `## Active claims` row and the two new request rows.
