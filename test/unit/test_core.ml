@@ -1359,6 +1359,19 @@ let test_bound_history () =
           bad :=
             Printf.sprintf "falsified_at %s: history %d scan %d" (Lit.to_string l) a b))
       lits;
+    List.iter
+      (fun var ->
+        for value = -1 to 11 do
+          for before = -1 to n + 1 do
+            let a = Store.remover s ~before ~var value in
+            let b = Store.remover_scan s ~before ~var value in
+            if not (Option.equal ( == ) a b) then (
+              ok := false;
+              bad :=
+                Printf.sprintf "remover %s %d before %d" (Store.name s var) value before)
+          done
+        done)
+      [ x; y; x'; z ];
     check
       (Printf.sprintf "bound history = trail scan, every case (%s)%s" tag
          (if !ok then "" else " -- " ^ !bad))

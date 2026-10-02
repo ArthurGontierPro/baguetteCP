@@ -156,6 +156,10 @@ type t = {
   lo_hn : int array;
   hi_hist : int array array;
   hi_hn : int array;
+  (* M6-T14: the same for EVERY live entry on the variable, bound move or hole, behind
+     [remover]. One more int per trail entry. *)
+  all_hist : int array array;
+  all_hn : int array;
   (* The [name_rep] classes with more than one member, or [None] when names are unique
      (every store [Compile] builds). Lazy for the same reason [by_name] is. *)
   classes : int list array option Lazy.t;
@@ -267,6 +271,8 @@ let create ~names ~domains =
     lo_hn = Array.make nv 0;
     hi_hist = Array.make nv [||];
     hi_hn = Array.make nv 0;
+    all_hist = Array.make nv [||];
+    all_hn = Array.make nv 0;
     classes = lazy (build_classes (Lazy.force by_name));
     trail = Array.make 64 dummy_entry;
     trail_len = 0;
@@ -658,6 +664,7 @@ let apply t v (r : Domain.result) (j : Reason.justified) =
       check_conclusion t v ~old ~now:d j;
       let why = Explanation.Arena.add t.reasons why in
       let at = t.trail_len in
+      push_hist t.all_hist t.all_hn i at;
       push_entry t
         {
           var = v;
@@ -710,6 +717,7 @@ let undo_to t target =
     t.hi_sup.(i) <- e.sup_hi;
     (* M6-T14: the entry being popped is the newest on the trail, so if it moved a bound
        it is the top of that bound's history. *)
+    t.all_hn.(i) <- t.all_hn.(i) - 1;
     if Domain.lo e.now > Domain.lo e.old then t.lo_hn.(i) <- t.lo_hn.(i) - 1;
     if Domain.hi e.now < Domain.hi e.old then t.hi_hn.(i) <- t.hi_hn.(i) - 1;
     t.trail.(t.trail_len - 1) <- dummy_entry;
@@ -861,7 +869,7 @@ let bound_support t ~before v ~is_lower ~value =
 
    Shared: [Trace] and [Linear] had a copy each ([remover] and [find_removal]), with the
    two off-by-one conventions that invites. This is the [before]-is-exclusive one. *)
-let remover t ~before ~var value =
+let remover_scan t ~before ~var value =
   let rec go i =
     if i < 0 then None
     else
@@ -871,6 +879,34 @@ let remover t ~before ~var value =
       else go (i - 1)
   in
   go (Stdlib.min (before - 1) (t.trail_len - 1))
+
+(* M6-T14 (D-0088): [remover_scan]'s answer from [var]'s entry history in O(log entries
+   on [var]) rather than O(|trail|) per call -- the walk that was left at the top of
+   2014_mario's profile once [bound_support] had removed the bound one. Along that history
+   each entry's [old] is its predecessor's [now] and domains only shrink (I-D3), so
+   "[value] is gone from [now]" is false then true: the first entry where it turns true
+   is the only one that can have removed it, found by binary search; it did iff its [old]
+   still held [value] (false only for the first entry, when the declared domain never
+   did), and the scan finds it iff it lies strictly below [before]. The scan stays one
+   wave as the [BAGUETTE_DEBUG] cross-check and test_core's oracle. *)
+let remover t ~before ~var value =
+  let i = Var.to_int var in
+  let h = t.all_hist.(i) and n = t.all_hn.(i) in
+  let lo = ref 0 and hi = ref n in
+  while !lo < !hi do
+    let mid = (!lo + !hi) lsr 1 in
+    if Domain.mem t.trail.(h.(mid)).now value then lo := mid + 1 else hi := mid
+  done;
+  let r =
+    if !lo = n then None
+    else
+      let at = h.(!lo) in
+      let e = t.trail.(at) in
+      if at < before && Domain.mem e.old value then Some e else None
+  in
+  Debug.check "M6-T14: remover's history agrees with the trail scan" (fun () ->
+      Option.equal ( == ) r (remover_scan t ~before ~var value));
+  r
 
 (* The values [Domain.settle] walked a bound over on its way to [cur]: the maximal run of
    holes immediately below (above) it in [old]. It stops at the first value [old] still
@@ -1004,6 +1040,21 @@ let check_invariants t =
   in
   hist_ok t.lo_hist t.lo_hn t.lo_sup (fun e -> Domain.lo e.now > Domain.lo e.old);
   hist_ok t.hi_hist t.hi_hn t.hi_sup (fun e -> Domain.hi e.now < Domain.hi e.old);
+  (* and the entry history holds exactly the live entries, each under its own variable *)
+  let total = ref 0 in
+  Array.iteri
+    (fun i n ->
+      total := !total + n;
+      for j = 0 to n - 1 do
+        let at = t.all_hist.(i).(j) in
+        if
+          at < 0 || at >= t.trail_len
+          || (j > 0 && at <= t.all_hist.(i).(j - 1))
+          || Var.to_int t.trail.(at).var <> i
+        then ok_hist := false
+      done)
+    t.all_hn;
+  if !total <> t.trail_len then ok_hist := false;
   ok_marks && !ok_reasons && ok_domains && !ok_support && !ok_hist
 
 let to_string t =
