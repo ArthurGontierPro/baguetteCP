@@ -625,7 +625,8 @@ work. The owning session picks it up.
 | **M6-T9**: `Search.conclude_stopped` writes `output NONE` / `conclusion NONE` / `end` through `Writer.rule` and then repeats `Writer.conclusion`'s epilogue (finished, flush, audit) by hand, because `Writer.verdict` has no NONE arm. A `Writer.No_conclusion` verdict would make it one call | `lib/proof/writer.ml` | agent-perf | **taken 2026-10-02** by M6-T12 (agent-tidy), wave 32 |
 
 | **M6-T9**: `corpus_selftest.sh` has no lane for the three classifications this wave added or repaired -- `UNKNOWN-LIMIT`, `CHECK-ERR-<rc>`, and `TIMEOUT-CHECK` (unreachable before `2dda188`). A fake solver printing `limit: reached` and a fake checker exiting 124 / exiting 1 with and without "Verification error" would pin all three | `scripts/corpus_selftest.sh` | agent-perf | **taken 2026-10-02** by M6-T12 (agent-tidy), wave 32 |
-
+| **M6-T11 / D-0085**: `Opb.normalise` and `Opb.var_names` key generic `Hashtbl`s on RENDERED names (`Lit.var_name` per term, then a polymorphic-compare probe), one table per constraint. On a generated wide compile they are the largest remaining share after M6-T11 (`Opb.write` ~9 %, `normalise` ~9 % inclusive, plus `compare_val`/`caml_hash` ~10 % self). A `string`-specialised `Hashtbl.Make` (as `Encoding.Names`) is byte-safe; keying on `Lit.pbvar` instead is NOT without an argument, because `sanitize` is non-injective and merging by rendered name is the current semantics | `lib/proof/opb.ml` | agent-speed | open |
+| **M6-T11 / D-0085**: on the padded pigeonhole (`bench/m6t11/gen.py ne 7 2000`) the time is in `Search` per-node work over ALL variables (`Search.unfixed`, `Hashtbl.replace` under `branch_split`), not in name lookup -- unconstrained variables cost per node. Worth a look when `search.ml` is free | `lib/core/search.ml` | agent-speed | open |
 
 ## Completed
 
@@ -723,6 +724,7 @@ work. The owning session picks it up.
 | M6-T4 (+ M5-T3) | `scripts/compare_run.sh` (new), `scripts/compare_selftest.sh` (new), `tools/compare/compare.py` (new), `bench/README.md` (§8, appended), `bench/corpus/{shared_set.lst,answers.tsv}` (new), `docs/DECISIONS.md` (D-0081), `docs/ROADMAP.md` (M6-T4 row) | agent-compare | released 2026-10-01 -- **D-0081**, branch `wave31-compare`, not merged. 0 DISAGREE over 164 agreeing instances |
 
 | M6-T9 | agent-perf | 2026-10-02 | **D-0080**. `--time-limit S` + `Search.config.stop`: a stopped run ends `conclusion NONE` and veripb accepts it (142 corpus runs); `BAGUETTE_PB_ANALYSIS`, `BAGUETTE_NODE_LIMIT`, SIGTERM `limit: killed` line; `corpus_run.sh` `SOLVER_ARGS`/`NO_PROOF`/`RSS`/`UNKNOWN-LIMIT`/`--no-output-ozn`, and two repaired classifications (`TIMEOUT-CHECK` never fired; rejection gated on the checker's wording). Shipped fix: `Pb_analysis.falsified_at` one-pass (57 → 73 verified, median nodes/s 1.44 → 10.8, byte-identical proofs) and overflow-as-fallback in the PB walk. Gate on `249d37d`: 2953 ok / 0 FAIL (peak 40.9 MB), 107/107 models (18.5 MB), selftest PASS, w30 report byte-identical. Branch `wave31-perf`, not merged |
+| M6-T11 | agent-speed | 2026-10-02 | **D-0085**. D-0080's #5 (`Store.var_named` lazy index + `name_rep`), #3 (`scan_support` on `Var.t`), #6 (`Lit` rendering without `Printf`/copies; `Encoding` aux-name set + string tables), #4's two local quadratics (`Learned.combine` cancel, `Pb` effective). 366/366 artefacts byte-identical per lever (`bench/m6t11/byte_identity.sh`), tip binary `7a8b5e2c3b86cdc19e3eec5a21aa189b` vs BASE `fd432a57...`. Gate: `dune runtest --force` 2993 ok / 0 FAIL, peak RSS 40.1 MB; `run_model_tests.sh` 117/117, peak RSS 18.5 MB. Branch `wave32-speed`, not merged |
 
 ## Handoff notes
 
@@ -3470,3 +3472,16 @@ element / `mapget` indices. The artefacts are kept on the node; do not delete
 `/scratch/arthur/perf-out-{a,a2}/log`.
 
 Branch `wave31-perf`, not merged. Gate on the final tip: see the Completed row.
+
+## M6-T11 handoff, 2026-10-02 (agent-speed)
+
+Four constant-factor levers on `wave32-speed`, one commit each, every artefact of the suite
+plus five generated models byte-identical at each (D-0085 has the hashes and the table).
+Locally only #4 moves much (`knap 12 3 3 1` at 100 nodes 4.9 s -> 1.8 s; it reproduces
+D-0080's trucking profile); #6 is ~1.25x on a wide compile; #3 and #5 are shipped on
+D-0080's profiles and are UNMEASURED until the node is back -- D-0085's last table says
+which of the six instances should move and by how much. Rerun `bench/m6t11/timing.sh` and
+`byte_identity.sh` with BASE vs tip there. Next tier: `Opb`'s string tables (request
+filed), then watched slack for `Pb` (design, proposed in D-0085; a sorted-sums `effective`
+was tried and was slower). `Store.var_named` is on the hot path now and indexed -- its
+header no longer says otherwise.
