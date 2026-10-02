@@ -198,10 +198,13 @@
        off ORDER literals. It now concludes `~idx_ge_p \/ idx_ge_(p+1)`, like every other
        hole in the store. test/models/element_crossed_root_unsat.fzn.
 
-   What is still OPEN: [excl_hole] trusts the remover's derivation to conclude the hole in
-   the order currency. An element result that is also in an all_different scope can have
-   a hole punched by Regin, whose derivation concludes over the direct encoding; that
-   case is not reduced or measured here (D-0084, "not verified").
+   The case D-0084 left "not verified" is settled (M7-T22, D-0086): [excl_hole] trusts the
+   remover's derivation to conclude the hole in the ORDER currency, and an element result
+   that is also in an all_different scope can have its hole punched by Regin, whose
+   removal used to conclude over the DIRECT encoding. alldiff.ml now converts an interior
+   Regin removal to the order clause itself ([in_order_currency], the forward channelling
+   row with divisor 1), so there is one convention for every hole in the store and nothing
+   here bridges. test/models/alldiff_regin_hole_element_unsat.fzn is the lane.
 
    ---------------------------------------------------------------------------
    Snapshotting and I-X6
