@@ -158,6 +158,9 @@ type counters = {
   mutable c_contra : int;
   mutable c_wakes : int;
   mutable c_masked : int;
+  mutable c_seeded : int;
+      (** runs SEEDED: [propagate] enqueues every instance on entry, so this grows by
+          [n_instances] per call. [c_runs - c_seeded] is the runs that came from wakes. *)
   mutable c_vetoed : int;
       (** M2-T6 deliverable 2: self-wakes dropped because the instance's idempotence
           claim is honoured ([honours_claim]). Counted apart from [c_masked]: a mask
@@ -165,7 +168,15 @@ type counters = {
 }
 
 let counters_create () =
-  { c_runs = 0; c_effectful = 0; c_contra = 0; c_wakes = 0; c_masked = 0; c_vetoed = 0 }
+  {
+    c_runs = 0;
+    c_effectful = 0;
+    c_contra = 0;
+    c_wakes = 0;
+    c_masked = 0;
+    c_seeded = 0;
+    c_vetoed = 0;
+  }
 
 (* Off unless asked for: BAGUETTE_WAKE_STATS=1 prints the counters to stderr at exit.
    stderr, not stdout, so that scripts/run_model_tests.sh's diff against
@@ -939,6 +950,7 @@ let propagate (t : t) (store : Store.t) : outcome =
     Array.iter
       (fun (inst : Propagator.instance) -> enqueue inst.Propagator.id)
       t.instances;
+    t.ctr.c_seeded <- t.ctr.c_seeded + Queue.length queue;
     let conflict = ref None in
     while Option.is_none !conflict && not (Queue.is_empty queue) do
       let id = Queue.pop queue in

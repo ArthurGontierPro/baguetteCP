@@ -949,7 +949,12 @@ let report_engine_counters (c : Engine.counters) ~nodes =
   Printf.eprintf "stats: %-10s %10d wakes  watcher wakes delivered to the queue\n" "wakes"
     c.Engine.c_wakes;
   Printf.eprintf "stats: %-10s %10d wakes  ...dropped by the M2-T5 trigger mask\n"
-    "masked" c.Engine.c_masked
+    "masked" c.Engine.c_masked;
+  Printf.eprintf "stats: %-10s %10d wakes  ...dropped by the M2-T6 self-wake veto\n"
+    "vetoed" c.Engine.c_vetoed;
+  Printf.eprintf
+    "stats: %-10s %10d runs   ...of the props, SEEDED (every instance, every propagate)\n"
+    "seeded" c.Engine.c_seeded
 
 (* M6-T10. The wall clock --time-limit is checked against, counted from this module's
    initialisation, i.e. process start to within the runtime's own start-up. [Sys.time]
