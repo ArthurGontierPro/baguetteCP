@@ -51,11 +51,28 @@ entre les vagues 30 et 35 du projet, sans rien perdre.
 
 ### Vitesse, sur les 51 instances que les trois résolvent
 
-| Solveur | Médiane | Moyenne | PAR2 sur 436 | Preuve médiane | Vérification médiane |
-|---|---|---|---|---|---|
-| baguette | **4,22 s** | 33,5 s | 492,6 | 8,2 Mo | 1,42 s |
-| Chuffed | 0,12 s | 0,26 s | 240,5 | — | — |
-| GCS | 0,42 s | 17,0 s | 478,9 | 23,3 Mo | 4,13 s |
+Moyenne arithmétique et **géomoyenne décalée de 1** (exp de la moyenne des log(1 + x),
+moins 1 ; l'unité est celle de x). PAR2 sur les 436 : une instance non résolue compte
+600 s.
+
+| Solveur | Temps moyen | Temps, géomoyenne +1 | PAR2 sur 436 | Preuve moyenne | Preuve, géomoyenne +1 | Vérification moyenne | Vérification, géomoyenne +1 |
+|---|---|---|---|---|---|---|---|
+| baguette | 33,5 s | **7,26 s** | 492,6 | 105 Mo | 8,5 Mo | 14,0 s | 2,33 s |
+| Chuffed | 0,26 s | **0,20 s** | 240,5 | — | — | — | — |
+| GCS | 17,0 s | **2,28 s** | 478,9 | 1 101 Mo | 35,7 Mo | 53,8 s | 6,62 s |
+
+Les colonnes de vérification ne comptent que les preuves vérifiées : 50 sur 51 pour
+baguette, 42 sur 51 pour GCS (les 9 autres sont des rejets ou des vérifications au-delà
+de 900 s), ce qui avantage GCS dans cette colonne. La moyenne des tailles de preuve de GCS
+est dominée par quelques fichiers de plusieurs Go ; la géomoyenne est la comparaison
+honnête, et elle dit un facteur 4 en faveur de baguette.
+
+Sur les paires d'instances résolues par les deux solveurs, hors ensemble commun aux trois :
+
+| Paire | Instances | Temps moyen | Temps, géomoyenne +1 |
+|---|---|---|---|
+| baguette / Chuffed | 84 | 42,4 s / 1,15 s | 9,35 s / 0,40 s |
+| baguette / GCS | 51 | 33,5 s / 17,0 s | 7,26 s / 2,28 s |
 
 ## Ce qu'il faut en retenir
 
@@ -63,13 +80,14 @@ entre les vagues 30 et 35 du projet, sans rien perdre.
    ses preuves passent. Les 26 preuves que le checker rejetait la veille, invisibles tant
    que les instances tombaient en timeout, sont corrigées et revérifiées (D-0084).
 2. **Le PAR2 de baguette est à 3 % de celui de GCS avec preuves**, les deux au double de
-   Chuffed. Sur les instances communes, baguette reste à 35× Chuffed et 10× GCS en
-   médiane. Le travail de la semaine a multiplié les nœuds par seconde par environ 7
+   Chuffed. Sur les instances communes, en géomoyenne décalée, baguette reste à 36×
+   Chuffed et 3,2× GCS ; en moyenne arithmétique, à 2× GCS, parce que les instances
+   longues de GCS pèsent lourd. Le travail de la semaine a multiplié les nœuds par seconde par environ 7
    (`falsified_at`), puis par 2 à 6 selon les modèles (mémo de `Justify`, index de la
    trail, `Trace.position_of`) ; ces derniers gains ne sont **pas** dans les chiffres
    ci-dessus, mesurés sur le binaire `9ff90da`.
-3. **Les preuves de baguette sont un point fort** : un tiers de la taille de celles de
-   GCS, vérifiées trois fois plus vite. En contrepartie, 12 instances résolues ont une
+3. **Les preuves de baguette sont un point fort** : quatre fois plus petites que celles de
+   GCS en géomoyenne, dix fois en moyenne, et vérifiées trois à quatre fois plus vite. En contrepartie, 12 instances résolues ont une
    preuve que veripb ne vérifie pas en 900 s, et GCS plafonne à 16 Go sur 273 instances :
    la taille des preuves est le coût commun du proof logging CP, et les hints RUP (M4-T5)
    sont la row qui ferait bouger la colonne de vérification.

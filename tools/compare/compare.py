@@ -20,6 +20,7 @@ Python 3.8+, standard library only: the node has 3.14 and the laptop 3.10.
 import json
 import os
 import re
+import math
 import statistics
 import sys
 
@@ -324,6 +325,11 @@ def solved(r):
     return s == "SAT" and not r.get("objective", "-").startswith(("min:", "max:"))
 
 
+def sgm1(xs):
+    """The 1-shifted geometric mean: exp(mean(log(1 + x))) - 1, in x's own unit."""
+    return math.exp(sum(math.log(1.0 + x) for x in xs) / len(xs)) - 1.0
+
+
 def fnum(x):
     try:
         return float(x)
@@ -437,8 +443,15 @@ def report(outdirs, pinned=None, timeout=None):
     print()
     print("== on the %d instance(s) every listed solver solved (%s); PAR2 over all %d, "
           "timeout %gs" % (len(common), ",".join(solvers), len(by), timeout))
-    print("  %-10s %10s %10s %10s %14s %12s" % ("solver", "median_s", "mean_s", "PAR2",
-                                               "median_pbp_B", "median_chk_s"))
+    # Arithmetic MEAN and 1-SHIFTED GEOMETRIC MEAN (exp(mean(log(1 + x))) - 1, in x's
+    # unit) rather than the median (2026-10-02, at the user's request): the mean shows
+    # the long tail every solver has on this corpus, the shifted geomean is the
+    # standard summary that neither a 0.01 s instance nor a 299 s one can dominate.
+    # The check columns count only VERIFIED proofs, so a solver whose proofs are
+    # rejected or time out in the checker is flattered there; the report says n.
+    print("  %-10s %9s %9s %9s %12s %12s %10s %10s %7s" % (
+        "solver", "mean_s", "sgm1_s", "PAR2", "mean_pbp_MB", "sgm1_pbp_MB",
+        "mean_chk_s", "sgm1_chk_s", "chk_n"))
     for s in solvers:
         w = [fnum(by[i][s]["wall_s"]) for i in common]
         w = [x for x in w if x is not None]
@@ -450,15 +463,19 @@ def report(outdirs, pinned=None, timeout=None):
             x = fnum(r["wall_s"])
             par2.append(x if (solved(r) and x is not None) else 2 * timeout)
         pb = [fnum(by[i][s]["pbp_bytes"]) for i in common]
-        pb = [x for x in pb if x is not None]
-        ck = [fnum(by[i][s]["check_s"]) for i in common]
+        pb = [x / 1e6 for x in pb if x is not None]
+        ck = [fnum(by[i][s]["check_s"]) for i in common
+              if by[i][s]["check_verdict"] == "VERIFIED"]
         ck = [x for x in ck if x is not None]
-        print("  %-10s %10s %10s %10s %14s %12s" % (
-            s, "%.2f" % statistics.median(w) if w else "-",
-            "%.2f" % statistics.mean(w) if w else "-",
+        print("  %-10s %9s %9s %9s %12s %12s %10s %10s %7s" % (
+            s, "%.2f" % statistics.mean(w) if w else "-",
+            "%.2f" % sgm1(w) if w else "-",
             "%.1f" % statistics.mean(par2) if par2 else "-",
-            "%d" % statistics.median(pb) if pb else "-",
-            "%.2f" % statistics.median(ck) if ck else "-"))
+            "%.1f" % statistics.mean(pb) if pb else "-",
+            "%.1f" % sgm1(pb) if pb else "-",
+            "%.2f" % statistics.mean(ck) if ck else "-",
+            "%.2f" % sgm1(ck) if ck else "-",
+            "%d" % len(ck)))
     print()
     print("distinct instances: %d   rows: %d" % (len(by), len(allrows)))
     if dups:

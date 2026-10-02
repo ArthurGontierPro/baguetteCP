@@ -109,6 +109,8 @@ table above. We are happy to copy any of them, or to re-run with a newer GCS com
 
 The same harness checked 353 baguette proofs that day (all accepted) and found no
 disagreement between the three solvers over 127 instances. On the 51 instances all three
-solved, GCS's median wall time was 0.42 s against baguette's 4.22 s and Chuffed's 0.12 s;
-GCS's median proof was 23.3 MB and checked in 4.1 s, baguette's 8.2 MB in 1.4 s. GCS without
+solved, the 1-shifted geometric mean of wall time was 2.28 s for GCS, 7.26 s for baguette
+and 0.20 s for Chuffed (arithmetic means 17.0 s, 33.5 s, 0.26 s); GCS's proofs averaged
+35.7 MB (shifted geomean; 1.1 GB arithmetic mean) and checked in 6.6 s (geomean over the 42
+that verified), baguette's 8.5 MB and 2.3 s. GCS without
 proof logging solves 149 of the 436 within 300 s; with it, the 16 GB cap stops 273.
