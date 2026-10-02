@@ -148,6 +148,7 @@ type memo_entry = { cid : Writer.cid; level : int }
 and memo_table = {
   tbl : (int, (Explanation.t * memo_entry) list) Hashtbl.t;
   by_level : (int, Explanation.t list) Hashtbl.t;
+  mutable memo_hi : int; (* M6-T17: no [by_level] key above this *)
 }
 
 let shallow_tag (e : Explanation.t) =
@@ -192,6 +193,8 @@ type ctx = {
          shared by every view of the same writer -- although since M1-T31 removed
          [for_constraint] there is only ever one view. *)
   stated : (Lit.t list, stated) Hashtbl.t;
+  stated_by_level : (int, Lit.t list list) Hashtbl.t; (* M6-T17: keys each level stated *)
+  mutable stated_hi : int;
       (* M2-T9. Clause (as a sorted literal set) -> the line that states it. Read by
          [defining_line] and [defining_lit], written by every clause this module puts on
          the page, wiped by [wipe_level]. Lookup only -- never iterated for emission. *)
@@ -201,8 +204,10 @@ let create ~writer ~encoding =
   {
     writer;
     encoding;
-    memo = { tbl = Hashtbl.create 1024; by_level = Hashtbl.create 16 };
+    memo = { tbl = Hashtbl.create 1024; by_level = Hashtbl.create 16; memo_hi = -1 };
     stated = Hashtbl.create 64;
+    stated_by_level = Hashtbl.create 16;
+    stated_hi = -1;
   }
 
 (* The writer a [ctx] emits through. [Learned] needs it to put a constraint on the page
@@ -227,6 +232,7 @@ let remember ctx (e : Explanation.t) (cid : Writer.cid) : Writer.cid =
   Hashtbl.replace ctx.memo.tbl h ((e, { cid; level }) :: bucket);
   Hashtbl.replace ctx.memo.by_level level
     (e :: Option.value (Hashtbl.find_opt ctx.memo.by_level level) ~default:[]);
+  if level > ctx.memo.memo_hi then ctx.memo.memo_hi <- level;
   cid
 
 (* Backtracking: wipe the writer's level and drop the memo entries it invalidated, in
@@ -234,11 +240,15 @@ let remember ctx (e : Explanation.t) (cid : Writer.cid) : Writer.cid =
    [Writer.wipe_level] directly when a [ctx] is in play. *)
 let wipe_level ctx level =
   Writer.wipe_level ctx.writer level;
-  let doomed =
-    Hashtbl.fold
-      (fun l es acc -> if l >= level then (l, es) :: acc else acc)
-      ctx.memo.by_level []
-  in
+  (* M6-T17: walk levels [level, memo_hi] only, and the [stated] keys the same way,
+     rather than folding every table. *)
+  let doomed = ref [] in
+  for l = level to ctx.memo.memo_hi do
+    match Hashtbl.find_opt ctx.memo.by_level l with
+    | Some es -> doomed := (l, es) :: !doomed
+    | None -> ()
+  done;
+  if ctx.memo.memo_hi >= level then ctx.memo.memo_hi <- level - 1;
   List.iter
     (fun (l, es) ->
       Hashtbl.remove ctx.memo.by_level l;
@@ -252,10 +262,20 @@ let wipe_level ctx level =
               | [] -> Hashtbl.remove ctx.memo.tbl h
               | b -> Hashtbl.replace ctx.memo.tbl h b))
         es)
-    doomed;
-  Hashtbl.filter_map_inplace
-    (fun _ (s : stated) -> if s.s_level < level then Some s else None)
-    ctx.stated
+    !doomed;
+  for l = level to ctx.stated_hi do
+    match Hashtbl.find_opt ctx.stated_by_level l with
+    | None -> ()
+    | Some keys ->
+        Hashtbl.remove ctx.stated_by_level l;
+        List.iter
+          (fun k ->
+            match Hashtbl.find_opt ctx.stated k with
+            | Some (s : stated) when s.s_level >= level -> Hashtbl.remove ctx.stated k
+            | _ -> ())
+          keys
+  done;
+  if ctx.stated_hi >= level then ctx.stated_hi <- level - 1
 
 (* Emit at a chosen level -- [Writer.with_level] with the [ctx]'s two side tables kept
    honest, and the call every learned constraint goes through (M2-L1, D-0045).
@@ -298,7 +318,11 @@ let state_clause ctx (lits : Lit.t list) (cid : Writer.cid) =
       let level = Writer.current_level ctx.writer in
       match Hashtbl.find_opt ctx.stated key with
       | Some s when s.s_level <= level -> ()
-      | _ -> Hashtbl.replace ctx.stated key { s_cid = cid; s_level = level })
+      | _ ->
+          Hashtbl.replace ctx.stated key { s_cid = cid; s_level = level };
+          Hashtbl.replace ctx.stated_by_level level
+            (key :: Option.value (Hashtbl.find_opt ctx.stated_by_level level) ~default:[]);
+          if level > ctx.stated_hi then ctx.stated_hi <- level)
 
 (* [defining_line ctx lits] is the id of a line already on the page that states exactly
    the clause [lits], and that a line written *now* may cite: it is at or below the

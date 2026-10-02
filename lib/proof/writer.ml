@@ -258,6 +258,12 @@ type t = {
          and `w` used to consult it (D-0024) -- so [wipe_level] reproduces `w l` from
          this table. It is a mirror of checker state (invariant I-X3) and stopped being
          optional the moment the checker stopped holding it. *)
+  mutable by_lvl : cid list array;
+      (* M6-T17: the ids [fresh] tagged at each level, newest first, indexed by level, so
+         [wipe_level l] walks levels >= l only instead of folding all of [tags]. An id
+         deleted by other means stays in its bucket; [wipe_level] skips it by looking it
+         up in [tags], which is the authority. *)
+  mutable by_hi : int; (* no bucket above this index is non-empty *)
   audit : bool;
   comments : bool;
   mutable level : int;
@@ -287,6 +293,8 @@ let create ?(comments = false) ?audit oc =
     model = Hashtbl.create 64;
     objective = Hashtbl.create 8;
     tags = Hashtbl.create 256;
+    by_lvl = Array.make 16 [];
+    by_hi = -1;
     audit;
     comments;
     level = 0;
@@ -478,6 +486,13 @@ let fresh t ~origin =
   t.next_id <- t.next_id + 1;
   if t.audit then Hashtbl.replace t.live t.next_id { origin; level = t.level };
   Hashtbl.replace t.tags t.next_id t.level;
+  let lv = t.level in
+  if lv >= Array.length t.by_lvl then (
+    let a = Array.make (max (lv + 1) (2 * Array.length t.by_lvl)) [] in
+    Array.blit t.by_lvl 0 a 0 (Array.length t.by_lvl);
+    t.by_lvl <- a);
+  t.by_lvl.(lv) <- t.next_id :: t.by_lvl.(lv);
+  if lv > t.by_hi then t.by_hi <- lv;
   t.next_id
 
 (* Preamble: version line, then the count of model constraints loaded from the .opb.
@@ -724,6 +739,11 @@ let del_run t (lo, hi) =
     rule t (Printf.sprintf "del range %s %s" (cite t lo) (cite t hi));
     rule t (Printf.sprintf "del id %s" (cite t hi)))
 
+let debug_xcheck =
+  match Sys.getenv_opt "BAGUETTE_DEBUG" with
+  | Some ("1" | "true" | "yes" | "on") -> true
+  | _ -> false
+
 let wipe_level t l =
   (* M2-L4: a backjump may not be a second owner of a learned constraint's lifetime, and
      this line is what makes that structural instead of a fact about [Search]'s call
@@ -764,19 +784,29 @@ let wipe_level t l =
 
      [del_run] is what turns an inclusive run into a rule; `del range` is half-open and
      that difference is the whole of M1-T22. *)
-  let doomed =
-    Hashtbl.fold (fun id lv acc -> if lv >= l then id :: acc else acc) t.tags []
-    |> List.sort compare
-  in
+  let doomed_ids = ref [] in
+  for lv = l to t.by_hi do
+    List.iter
+      (fun id ->
+        if Hashtbl.find_opt t.tags id = Some lv then doomed_ids := id :: !doomed_ids)
+      t.by_lvl.(lv);
+    t.by_lvl.(lv) <- []
+  done;
+  if t.by_hi >= l then t.by_hi <- l - 1;
+  let doomed = List.sort compare !doomed_ids in
+  (* The old whole-table computation, kept one wave as a BAGUETTE_DEBUG cross-check.
+     [proof] cannot see [Baguette_core.Debug], hence its own read of the flag. *)
+  if debug_xcheck then
+    if
+      doomed
+      <> (Hashtbl.fold (fun id lv acc -> if lv >= l then id :: acc else acc) t.tags []
+         |> List.sort compare)
+    then
+      failwith
+        "invariant violated: Writer.wipe_level per-level doomed set = whole-table fold";
   List.iter (Hashtbl.remove t.tags) doomed;
   List.iter (del_run t) (runs doomed);
-  if t.audit then
-    let doomed =
-      Hashtbl.fold
-        (fun id (e : entry) acc -> if e.level >= l then id :: acc else acc)
-        t.live []
-    in
-    List.iter (Hashtbl.remove t.live) doomed
+  if t.audit then List.iter (Hashtbl.remove t.live) doomed
 (* VeriPB's LevelStack does not move the current level on a wipe, so neither do we:
    the mirror has to stay exact (invariant I-X3). *)
 

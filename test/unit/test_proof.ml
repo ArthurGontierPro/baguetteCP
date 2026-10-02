@@ -269,6 +269,70 @@ let test_writer_not_truncated () =
   check "writer: the proof is never truncated"
     (has "pseudo-Boolean proof version 3.0" && has "end pseudo-Boolean proof ;")
 
+(* M6-T17: [wipe_level] walks per-level buckets, not the whole tag table. A scene minting
+   at several levels, wiping a middle level, minting again, wiping to 1: the exact `del`
+   lines, the audit passing, and the audit still failing on a leaked id. *)
+let test_wipe_buckets () =
+  let ids = ref [] in
+  let s, r =
+    emitted ~audit:true (fun w ->
+        Writer.header w ~n_model_constraints:1;
+        let mk l =
+          Writer.set_level w l;
+          Writer.pol w ~origin:"x" (Pol.id 1)
+        in
+        let a = mk 1 in
+        let b = mk 2 in
+        let c = mk 2 in
+        let d = mk 3 in
+        let e = mk 1 in
+        (* ids 2..6 at levels 1 2 2 3 1. Wipe level 3 and up: only d. *)
+        Writer.wipe_level w 3;
+        let f = mk 3 in
+        let g = mk 2 in
+        (* 7 at 3, 8 at 2. Wipe 2: b c f g, i.e. 3 4 7 8 *)
+        Writer.wipe_level w 2;
+        Writer.wipe_level w 2;
+        (* nothing left at >= 2: no line *)
+        ids := [ a; b; c; d; e; f; g ];
+        Writer.wipe_level w 1;
+        Writer.conclusion w (Writer.Unsat None))
+  in
+  check "wipe buckets: the audit passes after wiping to 1"
+    (match r with Ok () -> true | _ -> false);
+  let dels =
+    List.filter
+      (fun l -> String.length l > 3 && String.sub l 0 3 = "del")
+      (String.split_on_char '\n' s)
+  in
+  check "wipe buckets: the exact del lines, in order"
+    (dels
+    = [
+        "del id @c5 ;";
+        "del range @c3 @c5 ;";
+        "del range @c7 @c8 ;";
+        "del id @c8 ;";
+        "del id @c2 ;";
+        "del id @c6 ;";
+      ]);
+  check "wipe buckets: first wipe retires only the level-3 id"
+    (match dels with
+    | d :: _ -> String.length d >= 6 && String.sub d 0 6 = "del id"
+    | [] -> false);
+  check "wipe buckets: ids are a, b, c, d, e, f, g = 2..8" (!ids = [ 2; 3; 4; 5; 6; 7; 8 ]);
+  let _, r =
+    emitted ~audit:true (fun w ->
+        Writer.header w ~n_model_constraints:1;
+        Writer.set_level w 2;
+        let _ = Writer.pol w ~origin:"wiped" (Pol.id 1) in
+        Writer.set_level w 1;
+        let _leak = Writer.pol w ~origin:"leaked at 1" (Pol.id 1) in
+        Writer.wipe_level w 2;
+        Writer.conclusion w (Writer.Unsat None))
+  in
+  check "wipe buckets: a level below the wipe still fails the audit when leaked"
+    (match r with Error (Writer.Audit_failed _) -> true | _ -> false)
+
 let test_audit () =
   (* An id that is handed out and never deleted is an I-X2 violation. *)
   let _, r =
@@ -3526,6 +3590,7 @@ let () =
   test_writer_ids ();
   test_writer_not_truncated ();
   test_audit ();
+  test_wipe_buckets ();
   test_order_encoding ();
   test_ids_and_equality ();
   test_direct_encoding ();
