@@ -127,6 +127,42 @@ let reset_stats () =
 
 let stats () = (!runs, !wakes, !masked_wakes)
 
+(* M2-T6 deliverable 1: the three counters GCS prints under `-s`, PER ENGINE.
+
+   [c_runs]       propagator runs taken off the queue by [propagate]          (GCS
+                  `propagations`).
+   [c_effectful]  runs that returned [Fixpoint] AND grew the trail, i.e. changed at
+                  least one domain                                 (GCS
+                  `effectfulPropagations`).
+   [c_contra]     runs that returned [Conflict]                     (GCS
+                  `contradictingPropagations`). A run that pruned and then failed is
+                  counted here and NOT in [c_effectful]: the two are disjoint, so
+                  [c_runs - c_effectful - c_contra] is exactly the number of runs that
+                  did nothing at all, which is the number the wake discipline is for.
+   [c_wakes] [c_masked]  the M2-T5 pair, per engine as well.
+
+   Only the fixpoint loop counts. [check_fixpoint] (the re-checker) and the M2-T10
+   consistency oracle run propagators too, but they are audits of the loop and must not
+   inflate the figure they audit -- a BAGUETTE_DEBUG run reports the same counts as a
+   plain one.
+
+   Per engine and not process-global (the globals above stay, for BAGUETTE_WAKE_STATS
+   and for the tests that predate this) because a solve builds exactly one engine
+   ([Compile.compile]) and [bin/main.ml] prints this record beside [Search.stats],
+   which is per solve too: a counter that outlived its run could not sit on the same
+   `limit:` line as the node count it is divided by. Counted by the engine, never read
+   from the proof (M1-T36's rule). *)
+type counters = {
+  mutable c_runs : int;
+  mutable c_effectful : int;
+  mutable c_contra : int;
+  mutable c_wakes : int;
+  mutable c_masked : int;
+}
+
+let counters_create () =
+  { c_runs = 0; c_effectful = 0; c_contra = 0; c_wakes = 0; c_masked = 0 }
+
 (* Off unless asked for: BAGUETTE_WAKE_STATS=1 prints the counters to stderr at exit.
    stderr, not stdout, so that scripts/run_model_tests.sh's diff against
    test/expected/*.out is untouched by it. *)
@@ -151,6 +187,7 @@ type t = {
      gets [wake_on_any]: an unknown instance is one whose reads are unknown, and the safe
      answer for an unknown reader is always "wake it". *)
   mutable triggers : trigger array;
+  ctr : counters;  (** M2-T6: this engine's run counters, see [counters]. *)
 }
 
 let create ?(trigger = default_trigger) (instances : Propagator.instance list) : t =
@@ -174,9 +211,10 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
     (fun (inst : Propagator.instance) ->
       if inst.Propagator.id >= 0 then triggers.(inst.Propagator.id) <- trigger inst)
     instances;
-  { instances = Array.of_list instances; watchers; triggers }
+  { instances = Array.of_list instances; watchers; triggers; ctr = counters_create () }
 
 let n_instances t = Array.length t.instances
+let counters t = t.ctr
 
 (* ------------------------------------------------- registering a LEARNED constraint *)
 
@@ -308,8 +346,11 @@ let watchers_of_new_entries t store ~since =
           (fun id ->
             if wakes_on (trigger_of t id) change then (
               incr wakes;
+              t.ctr.c_wakes <- t.ctr.c_wakes + 1;
               acc := id :: !acc)
-            else incr masked_wakes)
+            else (
+              incr masked_wakes;
+              t.ctr.c_masked <- t.ctr.c_masked + 1))
           ids
   done;
   !acc
@@ -796,6 +837,7 @@ let propagate (t : t) (store : Store.t) : outcome =
       let inst = t.instances.(id) in
       let before = Store.trail_length store in
       incr runs;
+      t.ctr.c_runs <- t.ctr.c_runs + 1;
       (* The whole of M2-T7's threading, in one bracket: everything [inst] pushes while
          this call is in flight is stamped with [inst]'s own id, and nothing else can be.
          [check_attribution] then reads it back on both arms -- a propagator may push
@@ -806,9 +848,12 @@ let propagate (t : t) (store : Store.t) : outcome =
       with
       | Propagator.Conflict c ->
           check_attribution t inst store ~since:before ~conflict:(Some c);
+          t.ctr.c_contra <- t.ctr.c_contra + 1;
           conflict := Some c
       | Propagator.Fixpoint ->
           check_attribution t inst store ~since:before ~conflict:None;
+          if Store.trail_length store > before then
+            t.ctr.c_effectful <- t.ctr.c_effectful + 1;
           let woken = watchers_of_new_entries t store ~since:before in
           List.iter enqueue woken
     done;

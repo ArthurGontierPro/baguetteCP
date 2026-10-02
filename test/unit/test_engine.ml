@@ -1557,6 +1557,59 @@ let test_hole_split_with_settled_ancestor () =
         [ false; true ];
       try Sys.rmdir dir with _ -> ())
 
+(* ===================================================================== *)
+(* M2-T6: the per-engine propagation counters GCS prints under -s.        *)
+(* ===================================================================== *)
+
+(* Two propagators on disjoint variables: [x <= 2] over x in 0..4 prunes on its first
+   run (EFFECTFUL), [y <= 9] over y in 0..4 never prunes. The queue is seeded with both,
+   so the first pass is one effectful run and one empty one; [x <= 2]'s own pruning of
+   x then wakes it once more (the self-wake M2-T6's second deliverable is about), and
+   that run is empty too. [expected_runs] is the one number the wake discipline is
+   allowed to move. *)
+let counters_expected_runs = 3
+
+let test_counters_effectful_and_not () =
+  let store = mk_store [ ("x", 0, 4); ("y", 0, 4) ] in
+  let lx = Linear.make ~row_id:(unrendered_row ()) store [ (1, var 0) ] 2 in
+  let ly = Linear.make ~row_id:(unrendered_row ()) store [ (1, var 1) ] 9 in
+  let engine = Engine.create [ pack_linear 0 lx; pack_linear 1 ly ] in
+  let c = Engine.counters engine in
+  check "counters: a fresh engine starts at zero (per engine, not process-global)"
+    (c.Engine.c_runs = 0 && c.Engine.c_effectful = 0 && c.Engine.c_contra = 0);
+  (match Engine.propagate engine store with
+  | Engine.Conflict _ ->
+      incr failures;
+      Printf.printf "FAIL counters: unexpected conflict\n"
+  | Engine.Fixpoint -> ());
+  check "counters: x <= 2 did prune" (Domain.hi (Store.get store (var 0)) = 2);
+  check
+    (Printf.sprintf "counters: runs = %d (got %d)" counters_expected_runs c.Engine.c_runs)
+    (c.Engine.c_runs = counters_expected_runs);
+  check
+    (Printf.sprintf "counters: exactly one run was effectful (got %d)"
+       c.Engine.c_effectful)
+    (c.Engine.c_effectful = 1);
+  check "counters: no run contradicted" (c.Engine.c_contra = 0);
+  (* The audit does not count: re-running every propagator for I-P2 is not a run of the
+     fixpoint loop, and a BAGUETTE_DEBUG run must report the same figures. *)
+  Engine.check_fixpoint engine store;
+  check "counters: the I-P2 re-checker's runs are not counted"
+    (c.Engine.c_runs = counters_expected_runs)
+
+let test_counters_contradicting () =
+  let store = mk_store [ ("x", 0, 4); ("y", 0, 4) ] in
+  let l = Linear.make ~row_id:(unrendered_row ()) store [ (1, var 0); (1, var 1) ] (-1) in
+  let engine = Engine.create [ pack_linear 0 l ] in
+  (match Engine.propagate engine store with
+  | Engine.Conflict _ -> ()
+  | Engine.Fixpoint ->
+      incr failures;
+      Printf.printf "FAIL counters: x + y <= -1 over 0..4 did not conflict\n");
+  let c = Engine.counters engine in
+  check "counters: the failing run is one run, contradicting, not effectful"
+    (c.Engine.c_runs = 1 && c.Engine.c_contra = 1 && c.Engine.c_effectful = 0)
+
 let () =
   test_fixpoint_tightens_and_settles ();
   test_conflict_carries_explanation ();
@@ -1571,6 +1624,8 @@ let () =
   test_hole_wake_starved_is_caught ();
   test_bounds_propagator_masked_safely ();
   test_check_fixpoint_is_quiet_on_real_fixpoints ();
+  test_counters_effectful_and_not ();
+  test_counters_contradicting ();
   test_search_finds_and_verifies_a_solution ();
   test_search_exhausts_and_reports_unsat ();
   test_audit_empty_at_conclusion ();
