@@ -7593,26 +7593,26 @@ mismatches**. On the 51 instances all three solved:
    runs are tens of MB each: M4-T5's RUP hints are the row that would move the check column.
 5. **The width wall** (64 + 2 + 2 instances) is D-0028's and untouched; a different encoding of
    wide domains is a decision not yet taken.
-### Addendum, 2026-10-02 evening: means and 1-shifted geometric means
+### Addendum, 2026-10-02 evening: the 1-shifted geometric mean
 
-At the user's request the summary statistic is the arithmetic mean plus the **1-shifted
-geometric mean** (exp(mean(log(1 + x))) − 1, in x's unit) rather than the median, and
-`tools/compare/compare.py`'s report now prints those. The same two common sets as above:
+At the user's request the summary statistic is the **1-shifted geometric mean**
+(exp(mean(log(1 + x))) − 1, in x's unit) rather than the median, and
+`tools/compare/compare.py`'s report now prints it beside PAR2. The same two common sets as
+above:
 
-| set | solver | mean wall | sgm+1 wall | mean `.pbp` | sgm+1 `.pbp` | mean check | sgm+1 check | checked n |
-|---|---|---|---|---|---|---|---|---|
-| wave 31, 40 common | baguette | 43.3 s | **8.51 s** | 8.8 MB | 3.5 MB | 1.25 s | 0.88 s | 40 |
-| | Chuffed | 0.17 s | **0.16 s** | — | — | — | — | — |
-| | GCS | 17.5 s | **1.80 s** | 915 MB | 21.4 MB | 38.5 s | 4.81 s | 36 |
-| wave 35 baguette + wave 31 others, 51 common | baguette | 33.5 s | **7.26 s** | 105 MB | 8.5 MB | 14.0 s | 2.33 s | 50 |
-| | Chuffed | 0.26 s | **0.20 s** | — | — | — | — | — |
-| | GCS | 17.0 s | **2.28 s** | 1 101 MB | 35.7 MB | 53.8 s | 6.62 s | 42 |
+| set | solver | sgm+1 wall | PAR2 (436) | sgm+1 `.pbp` | sgm+1 check | checked n |
+|---|---|---|---|---|---|---|
+| wave 31, 40 common | baguette | **8.51 s** | 524.3 | 3.5 MB | 0.88 s | 40 |
+| | Chuffed | **0.16 s** | 240.5 | — | — | — |
+| | GCS | **1.80 s** | 478.9 | 21.4 MB | 4.81 s | 36 |
+| wave 35 baguette + wave 31 others, 51 common | baguette | **7.26 s** | 492.6 | 8.5 MB | 2.33 s | 50 |
+| | Chuffed | **0.20 s** | 240.5 | — | — | — |
+| | GCS | **2.28 s** | 478.9 | 35.7 MB | 6.62 s | 42 |
 
-Pairwise, on every instance both solved: baguette/Chuffed n=84, sgm+1 9.35 s vs 0.40 s
-(means 42.4 vs 1.15); baguette/GCS n=51, 7.26 s vs 2.28 s (33.5 vs 17.0). So the gap on the
-common set reads **36× Chuffed and 3.2× GCS** in shifted geomean, 2× GCS in arithmetic mean;
-the proofs are **4× smaller than GCS's** in shifted geomean and 10× in mean. The check
-columns count only VERIFIED proofs, which flatters GCS (42 of 51).
+Pairwise, on every instance both solved: baguette/Chuffed n=84, 9.35 s vs 0.40 s;
+baguette/GCS n=51, 7.26 s vs 2.28 s. So the gap on the common set reads **36× Chuffed and
+3.2× GCS**, and the proofs are **4× smaller than GCS's**. The check column counts only
+VERIFIED proofs, which flatters GCS (42 of 51).
 
 ## D-0090  M6-T15: `Trace.position_of` from the entry's own trail position, `add_fact` by a reversed accumulator
 
