@@ -33,8 +33,8 @@
    and nothing here reads a live domain to decide what a reason says).
 
      - "which trail entry established this bound?"  [Store.lo_support]/[hi_support],
-       O(1), M2-T8. See [support_of] for the one case where it is not the answer and a
-       scan is needed instead.
+       O(1), M2-T8. See [support_of] for the one case where it is not the answer and
+       [Store.bound_support]'s binary search over the bound's history is (M6-T14).
      - "which constraint made that entry?"          [Store.entry]'s [prop], M2-T7/I-T4.
      - "which bounds did that constraint read?"     the entry's [Reason.t], walked by
        [Reason.owners]' sibling logic without materialising a [Lit.t].
@@ -52,11 +52,15 @@
    So [support_of] takes a [~before] bound -- the trail position of the entry whose
    reason produced the fact -- and asks for the entry that established the fact STRICTLY
    BELOW it. [lo_support] is tried first and is the answer in the common case (nothing
-   moved the bound again between the read and the conflict); when it is not, a downward
-   scan finds the unique entry that pushed the bound past [value], which exists and is
-   unique because bounds are monotone within a level (I-D3) and [undo_to] pops entries
-   whose effect is gone. [o1_supports] and [scanned_supports] count the two paths, so a
-   test can assert the O(1) path is the one actually taken rather than assuming it.
+   moved the bound again between the read and the conflict); when it is not, the unique
+   entry that pushed the bound past [value] is found -- it exists and is unique because
+   bounds are monotone within a level (I-D3) and [undo_to] pops entries whose effect is
+   gone. Until M6-T14 that was a downward scan of the trail, once per fact per step, so
+   quadratic in trail depth over an analysis; it is now [Store.bound_support], a binary
+   search over the variable's bound history (D-0088), with the scan kept as a
+   [BAGUETTE_DEBUG] cross-check. [o1_supports] and [scanned_supports] count the two
+   paths ([scanned] now meaning "the history answered"), so a test can assert the O(1)
+   path is the one actually taken rather than assuming it.
 
    That [~before] discipline is also the termination argument: every fact a resolution
    step introduces has a support strictly below the step's own, so the largest expandable
@@ -311,12 +315,19 @@ type scope = At_conflict_level | Everywhere
 (* ------------------------------------------------------- the walk *)
 
 (* Did [e] establish [value] in this direction? True for exactly one entry per
-   (variable, direction, value) that is still live, by I-D3's monotonicity. *)
-let establishes (e : Store.entry) ~is_lower ~value =
-  if is_lower then Domain.lo e.Store.old < value && Domain.lo e.Store.now >= value
-  else Domain.hi e.Store.old > value && Domain.hi e.Store.now <= value
+   (variable, direction, value) that is still live, by I-D3's monotonicity. The predicate
+   lives in [Store] since M6-T14 so that the history search and this scan share it. *)
+let establishes = Store.establishes
 
-(* [v] is [Store.var_named store name]. M6-T11 (D-0085): the scan used to compare
+(* The downward trail walk [support_of] used until M6-T14 (D-0088): the newest entry
+   strictly below [before] on a variable of [v]'s name that establishes [value]. Linear
+   in the trail, once per fact per resolution step, so quadratic in trail depth over an
+   analysis -- the walk the 2014_mario / 2023_chessboard profiles put at the top.
+   [Store.bound_support] answers the same question by binary search over the variable's
+   bound history; this scan survives for one wave as the [BAGUETTE_DEBUG] cross-check in
+   [support_of] and as test_analysis's oracle, and is otherwise dead.
+
+   [v] is [Store.var_named store name]. M6-T11 (D-0085): the scan used to compare
    [String.equal (Store.name store e.var) name] at every entry -- D-0080 measured ~60 % of
    2016 prize-collecting's self time in it. [Store.name_rep] maps each entry's variable to
    the first variable of its name, so the integer test below holds on exactly the entries
@@ -333,7 +344,8 @@ let scan_support store ~before ~v ~is_lower ~value =
   go (min (before - 1) (Store.trail_length store - 1))
 
 (* The trail position that established [fact], looking strictly below [before]. Returns
-   the position and whether the O(1) array answered it. See the header. *)
+   the position and whether the O(1) array answered it ([false]: the bound history did).
+   See the header. *)
 let support_of store ~before fact =
   let name = Reason.fact_owner fact in
   let is_lower = Reason.fact_is_lower fact in
@@ -348,7 +360,11 @@ let support_of store ~before fact =
         fast <> Store.no_support && fast < before
         && establishes (Store.trail_entry store fast) ~is_lower ~value
       then (fast, true)
-      else (scan_support store ~before ~v ~is_lower ~value, false)
+      else
+        let at = Store.bound_support store ~before v ~is_lower ~value in
+        Debug.check "M6-T14: the bound history agrees with the trail scan" (fun () ->
+            at = scan_support store ~before ~v ~is_lower ~value);
+        (at, false)
 
 let same_slot a b =
   String.equal (Reason.fact_owner a.fact) (Reason.fact_owner b.fact)
