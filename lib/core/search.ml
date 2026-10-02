@@ -1536,13 +1536,32 @@ let mixes_currencies encoding (summands : Explanation.summand list) =
   in
   List.exists order_model_row summands && List.exists counting_term summands
 
-(* Does this derivation ask the claim index for an id at its own top level? See the
-   root-conflict arm in [dfs], which is the only caller and states why it matters. *)
-let top_defining (e : Explanation.t) =
+(* Does this root derivation contain a leaf [Justify] renders as a `rup` against the
+   page? See the root-conflict arm in [dfs], its only caller, for why that is the
+   question (M7-T22, D-0086).
+
+   The WHOLE derivation, not its top level: [Justify.emit] recurses through every [Term]
+   and both sides of a [Cut], and a [Defining] three levels down asks the claim index
+   exactly as one at the top does. The leaves that need the page are the three
+   [Justify] writes as `rup`: a [Defining] (when the claim index has no line for it, it
+   mints `rup <lit> >= 1`), a [Linear] and a [Clause]. A [Clause] never reaches this
+   predicate's caller -- [rests_on_a_clause] routes it to [close_root_conflict], which
+   writes the trace itself -- and answers [true] here anyway, because erring [true]
+   costs lines and erring [false] costs the proof. A [Model_row] cites an .opb row and a
+   [Weaken] adds trivial axioms; neither consults anything. A new constructor that
+   renders as `rup` belongs in the first arm. *)
+let rec root_needs_trace (e : Explanation.t) =
   match Explanation.force e with
+  | Explanation.Linear _ | Explanation.Clause _ -> true
   | Explanation.Combine (summands, _) ->
-      List.exists (function Explanation.Defining _ -> true | _ -> false) summands
-  | _ -> false
+      List.exists
+        (function
+          | Explanation.Defining _ -> true
+          | Explanation.Term (_, e) -> root_needs_trace e
+          | Explanation.Weaken _ -> false)
+        summands
+  | Explanation.Cut (a, b, _, _) -> root_needs_trace a || root_needs_trace b
+  | Explanation.Decision _ | Explanation.Model_row _ | Explanation.Deferred _ -> false
 
 let rests_on_a_clause encoding (e : Explanation.t) =
   let rec go ~cited (e : Explanation.t) =
@@ -2497,9 +2516,23 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
                  no decisions here), so this changes nothing about what the proof says --
                  only about what it contains.
 
-                 Gated on the derivation actually HAVING a [Defining] at its top level,
-                 so a root conflict that cites nothing keeps the shape it had. *)
-              if top_defining e then Trace.emit ctx trace store;
+                 Gated, since M7-T22 (D-0086), on [root_needs_trace]: the derivation
+                 CONTAINS, anywhere, a leaf that is written as a `rup` against the page.
+                 Until M7-T22 the gate was a [Defining] at the TOP level only, and a
+                 [Defining] NESTED under a [Term] -- gcc's [bound_cancels], alldiff's
+                 [Gone_hole_root], element's root-residue cancels inside an embedded
+                 derivation -- reached the empty claim index all the same, minted a `rup`
+                 with no root trace to propagate from, and 3.0.2 refused it (five sweep
+                 instances, bench/fuzz; test/models/root_nested_defining_*_unsat).
+
+                 Why gated at all rather than unconditional, which also fixes them: a
+                 root conflict whose derivation consults nothing does not need the trace,
+                 and test_matrix's depth-0 lanes pin exactly that -- "no trace and no
+                 nogood", and blanking a trace line must break a proof that has one.
+                 Unconditional would put lines on 11 of 124 model proofs that nothing
+                 cites. The walk changes no model proof byte (measured, every .opb/.pbp/
+                 stdout hashed before and after) and keeps those lanes as they were. *)
+              if root_needs_trace e then Trace.emit ctx trace store;
               Justify.emit ctx e)
           in
           NFail ([], cid)

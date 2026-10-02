@@ -1,0 +1,29 @@
+% M7-T22 / D-0086 (a): A ROOT REFUTATION THE CHECKER REJECTED, from M7-T21's random sweep
+% (`bench/fuzz/gen.py gcc 565`, shrunk greedily). FIXED; an ordinary passing model test
+% whose proof is verified on every run.
+%
+% THE DEFECT. The conflict happens with no decision on the stack, so [Search.dfs]'s root
+% arm justifies it by its own [pol]. The derivation embeds one of gcc's [bound_cancels]
+% -- a [Defining] NESTED under a [Term], not at the derivation's top level -- and the
+% root arm wrote the root trace only for a top-level [Defining]. With no trace on the
+% page the claim index was empty, the [Defining] minted its own unit, and 3.0.2 refused
+% it: line 4, `rup +1 ~n0_1_ge_2 >= 1 ;`, "not implied by reverse unit propagation".
+%
+% THE FIX is search.ml's root arm: the root trace is written before a root derivation
+% that CONTAINS, anywhere, a leaf rendered as a `rup` ([root_needs_trace]). No SAT twin exists: the root arm is reached only by a
+% conflict under no decision, i.e. by the refutation itself. The break is a REFUSAL, so
+% it is not one D-0066's vacuity can hide; measured on the pre-fix binary (sha256
+% a57f2961...), rejected at line 4.
+var 1..1: x0 :: output_var;
+var 1..1: x1 :: output_var;
+var 1..3: x2 :: output_var;
+var 3..3: x3 :: output_var;
+var 2..2: x4 :: output_var;
+var 1..3: x6 :: output_var;
+var 0..0: n0_0 :: output_var;
+var 1..2: n0_1 :: output_var;
+var 1..1: n1_0 :: output_var;
+constraint fzn_global_cardinality([x3,x6,x2,x1,x0],[2,3],[n0_0,n0_1]);
+constraint fzn_global_cardinality([x4,n0_1,x2,x6],[1],[n1_0]);
+constraint int_lin_le([2,2,2],[x2,x1,x6],9);
+solve :: int_search([x1,x3,x6,n0_1,x0,x4,n0_0,n1_0,x2], input_order, indomain_median, complete) satisfy;
