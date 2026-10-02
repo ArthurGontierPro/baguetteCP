@@ -805,6 +805,7 @@ work. The owning session picks it up.
 | **M4-T9**, for information at merge: `test/unit/test_trace.ml`'s I-X10 closure table gained ONE row, `("maxmin.ml", Single_row)`, appended after `gcc.ml`. The gate reddens without it, and it was not in any session's claim. agent-cumulative's `cumulative.ml` row will land at the same spot, so expect a trivial conflict there. Also outside the brief's file list: NEW `mznlib/redefinitions-2.0.mzn` (std has no `fzn_array_int_maximum`, see D-0095) and a two-line edit to `mznlib/redefinitions.mzn`'s header comment saying so. `lib/core/dune` needed NO edit (`include_subdirs unqualified`) | `test/unit/test_trace.ml`, `mznlib/` | agent-maxmin | for information |
 | **M2-T6 / D-0094**: every-instance SEEDING is 75–85 % of propagator runs (s4 628/node, mario 1 575/node, chessboard 5 090/node), and it is the real wake lever. The self-wake veto saves under 2 %. An incremental seed has to cover the watchers of trail entries since the last fixpoint plus newly `Engine.add`ed instances. It needs `Store` to report the trail's **low-water mark** since the engine last asked: after a backjump the engine sees a short trail and cannot locate the restore point. Proposed as a new row. It also has to check that no propagator reads mutable state that is off the trail. | `lib/core/store.ml` (+ `engine.ml`, `search.ml`) | agent-wake | **taken 2026-10-02** by M6-T18 (agent-seed, wave 39) |
 | **M2-T6 / D-0094**: `Propagator.pack` now takes `?idempotent`. Its default is a by-name table (`int_lin_le`/`int_le`/`int_lt`). Please pass `~idempotent:true` at `Compile.pack_linear`, and at `pack_arith_row` for the ROW faces only (`Arith.Times_row`/`Div_row`/`Abs_row`, which are `Linear.t`). The guard faces share those names and are reifications, which is why the table cannot claim them. Then the table can go. The engine's aliased-scope rule still applies. | `lib/flatzinc/compile.ml` | agent-wake | **taken 2026-10-02** by M6-T18 (agent-seed, wave 39) |
+| **M7-T23 / D-0097**, for whoever holds `lib/core/prop/gcc.ml` next: routing one-value counts (`count`/`exactly`/`at_most`/`at_least`) to gcc was measured on the node and is a regression. 2 of 3 trials lost a proved optimum, 3 of 12 more died at the 32 GB cap, and none was better. Two gcc gaps are the cause. (1) gcc never makes an interior hole, so a saturated or forced cover value cannot be removed from or fixed on a variable whose domain has it strictly inside. Std's decomposition does that, and it is the cheap single-value case of domain filtering. (2) Per-propagation proof volume: 2015_roster with the route writes 1.81 GB of proof in 258 nodes (about 7 MB per node) at 11.8 GB RSS. With both fixed, commit 04514a9's `mznlib/fzn_count_eq.mzn` restores the route, and D-0097's table is the measurement to re-run. A second lead, which only the front end can follow: merge `count(xs, v_i, n_i)` calls over the SAME `xs` into one multi-value gcc. That is what would use the interval-capacity rule (oc-roster counts every staff member over one array). | `lib/core/prop/gcc.ml`, `lib/flatzinc/compile.ml` | agent-count | OPEN |
 
 ## Completed
 
@@ -914,6 +915,7 @@ work. The owning session picks it up.
 | M6-T16 | agent-speed5 | 2026-10-02 | **D-0092**. `Analysis.Frontier` is persistent cells plus a per-bound monomorphic `String` table, and it replaces the per-step `add_node` fold (`List.map` + `@`). `Analysis.Uniq` replaces `List.mem`/`@` for antecedents, and `folds` is a reversed accumulator. `add_node` stays as the reference, and `test_analysis` compares the two. 396 artefacts byte-identical. Node: mario 1.40x, chessboard 1.07x (a first per-step tuple-Hashtbl version was 0.91x on chessboard and was replaced). Profile now flat. |
 | M4-T9 | agent-maxmin | 2026-10-02 | **D-0095**. `lib/core/prop/maxmin.ml`: the disjunction `m <= max x` as one propagator (R3 `hi(m) <= max hi(x)`, R4 the unique reacher, conflict) over one `.opb` clause per threshold, `~[m>=v] \/ [x_1>=v] \/ ...`; every explanation is `Explanation.clause` of one posted row (no new constructor, I-X10 Single_row). `m >= x_i` is `n` `Linear` rows. Minimum = same instance over negated views; `int_max`/`int_min` = the two-element array form. mznlib shadows std `redefinitions-2.0.mzn`; D-0083 inference for the result. Corpus: radiation 888 -> 775 nodes, 13.8 -> 7.9 s, all proofs verified |
 | M2-T6 | agent-wake | 2026-10-02 | **D-0094**. Per-engine `props`/`eff`/`contra` (+`wakes`/`masked`/`vetoed`/`seeded`) under `--stats` and on both `limit:` lines, and in `corpus_run.sh`'s detail. The self-wake veto ships with the aliased-scope rule and, in the same commit, the `BAGUETTE_DEBUG` claim re-checker (`Engine.check_claim`). Suite stdout is identical on 132/132, 1 proof changed, and all verify. The veto does not pay: seeding is 75–85 % of runs |
+| M7-T23 | agent-count | 2026-10-02 | **D-0097. Built, measured, WITHDRAWN.** One `mznlib/fzn_count_eq.mzn` (04514a9) routed the whole counting family to gcc. It flattened clean on 436/436 with the same status as std, and gcc carriers went from 42 to 69 models, but it was worse on the node: 2012_amaze and 2015_roster lost their proved optima, 3 more died at the 32 GB cap, and none was better. gcc is bounds-level, so a one-value cover loses interior-value pruning and gains no cross-value reasoning. `among`: 0 corpus callers. Ten lanes kept as one-value gcc tests. `count_std_guard_sat.mzn` pins std. Request filed for gcc interior holes |
 
 ## Handoff notes
 
@@ -3896,3 +3898,19 @@ header no longer says otherwise.
   needs a trail low-water mark from `Store`, filed under Cross-session requests with the
   `compile.ml` `~idempotent` request. My `## Active claims` row is left for the orchestrator to
   clear at merge, so that two sessions do not edit adjacent rows of that table.
+## M7-T23 handoff, 2026-10-02 (agent-count)
+
+- **The counting family stays with std's decomposition (D-0097).** The route works mechanically.
+  Std funnels `count`/`count_eq`, the `count(xs, v)` function, `count_leq/geq/lt/gt/neq`,
+  `exactly`, `at_most` and `at_least` through `fzn_count_eq`, so a single shadow with an
+  `is_fixed(value)` dispatch routes them all. It flattened 436/436 with the same status as std.
+  But it is a regression on the solver: gcc is bounds-only, so a one-value cover loses
+  `x != v` for an interior `v`. A guard that routes only bound-valued `v` was no better. Commit
+  04514a9 holds the route, ready to restore once gcc makes interior holes (request filed).
+- **Trap: std's relational counts read backwards.** `count_leq(xs, v, n)` is `n <= count` and
+  `count_geq` is `n >= count`. Delegate to std's wrappers rather than restating them.
+- The ten `test/models/{count,exactly,at_most,at_least}_*` lanes are unedited flattener output
+  of the withdrawn route. They remain gcc tests, and their headers say where they came from.
+  `mznlib/test/count_std_guard_sat.mzn` makes `check_mznlib.sh` fail if anyone re-adds the
+  route without flipping its directives. On the node, `/scratch/arthur/count-flat/{old,new,guard}`
+  hold the three whole-corpus flattens.

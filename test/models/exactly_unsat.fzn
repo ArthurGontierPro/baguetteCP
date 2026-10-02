@@ -1,0 +1,30 @@
+% exactly_unsat -- M7-T23 (D-0097)
+%
+% FLATTENED ARTEFACT OF A WITHDRAWN ROUTE. Flattened by MiniZinc 2.10.1 on
+% 2026-10-02 from mznlib/test/exactly_unsat.mzn against the mznlib/ of commit 04514a9,
+% whose mznlib/fzn_count_eq.mzn routed the counting family to the gcc
+% propagator. D-0097 measured that route on the corpus and WITHDREW it (one-value
+% covers lose the decomposition's interior-value pruning and gain no cross-value
+% reasoning), so neither file is in the tree any more. The body is unedited
+% flattener output and the lane stays as a solver test; regenerate it only from
+% 04514a9's mznlib/.
+%
+% WHAT IT PINS: one-value-cover baguette_global_cardinality calls as that route
+% emitted them. This lane is
+%   exactly(3, x, 1) and exactly(2, x, 2) over four variables: the counts close
+%   it.
+%
+
+predicate baguette_global_cardinality(array [int] of var int: x,array [int] of int: cover,array [int] of var int: counts);
+array [1..1] of int: X_INTRODUCED_22_ = [1];
+array [1..1] of int: X_INTRODUCED_25_ = [2];
+var 1..3: X_INTRODUCED_16_;
+var 1..3: X_INTRODUCED_17_;
+var 1..3: X_INTRODUCED_18_;
+var 1..3: X_INTRODUCED_19_;
+array [1..4] of var int: x:: output_array([1..4]) = [X_INTRODUCED_16_,X_INTRODUCED_17_,X_INTRODUCED_18_,X_INTRODUCED_19_];
+array [1..1] of var int: X_INTRODUCED_21_ ::var_is_introduced  = [3];
+array [1..1] of var int: X_INTRODUCED_24_ ::var_is_introduced  = [2];
+constraint baguette_global_cardinality(x,X_INTRODUCED_22_,X_INTRODUCED_21_);
+constraint baguette_global_cardinality(x,X_INTRODUCED_25_,X_INTRODUCED_24_);
+solve  satisfy;
