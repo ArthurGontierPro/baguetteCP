@@ -103,6 +103,29 @@ Sur les paires d'instances résolues par les deux solveurs, hors ensemble commun
 - 25 instances n'atteignent aucun solveur : 20 sans fichier de données, 4 modèles que
   MiniZinc 2.10.1 refuse, 1 aplatissement au-delà de 120 s.
 
+## Pourquoi les preuves de GCS sont plus grosses : un cas mesuré
+
+`2014_stochastic-fjsp … det` (optimum 242 pour les deux), rejoué sur le nœud avec les
+statistiques de GCS (`-s`), avec et sans `--prove` :
+
+| | baguette | GCS |
+|---|---|---|
+| nœuds | 178 (52 conflits, apprentissage de clauses) | **3 007 079** (3 006 955 échecs, pas d'apprentissage, 0 redémarrage) |
+| propagations | — | 308,6 M, dont 67,6 M effectives |
+| temps | 3,4 s | 72,7 s sans preuve, **193,7 s avec** (×2,7) |
+| `.pbp` | 1,53 Mo, 5 717 lignes | 13,93 Go, 192 365 107 lignes |
+| par nœud | 8,6 Ko, 32 lignes de 216 o | 4,6 Ko, 64 lignes de 67 o |
+| par propagation effective | — | 2,85 lignes (`pol` + `rup` + `del`) |
+
+Sur cette instance la taille vient d'abord de l'arbre : GCS visite 17 000 fois plus de
+nœuds, parce qu'il n'apprend pas de nogoods là où baguette ferme la recherche en 52
+conflits. Par nœud, la preuve de GCS est en fait plus **petite** en octets que celle de
+baguette (ses lignes sont courtes, son encodage binaire tient dans l'`.opb`), mais il
+justifie chaque propagation effective au moment où elle a lieu, environ trois lignes
+chacune, là où baguette n'écrit une ligne de trace que pour une branche qui échoue. Le
+proof logging coûte à GCS un facteur 2,7 en temps ici. Sur le corpus, le facteur 4 en
+géomoyenne mélange ces deux effets ; il est le plus fort là où l'apprentissage paie.
+
 ## Prochaines mesures
 
 Un nouveau run `--time-limit` et une nouvelle comparaison sur le binaire final de la

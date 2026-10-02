@@ -113,3 +113,10 @@ solved, the 1-shifted geometric mean of wall time was 2.28 s for GCS, 7.26 s for
 and 0.20 s for Chuffed; GCS's proofs were 35.7 MB and checked in 6.6 s (geometric means over the
 42 that verified), baguette's 8.5 MB and 2.3 s.5 MB and 2.3 s. GCS without
 proof logging solves 149 of the 436 within 300 s; with it, the 16 GB cap stops 273.
+
+One data point on proof size, from re-running instance #16 with `-s`: GCS visits 3 007 079
+nodes (3 006 955 failures, no restarts, 308.6 M propagations of which 67.6 M effectful) and
+writes 192 365 107 proof lines, i.e. 4.6 KB and 64 lines per node, about 2.85 lines per
+effectful propagation; proof logging takes the run from 72.7 s to 193.7 s. baguette closes
+the same instance in 178 nodes with clause learning, so its 1.5 MB proof is a tree-size
+effect, not a per-node one: per node its proof is larger (8.6 KB).
