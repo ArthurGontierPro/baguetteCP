@@ -8764,8 +8764,9 @@ also gives alldiff and gcc conflicts something to learn from, but they would hav
 
 **Date.** 2026-10-03. **Row.** M4-T5 (agent-hints, `wave40-hints`). **Status: deliverable 1 is
 PARTIAL.** The suite and the local scaled proofs are measured. The corpus lane is not, because
-`fataepyc-head` (130.209.251.1:22) stopped accepting connections at 2026-10-02 ~16:10 BST. It
-was still refusing at 11:30 the next morning, after ~19 h of polling. The solves had been
+`fataepyc-head` (130.209.251.1:22) stopped accepting connections minutes after this row's
+solves were launched, and was still refusing at 11:30 BST on 2026-10-03, after about 3 h of
+polling, while the rest of the internet was reachable. The solves had been
 launched in `/scratch/arthur/hints-d0102/` before the outage (binary `65c9da02…`, `main`
 `1df8d81`). No solver code was written. Deliverable 2 stays closed until the corpus table below
 exists.
