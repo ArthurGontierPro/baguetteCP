@@ -679,6 +679,25 @@ checker of record is VeriPB source `d5644ca4` (D-0100); rejection header "Checki
 |---|---|---|---|
 | M7-T25 | `lib/core/prop/element.ml`, `test/unit/{test_prop,test_trace,test_learn}.ml` (own scenes), new `test/models/*` + expected, `docs/PROOF-FORMAT.md` (§4 element row), `docs/DECISIONS.md` (D-0101, append) | agent-elearn | 2026-10-02 |
 | M4-T5 | `docs/DECISIONS.md` (D-0102, append) FIRST; then `lib/core/trace.ml`, `lib/core/justify.ml`, `lib/proof/writer.ml`, `lib/core/learn.ml`, `test/unit/{test_proof,test_justify,test_trace}.ml`, `bench/**` | agent-hints | 2026-10-02 |
+
+**Node runs in flight when access dropped (2026-10-02 late evening), read them, do not re-launch:**
+1. `/scratch/arthur/corpus-out-w37` — the `--time-limit 280` sweep on `main` = `1df8d81` (waves 31–39
+   whole, cumulative/maxmin/gcc3/seed included), binary md5 `70561345fc3974297102602dba50d8b6`, run
+   from the throwaway clone `/scratch/arthur/baguette-main-check` (`PAR=48`). Compare with D-0093
+   (87 verified, 25 check-timeouts, median 18.1 nodes/s): `scripts/corpus_run.sh --report /scratch/arthur/corpus-out-w37`.
+2. `/scratch/arthur/compare-out-w37-baguette` — baguette alone, same binary, `PAIRS=answers.tsv`.
+   Read joined: `scripts/compare_run.sh --report compare-out-w31 compare-out-w36-baguette compare-out-w37-baguette --pinned bench/corpus/answers.tsv`
+   — the report's new **regressions section** (solved LOST / verified LOST between tables) comes first.
+3. `/scratch/arthur/gcs-recheck/<id>.vp` — the 16 GCS proofs re-checked with the d5644ca4 checker
+   (D-0100); the first 10 all VERIFIED; 6 large ones (prize-collecting, proteindesign12, smelt,
+   stochastic-fjsp det, table-layout, atsp) were still running. Then rewrite
+   `docs/reports/2026-10-02-gcs-rejected-proofs.md` and add the D-0089 §1 addendum.
+4. `/scratch/arthur/corpus-out-w36-longcheck` — the 25 TIMEOUT-CHECK instances re-solved with a 3 h
+   check budget, launched under load; mostly `UNKNOWN-LIMIT` (did not re-solve in 280 s under load),
+   so inconclusive about the proofs. `corpus_run.sh` now KEEPS TIMEOUT-CHECK artefacts (`596692d`),
+   so the next sweep's unchecked proofs can be checked long without re-solving.
+**The node checkout `/scratch/arthur/baguette` is at `5c299cb` and must be pulled + rebuilt once
+nothing runs from it** (the longcheck run executes its scripts).
 ## Cross-session requests
 
 Need a change in a file someone else has claimed? Write it here and move on to other
