@@ -1075,7 +1075,13 @@ let ix10_table =
        trigger onto the propagator and element never sets it, for the INDEX side too:
        all seven element models plus a scene
        built to defeat it verify with nothing written ahead of their lines (I-S4/D-0039:
-       RUP against the .opb plus EARLIER TRACE LINES, not a second model constraint). *)
+       RUP against the .opb plus EARLIER TRACE LINES, not a second model constraint).
+       M7-T25 (D-0101): the PRUNINGS stay Single_row. The empty-index CONFLICT now
+       carries its facts under a decision and is made under [Store.deriving_ahead], so
+       its derivation is written ahead of `rup ~facts >= 1` -- cumulative's conflict
+       arrangement. Measured: that line is also RUP in sequence without the pol (one
+       live position's rows, the index ladder and the earlier removal lines), on the
+       suite and 1500 bench/fuzz elem seeds; the pol is there so it need not be. *)
     ("element.ml", Single_row);
     (* M4-T1: all_different_int. THE FIRST [Needs_derivation] FAMILY, and the one the
        classification above was written in anticipation of.

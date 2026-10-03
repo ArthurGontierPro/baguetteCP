@@ -1,0 +1,22 @@
+% M7-T25 / D-0101: an element conflict under a decision learns a clause that PRUNES on a
+% later branch. Found by bench/fuzz (`gen.py elem 1124`) as the smallest SAT model on
+% which the learned count moves from 0 and the learned constraint then moves a bound.
+%
+% Measured 2026-10-03: OLD (main 1df8d81) 7 nodes, 3 conflicts, learned 0 -- each element
+% conflict carried Reason.none (D-0091), so the branch closed on its full decision nogood.
+% NEW: 3 nodes, 1 conflict, learned 1, and that learned unit is applied as a global bound
+% tightening that moves a bound (`glob-prune 1`) and closes the subtree OLD searched.
+% The first solution is unchanged (SPEC 3.4). test_learn.ml asserts the counts and veripb
+% acceptance on this model; it is SAT, so the learned rup is really checked (D-0053).
+var 1..4: x0 :: output_var;
+var 1..4: x1 :: output_var;
+var 1..4: x2 :: output_var;
+var 1..4: x3 :: output_var;
+constraint array_int_element(x3,[1,1,2,1],x0);
+constraint array_int_element(x3,[1,3,2,4],x0);
+constraint array_int_element(x1,[3,4,3,4],x2);
+constraint int_ne(x2,x3);
+constraint int_ne(x0,x1);
+constraint int_ne(x0,x3);
+constraint int_ne(x2,x3);
+solve :: int_search([x2,x0,x3,x1], largest, indomain_min, complete) satisfy;

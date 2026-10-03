@@ -1,0 +1,23 @@
+% M7-T25 / D-0101: an element conflict under a decision now LEARNS, and the result hole
+% it read is cited through its remover's facts.
+%
+% Deciding y = 2 makes int_ne punch the hole c <> 2 (its line's tail is y = 2) and
+% int_eq fix i = 2, whose array entry is 2: element finds no position left. Until M7-T25
+% that conflict carried Reason.none (D-0091), so the branch closed on the full decision
+% nogood and nothing was learned (OLD: learned 0). Now its reason is the facts its
+% derivation read -- i's bounds and the hole's REMOVER's facts, y >= 2 /\ y <= 2
+% (D-0075's rule: a hole is cited through its remover) -- written after the derivation
+% ([Store.deriving_ahead], D-0096), and 1UIP learning resolves from it (learned 3).
+%
+% SAT, so the database is not contradictory and every rup on the page is really checked
+% (D-0053, D-0066/D-0073). test_learn.ml's M7-T25 break drops the remover's facts from the
+% reason and 3.0.2 refuses the conflict line ("Checking error at", the RUP sentence).
+var 1..4: i :: output_var;
+var 1..3: c :: output_var;
+var 1..4: y :: output_var;
+var 1..3: z :: output_var;
+constraint int_ne(c, y);
+constraint int_eq(i, y);
+constraint array_int_element(i, [1,2,3,1], c);
+constraint int_lin_le([1,-1],[z,y],0);
+solve :: int_search([y,z], input_order, indomain_median, complete) satisfy;

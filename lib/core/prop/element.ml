@@ -131,6 +131,25 @@
    letting [Store.apply]'s [Failed] arm report it -- that arm would hand back the
    derivation of the ONE position it was removing, which is not contradicting.
 
+   WHAT A CONFLICT READ, and why it now says so (M7-T25 / D-0101). An empty-index
+   conflict is reached with exactly one position p still in dom(idx), and as[p] is not in
+   dom(c). Its FACTS are, per declared position q, the facts behind whichever
+   [pos_gone] arm excludes q: the result bound as[q] lies beyond ([c <= hi] or
+   [c >= lo]); the index bound q lies beyond; for a hole in c at as[q], the REMOVER's
+   facts (D-0075/D-0084 -- a hole is cited through its remover, never as a bound fact);
+   for an interior index hole punched under a decision, its puncher's facts. Under a
+   decision the derivation above then leaves exactly the negations of those facts --
+   "not all of these bounds hold" -- so `rup ~facts >= 1` is unit propagation against it.
+   [conflict_facts] collects them and [no_position_conflict] reports them under
+   [Store.deriving_ahead], so the derivation is on the page before the line (D-0096's
+   [c_ahead]). That is what lets 1UIP learning resolve from an element conflict; until
+   M7-T25 the reason was [Reason.none] at every depth (D-0091) and nothing was learned.
+   The line is ALSO RUP in sequence without the derivation, by the [Single_row] argument
+   below: the one live position's rows plus the index ladder and the earlier trace lines
+   of every index removal (measured, D-0101) -- the [pol] ahead is what makes that not a
+   thing the line has to rely on. At the ROOT the reason stays [Reason.none]: there is no
+   branch to learn from and the derivation itself closes to [0 >= 1].
+
    ---------------------------------------------------------------------------
    I-X10: this is a [Single_row] family, on the [Ne] precedent
    ---------------------------------------------------------------------------
@@ -860,27 +879,116 @@ exception Moved
 
 let live_positions t store = List.filter (fun p -> View.mem store t.pos p) t.decl_pos
 
+(* M7-T25 / D-0101. WHAT AN EMPTY-INDEX CONFLICT READ, per dead position, arm by arm.
+
+   This is [pos_gone]'s case split replayed to say which FACTS each arm's line rests on,
+   rather than which line it is. It must agree with [pos_gone] arm for arm, because the
+   conflict line `rup ~facts >= 1` is RUP only if every literal the derivation leaves
+   behind is falsified by assuming the facts -- and what each arm leaves behind is:
+
+     - outside the array, or a value outside the result's DECLARED range: nothing (the
+       row is already the unit [~idx_eq_p]);
+     - as[p] above hi(c): [c_ge_(hi+1)], so the fact [c <= hi];
+     - as[p] below lo(c): [~c_ge_lo], so the fact [c >= lo];
+     - as[p] a HOLE in c: [excl_hole] embeds the remover's own derivation, which leaves
+       the remover's residue -- the negation of the REMOVER'S facts (D-0075/D-0084: a hole
+       is cited through its remover, never as a bound fact); a declared hole leaves
+       nothing;
+     - p below lo(idx) / above hi(idx): [~idx_ge_lo] / [idx_ge_(hi+1)], so the index
+       bound;
+     - p an interior INDEX hole: [index_hole_clause] carries the puncher's facts negated
+       when the puncher acted under a decision, and nothing for a level-0 hole.
+
+   Each arm reads the store exactly as [pos_gone] does (the same [View.lo]/[View.hi],
+   [hole_line]'s [Store.remover], [index_hole_clause]'s trail walk), and EAGERLY (I-X6).
+   A fact at its declared value materialises to no literal, matching an arm that leaves
+   none. Root-established residue that [residue_cancel] cancels is still listed: a root
+   fact is harmless on a tail (Analysis drops root nodes from every cut), and listing it
+   keeps this function free of a second copy of the cancellation rule. *)
+(* A BREAK, for test/unit/test_learn.ml alone: drop the result hole's remover's facts
+   from the conflict's reason, which is the D-0075 mistake made again on this line. The
+   conflict line then claims more than the derivation ahead of it supports, and 3.0.2
+   refuses it (test/models/element_learn_hole_sat.fzn). Never set outside that lane. *)
+let break_hole_facts = ref false
+
+let conflict_facts t store =
+  let n = Array.length t.values in
+  let rlo = View.lo store t.res and rhi = View.hi store t.res in
+  let d = Store.get store t.ibase in
+  let dlo = Domain.lo d and dhi = Domain.hi d in
+  let index_hole_puncher bp =
+    let rec find i =
+      if i < 0 then []
+      else
+        let e = Store.trail_entry store i in
+        if
+          Var.equal e.Store.var t.ibase && Domain.mem e.Store.old bp
+          && not (Domain.mem e.Store.now bp)
+        then if Store.level_of_index store i > 0 then e.Store.reason else []
+        else find (i - 1)
+    in
+    find (Store.trail_length store - 1)
+  in
+  let of_pos p =
+    if p < 0 || p >= n then []
+    else
+      let w = t.values.(p) in
+      let rn () = Option.get t.rname in
+      if w > rhi then
+        if w > t.rdhi then [] else [ Reason.at_most ~name:(rn ()) ~decl:t.rdhi rhi ]
+      else if w < rlo then
+        if w < t.rdlo then [] else [ Reason.at_least ~name:(rn ()) ~decl:t.rdlo rlo ]
+      else if not (View.mem store t.res w) then
+        match View.base_var t.res with
+        | None -> []
+        | Some rv -> if !break_hole_facts then [] else remover_facts store ~var:rv w
+      else
+        let bp = base_of t p in
+        if bp < dlo then [ Reason.at_least ~name:t.iname ~decl:t.idlo dlo ]
+        else if bp > dhi then [ Reason.at_most ~name:t.iname ~decl:t.idhi dhi ]
+        else index_hole_puncher bp
+  in
+  List.fold_left (fun acc p -> add_facts acc (of_pos p)) [] t.decl_pos
+
 (* Every declared position is impossible, so the at-least-one line has nothing left and
    the sum IS [0 >= 1] -- once the bound literals the exclusions carried are cancelled.
 
-   [Reason.none], deliberately: lib/core/trace.ml's [conflict_line] writes a [rup] over
-   the reason's facts, claiming those bounds are jointly impossible -- and for this
-   conflict that claim is the counting argument itself, not reverse unit propagation,
-   which 3.0.2 refuses. With no facts no line is written and what closes the root is this
-   derivation, which really does derive the contradiction. alldiff.ml reaches the same
-   arrangement through [Store.apply]'s [Failed] arm; saying it here is the same thing
-   said where it can be read. *)
+   AT THE ROOT: [Reason.none], deliberately. With no decision there is no branch to
+   learn from, and every residue the root established is cancelled by [residue_cancel],
+   so the derivation itself closes to [0 >= 1] and search.ml's root arm cites it. The
+   facts genuinely ARE none there in the sense that matters -- each one a root
+   consequence of the model -- and keeping the arm factless keeps every root refutation
+   byte-identical.
+
+   UNDER A DECISION (M7-T25 / D-0101): the facts [conflict_facts] collects, and the
+   conflict is made under [Store.deriving_ahead]. Until M7-T25 this arm was factless too
+   (D-0091's finding), which is sound -- search.ml's D-0040 arm emitted the derivation and
+   the full decision nogood closed the branch -- but it handed [Learn.at_conflict] an
+   empty cut, so no element conflict ever produced a 1UIP clause. With facts,
+   [Trace.conflict_line] writes `rup ~facts >= 1`, and that line is the counting
+   argument, NOT reverse unit propagation over the rows (each r_ge/r_le row leaves a
+   two-literal [idx <> p] that unit propagation cannot sum). So the derivation goes on
+   the page FIRST ([c_ahead], D-0096's mechanism, cumulative.ml's template): under a
+   decision it derives "not all of these bounds hold", every literal of which is the
+   negation of a fact listed here, and the `rup` is then unit propagation against that
+   one line. *)
 let no_position_conflict t store =
   let dead = dead_positions t store ~live:[] in
   let cancel = residue_cancel t store ~dead in
-  Store.conflict store
-    (Reason.because ~concludes:None Reason.none
-       (Explanation.deferred (fun () ->
-            Explanation.combine
-              (cite (need "at-least-one" (Encoding.at_least_one_id t.enc t.iname))
-               :: List.map (fun (e, _) -> Explanation.term 1 e) dead
-              @ cancel)
-              1)))
+  let why =
+    Explanation.deferred (fun () ->
+        Explanation.combine
+          (cite (need "at-least-one" (Encoding.at_least_one_id t.enc t.iname))
+           :: List.map (fun (e, _) -> Explanation.term 1 e) dead
+          @ cancel)
+          1)
+  in
+  if Store.level store = 0 then
+    Store.conflict store (Reason.because ~concludes:None Reason.none why)
+  else
+    let facts = conflict_facts t store in
+    Store.deriving_ahead store (fun () ->
+        Store.conflict store (Reason.because ~concludes:None facts why))
 
 (* The three ways a pruning of the RESULT can run into a bound the result already has.
    Each derivation below concludes a single order literal, so the contradiction is that
