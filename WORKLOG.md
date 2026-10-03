@@ -974,6 +974,7 @@ work. The owning session picks it up.
 | M6-T18 | agent-seed | 2026-10-02 | **D-0098**. `Engine.propagate` runs only DIRTY seed slots: the watchers (trigger-masked) of trail entries above the last fixpoint still on the trail, found via `Store`'s per-reader low-water mark (`register_low_water`/`take_low_water`, kept in `undo_to`); instances not born at that fixpoint (`Engine.add`, or a backjump below their birth); and slots woken before they came up. The skip is EXACT: 136/136 identical in stdout, `.opb` AND `.pbp`, all verify; `check_skip` (every skipped slot re-run under `BAGUETTE_DEBUG`) never fired over the suite. Runs/node s4 742.6->158.6, mario 2122->855, chessboard 6492->1944, eff/node unchanged, nodes/55 s within noise. `~idempotent:true` at `pack_linear`/`pack_arith_row`, the by-name table retired. Audit: no propagator lacked a watch |
 | M7-T24 | agent-gcc3 | 2026-10-02 | **D-0099.** gcc's proof volume was in the REASONS, not the derivations: `scope_facts` appended the trail reason behind every non-root bound (for a `fact_summand` nothing called), unfolding the implication DAG -- 99.998 % of 2015_roster's 1.81 GB. Bounded (bounds only, interval-scoped, weighted rung sums, shared HIGH rows): 7.03 MB -> 10.3 KB per node, 11.8 GB -> 184 MB RSS. Rules (a) saturated value -> interior hole / bound push, (b) forced value -> fix candidates; lanes `gcc_saturate_hole_{sat,unsat}`, `gcc_forced_sat`, `gcc_forced_root_unsat`, a test_trace break, gcc's first I-P1 sweep (3276 scenes). Count route re-measured: still worse on roster, so it stays withdrawn |
 | M4-T10 | agent-cumulative | 2026-10-02 | D-0096 (census of the 69, worked proof checked, GO) + `cumulative.ml`, mznlib routing, 3 lanes; front-end arms and conflict learning by request (two patches in `docs/requests/`); branch `wave38-cumulative`, not merged |
+| M4-T5 (deliverable 1, partial) | agent-hints | 2026-10-03 | D-0102: RUP hints measured by hand via veripb elaboration on the suite (153/153 verify hinted, 1.0x at the floor) and scratch php20/28 (1.4-1.5x); per-line opt-out confirmed; corpus lane BLOCKED (node unreachable); NOT GO; no solver code; `bench/m4t5/` |
 
 ## Handoff notes
 
@@ -4063,3 +4064,25 @@ models 135/135, fmt and width lint clean; peak RSS 41.5 MB (`dune runtest`), 17.
    against a bound / last value), which still report `Reason.none`: they are the next place
    learning is missing on element models.
 
+## M4-T5 handoff, 2026-10-03 (agent-hints)
+
+D-0102 is committed and is **partial**. No solver code was written. The hint lists come
+from the checker itself: `veripb --elaborate` writes each `rup` as `rup C : ids ;`, and
+`bench/m4t5/splice_hints.py` copies those lists back into the solver's own `.pbp`. It
+remaps the ids through the deletions, because elaboration renumbers: every `red` takes 2
+ids. All 153 suite proofs verify hinted, and dropping one hint is refused at that exact line.
+**The per-line opt-out exists in 3.0**: a `rup` without `:` still propagates over the whole
+database, and a mixed proof verifies. So hints can be migrated one emitter at a time, and the
+only real rule is that a line that does carry a list must carry a complete one.
+
+A trace line's list also contains the **ladder rungs** the propagation walks (D-0028), not
+just its cited lines and the model row. Emitting lists from the solver therefore needs the
+ladder clause ids threaded from `Encoding` into `Justify.ctx`. The nogood's `rup` is in
+`learned.ml:305` (`introduce`), which is not on this row's file list.
+
+**Still to do:** the corpus lane. `fataepyc-head` was unreachable for the rest of this
+session. In `/scratch/arthur/hints-d0102/`, the solves of `2019_zephyrus`,
+`2023_test-scheduling` and `2013_mario` (55 s limit) were launched before the outage; their
+outputs are unchecked. Copy `bench/m4t5/{splice_hints.py,nodepipe.sh}` there and run
+`./nodepipe.sh zeph`, then `ts`, then `mario`. Append the three rows and the `perf` split to
+D-0102. GO only if the hinted run is at least 3x faster on both corpus proofs.
