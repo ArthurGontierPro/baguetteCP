@@ -905,6 +905,12 @@ let live_positions t store = List.filter (fun p -> View.mem store t.pos p) t.dec
    none. Root-established residue that [residue_cancel] cancels is still listed: a root
    fact is harmless on a tail (Analysis drops root nodes from every cut), and listing it
    keeps this function free of a second copy of the cancellation rule. *)
+(* A BREAK, for test/unit/test_learn.ml alone: drop the result hole's remover's facts
+   from the conflict's reason, which is the D-0075 mistake made again on this line. The
+   conflict line then claims more than the derivation ahead of it supports, and 3.0.2
+   refuses it (test/models/element_learn_hole_sat.fzn). Never set outside that lane. *)
+let break_hole_facts = ref false
+
 let conflict_facts t store =
   let n = Array.length t.values in
   let rlo = View.lo store t.res and rhi = View.hi store t.res in
@@ -935,7 +941,7 @@ let conflict_facts t store =
       else if not (View.mem store t.res w) then
         match View.base_var t.res with
         | None -> []
-        | Some rv -> remover_facts store ~var:rv w
+        | Some rv -> if !break_hole_facts then [] else remover_facts store ~var:rv w
       else
         let bp = base_of t p in
         if bp < dlo then [ Reason.at_least ~name:t.iname ~decl:t.idlo dlo ]

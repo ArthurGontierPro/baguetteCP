@@ -31,6 +31,9 @@ module Reduce = Baguette_core.Reduce
 module Pb = Baguette_core.Pb_analysis
 module Checked = Baguette_core.Checked
 module Propagator = Baguette_core.Propagator
+module Engine = Baguette_core.Engine
+module Reason = Baguette_core.Reason
+module Explanation = Baguette_core.Explanation
 
 let () = Mem_guard.install ()
 let failures = ref 0
@@ -190,9 +193,12 @@ type run = {
    it is exactly the thing that leaks if [Search.solve] forgets to retire it. A raised
    [Writer.Audit_failed] is captured rather than allowed to abort the binary, so that the
    failure is reported as one check rather than as a crash. *)
-let run ?(config = Search.default_config) ?order src =
+(* [~annotated:true] (M7-T25) searches in the model's own [int_search] order, as the CLI
+   does, when no [order] is given; the default keeps every older scene's order. *)
+let run ?(config = Search.default_config) ?(annotated = false) ?order src =
   let m = F.Builder.of_string ~file:"test" src in
   let c = Compile.compile m in
+  let order = match order with None when annotated -> c.Compile.order | o -> o in
   let dir = Filename.temp_file "baguette_learn" "" in
   Sys.remove dir;
   Sys.mkdir dir 0o700;
@@ -1693,6 +1699,120 @@ let test_m7t12_backjump_through_assignment () =
   expect_accepted ~title:"M7-T12 (d): the refutation verifies" ~dir ~opb ~pbp;
   cleanup dir [ opb; pbp ]
 
+(* ===================================================== M7-T25: element conflicts learn *)
+
+(* D-0101. test/models/element_learn_hole_sat.fzn and element_learn_prunes_sat.fzn, inline.
+   Until M7-T25 an element conflict carried [Reason.none] at every depth (D-0091), so
+   [Learn.at_conflict] saw an empty cut and returned [None]. Domains are 1..4 (D-0028). *)
+let el_hole_src =
+  "var 1..4: i;\n\
+   var 1..3: c;\n\
+   var 1..4: y;\n\
+   var 1..3: z;\n\
+   constraint int_ne(c, y);\n\
+   constraint int_eq(i, y);\n\
+   constraint array_int_element(i, [1,2,3,1], c);\n\
+   constraint int_lin_le([1,-1],[z,y],0);\n\
+   solve :: int_search([y,z], input_order, indomain_median, complete) satisfy;\n"
+
+let el_prunes_src =
+  "var 1..4: x0;\n\
+   var 1..4: x1;\n\
+   var 1..4: x2;\n\
+   var 1..4: x3;\n\
+   constraint array_int_element(x3,[1,1,2,1],x0);\n\
+   constraint array_int_element(x3,[1,3,2,4],x0);\n\
+   constraint array_int_element(x1,[3,4,3,4],x2);\n\
+   constraint int_ne(x2,x3);\n\
+   constraint int_ne(x0,x1);\n\
+   constraint int_ne(x0,x3);\n\
+   constraint int_ne(x2,x3);\n\
+   solve :: int_search([x2,x0,x3,x1], largest, indomain_min, complete) satisfy;\n"
+
+(* (a) The conflict itself, driven by hand: decide y = 2 at level 1. int_ne punches c <> 2
+   (tail y = 2), int_eq fixes i = 2, and element finds no position. The conflict must be
+   element's -- the only [deriving_ahead] conflict in this model -- carry facts, and
+   [Learn.at_conflict] must return [Some]. *)
+let test_m7t25_element_conflict_learns () =
+  let c = Compile.compile (F.Builder.of_string ~file:"test" el_hole_src) in
+  let store = c.Compile.store and engine = c.Compile.engine in
+  let path = Filename.temp_file "baguette_m7t25" ".pbp" in
+  let oc = open_out path in
+  Encoding.start_proof c.Compile.encoding (Writer.create oc);
+  let root = Engine.propagate engine store in
+  check "M7-T25 a: the root is a fixpoint" (root = Engine.Fixpoint);
+  let y = Option.get (Store.var_named store "y") in
+  (* One decision per level, as [Search.branch] makes them: a 1UIP cut needs a single
+     decision at the conflict level to stop at. *)
+  let decide f lit =
+    Store.new_level store;
+    ignore
+      (f (Reason.because ~concludes:None Reason.none (Explanation.decision lit))
+        : Store.outcome)
+  in
+  decide (Store.set_lo store y 2) (Lit.ge "y" 2);
+  check "M7-T25 a: y >= 2 at level 1 is a fixpoint"
+    (Engine.propagate engine store = Engine.Fixpoint);
+  decide (Store.set_hi store y 2) (Lit.negate (Lit.ge "y" 3));
+  (match Engine.propagate engine store with
+  | Engine.Fixpoint -> check "M7-T25 a: deciding y = 2 reaches a conflict" false
+  | Engine.Conflict cf ->
+      check "M7-T25 a: the conflict is made under deriving_ahead (element's)"
+        cf.Store.c_ahead;
+      check "M7-T25 a: and it carries facts (D-0091: it used to be Reason.none)"
+        (Reason.lits cf.Store.c_reason <> []);
+      check "M7-T25 a: the facts include the hole's REMOVER's, y >= 2 (D-0075)"
+        (List.mem (Lit.ge "y" 2) (Reason.lits cf.Store.c_reason));
+      check "M7-T25 a: the reason and the justification agree (D-0026)"
+        (Store.agreement_holds store
+           (Reason.because ~concludes:None cf.Store.c_reason cf.Store.c_why));
+      let l =
+        Learn.at_conflict store cf ~vars_of:(Engine.vars_of engine)
+          ~decl:(Learned.decl_of_encoding c.Compile.encoding)
+      in
+      check "M7-T25 a: Learn.at_conflict returns Some on an element conflict"
+        (Option.is_some l));
+  close_out oc;
+  try Sys.remove path with _ -> ()
+
+(* (b) The learned clauses are on the page as `rup` lines and the proof VERIFIES, on SAT
+   models (D-0053: over a contradictory database a rup proves nothing). *)
+let test_m7t25_learned_verifies () =
+  List.iter
+    (fun (title, src, min_learned) ->
+      let r, dir, opb, pbp = run ~annotated:true src in
+      check (title ^ ": SAT") (r.r_outcome <> Search.Unsat);
+      check
+        (Printf.sprintf "%s: learned %d >= %d" title r.r_stats.Search.n_learned
+           min_learned)
+        (r.r_stats.Search.n_learned >= min_learned);
+      expect_accepted ~title ~dir ~opb ~pbp;
+      cleanup dir [ opb; pbp ])
+    [ ("M7-T25 b hole", el_hole_src, 1); ("M7-T25 b prunes", el_prunes_src, 1) ];
+  let r, dir, opb, pbp = run ~annotated:true el_prunes_src in
+  check "M7-T25 b prunes: the learned constraint moves a bound later"
+    (r.r_stats.Search.n_global_prunes + r.r_stats.Search.n_clause_prunes > 0);
+  cleanup dir [ opb; pbp ]
+
+(* (c) THE BREAK: drop the result hole's remover's facts from the conflict's reason. The
+   conflict line then claims "i = 2 is impossible" outright, which the derivation ahead of
+   it does not support, and 3.0.2 refuses it in its own words. *)
+let test_m7t25_break_hole_facts () =
+  Baguette_core.Element.break_hole_facts := true;
+  let r, dir, opb, pbp =
+    Fun.protect
+      ~finally:(fun () -> Baguette_core.Element.break_hole_facts := false)
+      (fun () -> run ~annotated:true el_hole_src)
+  in
+  ignore r;
+  (match veripb ~dir ~opb ~pbp with
+  | Some (false, out) ->
+      check "M7-T25 c BREAK: the rejection is a judgement (\"Checking error at\")"
+        (contains ~needle:"Checking error at" out)
+  | _ -> ());
+  expect_rejected ~title:"M7-T25 c BREAK (no remover facts)" ~dir ~opb ~pbp;
+  cleanup dir [ opb; pbp ]
+
 let () =
   test_minimise_pure ();
   test_minimise_break_in_a_proof ();
@@ -1718,6 +1838,9 @@ let () =
   test_m7t12_clause_break ();
   test_m7t12_hole_tail_break ();
   test_m7t12_backjump_through_assignment ();
+  test_m7t25_element_conflict_learns ();
+  test_m7t25_learned_verifies ();
+  test_m7t25_break_hole_facts ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
