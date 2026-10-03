@@ -8759,3 +8759,120 @@ TIMEOUT-CHECK instances become checkable. If the conflict-learning patch is refu
 mznlib routing should not merge either -- say so rather than ship the regression. The patch
 also gives alldiff and gcc conflicts something to learn from, but they would have to opt in
 (report their pigeonhole with facts under `deriving_ahead`); that is not measured here.
+
+## D-0102  M4-T5 reopened: RUP hints measured by hand. Method validated and the per-line rule settled. Corpus lane BLOCKED, so NOT GO yet
+
+**Date.** 2026-10-03. **Row.** M4-T5 (agent-hints, `wave40-hints`). **Status: deliverable 1 is
+PARTIAL.** The suite and the local scaled proofs are measured. The corpus lane is not, because
+`fataepyc-head` (130.209.251.1:22) stopped accepting connections at 2026-10-02 ~16:10 BST. It
+was still refusing at 11:30 the next morning, after ~19 h of polling. The solves had been
+launched in `/scratch/arthur/hints-d0102/` before the outage (binary `65c9da02…`, `main`
+`1df8d81`). No solver code was written. Deliverable 2 stays closed until the corpus table below
+exists.
+
+### How the hint lists were found: the checker writes them
+
+No guessing was needed. `veripb --elaborate` (d5644ca4) re-emits every `rup` as
+`rup C : <ids> ;`. The ids are the constraints its own unit propagation actually used, in the
+order they fired, with `~` for the negated claim (`veripb-checker/src/rules/rup.rs`).
+`bench/m4t5/splice_hints.py` copies those lists back into the solver's own `.pbp`. Everything
+else stays byte-for-byte the same, so the comparison changes nothing but the hints.
+
+- **The elaborated proof's ids cannot be pasted back as they are.** Elaboration renumbers: a
+  `red` grows a `: subproof … qed` and takes 2 ids. The script maps each elaborated id to the
+  solver's `@cN` label. It does this through the k-th id-creating line, and cross-checks the
+  mapping against the `del id`/`del range`/`deld` lines, which align one-to-one by I-X2. A
+  disagreement aborts the script. The labels are accepted as hints.
+- **Every hinted proof verifies.** All 153 suite models pass, and so do php20/php28 (below).
+  None needed a correction, because the lists come from the checker.
+- **The hints are load-bearing.** Dropping the last non-`~` id of one `rup` (`drop1:k`) gets the
+  proof refused at exactly that line. This was tested at k = 1, 50, 120 and 181 on
+  `width_sat_depth`, which is SAT (D-0053/D-0066: a satisfiable database), and at k = 20 on
+  php_wide, colour and alldiff_search. The refusal reads `Checking error at <file>:<line>` /
+  "The constraint is not implied by reverse unit propagation (RUP) from core and derived
+  database." This is the corruption lane deliverable 2 would pin.
+
+### What the 3.0 grammar says, which settles the "all-or-nothing" worry
+
+The syntax is `rup <C> : <id|@label|~> … ;`. The hints go BEFORE the `;`. Placed after it, they
+are not hints, the same trap as `ia`'s (PROOF-FORMAT §2a, M1-T51). With hints, the checker
+propagates only over the listed constraints. It loops over the list until nothing changes, so a
+list in firing order costs one pass. `~` must be listed explicitly, or the negated claim is never
+propagated. Without hints, it propagates over the whole live database.
+
+**The rule is per LINE, not per proof.** GCS's "an engaged-but-empty hint list restricts
+propagation to nothing" is true of one line. A proof can mix the two kinds freely: stripping the
+hints from every second `rup` of a hinted proof still verifies (php_wide, width_sat_depth,
+alldiff_search). So **leaving the hints out of a line is the per-line opt-out**, and it exists in
+3.0. "No half-hinted chain" therefore means one thing only: a line that carries hints must carry
+a COMPLETE list. Its unhinted neighbours are unaffected.
+
+### The emitters
+
+Every `rup` goes through `Writer.rup` (`writer.ml:1051`). There are six emitters:
+
+| emitter | file | what it would need |
+|---|---|---|
+| trace line | `trace.ml:402` `emit_line` | see the next paragraph |
+| conflict line | `trace.ml:671` `conflict_line` | the same list, without a claim |
+| memoised clause | `justify.ml:417` `emit_clause` | its citing explanation's ids |
+| `Linear` reason | `justify.ml:481` `emit_linear` | the bound facts' defining lines |
+| settle bridge | `search.ml:1945` (orchestrator's file) | the hole lines it already collects |
+| learned constraint / nogood | `learned.ml:305` `introduce` (**not** `learn.ml`, and not on this row's file list) | the trace ids of the cut |
+
+Any of them can stay unhinted.
+
+**What a trace line's list really contains (measured).** It is NOT just "the cited facts'
+defining lines plus the model row". A model row in the `.opb` is written over the ORDER literals
+(D-0028). Unit propagation therefore walks the ladder: on `width_sat_depth`, line `@c201`'s list
+is `~ 98 97 … 1 200`, which is 98 ladder clauses and then the row. So a solver-side list must
+also enumerate the ladder rungs between each fact and the bound. The solver can know those ids,
+since it wrote the `.opb`, but that is new plumbing (`Encoding` → `Justify.ctx`). M2-T9's index
+does not cover it. Across the 35,360 hinted lines measured, the mean list is 3.3 ids, 95 % have at
+most 5, and the maximum is 198 (the ladder walks).
+
+### The table: what was measured
+
+All rows: veripb d5644ca4. Local rows use the worktree binary at `b325d26` (= `1df8d81`'s
+solver), min of 3, under `ulimit -v 4000000`.
+
+| proof | .pbp bytes | rup lines | check unhinted | check hinted | ratio | hint bytes |
+|---|---|---|---|---|---|---|
+| suite, 153 models, summed | 473,363 | 3,793 | 1.185 s | 1.175 s | 1.0x (process floor) | 135,351 (+29 %) |
+| `width_sat_depth` (SAT, deepest) | 12,541 | 181 | 0.012 s | 0.012 s | floor | 80,293 (+640 %: ladder walks) |
+| `php_wide_unsat` (learning) | 53,330 | 525 | 0.011 s | 0.010 s | floor | 5,775 |
+| php 21→20, scratch, UNSAT | 4,256,918 | 11,879 | 0.26 s | 0.17 s | **1.5x** | 127,296 (+3 %) |
+| php 29→28, scratch, UNSAT | 19,384,541 | 31,567 | 1.05 s | 0.74 s | **1.4x** | 337,120 (+1.7 %) |
+| `2019_zephyrus` (31 MB) | — | — | > 900 s (D-0093) | **not measured** | — | — |
+| `2023_test-scheduling` (36–56 MB) | — | — | > 900 s (D-0093) | **not measured** | — | — |
+| `2013_mario`, 55 s limit | — | — | — | **not measured** | — | — |
+
+The checker's peak RSS also fell with hints: php28 went from 37.7 MB to 19.5 MB, because there are
+no watches over the whole database.
+
+**Where the checker's time goes.** The only answer so far is the ablation itself. On php28,
+hints remove about 30 % of check time, so at least that share is unhinted propagation. `veripb
+--stats` reports total time only, and `perf` is unavailable under WSL. The node has
+`/usr/bin/perf`, and `bench/m4t5/nodepipe.sh` records a 600 s `perf` sample beside the
+unhinted, elaborated and hinted runs. The php28 proof is 98 % `rup` bytes and 0.01 % `pol`, so
+its `pol` share cannot be large there. Whether the corpus proofs are the same is exactly the
+open question: their 900 s+ is 30x per MB slower than php28. That points at a large live
+database (O(live DB) per `rup`), which is the case hints address. It could also be wide `pol`
+chains, which hints do not touch.
+
+### Verdict: NOT GO, and not NO-GO either
+
+The gate was "GO only if feasible at the emission point AND at least 3x on the corpus proofs".
+
+- **Feasibility: yes, with one addition.** Cited lines, the model row and the decisions are
+  known at emission (I-S4, `record_citation`, `t.line_ids`). The ladder rung ids are not, and
+  have to be plumbed. Per-line opt-out exists, so the emitters can be migrated one at a time.
+- **At least 3x: unknown.** Every local proof that is off the process floor shows 1.4–1.5x, below
+  the bar. Those are pigeonhole proofs, though: a small database, long clauses, and a check
+  already fast per MB. They do not look like the corpus. The corpus numbers are the decision,
+  and they are blocked on the network, not on the method.
+
+**To finish:** when `fataepyc-head` answers, run `bench/m4t5/nodepipe.sh {zeph,ts,mario}` in
+`/scratch/arthur/hints-d0102` (copy `splice_hints.py` there or set `ROOT`). Append the three rows
+and the `perf` split here as an addendum. GO only if the hinted/unhinted ratio is at least 3x on
+both corpus proofs. Elaborating a proof costs one unhinted check, so allow up to 3 h each.
