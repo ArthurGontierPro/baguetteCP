@@ -8759,3 +8759,105 @@ TIMEOUT-CHECK instances become checkable. If the conflict-learning patch is refu
 mznlib routing should not merge either -- say so rather than ship the regression. The patch
 also gives alldiff and gcc conflicts something to learn from, but they would have to opt in
 (report their pigeonhole with facts under `deriving_ahead`); that is not measured here.
+
+## D-0101  M7-T25: an element conflict carries its facts under a decision, derived ahead, so 1UIP learning resolves from it
+
+**Status**: **SHIPPED** on `wave40-elearn`, 2026-10-03 (agent-elearn). Closes the
+explanation-quality gap D-0091 recorded ("Element's conflicts carry `Reason.none` at every
+depth"). No file outside `lib/core/prop/element.ml` changed on the solver side: the mechanism
+is M4-T10's (`Store.conflict.c_ahead`, `Trace.conflict_line`'s derivation ahead, D-0096).
+
+### The facts of an element conflict
+
+`no_position_conflict` is reached with exactly one position p still in dom(idx) whose entry
+as[p] is not in dom(c) (from `filter_index`; `filter_result`'s `live = []` arm is the same
+computation and is unreachable after it). For every declared position q, the line that
+excludes q (`pos_gone`'s arm) leaves at most one literal behind, and the conflict's facts are
+exactly the facts those literals negate:
+
+| arm of `pos_gone` for q | what the derivation leaves | fact on the tail |
+|---|---|---|
+| q outside the array; as[q] outside c's DECLARED range | nothing | none |
+| as[q] > hi(c) | `c_ge_(hi+1)` | `c <= hi` |
+| as[q] < lo(c) | `~c_ge_lo` | `c >= lo` |
+| as[q] a hole in c (`excl_hole`) | the remover's own derivation, embedded: its residue | the REMOVER's facts (D-0075/D-0084: a hole is cited through `Store.remover`, never as a bound fact) |
+| q below lo(idx) / above hi(idx) | `~idx_ge_lo` / `idx_ge_(hi+1)` | the index bound |
+| q an interior index hole (`index_hole_clause`) | the puncher's facts, negated, when it acted under a decision; nothing for a level-0 hole | the puncher's facts |
+
+`conflict_facts` replays that case split, reading the store exactly as `pos_gone` does and
+eagerly (I-X6). Root-established residue that `residue_cancel` cancels with a `Defining` is
+still listed; a root fact on a tail is harmless (Analysis drops root nodes from every cut).
+
+### The derivation and the line
+
+Under a decision the conflict is made under `Store.deriving_ahead`, so `Trace.conflict_line`
+writes, in order: the derivation `c_why` -- the at-least-one line plus one exclusion per
+declared position, i.e. "not all of these bounds hold" -- and then `rup ~facts >= 1`, which is
+unit propagation against that one line. At the ROOT the reason stays `Reason.none`: there is
+no branch to learn from, every root residue is cancelled, and the derivation closes to
+`0 >= 1` itself, so every root refutation is byte-identical.
+
+**Measured, and recorded so nobody re-derives it as a surprise: the conflict line is ALSO RUP
+in sequence without the `pol`.** Exactly one position is live; every other one left dom(idx)
+through a bound or through a removal whose trace line is already on the page, so unit
+propagation walks the index ladder to idx = p, and p's two rows plus c's bounds or c's hole
+line refute it. D-0091's "the counting argument is not RUP" holds for the derivation, not for
+this line. The no-`pol` variant verified on all 153 suite models and 1500 `bench/fuzz` elem
+seeds. The `pol` stays because the line then rests on a derivation rather than on that
+argument, at a cost of 2-10% of proof bytes on the fuzz instances below.
+
+### Lanes
+
+- `test/models/element_learn_hole_sat.fzn` (SAT): deciding y = 2 punches c <> 2 (int_ne, tail
+  y = 2) and fixes i = 2 (entry 2); element finds no position. OLD learned 0, NEW learned 3;
+  verifies.
+- `test/models/element_learn_hole_unsat.fzn`: its UNSAT twin (refutation guard only, D-0066).
+- `test/models/element_learn_prunes_sat.fzn` (SAT, `bench/fuzz elem 1124`): OLD 7 nodes,
+  3 conflicts, learned 0; NEW 3 nodes, 1 conflict, learned 1, and the learned unit moves a
+  bound as a global (`glob-prune 1`). First solution unchanged.
+- `test_learn.ml`, M7-T25 a/b/c: (a) a hand-driven level-2 element conflict is `c_ahead`,
+  carries facts including the remover's `y >= 2`, satisfies `Store.agreement_holds`, and
+  `Learn.at_conflict` returns `Some`; (b) both SAT models verify with learned > 0, and the
+  prunes model's learned constraint moves a bound; (c) THE BREAK, `Element.break_hole_facts`
+  (drop the result hole's remover's facts): 3.0.2 refuses with "Checking error at" and the
+  full RUP sentence. The same break with the `pol` removed is refused too (measured by hand),
+  so the remover's facts are what the line needs, whichever way it is checked.
+- `BAGUETTE_DEBUG=1`: all models and `test_prop`/`test_learn` clean -- the D-0026 agreement
+  check accepts the stated reason against the derivation.
+
+### Before / after, small instances (local, `bench/fuzz` seeds, veripb 3.0.2)
+
+| instance | OLD nodes / confl / learned / .pbp B | NEW nodes / confl / learned / .pbp B | NEW without the `pol` .pbp B | verdict |
+|---|---|---|---|---|
+| elem384 (UNSAT) | 61 / 33 / 0 / 18717 | 9 / 5 / 5 / 4135 | 3873 | VERIFIED both |
+| elem47 (UNSAT) | 35 / 18 / 0 / 8008 | 7 / 3 / 3 / 2023 | 1737 | VERIFIED both |
+| mix684 (SAT) | 282 / 138 / 0 / 92953 | 264 / 129 / 1 / 79510 | 79225 | VERIFIED both |
+| mix729 (SAT) | 110 / 50 / 0 / 38329 | 90 / 40 / 7 / 28047 | 26528 | VERIFIED both |
+| mix1028 (SAT) | 758 / 376 / 0 / 264486 | 754 / 374 / 1 / 262149 | 261852 | VERIFIED both |
+| mix1061 (SAT) | 37 / 16 / 0 / 13285 | 17 / 6 / 1 / 5644 | 5439 | VERIFIED both |
+| mix1350 (SAT) | 79 / 38 / 0 / 36154 | 32 / 14 / 8 / 14951 | 13457 | VERIFIED both |
+
+Binaries: OLD = this branch's base `b325d26` (= main `1df8d81` code), md5 `1f50e353…`; NEW md5
+`64992131…`.
+
+### Before / after on the corpus
+
+**fataepyc-07 was unreachable for the whole session** (the head node `fataepyc-head` timed
+out on port 22 for over an hour of retries), so the node measurement the row asked for was NOT
+taken. What was taken, locally under `ulimit -v 4000000`: `2014_mario` from a flattened copy
+already in the session scratchpad (160 KB `.fzn`, dated 2026-10-02, md5 `c148f76a…`), with
+`--time-limit 120 --stats --proof`, OLD and NEW as above:
+
+| 2014_mario, 120 s | nodes | conflicts | learned | outcome | .pbp | veripb |
+|---|---|---|---|---|---|---|
+| OLD | 3969 | 1891 | 866 (46% of conflicts) | limit, incumbent 0 | 178.9 MB | not run |
+| NEW | 3463 | 1636 | 1344 (82% of conflicts) | limit, incumbent 0 | 149.2 MB | VERIFIED NO CONCLUSION (84 s, 235 MB RSS) |
+| NEW without the `pol` | 3708 | 1760 | 1452 | limit, incumbent 0 | 123.8 MB | not run |
+
+So element conflicts now learn on mario -- the share of conflicts that yield a 1UIP clause
+goes from under half to over four fifths -- but within 120 s neither binary improves the
+incumbent (pinned `max:445`, not contradicted), and the node rate does not improve (33 -> 29
+nodes/s): the time is
+spent per node, not per conflict. The `pol` ahead costs 17% of proof bytes here, more than
+on the fuzz instances. `2013_mario` and `2012_tpp` need the node (no `minizinc` locally) and
+are left for the next session with node access, with the script the row specified.

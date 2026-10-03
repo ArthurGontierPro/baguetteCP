@@ -679,6 +679,8 @@ checker of record is VeriPB source `d5644ca4` (D-0100); rejection header "Checki
 |---|---|---|---|
 | M7-T25 | `lib/core/prop/element.ml`, `test/unit/{test_prop,test_trace,test_learn}.ml` (own scenes), new `test/models/*` + expected, `docs/PROOF-FORMAT.md` (§4 element row), `docs/DECISIONS.md` (D-0101, append) | agent-elearn | 2026-10-02 |
 | M4-T5 | `docs/DECISIONS.md` (D-0102, append) FIRST; then `lib/core/trace.ml`, `lib/core/justify.ml`, `lib/proof/writer.ml`, `lib/core/learn.ml`, `test/unit/{test_proof,test_justify,test_trace}.ml`, `bench/**` | agent-hints | 2026-10-02 |
+| M7-T25 | agent-elearn | 2026-10-03 | **D-0101.** `Element.no_position_conflict` reports its facts above level 0 (`conflict_facts`: per dead position the bound it lies beyond, a result hole's remover's facts, a deep index hole's puncher's facts) under `Store.deriving_ahead`; root stays `Reason.none`. Lanes `element_learn_{hole_sat,hole_unsat,prunes_sat}`, test_learn M7-T25 a/b/c. 2014_mario learned 866 -> 1344 at 120 s, proof VERIFIED; node unreachable |
+
 ## Cross-session requests
 
 Need a change in a file someone else has claimed? Write it here and move on to other
@@ -4023,4 +4025,22 @@ the old rejection wording and FAIL on the updated checker; they pass on
 **Gate** (front-end patch applied, uncommitted): 3161 ok / 3 FAIL (the wording above),
 models 135/135, fmt and width lint clean; peak RSS 41.5 MB (`dune runtest`), 17.4 MB
 (model tests). `mznlib/test/check_mznlib.sh` 12/12 on fataepyc-07 against a throwaway copy.
+
+## M7-T25 handoff, 2026-10-03 (agent-elearn)
+
+1. **What changed**: `lib/core/prop/element.ml` only, on the solver side. An element
+   empty-index conflict under a decision now carries the facts its derivation read and is made
+   under `Store.deriving_ahead`, so M4-T10's `c_ahead` writes the `pol` before
+   `rup ~facts >= 1` and 1UIP learning resolves from it (D-0101). Root conflicts are unchanged
+   (factless, byte-identical). `Element.break_hole_facts` is a test-only break knob.
+2. **Measured**: the conflict line is RUP in sequence even WITHOUT the `pol` (one live
+   position; every other position left through a bound or an earlier trace line); the `pol`
+   costs 2-10% of proof bytes on fuzz, 17% on 2014_mario. If proof volume matters more than
+   belt-and-braces, dropping `deriving_ahead` in `no_position_conflict` is a one-line change and
+   verified on the suite and 1500 fuzz seeds -- it is a decision, not done here.
+3. **Not done**: fataepyc-07 was unreachable (head node port 22 timed out all session), so
+   `2013_mario` and `2012_tpp` OLD/NEW were not run. 2014_mario was measured locally from a
+   scratchpad copy. The same rule applies to element's three `conflict_of` sites (result push
+   against a bound / last value), which still report `Reason.none`: they are the next place
+   learning is missing on element models.
 
