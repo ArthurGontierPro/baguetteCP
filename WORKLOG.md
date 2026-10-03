@@ -700,6 +700,37 @@ checker of record is VeriPB source `d5644ca4` (D-0100); rejection header "Checki
 nothing runs from it** (the longcheck run executes its scripts).
 | M7-T25 | agent-elearn | 2026-10-03 | **D-0101.** `Element.no_position_conflict` reports its facts above level 0 (`conflict_facts`: per dead position the bound it lies beyond, a result hole's remover's facts, a deep index hole's puncher's facts) under `Store.deriving_ahead`; root stays `Reason.none`. Lanes `element_learn_{hole_sat,hole_unsat,prunes_sat}`, test_learn M7-T25 a/b/c. 2014_mario learned 866 -> 1344 at 120 s, proof VERIFIED; node unreachable |
 
+
+**State at the end of the week, 2026-10-03 early morning (orchestrator).** Waves 31 to 40 are
+merged whole; every merge gate-green under `make check` with the d5644ca4 checker (D-0100): **156
+model tests, ~3 300 unit checks, 0 FAIL, also clean under `BAGUETTE_DEBUG=1`.** Nothing is live. The
+node has been unreachable since late 2026-10-02; the block above lists the four runs waiting there.
+
+**Since D-0093** (`5c299cb`, the last binary measured on the corpus): M6-T17 (`wipe_level`
+buckets), M4-T9 (`maximum`/`minimum` propagator, `radiation` proof −30 %), M2-T6 (propagation
+counters comparable to GCS's; the self-wake veto measured as not paying), M7-T23 (the `count`
+family route to gcc measured WORSE and withdrawn, D-0097), M6-T18 (incremental seeding: runs/node
+÷2.4–4.7, no nodes/s gain — the removed runs were cheap), M7-T24 (gcc's saturated/forced value
+rules and the reason-nesting bug behind 168 MB proof lines: 7 MB → 5.7 KB per node), M4-T10
+(`cumulative`/`disjunctive` time-table propagator AND the conflict-learning mechanism
+`Store.conflict.c_ahead`: 2008_rcpsp 13 s → 0.6 s), M7-T25 (element conflicts carry facts: mario's
+learning rate 46 % → 82 %), M4-T5 (RUP hints measured at 1.4–1.5× on local proofs, corpus
+measurement pending — BLOCKED), D-0100 (the checker of record moved past the trailhead fix; the
+GCS "rejections" were the June checker's, 10 of 16 re-verified before access dropped).
+
+**Open rows, in the order they matter for the comparison:**
+1. Read the four node runs (block above); rewrite the GCS report with the re-check verdicts and
+   add the D-0089 §1 addendum; record w37 as the week's final figures.
+2. M4-T5 — finish D-0102 on the node (`bench/m4t5/nodepipe.sh`); GO only at ≥3× on corpus proofs.
+   The check column is the bottleneck (25 unchecked solves at 900 s).
+3. The slow quartile is element-heavy and now learns; nodes/s there did not move (D-0101) — the
+   next profile is of `2014_mario` on the current binary, before any further engine work.
+4. Design-level levers still unmeasured: watched slack for `Pb.propagate` (D-0085), a priority
+   structure for the un-annotated `first_fail` (D-0087), restarts (D-0045, SPEC), gcc's hole-aware
+   counting (D-0099), element's three other factless conflict sites (D-0101).
+5. Coverage next by census: `table` (37 models), `diffn` (29), `circuit` (28), `regular` (26);
+   cumulative's variable-duration/resource forms (22 models) stay with std.
+6. The width wall (69 instances) — a different encoding of wide domains, a decision not taken.
 ## Cross-session requests
 
 Need a change in a file someone else has claimed? Write it here and move on to other
