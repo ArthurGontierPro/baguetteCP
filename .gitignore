@@ -14,3 +14,5 @@ _opam/
 test/out/
 perf.data*
 .claude/worktrees/
+*.pdf
+*:Zone.Identifier
