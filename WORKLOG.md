@@ -4155,3 +4155,12 @@ weekend -- READ, do not relaunch**, completion markers `stageN.done`:
 Read with `scripts/compare_run.sh --report <dir> --pinned bench/corpus/answers.tsv`
 (regressions first); `stage4` stats via the one-liner in this session's transcript or by
 grepping `stats/*.err` for `nodes|props|passes|deductions|wall`.
+
+**stage4 complete (added after the handoff above, best of 3, `--time-limit 120`)**: same tree where
+it finishes -- `2010_depot_placement` 104.0 -> 92.6 s (4948 nodes both), `2012_pattern-set-mining`
+110.7 -> 104.0 s (8130 both), `2009_open_stacks` 19.95 -> 19.94 s, `2013_fjsp` / `2016_gfd-schedule`
+unchanged (`passes 0`, decomposed cumulative). Where the limit bites, nodes in 120 s: `2016_mrcpsp`
+1546 -> 1647, `2020_racp` 7728 -> 8565, `2025_mondoku` 76569 -> 79606, `2025_stripboard` 3052 -> 3089,
+`2025_fbd1` 1141 -> 1120. So 0-11 % where our propagators are posted, nothing elsewhere; `props`
+per node unchanged, which is the number to attack next (M2-T6's successor: a priority queue and
+`Pb.propagate` watched slack, D-0085/D-0087).
