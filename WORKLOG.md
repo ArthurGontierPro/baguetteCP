@@ -679,7 +679,6 @@ checker of record is VeriPB source `d5644ca4` (D-0100); rejection header "Checki
 |---|---|---|---|
 | M7-T25 | `lib/core/prop/element.ml`, `test/unit/{test_prop,test_trace,test_learn}.ml` (own scenes), new `test/models/*` + expected, `docs/PROOF-FORMAT.md` (§4 element row), `docs/DECISIONS.md` (D-0101, append) | agent-elearn | 2026-10-02 |
 | M4-T5 | `docs/DECISIONS.md` (D-0102, append) FIRST; then `lib/core/trace.ml`, `lib/core/justify.ml`, `lib/proof/writer.ml`, `lib/core/learn.ml`, `test/unit/{test_proof,test_justify,test_trace}.ml`, `bench/**` | agent-hints | 2026-10-02 |
-| M6-T19 | `lib/core/prop/{alldiff,cumulative,gcc,element}.ml`, `lib/core/propagator.ml` (pass counters), `bin/main.ml` (`--stats` lines), `docs/INVARIANTS.md` (I-P6, append), `docs/ROADMAP.md` (own row), `test/unit/test_prop.ml` (own scenes) | solo-opt (sole session, per the user 2026-10-23) | 2026-10-23 |
 
 **Node runs in flight when access dropped (2026-10-02 late evening), read them, do not re-launch:**
 1. `/scratch/arthur/corpus-out-w37` — the `--time-limit 280` sweep on `main` = `1df8d81` (waves 31–39
@@ -1007,6 +1006,7 @@ work. The owning session picks it up.
 | M7-T24 | agent-gcc3 | 2026-10-02 | **D-0099.** gcc's proof volume was in the REASONS, not the derivations: `scope_facts` appended the trail reason behind every non-root bound (for a `fact_summand` nothing called), unfolding the implication DAG -- 99.998 % of 2015_roster's 1.81 GB. Bounded (bounds only, interval-scoped, weighted rung sums, shared HIGH rows): 7.03 MB -> 10.3 KB per node, 11.8 GB -> 184 MB RSS. Rules (a) saturated value -> interior hole / bound push, (b) forced value -> fix candidates; lanes `gcc_saturate_hole_{sat,unsat}`, `gcc_forced_sat`, `gcc_forced_root_unsat`, a test_trace break, gcc's first I-P1 sweep (3276 scenes). Count route re-measured: still worse on roster, so it stays withdrawn |
 | M4-T10 | agent-cumulative | 2026-10-02 | D-0096 (census of the 69, worked proof checked, GO) + `cumulative.ml`, mznlib routing, 3 lanes; front-end arms and conflict learning by request (two patches in `docs/requests/`); branch `wave38-cumulative`, not merged |
 | M4-T5 (deliverable 1, partial) | agent-hints | 2026-10-03 | D-0102: RUP hints measured by hand via veripb elaboration on the suite (153/153 verify hinted, 1.0x at the floor) and scratch php20/28 (1.4-1.5x); per-line opt-out confirmed; corpus lane BLOCKED (node unreachable); NOT GO; no solver code; `bench/m4t5/` |
+| M6-T19 | solo-opt | 2026-10-23 | **I-P6 (one snapshot, every deduction)** in `alldiff`, `cumulative` (incremental refresh of the pushed task), `gcc`, `element`; `Propagator.pass_counters` under `--stats`. Node: 3326 unit ok, 156/156 models, corpus before/after (`compare-out-m6t19-{before,after}`) 0 lost / 0 mismatch / 1 gained, sgm+1 9.23 -> 9.17 s. **The restart was not where the time goes**: `props` is 10^6..10^7 runs for 10^3..10^4 nodes (racp 42.8M runs / 8565 nodes); several `cumulative` corpus instances show `passes 0` (decomposed by mznlib, not our propagator). Weekend chain on the node, see handoff |
 
 ## Handoff notes
 
@@ -4118,3 +4118,40 @@ session. In `/scratch/arthur/hints-d0102/`, the solves of `2019_zephyrus`,
 outputs are unchecked. Copy `bench/m4t5/{splice_hints.py,nodepipe.sh}` there and run
 `./nodepipe.sh zeph`, then `ts`, then `mario`. Append the three rows and the `perf` split to
 D-0102. GO only if the hinted run is at least 3x faster on both corpus proofs.
+
+## M6-T19 handoff, 2026-10-23 (solo-opt) -- and what is running on the node over the weekend
+
+**Done, on `main`** (`b3e4e44` + `5518852`): I-P6 in `docs/INVARIANTS.md`; `alldiff`, `cumulative`,
+`gcc`, `element` apply every deduction of a pass instead of restarting after one. `cumulative`
+refreshes the pushed task's snapshot and profile share incrementally, because the stale-profile
+version chained pushes into longer 1UIP clauses (5 -> 7, 15 -> 19 nodes on `cumulative_sat` /
+`disjunctive_sat`; with the refresh, node counts are identical on all 35 alldiff/cumulative/gcc
+models). `passes` / `deductions` under `--stats`. Prompted by Le Bozec-Chiffoleau & Prud'homme
+(CP 2026, biclique factorisation, PDF gitignored in the checkout); the factor-in-the-proof idea
+was MEASURED and rejected: at L=P=30 the `.pbp` is 4x smaller and veripb 3.3x slower (lines,
+not bytes). Generator in the session scratchpad only.
+
+**Verified on `fataepyc-07`** (nothing ran on the laptop, by the user's rule): clones
+`/scratch/arthur/baguette-m6t19` (b3e4e44), `-base` (e758e1a), `-el` (5518852); logs in
+`/scratch/arthur/m6t19/`. Unit 3326 ok / 0 FAIL, models 156/156, both commits. Corpus
+`compare-out-m6t19-before` vs `-after` (shared set, pinned, 300 s): 0 solved lost, 0 verified
+lost, 0 PIN-MISMATCH, 1 gained (`2013_rubik_6-cube`), sgm+1 9.23 -> 9.17 s; per-instance all
+within x0.88..x1.12.
+
+**The finding**: the pass restart was real but cheap. `stage4` (`/scratch/arthur/m6t19/stats/`)
+shows `props` at 10^6-10^7 runs for 10^3-10^4 nodes (`2020_racp` 42.8M runs / 8565 nodes,
+`2016_mrcpsp` 20.4M / 1647, `2025_mondoku` 37.8M / 79606). The per-node propagator-run count is
+the cost, as D-0093 already said (727 vs GCS's 103). Several `cumulative` instances (`2013_fjsp`,
+`2020_racp`, `2012_pattern-set-mining`, `2016_gfd-schedule`) run with `passes 0`: mznlib
+decomposes their cumulative, so our propagator is not even posted there -- worth checking
+`mznlib/` before any further cumulative work.
+
+**Running detached on the node (`/scratch/arthur/m6t19/weekend.sh`), connection lost for the
+weekend -- READ, do not relaunch**, completion markers `stageN.done`:
+- stage 5: `compare-out-m6t19-el` -- the element commit on the shared set, 300 s, PAR 80.
+- stage 6: `compare-out-m6t19-3way-1200` -- baguette + Chuffed + GCS, 1200 s solve / 3600 s
+  check, PAR 30 each, GCS proofs capped 8 GB. Fresh three-way numbers for the D-0093 table.
+- stage 7: `compare-out-m6t19-long-1800` -- baguette alone, 1800 s / 3600 s, PAR 90.
+Read with `scripts/compare_run.sh --report <dir> --pinned bench/corpus/answers.tsv`
+(regressions first); `stage4` stats via the one-liner in this session's transcript or by
+grepping `stats/*.err` for `nodes|props|passes|deductions|wall`.
