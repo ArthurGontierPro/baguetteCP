@@ -452,24 +452,44 @@ let push_facts ~time ~halls ~y ~lower =
 
 (* --------------------------------------------------------------------- the sweep *)
 
-exception Moved
 exception Found of Store.conflict
 
 (* One pass: the compulsory profile from a fresh snapshot, then for each task the first
    overloaded point of its earliest run (a lower push) or of its latest run (an upper
-   push).  A pass that pushed anything restarts, so every push reads a CURRENT snapshot
-   (gcc's and alldiff's rule). *)
+   push).  Returns whether a push landed.
+
+   ONE SNAPSHOT, EVERY DEDUCTION (I-P6, M6-T19).  The snapshot and the profile are built
+   once per pass and every task they overload is pushed before [loop] takes the next.
+   Until M6-T19 the pass restarted at the first push that landed, so a time point whose
+   compulsory parts push k tasks cost k + 1 snapshots and k + 1 profiles.
+
+   The snapshot is kept CURRENT INCREMENTALLY rather than left stale, and that is a
+   choice about explanation quality, not soundness.  A push on a stale profile would be
+   sound (I-P6: its facts are frozen bounds that still hold) but could land short of
+   what the live profile allows, when a part an earlier push of this pass has grown is
+   what overloads the later point; the next pass would then push the same task again,
+   and the two entries chain into a longer 1UIP clause than the single push the old
+   restart made.  Measured on cumulative_sat / disjunctive_sat: 5 -> 7 and 15 -> 19
+   nodes with the stale version.  So a landed push refreshes ITS OWN task's snapshot --
+   nothing else in the store has moved, this propagator being the only thing running --
+   and adds the growth of its compulsory part to the profile, which is exactly what the
+   old restart's fresh snapshot and rebuilt profile would show, at O(duration) instead
+   of O(tasks + horizon).  What still differs from the restart is the ORDER: the scan
+   continues with the next task rather than starting over, so a task before the pushed
+   one is re-examined in the next pass, not now.  Same fixpoint, same reasons per push. *)
 let pass t store =
+  Propagator.count_pass ();
+  let moved = ref false in
   let snaps = Array.map (snap_of store) t.tasks in
   let n_rows = Array.length t.rows in
   let profile = Array.make n_rows 0 in
-  Array.iter
-    (fun s ->
-      for time = s.s_hi to s.s_lo + s.s_task.dur - 1 do
-        let i = time - t.t0 in
-        if i >= 0 && i < n_rows then profile.(i) <- profile.(i) + s.s_task.res
-      done)
-    snaps;
+  let add_part s sign =
+    for time = s.s_hi to s.s_lo + s.s_task.dur - 1 do
+      let i = time - t.t0 in
+      if i >= 0 && i < n_rows then profile.(i) <- profile.(i) + (sign * s.s_task.res)
+    done
+  in
+  Array.iter (fun s -> add_part s 1) snaps;
   let overloaded j time =
     match row_at t time with
     | None -> None
@@ -477,10 +497,10 @@ let pass t store =
         let own = if compulsory_at j ~time then j.s_task.res else 0 in
         if profile.(time - t.t0) - own + j.s_task.res > row.avail then Some row else None
   in
-  let push j row ~lower bound =
+  let push idx j row ~lower bound =
     let time = row.rt in
     let in_scope = List.filter (fun s -> in_row s ~time) (Array.to_list snaps) in
-    let others_of = List.filter (fun s -> s != j) in_scope in
+    let others_of = List.filter (fun s -> s.s_task != j.s_task) in_scope in
     let halls, others = List.partition (fun s -> compulsory_at s ~time) others_of in
     let why =
       Reason.because
@@ -509,34 +529,42 @@ let pass t store =
     in
     match Store.deriving_ahead store prune with
     | Store.Conflict c -> raise (Found c)
-    | Store.Changed -> raise Moved
+    | Store.Changed ->
+        Propagator.count_deduction ();
+        moved := true;
+        (* The incremental refresh the header describes: [j]'s snapshot and its share of
+           the profile, nothing else. *)
+        add_part snaps.(idx) (-1);
+        snaps.(idx) <- snap_of store j.s_task;
+        add_part snaps.(idx) 1
     | Store.Unchanged -> ()
   in
-  Array.iter
-    (fun j ->
-      let d = j.s_task.dur in
-      (* The LATEST overloaded point of the earliest run gives the strongest lower push,
-         the EARLIEST of the latest run the strongest upper one; any other is valid and
-         merely slower, since the pass restarts on every change. *)
-      for time = j.s_lo + d - 1 downto j.s_lo do
+  (* The first overloaded point of [times], scanned in the given order. *)
+  let rec first_overloaded j = function
+    | [] -> None
+    | time :: rest -> (
         match overloaded j time with
-        | Some row -> push j row ~lower:true (time + 1)
-        | None -> ()
-      done;
-      for time = j.s_hi to j.s_hi + d - 1 do
-        match overloaded j time with
-        | Some row -> push j row ~lower:false (time - d)
-        | None -> ()
-      done)
-    snaps
+        | Some row -> Some (time, row)
+        | None -> first_overloaded j rest)
+  in
+  for idx = 0 to Array.length snaps - 1 do
+    (* The LATEST overloaded point of the earliest run gives the strongest lower push,
+       the EARLIEST of the latest run the strongest upper one; one push per direction
+       per task, since any later point of the same run would push weaker on the same
+       bound. [j] is re-read between the two because a landed lower push refreshed it. *)
+    let j = snaps.(idx) in
+    let d = j.s_task.dur in
+    (match first_overloaded j (List.rev (range j.s_lo (j.s_lo + d - 1))) with
+    | Some (time, row) -> push idx j row ~lower:true (time + 1)
+    | None -> ());
+    let j = snaps.(idx) in
+    match first_overloaded j (range j.s_hi (j.s_hi + d - 1)) with
+    | Some (time, row) -> push idx j row ~lower:false (time - d)
+    | None -> ()
+  done;
+  !moved
 
-let rec loop t store =
-  if
-    try
-      pass t store;
-      false
-    with Moved -> true
-  then loop t store
+let rec loop t store = if pass t store then loop t store
 
 let propagate t store =
   match t.ground with

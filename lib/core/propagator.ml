@@ -139,3 +139,19 @@ let pack (type a) ?(row = no_row) ?(idempotent = false) ~id (module P : S with t
     inst_row = row;
     inst_idempotent = idempotent;
   }
+
+(* ------------------------------------------------------------ M6-T19: pass counters
+
+   MEASUREMENT ONLY, and global on purpose: a propagator holds no handle on the engine or
+   the search, and threading one through every [propagate] to carry two integers would be
+   the wrong trade. [passes] counts snapshots taken by the propagators that apply every
+   deduction of a snapshot in one pass (I-P6: alldiff, cumulative, gcc); [deductions]
+   counts the domain changes those passes made. Before M6-T19 every deduction cost its own
+   pass, so [passes] was [deductions] plus one per call; after it the ratio is what the
+   row bought. Printed on stderr under --stats by bin/main.ml, never on stdout, so the
+   determinism gate does not see them. *)
+type pass_counters = { mutable passes : int; mutable deductions : int }
+
+let pass_counters = { passes = 0; deductions = 0 }
+let count_pass () = pass_counters.passes <- pass_counters.passes + 1
+let count_deduction () = pass_counters.deductions <- pass_counters.deductions + 1

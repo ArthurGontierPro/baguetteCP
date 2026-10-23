@@ -946,6 +946,15 @@ let report_engine_counters (c : Engine.counters) ~nodes =
     "eff" c.Engine.c_effectful (per c.Engine.c_effectful);
   Printf.eprintf "stats: %-10s %10d runs   ...that returned Conflict\n" "contra"
     c.Engine.c_contra;
+  (* M6-T19 / I-P6: how many snapshots the multi-deduction propagators took, against
+     how many domain changes they made. Before M6-T19 passes = deductions + calls. *)
+  let pc = Baguette_core.Propagator.pass_counters in
+  Printf.eprintf
+    "stats: %-10s %10d snaps  passes of alldiff/cumulative/gcc, one snapshot each \
+     (M6-T19, I-P6)\n"
+    "passes" pc.Baguette_core.Propagator.passes;
+  Printf.eprintf "stats: %-10s %10d chgs   ...domain changes those passes made\n"
+    "deductions" pc.Baguette_core.Propagator.deductions;
   Printf.eprintf "stats: %-10s %10d wakes  watcher wakes delivered to the queue\n" "wakes"
     c.Engine.c_wakes;
   Printf.eprintf "stats: %-10s %10d wakes  ...dropped by the M2-T5 trigger mask\n"

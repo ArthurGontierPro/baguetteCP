@@ -773,7 +773,6 @@ let remove_reason ~keep halls y =
 let contained snaps ~a ~b = List.filter (fun s -> a <= s.s_lo && s.s_hi <= b) snaps
 
 exception Found of Store.conflict
-exception Moved
 
 (* One pass: every candidate interval, in a fixed order, pushing what it can. Returns
    [true] if anything moved, so [propagate] can re-run; raises [Found] on a conflict,
@@ -784,12 +783,23 @@ exception Moved
    restriction: a Hall interval can always be shrunk to one whose ends are a variable's
    bounds without losing any variable from its set.
 
-   It also returns as soon as one push lands ([Moved]), so every interval it examines is
-   examined against a CURRENT snapshot rather than one a push earlier in the same pass
-   has invalidated. Re-snapshotting is the cheap half of this loop and a stale Hall set
-   is the kind of thing that is sound by luck -- containment computed from wider, older
-   bounds is a subset of the true one -- which is not a property worth resting on. *)
+   ONE SNAPSHOT, EVERY DEDUCTION (I-P6, M6-T19). The pass takes [snaps] once and applies
+   every push the snapshot justifies before [propagate] takes the next one. Until M6-T19
+   it returned at the first push that landed, so a Hall set confining k variables cost
+   k + 1 snapshots and k + 1 interval enumerations; the restart bought the one-line
+   argument "everything examined is current", which I-P6 replaces with this one: a Hall
+   set's facts are frozen at snapshot values that still hold at every later push of the
+   pass, because bounds only tighten within a level (I-D3), and the pruned variable [y]
+   is re-read live at the push. Containment computed from the older, wider bounds is a
+   SUBSET of the true containment, so a set the stale snapshot calls Hall is Hall; what
+   staleness can do is miss a set that only the newer bounds reveal, or push a [y] the
+   live store already has there ([Unchanged]), or push a [y] the newer bounds have since
+   confined inside the interval -- which empties it, and that is the pigeonhole the
+   store reports as a conflict. The next pass, which [stage_bounds] runs until a pass
+   changes nothing, recovers whatever this one missed. *)
 let pass t store =
+  Propagator.count_pass ();
+  let moved = ref false in
   let snaps = Array.to_list (Array.map (snap_of store) t.terms) in
   let los = List.sort_uniq compare (List.map (fun s -> s.s_lo) snaps) in
   let his = List.sort_uniq compare (List.map (fun s -> s.s_hi) snaps) in
@@ -814,7 +824,9 @@ let pass t store =
           if lower then Store.set_lo store x bound j else Store.set_hi store x bound j)
     with
     | Store.Conflict c -> raise (Found c)
-    | Store.Changed -> raise Moved
+    | Store.Changed ->
+        Propagator.count_deduction ();
+        moved := true
     | Store.Unchanged -> ()
   in
   List.iter
@@ -859,7 +871,7 @@ let pass t store =
                 t.terms)
         his)
     los;
-  false
+  !moved
 
 (* ================================================== M4-T2: stage 2, Regin's matching
 
@@ -963,8 +975,12 @@ let in_order_currency t y value expl =
   | Some fwd -> Explanation.combine [ Explanation.term 1 expl; cite fwd ] 1
 
 (* One removal, with both halves of D-0026 built from the same snapshot, returning
-   through [Found]/[Moved] exactly as [pass]'s [push] does. *)
-let remove_one t store ~halls ~vals ~y_tm value =
+   through [Found] exactly as [pass]'s [push] does and recording a landed removal in
+   [moved]. [y] and [d] are read LIVE here, not from the pass's snapshot: I-P6 allows
+   stale premises, but the SHAPE of the entry -- a hole clause for an interior value, the
+   bound landed on for a value at the bound ([removal_conclusion]) -- must be decided
+   against the domain the store is about to change. *)
+let remove_one t store ~moved ~halls ~vals ~y_tm value =
   let y = snap_of store y_tm in
   let d = Store.get store y_tm.x in
   let keep v = List.mem v vals in
@@ -977,15 +993,22 @@ let remove_one t store ~halls ~vals ~y_tm value =
   (* A Regin hole counts too: [deriving_ahead], as for a Hall bound move. *)
   match Store.deriving_ahead store (fun () -> Store.remove store y_tm.x value j) with
   | Store.Conflict c -> raise (Found c)
-  | Store.Changed -> raise Moved
+  | Store.Changed ->
+      Propagator.count_deduction ();
+      moved := true
   | Store.Unchanged -> ()
 
-(* One Regin pass. Raises [Moved] as soon as one removal lands, for the reason [pass]
-   gives: every set it reasons about is then computed from a CURRENT snapshot rather than
-   one an earlier removal in the same pass has invalidated. *)
+(* One Regin pass. Returns whether a removal landed. ONE SNAPSHOT, EVERY DEDUCTION (I-P6,
+   M6-T19): [doms], the matching and the components are computed once and every removal
+   they justify is applied. The argument is [pass]'s, in this module's second currency:
+   a removal only ever takes a value OUTSIDE its tight set, so no matching edge and no
+   set membership is ever removed by this pass, and a set that is tight over the stale
+   domains is tight over the live ones, which are subsets of them. *)
 let regin_pass t store =
   let n = Array.length t.terms in
+  let moved = ref false in
   if n > 0 then (
+    Propagator.count_pass ();
     let doms = Array.map (fun tm -> Store.get store tm.x) t.terms in
     let values =
       Array.of_list
@@ -1091,24 +1114,18 @@ let regin_pass t store =
                     List.iter
                       (fun v ->
                         if Domain.mem doms.(y) v then
-                          remove_one t store ~halls ~vals ~y_tm:t.terms.(y) v)
+                          remove_one t store ~moved ~halls ~vals ~y_tm:t.terms.(y) v)
                       vals)
                 (range 0 (n - 1)))
-          (range 0 (n - 1)))
+          (range 0 (n - 1)));
+  !moved
 
 (* Stage 1, unchanged: Hall intervals over bounds. Returns whether it moved anything, so
    [propagate] can decide whether to go on to stage 2. *)
 let rec stage_bounds t store ~moved =
-  if try pass t store with Moved -> true then stage_bounds t store ~moved:true
-  else moved
+  if pass t store then stage_bounds t store ~moved:true else moved
 
-let rec stage_regin t store =
-  if
-    try
-      regin_pass t store;
-      false
-    with Moved -> true
-  then stage_regin t store
+let rec stage_regin t store = if regin_pass t store then stage_regin t store
 
 (* THE STAGING, and it is a measurement of GCS's rather than a choice of ours
    (docs/GCS-COMPARISON.md section 3, docs/ROADMAP.md M4-T2): above 256 var-value pairs

@@ -34,6 +34,22 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
 - **I-P4** Every change carries an explanation. Enforced by the type — the function that
   writes a domain takes an `Explanation.t`, not an optional one. Do not add a `?reason`
   optional argument to work around this.
+- **I-P6** One snapshot, every deduction (M6-T19). A pass photographs the store once (its
+  snapshot) and may then apply *every* deduction that snapshot justifies before it reads
+  anything again. Sound because a reason's facts are frozen at the values they had in the
+  snapshot (D-0026) and a domain only shrinks within a level (I-D3): each premise still
+  holds at the moment of each push, whatever earlier pushes of the same pass did.
+  Staleness costs strength, never soundness — a deduction computed from older, wider
+  bounds is at worst weaker than one from current bounds, already in place (`Unchanged`),
+  or a conflict the live store detects on the push — and the next pass, which `propagate`
+  runs until a pass changes nothing, recovers whatever was missed. The fixpoint is the
+  same; only the order of trail entries, hence of proof lines, depends on it. What a pass
+  MUST still read live is whatever decides the *shape* of an entry rather than its
+  premises: whether a removal is interior (a hole clause) or lands on a bound
+  (`removal_conclusion`). Before M6-T19 `alldiff`, `cumulative` and `gcc` restarted the
+  pass after one deduction, so a Hall set confining 30 variables cost 31 snapshots and 31
+  enumerations; the restart bought a one-line argument ("everything examined is current")
+  that this invariant replaces with a stated one.
 
 ## Proof
 

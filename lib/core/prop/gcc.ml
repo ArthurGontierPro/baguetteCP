@@ -968,7 +968,6 @@ let forced_expl t ~k ~v ~poss ~gone ~y ~lower =
 (* ------------------------------------------------------------------------ propagation *)
 
 exception Found of Store.conflict
-exception Moved
 
 let rule_c t store ~snaps ~caps ~apply =
   List.iter
@@ -1000,10 +999,18 @@ let rule_c t store ~snaps ~caps ~apply =
 
 (* One pass.  Rule C first -- it is O(values * n) and it is what turns a shortfall into a
    conflict -- then rule A over every candidate interval all of whose values are in the
-   cover.  Both return through [Moved]/[Found]: a pass that changed anything restarts,
-   so every interval is examined against a CURRENT snapshot rather than one a push
-   earlier in the same pass has invalidated (alldiff's rule, and for its reason). *)
+   cover.  Returns whether a push landed; a conflict leaves through [Found].
+
+   ONE SNAPSHOT, EVERY DEDUCTION (I-P6, M6-T19): [snaps] and [caps] are taken once and
+   every push either rule justifies from them is applied before [loop] takes the next.
+   The argument is alldiff's, in its [pass]: the facts a push names are frozen at
+   snapshot values that still hold later in the pass (I-D3); a window computed from the
+   older, wider bounds is a superset of the live one, so a set the snapshot finds
+   confined is confined, and what staleness costs is a push the next pass makes
+   instead. The one thing read LIVE is the shape of a hole removal, below. *)
 let pass t store =
+  Propagator.count_pass ();
+  let moved = ref false in
   let snaps = Array.to_list (Array.map (snap_of store) t.terms) in
   let caps = Array.to_list (Array.map (csnap_of store) t.cov) in
   (* [~ahead] is M7-T17's trigger (D-0082): rule A's capacity push sums a counting row
@@ -1031,7 +1038,9 @@ let pass t store =
     in
     match if ahead then Store.deriving_ahead store prune else prune () with
     | Store.Conflict c -> raise (Found c)
-    | Store.Changed -> raise Moved
+    | Store.Changed ->
+        Propagator.count_deduction ();
+        moved := true
     | Store.Unchanged -> ()
   in
   rule_c t store ~snaps ~caps ~apply:(fun ~ahead -> apply ~ahead);
@@ -1068,7 +1077,14 @@ let pass t store =
                 push ~a:v ~b:v ~halls:fixed ~caps_ab:[ k ] ~y ~lower:true y.s_var (v + 1)
               else if y.s_hi = v then
                 push ~a:v ~b:v ~halls:fixed ~caps_ab:[ k ] ~y ~lower:false y.s_var (v - 1)
-              else if y.s_lo < v && v < y.s_hi && Domain.mem (Store.get store y.s_var) v
+              else if
+                (* LIVE, not [y]'s snapshot bounds: an earlier push of this pass may have
+                   moved a bound of [y] onto [v], and a removal AT a bound is a bound
+                   move, which this entry's [~concludes:None] does not describe (I-P6's
+                   "shape" clause). Read live, the test is exactly what it was before
+                   M6-T19: an interior value, removed as a hole. *)
+                let live = Store.get store y.s_var in
+                Domain.lo live < v && v < Domain.hi live && Domain.mem live v
               then
                 let j =
                   Reason.because ~concludes:None
@@ -1079,7 +1095,9 @@ let pass t store =
                   Store.deriving_ahead store (fun () -> Store.remove store y.s_var v j)
                 with
                 | Store.Conflict cf -> raise (Found cf)
-                | Store.Changed -> raise Moved
+                | Store.Changed ->
+                    Propagator.count_deduction ();
+                    moved := true
                 | Store.Unchanged -> ())
           dv;
       (* (b) forced *)
@@ -1155,9 +1173,9 @@ let pass t store =
                     snaps)
         his)
     los;
-  false
+  !moved
 
-let rec loop t store = if try pass t store with Moved -> true then loop t store
+let rec loop t store = if pass t store then loop t store
 
 let propagate t store =
   try
