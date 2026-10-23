@@ -4164,3 +4164,8 @@ unchanged (`passes 0`, decomposed cumulative). Where the limit bites, nodes in 1
 `2025_fbd1` 1141 -> 1120. So 0-11 % where our propagators are posted, nothing elsewhere; `props`
 per node unchanged, which is the number to attack next (M2-T6's successor: a priority queue and
 `Pb.propagate` watched slack, D-0085/D-0087).
+
+**stage5 complete** (`compare-out-m6t19-el`, the element commit `5518852`, 300 s, PAR 80, against
+`-after`): 0 solved LOST, 0 verified LOST, **3 solved gained**, 0 DISAGREE, 0 PIN-MISMATCH, 0 proofs
+not cleanly verified; PAR2 465.6 -> 462.4 (104 solved, 101 verified). Stage 6 (three solvers,
+1200 s) started itself right after; stage 7 follows it.
