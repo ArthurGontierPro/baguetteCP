@@ -679,6 +679,7 @@ checker of record is VeriPB source `d5644ca4` (D-0100); rejection header "Checki
 |---|---|---|---|
 | M7-T25 | `lib/core/prop/element.ml`, `test/unit/{test_prop,test_trace,test_learn}.ml` (own scenes), new `test/models/*` + expected, `docs/PROOF-FORMAT.md` (§4 element row), `docs/DECISIONS.md` (D-0101, append) | agent-elearn | 2026-10-02 |
 | M4-T5 | `docs/DECISIONS.md` (D-0102, append) FIRST; then `lib/core/trace.ml`, `lib/core/justify.ml`, `lib/proof/writer.ml`, `lib/core/learn.ml`, `test/unit/{test_proof,test_justify,test_trace}.ml`, `bench/**` | agent-hints | 2026-10-02 |
+| M6-T19 | `lib/core/prop/{alldiff,cumulative,gcc,element}.ml`, `lib/core/propagator.ml` (pass counters), `bin/main.ml` (`--stats` lines), `docs/INVARIANTS.md` (I-P6, append), `docs/ROADMAP.md` (own row), `test/unit/test_prop.ml` (own scenes) | solo-opt (sole session, per the user 2026-10-23) | 2026-10-23 |
 
 **Node runs in flight when access dropped (2026-10-02 late evening), read them, do not re-launch:**
 1. `/scratch/arthur/corpus-out-w37` — the `--time-limit 280` sweep on `main` = `1df8d81` (waves 31–39
