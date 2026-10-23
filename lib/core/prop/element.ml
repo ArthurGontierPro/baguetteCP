@@ -875,7 +875,6 @@ let removal_conclusion t d bw =
 (* ------------------------------------------------------------------- propagation *)
 
 exception Found of Store.conflict
-exception Moved
 
 let live_positions t store = List.filter (fun p -> View.mem store t.pos p) t.decl_pos
 
@@ -1077,9 +1076,17 @@ let in_order_currency t bw expl =
   | None -> expl
   | Some fwd -> Explanation.combine [ Explanation.term 1 expl; cite fwd ] 1
 
-(* Rule 1: dom(idx) := { p : as[p] in dom(c) }. *)
+(* Rule 1: dom(idx) := { p : as[p] in dom(c) }. Returns whether a removal landed.
+
+   EVERY DEDUCTION IN ONE PASS (I-P6, M6-T19). This module takes no snapshot: every
+   removal reads the store LIVE -- [View.mem] for the position, [d] for the conclusion's
+   shape, [bound_facts]/[result_hole_facts] for the reason -- so continuing after a
+   landed removal reads exactly what a restarted pass would have read. Until M6-T19 the
+   pass restarted at the first removal that landed, so an index with k dead positions
+   cost k + 1 walks of [decl_pos]. *)
 let filter_index t store =
   let n = Array.length t.values in
+  let moved = ref false in
   List.iter
     (fun p ->
       if View.mem store t.pos p then
@@ -1111,12 +1118,19 @@ let filter_index t store =
           in
           match View.remove store t.pos p j with
           | Store.Conflict c -> raise (Found c)
-          | Store.Changed -> raise Moved
+          | Store.Changed ->
+              Propagator.count_deduction ();
+              moved := true
           | Store.Unchanged -> ()))
-    t.decl_pos
+    t.decl_pos;
+  !moved
 
-(* Rule 2: dom(c) := { as[p] : p in dom(idx) }. *)
+(* Rule 2: dom(c) := { as[p] : p in dom(idx) }. Returns whether a push landed. The two
+   bound pushes and the hole removals are independent -- a bound push reads the other
+   bound live, and the holes are interior to the domain read after both -- so they are
+   applied in one pass (I-P6, M6-T19) for [filter_index]'s reason. *)
 let filter_result t store =
+  let moved = ref false in
   let live = live_positions t store in
   if live = [] then raise (Found (no_position_conflict t store));
   let vals = List.map (fun p -> t.values.(p)) live in
@@ -1135,7 +1149,9 @@ let filter_result t store =
      match View.set_lo store t.res a (justified ~concludes expl) with
      | Store.Conflict _ ->
          raise (Found (conflict_of store (lo_push_conflict t store ~expl ~a ~h)))
-     | Store.Changed -> raise Moved
+     | Store.Changed ->
+         Propagator.count_deduction ();
+         moved := true
      | Store.Unchanged -> ());
   (if b < View.hi store t.res then
      let l = View.lo store t.res in
@@ -1146,13 +1162,15 @@ let filter_result t store =
      match View.set_hi store t.res b (justified ~concludes expl) with
      | Store.Conflict _ ->
          raise (Found (conflict_of store (hi_push_conflict t store ~expl ~b ~l)))
-     | Store.Changed -> raise Moved
+     | Store.Changed ->
+         Propagator.count_deduction ();
+         moved := true
      | Store.Unchanged -> ());
   (* Interior values no live position carries -- the half of DOMAIN consistency that
      [Bounds] would not do, and the reason D-0059 names [element] as a place the tag
      starts separating. Only reachable for a result with a variable behind it; a constant
      result is already decided by the two pushes above. *)
-  match t.rname with
+  (match t.rname with
   | None -> ()
   | Some _ ->
       let d = View.domain store t.res in
@@ -1163,16 +1181,20 @@ let filter_result t store =
             match View.remove store t.res v (justified ~concludes:None expl) with
             | Store.Conflict _ ->
                 raise (Found (conflict_of store (hole_conflict t store ~expl ~v)))
-            | Store.Changed -> raise Moved
+            | Store.Changed ->
+                Propagator.count_deduction ();
+                moved := true
             | Store.Unchanged -> ())
-        (range (Domain.lo d + 1) (Domain.hi d - 1))
+        (range (Domain.lo d + 1) (Domain.hi d - 1)));
+  !moved
 
 let pass t store =
-  filter_index t store;
-  filter_result t store
+  Propagator.count_pass ();
+  let a = filter_index t store in
+  let b = filter_result t store in
+  a || b
 
-let rec to_fixpoint t store =
-  match pass t store with () -> () | exception Moved -> to_fixpoint t store
+let rec to_fixpoint t store = if pass t store then to_fixpoint t store
 
 let propagate t store =
   try

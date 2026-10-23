@@ -46,7 +46,7 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
   same; only the order of trail entries, hence of proof lines, depends on it. What a pass
   MUST still read live is whatever decides the *shape* of an entry rather than its
   premises: whether a removal is interior (a hole clause) or lands on a bound
-  (`removal_conclusion`). Before M6-T19 `alldiff`, `cumulative` and `gcc` restarted the
+  (`removal_conclusion`). Before M6-T19 `alldiff`, `cumulative`, `gcc` and `element` restarted the
   pass after one deduction, so a Hall set confining 30 variables cost 31 snapshots and 31
   enumerations; the restart bought a one-line argument ("everything examined is current")
   that this invariant replaces with a stated one.

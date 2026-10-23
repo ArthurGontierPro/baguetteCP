@@ -145,7 +145,7 @@ let pack (type a) ?(row = no_row) ?(idempotent = false) ~id (module P : S with t
    MEASUREMENT ONLY, and global on purpose: a propagator holds no handle on the engine or
    the search, and threading one through every [propagate] to carry two integers would be
    the wrong trade. [passes] counts snapshots taken by the propagators that apply every
-   deduction of a snapshot in one pass (I-P6: alldiff, cumulative, gcc); [deductions]
+   deduction of a snapshot in one pass (I-P6: alldiff, cumulative, gcc, element); [deductions]
    counts the domain changes those passes made. Before M6-T19 every deduction cost its own
    pass, so [passes] was [deductions] plus one per call; after it the ratio is what the
    row bought. Printed on stderr under --stats by bin/main.ml, never on stdout, so the

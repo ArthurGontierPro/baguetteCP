@@ -950,8 +950,8 @@ let report_engine_counters (c : Engine.counters) ~nodes =
      how many domain changes they made. Before M6-T19 passes = deductions + calls. *)
   let pc = Baguette_core.Propagator.pass_counters in
   Printf.eprintf
-    "stats: %-10s %10d snaps  passes of alldiff/cumulative/gcc, one snapshot each \
-     (M6-T19, I-P6)\n"
+    "stats: %-10s %10d snaps  passes of alldiff/cumulative/gcc/element, one snapshot \
+     each (M6-T19, I-P6)\n"
     "passes" pc.Baguette_core.Propagator.passes;
   Printf.eprintf "stats: %-10s %10d chgs   ...domain changes those passes made\n"
     "deductions" pc.Baguette_core.Propagator.deductions;
