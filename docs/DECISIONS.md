@@ -8978,3 +8978,51 @@ The gate was "GO only if feasible at the emission point AND at least 3x on the c
 `/scratch/arthur/hints-d0102` (copy `splice_hints.py` there or set `ROOT`). Append the three rows
 and the `perf` split here as an addendum. GO only if the hinted/unhinted ratio is at least 3x on
 both corpus proofs. Elaborating a proof costs one unhinted check, so allow up to 3 h each.
+
+## D-0103  The weekend runs after M6-T19: three solvers at 1200 s, baguette at 1800 s -- 0 rejected, 0 disagreement, and the width wall is what longer limits reach
+
+**Status**: **MEASUREMENT**, recorded 2026-10-27 (solo-opt) from three complete runs on `fataepyc-07`
+(`DONE-` markers checked), binary = `main` at `5518852` (M6-T19 whole, md5 `60c9f24f…`), shared set
+of 411, data pinned to `bench/corpus/answers.tsv`. Dirs `/scratch/arthur/compare-out-m6t19-{3way-1200,
+long-1800,el}`; logs `/scratch/arthur/m6t19/`.
+
+### Three solvers, 1200 s solve / 3600 s check, PAR 30 each (`compare-out-m6t19-3way-1200`)
+
+| | baguette | Chuffed | GCS (`--prove`) |
+|---|---|---|---|
+| solved (SAT / UNSAT / OPT) | **112** (23 / 5 / 84) | 300 (45 / 10 / 245) | 83 (27 / 6 / 50) |
+| timeout / refused / capped | 221 / 77 / 0 | 111 / 0 / 0 | 7 / 0 / **317** |
+| proofs verified / rejected / check-timeout | **109 / 0 / 3** | — | 70 / 0 / 13 |
+| PAR2 over 411 (timeout 1200) | 1772.6 | 701.5 | 1919.3 |
+| sgm+1 wall, 58 instances all three solved | 6.59 s | 0.19 s | 2.38 s |
+| sgm+1 `.pbp` / check, same set | 12.7 MB / 2.73 s | — | 44.9 MB / 10.75 s |
+
+Agreement 137 AGREE, **0 DISAGREE**, 0 PIN-MISMATCH, 0 proofs not cleanly verified.
+
+**GCS's column is NOT comparable and that is this run's own mistake**: `PROOF_CAP_KB=8000000`
+(8 GB, half the default) was set to protect `/scratch`, and GCS hit it on **317 of 411** (`SIGXFSZ`),
+so its 83 solved are the instances whose proof stays under 8 GB. Keep the default 16 GB, or raise it,
+on any run meant to rank GCS; the ratios on the 58 common instances (2.8x GCS, 35x Chuffed) agree with
+D-0093's (2.6x, 47x) and are the figures to quote.
+
+### Baguette alone, 1800 s / 3600 s, PAR 90 (`compare-out-m6t19-long-1800`) against 300 s (`-el`)
+
+114 solved (24 / 5 / 85) vs 104: **10 gained**, 0 lost, 0 mismatch -- `bacp-18` 852 s, `fastfood` 574 s,
+`smelt` 337 s (check timed out at 3600 s), `projplan1_15_15` 1721 s, `mapping` 644 s (check timed out),
+`amaze3` 1509 s, `bnn-planner 5x5_10s` 832 s, `monomatch` 1253 s, `valve-network` 755 s, `compression`
+411 s. 111 verified, 3 check timeouts.
+
+**REFUSED rises with the limit: 67 at 300 s, 77 at 1200 s, 80 at 1800 s.** Not a regression: those
+instances were `TIMEOUT` at 300 s because the encoding of a wide variable (widths 10 565 to 1 179 648,
+`objective` in four of them) or the heap budget (`crossword_opt` 16.5 GB, `carpet-cutting` 24.8 GB
+against the 15.6 GB asked) had not yet been reached. With more time the width wall (D-0028) is what
+the run reaches, which says the wall, not the search, bounds coverage on this set.
+
+### What M6-T19 itself bought (D-0093's successor figures)
+
+Corpus `-before` (e758e1a) -> `-after` (b3e4e44) -> `-el` (5518852), 300 s: 100 -> 101 -> 104 solved,
+0 lost at each step, 0 mismatch, PAR2 466.5 -> 465.6 -> 462.4. Per instance x0.88..x1.12. Where our
+propagators are posted and the tree is the same: `depot_placement` 104.0 -> 92.6 s, `pattern-set-mining`
+110.7 -> 104.0 s. **The cost is `props` per node**, unchanged: `2020_racp` 42.8M runs / 8565 nodes,
+`2016_mrcpsp` 20.4M / 1647, `2025_mondoku` 37.8M / 79606. And four `cumulative` corpus instances run
+with `passes 0`: mznlib decomposes their `cumulative`, so the propagator is not posted there.

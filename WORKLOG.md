@@ -4169,3 +4169,10 @@ per node unchanged, which is the number to attack next (M2-T6's successor: a pri
 `-after`): 0 solved LOST, 0 verified LOST, **3 solved gained**, 0 DISAGREE, 0 PIN-MISMATCH, 0 proofs
 not cleanly verified; PAR2 465.6 -> 462.4 (104 solved, 101 verified). Stage 6 (three solvers,
 1200 s) started itself right after; stage 7 follows it.
+
+**Weekend chain read 2026-10-27, recorded as D-0103.** Stages 6 and 7 complete. 3-way at 1200 s:
+baguette 112 solved / 109 verified / 0 rejected, Chuffed 300, GCS 83 but **317 CAPPED** by the 8 GB
+proof cap this run set (do not halve `PROOF_CAP_KB` again on a ranking run). Long 1800 s: 114 solved,
+10 gained over 300 s, 0 lost, 0 mismatch; REFUSED grows 67 -> 80 because longer runs reach the width
+wall rather than the time limit. Next open row: `props` per node (D-0085 watched slack, D-0087
+priority), not more pass work.
