@@ -79,6 +79,11 @@ type env = {
   arrays : (string, Model.operand array) Hashtbl.t;
   array_dims : (string, (int * int) list) Hashtbl.t;
   mutable vars_rev : Model.var list;
+  (* M6-T21: the same variables BY INDEX, kept in step with [vars_rev] by [new_var] and
+     [infer_domains]. Both lookups below used to be [List.nth_opt (List.rev vars_rev) i],
+     a reversal of the whole table per lookup: 44 s of the 60 s budget on 2016_mrcpsp
+     (118 756 lines) went there, as `List.rev_append` and the GC behind it. *)
+  vars_by_index : (int, Model.var) Hashtbl.t;
   mutable nvars : int;
   mutable outputs_rev : Model.output_item list;
   (* M4-T4b: how many auxiliary Booleans the arithmetic family has introduced so far.
@@ -100,6 +105,7 @@ let new_env () =
     arrays = Hashtbl.create 16;
     array_dims = Hashtbl.create 16;
     vars_rev = [];
+    vars_by_index = Hashtbl.create 1024;
     nvars = 0;
     outputs_rev = [];
     naux = 0;
@@ -108,9 +114,13 @@ let new_env () =
 
 let new_var env name dom pos =
   let i = env.nvars in
-  env.vars_rev <- { Model.v_name = name; v_dom = dom; v_pos = pos } :: env.vars_rev;
+  let v = { Model.v_name = name; v_dom = dom; v_pos = pos } in
+  env.vars_rev <- v :: env.vars_rev;
+  Hashtbl.replace env.vars_by_index i v;
   env.nvars <- i + 1;
   i
+
+let var_at env i = Hashtbl.find_opt env.vars_by_index i
 
 (* ------------------------------------------------------------------ name resolution *)
 
@@ -154,7 +164,7 @@ and const_of env pos what e =
   | Model.Const n -> n
   | Model.Var i ->
       Error.failf pos "%s must be a constant, but variable `%s` was given" what
-        (match List.nth_opt (List.rev env.vars_rev) i with
+        (match var_at env i with
         | Some v -> v.Model.v_name
         | None -> Printf.sprintf "<var %d>" i)
 
@@ -625,6 +635,7 @@ let infer_domains env (cs : Ast.constraint_item list) =
         undomained
     in
     env.vars_rev <- List.rev (Array.to_list vars);
+    Array.iteri (fun i v -> Hashtbl.replace env.vars_by_index i v) vars;
     match unbounded with [] -> None | _ -> Some (unbounded, vars, facts, lo, hi)
 
 let refuse_unbounded (unbounded, (vars : Model.var array), facts, lo, hi) =
@@ -987,7 +998,7 @@ let build_constraint env (c : Ast.constraint_item) =
      chooses a path, so an auxiliary is never left undefined even if a path stops
      using it. *)
   let var_bounds i =
-    match List.nth_opt (List.rev env.vars_rev) i with
+    match var_at env i with
     | Some { Model.v_dom = Model.Dbool; _ } -> (0, 1)
     | Some { Model.v_dom = Model.Drange (l, u); _ } -> (l, u)
     | Some { Model.v_dom = Model.Dset (n :: ns); _ } ->

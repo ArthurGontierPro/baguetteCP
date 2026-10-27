@@ -389,26 +389,49 @@ module Learned_clause = struct
   let vars t = vars t.pb
   let false_at store t i = Pb.status store t.atoms.(i) = Pb.Unsat_lit
 
-  (* Two non-false literals, keeping a current watch that still qualifies. With fewer
-     than two non-false literals the clause is unit or failed, and [Pb.propagate] has
-     already acted; whatever is left watched then re-asks on that variable's next change,
-     which costs a run and nothing else. *)
+  (* The trail position of the entry that FALSIFIED literal [i]: a positive atom
+     `x >= k` is false because [hi x] moved below [k], a negative one because [lo x]
+     moved to [k] or past it. [Store.no_support] (-1) for a literal false by declaration,
+     which no backtrack ever un-falsifies. *)
+  let rank store t i =
+    let a = t.atoms.(i) in
+    if a.Pb.positive then Store.hi_support store a.Pb.x else Store.lo_support store a.Pb.x
+
+  (* Two watches, chosen so that I-P7 holds through every backtrack:
+
+       - with two or more non-false literals, two of them (a current watch that still
+         qualifies is kept);
+       - with exactly one, it and the LATEST-falsified other literal;
+       - with none (the run failed), the two latest-falsified literals.
+
+     The second and third cases are the classic argument. Backtracking un-falsifies
+     literals in reverse trail order, so the latest-falsified watch is non-false again
+     no later than any other false literal: whenever the clause has two non-false
+     literals both watches are among them, and whenever it has one that one is a watch.
+     A change that falsifies an unwatched literal therefore never makes the clause unit
+     or failed, which is exactly what [advise] answers [false] to. The first draft kept
+     whatever stale index [pick] fell back on and the BAGUETTE_DEBUG check caught it on
+     `colour_unsat` and five more models: a stale false watch can be un-falsified AFTER
+     another literal, and the clause then goes unit unwatched. *)
   let rewatch store t =
     let n = Array.length t.atoms in
-    let keep i = i >= 0 && i < n && not (false_at store t i) in
-    let pick ~not_ i =
-      let r = ref (-1) in
-      let j = ref 0 in
-      while !r < 0 && !j < n do
-        if !j <> not_ && not (false_at store t !j) then r := !j;
-        incr j
-      done;
-      if !r >= 0 then !r else i
+    let better i j =
+      (* [i] beats [j]: non-false first, then the later-falsified. *)
+      let fi = false_at store t i and fj = false_at store t j in
+      if fi <> fj then not fi else rank store t i > rank store t j
     in
-    let w1 = if keep t.w1 then t.w1 else pick ~not_:t.w2 t.w1 in
-    let w2 = if keep t.w2 && t.w2 <> w1 then t.w2 else pick ~not_:w1 t.w2 in
+    let best ~not_ =
+      let r = ref (-1) in
+      for j = 0 to n - 1 do
+        if j <> not_ && (!r < 0 || better j !r) then r := j
+      done;
+      !r
+    in
+    let keep i = i >= 0 && i < n && not (false_at store t i) in
+    let w1 = if keep t.w1 then t.w1 else best ~not_:t.w2 in
+    let w2 = if keep t.w2 && t.w2 <> w1 then t.w2 else best ~not_:w1 in
     t.w1 <- w1;
-    t.w2 <- w2
+    t.w2 <- (if w2 >= 0 then w2 else w1)
 
   let make (pb : Pb.t) =
     let atoms = Array.of_list (List.map (fun (tm : Pb.term) -> tm.Pb.a) pb.Pb.terms) in
