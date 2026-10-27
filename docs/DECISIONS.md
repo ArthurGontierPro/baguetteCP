@@ -9026,3 +9026,67 @@ propagators are posted and the tree is the same: `depot_placement` 104.0 -> 92.6
 110.7 -> 104.0 s. **The cost is `props` per node**, unchanged: `2020_racp` 42.8M runs / 8565 nodes,
 `2016_mrcpsp` 20.4M / 1647, `2025_mondoku` 37.8M / 79606. And four `cumulative` corpus instances run
 with `passes 0`: mznlib decomposes their `cumulative`, so the propagator is not posted there.
+
+## D-0104  M6-T20: learned clauses are where the propagator runs go, and the answer is an ADVISOR -- two watched literals, answered in O(1) before the wake is queued
+
+**Status**: **ACCEPTED, implemented by M6-T20** (2026-10-27, solo-opt). Overturns the "no watched
+literals" half of D-0052 and the "no mutable state" section of `prop/pb.ml`'s header ON EVIDENCE,
+and keeps their reason by naming the one argument that makes watch pointers safe without an undo.
+
+### The measurement (node, `--stats` per family, M6-T20's first commit `5d5546f`)
+
+| instance | runs/node | top family | its runs/node | its effectful/node |
+|---|---|---|---|---|
+| `2020_racp` | 3732 | `learned_clause` (2143 inst) | **1299** | 1.80 |
+| `2010_depot_placement` | 1830 | `learned_clause` (1552 inst) | **1731** | 1.18 |
+| `2025_mondoku` | 394 | `learned_clause` (455 inst) | **299** | 0.29 |
+
+A learned clause runs on EVERY bound change of EVERY variable it names (its whole scope is in the
+watcher table, `Bounds` trigger, `masked 0` on racp), and each run is `Pb.survey`: a full walk
+of its literals with `Store.get` each. `perf` on racp: `Pb.status` is the top self-time symbol
+(6.9 %), with `Pb.fun_*`, `List.map`, `List.find_all`, `Store.get` behind it. Between 0.1 % and
+0.2 % of those runs change anything. The SAT literature settled this in 2001: a clause needs
+looking at only when one of TWO watched non-false literals becomes false.
+
+### The mechanism: an advisor, not a new wake table
+
+`Propagator.instance` gains `inst_advise : Store.t -> Var.t -> bool` (default: always true,
+so nothing else changes). When a trail entry on `v` would wake instance `i` (after the M2-T5
+trigger mask and the M2-T6 veto), the engine asks `i.inst_advise store v`; `false` drops the
+wake, counted as `advised`. The same question is asked by the M6-T18 incremental seed. The
+watcher table is untouched: the clause's whole scope stays registered, so
+`Engine.check_attribution`'s second arm and the proof side see exactly what they saw. The
+watches MOVE only inside the instance.
+
+`Clause.Learned_clause` becomes a record over the `Pb.t` it was: `{ pb; atoms; mutable w1; mutable
+w2 }`. `advise store v` answers true iff `v` carries watch `w1` or `w2` and that literal is now
+false (one `Store.get`). `propagate` is `Pb.propagate pb` -- the SPECIFICATION, unchanged, the
+same trace lines and the same reasons -- followed by re-choosing `w1`, `w2` among the non-false
+literals, keeping a current watch that is still non-false.
+
+### Why watch pointers need no undo, which is what D-0052 and pb.ml's header were right to demand
+
+**I-P7** (new): `advise` may answer false only if, given that every change since the instance's
+last run on a variable it names was answered false, a run now would change nothing and not
+fail. For two watched literals: both are non-false after a run (or the clause was unit or
+failed, and `Pb.propagate` has already acted). A change on an unwatched variable leaves both
+non-false. A change on a watched variable that leaves its literal non-false leaves both
+non-false. A clause with two non-false literals is neither unit nor falsified, so a run does
+nothing. **Backtracking only widens domains, so a non-false literal stays non-false**: the
+invariant survives every `undo_to` with no trail entry of its own. That is the classic 2WL
+argument, and it is why this mutable state is not the "cached slack the trail does not undo"
+pb.ml's header refuses -- a cached slack is a NUMBER that backtracking invalidates; a watch is a
+CHOICE that backtracking cannot invalidate. The `learned_pb` rows keep their survey: a PB
+slack is the number, and D-0085's watched slack is the separate question it was.
+
+**Checked, not trusted**: under `BAGUETTE_DEBUG` every wake the advisor drops is run anyway and
+must prune nothing and not fail (`Engine.check_advise`, `Not_at_fixpoint` otherwise), the same
+instrument as M6-T18's `check_skip`. Fixpoints are unchanged by construction, so the search tree
+is unchanged; the run ORDER inside a fixpoint is, so proofs need not be byte-identical and the
+test is node counts + veripb.
+
+### What it leaves
+
+`int_le_reif` (1217 runs/node on racp, 74 effectful) and `int_lin_le_reif` (662 / 49) are the
+next two families; they are the `reif.ml` dispatcher, which this record does not touch.
+`learned_pb` keeps the survey (D-0085).

@@ -50,6 +50,15 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
   pass after one deduction, so a Hall set confining 30 variables cost 31 snapshots and 31
   enumerations; the restart bought a one-line argument ("everything examined is current")
   that this invariant replaces with a stated one.
+- **I-P7** An advisor answers for a wake it drops (M6-T20, D-0104). An instance's
+  `inst_advise store v` may answer `false` -- "do not queue me for this change of `v`" -- only
+  if, given that every change since its last run on a variable it names was answered `false`,
+  a run now would change nothing and not fail. The engine asks it after the trigger mask and
+  the veto, for wakes and for the incremental seed alike, and under `BAGUETTE_DEBUG` runs every
+  dropped wake anyway and raises if it pruned or failed (`Engine.check_advise`). The default
+  answers `true`. Two watched non-false literals satisfy it for a clause, and survive
+  backtracking without an undo because a domain that widens cannot falsify a literal; a cached
+  number (a slack) does not, which is why `pb.ml`'s survey stays.
 
 ## Proof
 
