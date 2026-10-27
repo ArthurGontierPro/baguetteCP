@@ -935,8 +935,20 @@ let report_stats (st : Search.stats) ~exhausted =
    same thing. Counted by the engine, not read from the proof (M1-T36). *)
 module Engine = Baguette_core.Engine
 
-let report_engine_counters (c : Engine.counters) ~nodes =
+let report_engine_counters ?families (c : Engine.counters) ~nodes =
   let per n = if nodes > 0 then float_of_int n /. float_of_int nodes else 0.0 in
+  (* M6-T20: which FAMILY the runs belong to, per node, most runs first. *)
+  (match families with
+  | None -> ()
+  | Some rows ->
+      prerr_endline
+        "stats: propagator runs by family (M6-T20): instances, runs/node, effectful/node";
+      List.iteri
+        (fun i (name, n, r, e) ->
+          if i < 14 then
+            Printf.eprintf "stats: %-28s %6d inst %10.1f runs/node %8.2f eff/node\n" name
+              n (per r) (per e))
+        rows);
   Printf.eprintf
     "stats: %-10s %10d runs   propagator runs taken off the queue (%.1f/node)\n" "props"
     c.Engine.c_runs (per c.Engine.c_runs);
@@ -1162,6 +1174,7 @@ let solve opts (m : Model.t) =
   if opts.stats then (
     report_stats stats ~exhausted;
     report_engine_counters
+      ~families:(Engine.family_table compiled.Compile.engine)
       (Engine.counters compiled.Compile.engine)
       ~nodes:stats.Search.nodes)
 

@@ -211,6 +211,12 @@ type t = {
      answer for an unknown reader is always "wake it". *)
   mutable triggers : trigger array;
   ctr : counters;  (** M2-T6: this engine's run counters, see [counters]. *)
+  mutable runs_by_id : int array;
+      (** M6-T20, MEASUREMENT ONLY: runs and effectful runs PER INSTANCE, indexed by id
+          and grown on demand, so [family_table] can say which propagator FAMILY the
+          [c_runs] of a solve belong to. One array write per run; nothing reads them
+          but the report. *)
+  mutable eff_by_id : int array;
   mutable veto : bool array;
       (** M2-T6: id -> whether this instance's own prunings may skip re-waking it, i.e.
           [honours_claim]. Indexed by id like [triggers], grown by [add] like it, and an
@@ -298,6 +304,8 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
     watchers;
     triggers;
     ctr = counters_create ();
+    runs_by_id = Array.make (Array.length triggers) 0;
+    eff_by_id = Array.make (Array.length triggers) 0;
     veto;
     born = Array.make (Array.length triggers) unborn;
     epoch = 0;
@@ -309,6 +317,36 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
 let set_incremental t b = t.incremental <- b
 let n_instances t = Array.length t.instances
 let counters t = t.ctr
+
+(* M6-T20. [name, instances, runs, effectful runs] per propagator family, most runs
+   first; ties by name so the table is deterministic. *)
+let family_table t =
+  let tbl = Hashtbl.create 16 in
+  Array.iter
+    (fun (inst : Propagator.instance) ->
+      let id = inst.Propagator.id in
+      let r = if id < Array.length t.runs_by_id then t.runs_by_id.(id) else 0 in
+      let e = if id < Array.length t.eff_by_id then t.eff_by_id.(id) else 0 in
+      let n, r0, e0 =
+        try Hashtbl.find tbl inst.Propagator.inst_name with Not_found -> (0, 0, 0)
+      in
+      Hashtbl.replace tbl inst.Propagator.inst_name (n + 1, r0 + r, e0 + e))
+    t.instances;
+  let rows = Hashtbl.fold (fun name (n, r, e) acc -> (name, n, r, e) :: acc) tbl [] in
+  List.sort
+    (fun (na, _, ra, _) (nb, _, rb, _) ->
+      if ra <> rb then compare rb ra else compare na nb)
+    rows
+
+let bump_by_id t id ~eff =
+  let n = Array.length t.runs_by_id in
+  if id >= n then (
+    let m = max (id + 1) (2 * n) in
+    let grow a = Array.append a (Array.make (m - n) 0) in
+    t.runs_by_id <- grow t.runs_by_id;
+    t.eff_by_id <- grow t.eff_by_id);
+  t.runs_by_id.(id) <- t.runs_by_id.(id) + 1;
+  if eff then t.eff_by_id.(id) <- t.eff_by_id.(id) + 1
 
 (* Whether instance [id]'s idempotence claim is honoured by this engine. *)
 let vetoes_self t id = id >= 0 && id < Array.length t.veto && t.veto.(id)
@@ -1120,11 +1158,13 @@ let propagate (t : t) (store : Store.t) : outcome =
       | Propagator.Conflict c ->
           check_attribution t inst store ~since:before ~conflict:(Some c);
           t.ctr.c_contra <- t.ctr.c_contra + 1;
+          bump_by_id t id ~eff:false;
           conflict := Some c
       | Propagator.Fixpoint ->
           check_attribution t inst store ~since:before ~conflict:None;
           let pruned = Store.trail_length store > before in
           if pruned then t.ctr.c_effectful <- t.ctr.c_effectful + 1;
+          bump_by_id t id ~eff:pruned;
           if pruned && Debug.enabled && vetoes_self t id then check_claim inst store;
           let woken = watchers_of_new_entries ~self:id t store ~since:before in
           List.iter wake woken
