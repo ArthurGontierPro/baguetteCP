@@ -94,6 +94,13 @@ type instance = {
   inst_row : Store.t -> pb_row option;
       (* M2-L6. See [pb_row] above. [pack] defaults it to "no row", so a propagator
          family that has not been taught its own row is not silently credited with one. *)
+  inst_advise : Store.t -> Var.t -> bool;
+      (* M6-T20 / D-0104, I-P7. Asked by [Engine] before a wake on [v] is queued: [false]
+         drops the wake. May answer [false] only if, every change since this instance's
+         last run on a variable it names having been answered [false], a run now would
+         change nothing and not fail. The default always answers [true]. Under
+         BAGUETTE_DEBUG the engine runs every dropped wake anyway and raises if it did
+         anything ([Engine.check_advise]). *)
   inst_idempotent : bool;
       (* M2-T6. The CLAIM that one call of [run] reaches this instance's own fixpoint:
          run it again straight after, with nothing else having moved, and it prunes
@@ -108,6 +115,7 @@ type instance = {
 }
 
 let no_row : Store.t -> pb_row option = fun _ -> None
+let advise_always : Store.t -> Var.t -> bool = fun _ _ -> true
 
 (* M2-T6 / M6-T18. The single-call idempotence claim is made AT THE PACKING SITE, by
    passing [~idempotent:true], and nowhere else. It used to be a table by packed name
@@ -128,8 +136,8 @@ let no_row : Store.t -> pb_row option = fun _ -> None
    [Element], [Maxmin] and [Bool2int] make no claim. The default is [false]: an instance
    whose packing site says nothing is re-woken off its own prunings, which is never
    unsound, only slower. *)
-let pack (type a) ?(row = no_row) ?(idempotent = false) ~id (module P : S with type t = a)
-    (p : a) : instance =
+let pack (type a) ?(row = no_row) ?(advise = advise_always) ?(idempotent = false) ~id
+    (module P : S with type t = a) (p : a) : instance =
   {
     id;
     inst_name = P.name;
@@ -137,6 +145,7 @@ let pack (type a) ?(row = no_row) ?(idempotent = false) ~id (module P : S with t
     inst_vars = P.vars p;
     run = (fun store -> P.propagate p store);
     inst_row = row;
+    inst_advise = advise;
     inst_idempotent = idempotent;
   }
 

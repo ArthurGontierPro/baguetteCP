@@ -378,10 +378,50 @@ end
    or an attribution failure says WHICH clause -- a model row's or one this search
    derived -- which is exactly the distinction [Retention]'s citation guard is about. *)
 module Learned_clause = struct
-  type nonrec t = t
+  (* M6-T20 / D-0104: the clause plus TWO WATCHED LITERALS, the first mutable propagator
+     state in lib/core/prop/ and the one kind I-P7 admits. [w1] and [w2] index [atoms];
+     after a run both are non-false unless the clause was unit or failed, and a widening
+     domain cannot falsify a literal, so backtracking never has to restore them. *)
+  type nonrec t = { pb : Pb.t; atoms : Pb.atom array; mutable w1 : int; mutable w2 : int }
 
   let name = "learned_clause"
   let consistency = consistency
-  let vars = vars
-  let propagate = propagate
+  let vars t = vars t.pb
+  let false_at store t i = Pb.status store t.atoms.(i) = Pb.Unsat_lit
+
+  (* Two non-false literals, keeping a current watch that still qualifies. With fewer
+     than two non-false literals the clause is unit or failed, and [Pb.propagate] has
+     already acted; whatever is left watched then re-asks on that variable's next change,
+     which costs a run and nothing else. *)
+  let rewatch store t =
+    let n = Array.length t.atoms in
+    let keep i = i >= 0 && i < n && not (false_at store t i) in
+    let pick ~not_ i =
+      let r = ref (-1) in
+      let j = ref 0 in
+      while !r < 0 && !j < n do
+        if !j <> not_ && not (false_at store t !j) then r := !j;
+        incr j
+      done;
+      if !r >= 0 then !r else i
+    in
+    let w1 = if keep t.w1 then t.w1 else pick ~not_:t.w2 t.w1 in
+    let w2 = if keep t.w2 && t.w2 <> w1 then t.w2 else pick ~not_:w1 t.w2 in
+    t.w1 <- w1;
+    t.w2 <- w2
+
+  let make (pb : Pb.t) =
+    let atoms = Array.of_list (List.map (fun (tm : Pb.term) -> tm.Pb.a) pb.Pb.terms) in
+    let n = Array.length atoms in
+    { pb; atoms; w1 = 0; w2 = (if n > 1 then 1 else 0) }
+
+  (* I-P7: queue only when a WATCHED literal on [v] has just become false. *)
+  let advise t store v =
+    let on i = Var.to_int t.atoms.(i).Pb.x = Var.to_int v && false_at store t i in
+    on t.w1 || on t.w2
+
+  let propagate t store =
+    let r = propagate t.pb store in
+    rewatch store t;
+    r
 end

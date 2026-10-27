@@ -974,6 +974,9 @@ let report_engine_counters ?families (c : Engine.counters) ~nodes =
   Printf.eprintf "stats: %-10s %10d wakes  ...dropped by the M2-T6 self-wake veto\n"
     "vetoed" c.Engine.c_vetoed;
   Printf.eprintf
+    "stats: %-10s %10d wakes  ...declined by the instance's own advisor (M6-T20, I-P7)\n"
+    "advised" c.Engine.c_advised;
+  Printf.eprintf
     "stats: %-10s %10d runs   ...of the props, SEEDED: dirty seed slots run at a node's \
      entry (M6-T18; every instance, every propagate, before it)\n"
     "seeded" c.Engine.c_seeded;

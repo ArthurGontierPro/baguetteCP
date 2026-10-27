@@ -2357,10 +2357,13 @@ let register_learned engine store ctx stats ~cid ~(lits : Lit.t list) =
       | None -> stats.n_clause_declined <- stats.n_clause_declined + 1
       | Some p ->
           let id = Engine.next_id engine in
+          let lc = Clause.Learned_clause.make p in
           Engine.add engine
             (Propagator.pack ~id
-               (module Clause.Learned_clause : Propagator.S with type t = Clause.t)
-               p);
+               ~advise:(Clause.Learned_clause.advise lc)
+               (module Clause.Learned_clause : Propagator.S
+                 with type t = Clause.Learned_clause.t)
+               lc);
           stats.n_clause_instances <- stats.n_clause_instances + 1;
           stats.clause_inst_ids_rev <- id :: stats.clause_inst_ids_rev;
           Retention.cite stats.db ~cid

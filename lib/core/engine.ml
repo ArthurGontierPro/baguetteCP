@@ -172,6 +172,9 @@ type counters = {
       (** M2-T6 deliverable 2: self-wakes dropped because the instance's idempotence
           claim is honoured ([honours_claim]). Counted apart from [c_masked]: a mask
           drops a wake by KIND of change, the veto by WHO made it. *)
+  mutable c_advised : int;
+      (** M6-T20 / D-0104: wakes (and seed marks) the instance's own [inst_advise]
+          declined, after the mask and the veto let them through. *)
 }
 
 let counters_create () =
@@ -184,6 +187,7 @@ let counters_create () =
     c_seeded = 0;
     c_skipped = 0;
     c_vetoed = 0;
+    c_advised = 0;
   }
 
 (* Off unless asked for: BAGUETTE_WAKE_STATS=1 prints the counters to stderr at exit.
@@ -482,6 +486,37 @@ let trigger_of t id =
    - Classification is per ENTRY, not per variable: one entry is one [Domain] operation,
      so its change is a [Bound] or a [Holes] but never both, and a watcher that wants
      bounds only cannot lose a bound move that happened to be bundled with a hole. *)
+(* M6-T20 / D-0104. The advisor's answer for instance [id] on a change of [v], or [true]
+   for an id this engine does not know (the safe answer, as for the trigger). Under
+   BAGUETTE_DEBUG a [false] is CHECKED on the spot: the instance is run and must prune
+   nothing and not fail, which is I-P7 read literally. *)
+exception Not_at_fixpoint of string
+
+let check_advise (inst : Propagator.instance) (store : Store.t) v =
+  let before = Store.trail_length store in
+  let fail what =
+    raise
+      (Not_at_fixpoint
+         (Printf.sprintf
+            "I-P7: propagator #%d %s declined the wake for a change of %s, but a run %s"
+            inst.Propagator.id inst.Propagator.inst_name (Store.name store v) what))
+  in
+  match inst.Propagator.run store with
+  | Propagator.Conflict _ -> fail "FAILED"
+  | Propagator.Fixpoint ->
+      if Store.trail_length store > before then
+        fail (Printf.sprintf "pruned %d entr(y/ies)" (Store.trail_length store - before))
+
+let advises t store id v =
+  if id < 0 || id >= Array.length t.instances then true
+  else
+    let inst = t.instances.(id) in
+    if inst.Propagator.inst_advise store v then true
+    else (
+      t.ctr.c_advised <- t.ctr.c_advised + 1;
+      if Debug.enabled then check_advise inst store v;
+      false)
+
 let watchers_of_new_entries ?self t store ~since =
   (* M2-T6: [self] is the instance that pushed these entries. When its claim is
      honoured, its own id is dropped from every entry's watcher list -- a subsequence
@@ -501,7 +536,7 @@ let watchers_of_new_entries ?self t store ~since =
             else if wakes_on (trigger_of t id) change then (
               incr wakes;
               t.ctr.c_wakes <- t.ctr.c_wakes + 1;
-              acc := id :: !acc)
+              if advises t store id e.var then acc := id :: !acc)
             else (
               incr masked_wakes;
               t.ctr.c_masked <- t.ctr.c_masked + 1))
@@ -583,8 +618,6 @@ let check_attribution (t : t) (inst : Propagator.instance) store ~since
                 id inst.Propagator.inst_name c.Store.c_prop))
 
 (* ------------------------------------------------- I-P2, checked by re-running *)
-
-exception Not_at_fixpoint of string
 
 (* I-P2: "when [engine.propagate] returns without failure, running any propagator again
    changes nothing". Until M2-T5 that invariant had no test of any kind. It is the one
@@ -1063,8 +1096,11 @@ let seed_dirty t store ~since ~(dirty : bool array) =
         let change = Domain.classify ~old:e.old ~now:e.now in
         List.iter
           (fun id ->
-            if id >= 0 && id < n && wakes_on (trigger_of t id) change then
-              dirty.(id) <- true)
+            if
+              id >= 0 && id < n
+              && wakes_on (trigger_of t id) change
+              && advises t store id e.var
+            then dirty.(id) <- true)
           ids
   done
 
