@@ -1086,7 +1086,7 @@ let check_consistency_exn (t : t) (store : Store.t) : unit =
    the end. A starved instance is caught at the slot it was skipped at, before any later
    wake could cover it up. *)
 
-let seed_dirty t store ~since ~(dirty : bool array) =
+let seed_dirty t store ~since ~epoch ~(dirty : bool array) =
   let n = Array.length dirty in
   for i = Store.trail_length store - 1 downto since do
     let e : Store.entry = Store.trail_entry store i in
@@ -1096,11 +1096,12 @@ let seed_dirty t store ~since ~(dirty : bool array) =
         let change = Domain.classify ~old:e.old ~now:e.now in
         List.iter
           (fun id ->
-            if
-              id >= 0 && id < n
-              && wakes_on (trigger_of t id) change
-              && advises t store id e.var
-            then dirty.(id) <- true)
+            if id >= 0 && id < n && wakes_on (trigger_of t id) change then
+              (* An instance born after the fixpoint at [epoch] has never run on this
+                 state: [propagate] seeds it whatever it says, so its advisor is not
+                 asked -- and under BAGUETTE_DEBUG not checked, since a run of it is
+                 EXPECTED to prune (I-P7 is a contract between runs). *)
+              if t.born.(id) > epoch || advises t store id e.var then dirty.(id) <- true)
           ids
   done
 
@@ -1154,7 +1155,7 @@ let propagate (t : t) (store : Store.t) : outcome =
           match t.fixpoints with
           | [] -> -1
           | (since, e) :: _ ->
-              seed_dirty t store ~since ~dirty;
+              seed_dirty t store ~since ~epoch:e ~dirty;
               for id = 0 to n - 1 do
                 if t.born.(id) > e then dirty.(id) <- true
               done;

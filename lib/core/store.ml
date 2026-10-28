@@ -324,6 +324,40 @@ let level t = t.n_levels
    "what holds a bound up". *)
 let lo_support t v = t.lo_sup.(Var.to_int v)
 let hi_support t v = t.hi_sup.(Var.to_int v)
+
+(* M6-T20 (D-0104). The trail position of the entry that FIRST brought [v]'s upper
+   bound below [k] ([hi_below]), or its lower bound to [k] or above ([lo_at_least]), or
+   [no_support] when the declared bound already did. These are the positions at which
+   the order literals `v >= k` and `v < k` became false, and so the positions a
+   backtrack must undo to make them non-false again -- which is what the watch rule of
+   [Clause.Learned_clause] ranks literals by. [hi_support] is NOT that position: it is
+   the entry behind the CURRENT bound, and a bound that has moved twice since it crossed
+   [k] has a support later than its crossing. Ranking by the support, the first M6-T20
+   draft watched a literal falsified early as if it had been falsified late, and the
+   BAGUETTE_DEBUG check of I-P7 caught the clause going unit unwatched after a backjump.
+
+   Each entry records the support of the bound BEFORE it ([sup_lo]/[sup_hi]), so the
+   crossing is found by walking one bound's own chain of moves back from its support
+   while the entry's [old] bound was already past [k]: O(moves of [v] on the trail),
+   and only asked for literals that are false now. *)
+let hi_below t v k =
+  let rec back p =
+    if p = no_support then p
+    else
+      let e = t.trail.(p) in
+      if Domain.hi e.old < k then back e.sup_hi else p
+  in
+  back (hi_support t v)
+
+let lo_at_least t v k =
+  let rec back p =
+    if p = no_support then p
+    else
+      let e = t.trail.(p) in
+      if Domain.lo e.old >= k then back e.sup_lo else p
+  in
+  back (lo_support t v)
+
 let trail_length t = t.trail_len
 let reasons t = t.reasons
 

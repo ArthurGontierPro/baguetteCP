@@ -389,13 +389,16 @@ module Learned_clause = struct
   let vars t = vars t.pb
   let false_at store t i = Pb.status store t.atoms.(i) = Pb.Unsat_lit
 
-  (* The trail position of the entry that FALSIFIED literal [i]: a positive atom
-     `x >= k` is false because [hi x] moved below [k], a negative one because [lo x]
-     moved to [k] or past it. [Store.no_support] (-1) for a literal false by declaration,
-     which no backtrack ever un-falsifies. *)
-  let rank store t i =
+  (* The trail position of the entry that FALSIFIED literal [i], which must be false:
+     a positive atom `x >= k` became false when [hi x] first moved below [k], a
+     negative one when [lo x] first reached [k]. [Store.no_support] (-1) for a literal
+     false by declaration, which no backtrack ever un-falsifies. NOT [Store.hi_support]:
+     see [Store.hi_below] for why the support of the current bound is a later position
+     than the crossing, and how that difference broke the first draft. *)
+  let falsified_at store t i =
     let a = t.atoms.(i) in
-    if a.Pb.positive then Store.hi_support store a.Pb.x else Store.lo_support store a.Pb.x
+    if a.Pb.positive then Store.hi_below store a.Pb.x a.Pb.k
+    else Store.lo_at_least store a.Pb.x a.Pb.k
 
   (* Two watches, chosen so that I-P7 holds through every backtrack:
 
@@ -409,22 +412,31 @@ module Learned_clause = struct
      no later than any other false literal: whenever the clause has two non-false
      literals both watches are among them, and whenever it has one that one is a watch.
      A change that falsifies an unwatched literal therefore never makes the clause unit
-     or failed, which is exactly what [advise] answers [false] to. The first draft kept
-     whatever stale index [pick] fell back on and the BAGUETTE_DEBUG check caught it on
-     `colour_unsat` and five more models: a stale false watch can be un-falsified AFTER
-     another literal, and the clause then goes unit unwatched. *)
+     or failed, which is exactly what [advise] answers [false] to. Two drafts got this
+     wrong and the BAGUETTE_DEBUG check of I-P7 caught both, on `colour_unsat` and five
+     more models and on test_random's random branching orders: the first kept whatever
+     stale false index it had, the second ranked by [Store.hi_support], the current
+     bound's support rather than the crossing ([falsified_at]). Either way a watch that
+     was falsified EARLIER than an unwatched literal is un-falsified after it, and the
+     clause goes unit unwatched. *)
   let rewatch store t =
     let n = Array.length t.atoms in
-    let better i j =
-      (* [i] beats [j]: non-false first, then the later-falsified. *)
-      let fi = false_at store t i and fj = false_at store t j in
-      if fi <> fj then not fi else rank store t i > rank store t j
-    in
     let best ~not_ =
+      (* Any non-false literal other than [not_]; failing that, the latest-falsified.
+         Ranks are computed only when every candidate is false. *)
       let r = ref (-1) in
       for j = 0 to n - 1 do
-        if j <> not_ && (!r < 0 || better j !r) then r := j
+        if j <> not_ && !r < 0 && not (false_at store t j) then r := j
       done;
+      (if !r < 0 then
+         let rk = ref min_int in
+         for j = 0 to n - 1 do
+           if j <> not_ then
+             let k = falsified_at store t j in
+             if k > !rk then (
+               r := j;
+               rk := k)
+         done);
       !r
     in
     let keep i = i >= 0 && i < n && not (false_at store t i) in
