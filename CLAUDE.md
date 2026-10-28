@@ -417,6 +417,25 @@ not just the session that caused it.
 - Keep explanations *lazy where they are expensive*: see `docs/ARCHITECTURE.md`,
   "Deferred explanations".
 
+## The node (`fataepyc-07`) is shared with the user's OTHER experiments
+
+Baguette's regression runs go to `fataepyc-07`, and so do the user's other experiments
+(graph solvers, `veripb`, Julia harnesses), under the **same user**, often for hours or
+days. On 2026-10-28 a session cleaning up its own runs did `pkill -u arthur -f veripb` and
+killed the `veripb` children of an experiment that had been running for hours. It had to be
+restarted from scratch.
+
+- **Never `pkill`, `killall`, or `kill` by pattern on the node. Not with `-u`, not with a
+  bracketed regex, not for "obviously mine" names.** `veripb`, `main.exe`, `dune`, `timeout`
+  are all names another experiment may be using.
+- **Kill by PID, and only PIDs you launched.** Every detached run you start writes its PIDs
+  to a pidfile next to its output (`echo $! > "$OUT/pid"`, or `pgrep -P` of your own
+  `setsid` leader at launch time). Cleaning up is `kill $(cat "$OUT/pid")`, nothing else.
+- **`ps` before you kill anything**, and read the list. If an experiment that is not yours
+  is running, it has priority: do not launch, and ask before killing even your own if the
+  cleanup could touch shared I/O.
+- A process you cannot identify as yours by PID is not yours to kill.
+
 ## Git
 
 Several sessions share this checkout, so staging discipline matters more than usual.
