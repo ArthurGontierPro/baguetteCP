@@ -33,6 +33,18 @@
 # whose library then refuses that instance gets `FLATTEN-FAIL` for it. That is a
 # library-coverage fact, not an answer.
 #
+# **Or the instances are GIVEN (M7-T26)**: `INSTANCES=<list>` names a TSV whose columns
+# are `id model data` (`#` lines skipped, further columns ignored; `data` is `<none>`
+# for a bare model, paths relative to the corpus root) -- bench/challenge/<YEAR>.lst is
+# one, the 100 official instances of a Challenge edition, five per model. Then nothing
+# is searched: the id is the list's, the data is the list's, and the walk over
+# `<root>/<year>/<family>/*.mzn` is replaced by the list. The flatten, validation,
+# resumption and report are the same code. `ONLY` still filters by id.
+#
+# `flatten.tsv` carries the flatten's wall time as its LAST column (`flatten_s`, `-`
+# when it failed), because the Challenge counts compile time inside the 20 minutes and
+# the challenge-equivalent time is wall_s + flatten_s. Readers index from the front.
+#
 # **The rule is deterministic only up to FLATTEN_TIMEOUT**, and that was MEASURED, not
 # foreseen: `2025_gt-sort` (whose flatten is heavy -- a 1.5 MB .ozn) paired
 # `n7_ub20_75.0_BEST.json` in the Chuffed pass and `n9_ub10_50.0_BEST.json` in the GCS
@@ -134,6 +146,9 @@
 #   BAGUETTE_MZN_ID / CHUFFED_MZN_ID / GCS_MZN_ID   the solver ids flattened for
 #   EXTRA_MSC_DIR  prepended to MZN_SOLVER_PATH (the self-test's shims)
 #   ONLY        a file of instance ids; KEEP=1 keeps every artefact; DATA_TRIES (4)
+#   INSTANCES   a TSV `id model data` (bench/challenge/<YEAR>.lst): run exactly these
+#               instances, with that data, under those ids. Replaces the corpus walk
+#               and the data search; wins over PAIRS.
 #   PAIRS       a TSV whose column 1 is the id and whose LAST column is the data file
 #               (`<none>` = bare): a run's pair.tsv, or bench/corpus/answers.tsv.
 #               Listed ids use THAT data instead of searching. Use it for any run
@@ -172,6 +187,7 @@ KEEP="${KEEP:-0}"
 ONLY="${ONLY:-}"
 DATA_TRIES="${DATA_TRIES:-4}"
 PAIRS="${PAIRS:-}"
+INSTANCES="${INSTANCES:-}"
 COMPAT="${COMPAT:-1}"
 COMPAT_MZN="${COMPAT_MZN:-$ROOT/mznlib/compat_mzn1.mzn}"
 
@@ -350,19 +366,33 @@ check_input() {
 # ------------------------------------------------------------------ phase A
 
 pair_one() {
-  local mzn="$1" id W c s ndata msg rc chosen="" found=0 first_err="" ok_any
+  # $1 is the model path, or -- from an INSTANCES list -- `model<TAB>id<TAB>data`.
+  local mzn eid edata id W c s ndata msg rc chosen="" found=0 first_err="" ok_any t0 t1
+  IFS=$'\t' read -r mzn eid edata <<< "$1"
   local -a cands=()
-  id="$(instance_id "$mzn")"
+  id="${eid:-$(instance_id "$mzn")}"
   W="$OUT/work/$id"
   ulimit -v "$MEM_KB" 2>/dev/null
-  while IFS= read -r c; do
-    [ -n "$c" ] && cands+=("$c")
-  done < <(data_candidates "$(dirname "$mzn")" "$DATA_TRIES")
-  ndata=${#cands[@]}
-  cands+=("")
-  # PAIRS pins the data file instead of searching for it (see "the instance").
   local pinned=""
-  if [ -n "$PAIRS" ]; then
+  if [ -n "$eid" ]; then
+    # The list says which data; there is nothing to search (see "the instances are GIVEN").
+    ndata=1
+    case "$edata" in
+      "<none>" | "") cands=("") ;;
+      /*) cands=("$edata") ;;
+      *) cands=("$CORPUS/$edata") ;;
+    esac
+    pinned="${edata:-<none>}"
+    PAIRS="$INSTANCES"
+  else
+    while IFS= read -r c; do
+      [ -n "$c" ] && cands+=("$c")
+    done < <(data_candidates "$(dirname "$mzn")" "$DATA_TRIES")
+    ndata=${#cands[@]}
+    cands+=("")
+  fi
+  # PAIRS pins the data file instead of searching for it (see "the instance").
+  if [ -z "$eid" ] && [ -n "$PAIRS" ]; then
     pinned="$(awk -F'\t' -v i="$id" '$1 == i {d = $NF} END {print d}' "$PAIRS")"
     if [ -n "$pinned" ]; then
       # answers.tsv stores data relative to the corpus root; pair.tsv absolute.
@@ -375,14 +405,17 @@ pair_one() {
   fi
   : > "$OUT/log/$id.pair"
   [ -n "$pinned" ] && printf 'pinned\t%s\tfrom %s\n' "$pinned" "$PAIRS" >> "$OUT/log/$id.pair"
-  declare -A res=() det=()
+  declare -A res=() det=() tm=()
   for c in "${cands[@]}"; do
     ok_any=0
     for s in $PAIR_SOLVERS; do
+      t0="$(now_ns)"
       msg="$(flatten_with "$mzn" "$s" "$c" "$W.$s.fzn")"
       rc=$?
+      t1="$(now_ns)"
       res[$s]=$rc
       det[$s]="$msg"
+      tm[$s]="$(secs "$t0" "$t1")"
       printf '%s\t%s\trc=%s\t%s\n' "${c:-<none>}" "$s" "$rc" "$(flat "$msg")" \
         >> "$OUT/log/$id.pair"
       [ "$rc" -eq 0 ] && ok_any=1
@@ -403,7 +436,7 @@ pair_one() {
     fi
     printf '%s\t%s\t%s\t%s\n' "$id" "$mzn" "$st" "-" >> "$OUT/pair.tsv"
     for s in $PAIR_SOLVERS; do
-      printf '%s\t%s\t%s\t-\t-\t-\t%s\n' "$id" "$s" "$st" "$(flat "$why")" >> "$OUT/flatten.tsv"
+      printf '%s\t%s\t%s\t-\t-\t-\t%s\t-\n' "$id" "$s" "$st" "$(flat "$why")" >> "$OUT/flatten.tsv"
     done
     for s in $SOLVERS; do
       has_row "$id" "$s" || emit "$id" "$s" "$st" - - - - - - - - "$why" >> "$OUT/results.tsv"
@@ -419,14 +452,14 @@ pair_one() {
         sense="$(printf '%s' "$line" | cut -f2)"
         obj="$(printf '%s' "$line" | cut -f3)"
         bytes="$(stat -c%s "$W.$s.fzn")"
-        printf '%s\t%s\tOK\t%s\t%s\t%s\t-\n' "$id" "$s" "$bytes" "$sense" "$obj" \
-          >> "$OUT/flatten.tsv"
+        printf '%s\t%s\tOK\t%s\t%s\t%s\t-\t%s\n' "$id" "$s" "$bytes" "$sense" "$obj" \
+          "${tm[$s]}" >> "$OUT/flatten.tsv"
       else
-        printf '%s\t%s\tINPUT-INVALID\t-\t-\t-\t%s\n' "$id" "$s" \
-          "$(flat "$(printf '%s' "$line" | cut -f2-)")" >> "$OUT/flatten.tsv"
+        printf '%s\t%s\tINPUT-INVALID\t-\t-\t-\t%s\t%s\n' "$id" "$s" \
+          "$(flat "$(printf '%s' "$line" | cut -f2-)")" "${tm[$s]}" >> "$OUT/flatten.tsv"
       fi
     else
-      printf '%s\t%s\tFLATTEN-FAIL\t-\t-\t-\t%s\n' "$id" "$s" "$(flat "${det[$s]}")" \
+      printf '%s\t%s\tFLATTEN-FAIL\t-\t-\t-\t%s\t-\n' "$id" "$s" "$(flat "${det[$s]}")" \
         >> "$OUT/flatten.tsv"
     fi
   done
@@ -560,6 +593,7 @@ preflight() {
   [ -f "$TOOL" ] || die "$TOOL is missing"
   [ "$COMPAT" != 1 ] || [ -f "$COMPAT_MZN" ] || die "COMPAT=1 but $COMPAT_MZN is missing"
   [ -z "$PAIRS" ] || [ -f "$PAIRS" ] || die "PAIRS=$PAIRS does not exist"
+  [ -z "$INSTANCES" ] || [ -f "$INSTANCES" ] || die "INSTANCES=$INSTANCES does not exist"
   command -v "$MZN" >/dev/null 2>&1 || die "minizinc not found (MZN=$MZN)"
   MZN="$(command -v "$MZN")"
   [ -n "$CHUFFED" ] || CHUFFED="$(dirname "$MZN")/fzn-chuffed"
@@ -638,6 +672,7 @@ write_conf() {
     echo "gcs_commit=$(git -C "$(dirname "$GCS")" rev-parse --short HEAD 2>/dev/null || echo -)"
     echo "gcs_prove=$GCS_PROVE"
     echo "compat=$COMPAT ${COMPAT_MZN} $(hash_of "$COMPAT_MZN")"
+    echo "instances=${INSTANCES:--} $(hash_of "$INSTANCES")"
     echo "veripb=$VERIPB $("$VERIPB" --version 2>/dev/null | tail -1)"
   } > "$OUT/run.conf.part" && mv -f "$OUT/run.conf.part" "$OUT/run.conf"
 }
@@ -653,30 +688,53 @@ main() {
   write_conf
   export OUT MZN BAGUETTE CHUFFED GCS GCS_PROVE MEM_KB PROOF_CAP_KB SOLVE_TIMEOUT
   export FLATTEN_TIMEOUT CHECK_TIMEOUT KEEP DATA_TRIES SOLVERS PAIR_SOLVERS TOOL VERIPB
-  export BAGUETTE_MZN_ID CHUFFED_MZN_ID GCS_MZN_ID COMPAT COMPAT_MZN PAIRS CORPUS
+  export BAGUETTE_MZN_ID CHUFFED_MZN_ID GCS_MZN_ID COMPAT COMPAT_MZN PAIRS CORPUS INSTANCES
   export -f pair_one solve_one flatten_with check_input emit_input_failures instance_id
   export -f validate_fzn data_candidates emit flat mzn_id_of now_ns secs has_row
 
-  find "$CORPUS" -mindepth 3 -name '*.mzn' | sort > "$OUT/all.lst"
+  # all.lst: one line per instance -- the model path, or from INSTANCES the
+  # `model<TAB>id<TAB>data` triple pair_one reads (see "the instances are GIVEN").
   local total
-  total="$(wc -l < "$OUT/all.lst")"
-  [ "$total" -gt 0 ] || die "no *.mzn found under $CORPUS (expected <root>/<year>/<family>/)"
+  if [ -n "$INSTANCES" ]; then
+    awk -F'\t' -v root="$CORPUS" '!/^#/ && NF >= 3 {
+      m = ($2 ~ /^\//) ? $2 : root "/" $2; printf "%s\t%s\t%s\n", m, $1, $3 }' \
+      "$INSTANCES" > "$OUT/all.lst"
+    total="$(wc -l < "$OUT/all.lst")"
+    [ "$total" -gt 0 ] || die "no `id model data` rows in INSTANCES=$INSTANCES"
+    local dup
+    dup="$(cut -f2 "$OUT/all.lst" | sort | uniq -d | head -3)"
+    [ -z "$dup" ] || die "INSTANCES has duplicate ids: $dup"
+    while IFS=$'\t' read -r mzn id dat; do
+      [ -f "$mzn" ] || die "INSTANCES row $id: model $mzn does not exist"
+      [ "$dat" = "<none>" ] || [ -f "$CORPUS/$dat" ] || [ -f "$dat" ] \
+        || die "INSTANCES row $id: data $dat does not exist under $CORPUS"
+    done < "$OUT/all.lst"
+  else
+    find "$CORPUS" -mindepth 3 -name '*.mzn' | sort > "$OUT/all.lst"
+    total="$(wc -l < "$OUT/all.lst")"
+    [ "$total" -gt 0 ] || die "no *.mzn found under $CORPUS (expected <root>/<year>/<family>/)"
+  fi
 
   : > "$OUT/.selected.ids"
   : > "$OUT/todo.pair"
-  local mzn id
+  local line mzn id
   cut -f1 "$OUT/pair.tsv" | sort -u > "$OUT/.paired.ids"
-  while IFS= read -r mzn; do
-    id="$(instance_id "$mzn")"
+  while IFS= read -r line; do
+    mzn="${line%%$'\t'*}"
+    if [ "$mzn" != "$line" ]; then
+      id="$(printf '%s' "$line" | cut -f2)"
+    else
+      id="$(instance_id "$mzn")"
+    fi
     if [ -n "$ONLY" ] && ! grep -qxF "$id" "$ONLY"; then continue; fi
     printf '%s\n' "$id" >> "$OUT/.selected.ids"
-    grep -qxF "$id" "$OUT/.paired.ids" || printf '%s\n' "$mzn" >> "$OUT/todo.pair"
+    grep -qxF "$id" "$OUT/.paired.ids" || printf '%s\n' "$line" >> "$OUT/todo.pair"
   done < "$OUT/all.lst"
   local selected
   selected="$(wc -l < "$OUT/.selected.ids")"
   [ "$selected" -gt 0 ] || die "the ONLY filter selected none of the $total instances"
   local total_par=$(( PAR * NSOLVERS ))
-  echo "compare_run: $total in the corpus, $selected selected, $(wc -l < "$OUT/todo.pair") to pair."
+  echo "compare_run: $total in the ${INSTANCES:+list }corpus, $selected selected, $(wc -l < "$OUT/todo.pair") to pair."
   echo "compare_run: SOLVERS='$SOLVERS' PAR=$PAR per solver ($total_par total) MEM_KB=$MEM_KB \
 SOLVE_TIMEOUT=$SOLVE_TIMEOUT checker=$VERIPB"
 
