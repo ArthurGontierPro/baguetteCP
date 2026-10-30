@@ -134,7 +134,7 @@
 #   scripts/compare_run.sh --shared <out-dir>...       ids every library flattened
 #
 #   SOLVERS     which solvers RUN       (default "baguette chuffed gcs")
-#   PAR         jobs PER SOLVER, default 16; PAR x |SOLVERS| is capped at 48
+#   PAR         jobs PER SOLVER, default 16; PAR x |SOLVERS| is capped at TOTAL_MAX (48)
 #   MEM_KB      per-process address-space cap, capped 32 GB (default 32000000)
 #   PROOF_CAP_KB  per-file size cap (ulimit -f), default 16000000 (~16 GB)
 #   SOLVE_TIMEOUT / FLATTEN_TIMEOUT / CHECK_TIMEOUT   (default 300 / 120 / 900)
@@ -191,7 +191,7 @@ INSTANCES="${INSTANCES:-}"
 COMPAT="${COMPAT:-1}"
 COMPAT_MZN="${COMPAT_MZN:-$ROOT/mznlib/compat_mzn1.mzn}"
 
-TOTAL_MAX=48
+TOTAL_MAX="${TOTAL_MAX:-48}"   # the cap on PAR x |SOLVERS|; raise it only on a node reserved for the run
 MEM_KB_MAX=32000000
 # The three libraries the data pairing consults: ALWAYS all three (see "the instance").
 PAIR_SOLVERS="baguette chuffed gcs"
