@@ -1885,6 +1885,15 @@ size on the PB path (every step a `pol` operand), so the two paths pull opposite
 M2-L8 is what decides it. Gate not re-run; docs-only amendment on a tree whose gate was green
 an hour earlier.
 
+**2026-10-30 (agent-mznc, M7-T26, IN FLIGHT -- claim kept).** The edition runs are detached on
+**fataepyc-06** (reserved for this; 07 carries another experiment): `/scratch/arthur/m7t26/<YEAR>/`,
+driver `run_editions2.sh` (PID in `/scratch/arthur/m7t26/pid`), 2025 then 2024 down to 2011, baguette +
+Chuffed only after 2025 (GCS 76/100 CAPPED on 2026). 2026 is read and recorded (D-0105: 12th of 13 in fd,
+49 refused). Read a year with `tools/compare/challenge_rank.py ~/mznc-archive/results/<Y>.json
+bench/challenge/<Y>.lst /scratch/arthur/m7t26/<Y>`; the archive is on 06 too. Do not relaunch; read.
+The node dropped off the network at ~16:30 UTC while 2025 was running -- the runs do not need the link.
+`make check` passed on 06 at `ec349f1` (second clone `baguette-m7t26-gate`).
+
 ## Starting M2-T3: clause learning (1UIP). Read this section first.
 
 Written 2026-09-17 at the close of wave nine, for whoever picks up M2-T3. It is the next
