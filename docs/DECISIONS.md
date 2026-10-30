@@ -9090,3 +9090,57 @@ test is node counts + veripb.
 `int_le_reif` (1217 runs/node on racp, 74 effectful) and `int_lin_le_reif` (662 / 49) are the
 next two families; they are the `reif.ml` dispatcher, which this record does not touch.
 `learned_pb` keeps the survey (D-0085).
+
+## D-0105  M7-T26, MiniZinc Challenge 2026 offline: baguette-fd 12th of 13 in the fixed category, 49 of 100 refused, and the scoring reproduced exactly
+
+**Status**: **MEASUREMENT**, recorded 2026-10-30 (agent-mznc) from one complete run on
+`fataepyc-06` (`DONE-` marker checked, 300 rows), binary = `main` at `ec349f1` (md5 `e12b772a…`),
+the 100 official instances of `bench/challenge/2026.lst`, 1200 s solve, 16 GiB, flatten counted,
+PAR 30 x 3 solvers. Dir `/scratch/arthur/m7t26/2026`; rank by
+`tools/compare/challenge_rank.py ~/mznc-archive/results/2026.json bench/challenge/2026.lst <dir>`.
+
+**The scoring is the organisers'.** All 330 600 stored pairwise scores of the 2026 page
+(58 entrants x 57 x 100) are recomputed identically from status, time and objective, and the
+12 official fixed-category ranks come back unchanged. The same holds on every edition 2013–2026
+(2011–2012 reproduce the ranks, with 137 and 816 pairwise residuals on blank or padded entries).
+Three rule changes had to be found in the data: times split in milliseconds up to 2017 and in
+floored seconds from 2018; the worse of two incomplete answers scores 0.5 in 2021–2025 and 0
+otherwise; 2011–2012 split all-or-nothing on a 0..2 scale.
+
+### Fixed category, baguette inserted alone (`--no-chuffed`)
+
+| rank | entrant | score |
+|---|---|---|
+| 1 | chuffed-fd | 693.3 |
+| 2 | or-tools_cp-sat-fd | 689.1 |
+| … | huub, huub-dl, pumpkin (6th), choco-lcg, gecode, jacop, sicstus, choco | |
+| 11 | thornbill-fd | 244.7 |
+| **12** | **baguette-fd** | **149.9** |
+| 13 | nucs-fd | 147.0 |
+
+Baguette: **OPT 11, SAT 4, UNSAT 1** (all 16 proofs VERIFIED, no demotion), TIMEOUT 35 (12 with an
+incumbent, scored S), **REFUSED 49**, so 72 instances score UNK. Points come from `filters` 34.5,
+`gcc-benchmark` 33.6, `zephyrus-2016` 18.3, then 12.5 each on atp-stage2, nside, saeling,
+workforce-alloc (one instance solved fast each), rect-euler 7.5, sdn-chain 6.0; zero on 8 of the
+20 problems. The 49 refusals are **36 width wall** (D-0028: `objective` over 21 755 to
+7.7 million values; 26 non-negative, 10 signed ranges), **11 heap budget exhausted** (M7-T8, the
+8 GiB `--max-heap-mb` the harness derives from 16 GiB), and **2 `fzn_global_cardinality` with a
+repeated variable** (gcc.ml's tally assumption, community-detection) — nothing was refused for a
+missing global this year, because mznlib decomposes them; whole problems lost that way: warehouse,
+tdtsp, multiple-constant-multiplication, gbac, community-detection (5 of 5 each).
+
+### Calibration: our Chuffed against the Challenge's
+
+`chuffed-ours-fd` on the same 100: OPT 31, SAT 6, UNSAT 1, TIMEOUT 62 — status agrees with the
+official `chuffed-fd` on **99 of 100** (S/S 50, SC/SC 30, UNK/UNK 18, C/C 1; one S -> SC). Time
+ratio ours / official on the 37 instances both completed: **geometric mean 0.44, median 0.42** —
+this node is about 2.3x faster than the 2026 Challenge machine, so inserted it ranks *above* the
+official Chuffed (830.7 vs 719.0). Baguette's time-split points carry the same advantage; its
+rank does not depend on it (the gap to 11th is 95 points, almost all quality).
+
+GCS, run with proofs at the default 16 GB cap: **76 CAPPED**, 8 OPT, 5 SAT, 7 TIMEOUT — D-0103's
+finding again, now at the default cap. Not a calibration; it is dropped from the later editions.
+
+**Reading.** On the newest edition baguette is above one entrant and solves 16 of 100 with a
+verified proof, and the half it does not attempt is the width wall and the heap, not search.
+That is the standing of M7's "real instances" today, in the Challenge's own units.
