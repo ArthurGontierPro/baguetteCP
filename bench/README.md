@@ -1254,3 +1254,36 @@ through the real harness, real baguette and real veripb, with a stub `minizinc` 
 is installed and two shims for Chuffed and GCS — the GCS shim deliberately answers UNSAT to
 everything — and asserts SAT, UNSAT, OPT, REFUSED, NO-PROOF, two `DISAGREE`s, one `AGREE`,
 resumption and a `PIN-MISMATCH`. It fails, never skips, without baguette or veripb.
+
+## 9. The Challenge editions as benchmark sets, and the offline rank (M7-T26)
+
+`bench/challenge/<YEAR>.lst`, 2011–2026, is the **official instance set of that edition**:
+the 100 (model, data) pairs of `mznc<YEAR>_probs.tar.gz`, in the order of the results
+page's `results.json`, one id per instance (`2025_atsp_instance11_0p25`), five per model —
+not the one-data-file-per-model walk `shared_set.lst` is. `tools/compare/challenge_lists.py
+~/mznc-archive bench/challenge` regenerates them from the download and checks every path
+against the tarball; the benchmark *name* is the authority where `locations` is misaligned
+(2012 filters, 2013 l2p, 2014 amaze and cyclic-rcpsp), and each such case is a `#` line.
+
+A run over an edition is `compare_run.sh` with `INSTANCES=` instead of a corpus walk,
+under the edition's rules (20 min, 16 GiB, compile time inside the limit — `flatten.tsv`'s
+last column is the flatten's wall time for that):
+
+```sh
+INSTANCES=bench/challenge/2025.lst SOLVE_TIMEOUT=1200 FLATTEN_TIMEOUT=1200 MEM_KB=16777216 \
+  SOLVERS="baguette chuffed gcs" scripts/compare_run.sh /scratch/arthur/mznc /scratch/arthur/m7t26/2025
+python3 tools/compare/challenge_rank.py ~/mznc-archive/results/2025.json bench/challenge/2025.lst \
+  /scratch/arthur/m7t26/2025            # --category=free, --trust-unverified, --all
+```
+
+`challenge_rank.py` first **reproduces the edition's own scoring** from `results.json`
+(every stored pairwise score recomputed from status, time and objective; it is exact on all
+sixteen editions, with three time rules and one half-point rule that changed over the
+years — its header lists them), then inserts `baguette-fd` in the fixed category and
+prints the ranking, with the official entrants' recomputed ranks beside their official
+ones. A REFUSED, a FLATTEN-FAIL or a missing row is a `UNK` and scores as one; a baguette
+OPT/UNSAT whose proof is not VERIFIED is demoted unless told otherwise. Our Chuffed rows go
+in too (`chuffed-ours-fd`): its rank against the official `chuffed-fd`, and the time ratio
+on the instances both completed, are the machine's scale factor. The rank is **indicative**
+— different hardware, and a solver that did not enter — and each edition's figures are a
+D-xxxx MEASUREMENT (D-0105 onwards).
