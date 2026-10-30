@@ -375,7 +375,12 @@ worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 uni
 **Wave twenty-seven, dispatched 2026-09-23 from `24336ee`.** Three rows, one worktree each
 (`wave27-search` / `wave27-rup` / `wave27-guard`), files disjoint. All three are children of
 D-0068, the first full corpus run. `lib/proof/encoding.ml` goes to agent-guard; if agent-rup
-needs it, that is a `## Cross-session requests` row, not an edit.
+needs it, that is a `
+| Task | Files being touched | Session | Since |
+|---|---|---|---|
+| M7-T26 | `scripts/compare_run.sh` (the `INSTANCES` list mode), `tools/compare/challenge_rank.py` (new), `tools/compare/challenge_lists.py` (new), `bench/challenge/**` (new), `docs/DECISIONS.md` (D-0105 and following, append), `docs/ROADMAP.md` (its row). Runs on **fataepyc-06** (reserved 2026-10-30; 07 carries another experiment) | agent-mznc | 2026-10-30 |
+
+## Cross-session requests` row, not an edit.
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
