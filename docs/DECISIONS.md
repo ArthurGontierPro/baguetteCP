@@ -9400,3 +9400,62 @@ starts: the order encoding over the declared objective width, and the heap that 
 bounded objective (`objective` views, or a lazily grown ladder, the M7 width discussions) and a
 heap budget that scales with the box would turn 533 of the 543 refusals into attempts; what those
 attempts would score is the next measurement, not this one. The free category (`-f`) was not run.
+
+## D-0122  M7-T26, what the 1 600 Challenge instances ask for, against what baguette propagates natively; and a word on the comparison itself
+
+**Status**: **MEASUREMENT**, recorded 2026-11-02 (agent-mznc), by `tools/compare/challenge_globals.py
+~/mznc-archive bench/challenge <runs>` over the sixteen runs of D-0105 to D-0121.
+
+**The comparison is not like for like, and D-0121 should be read with that in mind.** Every
+Challenge entrant runs without proof logging; baguette has no such mode (D-0046) and every row of
+D-0105 to D-0121 was produced writing a VeriPB 3.0 proof. The order encoding that makes the proof
+possible is also what the width wall (388 refusals) and the heap budget (145) are made of. So the
+ranks measure "baguette with its proof against solvers without one", which is the standing the
+project wants to know, but a gap to the entrant above is not a gap in search alone.
+
+**Vocabulary, because it was misread once.** A harness `REFUSED` is the FRONT END refusing the
+FlatZinc before any search (exit 2 or 3: a declared width over the cap, the heap budget, a
+`fzn_global_cardinality` with a repeated variable, a `var int` with no inferable bound). It is not a
+proof refused by the checker, which would be `check_verdict REJECTED`; across the 169 complete
+answers of the sixteen editions that count is 0.
+
+**The census** (instances using the global, out of 1 600; outcome of baguette on them; `complete%`
+is OPT+UNSAT over the instances attempted, i.e. not refused and flattened):
+
+| global | instances | native | REFUSED | OPT+UNSAT | incumbent | TIMEOUT, no solution | complete % |
+|---|---|---|---|---|---|---|---|
+| natives only, or none | 614 | | 181 | 58 | 233 | 120 | 14 |
+| cumulative | 241 | yes | 125 | 20 | 43 | 34 | 20 |
+| alldifferent / all_different | 299 | yes | 89 | 15 | 86 | 90 | 8 |
+| count family | 192 | no (D-0097 withdrawn) | 91 | 13 | 69 | 18 | 13 |
+| diffn | 140 | no | 68 | 17 | 22 | 26 | 26 |
+| table | 135 | no | 61 | 9 | 28 | 29 | 13 |
+| **regular** | 110 | no | 16 | **0** | 24 | **70** | **0** |
+| circuit | 95 | no | 31 | 6 | 18 | 32 | 11 |
+| value_precede(_chain) | 105 | no | 54 | 2 | 32 | 1 | 5 |
+| **inverse** | 70 | no | 20 | 4 | 1 | **44** | 8 |
+| **bin_packing_load** | 65 | no | 48 | **0** | 17 | 0 | 0 |
+| global_cardinality(_low_up) | 110 | yes | 40 | 5 | 36 | 29 | 7 |
+| **global_cardinality_closed** | 30 | **no** (gcc + a domain restriction) | 0 | 1 | 3 | **26** | 3 |
+| member | 40 | no | 19 | 1 | 0 | 20 | 5 |
+| nvalue | 40 | no | 14 | 15 | 8 | 3 | 58 |
+| lex_less / lex_lesseq / lex_greatereq | 95 | no | 5 | 17 | 56 | 17 | 19 |
+| var set of | 35 | no | 17 | 1 | 7 | 8 | 6 |
+
+**Reading.** On the instances that reach search, the baseline (natives only) completes 14 %, and
+the decomposed globals sort into three groups. Those that are plainly killing the search: `regular`
+(0 of 94 attempted, 70 of them time out without a single solution), `inverse` (44 of 50 attempted
+time out empty), `member` and `global_cardinality_closed` (46 of 51 empty), `bin_packing_load` (0
+complete). Those that do about as well as the baseline through the standard decomposition: `table`,
+`circuit`, `diffn`, `count`, the lex family. And those that are better than the baseline, so not a
+priority: `nvalue`, `at_most`/`at_least`, `network_flow_cost`, `maximum`. Two of the first group
+are cheap: `global_cardinality_closed` and `_low_up_closed` are gcc over a closed value set, one
+mznlib line each onto gcc.ml plus the domain restriction; `member` is a disjunction of equalities
+over a `View`. `regular` and `inverse` are propagators to design, with their proof stories
+(`regular` unfolds to a layered graph whose arcs are clauses over order literals, the natural
+object for a `rup`-based justification; `inverse` is element both ways). `circuit` and `table`
+stay where M4-T6 left them: decomposition is competitive here, so a native one is a speed row,
+not a reach row.
+
+The same join over the 543 refusals changes nothing in D-0121's conclusion: 181 of them are on
+models with no decomposed global at all, and they are width and heap wherever they fall.
