@@ -9538,3 +9538,143 @@ and expected the cost; this is its first measurement at Challenge scale.
 Which of the two reason shapes in (a) is right, and whether (c) needs a new carrier at all once
 (a) and (b) have moved families B and C into attempts. Both are measurements to take after,
 not before.
+
+## D-0124  M7-T27 (a): a `Linear` pruning's reason is materialised LATER, from the trail's history, not snapshotted per term at the push
+
+**Status**: DECIDED and implemented, 2026-11-02 (agent-reason, branch `wave40-reason`). Follows
+D-0123 (sub-row (a)). Amends one sentence of D-0026; narrows nothing in I-X6, I-X9 or D-0035.
+Reproduce on `fataepyc-06`: `/scratch/arthur/m7t27a/` holds both binaries and the eight runs.
+
+### Step 1, the measurement that chose the shape
+
+Instance `2012_pattern-set-mining-k1_mushroom` (28 MB `.fzn`), `--time-limit 60 --max-heap-mb
+60000 --stats`, `OCAMLRUNPARAM=v=0x400`, binary at `9b1a230` (md5 `bb2f2779`): 4 nodes, 65 615
+propagator runs, **5.84 GB** peak RSS, major heap 747 M words. A temporary counter in `linear.ml`
+and `store.ml` (not kept) said where it went: **44 633 Linear runs, 8 230 prunings, 16.9 M
+per-term snapshot records built, 16.9 M facts pushed, 14.9 M facts still live on the trail at
+exit** -- about 2 058 records per pruning, and about **2 prunings per effective run**.
+
+D-0123's hypothesis was right about the mechanism and wrong about the row. The 8 124-term
+objective row ran 8 times in 4 nodes (1 effective run per node). The sink is the **105
+`int_lin_le_reif` rows over 3 800 to 4 200 Booleans** (plus 8 123 over 98), which
+`reif_lin_le.ml` compiles to two big-M `int_lin_le` rows each: 7 065 runs and 1 005 effective
+runs per node, every pruning snapshotting ~4 000 terms, nearly all of them at their declared
+bound and so materialising to **no literal at all**.
+
+That number, 2 prunings per effective run, is what decided between the two shapes D-0123
+named. **(ii), one shared snapshot per row per fixpoint, divides the retained records by the
+prunings per run: a 2× remedy for a 25× problem.** (i), the reason holding only the row and
+the trail position, retains nothing per term.
+
+### What I-X6 forbids, and why reading the trail's history at a fixed position is not it
+
+I-X6 forbids a thunk that reads **live** state: "forcing it later must render the derivation
+as of the moment the pruning was made, not as of now". The live store is the thing that
+moves. The trail below a live entry does not:
+
+- the trail is a stack. `undo_to` pops from the top; a popped slot is overwritten with
+  `dummy_entry`; every `apply` allocates a fresh record. So while the entry pushed at
+  position `p` is on the trail, every position below `p` holds the **same physical record**
+  it held at the push, with the same `old`, `now`, `sup_lo`/`sup_hi` and the same live
+  arena id (I-T1, and the arena is truncated only by `backtrack`, to the level's mark);
+- a `Store.history` is that cut: `{store; upto = p; witness = trail.(p-1)}`. Its lookups
+  (`lo_at`, `hi_at`, `lo_reasons_at`, `hi_reasons_at`) walk each bound's own support chain
+  (`sup_lo`/`sup_hi`, newest first) back **past** `p` before answering, so nothing at or
+  after the pruning is readable through it, whatever is asked;
+- `check_history` refuses, by **physical identity** of the witness, to answer once the trail
+  has been unwound below `p` -- including the case where it has been re-pushed to the same
+  length with other entries, which a check on positions alone would answer wrongly and
+  silently. That check runs on every materialisation, from either half, and is O(1).
+
+So a snapshot taken when the reason is finally asked for is the snapshot that would have
+been taken at the push, by construction rather than by copying. The facts are the bounds as
+recorded at positions below `p`, the same values the per-term record used to hold, so
+**D-0035/I-X9 are untouched**: the reason still justifies the bound as recorded, the
+justification is the same `Combine` over the same snapshot, and the whole model suite emits
+**byte-identical `.opb`/`.pbp`** (`make check`'s determinism lane and the model tests, below).
+
+**D-0026 amended, one sentence.** "Laziness lives in *when* the reason is materialised, not in
+a closure per pruning" was written against a closure over the **live** store (GCS's
+`Narrowable*`, I-X6's own failure mode). A closure over a frozen history is laziness in *when*,
+with the captured environment a snapshot by I-T1. The type-level discharge D-0026 claimed
+("`Reason.lits` takes no store") becomes: a `Later`'s function is handed a `Store.history` and
+no store -- `Linear.justified_at`'s signature, the same move `explain_cross_conflict
+~opposite` made -- plus the witness check at run time. What remains discipline is that
+signature, which is what docs/INVARIANTS.md I-X6 now says.
+
+### The decision
+
+Shape **(i)**:
+
+- `Reason.t` is `Facts of fact list | Later of {compute; empty}`. `because` is unchanged and
+  wraps `Facts` (109 producer sites untouched); `because_later ~empty` is the new channel;
+  `Reason.facts` is the one place a stored reason becomes its list. `empty` is carried so
+  that `is_empty`, which `Analysis` asks per node, stays O(1); `Store.check_agreement`
+  asserts it against the materialisation under `BAGUETTE_DEBUG`. **Nothing memoises**: what a
+  memo would keep is exactly the per-term list this arm exists not to keep, and a reason is
+  asked once by the trace and once per cut by analysis.
+- `Store.history`, `history_live`, `check_history`, `lo_support_at`/`hi_support_at`,
+  `lo_at`/`hi_at`, `lo_reasons_at`/`hi_reasons_at`, `history_name`, `created_domain`.
+- `Linear.snapshot_at h tm` replaces the live read (`snapshot_source store` is now its
+  live-history wrapper, kept for the conflict paths and `test_matrix.ml`'s probe);
+  `row_snaps_at`, `justified_at`. **Prunings are deferred, conflicts stay eager**: a
+  conflict's reason is consumed where it is raised and its justification forced before any
+  backtrack, so there was nothing to defer.
+- Consumers of a stored reason go through `Reason.facts`: `analysis.ml` (3 sites),
+  `alldiff.ml` (2), `element.ml` (2), `cumulative.ml` (1), `bool2int.ml` and `analysis.ml`
+  take `lits_of_facts`/`to_string_facts` on plain lists. The claim row did not name these
+  files; the edits are one-line type adaptations and no other session holds them.
+
+### Measured after (same instance, same flags; md5 before `bb2f2779`, after `469b5629`, after+`fact_at` `950317c3`)
+
+| | before (`9b1a230`) | after (`ac7a6cc`) | after + `fact_at` (`22ae7b9`) |
+|---|---|---|---|
+| 60 s: nodes / propagator runs | 4 / 65 615 | 4 / 65 615 | 4 / 65 615 |
+| 60 s: peak RSS | **5.84 GB** | **1.80 GB** | **1.77 GB** |
+| 60 s: major heap at exit | 747 M words | 221 M words | 214 M words |
+| 300 s: nodes / conflicts / propagator runs | 77 / 36 / 342 546 | 67 / 31 / 304 311 | 67 / 31 / 304 311 |
+| 300 s: peak RSS | **8.71 GB** | **2.15 GB** | **2.18 GB** |
+| 300 s: words allocated / promoted | 39.2 G / 5.3 G | 45.5 G / 6.7 G | 39.1 G / 5.4 G |
+
+The 300 s pair was run twice, once beside `make check` and once on an idle node: the node
+counts are identical both times (77 and 67), so the difference is deterministic, not load.
+Of the 1.8 GB after, **1.0 GB is the encoding** (D-0123 family C, sub-row (b)), so the
+search's share went from ≈1.2 GB per node to ≈0.2 GB per node. The search itself is unchanged
+where it is comparable: at 60 s the same 4 nodes, the same 65 615 runs, the same 16 473
+effective runs; `make check`'s determinism lane reports the 156 models' `.opb`/`.pbp`/stdout
+identical.
+
+**The time cost, measured and located.** Fewer nodes in 300 s (67 against 77) with 33% more
+words allocated per node. A counter on `Reason.facts` (not kept) counted **146 055
+materialisations of a `Later`, 526 M facts, for about 15 000 Linear entries**: the trace asks
+once per entry, and the other ~130 000 asks are conflict analysis -- `Analysis.analyse
+~scope:Everywhere` (the decision closure search asks for at each conflict) expands every
+reachable entry including the **root-level** Linear entries, about 4 200 expansions of 3 600
+facts at each of the 31 conflicts. Before, an expansion found the facts already built; now it
+rebuilds them. `fact_at` (commit `22ae7b9`) takes the reason half's materialisation from 17 to
+7 words per term by building the fact straight from `value_at`, which puts the words allocated
+and promoted back at the baseline (39.1 G / 5.4 G against 39.2 G / 5.3 G) -- and the node
+count stays at 67. So the cost is not allocation but the **walk**: 526 M history lookups per
+300 s, each a support-chain step or two, about 40 s of the 300. It is paid where the closure
+re-expands entries whose level is 0, which cannot contribute a decision, and that is
+analysis.ml's to remove (below).
+
+### What it does not decide
+
+- **The decision closure at level 0.** `Analysis.decision_closure`/`~scope:Everywhere`
+  expands root-level entries at every conflict; an entry at level 0 rests on level-0 facts
+  only and can add no decision to the closure, so stopping the expansion at level 0 would
+  remove the ~4 200 re-materialisations per conflict measured above without changing the
+  closure. Not done here: analysis.ml is outside this claim, `resolutions`/`antecedents` are
+  reported as stats and the change wants its own measurement. A per-conflict memo table in
+  `Analysis` is the other shape; a memo on the `Later` itself is not, because what it would
+  keep is the list this record exists not to keep.
+- Where the remaining ≈0.2 GB per node goes (20 682 entries in 4 nodes; `bool2int`'s and the
+  reif rows' own entries, the arena, the watch lists) -- not measured.
+- (c) width and (d) the front end, untouched; the 1.0 GB encoding is (b).
+- Whether the per-pass snapshots of `alldiff`/`gcc`/`cumulative`/`element` (one per pass,
+  I-P6) want the same treatment: not measured on an instance where they dominate. The
+  `Store.history` lookups are general and would serve them.
+- `Trace.done_` keeps a reference to every entry it has written, overwritten only when a new
+  entry lands at the same position; with a `Later` that is a closure, with the old shape it
+  was the whole per-term list. Bounded by the trail's depth, not measured, worth a look.

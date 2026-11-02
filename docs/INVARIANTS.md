@@ -116,6 +116,19 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
   thunk can still close over the store, and on the justification half nothing but
   discipline stops it. That is what M2-T3 should be careful of.
 
+  **The reason half is deferred again since M7-T27 (a), D-0124 -- through a HISTORY, not
+  the store.** `Reason.t` has a `Later` arm whose function reads a `Store.history`: the
+  trail cut at the pruning's own position, and nothing at or past it. That is a snapshot
+  by I-T1 rather than by copying (every position below a live entry holds the same
+  physical record it held at the push), and `Store.check_history` refuses, by a physical
+  witness, to answer once the trail has been unwound below the cut. So "a reason cannot
+  read live state even by mistake" now reads: a reason cannot read anything the history
+  does not hold, and the history holds the past only. What is still discipline is the
+  producer: `Linear.justified_at` takes a `Store.history` and no store, the same
+  signature move `explain_cross_conflict ~opposite` makes. Three tests in `test_prop.ml`
+  (`test_d0124_*`) catch a reason citing a later bound, a reason read after its history
+  is gone, and a wrong emptiness flag. D-0124 says why the memory made this worth it.
+
 - **I-X7** What `conclusion UNSAT` cites is a line the checker has itself established is a
   contradiction — either a `pol` chain closing at `0 >= k` (D-0013) or an explicitly
   derived empty clause (D-0022). A propagator's reason is never cited as a contradiction
