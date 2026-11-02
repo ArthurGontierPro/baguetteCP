@@ -3535,6 +3535,34 @@ exact on 2013–2026, ranks reproduced on 2011–2012), `bench/README.md` §9, D
   Have the detached script write `$$` to its own pidfile and kill by PID only.
 
 
+### M7-T27 (b) encoding memory, 2026-11-02 (agent-stream, branch `wave40-stream`, from D-0123 family C)
+
+- `lib/proof/encoding.ml`: rows are rendered to the `.opb` body as they are minted (sink chosen
+  by the CLI through `Encoding.row_sink` before `Compile`: `Stream_rows_to PREFIX.opb.rows` with
+  `--proof`, `Discard_rows` without; library default `Retain_rows` keeps `constraints` for tests);
+  the header is COUNTED (`Occurs`: one interval per (owner, kind), the ladder is `[lo+1, hi]`) instead
+  of scanned; `ivar.consistency` (a per-value Hashtbl) is `ladder_base` + arithmetic. `lib/proof/opb.ml`:
+  `write` split into `write_header` + `output_row`, one renderer for both paths. `bin/main.ml`: sets
+  the sink and removes the body file at exit. Tests in `test_proof.ml` (byte identity against
+  `Opb.write`, hand-counted header, rung ids read back) and `test_endtoend.ml` (streamed proof verifies).
+- Binaries on fataepyc-06: `/scratch/arthur/m7t27b/main.before` (main `9b1a230`, md5
+  `bb2f2779e9886cb9f8b857c7e359e855`) and `main.after` (`be229a3`, md5 `462222cc78086dbebc8cc781a22efbca`).
+- wordpress_Wordpress11_Offers500 (26.3 M rungs, 3.04 GB `.opb`, `--time-limit 1`): before 25.2 GB RSS,
+  4:10 wall (compile 79 s, opb 150 s); after **1.33 GB RSS**, 2:10 wall (compile 107 s, opb 2 s).
+  `.opb` md5 identical on both sides (`303543101c99b8aeddd8bd192939b612`).
+- mapping_mesh3x3_mpeg_2 (4.3 M rungs): before dies at the 60 GB heap budget after 8:54 INSIDE the
+  compile phase, no `.opb` ever written; after ran at ~0.9-2 GB RSS but was still writing the body at
+  600 s (9.6 GB of rows: its linear rows over the order encoding, not the ladders, are the bulk).
+  **PENDING**: the re-run with `timeout 3000` -- logs `/scratch/arthur/m7t27b/mesh.after2/{stderr,stdout}`,
+  summary `/scratch/arthur/m7t27b/status2`, pidfile `/scratch/arthur/m7t27b/pid.mesh2`. Read them,
+  do not re-run. The other runs' stderr are in `/scratch/arthur/m7t27b/{wp,mesh}.{before,after}/`.
+- `make check` on the node under the cap: ok, 156 model tests passed, determinism lane identical,
+  peak RSS 85 MB (as `/usr/bin/time` saw it; log `/scratch/arthur/m7t27b/check.log`). Both binaries run
+  over all 156 `test/models/*.fzn`: every `.opb`, `.pbp` and stdout byte-identical.
+- Not done: rendering is ~16-20 MB/s either way (`Lit.to_string` allocates per literal); a model whose
+  `.opb` is tens of GB (mesh) is now I/O-bound and slow rather than dead. That is sub-row (c)'s problem.
+
+
 ## Claims history (archived 2026-11-02, read-only)
 
 What `## Active claims` held from 2026-09-16 to 2026-11-02, moved here verbatim (one broken
