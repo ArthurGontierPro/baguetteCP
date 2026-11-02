@@ -20,7 +20,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M6-T20 | `lib/core/propagator.ml` (advise), `lib/core/engine.ml` (advisor hook, counter, debug check), `lib/core/prop/clause.ml` (Learned_clause watches), `lib/core/search.ml` (register_learned pack), `bin/main.ml` (stats), `docs/INVARIANTS.md` (I-P7, append), `docs/DECISIONS.md` (D-0104, appended) | solo-opt | 2026-10-27 | **Landed** (`29a8238`, `517453b`, `149a06d`; D-0104 ACCEPTED) but **never released**: ROADMAP row still WIP, no handoff note. Left here 2026-11-02 for its session or the next one to close. |
-| M7-T27 | `docs/ROADMAP.md` (M7-T27 row only), `docs/DECISIONS.md` (D-0123, append), `tools/compare/refusal_causes.py` (new), `WORKLOG.md` (own rows) | solo-m7t27 | 2026-11-02 |
 
 ## Cross-session requests
 
@@ -304,8 +303,31 @@ work. The owning session picks it up.
 | M7-T18 | agent-gcc2 | 2026-10-01 | **D-0082** (shared M7-T17's claim; M7-T17 has its own row above). Archived 2026-11-02 |
 | M6-T17 | agent-wipe | 2026-10-02 | `Writer.wipe_level` / `Justify.wipe_level` walk per-level buckets instead of folding whole tables; 396 artefacts byte-identical over 132 models. Handoff note "M6-T17 handoff (agent-wipe, 2026-10-02)". Archived 2026-11-02 |
 | M7-T25 | agent-elearn | 2026-10-03 | **D-0101.** `Element.no_position_conflict` reports its facts above level 0 (`conflict_facts`: per dead position the bound it lies beyond, a result hole's remover's facts, a deep index hole's puncher's facts) under `Store.deriving_ahead`; root stays `Reason.none`. Lanes `element_learn_{hole_sat,hole_unsat,prunes_sat}`, test_learn M7-T25 a/b/c. 2014_mario learned 866 -> 1344 at 120 s, proof VERIFIED; node unreachable |
+| M7-T27 (measurement) | solo-m7t27 | 2026-11-02 | **D-0123.** The 543 Challenge refusals recounted from whole stderr: 520 are the 8 GiB heap budget (14 front end, 347 after the encoding and mostly in search, 159 inside a ladder loop, never the objective); the "388 width" of D-0121 was the warning on a truncated detail column. Four instances under 60 GB answer nothing; pattern-set-mining grows 1.2 GB/node with or without `--proof` from `Linear`'s per-pruning row snapshots (quadratic in row length). ROADMAP row rewritten into sub-rows (a) explanation memory (b) encoding memory (c) width (d) front end, all open; `tools/compare/refusal_causes.py` reproduces the tables |
 
 ## Handoff notes
+
+## M7-T27 measurement handoff, 2026-11-02 (solo-m7t27)
+
+**What changed.** D-0123, the M7-T27 ROADMAP row (now four sub-rows, none started),
+`tools/compare/refusal_causes.py`. No solver code. Also this session: `314018a` (the orphaned
+`Explanation.lits` thunk-marking diff of 2026-10-28, gate green on fataepyc-06) and `aff0b4d`
+(the claims history archived, the SessionStart hook now 1.2 KB).
+
+**What the next session should know.**
+- Start with sub-row (a), the explanation memory, and profile before designing: on
+  `2012_pattern-set-mining-k1_mushroom` (fzn kept at
+  `fataepyc-06:/scratch/arthur/m7t26/2012/work/`) the heap goes 1.0 GB after the encoding to
+  5.9 GB after 4 nodes, proof or no proof. The hypothesis in D-0123 is `linear.ml`'s per-term
+  snapshot list, one per pruning, over its one 8 124-term row. Confirm with a memory profile
+  before changing the reason shape; the shape is a contract (I-X6, D-0013).
+- Sub-row (b) is mechanical and testable by a byte-identical `.opb`: `Encoding.rev_constraints`
+  and the per-value `consistency` Hashtbl are ~300 B per rung of live heap.
+- The probe artefacts are in `fataepyc-06:/scratch/arthur/m7t27probe/` (opb/pbp/err of the four
+  runs, including a 3 GB `.opb` for wordpress); delete them when read, they are not in the repo.
+- `--time-limit` is only checked between nodes; a root that never finishes propagating ends in
+  the harness `timeout` as `killed`, with no stats. Not fixed.
+- M6-T20 (solo-opt, D-0104) is the one live claim: landed, never released, ROADMAP still WIP.
 
 ### M7-T16 handoff
 
