@@ -3746,12 +3746,14 @@ let test_ix6_cross_conflict_snapshot () =
    materialisation after the trail below the pruning has been unwound and re-pushed, which
    a reader that trusted positions alone would answer WRONGLY rather than crash on.
 
-   Scene, both tests: 2x + 3y <= 10 over 0..5, y >= 1 by row 901, so the row pushes
-   x <= floor((10 - 3) / 2) = 3. The reason is [y >= 1]; the justification cites 901. *)
+   Scene, both tests: 2x + 3y <= 10 over x in 0..5, y in 0..3, y >= 1 by row 901, so the
+   row pushes x <= floor((10 - 3) / 2) = 3 and nothing else (y's own bound from the row is
+   3, where it already is -- over 0..5 the row would push y too and the newest entry would
+   not be x's). The reason is [y >= 1]; the justification cites 901. *)
 
 let test_d0124_reason_reads_history () =
   let scene ~move_after =
-    let store = mk_store [ ("x", 0, 5); ("y", 0, 5) ] in
+    let store = mk_store [ ("x", 0, 5); ("y", 0, 3) ] in
     let prop = Linear.make store [ (2, var 0); (3, var 1) ] 10 ~row_id:1 in
     ignore (Store.set_lo store (var 1) 1 placeholder_pruning);
     (match Linear.propagate prop store with
@@ -3771,7 +3773,7 @@ let test_d0124_reason_reads_history () =
         (Store.set_lo store (var 1) 2
            (Reason.because ~concludes:None Reason.none (Explanation.model_row 902)));
       ignore
-        (Store.set_hi store (var 1) 4
+        (Store.set_hi store (var 1) 2
            (Reason.because ~concludes:None Reason.none (Explanation.model_row 903))));
     ( Reason.lits e.Store.reason,
       Reason.to_string e.Store.reason,
@@ -3798,7 +3800,7 @@ let test_d0124_unwound_history_is_refused () =
     | exception _ -> false
     | _ -> false
   in
-  let store = mk_store [ ("x", 0, 5); ("y", 0, 5) ] in
+  let store = mk_store [ ("x", 0, 5); ("y", 0, 3) ] in
   let prop = Linear.make store [ (2, var 0); (3, var 1) ] 10 ~row_id:1 in
   Store.new_level store;
   ignore (Store.set_lo store (var 1) 1 placeholder_pruning);
