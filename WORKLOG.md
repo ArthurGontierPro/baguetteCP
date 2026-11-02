@@ -378,7 +378,6 @@ D-0068, the first full corpus run. `lib/proof/encoding.ml` goes to agent-guard; 
 needs it, that is a `
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M7-T26 | `scripts/compare_run.sh` (the `INSTANCES` list mode), `tools/compare/challenge_rank.py` (new), `tools/compare/challenge_lists.py` (new), `bench/challenge/**` (new), `docs/DECISIONS.md` (D-0105 and following, append), `docs/ROADMAP.md` (its row). Runs on **fataepyc-06** (reserved 2026-10-30; 07 carries another experiment) | agent-mznc | 2026-10-30 |
 
 ## Cross-session requests` row, not an edit.
 
@@ -1013,6 +1012,7 @@ work. The owning session picks it up.
 | M4-T10 | agent-cumulative | 2026-10-02 | D-0096 (census of the 69, worked proof checked, GO) + `cumulative.ml`, mznlib routing, 3 lanes; front-end arms and conflict learning by request (two patches in `docs/requests/`); branch `wave38-cumulative`, not merged |
 | M4-T5 (deliverable 1, partial) | agent-hints | 2026-10-03 | D-0102: RUP hints measured by hand via veripb elaboration on the suite (153/153 verify hinted, 1.0x at the floor) and scratch php20/28 (1.4-1.5x); per-line opt-out confirmed; corpus lane BLOCKED (node unreachable); NOT GO; no solver code; `bench/m4t5/` |
 | M6-T19 | solo-opt | 2026-10-23 | **I-P6 (one snapshot, every deduction)** in `alldiff`, `cumulative` (incremental refresh of the pushed task), `gcc`, `element`; `Propagator.pass_counters` under `--stats`. Node: 3326 unit ok, 156/156 models, corpus before/after (`compare-out-m6t19-{before,after}`) 0 lost / 0 mismatch / 1 gained, sgm+1 9.23 -> 9.17 s. **The restart was not where the time goes**: `props` is 10^6..10^7 runs for 10^3..10^4 nodes (racp 42.8M runs / 8565 nodes); several `cumulative` corpus instances show `passes 0` (decomposed by mznlib, not our propagator). Weekend chain on the node, see handoff |
+| M7-T26 | agent-mznc | 2026-11-02 | **D-0105 to D-0121.** `bench/challenge/<Y>.lst` (2011–2026, the official 100 instances each, from `challenge_lists.py`), `compare_run.sh INSTANCES=<list>` with the flatten time in `flatten.tsv`, `challenge_rank.py` reproducing every stored pairwise score of every edition and inserting baguette in the fd or free category. Sixteen editions run on fataepyc-06 at 1200 s / 16 GiB: baguette-fd last in 13, next to last in 3 (2012, 2016, 2026); 169 complete answers, all proofs VERIFIED, 0 REJECTED; 543 REFUSED = 388 width wall + 145 heap budget + 9 gcc repeated variable + 1 unbounded var. Our Chuffed agrees with the official on 90–99/100 per year; the node is 1.6–2.3x faster than the Challenge machine from 2021 on. One classifier wording fixed on the way (veripb words infeasibility on an optimisation proof as `BOUNDS INF <= obj <= INF`, 7c8b6ed) |
 
 ## Handoff notes
 
@@ -4191,3 +4191,30 @@ proof cap this run set (do not halve `PROOF_CAP_KB` again on a ranking run). Lon
 10 gained over 300 s, 0 lost, 0 mismatch; REFUSED grows 67 -> 80 because longer runs reach the width
 wall rather than the time limit. Next open row: `props` per node (D-0085 watched slack, D-0087
 priority), not more pass work.
+
+## M7-T26 handoff, 2026-11-02 (agent-mznc): the Challenge editions as benchmark sets, and the offline rank
+
+**What changed.** `bench/challenge/2011.lst … 2026.lst` and `tools/compare/challenge_lists.py` (their
+generator, from `~/mznc-archive`), `scripts/compare_run.sh` `INSTANCES=<list>` (runs exactly the listed
+(id, model, data) triples; `flatten.tsv` carries the flatten wall time as its last column),
+`tools/compare/challenge_rank.py` (the organisers' scoring reproduced from each year's `results.json`,
+exact on 2013–2026, ranks reproduced on 2011–2012), `bench/README.md` §9, D-0105 to D-0121.
+
+**What the next session should know.**
+- The sixteen runs are on `fataepyc-06:/scratch/arthur/m7t26/<Y>/` (tables also in this session's
+  scratchpad, not in the repo). Read them, do not relaunch: `python3 -I tools/compare/challenge_rank.py
+  ~/mznc-archive/results/<Y>.json bench/challenge/<Y>.lst /scratch/arthur/m7t26/<Y> [--no-chuffed]`.
+  The node was reserved for this task; it is free again.
+- D-0121 is the table. The standing is last or next to last in fd in every edition, and 533 of the
+  543 refusals are the width wall (388) and the heap budget (145), decided before search. The two
+  open mechanical items: `fzn_global_cardinality` with a repeated variable (gcc.ml, 9 instances,
+  community-detection 2017/2021/2026) and a `var int` with no domain and no inferable bound
+  (2021 MZNC_connect, 1 instance). The free category (`-f`) was not run; `challenge_rank.py
+  --category=free` is ready for it.
+- `~/mznc-archive/PISTES-pumpkin-pour-baguette.md` lists six Pumpkin-inspired conflict-analysis
+  ideas (per-variable index, restarts, CPIP, extended propagation, LBD tiers, methodology). They
+  are **not** tasks of M7-T26 and nothing of them was implemented; a future ROADMAP row may point
+  there.
+- Trap met this week: `setsid nohup cmd &` inside an ssh one-liner gives `$!` of a subshell, and
+  GNU `timeout` puts its child in its own process group, so a group kill leaves solver orphans.
+  Have the detached script write `$$` to its own pidfile and kill by PID only.

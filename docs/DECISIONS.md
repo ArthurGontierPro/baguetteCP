@@ -9144,3 +9144,259 @@ finding again, now at the default cap. Not a calibration; it is dropped from the
 **Reading.** On the newest edition baguette is above one entrant and solves 16 of 100 with a
 verified proof, and the half it does not attempt is the width wall and the heap, not search.
 That is the standing of M7's "real instances" today, in the Challenge's own units.
+
+## D-0106  M7-T26, MiniZinc Challenge 2025 offline: baguette-fd 10th of 10 in fd, 61 of 100 refused, Pumpkin 7th
+
+**Status**: **MEASUREMENT**, recorded 2026-11-02 (agent-mznc). Setup shared by D-0106 to D-0121: one
+complete run per edition on `fataepyc-06` (`DONE-` marker checked, 200 rows, 300 for 2025 and 2026),
+binary `main` at `ec349f1` (md5 `e12b772a…`), the 100 official instances of `bench/challenge/<Y>.lst`,
+1200 s solve, 16 GiB, flatten counted, PAR 30, baguette + Chuffed (GCS dropped after D-0105). Dirs
+`/scratch/arthur/m7t26/<Y>`; rank by `tools/compare/challenge_rank.py ~/mznc-archive/results/<Y>.json
+bench/challenge/<Y>.lst <dir> [--no-chuffed]`; the ranks below are baguette inserted alone, the
+scoring reproduces every stored pairwise score and every official fd rank (D-0105). An `ERROR` row
+in these editions is always `Fatal error: allocation failure during minor GC`, the OCaml runtime at
+the 16 GiB address-space limit, on a model the width warning had already flagged; it scores ERR.
+
+**fd, 10 entrants**: or-tools_cp-sat 615.1, chuffed 567.4, huub 495.5, gecode, choco cp-sat, sicstus,
+**pumpkin 7th** 412.4, jacop, choco cp 325.4, **baguette 10th, 69.3**. Baguette: OPT 10 (all VERIFIED),
+TIMEOUT 27 (12 with an incumbent), FLATTEN-FAIL 2 (gt-sort, flatten over 1200 s), **REFUSED 61 = 35
+width wall + 26 heap budget**; 78 UNK. Points: ihtc-2024-kletzander 26.5, products-and-shelves 14.9,
+tsptw 7.0, stripboard 7.0, mondoku 6.1, skill-allocation 4.8, hitori 4.4, is 2.0; zero on 11 of 20
+problems (EchoSched, atsp, black-hole, carpet-cutting, cgt, groupsplitter, gt-sort, ihtc-2024-marte,
+proteindesign12, tower, work-task-variation). Calibration: our Chuffed agrees with the official on
+96/100, time ratio ours/official geomean 0.50, median 0.68; inserted it ranks 1st (679.5 vs 602.4).
+
+## D-0107  M7-T26, Challenge 2024 offline: baguette-fd 9th of 9, 29 refused, Pumpkin 5th
+
+**Status**: **MEASUREMENT**, recorded 2026-11-02 (agent-mznc), setup as D-0106.
+
+**fd, 9 entrants**: or-tools_cp-sat 552.5, chuffed 539.2, choco cp-sat 424.7, sicstus 390.2,
+**pumpkin 5th** 372.9, gecode 366.0, jacop 341.5, choco cp 340.8, **baguette 9th, 192.8**. Baguette:
+OPT 10, UNSAT 1 (11 VERIFIED), TIMEOUT 53 (30 with an incumbent), **REFUSED 29 = 17 width + 12 heap**,
+FLATTEN-FAIL 5 (train-scheduling, all five), ERROR 2 (cable-tree-wiring, `objective` width 21 M);
+46 UNK. Points on 13 of 20 problems: fox-geese-corn 26.7, accap 24.0, neighbours 22.5,
+monitor-placement-1id 20.4, tiny-cvrp 19.5, triangular 19.5, peacable_queens 18.5, compression 14.1,
+word-equations 13.7, graph-clear 13.0, portal 9.4; zero on aircraft-disassembly, cable-tree-wiring,
+community-detection, harmony, hoist-benchmark, train-scheduling, yumi-dynamic. The gap to 8th is
+148 points. Calibration: Chuffed agrees 90/100 (the 10 are S/SC and S/UNK edges either way), time
+ratio geomean 0.60, median 0.74; inserted it ranks 2nd.
+
+## D-0108  M7-T26, Challenge 2023 offline: baguette-fd 7th of 7, 31 refused
+
+**Status**: **MEASUREMENT**, recorded 2026-11-02 (agent-mznc), setup as D-0106.
+
+**fd, 7 entrants**: or-tools_cp-sat 391.5, chuffed 366.1, gecode 295.7, sicstus 267.1, choco 245.3,
+jacop 241.7, **baguette 7th, 120.1**. Baguette: OPT 13 (VERIFIED), TIMEOUT 52 (30 incumbents),
+**REFUSED 31 = 20 width + 11 heap**, ERROR 2 (travelling-thief; unit-commitment with `obj` declared
+0..2147483646), FLATTEN-FAIL 1 (test-scheduling); 55 UNK. Points on 14 of 20 problems: roster 32.5,
+speck-optimisation 22.0, valve-network 14.5, pennies-opt 13.0, mrcpsp 10.4, table-layout 9.3; zero on
+elitserien, evm-super-compilation, roster-shifts-bool, travelling-thief, unit-commitment, vrplc.
+Calibration: Chuffed agrees 97/100, time ratio geomean 0.52, median 0.66; inserted it ranks 2nd.
+
+## D-0109  M7-T26, Challenge 2022 offline: baguette-fd 7th of 7, 33 refused
+
+**Status**: **MEASUREMENT**, recorded 2026-11-02 (agent-mznc), setup as D-0106.
+
+**fd, 7 entrants**: or-tools_cp-sat 447.6, chuffed 384.9, sicstus 276.8, jacop 259.2, gecode 254.8,
+choco 239.4, **baguette 7th, 105.4**. Baguette: OPT 5 (VERIFIED), TIMEOUT 60 (32 incumbents),
+**REFUSED 33 = 26 width + 7 heap**, FLATTEN-FAIL 2 (yumi-static, `maximum` of an empty set under
+MiniZinc 2.10); 63 UNK. Points on 10 of 20: nfc 21.8, triangular 19.0, accap 17.5,
+generalized-peacable-queens 13.0, gfd-schedule 12.1, spot5 10.5; zero on arithmetic-target,
+blocks-world, ma-path-finding, roster-sickness, rotating-workforce-scheduling, stripboard, sudoku_opt,
+tower, traveling-tppv, wordpress. Calibration: Chuffed agrees 96/100, time ratio geomean 0.66,
+median 0.78; inserted it ranks 2nd.
+
+## D-0110  M7-T26, Challenge 2021 offline: baguette-fd 7th of 7, 41 refused
+
+**Status**: **MEASUREMENT**, recorded 2026-11-02 (agent-mznc), setup as D-0106.
+
+**fd, 7 entrants**: or-tools_cp-sat 372.9, chuffed 311.5, jacop 256.7, gecode 253.5, sicstus 249.9,
+choco 188.7, **baguette 7th, 94.8**. Baguette: OPT 5 (VERIFIED), SAT 6, TIMEOUT 42 (17 incumbents),
+**REFUSED 41 = 31 width + 7 heap + 2 `fzn_global_cardinality` repeated variable
+(community-detection-rnd) + 1 `var int` with no domain and no inferable bound (`fplen`,
+MZNC_connect)**, FLATTEN-FAIL 5 (yumi-dynamic, same `maximum` error as 2022), ERROR 1 (wmsmc-int);
+66 UNK. Points on 10 of 20: physician-scheduling 25.0, steiner-systems 15.8, neighbours 14.9,
+peacable_queens 14.0, java-routing 11.5, opt-cryptoanalysis 9.2, seat-moving 9.0; zero on ATSP,
+MZNC_connect, carpet-cutting, community-detection-rnd, flowshop-workers, mapping, p1f-pjs,
+perfect_square, wmsmc-int, yumi-dynamic. Calibration: Chuffed agrees 92/100, time ratio geomean
+0.66, median 0.76; inserted it ranks 2nd.
+
+## D-0111  M7-T26, Challenge 2020 offline: baguette-fd 6th of 6, 30 refused, the thinnest year
+
+**Status**: **MEASUREMENT**, recorded 2026-11-02 (agent-mznc), setup as D-0106.
+
+**fd, 6 entrants**: chuffed 330.9, gecode 158.3, sicstus 151.3, jacop 117.8, choco 97.0,
+**baguette 6th, 34.7**. Baguette: OPT 8 (VERIFIED), SAT 1, TIMEOUT 58 (only 7 with an incumbent),
+**REFUSED 30 = 19 width + 11 heap**, ERROR 3 (is; whirlpool d29 and d30); 73 UNK. Points on 8 of 20:
+bnn-planner 18.0 (the bare-model problem), then 4.0 or less each; zero on 12 problems
+(cable_tree_wiring, code-generator, gbac, hoist-benchmark, is, lot-sizing, p1f-pjs, pentominoes,
+pillars-and-planks, skill-allocation, tower_challenge, whirlpool). Calibration: Chuffed agrees
+98/100, time ratio geomean 1.13, median 1.08 (the 2020 machine was as fast as this node); inserted
+it ranks 2nd behind the official Chuffed.
+
+## D-0112  M7-T26, Challenge 2019 offline: baguette-fd 8th of 8, 5 points behind 7th
+
+**Status**: **MEASUREMENT**, recorded 2026-11-02 (agent-mznc), setup as D-0106.
+
+**fd, 8 entrants**: chuffed 520.1, or-tools 431.7, jacop 320.4, gecode 308.4, sicstus 300.6,
+choco 257.9, concrete 128.6, **baguette 8th, 123.4**. Baguette: OPT 9 (VERIFIED), SAT 5, TIMEOUT 61
+(40 incumbents), **REFUSED 25 = 20 width + 5 heap**; 46 UNK. Points on 13 of 20: kidney-exchange
+15.0, amaze3 14.8, zephyrus 14.7, triangular 14.0, ptv 13.5, accap 10.5, median-string 10.0,
+fox-geese-corn 9.7; zero on code-generator, groupsplitter, liner-sf-repositioning, multi-knapsack,
+nside, rotating-workforce, stack-cuttingstock. Calibration: Chuffed agrees 98/100, time ratio
+geomean 1.14, median 1.08; inserted it ranks 2nd.
+
+## D-0113  M7-T26, Challenge 2018 offline: baguette-fd 8th of 8, 35 refused
+
+**Status**: **MEASUREMENT**, recorded 2026-11-02 (agent-mznc), setup as D-0106.
+
+**fd, 8 entrants**: chuffed 469.3, or-tools 444.6, gecode 309.7, choco 288.0, jacop 285.6,
+concrete 131.6, sicstus 130.7, **baguette 8th, 69.6**. Baguette: OPT 3, UNSAT 1 (VERIFIED), SAT 3,
+TIMEOUT 54 (24 incumbents), **REFUSED 35 = 31 width + 4 heap**, FLATTEN-FAIL 3 (largescheduling 1600
+and 3200, MiniZinc out of memory; test-scheduling), ERROR 1 (steiner-tree, `objective` width 80 M);
+67 UNK. Points on 9 of 20: gfd-schedule 15.1, neighbours 15.0, oocsp_racks 10.6, concert-hall-cap
+8.0; zero on cargo, elitserien, largescheduling, mapping, proteindesign12, rotating-workforce,
+steiner-tree, team-assignment, test-scheduling, train, vrplc. Calibration: Chuffed agrees 97/100,
+time ratio geomean 0.82, median 0.91; inserted it ranks 1st (518.5 vs 508.3).
+
+## D-0114  M7-T26, Challenge 2017 offline: baguette-fd 12th of 12, 55 refused, the worst year
+
+**Status**: **MEASUREMENT**, recorded 2026-11-02 (agent-mznc), setup as D-0106.
+
+**fd, 12 entrants**: or-tools-lcg 764.3, chuffed 754.4, lcg-glucose 734.6, gecode, jacop, choco4,
+or-tools-cp, sicstus, g12fd, choco5, picat-cp 315.4, **baguette 12th, 52.8**. Baguette: OPT 2
+(VERIFIED), TIMEOUT 42 (30 incumbents), **REFUSED 55 = 43 width + 7 heap + 5 `fzn_global_cardinality`
+repeated variable (community-detection, all five)**, ERROR 1 (city-position); 67 UNK. Points on 9 of
+20: hrc 17.3, mario 14.0, steelmillslab 8.5, opt-cryptanalysis 8.0; zero on cargo, city-position,
+community-detection, gbac, groupsplitter, ma-path-finding, rel2onto, road-cons, routing-flexible,
+tc-graph-color, tdtsp. Calibration: Chuffed agrees 95/100, time ratio geomean 1.39, median 1.19;
+inserted it ranks 4th (771.5, the 2017 machine was faster than this node).
+
+## D-0115  M7-T26, Challenge 2016 offline: baguette-fd 10th of 11, above Picat CP
+
+**Status**: **MEASUREMENT**, recorded 2026-11-02 (agent-mznc), setup as D-0106.
+
+**fd, 11 entrants**: LCG-Glucose 855.4, Chuffed 814.3, Gecode 549.6, OR-Tools, Choco, JaCoP, SICStus,
+G12FD 305.8, Concrete 267.0, **baguette 10th, 249.5**, Picat CP 231.6. Baguette: **OPT 25**, UNSAT 2,
+SAT 3 (30 VERIFIED, the most of any edition), TIMEOUT 43 (32 incumbents), **REFUSED 22 = 15 width +
+7 heap**, FLATTEN-FAIL 5 (cryptanalysis, all five: `Index set mismatch`, the 2016 model under
+MiniZinc 2.10, not a solver matter); 38 UNK. Points on 13 of 20: nfc 45.5, gfd-schedule 32.4,
+zephyrus 27.3, filters 27.1, tpp 25.5, java-auto-gen 21.0, mrcpsp 18.0, maximum-dag 17.0, solbat
+13.9, oocsp_racks 13.5; zero on carpet-cutting, celar, cryptanalysis, depot-placement, elitserien,
+gbac, mapping. Calibration: Chuffed agrees 90/100 (3 C/UNK, 2 S/UNK against it), time ratio geomean
+1.25, median 1.17; inserted it ranks 3rd.
+
+## D-0116  M7-T26, Challenge 2015 offline: baguette-fd 9th of 9, 29 refused, and a verdict wording fixed
+
+**Status**: **MEASUREMENT**, recorded 2026-11-02 (agent-mznc), setup as D-0106.
+
+**fd, 9 entrants**: chuffed 545.3, Opturion CPX 522.1, OR-Tools 473.1, Gecode 423.2, JaCoP 385.8,
+Choco 333.6, G12/FD 261.7, Picat CP 245.9, **baguette 9th, 100.3**. Baguette: OPT 11, UNSAT 2 (13
+VERIFIED), TIMEOUT 56 (34 incumbents), **REFUSED 29 = 21 width + 8 heap**, FLATTEN-FAIL 2
+(largescheduling, MiniZinc `bad_alloc`); 53 UNK. Points on 10 of 20: roster 24.4, gfd-schedule 17.2,
+project-planning 17.0, triangular 14.5, grid-colouring 10.2, freepizza 8.4; zero on costas-array,
+cvrp, is, largescheduling, mapping, multi-knapsack, nmseq, radiation, tdtsp, zephyrus. Calibration:
+Chuffed agrees 99/100, time ratio geomean 1.30, median 1.24; inserted it ranks 2nd.
+
+**A classifier wording gap found here.** The two p1f UNSAT answers (correct: every complete official
+entrant says C) were filed `VERIFIED-WEAK` because `compare.py` looked for `UNSATISFIABLE` in the
+checker's conclusion, and on an optimisation proof veripb words infeasibility as `s VERIFIED BOUNDS
+INF <= obj <= INF`. `compare.py` now reads that wording (`INF_BOUNDS_RE`) and `challenge_rank.py`
+accepts it on tables written before the fix (7c8b6ed). It moved 2015 by 2.2 points and nothing else.
+
+## D-0117  M7-T26, Challenge 2014 offline: baguette-fd 11th of 11, 31 refused
+
+**Status**: **MEASUREMENT**, recorded 2026-11-02 (agent-mznc), setup as D-0106. One instance
+(cyclic-rcpsp easy_5) is absent from the official tarball and scores UNK for us.
+
+**fd, 11 entrants**: Chuffed 735.2, OR-Tools 575.7, Opturion CPX 565.9, SICStus 508.9, Choco, Gecode,
+G12/LazyFD, JaCoP, G12/FD 285.2, Picat CP 283.3, **baguette 11th, 131.6**. Baguette: OPT 5, UNSAT 1
+(VERIFIED), SAT 8, TIMEOUT 53 (30 incumbents), **REFUSED 31 = 29 width + 2 heap**, ERROR 2 (mario,
+`fuel` 0..20000); 54 UNK. Points on 12 of 20: stochastic-fjsp 34.7, cyclic-rcpsp 20.0, amaze 18.5,
+solbat 16.3, mqueens 16.0, fillomino 11.9, openshop 8.0; zero on elitserien, liner-sf-repositioning,
+multi-knapsack, rectangle-packing, road-cons, ship-schedule, smelt, train. Calibration: Chuffed
+agrees 91/100 (7 S/SC in our favour), time ratio geomean 1.01, median 1.15; inserted it ranks 1st.
+
+## D-0118  M7-T26, Challenge 2013 offline: baguette-fd 11th of 11, 28 refused
+
+**Status**: **MEASUREMENT**, recorded 2026-11-02 (agent-mznc), setup as D-0106.
+
+**fd, 11 entrants**: chuffed 620.4, opturion_cpx 594.6, or_tools 577.9, gecode 511.5, choco, jacop,
+lazyfd, gecoxicals, g12_fd 333.3, picat 155.6, **baguette 11th, 118.3**. Baguette: OPT 12, UNSAT 1
+(VERIFIED), SAT 4, TIMEOUT 53 (34 incumbents), **REFUSED 28 = 18 width + 10 heap**, ERROR 2 (ghoulomb,
+mario); 47 UNK. Points on 13 of 20: rcpsp 28.5, filters 24.1, rubik 19.8, l2p 15.7, mario 9.5,
+radiation 7.7; zero on cargo, celar, javarouting, league, nmseq, pentominoes-int, proteindesign12.
+Calibration: the official Chuffed had 20 `MZN` (its flatten failed) that ours flattens with 2.10,
+agreement 78/100 elsewhere exact but for 2 SC/S; time ratio geomean 2.82, median 2.11 (the 2013
+`times` are not comparable with ours; the rank is unaffected). Inserted it ranks 1st.
+
+## D-0119  M7-T26, Challenge 2012 offline: baguette-fd 9th of 10, above B-Prolog
+
+**Status**: **MEASUREMENT**, recorded 2026-11-02 (agent-mznc), setup as D-0106. 2012 scores on the
+organisers' 0..2 all-or-nothing scale; the ranks reproduce with 816 pairwise residuals (D-0105).
+
+**fd, 10 entrants**: chuffed 652.0, g12_cpx 616.0, gecode 503.5, g12_lazyfd 468.5, jacop 333.0,
+g12_fd 318.0, or_tools 287.0, choco 262.5, **baguette 9th, 176.5**, bprolog 164.0. Baguette: **OPT
+21**, SAT 3 (24 VERIFIED), TIMEOUT 50 (29 incumbents), **REFUSED 26 = 18 width + 8 heap**; 47 UNK.
+Points on 12 of 19: mspsp 33.0, project-planning 28.0, tpp 26.0, filters 24.5, amaze 22.0, league
+12.0, pattern-set-mining-k2 11.0; zero on amaze2, carpet-cutting, fast-food, nonogram,
+parity-learning, ship-schedule, train. Calibration: Chuffed agrees 90/100 (7 UNK/S in our favour),
+time ratio geomean 0.64, median 1.00 (seconds resolution); inserted it ranks 1st.
+
+## D-0120  M7-T26, Challenge 2011 offline: baguette-fd 8th of 8, 18 refused, the fewest
+
+**Status**: **MEASUREMENT**, recorded 2026-11-02 (agent-mznc), setup as D-0106. 2011 is one model
+per instance (no data files) and scores on the 0..2 scale with 137 pairwise residuals (D-0105).
+
+**fd, 8 entrants**: chuffed 522.5, cpx 442.0, gecode 408.0, g12_lazyfd 289.5, jacop 280.0, g12_fd
+271.0, bprolog 187.0, **baguette 8th, 96.0**. Baguette: OPT 9, UNSAT 1 (VERIFIED), SAT 8, TIMEOUT 64
+(38 incumbents, the most of any edition), **REFUSED 18 = 9 width + 9 heap**; 44 UNK. Points on 9 of
+20: roster 27.5, fillomino 16.0, table-layout 15.5, grid-colouring 9.0, open-stacks 8.5; zero on
+black-hole, carpet-cutting, costas-array, depot-placement, fast-food, nonogram, pentominoes,
+prize-collecting, ship-schedule, vrp, wwtpp-real. Calibration: Chuffed agrees 94/100 (3 UC/C are the
+same answer in 2011's vocabulary), time ratio geomean 0.95, median 1.00; inserted it ranks 1st.
+
+## D-0121  M7-T26, the sixteen editions side by side: last or next to last everywhere, and the wall is width and heap, not search
+
+**Status**: **MEASUREMENT** (synthesis of D-0105 to D-0120), recorded 2026-11-02 (agent-mznc).
+
+| edition | fd rank | score | 1st (score) | OPT+UNSAT verified | S | REFUSED (width/heap/other) | other 0-point rows |
+|---|---|---|---|---|---|---|---|
+| 2026 | 12 / 13 | 149.9 | chuffed 693.3 | 11+1 | 16 | 49 (36/11/2 gcc) | 0 |
+| 2025 | 10 / 10 | 69.3 | or-tools cp-sat 615.1 | 10+0 | 12 | 61 (35/26/0) | 2 flatten |
+| 2024 | 9 / 9 | 192.8 | or-tools cp-sat 552.5 | 10+1 | 41 | 29 (17/12/0) | 5 flatten, 2 oom |
+| 2023 | 7 / 7 | 120.1 | or-tools cp-sat 391.5 | 13+0 | 30 | 31 (20/11/0) | 1 flatten, 2 oom |
+| 2022 | 7 / 7 | 105.4 | or-tools cp-sat 447.6 | 5+0 | 32 | 33 (26/7/0) | 2 flatten |
+| 2021 | 7 / 7 | 94.8 | or-tools cp-sat 372.9 | 5+0 | 28 | 41 (31/7/3) | 5 flatten, 1 oom |
+| 2020 | 6 / 6 | 34.7 | chuffed 330.9 | 8+0 | 16 | 30 (19/11/0) | 3 oom |
+| 2019 | 8 / 8 | 123.4 | chuffed 520.1 | 9+0 | 45 | 25 (20/5/0) | 0 |
+| 2018 | 8 / 8 | 69.6 | chuffed 469.3 | 3+1 | 28 | 35 (31/4/0) | 3 flatten, 1 oom |
+| 2017 | 12 / 12 | 52.8 | or-tools-lcg 764.3 | 2+0 | 30 | 55 (43/7/5 gcc) | 1 oom |
+| 2016 | 10 / 11 | 249.5 | LCG-Glucose 855.4 | 25+2 | 35 | 22 (15/7/0) | 5 flatten |
+| 2015 | 9 / 9 | 100.3 | chuffed 545.3 | 11+2 | 34 | 29 (21/8/0) | 2 flatten |
+| 2014 | 11 / 11 | 131.6 | Chuffed 735.2 | 5+1 | 38 | 31 (29/2/0) | 2 oom, 1 missing |
+| 2013 | 11 / 11 | 118.3 | chuffed 620.4 | 12+1 | 38 | 28 (18/10/0) | 2 oom |
+| 2012 | 9 / 10 | 176.5 | chuffed 652.0 | 21+0 | 32 | 26 (18/8/0) | 0 |
+| 2011 | 8 / 8 | 96.0 | chuffed 522.5 | 9+1 | 46 | 18 (9/9/0) | 0 |
+
+Over 1 600 instances: **169 complete answers (159 OPT, 10 UNSAT), every one with a proof VERIFIED by
+veripb 3.0.2 and none REJECTED**; 501 incumbents; **543 REFUSED**, of which 388 the width wall
+(D-0028, an `objective` or a counter declared over 10⁴ to 2·10⁹ values), 145 the 8 GiB heap budget
+(M7-T8), 9 a repeated variable in `fzn_global_cardinality` (gcc.ml, community-detection in 2017,
+2021 and 2026), 1 an unbounded `var int`; 14 more died of memory past the width warning, and 25 did
+not flatten (MiniZinc 2.10 on 2015–2024 models, or over 1200 s). Baguette is last in 13 editions and next to last in 3 (2012,
+2016, 2026), always above the one entrant that was itself the year's tail. The years it did best
+(2016, 2024, 2012) are the years with the fewest refusals, not the years with easier instances.
+
+**What the calibration says.** Our Chuffed's status agrees with the official Chuffed on 90 to 99
+instances per edition (78 in 2013, where the official flatten failed 20 times); the node is 1.6 to
+2.3x faster than the Challenge machine from 2021 on and about equal or slower before (2013–2017,
+2019–2020). So the ranks from 2021 are, if anything, flattering on time splits; baguette's rank never
+turns on them (the smallest gap to the entrant above is 5 points in 2019, every other gap is 15 to
+260 points of quality).
+
+**Reading, and what it points at.** Three quarters of the lost ground is decided before search
+starts: the order encoding over the declared objective width, and the heap that encoding costs. A
+bounded objective (`objective` views, or a lazily grown ladder, the M7 width discussions) and a
+heap budget that scales with the box would turn 533 of the 543 refusals into attempts; what those
+attempts would score is the next measurement, not this one. The free category (`-f`) was not run.
