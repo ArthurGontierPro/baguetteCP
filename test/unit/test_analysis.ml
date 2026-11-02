@@ -744,6 +744,136 @@ let test_uniq_is_the_list_mem_append () =
   check "M6-T16: Uniq keeps first-occurrence order, as List.mem/@ did"
     (Analysis.Uniq.to_list u = reference && reference = [ 4; 1; 7; 0; 9; 3; 12 ])
 
+(* ===================================================================== *)
+(* (e) M7-T27 (a2): THE DECISION CLOSURE DOES NOT EXPAND LEVEL 0.        *)
+(*                                                                       *)
+(* A node at level 0 rests on level-0 facts only, so resolving it away    *)
+(* can add nothing but level-0 nodes, which [decision_levels] drops. The  *)
+(* closure keeps it as it stands; its postcondition says "every node      *)
+   (* ABOVE level 0 is a root". Measured reason in D-0124's addendum: the *)
+(* closure re-expanded every root-level Linear entry at every conflict,   *)
+(* and since D-0124 each expansion rebuilds the entry's reason.           *)
+(*                                                                       *)
+(* Scene 3, over x y u w in 0..4. Level 0: y >= 3 (factless, a root) and *)
+(* x <= 2 FROM y >= 3 (a level-0 node that is NOT a root). Level 1:       *)
+(* assume u >= 3; R3 (-x + u + w <= 4) pushes w <= 3 citing x <= 2 and    *)
+(* u >= 3; R4 (u - w <= -1) wants w >= 4 and conflicts. The closure must  *)
+(* resolve w <= 3 (level 1) and stop with x <= 2 in the cut unexpanded.   *)
+(*                                                                       *)
+(* Scene 4 is a ROOT conflict under the DEFAULT scope, where level 0 IS   *)
+(* the conflict level and must still be resolved, as 1UIP at the root     *)
+(* always was.                                                           *)
+(* ===================================================================== *)
+
+let names3 = [| "x"; "y"; "u"; "w" |]
+let v3x = Var.of_int 0
+let v3y = Var.of_int 1
+let v3u = Var.of_int 2
+let v3w = Var.of_int 3
+
+let model3 a =
+  a.(1) >= 3 && a.(0) + a.(1) <= 5 && -a.(0) + a.(2) + a.(3) <= 4 && a.(2) - a.(3) <= -1
+
+let build_scene3 () =
+  let store = Store.create ~names:names3 ~domains:(Array.make 4 (Domain.make 0 4)) in
+  let r_y = linear_step ~id:0 store [ (-1, v3y) ] (-3) in
+  let r_xy = linear_step ~id:1 store [ (1, v3x); (1, v3y) ] 5 in
+  let r3 = linear_step ~id:2 store [ (-1, v3x); (1, v3u); (1, v3w) ] 4 in
+  let r4 = linear_step ~id:3 store [ (1, v3u); (-1, v3w) ] (-1) in
+  let a_u = linear_step ~id:4 store [ (-1, v3u) ] (-3) in
+  let model = [ r_y; r_xy; r3; r4 ] in
+  let c0 = run_steps store model in
+  Store.new_level store;
+  let c1 = run_steps store (a_u :: model) in
+  (store, model @ [ a_u ], c0, c1)
+
+let scene3 () =
+  match build_scene3 () with
+  | store, all, None, Some c -> (store, all, c)
+  | _ -> failwith "test_analysis: scene 3 did not reach its conflict where it should"
+
+let test_closure_keeps_level_0 () =
+  let store, all, c = scene3 () in
+  check "(e) scene 3: the conflict is at level 1" (Store.level store = 1);
+  check "(e) scene 3: x <= 2 was derived at level 0 and rests on y >= 3 (not a root)"
+    (Domain.hi (Store.get store v3x) = 2
+    &&
+    let e = Store.trail_entry store (Store.hi_support store v3x) in
+    Store.level_of_index store (Store.hi_support store v3x) = 0
+    && Reason.lits e.Store.reason = [ Baguette_proof.Lit.ge "y" 3 ]);
+  check
+    "(e) the model alone is satisfiable, so a closure over it is evidence of something"
+    (satisfiable ~n:4 ~lo:0 ~hi:4 ~sat:model3);
+  match
+    Analysis.analyse ~scope:Analysis.Everywhere store c ~vars_of:(vars_of_table all)
+      ~criterion:Analysis.decision_closure
+  with
+  | Error e -> failwith ("test_analysis: scene 3 " ^ Analysis.error_to_string e)
+  | Ok t ->
+      check "(e) the closure satisfies its own postcondition and stopped by it"
+        (Analysis.postcondition_holds Analysis.decision_closure t
+        && t.Analysis.stopped_by_criterion);
+      check "(e) the closure is u >= 3 (level 1, a root) and x <= 2 (level 0, kept as is)"
+        (Reason.to_string_facts (Analysis.facts t) = "u>=3 x<=2"
+        && List.for_all
+             (fun n -> n.Analysis.root || n.Analysis.level = 0)
+             (Analysis.nodes t)
+        && List.exists
+             (fun n -> n.Analysis.level = 0 && not n.Analysis.root)
+             (Analysis.nodes t));
+      check "(e) it resolved the level-1 node and nothing at level 0"
+        (t.Analysis.resolutions = 1);
+      check "(e) the levels it names are unchanged by not expanding level 0: [1]"
+        (Analysis.decision_levels t = [ 1 ] && Analysis.cited_levels t = [ 0; 1 ]);
+      check "(e) every literal of the closure holds on the trail"
+        (Analysis.holds_on_trail store t);
+      check "(e) model + closure is UNSAT by brute force"
+        (not
+           (satisfiable ~n:4 ~lo:0 ~hi:4 ~sat:(fun a ->
+                model3 a && facts_hold store (Analysis.facts t) a)));
+      (* The negation of the oracle: the level-0 node is load-bearing. *)
+      check "(e) break: without x <= 2 the remainder is NOT a valid nogood"
+        (satisfiable ~n:4 ~lo:0 ~hi:4 ~sat:(fun a ->
+             model3 a
+             && facts_hold store
+                  (List.filter (fun f -> Reason.fact_owner f <> "x") (Analysis.facts t))
+                  a))
+
+let test_root_conflict_still_resolves_level_0 () =
+  let store = Store.create ~names:names3 ~domains:(Array.make 4 (Domain.make 0 4)) in
+  let r_y = linear_step ~id:0 store [ (-1, v3y) ] (-3) in
+  let r_xy = linear_step ~id:1 store [ (1, v3x); (1, v3y) ] 5 in
+  let r_x = linear_step ~id:2 store [ (-1, v3x) ] (-3) in
+  let all = [ r_y; r_xy; r_x ] in
+  match run_steps store all with
+  | None -> failwith "test_analysis: scene 4 did not conflict at the root"
+  | Some c -> (
+      check "(e) scene 4: the conflict is at level 0" (Store.level store = 0);
+      (match
+         Analysis.analyse store c ~vars_of:(vars_of_table all)
+           ~criterion:Analysis.decision_cut
+       with
+      | Error e -> failwith ("test_analysis: scene 4 " ^ Analysis.error_to_string e)
+      | Ok t ->
+          check
+            "(e) under the default scope a root conflict still resolves level 0 (its \
+             conflict level): x <= 2 goes to y >= 3"
+            (t.Analysis.resolutions = 1
+            && Reason.to_string_facts (Analysis.facts t) = "y>=3"
+            && Analysis.postcondition_holds Analysis.decision_cut t));
+      match
+        Analysis.analyse ~scope:Analysis.Everywhere store c ~vars_of:(vars_of_table all)
+          ~criterion:Analysis.decision_closure
+      with
+      | Error e -> failwith ("test_analysis: scene 4 " ^ Analysis.error_to_string e)
+      | Ok t ->
+          check
+            "(e) the decision closure at a root conflict resolves nothing and names no \
+             level, which is what a dependency set of a root conflict is"
+            (t.Analysis.resolutions = 0
+            && Analysis.postcondition_holds Analysis.decision_closure t
+            && Analysis.decision_levels t = []))
+
 let () =
   test_scene1_shape ();
   test_merge_nodes_is_the_add_node_fold ();
@@ -764,6 +894,8 @@ let () =
   test_engine_agrees ();
   test_determinism ();
   test_lits_are_the_negated_cut ();
+  test_closure_keeps_level_0 ();
+  test_root_conflict_still_resolves_level_0 ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
