@@ -175,7 +175,13 @@ and summand =
    same term [Weaken] would and keeps the degree. Like [Weaken], it is not a [t]:
    see the module header. *)
 
-and thunk = { mutable forced : t option; mutable compute : unit -> t }
+and thunk = { mutable forced : t option; mutable compute : unit -> t; mutable mark : int }
+(* [mark]: the walk that last visited this thunk ([lits] below). A thunk is the ONLY
+   shared node of a derivation -- a trail entry's explanation is one thunk cited by every
+   later derivation that rests on it -- so marking thunks is what makes a walk linear in
+   the DAG rather than exponential in its depth of sharing. Found on 2010_depot_placement
+   under BAGUETTE_DEBUG, where [Store.agreement_holds] walks every pruning's derivation:
+   a 60 s run was still walking after 22 h, all of it in [lits]. *)
 
 type expl = t
 
@@ -225,7 +231,14 @@ let combine summands divisor =
   | _ -> ());
   Combine (summands, divisor)
 
-let deferred compute = Deferred { forced = None; compute }
+let deferred compute = Deferred { forced = None; compute; mark = 0 }
+
+(* One fresh mark per walk; a thunk's [mark] equals it iff this walk has seen it. *)
+let marks = ref 0
+
+let fresh_mark () =
+  incr marks;
+  !marks
 
 (* Force to a non-deferred head. Nested [Deferred] is allowed: a thunk may return another
    thunk, and memoisation records the fully forced result at each level. The closure is
@@ -258,8 +271,15 @@ let lits e =
       Hashtbl.add seen l ();
       acc := l :: !acc)
   in
+  let mark = fresh_mark () in
   let rec go e =
-    match force e with
+    match e with
+    | Deferred th when th.mark = mark -> ()
+    | Deferred th ->
+        th.mark <- mark;
+        head (force e)
+    | e -> head e
+  and head = function
     (* A decision's reason set is exactly the literal it assumed. [Trivial]'s was
        empty, which is the dependency D-0035 says becomes unsoundness in M2-T3. *)
     | Decision l -> add l
