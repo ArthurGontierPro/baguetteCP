@@ -3535,6 +3535,28 @@ exact on 2013–2026, ranks reproduced on 2011–2012), `bench/README.md` §9, D
   Have the detached script write `$$` to its own pidfile and kill by PID only.
 
 
+## M7-T27 (a) handoff, 2026-11-02 (agent-reason): a Linear pruning's reason is materialised later, from the trail's history (D-0124)
+
+**What changed.** `Reason.t` is `Facts | Later` (`because` unchanged, `because_later` new, `Reason.facts`
+the one materialisation point); `Store.history`/`check_history`/`lo_at`/`hi_at`/`lo_reasons_at`/
+`hi_reasons_at`, the trail cut at a position with a physical witness; `Linear.snapshot_at`/`value_at`/
+`fact_at`/`justified_at`, prunings deferred, conflicts eager; nine consumer sites in analysis/alldiff/
+element/cumulative/bool2int take `Reason.facts`/`lits_of_facts` (files outside the claim row, one-line
+type adaptations, unclaimed by anyone). Three `test_d0124_*` scenes in `test_prop.ml`; I-X6 paragraph.
+pattern-set-mining at 300 s: 8.71 GB -> 2.18 GB RSS (1.0 GB of it the encoding, sub-row (b)); 156 models
+byte-identical; `make check` ok on fataepyc-06.
+
+**What the next session should know.**
+- D-0123's hypothesis named the wrong row: the sink was the 105 `int_lin_le_reif` rows over ~4 000
+  Booleans (two big-M Linear rows each), 2 prunings per effective run -- so "one snapshot per fixpoint"
+  would have bought 2x, which is why shape (i) was taken.
+- Measured cost: 67 nodes in 300 s against 77. `Analysis.analyse ~scope:Everywhere` re-expands every
+  root-level Linear entry at every conflict (146 055 materialisations, 526 M facts in 300 s); a level-0
+  entry can add no decision to the closure, so stopping the expansion at level 0 (analysis.ml, not this
+  claim) should recover it. Do NOT memoise the `Later` to get it back: that is the retention removed.
+- Artefacts on `fataepyc-06:/scratch/arthur/m7t27a/` (both binaries, all runs, `check3.log`); the clone
+  `/scratch/arthur/baguette-reason` is on `wave40-reason`.
+
 ## Claims history (archived 2026-11-02, read-only)
 
 What `## Active claims` held from 2026-09-16 to 2026-11-02, moved here verbatim (one broken
