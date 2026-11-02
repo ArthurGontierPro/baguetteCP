@@ -3733,6 +3733,123 @@ let test_ix6_cross_conflict_snapshot () =
   check "I-X6 cross: and not the row that took that bound over afterwards"
     (string_contains "model_row(7001)" b && not (string_contains "902" b))
 
+(* ------------------------- D-0124: the REASON half, materialised later (M7-T27 (a))
+
+   Since D-0124 a [Linear] pruning's reason is a [Reason.Later]: nothing per term is kept
+   on the trail, and the facts are rebuilt from a [Store.history] -- the trail cut at the
+   pruning's own position -- when they are asked for. That moves I-X6's exposure onto the
+   reason half, which D-0026 had discharged by the type ([Reason.t] was a list). So the
+   first test does for the reason exactly what [test_ix6_justification_snapshot] does for
+   the justification: run the scene twice, move the stated bound by another row in
+   between, materialise at two moments, demand the same answer. The second adds the one
+   failure the type can no longer rule out and the history's witness check exists for: a
+   materialisation after the trail below the pruning has been unwound and re-pushed, which
+   a reader that trusted positions alone would answer WRONGLY rather than crash on.
+
+   Scene, both tests: 2x + 3y <= 10 over 0..5, y >= 1 by row 901, so the row pushes
+   x <= floor((10 - 3) / 2) = 3. The reason is [y >= 1]; the justification cites 901. *)
+
+let test_d0124_reason_reads_history () =
+  let scene ~move_after =
+    let store = mk_store [ ("x", 0, 5); ("y", 0, 5) ] in
+    let prop = Linear.make store [ (2, var 0); (3, var 1) ] 10 ~row_id:1 in
+    ignore (Store.set_lo store (var 1) 1 placeholder_pruning);
+    (match Linear.propagate prop store with
+    | Propagator.Conflict _ -> failwith "D-0124: expected a pruning"
+    | Propagator.Fixpoint -> ());
+    let e = Store.trail_entry store (Store.trail_length store - 1) in
+    check "D-0124: the newest entry is the row's push of x"
+      (Var.equal e.Store.var (var 0));
+    check "D-0124: a Linear pruning's reason is stored deferred, not as a list"
+      (match e.Store.reason with Reason.Later _ -> true | Reason.Facts _ -> false);
+    if move_after then (
+      (* Both of y's bounds move AFTER the pruning, by other rows: the lower one, which
+         the reason states, to 2 by row 902; the upper one, which it does not state, by
+         903. A reason reading the live store would now say y >= 2 and a justification
+         reading it would cite 902; one reading the history says y >= 1 and cites 901. *)
+      ignore
+        (Store.set_lo store (var 1) 2
+           (Reason.because ~concludes:None Reason.none (Explanation.model_row 902)));
+      ignore
+        (Store.set_hi store (var 1) 4
+           (Reason.because ~concludes:None Reason.none (Explanation.model_row 903))));
+    ( Reason.lits e.Store.reason,
+      Reason.to_string e.Store.reason,
+      render_deep (Store.explanation store e),
+      store )
+  in
+  let la, sa, ja, _ = scene ~move_after:false in
+  let lb, sb, jb, store_b = scene ~move_after:true in
+  check "D-0124: the interloper really moved the stated bound before materialising"
+    (Domain.lo (Store.get store_b (var 1)) = 2);
+  check "D-0124: materialised at the push, the reason is y >= 1 and nothing about x"
+    (la = [ Lit.ge "y" 1 ] && sa = "y>=1");
+  check "D-0124: materialised after the bound moved, the reason is the same"
+    (lb = la && sb = sa);
+  check "D-0124: and the justification cites 901, not the rows that moved y afterwards"
+    (ja = jb && string_contains "901" jb
+    && (not (string_contains "902" jb))
+    && not (string_contains "903" jb))
+
+let test_d0124_unwound_history_is_refused () =
+  let refused_as_ix6 f =
+    match f () with
+    | exception Invalid_argument m -> string_contains "I-X6" m
+    | exception _ -> false
+    | _ -> false
+  in
+  let store = mk_store [ ("x", 0, 5); ("y", 0, 5) ] in
+  let prop = Linear.make store [ (2, var 0); (3, var 1) ] 10 ~row_id:1 in
+  Store.new_level store;
+  ignore (Store.set_lo store (var 1) 1 placeholder_pruning);
+  (match Linear.propagate prop store with
+  | Propagator.Conflict _ -> failwith "D-0124: expected a pruning"
+  | Propagator.Fixpoint -> ());
+  let e = Store.trail_entry store (Store.trail_length store - 1) in
+  (* Taken now, because the arena entry it names is wiped by the backtrack below -- the
+     thunk itself survives in this binding, which is exactly the situation the check is
+     for: a closure that outlived the trail it reads. *)
+  let ex = Store.explanation store e in
+  check "D-0124: on the trail, the reason materialises"
+    (Reason.lits e.Store.reason = [ Lit.ge "y" 1 ]);
+  Store.backtrack store;
+  check "D-0124: the backtrack really emptied the trail" (Store.trail_length store = 0);
+  check "D-0124: unwound below the pruning, the reason refuses to materialise (I-X6)"
+    (refused_as_ix6 (fun () -> Reason.facts e.Store.reason));
+  (* Re-push a DIFFERENT history at the same positions: y >= 2 by row 902 at position 0,
+     where y >= 1 by 901 used to be. A reader trusting positions alone would now answer
+     y >= 2 -- a wrong reason, silently -- and this is what the physical witness catches. *)
+  Store.new_level store;
+  ignore
+    (Store.set_lo store (var 1) 2
+       (Reason.because ~concludes:None Reason.none (Explanation.model_row 902)));
+  check "D-0124: the same positions are occupied again" (Store.trail_length store = 1);
+  check "D-0124: re-pushed under it, the reason still refuses rather than answer y >= 2"
+    (refused_as_ix6 (fun () -> Reason.facts e.Store.reason));
+  check "D-0124: and so does the justification, which reads the same history"
+    (refused_as_ix6 (fun () -> Explanation.force ex))
+
+(* A row with no other term has an EMPTY deferred reason, and [Reason.is_empty] must say
+   so without materialising: conflict analysis asks it per node (lib/core/analysis.ml's
+   [root]), and a wrong [empty] would make a Linear pruning look like a decision. *)
+let test_d0124_empty_deferred_reason () =
+  let store = mk_store [ ("x", 0, 5) ] in
+  let prop = Linear.make store [ (2, var 0) ] 7 ~row_id:1 in
+  (match Linear.propagate prop store with
+  | Propagator.Conflict _ -> failwith "D-0124 empty: expected a pruning"
+  | Propagator.Fixpoint -> ());
+  let e = Store.trail_entry store (Store.trail_length store - 1) in
+  check "D-0124 empty: x <= 3 was pushed" (Domain.hi (Store.get store (var 0)) = 3);
+  check "D-0124 empty: the deferred reason knows it is empty"
+    (Reason.is_empty e.Store.reason && Reason.facts e.Store.reason = []);
+  (* And a one-term row with a ZERO coefficient beside it: still no other term. *)
+  let store = mk_store [ ("x", 0, 5); ("z", 0, 5) ] in
+  let prop = Linear.make store [ (2, var 0); (0, var 1) ] 7 ~row_id:1 in
+  ignore (Linear.propagate prop store);
+  let e = Store.trail_entry store (Store.trail_length store - 1) in
+  check "D-0124 empty: a zero-coefficient term is not an other term"
+    (Reason.is_empty e.Store.reason && Reason.facts e.Store.reason = [])
+
 (* ------------------------------ D-0026: one pruning, two halves that agree (M2-T8)
 
    The reference propagator's reason and justification used to be two calls
@@ -3792,7 +3909,8 @@ let test_d0026_linear_pairing () =
       (* (3) And the two halves are about the same pruning. *)
       check "D-0026 linear: the reason and the justification agree"
         (Store.agreement_holds store
-           (Reason.because ~concludes:None e.Store.reason (Store.explanation store e)))
+           (Reason.because ~concludes:None (Reason.facts e.Store.reason)
+              (Store.explanation store e)))
 
 (* The same row with every other term left at its declared bound: the reason's scope is
    still the other terms -- the propagator DID read them -- but not one of the facts
@@ -3821,7 +3939,8 @@ let test_d0026_all_declared () =
         (Reason.lits e.Store.reason = []);
       check "D-0026 declared: and the halves still agree"
         (Store.agreement_holds store
-           (Reason.because ~concludes:None e.Store.reason (Store.explanation store e)))
+           (Reason.because ~concludes:None (Reason.facts e.Store.reason)
+              (Store.explanation store e)))
 
 (* M6-T8 / D-0091: the four BAGUETTE_DEBUG fatals, on the real propagator.
 
@@ -3876,7 +3995,7 @@ let test_d0091_element_root_defining () =
         (Store.root_holds store (Lit.le "c" 2));
       check "D-0091 element: the reason and the justification AGREE"
         (Store.agreement_holds store
-           (Reason.because ~concludes:None c.Store.c_reason c.Store.c_why));
+           (Reason.because ~concludes:None (Reason.facts c.Store.c_reason) c.Store.c_why));
       match element_moved_conflict ~deeper:true with
       | None -> check "D-0091 element: the level-1 scene is a conflict too" false
       | Some (store1, c1) ->
@@ -3884,7 +4003,9 @@ let test_d0091_element_root_defining () =
             (not (List.mem "c" (Explanation.top_weaken_owners c1.Store.c_why)));
           check "D-0091 element: and the pair agrees there as well"
             (Store.agreement_holds store1
-               (Reason.because ~concludes:None c1.Store.c_reason c1.Store.c_why)))
+               (Reason.because ~concludes:None
+                  (Reason.facts c1.Store.c_reason)
+                  c1.Store.c_why)))
 
 (* ---------------------------------------------------------------------------
    M2-L0 / D-0043, test (c): the conclusion tracks the split lib/core/trace.ml
@@ -6560,7 +6681,7 @@ let test_maxmin_rules () =
                 check
                   (title ^ ": D-0026, the reason and the clause agree")
                   (Store.agreement_holds store
-                     (Reason.because ~concludes:None e.Store.reason ex))))
+                     (Reason.because ~concludes:None (Reason.facts e.Store.reason) ex))))
   in
   let b3 = [ ("m", 0, 5); ("a", 0, 5); ("b", 0, 5) ] in
   scene ~title:"maxmin R3 (hi(m) <= max hi(x))" ~dir:Maxmin.Max ~bounds:b3 ~m:0
@@ -7195,6 +7316,9 @@ let () =
   test_d0091_element_root_defining ();
   test_ix6_justification_snapshot ();
   test_ix6_cross_conflict_snapshot ();
+  test_d0124_reason_reads_history ();
+  test_d0124_unwound_history_is_refused ();
+  test_d0124_empty_deferred_reason ();
   test_no_single_row_refutes "bool_reif_unsat" "bool_reif_unsat.fzn";
   test_no_single_row_refutes "bool_channel_unsat" "bool_channel_unsat.fzn";
 
