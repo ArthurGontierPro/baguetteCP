@@ -3582,6 +3582,166 @@ let test_no_conclusion () =
       |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
       try Sys.rmdir dir with _ -> ())
 
+(* ------------------------------------- M7-T27 (b) / D-0123: the .opb is streamed *)
+
+(* Build the same encoding under [policy], with the ambient setting restored whatever
+   happens: every other test in this binary relies on the default. *)
+let m7t27_create policy =
+  let saved = !Encoding.row_sink in
+  Encoding.row_sink := policy;
+  Fun.protect ~finally:(fun () -> Encoding.row_sink := saved) Encoding.create
+
+(* One of everything the header is computed from: a renamed owner ("a[1]"), a bool
+   whose only name comes from a MODEL row (no rung mentions it), a bool no row mentions
+   at all (so it must NOT be counted), holes, an int_lin_ne (its "$ne0" aux is renamed
+   and declared AFTER the model's own variables), a reified row, a hand-built clause,
+   and an objective naming a variable no row does (counted) and one a row does
+   (not counted twice). The streamed writer counts all of this as it mints; the
+   reference [Opb.write] scans the list at the end. *)
+let m7t27_fill e =
+  Encoding.declare_int e "a[1]" ~lo:0 ~hi:4;
+  Encoding.declare_int_with_holes e "h" ~holes:[ 2 ] ~lo:0 ~hi:3;
+  Encoding.declare_bool e "b";
+  Encoding.declare_bool e "lone";
+  Encoding.declare_bool e "never";
+  Encoding.declare_int e "y" ~lo:(-2) ~hi:2;
+  ignore (Encoding.add_int_lin_le e [ (1, "a[1]"); (2, "y") ] 3);
+  ignore (Encoding.add_int_lin_ne e [ (1, "a[1]"); (-1, "h") ] 1);
+  ignore (Encoding.add_constraint e (Opb.clause [ Lit.bool_true "b"; Lit.le "y" 0 ]));
+  ignore (Encoding.add_int_lin_le_reif e [ (1, "y") ] 0 ~reifier:"b");
+  Encoding.set_objective e
+    (Opb.objective [ (1, Lit.bool_true "lone"); (3, Lit.ge "y" 1) ])
+
+let test_m7t27_streamed_opb_is_byte_identical () =
+  let saved = !Encoding.encoding_budget in
+  Encoding.encoding_budget := None;
+  let comments = [ "M7-T27 (b)" ] in
+  (* The reference: the rows as a list, counted and written by [Opb.write], which is
+     the code path every .opb in test/expected/ was produced by. *)
+  let e_ref = m7t27_create Encoding.Retain_rows in
+  m7t27_fill e_ref;
+  let reference =
+    let path = Filename.temp_file "baguette_m7t27" ".ref.opb" in
+    let oc = open_out path in
+    Opb.write ?objective:(Encoding.objective e_ref) oc ~comments
+      ~constraints:(Encoding.constraints e_ref);
+    close_out oc;
+    let ic = open_in_bin path in
+    let s = really_input_string ic (in_channel_length ic) in
+    close_in ic;
+    Sys.remove path;
+    s
+  in
+  (* Retained rows, counted header. *)
+  let retained =
+    let path = Filename.temp_file "baguette_m7t27" ".ret.opb" in
+    let oc = open_out path in
+    Encoding.write_opb ~comments e_ref oc;
+    close_out oc;
+    let ic = open_in_bin path in
+    let s = really_input_string ic (in_channel_length ic) in
+    close_in ic;
+    Sys.remove path;
+    s
+  in
+  (* Streamed rows, counted header. *)
+  let rows = Filename.temp_file "baguette_m7t27" ".opb.rows" in
+  let e_str = m7t27_create (Encoding.Stream_rows_to rows) in
+  m7t27_fill e_str;
+  check "M7-T27 (b): the streamed encoding minted the same ids"
+    (Encoding.n_constraints e_str = Encoding.n_constraints e_ref);
+  check "M7-T27 (b): a streamed encoding has no row list to hand back"
+    (match Encoding.constraints e_str with
+    | exception Invalid_argument _ -> true
+    | _ -> false);
+  let streamed =
+    let path = Filename.temp_file "baguette_m7t27" ".str.opb" in
+    let oc = open_out path in
+    Encoding.write_opb ~comments e_str oc;
+    close_out oc;
+    let ic = open_in_bin path in
+    let s = really_input_string ic (in_channel_length ic) in
+    close_in ic;
+    Sys.remove path;
+    s
+  in
+  check "M7-T27 (b): the body file is gone once the .opb is written"
+    (not (Sys.file_exists rows));
+  check "M7-T27 (b): a second write of a streamed .opb is refused"
+    (match Encoding.write_opb e_str stdout with
+    | exception Invalid_argument _ -> true
+    | () -> false);
+  check "M7-T27 (b): a row after the streamed .opb is written is refused (I-X5)"
+    (match Encoding.add_constraint e_str (Opb.clause [ Lit.bool_true "b" ]) with
+    | exception Invalid_argument _ -> true
+    | _ -> false);
+  (* The header's inputs, by hand: a_1__ge_1..4, h_ge_1..3, b_ge_1, y_ge_m1..y_ge_2,
+     the aux's one name, and lone_ge_1 from the objective: 4 + 3 + 1 + 4 + 1 + 1 = 14.
+     "never" is declared, has no rung and sits in no row, so it is not a variable of the
+     .opb and the checker would refuse a count that said otherwise. *)
+  check_eq "M7-T27 (b): #variable= counts names in rows and objective, by hand"
+    ~expected:"* #variable= 14 #constraint= 15"
+    ~got:(List.hd (String.split_on_char '\n' streamed));
+  check_eq "M7-T27 (b): the renaming comments, in first-occurrence order"
+    ~expected:"* name a[1] -> a_1_\n* name $ne0 -> _ne0"
+    ~got:
+      (String.concat "\n"
+         (List.filter
+            (fun l -> String.length l > 6 && String.sub l 0 7 = "* name ")
+            (String.split_on_char '\n' streamed)));
+  check_eq "M7-T27 (b): retained rows + counted header == the reference writer"
+    ~expected:reference ~got:retained;
+  check_eq "M7-T27 (b): streamed rows + counted header == the reference writer"
+    ~expected:reference ~got:streamed;
+  (* [Discard_rows]: ids and counts are minted, nothing is kept, nothing can be
+     written -- the CLI's shape without --proof. *)
+  let e_dis = m7t27_create Encoding.Discard_rows in
+  m7t27_fill e_dis;
+  check "M7-T27 (b): discarded rows still mint the same ids"
+    (Encoding.n_constraints e_dis = Encoding.n_constraints e_ref);
+  check "M7-T27 (b): a discarded encoding refuses to write an .opb"
+    (match Encoding.write_opb e_dis stdout with
+    | exception Invalid_argument _ -> true
+    | () -> false);
+  check "M7-T27 (b): the ambient policy is back to the default"
+    (!Encoding.row_sink = Encoding.Retain_rows);
+  Encoding.encoding_budget := saved
+
+(* The rung ids are an arithmetic progression from the declaration's first id, and the
+   hole rows follow the whole ladder; both read back against the rows themselves. *)
+let test_m7t27_ladder_ids_are_arithmetic () =
+  let saved = !Encoding.encoding_budget in
+  Encoding.encoding_budget := None;
+  let e = Encoding.create () in
+  Encoding.declare_int e "p" ~lo:0 ~hi:3 (* rungs at 1, 2: ids 1, 2 *);
+  Encoding.declare_int e "x" ~lo:(-3) ~hi:3 (* rungs at -2..2: ids 3..7 *);
+  Encoding.declare_int_with_holes e "h" ~holes:[ 1; 3 ] ~lo:0 ~hi:4
+  (* rungs at 1..3: ids 8..10; holes 1, 3: ids 11, 12 *);
+  Encoding.declare_bool e "b" (* no rung *);
+  let rows = Array.of_list (List.map Opb.constr_to_string (Encoding.constraints e)) in
+  check "M7-T27 (b): 12 rows" (Array.length rows = 12);
+  let rung x v = Encoding.consistency_id e x v in
+  check "M7-T27 (b): below the first rung there is no rung" (rung "x" (-3) = None);
+  check "M7-T27 (b): at hi there is no rung" (rung "x" 3 = None);
+  check "M7-T27 (b): the first rung of x is the id after p's ladder"
+    (rung "x" (-2) = Some 3);
+  check "M7-T27 (b): the last rung of x" (rung "x" 2 = Some 7);
+  check_eq "M7-T27 (b): the rung at 0 is the row its id names"
+    ~expected:"+1 ~x_ge_1 +1 x_ge_0 >= 1 ;"
+    ~got:(match rung "x" 0 with Some id -> rows.(id - 1) | None -> "none");
+  check_eq "M7-T27 (b): the rung at -2 is the row its id names"
+    ~expected:"+1 ~x_ge_m1 +1 x_ge_m2 >= 1 ;"
+    ~got:(match rung "x" (-2) with Some id -> rows.(id - 1) | None -> "none");
+  check "M7-T27 (b): a bool has no rung at all" (rung "b" 0 = None && rung "b" 1 = None);
+  check "M7-T27 (b): h's ladder follows x's" (rung "h" 1 = Some 8 && rung "h" 3 = Some 10);
+  check "M7-T27 (b): the hole rows follow the whole ladder, ascending"
+    (Encoding.hole_id e "h" 1 = Some 11 && Encoding.hole_id e "h" 3 = Some 12);
+  check_eq "M7-T27 (b): the hole row at 3 is the row its id names"
+    ~expected:"+1 ~h_ge_3 +1 h_ge_4 >= 1 ;"
+    ~got:(match Encoding.hole_id e "h" 3 with Some id -> rows.(id - 1) | None -> "none");
+  check "M7-T27 (b): a hole is not a rung" (rung "h" 1 <> Encoding.hole_id e "h" 1);
+  Encoding.encoding_budget := saved
+
 let () =
   report_checker ();
   test_lits ();
@@ -3626,6 +3786,8 @@ let () =
   test_m7t8_resource_guard ();
   test_m7t11_hole_rows ();
   test_lit_rendering_is_the_reference ();
+  test_m7t27_streamed_opb_is_byte_identical ();
+  test_m7t27_ladder_ids_are_arithmetic ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

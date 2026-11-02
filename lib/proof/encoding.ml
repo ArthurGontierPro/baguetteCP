@@ -226,13 +226,21 @@ type ivar = {
   name : string;
   lo : int;
   hi : int;
-  (* v -> id of the consistency constraint  x_ge_(v+1) -> x_ge_v,  for lo < v < hi *)
-  consistency : (int, cid) Hashtbl.t;
+  (* The id of the FIRST consistency constraint  x_ge_(lo+2) -> x_ge_(lo+1); the rung
+     at value v (lo < v < hi) is  ladder_base + (v - lo - 1),  see [consistency_id].
+     Meaningful only when hi - lo >= 2, i.e. when there is a rung at all.
+
+     M7-T27 (b): this used to be a per-value [Hashtbl] from v to the rung's id, which
+     was the larger half of D-0123's ~300 bytes of live heap per rung (the binding, the
+     boxed value and the bucket array, resized log(width) times). The ids are minted
+     consecutively by the one [for] loop in [declare_int_gen], and nothing else mints
+     in between, so the table only ever recorded an arithmetic progression. *)
+  ladder_base : cid;
   (* h -> id of the HOLE clause  x_ge_h -> x_ge_(h+1),  for each declared hole h.
-     Keyed separately from [consistency] because the two are indexed by the same
-     integers and mean opposite implications: at the same value h, [consistency] holds
-     the downward rung and this holds the upward one. Merging the tables would make a
-     hole overwrite its own ladder rung. See [declare_int] (M7-T11). *)
+     Kept as a table because holes are sparse, and kept apart from the ladder because
+     the two are indexed by the same integers and mean opposite implications: at the
+     same value h, the ladder holds the downward rung and this holds the upward one.
+     See [declare_int] (M7-T11). *)
   hole_rows : (int, cid) Hashtbl.t;
   mutable direct : dvar option;
 }
@@ -250,6 +258,108 @@ module Names = Hashtbl.Make (struct
   let hash (s : string) = Hashtbl.hash s
 end)
 
+(* ---------------------------------------------------------------------------
+   M7-T27 (b): the .opb is STREAMED, and its header is COUNTED, not scanned
+   ---------------------------------------------------------------------------
+
+   D-0123, family C: 159 Challenge instances died inside a ladder loop at ~300 bytes
+   of live heap per rung, because every committed row was kept as an [Opb.constr]
+   until [write_opb] rendered the list, and [Opb.write] then scanned that list twice
+   more (distinct variable names for `#variable=`, renamed owners for the comments).
+   On the widest instance that is 26 M rows and a 3.0 GB .opb held as OCaml data.
+
+   Now a row is rendered to the .opb's body the moment [add_constraint] mints its id,
+   and the two header scans are replaced by counters maintained at the same moment:
+
+   - [Occurs] counts the distinct OPB variable names that occur in committed rows.
+     [Lit.render] is injective on (sanitize owner, kind, value): the suffix is
+     `[m]digits`, so neither "_ge_" nor "_eq_" can fall inside it, and the split of a
+     rendered name into prefix, kind and value is unique. A name is therefore a point
+     (owner', kind, v), and the ladder of x is the ONE INTERVAL (x', Ge, [lo+1, hi]):
+     the rung at v mentions x_ge_(v+1) and x_ge_v for lo < v < hi, and the hole rows
+     mention nothing outside that. So the ladder is counted in O(1) per declaration,
+     with no entry per rung, and only the model's own rows probe per literal -- which
+     [Opb.write] did at the end anyway, over every rung too.
+   - the renamed owners are recorded in first-occurrence order as rows are committed,
+     once per ladder declaration and once per literal of every other row -- the same
+     order [Opb.rename_comments] produced from the list.
+
+   Where the rows GO is the [sink]. The CLI chooses before [Compile] runs, through
+   [row_sink] (an ambient setting, like [order_width_limit] and for the same reason:
+   [Compile.compile] calls [create ()] and is the only door). Tests keep the default,
+   [Retain_rows], under which [constraints] still returns the rows and [write_opb]
+   is what it was; and one test ([test_m7t27_streamed_opb_is_byte_identical]) writes
+   the same encoding both ways and compares the bytes. *)
+
+module Occurs = struct
+  (* Sorted, disjoint, closed integer intervals; [add r a b] merges [a, b] in and
+     returns how many integers it newly covers. Lists stay a few entries long: one
+     ladder interval per (owner, kind), plus the odd point outside it. *)
+  type ranges = (int * int) list
+
+  let overlap a b (l : ranges) =
+    List.fold_left (fun n (c, d) -> n + max 0 (min b d - max a c + 1)) 0 l
+
+  let rec merge a b : ranges -> ranges = function
+    | [] -> [ (a, b) ]
+    | (c, d) :: rest when d < a - 1 -> (c, d) :: merge a b rest
+    | (c, d) :: rest when c > b + 1 -> (a, b) :: (c, d) :: rest
+    | (c, d) :: rest -> merge (min a c) (max b d) rest
+
+  let rec covered v : ranges -> bool = function
+    | [] -> false
+    | (c, d) :: rest -> (c <= v && v <= d) || (c <= v && covered v rest)
+
+  type owner = { mutable ge : ranges; mutable eq : ranges }
+  type t = { tbl : owner Names.t; (* keyed by the SANITISED owner *) mutable count : int }
+
+  let create () = { tbl = Names.create 64; count = 0 }
+
+  let owner t x =
+    let key = Lit.sanitize x in
+    match Names.find_opt t.tbl key with
+    | Some o -> o
+    | None ->
+        let o = { ge = []; eq = [] } in
+        Names.add t.tbl key o;
+        o
+
+  let add_range t x a b =
+    if a <= b then (
+      let o = owner t x in
+      let n = b - a + 1 - overlap a b o.ge in
+      o.ge <- merge a b o.ge;
+      t.count <- t.count + n)
+
+  let add_var t (v : Lit.pbvar) =
+    match v with
+    | Lit.Ge (x, k) -> add_range t x k k
+    | Lit.Eq (x, k) ->
+        let o = owner t x in
+        if not (covered k o.eq) then (
+          o.eq <- merge k k o.eq;
+          t.count <- t.count + 1)
+
+  let mem t (v : Lit.pbvar) =
+    match Names.find_opt t.tbl (Lit.sanitize (Lit.owner v)) with
+    | None -> false
+    | Some o -> (
+        match v with Lit.Ge (_, k) -> covered k o.ge | Lit.Eq (_, k) -> covered k o.eq)
+end
+
+(* Where a committed row goes. *)
+type sink =
+  | Retain of Opb.constr list (* newest first; [constraints] reverses it *)
+  | Stream of { path : string; oc : out_channel } (* the body, rendered as minted *)
+  | Discard (* no .opb will be asked for *)
+  | Written (* a streamed body that [write_opb] has already consumed *)
+
+type sink_policy = Retain_rows | Stream_rows_to of string | Discard_rows
+
+(* Consulted by [create]. The CLI sets it before [Compile.compile]; the library default
+   keeps every test and every direct caller exactly as they were. *)
+let row_sink : sink_policy ref = ref Retain_rows
+
 type t = {
   ints : ivar Names.t;
   taken : unit Names.t;
@@ -258,7 +368,10 @@ type t = {
          it from all of [ints] on every call (O(vars) per auxiliary, O(vars * rows) per
          compile). Never shrinks, because [ints] never does. *)
   mutable decl_rev : string list;
-  mutable rev_constraints : Opb.constr list;
+  mutable sink : sink;
+  occurs : Occurs.t; (* the distinct variable names of every committed row *)
+  mutable renamed_rev : string list; (* `name x -> x'` comments, newest first *)
+  renamed_seen : unit Names.t;
   mutable n : int; (* ids 1..n have been assigned *)
   mutable objective : Opb.objective option;
   mutable n_aux : int;
@@ -326,7 +439,14 @@ let create () =
     ints = Names.create 64;
     taken = Names.create 64;
     decl_rev = [];
-    rev_constraints = [];
+    sink =
+      (match !row_sink with
+      | Retain_rows -> Retain []
+      | Discard_rows -> Discard
+      | Stream_rows_to path -> Stream { path; oc = open_out path });
+    occurs = Occurs.create ();
+    renamed_rev = [];
+    renamed_seen = Names.create 8;
     n = 0;
     objective = None;
     n_aux = 0;
@@ -354,14 +474,44 @@ let domain t x =
 
 let vars t = List.rev t.decl_rev
 let n_constraints t = t.n
-let constraints t = List.rev t.rev_constraints
+
+(* The committed rows, in id order. Only under [Retain_rows]: a streamed row is on disk
+   and nowhere else, which is the point. *)
+let constraints t =
+  match t.sink with
+  | Retain rev -> List.rev rev
+  | Stream _ | Discard | Written ->
+      invalid_arg
+        "Encoding.constraints: the rows were streamed, not retained (M7-T27 (b))"
+
+(* Record that [x] renders under another name, the first time a row mentions it. *)
+let note_renamed t x =
+  if Lit.is_renamed x && not (Names.mem t.renamed_seen x) then (
+    Names.add t.renamed_seen x ();
+    t.renamed_rev <- Printf.sprintf "name %s -> %s" x (Lit.sanitize x) :: t.renamed_rev)
+
+(* Mint the id and put the row where the sink says. The header's counts are NOT
+   touched here: see [add_constraint] for the general row and [declare_int_gen] for the
+   ladder, which accounts for all its rungs at once. *)
+let commit t c =
+  if Opb.relation c = Opb.Eq then raise Equality_in_opb;
+  t.n <- t.n + 1;
+  (match t.sink with
+  | Retain rev -> t.sink <- Retain (c :: rev)
+  | Stream { oc; _ } -> Opb.output_row oc t.n c
+  | Discard -> ()
+  | Written ->
+      invalid_arg "Encoding.add_constraint: the .opb has already been written (I-X5)");
+  t.n
 
 (* Append a constraint to the .opb and hand back the id [f] will give it. *)
 let add_constraint t c =
-  if Opb.relation c = Opb.Eq then raise Equality_in_opb;
-  t.n <- t.n + 1;
-  t.rev_constraints <- c :: t.rev_constraints;
-  t.n
+  List.iter
+    (fun (_, (l : Lit.t)) ->
+      Occurs.add_var t.occurs l.Lit.v;
+      note_renamed t (Lit.owner l.Lit.v))
+    (Opb.terms c);
+  commit t c
 
 (* sum a_i l_i = b, as the two inequalities the checker would have split it into
    anyway -- but with ids we control. PROOF-FORMAT section 4 already says
@@ -955,7 +1105,7 @@ let declare_int_gen t x ~holes ~lo ~hi =
       name = x;
       lo;
       hi;
-      consistency = Hashtbl.create 16;
+      ladder_base = t.n + 1;
       hole_rows = Hashtbl.create 4;
       direct = None;
     }
@@ -963,18 +1113,28 @@ let declare_int_gen t x ~holes ~lo ~hi =
   Names.replace t.ints x v;
   Names.replace t.taken (Lit.sanitize x) ();
   t.decl_rev <- x :: t.decl_rev;
+  (* The header's accounting for the whole ladder and its holes, once (M7-T27 (b), see
+     [Occurs] above): the names x_ge_(lo+1) .. x_ge_hi, and the owner's renaming, and
+     only if a row is actually committed, which is when the ladder has a rung (a hole
+     is strictly interior, so it implies one). *)
+  if ladder >= 1 then (
+    Occurs.add_range t.occurs x (lo + 1) hi;
+    note_renamed t x);
   (* docs/PROOF-FORMAT.md section 3: for each lo < v < hi,
-        1 ~x_ge_(v+1) 1 x_ge_v >= 1        i.e.  x >= v+1 -> x >= v. *)
+        1 ~x_ge_(v+1) 1 x_ge_v >= 1        i.e.  x >= v+1 -> x >= v.
+     [commit], not [add_constraint]: the rung's id is [ladder_base + (value - lo - 1)]
+     by construction of this loop, and its names were accounted above. *)
   for value = lo + 1 to hi - 1 do
     let c = Opb.clause [ Lit.negate (Lit.ge x (value + 1)); Lit.ge x value ] in
-    Hashtbl.replace v.consistency value (add_constraint t c)
+    let id = commit t c in
+    assert (id = v.ladder_base + (value - lo - 1))
   done;
   (* The hole rows, after the whole ladder, in ascending order. See the comment above
      this function for why the polarity is the ladder's mirror and not its copy. *)
   List.iter
     (fun h ->
       let c = Opb.clause [ Lit.negate (Lit.ge x h); Lit.ge x (h + 1) ] in
-      Hashtbl.replace v.hole_rows h (add_constraint t c))
+      Hashtbl.replace v.hole_rows h (commit t c))
     holes
 
 let declare_int_gen t x ~holes ~lo ~hi =
@@ -1012,7 +1172,7 @@ let lt t x value = le t x (value - 1)
 (* The id of the consistency constraint  x >= v+1 -> x >= v. *)
 let consistency_id t x value =
   let v = find t x in
-  Hashtbl.find_opt v.consistency value
+  if v.lo < value && value < v.hi then Some (v.ladder_base + (value - v.lo - 1)) else None
 
 (* ---------------------------------------------------------------------------
    Direct encoding, introduced lazily with [red]
@@ -1121,7 +1281,7 @@ let derive_at_most_one t w x a b =
   if a < v.lo || b > v.hi then invalid_arg "Encoding.derive_at_most_one: out of domain";
   let d = direct t x in
   let chain =
-    List.init (max 0 (b - a - 1)) (fun i -> Hashtbl.find v.consistency (a + 1 + i))
+    List.init (max 0 (b - a - 1)) (fun i -> v.ladder_base + (a + 1 + i - v.lo - 1))
   in
   let ids = Hashtbl.find d.d_hi a :: Hashtbl.find d.d_lo b :: chain in
   Writer.comment w "at-most-one for %s: %d and %d are exclusive" x a b;
@@ -1256,7 +1416,41 @@ let assignment_lits t bindings =
    the paired [write_opb_for] collapsed into this function rather than being kept as a
    safer spelling of it: the unsafe spelling no longer exists. *)
 let write_opb ?(comments = []) t oc =
-  Opb.write ?objective:t.objective oc ~comments ~constraints:(constraints t)
+  (* `#variable=` counts the objective's names too, those not already in a row. *)
+  let nvars =
+    match t.objective with
+    | None -> t.occurs.Occurs.count
+    | Some o ->
+        let extra = Occurs.create () in
+        List.iter
+          (fun (_, (l : Lit.t)) ->
+            if not (Occurs.mem t.occurs l.Lit.v) then Occurs.add_var extra l.Lit.v)
+          o.Opb.obj_terms;
+        t.occurs.Occurs.count + extra.Occurs.count
+  in
+  Opb.write_header ?objective:t.objective oc ~nvars ~n_constraints:t.n
+    ~renames:(List.rev t.renamed_rev) ~comments;
+  match t.sink with
+  | Retain rev -> List.iteri (fun i c -> Opb.output_row oc (i + 1) c) (List.rev rev)
+  | Stream { path; oc = body } ->
+      (* The body is complete on disk; splice it in after the header, 1 MiB at a time,
+         and let go of it. The copy is the price of a header whose counts are only
+         known at the end; it is I/O, not heap. *)
+      close_out body;
+      let ic = open_in_bin path in
+      let buf = Bytes.create (1 lsl 20) in
+      let rec go () =
+        let k = input ic buf 0 (Bytes.length buf) in
+        if k > 0 then (
+          output oc buf 0 k;
+          go ())
+      in
+      go ();
+      close_in ic;
+      Sys.remove path;
+      t.sink <- Written
+  | Discard -> invalid_arg "Encoding.write_opb: the rows were discarded (Discard_rows)"
+  | Written -> invalid_arg "Encoding.write_opb: the .opb has already been written"
 
 (* Start the proof. Must be called after the .opb is complete (invariant I-X5).
 
@@ -1396,7 +1590,7 @@ let check_lin_le_computable t terms rhs ~what =
    there is no separate equality path to keep in sync with I-X5 here.
 
    This is one of the two committing doors M1-T32 guards. The check runs BEFORE the
-   expansion, so a row that cannot be computed never reaches [t.rev_constraints] and
+   expansion, so a row that cannot be computed never reaches the sink and
    the encoding is left exactly as it was. *)
 let add_int_lin_le t terms rhs =
   check_lin_le_computable t terms rhs ~what:"Encoding.add_int_lin_le";
@@ -1794,11 +1988,13 @@ let reif_pbvar reifier = (Lit.bool_true reifier).Lit.v
 
 (* Does [reifier]'s Boolean occur in anything already committed to the .opb? *)
 let reif_occurs t reifier =
-  let target = Lit.var_name (reif_pbvar reifier) in
+  let bv = reif_pbvar reifier in
+  let target = Lit.var_name bv in
   let in_terms terms =
     List.exists (fun (_, (l : Lit.t)) -> String.equal (Lit.var_name l.Lit.v) target) terms
   in
-  List.exists (fun c -> in_terms (Opb.terms c)) t.rev_constraints
+  (* By rendered name, as before: [Occurs] is keyed on exactly that (M7-T27 (b)). *)
+  Occurs.mem t.occurs bv
   || match t.objective with None -> false | Some o -> in_terms o.Opb.obj_terms
 
 (* The two rows of  reifier <-> cond,  as [Opb.constr] values. Exposed on its own for

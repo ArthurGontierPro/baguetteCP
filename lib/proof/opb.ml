@@ -162,13 +162,65 @@ let rename_comments constraints =
   List.rev !acc
 
 (* The header must be written before the constraints and must state the true counts,
-   so callers collect constraints first, then write. See invariant I-X5. *)
+   so a caller either collects constraints first and then calls [write], or counts as it
+   mints and calls [write_header] + [output_row] (M7-T27 (b), below). See invariant I-X5. *)
 (* The label a constraint carries in the .opb and is cited by in the proof. See
    docs/PROOF-FORMAT.md section 2a and D-0023. It is the row's 1-based position, which
    is also the id the [f] rule gives it -- but the *point* is that the proof never has
    to rely on that agreement again, because it cites the name. *)
 let label_of i = Printf.sprintf "@c%d" i
 
+(* M7-T27 (b). The .opb in two halves, so that [Encoding] can write a row the moment it
+   is minted instead of holding every row as data until the file is written (D-0123,
+   family C: ~300 bytes of live heap per ladder rung, 26 M rungs on the widest
+   Challenge instance). [write] below is the same two halves over a list, so the
+   streamed file and the collected one are byte-identical by construction: there is
+   one renderer for a row and one for the header. *)
+
+(* Row number [i] (1-based, the id the [f] rule gives it), labelled and terminated.
+
+   Every row is labelled (D-0023), and a labelled row must be a single constraint:
+   VeriPB 3.0 refuses `@c1 ... = k ;` outright ("Expected inequality constraint"),
+   because one name cannot stand for the two constraints an `=` splits into. That is
+   the checker enforcing the discipline [Encoding.add_constraint] already imposes, so
+   it is not a restriction added here -- but it is why an `=` row cannot reach this
+   function at all. *)
+let output_row oc i c =
+  match c.rel with
+  | Ge ->
+      output_string oc (label_of i);
+      output_char oc ' ';
+      List.iter
+        (fun (a, l) ->
+          if a >= 0 then output_char oc '+';
+          output_string oc (string_of_int a);
+          output_char oc ' ';
+          output_string oc (Lit.to_string l);
+          output_char oc ' ')
+        c.terms;
+      output_string oc ">= ";
+      output_string oc (string_of_int c.rhs);
+      output_string oc " ;\n"
+  | Eq ->
+      invalid_arg
+        "Opb.output_row: an `=` row cannot carry a label -- it is two constraints to the \
+         checker, and one name cannot name both. Post it as two `>=` rows \
+         (Encoding.add_equality)."
+
+(* Everything above the first row: the counts, the renaming comments ([renames] is the
+   `name x -> x'` lines in first-occurrence order, already rendered without the `* `),
+   the caller's comments and the objective. [nvars] is the number of distinct OPB
+   variable names over the rows AND the objective; [n_constraints] is the checker's
+   count ([n_checker_constraints]). *)
+let write_header ?objective:obj oc ~nvars ~n_constraints ~renames ~comments =
+  Printf.fprintf oc "* #variable= %d #constraint= %d\n" nvars n_constraints;
+  List.iter (fun s -> Printf.fprintf oc "* %s\n" s) renames;
+  List.iter (fun s -> Printf.fprintf oc "* %s\n" s) comments;
+  match obj with None -> () | Some o -> Printf.fprintf oc "%s\n" (objective_to_string o)
+
+(* The collected form: count over the list, then write it. This is the REFERENCE the
+   streamed writer in [Encoding] is tested against (test/unit/test_proof.ml,
+   [test_m7t27_streamed_opb_is_byte_identical]). *)
 let write ?objective:obj oc ~comments ~constraints =
   let names = var_names constraints in
   let obj_names =
@@ -182,26 +234,7 @@ let write ?objective:obj oc ~comments ~constraints =
     List.iter (fun n -> Names.replace seen n ()) obj_names;
     Names.length seen
   in
-  Printf.fprintf oc "* #variable= %d #constraint= %d\n" nvars
-    (n_checker_constraints constraints);
-  List.iter (fun s -> Printf.fprintf oc "* %s\n" s) (rename_comments constraints);
-  List.iter (fun s -> Printf.fprintf oc "* %s\n" s) comments;
-  (match obj with
-  | None -> ()
-  | Some o -> Printf.fprintf oc "%s\n" (objective_to_string o));
-  (* Every row is labelled (D-0023), and a labelled row must be a single constraint:
-     VeriPB 3.0 refuses `@c1 ... = k ;` outright ("Expected inequality constraint"),
-     because one name cannot stand for the two constraints an `=` splits into. That is
-     the checker enforcing the discipline [Encoding.add_constraint] already imposes, so
-     it is not a restriction added here -- but it is why an `=` row cannot reach this
-     function at all. *)
-  List.iteri
-    (fun i c ->
-      match c.rel with
-      | Ge -> Printf.fprintf oc "%s %s\n" (label_of (i + 1)) (constr_to_string c)
-      | Eq ->
-          invalid_arg
-            "Opb.write: an `=` row cannot carry a label -- it is two constraints to the \
-             checker, and one name cannot name both. Post it as two `>=` rows \
-             (Encoding.add_equality).")
-    constraints
+  write_header ?objective:obj oc ~nvars
+    ~n_constraints:(n_checker_constraints constraints)
+    ~renames:(rename_comments constraints) ~comments;
+  List.iteri (fun i c -> output_row oc (i + 1) c) constraints
