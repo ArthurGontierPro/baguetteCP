@@ -209,6 +209,15 @@ def load_runs(outdirs):
     return rows
 
 
+def verified(r):
+    """The proof establishes what the solver printed. Tables written before compare.py
+    read the checker's optimisation wording of infeasibility (`BOUNDS INF <= obj <= INF`)
+    file that sound UNSAT as VERIFIED-WEAK; it is accepted here on the same wording."""
+    v = r.get("check_verdict")
+    return v == "VERIFIED" or (v == "VERIFIED-WEAK" and r["status"] == "UNSAT"
+                               and compare.INF_BOUNDS_RE.search(r.get("detail") or ""))
+
+
 def our_answer(r, kind, timeout_s, rule, demote):
     """-> (status, time_ms, objective, note). note names a demotion, else ''."""
     if r is None:
@@ -219,7 +228,7 @@ def our_answer(r, kind, timeout_s, rule, demote):
     obj = str(val) if val is not None else " "
     n = compare.nsols(r)
     note = ""
-    if demote and st in ("OPT", "UNSAT") and r.get("check_verdict") != "VERIFIED":
+    if demote and st in ("OPT", "UNSAT") and not verified(r):
         note = "%s demoted: proof %s" % (st, r.get("check_verdict") or "-")
         st = "SAT" if st == "OPT" else "UNKNOWN"
     if st == "OPT":
@@ -405,8 +414,10 @@ def main(argv):
             print("   zero: " + " ".join(zero))
 
     cal = "chuffed-ours-%s" % category
-    if cal in extra and "chuffed-%s" % category in R["solvers"]:
-        s = R["solvers"].index("chuffed-%s" % category)
+    # The official name is `Chuffed-fd` in 2014-2016 and `chuffed-fd` elsewhere.
+    offs = [k for k, n in enumerate(R["solvers"]) if n.lower() == "chuffed-%s" % category]
+    if cal in extra and offs:
+        s = offs[0]
         agree = {}
         ratios = []
         for i in range(len(R["benchmarks"])):

@@ -167,6 +167,7 @@ def classify(solver, rc, outf, errf, sense, objname, cap_rc):
 # ------------------------------------------------------------------ verdict
 
 BOUNDS_RE = re.compile(r"BOUNDS\s+(\S+)\s*<=\s*obj\s*<=\s*(\S+)")
+INF_BOUNDS_RE = re.compile(r"BOUNDS INF <= \S+ <= INF")
 GRAMMAR_RE = re.compile(r"pars(e|ing)|syntax|unexpected|expected .* found|unknown rule", re.I)
 
 
@@ -183,7 +184,10 @@ def verdict(rc, vpf, status):
         # whose CONCLUSION does not establish what the solver printed. The second is a
         # soundness-relevant finding about the solver's output, not about the proof.
         weak = False
-        if status == "UNSAT" and "UNSATISFIABLE" not in s:
+        # On an optimisation proof the checker words infeasibility as a bound, not as
+        # UNSATISFIABLE: `s VERIFIED BOUNDS INF <= obj <= INF` (lower bound +inf = no
+        # solution). Found by M7-T26 on 2015 p1f, two sound UNSAT answers filed WEAK.
+        if status == "UNSAT" and "UNSATISFIABLE" not in s and not INF_BOUNDS_RE.search(s):
             weak = True
         if status == "OPT":
             m = BOUNDS_RE.search(s)
