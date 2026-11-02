@@ -1015,6 +1015,20 @@ let report_limit opts (st : Search.stats) ~(engine : Engine.t) ~best =
     c.Engine.c_runs c.Engine.c_effectful c.Engine.c_contra
 
 let solve opts (m : Model.t) =
+  (* M7-T27 (b), D-0123 family C: the .opb's rows go to disk as they are minted, never
+     to the heap. With --proof the body is written to PREFIX.opb.rows and [write_opb]
+     splices it under the header, then removes it; without --proof there is no .opb to
+     write and the rows are dropped at the door. Set BEFORE [Compile.compile], which is
+     where [Encoding.create] runs. The at_exit is for the runs that end in [exit 5] or
+     an uncaught exception with the body half-written: the .opb is INCOMPLETE then
+     anyway ([incomplete_proof_warning]), and the body should not outlive it. *)
+  (match opts.proof_prefix with
+  | Some prefix ->
+      let rows = prefix ^ ".opb.rows" in
+      Encoding.row_sink := Encoding.Stream_rows_to rows;
+      at_exit (fun () ->
+          if Sys.file_exists rows then try Sys.remove rows with Sys_error _ -> ())
+  | None -> Encoding.row_sink := Encoding.Discard_rows);
   let compiled = Timing.phase "compile" (fun () -> Compile.compile m) in
   let store = compiled.Compile.store in
   let encoding = compiled.Compile.encoding in
