@@ -9698,15 +9698,23 @@ words allocated are identical to the word (40 137 974 566 both) -- so on this in
 closure never expanded a level-0 node at all. (Run-to-run variance of the wall-clock limit:
 the same `950317c3` binary gave 67 nodes earlier today and 69 now.)
 
-**So the attribution in the main record above was wrong**, and this addendum corrects it: the
-146 055 materialisations are not the closure's level-0 expansions. The remaining candidates
-are the CONFLICT-LEVEL expansions -- 1UIP (`one_uip`, default scope) resolving the deepest
-level, which on this instance holds thousands of reif-row entries per decision, and then the
-closure resolving the same entries a second time (`Learn.at_conflict` runs both walks on
-one conflict). **Pending measurement**: a throwaway branch `wave40-reason2-measure` counts
-expansions by scope and materialisations by site; its 300 s run was launched on the node as
-`/scratch/arthur/m7t27a2/count300.err` (pidfile `count300.pid`, binary `main.count.exe`),
-and the ssh link dropped before it returned. Read that file before anything else; if it says
-"at-conflict-level" dominates, the remedy is a per-conflict memo of materialised facts keyed
-by trail position, shared by the two walks of one conflict and dropped with it -- not a memo
-on the `Later`, which would bring back the retention (a) removed.
+**So the attribution in the main record above was wrong**, and this addendum corrects it with
+the measurement (throwaway branch `wave40-reason2-measure`, counters by site, 300 s, log
+`fataepyc-06:/scratch/arthur/m7t27a2/count300.err`): 58 nodes, 27 conflicts, **128 842
+materialisations of a `Later`, 462.7 M facts**, of which Analysis expansions were **2 288 at
+the conflict level (1UIP) and 122 033 at levels above 0 under `Everywhere`** (429.8 M facts);
+the remainder (~4 500) is the trace, once per entry. Level 0 was never expanded; 1UIP is
+cheap. The sink is the **decision closure resolving every non-root entry at every open level
+above 0 back to its decisions, at every conflict**: a decision on this instance propagates
+thousands of reif-row prunings at its level, and the levels below the conflict level persist
+across conflicts, so the same entries are resolved again at each of them (~4 500 per
+conflict). The closure's only consumer is `decision_levels`, i.e. the SET OF LEVELS the
+conflict rests on; it does not need the facts.
+
+**Remedy, not done here (analysis.ml/learn.ml, a decision record of its own).** Answer
+"which decision levels does this entry rest on" without materialising facts: either (i) a
+per-entry, lazily computed and cached set of levels (small: at most the open levels), walked
+through supports rather than facts -- the cache is O(levels) per entry, not O(terms), so it is
+not the retention (a) removed; or (ii) a per-conflict memo keyed by trail position for the
+closure alone, which halves nothing across conflicts and is the weaker shape. The level-0
+stop stays: it is correct and costs nothing, and it is the half of the argument (i) needs.

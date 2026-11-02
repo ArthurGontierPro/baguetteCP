@@ -3572,11 +3572,12 @@ two scenes in `test/unit/test_analysis.ml`; D-0124 addendum. Branch `wave40-reas
   2.17 GB both, allocation identical to the word. md5 before (merged main `0f93b38`) `950317c3`, after
   (`6ffd37b`) `c8a14140`. The change recovers nothing on this instance; the main-record attribution
   (root-level re-expansion) was wrong.
-- PENDING, do not re-run: the attribution run on branch `wave40-reason2-measure` (temporary counters,
-  not for merge): `/scratch/arthur/m7t27a2/count300.err` (pidfile `count300.pid`, `main.count.exe`).
-  Its two `snapstat:` lines say whether 1UIP's conflict-level expansions or the closure's are the
-  146 055 materialisations. Next step is in the addendum (a per-conflict memo in Learn/Analysis).
-- The link dropped before the run returned; nothing else was left running by this session.
+- The attribution run (branch `wave40-reason2-measure`, temporary counters, not for merge; log
+  `/scratch/arthur/m7t27a2/count300.err`) RETURNED: 128 842 materialisations, of which 122 033 are the
+  decision closure's expansions at levels ABOVE 0 and 2 288 are 1UIP's. The sink is the closure resolving
+  every level above 0 back to its decisions at every conflict; its only consumer is `decision_levels`.
+  Remedy in the addendum: per-entry cached dependency LEVELS (O(levels), not facts) -- a record of its own.
+- Nothing is left running on the node by this session.
 
 ## Claims history (archived 2026-11-02, read-only)
 
