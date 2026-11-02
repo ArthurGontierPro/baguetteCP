@@ -1369,6 +1369,67 @@ let test_m6_time_limit () =
         (Array.to_list (Sys.readdir dir));
       try Sys.rmdir dir with _ -> ())
 
+(* ------------------------------------- M7-T27 (b) / D-0123: the streamed .opb, end to end *)
+
+(* The CLI's shape: [Encoding.row_sink] set to stream BEFORE [Compile.compile], the
+   .opb written from the body file, the proof over it, and veripb over both. Holes, a
+   disequality (an aux, renamed) and a bare bool, so that every header input of the
+   streamed writer is exercised on the way to the checker; and the .opb compared byte
+   for byte with the retained-rows compile of the same source, which is the path every
+   file in test/expected/ came from. *)
+let m7t27_src =
+  "var {1,3,5}: x :: output_var;\n\
+   var 0..4: y :: output_var;\n\
+   var bool: b :: output_var;\n\
+   constraint int_lin_le([1,-1],[x,y],1);\n\
+   constraint int_ne(x, y);\n\
+   constraint bool2int(b, y);\n\
+   solve satisfy;\n"
+
+let test_m7t27_streamed_proof_verifies () =
+  match veripb_path () with
+  | None ->
+      incr failures;
+      print_endline
+        "FAIL M7-T27 (b): veripb not found, so the streamed .opb was NOT checked against \
+         its proof. A missing checker is a failure, never a skip."
+  | Some veripb -> (
+      let dir = Filename.temp_file "baguette_m7t27" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let rows = Filename.concat dir "streamed.opb.rows" in
+      let saved = !Encoding.row_sink in
+      Encoding.row_sink := Encoding.Stream_rows_to rows;
+      let opb, pbp, outcome =
+        Fun.protect
+          ~finally:(fun () -> Encoding.row_sink := saved)
+          (fun () ->
+            let opb, pbp, outcome = el_solve dir "streamed" m7t27_src in
+            (opb, pbp, outcome))
+      in
+      check "M7-T27 (b) e2e: the scene is SAT"
+        (match outcome with Search.Sat _ -> true | _ -> false);
+      check "M7-T27 (b) e2e: the body file was consumed" (not (Sys.file_exists rows));
+      let rc, out = m6_veripb veripb dir opb (Filename.concat dir "streamed.pbp") in
+      check "M7-T27 (b) e2e: veripb VERIFIES the proof over the streamed .opb (I-X1)"
+        (rc = 0);
+      if rc <> 0 then print_endline out;
+      ignore pbp;
+      let opb_ref, _, _ = el_solve dir "retained" m7t27_src in
+      check "M7-T27 (b) e2e: the ambient policy was restored"
+        (!Encoding.row_sink = Encoding.Retain_rows);
+      let streamed = read_file opb and retained = read_file opb_ref in
+      check "M7-T27 (b) e2e: the streamed .opb is byte-identical to the retained one"
+        (streamed = retained);
+      if streamed <> retained then
+        Printf.printf "  streamed:\n%s\n  retained:\n%s\n" streamed retained;
+      check "M7-T27 (b) e2e: the renamed aux is in the header"
+        (m6_says streamed "* name $ne0 -> _ne0\n");
+      List.iter
+        (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ())
+        (Array.to_list (Sys.readdir dir));
+      try Sys.rmdir dir with _ -> ())
+
 let () =
   print_endline "";
   List.iter run_model models;
@@ -1377,6 +1438,7 @@ let () =
   test_m5_derivation_is_load_bearing ();
   test_element_derivation_is_load_bearing ();
   test_m6_time_limit ();
+  test_m7t27_streamed_proof_verifies ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
