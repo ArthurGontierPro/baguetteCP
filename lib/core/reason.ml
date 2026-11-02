@@ -58,7 +58,33 @@
    [Linear.snapshot_source].)
 
    [name] is the FlatZinc identifier, frozen the same way -- nothing renames a variable,
-   and a reason must be spellable without holding the store. *)
+   and a reason must be spellable without holding the store.
+
+   ---------------------------------------------------------------------------
+   M7-T27 (a), D-0124: a reason may be MATERIALISED LATER, from the trail's history
+   ---------------------------------------------------------------------------
+
+   [t] has two arms. [Facts] is the list above, built at the push. [Later] is a function
+   that builds that same list on demand -- and the discipline that keeps the paragraph
+   above true is that the function reads a [Store.history], the trail as it stood at a
+   FIXED position (the pruning's own), never the live store. I-T1 freezes every trail
+   position below an entry for as long as that entry is on the trail, and
+   [Store.check_history] refuses a materialisation after they have been unwound, so a
+   [Later] reason renders the derivation as of the moment of the pruning exactly as a
+   [Facts] one does, and nothing that may have changed since is readable through it.
+
+   Why it exists: a [Linear] pruning's reason is one fact per OTHER term of its row, and
+   on the Challenge rows D-0123 measured (4 000 to 8 000 terms, about two prunings per
+   effective run) building those eagerly held 15 M facts and as many snapshot records on
+   the trail after four search nodes, 1.2 GB per node. D-0026's "not a closure per
+   pruning" was written against a closure over the LIVE store (GCS's [Narrowable*], and
+   I-X6's own failure mode); a closure over a frozen history is laziness in WHEN the
+   reason is materialised, which is what D-0026 asked for, with the captured environment
+   a snapshot by construction rather than by copying. Nothing here memoises: a reason is
+   asked for once by the trace and once per cut by analysis, and what a memo would keep
+   is exactly the per-term list this arm exists not to keep. [empty] is carried so that
+   [is_empty], which analysis asks per node, stays O(1); [Store.check_agreement] checks
+   it against the materialisation under BAGUETTE_DEBUG. *)
 
 module Lit = Baguette_proof.Lit
 
@@ -72,7 +98,14 @@ type fact =
 (* A reason is the facts, in the order the propagator read them. Order is preserved
    through [lits] and no duplicate is dropped: what a trace line's tail contains, and in
    what order, is an artefact this project diffs byte for byte. *)
-type t = fact list
+type t = Facts of fact list | Later of later
+and later = { compute : unit -> fact list; empty : bool }
+
+(* THE one place a stored reason becomes the facts it stands for. A [Later] reads its
+   history here and nowhere else, and raises ([Store.check_history]) if that history has
+   been unwound. *)
+let facts = function Facts l -> l | Later l -> l.compute ()
+let of_facts l = Facts l
 
 (* "This change rests on no facts at all."
 
@@ -84,8 +117,8 @@ type t = fact list
    it. It is the honest answer in exactly two places: a search decision (nothing derived
    it -- its literal enters the proof negated, in the branch nogood, D-0018/D-0037) and
    a test that is not exercising the proof. *)
-let none : t = []
-let is_empty (t : t) = t = []
+let none : fact list = []
+let is_empty = function Facts l -> l = [] | Later l -> l.empty
 let at_least ~name ~decl value = At_least { name; value; decl }
 let at_most ~name ~decl value = At_most { name; value; decl }
 
@@ -116,7 +149,8 @@ let lit_of_fact = function
   | At_most { name; value; decl } ->
       if value < decl then Some (Lit.le name value) else None
 
-let lits (t : t) = List.filter_map lit_of_fact t
+let lits_of_facts (l : fact list) = List.filter_map lit_of_fact l
+let lits r = lits_of_facts (facts r)
 
 (* --------------------------------------------------------------- the scope *)
 
@@ -128,7 +162,8 @@ let lits (t : t) = List.filter_map lit_of_fact t
    [Store.apply]'s D-0026 agreement check reads this, and M2-T3's conflict analysis is
    meant to walk a reason's variables without materialising a single literal -- which is
    why this is here and not derived from [lits]. *)
-let owners (t : t) =
+let owners r =
+  let t = facts r in
   let seen = Hashtbl.create 8 in
   List.filter_map
     (fun f ->
@@ -156,8 +191,10 @@ let fact_to_string = function
   | At_most { name; value; decl } ->
       Printf.sprintf "%s<=%d%s" name value (if value < decl then "" else "[decl]")
 
-let to_string (t : t) =
+let to_string_facts (t : fact list) =
   match t with [] -> "-" | _ -> String.concat " " (List.map fact_to_string t)
+
+let to_string r = to_string_facts (facts r)
 
 (* --------------------------------------------------------------- the one channel *)
 
@@ -231,4 +268,13 @@ let to_string (t : t) =
    support" arm for the conclusion half. *)
 type justified = { reason : t; justification : Explanation.t; concludes : fact option }
 
-let because ~concludes reason justification = { reason; justification; concludes }
+let because ~concludes reason justification =
+  { reason = Facts reason; justification; concludes }
+
+(* D-0124: the same channel with the reason's facts built on demand. [compute] must read
+   a [Store.history] taken at the push and nothing live (see the module header); [empty]
+   must equal [compute () = []], which [Store.check_agreement] asserts under
+   BAGUETTE_DEBUG. [~empty] is required rather than defaulted for the reason [~concludes]
+   is: a caller states what it knows and is seen doing it. *)
+let because_later ~concludes ~empty compute justification =
+  { reason = Later { compute; empty }; justification; concludes }

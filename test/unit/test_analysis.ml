@@ -295,14 +295,14 @@ let test_one_uip_stops_at_a_real_uip () =
   check "(b) 1UIP: exactly one literal from the conflict level"
     (List.length (Analysis.at_level t t.Analysis.conflict_level) = 1);
   check "(b) 1UIP: the cut is b >= 3 with the hole's two facts folded in"
-    (Reason.to_string (Analysis.facts t) = "b>=3 e>=3 e<=3");
+    (Reason.to_string_facts (Analysis.facts t) = "b>=3 e>=3 e<=3");
   check "(b) 1UIP: it stopped at a UIP strictly inside the level, not at the assumption"
     (List.for_all (fun n -> not n.Analysis.root) (Analysis.at_level t 2));
   check "(b) 1UIP: two resolution steps, one per reconverging branch"
     (t.Analysis.resolutions = 2);
   check "(b) 1UIP: the decision cut is a different, weaker cut over the assumption"
     (let _, d = cut1 Analysis.decision_cut in
-     Reason.to_string (Analysis.facts d) = "e>=3 e<=3 a>=3"
+     Reason.to_string_facts (Analysis.facts d) = "e>=3 e<=3 a>=3"
      && List.for_all (fun n -> n.Analysis.root) (Analysis.at_level d 2))
 
 let test_conflict_side_carries_several_conflict_level_literals () =
@@ -386,7 +386,8 @@ let test_misattribution_that_is_not_caught () =
   check "(c) LIMIT: and the cut's literals are unchanged, so the oracle cannot see it"
     (match r with
     | Ok t ->
-        Reason.to_string (Analysis.facts t) = Reason.to_string (Analysis.facts truthful)
+        Reason.to_string_facts (Analysis.facts t)
+        = Reason.to_string_facts (Analysis.facts truthful)
     | Error _ -> false)
 
 let test_antecedents_are_the_rows_the_cut_rests_on () =
@@ -522,7 +523,7 @@ let test_scene2_scan_fallback () =
         [ vx; vy; vv ];
       check "scene 2: the bound history agrees with the trail scan on every query" !agree;
       check "scene 2: the cut is over the two assumptions"
-        (Reason.to_string (Analysis.facts t) = "v>=3 x>=2");
+        (Reason.to_string_facts (Analysis.facts t) = "v>=3 x>=2");
       check "scene 2: oracle -- model + cut is UNSAT by brute force"
         (satisfiable ~n:3 ~lo:0 ~hi:4 ~sat:(fun a ->
              model2 a && facts_hold store (Analysis.facts t) a)
@@ -609,8 +610,8 @@ let test_engine_agrees () =
                     (List.length t.Analysis.folds = 1);
                   check "engine: the cut is the same one the mini-engine reached"
                     (let _, m = cut1 Analysis.one_uip in
-                     Reason.to_string (Analysis.facts t)
-                     = Reason.to_string (Analysis.facts m)))))
+                     Reason.to_string_facts (Analysis.facts t)
+                     = Reason.to_string_facts (Analysis.facts m)))))
 
 (* ===================================================================== *)
 (* Determinism: a cut is naturally a set, and a set iterated in hash      *)

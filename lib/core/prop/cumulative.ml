@@ -521,7 +521,8 @@ let pass t store =
         (Found
            (Store.deriving_ahead store (fun () ->
                 Store.conflict store
-                  (Reason.because ~concludes:None why.Reason.reason
+                  (Reason.because ~concludes:None
+                     (Reason.facts why.Reason.reason)
                      why.Reason.justification))));
     let prune () =
       if lower then Store.set_lo store j.s_task.x bound why
