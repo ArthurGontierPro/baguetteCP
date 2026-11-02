@@ -446,6 +446,8 @@ Several sessions share this checkout, so staging discipline matters more than us
 - Commit in small pieces. A session that works for an hour without committing is a
   session whose work someone else will clobber.
 - Prefix commits with the task ID: `M1-T7: int_lin_le propagator and its pol justification`.
+- Milestones opened from 2026-11-02 on are named, `M<n>-<slug>` (`M8-bits-encoding`), and their
+  tasks `M<n>-<slug>-T<k>`; the slug is what you grep for. M0 to M7 keep their bare numbers.
 - Claim commits are their own commit (`claim: M1-T7`), pushed before the work starts.
 
 ## Environment note
