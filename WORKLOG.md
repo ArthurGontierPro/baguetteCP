@@ -3560,6 +3560,24 @@ byte-identical; `make check` ok on fataepyc-06.
 - Artefacts on `fataepyc-06:/scratch/arthur/m7t27a/` (both binaries, all runs, `check3.log`); the clone
   `/scratch/arthur/baguette-reason` is on `wave40-reason`.
 
+## M7-T27 (a2) handoff, 2026-11-02 (agent-reason): the decision closure stops at level 0 -- byte-neutral, and not the time sink
+
+**What changed.** `lib/core/analysis.ml`: `decision_closure` stops/postconditions on "every node above
+level 0 is a root", `Everywhere` expands levels > 0 only, root conflicts under the default scope unchanged;
+two scenes in `test/unit/test_analysis.ml`; D-0124 addendum. Branch `wave40-reason2`.
+
+**What the next session should know.**
+- Verified on fataepyc-06 (`/scratch/arthur/m7t27a2/`): 156 models byte-identical before/after
+  (`art/before`, `art/after`), `make check` ok (`check.log`), pattern-set-mining 300 s identical: 69 nodes /
+  2.17 GB both, allocation identical to the word. md5 before (merged main `0f93b38`) `950317c3`, after
+  (`6ffd37b`) `c8a14140`. The change recovers nothing on this instance; the main-record attribution
+  (root-level re-expansion) was wrong.
+- PENDING, do not re-run: the attribution run on branch `wave40-reason2-measure` (temporary counters,
+  not for merge): `/scratch/arthur/m7t27a2/count300.err` (pidfile `count300.pid`, `main.count.exe`).
+  Its two `snapstat:` lines say whether 1UIP's conflict-level expansions or the closure's are the
+  146 055 materialisations. Next step is in the addendum (a per-conflict memo in Learn/Analysis).
+- The link dropped before the run returned; nothing else was left running by this session.
+
 ## Claims history (archived 2026-11-02, read-only)
 
 What `## Active claims` held from 2026-09-16 to 2026-11-02, moved here verbatim (one broken

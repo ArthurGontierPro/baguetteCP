@@ -9678,3 +9678,35 @@ analysis.ml's to remove (below).
 - `Trace.done_` keeps a reference to every entry it has written, overwritten only when a new
   entry lands at the same position; with a `Later` that is a closure, with the old shape it
   was the whole per-term list. Bounded by the trail's depth, not measured, worth a look.
+
+### Addendum, M7-T27 (a2), 2026-11-02 (agent-reason, `wave40-reason2`): the closure stops at level 0 -- correct, byte-neutral, and NOT where the time went
+
+**Done.** `Analysis.decision_closure`'s stop and postcondition are "every node above level 0 is
+a root"; `~scope:Everywhere` expands levels above 0 only; a root conflict under the default
+scope still resolves level 0 (1UIP at the root is unchanged). Argument: a level-0 node's
+support and everything its reason cites precede every level mark, so expanding it can add
+only level-0 nodes, which `decision_levels` drops. Two scenes in `test_analysis.ml` (a level-1
+conflict resting on a level-0 derived fact, kept unexpanded, `decision_levels = [1]`; a root
+conflict still resolved under the default scope).
+
+**Measured, fataepyc-06, `/scratch/arthur/m7t27a2/`.** Before = merged `main` `0f93b38`
+(md5 `950317c3`), after = `6ffd37b` (md5 `c8a14140`). All 156 models: `.opb`/`.pbp`/stdout
+**byte-identical** between the two binaries (`art/before`, `art/after`), and `make check` ok
+(156 passed, determinism lane identical, `check.log`). pattern-set-mining, 300 s,
+`--max-heap-mb 60000`: before **69 nodes, 2.17 GB**, after **69 nodes, 2.17 GB**, and the
+words allocated are identical to the word (40 137 974 566 both) -- so on this instance the
+closure never expanded a level-0 node at all. (Run-to-run variance of the wall-clock limit:
+the same `950317c3` binary gave 67 nodes earlier today and 69 now.)
+
+**So the attribution in the main record above was wrong**, and this addendum corrects it: the
+146 055 materialisations are not the closure's level-0 expansions. The remaining candidates
+are the CONFLICT-LEVEL expansions -- 1UIP (`one_uip`, default scope) resolving the deepest
+level, which on this instance holds thousands of reif-row entries per decision, and then the
+closure resolving the same entries a second time (`Learn.at_conflict` runs both walks on
+one conflict). **Pending measurement**: a throwaway branch `wave40-reason2-measure` counts
+expansions by scope and materialisations by site; its 300 s run was launched on the node as
+`/scratch/arthur/m7t27a2/count300.err` (pidfile `count300.pid`, binary `main.count.exe`),
+and the ssh link dropped before it returned. Read that file before anything else; if it says
+"at-conflict-level" dominates, the remedy is a per-conflict memo of materialised facts keyed
+by trail position, shared by the two walks of one conflict and dropped with it -- not a memo
+on the `Later`, which would bring back the retention (a) removed.
