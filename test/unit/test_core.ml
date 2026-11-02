@@ -523,14 +523,15 @@ let test_reason () =
      the constant true (docs/PROOF-FORMAT.md section 3). Both directions, because a
      mirrored pair is where this project keeps shipping a half that nothing runs. *)
   check "D-0026: a lower fact past the declared bound materialises"
-    (Reason.lits [ Reason.at_least ~name:"x" ~decl:0 3 ] = [ Lit.ge "x" 3 ]);
+    (Reason.lits_of_facts [ Reason.at_least ~name:"x" ~decl:0 3 ] = [ Lit.ge "x" 3 ]);
   check "D-0026: a lower fact AT the declared bound materialises to nothing"
-    (Reason.lits [ Reason.at_least ~name:"x" ~decl:3 3 ] = []);
+    (Reason.lits_of_facts [ Reason.at_least ~name:"x" ~decl:3 3 ] = []);
   check "D-0026: an upper fact past the declared bound materialises"
-    (Reason.lits [ Reason.at_most ~name:"x" ~decl:9 4 ] = [ Lit.le "x" 4 ]);
+    (Reason.lits_of_facts [ Reason.at_most ~name:"x" ~decl:9 4 ] = [ Lit.le "x" 4 ]);
   check "D-0026: an upper fact AT the declared bound materialises to nothing"
-    (Reason.lits [ Reason.at_most ~name:"x" ~decl:4 4 ] = []);
-  check "D-0026: Reason.none materialises to nothing" (Reason.lits Reason.none = []);
+    (Reason.lits_of_facts [ Reason.at_most ~name:"x" ~decl:4 4 ] = []);
+  check "D-0026: Reason.none materialises to nothing"
+    (Reason.lits_of_facts Reason.none = []);
 
   (* Order and duplicates survive materialisation. The tail of a trace line is an
      artefact this project diffs byte for byte, so a [lits] that sorted or deduped would
@@ -543,7 +544,7 @@ let test_reason () =
     ]
   in
   check "D-0026: lits preserves order and keeps duplicates"
-    (Reason.lits three = [ Lit.ge "a" 1; Lit.le "b" 2; Lit.ge "a" 1 ]);
+    (Reason.lits_of_facts three = [ Lit.ge "a" 1; Lit.le "b" 2; Lit.ge "a" 1 ]);
 
   (* The scope is what a reason names, INCLUDING the variables whose fact does not
      materialise. M2-T3 is meant to walk a reason's variables without building a single
@@ -553,33 +554,37 @@ let test_reason () =
     [ Reason.at_least ~name:"kept" ~decl:0 2; Reason.at_least ~name:"dropped" ~decl:7 7 ]
   in
   check "D-0026: owners includes a variable whose fact has no literal"
-    (Reason.owners mixed = [ "kept"; "dropped" ]
-    && Reason.lits mixed = [ Lit.ge "kept" 2 ]);
+    (Reason.owners (Reason.of_facts mixed) = [ "kept"; "dropped" ]
+    && Reason.lits_of_facts mixed = [ Lit.ge "kept" 2 ]);
   check "D-0026: owners dedupes but keeps first-seen order"
-    (Reason.owners three = [ "a"; "b" ]);
+    (Reason.owners (Reason.of_facts three) = [ "a"; "b" ]);
 
   (* [fixed_at] is "x = v" as the two order facts [Ne] states, and each half drops at its
      own declared bound independently -- the case [Ne.fixed_facts] got right by hand and
      which now has to keep being right in one place for three callers. *)
   check "D-0026: fixed_at states both halves"
-    (Reason.lits (Reason.fixed_at ~name:"x" ~decl_lo:0 ~decl_hi:9 4)
+    (Reason.lits_of_facts (Reason.fixed_at ~name:"x" ~decl_lo:0 ~decl_hi:9 4)
     = [ Lit.ge "x" 4; Lit.le "x" 4 ]);
   check "D-0026: fixed_at at the declared lo states only the upper half"
-    (Reason.lits (Reason.fixed_at ~name:"x" ~decl_lo:0 ~decl_hi:9 0) = [ Lit.le "x" 0 ]);
+    (Reason.lits_of_facts (Reason.fixed_at ~name:"x" ~decl_lo:0 ~decl_hi:9 0)
+    = [ Lit.le "x" 0 ]);
   check "D-0026: fixed_at at the declared hi states only the lower half"
-    (Reason.lits (Reason.fixed_at ~name:"x" ~decl_lo:0 ~decl_hi:9 9) = [ Lit.ge "x" 9 ]);
+    (Reason.lits_of_facts (Reason.fixed_at ~name:"x" ~decl_lo:0 ~decl_hi:9 9)
+    = [ Lit.ge "x" 9 ]);
   check "D-0026: fixed_at on a one-value declaration states nothing"
-    (Reason.lits (Reason.fixed_at ~name:"x" ~decl_lo:4 ~decl_hi:4 4) = []);
+    (Reason.lits_of_facts (Reason.fixed_at ~name:"x" ~decl_lo:4 ~decl_hi:4 4) = []);
 
   (* [bound_for_coeff] is D-0013's case split, shared so a linear-shaped propagator's
      reason and its row arithmetic cannot disagree about WHICH bound was read. Getting
      this backwards is break 1 in the M2-T8 hand-back, and it is why the shared helper
      exists rather than each propagator writing the conditional. *)
   check "D-0026: a non-negative coefficient reads lo and states x >= v"
-    (Reason.lits [ Reason.bound_for_coeff ~coeff:2 ~name:"x" ~decl_lo:0 ~decl_hi:9 3 ]
+    (Reason.lits_of_facts
+       [ Reason.bound_for_coeff ~coeff:2 ~name:"x" ~decl_lo:0 ~decl_hi:9 3 ]
     = [ Lit.ge "x" 3 ]);
   check "D-0026: a negative coefficient reads hi and states x <= v"
-    (Reason.lits [ Reason.bound_for_coeff ~coeff:(-2) ~name:"x" ~decl_lo:0 ~decl_hi:9 3 ]
+    (Reason.lits_of_facts
+       [ Reason.bound_for_coeff ~coeff:(-2) ~name:"x" ~decl_lo:0 ~decl_hi:9 3 ]
     = [ Lit.le "x" 3 ]);
 
   (* NON-NARROWABLE, which is the property I-X6 needs and the one GCS's [Narrowable*]
@@ -788,8 +793,8 @@ let test_agreement () =
        (Reason.because ~concludes:None
           [ Reason.at_least ~name:"x" ~decl:0 2 ]
           weaken_only)
-    && Reason.lits [ Reason.at_least ~name:"x" ~decl:0 2 ] <> Explanation.lits weaken_only
-    );
+    && Reason.lits_of_facts [ Reason.at_least ~name:"x" ~decl:0 2 ]
+       <> Explanation.lits weaken_only);
 
   (* THE REVERSE DIRECTION, which is I-P5's: the derivation weakened [x] out of its own
      row, so the pruning depends on where [x] sits, so the reason must name it. Dropping

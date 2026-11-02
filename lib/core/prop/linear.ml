@@ -325,16 +325,25 @@ type source_snap = {
 let rests_on_a_decision reasons =
   List.exists (function Explanation.Decision _ -> true | _ -> false) reasons
 
-(* [None] only for a zero coefficient (an absent term, contributing nothing). *)
-let snapshot_source store (tm : term) : source_snap option =
+(* [None] only for a zero coefficient (an absent term, contributing nothing).
+
+   M7-T27 (a), D-0124: reads a [Store.history], not the store. A history is the trail
+   cut at one position, and [Store.lo_at]/[lo_reasons_at] answer for that cut exactly
+   what [Domain.lo (Store.get store x)]/[Store.lo_reasons] answer live when the cut is
+   now -- so this is the same snapshot as before, with the moment it describes carried
+   as a value instead of baked into a record per term. That is what lets
+   [justified_at] below build the snapshot on demand: the history cannot change
+   underneath it (I-T1, and [Store.check_history] refuses to read one that has been
+   unwound), so a snapshot taken when the reason is finally asked for is the snapshot
+   that would have been taken at the push. *)
+let snapshot_at (h : Store.history) (tm : term) : source_snap option =
   if tm.coeff = 0 then None
   else
-    let d = Store.get store tm.x in
     let snap value cited =
       Some
         {
           coeff = tm.coeff;
-          name = Store.name store tm.x;
+          name = Store.history_name h tm.x;
           decl_lo = tm.decl_lo;
           decl_hi = tm.decl_hi;
           value;
@@ -347,13 +356,18 @@ let snapshot_source store (tm : term) : source_snap option =
        between M1-T9 and M1-T17. M1-T50's [Snap_assume] is this line. *)
     let citable rests = if rests_on_a_decision rests then [] else rests in
     if tm.coeff >= 0 then
-      let cur = Domain.lo d in
+      let cur = Store.lo_at h tm.x in
       if cur <= tm.decl_lo then snap tm.decl_lo []
-      else snap cur (citable (lo_rests_on store tm.x ~decl_lo:tm.decl_lo))
+      else snap cur (citable (Store.lo_reasons_at h tm.x))
     else
-      let cur = Domain.hi d in
+      let cur = Store.hi_at h tm.x in
       if cur >= tm.decl_hi then snap tm.decl_hi []
-      else snap cur (citable (hi_rests_on store tm.x ~decl_hi:tm.decl_hi))
+      else snap cur (citable (Store.hi_reasons_at h tm.x))
+
+(* The live store, as the history of this moment. What every caller before D-0124
+   read; now the eager form, used for a conflict (whose reason is consumed where it is
+   raised, so deferring it would buy nothing) and by test_matrix.ml's probe. *)
+let snapshot_source store (tm : term) = snapshot_at (Store.history store) tm
 
 (* --------------------------------------- the two halves, from one snapshot *)
 
@@ -397,9 +411,31 @@ let others_except terms idx = List.filteri (fun i _ -> i <> idx) terms
    conflict, justifies the row's own contradiction, when [idx] is [None] and every
    term is "other"). Cheap eagerly (the snapshot decision above); the [Lit.t] chain
    and any recursive [emit] happen only once [Justify.emit] actually forces this. *)
-let row_snaps store terms ~exclude =
-  let others = match exclude with None -> terms | Some idx -> others_except terms idx in
-  List.filter_map (snapshot_source store) others
+let row_snaps_at (h : Store.history) terms ~exclude =
+  let rec go i acc = function
+    | [] -> List.rev acc
+    | tm :: rest -> (
+        let skip = match exclude with Some j -> j = i | None -> false in
+        if skip then go (i + 1) acc rest
+        else
+          match snapshot_at h tm with
+          | None -> go (i + 1) acc rest
+          | Some s -> go (i + 1) (s :: acc) rest)
+  in
+  go 0 [] terms
+
+let row_snaps store terms ~exclude = row_snaps_at (Store.history store) terms ~exclude
+
+(* Whether [row_snaps_at _ terms ~exclude] is empty, without building it: no other term
+   with a non-zero coefficient. What [Reason.because_later]'s [~empty] is told. *)
+let no_other_term (terms : term list) ~exclude =
+  let rec go i = function
+    | [] -> true
+    | (tm : term) :: rest ->
+        let excluded = match exclude with Some j -> j = i | None -> false in
+        (excluded || tm.coeff = 0) && go (i + 1) rest
+  in
+  go 0 terms
 
 (* Which of the three cases M1-T50 named a term is in. The constructors collapsed into
    one record (see [source_snap]), but the distinction is still a real one and
@@ -445,13 +481,46 @@ let classify s =
    it. It is NOT derivable from [snaps] -- [snaps] is what was read, the conclusion is
    what came out -- which is exactly why D-0043 puts it on [justified] and not in the
    reason. *)
+let combine_of_snaps base snaps divisor =
+  Explanation.combine
+    (Explanation.term 1 base :: List.concat_map summands_of_snap snaps)
+    divisor
+
 let justified_of_snaps ~concludes base snaps divisor : Reason.justified =
   Reason.because ~concludes (List.map fact_of_snap snaps)
-    (Explanation.deferred (fun () ->
-         let summands =
-           Explanation.term 1 base :: List.concat_map summands_of_snap snaps
-         in
-         Explanation.combine summands divisor))
+    (Explanation.deferred (fun () -> combine_of_snaps base snaps divisor))
+
+(* -------------------------------------- the same pairing, materialised later (D-0124)
+
+   THE function behind every bound push since M7-T27 (a). Same two halves, same single
+   source -- but the source is now [snaps], a function over a [Store.history] taken at
+   the push, and the per-term list exists only while one half is being rendered. What
+   the trail retains per pruning is this closure: the row's own term list (shared with
+   the instance), an index, a history handle. D-0123 measured the alternative at
+   16.9 M snapshot records and 14.9 M facts live on the trail after four nodes.
+
+   The two halves agree because they are two calls of ONE function over FROZEN input:
+   [row_snaps_at] is deterministic and the history it reads cannot change while the
+   pruning's entry is on the trail (I-T1; [Store.check_history] raises otherwise, and it
+   is called on every materialisation, from whichever half). D-0026 asked for one list
+   and one function; there is one function, and the list it returns is the same list
+   each time it is asked. [Store.check_agreement] still compares the two halves at the
+   push under BAGUETTE_DEBUG, through the same materialisation.
+
+   It takes [h] and NOT the store -- the signature is the discipline, exactly as
+   [explain_cross_conflict ~opposite] below. A [Store.t] here would be one careless
+   edit from a thunk that reads live state; a [Store.history] cannot answer for any
+   position at or past the pruning, whatever is asked of it. *)
+let justified_at ~concludes base (h : Store.history) terms ~exclude divisor :
+    Reason.justified =
+  let snaps () =
+    Store.check_history h;
+    row_snaps_at h terms ~exclude
+  in
+  Reason.because_later ~concludes
+    ~empty:(no_other_term terms ~exclude)
+    (fun () -> List.map fact_of_snap (snaps ()))
+    (Explanation.deferred (fun () -> combine_of_snaps base (snaps ()) divisor))
 
 (* D-0013 step 5: a conflict where this row's own new bound for [tm] contradicts a
    bound some *other* propagator instance already holds on the same variable -- add
@@ -595,32 +664,52 @@ let propagate t store =
         if Option.is_none !conflict && tm.coeff <> 0 then
           let max_term = Checked.add m slack in
           let d = Store.get store tm.x in
+          (* D-0124: the history is taken HERE, immediately before the push, so it
+             holds exactly what a snapshot taken here would have read -- including the
+             entries earlier terms of this same run pushed. On [Conflict] nothing was
+             pushed, the history is still the present, and the cross-row conflict
+             materialises the same snapshot eagerly: a conflict's reason is consumed
+             where it is raised, and its justification is forced by search before any
+             backtrack, so there is nothing to defer and a closure that outlived the
+             backtrack would only have [check_history] to answer with. *)
           if tm.coeff > 0 then (
             let new_hi = floordiv max_term tm.coeff in
             if new_hi < Domain.hi d then
-              let snaps = row_snaps store t.terms ~exclude:(Some idx) in
+              let h = Store.history store in
+              let exclude = Some idx in
               let concludes =
                 Some
                   (Reason.at_most ~name:(Store.name store tm.x) ~decl:tm.decl_hi new_hi)
               in
-              let j = justified_of_snaps ~concludes (base_explanation t) snaps tm.coeff in
+              let j =
+                justified_at ~concludes (base_explanation t) h t.terms ~exclude tm.coeff
+              in
               match Store.set_hi store tm.x new_hi j with
-              | Store.Conflict _ -> cross_conflict tm snaps j.Reason.justification
+              | Store.Conflict _ ->
+                  let snaps = row_snaps_at h t.terms ~exclude in
+                  cross_conflict tm snaps
+                    (justified_of_snaps ~concludes (base_explanation t) snaps tm.coeff)
+                      .Reason.justification
               | Store.Changed | Store.Unchanged -> ())
           else
             let new_lo = ceildiv max_term tm.coeff in
             if new_lo > Domain.lo d then
-              let snaps = row_snaps store t.terms ~exclude:(Some idx) in
+              let h = Store.history store in
+              let exclude = Some idx in
+              let divisor = Checked.neg tm.coeff in
               let concludes =
                 Some
                   (Reason.at_least ~name:(Store.name store tm.x) ~decl:tm.decl_lo new_lo)
               in
               let j =
-                justified_of_snaps ~concludes (base_explanation t) snaps
-                  (Checked.neg tm.coeff)
+                justified_at ~concludes (base_explanation t) h t.terms ~exclude divisor
               in
               match Store.set_lo store tm.x new_lo j with
-              | Store.Conflict _ -> cross_conflict tm snaps j.Reason.justification
+              | Store.Conflict _ ->
+                  let snaps = row_snaps_at h t.terms ~exclude in
+                  cross_conflict tm snaps
+                    (justified_of_snaps ~concludes (base_explanation t) snaps divisor)
+                      .Reason.justification
               | Store.Changed | Store.Unchanged -> ())
       (List.combine t.terms mins);
     (match !conflict with Some c -> result := Propagator.Conflict c | None -> ());

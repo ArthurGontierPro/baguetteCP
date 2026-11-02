@@ -286,7 +286,7 @@ let hole_cite store var value =
   match remover_index store ~var value with
   | Some i when Store.level_of_index store i = 0 -> Gone_hole_root
   | Some i -> Gone_hole (Store.trail_entry store i).Store.reason
-  | None -> Gone_hole Reason.none
+  | None -> Gone_hole (Reason.of_facts Reason.none)
 
 (* [s_gone], ascending: below the window, then the holes inside it, then above. The
    order is what makes an [alo_over] over an INTERVAL value set emit exactly the
@@ -747,7 +747,8 @@ let hall_facts ~keep halls =
          the tail that the derivation does not read. For an interval value set there are
          no excluded holes at all, which is why stage 1's reasons are unchanged. *)
       @ List.concat_map
-          (fun (v, g) -> match g with Gone_hole r when not (keep v) -> r | _ -> [])
+          (fun (v, g) ->
+            match g with Gone_hole r when not (keep v) -> Reason.facts r | _ -> [])
           s.s_gone)
     halls
 

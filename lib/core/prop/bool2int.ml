@@ -184,7 +184,7 @@ let ge_fact ~name ~decl_lo value = [ Reason.at_least ~name ~decl:decl_lo value ]
 let le_fact ~name ~decl_hi value = [ Reason.at_most ~name ~decl:decl_hi value ]
 
 (* "not all of these facts hold", the clause a conflict reports. *)
-let nogood reason = Explanation.clause (List.map Lit.negate (Reason.lits reason))
+let nogood reason = Explanation.clause (List.map Lit.negate (Reason.lits_of_facts reason))
 
 (* "these facts imply this claim", the clause a pruning reports -- and, literally, the
    line lib/core/trace.ml will write for it from the claim and the reason separately. The
@@ -200,7 +200,7 @@ let nogood reason = Explanation.clause (List.map Lit.negate (Reason.lits reason)
    nothing about where a bound sits) and that is exactly why the two halves are separate
    types rather than one. *)
 let implication ~claim reason =
-  Explanation.clause (claim :: List.map Lit.negate (Reason.lits reason))
+  Explanation.clause (claim :: List.map Lit.negate (Reason.lits_of_facts reason))
 
 (* ------------------------------------------------------------------- propagation *)
 

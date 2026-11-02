@@ -1765,7 +1765,9 @@ let test_m7t25_element_conflict_learns () =
         (List.mem (Lit.ge "y" 2) (Reason.lits cf.Store.c_reason));
       check "M7-T25 a: the reason and the justification agree (D-0026)"
         (Store.agreement_holds store
-           (Reason.because ~concludes:None cf.Store.c_reason cf.Store.c_why));
+           (Reason.because ~concludes:None
+              (Reason.facts cf.Store.c_reason)
+              cf.Store.c_why));
       let l =
         Learn.at_conflict store cf ~vars_of:(Engine.vars_of engine)
           ~decl:(Learned.decl_of_encoding c.Compile.encoding)

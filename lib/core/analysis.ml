@@ -547,7 +547,7 @@ let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
                 fold_into = at;
               }
               :: !folds_rev;
-            r.Store.reason)
+            Reason.facts r.Store.reason)
       holes
   in
   let expandable n = (not n.root) && (scope = Everywhere || n.level = conflict_level) in
@@ -573,7 +573,8 @@ let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
           add_antecedent e.Store.prop;
           Frontier.remove frontier n;
           let added =
-            e.Store.reason @ hole_facts e ~at ~is_lower:(Reason.fact_is_lower n.fact)
+            Reason.facts e.Store.reason
+            @ hole_facts e ~at ~is_lower:(Reason.fact_is_lower n.fact)
           in
           Frontier.add_all frontier added ~mk:(mk_node ~before:at);
           loop ()
@@ -585,7 +586,8 @@ let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
            (Misattributed
               { at = -1; claimed = c.Store.c_prop; var = "<the conflicting row>" }));
     add_antecedent c.Store.c_prop;
-    Frontier.add_all frontier c.Store.c_reason
+    Frontier.add_all frontier
+      (Reason.facts c.Store.c_reason)
       ~mk:(mk_node ~before:(Store.trail_length store));
     let nodes = loop () in
     let stopped = criterion.stop { v_nodes = nodes; v_conflict_level = conflict_level } in
@@ -617,13 +619,13 @@ let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
 
 (* ------------------------------------------------------- reading a cut *)
 
-let facts t : Reason.t = List.map (fun n -> n.fact) t.nodes
+let facts t : Reason.fact list = List.map (fun n -> n.fact) t.nodes
 
 (* The learned clause: the negation of the cut's conjunction, over order literals. A fact
    still at its declared bound has no literal ([Reason.lit_of_fact] returns [None]) and
    contributes nothing -- its negation is the constant false, and a false disjunct is not
    a weakening but a wrong line (lib/core/reason.ml's header). *)
-let lits t = List.map Lit.negate (Reason.lits (facts t))
+let lits t = List.map Lit.negate (Reason.lits_of_facts (facts t))
 
 (* The same clause, each literal paired with the decision level of the node it came from.
 
@@ -687,6 +689,6 @@ let holds_on_trail store t =
 
 let to_string t =
   Printf.sprintf "[%s] %s | levels %s | res %d | folds %d" t.criterion_name
-    (Reason.to_string (facts t))
+    (Reason.to_string_facts (facts t))
     (String.concat "," (List.map string_of_int (cited_levels t)))
     t.resolutions (List.length t.folds)

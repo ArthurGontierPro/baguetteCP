@@ -240,7 +240,7 @@ let dummy_entry =
     old = Domain.singleton 0;
     now = Domain.singleton 0;
     why = Explanation.Arena.null;
-    reason = Reason.none;
+    reason = Reason.of_facts Reason.none;
     concludes = None;
     prop = no_prop;
     ahead = false;
@@ -590,7 +590,7 @@ let agreement_holds t (j : Reason.justified) =
       Option.is_none (Reason.lit_of_fact fact)
       || List.mem (Reason.fact_owner fact) mentioned
       || supported fact)
-    j.reason
+    (Reason.facts j.reason)
   && List.for_all (fun o -> List.mem o named) (reverse_owners t j.justification)
 
 (* D-0043's half of the same question, and the one M2-T8 could not ask.
@@ -679,6 +679,8 @@ let decision_concludes_nothing (j : Reason.justified) =
    breakpoint. Built only on the failing path, so the enabled-and-passing cost is the
    predicate alone. *)
 let check_agreement t (j : Reason.justified) =
+  Debug.check "D-0124: a deferred reason's [empty] agrees with its materialisation"
+    (fun () -> Reason.is_empty j.reason = (Reason.facts j.reason = []));
   if Debug.enabled && not (agreement_holds t j) then
     failwith
       (Printf.sprintf
@@ -736,7 +738,12 @@ let conflict t (j : Reason.justified) =
    this file. Found by turning the check on: this arm was the only false positive left in
    the suite once non-materialising facts were skipped. *)
 let unattributed_conflict t why =
-  { c_prop = t.current_prop; c_why = why; c_reason = Reason.none; c_ahead = false }
+  {
+    c_prop = t.current_prop;
+    c_why = why;
+    c_reason = Reason.of_facts Reason.none;
+    c_ahead = false;
+  }
 
 (* The D-0026 agreement check.
 
@@ -1101,6 +1108,101 @@ let lo_reasons t v =
 
 let hi_reasons t v =
   reasons_under t v ~support:(hi_support t v) ~settled:(fun (e : entry) ->
+      settled_over_hi e.old ~cur:(Domain.hi e.now))
+
+(* ------------------------------ the trail as of a fixed position (M7-T27 (a), D-0124) *)
+
+(* A [history] is the store's trail cut at [upto]: positions [0 .. upto - 1] and nothing
+   after. The four lookups below answer, for that cut, exactly what [lo_support],
+   [Domain.lo (get t v)], [lo_reasons] and their [hi] twins answer for the live store --
+   and when [upto] is the current trail length the answers are the same values, which is
+   how a [Linear] pruning's reason can be materialised later from a history taken at the
+   push and render what a snapshot taken at the push would have (D-0124).
+
+   WHY THIS IS A SNAPSHOT AND NOT A LIVE READ (I-X6). The trail is a stack: an entry at
+   position [p] is popped only by [undo_to], which pops every entry above it first, and a
+   popped slot is overwritten with [dummy_entry]. So while the entry pushed at [upto] is
+   on the trail, every position below [upto] holds the same physical record it held at
+   the push, with the same [old], [now], [sup_lo]/[sup_hi] and the same live arena id.
+   Reading those positions later is reading frozen data. What a history must NOT read is
+   anything at or above [upto] (the pruning's own entry, and whatever came after), and
+   [support_before] walks every support chain back past it before answering.
+
+   WHEN THE HISTORY IS GONE. A reason is asked for by the trace at the branch's failure
+   and by conflict analysis at the conflict, both before the backtrack that pops its
+   entry; a conflict's reason is read where the conflict is raised. Nothing legitimately
+   asks later, and a reader that did would be reading a trail that has been unwound and
+   re-pushed with other entries -- the I-X6 failure, as a wrong answer. [check_history]
+   turns that into a raise: [h_witness] is the physical entry at [upto - 1] when the
+   history was taken, and a trail that has been unwound below [upto] cannot hold it at
+   that position again, because every [apply] allocates a fresh record. [upto = 0] is
+   the empty history, valid forever. *)
+type history = { h_store : t; h_upto : int; h_witness : entry }
+
+let history t =
+  {
+    h_store = t;
+    h_upto = t.trail_len;
+    h_witness = (if t.trail_len = 0 then dummy_entry else t.trail.(t.trail_len - 1));
+  }
+
+let history_upto h = h.h_upto
+
+(* Names never change, so the history answers them as the store does. *)
+let history_name h v = name h.h_store v
+
+let history_live h =
+  let t = h.h_store in
+  t.trail_len >= h.h_upto && (h.h_upto = 0 || t.trail.(h.h_upto - 1) == h.h_witness)
+
+let check_history h =
+  if not (history_live h) then
+    invalid_arg
+      (Printf.sprintf
+         "I-X6 (D-0124): a reason was materialised after the trail it reads was unwound \
+          below its pruning (history at %d, trail now %d)"
+         h.h_upto h.h_store.trail_len)
+
+(* The newest entry below [upto] on one bound's own chain of moves, starting from its
+   current support: [sup_lo]/[sup_hi] on a bound-moving entry is the previous support of
+   that bound, so the walk visits only that bound's movers, newest first, and stops at
+   the first one the history contains. O(moves of that bound since [upto]). *)
+let rec support_before t ~upto ~sup p =
+  if p = no_support || p < upto then p else support_before t ~upto ~sup (sup t.trail.(p))
+
+let lo_support_at h v =
+  support_before h.h_store ~upto:h.h_upto
+    ~sup:(fun e -> e.sup_lo)
+    (lo_support h.h_store v)
+
+let hi_support_at h v =
+  support_before h.h_store ~upto:h.h_upto
+    ~sup:(fun e -> e.sup_hi)
+    (hi_support h.h_store v)
+
+(* The domain [v] was created with: the [old] of its oldest entry, or its current domain
+   while it has none. Only needed when a bound has no support within the history, i.e.
+   it still stood where the store created it. *)
+let created_domain t v =
+  let i = Var.to_int v in
+  if t.all_hn.(i) > 0 then t.trail.(t.all_hist.(i).(0)).old else t.domains.(i)
+
+let lo_at h v =
+  let q = lo_support_at h v in
+  if q = no_support then Domain.lo (created_domain h.h_store v)
+  else Domain.lo h.h_store.trail.(q).now
+
+let hi_at h v =
+  let q = hi_support_at h v in
+  if q = no_support then Domain.hi (created_domain h.h_store v)
+  else Domain.hi h.h_store.trail.(q).now
+
+let lo_reasons_at h v =
+  reasons_under h.h_store v ~support:(lo_support_at h v) ~settled:(fun (e : entry) ->
+      settled_over_lo e.old ~cur:(Domain.lo e.now))
+
+let hi_reasons_at h v =
+  reasons_under h.h_store v ~support:(hi_support_at h v) ~settled:(fun (e : entry) ->
       settled_over_hi e.old ~cur:(Domain.hi e.now))
 
 (* The decision level the entry at trail position [i] belongs to: the number of open

@@ -829,7 +829,7 @@ let add_facts acc fs =
 let remover_facts store ~var v =
   match Store.remover store ~before:(Store.trail_length store) ~var v with
   | None -> []
-  | Some e -> e.Store.reason
+  | Some e -> Reason.facts e.Store.reason
 
 let holes_of d =
   List.filter (fun v -> not (Domain.mem d v)) (range (Domain.lo d + 1) (Domain.hi d - 1))
@@ -923,7 +923,7 @@ let conflict_facts t store =
         if
           Var.equal e.Store.var t.ibase && Domain.mem e.Store.old bp
           && not (Domain.mem e.Store.now bp)
-        then if Store.level_of_index store i > 0 then e.Store.reason else []
+        then if Store.level_of_index store i > 0 then Reason.facts e.Store.reason else []
         else find (i - 1)
     in
     find (Store.trail_length store - 1)
