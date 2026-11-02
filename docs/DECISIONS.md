@@ -9459,3 +9459,82 @@ not a reach row.
 
 The same join over the 543 refusals changes nothing in D-0121's conclusion: 181 of them are on
 models with no decomposed global at all, and they are width and heap wherever they fall.
+
+## D-0123  M7-T27, the wall is memory, in three places, and the objective's width is not one of them
+
+**Status**: **MEASUREMENT**, recorded 2026-11-02 (solo-m7t27). Reproduce with
+`python3 -I tools/compare/refusal_causes.py /scratch/arthur/m7t26 --widths` on `fataepyc-06`,
+over the sixteen run directories of D-0105 to D-0121. **Rewrites the premise of the M7-T27
+roadmap row**; decides nothing about the encoding, and says why that decision comes last.
+
+### The recount
+
+D-0121's "388 width, 145 heap" came from the `detail` column of `results.tsv`, which keeps the
+first 180 characters of stderr. The width WARNING (M7-T1) is printed first, so every later death
+inherited the word "width". The Challenge runs passed **no** `--max-order-width` (D-0065's default
+is unlimited; `scripts/compare_run.sh` passes `--max-heap-mb` only), so a refusal by declared width
+was not possible. Reading the whole stderr:
+
+| what ended the run | instances |
+|---|---|
+| exit 5, `--max-heap-mb` exhausted (8 GiB, M7-T8) | **520** |
+| exit 3, `fzn_global_cardinality` with a repeated variable (M7-T29) | 19 |
+| exit 2, OCaml `Out of memory` before the guard | 3 |
+| exit 2, `var int` with no inferable bound (M7-T29) | 1 |
+
+### The 520 heap deaths, split by the guard's own message
+
+The heap message says how many ladder clauses were minted and, when the synchronous check inside
+`declare_int` fired, which variable was being declared; the asynchronous `Gc` alarm names none.
+
+| family | n | where the heap went | evidence |
+|---|---|---|---|
+| **A** 0 clauses minted | 14 | the front end, before the first `declare_int` | `.fzn` of 360–850 MB; 26–48 s |
+| **B** after the encoding, no variable named | **347** | rows, propagator set-up, or the SEARCH | 45 s to 1 196 s of wall; 114 had minted under 10⁶ clauses, which cannot cost 8 GiB |
+| **C** inside a ladder loop | 159 | the ladders themselves | p50 25.7 M clauses at death ≈ **300 bytes of heap per rung**; the named variable is an `X_INTRODUCED` in 106 cases, never `objective` |
+
+**The objective is never the variable being declared at death (0 of 159).** Over the 495 refused
+models with an objective: it is the single widest variable in 324, but its share of the SUMMED
+declared width is ≥ ½ in only **84** and ≥ 0.9 in 71. An objective-only remedy (a view over a
+narrow carrier, a bounded ladder for it) reaches at most those 84 and none of family B.
+
+### Four instances re-run under a 60 GB budget (fataepyc-06, `--stats`, `--time-limit 300`)
+
+| instance | summed width | what happened |
+|---|---|---|
+| 2012 pattern-set-mining-k1_mushroom (28 MB `.fzn`) | 8 122 | encoding alone: **1.0 GB, 44 s**; then **≈1.2 GB per search node**, 8.9 GB at 300 s, 77 nodes, 1 solution |
+| 2018 team-assignment_data1_6_24 | 532 134 | 3 solutions, a 307 MB `.pbp` at 300 s |
+| 2015 mapping_mesh3x3_mpeg_2 | 4.3 M | encoding complete (4.29 M clauses, 18 warned variables), then **dead at 60 GB in search**, 0 solutions |
+| 2022 wordpress_Wordpress11_Offers500 | 26.3 M | a **3.0 GB `.opb`**; killed at 600 s **still propagating the root** (0 decisions), 45 GB RSS |
+
+pattern-set-mining **without `--proof`** uses the same memory (5.8 GB after 4 nodes, 65 615
+propagator runs, against 5.9 GB with the proof), so the growth is in `lib/core`, not in the
+writer. That model has exactly one long row, the sum of 8 124 Booleans that defines its
+objective. A `Linear` pruning's reason is one fact per OTHER term of the row, snapshotted
+eagerly because I-X6 forbids reading live state (`linear.ml`, "per-term snapshot"), so a row
+that prunes k of its n terms in one fixpoint retains k·n snapshots: **quadratic in row length,
+per node**. `docs/GCS-COMPARISON.md` named this shape ("GCS's pre-refactor `ReasonFunction`")
+and expected the cost; this is its first measurement at Challenge scale.
+
+### What this changes
+
+1. **M7-T27 is three rows, in this order of payoff**, not one design question about the
+   objective. (a) The explanation memory of family B: one snapshot per row per fixpoint instead
+   of one per pruning, or a counting reason for unit-coefficient Boolean sums, without touching
+   I-X6, with a decision record because the reason shape is a contract. (b) The encoding memory
+   of family C: `Encoding.rev_constraints` holds every `.opb` row as OCaml data until the file
+   is written, and `consistency` is a per-value `Hashtbl` although rung ids are consecutive;
+   stream the file and compute the ids, `.opb` byte-identical, no decision needed. (c) Only
+   then the width itself: the Θ(w) rows and justifications D-0028 accepted, which is what is
+   left on wordpress-shaped instances once (a) and (b) are done, and which D-0031 (no lazy
+   ladder after the first trace line) and the comparison's refusal of a bits carrier
+   constrain. (d) Family A, the front end at 15× the file size and 44 s per 28 MB, separately.
+2. **More memory is not a remedy**: 7.5× the budget turned none of the four into an answer.
+3. `--time-limit` is checked between nodes only, so a root propagation that never finishes
+   (wordpress) ends in the harness's `timeout`, as `killed`, with no stats. Worth a line.
+
+### What it does not decide
+
+Which of the two reason shapes in (a) is right, and whether (c) needs a new carrier at all once
+(a) and (b) have moved families B and C into attempts. Both are measurements to take after,
+not before.
