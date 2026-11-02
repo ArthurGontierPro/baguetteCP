@@ -831,12 +831,15 @@ let test_closure_keeps_level_0 () =
         (not
            (satisfiable ~n:4 ~lo:0 ~hi:4 ~sat:(fun a ->
                 model3 a && facts_hold store (Analysis.facts t) a)));
-      (* The negation of the oracle: the level-0 node is load-bearing. *)
-      check "(e) break: without x <= 2 the remainder is NOT a valid nogood"
+      (* The negation of the oracle, so that it is known to be able to fail: without the
+         decision the remainder is NOT a valid nogood. (Dropping x <= 2 instead would
+         change nothing, and that is the point of this row: a level-0 fact is a
+         consequence of the model, which is why the closure may leave it unexpanded.) *)
+      check "(e) break: without u >= 3 the remainder is NOT a valid nogood"
         (satisfiable ~n:4 ~lo:0 ~hi:4 ~sat:(fun a ->
              model3 a
              && facts_hold store
-                  (List.filter (fun f -> Reason.fact_owner f <> "x") (Analysis.facts t))
+                  (List.filter (fun f -> Reason.fact_owner f <> "u") (Analysis.facts t))
                   a))
 
 let test_root_conflict_still_resolves_level_0 () =
