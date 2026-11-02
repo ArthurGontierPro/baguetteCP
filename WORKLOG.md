@@ -10,732 +10,17 @@ Read this file at the start of every session. Claim before you edit. See `CLAUDE
 
 ## Active claims
 
-**AN OVERNIGHT CORPUS RUN IS IN FLIGHT ON `fataepyc-07`. Do not re-launch it; read it.**
-
-Launched 2026-09-22 ~16:05 from `/scratch/arthur/corpus_run.sh`, **detached (`setsid nohup`)**,
-64-way parallel, 32 GB ulimit per job. It survives the SSH session that started it.
-
-- **results**: `/scratch/arthur/corpus-out/results.tsv` — TSV, one line per instance:
-  `id <TAB> outcome <TAB> fzn-bytes <TAB> pbp-bytes <TAB> detail`
-- **per-instance logs**: `/scratch/arthur/corpus-out/log/`
-- **completion marker**: a final `DONE-<epoch>` line in `results.tsv`. **If that line is absent
-  the run was cut off**, and the file is partial — say so rather than reporting the total.
-- 436 instances queued (every `.mzn` in the corpus, smallest data file each).
-
-**It flattens with the M7-T3 library** (`MZN_SOLVER_PATH=/scratch/arthur/baguette/tools`), so
-constraints stay high-level, and it runs the node's `main` at `b6fa825` — M7-T1's unlimited
-defaults and M7-T2's annotations both in.
-
-**Every solved instance has its proof checked by veripb 3.0.2**, and `PROOF-REJECTED` is its own
-bucket, never folded into a failure. That bucket is the point.
-
-**At 232 of 436 the distribution was**: `REFUSED-MODEL` 186, `FLATTEN-FAIL` 25,
-`REFUSED-LIMIT` 14, **`PROOF-REJECTED` 3**, `SOLVE-ERR-134` 2, `OK-PROOF-VERIFIED` 2. **Read
-that as provisional**: it is the first half of an alphabetical walk, so it is 2008–2012-heavy
-and the early years are the least likely to flatten at all.
-
-**Three things already visible, for whoever picks this up:**
-
-1. **`PROOF-REJECTED` is not rare.** Three in the first 232, against two verified. **M7-T6 is
-   not an exotic corner** — and remember D-0066: on an UNSAT instance the same defect is
-   *accepted silently*, so this bucket is a **lower bound**.
-2. **`REFUSED-MODEL` (exit 2) dominates at 186.** That is the front end refusing a builtin or a
-   declaration, and D-0067 says the residual wall is **set-literal domains**. Worth confirming
-   from the logs before anyone builds anything.
-3. **Some `FLATTEN-FAIL` is the harness, not the corpus** — e.g. *"no function or predicate with
-   this signature found: `int_search(array[int] of var int,string,string,string)`"*, which is a
-   2008-era annotation syntax MiniZinc 2.10.1 no longer accepts. **Do not count those as
-   unsupported instances.** Separate harness failures from solver findings before quoting any
-   number.
-
-**SOLVE-ERR-134 is SIGABRT** (134 = 128+6) and is unexplained — two instances. That is worth a
-look on its own; an abort is not a refusal.
-
-
-**Wave twenty-six is COMPLETE: M7-T1, M7-T2 and M7-T3 all merged, released and pushed.**
-
-**Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `scripts/**`, `bench/**`,
-`bin/main.ml`, `lib/flatzinc/**`, `lib/core/dune` and all merging.
-
-Wave twenty-four (M4-T7, M4-T3) is merged, released and pushed. **Every builtin in SPEC §2.1 is
-now implemented** — `planned` is empty. Baseline: **2663 ok / 0 FAIL, 280 matrix, 44 mutation,
-85/85 models**.
-
-
-**Wave twenty-four is running: M4-T7 (agent-defid) and M4-T3 (agent-element).**
-
-**agent-defid holds** `lib/core/{explanation,justify}.ml`, `lib/core/prop/alldiff.ml`, and
-`test/unit/{test_justify,test_prop,test_trace}.ml`. M4-T7 closes the gap M4-T1 made concrete:
-`Justify.defining_lit` exists and has **no caller**, because nothing in an `Explanation.t`
-*value* can ask for one. **This is the row where `explanation.ml`'s no-new-constructor rule is
-most likely to be genuinely spent** — D-0044's table has held eight times, and if this breaks it,
-the argument is the deliverable as much as the code.
-
-**agent-element holds** `lib/core/prop/element.ml` (new), `lib/core/dune`, `lib/flatzinc/**`,
-`test/models/**`, `test/expected/**` and `test/unit/{test_compile,test_flatzinc,test_endtoend}.ml`.
-M4-T3 is `array_int_element`, **unblocked by M4-T0**: D-0058 settled that a 1-based index is
-`View.shift (View.of_var i) (-1)` and prunes the index directly, with **no channelling step at
-which to lose value consistency** — which is the failure GCS hit and M4-T0's row warns about.
-
-**They meet only at `lib/core/dune`**, which is agent-element's (it adds a module; agent-defid
-adds none). `lib/core/view.ml` is **read-only to both** — it landed in wave twenty-one and
-neither row should be changing it.
-
-**A standing note for both**: `test/models/width_sat_depth.fzn`'s header comment is stale
-(43 ms against ~160 ms today, D-0062) and `test/models/**` is agent-element's this wave. If it is
-convenient, fix the comment rather than delete it — a figure with a date on it is how the
-regression was caught at all.
-
-**Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `scripts/**`, `bench/**`,
-`lib/proof/**`, `lib/core/{search,engine,store,domain,var,view}.ml` and all merging.
-
-Wave twenty-three (M5-T1+T2, M6-T6) is merged, released and pushed. **M5 is open and every
-milestone M0–M5 now has its core rows done.** Baseline: **2608 ok / 0 FAIL, 280 matrix,
-44 mutation, 78/78 models**.
-
-
-**Wave twenty-three is running: M5-T1+M5-T2 (agent-bb) and M6-T6 (agent-bisect).**
-
-**agent-bb holds** `lib/core/{search,engine}.ml`, `lib/proof/{writer,encoding}.ml`,
-`bin/main.ml`, `lib/flatzinc/**`, `test/models/**`, `test/expected/**` and
-`test/unit/{test_proof,test_endtoend,test_output,test_compile,test_flatzinc,test_matrix}.ml`.
-M5-T1 and M5-T2 go together because `conclusion BOUNDS` is the proof half of branch and bound;
-splitting them would put the search and its conclusion in different branches.
-
-**It is not starting from nothing**: `Ast.solve_kind` and `Model.objective` already carry
-`Minimize`/`Maximize`, `Writer.obju` exists at `writer.ml:1183`, and the `Bounds` conclusion
-variant at `:1244`. **`PROOF-FORMAT.md` line 136 already records the trap**: `obju` *"needs
-explicit subproofs — Proofgoal #1 could not be autoproven"*, measured and filed against M5.
-
-**agent-bisect holds `bench/**` and nothing else**, read-only over the rest. M6-T6 is the
-`width_sat_depth` regression: the model's own header says 43 ms, it is 160 ms shipped and
-**590 ms with learned propagation off**, so the tree underneath costs roughly **14×** what the
-comment claims. M6-T1 hypothesised M2-L13 as the cause; measurement showed it is the
-**mitigation** (worth ~4×). **The row says bisect, not hypothesise** — `perf` is unavailable on
-this kernel, so the tool is `git bisect` plus a wall-clock harness, in its own worktree.
-
-**Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `dune-project`,
-`scripts/**`, `lib/core/prop/**` and all merging.
-
-Wave twenty-two (M4-T1, M6-T1) is merged, released and pushed. Baseline: **2564 ok / 0 FAIL,
-280 matrix, 44 mutation, 73/73 models**.
-
-
-**Wave twenty-two is running: M4-T1 (agent-hall), ALONE.**
-
-**This row goes out solo deliberately.** Its own text says it is *"an experiment, not
-propagator number eight"* and to budget it as one; `docs/EXPLANATION-REVIEW.md` §3 calls it the
-row where the project's central claim first becomes falsifiable. Precedent: wave twelve
-dispatched M2-L3 alone for the same reason.
-
-**agent-hall holds** `lib/core/prop/**`, `lib/core/dune`, `lib/core/{explanation,justify}.ml`,
-`lib/proof/encoding.ml`, `lib/flatzinc/**`, `test/models/**`, `test/expected/**`, and
-`test/unit/{test_prop,test_justify,test_compile,test_flatzinc,test_trace,test_proof}.ml`.
-
-**`explanation.ml` is lent, not given.** Its header still forbids a new constructor without a
-decision record and **that is not suspended** — but this is the first row that might genuinely
-need one, so it holds the file and reports rather than being blocked by a boundary. `Combine`,
-`Weaken` and `Model_row` were built for exactly this; if they suffice, that is itself the
-result D-0027 anticipated.
-
-**Added alongside wave twenty-two: M6-T1 (agent-prof).**
-
-**agent-prof holds `bench/**` and nothing else** — `lib/`, `bin/`, `test/` and `scripts/` are
-**read-only** to it. M6-T1 is "profile; establish the propagation hot path", and it is a
-measurement row: if it finds a hot spot it **reports** it, it does not fix it. That is what
-keeps it disjoint from agent-hall, which holds most of `lib/`.
-
-**It is no longer premature, which it was when I declined it in wave seventeen.** The suite is
-64 models with genuinely hard ones (`php_wide_unsat` is 1439 nodes unlearned), and PB
-propagation, arithmetic and reification have all landed since. There is now something to
-profile. It also has to land before M6-T2 (domains/trail to `Bigarray`) and M6-T3 (buffered
-proof writing), or both of those are guesses.
-
-**The trap it must not fall into is already measured**: `bench/README.md` §3 and §3a found that
-most models sit at the **process floor**, where the timing column measures `exec` and not this
-solver. §3b already split propagation from emission (M1-T47). It must build on those rather
-than rediscover them.
-
-**Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `dune-project`,
-`scripts/**`, `bench/**`, `bin/main.ml`, `lib/core/{search,engine,store,domain,var,view}.ml`
-and all merging. I am doing **M6-T5** (`check_determinism.sh` ignoring `test/models/PENDING`)
-myself while this runs — `scripts/` only, no overlap.
-
-Wave twenty-one (M4-T0, M4-T4b, M2-T10) is merged, released and pushed. Baseline: **2549 ok /
-0 FAIL, 280 matrix, 44 mutation, 64/64 models**.
-
-
-**Wave twenty is COMPLETE: M2-L15 and M3-T2+M3-T4 merged, released and pushed.**
-
-**Wave twenty-one is running: M4-T0 (agent-views) and M4-T4b (agent-arith).**
-
-**agent-views holds the VARIABLE layer**: `lib/core/{var,store,domain}.ml`, `lib/proof/{lit,encoding}.ml`,
-and `test/unit/{test_core,test_domain,test_proof}.ml`. M4-T0 is views (`±x + k`) and
-constants-as-variables. Its row opens a proof-side question — **each view needs its own range
-literals** — which is why it holds `lit.ml` and `encoding.ml`.
-
-**agent-arith holds the PROPAGATOR layer**: `lib/core/prop/**` (new modules only — it may
-**read** every existing propagator and **edit none**), `lib/core/dune`, `lib/flatzinc/**`,
-`test/models/**`, `test/expected/**`, `test/unit/{test_prop,test_interval,test_compile,test_flatzinc}.ml`.
-M4-T4b is `int_times`/`int_div`/`int_abs` over M4-T4a's `interval.ml`.
-
-**`lib/core/explanation.ml` and `lib/core/justify.ml` are NEITHER agent's.** A new constructor
-needs a decision record and that is not suspended; arithmetic justification is exactly where one
-would be wanted. Route it to me.
-
-**M4-T1 IS NOT DISPATCHED, and the reason is not technical.** Its blockers M1-T31 and M2-T17 are
-both DONE. But the row says **D-0048 should be closed before it, not after** — is a reified
-explanation a research output? — because that is the row where the reified form either
-demonstrates what it buys or looks like expensive ceremony. Decided before, M4-T1 reads as
-evidence; decided after, it reads as a verdict already reached. **That is a question for the
-project's owner, and it is with them.**
-
-**Added to wave twenty-one: M2-T10 (agent-oracle), dispatched alongside.**
-
-**agent-oracle holds** `lib/core/{search,engine,debug}.ml`, `test/unit/dune`, a new
-`test/unit/test_consistency.ml`, and `test/unit/test_engine.ml`. M2-T10 is the per-node
-consistency harness: **nothing verifies the `consistency` tag that SPEC §2.2 makes
-normative**, and today's oracle checks soundness only.
-
-**It is dispatched now because the timing is unusually good**: `reif.ml`, `reif_lin_le.ml` and
-`reif_lin_eq.ml` landed yesterday, and `int_times`/`int_div`/`int_abs` plus `all_different` are
-next — six new declared consistency levels with nothing checking any of them.
-
-It reads `lib/core/prop/**` (agent-arith's) and must **edit none of it**. If it finds a
-propagator weaker than its declared level, that is a **finding to report, not to fix** — and
-weakening the test to match is forbidden.
-
-**M4-T1 goes out as wave twenty-two** the moment agent-arith releases `lib/core/prop/` and
-`lib/core/dune`. Nothing else blocks it: **D-0048 never did, and that claim is struck** — the
-dependency ran backwards, since M4-T1 is the evidence that would inform D-0048 rather than
-something waiting on it.
-
-**Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `dune-project`,
-`scripts/**`, `bench/**` and all merging, as standing.
-
-Wave nineteen (M2-L13, M2-L14) is merged, released and pushed; gate re-verified on `main`
-after the merge: **2256 ok / 0 FAIL, 280 matrix, 44 mutation, 44/44 models, `check: ok`**.
-
-
-**Wave nineteen is COMPLETE: M2-L13 and M2-L14 merged, released and pushed. Every file is free.**
-
-**Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `dune-project`,
-`scripts/**` and all merging, as standing.
-
-Wave eighteen (M2-L12, M3-T1) is merged, released and pushed. Baseline: **2190 ok / 0 FAIL,
-280 matrix, 44 mutation, 39/39 models**, and **231 nodes suite-wide** — that last number is
-M2-L13's target and M2-L12 pinned it.
-
-
-**Wave eighteen is running: M2-L12 (agent-prop) and M3-T1 (agent-reify).**
-
-**Two real editing tasks this time**, not a row plus a study, because the file split finally
-allows it: M2-L12 is `lib/core/**`, M3-T1 is `lib/proof/**`, and they meet at exactly one
-place, handled below.
-
-**agent-prop holds `lib/core/**`, `bin/main.ml`, and all of `test/unit/**` EXCEPT
-`test_proof.ml`** (including `test/unit/dune` and `test/models/**`). M2-L12 makes learned
-constraints propagate: unit clauses as level-0 bounds first, then widen `bool_clause` to a
-threshold. D-0052 settled that this is a **widening, not a new family**, so D-0044's bet is not
-spent.
-
-**agent-reify holds `lib/proof/**` and `test/unit/test_proof.ml` ONLY.** M3-T1 is `red`-based
-definitions for reified variables. `Writer.red` already exists (`writer.ml:1069`) and is
-already used for channelling (`encoding.ml:406,411,420`), so this extends a working pattern.
-
-**THE ONE PLACE THEY MEET, and it is a hard constraint on agent-reify.** Fourteen `lib/core`
-modules call into `Encoding` — `trace.ml` alone 11 times, plus `ne.ml`, `ladder.ml`,
-`learned.ml`, `search.ml`, `linear.ml`, `lin_eq.ml`, `bool2int.ml`, `order_reason.ml`,
-`reason.ml`, `justify.ml`, `analysis.ml`, `pb_analysis.ml`, `checked.ml`. **agent-reify may
-ADD to `Encoding` and `Lit` but must NOT change any existing signature**, or agent-prop's
-branch stops compiling. Same protocol as the standing `lib/proof/lit.ml` request above, and
-for the same reason.
-
-**A precondition on M2-L12 that is part of the row, not optional.** D-0052 marks the figure its
-step ordering rests on — "~70 of 88 learned clauses are unit" — as **provisional, ±5, from
-proof-text parsing**. agent-prop **re-derives it from an instrumented run first** and lets the
-measurement pick the order. If the histogram comes back different, the plan changes and that is
-the row working as intended.
-
-**And M2-L12 must revisit `Retention` in the same change.** A trace line from a learned-clause
-instance is RUP only while that constraint is **live**. Today nothing propagates a learned
-constraint, which is the independence D-0051 assumed; giving one a registered instance couples
-retention to the propagator set. D-0051 named this as the condition that reverses its keep-all
-verdict, so the verdict gets re-run, not inherited.
-
-**Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `dune-project`,
-`scripts/**`, `bench/**` and all merging, as standing.
-
-Wave seventeen (M2-L4, plus D-0050/D-0051/D-0052 and M4-T5's gate) is merged, released and
-pushed. Baseline to beat: **2129 ok / 0 FAIL, 280 matrix, 44 mutation, 39/39 models**.
-
-
-**Wave seventeen is COMPLETE: M2-L4 (agent-del) merged and released; three read-only
-studies done (D-0050, D-0051, D-0052, M4-T5's gate). Every file is free.**
-
-**Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `dune-project`,
-`scripts/**`, `bench/**` and all merging, as standing.
-
-**The one design question M2-L4 must settle before writing any policy** (its row says so, and
-D-0045 found it): `Writer.wipe_level l` deletes every id tagged at level `>= l`, so a learned
-constraint tagged at the level it was learned at is deleted **by the backjump**. If the
-retention policy also deletes it, that is an I-X2 double-delete arriving from two owners.
-**Decide who owns a learned constraint's lifetime first.**
-
-Wave sixteen (M2-L11 agent-ladder, M2-T17 agent-size) is merged, released and pushed; its one
-carry-over is that **M2-L6's `pb-*` figures in any older note are not to be trusted** — see the
-wave-sixteen handoff and D-0047's amendment.
-
-
-**Wave sixteen is COMPLETE: M2-L11 (agent-ladder) and M2-T17 (agent-size) are both merged,
-released and pushed. Every file is free.** The whole tree is unclaimed as of this line.
-
-The split is the usual one and it is forced. **agent-ladder holds all of `lib/`**, because
-M2-L11 changes what `Linear` hands to PB analysis: that is `lib/core/prop/linear.ml`,
-`order_reason.ml`, `pb_analysis.ml`, `justify.ml`, `search.ml`'s counters and
-`lib/proof/encoding.ml`, which is the whole learning vertical plus the encoding edge. The
-roadmap already says `lib/core` is held **exclusively** for the M2L sequence, so its partner
-has to be outside `lib/` entirely.
-
-**agent-size (M2-T17) is that partner, and it was scoped to be.** The row exists because
-`docs/EXPLANATION-REVIEW.md` §6 asked for explanation size to be a tracked number before
-M4-T1; it is deliberately specified against the **emitted `.pbp` artefacts**, which already
-contain every literal count it needs, so it changes no `lib/` file and adds no counter. It
-owns `bench/**` and nothing else. Same shape as M2-L8, for the same reason.
-
-**Orchestrator holds** `WORKLOG.md`, `docs/**`, `Makefile`, `dune-project`, `scripts/**`
-and all merging, as standing. Neither agent commits to `main`.
-
-**Before this wave dispatched, three stale things were corrected** — read these before
-trusting a roadmap row you remember:
-
-- **M1-T44 was NOT open.** It was marked "TODO — highest priority open defect" and it has
-  been fixed for some time; a wave aimed at it would have found nothing to do. Re-verified
-  through the CLI on the row's own minimal model: `s VERIFIED UNSATISFIABLE`, veripb 3.0.2,
-  binary `0011dc99`. The fix was **not** the one the row proposed (`rests_on_a_clause` was
-  never the defect); the cause was a bound settled over a hole being stronger than the trail
-  entry carrying it, fixed in `linear.ml`'s `settled_over_lo`. `test/models/root_hole_unsat.fzn`
-  is byte-for-byte that minimal model, so the gate runs it every time.
-- **M2-L11's test (c) said "verified under both formats".** It was written before D-0046;
-  there is one format. Corrected on the row, and agent-ladder is told.
-- **The `Makefile` line 106 request from agent-bench is CLOSED** — the comment already says
-  `ARGS="-r 9"` and `23 of the 38 rows`. It landed with the wave-fifteen merge and was never
-  marked.
-
-Wave fifteen (M2-T16 agent-drop, M2-L8 agent-bench) is merged, released and pushed; every
-file it held is free.
-
-
-**Wave fifteen is running: M2-T16 (agent-drop) and M2-L8 (agent-bench).**
-
-**M2-T16 is RELEASED, 2026-09-18 (agent-drop).** Moved to `
-| **M6-T18 / D-0098**: `bin/main.ml`'s `stats: seeded` label still reads "every instance, every propagate". Since M6-T18 it counts the seed slots actually RUN. Please relabel it (e.g. "...of the props, from the SEED (dirty slots only, M6-T18)") and add a `stats: skipped` line for `Engine.counters.c_skipped` (clean slots passed over; `seeded + skipped` = the old figure). Not a correctness item | `bin/main.ml` | agent-seed (M6-T18) | **CLOSED 2026-10-02** by the orchestrator at the merge: relabelled, `skipped` line added |
-| **M6-T18 / D-0098**, for information at merge: both M2-T6 / D-0094 requests above are DONE on `wave39-seed` (the incremental seed, and `~idempotent:true` at `Compile.pack_linear`/`pack_arith_row` with the by-name table retired). `Propagator.pack`'s default is now `false`: a NEW packing site of a `Linear.t` must pass `~idempotent:true` itself, or it is merely unclaimed (safe, slower) | -- | agent-seed (M6-T18) | info |
-| **M6-T18 / D-0098**: nodes/55 s did not move although runs/node fell 2.4-4.7x, so the node rate is held by something other than propagator runs. A profile of NEW (`wave39-seed`) on mario and chessboard is the next measurement, before any further wake/seed work | -- (measurement) | agent-seed (M6-T18) | open |
-
-## Completed`; handoff notes at
-the bottom of the file. Every file except `bench/**` is free again. M2-L8 (agent-bench) is
-still running. Note for whoever merges: `Makefile`'s `bench` comment now says `ARGS="-r 9"`
-and `23 of the 38 rows`, replacing a `-F 2.0` example for a flag agent-bench removed.
-
-**agent-drop has the whole repo except `bench/`**, and that is not laziness in the split:
-removing `Writer.V2_0` breaks every test that names it, so the code half and the test half
-**cannot** be separate sessions — a branch that does one without the other never compiles,
-and this project's rule is to commit as soon as it compiles. M2-L8 is the only task that is
-genuinely orthogonal, because every counter it needs (`learned`, `pb-fallback`, `skipped`)
-is already on `--stats`, so it reads stderr and touches no `lib/` file at all.
-
-Previously: wave fourteen — M2-L6 (agent-pb) and M2-T14 (agent-fmt2) — is merged, released and pushed. **With M2-L6 in, the M2-L
-learning sequence is complete except M2-L4, M2-L7 and M2-L8.**
-
-It was dispatched as: **M2-L6 (agent-pb) and M2-T14 (agent-fmt2).** agent-pb has all of
-`lib/` — M2-L6 is the PB conflict analysis and touches the whole learning vertical — so its
-partner is deliberately **outside `lib/` entirely**: a read-only-over-`lib/` audit of the
-format-2.0 path. The two share no file; `test_justify.ml` goes to agent-fmt2, so agent-pb
-puts its justification tests in `test_learn.ml` / `test_analysis.ml`.
-
-Previously: wave thirteen (M2-L5 agent-reduce, M2-L10 agent-cover) is merged, released and pushed. M2-L10 was the row that unblocks the
-measurement half of M2-L4, M2-L6 and M2-L8, which were deliberately held back for it.
-
-Previously: **wave twelve was M2-L3, ALONE.** The M2-T3 briefing says twice that this row
-should have `lib/core` exclusively, and M2-T10 — the obvious partner — needs a hook in
-`search.ml`, so there is no honest parallel task. Waves ten and eleven are merged,
-released and pushed. Wave ten was dispatched 2026-09-18 by the orchestrator: one git worktree each
-under `.claude/worktrees/<tag>`, on branches `wave10-concl` / `wave10-cut` / `wave10-flaky`,
-so no two share `_build`'s global lock. Build with `dune build --root .` from inside the
-worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 unit checks.
+The LIVE table, and nothing else: claim here before you edit (CLAUDE.md, "The protocol"),
+release by moving your row to `## Completed` and writing a handoff note. The `SessionStart`
+hook prints this section, so keep it to the table. The wave-by-wave history that used to sit
+here (2026-09-16 to 2026-11-02, fifteen claim tables, every row released) was moved verbatim to
+`## Claims history` at the bottom of the file on 2026-11-02, because the hook was printing 20 KB
+of it to every session and stopping at a broken line before it even reached the tables.
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M6-T17 | agent-wipe | 2026-10-02 | `Writer.wipe_level` and `Justify.wipe_level` (memo and stated index) walk per-level buckets instead of folding whole tables; same `del` lines, same order. 396 artefacts byte-identical over 132 models. |
-| M2-T16 | **everything except `bench/**`** — the 2.0 removal lands atomically | agent-drop | 2026-09-18 |
-| M2-L8 | `bench/**` only; read-only over `lib/` and `test/` | agent-bench | 2026-09-18 |
-| M2-L6 | all of `lib/`, `test/unit/test_learn.ml`, `test/unit/test_analysis.ml`, `test/unit/dune`, new files under `test/models/` + `test/expected/` | agent-pb | 2026-09-18 |
+| M6-T20 | `lib/core/propagator.ml` (advise), `lib/core/engine.ml` (advisor hook, counter, debug check), `lib/core/prop/clause.ml` (Learned_clause watches), `lib/core/search.ml` (register_learned pack), `bin/main.ml` (stats), `docs/INVARIANTS.md` (I-P7, append), `docs/DECISIONS.md` (D-0104, appended) | solo-opt | 2026-10-27 | **Landed** (`29a8238`, `517453b`, `149a06d`; D-0104 ACCEPTED) but **never released**: ROADMAP row still WIP, no handoff note. Left here 2026-11-02 for its session or the next one to close. |
 
-**Wave twenty-seven, dispatched 2026-09-23 from `24336ee`.** Three rows, one worktree each
-(`wave27-search` / `wave27-rup` / `wave27-guard`), files disjoint. All three are children of
-D-0068, the first full corpus run. `lib/proof/encoding.ml` goes to agent-guard; if agent-rup
-needs it, that is a `
-| Task | Files being touched | Session | Since |
-|---|---|---|---|
-
-## Cross-session requests` row, not an edit.
-
-| Task | Files being touched | Session | Since |
-|---|---|---|---|
-
-
-_(M2-L3 released 2026-09-18 by agent-learn3 — see `## Completed` and `## M2-L3 handoff`.)_
-
-_(M2-T14 released 2026-09-18 by agent-fmt2 — see `## Completed` and `## M2-T14 handoff`.)_
-
-Two rounds are recorded in `## Completed` below. The rows that stood here on
-2026-09-15 (`integration`, M1-T12, M1-T13) were stale — see the handoff note "the
-claims table had rotted" — and the round dispatched after it (M1-T18/T19 agent-proof3,
-M1-T20 agent-matrix, M1-T21 agent-output, one worktree each so that no two shared an
-`_build` lock) is merged and released.
-
-**Read-only review, 2026-09-18 (agent-xreview).** A session from
-`~/Explanations-by-constraint-decomposition` reviewed the explanation mechanism against the
-explanation literature and added `docs/EXPLANATION-REVIEW.md` plus seven rows under
-`## Cross-session requests`. It claimed no task ID, edited **no** file under `lib/`, `test/`,
-`bench/` or `scripts/`, and committed nothing — `WORKLOG.md` and `docs/**` are
-orchestrator-held, so route or revert these two files as you see fit. `bench/**` was left
-alone throughout (M2-L8 / agent-bench is live).
-
-| M7-T6 | `lib/core/search.ml`, `lib/proof/writer.ml`, `test/unit/test_learn.ml`, `test/models/{rup_level0_nogood_sat,empty_model_sat}.fzn` + expected, `test/models/PENDING`, `docs/DECISIONS.md` | agent-rup | released 2026-09-23 — D-0070 |
-
-
-**Wave thirty-one, dispatched 2026-10-01 from `f7d06b0` (orchestrator).** Goal: **the
-comparison against Chuffed and GCS can START.** D-0079 records the wave-30 corpus run that
-set the agenda — 58 verified, 0 rejected, **273 timeouts of 436**. Four rows, one worktree
-each (`wave31-perf` / `wave31-compare` / `wave31-gcc2` / `wave31-cover`). `fataepyc-07`
-(192 cores, 2 TB) is reserved for this wave: agent-perf may run up to **64** jobs, agent-compare
-up to **48** across its three solvers, the two others a handful. Every agent builds in its OWN
-node clone under `/scratch/arthur/baguette-<tag>`, never in `/scratch/arthur/baguette`, which is
-the orchestrator's and runs `main` only. Non-interactive ssh needs
-`PATH=$HOME/.local/bin:$PATH` before `opam env` (see "Node trap" below) and **hash the binary**
-on both sides of any comparison. Decision-record ids are pre-assigned so appends do not
-collide: **D-0080** agent-perf, **D-0081** agent-compare, **D-0082** agent-gcc2, **D-0083**
-agent-cover.
-
-Seams by REGION, as wave 30 learned the hard way: `lib/flatzinc/builder.ml` — the builtin
-dispatch arm for `fzn_global_cardinality` is agent-gcc2's; the `search_of_annot` strategy arms
-and the declaration/domain code are agent-cover's. `lib/core/search.ml` — the variable-selection
-functions (`first_fail` and its neighbours, ~`:720-810`) are agent-cover's; the solve loop and
-everything else is agent-perf's. `lib/flatzinc/compile.ml` — the gcc region and every
-`request_direct` call site are agent-gcc2's; the variable-declaration/bounds region is
-agent-cover's. `lib/core/engine.ml` is agent-perf's and **read-only to agent-gcc2**: the
-derive-ahead flag travels on the store entry, set by the propagator at its pruning call, not
-through the engine.
-
-| Task | Files being touched | Session | Since |
-|---|---|---|---|
-| M6-T9 | `bin/main.ml`, `lib/core/search.ml` (all but the variable-selection functions), `lib/core/engine.ml`, `lib/core/retention.ml`, `lib/core/pb_analysis.ml`, `lib/core/learn.ml`, `test/unit/{test_engine,test_endtoend,test_output}.ml`, `test/models/*` (new lanes only), `bench/**`, `scripts/corpus_run.sh` (**additive only**: a `SOLVER_ARGS` pass-through and the classification of a clean `--time-limit` exit; `scripts/corpus_selftest.sh` stays green and `--report` on `corpus-out-w30` stays byte-identical), `docs/DECISIONS.md` (D-0080, append); node clone `/scratch/arthur/baguette-perf`, runs under `/scratch/arthur/perf-out-*` | agent-perf | 2026-10-01 |
-| M6-T4 (+ M5-T3 absorbed) | `scripts/compare_run.sh` (new), `scripts/compare_selftest.sh` (new), `scripts/corpus_run.sh` **read-only** (copy what you need; it is agent-perf's this wave), `tools/**`, `bench/README.md` (new section, append), `bench/corpus/**` (new), `docs/DECISIONS.md` (D-0081, append); node: `/scratch/arthur/gcs`, `/scratch/arthur/baguette-compare`, `/scratch/arthur/compare-out-*` | agent-compare | 2026-10-01 |
-| M7-T17 + M7-T18 | `lib/core/trace.ml`, `lib/core/store.ml`, `lib/core/propagator.ml`, `lib/core/prop/{gcc,alldiff,element}.ml`, `lib/proof/encoding.ml`, `lib/flatzinc/compile.ml` (gcc region + `request_direct` sites), `lib/flatzinc/builder.ml` (gcc dispatch arm), `test/unit/{test_trace,test_prop,test_compile}.ml`, `test/models/gcc_*` + expected, `docs/PROOF-FORMAT.md` (§4 gcc row), `docs/DECISIONS.md` (D-0082, append); node clone `/scratch/arthur/baguette-gcc2` | agent-gcc2 | 2026-10-01 |
-| M7-T19 | `lib/flatzinc/builder.ml` (`search_of_annot` arms + declaration/domain code), `lib/flatzinc/model.ml`, `lib/flatzinc/compile.ml` (declaration/bounds region), `lib/core/search.ml` (variable-selection functions only), `docs/SPEC.md` (§2.1, §3.4), `test/unit/{test_flatzinc,test_compile}.ml`, new `test/models/*` + expected, `docs/DECISIONS.md` (D-0083, append); node clone `/scratch/arthur/baguette-cover` | agent-cover | 2026-10-01 |
-
-**Orchestrator holds** `WORKLOG.md`, `docs/ROADMAP.md`, `CLAUDE.md`, `Makefile`,
-`lib/core/dune`, `lib/*/dune`,
-`lib/core/explanation.ml`, `lib/core/justify.ml`, `/scratch/arthur/baguette` on the node, and all
-merging. A need for any of these is a `## Cross-session requests` row.
-
-**READ 2026-10-02 — D-0089 records both runs and the three that followed on the new binary.**
-**TWO OVERNIGHT RUNS WERE LAUNCHED ON `fataepyc-07` on 2026-10-01 ~17:30 by the
-orchestrator, detached (`setsid nohup`), from `/scratch/arthur/baguette` at `main` =
-`56ae463`, binary md5 `b37ec100a31e27e598edbc334c0f183c`. Do not re-launch them; read them.**
-ssh access to the node was cut for the night right after the launch, so nothing below was
-watched past its first two log lines.
-
-1. **The wave-31 corpus run**: `scripts/corpus_run.sh` over all 436, `PAR=64`, 300 s,
-   veripb 3.0.2 on every solved instance. Results `/scratch/arthur/corpus-out-w31/results.tsv`,
-   log `/scratch/arthur/w31-corpus.log`. Read it with
-   `scripts/corpus_run.sh --report /scratch/arthur/corpus-out-w31`. It measures what wave 31
-   merged so far — M7-T17/T18 (gcc, constant counts), M7-T19 (ten refusals, bounds
-   inference), M7-T20 (single-value crash) — against D-0079's wave-30 table. **It does NOT
-   contain M6-T9's `--time-limit`** (agent-perf's branch was not merged at launch), so its
-   timeouts are still `TIMEOUT-SOLVE` with no stats.
-2. **The first full three-solver comparison**: `scripts/compare_run.sh` over all 436,
-   `SOLVERS="baguette chuffed gcs"`, `PAR=16` per solver, 300 s, `GCS_PROVE=1` (GCS proofs
-   on, 16 GB file cap), `PAIRS=bench/corpus/answers.tsv` so every instance uses the pinned
-   data file. Results `/scratch/arthur/compare-out-w31/results.tsv`, log
-   `/scratch/arthur/w31-compare.log`. Read it with
-   `scripts/compare_run.sh --report /scratch/arthur/compare-out-w31 --pinned bench/corpus/answers.tsv`.
-   **The `DISAGREE` list and any `PIN-MISMATCH` come first**: a disagreement involving
-   baguette is a soundness finding (D-0081: 0 over 164 so far).
-
-Both honour the `DONE-<epoch>` rule: no marker, partial table, say so. At launch the node
-also carried agent-perf's last jobs (load ~64), so the two runs' `TIMEOUT` columns are
-load-comparable with each other but slightly pessimistic against wave 30's.
-
-**Wave-31 merge state at that moment**: `wave31-gcc2` (M7-T17+T18), `wave31-cover` (M7-T19),
-`wave31-justify` (M7-T20, orchestrator) and `wave31-compare` (M6-T4) are merged into `main`
-and gate-green (117 models, selftests included); `wave31-perf` (M6-T9) is still live and
-merges next. Node clones `/scratch/arthur/baguette-{perf,compare,gcc2,cover}` and the
-`perf-out-*` / `compare-out-pilot` directories are the agents' and hold their raw data.
-
-**Wave thirty-two, dispatched 2026-10-02 from `5a9b84c` (orchestrator).** Wave 31 is fully
-merged (M7-T17/18/19/20, M6-T4, M6-T9), gate-green at 117 models. The node is UNREACHABLE
-until the user reconnects, so every row below starts from local reproducers and local
-measurements, and names what it will measure on the node later. Rows: M6-T10 (orchestrator,
-`wave32-memo`), M6-T11 (agent-speed, `wave32-speed`), M6-T12 (agent-tidy, `wave32-tidy`),
-M7-T21 (agent-rup2, `wave32-rup2`). Decision ids pre-assigned: **D-0084** agent-rup2, **D-0085**
-agent-speed, **D-0086** orchestrator (M6-T10) if it needs one, agent-tidy none.
-
-Seams: `lib/core/store.ml` is agent-speed's (the `var_named` index); if agent-rup2 needs a
-store change it is a cross-session row. `lib/core/trace.ml`, `lib/core/prop/element.ml` and
-`lib/core/prop/gcc.ml` are agent-rup2's. `lib/proof/writer.ml` and `lib/core/search.ml`'s
-`conclude_stopped` are agent-tidy's; `lib/proof/{lit,encoding}.ml` agent-speed's. `bin/**` and
-`lib/core/justify.ml` the orchestrator's.
-
-| Task | Files being touched | Session | Since |
-|---|---|---|---|
-| M6-T10 | `lib/core/justify.ml`, `bin/main.ml`, `bin/dune`, `docs/SPEC.md` §2.2, `test/unit/test_justify.ml` | orchestrator | 2026-10-02 |
-| M6-T11 | `lib/core/analysis.ml`, `lib/core/store.ml`, `lib/proof/lit.ml`, `lib/proof/encoding.ml`, (`lib/core/learned.ml`, `lib/core/prop/pb.ml` only for a local fix), `test/unit/{test_analysis,test_core,test_proof}.ml`, `bench/**`, `docs/DECISIONS.md` (D-0085, append) | agent-speed | 2026-10-02 |
-| M6-T12 | `lib/proof/writer.ml`, `lib/core/search.ml` (`conclude_stopped` only), `scripts/corpus_selftest.sh`, `test/unit/test_proof.ml` | agent-tidy | 2026-10-02 |
-| M7-T21 | `lib/core/prop/element.ml`, `lib/core/prop/gcc.ml`, `lib/core/trace.ml`, `lib/core/order_reason.ml`, `test/unit/{test_trace,test_prop}.ml`, new `test/models/*` + expected, `docs/PROOF-FORMAT.md` §4 rows, `docs/DECISIONS.md` (D-0084, append) | agent-rup2 | 2026-10-02 |
-
-**Orchestrator holds** `WORKLOG.md`, `docs/ROADMAP.md`, `CLAUDE.md`, `Makefile`, `lib/*/dune`,
-`lib/core/explanation.ml`, `scripts/corpus_run.sh`, `scripts/compare_run.sh`, and all merging.
-
-**Wave thirty-three, dispatched 2026-10-02 (orchestrator), while wave 32's agent-speed is still
-live.** One row, M7-T22 (agent-root, `wave33-root`), from M7-T21's three cross-session
-requests. Decision id pre-assigned: **D-0086**. Seams: agent-speed holds `lib/core/analysis.ml`,
-`lib/core/store.ml`, `lib/proof/{lit,encoding}.ml`, `lib/core/learned.ml`, `lib/core/prop/pb.ml`;
-agent-root holds `lib/core/search.ml` (the root arm of `dfs` and nothing else), `lib/core/prop/alldiff.ml`,
-`lib/core/prop/element.ml` (only if (b) needs `excl_hole` to meet the restatement halfway),
-`test/unit/{test_trace,test_prop,test_learn}.ml`, new `test/models/*` + expected, `bench/fuzz/**`
-(the sweep M7-T21 is committing), `docs/DECISIONS.md` (D-0086, append), `docs/PROOF-FORMAT.md` §4
-alldiff row.
-
-| Task | Files being touched | Session | Since |
-|---|---|---|---|
-| M7-T22 | `lib/core/search.ml` (root arm only), `lib/core/prop/alldiff.ml`, `lib/core/prop/element.ml` (if needed), `test/unit/{test_trace,test_prop,test_learn}.ml`, new `test/models/*` + expected, `bench/fuzz/**`, `docs/PROOF-FORMAT.md` (§4 alldiff row), `docs/DECISIONS.md` (D-0086, append) | agent-root | 2026-10-02 |
-
-**Wave thirty-four, dispatched 2026-10-02 (orchestrator), after wave 33 merged.** One row,
-M6-T13 (agent-speed2, `wave34-speed2`), from agent-speed's two open requests and M7-T18's
-mznlib request. Decision id pre-assigned: **D-0087**. Nothing else is live, so the seams are
-simple: agent-speed2 holds `lib/core/search.ml` (variable selection and the per-node candidate
-bookkeeping — NOT the solve loop's proof logic), `lib/proof/opb.ml`, `mznlib/**`,
-`test/unit/{test_proof,test_compile,test_engine}.ml`, new `test/models/*` + expected, `bench/**`,
-`docs/DECISIONS.md` (D-0087, append).
-
-| Task | Files being touched | Session | Since |
-|---|---|---|---|
-| M6-T13 | `lib/core/search.ml` (variable selection + candidate bookkeeping), `lib/proof/opb.ml`, `mznlib/**`, `test/unit/{test_proof,test_compile,test_engine}.ml`, new `test/models/*` + expected, `bench/**`, `docs/DECISIONS.md` (D-0087, append) | agent-speed2 | 2026-10-02 |
-
-**State at the end of 2026-10-02 (orchestrator).** Waves 31 to 34 are merged whole, every merge
-gate-green under `make check` (now including the two harness self-tests): **132 model tests,
-3015 unit checks, 0 FAIL, peak RSS ~75 MB.** Nothing is live; every worktree branch is merged.
-`fataepyc-07` was unreachable the whole day, so every wave-32/33/34 figure is LOCAL and the two
-overnight runs (above, `corpus-out-w31`, `compare-out-w31`) are still unread.
-
-What landed since D-0079, in the order it matters for the comparison:
-- **Speed**, all byte-identical proofs: `Pb_analysis.falsified_at` O(trail) (median nodes/s 1.44 →
-  10.8 on the corpus, D-0080); `Justify` memo buckets (costas prefix 15.3 s → 3.7 s, D-0080);
-  `var_named` index, `Var.equal` in `scan_support`, literal naming without copies, two quadratic
-  loops in `Learned`/`Pb` (knapsack 2.7×, D-0085); per-node work independent of store size,
-  string-keyed `Opb` tables (padded pigeonhole 2.7×, wide compile 1.2×, D-0087).
-- **Proof soundness**: the 26 corpus `PROOF-REJECTED` (two shapes, D-0084), three root-conflict
-  defects and a pigeonhole crash from the random sweep (D-0086); `bench/fuzz/` sweeps 120 000
-  models with 0 rejected / 0 crashes on the current binary. A `Justify` crash on single-value
-  variables (M7-T20).
-- **Coverage**: gcc constant counts, `indomain`, `anti_first_fail`, bounds inference for undomained
-  `var int`, `global_cardinality_low_up` routed (UNFLATTENED-UNTESTED: `mznlib/test/check_mznlib.sh`
-  on the node, expect `7 ok`).
-- **Instrumentation**: `--time-limit` on the wall clock with `conclusion NONE`; `UNKNOWN-LIMIT`,
-  `CHECK-ERR-<rc>`, `TIMEOUT-CHECK` buckets; the three-solver harness with agreement checking
-  (0 DISAGREE over 164, D-0081); GCS built on the node, Chuffed from the bundle.
-
-**The node's to-do list, in order, for whoever has access first** — *done 2026-10-02 except item 5's `prof.sh` (the sweep ran; D-0089): the reports are read, the node is on `main`, `check_mznlib.sh` says 7 ok, the 27 verify, the comparison ran*:
-1. `scripts/corpus_run.sh --report /scratch/arthur/corpus-out-w31` and
-   `scripts/compare_run.sh --report /scratch/arthur/compare-out-w31 --pinned bench/corpus/answers.tsv`
-   (check the `DONE-` marker; DISAGREE / PIN-MISMATCH first).
-2. `cd /scratch/arthur/baguette && git pull --ff-only origin main` (origin is the bare
-   `/scratch/arthur/baguette.git`; push `main` there first from a machine that can) and rebuild
-   with the opam PATH line; hash the binary.
-3. `MZN=<minizinc> mznlib/test/check_mznlib.sh` → `7 ok, 0 failed`, or M6-T13 (iii) is wrong.
-4. Re-run the 26 ids of D-0084 (`bench/m6t9/results/a2.tsv`, `PROOF-REJECTED` rows) plus
-   `2025_stripboard` with the new binary: every one should verify or stop at a DIFFERENT, later
-   line, which is then a new finding.
-5. `bench/m6t9/prof.sh` OLD=`b37ec100…` NEW=current on D-0080's six instances; then the config (a')
-   sweep with `SOLVER_ARGS="--time-limit 280 --stats --time"` over all 436 → the new `UNKNOWN-LIMIT`
-   / verified split against D-0079's 58.
-6. The full three-solver comparison on the new binary, `PAIRS=bench/corpus/answers.tsv`.
-
-**Open and NOT taken**: 14 older cross-session rows (agent-xreview's review items, M2-T11's
-evidence, the width-lint hatch) and two design-level performance proposals in D-0085/D-0087 —
-watched slack for `Pb.propagate`, and a priority structure for the un-annotated default
-`first_fail` over every variable (still linear per node). Those two are SPEC §3.4-adjacent and
-need a record before code.
-
-**Wave thirty-five, dispatched 2026-10-02 (orchestrator), node reachable again.** One row,
-M6-T14 (agent-speed3, `wave35-speed3`), from a `perf` profile the orchestrator took on the node
-of two of the 26 formerly-rejected instances (`/scratch/arthur/prof-2014_mario.data`,
-`/scratch/arthur/prof-2023_chessboard.data`; their `.fzn` are kept under
-`/scratch/arthur/corpus-out-w35-rejected/log/`). Decision id pre-assigned: **D-0088** for this row;
-**D-0089** is reserved for the orchestrator's measurement record of the w31/w35 runs. Nothing else
-is live. agent-speed3 holds `lib/core/store.ml`, `lib/core/analysis.ml`, `lib/core/pb_analysis.ml`
-(if it reads supports the same way), `test/unit/{test_core,test_analysis}.ml`, `bench/**`,
-`docs/DECISIONS.md` (D-0088, append). Node clone `/scratch/arthur/baguette-speed3`; a handful of
-jobs only — the w35 corpus sweep and the baguette-only comparison are still running there.
-
-| Task | Files being touched | Session | Since |
-|---|---|---|---|
-| M6-T14 | `lib/core/store.ml`, `lib/core/analysis.ml`, `lib/core/pb_analysis.ml` (if needed), `test/unit/{test_core,test_analysis}.ml`, `bench/**`, `docs/DECISIONS.md` (D-0088, append) | agent-speed3 | 2026-10-02 |
-
-**Wave thirty-six, dispatched 2026-10-02 (orchestrator).** Two rows from D-0088's requests:
-M6-T15 (agent-speed4, `wave36-speed4`) and M6-T8 reopened (agent-debug, `wave36-debug`). Decision
-ids pre-assigned: **D-0090** agent-speed4, **D-0091** agent-debug (D-0089 is the orchestrator's
-measurement record of the w31/w35 runs). Seams: agent-speed4 holds `lib/core/trace.ml`,
-`lib/core/store.ml` (only if an entry needs to carry its position), `test/unit/test_trace.ml`,
-`bench/**`; agent-debug holds `lib/core/prop/element.ml`, `lib/core/prop/alldiff.ml`,
-`lib/core/debug.ml`, `lib/core/engine.ml` (the agreement check's call site only),
-`test/unit/{test_prop,test_core}.ml`. Both append to `docs/DECISIONS.md`. Node clones
-`/scratch/arthur/baguette-speed4` and `/scratch/arthur/baguette-debug`, a handful of jobs each.
-
-| Task | Files being touched | Session | Since |
-|---|---|---|---|
-| M6-T15 | `lib/core/trace.ml`, `lib/core/store.ml` (entry position only, if needed), `test/unit/test_trace.ml`, `bench/**`, `docs/DECISIONS.md` (D-0090, append) | agent-speed4 | 2026-10-02 |
-| M6-T8 | `lib/core/prop/element.ml`, `lib/core/prop/alldiff.ml`, `lib/core/debug.ml`, `lib/core/engine.ml` (agreement-check call site only), `test/unit/{test_prop,test_core}.ml`, `docs/DECISIONS.md` (D-0091, append) | agent-debug | 2026-10-02 |
-
-**Wave thirty-seven, dispatched 2026-10-02 (orchestrator), beside agent-debug (M6-T8).** One row,
-M6-T16 (agent-speed5, `wave37-speed5`), from D-0090's request. Decision id pre-assigned:
-**D-0092**. agent-speed5 holds `lib/core/analysis.ml`, `test/unit/test_analysis.ml`, `bench/**`;
-agent-debug holds `lib/core/prop/{element,alldiff}.ml`, `lib/core/debug.ml`, `lib/core/engine.ml`
-(call site), `test/unit/{test_prop,test_core}.ml`. Node clone `/scratch/arthur/baguette-speed5`.
-
-| Task | Files being touched | Session | Since |
-|---|---|---|---|
-| M6-T16 | `lib/core/analysis.ml`, `test/unit/test_analysis.ml`, `bench/**`, `docs/DECISIONS.md` (D-0092, append) | agent-speed5 | 2026-10-02 |
-
-**READ 2026-10-02 evening — D-0093.** **Two final runs of the week were launched on `fataepyc-07` on 2026-10-02 by the
-orchestrator, detached, from `/scratch/arthur/baguette` at `main` = `5c299cb`, binary md5
-`9bdd6f16bce396296199d57867523d69`** (waves 31–37 whole: M6-T14/T15/T16 included). Read them, do not
-re-launch: `scripts/corpus_run.sh --report /scratch/arthur/corpus-out-w36` (the `--time-limit 280`
-sweep, `PAR=64`, to compare with D-0089 §2: 81 verified / 189 stopped / median 9.6 nodes/s) and
-`scripts/compare_run.sh --report /scratch/arthur/compare-out-w31 /scratch/arthur/compare-out-w36-baguette
---pinned bench/corpus/answers.tsv` (baguette alone on the new binary joined with wave 31's Chuffed
-and GCS tables; D-0089 §2: 84 solved). `DONE-` marker first.
-
-**Wave thirty-eight, dispatched 2026-10-02 (orchestrator): efficiency and coverage, from the
-2026-10-02 census of globals in the corpus (maximum/minimum 94 models, the counting family 123,
-cumulative/disjunctive 69, table 37, diffn 29, circuit 28, regular 26).** Five rows, one worktree
-each. Decision ids pre-assigned: **D-0093** the orchestrator's w36 measurement, **D-0094** agent-wake,
-**D-0095** agent-maxmin, **D-0096** agent-cumulative (the design record), **D-0097** agent-count if
-needed, agent-wipe none. The node is reachable; a handful of jobs each (two corpus runs may still be
-finishing there).
-
-Seams. `lib/core/engine.ml` and `lib/core/propagator.ml` are agent-wake's; `bin/main.ml`'s
-`--stats` printing region and the `limit:` lines are agent-wake's too (the counters it adds must
-print), the rest of `bin/main.ml` is the orchestrator's. `lib/proof/writer.ml` and `lib/core/justify.ml`
-are agent-wipe's for `wipe_level` ONLY. `lib/flatzinc/{model,builder,compile}.ml` dispatch arms and
-`lib/core/dune` are agent-maxmin's this wave; agent-cumulative files a cross-session request for its
-three arms and its dune line, as M7-T16 did. `mznlib/`: agent-count owns the counting-family files
-and their `mznlib/test/` sources; agent-maxmin owns `redefinitions.mzn`'s `int_max`/`int_min` lines
-and new `fzn_array_int_maximum/minimum` files; agent-cumulative owns `fzn_cumulative*.mzn` if it
-gets that far. Nobody edits `mznlib/test/check_mznlib.sh` itself (it iterates `*.mzn`).
-
-| Task | Files being touched | Session | Since |
-|---|---|---|---|
-| M2-T6 | `lib/core/engine.ml`, `lib/core/propagator.ml`, `bin/main.ml` (stats region + `limit:` lines), `scripts/corpus_run.sh` (additive: new `limit:` keys in `summarise_limit`), `test/unit/{test_engine,test_endtoend}.ml`, `docs/ARCHITECTURE.md` §5, `docs/DECISIONS.md` (D-0094, append), `bench/**` | agent-wake | 2026-10-02 |
-| M6-T17 | `lib/proof/writer.ml` (`wipe_level`), `lib/core/justify.ml` (`wipe_level`), `test/unit/{test_proof,test_justify}.ml` | agent-wipe | 2026-10-02 |
-| M4-T10 | `docs/DECISIONS.md` (D-0096, append) FIRST; then `lib/core/prop/cumulative.ml` (new), `mznlib/fzn_cumulative*.mzn`, `mznlib/test/*cumul*.mzn`, `test/unit/test_prop.ml` (its own scenes), new `test/models/*`, `docs/PROOF-FORMAT.md` §4 row; dispatch arms and dune line by request | agent-cumulative | 2026-10-02 |
-| M7-T23 | `mznlib/fzn_count*.mzn`, `mznlib/fzn_exactly*.mzn`, `mznlib/fzn_at_most*.mzn`, `mznlib/fzn_at_least*.mzn`, `mznlib/fzn_among*.mzn` (new), `mznlib/test/*count*|*exactly*|*among*|*at_*.mzn`, new `test/models/*` + expected, `docs/DECISIONS.md` (D-0097, append, only if a decision is taken) | agent-count | 2026-10-02 |
-
-**Wave thirty-nine, dispatched 2026-10-02 (orchestrator), beside wave 38's agent-cumulative and
-agent-count.** One row, M6-T18 (agent-seed, `wave39-seed`), from D-0094's two requests. Decision id
-pre-assigned: **D-0098**. agent-seed holds `lib/core/engine.ml`, `lib/core/store.ml` (the low-water
-mark), `lib/core/search.ml` (**the `Engine.propagate` call sites and what they pass, nothing else**),
-`lib/flatzinc/compile.ml` (**`pack_linear`/`pack_arith_row`'s `~idempotent` only** — agent-cumulative's
-dispatch arms will be granted there by the orchestrator at merge, in a different region),
-`lib/core/propagator.ml`, `test/unit/{test_engine,test_core}.ml`, `bench/**`, `docs/ARCHITECTURE.md` §5,
-`docs/DECISIONS.md` (D-0098, append).
-
-| Task | Files being touched | Session | Since |
-|---|---|---|---|
-| M6-T18 | `lib/core/engine.ml`, `lib/core/store.ml`, `lib/core/search.ml` (propagate call sites only), `lib/core/propagator.ml`, `lib/flatzinc/compile.ml` (`~idempotent` only), `test/unit/{test_engine,test_core}.ml`, `bench/**`, `docs/ARCHITECTURE.md` §5, `docs/DECISIONS.md` (D-0098, append) | agent-seed | 2026-10-02 |
-
-**Wave thirty-nine, second row, 2026-10-02 (orchestrator).** M7-T24 (agent-gcc3, `wave39-gcc3`),
-from D-0097's request. Decision id pre-assigned: **D-0099**. agent-gcc3 holds `lib/core/prop/gcc.ml`,
-`test/unit/{test_prop,test_trace}.ml` (its own scenes and the I-X10 table row if the family's
-classification changes), new `test/models/gcc_*`, `docs/PROOF-FORMAT.md` (§4 gcc row),
-`docs/DECISIONS.md` (D-0099, append). `mznlib/fzn_count_eq.mzn` is NOT restored on `main`; the
-re-measurement runs on a throwaway node copy.
-
-| Task | Files being touched | Session | Since |
-|---|---|---|---|
-| M7-T24 | `lib/core/prop/gcc.ml`, `test/unit/{test_prop,test_trace}.ml`, new `test/models/gcc_*` + expected, `docs/PROOF-FORMAT.md` (§4 gcc row), `docs/DECISIONS.md` (D-0099, append) | agent-gcc3 | 2026-10-02 |
-
-**Wave forty, dispatched 2026-10-02 (orchestrator), after waves 38 and 39 merged whole (`main`
-`1df8d81`, 153 models).** Two rows: M7-T25 (agent-elearn, `wave40-elearn`) and M4-T5 reopened
-(agent-hints, `wave40-hints`, design first). Decision ids pre-assigned: **D-0101** agent-elearn,
-**D-0102** agent-hints. Seams: agent-elearn holds `lib/core/prop/element.ml`, `test/unit/{test_prop,
-test_trace,test_learn}.ml` (its own scenes), new `test/models/*`, `docs/PROOF-FORMAT.md` §4 element
-row; agent-hints holds `lib/core/trace.ml`, `lib/core/justify.ml` (**granted for this row**),
-`lib/proof/writer.ml`, `lib/core/learn.ml` (the nogood's `rup`), `test/unit/{test_proof,test_justify}.ml`,
-`bench/**` — but writes NO solver code before D-0102's measurement is in. Node clones
-`/scratch/arthur/baguette-elearn`, `/scratch/arthur/baguette-hints`; a handful of jobs each. The
-checker of record is VeriPB source `d5644ca4` (D-0100); rejection header "Checking error at".
-
-| Task | Files being touched | Session | Since |
-|---|---|---|---|
-| M7-T25 | `lib/core/prop/element.ml`, `test/unit/{test_prop,test_trace,test_learn}.ml` (own scenes), new `test/models/*` + expected, `docs/PROOF-FORMAT.md` (§4 element row), `docs/DECISIONS.md` (D-0101, append) | agent-elearn | 2026-10-02 |
-| M4-T5 | `docs/DECISIONS.md` (D-0102, append) FIRST; then `lib/core/trace.ml`, `lib/core/justify.ml`, `lib/proof/writer.ml`, `lib/core/learn.ml`, `test/unit/{test_proof,test_justify,test_trace}.ml`, `bench/**` | agent-hints | 2026-10-02 |
-| M6-T20 | `lib/core/propagator.ml` (advise), `lib/core/engine.ml` (advisor hook, counter, debug check), `lib/core/prop/clause.ml` (Learned_clause watches), `lib/core/search.ml` (register_learned pack), `bin/main.ml` (stats), `docs/INVARIANTS.md` (I-P7, append), `docs/DECISIONS.md` (D-0104, appended) | solo-opt | 2026-10-27 |
-
-**Node runs in flight when access dropped (2026-10-02 late evening), read them, do not re-launch:**
-1. `/scratch/arthur/corpus-out-w37` — the `--time-limit 280` sweep on `main` = `1df8d81` (waves 31–39
-   whole, cumulative/maxmin/gcc3/seed included), binary md5 `70561345fc3974297102602dba50d8b6`, run
-   from the throwaway clone `/scratch/arthur/baguette-main-check` (`PAR=48`). Compare with D-0093
-   (87 verified, 25 check-timeouts, median 18.1 nodes/s): `scripts/corpus_run.sh --report /scratch/arthur/corpus-out-w37`.
-2. `/scratch/arthur/compare-out-w37-baguette` — baguette alone, same binary, `PAIRS=answers.tsv`.
-   Read joined: `scripts/compare_run.sh --report compare-out-w31 compare-out-w36-baguette compare-out-w37-baguette --pinned bench/corpus/answers.tsv`
-   — the report's new **regressions section** (solved LOST / verified LOST between tables) comes first.
-3. `/scratch/arthur/gcs-recheck/<id>.vp` — the 16 GCS proofs re-checked with the d5644ca4 checker
-   (D-0100); the first 10 all VERIFIED; 6 large ones (prize-collecting, proteindesign12, smelt,
-   stochastic-fjsp det, table-layout, atsp) were still running. Then rewrite
-   `docs/reports/2026-10-02-gcs-rejected-proofs.md` and add the D-0089 §1 addendum.
-4. `/scratch/arthur/corpus-out-w36-longcheck` — the 25 TIMEOUT-CHECK instances re-solved with a 3 h
-   check budget, launched under load; mostly `UNKNOWN-LIMIT` (did not re-solve in 280 s under load),
-   so inconclusive about the proofs. `corpus_run.sh` now KEEPS TIMEOUT-CHECK artefacts (`596692d`),
-   so the next sweep's unchecked proofs can be checked long without re-solving.
-**The node checkout `/scratch/arthur/baguette` is at `5c299cb` and must be pulled + rebuilt once
-nothing runs from it** (the longcheck run executes its scripts).
-| M7-T25 | agent-elearn | 2026-10-03 | **D-0101.** `Element.no_position_conflict` reports its facts above level 0 (`conflict_facts`: per dead position the bound it lies beyond, a result hole's remover's facts, a deep index hole's puncher's facts) under `Store.deriving_ahead`; root stays `Reason.none`. Lanes `element_learn_{hole_sat,hole_unsat,prunes_sat}`, test_learn M7-T25 a/b/c. 2014_mario learned 866 -> 1344 at 120 s, proof VERIFIED; node unreachable |
-
-
-**State at the end of the week, 2026-10-03 early morning (orchestrator).** Waves 31 to 40 are
-merged whole; every merge gate-green under `make check` with the d5644ca4 checker (D-0100): **156
-model tests, ~3 300 unit checks, 0 FAIL, also clean under `BAGUETTE_DEBUG=1`.** Nothing is live. The
-node has been unreachable since late 2026-10-02; the block above lists the four runs waiting there.
-
-**Since D-0093** (`5c299cb`, the last binary measured on the corpus): M6-T17 (`wipe_level`
-buckets), M4-T9 (`maximum`/`minimum` propagator, `radiation` proof −30 %), M2-T6 (propagation
-counters comparable to GCS's; the self-wake veto measured as not paying), M7-T23 (the `count`
-family route to gcc measured WORSE and withdrawn, D-0097), M6-T18 (incremental seeding: runs/node
-÷2.4–4.7, no nodes/s gain — the removed runs were cheap), M7-T24 (gcc's saturated/forced value
-rules and the reason-nesting bug behind 168 MB proof lines: 7 MB → 5.7 KB per node), M4-T10
-(`cumulative`/`disjunctive` time-table propagator AND the conflict-learning mechanism
-`Store.conflict.c_ahead`: 2008_rcpsp 13 s → 0.6 s), M7-T25 (element conflicts carry facts: mario's
-learning rate 46 % → 82 %), M4-T5 (RUP hints measured at 1.4–1.5× on local proofs, corpus
-measurement pending — BLOCKED), D-0100 (the checker of record moved past the trailhead fix; the
-GCS "rejections" were the June checker's, 10 of 16 re-verified before access dropped).
-
-**Open rows, in the order they matter for the comparison:**
-1. Read the four node runs (block above); rewrite the GCS report with the re-check verdicts and
-   add the D-0089 §1 addendum; record w37 as the week's final figures.
-2. M4-T5 — finish D-0102 on the node (`bench/m4t5/nodepipe.sh`); GO only at ≥3× on corpus proofs.
-   The check column is the bottleneck (25 unchecked solves at 900 s).
-3. The slow quartile is element-heavy and now learns; nodes/s there did not move (D-0101) — the
-   next profile is of `2014_mario` on the current binary, before any further engine work.
-4. Design-level levers still unmeasured: watched slack for `Pb.propagate` (D-0085), a priority
-   structure for the un-annotated `first_fail` (D-0087), restarts (D-0045, SPEC), gcc's hole-aware
-   counting (D-0099), element's three other factless conflict sites (D-0101).
-5. Coverage next by census: `table` (37 models), `diffn` (29), `circuit` (28), `regular` (26);
-   cumulative's variable-duration/resource forms (22 models) stay with std.
-6. The width wall (69 instances) — a different encoding of wide domains, a decision not taken.
 ## Cross-session requests
 
 Need a change in a file someone else has claimed? Write it here and move on to other
@@ -1013,6 +298,11 @@ work. The owning session picks it up.
 | M4-T5 (deliverable 1, partial) | agent-hints | 2026-10-03 | D-0102: RUP hints measured by hand via veripb elaboration on the suite (153/153 verify hinted, 1.0x at the floor) and scratch php20/28 (1.4-1.5x); per-line opt-out confirmed; corpus lane BLOCKED (node unreachable); NOT GO; no solver code; `bench/m4t5/` |
 | M6-T19 | solo-opt | 2026-10-23 | **I-P6 (one snapshot, every deduction)** in `alldiff`, `cumulative` (incremental refresh of the pushed task), `gcc`, `element`; `Propagator.pass_counters` under `--stats`. Node: 3326 unit ok, 156/156 models, corpus before/after (`compare-out-m6t19-{before,after}`) 0 lost / 0 mismatch / 1 gained, sgm+1 9.23 -> 9.17 s. **The restart was not where the time goes**: `props` is 10^6..10^7 runs for 10^3..10^4 nodes (racp 42.8M runs / 8565 nodes); several `cumulative` corpus instances show `passes 0` (decomposed by mznlib, not our propagator). Weekend chain on the node, see handoff |
 | M7-T26 | agent-mznc | 2026-11-02 | **D-0105 to D-0121.** `bench/challenge/<Y>.lst` (2011–2026, the official 100 instances each, from `challenge_lists.py`), `compare_run.sh INSTANCES=<list>` with the flatten time in `flatten.tsv`, `challenge_rank.py` reproducing every stored pairwise score of every edition and inserting baguette in the fd or free category. Sixteen editions run on fataepyc-06 at 1200 s / 16 GiB: baguette-fd last in 13, next to last in 3 (2012, 2016, 2026); 169 complete answers, all proofs VERIFIED, 0 REJECTED; 543 REFUSED = 388 width wall + 145 heap budget + 9 gcc repeated variable + 1 unbounded var. Our Chuffed agrees with the official on 90–99/100 per year; the node is 1.6–2.3x faster than the Challenge machine from 2021 on. One classifier wording fixed on the way (veripb words infeasibility on an optimisation proof as `BOUNDS INF <= obj <= INF`, 7c8b6ed) |
+| M2-L6 | agent-pb | 2026-09-18 | PB conflict analysis (`pb_analysis.ml`), DONE per ROADMAP and the wave-14 note. Its claim row was never moved; released 2026-11-02 while archiving the claims history |
+| M7-T6 | agent-rup | 2026-09-23 | **D-0070**. The claim row itself read "released 2026-09-23" but never moved; archived 2026-11-02 |
+| M7-T18 | agent-gcc2 | 2026-10-01 | **D-0082** (shared M7-T17's claim; M7-T17 has its own row above). Archived 2026-11-02 |
+| M6-T17 | agent-wipe | 2026-10-02 | `Writer.wipe_level` / `Justify.wipe_level` walk per-level buckets instead of folding whole tables; 396 artefacts byte-identical over 132 models. Handoff note "M6-T17 handoff (agent-wipe, 2026-10-02)". Archived 2026-11-02 |
+| M7-T25 | agent-elearn | 2026-10-03 | **D-0101.** `Element.no_position_conflict` reports its facts above level 0 (`conflict_facts`: per dead position the bound it lies beyond, a result hole's remover's facts, a deep index hole's puncher's facts) under `Store.deriving_ahead`; root stays `Reason.none`. Lanes `element_learn_{hole_sat,hole_unsat,prunes_sat}`, test_learn M7-T25 a/b/c. 2014_mario learned 866 -> 1344 at 120 s, proof VERIFIED; node unreachable |
 
 ## Handoff notes
 
@@ -4218,3 +3508,738 @@ exact on 2013–2026, ranks reproduced on 2011–2012), `bench/README.md` §9, D
 - Trap met this week: `setsid nohup cmd &` inside an ssh one-liner gives `$!` of a subshell, and
   GNU `timeout` puts its child in its own process group, so a group kill leaves solver orphans.
   Have the detached script write `$$` to its own pidfile and kill by PID only.
+
+
+## Claims history (archived 2026-11-02, read-only)
+
+What `## Active claims` held from 2026-09-16 to 2026-11-02, moved here verbatim (one broken
+`## Completed` line at its old line 336 got a leading backtick so it is no longer a heading).
+Every row in these tables is released; the live table is at the top of the file.
+
+
+**AN OVERNIGHT CORPUS RUN IS IN FLIGHT ON `fataepyc-07`. Do not re-launch it; read it.**
+
+Launched 2026-09-22 ~16:05 from `/scratch/arthur/corpus_run.sh`, **detached (`setsid nohup`)**,
+64-way parallel, 32 GB ulimit per job. It survives the SSH session that started it.
+
+- **results**: `/scratch/arthur/corpus-out/results.tsv` — TSV, one line per instance:
+  `id <TAB> outcome <TAB> fzn-bytes <TAB> pbp-bytes <TAB> detail`
+- **per-instance logs**: `/scratch/arthur/corpus-out/log/`
+- **completion marker**: a final `DONE-<epoch>` line in `results.tsv`. **If that line is absent
+  the run was cut off**, and the file is partial — say so rather than reporting the total.
+- 436 instances queued (every `.mzn` in the corpus, smallest data file each).
+
+**It flattens with the M7-T3 library** (`MZN_SOLVER_PATH=/scratch/arthur/baguette/tools`), so
+constraints stay high-level, and it runs the node's `main` at `b6fa825` — M7-T1's unlimited
+defaults and M7-T2's annotations both in.
+
+**Every solved instance has its proof checked by veripb 3.0.2**, and `PROOF-REJECTED` is its own
+bucket, never folded into a failure. That bucket is the point.
+
+**At 232 of 436 the distribution was**: `REFUSED-MODEL` 186, `FLATTEN-FAIL` 25,
+`REFUSED-LIMIT` 14, **`PROOF-REJECTED` 3**, `SOLVE-ERR-134` 2, `OK-PROOF-VERIFIED` 2. **Read
+that as provisional**: it is the first half of an alphabetical walk, so it is 2008–2012-heavy
+and the early years are the least likely to flatten at all.
+
+**Three things already visible, for whoever picks this up:**
+
+1. **`PROOF-REJECTED` is not rare.** Three in the first 232, against two verified. **M7-T6 is
+   not an exotic corner** — and remember D-0066: on an UNSAT instance the same defect is
+   *accepted silently*, so this bucket is a **lower bound**.
+2. **`REFUSED-MODEL` (exit 2) dominates at 186.** That is the front end refusing a builtin or a
+   declaration, and D-0067 says the residual wall is **set-literal domains**. Worth confirming
+   from the logs before anyone builds anything.
+3. **Some `FLATTEN-FAIL` is the harness, not the corpus** — e.g. *"no function or predicate with
+   this signature found: `int_search(array[int] of var int,string,string,string)`"*, which is a
+   2008-era annotation syntax MiniZinc 2.10.1 no longer accepts. **Do not count those as
+   unsupported instances.** Separate harness failures from solver findings before quoting any
+   number.
+
+**SOLVE-ERR-134 is SIGABRT** (134 = 128+6) and is unexplained — two instances. That is worth a
+look on its own; an abort is not a refusal.
+
+
+**Wave twenty-six is COMPLETE: M7-T1, M7-T2 and M7-T3 all merged, released and pushed.**
+
+**Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `scripts/**`, `bench/**`,
+`bin/main.ml`, `lib/flatzinc/**`, `lib/core/dune` and all merging.
+
+Wave twenty-four (M4-T7, M4-T3) is merged, released and pushed. **Every builtin in SPEC §2.1 is
+now implemented** — `planned` is empty. Baseline: **2663 ok / 0 FAIL, 280 matrix, 44 mutation,
+85/85 models**.
+
+
+**Wave twenty-four is running: M4-T7 (agent-defid) and M4-T3 (agent-element).**
+
+**agent-defid holds** `lib/core/{explanation,justify}.ml`, `lib/core/prop/alldiff.ml`, and
+`test/unit/{test_justify,test_prop,test_trace}.ml`. M4-T7 closes the gap M4-T1 made concrete:
+`Justify.defining_lit` exists and has **no caller**, because nothing in an `Explanation.t`
+*value* can ask for one. **This is the row where `explanation.ml`'s no-new-constructor rule is
+most likely to be genuinely spent** — D-0044's table has held eight times, and if this breaks it,
+the argument is the deliverable as much as the code.
+
+**agent-element holds** `lib/core/prop/element.ml` (new), `lib/core/dune`, `lib/flatzinc/**`,
+`test/models/**`, `test/expected/**` and `test/unit/{test_compile,test_flatzinc,test_endtoend}.ml`.
+M4-T3 is `array_int_element`, **unblocked by M4-T0**: D-0058 settled that a 1-based index is
+`View.shift (View.of_var i) (-1)` and prunes the index directly, with **no channelling step at
+which to lose value consistency** — which is the failure GCS hit and M4-T0's row warns about.
+
+**They meet only at `lib/core/dune`**, which is agent-element's (it adds a module; agent-defid
+adds none). `lib/core/view.ml` is **read-only to both** — it landed in wave twenty-one and
+neither row should be changing it.
+
+**A standing note for both**: `test/models/width_sat_depth.fzn`'s header comment is stale
+(43 ms against ~160 ms today, D-0062) and `test/models/**` is agent-element's this wave. If it is
+convenient, fix the comment rather than delete it — a figure with a date on it is how the
+regression was caught at all.
+
+**Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `scripts/**`, `bench/**`,
+`lib/proof/**`, `lib/core/{search,engine,store,domain,var,view}.ml` and all merging.
+
+Wave twenty-three (M5-T1+T2, M6-T6) is merged, released and pushed. **M5 is open and every
+milestone M0–M5 now has its core rows done.** Baseline: **2608 ok / 0 FAIL, 280 matrix,
+44 mutation, 78/78 models**.
+
+
+**Wave twenty-three is running: M5-T1+M5-T2 (agent-bb) and M6-T6 (agent-bisect).**
+
+**agent-bb holds** `lib/core/{search,engine}.ml`, `lib/proof/{writer,encoding}.ml`,
+`bin/main.ml`, `lib/flatzinc/**`, `test/models/**`, `test/expected/**` and
+`test/unit/{test_proof,test_endtoend,test_output,test_compile,test_flatzinc,test_matrix}.ml`.
+M5-T1 and M5-T2 go together because `conclusion BOUNDS` is the proof half of branch and bound;
+splitting them would put the search and its conclusion in different branches.
+
+**It is not starting from nothing**: `Ast.solve_kind` and `Model.objective` already carry
+`Minimize`/`Maximize`, `Writer.obju` exists at `writer.ml:1183`, and the `Bounds` conclusion
+variant at `:1244`. **`PROOF-FORMAT.md` line 136 already records the trap**: `obju` *"needs
+explicit subproofs — Proofgoal #1 could not be autoproven"*, measured and filed against M5.
+
+**agent-bisect holds `bench/**` and nothing else**, read-only over the rest. M6-T6 is the
+`width_sat_depth` regression: the model's own header says 43 ms, it is 160 ms shipped and
+**590 ms with learned propagation off**, so the tree underneath costs roughly **14×** what the
+comment claims. M6-T1 hypothesised M2-L13 as the cause; measurement showed it is the
+**mitigation** (worth ~4×). **The row says bisect, not hypothesise** — `perf` is unavailable on
+this kernel, so the tool is `git bisect` plus a wall-clock harness, in its own worktree.
+
+**Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `dune-project`,
+`scripts/**`, `lib/core/prop/**` and all merging.
+
+Wave twenty-two (M4-T1, M6-T1) is merged, released and pushed. Baseline: **2564 ok / 0 FAIL,
+280 matrix, 44 mutation, 73/73 models**.
+
+
+**Wave twenty-two is running: M4-T1 (agent-hall), ALONE.**
+
+**This row goes out solo deliberately.** Its own text says it is *"an experiment, not
+propagator number eight"* and to budget it as one; `docs/EXPLANATION-REVIEW.md` §3 calls it the
+row where the project's central claim first becomes falsifiable. Precedent: wave twelve
+dispatched M2-L3 alone for the same reason.
+
+**agent-hall holds** `lib/core/prop/**`, `lib/core/dune`, `lib/core/{explanation,justify}.ml`,
+`lib/proof/encoding.ml`, `lib/flatzinc/**`, `test/models/**`, `test/expected/**`, and
+`test/unit/{test_prop,test_justify,test_compile,test_flatzinc,test_trace,test_proof}.ml`.
+
+**`explanation.ml` is lent, not given.** Its header still forbids a new constructor without a
+decision record and **that is not suspended** — but this is the first row that might genuinely
+need one, so it holds the file and reports rather than being blocked by a boundary. `Combine`,
+`Weaken` and `Model_row` were built for exactly this; if they suffice, that is itself the
+result D-0027 anticipated.
+
+**Added alongside wave twenty-two: M6-T1 (agent-prof).**
+
+**agent-prof holds `bench/**` and nothing else** — `lib/`, `bin/`, `test/` and `scripts/` are
+**read-only** to it. M6-T1 is "profile; establish the propagation hot path", and it is a
+measurement row: if it finds a hot spot it **reports** it, it does not fix it. That is what
+keeps it disjoint from agent-hall, which holds most of `lib/`.
+
+**It is no longer premature, which it was when I declined it in wave seventeen.** The suite is
+64 models with genuinely hard ones (`php_wide_unsat` is 1439 nodes unlearned), and PB
+propagation, arithmetic and reification have all landed since. There is now something to
+profile. It also has to land before M6-T2 (domains/trail to `Bigarray`) and M6-T3 (buffered
+proof writing), or both of those are guesses.
+
+**The trap it must not fall into is already measured**: `bench/README.md` §3 and §3a found that
+most models sit at the **process floor**, where the timing column measures `exec` and not this
+solver. §3b already split propagation from emission (M1-T47). It must build on those rather
+than rediscover them.
+
+**Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `dune-project`,
+`scripts/**`, `bench/**`, `bin/main.ml`, `lib/core/{search,engine,store,domain,var,view}.ml`
+and all merging. I am doing **M6-T5** (`check_determinism.sh` ignoring `test/models/PENDING`)
+myself while this runs — `scripts/` only, no overlap.
+
+Wave twenty-one (M4-T0, M4-T4b, M2-T10) is merged, released and pushed. Baseline: **2549 ok /
+0 FAIL, 280 matrix, 44 mutation, 64/64 models**.
+
+
+**Wave twenty is COMPLETE: M2-L15 and M3-T2+M3-T4 merged, released and pushed.**
+
+**Wave twenty-one is running: M4-T0 (agent-views) and M4-T4b (agent-arith).**
+
+**agent-views holds the VARIABLE layer**: `lib/core/{var,store,domain}.ml`, `lib/proof/{lit,encoding}.ml`,
+and `test/unit/{test_core,test_domain,test_proof}.ml`. M4-T0 is views (`±x + k`) and
+constants-as-variables. Its row opens a proof-side question — **each view needs its own range
+literals** — which is why it holds `lit.ml` and `encoding.ml`.
+
+**agent-arith holds the PROPAGATOR layer**: `lib/core/prop/**` (new modules only — it may
+**read** every existing propagator and **edit none**), `lib/core/dune`, `lib/flatzinc/**`,
+`test/models/**`, `test/expected/**`, `test/unit/{test_prop,test_interval,test_compile,test_flatzinc}.ml`.
+M4-T4b is `int_times`/`int_div`/`int_abs` over M4-T4a's `interval.ml`.
+
+**`lib/core/explanation.ml` and `lib/core/justify.ml` are NEITHER agent's.** A new constructor
+needs a decision record and that is not suspended; arithmetic justification is exactly where one
+would be wanted. Route it to me.
+
+**M4-T1 IS NOT DISPATCHED, and the reason is not technical.** Its blockers M1-T31 and M2-T17 are
+both DONE. But the row says **D-0048 should be closed before it, not after** — is a reified
+explanation a research output? — because that is the row where the reified form either
+demonstrates what it buys or looks like expensive ceremony. Decided before, M4-T1 reads as
+evidence; decided after, it reads as a verdict already reached. **That is a question for the
+project's owner, and it is with them.**
+
+**Added to wave twenty-one: M2-T10 (agent-oracle), dispatched alongside.**
+
+**agent-oracle holds** `lib/core/{search,engine,debug}.ml`, `test/unit/dune`, a new
+`test/unit/test_consistency.ml`, and `test/unit/test_engine.ml`. M2-T10 is the per-node
+consistency harness: **nothing verifies the `consistency` tag that SPEC §2.2 makes
+normative**, and today's oracle checks soundness only.
+
+**It is dispatched now because the timing is unusually good**: `reif.ml`, `reif_lin_le.ml` and
+`reif_lin_eq.ml` landed yesterday, and `int_times`/`int_div`/`int_abs` plus `all_different` are
+next — six new declared consistency levels with nothing checking any of them.
+
+It reads `lib/core/prop/**` (agent-arith's) and must **edit none of it**. If it finds a
+propagator weaker than its declared level, that is a **finding to report, not to fix** — and
+weakening the test to match is forbidden.
+
+**M4-T1 goes out as wave twenty-two** the moment agent-arith releases `lib/core/prop/` and
+`lib/core/dune`. Nothing else blocks it: **D-0048 never did, and that claim is struck** — the
+dependency ran backwards, since M4-T1 is the evidence that would inform D-0048 rather than
+something waiting on it.
+
+**Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `dune-project`,
+`scripts/**`, `bench/**` and all merging, as standing.
+
+Wave nineteen (M2-L13, M2-L14) is merged, released and pushed; gate re-verified on `main`
+after the merge: **2256 ok / 0 FAIL, 280 matrix, 44 mutation, 44/44 models, `check: ok`**.
+
+
+**Wave nineteen is COMPLETE: M2-L13 and M2-L14 merged, released and pushed. Every file is free.**
+
+**Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `dune-project`,
+`scripts/**` and all merging, as standing.
+
+Wave eighteen (M2-L12, M3-T1) is merged, released and pushed. Baseline: **2190 ok / 0 FAIL,
+280 matrix, 44 mutation, 39/39 models**, and **231 nodes suite-wide** — that last number is
+M2-L13's target and M2-L12 pinned it.
+
+
+**Wave eighteen is running: M2-L12 (agent-prop) and M3-T1 (agent-reify).**
+
+**Two real editing tasks this time**, not a row plus a study, because the file split finally
+allows it: M2-L12 is `lib/core/**`, M3-T1 is `lib/proof/**`, and they meet at exactly one
+place, handled below.
+
+**agent-prop holds `lib/core/**`, `bin/main.ml`, and all of `test/unit/**` EXCEPT
+`test_proof.ml`** (including `test/unit/dune` and `test/models/**`). M2-L12 makes learned
+constraints propagate: unit clauses as level-0 bounds first, then widen `bool_clause` to a
+threshold. D-0052 settled that this is a **widening, not a new family**, so D-0044's bet is not
+spent.
+
+**agent-reify holds `lib/proof/**` and `test/unit/test_proof.ml` ONLY.** M3-T1 is `red`-based
+definitions for reified variables. `Writer.red` already exists (`writer.ml:1069`) and is
+already used for channelling (`encoding.ml:406,411,420`), so this extends a working pattern.
+
+**THE ONE PLACE THEY MEET, and it is a hard constraint on agent-reify.** Fourteen `lib/core`
+modules call into `Encoding` — `trace.ml` alone 11 times, plus `ne.ml`, `ladder.ml`,
+`learned.ml`, `search.ml`, `linear.ml`, `lin_eq.ml`, `bool2int.ml`, `order_reason.ml`,
+`reason.ml`, `justify.ml`, `analysis.ml`, `pb_analysis.ml`, `checked.ml`. **agent-reify may
+ADD to `Encoding` and `Lit` but must NOT change any existing signature**, or agent-prop's
+branch stops compiling. Same protocol as the standing `lib/proof/lit.ml` request above, and
+for the same reason.
+
+**A precondition on M2-L12 that is part of the row, not optional.** D-0052 marks the figure its
+step ordering rests on — "~70 of 88 learned clauses are unit" — as **provisional, ±5, from
+proof-text parsing**. agent-prop **re-derives it from an instrumented run first** and lets the
+measurement pick the order. If the histogram comes back different, the plan changes and that is
+the row working as intended.
+
+**And M2-L12 must revisit `Retention` in the same change.** A trace line from a learned-clause
+instance is RUP only while that constraint is **live**. Today nothing propagates a learned
+constraint, which is the independence D-0051 assumed; giving one a registered instance couples
+retention to the propagator set. D-0051 named this as the condition that reverses its keep-all
+verdict, so the verdict gets re-run, not inherited.
+
+**Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `dune-project`,
+`scripts/**`, `bench/**` and all merging, as standing.
+
+Wave seventeen (M2-L4, plus D-0050/D-0051/D-0052 and M4-T5's gate) is merged, released and
+pushed. Baseline to beat: **2129 ok / 0 FAIL, 280 matrix, 44 mutation, 39/39 models**.
+
+
+**Wave seventeen is COMPLETE: M2-L4 (agent-del) merged and released; three read-only
+studies done (D-0050, D-0051, D-0052, M4-T5's gate). Every file is free.**
+
+**Orchestrator holds** `WORKLOG.md`, `docs/**`, `CLAUDE.md`, `Makefile`, `dune-project`,
+`scripts/**`, `bench/**` and all merging, as standing.
+
+**The one design question M2-L4 must settle before writing any policy** (its row says so, and
+D-0045 found it): `Writer.wipe_level l` deletes every id tagged at level `>= l`, so a learned
+constraint tagged at the level it was learned at is deleted **by the backjump**. If the
+retention policy also deletes it, that is an I-X2 double-delete arriving from two owners.
+**Decide who owns a learned constraint's lifetime first.**
+
+Wave sixteen (M2-L11 agent-ladder, M2-T17 agent-size) is merged, released and pushed; its one
+carry-over is that **M2-L6's `pb-*` figures in any older note are not to be trusted** — see the
+wave-sixteen handoff and D-0047's amendment.
+
+
+**Wave sixteen is COMPLETE: M2-L11 (agent-ladder) and M2-T17 (agent-size) are both merged,
+released and pushed. Every file is free.** The whole tree is unclaimed as of this line.
+
+The split is the usual one and it is forced. **agent-ladder holds all of `lib/`**, because
+M2-L11 changes what `Linear` hands to PB analysis: that is `lib/core/prop/linear.ml`,
+`order_reason.ml`, `pb_analysis.ml`, `justify.ml`, `search.ml`'s counters and
+`lib/proof/encoding.ml`, which is the whole learning vertical plus the encoding edge. The
+roadmap already says `lib/core` is held **exclusively** for the M2L sequence, so its partner
+has to be outside `lib/` entirely.
+
+**agent-size (M2-T17) is that partner, and it was scoped to be.** The row exists because
+`docs/EXPLANATION-REVIEW.md` §6 asked for explanation size to be a tracked number before
+M4-T1; it is deliberately specified against the **emitted `.pbp` artefacts**, which already
+contain every literal count it needs, so it changes no `lib/` file and adds no counter. It
+owns `bench/**` and nothing else. Same shape as M2-L8, for the same reason.
+
+**Orchestrator holds** `WORKLOG.md`, `docs/**`, `Makefile`, `dune-project`, `scripts/**`
+and all merging, as standing. Neither agent commits to `main`.
+
+**Before this wave dispatched, three stale things were corrected** — read these before
+trusting a roadmap row you remember:
+
+- **M1-T44 was NOT open.** It was marked "TODO — highest priority open defect" and it has
+  been fixed for some time; a wave aimed at it would have found nothing to do. Re-verified
+  through the CLI on the row's own minimal model: `s VERIFIED UNSATISFIABLE`, veripb 3.0.2,
+  binary `0011dc99`. The fix was **not** the one the row proposed (`rests_on_a_clause` was
+  never the defect); the cause was a bound settled over a hole being stronger than the trail
+  entry carrying it, fixed in `linear.ml`'s `settled_over_lo`. `test/models/root_hole_unsat.fzn`
+  is byte-for-byte that minimal model, so the gate runs it every time.
+- **M2-L11's test (c) said "verified under both formats".** It was written before D-0046;
+  there is one format. Corrected on the row, and agent-ladder is told.
+- **The `Makefile` line 106 request from agent-bench is CLOSED** — the comment already says
+  `ARGS="-r 9"` and `23 of the 38 rows`. It landed with the wave-fifteen merge and was never
+  marked.
+
+Wave fifteen (M2-T16 agent-drop, M2-L8 agent-bench) is merged, released and pushed; every
+file it held is free.
+
+
+**Wave fifteen is running: M2-T16 (agent-drop) and M2-L8 (agent-bench).**
+
+**M2-T16 is RELEASED, 2026-09-18 (agent-drop).** Moved to `
+| **M6-T18 / D-0098**: `bin/main.ml`'s `stats: seeded` label still reads "every instance, every propagate". Since M6-T18 it counts the seed slots actually RUN. Please relabel it (e.g. "...of the props, from the SEED (dirty slots only, M6-T18)") and add a `stats: skipped` line for `Engine.counters.c_skipped` (clean slots passed over; `seeded + skipped` = the old figure). Not a correctness item | `bin/main.ml` | agent-seed (M6-T18) | **CLOSED 2026-10-02** by the orchestrator at the merge: relabelled, `skipped` line added |
+| **M6-T18 / D-0098**, for information at merge: both M2-T6 / D-0094 requests above are DONE on `wave39-seed` (the incremental seed, and `~idempotent:true` at `Compile.pack_linear`/`pack_arith_row` with the by-name table retired). `Propagator.pack`'s default is now `false`: a NEW packing site of a `Linear.t` must pass `~idempotent:true` itself, or it is merely unclaimed (safe, slower) | -- | agent-seed (M6-T18) | info |
+| **M6-T18 / D-0098**: nodes/55 s did not move although runs/node fell 2.4-4.7x, so the node rate is held by something other than propagator runs. A profile of NEW (`wave39-seed`) on mario and chessboard is the next measurement, before any further wake/seed work | -- (measurement) | agent-seed (M6-T18) | open |
+
+`## Completed`; handoff notes at
+the bottom of the file. Every file except `bench/**` is free again. M2-L8 (agent-bench) is
+still running. Note for whoever merges: `Makefile`'s `bench` comment now says `ARGS="-r 9"`
+and `23 of the 38 rows`, replacing a `-F 2.0` example for a flag agent-bench removed.
+
+**agent-drop has the whole repo except `bench/`**, and that is not laziness in the split:
+removing `Writer.V2_0` breaks every test that names it, so the code half and the test half
+**cannot** be separate sessions — a branch that does one without the other never compiles,
+and this project's rule is to commit as soon as it compiles. M2-L8 is the only task that is
+genuinely orthogonal, because every counter it needs (`learned`, `pb-fallback`, `skipped`)
+is already on `--stats`, so it reads stderr and touches no `lib/` file at all.
+
+Previously: wave fourteen — M2-L6 (agent-pb) and M2-T14 (agent-fmt2) — is merged, released and pushed. **With M2-L6 in, the M2-L
+learning sequence is complete except M2-L4, M2-L7 and M2-L8.**
+
+It was dispatched as: **M2-L6 (agent-pb) and M2-T14 (agent-fmt2).** agent-pb has all of
+`lib/` — M2-L6 is the PB conflict analysis and touches the whole learning vertical — so its
+partner is deliberately **outside `lib/` entirely**: a read-only-over-`lib/` audit of the
+format-2.0 path. The two share no file; `test_justify.ml` goes to agent-fmt2, so agent-pb
+puts its justification tests in `test_learn.ml` / `test_analysis.ml`.
+
+Previously: wave thirteen (M2-L5 agent-reduce, M2-L10 agent-cover) is merged, released and pushed. M2-L10 was the row that unblocks the
+measurement half of M2-L4, M2-L6 and M2-L8, which were deliberately held back for it.
+
+Previously: **wave twelve was M2-L3, ALONE.** The M2-T3 briefing says twice that this row
+should have `lib/core` exclusively, and M2-T10 — the obvious partner — needs a hook in
+`search.ml`, so there is no honest parallel task. Waves ten and eleven are merged,
+released and pushed. Wave ten was dispatched 2026-09-18 by the orchestrator: one git worktree each
+under `.claude/worktrees/<tag>`, on branches `wave10-concl` / `wave10-cut` / `wave10-flaky`,
+so no two share `_build`'s global lock. Build with `dune build --root .` from inside the
+worktree. Baseline before dispatch was `6761435`, `make check` green at 1625 unit checks.
+
+| Task | Files being touched | Session | Since |
+|---|---|---|---|
+| M6-T17 | agent-wipe | 2026-10-02 | `Writer.wipe_level` and `Justify.wipe_level` (memo and stated index) walk per-level buckets instead of folding whole tables; same `del` lines, same order. 396 artefacts byte-identical over 132 models. |
+| M2-T16 | **everything except `bench/**`** — the 2.0 removal lands atomically | agent-drop | 2026-09-18 |
+| M2-L8 | `bench/**` only; read-only over `lib/` and `test/` | agent-bench | 2026-09-18 |
+| M2-L6 | all of `lib/`, `test/unit/test_learn.ml`, `test/unit/test_analysis.ml`, `test/unit/dune`, new files under `test/models/` + `test/expected/` | agent-pb | 2026-09-18 |
+
+**Wave twenty-seven, dispatched 2026-09-23 from `24336ee`.** Three rows, one worktree each
+(`wave27-search` / `wave27-rup` / `wave27-guard`), files disjoint. All three are children of
+D-0068, the first full corpus run. `lib/proof/encoding.ml` goes to agent-guard; if agent-rup
+needs it, that is a `
+| Task | Files being touched | Session | Since |
+|---|---|---|---|
+
+## Cross-session requests` row, not an edit.
+
+| Task | Files being touched | Session | Since |
+|---|---|---|---|
+
+
+_(M2-L3 released 2026-09-18 by agent-learn3 — see `## Completed` and `## M2-L3 handoff`.)_
+
+_(M2-T14 released 2026-09-18 by agent-fmt2 — see `## Completed` and `## M2-T14 handoff`.)_
+
+Two rounds are recorded in `## Completed` below. The rows that stood here on
+2026-09-15 (`integration`, M1-T12, M1-T13) were stale — see the handoff note "the
+claims table had rotted" — and the round dispatched after it (M1-T18/T19 agent-proof3,
+M1-T20 agent-matrix, M1-T21 agent-output, one worktree each so that no two shared an
+`_build` lock) is merged and released.
+
+**Read-only review, 2026-09-18 (agent-xreview).** A session from
+`~/Explanations-by-constraint-decomposition` reviewed the explanation mechanism against the
+explanation literature and added `docs/EXPLANATION-REVIEW.md` plus seven rows under
+`## Cross-session requests`. It claimed no task ID, edited **no** file under `lib/`, `test/`,
+`bench/` or `scripts/`, and committed nothing — `WORKLOG.md` and `docs/**` are
+orchestrator-held, so route or revert these two files as you see fit. `bench/**` was left
+alone throughout (M2-L8 / agent-bench is live).
+
+| M7-T6 | `lib/core/search.ml`, `lib/proof/writer.ml`, `test/unit/test_learn.ml`, `test/models/{rup_level0_nogood_sat,empty_model_sat}.fzn` + expected, `test/models/PENDING`, `docs/DECISIONS.md` | agent-rup | released 2026-09-23 — D-0070 |
+
+
+**Wave thirty-one, dispatched 2026-10-01 from `f7d06b0` (orchestrator).** Goal: **the
+comparison against Chuffed and GCS can START.** D-0079 records the wave-30 corpus run that
+set the agenda — 58 verified, 0 rejected, **273 timeouts of 436**. Four rows, one worktree
+each (`wave31-perf` / `wave31-compare` / `wave31-gcc2` / `wave31-cover`). `fataepyc-07`
+(192 cores, 2 TB) is reserved for this wave: agent-perf may run up to **64** jobs, agent-compare
+up to **48** across its three solvers, the two others a handful. Every agent builds in its OWN
+node clone under `/scratch/arthur/baguette-<tag>`, never in `/scratch/arthur/baguette`, which is
+the orchestrator's and runs `main` only. Non-interactive ssh needs
+`PATH=$HOME/.local/bin:$PATH` before `opam env` (see "Node trap" below) and **hash the binary**
+on both sides of any comparison. Decision-record ids are pre-assigned so appends do not
+collide: **D-0080** agent-perf, **D-0081** agent-compare, **D-0082** agent-gcc2, **D-0083**
+agent-cover.
+
+Seams by REGION, as wave 30 learned the hard way: `lib/flatzinc/builder.ml` — the builtin
+dispatch arm for `fzn_global_cardinality` is agent-gcc2's; the `search_of_annot` strategy arms
+and the declaration/domain code are agent-cover's. `lib/core/search.ml` — the variable-selection
+functions (`first_fail` and its neighbours, ~`:720-810`) are agent-cover's; the solve loop and
+everything else is agent-perf's. `lib/flatzinc/compile.ml` — the gcc region and every
+`request_direct` call site are agent-gcc2's; the variable-declaration/bounds region is
+agent-cover's. `lib/core/engine.ml` is agent-perf's and **read-only to agent-gcc2**: the
+derive-ahead flag travels on the store entry, set by the propagator at its pruning call, not
+through the engine.
+
+| Task | Files being touched | Session | Since |
+|---|---|---|---|
+| M6-T9 | `bin/main.ml`, `lib/core/search.ml` (all but the variable-selection functions), `lib/core/engine.ml`, `lib/core/retention.ml`, `lib/core/pb_analysis.ml`, `lib/core/learn.ml`, `test/unit/{test_engine,test_endtoend,test_output}.ml`, `test/models/*` (new lanes only), `bench/**`, `scripts/corpus_run.sh` (**additive only**: a `SOLVER_ARGS` pass-through and the classification of a clean `--time-limit` exit; `scripts/corpus_selftest.sh` stays green and `--report` on `corpus-out-w30` stays byte-identical), `docs/DECISIONS.md` (D-0080, append); node clone `/scratch/arthur/baguette-perf`, runs under `/scratch/arthur/perf-out-*` | agent-perf | 2026-10-01 |
+| M6-T4 (+ M5-T3 absorbed) | `scripts/compare_run.sh` (new), `scripts/compare_selftest.sh` (new), `scripts/corpus_run.sh` **read-only** (copy what you need; it is agent-perf's this wave), `tools/**`, `bench/README.md` (new section, append), `bench/corpus/**` (new), `docs/DECISIONS.md` (D-0081, append); node: `/scratch/arthur/gcs`, `/scratch/arthur/baguette-compare`, `/scratch/arthur/compare-out-*` | agent-compare | 2026-10-01 |
+| M7-T17 + M7-T18 | `lib/core/trace.ml`, `lib/core/store.ml`, `lib/core/propagator.ml`, `lib/core/prop/{gcc,alldiff,element}.ml`, `lib/proof/encoding.ml`, `lib/flatzinc/compile.ml` (gcc region + `request_direct` sites), `lib/flatzinc/builder.ml` (gcc dispatch arm), `test/unit/{test_trace,test_prop,test_compile}.ml`, `test/models/gcc_*` + expected, `docs/PROOF-FORMAT.md` (§4 gcc row), `docs/DECISIONS.md` (D-0082, append); node clone `/scratch/arthur/baguette-gcc2` | agent-gcc2 | 2026-10-01 |
+| M7-T19 | `lib/flatzinc/builder.ml` (`search_of_annot` arms + declaration/domain code), `lib/flatzinc/model.ml`, `lib/flatzinc/compile.ml` (declaration/bounds region), `lib/core/search.ml` (variable-selection functions only), `docs/SPEC.md` (§2.1, §3.4), `test/unit/{test_flatzinc,test_compile}.ml`, new `test/models/*` + expected, `docs/DECISIONS.md` (D-0083, append); node clone `/scratch/arthur/baguette-cover` | agent-cover | 2026-10-01 |
+
+**Orchestrator holds** `WORKLOG.md`, `docs/ROADMAP.md`, `CLAUDE.md`, `Makefile`,
+`lib/core/dune`, `lib/*/dune`,
+`lib/core/explanation.ml`, `lib/core/justify.ml`, `/scratch/arthur/baguette` on the node, and all
+merging. A need for any of these is a `## Cross-session requests` row.
+
+**READ 2026-10-02 — D-0089 records both runs and the three that followed on the new binary.**
+**TWO OVERNIGHT RUNS WERE LAUNCHED ON `fataepyc-07` on 2026-10-01 ~17:30 by the
+orchestrator, detached (`setsid nohup`), from `/scratch/arthur/baguette` at `main` =
+`56ae463`, binary md5 `b37ec100a31e27e598edbc334c0f183c`. Do not re-launch them; read them.**
+ssh access to the node was cut for the night right after the launch, so nothing below was
+watched past its first two log lines.
+
+1. **The wave-31 corpus run**: `scripts/corpus_run.sh` over all 436, `PAR=64`, 300 s,
+   veripb 3.0.2 on every solved instance. Results `/scratch/arthur/corpus-out-w31/results.tsv`,
+   log `/scratch/arthur/w31-corpus.log`. Read it with
+   `scripts/corpus_run.sh --report /scratch/arthur/corpus-out-w31`. It measures what wave 31
+   merged so far — M7-T17/T18 (gcc, constant counts), M7-T19 (ten refusals, bounds
+   inference), M7-T20 (single-value crash) — against D-0079's wave-30 table. **It does NOT
+   contain M6-T9's `--time-limit`** (agent-perf's branch was not merged at launch), so its
+   timeouts are still `TIMEOUT-SOLVE` with no stats.
+2. **The first full three-solver comparison**: `scripts/compare_run.sh` over all 436,
+   `SOLVERS="baguette chuffed gcs"`, `PAR=16` per solver, 300 s, `GCS_PROVE=1` (GCS proofs
+   on, 16 GB file cap), `PAIRS=bench/corpus/answers.tsv` so every instance uses the pinned
+   data file. Results `/scratch/arthur/compare-out-w31/results.tsv`, log
+   `/scratch/arthur/w31-compare.log`. Read it with
+   `scripts/compare_run.sh --report /scratch/arthur/compare-out-w31 --pinned bench/corpus/answers.tsv`.
+   **The `DISAGREE` list and any `PIN-MISMATCH` come first**: a disagreement involving
+   baguette is a soundness finding (D-0081: 0 over 164 so far).
+
+Both honour the `DONE-<epoch>` rule: no marker, partial table, say so. At launch the node
+also carried agent-perf's last jobs (load ~64), so the two runs' `TIMEOUT` columns are
+load-comparable with each other but slightly pessimistic against wave 30's.
+
+**Wave-31 merge state at that moment**: `wave31-gcc2` (M7-T17+T18), `wave31-cover` (M7-T19),
+`wave31-justify` (M7-T20, orchestrator) and `wave31-compare` (M6-T4) are merged into `main`
+and gate-green (117 models, selftests included); `wave31-perf` (M6-T9) is still live and
+merges next. Node clones `/scratch/arthur/baguette-{perf,compare,gcc2,cover}` and the
+`perf-out-*` / `compare-out-pilot` directories are the agents' and hold their raw data.
+
+**Wave thirty-two, dispatched 2026-10-02 from `5a9b84c` (orchestrator).** Wave 31 is fully
+merged (M7-T17/18/19/20, M6-T4, M6-T9), gate-green at 117 models. The node is UNREACHABLE
+until the user reconnects, so every row below starts from local reproducers and local
+measurements, and names what it will measure on the node later. Rows: M6-T10 (orchestrator,
+`wave32-memo`), M6-T11 (agent-speed, `wave32-speed`), M6-T12 (agent-tidy, `wave32-tidy`),
+M7-T21 (agent-rup2, `wave32-rup2`). Decision ids pre-assigned: **D-0084** agent-rup2, **D-0085**
+agent-speed, **D-0086** orchestrator (M6-T10) if it needs one, agent-tidy none.
+
+Seams: `lib/core/store.ml` is agent-speed's (the `var_named` index); if agent-rup2 needs a
+store change it is a cross-session row. `lib/core/trace.ml`, `lib/core/prop/element.ml` and
+`lib/core/prop/gcc.ml` are agent-rup2's. `lib/proof/writer.ml` and `lib/core/search.ml`'s
+`conclude_stopped` are agent-tidy's; `lib/proof/{lit,encoding}.ml` agent-speed's. `bin/**` and
+`lib/core/justify.ml` the orchestrator's.
+
+| Task | Files being touched | Session | Since |
+|---|---|---|---|
+| M6-T10 | `lib/core/justify.ml`, `bin/main.ml`, `bin/dune`, `docs/SPEC.md` §2.2, `test/unit/test_justify.ml` | orchestrator | 2026-10-02 |
+| M6-T11 | `lib/core/analysis.ml`, `lib/core/store.ml`, `lib/proof/lit.ml`, `lib/proof/encoding.ml`, (`lib/core/learned.ml`, `lib/core/prop/pb.ml` only for a local fix), `test/unit/{test_analysis,test_core,test_proof}.ml`, `bench/**`, `docs/DECISIONS.md` (D-0085, append) | agent-speed | 2026-10-02 |
+| M6-T12 | `lib/proof/writer.ml`, `lib/core/search.ml` (`conclude_stopped` only), `scripts/corpus_selftest.sh`, `test/unit/test_proof.ml` | agent-tidy | 2026-10-02 |
+| M7-T21 | `lib/core/prop/element.ml`, `lib/core/prop/gcc.ml`, `lib/core/trace.ml`, `lib/core/order_reason.ml`, `test/unit/{test_trace,test_prop}.ml`, new `test/models/*` + expected, `docs/PROOF-FORMAT.md` §4 rows, `docs/DECISIONS.md` (D-0084, append) | agent-rup2 | 2026-10-02 |
+
+**Orchestrator holds** `WORKLOG.md`, `docs/ROADMAP.md`, `CLAUDE.md`, `Makefile`, `lib/*/dune`,
+`lib/core/explanation.ml`, `scripts/corpus_run.sh`, `scripts/compare_run.sh`, and all merging.
+
+**Wave thirty-three, dispatched 2026-10-02 (orchestrator), while wave 32's agent-speed is still
+live.** One row, M7-T22 (agent-root, `wave33-root`), from M7-T21's three cross-session
+requests. Decision id pre-assigned: **D-0086**. Seams: agent-speed holds `lib/core/analysis.ml`,
+`lib/core/store.ml`, `lib/proof/{lit,encoding}.ml`, `lib/core/learned.ml`, `lib/core/prop/pb.ml`;
+agent-root holds `lib/core/search.ml` (the root arm of `dfs` and nothing else), `lib/core/prop/alldiff.ml`,
+`lib/core/prop/element.ml` (only if (b) needs `excl_hole` to meet the restatement halfway),
+`test/unit/{test_trace,test_prop,test_learn}.ml`, new `test/models/*` + expected, `bench/fuzz/**`
+(the sweep M7-T21 is committing), `docs/DECISIONS.md` (D-0086, append), `docs/PROOF-FORMAT.md` §4
+alldiff row.
+
+| Task | Files being touched | Session | Since |
+|---|---|---|---|
+| M7-T22 | `lib/core/search.ml` (root arm only), `lib/core/prop/alldiff.ml`, `lib/core/prop/element.ml` (if needed), `test/unit/{test_trace,test_prop,test_learn}.ml`, new `test/models/*` + expected, `bench/fuzz/**`, `docs/PROOF-FORMAT.md` (§4 alldiff row), `docs/DECISIONS.md` (D-0086, append) | agent-root | 2026-10-02 |
+
+**Wave thirty-four, dispatched 2026-10-02 (orchestrator), after wave 33 merged.** One row,
+M6-T13 (agent-speed2, `wave34-speed2`), from agent-speed's two open requests and M7-T18's
+mznlib request. Decision id pre-assigned: **D-0087**. Nothing else is live, so the seams are
+simple: agent-speed2 holds `lib/core/search.ml` (variable selection and the per-node candidate
+bookkeeping — NOT the solve loop's proof logic), `lib/proof/opb.ml`, `mznlib/**`,
+`test/unit/{test_proof,test_compile,test_engine}.ml`, new `test/models/*` + expected, `bench/**`,
+`docs/DECISIONS.md` (D-0087, append).
+
+| Task | Files being touched | Session | Since |
+|---|---|---|---|
+| M6-T13 | `lib/core/search.ml` (variable selection + candidate bookkeeping), `lib/proof/opb.ml`, `mznlib/**`, `test/unit/{test_proof,test_compile,test_engine}.ml`, new `test/models/*` + expected, `bench/**`, `docs/DECISIONS.md` (D-0087, append) | agent-speed2 | 2026-10-02 |
+
+**State at the end of 2026-10-02 (orchestrator).** Waves 31 to 34 are merged whole, every merge
+gate-green under `make check` (now including the two harness self-tests): **132 model tests,
+3015 unit checks, 0 FAIL, peak RSS ~75 MB.** Nothing is live; every worktree branch is merged.
+`fataepyc-07` was unreachable the whole day, so every wave-32/33/34 figure is LOCAL and the two
+overnight runs (above, `corpus-out-w31`, `compare-out-w31`) are still unread.
+
+What landed since D-0079, in the order it matters for the comparison:
+- **Speed**, all byte-identical proofs: `Pb_analysis.falsified_at` O(trail) (median nodes/s 1.44 →
+  10.8 on the corpus, D-0080); `Justify` memo buckets (costas prefix 15.3 s → 3.7 s, D-0080);
+  `var_named` index, `Var.equal` in `scan_support`, literal naming without copies, two quadratic
+  loops in `Learned`/`Pb` (knapsack 2.7×, D-0085); per-node work independent of store size,
+  string-keyed `Opb` tables (padded pigeonhole 2.7×, wide compile 1.2×, D-0087).
+- **Proof soundness**: the 26 corpus `PROOF-REJECTED` (two shapes, D-0084), three root-conflict
+  defects and a pigeonhole crash from the random sweep (D-0086); `bench/fuzz/` sweeps 120 000
+  models with 0 rejected / 0 crashes on the current binary. A `Justify` crash on single-value
+  variables (M7-T20).
+- **Coverage**: gcc constant counts, `indomain`, `anti_first_fail`, bounds inference for undomained
+  `var int`, `global_cardinality_low_up` routed (UNFLATTENED-UNTESTED: `mznlib/test/check_mznlib.sh`
+  on the node, expect `7 ok`).
+- **Instrumentation**: `--time-limit` on the wall clock with `conclusion NONE`; `UNKNOWN-LIMIT`,
+  `CHECK-ERR-<rc>`, `TIMEOUT-CHECK` buckets; the three-solver harness with agreement checking
+  (0 DISAGREE over 164, D-0081); GCS built on the node, Chuffed from the bundle.
+
+**The node's to-do list, in order, for whoever has access first** — *done 2026-10-02 except item 5's `prof.sh` (the sweep ran; D-0089): the reports are read, the node is on `main`, `check_mznlib.sh` says 7 ok, the 27 verify, the comparison ran*:
+1. `scripts/corpus_run.sh --report /scratch/arthur/corpus-out-w31` and
+   `scripts/compare_run.sh --report /scratch/arthur/compare-out-w31 --pinned bench/corpus/answers.tsv`
+   (check the `DONE-` marker; DISAGREE / PIN-MISMATCH first).
+2. `cd /scratch/arthur/baguette && git pull --ff-only origin main` (origin is the bare
+   `/scratch/arthur/baguette.git`; push `main` there first from a machine that can) and rebuild
+   with the opam PATH line; hash the binary.
+3. `MZN=<minizinc> mznlib/test/check_mznlib.sh` → `7 ok, 0 failed`, or M6-T13 (iii) is wrong.
+4. Re-run the 26 ids of D-0084 (`bench/m6t9/results/a2.tsv`, `PROOF-REJECTED` rows) plus
+   `2025_stripboard` with the new binary: every one should verify or stop at a DIFFERENT, later
+   line, which is then a new finding.
+5. `bench/m6t9/prof.sh` OLD=`b37ec100…` NEW=current on D-0080's six instances; then the config (a')
+   sweep with `SOLVER_ARGS="--time-limit 280 --stats --time"` over all 436 → the new `UNKNOWN-LIMIT`
+   / verified split against D-0079's 58.
+6. The full three-solver comparison on the new binary, `PAIRS=bench/corpus/answers.tsv`.
+
+**Open and NOT taken**: 14 older cross-session rows (agent-xreview's review items, M2-T11's
+evidence, the width-lint hatch) and two design-level performance proposals in D-0085/D-0087 —
+watched slack for `Pb.propagate`, and a priority structure for the un-annotated default
+`first_fail` over every variable (still linear per node). Those two are SPEC §3.4-adjacent and
+need a record before code.
+
+**Wave thirty-five, dispatched 2026-10-02 (orchestrator), node reachable again.** One row,
+M6-T14 (agent-speed3, `wave35-speed3`), from a `perf` profile the orchestrator took on the node
+of two of the 26 formerly-rejected instances (`/scratch/arthur/prof-2014_mario.data`,
+`/scratch/arthur/prof-2023_chessboard.data`; their `.fzn` are kept under
+`/scratch/arthur/corpus-out-w35-rejected/log/`). Decision id pre-assigned: **D-0088** for this row;
+**D-0089** is reserved for the orchestrator's measurement record of the w31/w35 runs. Nothing else
+is live. agent-speed3 holds `lib/core/store.ml`, `lib/core/analysis.ml`, `lib/core/pb_analysis.ml`
+(if it reads supports the same way), `test/unit/{test_core,test_analysis}.ml`, `bench/**`,
+`docs/DECISIONS.md` (D-0088, append). Node clone `/scratch/arthur/baguette-speed3`; a handful of
+jobs only — the w35 corpus sweep and the baguette-only comparison are still running there.
+
+| Task | Files being touched | Session | Since |
+|---|---|---|---|
+| M6-T14 | `lib/core/store.ml`, `lib/core/analysis.ml`, `lib/core/pb_analysis.ml` (if needed), `test/unit/{test_core,test_analysis}.ml`, `bench/**`, `docs/DECISIONS.md` (D-0088, append) | agent-speed3 | 2026-10-02 |
+
+**Wave thirty-six, dispatched 2026-10-02 (orchestrator).** Two rows from D-0088's requests:
+M6-T15 (agent-speed4, `wave36-speed4`) and M6-T8 reopened (agent-debug, `wave36-debug`). Decision
+ids pre-assigned: **D-0090** agent-speed4, **D-0091** agent-debug (D-0089 is the orchestrator's
+measurement record of the w31/w35 runs). Seams: agent-speed4 holds `lib/core/trace.ml`,
+`lib/core/store.ml` (only if an entry needs to carry its position), `test/unit/test_trace.ml`,
+`bench/**`; agent-debug holds `lib/core/prop/element.ml`, `lib/core/prop/alldiff.ml`,
+`lib/core/debug.ml`, `lib/core/engine.ml` (the agreement check's call site only),
+`test/unit/{test_prop,test_core}.ml`. Both append to `docs/DECISIONS.md`. Node clones
+`/scratch/arthur/baguette-speed4` and `/scratch/arthur/baguette-debug`, a handful of jobs each.
+
+| Task | Files being touched | Session | Since |
+|---|---|---|---|
+| M6-T15 | `lib/core/trace.ml`, `lib/core/store.ml` (entry position only, if needed), `test/unit/test_trace.ml`, `bench/**`, `docs/DECISIONS.md` (D-0090, append) | agent-speed4 | 2026-10-02 |
+| M6-T8 | `lib/core/prop/element.ml`, `lib/core/prop/alldiff.ml`, `lib/core/debug.ml`, `lib/core/engine.ml` (agreement-check call site only), `test/unit/{test_prop,test_core}.ml`, `docs/DECISIONS.md` (D-0091, append) | agent-debug | 2026-10-02 |
+
+**Wave thirty-seven, dispatched 2026-10-02 (orchestrator), beside agent-debug (M6-T8).** One row,
+M6-T16 (agent-speed5, `wave37-speed5`), from D-0090's request. Decision id pre-assigned:
+**D-0092**. agent-speed5 holds `lib/core/analysis.ml`, `test/unit/test_analysis.ml`, `bench/**`;
+agent-debug holds `lib/core/prop/{element,alldiff}.ml`, `lib/core/debug.ml`, `lib/core/engine.ml`
+(call site), `test/unit/{test_prop,test_core}.ml`. Node clone `/scratch/arthur/baguette-speed5`.
+
+| Task | Files being touched | Session | Since |
+|---|---|---|---|
+| M6-T16 | `lib/core/analysis.ml`, `test/unit/test_analysis.ml`, `bench/**`, `docs/DECISIONS.md` (D-0092, append) | agent-speed5 | 2026-10-02 |
+
+**READ 2026-10-02 evening — D-0093.** **Two final runs of the week were launched on `fataepyc-07` on 2026-10-02 by the
+orchestrator, detached, from `/scratch/arthur/baguette` at `main` = `5c299cb`, binary md5
+`9bdd6f16bce396296199d57867523d69`** (waves 31–37 whole: M6-T14/T15/T16 included). Read them, do not
+re-launch: `scripts/corpus_run.sh --report /scratch/arthur/corpus-out-w36` (the `--time-limit 280`
+sweep, `PAR=64`, to compare with D-0089 §2: 81 verified / 189 stopped / median 9.6 nodes/s) and
+`scripts/compare_run.sh --report /scratch/arthur/compare-out-w31 /scratch/arthur/compare-out-w36-baguette
+--pinned bench/corpus/answers.tsv` (baguette alone on the new binary joined with wave 31's Chuffed
+and GCS tables; D-0089 §2: 84 solved). `DONE-` marker first.
+
+**Wave thirty-eight, dispatched 2026-10-02 (orchestrator): efficiency and coverage, from the
+2026-10-02 census of globals in the corpus (maximum/minimum 94 models, the counting family 123,
+cumulative/disjunctive 69, table 37, diffn 29, circuit 28, regular 26).** Five rows, one worktree
+each. Decision ids pre-assigned: **D-0093** the orchestrator's w36 measurement, **D-0094** agent-wake,
+**D-0095** agent-maxmin, **D-0096** agent-cumulative (the design record), **D-0097** agent-count if
+needed, agent-wipe none. The node is reachable; a handful of jobs each (two corpus runs may still be
+finishing there).
+
+Seams. `lib/core/engine.ml` and `lib/core/propagator.ml` are agent-wake's; `bin/main.ml`'s
+`--stats` printing region and the `limit:` lines are agent-wake's too (the counters it adds must
+print), the rest of `bin/main.ml` is the orchestrator's. `lib/proof/writer.ml` and `lib/core/justify.ml`
+are agent-wipe's for `wipe_level` ONLY. `lib/flatzinc/{model,builder,compile}.ml` dispatch arms and
+`lib/core/dune` are agent-maxmin's this wave; agent-cumulative files a cross-session request for its
+three arms and its dune line, as M7-T16 did. `mznlib/`: agent-count owns the counting-family files
+and their `mznlib/test/` sources; agent-maxmin owns `redefinitions.mzn`'s `int_max`/`int_min` lines
+and new `fzn_array_int_maximum/minimum` files; agent-cumulative owns `fzn_cumulative*.mzn` if it
+gets that far. Nobody edits `mznlib/test/check_mznlib.sh` itself (it iterates `*.mzn`).
+
+| Task | Files being touched | Session | Since |
+|---|---|---|---|
+| M2-T6 | `lib/core/engine.ml`, `lib/core/propagator.ml`, `bin/main.ml` (stats region + `limit:` lines), `scripts/corpus_run.sh` (additive: new `limit:` keys in `summarise_limit`), `test/unit/{test_engine,test_endtoend}.ml`, `docs/ARCHITECTURE.md` §5, `docs/DECISIONS.md` (D-0094, append), `bench/**` | agent-wake | 2026-10-02 |
+| M6-T17 | `lib/proof/writer.ml` (`wipe_level`), `lib/core/justify.ml` (`wipe_level`), `test/unit/{test_proof,test_justify}.ml` | agent-wipe | 2026-10-02 |
+| M4-T10 | `docs/DECISIONS.md` (D-0096, append) FIRST; then `lib/core/prop/cumulative.ml` (new), `mznlib/fzn_cumulative*.mzn`, `mznlib/test/*cumul*.mzn`, `test/unit/test_prop.ml` (its own scenes), new `test/models/*`, `docs/PROOF-FORMAT.md` §4 row; dispatch arms and dune line by request | agent-cumulative | 2026-10-02 |
+| M7-T23 | `mznlib/fzn_count*.mzn`, `mznlib/fzn_exactly*.mzn`, `mznlib/fzn_at_most*.mzn`, `mznlib/fzn_at_least*.mzn`, `mznlib/fzn_among*.mzn` (new), `mznlib/test/*count*|*exactly*|*among*|*at_*.mzn`, new `test/models/*` + expected, `docs/DECISIONS.md` (D-0097, append, only if a decision is taken) | agent-count | 2026-10-02 |
+
+**Wave thirty-nine, dispatched 2026-10-02 (orchestrator), beside wave 38's agent-cumulative and
+agent-count.** One row, M6-T18 (agent-seed, `wave39-seed`), from D-0094's two requests. Decision id
+pre-assigned: **D-0098**. agent-seed holds `lib/core/engine.ml`, `lib/core/store.ml` (the low-water
+mark), `lib/core/search.ml` (**the `Engine.propagate` call sites and what they pass, nothing else**),
+`lib/flatzinc/compile.ml` (**`pack_linear`/`pack_arith_row`'s `~idempotent` only** — agent-cumulative's
+dispatch arms will be granted there by the orchestrator at merge, in a different region),
+`lib/core/propagator.ml`, `test/unit/{test_engine,test_core}.ml`, `bench/**`, `docs/ARCHITECTURE.md` §5,
+`docs/DECISIONS.md` (D-0098, append).
+
+| Task | Files being touched | Session | Since |
+|---|---|---|---|
+| M6-T18 | `lib/core/engine.ml`, `lib/core/store.ml`, `lib/core/search.ml` (propagate call sites only), `lib/core/propagator.ml`, `lib/flatzinc/compile.ml` (`~idempotent` only), `test/unit/{test_engine,test_core}.ml`, `bench/**`, `docs/ARCHITECTURE.md` §5, `docs/DECISIONS.md` (D-0098, append) | agent-seed | 2026-10-02 |
+
+**Wave thirty-nine, second row, 2026-10-02 (orchestrator).** M7-T24 (agent-gcc3, `wave39-gcc3`),
+from D-0097's request. Decision id pre-assigned: **D-0099**. agent-gcc3 holds `lib/core/prop/gcc.ml`,
+`test/unit/{test_prop,test_trace}.ml` (its own scenes and the I-X10 table row if the family's
+classification changes), new `test/models/gcc_*`, `docs/PROOF-FORMAT.md` (§4 gcc row),
+`docs/DECISIONS.md` (D-0099, append). `mznlib/fzn_count_eq.mzn` is NOT restored on `main`; the
+re-measurement runs on a throwaway node copy.
+
+| Task | Files being touched | Session | Since |
+|---|---|---|---|
+| M7-T24 | `lib/core/prop/gcc.ml`, `test/unit/{test_prop,test_trace}.ml`, new `test/models/gcc_*` + expected, `docs/PROOF-FORMAT.md` (§4 gcc row), `docs/DECISIONS.md` (D-0099, append) | agent-gcc3 | 2026-10-02 |
+
+**Wave forty, dispatched 2026-10-02 (orchestrator), after waves 38 and 39 merged whole (`main`
+`1df8d81`, 153 models).** Two rows: M7-T25 (agent-elearn, `wave40-elearn`) and M4-T5 reopened
+(agent-hints, `wave40-hints`, design first). Decision ids pre-assigned: **D-0101** agent-elearn,
+**D-0102** agent-hints. Seams: agent-elearn holds `lib/core/prop/element.ml`, `test/unit/{test_prop,
+test_trace,test_learn}.ml` (its own scenes), new `test/models/*`, `docs/PROOF-FORMAT.md` §4 element
+row; agent-hints holds `lib/core/trace.ml`, `lib/core/justify.ml` (**granted for this row**),
+`lib/proof/writer.ml`, `lib/core/learn.ml` (the nogood's `rup`), `test/unit/{test_proof,test_justify}.ml`,
+`bench/**` — but writes NO solver code before D-0102's measurement is in. Node clones
+`/scratch/arthur/baguette-elearn`, `/scratch/arthur/baguette-hints`; a handful of jobs each. The
+checker of record is VeriPB source `d5644ca4` (D-0100); rejection header "Checking error at".
+
+| Task | Files being touched | Session | Since |
+|---|---|---|---|
+| M7-T25 | `lib/core/prop/element.ml`, `test/unit/{test_prop,test_trace,test_learn}.ml` (own scenes), new `test/models/*` + expected, `docs/PROOF-FORMAT.md` (§4 element row), `docs/DECISIONS.md` (D-0101, append) | agent-elearn | 2026-10-02 |
+| M4-T5 | `docs/DECISIONS.md` (D-0102, append) FIRST; then `lib/core/trace.ml`, `lib/core/justify.ml`, `lib/proof/writer.ml`, `lib/core/learn.ml`, `test/unit/{test_proof,test_justify,test_trace}.ml`, `bench/**` | agent-hints | 2026-10-02 |
+| M6-T20 | `lib/core/propagator.ml` (advise), `lib/core/engine.ml` (advisor hook, counter, debug check), `lib/core/prop/clause.ml` (Learned_clause watches), `lib/core/search.ml` (register_learned pack), `bin/main.ml` (stats), `docs/INVARIANTS.md` (I-P7, append), `docs/DECISIONS.md` (D-0104, appended) | solo-opt | 2026-10-27 |
+
+**Node runs in flight when access dropped (2026-10-02 late evening), read them, do not re-launch:**
+1. `/scratch/arthur/corpus-out-w37` — the `--time-limit 280` sweep on `main` = `1df8d81` (waves 31–39
+   whole, cumulative/maxmin/gcc3/seed included), binary md5 `70561345fc3974297102602dba50d8b6`, run
+   from the throwaway clone `/scratch/arthur/baguette-main-check` (`PAR=48`). Compare with D-0093
+   (87 verified, 25 check-timeouts, median 18.1 nodes/s): `scripts/corpus_run.sh --report /scratch/arthur/corpus-out-w37`.
+2. `/scratch/arthur/compare-out-w37-baguette` — baguette alone, same binary, `PAIRS=answers.tsv`.
+   Read joined: `scripts/compare_run.sh --report compare-out-w31 compare-out-w36-baguette compare-out-w37-baguette --pinned bench/corpus/answers.tsv`
+   — the report's new **regressions section** (solved LOST / verified LOST between tables) comes first.
+3. `/scratch/arthur/gcs-recheck/<id>.vp` — the 16 GCS proofs re-checked with the d5644ca4 checker
+   (D-0100); the first 10 all VERIFIED; 6 large ones (prize-collecting, proteindesign12, smelt,
+   stochastic-fjsp det, table-layout, atsp) were still running. Then rewrite
+   `docs/reports/2026-10-02-gcs-rejected-proofs.md` and add the D-0089 §1 addendum.
+4. `/scratch/arthur/corpus-out-w36-longcheck` — the 25 TIMEOUT-CHECK instances re-solved with a 3 h
+   check budget, launched under load; mostly `UNKNOWN-LIMIT` (did not re-solve in 280 s under load),
+   so inconclusive about the proofs. `corpus_run.sh` now KEEPS TIMEOUT-CHECK artefacts (`596692d`),
+   so the next sweep's unchecked proofs can be checked long without re-solving.
+**The node checkout `/scratch/arthur/baguette` is at `5c299cb` and must be pulled + rebuilt once
+nothing runs from it** (the longcheck run executes its scripts).
+| M7-T25 | agent-elearn | 2026-10-03 | **D-0101.** `Element.no_position_conflict` reports its facts above level 0 (`conflict_facts`: per dead position the bound it lies beyond, a result hole's remover's facts, a deep index hole's puncher's facts) under `Store.deriving_ahead`; root stays `Reason.none`. Lanes `element_learn_{hole_sat,hole_unsat,prunes_sat}`, test_learn M7-T25 a/b/c. 2014_mario learned 866 -> 1344 at 120 s, proof VERIFIED; node unreachable |
+
+
+**State at the end of the week, 2026-10-03 early morning (orchestrator).** Waves 31 to 40 are
+merged whole; every merge gate-green under `make check` with the d5644ca4 checker (D-0100): **156
+model tests, ~3 300 unit checks, 0 FAIL, also clean under `BAGUETTE_DEBUG=1`.** Nothing is live. The
+node has been unreachable since late 2026-10-02; the block above lists the four runs waiting there.
+
+**Since D-0093** (`5c299cb`, the last binary measured on the corpus): M6-T17 (`wipe_level`
+buckets), M4-T9 (`maximum`/`minimum` propagator, `radiation` proof −30 %), M2-T6 (propagation
+counters comparable to GCS's; the self-wake veto measured as not paying), M7-T23 (the `count`
+family route to gcc measured WORSE and withdrawn, D-0097), M6-T18 (incremental seeding: runs/node
+÷2.4–4.7, no nodes/s gain — the removed runs were cheap), M7-T24 (gcc's saturated/forced value
+rules and the reason-nesting bug behind 168 MB proof lines: 7 MB → 5.7 KB per node), M4-T10
+(`cumulative`/`disjunctive` time-table propagator AND the conflict-learning mechanism
+`Store.conflict.c_ahead`: 2008_rcpsp 13 s → 0.6 s), M7-T25 (element conflicts carry facts: mario's
+learning rate 46 % → 82 %), M4-T5 (RUP hints measured at 1.4–1.5× on local proofs, corpus
+measurement pending — BLOCKED), D-0100 (the checker of record moved past the trailhead fix; the
+GCS "rejections" were the June checker's, 10 of 16 re-verified before access dropped).
+
+**Open rows, in the order they matter for the comparison:**
+1. Read the four node runs (block above); rewrite the GCS report with the re-check verdicts and
+   add the D-0089 §1 addendum; record w37 as the week's final figures.
+2. M4-T5 — finish D-0102 on the node (`bench/m4t5/nodepipe.sh`); GO only at ≥3× on corpus proofs.
+   The check column is the bottleneck (25 unchecked solves at 900 s).
+3. The slow quartile is element-heavy and now learns; nodes/s there did not move (D-0101) — the
+   next profile is of `2014_mario` on the current binary, before any further engine work.
+4. Design-level levers still unmeasured: watched slack for `Pb.propagate` (D-0085), a priority
+   structure for the un-annotated `first_fail` (D-0087), restarts (D-0045, SPEC), gcc's hole-aware
+   counting (D-0099), element's three other factless conflict sites (D-0101).
+5. Coverage next by census: `table` (37 models), `diffn` (29), `circuit` (28), `regular` (26);
+   cumulative's variable-duration/resource forms (22 models) stay with std.
+6. The width wall (69 instances) — a different encoding of wide domains, a decision not taken.

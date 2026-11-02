@@ -24,7 +24,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sed -n '/^## Active claims/,/^## Completed/p' \"$CLAUDE_PROJECT_DIR/WORKLOG.md\""
+            "command": "sed -n '/^## Active claims/,/^## Cross-session requests/p' \"$CLAUDE_PROJECT_DIR/WORKLOG.md\""
           }
         ]
       }
