@@ -348,3 +348,32 @@ Depends on M7-T27 (a) and (b) being merged. Each row is measured before the next
 | M8-bits-encoding-T3 | **The full substrate**: `Weaken`, `Order_reason`'s chains, `Ladder` for PB conflict analysis (or the clause fallback, measured), trace lines that today rely on the ladder's unit propagation (D-0031 measured 7 of 20 rejected without it — they need the sparse chain), learned-clause emission (atoms before citation), `soli` over bits. The 156 models at `W = none`, `W = 0` and one middle value, the determinism gate at `W = none`, mutation lanes for the new `red`/`pol` shapes | TODO | Where the per-value justifications show their Θ(w) in atoms; record which families, do not hide it |
 | M8-bits-encoding-T4 | **The measurement, and the default**: the Challenge editions (`bench/challenge/*.lst`, `scripts/compare_run.sh`) at the three thresholds, with elaboration and `cake_pb` in the loop; `tools/compare/refusal_causes.py` re-run; a decision record on the default `W`, on whether both paths stay, and on what the all-bits arm could not compare | TODO | The gain is attempts first (D-0123's families), points second. Compare against M7-T27 (a)+(b) merged as the baseline, binaries hashed |
 
+## M9-no-proof — a solve-without-proof mode, as a measurement instrument
+
+Opened 2026-11-02 (Arthur's question after D-0123). **Today there is no such mode**: without
+`--proof` the proof is still written, to a temporary file that is then deleted (`bin/main.ml`'s
+header: "it is the file that is optional, not the proof"), and `docs/SPEC.md` §1 says a
+solve-without-logging mode should not exist ("The proof is not a debugging aid. It is a primary
+output"). So this milestone starts with a **SPEC amendment**, not with code.
+
+**Why it is worth having anyway.** Every Challenge entrant runs without proof logging and D-0122
+had to say that D-0121's standings are "not like for like". A real no-proof mode gives (1) the proof
+OVERHEAD per instance, measured, which separates "what proving costs" from "what our search is
+worth" and is the only honest reading of those standings; (2) the baseline that `M8-bits-encoding-T4`
+needs, because an encoding's cost is what it adds to that baseline; (3) attempts on D-0123's
+family C (the ladder deaths) without waiting for the encoding to shrink. M6-T3's "emission is
+2-4 % of CPU" does not bound this: on pattern-set-mining the encoding alone is 44 s and 1 GB,
+on wordpress it is the whole 10 minutes, and neither is emission.
+
+**What it does NOT give, said now.** Not D-0123's family B: the reasons live in `lib/core` and are
+needed by learning, and pattern-set-mining measured the same 5.8 GB without a proof file. Not a
+comparison of encodings: without a proof there is no encoding to compare. And it must not become
+the path where justifications rot: every propagator still produces its `Explanation` (I-P4, the
+learning needs it), `make check` runs every suite WITH proofs, and the mode is off by default.
+
+| ID | What | Status | Notes |
+|---|---|---|---|
+| M9-no-proof-T1 | **The decision record and the SPEC §1 amendment**: `--no-proof` is a measurement mode, off by default; what it skips (the `.opb` rows and ladder, `Writer`, `Justify`, `Trace` emission, the proof-side audit I-X2) and what it keeps (every `Explanation`, I-P4; learning; the independent solution check I-S1); the rule that the gate always proves; how `Explanation.Model_row` ids are minted without rows so that explanation VALUES are identical in both modes | TODO | Written before code. Names D-0046 and D-0122 as what it amends and why their reasoning survives |
+| M9-no-proof-T2 | **Implement**: `Compile` with the encoding half skipped (ids still counted), `bin/main.ml` with no `Writer`/`Justify`, `--stats` saying so. The lane that makes it safe: on all 156 models, **stdout byte-identical** between the proved run and the no-proof run, which is the first direct test that proof logging never steers the search | TODO | If stdout ever differs, the proof was influencing decisions, and that is a finding about the proved run, not about this mode |
+| M9-no-proof-T3 | **The measurement**: the Challenge editions with and without, per instance (time, RSS, attempts gained in family C), D-0121's standings re-ranked without proofs to answer D-0122's caveat, and the baseline handed to `M8-bits-encoding-T4` | TODO | `scripts/compare_run.sh` gains a `--no-proof` arm for baguette; `tools/compare/refusal_causes.py` re-run on it |
+
