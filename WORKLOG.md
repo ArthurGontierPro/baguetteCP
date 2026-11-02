@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M7-T27 (a2) level-0 closure | `lib/core/analysis.ml`, `test/unit/test_analysis.ml`, `docs/DECISIONS.md` (D-0124 addendum) | agent-reason, `wave40-reason2` | 2026-11-02 |
 | M7-T27 (a) explanation memory | `lib/core/prop/linear.ml`, `lib/core/store.ml` (a trail-position lookup if needed), `lib/core/explanation.ml` (only if the reason shape needs it), `test/unit/test_prop.ml` (own scenes), `docs/DECISIONS.md` (D-0124, append), `docs/INVARIANTS.md` (I-X6 wording only if it changes) | agent-reason, `wave40-reason` | 2026-11-02 |
 | M7-T27 (b) encoding memory | `lib/proof/encoding.ml` (`rev_constraints`, `consistency`, `declare_int_gen`, `add_constraint`), `lib/proof/opb.ml`, `bin/main.ml` (the `.opb` write site only), `test/unit/test_proof.ml`, `test/unit/test_endtoend.ml` (own checks) | agent-stream, `wave40-stream` | 2026-11-02 |
 | M6-T20 | `lib/core/propagator.ml` (advise), `lib/core/engine.ml` (advisor hook, counter, debug check), `lib/core/prop/clause.ml` (Learned_clause watches), `lib/core/search.ml` (register_learned pack), `bin/main.ml` (stats), `docs/INVARIANTS.md` (I-P7, append), `docs/DECISIONS.md` (D-0104, appended) | solo-opt | 2026-10-27 | **Landed** (`29a8238`, `517453b`, `149a06d`; D-0104 ACCEPTED) but **never released**: ROADMAP row still WIP, no handoff note. Left here 2026-11-02 for its session or the next one to close. |
