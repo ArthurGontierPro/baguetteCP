@@ -336,33 +336,49 @@ let rests_on_a_decision reasons =
    underneath it (I-T1, and [Store.check_history] refuses to read one that has been
    unwound), so a snapshot taken when the reason is finally asked for is the snapshot
    that would have been taken at the push. *)
+(* The [value] a snapshot of [tm] carries, as of [h]: the bound relevant to the term's
+   sign, clamped at the declared one -- a bound still at or outside its declared value
+   IS the declared value here, which is what makes [Reason.lits] materialise no literal
+   for it. ONE function for both halves (D-0026): [snapshot_at] stores it, [fact_at]
+   states it, and neither recomputes the case split. No allocation. *)
+let value_at (h : Store.history) (tm : term) =
+  if tm.coeff >= 0 then Stdlib.max (Store.lo_at h tm.x) tm.decl_lo
+  else Stdlib.min (Store.hi_at h tm.x) tm.decl_hi
+
 let snapshot_at (h : Store.history) (tm : term) : source_snap option =
   if tm.coeff = 0 then None
   else
-    let snap value cited =
-      Some
-        {
-          coeff = tm.coeff;
-          name = Store.history_name h tm.x;
-          decl_lo = tm.decl_lo;
-          decl_hi = tm.decl_hi;
-          value;
-          cited;
-        }
-    in
     (* A bound that rests on a decision keeps its [value] and drops its [cited] -- the
        pruning does depend on the decision, so dropping the fact would make the trace
        line an unconditional claim, which is the exact I-P5 failure [int_ne] shipped
        between M1-T9 and M1-T17. M1-T50's [Snap_assume] is this line. *)
     let citable rests = if rests_on_a_decision rests then [] else rests in
-    if tm.coeff >= 0 then
-      let cur = Store.lo_at h tm.x in
-      if cur <= tm.decl_lo then snap tm.decl_lo []
-      else snap cur (citable (Store.lo_reasons_at h tm.x))
-    else
-      let cur = Store.hi_at h tm.x in
-      if cur >= tm.decl_hi then snap tm.decl_hi []
-      else snap cur (citable (Store.hi_reasons_at h tm.x))
+    let value = value_at h tm in
+    let cited =
+      if tm.coeff >= 0 then
+        if value <= tm.decl_lo then [] else citable (Store.lo_reasons_at h tm.x)
+      else if value >= tm.decl_hi then []
+      else citable (Store.hi_reasons_at h tm.x)
+    in
+    Some
+      {
+        coeff = tm.coeff;
+        name = Store.history_name h tm.x;
+        decl_lo = tm.decl_lo;
+        decl_hi = tm.decl_hi;
+        value;
+        cited;
+      }
+
+(* The reason half's fact for [tm], as of [h], WITHOUT the snapshot record and without
+   the reasons lookup that only the justification half needs: [fact_of_snap (snapshot_at
+   h tm)] by definition (same [value_at], same name, same declared bounds), at a third of
+   the allocation. Measured to matter: conflict analysis re-materialises the reason of
+   every root-level Linear entry at every conflict (D-0124, "what it does not decide"),
+   526 M facts in 300 s on pattern-set-mining, and the trace asks once more per entry. *)
+let fact_at (h : Store.history) (tm : term) =
+  Reason.bound_for_coeff ~coeff:tm.coeff ~name:(Store.history_name h tm.x)
+    ~decl_lo:tm.decl_lo ~decl_hi:tm.decl_hi (value_at h tm)
 
 (* The live store, as the history of this moment. What every caller before D-0124
    read; now the eager form, used for a conflict (whose reason is consumed where it is
@@ -425,6 +441,18 @@ let row_snaps_at (h : Store.history) terms ~exclude =
   go 0 [] terms
 
 let row_snaps store terms ~exclude = row_snaps_at (Store.history store) terms ~exclude
+
+(* [List.map fact_of_snap (row_snaps_at h terms ~exclude)], built directly. *)
+let facts_at (h : Store.history) terms ~exclude =
+  let rec go i acc = function
+    | [] -> List.rev acc
+    | (tm : term) :: rest ->
+        let skip =
+          (match exclude with Some j -> j = i | None -> false) || tm.coeff = 0
+        in
+        if skip then go (i + 1) acc rest else go (i + 1) (fact_at h tm :: acc) rest
+  in
+  go 0 [] terms
 
 (* Whether [row_snaps_at _ terms ~exclude] is empty, without building it: no other term
    with a non-zero coefficient. What [Reason.because_later]'s [~empty] is told. *)
@@ -499,13 +527,15 @@ let justified_of_snaps ~concludes base snaps divisor : Reason.justified =
    the instance), an index, a history handle. D-0123 measured the alternative at
    16.9 M snapshot records and 14.9 M facts live on the trail after four nodes.
 
-   The two halves agree because they are two calls of ONE function over FROZEN input:
-   [row_snaps_at] is deterministic and the history it reads cannot change while the
-   pruning's entry is on the trail (I-T1; [Store.check_history] raises otherwise, and it
-   is called on every materialisation, from whichever half). D-0026 asked for one list
-   and one function; there is one function, and the list it returns is the same list
-   each time it is asked. [Store.check_agreement] still compares the two halves at the
-   push under BAGUETTE_DEBUG, through the same materialisation.
+   The two halves agree because they are two readings of ONE function over FROZEN
+   input: [value_at] decides each term's value for both ([fact_at] states it,
+   [snapshot_at] stores it beside what it cites), it is deterministic, and the history
+   it reads cannot change while the pruning's entry is on the trail (I-T1;
+   [Store.check_history] raises otherwise, and it is called on every materialisation,
+   from whichever half). D-0026 asked for one list and one function; there is one
+   function, and the list each half derives from it is the same list each time it is
+   asked. [Store.check_agreement] still compares the two halves at the push under
+   BAGUETTE_DEBUG, through the same materialisation.
 
    It takes [h] and NOT the store -- the signature is the discipline, exactly as
    [explain_cross_conflict ~opposite] below. A [Store.t] here would be one careless
@@ -519,7 +549,9 @@ let justified_at ~concludes base (h : Store.history) terms ~exclude divisor :
   in
   Reason.because_later ~concludes
     ~empty:(no_other_term terms ~exclude)
-    (fun () -> List.map fact_of_snap (snaps ()))
+    (fun () ->
+      Store.check_history h;
+      facts_at h terms ~exclude)
     (Explanation.deferred (fun () -> combine_of_snaps base (snaps ()) divisor))
 
 (* D-0013 step 5: a conflict where this row's own new bound for [tm] contradicts a
