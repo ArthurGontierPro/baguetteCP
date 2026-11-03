@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M7-T27 (measurement 2): D-0125, ROADMAP M7-T27 row + M8 preamble | `docs/DECISIONS.md` (append), `docs/ROADMAP.md`, `WORKLOG.md` (own rows) | solo-m7t27 | 2026-11-03 |
 | M6-T20 | `lib/core/propagator.ml` (advise), `lib/core/engine.ml` (advisor hook, counter, debug check), `lib/core/prop/clause.ml` (Learned_clause watches), `lib/core/search.ml` (register_learned pack), `bin/main.ml` (stats), `docs/INVARIANTS.md` (I-P7, append), `docs/DECISIONS.md` (D-0104, appended) | solo-opt | 2026-10-27 | **Landed** (`29a8238`, `517453b`, `149a06d`; D-0104 ACCEPTED) but **never released**: ROADMAP row still WIP, no handoff note. Left here 2026-11-02 for its session or the next one to close. |
 
 ## Cross-session requests
