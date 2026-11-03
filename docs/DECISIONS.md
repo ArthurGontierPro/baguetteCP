@@ -9718,3 +9718,87 @@ through supports rather than facts -- the cache is O(levels) per entry, not O(te
 not the retention (a) removed; or (ii) a per-conflict memo keyed by trail position for the
 closure alone, which halves nothing across conflicts and is the weaker shape. The level-0
 stop stays: it is correct and costs nothing, and it is the half of the argument (i) needs.
+
+## D-0125  M7-T27, the sixteen editions re-run with (a)+(a2)+(b): 331 refusals become attempts, 319 more incumbents, and the wall moves from the heap to the proof's size
+
+**Status**: **MEASUREMENT**, recorded 2026-11-03 (solo-m7t27). Run overnight on `fataepyc-06`
+(2026-11-02 16:44 to 2026-11-03 12:15), baguette only, binary `1d68c8c11770` = main `1a0cfa7`
+((a) D-0124, (a2), (b) merged), the rules of M7-T26 (1200 s, 16 GiB, compile time inside, 30-way),
+results in `fataepyc-06:/scratch/arthur/m7t27run/<Y>/` beside M7-T26's `/scratch/arthur/m7t26/<Y>/`
+(Chuffed and GCS rows reused from there). Reproduce the tables with
+`tools/compare/refusal_causes.py /scratch/arthur/m7t27run --widths` and `challenge_rank.py ... --no-chuffed`
+(the `results.json` files are on the laptop under `~/mznc-archive`, not on the node).
+
+### Refusals, against D-0123
+
+| | D-0121/D-0123 (`b6fa825`-era binary) | this run |
+|---|---|---|
+| REFUSED | 543 | **212** |
+| of which the heap budget, exit 5 | 520 | 192 |
+| family A, front end before any declaration | 14 | 14 |
+| family B, after the encoding (rows or search) | 347 | **162** |
+| family C, inside a ladder loop | 159 | **16** |
+| gcc repeated variable / unbounded `var int` (M7-T29) | 19 + 1 | 19 + 1 |
+
+(b) removed family C almost entirely (159 → 16: the 16 left mint 6 M to 74 M rungs and die in the
+loop at 300 B/rung's successor cost, the rows); (a) halved family B. Family A is untouched, as
+predicted (sub-row (d)).
+
+### Where the 346 freed rows went
+
+| new status | with an incumbent | without |
+|---|---|---|
+| TIMEOUT at 1200 s | **176** | 11 |
+| CAPPED (the harness's 16 GB proof-file cap, SIGXFSZ) | **143** | 1 |
+| OPT | 11 (4 VERIFIED, 6 TIMEOUT-CHECK, 1 CHECK-ERROR) | |
+| ERROR, OCaml abort rc=134 at 209–875 s | 4 | |
+
+Incumbents over the 1 600 instances: **675 → 994**. Complete answers: 169 → 180 (170 OPT + 10
+UNSAT), 219 VERIFIED, **0 REJECTED**.
+
+### The standings (fixed category, `challenge_rank.py --no-chuffed`)
+
+| edition | D-0121 rank / score | this run rank / score |
+|---|---|---|
+| 2026 | 12 / 13, 149.9 | 12, **190.7** |
+| 2025 | 10 / 10, 69.3 | 10, 106.0 |
+| 2024 | 9 / 9, 192.8 | 9, 221.8 |
+| 2023 | 7 / 7, 120.1 | 7, 141.4 |
+| 2022 | 7 / 7, 105.4 | 7, 121.6 |
+| 2021 | 7 / 7, 94.8 | 7, 100.9 |
+| 2020 | 6 / 6, 34.7 | 6, 39.2 |
+| 2019 | 8 / 8, 123.4 | **7**, 141.1 |
+| 2018 | 8 / 8, 69.6 | 8, 94.8 |
+| 2017 | 12 / 12, 52.8 | 12, 74.2 |
+| 2016 | 10 / 11, 249.5 | **9**, 278.9 |
+| 2015 | 9 / 9, 100.3 | 9, 100.5 |
+| 2014 | 11 / 11, 131.6 | 11, 176.9 |
+| 2013 | 11 / 11, 118.3 | **10**, 157.8 |
+| 2012 | 9 / 10, 176.5 | 9, 202.5 |
+| 2011 | 8 / 8, 96.0 | 8, 107.5 |
+
+The score rises in every edition and the rank in three. The gain is incumbents, as D-0123 said it
+would be ("attempts, not points"): the eleven new OPTs are worth little because seven of them
+cannot be verified within the budget (below).
+
+### The wall has moved, and it is now the proof's SIZE
+
+1. **148 CAPPED**: the proof file passed the harness's 16 GB cap at a median 652 s (p10 280 s), with
+   a median `.pbp` of 16.4 GB and `.opb` of 2.8 GB, 145 of them holding an incumbent. These are the
+   Θ(w) rows and justifications D-0028 accepted, now reached because the heap no longer stops the
+   run first. **This is `M8-bits-encoding`'s population**, 148 instances, measured.
+2. **7 OPTs whose proof the checker cannot finish**: six `TIMEOUT-CHECK` at 3 600 s (four
+   `ship-schedule`, `smelt_2`, `mapping_full2x2`, proofs of 0.5–5.2 GB) and one `CHECK-ERROR` that is
+   veripb's own `memory allocation ... failed` under the harness's 16 GiB on a **6.9 GB `.opb`**
+   (`2011_ship-schedule_6ShipsMixedUnconst`). An answer whose proof cannot be checked within the
+   budget is scored as unverified by the ranker; the same Θ(w) wall, seen from the checker.
+3. **4 aborts, exit 134** (`gbac` ×2, `unit-commitment`, `work-task-variation`), wide models that
+   now get past the encoding and die of `allocation failure during minor GC` at 209–875 s with
+   `--max-heap-mb 8192` set: the hole D-0071 named (the alarm runs at the end of a major cycle and
+   cannot promise to act before a minor-heap failure). Four is not nine (D-0068), but it is not zero.
+4. Family B's remainder (162) and the 176 freed timeouts with an incumbent are the same question:
+   what the search does with the memory and the time it now has. M7-T27 (a3) (the decision
+   closure's re-materialisation) is the located cost; nothing else is attributed.
+
+**Not changed by this run**: M7-T27's sub-row (d) (14 front-end deaths), M7-T29 (19 + 1), the 25
+flatten failures, the 798 timeouts that were timeouts before.

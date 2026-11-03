@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M7-T27 (measurement 2): D-0125, ROADMAP M7-T27 row + M8 preamble | `docs/DECISIONS.md` (append), `docs/ROADMAP.md`, `WORKLOG.md` (own rows) | solo-m7t27 | 2026-11-03 |
 | M6-T20 | `lib/core/propagator.ml` (advise), `lib/core/engine.ml` (advisor hook, counter, debug check), `lib/core/prop/clause.ml` (Learned_clause watches), `lib/core/search.ml` (register_learned pack), `bin/main.ml` (stats), `docs/INVARIANTS.md` (I-P7, append), `docs/DECISIONS.md` (D-0104, appended) | solo-opt | 2026-10-27 | **Landed** (`29a8238`, `517453b`, `149a06d`; D-0104 ACCEPTED) but **never released**: ROADMAP row still WIP, no handoff note. Left here 2026-11-02 for its session or the next one to close. |
 
 ## Cross-session requests
@@ -308,10 +307,24 @@ work. The owning session picks it up.
 | M7-T27 (a) explanation memory | agent-reason | 2026-11-02 | **D-0124.** A `Linear` pruning's reason holds the row and a `Store.history` (the trail cut at the pruning's position, physical witness) and materialises on demand (`Reason.Later`, `Reason.facts` the one materialisation point). pattern-set-mining 5.84 GB → 1.77 GB at 60 s, 8.71 → 2.18 GB at 300 s; 156 artefacts byte-identical; merged `7c910a1`. The 13 % node cost is (a2) |
 | M7-T27 (a2) level-0 closure | agent-reason | 2026-11-02 | The closure stops at level 0 (`analysis.ml`, two scenes); byte-identical artefacts, gate ok; recovers NO time (69 nodes / 2.17 GB both sides at 300 s), D-0124's attribution withdrawn in its addendum; merged. The 13 % loss is unattributed: (a3), attribution log on the node `/scratch/arthur/m7t27a2/count300.err` |
 | M7-T27 (b) encoding memory | agent-stream | 2026-11-02 | `.opb` streamed as minted (`Encoding.row_sink`), header counted, rung ids computed; wordpress encoding 25.2 GB → 1.33 GB, `.opb` md5 identical; 156 artefacts byte-identical; merged `957958c`. mesh3x3 run pending on the node (`/scratch/arthur/m7t27b/mesh.after2/`). Combined main `1a0cfa7` green on the node (156 models, 86 MB) |
+| M7-T27 (measurement 2) | solo-m7t27 | 2026-11-03 | **D-0125.** The sixteen editions re-run overnight with (a)+(a2)+(b): REFUSED 543 → 212, incumbents 675 → 994, 0 REJECTED, score up everywhere, rank up in 2013/2016/2019; 148 CAPPED at the 16 GB proof cap (M8-bits-encoding's population), 7 OPT proofs unverifiable in budget, 4 exit-134 aborts (D-0071's hole). Results `fataepyc-06:/scratch/arthur/m7t27run/` |
 | ROADMAP M9-no-proof | solo-m7t27 | 2026-11-02 | The milestone opened (T1 SPEC §1 amendment + decision record, T2 implement with a stdout-identical lane, T3 the Challenge measurement and the baseline for M8-bits-encoding-T4). Today `--proof` omitted still writes and deletes the proof |
 | ROADMAP M8-bits-encoding | solo-m7t27 | 2026-11-02 | The milestone opened (five rows T0..T4, order below a threshold `--bits-above W`, bits above, both kept); M7-T27 (c) points at it; milestones are now NAMED `M<n>-<slug>` (ROADMAP head, CLAUDE.md) |
 
 ## Handoff notes
+
+## M7-T27 measurement 2 handoff, 2026-11-03 (solo-m7t27)
+
+D-0125 is the record. Results stay on `fataepyc-06:/scratch/arthur/m7t27run/<Y>/` (read, do not
+relaunch; `refusal_causes.py` and `challenge_rank.py --no-chuffed` reproduce every table, the
+`results.json` are on the laptop under `~/mznc-archive`). Three things for whoever is next:
+- `M8-bits-encoding` now has its measured population (148 CAPPED + 7 unverifiable OPTs); T0/T1
+  can start.
+- The 4 exit-134 aborts under `--max-heap-mb 8192` are D-0071's known hole, now seen 4 times in
+  1 600; worth a row if it grows.
+- The (b) mesh3x3 run on the node (`/scratch/arthur/m7t27b/mesh.after2/`) ended at its 3000 s
+  timeout with nothing past the width warnings: it no longer dies in the encoding, it never
+  finishes the root. Same Θ(w) wall.
 
 ## M7-T27 measurement handoff, 2026-11-02 (solo-m7t27)
 
