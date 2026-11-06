@@ -15,13 +15,19 @@
      expr       ::= int | "true" | "false" | string | ident | ident "(" args ")"
                   | ident "[" expr "]" | "[" args "]" | "{" ints "}" | expr ".." expr
 
-   Every failure raises Error.Error with the position of the offending token. *)
+   Every failure raises Error.Error with the position of the offending token.
 
-type state = { toks : Lexer.lexeme array; mutable i : int }
+   The parser is LL(1) and never backs up: [cur] is the one token of lookahead the
+   streaming lexer holds, and [advance] scans the next. It delivers the file one [item]
+   at a time through [iter_items] rather than as a tree (M7-T27 (d), D-0128), so that
+   the builder can drop each item once it is built; the two rules that are about the
+   model and not an item -- exactly one `solve` -- are checked in [iter_items]. *)
 
-let cur st = st.toks.(st.i).Lexer.tok
-let pos st = st.toks.(st.i).Lexer.pos
-let advance st = if st.i < Array.length st.toks - 1 then st.i <- st.i + 1
+type state = Lexer.t
+
+let cur = Lexer.cur
+let pos = Lexer.pos
+let advance = Lexer.advance
 
 let expect st tok what =
   if cur st = tok then advance st
@@ -222,95 +228,85 @@ let skip_predicate st =
   in
   loop ()
 
-let parse_model st =
-  let decls = ref [] in
-  let cstrs = ref [] in
-  let solve = ref None in
-  let rec loop () =
-    match cur st with
-    | Lexer.EOF -> ()
-    | Lexer.PREDICATE ->
-        skip_predicate st;
-        loop ()
-    | Lexer.CONSTRAINT ->
-        advance st;
-        (* Point diagnostics at the builtin name rather than the `constraint` keyword:
-           the normative error of SPEC 2.1 is about the builtin. *)
-        let p = pos st in
-        let id = expect_ident st "a builtin name after `constraint`" in
-        let args =
-          if cur st = Lexer.LPAR then (
+(* The next item of the file, or [None] at its end. `predicate` items are skipped
+   here, as many as there are. *)
+let rec next_item st =
+  match cur st with
+  | Lexer.EOF -> None
+  | Lexer.PREDICATE ->
+      skip_predicate st;
+      next_item st
+  | Lexer.CONSTRAINT ->
+      advance st;
+      (* Point diagnostics at the builtin name rather than the `constraint` keyword:
+         the normative error of SPEC 2.1 is about the builtin. *)
+      let p = pos st in
+      let id = expect_ident st "a builtin name after `constraint`" in
+      let args =
+        if cur st = Lexer.LPAR then (
+          advance st;
+          parse_seq st Lexer.RPAR "`)`")
+        else
+          Error.failf (pos st)
+            "expected `(` after the builtin name `%s` in a constraint item" id
+      in
+      let annots = parse_annots st in
+      expect st Lexer.SEMI "`;` at the end of the constraint item";
+      Some (Ast.Constraint { Ast.c_id = id; c_args = args; c_annots = annots; c_pos = p })
+  | Lexer.SOLVE ->
+      let p = pos st in
+      advance st;
+      let annots = parse_annots st in
+      let kind =
+        match cur st with
+        | Lexer.SATISFY ->
             advance st;
-            parse_seq st Lexer.RPAR "`)`")
-          else
+            Ast.Satisfy
+        | Lexer.MINIMIZE ->
+            advance st;
+            Ast.Minimize (parse_expr st)
+        | Lexer.MAXIMIZE ->
+            advance st;
+            Ast.Maximize (parse_expr st)
+        | t ->
             Error.failf (pos st)
-              "expected `(` after the builtin name `%s` in a constraint item" id
-        in
-        let annots = parse_annots st in
-        expect st Lexer.SEMI "`;` at the end of the constraint item";
-        cstrs := { Ast.c_id = id; c_args = args; c_annots = annots; c_pos = p } :: !cstrs;
+              "expected `satisfy`, `minimize` or `maximize` but found %s"
+              (Lexer.string_of_token t)
+      in
+      expect st Lexer.SEMI "`;` at the end of the solve item";
+      Some (Ast.Solve (kind, annots, p))
+  | _ ->
+      let p = pos st in
+      let ti = parse_ti st in
+      expect st Lexer.COLON "`:` after the type in a declaration";
+      let name = expect_ident st "a parameter or variable name" in
+      let annots = parse_annots st in
+      let value =
+        if cur st = Lexer.EQ then (
+          advance st;
+          Some (parse_expr st))
+        else None
+      in
+      expect st Lexer.SEMI "`;` at the end of the declaration";
+      Some
+        (Ast.Decl
+           { Ast.d_name = name; d_ti = ti; d_value = value; d_annots = annots; d_pos = p })
+
+(* Drive the parser over the whole input: [f] sees every item in file order, as soon
+   as it is parsed. A second `solve` item is refused where it stands, a missing one at
+   the end of the file. *)
+let iter_items st f =
+  let seen_solve = ref false in
+  let rec loop () =
+    match next_item st with
+    | None -> if not !seen_solve then Error.failf (pos st) "the model has no `solve` item"
+    | Some (Ast.Solve (_, _, p) as item) ->
+        if !seen_solve then Error.failf p "a model may contain only one `solve` item";
+        seen_solve := true;
+        f item;
         loop ()
-    | Lexer.SOLVE ->
-        let p = pos st in
-        advance st;
-        let annots = parse_annots st in
-        let kind =
-          match cur st with
-          | Lexer.SATISFY ->
-              advance st;
-              Ast.Satisfy
-          | Lexer.MINIMIZE ->
-              advance st;
-              Ast.Minimize (parse_expr st)
-          | Lexer.MAXIMIZE ->
-              advance st;
-              Ast.Maximize (parse_expr st)
-          | t ->
-              Error.failf (pos st)
-                "expected `satisfy`, `minimize` or `maximize` but found %s"
-                (Lexer.string_of_token t)
-        in
-        expect st Lexer.SEMI "`;` at the end of the solve item";
-        (match !solve with
-        | Some _ -> Error.failf p "a model may contain only one `solve` item"
-        | None -> solve := Some (kind, annots, p));
-        loop ()
-    | _ ->
-        let p = pos st in
-        let ti = parse_ti st in
-        expect st Lexer.COLON "`:` after the type in a declaration";
-        let name = expect_ident st "a parameter or variable name" in
-        let annots = parse_annots st in
-        let value =
-          if cur st = Lexer.EQ then (
-            advance st;
-            Some (parse_expr st))
-          else None
-        in
-        expect st Lexer.SEMI "`;` at the end of the declaration";
-        decls :=
-          { Ast.d_name = name; d_ti = ti; d_value = value; d_annots = annots; d_pos = p }
-          :: !decls;
+    | Some item ->
+        f item;
         loop ()
   in
-  loop ();
-  match !solve with
-  | None -> Error.failf (pos st) "the model has no `solve` item"
-  | Some (kind, annots, p) ->
-      {
-        Ast.decls = List.rev !decls;
-        constraints = List.rev !cstrs;
-        solve = kind;
-        solve_annots = annots;
-        solve_pos = p;
-      }
-
-let parse_string ~file src = parse_model { toks = Lexer.tokenize ~file src; i = 0 }
-
-let read_file path =
-  let ic = open_in_bin path in
-  Fun.protect
-    ~finally:(fun () -> close_in_noerr ic)
-    (fun () -> really_input_string ic (in_channel_length ic))
-
-let parse_file path = parse_string ~file:path (read_file path)
+  loop ()

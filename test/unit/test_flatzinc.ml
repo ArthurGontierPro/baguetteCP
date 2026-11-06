@@ -205,6 +205,58 @@ let test_kitchen_sink () =
             M.Out_var ("obj", M.Oint, M.Var 4);
           ])
 
+(* M7-T27 (d), D-0128: the lexer reads through a window and a token may straddle its
+   edge. The default window is 64 KiB, so nothing in this file crosses it; every width
+   from 2 to 17 does, at every offset, and the front end's answer -- the Model.t, or the
+   error with its position -- must not depend on where the edges fall. *)
+let test_window_straddle () =
+  let through window src =
+    F.Error.catch (fun () -> F.Builder.of_string ~file:"<w>" ?window src)
+  in
+  let same name src =
+    let reference = through None src in
+    let differs =
+      List.filter
+        (fun w ->
+          match (reference, through (Some w) src) with
+          | Ok a, Ok b -> a <> b
+          | Error a, Error b ->
+              not (String.equal (F.Error.to_string a) (F.Error.to_string b))
+          | _ -> true)
+        (List.init 16 (fun i -> i + 2))
+    in
+    check
+      (Printf.sprintf "window straddle: %s is the same through every window 2..17" name)
+      (differs = [])
+  in
+  same "the kitchen sink" kitchen_sink;
+  same "a long identifier and a long literal"
+    "var 0..1234567890123: a_rather_long_identifier_name_here :: output_var;\n\
+     constraint int_le(a_rather_long_identifier_name_here, 1234567890123);\n\
+     solve satisfy;\n";
+  same "a string with escapes in an annotation"
+    "var 0..1: x :: foo(\"a\\\"b\\nc\\td\\\\e\") :: output_var;\nsolve satisfy;\n";
+  same "a float literal (lexical error, positioned)"
+    "var 0..1: x;\nint: p = 1234.5;\nsolve satisfy;\n";
+  same "an exponent (lexical error, positioned)"
+    "var 0..1: x;\nint: p = 12e3;\nsolve satisfy;\n";
+  same "a dot that is not a range (lexical error after `..`)"
+    "var 0..1: x;\nint: p = 12.;\nsolve satisfy;\n";
+  same "an unterminated string" "var 0..1: x :: foo(\"abc);\nsolve satisfy;\n";
+  same "an unterminated block comment" "var 0..1: x;\n/* abc\n\n def\nsolve satisfy;\n";
+  same "a block comment with a lone star"
+    "var 0..1: x; /* a * b ** c */\nsolve satisfy;\n";
+  same "an unexpected character"
+    "var 0..1: x;\nconstraint int_le(x, 1) # 3;\nsolve satisfy;\n";
+  same "a literal that does not fit"
+    "var 0..1: x;\nint: p = 99999999999999999999999;\nsolve satisfy;\n";
+  same "a colon that is not an annotation" "var 0..1:x::output_var;solve satisfy;\n";
+  same "a missing solve item (error at the end of the file)"
+    "var 0..1: x;\n%% trailing comment";
+  same "two solve items (error at the second)"
+    "var 0..1: x;\nsolve satisfy;\nsolve satisfy;\n";
+  same "a truncated file (end inside an item)" "var 0..1: x;\nconstraint int_le(x,"
+
 let test_misc_accepts () =
   let ok name src =
     match F.Error.catch (fun () -> F.Builder.of_string ~file:"<t>" src) with
@@ -1672,6 +1724,7 @@ let () =
     test_lin_unsat ();
     test_ne_sat ());
   test_kitchen_sink ();
+  test_window_straddle ();
   test_misc_accepts ();
   test_constant_folding ();
   test_rejections ();
