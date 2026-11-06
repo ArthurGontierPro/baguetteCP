@@ -315,8 +315,27 @@ work. The owning session picks it up.
 | ROADMAP M9-no-proof | solo-m7t27 | 2026-11-02 | The milestone opened (T1 SPEC §1 amendment + decision record, T2 implement with a stdout-identical lane, T3 the Challenge measurement and the baseline for M8-bits-encoding-T4). Today `--proof` omitted still writes and deletes the proof |
 | ROADMAP M8-bits-encoding | solo-m7t27 | 2026-11-02 | The milestone opened (five rows T0..T4, order below a threshold `--bits-above W`, bits above, both kept); M7-T27 (c) points at it; milestones are now NAMED `M<n>-<slug>` (ROADMAP head, CLAUDE.md) |
 | M7-T27 (b) follow-up | solo-m7t27 | 2026-11-06 | **D-0125 corrected by addendum.** The 2.4 TB left on the node were 161 `.opb.rows` the harness never deleted; 140 of the 148 CAPPED hit the 16 GB cap on the ENCODING (`.opb.rows`, no incumbent, no `.opb`/`.pbp` ever written), 8 on the proof; 21 more runs (18 TIMEOUT, 3 ERROR) left 9–16 GB of rows. Incumbents were overcounted (`max:-` counted as a value): 698 → 794, not 675 → 994. `compare_run.sh` now deletes `$L.opb.rows`. Results archived on the laptop (`~/mznc-archive/runs/`), proofs and probes deleted from the node |
+| M9-no-proof-T1 | agent-noproof | 2026-11-06 | **D-0126.** SPEC §1 amended (one paragraph added, the "primary output" sentence kept): `--no-proof` is a measurement mode, off by default, skips `.opb` rows (`Discard_rows`), `Writer`, `Justify`, `Trace`, learned-row deletion and I-X2; keeps every `Explanation`, learning, I-S1 and every front-end refusal. Id rule: `Encoding.commit` and `Writer.fresh` in `start_proof`, both before search, both modes. Gate always proves; only T2's stdout lane may run the mode. Branch `wave41-noproof`, not merged |
 
 ## Handoff notes
+
+## M9-no-proof-T1 handoff, 2026-11-06 (agent-noproof): D-0126, documentation only
+
+Read D-0126 before starting T2; the SPEC §1 paragraph is the normative summary. What T2 must know:
+- `Discard_rows` already counts: `Encoding.commit` increments `t.n` before it looks at the sink, so
+  `Model_row` ids, `ladder_base` and `hole_rows` are identical under all three policies with no new
+  code. The rung loop may be short-circuited under `Discard` (`t.n <- t.n + ladder`), the hole rows
+  may not.
+- `element`/`alldiff` embed `Writer.fresh` ids (the direct encoding's channelling halves) in their
+  explanations, all minted inside `Encoding.start_proof`. So "no Writer" is wrong: keep a `Writer.t`
+  over a null channel with `~audit:false`, call `start_proof`, then never emit through it. Trace,
+  justification and learned-row ids are proof-only and may stay unminted.
+- `Search` reaches `ctx.Justify.writer` at 27 sites and calls `Justify.emit`/`wipe_level`,
+  `Trace.emit`/`conflict_line`/`record_citation`; those are the calls the mode skips.
+- The preamble's "family C" gain is stale against D-0125's addendum: the population the mode reaches
+  is the 161 runs that never finished writing the `.opb` body, plus the 16 ladder deaths.
+- `--no-proof` with `--proof` is exit 2; `--stats` says the mode is on; the stdout lane belongs in the
+  gate, its proved side being the ordinary model run.
 
 ## M7-T27 (b) follow-up handoff, 2026-11-06 (solo-m7t27)
 
