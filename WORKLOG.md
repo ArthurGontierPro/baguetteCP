@@ -315,8 +315,27 @@ work. The owning session picks it up.
 | ROADMAP M9-no-proof | solo-m7t27 | 2026-11-02 | The milestone opened (T1 SPEC §1 amendment + decision record, T2 implement with a stdout-identical lane, T3 the Challenge measurement and the baseline for M8-bits-encoding-T4). Today `--proof` omitted still writes and deletes the proof |
 | ROADMAP M8-bits-encoding | solo-m7t27 | 2026-11-02 | The milestone opened (five rows T0..T4, order below a threshold `--bits-above W`, bits above, both kept); M7-T27 (c) points at it; milestones are now NAMED `M<n>-<slug>` (ROADMAP head, CLAUDE.md) |
 | M7-T27 (b) follow-up | solo-m7t27 | 2026-11-06 | **D-0125 corrected by addendum.** The 2.4 TB left on the node were 161 `.opb.rows` the harness never deleted; 140 of the 148 CAPPED hit the 16 GB cap on the ENCODING (`.opb.rows`, no incumbent, no `.opb`/`.pbp` ever written), 8 on the proof; 21 more runs (18 TIMEOUT, 3 ERROR) left 9–16 GB of rows. Incumbents were overcounted (`max:-` counted as a value): 698 → 794, not 675 → 994. `compare_run.sh` now deletes `$L.opb.rows`. Results archived on the laptop (`~/mznc-archive/runs/`), proofs and probes deleted from the node |
+| M8-bits-encoding-T0 | agent-spike | 2026-11-06 | **D-0127**, checker-only spike in `bench/bits_spike/` (generator, driver, per-operator diagnostic, `results.tsv`, README). The SAME root pruning as `rup` and as `pol`, order and bits, w = 10³..10⁶: order `pol` is QUADRATIC on 3.0.2 (4.1 s at 10⁵, 383 s at 10⁶) where the `rup` is 0.2 s / 2.6 s; elaboration re-emits a `pol` as is and a `rup` as a hint list 7x smaller, at the cost of checking; `cake_pb` checks the hinted RUP faster than the `pol`; bits `rup` is refused at every width, bits `pol` is 3 citations and flat. Every broken variant refused with the wording; `B2`'s witness is vacuous for a root pruning. Nothing merged into main; branch `wave41-spike` |
 
 ## Handoff notes
+
+## M8-bits-encoding-T0 handoff, 2026-11-06 (agent-spike): write `rup` wherever unit propagation closes it, `pol` only across a bits row
+
+Read **D-0127** before T1 chooses how justifications are written. The measurement is `bench/bits_spike/`
+(no solver code), results in `bench/bits_spike/results.tsv`, artefacts on `fataepyc-06:/scratch/arthur/wave41-spike/out/full/`.
+- **The order arm's Θ(w) `pol` is quadratic for VeriPB 3.0.2** (4.1 s at w = 10⁵, 383 s at 10⁶) while the same step as
+  `rup` is linear and parse-dominated (0.2 s, 2.6 s, of which 1.9 s is reading the 111 MB `.opb`). The operator at fault
+  is the ladder fold (`@lb_v v * +` into a Θ(w)-term accumulator), not weakening: D-0028's 2w weakenings are 2.5 s at 10⁶.
+- **Elaboration does not favour `pol`**: `veripb -e` copies a `pol` and writes a `rup` as its hint list (26.6 MB vs 3.75 MB
+  at 10⁶), in the same time as checking; `cake_pb` then checks the hinted RUP in 34 s and the `pol` in 49 s. Labels and
+  `e` lines vanish in the elaboration; `cake_pb` cannot parse a labelled proof and EXITS 0 on a refusal.
+- **In the bits arm there is no `rup` for a bound crossing a row** (refused at 10³ already); the `pol` is three citations
+  and 0.4 ms at every width. Its price is the `red` pair per atom, and for a ROOT pruning the second half of the pair
+  (`B2`) is vacuous: its wrong witness was accepted with `a`'s lower bound at 0. Test `ensure_atom` on an atom the
+  model does not decide.
+- The first design's conclusion was not load-bearing (the elaborator cited the ROW as the objective bound's
+  justification: a root bound from declared bounds is a weakening of the row). The shipped design routes the
+  conclusion through a `pol` that cites the pruning, and a `control-noG` variant proves it (refused at the conclusion).
 
 ## M7-T27 (b) follow-up handoff, 2026-11-06 (solo-m7t27)
 
