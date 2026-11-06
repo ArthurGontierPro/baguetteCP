@@ -805,6 +805,9 @@ let cite store ~check ~before fact =
            ~root:(Reason.is_empty e.Store.reason)
            ~is_lower:(Reason.fact_is_lower fact))
 
+(* [memo_entries]/[memo_ints] count the memos built and the ints they hold, over the run:
+   an upper bound on what the memo ever held live (a memo dies with its entry), printed
+   under --stats as `cites` so that the memory question is answered by a number. *)
 (* The citations of the entry at [p]: its memo, or computed once and stored. The holes
    follow [analyse]'s rule: the reasons of the holes the entry's bound move settled over,
    in the direction it moved -- [settled_over_lo] when the lower bound moved,
@@ -813,6 +816,9 @@ let cite store ~check ~before fact =
    node on that entry can have; for a two-bound entry it would be the union over both
    directions, a superset of either node's folds and sound. Each remover's attribution
    is checked as [hole_facts] checks it. *)
+let memo_entries = ref 0
+let memo_ints = ref 0
+
 let cites_of store ~check p =
   let e = Store.trail_entry store p in
   match e.Store.cites with
@@ -840,6 +846,8 @@ let cites_of store ~check p =
       if Domain.hi e.Store.now < Domain.hi e.Store.old then
         fold (Store.settled_over_hi e.Store.old ~cur:(Domain.hi e.Store.now));
       let a = Array.of_list (List.rev !out) in
+      incr memo_entries;
+      memo_ints := !memo_ints + Array.length a;
       e.Store.cites <- Some a;
       a
 

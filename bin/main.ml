@@ -784,6 +784,13 @@ let report_stats (st : Search.stats) ~exhausted =
   Printf.eprintf "stats: %-10s %10d asks   %s\n" "later"
     !Baguette_core.Reason.materialisations
     "deferred reasons materialised (D-0124): trace once per entry, 1UIP, and the closure";
+  Printf.eprintf "stats: %-10s %10d memos  %s\n" "cites"
+    !Baguette_core.Analysis.memo_entries
+    (Printf.sprintf
+       "citation memos built for the decision closure (M7-T27 a3), %d ints = %.1f MB in \
+        all"
+       !Baguette_core.Analysis.memo_ints
+       (float_of_int !Baguette_core.Analysis.memo_ints *. 8. /. 1048576.));
   Printf.eprintf "stats: %-10s %10d cls    %s\n" "convertible" st.Search.n_converts
     "...of which Learned.to_linear_row would accept, i.e. could propagate. MEASURED ONLY";
   Printf.eprintf "stats: %-10s %10s        %s\n" "retention"
