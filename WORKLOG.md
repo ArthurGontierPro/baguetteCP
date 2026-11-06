@@ -21,7 +21,6 @@ of it to every session and stopping at a broken line before it even reached the 
 |---|---|---|---|
 | M7-T27 (a3) | `lib/core/analysis.ml` (cached per-entry dependency levels), `lib/core/reason.ml` if the cache needs a hook, `test/unit/test_analysis.ml`, `docs/DECISIONS.md` (addendum to D-0124, append), `docs/ROADMAP.md` (M7-T27 row, the (a3) clause only) | agent-a3 (branch `wave41-a3`) | 2026-11-06 | The 122 033 decision-closure materialisations per 300 s on pattern-set-mining; artefacts byte-identical, nodes at 300 s back toward D-0124's 77 |
 | M7-T27 (d) | `lib/flatzinc/lexer.ml`, `parser.ml`, `ast.ml`, `builder.ml`, `model.ml` (front-end memory on 360–850 MB `.fzn`), `test/unit/test_flatzinc.ml`, `docs/DECISIONS.md` (D-0128 if a decision is needed, append), `docs/ROADMAP.md` (M7-T27 row, the (d) clause only) | agent-fe (branch `wave41-fe`) | 2026-11-06 | Family A: 14 deaths before the first declaration |
-| M9-no-proof-T1 | `docs/SPEC.md` §1, `docs/DECISIONS.md` (D-0126, append), `docs/ROADMAP.md` (M9-no-proof-T1 row) | agent-noproof (branch `wave41-noproof`) | 2026-11-06 | Doc only, no code |
 | M8-bits-encoding-T0 | `bench/bits_spike/` (new: generator, driver, README with the tables), `docs/DECISIONS.md` (D-0127, append), `docs/ROADMAP.md` (M8-bits-encoding-T0 row) | agent-spike (branch `wave41-spike`) | 2026-11-06 | Checker-only spike on fataepyc-06 with cake_pb; no solver code |
 
 ## Cross-session requests
@@ -326,6 +325,27 @@ the measurement the row promised: `learned_clause` runs/node and the `advised` c
 depot AFTER the advisor (D-0104 has the before: 1299 / 1731), and a corpus before/after. If a later
 row leans on D-0104's claim of a gain, take those two numbers first (`--stats` on the two instances
 through `scripts/compare_run.sh`, one run each); do not assume them.
+| M9-no-proof-T1 | agent-noproof | 2026-11-06 | **D-0126.** SPEC §1 amended (one paragraph added, the "primary output" sentence kept): `--no-proof` is a measurement mode, off by default, skips `.opb` rows (`Discard_rows`), `Writer`, `Justify`, `Trace`, learned-row deletion and I-X2; keeps every `Explanation`, learning, I-S1 and every front-end refusal. Id rule: `Encoding.commit` and `Writer.fresh` in `start_proof`, both before search, both modes. Gate always proves; only T2's stdout lane may run the mode. Branch `wave41-noproof`, not merged |
+
+## Handoff notes
+
+## M9-no-proof-T1 handoff, 2026-11-06 (agent-noproof): D-0126, documentation only
+
+Read D-0126 before starting T2; the SPEC §1 paragraph is the normative summary. What T2 must know:
+- `Discard_rows` already counts: `Encoding.commit` increments `t.n` before it looks at the sink, so
+  `Model_row` ids, `ladder_base` and `hole_rows` are identical under all three policies with no new
+  code. The rung loop may be short-circuited under `Discard` (`t.n <- t.n + ladder`), the hole rows
+  may not.
+- `element`/`alldiff` embed `Writer.fresh` ids (the direct encoding's channelling halves) in their
+  explanations, all minted inside `Encoding.start_proof`. So "no Writer" is wrong: keep a `Writer.t`
+  over a null channel with `~audit:false`, call `start_proof`, then never emit through it. Trace,
+  justification and learned-row ids are proof-only and may stay unminted.
+- `Search` reaches `ctx.Justify.writer` at 27 sites and calls `Justify.emit`/`wipe_level`,
+  `Trace.emit`/`conflict_line`/`record_citation`; those are the calls the mode skips.
+- The preamble's "family C" gain is stale against D-0125's addendum: the population the mode reaches
+  is the 161 runs that never finished writing the `.opb` body, plus the 16 ladder deaths.
+- `--no-proof` with `--proof` is exit 2; `--stats` says the mode is on; the stdout lane belongs in the
+  gate, its proved side being the ordinary model run.
 
 ## M7-T27 (b) follow-up handoff, 2026-11-06 (solo-m7t27)
 

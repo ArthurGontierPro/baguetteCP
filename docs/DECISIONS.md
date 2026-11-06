@@ -9849,3 +9849,157 @@ Housekeeping, same day: the results of this run and of M7-T26 (every `.tsv`, `.e
 on the laptop under `~/mznc-archive/runs/{m7t27run-2026-11-03,m7t26-2026-10-30}/`; the `.opb.rows`,
 `.opb` and `.pbp` of both runs and the 3.9 GB of `m7t27probe/` are deleted from the node; the `.fzn`
 stay (REFUSED/ERROR inputs, what `refusal_causes.py --widths` reads).
+
+## D-0126  M9-no-proof-T1: a solve-without-proof mode exists, as a measurement instrument
+
+**Status**: DECIDED 2026-11-06 (agent-noproof, branch `wave41-noproof`), written before any code.
+Amends `docs/SPEC.md` §1 (one paragraph added, none removed) and the premise of D-0046 and
+D-0122 as stated below. M9-no-proof-T2 implements it, M9-no-proof-T3 measures with it.
+
+### The decision
+
+`baguette MODEL.fzn --no-proof` solves the model and writes no proof. The mode is **off by
+default**, it is a measurement instrument and nothing else, and an answer it prints is not a
+result in the sense of SPEC §1 ("a run that produces a correct answer with an unverifiable
+proof is a failed run"): it is an unverified answer, and every harness column that holds one
+says so. The sentence in `bin/main.ml`'s header, "it is the file that is optional, not the
+proof", stays true of every run that does not ask for the mode.
+
+What the mode is for is the three readings the M9 preamble names: the proof's overhead per
+instance, which is the only honest reading of D-0121's standings against entrants that run
+without a proof; the baseline `M8-bits-encoding-T4` needs, because an encoding's cost is what
+it adds to that baseline; and attempts on the instances whose run today ends inside the
+encoding. What it is not for is also said there and is not repeated: it is not a remedy for
+D-0123's family B (the reasons live in `lib/core` and learning needs them), and without a
+proof there is no encoding to compare.
+
+### What it skips, and what it keeps
+
+Skipped, each with the module that does the work today and the invariant that goes vacuous:
+
+- the `.opb` body on disk: `Encoding.row_sink` at `Discard_rows`, which M7-T27 (b) already
+  provides and `bin/main.ml` already selects when `--proof` is absent (I-X5 and I-X8 vacuous:
+  there is no file to be complete and no row to be committed);
+- the `.pbp`: no channel, no `Writer.t` with bytes behind it, no `conclusion` (I-X1, I-X4);
+- every pruning's justification and every trace line: `Search` does not call `Justify.emit`,
+  `Justify.emit_rup_clause`, `Trace.emit`, `Trace.conflict_line` or `Trace.record_citation`,
+  so no `Deferred` thunk is ever forced for the proof's sake (I-X6, I-X9, I-X10, I-S4 vacuous);
+- the proof side of a learned constraint's lifetime: `Learned`'s introduction and
+  `Retention.retire`'s deletion, and `Justify.wipe_level`/`Writer.wipe_level` on backtrack
+  (I-X3);
+- the audit I-X2.
+
+Kept, because the preamble's rule is that the mode must not become the path where
+justifications rot:
+
+- every `Explanation` (I-P4): the mutators take a `Reason.justified` and have no optional
+  form, so a propagator cannot prune without one in either mode. The value is built; what
+  is skipped is forcing and rendering it;
+- clause learning and PB learning (`learn.ml`, `pb_analysis.ml`, `retention.ml`): they read
+  reasons, not the proof, and D-0123 measured pattern-set-mining at the same 5.8 GB without
+  a proof file for exactly that reason;
+- the independent solution check I-S1 (`Model.check_assignment` in `bin/main.ml`), which
+  never looked at the proof;
+- the encoding's **accounting**: `Encoding.cost` (ladder clauses, widest declaration,
+  direct values) is maintained by counters at the moment a row is minted, not by the sink,
+  so `--stats` reports under `--no-proof` what the encoding would have cost;
+- every front-end refusal: `Compile` and `Encoding.declare_int_gen` refuse an unrepresentable
+  or over-limit width, a repeated gcc variable and an unbounded `var int` in both modes, so
+  the accepted language is one language (the D-0065 argument, unchanged). A resource death
+  (the heap budget's exit 5, a time limit) is what the mode measures and may differ.
+
+### The id rule, concretely
+
+The one design question of the milestone is how `Explanation.Model_row` ids exist without
+rows. The answer is already in the code, and the rule is to keep it that way:
+
+**Every id an `Explanation` value can carry is minted by one of two counters, both of which run
+before the search starts and both of which run in both modes.**
+
+1. **Model rows**: `Encoding.commit` (`lib/proof/encoding.ml`) does `t.n <- t.n + 1` and
+   *then* looks at the sink; under `Discard` it drops the row and returns the id. Every row
+   door (`add_constraint`, `add_int_lin_le`, `add_int_lin_ne`, `add_all_different`,
+   `add_equality`, the reified rows) goes through it, and `Compile` stores the returned id in
+   the propagator instance, where it becomes `Model_row id`. The ladder rungs are ids by
+   arithmetic, `ladder_base + (value - lo - 1)` with `ladder_base = t.n + 1` taken before the
+   loop, and the loop asserts it; the hole rows are committed after the ladder and their ids
+   stored in `hole_rows`. So `Discard_rows` already counts, and `n_constraints`,
+   `ladder_base`, `hole_rows` and every returned id are identical under all three policies.
+   Nothing counting-only has to be written. T2 may short-circuit the rung loop under
+   `Discard` (`t.n <- t.n + ladder` instead of committing `ladder` throw-away clauses),
+   which changes no id because the ids are computed, not read back; the hole rows must still
+   go through `commit`.
+2. **The direct encoding**: `element` and `alldiff` cite the channelling halves by id
+   (`Encoding.direct_lo_id`/`direct_hi_id`/`direct_fwd_id`) inside their `Combine`s. Those
+   ids are `Writer.fresh` ids, minted by `Encoding.ensure_direct` and `derive_at_least_one`,
+   and the only caller is `Encoding.start_proof`, which runs once between `Compile` and
+   `Search.solve` over the names `request_direct` collected. So under `--no-proof` the run
+   still builds a `Writer.t`, over a null channel with `~audit:false`, and still calls
+   `Encoding.start_proof`: the counter advances in the same order from the same
+   `n_constraints`, and nothing is written. After `start_proof` that writer is never emitted
+   through.
+3. **Everything else is a proof-only id and need not exist**: a trace line's `w_cid`, a
+   justification line, a learned row's introduction, a `stated` claim. None of them is
+   embedded in an `Explanation` value; they are held beside the runtime objects for the
+   proof's sake. T2 may leave them unminted (an `option`, or a `Justify.ctx` whose emitting
+   entries are never called). What the search must never do is read one, and that is what
+   the stdout lane tests, not a rule this record can state.
+
+A consequence worth stating: the mode skips emission, not minting. `Encoding.t` exists, its
+tables are filled, `Justify.encoding` and `Encoding.is_direct_row` answer as before. What is
+absent is bytes and the forcing that produces them.
+
+### What it amends, and why the reasoning survives
+
+**SPEC §1.** One paragraph added after "The proof is not a debugging aid"; that sentence is
+kept verbatim and still governs every result. The amendment is normative on four points: off
+by default, explanation values identical (the id rule), an answer under the mode is not a
+result, and the gate always proves.
+
+**D-0046** (one checker, one format). The no-proof mode is not a second format and not a
+second checker; `veripb` 3.0.2 remains the sole oracle for every proof that exists. What
+D-0046 feared, "a second path that nothing exercises is a place where vacuous passes breed",
+is the real hazard here, and it is answered the way D-0046 answered it: the path is
+exercised by the gate (T2's lane, every model, every run of `make check`), and no lane under
+the mode may assert anything about a proof, because there is none to assert on. A green run
+under `--no-proof` says nothing about I-X1; that is why the SPEC forbids every other test
+from using it.
+
+**D-0122** (the comparison is "not like for like"). Its caveat was correct and the mode is what
+discharges it: T3 produces the standings with the proof's cost removed, which is the reading
+D-0122 could not give. Its census survives untouched, because the proof is not what makes
+`regular` time out empty on 70 of 94 instances; those rows are search, and the mode will say
+by how much.
+
+**The M9 preamble, one correction.** It names "attempts on D-0123's family C (the ladder
+deaths)" as the third gain. After D-0125's addendum the population is larger and differently
+named: 161 runs (10 % of the 1 600) never finished writing their `.opb` body, at ~28 MB/s for
+ten minutes, and 16 still die inside the ladder loop. `Discard_rows` writes nothing, so the
+first number is what the mode reaches directly; whether the 16 survive the loop's residual
+allocation is a T3 measurement, and the short-circuit in rule 1 is the lever if they do not.
+
+### T2's test plan (M9-no-proof-T2)
+
+- On all 156 models, **stdout byte-identical** between `baguette M.fzn` (proof written and
+  deleted, as today) and `baguette M.fzn --no-proof`: every solution, every `==========`,
+  every `=====UNSATISFIABLE=====`, in `--all` order where a model is run that way. This is
+  the first direct test that proof logging never steers the search. Its proved side is the
+  ordinary model run, so the lane costs one unverified run per model; it belongs in the gate.
+- `--stats` under the mode prints a line saying the mode is on and that no proof exists;
+  `--time`'s `emit` phase reads 0.
+- `--no-proof` together with `--proof PREFIX` is a usage error (exit 2), not a silent choice.
+- **If stdout ever differs, that is a finding about the PROVED run**: something in `Justify`,
+  `Trace` or `Writer` fed a decision, a wake or a reason. Stop and record it; do not make the
+  lane pass by changing the no-proof side.
+- A unit lane in `test_proof.ml` beside `test_m7t27_streamed_opb_is_byte_identical`: the same
+  encoding built under `Retain_rows` and `Discard_rows` has the same `n_constraints`, the same
+  `Encoding.cost` and the same ids from every row door.
+
+### T3's measurement (M9-no-proof-T3)
+
+Per instance, on the node, same rules as D-0125 (1 200 s, 16 GiB): wall, CPU and peak RSS
+with and without the proof, so the overhead is a number per instance and a distribution per
+edition, not M6-T3's "2 to 4 % of CPU" which bounds emission only; how many of the 161
+encoding-size runs and the 16 ladder deaths become attempts; D-0121's sixteen standings
+re-ranked with the no-proof answers, labelled unverified, beside the proved column, so the
+gap to the entrant above splits into "what proving costs" and "what the search is worth".

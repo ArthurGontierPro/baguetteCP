@@ -25,6 +25,24 @@ Keywords MUST / SHOULD / MAY are used in the RFC 2119 sense.
 The proof is not a debugging aid. It is a primary output: a run that produces a correct
 answer with an unverifiable proof is a **failed run**. *(normative)*
 
+**A solve-without-proof mode exists, as a measurement instrument** *(amended 2026-11-06,
+M9-no-proof-T1, D-0126; the paragraph above is unchanged and still governs every run that is
+a result)*. The solver MAY be run with `--no-proof`, which is off by default. Such a run
+skips the `.opb` rows and ladder on disk (`Encoding.row_sink` at `Discard_rows`), every
+proof line (`Writer`), every justification and trace (`Justify`, `Trace`), the proof-side
+deletion of learned rows and the audit I-X2, and it emits no proof at all. It MUST keep every
+`Explanation` (I-P4, which the mutators enforce by type in both modes), clause and PB
+learning, and the independent solution check I-S1. Every constraint id an `Explanation`
+value can carry MUST be minted in both modes by the same counter, in the same order:
+`Encoding.commit` for a model row and `Writer.fresh` inside `Encoding.start_proof` for the
+direct encoding, so that explanation values are identical whether or not a proof is
+written. An answer printed under `--no-proof` is NOT a result in the sense of the paragraph
+above: it is unverified, and a harness MUST label it so. The mode MUST NOT change which
+models are accepted: every front-end refusal of §2.1 and §3 fires in both modes; a resource
+death (the heap budget, a time limit) is what the mode measures and MAY differ. `make check`
+always proves: no test runs under `--no-proof` except the stdout-identity lane of
+M9-no-proof-T2, whose proved side is the ordinary model run. *(normative)*
+
 ### Out of scope (for now)
 
 Floats, sets of integers, `var set of int`, reified float constraints, search
