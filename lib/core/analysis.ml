@@ -19,7 +19,11 @@
    worth stating, because each is a thing a reader will look for and not find:
 
      - no [Writer] call and no dependency on lib/proof beyond [Lit] (which is data);
-     - no mutation of the store: [analyse] takes it and reads it;
+     - no mutation of the store: [analyse] takes it and reads it. The one exception
+       since M7-T27 (a3) is [dependency_levels], which writes a MEMO onto each entry it
+       reaches ([Store.entry.cites]): what that entry's reason cites, which the entry
+       already states and which cannot change while it is on the trail. See the last
+       section of this file;
      - no [Reason.justified] is CONSTRUCTED here. This module consumes reasons that
        propagators built; it never builds one;
      - no registration with [Engine].
@@ -502,6 +506,19 @@ end
 
 exception Bad of error
 
+(* The one place [entry.prop] is READ rather than carried, shared by [analyse] and
+   [dependency_levels]. An id that names no instance, or an instance that does not watch
+   the variable the entry changed, is a corrupt graph and stops the walk -- it does not
+   produce a cut with a wrong antecedent in it. M2-T7 stamps the field and
+   [Engine.check_attribution] checks it at the moment of the pruning; this checks it again
+   at the moment it is USED, which is the check that makes the field load-bearing here
+   rather than decorative. *)
+let check_attribution store ~(vars_of : int -> Var.t list option) ~at ~prop ~var =
+  if prop <> Store.no_prop then
+    match vars_of prop with
+    | Some vs when List.exists (Var.equal var) vs -> ()
+    | _ -> raise (Bad (Misattributed { at; claimed = prop; var = Store.name store var }))
+
 let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
     ~(vars_of : int -> Var.t list option) ~(criterion : criterion) : (t, error) result =
   let conflict_level = Store.level store in
@@ -511,19 +528,7 @@ let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
      the end (M6-T16). *)
   let antecedents = Uniq.create () and folds_rev = ref [] in
   let add_antecedent p = if p <> Store.no_prop then Uniq.add antecedents p in
-  (* The one place [entry.prop] is READ rather than carried. An id that names no
-     instance, or an instance that does not watch the variable the entry changed, is a
-     corrupt graph and stops the walk -- it does not produce a cut with a wrong
-     antecedent in it. M2-T7 stamps the field and [Engine.check_attribution] checks it at
-     the moment of the pruning; this checks it again at the moment it is USED, which is
-     the check that makes the field load-bearing here rather than decorative. *)
-  let check_attr ~at ~prop ~var =
-    if prop <> Store.no_prop then
-      match vars_of prop with
-      | Some vs when List.exists (Var.equal var) vs -> ()
-      | _ ->
-          raise (Bad (Misattributed { at; claimed = prop; var = Store.name store var }))
-  in
+  let check_attr = check_attribution store ~vars_of in
   let mk_node ~before fact =
     let support, fast = support_of store ~before fact in
     if fast then incr o1 else incr scanned;
@@ -714,3 +719,238 @@ let to_string t =
     (Reason.to_string_facts (facts t))
     (String.concat "," (List.map string_of_int (cited_levels t)))
     t.resolutions (List.length t.folds)
+
+(* ------------------------------------- the dependency levels, memoised (M7-T27 a3) *)
+
+(* [dependency_levels] is [decision_levels] of [analyse ~scope:Everywhere
+   ~criterion:decision_closure] -- the SAME set, for the same conflict -- computed
+   without materialising a reason the closure has already walked once. D-0124's second
+   addendum is the record.
+
+   WHY A MEMO OF LEVELS PER ENTRY WOULD BE WRONG, which is what D-0124's first addendum
+   proposed. The closure's answer is not the union, over the facts the conflict rests
+   on, of "the decision levels this fact rests on". [Frontier] keeps ONE node per bound
+   slot (a variable and a direction) and resolves the STRONGER of two facts on the same
+   slot, dropping the weaker without expanding it: a decision [x >= 2] at level 1, cited
+   by a level-1 pruning, is dropped when a decision [x >= 3] at level 2 is already in the
+   frontier, because [x >= 3] entails it. That drop is what makes the closure of a
+   bound-split search name {2} rather than {1, 2} (test_analysis.ml, scene 5). It is
+   sound -- the cut still entails the dropped fact, so it is still a nogood -- and it is
+   strictly better, since the backjump then skips level 1. A per-entry set of levels
+   cannot see it: whether [x >= 2] is dropped depends on what ELSE is in the frontier
+   when it arrives, a property of the conflict and not of the entry. So a union of
+   per-entry level sets is a SUPERSET of the closure's answer: sound, weaker, and not
+   the search this project measures itself against byte for byte.
+
+   WHAT IS MEMOISED INSTEAD is exactly what the walk needs from an entry: its CITATIONS,
+   the trail position that established each fact its reason read (and each fact the
+   reasons of the holes its bound move settled over read), with that position's level,
+   direction and root-ness packed into one int. That is a property of the entry alone --
+   [support_of ~before:p] answers from positions strictly below [p], and everything
+   below a live entry is frozen (I-T1, the argument D-0124 makes for [Store.history]) --
+   so it is computed on the entry's first visit, stored on it ([Store.entry.cites]), and
+   dies with the record; nothing invalidates it on backtrack because [Store.apply]
+   allocates a fresh record for every push. Citations at level 0 or without a support
+   are not kept: such a node contributes no level, and the only node it could shadow by
+   [stronger] is a weaker fact on the same slot, which sits below it on the trail and
+   is therefore at level 0 too. The memo is O(cited facts above level 0) per entry,
+   8 bytes each, for the entries a closure reaches, against the 7 to 17 words per term
+   of every pruning that D-0124 removed.
+
+   THE WALK over citations is [analyse]'s walk with the facts left out: a cell per slot
+   holding the highest cited position; the highest expandable cell resolved first
+   ([best_expandable]); a cited position merged into an existing cell only when it is
+   higher ([stronger]: on one slot a later position is a stronger bound, by I-D3, and
+   the same position is the same fact); the cell removed when its position is expanded
+   ([Frontier.remove]); a decision or factless pruning ([Reason.is_empty]) never
+   expanded; level 0 never entered. The answer is the set of levels of the cells left,
+   which are all roots above level 0: [decision_closure]'s postcondition, by
+   construction. Under BAGUETTE_DEBUG the walk over facts runs beside it and the two
+   answers must agree; test_analysis.ml compares them on every scene.
+
+   Per conflict this costs one hash step per citation of each entry resolved, in place
+   of one [Reason.facts] per entry (3 600 facts rebuilt from the history, 122 033 times
+   per 300 s on pattern-set-mining, D-0124's addendum) and one [support_of] per fact.
+   Entries persist across the conflicts of a subtree and so do their memos. *)
+
+(* One citation. The level sits in the high bits, then the position, then a root bit and
+   a direction bit, so that the integer order is the position order (a higher position
+   is at the same or a higher level). Positions and levels are bounded at 2^30, which a
+   trail cannot reach in 15 GB. *)
+let pack ~pos ~level ~root ~is_lower =
+  assert (pos >= 0 && pos < 1 lsl 30 && level >= 0 && level < 1 lsl 30);
+  (level lsl 32) lor (pos lsl 2) lor (if root then 2 else 0) lor if is_lower then 1 else 0
+
+let cite_pos c = (c lsr 2) land 0x3FFF_FFFF
+let cite_level c = c lsr 32
+let cite_root c = c land 2 <> 0
+let cite_is_lower c = c land 1 <> 0
+
+(* The citation of [fact] as read by the entry at [before] (the trail length, for the
+   conflict's own reason), or [None] for a fact at its declared bound or established at
+   level 0. [check] is the attribution check, run on the supporting entry whatever its
+   level, so that a corrupt graph is refused on first contact exactly as [mk_node]
+   refuses it. *)
+let cite store ~check ~before fact =
+  let s, _ = support_of store ~before fact in
+  if s = Store.no_support then None
+  else
+    let e = Store.trail_entry store s in
+    check ~at:s ~prop:e.Store.prop ~var:e.Store.var;
+    let level = Store.level_of_index store s in
+    if level = 0 then None
+    else
+      Some
+        (pack ~pos:s ~level
+           ~root:(Reason.is_empty e.Store.reason)
+           ~is_lower:(Reason.fact_is_lower fact))
+
+(* The citations of the entry at [p]: its memo, or computed once and stored. The holes
+   follow [analyse]'s rule: the reasons of the holes the entry's bound move settled over,
+   in the direction it moved -- [settled_over_lo] when the lower bound moved,
+   [settled_over_hi] when the upper did. An entry moves one bound ([Store.fix], which
+   moves both, has no caller in lib/), so this is [hole_facts] for the one direction a
+   node on that entry can have; for a two-bound entry it would be the union over both
+   directions, a superset of either node's folds and sound. Each remover's attribution
+   is checked as [hole_facts] checks it. *)
+let cites_of store ~check p =
+  let e = Store.trail_entry store p in
+  match e.Store.cites with
+  | Some a -> a
+  | None ->
+      let out = ref [] in
+      let add fact =
+        match cite store ~check ~before:p fact with
+        | None -> ()
+        | Some c -> out := c :: !out
+      in
+      List.iter add (Reason.facts e.Store.reason);
+      let fold holes =
+        List.iter
+          (fun h ->
+            match Store.remover store ~before:p ~var:e.Store.var h with
+            | None -> ()
+            | Some (r : Store.entry) ->
+                check ~at:p ~prop:r.Store.prop ~var:r.Store.var;
+                List.iter add (Reason.facts r.Store.reason))
+          holes
+      in
+      if Domain.lo e.Store.now > Domain.lo e.Store.old then
+        fold (Store.settled_over_lo e.Store.old ~cur:(Domain.lo e.Store.now));
+      if Domain.hi e.Store.now < Domain.hi e.Store.old then
+        fold (Store.settled_over_hi e.Store.old ~cur:(Domain.hi e.Store.now));
+      let a = Array.of_list (List.rev !out) in
+      e.Store.cites <- Some a;
+      a
+
+(* A max-heap of citations by position, cleaned lazily: a popped citation is acted on
+   only if its slot's cell still holds it, so a citation pushed twice (its cell removed
+   by an expansion and re-created by a later arrival) is expanded once per cell, which
+   is what [Frontier] does. *)
+module Heap = struct
+  type t = { mutable a : int array; mutable n : int }
+
+  let create () = { a = Array.make 64 0; n = 0 }
+
+  let push h c =
+    if h.n = Array.length h.a then (
+      let bigger = Array.make (2 * h.n) 0 in
+      Array.blit h.a 0 bigger 0 h.n;
+      h.a <- bigger);
+    let i = ref h.n in
+    h.n <- h.n + 1;
+    while !i > 0 && cite_pos h.a.((!i - 1) / 2) < cite_pos c do
+      h.a.(!i) <- h.a.((!i - 1) / 2);
+      i := (!i - 1) / 2
+    done;
+    h.a.(!i) <- c
+
+  let pop h =
+    if h.n = 0 then None
+    else
+      let top = h.a.(0) in
+      h.n <- h.n - 1;
+      let last = h.a.(h.n) in
+      let i = ref 0 and placed = ref false in
+      while not !placed do
+        let l = (2 * !i) + 1 and r = (2 * !i) + 2 in
+        let best = if l < h.n && cite_pos h.a.(l) > cite_pos last then l else !i in
+        let best =
+          if
+            r < h.n
+            && cite_pos h.a.(r) > cite_pos (if best = !i then last else h.a.(best))
+          then r
+          else best
+        in
+        if best = !i then (
+          h.a.(!i) <- last;
+          placed := true)
+        else (
+          h.a.(!i) <- h.a.(best);
+          i := best)
+      done;
+      Some top
+end
+
+(* The decision levels the conflict rests on, descending, level 0 dropped: what
+   [decision_levels] reads off the decision closure, see the section header. [Error]
+   when the graph is corrupt or the walk does not close, as [analyse] reports them. *)
+let dependency_levels store (c : Store.conflict) ~(vars_of : int -> Var.t list option) :
+    (int list, error) result =
+  let check = check_attribution store ~vars_of in
+  let max_resolutions = Store.trail_length store + 1 in
+  let resolutions = ref 0 in
+  (* Slot -> the citation its cell holds. Looked up and never iterated for an ordered
+     result: the levels are sorted at the end. *)
+  let cells : (int, int) Hashtbl.t = Hashtbl.create 64 in
+  let heap = Heap.create () in
+  let slot c =
+    let e = Store.trail_entry store (cite_pos c) in
+    (2 * Var.to_int e.Store.var) + if cite_is_lower c then 1 else 0
+  in
+  let insert c =
+    let k = slot c in
+    match Hashtbl.find_opt cells k with
+    | Some held when cite_pos held >= cite_pos c -> ()
+    | _ ->
+        Hashtbl.replace cells k c;
+        if not (cite_root c) then Heap.push heap c
+  in
+  let rec loop () =
+    match Heap.pop heap with
+    | None -> ()
+    | Some c ->
+        let k = slot c in
+        (match Hashtbl.find_opt cells k with
+        | Some held when held = c ->
+            if !resolutions >= max_resolutions then raise (Bad (Diverged !resolutions));
+            incr resolutions;
+            Hashtbl.remove cells k;
+            Array.iter insert (cites_of store ~check (cite_pos c))
+        | _ -> ());
+        loop ()
+  in
+  try
+    if c.Store.c_prop <> Store.no_prop && vars_of c.Store.c_prop = None then
+      raise
+        (Bad
+           (Misattributed
+              { at = -1; claimed = c.Store.c_prop; var = "<the conflicting row>" }));
+    let before = Store.trail_length store in
+    List.iter
+      (fun f -> match cite store ~check ~before f with None -> () | Some c -> insert c)
+      (Reason.facts c.Store.c_reason);
+    loop ();
+    let levels =
+      List.rev
+        (List.sort_uniq Int.compare
+           (Hashtbl.fold (fun _ c acc -> cite_level c :: acc) cells []))
+    in
+    Debug.check
+      "M7-T27 (a3): the memoised closure names the levels the walk over facts does"
+      (fun () ->
+        match analyse ~scope:Everywhere store c ~vars_of ~criterion:decision_closure with
+        | Ok t -> decision_levels t = levels
+        | Error _ -> false);
+    Ok levels
+  with Bad e -> Error e
