@@ -56,7 +56,9 @@ measure() {
 # verdict NAME : the checker's judgement line, from stdout then stderr.
 verdict() {
   local name=$1 v
-  v=$(grep -m1 -E '^s ' "$name.out" 2>/dev/null)
+  # cake_pb exits 0 on a refusal and says `c Checking failed ...` (measured), so the
+  # `s` line is looked for first and a `c Checking failed` line counts as the verdict.
+  v=$(grep -m1 -E '^s |^c Checking failed' "$name.out" 2>/dev/null)
   [ -z "$v" ] && v=$(grep -m1 -E 'Checking error|Verification error|error|Error|FAIL|not implied|could not' "$name.err" "$name.out" 2>/dev/null | head -1 | sed 's/^[^:]*:[^:]*://')
   [ -z "$v" ] && v=$(tail -1 "$name.err" 2>/dev/null)
   echo "${v:-<no output>}" | tr '\t' ' ' | cut -c1-200

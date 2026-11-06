@@ -6,29 +6,39 @@ Stdlib only; run it with `python3 -I`. No solver code is involved: this writes a
 that the checker, its elaborator and `cake_pb` can be measured on the derivation
 ALONE, free of search, of the writer and of the heap.
 
-The model is D-0028's two-variable shape made satisfiable: `a, b` declared `0..w`,
-one row `a + b <= c` with `c = w // 2`, objective `min -b`. The propagation is the
-root pruning `Linear` makes from that row with `a` at its declared lower bound:
-`b <= c`, i.e. the literal `~b_ge_m` with `m = c + 1`. It is load-bearing because
-the proof concludes `BOUNDS -c INF` on the objective, and the checker can establish
-that lower bound only from the derived literal (see README.md, "What makes the
-lines load-bearing"). The model is satisfiable (a = b = 0), so a `red`, a `pol` or
-a `rup` is judged, not waved through (D-0053, D-0066).
+The model is D-0028's two-variable shape made satisfiable, with one Boolean added
+so that the conclusion can only be reached THROUGH the derived literal:
+
+    a in [l, w]   b in [0, w]   z in {0, 1}        l = w//4
+    R:  a + b <= c                                c = l + w//2
+    T:  z  \/  b >= m                             m = c - l + 1 = w//2 + 1
+    min z
+
+The propagation is the root pruning `Linear` makes from R with `a` at its declared
+lower bound: `b <= c - l`, i.e. the literal `~b_ge_m`. The proof then derives
+`z >= 1` from T and that literal (line Z, a `pol` that CITES the pruning), and
+concludes `BOUNDS 1 : Z INF`. A proof whose pruning line carries no bound (the
+`control-noG` variant, where it is a copy of R) is therefore refused at the
+conclusion, which is what makes the pruning load-bearing. The model is satisfiable
+(a = l, b = 0, z = 1), so a `red`, a `pol` or a `rup` is judged, not waved through
+(D-0053, D-0066).
 
 Two arms, two styles:
 
   order   the eager order encoding of PROOF-FORMAT section 3: `x_ge_v` for
-          1 <= v <= w and the w-1 ladder rungs per variable, all in the `.opb`.
-          The row is the encoding's expansion, one literal per value. The
-          justification is the cancellation of w ladder rungs (D-0028): weaken
-          every `a` literal, fold `b`'s ladder up to rung m-1 (one row moves one
-          term one rung, lib/core/ladder.ml), weaken `b` above m, saturate.
+          l < v <= u and the ladder rungs, all in the `.opb`; R is the encoding's
+          expansion, one literal per value, its constant measured against the
+          declared bound (D-0028, "declared offsets"). The justification is the
+          cancellation of Theta(w) ladder rungs: weaken every `a` literal, fold
+          `b`'s ladder up to rung m-1 (one row moves one term one rung,
+          lib/core/ladder.ml), weaken `b` above m, saturate.
   bits    GCS's carrier: n = bit_length(w) bits per variable plus two bound rows.
           The order atom `[b >= m]` does not exist in the `.opb`; the proof mints
           it with a `red` pair whose witness touches ONLY the fresh atom
           (docs/ROADMAP.md, M8-bits-encoding preamble; NOT D-0031's rotation,
           which permutes existing literals). The justification is then three
           citations: row + lower-bound row + the atom's defining row, saturate.
+          Using the literal in Z needs the atom's other direction (B2) as well.
 
   rup     the pruning is one `rup` line and the checker reconstructs the reason.
   pol     the pruning is an explicit cutting-planes line.
@@ -37,17 +47,27 @@ In both styles an `e` line pins the derived constraint syntactically to the clai
 (M1-T51: the control `pol` never had), so a `pol` that derives the wrong thing is
 REJECTED at that line rather than silently carried.
 
-Broken variants, one per arm x style plus one per `red` of the bits arm, each of
-which the checker must refuse with a checking error over this SATISFIABLE model:
+Variants the checker must refuse over this SATISFIABLE model, one per arm x style
+plus one per `red` of the bits arm, plus the load-bearing control:
 
-  order/rup, bits/rup     the claim's literal flipped: `b_ge_m >= 1`
-  order/pol               the fold stops one rung too high (derives b <= c+1,
-                          a weaker bound) -- the `e` pin catches it
-  bits/pol                the atom's defining row cited in the wrong direction
-  bits/* broken-red-B1    B1's witness `b_ge_m -> 1` instead of `-> 0`
-  bits/* broken-red-B2    B2's witness `b_ge_m -> 0` instead of `-> 1`
+  broken        order/rup, bits/rup   the claim's literal flipped: `b_ge_m >= 1`
+                order/pol             the fold stops one rung too high (derives
+                                      b <= c-l+1, a weaker bound): the `e` pin
+                                      catches it
+                bits/pol              the atom's defining row cited in the wrong
+                                      direction: the `e` pin catches it
+  broken-red-B1 bits                  B1's witness `b_ge_m -> 1` instead of `-> 0`
+  broken-red-B2 bits                  B2's witness `b_ge_m -> 0` instead of `-> 1`.
+                                      EXPECTED TO BE ACCEPTED: the negation of B2
+                                      (b >= m and ~b_ge_m) contradicts the model,
+                                      so the redundance goals discharge trivially
+                                      (D-0053's vacuity, for a root pruning's atom)
+  control-noG   all                   the pruning line is a copy of R and the pin
+                                      is dropped; Z and the conclusion are kept.
+                                      Must be refused at the conclusion, or the
+                                      conclusion does not depend on the pruning
 
-Layout: <out>/w<w>/<arm>/<style>/{model.opb,proof.pbp,proof.broken.pbp,...}
+Layout: <out>/w<w>/<arm>/<style>/{model.opb,proof.pbp,proof.<variant>.pbp}
 """
 
 import argparse
@@ -59,34 +79,35 @@ ARMS = ("order", "bits")
 
 
 def params(w):
-    c = w // 2  # a + b <= c
-    m = c + 1  # the pruned literal is ~[b >= m]
-    assert 2 <= m < w, "m must be an interior value so the atom is genuine"
-    return c, m
+    l = w // 4
+    c = l + w // 2
+    m = c - l + 1
+    assert 1 <= l and l + 2 <= w and 2 <= m < w, "interior values only"
+    return l, c, m
 
 
 # ---------------------------------------------------------------- order arm
 
 
-def order_opb(w, c):
-    lines = []
-    nrows = 1 + 2 * (w - 1)
-    lines.append(f"* #variable= {2 * w} #constraint= {nrows}")
-    lines.append("min: " + " ".join(f"-1 b_ge_{v}" for v in range(1, w + 1)) + " ;")
-    row = " ".join(f"-1 a_ge_{v}" for v in range(1, w + 1)) + " " + " ".join(
-        f"-1 b_ge_{v}" for v in range(1, w + 1)
-    )
-    lines.append(f"@R {row} >= {-c} ;")
-    for x in ("a", "b"):
-        for v in range(1, w):
-            lines.append(f"@l{x}_{v} +1 ~{x}_ge_{v + 1} +1 {x}_ge_{v} >= 1 ;")
+def order_opb(w, l, c, m):
+    a_vals = range(l + 1, w + 1)  # a_ge_v exists for l < v <= w
+    b_vals = range(1, w + 1)
+    nrows = 2 + (w - l - 1) + (w - 1)
+    lines = [f"* #variable= {(w - l) + w + 1} #constraint= {nrows}", "min: +1 z_ge_1 ;"]
+    row = " ".join(f"-1 a_ge_{v}" for v in a_vals) + " " + " ".join(f"-1 b_ge_{v}" for v in b_vals)
+    lines.append(f"@R {row} >= {-(c - l)} ;")
+    lines.append(f"@T +1 z_ge_1 +1 b_ge_{m} >= 1 ;")
+    for v in range(l + 1, w):
+        lines.append(f"@la_{v} +1 ~a_ge_{v + 1} +1 a_ge_{v} >= 1 ;")
+    for v in range(1, w):
+        lines.append(f"@lb_{v} +1 ~b_ge_{v + 1} +1 b_ge_{v} >= 1 ;")
     return "\n".join(lines) + "\n", nrows
 
 
-def order_pol(w, m, top):
-    """R, weaken all of a, fold b's ladder to rung `top`-1, weaken b above `top`, s."""
+def order_pol(w, l, top):
+    """R, weaken all of a, fold b's ladder to rung top-1, weaken b above top, s."""
     toks = ["@R"]
-    toks += [f"a_ge_{v} w" for v in range(1, w + 1)]
+    toks += [f"a_ge_{v} w" for v in range(l + 1, w + 1)]
     for v in range(1, top):
         toks.append("@lb_%d +" % v if v == 1 else "@lb_%d %d * +" % (v, v))
     toks += [f"b_ge_{v} w" for v in range(top + 1, w + 1)]
@@ -94,14 +115,19 @@ def order_pol(w, m, top):
     return "@G pol " + " ".join(toks) + " ;"
 
 
-def order_proof(w, c, m, nrows, style, broken=False):
+def order_proof(w, l, m, nrows, style, variant=None):
     out = ["pseudo-Boolean proof version 3.0", f"f {nrows} ;"]
-    if style == "rup":
-        lit = f"b_ge_{m}" if broken else f"~b_ge_{m}"
+    if variant == "control-noG":
+        out.append("@G pol @R ;")
+    elif style == "rup":
+        lit = f"b_ge_{m}" if variant == "broken" else f"~b_ge_{m}"
         out.append(f"@G rup +1 {lit} >= 1 ;")
     else:
-        out.append(order_pol(w, m, top=m + 1 if broken else m))
-    out += tail(c, m)
+        out.append(order_pol(w, l, top=m + 1 if variant == "broken" else m))
+    if variant != "control-noG":
+        out.append(f"@E e +1 ~b_ge_{m} >= 1 : @G ;")
+    out.append("@Z pol @T @G + ;")
+    out += tail()
     return "\n".join(out) + "\n"
 
 
@@ -113,16 +139,16 @@ def bits_terms(x, n, neg=False, sign="+"):
     return " ".join(f"{sign}{1 << i} {t}{x}_bit_{i}" for i in range(n))
 
 
-def bits_opb(w, c):
+def bits_opb(w, l, c, m):
     n = w.bit_length()
-    lines = []
-    lines.append(f"* #variable= {2 * n} #constraint= 5")
-    lines.append("min: " + bits_terms("b", n, sign="-") + " ;")
+    lines = [f"* #variable= {2 * n + 1} #constraint= 6", "min: +1 z_bit_0 ;"]
     lines.append(f"@R {bits_terms('a', n, sign='-')} {bits_terms('b', n, sign='-')} >= {-c} ;")
-    for x in ("a", "b"):
-        lines.append(f"@{x.upper()}lo {bits_terms(x, n)} >= 0 ;")
-        lines.append(f"@{x.upper()}hi {bits_terms(x, n, sign='-')} >= {-w} ;")
-    return "\n".join(lines) + "\n", 5, n
+    lines.append(f"@T +{m} z_bit_0 {bits_terms('b', n)} >= {m} ;")
+    lines.append(f"@Alo {bits_terms('a', n)} >= {l} ;")
+    lines.append(f"@Ahi {bits_terms('a', n, sign='-')} >= {-w} ;")
+    lines.append(f"@Blo {bits_terms('b', n)} >= 0 ;")
+    lines.append(f"@Bhi {bits_terms('b', n, sign='-')} >= {-w} ;")
+    return "\n".join(lines) + "\n", 6, n
 
 
 def bits_atom(n, m, flip1=False, flip2=False):
@@ -136,29 +162,29 @@ def bits_atom(n, m, flip1=False, flip2=False):
     ]
 
 
-def bits_proof(n, c, m, nrows, style, broken=None):
+def bits_proof(n, m, nrows, style, variant=None):
     out = ["pseudo-Boolean proof version 3.0", f"f {nrows} ;"]
-    out += bits_atom(n, m, flip1=(broken == "red-B1"), flip2=(broken == "red-B2"))
-    if style == "rup":
-        lit = f"b_ge_{m}" if broken == "claim" else f"~b_ge_{m}"
+    out += bits_atom(n, m, flip1=(variant == "broken-red-B1"), flip2=(variant == "broken-red-B2"))
+    if variant == "control-noG":
+        out.append("@G pol @R ;")
+    elif style == "rup":
+        lit = f"b_ge_{m}" if variant == "broken" else f"~b_ge_{m}"
         out.append(f"@G rup +1 {lit} >= 1 ;")
     else:
-        defn = "@B2" if broken == "claim" else "@B1"
+        defn = "@B2" if variant == "broken" else "@B1"
         out.append(f"@G pol @R @Alo + {defn} + s ;")
-    out += tail(c, m)
+    if variant != "control-noG":
+        out.append(f"@E e +1 ~b_ge_{m} >= 1 : @G ;")
+    out.append(f"@Z pol @T @B2 + @G {(1 << n) - m} * + s ;")
+    out += tail()
     return "\n".join(out) + "\n"
 
 
 # ------------------------------------------------------------------- common
 
 
-def tail(c, m):
-    return [
-        f"@E e +1 ~b_ge_{m} >= 1 : @G ;",
-        "output NONE ;",
-        f"conclusion BOUNDS {-c} INF ;",
-        "end pseudo-Boolean proof ;",
-    ]
+def tail():
+    return ["output NONE ;", "conclusion BOUNDS 1 : @Z INF ;", "end pseudo-Boolean proof ;"]
 
 
 def write(path, text):
@@ -182,33 +208,31 @@ def main():
     widths = [int(x) for x in args.widths.split(",")]
     print("width\tarm\tstyle\tatoms\tlines\topb_bytes\tpbp_bytes\tfiles")
     for w in widths:
-        c, m = params(w)
+        l, c, m = params(w)
         for arm in args.arms.split(","):
             if arm == "order":
-                opb, nrows = order_opb(w, c)
+                opb, nrows = order_opb(w, l, c, m)
+                variants = ("broken", "control-noG")
             else:
-                opb, nrows, n = bits_opb(w, c)
+                opb, nrows, n = bits_opb(w, l, c, m)
+                variants = ("broken", "broken-red-B1", "broken-red-B2", "control-noG")
             for style in args.styles.split(","):
                 d = os.path.join(args.out, f"w{w}", arm, style)
                 ob = write(os.path.join(d, "model.opb"), opb)
-                if arm == "order":
-                    proof = order_proof(w, c, m, nrows, style)
-                    broken = {"proof.broken.pbp": order_proof(w, c, m, nrows, style, broken=True)}
-                    atoms = 0
-                else:
-                    proof = bits_proof(n, c, m, nrows, style)
-                    broken = {
-                        "proof.broken.pbp": bits_proof(n, c, m, nrows, style, broken="claim"),
-                        "proof.broken-red-B1.pbp": bits_proof(n, c, m, nrows, style, broken="red-B1"),
-                        "proof.broken-red-B2.pbp": bits_proof(n, c, m, nrows, style, broken="red-B2"),
-                    }
-                    atoms = 1
-                pb = write(os.path.join(d, "proof.pbp"), proof)
-                for name, text in broken.items():
-                    write(os.path.join(d, name), text)
+
+                def proof(variant=None):
+                    if arm == "order":
+                        return order_proof(w, l, m, nrows, style, variant)
+                    return bits_proof(n, m, nrows, style, variant)
+
+                main_text = proof()
+                pb = write(os.path.join(d, "proof.pbp"), main_text)
+                for v in variants:
+                    write(os.path.join(d, f"proof.{v}.pbp"), proof(v))
+                atoms = 0 if arm == "order" else 1
                 print(
-                    f"{w}\t{arm}\t{style}\t{atoms}\t{top_level_lines(proof)}\t{ob}\t{pb}\t"
-                    f"{d}: model.opb proof.pbp {' '.join(broken)}"
+                    f"{w}\t{arm}\t{style}\t{atoms}\t{top_level_lines(main_text)}\t{ob}\t{pb}\t"
+                    f"{d}: model.opb proof.pbp " + " ".join(f"proof.{v}.pbp" for v in variants)
                 )
                 sys.stdout.flush()
 
