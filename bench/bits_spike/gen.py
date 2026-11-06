@@ -11,7 +11,7 @@ so that the conclusion can only be reached THROUGH the derived literal:
 
     a in [l, w]   b in [0, w]   z in {0, 1}        l = w//4
     R:  a + b <= c                                c = l + w//2
-    T:  z  \/  b >= m                             m = c - l + 1 = w//2 + 1
+    T:  z  or  b >= m                             m = c - l + 1 = w//2 + 1
     min z
 
 The propagation is the root pruning `Linear` makes from R with `a` at its declared
@@ -58,10 +58,14 @@ plus one per `red` of the bits arm, plus the load-bearing control:
                                       direction: the `e` pin catches it
   broken-red-B1 bits                  B1's witness `b_ge_m -> 1` instead of `-> 0`
   broken-red-B2 bits                  B2's witness `b_ge_m -> 0` instead of `-> 1`.
-                                      EXPECTED TO BE ACCEPTED: the negation of B2
+                                      Vacuous IN PRINCIPLE: the negation of B2
                                       (b >= m and ~b_ge_m) contradicts the model,
-                                      so the redundance goals discharge trivially
-                                      (D-0053's vacuity, for a root pruning's atom)
+                                      so every goal is implied (D-0053, for a root
+                                      pruning's atom). Judged IN PRACTICE only when
+                                      the checker's unit propagation does not see
+                                      that contradiction: measured accepted with
+                                      a's lower bound at 0 (w=10), refused with it
+                                      at w//4 (w=12 and up). Report, do not rely
   control-noG   all                   the pruning line is a copy of R and the pin
                                       is dropped; Z and the conclusion are kept.
                                       Must be refused at the conclusion, or the

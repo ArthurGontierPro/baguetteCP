@@ -67,9 +67,9 @@ verdict() {
 # wording NAME : the sentence after a checking error (the next non-empty line).
 wording() {
   local name=$1
-  grep -A3 -E 'Checking error|Verification error' "$name.err" "$name.out" 2>/dev/null \
-    | grep -v -E 'Checking error|Verification error|^--$' | sed 's/^[^:]*:[^:]*://' \
-    | grep -v '^[[:space:]]*$' | head -1 | cut -c1-200
+  grep -h -A3 -E 'Checking error|Verification error' "$name.err" "$name.out" 2>/dev/null \
+    | grep -v -E 'Checking error|Verification error|Caused by|^--$|^[[:space:]]*$' \
+    | head -1 | sed 's/^[[:space:]]*//' | cut -c1-200
 }
 
 for w in ${WIDTHS//,/ }; do
@@ -82,6 +82,9 @@ for w in ${WIDTHS//,/ }; do
       echo "== w=$w $arm $style  $(date -Is)" >&2
       read -r vrc vwall vcpu vrss < <(measure veripb "$VERIPB" --stats model.opb proof.pbp)
       vv=$(verdict veripb)
+      [ "$vrc" != 0 ] && vv="$vv | $(wording veripb)"
+      vself=$(awk '/c statistic: time total/{print $(NF-1)}' veripb.out 2>/dev/null)
+      vv="$vv [self ${vself:--}s]"
       echo "   veripb rc=$vrc $vv  wall=${vwall}s cpu=${vcpu}s rss=${vrss}kB" >&2
       ebytes=0; erc=-; ewall=-; ecpu=-; erss=-; crc=-; cv=-; cwall=-; ccpu=-; crss=-
       if [ "$vrc" = 0 ]; then
@@ -98,7 +101,7 @@ for w in ${WIDTHS//,/ }; do
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$w" "$arm" "$style" ok "$opb" "$pbp" "$vrc" "$vv" "$vwall" "$vcpu" "$vrss" \
         "$ebytes" "$erc" "$ewall" "$ecpu" "$erss" "$crc" "$cv" "$cwall" "$ccpu" "$crss" >> "$TSV"
-      for b in proof.broken*.pbp; do
+      for b in proof.broken*.pbp proof.control*.pbp; do
         [ -f "$b" ] || continue
         tag=${b#proof.}; tag=${tag%.pbp}
         read -r brc bwall bcpu brss < <(measure "$tag" "$VERIPB" model.opb "$b")
