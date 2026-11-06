@@ -9849,3 +9849,108 @@ Housekeeping, same day: the results of this run and of M7-T26 (every `.tsv`, `.e
 on the laptop under `~/mznc-archive/runs/{m7t27run-2026-11-03,m7t26-2026-10-30}/`; the `.opb.rows`,
 `.opb` and `.pbp` of both runs and the 3.9 GB of `m7t27probe/` are deleted from the node; the `.fzn`
 stay (REFUSED/ERROR inputs, what `refusal_causes.py --widths` reads).
+
+### Addendum, M7-T27 (a3), 2026-11-06 (agent-a3, wave41-a3): the closure's levels over memoised CITATIONS, exact and byte-neutral, 67 -> 391 nodes in 300 s; the remedy as proposed (a memo of levels) would have been a superset
+
+**Done.** `Analysis.dependency_levels store c ~vars_of` answers what `decision_levels` read off
+`analyse ~scope:Everywhere ~criterion:decision_closure`, the same set for the same conflict,
+and `Learn.at_conflict` reads it instead of running that walk. The walk over facts stays, as
+the reference the unit tests compare against and as the `BAGUETTE_DEBUG` cross-check that
+runs beside every call. `Reason.materialisations` counts the `Later` asks the addendum above
+counted by hand, and `--stats` prints it as `later`; `Analysis.memo_entries`/`memo_ints` count
+the memos built, printed as `cites`. Reproduce on `fataepyc-06`: `/scratch/arthur/m7t27a3/`
+holds the gate log, the 2 x 468 artefacts and the runs; the clone is `/scratch/arthur/wave41-a3`.
+
+**The design, and why it is not the one the addendum above proposed.** The first addendum's
+remedy (i) was a per-entry, cached SET OF LEVELS, O(open levels) per entry, with the closure's
+answer the union of the sets of the facts the conflict rests on. That union is not the
+closure's answer. `Frontier` holds ONE node per bound slot (a variable and a direction) and
+merges two facts on the same slot into the STRONGER one (`stronger`, M6-T16), so the weaker is
+dropped without being expanded. In a bound-split search that is the common case rather than
+a corner: a decision `x >= 2` at level 1 is cited by a level-1 pruning, a decision `x >= 3`
+at level 2 is already in the frontier when the pruning is resolved, and `x >= 2` arrives on
+`x`'s slot, loses to `x >= 3` and is never expanded. The closure names {2}; the union names
+{1, 2}. The drop is sound (the cut still entails the dropped fact, so its negation is still
+a nogood) and strictly better (the backjump skips level 1), and whether it happens depends on
+what ELSE is in the frontier when the fact arrives, which is a property of the conflict and
+not of the entry. So no per-entry set of levels reproduces the closure; a union is a
+superset, sound and weaker, and a weaker backjump is a different search. test_analysis.ml's
+scene 5 is that search in three variables (`x - 3w <= 0`, `x - z <= 0`, `x + w + z <= 6`, so
+that `x = 3` is infeasible without any single row seeing it); the union is computed there as
+the break and shown to be `[2; 1]` against the closure's `[2]`.
+
+What IS a property of the entry alone is what the walk needs from it: its CITATIONS, i.e.
+for each fact its reason read (and each fact read by the reasons of the holes its bound move
+settled over, `hole_facts`' rule), the trail position that established it, with that
+position's level, direction and root-ness, packed into one int. The walk over citations is
+`analyse`'s walk with the facts left out, cell for cell: on one slot a later position is a
+stronger bound (I-D3) and the same position is the same fact, so `stronger` is "higher
+position wins, equal is a no-op"; the highest expandable cell is resolved first
+(`best_expandable`, a heap); the cell is removed when expanded (`Frontier.remove`); a
+decision or factless pruning is never expanded; level 0 is never entered. Citations at level
+0 or without a support are not memoised at all: such a node contributes no level, and the
+only node it could shadow is a weaker fact on the same slot, which sits below it on the trail
+and is therefore at level 0 too. The memo lives on the entry (`Store.entry.cites`, `int array
+option`, `None` until the closure first reaches the entry) and not in a side table, because
+its validity is exactly the entry's life: everything below a live entry is frozen (I-T1, the
+argument this record makes for `history`), so what an entry cites, at which level and whether
+it is a root cannot change while it is on the trail; `Store.apply` builds a fresh record for
+every push, so a popped entry's memo dies with it and nothing has to be invalidated on
+backtrack. Scene 6 backjumps below a conflict and conflicts again through the same level-1
+entry by another row order: the memo is the same physical array and still right. Attribution
+(`entry.prop`, I-T4) is checked on every cited support at memo time and on the conflict's
+own facts at every conflict, so a corrupt graph is still refused on first contact (the
+mis-stamped scene of test (c) is refused both ways).
+
+**Exact or superset.** The set is EXACT, i.e. the closure's: the same walk over the same
+slots, and the gate's determinism lane and the 468 artefacts below are the measurement of
+that. Two places where it is a superset by construction, both sound and both unreachable from
+`lib/`: an entry that moved BOTH bounds (`Store.fix`, no caller in `lib/`) folds the holes of
+both directions where `analyse` folds one node's direction, and its two cells share a
+position, so the heap and `best_expandable` may expand them in either order. A superset of the
+dependency levels is a nogood over more decisions than needed, which backjumps less far; a
+SUBSET would skip a subtree nothing had refuted (M2-L3's finding), and nothing here produces
+one, because every citation the walk over facts would have expanded is in the memo and every
+merge is the same merge.
+
+**Why the memo is not the retention (a) removed.** It is O(cited facts above level 0) per
+entry, one int each, for the entries a closure reaches, filled once; what (a) removed was 7
+to 17 words per term of EVERY pruning, filled at the push. Measured below.
+
+**Measured, `fataepyc-06`, `/scratch/arthur/m7t27a3/`.** main = the gate clone `1a0cfa7`
+(md5 `1d68c8c1`), after = `wave41-a3` at `ebfa888` (md5 `716a8696`; `0779772` adds the `cites`
+counter, md5 `08780450`). `make check` ok in the clone: 3 488 unit checks ok, 0 FAIL, 156 model
+tests passed, determinism lane identical; the model tests alone under `/usr/bin/time -v`:
+15.7 MB peak RSS, 3.2 s. All 156 models under `--proof`, both binaries: `.opb`, `.pbp` and
+stdout **byte-identical, 468 artefacts**, exit codes identical (`art/main.md5`, `art/a3.md5`).
+pattern-set-mining, `--time-limit 300 --max-heap-mb 60000 --stats`, the (a2) command, one
+binary at a time, the node otherwise carrying two other agents' single-threaded runs:
+
+| 300 s | main `1a0cfa7` | after `wave41-a3` | after, `--proof` | main, `--proof` |
+|---|---|---|---|---|
+| nodes / conflicts / depth | **67** / 31 / 35 | **391** / 193 / 92 | 393 / 194 / 92 | 65 / 30 / 34 |
+| propagator runs | 304 311 | 1 569 676 | 1 576 043 | 296 783 |
+| `later` | (no counter; 128 842 by the addendum above) | **29 409** | 29 475 | - |
+| `cites` memos / ints | - | 17 192 / 38 212 = **0.3 MB** (run `a3b_300`: 399 / 197 / 92, 2.19 GB) | - | - |
+| peak RSS | 1.44 GB | 2.34 GB | 2.31 GB | 1.44 GB |
+| top heap (M words) | 184.6 | 298.9 | 295.0 | 185.1 |
+| words allocated / promoted | 39.0 G / 5.35 G | 49.5 G / 7.76 G | 49.8 G / 7.80 G | 38.0 G / 5.20 G |
+| `.pbp` | - | - | 718 MB | 241 MB |
+
+The materialisations go from 128 842 to 29 409 **for six times the conflicts**: 193 conflicts
+materialise 29 409 reasons where 27 materialised 128 842, i.e. ~150 per conflict (the trace's
+once-per-entry asks and 1UIP's) against ~4 800. The target was "nodes back toward 77": they
+are 391, with the search 92 levels deep instead of 35, and an incumbent (`incumbent=8`) where
+main had none. The decision closure was not 13 % of the node cost; it was most of it, and the
+first measurement (D-0124, 77 against 67) under-read it because the baseline it compared
+against materialised the same walk from facts already built.
+
+**Memory, node-matched.** The 2.34 GB against 1.44 GB is the deeper tree, not the memo. At
+equal depth the two binaries are within 0.2 GB: after at 90 s is 52 nodes / depth 27 / 1.49 GB
+and at 120 s 97 nodes / depth 51 / 1.61 GB, against main's 67 nodes / depth 35 / 1.44 GB at
+300 s and 19 nodes / depth 10 / 1.33 GB at 120 s (`a3_60`, `a3_90`, `a3_120`, `main120`). The
+`cites` counter is the memo's own size over the whole run, memos that died with their
+entries included: 17 192 memos, 38 212 ints, **0.3 MB**, three orders of magnitude below the
+question (most cited terms are at their declared bound and are not memoised). (a)'s memory
+is kept: 8.71 GB before (a) at 77 nodes, 2.19 to 2.34 GB now at 391 to 399, and the memo is
+none of it. Run-to-run variance of the wall-clock limit, same binary: 391, 393 and 399 nodes.

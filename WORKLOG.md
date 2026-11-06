@@ -315,8 +315,31 @@ work. The owning session picks it up.
 | ROADMAP M9-no-proof | solo-m7t27 | 2026-11-02 | The milestone opened (T1 SPEC §1 amendment + decision record, T2 implement with a stdout-identical lane, T3 the Challenge measurement and the baseline for M8-bits-encoding-T4). Today `--proof` omitted still writes and deletes the proof |
 | ROADMAP M8-bits-encoding | solo-m7t27 | 2026-11-02 | The milestone opened (five rows T0..T4, order below a threshold `--bits-above W`, bits above, both kept); M7-T27 (c) points at it; milestones are now NAMED `M<n>-<slug>` (ROADMAP head, CLAUDE.md) |
 | M7-T27 (b) follow-up | solo-m7t27 | 2026-11-06 | **D-0125 corrected by addendum.** The 2.4 TB left on the node were 161 `.opb.rows` the harness never deleted; 140 of the 148 CAPPED hit the 16 GB cap on the ENCODING (`.opb.rows`, no incumbent, no `.opb`/`.pbp` ever written), 8 on the proof; 21 more runs (18 TIMEOUT, 3 ERROR) left 9–16 GB of rows. Incumbents were overcounted (`max:-` counted as a value): 698 → 794, not 675 → 994. `compare_run.sh` now deletes `$L.opb.rows`. Results archived on the laptop (`~/mznc-archive/runs/`), proofs and probes deleted from the node |
+| M7-T27 (a3) closure memo | agent-a3 | 2026-11-06 | **D-0124 second addendum.** `Analysis.dependency_levels`: the decision closure's level set over per-entry memoised citations (`Store.entry.cites`), exact (the same walk, cell for cell), not the per-entry level set the first addendum proposed (that is a superset: the closure drops a weaker same-slot fact when a stronger is in the frontier, the common case of a bound split). pattern-set-mining 300 s: `later` 128 842 (27 conflicts) → 29 409 (193 conflicts), nodes 67 (depth 35) → 391 (depth 92, an incumbent), RSS 1.44 GB → 2.34 GB (the deeper tree: within 0.2 GB at equal depth, memo 0.3 MB in all); 468 artefacts byte-identical; gate ok (3 488 ok, 0 FAIL, 156 models). Branch `wave41-a3`, not merged |
 
 ## Handoff notes
+
+## M7-T27 (a3) handoff, 2026-11-06 (agent-a3, `wave41-a3`): the closure's levels over memoised citations
+
+**What changed.** `lib/core/analysis.ml`: `dependency_levels` (the decision closure's level set, the
+same walk over per-entry memoised CITATIONS, packed ints; `cites_of`, `cite`, a small `Heap`;
+`check_attribution` lifted out of `analyse`); `lib/core/store.ml`: `entry.cites : int array option`,
+the memo slot, `None` from `apply`; `lib/core/learn.ml` reads `dependency_levels` (`l_closure` gone);
+`lib/core/reason.ml`: `materialisations`, printed by `bin/main.ml --stats` as `later`. Three scenes
+in `test/unit/test_analysis.ml` (f). D-0124 second addendum; ROADMAP (a3) clause.
+
+**What the next session should know.**
+- The first addendum's remedy, a per-entry SET OF LEVELS, is NOT the closure's answer: `Frontier`
+  drops a weaker same-slot fact unexpanded when a stronger one is in the frontier (a bound split:
+  `x >= 2` at level 1 shadowed by `x >= 3` at level 2), so the union of per-entry level sets is a
+  superset -- sound, weaker, and not byte-identical. Scene 5 shows `[2; 1]` against `[2]`. Hence
+  the memo is of citations (positions), the walk is the same walk, and the set is exact.
+- Artefacts on `fataepyc-06:/scratch/arthur/m7t27a3/` (`check.log`, `art/{main,a3}` + md5 lists,
+  `main300.err`/`a3_300.err` without `--proof`, `main300p.err`/`a3_300p.err` with); clone
+  `/scratch/arthur/wave41-a3`. main's binary is the gate clone `1a0cfa7` (md5 `1d68c8c1`); after is
+  md5 `716a8696`. Nodes 67 → 391 in 300 s (depth 35 → 92, incumbent found), `later` 128 842 → 29 409 for six times the conflicts, RSS 1.44 → 2.34 GB which is the deeper tree (node-matched within 0.2 GB; the memo itself is 0.3 MB over the run, `cites`).
+- `--stats` now prints `later`, the number of `Later` materialisations; it is the number to quote for
+  any further work on (a).
 
 ## M7-T27 (b) follow-up handoff, 2026-11-06 (solo-m7t27)
 
