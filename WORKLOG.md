@@ -20,6 +20,7 @@ of it to every session and stopping at a broken line before it even reached the 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M6-T20 | `lib/core/propagator.ml` (advise), `lib/core/engine.ml` (advisor hook, counter, debug check), `lib/core/prop/clause.ml` (Learned_clause watches), `lib/core/search.ml` (register_learned pack), `bin/main.ml` (stats), `docs/INVARIANTS.md` (I-P7, append), `docs/DECISIONS.md` (D-0104, appended) | solo-opt | 2026-10-27 | **Landed** (`29a8238`, `517453b`, `149a06d`; D-0104 ACCEPTED) but **never released**: ROADMAP row still WIP, no handoff note. Left here 2026-11-02 for its session or the next one to close. |
+| M7-T27 (b) follow-up | `scripts/compare_run.sh` (delete `.opb.rows` with the other artefacts), `docs/DECISIONS.md` (D-0125 addendum, append), `docs/ROADMAP.md` (M8-bits-encoding preamble, one sentence), `WORKLOG.md` | solo-m7t27 | 2026-11-06 | The 2.4 TB left on the node are 161 `.opb.rows` the harness never deleted; 140 of the 148 CAPPED hit the cap in the ENCODING, not the proof. Record corrected, hole closed |
 
 ## Cross-session requests
 
