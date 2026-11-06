@@ -9849,3 +9849,140 @@ Housekeeping, same day: the results of this run and of M7-T26 (every `.tsv`, `.e
 on the laptop under `~/mznc-archive/runs/{m7t27run-2026-11-03,m7t26-2026-10-30}/`; the `.opb.rows`,
 `.opb` and `.pbp` of both runs and the 3.9 GB of `m7t27probe/` are deleted from the node; the `.fzn`
 stay (REFUSED/ERROR inputs, what `refusal_causes.py --widths` reads).
+
+## D-0128  M7-T27 (d): the front end streams -- family A was the token array, and the fix is a window with one lexeme of lookahead, items built as they are parsed
+
+**Status**: **ACCEPTED**, implemented 2026-11-06 (agent-fe, `wave41-fe`). Closes sub-row (d) of
+**D-0123**. Changes `lib/flatzinc/` only: `lexer.ml`, `parser.ml`, `ast.ml`, `builder.ml`, and
+one test. Nothing in `core` or `proof` moves; the 156 artefacts of `test/models/` are
+byte-identical (stdout, `.opb`, `.pbp`, exit status, and stderr too) between main's binary
+(`1d68c8c1`) and this one (`992cd1d4`).
+
+### The measurement, before the fix
+
+Reproduce on `fataepyc-06` with the probes kept under `/scratch/arthur/m7t27d/probe-old-src/`
+(main's four-phase pipeline) and `probe-new-src/` (this branch's three passes), each a dune
+executable to drop into a checkout; the twelve `.fzn` are the Challenge's, under
+`/scratch/arthur/m7t27run/<year>/work/`, and `/scratch/arthur/m7t27d/run12.sh` is the run.
+
+D-0123 counted 14 Challenge runs dead under `--max-heap-mb 8192` with "0 clauses minted", in 25
+to 47 s, on `.fzn` of 360 to 850 MB (12 remain after (a)+(b), 460 MB to 1.7 GB). A probe over the
+front end's four phases, each held and then dropped, on main's `lib/flatzinc` (`fataepyc-06`,
+`ulimit -v` 60 GB, a measurement and not the harness; RSS from `/proc/self/status`, live heap
+after a forced major):
+
+| phase | yumi `p_9_..._7_7_zones` (460 MB, 69.3 M tokens, 4.16 M items) | gt-sort `n9_ub10` (1.7 GB, 240.7 M tokens, 15.2 M items) |
+|---|---|---|
+| `read_file`: the whole file as one string | 0.4 s, 439 MB | 1.2 s, 1 618 MB |
+| `Lexer.tokenize`: every token, positioned, in a list then an array | **36 s**, live **5 271 MB**, peak RSS **8 894 MB** | **125 s**, live **18 028 MB**, peak RSS **30 692 MB** |
+| `Parser.parse_model`: the whole `Ast.model` | 9 s, the tree alone 1 933 MB | 34 s, the tree alone 6 996 MB |
+| `Builder.build`: the `Model.t` | 16 s, 1 093 MB | 32 s, 2 873 MB; 267 s and a peak RSS of 31.4 GB for the four phases |
+
+**The token array is family A.** Each token cost a list cell (3 words), a `lexeme` record (3), a
+`Pos.t` (4) and, for an integer or an identifier, its box: about 80 bytes live per token, 100
+with the list that `Array.of_list` reversed from, minted for the whole file before the parser
+read the first one. 69 M tokens is 5.3 GB live and a 6.9 GB heap; the Challenge's guard fired at
+8 192 MB at 25 s, inside `tokenize`, which is exactly what the probe shows at 36 s with the
+forced collections. gt-sort's 241 M tokens would have needed a 30 GB RSS to get past the lexer at
+all. The tree behind it (1.9 GB on yumi, about 900 bytes per item) is the second copy, alive at
+the same time as the `Model.t` it is being built into; the file string (0.4 to 1.6 GB) the third.
+
+### The decision: stream, do not shrink the tree
+
+Two shapes were open. (1) Keep the whole-file pipeline and make it leaner: a token array of
+unboxed codes, positions recomputed on demand, a packed tree. (2) Make the front end streaming,
+so that nothing it holds is proportional to the file. (2) is taken, because the parser is LL(1)
+and never backs up, so it needs one lexeme of lookahead and not an array; because the builder
+consumes items in file order and keeps nothing of an item's syntax once it is built; and because
+(1) leaves a constant factor that the next edition's 3 GB `.fzn` would spend again.
+
+What changed, and what the module headers now say:
+
+- `Lexer.t` reads the input through a window of 64 KiB (`of_channel`) and holds the current
+  lexeme (`cur`, `pos`, `advance`). A token that straddles the window's edge is copied through a
+  `Buffer`, one that does not is taken out of the window. The window's size is a parameter, and
+  `test_flatzinc` lexes fifteen sources (the kitchen sink, long literals, escapes, every lexical
+  error, a missing and a doubled `solve`, a truncated file) through every width from 2 to 17 and
+  checks that the `Model.t` or the error with its position is the same as through the default.
+  `of_string` goes through the same window, so the straddling path is the unit tests' path too.
+- `Parser.iter_items` delivers `Ast.item` values (`Decl`, `Constraint`, `Solve`) in file order,
+  skipping `predicate` items as before; the two rules about the model rather than an item --
+  exactly one `solve`, the second refused where it stands and a missing one at the end -- live
+  there. `Ast.model`, `parse_model`, `parse_string`, `read_file` and `tokenize` are gone.
+- `Builder.add_item` builds each item as it arrives and `finish` closes the model. The one
+  deliberate exception keeps D-0083: a constraint that arrives after a `var int` with no domain
+  was declared is held as syntax until the end of the file, because its domain is inferred from
+  ALL the constraints before any is built and the arithmetic family sizes its auxiliaries from
+  domains. On a FlatZinc 2.x file every declaration precedes every constraint, so that is every
+  constraint or none, and the deferred path is the old path minus the tokens and the tree.
+
+### What it costs, and the one observable difference
+
+- Lexing is faster, not slower: 6.3 s for yumi's 69 M tokens against 36 s, 21.6 s for gt-sort's
+  241 M against 125 s, because nothing is retained and the minor heap does the work.
+- **A file with several errors reports the first in file order.** Before, the whole file was
+  lexed before the parser ran, so a lexical error anywhere (a float literal on line 10 000) was
+  reported ahead of a syntax error on line 3. With one error, message and position are identical;
+  the straddle test asserts that for every lexical and grammatical error the front end emits.
+- **A constraint that precedes the declaration of a name it uses is now refused** with
+  `undeclared identifier`, where the whole-tree builder, which applied every declaration before
+  any constraint, accepted it. FlatZinc 2.x orders items (predicates, parameters, variables,
+  constraints, solve); MiniZinc writes nothing else; no model under `test/models/` and no source
+  in the unit tests has one. SPEC 2.1 says "FlatZinc 2.x files" and is not amended.
+
+### After the fix
+
+The real binaries, front end only (`--time --max-encoding-clauses 1`: the first declaration is
+refused after `Builder.of_file` and before any encoding, and the `--time` report prints on that
+exit path too; `fataepyc-06`, `ulimit -v` 60 GB, `/usr/bin/time -v`):
+
+| instance | `parse` before (main, `1d68c8c1`) | peak RSS before | `parse` after (`992cd1d4`) | peak RSS after |
+|---|---|---|---|---|
+| yumi, 460 MB | 41.1 s | **12.8 GB** (top heap 12.2 GB) | **21.4 s** | **2.4 GB** (top heap 2.1 GB) |
+| gt-sort n9, 1.7 GB | 113.8 s | **38.9 GB** (top heap 37.1 GB) | **44.7 s** | **3.5 GB** (top heap 3.3 GB) |
+
+The front end is 2 to 2.5 times faster and uses a fifth to a tenth of the memory; what remains
+is the `Model.t` (1.1 GB and 2.9 GB live) plus the store `Compile` had begun when the budget
+refused it. The 2.4 GB on yumi is the probe's 1.7 GB plus `Compile.compile`'s start.
+
+**The twelve, under the harness's exact flags** (`ulimit -v 16777216`, `ulimit -f 16000000`,
+`timeout -k 30 1200 main.exe --max-heap-mb 8192 --proof`, plus `--stats --time`; one at a time on
+`fataepyc-06`). Before, from the Challenge's own `results.tsv`: all twelve `REFUSED`, exit 5 at
+25 to 47 s with "0 clauses minted" and no variable declared. After:
+
+| instance | `.fzn` | `parse` | ends | at | peak RSS |
+|---|---|---|---|---|---|
+| 2015 largescheduling 0800-1 | 538 MB | -- | the `.opb.rows` at the **16 GB cap** (SIGXFSZ, exit 153) | 5:12 | 1.7 GB |
+| 2018 largescheduling 0800-4 | 538 MB | -- | the rows at the 16 GB cap | 5:13 | 1.7 GB |
+| 2019 rcpsp-wet-diverse j90 | 473 MB | -- | **timeout** at 1 200 s, still in `compile`, 104 MB of rows written | 20:01 | 6.3 GB |
+| 2020 mips pgp.crypto.encryptfile | 494 MB | 19.1 s | heap guard inside a ladder loop (25.4 M clauses, `$ne6991`) | 3:11 | 8.3 GB |
+| 2020 mips gcc.real.eiremain | 561 MB | 22.1 s | heap guard in `compile` (7.5 M clauses, no variable named) | 3:42 | 8.6 GB |
+| 2023 mips mesa.eval.gl_Map1f | 554 MB | 22.3 s | heap guard in `compile` (23.8 M clauses, no variable named) | 1:49 | 8.7 GB |
+| 2024 yumi 7_7_zones | 460 MB | 21.3 s | heap guard inside a ladder loop (9.1 M clauses, `$ne9189`) | 3:41 | 8.3 GB |
+| 2025 gt-sort n7_ub20 | 619 MB | 16.5 s | heap guard at the **root**, after `compile` (192 s) wrote a 726 MB `.opb` | 3:33 | 8.3 GB |
+| 2025 gt-sort n9_ub10 | 1 696 MB | 45.2 s | heap guard in `compile` (2 052 clauses; the alarm fired at 13.2 GB) | 3:06 | 13.2 GB |
+| 2025 ihtc-2024-marte i11 | 550 MB | -- | the rows at the 16 GB cap | 5:29 | 2.5 GB |
+| 2025 ihtc-2024-marte i14 | 849 MB | -- | the rows at the 16 GB cap | 5:19 | 3.6 GB |
+| 2026 warehouse wlp22 | 685 MB | 22.2 s | heap guard in `compile` (2.1 M clauses, no variable named) | 1:20 | 8.4 GB |
+
+(`parse` is printed by `at_exit`, which a SIGXFSZ or the harness's `timeout` does not run; the
+four rows-cap runs and the timeout show none, and their front end is bounded by the 45 s of
+gt-sort n9 above.) **Family A is empty**: twelve of twelve pass the front end in 16 to 45 s and
+die where D-0123's families B and C die -- four at the encoding's size on disk (D-0125's
+addendum: four more of `M8-bits-encoding`'s population), three inside a ladder loop or at the
+root with the encoding's heap, four in `compile` with between 2 K and 24 M clauses minted, one in
+the harness's timeout still compiling. None is an attempt yet, and this row did not expect one:
+D-0123 ordered the sub-rows by payoff and put (d) last. gt-sort n9 is the one to note for
+`M7-T8`: with a 1.7 GB `.fzn` the reactive guard let the heap reach 13.2 GB before it acted,
+5 GB past the budget, because the alarm runs at the end of a major cycle and `compile` was
+allocating 14.65 M propagators between two of them.
+
+### What it does not fix, and the number to carry forward
+
+The front end's memory is now the `Model.t` and nothing else: 1.09 GB for yumi (3.5 M variables,
+2.1 M constraints), 2.87 GB for gt-sort (577 K variables, **14.65 M `bool_clause`**, about 196
+bytes each: a `constr` record with its `Pos.t` (7 words), the constructor (3), and 40 bytes per
+literal for a boxed `Var i` in a cons cell). That is family B's wall, not A's, and it is
+`model.ml`'s representation, shared with `compile.ml` and every propagator's set-up; it is noted
+here as the next cost of the front end, not changed. The `Pos.t` per variable and per
+constraint (32 bytes, 5.6 M of them on yumi) is the cheapest third of it.

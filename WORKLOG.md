@@ -315,8 +315,33 @@ work. The owning session picks it up.
 | ROADMAP M9-no-proof | solo-m7t27 | 2026-11-02 | The milestone opened (T1 SPEC §1 amendment + decision record, T2 implement with a stdout-identical lane, T3 the Challenge measurement and the baseline for M8-bits-encoding-T4). Today `--proof` omitted still writes and deletes the proof |
 | ROADMAP M8-bits-encoding | solo-m7t27 | 2026-11-02 | The milestone opened (five rows T0..T4, order below a threshold `--bits-above W`, bits above, both kept); M7-T27 (c) points at it; milestones are now NAMED `M<n>-<slug>` (ROADMAP head, CLAUDE.md) |
 | M7-T27 (b) follow-up | solo-m7t27 | 2026-11-06 | **D-0125 corrected by addendum.** The 2.4 TB left on the node were 161 `.opb.rows` the harness never deleted; 140 of the 148 CAPPED hit the 16 GB cap on the ENCODING (`.opb.rows`, no incumbent, no `.opb`/`.pbp` ever written), 8 on the proof; 21 more runs (18 TIMEOUT, 3 ERROR) left 9–16 GB of rows. Incumbents were overcounted (`max:-` counted as a value): 698 → 794, not 675 → 994. `compare_run.sh` now deletes `$L.opb.rows`. Results archived on the laptop (`~/mznc-archive/runs/`), proofs and probes deleted from the node |
+| M7-T27 (d) | agent-fe (`wave41-fe`) | 2026-11-06 | **D-0128.** Family A was the token array: `Lexer.tokenize` held ~80 B per token for the whole `.fzn` before the parser ran (5.3 GB live on yumi, 18 GB on gt-sort n9), plus the file as one string and the whole `Ast.model`. The front end now streams: a 64 KiB window, one lexeme of lookahead, `Parser.iter_items` → `Builder.add_item`, nothing proportional to the file but the `Model.t`. Front end alone: yumi 41 s / 12.8 GB → 21 s / 2.4 GB, gt-sort n9 114 s / 38.9 GB → 45 s / 3.5 GB. Gate ok on fataepyc-06 (3 473 ok, 0 FAIL, 156 models, 87 MB peak RSS); 156 artefacts byte-identical between `1d68c8c1` (main) and `992cd1d4`. The 12 instances all pass the front end under the harness's flags and die in families B/C (4 rows cap, 7 heap guard, 1 timeout). Not merged; the orchestrator merges |
 
 ## Handoff notes
+
+## M7-T27 (d) handoff, 2026-11-06 (agent-fe, `wave41-fe`): the front end streams, family A is empty (D-0128)
+
+- `lib/flatzinc/lexer.ml` reads through a 64 KiB window (`of_channel`, `of_string`; `?window` is a
+  parameter and `test_flatzinc` lexes fifteen sources through every width 2..17) and holds one
+  lexeme (`cur`, `pos`, `advance`). `Parser.iter_items` delivers `Ast.item`s in file order and owns
+  the exactly-one-`solve` rules; `Builder.add_item` / `finish` build them as they come. `Ast.model`,
+  `Parser.parse_model`/`parse_string`/`read_file` and `Lexer.tokenize` are gone; `Builder.of_file`
+  and `of_string` are the API and nothing outside `lib/flatzinc/` changed.
+- One deliberate retention: after a `var int` with no domain is declared, constraints are held as
+  syntax until the end of the file so D-0083's inference sees all of them first (every constraint
+  or none on a FlatZinc 2.x file). Two observable differences, both on files MiniZinc never writes:
+  several errors report the first in file order (the lexer's used to win), and a constraint that
+  precedes the declaration of a name it uses is refused. SPEC 2.1 is not amended.
+- Numbers to carry: the front end's memory is now the `Model.t` -- 1.1 GB on yumi (3.5 M variables),
+  2.9 GB on gt-sort n9 (14.65 M `bool_clause` at ~196 B each: `constr` + `Pos.t` + a boxed `Var` per
+  literal in a cons cell). That is `model.ml`'s representation, shared with `compile.ml`, and the
+  next front-end cost if a 3 GB `.fzn` turns up; not changed here. gt-sort n9 also shows the
+  reactive guard (M7-T8) acting 5 GB late (13.2 GB against an 8 192 MB budget) while `compile`
+  allocates 14.65 M propagators between two major cycles.
+- On the node: probes and logs under `fataepyc-06:/scratch/arthur/m7t27d/` (`probe-old-src/`,
+  `probe-new-src/`, `run12.sh`, `run12.new/*.err|.time`, `fe.*/`); the clones `/scratch/arthur/wave41-fe`
+  (this branch) and `/scratch/arthur/wave41-fe-base` (main at `d26eac3`, binary `1d68c8c1`). The
+  artefacts of every run are deleted; nothing of mine is running.
 
 ## M7-T27 (b) follow-up handoff, 2026-11-06 (solo-m7t27)
 
