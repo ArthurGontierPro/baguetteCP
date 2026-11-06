@@ -314,6 +314,7 @@ work. The owning session picks it up.
 | ROADMAP M8-bits-encoding | solo-m7t27 | 2026-11-02 | The milestone opened (five rows T0..T4, order below a threshold `--bits-above W`, bits above, both kept); M7-T27 (c) points at it; milestones are now NAMED `M<n>-<slug>` (ROADMAP head, CLAUDE.md) |
 | M7-T27 (b) follow-up | solo-m7t27 | 2026-11-06 | **D-0125 corrected by addendum.** The 2.4 TB left on the node were 161 `.opb.rows` the harness never deleted; 140 of the 148 CAPPED hit the 16 GB cap on the ENCODING (`.opb.rows`, no incumbent, no `.opb`/`.pbp` ever written), 8 on the proof; 21 more runs (18 TIMEOUT, 3 ERROR) left 9–16 GB of rows. Incumbents were overcounted (`max:-` counted as a value): 698 → 794, not 675 → 994. `compare_run.sh` now deletes `$L.opb.rows`. Results archived on the laptop (`~/mznc-archive/runs/`), proofs and probes deleted from the node |
 | M6-T20 | solo-opt (closed by the orchestrator) | 2026-11-06 | **D-0104 ACCEPTED, landed 2026-10-27** (`29a8238`, `517453b`, `149a06d`: advisor hook I-P7, two watched literals on learned clauses). Never released by its session; closed 2026-11-06 with the ROADMAP row marked DONE and an honest note that tests (a), (c), (d) were never recorded (no after-figures on racp/depot, no corpus before/after). (b) is covered by every gate since |
+| M9-no-proof-T1 | agent-noproof | 2026-11-06 | **D-0126.** SPEC §1 amended (one paragraph added, the "primary output" sentence kept): `--no-proof` is a measurement mode, off by default, skips `.opb` rows (`Discard_rows`), `Writer`, `Justify`, `Trace`, learned-row deletion and I-X2; keeps every `Explanation`, learning, I-S1 and every front-end refusal. Id rule: `Encoding.commit` and `Writer.fresh` in `start_proof`, both before search, both modes. Gate always proves; only T2's stdout lane may run the mode. Branch `wave41-noproof`, not merged |
 
 ## Handoff notes
 
@@ -325,9 +326,6 @@ the measurement the row promised: `learned_clause` runs/node and the `advised` c
 depot AFTER the advisor (D-0104 has the before: 1299 / 1731), and a corpus before/after. If a later
 row leans on D-0104's claim of a gain, take those two numbers first (`--stats` on the two instances
 through `scripts/compare_run.sh`, one run each); do not assume them.
-| M9-no-proof-T1 | agent-noproof | 2026-11-06 | **D-0126.** SPEC §1 amended (one paragraph added, the "primary output" sentence kept): `--no-proof` is a measurement mode, off by default, skips `.opb` rows (`Discard_rows`), `Writer`, `Justify`, `Trace`, learned-row deletion and I-X2; keeps every `Explanation`, learning, I-S1 and every front-end refusal. Id rule: `Encoding.commit` and `Writer.fresh` in `start_proof`, both before search, both modes. Gate always proves; only T2's stdout lane may run the mode. Branch `wave41-noproof`, not merged |
-
-## Handoff notes
 
 ## M9-no-proof-T1 handoff, 2026-11-06 (agent-noproof): D-0126, documentation only
 
