@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M6-T20 | `lib/core/propagator.ml` (advise), `lib/core/engine.ml` (advisor hook, counter, debug check), `lib/core/prop/clause.ml` (Learned_clause watches), `lib/core/search.ml` (register_learned pack), `bin/main.ml` (stats), `docs/INVARIANTS.md` (I-P7, append), `docs/DECISIONS.md` (D-0104, appended) | solo-opt | 2026-10-27 | **Landed** (`29a8238`, `517453b`, `149a06d`; D-0104 ACCEPTED) but **never released**: ROADMAP row still WIP, no handoff note. Left here 2026-11-02 for its session or the next one to close. |
 | M7-T27 (a3) | `lib/core/analysis.ml` (cached per-entry dependency levels), `lib/core/reason.ml` if the cache needs a hook, `test/unit/test_analysis.ml`, `docs/DECISIONS.md` (addendum to D-0124, append), `docs/ROADMAP.md` (M7-T27 row, the (a3) clause only) | agent-a3 (branch `wave41-a3`) | 2026-11-06 | The 122 033 decision-closure materialisations per 300 s on pattern-set-mining; artefacts byte-identical, nodes at 300 s back toward D-0124's 77 |
 | M7-T27 (d) | `lib/flatzinc/lexer.ml`, `parser.ml`, `ast.ml`, `builder.ml`, `model.ml` (front-end memory on 360–850 MB `.fzn`), `test/unit/test_flatzinc.ml`, `docs/DECISIONS.md` (D-0128 if a decision is needed, append), `docs/ROADMAP.md` (M7-T27 row, the (d) clause only) | agent-fe (branch `wave41-fe`) | 2026-11-06 | Family A: 14 deaths before the first declaration |
 | M9-no-proof-T1 | `docs/SPEC.md` §1, `docs/DECISIONS.md` (D-0126, append), `docs/ROADMAP.md` (M9-no-proof-T1 row) | agent-noproof (branch `wave41-noproof`) | 2026-11-06 | Doc only, no code |
@@ -315,8 +314,18 @@ work. The owning session picks it up.
 | ROADMAP M9-no-proof | solo-m7t27 | 2026-11-02 | The milestone opened (T1 SPEC §1 amendment + decision record, T2 implement with a stdout-identical lane, T3 the Challenge measurement and the baseline for M8-bits-encoding-T4). Today `--proof` omitted still writes and deletes the proof |
 | ROADMAP M8-bits-encoding | solo-m7t27 | 2026-11-02 | The milestone opened (five rows T0..T4, order below a threshold `--bits-above W`, bits above, both kept); M7-T27 (c) points at it; milestones are now NAMED `M<n>-<slug>` (ROADMAP head, CLAUDE.md) |
 | M7-T27 (b) follow-up | solo-m7t27 | 2026-11-06 | **D-0125 corrected by addendum.** The 2.4 TB left on the node were 161 `.opb.rows` the harness never deleted; 140 of the 148 CAPPED hit the 16 GB cap on the ENCODING (`.opb.rows`, no incumbent, no `.opb`/`.pbp` ever written), 8 on the proof; 21 more runs (18 TIMEOUT, 3 ERROR) left 9–16 GB of rows. Incumbents were overcounted (`max:-` counted as a value): 698 → 794, not 675 → 994. `compare_run.sh` now deletes `$L.opb.rows`. Results archived on the laptop (`~/mznc-archive/runs/`), proofs and probes deleted from the node |
+| M6-T20 | solo-opt (closed by the orchestrator) | 2026-11-06 | **D-0104 ACCEPTED, landed 2026-10-27** (`29a8238`, `517453b`, `149a06d`: advisor hook I-P7, two watched literals on learned clauses). Never released by its session; closed 2026-11-06 with the ROADMAP row marked DONE and an honest note that tests (a), (c), (d) were never recorded (no after-figures on racp/depot, no corpus before/after). (b) is covered by every gate since |
 
 ## Handoff notes
+
+## M6-T20 closed administratively, 2026-11-06 (orchestrator)
+
+The one stale live claim is released. The code landed on 2026-10-27 and has run through every gate
+and every Challenge edition since, so nothing is in doubt about (b). What was never written down is
+the measurement the row promised: `learned_clause` runs/node and the `advised` counter on racp and
+depot AFTER the advisor (D-0104 has the before: 1299 / 1731), and a corpus before/after. If a later
+row leans on D-0104's claim of a gain, take those two numbers first (`--stats` on the two instances
+through `scripts/compare_run.sh`, one run each); do not assume them.
 
 ## M7-T27 (b) follow-up handoff, 2026-11-06 (solo-m7t27)
 
