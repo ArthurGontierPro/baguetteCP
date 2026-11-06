@@ -877,6 +877,224 @@ let test_root_conflict_still_resolves_level_0 () =
             && Analysis.postcondition_holds Analysis.decision_closure t
             && Analysis.decision_levels t = []))
 
+(* ===================================================================== *)
+(* (f) M7-T27 (a3): THE DECISION CLOSURE'S LEVELS OVER MEMOISED CITATIONS.*)
+(*                                                                       *)
+(* [Analysis.dependency_levels] must answer exactly what [decision_levels] *)
+(* reads off [analyse ~scope:Everywhere ~criterion:decision_closure], on  *)
+(* every scene of this file, and must not materialise a reason it has     *)
+(* already walked. Three things are pinned beyond that agreement:         *)
+(*                                                                       *)
+(*  - scene 5 is a BOUND-SPLIT search: x >= 2 is decided at level 1 and  *)
+(*    x >= 3 at level 2, and a level-1 pruning cites the weaker decision. *)
+(*    The closure names {2}, not {1, 2}: the stronger decision shadows   *)
+(*    the weaker one on its slot and the weaker is never expanded. A      *)
+(*    per-entry union of levels -- D-0124's first addendum's remedy --    *)
+(*    would name {1, 2}, which is why the memo is of CITATIONS and not of *)
+(*    levels. The union is computed here as the break, and shown to be a *)
+(*    strict superset.                                                   *)
+(*  - scene 6 backjumps below that conflict and conflicts again through  *)
+(*    the SAME level-1 entry: its memo, built at the first conflict, is   *)
+(*    the same physical array and still right.                           *)
+(*  - scene 3's level-0 rule (a2) is preserved: [1], and a root conflict *)
+(*    names [].                                                          *)
+(* ===================================================================== *)
+
+(* Both answers for one conflict, compared. The reference is the walk over facts. *)
+let agrees label store all c =
+  let vars_of = vars_of_table all in
+  let reference =
+    Result.map Analysis.decision_levels
+      (Analysis.analyse ~scope:Analysis.Everywhere store c ~vars_of
+         ~criterion:Analysis.decision_closure)
+  in
+  let memo = Analysis.dependency_levels store c ~vars_of in
+  check
+    (Printf.sprintf "(f) %s: dependency_levels is decision_levels of the closure" label)
+    (match (reference, memo) with
+    | Ok a, Ok b -> a = b
+    | Error _, Error _ -> true
+    | _ -> false);
+  memo
+
+(* A per-entry UNION of levels, the remedy D-0124's first addendum proposed, as the
+   reference it is NOT: every fact's support, resolved to its decisions, levels joined.
+   Holes ignored (scene 5 has none). *)
+let union_levels store c =
+  let rec of_fact ~before f =
+    let s, _ = Analysis.support_of store ~before f in
+    if s = Store.no_support then []
+    else
+      let l = Store.level_of_index store s in
+      if l = 0 then []
+      else
+        let e = Store.trail_entry store s in
+        if Reason.is_empty e.Store.reason then [ l ]
+        else List.concat_map (of_fact ~before:s) (Reason.facts e.Store.reason)
+  in
+  List.rev
+    (List.sort_uniq Int.compare
+       (List.concat_map
+          (of_fact ~before:(Store.trail_length store))
+          (Reason.facts c.Store.c_reason)))
+
+(* Scene 5, over x w z in 0..4:
+     Rw  x - 3w <= 0      (w >= x/3)
+     Rz  x - z <= 0       (z >= x)
+     Rc  x + w + z <= 6
+   level 1: assume x >= 2 -> Rw: w >= 1 (e1, cites x >= 2); Rz: z >= 2; Rc: w <= 2,
+            z <= 3, x <= 3. Fixpoint x 2..3, w 1..2, z 2..3; x = 3 is infeasible
+            (z >= 3, w >= 1: 3 + 1 + 3 = 7) but no single row sees it.
+   level 2: assume x >= 3 -> Rz: z >= 3 (cites x >= 3); Rc: 3 + 1 + 3 > 6, conflict
+            citing x >= 3, w >= 1 and z >= 3.
+   Closure: z >= 3 resolves to x >= 3 (a decision, already there); w >= 1 resolves to
+   x >= 2, which arrives on x's slot while x >= 3 holds it and is dropped. {2}. *)
+let names5 = [| "x"; "w"; "z" |]
+let v5x = Var.of_int 0
+let v5w = Var.of_int 1
+let v5z = Var.of_int 2
+
+let model5 a =
+  a.(0) - (3 * a.(1)) <= 0 && a.(0) - a.(2) <= 0 && a.(0) + a.(1) + a.(2) <= 6
+
+let build_scene5 () =
+  let store = Store.create ~names:names5 ~domains:(Array.make 3 (Domain.make 0 4)) in
+  let rw = linear_step ~id:0 store [ (1, v5x); (-3, v5w) ] 0 in
+  let rz = linear_step ~id:1 store [ (1, v5x); (-1, v5z) ] 0 in
+  let rc = linear_step ~id:2 store [ (1, v5x); (1, v5w); (1, v5z) ] 6 in
+  let d1 = linear_step ~id:3 store [ (-1, v5x) ] (-2) in
+  let d2 = linear_step ~id:4 store [ (-1, v5x) ] (-3) in
+  let model = [ rw; rz; rc ] in
+  let all = model @ [ d1; d2 ] in
+  let c0 = run_steps store model in
+  Store.new_level store;
+  let c1 = run_steps store (d1 :: model) in
+  let d1_pos = Store.lo_support store v5x in
+  let e1_pos = Store.lo_support store v5w in
+  Store.new_level store;
+  let c2 = run_steps store (d2 :: rz :: rc :: [ rw ]) in
+  match (c0, c1, c2) with
+  | None, None, Some c -> (store, all, model, c, d1_pos, e1_pos)
+  | _ -> failwith "test_analysis: scene 5 did not reach its conflict where it should"
+
+let test_memo_matches_the_walk_on_a_bound_split () =
+  let store, all, _, c, d1_pos, e1_pos = build_scene5 () in
+  check "(f) scene 5: the conflict is at level 2 and is Rc's"
+    (Store.level store = 2 && c.Store.c_prop = 2);
+  check "(f) scene 5: level 1 left x in 2..3, so x = 3 was not refuted by bounds"
+    (Domain.lo (Store.get store v5x) = 3 && Domain.hi (Store.get store v5x) = 3);
+  let e1 = Store.trail_entry store e1_pos in
+  check "(f) scene 5: w >= 1 is a level-1 Linear entry, DEFERRED, citing x >= 2 alone"
+    (Store.level_of_index store e1_pos = 1
+    && (match e1.Store.reason with Reason.Later _ -> true | Reason.Facts _ -> false)
+    && Reason.lits e1.Store.reason = [ Baguette_proof.Lit.ge "x" 2 ]
+    && Store.level_of_index store d1_pos = 1);
+  check "(f) scene 5: the model alone is satisfiable"
+    (satisfiable ~n:3 ~lo:0 ~hi:4 ~sat:model5);
+  (match
+     Analysis.analyse ~scope:Analysis.Everywhere store c ~vars_of:(vars_of_table all)
+       ~criterion:Analysis.decision_closure
+   with
+  | Error e -> failwith ("test_analysis: scene 5 " ^ Analysis.error_to_string e)
+  | Ok t ->
+      check "(f) scene 5: the closure is x >= 3 alone: x >= 2 was shadowed, not expanded"
+        (Reason.to_string_facts (Analysis.facts t) = "x>=3"
+        && Analysis.decision_levels t = [ 2 ]
+        && Analysis.postcondition_holds Analysis.decision_closure t);
+      check "(f) scene 5: it resolved w >= 1 and z >= 3, so the shadowing happened"
+        (t.Analysis.resolutions = 2 && List.mem 0 t.Analysis.antecedents);
+      check "(f) scene 5: model + {x >= 3} is UNSAT by brute force: the cut is a nogood"
+        (not
+           (satisfiable ~n:3 ~lo:0 ~hi:4 ~sat:(fun a ->
+                model5 a && facts_hold store (Analysis.facts t) a))));
+  check "(f) scene 5: BREAK: a per-entry union of levels names {2, 1}, a strict superset"
+    (union_levels store c = [ 2; 1 ]);
+  let before = !Reason.materialisations in
+  let memo = agrees "scene 5" store all c in
+  check "(f) scene 5: the memoised answer is [2]" (memo = Ok [ 2 ]);
+  check "(f) scene 5: the first ask materialised the deferred reasons it walked"
+    (!Reason.materialisations > before);
+  check "(f) scene 5: w >= 1 now carries one citation: x >= 2's decision, level 1, a root"
+    (match e1.Store.cites with
+    | Some [| ct |] ->
+        Analysis.cite_pos ct = d1_pos
+        && Analysis.cite_level ct = 1
+        && Analysis.cite_root ct && Analysis.cite_is_lower ct
+    | _ -> false);
+  let before = !Reason.materialisations in
+  check "(f) scene 5: asked again, the same answer and NO reason materialised"
+    (Analysis.dependency_levels store c ~vars_of:(vars_of_table all) = Ok [ 2 ]
+    && !Reason.materialisations = before)
+
+(* Scene 6: scene 5, then backjump to level 1 and conflict again through e1. The rows run
+   in the other order at the new level 2, so the conflict is Rz's cross conflict on
+   z <= 2 (a level-2 entry citing w >= 1) rather than Rc's -- a different path to the
+   same memo. *)
+let test_memo_survives_a_backjump () =
+  let store, all, model, c, _, e1_pos = build_scene5 () in
+  ignore (agrees "scene 6, first conflict" store all c);
+  let e1 = Store.trail_entry store e1_pos in
+  let cites1 = e1.Store.cites in
+  check "(f) scene 6: the memo exists before the backjump" (cites1 <> None);
+  Store.backtrack_to store 1;
+  check "(f) scene 6: after the backjump the level-1 entry is the same record, memo kept"
+    (Store.trail_entry store e1_pos == e1
+    && match (e1.Store.cites, cites1) with Some a, Some b -> a == b | _ -> false);
+  Store.new_level store;
+  let d2 = List.nth all 4 in
+  (match run_steps store (d2 :: List.rev model) with
+  | None -> failwith "test_analysis: scene 6 did not conflict again"
+  | Some c' ->
+      check "(f) scene 6: the second conflict is Rz's, at level 2"
+        (c'.Store.c_prop = 1 && Store.level store = 2);
+      (match
+         Analysis.analyse ~scope:Analysis.Everywhere store c' ~vars_of:(vars_of_table all)
+           ~criterion:Analysis.decision_closure
+       with
+      | Error e -> failwith ("test_analysis: scene 6 " ^ Analysis.error_to_string e)
+      | Ok t ->
+          check
+            "(f) scene 6: the walk reaches w >= 1 again (Rw is an antecedent) and names \
+             [2]"
+            (List.mem 0 t.Analysis.antecedents && Analysis.decision_levels t = [ 2 ]));
+      let memo = agrees "scene 6, second conflict" store all c' in
+      check "(f) scene 6: the memoised answer after the backjump is [2]" (memo = Ok [ 2 ]);
+      check "(f) scene 6: w >= 1's memo was reused, not rebuilt"
+        (match (e1.Store.cites, cites1) with Some a, Some b -> a == b | _ -> false);
+      let before = !Reason.materialisations in
+      check "(f) scene 6: asked again, nothing is materialised"
+        (Analysis.dependency_levels store c' ~vars_of:(vars_of_table all) = Ok [ 2 ]
+        && !Reason.materialisations = before));
+  ()
+
+let test_memo_agrees_on_every_other_scene () =
+  (let store, all, c = scene1 () in
+   let memo = agrees "scene 1 (holes, two levels)" store all c in
+   check "(f) scene 1: the closure rests on both levels" (memo = Ok [ 2; 1 ]));
+  (let store, all, c = scene2 () in
+   ignore (agrees "scene 2 (a bound moved twice at one level)" store all c));
+  (let store, all, c = scene3 () in
+   let memo = agrees "scene 3 (a2's level-0 rule)" store all c in
+   check "(f) scene 3: the level-0 node is not expanded and the answer is [1]"
+     (memo = Ok [ 1 ]));
+  (let store = Store.create ~names:names3 ~domains:(Array.make 4 (Domain.make 0 4)) in
+   let r_y = linear_step ~id:0 store [ (-1, v3y) ] (-3) in
+   let r_xy = linear_step ~id:1 store [ (1, v3x); (1, v3y) ] 5 in
+   let r_x = linear_step ~id:2 store [ (-1, v3x) ] (-3) in
+   let all = [ r_y; r_xy; r_x ] in
+   match run_steps store all with
+   | None -> failwith "test_analysis: scene 4 did not conflict at the root"
+   | Some c ->
+       let memo = agrees "scene 4 (a root conflict)" store all c in
+       check "(f) scene 4: a root conflict rests on no decision level" (memo = Ok []));
+  match build_scene1 ~break:(1, 2) () with
+  | store, all, _, _, Some c ->
+      check "(f) scene 1 broken: a mis-stamped entry stops the memoised walk too"
+        (match Analysis.dependency_levels store c ~vars_of:(vars_of_table all) with
+        | Error (Analysis.Misattributed { claimed; var; _ }) -> claimed = 2 && var = "c"
+        | _ -> false)
+  | _ -> failwith "test_analysis: the broken scene did not reach its conflict"
+
 let () =
   test_scene1_shape ();
   test_merge_nodes_is_the_add_node_fold ();
@@ -899,6 +1117,9 @@ let () =
   test_lits_are_the_negated_cut ();
   test_closure_keeps_level_0 ();
   test_root_conflict_still_resolves_level_0 ();
+  test_memo_matches_the_walk_on_a_bound_split ();
+  test_memo_survives_a_backjump ();
+  test_memo_agrees_on_every_other_scene ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
