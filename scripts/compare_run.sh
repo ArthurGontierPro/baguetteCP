@@ -577,6 +577,11 @@ solve_one() {
     "$verdict" "$check_s" "$detail"
   [ "$KEEP" = 1 ] && return 0
   # A rejected or weak proof is the evidence: kept unconditionally (corpus_run.sh).
+  # The .opb.rows is the streamed .opb body (M7-T27 (b)): the solver splices it into the
+  # .opb and removes it, but a run killed mid-encoding (SIGXFSZ, SIGKILL) leaves it behind at
+  # up to PROOF_CAP_KB. Found as 2.6 TB over 161 runs on 2026-11-06; never evidence, always
+  # deleted, whatever the verdict.
+  rm -f "$L.opb.rows"
   case "$verdict" in REJECTED | VERIFIED-WEAK | CHECK-ERROR) return 0 ;; esac
   rm -f "$L.opb" "$L.pbp" "$L.scp" "$L.varmap"
   case "$status" in REFUSED | ERROR) ;; *) rm -f "$fzn" ;; esac

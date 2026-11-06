@@ -20,7 +20,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M6-T20 | `lib/core/propagator.ml` (advise), `lib/core/engine.ml` (advisor hook, counter, debug check), `lib/core/prop/clause.ml` (Learned_clause watches), `lib/core/search.ml` (register_learned pack), `bin/main.ml` (stats), `docs/INVARIANTS.md` (I-P7, append), `docs/DECISIONS.md` (D-0104, appended) | solo-opt | 2026-10-27 | **Landed** (`29a8238`, `517453b`, `149a06d`; D-0104 ACCEPTED) but **never released**: ROADMAP row still WIP, no handoff note. Left here 2026-11-02 for its session or the next one to close. |
-| M7-T27 (b) follow-up | `scripts/compare_run.sh` (delete `.opb.rows` with the other artefacts), `docs/DECISIONS.md` (D-0125 addendum, append), `docs/ROADMAP.md` (M8-bits-encoding preamble, one sentence), `WORKLOG.md` | solo-m7t27 | 2026-11-06 | The 2.4 TB left on the node are 161 `.opb.rows` the harness never deleted; 140 of the 148 CAPPED hit the cap in the ENCODING, not the proof. Record corrected, hole closed |
 
 ## Cross-session requests
 
@@ -311,8 +310,24 @@ work. The owning session picks it up.
 | M7-T27 (measurement 2) | solo-m7t27 | 2026-11-03 | **D-0125.** The sixteen editions re-run overnight with (a)+(a2)+(b): REFUSED 543 → 212, incumbents 675 → 994, 0 REJECTED, score up everywhere, rank up in 2013/2016/2019; 148 CAPPED at the 16 GB proof cap (M8-bits-encoding's population), 7 OPT proofs unverifiable in budget, 4 exit-134 aborts (D-0071's hole). Results `fataepyc-06:/scratch/arthur/m7t27run/` |
 | ROADMAP M9-no-proof | solo-m7t27 | 2026-11-02 | The milestone opened (T1 SPEC §1 amendment + decision record, T2 implement with a stdout-identical lane, T3 the Challenge measurement and the baseline for M8-bits-encoding-T4). Today `--proof` omitted still writes and deletes the proof |
 | ROADMAP M8-bits-encoding | solo-m7t27 | 2026-11-02 | The milestone opened (five rows T0..T4, order below a threshold `--bits-above W`, bits above, both kept); M7-T27 (c) points at it; milestones are now NAMED `M<n>-<slug>` (ROADMAP head, CLAUDE.md) |
+| M7-T27 (b) follow-up | solo-m7t27 | 2026-11-06 | **D-0125 corrected by addendum.** The 2.4 TB left on the node were 161 `.opb.rows` the harness never deleted; 140 of the 148 CAPPED hit the 16 GB cap on the ENCODING (`.opb.rows`, no incumbent, no `.opb`/`.pbp` ever written), 8 on the proof; 21 more runs (18 TIMEOUT, 3 ERROR) left 9–16 GB of rows. Incumbents were overcounted (`max:-` counted as a value): 698 → 794, not 675 → 994. `compare_run.sh` now deletes `$L.opb.rows`. Results archived on the laptop (`~/mznc-archive/runs/`), proofs and probes deleted from the node |
 
 ## Handoff notes
+
+## M7-T27 (b) follow-up handoff, 2026-11-06 (solo-m7t27)
+
+Read the **addendum of D-0125** before quoting that record: its "148 CAPPED at the proof cap, 145
+with an incumbent, incumbents 675 → 994" is corrected there. 140 of the 148 died writing the
+`.opb` body (`.opb.rows` at exactly the 16 GB cap, nothing else on disk), 8 died writing the `.pbp`;
+incumbents are 698 → 794 by the value actually present. The wall is the ENCODING's size for 161
+runs and the proof's for 8, which sharpens `M8-bits-encoding`: its first number is `.opb` bytes at
+`W = 0` on those 161 (their `.fzn` are still under `fataepyc-06:/scratch/arthur/m7t27run/*/work/`).
+- `scripts/compare_run.sh` deletes `$L.opb.rows` on every outcome now; any harness or script that
+  runs the solver with `--proof` and cleans up after it must do the same (`corpus_run.sh`?).
+- Both Challenge runs' results live on the laptop under `~/mznc-archive/runs/`; the node keeps only
+  tables, logs and `.fzn`. Nothing to re-run.
+- The two `incumbent` criteria now live in `recount.py` (session scratchpad, not committed); a
+  committed `tools/compare/` counter would stop this from happening a third time.
 
 ## M7-T27 measurement 2 handoff, 2026-11-03 (solo-m7t27)
 

@@ -9802,3 +9802,50 @@ cannot be verified within the budget (below).
 
 **Not changed by this run**: M7-T27's sub-row (d) (14 front-end deaths), M7-T29 (19 + 1), the 25
 flatten failures, the 798 timeouts that were timeouts before.
+
+### Addendum 2026-11-06: the cap was hit by the ENCODING, not the proof, and the incumbent counts were wrong
+
+Found while cleaning the node: the run left **2.6 TB in 161 `.opb.rows` files**, the streamed `.opb` body
+of M7-T27 (b). The solver splices that file into the `.opb` and removes it (`Encoding.write_opb`,
+`at_exit` in `bin/main.ml`), but a run killed by SIGXFSZ or SIGKILL never reaches either, and
+`scripts/compare_run.sh` deleted `.opb`/`.pbp`/`.scp`/`.varmap` and did not know the new file. Fixed:
+the harness now deletes `$L.opb.rows` on every outcome, before the evidence early-return.
+
+What the files say, joined to `results.tsv` by instance (`rows_files.txt` + `recount.py`, laptop):
+
+| CAPPED (148) | runs | with an incumbent | median wall | the file at 16 384 000 000 bytes |
+|---|---|---|---|---|
+| **encoding-capped** | **140** | **0** | 584 s | `.opb.rows`, no `.opb` and no `.pbp` ever written |
+| proof-capped | 8 | 8 | 698 s | `.pbp`; their `.opb` median 2.8 GB (0.5–9.5) |
+
+Plus **21 runs that are not CAPPED but left a rows file of 9.2–16.1 GB** (18 TIMEOUT, 3 ERROR): the
+20 minutes ended while the encoding was still being written, no incumbent either. So **161 runs
+(10 % of 1 600) never finished writing their `.opb`**, and 8 wrote a 16 GB proof.
+
+Three sentences of the record above are therefore wrong and are corrected here, not rewritten:
+
+1. "148 CAPPED: the proof file passed the harness's 16 GB cap at a median 652 s, with a median
+   `.pbp` of 16.4 GB and `.opb` of 2.8 GB, 145 of them holding an incumbent" — the medians were taken
+   over the 8 runs that had a `.pbp` and `.opb` at all; 140 of the 148 had neither. **The wall is the
+   size of the ENCODING** (D-0028's Θ(w) ladder clauses and rows, written at ~28 MB/s for ten minutes),
+   and the proof's size only for 8.
+2. "Incumbents 675 → 994", "176 TIMEOUT with incumbent", "143 CAPPED with incumbent": the script of
+   2026-11-03 tested `objective not in ("-", "")`, and the harness writes `min:-` / `max:-` for an
+   optimisation run without a solution, so every optimisation attempt counted as an incumbent. With
+   the value actually present: incumbents over the 1 600 instances **698 → 794** (TIMEOUT/CAPPED rows
+   only: 455 → 555); of the 346 freed refusals, TIMEOUT **89** with an incumbent / 98 without, CAPPED
+   **7** / 137, OPT 11, ERROR 1 / 3. The gain in incumbents is a third of what was written. The
+   standings table is unaffected (`challenge_rank.py` reads the tables itself), as are REFUSED
+   543 → 212, 0 REJECTED, and the status counts.
+3. "This is `M8-bits-encoding`'s population, 148 instances": it is **161 encoding-size runs + 8
+   proof-size runs**, and the first number is the one a bits carrier attacks directly: O(log w) bits
+   and two bound rows per variable instead of w ladder clauses, so the `.opb` of these models shrinks
+   by the ladder's share before any search runs. `M8-bits-encoding-T2`'s first figure should be
+   `.opb` bytes at `W = 0` on these 161 (their `.fzn` are kept under `/scratch/arthur/m7t27run/*/work/`),
+   not proof bytes on the D-0028 model.
+
+Housekeeping, same day: the results of this run and of M7-T26 (every `.tsv`, `.err`, `.out`, `.vp`,
+`.pair`, log and driver; 5 156 + 8 754 files, `results.tsv` md5 identical on both sides) are archived
+on the laptop under `~/mznc-archive/runs/{m7t27run-2026-11-03,m7t26-2026-10-30}/`; the `.opb.rows`,
+`.opb` and `.pbp` of both runs and the 3.9 GB of `m7t27probe/` are deleted from the node; the `.fzn`
+stay (REFUSED/ERROR inputs, what `refusal_causes.py --widths` reads).
