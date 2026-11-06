@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M7-T27 (d) | `lib/flatzinc/lexer.ml`, `parser.ml`, `ast.ml`, `builder.ml`, `model.ml` (front-end memory on 360–850 MB `.fzn`), `test/unit/test_flatzinc.ml`, `docs/DECISIONS.md` (D-0128 if a decision is needed, append), `docs/ROADMAP.md` (M7-T27 row, the (d) clause only) | agent-fe (branch `wave41-fe`) | 2026-11-06 | Family A: 14 deaths before the first declaration |
 | M8-bits-encoding-T0 | `bench/bits_spike/` (new: generator, driver, README with the tables), `docs/DECISIONS.md` (D-0127, append), `docs/ROADMAP.md` (M8-bits-encoding-T0 row) | agent-spike (branch `wave41-spike`) | 2026-11-06 | Checker-only spike on fataepyc-06 with cake_pb; no solver code |
 
 ## Cross-session requests
@@ -315,6 +314,7 @@ work. The owning session picks it up.
 | M6-T20 | solo-opt (closed by the orchestrator) | 2026-11-06 | **D-0104 ACCEPTED, landed 2026-10-27** (`29a8238`, `517453b`, `149a06d`: advisor hook I-P7, two watched literals on learned clauses). Never released by its session; closed 2026-11-06 with the ROADMAP row marked DONE and an honest note that tests (a), (c), (d) were never recorded (no after-figures on racp/depot, no corpus before/after). (b) is covered by every gate since |
 | M9-no-proof-T1 | agent-noproof | 2026-11-06 | **D-0126.** SPEC §1 amended (one paragraph added, the "primary output" sentence kept): `--no-proof` is a measurement mode, off by default, skips `.opb` rows (`Discard_rows`), `Writer`, `Justify`, `Trace`, learned-row deletion and I-X2; keeps every `Explanation`, learning, I-S1 and every front-end refusal. Id rule: `Encoding.commit` and `Writer.fresh` in `start_proof`, both before search, both modes. Gate always proves; only T2's stdout lane may run the mode. Branch `wave41-noproof`, not merged |
 | M7-T27 (a3) closure memo | agent-a3 | 2026-11-06 | **D-0124 second addendum.** `Analysis.dependency_levels`: the decision closure's level set over per-entry memoised citations (`Store.entry.cites`), exact (the same walk, cell for cell), not the per-entry level set the first addendum proposed (that is a superset: the closure drops a weaker same-slot fact when a stronger is in the frontier, the common case of a bound split). pattern-set-mining 300 s: `later` 128 842 (27 conflicts) → 29 409 (193 conflicts), nodes 67 (depth 35) → 391 (depth 92, an incumbent), RSS 1.44 GB → 2.34 GB (the deeper tree: within 0.2 GB at equal depth, memo 0.3 MB in all); 468 artefacts byte-identical; gate ok (3 488 ok, 0 FAIL, 156 models). Branch `wave41-a3`, not merged |
+| M7-T27 (d) | agent-fe (`wave41-fe`) | 2026-11-06 | **D-0128.** Family A was the token array: `Lexer.tokenize` held ~80 B per token for the whole `.fzn` before the parser ran (5.3 GB live on yumi, 18 GB on gt-sort n9), plus the file as one string and the whole `Ast.model`. The front end now streams: a 64 KiB window, one lexeme of lookahead, `Parser.iter_items` → `Builder.add_item`, nothing proportional to the file but the `Model.t`. Front end alone: yumi 41 s / 12.8 GB → 21 s / 2.4 GB, gt-sort n9 114 s / 38.9 GB → 45 s / 3.5 GB. Gate ok on fataepyc-06 (3 473 ok, 0 FAIL, 156 models, 87 MB peak RSS); 156 artefacts byte-identical between `1d68c8c1` (main) and `992cd1d4`. The 12 instances all pass the front end under the harness's flags and die in families B/C (4 rows cap, 7 heap guard, 1 timeout). Not merged; the orchestrator merges |
 
 ## Handoff notes
 ## M6-T20 closed administratively, 2026-11-06 (orchestrator)
@@ -365,6 +365,30 @@ in `test/unit/test_analysis.ml` (f). D-0124 second addendum; ROADMAP (a3) clause
   md5 `716a8696`. Nodes 67 → 391 in 300 s (depth 35 → 92, incumbent found), `later` 128 842 → 29 409 for six times the conflicts, RSS 1.44 → 2.34 GB which is the deeper tree (node-matched within 0.2 GB; the memo itself is 0.3 MB over the run, `cites`).
 - `--stats` now prints `later`, the number of `Later` materialisations; it is the number to quote for
   any further work on (a).
+
+## M7-T27 (d) handoff, 2026-11-06 (agent-fe, `wave41-fe`): the front end streams, family A is empty (D-0128)
+
+- `lib/flatzinc/lexer.ml` reads through a 64 KiB window (`of_channel`, `of_string`; `?window` is a
+  parameter and `test_flatzinc` lexes fifteen sources through every width 2..17) and holds one
+  lexeme (`cur`, `pos`, `advance`). `Parser.iter_items` delivers `Ast.item`s in file order and owns
+  the exactly-one-`solve` rules; `Builder.add_item` / `finish` build them as they come. `Ast.model`,
+  `Parser.parse_model`/`parse_string`/`read_file` and `Lexer.tokenize` are gone; `Builder.of_file`
+  and `of_string` are the API and nothing outside `lib/flatzinc/` changed.
+- One deliberate retention: after a `var int` with no domain is declared, constraints are held as
+  syntax until the end of the file so D-0083's inference sees all of them first (every constraint
+  or none on a FlatZinc 2.x file). Two observable differences, both on files MiniZinc never writes:
+  several errors report the first in file order (the lexer's used to win), and a constraint that
+  precedes the declaration of a name it uses is refused. SPEC 2.1 is not amended.
+- Numbers to carry: the front end's memory is now the `Model.t` -- 1.1 GB on yumi (3.5 M variables),
+  2.9 GB on gt-sort n9 (14.65 M `bool_clause` at ~196 B each: `constr` + `Pos.t` + a boxed `Var` per
+  literal in a cons cell). That is `model.ml`'s representation, shared with `compile.ml`, and the
+  next front-end cost if a 3 GB `.fzn` turns up; not changed here. gt-sort n9 also shows the
+  reactive guard (M7-T8) acting 5 GB late (13.2 GB against an 8 192 MB budget) while `compile`
+  allocates 14.65 M propagators between two major cycles.
+- On the node: probes and logs under `fataepyc-06:/scratch/arthur/m7t27d/` (`probe-old-src/`,
+  `probe-new-src/`, `run12.sh`, `run12.new/*.err|.time`, `fe.*/`); the clones `/scratch/arthur/wave41-fe`
+  (this branch) and `/scratch/arthur/wave41-fe-base` (main at `d26eac3`, binary `1d68c8c1`). The
+  artefacts of every run are deleted; nothing of mine is running.
 
 ## M7-T27 (b) follow-up handoff, 2026-11-06 (solo-m7t27)
 

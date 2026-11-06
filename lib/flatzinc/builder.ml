@@ -1,4 +1,4 @@
-(* Ast.model -> Model.t.
+(* Ast.item stream -> Model.t.
 
    This is where the normative rules of SPEC 2.1 are enforced:
 
@@ -10,7 +10,18 @@
 
    [implemented] below is the M1 row of the SPEC 2.1 milestone table. When a propagator
    lands, move its builtin from [planned] to [implemented] in the same commit — that is
-   the only place the front end's idea of "supported" is written down. *)
+   the only place the front end's idea of "supported" is written down.
+
+   Memory model (M7-T27 (d), D-0128). The builder consumes the file ONE ITEM AT A TIME
+   as the parser delivers it ([add_item]), and keeps nothing of an item's syntax once it
+   is built: a declaration becomes its entries in [env], a constraint becomes its
+   [Model.cstr]. The one exception is deliberate: a constraint that arrives after a
+   `var int` with no domain was declared is held as syntax until the end of the file,
+   because its domain is inferred from ALL the constraints before any of them is built
+   (D-0083, and the arithmetic family sizes its auxiliaries from domains). On a
+   FlatZinc 2.x file every declaration precedes every constraint, so that is either
+   every constraint or none. What this costs, and the one way it differs from building
+   a whole tree, is in D-0128. *)
 
 (* SPEC 2.1, milestones M1, M2 and M3. *)
 let implemented =
@@ -1308,30 +1319,68 @@ let rec search_of_annot env pos (a : Ast.expr) =
 
 (* ---------------------------------------------------------------------- entry point *)
 
-let build (m : Ast.model) : Model.t =
-  let env = new_env () in
-  List.iter (add_decl env) m.Ast.decls;
-  (* M7-T19 (D-0083): infer the undomained variables' domains BEFORE the constraints are
-     built, because the arithmetic family sizes its auxiliaries from domains. One that
-     stays unbounded is refused AFTER, so a malformed constraint still reports its own
-     error first. *)
-  let unbounded = infer_domains env m.Ast.constraints in
-  let constraints = List.map (build_constraint env) m.Ast.constraints in
+(* ------------------------------------------------------------------ the build *)
+
+type state = {
+  env : env;
+  (* The constraints built so far, newest first. *)
+  mutable built_rev : Model.constr list;
+  (* The constraints held as syntax for [infer_domains], newest first; see the header. *)
+  mutable deferred_rev : Ast.constraint_item list;
+  mutable solve : (Ast.solve_kind * Ast.annot list * Pos.t) option;
+}
+
+let create () = { env = new_env (); built_rev = []; deferred_rev = []; solve = None }
+
+let add_item st (item : Ast.item) =
+  match item with
+  | Ast.Decl d -> add_decl st.env d
+  | Ast.Constraint c ->
+      if st.env.undomained_rev = [] then
+        st.built_rev <- build_constraint st.env c :: st.built_rev
+      else st.deferred_rev <- c :: st.deferred_rev
+  | Ast.Solve (kind, annots, pos) -> st.solve <- Some (kind, annots, pos)
+
+(* After the last item. The deferred constraints are built here, after inference; a
+   variable that stays unbounded is refused AFTER, so a malformed constraint still
+   reports its own error first (M7-T19, D-0083). *)
+let finish st : Model.t =
+  let env = st.env in
+  let deferred = List.rev st.deferred_rev in
+  st.deferred_rev <- [];
+  let unbounded = infer_domains env deferred in
+  List.iter (fun c -> st.built_rev <- build_constraint env c :: st.built_rev) deferred;
   Option.iter refuse_unbounded unbounded;
-  let objective =
-    match m.Ast.solve with
-    | Ast.Satisfy -> Model.Satisfy
-    | Ast.Minimize e -> Model.Minimize (operand env m.Ast.solve_pos e)
-    | Ast.Maximize e -> Model.Maximize (operand env m.Ast.solve_pos e)
+  let kind, solve_annots, solve_pos =
+    match st.solve with
+    | Some s -> s
+    | None ->
+        invalid_arg "Builder.finish: no `solve` item (Parser.iter_items refuses that)"
   in
-  let search = List.filter_map (search_of_annot env m.Ast.solve_pos) m.Ast.solve_annots in
+  let objective =
+    match kind with
+    | Ast.Satisfy -> Model.Satisfy
+    | Ast.Minimize e -> Model.Minimize (operand env solve_pos e)
+    | Ast.Maximize e -> Model.Maximize (operand env solve_pos e)
+  in
+  let search = List.filter_map (search_of_annot env solve_pos) solve_annots in
   {
     Model.vars = Array.of_list (List.rev env.vars_rev);
-    constraints;
+    constraints = List.rev st.built_rev;
     objective;
     search;
     output = List.rev env.outputs_rev;
   }
 
-let of_string ~file src = build (Parser.parse_string ~file src)
-let of_file path = build (Parser.parse_file path)
+let of_lexer lx =
+  let st = create () in
+  Parser.iter_items lx (add_item st);
+  finish st
+
+let of_string ~file ?window src = of_lexer (Lexer.of_string ~file ?window src)
+
+let of_file path =
+  let ic = open_in_bin path in
+  Fun.protect
+    ~finally:(fun () -> close_in_noerr ic)
+    (fun () -> of_lexer (Lexer.of_channel ~file:path ic))
