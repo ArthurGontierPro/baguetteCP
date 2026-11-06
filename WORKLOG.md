@@ -20,6 +20,10 @@ of it to every session and stopping at a broken line before it even reached the 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M6-T20 | `lib/core/propagator.ml` (advise), `lib/core/engine.ml` (advisor hook, counter, debug check), `lib/core/prop/clause.ml` (Learned_clause watches), `lib/core/search.ml` (register_learned pack), `bin/main.ml` (stats), `docs/INVARIANTS.md` (I-P7, append), `docs/DECISIONS.md` (D-0104, appended) | solo-opt | 2026-10-27 | **Landed** (`29a8238`, `517453b`, `149a06d`; D-0104 ACCEPTED) but **never released**: ROADMAP row still WIP, no handoff note. Left here 2026-11-02 for its session or the next one to close. |
+| M7-T27 (a3) | `lib/core/analysis.ml` (cached per-entry dependency levels), `lib/core/reason.ml` if the cache needs a hook, `test/unit/test_analysis.ml`, `docs/DECISIONS.md` (addendum to D-0124, append), `docs/ROADMAP.md` (M7-T27 row, the (a3) clause only) | agent-a3 (branch `wave41-a3`) | 2026-11-06 | The 122 033 decision-closure materialisations per 300 s on pattern-set-mining; artefacts byte-identical, nodes at 300 s back toward D-0124's 77 |
+| M7-T27 (d) | `lib/flatzinc/lexer.ml`, `parser.ml`, `ast.ml`, `builder.ml`, `model.ml` (front-end memory on 360–850 MB `.fzn`), `test/unit/test_flatzinc.ml`, `docs/DECISIONS.md` (D-0128 if a decision is needed, append), `docs/ROADMAP.md` (M7-T27 row, the (d) clause only) | agent-fe (branch `wave41-fe`) | 2026-11-06 | Family A: 14 deaths before the first declaration |
+| M9-no-proof-T1 | `docs/SPEC.md` §1, `docs/DECISIONS.md` (D-0126, append), `docs/ROADMAP.md` (M9-no-proof-T1 row) | agent-noproof (branch `wave41-noproof`) | 2026-11-06 | Doc only, no code |
+| M8-bits-encoding-T0 | `bench/bits_spike/` (new: generator, driver, README with the tables), `docs/DECISIONS.md` (D-0127, append), `docs/ROADMAP.md` (M8-bits-encoding-T0 row) | agent-spike (branch `wave41-spike`) | 2026-11-06 | Checker-only spike on fataepyc-06 with cake_pb; no solver code |
 
 ## Cross-session requests
 
