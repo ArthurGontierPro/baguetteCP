@@ -101,10 +101,23 @@ type fact =
 type t = Facts of fact list | Later of later
 and later = { compute : unit -> fact list; empty : bool }
 
+(* M7-T27 (a3). How many times a [Later] has been materialised since start-up: the number
+   D-0124's addenda attributed by hand with a throwaway counter, kept because the memo of
+   the decision closure (lib/core/analysis.ml, [dependency_levels]) is justified by it
+   moving. Read by the CLI under --stats and pinned by test_analysis.ml, which asks the
+   same conflict twice and requires the second ask not to move it. A process-wide
+   counter and not a per-store one, as [Store.history] reads are: a count, not state. *)
+let materialisations = ref 0
+
 (* THE one place a stored reason becomes the facts it stands for. A [Later] reads its
    history here and nowhere else, and raises ([Store.check_history]) if that history has
    been unwound. *)
-let facts = function Facts l -> l | Later l -> l.compute ()
+let facts = function
+  | Facts l -> l
+  | Later l ->
+      incr materialisations;
+      l.compute ()
+
 let of_facts l = Facts l
 
 (* "This change rests on no facts at all."

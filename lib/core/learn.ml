@@ -72,7 +72,9 @@
    non-root node away at every level, so its cut is over decisions, declared bounds and
    factless prunings alone, and the decision levels it names really are the levels the
    conflict rests on ([Analysis.decision_levels] states that argument at the point it is
-   read). [levels] below is that set.
+   read). [levels] below is that set -- computed, since M7-T27 (a3), by
+   [Analysis.dependency_levels], the same walk over memoised citations instead of over
+   facts rebuilt at every conflict; the walk over facts stays as its reference.
 
    What the search then does with it is one rule, and it is sound by a one-line argument
    rather than by CDCL's progress argument:
@@ -98,7 +100,7 @@
 
    What M2-L13 did change is [Analysis.analyse ~scope:Everywhere]'s own answer: a learned
    PB instance's pruning is a trail entry with reason facts, so the walk resolves through
-   it and [l_closure] already accounts for the row's antecedents. The calculation was
+   it and [l_levels] already accounts for the row's antecedents. The calculation was
    redone by the walk.
 
    ---------------------------------------------------------------------------
@@ -234,8 +236,9 @@ type t = {
   l_lits : Lit.t list; (* the 1UIP clause over order literals, minimised *)
   l_clause : Learned.t; (* the same thing as D-0044's type *)
   l_cut : Analysis.t; (* the 1UIP cut it came from *)
-  l_closure : Analysis.t; (* the decision closure the backjump rests on *)
-  l_levels : int list; (* decision levels the conflict rests on, DESCENDING *)
+  l_levels : int list;
+      (* decision levels the conflict rests on, DESCENDING: the decision closure's,
+         read through [Analysis.dependency_levels] since M7-T27 (a3) *)
   l_converts : bool;
       (* Would [Learned.to_linear_row] accept it? MEASURED, NOT USED, and since M2-L13
          that is the whole of what the predicate is for: D-0054 took it out of the
@@ -254,7 +257,6 @@ type t = {
 let lits t = t.l_lits
 let clause t = t.l_clause
 let cut t = t.l_cut
-let closure t = t.l_closure
 let levels t = t.l_levels
 let converts t = t.l_converts
 let lbd t = t.l_lbd
@@ -263,10 +265,13 @@ let lbd t = t.l_lbd
    produced nothing to learn; the caller then behaves exactly as it did before this row
    existed, which is why every arm here is a plain [None] and not an exception.
 
-   Both postconditions are CHECKED rather than assumed: [Analysis] reports
+   The 1UIP postcondition is CHECKED rather than assumed: [Analysis] reports
    [stopped_by_criterion] precisely so that a caller can tell "the criterion said stop"
-   from "the walk ran out of nodes first", and a decision closure that did not close is
-   not a dependency set. *)
+   from "the walk ran out of nodes first". The decision closure's postcondition holds by
+   construction of [Analysis.dependency_levels], which since M7-T27 (a3) computes the
+   closure's level set over memoised citations rather than by re-walking the facts at
+   every conflict (D-0124's second addendum); a closure that does not close is its
+   [Error], and not a dependency set. *)
 let at_conflict ?(policy = Strongest) store (c : Store.conflict)
     ~(vars_of : int -> Var.t list option) ~(decl : string -> (int * int) option) :
     t option =
@@ -275,37 +280,29 @@ let at_conflict ?(policy = Strongest) store (c : Store.conflict)
   | Ok cut -> (
       if not (Analysis.postcondition_holds Analysis.one_uip cut) then None
       else
-        match
-          Analysis.analyse ~scope:Analysis.Everywhere store c ~vars_of
-            ~criterion:Analysis.decision_closure
-        with
+        match Analysis.dependency_levels store c ~vars_of with
         | Error _ -> None
-        | Ok closure ->
-            if not (Analysis.postcondition_holds Analysis.decision_closure closure) then
-              None
+        | Ok levels ->
+            (* One minimisation, read two ways. [Analysis.lits_levelled] is
+               [Analysis.lits] with each literal's level attached and in the same order
+               (it is 1:1 by construction -- see its comment), so [List.map fst] of this
+               is exactly [minimise ~policy (Analysis.lits cut)] and the clause is
+               unchanged by M2-L4. [test_learn.ml]'s [minimise_agrees_with_levelled]
+               pins that equality rather than leaving it as a claim in this comment. *)
+            let levelled = minimise_with policy (Analysis.lits_levelled cut) in
+            let ls = List.map fst levelled in
+            if ls = [] then None
             else
-              (* One minimisation, read two ways. [Analysis.lits_levelled] is
-                 [Analysis.lits] with each literal's level attached and in the same order
-                 (it is 1:1 by construction -- see its comment), so [List.map fst] of this
-                 is exactly [minimise ~policy (Analysis.lits cut)] and the clause is
-                 unchanged by M2-L4. [test_learn.ml]'s [minimise_agrees_with_levelled]
-                 pins that equality rather than leaving it as a claim in this comment. *)
-              let levelled = minimise_with policy (Analysis.lits_levelled cut) in
-              let ls = List.map fst levelled in
-              if ls = [] then None
-              else
-                let cl = Learned.of_clause ls in
-                Some
-                  {
-                    l_lits = ls;
-                    l_clause = cl;
-                    l_cut = cut;
-                    l_closure = closure;
-                    l_levels = Analysis.decision_levels closure;
-                    l_converts = Learned.to_linear_row cl ~decl <> None;
-                    l_lbd =
-                      List.length (List.sort_uniq Int.compare (List.map snd levelled));
-                  })
+              let cl = Learned.of_clause ls in
+              Some
+                {
+                  l_lits = ls;
+                  l_clause = cl;
+                  l_cut = cut;
+                  l_levels = levels;
+                  l_converts = Learned.to_linear_row cl ~decl <> None;
+                  l_lbd = List.length (List.sort_uniq Int.compare (List.map snd levelled));
+                })
 
 (* Put the learned clause on the page, at level 0, through M2-L1's own entry point.
 

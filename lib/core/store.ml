@@ -72,8 +72,8 @@ type mark = { trail_mark : int; reason_mark : int }
    allocation.
 
    Note for docs/ARCHITECTURE.md section 3 (the "keep the trail record small" one): this
-   record is now eight fields, five of which exist only for the proof and for conflict
-   analysis.
+   record is now twelve fields, nine of which exist only for the proof and for conflict
+   analysis ([cites], the newest, is a memo and the only mutable one).
 
    [prop] is the propagator instance that made this change, M2-T7, closing the blocker
    docs/DECISIONS.md D-0011 names against itself: "a pruning's explanation is recorded on
@@ -124,6 +124,19 @@ type entry = {
          exactly this position, and no entry is ever re-pushed, so an entry occupies one
          trail position for its whole life. lib/core/trace.ml's [position_of] reads it to
          answer in O(1) what it used to answer by walking [done_]. *)
+  mutable cites : int array option;
+      (* M7-T27 (a3), D-0124's second addendum. lib/core/analysis.ml's memo of what this
+         entry's reason CITES, as the trail positions that established the facts it read
+         (packed with their level and direction by [Analysis]; [Store] never reads the
+         contents). [None] until the decision closure first reaches the entry; filled
+         once and read at every later conflict instead of materialising the reason
+         again. It lives on the entry and not in a side table because its validity is
+         exactly the entry's life: the trail below a live entry is frozen (I-T1, and
+         D-0124's argument for [history]), so what the entry cites, at which level and
+         whether it is a decision cannot change while the entry is on the trail -- and
+         [apply] builds a fresh record for every push, so nothing has to invalidate it
+         when the entry is popped. The memo is O(cited facts above level 0) per entry,
+         filled only for entries a conflict analysis reaches. *)
 }
 
 (* [lo_sup]/[hi_sup] are indexed by variable and hold the trail position of the entry
@@ -247,6 +260,7 @@ let dummy_entry =
     sup_lo = no_support;
     sup_hi = no_support;
     pos = -1;
+    cites = None;
   }
 
 let dummy_mark = { trail_mark = 0; reason_mark = 0 }
@@ -812,6 +826,7 @@ let apply t v (r : Domain.result) (j : Reason.justified) =
           sup_lo = t.lo_sup.(i);
           sup_hi = t.hi_sup.(i);
           pos = at;
+          cites = None;
         };
       (* The support of a bound this entry moved is this entry. A bound it left alone
          keeps whatever supported it, which is what the saved fields above restore. Both
