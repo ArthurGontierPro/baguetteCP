@@ -325,7 +325,9 @@ Read **D-0127** before T1 chooses how justifications are written. The measuremen
 (no solver code), results in `bench/bits_spike/results.tsv`, artefacts on `fataepyc-06:/scratch/arthur/wave41-spike/out/full/`.
 - **The order arm's Θ(w) `pol` is quadratic for VeriPB 3.0.2** (4.1 s at w = 10⁵, 383 s at 10⁶) while the same step as
   `rup` is linear and parse-dominated (0.2 s, 2.6 s, of which 1.9 s is reading the 111 MB `.opb`). The operator at fault
-  is the ladder fold (`@lb_v v * +` into a Θ(w)-term accumulator), not weakening: D-0028's 2w weakenings are 2.5 s at 10⁶.
+  is the ladder fold (`@lb_v v * +` into a Θ(w)-term accumulator: 1 292 s alone at 10⁶, 1 754 s without the
+  multiplier, 291 s from a two-term accumulator, all ×100 for ×10 in width), not weakening: D-0028's 2w weakenings
+  are 2.5 s at 10⁶. The table is `bench/bits_spike/diag-results.tsv`.
 - **Elaboration does not favour `pol`**: `veripb -e` copies a `pol` and writes a `rup` as its hint list (26.6 MB vs 3.75 MB
   at 10⁶), in the same time as checking; `cake_pb` then checks the hinted RUP in 34 s and the `pol` in 49 s. Labels and
   `e` lines vanish in the elaboration; `cake_pb` cannot parse a labelled proof and EXITS 0 on a refusal.

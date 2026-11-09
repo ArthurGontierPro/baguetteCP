@@ -146,9 +146,26 @@ contradiction (three constraints, two variables, over bits): with `a`'s lower bo
 (a first design, w = 10) the same wrong witness was `s VERIFIED`. A test of `ensure_atom`'s
 witness must therefore mint an atom the model does not decide, or it tests nothing.
 
-### Which `pol` operator is quadratic
+### Which `pol` operator is quadratic (`diag.sh`, `diag-results.tsv`)
 
-_(filled in from `diag.sh`; see D-0127.)_
+One operator kind per proof, over the order arm's `model.opb`, concluding NONE:
+
+| w | variant | ops | `.pbp` B | checker s | RSS MB |
+|---|---|---|---|---|---|
+| 10⁵ | `weaken`, every literal of a and b | 175 000 | 2 264 011 | 0.21 | 171 |
+| 10⁵ | `sum`, `@lb_v +` for v < m | 50 000 | 589 009 | 17.17 | 171 |
+| 10⁵ | `fold`, `@lb_v v * +` for v < m | 50 000 | 977 899 | 12.69 | 169 |
+| 10⁵ | `foldT`, the fold from the 2-term row `T` | 50 000 | 977 899 | 3.07 | 167 |
+| 10⁶ | `weaken` | 1 750 000 | 24 389 013 | 2.49 | 1 152 |
+| 10⁶ | `sum` | 500 000 | 6 389 011 | **1 754.35** | 1 166 |
+| 10⁶ | `fold` | 500 000 | 10 777 902 | **1 291.64** | 1 199 |
+| 10⁶ | `foldT` | 500 000 | 10 777 902 | 290.99 | 1 221 |
+
+Weakening is linear (1.4 µs an op). Every addition of a rung into the accumulator costs time
+proportional to the accumulator's width, with or without the multiplier: ×95 to ×102 for ×10 in
+width, quadratic in w from `R` and in m from the two-term `T`. The `sum`, which cancels nothing,
+is slower than the fold, which removes one term a step. The run's full `pol` (4.09 s, 383 s) is
+cheaper than its fold alone because the `a` weakenings come first and shrink the accumulator.
 
 ## Reading
 

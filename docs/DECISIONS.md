@@ -9849,3 +9849,208 @@ Housekeeping, same day: the results of this run and of M7-T26 (every `.tsv`, `.e
 on the laptop under `~/mznc-archive/runs/{m7t27run-2026-11-03,m7t26-2026-10-30}/`; the `.opb.rows`,
 `.opb` and `.pbp` of both runs and the 3.9 GB of `m7t27probe/` are deleted from the node; the `.fzn`
 stay (REFUSED/ERROR inputs, what `refusal_causes.py --widths` reads).
+
+## D-0127  M8-bits-encoding-T0: RUP, `pol` and elaboration measured on the checker alone, in the order and the bits encodings
+
+**Status**: **MEASUREMENT**, recorded 2026-11-06, written up 2026-11-09 (agent-spike, branch
+`wave41-spike`). Run on
+`fataepyc-06` the same day, sequentially, one checker at a time, under `ulimit -v 16777216`:
+`~/.cargo/bin/veripb` 3.0.2 (Rust, source d5644ca4), `veripb -e` of the same build, and
+`/scratch/arthur/cake_pb` (CakePB of 2026-08-25). No solver code. The instrument is
+`bench/bits_spike/` (`gen.py`, `run.sh`, `diag.sh`, `README.md` with the full tables), the table
+is `bench/bits_spike/results.tsv` verbatim, the artefacts are under
+`fataepyc-06:/scratch/arthur/wave41-spike/out/full/` (111 MB `.opb` and 28 MB `.pbp` at the top
+width; not in the repo).
+
+### The question, and the model it was asked on
+
+T1 has to decide how a justification is WRITTEN before `encoding.ml`, `justify.ml` and
+`ladder.ml` learn a second representation: as one `rup` line the checker closes by unit
+propagation, or as the explicit `pol` our writer emits today. The user's prior was that `pol`
+elaborates better, because a `rup` has to be reconstructed by the elaborator before a verified
+checker can see it. Both arms of M8 were to be measured with the SAME derivation, over a database
+of 10³ to 10⁶ rows.
+
+The derivation is D-0028's two-variable shape, made satisfiable so that every `red`, `pol` and
+`rup` is judged (D-0053, D-0066), with one Boolean added so that the conclusion can only be
+reached through the derived literal:
+
+```
+a in [l, w]   b in [0, w]   z in {0, 1}        l = w//4,  c = l + w//2,  m = c - l + 1
+R:  a + b <= c          T:  z  or  b >= m          min z
+```
+
+The propagation is the root pruning `Linear` makes from `R` with `a` at its declared lower
+bound, `b <= c - l`, i.e. the literal `~b_ge_m`. The proof derives `z >= 1` from `T` and that
+literal (a `pol` that CITES the pruning) and concludes `BOUNDS 1 : Z INF`.
+
+- **order**: the eager encoding of PROOF-FORMAT §3, `x_ge_v` and the ladder in the `.opb`, `R` as
+  the expansion with its constant against the declared bound. The `pol` is the cancellation of
+  Θ(w) rungs: weaken every `a` literal, fold `b`'s ladder up to rung m−1 with a growing multiplier
+  (`@lb_v v * +`, the step `lib/core/ladder.ml` describes), weaken `b` above m, saturate. The
+  `rup` is `rup +1 ~b_ge_m >= 1 ;`.
+- **bits**: `bit_length(w)` bits per variable plus two bound rows; `[b >= m]` is not in the
+  `.opb` and is minted by a `red` pair whose witness touches only the fresh atom (the M8
+  preamble's shape, NOT D-0031's rotation). The `pol` is `pol @R @Alo + @B1 + s`, three citations.
+  The `rup` is the same line as in the order arm.
+
+Both styles carry an `e` pin on the derived literal (M1-T51's control), so a `pol` that derives
+something else is refused where it happens. Six variants per arm and style must be refused with
+the checker's wording: the claim's literal flipped, the fold stopped one rung too high (a weaker,
+TRUE bound), the atom's row cited in the wrong direction, each `red` with its witness flipped, and
+`control-noG`, in which the pruning line is a copy of `R` and the pin is dropped.
+
+**The first design was not load-bearing, and the elaborator said so.** It concluded `BOUNDS -c`
+on `min -b`, and `veripb -e` wrote `conclusion BOUNDS -5 : 1 INF`, citing **the row** as the
+bound's justification: a root bound from declared bounds is a weakening of the row, so the Θ(w)
+literal derivation beside it was decoration. Hence `z`, `T` and a conclusion that cites a `pol`
+consuming the pruning; `control-noG` is refused at the conclusion in all 16 pairs ("Expected
+constraint is not syntactically implied by the constraint at the hint."), which is the evidence
+that the conclusion depends on the pruning.
+
+### VeriPB 3.0.2 on the proof (CPU s from `/usr/bin/time -v`; the checker's own `--stats` agrees)
+
+| w | arm | style | `.opb` B | `.pbp` B | verdict | s | RSS MB |
+|---|---|---|---|---|---|---|---|
+| 10³ | order | rup | 90 592 | 188 | V | 0.00 | 19 |
+| 10³ | order | pol | 90 592 | 21 696 | V | 0.00 | 19 |
+| 10³ | bits | rup | 978 | 542 | **REJECTED**, not RUP | 0.00 | 11 |
+| 10³ | bits | pol | 978 | 542 | V | 0.00 | 11 |
+| 10⁴ | order | rup | 975 595 | 191 | V | 0.01 | 41 |
+| 10⁴ | order | pol | 975 595 | 237 949 | V | 0.05 | 41 |
+| 10⁴ | bits | rup | 1 404 | 680 | **REJECTED**, not RUP | 0.00 | 11 |
+| 10⁴ | bits | pol | 1 404 | 679 | V | 0.00 | 11 |
+| 10⁵ | order | rup | 10 455 598 | 194 | V | 0.20 | 201 |
+| 10⁵ | order | pol | 10 455 598 | 2 602 952 | V | **4.09** | 175 |
+| 10⁵ | bits | rup | 1 746 | 787 | **REJECTED**, not RUP | 0.00 | 11 |
+| 10⁵ | bits | pol | 1 746 | 785 | V | 0.00 | 11 |
+| 10⁶ | order | rup | 111 555 601 | 197 | V | 2.58 | 1 553 |
+| 10⁶ | order | pol | 111 555 601 | 28 277 955 | V | **383.05** | 1 268 |
+| 10⁶ | bits | rup | 2 109 | 903 | **REJECTED**, not RUP | 0.00 | 11 |
+| 10⁶ | bits | pol | 2 109 | 900 | V | 0.00 | 11 |
+
+V is `s VERIFIED BOUNDS 1 <= obj <= INF`. The `control-noG` rows give the parse-only baseline of
+the order `.opb`: 0.15 s at 10⁵, 1.8–1.9 s at 10⁶. So the `rup` CHECK is ~0.05 s and ~0.7 s, the
+`pol` ~3.9 s and ~381 s: **×94 for ×10 in width.**
+
+### Elaboration (`veripb -e`) and `cake_pb` on it
+
+| w | arm | style | elab B | elab s | elab RSS MB | cake_pb | s | RSS MB |
+|---|---|---|---|---|---|---|---|---|
+| 10³ | order | rup | 2 407 | 0.00 | 19 | V | 0.02 | 26 |
+| 10³ | order | pol | 20 017 | 0.00 | 19 | V | 0.03 | 29 |
+| 10³ | bits | pol | 491 | 0.00 | 11 | V | 0.00 | 1.6 |
+| 10⁴ | order | rup | 27 661 | 0.02 | 43 | V | 0.36 | 260 |
+| 10⁴ | order | pol | 221 520 | 0.05 | 43 | V | 0.39 | 293 |
+| 10⁴ | bits | pol | 619 | 0.00 | 11 | V | 0.00 | 1.5 |
+| 10⁵ | order | rup | 325 165 | 0.22 | 231 | V | 4.09 | 2 863 |
+| 10⁵ | order | pol | 2 439 023 | 4.08 | 207 | V | 4.75 | 3 213 |
+| 10⁵ | bits | pol | 718 | 0.00 | 11 | V | 0.00 | 3.0 |
+| 10⁶ | order | rup | 3 750 169 | 2.67 | 1 936 | V | 34.33 | 4 310 |
+| 10⁶ | order | pol | 26 639 026 | 380.86 | 1 634 | V | 49.27 | 4 370 |
+| 10⁶ | bits | pol | 826 | 0.00 | 11 | V | 0.00 | 3.1 |
+
+What the elaborator of this build re-emits, measured on these files and not assumed from
+D-0102: labels are dropped and every citation renumbered; the `e` pins are **dropped entirely**;
+a `rup C ;` becomes `rup C : <ids> ;` with the ids its propagation used and `~` for the negated
+claim (in the order arm the m−1 rungs it walked plus `R`, ~7.5 bytes a rung); a `pol` is copied
+as it is; a `red` becomes `red C : witness : subproof` / `qed;`, an explicit empty subproof; the
+conclusion keeps its hint. **Elaborating costs what checking costs** (2.67 s against 2.58 s,
+380.9 s against 383.1 s): the elaborator is the checker with the hints written down, and a `rup`
+costs it nothing extra to "reconstruct". `cake_pb` cannot parse a labelled proof (it fails on the
+first `@G` line) and **exits 0 on a refusal**, saying `c Checking failed …`; on the elaboration it
+verifies all twelve accepted pairs. Its RSS is the CakeML heap, 4.3 GB at 10⁶ in both styles of
+the order arm.
+
+### The variants
+
+Every one of the 56 variant runs was refused by VeriPB with a checking error, and the wording
+is the one the claim needs: the flipped `rup` claim with "The constraint is not implied by
+reverse unit propagation (RUP) from core and derived database."; the wrong `pol` at the `e` pin
+with "Expected constraint is not equal to the constraint at the hint."; the flipped `red`
+witness with "Proofgoal #1 could not be autoproven. Please add an explicit subproof for proofgoal
+#1."; `control-noG` at the conclusion as quoted above.
+
+One of them is refused for the wrong reason, and that is a finding. **`B2`, the half of the atom
+pair that says `b >= m -> b_ge_m`, is vacuous for a root pruning.** The atom a root pruning mints
+is decided by the model (b ≥ m is impossible under `R` and `a`'s lower bound), so the negation of
+`B2` contradicts the database and every redundance goal is implied whatever the witness: D-0053's
+vacuity one step out, not over a contradictory database but over a contradictory `¬C`. The
+checker refuses the wrong witness here only because its unit propagation does not SEE the
+contradiction (three constraints, two variables, over bits). With `a`'s lower bound at 0, in the
+first design at w = 10, the same wrong witness was `s VERIFIED`. The solver is not unsound for it
+(a `red` whose negation contradicts the database derives an implied constraint, witness or not),
+but a test of `ensure_atom`'s witness must mint an atom the model does not decide, or it tests
+nothing.
+
+### Which `pol` operator is quadratic (`diag.sh`, one operator kind per proof, order arm)
+
+| w | variant | ops | `.pbp` B | checker s | RSS MB |
+|---|---|---|---|---|---|
+| 10⁵ | `weaken`, every literal of a and b | 175 000 | 2 264 011 | 0.21 | 171 |
+| 10⁵ | `sum`, `@lb_v +` for v < m | 50 000 | 589 009 | 17.17 | 171 |
+| 10⁵ | `fold`, `@lb_v v * +` for v < m | 50 000 | 977 899 | 12.69 | 169 |
+| 10⁵ | `foldT`, the fold from the 2-term row `T` | 50 000 | 977 899 | 3.07 | 167 |
+| 10⁶ | `weaken` | 1 750 000 | 24 389 013 | 2.49 | 1 152 |
+| 10⁶ | `sum` | 500 000 | 6 389 011 | **1 754.35** | 1 166 |
+| 10⁶ | `fold` | 500 000 | 10 777 902 | **1 291.64** | 1 199 |
+| 10⁶ | `foldT` | 500 000 | 10 777 902 | 290.99 | 1 221 |
+
+Weakening is linear and cheap, 1.4 µs an operation at 10⁶ (D-0028's 2w-weakening `pol` was 12 s
+at that width on the same checker, and the whole of its cost is here). **Adding a rung into an
+accumulator of Θ(w) terms costs Θ(w) per addition**, with or without the multiplier, which is what
+makes the fold Θ(w·m): the same fold started from a two-term row (`foldT`, whose accumulator
+grows to Θ(m)) is four times cheaper at both widths, and every variant but weakening is ×95 to
+×102 for ×10 in width: quadratic, in w for the fold from `R` and in m for the fold from `T`. The
+`sum` variant, which cancels nothing, is slower than the fold, which removes one term a step
+(1 754 s against 1 292 s at 10⁶). The checker's `+` is not in-place. The run's `pol` (4.09 s,
+383 s) is cheaper than its fold alone because the `a` weakenings come first and shrink the
+accumulator before the fold starts; the exponent is the same.
+
+### What this says
+
+1. **In the order arm, `rup` wins on every axis the checker can measure.** The same Θ(w)-rung
+   cancellation is 197 bytes and ~0.7 s as a RUP check, 28 MB and ~381 s as an explicit `pol`
+   at w = 10⁶, and the exponent differs: the `pol` is quadratic in w, the RUP check linear and
+   dominated by reading the `.opb`. PROOF-FORMAT §2a's rule "prefer `pol` over `rup`; `rup`
+   makes the checker search" is true for a derivation of O(1) citations and false for one of
+   Θ(w): there the search IS the cheap part, because unit propagation along the ladder is linear
+   and the explicit arithmetic is not.
+2. **The prior that `pol` elaborates better than `rup` is the opposite of what the elaborator
+   does.** It copies a `pol` and writes a `rup` as its hint list, seven times smaller at 10⁶, in
+   the time it takes to check either. `cake_pb` then checks the hinted RUP in 34 s and the
+   `pol` in 49 s. Nothing is "reconstructed": the hints are the propagation the checker ran
+   anyway.
+3. **In the bits arm there is no `rup` for a bound that crosses a row.** Refused at 10³ already
+   and at every width: unit propagation over `A >= l`, `B >= m` and `A + B <= c` on bits finds
+   nothing, which is GCS's observation on this checker. Every such step is a `pol`, and that
+   `pol` is three citations, 0.4 ms, 11 MB and under 1 kB elaborated, flat from 10³ to 10⁶.
+4. **The bits arm's price is the atom pair**: two `red` lines of O(log w) bytes per atom, plus
+   the second direction (`B2`) wherever the literal has to re-enter a row. One of the two is
+   unjudged for a root pruning. D-0031's objection (a witness that permutes existing literals)
+   does not arise: the fresh-atom witness is accepted beside a neighbouring atom, since nothing
+   else mentions it.
+
+### The sentence T1 takes from this
+
+**Write a justification as `rup` wherever the checker's unit propagation closes it, which is the
+order encoding's ladder walks and any clause over atoms that already exist, and as `pol` only
+where it cannot, which is every bound that crosses a bits row; a Θ(w)-token `pol` is quadratic
+for VeriPB 3.0.2, its elaboration is the `pol` itself, and a `rup` elaborates to a hint list the
+verified checker handles faster.**
+
+Two consequences for the rows that follow:
+
+- The order arm below the threshold keeps its ladder-walk justifications but should EMIT them as
+  `rup`, not as the fold the writer builds today, and `--stats` should count tokens per `pol` so
+  that a Θ(w) one is visible. That is a change to `justify.ml`/`ladder.ml`'s emission, not to
+  any propagator (D-0026's split holds), and it is the cheap half of M8.
+- `ensure_atom`'s tests must mint an atom under a decision, never at the root, and the
+  `--stats` counter of introduced atoms the preamble asks for must be there from T2's first
+  commit: the pair is the only cost the bits arm has, and it is paid per atom, not per pruning.
+
+What this did not measure, named so that it is not read into the tables: the solver's own cost
+of writing either form (none of this ran the solver), a learned clause's `rup` over derived
+atoms in the bits arm (only the row-crossing bound was written), and `cake_pb` on a `red` with a
+non-empty subproof (the elaborator emitted empty ones, because the autoprover discharged every
+goal).
