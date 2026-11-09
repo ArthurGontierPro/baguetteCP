@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M8-bits-encoding-T0 | `bench/bits_spike/` (new: generator, driver, README with the tables), `docs/DECISIONS.md` (D-0127, append), `docs/ROADMAP.md` (M8-bits-encoding-T0 row) | agent-spike (branch `wave41-spike`) | 2026-11-06 | Checker-only spike on fataepyc-06 with cake_pb; no solver code |
 
 ## Cross-session requests
 
@@ -315,6 +314,7 @@ work. The owning session picks it up.
 | M9-no-proof-T1 | agent-noproof | 2026-11-06 | **D-0126.** SPEC §1 amended (one paragraph added, the "primary output" sentence kept): `--no-proof` is a measurement mode, off by default, skips `.opb` rows (`Discard_rows`), `Writer`, `Justify`, `Trace`, learned-row deletion and I-X2; keeps every `Explanation`, learning, I-S1 and every front-end refusal. Id rule: `Encoding.commit` and `Writer.fresh` in `start_proof`, both before search, both modes. Gate always proves; only T2's stdout lane may run the mode. Branch `wave41-noproof`, not merged |
 | M7-T27 (a3) closure memo | agent-a3 | 2026-11-06 | **D-0124 second addendum.** `Analysis.dependency_levels`: the decision closure's level set over per-entry memoised citations (`Store.entry.cites`), exact (the same walk, cell for cell), not the per-entry level set the first addendum proposed (that is a superset: the closure drops a weaker same-slot fact when a stronger is in the frontier, the common case of a bound split). pattern-set-mining 300 s: `later` 128 842 (27 conflicts) → 29 409 (193 conflicts), nodes 67 (depth 35) → 391 (depth 92, an incumbent), RSS 1.44 GB → 2.34 GB (the deeper tree: within 0.2 GB at equal depth, memo 0.3 MB in all); 468 artefacts byte-identical; gate ok (3 488 ok, 0 FAIL, 156 models). Branch `wave41-a3`, not merged |
 | M7-T27 (d) | agent-fe (`wave41-fe`) | 2026-11-06 | **D-0128.** Family A was the token array: `Lexer.tokenize` held ~80 B per token for the whole `.fzn` before the parser ran (5.3 GB live on yumi, 18 GB on gt-sort n9), plus the file as one string and the whole `Ast.model`. The front end now streams: a 64 KiB window, one lexeme of lookahead, `Parser.iter_items` → `Builder.add_item`, nothing proportional to the file but the `Model.t`. Front end alone: yumi 41 s / 12.8 GB → 21 s / 2.4 GB, gt-sort n9 114 s / 38.9 GB → 45 s / 3.5 GB. Gate ok on fataepyc-06 (3 473 ok, 0 FAIL, 156 models, 87 MB peak RSS); 156 artefacts byte-identical between `1d68c8c1` (main) and `992cd1d4`. The 12 instances all pass the front end under the harness's flags and die in families B/C (4 rows cap, 7 heap guard, 1 timeout). Not merged; the orchestrator merges |
+| M8-bits-encoding-T0 | agent-spike | 2026-11-06 | **D-0127**, checker-only spike in `bench/bits_spike/` (generator, driver, per-operator diagnostic, `results.tsv`, README). The SAME root pruning as `rup` and as `pol`, order and bits, w = 10³..10⁶: order `pol` is QUADRATIC on 3.0.2 (4.1 s at 10⁵, 383 s at 10⁶) where the `rup` is 0.2 s / 2.6 s; elaboration re-emits a `pol` as is and a `rup` as a hint list 7x smaller, at the cost of checking; `cake_pb` checks the hinted RUP faster than the `pol`; bits `rup` is refused at every width, bits `pol` is 3 citations and flat. Every broken variant refused with the wording; `B2`'s witness is vacuous for a root pruning. Nothing merged into main; branch `wave41-spike` |
 
 ## Handoff notes
 ## Wave 41 merged and gated, the Challenge re-measure launched, 2026-11-09 (orchestrator)
@@ -406,6 +406,26 @@ in `test/unit/test_analysis.ml` (f). D-0124 second addendum; ROADMAP (a3) clause
   `probe-new-src/`, `run12.sh`, `run12.new/*.err|.time`, `fe.*/`); the clones `/scratch/arthur/wave41-fe`
   (this branch) and `/scratch/arthur/wave41-fe-base` (main at `d26eac3`, binary `1d68c8c1`). The
   artefacts of every run are deleted; nothing of mine is running.
+
+## M8-bits-encoding-T0 handoff, 2026-11-06 (agent-spike): write `rup` wherever unit propagation closes it, `pol` only across a bits row
+
+Read **D-0127** before T1 chooses how justifications are written. The measurement is `bench/bits_spike/`
+(no solver code), results in `bench/bits_spike/results.tsv`, artefacts on `fataepyc-06:/scratch/arthur/wave41-spike/out/full/`.
+- **The order arm's Θ(w) `pol` is quadratic for VeriPB 3.0.2** (4.1 s at w = 10⁵, 383 s at 10⁶) while the same step as
+  `rup` is linear and parse-dominated (0.2 s, 2.6 s, of which 1.9 s is reading the 111 MB `.opb`). The operator at fault
+  is the ladder fold (`@lb_v v * +` into a Θ(w)-term accumulator: 1 292 s alone at 10⁶, 1 754 s without the
+  multiplier, 291 s from a two-term accumulator, all ×100 for ×10 in width), not weakening: D-0028's 2w weakenings
+  are 2.5 s at 10⁶. The table is `bench/bits_spike/diag-results.tsv`.
+- **Elaboration does not favour `pol`**: `veripb -e` copies a `pol` and writes a `rup` as its hint list (26.6 MB vs 3.75 MB
+  at 10⁶), in the same time as checking; `cake_pb` then checks the hinted RUP in 34 s and the `pol` in 49 s. Labels and
+  `e` lines vanish in the elaboration; `cake_pb` cannot parse a labelled proof and EXITS 0 on a refusal.
+- **In the bits arm there is no `rup` for a bound crossing a row** (refused at 10³ already); the `pol` is three citations
+  and 0.4 ms at every width. Its price is the `red` pair per atom, and for a ROOT pruning the second half of the pair
+  (`B2`) is vacuous: its wrong witness was accepted with `a`'s lower bound at 0. Test `ensure_atom` on an atom the
+  model does not decide.
+- The first design's conclusion was not load-bearing (the elaborator cited the ROW as the objective bound's
+  justification: a root bound from declared bounds is a weakening of the row). The shipped design routes the
+  conclusion through a `pol` that cites the pruning, and a `control-noG` variant proves it (refused at the conclusion).
 
 ## M7-T27 (b) follow-up handoff, 2026-11-06 (solo-m7t27)
 
