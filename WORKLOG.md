@@ -317,6 +317,23 @@ work. The owning session picks it up.
 | M7-T27 (d) | agent-fe (`wave41-fe`) | 2026-11-06 | **D-0128.** Family A was the token array: `Lexer.tokenize` held ~80 B per token for the whole `.fzn` before the parser ran (5.3 GB live on yumi, 18 GB on gt-sort n9), plus the file as one string and the whole `Ast.model`. The front end now streams: a 64 KiB window, one lexeme of lookahead, `Parser.iter_items` → `Builder.add_item`, nothing proportional to the file but the `Model.t`. Front end alone: yumi 41 s / 12.8 GB → 21 s / 2.4 GB, gt-sort n9 114 s / 38.9 GB → 45 s / 3.5 GB. Gate ok on fataepyc-06 (3 473 ok, 0 FAIL, 156 models, 87 MB peak RSS); 156 artefacts byte-identical between `1d68c8c1` (main) and `992cd1d4`. The 12 instances all pass the front end under the harness's flags and die in families B/C (4 rows cap, 7 heap guard, 1 timeout). Not merged; the orchestrator merges |
 
 ## Handoff notes
+## Wave 41 merged and gated, the Challenge re-measure launched, 2026-11-09 (orchestrator)
+
+Three of the four wave-41 branches are on `main`: `wave41-noproof` (`a629fea`, D-0126),
+`wave41-a3` (`b52a384`, D-0124 second addendum), `wave41-fe` (`35588fb`, D-0128). The merged main
+passed `make check` on fataepyc-06 on 2026-11-06 (`check: ok`, 156 models, clone
+`/scratch/arthur/baguette-gate-20261106`, binary `e25ec4d3`), and all 156 x {stdout, rc, .opb, .pbp}
+are byte-identical to `1a0cfa7`'s binary `1d68c8c1` (`/scratch/arthur/gate41.status`): (a3) and (d)
+change no answer and no proof, only time and memory. The fourth branch, `wave41-spike` (M8-T0,
+D-0127), is still being finished by its agent; merge it like the others.
+
+The sixteen editions are re-running with that binary since 2026-11-09 12:50 under
+`/scratch/arthur/wave41run/` (driver `run_editions.sh`, per-edition `<Y>.done`, ~19 h). Read it as
+D-0125's addendum says: incumbent means an objective VALUE present (`max:-` is not one), and the
+`.opb.rows` are deleted by the harness now, so the CAPPED split must come from the `.err`/`.out`
+and the `opb`/`pbp` columns (a CAPPED with both columns empty died in the encoding). Baseline to
+compare against: `~/mznc-archive/runs/m7t27run-2026-11-03/` on the laptop.
+
 ## M6-T20 closed administratively, 2026-11-06 (orchestrator)
 
 The one stale live claim is released. The code landed on 2026-10-27 and has run through every gate
