@@ -20,7 +20,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M7-T27 (re-measure, D-0129) | `docs/DECISIONS.md` (D-0129 appended at the bottom), `docs/ROADMAP.md` M7-T27 row (the "result pending" clause), `WORKLOG.md`; laptop archive `~/mznc-archive/runs/wave41run-2026-11-09/`; node `/scratch/arthur/wave41run/` (proofs deleted after the archive is verified) | agent-remeasure (`wave42-remeasure`) | 2026-11-10 |
-| M8-bits-encoding-T1 | `docs/DECISIONS.md` (D-0130 appended), `docs/PROOF-FORMAT.md` §2a (the `pol`-over-`rup` rule at the end of "The `pol` operators") and §4 preface, `docs/ROADMAP.md` M8 rows, `docs/INVARIANTS.md` only if an invariant is added, `bench/bits_spike/` worked example if extended. Documentation only, no `lib/` | agent-m8t1 (`wave42-t1`) | 2026-11-10 |
 | M8-bits-encoding-T5 | `lib/core/justify.ml`, `lib/core/ladder.ml`, `lib/proof/writer.ml` (token counter, `rup` hints if used), `bin/main.ml` (`--stats`), `test/unit/test_justify.ml`, `test/unit/test_ladder.ml`, `test/unit/test_mutation.ml`, `test/expected/` if stdout changes (it must not), `docs/DECISIONS.md` (D-0131 appended), `docs/PROOF-FORMAT.md` §4 only (the Linear/Combine paragraphs; §2a is T1's), `docs/ROADMAP.md` T5 row | agent-rup (`wave42-rup`) | 2026-11-10 |
 
 ## Cross-session requests
@@ -318,8 +317,36 @@ work. The owning session picks it up.
 | M7-T27 (a3) closure memo | agent-a3 | 2026-11-06 | **D-0124 second addendum.** `Analysis.dependency_levels`: the decision closure's level set over per-entry memoised citations (`Store.entry.cites`), exact (the same walk, cell for cell), not the per-entry level set the first addendum proposed (that is a superset: the closure drops a weaker same-slot fact when a stronger is in the frontier, the common case of a bound split). pattern-set-mining 300 s: `later` 128 842 (27 conflicts) → 29 409 (193 conflicts), nodes 67 (depth 35) → 391 (depth 92, an incumbent), RSS 1.44 GB → 2.34 GB (the deeper tree: within 0.2 GB at equal depth, memo 0.3 MB in all); 468 artefacts byte-identical; gate ok (3 488 ok, 0 FAIL, 156 models). Branch `wave41-a3`, not merged |
 | M7-T27 (d) | agent-fe (`wave41-fe`) | 2026-11-06 | **D-0128.** Family A was the token array: `Lexer.tokenize` held ~80 B per token for the whole `.fzn` before the parser ran (5.3 GB live on yumi, 18 GB on gt-sort n9), plus the file as one string and the whole `Ast.model`. The front end now streams: a 64 KiB window, one lexeme of lookahead, `Parser.iter_items` → `Builder.add_item`, nothing proportional to the file but the `Model.t`. Front end alone: yumi 41 s / 12.8 GB → 21 s / 2.4 GB, gt-sort n9 114 s / 38.9 GB → 45 s / 3.5 GB. Gate ok on fataepyc-06 (3 473 ok, 0 FAIL, 156 models, 87 MB peak RSS); 156 artefacts byte-identical between `1d68c8c1` (main) and `992cd1d4`. The 12 instances all pass the front end under the harness's flags and die in families B/C (4 rows cap, 7 heap guard, 1 timeout). Not merged; the orchestrator merges |
 | M8-bits-encoding-T0 | agent-spike | 2026-11-06 | **D-0127**, checker-only spike in `bench/bits_spike/` (generator, driver, per-operator diagnostic, `results.tsv`, README). The SAME root pruning as `rup` and as `pol`, order and bits, w = 10³..10⁶: order `pol` is QUADRATIC on 3.0.2 (4.1 s at 10⁵, 383 s at 10⁶) where the `rup` is 0.2 s / 2.6 s; elaboration re-emits a `pol` as is and a `rup` as a hint list 7x smaller, at the cost of checking; `cake_pb` checks the hinted RUP faster than the `pol`; bits `rup` is refused at every width, bits `pol` is 3 citations and flat. Every broken variant refused with the wording; `B2`'s witness is vacuous for a root pruning. Nothing merged into main; branch `wave41-spike` |
+| M8-bits-encoding-T1 | agent-m8t1 (`wave42-t1`) | 2026-11-10 | **D-0130**, the design record, documentation only. The substrate contract (a propagator cannot spell a bit; `Encoding`, `Justify` and `Trace` are the three places that know two representations), `declare_int` over bits (offset from `lo`, `bit_length(hi − lo)` bits, two bound rows, no ladder), `ensure_atom` (the `red` pair at level 0, the sparse chain, the counter, the D-0053 hazard), the mixed row and its overflow envelope, `Linear`'s bits `pol` (divide, cite the atom, saturate) with `gen.py`'s w = 10⁶ lines as the worked example, `Weaken_declared`, `min:`/`soli` unchanged in protocol, `--bits-above`, the three-threshold test plan, what `W = 0` cannot compare. PROOF-FORMAT §2a's rule amended to D-0127's with the old sentence kept as a dated note. Touched `docs/PROOF-FORMAT.md`, `docs/DECISIONS.md`, `docs/ROADMAP.md` (T1 row), `WORKLOG.md`; not `docs/INVARIANTS.md`, not `bench/` |
 
 ## Handoff notes
+## M8-bits-encoding-T1 handoff, 2026-11-10 (agent-m8t1, `wave42-t1`): D-0130, the bits design, documentation only
+
+Read D-0130 whole before T2 (it is long on purpose; §0 is the sentence, §13 the four decisions to
+challenge, §14 the open questions, §15 what it leaves to T4 and to the normative docs). What T2 must
+know before the first commit:
+- **Eligibility is width AND scope** (§3.4). A `.opb` row cannot name an atom that does not exist
+  yet (I-X5 + the fresh-atom witness), so a variable in a gcc/alldiff/maxmin/element/cumulative
+  scope, or with declared holes, or of width <= 1, keeps the ladder at every `W`; `Ne`'s scope is
+  held back at T2 and released at T3 with the two-half `pol` of §7.4. `--stats` must say how many
+  were held back and by which family, or `W = 0` on a gcc-heavy model compares nothing.
+- **Bits are `x − lo`, unsigned, both bound rows always posted** (§4); the constant folds exactly
+  where `linear_terms_int_lin_le` folds `a·lo` today, so `Linear.make` and `propagate` are untouched.
+- **The pruning `pol` divides FIRST, then adds the atom's `B1`/`B2`, then saturates** (§7.1): the
+  degree is 1 by construction and D-0043's `e` pin holds. The claim is mandatory for a bits
+  conclusion. `Trace` writes that `pol` lazily where it writes the `rup` today; no `deriving_ahead`.
+- **`Weaken_declared`** (§8) is the one new `Explanation` constructor, with `assumed` for a
+  decision-bound term; the order rendering must stay byte-identical (`top_weaken_owners` gains an arm).
+- **`ensure_atom` tests mint under a DECISION on a satisfiable model** (§2, D-0127's `B2`): at the
+  root the flipped witness can pass and the lane tests nothing. Never after a root contradiction.
+- First table: D-0028's model at 10³..10⁶ at `W = 0` beside D-0028's and D-0127's rows; then `.opb`
+  bytes on the 161 encoding-size `.fzn` under `fataepyc-06:/scratch/arthur/m7t27run/*/work/`.
+T5 (D-0131, `wave42-rup`) is independent and owns `justify.ml`/`ladder.ml`'s emission and the
+`poltokens` counter; T2 adds the atom counters beside it. PROOF-FORMAT §2a's rule is now D-0127's;
+§3's "Bits encoding" subsection and SPEC §4.2's "every ORDER-encoded variable" are T2's to write
+when the code lands (§15). Nothing was built or run; `gen.py` was executed on the laptop for its
+text only (stdlib, no checker).
+
 ## Wave 41 merged and gated, the Challenge re-measure launched, 2026-11-09 (orchestrator)
 
 Three of the four wave-41 branches are on `main`: `wave41-noproof` (`a629fea`, D-0126),
