@@ -161,9 +161,27 @@ right-hand side. It rounds the coefficients too, by the same ceiling. Checked: f
 `+1 x1 >= 1`, forcing `x1`, and a `rup` of `x1` after the division is rejected, which is
 what settles it.
 
-**Rule**: prefer `pol` over `rup`. A `pol` step states the actual reasoning and is cheap
-to check; `rup` makes the checker search. A propagator that can only produce `rup` should
-say so in its module header and explain why.
+**Rule** *(amended 2026-11-10 from D-0127, designed into both arms by D-0130;
+M8-bits-encoding-T5 implements it for the order arm)*: write a justification as `rup`
+wherever the checker's unit propagation closes it -- the order encoding's ladder walks, and any
+clause over atoms that already exist -- and as `pol` only where it cannot, which is every bound
+that crosses a bits row and every step that needs a division. Measured on VeriPB 3.0.2
+(D-0127): the same Θ(w)-rung cancellation at w = 10⁶ is 197 bytes and ~0.7 s of checking as a
+`rup`, 28 MB and ~381 s as an explicit `pol` -- quadratic, because every addition of a rung into
+an accumulator of Θ(w) terms costs Θ(w), while weakening is linear; the elaborator re-emits a
+`pol` as it is and a `rup` as a hint list seven times smaller, which `cake_pb` checks faster
+(34 s against 49 s). On bits a `rup` is refused at every width, and the `pol` is three citations,
+flat from 10³ to 10⁶. `--stats` counts tokens per `pol`, so a Θ(w) one is visible rather than
+argued. A propagator that can only produce `rup` should still say so in its module header and
+explain why.
+
+*(Until 2026-11-10 this rule read: "prefer `pol` over `rup`. A `pol` step states the actual
+reasoning and is cheap to check; `rup` makes the checker search. A propagator that can only
+produce `rup` should say so in its module header and explain why." That is true for a
+derivation of O(1) citations and false for one of Θ(w): there the search IS the cheap part,
+because unit propagation along the ladder is linear and the explicit arithmetic is not --
+D-0127, point 1. The sentence is kept because D-0013 and every module header written before
+that date cite it.)*
 
 ### Traps
 
