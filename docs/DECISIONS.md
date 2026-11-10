@@ -10447,3 +10447,223 @@ of writing either form (none of this ran the solver), a learned clause's `rup` o
 atoms in the bits arm (only the row-crossing bound was written), and `cake_pb` on a `red` with a
 non-empty subproof (the elaborator emitted empty ones, because the autoprover discharged every
 goal).
+
+## D-0129  M7-T27 complete: the sixteen editions with (a3)+(d) -- family A is empty, four more OPT and 63 better incumbents at the same sixteen ranks, and the encoding's size is the wall on 169 runs
+
+**Status**: **MEASUREMENT**, recorded 2026-11-10 (agent-remeasure, `wave42-remeasure`). Run on
+`fataepyc-06` from 2026-11-09 12:50 to 2026-11-10 08:37, baguette only, binary `e25ec4d3c72820caf722cdfa5b810922`
+= main `35588fb` ((a3) D-0124 second addendum and (d) D-0128 on top of (a)+(a2)+(b)), the rules of
+M7-T26/D-0125 (1200 s, 16 GiB RSS, 16 GB file cap, 3600 s check, 30-way; `run.conf` per edition),
+results in `fataepyc-06:/scratch/arthur/wave41run/<Y>/`, archived on the laptop under
+`~/mznc-archive/runs/wave41run-2026-11-09/` (97 MB, 5 163 files: every `.tsv`, `.out`, `.err`, `.vp`,
+`.pair`, log, driver, `binary.md5`, `commit`, `run_editions.sh`, `refusal_causes.txt`). The baseline
+is D-0125's run as archived (`m7t27run-2026-11-03/`), read with the addendum's criterion
+throughout: **an incumbent is a row whose objective VALUE is present; `min:-` / `max:-` is not one.**
+Reproduce with `challenge_rank.py ... --no-chuffed` on the laptop (it gives D-0125's numbers back
+on the old archive to the decimal) and `refusal_causes.py /scratch/arthur/wave41run --widths` on
+the node. The 1 600 rows have the same keys in both runs; 1 564 have the same status.
+
+### The statuses, and the incumbents
+
+| over 1 600 instances | D-0125 run (`1a0cfa7`) | this run (`35588fb`) |
+|---|---|---|
+| TIMEOUT | 985 | 978 |
+| REFUSED | 212 | **206** |
+| OPT | 170 | **174** |
+| CAPPED | 148 | 151 |
+| SAT | 46 | **48** |
+| FLATTEN-FAIL | 25 | 25 |
+| UNSAT | 10 | 10 |
+| ERROR | 4 | 8 |
+| complete answers (OPT + UNSAT) | 180 | 184 |
+| verified (`VERIFIED` in the verdict column) | 219 | 224 |
+| **REJECTED** (status or verdict) | **0** | **0** |
+| incumbents, all rows | 794 | **799** |
+| incumbents, TIMEOUT + CAPPED rows | 555 | 558 |
+| of which TIMEOUT / CAPPED | 547 / 8 | 550 / 8 |
+| incumbents on REFUSED rows (the guard fired during search) | 68 | 67 |
+
+Every SAT and UNSAT is VERIFIED in both runs. The 36 instances whose status changed:
+
+| from (D-0125 run) | to (this run) | n | which |
+|---|---|---|---|
+| TIMEOUT | OPT | 4 | `2011_bacp_bacp-24` (min 29, 1 140.7 s, VERIFIED in 41 s), `2020_sdn-chain_d10n780-1` (min 10, 189.8 s, VERIFIED in 1 482 s), `2020_sdn-chain_d10n780-2` (min 22, 326.0 s, VERIFIED in 1 228 s), `2012_ship-schedule_8ShipsUnconst` (max 834 150, the incumbent it already had, proved at 1 096.4 s; TIMEOUT-CHECK, below) |
+| TIMEOUT | SAT | 2 | `2012_nonogram_non_fast_8` (112.2 s), `2026_nonogram_medium_05` (76.6 s), both VERIFIED |
+| REFUSED | CAPPED / TIMEOUT / ERROR | 6 / 5 / 7 | the 18 freed refusals, **none with an incumbent** (family A's 6 and 12 of family B, below) |
+| TIMEOUT / ERROR / CAPPED | REFUSED | 6 / 3 / 3 | the 12 new refusals, all family B but one (below) |
+
+### The standings (fixed category, `challenge_rank.py --no-chuffed`)
+
+| edition | D-0121 rank / score | D-0125 rank / score | this run rank / score |
+|---|---|---|---|
+| 2026 | 12 / 13, 149.9 | 12, 190.7 | 12, **205.6** |
+| 2025 | 10 / 10, 69.3 | 10, 106.0 | 10, 106.3 |
+| 2024 | 9 / 9, 192.8 | 9, 221.8 | 9, 227.4 |
+| 2023 | 7 / 7, 120.1 | 7, 141.4 | 7, 141.9 |
+| 2022 | 7 / 7, 105.4 | 7, 121.6 | 7, 123.6 |
+| 2021 | 7 / 7, 94.8 | 7, 100.9 | 7, 101.2 |
+| 2020 | 6 / 6, 34.7 | 6, 39.2 | 6, **56.4** |
+| 2019 | 8 / 8, 123.4 | 7, 141.1 | 7, 143.4 |
+| 2018 | 8 / 8, 69.6 | 8, 94.8 | 8, 94.9 |
+| 2017 | 12 / 12, 52.8 | 12, 74.2 | 12, 80.1 |
+| 2016 | 10 / 11, 249.5 | 9, 278.9 | 9, 280.3 |
+| 2015 | 9 / 9, 100.3 | 9, 100.5 | 9, 104.0 |
+| 2014 | 11 / 11, 131.6 | 11, 176.9 | 11, **173.3** |
+| 2013 | 11 / 11, 118.3 | 10, 157.8 | 10, 158.2 |
+| 2012 | 9 / 10, 176.5 | 9, 202.5 | 9, 204.0 |
+| 2011 | 8 / 8, 96.0 | 8, 107.5 | 8, 110.0 |
+
+**The rank is the same in all sixteen editions.** The score rises in fifteen, by 0.1 (2018) to
+17.1 (2020: the two `sdn-chain` OPTs and five incumbents gained), and falls in one, 2014 (-3.6:
+`traveling-tppv_circ14bnonbal` lost its incumbent, min 500 -> none, and `cyclic-rcpsp_hard_5` went
+798 -> 799, against five improved values that crossed no opponent). The script reproduces the
+official ranks in all sixteen editions on both archives; its 2011 and 2012 pairwise reproduction
+leaves 137 and 816 stored scores unmatched, identically on both runs (the whole-second editions, a
+property of the stored matrices, not of either run).
+
+### What (a3) bought, instance by instance
+
+(d) touches only family A's 14 (next section, separable by the stderr), so the rest of the delta
+is (a3)'s, by elimination and not by a measurement that isolates it.
+
+| | |
+|---|---|
+| complete answers | +4 OPT, +2 SAT (above); none lost |
+| wall on the 180 complete answers both runs have | 22 915 s -> 21 430 s (-6.5 %), median 40.05 -> 38.91 s; faster by more than 5 % on 47, slower on 9 |
+| objective on the 790 instances with a value in both runs | **better on 63** (58 TIMEOUT -> TIMEOUT, 5 REFUSED -> REFUSED), worse on 13, equal on 714 |
+| incumbent gained / lost | 9 (3 are the new OPTs, 5 TIMEOUT, 1 REFUSED) / 4 (`2013_proteindesign12_1PGB.11p.9aa.usingEref_self` min 1 230, `2017_city-position_city-8-06` min 3 531 009 and `2025_cgt_cgt_5_h27_r0.05_s0.8_0` min 16 381, REFUSED in both runs, the guard now fires before the first solution; `2014_traveling-tppv_circ14bnonbal` min 500, TIMEOUT in both) |
+
+The 13 worse values, so that the count is not read as noise-free: `2011_ship-schedule_7ShipsUnconst`
+max 441 165 -> 346 195, `2012_tpp_tpp_7_5_30_1` 268 -> 269, `2013_celar_CELAR6-SUB3` 32 466 -> 32 576,
+`2014_cyclic-rcpsp_hard_5` 798 -> 799, `2015_is_jZ9pQqRxJ2` 210 944 -> 217 088 (REFUSED both),
+`2017_rcpsp-wet_j90_48_4-wet` 1 797 -> 1 803 (REFUSED both), `2020_is_v1HjuSBQMb` 825 344 -> 833 536
+(REFUSED both), `2021_carpet-cutting_mzn_rnd_test.19` 3 272 -> 3 403 (REFUSED both),
+`2023_table-layout_p1000_m20_r200_c20` 19 065 -> 19 068, `2024_fox-geese-corn_foxgeesecorn_19` max
+204 -> 195, `2025_ihtc-2024-kletzander_i07` 24 740 -> 24 750, `2025_is_vWQp9idqMs` 113 152 -> 122 880
+(REFUSED both), `2026_rect-euler_british_isles_combined_model_input` 2 708 -> 2 709. A deeper tree in
+the same 1 200 s is a different tree, not a superset of the old one.
+
+**What the deeper search costs**: 12 instances that ran to the timeout, the cap or the minor-GC
+abort before now exhaust the 8 GiB heap guard, after 116 to 1 171 s: `2011_pentominoes_06`,
+`2013_pentominoes-int_06`, `2020_pentominoes_06` (TIMEOUT at 1 200 s before, REFUSED at 1 149-1 171 s
+now, satisfaction models), `2015_is_1YHXeG1xYs` (374 s), `2017_opt-cryptanalysis_r15` (858 s),
+`2018_opt-cryptanalysis_r14` (1 054 s), `2020_whirlpool_d30` and
+`2023_multi-agent-graph-coverage_rnd_n75_p1000_c50_s1` (CAPPED before, family B now),
+`2023_travelling-thief_n10_k3_c5000_l10000_u10100_r46` (CAPPED before, family C at `$ne351` now), and
+the three minor-GC aborts of D-0125 (`2020_gbac_reduced_UD7-gbac`, `2026_gbac_reduced_UD1-gbac`,
+`2025_work-task-variation_...-block-15`, the guard winning the race this time). The net REFUSED
+212 -> 206 is 18 freed minus these 12.
+
+### Refusals: family A is empty, and ERROR is family B seen from the other side
+
+| | D-0125 run | this run |
+|---|---|---|
+| REFUSED | 212 | **206** |
+| of which the heap budget, exit 5 | 192 | 186 |
+| family A, front end before any declaration (0 clauses minted) | 14 | **0** |
+| family B, after the encoding (rows or search) | 162 | 170 |
+| family C, inside a ladder loop | 16 | 16 |
+| gcc repeated variable / unbounded `var int` (M7-T29) | 19 + 1 | 19 + 1 |
+
+(`refusal_causes.py` on the node and the archived `.err` on the laptop agree line for line.) Family
+B's clauses minted at death: p10/p50/p90 = 161 948 / 5.10 M / 93.2 M; C's 195 219 / 16.2 M / 25.4 M.
+
+**Family A's 14** (every run the old binary refused with "0 clauses minted"), under the streaming front
+end, now pass the front end and die where D-0123's B and C die, as D-0128 predicted for its twelve
+and the harness confirms for all fourteen:
+
+| instance | D-0125 run | this run |
+|---|---|---|
+| `2015_largescheduling_instance-0800-1` | REFUSED 29.8 s | **CAPPED** 312 s, no `.opb`, no incumbent (the rows cap) |
+| `2018_largescheduling_instance-0800-4` | REFUSED 29.7 s | **CAPPED** 317 s, rows cap |
+| `2022_ma-path-finding_ins_g32_p20_a10` | REFUSED 30.0 s | **CAPPED** 833 s, rows cap |
+| `2025_ihtc-2024-marte_i11` | REFUSED 30.6 s | **CAPPED** 331 s, rows cap |
+| `2025_ihtc-2024-marte_i14` | REFUSED 47.1 s | **CAPPED** 316 s, rows cap |
+| `2019_rcpsp-wet-diverse_j90_48_4-wet-diverse-3` | REFUSED 26.0 s | **TIMEOUT** 1 200 s, no `.opb`: still compiling |
+| `2020_code-generator_mips_gcc.real.eiremain` | REFUSED 31.0 s | REFUSED 227 s, family B |
+| `2023_code-generator_mips_mesa.eval.gl_Map1f` | REFUSED 30.3 s | REFUSED 109 s, family B |
+| `2025_gt-sort_n9_ub10_50.0_BEST` | REFUSED 26.3 s | REFUSED 116 s, family B, a 420 MB `.opb` written |
+| `2025_gt-sort_n9_ub10_75.0_BEST` | REFUSED 41.3 s | REFUSED 207 s, family B |
+| `2026_warehouse_wlp22` | REFUSED 38.1 s | REFUSED 81 s, family B |
+| `2020_code-generator_mips_pgp.crypto.encryptfile` | REFUSED 27.2 s | REFUSED 197 s, family C at `$ne6991` |
+| `2024_yumi-dynamic_p_9_GSGS_GSGSG_yumi_grid_setup_7_7_zones` | REFUSED 24.9 s | REFUSED 225 s, family C at `$ne9189` |
+| `2025_gt-sort_n7_ub20_75.0_BEST` | REFUSED 33.8 s | REFUSED 247 s, family C at `X_INTRODUCED_67_`, a 726 MB `.opb` written (D-0128 read this one as the root, after `compile`) |
+
+None of the fourteen holds an incumbent in either run. Sub-row (d) is closed by this table: the
+front end is no longer where anything dies, and these fourteen are now M8-bits-encoding's (the
+six at the encoding's size) and family B's (the eight) at the same time.
+
+**ERROR 4 -> 8, and every one is the same line**: `Fatal error: allocation failure during minor GC`,
+rc=134, after 109 to 562 s, the hole D-0071 named (the Gc alarm acts at the end of a major cycle and
+cannot promise to act before the minor heap fails). Seven of the eight were family-B refusals in the
+D-0125 run (`2014_liner-sf-repositioning_tp7_10`, `2018_steiner-tree_es20fst08/09/14.stp`,
+`2020_gbac_UD10-gbac`, `2020_whirlpool_d12`, `2024_aircraft-disassembly_B737NG-600-04-Anon.json`),
+and three of the previous four aborts are family-B refusals now; only
+`2023_unit-commitment_L7-T12G5L5` aborted in both. ERROR and family B are one population, split by
+which of the two guards wins a race the alarm cannot be made to win (D-0071). **No new wording.**
+
+### The wall: the encoding's size, on 169 runs, and the proof's on 8
+
+The harness now deletes `.opb.rows` on every outcome (D-0125 addendum), so the addendum's evidence (a
+rows file at exactly 16 384 000 000 bytes) is gone. What stands in for it is the `opb` column of
+`results.tsv`, which is `-` when no `.opb` was ever completed; on the D-0125 archive that proxy
+reproduces the addendum's split exactly (CAPPED without `.opb` 140 / with 8; TIMEOUT without `.opb`
+18; ERROR without 3), so it is read here as the same thing.
+
+| | D-0125 run | this run |
+|---|---|---|
+| CAPPED, `opb` column empty, no incumbent: **the encoding hit the 16 GB cap** | 140 | **143** |
+| CAPPED with an `.opb` size and an incumbent: the proof hit the cap | 8 | 8, **the same eight instances with the same `.opb` bytes** (0.47 to 9.53 GB) |
+| TIMEOUT with no `.opb` and no incumbent: 1 200 s ended while the encoding was still being written | 18 | 19 |
+| ERROR with no `.opb` | 3 | 7 |
+| **runs that never finished writing their `.opb`** | 161 | **169** |
+
+CAPPED wall: median 613 s (638 before), p10 280 s (same). The three encoding-capped runs that left
+the population became family-B refusals (`whirlpool_d30`, `multi-agent-graph-coverage`,
+`travelling-thief`); the six that joined are family A's five above and `2025_carpet-cutting_cc_rnd_8_1`
+(family B before, CAPPED at 780 s now). **M8-bits-encoding's population is 169 + 8**, the `.fzn` of
+the refused and erroring ones kept under `/scratch/arthur/wave41run/*/work/` (215 files, 9.3 GB).
+What cannot be told any more: how far the rows got in the 1 200 s runs (the addendum's 9.2-16.1 GB),
+because the file that said so is deleted on exit.
+
+### The OPTs the checker cannot finish: 8 (M8-bits-encoding-T5's list)
+
+The archive of the D-0125 run holds **6** `TIMEOUT-CHECK` rows and **1** `CHECK-ERROR` row; its text
+says "7 OPTs whose proof the checker cannot finish: six TIMEOUT-CHECK and one CHECK-ERROR", which is
+the same count (7 is the total, 6 the TIMEOUT-CHECK share). This run has 7 + 1 = **8**, the seven of
+before with the same `.opb` and `.pbp` byte counts (the proofs are unchanged, as the gate said) plus
+`8ShipsUnconst`, newly proved optimal at 1 096 s with a 4.7 GB proof. Verbatim from `results.tsv`
+(`wall` is the solve, bytes are `.opb` / `.pbp`, then the verdict and the check's seconds):
+
+```
+2011_ship-schedule_6ShipsMixedUnconst   OPT max:288900  578.5 s   6898905812 / 4515380402   CHECK-ERROR     51.0 s  (veripb rc=134, its own allocation failure under 16 GiB)
+2012_ship-schedule_5Ships               OPT max:483650  231.6 s   1863536937 / 5151911100   TIMEOUT-CHECK 3600.3 s
+2012_ship-schedule_6ShipsMixed          OPT max:301650  137.4 s   1154866325 / 2408458634   TIMEOUT-CHECK 3600.1 s
+2012_ship-schedule_7ShipsMixedUnconst   OPT max:389100  167.1 s   1396890373 /  925100941   TIMEOUT-CHECK 3600.3 s
+2012_ship-schedule_8ShipsUnconst        OPT max:834150 1096.4 s   2761295336 / 4663399101   TIMEOUT-CHECK 3600.3 s   NEW (TIMEOUT with this incumbent before)
+2014_ship-schedule_3Ships               OPT max:265650  120.3 s   1116198454 / 2359685872   TIMEOUT-CHECK 3600.2 s
+2014_smelt_smelt_2                      OPT min:69      179.7 s   1133117490 /  482327204   TIMEOUT-CHECK 3600.2 s
+2018_mapping_full2x2_mp3                OPT min:1100    624.3 s    847078211 /  636566189   TIMEOUT-CHECK 3600.2 s
+```
+
+`challenge_rank.py` demotes all eight to an incumbent ("OPT demoted: proof TIMEOUT-CHECK"). Two of
+the three new VERIFIED OPTs were close to the same edge: `sdn-chain_d10n780-1` checked in 1 482 s
+and `-2` in 1 228 s of the 3 600; the check time over the VERIFIED OPTs is 22 063 -> 24 119 s.
+**0 REJECTED**, so nothing was kept: the only proof artefacts the run left were this CHECK-ERROR's
+`.opb` and `.pbp` under `2011/log/` (11.4 GB, the harness's evidence for a failed check), deleted
+with the archive verified; `work/` held none, the harness deletes them on every outcome now.
+
+### What this did not measure
+
+Named so that it is not read into the tables: (a3) alone (the run has (a3)+(d); (d)'s effect is
+the fourteen rows above, the rest is (a3) by elimination); the run-to-run variance of one 30-way
+run (the 13 worse values, the 4 lost incumbents and the 6 TIMEOUT -> REFUSED are consistent with a
+deeper tree and with an asynchronous guard on a loaded node, and nothing here tells the two apart;
+no instance was run twice); node counts and peak RSS per instance (in the archived `.err`, not
+tabulated); Chuffed and GCS (not re-run, `--no-chuffed`; the calibration is D-0121's); the rows'
+progress at the timeout (above); and the bits encoding itself, which is M8's to measure on these
+169 + 8 and on the eight proofs above.
+
+**Housekeeping, same day**: the run's tables and logs are on the laptop (above); on the node
+`/scratch/arthur/wave41run/` went from 20 GB to 8.8 GB (the two files under `2011/log/`; nothing
+matched under `*/work/`), the 215 `.fzn` and every table, log and `work/` directory kept.
