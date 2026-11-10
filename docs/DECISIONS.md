@@ -10447,3 +10447,586 @@ of writing either form (none of this ran the solver), a learned clause's `rup` o
 atoms in the bits arm (only the row-crossing bound was written), and `cake_pb` on a `red` with a
 non-empty subproof (the elaborator emitted empty ones, because the autoprover discharged every
 goal).
+
+## D-0130  M8-bits-encoding-T1: the bits encoding above a threshold -- the substrate contract, the on-demand atom, the mixed row, and how a bits pruning is written
+
+**Status**: **DESIGN**, recorded 2026-11-10 (agent-m8t1, branch `wave42-t1`). Written BEFORE
+code, as the roadmap row asks; no file under `lib/`, `bin/` or `test/` changes. Implemented by
+M8-bits-encoding-T2 (encoding, rows, `Linear`) and T3 (the rest of the substrate), measured by
+T4, which also picks the default. T5 (D-0131) is the order arm's half of D-0127's rule and runs
+independently; this record positions it and takes its `pol`/`rup` rule as given. Inputs, by
+number: D-0123 and D-0125 with its 2026-11-06 addendum (the population), D-0127 (the checker
+measurement), D-0028 and D-0031 (why the order encoding is Θ(w) twice over and why the ladder is
+eager), D-0010 and D-0013 (the currency and the arithmetic every justification keeps), D-0026
+and D-0043 (the split this design must not undo), D-0053 (`red` is vacuous over a contradictory
+database), D-0058 (views render onto base literals), PROOF-FORMAT §2a and §3,
+`bench/bits_spike/gen.py` and its tables.
+
+### 0. The sentence
+
+**An integer variable declared wider than `W` is written as `bit_length(hi − lo)` bits of `x − lo`
+plus two bound rows and no ladder; its order atoms `[x >= v]` keep their names `x_ge_v` and are
+minted into the proof on demand, at level 0, by a `red` pair whose witness touches only the fresh
+atom; every propagator still states facts over `x_ge_v` and justifies with the same `Combine`,
+because the three places that turn a reason into proof text -- `Encoding`/`Opb` for rows,
+`Justify` for `pol` summands, `Trace` for pruning lines -- are the only places that know there are
+two representations; a pruning from a row with a bits term is written as one short `pol` that
+divides, cites the atom's definition and saturates, and a pruning from an order-only row is written
+as D-0127 says, a `rup`.**
+
+### 1. What this buys, in the population's own numbers
+
+D-0125's addendum: **161 of 1 600 Challenge runs never finished writing their `.opb`** (140 at the
+16 GB cap on the streamed `.opb.rows`, 21 still writing at 20 minutes), none with an incumbent; 8
+more wrote a 16 GB proof; 7 OPTs have a proof the checker cannot finish in an hour, and one a
+6.9 GB `.opb` the checker cannot load under 16 GiB. D-0123 named the shape: wordpress-shaped
+instances with 26 M ladder rungs and a 3 GB `.opb`, still propagating the root at 600 s. Those are
+D-0028's Θ(w) ladder and Θ(w) row expansion, which D-0031 showed cannot be deferred inside the
+order encoding (lazy rungs are Θ(w²)) and D-0028 showed cannot be shortened on the reason side
+("the width is inherited from the encoding").
+
+What the bits carrier does to each of those, per variable of declared width w, with n = ⌈log₂ w⌉:
+
+| cost | order (today) | bits (this record) | measured where |
+|---|---|---|---|
+| `.opb` per variable | w − 1 ladder rows, w literals per row occurrence | 2 rows of n terms, n literals per row occurrence | D-0127: 111 MB → 2.1 kB at w = 10⁶, two variables |
+| a bound that crosses a row | Θ(w) literal cancellation; as `pol` quadratic for the checker, as `rup` linear (T5) | one `pol` of O(1) citations | D-0127: 383 s / 0.7 s → 0.4 ms, flat 10³..10⁶ |
+| an atom `[x >= v]` | free, in the `.opb` | two `red` lines of O(n) bytes, once, never deleted | D-0127: 900 B proof at 10⁶ |
+| a ladder walk by unit propagation (trace lines, learned clauses, D-0031's 7 of 20) | free, along the eager ladder | along the SPARSE chain between minted atoms (§5) | **not measured**; T3 |
+| a value-enumerating justification (gcc, alldiff, maxmin, element, cumulative) | Θ(w) rows in the `.opb` | **not available on bits** (§3.4) | by construction |
+
+The last two rows are the price, and §12 says what they prevent `W = 0` from comparing.
+
+### 2. The writing rule, from D-0127, and what this record adds to it
+
+D-0127's sentence is taken whole: **write a justification as `rup` wherever the checker's unit
+propagation closes it -- the order encoding's ladder walks and any clause over atoms that already
+exist -- and as `pol` only where it cannot, which is every bound that crosses a bits row; a
+Θ(w)-token `pol` is quadratic for VeriPB 3.0.2, its elaboration is the `pol` itself, and a `rup`
+elaborates to a hint list the verified checker handles faster.** The numbers behind it, so they do
+not have to be looked up: at w = 10⁶ the same cancellation is 197 B and ~0.7 s of checking as `rup`,
+28 MB and ~381 s as `pol` (×94 for ×10 in width: every addition of a rung into an accumulator of
+Θ(w) terms costs Θ(w), with or without a multiplier, while weakening is linear at 1.4 µs an
+operation); the elaborator copies a `pol` and writes a `rup` as its ~7.5 B/rung hint list, 3.75 MB
+against 26.6 MB, and `cake_pb` checks the hinted RUP in 34 s against 49 s. On bits, `rup +1 ~b_ge_m
+>= 1` is **refused at every width** ("not implied by reverse unit propagation"): a bound does not
+cross a bits row by unit propagation, which is GCS's observation on this checker.
+
+Three refinements, which are this record's:
+
+1. **The unit is the ROW, not the arm.** A `Linear` instance whose row has at least one bits term
+   justifies every pruning and every conflict by `pol` (§7), because the fact it would have the
+   checker propagate across the row is on bits even when the pruned variable is not. A row with
+   no bits term is untouched and is T5's (its walks become `rup`). `Trace` decides this per entry
+   from the representation of the claim's and the facts' owners (§3.2); nothing in `Linear` knows.
+2. **A clause over atoms that exist is `rup` in both arms.** The learned clause of `Learn` (1UIP
+   over order literals, D-0044) is derived by unit propagation over the trace CLAUSES already on
+   the page, not over rows, so it stays a `rup` whatever carries the variables -- provided every
+   atom it names has been minted (§5) and the sparse chain supplies the `x_ge_5 -> x_ge_3` steps
+   its semantic minimisation (`Learn.slot`) relies on.
+3. **The Θ(w)-token diagnostic is the gate for both arms.** T5's `--stats` counter of tokens per
+   `pol` (max and total) is what says a bits-arm `pol` has quietly grown a walk; this record adds
+   the atom counters beside it (§10). A `pol` whose token count is proportional to a declared
+   width is a defect in either arm, and the counter is how it is seen rather than argued.
+
+**The caveat every `ensure_atom` test inherits** (D-0127, the `B2` finding): for a ROOT pruning
+the atom it mints is decided by the model, the negation of the pair's second half contradicts the
+database, and every redundance goal is implied whatever the witness -- D-0053's vacuity one step
+out. The checker refused the flipped witness in the spike only because its unit propagation did
+not SEE the contradiction; with `a`'s lower bound at 0 the same wrong witness was `s VERIFIED`.
+**A test of the witness must mint an atom the model does not decide: under a decision, on a
+satisfiable model, and the lane must assert "Proofgoal #1 could not be autoproven" on the flipped
+witness.** A lane that mints at the root tests nothing and must not be written.
+
+### 3. The substrate contract
+
+#### 3.1 The one rule
+
+**A propagator states facts and builds justifications; it cannot spell a bit.** A reason is
+`Reason.fact` (`At_least`/`At_most` of a name, a value and a declared flag, D-0043), materialised
+by `Reason.lits` into `x_ge_v` literals exactly as today. A justification is an `Explanation.t`
+over `Model_row`, `Term`, `Defining`, `Weaken` and `Combine` (D-0026) plus the one constructor this
+record adds (§8). Neither type has a bit in it, so the property is a type, not a review item, and
+D-0026's split is what makes the whole milestone a substrate change rather than a propagator
+rewrite: the preamble's premise, confirmed module by module below.
+
+#### 3.2 Who sees what
+
+| module | sees today | at T2/T3 |
+|---|---|---|
+| `lib/proof/lit.ml` | `Ge`, `Eq` | gains `Bit of string * int`, rendered `x_bit_i`; `var_compare` puts it after `Eq`; `owner`/`value` extended; `is_order`/`is_direct` false for it |
+| `lib/proof/encoding.ml` | the only module allowed to know the encoding's shape (its header) | **knows both**: `declare_int` forks on eligibility (§4), `ensure_atom` and the chain (§5), `linear_terms_int_lin_le` emits `(a·2^i, x_bit_i)` for a bits term (§6), `is_bits`, `bound_row_ids`, the counters |
+| `lib/proof/opb.ml` | renders terms by name | unchanged but for `Lit.Bit`'s name in `normalise`/`write`; the objective line follows the terms it is given (§9) |
+| `lib/proof/writer.ml` | ids, levels, `red`, `pol`, `rup`, `soli` | unchanged; `ensure_atom` uses `red` and `with_level 0` exactly as `ensure_direct` and `soli` do |
+| `lib/core/justify.ml` | renders every summand to `Pol.t`; `validate_lits` checks owners are declared | **knows both**: `Weaken_declared` → axioms or bound-row citation; `Term`/`Defining` of a unit over a bits atom → the B1/B2 bridge; the atom step after the division; mints atoms before the first line that names them |
+| `lib/core/trace.ml` | writes `rup claim ∨ ¬facts` per entry, lazily, in trail order | **knows both**: an entry whose claim's or any fact's owner is bits is written as its justification (§7.3); order entries unchanged; mints the claim's and the facts' atoms |
+| `lib/core/prop/order_reason.ml` | D-0010's chains, `weaken_declared` | its chain builders are called only from `Justify`'s order arm; no new caller, no bits knowledge |
+| `lib/core/ladder.ml` | ladder rows as ids for PB analysis | unchanged; answers `None` for a bits variable's "rung", which is already the ends' answer (§7.5) |
+| `lib/core/learn.ml`, `analysis.ml` | clauses over `Lit.t`, `slot` on `Ge` | unchanged; `Bit` never reaches them (no trace clause names a bit) |
+| `lib/core/learned.ml`, `pb_analysis.ml`, `prop/pb.ml` | `.opb` rows as PB inequalities over `Lit.t` through `Propagator.pb_row` | a mixed row's `pb_row` carries `Bit` terms; `ladder_form`/`atom_of`/`falsified_*` answer `None`/`false` for a `Bit` as they do for `Eq`, so PB analysis takes its documented clause fallback and `pb.ml` declines the instance (§7.5, counted) |
+| `lib/core/search.ml` | decisions as `Lit.ge`/`Lit.le`, the objective's bound literal, `soli` | mints the decision's atoms before the level marker and the objective's atom at each `soli` (§5.4, §9); `global_of` returns `None` for a `Bit` |
+| `lib/core/store.ml` | `root_holds` matches `Ge` | `Bit → false`; nothing else |
+| `lib/core/view.ml` | renders `[y >= n]` to the base's `x_ge_(n−k)` (D-0058) | unchanged: a view renders to a NAME, and the name is representation-free |
+| `lib/flatzinc/compile.ml` | declares, posts rows, builds instances | computes eligibility (§3.4) from the model's scopes, before any `declare_int` |
+| `bin/main.ml` | flags, `--stats` | `--bits-above`, the atom lines (§10) |
+| every module in `lib/core/prop/` except `order_reason.ml` | facts and `Explanation.t` | **unchanged, by the rule above** |
+
+#### 3.3 Names are the contract, and the atom must exist before it is cited
+
+The literal `[x >= v]` is `x_ge_v` in both arms (PROOF-FORMAT §3, normative). What differs is
+whether the name is a PB variable of the `.opb` (order: yes, all of them) or a proof-level atom
+minted by `ensure_atom` (bits). Every consumer of the name -- trace lines, learned clauses, the
+nogood, `soli`, the direct encoding's channelling -- therefore works unchanged on one condition:
+**the atom is on the page before the first line that names it.** The substrate guarantees it at
+the three places a name first reaches the writer: `Justify.validate_lits` (every summand and
+clause), `Trace` (every claim and fact), `Search` (every decision literal and the objective's
+bound literal). A propagator never calls `ensure_atom`; it could not know whether it needs to.
+
+#### 3.4 Eligibility: width AND scope
+
+The flag says "wider than W". The record adds a condition the preamble's "Θ(w) in atoms whatever the
+carrier" implies but does not state: **a variable gets bits only if every `.opb` row that mentions
+it is a linear row** (posted through `add_int_lin_le`/`add_int_lin_ne`/`add_equality`:
+`int_lin_le/eq/ne`, `int_le/lt/eq`, `int_ne`'s big-M rows, `bool2int`, `reif_lin_*`, `arith`'s
+guarded rows). The reason is I-X5 plus the fresh-atom witness: the `.opb` is closed before the first
+proof line, a `red` is a proof line, and a `red` whose atom already occurs in a model row has a goal
+for that row that the fresh-atom witness does not discharge (D-0031's permutation problem, from the
+other side). The families whose rows name order literals per value -- `gcc`'s counting rows,
+`maxmin`'s one clause per threshold, `cumulative`'s capacity rows, `element`'s per-position rows,
+`alldiff`'s direct encoding and Hall rows -- cannot be posted over a variable whose atoms do not
+exist, so **every variable in such a scope keeps the order encoding at every `W`**, and `--stats`
+says how many were held back and by which family. Two further holds: a variable declared with
+**holes** (`var {1,3,5}`, M7-T11: the hole rows are ladder rows) stays order, and a variable of
+**width 0 or 1** stays order because its order encoding already IS one Boolean -- `W = 0` does
+not rename every `var bool` to `b_bit_0`, which keeps `clause.ml`, `bool2int.ml` and `reif.ml`
+byte-identical at every threshold. `Ne`'s scope is held back at T2 and released at T3 (§7.4).
+
+### 4. `declare_int` for a bits variable
+
+For `x` eligible with declared `[lo, hi]`, `width = hi − lo ≥ 2`, `n = bit_length(width)`
+(`2^(n−1) ≤ width < 2^n`):
+
+```
+x_bit_i        for 0 <= i < n        meaning   bit i of (x − lo)
+@lb_x   +1 x_bit_0 +2 x_bit_1 ... +2^(n-1) x_bit_(n-1) >= 0 ;          x >= lo
+@ub_x   -1 x_bit_0 -2 x_bit_1 ... -2^(n-1) x_bit_(n-1) >= -(hi - lo) ;  x <= hi
+```
+
+- **The bits are the offset from `lo`, unsigned.** That is D-0010's own currency: the order
+  expansion is `x = lo + Σ [x >= v]` and `linear_terms_int_lin_le` folds `a·lo` into the row's
+  constant; the bits expansion is `x = lo + Σ 2^i x_bit_i` through the same fold. So a negative `lo`
+  costs nothing and there is no sign bit; the roadmap row's "sign handling for negative lows" is
+  answered by having no signs to handle. `gen.py` writes raw values (its `a ∈ [l, w]` carries `l`
+  in `@Alo`); the solver's rows are the same shape with the constants shifted (§7.2).
+- **Both bound rows are posted unconditionally**, even where one is trivially true (`@lb` always
+  is under the offset; `@ub` is when `width = 2^n − 1`). One line of n terms each, so that
+  `Justify` weakens a bits term in either direction by ONE citation (§8), and because that is the
+  shape D-0127 measured (`@Alo`/`@Ahi`, `@Blo`/`@Bhi`, loaded and verified at every width). Their
+  ids are consecutive, `bits_base` and `bits_base + 1`, by construction of the one emission, as the
+  ladder's are.
+- **No ladder, no hole rows, no `x_ge_v` in the `.opb` at all.** `Occurs` gains a `bit` range per
+  owner for the header's variable count; `#constraint=` grows by 2; `ladder_clauses` is untouched
+  and a new `bits_rows` counter is incremented, so M7-T1's "encoding cost" lines stay true.
+- **The width limits and the warning are the ladder's and do not fire for a bits variable**:
+  `--max-order-width` refuses an ORDER ladder, and `--width-warn` reports one. `Checked.limit`
+  (D-0029) applies as before, at compile time, to the model's arithmetic; §6 shows the row's
+  envelope.
+- `Encoding.ge`/`le` keep their `Holds`/`Fails`/`Cond` answers (the constants at the declared
+  bounds are the same constants); `consistency_id` and `hole_id` answer `None`; `ensure_direct`
+  raises for a bits variable at T2/T3 (its callers are held back by §3.4, so the raise is a guard,
+  not a path).
+
+### 5. `ensure_atom`: the pair, the level, the sparse chain, the counter
+
+#### 5.1 The pair
+
+`Encoding.ensure_atom t w x v`, for `lo < v <= hi`, memoised per `(x, v)`, returns the ids
+`(B1, B2)`. With `k = v − lo` and `K = 2^n − k`:
+
+```
+@B1 red +1 x_bit_0 ... +2^(n-1) x_bit_(n-1)  +k x_ge_v   >= k : x_ge_v -> 0 ;    x_ge_v -> x >= v
+@B2 red +1 ~x_bit_0 ... +2^(n-1) ~x_bit_(n-1) +K x_ge_v  >= K : x_ge_v -> 1 ;    x >= v -> x_ge_v
+```
+
+B1 first, under the witness that falsifies the fresh atom (B1 is then satisfied outright and no
+other constraint mentions the atom); B2 second, under the witness that satisfies it, whose one
+non-trivial goal is B1's image `x >= v`, which the negation of B2 supplies. The order matters for
+the same reason `ensure_direct`'s does, and the shape is `gen.py`'s `bits_atom`, accepted at every
+width with the flipped witnesses refused at full wording ("Proofgoal #1 could not be
+autoproven. Please add an explicit subproof for proofgoal #1."). Coefficients are O(w) numbers in
+O(log w) digits; the line is O(n) tokens.
+
+#### 5.2 Level 0, never deleted before the conclusion
+
+The pair is written under `Justify.with_level ctx 0`, as `Learned.introduce` and `soli` are
+(D-0045's addendum): an atom minted under a decision is still an atom after the backtrack, and a
+`wipe_level` that took it would retire it out from under every later line that names it (the
+measured failure of D-0045, in a different coat). The ids go in a per-variable table beside
+`direct_cids`, and `retire_all_atoms` deletes them en bloc just before the conclusion, as
+`retire_all_direct` does, so I-X2's audit stays exact and the preamble's risk (1) -- atoms
+introduced at every inference, never freed -- is at least VISIBLE: the count is on `--stats` and
+the deletion is one `del range` per variable.
+
+#### 5.3 The sparse chain
+
+An atom alone does not give the checker the ladder step D-0031 measured 7 of 20 proofs to need.
+When `[x >= v]` is minted and `[x >= u]` is the nearest atom below (`lo < u < v`) and `[x >= t]`
+the nearest above, two `pol` lines link it in, each from the two definitions alone:
+
+```
+@L_v_u  pol @B1_v @B2_u + s (v - u + 1) d ;        ~x_ge_v  \/  x_ge_u       (x >= v  ->  x >= u)
+@L_t_v  pol @B1_t @B2_v + s (t - v + 1) d ;        ~x_ge_t  \/  x_ge_v
+```
+
+The arithmetic, once: `B1_v + B2_u` is `(2^n − 1) + k_v·~x_ge_v + K_u·x_ge_u >= k_v + K_u`, i.e.
+`k_v·~x_ge_v + K_u·x_ge_u >= v − u + 1`; saturation caps both coefficients at `v − u + 1` (it can,
+since `k_v >= v − u + 1` iff `u > lo`, and `K_u >= v − u + 1` iff `v <= lo + 2^n − 1`, both true
+for atoms); division by `v − u + 1` leaves the clause. Five tokens, no walk. An older link
+`x_ge_t -> x_ge_u` that the new atom lands inside stays (still true, never cited); links are never
+deleted before the conclusion, so the set of links is the ladder restricted to minted atoms, in
+which unit propagation walks from any atom to any lower atom through its neighbours. That is what
+`Learn`'s subsumption, the nogood's RUP and a settle line's RUP read off the eager ladder today.
+**Not measured**: that the neighbour links are enough for every RUP D-0031's seven models make.
+T3 runs those seven at `W = 0` first.
+
+#### 5.4 Who calls it, and when it must not run
+
+`ensure_atom` is called by the substrate immediately before the first line that names the atom:
+`Justify.validate_lits` for a `pol` or `rup` it is about to write, `Trace` for a pruning line's
+claim and facts, `Search` for the two literals of a decision (before `% level N`) and for the
+objective's bound literal after a `soli` (§9). It therefore runs only on the emission path of a
+live search node. **It must never run after a contradiction has been derived at level 0** (D-0053:
+every `red` is then accepted, wrong witness or none, and a missing witness is only a `Warning`
+nothing reads). Structurally that holds because a root contradiction ends the search and nothing
+but deletions and the conclusion follow; under `BAGUETTE_DEBUG` the writer asserts it anyway
+(`conclusion_pending` set by the contradiction's emitter, checked by `red`). An atom at a
+constant (`v <= lo`, `v > hi`) is never minted: `Encoding.ge` answers `Holds`/`Fails` first.
+
+### 6. The mixed linear row
+
+`Encoding.linear_terms_int_lin_le` already folds each term's `a·lo` into the constant and emits
+one literal per unit of width for an order term; for a bits term it emits `n` weighted literals:
+
+```
+order term   (a, x):   (a, x_ge_(lo+1)) ... (a, x_ge_hi)              const += a·lo
+bits  term   (a, x):   (a·2^0, x_bit_0) ... (a·2^(n-1), x_bit_(n-1))   const += a·lo
+```
+
+Same fold, same constant, same `Opb.le`/`normalise` tail, so a row over an order variable and a
+bits variable is ONE row with both shapes in it, and `Linear.make`, which reads only `lo`/`hi`
+from the store, is unchanged. **Sign**: a negative `a` negates the bit coefficients exactly as it
+negates the order ones; a negative `lo` is in the constant. **Overflow**: the term's coefficient
+mass is `|a|·(2^n − 1) < 2·|a|·width`, so `row_magnitudes`'s `W` becomes `W_bits <= 2W` and
+`check_lin_le_computable`'s envelope `|rhs| + S + W` becomes `|rhs| + S + 2W`, computed in `Arith`
+and still RAISING on failure (I-X8). Under `Compile`'s cap `|c| + Σ|a_i|·max(|lo_i|,|hi_i|) <=
+Checked.limit = max_int/16` the envelope is at most `5·limit` (`W <= 2S`), under a third of
+`max_int`; the cap does not move. The per-atom rows have coefficients `k <= width` and `K <= 2^n <= 2·width`,
+inside the same envelope. `Checked.limit` is unchanged and D-0029's "no decline" holds: a row
+that cannot be computed is refused at compile time, not written wrong.
+
+### 7. `Linear`'s justification of a bits term, and the worked example
+
+#### 7.1 The summands, rendered
+
+`Linear` builds today's `Combine (Model_row row :: summands, |a_j|)` from the same snapshot
+(`summands_of_snap`); only `Justify.emit_summand`'s rendering forks, on the owner's
+representation:
+
+| summand (built by `Linear`) | order arm (today, T5 may emit as `rup`) | bits arm |
+|---|---|---|
+| `Weaken_declared {coeff=c; name=x; dir=Lower}` (term at its declared lower bound) | `Order_reason.weaken_declared`'s axiom fold, Θ(w) tokens, linear for the checker | `@lb_x c *`, one citation |
+| `Weaken_declared {dir=Upper}` | the same, negated literals | `@ub_x c *` |
+| `Term (c, e)` where `e` concludes the unit `x_ge_v` (a derived lower bound `x >= v`) | the cited line, scaled; the ladder lift cancels the prefix (`Ladder.derive`, O(w) rungs) | `@B1_x_v c * + @E (c·k_v) * +` -- B1 scaled by c adds `c·X' + c·k_v·~x_ge_v`, the unit scaled by `c·k_v` cancels the atom, leaving `c·X'` to cancel the row's `−c·X'` exactly |
+| `Term (c, e)` where `e` concludes `~x_ge_(v+1)` (a derived upper bound `x <= v`) | the same, mirrored | `@B2_x_(v+1) c * + @E (c·K_(v+1)) * +` |
+| `Defining (c, l)` (D-0064, a root-established unit) | the unit's id, scaled | the same bridge, the unit being the root line |
+| a term resting on a DECISION (`classify` = `Assumed`, I-X9's exception): `Weaken_declared` with `assumed = Some fact` | weakened over its declared range exactly as today (the derivation is weaker than the claim, the trace line carries the claim) | `@B1_x_v c * +` with NO unit (`Justify.emit` on a `Decision` raises, by design): the atom `c·k_v·~x_ge_v` stays in the derived row -- "left in the row under a decision", `cumulative`'s phrase (D-0096) |
+
+Then the pruned term. After the others cancel, the row is `−|a_j|·X_j' >= −K` (an upper push) or
+`+|a_j|·X_j' >= K` (a lower push), plus any decision atoms. **Divide first** -- D-0013's one
+division, unchanged -- and the bits coefficients become exactly `2^i` while the constant rounds to
+the bound the propagator computed (`⌈·⌉` on the normalised form is `⌊K/|a_j|⌋` on the offset,
+measured in PROOF-FORMAT §2a's division row). Then cite the pruned variable's own atom and
+saturate:
+
+```
+upper push  x_j <= u :   ... |a_j| d  @B1_xj_(u+1) +  s        -->   ~xj_ge_(u+1)  [ \/ ~decision atoms ]
+lower push  x_j >= l :   ... |a_j| d  @B2_xj_l     +  s        -->    xj_ge_l      [ \/ ~decision atoms ]
+conflict (slack < 0) :   ... (every term cancelled, divisor 1)  -->    0 >= k,  k > 0,  no atom
+```
+
+The right-hand side after the atom step is 1 by construction (`2^n − 1 − u' + (u'+1) − (2^n − 1)`),
+so saturation yields the unit at the root and the clause under decisions, and the `e` pin of
+M1-T51/D-0043 compares against exactly that. **The claim is mandatory in the bits arm**: `Justify`
+needs the atom's value to write the step, and takes it from `justified.concludes` (D-0043's
+`Reason.fact`), which `Linear` already carries; a bits conclusion with no claim is
+`invalid_arg`, not a bare `pol`. A conflict between two opposite bounds on one bits variable
+(`Store.set_hi` against an established `x >= l`, D-0013 step 5) is `@B1_l @B2_(u+1) + @E_l k_l * +
+@E_u K_(u+1) * +`, four citations closing to `0 >= l − u`, whatever the distance between the two
+bounds; the order arm walks the rungs between them.
+
+#### 7.2 The worked example: D-0028's model at w = 10⁶, as `gen.py` writes it
+
+The satisfiable variant D-0127 measured (`a ∈ [250000, 10⁶]`, `b ∈ [0, 10⁶]`, `z ∈ {0,1}`;
+`R: a + b <= 750000`; `T: z ∨ b >= 500001`; `min z`), `bench/bits_spike/gen.py --widths 1000000
+--arms bits --styles pol`, n = 20. The `.opb` is 2 109 bytes, six rows; bit sums are elided to
+`Σ` here and are written out in the file:
+
+```
+* #variable= 41 #constraint= 6
+min: +1 z_bit_0 ;
+@R   -Σ 2^i a_bit_i  -Σ 2^i b_bit_i  >= -750000 ;
+@T   +500001 z_bit_0  +Σ 2^i b_bit_i  >= 500001 ;
+@Alo +Σ 2^i a_bit_i >= 250000 ;        @Ahi -Σ 2^i a_bit_i >= -1000000 ;
+@Blo +Σ 2^i b_bit_i >= 0 ;             @Bhi -Σ 2^i b_bit_i >= -1000000 ;
+```
+
+The proof, 900 bytes, verified in 0.4 ms (`s VERIFIED BOUNDS 1 <= obj <= INF`), every line as the
+generator wrote it:
+
+```
+pseudo-Boolean proof version 3.0
+f 6 ;
+@B1 red +1 b_bit_0 +2 b_bit_1 ... +524288 b_bit_19 +500001 ~b_ge_500001 >= 500001 : b_ge_500001 -> 0 ;
+@B2 red +1 ~b_bit_0 +2 ~b_bit_1 ... +524288 ~b_bit_19 +548575 b_ge_500001 >= 548575 : b_ge_500001 -> 1 ;
+@G pol @R @Alo + @B1 + s ;
+@E e +1 ~b_ge_500001 >= 1 : @G ;
+@Z pol @T @B2 + @G 548575 * + s ;
+output NONE ;
+conclusion BOUNDS 1 : @Z INF ;
+end pseudo-Boolean proof ;
+```
+
+`@G` is §7.1's recipe with `a` at its declared lower bound (`@Alo`, one citation), divisor 1 (`a`'s
+coefficient), `b`'s atom (`@B1`) and saturation; `@E` is the pin; `@Z` is a consumer of the pruning
+through the atom's other direction, which is what makes the pruning load-bearing (D-0127's
+`control-noG` is refused at the conclusion). In the order arm the same `@G` is 28 277 955 bytes
+and 383 s, or `rup +1 ~b_ge_500001 >= 1 ;` and 0.7 s. What the solver writes differs from the
+generator in constants only: `a`'s bits carry `a − 250000`, so `@R`'s degree is `−500000`, `@Alo`
+is `>= 0` and `@Ahi` is `>= −750000`; `b`'s `lo` is 0 and its lines are identical.
+
+The model D-0028 measured itself -- `var 0..999999: a, b; a + b = 2500000`, infeasible on the
+declared bounds, zero prunings -- is the conflict row of §7.1: two rows from `add_equality`, four
+bound rows, and
+
+```
+@c7 pol @eq_ge @ub_a + @ub_b + ;       0 >= 2500000 - 999999 - 999999 = 500002
+conclusion UNSAT : @c7 ;
+```
+
+(`@c1`..`@c4` are the two variables' bound rows, `@c5`/`@c6` the equality's two rows, so the
+conflict is the seventh id, as D-0028's was.)
+
+Five tokens against D-0028's 29.8 MB line (two million axiom literals), and a `.opb` of about
+2.5 kB against 156 MB. That is the row T2 validates first, at 10³..10⁶, against both tables.
+
+#### 7.3 Where the `pol` is written: by `Trace`, lazily, in trail order
+
+D-0018's economy is kept. In the order arm a pruning writes nothing until its branch fails, and
+then `Trace` walks the trail and writes one `rup` per entry. In the bits arm `Trace` walks the same
+trail and, for an entry whose claim's owner or any fact's owner is bits, calls `Justify.emit` on
+the entry's justification instead -- the `Combine` of §7.1, memoised, over a snapshot (D-0124's
+history, I-X6) -- with the claim set, and writes no separate `rup`: the `pol`'s pinned conclusion
+IS the clause `claim ∨ ¬(decision facts)`, and the trace clause `claim ∨ ¬(all facts)`, if any
+later line wants it in that exact form, is its weakening by the cancelled facts, pinned by `ia`
+against it. `Store.deriving_ahead` is not needed: the flag exists to put a derivation ahead of a
+trace line, and here the derivation is the line. The entries are written in trail order, so every
+cited unit precedes its citer, and every atom is minted before the line that names it because
+`Trace` calls `ensure_atom` on the claim and the facts first. The `Needs_derivation` families are
+held back (§3.4) and keep their ahead-derivations as they are.
+
+#### 7.4 `Ne` over bits (T3)
+
+`int_ne`'s hole `x <> v` is the clause `~x_ge_v ∨ x_ge_(v+1)`, RUP today over the two big-M rows
+and the ladder. Over bits it is not RUP, and it is a short `pol`: row A with `a·B1(x,v)` and the
+other terms' units added, saturated, is `~x_ge_v ∨ sel`; row B with `a·B2(x,v+1)` and the units,
+saturated, is `x_ge_(v+1) ∨ ~sel`; their sum resolves on the selector. Two atoms, O(terms)
+citations, no walk. T2 holds `Ne`'s scope back; T3 writes this and releases it. The settle past a
+hole (I-X9) is unchanged: it cites the hole's line, which is a clause.
+
+#### 7.5 PB conflict analysis over a mixed row: the clause fallback, counted
+
+`Pb_analysis` resolves rows as PB inequalities and lifts terms along ladder rows (`Ladder.derive`).
+A mixed row's `pb_row` carries `Bit` literals; `Learned.ladder_form`, `Pb.atom_of` and the
+`falsified_*` predicates answer for a `Bit` what they answer for an `Eq` (`None`/`false`), so the
+analysis takes its documented fallback to the clause path, and a learned PB row that would carry a
+bit is declined by `pb.ml` ("decline the whole instance rather than guess a box"). Nothing is
+unsound; something is weaker, and `--stats`'s existing fallback counters say how often. Lifting
+bits terms in PB analysis is T3's to measure or decline; this record does not design it.
+
+### 8. `Weaken` over a bits variable: the `Weaken_declared` constructor
+
+`Explanation.Weaken of (int * Lit.t) list` lists literal axioms, and for an order variable
+`Order_reason.weaken_declared` builds them: Θ(w) literals per term, built when the `Combine` is
+forced. A bits variable has no such literals to list, and building a million-element list to
+read its head would re-import the Θ(w) the arm exists to remove. This record therefore adds, under
+D-0043's "no new constructor without a decision record":
+
+```
+| Weaken_declared of { coeff : int; name : string; dir : [ `Lower | `Upper ];
+                      decl_lo : int; decl_hi : int; assumed : Reason.fact option }
+```
+
+`assumed` is `Some` for a term resting on a decision (`Linear.classify` = `Assumed`), whose
+chain today is the same declared-range weakening as a `Weakened` term's -- the order arm ignores
+the field and stays byte-identical; the bits arm reads it to leave the decision's atom in the row
+(§7.1). `Explanation.top_weaken_owners` gains the one arm that returns `name`, so
+`Store.reverse_owners` and the agreement check see the owners they see today.
+
+the preamble's own third reason shape ("weaken `z` over its domain"), declarative. `Linear`'s
+`summands_of_snap` builds it where it builds `Weaken (Order_reason.weaken_declared ...)` today, and
+`Justify.emit_summand` renders it: for an order owner by calling `Order_reason.weaken_declared` and
+folding the axioms exactly as today, so the `pol` text at `W = none` is byte-identical (the
+determinism gate holds it); for a bits owner as `@lb`/`@ub` scaled by `coeff`, one citation. `Weaken`
+stays, with its other producers (`Pb_analysis`'s reductions, the enumerating families, which are
+order-only). At T2 the new constructor has one producer, `Linear`, through which `Lin_eq`, `Int_le`,
+`Int_lt`, `Int_eq`, `Reif_lin_*` and `Arith` already go. The alternative -- `Linear.term` carrying
+the bound rows' ids from `Linear.make`, D-0011's `~row_id` move -- needs no constructor and makes
+`Linear` carry a representation in a field; it is rejected here because the contract of §3.1 is
+worth being a type, and named so T2 can disagree with a reason.
+
+### 9. `min:` over bits, `soli`, and `conclusion BOUNDS`: the protocol is unchanged
+
+The objective line is rendered from the objective variable's terms: `min: +1 obj_bit_0 +2
+obj_bit_1 ...` plus the constant `lo`, through `Opb.objective ~constant`, where today it is the order
+expansion with the same constant. `soli` lists the bits of every bits variable at the solution's
+values; the checker PROPAGATES a logged solution, and the atoms follow from the bits by unit
+propagation on B1/B2 (with the bits fixed below `k`, B1 forces `~x_ge_v`; at or above, B2 forces
+`x_ge_v`), as the `_neN` selectors follow today. The checker's own improving constraint after
+`soli` is over the `min:` terms, the bits; `Search` then wants the literal `~obj_ge_value`
+(`Lit.le o.o_name (value − 1)`, search.ml) for its bound, so it mints the atom and writes one
+bridge, `pol @soli @B1_obj_value + s`, whose conclusion is that unit. `conclusion BOUNDS lo : @cid
+INF` is unchanged; `obju` stays unused for the reason search.ml gives. One `pol` of three tokens per
+improving solution is the whole cost.
+
+### 10. The flag, the counters, the thresholds
+
+**`--bits-above W`**, env `BAGUETTE_BITS_ABOVE`, parsed by `set_limit` through
+`Encoding.limit_of_string`, so `none`/`unlimited`/`off`/empty and a decimal integer are the only
+accepted forms and a typo is a usage error, not a silent default (M7-T8's rule). An
+`Encoding.bits_above : int option ref`, set by the CLI before `Compile.compile`, like
+`order_width_limit`.
+
+| `W` | meaning |
+|---|---|
+| `none` (default) | no variable gets bits: today's solver, and the determinism gate holds every `.opb`/`.pbp` byte-identical to `main` at this setting |
+| `0` | every ELIGIBLE variable (§3.4) gets bits; width 0 and 1 stay order by rule, so `W = 1` is the same set |
+| `k` | a variable gets bits iff `hi − lo > k` and it is eligible |
+
+**`--stats` lines, from T2's first commit** (the preamble's risk (1)):
+
+```
+stats: bits        N vars   bits-encoded (--bits-above W); M eligible held back: <family: count> ...
+stats: bitsrows    N lines  bound rows (2 per bits variable), beside `ladder` and `opb`
+stats: atoms       N minted order atoms introduced by red pairs over bits variables; never deleted before the conclusion
+stats: atomlinks   N lines  sparse-chain links (pol, 5 tokens each)
+stats: atoms/prune R        atoms minted per pruning line written -- GCS's quadratic is R growing with the search
+stats: poltokens   max / total      (T5's counter; a max proportional to a declared width is a walk in disguise)
+```
+
+The three thresholds of the test plan and the measurement are `none`, `0`, and **a middle value
+chosen so that both arms meet in one row**: for the model suite, whose domains are single and low
+double digits by rule, `W = 8` puts `var 0..9` on bits and `var 0..5` on the ladder in the same
+`int_lin_le`; for the Challenge, T4 reads the width distribution (`refusal_causes.py --widths`)
+and picks the knee. This record does not pick a Challenge middle and does not pick the default.
+
+### 11. The test plan
+
+**At `W = none`**: all 156 models, `.opb`, `.pbp`, stdout and exit code byte-identical to `main`
+with a DIFFERENT binary hash (the wave-41 gate procedure); the determinism gate; `make check`.
+
+**At `W = 0`**, in T2's order: (1) D-0028's model at 10³, 10⁴, 10⁵, 10⁶, proof bytes, `.opb` bytes,
+solve time and checker time in a table beside D-0028's and D-0127's bits rows; (2) `.opb` bytes
+on the 161 encoding-size `.fzn` of D-0125's addendum (`/scratch/arthur/m7t27run/*/work/`), the
+figure the addendum asks for first, with the number of variables held back by §3.4 beside it;
+(3) every linear lane of the model suite, each proof verified, stdout unchanged, proofs expected to
+CHANGE; (4) T3: all 156, D-0031's seven ladder-dependent models first.
+
+**At `W = 8`**: all 156, both arms in one row, the determinism gate at this setting too, and the
+proof of every model with a mixed row read once by a person.
+
+**Unit and mutation lanes**, each asserting the checker's wording at full strength:
+- `ensure_atom`'s pair under a DECISION on a satisfiable model (§2's caveat), B1's and B2's witness
+  flipped: "Proofgoal #1 could not be autoproven. Please add an explicit subproof for proofgoal
+  #1."; the pair with B2 before B1; a lane that mints an atom the model decides and REPORTS that
+  the flipped witness passes (the vacuity, measured rather than assumed away).
+- the bits `pol` with B2 cited where B1 belongs: "Expected constraint is not equal to the
+  constraint at the hint." at the `e` pin; the division omitted (a weaker, true bound) -- the same
+  wording; `@lb` cited where `@ub` belongs.
+- a sparse-chain link with the wrong neighbour; a trace clause citing an atom not yet minted (the
+  parse error "The label `@…` is not assigned to a constraint ID" is NOT the lane's pass: the
+  lane must fail on a judgement, D-0020/D-0030, so it asserts the substrate raises before the
+  writer does).
+- a `Linear` pruning under two decisions on bits variables, the derived clause compared by `e`
+  and the trace clause by `ia` (§7.3's open question 1, measured here).
+- width 0 and 1 never get bits at `W = 0`; a variable in a gcc scope never does; a variable with
+  holes never does; the `--stats` lines say so.
+- `sol`/`soli` with bits: `conclusion SAT` through a logged solution (PROOF-FORMAT trap 5) and a
+  `BOUNDS` conclusion with two improvements, the atom bridge in between.
+- `BAGUETTE_PROOF_AUDIT=1` on every lane: the atoms are retired and the live set is empty.
+- `BAGUETTE_DEBUG=1`: an `ensure_atom` after a root contradiction raises.
+- the overflow guard: a mixed row at the cap's edge is refused by `check_lin_le_computable`, not
+  written.
+
+### 12. What `W = 0` cannot compare, said before the numbers exist
+
+A variable in the scope of `gcc`, `all_different`, `array_int_maximum`/`minimum`, `element` or
+`cumulative`, a variable with declared holes, and (until T3) a variable in an `int_ne`/`int_lin_ne`
+scope keep the order encoding at every `W`. On a model where every wide variable is in such a
+scope, `W = 0` and `W = none` produce the same artefacts, and `--stats`'s `bits` line says
+`0 vars, M held back`; a comparison that does not read that line compares nothing. The all-bits
+arm is therefore an honest comparison on linear models and, per family, on the linear part of a
+mixed model; the preamble's "Θ(w) in introduced atoms whatever the carrier" for the enumerating
+families is, under this design, "not on bits at all", which is the same limit stated as a
+non-attempt rather than as a cost. Whether those families can ever go over bits -- their rows
+introduced in the proof after the atoms exist, with `Model_row` citations re-pointed -- is §15's.
+
+### 13. The decisions T2 should challenge first
+
+1. **Eligibility by scope (§3.4)**, not by width alone. It follows from I-X5 and the fresh-atom
+   witness, but the alternative (introduce an enumerating family's rows in the proof, after its
+   atoms) was not tried against the checker, and this project has been wrong about a proof-layer
+   "cannot" three times (D-0028's own warning).
+2. **Bits as the offset from `lo`, both bound rows always posted (§4)** against the generator's raw
+   values; and the trivially true `@lb` as the price of one rendering path for `Weaken`.
+3. **`Weaken_declared` as a new `Explanation` constructor (§8)** against `Linear.term` carrying
+   the bound-row ids.
+4. **The pruning line IS the `pol` (§7.3)**, written by `Trace` lazily, with no `deriving_ahead`
+   and no separate `rup`; and the claim being mandatory for a bits conclusion.
+
+### 14. Open questions
+
+1. Is the trace clause `claim ∨ ¬(all facts)` accepted by `ia` against the derived clause
+   `claim ∨ ¬(decision facts)` -- a weakening by literals -- on 3.0.2? Expected yes; measured by
+   §11's lane. If not, the derived clause is the trace line and `Learn` reads it as such.
+2. Are nearest-neighbour links enough for every RUP that walks the eager ladder today (D-0031's
+   seven models), or does some line need a link across a gap? T3 measures at `W = 0`; the fix,
+   if needed, is a link per cited pair, still O(1) each.
+3. What ratio of atoms minted to prunings written marks GCS's quadratic on a Challenge search?
+   T4 reads `atoms/prune` across the editions; no threshold is set here.
+4. `cake_pb` on a `red` with a non-empty subproof was never measured (D-0127's last paragraph);
+   the pair's goals are discharged by the autoprover, so the elaboration should carry empty
+   subproofs as the spike's did. T4's loop includes elaboration and will say.
+5. Should PB analysis lift a bits term (a `Reduce` step over `@lb`/`@ub` and the atom pair) rather
+   than fall back? Only if §7.5's counter says the fallback is frequent on the instances that
+   matter.
+6. The direct encoding over a bits base (`ensure_direct` channels `x_eq_v` to two atoms) is
+   unreachable at T2/T3 by §3.4; if `element`'s index is ever let onto bits, the channelling is
+   2 atoms + 3 `red` per value, which is Θ(w) atoms for a domain-consistent index -- GCS's range
+   literals are the answer there, and are not designed here.
+
+### 15. What this record does not decide
+
+- The default `W`, whether both paths stay after the measurement, and the Challenge middle value:
+  T4's record, with the binaries hashed and D-0125 + D-0129 as the baseline.
+- Whether the enumerating families ever get bits (§12), and `Ne`'s release at T3 against holding
+  it back if the two-half `pol` of §7.4 costs more than it saves.
+- The normative text: SPEC §4.2's "the consistency clauses MUST be in the `.opb` for every declared
+  variable" becomes "for every ORDER-encoded variable", and PROOF-FORMAT §3 gains a "Bits encoding"
+  subsection with §4 and §5 of this record as its content and `x_bit_i` in the naming table. T2
+  writes both when the code lands, citing this record; a design record is not the place to change
+  a normative document whose code does not exist yet.
+- Whether `Lit.Bit` is the right shape for `Opb` and `pb_row`, or whether a bits variable's row
+  terms should be a separate term kind that `Learned.t` cannot hold at all. T2 picks; the
+  property to keep is that no `Bit` ever reaches `Learn`, `Analysis` or a trace clause.
+- Anything about the solver's own time or memory for either arm: D-0127 ran no solver, and this
+  record ran nothing. T2's first table is the first measurement.
