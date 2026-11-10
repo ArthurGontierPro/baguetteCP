@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M7-T27 (re-measure, D-0129) | `docs/DECISIONS.md` (D-0129 appended at the bottom), `docs/ROADMAP.md` M7-T27 row (the "result pending" clause), `WORKLOG.md`; laptop archive `~/mznc-archive/runs/wave41run-2026-11-09/`; node `/scratch/arthur/wave41run/` (proofs deleted after the archive is verified) | agent-remeasure (`wave42-remeasure`) | 2026-11-10 |
 | M8-bits-encoding-T1 | `docs/DECISIONS.md` (D-0130 appended), `docs/PROOF-FORMAT.md` §2a (the `pol`-over-`rup` rule at the end of "The `pol` operators") and §4 preface, `docs/ROADMAP.md` M8 rows, `docs/INVARIANTS.md` only if an invariant is added, `bench/bits_spike/` worked example if extended. Documentation only, no `lib/` | agent-m8t1 (`wave42-t1`) | 2026-11-10 |
 | M8-bits-encoding-T5 | `lib/core/justify.ml`, `lib/core/ladder.ml`, `lib/proof/writer.ml` (token counter, `rup` hints if used), `bin/main.ml` (`--stats`), `test/unit/test_justify.ml`, `test/unit/test_ladder.ml`, `test/unit/test_mutation.ml`, `test/expected/` if stdout changes (it must not), `docs/DECISIONS.md` (D-0131 appended), `docs/PROOF-FORMAT.md` §4 only (the Linear/Combine paragraphs; §2a is T1's), `docs/ROADMAP.md` T5 row | agent-rup (`wave42-rup`) | 2026-11-10 |
 
@@ -318,8 +317,30 @@ work. The owning session picks it up.
 | M7-T27 (a3) closure memo | agent-a3 | 2026-11-06 | **D-0124 second addendum.** `Analysis.dependency_levels`: the decision closure's level set over per-entry memoised citations (`Store.entry.cites`), exact (the same walk, cell for cell), not the per-entry level set the first addendum proposed (that is a superset: the closure drops a weaker same-slot fact when a stronger is in the frontier, the common case of a bound split). pattern-set-mining 300 s: `later` 128 842 (27 conflicts) → 29 409 (193 conflicts), nodes 67 (depth 35) → 391 (depth 92, an incumbent), RSS 1.44 GB → 2.34 GB (the deeper tree: within 0.2 GB at equal depth, memo 0.3 MB in all); 468 artefacts byte-identical; gate ok (3 488 ok, 0 FAIL, 156 models). Branch `wave41-a3`, not merged |
 | M7-T27 (d) | agent-fe (`wave41-fe`) | 2026-11-06 | **D-0128.** Family A was the token array: `Lexer.tokenize` held ~80 B per token for the whole `.fzn` before the parser ran (5.3 GB live on yumi, 18 GB on gt-sort n9), plus the file as one string and the whole `Ast.model`. The front end now streams: a 64 KiB window, one lexeme of lookahead, `Parser.iter_items` → `Builder.add_item`, nothing proportional to the file but the `Model.t`. Front end alone: yumi 41 s / 12.8 GB → 21 s / 2.4 GB, gt-sort n9 114 s / 38.9 GB → 45 s / 3.5 GB. Gate ok on fataepyc-06 (3 473 ok, 0 FAIL, 156 models, 87 MB peak RSS); 156 artefacts byte-identical between `1d68c8c1` (main) and `992cd1d4`. The 12 instances all pass the front end under the harness's flags and die in families B/C (4 rows cap, 7 heap guard, 1 timeout). Not merged; the orchestrator merges |
 | M8-bits-encoding-T0 | agent-spike | 2026-11-06 | **D-0127**, checker-only spike in `bench/bits_spike/` (generator, driver, per-operator diagnostic, `results.tsv`, README). The SAME root pruning as `rup` and as `pol`, order and bits, w = 10³..10⁶: order `pol` is QUADRATIC on 3.0.2 (4.1 s at 10⁵, 383 s at 10⁶) where the `rup` is 0.2 s / 2.6 s; elaboration re-emits a `pol` as is and a `rup` as a hint list 7x smaller, at the cost of checking; `cake_pb` checks the hinted RUP faster than the `pol`; bits `rup` is refused at every width, bits `pol` is 3 citations and flat. Every broken variant refused with the wording; `B2`'s witness is vacuous for a root pruning. Nothing merged into main; branch `wave41-spike` |
+| M7-T27 (re-measure) | agent-remeasure (`wave42-remeasure`) | 2026-11-10 | **D-0129, M7-T27 COMPLETE.** The sixteen editions with `35588fb` ((a3)+(d), binary `e25ec4d3`) against D-0125's archive, with the addendum's incumbent criterion: the rank identical in all 16 editions, the score up in 15 and down in 2014; REFUSED 212 → 206 with family A 14 → 0, OPT 170 → 174, SAT 46 → 48, incumbents 794 → 799, objectives better on 63 / worse on 13, ERROR 4 → 8 (all minor-GC aborts, family B's other face), 0 REJECTED; 8 OPTs the checker cannot finish (listed verbatim in the record, for M8-bits-encoding-T5); 169 runs never finish their `.opb` + the same 8 proof-capped (M8's population). Archived `~/mznc-archive/runs/wave41run-2026-11-09/` (97 MB); node proofs deleted (20 → 8.8 GB), `.fzn` kept |
 
 ## Handoff notes
+## M7-T27 re-measure handoff, 2026-11-10 (agent-remeasure, `wave42-remeasure`): D-0129, M7-T27 complete
+
+The sixteen editions with `35588fb` ((a3)+(d), binary `e25ec4d3`) are read in D-0129 against the
+D-0125 archive, with the addendum's criterion (an incumbent is a VALUE; `max:-` is none). Ranks are
+identical in all 16 editions; the score is up in 15 (2026 190.7 -> 205.6, 2020 39.2 -> 56.4, 2017
+74.2 -> 80.1, 2024 221.8 -> 227.4, 2015 100.5 -> 104.0, 2011 107.5 -> 110.0, the rest +0.1 to +2.3)
+and down in 2014 (176.9 -> 173.3, one incumbent lost). REFUSED 212 -> 206 with family A 14 -> 0 (5
+CAPPED at the rows cap, 1 TIMEOUT still compiling, 8 into B/C), OPT 170 -> 174, SAT 46 -> 48, ERROR
+4 -> 8 (every one the D-0071 minor-GC abort, the same wall as family B), CAPPED 148 -> 151 (143 on
+the encoding + the same 8 on the proof), 0 REJECTED. Incumbents 794 -> 799; objective better on 63
+and worse on 13 of 790; wall on the 180 common complete answers -6.5 %. Twelve instances newly
+exhaust the heap (six were TIMEOUT), the deeper search's cost. OPTs the checker cannot finish, for
+M8-bits-encoding-T5: 7 TIMEOUT-CHECK (2012 ship-schedule 5Ships, 6ShipsMixed, 7ShipsMixedUnconst,
+8ShipsUnconst [new], 2014 ship-schedule 3Ships, 2014 smelt_2, 2018 mapping_full2x2_mp3) + 1
+CHECK-ERROR (2011 ship-schedule 6ShipsMixedUnconst, 6.9 GB `.opb`); byte counts in the record. M8's
+population is the 169 runs that never finished their `.opb` plus those 8. Archive
+`~/mznc-archive/runs/wave41run-2026-11-09/` (97 MB, `challenge_rank.py` reproduces D-0125's numbers on
+the old archive to the decimal); node `/scratch/arthur/wave41run/` 20 -> 8.8 GB, 215 `.fzn` kept,
+no proof left. Reading note: the `opb` column of `results.tsv` empty means the `.opb` never completed
+(it reproduces the addendum's rows-file split 140/8/18/3 exactly), use it now that `.opb.rows` is gone.
+
 ## Wave 41 merged and gated, the Challenge re-measure launched, 2026-11-09 (orchestrator)
 
 Three of the four wave-41 branches are on `main`: `wave41-noproof` (`a629fea`, D-0126),
