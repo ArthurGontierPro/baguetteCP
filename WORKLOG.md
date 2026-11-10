@@ -19,6 +19,9 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M7-T27 (re-measure, D-0129) | `docs/DECISIONS.md` (D-0129 appended at the bottom), `docs/ROADMAP.md` M7-T27 row (the "result pending" clause), `WORKLOG.md`; laptop archive `~/mznc-archive/runs/wave41run-2026-11-09/`; node `/scratch/arthur/wave41run/` (proofs deleted after the archive is verified) | agent-remeasure (`wave42-remeasure`) | 2026-11-10 |
+| M8-bits-encoding-T1 | `docs/DECISIONS.md` (D-0130 appended), `docs/PROOF-FORMAT.md` §2a (the `pol`-over-`rup` rule at the end of "The `pol` operators") and §4 preface, `docs/ROADMAP.md` M8 rows, `docs/INVARIANTS.md` only if an invariant is added, `bench/bits_spike/` worked example if extended. Documentation only, no `lib/` | agent-m8t1 (`wave42-t1`) | 2026-11-10 |
+| M8-bits-encoding-T5 | `lib/core/justify.ml`, `lib/core/ladder.ml`, `lib/proof/writer.ml` (token counter, `rup` hints if used), `bin/main.ml` (`--stats`), `test/unit/test_justify.ml`, `test/unit/test_ladder.ml`, `test/unit/test_mutation.ml`, `test/expected/` if stdout changes (it must not), `docs/DECISIONS.md` (D-0131 appended), `docs/PROOF-FORMAT.md` §4 only (the Linear/Combine paragraphs; §2a is T1's), `docs/ROADMAP.md` T5 row | agent-rup (`wave42-rup`) | 2026-11-10 |
 
 ## Cross-session requests
 
