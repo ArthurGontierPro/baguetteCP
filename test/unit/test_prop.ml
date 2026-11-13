@@ -5592,6 +5592,28 @@ let pol_cited body =
            int_of_string_opt (String.sub t 2 (n - 2))
          else None)
 
+(* The last `pol` line before the one labelled [label]. Since M8-bits-encoding-T5
+   (D-0131) `conclusion UNSAT` cites the empty clause `rup >= 1`, the root close every
+   branch already used, and the derivation it rests on -- the Hall pol, written ahead
+   of the close because alldiff is [Needs_derivation] (I-X10) -- is the `pol` just
+   before it. *)
+let last_pol_before ls label =
+  match label with
+  | None -> None
+  | Some lab ->
+      let rec go acc = function
+        | [] -> acc
+        | l :: rest ->
+            let t = String.trim l in
+            if starts_with_str (lab ^ " ") t then acc
+            else go (if contains_sub ~needle:" pol " (" " ^ t) then Some l else acc) rest
+      in
+      go None ls
+
+let rup_wording =
+  "The constraint is not implied by reverse unit propagation (RUP) from core and derived \
+   database."
+
 (* The one-literal `rup` a cited id was minted by, or [None] if that id was minted by
    something else. This is how obligation (a) is ESTABLISHED rather than asserted: the
    conclusion names a line, that line is a `pol`, and every id the `pol` cites is looked
@@ -5630,20 +5652,21 @@ let test_alldiff_conclusion () =
      constraint all_different_int([a, b, c, d]);\n\
      solve satisfy;\n"
   in
-  let outcome, _, _, minting, _, _ =
+  let outcome, _, _, minting, text_clean, label_clean =
     alldiff_conclusion_kind dir ~file:"concl_clean" clean
   in
   check "alldiff (c): the clean pigeonhole is UNSAT" (outcome = Search.Unsat);
+  (* D-0131: the conclusion cites the empty clause, and the Hall derivation is the pol
+     written ahead of it -- the counting argument the empty clause rests on. *)
   (match minting with
   | None -> check "alldiff (c): the conclusion names a line this proof minted" false
   | Some line ->
       check "alldiff (c): the conclusion names a line this proof minted" true;
-      if not (contains_sub ~needle:" pol " (" " ^ String.trim line)) then
-        Printf.printf "     conclusion cites: %s\n" (String.trim line);
       check
-        "alldiff (c): `conclusion UNSAT` cites the Hall DERIVATION -- a pol, not the \
-         empty clause"
-        (contains_sub ~needle:" pol " (" " ^ String.trim line)));
+        "alldiff (c): `conclusion UNSAT` cites the empty clause `rup >= 1` (D-0131's \
+         root close) and the Hall DERIVATION -- a pol -- is on the page ahead of it"
+        (String.trim (Writer.strip_label (String.trim line)) = "rup >= 1 ;"
+        && last_pol_before (String.split_on_char '\n' text_clean) label_clean <> None));
   (* ---------------------------------------------------- M4-T7, obligation (a) ----
 
      Until M4-T7 this lane asserted the OPPOSITE: with the bounds moved the derivation
@@ -5662,13 +5685,18 @@ let test_alldiff_conclusion () =
   in
   check "alldiff (c): the moved-bounds pigeonhole is UNSAT" (outcome = Search.Unsat);
   let ls = String.split_on_char '\n' text in
-  (match minting with
-  | None -> check "alldiff (a): the moved-bounds conclusion names a line" false
-  | Some line ->
+  let hall = last_pol_before ls label in
+  (match (minting, hall) with
+  | None, _ -> check "alldiff (a): the moved-bounds conclusion names a line" false
+  | Some _, None ->
+      check "alldiff (a): a Hall pol precedes the close for the empty clause to rest on"
+        false
+  | Some close, Some line ->
       check
-        "alldiff (a): with the bounds moved `conclusion UNSAT` now cites the Hall POL, \
-         not `rup >= 1` -- the D-0061 stand-in is gone"
-        (contains_sub ~needle:" pol " (" " ^ String.trim line));
+        "alldiff (a): with the bounds moved the close is the empty clause and the Hall \
+         POL precedes it -- the D-0061 stand-in (a close with no derivation under it) is \
+         gone"
+        (String.trim (Writer.strip_label (String.trim close)) = "rup >= 1 ;");
       (* Read the cited ids back out and look each one up. The bound facts this
          derivation cancels are a, b and c's lower bounds, every one of them moved to 3
          by the two int_lin_le rows, and each is cited through a UNIT line -- which is
@@ -5683,19 +5711,25 @@ let test_alldiff_conclusion () =
          bounds -- a_ge_3, b_ge_3, c_ge_3, each a one-literal rup"
         (sorted = [ "a_ge_3"; "b_ge_3"; "c_ge_3" ]);
       check
-        "alldiff (a): the Hall pol carries the conflict, so nothing is a bare `rup >= 1`"
-        (not (List.exists (fun l -> String.trim l = "rup >= 1 ;") ls)));
+        "alldiff (a): the Hall pol carries the conflict: it is the derivation the empty \
+         clause rests on, one propagation before it"
+        (contains_sub ~needle:" pol " (" " ^ String.trim line)));
   (* (b) The derivation is accepted, and a WRONG defining id is not. The break is
      performed on the solver's own artefact: the last id the conclusion's `pol` cites is
      swapped for the first, so the row is cancelled against the wrong variable's bound.
      The checker's judgement on that is named at full strength -- an exit status cannot
      tell it from a parse error. *)
-  (match (veripb_path (), label, minting) with
-  | None, _, _ ->
+  (match (veripb_path (), hall) with
+  | None, _ ->
       incr failures;
       Printf.printf
         "FAIL alldiff (b): veripb not found -- the derivation was NOT checked.\n"
-  | Some veripb, Some lab, Some line ->
+  | Some veripb, Some line ->
+      let lab =
+        match String.index_opt (String.trim line) ' ' with
+        | Some i -> String.sub (String.trim line) 0 i
+        | None -> String.trim line
+      in
       let run tag pbp =
         let log = Filename.concat dir ("log" ^ tag) in
         let rc =
@@ -5754,13 +5788,16 @@ let test_alldiff_conclusion () =
         n = 0 || go 0
       in
       check "alldiff (b) BREAK: a WRONG defining id in the Hall pol is rejected" (rc <> 0);
+      (* The pol itself is still well-formed cutting planes, so it is accepted and derives
+         something else; what the checker refuses is the empty clause that rested on it,
+         at the RUP wording (D-0131). *)
       check
-        "alldiff (b) BREAK: and the rejection is that JUDGEMENT -- \"is not \
-         contradicting, as specified by the hint.\" -- not a parse error"
-        (contains "is not contradicting, as specified by the hint." out);
-      if not (contains "is not contradicting, as specified by the hint." out) then
+        "alldiff (b) BREAK: and the rejection is that JUDGEMENT -- the empty clause is \
+         no longer implied by reverse unit propagation -- not a parse error"
+        (contains rup_wording out);
+      if not (contains rup_wording out) then
         Printf.printf "     checker said: %s\n" (String.trim out)
-  | _ -> check "alldiff (b): the conclusion names a pol to break" false);
+  | _ -> check "alldiff (b): a Hall pol precedes the close, to break" false);
   Sys.readdir dir
   |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
   try Sys.rmdir dir with _ -> ()

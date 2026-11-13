@@ -987,13 +987,13 @@ let emitter_lane c ~build ~expect ~knob name =
 (* finding about the derivation, not a licence to ignore the lane.     *)
 (* ------------------------------------------------------------------ *)
 
-let known_slack_lin_unsat_pol_coeff =
-  "lin_unsat's refutation closes at `0 >= 2`, one unit wider than a contradiction needs \
-   to be, so a one-unit coefficient perturbation of either weakening step still closes \
-   it (`y_ge_1 >= 2` is still infeasible). Trap 1 in this file's header, measured rather \
-   than assumed. The `pol` lanes gate on triple_unsat, whose margin is one and whose \
-   rows are each individually satisfiable (M1-T38); this lane stays registered so the \
-   slack is reported on every run"
+(* GONE with the `pol` it was about (M8-bits-encoding-T5, D-0131), recorded as the
+   measurement it was: lin_unsat's refutation closed at `0 >= 2`, one unit wider than a
+   contradiction needs to be, so a one-unit coefficient perturbation of either weakening
+   step still closed it (`y_ge_1 >= 2` is still infeasible) -- trap 1 in this file's
+   header, measured rather than assumed, and registered as `lin_unsat/pol-coeff`'s
+   known slack so it was reported on every run. The root no longer writes that `pol`
+   (its close is the trace and `rup >= 1`), so there is no step for the slack to be in. *)
 
 (* GONE (M1-T38), and worth recording why rather than just deleting it.
 
@@ -1027,6 +1027,100 @@ let drop_line_is_a_grammar_lane =
   "deleting a step un-defines the label every later citation names, so veripb stops at \
    the grammar; Writer.Mutation.Truncate_derivation is the lane that judges this step's \
    derivation"
+
+(* ------------------------------------------------------------------ *)
+(* The root lane (M8-bits-encoding-T5, D-0131)                          *)
+(* ------------------------------------------------------------------ *)
+
+(* Since D-0131 a root refutation is the root's TRACE -- one `rup` per root pruning, its
+   claim disjoined with the negation of its facts -- then the conflict's own
+   `rup ~facts >= 1`, then the empty clause `rup >= 1`, which `conclusion UNSAT` cites.
+   The empty clause is RUP because the lines before it put every root bound one unit
+   propagation away from the model rows. So the corruption that tests THAT takes those
+   lines away and keeps the close: every `rup` but the last is replaced by a tautology
+   (`+1 l +1 ~l >= 1`, which RUP accepts anywhere) WITH ITS LABEL KEPT, so every later
+   `del` and the conclusion still parse and the checker has to judge the empty clause
+   rather than stumble on a dangling name. The instance's rows must not refute it on
+   their own ([rows_that_refute_alone] certifies that, and is why the lane sits on
+   triple_unsat and lin_unsat), or `rup >= 1` would be accepted whatever stood above it:
+   CLAUDE.md's "rup is vacuous over a contradictory database".
+
+   Three corruptions this lane is deliberately NOT, each measured on triple_unsat before
+   it was written. A knob on ONE trace line is not a test: the conflict line
+   `rup +1 ~x_ge_2 +1 ~y_ge_2 >= 1` and the other unit rebuild the missing bound by unit
+   propagation (D-0021's "blanking half a trace proves nothing"). A knob on the conflict
+   line is not one either: once the two units are on the page the database is already
+   contradictory and any `rup` passes. And raising the empty clause's degree tests the
+   parser. Blanking everything but the close is the one corruption the close cannot
+   survive, and the checker's wording for it is the RUP one, asserted at full strength. *)
+let rup_wording =
+  "The constraint is not implied by reverse unit propagation (RUP) from core and derived \
+   database."
+
+let blank_trace_lane c ~proof ~opb ~taut =
+  let tag = c.c_tag in
+  let lane = Printf.sprintf "%s/blank-trace" tag in
+  ran c "blank-trace";
+  let lines = String.split_on_char '\n' (read_file proof) in
+  let blanked = ref 0 in
+  let is_label w = String.length w > 2 && String.sub w 0 2 = "@c" in
+  let lines' =
+    List.map
+      (fun l ->
+        let t = String.trim l in
+        match String.index_opt t ' ' with
+        | Some i when is_label (String.sub t 0 i) ->
+            let lbl = String.sub t 0 i in
+            let body = String.trim (String.sub t i (String.length t - i)) in
+            if
+              String.length body > 4
+              && String.sub body 0 4 = "rup "
+              && body <> "rup >= 1 ;"
+            then (
+              incr blanked;
+              Printf.sprintf "%s rup +1 %s +1 ~%s >= 1 ;" lbl taut taut)
+            else l
+        | _ -> l)
+      lines
+  in
+  if !blanked = 0 then (
+    incr checks;
+    fail "%s: the proof has no trace line to blank, so nothing was tested" lane)
+  else
+    let pbp = proof ^ ".blank-trace.pbp" in
+    let oc = open_out pbp in
+    output_string oc (String.concat "\n" lines');
+    close_out oc;
+    let v, out = check_proof { pbp; opb; fired = true } in
+    match v with
+    | Rejected_on_derivation ->
+        check
+          (Printf.sprintf
+             "%s: with every trace line blanked (%d of them) the empty clause is REFUSED \
+              -- the root's trace is what the close rests on"
+             lane !blanked)
+          true;
+        check
+          (Printf.sprintf "%s: ... at the checker's RUP wording" lane)
+          (contains out rup_wording);
+        if not (contains out rup_wording) then show out
+    | Accepted ->
+        incr checks;
+        fail
+          "%s: veripb ACCEPTED the proof with its whole trace blanked. Either the rows \
+           refute the instance alone (then [rows_that_refute_alone] should have said so) \
+           or the close no longer rests on the trace. A finding, not a lane to weaken."
+          lane;
+        show out
+    | Rejected_unevaluated ->
+        incr checks;
+        fail "%s: refused on the GRAMMAR -- the blanking broke a label, not the reasoning"
+          lane;
+        show out
+    | Unchecked ->
+        incr checks;
+        fail "%s: %s -- do not read this as a pass" lane (verdict_name Unchecked);
+        show out
 
 (* ------------------------------------------------------------------ *)
 
@@ -1272,21 +1366,36 @@ let run () =
     let knob = Writer.Mutation.make in
     (* Where the emitter knobs aim. A site is a substring of the [~origin] the rule
        emission already carries, so a lane NAMES the derivation it corrupts instead of
-       hunting for it in the text. "combine" is Justify.emit_combine's origin (D-0013's
-       weaken-divide-add) and the chain site names the claim literal outright: if the
-       search stops deriving `~b_ge_2` under a decision, the knob does not fire and the
-       lane FAILS saying so, rather than sliding onto a root-level line where dropping a
-       reason literal changes nothing the checker can see (trap 3). *)
-    let site_combine = "combine" in
+       hunting for it in the text. The chain site names the claim literal outright: if
+       the search stops deriving `~b_ge_2` under a decision, the knob does not fire and
+       the lane FAILS saying so, rather than sliding onto a root-level line where
+       dropping a reason literal changes nothing the checker can see (trap 3). The
+       "combine" site -- Justify.emit_combine's origin, D-0013's weaken-divide-add -- is
+       gone from this file with D-0131: no instance built here writes one any more. *)
     let site_branch_trace = "branch_trace" in
     let site_chain_branch_claim = "trace: ~b_ge_2" in
 
-    (* -- the pol lanes, on the margin-one instance ---------------------------- *)
+    (* -- the ROOT lanes, on the margin-one instance --------------------------- *)
     (* M1-T38. The lanes were on [root_unsat] until D-0030 showed that one of its model
        rows refutes the model by itself, so nothing above it can be load-bearing. They
        are on [triple_unsat] now, and BEFORE they run, the procedure that says so is
        shown finding that defect on root_unsat and not finding it here. An instance
-       that has not been certified is one nobody has checked can fail. *)
+       that has not been certified is one nobody has checked can fail.
+
+       M8-bits-encoding-T5 (D-0131). These two instances carried the `pol` lanes --
+       pol-coeff, pol-cite, perturb-coefficient, swap-citation, truncate-derivation --
+       because a root refutation by [int_lin_le] used to be one D-0013 `pol` per cited
+       pruning and one closing it. It is not any more: the root closes as its own trace
+       (one `rup` per root pruning, D-0018 with no decision to negate) and the empty
+       clause `rup >= 1`, and no `pol` is written for a row with no bits term. The five
+       lanes have NO SITE here and are retired from these instances rather than left to
+       fail "found no site" on every run; the knobs they exercised keep their targets
+       where a `pol` is still written (a counting family's derivation in test_prop.ml and
+       test_endtoend.ml, a learned PB row in test_justify.ml's M2-L5 (c)). What replaces
+       them is the lane the new shape needs, [blank_trace_lane]: blank every trace line
+       and the conflict line, keep the close, and the checker must refuse it -- at the
+       RUP wording. `drop-line` stays, as the grammar lane it always was: the step it
+       deletes is now the close itself, whose label the conclusion names. *)
     certification_finds_root_unsat ~dir;
     no_single_row_refutes ~dir ~name:"triple_unsat" triple_unsat;
     let b, outcome = solve_to_proof ~dir ~name:"triple_unsat" triple_unsat in
@@ -1297,72 +1406,26 @@ let run () =
     in
     gated ~tag:"triple_unsat"
       ~control:(fun () -> control_holds ~tag:"triple_unsat" ~proof:b.pbp)
-      ~declares:
-        [
-          "pol-coeff";
-          "pol-cite";
-          "drop-line";
-          "perturb-coefficient";
-          "swap-citation";
-          "truncate-derivation";
-        ]
+      ~declares:[ "drop-line"; "blank-trace" ]
       (fun c ->
-        mutation_lane c ~proof:b.pbp ~expect:`Rejects "pol-coeff";
-        mutation_lane c ~proof:b.pbp ~expect:`Rejects "pol-cite";
         mutation_lane c ~proof:b.pbp ~expect:(`Unevaluated drop_line_is_a_grammar_lane)
           "drop-line";
-        emitter_lane c ~build:build_triple ~expect:`Rejects
-          ~knob:(knob ~site:site_combine Writer.Mutation.Perturb_coefficient)
-          "perturb-coefficient";
-        emitter_lane c ~build:build_triple ~expect:`Rejects
-          ~knob:(knob ~site:site_combine Writer.Mutation.Swap_citation)
-          "swap-citation";
-        (* What `drop-line` was for, done so that the checker has to answer it: the
-           step keeps its label and loses its derivation. On root_unsat this was
-           ACCEPTED and registered known-slack (D-0030); here the truncation leaves
-           @c5, which is satisfiable, so the checker has to judge it. *)
-        emitter_lane c ~build:build_triple ~expect:`Rejects
-          ~knob:(knob ~site:site_combine Writer.Mutation.Truncate_derivation)
-          "truncate-derivation");
+        blank_trace_lane c ~proof:b.pbp ~opb:b.opb ~taut:"x_ge_1");
 
     (* -- the same lanes on the wider D-0015 derivation ------------------------ *)
     let b, outcome = solve_to_proof ~dir ~name:"lin_unsat" lin_unsat in
     check "lin_unsat: the solver refutes it (the instance is what we think it is)"
       (outcome = Search.Unsat);
-    let build_lin ~name ~mutation = fst (solve_to_proof ~mutation ~dir ~name lin_unsat) in
+    (* lin_unsat's known slack -- a refutation closing at `0 >= 2`, one unit wider than
+       it needs to be ([known_slack_lin_unsat_pol_coeff]) -- was a property of the `pol`
+       D-0131 retired; the record stays as the measurement it was. *)
     gated ~tag:"lin_unsat"
       ~control:(fun () -> control_holds ~tag:"lin_unsat" ~proof:b.pbp)
-      ~declares:
-        [
-          "pol-coeff";
-          "pol-cite";
-          "drop-line";
-          "perturb-coefficient";
-          "swap-citation";
-          "truncate-derivation";
-        ]
+      ~declares:[ "drop-line"; "blank-trace" ]
       (fun c ->
-        mutation_lane c ~proof:b.pbp
-          ~expect:(`Known_slack known_slack_lin_unsat_pol_coeff) "pol-coeff";
-        mutation_lane c ~proof:b.pbp ~expect:`Rejects "pol-cite";
         mutation_lane c ~proof:b.pbp ~expect:(`Unevaluated drop_line_is_a_grammar_lane)
           "drop-line";
-        (* Occurrence 1 is the first weakening `pol`, which is the step D-0020 is
-           about: the emitter lane lands on the same site the text lane does, and
-           finds the same slack. Registered, not silenced. *)
-        emitter_lane c ~build:build_lin
-          ~expect:(`Known_slack known_slack_lin_unsat_pol_coeff)
-          ~knob:(knob ~site:site_combine Writer.Mutation.Perturb_coefficient)
-          "perturb-coefficient";
-        emitter_lane c ~build:build_lin ~expect:`Rejects
-          ~knob:(knob ~site:site_combine Writer.Mutation.Swap_citation)
-          "swap-citation";
-        (* Occurrence 3 is the outer `pol`, the one `conclusion UNSAT` cites -- the
-           step `drop-line` deletes, judged rather than parsed. *)
-        emitter_lane c ~build:build_lin ~expect:`Rejects
-          ~knob:
-            (knob ~occurrence:3 ~site:site_combine Writer.Mutation.Truncate_derivation)
-          "truncate-derivation");
+        blank_trace_lane c ~proof:b.pbp ~opb:b.opb ~taut:"x_ge_1");
 
     (* -- the clause lanes, on a fact that arrives under a decision ------------ *)
     let b = branch_trace ~dir () in
@@ -1436,11 +1499,11 @@ let run () =
        pol-cite lane. *)
     let already_corrupt =
       build_triple ~name:"control_guard"
-        ~mutation:(knob ~site:site_combine Writer.Mutation.Perturb_coefficient)
+        ~mutation:(knob ~site:"trace:" Writer.Mutation.Strengthen_rhs)
     in
     check "harness: the emitter really did corrupt the control-guard instance"
       already_corrupt.fired;
-    let r, out = run_lane ~proof:already_corrupt.pbp "pol-cite" in
+    let r, out = run_lane ~proof:already_corrupt.pbp "rhs-const" in
     check
       "harness: a lane on an instance whose honest proof does not verify FAILS on the \
        control, rather than reporting the corruption"
