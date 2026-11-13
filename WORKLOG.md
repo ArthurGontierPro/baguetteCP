@@ -320,6 +320,17 @@ work. The owning session picks it up.
 | M8-bits-encoding-T1 | agent-m8t1 (`wave42-t1`) | 2026-11-10 | **D-0130**, the design record, documentation only. The substrate contract (a propagator cannot spell a bit; `Encoding`, `Justify` and `Trace` are the three places that know two representations), `declare_int` over bits (offset from `lo`, `bit_length(hi − lo)` bits, two bound rows, no ladder), `ensure_atom` (the `red` pair at level 0, the sparse chain, the counter, the D-0053 hazard), the mixed row and its overflow envelope, `Linear`'s bits `pol` (divide, cite the atom, saturate) with `gen.py`'s w = 10⁶ lines as the worked example, `Weaken_declared`, `min:`/`soli` unchanged in protocol, `--bits-above`, the three-threshold test plan, what `W = 0` cannot compare. PROOF-FORMAT §2a's rule amended to D-0127's with the old sentence kept as a dated note. Touched `docs/PROOF-FORMAT.md`, `docs/DECISIONS.md`, `docs/ROADMAP.md` (T1 row), `WORKLOG.md`; not `docs/INVARIANTS.md`, not `bench/` |
 
 ## Handoff notes
+## The eligibility rule measured before T2, 2026-11-13 (orchestrator, `wave42-elig`)
+
+D-0130 §3.4 (bits only for a variable no enumerating-family row mentions) was run over the `.fzn`
+of D-0129's 169 encoding-wall runs and 8 unverifiable OPTs: `bench/challenge/ELIGIBILITY-wave41.md`
+and the D-0130 addendum of 2026-11-13. 94 of 169 are >= 90 % eligible by width, 50 are below 50 %;
+99.98 % of the held width is maxmin's (road-cons' `array_int_minimum` over width-2 000 000
+variables, then largescheduling, tower, ATSP), element's share is 0.016 %. The six ship-schedule
+OPTs are 98-99.8 % eligible. So T2 (Linear only) proceeds under §3.4 unchanged, and maxmin over
+bits is T3's first design question (its rows are one clause per value, Θ(w) without any ladder).
+The 162 re-flattened `.fzn` stay under `fataepyc-06:/scratch/arthur/wave42-elig/` for T2's table.
+
 ## M8-bits-encoding-T1 handoff, 2026-11-10 (agent-m8t1, `wave42-t1`): D-0130, the bits design, documentation only
 
 Read D-0130 whole before T2 (it is long on purpose; §0 is the sentence, §13 the four decisions to

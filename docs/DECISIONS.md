@@ -11249,3 +11249,45 @@ introduced in the proof after the atoms exist, with `Model_row` citations re-poi
   property to keep is that no `Bit` ever reaches `Learn`, `Analysis` or a trace clause.
 - Anything about the solver's own time or memory for either arm: D-0127 ran no solver, and this
   record ran nothing. T2's first table is the first measurement.
+
+### Addendum 2026-11-13: the eligibility rule (§3.4) measured on the 169 and on the 8 (orchestrator, `wave42-elig`)
+
+Before T2 commits to §3.4, the rule was run over the `.fzn` of the 169 runs whose `.opb` never
+finished (D-0129) and of the 8 OPTs whose proof the checker cannot finish:
+`bench/challenge/ELIGIBILITY-wave41.md` (method, caveats, every predicate seen and how it was
+classified) and `bench/challenge/eligibility-wave41.tsv` (one row per instance). Only 15 of the
+177 `.fzn` were still on disk; 162 were re-flattened with the run's minizinc 2.10.1 and an
+md5-identical `mznlib`, validated against a kept file. A variable is ELIGIBLE iff its width is
+>= 2, it has no holes, and no enumerating-family row (gcc, alldiff, element, maxmin,
+cumulative) mentions it; Σw is the declared width summed, i.e. the ladder rows and nothing else
+(not the families' own per-value rows, not the big-M rows).
+
+| the 169, share of each instance's Σw that is eligible | instances |
+|---|---|
+| >= 90 % | **94** (71 CAPPED, 17 TIMEOUT, 6 ERROR); 38 of them hold nothing at all |
+| 50-90 % | 25 |
+| < 50 % | **50** |
+
+By width: Σw = 3.27 x 10^12 ladder rows over the 169, **54.2 % eligible** (7.3 x 10^6 bits would
+carry it), 45.8 % held. Of the held width **maxmin holds 99.98 %** (1.496 x 10^12; ten `road-cons`
+instances with `array_int_minimum` over variables of width 2 000 000 are 1.47 x 10^12 of it, and
+without them 23.7 x 10^9 is held, still 98 % maxmin: largescheduling, tower, ATSP), element 0.016 %
+(2.38 x 10^8, nearly all by element alone), alldiff 1.4 x 10^6, holes 1.4 x 10^6, cumulative
+3.5 x 10^5, gcc 8 x 10^4. Instance-normalised, maxmin is the largest holder in 78 instances and
+element in 36. The 8 OPTs: the six `ship-schedule` are 98.0-99.8 % eligible and their widest
+variable (267 000 to 3 600 000) is eligible in all six; `smelt_2` 52 % (cumulative holds 10 000);
+`mapping_full2x2_mp3` 57 % (maxmin holds its objective of width 10 000). No predicate was
+unclassified; the counting family never reaches the `.fzn` (MiniZinc's std library decomposes it
+into reified linear rows because `mznlib` has no `fzn_count_*`), and `int_max`/`int_min` are
+rewritten to the array forms by `mznlib/redefinitions.mzn`.
+
+What this settles. §13's first challenge is answered by family rather than by relaxing the
+rule: element is NOT the case to relax (0.016 % of the held width), and §3.4 as written reaches
+94 of the 169 at >= 90 % and every ship-schedule OPT, which is T2's population. The family that
+matters is maxmin, and bits on its variables would not help it by themselves, because its own
+encoding is one clause row per threshold value (M4-T9, D-0095), Θ(w) in rows without any ladder.
+So **a maxmin over bits is T3's first design question**, not element: `m >= x_i` is a linear
+row, and the "some i attains m" side needs either on-demand atoms under the sparse chain or a
+different row shape; until it exists the 50 instances below 50 % (road-cons, largescheduling,
+tower, ATSP, mapping) stay on the ladder at every `W`. The 2.7 GB of re-flattened `.fzn` are kept
+under `fataepyc-06:/scratch/arthur/wave42-elig/` for T2's `.opb`-bytes table.
