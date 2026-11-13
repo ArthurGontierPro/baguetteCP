@@ -321,6 +321,31 @@ work. The owning session picks it up.
 | M8-bits-encoding-T5 | agent-rup (`wave42-rup`) | 2026-11-13 | D-0131. The root conflict closes as its trace + `rup >= 1` (every root `pol` gone, 36 of 156 proofs change, stdout and `.opb` byte-identical); `emit_concluding` writes `rup <literal>`; `--stats` counts `rup`/`pol` lines and `pol` tokens. D-0028's model at 10⁶: 29.8 MB → 138 B; the quadratic shape is a Θ(w) chain of root prunings, where the baseline's checker dies at 16 GiB and the `rup` form finishes (Θ(w²) in RUP time); hints rejected by measurement. The seven OPT proofs are byte-identical to the baseline's: no root `pol` was ever in them. Gate green, 20 min, 85 MB |
 
 ## Handoff notes
+## M8-bits-encoding-T2 wind-down, 2026-11-13 (agent-t2, `wave43-t2`): design settled, no code, nothing running on the node
+
+Arthur asked for a wind-down before the first edit to `lib/`. State of the branch: `main` +
+the claim + three artefacts, all documentation or probes. **No solver code was written and
+NOTHING IS RUNNING on `fataepyc-06`** (no pidfile, no output dir under `/scratch/arthur/wave43-t2-out/`;
+the only node artefact is `/scratch/arthur/probe-t2/`, the probe script's files, disposable).
+
+- **D-0132 (draft, bottom of `docs/DECISIONS.md`)** is the thing to read first: §1 is six
+  checker probes measured on the node (`bench/bits_spike/probe_t2.sh` reproduces them in one
+  command), §2 the eight design decisions and where they deviate from D-0130, §3 the plan with
+  file coordinates in commit order. The three deviations that matter: (1) the bits pruning line
+  is one `pol` deriving EXACTLY the trace clause, every fact's atom left in the row via its
+  bridge, no unit cited; (2) an order variable in a mixed row goes through a `rup` bridge pair
+  memoised at level 0; (3) one summand constructor `Linear_term` carrying the term's snapshot,
+  not `Weaken_declared`, rendered byte-identically in the order arm.
+- Also found: B2-before-B1 is ACCEPTED by the checker (p6) -- D-0130 §11's lane for it must
+  assert symmetry, not a refusal. `int_eq_reif`/`int_ne_reif` and `bool2int` scopes are held
+  back at T2 beyond D-0130 §3.4's list (Clause-justified prunings).
+- **Next session, first thing**: start at D-0132 §3 step 1 (`lit.ml`'s `Bit` constructor and
+  the nine exhaustiveness sites it lists), build with `dune build --root . lib/ bin/`, commit;
+  then step 2 (`encoding.ml`). Do not re-read D-0130 whole; §3 of D-0132 names the sections
+  the code needs. The claim row in `## Active claims` stays as it is.
+- Node protocol reminders that cost time today: a compound `ssh ... && scp ... && ssh`
+  command is refused by the worktree guard; split into single ssh/scp calls.
+
 ## Wave 42 merged and gated, 2026-11-13 (orchestrator)
 
 Merged on `main` in this order: `wave42-remeasure` (D-0129, `b0e173a`), `wave42-t1` (D-0130, `495f1c4`),
