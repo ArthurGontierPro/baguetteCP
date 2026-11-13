@@ -755,6 +755,35 @@ let warn_partial_proof opts =
         \  anything. Re-run with a larger budget, or with none.\n"
         p p
 
+(* M8-bits-encoding-T5 (D-0131). The SHAPE of the proof that was just written, on
+   stderr under --stats: how many lines are `pol` and how many `rup`, and the tokens the
+   `pol` lines carry, in total and at the widest one, with that one's origin.
+
+   Written for a reader who has not read D-0127: VeriPB 3.0.2 checks a `rup` by unit
+   propagation, which is linear in what it walks, and a `pol` by cutting-planes
+   arithmetic whose every `+` costs the size of the accumulator -- so a `pol` of
+   Theta(w) tokens over a variable of declared width w is the one line in a proof whose
+   check time grows faster than its byte count. After D-0131 the solver writes its
+   ladder walks as `rup`; what is left as `pol` is a derivation the checker cannot
+   reach by propagation (a counting global's, a learned PB row's), and this report is
+   how a wide one is seen by name. *)
+let report_proof_shapes (sh : Writer.shape_stats) =
+  prerr_endline
+    "stats: proof-line shapes (M8-bits-encoding-T5, D-0131). A `rup` is checked by unit";
+  prerr_endline
+    "stats: propagation, linear in what it walks; a `pol` by arithmetic that costs the";
+  prerr_endline
+    "stats: accumulator's size per `+`, so a Theta(w)-token `pol` is the line to look at.";
+  Printf.eprintf "stats: %-10s %10d lines  `rup` lines written\n" "rup" sh.Writer.n_rup;
+  Printf.eprintf "stats: %-10s %10d lines  `pol` lines written\n" "pol" sh.Writer.n_pol;
+  Printf.eprintf "stats: %-10s %10d tokens over every `pol` (operands + operators)\n"
+    "pol-tokens" sh.Writer.pol_tokens;
+  if sh.Writer.n_pol = 0 then
+    Printf.eprintf "stats: %-10s %10s        no `pol` written\n" "pol-widest" "-"
+  else
+    Printf.eprintf "stats: %-10s %10d tokens in the widest `pol` -- %s\n" "pol-widest"
+      sh.Writer.pol_tokens_max sh.Writer.pol_widest
+
 let report_stats (st : Search.stats) ~exhausted =
   prerr_endline
     "stats: baguette search-tree counters (M1-T36). Counted by Search itself, not read";
@@ -1203,7 +1232,8 @@ let solve opts (m : Model.t) =
     report_engine_counters
       ~families:(Engine.family_table compiled.Compile.engine)
       (Engine.counters compiled.Compile.engine)
-      ~nodes:stats.Search.nodes)
+      ~nodes:stats.Search.nodes;
+    report_proof_shapes (Writer.shape_stats (Justify.writer ctx)))
 
 (* --------------------------------------------------------------------- main *)
 

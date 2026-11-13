@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M8-bits-encoding-T5 | `lib/core/justify.ml`, `lib/core/ladder.ml`, `lib/proof/writer.ml` (token counter, `rup` hints if used), `bin/main.ml` (`--stats`), `test/unit/test_justify.ml`, `test/unit/test_ladder.ml`, `test/unit/test_mutation.ml`, `test/expected/` if stdout changes (it must not), `docs/DECISIONS.md` (D-0131 appended), `docs/PROOF-FORMAT.md` §4 only (the Linear/Combine paragraphs; §2a is T1's), `docs/ROADMAP.md` T5 row | agent-rup (`wave42-rup`) | 2026-11-10 |
 
 ## Cross-session requests
 
@@ -318,8 +317,41 @@ work. The owning session picks it up.
 | M8-bits-encoding-T0 | agent-spike | 2026-11-06 | **D-0127**, checker-only spike in `bench/bits_spike/` (generator, driver, per-operator diagnostic, `results.tsv`, README). The SAME root pruning as `rup` and as `pol`, order and bits, w = 10³..10⁶: order `pol` is QUADRATIC on 3.0.2 (4.1 s at 10⁵, 383 s at 10⁶) where the `rup` is 0.2 s / 2.6 s; elaboration re-emits a `pol` as is and a `rup` as a hint list 7x smaller, at the cost of checking; `cake_pb` checks the hinted RUP faster than the `pol`; bits `rup` is refused at every width, bits `pol` is 3 citations and flat. Every broken variant refused with the wording; `B2`'s witness is vacuous for a root pruning. Nothing merged into main; branch `wave41-spike` |
 | M7-T27 (re-measure) | agent-remeasure (`wave42-remeasure`) | 2026-11-10 | **D-0129, M7-T27 COMPLETE.** The sixteen editions with `35588fb` ((a3)+(d), binary `e25ec4d3`) against D-0125's archive, with the addendum's incumbent criterion: the rank identical in all 16 editions, the score up in 15 and down in 2014; REFUSED 212 → 206 with family A 14 → 0, OPT 170 → 174, SAT 46 → 48, incumbents 794 → 799, objectives better on 63 / worse on 13, ERROR 4 → 8 (all minor-GC aborts, family B's other face), 0 REJECTED; 8 OPTs the checker cannot finish (listed verbatim in the record, for M8-bits-encoding-T5); 169 runs never finish their `.opb` + the same 8 proof-capped (M8's population). Archived `~/mznc-archive/runs/wave41run-2026-11-09/` (97 MB); node proofs deleted (20 → 8.8 GB), `.fzn` kept |
 | M8-bits-encoding-T1 | agent-m8t1 (`wave42-t1`) | 2026-11-10 | **D-0130**, the design record, documentation only. The substrate contract (a propagator cannot spell a bit; `Encoding`, `Justify` and `Trace` are the three places that know two representations), `declare_int` over bits (offset from `lo`, `bit_length(hi − lo)` bits, two bound rows, no ladder), `ensure_atom` (the `red` pair at level 0, the sparse chain, the counter, the D-0053 hazard), the mixed row and its overflow envelope, `Linear`'s bits `pol` (divide, cite the atom, saturate) with `gen.py`'s w = 10⁶ lines as the worked example, `Weaken_declared`, `min:`/`soli` unchanged in protocol, `--bits-above`, the three-threshold test plan, what `W = 0` cannot compare. PROOF-FORMAT §2a's rule amended to D-0127's with the old sentence kept as a dated note. Touched `docs/PROOF-FORMAT.md`, `docs/DECISIONS.md`, `docs/ROADMAP.md` (T1 row), `WORKLOG.md`; not `docs/INVARIANTS.md`, not `bench/` |
+| M8-bits-encoding-T5 | agent-rup (`wave42-rup`) | 2026-11-13 | D-0131. The root conflict closes as its trace + `rup >= 1` (every root `pol` gone, 36 of 156 proofs change, stdout and `.opb` byte-identical); `emit_concluding` writes `rup <literal>`; `--stats` counts `rup`/`pol` lines and `pol` tokens. D-0028's model at 10⁶: 29.8 MB → 138 B; the quadratic shape is a Θ(w) chain of root prunings, where the baseline's checker dies at 16 GiB and the `rup` form finishes (Θ(w²) in RUP time); hints rejected by measurement. The seven OPT proofs are byte-identical to the baseline's: no root `pol` was ever in them. Gate green, 20 min, 85 MB |
 
 ## Handoff notes
+## M8-bits-encoding-T5 handoff, 2026-11-13 (agent-rup, `wave42-rup`): the ladder walks as `rup`, and what the OPT hour is really spent on (D-0131)
+
+Merged nothing; branch `wave42-rup` (head 5dc0a75 plus the release commit that carries D-0131 and this note) is pushed to origin and node06, gate green on
+the node (`/scratch/arthur/wave42-gate`, rc 0, 20 min, 156 models verified, stdout and `.opb`
+byte-identical to the baseline, 36 `.pbp` changed). Artefacts under `/scratch/arthur/wave42-rup-out/`
+(`probe/`, `width/`, `hints/`, `opt/`, `gate42.*`); nothing of mine is running.
+
+1. `Search.dfs`'s root arm is one arm: trace, conflict line, `rup >= 1`. The D-0013 closing `pol`
+   and the predicates `rests_on_a_clause`/`mixes_currencies`/`root_needs_trace` are deleted. A
+   factless derivation is written unless it is one row weakened (`Search.weakened_row_only`);
+   `Store.unattributed_conflict` carries `current_ahead`. No `lib/core/prop/` file changed.
+2. The brief's premise was half wrong and D-0131 §3 says so: the solver's root `pol` was the AXIOM
+   fold, which 3.0.2 checks in O(1) per axiom (3.8 s at 10⁶, not 383 s); the win is 29.8 MB → 138 B
+   and the elaboration. The quadratic object in our emission was a chain of root prunings citing
+   each other (`chain` shape), where the baseline's checker dies at the 16 GiB cap at 10⁵; the
+   `rup` form finishes there in 24 min at 320 MB, and is Θ(w²) in checker time because RUP
+   re-walks the ladder per line. Hints make it worse (710 MB, slower); none are emitted.
+3. **The seven OPT proofs are byte-identical to the baseline's** (sizes in D-0131 §5): an
+   optimisation run never returns to the root arm. Their hour is 10⁵–10⁷ trace lines over kB-wide
+   rows, plus on smelt_2 1.5 M `Pb_analysis` `pol`s of up to 1 985 tokens (the ladder lift) and
+   on mapping 926 `Reduce` weakenings of 12 081 tokens -- all visible under `--stats` now. That is
+   the bits arm's and a stateful checker's problem, not this task's.
+4. Lanes: test_mutation's `pol` lanes on triple_unsat/lin_unsat are retired (no site) and replaced
+   by `blank-trace`; test_prop's alldiff (b)/regin (c) break the derivation's ABSENCE (a swapped
+   Defining id is repaired by UP -- a finding); test_endtoend pins that element_range is refuted by
+   its rows alone and that on element_moved the bound is on the page twice. Never weaken these;
+   D-0131 §7 has each measurement.
+5. For the orchestrator at merge: INVARIANTS I-X7 still says `conclusion UNSAT` may cite a `pol`
+   closing at `0 >= k`; it is always the empty clause now (one sentence, T1's file). D-0131 goes
+   at the bottom of DECISIONS.md after D-0130; PROOF-FORMAT §4 has a new "The root conflict"
+   subsection and the `int_lin_le` row rewritten; §2a untouched.
+
 ## The eligibility rule measured before T2, 2026-11-13 (orchestrator, `wave42-elig`)
 
 D-0130 §3.4 (bits only for a variable no enumerating-family row mentions) was run over the `.fzn`

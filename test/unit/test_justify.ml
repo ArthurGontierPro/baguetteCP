@@ -929,7 +929,8 @@ let test_defining_summand () =
         check "Defining: a summand whose literal is already stated mints no extra line"
           (cited = before + 1);
         (* No line states [x >= 3], so this one has to be written. It is still a UNIT,
-           which is the property [Search.rests_on_a_clause] reads off this constructor. *)
+           which is the property [Search.rests_on_a_clause] read off this constructor until
+           D-0131 retired it with the root arm it served. *)
         let before = Writer.last_id w in
         let minted =
           Justify.emit ctx
@@ -1089,20 +1090,35 @@ let build_defining_proof ~lit dir =
    from where it now lives -- [Reason.justified]'s [concludes] -- through
    [Justify.emit_concluding].
 
+   M8-bits-encoding-T5 (D-0131) changed what that door writes. A conclusion that is one
+   literal no longer goes out as `pol` + `ia` + `del`: it is `rup <literal> >= 1 ;`, one
+   line, checked by the checker's unit propagation against the page rather than
+   syntactically against a derivation it never sees. Two consequences for these lanes:
+
+     - the "truncated derivation" corruption has no site on the stated path (no `pol`
+       is written there), so the control is the corruption a `rup` CAN carry: a
+       conclusion one rung STRONGER than the derivation supports, refused at the line;
+     - a `rup` over a CONTRADICTORY database is accepted whatever it claims (CLAUDE.md,
+       D-0066), so the stated lanes run over the SATISFIABLE half of the model (c1 and
+       c2 alone, x = 1 satisfies both) and conclude nothing. The bare lanes keep the
+       UNSAT model and the `pol` they always had.
+
    Four lanes, and the first two exist so the last two mean something:
 
-     1. the honest derivation, bare               -- must be ACCEPTED
-     2. the honest derivation, stating its bound  -- must be ACCEPTED
-     3. the derivation truncated to its leftmost operand, so it derives a clause strictly
-        weaker than the bound the pruning claimed, and bare it is ACCEPTED. This lane
-        asserts the ACCEPTANCE. If it ever starts failing, a bare [pol] has grown a
+     1. the honest derivation, bare               -- `pol`, must be ACCEPTED
+     2. the honest derivation, stating its bound  -- `rup +1 x_ge_1 >= 1`, ACCEPTED,
+        and the proof holds that line and no `ia` and no `pol` for the pruning
+     3. the derivation truncated to its leftmost operand, bare -- derives a clause
+        strictly weaker than the bound the pruning claimed and is ACCEPTED. This lane
+        asserts the ACCEPTANCE: if it ever starts failing, a bare [pol] has grown a
         conclusion check and this test's premise wants re-measuring, not deleting.
-     4. the same corruption with the conclusion stated -- REJECTED.
+     4. the honest derivation stating a bound it does NOT support (x >= 2 where
+        c1 + c2 give x >= 1) -- REJECTED, in the checker's RUP words.
 
-   The model is UNSAT and the contradiction is derived under its own origin, so the
-   mutation knob cannot reach it: what differs between lanes is the pruning's line and
-   nothing else. *)
-let conclusion_break_opb dir name =
+   On the UNSAT half the contradiction is derived under its own origin, so the mutation
+   knob cannot reach it: what differs between lanes is the pruning's line and nothing
+   else. *)
+let conclusion_break_opb dir name ~unsat =
   let e = Encoding.create () in
   Encoding.declare_int e "x" ~lo:0 ~hi:3;
   Encoding.declare_int e "y" ~lo:0 ~hi:3;
@@ -1111,7 +1127,10 @@ let conclusion_break_opb dir name =
      proof can conclude. c1 alone is what the truncation leaves behind. *)
   let c1 = Encoding.add_constraint e (Opb.ge [ (1, v); (1, u) ] 1) in
   let c2 = Encoding.add_constraint e (Opb.ge [ (1, v); (1, Lit.negate u) ] 1) in
-  let c3 = Encoding.add_constraint e (Opb.ge [ (1, Lit.negate v) ] 1) in
+  let c3 =
+    if unsat then Some (Encoding.add_constraint e (Opb.ge [ (1, Lit.negate v) ] 1))
+    else None
+  in
   let opb = Filename.concat dir (name ^ ".opb") in
   let oc = open_out opb in
   (* The .opb and the .pbp are one artefact in two files and they must agree about
@@ -1138,11 +1157,25 @@ let test_conclusion_rejects_a_weakened_pol () =
       Sys.mkdir dir 0o700;
       let log = Filename.concat dir "log" in
       let site = "combine(2 summand(s), / 2)" in
+      let contains needle hay =
+        let n = String.length needle and h = String.length hay in
+        let rec go i = i + n <= h && (String.sub hay i n = needle || go (i + 1)) in
+        n = 0 || go 0
+      in
+      let slurp path =
+        let ic = open_in_bin path in
+        let s = really_input_string ic (in_channel_length ic) in
+        close_in ic;
+        s
+      in
       (* [stated]: does the pruning go out through [emit_concluding] with the
-         [Reason.fact] it concluded, or through plain [emit]? [truncated]: is the `pol`
-         corrupted to its leftmost operand? Returns [true] iff veripb ACCEPTED. *)
-      let run ~name ~stated ~truncated =
-        let e, opb, c1, c2, c3 = conclusion_break_opb dir name in
+         [Reason.fact] it concluded (x >= [value]), or through plain [emit]?
+         [truncated]: is the `pol` corrupted to its leftmost operand? Returns [true] iff
+         veripb ACCEPTED, and the proof's text, so a lane can assert the SHAPE of the
+         line as well as the verdict. *)
+      let run ~name ~stated ~truncated ~value =
+        let unsat = not stated in
+        let e, opb, c1, c2, c3 = conclusion_break_opb dir name ~unsat in
         let pbp = Filename.concat dir (name ^ ".pbp") in
         let oc = open_out pbp in
         let mutation = Writer.Mutation.make ~site Writer.Mutation.Truncate_derivation in
@@ -1154,7 +1187,7 @@ let test_conclusion_rejects_a_weakened_pol () =
         let ctx = Justify.create ~writer:w ~encoding:e in
         (* The pruning as a propagator builds it: one [Combine] over the two rows,
            divided by 2, and the bound it concluded. [x >= 1] with [x] declared from 0,
-           so the fact materialises to the literal the `ia` claims. *)
+           so the fact materialises to the literal the line claims. *)
         let expl =
           Explanation.combine
             [
@@ -1163,7 +1196,7 @@ let test_conclusion_rejects_a_weakened_pol () =
             ]
             2
         in
-        let concludes = Some (Reason.at_least ~name:"x" ~decl:0 1) in
+        let concludes = Some (Reason.at_least ~name:"x" ~decl:0 value) in
         let id =
           if stated then Justify.emit_concluding ctx ~concludes expl
           else Justify.emit ctx expl
@@ -1175,47 +1208,55 @@ let test_conclusion_rejects_a_weakened_pol () =
              lane corrupted nothing and its verdict means nothing.\n"
             name site);
         Writer.delete w id;
-        let bottom =
-          Writer.pol w ~origin:"the contradiction"
-            Pol.(add (div (add (id c1) (id c2)) 2) (id c3))
-        in
-        Writer.conclusion w (Writer.Unsat (Some bottom));
+        (match c3 with
+        | Some c3 ->
+            let bottom =
+              Writer.pol w ~origin:"the contradiction"
+                Pol.(add (div (add (id c1) (id c2)) 2) (id c3))
+            in
+            Writer.conclusion w (Writer.Unsat (Some bottom))
+        | None -> Writer.conclusion w Writer.No_conclusion);
         close_out oc;
-        Sys.command
-          (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
-             (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
-        = 0
+        let ok =
+          Sys.command
+            (Printf.sprintf "%s %s %s > %s 2>&1" (Filename.quote veripb)
+               (Filename.quote opb) (Filename.quote pbp) (Filename.quote log))
+          = 0
+        in
+        (ok, slurp pbp)
       in
       check "D-0043 (a) baseline: an honest Combine, emitted bare, is accepted"
-        (run ~name:"honest_bare" ~stated:false ~truncated:false);
+        (fst (run ~name:"honest_bare" ~stated:false ~truncated:false ~value:1));
+      let ok, text = run ~name:"honest_stated" ~stated:true ~truncated:false ~value:1 in
       check
         "D-0043 (a) baseline: the same Combine through emit_concluding is accepted -- \
          stating the bound costs nothing when the derivation is honest"
-        (run ~name:"honest_stated" ~stated:true ~truncated:false);
+        ok;
+      check
+        "D-0131: the stated conclusion is ONE `rup` of the literal, with no `ia` and no \
+         `pol` for the pruning"
+        (contains "rup +1 x_ge_1 >= 1 ;" text
+        && (not (contains " ia " text))
+        && not (contains " pol " text));
       check
         "D-0043 (a) THE GAP: a Combine truncated to derive strictly LESS than the bound \
          the pruning claimed is still ACCEPTED when nothing states the claim"
-        (run ~name:"weak_bare" ~stated:false ~truncated:true);
+        (fst (run ~name:"weak_bare" ~stated:false ~truncated:true ~value:1));
       check
-        "D-0043 (a) THE CONTROL: the same truncation is REJECTED once the conclusion \
-         travels on Reason.justified and reaches the page as an `ia`"
-        (not (run ~name:"weak_stated" ~stated:true ~truncated:true));
-      (* And it is the implication check that rejects it, not a parse error or a dangling
+        "D-0043 (a) THE CONTROL, in D-0131's form: a conclusion the derivation does NOT \
+         support (x >= 2 where the rows give x >= 1), stated as the `rup` it now is, is \
+         REJECTED at the line"
+        (not (fst (run ~name:"over_stated" ~stated:true ~truncated:false ~value:2)));
+      (* And it is the RUP check that rejects it, not a parse error or a dangling
          label. Asserted at full strength: an exit status cannot tell a JUDGEMENT from a
-         refusal to parse, which is how four lanes came to be green (M2-T14). *)
-      let contains needle hay =
-        let n = String.length needle and h = String.length hay in
-        let rec go i = i + n <= h && (String.sub hay i n = needle || go (i + 1)) in
-        n = 0 || go 0
-      in
-      let s =
-        let ic = open_in_bin log in
-        let s = really_input_string ic (in_channel_length ic) in
-        close_in ic;
-        s
-      in
-      check "D-0043 (a): the rejection is the implication check, in the checker's words"
-        (contains "not syntactically implied" s);
+         refusal to parse, which is how four lanes came to be green (M2-T14). The model
+         is satisfiable, so the database is not contradictory and this refusal is a
+         judgement about the claim (CLAUDE.md on `rup`'s vacuity). *)
+      check "D-0043 (a): the rejection is the RUP check, in the checker's words"
+        (contains
+           "The constraint is not implied by reverse unit propagation (RUP) from core \
+            and derived database."
+           (slurp log));
       Sys.readdir dir
       |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
       try Sys.rmdir dir with _ -> ())
@@ -1559,10 +1600,15 @@ let test_reduction_truncation_is_rejected () =
       Sys.mkdir dir 0o700;
       let log = Filename.concat dir "log" in
       let last_out = ref "" in
-      (* [expl_of] picks the derivation the lane emits; [stated] decides whether the
-         bound it claims reaches the page as an `ia` (M2-L0's [emit_concluding]).
-         Returns [true] iff veripb ACCEPTED. *)
-      let run ~veripb ~name ~stated ~expl_of =
+      (* [expl_of] picks the derivation the lane emits; [claim_of] is the ROW the lane
+         says it derives, stated against the derivation through [Justify.emit_stating]
+         -- the door [Pb_analysis.introduce] uses for a learned PB row -- or [None] for
+         a bare `pol`. Until M8-bits-encoding-T5 (D-0131) this went through
+         [emit_concluding] with the bound x >= 1 as the claim; that door now writes the
+         literal as a `rup`, which states no derivation at all, so a reduction's
+         arithmetic is checked by the proof exactly where lib/ checks it: an `ia` of the
+         reduced row against the `pol`. Returns [true] iff veripb ACCEPTED. *)
+      let run ~veripb ~name ~claim_of ~expl_of =
         let e, c1, c2 = reduce_break_encoding () in
         let pbp = Filename.concat dir (name ^ ".pbp") in
         let opb = Filename.concat dir (name ^ ".opb") in
@@ -1576,10 +1622,10 @@ let test_reduction_truncation_is_rejected () =
         let row = Learned.make [ (3, rv); (3, ru); (1, rw) ] 5 in
         let v = view row ~pivot:rv ~falsified:[] in
         let expl = expl_of v (Explanation.model_row c1) in
-        let concludes = Some (Reason.at_least ~name:"x" ~decl:0 1) in
         let id =
-          if stated then Justify.emit_concluding ctx ~concludes expl
-          else Justify.emit ctx expl
+          match claim_of v with
+          | Some claim -> Justify.emit_stating ctx ~claim expl
+          | None -> Justify.emit ctx expl
         in
         Writer.delete w id;
         (* The contradiction is derived under its own origin, from the model rows
@@ -1609,6 +1655,11 @@ let test_reduction_truncation_is_rejected () =
         rc = 0
       in
       let honest (r : Reduce.t) v base = (Option.get (r.reduce v)).derive base in
+      (* The row the component itself says it derives -- what [Pb_analysis] states. *)
+      let reduced (r : Reduce.t) v =
+        Some (Learned.to_opb (Option.get (r.reduce v)).reduced)
+      in
+      let bare _ = None in
       (* The truncation: roundToOne's divisor with roundToOne's weakening step dropped.
          This is not a mutation knob -- it is the defect a reduction component actually
          has, a rule that weakens less than its own definition says. *)
@@ -1629,28 +1680,31 @@ let test_reduction_truncation_is_rejected () =
           check
             ("M2-L5 (c) baseline: roundToOne's derivation, emitted bare, is ACCEPTED"
            ^ tag)
-            (run ~name:("rto_bare" ^ slug) ~stated:false
+            (run ~name:("rto_bare" ^ slug) ~claim_of:bare
                ~expl_of:(honest Reduce.round_to_one));
           check
-            ("M2-L5 (c) baseline: roundToOne's derivation stating the bound it concluded \
+            ("M2-L5 (c) baseline: roundToOne's derivation stating the row it reduces to \
               is ACCEPTED -- an honest reduction pays nothing for the `ia`" ^ tag)
-            (run ~name:("rto_stated" ^ slug) ~stated:true
+            (run ~name:("rto_stated" ^ slug) ~claim_of:(reduced Reduce.round_to_one)
                ~expl_of:(honest Reduce.round_to_one));
           check
-            ("M2-L5 (c) baseline: division's derivation stating the same bound is \
+            ("M2-L5 (c) baseline: division's derivation stating its own reduced row is \
               ACCEPTED" ^ tag)
-            (run ~name:("div_stated" ^ slug) ~stated:true
+            (run ~name:("div_stated" ^ slug) ~claim_of:(reduced Reduce.division)
                ~expl_of:(honest Reduce.division));
           check
             ("M2-L5 (c) THE GAP: the reduction TRUNCATED -- divided without its \
               weakening step, so it derives v+u+w >= 2 where roundToOne derives v+u >= 2 \
               -- is still ACCEPTED bare. A bare `pol` checks well-formedness, not what \
               was claimed." ^ tag)
-            (run ~name:("trunc_bare" ^ slug) ~stated:false ~expl_of:truncated);
+            (run ~name:("trunc_bare" ^ slug) ~claim_of:bare ~expl_of:truncated);
           check
             ("M2-L5 (c) THE CONTROL M1-T42 COULD NOT BUILD: the same truncated reduction \
-              is REJECTED once M2-L0's conclusion is stated" ^ tag)
-            (not (run ~name:("trunc_stated" ^ slug) ~stated:true ~expl_of:truncated));
+              is REJECTED once roundToOne's row is stated against it (D-0131: through \
+              emit_stating, the door Pb_analysis uses)" ^ tag)
+            (not
+               (run ~name:("trunc_stated" ^ slug) ~claim_of:(reduced Reduce.round_to_one)
+                  ~expl_of:truncated));
           (* Which rejection it is, named at full strength: the implication check, not a
              parse error and not a dangling label. The fragment "reverse unit
              propagation" is deliberately not used -- it is the least specific thing the

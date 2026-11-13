@@ -750,13 +750,24 @@ let conflict t (j : Reason.justified) =
    It is a separate function rather than a flag on [conflict] so that the exception is one
    named call site that a reader trips over, and so that adding a second one is an edit to
    this file. Found by turning the check on: this arm was the only false positive left in
-   the suite once non-materialising facts were skipped. *)
+   the suite once non-materialising facts were skipped.
+
+   [c_ahead] carries [current_ahead] exactly as [conflict] does (M8-bits-encoding-T5,
+   D-0131). It was hard-coded [false] here while nothing read the flag on a factless
+   conflict: [Trace.conflict_line] writes nothing over an empty tail, and both of
+   [Search]'s conflict arms wrote a factless derivation unconditionally. The root arm now
+   writes it ONLY when the family flagged the conflict, and the pigeonhole -- alldiff's
+   and gcc's push that empties a domain, made inside [deriving_ahead] -- is a conflict of
+   exactly that kind: its derivation is the counting argument the empty clause rests on.
+   Measured: with [false] here, five root refutations (alldiff_hall_unsat,
+   alldiff_pigeonhole_narrow_unsat, gcc_capacity_unsat, ...) closed on `rup >= 1` with no
+   derivation on the page and 3.0.2 refused each at that line. *)
 let unattributed_conflict t why =
   {
     c_prop = t.current_prop;
     c_why = why;
     c_reason = Reason.of_facts Reason.none;
-    c_ahead = false;
+    c_ahead = t.current_ahead;
   }
 
 (* The D-0026 agreement check.

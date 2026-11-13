@@ -5,13 +5,58 @@
    direction is [core -> proof], so [proof] cannot see [Explanation] and the bridge has
    to sit on the [core] side of the line, calling down into [Baguette_proof.Writer].
 
-   docs/PROOF-FORMAT.md section 2's rule is "prefer [pol] over [rup] everywhere [pol]
-   states the reasoning; [rup] makes the checker search" -- [Cut], [Combine] and
-   [Model_row] follow it. [Clause] cannot (see the comment there), and neither, it
-   turns out, can [Linear] as [Explanation.t] is shaped today -- see D-0009
-   (docs/DECISIONS.md) and the comment on [emit_linear]. [Decision] is neither: it is
-   not a derivation at all, and [emit] refuses it rather than rendering it as
-   something.
+   -------------------------------------------------------------------------------
+   Which rule a derivation is written as (D-0009, D-0013, D-0043, and since
+   M8-bits-encoding-T5 D-0131)
+   -------------------------------------------------------------------------------
+
+   docs/PROOF-FORMAT.md section 2a's rule used to read "prefer [pol] over [rup]
+   everywhere [pol] states the reasoning; [rup] makes the checker search". D-0127
+   measured that sentence on the checker alone and found it true for a derivation of
+   O(1) citations and false for one of Theta(w): a `pol` that adds Theta(w) terms into
+   a wide accumulator is quadratic for VeriPB 3.0.2 (383 s at w = 10^6), the same
+   conclusion as a `rup` is 197 bytes and the linear unit-propagation walk the checker
+   does anyway (2.6 s, dominated by reading the .opb), and the elaborator writes a
+   `rup` as its hint list while it copies a `pol` as it is. So the rule this module
+   follows is D-0127's closing sentence: **a justification is written as `rup`
+   wherever the checker's unit propagation closes it, and as `pol` only where it
+   cannot.**
+
+   Per constructor, that is:
+
+     - [Clause] and [Linear] are `rup`, and always were: a clause carries no record of
+       HOW its literals imply the pruning, and a bare literal in a `pol` asserts
+       nothing (D-0009, and [emit_linear]'s comment keeps the measurement).
+     - [Combine] and [Cut] WITH A CONCLUSION -- [emit_concluding], the D-0043 path,
+       whose claim is one order literal -- are `rup` of that literal. The ladder walk
+       D-0013's "weaken, divide, add" spells out as Theta(w) axioms is exactly what the
+       checker's unit propagation performs on its own along the ladder rows the .opb
+       holds (D-0031), once the bounds the derivation cites are on the page as lines it
+       can propagate along. Where that is true a `rup` is one line and O(1) tokens where
+       the `pol` + `ia` + `del` of D-0043 were three lines and Theta(w) tokens; where it
+       is not, the checker says so at the line ("not implied by reverse unit
+       propagation"), and nothing is silently weaker. The conclusion goes through the
+       claim index like every other clause, so a line the trace already wrote is reused
+       rather than restated (M1-T59).
+     - [Combine] and [Cut] WITHOUT a conclusion -- plain [emit] -- stay the D-0013
+       `pol`. A bare derivation is demanded exactly where its RESULT is consumed as a
+       ROW by arithmetic rather than as a bound: a [Term] operand of a parent `pol`, a
+       counting family's derivation written ahead of its trace line because unit
+       propagation cannot close that line without it (I-X10's [Needs_derivation]:
+       alldiff, gcc, element, cumulative), and [Pb_analysis.introduce]'s learned PB row,
+       whose claim is an inequality the checker cannot reach by propagation (measured,
+       D-0131: the lifted row of lib/core/ladder.ml's worked example is refused as
+       `rup`). For those the `pol` IS the statement, and its token count is what
+       `--stats` reports so that a Theta(w) one is seen rather than suffered.
+     - [Model_row] writes nothing: its id is the row's.
+     - [Decision] is not a derivation at all, and [emit] refuses it rather than
+       rendering it as something.
+
+   The root conflict, which until D-0131 was the one place [Linear]'s Combine reached
+   the page as a `pol` at all, no longer asks this module for the derivation:
+   [Search.close_root_conflict] writes the root's trace and closes with `rup >= 1`, the
+   nogood over an empty decision stack (D-0018 with [decisions = []]), which is the same
+   shape every branch already closed with.
 
    -------------------------------------------------------------------------------
    Context -- and the ambient row that used to live in it (M1-T31)
@@ -498,8 +543,13 @@ let emit_linear ctx terms rhs =
    writes the derivation, an `ia` stating [c] against it, and a `del` of the derivation,
    and hands back the id of the CLAIM. M1-T51 measured what that buys: a [pol] truncated
    so it derives something strictly weaker than the bound the propagator actually set is
-   ACCEPTED bare and REJECTED once the claim is on the page. This function is the first
-   caller either rule has had in [lib/] since M1-T51 built them. *)
+   ACCEPTED bare and REJECTED once the claim is on the page.
+
+   Since D-0131 the only [Some] caller is [emit_stating], whose claim is a PB ROW: a
+   learned inequality the checker cannot reach by unit propagation, so the `pol` is the
+   statement and the `ia` is what checks our arithmetic against the checker's. A claim
+   that is one LITERAL no longer comes here at all -- [emit_concluding] writes it as the
+   `rup` the module header describes. *)
 let pol_stating ctx ~origin ~claim expr =
   match claim with
   | None -> Writer.pol ctx.writer ~origin expr
@@ -654,37 +704,6 @@ let rec emit ctx (e : Explanation.t) : Writer.cid =
       memoized ctx e (fun () -> emit_combine ~emit ~claim:None ctx summands divisor)
   | Explanation.Deferred _ -> memoized ctx e (fun () -> emit ctx (Explanation.force e))
 
-(* [emit_concluding ctx ~concludes e] renders [e] exactly as [emit] does, except that
-   where the rendering is a [pol] -- and only there -- the [pol] states what it concludes.
-
-   [~concludes] is [Reason.justified]'s D-0043 field, passed through rather than
-   recovered: a [Combine] records how a bound was derived and not what, which is the
-   whole of why the field exists. The claim is the conclusion's order literal as a
-   one-literal constraint, which is the same clause lib/core/trace.ml writes for the same
-   pruning, so the `ia` and the trace line cannot claim two different bounds.
-
-   Four cases fall through to [emit], and each falls through for its own reason rather
-   than for lack of coverage:
-
-     - [None], or a conclusion at its declared bound. [Reason.lit_of_fact] is [None]
-       there because the encoding states that bound as the constant true (PROOF-FORMAT
-       section 3), so there is no literal to claim and an `ia` of the constant true would
-       be a line that says nothing.
-     - [Clause] and [Linear] are [rup], and a [rup] already names its own target
-       outright: the claim is the line. Wrapping one in an `ia` would restate it.
-     - [Model_row] mints no line at all. Its id is the row's, and a conclusion stated
-       against it would claim the ROW implies the bound, which is exactly the D-0020
-       restatement defect.
-     - [Decision] raises, in [emit], as it must.
-
-   It deliberately neither consults nor populates the memo. The memo maps an explanation
-   to the id of the constraint emitted for it, and what this returns for a [Combine] is
-   the id of the CLAIM, not of the derivation -- a strictly weaker constraint. Handing
-   that back to a later plain [emit] of the same explanation would give a parent [Cut] an
-   operand that is not what it asked for, which is the silent-weakening failure this whole
-   task exists to close. Two demands of one concluding explanation therefore write two
-   lines; there is no live caller yet for which that matters, and the alternative is
-   unsound. *)
 (* M2-L6: emit [e] as a [pol] that STATES the constraint [claim], where [e] renders to a
    [pol] at all.
 
@@ -715,24 +734,51 @@ let emit_stating ctx ~(claim : Opb.constr) (e : Explanation.t) : Writer.cid =
   in
   go e
 
+(* M8-bits-encoding-T5 (D-0131): a [Combine] or [Cut] that concludes a LITERAL is
+   written as `rup <literal> >= 1 ;` -- the module header says why, and this comment
+   says what the line rests on, because a `rup` is only as good as the database it is
+   checked against.
+
+   What the checker needs on the page is every bound the derivation CITES, as a line it
+   can unit-propagate to: a [Term] summand's conclusion as a unit (or as a trace clause
+   whose other literals are already forced), and a [Defining]'s literal likewise. The
+   derivation's own summands are therefore NOT emitted here -- a [Term]'s explanation is
+   not recursed into, and a [Weaken] has nothing to put on the page in any rule -- and
+   the obligation moves to the caller, which is the same obligation every D-0018 trace
+   line already carries: [Trace.emit] writes the trail oldest first, so each line's facts
+   precede it. A caller that asks for a concluding derivation whose premises are not on
+   the page gets the checker's "not implied by reverse unit propagation", at this line,
+   and never a weaker constraint quietly accepted; that is the trade D-0043 asked for
+   from the `ia`, made by the rule itself.
+
+   The literal goes through [emit_clause], i.e. through the claim index: if the trace
+   has already stated it, that id is handed back (M1-T59's ownership answer, and I-S4
+   holds because [defining_line] only answers with a line at or below the current
+   level); otherwise one `rup` is minted and indexed, so a later [Defining] or [Clause]
+   asking for the same literal finds it. It deliberately still does not touch the memo:
+   the memo maps an explanation to the id of the constraint EMITTED FOR IT as a row, and
+   a unit stating its bound is a strictly weaker object than the row a parent [Cut]
+   would ask [emit] for -- the silent-weakening failure D-0043 exists to close.
+
+   Four cases fall through to [emit], each for its own reason:
+
+     - [None], or a conclusion at its declared bound: there is no literal to claim
+       (PROOF-FORMAT section 3 states that bound as the constant true).
+     - [Clause] and [Linear] are `rup` already and name their own target.
+     - [Model_row] mints no line; its id is the row's, and a bound stated against it
+       would claim the ROW implies the bound, the D-0020 restatement defect.
+     - [Decision] raises, in [emit], as it must. *)
 let emit_concluding ctx ~(concludes : Reason.fact option) (e : Explanation.t) : Writer.cid
     =
-  let rec go e =
-    match Option.bind concludes Reason.lit_of_fact with
-    | None -> emit ctx e
-    | Some l -> (
-        (* The same hygiene [emit_clause] applies to a reason's literals: a conclusion
-           about a variable this encoding never declared is a caller's mistake and says
-           so here, not several lines later inside veripb. *)
-        validate_lits ctx [ l ];
-        let claim = Some (Opb.clause [ l ]) in
-        match e with
-        | Explanation.Cut (e1, e2, c1, c2) -> emit_cut ~emit ~claim ctx e1 e2 c1 c2
-        | Explanation.Combine (summands, divisor) ->
-            emit_combine ~emit ~claim ctx summands divisor
-        | Explanation.Deferred _ -> go (Explanation.force e)
-        | Explanation.Clause _ | Explanation.Linear _ | Explanation.Model_row _
-        | Explanation.Decision _ ->
-            emit ctx e)
-  in
-  go e
+  match Option.bind concludes Reason.lit_of_fact with
+  | None -> emit ctx e
+  | Some l -> (
+      (* The same hygiene [emit_clause] applies to a reason's literals: a conclusion
+         about a variable this encoding never declared is a caller's mistake and says
+         so here, not several lines later inside veripb. *)
+      validate_lits ctx [ l ];
+      match Explanation.force e with
+      | Explanation.Cut _ | Explanation.Combine _ -> emit_clause ctx [ l ]
+      | Explanation.Clause _ | Explanation.Linear _ | Explanation.Model_row _
+      | Explanation.Decision _ | Explanation.Deferred _ ->
+          emit ctx e)

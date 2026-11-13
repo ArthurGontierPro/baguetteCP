@@ -96,6 +96,18 @@ module Pol = struct
     let b = Buffer.create 64 in
     write_cited b cite p;
     Buffer.contents b
+
+  (* How many tokens the rendered expression carries: one per operand or operator, so
+     the word count of [to_string_cited]'s output. This is what [--stats] reports per
+     `pol` (M8-bits-encoding-T5, D-0131). D-0127 measured, on VeriPB 3.0.2, that every
+     `+` into an accumulator of Theta(w) terms costs Theta(w), so a `pol` of Theta(w)
+     tokens is the shape whose check time grows faster than its byte count, and the
+     count is the number to watch rather than the line's length. *)
+  let rec tokens = function
+    | Id _ | Axiom _ -> 1
+    | Add (a, b) -> tokens a + tokens b + 1
+    | Mul (a, _) | Div (a, _) | Weaken (a, _) -> tokens a + 2
+    | Sat a -> tokens a + 1
 end
 
 (* ---------------------------------------------------------------------------
@@ -279,6 +291,16 @@ type t = {
   mutable mutation_note : string option;
       (* [Some description] once the knob has fired. Latched: one corruption per proof,
          so a rejection names one suspect. *)
+  mutable n_pol : int;
+  mutable n_rup : int;
+  mutable pol_tokens : int;
+  mutable pol_tokens_max : int;
+  mutable pol_widest : string;
+      (* M8-bits-encoding-T5 (D-0131): the SHAPE counters, read back by [shape_stats] for
+         bin/main.ml's [--stats]. How many `pol` and `rup` lines this writer put on the
+         page, the tokens over every `pol` ([Pol.tokens]), the widest single `pol` and the
+         [~origin] that wrote it -- so a Theta(w)-token `pol` is visible by name, not only
+         as a slow check. Counted on what is written, after the mutation knob. *)
 }
 
 let audit_enabled () =
@@ -303,6 +325,11 @@ let create ?(comments = false) ?audit oc =
     mutation = None;
     mutation_hits = 0;
     mutation_note = None;
+    n_pol = 0;
+    n_rup = 0;
+    pol_tokens = 0;
+    pol_tokens_max = 0;
+    pol_widest = "";
   }
 
 (* A writer that emits ONE deliberately wrong step, for the mutation gate. Off is not
@@ -329,6 +356,26 @@ let cite _t id = Opb.label_of id
 let cite_all t ids = String.concat " " (List.map (cite t) ids)
 let auditing t = t.audit
 let last_id t = t.next_id
+
+(* The shape counters, as a value (M8-bits-encoding-T5, D-0131). [pol_widest] is the
+   [~origin] of the `pol` with the most tokens, "" when none was written. *)
+type shape_stats = {
+  n_pol : int;
+  n_rup : int;
+  pol_tokens : int;
+  pol_tokens_max : int;
+  pol_widest : string;
+}
+
+let shape_stats (t : t) : shape_stats =
+  {
+    n_pol = t.n_pol;
+    n_rup = t.n_rup;
+    pol_tokens = t.pol_tokens;
+    pol_tokens_max = t.pol_tokens_max;
+    pol_widest = t.pol_widest;
+  }
+
 let live_count t = Hashtbl.length t.live
 let live_ids t = Hashtbl.fold (fun id _ acc -> id :: acc) t.live [] |> List.sort compare
 
@@ -1041,6 +1088,12 @@ let emit_yielding t ~origin body_of_id =
 let pol t ~origin p =
   (* [corrupt_pol] is the identity for every writer [create] built. *)
   let p = corrupt_pol t ~origin p in
+  let n = Pol.tokens p in
+  t.n_pol <- t.n_pol + 1;
+  t.pol_tokens <- t.pol_tokens + n;
+  if n > t.pol_tokens_max then (
+    t.pol_tokens_max <- n;
+    t.pol_widest <- origin);
   emit_yielding t ~origin (fun _ -> "pol " ^ Pol.to_string_cited ~cite:(cite t) p)
 
 (* Reverse unit propagation of a PB constraint. Prefer [pol] where the reasoning is
@@ -1051,6 +1104,7 @@ let pol t ~origin p =
 let rup t ~origin c =
   let c = corrupt_claim t ~origin c in
   let id = t.next_id + 1 in
+  t.n_rup <- t.n_rup + 1;
   line t "%srup %s" (label_for t id) (Opb.constr_to_string c);
   fresh t ~origin
 

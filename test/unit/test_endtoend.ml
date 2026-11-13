@@ -829,11 +829,14 @@ let test_m5_derivation_is_load_bearing () =
             (m5_says out
                "The constraint is not implied by reverse unit propagation (RUP) from \
                 core and derived database."));
-      (* ------------------------------------- the `pol`-minted citation, opt_unsat's shape
+      (* ------------------------------------- the cited contradiction, opt_unsat's shape
 
-         An infeasible optimisation model concludes BOUNDS INF INF citing a `pol`, which
-         is exactly the shape the decorative-`pol` warning is about. It is NOT decorative:
-         the conclusion checks that the cited constraint really is a contradiction. *)
+         An infeasible optimisation model concludes BOUNDS INF INF citing the line that
+         refutes the root. Until M8-bits-encoding-T5 (D-0131) that was [int_lin_le]'s
+         D-0013 `pol`; it is now the empty clause `rup >= 1`, derived after the root's
+         trace. Either way the citation is NOT decorative: the conclusion checks that the
+         cited constraint really is a contradiction, and the break below makes it one
+         that is not. *)
       let opb2, _, proof2, outcome2 =
         m5_emit dir "inf"
           "var 0..3: x :: output_var;\n\
@@ -871,35 +874,38 @@ let test_m5_derivation_is_load_bearing () =
           incr failures;
           print_endline "FAIL M5: the INF conclusion cites no constraint"
       | Some id ->
-          check "M5: the INF conclusion's cited id was minted by a `pol`"
+          check
+            "M5: the INF conclusion's cited id was minted by the empty clause `rup >= 1` \
+             (D-0131's root close)"
             (List.find_map
                (fun l ->
-                 match m5_minted l with Some (i, r) when i = id -> Some r | _ -> None)
+                 match m5_minted l with
+                 | Some (i, r) when i = id ->
+                     Some (r, String.trim (Writer.strip_label (String.trim l)))
+                 | _ -> None)
                lines2
-            = Some "pol");
-          (* BREAK 3: corrupt that `pol` so it derives something sound but NOT a
-             contradiction, leaving the claim unchanged. If the conclusion did not check
-             its citation this would sail through, which is the whole worry. *)
+            = Some ("rup", "rup >= 1 ;"));
+          (* BREAK 3: make the cited line something sound but NOT a contradiction -- a
+             tautology, label kept -- leaving the conclusion unchanged. If the conclusion
+             did not check its citation this would sail through, which is the whole
+             worry. *)
           let corrupted =
             List.map
               (fun l ->
                 match m5_minted l with
-                | Some (i, "pol") when i = id -> (
-                    (* `pol @cA @cB +` -> `pol @cA @cA +`: still a valid derivation, no
-                       longer a contradiction. *)
+                | Some (i, "rup") when i = id -> (
                     match String.split_on_char ' ' (String.trim l) with
-                    | lbl :: "pol" :: a :: _ :: rest ->
-                        String.concat " " (lbl :: "pol" :: a :: a :: rest)
-                    | _ -> l)
+                    | lbl :: _ -> lbl ^ " rup +1 x_ge_1 +1 ~x_ge_1 >= 1 ;"
+                    | [] -> l)
                 | _ -> l)
               lines2
           in
-          check "M5 BREAK CONTROL: the corruption really changed the pol"
+          check "M5 BREAK CONTROL: the corruption really changed the cited line"
             (corrupted <> lines2);
           let ok, out = m5_run_lines checker dir "polbad" opb2 corrupted in
           check
-            "M5 BREAK: a `pol` that derives something sound but not contradictory is \
-             REFUSED by the conclusion -- BOUNDS checks the id it cites"
+            "M5 BREAK: a cited line that is sound but not contradictory is REFUSED by \
+             the conclusion -- BOUNDS checks the id it cites"
             (not ok);
           check "M5 BREAK: ... at full strength, naming the citation"
             (m5_says out "is not contradicting, as specified by the hint."));
@@ -972,44 +978,46 @@ let el_cited_line proof =
         Some lbl,
         List.find_opt (fun l -> m5_says (String.trim l ^ " ") (lbl ^ " ")) lines )
 
-(* Drop the last operand of a reverse-Polish [pol], which leaves a pol that is still
-   SOUND -- it derives something the database really entails -- but no longer
-   contradictory. That is precisely D-0057's failure mode, so it is the break worth
-   making: a proof that goes on being accepted after it is exactly a proof whose pol was
-   decorative. *)
-(* M4-T8: a summand may be scaled ("@cN k *") rather than added bare ("@cN"), which
-   [Defining]'s multiplicity introduces and the older Clause-only lines this helper was
-   first written against never did. Dropping only the id and the immediately-following
-   token left a dangling "k *" for a scaled summand -- a syntax error, not the "sound
-   but not contradictory" pol this break wants -- so the coefficient, if present, is
-   consumed too. *)
-let el_drop_last_operand line =
-  let ws = Array.of_list (String.split_on_char ' ' (String.trim line)) in
-  let n = Array.length ws in
-  let is_id w = String.length w > 2 && String.sub w 0 2 = "@c" in
-  let idx_last_op =
-    let best = ref (-1) in
-    for i = 2 to n - 1 do
-      if is_id ws.(i) then best := i
-    done;
-    !best
-  in
-  if idx_last_op < 0 then None
-  else
-    let j = ref (idx_last_op + 1) in
-    if
-      !j + 1 < n
-      && (match int_of_string_opt ws.(!j) with Some _ -> true | None -> false)
-      && ws.(!j + 1) = "*"
-    then j := !j + 2;
-    if !j >= n then None
-    else
-      let last_dropped = !j in
-      Some
-        (String.concat " "
-           (List.filteri
-              (fun i _ -> i < idx_last_op || i > last_dropped)
-              (Array.to_list ws)))
+(* The last `pol` line before the one labelled [cited]. Since D-0131 the conclusion
+   cites the empty clause `rup >= 1`, and the derivation it rests on -- element's own,
+   written ahead of the close because the family is [Needs_derivation] (I-X10) -- is
+   the `pol` just before it. *)
+let el_last_pol_before lines cited =
+  match cited with
+  | None -> None
+  | Some lbl ->
+      let starts p t =
+        String.length t >= String.length p && String.sub t 0 (String.length p) = p
+      in
+      let rec go acc = function
+        | [] -> acc
+        | l :: rest ->
+            let t = String.trim l in
+            if starts (lbl ^ " ") t then acc
+            else go (if m5_says (" " ^ t) " pol " then Some l else acc) rest
+      in
+      go None lines
+
+let rup_wording =
+  "The constraint is not implied by reverse unit propagation (RUP) from core and derived \
+   database."
+
+(* [line] replaced by a tautology that keeps its label, so every later citation still
+   parses and the checker judges what rested on it (test_matrix.ml's [blank_rules]
+   recipe). [victim] selects the lines. *)
+let el_blank ~victim ~taut lines =
+  List.map
+    (fun l ->
+      if victim l then
+        match String.split_on_char ' ' (String.trim l) with
+        | lbl :: _ -> Printf.sprintf "%s rup +1 %s +1 ~%s >= 1 ;" lbl taut taut
+        | [] -> l
+      else l)
+    lines
+
+let el_is_rup_not_close l =
+  let t = String.trim l in
+  m5_says (" " ^ t) " rup " && not (m5_says (t ^ " ") " rup >= 1 ; ")
 
 let el_range_src =
   "var 1..3: i;\n\
@@ -1041,41 +1049,53 @@ let test_element_derivation_is_load_bearing () =
       check "M4-T3 (c): the declared-range scene is UNSAT" (outcome = Search.Unsat);
       let lines, cited, minting = el_cited_line proof in
       check "M4-T3 (c): the conclusion names an id" (cited <> None);
+      (* D-0131: the conclusion cites the empty clause, and element's derivation -- the
+         counting argument the empty clause rests on -- is the `pol` written ahead of it
+         (the family is [Needs_derivation], so the close is one propagation past it). *)
       (match minting with
       | None -> check "M4-T3 (c): the conclusion names a line THIS proof minted" false
       | Some line ->
           check "M4-T3 (c): the conclusion names a line THIS proof minted" true;
-          if not (m5_says (" " ^ String.trim line) " pol ") then
-            Printf.printf "     conclusion cites: %s\n" (String.trim line);
           check
-            "M4-T3 (c): `conclusion UNSAT` cites the ELEMENT DERIVATION -- a pol, not \
-             the empty clause a D-0022 close would put there"
-            (m5_says (" " ^ String.trim line) " pol "));
-      (* --------------------------------- (b) the break, on the very line it cites *)
-      (match minting with
+            "M4-T3 (c): `conclusion UNSAT` cites the empty clause `rup >= 1`, D-0131's \
+             root close"
+            (String.trim (Writer.strip_label (String.trim line)) = "rup >= 1 ;"));
+      let derivation = el_last_pol_before lines cited in
+      check
+        "M4-T3 (c): and the ELEMENT DERIVATION -- a pol -- is on the page ahead of the \
+         close, which is what the close rests on"
+        (derivation <> None);
+      (* ----------------------- (b) what a break can and cannot show on this scene
+
+         Measured on 3.0.2 (M8-bits-encoding-T5, D-0131): with element's pol AND every
+         trace line replaced by tautologies, `rup >= 1` is still ACCEPTED here. The
+         declared-range scene is refuted by its .opb alone under unit propagation
+         (`c <= 4` makes every `~idx_eq_p \/ c >= as[p]` row a unit, and the at-least-one
+         closes), which is D-0030's shape: no corruption of the derivation or of the trace
+         can be judged on it. The old BREAK -- the pol's last operand dropped, refused at
+         `conclusion UNSAT`'s SYNTACTIC check of its citation -- tested that check, not
+         the derivation. The fact is pinned so that the day it stops holding (a weaker
+         encoding of the guards, say) the lane says so, and the load-bearing break lives
+         on the moved-bound scene below, where the checker refuses it. *)
+      (match derivation with
       | None -> ()
-      | Some line -> (
+      | Some line ->
           let ok, _ = m5_run_lines checker dir "elok" opb lines in
           check "M4-T3 BREAK CONTROL: the unmodified proof is accepted" ok;
-          match el_drop_last_operand line with
-          | None ->
-              check
-                "M4-T3 BREAK: the cited pol has operands to drop (a one-operand pol \
-                 would make this lane vacuous)"
-                false
-          | Some broken ->
-              let lines2 = List.map (fun l -> if l = line then broken else l) lines in
-              check "M4-T3 BREAK CONTROL: the corruption really changed the file"
-                (lines2 <> lines);
-              let ok, out = m5_run_lines checker dir "elbad" opb lines2 in
-              check
-                "M4-T3 BREAK (b): a cited pol that is SOUND but no longer contradictory \
-                 is REFUSED"
-                (not ok);
-              check
-                "M4-T3 BREAK (b): ... at full strength -- the checker's own wording, not \
-                 an exit status and not a parse error"
-                (m5_says out "is not contradicting, as specified by the hint.")));
+          let blanked =
+            el_blank ~taut:"c_ge_1"
+              ~victim:(fun l -> l = line || el_is_rup_not_close l)
+              lines
+          in
+          check "M4-T3 (b) premise: the blanking really changed the file"
+            (blanked <> lines);
+          let ok, _ = m5_run_lines checker dir "elvac" opb blanked in
+          check
+            "M4-T3 (b), MEASURED (D-0131): the declared-range scene is refuted by its \
+             .opb alone under unit propagation -- with element's pol and the whole trace \
+             blanked the empty clause is still ACCEPTED, so no break is judged here and \
+             the load-bearing lane is the moved-bound scene's"
+            ok);
       (* ---------------------------------- (c) the negative half, INVERTED by M4-T8
 
          M4-T3 wrote this half asserting `rup >= 1`, deliberately, so that it would go
@@ -1101,48 +1121,70 @@ let test_element_derivation_is_load_bearing () =
       | Some line ->
           check "M4-T8 (c): the moved-bound conclusion names a line THIS proof minted"
             true;
-          if not (m5_says (" " ^ String.trim line) " pol ") then
-            Printf.printf "     conclusion cites: %s\n" (String.trim line);
           check
-            "M4-T8 (c): with the bound MOVED, `conclusion UNSAT` now cites element.ml's \
-             OWN pol (Route A) -- D-0064's Defining cancels it exactly, where the old \
-             Clause stand-in could not, and element.ml's [pol] is no longer decorative \
-             for this scene"
-            (m5_says (" " ^ String.trim line) " pol ");
-          check
-            "M4-T8 (c): ... and it is NOT `rup >= 1` -- the empty-clause Route B this \
-             scene used to take before the swap"
-            (not (m5_says (String.trim line) "rup >= 1")));
-      (* ------------------------- M4-T8 obligation (b): the break, on this cited line
+            "M4-T8 (c): with the bound MOVED, `conclusion UNSAT` cites the empty clause \
+             (D-0131's root close, which is also what the pre-M4-T8 Route B wrote -- the \
+             difference is now in what the close RESTS on, below)"
+            (String.trim (Writer.strip_label (String.trim line)) = "rup >= 1 ;"));
+      let derivation = el_last_pol_before lines cited in
+      check
+        "M4-T8 (c): ... and element.ml's OWN pol is on the page ahead of it -- D-0064's \
+         Defining cancels the moved bound exactly, where the old Clause stand-in could \
+         not, so the derivation is what the empty clause rests on and it is not \
+         decorative for this scene"
+        (derivation <> None);
+      (* ------------------------- M4-T8 obligation (b): what the empty clause rests on
 
-         Same recipe as the positive half's BREAK above: drop the pol's last operand,
-         which leaves it SOUND but no longer contradictory, and check that `conclusion
-         UNSAT` -- which now names this line -- is refused, at the checker's full
-         wording rather than an exit status. *)
-      (match minting with
+         Measured on 3.0.2 (M8-bits-encoding-T5, D-0131), and the answer is not a single
+         line. The moved bound `c <= 2` is on the page TWICE: as its trace line, and
+         inside element's derivation, where D-0064's [Defining] cites that very line so
+         the cancellation is exact. Blank the trace alone and the close is still
+         ACCEPTED (the derivation, with its citation turned into a tautology, still
+         derives a row the element rows then refute by unit propagation); blank the
+         derivation alone and it is still ACCEPTED (the trace puts the bound where the
+         rows refute it); blank BOTH and the empty clause is REFUSED, at the RUP wording.
+         The old BREAK (the pol's last operand dropped, refused at the conclusion's
+         syntactic check of its citation) measured the citation check; this measures the
+         proof, and what the proof says is that the refutation needs what the solver
+         wrote and not only the rows -- which is the D-0030 property, now asserted on
+         the moved-bound scene where it holds. *)
+      (match derivation with
       | None -> ()
-      | Some line -> (
+      | Some line ->
           let ok, _ = m5_run_lines checker dir "elmovedok" opb lines in
           check "M4-T8 BREAK CONTROL: the unmodified moved-bound proof is accepted" ok;
-          match el_drop_last_operand line with
-          | None ->
-              check
-                "M4-T8 BREAK: the cited pol has operands to drop (a one-operand pol \
-                 would make this lane vacuous)"
-                false
-          | Some broken ->
-              let lines2 = List.map (fun l -> if l = line then broken else l) lines in
-              check "M4-T8 BREAK CONTROL: the corruption really changed the file"
-                (lines2 <> lines);
-              let ok, out = m5_run_lines checker dir "elmovedbad" opb lines2 in
-              check
-                "M4-T8 BREAK (b): a cited pol that is SOUND but no longer contradictory \
-                 is REFUSED"
-                (not ok);
-              check
-                "M4-T8 BREAK (b): ... at full strength -- the checker's own wording, not \
-                 an exit status and not a parse error"
-                (m5_says out "is not contradicting, as specified by the hint.")));
+          let trace_blanked = el_blank ~taut:"c_ge_1" ~victim:el_is_rup_not_close lines in
+          check "M4-T8 BREAK premise: there is a trace to blank" (trace_blanked <> lines);
+          let ok, _ = m5_run_lines checker dir "elmovedtrace" opb trace_blanked in
+          check
+            "M4-T8 (b), MEASURED (D-0131): with the root's trace alone blanked the empty \
+             clause is still ACCEPTED -- element's exact derivation carries the bound \
+             too"
+            ok;
+          let pol_blanked = el_blank ~taut:"c_ge_1" ~victim:(fun l -> l = line) lines in
+          let ok, _ = m5_run_lines checker dir "elmovedpol" opb pol_blanked in
+          check
+            "M4-T8 (b), MEASURED (D-0131): with element's derivation alone blanked the \
+             empty clause is still ACCEPTED -- the trace carries the bound too"
+            ok;
+          let both_blanked =
+            el_blank ~taut:"c_ge_1"
+              ~victim:(fun l -> l = line || el_is_rup_not_close l)
+              lines
+          in
+          let ok, out = m5_run_lines checker dir "elmovedboth" opb both_blanked in
+          if ok then
+            Printf.printf "     accepted with both blanked; the proof was:\n%s\n"
+              (String.concat "\n" both_blanked);
+          check
+            "M4-T8 BREAK (b): with the trace AND element's derivation blanked the empty \
+             clause is REFUSED -- the refutation rests on what the solver wrote, not on \
+             the rows"
+            (not ok);
+          check
+            "M4-T8 BREAK (b): ... at full strength -- the checker's RUP wording, not an \
+             exit status and not a parse error"
+            (m5_says out rup_wording));
       List.iter
         (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ())
         (Array.to_list (Sys.readdir dir));

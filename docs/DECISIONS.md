@@ -11291,3 +11291,238 @@ row, and the "some i attains m" side needs either on-demand atoms under the spar
 different row shape; until it exists the 50 instances below 50 % (road-cons, largescheduling,
 tower, ATSP, mapping) stay on the ladder at every `W`. The 2.7 GB of re-flattened `.fzn` are kept
 under `fataepyc-06:/scratch/arthur/wave42-elig/` for T2's `.opb`-bytes table.
+## D-0131  M8-bits-encoding-T5: the order arm's ladder walks are written as `rup`, the root closes on its trace, and where `pol` stays and why
+
+**Status**: DECIDED and MEASURED, 2026-11-10 to 2026-11-13 (agent-rup, branch `wave42-rup`).
+Implements the cheap half D-0127 named and D-0130 §2 states as the writing rule: *write a
+justification as `rup` wherever the checker's unit propagation closes it, and as `pol` only
+where it cannot.* Measured on `fataepyc-06`, VeriPB 3.0.2 (`~/.cargo/bin/veripb`, source
+d5644ca4), `cake_pb` of 2026-08-25, `/usr/bin/time -v`. Binaries: baseline
+`/scratch/arthur/baguette-gate-20261106/_build/default/bin/main.exe` (main 35588fb, md5
+`e25ec4d3c72820caf722cdfa5b810922`); this branch at 30ecc38 (`5c1c12b57a858357df05a9d205a8c647`,
+the width table), 640fe1d (`f2028d504aa81ed59acd0fa1fdbbec8f`, the chain and the OPT re-solves)
+and the gated head (`a6327dc69ae21e0b50203af668347c9e`). The two intermediate binaries differ from the head only in
+the root arm's gate for a factless counting conflict (§3), which none of the measured models
+reach.
+
+### 1. What changed, per site
+
+| site | before | after | why |
+|---|---|---|---|
+| the root conflict (`Search.dfs`, `decisions = []`) | two arms: D-0013's closing `pol` (the propagator's `Combine`, recursed into every cited pruning's `Combine`: one Θ(w)-token `pol` per variable of declared width w) where three predicates said it closed, else D-0022's `close_root_conflict` | one arm, `close_root_conflict`: the root's trace (`Trace.emit`), the conflict's `rup ~facts >= 1` (`Trace.conflict_line`), the empty clause `rup >= 1`, cited by `conclusion UNSAT`; the predicates `rests_on_a_clause`, `mixes_currencies`, `root_needs_trace`, `is_counting_row` are deleted | D-0018 with an empty decision stack; every branch already closed this way, and the root's trace was always what made the refutation checkable (§2, probe 2) |
+| the derivation of a factless root conflict | written (the closing arm) | written as the branch arm writes it, UNLESS it is one model row plus literal axioms (`Search.weakened_row_only`) | that shape is `int_lin_le`'s slack below zero on the declared box: weakening cannot make a row contradictory that was not, so the row's own coefficients cannot reach its degree and the checker's propagation refutes it unaided. Every other factless derivation (alldiff's Hall and Regin pigeonholes, gcc's capacity, element's empty index) is a counting row the checker cannot reach and is written. The gate was first the family's `c_ahead` flag; alldiff's Regin pigeonhole reaches the root with it unset (its emptying push is made outside the `deriving_ahead` bracket its removals run in) and 3.0.2 refused that scene's honest proof at the close, so the shape, which is what the checker reads, is the criterion |
+| `Store.unattributed_conflict` | `c_ahead = false` hard-coded | carries `current_ahead` like `Store.conflict` | the flag means what its name says on both constructors; with it hard-coded, five root refutations (alldiff_hall_unsat, alldiff_hall_moved_unsat, alldiff_pigeonhole_narrow_unsat, gcc_capacity_unsat, gcc_hall_narrowed_unsat) closed on `rup >= 1` with nothing under them and were refused, which is how the first gate was found wanting |
+| `Justify.emit_concluding` (a `Combine`/`Cut` with a literal conclusion, D-0043) | `pol` + `ia <literal> : @pol` + `del` | `rup <literal> >= 1 ;` through the claim index (`emit_clause`), the summands NOT recursed into | the premises must be on the page as lines the checker can propagate along, which is the trace's contract already. And the old form could never have stated a `Linear` pruning at all: D-0013's row is a cardinality over the full declared range, and `ia` is syntactic implication, which does not walk the ladder (§2, probe 1d: refused) |
+| `Justify.emit` on a bare `Combine`/`Cut` | D-0013 `pol` | unchanged | demanded only where the result is consumed as a ROW by arithmetic: a `Term` operand of a parent `pol`, a counting family's derivation ahead of its trace line (I-X10 `Needs_derivation`), `Pb_analysis.introduce`'s learned row |
+| `Justify.emit_stating` (claim = a PB row, `Pb_analysis.introduce`) | `pol` + `ia <row>` + `del` | unchanged | the lifted row is not RUP (§2, probe 3a: refused), and the `ia` is what checks `Learned.combine`'s arithmetic against the checker's |
+| `Ladder.derive` | `pol` over Θ(rungs) ids | unchanged (header says why) | same measurement; its token count is Θ(rungs) into a Θ(w) accumulator, the shape D-0127 found quadratic, now visible under `--stats` |
+| `Writer` / `bin/main.ml --stats` | — | `Pol.tokens`; counters `rup`/`pol` lines, `pol-tokens` total, `pol-widest` with its `~origin`; `Writer.shape_stats` | D-0127's and D-0130 §2's requirement: a Θ(w)-token `pol` is seen by name |
+| hints on `rup` | — | not emitted | §4: measured worse on every shape that has more than one line |
+
+No file under `lib/core/prop/` changed. D-0026's split holds: reasons and justifications are the
+same data; what changed is which rule the bridge writes them as.
+
+### 2. The checker tests that settle the questions (small hand-written `.opb`/`.pbp` pairs, satisfiable where the lane needs it)
+
+Probe 1, the division case: `x, y in 0..3`, `2x + y <= 3`, the pruning `x <= 1` (ceiling
+division by 2). (a) D-0013's exact derived row `~x_ge_1 + ~x_ge_2 + ~x_ge_3 >= 2` as `rup`:
+**REFUSED** ("not implied by reverse unit propagation"): its negation is a cardinality (at least
+two of the three `x_ge_v` true) which forces no literal, and unit propagation cannot count. (b)
+the literal `~x_ge_2 >= 1` as `rup`: **ACCEPTED**. (c) the exact row as `rup` AFTER the literal:
+accepted (one more level). (d) the old shape, `pol @R y_ge_1 + y_ge_2 + y_ge_3 + 2 d` then
+`ia +1 ~x_ge_2 >= 1 : @pol`: **REFUSED at the `ia`** -- the D-0013 row does not syntactically
+imply the literal. (e) the over-claim `~x_ge_1` as `rup`: refused, same wording. So the brief's
+"state exactly the constraint the `pol` would have derived" has no `rup` form: the row the fold
+derives is not RUP-reachable and the literal is; and the `pol` + `ia` the task set out to shorten
+could not have stated a ladder walk's conclusion in the first place. No OCaml evaluator of the
+derived row was written, because nothing can be done with it.
+
+Probe 2, the Cut case: `x in 0..5`, `x >= 4` against `x <= 1` (two rungs apart). Trace lines
+`rup +1 x_ge_4 >= 1`, `rup +1 ~x_ge_2 >= 1`, then `rup >= 1`: **ACCEPTED**; `rup >= 1` with no
+trace line: **REFUSED** (the rows alone propagate nothing); the old `pol` of the two rows:
+accepted. The root close is the branch close with nothing to negate.
+
+Probe 3, `Ladder.derive`: lib/core/ladder.ml's worked case, `3a + 2b <= 14` over `0..4`, the lift
+`3 L_1 + 6 L_2` onto `~a_ge_3`. The lifted row `9 ~a_ge_3 + 3 ~a_ge_4 + 2 ~b_ge_1..4 >= 6` as
+`rup`: **REFUSED**; as `pol @R @L1 3 * + @L2 6 * +` with `e` against the row: accepted. The row's
+strength is in the rungs, which is the module's whole point; `Pb_analysis.introduce` keeps
+`pol` + `ia`.
+
+### 3. Measurement (a): D-0028's two-variable model, and two shapes beside it, 10³ to 10⁶
+
+`root`: `a, b in 0..w`, `a + b = 5(w+1)/2`, infeasible on the declared bounds, zero prunings
+(`test/models/width_root_unsat.fzn` is w = 999). `prune`: `a in l..w`, `b in 0..w`,
+`a + b <= c`, `b >= m` with `l = w/4`, `c = l + w/2`, `m = c - l + 1`: one root pruning cited by
+the conflict, D-0127's shape with the Boolean replaced by a second row. `chain`: `a, b in 0..w`,
+`b - a <= -1` and `a - b <= -1`: Θ(w) root prunings each citing the previous one as a `Term`.
+Solve under `ulimit -v 16 GiB`, `ulimit -f 16 GB`, 1 200 s; checker CPU s from `/usr/bin/time -v`,
+`--stats` on; elaboration and `cake_pb` at 10⁶ as D-0127 did.
+
+| shape | w | binary | `.pbp` B | `pol`/`rup` lines | longest line B | veripb CPU s | RSS MB | elab B | elab s | cake_pb s |
+|---|---|---|---|---|---|---|---|---|---|---|
+| root | 999 | base | 23 891 | 1 / 0 | 23 779 | 0.00 | 17 | | | |
+| root | 999 | this | 129 | 0 / 1 | 32 | 0.00 | 16 | | | |
+| root | 9 999 | base | 257 895 | 1 / 0 | 257 781 | 0.02 | 42 | | | |
+| root | 9 999 | this | 132 | 0 / 1 | 32 | 0.02 | 42 | | | |
+| root | 99 999 | base | 2 777 899 | 1 / 0 | 2 777 783 | 0.28 | 186 | | | |
+| root | 99 999 | this | 135 | 0 / 1 | 32 | 0.23 | 192 | | | |
+| root | 999 999 | base | 29 777 903 | 1 / 0 | 29 777 785 | 3.76 | 1 640 | 29 777 885 | 4.11 | 76.8 (4.4 GB) |
+| root | 999 999 | this | 138 | 0 / 1 | 32 | 3.22 | 1 882 | 132 | 3.36 | 66.5 (4.4 GB) |
+| prune | 999 | base | 8 426 | 2 / 0 | 8 269 | 0.00 | 15 | | | |
+| prune | 999 | this | 251 | 0 / 4 | 32 | 0.00 | 16 | | | |
+| prune | 9 999 | base | 90 184 | 2 / 0 | 90 021 | 0.01 | 34 | | | |
+| prune | 9 999 | this | 263 | 0 / 4 | 32 | 0.01 | 38 | | | |
+| prune | 99 999 | base | 975 192 | 2 / 0 | 975 023 | 0.21 | 161 | | | |
+| prune | 99 999 | this | 275 | 0 / 4 | 35 | 0.24 | 208 | | | |
+| prune | 999 999 | base | 10 500 200 | 2 / 0 | 10 500 025 | 2.48 | 1 252 | 10 500 162 | 2.65 | 44.5 (4.4 GB) |
+| prune | 999 999 | this | 287 | 0 / 4 | 38 | 3.14 | 1 771 | 11 139 158 | 3.33 | 50.5 (4.4 GB) |
+| chain | 999 | base | 58 901 | 1 001 / 0 | 11 899 | 0.01 | 42 | | | |
+| chain | 999 | this | 49 947 | 0 / 1 002 | 7 015 (the `del`) | 0.07 | 16 | | | |
+| chain | 9 999 | base | 647 905 | 10 001 / 0 | 128 901 | 1.04 | 2 601 | | | |
+| chain | 9 999 | this | 537 954 | 0 / 10 002 | 80 016 (the `del`) | 8.07 | 50 | | | |
+| chain | 99 999 | base | 7 077 909 | 100 001 / 0 | 1 388 903 | **killed, rc 134, 15.6 GB** (the 16 GiB cap) | | | | |
+| chain | 99 999 | this | 5 777 961 | 0 / 100 002 | 900 017 (the `del`) | **1 437.6** | 320 | | | |
+| chain | 999 999 | this | (solve timed out at 1 200 s, 405 148 lines written) | | | | | | | |
+
+Three things the table says, and the first corrects the premise this task was opened with.
+
+1. **The solver's root `pol` was never the 383 s object.** D-0127's quadratic `pol` was the spike's
+   RUNG fold (`@lb_v v * +`, `Ladder.derive`'s step); the fold the solver wrote is D-0013's AXIOM
+   fold, and 3.0.2 adds a literal axiom into a wide accumulator in O(1): 2 × 10⁶ additions cost
+   ~0.5 s above the 3.2 s it takes to read the 156 MB `.opb` (D-0028 measured 12 s for the same
+   proof in September, on a build that has since changed). What the `rup` form wins on these two
+   shapes is bytes and everything downstream of bytes: 29.8 MB → 138 B of proof, 29.8 MB → 132 B
+   of elaboration, 77 s → 66 s in `cake_pb` on `root` (44 s → 51 s on `prune`, where the
+   11 MB hint list the elaborator writes for the walk is what `cake_pb` reads); the checker's own time is the `.opb` parse either
+   way, and on `prune` the `rup` is 0.7 s slower at 10⁶ because the ladder walk it asks for costs
+   what the fold's cancellation cost.
+2. **The solver's emission WAS quadratic, on a chain.** Θ(w) root prunings citing one another
+   gave the baseline Θ(w) nested `pol`s each adding a Θ(w)-literal row into the next: Θ(w²) time
+   and, since every derived row stays live until the final `del`, Θ(w²) memory -- 2.6 GB at 10⁴,
+   the checker killed at the 16 GiB cap at 10⁵. The `rup` form is Θ(w) lines of O(1) tokens and
+   320 MB at 10⁵, and it finishes. But it finishes in 24 minutes: **reverse unit propagation
+   re-walks the ladder for every line** (0.8 ms a line at 10⁴, 14 ms at 10⁵, Θ(w) each), so a
+   chain of Θ(w) trace lines is Θ(w²) checker time whatever the emission. That is a property of
+   RUP over the order encoding on this checker, not of a choice this task could make; the
+   elaboration confirms it (§4). The solver is superlinear on the same chain too (9.6 s for 10⁵
+   prunings, 1 200 s not enough for 4 × 10⁵ at 10⁶; the baseline 25.7 s at 10⁵), which is not
+   this task's and is noted for M7-T27's successors.
+3. The `rup` form's checker memory is flat (the `.opb` plus the trace), where the `pol` form's
+   grew with the proof: 1.8 GB against 1.6 GB at 10⁶ on `root` is the `.opb`; 50 MB against
+   2.6 GB at 10⁴ on `chain` is the point.
+
+### 4. Hints: measured and rejected
+
+3.0.2 accepts the elaborator's `rup C : <ids> ;` form, and the elaborated proof IS the hinted
+proof, so the pair is the measurement. On the spike's single walk (order/rup, D-0127's artefacts)
+the hinted `rup` checks in 1.97 s against 2.60 s at 10⁶ and is 3.75 MB against 197 B. On the
+chain at 10⁴ the hinted proof is **710 MB** (every line's hint list is the whole ladder walk the
+checker made: 10 000 to 19 996 ids a line, median 12 500) and checks in **17.1 s against 8.1 s
+bare**; elaborating it took 15.4 s. A hint list that is the walk does not shorten the walk. No
+hints are emitted; the writer has no `~hints` argument to leave unused.
+
+### 5. Measurement (b): the OPT proofs the checker could not finish (D-0125/D-0129)
+
+The seven TIMEOUT-CHECK instances of D-0129 (the eighth of its list, `2011_ship-schedule_6ShipsMixedUnconst`, is a CHECK-ERROR on a 6.9 GB `.opb`, the checker's own allocation failure, and not a proof-shape case), re-flattened from the corpus with the harness's command and re-solved with this branch's binary (640fe1d) under the harness's limits: 1 200 s, `ulimit -v 16 GiB`, `ulimit -f 16 GB`, `--max-heap-mb 8192`, then `veripb --stats` under `timeout 3600`, seven workers at once on the idle node. Baseline bytes and verdicts are D-0129's.
+
+| instance | this: status, objective, solve s | `.pbp` B, this / baseline | `rup` / `pol` lines, widest `pol` (tokens, origin) | checker, this / baseline |
+|---|---|---|---|---|
+| 2012_ship-schedule_5Ships | OPT, max 483 650, 229.9 s (359 solutions, as D-0129) | 5 151 911 100 / 5 151 911 100 | 3 632 409 / 7, 147 `at-least-one X_INTRODUCED_0_` | TIMEOUT 3 600 s (rc 124) / TIMEOUT 3 600 s |
+| 2012_ship-schedule_6ShipsMixed | OPT, max 301 650, 137.9 s (237, as D-0129) | 2 408 458 634 / 2 408 458 634 | 1 653 350 / 6, 147 (same) | TIMEOUT 3 600 s (rc 124) / TIMEOUT |
+| 2012_ship-schedule_7ShipsMixedUnconst | OPT, max 389 100, 159.5 s (48, as D-0129) | 925 100 941 / 925 100 941 | 779 032 / 5, 147 (same) | TIMEOUT 3 600 s (rc 124) / TIMEOUT |
+| 2012_ship-schedule_8ShipsUnconst | OPT, max 834 150, 950.2 s (101, as D-0129) | 4 663 399 101 / 4 663 399 101 | 21 642 936 / 8, 147 (same) | TIMEOUT 3 600 s (rc 124) / TIMEOUT |
+| 2014_ship-schedule_3Ships | OPT, max 265 650, 118.7 s (302, as D-0129) | 2 359 685 872 / 2 359 685 872 | 310 589 / 3, 147 (same) | TIMEOUT 3 600 s (rc 124) / TIMEOUT |
+| 2014_smelt_smelt_2 | OPT, min 69, 171.6 s (18, as D-0129) | 482 327 204 / 482 327 204 | 4 180 745 / 1 510 216, 1 985 `combine(993 summand(s), / 1)` (a `Ladder.derive` lift of 992 rungs, `Pb_analysis.introduce`) | TIMEOUT 3 600 s (rc 124) / TIMEOUT |
+| 2018_mapping_full2x2_mp3 | OPT, min 1 100, 652.2 s (4, as D-0129) | 636 566 189 / 636 566 189 | 5 623 546 / 926, 12 081 `combine(2 summand(s), / 4)` (a `Reduce` step weakening a 6 000-literal row, `Pb_analysis.introduce`) | TIMEOUT 3 600 s (rc 124) / TIMEOUT |
+
+**Every one of the seven proofs is byte-for-byte the baseline's size, and this task changes
+none of them.** The reason is structural and was not in the brief's premise: an optimisation
+run's last conflict is under a decision -- `dfs` reaches its root arm only on the very first
+call, before the first solution, and the objective bound is tightened in place afterwards -- so
+no D-0013 root `pol` was ever in these proofs. What the checker spends its hour on is what
+`--stats` now shows by name: between 3 × 10⁵ and 2.2 × 10⁷ trace lines of 1 to 8 kB each (one
+negated fact per task the cumulative row counts), each a reverse-unit-propagation walk over a
+database of that size -- §3's chain cost, with the row's width in place of the ladder's -- and,
+on `smelt_2`, 1.5 million `Pb_analysis` `pol`s of up to 1 985 tokens (the ladder lift D-0127
+measured as quadratic, which §2's probe 3 keeps as `pol`), and on `mapping`, 926 `Reduce`
+weakenings of up to 12 081 tokens. Those are the lines the bits arm (M8-T2 and after) and a
+checker that keeps its propagation state across lines would have to answer; the order arm's
+ladder-walk `pol` of D-0127 is not among them.
+
+### 6. The 156 models and the gate
+
+`make check` on a fresh clone of the branch head on `fataepyc-06` (`/scratch/arthur/wave42-gate`,
+`ulimit -v 4000000`): **rc 0**, 20 min 35 s wall, format check, build, lint, determinism and
+every suite green -- 156 model proofs verified, 289 matrix checks, 49 mutation checks, the
+propagator, trace, justify, end-to-end and the other binaries all passed; `/usr/bin/time -v`
+reports 85 MB for the make tree and no binary approached its 4 GB cap. Over the 156 models, run
+with the baseline binary and the gated one: **stdout and exit codes byte-identical on all 156,
+`.opb` byte-identical on all 156, `.pbp` changed on 36** (every model whose refutation goes
+through the root arm), 477 747 → 453 802 bytes over the suite. The unit suites were also run
+with `dune runtest --root . --force` before the gate (run4): every binary's own count line
+reports all passed.
+
+### 7. The lanes, and what the re-pointing found
+
+Every test that pinned the root `pol` was re-pointed to the shape the checker now judges, and
+three of the re-pointings are findings rather than edits:
+
+- **`test_mutation.ml`**: `triple_unsat` and `lin_unsat` carried the five `pol` lanes (pol-coeff,
+  pol-cite, perturb-coefficient, swap-citation, truncate-derivation) because a root refutation by
+  `int_lin_le` was a `pol`. It is not any more, and the lanes had no site; they are retired from
+  those instances (the knobs keep their targets where a `pol` is still written: test_prop's and
+  test_endtoend's counting scenes, test_justify's learned row) and replaced by `blank-trace`:
+  every trace line and the conflict line blanked to a labelled tautology, the close kept, the
+  checker must refuse at the RUP wording. Measured before it was written: a knob on ONE trace
+  line is not a test (the conflict line and the other unit rebuild the bound), a knob on the
+  conflict line is not one either (once the units are on the page the database is contradictory
+  and any `rup` passes), and the close's degree raised tests the parser. `lin_unsat`'s known
+  slack was a property of the retired `pol`; the record stays as the measurement it was.
+- **`test_justify.ml`**, D-0043 (a): the stated lanes now run over the SATISFIABLE half of their
+  model (a `rup` over a contradictory database is accepted whatever it claims) and assert one
+  `rup` of the literal with no `ia` and no `pol`; the control is a conclusion one rung stronger
+  than the rows support, refused at the RUP wording. M2-L5 (c) states the REDUCED ROW through
+  `emit_stating` -- the door `Pb_analysis.introduce` uses -- so the truncated reduction is still
+  refused at the `ia`: the reduction's arithmetic is checked by the proof exactly where lib/
+  checks it.
+- **`test_matrix.ml`**: a depth-0 instance now has a trace (one line per root pruning) and a
+  close; the negative control that blanks the trace runs at depth 0 too and is the load-bearing
+  lane for the root. `ne/root-conflict`: int_ne's clause is no longer restated at the root -- a
+  conflict whose derivation IS a clause states itself in the currency the empty clause propagates
+  in, as the branch arm has always treated it -- and the lane pins the close.
+- **`test_prop.ml` alldiff (b) and regin (c)**, a finding: the old break swapped a defining id
+  inside the Hall `pol` and asserted the conclusion's refusal, "is not contradicting, as
+  specified by the hint" -- a SYNTACTIC check of the one cited constraint. Under the root close
+  the same swap is ACCEPTED: the mis-cancelled row still falsifies under the units the trace put
+  on the page, and reverse unit propagation judges the proof as a whole. The break that still
+  says "this derivation is needed" is its absence: the Hall (or Regin) `pol` blanked to a
+  tautology, the close refused at the RUP wording (measured on both scenes). A wrong Defining id
+  is caught where the unit it names is NOT on the page, which is the under-a-decision case
+  `established_at_root` guards.
+- **`test_endtoend.ml` M4-T3/M4-T8**, two findings. `element_range_unsat` is refuted by its
+  `.opb` alone under unit propagation (with the derivation AND the whole trace blanked, the close
+  is still accepted): D-0030's shape, and the old BREAK on it measured the conclusion's citation
+  check, not the derivation; the lane now pins that fact. On `element_moved_unsat` the moved bound
+  is on the page twice, as its trace line and inside the exact Defining derivation that cites
+  that line, so either blanked alone is accepted and only both blanked is refused -- "which
+  single line is load-bearing" is not a property these proofs have, and the lane asserts the
+  property they do have. M5's INF conclusion cites `rup >= 1` and its break blanks that line,
+  keeping the "not contradicting" wording the conclusion's citation check still produces.
+
+### 8. What this leaves open
+
+- **INVARIANTS I-X7** says `conclusion UNSAT` cites "either a `pol` chain closing at `0 >= k`
+  (D-0013) or an explicitly derived empty clause (D-0022)". It is now always the empty clause,
+  derived after the root's trace. The file is T1's to touch if an invariant is added; the
+  one-sentence update is the orchestrator's to make at the merge.
+- The branch arm of `dfs` still writes every factless `Combine`/`Cut` unconditionally. The two
+  arms agree on every conflict that exists (under a decision an `int_lin_le` conflict always
+  carries a fact, the decision's own bound), so no ladder-wide `pol` is written there today; the
+  `weakened_row_only` gate could be applied to both for uniformity, and was not, to keep this
+  change to the root.
+- `Pb_analysis.introduce`'s `pol` is the one Θ(w)-token line the order arm still writes, and on
+  `2014_smelt_smelt_2` it is written 1.5 million times (§5). That is M8's bits arm's problem to
+  take from `--stats`, not this task's.
+- A chain of Θ(w) trace lines is Θ(w²) for this checker (§3.2) and hints do not help (§4). The
+  only linear-time close of such a chain would be a checker that keeps its propagation state
+  across lines; the proof side cannot buy it.
