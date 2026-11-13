@@ -1135,16 +1135,19 @@ let test_element_derivation_is_load_bearing () =
         (derivation <> None);
       (* ------------------------- M4-T8 obligation (b): what the empty clause rests on
 
-         Measured on 3.0.2 (M8-bits-encoding-T5, D-0131), and the answer is not the one
-         the old lane asserted. Blank the TRACE (every `rup` but the close, tautologies
-         with labels kept) and the empty clause is REFUSED, at the RUP wording: the root
-         bounds the trace states are what the close rests on. Blank element's POL alone
-         and the empty clause is still ACCEPTED: D-0064's [Defining] cancels exactly the
-         bounds whose trace lines already put the same units on the page, so under unit
-         propagation the derivation adds nothing the trace had not -- it is exact, and it
-         is decorative for this close. The old BREAK (the pol's last operand dropped,
-         refused at the conclusion's syntactic check of its citation) measured the
-         citation check; this measures the proof. Both facts are pinned. *)
+         Measured on 3.0.2 (M8-bits-encoding-T5, D-0131), and the answer is not a single
+         line. The moved bound `c <= 2` is on the page TWICE: as its trace line, and
+         inside element's derivation, where D-0064's [Defining] cites that very line so
+         the cancellation is exact. Blank the trace alone and the close is still
+         ACCEPTED (the derivation, with its citation turned into a tautology, still
+         derives a row the element rows then refute by unit propagation); blank the
+         derivation alone and it is still ACCEPTED (the trace puts the bound where the
+         rows refute it); blank BOTH and the empty clause is REFUSED, at the RUP wording.
+         The old BREAK (the pol's last operand dropped, refused at the conclusion's
+         syntactic check of its citation) measured the citation check; this measures the
+         proof, and what the proof says is that the refutation needs what the solver
+         wrote and not only the rows -- which is the D-0030 property, now asserted on
+         the moved-bound scene where it holds. *)
       (match derivation with
       | None -> ()
       | Some line ->
@@ -1152,26 +1155,36 @@ let test_element_derivation_is_load_bearing () =
           check "M4-T8 BREAK CONTROL: the unmodified moved-bound proof is accepted" ok;
           let trace_blanked = el_blank ~taut:"c_ge_1" ~victim:el_is_rup_not_close lines in
           check "M4-T8 BREAK premise: there is a trace to blank" (trace_blanked <> lines);
-          let ok, out = m5_run_lines checker dir "elmovedtrace" opb trace_blanked in
-          if ok then
-            Printf.printf "     accepted with the trace blanked; the proof was:\n%s\n"
-              (String.concat "\n" trace_blanked);
+          let ok, _ = m5_run_lines checker dir "elmovedtrace" opb trace_blanked in
           check
-            "M4-T8 BREAK (b): with the root's trace blanked, the empty clause is REFUSED \
-             -- the close rests on the trace lines the Defining cites"
+            "M4-T8 (b), MEASURED (D-0131): with the root's trace alone blanked the empty \
+             clause is still ACCEPTED -- element's exact derivation carries the bound \
+             too"
+            ok;
+          let pol_blanked = el_blank ~taut:"c_ge_1" ~victim:(fun l -> l = line) lines in
+          let ok, _ = m5_run_lines checker dir "elmovedpol" opb pol_blanked in
+          check
+            "M4-T8 (b), MEASURED (D-0131): with element's derivation alone blanked the \
+             empty clause is still ACCEPTED -- the trace carries the bound too"
+            ok;
+          let both_blanked =
+            el_blank ~taut:"c_ge_1"
+              ~victim:(fun l -> l = line || el_is_rup_not_close l)
+              lines
+          in
+          let ok, out = m5_run_lines checker dir "elmovedboth" opb both_blanked in
+          if ok then
+            Printf.printf "     accepted with both blanked; the proof was:\n%s\n"
+              (String.concat "\n" both_blanked);
+          check
+            "M4-T8 BREAK (b): with the trace AND element's derivation blanked the empty \
+             clause is REFUSED -- the refutation rests on what the solver wrote, not on \
+             the rows"
             (not ok);
           check
             "M4-T8 BREAK (b): ... at full strength -- the checker's RUP wording, not an \
              exit status and not a parse error"
-            (m5_says out rup_wording);
-          let pol_blanked = el_blank ~taut:"c_ge_1" ~victim:(fun l -> l = line) lines in
-          let ok, _ = m5_run_lines checker dir "elmovedpol" opb pol_blanked in
-          check
-            "M4-T8 (b), MEASURED (D-0131): with element's pol alone blanked the empty \
-             clause is still ACCEPTED -- the exact Defining cancellation restates what \
-             the trace already propagates, so the derivation is not what the close rests \
-             on here"
-            ok);
+            (m5_says out rup_wording));
       List.iter
         (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ())
         (Array.to_list (Sys.readdir dir));
