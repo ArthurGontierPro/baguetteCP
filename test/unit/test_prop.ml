@@ -6385,14 +6385,13 @@ let test_regin_conclusion () =
       check
         "regin (c) BREAK: with the Regin derivation blanked, the empty clause is rejected"
         (rc <> 0);
-      let saying = "is not contradicting, as specified by the hint." in
-      if not (contains_sub ~needle:saying out) then
+      if not (contains_sub ~needle:rup_wording out) then
         Printf.printf "     checker said: %s\n" (String.trim out);
       check
-        "regin (c) BREAK: and the rejection is that JUDGEMENT -- \"is not contradicting, \
-         as specified by the hint.\" -- not a parse error"
-        (contains_sub ~needle:saying out)
-  | _ -> check "regin (c): the conclusion names a pol to break" false);
+        "regin (c) BREAK: and the rejection is that JUDGEMENT -- the empty clause is no \
+         longer implied by reverse unit propagation -- not a parse error"
+        (contains_sub ~needle:rup_wording out)
+  | _ -> check "regin (c): a Regin pol precedes the close, to break" false);
   Sys.readdir dir
   |> Array.iter (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ());
   try Sys.rmdir dir with _ -> ()

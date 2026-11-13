@@ -1153,6 +1153,9 @@ let test_element_derivation_is_load_bearing () =
           let trace_blanked = el_blank ~taut:"c_ge_1" ~victim:el_is_rup_not_close lines in
           check "M4-T8 BREAK premise: there is a trace to blank" (trace_blanked <> lines);
           let ok, out = m5_run_lines checker dir "elmovedtrace" opb trace_blanked in
+          if ok then
+            Printf.printf "     accepted with the trace blanked; the proof was:\n%s\n"
+              (String.concat "\n" trace_blanked);
           check
             "M4-T8 BREAK (b): with the root's trace blanked, the empty clause is REFUSED \
              -- the close rests on the trace lines the Defining cites"

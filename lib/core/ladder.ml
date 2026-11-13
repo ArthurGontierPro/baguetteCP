@@ -107,7 +107,25 @@
    of CONSTRAINT IDS of the ladder rows. They are different objects on different lines of
    the proof, appearing in different derivations -- [Linear]'s justification of its
    pruning, and PB analysis's derivation of a learned row -- and neither is a copy of the
-   other. test/unit/test_ladder.ml pins that they cannot collide. *)
+   other. test/unit/test_ladder.ml pins that they cannot collide.
+
+   ---------------------------------------------------------------------------
+   It stays a `pol` (M8-bits-encoding-T5, D-0131)
+   ---------------------------------------------------------------------------
+
+   D-0131 writes the order arm's ladder walks as `rup` wherever the checker's unit
+   propagation closes them. This derivation is the one ladder walk that is NOT such a
+   case, and it was measured rather than argued: on the worked case above, `rup` of the
+   lifted row `9 ~[a>=3] + 3 ~[a>=4] + 2 ~[b>=1..4] >= 6` against the .opb (the row and
+   the ladder) is REFUSED by VeriPB 3.0.2 ("not implied by reverse unit propagation"),
+   while the `pol` of the two rung additions is accepted and `e` confirms it equals the
+   row. Reverse unit propagation negates the claim and propagates; the lifted row's
+   negation forces nothing that the model row then contradicts, because the row's
+   strength was never in the row -- it is in the rungs, which is the whole point of this
+   module. So [Pb_analysis.introduce] keeps `pol` + `ia`, the `ia` stating the row our
+   arithmetic produced against the checker's, and its token count is Theta(rungs) ids
+   added into a Theta(w)-term accumulator, which is the shape D-0127 measured as
+   quadratic in the checker. `--stats` reports it (`pol-widest`) so a wide one is seen. *)
 
 module Lit = Baguette_proof.Lit
 
