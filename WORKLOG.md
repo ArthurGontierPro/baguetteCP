@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M8-bits-encoding-T2 | `lib/proof/encoding.ml`, `lib/proof/lit.ml`, `lib/proof/opb.ml`, `lib/proof/writer.ml` (the `red` pair, level 0), `lib/flatzinc/compile.ml` (eligibility from scopes, D-0130 §3.4), `lib/core/explanation.ml` (`Weaken_declared`, D-0130 §8 is its record), `lib/core/justify.ml`, `lib/core/prop/linear.ml`, `lib/core/prop/order_reason.ml` if needed, `lib/core/trace.ml`, `bin/main.ml` (`--bits-above`, `--stats`), `test/unit/{test_proof,test_compile,test_justify,test_endtoend,test_mutation}.ml`, new `test/models/*bits*.fzn` + `test/expected/`, `docs/DECISIONS.md` (D-0132 appended), `docs/PROOF-FORMAT.md` §3 (bits naming, normative), `docs/ROADMAP.md` T2 row, `docs/ARCHITECTURE.md` §1 and `CLAUDE.md`'s map if a module is added, `docs/INVARIANTS.md` if an invariant is added | agent-t2 (`wave43-t2`) | 2026-11-13 |
 
 ## Cross-session requests
 
