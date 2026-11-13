@@ -974,10 +974,20 @@ let run_instance inst =
      flag says -- not inferred from first-fail and indomain_min. [opens_level] knows
      both spellings; spelling one of them here is how this check would go quietly true
      under the other. *)
+  (* M8-bits-encoding-T5 (D-0131): a depth-0 instance opens no level, and its root
+     conflict is closed the way every branch is -- the root's own trace (one line per
+     root pruning, so [trace_ids] is empty only when nothing was pruned) and the empty
+     clause `rup >= 1`, the nogood over no decisions. Until D-0131 the root arm wrote the
+     propagator's D-0013 `pol` instead and no trace, and this lane pinned "no trace and
+     no nogood"; the negative control below, which blanks the trace, now runs at depth 0
+     too and is the lane that says the root's trace is load-bearing. *)
   if inst.depth = 0 then
     check
-      (tag ^ ": the search does not branch at all, so there is no trace and no nogood")
-      ((not branched) && trace_ids = [])
+      (tag
+     ^ ": the search does not branch at all: no level is opened, and the root closes on \
+        the empty clause after its own trace (D-0131)")
+      ((not branched)
+      && List.exists (fun (_, _, line) -> String.trim line = "rup >= 1 ;") rules)
   else
     check
       (Printf.sprintf "%s: the search reaches decision level %d" tag inst.depth)
@@ -1864,10 +1874,16 @@ let known_bug_ne_root_conflict () =
   let proof = read_file pbp in
   check "ne/root-conflict: the solver refutes it with no decision made"
     (outcome = Search.Unsat && not (opens_level 1 proof));
+  (* D-0131: the root closes on the empty clause after the trace that fixes x and y
+     (`rup +1 ~x_ge_2 >= 1`, `rup +1 ~y_ge_2 >= 1`), and int_ne's clause is not restated
+     -- a conflict whose derivation IS a clause states itself in the currency the empty
+     clause propagates in, exactly as the under-a-decision arm has always treated it.
+     What the lane pins is that the instance reaches int_ne's conflict and that the
+     conclusion cites a line the checker judged, not the clause. *)
   check
-    "ne/root-conflict: the contradiction the conclusion cites is int_ne's own clause \
-     (the instance reaches the gap)"
-    (obs.ne_conflict && contains "rup +1 x_ge_2 +1 y_ge_2 >= 1 ;" proof);
+    "ne/root-conflict: the instance reaches int_ne's root conflict, and the conclusion \
+     cites the empty clause derived after the trace (D-0131)"
+    (obs.ne_conflict && contains "rup >= 1 ;" proof);
   (match run_veripb ~dir ~opb proof with
   | None -> fail "ne/root-conflict: veripb not found -- nothing was checked"
   | Some true ->
