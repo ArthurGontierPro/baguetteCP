@@ -987,7 +987,12 @@ let run_instance inst =
      ^ ": the search does not branch at all: no level is opened, and the root closes on \
         the empty clause after its own trace (D-0131)")
       ((not branched)
-      && List.exists (fun (_, _, line) -> String.trim line = "rup >= 1 ;") rules)
+      && List.exists
+           (fun (_, _, line) ->
+             let t = String.trim line in
+             let n = String.length t in
+             n >= 10 && String.sub t (n - 10) 10 = "rup >= 1 ;")
+           rules)
   else
     check
       (Printf.sprintf "%s: the search reaches decision level %d" tag inst.depth)

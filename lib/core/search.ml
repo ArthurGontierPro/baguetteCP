@@ -1536,30 +1536,60 @@ let wipe_after_nogood ctx ~lvl ~nogood =
    to negate: each root pruning's line is on the page with its facts before it
    ([Trace.emit] walks the trail oldest first), the conflict's facts are stated as
    `rup ~fact ... >= 1` ([Trace.conflict_line]), and unit propagation from nothing
-   reaches every root bound and then the violated row. A conflict with NO facts is a
-   row violated at the declared bounds, which the checker's propagation sees without
-   help -- for every family whose lines are RUP against its own row (I-X10's
-   [Single_row] set; for [int_lin_le] a factless conflict is a slack below zero on the
-   declared box, i.e. a row whose coefficients cannot reach its degree). The families
-   whose lines are NOT ([Needs_derivation]: alldiff, gcc, element, cumulative) say so on
-   the conflict itself, [Store.conflict]'s [c_ahead], and their derivation goes on the
-   page ahead of the close as it goes ahead of each of their trace lines
-   ([Trace.derive_ahead]): a counting argument is still a `pol`, written once, and the
-   empty clause is one propagation past it. That flag, set by the propagator, is the
-   whole trigger, as it is for the lines (M7-T17, D-0082). A [Needs_derivation] family
-   reporting a factless conflict outside [Store.deriving_ahead] would have its
-   `rup >= 1` refused AT THE LINE, the loud failure, never a weaker proof accepted.
+   reaches every root bound and then the violated row. The families whose lines are
+   NOT RUP against their own rows ([Needs_derivation]: alldiff, gcc, element,
+   cumulative) say so on a conflict that carries facts, [Store.conflict]'s [c_ahead],
+   and [conflict_line] writes their derivation ahead of the facts line as
+   [Trace.derive_ahead] writes it ahead of each of their trace lines: a counting
+   argument is still a `pol`, written once, and the empty clause is one propagation
+   past it.
 
-   This gate is what the under-a-decision arm of [dfs] does not have: there a factless
-   [Combine]/[Cut] conflict is written unconditionally. The two agree on every conflict
-   that exists, because under a decision an [int_lin_le] conflict always carries a fact
-   (the decision's own bound is one), so the unconditional write never reaches a
-   ladder-wide `pol` there; at the root it would, on every model infeasible at its
-   declared bounds, which is why the root gates on the flag.
+   A conflict with NO facts is written the way the under-a-decision arm of [dfs] writes
+   it -- its derivation goes on the page -- with ONE exception, [weakened_row_only]: a
+   derivation that is one model row with literal axioms added and nothing else. That is
+   [int_lin_le]'s factless conflict, a slack below zero on the DECLARED box: adding
+   axioms to a row cannot make it contradictory if the row was not, so the row itself
+   has coefficients that cannot reach its degree, and the checker's propagation sees
+   that unaided. Writing the derivation there would put D-0028's Theta(w)-token `pol`
+   back on every model infeasible at its declared bounds, for a line nothing needs. No
+   other factless derivation has that property -- a pigeonhole that empties a domain
+   (alldiff's Hall and Regin passes, gcc's capacity), element's empty index, each a
+   counting row the checker cannot reach by propagation -- and each is written. The
+   flag is deliberately NOT the gate for the factless case: alldiff's Regin pigeonhole
+   reaches here with [c_ahead] unset (its conflict is built outside the
+   [deriving_ahead] bracket its removals run in), and a gate on the flag closed that
+   scene on `rup >= 1` with nothing under it, which 3.0.2 refused (measured,
+   test_prop.ml's regin (c)). The shape of the derivation is the honest criterion: it
+   is what the checker reads.
 
    The one shape that short-circuits is a conflict whose explanation is already the
    empty clause -- a disequality every one of whose variables the model declares fixed
    (D-0019) -- emitted once rather than twice. *)
+let weakened_row_only (e : Explanation.t) =
+  match Explanation.force e with
+  | Explanation.Combine (summands, _) ->
+      let rows =
+        List.filter
+          (function
+            | Explanation.Term (_, t) -> (
+                match Explanation.force t with
+                | Explanation.Model_row _ -> true
+                | _ -> false)
+            | Explanation.Weaken _ | Explanation.Defining _ -> false)
+          summands
+      in
+      List.length rows = 1
+      && List.for_all
+           (function
+             | Explanation.Weaken _ -> true
+             | Explanation.Term (_, t) -> (
+                 match Explanation.force t with
+                 | Explanation.Model_row _ -> true
+                 | _ -> false)
+             | Explanation.Defining _ -> false)
+           summands
+  | _ -> false
+
 let close_root_conflict ctx trace store (c : Store.conflict) =
   let e = c.Store.c_why in
   Trace.emit ctx trace store;
@@ -1568,9 +1598,11 @@ let close_root_conflict ctx trace store (c : Store.conflict) =
   | Explanation.Clause [] -> Justify.emit ctx e
   | forced ->
       (match (line, forced) with
-      | None, (Explanation.Combine _ | Explanation.Cut _) when c.Store.c_ahead ->
-          (* Factless and made ahead: [conflict_line] wrote nothing, so the derivation
-             is written here, as the under-a-decision arm of [dfs] writes it. *)
+      | None, (Explanation.Combine _ | Explanation.Cut _) when not (weakened_row_only e)
+        ->
+          (* Factless: [conflict_line] wrote nothing, so the derivation is written here,
+             as the under-a-decision arm of [dfs] writes it -- unless it is one row
+             weakened, which the checker refutes unaided. *)
           ignore (Justify.emit ctx e : Writer.cid)
       | _ -> ());
       Justify.emit ctx (Explanation.clause [])

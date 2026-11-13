@@ -5714,22 +5714,30 @@ let test_alldiff_conclusion () =
         "alldiff (a): the Hall pol carries the conflict: it is the derivation the empty \
          clause rests on, one propagation before it"
         (contains_sub ~needle:" pol " (" " ^ String.trim line)));
-  (* (b) The derivation is accepted, and a WRONG defining id is not. The break is
-     performed on the solver's own artefact: the last id the conclusion's `pol` cites is
-     swapped for the first, so the row is cancelled against the wrong variable's bound.
-     The checker's judgement on that is named at full strength -- an exit status cannot
-     tell it from a parse error. *)
+  (* (b) The derivation is accepted, and the close RESTS on it. The break is performed on
+     the solver's own artefact: the Hall pol is replaced by a tautology with its label
+     kept, so every later citation parses and the checker has to judge the empty clause
+     without the counting argument under it. Measured on 3.0.2 (D-0131): refused, at the
+     RUP wording.
+
+     What this lane no longer asserts, and why. Until D-0131 it swapped the LAST defining
+     id the pol cites for the FIRST (the row cancelled against the wrong variable's
+     bound) and asserted `conclusion UNSAT`'s refusal, "is not contradicting, as
+     specified by the hint" -- a SYNTACTIC check of the cited constraint. Under the root
+     close the same swap is ACCEPTED (measured): the mis-cancelled row still falsifies
+     under the units the trace put on the page, and reverse unit propagation judges the
+     proof as a whole rather than one line's arithmetic. That is not a weakness found; it
+     is what RUP is. A wrong Defining id is caught where the unit it names is NOT on the
+     page, which is the under-a-decision case alldiff.ml's [established_at_root] guards,
+     and the arithmetic of a [Defining] is still exact, which (a) above reads off the file.
+     The checker's judgement is named at full strength -- an exit status cannot tell it
+     from a parse error. *)
   (match (veripb_path (), hall) with
   | None, _ ->
       incr failures;
       Printf.printf
         "FAIL alldiff (b): veripb not found -- the derivation was NOT checked.\n"
   | Some veripb, Some line ->
-      let lab =
-        match String.index_opt (String.trim line) ' ' with
-        | Some i -> String.sub (String.trim line) 0 i
-        | None -> String.trim line
-      in
       let run tag pbp =
         let log = Filename.concat dir ("log" ^ tag) in
         let rc =
@@ -5744,37 +5752,23 @@ let test_alldiff_conclusion () =
       in
       let rc, out = run "ok" pbp in
       if rc <> 0 then Printf.printf "     checker said: %s\n" (String.trim out);
-      check "alldiff (b): 3.0.2 accepts the derivation the conclusion now rests on"
-        (rc = 0);
+      check "alldiff (b): 3.0.2 accepts the derivation the close rests on" (rc = 0);
       let cited = pol_cited (String.trim line) in
-      let first = List.hd cited and last = List.nth cited (List.length cited - 1) in
-      check "alldiff (b) premise: the id the break replaces IS a defining unit line"
+      let last = List.nth cited (List.length cited - 1) in
+      check "alldiff (b) premise: the last id the Hall pol cites IS a defining unit line"
         (unit_rup_of ls last <> None);
+      let lab =
+        match String.index_opt (String.trim line) ' ' with
+        | Some i -> String.sub (String.trim line) 0 i
+        | None -> String.trim line
+      in
       let broken = Filename.concat dir "concl_moved_broken.pbp" in
       let oc = open_out broken in
       List.iteri
         (fun i l ->
           let l =
-            if starts_with_str (lab ^ " ") (String.trim l) then (
-              (* one substitution, the last cited id for the first *)
-              let want = Printf.sprintf "@c%d " last in
-              match String.index_opt l '@' with
-              | _ ->
-                  let n = String.length want in
-                  let b = Buffer.create (String.length l) in
-                  let rec go j =
-                    if j + n <= String.length l then
-                      if String.sub l j n = want then (
-                        Buffer.add_string b (Printf.sprintf "@c%d " first);
-                        Buffer.add_string b
-                          (String.sub l (j + n) (String.length l - j - n)))
-                      else (
-                        Buffer.add_char b l.[j];
-                        go (j + 1))
-                    else Buffer.add_string b (String.sub l j (String.length l - j))
-                  in
-                  go 0;
-                  Buffer.contents b)
+            if starts_with_str (lab ^ " ") (String.trim l) then
+              lab ^ " rup +1 a_ge_2 +1 ~a_ge_2 >= 1 ;"
             else l
           in
           if i > 0 then output_char oc '\n';
@@ -5787,10 +5781,7 @@ let test_alldiff_conclusion () =
         let rec go i = i + n <= h && (String.sub hay i n = needle || go (i + 1)) in
         n = 0 || go 0
       in
-      check "alldiff (b) BREAK: a WRONG defining id in the Hall pol is rejected" (rc <> 0);
-      (* The pol itself is still well-formed cutting planes, so it is accepted and derives
-         something else; what the checker refuses is the empty clause that rested on it,
-         at the RUP wording (D-0131). *)
+      check "alldiff (b) BREAK: with the Hall pol blanked, the proof is rejected" (rc <> 0);
       check
         "alldiff (b) BREAK: and the rejection is that JUDGEMENT -- the empty clause is \
          no longer implied by reverse unit propagation -- not a parse error"
@@ -6283,13 +6274,18 @@ let test_regin_conclusion () =
   in
   check "regin (c): the non-interval pigeonhole is UNSAT" (outcome = Search.Unsat);
   let ls = String.split_on_char '\n' text in
-  (match minting with
-  | None -> check "regin (d): the conclusion names a line this proof minted" false
-  | Some line ->
+  let regin = last_pol_before ls label in
+  (match (minting, regin) with
+  | None, _ -> check "regin (d): the conclusion names a line this proof minted" false
+  | Some _, None ->
+      check "regin (d): a Regin pol precedes the close for the empty clause to rest on"
+        false
+  | Some close, Some line ->
       check
-        "regin (d): `conclusion UNSAT` cites the REGIN derivation -- a pol, not the \
-         D-0022 empty clause"
-        (contains_sub ~needle:" pol " (" " ^ String.trim line));
+        "regin (d): `conclusion UNSAT` cites the empty clause (D-0131's root close) and \
+         the REGIN derivation -- a pol -- is on the page ahead of it"
+        (String.trim (Writer.strip_label (String.trim close)) = "rup >= 1 ;"
+        && contains_sub ~needle:" pol " (" " ^ String.trim line));
       (* Established, not asserted: the ids the pol cites are looked up, and the ones
          that are one-literal `rup`s are the lines establishing the three variables'
          HOLES -- which is the thing an interval Hall argument never had to cancel. *)
@@ -6331,12 +6327,17 @@ let test_regin_conclusion () =
         "regin (d): and the units it cites really are the lines establishing the six \
          HOLES the counting had to cancel"
         (sorted = want));
-  (match (veripb_path (), label, minting) with
-  | None, _, _ ->
+  (match (veripb_path (), regin) with
+  | None, _ ->
       incr failures;
       Printf.printf
         "FAIL regin (c): veripb not found -- the derivation was NOT checked.\n"
-  | Some veripb, Some lab, Some line ->
+  | Some veripb, Some line ->
+      let lab =
+        match String.index_opt (String.trim line) ' ' with
+        | Some i -> String.sub (String.trim line) 0 i
+        | None -> String.trim line
+      in
       let run tag pbp =
         let log = Filename.concat dir ("log" ^ tag) in
         let rc =
@@ -6353,37 +6354,25 @@ let test_regin_conclusion () =
       if rc <> 0 then Printf.printf "     checker said: %s\n" (String.trim out);
       check "regin (c): 3.0.2 accepts the Regin derivation the conclusion rests on"
         (rc = 0);
-      (* THE BREAK, on the solver's own artefact: one variable's at-least-one line in the
-         conclusion's pol is SWAPPED for another variable's, so the counting is over a
-         Hall set that names one variable twice and one not at all -- which is exactly
-         what a wrong Hall set looks like from inside the arithmetic. It is a swap and
-         not a deletion on purpose: deleting an operand leaves a dangling `+` and the
-         checker refuses it on the GRAMMAR, and a lane that accepted that would be
-         reporting a parse error as a judgement (M2-T14). The row here stays well formed
-         and VALID and stops being a contradiction, which is the claim under test. *)
-      let ids = pol_cited (String.trim line) in
-      let first = List.hd ids and second = List.nth ids 1 in
+      (* THE BREAK, on the solver's own artefact: the Regin pol is replaced by a tautology
+         with its label kept, so every later citation parses and the checker has to
+         judge the empty clause without the counting argument under it (D-0131: the
+         close is `rup >= 1`, and this derivation is what it rests on). Until D-0131 the
+         break SWAPPED one variable's at-least-one line for another's and asserted the
+         conclusion's syntactic refusal of its citation; under the root close a swap
+         inside the derivation is judged by reverse unit propagation over the whole page,
+         where the trace's units can repair it (test_prop.ml's alldiff (b) records the
+         same measurement), so the break that still says "this derivation is needed" is
+         its absence. Replacing rather than deleting the line is still the rule: a
+         dangling label is refused on the GRAMMAR, and a lane that accepted that would be
+         reporting a parse error as a judgement (M2-T14). *)
       let broken = Filename.concat dir "regin_unsat_broken.pbp" in
       let oc = open_out broken in
       List.iteri
         (fun i l ->
           let l =
-            if starts_with_str (lab ^ " ") (String.trim l) then (
-              let want = Printf.sprintf "@c%d " first in
-              let n = String.length want in
-              let b = Buffer.create (String.length l) in
-              let rec go j =
-                if j + n <= String.length l then
-                  if String.sub l j n = want then (
-                    Buffer.add_string b (Printf.sprintf "@c%d " second);
-                    Buffer.add_string b (String.sub l (j + n) (String.length l - j - n)))
-                  else (
-                    Buffer.add_char b l.[j];
-                    go (j + 1))
-                else Buffer.add_string b (String.sub l j (String.length l - j))
-              in
-              go 0;
-              Buffer.contents b)
+            if starts_with_str (lab ^ " ") (String.trim l) then
+              lab ^ " rup +1 a_ge_2 +1 ~a_ge_2 >= 1 ;"
             else l
           in
           if i > 0 then output_char oc '\n';
@@ -6391,11 +6380,10 @@ let test_regin_conclusion () =
         ls;
       close_out oc;
       let rc, out = run "bad" broken in
-      check "regin (c) BREAK premise: the broken pol differs from the honest one"
+      check "regin (c) BREAK premise: the broken proof differs from the honest one"
         (read_file broken <> text);
       check
-        "regin (c) BREAK: a Regin pol over a Hall set that names one variable twice is \
-         rejected"
+        "regin (c) BREAK: with the Regin derivation blanked, the empty clause is rejected"
         (rc <> 0);
       let saying = "is not contradicting, as specified by the hint." in
       if not (contains_sub ~needle:saying out) then
