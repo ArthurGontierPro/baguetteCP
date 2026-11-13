@@ -320,6 +320,18 @@ work. The owning session picks it up.
 | M8-bits-encoding-T5 | agent-rup (`wave42-rup`) | 2026-11-13 | D-0131. The root conflict closes as its trace + `rup >= 1` (every root `pol` gone, 36 of 156 proofs change, stdout and `.opb` byte-identical); `emit_concluding` writes `rup <literal>`; `--stats` counts `rup`/`pol` lines and `pol` tokens. D-0028's model at 10⁶: 29.8 MB → 138 B; the quadratic shape is a Θ(w) chain of root prunings, where the baseline's checker dies at 16 GiB and the `rup` form finishes (Θ(w²) in RUP time); hints rejected by measurement. The seven OPT proofs are byte-identical to the baseline's: no root `pol` was ever in them. Gate green, 20 min, 85 MB |
 
 ## Handoff notes
+## Wave 42 merged and gated, 2026-11-13 (orchestrator)
+
+Merged on `main` in this order: `wave42-remeasure` (D-0129, `b0e173a`), `wave42-t1` (D-0130, `495f1c4`),
+`wave42-elig` (the eligibility measurement, `cb6cd1f` + the D-0130 addendum `cb2f117`), `wave42-rup`
+(D-0131, `5aff009`; I-X7 restated in `f158c9f`). Gate of `f158c9f` on fataepyc-06
+(`/scratch/arthur/gate43.status`, clone `/scratch/arthur/baguette-gate-20261113`): `make check` rc 0,
+156 models passed, binary `a6327dc69ae21e0b50203af668347c9e`; against the a3+d binary `e25ec4d3`
+stdout, exit codes and `.opb` are byte-identical on all 156, `.pbp` differs on 36 (D-0131's shape),
+477 747 -> 453 802 bytes over the suite. No live claim. Next: M8-bits-encoding-T2 (D-0132), the bits
+encoding for `Linear` under D-0130 §3.4's eligibility, with the `.opb`-bytes table at `W = 0` on the
+169 (their `.fzn` are under `/scratch/arthur/wave42-elig/` on the node).
+
 ## M8-bits-encoding-T5 handoff, 2026-11-13 (agent-rup, `wave42-rup`): the ladder walks as `rup`, and what the OPT hour is really spent on (D-0131)
 
 Merged nothing; branch `wave42-rup` (head 5dc0a75 plus the release commit that carries D-0131 and this note) is pushed to origin and node06, gate green on
