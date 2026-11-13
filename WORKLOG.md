@@ -321,6 +321,23 @@ work. The owning session picks it up.
 | M8-bits-encoding-T5 | agent-rup (`wave42-rup`) | 2026-11-13 | D-0131. The root conflict closes as its trace + `rup >= 1` (every root `pol` gone, 36 of 156 proofs change, stdout and `.opb` byte-identical); `emit_concluding` writes `rup <literal>`; `--stats` counts `rup`/`pol` lines and `pol` tokens. D-0028's model at 10⁶: 29.8 MB → 138 B; the quadratic shape is a Θ(w) chain of root prunings, where the baseline's checker dies at 16 GiB and the `rup` form finishes (Θ(w²) in RUP time); hints rejected by measurement. The seven OPT proofs are byte-identical to the baseline's: no root `pol` was ever in them. Gate green, 20 min, 85 MB |
 
 ## Handoff notes
+## Weekend runs 2026-11-13 (orchestrator): the editions with D-0131's binary, and the seven OPT proofs under a 60-hour check
+
+Two detached runs on fataepyc-06, launched 17:06 (kill only by `kill $(cat <dir>/pid)` and the
+workers' pidfile, never by name):
+- `/scratch/arthur/wave43run/` (driver `/scratch/arthur/run_editions43.sh`, `driver.log`, `<Y>.done`,
+  ~19 h): the sixteen Challenge editions, baguette only, binary `a6327dc6` (main `f158c9f`, clone
+  `baguette-gate-20261113`), same rules as D-0129. Purpose: the baseline for M8-bits-encoding-T4 with the
+  final order arm, and D-0131's `rup` shapes validated at scale. Read exactly like D-0129 (incumbent =
+  objective VALUE present; the `opb` column empty = the `.opb` never completed); compare against
+  `~/mznc-archive/runs/wave41run-2026-11-09/`. Any REJECTED is a finding, and the verified count was 224.
+- `/scratch/arthur/wave43-optcheck/` (driver `/scratch/arthur/optcheck43.sh`, `workers.pid`, `DONE`):
+  VeriPB 3.0.2 over the seven OPT proofs D-0131 re-solved (`/scratch/arthur/wave42-rup-out/opt/`,
+  26 GB), `timeout 216000` (60 h) each, in parallel, `/usr/bin/time -v` at the end of each
+  `<b>.veripb.err`, `<b>.rc` with start/end. Purpose: do these proofs verify at all, and at what time
+  scale (D-0131 §5). First launch died at once because `$PATH` found the stale Python wrapper
+  `~/.local/bin/veripb` first; the script now names `~/.cargo/bin/veripb`. Relaunched 17:12.
+
 ## Wave 42 merged and gated, 2026-11-13 (orchestrator)
 
 Merged on `main` in this order: `wave42-remeasure` (D-0129, `b0e173a`), `wave42-t1` (D-0130, `495f1c4`),
