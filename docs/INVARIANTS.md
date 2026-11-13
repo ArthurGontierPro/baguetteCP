@@ -130,9 +130,11 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
   is gone, and a wrong emptiness flag. D-0124 says why the memory made this worth it.
 
 - **I-X7** What `conclusion UNSAT` cites is a line the checker has itself established is a
-  contradiction — either a `pol` chain closing at `0 >= k` (D-0013) or an explicitly
-  derived empty clause (D-0022). A propagator's reason is never cited as a contradiction
-  on the propagator's word. `Search.rests_on_a_clause` is where the two are told apart.
+  contradiction. Since D-0131 (M8-bits-encoding-T5) that line is always an explicitly
+  derived empty clause, `rup >= 1` over the root's trace (D-0022's shape); the `pol` chain
+  closing at `0 >= k` (D-0013) and `Search.rests_on_a_clause`, which told the two apart,
+  are gone. A propagator's reason is never cited as a contradiction on the propagator's
+  word.
 
 - **I-X8** No row is committed to the `.opb` whose arithmetic wrapped.
   `Encoding.add_int_lin_le` and `add_int_lin_ne` check, in overflow-checked arithmetic,
