@@ -19,6 +19,8 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M8-bits-encoding-T3 | design record D-0134 first (`docs/DECISIONS.md` appended), then `lib/proof/encoding.ml`, `lib/proof/lit.ml`, `lib/core/prop/maxmin.ml`, `lib/core/prop/ne.ml`, `lib/core/prop/arith.ml` if reached, `lib/core/pb_analysis.ml`, `lib/core/ladder.ml`, `lib/core/learn.ml`, `lib/core/trace.ml`, `lib/core/justify.ml`, `lib/flatzinc/compile.ml` (eligibility releases), `bin/main.ml` (`--stats`), their tests under `test/unit/`, new `test/models/bits_*.fzn` + `test/expected/`, `docs/PROOF-FORMAT.md` §3/§4 (bits paragraphs), `docs/ROADMAP.md` T3 row, `docs/INVARIANTS.md` if an invariant is added | agent-t3 (`wave44-t3`) | 2026-11-16 |
+| M9-no-proof-T2 | `bin/main.ml` (`--no-proof`), `lib/proof/writer.ml` (null channel, `~audit:false`), `lib/proof/encoding.ml` (`Discard_rows` path only), `lib/flatzinc/compile.ml` (the mode threaded through), `scripts/run_model_tests.sh` or `test/unit/test_endtoend.ml` (the stdout-identity lane), `docs/DECISIONS.md` (D-0135 appended), `docs/ROADMAP.md` M9-T2 row, `docs/SPEC.md` §1 only if the amendment needs a word | agent-noproof2 (`wave44-noproof`) | 2026-11-16 |
 
 ## Cross-session requests
 
@@ -322,6 +324,16 @@ work. The owning session picks it up.
 | M8-bits-encoding-T4 (baseline) | agent-remeasure2 (`wave43-read`) | 2026-11-16 | **D-0133** and the D-0131 addendum. The sixteen editions with `f158c9f` (binary `a6327dc6`) against D-0129's archive: 0 REJECTED on 224 verified proofs, the same sixteen ranks, 1 594 of 1 600 statuses unchanged, the same 184 complete answers, incumbents 799 -> 800, objective better on 14 / worse on 20 of 799 (the noise floor T4 must stand above); 223 of the 224 verified proofs byte-identical to D-0129's, D-0131's shape on one root-UNSAT only. The seven OPT proofs verify under 60 h (1 h 20 to 16 h 22, up to 20.5 GiB; `8ShipsUnconst` over the harness's 16 GiB), and D-0131 §5's `5Ships`/`7ShipsMixedUnconst` line counts are corrected. Archives on the laptop; 37 GB of proofs deleted on the node. |
 
 ## Handoff notes
+## Wave 43 merged and gated, 2026-11-16 (orchestrator)
+
+Merged on `main`: `wave43-read` (D-0133 + the D-0131 addendum, `0f79f59`) and `wave43-t2` (D-0132,
+`9de2688`). Gate of `9de2688` on fataepyc-06 (`/scratch/arthur/gate44.status`, clone
+`/scratch/arthur/baguette-gate-20261116`): `make check` rc 0, 165 models passed, binary
+`274a802874aa0278e01b4574ec7b3a7a`; against the D-0131 binary `a6327dc6` at the default `W = none`,
+stdout, exit codes, `.opb` and `.pbp` are byte-identical on all 165 (463 646 `.pbp` bytes both sides).
+Wave 44 opens: M8-bits-encoding-T3 (D-0134, design first then code, maxmin over bits first) and
+M9-no-proof-T2 (D-0135).
+
 ## M8-bits-encoding-T4 baseline read, 2026-11-16 (agent-remeasure2, `wave43-read`): D-0133 and the D-0131 addendum
 
 Merged nothing; branch `wave43-read` is pushed. Two records appended at the bottom of `docs/DECISIONS.md`,
