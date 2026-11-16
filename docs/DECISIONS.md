@@ -11526,3 +11526,313 @@ three of the re-pointings are findings rather than edits:
 - A chain of Θ(w) trace lines is Θ(w²) for this checker (§3.2) and hints do not help (§4). The
   only linear-time close of such a chain would be a checker that keeps its propagation state
   across lines; the proof side cannot buy it.
+
+### Addendum 2026-11-16: the seven OPT proofs verify under a long budget (orchestrator's weekend run)
+
+Recorded by agent-remeasure2 (`wave43-read`) from the orchestrator's run of 2026-11-13 17:07 to
+2026-11-14 09:30 on `fataepyc-06`: VeriPB 3.0.2 (`~/.cargo/bin/veripb`, source d5644ca4) over the
+seven `.opb`/`.pbp` pairs §5 re-solved (`/scratch/arthur/wave42-rup-out/opt/`, binary `f2028d50` =
+640fe1d), `timeout 216000` (60 h) each, `ulimit -v 400000000`, the seven in parallel under
+`/usr/bin/time -v`, beside D-0133's 30-way harness run on the same node (driver
+`/scratch/arthur/optcheck43.sh`). The small files are archived under
+`~/mznc-archive/runs/wave43-optcheck-2026-11-13/` (6.6 MB, 81 files: `<b>.veripb.out/.err/.rc`, the
+driver, and under `wave42-rup-out-opt/` the re-solves' `.out`, `.err` with `--stats`, `.solve.time`
+and `opt.tsv`); the 26 GB of `.opb`/`.pbp` were deleted from the node once the archive was verified.
+The `.pbp` checked here are the re-solves', the same size to the byte as the harness's eight rows in
+D-0129 and D-0133 (whose own copies the harness deletes on exit); their `.opb` are 9 bytes shorter
+than the harness's, the re-flatten's `.fzn` being 36 bytes shorter (a header line).
+
+**All seven are VERIFIED**, in 1 h 20 to 16 h 22. Sorted by wall:
+
+| instance | `.opb` / `.pbp` bytes | `rup` / `pol` lines | checker wall (CPU s) | peak RSS | `.pbp` kB per s | ms per line | D-0129 / D-0133 verdict (3 600 s, 16 GiB) |
+|---|---|---|---|---|---|---|---|
+| `2014_ship-schedule_3Ships` | 1 116 198 445 / 2 359 685 872 | 310 589 / 3 | 1:19:56 (4 796) | 7.0 GiB | 492 | 15.4 | TIMEOUT-CHECK |
+| `2018_mapping_full2x2_mp3` | 847 078 202 / 636 566 189 | 5 623 546 / 926 | 2:06:43 (7 603) | 4.8 GiB | 84 | 1.35 | TIMEOUT-CHECK |
+| `2012_ship-schedule_5Ships` | 1 863 536 928 / 5 151 911 100 | **779 032 / 5** | 2:37:11 (9 430) | 13.1 GiB | 546 | 12.1 | TIMEOUT-CHECK |
+| `2012_ship-schedule_7ShipsMixedUnconst` | 1 396 890 364 / 925 100 941 | **3 632 409 / 7** | 2:52:26 (10 345) | 7.1 GiB | 89 | 2.8 | TIMEOUT-CHECK |
+| `2012_ship-schedule_6ShipsMixed` | 1 154 866 316 / 2 408 458 634 | 1 653 350 / 6 | 2:57:57 (10 676) | 7.0 GiB | 226 | 6.5 | TIMEOUT-CHECK |
+| `2014_smelt_smelt_2` | 1 133 117 481 / 482 327 204 | 4 180 745 / 1 510 216 | 8:08:43 (29 320) | 5.4 GiB | 16 | 5.2 | TIMEOUT-CHECK |
+| `2012_ship-schedule_8ShipsUnconst` | 2 761 295 327 / 4 663 399 101 | 21 642 936 / 8 | 16:22:03 (58 916) | 20.5 GiB | 79 | 2.7 | TIMEOUT-CHECK |
+
+The verdict line is `s VERIFIED BOUNDS v <= obj <= v` with v the solver's optimum, negated on the
+five `max` models because the `.opb` minimises (`-265650`, `-483650`, `-389100`, `-301650`,
+`-834150`; `1100`; `69`). CPU equals wall on all seven (ratio 1.000), so the harness run beside
+them did not starve them of a core; what sharing the node's memory did to the wall is not
+measured. 131 099 s = 36.4 h of checker time in all, over 26.9 GB of artefacts. The re-solves'
+side, from their `--stats`: 119 to 950 s of solve, 0.45 to 3.8 GiB, so the check is 12×
+(`mapping`) to 171× (`smelt_2`) the solve.
+
+**Correction to §5's table**: its `rup` / `pol` column for `5Ships` and `7ShipsMixedUnconst` is the
+other way round. `opt.tsv` in the run directory has 5Ships 779 032 / 5 and 7ShipsMixedUnconst
+3 632 409 / 7, and an `awk` over the two `.pbp` before their deletion counts the same (795 211 and
+3 670 655 lines in all, with the `red` ladder and the `del`s). The other five rows agree with
+`opt.tsv`. The table above has the corrected values in bold.
+
+What this changes in §5's reading:
+
+- "The OPT proofs the checker could not finish" reads "the OPT proofs the checker needs 1 h 20 to
+  16 h 22 for". Every one is a proof the checker accepts; the harness's 3 600 s is 1.3× (`3Ships`)
+  to 16.4× (`8ShipsUnconst`) short of it. Six of the seven verify under 3 h; `smelt_2` needs 8 h 09
+  and `8ShipsUnconst` 16 h 22.
+- There is a second wall beside the time, and it is memory. The harness checks under the solve's
+  `ulimit -v` 16 GiB (`mem_kb=16777216` in `run.conf`), and `8ShipsUnconst`'s check peaks at
+  20.5 GiB, `5Ships`' at 13.1. So under the harness's rules `8ShipsUnconst` cannot verify at any
+  time budget, the way `2011_ship-schedule_6ShipsMixedUnconst` cannot (D-0129's eighth, CHECK-ERROR
+  at 51 s on a 6.9 GB `.opb`, the checker's own allocation failure; not re-checked here).
+- Where the time goes, as far as seven points can say. Bytes per checker-second spread 34× (16 kB/s
+  on `smelt_2` to 546 on `5Ships`) and lines per second 11× (65 on `3Ships` to 740 on `mapping`), so
+  neither the file's size nor its line count is the cost. Across the five ship-schedule proofs,
+  which are `rup` lines with 3 to 8 `pol`s among them, the time per line follows the line's length:
+  2.7 to 2.8 ms at 215 to 255 bytes per line (`8ShipsUnconst`, `7ShipsMixedUnconst`), 6.5 ms at
+  1.5 kB (`6ShipsMixed`), 12 to 15 ms at 6.6 to 7.6 kB (`5Ships`, `3Ships`). About 2.4 ms per line
+  plus 1.7 ms per kB fits two of the points by construction and the other three within 30 %. That
+  is §5's reading (one reverse-unit-propagation walk per line over a database of the model's size,
+  plus the line's own width) with numbers on it, and not a measurement that separates the two
+  parts. The two proofs §5 named for their wide `pol`s are the two slowest per byte: `smelt_2`
+  (1.5 M `Pb_analysis.introduce` `pol`s of up to 1 985 tokens) spends 5.2 ms per line on lines of
+  85 bytes, twice the ship proofs' per-line floor, and `mapping` (926 `Reduce` weakenings of up to
+  12 081 tokens, 5.6 M `rup`) is the fastest per line, 1.35 ms, over the smallest model
+  (194 k rows). Consistent with §5, and not isolating the `pol`s' share, which the checker does
+  not report.
+- What M8-bits-encoding has to beat on these seven is now a number and not a timeout: 131 099 s of
+  checker time, 20.5 GiB of checker memory, the eighth (`6ShipsMixedUnconst`) still unmeasured.
+
+## D-0133  M8-bits-encoding-T4 baseline: the sixteen editions with D-0131's binary -- 0 REJECTED on 224 proofs, the same sixteen ranks, 1 594 of 1 600 statuses unchanged, and D-0131's shape on one proof of the 224
+
+**Status**: **MEASUREMENT**, recorded 2026-11-16 (agent-remeasure2, `wave43-read`). Run on
+`fataepyc-06` from 2026-11-13 17:06 to 2026-11-14 12:56 (driver `/scratch/arthur/run_editions43.sh`,
+the editions in sequence from 2026 down to 2011), baguette only, binary
+`a6327dc69ae21e0b50203af668347c9e` = main `f158c9f` (wave 42 merged: D-0129, D-0130, D-0131 and
+I-X7 restated; the gated head), clone `/scratch/arthur/baguette-gate-20261113`, the rules of
+D-0125/D-0129 (`run.conf` per edition: 1 200 s solve, 1 200 s flatten, 3 600 s check,
+`mem_kb=16777216`, `proof_cap_kb=16000000`, 30-way), results in
+`fataepyc-06:/scratch/arthur/wave43run/<Y>/`, archived on the laptop under
+`~/mznc-archive/runs/wave43run-2026-11-13/` (96 MB, 5 166 files: D-0129's inventory plus
+`run_editions43.sh` and `refusal_causes.txt`). The baseline is D-0129's run as archived
+(`wave41run-2026-11-09/`, binary `e25ec4d3`, main `35588fb`), read with D-0125's addendum's
+criterion throughout: **an incumbent is a row whose objective VALUE is present; `min:-` / `max:-`
+is not one.** `challenge_rank.py ... --no-chuffed` on the laptop gives D-0129's sixteen scores back
+to the decimal on the old archive; `refusal_causes.py /scratch/arthur/wave43run --widths` on the
+node. The 1 600 rows have the same keys in both runs; **1 594 have the same status**, and the 184
+complete answers have the same solution count in both. The seven OPT proofs of this run's list
+under a 60-hour check are D-0131's addendum above.
+
+**What this run is for.** It is the ORDER-ARM BASELINE of M8-bits-encoding-T4: the binary the bits
+arm's binaries are compared against, hashed, with every table a T4 reading needs on the same
+1 600 instances under the same rules. It was also meant to validate D-0131's `rup` shapes at
+scale; what it found about that is the proof-bytes section, and it is less than the brief assumed.
+
+### The statuses, and the incumbents
+
+| over 1 600 instances | D-0129 run (`35588fb`) | this run (`f158c9f`) |
+|---|---|---|
+| TIMEOUT | 978 | 982 |
+| REFUSED | 206 | 205 |
+| OPT | 174 | 174 |
+| CAPPED | 151 | 148 |
+| SAT | 48 | 48 |
+| FLATTEN-FAIL | 25 | 25 |
+| UNSAT | 10 | 10 |
+| ERROR | 8 | 8 |
+| complete answers (OPT + UNSAT) | 184 | 184, **the same 184 instances** |
+| verified (`VERIFIED` in the verdict column) | 224 | 224 |
+| **REJECTED** (status or verdict) | **0** | **0** |
+| incumbents, all rows | 799 | 800 |
+| incumbents, TIMEOUT + CAPPED rows | 558 | 559 |
+| of which TIMEOUT / CAPPED | 550 / 8 | 552 / 7 |
+| incumbents on REFUSED rows (the guard fired during search) | 67 | 67 |
+
+Every SAT and UNSAT is VERIFIED in both runs. No complete answer was gained or lost. The six
+instances whose status changed, every one at the 1 200 s edge:
+
+| from (D-0129 run) | to (this run) | n | which |
+|---|---|---|---|
+| CAPPED | TIMEOUT | 3 | `2013_on-call-rostering_10s-150d` (min 94 in both; the proof stood at 16 055 888 667 bytes when the timeout came at 1 200.6 s, where the run before reached the 16 GB cap at 1 201.0 s), `2017_cargo_challenge19_31058f_2548` and `2018_cargo_challenge20_27613f_2435` (no `.opb` and no incumbent in both; the rows cap at 1 190.7 and 1 115.8 s before, the timeout at 1 201 s now) |
+| REFUSED | TIMEOUT | 2 | `2011_vrp_B-n43-k6.vrp` (min 3 607 in both; the heap guard at 1 073.9 s before, the timeout now), `2026_zephyrus-2016_12__10__10__3` (no incumbent in both; the guard at 1 159.2 s before) |
+| TIMEOUT | REFUSED | 1 | `2017_tc-graph-color_k2_42` (no incumbent in both; the guard at 1 186.1 s now) |
+
+Six rows decided by which of two limits a loaded node reached first. None of them carries a point.
+
+### The standings (fixed category, `challenge_rank.py --no-chuffed`)
+
+| edition | D-0121 rank / score | D-0125 rank / score | D-0129 rank / score | this run rank / score |
+|---|---|---|---|---|
+| 2026 | 12 / 13, 149.9 | 12, 190.7 | 12, 205.6 | 12, 205.2 |
+| 2025 | 10 / 10, 69.3 | 10, 106.0 | 10, 106.3 | 10, 106.3 |
+| 2024 | 9 / 9, 192.8 | 9, 221.8 | 9, 227.4 | 9, 228.2 |
+| 2023 | 7 / 7, 120.1 | 7, 141.4 | 7, 141.9 | 7, 142.0 |
+| 2022 | 7 / 7, 105.4 | 7, 121.6 | 7, 123.6 | 7, 123.6 |
+| 2021 | 7 / 7, 94.8 | 7, 100.9 | 7, 101.2 | 7, 101.2 |
+| 2020 | 6 / 6, 34.7 | 6, 39.2 | 6, 56.4 | 6, 56.8 |
+| 2019 | 8 / 8, 123.4 | 7, 141.1 | 7, 143.4 | 7, 144.0 |
+| 2018 | 8 / 8, 69.6 | 8, 94.8 | 8, 94.9 | 8, 94.9 |
+| 2017 | 12 / 12, 52.8 | 12, 74.2 | 12, 80.1 | 12, 80.0 |
+| 2016 | 10 / 11, 249.5 | 9, 278.9 | 9, 280.3 | 9, 280.3 |
+| 2015 | 9 / 9, 100.3 | 9, 100.5 | 9, 104.0 | 9, **107.0** |
+| 2014 | 11 / 11, 131.6 | 11, 176.9 | 11, 173.3 | 11, 174.0 |
+| 2013 | 11 / 11, 118.3 | 10, 157.8 | 10, 158.2 | 10, 159.2 |
+| 2012 | 9 / 10, 176.5 | 9, 202.5 | 9, 204.0 | 9, 204.0 |
+| 2011 | 8 / 8, 96.0 | 8, 107.5 | 8, 110.0 | 8, 110.0 |
+
+**The rank is the same in all sixteen editions, for the third run in a row.** The score moves by
+-0.4 (2026) to +3.0 (2015), and the sum over the sixteen by +6.3 (2 310.4 -> 2 316.7); the 34
+objective moves of the next section are what moves it. Reproduction as in D-0129: the script gives
+the official ranks in all sixteen editions on both archives, and its 2011 and 2012 pairwise
+reproduction leaves 137 and 816 stored scores unmatched, identically on both runs.
+
+### The search, instance by instance: the same tree, and the node's noise measured once
+
+The binary differs from D-0129's in what it writes to the proof and in nothing the search reads
+(D-0131 §6: stdout and `.opb` byte-identical on the 156), and the 184 complete answers report the
+same solution count in both runs. So the differences below are the run-to-run variance of one
+30-way run on a shared node (the seven checkers of the addendum, up to 20.5 GiB, ran beside this
+one for its first 16 h), which D-0129 named as unmeasured and this pair measures once:
+
+| | |
+|---|---|
+| wall on the 184 complete answers | 24 183 -> 24 332 s (+0.6 %), median 39.8 -> 41.3 s; faster by more than 5 % on 51, slower on 14 |
+| objective on the 799 instances with a value in both runs | better on 14 (13 TIMEOUT -> TIMEOUT, 1 REFUSED -> REFUSED), worse on 20 (19 / 1), equal on 765 |
+| incumbent gained / lost | 1 (`2025_cgt_cgt_5_h27_r0.05_s0.8_0`, REFUSED in both, min 16 381, the one D-0129 lost to the same guard) / 0 |
+
+The 20 worse values: `2011_ship-schedule_7ShipsUnconst` max 346 195 -> 345 610, `2012_tpp_tpp_7_5_30_1`
+269 -> 270, `2014_jp-encoding_data1700` 77 676 -> 77 760, `2014_ship-schedule_6Ships` max 602 195 ->
+602 065, `2014_stochastic-vrp_vrp-s3-v2-c6_vrp-v2-c6_det` 219 -> 288, `2015_cvrp_P-n16-k8.vrp` 534 ->
+559, `2016_celar_graph05` 142 448 -> 143 819, `2016_rcpsp-wet_j90_10_10-wet` 1 859 -> 1 861,
+`2017_mario_mario_n_medium_1` max 652 -> 179, `2019_kidney-exchange_3_20_0.40_3` max 856 -> 840,
+`2019_nside_HARD_200_50` max 1 699 -> 1 675, `2019_ptv_pax_period_20_1c` 2 910 -> 2 916,
+`2022_accap_accap_a40_f800_t180` 3 601 -> 3 604, `2023_multi-agent-graph-coverage_rnd_n10_p1500_c15_s1`
+315 -> 325 and `_p2000_` 308 -> 323, `2023_table-layout_p1000_m20_r200_c20` 19 068 -> 19 085,
+`2024_fox-geese-corn_foxgeesecorn_19` max 195 -> 186, `2024_graph-clear_planar_n30_seed2022_4` 115 ->
+116 and `_8` 130 -> 131, `2026_tdtsp_inst_10_53_00` 9 275 -> 9 329 (REFUSED both). The 14 better:
+`2011_pattern-set-mining_vehicle-k1` max 75 -> 76, `2012_project-planning_ProjectPlannertest_16_7`
+64 -> 62, `2013_celar_CELAR6-SUB3` 32 576 -> 32 466 (back to D-0125's value), `2014_stochastic-vrp_..._c7_det`
+400 -> 394, `2015_project-planning_ProjectPlannertest_16_8` 62 -> 60, `2015_spot5_414` 55 598 ->
+55 597 (REFUSED both), `2015_spot5_503` 15 175 -> 15 174, `2019_ptv_pax_period_20_2b` 3 408 -> 3 405,
+`2020_stable-goods_s-d16` max 16 938 -> 16 998, `2021_java-routing_trip_7_4` 95 -> 94,
+`2023_valve-network_horizon19` max 34 -> 36, `2024_accap_accap_a20_f160_t90` 493 -> 492,
+`2024_tiny-cvrp_medium_instance_06` 3 427 -> 2 961, `2025_ihtc-2024-kletzander_i07` 24 750 -> 24 740
+(back to D-0125's value).
+
+**This is the noise floor for T4.** Two runs of the same search differ by 34 objective values
+(14 up, 20 down), one incumbent, six statuses at the timeout edge, and up to 3.0 points in an
+edition; D-0129's 63 better against 13 worse stands above it, and a T4 reading of 14 against 20
+has found nothing.
+
+### Proof bytes: where D-0131's shape is, and where it is not
+
+Each row carries the `.pbp` size the harness measured at exit (the `pbp` column, 1 319 rows in
+each run; the `.opb` bytes are identical on all 1 319, as the gate said). D-0131 changed 36 of the
+156 suite proofs. On the Challenge:
+
+| rows with `.pbp` bytes in both runs, by status pair | n | D-0129 run | this run | smaller / larger / same |
+|---|---|---|---|---|
+| OPT -> OPT | 174 | 79 679 508 747 | 79 679 508 747 | 0 / 0 / 174 |
+| SAT -> SAT | 48 | 10 841 068 016 | 10 841 068 016 | 0 / 0 / 48 |
+| UNSAT -> UNSAT | 10 | 740 437 863 | 740 442 671 | 0 / 1 / 9 |
+| CAPPED -> CAPPED | 7 | 7 × 16 384 000 000 | the same | 0 / 0 / 7 |
+| ERROR -> ERROR | 1 | 2 075 262 976 | the same | 0 / 0 / 1 |
+| TIMEOUT -> TIMEOUT | 958 | 1 394 564 362 266 | 1 384 404 538 822 (-0.73 %) | 445 / 370 / 143 |
+| REFUSED -> REFUSED | 117 | 115 122 928 793 | 112 926 268 519 (-1.91 %) | 22 / 19 / 76 |
+| all 1 319 | | 1 746 332 412 247 | 1 733 525 525 331 (-0.73 %) | |
+| the 224 VERIFIED | | 70 118 185 183 | 70 118 189 991 (+4 808) | 0 / 1 / 223 |
+
+**223 of the 224 verified proofs are byte-for-byte the size of D-0129's**, every OPT and every SAT
+among them. The one that changed is `2026_gcc-benchmark_instance-l35_1`, UNSAT at the root without
+a decision: 405 -> 5 213 bytes (D-0013's closing `pol` before, the root's trace and its `rup` now),
+VERIFIED in 0.216 -> 0.025 s. The TIMEOUT and REFUSED proofs are cut off where the kill came, and
+their bytes move with the node's load (445 smaller, 370 larger), not with the shape. So D-0131's
+shape is in this corpus exactly where D-0131 §5 said the root `pol` was: in a root that closes
+without a decision, which the Challenge's 174 OPTs never do (an optimisation run's last conflict
+is under a decision) and nine of its ten UNSATs do not either (they close on a derived empty clause
+after search, which D-0131 left as it was). **What "0 REJECTED" validates at scale is the binary
+(nothing it writes is refused, on 224 proofs of up to 7.09 GB), and of D-0131's shape one proof**;
+the evidence for the shape on more than one proof stays the gate's 36 of 156 and D-0131 §2's
+checker tests. T4 should know this about the corpus before it reads its own run: the bits arm's
+root `rup` (D-0130 §2) will be exercised by these 1 600 instances about as often, so the shape's
+evidence has to come from the gate and from `--stats`, not from the Challenge.
+
+The check time over the 224 is 27 880 -> 27 916 s. The largest verified proofs, identical in size
+to D-0129's: `2018_gfd-schedule_n90f5d40m30k6` 7 087 632 398 bytes (OPT min 11, checked in 3 007 s
+of the 3 600, 2 813 before: the OPT a slower node loses), `2012_still-life-wastage_10` 4 736 975 127
+(158 s), `2023_table-layout_p1000_m3_r100_c10` 3 443 008 835 (255 s),
+`2025_stripboard_stripboard_w10_h10_l12_c4_n24` 2 503 038 232 (202 s), `2025_fbd1_FBDk04`
+2 202 972 868 (127 s), `2016_tpp_tpp_7_3_30_1` 1 886 140 699 (129 s), `2011_solbat_sb_14_14_6_2`
+1 872 974 198 (SAT, 302 s), `2020_bnn-planner_navigation_5x5_10s` 1 626 454 446 (245 s). The six
+VERIFIED OPT checks over 1 000 s: `gfd-schedule_n90f5d40m30k6` 3 007, `2016_mrcpsp_j30_15_5` 2 129,
+`2020_sdn-chain_d10n780-1` 1 455, `2025_skill-allocation_skill_allocation_mzn_5d_1` 1 262,
+`2020_sdn-chain_d10n780-2` 1 197, `2022_gfd-schedule_n60f7d50m30k10_10124` 1 038 (D-0129: 2 813,
+2 104, 1 482, 1 207, 1 228, 1 080).
+
+### The wall: the encoding's size, on the same 169 runs, and the proof's on 7
+
+Read as in D-0129, with the `opb` column empty standing for "the `.opb` never completed":
+
+| | D-0129 run | this run |
+|---|---|---|
+| CAPPED, `opb` column empty, no incumbent: **the encoding hit the 16 GB cap** | 143 | **141** |
+| CAPPED with an `.opb` size and an incumbent: the proof hit the cap | 8 | 7, the same seven with the same `.opb` bytes (0.47 to 9.53 GB); `on-call-rostering_10s-150d` is TIMEOUT 328 MB short of the cap |
+| TIMEOUT with no `.opb` and no incumbent: 1 200 s ended while the encoding was still being written | 19 | 21 (the two `cargo` above) |
+| ERROR with no `.opb` | 7 | 7 |
+| **runs that never finished writing their `.opb`** | 169 | **169, the same 169 instances** |
+
+CAPPED wall: median 622 s (613 before), p10 293 s (280). **M8-bits-encoding's population is
+169 + 7**, plus the one TIMEOUT 328 MB short of the proof cap, unchanged from D-0129's 169 + 8, the `.fzn` of the refused and erroring ones kept under
+`/scratch/arthur/wave43run/*/work/` (214 files) beside D-0129's 215 under `wave41run/`.
+
+### Refusals: family A stays empty
+
+| | D-0129 run | this run |
+|---|---|---|
+| REFUSED | 206 | 205 |
+| of which the heap budget, exit 5 | 186 | 185 |
+| family A, front end before any declaration | 0 | **0** |
+| family B, after the encoding (rows or search) | 170 | 171 |
+| family C, inside a ladder loop | 16 | 14 |
+| gcc repeated variable / unbounded `var int` (M7-T29) | 19 + 1 | 19 + 1 |
+
+(`refusal_causes.py` on the node; archived as `refusal_causes.txt`.) Family B's clauses minted at
+death: p10/p50/p90 = 161 948 / 5.16 M / 89.1 M (5.10 M / 93.2 M before); C's 195 219 / 16.2 M /
+25.4 M, the same. The set of refused instances differs by the three rows of the status table.
+B and C are told apart by whether the guard's message names a variable, which is where the alarm
+happened to fire, so a 170/16 -> 171/14 split on a heap total down by one is the same population
+read twice; the script aggregates and does not name the two that moved. ERROR: the same eight
+instances as D-0129, the same line (`allocation failure during minor GC`, rc=134), after 112 to
+614 s.
+
+### The OPTs the checker cannot finish in 3 600 s: the same 8
+
+Verbatim from `results.tsv` (`wall` is the solve, bytes are `.opb` / `.pbp`, then the verdict and
+the check's seconds), the same eight instances as D-0129 with the same `.opb` and `.pbp` bytes:
+
+```
+2011_ship-schedule_6ShipsMixedUnconst   OPT max:288900  583.6 s   6898905812 / 4515380402   CHECK-ERROR     53.6 s  (veripb rc=134, its own allocation failure under 16 GiB)
+2012_ship-schedule_5Ships               OPT max:483650  231.6 s   1863536937 / 5151911100   TIMEOUT-CHECK 3600.2 s
+2012_ship-schedule_6ShipsMixed          OPT max:301650  140.0 s   1154866325 / 2408458634   TIMEOUT-CHECK 3600.1 s
+2012_ship-schedule_7ShipsMixedUnconst   OPT max:389100  171.4 s   1396890373 /  925100941   TIMEOUT-CHECK 3600.1 s
+2012_ship-schedule_8ShipsUnconst        OPT max:834150 1083.7 s   2761295336 / 4663399101   TIMEOUT-CHECK 3600.3 s
+2014_ship-schedule_3Ships               OPT max:265650  120.1 s   1116198454 / 2359685872   TIMEOUT-CHECK 3600.2 s
+2014_smelt_smelt_2                      OPT min:69      196.2 s   1133117490 /  482327204   TIMEOUT-CHECK 3600.1 s
+2018_mapping_full2x2_mp3                OPT min:1100    661.7 s    847078211 /  636566189   TIMEOUT-CHECK 3600.2 s
+```
+
+`challenge_rank.py` demotes all eight to an incumbent. Seven of them verify under a 60-hour budget
+(D-0131's addendum: 1 h 20 to 16 h 22, 4.8 to 20.5 GiB), and the eighth is the checker's memory,
+not the proof. The only proof artefacts the run left were this CHECK-ERROR's `.opb` and `.pbp`
+under `2011/log/` (11.4 GB), as in D-0129; `work/` held none.
+
+### What this did not measure
+
+Named so that it is not read into the tables: run-to-run variance beyond one pair (no instance was
+run twice; the six status flips and the 34 objective moves are one sample of it, and the only one
+this project has); D-0131's shape on more than one verified proof (above); `--stats` per instance
+(the harness does not pass it; the seven re-solves of D-0131 §5 have it); the bits arm, which is
+not in this binary and which T4 measures against this run; Chuffed and GCS (`--no-chuffed`, the
+calibration is D-0121's); and the 1 343 TIMEOUT, CAPPED, REFUSED and ERROR rows, NOT-CHECKED by the
+harness's design, since a cut-off proof has no conclusion to check.
+
+**Housekeeping, same day**: the run's tables and logs are on the laptop (above); on the node
+`/scratch/arthur/wave43run/` went from 20 GB to 8.8 GB (the two files under `2011/log/`; nothing
+matched under `*/work/`), the 214 `.fzn` and every table, log and `work/` directory kept; and
+`/scratch/arthur/wave42-rup-out/opt/` from 26 GB to 25 MB (the seven `.opb`/`.pbp`, verified and
+archived as the addendum says; its `.fzn`, `.out`, `.err`, `.solve.time`, `opt.tsv` and `main.exe`
+kept).

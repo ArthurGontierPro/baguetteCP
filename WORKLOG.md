@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M8-bits-encoding-T4 baseline (the wave-43 weekend runs read: D-0133 + a D-0131 addendum) | `docs/DECISIONS.md` (D-0131 addendum and D-0133 appended at the bottom), `docs/ROADMAP.md` M8-T4 row (one clause), `WORKLOG.md`; laptop archive `~/mznc-archive/runs/wave43run-2026-11-13/` and `~/mznc-archive/runs/wave43-optcheck-2026-11-13/`; node `/scratch/arthur/wave43run/` and `/scratch/arthur/wave43-optcheck/` (proofs deleted after the archive is verified) | agent-remeasure2 (`wave43-read`) | 2026-11-16 |
 | M8-bits-encoding-T2 | `lib/proof/encoding.ml`, `lib/proof/lit.ml`, `lib/proof/opb.ml`, `lib/proof/writer.ml` (the `red` pair, level 0), `lib/flatzinc/compile.ml` (eligibility from scopes, D-0130 §3.4), `lib/core/explanation.ml` (`Weaken_declared`, D-0130 §8 is its record), `lib/core/justify.ml`, `lib/core/prop/linear.ml`, `lib/core/prop/order_reason.ml` if needed, `lib/core/trace.ml`, `bin/main.ml` (`--bits-above`, `--stats`), `test/unit/{test_proof,test_compile,test_justify,test_endtoend,test_mutation}.ml`, new `test/models/*bits*.fzn` + `test/expected/`, `docs/DECISIONS.md` (D-0132 appended), `docs/PROOF-FORMAT.md` §3 (bits naming, normative), `docs/ROADMAP.md` T2 row, `docs/ARCHITECTURE.md` §1 and `CLAUDE.md`'s map if a module is added, `docs/INVARIANTS.md` if an invariant is added | agent-t2 (`wave43-t2`) | 2026-11-13 |
 
 ## Cross-session requests
@@ -320,8 +319,36 @@ work. The owning session picks it up.
 | M7-T27 (re-measure) | agent-remeasure (`wave42-remeasure`) | 2026-11-10 | **D-0129, M7-T27 COMPLETE.** The sixteen editions with `35588fb` ((a3)+(d), binary `e25ec4d3`) against D-0125's archive, with the addendum's incumbent criterion: the rank identical in all 16 editions, the score up in 15 and down in 2014; REFUSED 212 → 206 with family A 14 → 0, OPT 170 → 174, SAT 46 → 48, incumbents 794 → 799, objectives better on 63 / worse on 13, ERROR 4 → 8 (all minor-GC aborts, family B's other face), 0 REJECTED; 8 OPTs the checker cannot finish (listed verbatim in the record, for M8-bits-encoding-T5); 169 runs never finish their `.opb` + the same 8 proof-capped (M8's population). Archived `~/mznc-archive/runs/wave41run-2026-11-09/` (97 MB); node proofs deleted (20 → 8.8 GB), `.fzn` kept |
 | M8-bits-encoding-T1 | agent-m8t1 (`wave42-t1`) | 2026-11-10 | **D-0130**, the design record, documentation only. The substrate contract (a propagator cannot spell a bit; `Encoding`, `Justify` and `Trace` are the three places that know two representations), `declare_int` over bits (offset from `lo`, `bit_length(hi − lo)` bits, two bound rows, no ladder), `ensure_atom` (the `red` pair at level 0, the sparse chain, the counter, the D-0053 hazard), the mixed row and its overflow envelope, `Linear`'s bits `pol` (divide, cite the atom, saturate) with `gen.py`'s w = 10⁶ lines as the worked example, `Weaken_declared`, `min:`/`soli` unchanged in protocol, `--bits-above`, the three-threshold test plan, what `W = 0` cannot compare. PROOF-FORMAT §2a's rule amended to D-0127's with the old sentence kept as a dated note. Touched `docs/PROOF-FORMAT.md`, `docs/DECISIONS.md`, `docs/ROADMAP.md` (T1 row), `WORKLOG.md`; not `docs/INVARIANTS.md`, not `bench/` |
 | M8-bits-encoding-T5 | agent-rup (`wave42-rup`) | 2026-11-13 | D-0131. The root conflict closes as its trace + `rup >= 1` (every root `pol` gone, 36 of 156 proofs change, stdout and `.opb` byte-identical); `emit_concluding` writes `rup <literal>`; `--stats` counts `rup`/`pol` lines and `pol` tokens. D-0028's model at 10⁶: 29.8 MB → 138 B; the quadratic shape is a Θ(w) chain of root prunings, where the baseline's checker dies at 16 GiB and the `rup` form finishes (Θ(w²) in RUP time); hints rejected by measurement. The seven OPT proofs are byte-identical to the baseline's: no root `pol` was ever in them. Gate green, 20 min, 85 MB |
+| M8-bits-encoding-T4 (baseline) | agent-remeasure2 (`wave43-read`) | 2026-11-16 | **D-0133** and the D-0131 addendum. The sixteen editions with `f158c9f` (binary `a6327dc6`) against D-0129's archive: 0 REJECTED on 224 verified proofs, the same sixteen ranks, 1 594 of 1 600 statuses unchanged, the same 184 complete answers, incumbents 799 -> 800, objective better on 14 / worse on 20 of 799 (the noise floor T4 must stand above); 223 of the 224 verified proofs byte-identical to D-0129's, D-0131's shape on one root-UNSAT only. The seven OPT proofs verify under 60 h (1 h 20 to 16 h 22, up to 20.5 GiB; `8ShipsUnconst` over the harness's 16 GiB), and D-0131 §5's `5Ships`/`7ShipsMixedUnconst` line counts are corrected. Archives on the laptop; 37 GB of proofs deleted on the node. |
 
 ## Handoff notes
+## M8-bits-encoding-T4 baseline read, 2026-11-16 (agent-remeasure2, `wave43-read`): D-0133 and the D-0131 addendum
+
+Merged nothing; branch `wave43-read` is pushed. Two records appended at the bottom of `docs/DECISIONS.md`,
+one clause on `docs/ROADMAP.md`'s M8-bits-encoding-T4 row, nothing else changed.
+- D-0131's addendum: the seven OPT proofs VERIFY under the 60-hour budget, in 1 h 20 (`3Ships`) to
+  16 h 22 (`8ShipsUnconst`), peak RSS 4.8 to 20.5 GiB; `8ShipsUnconst` is over the harness's 16 GiB
+  `ulimit -v` (the check runs under the solve's cap), so under the harness's rules it cannot verify at
+  any time budget. D-0131 §5's `rup`/`pol` counts for `5Ships` and `7ShipsMixedUnconst` were the other
+  way round (`opt.tsv` and an `awk` over the two proofs agree); the addendum corrects them.
+- D-0133, the order-arm baseline for T4: 0 REJECTED on 224 verified proofs, the same sixteen ranks,
+  1 594 of 1 600 statuses unchanged, the same 184 complete answers with the same solution counts,
+  incumbents 799 -> 800, objective better on 14 / worse on 20 of 799. That pair is the NOISE FLOOR a
+  T4 reading must stand above (34 moves, 6 status flips at the 1 200 s edge, up to 3.0 points in an
+  edition). 223 of the 224 verified proofs are byte-identical to D-0129's: D-0131's shape is on ONE
+  Challenge proof (`2026_gcc-benchmark_instance-l35_1`, a root UNSAT, 405 -> 5 213 bytes), because the
+  Challenge's OPTs end under a decision and nine of ten UNSATs close on a learned clause. Do not read
+  "validated at scale" into the run; the gate's 36 of 156 is the shape's evidence, and the bits arm's
+  root `rup` will be exercised by this corpus about as often.
+- Archives on the laptop: `~/mznc-archive/runs/wave43run-2026-11-13/` (96 MB, 5 166 files, with
+  `refusal_causes.txt` and `run_editions43.sh`) and `~/mznc-archive/runs/wave43-optcheck-2026-11-13/`
+  (6.6 MB, 81 files; the re-solves' `--stats` and `opt.tsv` under `wave42-rup-out-opt/`). Node:
+  `/scratch/arthur/wave43run/` 20 GB -> 8.8 GB (the CHECK-ERROR's `.opb`/`.pbp` under `2011/log/`
+  deleted; the 214 `.fzn`, tables, logs and `work/` kept), `/scratch/arthur/wave42-rup-out/opt/` 26 GB
+  -> 25 MB (the seven `.opb`/`.pbp` deleted; `.fzn`, `.out`, `.err`, `.solve.time`, `opt.tsv` kept).
+  Nothing of mine is running on the node; `/scratch/arthur/wave43-t2*` was not touched.
+- Next: M8-bits-encoding-T2 (D-0132, on `wave43-t2*`), then T4 against this run, binaries hashed.
+
 ## Weekend runs 2026-11-13 (orchestrator): the editions with D-0131's binary, and the seven OPT proofs under a 60-hour check
 
 Two detached runs on fataepyc-06, launched 17:06 (kill only by `kill $(cat <dir>/pid)` and the
