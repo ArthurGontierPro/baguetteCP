@@ -529,13 +529,18 @@ let settle_facts t store ~before ~var holes base =
    the checker. [Debug.check] is the live gate; [i_s4_violations] is the same verdict as
    data, for a test that wants to perform the break and then ask. *)
 let record_citation t (w : Writer.t) ~citing ~citing_level ~cited ~cited_level ~hole =
-  let live_known = Writer.auditing w in
-  let cited_live = live_known && Writer.is_live w cited in
-  let c = { citing; cited; citing_level; cited_level; cited_live; live_known; hole } in
-  t.cites_rev <- c :: t.cites_rev;
-  Debug.check
-    (match i_s4_verdict c with Some m -> m | None -> "I-S4")
-    (fun () -> i_s4_verdict c = None)
+  (* M9-no-proof-T2 (D-0126): no page, no edge. Unreachable in practice under the null
+     writer -- [emit] below writes no line, so [hole_line_of] names none to cite -- and
+     guarded anyway, so the list D-0126 gives is the list the code enforces. *)
+  if Writer.is_null w then ()
+  else
+    let live_known = Writer.auditing w in
+    let cited_live = live_known && Writer.is_live w cited in
+    let c = { citing; cited; citing_level; cited_level; cited_live; live_known; hole } in
+    t.cites_rev <- c :: t.cites_rev;
+    Debug.check
+      (match i_s4_verdict c with Some m -> m | None -> "I-S4")
+      (fun () -> i_s4_verdict c = None)
 
 (* I-X10 / D-0040, and the whole of what a [Needs_derivation] propagator family needs
    from this module (M4-T1).
@@ -596,7 +601,7 @@ let derive_ahead (ctx : Justify.ctx) store (e : Store.entry) =
    against the lines of the holes it walked over (see [line]), and those holes are
    earlier trail entries, so their lines are already in the database when the settle's
    line is checked. *)
-let emit (ctx : Justify.ctx) t store =
+let emit_to_page (ctx : Justify.ctx) t store =
   resync t store;
   let saved = Writer.current_level ctx.Justify.writer in
   let at = ref saved in
@@ -688,6 +693,16 @@ let emit (ctx : Justify.ctx) t store =
   done;
   if !at <> saved then Writer.set_level ctx.Justify.writer saved
 
+(* M9-no-proof-T2 (D-0126): under `--no-proof` the writer is null and this module writes
+   nothing -- the trail is not walked, no reason is materialised for a line's facts, no
+   derivation is written ahead and no [Deferred] thunk is forced. [done_], [line_ids] and
+   [permanent] stay empty, so [lines_at], [hole_line_of] and [permanent_ids] answer
+   "nothing", which is the truth: a learned clause under this mode rests on lines that
+   were never written, and [Learn.supports] reports none. The guard is a wrapper rather
+   than a line inside [emit_to_page] so that the function above keeps its shape. *)
+let emit (ctx : Justify.ctx) t store =
+  if not (Writer.is_null ctx.Justify.writer) then emit_to_page ctx t store
+
 (* D-0018 point 3: "a conflict under decisions logs its own reason line first, then the
    nogood". A conflict establishes no bound, so its line is the same clause with the
    claim omitted -- the empty sum over the negated facts, which is GCS's
@@ -705,7 +720,7 @@ let emit (ctx : Justify.ctx) t store =
    The three sites that had to clear the slot ([take_conflict_facts], [Store.new_level],
    [Store.backtrack]) are gone with it. [Reason.none] materialising to [[]] is exactly
    what the un-armed slot's [None] used to mean, so what gets written is unchanged. *)
-let conflict_line (ctx : Justify.ctx) t (c : Store.conflict) =
+let conflict_line_to_page (ctx : Justify.ctx) t (c : Store.conflict) =
   let all_facts = Reason.facts c.Store.c_reason in
   (* M8-bits-encoding-T2: a [Linear] conflict over a row with a bits term is the same
      `pol` as a pruning with no claim, saturated to `~facts >= 1` -- and with NO facts
@@ -748,3 +763,13 @@ let conflict_line (ctx : Justify.ctx) t (c : Store.conflict) =
         in
         record t ~level:(Writer.current_level ctx.Justify.writer) cid;
         Some cid
+
+(* M9-no-proof-T2 (D-0126): under the null writer the conflict's reason is not
+   materialised and its derivation is not forced. [Some id] rather than [None], on
+   purpose: [None] means "no line, state the derivation yourself", and [Search]'s
+   conflict arm answers it by forcing [c_why] to write a `pol` -- exactly the forcing this
+   mode exists to skip. The id is the null writer's, distinct and uncited. *)
+let conflict_line (ctx : Justify.ctx) t (c : Store.conflict) =
+  if Writer.is_null ctx.Justify.writer then
+    Some (Writer.fresh ctx.Justify.writer ~origin:"no-proof: conflict line")
+  else conflict_line_to_page ctx t c
