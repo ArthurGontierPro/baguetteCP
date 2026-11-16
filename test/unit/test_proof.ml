@@ -3865,7 +3865,8 @@ let test_bits_mixed_row () =
   (* And the committing door still raises rather than wrap (I-X8): a 42-bit variable with
      a 2^22 coefficient has mass 2^22 * (2^42 - 1), past a 63-bit int. *)
   let wide = Encoding.create () in
-  Encoding.declare_int_bits wide "w" ~lo:0 ~hi:(1 lsl 41);
+  (* 42 literals and no ladder: the I-X8 envelope needs the magnitude, not a ladder. *)
+  Encoding.declare_int_bits wide "w" ~lo:0 ~hi:(1 lsl 41) (* width-ok: bits *);
   raises "bits: the mixed row's envelope is checked in Arith (I-X8)" (fun () ->
       Encoding.add_int_lin_le wide [ (1 lsl 22, "w") ] 0)
 

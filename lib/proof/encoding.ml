@@ -1630,7 +1630,7 @@ let mint_bits_atom t w (iv : ivar) ~n v =
   (* The two nearest minted neighbours, before this one joins the map. *)
   let below = IMap.find_last_opt (fun u -> u < v) iv.atoms in
   let above = IMap.find_first_opt (fun u -> u > v) iv.atoms in
-  let link ~hi:(vh, (b1h, _)) ~lo:(vl, (_, b2l)) =
+  let link ~upper:(vh, (b1h, _)) ~lower:(vl, (_, b2l)) =
     (* ~x_ge_vh \/ x_ge_vl, from B1 of the higher and B2 of the lower. *)
     ignore
       (Writer.pol_concluding w
@@ -1640,8 +1640,12 @@ let mint_bits_atom t w (iv : ivar) ~n v =
         : cid);
     t.n_links <- t.n_links + 1
   in
-  (match below with Some (u, pair) -> link ~hi:(v, (b1, b2)) ~lo:(u, pair) | None -> ());
-  (match above with Some (u, pair) -> link ~hi:(u, pair) ~lo:(v, (b1, b2)) | None -> ());
+  (match below with
+  | Some (u, pair) -> link ~upper:(v, (b1, b2)) ~lower:(u, pair)
+  | None -> ());
+  (match above with
+  | Some (u, pair) -> link ~upper:(u, pair) ~lower:(v, (b1, b2))
+  | None -> ());
   (b1, b2)
 
 let order_rungs (iv : ivar) =
