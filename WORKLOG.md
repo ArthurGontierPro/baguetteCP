@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M8-bits-encoding-T2 | `lib/proof/encoding.ml`, `lib/proof/lit.ml`, `lib/proof/opb.ml`, `lib/proof/writer.ml` (the `red` pair, level 0), `lib/flatzinc/compile.ml` (eligibility from scopes, D-0130 §3.4), `lib/core/explanation.ml` (`Weaken_declared`, D-0130 §8 is its record), `lib/core/justify.ml`, `lib/core/prop/linear.ml`, `lib/core/prop/order_reason.ml` if needed, `lib/core/trace.ml`, `bin/main.ml` (`--bits-above`, `--stats`), `test/unit/{test_proof,test_compile,test_justify,test_endtoend,test_mutation}.ml`, new `test/models/*bits*.fzn` + `test/expected/`, `docs/DECISIONS.md` (D-0132 appended), `docs/PROOF-FORMAT.md` §3 (bits naming, normative), `docs/ROADMAP.md` T2 row, `docs/ARCHITECTURE.md` §1 and `CLAUDE.md`'s map if a module is added, `docs/INVARIANTS.md` if an invariant is added | agent-t2 (`wave43-t2`) | 2026-11-13 |
 
 ## Cross-session requests
 
@@ -187,6 +186,7 @@ work. The owning session picks it up.
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M8-bits-encoding-T2 | agent-t2 (`wave43-t2`) | 2026-11-16 | **D-0132.** The bits encoding for `Linear`: `Lit.Bit`, `declare_int_bits` (two bound rows, no ladder), the mixed row, `ensure_atom` (the `red` pair at level 0 + nearest-neighbour links; a `rup` bridge pair for an order variable in a mixed row), `Explanation.Linear_term`, `Justify.emit_bits_pruning` (one `pol` deriving exactly the trace clause, pinned by `ia`), Trace's per-entry fork, eligibility by scope in `Compile`, `--bits-above W`. Gate green on a fresh clone (19 min 46 s, 85 MB); the 156 byte-identical at `W = none`; 165 of 165 verified at `W = 0` and at `W = 8`; D-0028's model at 10⁶ on bits: 2.4 kB `.opb`, 192 B proof, 0.00 s (order: 156 MB, 3.2 s, 1.9 GB); the Θ(w) chain's checker 1 429 s → 4.8 s at 10⁵ (17× the bytes). The 169 at `W = 0`: see D-0132 §6 (b) |
 | M7-T12 | agent-decision | 2026-09-23 | The ASSIGNMENT decision shape (`Search.Assign`) and `indomain_median` over it -- **D-0077**. The sibling is discharged by DERIVATION, not RESOLUTION: `combine_nogoods` is untouched. `SPEC.md` 3.4 CHANGED (normative): the refusal is lifted, not weakened. Three models (two SAT), four `test_learn.ml` lanes including two breaks that redden at full wording |
 | M7-T15 | agent-flatten | 2026-09-23 | `FLATTEN-FAIL`: 22 of the 24 instances this row owns now flatten. 24 of the 50 were one thing -- a MiniZinc 1.x dialect -- not a missing global; `mznlib/compat_mzn1.mzn`, four model tests, `mznlib/test/check_mznlib.sh`, D-0076 |
 | M0-T1 | setup | 2026-09-14 | Project skeleton, docs, dune files, test harness, `.claude/` setup |
@@ -321,30 +321,36 @@ work. The owning session picks it up.
 | M8-bits-encoding-T5 | agent-rup (`wave42-rup`) | 2026-11-13 | D-0131. The root conflict closes as its trace + `rup >= 1` (every root `pol` gone, 36 of 156 proofs change, stdout and `.opb` byte-identical); `emit_concluding` writes `rup <literal>`; `--stats` counts `rup`/`pol` lines and `pol` tokens. D-0028's model at 10⁶: 29.8 MB → 138 B; the quadratic shape is a Θ(w) chain of root prunings, where the baseline's checker dies at 16 GiB and the `rup` form finishes (Θ(w²) in RUP time); hints rejected by measurement. The seven OPT proofs are byte-identical to the baseline's: no root `pol` was ever in them. Gate green, 20 min, 85 MB |
 
 ## Handoff notes
-## M8-bits-encoding-T2 wind-down, 2026-11-13 (agent-t2, `wave43-t2`): design settled, no code, nothing running on the node
+## M8-bits-encoding-T2 handoff, 2026-11-16 (agent-t2, `wave43-t2`): the bits encoding for `Linear` -- D-0132
 
-Arthur asked for a wind-down before the first edit to `lib/`. State of the branch: `main` +
-the claim + three artefacts, all documentation or probes. **No solver code was written and
-NOTHING IS RUNNING on `fataepyc-06`** (no pidfile, no output dir under `/scratch/arthur/wave43-t2-out/`;
-the only node artefact is `/scratch/arthur/probe-t2/`, the probe script's files, disposable).
-
-- **D-0132 (draft, bottom of `docs/DECISIONS.md`)** is the thing to read first: §1 is six
-  checker probes measured on the node (`bench/bits_spike/probe_t2.sh` reproduces them in one
-  command), §2 the eight design decisions and where they deviate from D-0130, §3 the plan with
-  file coordinates in commit order. The three deviations that matter: (1) the bits pruning line
-  is one `pol` deriving EXACTLY the trace clause, every fact's atom left in the row via its
-  bridge, no unit cited; (2) an order variable in a mixed row goes through a `rup` bridge pair
-  memoised at level 0; (3) one summand constructor `Linear_term` carrying the term's snapshot,
-  not `Weaken_declared`, rendered byte-identically in the order arm.
-- Also found: B2-before-B1 is ACCEPTED by the checker (p6) -- D-0130 §11's lane for it must
-  assert symmetry, not a refusal. `int_eq_reif`/`int_ne_reif` and `bool2int` scopes are held
-  back at T2 beyond D-0130 §3.4's list (Clause-justified prunings).
-- **Next session, first thing**: start at D-0132 §3 step 1 (`lit.ml`'s `Bit` constructor and
-  the nine exhaustiveness sites it lists), build with `dune build --root . lib/ bin/`, commit;
-  then step 2 (`encoding.ml`). Do not re-read D-0130 whole; §3 of D-0132 names the sections
-  the code needs. The claim row in `## Active claims` stays as it is.
-- Node protocol reminders that cost time today: a compound `ssh ... && scp ... && ssh`
-  command is refused by the worktree guard; split into single ssh/scp calls.
+- **What landed**: D-0132 §4 lists it file by file. The bits/order fork is `Encoding.ivar.repr`;
+  the three places that know there are two representations on the core side are
+  `Justify.emit_summand` (order rendering of a `Linear_term`, byte-identical),
+  `Justify.emit_bits_pruning` (the bits `pol` + `ia` + `del`) and `Trace.bits_arm`. No propagator
+  changed but `linear.ml`'s summand builder, which now hands over the term's snapshot
+  (`Explanation.Linear_term`) instead of its rendering. `--bits-above none` is the default and
+  the 156 are byte-identical to `main` at it (gate, determinism lane, and a separate comparison).
+- **Numbers**: 165 of 165 verified at `W = 0` and at `W = 8`; D-0028's two-variable model flat on
+  bits from 10³ to 10⁶ (2.4 kB `.opb`, 192 B proof, 11 MB in the checker) where the ladder's `.opb`
+  is 156 MB and the checker 1.9 GB; the Θ(w) chain (D-0131 §3's `chain`) checks in 4.8 s on bits
+  against 1 429 s on the ladder at 10⁵, at 17× the proof bytes. The 169 at `W = 0` (300 s,
+  8-way): D-0132 §6 (b). All outputs under `fataepyc-06:/scratch/arthur/wave43-t2-out/`
+  (`none-step3`, `w0-156b`, `w8-156`, `d0028`, `w0-169`, `gate`, `suites`, `runtest`;
+  `run156.sh`, `d0028.sh`, `run169.sh`, `gate44.sh` are the drivers, each with `results.tsv` and
+  `driver.log`). Nothing is left running.
+- **Deviations from D-0130, all recorded in D-0132 §2 and §5**: every fact's atom stays in the
+  row (no unit cited, so the derived clause IS the trace clause, under a decision as at the root);
+  an order variable in a mixed row goes through a `rup` bridge pair; `Linear_term` instead of
+  `Weaken_declared`; `ia` instead of `e`; the floor over a bits objective is derived; two more
+  scopes held (`int_eq_reif`/`int_ne_reif`, `bool2int`); B2-before-B1 is accepted by the checker
+  (the lane is a measurement).
+- **For T3**: `Ne`'s release (D-0130 §7.4) and the two extra holds; `int_times`/`int_div`'s case
+  split posts one reified Boolean per value of `y`, so carpet-cutting's `.opb` is still the wall at
+  `W = 0` (1.08 GB of rows in 300 s) -- bits shrink each row, not the row count; nearest-neighbour
+  links were never stressed by a gap (D-0031's seven models at `W = 0` are the test); the
+  three-line pruning and the level markers are bytes T4 may want back.
+- **Trap met twice this wave**: `~/.local/bin/veripb` (a dead Python shim) shadows
+  `~/.cargo/bin/veripb` when `.local/bin` is first on `PATH`; name the cargo binary in a driver.
 
 ## Wave 42 merged and gated, 2026-11-13 (orchestrator)
 
