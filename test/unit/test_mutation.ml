@@ -469,9 +469,16 @@ type built = { pbp : string; opb : string; fired : bool }
    encoding and the row ids. Factored out of [solve_to_proof] because
    [rows_that_refute_alone] must certify the SAME .opb the lanes are run against -- a
    second copy of this that drifted would certify a model nothing tests. *)
-let encoding_of m =
+let encoding_of ?(bits = false) m =
   let enc = Encoding.create () in
-  Array.iter (fun (n, lo, hi) -> Encoding.declare_int enc n ~lo ~hi) m.vars;
+  Array.iter
+    (fun (n, lo, hi) ->
+      (* M8-bits-encoding-T2: [~bits] puts every variable of width >= 2 on the bits
+         encoding, which is what `--bits-above 0` does through [Compile] for a model of
+         linear rows; width 0 and 1 stay order by rule. *)
+      if bits && hi - lo >= 2 then Encoding.declare_int_bits enc n ~lo ~hi
+      else Encoding.declare_int enc n ~lo ~hi)
+    m.vars;
   let named terms =
     List.map
       (fun (a, i) ->
@@ -491,7 +498,7 @@ let encoding_of m =
 
    [?mutation] arms one of the emitter's typed knobs for this build. A build without it
    goes through [Writer.create], which cannot corrupt anything. *)
-let solve_to_proof ?mutation ~dir ~name m =
+let solve_to_proof ?mutation ?(bits = false) ~dir ~name m =
   let opb = Filename.concat dir (name ^ ".opb") in
   let pbp = Filename.concat dir (name ^ ".pbp") in
   let store =
@@ -499,7 +506,7 @@ let solve_to_proof ?mutation ~dir ~name m =
       ~names:(Array.map (fun (n, _, _) -> n) m.vars)
       ~domains:(Array.map (fun (_, lo, hi) -> Domain.make lo hi) m.vars)
   in
-  let enc, row_ids = encoding_of m in
+  let enc, row_ids = encoding_of ~bits m in
   let oc = open_out opb in
   Encoding.write_opb ~comments:[ "test_mutation: " ^ name ] enc oc;
   close_out oc;
@@ -1477,6 +1484,55 @@ let run () =
         emitter_lane c ~build:build_chain ~expect:`Rejects
           ~knob:(knob ~site:site_chain_branch_claim Writer.Mutation.Strengthen_rhs)
           "strengthen-rhs");
+
+    (* -- M8-bits-encoding-T2: the bits arm's lines (D-0130 section 11, D-0132) ------
+       The same `2x + 2y = 7` as test/models/bits_search_unsat.fzn: x, y in 0..6 on 3
+       bits, refuted only under decisions, so every bits-arm `pol` is written under a
+       decision over a database that is not yet contradictory (D-0053/D-0066), every
+       atom's `red` pair is minted under a decision (D-0127's caveat), and the sparse
+       chain is walked by the nogoods. The five emitter knobs each corrupt one of the new
+       shapes and the checker must refuse ON THE DERIVATION, which for the `ia`-pinned
+       lines is "Expected constraint is not syntactically implied by the constraint at
+       the hint." and for the pair is the proofgoal wording -- both judgements, neither
+       a parse error (the banner check and [Rejected_unevaluated] guard the rest). *)
+    let bits_search =
+      {
+        vars = [| ("x", 0, 6); ("y", 0, 6) |];
+        rows = [ ([ (2, 0); (2, 1) ], 7); ([ (-2, 0); (-2, 1) ], -7) ];
+      }
+    in
+    let b, outcome = solve_to_proof ~bits:true ~dir ~name:"bits_search" bits_search in
+    check "bits_search: the solver refutes it (the instance is what we think it is)"
+      (outcome = Search.Unsat);
+    check "bits_search: the proof mints atoms (a red pair is on the page)"
+      (contains (read_file b.pbp) " red ");
+    let build_bits ~name ~mutation =
+      fst (solve_to_proof ~mutation ~bits:true ~dir ~name bits_search)
+    in
+    gated ~tag:"bits_search"
+      ~control:(fun () -> control_holds ~tag:"bits_search" ~proof:b.pbp)
+      ~declares:[ "pol-coeff"; "pol-cite"; "truncate"; "atom-rhs"; "link-cite" ]
+      (fun c ->
+        (* the division or a bridge's multiplier perturbed in a bits-arm pol *)
+        emitter_lane c ~build:build_bits ~expect:`Rejects
+          ~knob:(knob ~site:"bits trace" Writer.Mutation.Perturb_coefficient)
+          "pol-coeff";
+        (* B2 cited where B1 belongs (or the row for a bridge): a different live id *)
+        emitter_lane c ~build:build_bits ~expect:`Rejects
+          ~knob:(knob ~site:"bits trace" Writer.Mutation.Swap_citation)
+          "pol-cite";
+        (* the derivation thrown away, the label kept: the ia must refuse *)
+        emitter_lane c ~build:build_bits ~expect:`Rejects
+          ~knob:(knob ~site:"bits trace" Writer.Mutation.Truncate_derivation)
+          "truncate";
+        (* the pair's degree raised by one: B1's goal under its own witness fails *)
+        emitter_lane c ~build:build_bits ~expect:`Rejects
+          ~knob:(knob ~site:"atom " Writer.Mutation.Strengthen_rhs)
+          "atom-rhs";
+        (* a sparse-chain link citing the wrong definition *)
+        emitter_lane c ~build:build_bits ~expect:`Rejects
+          ~knob:(knob ~site:"link " Writer.Mutation.Swap_citation)
+          "link-cite");
 
     (* -- the harness's own guards -------------------------------------------- *)
     (* A mutation that rewrote nothing would make every lane green against the control's

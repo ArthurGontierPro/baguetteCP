@@ -2349,7 +2349,29 @@ let record_improving ctx store stats (b : bnb) (asn : assignment) : [ `Continue 
     | Maximise -> (value >= o.o_decl_hi, Lit.ge o.o_name (value + 1))
   in
   if at_limit then (
-    b.b_floor <- Some cid;
+    (* M8-bits-encoding-T2 (D-0132 section 2.6): over a BITS objective the improving
+       constraint at the floor is `Σ 2^i obj_bit_i <= -1` (or `>= 2^n`-ish for a
+       maximisation), which is NOT contradictory on its own -- the bound row is what
+       refutes it -- and `conclusion BOUNDS` checks the cited constraint syntactically.
+       Measured: opt_max_sat at W = 0 was refused at the conclusion ("Expected
+       constraint is not syntactically implied by the constraint at the hint") until
+       this line was written. So the floor's contradiction is DERIVED, `pol @soli @lb +`
+       (a minimisation) or `pol @soli @ub +` (a maximisation), to `0 >= 1`, pinned, and
+       that id is what the conclusion cites. Over the ladder the improving constraint
+       is contradictory by itself (a count above the rungs), and nothing changes. *)
+    let enc = ctx.Justify.encoding in
+    let floor_id =
+      if Encoding.n_bits_vars enc > 0 && Encoding.is_bits enc o.o_name then
+        Justify.with_level ctx 0 (fun () ->
+            let w = ctx.Justify.writer in
+            let lb, ub = Encoding.bound_lines enc w o.o_name in
+            let row = match o.o_dir with Minimise -> lb | Maximise -> ub in
+            Writer.pol_concluding w ~origin:"M8-T2 objective floor over bits"
+              ~claim:(Baguette_proof.Opb.clause [])
+              Writer.Pol.(add (id cid) (id row)))
+      else cid
+    in
+    b.b_floor <- Some floor_id;
     `Proved)
   else
     (* M8-bits-encoding-T2 (D-0130 section 9): over a bits objective the improving
