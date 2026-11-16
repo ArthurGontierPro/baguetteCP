@@ -116,6 +116,7 @@ let decode_bound (l : Lit.t) =
   match l.Lit.v with
   | Lit.Ge (_, v) -> if l.Lit.positive then v else v - 1
   | Lit.Eq (_, v) -> v
+  | Lit.Bit _ -> invalid_arg "decode_bound: a bit is not a bound"
 
 (* The largest value a Linear row's term list can attain: each literal is 0/1, so a
    term with coefficient [a] contributes at most [max a 0]. A row whose own terms can

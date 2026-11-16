@@ -630,7 +630,7 @@ let test_proof () =
    Both halves are asserted below. Asserting only the second would let the returned
    constant drift freely (nothing reads it today); asserting only the first would not
    notice if [Encoding]'s expansion changed shape. *)
-let var_of (l : Lit.t) = match l.Lit.v with Lit.Ge (n, _) | Lit.Eq (n, _) -> n
+let var_of (l : Lit.t) = Lit.owner l.Lit.v
 
 let mentions name c =
   List.exists (fun (_, l) -> String.equal (var_of l) name) (Opb.terms c)

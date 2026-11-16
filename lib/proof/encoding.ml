@@ -5,7 +5,18 @@
    docs/PROOF-FORMAT.md section 3 is normative here, and this module is the only
    place that is allowed to know the shape of the encoding:
 
-   - every integer variable gets the *order* encoding, eagerly, in the .opb;
+   - every integer variable gets the *order* encoding, eagerly, in the .opb -- UNLESS it
+     is declared wider than `--bits-above W` and its scope is eligible, in which case it
+     gets the *bits* encoding (M8-bits-encoding-T2, D-0130, D-0132): `bit_length (hi - lo)`
+     Booleans `x_bit_i` for `x - lo`, two bound rows and NO ladder. Its order atoms
+     `x_ge_v` keep their names and are minted into the .pbp on demand, at level 0, by a
+     `red` pair ([ensure_atom]); the rows that mention it carry `a * 2^i` on `x_bit_i`
+     ([linear_terms_int_lin_le]). The fork is [ivar.repr], and the four functions that
+     read it -- [declare_int_bits], [linear_terms_int_lin_le], [assignment_lits_of],
+     [ensure_atom]/[bound_lines] -- are the whole of what knows there are two shapes on
+     the proof side; lib/core/justify.ml and lib/core/trace.ml are the two on the core
+     side. Eligibility (width AND scope) is lib/flatzinc/compile.ml's, computed from the
+     model before any declaration;
    - the *direct* encoding is introduced lazily, into the .pbp, with [red], only for
      the variables a disequality / element / all_different propagator touches;
    - exactly-one over the direct encoding is *derived* from the channelling, never
@@ -222,6 +233,8 @@ type dvar = {
   d_fwd : (int, cid) Hashtbl.t;
 }
 
+module IMap = Map.Make (Int)
+
 type ivar = {
   name : string;
   lo : int;
@@ -243,7 +256,22 @@ type ivar = {
      See [declare_int] (M7-T11). *)
   hole_rows : (int, cid) Hashtbl.t;
   mutable direct : dvar option;
+  (* M8-bits-encoding-T2 (D-0130 section 4, D-0132). [Order] is every variable at
+     `--bits-above none` and every ineligible one; [Bits] carries the bit count and the
+     ids of the two bound rows `@lb` (`Σ 2^i x_bit_i >= 0`) and `@ub`
+     (`-Σ 2^i x_bit_i >= -(hi - lo)`), consecutive by construction. *)
+  repr : repr;
+  (* v -> the ids (B1, B2) of the atom `x_ge_v` minted by [ensure_atom]: for a bits
+     variable the `red` pair, for an order variable the `rup` bridge pair (D-0132
+     section 2.2). An immutable map, so an atom-less variable costs nothing. *)
+  mutable atoms : (cid * cid) IMap.t;
+  (* An ORDER variable's `rup Σ x_ge_w >= 0` / `rup Σ ~x_ge_w >= 0`, minted once by
+     [bound_lines] when a mixed-row derivation first weakens it (D-0132 section 2.2). A
+     bits variable's bound lines are its `.opb` rows. *)
+  mutable bound_lines : (cid * cid) option;
 }
+
+and repr = Order | Bits of { n : int; lb_row : cid; ub_row : cid }
 
 (* M6-T11 (D-0085). The two tables keyed on a FlatZinc identifier, specialised to
    [string]: the generic [Hashtbl] compares keys with the polymorphic [compare] (a C call
@@ -310,7 +338,7 @@ module Occurs = struct
     | [] -> false
     | (c, d) :: rest -> (c <= v && v <= d) || (c <= v && covered v rest)
 
-  type owner = { mutable ge : ranges; mutable eq : ranges }
+  type owner = { mutable ge : ranges; mutable eq : ranges; mutable bit : ranges }
   type t = { tbl : owner Names.t; (* keyed by the SANITISED owner *) mutable count : int }
 
   let create () = { tbl = Names.create 64; count = 0 }
@@ -320,7 +348,7 @@ module Occurs = struct
     match Names.find_opt t.tbl key with
     | Some o -> o
     | None ->
-        let o = { ge = []; eq = [] } in
+        let o = { ge = []; eq = []; bit = [] } in
         Names.add t.tbl key o;
         o
 
@@ -331,9 +359,19 @@ module Occurs = struct
       o.ge <- merge a b o.ge;
       t.count <- t.count + n)
 
+  (* The bits x_bit_a .. x_bit_b of one declaration, in O(1) like a ladder's interval
+     (M8-bits-encoding-T2). *)
+  let add_bit_range t x a b =
+    if a <= b then (
+      let o = owner t x in
+      let n = b - a + 1 - overlap a b o.bit in
+      o.bit <- merge a b o.bit;
+      t.count <- t.count + n)
+
   let add_var t (v : Lit.pbvar) =
     match v with
     | Lit.Ge (x, k) -> add_range t x k k
+    | Lit.Bit (x, k) -> add_bit_range t x k k
     | Lit.Eq (x, k) ->
         let o = owner t x in
         if not (covered k o.eq) then (
@@ -344,7 +382,10 @@ module Occurs = struct
     match Names.find_opt t.tbl (Lit.sanitize (Lit.owner v)) with
     | None -> false
     | Some o -> (
-        match v with Lit.Ge (_, k) -> covered k o.ge | Lit.Eq (_, k) -> covered k o.eq)
+        match v with
+        | Lit.Ge (_, k) -> covered k o.ge
+        | Lit.Eq (_, k) -> covered k o.eq
+        | Lit.Bit (_, k) -> covered k o.bit)
 end
 
 (* Where a committed row goes. *)
@@ -417,8 +458,24 @@ type t = {
          below sorts by declaration). The determinism lane is what would catch a
          regression here. *)
   alo : (string, cid) Hashtbl.t;
-      (* x -> the id of the at-least-one line [derive_at_least_one] wrote for it,
-         populated by [start_proof] alongside the direct encoding itself. *)
+  (* x -> the id of the at-least-one line [derive_at_least_one] wrote for it,
+     populated by [start_proof] alongside the direct encoding itself. *)
+  (* M8-bits-encoding-T2. What the bits arm cost, for `--stats` (D-0130 section 10):
+     declarations on bits and their bound rows; eligible-by-width variables held back
+     by scope, per family ([note_held_back], written by [Compile]); and on the proof
+     side the atoms minted, the sparse-chain links, the order bridge pairs and the order
+     bound lines, each a level-0 line nothing retires before the conclusion's sweep. *)
+  mutable bits_vars : int;
+  mutable bits_rows : int;
+  mutable held_back_rev : (string * int) list; (* family -> count, newest family first *)
+  mutable n_atoms : int;
+  mutable n_links : int;
+  mutable n_bridges : int;
+  mutable n_bound_lines : int;
+  (* Set by [close_atoms] once a root contradiction is on the page: a `red` after that
+     is accepted whatever its witness (D-0053), so [ensure_atom] raises instead
+     (D-0130 section 5.4). *)
+  mutable atoms_closed : bool;
 }
 
 (* The encoding the CLI is currently building, for the REACTIVE guard alone (M7-T8).
@@ -456,6 +513,14 @@ let create () =
     ladder_clauses = 0;
     widest = None;
     direct_values = 0;
+    bits_vars = 0;
+    bits_rows = 0;
+    held_back_rev = [];
+    n_atoms = 0;
+    n_links = 0;
+    n_bridges = 0;
+    n_bound_lines = 0;
+    atoms_closed = false;
   }
 
 let create () =
@@ -635,6 +700,16 @@ let limit_of_string ~what s =
         | Some n when n >= 0 -> Some n
         | _ -> raise (Bad_limit (what, s)))
 
+(* M8-bits-encoding-T2 (D-0130 section 10): `--bits-above W`, `BAGUETTE_BITS_ABOVE`.
+   [None] (the default) is the order encoding everywhere -- today's solver, byte for
+   byte. [Some k] puts every ELIGIBLE variable of width > k on bits; width 0 and 1 stay
+   order by rule ([wants_bits]), so `0` and `1` are the same set. Eligibility by scope is
+   [Compile]'s and is checked there; this ref answers the width half only. *)
+let bits_above : int option ref = ref None
+
+let bits_above_string () =
+  match !bits_above with None -> "none" | Some n -> string_of_int n
+
 let limits_from_env () =
   let get name r =
     match Sys.getenv_opt name with
@@ -643,7 +718,8 @@ let limits_from_env () =
   in
   get "BAGUETTE_MAX_ORDER_WIDTH" order_width_limit;
   get "BAGUETTE_MAX_DIRECT_VALUES" direct_values_limit;
-  get "BAGUETTE_WIDTH_WARN" width_warn_threshold
+  get "BAGUETTE_WIDTH_WARN" width_warn_threshold;
+  get "BAGUETTE_BITS_ABOVE" bits_above
 
 (* [lo <= hi] is a precondition. [hi - lo] is not always representable -- min_int..0 is
    a legal pair of 63-bit ints whose width is not one -- so the comparison never
@@ -664,6 +740,12 @@ let width_opt ~lo ~hi =
   if lo >= 0 || hi < 0 then Some (hi - lo)
   else if hi <= max_int + lo then Some (hi - lo)
   else None
+
+(* The width half of eligibility: declared width >= 2 and above the threshold. *)
+let wants_bits ~lo ~hi =
+  match (!bits_above, width_opt ~lo ~hi) with
+  | Some k, Some w -> w >= 2 && w > k
+  | _ -> false
 
 (* True when this declaration will be refused. Two independent reasons, and only one of
    them is a budget:
@@ -700,6 +782,9 @@ type cost = {
   c_widest : (string * int * int) option; (* the single widest declared domain *)
   c_direct_values : int; (* values materialised into direct encodings *)
   c_constraints : int; (* .opb lines, i.e. ids minted *)
+  c_bits_vars : int; (* M8-bits-encoding-T2: variables on the bits encoding *)
+  c_bits_rows : int; (* their bound rows, 2 per variable *)
+  c_held_back : (string * int) list; (* eligible by width, held by scope: family, count *)
 }
 
 let cost t =
@@ -708,6 +793,30 @@ let cost t =
     c_widest = t.widest;
     c_direct_values = t.direct_values;
     c_constraints = t.n;
+    c_bits_vars = t.bits_vars;
+    c_bits_rows = t.bits_rows;
+    c_held_back = List.rev t.held_back_rev;
+  }
+
+(* [Compile] says a variable was eligible by width and held back by [family]'s scope
+   (D-0130 section 3.4); one call per (variable, family). *)
+let note_held_back t family =
+  let rec bump = function
+    | [] -> [ (family, 1) ]
+    | (f, n) :: rest when String.equal f family -> (f, n + 1) :: rest
+    | e :: rest -> e :: bump rest
+  in
+  t.held_back_rev <- bump t.held_back_rev
+
+(* The proof-side counters (D-0130 section 10), read after the proof is written. *)
+type atom_stats = { a_atoms : int; a_links : int; a_bridges : int; a_bound_lines : int }
+
+let atom_stats t =
+  {
+    a_atoms = t.n_atoms;
+    a_links = t.n_links;
+    a_bridges = t.n_bridges;
+    a_bound_lines = t.n_bound_lines;
   }
 
 let widest_width = function None -> 0 | Some (_, lo, hi) -> hi - lo
@@ -1108,6 +1217,9 @@ let declare_int_gen t x ~holes ~lo ~hi =
       ladder_base = t.n + 1;
       hole_rows = Hashtbl.create 4;
       direct = None;
+      repr = Order;
+      atoms = IMap.empty;
+      bound_lines = None;
     }
   in
   Names.replace t.ints x v;
@@ -1153,6 +1265,92 @@ let declare_int_with_holes t x ~holes ~lo ~hi = declare_int_gen t x ~holes ~lo ~
 (* A FlatZinc [var bool] is the order encoding on [0, 1]: one variable, b_ge_1. *)
 let declare_bool t x = declare_int t x ~lo:0 ~hi:1
 
+(* ---------------------------------------------------------------------------
+   M8-bits-encoding-T2: the BITS encoding of one variable (D-0130 section 4, D-0132)
+   ---------------------------------------------------------------------------
+
+   For [x] declared over [lo, hi] with width [hi - lo >= 2] and [n = bit_length width]
+   (the least n with 2^n > width):
+
+     x_bit_i   for 0 <= i < n          bit i of (x - lo)
+     @lb_x     +1 x_bit_0 +2 x_bit_1 ... +2^(n-1) x_bit_(n-1) >= 0              x >= lo
+     @ub_x     -1 x_bit_0 -2 x_bit_1 ... -2^(n-1) x_bit_(n-1) >= -(hi - lo)     x <= hi
+
+   The bits are the OFFSET from [lo], unsigned: that is D-0010's own currency, the same
+   fold [linear_terms_int_lin_le] performs for the order expansion (`x = lo + Σ ...`), so
+   a negative [lo] is in a row's constant and there is no sign bit. Both bound rows are
+   always posted, even where one is trivially true (`@lb` always is; `@ub` is when
+   [width = 2^n - 1]), so that a derivation weakens a bits term in either direction by
+   ONE citation whatever the width. No ladder, no hole rows, no `x_ge_v` in the .opb at
+   all: an atom `[x >= v]` is a proof-level object, minted by [ensure_atom].
+
+   The caller decides eligibility. WIDTH is [wants_bits]; SCOPE is [Compile]'s (D-0130
+   section 3.4): a variable mentioned by any row that names its order literals per value
+   cannot be on bits, because the .opb is closed before the first proof line (I-X5) and a
+   `red` whose atom already occurs in a model row has a goal the fresh-atom witness does
+   not discharge. This function checks only what it can see: width >= 2 and no holes. *)
+let bit_length width =
+  let rec go n = if 1 lsl n > width then n else go (n + 1) in
+  go 1
+
+(* The weighted bit literals of [x]: (2^i, x_bit_i) for 0 <= i < n. *)
+let bit_terms x n = List.init n (fun i -> (1 lsl i, Lit.bit x i))
+
+let declare_int_bits t x ~lo ~hi =
+  if lo > hi then raise (Empty_domain x);
+  (match width_opt ~lo ~hi with
+  | None -> raise (Width_too_large (x, lo, hi))
+  | Some w when w < 2 ->
+      invalid_arg
+        (Printf.sprintf
+           "Encoding.declare_int_bits: `%s` has width %d; width 0 and 1 stay on the \
+            order encoding by rule (D-0130 section 3.4) and the caller should not have \
+            asked"
+           x w)
+  | Some _ -> ());
+  (match Names.find_opt t.ints x with
+  | Some v when v.lo = lo && v.hi = hi && v.repr <> Order -> raise Exit
+  | Some _ -> raise (Redeclared x)
+  | None -> ());
+  let width = hi - lo in
+  let n = bit_length width in
+  check_encoding_budget t ~what:x ~kind:"bits bound rows" ~blo:lo ~bhi:hi ~adds:2;
+  check_heap_at t ~what:x ~blo:lo ~bhi:hi;
+  (match t.widest with
+  | Some (_, wlo, whi) when whi - wlo >= width -> ()
+  | _ -> t.widest <- Some (x, lo, hi));
+  Occurs.add_bit_range t.occurs x 0 (n - 1);
+  note_renamed t x;
+  let terms = bit_terms x n in
+  let lb_row = commit t (Opb.ge terms 0) in
+  let ub_row = commit t (Opb.le terms width) in
+  assert (ub_row = lb_row + 1);
+  t.bits_vars <- t.bits_vars + 1;
+  t.bits_rows <- t.bits_rows + 2;
+  let v =
+    {
+      name = x;
+      lo;
+      hi;
+      ladder_base = lb_row;
+      hole_rows = Hashtbl.create 1;
+      direct = None;
+      repr = Bits { n; lb_row; ub_row };
+      atoms = IMap.empty;
+      bound_lines = None;
+    }
+  in
+  Names.replace t.ints x v;
+  Names.replace t.taken (Lit.sanitize x) ();
+  t.decl_rev <- x :: t.decl_rev
+
+let declare_int_bits t x ~lo ~hi = try declare_int_bits t x ~lo ~hi with Exit -> ()
+let is_bits t x = match (find t x).repr with Bits _ -> true | Order -> false
+let n_bits_vars t = t.bits_vars
+
+(* The bit count of a bits variable; [None] for an order one. *)
+let bits_n t x = match (find t x).repr with Bits { n; _ } -> Some n | Order -> None
+
 (* The id of the hole clause  x >= h -> x >= h+1,  if [h] was declared a hole. *)
 let hole_id t x h = Hashtbl.find_opt (find t x).hole_rows h
 
@@ -1172,7 +1370,11 @@ let lt t x value = le t x (value - 1)
 (* The id of the consistency constraint  x >= v+1 -> x >= v. *)
 let consistency_id t x value =
   let v = find t x in
-  if v.lo < value && value < v.hi then Some (v.ladder_base + (value - v.lo - 1)) else None
+  match v.repr with
+  | Bits _ -> None (* no ladder: the chain is minted on demand, [ensure_atom] *)
+  | Order ->
+      if v.lo < value && value < v.hi then Some (v.ladder_base + (value - v.lo - 1))
+      else None
 
 (* ---------------------------------------------------------------------------
    Direct encoding, introduced lazily with [red]
@@ -1203,6 +1405,18 @@ let ne t x value =
    Reversing this order makes VeriPB reject the definition. *)
 let ensure_direct t w x =
   let v = find t x in
+  (match v.repr with
+  | Bits _ ->
+      (* A guard, not a path: every family that asks for the direct encoding holds its
+         scope back from bits (D-0130 section 3.4), so a bits variable never reaches here
+         from [Compile]. Channelling `x_eq_v` to two on-demand atoms is D-0130 section 14's
+         question 6 and is not designed. *)
+      invalid_arg
+        (Printf.sprintf
+           "Encoding.ensure_direct: `%s` is on the bits encoding, which has no direct \
+            encoding (D-0130 section 3.4; its scope should have held it back)"
+           x)
+  | Order -> ());
   match v.direct with
   | Some d -> d
   | None ->
@@ -1310,6 +1524,197 @@ let retire_direct t w x =
 let retire_all_direct t w = List.iter (fun x -> retire_direct t w x) (vars t)
 
 (* ---------------------------------------------------------------------------
+   M8-bits-encoding-T2: the on-demand atom, and the bridges an ORDER variable needs
+   beside one (D-0130 section 5, D-0132 sections 1 and 2)
+   ---------------------------------------------------------------------------
+
+   THE PAIR. For a bits variable [x] and [lo < v <= hi], with [k = v - lo] and
+   [K = 2^n - k]:
+
+     @B1 red +1 x_bit_0 ... +2^(n-1) x_bit_(n-1)  +k ~x_ge_v  >= k : x_ge_v -> 0 ;   x_ge_v -> x >= v
+     @B2 red +1 ~x_bit_0 ... +2^(n-1) ~x_bit_(n-1) +K x_ge_v  >= K : x_ge_v -> 1 ;   x >= v -> x_ge_v
+
+   written AT LEVEL 0 ([Writer.with_level w 0], as every learned constraint is, D-0045's
+   addendum: an atom minted under a decision is still an atom after the backtrack) and
+   memoised per (x, v). B1 goes first, under the witness that falsifies the fresh atom,
+   which satisfies it outright while nothing else mentions the atom; B2 second, under the
+   witness that satisfies it, whose one goal is B1's image and is discharged by B2's own
+   negation. The reverse order is ALSO accepted by VeriPB 3.0.2 (D-0132 section 1, probe
+   p6: for a fresh atom the two halves are symmetric), so the order here is a convention,
+   not a checker fact. The flipped witness is refused, on a satisfiable model with the
+   atom undecided, at "Proofgoal #1 could not be autoproven" (probe p4) -- and ONLY then:
+   D-0127's B2 finding is that a `red` over a contradictory database, or one whose atom
+   the model decides, is accepted whatever its witness (D-0053). [close_atoms] is the
+   structural guard: after a root contradiction nothing may mint.
+
+   THE SPARSE CHAIN. When [x_ge_v] is minted and [x_ge_u] is the nearest minted atom
+   below ([lo < u < v]) and [x_ge_t] the nearest above, two links tie it in, each from
+   the two definitions alone (D-0130 section 5.3):
+
+     pol @B1_v @B2_u + s (v - u + 1) d      ~x_ge_v \/ x_ge_u
+     pol @B1_t @B2_v + s (t - v + 1) d      ~x_ge_t \/ x_ge_v
+
+   [B1_v + B2_u] is [k_v ~x_ge_v + K_u x_ge_u >= v - u + 1]; saturation caps both
+   coefficients at [v - u + 1] (it can: [k_v >= v - u + 1] iff [u > lo], [K_u >= v - u
+   + 1] iff [v <= lo + 2^n - 1], both true of atoms); the division leaves the clause.
+   Each link is pinned by its clause through [Writer.pol_concluding] (`ia`), so a wrong
+   neighbour is refused where it is written. An older link the new atom lands inside
+   stays. The set of links is the ladder restricted to minted atoms, which is what a
+   nogood's RUP, a learned clause's RUP and [Learn.slot]'s subsumption read off the eager
+   ladder today; whether nearest neighbours are enough for every such walk is D-0130
+   section 14's question 2 and T3's measurement.
+
+   THE ORDER BRIDGE (D-0132 section 2.2). A derivation over a row with a bits term is a
+   `pol` in which every fact's atom is left in the row through its B1/B2 (lib/core/
+   justify.ml, [emit_bits_pruning]). An ORDER variable in such a row needs the same
+   shape, and its ladder supplies it: for [lo < v <= hi], [k = v - lo],
+   [K = (hi - lo) - k + 1],
+
+     @B1' rup +1 x_ge_(lo+1) ... +1 x_ge_hi  +k ~x_ge_v >= k ;    x_ge_v -> X' >= k
+     @B2' rup +1 ~x_ge_(lo+1) ... +1 ~x_ge_hi +K x_ge_v >= K ;    X' >= k -> x_ge_v
+
+   both RUP from the ladder alone (probe p1), written once at level 0 and memoised in the
+   same table. A `var bool`'s B1' is the tautology `+1 b_ge_1 +1 ~b_ge_1 >= 1`, which the
+   checker accepts and normalises. [bound_lines] is the matching pair for a term at its
+   DECLARED bound: a bits variable's are its `.opb` rows, an order variable's are
+   `rup Σ x_ge_w >= 0` / `rup Σ ~x_ge_w >= 0`, degree-0 lines the checker accepts (p1),
+   minted once. So every term of a mixed row is ONE citation whatever its width, and the
+   Θ(w) bytes an order variable costs are paid once per cited (x, v), not per pruning.
+
+   LIFETIME. Everything minted here is a level-0 id that no [w] retires and that
+   lib/core/search.ml's end-of-run sweep deletes with every other live id before the
+   conclusion (I-X2). There is no [retire_all_atoms]; the sweep is it. *)
+
+(* [x >= v] can be minted: strictly above the declared lower bound, at most the upper. *)
+let check_atom_value t x v =
+  let iv = find t x in
+  if v <= iv.lo || v > iv.hi then
+    invalid_arg
+      (Printf.sprintf
+         "Encoding.ensure_atom: `%s >= %d` is a constant over %d..%d (ge answers \
+          Holds/Fails first) and is never minted"
+         x v iv.lo iv.hi);
+  iv
+
+let close_atoms t = t.atoms_closed <- true
+let atoms_closed t = t.atoms_closed
+let neg_bit_terms x n = List.init n (fun i -> (1 lsl i, Lit.negate (Lit.bit x i)))
+
+let mint_bits_atom t w (iv : ivar) ~n v =
+  let x = iv.name in
+  let k = v - iv.lo in
+  let big_k = (1 lsl n) - k in
+  let atom = Lit.ge x v in
+  let origin = Printf.sprintf "atom %s>=%d" x v in
+  let b1 =
+    Writer.red w ~origin
+      ~witness:[ (atom.Lit.v, Writer.Zero) ]
+      (Opb.ge (bit_terms x n @ [ (k, Lit.negate atom) ]) k)
+  in
+  let b2 =
+    Writer.red w ~origin
+      ~witness:[ (atom.Lit.v, Writer.One) ]
+      (Opb.ge (neg_bit_terms x n @ [ (big_k, atom) ]) big_k)
+  in
+  t.n_atoms <- t.n_atoms + 1;
+  (* The two nearest minted neighbours, before this one joins the map. *)
+  let below = IMap.find_last_opt (fun u -> u < v) iv.atoms in
+  let above = IMap.find_first_opt (fun u -> u > v) iv.atoms in
+  let link ~hi:(vh, (b1h, _)) ~lo:(vl, (_, b2l)) =
+    (* ~x_ge_vh \/ x_ge_vl, from B1 of the higher and B2 of the lower. *)
+    ignore
+      (Writer.pol_concluding w
+         ~origin:(Printf.sprintf "link %s>=%d -> %s>=%d" x vh x vl)
+         ~claim:(Opb.clause [ Lit.negate (Lit.ge x vh); Lit.ge x vl ])
+         Writer.Pol.(div (saturate (add (id b1h) (id b2l))) (vh - vl + 1))
+        : cid);
+    t.n_links <- t.n_links + 1
+  in
+  (match below with Some (u, pair) -> link ~hi:(v, (b1, b2)) ~lo:(u, pair) | None -> ());
+  (match above with Some (u, pair) -> link ~hi:(u, pair) ~lo:(v, (b1, b2)) | None -> ());
+  (b1, b2)
+
+let order_rungs (iv : ivar) =
+  List.init (iv.hi - iv.lo) (fun i -> Lit.ge iv.name (iv.lo + 1 + i))
+
+let mint_order_bridge t w (iv : ivar) v =
+  let x = iv.name in
+  let k = v - iv.lo in
+  let big_k = iv.hi - iv.lo - k + 1 in
+  let atom = Lit.ge x v in
+  let rungs = order_rungs iv in
+  let origin = Printf.sprintf "bridge %s>=%d" x v in
+  let b1 =
+    Writer.rup w ~origin
+      (Opb.ge (List.map (fun l -> (1, l)) rungs @ [ (k, Lit.negate atom) ]) k)
+  in
+  let b2 =
+    Writer.rup w ~origin
+      (Opb.ge (List.map (fun l -> (1, Lit.negate l)) rungs @ [ (big_k, atom) ]) big_k)
+  in
+  t.n_bridges <- t.n_bridges + 1;
+  (b1, b2)
+
+(* The ids (B1, B2) of the atom [x >= v] -- minted now if this is the first time it is
+   named, memoised otherwise. Precondition: no root contradiction is on the page. *)
+let ensure_atom t w x v =
+  let iv = check_atom_value t x v in
+  match IMap.find_opt v iv.atoms with
+  | Some pair -> pair
+  | None ->
+      if t.atoms_closed then
+        invalid_arg
+          (Printf.sprintf
+             "Encoding.ensure_atom: `%s >= %d` asked for after the root contradiction -- \
+              a `red` is vacuous over a contradictory database (D-0053, D-0130 section \
+              5.4)"
+             x v);
+      let pair =
+        Writer.with_level w 0 (fun () ->
+            match iv.repr with
+            | Bits { n; _ } -> mint_bits_atom t w iv ~n v
+            | Order -> mint_order_bridge t w iv v)
+      in
+      iv.atoms <- IMap.add v pair iv.atoms;
+      pair
+
+(* Has [x >= v] been minted? (Tests and the audit; emission never needs to ask.) *)
+let has_atom t x v = IMap.mem v (find t x).atoms
+
+(* The ids (LB, UB) of the two lines that weaken a term of [x] at its declared lower /
+   upper bound out of a mixed row: `X' >= 0` and `-X' >= -(hi - lo)` over the
+   variable's own literals. Precondition: width >= 1 (a fixed variable has no term). *)
+let bound_lines t w x =
+  let iv = find t x in
+  match iv.repr with
+  | Bits { lb_row; ub_row; _ } -> (lb_row, ub_row)
+  | Order -> (
+      match iv.bound_lines with
+      | Some pair -> pair
+      | None ->
+          if iv.hi <= iv.lo then
+            invalid_arg
+              (Printf.sprintf
+                 "Encoding.bound_lines: `%s` is fixed at %d and has no literal to weaken"
+                 x iv.lo);
+          let rungs = order_rungs iv in
+          let origin = Printf.sprintf "bound lines %s" x in
+          let pair =
+            Writer.with_level w 0 (fun () ->
+                let lb =
+                  Writer.rup w ~origin (Opb.ge (List.map (fun l -> (1, l)) rungs) 0)
+                in
+                let ub =
+                  Writer.rup w ~origin
+                    (Opb.ge (List.map (fun l -> (1, Lit.negate l)) rungs) 0)
+                in
+                (lb, ub))
+          in
+          t.n_bound_lines <- t.n_bound_lines + 1;
+          iv.bound_lines <- Some pair;
+          pair)
+
+(* ---------------------------------------------------------------------------
    M4-T1: the direct encoding a global constraint asks for up front
    --------------------------------------------------------------------------- *)
 
@@ -1382,11 +1787,19 @@ let assignment_lits_of t x value =
   let v = find t x in
   if value < v.lo || value > v.hi then invalid_arg "Encoding.assignment_lits_of";
   let order =
-    List.init
-      (max 0 (v.hi - v.lo))
-      (fun i ->
-        let k = v.lo + 1 + i in
-        if value >= k then Lit.ge x k else Lit.negate (Lit.ge x k))
+    match v.repr with
+    | Bits { n; _ } ->
+        (* The bits of (value - lo); the atoms follow by unit propagation on their
+           pairs, as the `_neN` selectors follow from the rows (D-0130 section 9). *)
+        let k = value - v.lo in
+        List.init n (fun i ->
+            if (k lsr i) land 1 = 1 then Lit.bit x i else Lit.negate (Lit.bit x i))
+    | Order ->
+        List.init
+          (max 0 (v.hi - v.lo))
+          (fun i ->
+            let k = v.lo + 1 + i in
+            if value >= k then Lit.ge x k else Lit.negate (Lit.ge x k))
   in
   let direct =
     match v.direct with
@@ -1513,7 +1926,14 @@ let linear_terms_int_lin_le t terms =
         let v = find t x in
         let const = const + (a * v.lo) in
         let vterms =
-          List.init (max 0 (v.hi - v.lo)) (fun i -> (a, Lit.ge x (v.lo + 1 + i)))
+          match v.repr with
+          | Order ->
+              List.init (max 0 (v.hi - v.lo)) (fun i -> (a, Lit.ge x (v.lo + 1 + i)))
+          | Bits { n; _ } ->
+              (* M8-bits-encoding-T2 (D-0130 section 6): the same fold of [a * lo] into
+                 the constant, and [a * 2^i] on bit i in place of [a] on every rung. One
+                 row holds both shapes. *)
+              List.init n (fun i -> (a * (1 lsl i), Lit.bit x i))
         in
         (acc @ vterms, const))
     ([], 0) terms
@@ -1547,7 +1967,14 @@ let row_magnitudes t terms =
         let v = find t x in
         let m = Arith.abs a in
         let s = Arith.add s (Arith.mul m (max (Arith.abs v.lo) (Arith.abs v.hi))) in
-        let w = Arith.add w (Arith.mul m (Arith.sub v.hi v.lo)) in
+        (* A bits term's coefficient mass is |a| * (2^n - 1) < 2 |a| * width (D-0130
+           section 6): the envelope below grows by at most W and the cap does not move. *)
+        let span =
+          match v.repr with
+          | Order -> Arith.sub v.hi v.lo
+          | Bits { n; _ } -> (1 lsl n) - 1
+        in
+        let w = Arith.add w (Arith.mul m span) in
         (s, w))
     (0, 0) terms
 

@@ -336,7 +336,12 @@ let expect_accepted ~title ~dir ~opb ~pbp =
    than an argument. *)
 let lit_holds assign (l : Lit.t) =
   let v = List.assoc (Lit.owner l.Lit.v) assign in
-  let raw = match l.Lit.v with Lit.Ge (_, k) -> v >= k | Lit.Eq (_, k) -> v = k in
+  let raw =
+    match l.Lit.v with
+    | Lit.Ge (_, k) -> v >= k
+    | Lit.Eq (_, k) -> v = k
+    | Lit.Bit (_, i) -> (v lsr i) land 1 = 1 (* unreached: no bits variable here *)
+  in
   if l.Lit.positive then raw else not raw
 
 let clause_holds assign lits = List.exists (lit_holds assign) lits

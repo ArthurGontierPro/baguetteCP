@@ -308,7 +308,7 @@ let bounds_before store ~at v =
    unreachable-and-safe rather than unreachable-and-absent. *)
 let falsified_before store ~at (l : Lit.t) =
   match l.Lit.v with
-  | Lit.Eq _ -> false
+  | Lit.Eq _ | Lit.Bit _ -> false
   | Lit.Ge (name, k) -> (
       match Store.var_named store name with
       | None -> false
@@ -344,7 +344,7 @@ let falsified_at_scan store (l : Lit.t) =
          entries on [v] the reconstructed domain does not move, so no other position
          can be the first. *)
   match l.Lit.v with
-  | Lit.Eq _ -> Store.no_support
+  | Lit.Eq _ | Lit.Bit _ -> Store.no_support
   | Lit.Ge (name, k) -> (
       match Store.var_named store name with
       | None -> Store.no_support
@@ -384,7 +384,7 @@ let falsified_at_scan store (l : Lit.t) =
 let falsified_at store (l : Lit.t) =
   let at =
     match l.Lit.v with
-    | Lit.Eq _ -> Store.no_support
+    | Lit.Eq _ | Lit.Bit _ -> Store.no_support
     | Lit.Ge (name, k) -> (
         match Store.var_named store name with
         | None -> Store.no_support

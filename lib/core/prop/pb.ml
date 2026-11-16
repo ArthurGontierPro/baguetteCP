@@ -212,7 +212,7 @@ let finish terms degree =
    the caller, not a defensive arm. *)
 let atom_of store ~(decl : string -> (int * int) option) (l : Lit.t) : atom option =
   match l.Lit.v with
-  | Lit.Eq _ -> None
+  | Lit.Eq _ | Lit.Bit _ -> None (* a bit is not a bound: decline (D-0130 section 7.5) *)
   | Lit.Ge (nm, k) -> (
       match (Store.var_named store nm, decl nm) with
       | Some x, Some (lo, hi) ->

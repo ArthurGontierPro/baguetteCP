@@ -509,7 +509,7 @@ let at_root t i = t.n_levels = 0 || i < t.marks.(0).trail_mark
    literal answers [false]; see [agreement_holds]. *)
 let root_holds t (l : Lit.t) =
   match l.Lit.v with
-  | Lit.Eq _ -> false
+  | Lit.Eq _ | Lit.Bit _ -> false (* a bit is never a bound fact (D-0130 section 3.2) *)
   | Lit.Ge (x, k) -> (
       match var_named t x with
       | None -> false

@@ -107,6 +107,7 @@ let test_lit_rendering_is_the_reference () =
   let ref_var_name = function
     | Lit.Ge (x, v) -> Printf.sprintf "%s_ge_%s" (ref_sanitize x) (ref_suffix v)
     | Lit.Eq (x, v) -> Printf.sprintf "%s_eq_%s" (ref_sanitize x) (ref_suffix v)
+    | Lit.Bit (x, i) -> Printf.sprintf "%s_bit_%s" (ref_sanitize x) (ref_suffix i)
   in
   let ref_to_string (l : Lit.t) =
     if l.Lit.positive then ref_var_name l.Lit.v else "~" ^ ref_var_name l.Lit.v
@@ -599,6 +600,7 @@ let lit_truth assign (l : Lit.t) =
     match v with
     | Lit.Ge (x, k) -> List.assoc x assign >= k
     | Lit.Eq (x, k) -> List.assoc x assign = k
+    | Lit.Bit (x, i) -> (List.assoc x assign lsr i) land 1 = 1
   in
   if l.Lit.positive then base else not base
 

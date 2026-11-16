@@ -7,6 +7,12 @@
 type pbvar =
   | Ge of string * int (* x_ge_v : x >= v, the order encoding *)
   | Eq of string * int (* x_eq_v : x = v,  the direct encoding *)
+  | Bit of string * int
+(* x_bit_i : bit i of (x - lo), the BITS encoding (M8-bits-encoding-T2, D-0130 section 4,
+   D-0132). A bits variable has no x_ge_v in the .opb; its order atoms keep the name
+   x_ge_v and are minted into the proof on demand by [Encoding.ensure_atom]. Nothing in
+   lib/core/ ever builds a [Bit]: it is a term of a row the .opb carries and of an
+   assignment the checker is handed, and that is all. *)
 
 type t = { v : pbvar; positive : bool }
 
@@ -37,29 +43,33 @@ let sanitize name =
   if needs_sanitize name then String.map (fun c -> if ident_char c then c else '_') name
   else name
 
-(* [neg ^ sanitize x ^ mid ^ int_suffix v], in one allocation. [mid] is "_ge_"/"_eq_". *)
+(* [neg ^ sanitize x ^ mid ^ int_suffix v], in one allocation. [mid] is "_ge_"/"_eq_"/
+   "_bit_"; its length is read, not assumed, since M8-bits-encoding-T2 added the five-byte
+   one. *)
 let render ~neg x mid v =
   let x = sanitize x in
   let digits = string_of_int (abs v) in
-  let lx = String.length x and ld = String.length digits in
+  let lx = String.length x and ld = String.length digits and lm = String.length mid in
   let p = if neg then 1 else 0 in
   let m = if v < 0 then 1 else 0 in
-  let b = Bytes.create (p + lx + 4 + m + ld) in
+  let b = Bytes.create (p + lx + lm + m + ld) in
   if neg then Bytes.unsafe_set b 0 '~';
   Bytes.unsafe_blit_string x 0 b p lx;
-  Bytes.unsafe_blit_string mid 0 b (p + lx) 4;
-  if v < 0 then Bytes.unsafe_set b (p + lx + 4) 'm';
-  Bytes.unsafe_blit_string digits 0 b (p + lx + 4 + m) ld;
+  Bytes.unsafe_blit_string mid 0 b (p + lx) lm;
+  if v < 0 then Bytes.unsafe_set b (p + lx + lm) 'm';
+  Bytes.unsafe_blit_string digits 0 b (p + lx + lm + m) ld;
   Bytes.unsafe_to_string b
 
 let var_name = function
   | Ge (x, v) -> render ~neg:false x "_ge_" v
   | Eq (x, v) -> render ~neg:false x "_eq_" v
+  | Bit (x, i) -> render ~neg:false x "_bit_" i
 
 let to_string l =
   match l.v with
   | Ge (x, v) -> render ~neg:(not l.positive) x "_ge_" v
   | Eq (x, v) -> render ~neg:(not l.positive) x "_eq_" v
+  | Bit (x, i) -> render ~neg:(not l.positive) x "_bit_" i
 
 (* x >= v, as a literal. *)
 let ge x v = pos (Ge (x, v))
@@ -68,6 +78,9 @@ let ge x v = pos (Ge (x, v))
 let le x v = neg (Ge (x, v + 1))
 let eq x v = pos (Eq (x, v))
 let ne x v = neg (Eq (x, v))
+
+(* Bit [i] of (x - lo) is set. Only [Encoding] builds one (M8-bits-encoding-T2). *)
+let bit x i = pos (Bit (x, i))
 
 (* ---------------------------------------------------------------------------
    Additions (M1-T4). Everything above this line is frozen: lib/core/explanation.ml
@@ -80,15 +93,17 @@ let ne x v = neg (Eq (x, v))
 let bool_true x = ge x 1
 let bool_false x = le x 0
 
+(* Ge < Eq < Bit across kinds (D-0130 section 3.2: [Bit] sorts after [Eq]). *)
+let kind_rank = function Ge _ -> 0 | Eq _ -> 1 | Bit _ -> 2
+
 let var_compare a b =
   match (a, b) with
-  | Ge (x, i), Ge (y, j) | Eq (x, i), Eq (y, j) ->
+  | Ge (x, i), Ge (y, j) | Eq (x, i), Eq (y, j) | Bit (x, i), Bit (y, j) ->
       (* [x == y] first (M6-T11): literals of one variable share its identifier string,
          so the common case skips the C call. Same order: [String.compare x x = 0]. *)
       let c = if x == y then 0 else String.compare x y in
       if c <> 0 then c else Int.compare i j
-  | Ge _, Eq _ -> -1
-  | Eq _, Ge _ -> 1
+  | _ -> Int.compare (kind_rank a) (kind_rank b)
 
 let var_equal a b = var_compare a b = 0
 
@@ -99,10 +114,13 @@ let compare a b =
 let equal a b = compare a b = 0
 
 (* The FlatZinc identifier a literal is about, before sanitisation. *)
-let owner = function Ge (x, _) -> x | Eq (x, _) -> x
-let value = function Ge (_, v) -> v | Eq (_, v) -> v
-let is_order = function Ge _ -> true | Eq _ -> false
-let is_direct = function Ge _ -> false | Eq _ -> true
+let owner = function Ge (x, _) | Eq (x, _) | Bit (x, _) -> x
+
+(* For a [Bit] this is the bit INDEX, not a value of the variable. *)
+let value = function Ge (_, v) | Eq (_, v) | Bit (_, v) -> v
+let is_order = function Ge _ -> true | Eq _ | Bit _ -> false
+let is_direct = function Eq _ -> true | Ge _ | Bit _ -> false
+let is_bit = function Bit _ -> true | Ge _ | Eq _ -> false
 
 (* True when [sanitize] had to rewrite the identifier, i.e. the .opb name and the
    FlatZinc name differ and the mapping must be dumped as a comment. *)

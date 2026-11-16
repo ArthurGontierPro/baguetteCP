@@ -323,7 +323,7 @@ let ladder_form t =
     | [] -> Some (List.sort compare acc, const)
     | { coeff; lit } :: rest -> (
         match lit.Lit.v with
-        | Lit.Eq _ -> None
+        | Lit.Eq _ | Lit.Bit _ -> None (* no ladder form over a bit: D-0130 section 7.5 *)
         | Lit.Ge (x, v) ->
             if lit.Lit.positive then go ((x, v, coeff) :: acc) const rest
             else go ((x, v, -coeff) :: acc) (const + coeff) rest)

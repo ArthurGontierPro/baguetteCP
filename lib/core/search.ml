@@ -2102,7 +2102,7 @@ let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_conve
 let global_of store ~(decl : string -> (int * int) option) ~cid (l : Lit.t) :
     global option =
   match l.Lit.v with
-  | Lit.Eq _ -> None
+  | Lit.Eq _ | Lit.Bit _ -> None
   | Lit.Ge (nm, k) -> (
       match (Store.var_named store nm, decl nm) with
       | Some x, Some (lo, hi) ->
