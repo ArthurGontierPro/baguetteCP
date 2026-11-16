@@ -1575,13 +1575,16 @@ let weakened_row_only (e : Explanation.t) =
                 match Explanation.force t with
                 | Explanation.Model_row _ -> true
                 | _ -> false)
-            | Explanation.Weaken _ | Explanation.Defining _ -> false)
+            | Explanation.Weaken _ | Explanation.Defining _ | Explanation.Linear_term _ ->
+                false)
           summands
       in
       List.length rows = 1
       && List.for_all
            (function
              | Explanation.Weaken _ -> true
+             (* An uncited term is the declared-range weakening (D-0132 section 2.4). *)
+             | Explanation.Linear_term r -> r.lt_cited = []
              | Explanation.Term (_, t) -> (
                  match Explanation.force t with
                  | Explanation.Model_row _ -> true

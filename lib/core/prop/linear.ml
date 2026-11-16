@@ -409,15 +409,17 @@ let fact_of_snap s =
    the chain. D-0022 settled the same trade the other way round for a clause folded in as
    a bound, and for the same reason: weakening it away would erase the signal and still
    not close. *)
+(* M8-bits-encoding-T2 (D-0132 section 2.4): the term goes into the [Combine] as the
+   snapshot itself, [Explanation.Linear_term], and the two renderings above -- the axiom
+   chain [Order_reason.weaken_declared] builds for [cited = []], one [Term] at
+   [abs coeff] per cited explanation otherwise -- are now lib/core/justify.ml's
+   [emit_summand], byte for byte for the order encoding. Nothing here knows which
+   encoding carries [s.name], which is D-0130 section 3.1's contract made a type. *)
 let summands_of_snap s =
-  match s.cited with
-  | [] ->
-      let lits, _ =
-        Order_reason.weaken_declared ~coeff:s.coeff ~name:s.name ~decl_lo:s.decl_lo
-          ~decl_hi:s.decl_hi
-      in
-      [ Explanation.weaken lits ]
-  | cited -> List.map (fun e -> Explanation.term (Checked.abs s.coeff) e) cited
+  [
+    Explanation.linear_term ~coeff:s.coeff ~name:s.name ~decl_lo:s.decl_lo
+      ~decl_hi:s.decl_hi ~value:s.value s.cited;
+  ]
 
 (* All terms except the one at [idx] (by position, not value - a variable could in
    principle appear twice, and each occurrence is excluded independently). *)
@@ -628,15 +630,32 @@ let opposite_rests_on store (tm : term) =
    it, whose proof is a single [pol]. So this function is reachable only from a library
    caller today, which is the other half of why breaking it moved no artefact, and it is
    why a test/models/ instance cannot stand in for the unit test above. *)
-let explain_cross_conflict ~opposite new_bound_expl =
+(* M8-bits-encoding-T2 (D-0132 section 2.4): the shape changed from "this row's own
+   derivation plus the opposite bound's derivation, added" to the same [Combine] every
+   other conflict of this module builds -- the row, every term as a [Linear_term], and
+   the crossed term AT THE OPPOSITE BOUND with [cited = opposite], divisor 1. The two
+   are the same contradiction (the crossed term's own coefficient cancels against the
+   opposite derivation either way, and the degree lands on [|a| (l - u) > 0]), and the
+   new one is what the bits arm can render: every term is a bridge citation, including
+   the crossed one. The ORDER rendering of a cross conflict is not written at all since
+   D-0131 (a cross conflict always carries the opposite bound as a fact, so its
+   [Trace.conflict_line] is a `rup`), so no artefact moves at `--bits-above none`.
+   [opposite_value] is read at the push, never inside the thunk -- the same discipline as
+   [~opposite] below. *)
+let explain_cross_conflict ~base ~snaps ~crossed:(tm : term) ~name ~opposite_value
+    ~opposite =
   Explanation.deferred (fun () ->
       match opposite with
       | _ :: _ ->
-          (* One [Term] per reason the opposing bound rests on -- the entry that moved
-             it, plus any hole its settle walked over (M1-T44, [Store.lo_reasons]). *)
+          (* One cited derivation per reason the opposing bound rests on -- the entry
+             that moved it, plus any hole its settle walked over (M1-T44,
+             [Store.lo_reasons]). *)
           Explanation.combine
-            (Explanation.term 1 new_bound_expl
-            :: List.map (fun e -> Explanation.term 1 e) opposite)
+            ((Explanation.term 1 base :: List.concat_map summands_of_snap snaps)
+            @ [
+                Explanation.linear_term ~coeff:tm.coeff ~name ~decl_lo:tm.decl_lo
+                  ~decl_hi:tm.decl_hi ~value:opposite_value opposite;
+              ])
             1
       | [] ->
           (* The opposite bound is still declared, yet contradicts a fresh derivation
@@ -680,16 +699,20 @@ let propagate t store =
     (* [tm : term] and [idx]'s [tm] below are annotated because [source_snap] is declared
        after [term] and also has a [coeff] field, so OCaml's field disambiguation picks
        [source_snap] for a bare [tm.coeff]. *)
-    let cross_conflict (tm : term) snaps expl =
+    let cross_conflict (tm : term) snaps =
       (* The row's own reason, plus the opposing bound this new one ran into. Both halves
          are snapshotted here, not inside the thunk, for the reason
          [explain_cross_conflict] above spells out. *)
+      let opposite_fact = opposite_bound_fact store tm in
       conflict :=
         Some
           (Store.conflict store
              (Reason.because ~concludes:None
-                (List.map fact_of_snap snaps @ [ opposite_bound_fact store tm ])
-                (explain_cross_conflict ~opposite:(opposite_rests_on store tm) expl)))
+                (List.map fact_of_snap snaps @ [ opposite_fact ])
+                (explain_cross_conflict ~base:(base_explanation t) ~snaps ~crossed:tm
+                   ~name:(Store.name store tm.x)
+                   ~opposite_value:(Reason.fact_value opposite_fact)
+                   ~opposite:(opposite_rests_on store tm))))
     in
     List.iteri
       (fun idx ((tm : term), m) ->
@@ -717,11 +740,7 @@ let propagate t store =
                 justified_at ~concludes (base_explanation t) h t.terms ~exclude tm.coeff
               in
               match Store.set_hi store tm.x new_hi j with
-              | Store.Conflict _ ->
-                  let snaps = row_snaps_at h t.terms ~exclude in
-                  cross_conflict tm snaps
-                    (justified_of_snaps ~concludes (base_explanation t) snaps tm.coeff)
-                      .Reason.justification
+              | Store.Conflict _ -> cross_conflict tm (row_snaps_at h t.terms ~exclude)
               | Store.Changed | Store.Unchanged -> ())
           else
             let new_lo = ceildiv max_term tm.coeff in
@@ -737,11 +756,7 @@ let propagate t store =
                 justified_at ~concludes (base_explanation t) h t.terms ~exclude divisor
               in
               match Store.set_lo store tm.x new_lo j with
-              | Store.Conflict _ ->
-                  let snaps = row_snaps_at h t.terms ~exclude in
-                  cross_conflict tm snaps
-                    (justified_of_snaps ~concludes (base_explanation t) snaps divisor)
-                      .Reason.justification
+              | Store.Conflict _ -> cross_conflict tm (row_snaps_at h t.terms ~exclude)
               | Store.Changed | Store.Unchanged -> ())
       (List.combine t.terms mins);
     (match !conflict with Some c -> result := Propagator.Conflict c | None -> ());

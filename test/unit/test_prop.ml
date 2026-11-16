@@ -161,50 +161,76 @@ let verify_one_summand ?(strict = true) test_name store bounds idx coeff summand
   let neg_lits, neg_c =
     Order_reason.weaken_declared ~coeff:(-mag) ~name ~decl_lo ~decl_hi
   in
-  let check_weaken lits =
+  (* M8-bits-encoding-T2 (D-0132 section 2.4): the summand is now the term's snapshot,
+     [Explanation.Linear_term], and the weakening chain is what the ORDER arm renders it
+     as -- [Explanation.lt_axiom_lits], asserted against [Order_reason.weaken_declared]
+     literal for literal, at the row's own coefficient magnitude. *)
+  let check_weaken (r : Explanation.linear_term) =
+    let lits = Explanation.lt_axiom_lits r in
+    let pos = List.map snd pos_lits and negs = List.map snd neg_lits in
     expect
-      (lits = pos_lits || lits = neg_lits)
+      (lits = pos || lits = negs)
       (Printf.sprintf
          "%s: weaken chain matches Order_reason.weaken_declared (coeff magnitude %d)" name
          mag);
-    let contribution = if lits = pos_lits then pos_c else neg_c in
     expect
-      (max_attainable lits >= contribution)
+      (abs r.Explanation.lt_coeff = mag)
+      (Printf.sprintf "%s: the term carries the row's coefficient magnitude %d" name mag);
+    let contribution = if lits = pos then pos_c else neg_c in
+    expect
+      (max_attainable (List.map (fun l -> (mag, l)) lits) >= contribution)
       (Printf.sprintf "%s: weaken chain can attain its own contribution" name)
+  in
+  let not_linear_term s =
+    expect false
+      (Printf.sprintf "%s: int_lin_le builds only Linear_term summands, got %s" name
+         (Explanation.summand_to_string s))
   in
   (if not strict then
      match summand with
-     | Explanation.Weaken lits -> check_weaken lits
-     | Explanation.Term (c, _cited) ->
-         expect (c = mag)
-           (Printf.sprintf "%s: cited derived bound is scaled by abs(coeff) = %d" name mag)
-     | Explanation.Defining _ ->
-         expect false
-           (Printf.sprintf "%s: int_lin_le does not build a Defining summand" name)
+     | Explanation.Linear_term r -> (
+         expect
+           (String.equal r.Explanation.lt_name name)
+           (name ^ ": the term names its variable");
+         match r.Explanation.lt_cited with
+         | [] -> check_weaken r
+         | _ :: _ ->
+             expect
+               (abs r.Explanation.lt_coeff = mag)
+               (Printf.sprintf "%s: cited derived bound is scaled by abs(coeff) = %d" name
+                  mag))
+     | (Explanation.Weaken _ | Explanation.Term _ | Explanation.Defining _) as s ->
+         not_linear_term s
    else
      let d = Store.get store (var idx) in
      let still_declared =
        if coeff >= 0 then Domain.lo d <= decl_lo else Domain.hi d >= decl_hi
      in
-     match (summand, still_declared) with
-     | Explanation.Weaken lits, true -> check_weaken lits
-     | Explanation.Term (c, _cited), false ->
-         expect (c = mag)
-           (Printf.sprintf "%s: cited derived bound is scaled by abs(coeff) = %d" name mag)
-     | Explanation.Weaken _, false ->
-         expect false
-           (Printf.sprintf
-              "%s: bound is derived (tighter than declared) but the summand weakens \
-               instead of citing"
-              name)
-     | Explanation.Term _, true ->
-         expect false
-           (Printf.sprintf
-              "%s: bound is still declared but the summand cites instead of weakening"
-              name)
-     | Explanation.Defining _, _ ->
-         expect false
-           (Printf.sprintf "%s: int_lin_le does not build a Defining summand" name));
+     match summand with
+     | Explanation.Linear_term r -> (
+         expect
+           (String.equal r.Explanation.lt_name name)
+           (name ^ ": the term names its variable");
+         match (r.Explanation.lt_cited, still_declared) with
+         | [], true -> check_weaken r
+         | _ :: _, false ->
+             expect
+               (abs r.Explanation.lt_coeff = mag)
+               (Printf.sprintf "%s: cited derived bound is scaled by abs(coeff) = %d" name
+                  mag)
+         | [], false ->
+             expect false
+               (Printf.sprintf
+                  "%s: bound is derived (tighter than declared) but the summand weakens \
+                   instead of citing"
+                  name)
+         | _ :: _, true ->
+             expect false
+               (Printf.sprintf
+                  "%s: bound is still declared but the summand cites instead of weakening"
+                  name))
+     | (Explanation.Weaken _ | Explanation.Term _ | Explanation.Defining _) as s ->
+         not_linear_term s);
   !ok
 
 (* Verify a whole [Combine (summands, divisor)] against the row it came from:
@@ -3674,6 +3700,12 @@ let rec render_deep e =
            (List.map
               (function
                 | Explanation.Term (c, e) -> Printf.sprintf "%d*%s" c (render_deep e)
+                | Explanation.Linear_term r ->
+                    Printf.sprintf "term(%+d*%s@%d%s)" r.Explanation.lt_coeff
+                      r.Explanation.lt_name r.Explanation.lt_value
+                      (match r.Explanation.lt_cited with
+                      | [] -> ""
+                      | es -> ", cites " ^ String.concat " + " (List.map render_deep es))
                 | (Explanation.Weaken _ | Explanation.Defining _) as w ->
                     Explanation.summand_to_string w)
               summands))

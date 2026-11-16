@@ -529,7 +529,8 @@ let reverse_owners t e =
              | Explanation.Weaken lits -> List.map (fun (_, l) -> Lit.owner l.Lit.v) lits
              | Explanation.Defining (_, l) ->
                  if root_holds t l then [] else [ Lit.owner l.Lit.v ]
-             | Explanation.Term _ -> [])
+             | Explanation.Term _ -> []
+             | Explanation.Linear_term r -> if r.lt_cited = [] then [ r.lt_name ] else [])
            summands)
   | _ -> []
 

@@ -630,6 +630,7 @@ let cited_ids (e : Explanation.t) : int list =
   and summand = function
     | Explanation.Term (_, e) -> go e
     | Explanation.Weaken _ -> ()
+    | Explanation.Linear_term r -> List.iter go r.lt_cited
     (* M4-T7. A [Defining] cites the id of the line establishing a literal, resolved from
        [Justify]'s claim index at emit time -- which is exactly the trace-line citation
        the I-S4 discharge above says this module never makes, and which this function
