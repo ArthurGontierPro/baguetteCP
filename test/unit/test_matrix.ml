@@ -492,20 +492,44 @@ let scan_linear obs (lin : Linear.t) store =
 
 (* Which kind of conflict this is, from the shape D-0013 gives each one:
      - a row's own slack:  Combine (Term (1, Model_row _) :: _, 1)
-     - a cross-row clash:  Combine ([Term (1, _); Term (1, _)], 1) with neither a row
-   The classification is structural rather than a flag set by the code under test. *)
+     - a cross-row clash:  the same Combine, in which the crossed term's [Linear_term]
+       CITES a derivation of this same row -- the bound this row pushed earlier in the
+       same pass, that its later push ran into.
+   Until M8-bits-encoding-T2 the cross clash was its own shape, `Combine ([Term (1, _);
+   Term (1, _)], 1)` with neither a row (D-0013 step 5's "add the two derivations");
+   D-0132 section 2.4 rebuilt it as the row over every term with the crossed one at its
+   opposite bound, which is the same contradiction and the one the bits arm can render,
+   so the two conflicts now share a shape and differ only in what the crossed term
+   cites. The classification is still structural rather than a flag set by the code
+   under test. *)
 let classify_conflict obs store e =
   obs.conflict_levels <- Store.level store :: obs.conflict_levels;
   let rows, clause_in_pol = walk_explanation e in
   if clause_in_pol then obs.clause_in_pol <- true;
   if List.length rows > 1 then obs.cross_instance_cite <- true;
+  let same_row_cited row summands =
+    List.exists
+      (function
+        | Explanation.Linear_term r ->
+            List.exists
+              (fun c ->
+                match Explanation.force c with
+                | Explanation.Combine
+                    (Explanation.Term (1, Explanation.Model_row r') :: _, _) ->
+                    r' = row
+                | _ -> false)
+              r.Explanation.lt_cited
+        | _ -> false)
+      summands
+  in
   match Explanation.force e with
   | Explanation.Clause _ -> obs.ne_conflict <- true
-  | Explanation.Combine (Explanation.Term (1, Explanation.Model_row _) :: _, 1) ->
-      obs.slack_conflict <- true;
-      if Store.level store = 0 then obs.root_slack <- true
-  | Explanation.Combine ([ Explanation.Term (1, _); Explanation.Term (1, _) ], 1) ->
-      obs.cross_conflict <- true
+  | Explanation.Combine
+      ((Explanation.Term (1, Explanation.Model_row row) :: _ as summands), 1) ->
+      if same_row_cited row summands then obs.cross_conflict <- true
+      else (
+        obs.slack_conflict <- true;
+        if Store.level store = 0 then obs.root_slack <- true)
   | _ -> ()
 
 (* M1-T31/M1-T50: a decision's trail entry carries [Explanation.Decision l], and [l]
@@ -2173,8 +2197,9 @@ let cross_row_cell () =
   check "white-box/cross-row: the duplicate-variable row is refuted"
     (outcome = Search.Unsat);
   check
-    "white-box/cross-row: and it is refuted through D-0013 step 5, the two-summand \
-     divisor-1 Combine -- the only route that reaches Linear's cross-conflict path"
+    "white-box/cross-row: and it is refuted through Linear's cross-conflict path -- the \
+     row over every term, the crossed one citing this row's own earlier push (D-0013 \
+     step 5 as D-0132 section 2.4 rebuilt it)"
     obs2.cross_conflict;
   (match run_veripb ~dir ~opb (read_file pbp) with
   | None -> fail "white-box/cross-row: veripb not found -- nothing was checked"
