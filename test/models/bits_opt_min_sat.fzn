@@ -1,0 +1,12 @@
+% M8-bits-encoding-T2 (D-0132, D-0130 section 9): branch and bound with the OBJECTIVE on
+% bits. `min:` is the bits expansion of x; every improving solution is a `soli` over the
+% bits, followed by the bridge `pol @soli @B1 + s` that turns the improving constraint
+% into the atom `~x_ge_v` the search installs as its bound; the optimum x = 6 is strictly
+% inside the declared domain, so the tree is exhausted under the last improvement and
+% `conclusion BOUNDS 6` cites the root's `rup >= 1`.
+% x + y >= 10 and 2y - x <= 3 give x >= 6 (x = 6, y = 4).
+var 0..20: x :: output_var;
+var 0..20: y :: output_var;
+constraint int_lin_le([-1, -1], [x, y], -10);
+constraint int_lin_le([-1, 2], [x, y], 3);
+solve minimize x;

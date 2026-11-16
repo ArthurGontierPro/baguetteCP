@@ -1,0 +1,10 @@
+% M8-bits-encoding-T2 (D-0132): a refutation that needs SEARCH over bits variables.
+% 2x + 2y = 7 has no integer solution, but bounds reasoning only sees x <= 3, y <= 3;
+% every branch on x fixes y to a half-integer and fails under a decision. So: decisions
+% whose atoms are minted at level 0 before the level opens, bits-arm pruning lines under
+% decisions deriving `claim \/ ~facts`, conflict lines, nogoods RUP over the atoms, and
+% the sparse chain between x's and y's minted atoms.
+var 0..6: x :: output_var;
+var 0..6: y :: output_var;
+constraint int_lin_eq([2, 2], [x, y], 7);
+solve satisfy;

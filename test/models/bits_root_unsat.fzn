@@ -1,0 +1,10 @@
+% M8-bits-encoding-T2 (D-0132): D-0028's root-infeasible shape at a width the suite
+% allows. At `--bits-above 0` both variables are on 5 bits (width 20 -> 2^5 > 20) and the
+% conflict is the row's slack below zero on the declared box, with no fact at all: the
+% bits arm's `pol @row @lb_x + @lb_y +` closes at `0 >= 1`, pinned by `ia >= 1`, and the
+% root closes on `rup >= 1` (D-0131). At `--bits-above none` it is lin_unsat's shape.
+var 0..20: x :: output_var;
+var 0..20: y :: output_var;
+constraint int_lin_le([1, 1], [x, y], 50);
+constraint int_lin_le([-1, -1], [x, y], -41);
+solve satisfy;

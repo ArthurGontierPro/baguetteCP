@@ -1,0 +1,12 @@
+% M8-bits-encoding-T2 (D-0132 section 2.2): a MIXED row -- x on bits, y held on the order
+% encoding by its int_ne scope, z on bits -- so the bits-arm `pol` cites an order
+% variable's bridge pair (`rup Σ y_ge_w + k ~y_ge_v >= k`) and degree-0 bound lines beside
+% the bits terms' `red` pairs. x >= 19 forces y + z <= 3 from x + y + z <= 22; y <> 2.
+var 0..20: x :: output_var;
+var 0..5: y :: output_var;
+var 0..3: z :: output_var;
+constraint int_lin_le([1, 1, 1], [x, y, z], 22);
+constraint int_lin_le([-1], [x], -19);
+constraint int_lin_le([-1, -1], [y, z], -3);
+constraint int_ne(y, 2);
+solve satisfy;

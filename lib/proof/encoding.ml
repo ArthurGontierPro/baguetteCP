@@ -1658,9 +1658,14 @@ let mint_order_bridge t w (iv : ivar) v =
     Writer.rup w ~origin
       (Opb.ge (List.map (fun l -> (1, l)) rungs @ [ (k, Lit.negate atom) ]) k)
   in
+  (* A width-1 variable (a `var bool`, the reifier of every big-M row) has one rung,
+     which IS the atom, so both halves are the tautology `+1 b_ge_1 +1 ~b_ge_1 >= 1`
+     and one line serves both directions. *)
   let b2 =
-    Writer.rup w ~origin
-      (Opb.ge (List.map (fun l -> (1, Lit.negate l)) rungs @ [ (big_k, atom) ]) big_k)
+    if iv.hi - iv.lo = 1 then b1
+    else
+      Writer.rup w ~origin
+        (Opb.ge (List.map (fun l -> (1, Lit.negate l)) rungs @ [ (big_k, atom) ]) big_k)
   in
   t.n_bridges <- t.n_bridges + 1;
   (b1, b2)

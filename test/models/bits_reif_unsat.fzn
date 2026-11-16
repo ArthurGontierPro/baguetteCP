@@ -1,0 +1,10 @@
+% M8-bits-encoding-T2 (D-0132 section 2.7): the reified linear inequality over a bits
+% variable -- every face of int_lin_le_reif is a Linear instance over a big-M row, so its
+% scope is eligible. b is forced true, so enforce-hold prunes x <= 5 through the FWD row
+% (a mixed row: x on bits, the reifier a bool on the ladder), against x >= 7.
+var 0..20: x :: output_var;
+var bool: b :: output_var;
+constraint int_lin_le_reif([1], [x], 5, b);
+constraint int_lin_le([-1], [x], -7);
+constraint bool_clause([b], []);
+solve satisfy;
