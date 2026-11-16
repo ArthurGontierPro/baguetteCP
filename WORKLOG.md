@@ -19,6 +19,7 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M8-bits-encoding-T4 baseline (the wave-43 weekend runs read: D-0133 + a D-0131 addendum) | `docs/DECISIONS.md` (D-0131 addendum and D-0133 appended at the bottom), `docs/ROADMAP.md` M8-T4 row (one clause), `WORKLOG.md`; laptop archive `~/mznc-archive/runs/wave43run-2026-11-13/` and `~/mznc-archive/runs/wave43-optcheck-2026-11-13/`; node `/scratch/arthur/wave43run/` and `/scratch/arthur/wave43-optcheck/` (proofs deleted after the archive is verified) | agent-remeasure2 (`wave43-read`) | 2026-11-16 |
 | M8-bits-encoding-T2 | `lib/proof/encoding.ml`, `lib/proof/lit.ml`, `lib/proof/opb.ml`, `lib/proof/writer.ml` (the `red` pair, level 0), `lib/flatzinc/compile.ml` (eligibility from scopes, D-0130 §3.4), `lib/core/explanation.ml` (`Weaken_declared`, D-0130 §8 is its record), `lib/core/justify.ml`, `lib/core/prop/linear.ml`, `lib/core/prop/order_reason.ml` if needed, `lib/core/trace.ml`, `bin/main.ml` (`--bits-above`, `--stats`), `test/unit/{test_proof,test_compile,test_justify,test_endtoend,test_mutation}.ml`, new `test/models/*bits*.fzn` + `test/expected/`, `docs/DECISIONS.md` (D-0132 appended), `docs/PROOF-FORMAT.md` §3 (bits naming, normative), `docs/ROADMAP.md` T2 row, `docs/ARCHITECTURE.md` §1 and `CLAUDE.md`'s map if a module is added, `docs/INVARIANTS.md` if an invariant is added | agent-t2 (`wave43-t2`) | 2026-11-13 |
 
 ## Cross-session requests
