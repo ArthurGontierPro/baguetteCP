@@ -1822,7 +1822,7 @@ constraint int_lin_ne([1, 1], [m, c], 4);
 constraint int_lin_le([1, 1], [h, e], 7);
 constraint int_eq_reif(r, s, f);
 constraint bool2int(f, q);
-constraint global_cardinality([g], [2], [cnt]);
+constraint fzn_global_cardinality([g], [2], [cnt]);
 constraint array_int_maximum(mx, [k, c]);
 solve satisfy;
 |}

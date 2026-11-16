@@ -1511,7 +1511,7 @@ let run () =
     in
     gated ~tag:"bits_search"
       ~control:(fun () -> control_holds ~tag:"bits_search" ~proof:b.pbp)
-      ~declares:[ "pol-coeff"; "pol-cite"; "truncate"; "atom-rhs"; "link-cite" ]
+      ~declares:[ "pol-coeff"; "pol-cite"; "truncate"; "link-cite" ]
       (fun c ->
         (* the division or a bridge's multiplier perturbed in a bits-arm pol *)
         emitter_lane c ~build:build_bits ~expect:`Rejects
@@ -1525,14 +1525,42 @@ let run () =
         emitter_lane c ~build:build_bits ~expect:`Rejects
           ~knob:(knob ~site:"bits trace" Writer.Mutation.Truncate_derivation)
           "truncate";
-        (* the pair's degree raised by one: B1's goal under its own witness fails *)
-        emitter_lane c ~build:build_bits ~expect:`Rejects
-          ~knob:(knob ~site:"atom " Writer.Mutation.Strengthen_rhs)
-          "atom-rhs";
         (* a sparse-chain link citing the wrong definition *)
         emitter_lane c ~build:build_bits ~expect:`Rejects
           ~knob:(knob ~site:"link " Writer.Mutation.Swap_citation)
           "link-cite");
+
+    (* The pair's lane needs an atom whose value the rows do NOT decide (D-0127's caveat,
+       D-0132 section 1's vacuity): on bits_search above, `2x + 2y = 7` refutes `x = 0`
+       by unit propagation alone, so a strengthened B1's goal (`X' >= 1` under its own
+       witness) is autoproven from the rows and the corruption is ACCEPTED -- measured
+       before this instance was written. Here x + y in 3..9 over 0..6 leaves x = 0
+       feasible; the search decides `x <= 0` first, minting x_ge_1's pair before the
+       level opens, and finds x = 0, y = 3 with no failed branch. The strengthened B1 is
+       judged at its own line: refused at the proofgoal wording, over a satisfiable
+       database that does not decide the atom. *)
+    let bits_sat =
+      {
+        vars = [| ("x", 0, 6); ("y", 0, 6) |];
+        rows = [ ([ (-1, 0); (-1, 1) ], -3); ([ (1, 0); (1, 1) ], 9) ];
+      }
+    in
+    let b, outcome = solve_to_proof ~bits:true ~dir ~name:"bits_sat" bits_sat in
+    check "bits_sat: the solver solves it (the instance is what we think it is)"
+      (match outcome with Search.Sat _ -> true | Search.Unsat -> false);
+    check "bits_sat: a decision minted an atom (a red pair is on the page)"
+      (contains (read_file b.pbp) " red ");
+    let build_bits_sat ~name ~mutation =
+      fst (solve_to_proof ~mutation ~bits:true ~dir ~name bits_sat)
+    in
+    gated ~tag:"bits_sat"
+      ~control:(fun () -> control_holds ~tag:"bits_sat" ~proof:b.pbp)
+      ~declares:[ "atom-rhs" ]
+      (fun c ->
+        (* the pair's degree raised by one: B1's goal under its own witness fails *)
+        emitter_lane c ~build:build_bits_sat ~expect:`Rejects
+          ~knob:(knob ~site:"atom " Writer.Mutation.Strengthen_rhs)
+          "atom-rhs");
 
     (* -- the harness's own guards -------------------------------------------- *)
     (* A mutation that rewrote nothing would make every lane green against the control's

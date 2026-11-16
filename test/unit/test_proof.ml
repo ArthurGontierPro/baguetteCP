@@ -3848,10 +3848,12 @@ let test_bits_mixed_row () =
   Encoding.declare_int e "y" ~lo:0 ~hi:3;
   (* 2x + y <= 20 with x = 3 + X': 2X' + Y' <= 14, i.e. the checker's `>=` form. *)
   let row = Encoding.expand_int_lin_le e [ (2, "x"); (1, "y") ] 20 in
+  (* [Opb.normalise] moves every negative coefficient onto the negated literal, so the
+     checker's form is `2 ~x_bit_0 + ... >= 2 * 15 + 3 - 14`. *)
   check_eq "bits: the mixed row carries a*2^i on the bits beside a on the rungs"
     ~expected:
-      "-2 x_bit_0 -4 x_bit_1 -8 x_bit_2 -16 x_bit_3 -1 y_ge_1 -1 y_ge_2 -1 y_ge_3 >= -14 \
-       ;"
+      "+2 ~x_bit_0 +4 ~x_bit_1 +8 ~x_bit_2 +16 ~x_bit_3 +1 ~y_ge_1 +1 ~y_ge_2 +1 ~y_ge_3 \
+       >= 19 ;"
     ~got:(Opb.constr_to_string row);
   let terms, const = Encoding.linear_terms_int_lin_le e [ (-3, "x") ] in
   check "bits: a negative coefficient negates the bit coefficients, lo in the constant"
