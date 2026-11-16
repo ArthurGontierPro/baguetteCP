@@ -11836,3 +11836,360 @@ matched under `*/work/`), the 214 `.fzn` and every table, log and `work/` direct
 `/scratch/arthur/wave42-rup-out/opt/` from 26 GB to 25 MB (the seven `.opb`/`.pbp`, verified and
 archived as the addendum says; its `.fzn`, `.out`, `.err`, `.solve.time`, `opt.tsv` and `main.exe`
 kept).
+## D-0132  M8-bits-encoding-T2: the bits encoding for `Linear` -- the design as it will be built, the checker facts measured first, and what deviates from D-0130
+
+**Status**: **IN PROGRESS, DESIGN SETTLED, NO CODE YET** (agent-t2, branch `wave43-t2`,
+2026-11-13). The session was wound down at Arthur's request before the first edit to `lib/`;
+this record is written so the next session starts at the code and not at the reading.
+Inputs read whole: D-0130 (every section and the 2026-11-13 addendum), D-0131 §1-§8, D-0127's
+caveat, the module headers and bodies of `encoding.ml`, `lit.ml`, `opb.ml`, `writer.ml`'s
+emission primitives, `explanation.ml`, `justify.ml`, `linear.ml`, `order_reason.ml`,
+`trace.ml`'s `emit`/`conflict_line`, `search.ml`'s root close / `record_improving` /
+`optimise`, `reason.ml`, `propagator.ml`'s `pb_row`, `compile.ml`'s declaration loop and
+`post_*` doors, `reif_lin_eq.ml`, `bool2int.ml`. Nothing in this record is measured on the
+solver; §1 is measured on the checker.
+
+### 1. Six checker facts, measured before writing (bench/bits_spike/probe_t2.sh, VeriPB 3.0.2 d5644ca4, fataepyc-06)
+
+Model: `x in 0..5` on 3 bits, `y in 0..3` on the ladder, `R: 2x + y <= 7` as the mixed row
+`-2 x_bit_0 -4 x_bit_1 -8 x_bit_2 -1 y_ge_1 -1 y_ge_2 -1 y_ge_3 >= -7`, the two bound rows, the
+two rungs. The pruning is `x <= 2` from the fact `y >= 2`.
+
+| probe | line(s) | verdict |
+|---|---|---|
+| p1 | the whole honest shape: `rup +1 y_ge_1 +1 y_ge_2 +1 y_ge_3 +2 ~y_ge_2 >= 2` (the ORDER bridge B1', `y_ge_2 -> Y' >= 2`), its B2' twin `+1 ~y_ge_1 +1 ~y_ge_2 +1 ~y_ge_3 +2 y_ge_2 >= 2`, the degree-0 lines `rup Σ y_ge_w >= 0` / `rup Σ ~y_ge_w >= 0`, the bool tautology `rup +1 b_ge_1 +1 ~b_ge_1 >= 1`, the `red` pair B1/B2 for `x_ge_3`, the pruning `pol @R @B1' 1 * + 2 d @B1_3 + s` with the pin `ia +1 ~x_ge_3 +1 ~y_ge_2 >= 1 : @pol`, `del` of the pol, a second atom `x_ge_1`, the sparse link `pol @B1_3 @B2_1 + s 3 d` pinned by `e +1 ~x_ge_3 +1 x_ge_1 >= 1`, and a consumer `rup` of all three atoms | **s VERIFIED** |
+| p2 | the pin claims a UNIT the derivation does not give (`ia +1 ~x_ge_3 >= 1 : @pol`) | **refused**: "Expected constraint is not syntactically implied by the constraint at the hint." |
+| p3 | B2 cited where B1 belongs in the pruning's `pol` | **refused**, same wording at the `ia` |
+| p4 | B1 under the flipped witness `x_ge_3 -> 1`, satisfiable model, atom undecided | **refused**: "Proofgoal #1 could not be autoproven. Please add an explicit subproof for proofgoal #1." |
+| p6 | B2 written BEFORE B1 | **accepted** -- for a fresh atom the pair is symmetric (each half is satisfied outright by its own witness, and the other's goal is discharged by the negation). D-0130 §5.1's "the order matters" is NOT a checker fact; the §11 lane "the pair with B2 before B1" is a measurement of symmetry, not a refusal, and must not be written as one |
+| c1 | the infeasible mixed row (`x in 2..5`, `2x + y <= 3`): `pol @R @lb_x 2 * + @olb 1 * +` to `0 >= 1`, `ia >= 1 : @pol`, `del`, `rup >= 1`, `conclusion UNSAT` | **s VERIFIED UNSATISFIABLE** |
+| c2 | the same model, `rup >= 1` alone (D-0131's `weakened_row_only` shape, over bits) | accepted HERE -- PB propagation over the row and `@ub` happens to close it -- but not in general (two PB rows over the same bits do not unit-propagate to a conflict), so the bits arm always writes the `pol` |
+
+p5 (an `ia` of a clause against a stronger unit) measured nothing: the unit was not RUP in
+that model. Not needed by the design below.
+
+### 2. The decisions, and where they deviate from D-0130
+
+1. **The bits-arm pruning line is ONE `pol` that derives EXACTLY the trace clause
+   `claim ∨ ¬facts`, with no unit cited and no recursion into any cited explanation.** Every
+   non-declared fact of the row, bits or order, is a citation of its bridge scaled by the
+   term's coefficient: `@B1_x_v |a| * +` for `x >= v` (leaves `|a|·k_v·~x_ge_v` in the row),
+   `@B2_x_(v+1) |a| * +` for `x <= v` (leaves `|a|·K_(v+1)·x_ge_(v+1)`); every declared-bound
+   term is `@lb_x |a| *` / `@ub_x |a| *`; then `|a_j| d`, then the pruned variable's own atom,
+   then `s`. The atoms' coefficients after the division are `ceil(|a_i| k_i / |a_j|) >= 1` and
+   the degree is `k_(u+1) - k_u = 1`, so saturation gives the clause with coefficient 1 on
+   every literal. This REPLACES D-0130 §7.1's table (cite the unit `@E (c·k_v) *`, leave only a
+   DECISION's atom in the row): citing the line that establishes a fact is wrong under a
+   decision (that line is a clause, so the derived clause would be `claim ∨ ¬(the facts of the
+   facts)`, a different clause, not a weakening), and leaving every atom in the row is uniform,
+   derives the trace clause itself, and makes D-0130 §14's open question 1 (`ia` of the trace
+   clause against a decision-only clause) disappear. A conflict is the same `pol` with divisor
+   1 and no atom step: `Σ |a_i| k_i ~F_i >= k`, `k >= 1`, saturated to `∨ ¬F_i`; with no facts
+   it is `0 >= k` and the close is D-0131's `rup >= 1` unchanged (c1).
+2. **An ORDER variable in a mixed row is rendered through the same shape, by a `rup` bridge
+   pair written once at level 0 and memoised per `(y, v)`**: B1' = `Σ_{w=lo+1}^{hi} y_ge_w +
+   k_v ~y_ge_v >= k_v`, B2' = `Σ ~y_ge_w + K_v y_ge_v >= K_v` with `K_v = width - k_v + 1`;
+   both are RUP from the ladder alone (p1). A declared-bound order term in a mixed row cites
+   `rup Σ y_ge_w >= 0` / `rup Σ ~y_ge_w >= 0`, also memoised per variable (p1). So a mixed-row
+   `pol` is O(terms) tokens whatever the order variables' widths; the Θ(w) bytes are paid once
+   per cited `(y, v)` as a `rup` line (a Θ(w) walk for the checker, once), not per pruning.
+   D-0130 §7.1 did not say what an order fact in a mixed row does; the axiom fold would have
+   derived something weaker than the claim.
+3. **The pin is `ia` through `Writer.pol_concluding`** (`pol`, `ia <clause> : @pol`, `del`),
+   not D-0130's `e`: it is the primitive that exists, its refusal wording is measured (p2, p3)
+   and it lets the derivation be stronger than the clause without failing. Three lines per
+   bits pruning against one `rup` in the order arm; T4 may drop the pin by measurement.
+4. **The order arm is untouched byte for byte**: a row with no bits term keeps D-0131's
+   emission; `Weaken_declared` is not added as D-0130 §8 names it. Instead ONE summand
+   constructor, `Linear_term of { coeff; name; decl_lo; decl_hi; value; cited : t list }` (the
+   per-term snapshot `Linear.summands_of_snap` already builds, as data), replaces both
+   `Weaken (Order_reason.weaken_declared ...)` and `Term (|coeff|, e)` for `Linear`'s terms.
+   `Justify.emit_summand` renders it for the order arm exactly as today (the axiom fold when
+   `cited = []`, one `Term` per cited explanation otherwise; a width-0 term renders to nothing,
+   as `Weaken []` did), so the `pol` text at `W = none` is byte-identical, and for the bits arm
+   as §2.1 says. `lits`/`owners`/`top_weaken_owners` see the same owners they see today
+   (`lits` enumerates the axiom literals; it is reached only by the debug-gated agreement
+   check). Reason for the reshaping: the bits arm needs each term's FACT (name, value,
+   direction), which a `Term (c, e)` does not carry and a `Weaken_declared` for the cited case
+   would have had to grow anyway. The cross-row conflict (`Linear.explain_cross_conflict`) is
+   rebuilt in the same shape, over every term with the crossed variable at its OPPOSITE bound
+   and `cited = opposite`; its order rendering is never written since D-0131 (a cross conflict
+   always carries a fact), so nothing moves at `W = none`.
+5. **`Trace` decides per entry, and the unit is the ROW's owners (D-0130 §2 refinement 1),
+   read from the REASON's scope** (`Reason.owners`, which includes the declared-bound terms)
+   plus the claim's owner, without forcing the justification. Order-only models short-circuit
+   on `Encoding.n_bits_vars = 0`. A bits-arm entry writes `Justify.emit_bits_pruning` (the
+   `pol`+`ia`+`del`), whose `ia` clause is built from the `Linear_term`s' own facts; when it
+   equals the trace clause (always, unless the claim settled past a hole, which only an order
+   variable in an `Ne` scope can do) its id IS the trace line; otherwise the ordinary `rup`
+   trace line follows it, RUP in sequence. `conflict_line` forks the same way and writes the
+   conflict `pol` even with no facts (c2), returning the `ia`'s id.
+6. **Atoms are minted inside `Justify.validate_lits`** (renamed in meaning, not in name: it
+   validates AND ensures), which is the choke point every clause, `rup`, `Defining` and
+   nogood already passes through; `Search` mints the two literals of a decision explicitly
+   (`branch`, `branch_assign`), and `record_improving` writes the `soli` bridge `pol @soli
+   @B1_obj_v + s` at level 0 and hands ITS id to `global_of`. `Learned.introduce`/`Learn` need
+   nothing: every literal they write came from a trace line or a decision.
+7. **Held back at T2, beyond D-0130 §3.4's list** (gcc, alldiff, element, maxmin, cumulative,
+   holes, `int_ne`/`int_lin_ne`): **`int_eq_reif`/`int_ne_reif`** (`reif_lin_eq.ml` justifies
+   with `Clause`s and punches holes) and **`bool2int`** (`Clause`-justified; its `x` is width 1
+   in practice). Eligible: `int_lin_le/eq`, `int_le/lt/eq`, `int_lin_le_reif`/`int_le_reif`
+   (`reif_lin_le.ml`'s faces are `Linear` instances; VERIFY the entailment face before
+   trusting this), `arith`'s rows. A `Linear` instance over a row with a bits term is packed
+   WITHOUT `~row:` (`pack_linear` gains a flag computed in `compile.ml`): `Linear.pb_row`
+   spells the order expansion and would hand PB analysis a row the `.opb` does not contain.
+8. **No `retire_all_atoms`**: the atom pairs, links, order bridges and bound lines are
+   level-0 ids, and `Search.solve`/`optimise`/`conclude_stopped` already sweep every live id
+   before the conclusion (I-X2 discharged there as for every other level-0 line). A
+   `no_more_atoms` flag set by `close_root_conflict` makes `ensure_atom` raise after a root
+   contradiction (D-0130 §5.4, D-0053).
+
+### 3. The plan, with coordinates (for the next session; commit after each step)
+
+1. `lit.ml`: `Bit of string * int`, rendered `x_bit_i` (`render` takes the marker's length);
+   `var_compare` Ge < Eq < Bit; `owner`/`value`; `is_order`/`is_direct` false. Then the
+   exhaustiveness sites: `ladder.ml:233`, `learn.ml:190`, `store.ml:512`, `learned.ml:326`,
+   `pb.ml:215`, `pb_analysis.ml:311/347/387`, `search.ml:2105` (each `Bit _ -> None/false`),
+   `encoding.ml`'s `Occurs` (a `bit` range per owner).
+2. `encoding.ml`: `bits_above : int option ref` + `limit_of_string` + env
+   `BAGUETTE_BITS_ABOVE`; `ivar` gains `repr : Order | Bits of { n; lb_row; ub_row }`,
+   `atoms : (int, cid * cid) Hashtbl.t`, `bound_lines : (cid * cid) option`;
+   `declare_int_bits t x ~lo ~hi` (D-0130 §4: `n = bit_length (hi - lo)`, `@lb`
+   `Σ 2^i x_bit_i >= 0`, `@ub` via `Opb.le` to `>= -(hi - lo)`, no ladder, `bits_vars`/
+   `bits_rows` counters, `Occurs.add_bit_range`); `is_bits`; `consistency_id`/`hole_id`
+   `None` for bits; `ensure_direct` raises; `linear_terms_int_lin_le` emits
+   `(a·2^i, Bit (x, i))`; `row_magnitudes` uses `2^n - 1` for a bits term (D-0130 §6);
+   `assignment_lits_of` lists the bits; `ensure_atom t w x v` (bits: the `red` pair under
+   `Writer.with_level w 0`, B1 then B2, plus the nearest-neighbour links of D-0130 §5.3,
+   counters `atoms`/`links`; order: the `rup` pair B1'/B2'); `bound_lines t w x` (bits: the
+   `.opb` ids; order: the two degree-0 `rup`s); `note_held_back t family`.
+3. `explanation.ml`: `Linear_term` (header: this record is its decision record, D-0130 §8
+   is the design it replaces); extend `lits`, `top_weaken_owners`, `to_string`;
+   `justify.ml`: `shallow_hash`, `emit_summand`'s order arm, `emit_bits_pruning`,
+   `validate_lits` minting; `linear.ml`: `summands_of_snap` and `explain_cross_conflict`.
+4. `trace.ml` (`emit`, `conflict_line`), `search.ml` (decisions, `record_improving`,
+   `close_root_conflict`'s flag), `compile.ml` (the scope pre-pass over `m.Model.constraints`
+   by constructor, `declare_int_bits` when `Encoding.wants_bits ~lo ~hi && eligible`, the
+   `pack_linear` flag, `note_held_back`), `bin/main.ml` (`--bits-above`, the `stats:` lines
+   `bits`, `bitsrows`, `atoms`, `atomlinks`, `bridges`, `atoms/prune`).
+5. Node: push `wave43-t2` to `node06`, clone under `/scratch/arthur/wave43-t2`, D-0028's
+   model at w = 5 first, then 10³..10⁶ at `W = 0`; the 156 at `W = none` byte-identical to
+   `/scratch/arthur/gate43.art/new/`; the 156 at `W = 0`.
+6. Tests (D-0130 §11, with p6's correction), models `test/models/*bits*.fzn`, mutation lanes
+   (`ia` wording from p2/p3, witness wording from p4), docs (PROOF-FORMAT §3, SPEC 4.2,
+   ROADMAP, ARCHITECTURE/CLAUDE.md if a module is added), this record's measurement sections.
+
+### 4. What landed (2026-11-16, commits `0a76a3f` .. `HEAD` on `wave43-t2`), against §2 and §3
+
+The plan of §3 was followed in its order; §2's decisions all held, and three things §2 did
+not foresee were found by the checker on the node and are recorded as the deviations of §5.
+
+- `lit.ml`: `Bit of string * int`, rendered `x_bit_i`, `Ge < Eq < Bit`; `render` reads its
+  marker's length. Nine core sites (`store`, `ladder`, `learn`, `learned`, `pb`,
+  `pb_analysis` x3, `search`) answer `None`/`false` for a `Bit`, four test helpers likewise.
+- `encoding.ml`: `ivar.repr = Order | Bits { n; lb_row; ub_row }`, `IMap`-keyed atoms per
+  variable, `declare_int_bits` (§4 of D-0130 as written: offset bits, both bound rows always,
+  no ladder, the budget and heap guards, no width warning), `linear_terms_int_lin_le` emitting
+  `a·2^i` on `x_bit_i`, `row_magnitudes` with `2^n − 1`, `assignment_lits_of` listing the bits,
+  `ensure_atom` (the `red` pair B1-then-B2 under `with_level 0`, memoised; the nearest-neighbour
+  links pinned by `ia` through `pol_concluding`; for an ORDER variable the `rup` bridge pair of
+  §2.2, one line for a width-1 variable), `bound_lines` (the `.opb` rows, or two degree-0
+  `rup`s minted once), `close_atoms`, `wants_bits`, `bits_above`/`BAGUETTE_BITS_ABOVE`, the
+  counters (`bits_vars`, `bits_rows`, `held_back` per family, `n_atoms`, `n_links`,
+  `n_bridges`, `n_bound_lines`, `n_bits_prunings`).
+- `explanation.ml`: `Linear_term of { lt_coeff; lt_name; lt_decl_lo; lt_decl_hi; lt_value;
+  lt_cited }` with `lt_declared`, `lt_lit`, `lt_axiom_lits`; `lits`, `top_weaken_owners`,
+  `to_string` extended; the header carries this record as the constructor's decision record.
+- `justify.ml`: `emit_summand` renders a `Linear_term` for the order arm byte for byte as the
+  `Weaken`/`Term`s it replaced (every summand yields a LIST of fragments, folded left as before,
+  which is what kept the text identical); `emit_bits_pruning` is §2.1's `pol` + `ia` + `del`;
+  `validate_lits` mints a bits variable's atoms (`ensure_lit`); a `Linear_term` of a bits owner
+  reaching a bare `pol` raises.
+- `linear.ml`: `summands_of_snap` is one `Linear_term`; `explain_cross_conflict` is the row over
+  every term with the crossed one at its opposite bound and `cited = opposite`.
+- `trace.ml`: `bits_arm` (the claim's owner or any owner in the reason's scope is bits, the
+  justification forces to a `Combine`); the derivation is written first and reused as the line
+  when it IS the trace clause (`same_clause`), else the `rup` follows it; `conflict_line` writes
+  the bits `pol` facts or not.
+- `search.ml`: `ensure_lit` on the two literals of `branch` and the four of `branch_assign`
+  before the level opens; `close_atoms` after the root's conflict line; the `soli` bridge and
+  the floor derivation of §5.
+- `compile.ml`: `held_families` (the pre-pass over `Model.constr` by constructor), `on_bits`
+  decided before the width refusal and before any declaration, `declare_int_bits` for them,
+  `note_held_back` per (variable, family), `pack_linear ~mixed` / `pack_arith_row ~mixed`
+  dropping the PB row of a row with a bits term.
+- `bin/main.ml`: `--bits-above W`, the `bits`/`bitsrows` lines in the encoding cost, and after
+  the proof `atoms`, `atomlinks`, `bridges`, `boundlines`, `bitsprune`, `atoms/prune`.
+- Docs: PROOF-FORMAT §3 "Bits encoding" (normative), SPEC §4.2's condition, I-X10's second
+  stated exception. No module was added, so ARCHITECTURE §1 and CLAUDE.md's map are unchanged.
+- Tests: nine `test/models/bits_*.fzn` with expected outputs (the `W = none` stdout, identical
+  at `W = 0`); `test_proof`'s bits section (naming, declaration, the mixed row and its I-X8
+  envelope, and the checker-backed lanes of §1 with the pair minted UNDER A DECISION over a
+  SATISFIABLE model: B1 and B2 flipped refused at the proofgoal wording, B2-before-B1 accepted
+  and reported, the vacuity measured on a model that decides the atom, an over-claiming `ia`,
+  B2-for-B1 and a wrong link neighbour refused at the `ia` wording, the sparse chain walked by a
+  `rup`, the constant and close guards); `test_compile`'s eligibility by family with the
+  held-back counts, the default, and the mixed row's absent PB row; `test_mutation`'s
+  `bits_search` instance (four emitter lanes: `pol-coeff`, `pol-cite`, `truncate` on a bits
+  trace line, `link-cite` on a link) and `bits_sat` (`atom-rhs`: `strengthen-rhs` on a pair);
+  `test_matrix`'s conflict classifier re-pointed to the merged shape; `test_prop`'s D-0013 shape
+  checks read `Linear_term`.
+
+### 5. Deviations from §2, each found by the checker
+
+1. **The floor over a bits objective is derived.** `opt_max_sat` at `W = 0` was the one
+   rejection of the first full run (164 of 165): at the floor case `conclusion BOUNDS` cites
+   the `soli` constraint, which over the ladder is a count above the rungs and contradictory
+   by itself, and over bits (`Σ 2^i y_bit_i >= 6` on three bits) is not -- the `@ub` row is
+   what refutes it, and the conclusion's check is syntactic on one constraint. `record_improving`
+   now writes `pol @soli @ub +` (or `@lb +` for a minimisation) pinned by `ia >= 1` at level 0
+   and hands that id to `b_floor`. The next full run verified 165 of 165.
+2. **Two more scopes are held at T2**, beyond D-0130 §3.4 and §2.7's two: none were added
+   after §2 -- `int_eq_reif`/`int_ne_reif` and `bool2int` are exactly §2.7's -- but the census
+   of §3 of the addendum did not count them, so the held width on the Challenge is larger than
+   its 45.8 % by whatever those two scopes hold (ship-schedule `8Ships` holds 1 198 variables
+   by `int_eq_reif`, see §6 (b)).
+3. **A width-1 order variable's bridge is one line**, not two: B1' and B2' are the same
+   tautology `+1 b_ge_1 +1 ~b_ge_1 >= 1`, and the reifier of every big-M row is such a
+   variable (visible on `bits_reif_unsat`'s first proof).
+4. **D-0127's caveat bit the mutation instance**: on `2x + 2y = 7` (UNSAT by parity) the
+   strengthened B1's redundance goal is autoproven from the rows alone (unit propagation refutes
+   `x = 0`), and the corruption was ACCEPTED -- the vacuity of §1, in the harness. The pair's
+   lane moved to `bits_sat` (`x + y in 3..9`, satisfiable, `x = 0` feasible), where it is
+   refused at the proofgoal wording. The four `pol` lanes stay on the UNSAT instance: the
+   `ia` pin is a syntactic check and is judged whatever the database.
+5. **`test_matrix`'s conflict classifier** told a cross-row clash from a slack conflict by the
+   two-`Term` shape D-0013 step 5 had; §2.4 merged the shapes (they are the same contradiction,
+   detected after a push rather than at the slack), and what is specific to the late-detected
+   case is that the crossed term cites a derivation of the SAME row. The observer reads that.
+6. Open question 1 of D-0130 §14 did not arise: the derived clause IS the trace clause, so no
+   `ia` of one against the other is ever written. Question 2 (are nearest-neighbour links
+   enough?) was not reached by any of the 165 models or the lanes; T3's seven models decide it.
+
+### 6. Measurements (fataepyc-06, VeriPB 3.0.2 d5644ca4, binary `6165deb5` at `f92fe1b` for the
+first runs and the gate's binary for the last; outputs under `/scratch/arthur/wave43-t2-out/`)
+
+**The 156 at `W = none`** (`none-step3/`, after step 3, before any bits variable could be
+declared): stdout, rc, `.opb` and `.pbp` **byte-identical on all 156** to `gate43.art/new`
+(`main` `f158c9f`), `.pbp` total 453 802 bytes as D-0131 §6 reports. The `Linear_term`
+reshaping moved no byte.
+
+**The 165 at `W = 0`** (`w0-156b/`): **165 verified, 0 rejected** (the 156 plus the nine
+`bits_*`), 62 models with at least one bits variable; `.opb` total 170 403 bytes against
+318 584 at `W = none` over the 156 (the nine add about 9 kB at `none`), `.pbp` total 663 159
+against 453 802; 408 atoms minted, 555 links, 512 bits-arm `pol` lines over the suite
+(0.80 atoms per bits pruning). The proofs GROW on the suite's single-digit widths: a bits
+pruning is `pol` + `ia` + `del` plus the level markers of each pair, where the order arm's is
+one `rup`; the width at which the pair's cost is repaid is D-0028's table below. Held back on
+the suite: `int_ne` (14 variables over 9 models), `alldiff` (5), `element` (8), `gcc`, `maxmin`,
+`cumulative` and the two T2 holds on theirs.
+
+**The 165 at `W = 8`** (`w8-156/`): **165 verified, 0 rejected**, 20 models with a bits variable
+(every `var 0..9` and wider), `.opb` 174 683, `.pbp` 620 588: the mixed-row arm, both shapes in
+one row, verified on every model that has one.
+
+**(a) D-0028's two-variable model, D-0131 §3's three shapes, `W = none` against `W = 0`**
+(`d0028/results.tsv`; solve under `ulimit -v 16 GiB -f 16 GB`, 1 200 s; checker CPU s and RSS
+from `/usr/bin/time -v`):
+
+| shape | w | W | `.opb` B | `.pbp` B | solve s | veripb CPU s | RSS MB | atoms / links / bits-pol |
+|---|---|---|---|---|---|---|---|---|
+| root | 999 | none | 125 922 | 129 | 0.03 | 0.00 | 15 | — |
+| root | 999 | 0 | 1 106 | 192 | 0.02 | 0.00 | 11 | 0 / 0 / 1 |
+| root | 9 999 | none | 1 359 924 | 132 | 0.12 | 0.01 | 41 | — |
+| root | 9 999 | 0 | 1 598 | 192 | 0.02 | 0.00 | 11 | 0 / 0 / 1 |
+| root | 99 999 | none | 14 599 926 | 135 | 1.12 | 0.23 | 187 |
+| root | 99 999 | 0 | 1 993 | 192 | 0.02 | 0.00 | 11 | 0 / 0 / 1 |
+| root | 999 999 | none | 155 999 928 | 138 | 13.2 | 3.20 | 1 838 | — |
+| root | 999 999 | 0 | 2 413 | 192 | 0.02 | 0.00 | 11 | 0 / 0 / 1 |
+| prune | 999 | none | 101 416 | 251 | 0.02 | 0.00 | 15 | — |
+| prune | 999 | 0 | 987 | 1 087 | 0.02 | 0.00 | 11 | 2 / 0 / 3 |
+| prune | 9 999 | none | 1 094 418 | 263 | 0.10 | 0.02 | 37 | — |
+| prune | 9 999 | 0 | 1 374 | 1 325 | 0.02 | 0.00 | 11 | 2 / 0 / 3 |
+| prune | 99 999 | none | 11 744 420 | 275 | 0.82 | 0.25 | 203 |
+| prune | 99 999 | 0 | 1 767 | 1 571 | 0.02 | 0.00 | 11 | 2 / 0 / 3 |
+| prune | 999 999 | none | 125 444 422 | 287 | 9.8 | 3.19 | 1 729 | — |
+| prune | 999 999 | 0 | 2 135 | 1 800 | 0.02 | 0.00 | 11 | 2 / 0 / 3 |
+| chain | 999 | none | 125 923 | 49 947 | 0.03 | 0.07 | 15 | — |
+| chain | 999 | 0 | 1 107 | 688 657 | 0.06 | 0.03 | 21 | 1 000 / 1 994 / 1 001 |
+| chain | 9 999 | none | 1 359 925 | 537 954 | 0.26 | 8.42 | 49 | — |
+| chain | 9 999 | 0 | 1 600 | 8 543 265 | 0.63 | 0.39 | 83 | 10 000 / 19 994 / 10 001 |
+| chain | 99 999 | none | 14 599 927 | 5 777 961 | 9.4 | 1 428.78 | 303 | — |
+| chain | 99 999 | 0 | 1 995 | 99 270 125 | 27.1 | 4.80 | 699 | 100 000 / 199 994 / 100 001 |
+| chain | 999 999 | none | 155 999 929 | 22 759 568 written | 1 200 (solve timeout) | not run | — | — |
+| chain | 999 999 | 0 | 2 414 | 138 607 949 written | 1 200 (solve timeout) | not run | — | — |
+
+Read against D-0028's table (156 MB `.opb`, 29.8 MB `.pbp`, 12 s at 10⁶) and D-0131 §3's (138 B
+of `rup` proof but the same 156 MB `.opb` and 3.2 s of checker spent reading it): on `root` and
+`prune` the bits arm is **flat from 10³ to 10⁶** in every column -- a 2 kB `.opb`, a 192 B or
+1.6 kB proof, a checker that does not reach a hundredth of a second -- where the order arm's
+`.opb` and the checker's time and memory grow with the width whatever the emission. On `chain`
+(Θ(w) root prunings citing one another) the bits proof is ~16× the order proof's bytes at 10⁴
+(each pruning is `pol` + `ia` + `del` plus a pair and two links where the order arm writes one
+`rup`) and the checker is **20× faster** (0.39 s against 8.42 s): a bits-arm line is O(1)
+citations the checker evaluates once, where RUP re-walks the ladder per line (D-0131 §3.2's
+Θ(w²)). At 10⁵ the order arm's chain is D-0131 §3's number again (1 428.8 s against its 1 437.6 s, 303 MB) and the bits arm's is **4.80 s at 699 MB**: 0.39 s at 10⁴ and 4.8 s at 10⁵ is the checker's time growing with the proof's length rather than with the ladder's -- 100 000 pairs, 199 994 links and 100 001 pinned lines, 99 MB -- which is the shape D-0131 said no emission choice on the ladder could reach and D-0130 claimed for bits. The price is on the writer's side: the solver took 27.1 s to write it where the order arm wrote its 5.8 MB in 9.4 s, and 17× the bytes. At 10⁶ neither arm's SOLVE finishes in 1 200 s (D-0131 §3 had the same for the ladder: the solver is superlinear on this chain, which is M7-T27's successors' problem and not the proof's); the bits arm had written 138.6 MB of proof when stopped against the ladder's 22.8 MB, over a 2.4 kB `.opb` against 156 MB, and no checker ran on either.
+
+**(b) The 169 encoding-wall runs of D-0129 at `W = 0`** (`w0-169/results.tsv`; the 177 `.fzn`
+of `/scratch/arthur/wave42-elig/files.tsv`, 8-way, `timeout 300`, `ulimit -v 16 GiB -f 16 GB`;
+a `.opb` is COMPLETE when its header is on disk, which the streamed sink writes last):
+
+| prior status (D-0129) | instances | `.opb` COMPLETE at `W = 0` | still unfinished at 300 s |
+|---|---|---|---|
+| CAPPED | 143 | 43 | 100 |
+| TIMEOUT | 19 | 16 | 3 |
+| ERROR | 7 | 6 | 1 |
+| OPT8 | 8 | 8 | 0 |
+| **all** | **177** | **73** | **104** |
+
+Completed `.opb` bytes: min 67 kB, median 142.6 MB, max 2.07 GB; 31 under 100 MB, 12 of 1 GB or more. Before: every one of them never finished writing its `.opb` (D-0129: the 16 GB cap or 1 200 s).
+Of the completed, 57 printed an answer or incumbent within 300 s and 16 did not.
+
+The five largest `.opb` that now complete (the heaviest encodings bits carried):
+
+| instance | prior | `.opb` bytes | ladder left | bits line |
+|---|---|---|---|---|
+| `2020_cable_tree_wiring_A073` | CAPPED | 2.07 GB | 183845 | 199 vars bits-encoded (--bits-above 0); held back: maxmin: 741, alldiff: 396 |
+| `2020_code-generator_mips_gcc.cfgbuild.control_flow_insn_p` | CAPPED | 1.53 GB | 505769 | 8398 vars bits-encoded (--bits-above 0); held back: maxmin: 835, alldiff: 1, holes: 160, int_ne: 11, |
+| `2011_ship-schedule_8Ships` | CAPPED | 1.52 GB | 17042 | 683 vars bits-encoded (--bits-above 0); held back: int_eq_reif: 1198, element: 16 |
+| `2024_aircraft-disassembly_B737NG-600-04-Anon.json` | ERROR | 1.40 GB | 105545 | 1 vars bits-encoded (--bits-above 0); held back: cumulative: 54, maxmin: 55 |
+| `2012_ship-schedule_8ShipsUnconst` | OPT8 | 1.36 GB | 16292 | 683 vars bits-encoded (--bits-above 0); held back: int_eq_reif: 1198, element: 16 |
+
+The five smallest:
+
+| instance | prior | `.opb` bytes | ladder left | bits line |
+|---|---|---|---|---|
+| `2021_wmsmc-int_batch_0_case_115_instance_0_small_subset_elements_3_sumreqs_1295_candidates_41` | CAPPED | 67 kB | 0 | 42 vars bits-encoded (--bits-above 0); held back: none |
+| `2021_wmsmc-int_batch_0_case_115_instance_1_base_full_elements_3_sumreqs_702_candidates_86` | CAPPED | 134 kB | 0 | 87 vars bits-encoded (--bits-above 0); held back: none |
+| `2023_unit-commitment_L7-T12G5L5` | ERROR | 289 kB | 0 | 105 vars bits-encoded (--bits-above 0); held back: none |
+| `2023_unit-commitment_L10-T48G10L10` | CAPPED | 3.0 MB | 0 | 837 vars bits-encoded (--bits-above 0); held back: none |
+| `2023_unit-commitment_L12-T48G15L10` | CAPPED | 4.6 MB | 0 | 1041 vars bits-encoded (--bits-above 0); held back: none |
+
+Unfinished at 300 s: 104; rows written when stopped: min 26.1 MB, median 6.41 GB, max 16.38 GB; 104 of them printed no `--stats` line at all (killed before compile ended, so their held-back counts are unknown).
+Unfinished by instance family: carpet-cutting 18, tower 15, road-cons 10, mapping 9, largescheduling 6, flowshop-workers 5, arithmetic-target 5, test-scheduling 4, yumi-dynamic 4, zephyrus 3, ATSP 3, atsp 3
+
+What held the rest, read off the `--stats` lines: none of the 104 reached the end of compile in 300 s, so their own `--stats` lines do not exist; by instance family they are carpet-cutting 18 (`int_times`'s case split, §7), tower 15, road-cons 10, mapping 9, largescheduling 6, ATSP 6 (the maxmin-held families of D-0130's addendum, 99.98 % of the held width), flowshop-workers 5, arithmetic-target 5, test-scheduling 4, yumi-dynamic 4, zephyrus 3 and a tail of singletons. They had written a median of 6.4 GB of rows (min 26 MB, max 16.4 GB, the `-f` cap) when stopped, so at D-0129's 1 200 s most would still have met the 16 GB cap: 300 s is a shorter budget than the baseline's, and the "unfinished" column overstates nothing a longer run would have turned into a completion except at the margin. The completed 73 are a different population from the baseline's eight OPTs with a `.opb` (0.47 to 9.53 GB): 57 of them printed an answer or an incumbent within the 300 s, which no run of the 169 had done before. What the `.opb` bytes do not say is whether the proofs that follow can be checked, which is T4's loop with the 1 h 20 to 16 h scale the weekend's re-check of the seven OPTs set (D-0131 §5 addendum)
+
+**(c) The gate** (`gate/status`, a fresh clone of `HEAD` at `/scratch/arthur/wave43-t2-gate`,
+`make check` under `ulimit -v 4000000`): `make check` **rc 0** on a fresh clone of `f13aa45` (binary `274a8028`), 19 min 46 s wall, peak RSS 85 MB for the make tree and no binary near its 4 GB cap: format, build, the width lint, determinism (165 models, `.opb`/`.pbp`/stdout identical across two runs), every unit suite, 165 model tests passed. The same clone's binary against `gate43.art/new` (`main` `f158c9f`) at `W = none`: **stdout, rc, `.opb` and `.pbp` byte-identical on all 156**; the nine `bits_*` models have no reference. Two earlier gate attempts failed on the width lint (the link's `~hi`/`~lo` labels read as domains; the 2⁴¹-wide bits declaration of the I-X8 envelope test, now marked `width-ok`) and on two shape pins of the old cross-conflict form (§5.5), each fixed and recorded, none on a proof.
+
+### 7. What T3 inherits, and the open questions
+
+- `Ne`'s scope (D-0130 §7.4), `int_eq_reif`/`int_ne_reif` and `bool2int` are held; releasing
+  them is a rendering per family, through `emit_bits_pruning`'s shape or a new one, and the
+  lanes of §4 are the pattern.
+- **`int_times`/`int_div` over bits do not shrink the `.opb` by themselves**: the case split
+  (`Builder.ladder_bools y`) posts one reified Boolean per VALUE of `y` with two big-M rows each,
+  so carpet-cutting's wall at `W = 0` is 1.08 GB of rows in 300 s and still unfinished, with a
+  ladder of 4.9 M. Bits shrink each row, not the row count; the census of D-0130's addendum
+  summed ladder widths and did not see this family. T3 or T4 decides whether the split goes
+  over the bits of `y` (`n` guards instead of `w`).
+- `atoms/prune` on the suite is 0.80; the number that says whether GCS's quadratic appears on a
+  real search is T4's, from the Challenge.
+- The three-line pruning (`pol` + `ia` + `del`) and the two level markers per pair are bytes
+  T4 may want back: a `rup` of the derived clause after the `pol` is the alternative measured
+  in §1 as equivalent for a judgement, and `with_level 0`'s markers are D-0045's cost.
+- Nearest-neighbour links were never exercised by a `rup` that needed a gap link (D-0130 §14,
+  question 2); D-0031's seven models at `W = 0` are the first test of it.
+- PB conflict analysis declines every mixed row (`~mixed`); whether a bits term should be
+  lifted is D-0130 §14's question 5 and the fallback counter says how often it mattered.

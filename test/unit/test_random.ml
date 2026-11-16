@@ -288,6 +288,8 @@ let clause_folded_into_pol e =
         List.iter
           (function
             | Explanation.Term (_, e) -> go ~in_pol:true e
+            | Explanation.Linear_term r ->
+                List.iter (go ~in_pol:true) r.Explanation.lt_cited
             | Explanation.Weaken _ -> ()
             (* M4-T7: a [Defining] cites an id, but one resolved at emit time rather
                than named in the value, so there is nothing here to walk into. *)

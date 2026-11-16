@@ -308,7 +308,7 @@ let bounds_before store ~at v =
    unreachable-and-safe rather than unreachable-and-absent. *)
 let falsified_before store ~at (l : Lit.t) =
   match l.Lit.v with
-  | Lit.Eq _ -> false
+  | Lit.Eq _ | Lit.Bit _ -> false
   | Lit.Ge (name, k) -> (
       match Store.var_named store name with
       | None -> false
@@ -344,7 +344,7 @@ let falsified_at_scan store (l : Lit.t) =
          entries on [v] the reconstructed domain does not move, so no other position
          can be the first. *)
   match l.Lit.v with
-  | Lit.Eq _ -> Store.no_support
+  | Lit.Eq _ | Lit.Bit _ -> Store.no_support
   | Lit.Ge (name, k) -> (
       match Store.var_named store name with
       | None -> Store.no_support
@@ -384,7 +384,7 @@ let falsified_at_scan store (l : Lit.t) =
 let falsified_at store (l : Lit.t) =
   let at =
     match l.Lit.v with
-    | Lit.Eq _ -> Store.no_support
+    | Lit.Eq _ | Lit.Bit _ -> Store.no_support
     | Lit.Ge (name, k) -> (
         match Store.var_named store name with
         | None -> Store.no_support
@@ -630,6 +630,7 @@ let cited_ids (e : Explanation.t) : int list =
   and summand = function
     | Explanation.Term (_, e) -> go e
     | Explanation.Weaken _ -> ()
+    | Explanation.Linear_term r -> List.iter go r.lt_cited
     (* M4-T7. A [Defining] cites the id of the line establishing a literal, resolved from
        [Justify]'s claim index at emit time -- which is exactly the trace-line citation
        the I-S4 discharge above says this module never makes, and which this function

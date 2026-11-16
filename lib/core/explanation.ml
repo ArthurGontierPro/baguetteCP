@@ -24,6 +24,34 @@
    rather than adding a catch-all case: the exhaustiveness warning is what will find
    every site that needs updating.
 
+   -------------------------------------------------------------------------------
+   M8-bits-encoding-T2 / docs/DECISIONS.md D-0132: [Linear_term], ONE summand for a
+   term of a linear row, carrying the term's SNAPSHOT rather than its rendering
+   -------------------------------------------------------------------------------
+
+   D-0132 section 2.4 is this constructor's decision record (D-0130 section 8 designed a
+   [Weaken_declared] for the declared and assumed cases only; this is that constructor
+   grown to cover the cited case too, and the reason is stated there). What a term of
+   [Linear]'s row contributes to the D-0013 derivation was, until T2, decided by [Linear]
+   at construction: a [Weaken] of the full declared-range axiom chain when the bound it
+   read was the declared one or rested on a decision, one [Term] per cited explanation
+   otherwise. Both renderings spell the ORDER encoding -- the chain is Theta(w) literals
+   named `x_ge_v`, and a [Term] expects the cited line to be D-0013's full-range row --
+   and a variable on the BITS encoding has neither: no `x_ge_v` in the .opb, and a cited
+   line that is a clause over atoms. So a term is now carried as what [Linear] READ --
+   its coefficient, its name, its declared bounds, the bound value at the snapshot and
+   the explanations that bound rests on -- and the TWO renderings live in
+   lib/core/justify.ml: the order arm renders a [Linear_term] exactly as it rendered the
+   [Weaken]/[Term] it replaces (the `pol` text at `--bits-above none` is byte-identical,
+   the determinism gate holds it), and the bits arm cites the term's bridge
+   ([Encoding.ensure_atom]) or bound line ([Encoding.bound_lines]) once, whatever the
+   width. The substrate contract of D-0130 section 3.1 holds as a type: no field here
+   names a representation, and nothing in lib/core/prop/ can spell a bit.
+
+   [Weaken], [Term] and [Defining] stay, with their other producers: the enumerating
+   families (alldiff, gcc, element, cumulative, maxmin), which are order-only by
+   D-0130 section 3.4, and [Pb_analysis]'s reductions.
+
    [Deferred] exists because most prunings are never asked for a reason. Computing a full
    explanation eagerly for every pruning is the standard way to make a proof-logging
    solver an order of magnitude slower than its unlogged sibling. Forcing memoises: a
@@ -170,10 +198,29 @@ and summand =
        row it is added to. See the module header -- never meaningful outside a
        [Combine]'s summand list. *)
   | Defining of int * Lit.t
-(* coeff * the id of the line that ESTABLISHES this literal -- D-0009's missing
-   half, resolved by [Justify.defining_lit] and always a UNIT line. Cancels the
-   same term [Weaken] would and keeps the degree. Like [Weaken], it is not a [t]:
-   see the module header. *)
+    (* coeff * the id of the line that ESTABLISHES this literal -- D-0009's missing
+       half, resolved by [Justify.defining_lit] and always a UNIT line. Cancels the
+       same term [Weaken] would and keeps the degree. Like [Weaken], it is not a [t]:
+       see the module header. *)
+  | Linear_term of linear_term
+(* One term of [Linear]'s row, as the snapshot it took of it (M8-bits-encoding-T2,
+   D-0132 section 2.4 -- the module header says why). Like [Weaken] and [Defining] it is
+   not a [t]; it is rendered only inside a [Combine]. *)
+
+and linear_term = {
+  lt_coeff : int; (* the row's own coefficient on this variable; never 0 *)
+  lt_name : string; (* the FlatZinc identifier, frozen (a reason must be spellable) *)
+  lt_decl_lo : int;
+  lt_decl_hi : int;
+  lt_value : int;
+      (* the bound the row read at the snapshot: lo for [lt_coeff >= 0], hi otherwise
+         (D-0013's case split, [Reason.bound_for_coeff]) *)
+  lt_cited : t list;
+      (* the derivations that bound rests on -- the entry that moved it and any hole its
+         settle walked over (M1-T44) -- or [] when it is the declared bound or rests on a
+         decision (I-X9's exception: weakened over its declared range, the trace line
+         carries the claim) *)
+}
 
 and thunk = { mutable forced : t option; mutable compute : unit -> t; mutable mark : int }
 (* [mark]: the walk that last visited this thunk ([lits] below). A thunk is the ONLY
@@ -223,6 +270,46 @@ let citable what e =
 
 let cut e1 e2 c1 c2 = Cut (citable "cut" e1, citable "cut" e2, c1, c2)
 let term coeff e = Term (coeff, citable "term" e)
+
+(* [Linear_term] and its readings (M8-bits-encoding-T2). The term is DECLARED when the
+   bound it read is the declared one in its own direction, and then has no literal:
+   [Reason.lit_of_fact]'s rule, restated here because this module cannot see [Reason]
+   (reason.ml depends on this one). *)
+let linear_term ~coeff ~name ~decl_lo ~decl_hi ~value cited =
+  if coeff = 0 then
+    invalid_arg "Explanation.linear_term: a zero coefficient is not a term";
+  Linear_term
+    {
+      lt_coeff = coeff;
+      lt_name = name;
+      lt_decl_lo = decl_lo;
+      lt_decl_hi = decl_hi;
+      lt_value = value;
+      lt_cited = List.map (citable "linear_term") cited;
+    }
+
+let lt_declared r =
+  if r.lt_coeff >= 0 then r.lt_value <= r.lt_decl_lo else r.lt_value >= r.lt_decl_hi
+
+(* The bound fact as a literal: [x >= value] for a positive coefficient, [x <= value]
+   for a negative one; [None] at the declared bound. *)
+let lt_lit r =
+  if lt_declared r then None
+  else if r.lt_coeff >= 0 then Some (Lit.ge r.lt_name r.lt_value)
+  else Some (Lit.le r.lt_name r.lt_value)
+
+let lt_width r = r.lt_decl_hi - r.lt_decl_lo
+
+(* The literals of D-0013's declared-range weakening of this term, in the order
+   [Order_reason.weaken_declared] lists them: the ORDER arm's rendering of a term whose
+   bound is not cited (declared, or resting on a decision), kept here so [lits] can say
+   what that rendering names without calling into prop/. Empty for a fixed variable. *)
+let lt_axiom_lits r =
+  let width = lt_width r in
+  if width <= 0 then []
+  else if r.lt_coeff > 0 then
+    List.init width (fun i -> Lit.ge r.lt_name (r.lt_decl_lo + 1 + i))
+  else List.init width (fun i -> Lit.le r.lt_name (r.lt_decl_lo + i))
 
 let combine summands divisor =
   if divisor < 1 then invalid_arg "Explanation.combine: divisor must be >= 1";
@@ -297,6 +384,13 @@ let lits e =
     (* The literal a [Defining] cites is a bound fact the derivation RESTS on, so it
        belongs in the reason set at least as much as a weakened one does (D-0035). *)
     | Defining (_, l) -> add l
+    (* What the ORDER rendering would name: the axiom chain where nothing is cited, the
+       cited derivations otherwise. The bits rendering names the term's one atom instead,
+       but [owners] is what every caller reads and it is the same either way. *)
+    | Linear_term r -> (
+        match r.lt_cited with
+        | [] -> List.iter add (lt_axiom_lits r)
+        | es -> List.iter go es)
   in
   go e;
   List.rev !acc
@@ -342,7 +436,10 @@ let top_weaken_owners e =
                 is, and the reason owes the same account of it -- more so, since the
                 derivation names the line that established it. *)
              | Defining (_, l) -> [ Lit.owner l.Lit.v ]
-             | Term _ -> [])
+             | Term _ -> []
+             (* An uncited term is weakened out of the row (declared or assumed), and the
+                reason owes the same account of it a [Weaken] got. *)
+             | Linear_term r -> if r.lt_cited = [] then [ r.lt_name ] else [])
            summands)
   | _ -> []
 
@@ -373,6 +470,12 @@ and summand_to_string = function
           (List.map (fun (c, l) -> Printf.sprintf "%d*%s" c (Lit.to_string l)) lits)
       ^ ")"
   | Defining (c, l) -> Printf.sprintf "%d*defining(%s)" c (Lit.to_string l)
+  | Linear_term r ->
+      Printf.sprintf "term(%+d*%s@%d in %d..%d%s)" r.lt_coeff r.lt_name r.lt_value
+        r.lt_decl_lo r.lt_decl_hi
+        (match r.lt_cited with
+        | [] -> if lt_declared r then "" else ", assumed"
+        | es -> ", cites " ^ String.concat " + " (List.map to_string es))
 
 (* ------------------------------------------------------------------- arena *)
 

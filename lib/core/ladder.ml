@@ -231,6 +231,7 @@ let lift ~(row : Learned.t) ~(pivot : Lit.t) ~(falsified : Lit.t -> bool)
     ~(ladder_id : string -> int -> int option) : t option =
   match pivot.Lit.v with
   | Lit.Eq _ -> None (* the direct encoding has no ladder: D-0019/D-0040 *)
+  | Lit.Bit _ -> None (* a bits variable has no ladder either: D-0130 section 7.5 *)
   | Lit.Ge (name, k) ->
       let positive = pivot.Lit.positive in
       (* Multipliers accumulated per ladder value. An association list keyed by the value,

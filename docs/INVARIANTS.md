@@ -232,6 +232,14 @@ Assertions guarded by `BAGUETTE_DEBUG=1` should check as many of these as is aff
   it against this invariant is the event I-X10 exists to make visible** — see D-0040 and
   the closure gate in `test/unit/test_trace.ml`.
 
+  **The bits arm (M8-bits-encoding-T2, D-0132) is a second stated exception**, by row
+  rather than by family: a `Linear` pruning or conflict whose row has a term on the bits
+  encoding is not RUP at any width (D-0127, measured), so `Trace` writes its derivation
+  ahead as one `pol` deriving exactly the trace clause, pinned by `ia`, and the `rup` of
+  that clause is not written separately (the `ia` is the line) unless the claim settled
+  past a hole. A row with no bits term is untouched. The rule is decided per entry from the
+  reason's scope (`Trace.bits_arm`), never by the propagator.
+
   *Status, in I-S4's register*: the enumeration and both Hall measurements are **measured**.
   That the enumeration stays complete as propagators are added is **argued**, and the
   closure gate is what converts it into a check.

@@ -540,10 +540,17 @@ type pending = int -> Propagator.instance
 (* M2-L6: every [Linear.t] in this solver is packed here -- including both halves of an
    [int_lin_eq] (D-0011) and the [int_le]/[int_lt]/[int_eq] shapes that delegate -- so
    teaching [Linear] its own PB row is taught once, here, and reaches all of them. *)
-let pack_linear (lin : Linear.t) : pending =
+(* [~mixed] (M8-bits-encoding-T2, D-0132 section 2.7): a row with a term on the bits
+   encoding is packed WITHOUT its PB row. [Linear.pb_row] spells the order expansion
+   from the declared bounds, which is not what the .opb holds for such a row, and PB
+   conflict analysis resolving it would hand [Learned.combine] arithmetic the checker
+   cannot reproduce. The honest answer is the one [Ne] and [Reif] give: no row, the
+   clause path, counted in the fallback rate (D-0130 section 7.5). *)
+let pack_linear ~mixed (lin : Linear.t) : pending =
  fun id ->
   Propagator.pack ~id ~idempotent:true
-    ~row:(fun store -> Some (Linear.pb_row store lin))
+    ~row:
+      (if mixed then Propagator.no_row else fun store -> Some (Linear.pb_row store lin))
     (module Linear : Propagator.S with type t = Linear.t)
     lin
 
@@ -623,25 +630,98 @@ let pack_bool2int (p : Bool2int.t) : pending =
    each one IS one row and M2-L6 can resolve it. What differs is only the [name] the
    instance reports, which is the builtin the model wrote rather than `int_lin_le`;
    lib/core/prop/arith.ml's faces exist for that and nothing else. *)
-let pack_arith_row (module P : Propagator.S with type t = Linear.t) (lin : Linear.t) :
-    pending =
+let pack_arith_row (module P : Propagator.S with type t = Linear.t) ~mixed
+    (lin : Linear.t) : pending =
  fun id ->
   (* M6-T18: a ROW face is [Linear] and makes [pack_linear]'s idempotence claim; the
      guard faces below are reifications and do not (lib/core/propagator.ml, above
-     [pack]). *)
+     [pack]). [~mixed] as in [pack_linear]. *)
   Propagator.pack ~id ~idempotent:true
-    ~row:(fun store -> Some (Linear.pb_row store lin))
+    ~row:
+      (if mixed then Propagator.no_row else fun store -> Some (Linear.pb_row store lin))
     (module P)
     lin
 
-let pack_times_row (p : Linear.t) : pending =
-  pack_arith_row (module Arith.Times_row : Propagator.S with type t = Linear.t) p
+let pack_times_row ~mixed (p : Linear.t) : pending =
+  pack_arith_row (module Arith.Times_row : Propagator.S with type t = Linear.t) ~mixed p
 
-let pack_div_row (p : Linear.t) : pending =
-  pack_arith_row (module Arith.Div_row : Propagator.S with type t = Linear.t) p
+let pack_div_row ~mixed (p : Linear.t) : pending =
+  pack_arith_row (module Arith.Div_row : Propagator.S with type t = Linear.t) ~mixed p
 
-let pack_abs_row (p : Linear.t) : pending =
-  pack_arith_row (module Arith.Abs_row : Propagator.S with type t = Linear.t) p
+let pack_abs_row ~mixed (p : Linear.t) : pending =
+  pack_arith_row (module Arith.Abs_row : Propagator.S with type t = Linear.t) ~mixed p
+
+(* ---------------------------------------------------------------------------
+   M8-bits-encoding-T2: eligibility for the bits encoding, by SCOPE (D-0130 section 3.4,
+   D-0132 section 2.7)
+   ---------------------------------------------------------------------------
+
+   The width half is [Encoding.wants_bits]. The scope half is this: a variable is held
+   on the order encoding, whatever `--bits-above` says, when any row the model will post
+   over it names its order literals per value or when a propagator over it justifies
+   with a [Clause] -- because the .opb is closed before the first proof line (I-X5), a
+   `red` is a proof line, and a `red` whose atom already occurs in a model row has a
+   goal the fresh-atom witness cannot discharge; and because a `rup` over a bits row is
+   refused at every width (D-0127). The families, by the name `--stats` reports:
+
+     alldiff      all_different_int: the direct encoding and the pairwise clause rows
+     gcc          global_cardinality: the counting rows over the order encoding
+     element      array_int_element: the index's direct encoding, the result's rows
+     maxmin       array_int_maximum/minimum: one clause row per threshold value
+     cumulative   the capacity rows over gcc's window indicators
+     holes        a declared set domain: the hole rows are ladder rows
+     int_ne       int_ne / int_lin_ne: held at T2, released by T3 with D-0130 section
+                  7.4's two-half `pol`
+     int_eq_reif  int_eq_reif / int_ne_reif: lib/core/prop/reif_lin_eq.ml justifies
+                  with [Clause]s and punches holes (T2 holds it; D-0132 section 2.7)
+     bool2int     lib/core/prop/bool2int.ml justifies with [Clause]s; its `x` is width
+                  1 in practice (T2 holds it; D-0132 section 2.7)
+
+   Eligible: int_lin_le/eq, int_le/lt/eq, int_lin_le_reif/int_le_reif (every face of
+   lib/core/prop/reif_lin_le.ml is a [Linear] instance), int_times/div/abs (guarded
+   linear rows and [Linear] instances), the clause family's rows (bools, width 1).
+   Computed from the model BEFORE any declaration, which is the only moment the scope
+   is known and the encoding is empty. *)
+let held_families (m : Model.t) : (int, string list) Hashtbl.t =
+  let held = Hashtbl.create 64 in
+  let hold family (ops : Model.operand list) =
+    List.iter
+      (function
+        | Model.Var i ->
+            let fs = Option.value (Hashtbl.find_opt held i) ~default:[] in
+            if not (List.mem family fs) then Hashtbl.replace held i (family :: fs)
+        | Model.Const _ -> ())
+      ops
+  in
+  let vars_of_terms terms = List.map (fun (_, i) -> Model.Var i) terms in
+  Array.iteri
+    (fun i (v : Model.var) ->
+      match v.Model.v_dom with
+      | Model.Dset (_ :: _) when holes_of_domain v <> [] -> hold "holes" [ Model.Var i ]
+      | _ -> ())
+    m.Model.vars;
+  List.iter
+    (fun (c : Model.constr) ->
+      match c.Model.k with
+      | Model.Int_lin_ne (terms, _) -> hold "int_ne" (vars_of_terms terms)
+      | Model.Int_ne (a, b) -> hold "int_ne" [ a; b ]
+      | Model.Bool2int (b, x) -> hold "bool2int" [ b; x ]
+      | Model.Int_eq_reif (a, b, r) | Model.Int_ne_reif (a, b, r) ->
+          hold "int_eq_reif" [ a; b; r ]
+      | Model.All_different ops -> hold "alldiff" ops
+      | Model.Global_cardinality (xs, _, counts) -> hold "gcc" (xs @ counts)
+      | Model.Array_int_maximum (mx, xs) | Model.Array_int_minimum (mx, xs) ->
+          hold "maxmin" (mx :: xs)
+      | Model.Cumulative (ss, _, _, _) -> hold "cumulative" ss
+      | Model.Array_int_element (idx, _, res) -> hold "element" [ idx; res ]
+      | Model.Int_lin_le _ | Model.Int_lin_eq _ | Model.Int_le _ | Model.Int_lt _
+      | Model.Int_eq _ | Model.Bool_clause _ | Model.Array_bool_or _
+      | Model.Array_bool_and _ | Model.Bool_eq _ | Model.Bool_not _
+      | Model.Int_lin_le_reif _ | Model.Int_le_reif _ | Model.Int_times _
+      | Model.Int_div _ | Model.Int_abs _ ->
+          ())
+    m.Model.constraints;
+  held
 
 (* A guard definition is a reification, so it packs like one -- without [~row:], for
    the reason [pack_reif_as] gives. It reports the arithmetic builtin and not
@@ -705,10 +785,25 @@ let compile (m : Model.t) : t =
      allocates neither a domain nor a ladder. That, rather than the diagnostic, is what
      distinguishes this check from `ulimit -v` and [Mem_guard], which can only kill a
      run already in progress. *)
+  (* M8-bits-encoding-T2: which variables go on bits -- eligible by width
+     ([Encoding.wants_bits]) and by scope ([held_families]) -- decided here, before the
+     width refusal (which is the ORDER ladder's and does not apply to a bits variable)
+     and before any declaration. *)
+  let held = held_families m in
+  let on_bits =
+    Array.mapi
+      (fun i (v : Model.var) ->
+        let lo, hi = bounds.(i) in
+        (match v.Model.v_dom with Model.Dbool -> false | _ -> true)
+        && Encoding.wants_bits ~lo ~hi
+        && not (Hashtbl.mem held i))
+      m.Model.vars
+  in
   Array.iteri
     (fun i (v : Model.var) ->
       let lo, hi = bounds.(i) in
-      if Encoding.order_width_exceeds ~lo ~hi then reject_declared_width v lo hi)
+      if (not on_bits.(i)) && Encoding.order_width_exceeds ~lo ~hi then
+        reject_declared_width v lo hi)
     m.Model.vars;
   let names = Array.map (fun (v : Model.var) -> v.Model.v_name) m.Model.vars in
   (* The store gets the HULL, holes and all, and the holes are then taken out by a
@@ -728,10 +823,20 @@ let compile (m : Model.t) : t =
     Store.create ~names ~domains:(Array.map (fun (lo, hi) -> Domain.make lo hi) bounds)
   in
   let encoding = Encoding.create () in
+  (* The held-back accounting for `--stats`: eligible by width, held by scope. *)
+  Array.iteri
+    (fun i (_ : Model.var) ->
+      let lo, hi = bounds.(i) in
+      if Encoding.wants_bits ~lo ~hi then
+        match Hashtbl.find_opt held i with
+        | Some fs -> List.iter (Encoding.note_held_back encoding) (List.rev fs)
+        | None -> ())
+    m.Model.vars;
   Array.iteri
     (fun i (v : Model.var) ->
       let lo, hi = bounds.(i) in
       match v.Model.v_dom with
+      | _ when on_bits.(i) -> Encoding.declare_int_bits encoding v.Model.v_name ~lo ~hi
       | Model.Dbool -> Encoding.declare_bool encoding v.Model.v_name
       | Model.Dset (_ :: _) ->
           (* M7-T11: one clause per hole, of the mirror polarity to the ladder rung at
@@ -815,11 +920,16 @@ let compile (m : Model.t) : t =
       reject_row pos ~what ~magnitude:(Checked.row_magnitude tb rhs)
   in
 
+  (* M8-bits-encoding-T2: does this row carry a term on the bits encoding? Decides
+     [pack_linear]'s [~mixed]. *)
+  let mixed nterms =
+    Encoding.n_bits_vars encoding > 0 && List.exists (fun (_, i) -> on_bits.(i)) nterms
+  in
   (* One row + one instance. [nterms] is the *same* normalised list on both sides. *)
   let post_le_as ~pack ~what pos nterms rhs =
     check_row pos ~what nterms rhs;
     let row_id = Encoding.add_int_lin_le encoding (opb_terms pos nterms) rhs in
-    [ pack (Linear.make ~row_id store (prop_terms nterms) rhs) ]
+    [ pack ~mixed:(mixed nterms) (Linear.make ~row_id store (prop_terms nterms) rhs) ]
   in
   let post_le pos nterms rhs =
     post_le_as ~pack:pack_linear ~what:"this linear inequality" pos nterms rhs
@@ -834,7 +944,8 @@ let compile (m : Model.t) : t =
       Encoding.add_int_lin_le encoding (opb_terms pos (negate_terms nterms)) (-rhs)
     in
     let le, ge = Lin_eq.make ~le_id ~ge_id store (prop_terms nterms) rhs in
-    [ pack_linear le; pack_linear ge ]
+    let mixed = mixed nterms in
+    [ pack_linear ~mixed le; pack_linear ~mixed ge ]
   in
   (* Two rows, one instance, no row id -- see the module header. The propagator is
      built here, eagerly, rather than inside the pending closure, because [Ne.make]
@@ -1267,7 +1378,7 @@ let compile (m : Model.t) : t =
     let rhs = if v = 1 then -1 else 0 in
     check_row pos ~what:"this reified constant" nterms rhs;
     let row_id = Encoding.add_int_lin_le encoding (opb_terms pos nterms) rhs in
-    [ pack_linear (Linear.make ~row_id store (prop_terms nterms) rhs) ]
+    [ pack_linear ~mixed:false (Linear.make ~row_id store (prop_terms nterms) rhs) ]
   in
   (* b <-> (sum a_i x_i <= rhs). Two rows, one instance. *)
   let post_reif_le pos ~builtin ~pack nterms rhs r =

@@ -1575,13 +1575,16 @@ let weakened_row_only (e : Explanation.t) =
                 match Explanation.force t with
                 | Explanation.Model_row _ -> true
                 | _ -> false)
-            | Explanation.Weaken _ | Explanation.Defining _ -> false)
+            | Explanation.Weaken _ | Explanation.Defining _ | Explanation.Linear_term _ ->
+                false)
           summands
       in
       List.length rows = 1
       && List.for_all
            (function
              | Explanation.Weaken _ -> true
+             (* An uncited term is the declared-range weakening (D-0132 section 2.4). *)
+             | Explanation.Linear_term r -> r.lt_cited = []
              | Explanation.Term (_, t) -> (
                  match Explanation.force t with
                  | Explanation.Model_row _ -> true
@@ -1594,6 +1597,10 @@ let close_root_conflict ctx trace store (c : Store.conflict) =
   let e = c.Store.c_why in
   Trace.emit ctx trace store;
   let line = Trace.conflict_line ctx trace c in
+  (* M8-bits-encoding-T2 (D-0130 section 5.4, D-0053): nothing may mint an atom once the
+     root contradiction is on the page. Nothing below names a literal; the guard is for
+     whatever comes after. *)
+  Encoding.close_atoms ctx.Justify.encoding;
   match Explanation.force e with
   | Explanation.Clause [] -> Justify.emit ctx e
   | forced ->
@@ -2102,7 +2109,7 @@ let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_conve
 let global_of store ~(decl : string -> (int * int) option) ~cid (l : Lit.t) :
     global option =
   match l.Lit.v with
-  | Lit.Eq _ -> None
+  | Lit.Eq _ | Lit.Bit _ -> None
   | Lit.Ge (nm, k) -> (
       match (Store.var_named store nm, decl nm) with
       | Some x, Some (lo, hi) ->
@@ -2342,9 +2349,54 @@ let record_improving ctx store stats (b : bnb) (asn : assignment) : [ `Continue 
     | Maximise -> (value >= o.o_decl_hi, Lit.ge o.o_name (value + 1))
   in
   if at_limit then (
-    b.b_floor <- Some cid;
+    (* M8-bits-encoding-T2 (D-0132 section 2.6): over a BITS objective the improving
+       constraint at the floor is `Σ 2^i obj_bit_i <= -1` (or `>= 2^n`-ish for a
+       maximisation), which is NOT contradictory on its own -- the bound row is what
+       refutes it -- and `conclusion BOUNDS` checks the cited constraint syntactically.
+       Measured: opt_max_sat at W = 0 was refused at the conclusion ("Expected
+       constraint is not syntactically implied by the constraint at the hint") until
+       this line was written. So the floor's contradiction is DERIVED, `pol @soli @lb +`
+       (a minimisation) or `pol @soli @ub +` (a maximisation), to `0 >= 1`, pinned, and
+       that id is what the conclusion cites. Over the ladder the improving constraint
+       is contradictory by itself (a count above the rungs), and nothing changes. *)
+    let enc = ctx.Justify.encoding in
+    let floor_id =
+      if Encoding.n_bits_vars enc > 0 && Encoding.is_bits enc o.o_name then
+        Justify.with_level ctx 0 (fun () ->
+            let w = ctx.Justify.writer in
+            let lb, ub = Encoding.bound_lines enc w o.o_name in
+            let row = match o.o_dir with Minimise -> lb | Maximise -> ub in
+            Writer.pol_concluding w ~origin:"M8-T2 objective floor over bits"
+              ~claim:(Baguette_proof.Opb.clause [])
+              Writer.Pol.(add (id cid) (id row)))
+      else cid
+    in
+    b.b_floor <- Some floor_id;
     `Proved)
   else
+    (* M8-bits-encoding-T2 (D-0130 section 9): over a bits objective the improving
+       constraint is over the bits, and the bound literal the search installs is an
+       atom that does not follow from it by unit propagation. One bridge, at level 0:
+       `pol @soli @B + s` -- B1 of the atom for `~obj_ge_v` (a minimisation's `obj <=
+       v - 1`), B2 for `obj_ge_(v+1)` (a maximisation's) -- pinned by `ia` to the unit,
+       which is then what the global's trace line is RUP from. The `soli` id stays in
+       [b_soli_ids] for the sweep; the bridge's id is the global's support. *)
+    let cid =
+      let enc = ctx.Justify.encoding in
+      if Encoding.n_bits_vars enc > 0 && Encoding.is_bits enc o.o_name then
+        Justify.with_level ctx 0 (fun () ->
+            let w = ctx.Justify.writer in
+            let b1, b2 = Encoding.ensure_atom enc w o.o_name (Lit.value lit.Lit.v) in
+            let b = if lit.Lit.positive then b2 else b1 in
+            let id =
+              Writer.pol_concluding w ~origin:"M8-T2 objective bridge over bits"
+                ~claim:(Baguette_proof.Opb.clause [ lit ])
+                Writer.Pol.(saturate (add (id cid) (id b)))
+            in
+            Justify.state_clause ctx [ lit ] id;
+            id)
+      else cid
+    in
     let decl = Learned.decl_of_encoding ctx.Justify.encoding in
     match global_of store ~decl ~cid lit with
     | Some g ->
@@ -2603,6 +2655,9 @@ and branch_split engine store ctx trace stats cfg order decisions (dec : decisio
          (Store.name store v) k (Domain.lo d) (Domain.hi d));
   let name = Store.name store v in
   let lit = Lit.ge name (k + 1) in
+  (* M8-bits-encoding-T2 (D-0130 section 5.4): a decision's atom is on the page before
+     the level that assumes it opens -- minted at level 0, so no [w] takes it. *)
+  Justify.ensure_lit ctx lit;
   (* The two sides, in the order this decision asks for. They are the same two functions
      whichever way round they go: which side is explored first changes the tree, and
      changes nothing about what is emitted for either side. *)
@@ -2754,6 +2809,9 @@ and branch_assign engine store ctx trace stats cfg order decisions (a : assign) 
   (* The assumption's two literals, and its negation's two. [Lit.le x (m-1)] is
      [~(x >= m)] and [Lit.ge x (m+1)] is [~(x <= m)] by construction of [Lit]. *)
   let dec_ge = Lit.ge name m and dec_le = Lit.le name m in
+  (* M8-bits-encoding-T2: both atoms before the two levels open (see [branch]). *)
+  Justify.ensure_lit ctx dec_ge;
+  Justify.ensure_lit ctx dec_le;
   let p = Store.level store in
   stats.decisions <- stats.decisions + 2;
   stats.assigns <- stats.assigns + 1;

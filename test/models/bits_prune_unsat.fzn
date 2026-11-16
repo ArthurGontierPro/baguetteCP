@@ -1,0 +1,11 @@
+% M8-bits-encoding-T2 (D-0132): root prunings over bits, cited by a cross-row conflict.
+% x + y <= 10 prunes x <= 10 and y <= 10 at the root (two bits-arm `pol` lines, each
+% deriving a unit through the pruned variable's own atom); z - x <= -15 then pushes
+% x >= 15, which crosses the established x <= 10: the conflict line is the same `pol`
+% over every term with x at its opposite bound, saturated to `~x_le_10 >= 1`.
+var 0..20: x :: output_var;
+var 0..20: y :: output_var;
+var 0..20: z :: output_var;
+constraint int_lin_le([1, 1], [x, y], 10);
+constraint int_lin_le([-1, 1], [x, z], -15);
+solve satisfy;

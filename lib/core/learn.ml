@@ -187,7 +187,9 @@ type policy = Strongest | Weakest
    one direction of the ladder. An [Eq] literal gets no slot -- [None] means "never
    merged", which is the honest answer for the direct encoding. *)
 let slot (l : Lit.t) =
-  match l.Lit.v with Lit.Ge (x, _) -> Some (x, l.Lit.positive) | Lit.Eq _ -> None
+  match l.Lit.v with
+  | Lit.Ge (x, _) -> Some (x, l.Lit.positive)
+  | Lit.Eq _ | Lit.Bit _ -> None
 
 let threshold (l : Lit.t) = Lit.value l.Lit.v
 

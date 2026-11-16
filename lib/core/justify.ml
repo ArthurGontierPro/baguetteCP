@@ -59,6 +59,36 @@
    shape every branch already closed with.
 
    -------------------------------------------------------------------------------
+   The BITS arm (M8-bits-encoding-T2, D-0130 section 7 as D-0132 section 2 rebuilt it)
+   -------------------------------------------------------------------------------
+
+   A pruning or conflict of a [Linear] row with at least one term on the bits encoding
+   is not RUP: a bound does not cross a bits row by unit propagation (D-0127, measured
+   at every width). Its trace line is therefore written by [emit_bits_pruning] as ONE
+   `pol` that derives EXACTLY the trace clause `claim \/ ~facts`, pinned by `ia`
+   through [Writer.pol_concluding]: the row; for every other term, its bound line
+   ([Encoding.bound_lines], `@lb`/`@ub`) scaled by |a| when the bound it read is the
+   declared one, else its bridge ([Encoding.ensure_atom]: B1 for `x >= v`, B2 for
+   `x <= v`) scaled by |a|, which cancels the term and leaves `|a| k ~fact` in the row;
+   then `|a_j| d`; then the pruned variable's own atom (B1 for an upper push, B2 for a
+   lower one); then `s`. Every atom's coefficient after the division is >= 1 and the
+   degree is exactly 1, so saturation yields the clause with coefficient 1 on each
+   literal -- the trace clause itself, which is what [Trace] and [Learn] read. NO unit is
+   cited and NO cited explanation is recursed into: that is what makes the derived
+   clause the trace clause under a decision as at the root (D-0132 section 2.1 says why
+   D-0130's "cite the unit" is wrong under a decision). An ORDER variable in such a row
+   is rendered through the same shape by the `rup` bridge pair and degree-0 bound lines
+   [Encoding] mints once per (x, v) (D-0132 section 2.2). The order arm's text at
+   `--bits-above none` is untouched: [emit_summand] renders a [Linear_term] exactly as it
+   rendered the [Weaken]/[Term] it replaced.
+
+   Atoms are minted where a name first reaches the writer (D-0130 section 3.3):
+   [validate_lits] below, which every clause, `rup`, [Defining] and nogood already pass
+   through, mints the atom of every bits-owned order literal it checks; [Trace] and
+   [Search] call [ensure_lit] for a claim, a fact and a decision. A propagator never
+   mints; it could not know whether it needs to.
+
+   -------------------------------------------------------------------------------
    Context -- and the ambient row that used to live in it (M1-T31)
    -------------------------------------------------------------------------------
 
@@ -222,7 +252,13 @@ let shallow_hash (e : Explanation.t) =
             (function
               | Explanation.Term (c, t) -> Hashtbl.hash (c, shallow_tag t)
               | Explanation.Weaken ls -> Hashtbl.hash (1, ls)
-              | Explanation.Defining (c, l) -> Hashtbl.hash (2, c, l))
+              | Explanation.Defining (c, l) -> Hashtbl.hash (2, c, l)
+              | Explanation.Linear_term r ->
+                  Hashtbl.hash
+                    ( 3,
+                      r.Explanation.lt_coeff,
+                      r.Explanation.lt_name,
+                      r.Explanation.lt_value ))
             ss )
   | Explanation.Deferred _ -> 6
 
@@ -411,6 +447,17 @@ let defining_line ctx (lits : Lit.t list) : Writer.cid option =
    is closed on the [pol] side. [emit_summand] below is the call. *)
 let defining_lit ctx (l : Lit.t) : Writer.cid option = defining_line ctx [ l ]
 
+(* The atom a literal names is on the page before the line that names it (D-0130
+   section 3.3): for an order literal of a BITS variable, [Encoding.ensure_atom] mints
+   the `red` pair (once; memoised there). An order variable's literal is a PB variable
+   of the .opb and needs nothing; a [Bit] never reaches a clause this module writes. *)
+let ensure_lit ctx (l : Lit.t) =
+  match l.Lit.v with
+  | Lit.Ge (x, v)
+    when Encoding.n_bits_vars ctx.encoding > 0 && Encoding.is_bits ctx.encoding x ->
+      ignore (Encoding.ensure_atom ctx.encoding ctx.writer x v : Writer.cid * Writer.cid)
+  | Lit.Ge _ | Lit.Eq _ | Lit.Bit _ -> ()
+
 let validate_lits ctx lits =
   List.iter
     (fun (l : Lit.t) ->
@@ -419,7 +466,8 @@ let validate_lits ctx lits =
         invalid_arg
           (Printf.sprintf
              "Justify: literal %s refers to variable %s not declared in this encoding"
-             (Lit.to_string l) owner))
+             (Lit.to_string l) owner);
+      ensure_lit ctx l)
     lits
 
 (* Run [thunk] and memoise its result under [e]'s identity, unless it is already
@@ -583,13 +631,63 @@ let emit_cut ~emit ~claim ctx e1 e2 c1 c2 =
    return shapes (mint an id vs. build a fragment directly); folding both into one
    [Pol.t] before the single [Writer.pol] call is what keeps the whole [Combine] to
    exactly one proof line, matching every step of D-0013's worked example. *)
+(* The axiom fold of a [Weaken] (and of an uncited [Linear_term]): one fragment, the
+   literals added left to right. Empty for a fixed variable, which [emit_combine] drops. *)
+let emit_weaken ctx lits =
+  match lits with
+  | [] -> []
+  | (c0, l0) :: rest ->
+      validate_lits ctx (List.map snd lits);
+      [
+        List.fold_left
+          (fun acc (c, l) ->
+            if c < 1 then
+              invalid_arg
+                (Printf.sprintf
+                   "Justify.emit: Weaken axiom coefficient must be >= 1, got %d" c);
+            Pol.add acc (Pol.mul (Pol.axiom l) c))
+          (Pol.mul (Pol.axiom l0) c0)
+          rest;
+      ]
+
+(* Every summand yields a LIST of fragments that [emit_combine] adds one at a time, in
+   order -- the left fold is what the emitted text is, and a [Linear_term] with several
+   cited explanations must land as the several [Term]s it replaced, not as one nested
+   sum (M8-bits-encoding-T2; the determinism gate holds the text). *)
 let emit_summand ~emit ctx = function
   | Explanation.Term (c, e) ->
       if c < 1 then
         invalid_arg
           (Printf.sprintf "Justify.emit: Combine term coefficient must be >= 1, got %d" c);
       let id = emit ctx e in
-      Pol.mul (Pol.id id) c
+      [ Pol.mul (Pol.id id) c ]
+  (* [Linear_term] in the ORDER arm (D-0132 section 2.4): the declared-range axiom chain
+     when nothing is cited (declared bound, or a bound resting on a decision -- I-X9's
+     exception), one [Term] at |coeff| per cited explanation otherwise. Byte for byte
+     what [Linear] built before T2. A bits term cannot be rendered here at all: its
+     order literals are atoms, not .opb variables, and the derivation that names them is
+     [emit_bits_pruning]'s. *)
+  | Explanation.Linear_term r -> (
+      if
+        Encoding.n_bits_vars ctx.encoding > 0
+        && Encoding.is_bits ctx.encoding r.Explanation.lt_name
+      then
+        invalid_arg
+          (Printf.sprintf
+             "Justify.emit: `%s` is on the bits encoding; its row's derivation is \
+              written by emit_bits_pruning, never as a bare pol (D-0132 section 2)"
+             r.Explanation.lt_name);
+      match r.Explanation.lt_cited with
+      | [] ->
+          let lits, _ =
+            Order_reason.weaken_declared ~coeff:r.Explanation.lt_coeff
+              ~name:r.Explanation.lt_name ~decl_lo:r.Explanation.lt_decl_lo
+              ~decl_hi:r.Explanation.lt_decl_hi
+          in
+          emit_weaken ctx lits
+      | es ->
+          let c = Stdlib.abs r.Explanation.lt_coeff in
+          List.map (fun e -> Pol.mul (Pol.id (emit ctx e)) c) es)
   (* [Defining (c, l)] -- D-0009's other half (M4-T7, explanation.ml's header).
 
      A [Weaken] puts [l] in as the trivial axiom, which cancels the term and costs one
@@ -618,22 +716,8 @@ let emit_summand ~emit ctx = function
       let id =
         match defining_lit ctx l with Some id -> id | None -> emit_clause ctx [ l ]
       in
-      Pol.mul (Pol.id id) c
-  | Explanation.Weaken lits ->
-      (match lits with
-      | [] -> invalid_arg "Justify.emit: Combine's Weaken summand must be non-empty"
-      | _ -> ());
-      validate_lits ctx (List.map snd lits);
-      List.fold_left
-        (fun acc (c, l) ->
-          if c < 1 then
-            invalid_arg
-              (Printf.sprintf
-                 "Justify.emit: Weaken axiom coefficient must be >= 1, got %d" c);
-          Pol.add acc (Pol.mul (Pol.axiom l) c))
-        (let c0, l0 = List.hd lits in
-         Pol.mul (Pol.axiom l0) c0)
-        (List.tl lits)
+      [ Pol.mul (Pol.id id) c ]
+  | Explanation.Weaken lits -> emit_weaken ctx lits
 
 let emit_combine ~emit ~claim ctx summands divisor =
   (* A [Weaken []] summand is a variable with NOTHING to weaken: declared on a single
@@ -647,16 +731,23 @@ let emit_combine ~emit ~claim ctx summands divisor =
      [emit_summand]'s own check below stays, for a [Weaken []] that reaches it any other
      way. *)
   let summands =
-    List.filter (function Explanation.Weaken [] -> false | _ -> true) summands
+    List.filter
+      (function
+        | Explanation.Weaken [] -> false
+        | Explanation.Linear_term r ->
+            (* A fixed variable, uncited: the same empty chain as [Weaken []]. *)
+            not (r.Explanation.lt_cited = [] && Explanation.lt_width r <= 0)
+        | _ -> true)
+      summands
   in
   (match summands with
   | [] -> invalid_arg "Justify.emit: Combine must have at least one summand"
   | _ -> ());
+  let frags = List.concat_map (emit_summand ~emit ctx) summands in
   let expr =
-    List.fold_left
-      (fun acc s -> Pol.add acc (emit_summand ~emit ctx s))
-      (emit_summand ~emit ctx (List.hd summands))
-      (List.tl summands)
+    match frags with
+    | [] -> invalid_arg "Justify.emit: Combine must have at least one summand"
+    | f :: rest -> List.fold_left Pol.add f rest
   in
   let expr = if divisor <= 1 then expr else Pol.div expr divisor in
   pol_stating ctx ~claim
@@ -733,6 +824,82 @@ let emit_stating ctx ~(claim : Opb.constr) (e : Explanation.t) : Writer.cid =
         emit ctx e
   in
   go e
+
+(* M8-bits-encoding-T2: the BITS arm's trace line -- the module header's "The BITS arm"
+   says what the `pol` is and why it derives exactly the trace clause. [concludes] is
+   the pruning's own claim ([Reason.justified]'s third half, D-0043), [None] for a
+   conflict. Returns the id of the `ia` line, which IS the clause, and the clause it
+   states (claim first, then the facts negated in snapshot order), so [Trace] can tell
+   whether its own line is that clause (always, unless the claim settled past a hole,
+   which only an order variable in an [Ne] scope can do) or must follow it as a `rup`.
+   Precondition: [e] forces to [Linear]'s [Combine] shape -- the row as [Term (1,
+   Model_row)] and every other summand a [Linear_term]; anything else is a caller's
+   mistake and says so here. *)
+let emit_bits_pruning ctx ~origin ~(concludes : Reason.fact option) (e : Explanation.t) :
+    Writer.cid * Lit.t list =
+  let w = ctx.writer and enc = ctx.encoding in
+  let summands, divisor =
+    match Explanation.force e with
+    | Explanation.Combine (summands, divisor) -> (summands, divisor)
+    | other ->
+        invalid_arg
+          (Printf.sprintf "Justify.emit_bits_pruning: not a Linear derivation: %s"
+             (Explanation.to_string other))
+  in
+  let neg_facts_rev = ref [] in
+  let fragment = function
+    | Explanation.Term (c, Explanation.Model_row id) -> Some (Pol.mul (Pol.id id) c)
+    | Explanation.Linear_term r -> (
+        let c = Stdlib.abs r.Explanation.lt_coeff and x = r.Explanation.lt_name in
+        match Explanation.lt_lit r with
+        | None ->
+            if Explanation.lt_width r <= 0 then None
+              (* a fixed variable: nothing to weaken *)
+            else
+              let lb, ub = Encoding.bound_lines enc w x in
+              Some (Pol.mul (Pol.id (if r.Explanation.lt_coeff > 0 then lb else ub)) c)
+        | Some l ->
+            validate_lits ctx [ l ];
+            (* [x >= v] cites B1 at v; [x <= v] is [~x_ge_(v+1)] and cites B2 at v+1:
+               [Lit.value] is the atom's value either way. *)
+            let b1, b2 = Encoding.ensure_atom enc w x (Lit.value l.Lit.v) in
+            neg_facts_rev := Lit.negate l :: !neg_facts_rev;
+            Some (Pol.mul (Pol.id (if l.Lit.positive then b1 else b2)) c))
+    | s ->
+        invalid_arg
+          (Printf.sprintf
+             "Justify.emit_bits_pruning: a summand that is not a Linear term: %s"
+             (Explanation.summand_to_string s))
+  in
+  let frags = List.filter_map fragment summands in
+  let expr =
+    match frags with
+    | [] -> invalid_arg "Justify.emit_bits_pruning: empty derivation"
+    | f :: rest -> List.fold_left Pol.add f rest
+  in
+  let expr = if divisor <= 1 then expr else Pol.div expr divisor in
+  let claim =
+    match Option.bind concludes Reason.lit_of_fact with
+    | None ->
+        if concludes <> None then
+          invalid_arg
+            "Justify.emit_bits_pruning: a bits conclusion at its declared bound (nothing \
+             to claim)";
+        []
+    | Some l ->
+        validate_lits ctx [ l ];
+        let b1, b2 = Encoding.ensure_atom enc w (Lit.owner l.Lit.v) (Lit.value l.Lit.v) in
+        (* The pruned variable's own atom: an upper push [x <= u] is [~x_ge_(u+1)] and
+           cites B1 at u+1; a lower push [x >= l] cites B2 at l. *)
+        [ (l, if l.Lit.positive then b2 else b1) ]
+  in
+  let expr = List.fold_left (fun acc (_, b) -> Pol.add acc (Pol.id b)) expr claim in
+  let clause = List.map fst claim @ List.rev !neg_facts_rev in
+  let expr = if clause = [] then expr else Pol.saturate expr in
+  let cid = Writer.pol_concluding w ~origin ~claim:(Opb.clause clause) expr in
+  Encoding.note_bits_pruning enc;
+  state_clause ctx clause cid;
+  (cid, clause)
 
 (* M8-bits-encoding-T5 (D-0131): a [Combine] or [Cut] that concludes a LITERAL is
    written as `rup <literal> >= 1 ;` -- the module header says why, and this comment

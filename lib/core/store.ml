@@ -509,7 +509,7 @@ let at_root t i = t.n_levels = 0 || i < t.marks.(0).trail_mark
    literal answers [false]; see [agreement_holds]. *)
 let root_holds t (l : Lit.t) =
   match l.Lit.v with
-  | Lit.Eq _ -> false
+  | Lit.Eq _ | Lit.Bit _ -> false (* a bit is never a bound fact (D-0130 section 3.2) *)
   | Lit.Ge (x, k) -> (
       match var_named t x with
       | None -> false
@@ -529,7 +529,8 @@ let reverse_owners t e =
              | Explanation.Weaken lits -> List.map (fun (_, l) -> Lit.owner l.Lit.v) lits
              | Explanation.Defining (_, l) ->
                  if root_holds t l then [] else [ Lit.owner l.Lit.v ]
-             | Explanation.Term _ -> [])
+             | Explanation.Term _ -> []
+             | Explanation.Linear_term r -> if r.lt_cited = [] then [ r.lt_name ] else [])
            summands)
   | _ -> []
 

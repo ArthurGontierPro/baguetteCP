@@ -107,6 +107,7 @@ let test_lit_rendering_is_the_reference () =
   let ref_var_name = function
     | Lit.Ge (x, v) -> Printf.sprintf "%s_ge_%s" (ref_sanitize x) (ref_suffix v)
     | Lit.Eq (x, v) -> Printf.sprintf "%s_eq_%s" (ref_sanitize x) (ref_suffix v)
+    | Lit.Bit (x, i) -> Printf.sprintf "%s_bit_%s" (ref_sanitize x) (ref_suffix i)
   in
   let ref_to_string (l : Lit.t) =
     if l.Lit.positive then ref_var_name l.Lit.v else "~" ^ ref_var_name l.Lit.v
@@ -599,6 +600,7 @@ let lit_truth assign (l : Lit.t) =
     match v with
     | Lit.Ge (x, k) -> List.assoc x assign >= k
     | Lit.Eq (x, k) -> List.assoc x assign = k
+    | Lit.Bit (x, i) -> (List.assoc x assign lsr i) land 1 = 1
   in
   if l.Lit.positive then base else not base
 
@@ -3742,6 +3744,445 @@ let test_m7t27_ladder_ids_are_arithmetic () =
   check "M7-T27 (b): a hole is not a rung" (rung "h" 1 <> Encoding.hole_id e "h" 1);
   Encoding.encoding_budget := saved
 
+(* ------------------------------------------------------------------ *)
+(* M8-bits-encoding-T2 (D-0130 sections 4-6 and 11, D-0132): the bits  *)
+(* encoding, the on-demand atom, and the checker's judgement of both.  *)
+(* ------------------------------------------------------------------ *)
+
+let with_bits_above w f =
+  let saved = !Encoding.bits_above in
+  Encoding.bits_above := w;
+  Fun.protect ~finally:(fun () -> Encoding.bits_above := saved) f
+
+let test_bits_naming () =
+  (* PROOF-FORMAT section 3's third name: `x_bit_i`, bit i of (x - lo). *)
+  check_eq "bits: var_name" ~expected:"x_bit_3" ~got:(Lit.var_name (Lit.Bit ("x", 3)));
+  check_eq "bits: a negated bit" ~expected:"~x_bit_0"
+    ~got:(Lit.to_string (Lit.negate (Lit.bit "x" 0)));
+  check_eq "bits: a renamed owner's bit" ~expected:"a_b_bit_2"
+    ~got:(Lit.var_name (Lit.Bit ("a.b", 2)));
+  check "bits: Ge < Eq < Bit across kinds"
+    (Lit.var_compare (Lit.Ge ("x", 1)) (Lit.Bit ("x", 0)) < 0
+    && Lit.var_compare (Lit.Eq ("x", 1)) (Lit.Bit ("x", 0)) < 0
+    && Lit.var_compare (Lit.Bit ("x", 0)) (Lit.Bit ("x", 1)) < 0
+    && Lit.var_compare (Lit.Bit ("x", 1)) (Lit.Bit ("x", 1)) = 0);
+  check "bits: a bit is neither an order nor a direct literal"
+    ((not (Lit.is_order (Lit.Bit ("x", 0))))
+    && (not (Lit.is_direct (Lit.Bit ("x", 0))))
+    && Lit.is_bit (Lit.Bit ("x", 0))
+    && not (Lit.is_bit (Lit.Ge ("x", 1))));
+  check "bits: owner and index"
+    (Lit.owner (Lit.Bit ("q", 4)) = "q" && Lit.value (Lit.Bit ("q", 4)) = 4);
+  (* The threshold's spelling is [limit_of_string]'s (D-0130 section 10). *)
+  check "bits: --bits-above none/0/k"
+    (Encoding.limit_of_string ~what:"--bits-above" "none" = None
+    && Encoding.limit_of_string ~what:"--bits-above" "0" = Some 0
+    && Encoding.limit_of_string ~what:"--bits-above" "17" = Some 17);
+  raises "bits: --bits-above refuses a typo" (fun () ->
+      Encoding.limit_of_string ~what:"--bits-above" "zero");
+  check "bits: wants_bits is false at the default"
+    (with_bits_above None (fun () -> not (Encoding.wants_bits ~lo:0 ~hi:1000)));
+  check "bits: wants_bits at 0 -- width 2 yes, width 1 and 0 no (D-0130 section 3.4)"
+    (with_bits_above (Some 0) (fun () ->
+         Encoding.wants_bits ~lo:0 ~hi:2
+         && (not (Encoding.wants_bits ~lo:0 ~hi:1))
+         && not (Encoding.wants_bits ~lo:7 ~hi:7)));
+  check "bits: wants_bits at k is strictly wider than k"
+    (with_bits_above (Some 8) (fun () ->
+         Encoding.wants_bits ~lo:0 ~hi:9 && not (Encoding.wants_bits ~lo:0 ~hi:8)))
+
+let test_bits_declare () =
+  let e = Encoding.create () in
+  (* width 9 -> 4 bits (2^4 = 16 > 9 >= 2^3); lo = 3, so the bits carry x - 3. *)
+  Encoding.declare_int_bits e "x" ~lo:3 ~hi:12;
+  check "bits: is_bits" (Encoding.is_bits e "x");
+  check "bits: bit_length 9 = 4" (Encoding.bits_n e "x" = Some 4);
+  check "bits: n_bits_vars" (Encoding.n_bits_vars e = 1);
+  check "bits: two rows, no ladder" (Encoding.n_constraints e = 2);
+  check "bits: no rung" (Encoding.consistency_id e "x" 5 = None);
+  check "bits: no hole row" (Encoding.hole_id e "x" 5 = None);
+  check "bits: ge/le answer as for any variable"
+    (Encoding.ge e "x" 3 = Encoding.Holds
+    && Encoding.ge e "x" 13 = Encoding.Fails
+    && Encoding.ge e "x" 7 = Encoding.Cond (Lit.ge "x" 7)
+    && Encoding.le e "x" 12 = Encoding.Holds);
+  let rows = List.map Opb.constr_to_string (Encoding.constraints e) in
+  check_eq "bits: @lb is the unsigned offset's lower bound"
+    ~expected:"+1 x_bit_0 +2 x_bit_1 +4 x_bit_2 +8 x_bit_3 >= 0 ;" ~got:(List.nth rows 0);
+  check_eq "bits: @ub bounds the offset by the width"
+    ~expected:"-1 x_bit_0 -2 x_bit_1 -4 x_bit_2 -8 x_bit_3 >= -9 ;" ~got:(List.nth rows 1);
+  let c = Encoding.cost e in
+  check "bits: the cost record counts it"
+    (c.Encoding.c_bits_vars = 1 && c.Encoding.c_bits_rows = 2
+    && c.Encoding.c_ladder_clauses = 0);
+  (* The header counts the four bit names (M7-T27 (b)'s [Occurs], bits range). *)
+  let buf = Buffer.create 256 in
+  let tmp = Filename.temp_file "baguette_bits_decl" ".opb" in
+  let oc = open_out tmp in
+  Encoding.write_opb e oc;
+  close_out oc;
+  Buffer.add_string buf (read_whole tmp);
+  Sys.remove tmp;
+  check "bits: #variable= counts the bits"
+    (String.length (Buffer.contents buf) > 0
+    && String.sub (Buffer.contents buf) 0 24 = "* #variable= 4 #constrai");
+  raises "bits: width 1 is refused (stays order by rule)" (fun () ->
+      Encoding.declare_int_bits (Encoding.create ()) "b" ~lo:0 ~hi:1);
+  raises "bits: no direct encoding over bits" (fun () ->
+      let tmp = Filename.temp_file "baguette_bits_direct" ".pbp" in
+      let oc = open_out tmp in
+      let w = Writer.create oc in
+      Fun.protect
+        ~finally:(fun () ->
+          close_out oc;
+          Sys.remove tmp)
+        (fun () -> ignore (Encoding.ensure_direct e w "x")));
+  (* The assignment the checker is handed: the bits of (value - lo). x = 10 is 7 = 0111. *)
+  check "bits: assignment_lits_of lists the bits of the offset"
+    (List.map Lit.to_string (Encoding.assignment_lits_of e "x" 10)
+    = [ "x_bit_0"; "x_bit_1"; "x_bit_2"; "~x_bit_3" ])
+
+let test_bits_mixed_row () =
+  let e = Encoding.create () in
+  Encoding.declare_int_bits e "x" ~lo:3 ~hi:12;
+  Encoding.declare_int e "y" ~lo:0 ~hi:3;
+  (* 2x + y <= 20 with x = 3 + X': 2X' + Y' <= 14, i.e. the checker's `>=` form. *)
+  let row = Encoding.expand_int_lin_le e [ (2, "x"); (1, "y") ] 20 in
+  (* [Opb.normalise] moves every negative coefficient onto the negated literal, so the
+     checker's form is `2 ~x_bit_0 + ... >= 2 * 15 + 3 - 14`. *)
+  check_eq "bits: the mixed row carries a*2^i on the bits beside a on the rungs"
+    ~expected:
+      "+2 ~x_bit_0 +4 ~x_bit_1 +8 ~x_bit_2 +16 ~x_bit_3 +1 ~y_ge_1 +1 ~y_ge_2 +1 ~y_ge_3 \
+       >= 19 ;"
+    ~got:(Opb.constr_to_string row);
+  let terms, const = Encoding.linear_terms_int_lin_le e [ (-3, "x") ] in
+  check "bits: a negative coefficient negates the bit coefficients, lo in the constant"
+    (List.map fst terms = [ -3; -6; -12; -24 ] && const = -9);
+  (* D-0130 section 6: the coefficient mass of a bits term is |a| (2^n - 1), here 2 * 15
+     for x beside 1 * 3 for y. *)
+  check "bits: row_magnitudes uses 2^n - 1 for a bits term"
+    (Encoding.row_magnitudes e [ (2, "x"); (1, "y") ] = ((2 * 12) + (1 * 3), (2 * 15) + 3));
+  (* And the committing door still raises rather than wrap (I-X8): a 42-bit variable with
+     a 2^22 coefficient has mass 2^22 * (2^42 - 1), past a 63-bit int. *)
+  let wide = Encoding.create () in
+  (* 42 literals and no ladder: the I-X8 envelope needs the magnitude, not a ladder. *)
+  Encoding.declare_int_bits wide "w" ~lo:0 ~hi:(1 lsl 41) (* width-ok: bits *);
+  raises "bits: the mixed row's envelope is checked in Arith (I-X8)" (fun () ->
+      Encoding.add_int_lin_le wide [ (1 lsl 22, "w") ] 0)
+
+(* The checker's judgement of the atom pair, the bridges, the links and the pruning --
+   D-0130 section 11's lanes, with D-0132 section 1's corrections (p6: B2-before-B1 is
+   accepted; the vacuity: an atom the model decides accepts B2's flipped witness).
+   Everything is over a SATISFIABLE model (D-0053), and the pair is minted UNDER A
+   DECISION (D-0127's caveat), by [Encoding.ensure_atom] where the lane is about the
+   honest shape and by hand where it is about a corruption. *)
+let test_bits_atoms_veripb () =
+  match veripb_path () with
+  | None ->
+      incr failures;
+      print_endline
+        ("FAIL M8-T2 bits atoms: " ^ Baguette_proof.Checker.not_found_message
+       ^ " -- a red pair nothing checked is not an atom.")
+  | Some veripb ->
+      let dir = Filename.temp_file "baguette_bits_veripb" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let log = Filename.concat dir "log" in
+      let run opb pbp = run_checker ~checker:veripb ~opb ~pbp ~log = Some true in
+      let says needle =
+        let out = try read_whole log with _ -> "" in
+        let n = String.length needle in
+        let rec go i =
+          i + n <= String.length out && (String.sub out i n = needle || go (i + 1))
+        in
+        go 0
+      in
+      let accepted name ~opb ~pbp =
+        if run opb pbp then Printf.printf "ok   %s\n" name
+        else (
+          incr failures;
+          Printf.printf "FAIL %s (veripb REJECTED it)\n  model: %s\n  proof: %s\n%s\n"
+            name opb pbp
+            (try read_whole log with _ -> ""))
+      in
+      let rejected_saying name ~opb ~pbp ~needle =
+        if run opb pbp then (
+          incr failures;
+          Printf.printf "FAIL %s (veripb ACCEPTED it)\n  model: %s\n  proof: %s\n" name
+            opb pbp)
+        else if says needle then Printf.printf "ok   %s\n" name
+        else (
+          incr failures;
+          Printf.printf
+            "FAIL %s -- it was rejected, but not on %S, so this lane cannot tell a \
+             JUDGEMENT from a parse error\n\
+             %s\n"
+            name needle
+            (try read_whole log with _ -> ""))
+      in
+      let witness_wording =
+        "Proofgoal #1 could not be autoproven. Please add an explicit subproof for \
+         proofgoal #1."
+      in
+      let ia_wording =
+        "Expected constraint is not syntactically implied by the constraint at the hint."
+      in
+      (* The model of D-0132 section 1: x on 3 bits, y on the ladder, 2x + y <= 7.
+         Satisfiable (x = y = 0), and nothing decides x >= 3. *)
+      let model name =
+        let e = Encoding.create () in
+        Encoding.declare_int_bits e "x" ~lo:0 ~hi:5;
+        Encoding.declare_int e "y" ~lo:0 ~hi:3;
+        let row = Encoding.add_int_lin_le e [ (2, "x"); (1, "y") ] 7 in
+        let opb = Filename.concat dir (name ^ ".opb") in
+        let oc = open_out opb in
+        Encoding.write_opb ~comments:[ "2x + y <= 7, x on bits" ] e oc;
+        close_out oc;
+        (e, opb, row)
+      in
+      let proof name ~audit f =
+        let pbp = Filename.concat dir (name ^ ".pbp") in
+        let oc = open_out pbp in
+        let w = Writer.create ~comments:true ~audit oc in
+        f w;
+        close_out oc;
+        pbp
+      in
+      let bits_terms e x =
+        let n = Option.get (Encoding.bits_n e x) in
+        Encoding.bit_terms x n
+      in
+      let neg_bits_terms e x =
+        List.map (fun (c, l) -> (c, Lit.negate l)) (bits_terms e x)
+      in
+      let pair_by_hand e w x v ~w1 ~w2 ~order =
+        let lo, _ = Encoding.domain e x in
+        let n = Option.get (Encoding.bits_n e x) in
+        let k = v - lo and big_k = (1 lsl n) - (v - lo) in
+        let atom = Lit.ge x v in
+        let b1 () =
+          Writer.red w ~origin:"by hand B1"
+            ~witness:[ (atom.Lit.v, w1) ]
+            (Opb.ge (bits_terms e x @ [ (k, Lit.negate atom) ]) k)
+        in
+        let b2 () =
+          Writer.red w ~origin:"by hand B2"
+            ~witness:[ (atom.Lit.v, w2) ]
+            (Opb.ge (neg_bits_terms e x @ [ (big_k, atom) ]) big_k)
+        in
+        match order with
+        | `B1_first ->
+            let a = b1 () in
+            let b = b2 () in
+            (a, b)
+        | `B2_first ->
+            let b = b2 () in
+            let a = b1 () in
+            (a, b)
+      in
+      (* ---- (a) the honest shape, minted under a decision, through the substrate ---- *)
+      let e, opb, row = model "honest" in
+      let pbp =
+        proof "honest" ~audit:true (fun w ->
+            Encoding.start_proof e w;
+            Writer.set_level w 1;
+            let b1, b2 = Encoding.ensure_atom e w "x" 3 in
+            check "M8-T2 atoms: the pair lands at level 0 whatever the writer's level"
+              (Writer.tag_of w b1 = Some 0 && Writer.tag_of w b2 = Some 0);
+            check "M8-T2 atoms: the writer is back on the decision's level"
+              (Writer.current_level w = 1);
+            check "M8-T2 atoms: memoised" (Encoding.ensure_atom e w "x" 3 = (b1, b2));
+            let o1, _ = Encoding.ensure_atom e w "y" 2 in
+            let lb_y, _ = Encoding.bound_lines e w "y" in
+            ignore (lb_y : Writer.cid);
+            (* The pruning x <= 2 from y >= 2: row + B1'(y,2), divide by 2, + B1(x,3), s. *)
+            let line =
+              Writer.pol_concluding w ~origin:"the pruning"
+                ~claim:(Opb.clause [ Lit.le "x" 2; Lit.negate (Lit.ge "y" 2) ])
+                Pol.(saturate (add (div (add (id row) (id o1)) 2) (id b1)))
+            in
+            ignore (line : Writer.cid);
+            Writer.set_level w 0;
+            let st = Encoding.atom_stats e in
+            check "M8-T2 atoms: the counters see one atom, one bridge, one bound pair"
+              (st.Encoding.a_atoms = 1 && st.Encoding.a_bridges = 1
+             && st.Encoding.a_bound_lines = 1 && st.Encoding.a_links = 0);
+            Writer.delete_many w (Writer.live_ids w);
+            Writer.conclusion w Writer.No_conclusion)
+      in
+      accepted "M8-T2 atoms: the honest pair, bridge, bound line and pruning verify" ~opb
+        ~pbp;
+      (* ---- (b) B1 under the flipped witness, atom undecided ---- *)
+      let e, opb, _ = model "flip_b1" in
+      let pbp =
+        proof "flip_b1" ~audit:false (fun w ->
+            Encoding.start_proof e w;
+            Writer.set_level w 1;
+            ignore (pair_by_hand e w "x" 3 ~w1:Writer.One ~w2:Writer.One ~order:`B1_first);
+            Writer.conclusion w Writer.No_conclusion)
+      in
+      rejected_saying
+        "M8-T2 atoms: B1 under the flipped witness is refused at the proofgoal wording"
+        ~opb ~pbp ~needle:witness_wording;
+      (* ---- (c) B2 under the flipped witness, atom undecided ---- *)
+      let e, opb, _ = model "flip_b2" in
+      let pbp =
+        proof "flip_b2" ~audit:false (fun w ->
+            Encoding.start_proof e w;
+            Writer.set_level w 1;
+            ignore
+              (pair_by_hand e w "x" 3 ~w1:Writer.Zero ~w2:Writer.Zero ~order:`B1_first);
+            Writer.conclusion w Writer.No_conclusion)
+      in
+      rejected_saying
+        "M8-T2 atoms: B2 under the flipped witness is refused at the proofgoal wording"
+        ~opb ~pbp ~needle:witness_wording;
+      (* ---- (d) B2 before B1: a MEASUREMENT, not a refusal (D-0132 section 1, p6) ---- *)
+      let e, opb, _ = model "b2_first" in
+      let pbp =
+        proof "b2_first" ~audit:false (fun w ->
+            Encoding.start_proof e w;
+            Writer.set_level w 1;
+            ignore
+              (pair_by_hand e w "x" 3 ~w1:Writer.Zero ~w2:Writer.One ~order:`B2_first);
+            Writer.conclusion w Writer.No_conclusion)
+      in
+      accepted
+        "M8-T2 atoms: B2 before B1 is ACCEPTED -- the pair is symmetric for a fresh atom \
+         (measured; D-0130 section 5.1's order is a convention)"
+        ~opb ~pbp;
+      (* ---- (e) the vacuity: an atom the MODEL decides ---- *)
+      let vac name =
+        let e = Encoding.create () in
+        Encoding.declare_int_bits e "x" ~lo:0 ~hi:5;
+        ignore (Encoding.add_int_lin_le e [ (1, "x") ] 2 : Writer.cid);
+        let opb = Filename.concat dir (name ^ ".opb") in
+        let oc = open_out opb in
+        Encoding.write_opb ~comments:[ "x <= 2 decides x >= 3" ] e oc;
+        close_out oc;
+        (e, opb)
+      in
+      let e, opb = vac "vac_b2" in
+      let pbp =
+        proof "vac_b2" ~audit:false (fun w ->
+            Encoding.start_proof e w;
+            ignore
+              (pair_by_hand e w "x" 3 ~w1:Writer.Zero ~w2:Writer.Zero ~order:`B1_first);
+            Writer.conclusion w Writer.No_conclusion)
+      in
+      accepted
+        "M8-T2 atoms: VACUITY MEASURED -- on a model that decides the atom, B2 under the \
+         flipped witness is accepted (D-0127's B2 finding; why the lanes above mint \
+         under a decision)"
+        ~opb ~pbp;
+      let e, opb = vac "vac_b1" in
+      let pbp =
+        proof "vac_b1" ~audit:false (fun w ->
+            Encoding.start_proof e w;
+            ignore (pair_by_hand e w "x" 3 ~w1:Writer.One ~w2:Writer.One ~order:`B1_first);
+            Writer.conclusion w Writer.No_conclusion)
+      in
+      rejected_saying
+        "M8-T2 atoms: ... while B1 under the flipped witness is still refused there (its \
+         goal is not vacuous: the negation of B1 is satisfiable with the row)"
+        ~opb ~pbp ~needle:witness_wording;
+      (* ---- (f) the `ia` pin: a stronger claim than the pol derives ---- *)
+      let e, opb, row = model "ia_wrong" in
+      let pbp =
+        proof "ia_wrong" ~audit:false (fun w ->
+            Encoding.start_proof e w;
+            Writer.set_level w 1;
+            let b1, _ = Encoding.ensure_atom e w "x" 3 in
+            let o1, _ = Encoding.ensure_atom e w "y" 2 in
+            ignore
+              (Writer.pol_concluding w ~origin:"over-claim"
+                 ~claim:(Opb.clause [ Lit.le "x" 2 ])
+                 Pol.(saturate (add (div (add (id row) (id o1)) 2) (id b1))));
+            Writer.conclusion w Writer.No_conclusion)
+      in
+      rejected_saying
+        "M8-T2 atoms: a pin stronger than the derivation is refused at the ia" ~opb ~pbp
+        ~needle:ia_wording;
+      (* ---- (g) B2 cited where B1 belongs ---- *)
+      let e, opb, row = model "b2_for_b1" in
+      let pbp =
+        proof "b2_for_b1" ~audit:false (fun w ->
+            Encoding.start_proof e w;
+            Writer.set_level w 1;
+            let _, b2 = Encoding.ensure_atom e w "x" 3 in
+            let o1, _ = Encoding.ensure_atom e w "y" 2 in
+            ignore
+              (Writer.pol_concluding w ~origin:"wrong half"
+                 ~claim:(Opb.clause [ Lit.le "x" 2; Lit.negate (Lit.ge "y" 2) ])
+                 Pol.(saturate (add (div (add (id row) (id o1)) 2) (id b2))));
+            Writer.conclusion w Writer.No_conclusion)
+      in
+      rejected_saying "M8-T2 atoms: B2 cited where B1 belongs is refused at the ia" ~opb
+        ~pbp ~needle:ia_wording;
+      (* ---- (h) the sparse chain: honest links, then a wrong neighbour ---- *)
+      let e, opb, _ = model "links" in
+      let pbp =
+        proof "links" ~audit:true (fun w ->
+            Encoding.start_proof e w;
+            Writer.set_level w 1;
+            ignore (Encoding.ensure_atom e w "x" 1);
+            ignore (Encoding.ensure_atom e w "x" 4);
+            (* lands between the two: links (2,1) and (4,2) are written, (4,1) stays *)
+            ignore (Encoding.ensure_atom e w "x" 2);
+            let st = Encoding.atom_stats e in
+            check "M8-T2 atoms: three atoms, three links (one per neighbour pair)"
+              (st.Encoding.a_atoms = 3 && st.Encoding.a_links = 3);
+            (* A consumer that walks the chain: x >= 4 and x <= 0 cannot both hold. *)
+            ignore
+              (Writer.rup_clause w ~origin:"walk"
+                 [ Lit.negate (Lit.ge "x" 4); Lit.ge "x" 1 ]);
+            Writer.set_level w 0;
+            Writer.delete_many w (Writer.live_ids w);
+            Writer.conclusion w Writer.No_conclusion)
+      in
+      accepted "M8-T2 atoms: the sparse chain verifies and a RUP walks it" ~opb ~pbp;
+      let e, opb, _ = model "link_wrong" in
+      let pbp =
+        proof "link_wrong" ~audit:false (fun w ->
+            Encoding.start_proof e w;
+            Writer.set_level w 1;
+            let b1_1, _ = Encoding.ensure_atom e w "x" 1 in
+            ignore b1_1;
+            let _, b2_2 = Encoding.ensure_atom e w "x" 2 in
+            let b1_4, _ = Encoding.ensure_atom e w "x" 4 in
+            (* B1_4 + B2_2 derives ~x_ge_4 \/ x_ge_2; claiming x_ge_1 instead is a wrong
+               neighbour. *)
+            ignore
+              (Writer.pol_concluding w ~origin:"wrong neighbour"
+                 ~claim:(Opb.clause [ Lit.negate (Lit.ge "x" 4); Lit.ge "x" 1 ])
+                 Pol.(div (saturate (add (id b1_4) (id b2_2))) 4));
+            Writer.conclusion w Writer.No_conclusion)
+      in
+      rejected_saying "M8-T2 atoms: a link to the wrong neighbour is refused at the ia"
+        ~opb ~pbp ~needle:ia_wording;
+      (* ---- (i) the guards that need no checker ---- *)
+      let e, _, _ = model "guards" in
+      let pbp = Filename.concat dir "guards.pbp" in
+      let oc = open_out pbp in
+      let w = Writer.create ~audit:false oc in
+      Encoding.start_proof e w;
+      raises "M8-T2 atoms: an atom at a constant is never minted" (fun () ->
+          Encoding.ensure_atom e w "x" 0);
+      raises "M8-T2 atoms: nor one above the declared top" (fun () ->
+          Encoding.ensure_atom e w "x" 6);
+      ignore (Encoding.ensure_atom e w "x" 2);
+      check "M8-T2 atoms: has_atom"
+        (Encoding.has_atom e "x" 2 && not (Encoding.has_atom e "x" 3));
+      Encoding.close_atoms e;
+      check "M8-T2 atoms: a minted atom is still answered after the close"
+        (Encoding.has_atom e "x" 2
+        &&
+        let _ = Encoding.ensure_atom e w "x" 2 in
+        true);
+      raises "M8-T2 atoms: no new atom after the root contradiction (D-0053)" (fun () ->
+          Encoding.ensure_atom e w "x" 3);
+      close_out oc
+
 let () =
   report_checker ();
   test_lits ();
@@ -3788,6 +4229,10 @@ let () =
   test_lit_rendering_is_the_reference ();
   test_m7t27_streamed_opb_is_byte_identical ();
   test_m7t27_ladder_ids_are_arithmetic ();
+  test_bits_naming ();
+  test_bits_declare ();
+  test_bits_mixed_row ();
+  test_bits_atoms_veripb ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

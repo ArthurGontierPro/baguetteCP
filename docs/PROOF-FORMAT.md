@@ -368,6 +368,75 @@ of proof text where the `.opb` spends Θ(w). Measured on `width_sat_depth`: `.op
 16 153 → 9 237 B, `.pbp` 29 859 → 221 525 B. That is why the rungs stay in the `.opb`;
 see D-0031.
 
+### Bits encoding *(normative — M8-bits-encoding-T2, D-0130 §4–§5, D-0132)*
+
+A variable declared wider than `--bits-above W` (default `none`: no variable) whose scope
+is eligible (D-0130 §3.4: no `all_different`, `global_cardinality`, `array_int_element`,
+`array_int_maximum`/`minimum`, `cumulative`, `int_ne`/`int_lin_ne`, `int_eq_reif`/
+`int_ne_reif` or `bool2int` row names it, and no declared holes; width 0 and 1 stay order
+by rule) is encoded on `n = bit_length(u − l)` Booleans, the least `n` with `2^n > u − l`:
+
+```
+x_bit_i        for 0 <= i < n        meaning  bit i of (x − l), unsigned
+```
+
+with two bound rows in the `.opb` and **no ladder**:
+
+```
++1 x_bit_0 +2 x_bit_1 ... +2^(n-1) x_bit_(n-1) >= 0 ;              x >= l
+-1 x_bit_0 -2 x_bit_1 ... -2^(n-1) x_bit_(n-1) >= -(u - l) ;       x <= u
+```
+
+Both rows are always posted, consecutive, even where one is trivially true, so that a
+derivation weakens a bits term in either direction by one citation. A model row over `x`
+carries `a·2^i` on `x_bit_i` with the same fold of `a·l` into its constant as the order
+expansion (`Encoding.linear_terms_int_lin_le`); a row may hold both shapes.
+
+**The order atoms keep their names.** `[x >= v]` is `x_ge_v` whether `x` is on the ladder
+or on bits; what differs is that for a bits variable the name is not a variable of the
+`.opb` but a proof-level atom, minted into the `.pbp` on demand by `Encoding.ensure_atom`,
+at level 0, memoised per `(x, v)`, for `l < v <= u` only (`x >= l` and `x >= u+1` are
+constants and are never minted), as a `red` pair whose witness touches only the fresh atom
+(`k = v − l`, `K = 2^n − k`):
+
+```
+red +1 x_bit_0 ... +2^(n-1) x_bit_(n-1)  +k ~x_ge_v >= k : x_ge_v -> 0 ;     x_ge_v -> x >= v
+red +1 ~x_bit_0 ... +2^(n-1) ~x_bit_(n-1) +K x_ge_v  >= K : x_ge_v -> 1 ;     x >= v -> x_ge_v
+```
+
+Measured on 3.0.2 (D-0132 §1): both orders are accepted for a fresh atom; the flipped
+witness is refused at *"Proofgoal #1 could not be autoproven. Please add an explicit
+subproof for proofgoal #1."* on a satisfiable model whose database does not decide the
+atom, and **only then** — over a contradictory database, or for an atom the model decides,
+the second half's flipped witness is accepted (D-0053, D-0127), which is why every test of
+the pair mints under a decision. When an atom is minted between two already minted
+neighbours `u < v < t`, two links `pol @B1_v @B2_u + s (v−u+1) d` and `pol @B1_t @B2_v + s
+(t−v+1) d` (each pinned by `ia` to its clause `~x_ge_v ∨ x_ge_u`) keep the chain
+`x_ge_t → x_ge_v → x_ge_u` walkable by unit propagation; links are never deleted before the
+conclusion. Every atom, link, bridge and bound line is a level-0 id retired by the
+end-of-run sweep (I-X2).
+
+**An order variable in a row that has a bits term** is cited through the same shape, by a
+`rup` bridge pair written once at level 0 (`k = v − l`, `K = (u − l) − k + 1`):
+
+```
+rup +1 x_ge_(l+1) ... +1 x_ge_u  +k ~x_ge_v >= k ;      x_ge_v -> at least k rungs
+rup +1 ~x_ge_(l+1) ... +1 ~x_ge_u +K x_ge_v >= K ;      at least k rungs -> x_ge_v
+```
+
+and, at its declared bound, the degree-0 lines `rup Σ x_ge_w >= 0` / `rup Σ ~x_ge_w >= 0`,
+also once. A `var bool`'s bridge is the tautology `+1 b_ge_1 +1 ~b_ge_1 >= 1`, one line.
+
+**A pruning or conflict of a row with a bits term is not RUP** (D-0127: a bound does not
+cross a bits row by unit propagation, at any width) and is written as one `pol` deriving
+exactly its trace clause, pinned by `ia` (§4, `Linear`); the trace line of a row with no
+bits term is the `rup` of §4 unchanged. The `sol`/`soli` assignment lists `x_bit_i` for a
+bits variable, from which the checker propagates the atoms through their pairs; an
+optimisation's bound literal over a bits objective is bridged from the `soli` constraint by
+`pol @soli @B + s`, and at the floor its contradiction is derived (`pol @soli @lb +` or
+`@ub +`) and cited, because the improving constraint over bits is not contradictory on its
+own as the ladder's count is.
+
 ### Direct encoding
 
 Introduced lazily, only for variables that an `element` or `all_different` propagator

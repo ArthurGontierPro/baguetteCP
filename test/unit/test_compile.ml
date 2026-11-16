@@ -1785,6 +1785,122 @@ let test_maxmin () =
 
 (* ------------------------------------------------------------------------- main *)
 
+(* ------------------------------------------------------------- M8-bits-encoding-T2 *)
+
+(* Eligibility for the bits encoding is decided HERE, from the model's scopes, before
+   any declaration (D-0130 section 3.4, D-0132 section 2.7). Width is
+   [Encoding.wants_bits]; scope is [Compile.held_families]. These tests set the
+   threshold and restore it, because every other test in this binary runs at the
+   default and must keep seeing the order encoding. *)
+let with_bits_above w f =
+  let saved = !Encoding.bits_above in
+  Encoding.bits_above := w;
+  Fun.protect ~finally:(fun () -> Encoding.bits_above := saved) f
+
+let bits_scope_model =
+  {|
+var 0..9: a;
+var 0..9: b;
+var 0..9: c;
+var 0..1: w;
+var 0..9: n;
+var 0..9: m;
+var {1,3,5}: h;
+var 0..9: e;
+var 0..9: r;
+var 0..9: s;
+var bool: f;
+var 0..9: q;
+var 0..9: g;
+var 0..9: cnt;
+var 0..9: mx;
+var 0..9: k;
+constraint all_different_int([a, b]);
+constraint int_lin_le([1, 1, 1], [a, b, c], 12);
+constraint int_ne(n, 3);
+constraint int_lin_ne([1, 1], [m, c], 4);
+constraint int_lin_le([1, 1], [h, e], 7);
+constraint int_eq_reif(r, s, f);
+constraint bool2int(f, q);
+constraint fzn_global_cardinality([g], [2], [cnt]);
+constraint array_int_maximum(mx, [k, c]);
+solve satisfy;
+|}
+
+let test_bits_eligibility () =
+  with_bits_above (Some 0) (fun () ->
+      let c = Compile.compile (build bits_scope_model) in
+      let enc = c.Compile.encoding in
+      let on = Encoding.is_bits enc in
+      check "bits elig: c is held (int_lin_ne and maxmin both name it)" (not (on "c"));
+      check "bits elig: e is eligible and goes on bits" (on "e");
+      check "bits elig: a, b held by alldiff" ((not (on "a")) && not (on "b"));
+      check "bits elig: w has width 1 and stays order by rule" (not (on "w"));
+      check "bits elig: n held by int_ne, m by int_lin_ne (T2 holds Ne's scope)"
+        ((not (on "n")) && not (on "m"));
+      check "bits elig: h has holes and stays order" (not (on "h"));
+      check "bits elig: r, s held by int_eq_reif" ((not (on "r")) && not (on "s"));
+      check "bits elig: q held by bool2int" (not (on "q"));
+      check "bits elig: g, cnt held by gcc" ((not (on "g")) && not (on "cnt"));
+      check "bits elig: mx, k held by maxmin" ((not (on "mx")) && not (on "k"));
+      let held = (Encoding.cost enc).Encoding.c_held_back in
+      let n f = Option.value (List.assoc_opt f held) ~default:0 in
+      check "bits elig: --stats counts the held-back per family"
+        (n "alldiff" = 2
+        && n "int_ne" = 3
+        && n "holes" = 1
+        && n "int_eq_reif" = 2
+        && n "bool2int" = 1
+        && n "gcc" = 2
+        && n "maxmin" = 3);
+      check "bits elig: exactly one variable went on bits"
+        ((Encoding.cost enc).Encoding.c_bits_vars = 1))
+
+let test_bits_default_is_order () =
+  (* At the default threshold nothing is on bits, whatever the scope: today's solver. *)
+  let c = Compile.compile (build bits_scope_model) in
+  check "bits elig: at --bits-above none no variable is on bits"
+    (Encoding.n_bits_vars c.Compile.encoding = 0
+    && (Encoding.cost c.Compile.encoding).Encoding.c_held_back = [])
+
+let test_bits_mixed_row_has_no_pb_row () =
+  (* D-0132 section 2.7: a Linear instance over a row with a bits term is packed without
+     its PB row, so PB conflict analysis takes the clause path rather than resolving a
+     row the .opb does not contain. [Engine.row_of] is what the analysis asks. *)
+  with_bits_above (Some 0) (fun () ->
+      let src =
+        {|
+var 0..9: x;
+var 0..3: y;
+var 0..9: z;
+constraint int_lin_le([1, 1], [x, y], 7);
+constraint int_lin_le([1, -1], [y, z], 0);
+constraint int_ne(z, 4);
+solve satisfy;
+|}
+      in
+      let c = Compile.compile (build src) in
+      let enc = c.Compile.encoding in
+      check "bits pb_row: x on bits, y (width 3) on bits, z held by int_ne"
+        (Encoding.is_bits enc "x" && Encoding.is_bits enc "y"
+        && not (Encoding.is_bits enc "z"));
+      let row_of i = Engine.row_of c.Compile.engine c.Compile.store i in
+      check "bits pb_row: the mixed row x + y <= 7 offers no PB row" (row_of 0 = None);
+      check "bits pb_row: the row y - z <= 0 is mixed too (y is on bits)" (row_of 1 = None));
+  (* And at the default every Linear instance still offers its row. *)
+  let c =
+    Compile.compile
+      (build
+         {|
+var 0..9: x;
+var 0..3: y;
+constraint int_lin_le([1, 1], [x, y], 7);
+solve satisfy;
+|})
+  in
+  check "bits pb_row: at the default the row is offered"
+    (Option.is_some (Engine.row_of c.Compile.engine c.Compile.store 0))
+
 let () =
   print_endline "";
   test_variable_identity ();
@@ -1806,6 +1922,9 @@ let () =
   test_set_domain_holes ();
   test_gcc_constant_counts ();
   test_maxmin ();
+  test_bits_eligibility ();
+  test_bits_default_is_order ();
+  test_bits_mixed_row_has_no_pb_row ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

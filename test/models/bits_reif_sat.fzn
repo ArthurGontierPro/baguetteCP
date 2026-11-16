@@ -1,0 +1,10 @@
+% M8-bits-encoding-T2 (D-0132 section 2.7): int_lin_le_reif over bits, the entailment
+% direction. x >= 9 from the plain row entails 2x > 10, so the BWD row fixes b false; y is
+% there so the solution needs a value for a second bits variable in `sol`.
+var 0..20: x :: output_var;
+var 0..20: y :: output_var;
+var bool: b :: output_var;
+constraint int_lin_le_reif([2], [x], 10, b);
+constraint int_lin_le([-1], [x], -9);
+constraint int_lin_le([1, 1], [x, y], 25);
+solve satisfy;

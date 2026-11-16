@@ -401,8 +401,14 @@ Integer variables are encoded with the **order encoding**: for a variable `x` wi
 declared domain `[l, u]`, Boolean variables `x_ge_v` for `l < v <= u`, together with the
 consistency clauses `x_ge_(v+1) -> x_ge_v` for `l < v < u`.
 
-**The consistency clauses MUST be in the `.opb`, and MUST be there for every declared
-variable** *(normative)*. They are not an optimisation and not a convenience for the
+**The consistency clauses MUST be in the `.opb`, and MUST be there for every variable on
+the order encoding** *(normative; amended by M8-bits-encoding-T2, D-0132 — until then
+"every declared variable", which was the same set)*. A variable may instead be on the
+**bits encoding** when it is declared wider than `--bits-above W` and its scope is eligible
+(`docs/PROOF-FORMAT.md` §3, "Bits encoding", normative; D-0130 §3.4): `bit_length(u − l)`
+Booleans `x_bit_i` for `x − l`, two bound rows in the `.opb` and no ladder, its order atoms
+`x_ge_v` minted into the proof on demand by a `red` pair. At the default `W = none` no
+variable is. The consistency clauses are not an optimisation and not a convenience for the
 solver: no proof step this solver emits ever cites one, and the checker needs them all the
 same. A model row is this encoding's own expansion, in which every literal of one variable
 carries the same coefficient, so a row constrains only *how many* of `x`'s literals hold.
