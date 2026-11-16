@@ -3739,13 +3739,19 @@ let test_ix6_cross_conflict_snapshot () =
            (Reason.because ~concludes:None Reason.none (Explanation.model_row 902)));
     let rendered = render_deep c.Store.c_why in
     (* AFTER the render, deliberately: see the last paragraph of the comment above. This
-       reads the memo rather than forcing anything. D-0013 step 5's shape is the
-       two-summand, divisor-1 [Combine], which is how [test_matrix.ml]'s
+       reads the memo rather than forcing anything. D-0013 step 5's shape WAS the
+       two-summand, divisor-1 [Combine]; since M8-bits-encoding-T2 (D-0132 section 2.4)
+       it is the row over every term, divisor 1, with the crossed term a [Linear_term]
+       that CITES the opposite bound's derivation -- which is how [test_matrix.ml]'s
        [classify_conflict] tells this path from the row's own slack conflict. *)
     let is_cross =
       match Explanation.force c.Store.c_why with
-      | Explanation.Combine ([ Explanation.Term (1, _); Explanation.Term (1, _) ], 1) ->
-          true
+      | Explanation.Combine (Explanation.Term (1, Explanation.Model_row _) :: summands, 1)
+        ->
+          List.exists
+            (function
+              | Explanation.Linear_term r -> r.Explanation.lt_cited <> [] | _ -> false)
+            summands
       | _ -> false
     in
     (rendered, is_cross, store)
