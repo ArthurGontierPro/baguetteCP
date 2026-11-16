@@ -93,7 +93,7 @@ let usage () =
   prerr_endline
     "usage: baguette MODEL.fzn [--proof PREFIX] [--proof-comments] [--all] [--time] \
      [--stats] [--max-order-width N] [--max-direct-values N] [--width-warn N] \
-     [--max-encoding-clauses N] [--max-heap-mb N] [--time-limit S]";
+     [--max-encoding-clauses N] [--max-heap-mb N] [--bits-above W] [--time-limit S]";
   prerr_endline "";
   prerr_endline "  --proof PREFIX    write PREFIX.opb and PREFIX.pbp (SPEC 4.1); verify";
   prerr_endline "                    them with: veripb PREFIX.opb PREFIX.pbp";
@@ -183,8 +183,25 @@ let usage () =
   prerr_endline "                    5 a resource budget above was exhausted.";
   prerr_endline "";
   prerr_endline
+    "  --bits-above W    (M8-bits-encoding-T2, D-0130/D-0132) put every ELIGIBLE integer";
+  prerr_endline "                    variable declared wider than W on the BITS encoding:";
+  prerr_endline
+    "                    bit_length(hi-lo) Booleans x_bit_i, two bound rows, no";
+  prerr_endline "                    ladder; its order atoms are minted into the proof on";
+  prerr_endline
+    "                    demand. `none` (default): the order encoding everywhere.";
+  prerr_endline
+    "                    `0`: every eligible variable (width 0 and 1 stay order).";
+  prerr_endline
+    "                    A variable in an all_different, gcc, element, maxmin,";
+  prerr_endline
+    "                    cumulative, int_ne, int_eq_reif or bool2int scope, or";
+  prerr_endline
+    "                    with holes, stays order at every W (--stats says so).";
+  prerr_endline
     "  BAGUETTE_MAX_ORDER_WIDTH, BAGUETTE_MAX_DIRECT_VALUES, BAGUETTE_WIDTH_WARN,";
-  prerr_endline "  BAGUETTE_MAX_ENCODING_CLAUSES, BAGUETTE_MAX_HEAP_MB";
+  prerr_endline
+    "  BAGUETTE_MAX_ENCODING_CLAUSES, BAGUETTE_MAX_HEAP_MB, BAGUETTE_BITS_ABOVE";
   prerr_endline "                    the same five, as environment variables. A flag on";
   prerr_endline "                    the command line wins over the environment. Each";
   prerr_endline
@@ -291,6 +308,13 @@ let parse_args argv =
       | "--max-heap-mb" ->
           if i + 1 >= Array.length argv then usage ();
           set_limit "--max-heap-mb" Encoding.heap_limit_mb argv.(i + 1);
+          go (i + 2)
+      (* M8-bits-encoding-T2 (D-0130 section 10): the same shape, consulted by [Compile]
+         at every declaration. [set_limit] gives it `none`'s spelling and the typo
+         refusal of the other five. *)
+      | "--bits-above" ->
+          if i + 1 >= Array.length argv then usage ();
+          set_limit "--bits-above" Encoding.bits_above argv.(i + 1);
           go (i + 2)
       | "-h" | "--help" -> usage ()
       | arg when String.length arg > 0 && arg.[0] = '-' ->
@@ -738,7 +762,19 @@ let report_encoding_cost (c : Encoding.cost) =
     "stats: %-10s %10s        --max-encoding-clauses (bounds ladder+direct)\n" "budget"
     (Encoding.encoding_budget_string ());
   Printf.eprintf "stats: %-10s %10s        --max-heap-mb (MB of OCaml heap)\n" "heap"
-    (Encoding.heap_limit_string ())
+    (Encoding.heap_limit_string ());
+  (* M8-bits-encoding-T2 (D-0130 section 10). How many variables went on bits, how many
+     bound rows that cost, and how many eligible-by-width variables the scope rule held
+     back, by family -- the line D-0130 section 12 says a comparison must read. *)
+  Printf.eprintf
+    "stats: %-10s %10d vars   bits-encoded (--bits-above %s); held back: %s\n" "bits"
+    c.Encoding.c_bits_vars
+    (Encoding.bits_above_string ())
+    (match c.Encoding.c_held_back with
+    | [] -> "none"
+    | hs -> String.concat ", " (List.map (fun (f, n) -> Printf.sprintf "%s: %d" f n) hs));
+  Printf.eprintf "stats: %-10s %10d lines  bound rows (2 per bits variable)\n" "bitsrows"
+    c.Encoding.c_bits_rows
 
 (* M7-T8. A resource overrun can fire at a DECLARATION, before any file exists, or at
    [ensure_direct], which runs inside [start_proof] with the .opb already on disk and
@@ -767,6 +803,27 @@ let warn_partial_proof opts =
    ladder walks as `rup`; what is left as `pol` is a derivation the checker cannot
    reach by propagation (a counting global's, a learned PB row's), and this report is
    how a wide one is seen by name. *)
+(* M8-bits-encoding-T2 (D-0130 section 10): what the bits arm minted into the proof.
+   Every count is a level-0 line retired by the conclusion's sweep. [atoms/prune] is
+   GCS's quadratic made visible: atoms minted per bits-arm pruning line written. *)
+let report_atoms (a : Encoding.atom_stats) =
+  Printf.eprintf
+    "stats: %-10s %10d atoms  order atoms minted by red pairs over bits variables\n"
+    "atoms" a.Encoding.a_atoms;
+  Printf.eprintf "stats: %-10s %10d lines  sparse-chain links between minted atoms\n"
+    "atomlinks" a.Encoding.a_links;
+  Printf.eprintf
+    "stats: %-10s %10d pairs  rup bridge pairs for order variables in mixed rows\n"
+    "bridges" a.Encoding.a_bridges;
+  Printf.eprintf "stats: %-10s %10d pairs  degree-0 bound lines for order variables\n"
+    "boundlines" a.Encoding.a_bound_lines;
+  Printf.eprintf "stats: %-10s %10d lines  bits-arm pol lines (prunings and conflicts)\n"
+    "bitsprune" a.Encoding.a_bits_prunings;
+  if a.Encoding.a_bits_prunings > 0 then
+    Printf.eprintf "stats: %-10s %10.3f        atoms minted per bits-arm pruning line\n"
+      "atoms/prune"
+      (float_of_int a.Encoding.a_atoms /. float_of_int a.Encoding.a_bits_prunings)
+
 let report_proof_shapes (sh : Writer.shape_stats) =
   prerr_endline
     "stats: proof-line shapes (M8-bits-encoding-T5, D-0131). A `rup` is checked by unit";
@@ -1233,7 +1290,8 @@ let solve opts (m : Model.t) =
       ~families:(Engine.family_table compiled.Compile.engine)
       (Engine.counters compiled.Compile.engine)
       ~nodes:stats.Search.nodes;
-    report_proof_shapes (Writer.shape_stats (Justify.writer ctx)))
+    report_proof_shapes (Writer.shape_stats (Justify.writer ctx));
+    report_atoms (Encoding.atom_stats encoding))
 
 (* --------------------------------------------------------------------- main *)
 

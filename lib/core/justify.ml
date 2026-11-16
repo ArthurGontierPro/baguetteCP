@@ -897,6 +897,7 @@ let emit_bits_pruning ctx ~origin ~(concludes : Reason.fact option) (e : Explana
   let clause = List.map fst claim @ List.rev !neg_facts_rev in
   let expr = if clause = [] then expr else Pol.saturate expr in
   let cid = Writer.pol_concluding w ~origin ~claim:(Opb.clause clause) expr in
+  Encoding.note_bits_pruning enc;
   state_clause ctx clause cid;
   (cid, clause)
 

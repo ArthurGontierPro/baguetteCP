@@ -472,6 +472,7 @@ type t = {
   mutable n_links : int;
   mutable n_bridges : int;
   mutable n_bound_lines : int;
+  mutable n_bits_prunings : int; (* bits-arm `pol` lines written (D-0130's atoms/prune) *)
   (* Set by [close_atoms] once a root contradiction is on the page: a `red` after that
      is accepted whatever its witness (D-0053), so [ensure_atom] raises instead
      (D-0130 section 5.4). *)
@@ -520,6 +521,7 @@ let create () =
     n_links = 0;
     n_bridges = 0;
     n_bound_lines = 0;
+    n_bits_prunings = 0;
     atoms_closed = false;
   }
 
@@ -809,7 +811,13 @@ let note_held_back t family =
   t.held_back_rev <- bump t.held_back_rev
 
 (* The proof-side counters (D-0130 section 10), read after the proof is written. *)
-type atom_stats = { a_atoms : int; a_links : int; a_bridges : int; a_bound_lines : int }
+type atom_stats = {
+  a_atoms : int;
+  a_links : int;
+  a_bridges : int;
+  a_bound_lines : int;
+  a_bits_prunings : int;
+}
 
 let atom_stats t =
   {
@@ -817,8 +825,10 @@ let atom_stats t =
     a_links = t.n_links;
     a_bridges = t.n_bridges;
     a_bound_lines = t.n_bound_lines;
+    a_bits_prunings = t.n_bits_prunings;
   }
 
+let note_bits_pruning t = t.n_bits_prunings <- t.n_bits_prunings + 1
 let widest_width = function None -> 0 | Some (_, lo, hi) -> hi - lo
 
 (* ---------------------------------------------------------------------------

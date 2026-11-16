@@ -401,6 +401,22 @@ let clause_of ~claim ~facts = claim @ List.map Lit.negate facts
 let emit_line (ctx : Justify.ctx) ~origin ~claim ~facts =
   Justify.emit_rup_clause ctx ~origin (clause_of ~claim ~facts)
 
+(* M8-bits-encoding-T2 (D-0130 section 2's first refinement, D-0132 section 2.5): is
+   this entry's line the BITS arm's? The unit is the ROW -- a pruning whose row has a
+   bits term anywhere is not RUP, whichever variable it pruned -- and the row's owners
+   are the claim's owner plus every term the propagator READ, which is the reason's
+   scope including the terms whose fact does not materialise ([Reason.owners]'s
+   contract). Order-only models short-circuit before touching the reason. *)
+let bits_owner (enc : Encoding.t) name = Encoding.is_bits enc name
+
+let bits_arm (enc : Encoding.t) ~claim_owner (facts : Reason.fact list) =
+  Encoding.n_bits_vars enc > 0
+  && (bits_owner enc claim_owner
+     || List.exists (fun f -> bits_owner enc (Reason.fact_owner f)) facts)
+
+let same_clause a b =
+  List.equal Lit.equal (List.sort_uniq Lit.compare a) (List.sort_uniq Lit.compare b)
+
 (* [Store.remover] is the trail entry that took a value out of a variable's domain. It
    used to be a local copy here; M2-T8 moved it to [Store], which had a second copy of it
    in [Linear.find_removal] with the other off-by-one convention. [None] means a hole with
@@ -598,7 +614,10 @@ let emit (ctx : Justify.ctx) t store =
       match lines ctx.Justify.encoding e name with
       | [] -> ()
       | cs ->
-          let facts = Reason.lits e.Store.reason in
+          (* One materialisation of the reason serves both the facts of the line and
+             (M8-bits-encoding-T2) the scope the bits-arm decision reads. *)
+          let all_facts = Reason.facts e.Store.reason in
+          let facts = Reason.lits_of_facts all_facts in
           let level = Store.level_of_index store i in
           (* The level is set here rather than inside the loop below so that the
              derivation and the line it precedes are tagged together; the loop's own
@@ -608,6 +627,27 @@ let emit (ctx : Justify.ctx) t store =
             Writer.set_level ctx.Justify.writer level;
             at := level);
           derive_ahead ctx store e;
+          (* M8-bits-encoding-T2: the BITS arm. A [Linear] pruning over a row with a
+             bits term writes its derivation as ONE `pol` deriving exactly its trace
+             clause ([Justify.emit_bits_pruning]); when the line this module would have
+             written IS that clause (the usual case) the `ia`'s id is the line, else the
+             ordinary `rup` follows it and is RUP in sequence. An entry whose claim is a
+             bits atom but whose justification is a [Clause] -- a global unit from `soli`
+             (D-0130 section 9), whose bridge is already on the page -- keeps its `rup`. *)
+          let derived =
+            if bits_arm ctx.Justify.encoding ~claim_owner:name all_facts then
+              match Explanation.force (Store.explanation store e) with
+              | Explanation.Combine _ as forced ->
+                  let origin =
+                    Printf.sprintf "bits trace: %s from %d fact(s)" name
+                      (List.length facts)
+                  in
+                  Some
+                    (Justify.emit_bits_pruning ctx ~origin ~concludes:e.Store.concludes
+                       forced)
+              | _ -> None
+            else None
+          in
           List.iter
             (fun { claim; settled_over; hole } ->
               let facts, cited =
@@ -626,7 +666,13 @@ let emit (ctx : Justify.ctx) t store =
                       Printf.sprintf ", settled over %s"
                         (String.concat "," (List.map string_of_int vs)))
               in
-              let cid = emit_line ctx ~origin ~claim ~facts in
+              let cid =
+                match derived with
+                | Some (dcid, dclause) when same_clause dclause (clause_of ~claim ~facts)
+                  ->
+                    dcid
+                | _ -> emit_line ctx ~origin ~claim ~facts
+              in
               record t ~level cid;
               t.line_ids.(i) <-
                 { w_hole = hole; w_cid = cid; w_level = level } :: t.line_ids.(i);
@@ -660,17 +706,45 @@ let emit (ctx : Justify.ctx) t store =
    [Store.backtrack]) are gone with it. [Reason.none] materialising to [[]] is exactly
    what the un-armed slot's [None] used to mean, so what gets written is unchanged. *)
 let conflict_line (ctx : Justify.ctx) t (c : Store.conflict) =
-  match Reason.lits c.Store.c_reason with
-  | [] -> None
-  | facts ->
-      (* M4-T10 (D-0096): a conflict made under [Store.deriving_ahead] has its
-         derivation written first, so the `rup` below is RUP in sequence -- the conflict
-         twin of [derive_ahead] for an entry. *)
-      if c.Store.c_ahead then ignore (Justify.emit ctx c.Store.c_why : Writer.cid);
-      let cid =
-        Justify.emit_rup_clause ctx
-          ~origin:(Printf.sprintf "trace: conflict from %d fact(s)" (List.length facts))
-          (List.map Lit.negate facts)
-      in
-      record t ~level:(Writer.current_level ctx.Justify.writer) cid;
-      Some cid
+  let all_facts = Reason.facts c.Store.c_reason in
+  (* M8-bits-encoding-T2: a [Linear] conflict over a row with a bits term is the same
+     `pol` as a pruning with no claim, saturated to `~facts >= 1` -- and with NO facts
+     (the row's slack below zero on the declared box) it closes at `0 >= k`, pinned by
+     `ia >= 1`. That line is written even where the checker would refute the row unaided
+     (D-0132 section 1, probe c2: it does here, and not in general), so a bits-row
+     conflict always has a line. The scope read is the reason's, declared terms
+     included, so a factless conflict still says which row it is about. *)
+  let bits =
+    Encoding.n_bits_vars ctx.Justify.encoding > 0
+    && List.exists
+         (fun f -> bits_owner ctx.Justify.encoding (Reason.fact_owner f))
+         all_facts
+    &&
+    match Explanation.force c.Store.c_why with
+    | Explanation.Combine _ -> true
+    | _ -> false
+  in
+  if bits then (
+    let cid, _ =
+      Justify.emit_bits_pruning ctx
+        ~origin:
+          (Printf.sprintf "bits trace: conflict from %d fact(s)" (List.length all_facts))
+        ~concludes:None c.Store.c_why
+    in
+    record t ~level:(Writer.current_level ctx.Justify.writer) cid;
+    Some cid)
+  else
+    match Reason.lits_of_facts all_facts with
+    | [] -> None
+    | facts ->
+        (* M4-T10 (D-0096): a conflict made under [Store.deriving_ahead] has its
+           derivation written first, so the `rup` below is RUP in sequence -- the conflict
+           twin of [derive_ahead] for an entry. *)
+        if c.Store.c_ahead then ignore (Justify.emit ctx c.Store.c_why : Writer.cid);
+        let cid =
+          Justify.emit_rup_clause ctx
+            ~origin:(Printf.sprintf "trace: conflict from %d fact(s)" (List.length facts))
+            (List.map Lit.negate facts)
+        in
+        record t ~level:(Writer.current_level ctx.Justify.writer) cid;
+        Some cid
