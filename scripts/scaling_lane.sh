@@ -40,7 +40,7 @@
 # rows in flight, so the lane prints its verdict and exits 0. `--enforce` (or
 # SCALING_ENFORCE=1) makes an OVER line fail; T6 makes that the default.
 #
-#   scripts/scaling_lane.sh [--enforce] [--update] [--bin PATH] [--keep DIR]
+#   scripts/scaling_lane.sh [--enforce] [--update] [-j N] [--bin PATH] [--keep DIR]
 #
 # Environment: SCALING_PAR (default 8), SCALING_TIMEOUT (default 900 s per run),
 # SCALING_MARGIN (default 0.01), BAGUETTE_MEM_CAP_KB (ulimit -v per run, default 4000000).
@@ -63,6 +63,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --enforce) ENFORCE=1 ;;
     --update) UPDATE=1 ;;
+    -j) [ $# -ge 2 ] || usage; PAR="$2"; shift ;;
     --bin) [ $# -ge 2 ] || usage; BIN="$2"; shift ;;
     --keep) [ $# -ge 2 ] || usage; KEEP="$2"; shift ;;
     -h|--help) usage ;;

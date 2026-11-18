@@ -22,6 +22,7 @@
 #   scripts/diff_lane.sh --bin PATH           the solver under test (default: the dune build)
 #   scripts/diff_lane.sh --keep DIR           keep every run's files under DIR
 #   scripts/diff_lane.sh --self-test          the comparator's self-test only
+#   scripts/diff_lane.sh -j N                 N runs in parallel (default 8, or DIFF_PAR)
 #
 # Environment: DIFF_PAR (parallel runs, default 8), DIFF_TIMEOUT (seconds per run,
 # default 300), BAGUETTE_MEM_CAP_KB (ulimit -v per run, default 4000000, as the Makefile).
@@ -57,6 +58,7 @@ usage() { sed -n '2,/^set -u/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 2; 
 while [ $# -gt 0 ]; do
   case "$1" in
     --update) UPDATE=1 ;;
+    -j) [ $# -ge 2 ] || usage; PAR="$2"; shift ;;
     --only) [ $# -ge 2 ] || usage; ONLY_IDS+=("$2"); shift ;;
     --config) [ $# -ge 2 ] || usage; ONLY_CFGS+=("$2"); shift ;;
     --bin) [ $# -ge 2 ] || usage; BIN="$2"; shift ;;

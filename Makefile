@@ -30,7 +30,7 @@ CAP := $(if $(filter none unlimited 0,$(MEM_CAP_KB)),:,ulimit -v $(MEM_CAP_KB)) 
 # Passed down so a script invoked from a recipe agrees with the recipe.
 export BAGUETTE_MEM_CAP_KB = $(MEM_CAP_KB)
 
-.PHONY: build test unit models check fmt fmt-check lint determinism unlimit selftests clean proof bootstrap bench
+.PHONY: build test unit models check fmt fmt-check lint determinism unlimit selftests clean proof bootstrap bench diff scaling
 
 build:
 	dune build
@@ -150,3 +150,21 @@ clean:
 # are at the process floor, so their timing columns measure exec and not this solver.
 bench: build
 	$(CAP) ./bench/run_bench.sh $(ARGS)
+
+# M11-complexity-T2 (D-0141). The two lanes of the M11 pass, deliberately NOT part of
+# `check`: the differential lane is 126 runs of real instances (about two minutes on
+# fataepyc-06 at 16 in parallel, far longer on a laptop, and a laptop is not where runs
+# go), and the scaling lane needs perf and runs of up to 32 000 nodes. The gate script
+# runs both right after `make check`:
+#
+#   make check && make diff ARGS="-j 16" && make scaling ARGS="-j 16"
+#
+# `make diff` FAILS on any difference from bench/diff/reference/; the rule for
+# re-recording it (never to make it pass) is in D-0141 and in the script's header.
+# `make scaling` is REPORT-ONLY until M11-complexity-T6 (ARGS=--enforce fails now).
+# Everything both lanes read is in the repository (bench/diff/corpus/, 766 KB gz).
+diff: build
+	$(CAP) ./scripts/diff_lane.sh $(ARGS)
+
+scaling: build
+	$(CAP) ./scripts/scaling_lane.sh $(ARGS)

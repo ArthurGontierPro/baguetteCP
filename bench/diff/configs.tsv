@@ -15,8 +15,17 @@
 # BAGUETTE_NODE_LIMIT is set by the runner; do not set it here.
 default	-	-	yes
 noproof	-	--no-proof	no
+#
+# lbd and fifo consult the policy after every learned constraint, but on main every
+# learned constraint is CITED (it is a registered instance), so the soft cap pins all of
+# them and NOTHING is evicted (`retention ... 0 evicted ... pinned`, measured 2026-11-18).
+# The two *-po lines turn propagation of learned constraints off (proof-only learning),
+# and there the cap BINDS: QR48 at 6000 nodes evicts 2 494 of 2 994 mid-search, so the
+# retire path, its `del` lines and the I-X2 audit run on every instance.
 lbd	BAGUETTE_RETENTION=lbd:500	-	yes
 fifo	BAGUETTE_RETENTION=fifo:500	-	yes
+lbd-po	BAGUETTE_PROPAGATE_LEARNED=off BAGUETTE_RETENTION=lbd:500	-	yes
+fifo-po	BAGUETTE_PROPAGATE_LEARNED=off BAGUETTE_RETENTION=fifo:500	-	yes
 nopb	BAGUETTE_PB_ANALYSIS=off	-	yes
 bits0	-	--bits-above 0	yes
 # --- slots for flags not on main yet (wave45-strategy); uncomment when they merge ---
