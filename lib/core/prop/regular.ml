@@ -98,7 +98,11 @@
    Trace builds from the entry, carries those.
 
    The scan is O(n * E) per call, E the automaton's non-failing edges: [out] lists each
-   state's edges once, at [make]. *)
+   state's edges and [preds] each state's predecessors per symbol, once, at [make]. A call
+   allocates only the reasons of the prunings it makes: the reachability marks, the
+   supported symbols and the dedup stamps of a reason are scratch arrays of the instance
+   (measured on 2011_nonogram_non_med_1: the first version spent a quarter of its time in
+   the GC and in polymorphic hashing of facts, D-0146 section 5). *)
 
 module Lit = Baguette_proof.Lit
 
@@ -119,9 +123,15 @@ type t = {
   xs : cell array;
   flags : Var.t array; (* (n + 1) * nq, layer-major: flags.(i * nq + q - 1) *)
   fnames : string array;
+  flag_of_name : (string, int) Hashtbl.t; (* fnames inverted, for a remover's facts *)
   out : (int * int) array array; (* out.(q - 1): (v, t) with t > 0 *)
+  preds : int array array; (* preds.((t - 1) * w + k): the q with d[q, smin + k] = t *)
   vars : Var.t list;
-  reach : bool array; (* scratch, (n + 1) * nq *)
+  (* Scratch, reused by every call: nothing in it survives a call. *)
+  reach : bool array; (* (n + 1) * nq *)
+  sup : bool array; (* w: a symbol some live edge of the current layer carries *)
+  mark : int array; (* (n + 1) * nq: the reason stamp a flag fact was last added under *)
+  mutable stamp : int;
 }
 
 let step t q v =
@@ -136,33 +146,24 @@ let make store ~xs ~nq ~smin ~delta ~q0 ~final ~flags : t =
   if Array.length flags <> (n + 1) * nq then
     invalid_arg "Regular.make: (n + 1) * Q state flags are needed";
   let w = Array.length delta / nq in
-  let t0 =
-    {
-      n;
-      nq;
-      smin;
-      w;
-      delta;
-      q0;
-      final = Array.init nq (fun q -> List.mem (q + 1) final);
-      xs;
-      flags;
-      fnames = Array.map (Store.name store) flags;
-      out = [||];
-      vars = [];
-      reach = Array.make ((n + 1) * nq) false;
-    }
-  in
+  let get q k = delta.(((q - 1) * w) + k) in
   let out =
     Array.init nq (fun qi ->
         Array.of_list
           (List.filter_map
              (fun k ->
-               let v = smin + k in
-               let tq = step t0 (qi + 1) v in
-               if tq > 0 then Some (v, tq) else None)
+               if get (qi + 1) k > 0 then Some (smin + k, get (qi + 1) k) else None)
              (List.init w Fun.id)))
   in
+  let preds =
+    Array.init (nq * w) (fun j ->
+        let tq = (j / w) + 1 and k = j mod w in
+        Array.of_list
+          (List.filter (fun q -> get q k = tq) (List.init nq (fun q -> q + 1))))
+  in
+  let fnames = Array.map (Store.name store) flags in
+  let flag_of_name = Hashtbl.create (Array.length fnames) in
+  Array.iteri (fun k nm -> Hashtbl.replace flag_of_name nm k) fnames;
   let letters =
     Array.fold_right
       (fun c acc ->
@@ -171,7 +172,26 @@ let make store ~xs ~nq ~smin ~delta ~q0 ~final ~flags : t =
         | _ -> acc)
       xs []
   in
-  { t0 with out; vars = letters @ Array.to_list flags }
+  {
+    n;
+    nq;
+    smin;
+    w;
+    delta;
+    q0;
+    final = Array.init nq (fun q -> List.mem (q + 1) final);
+    xs;
+    flags;
+    fnames;
+    flag_of_name;
+    out;
+    preds;
+    vars = letters @ Array.to_list flags;
+    reach = Array.make ((n + 1) * nq) false;
+    sup = Array.make (max w 1) false;
+    mark = Array.make ((n + 1) * nq) 0;
+    stamp = 0;
+  }
 
 let vars t = t.vars
 let fid t i q = (i * t.nq) + q - 1
@@ -191,15 +211,45 @@ let letter_dom store t i =
 
 exception Found of Store.conflict
 
-(* A reason under construction: facts in the order they were read, each once. *)
-type acc = { mutable facts_rev : Reason.fact list; seen : (Reason.fact, unit) Hashtbl.t }
+(* A reason under construction: facts in the order they were read, each once. A dead
+   flag is deduplicated by a stamp on its index (the common case, and the one a call
+   repeats); any other fact -- a letter's bound, a hole remover's fact -- by a small
+   table, built only if one occurs. A remover's fact that IS one of this instance's dead
+   flags goes through the stamp, so the two kinds never duplicate each other. *)
+type acc = {
+  mutable facts_rev : Reason.fact list;
+  mutable seen : (Reason.fact, unit) Hashtbl.t option;
+}
 
-let new_acc () = { facts_rev = []; seen = Hashtbl.create 8 }
+let new_acc t =
+  t.stamp <- t.stamp + 1;
+  { facts_rev = []; seen = None }
 
-let add a f =
-  if not (Hashtbl.mem a.seen f) then (
-    Hashtbl.replace a.seen f ();
-    a.facts_rev <- f :: a.facts_rev)
+let add_dead a t i q =
+  let k = fid t i q in
+  if t.mark.(k) <> t.stamp then (
+    t.mark.(k) <- t.stamp;
+    a.facts_rev <- dead_fact t i q :: a.facts_rev)
+
+let add_other a t (f : Reason.fact) =
+  match f with
+  | Reason.At_most { name; value = 0; decl = 1 } when Hashtbl.mem t.flag_of_name name ->
+      let k = Hashtbl.find t.flag_of_name name in
+      if t.mark.(k) <> t.stamp then (
+        t.mark.(k) <- t.stamp;
+        a.facts_rev <- f :: a.facts_rev)
+  | _ ->
+      let seen =
+        match a.seen with
+        | Some s -> s
+        | None ->
+            let s = Hashtbl.create 8 in
+            a.seen <- Some s;
+            s
+      in
+      if not (Hashtbl.mem seen f) then (
+        Hashtbl.replace seen f ();
+        a.facts_rev <- f :: a.facts_rev)
 
 let facts a = List.rev a.facts_rev
 
@@ -208,8 +258,8 @@ let add_bounds a t i lo hi =
   match t.xs.(i) with
   | Fixed _ -> ()
   | Letter { name; dlo; dhi; _ } ->
-      if lo > dlo then add a (Reason.at_least ~name ~decl:dlo lo);
-      if hi < dhi then add a (Reason.at_most ~name ~decl:dhi hi)
+      if lo > dlo then add_other a t (Reason.at_least ~name ~decl:dlo lo);
+      if hi < dhi then add_other a t (Reason.at_most ~name ~decl:dhi hi)
 
 (* The facts behind the hole [v] of letter i: those of the entry that punched it. [None]
    from [Store.remover] is a declared hole with no entry, which lib/ does not produce
@@ -220,7 +270,7 @@ let add_hole a store t i v =
   | Letter { var; _ } -> (
       match Store.remover store ~before:(Store.trail_length store) ~var v with
       | None -> ()
-      | Some e -> List.iter (add a) (Reason.facts e.Store.reason))
+      | Some e -> List.iter (add_other a t) (Reason.facts e.Store.reason))
 
 let clause_expl claim fs =
   Explanation.deferred (fun () ->
@@ -255,14 +305,17 @@ let check_layer store t i =
    and n. *)
 let fixed_flags store t =
   for i = 0 to t.n do
-    let set = List.filter (is_set store t i) (List.init t.nq (fun k -> k + 1)) in
-    match set with
-    | a :: b :: _ -> raise (Found (conflict store [ set_fact t i a; set_fact t i b ]))
-    | [ a ] ->
-        for r = 1 to t.nq do
-          if r <> a && not (dead store t i r) then kill store t i r [ set_fact t i a ]
-        done
-    | [] -> ()
+    let first = ref 0 in
+    for q = 1 to t.nq do
+      if is_set store t i q then
+        if !first = 0 then first := q
+        else raise (Found (conflict store [ set_fact t i !first; set_fact t i q ]))
+    done;
+    if !first > 0 then
+      for r = 1 to t.nq do
+        if r <> !first && not (dead store t i r) then
+          kill store t i r [ set_fact t i !first ]
+      done
   done;
   for q = 1 to t.nq do
     if q <> t.q0 && not (dead store t 0 q) then kill store t 0 q []
@@ -272,18 +325,18 @@ let fixed_flags store t =
   done
 
 (* P1's reason for s(i+1,q'): per value of [lo, hi] of letter i, its predecessors on q'
-   dead, or else the value is a hole. *)
+   dead, or else the value is a hole; the letter's bounds last. *)
 let forward_reason store t i q' =
-  let a = new_acc () in
+  let a = new_acc t in
   let lo, hi, mem = letter_dom store t i in
   for v = lo to hi do
-    let preds =
-      List.filter (fun q -> step t q v = q') (List.init t.nq (fun k -> k + 1))
-    in
-    if List.for_all (fun q -> dead store t i q) preds then
-      List.iter (fun q -> add a (dead_fact t i q)) preds
-    else if not (mem v) then add_hole a store t i v
-    else invalid_arg "Regular: a forward death with a live predecessor edge"
+    let k = v - t.smin in
+    if k >= 0 && k < t.w then
+      let ps = t.preds.(((q' - 1) * t.w) + k) in
+      if Array.for_all (fun q -> dead store t i q) ps then
+        Array.iter (fun q -> add_dead a t i q) ps
+      else if not (mem v) then add_hole a store t i v
+      else invalid_arg "Regular: a forward death with a live predecessor edge"
   done;
   add_bounds a t i lo hi;
   facts a
@@ -309,14 +362,14 @@ let forward store t =
   done
 
 (* P2's reason for s(i,q): per value of [lo, hi] of letter i, its successor dead (or no
-   successor), or else the value is a hole. *)
+   successor), or else the value is a hole; the letter's bounds last. *)
 let backward_reason store t i q =
-  let a = new_acc () in
+  let a = new_acc t in
   let lo, hi, mem = letter_dom store t i in
   for v = lo to hi do
     let tq = step t q v in
     if tq = 0 then ()
-    else if dead store t (i + 1) tq then add a (dead_fact t (i + 1) tq)
+    else if dead store t (i + 1) tq then add_dead a t (i + 1) tq
     else if not (mem v) then add_hole a store t i v
     else invalid_arg "Regular: a backward death with a live successor edge"
   done;
@@ -362,28 +415,33 @@ let values store t i =
   | Fixed _ -> ()
   | Letter { var; name; dlo; dhi } ->
       let d0 = Store.get store var in
-      let supported = Hashtbl.create 16 in
+      Array.fill t.sup 0 (Array.length t.sup) false;
       for q = 1 to t.nq do
         if not (dead store t i q) then
           Array.iter
             (fun (v, tq) ->
               if Domain.mem d0 v && not (dead store t (i + 1) tq) then
-                Hashtbl.replace supported v ())
+                t.sup.(v - t.smin) <- true)
             t.out.(q - 1)
       done;
+      let supported v =
+        let k = v - t.smin in
+        k >= 0 && k < t.w && t.sup.(k)
+      in
       Domain.iter
         (fun v ->
-          if not (Hashtbl.mem supported v) then (
+          if not (supported v) then (
             let d = Store.get store var in
-            let a = new_acc () in
+            let a = new_acc t in
             for q = 1 to t.nq do
               let tq = step t q v in
               if tq > 0 then
-                if dead store t i q then add a (dead_fact t i q)
-                else add a (dead_fact t (i + 1) tq)
+                if dead store t i q then add_dead a t i q else add_dead a t (i + 1) tq
             done;
-            if v = Domain.lo d && v > dlo then add a (Reason.at_least ~name ~decl:dlo v);
-            if v = Domain.hi d && v < dhi then add a (Reason.at_most ~name ~decl:dhi v);
+            if v = Domain.lo d && v > dlo then
+              add_other a t (Reason.at_least ~name ~decl:dlo v);
+            if v = Domain.hi d && v < dhi then
+              add_other a t (Reason.at_most ~name ~decl:dhi v);
             let fs = facts a in
             if Domain.is_fixed d then raise (Found (conflict store fs));
             let claim =
@@ -403,25 +461,26 @@ let values store t i =
 (* Step 5: a layer with one live state fixes its flag (ALO_i). *)
 let fix_singletons store t =
   for i = 0 to t.n do
-    let live =
-      List.filter (fun q -> not (dead store t i q)) (List.init t.nq (fun k -> k + 1))
-    in
-    match live with
-    | [ q ] when not (is_set store t i q) -> (
-        let fs =
-          List.filter_map
-            (fun r -> if r = q then None else Some (dead_fact t i r))
-            (List.init t.nq (fun k -> k + 1))
-        in
-        let concl = set_fact t i q in
-        match
-          Store.set_lo store (flag t i q) 1
-            (Reason.because ~concludes:(Some concl) fs
-               (clause_expl (Option.to_list (Reason.lit_of_fact concl)) fs))
-        with
-        | Store.Conflict c -> raise (Found c)
-        | Store.Changed | Store.Unchanged -> ())
-    | _ -> ()
+    let live = ref 0 and count = ref 0 in
+    for q = 1 to t.nq do
+      if not (dead store t i q) then (
+        incr count;
+        live := q)
+    done;
+    if !count = 1 && not (is_set store t i !live) then (
+      let q = !live in
+      let fs = ref [] in
+      for r = t.nq downto 1 do
+        if r <> q then fs := dead_fact t i r :: !fs
+      done;
+      let concl = set_fact t i q in
+      match
+        Store.set_lo store (flag t i q) 1
+          (Reason.because ~concludes:(Some concl) !fs
+             (clause_expl (Option.to_list (Reason.lit_of_fact concl)) !fs))
+      with
+      | Store.Conflict c -> raise (Found c)
+      | Store.Changed | Store.Unchanged -> ())
   done
 
 let propagate t store =
