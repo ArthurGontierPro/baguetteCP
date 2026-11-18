@@ -12710,6 +12710,14 @@ the one-literal decision `x >= hi` first, and strictly inside it is D-0077's ass
 that has left the domain falls back to the order's own choice. So phase saving adds no decision
 shape and no proof line. Flag: `--phase-saving`.
 
+**Addendum, same day, measured: strictly inside, phase saving branches `x <= s` first, not
+`x = s`.** With the assignment shape, `--search activity --restarts luby --phase-saving` wrote a
+branch nogood veripb refuses on `2017_hrc_exp1-1-5670` (section 13), and with the one-literal
+split the same run verifies. The split keeps `s` at the top of its first branch, so the next
+decision on `x` with the same phase is `x >= s` there and lands on `s`. Phase saving now never
+produces the assignment shape. The root cause is not found and is filed as a finding (section 13),
+because the shape is main's too (`indomain_median`).
+
 **Over an annotation it is a substitution of the value choice**, which SPEC §3.4 forbids done
 silently. The flag is the user asking for it, and section 6 says so in the SPEC.
 
