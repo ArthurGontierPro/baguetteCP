@@ -1096,12 +1096,17 @@ let wall () = Unix.gettimeofday () -. wall_start
    fields after the `limit:` tag; scripts/corpus_run.sh copies it into its detail
    column, so a field renamed here is a column renamed there. [cpu_s] is Sys.time at the
    moment of the report, the same clock the limit was checked against. *)
+(* M6-T21: the wall clock at which the stop first said yes, so the `limit:` line can
+   split an overshoot into the stop's latency ([fired] minus the limit) and the
+   finaliser's ([wall] minus [fired]). NaN until then, and on a node-limit stop. *)
+let stop_fired_at = ref Float.nan
+
 let report_limit opts (st : Search.stats) ~(engine : Engine.t) ~best =
   let c = Engine.counters engine in
   Printf.eprintf
     "limit: reached time-limit=%s cpu=%.2fs wall=%.2fs nodes=%d decisions=%d \
      conflicts=%d learned=%d pb-learned=%d db=%d maxdepth=%d incumbent=%s props=%d \
-     eff=%d contra=%d at=%s\n\
+     eff=%d contra=%d at=%s fired=%s\n\
      %!"
     (match opts.time_limit with None -> "none" | Some s -> Printf.sprintf "%gs" s)
     (Sys.time ()) (wall ()) st.Search.nodes st.Search.decisions st.Search.conflicts
@@ -1115,6 +1120,7 @@ let report_limit opts (st : Search.stats) ~(engine : Engine.t) ~best =
     c.Engine.c_runs c.Engine.c_effectful c.Engine.c_contra
     (* M6-T21: where the stop landed -- a node entry, or a poll inside propagation. *)
     (if st.Search.stopped_in_propagation then "propagation" else "node")
+    (if Float.is_nan !stop_fired_at then "none" else Printf.sprintf "%.2fs" !stop_fired_at)
 
 let solve opts (m : Model.t) =
   (* M7-T27 (b), D-0123 family C: the .opb's rows go to disk as they are minted, never
@@ -1214,7 +1220,13 @@ let solve opts (m : Model.t) =
                   (let by_time =
                      match opts.time_limit with
                      | None -> fun () -> false
-                     | Some s -> fun () -> wall () >= s
+                     | Some s ->
+                         fun () ->
+                           let w = wall () in
+                           w >= s
+                           &&
+                           (if Float.is_nan !stop_fired_at then stop_fired_at := w;
+                            true)
                    in
                    match node_limit () with
                    | None -> by_time
