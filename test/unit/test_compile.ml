@@ -1950,15 +1950,17 @@ let test_bits_mixed_row_has_no_pb_row () =
 var 0..9: x;
 var 0..3: y;
 var 0..9: z;
+var 0..9: w;
 constraint int_lin_le([1, 1], [x, y], 7);
 constraint int_lin_le([1, -1], [y, z], 0);
-constraint int_ne(z, 4);
+constraint all_different_int([z, w]);
 solve satisfy;
 |}
       in
       let c = Compile.compile (build src) in
       let enc = c.Compile.encoding in
-      check "bits pb_row: x on bits, y (width 3) on bits, z held by int_ne"
+      (* z was held by int_ne until T3 released it (D-0134); alldiff still holds. *)
+      check "bits pb_row: x on bits, y (width 3) on bits, z held by alldiff"
         (Encoding.is_bits enc "x" && Encoding.is_bits enc "y"
         && not (Encoding.is_bits enc "z"));
       let row_of i = Engine.row_of c.Compile.engine c.Compile.store i in

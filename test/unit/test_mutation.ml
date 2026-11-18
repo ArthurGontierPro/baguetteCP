@@ -1609,7 +1609,7 @@ solve :: int_search([a, b, c, m], input_order, indomain_min, complete) satisfy;
           let outcome =
             Search.solve ~engine:c.Compile.engine ~store:c.Compile.store ~ctx
               ~check:(fun _ -> true)
-              ()
+              ?order:c.Compile.order ()
           in
           close_out oc;
           ({ pbp; opb; fired = Writer.mutation_fired writer }, outcome))
@@ -1635,9 +1635,9 @@ solve :: int_search([a, b, c, m], input_order, indomain_min, complete) satisfy;
           "drop-literal");
 
     (* -- M8-bits-encoding-T3: int_ne / int_lin_ne over bits (D-0134 section 6) ------
-       test/models/bits_ne_sat.fzn (inlined), SATISFIABLE: a hole punched in a bits
-       domain at the root, a settle past it, and a disequality conflict with every term
-       fixed under a decision. The first "[resolve]" line is the hole's two-half `pol`;
+       test/models/bits_ne_sat.fzn (inlined), SATISFIABLE, solved in the model's own
+       search order as the CLI does: a hole punched in a bits domain at the root, a
+       settle past it, and a disequality conflict with every term fixed under a decision. The first "[resolve]" line is the hole's two-half `pol`;
        each corruption is refused at the `ia`. *)
     let ne_src =
       {|
