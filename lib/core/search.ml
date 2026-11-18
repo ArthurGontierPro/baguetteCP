@@ -1141,10 +1141,19 @@ let sequence ?(fallback = spec_order) (phases : phase list) : order =
 
    D-0137 section 3. [phased ph o] is [o] with its VALUE choice replaced by the saved
    phase of the variable [o] chose, when [ph] holds one still in that variable's domain;
-   the variable choice is [o]'s, untouched. The saved value [s] becomes a decision of a
-   shape SPEC 3.4 already has: at [lo] the one-literal [x <= lo] first, at [hi] the
-   one-literal [x >= hi] first, strictly inside D-0077's assignment [x = s]. So no
-   decision shape and no proof line is new.
+   the variable choice is [o]'s, untouched. The saved value [s] becomes a ONE-LITERAL
+   decision, the shape every default and annotated search makes: at [lo] the literal
+   [x <= lo] first (that branch is [x = lo]), at [hi] [x >= hi] first, and strictly inside
+   [x <= s] first, with [s] at the top of that branch, so the next decision on [x], if
+   the order takes [x] again with the same phase, is [x >= s] there and lands on [s]. So
+   no decision shape and no proof line is new.
+
+   NOT D-0077's assignment [x = s], and that is a measured choice (D-0137 section 3,
+   addendum): with the assignment shape, `--search activity --restarts luby
+   --phase-saving` wrote a branch nogood veripb refuses on 2017_hrc_exp1-1-5670 (node
+   2801, a decision level the closure does not name is needed), and with this split the
+   same run verifies. The root cause is not found; until it is, phase saving does not
+   produce the assignment shape.
 
    Both forms of [o] are wrapped -- the full one, and the staged one [dfs] asks first
    (M6-T13) -- so that a staged order keeps its O(phase) node instead of falling back to
@@ -1153,7 +1162,7 @@ let value_decision store v s =
   let d = Store.get store v in
   if s = Domain.lo d then Split { d_var = v; d_split = s; d_high_first = false }
   else if s = Domain.hi d then Split { d_var = v; d_split = s - 1; d_high_first = true }
-  else Assign { a_var = v; a_value = s }
+  else Split { d_var = v; d_split = s; d_high_first = false }
 
 let phased (ph : Phase.t) (o : order) : order =
   let apply store c =

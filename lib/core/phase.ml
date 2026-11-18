@@ -26,8 +26,9 @@
    ---------------------------------------------------------------------------
 
    [saved] answers "is there a saved value still in [v]'s domain?". Turning that into a
-   decision -- a one-literal split at a bound, D-0077's assignment strictly inside -- is
-   Search's, because the decision type is Search's and this module must not depend on it.
+   decision -- always a one-literal split, see [Search.value_decision] and D-0137 section
+   3's addendum on why not D-0077's assignment -- is Search's, because the decision type
+   is Search's and this module must not depend on it.
    No decision shape and no proof line is added (D-0137 section 3).
 
    This module never reads the live store except through [save_level]'s walk of the
