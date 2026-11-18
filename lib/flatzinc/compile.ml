@@ -802,7 +802,8 @@ let split_gcc_repeats (m : Model.t) : Model.t =
     fresh_rev :=
       { v with Model.v_name = Printf.sprintf "X_INTRODUCED_gcc_copy_%d" (j - n0) }
       :: !fresh_rev;
-    defs_rev := { Model.k = Model.Int_eq (Model.Var i, Model.Var j); c_pos = pos } :: !defs_rev;
+    defs_rev :=
+      { Model.k = Model.Int_eq (Model.Var i, Model.Var j); c_pos = pos } :: !defs_rev;
     Model.Var j
   in
   let rewrite (c : Model.constr) =
