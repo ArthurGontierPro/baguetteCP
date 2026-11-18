@@ -20,7 +20,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M11-complexity-T4 (part 1: learning and PB analysis) | `lib/core/learn.ml`, `lib/core/pb_analysis.ml`, `lib/core/reduce.ml`, `lib/core/ladder.ml`, their unit tests, `docs/DECISIONS.md` (D-0144 appended), `docs/ROADMAP.md` M11-T4 row. NOT `search.ml`, `analysis.ml` (M10 in flight), `retention.ml`, `learned.ml` (M10-T4 in flight), `store.ml`, `linear.ml` (M11-T3) | agent-batch4a (`wave49-batch4a`) | 2026-11-18 |
-| M11-complexity-T5 | `lib/core/justify.ml`, `lib/core/trace.ml`, `lib/proof/writer.ml`, `lib/core/reason.ml`, their unit tests, `docs/DECISIONS.md` (D-0145 appended), `docs/ROADMAP.md` M11-T5 row; a new opam switch `baguette-fp` on fataepyc-06 for profiling only. NOT `opb.ml`, `encoding.ml`, `lit.ml` (M11-T7), `learn.ml` (M11-T4 part 1) | agent-batch5 (`wave49-batch5`) | 2026-11-18 |
 | M7-T28 (first steps) and M7-T29 (the gcc half) | `mznlib/*.mzn`, `lib/core/prop/gcc.ml`, a new `lib/core/prop/regular.ml` (+ `docs/ARCHITECTURE.md` §1 and `CLAUDE.md`'s map), `lib/flatzinc/compile.ml` (dispatch lines only, in one separated block: M11-T7 is optimising that file), new `test/models/*` + `test/expected/`, `test/unit/test_prop.ml`, `docs/DECISIONS.md` (D-0146 appended), `docs/SPEC.md` §2.1 (the builtins table), `docs/ROADMAP.md` M7-T28/T29 rows | agent-globals (`wave49-globals`) | 2026-11-18 |
 | M12-parity-T1 (spike, branch never merged except its record) | on the branch only: a new `lib/core/prop/parity.ml`, `mznlib/` routes, `lib/flatzinc/compile.ml`; on main only `docs/DECISIONS.md` (D-0147) and `docs/ROADMAP.md` M12 rows, merged by the orchestrator | agent-parity (`wave49-parity`) | 2026-11-18 |
 | M11-complexity-T3 | `lib/core/engine.ml`, `lib/core/store.ml`, `lib/core/domain.ml`, `lib/core/propagator.ml`, `lib/core/prop/clause.ml`, `lib/core/prop/pb.ml`, `lib/core/prop/arith.ml`, `lib/core/prop/linear.ml`, `lib/core/prop/lin_eq.ml`, `lib/core/prop/ne.ml`, `lib/core/prop/alldiff.ml`, `lib/core/prop/element.ml`, their unit tests, `docs/DECISIONS.md` (D-0142 appended), `docs/ROADMAP.md` M11-T3 row. NOT `search.ml`, `analysis.ml`, `retention.ml`, `learned.ml` (in flight) | agent-batch3 (`wave48-batch3`) | 2026-11-18 |
@@ -325,10 +324,17 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
    works around it with a sum). Probably a par-`b` overload is needed, or the 3-argument form must be
    caught as `fzn_bool_xor`; worth a census of the other `bool_*` builtins with a par argument.
 
+### 2026-11-18 — M11-complexity-T5 (D-0145): the largest proof-mode cost left on cyclic is in batch 1's and W7's files (agent-batch5, `wave49-batch5`)
+
+| Request | File | From | Status |
+|---|---|---|---|
+| `Alldiff.excl` cites one ladder rung per value through `Encoding.consistency_id`, which looks the variable up by NAME every time (`Encoding.find`, a string `Hashtbl`, `Encoding.hash`): 12.4 % of 2011_cyclic-rcpsp_easy_6's proof mode at 2 000 nodes and 2.6 % of rcpsp_11's at 10 000, measured with the frame-pointer switch at `910af19`. Look the variable up once per exclusion (its `ladder_base` and bounds) and compute the rung ids arithmetically, as `consistency_id` itself does; or give `Encoding` a lookup by variable index (D-0140 W7). Byte-neutral: the ids are the same. | `lib/core/prop/alldiff.ml`, `lib/proof/encoding.ml` | agent-batch5 (M11-T5) | open |
+
 ## Completed
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M11-complexity-T5 | agent-batch5 (`wave49-batch5`) | 2026-11-18 | **D-0145.** Batch 3: the `pol`/`rup`/`ia`/`del`/level/`sol` lines assembled in one writer buffer (W2, W4, W6), the per-line origins lazy and holding counts only (J6, W8), the writer's id tables monomorphic and `wipe_level` without a sort (W3, W5), the memo's hash an allocation-free mix computed once (J1), the claim index a `Hashtbl.Make` (J2), `resync` from the low-water mark and a level cursor (J3, J5), the trace history opt-in (J4). Proof mode at 10 000 nodes: QR48 -16 %, rcpsp_11 -36 %, mspsp -19 %, cyclic -46 % instructions, RSS down too; `.pbp`/`.opb`/stdout/counters identical, lane 232/232 at four commits. Profiler: opam switch `baguette-fp` (frame pointers) on fataepyc-06. |
 | M11-complexity-T7 | agent-setup (`wave48-setup`) | 2026-11-18 | **D-0143.** The setup before node 1 was the .opb name pipeline: every term of every linear row went through three lists, a rendered name hashed into a per-row table, and a per-term sanitise and hash for the header; with the proof, every piece of a row was its own channel call under the channel mutex. Eight fixes, one per commit, in `encoding.ml`, `opb.ml`, `lit.ml`: openshop_gp10-4 to node 1 723.5 G -> 0.36 G instructions (102 s -> 0.09 s) without the proof and 950.5 G -> 105.7 G (132 s -> 15 s) with it; cyclic-rcpsp_hard_2 902 s -> 7 s without. stdout, counters, .opb and .pbp identical on five instances, 179 models, diff lane 232/232; gate green |
 | M8-bits-encoding-T3 (continuation; T3 DONE) | agent-t3c (`wave46-t3`) | 2026-11-18 | **D-0134 §8-§15.** `int_eq_reif`/`int_ne_reif` released over bits (their two `Clause` pieces derived as `Ne`'s `Resolve` with the reifier as one more term, probed first); `bool2int` over a bits integer posted by `compile.ml` as two rows with a `Linear` each; ATSP was held by `int_eq_reif`, mapping and carpet-cutting by `int_times`'s split over its wide operand, now split over the narrower one (`builder.ml`); step 3 measured (PB analysis over mixed rows falls back; `--stats pb-whys`), the lift designed, not built; step 4 checked; step 5 designed and probed, not built. 179/179 verified at `W = none`, `0`, `8` (the 173 of gate 46 byte-identical with no flags; against gate 47's binary 178 of 179, the difference the new `arith_times_narrow_sat`); gate rc 0 on `e1b46dc` (26 s, 89.7 MB). The 177 at `W = 0`: 108 -> **162** complete `.opb` (+54, none lost: carpet-cutting 18, mapping 9, ATSP 6, flowshop-workers 5, yumi-dynamic 4, zephyrus 3, ...); 15 unfinished, 5 of them `arithmetic-target`. |
 | M6-T22 | agent-pernode (`wave45-pernode`) | 2026-11-18 | **D-0138.** The per-node cost on the XOR codes was the engine asking every learned clause about every variable it names (D-0104 kept the whole scope registered: 18 800 asks per node on QR48, 37 % of the cycles) plus `check_attribution`'s `List.mem` (15 %). A wake index of the two watched variables (`Propagator.advisor`, `Engine.dyn_ids`), the degree-1 shortcut in `Pb.propagate`, no per-node or per-conflict array of the database, an O(1) watch move, a heap seed, binary-searched level marks, `rup` without `Printf`. QR48 to UNSAT: 107.1 s to 24.3 s without proof, 125.0 s to 38.0 s with it (same 143 MB proof, byte for byte, VERIFIED); QR72 now UNSAT in 531 s without proof; same nodes, same runs, 165 models byte-identical, gate green (3 632 ok, 85 MB) |
@@ -472,6 +478,23 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M8-bits-encoding-T3 (steps 1, 2 partial; T3 stays WIP) | agent-t3 + agent-t3b (`wave44-t3`) | 2026-11-18 | **D-0134 §4-§7.** maxmin over a bits scope by selector rows + one `Resolve` `pol` per pruning, selectors listed in `sol`/`soli`; `int_ne`/`int_lin_ne` released (the A/B pair resolved); `Justify.is_bits_derivation` (a T2 latent). 173/173 verified at W none/0/8, 165 byte-identical at none; gate rc 0 on `20c324f`, 85 MB. The 177 at W = 0: 73 -> 108 complete `.opb`. Open: reified holds, steps 3-5 |
 | M11-complexity-T1 | agent-inventory (`wave47-inventory`) | 2026-11-18 | **D-0140.** The inventory, read-only: 48 items, each with what it grows with, how often it runs, its measured marginal share, the fix, the batch (T3/T4/T5), the byte risk and the reference. Six instances (QR48, QR72, rcpsp_11, mspsp_hard_01, cyclic-rcpsp_easy_6, openshop_gp10-4) at 1, 1k, 10k, 40k nodes, both modes; scratch patches S1 (`count_learned_activity`), S2 (retention), S3a-c measured byte-identical; outputs in `bench/perf/` |
 ## Handoff notes
+## M11-complexity-T5 handoff, 2026-11-18 (agent-batch5, `wave49-batch5`): trace, justification and proof writing, D-0145
+
+- **What changed.** `lib/proof/writer.ml`, `lib/core/justify.ml`, `lib/core/trace.ml` and their
+  tests (plus `~history:true` in `test_matrix.ml` and `test_random.ml`). Every rule on the search's
+  path is assembled in `Writer`'s buffer and written in one call. Every rule that yields an id has
+  a `_lazy` twin taking `~origin:(unit -> string)` (the string forms remain). `Justify`'s memo and
+  claim index are re-hashed and monomorphic. `Trace.resync` uses a store low-water reader;
+  `Trace.create ~history:true` is needed to read `emitted_ids`/`citations` (they raise otherwise).
+- **Numbers.** Proof mode, 10 000 nodes: QR48 42.2 -> 35.4 G, rcpsp_11 296.6 -> 188.6 G, mspsp
+  187.7 -> 152.6 G, cyclic 1 205.6 -> 651.5 G instructions. Every artefact identical, lane
+  232/232 (audit on and off, `--bits-above 0`).
+- **For the next session.** A lazy origin must not capture a list the line does not print, because
+  the audit keeps it while the line is live, and capturing the summands cost cyclic 72 G (D-0145 §3).
+  Profile proof mode with `opam switch baguette-fp` on fataepyc-06 (`prof.sh` and `callers.py`
+  under `/scratch/arthur/wave49-batch5-runs/`), never build or gate with it. The largest
+  proof-mode cost left on cyclic is `Alldiff.excl` -> `Encoding.consistency_id` (request filed).
+
 ## M11-complexity-T7 handoff, 2026-11-18 (agent-setup, `wave48-setup`): the setup before node 1, D-0143
 
 - **What changed.** `lib/proof/encoding.ml`, `opb.ml`, `lit.ml` and `test/unit/test_proof.ml` only.
