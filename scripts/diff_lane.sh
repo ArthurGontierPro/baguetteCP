@@ -24,7 +24,9 @@
 #   --debug  every selected run again under BAGUETTE_DEBUG=1 at min(budget, 1500) nodes,
 #          against bench/diff/reference-debug/: check_watched, check_skip and the I-P7
 #          advise check are what catch a lost wake (D-0138), and they only run in debug
-#   --full   = --tier all, then the same under --debug. THE GATE RUNS THIS.
+#   --full   = --tier all, then the same under --debug. The gate runs the two passes as
+#          two commands, so that the debug pass, RED on a8d2924 (D-0141 s5: the I-P7 advise
+#          check fires on 16 integer instances), is reported apart from the plain one.
 #
 #   scripts/diff_lane.sh [--tier fast|slow|all] [--debug | --full] [-j N]
 #   scripts/diff_lane.sh --update ...         RE-RECORD the reference (see the rule below)
