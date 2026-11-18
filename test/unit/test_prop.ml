@@ -7947,9 +7947,18 @@ let test_regular_veripb () =
   check "regular: the instance is satisfiable and the solution is the automaton's"
     (match outcome with Search.Sat _ -> true | _ -> false);
   let text = read_file pbp in
-  check "regular: the proof derives its lemmas and writes trace lines below the root"
-    (contains_sub ~needle:"root lemmas (D-0146)" text
-    && contains_sub ~needle:"trace: " text);
+  let ruplines =
+    List.length
+      (List.filter
+         (fun l -> contains_sub ~needle:" rup " l)
+         (String.split_on_char '\n' text))
+  in
+  check
+    (Printf.sprintf
+       "regular: the proof derives its 48 lemmas and writes trace lines past them (%d \
+        rup lines)"
+       ruplines)
+    (contains_sub ~needle:"root lemmas (D-0146)" text && ruplines > 48);
   run_veripb ~name:"regular: the instance-2 proof, lemmas and trace lines, verifies"
     ~build:(fun _ -> (opb, pbp))
 
