@@ -14307,3 +14307,13 @@ J5's level), or stops building a value nothing printed (J4, J6). Measured at eve
 - At `910af19` the profile is led by `caml_apply2`, the GC and the propagators, which are batches 1
   and 2.
 
+
+### 6. Gate
+
+`make check` on a fresh clone of `wave49-batch5` at `0f75dd4` on `fataepyc-06`
+(`/scratch/arthur/wave49-batch5-gate.sh`), under `ulimit -v 4000000`: rc 0, `check: ok`, 179
+model tests passed, each a proof veripb accepted and a `--no-proof` run byte-identical to it, the
+22 `bits_*` models also at `--bits-above 0`. Wall 22.5 s, peak RSS 89.7 MB. Binary md5
+`ac86699a`. Then every model of `test/models/` run with `--proof` and compared with gate 50's
+artefacts (`/scratch/arthur/gate50.art/new`, binary `5e6f653e`, which is `main` at `da9df69`):
+179 models, 0 differences in stdout, exit code, `.opb` and `.pbp`.
