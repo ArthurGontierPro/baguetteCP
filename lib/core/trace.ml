@@ -135,6 +135,9 @@ type t = {
   mutable line_ids : written list array;
   (* The I-S4 record, newest first. See [citation] and [i_s4_violations]. *)
   mutable cites_rev : citation list;
+  (* M11-complexity-T5 (D-0145, D-0140 J3): this module's low-water reader on the store
+     it writes the trace of, registered by the first [resync]. *)
+  mutable low_water : (Store.t * int) option;
 }
 
 (* One "line A rests on line B" edge, with the two facts I-S4 is about, **measured at the
@@ -182,6 +185,7 @@ let create () =
     ids_rev = [];
     line_ids = Array.make 64 [];
     cites_rev = [];
+    low_water = None;
   }
 
 let permanent_ids t = List.rev t.permanent
@@ -243,15 +247,35 @@ let remember t i (e : Store.entry) =
 (* Drop back to the longest prefix of the trail this module has actually written lines
    for, comparing entries by physical identity. A backtrack shortens the trail and the
    next branch refills those positions with new entries; the lines for the old ones were
-   retired by the same [w] that the backtrack triggered. *)
+   retired by the same [w] that the backtrack triggered.
+
+   M11-complexity-T5 (D-0145, D-0140 J3): the walk starts at the store's low-water mark
+   for this module, not at position 0. At the previous [resync] the prefix
+   [0, n_done) agreed with the trail, and [emit] then filled [done_] up to the trail's
+   length; every position below the mark has stayed on the trail, unchanged, since that
+   [resync] ([Store.take_low_water]: the trail only shrinks in [Store.undo_to], which
+   lowers the mark). So the walk from the mark ends where the walk from 0 ended, and
+   [n_done] is what it was. The first call on a store registers the reader and walks from
+   0; a trace moved to another store (a test's shape) registers again. *)
 let resync t store =
+  let start =
+    match t.low_water with
+    | Some (s, r) when s == store -> Store.take_low_water store r
+    | _ ->
+        t.low_water <- Some (store, Store.register_low_water store);
+        0
+  in
   let n = Stdlib.min t.n_done (Store.trail_length store) in
   let rec go i =
     if i >= n then n
     else if Store.trail_entry store i == t.done_.(i) then go (i + 1)
     else i
   in
-  t.n_done <- go 0
+  t.n_done <- go (Stdlib.min start n)
+
+(* The trail position at which level [k + 1] opened: [Store.level_marks]' [k]-th element,
+   read in place (M11-complexity-T5, see [emit_to_page]). *)
+let mark_at store k = store.Store.marks.(k).Store.trail_mark
 
 (* ------------------------------------------------------------------ claims *)
 
@@ -611,10 +635,24 @@ let emit_to_page (ctx : Justify.ctx) t store =
   let saved = Writer.current_level ctx.Justify.writer in
   let at = ref saved in
   let n = Store.trail_length store in
+  (* M11-complexity-T5 (D-0145, D-0140 J5): the entry's level by a cursor over the level
+     marks, which only moves forward as [i] does, instead of two binary searches per
+     entry ([Store.is_level_start] and [Store.level_of_index]). [lv] is the number of
+     marks at or below [i], which is [Store.level_of_index store i] (the marks are
+     monotone, I-T2), and [i] opens a level exactly when the last of them is [i], which
+     is [Store.is_level_start]'s test. Nothing in this loop opens or closes a level. *)
+  let n_levels = Store.level store in
+  let lv = ref (Store.level_of_index store t.n_done) in
   for i = t.n_done to n - 1 do
+    while !lv < n_levels && mark_at store !lv <= i do
+      incr lv
+    done;
+    let opens = !lv > 0 && mark_at store (!lv - 1) = i in
+    Debug.check "M11-T5: Trace's level cursor agrees with Store.level_of_index" (fun () ->
+        !lv = Store.level_of_index store i && opens = Store.is_level_start store i);
     let e = Store.trail_entry store i in
     remember t i e;
-    if not (Store.is_level_start store i) then
+    if not opens then
       let name = Store.name store e.Store.var in
       (* [claims] first: a change that claims nothing writes nothing and must not force
          the [facts] thunk to find that out. "Lazy where it is expensive" cuts here too.
@@ -628,7 +666,7 @@ let emit_to_page (ctx : Justify.ctx) t store =
              (M8-bits-encoding-T2) the scope the bits-arm decision reads. *)
           let all_facts = Reason.facts e.Store.reason in
           let facts = Reason.lits_of_facts all_facts in
-          let level = Store.level_of_index store i in
+          let level = !lv in
           (* The level is set here rather than inside the loop below so that the
              derivation and the line it precedes are tagged together; the loop's own
              [set_level] is then a no-op on the first claim and still does its job for a

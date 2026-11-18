@@ -2140,6 +2140,79 @@ let test_m6t15_position_of () =
         (List.equal Lit.equal want got))
     cases
 
+(* M11-complexity-T5 (D-0145, D-0140 J3 and J5). [resync] starts its walk at the store's
+   low-water mark, and [emit_to_page] reads each entry's level from a cursor over the
+   marks. A random walk of levels, prunings, backtracks and emits on m6t15's model: before
+   every emit, [resync]'s [n_done] against the walk from position 0 that it replaced, and
+   after it, every entry's lines filed at [Store.level_of_index] and no line for a level
+   start. Tiny domains (D-0028); the proof is not checked, the bookkeeping is. *)
+let test_m11t5_resync_and_levels () =
+  let pbp = Filename.temp_file "baguette_m11t5" ".pbp" in
+  let m = F.Builder.of_string ~file:"m11t5" m6t15_source in
+  let comp = F.Compile.compile m in
+  let store = comp.F.Compile.store in
+  let encoding = comp.F.Compile.encoding in
+  let oc = open_out pbp in
+  let writer = Writer.create ~audit:false oc in
+  Encoding.start_proof encoding writer;
+  let ctx = Justify.create ~writer ~encoding in
+  let trace = Trace.create () in
+  let vars =
+    [| Option.get (var_by_name store "x"); Option.get (var_by_name store "y") |]
+  in
+  let st = Random.State.make [| 3145 |] in
+  let walk_from_0 () =
+    let n = Stdlib.min trace.Trace.n_done (Store.trail_length store) in
+    let rec go i =
+      if i >= n then n
+      else if Store.trail_entry store i == trace.Trace.done_.(i) then go (i + 1)
+      else i
+    in
+    go 0
+  in
+  let bad_resync = ref 0 and bad_level = ref 0 and emits = ref 0 in
+  for _ = 1 to 400 do
+    match Random.State.int st 6 with
+    | 0 when Store.level store < 5 -> Store.new_level store
+    | 1 when Store.level store > 0 -> Store.backtrack store
+    | 2 when Store.level store > 1 -> Store.backtrack_to store (Random.State.int st 2)
+    | 3 ->
+        let want = walk_from_0 () in
+        Trace.resync trace store;
+        if trace.Trace.n_done <> want then incr bad_resync;
+        Trace.emit ctx trace store;
+        incr emits;
+        for i = 0 to Store.trail_length store - 1 do
+          let e = Store.trail_entry store i in
+          let lines = Trace.lines_at trace e in
+          if Store.is_level_start store i then (if lines <> [] then incr bad_level)
+          else if
+            not
+              (List.for_all
+                 (fun (w : Trace.written) ->
+                   w.Trace.w_level = Store.level_of_index store i)
+                 lines)
+          then incr bad_level
+        done
+    | _ -> (
+        let x = vars.(Random.State.int st 2) in
+        let d = Store.get store x in
+        let lo = Domain.lo d and hi = Domain.hi d in
+        if hi - lo >= 2 then
+          match Random.State.int st 3 with
+          | 0 -> ignore (Store.set_lo store x (lo + 1) factless : Store.outcome)
+          | 1 -> ignore (Store.set_hi store x (hi - 1) factless : Store.outcome)
+          | _ -> ignore (Store.remove store x (lo + 1) factless : Store.outcome))
+  done;
+  close_out oc;
+  (try Sys.remove pbp with _ -> ());
+  check
+    (Printf.sprintf "M11-T5: resync from the low-water mark = the walk from 0 (%d emits)"
+       !emits)
+    (!bad_resync = 0 && !emits > 20);
+  check "M11-T5: every line filed at its entry's level, none for a level start"
+    (!bad_level = 0)
+
 let () =
   print_endline "";
   (match veripb with
@@ -2173,6 +2246,7 @@ let () =
   test_m7t21_element ();
   test_is4_gate ();
   test_m6t15_position_of ();
+  test_m11t5_resync_and_levels ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
