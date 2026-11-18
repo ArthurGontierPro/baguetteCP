@@ -1,0 +1,118 @@
+rc 0
+out objective = 42;
+out s = array1d(1..25, [0, 4, 11, 0, 4, 15, 6, 9, 18, 18, 19, 22, 25, 11, 25, 26, 14, 30, 33, 29, 17, 34, 35, 31, 37]);
+out X_INTRODUCED_41_ = array1d(1..50, [true, true, true, false, false, true, false, true, false, true, true, true, false, false, true, true, false, true, true, false, false, true, true, true, true, false, false, false, true, true, false, true, false, true, false, false, false, true, true, false, false, true, false, false, true, true, false, true, false, true]);
+out ----------
+out objective = 41;
+out s = array1d(1..25, [0, 4, 11, 0, 4, 15, 6, 9, 18, 18, 19, 22, 25, 11, 25, 26, 14, 30, 34, 29, 17, 33, 34, 31, 36]);
+out X_INTRODUCED_41_ = array1d(1..50, [true, true, true, false, false, true, false, true, false, true, true, true, false, false, true, true, false, true, true, false, false, true, false, true, true, false, false, false, true, true, false, true, false, true, false, false, false, true, true, false, false, true, false, false, true, true, false, true, false, true]);
+out ----------
+out objective = 40;
+out s = array1d(1..25, [0, 4, 11, 0, 4, 15, 6, 9, 18, 18, 19, 22, 25, 11, 25, 26, 14, 30, 31, 29, 17, 32, 33, 32, 35]);
+out X_INTRODUCED_41_ = array1d(1..50, [true, true, true, false, false, true, false, true, false, true, true, true, false, false, true, true, false, true, true, false, false, true, true, false, true, false, false, false, true, true, false, true, false, true, false, false, false, true, true, false, false, true, false, false, true, true, false, false, true, true]);
+out ----------
+out objective = 39;
+out s = array1d(1..25, [0, 4, 11, 0, 4, 15, 6, 9, 18, 18, 19, 22, 25, 11, 25, 26, 14, 30, 34, 29, 17, 31, 32, 32, 34]);
+out X_INTRODUCED_41_ = array1d(1..50, [true, true, true, false, false, true, false, true, false, true, true, true, false, false, true, true, false, true, true, false, false, true, true, false, false, false, false, false, true, true, false, true, false, true, false, false, false, true, true, false, false, true, false, false, true, true, false, false, true, true]);
+out ----------
+out objective = 38;
+out s = array1d(1..25, [0, 4, 11, 0, 4, 15, 6, 9, 18, 18, 19, 22, 25, 11, 25, 26, 14, 33, 36, 29, 17, 30, 31, 34, 33]);
+out X_INTRODUCED_41_ = array1d(1..50, [true, true, true, false, false, true, false, true, false, true, true, true, false, false, true, true, false, true, true, false, false, true, true, true, false, false, false, false, true, true, false, true, false, true, false, false, false, true, true, false, false, true, false, false, true, true, false, false, false, true]);
+out ----------
+out objective = 37;
+out s = array1d(1..25, [0, 4, 11, 0, 4, 15, 6, 9, 18, 18, 19, 22, 25, 11, 25, 30, 14, 26, 34, 29, 17, 27, 28, 35, 32]);
+out X_INTRODUCED_41_ = array1d(1..50, [true, true, true, false, false, true, false, true, false, true, true, true, false, false, true, true, false, true, true, false, false, true, true, true, false, false, false, false, true, true, false, true, false, true, false, false, false, true, true, false, false, true, false, false, true, true, false, false, false, true]);
+out ----------
+out objective = 36;
+out s = array1d(1..25, [0, 4, 11, 0, 4, 15, 6, 9, 18, 18, 20, 24, 27, 11, 23, 28, 14, 32, 27, 24, 17, 19, 20, 33, 31]);
+out X_INTRODUCED_41_ = array1d(1..50, [true, true, true, false, false, true, false, true, false, true, true, true, false, false, true, true, false, true, true, false, false, true, false, true, false, false, false, false, true, true, false, true, false, true, false, false, false, true, true, false, false, true, false, false, true, true, false, true, false, true]);
+out ----------
+out objective = 35;
+out s = array1d(1..25, [0, 4, 11, 0, 4, 15, 6, 9, 18, 20, 19, 23, 26, 11, 22, 27, 14, 26, 31, 23, 17, 18, 21, 32, 30]);
+out X_INTRODUCED_41_ = array1d(1..50, [true, true, true, false, false, true, false, true, false, false, true, true, false, false, true, true, false, true, true, false, false, true, false, true, false, false, false, false, true, true, false, true, false, true, true, false, false, true, true, false, false, true, false, false, true, true, false, true, false, true]);
+out ----------
+search ladder/cls 1768 cls
+search opb/lines 35187 lines
+search direct/vals 0 vals
+search widest/wide 69 wide
+search bits/vars 0 vars
+search bitsrows/lines 0 lines
+search choices/groups 0 groups
+search limit.nodes 10001
+search limit.decisions 5565
+search limit.conflicts 4435
+search limit.learned 4401
+search limit.pb-learned 65
+search limit.db 4466
+search limit.maxdepth 147
+search limit.incumbent 35
+work limit.props 16329851
+work limit.eff 1724706
+work limit.contra 4427
+search limit.at node
+search nodes/nodes 10001 nodes
+search decisions/decs 5565 decs
+search conflicts/nodes 4435 nodes
+search maxdepth/levels 147 levels
+work exhausted/bool 0 bool 1 if
+search skipped/nodes 1090 nodes
+search learned/cls 4401 cls
+work later/asks 151651 asks
+work cites/memos 184939 memos
+search convertible/cls 180 cls
+search retention keep-all keep-all: 4466 added, 0 evicted, 4466 swept, 0 live, 78 duplicate, 4458 cited, 0 pinned
+search lbd 1:8,2:27,3:170,4:158,5:266,6:481,7:665,8:795,9:747,10:557,11:312,12:141,13:52,14:18,15:4
+search width 1:8,3:126,4:12,5:42,6:71,7:37,8:43,9:50,10:33,11:25,12:44,13:43,14:35,15:34,16:3798
+search globals/units 8 units
+search glob-prune/prunes 378 prunes
+search glob-confl/confl 8 confl
+search cls-inst/inst 4393 inst
+search cls-decl/cls 0 cls
+search cls-prune/prunes 36066 prunes
+search pb-inst/inst 65 inst
+search pb-inst-no/rows 0 rows
+search pb-prune/prunes 10684 prunes
+search pb-confl/confl 57 confl
+search minimised/lits 4077 lits
+search i-s4-cross/lines 0 lines
+search pb-tried/confl 4401 confl
+search pb-learned/rows 65 rows
+search pb-fallback/confl 4336 confl
+search pb-why first fallback reason: no PB row for instance int_times
+work pb-whys/recd 64 recd 20 x
+search pb-steps/pivots 65 pivots
+search pb-convert/rows 65 rows
+search pb-stronger/rows 48 rows
+search pb-nondeg/rows 65 rows
+search pb-lifted/rows 0 rows
+search pb-rungs/rungs 0 rungs
+search lvl-cmp/confl 65 confl
+search lvl-same/confl 0 confl
+search lvl-narrow/confl 61 confl
+search lvl-wide/confl 0 confl
+search lvl-incomp/confl 4 confl
+search lvl-empty/confl 0 confl
+search lvl-assert/confl 65 confl
+search lvl-why first disagreement: closure {111,110,107,106,104,56,38,34,32,28,23,17,11,5} vs pb {111,104} (pb asserts at 0)
+work int_le_reif/inst 3450 inst 782.0 runs/node 29.01 eff/node
+work int_times/inst 15092 inst 420.8 runs/node 97.44 eff/node
+work learned_clause/inst 4393 inst 211.3 runs/node 3.61 eff/node
+work array_bool_and/inst 4968 inst 82.3 runs/node 14.47 eff/node
+work int_lin_le_reif/inst 100 inst 47.9 runs/node 3.86 eff/node
+work int_lin_le/inst 209 inst 32.5 runs/node 4.16 eff/node
+work bool2int/inst 1824 inst 31.5 runs/node 16.24 eff/node
+work learned_pb/inst 65 inst 14.2 runs/node 0.60 eff/node
+work bool_clause/inst 100 inst 6.2 runs/node 2.19 eff/node
+work cumulative/inst 2 inst 4.0 runs/node 0.89 eff/node
+work props/runs 16329851 runs
+work eff/runs 1724706 runs
+work contra/runs 4427 runs
+work passes/snaps 60525 snaps
+work deductions/chgs 28991 chgs
+work wakes/wakes 31375198 wakes
+work masked/wakes 0 wakes
+work vetoed/wakes 189259 wakes
+work advised/wakes 11443459 wakes
+work seeded/runs 4403386 runs
+work skipped/slots 273121779 slots
+search no-proof/bool 1 bool

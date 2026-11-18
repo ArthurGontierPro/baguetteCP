@@ -60,13 +60,32 @@ let sanitize name =
   if needs_sanitize name then String.map (fun c -> if ident_char c then c else '_') name
   else name
 
+(* M11-complexity-T7 (D-0143): the decimal digits of [n >= 0] written straight into a
+   buffer, instead of through [string_of_int], which is the C [format_int] with a "%d"
+   format to parse and a string to allocate on every call. [n_digits n] is
+   [String.length (string_of_int n)] and [put_digits b ofs n ld] writes the same bytes
+   at [ofs]. A negative [n] reaches neither: [abs min_int] is [min_int], and the callers
+   keep [string_of_int] for that one value, so even it prints as it always did. *)
+let n_digits n =
+  let rec go n k = if n < 10 then k else go (n / 10) (k + 1) in
+  go n 1
+
+let put_digits b ofs n ld =
+  let n = ref n in
+  for i = ofs + ld - 1 downto ofs do
+    Bytes.unsafe_set b i (Char.unsafe_chr (48 + (!n mod 10)));
+    n := !n / 10
+  done
+
 (* [neg ^ sanitize x ^ mid ^ int_suffix v], in one allocation. [mid] is "_ge_"/"_eq_"/
    "_bit_"; its length is read, not assumed, since M8-bits-encoding-T2 added the five-byte
-   one. *)
-let render ~neg x mid v =
-  let x = sanitize x in
-  let digits = string_of_int (abs v) in
-  let lx = String.length x and ld = String.length digits and lm = String.length mid in
+   one. [render_sanitized] takes the owner already sanitised, for a caller that renders
+   many literals of one owner (lib/proof/opb.ml's [output_row]). *)
+let render_sanitized ~neg x mid v =
+  let a = abs v in
+  let lit = if a < 0 then string_of_int a else "" in
+  let lx = String.length x and lm = String.length mid in
+  let ld = if a < 0 then String.length lit else n_digits a in
   let p = if neg then 1 else 0 in
   let m = if v < 0 then 1 else 0 in
   let b = Bytes.create (p + lx + lm + m + ld) in
@@ -74,8 +93,26 @@ let render ~neg x mid v =
   Bytes.unsafe_blit_string x 0 b p lx;
   Bytes.unsafe_blit_string mid 0 b (p + lx) lm;
   if v < 0 then Bytes.unsafe_set b (p + lx + lm) 'm';
-  Bytes.unsafe_blit_string digits 0 b (p + lx + lm + m) ld;
+  if a < 0 then Bytes.unsafe_blit_string lit 0 b (p + lx + lm + m) ld
+  else put_digits b (p + lx + lm + m) a ld;
   Bytes.unsafe_to_string b
+
+let render ~neg x mid v = render_sanitized ~neg (sanitize x) mid v
+
+(* [string_of_int n], appended to [b] without the allocation (M11-complexity-T7). A
+   [Buffer], not an [out_channel]: in OCaml 5 every [output_char]/[output_string] on a
+   channel is a C call that takes and releases the channel's mutex, and that was a third
+   of writing openshop's 2.2 GB .opb one piece at a time (D-0143). *)
+let int_scratch = Bytes.create 24
+
+let add_int b n =
+  if n = min_int then Buffer.add_string b (string_of_int n)
+  else (
+    if n < 0 then Buffer.add_char b '-';
+    let a = abs n in
+    let ld = n_digits a in
+    put_digits int_scratch 0 a ld;
+    Buffer.add_subbytes b int_scratch 0 ld)
 
 let var_name = function
   | Ge (x, v) -> render ~neg:false x "_ge_" v
@@ -87,6 +124,21 @@ let to_string l =
   | Ge (x, v) -> render ~neg:(not l.positive) x "_ge_" v
   | Eq (x, v) -> render ~neg:(not l.positive) x "_eq_" v
   | Bit (x, i) -> render ~neg:(not l.positive) x "_bit_" i
+
+(* [to_string l] appended to [b] with its owner already sanitised as [x'], and nothing
+   allocated (M11-complexity-T7): the same five pieces [render] assembles, in order. *)
+let add_sanitized b x' l =
+  let mid, v =
+    match l.v with
+    | Ge (_, v) -> ("_ge_", v)
+    | Eq (_, v) -> ("_eq_", v)
+    | Bit (_, i) -> ("_bit_", i)
+  in
+  if not l.positive then Buffer.add_char b '~';
+  Buffer.add_string b x';
+  Buffer.add_string b mid;
+  if v < 0 then Buffer.add_char b 'm';
+  add_int b (abs v)
 
 (* x >= v, as a literal. *)
 let ge x v = pos (Ge (x, v))

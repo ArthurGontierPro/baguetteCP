@@ -61,7 +61,7 @@ module Names = Hashtbl.Make (struct
   let hash (s : string) = Hashtbl.hash s
 end)
 
-let normalise c =
+let normalise_by_name c =
   let coef = Names.create 16 in
   let order = ref [] in
   let rhs = ref c.rhs in
@@ -92,6 +92,85 @@ let normalise c =
              Some (-a, Lit.neg v)))
   in
   { terms; rel = c.rel; rhs = !rhs }
+
+(* M11-complexity-T7 (D-0143): the same function without the table when it would merge
+   nothing. On 2014 openshop_gp10-4 the 3 600 big-M rows of its 1 800 [int_lin_le_reif]
+   are 20 000 terms each, all over distinct names, and [normalise_by_name] rendered every
+   name, hashed it end to end and grew a 32 768-bucket table per row to learn that: with
+   the minor heap overflowing into the major one on every row, that was most of the 762 G
+   instructions D-0140 measured before node 1.
+
+   WHEN THE TABLE MERGES NOTHING. Two terms share an entry iff their rendered names are
+   equal, and [Lit.render] is injective on (sanitised owner, kind, value) -- the argument
+   is [Encoding.Occurs]'s, and [Encoding] already counts the header's names on it. So
+   [distinct_names] splits the terms into RUNS (consecutive terms whose owner is the same
+   string, physically, of one kind, with strictly increasing values: distinct by
+   construction, and a whole variable's block of a linear row is one), and checks that no
+   two runs of the same sanitised owner and kind overlap as intervals. One sanitise and
+   one hash per run instead of a render and a hash per term. An owner with more than
+   [max_runs] runs answers "not shown distinct", which only sends the row to the table.
+
+   WHAT THE FAST PATH RETURNS. With every name distinct, [normalise_by_name]'s entry for
+   a term is that term's own [delta] and its own [pbvar], its output order is the input
+   order, and its right-hand side moves by [a] for a negated input and by the coefficient
+   for a negative entry. [normalise_distinct] does exactly those moves in one pass: the
+   same terms, the same order, the same coefficients and the same right-hand side
+   (integer addition commutes, wrapped or not, and [Encoding]'s computability guard keeps
+   it from wrapping anyway). A positive input with a positive coefficient is returned as
+   the same [Lit.t] rather than a fresh [Lit.pos] of its [pbvar]; the two are equal.
+   test/unit/test_proof.ml pins both functions to each other on rows with and without
+   merges. *)
+let max_runs = 8
+
+let distinct_names terms =
+  match terms with
+  | [] | [ _ ] -> true
+  | (_, (l0 : Lit.t)) :: rest0 ->
+      let runs : (int * int * int) list Names.t = Names.create 8 in
+      let close x kind lo hi =
+        let key = Lit.sanitize x in
+        let prev = match Names.find_opt runs key with Some r -> r | None -> [] in
+        if List.length prev >= max_runs then false
+        else if List.exists (fun (k, a, b) -> k = kind && a <= hi && lo <= b) prev then
+          false
+        else (
+          Names.replace runs key ((kind, lo, hi) :: prev);
+          true)
+      in
+      let rec go x kind lo hi = function
+        | [] -> close x kind lo hi
+        | (_, (l : Lit.t)) :: rest ->
+            let y = Lit.owner l.Lit.v
+            and k = Lit.kind_rank l.Lit.v
+            and v = Lit.value l.Lit.v in
+            if y == x && k = kind && v > hi then go x kind lo v rest
+            else close x kind lo hi && go y k v v rest
+      in
+      let v0 = Lit.value l0.Lit.v in
+      go (Lit.owner l0.Lit.v) (Lit.kind_rank l0.Lit.v) v0 v0 rest0
+
+let normalise_distinct c =
+  let rhs = ref c.rhs in
+  let terms =
+    List.filter_map
+      (fun (a, (l : Lit.t)) ->
+        let delta =
+          if l.Lit.positive then a
+          else (
+            rhs := !rhs - a;
+            -a)
+        in
+        if delta = 0 then None
+        else if delta > 0 then Some (delta, if l.Lit.positive then l else Lit.pos l.Lit.v)
+        else (
+          rhs := !rhs - delta;
+          Some (-delta, Lit.neg l.Lit.v)))
+      c.terms
+  in
+  { terms; rel = c.rel; rhs = !rhs }
+
+let normalise c =
+  if distinct_names c.terms then normalise_distinct c else normalise_by_name c
 
 (* The constraint without its terminating " ;". VeriPB 3.0's [red] rule ends at the
    first ";", so its witness has to come before one: `red <body> : <witness> ;`. Every
@@ -185,22 +264,49 @@ let label_of i = Printf.sprintf "@c%d" i
    the checker enforcing the discipline [Encoding.add_constraint] already imposes, so
    it is not a restriction added here -- but it is why an `=` row cannot reach this
    function at all. *)
+(* M11-complexity-T7 (D-0143): the row is assembled in one [Buffer] and handed to the
+   channel once. Written piece by piece, every piece was a C call taking the channel's
+   mutex (OCaml 5), a third of the .opb's cost on openshop. The owner is sanitised once
+   per run of terms naming the same string (physically), not once per literal, and the
+   integers are written by [Lit.add_int] instead of through [string_of_int]. The bytes
+   are [constr_to_string]'s, which test/unit/test_proof.ml checks row by row. The buffer
+   is reused from row to row; it holds the longest row written so far (about 0.5 MB on
+   openshop), and is shrunk back when one row has made it larger than [row_buf_keep]. *)
+let row_buf = Buffer.create 4096
+let row_buf_keep = 1 lsl 22
+
 let output_row oc i c =
   match c.rel with
   | Ge ->
-      output_string oc (label_of i);
-      output_char oc ' ';
+      let b = row_buf in
+      Buffer.clear b;
+      (* [label_of i], without [Printf]: "@c" and the decimal. *)
+      Buffer.add_string b "@c";
+      Lit.add_int b i;
+      Buffer.add_char b ' ';
+      let cache = ref None in
       List.iter
-        (fun (a, l) ->
-          if a >= 0 then output_char oc '+';
-          output_string oc (string_of_int a);
-          output_char oc ' ';
-          output_string oc (Lit.to_string l);
-          output_char oc ' ')
+        (fun (a, (l : Lit.t)) ->
+          if a >= 0 then Buffer.add_char b '+';
+          Lit.add_int b a;
+          Buffer.add_char b ' ';
+          let x = Lit.owner l.Lit.v in
+          let x' =
+            match !cache with
+            | Some (y, y') when y == x -> y'
+            | _ ->
+                let x' = Lit.sanitize x in
+                cache := Some (x, x');
+                x'
+          in
+          Lit.add_sanitized b x' l;
+          Buffer.add_char b ' ')
         c.terms;
-      output_string oc ">= ";
-      output_string oc (string_of_int c.rhs);
-      output_string oc " ;\n"
+      Buffer.add_string b ">= ";
+      Lit.add_int b c.rhs;
+      Buffer.add_string b " ;\n";
+      Buffer.output_buffer oc b;
+      if Buffer.length b > row_buf_keep then Buffer.reset b
   | Eq ->
       invalid_arg
         "Opb.output_row: an `=` row cannot carry a label -- it is two constraints to the \

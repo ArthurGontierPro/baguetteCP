@@ -1287,3 +1287,35 @@ in too (`chuffed-ours-fd`): its rank against the official `chuffed-fd`, and the 
 on the instances both completed, are the machine's scale factor. The rank is **indicative**
 — different hardware, and a solver that did not enter — and each edition's figures are a
 D-xxxx MEASUREMENT (D-0105 onwards).
+
+---
+
+## 10. The M11 lanes: same search, and no cost that grows with the database (M11-complexity-T2, D-0141)
+
+Two lanes guard the M11 pass, which replaces every operation whose cost grows with the run.
+Neither is part of `make check`; the gate runs them right after it, on fataepyc-06:
+
+```sh
+make check && make diff ARGS="-j 16" && make scaling ARGS="-j 16"
+```
+
+**`make diff`** (`scripts/diff_lane.sh`, about three minutes at 16 in parallel). The 21 instances
+of `bench/diff/corpus/` (QR48, QR72 and 19 Challenge instances, 766 KB of `.fzn.gz`, listed with
+their budgets and families in `bench/diff/corpus.tsv`) are each run at a fixed
+`BAGUETTE_NODE_LIMIT` in every configuration of `bench/diff/configs.tsv` (default, `--no-proof`,
+`lbd:500`, `fifo:500`, the same two with learned propagation off, `BAGUETTE_PB_ANALYSIS=off`,
+`--bits-above 0`). Exit code, stdout, the `--stats` counters (prose and clocks stripped by
+`bench/diff/observe.py`) and the `.opb`/`.pbp` sha256 must equal `bench/diff/reference/`. A
+difference fails with the instance, the configuration and the first differing item. The
+reference is re-recorded (`--update`, which also runs veripb over every proof it records) only
+after a gated merge that changes the search on purpose. **Never to make the lane pass.** To add a
+configuration when a flag merges, add a line to `configs.tsv` and record it with
+`--update --config NAME`.
+
+**`make scaling`** (`scripts/scaling_lane.sh`, under two minutes). For each line of
+`bench/scaling/plan.tsv` it runs one instance at four node budgets, reads `instructions:u` from
+`perf stat`, and prints the cost per propagator run in the late segment (large database) over
+the early one (small database). It also prints the same ratio per node and in `cycles:u`, for
+information only. A line is OVER when its ratio exceeds the baseline in
+`bench/scaling/baseline.tsv` by more than 1 %. The lane is REPORT-ONLY until M11-complexity-T6
+(`ARGS=--enforce` fails now). Without perf it falls back to the GC's allocated words and says so.
