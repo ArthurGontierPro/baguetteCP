@@ -6947,14 +6947,22 @@ let test_maxmin_veripb () =
    3. The factless root conflict (probe c1, m in 5..7 over x, y in 0..3) closes to
       `0 >= 1` through the same emitter, and the refutation verifies. *)
 
-let bits_mm_scene ?(m_lo = 0) ?(x_hi = 7) () =
+let bits_mm_scene ?(root_unsat = false) () =
   let e = Encoding.create () in
-  Encoding.declare_int_bits e "m" ~lo:m_lo ~hi:7;
-  Encoding.declare_int_bits e "x" ~lo:0 ~hi:x_hi;
+  (* Literal widths, for the width lint: Model A, or Model C (m above every operand). *)
+  if root_unsat then (
+    Encoding.declare_int_bits e "m" ~lo:5 ~hi:7;
+    Encoding.declare_int_bits e "x" ~lo:0 ~hi:3)
+  else (
+    Encoding.declare_int_bits e "m" ~lo:0 ~hi:7;
+    Encoding.declare_int_bits e "x" ~lo:0 ~hi:7);
   Encoding.declare_int_bits e "y" ~lo:0 ~hi:3;
   ignore (Encoding.add_int_lin_le e [ (1, "x"); (-1, "m") ] 0 : int);
   ignore (Encoding.add_int_lin_le e [ (1, "y"); (-1, "m") ] 0 : int);
-  let decls = [ ("m", m_lo, 7); ("x", 0, x_hi); ("y", 0, 3) ] in
+  let decls =
+    if root_unsat then [ ("m", 5, 7); ("x", 0, 3); ("y", 0, 3) ]
+    else [ ("m", 0, 7); ("x", 0, 7); ("y", 0, 3) ]
+  in
   let store = mk_store decls in
   let p =
     Maxmin.make ~shape:`Selector store ~dir:Maxmin.Max
@@ -7097,7 +7105,7 @@ let build_bits_mm_r3 ~tamper dir =
   (opb, pbp)
 
 let build_bits_mm_root_conflict dir =
-  let e, store, p, _ = bits_mm_scene ~m_lo:5 ~x_hi:3 () in
+  let e, store, p, _ = bits_mm_scene ~root_unsat:true () in
   let opb = Filename.concat dir "bits_mm_c.opb"
   and pbp = Filename.concat dir "bits_mm_c.pbp" in
   let oc = open_out opb in
