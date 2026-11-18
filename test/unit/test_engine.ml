@@ -2045,6 +2045,73 @@ let test_declined_while_pending () =
     check "pending CONTROL: without BAGUETTE_DEBUG that lost wake is simply lost"
       (r = Ok () && x_lo = 1)
 
+(* ---------------------------------------------------------------------------
+   M11-complexity-T3 (D-0142 section 1): the wake index's positions stay exact when an
+   instance with BOTH watches on one variable is moved by another's removal
+
+   [wp1]/[wp2] are where an instance's entries sit in [dyn_ids]; with both watches on one
+   variable there is one entry, and [sync_watched] sets both positions to it. The O(1)
+   swap-remove of another instance's entry used to update only [wp1] of the instance it
+   moved, so [wp2] went stale. The index itself never read that stale [wp2] (with both
+   watches on one variable only [wp1] is used), but BAGUETTE_DEBUG's check of the
+   positions does, and it raised `the wake index lost propagator #N learned_clause's
+   watch entries` on 15 of the lane's instances once D-0142's first fix let the debug
+   pass run past the I-P7 alarm. An integer clause such as `x >= 5 \/ x <= 2` watches
+   one variable twice; a Boolean clause almost never does, which is why D-0138's debug
+   runs on QR48 and QR72 never met it.
+
+   The scene: B = `x >= 7 \/ y >= 3 \/ z >= 1` (watching x and y) is indexed on x before
+   A = `x >= 5 \/ x <= 2` (both watches on x). Bringing x below 7 falsifies B's watch, B
+   moves it to z, and the removal of B's entry from x's slice moves A's entry. The test
+   reads the index directly: every self-watching instance's two positions must hold its
+   id. *)
+let test_index_positions () =
+  let module Clause = Baguette_core.Clause in
+  let module LC = Clause.Learned_clause in
+  let bounds = [ ("x", 0, 9); ("y", 0, 9); ("z", 0, 1) ] in
+  let decl name =
+    List.find_map (fun (n, lo, hi) -> if n = name then Some (lo, hi) else None) bounds
+  in
+  let store = mk_store bounds in
+  let pack id ls =
+    let lc = LC.make (Option.get (Clause.of_lits store ~decl ls)) in
+    Propagator.pack ~id ~advise:(LC.advise lc)
+      (module LC : Propagator.S with type t = LC.t)
+      lc
+  in
+  let b = pack 0 [ Lit.ge "x" 7; Lit.ge "y" 3; Lit.ge "z" 1 ] in
+  let a = pack 1 [ Lit.ge "x" 5; Lit.le "x" 2 ] in
+  let engine = Engine.create [ b; a ] in
+  let consistent () =
+    List.for_all
+      (fun id ->
+        let at sl p =
+          sl >= 0 && p >= 0
+          && p < engine.Engine.dyn_len.(sl)
+          && engine.Engine.dyn_ids.(sl).(p) = id
+        in
+        at engine.Engine.wv1.(id) engine.Engine.wp1.(id)
+        && at engine.Engine.wv2.(id) engine.Engine.wp2.(id))
+      [ 0; 1 ]
+  in
+  let r =
+    try Ok (Engine.propagate engine store) with e -> Error (Printexc.to_string e)
+  in
+  check "index: after the first call both instances' positions hold their ids"
+    (r = Ok Engine.Fixpoint && consistent ());
+  Store.new_level store;
+  ignore (Store.set_hi store (var 0) 6 no_facts_placeholder);
+  let r =
+    try Ok (Engine.propagate engine store) with e -> Error (Printexc.to_string e)
+  in
+  check
+    (Printf.sprintf "index: B's watch move leaves A's two positions exact%s"
+       (match r with Ok _ -> "" | Error m -> " -- got: " ^ m))
+    (r = Ok Engine.Fixpoint && consistent ());
+  check "index: ...and B did move off x (the removal the scene is about happened)"
+    (engine.Engine.wv1.(0) <> engine.Engine.wv1.(1)
+    && engine.Engine.wv2.(0) <> engine.Engine.wv1.(1))
+
 let () =
   test_fixpoint_tightens_and_settles ();
   test_conflict_carries_explanation ();
@@ -2084,6 +2151,7 @@ let () =
   test_hole_split_sweep ();
   test_hole_split_with_settled_ancestor ();
   test_declined_while_pending ();
+  test_index_positions ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

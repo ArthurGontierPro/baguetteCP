@@ -433,15 +433,19 @@ let dyn_push t x id =
 
 (* Swap-remove the entry at [i] of [x]'s slice: the order inside one slice carries
    nothing, the wake loop sorts what it wakes. The entry moved into [i] has its position
-   updated; it belongs to an instance whose [wv1]/[wv2] are current, and [wp1] is the
-   slot when [wv1] is [x] (both watches on [x] included). *)
+   updated; it belongs to an instance whose [wv1]/[wv2] are current. With both its
+   watches on [x] it has ONE entry and both positions name it, so both are updated
+   (D-0142 section 1: updating [wp1] alone left [wp2] stale, which only the
+   BAGUETTE_DEBUG position check reads, and which it then reported as a lost entry). *)
 let dyn_remove t x i =
   let len = t.dyn_len.(x) in
   let a = t.dyn_ids.(x) in
   let moved = a.(len - 1) in
   a.(i) <- moved;
   t.dyn_len.(x) <- len - 1;
-  if i < len - 1 then if t.wv1.(moved) = x then t.wp1.(moved) <- i else t.wp2.(moved) <- i
+  if i < len - 1 then (
+    if t.wv1.(moved) = x then t.wp1.(moved) <- i;
+    if t.wv2.(moved) = x then t.wp2.(moved) <- i)
 
 (* Under BAGUETTE_DEBUG, after every run of a self-watching instance: the advisor must
    answer [false] for every variable of its scope it does not watch, which is the whole
