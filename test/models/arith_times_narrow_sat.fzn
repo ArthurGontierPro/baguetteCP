@@ -1,0 +1,16 @@
+% M8-bits-encoding-T3 continuation (D-0134 section 10): int_times splits over its NARROWER
+% operand. b is 0..1 and y is 0..9, so the case split runs over b (one guard Boolean, two
+% groups) and not over y (nine guards, ten groups), as lib/flatzinc/builder.ml now orders
+% the operands. z >= 3 refutes b = 0 at the root (b = 0 forces z = 0 through the v = 0
+% group), so z = y from the v = 1 group; deciding y at its top, 4, fixes z = 4 and
+% y + z <> 8 fails with both terms fixed. The learned clause sends y to 3: the search lands
+% on b = 1, y = 3, z = 3. At `--bits-above 0` y and z are on bits and every row above is a
+% bits row.
+var 0..1: b :: output_var;
+var 0..9: y :: output_var;
+var 0..9: z :: output_var;
+constraint int_times(b, y, z);
+constraint int_lin_le([-1], [z], -3);
+constraint int_lin_le([1], [y], 4);
+constraint int_lin_ne([1, 1], [y, z], 8);
+solve :: int_search([y], input_order, indomain_max, complete) satisfy;

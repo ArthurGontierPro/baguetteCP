@@ -1,0 +1,31 @@
+% M8-bits-encoding-T3 continuation (D-0134 section 8): four pigeons in three holes over 0..2
+% -- width 2, so on bits at `--bits-above 0` (and on the ladder at 8) -- as six REIFIED
+% equalities whose reifiers are forced: three int_eq_reif forced false and three
+% int_ne_reif forced true, so both polarities of the guarded A/B pair are in play. Every
+% pruning is a value removal by a disequality piece (a 1 is interior: a hole in a bits
+% domain), every conflict a reified equality with both terms fixed, and the refutation's
+% nogoods are RUP only through the derived two-half `pol` lines, each carrying its
+% reifier's literal, none of which the guarded rows give by unit propagation.
+var 0..2: p :: output_var;
+var 0..2: q :: output_var;
+var 0..2: r :: output_var;
+var 0..2: s :: output_var;
+var bool: f1;
+var bool: f2;
+var bool: f3;
+var bool: t1;
+var bool: t2;
+var bool: t3;
+constraint int_eq_reif(p, q, f1);
+constraint int_eq_reif(p, r, f2);
+constraint int_eq_reif(p, s, f3);
+constraint int_ne_reif(q, r, t1);
+constraint int_ne_reif(q, s, t2);
+constraint int_ne_reif(r, s, t3);
+constraint bool_clause([], [f1]);
+constraint bool_clause([], [f2]);
+constraint bool_clause([], [f3]);
+constraint bool_clause([t1], []);
+constraint bool_clause([t2], []);
+constraint bool_clause([t3], []);
+solve satisfy;

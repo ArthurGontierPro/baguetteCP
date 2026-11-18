@@ -1,0 +1,16 @@
+% M8-bits-encoding-T3 continuation (D-0134 section 9): bool2int over a BITS integer,
+% refuted at the root. x1, x2 (0..5) and s (0..9) are on bits at `--bits-above 0`; each
+% bool2int is posted as its two rows with a [Linear] each. The channellings confine x1 and
+% x2 to 0..1 (b's top, over a bits row), so s = x1 + x2 is at most 2 against s >= 3: the
+% root's trace is the channelling prunings, each a bits-row `pol` pinned by `ia`, and the
+% empty clause is RUP only along them.
+var bool: b1 :: output_var;
+var bool: b2 :: output_var;
+var 0..5: x1 :: output_var;
+var 0..5: x2 :: output_var;
+var 0..9: s :: output_var;
+constraint bool2int(b1, x1);
+constraint bool2int(b2, x2);
+constraint int_lin_eq([1, 1, -1], [x1, x2, s], 0);
+constraint int_lin_le([-1], [s], -3);
+solve satisfy;

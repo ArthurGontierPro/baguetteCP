@@ -69,6 +69,11 @@
      T3  [A(v), ~S]   z - v x <= 0        y >= v and x <= 0  =>  xy <= vx
      T4  [B(v), ~S]   z - v x >= 0        y <= v and x <= 0  =>  xy >= vx
 
+   Which operand is y: the NARROWER of the two (M8-bits-encoding-T3, docs/DECISIONS.md
+   D-0134 section 10). Multiplication is symmetric and the groups are one per value of
+   y, so lib/flatzinc/builder.ml puts the narrower operand second, the model's order at a
+   tie; `int_times(b, y, z)` with b in 0..1 is two groups whatever y's width.
+
    At y = v both A(v) and B(v) hold, so whichever sign x has, z = v x is forced from
    two sides. The family is therefore CHECKING (propagator.ml's I-P2), which a
    relaxation such as a bare McCormick envelope over the declared box would NOT be --
