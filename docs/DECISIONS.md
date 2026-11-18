@@ -14215,7 +14215,10 @@ own argument, and `learned.ml` is M10-T4's file. Requested in WORKLOG.md.
   including cyclic's 2.0 GB proof (`17257ea6`).
 - **The unit suites**, `dune runtest --root . --force` under `ulimit -v 4000000`: 0 FAIL, the new
   reference tests included.
-- **The gate**: GATE_RESULT.
+- **The gate**, `make check` on a fresh clone at `6c2646f` on `fataepyc-06`: rc 0, 0 FAIL,
+  179 models passed, peak RSS 89 MB (`make_check_wall 25.01 s peak_rss 89268 kB`, gate 50 said
+  23.30 s and 89 864 kB), and every model's stdout, exit code, `.opb` and `.pbp` byte-identical to
+  gate 50's (`/scratch/arthur/gate50.art/new/`, binary `5e6f653e`): 179 models, 0 differences.
 
 ### 3. Measurement
 
