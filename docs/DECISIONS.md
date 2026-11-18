@@ -13003,12 +13003,17 @@ stdout, exit code, `.opb` and `.pbp` are byte-identical** to main's binary `a921
 `restart_*`, which restart 8, 3 and 14 times in their lane), and **0 differences in stdout, exit
 code, `.opb` and `.pbp` on all 179 models** against main's binary `e8354a74` (gate 48,
 `/scratch/arthur/gate48.art/new/`). The new binary is `28c4a51c`. Status:
-`/scratch/arthur/wave45-strategy-runs/gate.status`.
+`/scratch/arthur/wave45-strategy-runs/gate.efbe5b6.status`.
+
+**And once more after the phase-saving fix (section 3's addendum)**, on a fresh clone of
+`48de0a3`: `make check` rc 0, peak RSS 89 852 kB, 182 model tests, **0 differences on the 179
+models** against `e8354a74`, binary `46b0deaa`. Status: `gate.status` in the same directory.
 
 ### 12. For the differential lane (M11-T2, D-0141): flags off, and the lines to add
 
 **With the flags off nothing moves.** `make diff ARGS="-j 16"` on this branch after merging
-`origin/main` (`576da4b`) and `origin/wave47-lanes` (`eaf5a7b`), binary `28c4a51c` at `9fb9b09`,
+`origin/main` (`576da4b`) and `origin/wave47-lanes` (`eaf5a7b`), binary `28c4a51c` at `9fb9b09`
+and again `46b0deaa` at `48de0a3` (after the phase-saving fix), both times
 against the reference recorded on `a9ffcc5` (`e8354a74`), 21 instances times the 8 configurations
 of `bench/diff/configs.tsv`: **`diff_lane: ok -- 168 of 168 runs equal the reference`** (203 s, rc 0). The strategy counters (`stats: restarts`, `unexplored`,
 `kept`, `activity`, `phases`, `phase-used`) are printed only when a strategy flag is on, so a
@@ -13032,16 +13037,36 @@ run's (a window of 5 with K = 1 restarted 6 times over the whole suite, too rare
 and so exercises the LBD state machine and its Luby floor. Between them the three
 lines cover every code path this branch adds: full restarts (all three), partial restarts
 (`--reuse-trail`, only under `activity`), the activity order with its bumps and decay, the
-alternation and its staged form, phase saving's save and use, and the assignment decision
-phase saving can produce at an interior saved value. `stable` and `geom` are the same
+alternation and its staged form, and phase saving's save and use. `stable` and `geom` are the same
 mechanism under another schedule and do not need a line of their own. Each line needs its
 reference recorded once with `scripts/diff_lane.sh --update --config NAME` on the merged binary.
 
-All three were run over the 182 test models first (binary `28c4a51c`, every proof through
-veripb 3.0.2, `smoke/<tag>/summary` on the node): `restarts` (`luby:1` with phase saving)
-165 of 165 VERIFIED earlier on `7c3bbc2a` with 155 restarts; `activity` 182 of 182 VERIFIED,
-verdicts equal to the default run's, 182 restarts and 539 levels kept by `--reuse-trail`;
-`alternate` 182 of 182 VERIFIED, verdicts equal, 79 restarts.
+All three were run over the 182 test models first, every proof through veripb 3.0.2 and every
+verdict equal to the default run's (`smoke/<tag>/summary` on the node). On the final binary
+`46b0deaa`: `restarts` 182 of 182 VERIFIED (218 restarts), `alternate` 182 of 182 (79
+restarts), and `--search activity --restarts luby:1 --phase-saving` 182 of 182 (178). On
+`28c4a51c`, before the fix, which does not touch it: `activity` with `--reuse-trail` 182 of 182
+(182 restarts, 539 levels kept).
+
+### 13. Findings for other owners (filed in WORKLOG, `## Cross-session requests`, 2026-11-18)
+
+1. **A branch nogood veripb refuses, with D-0077's assignment decision in the tree.** On
+   `2017_hrc_exp1-1-5670` under `--search activity --restarts luby --phase-saving` (phase
+   saving then assigning interior saved values), the nogood of node 2801 keeps 34 of 50 decision
+   levels and is not RUP. The clause of all 50 is, and so is the nogood with the one decision of
+   level 26 added back, and no other single level does it. So `Learn.levels` misses a level the
+   trace needs, while every `BAGUETTE_DEBUG` check holds (M7-T27 (a3)'s memo-against-walk
+   cross-check included). Reproduced on the pre-M6-T22 code too. With phase saving branching
+   `x <= s` instead (section 3's addendum) the same run verifies, so the assignment shape is the
+   suspect. Main reaches that shape through `indomain_median`, which is why this is a finding
+   and not only a fix here.
+2. **I-P7 fires on this instance at default flags**, on main's code and before M6-T22: a learned
+   clause's advisor declines a wake for a change that, run, prunes. A missed pruning, not an
+   unsound one.
+3. **The stop can overshoot `--time-limit 300` by more than 300 s** with the proof on, on main's
+   binary as on the flags (`2017_cargo_challenge01_0s_1913`, `2020_cable_tree_wiring_R046`):
+   the runs were killed at the 600 s wall with a truncated proof, which is why the subset tables
+   show `SAT 600 s` for them and no verdict. D-0136's family.
 
 ## D-0134  M8-bits-encoding-T3: the full substrate -- maxmin over bits by SELECTOR rows and one `Resolve` step, the checker facts measured first, and the step order
 
