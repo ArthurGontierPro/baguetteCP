@@ -1947,7 +1947,8 @@ let register_learned_pb engine store ctx stats ~bump ~cid ~(row : Learned.t) =
   match Learned.pb_instance ~id ~row_id:cid ~bump store ~decl row with
   | None -> stats.n_pb_inst_declined <- stats.n_pb_inst_declined + 1
   | Some inst ->
-      Engine.add engine inst;
+      (* D-0139: behind [Retention.gate], so a policy that detaches can evict it. *)
+      Engine.add engine (Retention.gate stats.db store ~cid inst);
       stats.n_pb_instances <- stats.n_pb_instances + 1;
       stats.pb_inst_ids_rev <- id :: stats.pb_inst_ids_rev;
       Retention.cite stats.db ~cid
@@ -2281,12 +2282,14 @@ let register_learned engine store ctx stats ~cid ~(lits : Lit.t list) =
       | Some p ->
           let id = Engine.next_id engine in
           let lc = Clause.Learned_clause.make p in
+          (* D-0139: behind [Retention.gate], so a policy that detaches can evict it. *)
           Engine.add engine
-            (Propagator.pack ~id
-               ~advise:(Clause.Learned_clause.advise lc)
-               (module Clause.Learned_clause : Propagator.S
-                 with type t = Clause.Learned_clause.t)
-               lc);
+            (Retention.gate stats.db store ~cid
+               (Propagator.pack ~id
+                  ~advise:(Clause.Learned_clause.advise lc)
+                  (module Clause.Learned_clause : Propagator.S
+                    with type t = Clause.Learned_clause.t)
+                  lc));
           stats.n_clause_instances <- stats.n_clause_instances + 1;
           stats.clause_inst_ids_rev <- id :: stats.clause_inst_ids_rev;
           Retention.cite stats.db ~cid
