@@ -1,11 +1,11 @@
 rc 0
 out =====UNKNOWN=====
-search ladder/cls 6023 cls
-search opb/lines 14966 lines
+search ladder/cls 5855 cls
+search opb/lines 14826 lines
 search direct/vals 0 vals
 search widest/wide 4118 wide
-search bits/vars 27 vars
-search bitsrows/lines 54 lines
+search bits/vars 41 vars
+search bitsrows/lines 82 lines
 search choices/groups 0 groups
 search limit.nodes 3001
 search limit.decisions 3030
@@ -48,6 +48,7 @@ search pb-tried/confl 893 confl
 search pb-learned/rows 0 rows
 search pb-fallback/confl 893 confl
 search pb-why first fallback reason: no PB row for instance int_eq_reif
+work pb-whys/recd 64 recd 63 x
 search pb-steps/pivots 0 pivots
 search pb-convert/rows 0 rows
 search pb-stronger/rows 0 rows
@@ -82,15 +83,15 @@ work vetoed/wakes 13301 wakes
 work advised/wakes 267963 wakes
 work seeded/runs 264025 runs
 work skipped/slots 6346245 slots
-search rup/lines 168315 lines
-search pol/lines 277924 lines
-search pol-tokens/tokens 3301544 tokens
+search rup/lines 150090 lines
+search pol/lines 297127 lines
+search pol-tokens/tokens 3479662 tokens
 search pol-widest/tokens 391 tokens
-search atoms/atoms 1302 atoms
-search atomlinks/lines 2548 lines
-search bridges/pairs 230 pairs
+search atoms/atoms 1383 atoms
+search atomlinks/lines 2651 lines
+search bridges/pairs 750 pairs
 search boundlines/pairs 14 pairs
-search bitsprune/lines 8570 lines
-search atoms/prune/atoms 0.152 atoms
-opb adb0584f5d07195a15b8ed85cfd89c2c62b3bca42bbca832f534929b8656720c
-pbp 805e43f43d2a2835966d1ace8be2d491a8966ece8ce2eacfdcfa0b788acb71a0
+search bitsprune/lines 27670 lines
+search atoms/prune/atoms 0.050 atoms
+opb 926f703a84a5f1d1471d3302b80f05ea02e7ea89abd9f202ecae5f09c58c25bf
+pbp bc576e871ded959081be9b70eb1972a041938c93e00f15f635d59d6d643d6566

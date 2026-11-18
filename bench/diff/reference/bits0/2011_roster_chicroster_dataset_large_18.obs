@@ -7,12 +7,12 @@ out evemorn = 0;
 out isolated = 16;
 out X_INTRODUCED_17_ = array1d(1..182, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 2, 2, 2, 1, 1, 2, 2, 2, 2, 3, 2, 1, 2, 2, 3, 2, 3, 2, 2, 2, 2, 3, 3, 3, 2, 2, 2, 2, 4, 4, 4, 2, 4, 3, 2, 4, 4, 4, 2, 4, 3, 3, 4, 4, 4, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]);
 out ----------
-search ladder/cls 1092 cls
-search opb/lines 13357 lines
+search ladder/cls 0 cls
+search opb/lines 12993 lines
 search direct/vals 0 vals
 search widest/wide 364 wide
-search bits/vars 367 vars
-search bitsrows/lines 734 lines
+search bits/vars 731 vars
+search bitsrows/lines 1462 lines
 search choices/groups 0 groups
 search limit.nodes 3501
 search limit.decisions 2238
@@ -55,6 +55,7 @@ search pb-tried/confl 1252 confl
 search pb-learned/rows 0 rows
 search pb-fallback/confl 1252 confl
 search pb-why first fallback reason: no PB row for instance <unknown>
+work pb-whys/recd 64 recd 45 x
 search pb-steps/pivots 0 pivots
 search pb-convert/rows 0 rows
 search pb-stronger/rows 0 rows
@@ -85,15 +86,15 @@ work vetoed/wakes 112820 wakes
 work advised/wakes 191996 wakes
 work seeded/runs 119372 runs
 work skipped/slots 19612231 slots
-search rup/lines 100932 lines
-search pol/lines 115602 lines
-search pol-tokens/tokens 9221640 tokens
+search rup/lines 71228 lines
+search pol/lines 147817 lines
+search pol-tokens/tokens 9647224 tokens
 search pol-widest/tokens 368 tokens
-search atoms/atoms 2219 atoms
-search atomlinks/lines 3049 lines
-search bridges/pairs 552 pairs
+search atoms/atoms 3253 atoms
+search atomlinks/lines 3964 lines
+search bridges/pairs 2133 pairs
 search boundlines/pairs 551 pairs
-search bitsprune/lines 112551 lines
-search atoms/prune/atoms 0.020 atoms
-opb fbf774976be03e4c31009a3141441296e1a7a5319c2a7ae30ec5eb54df7daa83
-pbp 43c8e120c0ea9d2c054daa809b3641e52cd21e9a1cd8121902f45c9aaf66c859
+search bitsprune/lines 143851 lines
+search atoms/prune/atoms 0.023 atoms
+opb 7d9b08943407d12c10f7e2c68bd93b1650b6c9977f187c918527b4ab620aec7e
+pbp 5a7e10bf5a62127820573617f58e4f1710fe4d1a3377e8b3fcad8d778aefe095

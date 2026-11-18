@@ -48,6 +48,7 @@ search pb-tried/confl 2595 confl
 search pb-learned/rows 2 rows
 search pb-fallback/confl 2593 confl
 search pb-why first fallback reason: no PB row for instance int_eq_reif
+work pb-whys/recd 64 recd 38 x
 search pb-steps/pivots 2 pivots
 search pb-convert/rows 2 rows
 search pb-stronger/rows 2 rows

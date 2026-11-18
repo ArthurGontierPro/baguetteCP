@@ -68,6 +68,7 @@ search pb-tried/confl 2133 confl
 search pb-learned/rows 633 rows
 search pb-fallback/confl 1500 confl
 search pb-why first fallback reason: no PB row for instance <unknown>
+work pb-whys/recd 64 recd 38 x
 search pb-steps/pivots 633 pivots
 search pb-convert/rows 633 rows
 search pb-stronger/rows 633 rows
