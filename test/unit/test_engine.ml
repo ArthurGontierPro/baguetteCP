@@ -2169,7 +2169,7 @@ let test_direction_index () =
           Domain.hi e.Store.now,
           Reason.to_string e.Store.reason ))
   in
-  let scenes = 300 and agree = ref 0 and steps = ref 0 and conflicts = ref 0 in
+  let scenes = 500 and agree = ref 0 and steps = ref 0 and conflicts = ref 0 in
   let w_dir = ref 0 and w_any = ref 0 in
   for _ = 1 to scenes do
     let clauses =
