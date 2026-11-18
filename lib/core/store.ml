@@ -1236,21 +1236,27 @@ let hi_reasons_at h v =
    level marks at or below it (I-T2 makes the marks monotone, so this is a count, not a
    search). Position [marks.(k)] is exactly the *first* entry of level [k+1], which for
    a level opened by [Search.branch] is the decision push itself. *)
-let level_of_index t i =
-  let l = ref 0 in
-  for k = 0 to t.n_levels - 1 do
-    if t.marks.(k).trail_mark <= i then incr l
-  done;
-  !l
+(* M6-T22 / D-0138: the count is a binary search -- the first [k] whose mark is past [i]
+   -- because the marks are monotone (I-T2); it was a walk over every open level, once
+   per trail entry conflict analysis reads. *)
+let first_mark_above t i =
+  let rec go lo hi =
+    if lo >= hi then lo
+    else
+      let mid = (lo + hi) lsr 1 in
+      if t.marks.(mid).trail_mark <= i then go (mid + 1) hi else go lo mid
+  in
+  go 0 t.n_levels
+
+let level_of_index t i = first_mark_above t i
 
 (* True when [i] is the first entry of some open level, i.e. the push that opened it.
-   [Trace] skips these: a decision is not implied by the model and has no trace line. *)
+   [Trace] skips these: a decision is not implied by the model and has no trace line.
+   M6-T22: the marks at or below [i] are exactly the first [level_of_index t i], so [i]
+   is a level start iff the last of them equals it. *)
 let is_level_start t i =
-  let r = ref false in
-  for k = 0 to t.n_levels - 1 do
-    if t.marks.(k).trail_mark = i then r := true
-  done;
-  !r
+  let k = first_mark_above t i in
+  k > 0 && t.marks.(k - 1).trail_mark = i
 
 (* Debug-mode check of the trail invariants. Cheap enough to call after a backtrack in
    tests; linear in the trail, so not something the engine should call per propagation. *)

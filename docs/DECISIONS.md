@@ -12868,3 +12868,182 @@ widths. The commits after `20c324f` are documentation only.
 - **`Resolve` is general.** Its parts are any `Combine`s of `Linear`'s shape and model rows;
   maxmin's selector rows and `Ne`'s pair are its two producers, and the guarded rows of the
   reified families are the next. The `[resolve]` origin tag lets a mutation lane aim at it.
+
+## D-0138  M6-T22: the per-node cost on the XOR codes was the engine asking every learned clause about every variable it names; a wake index of watched variables and smaller fixes make QR48 4.4 times faster with the same nodes and the same proof
+
+**Status**: **DONE**, recorded 2026-11-18 (agent-pernode, `wave45-pernode`). Measured on
+`fataepyc-06`, outputs under `/scratch/arthur/wave45-pernode-runs/`. Instances: the user's
+`H_qr48_bag_def` and `H_qr72_bag_def` from `/scratch/arthur/codes-bench/`. Baseline = `main` at
+`9f3ed78` (md5 `6d3d2dc3…`, gate 45's binary). Final = `wave45-pernode` at `0364386` (md5
+`17a802c9…`). The request is WORKLOG "codes-cp measurements", point 1, and ROADMAP M6-T22.
+
+### 1. Reproduction (baseline binary)
+
+The model compiles to 992 `bool_clause` (the XOR chains, four clauses per `z = x xor y`), 48
+`bool2int` and 3 `int_lin_le` (the cardinalities and the weight bound). There is no PB row, so every
+learned constraint is a clause (`pb-fallback` 1.00, "no PB row for instance bool2int"): 11 684 of
+them on QR48, 6 581 with 16 literals or more. `skipped 0` and the `decisions = conflicts` shape
+belong to the search (M10), not to this record.
+
+| run | nodes | wall, `--proof` | wall, `--no-proof` |
+|---|---|---|---|
+| QR48 to UNSAT | 23 367 | 125.0 s (187 nodes/s) | 107.1 s (218 nodes/s) |
+| QR72, `--time-limit 600` | 45 812 / 48 329 | 600 s (76 nodes/s) | 600 s (81 nodes/s) |
+
+The slowdown as a curve, from `BAGUETTE_NODE_LIMIT` runs (wall seconds to reach N nodes,
+no-proof; the rate is over the segment that ends at N):
+
+| N | QR48 | QR48 rate | QR72 | QR72 rate |
+|---|---|---|---|---|
+| 1 000 | 0.45 | 2 200 /s | 0.60 | 1 670 /s |
+| 5 000 | 5.31 | 820 /s | 6.41 | 690 /s |
+| 10 000 | 18.94 | 370 /s | 22.32 | 314 /s |
+| 20 000 | 77.27 | 171 /s | 95.81 | 136 /s |
+| 40 000 | | | 375.59 | 71 /s |
+
+The time per node grows linearly with the node count, that is with the learned database (one
+clause per conflict, a conflict every other node, `keep_all`), so the total is quadratic. The proof
+adds 17 % on QR48 (`emit` lower bound 2.3 s; 1.29 M `rup` lines).
+
+### 2. Profile (baseline, QR48 at 10 000 nodes, `perf record` self time, both modes)
+
+| share (no-proof / proof) | what |
+|---|---|
+| 37 % / 33 % | the ADVISOR's asks: `Clause.on` 16.5 %, `Clause.advise` 8.8 %, `Engine.advises` 4.7 %, `caml_apply2` 3.3 %, the wake loop's closure 2.7 %, `trigger_of`, `Var.to_int` |
+| 15 % / 14 % | `List.mem` under polymorphic `compare` (`caml_compare`, `compare_val`, `List.mem`), from `Engine.check_attribution` |
+| about 8 % / 7 % | `Pb.*`, the survey a learned clause's run makes (`status`, `List.map`/`find_all`, the hash table of `effective_of` from 12 literals on) |
+| about 6 % / 7 % | GC (`do_some_marking`, `caml_make_vect`, `caml_modify`), fed by arrays of the whole database allocated per node and per conflict |
+| 0 / about 5 % | proof only: `printf`, string hashing, `Lit` rendering |
+
+`--stats` says the same in counts: **439.9 M wakes for 23 367 nodes (18 800 per node), 432.2 M of
+them declined by the advisor**, and 369 learned-clause runs per node of which 0.01 change
+anything. The cause is a choice D-0104 states: the watcher table was left untouched, so a learned
+clause stays registered on its WHOLE scope, and every trail entry on a variable asks every learned
+clause naming it. The clause answers no unless one of its two watches is on that variable. Chuffed
+asks only the clauses that watch the literal. The proof is not the main cost. It is 25 % more
+instructions on top of a solve that was itself the slow part.
+
+### 3. The fixes, one commit each, each measured
+
+`perf stat` instructions at `BAGUETTE_NODE_LIMIT=10000`, in units of 10⁹. The node was shared with
+three other agents, so instruction counts are the metric and not wall time; cycles follow them.
+**On every row the node count (10 001), the propagator runs (4 552 401 on QR48, 5 716 802 on QR72)
+and the 165 suite models' stdout, exit code, `.opb` and `.pbp` are unchanged against `main`'s**
+(gate 45's artefacts). After each engine change, `dune runtest --force` gave 3 632 ok, and QR48 and
+QR72 ran 1 500 nodes under BAGUETTE_DEBUG (the I-P7, I-P2 and M6-T18 checks and the new index
+checks).
+
+| commit | fix | QR48 no-proof | QR48 proof | QR72 no-proof | QR72 proof |
+|---|---|---|---|---|---|
+| `9f3ed78` | baseline | 77.90 | 97.01 | 92.63 | 121.13 |
+| `0890031` | (1) `check_attribution` by binary search in the instance's sorted scope | 72.30 | 91.44 | 87.38 | 115.82 |
+| `736a3de` | (2) the wake index of watched variables | 59.11 | 78.26 | 74.20 | 102.66 |
+| `b85c878` | (3) a learned clause skips `Pb.propagate` when two free literals sit on different variables | 40.15 | 59.30 | 55.10 | 83.73 |
+| `6540576` | (4) no array of the whole database allocated per conflict or per node | 30.06 | 49.05 | 42.95 | 71.16 |
+| `704ab08` | (5) a watch move removes its index entry in O(1) | 27.87 | 46.81 | 40.86 | 68.98 |
+| `7230bf9` | (6) the seed pops the dirty slots off a heap, and `born` is read through its inverse | 27.19 | 46.16 | 39.85 | 68.01 |
+| `54b4902` | (7) `Store.level_of_index` and `is_level_start` by binary search | 26.73 | 45.53 | 38.53 | 66.31 |
+| `3f7b716` | (8) the degree-1 shortcut inside `Pb.propagate`, for every clause | 26.12 | 44.91 | 37.77 | 65.54 |
+| `0364386` | (9) a `rup` line written without a `Printf` format | 26.13 | 44.59 | 37.77 | 65.04 |
+
+QR48 no-proof cycles went from 44.6 G to 14.2 G. Commit `a2062b4` (the learned clause's advisor as
+a true two-argument closure) measured nothing (27.19 G to 27.18 G) and `0fd53ed` reverts it with the
+reason. `ab08f9b` first put fix (8) in `Clause.propagate`. `test_pb`'s D-0044 check
+(`Clause.propagate == Pb.propagate`) caught it, and `3f7b716` moved the test into `Pb.propagate`,
+which keeps one implementation.
+
+**(2) The wake index** is the substance. `Propagator.pack`'s `?advise` is now a record,
+`Propagator.advisor = { ask; watched }`, and `Clause.Learned_clause.advise lc` returns both halves,
+so the packing line in `search.ml` is unchanged. `watched ()` names the two variables the clause
+watches. The contract (`Propagator.inst_watched`) is that `ask` answers false for every other
+variable, which `Learned_clause`'s ask does by construction. The engine indexes such an instance by
+those two variables only (`dyn_ids`). It wraps the instance's `run` so that every run, whoever
+makes it, re-reads them (`sync_watched`), and it keeps the instance out of the static wake lists. A
+wake on `x` therefore asks exactly the instances whose advisor could answer yes. The set queued is
+the old set, because every instance no longer asked used to answer no. The ORDER is the old one
+as well. Per trail entry the old walk queued the woken ids in ascending id order, and the index's
+woken ids are merged into the static ones by id. Before its first run a self-watching instance is
+in no list, and that loses nothing: it was added since the last fixpoint, so the M6-T18 seed runs
+it whatever else happened. `watchers` itself, the declaration of what each instance reads, is
+unchanged. Under BAGUETTE_DEBUG every run of a self-watching instance is followed by
+`check_watched` (the advisor must say no off the watched variables) and by a check of the index
+positions. Wakes on QR48, whole run: 439.9 M before, 37.3 M after.
+
+**(3) and (8).** At degree 1, when two non-false literals sit on different variables, the slack is
+at least 1, and no literal's ladder-effective coefficient can reach the sum of the non-false
+coefficients, so a pass would change nothing. `Pb.quiet` checks this in one walk, and
+`Pb.propagate` runs its pass only otherwise. The runs it skips change nothing, so the trail and the
+proof are the same. `Learned_clause.rewatch` still runs afterwards on the same store, so the
+watches are the same too.
+
+**(4)** `Engine.add` grew six id-indexed arrays by one slot, which copied the database for every
+learned clause, and `propagate` allocated two arrays of the database per call (`dirty`,
+`in_queue`), in the major heap once past 256 instances. The arrays now double, `count` says how many
+instances exist, and the two flag arrays live in the engine, all false between calls and cleared
+on every exit, an exception included. **(6)** removes the three O(n) passes left per call. The seed
+pops dirty ids off a min-heap (the same runs in the same order, the same `seeded` and `skipped`
+counts, and `check_skip` still runs on every clean slot under BAGUETTE_DEBUG). `born` is read and
+written through `newborns` and `births`, its inverse by epoch.
+
+### 4. Result (final binary `0364386`, md5 `17a802c9…`)
+
+| run | nodes | wall, `--proof` | wall, `--no-proof` |
+|---|---|---|---|
+| QR48 to UNSAT | 23 367 | **38.0 s** (was 125.0; 615 nodes/s) | **24.3 s** (was 107.1; 960 nodes/s) |
+| QR72, `--time-limit 600` | 98 047 with the proof (was 45 812) | 600 s, 163 nodes/s | **UNSAT in 531.3 s**, 100 685 nodes (was 48 329 nodes at the limit) |
+
+QR72 is now SOLVED without the proof, and with it the 600 s run reaches 97 % of the same tree
+(Chuffed: 90 500 nodes in 2.8 s, so the node counts still agree). Peak RSS: QR48 183 MB / 280 MB,
+QR72 998 MB / 1.72 GB (no-proof / proof).
+
+The curve (wall seconds to N nodes, no-proof, the old value in brackets; the rate is over the
+segment that ends at N):
+
+| N | QR48 | QR48 rate | QR72 | QR72 rate |
+|---|---|---|---|---|
+| 1 000 | 0.30 (0.45) | 3 300 /s | 0.43 (0.60) | 2 330 /s |
+| 5 000 | 2.34 (5.31) | 1 960 /s | 3.27 (6.41) | 1 410 /s |
+| 10 000 | 6.48 (18.94) | 1 210 /s | 8.51 (22.32) | 950 /s |
+| 20 000 | 18.61 (77.27) | 820 /s | 25.42 (95.81) | 590 /s |
+| 40 000 | | | 76.71 (375.59) | 390 /s |
+| end | 24.33 at 23 367 (107.09) | 590 /s | 531.29 at 100 685 | 133 /s |
+
+The rate still falls as the database grows, more gently: section 5 says where the rest goes.
+
+**The proofs are the same files.** QR48 to UNSAT with `--proof`: `.opb`, `.pbp` (143 810 123 bytes)
+and stdout are byte-identical between the baseline and the final binary, and VeriPB 3.0.2 says
+`VERIFIED UNSATISFIABLE` (6.7 s, 516 MB). QR72 at 10 000 nodes: the same three files identical.
+
+**Gate** on a fresh clone of `0364386` on `fataepyc-06` (`/scratch/arthur/wave45-pernode-runs/gate/`):
+`make check` rc 0, 3 632 unit checks ok and 0 FAIL, 165 models PASS (veripb and the no-proof stdout
+lane), peak RSS 84 828 kB. Against `main`'s binary `6d3d2dc3` (gate 45's artefacts), on all 165
+models: stdout 0 differences, exit codes 0, `.opb` 0, `.pbp` 0.
+
+### 5. What is left, and whose it is
+
+Profile of `3f7b716` (QR48 no-proof, 10 000 nodes, self time): `List` 19 %, `Engine` 15 %, `Pb`
+10 %, `Clause` 9 %, `Store` 7.5 %, GC 6 %, `Analysis` 5 %, `caml_apply2` 4.5 %.
+
+- **The learned database costs O(n) per conflict, in `retention.ml` (M10-T4, agent-retention).**
+  `Retention.reduce` copies `live_rev` (`List.rev`) after every learned clause, even under
+  `keep_all`, and `add` calls `holds`, a `List.exists` over the same list. That is about 13 % of the
+  self time, it grows with the database, and it is why the rate still falls. A scratch experiment (a
+  `Hashtbl` of live cids, and `reduce` returning at once under `keep_all`) cut cycles by 14 % on
+  QR48 and by 10 % on QR72 at 10 000 nodes. Filed under `## Cross-session requests`.
+- **Literal rendering in the proof, in `lit.ml` (M8-T3, agent-t3).** 3.2 % of the proof-mode self
+  time re-scans each variable's name to sanitise it. Filed, low priority.
+- **Mine, not done: the wake index by DIRECTION.** About half of the remaining asks (37.3 M wakes on
+  QR48, 17.1 M declined) come from a watched variable moving the way that makes its literal TRUE. A
+  watched-literal solver indexes by literal, and indexing `dyn_ids` by (variable, bound moved) would
+  drop those asks. On Booleans that is exact. On an integer variable one run can move both bounds in
+  two entries, and then skipping the wrong-direction ask can move the clause's place in the queue.
+  The proof would then not be byte-identical in that corner, so the change needs its own argument,
+  or D-0104's standard of node counts plus veripb.
+- `Analysis` (5 %, `analysis.ml`, M10-T1's file) has no single hot function.
+
+### 6. What would reverse this
+
+A self-watching instance whose `ask` says yes off its watched variables would lose wakes silently,
+which is the M2-T5 hazard. `check_watched` under BAGUETTE_DEBUG is the instrument, and it runs after
+every run of every such instance. A caller that ran a learned clause from its own copy of the
+instance, outside `t.instances`, would bypass `sync_watched`. No caller does.
