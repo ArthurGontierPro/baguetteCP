@@ -6929,6 +6929,211 @@ let test_maxmin_veripb () =
     ~name:"maxmin R3 BREAK: the honest hi(m) <= 3 WITHOUT the per-value rows is refused"
     ~build:(build_maxmin_r3 ~clauses:false ~claim:"+1 ~m_ge_4")
     ~saying:maxmin_rup_refusal
+(* ================================================================ M8-bits-encoding-T3
+
+   maxmin's SELECTOR shape (D-0134): over a scope with a bits variable the disjunction is
+   one big-M row per operand over `$mxN` plus a clause over the selectors, and every
+   pruning is one `pol` that resolves the selector rows (Explanation.Resolve). The scene
+   is D-0134 section 1's Model A: m, x in 0..7 and y in 0..3, all on bits, m = max(x, y)
+   as two linear rows plus the choice group -- SATISFIABLE, so a line the checker accepts
+   here is not accepted for the database's sake (D-0053). Three questions:
+
+   1. Each rule's Resolve derives C_v literal for literal -- the SAME clause the per-value
+      twin cites -- with the reason unchanged (D-0026's split) and the agreement holding.
+   2. The checker accepts the R3 line written by [Justify.emit_bits_pruning] under a
+      decision, its atoms minted by `red` pairs at level 0 (D-0127's rule: under a
+      decision), and refuses the same `pol` pinned by the unit claim alone (probe a3) at
+      the `ia` wording.
+   3. The factless root conflict (probe c1, m in 5..7 over x, y in 0..3) closes to
+      `0 >= 1` through the same emitter, and the refutation verifies. *)
+
+let bits_mm_scene ?(m_lo = 0) ?(x_hi = 7) () =
+  let e = Encoding.create () in
+  Encoding.declare_int_bits e "m" ~lo:m_lo ~hi:7;
+  Encoding.declare_int_bits e "x" ~lo:0 ~hi:x_hi;
+  Encoding.declare_int_bits e "y" ~lo:0 ~hi:3;
+  ignore (Encoding.add_int_lin_le e [ (1, "x"); (-1, "m") ] 0 : int);
+  ignore (Encoding.add_int_lin_le e [ (1, "y"); (-1, "m") ] 0 : int);
+  let decls = [ ("m", m_lo, 7); ("x", 0, x_hi); ("y", 0, 3) ] in
+  let store = mk_store decls in
+  let p =
+    Maxmin.make ~shape:`Selector store ~dir:Maxmin.Max
+      (View.of_var (var 0))
+      [ View.of_var (var 1); View.of_var (var 2) ]
+  in
+  let rows =
+    List.map
+      (fun (r : Maxmin.selector_row) ->
+        (r.Maxmin.sr_terms, r.Maxmin.sr_big_m, r.Maxmin.sr_rhs))
+      (Maxmin.selector_rows p)
+  in
+  let ids, clause = Encoding.add_choice e ~rows ~pick:(Maxmin.chosen p) in
+  Maxmin.attach_selectors p ~rows:ids ~clause;
+  (e, store, p, mk_store decls)
+
+let test_bits_maxmin_rules () =
+  let sorted ls = List.sort compare (List.map Lit.to_string ls) in
+  let resolve_of e =
+    match Explanation.force e with Explanation.Resolve parts -> Some parts | _ -> None
+  in
+  let scene ~title ~setup ~pushed ~clause ~facts =
+    let _, store, p, twin_store = bits_mm_scene () in
+    let twin = mm_make twin_store ~dir:Maxmin.Max 0 [ `V 1; `V 2 ] in
+    List.iter
+      (fun (i, lo, hi) ->
+        ignore (Store.set_lo store (var i) lo placeholder_pruning);
+        ignore (Store.set_hi store (var i) hi placeholder_pruning))
+      setup;
+    let before = Store.trail_length store in
+    let judge ex ~v =
+      match resolve_of ex with
+      | None -> check (title ^ ": the justification is a Resolve") false
+      | Some parts ->
+          check
+            (title ^ ": n + 1 parts (one per operand, then the selector clause)")
+            (List.length parts = 3);
+          let derived = sorted (Justify.resolve_clause parts) in
+          check (title ^ ": it derives C_v, literal for literal") (derived = clause);
+          check
+            (title ^ ": ... the very clause the per-value twin cites")
+            (Option.map sorted (mm_clause (Maxmin.expl_at twin v)) = Some derived)
+    in
+    match (Maxmin.propagate p store, pushed) with
+    | Propagator.Conflict c, None -> judge c.Store.c_why ~v:5
+    | Propagator.Fixpoint, Some (i, v) -> (
+        match mm_entry_of store before (var i) with
+        | None -> check (title ^ ": an entry was pushed") false
+        | Some e ->
+            let ex = Store.explanation store e in
+            judge ex ~v;
+            check
+              (title ^ ": the trace line's facts are the bounds read")
+              (sorted (Reason.lits e.Store.reason) = facts);
+            check
+              (title ^ ": D-0026, the reason and the derivation agree")
+              (Store.agreement_holds store
+                 (Reason.because ~concludes:None (Reason.facts e.Store.reason) ex)))
+    | _ -> check (title ^ ": the outcome") false
+  in
+  scene ~title:"bits maxmin R3"
+    ~setup:[ (1, 0, 4) ]
+    ~pushed:(Some (0, 5))
+    ~clause:[ "x_ge_5"; "~m_ge_5" ] ~facts:[ "~x_ge_5" ];
+  scene ~title:"bits maxmin R4"
+    ~setup:[ (0, 5, 7) ]
+    ~pushed:(Some (1, 5))
+    ~clause:[ "x_ge_5"; "~m_ge_5" ] ~facts:[ "m_ge_5" ];
+  scene ~title:"bits maxmin conflict"
+    ~setup:[ (0, 5, 7); (1, 0, 4) ]
+    ~pushed:None ~clause:[ "x_ge_5"; "~m_ge_5" ] ~facts:[];
+  (* The pick a `sol` lists: the first operand attaining m, here at a TIE. *)
+  let _, _, p, _ = bits_mm_scene () in
+  let tie = function "m" -> 3 | "x" -> 3 | "y" -> 3 | _ -> 0 in
+  let y_only = function "m" -> 3 | "x" -> 1 | "y" -> 3 | _ -> 0 in
+  check "bits maxmin: the choice picks the first operand attaining m"
+    (Maxmin.chosen p tie = 0 && Maxmin.chosen p y_only = 1);
+  raises "bits maxmin: a per-value instance has no selectors to attach" (fun () ->
+      Maxmin.attach_selectors
+        (mm_make (mk_store [ ("m", 0, 3); ("a", 0, 3) ]) ~dir:Maxmin.Max 0 [ `V 1 ])
+        ~rows:[] ~clause:0)
+
+let read_text path =
+  let ic = open_in_bin path in
+  let s = really_input_string ic (in_channel_length ic) in
+  close_in ic;
+  s
+
+(* The `ia` line's constraint replaced by [claim], the `pol` kept: probe a3's shape. A
+   line is `@cN ia <constraint> : @cM ;`. *)
+let replace_ia_claim text claim =
+  let rewrite l =
+    match String.split_on_char ' ' l with
+    | lbl :: "ia" :: _ -> (
+        match String.index_opt l ':' with
+        | Some k ->
+            Printf.sprintf "%s ia %s >= 1 %s" lbl claim
+              (String.sub l k (String.length l - k))
+        | None -> l)
+    | _ -> l
+  in
+  String.concat "\n" (List.map rewrite (String.split_on_char '\n' text))
+
+let build_bits_mm_r3 ~tamper dir =
+  let e, store, p, _ = bits_mm_scene () in
+  let opb = Filename.concat dir "bits_mm.opb"
+  and pbp = Filename.concat dir "bits_mm.pbp" in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "m = max(x, y), selector shape, all on bits" ] e oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let w = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof e w;
+  let ctx = Justify.create ~writer:w ~encoding:e in
+  (* under a DECISION: the atoms' `red` pairs land at level 0 while the writer is at 1 *)
+  Writer.set_level w 1;
+  ignore (Store.set_hi store (var 1) 4 placeholder_pruning);
+  let before = Store.trail_length store in
+  (match Maxmin.propagate p store with
+  | Propagator.Fixpoint -> ()
+  | _ -> failwith "bits maxmin R3: the scene did not propagate");
+  (match mm_entry_of store before (var 0) with
+  | None -> failwith "bits maxmin R3: no entry for m"
+  | Some en ->
+      let _cid, clause =
+        Justify.emit_bits_pruning ctx ~origin:"bits maxmin R3"
+          ~concludes:en.Store.concludes (Store.explanation store en)
+      in
+      check "bits maxmin R3: the emitter pins C_5"
+        (List.sort compare (List.map Lit.to_string clause) = [ "x_ge_5"; "~m_ge_5" ]));
+  Writer.set_level w 0;
+  Writer.delete_many w (Writer.live_ids w);
+  Writer.conclusion w Writer.No_conclusion;
+  close_out oc;
+  if tamper then (
+    let text = replace_ia_claim (read_text pbp) "+1 ~m_ge_5" in
+    let oc = open_out_bin pbp in
+    output_string oc text;
+    close_out oc);
+  (opb, pbp)
+
+let build_bits_mm_root_conflict dir =
+  let e, store, p, _ = bits_mm_scene ~m_lo:5 ~x_hi:3 () in
+  let opb = Filename.concat dir "bits_mm_c.opb"
+  and pbp = Filename.concat dir "bits_mm_c.pbp" in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "m in 5..7 = max(x, y), x, y in 0..3: UNSAT" ] e oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let w = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof e w;
+  let ctx = Justify.create ~writer:w ~encoding:e in
+  (match Maxmin.propagate p store with
+  | Propagator.Conflict c ->
+      let _cid, clause =
+        Justify.emit_bits_pruning ctx ~origin:"bits maxmin root conflict" ~concludes:None
+          c.Store.c_why
+      in
+      check "bits maxmin c1: the factless conflict derives the empty clause" (clause = []);
+      let close = Justify.emit ctx (Explanation.clause []) in
+      Writer.delete_many w (List.filter (fun id -> id <> close) (Writer.live_ids w));
+      Writer.conclusion w (Writer.Unsat (Some close))
+  | _ -> failwith "bits maxmin c1: the scene did not conflict");
+  close_out oc;
+  (opb, pbp)
+
+let bits_mm_ia_refusal =
+  "Expected constraint is not syntactically implied by the constraint at the hint."
+
+let test_bits_maxmin_veripb () =
+  run_veripb ~name:"bits maxmin R3: the selector-shape pol, under a decision, verifies"
+    ~build:(build_bits_mm_r3 ~tamper:false);
+  run_veripb_rejects_saying
+    ~name:"bits maxmin R3 BREAK: the same pol pinned by the unit ~m_ge_5 (probe a3)"
+    ~build:(build_bits_mm_r3 ~tamper:true)
+    ~saying:bits_mm_ia_refusal;
+  run_veripb ~name:"bits maxmin c1: the factless root conflict refutes the model"
+    ~build:build_bits_mm_root_conflict
+
 (* ================================================================ M4-T10, D-0096
 
    cumulative (and disjunctive as its cap = 1 case), lib/core/prop/cumulative.ml.
@@ -7455,6 +7660,8 @@ let () =
   test_maxmin_rules ();
   test_maxmin_brute_force ();
   test_maxmin_veripb ();
+  test_bits_maxmin_rules ();
+  test_bits_maxmin_veripb ();
   (* M4-T10, D-0096: cumulative. *)
   test_cumulative_soundness ();
   test_cumulative_checking ();

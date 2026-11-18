@@ -1832,7 +1832,7 @@ let test_bits_eligibility () =
       let c = Compile.compile (build bits_scope_model) in
       let enc = c.Compile.encoding in
       let on = Encoding.is_bits enc in
-      check "bits elig: c is held (int_lin_ne and maxmin both name it)" (not (on "c"));
+      check "bits elig: c is held (int_lin_ne names it)" (not (on "c"));
       check "bits elig: e is eligible and goes on bits" (on "e");
       check "bits elig: a, b held by alldiff" ((not (on "a")) && not (on "b"));
       check "bits elig: w has width 1 and stays order by rule" (not (on "w"));
@@ -1842,7 +1842,10 @@ let test_bits_eligibility () =
       check "bits elig: r, s held by int_eq_reif" ((not (on "r")) && not (on "s"));
       check "bits elig: q held by bool2int" (not (on "q"));
       check "bits elig: g, cnt held by gcc" ((not (on "g")) && not (on "cnt"));
-      check "bits elig: mx, k held by maxmin" ((not (on "mx")) && not (on "k"));
+      (* M8-bits-encoding-T3 (D-0134 section 2.5): maxmin holds nothing any more. mx and
+         k are named by nothing else and go on bits; the scope keeps c on the order
+         ladder (int_lin_ne holds it), so it is the MIXED selector shape. *)
+      check "bits elig: mx, k released by T3 and on bits" (on "mx" && on "k");
       let held = (Encoding.cost enc).Encoding.c_held_back in
       let n f = Option.value (List.assoc_opt f held) ~default:0 in
       check "bits elig: --stats counts the held-back per family"
@@ -1852,9 +1855,82 @@ let test_bits_eligibility () =
         && n "int_eq_reif" = 2
         && n "bool2int" = 1
         && n "gcc" = 2
-        && n "maxmin" = 3);
-      check "bits elig: exactly one variable went on bits"
-        ((Encoding.cost enc).Encoding.c_bits_vars = 1))
+        && n "maxmin" = 0);
+      check "bits elig: exactly three variables went on bits (e, mx, k)"
+        ((Encoding.cost enc).Encoding.c_bits_vars = 3);
+      check "bits elig: the maxmin scope posted ONE choice group of two selectors"
+        ((Encoding.cost enc).Encoding.c_choices = 1
+        && List.length
+             (List.filter
+                (fun x -> String.length x > 3 && String.sub x 0 3 = "$mx")
+                (Encoding.vars enc))
+           = 2))
+
+(* M8-bits-encoding-T3 (D-0134 sections 2.1, 2.5): the shape is chosen per SCOPE. A
+   maxmin whose every variable stays on the order ladder (width <= 1 here) keeps
+   D-0095's per-value rows at any W and registers no choice; one with a bits variable
+   posts n selector rows and the clause, and its rows are those [Maxmin.selector_rows]
+   spells -- the base coefficients, M_i = dhi(m) - dlo(x_i), and the right-hand side. *)
+let test_bits_maxmin_shape () =
+  with_bits_above (Some 0) (fun () ->
+      let narrow =
+        Compile.compile
+          (build
+             {|
+var 0..1: m;
+var 0..1: x;
+var 0..1: y;
+constraint array_int_maximum(m, [x, y]);
+solve satisfy;
+|})
+      in
+      check "bits maxmin: an all-order scope keeps the per-value rows, no choice"
+        ((Encoding.cost narrow.Compile.encoding).Encoding.c_choices = 0
+        && Encoding.n_bits_vars narrow.Compile.encoding = 0);
+      let wide =
+        Compile.compile
+          (build
+             {|
+var 0..7: m;
+var 2..7: x;
+var 0..3: y;
+constraint array_int_minimum(m, [x, y, 5]);
+solve satisfy;
+|})
+      in
+      let enc = wide.Compile.encoding in
+      check "bits maxmin: a bits scope posts one group"
+        ((Encoding.cost enc).Encoding.c_choices = 1);
+      (* three linear rows + three selector rows + the clause, after six bound rows *)
+      check "bits maxmin: 3 linear + 3 selector rows + 1 clause beside the bound rows"
+        (Encoding.n_constraints enc = 6 + 3 + 3 + 1);
+      (* the minimum's first selector row is x - m + M b <= M, M = dhi(x) - dlo(m) = 7,
+         which normalises (x = 2 + bits, m = bits) to a `>=` row whose selector
+         coefficient is 7; y's is dhi(y) - dlo(m) = 3 and the constant operand's
+         dhi(5) - dlo(m) = 5. *)
+      let opb = Buffer.create 256 in
+      let path = Filename.temp_file "bits_maxmin" ".opb" in
+      let oc = open_out path in
+      Encoding.write_opb enc oc;
+      close_out oc;
+      let ic = open_in path in
+      (try
+         while true do
+           Buffer.add_string opb (input_line ic);
+           Buffer.add_char opb '\n'
+         done
+       with End_of_file -> close_in ic);
+      Sys.remove path;
+      let text = Buffer.contents opb in
+      let has needle =
+        let n = String.length needle and t = String.length text in
+        let rec go i = i + n <= t && (String.sub text i n = needle || go (i + 1)) in
+        go 0
+      in
+      check "bits maxmin: the selector rows name $mxN with M_i = 7, 3, 5"
+        (has "+7 ~_mx0_ge_1" && has "+3 ~_mx1_ge_1" && has "+5 ~_mx2_ge_1");
+      check "bits maxmin: the clause over the selectors"
+        (has "+1 _mx0_ge_1 +1 _mx1_ge_1 +1 _mx2_ge_1 >= 1"))
 
 let test_bits_default_is_order () =
   (* At the default threshold nothing is on bits, whatever the scope: today's solver. *)
@@ -1922,6 +1998,7 @@ let () =
   test_set_domain_holes ();
   test_gcc_constant_counts ();
   test_maxmin ();
+  test_bits_maxmin_shape ();
   test_bits_eligibility ();
   test_bits_default_is_order ();
   test_bits_mixed_row_has_no_pb_row ();
