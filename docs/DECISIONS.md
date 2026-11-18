@@ -15026,3 +15026,199 @@ the first such flake is a bug in the solver, not in the lane. If `instructions:u
 available where the gate runs, the fallback is blind to costs that do not allocate, and the scaling
 lane belongs where perf works. If a batch makes runs per node fall sharply, the per-node ratios fall
 with them, and that is the point of the pass.
+## D-0145  M11-complexity-T5: batch 3 of the complexity pass, trace, justification and proof writing, profiled with frame pointers; proof-mode instructions down 16 to 46 % on D-0140's four instances, every byte the same
+
+**Status**: **DONE**, recorded 2026-11-18 (agent-batch5, `wave49-batch5`). The contract is ROADMAP
+`## M11-complexity`, row T5, and the list is D-0140 §5's rows J1 to J6 and W2 to W8 (W7 is
+`encoding.ml`'s and was not touched, and the `learn.ml` and `search.ml` sites of J6 belong to
+other batches). Files changed: `lib/proof/writer.ml`, `lib/core/justify.ml`, `lib/core/trace.ml`,
+and the tests `test/unit/test_proof.ml`, `test_justify.ml`, `test_trace.ml`, plus one argument
+(`~history:true`) in `test_matrix.ml` and `test_random.ml`. `reason.ml` was claimed and needed
+nothing. Measured on `fataepyc-06` against `main` at `da9df69` (binary md5 `5e6f653e`, the same
+binary as gate 50), outputs under `/scratch/arthur/wave49-batch5-runs/`.
+
+### 1. The profiler, an opam switch with frame pointers
+
+D-0140 §8.6 asked for it, because OCaml 5's `--call-graph dwarf` cannot unwind from `caml_hash`,
+`caml_compare` or the GC to their OCaml caller. A second switch was created on `fataepyc-06` for
+profiling only, `opam switch create baguette-fp
+--packages=ocaml-variants.5.1.1+options,ocaml-option-fp`, with the `baguette` switch's `dune
+3.24.2` and `menhir 20260209` (the repository needs nothing else). `ocamlopt -config` says
+`with_frame_pointers: true`. It took about six minutes to build. The `baguette` switch was not
+touched and stays the default, and every build, test, lane, gate and instruction count of this
+record ran on it. The profiling binary is built into its own build directory (`dune build
+--build-dir=_build_fp`), and `perf record -F 499 --per-thread -m 512 --call-graph fp` then
+attributes C leaves to their callers. One trap: `perf report`'s caller view still leaves most
+`caml_hash` samples unattributed, while `perf script` has the full chains, so the attribution
+below aggregates `perf script` stacks (`/scratch/arthur/wave49-batch5-runs/callers.py` weights
+each sample by its period and reports the first OCaml and the first Baguette frame above a
+chosen leaf; `prof.sh` there is the build-and-record script).
+
+### 2. What it attributed on `main`, proof mode, 10 000 nodes (cyclic 2 000)
+
+Inclusive shares of the whole run (`perf report --children`), empty where under 1 %.
+
+| site | QR48 | rcpsp_11 | mspsp | cyclic |
+|---|---|---|---|---|
+| `Writer.write_cited`, the `pol` rendering (a `Printf.sprintf` per operator and per `@c` reference) | | 18.5 | 2.7 | 38.0 |
+| `Justify.shallow_hash`, the memo's hash (a tuple and a `List.map` per `Combine`, then `caml_hash`) | | 7.4 | 1.5 | 15.1 |
+| `Justify.wipe_level` (the hash recomputed per doomed entry, a bucket filtered once per entry) | 2.7 | 6.3 | 3.3 | 8.7 |
+| `Justify.find_memo` + `remember` (the hash again, twice) | | 8.0 | | 11.2 |
+| `Opb.constr_to_string` under `Writer.rup` (a `Buffer`, a string, `^ " ;"`) | 5.6 | 1.2 | 4.3 | |
+| `Justify.state_clause` (the claim index, `clause_key` sorted twice) | 4.7 | | 3.5 | |
+| `Encoding.consistency_id` + `Encoding.find`, from `Alldiff.excl` (W7, not this batch) | | 2.6 | 1.3 | 12.4 |
+
+`caml_hash` is 5.7 % of rcpsp_11's samples. Its first Baguette frame is `Justify` for 3.5 points
+(the closure inside `shallow_hash` 2.2, `shallow_hash` 0.7, then `remember`, `find_memo` and
+`wipe_level`), `Encoding.hash` for 0.8 and `Pb.effective_of` for 0.2. On mspsp it is
+`state_clause` 0.6, `Encoding.hash` 0.6 and the memo 1.1. `compare_val` in proof mode is mostly
+not this batch's, `Search.count_learned_activity` (T4's S1) leads it. The printf machinery
+(`__printf_buffer`, `CamlinternalFormat.*`, `caml_format_int`) is 6.7 % of rcpsp_11, of which
+`write_cited` is 4.0 and `emit_combine`'s origin 1.3. So the two largest proof-mode costs were
+the `pol` text and the memo's hashing, and neither could be seen without frame pointers.
+
+### 3. The fixes, and the four instances before and after
+
+Instructions (`perf stat -e instructions:u`, in G) in proof mode at 10 000 nodes with the CLI
+default (audit on). Each row is the branch at that commit, so the rows are cumulative.
+
+| commit | items | QR48 | rcpsp_11 | mspsp | cyclic |
+|---|---|---|---|---|---|
+| `main` `da9df69` | | 42.17 | 296.60 | 187.70 | 1 205.57 |
+| `366b599` + `9fb1ba9` | W3, W5, then W2, W4, W6, J6, W8 | 38.04 | 227.37 | 166.40 | 910.23 |
+| `1a70dfb` | J1 | 37.94 | 198.73 | 161.94 | 721.07 |
+| `16b8d0d` | J2 | 36.14 | 198.82 | 160.41 | 719.45 |
+| `9e65d05` | J3, J5 | 36.03 | 198.44 | 157.05 | 718.70 |
+| `8208b4b` | J4 | 35.64 | 198.21 | 155.86 | 724.06 |
+| `910af19` | J2 and J6 follow-ups | **35.39** | **188.63** | **152.58** | **651.54** |
+| change | | **-16.1 %** | **-36.4 %** | **-18.7 %** | **-46.0 %** |
+
+Wall time (one run each, the node at load 40 to 70) goes from 9.8 to 9.1 s on QR48, 58.7 to
+45.7 s on rcpsp_11, 45.0 to 44.8 s on mspsp and 180.8 to 103.0 s on cyclic. Peak RSS goes from
+115, 186, 476 and 210 MB to 91, 166, 365 and 189 MB in the same order. W3 and W5 were committed
+first and measured only together with the next commit.
+
+**W3, W5** (`writer.ml`). The writer's tables keyed by a constraint id (`tags`, `live`, `model`,
+`objective`) were polymorphic `Hashtbl`s, so `fresh`, every deletion and every lookup went
+through `caml_hash` and `compare_val`. They are now `Itbl`, a `Hashtbl.Make` over `int` with the
+identity as hash. `wipe_level` sorted its doomed ids with polymorphic `compare` on every
+backjump. It now collects them level by level in ascending order (a bucket is newest first, so
+the fold reverses it) and sorts with `Int.compare` only when that list is not ascending, which
+happens when a level was re-entered after an interlude below it. Bucket 0 of `by_lvl` is no
+longer filled, because `wipe_level` refuses level 0 and nothing else read it, and it held the id
+of every learned constraint for the whole run.
+
+**W2, W4, W6** (`writer.ml`). Every rule on the search's path (`rup`, `pol`, `ia`, `del id`, `del
+range`, the `% level` marker, `sol`, `soli`) is assembled in one writer-owned `Buffer` with
+`Lit.add_int` (M11-T7's allocation-free `string_of_int`) and `Lit.add_sanitized`, and written by
+one `Buffer.output_buffer`. Before, a `pol` went through `Pol.to_string_cited` (a `Printf` per
+operator and per reference), `label_for t id ^ body`, then `rule`'s `"%s ;"` format with `"\n"`
+appended, about four copies, and `rup` rendered its constraint through `Opb.constr_to_string`
+into a string of its own. `Pol.write_cited` keeps its signature for the tests and the mutation
+knob, over the same `write_with`. `put` and `emit_yielding` had no caller left and were removed.
+
+**J6, W8** (`writer.ml`, `justify.ml`, `trace.ml`). Every trace line and every `Justify` line built
+its `~origin` eagerly, a `Printf.sprintf` and a rendering of the line's literals (`emit_linear`
+rendered its constraint a second time for it). The origin has three readers, the audit's report
+of a leaked id, the mutation knob and `--stats`'s widest `pol`, and none of them runs on a normal
+line. The writer's entry now keeps `origin : unit -> string`, every rule that yields an id has a
+`_lazy` form taking the thunk (the string forms stay for every other caller and wrap a
+constant), and `pol_widest` keeps the thunk and renders it in `shape_stats`.
+`Justify.emit_clause`, `emit_rup_clause_lazy`, `emit_linear`, `emit_cut`, `emit_combine` and
+`Trace`'s lines pass thunks. The follow-up `910af19` is worth 72 G on cyclic and 10 G on
+rcpsp_11 by itself. The audit keeps the origin of every live id, and the first thunks captured
+the `Combine`'s summand list and the trace line's fact list, so every live line kept its
+explanation reachable and the major GC walked it. They now capture the two counts the text
+prints.
+
+**J1** (`justify.ml`). The memo's shallow hash was `Hashtbl.hash` over a tuple built per call, and
+for a `Combine` over a `List.map` of per-summand hashes as long as the row. It was computed in
+`find_memo`, again in `remember` and again for every doomed entry in `wipe_level`, and every
+`Deferred` hashed to the constant 6, so all of them shared one bucket walked with `==`. Now it is
+an integer mix of the constructor, its integers and at most four elements (a literal by
+`Hashtbl.hash` of its name, its value, its kind and its sign), with nothing allocated.
+`memoized` computes it once and passes it to `remember_with`, and `by_level` keeps the hashes, so
+the wipe never recomputes one and filters each touched bucket once. A forced `Deferred` hashes as
+its forced head. That is sound because `forced` only goes from `None` to `Some` and an entry
+exists only after its thunk forced it, and an unforced `Deferred` is looked up in the old
+constant bucket (empty in practice). The equality is still `==` and nothing iterates the table,
+so only the bucketing changed.
+
+**J2** (`justify.ml`). The claim index is `Claims`, a `Hashtbl.Make` over the sorted literal list
+with `List.equal Lit.equal`, which is the structural equality the polymorphic table used, and a
+hash over the first eight literals and the length (`1a4f47c`, because hashing every literal was
+2 % of QR48 in the frame-pointer profile). `emit_clause` computes the key once, where it was
+sorted by `defining_line` and again by `state_clause`. Level 0 is not recorded in
+`stated_by_level`, for the same reason as W5.
+
+**J3, J5** (`trace.ml`). `resync` walked the trail from position 0 to find the prefix it had
+already written. It now registers a low-water reader on the store (`Store.register_low_water`,
+M6-T18) at its first call and starts its identity walk at the mark. Every position below the
+mark has stayed on the trail unchanged since the previous `resync`, so `n_done` comes out as
+before. `emit_to_page` read each entry's level with two binary searches (`Store.is_level_start`
+and `Store.level_of_index`). It now keeps a cursor over the level marks that only moves forward
+with the position, read in place through `store.Store.marks` (there is no accessor for one mark,
+and `store.ml` is batch 1's), with a `BAGUETTE_DEBUG` cross-check against both functions.
+
+**J4** (`trace.ml`). `ids_rev` and `cites_rev` grew by one cell per trace line and one record per
+citation for the whole run, and only tests read them. They are kept under `Trace.create
+~history:true` only, `Search`'s private trace keeps none, and `emitted_ids` and `citations` on a
+trace without history raise rather than answer `[]`. The instruction count barely moves (the
+cyclic row is GC timing), the peak RSS does (mspsp 480 to 376 MB and QR48 114 to 89 MB at this
+step).
+
+### 4. Why the bytes are the same, and the evidence
+
+Every replacement either writes the same text by construction (W2, W4, W6), or changes how a
+table is bucketed while keeping its equality and never iterating it in an order that reaches the
+page (W3, J1, J2), or returns what the replaced walk returned (W5's sorted set, J3's `n_done`,
+J5's level), or stops building a value nothing printed (J4, J6). Measured at every commit of §3.
+
+- The four instances' `.pbp`, `.opb` and stdout md5 equal `main`'s on every row of the table
+  (QR48 `561db0f8`, 54.7 MB, rcpsp_11 `4aeef3f8`, 421 MB, mspsp `a6fe7ff4`, 226 MB, cyclic
+  `17257ea6`, 2.02 GB), and the `--stats` limit line without its clocks is identical.
+- The differential lane (`make diff ARGS="--tier all -j 16"`, D-0141, merged from `wave47-lanes`)
+  is 232 of 232 equal at `9fb1ba9`, `16b8d0d`, `8208b4b` and `910af19`. It includes the
+  `audit0` configuration (`BAGUETTE_PROOF_AUDIT=0`, where the end sweep's `del` lines do not
+  exist, W8) and `--bits-above 0`.
+- `dune runtest --root . --force` rc 0 with no `FAIL` at each of those commits. The new tests:
+  `test_proof` pins each new line against the pre-T5 spelling written out with `Printf`, over 300
+  random rules with awkward names and extreme integers, checks that no line renders its lazy
+  origin while the audit renders the leaked one, and checks `wipe_level`'s `del` lines over 100
+  random level walks against a slow model. `test_justify` checks that the memo stays physical
+  identity over 40 values with colliding prefixes, forced `Deferred`s included, before and after
+  a wipe, and that nine clauses sharing four literals each keep their own line in the claim
+  index. `test_trace` compares `resync` from the mark with the walk from 0 over 75 emits of a
+  random walk of levels, prunings and backtracks, checks every line's level, and checks that a
+  trace without history refuses to answer.
+- The gate is in §6.
+
+### 5. What is left
+
+- **`Alldiff.excl` and `Encoding.consistency_id`, 12.4 % of cyclic's proof mode** at `910af19`
+  and 2.6 % of rcpsp_11's. Each ladder rung an alldiff exclusion cites looks its variable up by
+  name (`Encoding.find`, a string `Hashtbl`). Filed as a cross-session request, since
+  `alldiff.ml` is batch 1's and `encoding.ml` is W7.
+- **The `pol` text itself.** `Writer.write_with` is still 13 % of cyclic and 5 % of rcpsp_11,
+  most of it `Lit.add_int` and `put_digits`. That is the size of the proof (2.02 GB for 2 000
+  cyclic nodes, 1 MB per node), and the next lever is fewer or shorter lines, not faster ones.
+- J6's other sites, `learn.ml`'s `introduce` and `search.ml`'s bridges, are T4's and the strategy
+  branch's files. `Justify.emit_bits_*` and the bits trace line still build their origin eagerly.
+  They run on the bits arm only and were not measured here.
+- W6's `encoding.ml` half (`assignment_lits`) and W7 are not this batch's.
+- The memo and the claim index keep their level-0 entries for the whole run, as before. With the
+  new hashes the buckets stay short, so only the memory is left, and none of the four instances
+  showed it.
+- At `910af19` the profile is led by `caml_apply2`, the GC and the propagators, which are batches 1
+  and 2.
+
+
+### 6. Gate
+
+`make check` on a fresh clone of `wave49-batch5` at `0f75dd4` on `fataepyc-06`
+(`/scratch/arthur/wave49-batch5-gate.sh`), under `ulimit -v 4000000`: rc 0, `check: ok`, 179
+model tests passed, each a proof veripb accepted and a `--no-proof` run byte-identical to it, the
+22 `bits_*` models also at `--bits-above 0`. Wall 22.5 s, peak RSS 89.7 MB. Binary md5
+`ac86699a`. Then every model of `test/models/` run with `--proof` and compared with gate 50's
+artefacts (`/scratch/arthur/gate50.art/new`, binary `5e6f653e`, which is `main` at `da9df69`):
+179 models, 0 differences in stdout, exit code, `.opb` and `.pbp`.

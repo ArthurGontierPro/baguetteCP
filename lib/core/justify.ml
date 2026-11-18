@@ -219,6 +219,15 @@ module Writer = Baguette_proof.Writer
 module Pol = Baguette_proof.Writer.Pol
 module Encoding = Baguette_proof.Encoding
 
+(* M11-complexity-T5 (D-0145): the memo's table, keyed by an [int] hash, without the
+   polymorphic [Hashtbl]'s C hash and compare per lookup. *)
+module Itbl = Hashtbl.Make (struct
+  type t = int
+
+  let equal = Int.equal
+  let hash x = x land max_int
+end)
+
 type memo_entry = { cid : Writer.cid; level : int }
 
 (* M6-T9 (a cross-session PROPOSAL, D-0080). The memo keyed by physical identity, as
@@ -227,11 +236,27 @@ type memo_entry = { cid : Writer.cid; level : int }
    [Deferred] (its [thunk] is mutable, which is the trap the header names), nor into a
    [Cut]/[Term] operand beyond its constructor, so forcing a thunk cannot move a key.
    Equality inside a bucket is still [==], so the memo's meaning is unchanged. [by_level]
-   records which keys each level inserted, so [wipe_level] removes exactly those. *)
+   records which keys each level inserted, so [wipe_level] removes exactly those.
+
+   M11-complexity-T5 (D-0145, D-0140 J1). Three costs of that scheme, measured with
+   frame pointers on 2013_rcpsp_11 and 2011_cyclic-rcpsp_easy_6 in proof mode (about a
+   sixth of their time): the hash was [Hashtbl.hash] over a freshly built tuple, and over
+   a list built by [List.map] for a [Combine], whose summands are as long as the row; it
+   was computed three times per memoised explanation ([find_memo], [remember], and again
+   in [wipe_level]); and every [Deferred] hashed to one constant, so they shared one long
+   bucket walked with [==]. Now the hash is an integer mix over at most [hash_width]
+   elements, nothing allocated; it is computed once and kept, in [by_level], for the wipe;
+   a [Deferred] that is forced hashes as its forced head (forcing only ever goes from
+   [None] to [Some], so the key cannot move once the entry exists, and an entry exists
+   only after its thunk forced it, see [memoized]); and the tables are keyed by [int]
+   monomorphically. Still only bucketing: the equality is [==] and nothing iterates the
+   table, so no emitted byte can change. *)
 and memo_table = {
-  tbl : (int, (Explanation.t * memo_entry) list) Hashtbl.t;
-  by_level : (int, Explanation.t list) Hashtbl.t;
-  mutable memo_hi : int; (* M6-T17: no [by_level] key above this *)
+  tbl : (Explanation.t * memo_entry) list Itbl.t;
+  mutable by_level : int list array;
+      (* the hashes each level inserted, newest first; level 0 is never recorded, since
+         no wipe reaches it (see [wipe_level]) *)
+  mutable memo_hi : int; (* M6-T17: no [by_level] entry above this *)
 }
 
 let shallow_tag (e : Explanation.t) =
@@ -245,36 +270,93 @@ let shallow_tag (e : Explanation.t) =
   | Explanation.Deferred _ -> 6
   | Explanation.Resolve _ -> 7
 
-let shallow_hash (e : Explanation.t) =
+(* The shallow hash (M11-complexity-T5, D-0145): an integer mix of the constructor, its
+   integers and at most [hash_width] of its elements, each by the cheap facts a
+   [shallow_tag] or a literal's variable name and value give. A name is hashed with
+   [Hashtbl.hash], the C string hash, which allocates nothing. *)
+let hash_width = 4
+let mix h x = (h * 31) + x
+
+let finish h =
+  let h = h * 0x2545F4914F6CDD1D in
+  h lxor (h lsr 29) land max_int
+
+let lit_hash (l : Lit.t) =
+  let k, x, v =
+    match l.Lit.v with
+    | Lit.Ge (x, v) -> (0, x, v)
+    | Lit.Eq (x, v) -> (1, x, v)
+    | Lit.Bit (x, i) -> (2, x, i)
+  in
+  mix (mix (mix (Hashtbl.hash x) v) k) (Bool.to_int l.Lit.positive)
+
+(* [f] over the first [hash_width] elements of [xs], mixed into [h] with the length seen. *)
+let mix_list f h xs =
+  let rec go h n = function
+    | x :: rest when n < hash_width -> go (mix h (f x)) (n + 1) rest
+    | _ -> mix h n
+  in
+  go h 0 xs
+
+let summand_hash = function
+  | Explanation.Term (c, t) -> mix c (shallow_tag t)
+  | Explanation.Weaken ls -> mix_list (fun (c, l) -> mix c (lit_hash l)) 1 ls
+  | Explanation.Defining (c, l) -> mix (mix 2 c) (lit_hash l)
+  | Explanation.Linear_term r ->
+      mix
+        (mix (mix 3 (Hashtbl.hash r.Explanation.lt_name)) r.Explanation.lt_coeff)
+        r.Explanation.lt_value
+
+(* The value a [Deferred] that has not been forced hashes to. Nothing is ever remembered
+   under it in practice ([memoized] forces before it remembers), and [find_memo] looks
+   here as well, so that a [Deferred] remembered unforced by some future path would still
+   be found. *)
+let unforced_hash = 6
+
+let rec shallow_hash (e : Explanation.t) =
   match e with
-  | Explanation.Decision l -> Hashtbl.hash (0, l)
-  | Explanation.Clause ls -> Hashtbl.hash (1, ls)
-  | Explanation.Linear (ts, r) -> Hashtbl.hash (2, ts, r)
+  | Explanation.Decision l -> finish (mix 0 (lit_hash l))
+  | Explanation.Clause ls -> finish (mix_list lit_hash 1 ls)
+  | Explanation.Linear (ts, r) ->
+      finish (mix (mix_list (fun (c, l) -> mix c (lit_hash l)) 2 ts) r)
   | Explanation.Cut (a, b, c1, c2) ->
-      Hashtbl.hash (3, shallow_tag a, shallow_tag b, c1, c2)
-  | Explanation.Model_row i -> Hashtbl.hash (4, i)
-  | Explanation.Combine (ss, d) ->
-      Hashtbl.hash
-        ( 5,
-          d,
-          List.map
-            (function
-              | Explanation.Term (c, t) -> Hashtbl.hash (c, shallow_tag t)
-              | Explanation.Weaken ls -> Hashtbl.hash (1, ls)
-              | Explanation.Defining (c, l) -> Hashtbl.hash (2, c, l)
-              | Explanation.Linear_term r ->
-                  Hashtbl.hash
-                    ( 3,
-                      r.Explanation.lt_coeff,
-                      r.Explanation.lt_name,
-                      r.Explanation.lt_value ))
-            ss )
-  | Explanation.Deferred _ -> 6
-  | Explanation.Resolve parts -> Hashtbl.hash (7, List.map shallow_tag parts)
+      finish (mix (mix (mix (mix 3 (shallow_tag a)) (shallow_tag b)) c1) c2)
+  | Explanation.Model_row i -> finish (mix 4 i)
+  | Explanation.Combine (ss, d) -> finish (mix_list summand_hash (mix 5 d) ss)
+  | Explanation.Deferred { forced = Some f; _ } -> shallow_hash f
+  | Explanation.Deferred { forced = None; _ } -> unforced_hash
+  | Explanation.Resolve parts -> finish (mix_list shallow_tag 7 parts)
 
 (* A claim that is already on the page: the id of the line stating it and the level that
    line was written at. See the module header's "claim index". *)
 type stated = { s_cid : Writer.cid; s_level : int }
+
+(* M11-complexity-T5 (D-0145, D-0140 J2). The claim index's table. It was a polymorphic
+   [Hashtbl] keyed by the sorted literal list: the C hash stops after ten meaningful words,
+   which is about three literals, so clauses that agree on their first literals shared a
+   bucket, and the equality was [compare_val] over the lists. Now the hash mixes the
+   first eight literals ([lit_hash]) and the length, and the equality is [Lit.equal]
+   element by element, which is the structural equality the polymorphic table used
+   ([Lit.t] is strings, ints and a bool).
+   Nothing iterates this table, so only the cost of a lookup changes. *)
+module Claims = Hashtbl.Make (struct
+  type t = Lit.t list
+
+  let equal = List.equal Lit.equal
+
+  (* The first [claim_hash_width] literals and the length: a key is sorted, so two
+     clauses that agree on that prefix and length share a bucket and [equal] tells them
+     apart. Hashing every literal cost a C string hash per literal of every line
+     (measured on H_qr48, D-0145). *)
+  let claim_hash_width = 8
+
+  let hash ls =
+    let rec go h n = function
+      | l :: rest when n < claim_hash_width -> go (mix h (lit_hash l)) (n + 1) rest
+      | rest -> mix h (n + List.length rest)
+    in
+    finish (go 8 0 ls)
+end)
 
 type ctx = {
   writer : Writer.t;
@@ -283,8 +365,10 @@ type ctx = {
       (* Boxed behind a ref for the same reason it always was -- it is proof state,
          shared by every view of the same writer -- although since M1-T31 removed
          [for_constraint] there is only ever one view. *)
-  stated : (Lit.t list, stated) Hashtbl.t;
-  stated_by_level : (int, Lit.t list list) Hashtbl.t; (* M6-T17: keys each level stated *)
+  stated : stated Claims.t;
+  mutable stated_by_level : Lit.t list list array;
+      (* M6-T17: the keys each level stated, indexed by level. Level 0 is not recorded
+         (M11-complexity-T5): no wipe reaches it. *)
   mutable stated_hi : int;
       (* M2-T9. Clause (as a sorted literal set) -> the line that states it. Read by
          [defining_line] and [defining_lit], written by every clause this module puts on
@@ -295,9 +379,9 @@ let create ~writer ~encoding =
   {
     writer;
     encoding;
-    memo = { tbl = Hashtbl.create 1024; by_level = Hashtbl.create 16; memo_hi = -1 };
-    stated = Hashtbl.create 64;
-    stated_by_level = Hashtbl.create 16;
+    memo = { tbl = Itbl.create 1024; by_level = Array.make 16 []; memo_hi = -1 };
+    stated = Claims.create 64;
+    stated_by_level = Array.make 16 [];
     stated_hi = -1;
   }
 
@@ -307,24 +391,39 @@ let create ~writer ~encoding =
    honest than adding an [Explanation] constructor that means "and also remember this". *)
 let writer ctx = ctx.writer
 
-let find_memo ctx (e : Explanation.t) =
+let find_in_bucket ctx h (e : Explanation.t) =
   let rec go = function
     | [] -> None
     | (k, m) :: rest -> if k == e then Some m else go rest
   in
-  match Hashtbl.find_opt ctx.memo.tbl (shallow_hash e) with
-  | None -> None
-  | Some bucket -> go bucket
+  match Itbl.find_opt ctx.memo.tbl h with None -> None | Some bucket -> go bucket
 
-let remember ctx (e : Explanation.t) (cid : Writer.cid) : Writer.cid =
+(* [e]'s entry, looked up under the hash [h] it was given ([shallow_hash e]). A forced
+   [Deferred] is also looked up under [unforced_hash]: see there. *)
+let find_memo ctx h (e : Explanation.t) =
+  match find_in_bucket ctx h e with
+  | Some _ as m -> m
+  | None -> (
+      match e with
+      | Explanation.Deferred { forced = Some _; _ } when h <> unforced_hash ->
+          find_in_bucket ctx unforced_hash e
+      | _ -> None)
+
+let remember_with ctx (e : Explanation.t) h (cid : Writer.cid) : Writer.cid =
   let level = Writer.current_level ctx.writer in
-  let h = shallow_hash e in
-  let bucket = Option.value (Hashtbl.find_opt ctx.memo.tbl h) ~default:[] in
-  Hashtbl.replace ctx.memo.tbl h ((e, { cid; level }) :: bucket);
-  Hashtbl.replace ctx.memo.by_level level
-    (e :: Option.value (Hashtbl.find_opt ctx.memo.by_level level) ~default:[]);
-  if level > ctx.memo.memo_hi then ctx.memo.memo_hi <- level;
+  let m = ctx.memo in
+  let bucket = Option.value (Itbl.find_opt m.tbl h) ~default:[] in
+  Itbl.replace m.tbl h ((e, { cid; level }) :: bucket);
+  if level > 0 then (
+    if level >= Array.length m.by_level then (
+      let a = Array.make (Stdlib.max (level + 1) (2 * Array.length m.by_level)) [] in
+      Array.blit m.by_level 0 a 0 (Array.length m.by_level);
+      m.by_level <- a);
+    m.by_level.(level) <- h :: m.by_level.(level);
+    if level > m.memo_hi then m.memo_hi <- level);
   cid
+
+let remember ctx e cid = remember_with ctx e (shallow_hash e) cid
 
 (* Backtracking: wipe the writer's level and drop the memo entries it invalidated, in
    one call, so the two structures cannot drift apart. Always call this instead of
@@ -332,39 +431,37 @@ let remember ctx (e : Explanation.t) (cid : Writer.cid) : Writer.cid =
 let wipe_level ctx level =
   Writer.wipe_level ctx.writer level;
   (* M6-T17: walk levels [level, memo_hi] only, and the [stated] keys the same way,
-     rather than folding every table. *)
-  let doomed = ref [] in
-  for l = level to ctx.memo.memo_hi do
-    match Hashtbl.find_opt ctx.memo.by_level l with
-    | Some es -> doomed := (l, es) :: !doomed
-    | None -> ()
-  done;
-  if ctx.memo.memo_hi >= level then ctx.memo.memo_hi <- level - 1;
-  List.iter
-    (fun (l, es) ->
-      Hashtbl.remove ctx.memo.by_level l;
-      List.iter
-        (fun e ->
-          let h = shallow_hash e in
-          match Hashtbl.find_opt ctx.memo.tbl h with
-          | None -> ()
-          | Some bucket -> (
-              match List.filter (fun (_, (m : memo_entry)) -> m.level < level) bucket with
-              | [] -> Hashtbl.remove ctx.memo.tbl h
-              | b -> Hashtbl.replace ctx.memo.tbl h b))
-        es)
-    !doomed;
+     rather than folding every table. M11-complexity-T5: the hashes were kept by
+     [remember], and each bucket is filtered once however many of its entries die (it
+     was filtered once per doomed entry). The end state is the old one: every bucket that
+     holds an entry at [level] or above is in the list, and loses exactly those entries.
+     [Writer.wipe_level] above refuses [level <= 0], so level 0 is never walked. *)
+  let m = ctx.memo in
+  if m.memo_hi >= level then (
+    let hs = ref [] in
+    for l = level to m.memo_hi do
+      hs := List.rev_append m.by_level.(l) !hs;
+      m.by_level.(l) <- []
+    done;
+    m.memo_hi <- level - 1;
+    List.iter
+      (fun h ->
+        match Itbl.find_opt m.tbl h with
+        | None -> ()
+        | Some bucket -> (
+            match List.filter (fun (_, (me : memo_entry)) -> me.level < level) bucket with
+            | [] -> Itbl.remove m.tbl h
+            | b -> Itbl.replace m.tbl h b))
+      (List.sort_uniq Int.compare !hs));
   for l = level to ctx.stated_hi do
-    match Hashtbl.find_opt ctx.stated_by_level l with
-    | None -> ()
-    | Some keys ->
-        Hashtbl.remove ctx.stated_by_level l;
-        List.iter
-          (fun k ->
-            match Hashtbl.find_opt ctx.stated k with
-            | Some (s : stated) when s.s_level >= level -> Hashtbl.remove ctx.stated k
-            | _ -> ())
-          keys
+    let keys = ctx.stated_by_level.(l) in
+    ctx.stated_by_level.(l) <- [];
+    List.iter
+      (fun k ->
+        match Claims.find_opt ctx.stated k with
+        | Some (s : stated) when s.s_level >= level -> Claims.remove ctx.stated k
+        | _ -> ())
+      keys
   done;
   if ctx.stated_hi >= level then ctx.stated_hi <- level - 1
 
@@ -402,18 +499,23 @@ let clause_key (lits : Lit.t list) : Lit.t list option =
    (Within one [Trace.emit] the trail is walked oldest first, so levels arrive
    non-decreasing and this is almost always the first writer anyway; the comparison is
    here so that "almost always" is not what the index rests on.) *)
+let state_key ctx key (cid : Writer.cid) =
+  let level = Writer.current_level ctx.writer in
+  match Claims.find_opt ctx.stated key with
+  | Some s when s.s_level <= level -> ()
+  | _ ->
+      Claims.replace ctx.stated key { s_cid = cid; s_level = level };
+      if level > 0 then (
+        if level >= Array.length ctx.stated_by_level then (
+          let n = Array.length ctx.stated_by_level in
+          let a = Array.make (Stdlib.max (level + 1) (2 * n)) [] in
+          Array.blit ctx.stated_by_level 0 a 0 n;
+          ctx.stated_by_level <- a);
+        ctx.stated_by_level.(level) <- key :: ctx.stated_by_level.(level);
+        if level > ctx.stated_hi then ctx.stated_hi <- level)
+
 let state_clause ctx (lits : Lit.t list) (cid : Writer.cid) =
-  match clause_key lits with
-  | None -> ()
-  | Some key -> (
-      let level = Writer.current_level ctx.writer in
-      match Hashtbl.find_opt ctx.stated key with
-      | Some s when s.s_level <= level -> ()
-      | _ ->
-          Hashtbl.replace ctx.stated key { s_cid = cid; s_level = level };
-          Hashtbl.replace ctx.stated_by_level level
-            (key :: Option.value (Hashtbl.find_opt ctx.stated_by_level level) ~default:[]);
-          if level > ctx.stated_hi then ctx.stated_hi <- level)
+  match clause_key lits with None -> () | Some key -> state_key ctx key cid
 
 (* [defining_line ctx lits] is the id of a line already on the page that states exactly
    the clause [lits], and that a line written *now* may cite: it is at or below the
@@ -424,23 +526,23 @@ let state_clause ctx (lits : Lit.t list) (cid : Writer.cid) =
    this table and [Writer]'s live set have drifted, and the only thing that wipes either
    is [wipe_level], which does both. Making it a fallback would also make *emission*
    depend on whether the audit is on, and the .pbp must not. *)
+let defining_key ctx key : Writer.cid option =
+  match Claims.find_opt ctx.stated key with
+  | Some s when s.s_level <= Writer.current_level ctx.writer ->
+      if Writer.auditing ctx.writer && not (Writer.is_live ctx.writer s.s_cid) then
+        invalid_arg
+          (Printf.sprintf
+             "Justify.defining_line: the claim index names @c%d for `%s`, which the \
+              proof no longer contains -- the index and the writer's live set have \
+              drifted. Only [Justify.wipe_level] may retire either, and it retires both. \
+              See justify.ml's claim-index header and I-S4."
+             s.s_cid
+             (String.concat " " (List.map Lit.to_string key)))
+      else Some s.s_cid
+  | _ -> None
+
 let defining_line ctx (lits : Lit.t list) : Writer.cid option =
-  match clause_key lits with
-  | None -> None
-  | Some key -> (
-      match Hashtbl.find_opt ctx.stated key with
-      | Some s when s.s_level <= Writer.current_level ctx.writer ->
-          if Writer.auditing ctx.writer && not (Writer.is_live ctx.writer s.s_cid) then
-            invalid_arg
-              (Printf.sprintf
-                 "Justify.defining_line: the claim index names @c%d for `%s`, which the \
-                  proof no longer contains -- the index and the writer's live set have \
-                  drifted. Only [Justify.wipe_level] may retire either, and it retires \
-                  both. See justify.ml's claim-index header and I-S4."
-                 s.s_cid
-                 (String.concat " " (List.map Lit.to_string key)))
-          else Some s.s_cid
-      | _ -> None)
+  match clause_key lits with None -> None | Some key -> defining_key ctx key
 
 (* D-0009's missing field, and the whole reason the index exists.
 
@@ -483,7 +585,22 @@ let validate_lits ctx lits =
 (* Run [thunk] and memoise its result under [e]'s identity, unless it is already
    memoised. *)
 let memoized ctx (e : Explanation.t) (thunk : unit -> Writer.cid) : Writer.cid =
-  match find_memo ctx e with Some m -> m.cid | None -> remember ctx e (thunk ())
+  match e with
+  | Explanation.Deferred { forced = None; _ } -> (
+      (* Not forced, so not remembered (an entry exists only after its thunk ran, and
+         the thunk of a [Deferred] forces it, see [emit]), unless some path remembered
+         it unforced, which [unforced_hash]'s bucket would hold. [remember] hashes it
+         again after the thunk, forced. *)
+      match find_in_bucket ctx unforced_hash e with
+      | Some m -> m.cid
+      | None -> remember ctx e (thunk ()))
+  | _ -> (
+      (* Hashed once: a head that is not a [Deferred] hashes the same before and after
+         its thunk runs ([shallow_hash] reads operands by their tag only). *)
+      let h = shallow_hash e in
+      match find_memo ctx h e with
+      | Some m -> m.cid
+      | None -> remember_with ctx e h (thunk ()))
 
 (* [Clause lits] -- rup, not pol.
 
@@ -513,17 +630,21 @@ let memoized ctx (e : Explanation.t) (thunk : unit -> Writer.cid) : Writer.cid =
    already retires by [live_ids] rather than by counting what it was handed. *)
 let emit_clause ctx lits =
   validate_lits ctx lits;
-  match defining_line ctx lits with
+  (* The key once (M11-complexity-T5, D-0140 J2): it was sorted by [defining_line] and
+     again by [state_clause]. *)
+  let key = clause_key lits in
+  match match key with None -> None | Some k -> defining_key ctx k with
   | Some cid -> cid
   | None ->
+      (* The origin is rendered only if something reads it (D-0145, D-0140 J6): the
+         writer's audit naming a leaked id, or the mutation knob. *)
       let cid =
-        Writer.rup_clause ctx.writer
-          ~origin:
-            (Printf.sprintf "clause(%s)"
-               (String.concat " " (List.map Lit.to_string lits)))
+        Writer.rup_clause_lazy ctx.writer
+          ~origin:(fun () ->
+            Printf.sprintf "clause(%s)" (String.concat " " (List.map Lit.to_string lits)))
           lits
       in
-      state_clause ctx lits cid;
+      (match key with None -> () | Some k -> state_key ctx k cid);
       cid
 
 (* A clause emitted outside the [Explanation.t] world entirely: docs/DECISIONS.md
@@ -541,14 +662,20 @@ let emit_clause ctx lits =
    what is already there. Consulting here would also break two properties [Trace] owns
    -- [emitted_ids] would list one id twice, and [permanent_ids] would hand
    [Search.solve] an id to delete twice, which is an I-X2 violation rather than a saving. *)
-let emit_rup_clause ctx ~origin lits =
+(* [~origin] is a thunk (D-0145, D-0140 J6): [Trace] builds it from the line's literals,
+   and only the writer's audit and the mutation knob ever render it. [emit_rup_clause]
+   below is the same over a string, for [Search]'s bridges. *)
+let emit_rup_clause_lazy ctx ~origin lits =
   (* M9-no-proof-T2: no line, no claim-index entry, no literal validated. *)
-  if Writer.is_null ctx.writer then Writer.fresh ctx.writer ~origin
+  if Writer.is_null ctx.writer then Writer.fresh_lazy ctx.writer ~origin
   else (
     validate_lits ctx lits;
-    let cid = Writer.rup_clause ctx.writer ~origin lits in
+    let cid = Writer.rup_clause_lazy ctx.writer ~origin lits in
     state_clause ctx lits cid;
     cid)
+
+let emit_rup_clause ctx ~origin lits =
+  emit_rup_clause_lazy ctx ~origin:(fun () -> origin) lits
 
 (* [Linear (terms, rhs)] -- rup of exactly the constraint it states. Not [pol]; see
    D-0009 (docs/DECISIONS.md) for the full story, summarised here because
@@ -584,9 +711,10 @@ let emit_rup_clause ctx ~origin lits =
    available -- it is not available here. *)
 let emit_linear ctx terms rhs =
   validate_lits ctx (List.map snd terms);
-  Writer.rup ctx.writer
-    ~origin:(Printf.sprintf "linear: %s" (Opb.constr_to_string (Opb.ge terms rhs)))
-    (Opb.ge terms rhs)
+  let c = Opb.ge terms rhs in
+  Writer.rup_lazy ctx.writer
+    ~origin:(fun () -> Printf.sprintf "linear: %s" (Opb.constr_to_string c))
+    c
 
 (* [Cut (e1, e2, c1, c2)] -- recurse on both reasons, then combine: c1 * e1 + c2 * e2.
 
@@ -613,8 +741,8 @@ let emit_linear ctx terms rhs =
    `rup` the module header describes. *)
 let pol_stating ctx ~origin ~claim expr =
   match claim with
-  | None -> Writer.pol ctx.writer ~origin expr
-  | Some c -> Writer.pol_concluding ctx.writer ~origin ~claim:c expr
+  | None -> Writer.pol_lazy ctx.writer ~origin expr
+  | Some c -> Writer.pol_concluding_lazy ctx.writer ~origin ~claim:c expr
 
 let emit_cut ~emit ~claim ctx e1 e2 c1 c2 =
   if c1 < 1 || c2 < 1 then
@@ -623,7 +751,7 @@ let emit_cut ~emit ~claim ctx e1 e2 c1 c2 =
   let id1 = emit ctx e1 in
   let id2 = emit ctx e2 in
   pol_stating ctx ~claim
-    ~origin:(Printf.sprintf "cut(%d*%d + %d*%d)" c1 id1 c2 id2)
+    ~origin:(fun () -> Printf.sprintf "cut(%d*%d + %d*%d)" c1 id1 c2 id2)
     Pol.(add (mul (id id1) c1) (mul (id id2) c2))
 
 (* [Combine (summands, divisor)] -- docs/DECISIONS.md D-0013: the "weaken, divide, add"
@@ -763,8 +891,11 @@ let emit_combine ~emit ~claim ctx summands divisor =
     | f :: rest -> List.fold_left Pol.add f rest
   in
   let expr = if divisor <= 1 then expr else Pol.div expr divisor in
+  (* The count now, so that the origin, which the audit keeps for as long as the line
+     is live, holds two integers and not the summands. *)
+  let n_summands = List.length summands in
   pol_stating ctx ~claim
-    ~origin:(Printf.sprintf "combine(%d summand(s), / %d)" (List.length summands) divisor)
+    ~origin:(fun () -> Printf.sprintf "combine(%d summand(s), / %d)" n_summands divisor)
     expr
 
 (* The fragment one [Linear_term] contributes to a bits-arm `pol`, shared by the

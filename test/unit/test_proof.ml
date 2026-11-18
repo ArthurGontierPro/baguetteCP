@@ -4482,6 +4482,204 @@ let test_m11t7_discarded_rows_count_the_same () =
     ~expected:"0" ~got:(string_of_int !bad);
   check "m11t7: the renamings were exercised" (List.length r.Encoding.renamed_rev >= 2)
 
+(* M11-complexity-T5 (D-0145, D-0140 W2, W4, W6). Every rule the search writes is now
+   assembled in the writer's buffer, with [Lit.add_int] and [Lit.add_sanitized], and
+   written in one call. Pinned against the pre-T5 spellings written out here with
+   [Printf], [Opb.constr_to_string] and [Lit.to_string], over random rows of awkward
+   names and extreme values, a random `pol` of every operator, deletions, level markers
+   and solutions. *)
+let test_m11t5_writer_lines_are_the_reference () =
+  let st = Random.State.make [| 4145 |] in
+  let names = [| "x"; "X_INTRODUCED_12_"; "$ne0"; "a.b"; "a-b"; "q[3]"; "_" |] in
+  let values = [| 0; 1; -3; 7; -10; 99; max_int; min_int; min_int + 1 |] in
+  let pick a = a.(Random.State.int st (Array.length a)) in
+  let lit () =
+    let x = pick names and v = pick values in
+    let l =
+      match Random.State.int st 3 with
+      | 0 -> Lit.ge x v
+      | 1 -> Lit.eq x v
+      | _ -> Lit.bit x (abs (v mod 64))
+    in
+    if Random.State.bool st then l else Lit.negate l
+  in
+  let row () =
+    let terms = List.init (1 + Random.State.int st 6) (fun _ -> (pick values, lit ())) in
+    if Random.State.int st 4 = 0 then Opb.eq terms (pick values)
+    else Opb.ge terms (pick values)
+  in
+  let rec pol depth =
+    if depth = 0 then
+      if Random.State.bool st then Pol.id (1 + Random.State.int st 3)
+      else Pol.axiom (lit ())
+    else
+      match Random.State.int st 5 with
+      | 0 -> Pol.add (pol (depth - 1)) (pol (depth - 1))
+      | 1 -> Pol.mul (pol (depth - 1)) (2 + Random.State.int st 1000)
+      | 2 -> Pol.div (pol (depth - 1)) (1 + Random.State.int st 1000)
+      | 3 -> Pol.saturate (pol (depth - 1))
+      | _ -> Pol.weaken (pol (depth - 1)) (lit ()).Lit.v
+  in
+  (* The pre-T5 renderer of a [Pol.t]: [Printf] per operator, [Opb.label_of] per id. *)
+  let rec ref_pol = function
+    | Pol.Id c -> Opb.label_of c
+    | Pol.Axiom l -> Lit.to_string l
+    | Pol.Add (a, b) -> ref_pol a ^ " " ^ ref_pol b ^ " +"
+    | Pol.Mul (a, k) -> ref_pol a ^ Printf.sprintf " %d *" k
+    | Pol.Div (a, k) -> ref_pol a ^ Printf.sprintf " %d d" k
+    | Pol.Sat a -> ref_pol a ^ " s"
+    | Pol.Weaken (a, v) -> ref_pol a ^ Printf.sprintf " %s w" (Lit.var_name v)
+  in
+  let lits_ref ls = String.concat " " (List.map Lit.to_string ls) in
+  let expected = Buffer.create 4096 in
+  let exp fmt = Printf.bprintf expected (fmt ^^ "\n") in
+  let s, r =
+    emitted ~audit:true (fun w ->
+        Writer.header w ~n_model_constraints:3;
+        exp "pseudo-Boolean proof version 3.0";
+        exp "f 3 ;";
+        for _ = 1 to 300 do
+          let id = Writer.last_id w + 1 in
+          match Random.State.int st 7 with
+          | 0 ->
+              let c = row () in
+              ignore (Writer.rup w ~origin:"r" c : int);
+              exp "@c%d rup %s" id (Opb.constr_to_string c)
+          | 1 ->
+              let c =
+                Opb.clause (List.init (1 + Random.State.int st 5) (fun _ -> lit ()))
+              in
+              ignore (Writer.rup_clause_lazy w ~origin:(fun () -> "c") (Opb.lits c) : int);
+              exp "@c%d rup %s" id (Opb.constr_to_string c)
+          | 2 ->
+              let p = pol (Random.State.int st 4) in
+              ignore (Writer.pol w ~origin:"p" p : int);
+              exp "@c%d pol %s ;" id (ref_pol p)
+          | 3 ->
+              let p = pol (1 + Random.State.int st 3) and c = row () in
+              let got = Writer.pol_concluding w ~origin:"pc" ~claim:c p in
+              exp "@c%d pol %s ;" id (ref_pol p);
+              exp "@c%d ia %s : @c%d ;" (id + 1) (Opb.constr_body c) id;
+              exp "del id @c%d ;" id;
+              ignore got
+          | 4 ->
+              let l = 1 + Random.State.int st 5 in
+              Writer.set_level w l;
+              exp "%% level %d" l
+          | 5 ->
+              let ls = List.init (Random.State.int st 4) (fun _ -> lit ()) in
+              Writer.solution w ls;
+              exp "sol %s ;" (lits_ref ls)
+          | _ ->
+              let ls = List.init (1 + Random.State.int st 3) (fun _ -> lit ()) in
+              ignore (Writer.improving w ~origin:"soli" ls : int);
+              exp "@c%d soli %s ;" id (lits_ref ls)
+        done)
+  in
+  ignore r;
+  check_eq "m11t5: rup, pol, ia, del, level markers, sol and soli are the pre-T5 bytes"
+    ~expected:(Buffer.contents expected) ~got:s
+
+(* M11-complexity-T5 (D-0145, D-0140 J6 and W8): a lazy origin is not rendered by a
+   normal line, and IS rendered by the audit when its id leaks -- the one reader it is
+   kept for. *)
+let test_m11t5_lazy_origin () =
+  let forced = ref 0 in
+  let origin () =
+    incr forced;
+    "the leaked line"
+  in
+  let s, r =
+    emitted ~audit:true (fun w ->
+        Writer.header w ~n_model_constraints:1;
+        let a = Writer.rup_clause_lazy w ~origin [ Lit.ge "x" 1 ] in
+        let b = Writer.pol_lazy w ~origin (Pol.id 1) in
+        let c =
+          Writer.pol_concluding_lazy w ~origin
+            ~claim:(Opb.clause [ Lit.ge "x" 1 ])
+            (Pol.id a)
+        in
+        ignore (Writer.fresh_lazy w ~origin : int);
+        check_eq "m11t5: no line rendered its origin" ~expected:"0"
+          ~got:(string_of_int !forced);
+        Writer.delete_many w [ a; b; c ];
+        Writer.conclusion w Writer.No_conclusion)
+  in
+  ignore s;
+  check "m11t5: the audit names the leaked id by its origin"
+    (match r with
+    | Error (Writer.Audit_failed report) ->
+        let needle = "from the leaked line" in
+        let n = String.length needle and m = String.length report in
+        let rec at i = i + n <= m && (String.sub report i n = needle || at (i + 1)) in
+        at 0
+    | _ -> false);
+  check "m11t5: and rendered it for that id only" (!forced = 1)
+
+(* M11-complexity-T5 (D-0145, D-0140 W5): [wipe_level] collects the doomed ids without a
+   sort when they are already ascending and sorts when a level was re-entered. Random
+   level walks, against a model that keeps every live id's level and computes `w l`'s set
+   the slow way, rendered as [del_run] renders it. *)
+let test_m11t5_wipe_order () =
+  let st = Random.State.make [| 5145 |] in
+  let bad = ref 0 in
+  for _ = 1 to 100 do
+    let model = Hashtbl.create 64 in
+    let expected = Buffer.create 256 in
+    let next = ref 1 in
+    let s, _ =
+      emitted ~audit:false (fun w ->
+          Writer.header w ~n_model_constraints:1;
+          for _ = 1 to 60 do
+            match Random.State.int st 4 with
+            | 0 | 1 ->
+                let id = Writer.fresh w ~origin:"x" in
+                next := id + 1;
+                Hashtbl.replace model id (Writer.current_level w)
+            | 2 -> Writer.set_level w (Random.State.int st 6)
+            | _ ->
+                let l = 1 + Random.State.int st 5 in
+                let doomed =
+                  Hashtbl.fold
+                    (fun id lv acc -> if lv >= l then id :: acc else acc)
+                    model []
+                  |> List.sort Int.compare
+                in
+                List.iter (Hashtbl.remove model) doomed;
+                let rec runs = function
+                  | [] -> []
+                  | x :: rest -> (
+                      match runs rest with
+                      | (lo, hi) :: more when lo = x + 1 -> (x, hi) :: more
+                      | rs -> (x, x) :: rs)
+                in
+                List.iter
+                  (fun (lo, hi) ->
+                    if lo = hi then Printf.bprintf expected "del id @c%d ;\n" lo
+                    else if hi + 1 < !next then
+                      Printf.bprintf expected "del range @c%d @c%d ;\n" lo (hi + 1)
+                    else (
+                      Printf.bprintf expected "del range @c%d @c%d ;\n" lo hi;
+                      Printf.bprintf expected "del id @c%d ;\n" hi))
+                  (runs doomed);
+                Writer.wipe_level w l
+          done)
+    in
+    let dels =
+      List.filter
+        (fun l -> String.length l > 3 && String.sub l 0 3 = "del")
+        (String.split_on_char '\n' s)
+    in
+    let want =
+      List.filter
+        (fun l -> l <> "")
+        (String.split_on_char '\n' (Buffer.contents expected))
+    in
+    if dels <> want then incr bad
+  done;
+  check_eq "m11t5: wipe_level's del lines over 100 random level walks" ~expected:"0"
+    ~got:(string_of_int !bad)
+
 let () =
   report_checker ();
   test_lits ();
@@ -4538,6 +4736,9 @@ let () =
   test_m11t7_output_row_is_the_reference ();
   test_m11t7_expand_one_pass ();
   test_m11t7_discarded_rows_count_the_same ();
+  test_m11t5_writer_lines_are_the_reference ();
+  test_m11t5_lazy_origin ();
+  test_m11t5_wipe_order ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

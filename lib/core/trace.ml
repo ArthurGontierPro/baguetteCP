@@ -126,15 +126,24 @@ type t = {
      are trace lines and check each one on its own against the .opb -- which is the only
      way to demonstrate the property this whole module exists for, that a trace line is
      a decision-free consequence of the model and needs nothing else in the database.
-     See test/unit/test_trace.ml. *)
+     See test/unit/test_trace.ml. Kept only by a trace made with [~history:true]. *)
   mutable ids_rev : Writer.cid list;
   (* Which lines this module wrote for each trail position, and for a hole line, which
      hole it claims. Parallel to [done_] and keyed the same way. It exists so that when a
      settle line cites a hole, this module can name the *id* of the hole's own line and
      not merely the facts on it -- which is what makes I-S4 checkable. See [citations]. *)
   mutable line_ids : written list array;
-  (* The I-S4 record, newest first. See [citation] and [i_s4_violations]. *)
+  (* The I-S4 record, newest first, under [~history:true]. See [citation] and
+     [i_s4_violations]. *)
   mutable cites_rev : citation list;
+  (* M11-complexity-T5 (D-0145, D-0140 J3): this module's low-water reader on the store
+     it writes the trace of, registered by the first [resync]. *)
+  mutable low_water : (Store.t * int) option;
+  (* M11-complexity-T5 (D-0145, D-0140 J4): whether [ids_rev] and [cites_rev] are kept.
+     They are read by tests only, and kept they grow with every line of the run (a cons
+     per trace line, a record per citation), which the major GC walks for as long as the
+     run lasts. [create ~history:true] keeps them; [Search]'s own trace does not. *)
+  history : bool;
 }
 
 (* One "line A rests on line B" edge, with the two facts I-S4 is about, **measured at the
@@ -174,7 +183,7 @@ and citation = {
   hole : int; (* the hole value whose line is cited -- for the failure message *)
 }
 
-let create () =
+let create ?(history = false) () =
   {
     done_ = Array.make 64 Store.dummy_entry;
     n_done = 0;
@@ -182,13 +191,30 @@ let create () =
     ids_rev = [];
     line_ids = Array.make 64 [];
     cites_rev = [];
+    low_water = None;
+    history;
   }
 
 let permanent_ids t = List.rev t.permanent
-let emitted_ids t = List.rev t.ids_rev
+
+(* A trace made without [~history:true] has no record to give, and says so rather than
+   answering [[]], which a test would read as "no line was written". *)
+let need_history what t =
+  if not t.history then
+    invalid_arg
+      (Printf.sprintf
+         "Trace.%s: this trace keeps no history; make it with Trace.create ~history:true \
+          (M11-complexity-T5)"
+         what)
+
+let emitted_ids t =
+  need_history "emitted_ids" t;
+  List.rev t.ids_rev
 
 (* The I-S4 edges, oldest first. *)
-let citations t = List.rev t.cites_rev
+let citations t =
+  need_history "citations" t;
+  List.rev t.cites_rev
 
 (* I-S4 on one edge: [None] if it holds, [Some message] naming which half broke.
 
@@ -221,7 +247,7 @@ let i_s4_verdict c =
 let i_s4_violations t = List.filter_map i_s4_verdict (citations t)
 
 let record t ~level cid =
-  t.ids_rev <- cid :: t.ids_rev;
+  if t.history then t.ids_rev <- cid :: t.ids_rev;
   if level = 0 then t.permanent <- cid :: t.permanent
 
 let remember t i (e : Store.entry) =
@@ -243,15 +269,35 @@ let remember t i (e : Store.entry) =
 (* Drop back to the longest prefix of the trail this module has actually written lines
    for, comparing entries by physical identity. A backtrack shortens the trail and the
    next branch refills those positions with new entries; the lines for the old ones were
-   retired by the same [w] that the backtrack triggered. *)
+   retired by the same [w] that the backtrack triggered.
+
+   M11-complexity-T5 (D-0145, D-0140 J3): the walk starts at the store's low-water mark
+   for this module, not at position 0. At the previous [resync] the prefix
+   [0, n_done) agreed with the trail, and [emit] then filled [done_] up to the trail's
+   length; every position below the mark has stayed on the trail, unchanged, since that
+   [resync] ([Store.take_low_water]: the trail only shrinks in [Store.undo_to], which
+   lowers the mark). So the walk from the mark ends where the walk from 0 ended, and
+   [n_done] is what it was. The first call on a store registers the reader and walks from
+   0; a trace moved to another store (a test's shape) registers again. *)
 let resync t store =
+  let start =
+    match t.low_water with
+    | Some (s, r) when s == store -> Store.take_low_water store r
+    | _ ->
+        t.low_water <- Some (store, Store.register_low_water store);
+        0
+  in
   let n = Stdlib.min t.n_done (Store.trail_length store) in
   let rec go i =
     if i >= n then n
     else if Store.trail_entry store i == t.done_.(i) then go (i + 1)
     else i
   in
-  t.n_done <- go 0
+  t.n_done <- go (Stdlib.min start n)
+
+(* The trail position at which level [k + 1] opened: [Store.level_marks]' [k]-th element,
+   read in place (M11-complexity-T5, see [emit_to_page]). *)
+let mark_at store k = store.Store.marks.(k).Store.trail_mark
 
 (* ------------------------------------------------------------------ claims *)
 
@@ -398,8 +444,13 @@ let claims encoding e name = List.map (fun l -> l.claim) (lines encoding e name)
 
 let clause_of ~claim ~facts = claim @ List.map Lit.negate facts
 
-let emit_line (ctx : Justify.ctx) ~origin ~claim ~facts =
-  Justify.emit_rup_clause ctx ~origin (clause_of ~claim ~facts)
+(* [~origin] rendered on demand (D-0145, D-0140 J6); [emit_line] is the same over a
+   string. *)
+let emit_line_lazy (ctx : Justify.ctx) ~origin ~claim ~facts =
+  Justify.emit_rup_clause_lazy ctx ~origin (clause_of ~claim ~facts)
+
+let emit_line ctx ~origin ~claim ~facts =
+  emit_line_lazy ctx ~origin:(fun () -> origin) ~claim ~facts
 
 (* M8-bits-encoding-T2 (D-0130 section 2's first refinement, D-0132 section 2.5): is
    this entry's line the BITS arm's? The unit is the ROW -- a pruning whose row has a
@@ -537,7 +588,7 @@ let record_citation t (w : Writer.t) ~citing ~citing_level ~cited ~cited_level ~
     let live_known = Writer.auditing w in
     let cited_live = live_known && Writer.is_live w cited in
     let c = { citing; cited; citing_level; cited_level; cited_live; live_known; hole } in
-    t.cites_rev <- c :: t.cites_rev;
+    if t.history then t.cites_rev <- c :: t.cites_rev;
     Debug.check
       (match i_s4_verdict c with Some m -> m | None -> "I-S4")
       (fun () -> i_s4_verdict c = None)
@@ -606,10 +657,24 @@ let emit_to_page (ctx : Justify.ctx) t store =
   let saved = Writer.current_level ctx.Justify.writer in
   let at = ref saved in
   let n = Store.trail_length store in
+  (* M11-complexity-T5 (D-0145, D-0140 J5): the entry's level by a cursor over the level
+     marks, which only moves forward as [i] does, instead of two binary searches per
+     entry ([Store.is_level_start] and [Store.level_of_index]). [lv] is the number of
+     marks at or below [i], which is [Store.level_of_index store i] (the marks are
+     monotone, I-T2), and [i] opens a level exactly when the last of them is [i], which
+     is [Store.is_level_start]'s test. Nothing in this loop opens or closes a level. *)
+  let n_levels = Store.level store in
+  let lv = ref (Store.level_of_index store t.n_done) in
   for i = t.n_done to n - 1 do
+    while !lv < n_levels && mark_at store !lv <= i do
+      incr lv
+    done;
+    let opens = !lv > 0 && mark_at store (!lv - 1) = i in
+    Debug.check "M11-T5: Trace's level cursor agrees with Store.level_of_index" (fun () ->
+        !lv = Store.level_of_index store i && opens = Store.is_level_start store i);
     let e = Store.trail_entry store i in
     remember t i e;
-    if not (Store.is_level_start store i) then
+    if not opens then
       let name = Store.name store e.Store.var in
       (* [claims] first: a change that claims nothing writes nothing and must not force
          the [facts] thunk to find that out. "Lazy where it is expensive" cuts here too.
@@ -623,7 +688,7 @@ let emit_to_page (ctx : Justify.ctx) t store =
              (M8-bits-encoding-T2) the scope the bits-arm decision reads. *)
           let all_facts = Reason.facts e.Store.reason in
           let facts = Reason.lits_of_facts all_facts in
-          let level = Store.level_of_index store i in
+          let level = !lv in
           (* The level is set here rather than inside the loop below so that the
              derivation and the line it precedes are tagged together; the loop's own
              [set_level] is then a no-op on the first claim and still does its job for a
@@ -663,10 +728,15 @@ let emit_to_page (ctx : Justify.ctx) t store =
               if !at <> level then (
                 Writer.set_level ctx.Justify.writer level;
                 at := level);
-              let origin =
+              (* Rendered only if read (D-0145, D-0140 J6): by the writer's audit naming
+                 a leaked id, or by the mutation knob. It was a [Printf] and a rendering
+                 of the claim per trace line. It holds the claim and a count, not the
+                 facts: the audit keeps it while the line is live. *)
+              let n_facts = List.length facts in
+              let origin () =
                 Printf.sprintf "trace: %s from %d fact(s)%s"
                   (String.concat " \\/ " (List.map Lit.to_string claim))
-                  (List.length facts)
+                  n_facts
                   (match settled_over with
                   | [] -> ""
                   | vs ->
@@ -678,7 +748,7 @@ let emit_to_page (ctx : Justify.ctx) t store =
                 | Some (dcid, dclause) when same_clause dclause (clause_of ~claim ~facts)
                   ->
                     dcid
-                | _ -> emit_line ctx ~origin ~claim ~facts
+                | _ -> emit_line_lazy ctx ~origin ~claim ~facts
               in
               record t ~level cid;
               t.line_ids.(i) <-
@@ -756,8 +826,9 @@ let conflict_line_to_page (ctx : Justify.ctx) t (c : Store.conflict) =
            twin of [derive_ahead] for an entry. *)
         if c.Store.c_ahead then ignore (Justify.emit ctx c.Store.c_why : Writer.cid);
         let cid =
-          Justify.emit_rup_clause ctx
-            ~origin:(Printf.sprintf "trace: conflict from %d fact(s)" (List.length facts))
+          let n_facts = List.length facts in
+          Justify.emit_rup_clause_lazy ctx
+            ~origin:(fun () -> Printf.sprintf "trace: conflict from %d fact(s)" n_facts)
             (List.map Lit.negate facts)
         in
         record t ~level:(Writer.current_level ctx.Justify.writer) cid;
