@@ -320,6 +320,43 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
    works around it with a sum). Probably a par-`b` overload is needed, or the 3-argument form must be
    caught as `fzn_bool_xor`; worth a census of the other `bool_*` builtins with a par argument.
 
+### 2026-11-18 — three findings from the M10 measurements, for the owners of the code they point at (agent-strategy, `wave45-strategy`, D-0137 section 13)
+
+1. **A branch nogood veripb refuses, with D-0077's assignment decision in the tree** (search.ml,
+   `branch_assign` and the decision closure; no current owner). On
+   `2017_hrc_exp1-1-5670` (the D-0133 Challenge subset, re-flattened under
+   `fataepyc-06:/scratch/arthur/wave45-strategy-runs/subset/`), binary `28c4a51c` with
+   `--search activity --restarts luby --phase-saving` (phase saving then produced assignment
+   decisions at interior saved values): `Checking error ... reverse unit propagation` at the
+   nogood of node 2801 (`@c613565`, line 620 348; `BAGUETTE_NODE_LIMIT=2802` reproduces it in a
+   620 408-line proof). The nogood keeps 34 of the 50 decision levels; the clause of all 50 is RUP
+   at that point, and so is the nogood with the one decision of level 26 added back
+   (`~X_INTRODUCED_2785__ge_1`), and no other single level does it. So the decision closure
+   (`Learn.levels`) misses a level the trace needs. Under `BAGUETTE_DEBUG=1` (I-P7's advisor check
+   off, see 2) every invariant holds, including M7-T27 (a3)'s memo-against-walk cross-check, so the
+   memo and the walk over facts agree on the wrong set. The same rejection happens on the
+   pre-M6-T22 code (`0129c1d`), and the run verifies once phase saving branches `x <= s` instead of
+   assigning `x = s`, so the assignment shape is the suspect, not restarts or the activity order.
+   Main can reach the shape through `indomain_median`. Scripts: `repro2.sh`, `bis.sh`, `swap.py`,
+   `addback.py` in the same directory; the instrumented build printing `all`/`ng`/`ls` per nogood
+   is `/scratch/arthur/wave45-strategy-dbg` at `0129c1d` plus `instr.py`. This branch no longer
+   produces the shape from phase saving (`0cda31d`).
+2. **I-P7 fires on main at default flags** (engine.ml / the learned clause's advisor, M6-T20 and
+   M6-T22's `Engine.dyn_ids`; M11-T3 holds engine.ml). Same instance, `BAGUETTE_DEBUG=1`, no flag:
+   `Not_at_fixpoint("I-P7: propagator #2855 learned_clause declined the wake for a change of
+   X_INTRODUCED_2105_, but a run pruned 1 entr(y/ies)")` with this branch's `28c4a51c` (identical
+   to main without flags, section 11 of D-0137), and on `6d3d2dc3` before M6-T22 (`#2734`,
+   `X_INTRODUCED_2983_`). With that check disabled, M6-T22's own check fires under the strategy
+   flags (not tried without them): `Bad_watch("M6-T22: the wake index lost propagator #2924
+   learned_clause's watch entries")`. A dropped wake is a missed pruning, not an
+   unsound one, so no proof is wrong because of it; a learned clause is propagating less than
+   its contract says.
+3. **The `--time-limit` stop can overshoot by more than 300 s** (D-0136's family). With
+   `--time-limit 300 --proof`, main's binary was killed by the 600 s wall on
+   `2017_cargo_challenge01_0s_1913` and `2020_cable_tree_wiring_R046` (rc 124, the `limit:` line
+   printed, the proof truncated), and so were the strategy flags on those two and on
+   `2020_hoist-benchmark-for-minizinc_PU_3_8_5`. The finaliser after the stop is the time.
+
 ## Completed
 
 | Task | Session | Date | Summary |
