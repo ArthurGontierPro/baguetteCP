@@ -10,5 +10,5 @@ array [1..5] of var 0..6: x;
 constraint global_cardinality_low_up_closed(x, [1, 3, 5], [1, 1, 1], [2, 2, 2]);
 constraint x[1] > x[2];
 constraint x[2] > x[3];
-constraint x[4] = x[5];
+constraint x[4] < x[5];
 solve satisfy;
