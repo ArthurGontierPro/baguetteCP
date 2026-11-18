@@ -4436,6 +4436,52 @@ let test_m11t7_expand_one_pass () =
   check "m11t7: a zero coefficient does not count"
     (Encoding.distinct_owners [ (0, "x"); (2, "x") ])
 
+(* M11-complexity-T7 (D-0143): under [Discard_rows], [add_int_lin_le] counts a row from
+   its variables instead of building it. The same random rows (order and bits
+   variables, a width-0 and a width-1 one, a sanitise collision, renamed owners,
+   repeated variables, zero coefficients) go to a discarding and a retaining encoding,
+   interleaved with hand-built clauses; the ids, the header's name count and the
+   renaming comments must agree after every row. *)
+let test_m11t7_discarded_rows_count_the_same () =
+  let mk policy =
+    let e = m7t27_create policy in
+    List.iter
+      (fun (x, lo, hi) -> Encoding.declare_int e x ~lo ~hi)
+      [ ("x", -3, 4); ("a.b", 0, 5); ("a_b", 1, 3); ("one", 2, 2); ("w1", 0, 1) ];
+    Encoding.declare_int_bits e "bx" ~lo:(-2) ~hi:9;
+    Encoding.declare_int_bits e "q[1]" ~lo:0 ~hi:5;
+    e
+  in
+  let d = mk Encoding.Discard_rows and r = mk Encoding.Retain_rows in
+  let vars = [| "x"; "a.b"; "a_b"; "one"; "w1"; "bx"; "q[1]" |] in
+  let st = Random.State.make [| 4143 |] in
+  let same () =
+    Encoding.n_constraints d = Encoding.n_constraints r
+    && d.Encoding.occurs.Encoding.Occurs.count = r.Encoding.occurs.Encoding.Occurs.count
+    && d.Encoding.renamed_rev = r.Encoding.renamed_rev
+  in
+  let bad = ref 0 in
+  for i = 1 to 2000 do
+    (if i mod 7 = 0 then (
+       let c =
+         Opb.clause [ Lit.ge "x" (Random.State.int st 7 - 2); Lit.bool_true "w1" ]
+       in
+       ignore (Encoding.add_constraint d c : int);
+       ignore (Encoding.add_constraint r c : int))
+     else
+       let terms =
+         List.init (Random.State.int st 4) (fun _ ->
+             (Random.State.int st 7 - 3, vars.(Random.State.int st (Array.length vars))))
+       in
+       let rhs = Random.State.int st 21 - 10 in
+       ignore (Encoding.add_int_lin_le d terms rhs : int);
+       ignore (Encoding.add_int_lin_le r terms rhs : int));
+    if not (same ()) then incr bad
+  done;
+  check_eq "m11t7: a discarded row counts what a retained one records, 2000 rows"
+    ~expected:"0" ~got:(string_of_int !bad);
+  check "m11t7: the renamings were exercised" (List.length r.Encoding.renamed_rev >= 2)
+
 let () =
   report_checker ();
   test_lits ();
@@ -4491,6 +4537,7 @@ let () =
   test_m11t7_header_by_runs ();
   test_m11t7_output_row_is_the_reference ();
   test_m11t7_expand_one_pass ();
+  test_m11t7_discarded_rows_count_the_same ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

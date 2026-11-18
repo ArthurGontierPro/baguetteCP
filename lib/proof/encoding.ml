@@ -2229,9 +2229,63 @@ let check_lin_le_computable t terms rhs ~what =
    This is one of the two committing doors M1-T32 guards. The check runs BEFORE the
    expansion, so a row that cannot be computed never reaches the sink and
    the encoding is left exactly as it was. *)
+(* M11-complexity-T7 (D-0143): under [Discard_rows] (`--no-proof`) the expanded row is
+   never read, so it is not built: what [add_constraint] would have recorded is recorded
+   from the variables, per variable instead of per term, and the id is minted. It is
+   D-0126's rule 1 (the ladder loop replaced by its count) applied to a linear row.
+
+   What [add_constraint] records is the header's names ([Occurs]) and the renamings,
+   and nothing reads either under [Discard_rows] (the .opb is never written), but they
+   are kept exact all the same, so that the encoding is the same object in both modes.
+   They can be read off the variables when [discard_shape_ok] holds:
+
+   - [distinct_owners]: no two literals of the row share a name, so [Opb.normalise]
+     drops a term only for a zero coefficient;
+   - no expanded coefficient is zero. A rung carries [a <> 0]; bit i carries
+     [a * 2^i], zero only if it wrapped, and if bit i's wraps so does every higher
+     bit's, so the top bit is the one to test ([Compile]'s cap keeps it from happening).
+
+   Then the row's terms are, per variable with [a <> 0] in order, the whole block
+   x_ge_(lo+1) .. x_ge_hi (none when lo = hi) or x_bit_0 .. x_bit_(n-1): one interval
+   per variable ([Occurs.add_range] / [add_bit_range], which [add_constraint]'s runs
+   reduce to), and the first occurrence of each owner in that order ([note_renamed]).
+   Otherwise the row is built and committed as in the other modes.
+   test/unit/test_proof.ml feeds the same random rows to a discarding and a retaining
+   encoding and compares ids, name counts and renamings. *)
+let discard_shape_ok t terms =
+  distinct_owners terms
+  && List.for_all
+       (fun (a, x) ->
+         a = 0
+         ||
+         match (find t x).repr with
+         | Order -> true
+         | Bits { n; _ } -> a * (1 lsl (n - 1)) <> 0)
+       terms
+
+let count_discarded_row t terms =
+  List.iter
+    (fun (a, x) ->
+      if a <> 0 then
+        let v = find t x in
+        match v.repr with
+        | Order ->
+            if v.hi > v.lo then (
+              note_renamed t x;
+              Occurs.add_range t.occurs x (v.lo + 1) v.hi)
+        | Bits { n; _ } ->
+            note_renamed t x;
+            Occurs.add_bit_range t.occurs x 0 (n - 1))
+    terms;
+  t.n <- t.n + 1;
+  t.n
+
 let add_int_lin_le t terms rhs =
   check_lin_le_computable t terms rhs ~what:"Encoding.add_int_lin_le";
-  add_constraint t (expand_int_lin_le t terms rhs)
+  match t.sink with
+  | Discard when discard_shape_ok t terms -> count_discarded_row t terms
+  | Discard | Retain _ | Stream _ | Written ->
+      add_constraint t (expand_int_lin_le t terms rhs)
 
 (* ---------------------------------------------------------------------------
    M1-T9: disequalities.
