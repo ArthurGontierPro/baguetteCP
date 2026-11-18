@@ -1468,20 +1468,26 @@ let test_m6_t21_stop_in_propagation () =
         close_out poc;
         (stopped, stats, (Engine.counters engine).Engine.c_runs, live, opb, pbp)
       in
-      (* The first k from 40 up whose stop lands strictly inside a node: a k that a
-         node's propagation happens to end on is caught at the next entry instead, and
-         is not this lane's case. Deterministic, so the same k on every machine. *)
+      (* The first k whose stop lands strictly inside a node PAST the root, once something
+         has been learned: a k that a node's propagation happens to end on is caught at
+         the next entry instead, and a k inside the root's propagation leaves nothing on
+         the page to sweep; neither is this lane's case. Deterministic, so the same k on
+         every machine. *)
       let rec pick k =
         if k > 200 then None
         else
           let ((_, st, runs, _, _, _) as r) = run ~name:"t21" ~k ~poll:1 in
-          if st.Search.stopped_in_propagation && runs = k then Some (k, r)
+          if
+            st.Search.stopped_in_propagation && runs = k && st.Search.nodes > 1
+            && st.Search.n_learned > 0
+          then Some (k, r)
           else pick (k + 1)
       in
-      (match pick 40 with
+      (match pick 1 with
       | None ->
           check_bool_m6
-            "M6-T21: some k in 40..200 stops INSIDE propagation with exactly k runs taken"
+            "M6-T21: some k in 1..200 stops INSIDE propagation, past the root and after \
+             a learned constraint, with exactly k runs taken"
             false
       | Some (k, (stopped, st, runs, live, opb, pbp)) ->
           check_bool_m6 "M6-T21: the stopped run raises Stopped, no incumbent" stopped;
