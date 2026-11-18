@@ -325,6 +325,13 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
    works around it with a sum). Probably a par-`b` overload is needed, or the 3-argument form must be
    caught as `fzn_bool_xor`; worth a census of the other `bool_*` builtins with a par argument.
 
+### 2026-11-18 — M11-complexity-T4 part 1 (D-0144): what is left in files part 1 does not hold (agent-batch4a, `wave49-batch4a`)
+
+| Request | File | From | Status |
+|---|---|---|---|
+| **A lazy `~origin` (D-0140 J6, the writer's half).** `Learn.introduce` now builds no origin string for the null writer, which drops it unread. With a writer that writes, the string is still built per learned clause (every literal through `Lit.to_string` and `String.concat`), because `Writer.fresh` stores it in the audit's `entry.origin` and `knob_for` matches the mutation site against it, although neither the `.pbp` nor anything else reads it in a run that passes. Proposal: an `origin` that is a `string Lazy.t` (or `unit -> string`) in `entry` and in the `~origin` of `rup`/`pol`/`implied`/`red`, forced only by `knob_for` when a mutation is armed and by the audit's failure messages; existing callers wrap their literal string with `Lazy.from_val`. Then `learn.ml` passes `lazy (Printf.sprintf ...)`, and `justify.ml`'s `emit_*`, `trace.ml` and `search.ml`'s `bridges` can do the same. Byte identity holds by construction (the origin is never written) | `lib/proof/writer.ml` (then `lib/core/learned.ml` `introduce`'s signature) | agent-batch4a | open, for M11-T5 (agent-batch5); `learned.ml` is M10-T4's |
+| **`Ladder.lift` re-sorts the whole row once per rung** (D-0140 P2, its `combine` half): `lifted` is a fold of `Learned.combine acc 1 (ladder_row w) m` over the rungs, and each `combine` scales, sorts and cancels the full row. A `Learned.combine_many` (one scale, one sort, one cancel over the row and all rungs) gives the same normal form, but its `Checked` additions are not the fold's, so the `Overflow` point and its message can move (the message reaches `--stats` through `pb_fallback_rev`). Needs the overflow argument written down, or a measured "no instance reaches it", in its own record | `lib/core/learned.ml` | agent-batch4a | open, for T4 part 2 after M10-T4 merges |
+
 ## Completed
 
 | Task | Session | Date | Summary |
