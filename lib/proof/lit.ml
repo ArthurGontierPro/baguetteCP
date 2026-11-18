@@ -39,9 +39,30 @@ let needs_sanitize name =
   let rec go i = i < n && ((not (ident_char (String.unsafe_get name i))) || go (i + 1)) in
   go 0
 
-let sanitize name =
-  if needs_sanitize name then String.map (fun c -> if ident_char c then c else '_') name
-  else name
+(* 2026-11-18 (M8-bits-encoding-T3, answering the cross-session request on proof-mode
+   rendering cost: 3.2 % of QR48's proof-mode time was this scan): a ONE-ENTRY memo keyed
+   on the string's PHYSICAL identity. Literals are rendered in runs over one variable (a
+   row's order expansion, a bits row's bits, a ladder) and every rendering of a variable
+   is handed the same frozen name, so the run pays one scan. Strings are immutable, so a
+   physically equal argument has the same answer, and every name written is exactly what
+   it was: the memo can change only how often [needs_sanitize] runs. Not a table keyed on
+   the name, because hashing a name reads it end to end, which is the cost being removed.
+   The memo is local to the closure, so the module's interface is what it was. The
+   solver runs on one domain; a second domain sharing this memo would need it made
+   domain-local. *)
+let sanitize =
+  let memo_in = ref "" and memo_out = ref "" in
+  fun name ->
+    if name == !memo_in then !memo_out
+    else
+      let out =
+        if needs_sanitize name then
+          String.map (fun c -> if ident_char c then c else '_') name
+        else name
+      in
+      memo_in := name;
+      memo_out := out;
+      out
 
 (* [neg ^ sanitize x ^ mid ^ int_suffix v], in one allocation. [mid] is "_ge_"/"_eq_"/
    "_bit_"; its length is read, not assumed, since M8-bits-encoding-T2 added the five-byte
