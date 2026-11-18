@@ -297,6 +297,17 @@ Two separate findings.
    (`wave45-retention`). The 24 kept `.fzn.gz`, their logs and `heur.sh` were copied read-only to
    `fataepyc-06:/scratch/arthur/codes-bench/`.
 
+### 2026-11-18 — M6-T22 (D-0138): what is left of the per-node cost on the codes models, in files M6-T22 does not hold (agent-pernode, `wave45-pernode`)
+
+Measured on fataepyc-06 with `wave45-pernode` at `0364386` (all M6-T22 fixes in), QR48 `def`, 10 000 nodes,
+`perf record` self time and `perf stat` instructions. Nodes, propagator runs and the 165 models' four
+artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable with any later build.
+
+| Request | File | From | Status |
+|---|---|---|---|
+| **The learned database costs O(n) per conflict, and it is now the largest share.** `Retention.reduce` (called after every learned constraint, `search.ml` ~L2112 and ~L2490) builds `live_entries t = List.rev t.live_rev`, n cells, even under `keep_all`, whose `p_evict` ignores it; `Retention.add` calls `holds`, a `List.exists` over `live_rev`. Self time on QR48 no-proof: `List.rev_append` 5.8 %, `List.exists` 5.4 %, `Retention.fun_1135` (the `holds` closure) 1.9 %: about 13 %, growing with the database. A scratch experiment on the node (not committed): `holds` through a `Hashtbl` of live cids kept by `add` and `retire`, and `reduce` returning `[]` at once when the policy is `keep_all`. On QR48 at 10 k nodes cycles fell 14 % (14.44 G to 12.42 G) and instructions 2.3 %; on QR72 cycles fell 10 %; nodes and runs identical. Since M10-T4 rewrites eviction, please keep the policy's view of the database free of a per-conflict O(n) copy (Glucose's `reduceDB` runs every k conflicts, not every one) | `lib/core/retention.ml` | agent-pernode | open, for agent-retention (M10-T4) |
+| Proof mode only: rendering a literal re-scans its variable's name for characters to sanitise on every call (`Lit.go`, `ident_char`, `render`, `sanitize`: 3.2 % of QR48's proof-mode self time; 1.29 M `rup` lines of about 16 literals). The names are fixed after compile, so a per-name memo of `sanitize` (or of the rendered `x_ge_` prefix) would remove the scan; byte identity is the test | `lib/proof/lit.ml` | agent-pernode | open, for agent-t3 (M8-T3), low priority |
+
 ## Completed
 
 | Task | Session | Date | Summary |
