@@ -612,13 +612,21 @@ let honours_claim (inst : Propagator.instance) =
 
 let create ?(trigger = default_trigger) (instances : Propagator.instance list) : t =
   let watchers = Hashtbl.create 64 in
+  (* M11-complexity-T3 (D-0142, D-0143's request): whether [id] is already in [v]'s list,
+     answered by a table of the (variable, id) pairs added so far instead of a [List.mem]
+     over the list, which made building the engine quadratic in a variable's degree
+     (smelt_2: variables in about 2 000 constraints). The table holds exactly the pairs
+     the lists hold, so the answer, the lists and their order are the old ones. *)
+  let seen = Hashtbl.create 64 in
   List.iter
     (fun (inst : Propagator.instance) ->
       List.iter
         (fun v ->
-          let cur = try Hashtbl.find watchers v with Not_found -> [] in
-          if not (List.mem inst.Propagator.id cur) then
-            Hashtbl.replace watchers v (inst.Propagator.id :: cur))
+          let key = (Var.to_int v, inst.Propagator.id) in
+          if not (Hashtbl.mem seen key) then (
+            Hashtbl.replace seen key ();
+            let cur = try Hashtbl.find watchers v with Not_found -> [] in
+            Hashtbl.replace watchers v (inst.Propagator.id :: cur)))
         inst.Propagator.inst_vars)
     instances;
   let max_id =

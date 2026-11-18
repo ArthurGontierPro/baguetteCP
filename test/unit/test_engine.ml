@@ -2318,6 +2318,53 @@ let test_direction_walk_order () =
        (String.concat ";" (List.map string_of_int by_variable)))
     (by_direction = by_variable && by_variable = [ 0; 1 ])
 
+(* ---------------------------------------------------------------------------
+   M11-complexity-T3 (D-0142, D-0143's request): [Engine.create] registers watchers through
+   a table of the (variable, id) pairs already added instead of a [List.mem] over each
+   variable's list. The old loop is kept here as the specification and must build the same
+   list, in the same order, for every variable, on random scopes that repeat variables
+   (the aliased case [List.mem] was there for). *)
+module Scope = struct
+  type t = Var.t list
+
+  let name = "scope"
+  let consistency = Propagator.Bounds
+  let vars p = p
+  let propagate _ _ = Propagator.Fixpoint
+end
+
+let test_create_watchers () =
+  let rng = Random.State.make [| 0x0142; 9 |] in
+  let same = ref true in
+  for _ = 1 to 200 do
+    let insts =
+      List.init
+        (1 + Random.State.int rng 30)
+        (fun id ->
+          let scope =
+            List.init (1 + Random.State.int rng 6) (fun _ -> var (Random.State.int rng 6))
+          in
+          Propagator.pack ~id (module Scope : Propagator.S with type t = Scope.t) scope)
+    in
+    let old = Hashtbl.create 16 in
+    List.iter
+      (fun (inst : Propagator.instance) ->
+        List.iter
+          (fun v ->
+            let cur = try Hashtbl.find old v with Not_found -> [] in
+            if not (List.mem inst.Propagator.id cur) then
+              Hashtbl.replace old v (inst.Propagator.id :: cur))
+          inst.Propagator.inst_vars)
+      insts;
+    let engine = Engine.create insts in
+    for x = 0 to 5 do
+      if Hashtbl.find_opt engine.Engine.watchers (var x) <> Hashtbl.find_opt old (var x)
+      then same := false
+    done
+  done;
+  check "D-0143 request: Engine.create builds every watcher list the List.mem loop built"
+    !same
+
 let () =
   test_fixpoint_tightens_and_settles ();
   test_conflict_carries_explanation ();
@@ -2360,6 +2407,7 @@ let () =
   test_index_positions ();
   test_direction_index ();
   test_direction_walk_order ();
+  test_create_watchers ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
