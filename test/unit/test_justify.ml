@@ -1773,10 +1773,10 @@ let test_memo_identity_m11t5 () =
   in
   expect_ok "m11t5 memo: no exception" r
 
-(* M11-complexity-T5 (D-0145, D-0140 J2): the claim index hashes every literal of the
-   key, where the polymorphic hash read about three. Clauses that agree on their first
-   literals and differ further on each keep their own line, and each is found again,
-   in whatever order its literals come. *)
+(* M11-complexity-T5 (D-0145, D-0140 J2): the claim index hashes eight literals of the
+   key and its length, where the polymorphic hash read about three. Clauses that agree on
+   their first literals and differ further on each keep their own line, and each is
+   found again, in whatever order its literals come. *)
 let test_index_long_keys_m11t5 () =
   let _, r =
     emitted (fun w ->

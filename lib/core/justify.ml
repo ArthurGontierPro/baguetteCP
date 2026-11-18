@@ -334,18 +334,28 @@ type stated = { s_cid : Writer.cid; s_level : int }
 (* M11-complexity-T5 (D-0145, D-0140 J2). The claim index's table. It was a polymorphic
    [Hashtbl] keyed by the sorted literal list: the C hash stops after ten meaningful words,
    which is about three literals, so clauses that agree on their first literals shared a
-   bucket, and the equality was [compare_val] over the lists. Now the hash mixes every
-   literal ([lit_hash]) and the equality is [Lit.equal] element by element, which is the
-   structural equality the polymorphic table used ([Lit.t] is strings, ints and a bool).
+   bucket, and the equality was [compare_val] over the lists. Now the hash mixes the
+   first eight literals ([lit_hash]) and the length, and the equality is [Lit.equal]
+   element by element, which is the structural equality the polymorphic table used
+   ([Lit.t] is strings, ints and a bool).
    Nothing iterates this table, so only the cost of a lookup changes. *)
 module Claims = Hashtbl.Make (struct
   type t = Lit.t list
 
   let equal = List.equal Lit.equal
 
+  (* The first [claim_hash_width] literals and the length: a key is sorted, so two
+     clauses that agree on that prefix and length share a bucket and [equal] tells them
+     apart. Hashing every literal cost a C string hash per literal of every line
+     (measured on H_qr48, D-0145). *)
+  let claim_hash_width = 8
+
   let hash ls =
-    let rec go h = function [] -> h | l :: rest -> go (mix h (lit_hash l)) rest in
-    finish (go 8 ls)
+    let rec go h n = function
+      | l :: rest when n < claim_hash_width -> go (mix h (lit_hash l)) (n + 1) rest
+      | rest -> mix h (n + List.length rest)
+    in
+    finish (go 8 0 ls)
 end)
 
 type ctx = {
