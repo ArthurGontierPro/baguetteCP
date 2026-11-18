@@ -1996,26 +1996,35 @@ let start_proof t w =
    A variable with a_i = 0 contributes nothing (skipped outright, so it never
    even touches the constant). A singleton domain (lo_i = hi_i) has no order
    literals at all -- the [List.init] below produces zero terms for it -- and
-   contributes only lo_i * a_i to the constant. *)
+   contributes only lo_i * a_i to the constant.
+
+   M11-complexity-T7 (D-0143): the per-variable blocks are collected newest first and
+   concatenated ONCE at the end. The fold used to append each block to everything before
+   it ([acc @ vterms]), which copied the row built so far once per variable: a row over
+   k variables of width w cost O(k^2 w) cons cells for an output of k w terms. Same
+   blocks, same order, so the same list. *)
 let linear_terms_int_lin_le t terms =
-  List.fold_left
-    (fun (acc, const) (a, x) ->
-      if a = 0 then (acc, const)
-      else
-        let v = find t x in
-        let const = const + (a * v.lo) in
-        let vterms =
-          match v.repr with
-          | Order ->
-              List.init (max 0 (v.hi - v.lo)) (fun i -> (a, Lit.ge x (v.lo + 1 + i)))
-          | Bits { n; _ } ->
-              (* M8-bits-encoding-T2 (D-0130 section 6): the same fold of [a * lo] into
-                 the constant, and [a * 2^i] on bit i in place of [a] on every rung. One
-                 row holds both shapes. *)
-              List.init n (fun i -> (a * (1 lsl i), Lit.bit x i))
-        in
-        (acc @ vterms, const))
-    ([], 0) terms
+  let blocks, const =
+    List.fold_left
+      (fun (acc, const) (a, x) ->
+        if a = 0 then (acc, const)
+        else
+          let v = find t x in
+          let const = const + (a * v.lo) in
+          let vterms =
+            match v.repr with
+            | Order ->
+                List.init (max 0 (v.hi - v.lo)) (fun i -> (a, Lit.ge x (v.lo + 1 + i)))
+            | Bits { n; _ } ->
+                (* M8-bits-encoding-T2 (D-0130 section 6): the same fold of [a * lo] into
+                   the constant, and [a * 2^i] on bit i in place of [a] on every rung. One
+                   row holds both shapes. *)
+                List.init n (fun i -> (a * (1 lsl i), Lit.bit x i))
+          in
+          (vterms :: acc, const))
+      ([], 0) terms
+  in
+  (List.concat (List.rev blocks), const)
 
 (* The full row  sum_i a_i x_i <= rhs,  as a normalised [Opb.t]. Exposed on its
    own (not just via [add_int_lin_le]) so a caller -- or a test -- can inspect
