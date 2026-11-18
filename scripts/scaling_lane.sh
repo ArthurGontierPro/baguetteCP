@@ -38,8 +38,8 @@
 # on them would be a flaky gate.
 #
 # THE THRESHOLD. bench/scaling/baseline.tsv holds each line's ratio as recorded; the lane
-# enforces the per-node ratio <= baseline x (1 + margin), margin 1 % by default (four times the run-to-run
-# jitter of the ratio, measured at <= 0.25 % on fataepyc-06 at load 50). It is a RATCHET: a
+# enforces the per-node ratio <= baseline x (1 + margin), margin 0.5 % by default (seven times the run-to-run
+# jitter of the per-node ratio, measured at <= 0.07 % on fataepyc-06 at load 40). It is a RATCHET: a
 # batch that lowers a ratio re-records it (--update, in its own commit, after the gated
 # merge), and nothing re-records it upward.
 #
@@ -50,7 +50,7 @@
 #   scripts/scaling_lane.sh [--enforce] [--update] [-j N] [--bin PATH] [--keep DIR]
 #
 # Environment: SCALING_PAR (default 8), SCALING_TIMEOUT (default 900 s per run),
-# SCALING_MARGIN (default 0.01), BAGUETTE_MEM_CAP_KB (ulimit -v per run, default 4000000).
+# SCALING_MARGIN (default 0.005), BAGUETTE_MEM_CAP_KB (ulimit -v per run, default 4000000).
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 S="$ROOT/bench/scaling"
@@ -58,7 +58,7 @@ CORPUS="$ROOT/bench/diff/corpus"
 BIN="${BIN:-$ROOT/_build/default/bin/main.exe}"
 PAR="${SCALING_PAR:-8}"
 TMO="${SCALING_TIMEOUT:-900}"
-MARGIN="${SCALING_MARGIN:-0.01}"
+MARGIN="${SCALING_MARGIN:-0.005}"
 CAP_KB="${BAGUETTE_MEM_CAP_KB:-4000000}"
 ENFORCE="${SCALING_ENFORCE:-0}"
 UPDATE=0

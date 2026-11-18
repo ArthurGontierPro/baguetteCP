@@ -14120,3 +14120,163 @@ RSS 481 MB.
   today, so it is not reachable from the CLI).
 - If `define_reif` (the `.pbp` door) were wired into `Compile`, G would still be right, because it
   keeps `Occurs` exact; that is why it does not take the cheaper route of skipping `Occurs`.
+
+## D-0144  M11-complexity-T4 part 1: learning and PB analysis without their quadratic lists, the trail walk of `falsified_before` replaced by the bound history; 1 to 3.5 % of the instructions at 10 000 nodes, every byte the same
+
+**Status**: **DONE** (part 1 of M11-complexity-T4), recorded 2026-11-18 (agent-batch4a,
+`wave49-batch4a`). The contract is D-0140 §5's rows L1, S5 (its `learn.ml` half), P1, P2 (but
+`linear.ml`'s `pb_row`, which is M11-T3's) and J6 (its `learn.ml` part), and §7's T4 paragraph.
+Files changed: `lib/core/learn.ml`, `lib/core/pb_analysis.ml`, `lib/core/reduce.ml`,
+`lib/core/ladder.ml`, `test/unit/test_learn.ml`, `test/unit/test_core.ml`. No store function was
+added, and nothing in `search.ml`, `analysis.ml`, `retention.ml`, `learned.ml`, `store.ml` or
+`writer.ml`. Measured on `fataepyc-06` against `main`'s binary `5e6f653e` (`da9df69`, the binary
+gate 50 recorded), outputs under `/scratch/arthur/wave49-batch4a-runs/`.
+
+### 1. The fixes, and why each one keeps the bytes
+
+Every fix replaces a data structure and keeps the function it computes. Where the argument is not
+a line long, the old code stays in the module as the specification, under a `_reference` or
+`_scan` name, and a unit test or a `BAGUETTE_DEBUG` check compares the two.
+
+**L1, `Learn.supports`.** The I-S4 support list was deduplicated by a `List.exists` over the list
+so far and grown by `acc @ [s]`, quadratic in the supports of every learned clause (the check is
+always on). Now a table of the ids taken (`Hashtbl.Make (Int)`) and a reversed list turned round
+once. The same first-seen entries in the same order; the table is never iterated.
+
+**S5, `Learn.minimise_with`** (the `search.ml` half, `dfs`'s `kept`, is part 2). The branch
+nogood is as long as the decision stack (147 on mspsp, 226 on openshop) and was minimised by a
+fold that appended with `@` and found a literal's slot by a `List.map` over the whole accumulator
+with a POLYMORPHIC `slot m = Some s`. Now one cell per slot behind a table keyed by
+`(variable name, direction)` with `String.equal`/`Bool.equal`, the cells kept in first-appearance
+order. Same output element for element: a slot's cell is created where the fold appended the slot's
+first literal, and a later literal of the slot replaces the cell exactly when the fold replaced
+it (`keep` does not return the old one). `minimise_with_reference` is the old fold, and
+`test_learn.ml` compares the two on 2 000 random clauses under both policies, payloads included.
+
+**J6, `Learn.introduce`'s origin.** The origin string renders every literal of the learned clause.
+The null writer of a `--no-proof` run drops `~origin` unread (`Writer.fresh`, M9-no-proof-T2), so
+for it the string is no longer built (`Writer.is_null`). With a writer that writes, it is built as
+before, because the audit keeps it per live id and the mutation knob matches it; making it lazy
+there is the writer's change and is a cross-session request to M11-T5. The origin is never written
+to the `.pbp`, so neither arm can change a byte.
+
+**P1, `Pb_analysis.falsified_before`.** Asked four to five times per term per elimination by
+`Reduce` and `Ladder`, it reconstructed the variable's bounds before trail position `at` by two
+linear trail walks (`bounds_before`). It now answers from the bound history D-0088 and D-0124
+already keep, through the existing `Store.var_support`, in O(log moves): `[x >= k]` is false
+before `at` iff `hi x <= k - 1` holds now and the one live entry that established it sits strictly
+below `at`, or no entry established it (the created domain already had it). A bound only tightens
+along the trail (I-D3), so a bound that does not hold now held at no earlier position. The scan
+stays as `falsified_before_scan`, checked against under `BAGUETTE_DEBUG` at every call, and
+`test_core.ml`'s bound-history test compares the two at every position on every literal of a
+hand-built trail (holes, a fix, a duplicated name, undo and re-push).
+
+**P2, the rest of the PB step.**
+- `analyse`'s `step` carried `antecedents`, `antecedent_rows` and `pivots` grown by `@`, with a
+  `List.mem` per cited id: now reversed accumulators turned round once when the loop stops, and
+  the ids taken in an int table. Same lists.
+- `asserting_level` scanned every level from 0 with a full slack sum per level (levels x terms, the
+  levels being the search depth): now one pass over the terms into per-level sums and a suffix
+  maximum. The `Checked` operations are the old ones value for value, so an overflow raises where
+  it raised with the same message (which reaches `--stats` through `Fallback (Overflow m)`): the
+  level-0 sum is accumulated in list order with `Checked.add` exactly as before, every later sum
+  is that one minus coefficients that are >= 1, and each level's `Checked.sub` of the degree is on
+  the same two integers. `asserting_level_reference` is the old scan; `test_learn.ml` compares
+  the two on 3 000 random rows, with levels below 0, at 0 and past the conflict level, and with
+  coefficients near 2^61 so that both the overflow arm and the ordinary one are reached.
+- `fat_memo` and `cited_ids` keyed through `Lit.equal` and `Int.equal` (`Hashtbl.Make`) instead of
+  the polymorphic compare of a plain `Hashtbl` or `List.mem`; `cited_ids` also lost its `@`.
+- `Ladder.lift` accumulated the multipliers per rung in an association list (`assoc` and
+  `remove_assoc` per rung per term): now an int table, folded into a list that is then sorted by
+  the rung value, which is unique, so the table's order reaches nothing.
+- `Reduce.round_to_one`'s postcondition looked each kept term up in the reduced row by a scan
+  (row^2 per elimination): the reduced row is now read once into a table that keeps the first
+  term per literal, as `coeff_of`'s `find_map` did.
+
+Not done, and why: `Ladder.lift` still folds `Learned.combine` once per rung, each one re-sorting
+the whole row. One combination of all the rungs gives the same normal form, but not the same
+sequence of `Checked` additions, so the overflow point and its message could move; it needs its
+own argument, and `learned.ml` is M10-T4's file. Requested in WORKLOG.md.
+
+### 2. Byte identity
+
+- **The differential lane** (D-0141, `origin/wave47-lanes` merged into the branch), `make diff
+  ARGS="--tier all -j 24"` on `cc0639a5`: **232 of 232 runs equal the reference**, 54 of 54 in the
+  Boolean class and 178 of 178 in the integer class: rc, stdout, the `--stats` counters, `.opb`
+  and `.pbp` sha256, over every configuration D-0140 §7 asks T4 for (`keep_all`, `fifo-po`,
+  `lbd-po`, `nopb` for PB analysis off, `audit0`, `bits0`, `noproof`), with PB analysis learning
+  rows on cyclic, mspsp and rcpsp_11 and the deep searches of mspsp and openshop.
+- **The debug pass**, `--tier all --debug -j 16`, where `falsified_before`'s cross-check runs at
+  every call: **223 of 223 runs equal the reference** (54 Boolean, 169 integer;
+  lot-sizing's nine excluded by name as on `main`, `bench/diff/debug-skip.tsv`), rc 0, no
+  invariant fired.
+- **The measurement runs below**: stdout, the `--stats` output minus clocks, and the `.pbp` and
+  `.opb` md5 identical between `main` and the branch on all eight (instance, mode) pairs,
+  including cyclic's 2.0 GB proof (`17257ea6`).
+- **The unit suites**, `dune runtest --root . --force` under `ulimit -v 4000000`: 0 FAIL, the new
+  reference tests included.
+- **The gate**, `make check` on a fresh clone at `6c2646f` on `fataepyc-06`: rc 0, 0 FAIL,
+  179 models passed, peak RSS 89 MB (`make_check_wall 25.01 s peak_rss 89268 kB`, gate 50 said
+  23.30 s and 89 864 kB), and every model's stdout, exit code, `.opb` and `.pbp` byte-identical to
+  gate 50's (`/scratch/arthur/gate50.art/new/`, binary `5e6f653e`): 179 models, 0 differences.
+
+### 3. Measurement
+
+`perf stat -e instructions:u`, `BAGUETTE_NODE_LIMIT=10000`, `--stats`, one process each, the four
+instances D-0140 §1 names for T4 (`.fzn` md5 as there: cyclic `b6939345`, mspsp `ab82542d`,
+rcpsp_11 `3b810f0e`, QR48 `3ed67581`). `main` is `5e6f653e`, the branch `cc0639a5`. Two more
+builds split the gain: `learn` is `main` with only the branch's `learn.ml` (`cea992b0`: L1, S5,
+J6), `noP1` is the branch with `falsified_before` routed back to the scan (`5eaa9611`: everything
+but P1). So L1+S5+J6 = `learn` - `main`, P1 = branch - `noP1`, and P2 = `noP1` - `learn`.
+
+Instructions (G) at 10 000 nodes, and each split as a share of `main`'s count:
+
+| instance | mode | `main` | branch | total | L1+S5+J6 | P1 | P2 |
+|---|---|---|---|---|---|---|---|
+| cyclic-rcpsp_easy_6 | no-proof | 65.074 | 64.429 | **-0.99 %** | -0.73 % | -0.26 % | -0.01 % |
+| | proof | 1 205.443 | 1 204.819 | -0.05 % | -0.06 % | -0.00 % | +0.01 % |
+| mspsp_hard_01 | no-proof | 106.131 | 102.437 | **-3.48 %** | -2.70 % | -0.77 % | -0.01 % |
+| | proof | 187.726 | 184.069 | **-1.95 %** | -1.50 % | -0.45 % | -0.00 % |
+| rcpsp_11 | no-proof | 90.952 | 90.009 | **-1.04 %** | -0.83 % | -0.11 % | -0.10 % |
+| | proof | 296.647 | 295.644 | -0.34 % | -0.24 % | -0.05 % | -0.05 % |
+| QR48 (clause path) | no-proof | 25.871 | 25.206 | **-2.57 %** | -2.56 % | +0.03 % | -0.03 % |
+| | proof | 42.167 | 41.501 | **-1.58 %** | -1.63 % | +0.03 % | +0.08 % |
+
+Every (instance, mode) pair has the same stdout, `--stats` minus clocks and proof md5 in all four
+builds. Reading it:
+
+- **The learning half is most of it**, and it is S5 and L1 more than J6: mspsp's nogoods are as
+  deep as its search (147) and lose 2.7 %, QR48's 2.6 % (no PB analysis at all, `pb-learned=0`).
+  J6 acts only without the proof; its own share was not isolated by a build, and the column is
+  larger without the proof than with it on every instance, which it is also for the dilution
+  described in the last bullet.
+- **P1 is worth 0.8 % on mspsp** (65 PB rows learned in 10 000 nodes) and 0.26 % on cyclic, and
+  nothing on QR48, which never runs PB analysis: what a trail walk per literal query cost, and what
+  D-0140 measured as 0.3 % inclusive on cyclic.
+- **P2 is below what this measures**, as D-0140 §5 said ("nv, under 1 %"): within 0.1 % either way,
+  QR48's and cyclic proof's small positive entries included, which are differences of two builds
+  that are both noise-level away from each other (QR48 never reaches the code P2 changed). It is
+  kept because it removes quadratic and polymorphic work that grows with the depth and the row
+  width, and the lane shows it costs no byte.
+- In proof mode the shares are smaller because the proof writing (M11-T5's) is most of the count:
+  cyclic writes 2.0 GB of proof in 10 000 nodes.
+
+### 4. What is left for T4 part 2
+
+These wait for the branches in flight (`wave45-strategy` holds `search.ml` and `analysis.ml`,
+`wave45-retention` holds `retention.ml` and `learned.ml`), as the ROADMAP says:
+
+- `retention.ml`: R1 (`reduce` copies `live_rev` per learned constraint, under `keep_all` too), R2
+  (`holds` by `List.exists`), R3 (`fifo`/`lbd` sort the database per reduce), R4 (the key is
+  `Learned.to_string`). D-0140 ranks R1 + R2 fourth of all items.
+- `search.ml`: S1 (`count_learned_activity`'s polymorphic `List.mem`, mspsp -7.7 % in D-0140's
+  scratch patch), S2 (`register_learned*` render every literal into the `Retention.cite`
+  message), S3 (`decision_entries` over the whole trail), S4 (`unfixed`/`first_fail`), S5's other
+  half (`dfs`'s `kept`, polymorphic `List.mem` per nogood literal), S6 (`apply_globals`), and J6's
+  `bridges` origin.
+- `analysis.ml`: A1 (the 1UIP loop's lists and name-keyed facts), A3 (`check_attribution`'s
+  `List.exists Var.equal`); A2 stays, it is the backjump's definition.
+- `learned.ml`: L2 (`ladder_form`/`to_linear_row` per learned clause for `--stats` only), and
+  `Learned.combine` once per rung in `Ladder.lift` (§1, with its overflow argument).
+- Two cross-session requests filed in WORKLOG.md: a lazy `~origin` in `writer.ml` (M11-T5), then
+  in `Learned.introduce`'s signature; the combination of all the rungs at once in `learned.ml`.

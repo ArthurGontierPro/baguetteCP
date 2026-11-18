@@ -410,6 +410,96 @@ let test_minimise_pure () =
      weakest-reduced clause does not"
     (clause_holds [ ("x", 2) ] [ nx 1; nx 3 ] && not (clause_holds [ ("x", 2) ] weakest))
 
+(* M11-complexity-T4 (D-0144): [minimise_with] became one cell per slot behind a table;
+   [minimise_with_reference] is the quadratic fold it replaced. The two must agree element
+   for element, payloads included, under both policies -- on lists that repeat a slot many
+   times, interleave slots, mix both directions of one variable and carry [Eq] literals,
+   which are never merged. A fixed seed, so the inputs are the same on every run. *)
+let test_minimise_matches_reference () =
+  let rng = Random.State.make [| 20261118 |] in
+  let lit () =
+    let x = [| "x"; "y"; "z" |].(Random.State.int rng 3) in
+    let k = Random.State.int rng 6 in
+    match Random.State.int rng 5 with
+    | 0 -> Lit.eq x k
+    | 1 | 2 -> Lit.ge x k
+    | _ -> Lit.negate (Lit.ge x k)
+  in
+  let bad = ref 0 in
+  for _ = 1 to 2000 do
+    let n = Random.State.int rng 12 in
+    let xs = List.init n (fun i -> (lit (), i)) in
+    List.iter
+      (fun policy ->
+        if Learn.minimise_with policy xs <> Learn.minimise_with_reference policy xs then
+          incr bad)
+      [ Learn.Strongest; Learn.Weakest ]
+  done;
+  check_eq "S5: minimise_with agrees with the reference fold on 2000 random clauses" !bad
+    0;
+  check "S5: an empty clause and a singleton are returned as they are"
+    (Learn.minimise_with Learn.Strongest [] = []
+    && Learn.minimise_with Learn.Strongest [ (nx 2, 7) ] = [ (nx 2, 7) ])
+
+(* M11-complexity-T4 (D-0144): [Pb_analysis.asserting_level] became one pass over the
+   terms with suffix sums; [asserting_level_reference] is the scan per level it replaced.
+   They must agree on the level and, when a sum overflows, raise the same [Overflow] with
+   the same message, because that message reaches [Fallback (Overflow m)]. Random rows,
+   levels that include 0, negatives and levels at or past the conflict level, degrees of
+   both signs, and now and then coefficients near 2^61 so that the overflow arm is hit. *)
+let test_asserting_level_matches_reference () =
+  let rng = Random.State.make [| 144 |] in
+  let names = [| "a"; "b"; "c"; "d" |] in
+  let bad = ref 0 and overflows = ref 0 and cases = ref 0 in
+  for _ = 1 to 3000 do
+    let big = Random.State.int rng 10 = 0 in
+    let n = Random.State.int rng 7 in
+    let raw =
+      List.init n (fun _ ->
+          let c =
+            if big then (1 lsl 61) + Random.State.int rng 1000
+            else 1 + Random.State.int rng 9
+          in
+          let l = Lit.ge names.(Random.State.int rng 4) (Random.State.int rng 4) in
+          (c, if Random.State.bool rng then l else Lit.negate l))
+    in
+    let degree = Random.State.int rng 30 - 5 in
+    match Learned.make raw degree with
+    | exception Checked.Overflow _ -> ()
+    | row
+      when List.exists
+             (fun (tm : Learned.term) -> tm.Learned.coeff < 1)
+             (Learned.terms row) ->
+        (* [make] sums a repeated literal unchecked, and two 2^61 wrap: not a row the
+           analysis can hold (its coefficients are >= 1), so not a case. *)
+        ()
+    | row ->
+        let cl = Random.State.int rng 6 in
+        let levels = Hashtbl.create 8 in
+        let level_of (l : Lit.t) =
+          match Hashtbl.find_opt levels l with
+          | Some x -> x
+          | None ->
+              let x = Random.State.int rng (cl + 3) - 1 in
+              Hashtbl.add levels l x;
+              x
+        in
+        List.iter
+          (fun (tm : Learned.term) -> ignore (level_of tm.Learned.lit))
+          (Learned.terms row);
+        let v =
+          { Pb.c_row = row; c_conflict_level = cl; c_steps = 1; c_level_of = level_of }
+        in
+        let run f = try Ok (f v) with Checked.Overflow m -> Error m in
+        let a = run Pb.asserting_level and b = run Pb.asserting_level_reference in
+        incr cases;
+        (match b with Error _ -> incr overflows | Ok _ -> ());
+        if a <> b then incr bad
+  done;
+  check_eq "P2: asserting_level agrees with the per-level scan, overflow included" !bad 0;
+  check "P2: the random rows reach the overflow arm and the ordinary one"
+    (!overflows > 0 && !overflows < !cases)
+
 (* And the same break where it matters: through the solver, with the real checker over
    the proof. A break that only reddens a unit test of a pure function has not shown that
    the reduction is load-bearing in the PROOF.
@@ -1822,6 +1912,8 @@ let test_m7t25_break_hole_facts () =
 
 let () =
   test_minimise_pure ();
+  test_minimise_matches_reference ();
+  test_asserting_level_matches_reference ();
   test_minimise_break_in_a_proof ();
   test_i_s4_ordering ();
   test_i_s4_crossings_are_real ();

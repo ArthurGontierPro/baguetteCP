@@ -1,0 +1,89 @@
+rc 0
+out =====UNKNOWN=====
+search ladder/cls 6543 cls
+search opb/lines 12060 lines
+search direct/vals 0 vals
+search widest/wide 1000 wide
+search bits/vars 0 vars
+search bitsrows/lines 0 lines
+search choices/groups 0 groups
+search limit.nodes 1501
+search limit.decisions 1428
+search limit.conflicts 72
+search limit.learned 72
+search limit.pb-learned 0
+search limit.db 72
+search limit.maxdepth 88
+search limit.incumbent none
+work limit.props 175759
+work limit.eff 42703
+work limit.contra 72
+search limit.at node
+search nodes/nodes 1501 nodes
+search decisions/decs 1428 decs
+search conflicts/nodes 72 nodes
+search maxdepth/levels 88 levels
+work exhausted/bool 0 bool 1 if
+search skipped/nodes 1344 nodes
+search learned/cls 72 cls
+work later/asks 171156 asks
+work cites/memos 753 memos
+search convertible/cls 72 cls
+search retention lbd(cap=500) lbd(cap=500): 72 added, 0 evicted, 72 swept, 0 live, 8 duplicate, 0 cited, 0 pinned
+search lbd 4:72
+search width 7:72
+search globals/units 0 units
+search glob-prune/prunes 0 prunes
+search glob-confl/confl 0 confl
+search cls-inst/inst 0 inst
+search cls-decl/cls 0 cls
+search cls-prune/prunes 0 prunes
+search pb-inst/inst 0 inst
+search pb-inst-no/rows 0 rows
+search pb-prune/prunes 0 prunes
+search pb-confl/confl 0 confl
+search minimised/lits 0 lits
+search i-s4-cross/lines 432 lines
+search pb-tried/confl 72 confl
+search pb-learned/rows 0 rows
+search pb-fallback/confl 72 confl
+search pb-why first fallback reason: no PB row for instance bool_clause
+work pb-whys/recd 64 recd 64 x
+search pb-steps/pivots 0 pivots
+search pb-convert/rows 0 rows
+search pb-stronger/rows 0 rows
+search pb-nondeg/rows 0 rows
+search pb-lifted/rows 0 rows
+search pb-rungs/rungs 0 rungs
+search lvl-cmp/confl 0 confl
+search lvl-same/confl 0 confl
+search lvl-narrow/confl 0 confl
+search lvl-wide/confl 0 confl
+search lvl-incomp/confl 0 confl
+search lvl-empty/confl 0 confl
+search lvl-assert/confl 0 confl
+work int_lin_le_reif/inst 2368 inst 95.8 runs/node 27.75 eff/node
+work bool_clause/inst 592 inst 17.3 runs/node 0.25 eff/node
+work int_lin_le/inst 88 inst 3.8 runs/node 0.42 eff/node
+work array_int_maximum/inst 1 inst 0.2 runs/node 0.02 eff/node
+work props/runs 175759 runs
+work eff/runs 42703 runs
+work contra/runs 72 runs
+work passes/snaps 0 snaps
+work deductions/chgs 0 chgs
+work wakes/wakes 122241 wakes
+work masked/wakes 0 wakes
+work vetoed/wakes 656 wakes
+work advised/wakes 0 wakes
+work seeded/runs 91329 runs
+work skipped/slots 4482171 slots
+search rup/lines 42930 lines
+search pol/lines 0 lines
+search pol-tokens/tokens 0 tokens
+search atoms/atoms 0 atoms
+search atomlinks/lines 0 lines
+search bridges/pairs 0 pairs
+search boundlines/pairs 0 pairs
+search bitsprune/lines 0 lines
+opb 54be864a4556fd15b205431320b66a904b7f19b7b692ca818721606295750d48
+pbp 7eadbef33ef321422ab016970f99e59b6ceaed8ae84182753f1a8c419a2464f2
