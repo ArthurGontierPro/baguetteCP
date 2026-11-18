@@ -12424,3 +12424,90 @@ and saturated once more) and the clause as the parts' negated literals in part o
    the CLI does (`?order:c.Compile.order`). Without it `bits_ne_sat` found its solution with
    no conflict, the trace (written lazily, at conflicts) never reached the page, and every
    knob reported that it found no site, which the harness turns into a failure.
+
+### 6. Measurements (fataepyc-06, VeriPB 3.0.2 d5644ca4; outputs under `/scratch/arthur/wave44-t3-out/`)
+
+**The suite** (`suite3-{none,0,8}/`, binary `250ce5ae` at `c7a0636`, `run156.sh` of D-0132 over
+the 173 models, the 165 of wave 43 plus the six `bits_maxmin_*` and the two `bits_ne_*`):
+
+| W | verified | models with a bits variable | `.opb` B | `.pbp` B | atoms | links | bits-arm `pol` | choice groups |
+|---|---|---|---|---|---|---|---|---|
+| none | 173 / 173 | 0 | 371 009 | 527 233 | 0 | 0 | 0 | 0 models |
+| 0 | 173 / 173 | 89 | 181 930 | 878 622 | 800 | 1 022 | 1 170 | 10 models |
+| 8 | 173 / 173 | 27 | 186 326 | 773 168 | 524 | 829 | 711 | 6 models |
+
+At `W = none` the 165 pre-existing models are **byte-identical in stdout, exit code, `.opb`
+and `.pbp`** to `gate44.art/new` (`main`, binary `274a8028`), with 463 646 `.pbp` bytes on
+both sides; the eight new models have no reference. Against D-0132 §6 at `W = 0` (62 models
+with a bits variable, 408 atoms, 512 bits-arm lines) the releases put 27 more models on bits
+and the bits-arm lines more than double, all verified. Atoms per bits-arm line went from
+0.80 to 0.68. Held back on the suite at `W = 0`, summed over models: gcc 107,
+alldiff 47, element 43, int_eq_reif 13, cumulative 12, holes 3, bool2int 3 (maxmin and
+int_ne are gone from the line). D-0031's models in the suite (`chain_sat`,
+`guess_wrong_sat`, `lin_sat`, `ne_conflict_sat`, `near_limit_ne_sat`, `near_limit_unsat`,
+`offset_unsat`, `width_root_unsat`) each have two or three variables on bits at `W = 0` and
+all verify, so the nearest-neighbour links of D-0130 §14 question 2 sufficed wherever a
+trace line walked them.
+
+**The 177 encoding-wall runs at `W = 0`** (D-0132 §6 (b)'s protocol and script, `run169.sh`:
+`/scratch/arthur/wave42-elig/files.tsv`, 8-way, `timeout 300`, `ulimit -v 16 GiB -f 16 GB`;
+a `.opb` is complete when its header is on disk):
+
+| prior status (D-0129) | instances | complete, T2 (D-0132 §6 b) | complete, step 1 (`6e53a433`) | complete, step 2 (`250ce5ae`) |
+|---|---|---|---|---|
+| CAPPED | 143 | 43 | 78 | 78 |
+| TIMEOUT | 19 | 16 | 16 | 16 |
+| ERROR | 7 | 6 | 6 | 6 |
+| OPT8 | 8 | 8 | 8 | 8 |
+| **all** | **177** | **73** | **108** | **108** |
+
+Step 1 (`w0-169/`) completes **35 more `.opb` and loses none** of T2's 73: all 15 tower, all
+10 road-cons, all 6 largescheduling and four test-scheduling. The 35 weigh 11.8 MB to 4.07 GB
+(median 77.8 MB), and 25 of them printed an answer or an incumbent within the 300 s. Of the
+108, 82 printed one, and 24 hold no variable back at all. Step 2 (`w0-177ne/`, `int_ne`
+released, the gate's binary) completes the same 108. It moves no instance across the line,
+and `int_ne` (89 variables over 4 instances under step 1) leaves the held-back line. Still
+unfinished at 300 s: 69, none of which printed a `--stats` line (each was killed before
+compile ended; the 70th run without one is `road_20` below). By family: carpet-cutting 18 (`int_times`'s split),
+mapping 9 (7 of 16 complete, as under T2), flowshop-workers 5, arithmetic-target 5,
+yumi-dynamic 4, zephyrus 3, ATSP 6 (all six at the 16 GB file cap, rc 153), and singletons.
+**The maxmin-held families of D-0130's addendum are therefore not all maxmin's.** Tower,
+road-cons and largescheduling were, and complete. Mapping and ATSP are held by something
+else that compile does not reach in 300 s, and their `--stats` line does not exist to say
+what. Among the completed, what still holds variables back is `int_eq_reif` (18 527
+variables in 74 instances), gcc (3 993 in 9), element (5 253 in 29), holes (1 796 in 23),
+cumulative (519 in 8) and alldiff (404 in 4). `2014_road-cons_road_20` completes its 369 MB
+`.opb` and then dies at 294 s on the 16 GiB address-space cap during search ("allocation
+failure during minor GC", rc 134), a memory finding and not a proof one.
+
+**The gate** (`gate.status`, a fresh clone of `20c324f` at `/scratch/arthur/wave44-t3-gate`,
+`make check` under `ulimit -v 4000000`): **rc 0**, 20 s wall with the shared dune cache warm,
+peak RSS 85 MB (`/usr/bin/time -v`): format, build, the width lint, determinism (173 models,
+`.opb`/`.pbp`/stdout identical across two runs), every unit suite, 173 model tests passed. A
+first attempt failed on the width lint (a test scene declared `~lo:m_lo`), fixed by literal
+widths. The commits after `20c324f` are documentation only.
+
+### 7. Where T3 stops, and what its continuation or T4 inherits
+
+- **Step 2's rest.** `int_eq_reif`/`int_ne_reif` stay held. Their four guarded rows
+  (reif_lin_eq.ml's header) are `Ne`'s A/B pair plus LE/GE, each with the reifier as one
+  more term, so the enforce-not-hold face is `Ne`'s `Resolve` with the reifier's
+  `Linear_term` in both parts and the enforce-hold face is `Linear`'s `Combine` on LE/GE.
+  The entailment face and the holes it punches need a probe before code, as §1 did here.
+  `bool2int` stays held. Its `x` is width 1 in the population, so the hold costs little
+  (it does not appear among the 177's held families above). `int_eq_reif` is now the
+  largest hold on the population by far (§6).
+- **Step 3** (PB conflict analysis over mixed rows) was not started. `Linear` instances
+  over mixed rows still offer no PB row (D-0132 §2.7), and `Maxmin` and `Ne` never offered
+  one, so a conflict that involves them takes the clause path, counted in `--stats`'s
+  fallback line. Deviation §5.3 shows that learned constraints over bits atoms do occur.
+- **Step 4** was not done as a separate step. What exists: every literal a learned clause
+  or a nogood writes passes `Justify.validate_lits`, which mints a bits atom before the
+  line that names it (D-0132 §2.6), and the suite's audit (I-X2) ran green at `W = 0`
+  and `W = 8`, including the two `element_learn_hole` models of §5.3. `soli` over a bits objective with ties verifies
+  (`bits_maxmin_opt_sat`, 21 improving solutions, each listing the selectors).
+- **Step 5** (`int_times`/`int_div` over bits) was not started. D-0132 §7's note stands:
+  carpet-cutting's wall is the case split's row COUNT, which bits do not shrink.
+- **`Resolve` is general.** Its parts are any `Combine`s of `Linear`'s shape and model rows;
+  maxmin's selector rows and `Ne`'s pair are its two producers, and the guarded rows of the
+  reified families are the next. The `[resolve]` origin tag lets a mutation lane aim at it.
