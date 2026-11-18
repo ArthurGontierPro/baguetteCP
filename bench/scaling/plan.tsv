@@ -1,11 +1,13 @@
 # M11-complexity-T2 (D-0141). The scaling lane's PLAN: one line per (instance, mode),
-# TAB-separated. The instance is one of bench/diff/corpus/. Budgets N0 < N1 <= N2 < N3:
+# TAB-separated. The instance is a file of bench/diff/corpus/. Budgets N0 < N1 <= N2 < N3:
 # the early segment is (N0, N1] (small learned database), the late one (N2, N3] (large).
 # N3 must stay below the node at which the search closes (QR48 closes at 23 367, which is
-# why the clause-path line is QR72). Changing a line is a change to its baseline: re-record.
+# why the clause-path lines are QR72). D-0140 section 2 measured the same segments
+# (1k..10k, 10k..40k). Changing a line is a change to its baseline: re-record it.
 #
 # id	mode	N0	N1	N2	N3	why
-H_qr72_bag_def	noproof	1000	2000	16000	32000	clause path, cheap conflicts: the most sensitive line (database ~500 -> ~16 000)
-H_qr72_bag_def	proof	1000	2000	16000	32000	the same search with the proof written: trace, justification, writer
-2012_parity-learning_48_24_6.2	noproof	500	1000	8000	16000	PB path: learned PB rows propagating, runs per node x4 over the run
-2012_parity-learning_48_24_6.2	proof	500	1000	8000	16000	PB path with pol lines written
+H_qr72_bag_def	noproof	1000	10000	10000	40000	Boolean learned clauses: D-0140 x1.8 per node, database ~20 000 at 40k
+H_qr72_bag_def	proof	1000	10000	10000	40000	the same search with the proof written: trace, justification, writer (T5)
+2013_rcpsp_11	noproof	1000	10000	10000	20000	integer learned clauses, cumulative: D-0140's steepest growth (x9.5 to 40k); 20k keeps the run near two minutes
+2012_parity-learning_48_24_6.2	noproof	1000	4000	8000	16000	learned PB rows propagating (x4 runs per node over the run)
+2012_parity-learning_48_24_6.2	proof	1000	4000	8000	16000	PB path with pol lines written

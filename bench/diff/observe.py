@@ -134,24 +134,39 @@ def parse(text):
 
 
 def compare(ref_text, now_text, label):
-    """Return (ok, message). The message names the FIRST differing item."""
+    """Return (ok, message). The message names the FIRST differing item, in the order
+    exit code, stdout, SEARCH counters, .opb/.pbp hashes, WORK counters -- so a WORK
+    counter is named first only when everything else is equal, which is the signature of
+    a change that kept the search and the proof and moved how much propagation it took --
+    and then counts what else differs."""
     r_rc, r_out, r_st, r_ord, r_h = parse(ref_text)
     n_rc, n_out, n_st, n_ord, n_h = parse(now_text)
+    diffs = []  # (kind, text) in priority order
     if r_rc != n_rc:
-        return False, "DIFF %s: exit code: reference %s, now %s" % (label, r_rc, n_rc)
+        diffs.append(("rc", "exit code: reference %s, now %s" % (r_rc, n_rc)))
     for i in range(max(len(r_out), len(n_out))):
         a = r_out[i] if i < len(r_out) else "<no line>"
         b = n_out[i] if i < len(n_out) else "<no line>"
         if a != b:
-            return False, "DIFF %s: stdout line %d: reference %r, now %r" % (label, i + 1, a, b)
-    for k in r_ord:
-        if k in n_st and r_st[k][1] != n_st[k][1]:
-            return False, "DIFF %s: %s counter `%s`: reference %s, now %s" % (
-                label, r_st[k][0].upper(), k, r_st[k][1], n_st[k][1])
-    for h in ("opb", "pbp"):
-        if r_h.get(h) != n_h.get(h):
-            return False, "DIFF %s: .%s sha256: reference %s, now %s" % (
-                label, h, r_h.get(h, "<none>"), n_h.get(h, "<none>"))
+            diffs.append(("stdout", "stdout line %d: reference %r, now %r" % (i + 1, a, b)))
+    for cls in ("search", "hash", "work"):
+        if cls == "hash":
+            for h in ("opb", "pbp"):
+                if r_h.get(h) != n_h.get(h):
+                    diffs.append(("hash", ".%s sha256: reference %s, now %s" % (
+                        h, r_h.get(h, "<none>"), n_h.get(h, "<none>"))))
+            continue
+        for k in r_ord:
+            if r_st[k][0] == cls and k in n_st and r_st[k][1] != n_st[k][1]:
+                diffs.append((cls, "%s counter `%s`: reference %s, now %s" % (
+                    cls.upper(), k, r_st[k][1], n_st[k][1])))
+    if diffs:
+        count = {}
+        for kind, _ in diffs:
+            count[kind] = count.get(kind, 0) + 1
+        what = ", ".join("%s %d" % (k, count[k])
+                         for k in ("rc", "stdout", "search", "hash", "work") if k in count)
+        return False, "DIFF %s: %s   [differing items: %s]" % (label, diffs[0][1], what)
     notes = [k for k in r_ord if k not in n_st] + [k for k in n_ord if k not in r_st]
     msg = "ok   %s" % label
     if notes:
@@ -211,6 +226,10 @@ def self_test():
         ("work", obs("=====UNKNOWN=====\n", SELF_ERR.replace("517082", "517081")), False, "WORK counter `props/runs`"),
         ("hist", obs("=====UNKNOWN=====\n", SELF_ERR.replace("16:877", "16:876")), False, "SEARCH counter `lbd`"),
         ("pbp", obs("=====UNKNOWN=====\n", SELF_ERR, proof=b"y"), False, ".pbp sha256"),
+        ("pbp before work", obs("=====UNKNOWN=====\n", SELF_ERR.replace("props=517", "props=518"), proof=b"y"),
+         False, ".pbp sha256: reference"),
+        ("work only, counted", obs("=====UNKNOWN=====\n", SELF_ERR.replace("props=517", "props=518").replace("517082", "1")),
+         False, "[differing items: work 2]"),
     ]
     for name, now, want_ok, want_msg in cases:
         ok, msg = compare(ref, now, "self-test [%s]" % name)

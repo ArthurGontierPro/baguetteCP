@@ -2,30 +2,46 @@
 # M11-complexity-T2 (D-0141). THE DIFFERENTIAL LANE.
 #
 # Real instances, each at a FIXED NODE BUDGET (BAGUETTE_NODE_LIMIT, M6-T9: deterministic,
-# never a time limit), in every configuration of bench/diff/configs.tsv. What each run
-# shows -- exit code, stdout, the --stats/limit counters minus clocks and prose, and the
-# sha256 of the .opb and .pbp -- must equal the reference recorded in
-# bench/diff/reference/<config>/<instance>.obs. One differing item fails the lane, and
-# the failure names the instance, the configuration and the first item that differs.
+# never a time limit), in the configurations of bench/diff/configs.tsv that its line in
+# bench/diff/corpus.tsv names. What each run shows -- exit code, stdout, the --stats/limit
+# counters minus clocks and prose, and the sha256 of the .opb and .pbp -- must equal the
+# reference recorded in bench/diff/reference/<config>/<name>.obs. One differing item fails
+# the lane, and the failure names the instance, the configuration and the first item that
+# differs, and says whether it is a SEARCH or a WORK counter (bench/diff/observe.py).
 #
-# WHY IT EXISTS. The 173 models of test/models/ are tiny: they never build a learned
-# database of thousands of constraints or a long trail, so they cannot see a change that
-# alters the search only once the database is large, and they barely reach the
-# non-default paths (retention policies, PB analysis on/off, the bits arm). The M11
-# pass replaces every operation whose cost grows with the run, and each replacement
-# must keep the search and the proof byte for byte. This lane is how a batch shows it.
+# WHY IT EXISTS. The test models are tiny: they never build a learned database of
+# thousands of constraints or a long trail, so they cannot see a change that alters the
+# search only once the database is large, and they barely reach the non-default paths.
+# The M11 pass replaces every operation whose cost grows with the run (D-0140), and each
+# replacement must keep the search and the proof byte for byte. This lane is how a batch
+# shows it. D-0140 section 7 lists what it must contain, batch by batch.
 #
-#   scripts/diff_lane.sh                      compare against the reference; exit 1 on a diff
-#   scripts/diff_lane.sh --update             RE-RECORD the reference (see the rule below)
-#   scripts/diff_lane.sh --only ID            one instance (repeatable), any mode
-#   scripts/diff_lane.sh --config NAME        one configuration (repeatable), any mode
+# TIERS AND PASSES.
+#   fast   (default) 21 instances, 1 to 10 s a run: what a batch agent runs after each
+#          change, about three minutes at -j 16 on fataepyc-06
+#   slow   D-0140's six measured instances at 10 000 nodes (cyclic and openshop lower):
+#          deep searches, learned PB rows, integer learned clauses; about five minutes
+#   --debug  every selected run again under BAGUETTE_DEBUG=1 at min(budget, 1500) nodes,
+#          against bench/diff/reference-debug/: check_watched, check_skip and the I-P7
+#          advise check are what catch a lost wake (D-0138), and they only run in debug
+#   --full   = --tier all, then the same under --debug. THE GATE RUNS THIS.
+#
+#   scripts/diff_lane.sh [--tier fast|slow|all] [--debug | --full] [-j N]
+#   scripts/diff_lane.sh --update ...         RE-RECORD the reference (see the rule below)
+#   scripts/diff_lane.sh --only NAME          one instance (repeatable)
+#   scripts/diff_lane.sh --config NAME        one configuration (repeatable)
 #   scripts/diff_lane.sh --bin PATH           the solver under test (default: the dune build)
 #   scripts/diff_lane.sh --keep DIR           keep every run's files under DIR
 #   scripts/diff_lane.sh --self-test          the comparator's self-test only
-#   scripts/diff_lane.sh -j N                 N runs in parallel (default 8, or DIFF_PAR)
 #
-# Environment: DIFF_PAR (parallel runs, default 8), DIFF_TIMEOUT (seconds per run,
-# default 300), BAGUETTE_MEM_CAP_KB (ulimit -v per run, default 4000000, as the Makefile).
+# Environment: DIFF_PAR (runs in parallel, default 8; -j wins), DIFF_TIMEOUT (seconds per
+# run, default 900), BAGUETTE_MEM_CAP_KB (ulimit -v per run, default 4000000, as the
+# Makefile).
+#
+# CLASSES. Every instance is `bool` (learned clauses over Boolean variables: the codes
+# models) or `int` (learned clauses over integer order literals). The summary reports the
+# two separately, because a wake index by direction is exact on the first and can reorder
+# runs on the second (D-0140 E1).
 #
 # THE REFERENCE RULE (D-0141). The reference is re-recorded ONLY after a GATED merge that
 # changes the default search, the proof bytes or a recorded counter ON PURPOSE, in its
@@ -34,23 +50,31 @@
 # "never weaken a test to make it pass"). --update also runs the checker over every
 # proof it records, and refuses to record one the checker does not accept.
 #
-# Every run is in its own directory with the model linked in as `model.fzn` and the proof
-# prefix `p`: the .opb names the model path it was given (`* baguette: model.fzn`), so an
-# absolute path would make the hash depend on where the lane ran. BAGUETTE_* variables of
-# the caller's shell are unset for each run except the memory cap: a stray
-# BAGUETTE_RETENTION in a terminal would otherwise silently become the default.
+# PINNED ENVIRONMENT. BAGUETTE_* variables of the caller's shell are unset for each run
+# except the memory cap, so a stray BAGUETTE_RETENTION in a terminal cannot silently
+# become the default, and BAGUETTE_PROOF_AUDIT is the CLI default (on) except in the
+# `audit0` configuration: the end sweep's `del` lines exist only under the audit (D-0140
+# W8), so the .pbp depends on it. Every run is in its own directory with the model linked
+# in as `model.fzn` and the proof prefix `p`: the .opb names the model path it was given
+# (`* baguette: model.fzn`), so an absolute path would make the hash depend on where the
+# lane ran.
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 D="$ROOT/bench/diff"
 OBS="$D/observe.py"
 BIN="${BIN:-$ROOT/_build/default/bin/main.exe}"
 PAR="${DIFF_PAR:-8}"
-TMO="${DIFF_TIMEOUT:-300}"
+TMO="${DIFF_TIMEOUT:-900}"
 CAP_KB="${BAGUETTE_MEM_CAP_KB:-4000000}"
+DEBUG_BUDGET=1500
 UPDATE=0
+DEBUG=0
+FULL=0
+TIER=fast
 KEEP=""
 ONLY_IDS=()
 ONLY_CFGS=()
+ARGV=("$@")
 
 die() { echo "diff_lane: $*" >&2; exit 2; }
 usage() { sed -n '2,/^set -u/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 2; }
@@ -58,6 +82,9 @@ usage() { sed -n '2,/^set -u/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 2; 
 while [ $# -gt 0 ]; do
   case "$1" in
     --update) UPDATE=1 ;;
+    --debug) DEBUG=1 ;;
+    --full) FULL=1 ;;
+    --tier) [ $# -ge 2 ] || usage; TIER="$2"; shift ;;
     -j) [ $# -ge 2 ] || usage; PAR="$2"; shift ;;
     --only) [ $# -ge 2 ] || usage; ONLY_IDS+=("$2"); shift ;;
     --config) [ $# -ge 2 ] || usage; ONLY_CFGS+=("$2"); shift ;;
@@ -69,12 +96,25 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+case "$TIER" in fast|slow|all) ;; *) die "--tier is fast, slow or all, not $TIER" ;; esac
+
+# --full is two passes of this script: every tier, then every tier under debug.
+if [ "$FULL" = 1 ]; then
+  rest=()
+  for a in "${ARGV[@]}"; do [ "$a" = --full ] || rest+=("$a"); done
+  "$0" "${rest[@]}" --tier all; r1=$?
+  "$0" "${rest[@]}" --tier all --debug; r2=$?
+  echo "diff_lane --full: plain pass rc $r1, debug pass rc $r2"
+  [ "$r1" = 0 ] && [ "$r2" = 0 ]; exit $?
+fi
 
 # The comparator proves it can fail before it is trusted to pass (the `lint` discipline).
 python3 -I "$OBS" --self-test || die "the comparator's self-test failed; nothing was run"
 
 [ -x "$BIN" ] || die "no solver at $BIN (build it first: dune build bin/)"
 case "$CAP_KB" in none|unlimited|0) CAPCMD=":" ;; *) CAPCMD="ulimit -v $CAP_KB" ;; esac
+REFDIR="$D/reference"
+[ "$DEBUG" = 1 ] && REFDIR="$D/reference-debug"
 
 if [ "$UPDATE" = 1 ]; then
   # shellcheck source=checker.sh
@@ -88,19 +128,31 @@ in_list() { local x="$1"; shift; [ $# -eq 0 ] && return 0; for y in "$@"; do [ "
 CFG_NAMES=(); CFG_ENV=(); CFG_FLAGS=(); CFG_PROOF=()
 while IFS=$'\t' read -r name env flags proof; do
   case "$name" in ''|'#'*) continue ;; esac
-  in_list "$name" "${ONLY_CFGS[@]+"${ONLY_CFGS[@]}"}" || continue
   CFG_NAMES+=("$name"); CFG_ENV+=("$env"); CFG_FLAGS+=("$flags"); CFG_PROOF+=("$proof")
 done < "$D/configs.tsv"
-IDS=(); BUDGETS=()
-while IFS=$'\t' read -r id budget _rest; do
-  case "$id" in ''|'#'*) continue ;; esac
-  in_list "$id" "${ONLY_IDS[@]+"${ONLY_IDS[@]}"}" || continue
-  IDS+=("$id"); BUDGETS+=("$budget")
-done < "$D/corpus.tsv"
-[ ${#CFG_NAMES[@]} -gt 0 ] || die "no configuration selected"
-[ ${#IDS[@]} -gt 0 ] || die "no instance selected"
 for c in "${ONLY_CFGS[@]+"${ONLY_CFGS[@]}"}"; do in_list "$c" "${CFG_NAMES[@]}" || die "no configuration named $c"; done
-for i in "${ONLY_IDS[@]+"${ONLY_IDS[@]}"}"; do in_list "$i" "${IDS[@]}" || die "no instance named $i"; done
+
+# JOBS: "name file budget class cfg-index", one per (instance, configuration).
+JOBS=()
+declare -A CLASS_OF=()
+ALL_NAMES=()
+while IFS=$'\t' read -r name file budget tier class cfgs _rest; do
+  case "$name" in ''|'#'*) continue ;; esac
+  ALL_NAMES+=("$name")
+  [ "$TIER" = all ] || [ "$TIER" = "$tier" ] || continue
+  in_list "$name" "${ONLY_IDS[@]+"${ONLY_IDS[@]}"}" || continue
+  [ -f "$D/corpus/$file.fzn.gz" ] || die "corpus file bench/diff/corpus/$file.fzn.gz missing"
+  [ "$DEBUG" = 1 ] && [ "$budget" -gt "$DEBUG_BUDGET" ] && budget=$DEBUG_BUDGET
+  CLASS_OF[$name]="$class"
+  for ci in "${!CFG_NAMES[@]}"; do
+    c="${CFG_NAMES[$ci]}"
+    in_list "$c" "${ONLY_CFGS[@]+"${ONLY_CFGS[@]}"}" || continue
+    [ "$cfgs" = all ] || in_list "$c" ${cfgs//,/ } || continue
+    JOBS+=("$name $file $budget $class $ci")
+  done
+done < "$D/corpus.tsv"
+for i in "${ONLY_IDS[@]+"${ONLY_IDS[@]}"}"; do in_list "$i" "${ALL_NAMES[@]}" || die "no instance named $i"; done
+[ ${#JOBS[@]} -gt 0 ] || die "nothing selected (tier $TIER)"
 
 WORK="${KEEP:-$(mktemp -d "${TMPDIR:-/tmp}/diff_lane.XXXXXX")}"
 mkdir -p "$WORK/fzn" "$WORK/res"
@@ -108,26 +160,27 @@ mkdir -p "$WORK/fzn" "$WORK/res"
 
 MD5="$(md5sum < "$BIN" | cut -d' ' -f1)"
 echo "diff_lane: solver $BIN md5 $MD5"
-echo "diff_lane: reference recorded by: $(grep -v '^#' "$D/reference/BINARY" 2>/dev/null | tail -1)"
-echo "diff_lane: ${#IDS[@]} instance(s) x ${#CFG_NAMES[@]} configuration(s), $PAR in parallel, ${TMO}s and ulimit -v $CAP_KB per run$([ "$UPDATE" = 1 ] && echo ', RECORDING')"
+echo "diff_lane: reference recorded by: $(grep -v '^#' "$REFDIR/BINARY" 2>/dev/null | tail -1)"
+echo "diff_lane: tier $TIER$([ "$DEBUG" = 1 ] && echo ", DEBUG pass (BAGUETTE_DEBUG=1, at most $DEBUG_BUDGET nodes)"), ${#JOBS[@]} runs, $PAR in parallel, ${TMO}s and ulimit -v $CAP_KB per run$([ "$UPDATE" = 1 ] && echo ', RECORDING')"
 
-for id in "${IDS[@]}"; do
-  [ -f "$D/corpus/$id.fzn.gz" ] || die "corpus file $D/corpus/$id.fzn.gz missing"
-  gzip -dc "$D/corpus/$id.fzn.gz" > "$WORK/fzn/$id.fzn" || die "cannot decompress $id"
+for j in "${JOBS[@]}"; do
+  read -r _n file _b _c _ci <<< "$j"
+  [ -f "$WORK/fzn/$file.fzn" ] || gzip -dc "$D/corpus/$file.fzn.gz" > "$WORK/fzn/$file.fzn" || die "cannot decompress $file"
 done
 
 # ------------------------------------------------------------------ one run
-run_one() { # cfg-index id budget
-  local ci="$1" id="$2" n="$3"
+run_one() { # name file budget class cfg-index
+  local name="$1" file="$2" n="$3" ci="$5"
   local cfg="${CFG_NAMES[$ci]}" env="${CFG_ENV[$ci]}" flags="${CFG_FLAGS[$ci]}" proof="${CFG_PROOF[$ci]}"
-  local dir="$WORK/run/$cfg/$id" label="$id [$cfg]" res="$WORK/res/$cfg.$id"
-  local ref="$D/reference/$cfg/$id.obs"
+  local dir="$WORK/run/$cfg/$name" label="$name [$cfg$([ "$DEBUG" = 1 ] && echo ', debug')]"
+  local res="$WORK/res/$cfg.$name" ref="$REFDIR/$cfg/$name.obs"
   mkdir -p "$dir"
-  ln -sf "$WORK/fzn/$id.fzn" "$dir/model.fzn"
+  ln -sf "$WORK/fzn/$file.fzn" "$dir/model.fzn"
   local -a envv=() flagv=() proofv=()
   [ "$env" = "-" ] || read -r -a envv <<< "$env"
   [ "$flags" = "-" ] || read -r -a flagv <<< "$flags"
   [ "$proof" = "yes" ] && proofv=(--proof p)
+  [ "$DEBUG" = 1 ] && envv+=(BAGUETTE_DEBUG=1)
   (
     cd "$dir" || exit 1
     for v in $(compgen -e | grep '^BAGUETTE_' | grep -v '^BAGUETTE_MEM_CAP_KB$'); do unset "$v"; done
@@ -138,15 +191,25 @@ run_one() { # cfg-index id budget
     echo $? > rc
   )
   local rcv; rcv="$(cat "$dir/rc")"
+  # A non-zero exit is quoted with the solver's last stderr line (an invariant under
+  # BAGUETTE_DEBUG, the memory cap, a crash), and it is NEVER recorded as a reference:
+  # the lane must not bless a failure.
+  local why=""
+  [ "$rcv" = 0 ] || why="   [exit $rcv: $(grep -v '^\(stats\|limit\|time\):' "$dir/err" | tail -1 | cut -c1-240)]"
   if [ "$proof" = "yes" ]; then
     if [ ! -f "$dir/p.opb" ] || [ ! -f "$dir/p.pbp" ]; then
-      echo "DIFF $label: no proof written (rc $rcv)" > "$res"; return
+      echo "DIFF $label: no proof written (rc $rcv)$why" > "$res"; return
     fi
     python3 -I "$OBS" observe "$rcv" "$dir/out" "$dir/err" "$dir/p.opb" "$dir/p.pbp" > "$dir/obs"
   else
     python3 -I "$OBS" observe "$rcv" "$dir/out" "$dir/err" > "$dir/obs"
   fi
   if [ "$UPDATE" = 1 ]; then
+    if [ "$rcv" != 0 ]; then
+      echo "REFUSED $label: not recorded$why" > "$res"
+      [ -n "$KEEP" ] || rm -f "$dir/p.opb" "$dir/p.pbp"
+      return
+    fi
     if [ "$proof" = "yes" ]; then
       local v; v="$(timeout 3600 "$VERIPB" "$dir/p.opb" "$dir/p.pbp" 2>&1)"
       if [ $? -ne 0 ] || ! grep -q '^s VERIFIED' <<< "$v"; then
@@ -154,42 +217,56 @@ run_one() { # cfg-index id budget
         return
       fi
     fi
-    mkdir -p "$D/reference/$cfg"
+    mkdir -p "$REFDIR/$cfg"
     cp "$dir/obs" "$ref"
     echo "recorded $label (rc $rcv)" > "$res"
   elif [ ! -f "$ref" ]; then
-    echo "DIFF $label: NO REFERENCE at ${ref#"$ROOT"/} -- record it with --update (see the rule)" > "$res"
+    echo "DIFF $label: NO REFERENCE at ${ref#"$ROOT"/} -- record it with --update (see the rule)$why" > "$res"
   else
     python3 -I "$OBS" compare "$ref" "$dir/obs" "$label" > "$res"
+    if [ -n "$why" ] && grep -q '^DIFF' "$res"; then
+      { head -1 "$res" | tr -d '\n'; printf '%s\n' "$why"; } > "$res.tmp" && mv "$res.tmp" "$res"
+    fi
   fi
   [ -n "$KEEP" ] || rm -f "$dir/p.opb" "$dir/p.pbp"
 }
 
 START=$(date +%s)
-for i in "${!IDS[@]}"; do
-  for ci in "${!CFG_NAMES[@]}"; do
-    while [ "$(jobs -r | wc -l)" -ge "$PAR" ]; do wait -n; done
-    run_one "$ci" "${IDS[$i]}" "${BUDGETS[$i]}" &
-  done
+for j in "${JOBS[@]}"; do
+  while [ "$(jobs -r | wc -l)" -ge "$PAR" ]; do wait -n; done
+  # shellcheck disable=SC2086
+  run_one $j &
 done
 wait
 WALL=$(( $(date +%s) - START ))
 
-TOTAL=$(( ${#IDS[@]} * ${#CFG_NAMES[@]} ))
+TOTAL=${#JOBS[@]}
 NRES=$(ls "$WORK/res" | wc -l)
 BAD=$(cat "$WORK/res"/* 2>/dev/null | grep -c '^\(DIFF\|REFUSED\)')
 cat "$WORK/res"/* 2>/dev/null | grep '^\(DIFF\|REFUSED\)' | sort
 cat "$WORK/res"/* 2>/dev/null | grep -o '(note:.*' | sort -u | sed 's/^/diff_lane: /'
+# The two learning classes, reported separately (D-0140 section 7, E1).
+for cls in bool int; do
+  n=0; b=0
+  for j in "${JOBS[@]}"; do
+    read -r name _f _b class ci <<< "$j"
+    [ "$class" = "$cls" ] || continue
+    n=$((n + 1))
+    grep -q '^\(DIFF\|REFUSED\)' "$WORK/res/${CFG_NAMES[$ci]}.$name" 2>/dev/null && b=$((b + 1))
+  done
+  [ "$n" = 0 ] || echo "diff_lane: class $cls (learned clauses over $([ "$cls" = bool ] && echo 'Boolean variables' || echo 'integer order literals')): $((n - b)) of $n runs equal"
+done
 if [ "$NRES" -ne "$TOTAL" ]; then
   echo "diff_lane: FAIL -- only $NRES of $TOTAL runs reported (a run died before writing its result)"
   exit 1
 fi
 if [ "$UPDATE" = 1 ]; then
   if [ "$BAD" -ne 0 ]; then echo "diff_lane: FAIL -- $BAD run(s) not recorded"; exit 1; fi
+  mkdir -p "$REFDIR"
   {
-    [ -f "$D/reference/BINARY" ] || echo "# Who recorded bench/diff/reference/: one line per --update, newest last (D-0141)."
-    echo "$(date -u +%Y-%m-%dT%H:%MZ) md5=$MD5 commit=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo '?') host=$(hostname -s) configs=$(IFS=,; echo "${CFG_NAMES[*]}") instances=${#IDS[@]}"
-  } >> "$D/reference/BINARY"
+    [ -f "$REFDIR/BINARY" ] || echo "# Who recorded ${REFDIR#"$ROOT"/}/: one line per --update, newest last (D-0141)."
+    echo "$(date -u +%Y-%m-%dT%H:%MZ) md5=$MD5 commit=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo '?') host=$(hostname -s) tier=$TIER runs=$TOTAL"
+  } >> "$REFDIR/BINARY"
   echo "diff_lane: recorded $TOTAL reference(s) in ${WALL}s, every proof accepted by $VERIPB"
   exit 0
 fi
