@@ -2117,8 +2117,8 @@ let test_index_positions () =
    index woke
 
    Two engines over the same learned clauses, from the same store: one as packed
-   ([Clause.Learned_clause.advise], directional slots for the rung of a two-valued
-   variable), one whose advisor reports every watch as [Propagator.watch_any] -- the
+   ([Clause.Learned_clause.advise], every watch in the slot of the bound move that can
+   falsify it), one whose advisor reports every watch as [Propagator.watch_any] -- the
    M6-T22 index, which asked every watcher of a variable on every change of it. A random
    search drives both (decide a bound, propagate, backtrack on a conflict or at random)
    and after every [propagate] the two must agree on the outcome and on the WHOLE trail,
@@ -2126,8 +2126,8 @@ let test_index_positions () =
    equal trails are equal wake orders wherever a wake order could show. The directional
    engine must also ask strictly less ([c_wakes]), or the test proves nothing.
 
-   Clauses over four Booleans and two variables on 0..3 (whose watches stay [watch_any]),
-   so both kinds of slot and the mix are exercised, each passed through [Learn.minimise]
+   Clauses over four Booleans and two variables on 0..3, both bound directions, each
+   passed through [Learn.minimise]
    as every registered learned clause is: one literal per (variable, polarity), which is
    the two-watched-literal precondition [Clause.Learned_clause] states (two rungs of one
    variable in one direction can propagate with both watched, see its [make]). Under
@@ -2254,6 +2254,70 @@ let test_direction_index () =
     (Printf.sprintf "E1: ...over enough conflicts to matter (%d > 100)" !conflicts)
     (!conflicts > 100)
 
+(* ---------------------------------------------------------------------------
+   M11-complexity-T3 (D-0142, E1): one walk that moves BOTH bounds of one variable
+
+   The case D-0138 section 5 named as the reason the direction index was not exact on
+   integers. One run moves [lo x] (the older entry) and then [hi x] (the newer one). The
+   variable index asked every watcher of [x] at the OLDER entry against the final store,
+   so a clause whose watch only the upper move falsified was placed there, before the
+   clauses of the newer entry. An index that asked each entry only its own direction would
+   place it at the newer entry instead and reorder the queue. The walk therefore asks an
+   entry the directions of every NEWER entry of the walk on the same variable too
+   ([t.moved]). Clause 0 watches `x >= 6` (upper move), clause 1 watches `x <= 1` (lower
+   move); after `lo x := 2`, `hi x := 5` the woken order must be 0 then 1, as the variable
+   index gives it. *)
+let test_direction_walk_order () =
+  let module Clause = Baguette_core.Clause in
+  let module LC = Clause.Learned_clause in
+  let bounds = [ ("x", 0, 9); ("y", 0, 9); ("z", 0, 9) ] in
+  let decl name =
+    List.find_map (fun (n, lo, hi) -> if n = name then Some (lo, hi) else None) bounds
+  in
+  let any_of (adv : Propagator.advisor) =
+    let to_any w = Propagator.watch_any (Propagator.watch_var w) in
+    {
+      adv with
+      Propagator.watched =
+        Option.map
+          (fun w () ->
+            let a, b = w () in
+            (to_any a, to_any b))
+          adv.Propagator.watched;
+    }
+  in
+  let woken wrap =
+    let store = mk_store bounds in
+    let insts =
+      List.mapi
+        (fun id ls ->
+          let lc = LC.make (Option.get (Clause.of_lits store ~decl ls)) in
+          Propagator.pack ~id
+            ~advise:(wrap (LC.advise lc))
+            (module LC : Propagator.S with type t = LC.t)
+            lc)
+        [ [ Lit.ge "x" 6; Lit.ge "y" 1 ]; [ Lit.le "x" 1; Lit.ge "z" 1 ] ]
+    in
+    let engine = Engine.create insts in
+    ignore (Engine.propagate engine store);
+    Store.new_level store;
+    let since = Store.trail_length store in
+    ignore (Store.set_lo store (var 0) 2 no_facts_placeholder);
+    ignore (Store.set_hi store (var 0) 5 no_facts_placeholder);
+    let first_occurrences l =
+      List.rev
+        (List.fold_left (fun acc id -> if List.mem id acc then acc else id :: acc) [] l)
+    in
+    first_occurrences (Engine.watchers_of_new_entries engine store ~since)
+  in
+  let by_direction = woken Fun.id and by_variable = woken any_of in
+  check
+    (Printf.sprintf
+       "E1 walk: lo then hi of x in one walk wakes [%s] by direction, [%s] by variable"
+       (String.concat ";" (List.map string_of_int by_direction))
+       (String.concat ";" (List.map string_of_int by_variable)))
+    (by_direction = by_variable && by_variable = [ 0; 1 ])
+
 let () =
   test_fixpoint_tightens_and_settles ();
   test_conflict_carries_explanation ();
@@ -2295,6 +2359,7 @@ let () =
   test_declined_while_pending ();
   test_index_positions ();
   test_direction_index ();
+  test_direction_walk_order ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

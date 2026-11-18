@@ -90,17 +90,13 @@ type pb_row = { r_terms : (int * Baguette_proof.Lit.t) list; r_degree : int; r_c
 
      [watch_any v]  any change of [v] may falsify it (the general case, and the only
                     one before E1);
-     [watch_lo v]   the literal is the rung of a TWO-VALUED variable read negatively
-                    (`v <= lo`): only a move of [v]'s LOWER bound falsifies it, and
-                    once it is false [v] is fixed;
-     [watch_hi v]   the same rung read positively (`v >= hi`): only a move of the
-                    UPPER bound falsifies it, and once it is false [v] is fixed.
+     [watch_lo v]   only a move of [v]'s LOWER bound can falsify it (an order literal
+                    `v <= k`);
+     [watch_hi v]   only a move of [v]'s UPPER bound can falsify it (`v >= k`).
 
-   The second half of [watch_lo] / [watch_hi] is what makes the engine's use of them
-   exact (lib/core/engine.ml, "The wake index by direction"): a watch that is false
-   leaves no later change of its variable on the same branch to be asked about. Only a
-   propagator that knows its literal is such a rung may claim it; anything else says
-   [watch_any]. An int, three per variable, so the index is an array. *)
+   What the engine does with it, and why that wakes what the variable index woke, is
+   lib/core/engine.ml's "The wake index by direction". An int, three per variable, so
+   the index is an array. *)
 type watch = int
 
 let watch_any v = 3 * Var.to_int v

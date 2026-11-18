@@ -486,16 +486,12 @@ module Learned_clause = struct
      other variable whatever the store holds, which is [Propagator.inst_watched]'s
      contract, so the engine may wake this clause from these two variables only.
 
-     M11-complexity-T3 (D-0142, E1): with the move that falsifies each. A literal that
-     is the one rung of a two-valued declared variable ([decl_hi = decl_lo + 1] and
-     [k = decl_hi], so `x >= hi` or `x <= lo`) is falsified only by the move of one bound
-     and fixes the variable when false, which is [Propagator.watch_lo]/[watch_hi]'s
-     contract; every other literal is [watch_any]. A `var bool` is the common case: its
-     ladder has the one rung (D-0007). *)
+     M11-complexity-T3 (D-0142, E1): with the move that can falsify each. `x >= k` is
+     false once [hi x < k], so only an UPPER-bound move falsifies it; `x <= k - 1` only a
+     LOWER-bound move. That is [Propagator.watch_hi]/[watch_lo]'s whole claim, and it is
+     true of every order literal. *)
   let watch_of (a : Pb.atom) =
-    if a.Pb.decl_hi = a.Pb.decl_lo + 1 && a.Pb.k = a.Pb.decl_hi then
-      if a.Pb.positive then Propagator.watch_hi a.Pb.x else Propagator.watch_lo a.Pb.x
-    else Propagator.watch_any a.Pb.x
+    if a.Pb.positive then Propagator.watch_hi a.Pb.x else Propagator.watch_lo a.Pb.x
 
   let watched t () = (watch_of t.atoms.(t.w1), watch_of t.atoms.(t.w2))
 

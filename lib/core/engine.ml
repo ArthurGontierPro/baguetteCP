@@ -283,6 +283,11 @@ type t = {
           [inst_watched] that read it, newest first. The wake loops' copy of [watchers]
           minus the self-watching instances, indexed by array rather than hashed. Grown
           on demand; a variable past its end has no such reader. *)
+  mutable moved : Bytes.t;
+      (** M11-complexity-T3 (D-0142, E1): variable int -> the bound moves (bit 1 lower,
+          bit 2 upper) of the entries [watchers_of_new_entries] has walked so far, i.e.
+          of this walk's NEWER entries on the variable. All zero between walks; sized
+          with [wake_static]. *)
   mutable dyn_ids : int array array;
   mutable dyn_len : int array;
       (** M6-T22 / D-0138: WATCH SLOT -> the self-watching instances that CURRENTLY
@@ -406,41 +411,45 @@ let in_scope t id v =
 
 (* ---------------------------- M11-complexity-T3 (D-0142, E1): the wake index by direction
 
-   The index above asks a learned clause on EVERY change of a watched variable, and on a
-   Boolean half of those changes cannot make it want a run: fixing `b` to 1 makes the
-   watch `b >= 1` TRUE, and only fixing it to 0 can falsify it. D-0138 section 5 measured
-   that half on QR48 (37.3 M wakes, 17.1 M declined) and filed it, with the reason it is
-   exact on Booleans and not beyond them.
+   The index above asks a learned clause on EVERY change of a watched variable, and most
+   of those changes cannot make it want a run: a watch `x >= k` is falsified only when
+   [hi x] drops below [k], so a move of [lo x] can never falsify it. D-0138 section 5
+   measured that half on QR48 (37.3 M wakes, 17.1 M declined) and filed it.
 
    So a self-watching instance reports each watch as a [Propagator.watch], which also
    says which bound move can falsify it, and the index keeps three slots per variable:
    [3x] (any change may falsify the watch), [3x + 1] (only a lower-bound move), [3x + 2]
-   (only an upper-bound move). An entry on [x] asks slot [3x] always, [3x + 1] when it
-   moved the lower bound and [3x + 2] when it moved the upper one.
+   (only an upper-bound move). An entry on [x] asks slot [3x] always, [3x + 1] when IT OR
+   A NEWER ENTRY OF THE SAME WALK moved [x]'s lower bound, and [3x + 2] likewise for the
+   upper bound ([t.moved]). The seed asks by the entry's own moves.
 
-   EXACT, the same instances woken in the same order, for this reason. The ask is a
-   function of the store, not of the entry: it answers yes iff a watch of the instance on
-   [x] is false NOW. So what must be shown is that an instance with a false watch on [x]
-   sits in a slot the entry asks. A directional watch is only claimed for the one rung of
-   a TWO-VALUED variable ([Propagator.watch_lo]): false means the variable is fixed. If it
-   was fixed before the entries being walked, none of them is on [x] and nobody is asked,
-   before or after. Otherwise the entry on [x] is the one that fixed it (a two-valued
-   variable has no other change on one branch), and fixing it to the value that falsifies
-   a `x <= lo` watch is a lower-bound move, to the one that falsifies `x >= hi` an
-   upper-bound move: the slot is asked. Every other instance answered no and is the
-   asking saved. The woken ids are merged by id as before ([sort_uniq] because one
-   instance can now sit in two slots of one variable), so the order is the old one, and
-   the seed only marks, so its order never mattered.
-
-   NOT exact on wider variables, and not used there: a watch `x >= 5` on 0..9 can be
-   false with [x] unfixed, a later lower-bound move of [x] is then asked about it by the
-   variable index and answered yes, and the run it gets (which may move the watch) would
-   not happen by direction. That is D-0142's deferred item, with its measurement.
+   Why this wakes the same instances in the same order, apart from runs that do nothing.
+   The ask is a function of the store, not of the entry: it answers yes iff a watch of the
+   instance on [x] is false NOW, so every entry on [x] of one walk gets the same answers,
+   and the old walk placed an instance at its FIRST occurrence, the OLDEST entry on [x]
+   whose trigger kind it wants (the woken lists are oldest-entry-first, and a later
+   occurrence is a no-op of [enqueue]/[mark_dirty]). Take an instance whose watch on [x]
+   is false now, say `x >= k`. Either an entry of this walk moved [hi x] below [k], and
+   then every entry on [x] at or before it in age asks the upper slot, the oldest one
+   included, so the instance is placed where it was; or [hi x] was below [k] before the
+   walk. Then it was false when the instance last ran: had it been falsified since, the
+   walk or seed that saw that entry asked the upper slot, and the instance has run since
+   or is still queued, where a second wake changes nothing. A run that leaves a false
+   watch is a conflict (which ends the call and is backtracked over, both watches being
+   falsified at the conflict's level) or a unit propagation, after which the clause is
+   SATISFIED by its one non-false literal; so the clause is satisfied, every literal but
+   the true one is false, and the run the old walk gave it changes nothing: [Pb.pass] finds no open term,
+   and [rewatch] keeps the true literal and picks the latest-falsified other literal again,
+   which is the same one because no falsification position has moved. That run, and the
+   asks that answer no, are what goes: WORK counters (wakes, advised, props), never the
+   trail. The seed only marks, so its order never mattered, and the same two cases cover
+   which slots it marks. The woken ids are merged by id as before ([sort_uniq], because one
+   instance can now sit in two slots of one variable).
 
    Under BAGUETTE_DEBUG the instances of the slots an entry does not ask are recorded as
    declined asks ([record_unasked]), so [check_declined] runs each one nothing else woke,
-   as it did when they were asked, and [check_watched] checks that a directional watch's
-   variable was created two-valued. *)
+   as it did when they were asked: the satisfied clauses above pass it, and a watch whose
+   direction was wrong would not. *)
 
 let ensure_var t x =
   let n = Array.length t.wake_static in
@@ -449,6 +458,9 @@ let ensure_var t x =
     let ws = Array.make m [] in
     Array.blit t.wake_static 0 ws 0 n;
     t.wake_static <- ws;
+    let mv = Bytes.make m '\000' in
+    Bytes.blit t.moved 0 mv 0 n;
+    t.moved <- mv;
     let di = Array.make (3 * m) [||] in
     Array.blit t.dyn_ids 0 di 0 (3 * n);
     t.dyn_ids <- di;
@@ -497,22 +509,6 @@ exception Bad_watch of string
 let check_watched t (inst : Propagator.instance) store k1 k2 =
   let id = inst.Propagator.id in
   let a1 = k1 / 3 and a2 = k2 / 3 in
-  (* E1: a directional slot claims its variable is two-valued (Propagator.watch_lo). *)
-  List.iter
-    (fun k ->
-      if k mod 3 <> 0 then
-        let d = Store.created_domain store (Propagator.watch_var k) in
-        if Domain.hi d - Domain.lo d > 1 then
-          raise
-            (Bad_watch
-               (Printf.sprintf
-                  "D-0142 E1: propagator #%d %s watches %s by one bound's move only, \
-                   but                    the variable was created over %s, not two \
-                   values"
-                  id inst.Propagator.inst_name
-                  (Store.name store (Propagator.watch_var k))
-                  (Domain.to_string d))))
-    [ k1; k2 ];
   if id >= 0 && id < Array.length t.scopes then
     Array.iter
       (fun x ->
@@ -663,6 +659,7 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
       poll_left = default_poll_runs;
       scopes;
       wake_static = [||];
+      moved = Bytes.empty;
       dyn_ids = [||];
       dyn_len = [||];
       wv1 = Array.make (Array.length triggers) (-1);
@@ -940,13 +937,13 @@ let lo_moved (e : Store.entry) = Domain.lo e.now <> Domain.lo e.old
 let hi_moved (e : Store.entry) = Domain.hi e.now <> Domain.hi e.old
 
 (* E1 (D-0142), under BAGUETTE_DEBUG only: the instances of the directional slots of
-   [e.var] that this entry does NOT ask are recorded as declined asks, so that
+   [e.var] that this entry does NOT ask ([lo]/[hi] false) are recorded as declined asks, so that
    [check_declined] treats them exactly as it treated them when every watcher of the
    variable was asked: an instance that nothing else woke is run and must prune nothing.
    That is the claim the direction index rests on, checked the way I-P7 is. [self] is a
    vetoed self-wake (never asked, not recorded); [skip] an instance the seed marks
    whatever its advisor says. The trigger mask is applied as the ask would apply it. *)
-let record_unasked ?(skip = fun _ -> false) t (e : Store.entry) ~self =
+let record_unasked ?(skip = fun _ -> false) t (e : Store.entry) ~lo ~hi ~self =
   let x = Var.to_int e.Store.var in
   let change = lazy (Domain.classify ~old:e.Store.old ~now:e.Store.now) in
   let record sl =
@@ -956,8 +953,8 @@ let record_unasked ?(skip = fun _ -> false) t (e : Store.entry) ~self =
       then t.declined <- (id, e.Store.var) :: t.declined
     done
   in
-  if not (lo_moved e) then record ((3 * x) + 1);
-  if not (hi_moved e) then record ((3 * x) + 2)
+  if not lo then record ((3 * x) + 1);
+  if not hi then record ((3 * x) + 2)
 
 let watchers_of_new_entries ?self t store ~since =
   (* M2-T6: [self] is the instance that pushed these entries. When its claim is
@@ -1000,14 +997,23 @@ let watchers_of_new_entries ?self t store ~since =
     let x = Var.to_int e.var in
     if x < Array.length t.wake_static then (
       let stat = t.wake_static.(x) in
-      (* E1 (D-0142): the slots this entry asks -- see "The wake index by direction". *)
-      let sl = 3 * x and lo = lo_moved e and hi = hi_moved e in
+      (* E1 (D-0142): the slots this entry asks are those of the bound moves of this
+         entry AND of every newer entry of this walk on [x] -- see "The wake index by
+         direction", and [t.moved]. *)
+      let m =
+        Char.code (Bytes.unsafe_get t.moved x)
+        lor (if lo_moved e then 1 else 0)
+        lor if hi_moved e then 2 else 0
+      in
+      Bytes.unsafe_set t.moved x (Char.unsafe_chr m);
+      let sl = 3 * x and lo = m land 1 <> 0 and hi = m land 2 <> 0 in
       let nd =
         t.dyn_len.(sl)
         + (if lo then t.dyn_len.(sl + 1) else 0)
         + if hi then t.dyn_len.(sl + 2) else 0
       in
-      if Debug.enabled then record_unasked t e ~self:(if vetoed then self_id else -1);
+      if Debug.enabled then
+        record_unasked t e ~lo ~hi ~self:(if vetoed then self_id else -1);
       if stat <> [] || nd > 0 then (
         let change = Domain.classify ~old:e.old ~now:e.now in
         (* M6-T22: the self-watching instances that want this entry, DESCENDING, to
@@ -1037,6 +1043,11 @@ let watchers_of_new_entries ?self t store ~since =
             if wants id change e.var then acc := id :: !acc)
           stat;
         flush_above min_int))
+  done;
+  (* [t.moved] back to all zero, over the same entries. *)
+  for i = since to Store.trail_length store - 1 do
+    let x = Var.to_int (Store.trail_entry store i).Store.var in
+    if x < Bytes.length t.moved then Bytes.unsafe_set t.moved x '\000'
   done;
   !acc
 
@@ -1658,7 +1669,7 @@ let seed_dirty t store ~since ~epoch =
         + if hi then t.dyn_len.(sl + 2) else 0
       in
       if Debug.enabled then
-        record_unasked t e ~self:(-1) ~skip:(fun id -> t.born.(id) > epoch);
+        record_unasked t e ~lo ~hi ~self:(-1) ~skip:(fun id -> t.born.(id) > epoch);
       if stat <> [] || nd > 0 then (
         let change = Domain.classify ~old:e.old ~now:e.now in
         List.iter (mark change e.var) stat;
