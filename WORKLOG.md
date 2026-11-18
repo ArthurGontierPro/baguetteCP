@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M6-T21 | `lib/core/search.ml` (the stop poll and its exit), `lib/core/engine.ml` (a poll in the propagation fixpoint loop, between propagator runs), `bin/main.ml` (how `--time-limit` builds `stop`: a few lines, `wave44-noproof` also edits this file), `test/unit/test_engine.ml` or `test_endtoend.ml` (the lane), `docs/DECISIONS.md` (D-0136 appended), `docs/ROADMAP.md` M6-T21 row, `WORKLOG.md` (the 2026-11-17 request's status). NOT `learn.ml`/`pb_analysis.ml` (claimed by M8-T3) | agent-timelimit (`wave44-timelimit`) | 2026-11-18 |
 | M8-bits-encoding-T3 | design record D-0134 first (`docs/DECISIONS.md` appended), then `lib/proof/encoding.ml`, `lib/proof/lit.ml`, `lib/core/prop/maxmin.ml`, `lib/core/prop/ne.ml`, `lib/core/prop/arith.ml` if reached, `lib/core/pb_analysis.ml`, `lib/core/ladder.ml`, `lib/core/learn.ml`, `lib/core/trace.ml`, `lib/core/justify.ml`, `lib/flatzinc/compile.ml` (eligibility releases), `bin/main.ml` (`--stats`), their tests under `test/unit/`, new `test/models/bits_*.fzn` + `test/expected/`, `docs/PROOF-FORMAT.md` §3/§4 (bits paragraphs), `docs/ROADMAP.md` T3 row, `docs/INVARIANTS.md` if an invariant is added | agent-t3 (`wave44-t3`) | 2026-11-16 |
 | M9-no-proof-T2 | `bin/main.ml` (`--no-proof`), `lib/proof/writer.ml` (null channel, `~audit:false`), `lib/proof/encoding.ml` (`Discard_rows` path only), `lib/flatzinc/compile.ml` (the mode threaded through), `scripts/run_model_tests.sh` or `test/unit/test_endtoend.ml` (the stdout-identity lane), `docs/DECISIONS.md` (D-0135 appended), `docs/ROADMAP.md` M9-T2 row, `docs/SPEC.md` §1 only if the amendment needs a word | agent-noproof2 (`wave44-noproof`) | 2026-11-16 |
 
@@ -198,6 +197,7 @@ conflict analysis, set by a `Unix.alarm`/SIGALRM handler (or a counter-based clo
 propagations), and exit through the normal path at a consistent point. Do NOT raise `Limit_hit` from
 inside a propagator (store/id counter mid-update) and do not rely on an external kill (truncated
 proof). Cost should be unmeasurable; please confirm with a before/after nodes/s.
+**Status 2026-11-18 (agent-timelimit, `wave44-timelimit`, D-0136): DONE.** The overshoot was the stop's own end-of-search sweep (`Retention.retire`, quadratic in the learned clauses), not node granularity. 600 s now stops at 600.3 s and 1 200 s at 1 200.5 s, proofs VERIFIED NO CONCLUSION. The requested poll is in as well (+0.035 % instructions).
 
 ### 2026-11-18 — what the codes-cp side project needs from baguette (from the codes-cp side session)
 
@@ -233,6 +233,7 @@ by `bash fzn/make.sh <msc> <tag>`. In priority order:
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M6-T21 | agent-timelimit (`wave44-timelimit`) | 2026-11-18 | **D-0136.** The `--time-limit` overshoot (+46 s at 600, +108 at 1 200) was `conclude_stopped`'s sweep: `Retention.retire` was O(k n), and the end-of-search sweep has k = n learned clauses. One pass now; 600 s stops at 600.3 s, 1 200 at 1 200.5, proofs VERIFIED NO CONCLUSION. The stop is also polled inside `Engine.propagate` after every 128 completed runs (`Engine.Stopped` -> `Limit_hit`, at a run boundary, nothing written by the node yet): +0.035 % instructions at a fixed node budget. `limit:` gains `at=` and `fired=`. Conflict analysis needed no poll. Gate of `d63f371` green (3 629 checks, 85 MB), 165 models byte-identical |
 | M8-bits-encoding-T2 | agent-t2 (`wave43-t2`) | 2026-11-16 | **D-0132.** The bits encoding for `Linear`: `Lit.Bit`, `declare_int_bits` (two bound rows, no ladder), the mixed row, `ensure_atom` (the `red` pair at level 0 + nearest-neighbour links; a `rup` bridge pair for an order variable in a mixed row), `Explanation.Linear_term`, `Justify.emit_bits_pruning` (one `pol` deriving exactly the trace clause, pinned by `ia`), Trace's per-entry fork, eligibility by scope in `Compile`, `--bits-above W`. Gate green on a fresh clone (19 min 46 s, 85 MB); the 156 byte-identical at `W = none`; 165 of 165 verified at `W = 0` and at `W = 8`; D-0028's model at 10⁶ on bits: 2.4 kB `.opb`, 192 B proof, 0.00 s (order: 156 MB, 3.2 s, 1.9 GB); the Θ(w) chain's checker 1 429 s → 4.8 s at 10⁵ (17× the bytes). The 169 at `W = 0`: see D-0132 §6 (b) |
 | M7-T12 | agent-decision | 2026-09-23 | The ASSIGNMENT decision shape (`Search.Assign`) and `indomain_median` over it -- **D-0077**. The sibling is discharged by DERIVATION, not RESOLUTION: `combine_nogoods` is untouched. `SPEC.md` 3.4 CHANGED (normative): the refusal is lifted, not weakened. Three models (two SAT), four `test_learn.ml` lanes including two breaks that redden at full wording |
 | M7-T15 | agent-flatten | 2026-09-23 | `FLATTEN-FAIL`: 22 of the 24 instances this row owns now flatten. 24 of the 50 were one thing -- a MiniZinc 1.x dialect -- not a missing global; `mznlib/compat_mzn1.mzn`, four model tests, `mznlib/test/check_mznlib.sh`, D-0076 |
@@ -369,6 +370,14 @@ by `bash fzn/make.sh <msc> <tag>`. In priority order:
 | M8-bits-encoding-T4 (baseline) | agent-remeasure2 (`wave43-read`) | 2026-11-16 | **D-0133** and the D-0131 addendum. The sixteen editions with `f158c9f` (binary `a6327dc6`) against D-0129's archive: 0 REJECTED on 224 verified proofs, the same sixteen ranks, 1 594 of 1 600 statuses unchanged, the same 184 complete answers, incumbents 799 -> 800, objective better on 14 / worse on 20 of 799 (the noise floor T4 must stand above); 223 of the 224 verified proofs byte-identical to D-0129's, D-0131's shape on one root-UNSAT only. The seven OPT proofs verify under 60 h (1 h 20 to 16 h 22, up to 20.5 GiB; `8ShipsUnconst` over the harness's 16 GiB), and D-0131 §5's `5Ships`/`7ShipsMixedUnconst` line counts are corrected. Archives on the laptop; 37 GB of proofs deleted on the node. |
 
 ## Handoff notes
+## M6-T21 handoff, 2026-11-18 (agent-timelimit, `wave44-timelimit`): the `--time-limit` overshoot, D-0136
+
+- The overshoot was NOT node granularity. The stop fired on time (`fired=600.00s` on the new `limit:` field) and the 46 s (600 s) / 108 s (1 200 s) went to `conclude_stopped`'s first sweep: `Retention.retire` looked every id up in the database list three times, O(n^2) at the end of search, where n is every learned clause under `keep_all`. One pass now (`lib/core/retention.ml`, claim widened on the branch by measurement). Finished SAT/UNSAT runs paid the same sweep and are faster too.
+- The requested poll is in: `Engine.propagate ?stop ?poll_runs` asks after every 128th completed `Fixpoint` run, ends its own loops (cursor to n, queue cleared, so the seed guard gains no test: a guard test measured +0.73 %), raises `Engine.Stopped`, and `Search.dfs` re-raises it as `Limit_hit`. `config.stop_poll_runs = 0` is M6-T9's node-entry-only contract, for a `stop` that counts its calls.
+- Cost: +0.035 % user instructions at `BAGUETTE_NODE_LIMIT=20000` (perf stat; main twice differs by 0.003 %). Every proof at that budget byte-identical across main and the branch. Conflict analysis needed no poll: `fired` was within 0.01 s of the limit on every run, `at=node` included.
+- `limit:` now ends `at=node|propagation fired=<s>|none`. A `fired` well past the limit with `at=node` is what a slow 1UIP/PB analysis would look like; measure that before polling in `learn.ml`/`pb_analysis.ml`.
+- Measurement outputs: `fataepyc-06:/scratch/arthur/wave44-timelimit-out/` (`base*`, `fin*`, `n3_*`, `perf2/`, `gate.status`). The user's model is there as `m.fzn` (copied once from fataepyc-07).
+
 ## Wave 43 merged and gated, 2026-11-16 (orchestrator)
 
 Merged on `main`: `wave43-read` (D-0133 + the D-0131 addendum, `0f79f59`) and `wave43-t2` (D-0132,

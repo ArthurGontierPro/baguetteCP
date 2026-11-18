@@ -502,9 +502,26 @@ let cited_by t cid = Hashtbl.find_opt t.cited cid
    [~unchecked:true] skips the guards and is the break. It exists so that
    [test_retention.ml] can perform the deletion the guards refuse and show what the
    CHECKER says about it, which is the only way to know the guard is catching something
-   the checker would otherwise have had to. It is not reachable from the CLI. *)
+   the checker would otherwise have had to. It is not reachable from the CLI.
+
+   M6-T21 (D-0136): ONE pass over [live_rev] per call, not one per id. It used to look
+   each id up with [holds], [List.find_opt] and [List.filter] over the whole database,
+   which is O(k n) for k ids out of n held, and the end-of-search sweep has k = n: at
+   12 071 learned clauses that was 4.3 s of a 120 s `--time-limit` stop, at 34 381 the
+   bulk of a 46 s overshoot past 600 s. The guards, their order and their messages, the
+   entry recorded in [gone] (the newest one holding the id, which is what [find_opt]
+   over a newest-first list returned) and what is left in [live_rev] are unchanged. *)
 let retire ?(unchecked = false) t ctx ~why (ids : Writer.cid list) =
   if ids <> [] then (
+    let wanted = Hashtbl.create 64 in
+    List.iter (fun cid -> Hashtbl.replace wanted cid ()) ids;
+    (* cid -> the newest held entry for it, for the ids of this call only. *)
+    let held = Hashtbl.create 64 in
+    List.iter
+      (fun e ->
+        if Hashtbl.mem wanted e.e_cid && not (Hashtbl.mem held e.e_cid) then
+          Hashtbl.add held e.e_cid e)
+      t.live_rev;
     if not unchecked then
       List.iter
         (fun cid ->
@@ -519,7 +536,7 @@ let retire ?(unchecked = false) t ctx ~why (ids : Writer.cid list) =
                        it because a second forget is a no-op (D-0045)."
                       cid e.e_origin why))
           | None -> ());
-          if not (holds t cid) then
+          if not (Hashtbl.mem held cid) then
             raise
               (Not_owned
                  (Printf.sprintf
@@ -539,13 +556,8 @@ let retire ?(unchecked = false) t ctx ~why (ids : Writer.cid list) =
           | None -> ())
         ids;
     Writer.delete_many (Justify.writer ctx) ids;
-    List.iter
-      (fun cid ->
-        (match List.find_opt (fun e -> e.e_cid = cid) t.live_rev with
-        | Some e -> Hashtbl.replace t.gone cid e
-        | None -> ());
-        t.live_rev <- List.filter (fun e -> e.e_cid <> cid) t.live_rev)
-      ids)
+    Hashtbl.iter (fun cid e -> Hashtbl.replace t.gone cid e) held;
+    t.live_rev <- List.filter (fun e -> not (Hashtbl.mem wanted e.e_cid)) t.live_rev)
 
 (* Apply the policy. Returns the ids evicted, in the order they were deleted.
 

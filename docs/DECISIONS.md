@@ -12193,3 +12193,186 @@ What held the rest, read off the `--stats` lines: none of the 104 reached the en
   question 2); D-0031's seven models at `W = 0` are the first test of it.
 - PB conflict analysis declines every mixed row (`~mixed`); whether a bits term should be
   lifted is D-0130 §14's question 5 and the fallback counter says how often it mattered.
+
+## D-0136  M6-T21: the `--time-limit` overshoot was the stop's own sweep, quadratic in the learned constraints; and the stop is now also polled between two propagator runs
+
+**Status**: **DONE**, recorded 2026-11-18 (agent-timelimit, `wave44-timelimit`). Measured on
+`fataepyc-06`, outputs under `/scratch/arthur/wave44-timelimit-out/`. The model is the user's
+linear-code model (n = 40, k = 8, d = 16, SB), `m.fzn`, 4.9 MB, copied once from
+`fataepyc-07:/scratch/arthur/codes-cp/dbg/`. Baseline binary = main `9de2688` (the gate-44 build,
+md5 `274a8028`). Final binary = `wave44-timelimit` `d63f371` (md5 `f6cec7cb`). Every run used
+`--proof --stats --time-limit L` under `ulimit -v 16000000` and `/usr/bin/time`, as the user's
+`lim.sh` does. The request is the WORKLOG note of 2026-11-17 and ROADMAP M6-T21.
+
+### 1. The cause was not where the request put it
+
+The request read the overshoot (600 → 649 s, 1 200 → 1 314, 2 400 → 2 596) as node granularity,
+because `config.stop` was asked only at node entry and late nodes are heavy. That was a plausible
+reading, and the measurement says otherwise. A `fired=` field on the `limit:` line (the wall
+clock at which the stop first said yes) splits an overshoot into the stop's LATENCY (`fired`
+minus the limit) and the FINALISER's cost (`wall` minus `fired`).
+
+| run | limit | stop fired | `limit:` line printed | process exit | learned in the database |
+|---|---|---|---|---|---|
+| poll, old sweep | 120 s | 120.00 s | 124.26 s | 124.39 s | 12 071 |
+| poll, old sweep | 300 s | 300.00 s | 313.81 s | 314.05 s | 20 109 |
+| poll, old sweep | 600 s | (no field yet) | 645.24 s | 645.63 s | 33 984 |
+
+The stop fires on time and the time is spent AFTER it. The node granularity cost nothing
+measurable on this model. A node here is about 10 ms (68 848 nodes in 646 s), so a node-entry
+stop lands within milliseconds of the limit. Polling inside propagation alone (the third row,
+before the second fix) still stopped at 645.6 s.
+
+The time after the stop is `conclude_stopped`'s first sweep, `Retention.retire_all`, which
+retires every learned constraint the database holds. `Retention.retire` looked each id up in
+the database's list three times (`holds`, `List.find_opt`, and a `List.filter` that rebuilt the
+list), so retiring k ids out of n cost O(k n), and the end-of-search sweep has k = n. With
+`keep_all` (the default, D-0051) n is every learned clause of the run, and it grows with the run
+length. That is why the overshoot grew with the limit. At 12 071 clauses the sweep took 4.3 s,
+at 20 109 it took 13.8 s, at 34 381 it took 46 s and at 49 430 it took 108 s. The same sweep runs
+at the end of a run that finishes (SAT or UNSAT), so those paid it too.
+
+`retire` now makes one pass. It builds a table of the ids it was given, walks `live_rev` once to
+find the newest entry holding each, runs the guards in the same order with the same messages,
+writes the same `del` line, records the same entry in `gone` and filters `live_rev` once. It is
+O(n + k) per call. The proofs are byte-identical (section 4).
+
+### 2. The poll inside propagation, and why its exit point is consistent
+
+The request's poll is in as well, because one heavy node CAN hold a node-entry stop past the
+limit on another model (a long propagation fixpoint on a wide model, or a node that runs many
+learned instances). `Engine.propagate` takes `?stop` and `?poll_runs`. After every
+`poll_runs`-th COMPLETED `Fixpoint` run of the engine (128 by default, a per-engine countdown
+carried across calls), it asks `stop`. On yes it moves the seed cursor to the end and empties
+the queue, so both loops end without running anything more. It then does the same low-water
+reset a `Conflict` return does, records no fixpoint, and raises `Engine.Stopped`. `Search.dfs`
+catches that around its one `Engine.propagate` call, sets `stats.stopped_in_propagation` and
+raises `Limit_hit`, which is the node-entry stop's own exception, so the run ends through
+M6-T9's path unchanged (`Interrupted`, `conclude_stopped`, `Stopped`). `config.stop_poll_runs`
+(default 128, `0` = node entry only, which is M6-T9's contract exactly) is how a caller chooses.
+
+The point is consistent for four reasons.
+
+- **No propagator is mid-run.** The poll is the last statement of a completed run's `Fixpoint`
+  arm, after its trail entries are pushed and attributed and its watchers woken. A run is never
+  interrupted, so the store is never left mid-update (the request's first prohibition).
+- **The engine has written nothing to the proof, and neither has this node.** The engine never
+  touches the proof (its header, since M1-T10), and a propagator only builds explanations,
+  which are rendered later. A node writes its lines AFTER `Engine.propagate` returns, in
+  `dfs`'s `Conflict` arm (the trace, the conflict line, the learned constraint, the nogood). So
+  at the poll the writer holds exactly what it held at this node's entry, and its id counter is
+  at a line boundary (the request's second prohibition).
+- **What the half-propagated node leaves is trail entries with unrendered explanations, and
+  the finaliser does not read the trail.** `conclude_stopped` retires the learned database, the
+  assignment clauses and the trace's permanent ids, deletes every id still live
+  (`Writer.live_ids`) and writes `output NONE`, `conclusion NONE`, `end`. None of that consults
+  the store. The node-entry stop already ends with the store at an arbitrary depth, and a
+  half-propagated node is the same kind of state with more entries.
+- **A half-propagated node can be concluded NONE** because NONE claims nothing about it. Every
+  line on the page was derived before the node began, and the checker checks those lines, not
+  the node.
+
+The engine is also left reusable, though nothing reuses it. No fixpoint is recorded for the
+stopped call, so a later call would reseed from the last recorded fixpoint, exactly as it does
+after a `Conflict`.
+
+**Conflict analysis did not need a poll.** On every run the stop fired at the limit to the
+hundredth of a second (120.00, 300.00, 600.00, 600.01, 1 200.00 and 1 200.01 s, and 300.00 s on the Challenge instance of section 3), whether it landed in propagation or at a node entry, so
+the time between two polls (one node's conflict analysis included) is milliseconds on this
+model. `learn.ml` and `pb_analysis.ml` (claimed by M8-T3) were not touched and no request was
+filed. A model whose single 1UIP or PB analysis takes seconds would show it as `fired` well
+past the limit with `at=node`, and that is the measurement to take first.
+
+### 3. Before and after
+
+Baseline (main `9de2688`) against the final binary, the same model, runs side by side on a
+node shared with two other agents (load 15 to 30 on 192 cores). Nodes differ between runs at
+the same limit because the stop is a wall clock.
+
+| binary | limit | process exit | overshoot | nodes | nodes/s | learned | `at`, `fired` | proof | veripb |
+|---|---|---|---|---|---|---|---|---|---|
+| main `9de2688` | 600 s | 646.61 s | +46.6 s | 68 848 | 106.5 | 34 381 | (no fields) | 881 MB | VERIFIED NO CONCLUSION, 50 s |
+| main `9de2688` | 1 200 s | 1 308.11 s | +108.1 s | 98 962 | 75.7 | 49 430 | (no fields) | 1.37 GB | VERIFIED NO CONCLUSION, 77 s |
+| final `d63f371` | 600 s | 600.30 s | +0.30 s | 60 529 | 100.8 | 30 223 | `node`, 600.01 s | 748 MB | VERIFIED NO CONCLUSION, 41 s |
+| final `d63f371` | 1 200 s | 1 200.49 s | +0.49 s | 95 724 | 79.7 | 47 813 | `propagation`, 1 200.01 s | 1.31 GB | VERIFIED NO CONCLUSION, 74 s |
+| `c8e4912` (sweep fixed, loop guards) | 120 s | 120.13 s | +0.13 s | 23 813 | 198.2 | 11 874 | `propagation`, 120.00 s | | VERIFIED NO CONCLUSION, 15 s |
+| `c8e4912` | 600 s | 600.31 s | +0.31 s | 63 866 | 106.4 | 31 892 | `node`, 600.00 s | 801 MB | VERIFIED NO CONCLUSION, 43 s |
+| `c8e4912` | 1 200 s | 1 200.47 s | +0.47 s | 95 002 | 79.1 | 47 452 | `node`, 1 200.00 s | 1.30 GB | VERIFIED NO CONCLUSION, 74 s |
+
+What is left of the overshoot (0.3 to 0.5 s) is the sweep, the `del` of every live id, closing
+the proof channel and the process exit. The nodes/s at a wall-clock limit follow the node's load
+at the time (the final 600 s run is slower than main's for that reason, at the same
+instructions per node), and section 4 is the cost measured without that noise.
+
+The user's 2 400 s figure (+196 s) is the same curve. It was not re-run.
+
+One Challenge instance, `2011_cyclic-rcpsp_easy_6` (TIMEOUT in D-0133 at 1 200 s), at
+`--time-limit 300`: main stopped at 300.11 s, the final engine at 300.05 s (`at=node
+fired=300.00s`), the incumbent 674 printed by both. Its database is small (73 constraints), so
+it had no sweep to pay, and it is here as the control that the change costs nothing where there
+was nothing to fix. Its 2.6 GB proofs were not checked.
+
+### 4. The cost, and that nothing else moved
+
+At a fixed `BAGUETTE_NODE_LIMIT=20000` with the clock stop armed (`--time-limit 100000`, so the
+poll asks the real closure, which reads `Unix.gettimeofday`), user-space instructions under
+`perf stat`, five runs side by side:
+
+| binary | instructions:u | against main |
+|---|---|---|
+| main `9de2688`, run a | 463 635 827 548 | |
+| main `9de2688`, run b | 463 623 952 876 | -0.003 % (the noise floor) |
+| poll only (final engine, old `retention.ml`), run a | 463 765 765 069 | +0.03 % |
+| poll only, run b | 463 813 481 370 | +0.04 % |
+| final `d63f371` | 456 715 513 973 | -1.5 % (the sweep) |
+
+The poll costs about 0.035 % of the instructions, about 20 per propagator run (8.2 M runs). The
+wall clocks of the same five runs were 102, 113, 90, 91 and 99 s, so the wall-clock noise on a
+shared node is far above the poll's cost, which is what "unmeasurable" means here. The nodes/s
+at this budget (20 001 nodes over those walls) are 196 and 177 for main, 221 and 219 for the
+poll only, 202 for the final binary.
+
+A first version tested a `stopped` flag in both loops' guards. That measured +0.73 %
+(466.96 G against 463.56 G), because the seed loop's guard is evaluated once per instance SLOT,
+run or skipped, and this model skips 3.5 billion slots in 600 s (`stats: skipped`). The poll
+now ends the loops itself (the cursor to the end, the queue emptied), and the guards are what
+they were.
+
+All eight proofs at the 20 000-node budget are byte-identical across main, the poll-only
+binaries and the final one (`41b11f1a`). A node-limit stop never fires inside propagation
+(`stats.nodes` does not change during it), and the sweep writes the same `del` line. The gate
+of `d63f371` on a fresh clone: `make check` rc 0 (3 629 checks, 0 FAIL, peak RSS 85 MB), and
+the 165 models with no limit byte-identical to gate 44's artefacts of main (stdout, rc, `.opb`,
+`.pbp`, 0 diffs).
+
+### 5. Tests
+
+`test/unit/test_endtoend.ml` `test_m6_t21_stop_in_propagation`, on M6-T9's 4×3 pigeons. The stop
+is a predicate on the engine's own run counter and the poll is asked after every run
+(`stop_poll_runs = 1`), so where it lands is deterministic. It picks the first k that stops
+inside propagation past the root with a learned constraint on the page (k = 37, at 5 nodes).
+It asserts that the run stops INSIDE propagation after exactly k runs (nothing ran after the
+poll), that every id is deleted (I-X2, audit on), that the proof ends `output NONE`,
+`conclusion NONE`, `end`, that veripb says `VERIFIED NO CONCLUSION`, and that the same proof
+with `conclusion UNSAT` is refused in the checker's wording. The control is the same predicate
+with `stop_poll_runs = 0`. It stops at a node entry after 47 runs, so the poll is what moved the
+stop. M6-T9's own lane (a `stop` counting its calls, "AT the 7th node") passes unchanged at the
+default 128, because 4×3 pigeons take fewer than 128 runs to node 7. A predicate that counts its
+calls is the one kind the poll changes, and `stop_poll_runs = 0` is there for it.
+
+No test pins the sweep's complexity. `test_retention.ml`'s guards (double delete, not owned,
+cited, and their breaks) pass unchanged, and the byte-identity above covers the output.
+
+### 6. What changed, file by file
+
+- `lib/core/engine.ml`: `exception Stopped`, `default_poll_runs`, the `poll_left` field, the
+  poll in `propagate` (`?stop`, `?poll_runs`). The header says what the poll is.
+- `lib/core/search.ml`: `config.stop_poll_runs`, `stats.stopped_in_propagation`, the
+  `Engine.Stopped` arm in `dfs`, and the `Limit_hit` and `config.stop` comments with the
+  consistency argument above.
+- `lib/core/retention.ml`: `retire` in one pass (claim widened on the branch, by measurement).
+- `bin/main.ml`: the `limit:` line gains `at=node|propagation` and `fired=<s>|none` (appended
+  key=value fields, which `scripts/corpus_run.sh` reads by key), and the `--time-limit` help
+  says where the stop is checked. `wave44-noproof` also edits this file. This row's change is
+  the help text, `stop_fired_at`, the closure and the two fields.
+- `test/unit/test_endtoend.ml`: the lane above.
