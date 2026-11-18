@@ -7891,40 +7891,49 @@ let test_regular_brute_force () =
        !scenes !changed !conflicts)
     (!bad = 0 && !scenes = 1200 && !changed > 100 && !conflicts > 10)
 
-(* D-0146 section 4's instance 2 as FlatZinc: Q = 4, x_i in 1..4, F = {4}; layer 1 holds
-   states 2 and 3 whatever x0 is. The extra row x2 <= x0 + 1 and the search order (x0
-   first, smallest value first) make the first branch fail under a decision, so trace
-   lines with decision facts are on the page; the second finds a solution. *)
-let regular_fzn ?(extra = "constraint int_lin_le([1, -1], [x2, x0], 1);\n") () =
-  let flags = List.init 16 (fun k -> Printf.sprintf "s%d_%d" (k / 4) ((k mod 4) + 1)) in
+(* A [baguette_regular] instance as FlatZinc: [n] letters on 1..[dom_hi], [nq] states,
+   [table] row-major over the symbols 1..|table|/nq, start 1, accepting [final], flags
+   s<i>_<q>, then the [extra] lines and an input-order, smallest-first search on x. Shared
+   with test/unit/test_mutation.ml's lanes, which inline the same text. *)
+let regular_fzn ~n ~dom_hi ~nq ~table ~final ?(extra = []) () =
+  let xs = List.init n (Printf.sprintf "x%d") in
+  let flags =
+    List.init ((n + 1) * nq) (fun k -> Printf.sprintf "s%d_%d" (k / nq) ((k mod nq) + 1))
+  in
+  let ints l = String.concat ", " (List.map string_of_int l) in
   String.concat ""
-    ([
-       "var 1..4: x0 :: output_var;\n";
-       "var 1..4: x1 :: output_var;\n";
-       "var 1..4: x2 :: output_var;\n";
-     ]
+    (List.map (fun x -> Printf.sprintf "var 1..%d: %s :: output_var;\n" dom_hi x) xs
     @ List.map (fun f -> Printf.sprintf "var bool: %s;\n" f) flags
     @ [
-        "constraint baguette_regular([x0, x1, x2], 4, 1, [2, 3, 0, 0, 2, 2, 2, 4, 3, 3, \
-         3, 4, 4, 4, 4, 4], 1, [4], [";
-        String.concat ", " flags;
-        "]);\n";
-        extra;
-        "solve :: int_search([x0, x1, x2], input_order, indomain_min, complete) satisfy;\n";
+        Printf.sprintf "constraint baguette_regular([%s], %d, 1, [%s], 1, [%s], [%s]);\n"
+          (String.concat ", " xs) nq (ints table) (ints final) (String.concat ", " flags);
+      ]
+    @ extra
+    @ [
+        Printf.sprintf
+          "solve :: int_search([%s], input_order, indomain_min, complete) satisfy;\n"
+          (String.concat ", " xs);
       ])
 
-let test_regular_veripb () =
-  let dir = Filename.temp_file "baguette_regular" "" in
-  Sys.remove dir;
-  Sys.mkdir dir 0o700;
-  let file = "regular_inst2" in
-  let m = Flatzinc.Builder.of_string ~file (regular_fzn ()) in
+(* D-0146 section 4's instance 2: columns 1, 2, 3, 4 all distinct, so 4 runs a letter. *)
+let regular_inst2 () =
+  regular_fzn ~n:3 ~dom_hi:4 ~nq:4
+    ~table:[ 2; 3; 0; 0; 2; 2; 2; 4; 3; 3; 3; 4; 4; 4; 4; 4 ]
+    ~final:[ 4 ] ()
+
+(* "No two consecutive 2s" over five letters on 1..2, and the letters sum to 8: three 2s,
+   so 2 1 2 1 2 is the only word. Smallest-first on x0 fails first (the other four letters
+   cannot hold three separated 2s), under a decision the root fixpoint does not see, so
+   the trace lines of that branch -- deaths and value removals with a DECISION fact on
+   their tail -- are on the page before the solution. *)
+let regular_nocons () =
+  regular_fzn ~n:5 ~dom_hi:2 ~nq:2 ~table:[ 1; 2; 1; 0 ] ~final:[ 1; 2 ]
+    ~extra:[ "constraint int_lin_eq([1, 1, 1, 1, 1], [x0, x1, x2, x3, x4], 8);\n" ]
+    ()
+
+let regular_solve dir ~file src =
+  let m = Flatzinc.Builder.of_string ~file src in
   let t = Compile.compile m in
-  (* section 3.1's rows: 4 layers x (ALO + AMO), START, ACCEPT, the three ladders of 3
-     rungs, and per letter 4 states x 2 runs (1..3 share a column? no: 1, 2, 3, 4 are
-     four columns, so 4 runs) = 16 forward rows -- and as many lemmas. *)
-  check "regular: the root lemmas are n * Q * runs = 3 * 4 * 4"
-    (Encoding.n_root_lemmas t.Compile.encoding = 48);
   let opb = Filename.concat dir (file ^ ".opb")
   and pbp = Filename.concat dir (file ^ ".pbp") in
   let oc = open_out opb in
@@ -7944,22 +7953,37 @@ let test_regular_veripb () =
       ?order:t.Compile.order ()
   in
   close_out oc;
-  check "regular: the instance is satisfiable and the solution is the automaton's"
+  (t, outcome, opb, pbp)
+
+let test_regular_veripb () =
+  let dir = Filename.temp_file "baguette_regular" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let t2 =
+    Compile.compile (Flatzinc.Builder.of_string ~file:"inst2" (regular_inst2 ()))
+  in
+  check "regular: instance 2 registers n * Q * runs = 3 * 4 * 4 root lemmas"
+    (Encoding.n_root_lemmas t2.Compile.encoding = 48);
+  let t, outcome, opb, pbp =
+    regular_solve dir ~file:"regular_nocons" (regular_nocons ())
+  in
+  check "regular: no-two-consecutive registers 5 * 2 * 2 root lemmas"
+    (Encoding.n_root_lemmas t.Compile.encoding = 20);
+  check "regular: the solver finds the one word, and the oracle accepts it"
     (match outcome with Search.Sat _ -> true | _ -> false);
-  let text = read_file pbp in
+  let lines = String.split_on_char '\n' (read_file pbp) in
   let ruplines =
-    List.length
-      (List.filter
-         (fun l -> contains_sub ~needle:" rup " l)
-         (String.split_on_char '\n' text))
+    List.length (List.filter (fun l -> contains_sub ~needle:" rup " l) lines)
   in
   check
     (Printf.sprintf
-       "regular: the proof derives its 48 lemmas and writes trace lines past them (%d \
+       "regular: the proof derives its 20 lemmas and the failed branch's trace lines (%d \
         rup lines)"
        ruplines)
-    (contains_sub ~needle:"root lemmas (D-0146)" text && ruplines > 48);
-  run_veripb ~name:"regular: the instance-2 proof, lemmas and trace lines, verifies"
+    (List.exists (fun l -> contains_sub ~needle:"root lemmas (D-0146)" l) lines
+    && ruplines > 20);
+  run_veripb
+    ~name:"regular: the no-two-consecutive proof, lemmas, trace and nogood, verifies"
     ~build:(fun _ -> (opb, pbp))
 
 let () =
