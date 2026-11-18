@@ -1,0 +1,23 @@
+--- a/lib/core/search.ml
++++ b/lib/core/search.ml
+@@ -1733,12 +1733,15 @@
+    the same ~before [Trace.settle_facts] passes for a propagator's settle; M1-T66 asks it
+    for a decision's. *)
+ let decision_entries store =
++  (* M11-T1 SCRATCH S3: the level marks, not the whole trail. *)
+   let n = Store.trail_length store in
+-  let acc = ref [] in
+-  for i = n - 1 downto 0 do
+-    if Store.is_level_start store i then acc := (i, Store.trail_entry store i) :: !acc
+-  done;
+-  !acc
++  let rec go acc prev = function
++    | [] -> List.rev acc
++    | m :: rest ->
++        if m = prev || m >= n then go acc prev rest
++        else go ((m, Store.trail_entry store m) :: acc) m rest
++  in
++  go [] (-1) (Store.level_marks store)
+ 
+ (* Did this push land somewhere strictly stronger than its literal names, and if so on
+    what? [Some cond] is the bound the trail actually recorded; [None] means the push

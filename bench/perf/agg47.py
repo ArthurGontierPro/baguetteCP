@@ -55,9 +55,34 @@ def owner(sym):
     return "other C/kernel"
 
 
+MODEL = {"Linear", "Lin_eq", "Cumulative", "Alldiff", "Gcc", "Element", "Maxmin", "Reif",
+         "Reif_lin_le", "Reif_lin_eq", "Arith", "Bool2int", "Ne", "Checked", "Interval",
+         "Order_reason", "Int_le", "Int_lt", "Int_eq", "View"}
+LEARN = {"Analysis", "Learn", "Pb_analysis", "Reduce", "Ladder", "Learned", "Search"}
+PROOF = {"Trace", "Justify", "Writer", "Lit", "Opb", "Encoding", "Explanation", "Reason",
+         "strings/IO", "Stdlib.Buffer", "Stdlib.Printf", "CamlinternalFormat"}
+
+
+def category(own):
+    if own in ("Clause", "Pb", "Engine", "Retention", "Store", "GC/alloc", "closure calls",
+               "polymorphic compare", "polymorphic hash", "Stdlib.List"):
+        return own
+    if own in MODEL:
+        return "model propagators"
+    if own in LEARN:
+        return "search/analysis/learning"
+    if own in PROOF or own.startswith("Camlinternal"):
+        return "proof path"
+    return "other"
+
+
 def main():
     args = sys.argv[1:]
     ntop = 30
+    cats = False
+    if args and args[0] == "--categories":
+        cats = True
+        args = args[1:]
     if args and args[-1].isdigit():
         ntop = int(args.pop())
     if len(args) == 1:
@@ -74,6 +99,12 @@ def main():
     by_owner = collections.Counter()
     for k, v in d.items():
         by_owner[owner(k)] += v
+    if cats:
+        by_cat = collections.Counter()
+        for k, v in by_owner.items():
+            by_cat[category(k)] += v
+        print("\t".join("%s=%.1f" % (k, 100.0 * v / total) for k, v in by_cat.most_common()))
+        return
     print("profile:", title)
     print("samples:", total)
     print("-- by owner (share of self samples)")
