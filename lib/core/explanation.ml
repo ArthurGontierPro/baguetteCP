@@ -204,22 +204,22 @@ type t =
     (* sum of summands, then divide by the int (>= 1; 1 means "do not divide" --
        Justify skips emitting a division step rather than a no-op "1 d"). One
        [Combine] is one [pol] step (D-0013). *)
-  | Deferred of thunk
-    (* Computed only if actually needed. *)
   | Resolve of t list
     (* M8-bits-encoding-T3, D-0134 section 2.2: the SUM of the listed derivations, each
        first saturated to the clause it derives (a [Combine] is summed, divided and
        saturated; a [Model_row] is cited as it stands), saturated again -- resolution on
        the literals that cancel between them, as ONE `pol` step. The literals that
        cancel are a choice encoding's selectors: maxmin's `b_i -> m <= x_i` rows summed
-       with `\/ b_i`, int_lin_ne's A/B pair summed on `_neN`. The clause it derives is
-       the union of its parts' literals less the cancelled pairs, and every part's
-       [Linear_term] is read for that clause -- including the one that carries the
-       NEGATION of the claim as the bound it assumed (section 2.3): no atom is added
-       for the claim at the end, unlike a [Combine]'s bits rendering. Rendered only by
-       the bits arm ([Justify.emit_bits_pruning]); a bare [Justify.emit] refuses it, as
-       it refuses a bits [Linear_term], because an order-only derivation has no reason
-       to be one (the per-value clause IS a row there). *)
+       with `\/ b_i` (and, by the same shape, int_lin_ne's A/B pair on `_neN`). The
+       clause it derives is the union of its parts' literals less the cancelled pairs,
+       and every part's [Linear_term] is read for that clause -- including the one that
+       carries the NEGATION of the claim as the bound it assumed (section 2.3): no atom
+       is added for the claim at the end, unlike a [Combine]'s bits rendering. Rendered
+       by the bits arm ([Justify.emit_bits_pruning]) as an entry's trace line; a bare
+       [Justify.emit] meets one only as a CITATION from an order-arm derivation and
+       answers the line stating the clause it derives (D-0134 section 5). *)
+  | Deferred of thunk
+(* Computed only if actually needed. *)
 
 and summand =
   | Term of int * t
