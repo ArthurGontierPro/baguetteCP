@@ -1562,6 +1562,117 @@ let run () =
           ~knob:(knob ~site:"atom " Writer.Mutation.Strengthen_rhs)
           "atom-rhs");
 
+    (* -- M8-bits-encoding-T3: maxmin's SELECTOR shape (D-0134) ---------------------
+       test/models/bits_maxmin_sat.fzn (inlined) compiled at `--bits-above 0`: m = max(a, b, c)
+       over bits, SATISFIABLE, with Maxmin conflicts under decisions -- each a `pol`
+       resolving the three selector rows with the clause over the selectors, pinned by
+       `ia` (Explanation.Resolve). The knobs aim at "[resolve]", the origin only that
+       shape carries. pol-cite swaps the first citation, the first part's SELECTOR ROW,
+       for another live id; truncate keeps the label and throws the derivation away;
+       drop-literal pins a clause one literal short. Each is refused at the `ia`
+       wording, a judgement on the derivation. *)
+    let mm_src =
+      {|
+var 0..9: m :: output_var;
+var 0..9: a :: output_var;
+var 0..9: b :: output_var;
+var 0..5: c :: output_var;
+constraint array_int_maximum(m, [a, b, c]);
+constraint int_lin_le([-1], [m], -6);
+constraint int_le(b, a);
+constraint int_lin_le([1, 1, 1], [a, b, c], 9);
+solve :: int_search([a, b, c, m], input_order, indomain_min, complete) satisfy;
+|}
+    in
+    let solve_bits_src src ?mutation ~name () =
+      let saved = !Encoding.bits_above in
+      Encoding.bits_above := Some 0;
+      Fun.protect
+        ~finally:(fun () -> Encoding.bits_above := saved)
+        (fun () ->
+          let m = F.Builder.of_string ~file:name src in
+          let c = Compile.compile m in
+          let opb = Filename.concat dir (name ^ ".opb")
+          and pbp = Filename.concat dir (name ^ ".pbp") in
+          let oc = open_out opb in
+          Encoding.write_opb ~comments:[ "test_mutation: " ^ name ] c.Compile.encoding oc;
+          close_out oc;
+          let oc = open_out pbp in
+          let writer =
+            match mutation with
+            | None -> Writer.create ~comments:false ~audit:true oc
+            | Some mutation ->
+                Writer.create_mutated ~comments:false ~audit:true ~mutation oc
+          in
+          Encoding.start_proof c.Compile.encoding writer;
+          let ctx = Justify.create ~writer ~encoding:c.Compile.encoding in
+          let outcome =
+            Search.solve ~engine:c.Compile.engine ~store:c.Compile.store ~ctx
+              ~check:(fun _ -> true)
+              ?order:c.Compile.order ()
+          in
+          close_out oc;
+          ({ pbp; opb; fired = Writer.mutation_fired writer }, outcome))
+    in
+    let b, outcome = solve_bits_src mm_src ~name:"bits_maxmin" () in
+    check "bits_maxmin: the solver solves it (the instance is what we think it is)"
+      (match outcome with Search.Sat _ -> true | Search.Unsat -> false);
+    check "bits_maxmin: the selector shape is on the page (a choice group in the .opb)"
+      (contains (read_file b.opb) "_mx0_ge_1");
+    let build_mm ~name ~mutation = fst (solve_bits_src mm_src ~mutation ~name ()) in
+    gated ~tag:"bits_maxmin"
+      ~control:(fun () -> control_holds ~tag:"bits_maxmin" ~proof:b.pbp)
+      ~declares:[ "pol-cite"; "truncate"; "drop-literal" ]
+      (fun c ->
+        emitter_lane c ~build:build_mm ~expect:`Rejects
+          ~knob:(knob ~site:"[resolve]" Writer.Mutation.Swap_citation)
+          "pol-cite";
+        emitter_lane c ~build:build_mm ~expect:`Rejects
+          ~knob:(knob ~site:"[resolve]" Writer.Mutation.Truncate_derivation)
+          "truncate";
+        emitter_lane c ~build:build_mm ~expect:`Rejects
+          ~knob:(knob ~site:"[resolve]" Writer.Mutation.Drop_literal)
+          "drop-literal");
+
+    (* -- M8-bits-encoding-T3: int_ne / int_lin_ne over bits (D-0134 section 6) ------
+       test/models/bits_ne_sat.fzn (inlined), SATISFIABLE, solved in the model's own
+       search order as the CLI does: a hole punched in a bits domain at the root, a
+       settle past it, and a disequality conflict with every term fixed under a decision. The first "[resolve]" line is the hole's two-half `pol`;
+       each corruption is refused at the `ia`. *)
+    let ne_src =
+      {|
+var 0..9: x :: output_var;
+var 0..9: y :: output_var;
+var 0..9: z :: output_var;
+constraint int_lin_eq([1, 1], [x, y], 9);
+constraint int_lin_ne([1, -1], [x, y], 1);
+constraint int_lin_le([-1], [x], -4);
+constraint int_lin_le([1], [x], 5);
+constraint int_ne(z, 5);
+constraint int_lin_le([1, -1], [z, x], 0);
+solve :: int_search([z, x, y], input_order, indomain_max, complete) satisfy;
+|}
+    in
+    let b, outcome = solve_bits_src ne_src ~name:"bits_ne" () in
+    check "bits_ne: the solver solves it (the instance is what we think it is)"
+      (match outcome with Search.Sat _ -> true | Search.Unsat -> false);
+    check "bits_ne: the disequalities are on bits (a `_ne` selector beside bits rows)"
+      (contains (read_file b.opb) "_ne0_ge_1" && contains (read_file b.opb) "z_bit_0");
+    let build_ne ~name ~mutation = fst (solve_bits_src ne_src ~mutation ~name ()) in
+    gated ~tag:"bits_ne"
+      ~control:(fun () -> control_holds ~tag:"bits_ne" ~proof:b.pbp)
+      ~declares:[ "pol-cite"; "truncate"; "drop-literal" ]
+      (fun c ->
+        emitter_lane c ~build:build_ne ~expect:`Rejects
+          ~knob:(knob ~site:"[resolve]" Writer.Mutation.Swap_citation)
+          "pol-cite";
+        emitter_lane c ~build:build_ne ~expect:`Rejects
+          ~knob:(knob ~site:"[resolve]" Writer.Mutation.Truncate_derivation)
+          "truncate";
+        emitter_lane c ~build:build_ne ~expect:`Rejects
+          ~knob:(knob ~site:"[resolve]" Writer.Mutation.Drop_literal)
+          "drop-literal");
+
     (* -- the harness's own guards -------------------------------------------- *)
     (* A mutation that rewrote nothing would make every lane green against the control's
        own proof. mutate_proof.sh calls that out rather than running veripb on an

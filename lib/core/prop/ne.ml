@@ -150,6 +150,27 @@
    input [Stdlib.mod] is not guaranteed to survive and which [rest mod tm.coeff] can
    reach for a coefficient of -1 -- which is every [int_ne]. *)
 
+(* ---------------------------------------------------------------------------
+   Over the BITS encoding (M8-bits-encoding-T3, D-0134 section 6, D-0130 section 7.4)
+   ---------------------------------------------------------------------------
+
+   The nogood above is RUP over the A/B pair and the LADDER; over a bits variable it is
+   not (D-0127: no bound crosses a bits row by unit propagation), so a scope with a bits
+   variable is built with [~rows:(a, b)], the ids of [Encoding.add_int_lin_ne]'s pair,
+   and the same nogood is DERIVED as one `pol` ([Explanation.Resolve]):
+
+     A:  sum a_i x_i - A sel <= c - 1      plus |a_i| x the bridge of x_i at v_i on the
+                                           side the row reads, saturated: sel \/ ~[x_i >= v_i]...
+     B:  -sum a_i x_i + B sel <= -L        likewise from the other side, saturated:
+                                           ~sel \/ [x_i >= v_i + 1]...
+
+   Both degrees are exactly 1 because the pairs sum to exactly c, so neither part divides,
+   and their sum resolves the selector away: the clause left is the nogood, literal for
+   literal (probe g1). The reason half is untouched (D-0026's split): the same facts, the
+   same claims; only the justification's shape depends on the encoding, chosen once by
+   lib/flatzinc/compile.ml from the scope. A scope with no bits variable has no [rows]
+   and is byte for byte what it was. *)
+
 module Encoding = Baguette_proof.Encoding
 module Lit = Baguette_proof.Lit
 
@@ -160,7 +181,12 @@ module Lit = Baguette_proof.Lit
    against the *declared* domain, which the store stops reporting the moment anything
    narrows the variable. Coefficients here are always non-zero; see [make]. *)
 type term = { coeff : int; x : Var.t; name : string; decl_lo : int; decl_hi : int }
-type t = { terms : term list; rhs : int }
+
+type t = {
+  terms : term list;
+  rhs : int;
+  rows : (int * int) option; (* (A, B) over a bits scope (T3), else [None] *)
+}
 
 let name = "int_lin_ne"
 let consistency = Propagator.Value
@@ -175,7 +201,7 @@ let consistency = Propagator.Value
    Reads each variable's domain out of the store, so it must be called before
    anything has narrowed it (the same requirement, for the same D-0010 reason, that
    [Linear.make]'s header states). *)
-let make store raw_terms rhs =
+let make ?rows store raw_terms rhs =
   let terms =
     List.filter_map
       (fun (coeff, x) ->
@@ -192,7 +218,7 @@ let make store raw_terms rhs =
             })
       raw_terms
   in
-  { terms; rhs }
+  { terms; rhs; rows }
 
 let vars t = List.map (fun tm -> tm.x) t.terms
 
@@ -210,7 +236,25 @@ let nogood pairs =
 (* The clause is short, but building it still allocates and most prunings are never
    asked for a reason (docs/ARCHITECTURE.md, "Deferred explanations"), so it goes
    behind a thunk over the already-snapshotted values. *)
-let explain pairs = Explanation.deferred (fun () -> nogood pairs)
+(* The same nogood over a bits scope, derived (the header's last section): row A with
+   every pair as a [Linear_term] on A's coefficient, row B on the negated ones, each a
+   divisor-1 [Combine], resolved on the selector. *)
+let nogood_resolve (row_a, row_b) pairs =
+  let part row sign =
+    Explanation.combine
+      (Explanation.term 1 (Explanation.model_row row)
+      :: List.map
+           (fun (tm, v) ->
+             Explanation.linear_term ~coeff:(sign * tm.coeff) ~name:tm.name
+               ~decl_lo:tm.decl_lo ~decl_hi:tm.decl_hi ~value:v [])
+           pairs)
+      1
+  in
+  Explanation.resolve [ part row_a 1; part row_b (-1) ]
+
+let explain ?rows pairs =
+  Explanation.deferred (fun () ->
+      match rows with None -> nogood pairs | Some r -> nogood_resolve r pairs)
 
 (* ---------------------------------------------------------------------------
    The other projection of the same pruning: its bound facts (docs/DECISIONS.md
@@ -270,10 +314,10 @@ let pruning_reason tm w d fixed_others =
    [(tm, w) :: fixed_others] (the pruned term fixed at [w] as well, which is what makes it
    a nogood) and the reason is over the bound [w] is about to move plus the others; the
    two differ exactly there and by construction, not by two call sites agreeing. *)
-let justified_pruning ~concludes tm w d fixed_others : Reason.justified =
+let justified_pruning ?rows ~concludes tm w d fixed_others : Reason.justified =
   Reason.because ~concludes
     (pruning_reason tm w d fixed_others)
-    (explain ((tm, w) :: fixed_others))
+    (explain ?rows ((tm, w) :: fixed_others))
 
 (* D-0043's conclusion for a *value removal*, which is the one pruning shape whose claim
    is not always a bound.
@@ -355,7 +399,7 @@ let propagate t store =
         Propagator.Conflict
           (Store.conflict store
              (Reason.because ~concludes:None Reason.none
-                (explain (all_pairs store t.terms))))
+                (explain ?rows:t.rows (all_pairs store t.terms))))
   | [ idx ] -> (
       let tm = List.nth t.terms idx in
       let others = others_except t.terms idx in
@@ -376,7 +420,8 @@ let propagate t store =
           in
           let concludes = removal_conclusion tm w d in
           match
-            Store.remove store tm.x w (justified_pruning ~concludes tm w d fixed_others)
+            Store.remove store tm.x w
+              (justified_pruning ?rows:t.rows ~concludes tm w d fixed_others)
           with
           | Store.Conflict e ->
               (* Unreachable at the interface: [tm] is unfixed, so its domain holds at

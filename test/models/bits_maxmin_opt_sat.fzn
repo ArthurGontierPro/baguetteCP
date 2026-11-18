@@ -1,0 +1,18 @@
+% M8-bits-encoding-T3 (D-0134): a tower-shaped MAKESPAN, minimised. mk = max(e1, e2, e3)
+% with e_i = s_i + d_i, d = (3, 4, 7), and s2 >= s1 + 3. The optimum mk = 7 has e2 = e3 =
+% 7, a TIE, so every improving `soli` and the last one in particular must list the
+% selectors (D-0134 section 2.4), and with mk on bits the floor is the derived `pol @soli
+% @lb +` of D-0132 section 5.1.
+var 0..20: s1 :: output_var;
+var 0..20: s2 :: output_var;
+var 0..20: s3 :: output_var;
+var 0..30: e1;
+var 0..30: e2;
+var 0..30: e3;
+var 0..30: mk :: output_var;
+constraint int_lin_eq([1, -1], [e1, s1], 3);
+constraint int_lin_eq([1, -1], [e2, s2], 4);
+constraint int_lin_eq([1, -1], [e3, s3], 7);
+constraint int_lin_le([1, -1], [s1, s2], -3);
+constraint array_int_maximum(mk, [e1, e2, e3]);
+solve :: int_search([s3, s2, s1], input_order, indomain_max, complete) minimize mk;

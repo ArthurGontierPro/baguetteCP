@@ -1,0 +1,19 @@
+% M8-bits-encoding-T3 (D-0134 section 6, D-0130 section 7.4): int_ne / int_lin_ne over bits.
+% At `--bits-above 0` x, y, z are on bits and every disequality's nogood is DERIVED: row A
+% and row B of its `_neN` pair, each with the bridges of the fixed terms, saturated and
+% summed so the selector resolves away. z <> 5 punches a hole in a bits domain at the
+% root; branching z to its top then settles z <= x <= 5 PAST that hole (the claim z <= 4
+% is not the derived clause's literal, so the trace's `rup` follows the `ia`, RUP through
+% the hole's line); x = 5 fixes y = 4 by the equality and x - y <> 1 fails with every
+% term fixed, a conflict whose `pol` is written under the decision (no fact to hang a
+% line on). The search then lands on z = 4, x = 4, y = 5.
+var 0..9: x :: output_var;
+var 0..9: y :: output_var;
+var 0..9: z :: output_var;
+constraint int_lin_eq([1, 1], [x, y], 9);
+constraint int_lin_ne([1, -1], [x, y], 1);
+constraint int_lin_le([-1], [x], -4);
+constraint int_lin_le([1], [x], 5);
+constraint int_ne(z, 5);
+constraint int_lin_le([1, -1], [z, x], 0);
+solve :: int_search([z, x, y], input_order, indomain_max, complete) satisfy;

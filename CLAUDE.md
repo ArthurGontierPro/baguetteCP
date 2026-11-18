@@ -274,7 +274,9 @@ lib/core/       Baguette_core
                             pruning is an interior hole in its own domain (M4-T3)
     maxmin.ml               array_int_maximum / array_int_minimum (and int_max/int_min as
                             the two-element case), BOUNDS consistent over one clause row per
-                            value; minimum is maximum over negated views (M4-T9, D-0095)
+                            value; minimum is maximum over negated views (M4-T9, D-0095).
+                            Over bits: one SELECTOR row per operand + a clause, each
+                            pruning one Resolve `pol` (M8-bits-encoding-T3, D-0134)
     cumulative.ml           cumulative (and disjunctive as cap 1, r 1): time-table filtering
                             over gcc's window indicators, one capacity row per time point,
                             CHECKING; the first Needs_derivation family whose CONFLICTS carry

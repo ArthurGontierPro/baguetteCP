@@ -1,0 +1,16 @@
+% M8-bits-encoding-T3 (D-0134): array_int_MINIMUM over bits -- the same selector shape over
+% the negated views, so its rows are `x_i - m + M_i b_i <= M_i` with M_i = dhi(x_i) -
+% dlo(m). m <= 4 and y >= 5 are rows, x - z <= 4 links the other two. indomain_max tries
+% x = 9 first: z >= 5, and every operand is then above hi(m) -- the mirrored Maxmin
+% conflict, a `pol` resolving the three selector rows, under a decision over a
+% satisfiable model (D-0053). x = 8 leaves z the only operand that can come down to 4,
+% so the mirrored R4 pushes z <= 4 and the mirrored R3 lifts m to 4.
+var 0..9: m :: output_var;
+var 0..9: x :: output_var;
+var 0..9: y :: output_var;
+var 0..9: z :: output_var;
+constraint array_int_minimum(m, [x, y, z]);
+constraint int_lin_le([1], [m], 4);
+constraint int_lin_le([-1], [y], -5);
+constraint int_lin_le([1, -1], [x, z], 4);
+solve :: int_search([x, z, y, m], input_order, indomain_max, complete) satisfy;

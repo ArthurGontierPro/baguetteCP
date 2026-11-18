@@ -19,10 +19,9 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M6-T22 | `lib/core/engine.ml`, `lib/core/store.ml`, `lib/core/domain.ml`, `lib/core/prop/clause.ml`, `lib/core/prop/pb.ml`, `lib/core/prop/bool2int.ml`, `lib/core/prop/linear.ml`, `lib/core/prop/lin_eq.ml`, `lib/proof/writer.ml` (the write path only), their unit tests, `docs/DECISIONS.md` (D-0138 appended), `docs/ROADMAP.md` M6-T22 row. NOT `search.ml` (M10-T1), `retention.ml` (M10-T4), `learn.ml`/`trace.ml`/`justify.ml`/`pb_analysis.ml` (M8-T3) | agent-pernode (`wave45-pernode`) | 2026-11-18 |
+| M8-bits-encoding-T3 (continuation: the reified/bool2int holds, steps 3-5, mapping/ATSP diagnosis) | `lib/core/pb_analysis.ml`, `lib/core/ladder.ml`, `lib/core/learn.ml`, `lib/core/trace.ml`, `lib/core/justify.ml`, `lib/core/explanation.ml`, `lib/proof/encoding.ml`, `lib/proof/lit.ml`, `lib/flatzinc/compile.ml`, `lib/core/prop/reif*.ml`, `lib/core/prop/arith.ml`, `bin/main.ml` (`--stats` only), their tests, new `test/models/bits_*`, `docs/DECISIONS.md` (D-0134 sections appended), `docs/PROOF-FORMAT.md` §3/§4, `docs/ROADMAP.md` T3 row. `prop/bool2int.ml` is M6-T22's: request any change there | agent-t3c (`wave46-t3`) | 2026-11-18 |
 | M10-search-strategy-T1, then T2 and T3 | `docs/DECISIONS.md` (D-0137 appended), `docs/SPEC.md` §3.4 (the restart amendment), `docs/ROADMAP.md` M10 rows T1-T3, `lib/core/search.ml` (restarts, phase saving, branching), a new `lib/core/activity.ml` (+ `docs/ARCHITECTURE.md` §1 and `CLAUDE.md`'s map), `lib/core/analysis.ml` (activity bumps, if needed), `bin/main.ml` (flags), `test/unit/test_search*.ml`/`test_learn.ml`/`test_endtoend.ml`, new `test/models/*restart*`/`*activity*` + `test/expected/` | agent-strategy (`wave45-strategy`) | 2026-11-18 |
 | M10-search-strategy-T4 | `lib/core/retention.ml`, `lib/core/learned.ml` (an LBD field if needed), `bin/main.ml` (the policy flag only), `test/unit/test_retention.ml`, `docs/DECISIONS.md` (D-0139 appended), `docs/ROADMAP.md` M10-T4 row | agent-retention (`wave45-retention`) | 2026-11-18 |
-| M8-bits-encoding-T3 | design record D-0134 first (`docs/DECISIONS.md` appended), then `lib/proof/encoding.ml`, `lib/proof/lit.ml`, `lib/core/prop/maxmin.ml`, `lib/core/prop/ne.ml`, `lib/core/prop/arith.ml` if reached, `lib/core/pb_analysis.ml`, `lib/core/ladder.ml`, `lib/core/learn.ml`, `lib/core/trace.ml`, `lib/core/justify.ml`, `lib/flatzinc/compile.ml` (eligibility releases), `bin/main.ml` (`--stats`), their tests under `test/unit/`, new `test/models/bits_*.fzn` + `test/expected/`, `docs/PROOF-FORMAT.md` §3/§4 (bits paragraphs), `docs/ROADMAP.md` T3 row, `docs/INVARIANTS.md` if an invariant is added | agent-t3 (`wave44-t3`) | 2026-11-16 |
 
 ## Cross-session requests
 
@@ -297,10 +296,22 @@ Two separate findings.
    (`wave45-retention`). The 24 kept `.fzn.gz`, their logs and `heur.sh` were copied read-only to
    `fataepyc-06:/scratch/arthur/codes-bench/`.
 
+### 2026-11-18 — M6-T22 (D-0138): what is left of the per-node cost on the codes models, in files M6-T22 does not hold (agent-pernode, `wave45-pernode`)
+
+Measured on fataepyc-06 with `wave45-pernode` at `0364386` (all M6-T22 fixes in), QR48 `def`, 10 000 nodes,
+`perf record` self time and `perf stat` instructions. Nodes, propagator runs and the 165 models' four
+artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable with any later build.
+
+| Request | File | From | Status |
+|---|---|---|---|
+| **The learned database costs O(n) per conflict, and it is now the largest share.** `Retention.reduce` (called after every learned constraint, `search.ml` ~L2112 and ~L2490) builds `live_entries t = List.rev t.live_rev`, n cells, even under `keep_all`, whose `p_evict` ignores it; `Retention.add` calls `holds`, a `List.exists` over `live_rev`. Self time on QR48 no-proof: `List.rev_append` 5.8 %, `List.exists` 5.4 %, `Retention.fun_1135` (the `holds` closure) 1.9 %: about 13 %, growing with the database. A scratch experiment on the node (not committed): `holds` through a `Hashtbl` of live cids kept by `add` and `retire`, and `reduce` returning `[]` at once when the policy is `keep_all`. On QR48 at 10 k nodes cycles fell 14 % (14.44 G to 12.42 G) and instructions 2.3 %; on QR72 cycles fell 10 %; nodes and runs identical. Since M10-T4 rewrites eviction, please keep the policy's view of the database free of a per-conflict O(n) copy (Glucose's `reduceDB` runs every k conflicts, not every one) | `lib/core/retention.ml` | agent-pernode | open, for agent-retention (M10-T4) |
+| Proof mode only: rendering a literal re-scans its variable's name for characters to sanitise on every call (`Lit.go`, `ident_char`, `render`, `sanitize`: 3.2 % of QR48's proof-mode self time; 1.29 M `rup` lines of about 16 literals). The names are fixed after compile, so a per-name memo of `sanitize` (or of the rendered `x_ge_` prefix) would remove the scan; byte identity is the test | `lib/proof/lit.ml` | agent-pernode | open, for agent-t3 (M8-T3), low priority |
+
 ## Completed
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M6-T22 | agent-pernode (`wave45-pernode`) | 2026-11-18 | **D-0138.** The per-node cost on the XOR codes was the engine asking every learned clause about every variable it names (D-0104 kept the whole scope registered: 18 800 asks per node on QR48, 37 % of the cycles) plus `check_attribution`'s `List.mem` (15 %). A wake index of the two watched variables (`Propagator.advisor`, `Engine.dyn_ids`), the degree-1 shortcut in `Pb.propagate`, no per-node or per-conflict array of the database, an O(1) watch move, a heap seed, binary-searched level marks, `rup` without `Printf`. QR48 to UNSAT: 107.1 s to 24.3 s without proof, 125.0 s to 38.0 s with it (same 143 MB proof, byte for byte, VERIFIED); QR72 now UNSAT in 531 s without proof; same nodes, same runs, 165 models byte-identical, gate green (3 632 ok, 85 MB) |
 | M6-T21 | agent-timelimit (`wave44-timelimit`) | 2026-11-18 | **D-0136.** The `--time-limit` overshoot (+46 s at 600, +108 at 1 200) was `conclude_stopped`'s sweep: `Retention.retire` was O(k n), and the end-of-search sweep has k = n learned clauses. One pass now; 600 s stops at 600.3 s, 1 200 at 1 200.5, proofs VERIFIED NO CONCLUSION. The stop is also polled inside `Engine.propagate` after every 128 completed runs (`Engine.Stopped` -> `Limit_hit`, at a run boundary, nothing written by the node yet): +0.035 % instructions at a fixed node budget. `limit:` gains `at=` and `fired=`. Conflict analysis needed no poll. Gate of `d63f371` green (3 629 checks, 85 MB), 165 models byte-identical |
 | M8-bits-encoding-T2 | agent-t2 (`wave43-t2`) | 2026-11-16 | **D-0132.** The bits encoding for `Linear`: `Lit.Bit`, `declare_int_bits` (two bound rows, no ladder), the mixed row, `ensure_atom` (the `red` pair at level 0 + nearest-neighbour links; a `rup` bridge pair for an order variable in a mixed row), `Explanation.Linear_term`, `Justify.emit_bits_pruning` (one `pol` deriving exactly the trace clause, pinned by `ia`), Trace's per-entry fork, eligibility by scope in `Compile`, `--bits-above W`. Gate green on a fresh clone (19 min 46 s, 85 MB); the 156 byte-identical at `W = none`; 165 of 165 verified at `W = 0` and at `W = 8`; D-0028's model at 10⁶ on bits: 2.4 kB `.opb`, 192 B proof, 0.00 s (order: 156 MB, 3.2 s, 1.9 GB); the Θ(w) chain's checker 1 429 s → 4.8 s at 10⁵ (17× the bytes). The 169 at `W = 0`: see D-0132 §6 (b) |
 | M7-T12 | agent-decision | 2026-09-23 | The ASSIGNMENT decision shape (`Search.Assign`) and `indomain_median` over it -- **D-0077**. The sibling is discharged by DERIVATION, not RESOLUTION: `combine_nogoods` is untouched. `SPEC.md` 3.4 CHANGED (normative): the refusal is lifted, not weakened. Three models (two SAT), four `test_learn.ml` lanes including two breaks that redden at full wording |
@@ -438,7 +449,48 @@ Two separate findings.
 | M8-bits-encoding-T4 (baseline) | agent-remeasure2 (`wave43-read`) | 2026-11-16 | **D-0133** and the D-0131 addendum. The sixteen editions with `f158c9f` (binary `a6327dc6`) against D-0129's archive: 0 REJECTED on 224 verified proofs, the same sixteen ranks, 1 594 of 1 600 statuses unchanged, the same 184 complete answers, incumbents 799 -> 800, objective better on 14 / worse on 20 of 799 (the noise floor T4 must stand above); 223 of the 224 verified proofs byte-identical to D-0129's, D-0131's shape on one root-UNSAT only. The seven OPT proofs verify under 60 h (1 h 20 to 16 h 22, up to 20.5 GiB; `8ShipsUnconst` over the harness's 16 GiB), and D-0131 §5's `5Ships`/`7ShipsMixedUnconst` line counts are corrected. Archives on the laptop; 37 GB of proofs deleted on the node. |
 | M9-no-proof-T2 | agent-noproof2, agent-noproof3 (`wave44-noproof`) | 2026-11-18 | **D-0135**. `--no-proof`: null writer (ids minted, nothing written), guards at Justify/Trace entry, `Discard` ladder short-circuit, exit 2 beside `--proof`. Identity lane in `make check`: 165/165 + 9 bits at W = 0, no stdout difference. Gate rc 0, 82 MB. Twenty Challenge instances measured both ways |
 
+| M8-bits-encoding-T3 (steps 1, 2 partial; T3 stays WIP) | agent-t3 + agent-t3b (`wave44-t3`) | 2026-11-18 | **D-0134 §4-§7.** maxmin over a bits scope by selector rows + one `Resolve` `pol` per pruning, selectors listed in `sol`/`soli`; `int_ne`/`int_lin_ne` released (the A/B pair resolved); `Justify.is_bits_derivation` (a T2 latent). 173/173 verified at W none/0/8, 165 byte-identical at none; gate rc 0 on `20c324f`, 85 MB. The 177 at W = 0: 73 -> 108 complete `.opb`. Open: reified holds, steps 3-5 |
 ## Handoff notes
+## M6-T22 handoff, 2026-11-18 (agent-pernode, `wave45-pernode`): the per-node cost on the XOR codes, D-0138
+
+Branch `wave45-pernode`, code at `0364386`, gated on fataepyc-06 (`make check` rc 0, 3 632 ok, 85 MB; the
+165 models' stdout, rc, `.opb`, `.pbp` identical to `main`'s). The cost was D-0104's choice to keep a learned
+clause registered on its whole scope: every trail entry asked every learned clause naming the variable
+(18 800 asks per node on QR48, 37 % of the cycles), plus `check_attribution`'s `List.mem` (15 %). Nine
+commits, each measured by `perf stat` at 10 k nodes and each with the same nodes and runs: QR48 77.9 G to
+26.1 G instructions without proof, 97.0 G to 44.6 G with it. QR48 runs to UNSAT in 24.3 s / 38.0 s (was 107 /
+125) with the SAME 143 MB proof; QR72 is solved in 531 s without the proof. New API, read before touching it:
+`Propagator.advisor = { ask; watched }` (what `pack ~advise` takes) and the engine's wake index
+(`dyn_ids`, `sync_watched`, `check_watched` under BAGUETTE_DEBUG); `Pb.quiet` is the first step of
+`Pb.propagate`. For the merge: `search.ml`'s packing line (`~advise:(Clause.Learned_clause.advise lc)`) is
+unchanged and now passes the record, so M10's branch compiles against it as long as it keeps that line.
+Left: `retention.ml`'s O(n) per conflict (about 13 %, filed for M10-T4 with a measured experiment), a
+direction-split index (mine, D-0138 §5, not byte-identical in one integer corner), `lit.ml` rendering (filed).
+
+## M8-bits-encoding-T3 (WIP) merged on top of wave 44 and gated, 2026-11-18 (orchestrator)
+
+`wave44-t3` merged as `bfa7cf2` (code merged without conflict beside D-0135/D-0136). Gate of `bfa7cf2` on
+fataepyc-06 (`/scratch/arthur/gate46.status`, clone `/scratch/arthur/baguette-gate-20261118b`): `make
+check` rc 0 in 23.6 s, peak RSS 87 MB, 3 751 `ok` checks, 173 models; against gate 45's binary
+`6d3d2dc3` with no flags, stdout, exit codes, `.opb` and `.pbp` byte-identical on all 173. Binary
+`7ddbf348e5de6953087b6459dcfcf8e1`. On the gate's speed: every orchestrator gate since gate 43 took 20 to
+25 s (the shared dune cache builds the fresh clone; the check count grows with the suite, 3 511 at
+gate 43), so the agents' "19 to 20 min" figures are their cold builds, not a different test set. M8-T3
+is WIP and its claim released: steps 3 to 5 and the reified/bool2int holds need a new claim.
+
+## M8-bits-encoding-T3 handoff, 2026-11-18 (agent-t3b, `wave44-t3`): maxmin and int_ne over bits, D-0134 §4-§7
+
+T3 is **WIP**: steps 1 and 2 (`int_ne`/`int_lin_ne` only) landed, steps 3 to 5 and the reified
+holds did not (D-0134 §7 says where each stands). maxmin over a bits scope posts one big-M
+selector row per operand over `$mxN` and a clause (`Encoding.add_choice`), every pruning is one
+`Explanation.Resolve` `pol` pinned by `ia`, and `sol`/`soli` list the selectors. `Ne` over a bits
+scope derives its nogood as the `Resolve` of its A/B pair (probe g1). The bits arm now takes only
+a derivation it can render (`Justify.is_bits_derivation`), which fixed a T2 latent the suite
+found once `int_ne` was released (§5.3). Suite: 173/173 verified at `W = none`, `0`, `8`; the
+165 pre-existing byte-identical at `W = none` to `gate44.art/new`. Gate rc 0 on `20c324f`, peak
+85 MB. The 177 at `W = 0`: 73 -> 108 complete `.opb` (tower 15/15, road-cons 10/10, largescheduling 6/6, none lost); `int_ne`'s release moves none; mapping and ATSP are held by something other than maxmin and do not reach `--stats` in 300 s. Read D-0134 §5 before touching `justify.ml`'s bits arm, and §7 before the
+reified families: their guarded rows are `Ne`'s pair plus LE/GE, so `Resolve` is ready for them.
+
 ## M6-T21 and M9-no-proof-T2 merged together and gated, 2026-11-18 (orchestrator)
 
 Merged on `main`: `wave44-timelimit` (D-0136, `481568d`) and `wave44-noproof` (D-0135, `c7ddd75`); their
@@ -474,7 +526,6 @@ Twenty Challenge instances (D-0135 section 5, `/scratch/arthur/wave44-noproof-ou
 OPTs agree to the node, proof overhead 6 % to 119 % wall; 4 of 5 heap refusals were the proof's
 memory; road_20 and ATSP16 die at 43 s (rc 134, 16.5 GB) building a 10^8-term objective row,
 which is T3's first lever. `scripts/compare_run.sh` untouched (T3's).
-
 ## Wave 43 merged and gated, 2026-11-16 (orchestrator)
 
 Merged on `main`: `wave43-read` (D-0133 + the D-0131 addendum, `0f79f59`) and `wave43-t2` (D-0132,

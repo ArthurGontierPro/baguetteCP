@@ -633,8 +633,10 @@ let emit_to_page (ctx : Justify.ctx) t store =
             at := level);
           derive_ahead ctx store e;
           (* M8-bits-encoding-T2: the BITS arm. A [Linear] pruning over a row with a
-             bits term writes its derivation as ONE `pol` deriving exactly its trace
-             clause ([Justify.emit_bits_pruning]); when the line this module would have
+             bits term -- and, since T3 (D-0134), a choice derivation such as maxmin's
+             over its selector rows -- writes its derivation as ONE `pol` deriving
+             exactly its trace clause ([Justify.emit_bits_pruning]); when the line this
+             module would have
              written IS that clause (the usual case) the `ia`'s id is the line, else the
              ordinary `rup` follows it and is RUP in sequence. An entry whose claim is a
              bits atom but whose justification is a [Clause] -- a global unit from `soli`
@@ -642,7 +644,7 @@ let emit_to_page (ctx : Justify.ctx) t store =
           let derived =
             if bits_arm ctx.Justify.encoding ~claim_owner:name all_facts then
               match Explanation.force (Store.explanation store e) with
-              | Explanation.Combine _ as forced ->
+              | forced when Justify.is_bits_derivation forced ->
                   let origin =
                     Printf.sprintf "bits trace: %s from %d fact(s)" name
                       (List.length facts)
@@ -734,10 +736,7 @@ let conflict_line_to_page (ctx : Justify.ctx) t (c : Store.conflict) =
     && List.exists
          (fun f -> bits_owner ctx.Justify.encoding (Reason.fact_owner f))
          all_facts
-    &&
-    match Explanation.force c.Store.c_why with
-    | Explanation.Combine _ -> true
-    | _ -> false
+    && Justify.is_bits_derivation c.Store.c_why
   in
   if bits then (
     let cid, _ =
