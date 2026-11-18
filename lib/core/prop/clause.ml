@@ -463,18 +463,11 @@ module Learned_clause = struct
 
   (* I-P7: queue only when a WATCHED literal on [v] has just become false. Written
      without a local closure (M6-T22): this is asked once per wake, and the closure the
-     first version built per call was an allocation on the engine's hottest loop.
-
-     [ask t] is a closure of EXACTLY two arguments, built once at packing: the [let]
-     between [t] and [fun] stops OCaml from merging the three into one function, whose
-     partial application [ask t] would go through [caml_curry3] on every call (D-0138
-     measured [caml_apply2] at 5 % of QR48's cycles). *)
-  let ask t =
-    let atoms = t.atoms in
-    fun store v ->
-      let x = Var.to_int v in
-      (Var.to_int atoms.(t.w1).Pb.x = x && false_at store t t.w1)
-      || (Var.to_int atoms.(t.w2).Pb.x = x && false_at store t t.w2)
+     first version built per call was an allocation on the engine's hottest loop. *)
+  let ask t store v =
+    let x = Var.to_int v in
+    (Var.to_int t.atoms.(t.w1).Pb.x = x && false_at store t t.w1)
+    || (Var.to_int t.atoms.(t.w2).Pb.x = x && false_at store t t.w2)
 
   (* M6-T22 / D-0138: the variables of the two watches. [ask] answers [false] for every
      other variable whatever the store holds, which is [Propagator.inst_watched]'s
