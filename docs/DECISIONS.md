@@ -13928,6 +13928,454 @@ Unit suites on the fixed branch: 3 724 ok, 0 FAIL, and `test_engine` 123 ok, and
 **The second case** (`BAGUETTE_PROPAGATE_LEARNED=off`) is not an invariant either: the orchestrator's
 correction says the run dies of memory under the 4 GB cap in debug mode when learned constraints are
 proof-only, and agent-lanes records it in D-0141. It is the lot-sizing line above. Not chased here.
+
+### 2. The batch: how every fix below is measured and held to the bytes
+
+**Status of the batch**: DONE, recorded 2026-11-18 (agent-batch3, `wave48-batch3`). Eight fixes, all
+byte-identical in stdout, the SEARCH counters and the proof (sections 3 to 8b and 3's memory
+addendum), four items left out because they reorder runs, with their measured gains (section 9).
+
+**The evidence per fix**, all on `fataepyc-06` against the reference binary `e8354a74` (gate 48's,
+`main` at `a8d2924`, which `576da4b` and `e809a08` do not change under `lib/` or `bin/`):
+
+- the unit suites, `dune runtest --root . --force` under the 4 GB cap, and `test_pb`, `test_clause`
+  and `test_engine` again under `BAGUETTE_DEBUG=1`, each fix bringing its own test of the new
+  structure against the old one kept in the test as the specification,
+- the differential lane (M11-T2, D-0141), `scripts/diff_lane.sh --bin <fix> --tier all`: 21
+  instances in 9 configurations and the six D-0140 instances at their slow-tier budgets, stdout,
+  every `--stats` counter and the `.opb`/`.pbp` sha256 against the recorded reference,
+- the six D-0140 instances at 10 000 nodes, `--no-proof`, under `perf stat -e instructions:u`
+  (`bench/perf`'s method, and instructions because cycles moved by 30 % between two runs of one
+  binary on the loaded node), with their `--stats` observations compared to the reference's,
+- the debug pass on the batch's tip (section 11): every lane instance in every configuration at
+  1 500 nodes under `BAGUETTE_DEBUG=1`, each proof through VeriPB 3.0.2. For E3 (a) and E2 (a) the six
+  instances also ran at 1 500 nodes under `BAGUETTE_DEBUG=1` against the reference's own debug runs,
+  which before section 1's fix only says much on QR48 and QR72: the four integer instances stopped on
+  the I-P7 alarm in both builds, identically.
+
+**Why a pass can be byte-identical and still save work.** The lane splits the counters into
+SEARCH and WORK. A fix that removes asks or runs that change nothing moves WORK (wakes, advised,
+props) and must leave stdout, every SEARCH counter and both proof hashes alone. The orchestrator's
+standard of 2026-11-18 allows the WORK deltas and asks for them to be reported, and each section
+gives them.
+
+### 3. E3 (a): the PB pass over a per-row layout (`prop/pb.ml`, commit `5e3b4f8`)
+
+**What changed.** A pass of `Pb.propagate` (every model clause, every learned clause that is not
+quiet, every learned PB row) surveyed the row into a list of (term, status) pairs, built a hash table
+of (variable, polarity) groups from 12 terms on, filtered the forceable terms into a list, and kept
+the strongest per group with a `List.exists` over that list per forceable term: allocation on every
+pass and quadratic in a group. It now runs over a `layout` built once per row on its first pass
+(lazy, so a row `quiet` always answers never builds one): the terms as an array, each term's group,
+each group's terms in dominance order (strongest threshold first), and three scratch arrays
+(statuses, effective coefficients, the strongest forceable threshold per group). A pass is one walk
+for the statuses and the slack, one walk per group for the effective coefficients, one walk for the
+forceable terms and their groups' strongest, and the forcings in term order. It allocates nothing
+unless it prunes or conflicts, and then only the explanation, as before. E4 (the per-run allocation
+of every `Pb`-backed instance) is the same change.
+
+**Why the bytes cannot move.** Each piece computes the old value by the old definition. The
+snapshot F, the slack (summed in term order from `-degree` through `Checked.add`), the conflict and
+its reason are the old ones. The effective coefficient is a sum of the same positive addends in
+another order, so the same number. The only thing the order changes is where `Checked.add` would
+overflow and so the message it raises, and that is kept exact: a group's running sum that would pass
+`max_int` marks the terms from there on, and for those the old term-order fold is called and raises
+what it raised, at the same query, because the forceable terms are queried in term order as the old
+list filter did. "Forced" is "forceable and as strong as its group's strongest forceable threshold",
+which is the old `strongest` (no strictly stronger forceable term of its group). The forcings are
+applied in term order off the snapshot, the old list. The reason clause is built in term order from
+the snapshot and returns the shared `expl_all` when it names the whole row, so `Justify`'s
+physical-identity memo fires as before. The scratch arrays are written by every pass before they
+are read, so they carry nothing between calls and pb.ml's "no state the trail must undo" argument is
+untouched (its header now says why).
+
+**The test.** `test_pb.ml`, `test_pass_layout`: the old pass kept verbatim in the test as the
+specification, and 3 000 random rows (several rungs of one variable at both polarities, repeated
+literals, coefficients 1 to 3, every degree, narrowed boxes) run through both from the same store:
+same outcome, trail, reason facts, explanation literals and `expl_all` sharing on all 3 000 (403 of
+them prune, 1 412 conflict, 740 put three or more rungs on one variable). Two hand-built rows make
+`effective` overflow with their terms in each order: both passes raise, with the same message.
+
+**Evidence.** Lane 168 of 168 runs equal (the fast tier as it then was), WORK counters included,
+because the pass makes the same prunings in the same runs. The six at 10 000 nodes: stdout and every
+counter equal, proof-mode `.pbp` equal, `BAGUETTE_DEBUG` runs at 1 500 equal (see section 2 on what they show). Unit 3 726 ok.
+
+| instance, 10 000 nodes, no-proof | reference (G instr.) | E3 (a) | change |
+|---|---|---|---|
+| QR48 | 25.96 | 25.30 | -2.5 % |
+| QR72 | 37.55 | 36.55 | -2.7 % |
+| rcpsp_11 | 92.33 | 74.12 | **-19.7 %** |
+| mspsp_hard_01 | 109.13 | 106.28 | -2.6 % |
+| cyclic-rcpsp_easy_6 | 75.23 | 69.79 | -7.2 % |
+| openshop_gp10-4 | 806.88 | 802.85 | -0.5 % (setup is 95 % of it) |
+
+**What D-0140 expected and what came.** D-0140 measured cyclic at 439 G for 10 000 nodes with 21
+learned PB rows costing 73 % of a node, on `dc40d89`. The reference binary here (`e8354a74`, after the
+M8-T3 continuation's `int_times` split) runs the same 10 000 nodes in 75 G with 16 rows, so most of
+E3's cost on that instance had already gone with the search change, and what E3 (a) finds there is
+7 %. The largest gain is on rcpsp_11, where the pass runs on model clauses and learned clauses that
+are not quiet.
+
+**Addendum, the memory (commit `2cea86d`).** A layout with its three scratch arrays per row raised the
+peak RSS of the 40 000-node runs, one learned clause per conflict, by 9 to 16 % (rcpsp_11 551 to 641
+MB, mspsp 1 287 to 1 487 MB, openshop 1 015 to 1 111 MB, measured on `8b96877`). The scratch arrays
+are now one module-level set shared by every row, which is safe because two passes never overlap
+(pb.ml's header gives the argument), and a row whose (variable, polarity) groups are all single terms,
+every clause `Learn.minimise` produced, keeps no group arrays (its effective coefficient is its own
+coefficient while it is non-false). The lane (232 runs) and the six at 10 000 nodes:
+every observation equal to the previous fix's. Instructions within 0.8 % either way (mspsp 90.24 to
+89.57 G, cyclic 68.57 to 68.82 G). Peak RSS at 10 000 nodes: rcpsp_11 146 to 129 MB, mspsp 330 to 306
+MB, and at 40 000 nodes section 10 has it within -1.7 % and +4.5 % of the reference.
+
+### 4. E2 (a): one walk per learned-clause run (`prop/pb.ml`, `prop/clause.ml`, commit `ca9a53e`)
+
+**What changed.** A learned clause's run was `Pb.propagate` (whose `quiet` walks the clause with
+three closures built per call) followed by `rewatch`, whose `best` walked the clause again once per
+watch to replace. `Pb.quiet` now walks `t.atoms` (an array built once per row, which the learned clause
+shares it for its watches) with top-level functions, and records the first two non-false literals in
+the row's `scan`. `Learned_clause.propagate` then moves its watches from them (`rewatch_quiet`). A
+run `quiet` does not answer is `Pb.pass` followed by the full `rewatch`, as before.
+
+**Why the bytes cannot move.** `quiet`'s predicate is the old one split at the second non-false
+literal ("a non-false literal after the first, on another variable" is "the second is on another
+variable, or one after it is"). After a quiet run the store has not moved, so `rewatch` would
+choose by the same store, and its `best ~not_` ("the first non-false literal other than `not_`") is
+`f1` unless `not_` is `f1` and then `f2`, and its latest-falsified arm is unreachable because two
+non-false literals exist. `keep` is `rewatch`'s own test. So the watches are the ones `rewatch`
+chose, and every later wake with them.
+
+**The test.** `test_clause.ml`, `test_one_walk`: 4 000 random clauses over two Booleans and two
+small integers with random starting watches: `Pb.quiet` equals the old list walk on all, and a run
+through `Learned_clause.propagate` leaves the same outcome, trail and two watches as `Pb.propagate`
+followed by `rewatch` on all (over 1 000 quiet runs, over 300 of them moving a watch).
+
+**Evidence.** Lane 168 of 168 equal, WORK included. The six: every observation equal. Unit 3 730 ok,
+the three debug suites ok.
+
+| instance, 10 000 nodes, no-proof | after E3 (a) | after E2 (a) | change |
+|---|---|---|---|
+| QR48 | 25.30 | 24.23 | -4.2 % |
+| QR72 | 36.55 | 35.40 | -3.1 % |
+| rcpsp_11 | 74.12 | 69.49 | -6.2 % |
+| mspsp_hard_01 | 106.28 | 100.95 | -5.0 % |
+| cyclic-rcpsp_easy_6 | 69.79 | 69.75 | 0 |
+| openshop_gp10-4 | 802.85 | 803.25 | 0 |
+
+### 5. E1: the wake index by direction, on every variable (`engine.ml`, `propagator.ml`, `prop/clause.ml`, commits `6cb18ad`, `10558b5`, `94c91c5`, `fdae732`)
+
+**What changed.** A self-watching instance reports each watch as a `Propagator.watch`: its variable
+and the bound move that can falsify it (`watch_lo`, `watch_hi`, or `watch_any`). A learned clause's
+watch `x >= k` is falsified only when `hi x` drops below `k`, so it is `watch_hi`, and `x <= k - 1` is
+`watch_lo`. The engine's index (D-0138's `dyn_ids`) keeps three slots per variable instead of one,
+and an entry on `x` asks the any-move slot, plus the lower-move slot when the entry OR A NEWER ENTRY
+OF THE SAME WALK moved `lo x`, plus the upper-move slot likewise (`t.moved`, a byte per variable,
+cleared after the walk). The seed asks by the entry's own moves.
+
+**Why the search cannot move.** The ask is a function of the store, not of the entry: it says yes
+iff a watch of the instance on `x` is false now. So every entry on `x` of one walk gets the same
+answers, and the old walk placed an instance at its first occurrence, the oldest entry on `x` its
+trigger wants. Take an instance with a false watch on `x`, say `x >= k`. If an entry of the walk
+moved `hi x` below `k`, every entry on `x` up to it in age asks the upper slot, the oldest included,
+so the instance lands where it did. Otherwise the watch was false before the walk, hence when the
+instance last ran (had it been falsified since, the walk or seed that saw that entry woke it, and it
+has run since or is still queued). A run that leaves a false watch is a conflict, which ends the call
+and is backtracked over with both watches falsified at its level, or a unit propagation, after which
+the clause is satisfied by its one non-false literal. Then every other literal is false and stays
+false, and the run the old walk gave it changes nothing: `Pb.pass` finds no open term, and `rewatch`
+keeps the true literal and picks the same latest-falsified literal again, since no falsification
+position has moved. So what goes is the asks that answered no and those no-op runs: WORK counters,
+never the trail. The woken ids are merged by id as before (`sort_uniq`, one instance being able to
+sit in two slots of one variable).
+
+D-0138 section 5 and D-0140 (E1, "ordering on integer variables") filed the integer case as
+reordering, for the walk in which one run moves both bounds of `x`: an index that asked each entry
+only its own direction would place a clause woken by the newer upper move at the newer entry, after
+the clauses of the older lower move. Asking an entry the directions of the newer entries of the walk
+is what keeps it exact, and a test pins the both-bounds walk.
+
+**A precondition made explicit on the way.** The first random test drew clauses with two rungs of one
+variable in one direction (`y >= 1 \/ y >= 3 \/ x <= 0`) and the M6-T18 skip check fired under
+`BAGUETTE_DEBUG`, identically with both indexes. Such a clause propagates with both of those rungs
+non-false (`Pb.pass`'s ladder-effective rule forces `y >= 1` once `x <= 0` is false), so watching the
+two of them is not I-P7. The solver never builds one: `Search.register_learned` registers only
+`Learn.lits`, which `Learn.minimise` reduces to one literal per (variable, polarity), and names are
+unique in every store `Compile` builds. `Learned_clause.make` now states the precondition and checks
+it under `BAGUETTE_DEBUG` (commit `10558b5`), and the tests draw minimised clauses.
+
+**The tests.** `test_engine.ml`: `test_direction_index` runs 500 random searches (decide, propagate,
+backtrack) over minimised learned clauses on four Booleans and two variables on 0..3, against an engine
+whose advisor reports every watch as `watch_any` (the M6-T22 index): the same outcome and the same
+whole trail after all 5 594 calls, 154 conflicts, and 3 691 wakes against 9 202. `test_direction_walk_order`
+moves `lo x` then `hi x` in one walk with one clause watching `x >= 6` and one watching `x <= 1`:
+woken `[0; 1]` by both indexes. **The break, performed**: with the newer-entry rule removed (each entry
+asks its own direction only) the walk-order test FAILS (`[1; 0]`) while the random test still passes,
+which is why the walk-order test exists. Both pass under `BAGUETTE_DEBUG=1`, where the instances of
+the slots an entry does not ask go to `check_declined` exactly as if they had been asked.
+
+**Evidence.** The lane, `--tier all`, 232 runs: 50 identical, 182 differing in WORK counters
+only, none in stdout, a SEARCH counter or a proof hash. Over the 232 runs the wakes go from
+1 097 179 533 to 807 782 751 (-26.4 %), the runs from 447 919 323 to 445 959 364 (-0.4 %, the no-op
+runs of the satisfied clauses), and the effective runs stay at 55 033 067. After E1 the Boolean
+instances decline no ask at all (QR72 at 10 000 nodes: 3 270 455 declined before, 0 after). The six at
+10 000 nodes differ from the reference in WORK lines only. Unit 3 740 ok, the three suites ok under
+`BAGUETTE_DEBUG`.
+
+| instance, 10 000 nodes, no-proof | after E2 (a) | after E1 | instructions | cycles, median of 3, started together |
+|---|---|---|---|---|
+| QR48 | 24.23 | 23.83 | -1.7 % | |
+| QR72 (at 40 000 nodes) | 231.26 | 222.81 | -3.7 % | 208.0 G to 168.1 G, -19 % |
+| rcpsp_11 | 69.49 | 66.92 | -3.7 % | 45.8 G to 37.1 G, -19 % |
+| mspsp_hard_01 | 100.95 | 100.09 | -0.9 % | 61.4 G to 58.2 G, -5 % |
+| cyclic-rcpsp_easy_6 | 69.75 | 70.10 | +0.5 % | |
+| openshop_gp10-4 | 803.25 | 801.43 | -0.2 % | |
+
+The asks E1 removes are cheap in instructions and dear in cycles: each reads a cold clause record.
+D-0140 ranked E1 from a cycles profile, and the cycles are where it shows. On cyclic, where a learned
+clause is rarely asked, the walk's per-variable bookkeeping costs more than it saves (+0.5 %).
+
+### 6. E7: `Linear.propagate` without its two lists (`prop/linear.ml`, commit `8b96877`)
+
+**What changed.** Every run built the list of term minima (`List.map`) and its `List.combine` with the
+terms. The minima now go into a scratch array written for every term at the top of every run. It was
+first one array per row (`8b96877`), which cost smelt_2 about 9 MB before node 1 (378 to 369 MB when it
+went, `int_times` posting a guarded row per value of its case variable). It is now one array shared by
+every row (commit `1453de2`), safe for the reason pb.ml's scratch is. It carries nothing between runs,
+and two runs never overlap. (That commit's message puts the whole of smelt_2's 327 to 378 MB on these
+arrays. Most of it was section 8b's first table, measured after.)
+
+**Why the bytes cannot move.** The minima are computed in term order as `List.map` computed them, then
+summed in term order from 0 through `Checked.add` as `Checked.sum` did, so the values and an overflow's
+message are the old ones, and the pruning walk reads term `idx`'s minimum at `idx`. Every `int_times`/`int_div`/`int_abs` row and guard is a `Linear` (or a
+`Reif_lin_le` of two), so this reaches E6's rows as well, without changing which of them run.
+
+**The test.** `test_prop.ml`, `test_linear_scratch`: the old function kept verbatim as the
+specification, 2 000 random rows (four variables with negative bounds, coefficients -3..3 with zeros,
+every right-hand side) from the same narrowed store: same outcome, conflict reason and trail with its
+reasons on all, over 300 that prune and 300 that conflict.
+
+**Evidence.** The lane, 232 runs: every observation equal to E1's (no WORK counter moves either,
+the same runs happen). The six at 10 000 nodes: every observation equal to E1's.
+
+| instance, 10 000 nodes, no-proof | after E1 | after E7 | change |
+|---|---|---|---|
+| QR48 | 23.83 | 23.80 | -0.1 % |
+| QR72 | 35.10 | 35.06 | -0.1 % |
+| rcpsp_11 | 66.92 | 66.72 | -0.3 % |
+| mspsp_hard_01 | 100.09 | 99.19 | -0.9 % |
+| cyclic-rcpsp_easy_6 | 70.10 | 69.48 | -0.9 % |
+| openshop_gp10-4 | 801.43 | 800.78 | -0.1 % |
+
+### 7. S3's store half: `Store.is_level_start` in one load (`store.ml`, commit `e8760c8`)
+
+**Why here.** D-0140 filed S3 (`Search.decision_entries` walking the whole trail at every conflict)
+under T4, because the walk is in `search.ml`. An instruction profile of this batch's tip (`perf record
+-e instructions:u`, mspsp at 10 000 nodes) put 8.2 % of the instructions in `Store.go`, the binary
+search over the level marks that `is_level_start` runs for every entry of that walk. The walk stays
+T4's. Its per-entry cost is the store's.
+
+**What changed.** The store keeps `starts`, a count per trail position of the open level marks sitting
+there (an empty level can share its position with the next), updated in `push_mark` and `backtrack`,
+the only two places `n_levels` moves. `is_level_start` reads it. The old definition stays as
+`is_level_start_by_marks`.
+
+**Why the bytes cannot move.** The old test was "the last open mark at or below `i` is at `i`", which,
+the marks being monotone (I-T2), is "some open mark is at `i`", which is the count being positive. It
+is a pure query, so nothing else changes.
+
+**The test.** `test_core.ml`, `test_level_start_count`: 4 000 random steps of new levels, bound moves
+and backtracks, comparing the two definitions at every trail position (one past the end included)
+after every step, over 100 states with two levels at one position.
+
+**Evidence.** The lane, 232 runs, and the six at 10 000 nodes: every observation equal to E7's,
+WORK counters included (the same runs, the same asks). The unit run at this commit had one FAIL, and
+not in this change: E7's own test drew 276 pruning rows against the floor of 300 it sets itself, fixed
+by drawing 3 000 rows (`214e851`, 413 prune) and green at the gate.
+
+| instance, 10 000 nodes, no-proof | after E7 | after this | change |
+|---|---|---|---|
+| QR48 | 23.80 | 23.56 | -1.0 % |
+| QR72 | 35.06 | 34.63 | -1.2 % |
+| rcpsp_11 | 66.72 | 66.01 | -1.1 % |
+| mspsp_hard_01 | 99.19 | 90.39 | **-8.9 %** |
+| cyclic-rcpsp_easy_6 | 69.48 | 68.49 | -1.4 % |
+| openshop_gp10-4 | 800.78 | 797.71 | -0.4 % |
+
+### 8. E8, first part: cumulative's pass without its range lists (`prop/cumulative.ml`, commit `dd935e2`)
+
+**What changed.** For every task, in both directions, on every pass, the time-table filter built the
+list of the task's possible times (`range`, a `List.init`) and, for the lower push, its `List.rev`, and
+scanned it for the first overloaded point. A loop now visits the same times (descending from
+`lo + dur - 1` for the lower push, ascending from `hi` for the upper one) and stops at the same point.
+The rest of D-0140's E8 (the profile rebuilt and the snapshot array allocated per pass) is left: it is
+kept across runs only with a trail-undone state, which is the cumulative's own design question.
+
+**Why the bytes cannot move.** Same times, same order, same first hit, same push. The existing
+cumulative tests (`test_prop.ml`'s soundness, checking, rows, time-table fixpoint and search lanes,
+with VeriPB) and the lane's two rcpsp instances in nine configurations are the checks.
+
+**Evidence.** The lane, 232 runs, and the six at 10 000 nodes: every observation equal to the
+previous fix's, WORK counters included.
+
+| instance, 10 000 nodes, no-proof | before | after | change |
+|---|---|---|---|
+| QR48 | 23.56 | 23.55 | 0 |
+| QR72 | 34.63 | 34.63 | 0 |
+| rcpsp_11 | 66.01 | 63.99 | **-3.1 %** |
+| mspsp_hard_01 | 90.39 | 90.24 | -0.2 % |
+| cyclic-rcpsp_easy_6 | 68.49 | 68.57 | +0.1 % |
+| openshop_gp10-4 | 797.71 | 797.52 | 0 |
+
+### 8b. D-0143's request: `Engine.create` without its `List.mem` (`engine.ml`, commits `8e28002`, `7f4420a`)
+
+**The request** (agent-setup, D-0143, under `## Cross-session requests`). `Engine.create` registered
+each instance on each variable of its scope after a `List.mem` of its id over the variable's watcher
+list, so building the engine was quadratic in a variable's degree. On 2014 smelt_2 (variables in about
+2 000 constraints, 30 228 `int_times`) `List.mem` and polymorphic compare were 16 % of the 3 s left
+before node 1 after D-0143.
+
+**What changed.** Ids are distinct (`t.instances` holds instance `i` at slot `i`), so the id being
+registered can only be in a variable's list if this same instance put it there for an earlier
+occurrence of the variable in its own scope, and then it is the head, nothing having been prepended
+since. The test is now the head. A first version (`8e28002`) kept a table of every (variable, id)
+pair instead, exact without the argument, but the table raised smelt_2's peak memory by about 30 MB
+for the length of the setup (369 to 339 MB when it went), and `7f4420a` replaced it.
+
+**Why the bytes cannot move.** The same lists in the same order, by the argument above. `test_engine.ml`,
+`test_create_watchers`, keeps the old loop as the specification and compares every variable's list on
+200 random engines whose scopes repeat variables.
+
+**Evidence.** smelt_2 at one node, `--no-proof`, main (`85cecf4`, after D-0143) against the batch's tip,
+two runs each: 15.55 G instructions to 12.50 G (-19.6 %), 2.85 s to 2.49 s, stdout identical. The
+batch's tip uses 339 MB at that point against main's 327 MB (the per-row arrays of sections 3 and 4,
+for every model row). The lane on the tip is section 11's.
+
+### 9. What this batch leaves out, and why: the items that reorder runs, with their measured gains
+
+Each item below changes the order in which runs happen, so the trail, the learned clauses and the
+proof can move, and D-0104's standard (node counts reported, every proof verified) applies, not
+byte identity. They are a decision for the user, one each. The gains are measured on throwaway
+builds of `8b96877` (the batch as it stood after E7), never merged, at 10 000 nodes without the
+proof.
+
+**(a) E2 (b), the MiniSat watch move.** On a falsified watch, look for a non-false literal from
+that watch's position onwards (circularly) and stop there, instead of re-reading the clause from
+literal 0 (`/scratch/arthur/wave48-batch3-x1`, a dozen lines in `Learned_clause.propagate`). The
+watches chosen differ, so the clause is woken at other entries and placed elsewhere in the queue.
+Measured against `8b96877`, instructions at 10 000 nodes: QR48 +8.7 %, QR72 +4.4 %, rcpsp_11
+-4.3 %, mspsp -1.8 %, cyclic and openshop 0. The decisions and conflicts move on rcpsp_11 (5 114 and
+4 886 to 5 119 and 4 881) and on mspsp (5 565 and 4 435 to 5 575 and 4 425). It reorders even on the Boolean codes models (QR48: same node, decision and
+conflict counts, but other learned clauses, `cls-prune` 78 against 74). Not a gain as it stands (it costs more on
+the codes models, whose searches it changes), and small next to E2 (a)'s where it helps, because
+`quiet` already stops at the second non-false literal. Not recommended.
+
+**(b) E3 (b), an advisor for the learned PB rows.** A slack-watch advisor (RoundingSat, GCS's
+`linear-slack-waking.md`): watch enough non-false literals that their coefficients exceed the degree
+by the largest group sum, and wake the row only when one of them is falsified. Two reasons it is
+ordering: a declined wake whose run would do nothing now can become a run that prunes later in the
+same call, and then it runs at a later queue position than the variable index gave it. And the
+advisor has to be packed by `Learned.pb_instance` (`learned.ml`, claimed by wave45-retention).
+Measured upper bound, by running every learned-PB-row run twice in a throwaway (the second run of a
+row at its fixpoint is a no-op, checked: the throwaway exits if a second run prunes, and none did):
+all learned PB row runs cost 5.1 G of 73.9 G
+instructions on cyclic (6.9 %) and 5.3 G of 70.0 G on rcpsp_11 (7.5 %), and nothing measurable on mspsp
+(-0.4 G, within the noise of a run's allocation). Of those runs 87 % (cyclic), 96 % (mspsp) and 94 %
+(rcpsp_11) change nothing, so a free oracle advisor would save at most about that. After E3 (a) the
+rows are cheap per run, and on the reference binary there are 16 to 65 of them.
+
+**(c) E6, an advisor for the `int_times` guard rows.** Wake a guarded row only while its guard can
+still hold, a guard only when the case variable crosses its value. Same ordering argument as (b), and
+the rows are posted by `compile.ml` (claimed by wave48-setup). Measured the same way: all `int_times`
+runs cost 9.2 G of 73.9 G instructions on cyclic (12.5 %) and 4.2 G of 108.3 G on mspsp (3.8 %), and
+97.6 % of them change nothing on cyclic, 77 % on mspsp. E7 already made each
+of these runs cheaper without changing which run.
+
+**(d) The blocker literal (E1's second half).** A literal tested before the ask, so that a clause
+satisfied by it is not queued. Not I-P7 by itself (a satisfied clause with a false watch must keep
+the 2WL invariant over backtracking, which MiniSat gets from the blocker being assigned earlier on
+the trail), and it changes which runs happen and so the watches. After E1 the asks that remain are
+the ones that answer yes, and the blocker's target is the yes-answers whose run finds the clause
+satisfied, which this batch did not separate. Not measured, it is the next E1 question.
+
+### 10. The batch's result: instructions at three budgets, and the scaling ratios
+
+User instructions, `--no-proof`, in units of 10⁹, on the reference binary (`e8354a74`) and on the
+batch at `2cea86d` (sections 3 to 8 and the memory addendum, before section 8b and before main's
+D-0143 was merged in, so that the numbers are this batch's alone), measured on the same node the same
+afternoon. At every budget every observation of the batch equals the reference's but WORK counters
+(18 of 18 runs).
+
+| instance | 1 000: ref, batch | 10 000: ref, batch | 40 000: ref, batch | at 40 000 |
+|---|---|---|---|---|
+| QR48 (UNSAT at 23 367) | 1.52, 1.44 | 25.96, 23.58 | 86.14, 76.13 | -11.6 % |
+| QR72 | 2.31, 2.19 | 37.55, 34.57 | 247.71, 220.90 | -10.8 % |
+| rcpsp_11 | 4.81, 4.42 | 92.33, 64.05 | 1 079.68, 647.08 | **-40.1 %** |
+| mspsp_hard_01 | 11.19, 10.13 | 109.13, 89.57 | 756.51, 584.50 | **-22.7 %** |
+| cyclic-rcpsp_easy_6 | 17.20, 17.12 | 75.23, 68.82 | 294.22, 261.07 | -11.3 % |
+| openshop_gp10-4 | 728.77, 729.47 | 806.88, 798.27 | 1 471.55, 1 318.40 | -10.4 % |
+
+Wall time at 40 000 nodes on the loaded node, for orientation only: rcpsp_11 439 s to 283 s, mspsp 298
+to 241, QR72 90 to 64, openshop 364 to 308. Peak RSS at 40 000 nodes against the reference: between
+-1.7 % and +4.5 % (rcpsp_11 551 to 576 MB, mspsp 1 287 to 1 344 MB). Before section 3's memory addendum
+it was up to +16 %.
+
+**The scaling ratio** D-0140 section 7 defines: instructions per node over the 10 000 to 40 000
+segment, over the same over the 1 000 to 10 000 segment. Near 1 is the target, a rise is the alarm.
+
+| instance | per node, 1k to 10k (M instr.) | per node, 10k to 40k | ratio, reference | ratio, batch |
+|---|---|---|---|---|
+| QR48 | 2.72 to 2.46 | 4.50 to 3.93 | 1.66 | 1.60 |
+| QR72 | 3.92 to 3.60 | 7.01 to 6.21 | 1.79 | 1.73 |
+| rcpsp_11 | 9.72 to 6.63 | 32.91 to 19.43 | 3.38 | 2.93 |
+| mspsp_hard_01 | 10.88 to 8.83 | 21.58 to 16.50 | 1.98 | 1.87 |
+| cyclic-rcpsp_easy_6 | 6.45 to 5.74 | 7.30 to 6.41 | 1.13 | 1.12 |
+| openshop_gp10-4 | 8.68 to 7.64 | 22.16 to 17.34 | 2.55 | 2.27 |
+
+The reference ratios are D-0140 section 7's (1.8, 3.4, 2.0, 2.6), measured again here on the binary
+that has moved since.
+
+**Reading.** The batch takes the most from the later segment, where the growth is: the cost of a
+node between 10 000 and 40 000 falls by 41 % on rcpsp_11, 24 % on mspsp and 22 % on openshop, against
+32 %, 19 % and 12 % in the first segment, so every ratio falls. None reaches 1. What still grows is
+mostly T4's (the database's O(n) per conflict in `retention.ml`, `Search.decision_entries` walking the
+whole trail, the polymorphic `List.mem` of `count_learned_activity`) and the learned clauses' runs that
+change nothing, which E2 (b) and the blocker would address and section 9 leaves to the user. rcpsp_11's
+-40 % at 40 000 nodes is mostly E3 (a) and E1: its model clauses and learned clauses pass often, and
+72 % of its asks were declined ones before E1.
+
+### 11. The gate
+
+On a fresh clone of the batch's tip on `fataepyc-06` (`7f4420a`, binary `104769d1`,
+`/scratch/arthur/wave48-batch3-runs/gate.sh`, gate 48's script with the reference artefacts kept):
+`make check` rc 0 under the 4 GB cap, 3 834 unit checks ok and 0 FAIL, 179 models passed (VeriPB and
+the no-proof stdout lane), peak RSS 92 776 kB. Against main's `e8354a74` (gate 48's artefacts, which
+also predate D-0143), all 179 models: stdout 0 differences, exit codes 0, `.opb` 0, `.pbp` 0.
+
+The tip, merged with main's D-0143 (`7f4420a`), on the rest of the evidence. The lane, `--tier all`:
+232 runs, 50 identical, 182 differing in WORK counters only, none in anything else. The six at 10 000
+nodes: every observation equal to `2cea86d`'s. Unit 3 762 ok and 0 FAIL, `test_pb`, `test_clause` and
+`test_engine` ok under `BAGUETTE_DEBUG=1`. The debug pass (25 lane instances x 9 configurations at
+1 500 nodes): the same 216 of 225 runs end rc 0 with no check firing as on section 1's fixed binary,
+with the same decisions, conflicts and learned counts in all 225, the same 9 lot-sizing runs die of
+memory under the cap, and 185 proofs say `VERIFIED NO CONCLUSION`. openshop's seven proofs again
+exhausted VeriPB's 8 GB cap in the pass. Section 1's rerun of one of them under 32 GB ended
+`VERIFIED NO CONCLUSION` (600 s, 7.8 GB).
+
+### 12. What would reverse this
+
+- **A propagator whose run counts start to matter.** E1 and the fixes after it hold stdout, the
+  SEARCH counters and the proof, and move WORK (wakes, declined asks, the runs of satisfied clauses).
+  Nothing in `lib/` reads a run count to decide anything today (`runs_by_id` feeds `--stats` only). A
+  heuristic that did (an activity per instance, a restart rule on propagation work) would turn E1's
+  removed no-op runs into a search change.
+- **A learned clause with two literals of one variable in one direction.** E1, E2 (a) and D-0104's
+  watches all rest on `Learn.minimise` (section 5). A new source of learned clauses registered as
+  `Learned_clause` must minimise them too, which `BAGUETTE_DEBUG` checks at `make`.
+- **A watch that is not an order literal.** `watch_lo`/`watch_hi` are claims about `x >= k`. A bits
+  literal or a direct-encoding literal as a watch would need `watch_any`, which the index still keeps.
+- **Cycles.** E1 is worth 1 to 4 % of the instructions and 6 to 18 % of the cycles in this batch's
+  measurement (asks are cache misses on cold clause records, not instructions). If the node's noise
+  hid a loss, it would show there first. The instruction counts, which are the metric, do not move
+  the wrong way on any of the six.
 ## D-0143  M11-complexity-T7: the setup before node 1 was the .opb's name pipeline, three lists and two string tables per term of every linear row; eight fixes make openshop's setup 2 000 times cheaper without the proof and 9 times with it, every byte the same
 
 **Status**: **DONE**, recorded 2026-11-18 (agent-setup, `wave48-setup`). The contract is ROADMAP

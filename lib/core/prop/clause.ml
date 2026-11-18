@@ -446,9 +446,32 @@ module Learned_clause = struct
     t.w1 <- w1;
     t.w2 <- (if w2 >= 0 then w2 else w1)
 
-  let make (pb : Pb.t) =
-    let atoms = Array.of_list (List.map (fun (tm : Pb.term) -> tm.Pb.a) pb.Pb.terms) in
+  (* THE PRECONDITION of the two watches (D-0142 section 5): at most one literal per
+     (variable, polarity). Two rungs of one variable in one direction, `x >= 3 \/ x >= 5`,
+     can propagate with both of them non-false -- [Pb.pass]'s ladder-effective rule forces
+     `x >= 3` once every other literal is false -- so watching those two would let a
+     change of an unwatched variable make the clause unit unasked. Opposite polarities on
+     one variable are fine: BOUNDS cannot punch the hole between them, so a run with both
+     open does nothing. [Learn.minimise] merges every same-slot pair of the 1UIP clause, and
+     that clause is the only one [Search] registers here; checked under BAGUETTE_DEBUG. *)
+  let one_per_slot (atoms : Pb.atom array) =
     let n = Array.length atoms in
+    let ok = ref true in
+    for i = 0 to n - 1 do
+      for j = i + 1 to n - 1 do
+        if
+          Var.to_int atoms.(i).Pb.x = Var.to_int atoms.(j).Pb.x
+          && atoms.(i).Pb.positive = atoms.(j).Pb.positive
+        then ok := false
+      done
+    done;
+    !ok
+
+  let make (pb : Pb.t) =
+    let atoms = pb.Pb.atoms in
+    let n = Array.length atoms in
+    Debug.check "Learned_clause: one literal per (variable, polarity) (D-0142 section 5)"
+      (fun () -> one_per_slot atoms);
     { pb; atoms; w1 = 0; w2 = (if n > 1 then 1 else 0) }
 
   (* I-P7: queue only when a WATCHED literal on [v] has just become false. Written
@@ -461,19 +484,53 @@ module Learned_clause = struct
 
   (* M6-T22 / D-0138: the variables of the two watches. [ask] answers [false] for every
      other variable whatever the store holds, which is [Propagator.inst_watched]'s
-     contract, so the engine may wake this clause from these two variables only. *)
-  let watched t () = (t.atoms.(t.w1).Pb.x, t.atoms.(t.w2).Pb.x)
+     contract, so the engine may wake this clause from these two variables only.
+
+     M11-complexity-T3 (D-0142, E1): with the move that can falsify each. `x >= k` is
+     false once [hi x < k], so only an UPPER-bound move falsifies it; `x <= k - 1` only a
+     LOWER-bound move. That is [Propagator.watch_hi]/[watch_lo]'s whole claim, and it is
+     true of every order literal. *)
+  let watch_of (a : Pb.atom) =
+    if a.Pb.positive then Propagator.watch_hi a.Pb.x else Propagator.watch_lo a.Pb.x
+
+  let watched t () = (watch_of t.atoms.(t.w1), watch_of t.atoms.(t.w2))
 
   (* The advisor [Propagator.pack] takes: both halves of one object. *)
   let advise t = { Propagator.ask = ask t; watched = Some (watched t) }
 
+  (* [rewatch] after a run [Pb.quiet] answered (M11-complexity-T3, D-0142, E2 (a)), from
+     what its walk found instead of a walk of its own. The store has not moved since
+     [quiet] (a quiet run prunes nothing), and [quiet] answered [true], so [scan.f1] and
+     [scan.f2] are the first two non-false literals. [best ~not_] is then "the first
+     non-false literal other than [not_]", which is [f1] unless [not_] is [f1] and then
+     [f2], and its latest-falsified arm is never reached. [keep] is [rewatch]'s own test.
+     So the two watches are the ones [rewatch] would choose, by its own definition. *)
+  let rewatch_quiet store t (s : Pb.scan) =
+    let n = Array.length t.atoms in
+    let best ~not_ = if s.Pb.f1 <> not_ then s.Pb.f1 else s.Pb.f2 in
+    let keep i = i >= 0 && i < n && not (false_at store t i) in
+    let w1 = if keep t.w1 then t.w1 else best ~not_:t.w2 in
+    let w2 = if keep t.w2 && t.w2 <> w1 then t.w2 else best ~not_:w1 in
+    t.w1 <- w1;
+    t.w2 <- w2
+
   (* M6-T22 / D-0138: nearly every run of a learned clause is a watched literal falsified
      with another literal still free -- the run a two-watched-literal solver answers by
-     moving the watch. [Pb.propagate] answers it with [Pb.quiet], one walk, and
-     [rewatch] then moves the watch on the same store, so the watches -- and every later
-     wake -- are what they were. *)
+     moving the watch. [Pb.quiet] answers it with one walk, and the watch then moves on
+     the same store, so the watches -- and every later wake -- are what they were.
+
+     M11-complexity-T3 (D-0142, E2 (a)): that walk is now the only one. [Pb.quiet] leaves
+     the first two non-false literals in [t.pb]'s scan and [rewatch_quiet] reads them,
+     where the run used to walk the clause again in [rewatch]'s [best], once per watch to
+     replace. A run [quiet] does not answer is [Pb.pass] -- exactly what [Pb.propagate]
+     does then -- followed by the full [rewatch], because that run may have moved the
+     store. *)
   let propagate t store =
-    let r = propagate t.pb store in
-    rewatch store t;
-    r
+    if Pb.quiet store t.pb then (
+      rewatch_quiet store t t.pb.Pb.scan;
+      Propagator.Fixpoint)
+    else
+      let r = Pb.pass t.pb store in
+      rewatch store t;
+      r
 end
