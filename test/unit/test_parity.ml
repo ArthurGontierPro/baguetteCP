@@ -127,12 +127,21 @@ let test_brute_force () =
   let bad_sound = ref 0 and bad_complete = ref 0 and bad_conflict = ref 0 in
   let inferences = ref 0 and conflicts = ref 0 and beyond = ref 0 in
   for _ = 1 to trials do
-    let n = 3 + Random.State.int rng 6 in
-    let m = 1 + Random.State.int rng 6 in
+    (* Most systems are built consistent, from a hidden solution, so that inferences
+       dominate; one in five has random parities, so that root contradictions occur. *)
+    let n = 4 + Random.State.int rng 6 in
+    let m = 2 + Random.State.int rng (n - 1) in
+    let hidden = Array.init n (fun _ -> Random.State.int rng 2) in
+    let random_rhs = Random.State.int rng 5 = 0 in
     let rows =
       List.init m (fun _ ->
-          let k = 1 + Random.State.int rng 4 in
-          (List.init k (fun _ -> Random.State.int rng n), Random.State.int rng 2))
+          let k = 2 + Random.State.int rng 3 in
+          let xs = List.init k (fun _ -> Random.State.int rng n) in
+          let rhs =
+            if random_rhs then Random.State.int rng 2
+            else List.fold_left (fun p x -> p lxor hidden.(x)) 0 xs
+          in
+          (xs, rhs))
     in
     (* the rows the brute force reads: duplicates cancel, as in the propagator *)
     let rows =
@@ -144,8 +153,11 @@ let test_brute_force () =
     let t = Parity.make store (rows_of rows) in
     (* a random partial assignment over all n variables *)
     let g =
-      Array.init n (fun _ ->
-          match Random.State.int rng 3 with 0 -> 0 | 1 -> 1 | _ -> -1)
+      Array.init n (fun i ->
+          match Random.State.int rng 10 with
+          | 0 | 1 | 2 -> hidden.(i)
+          | 3 -> 1 - hidden.(i)
+          | _ -> -1)
     in
     let v = atom_values t g in
     let consistent_with fixed (h : int array) =
@@ -283,7 +295,7 @@ let test_cli () =
       check "cli: --parity --no-proof answers UNSAT"
         (rc = 0 && contains o "=====UNSATISFIABLE=====");
       check "cli: the parity line reports one instance and a conflict"
-        (contains e "parity: instances=1 " && not (contains e "conflicts=0 "));
+        (contains e "parity: instances=1 " && contains e " conflicts=1 ");
       let rc, o, _ = run "--no-proof" in
       check "cli: without --parity the same answer"
         (rc = 0 && contains o "=====UNSATISFIABLE=====")
