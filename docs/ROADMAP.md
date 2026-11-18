@@ -403,3 +403,28 @@ level 0 that deletes nothing learned. Everything here is behind flags until T5 m
 | M10-search-strategy-T3 | **The activity heuristic, behind a flag**, and its alternation with the annotation; measured on the codes set (aut order 7, QR48, QR72) against Chuffed's `-f` | TODO | |
 | M10-search-strategy-T4 | **Learned-clause deletion re-measured, and LBD tiers**: today's policies (`keep_all`, `fifo`, `lbd`) on the codes set and the editions, then glue clauses kept forever and tiered reduction (Glucose, Oh 2015), LBD for PB rows (RoundingSat); D-0051's default revisited by measurement | TODO | Record D-0139 |
 | M10-search-strategy-T5 | **The measurement and the defaults**: the sixteen editions in the fixed and free categories (M7-T30), the codes set, a decision record on what becomes default and what SPEC §3.4 then says | TODO | Needs T2-T4 |
+
+## M11-complexity — the pass that removes the costs that grow with the run
+
+Opened 2026-11-18 (the user, after D-0136 and D-0138). Every profile of a real instance this month
+found an operation whose cost grows with the learned database, the trail or the model, on a path run
+per node, per conflict or per propagation: `Retention.retire` (quadratic end-of-search sweep, D-0136),
+the engine asking every learned clause about every variable it names and six smaller linear scans
+(D-0138), `Retention.reduce` copying the live list after every learned clause (filed), the per-node
+statistics `List.mem` over every learned id in `Search.count_learned_activity` (found 2026-11-18),
+and earlier `Trace.position_of` (M6-T15). The 173 test models are too small to show any of them. The
+pass removes them systematically, with every change keeping the search and the proof byte for byte,
+and it comes BEFORE the Challenge-wide measurements (M8-bits-encoding-T4, M9-no-proof-T3,
+M10-search-strategy-T5), whose timings it would otherwise make stale. Its code batches start once the
+branches in flight on 2026-11-18 (`wave44-t3` continuation as `wave46-t3`, `wave45-strategy`,
+`wave45-retention`) are merged; they are not cut short (the user's decision).
+
+| ID | Task | Status | Notes |
+|---|---|---|---|
+| M11-complexity-T1 | **The inventory, read-only**: every operation in `lib/` run per node, per conflict, per propagation or per proof line whose cost grows with the learned database, the trail, the trace or the model; for each, the call frequency, its measured share on profiles of three or four instance shapes (QR48 and QR72 from the codes set, integer-heavy Challenge instances with long runs), the fix, the batch it belongs to, the risk to proof bytes, and the reference design (GCS's notes on triggers and waking for propagation; Chuffed and MiniSat for the learned database) | TODO | Opened 2026-11-18; record D-0140; no file under `lib/` changes |
+| M11-complexity-T2 | **The lanes the pass needs, before any fix**: (a) a DIFFERENTIAL lane, real instances at a fixed node budget whose stdout, node counts and proof hashes must equal a recorded reference, on the default path and on the non-default ones (retention policies, PB analysis, `--bits-above 0`, `--no-proof`, later the restart and activity flags); (b) a SCALING lane that fails when the cost per node grows with the learned database, report-only until the pass lands, then a gate; both wired into the gate | TODO | Opened 2026-11-18; record D-0141 |
+| M11-complexity-T3 | **Batch 1, engine, store and propagators** | TODO | After the merges; T1's list |
+| M11-complexity-T4 | **Batch 2, search, analysis, learning and retention** | TODO | After the merges; T1's list |
+| M11-complexity-T5 | **Batch 3, trace, justification and proof writing** | TODO | After the merges; T1's list |
+| M11-complexity-T6 | **The scaling lane becomes a gate, and the re-baseline** handed to M8-T4, M9-T3 and M10-T5 | TODO | |
+
