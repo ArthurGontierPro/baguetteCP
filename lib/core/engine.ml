@@ -267,9 +267,34 @@ type t = {
       (** M6-T21: completed runs left before [propagate] next asks its [?stop]. PER
           ENGINE and carried ACROSS calls, so a long run of short nodes still polls on
           schedule; only a call given [?stop] counts it down. *)
+  mutable scopes : int array array;
+      (** M6-T22 / D-0138: id -> the instance's [inst_vars] as SORTED, DEDUPLICATED
+          variable ints, so [check_attribution] answers "does [id] watch [v]" by binary
+          search. Indexed by id and grown by [add] like [triggers]; an id with no entry
+          has the empty scope. See [in_scope] for why this replaced a walk of the
+          watcher list. *)
 }
 
 let unborn = max_int
+
+(* M6-T22 / D-0138: an instance's scope as the sorted set of its variables' ints. *)
+let scope_of (inst : Propagator.instance) =
+  Array.of_list
+    (List.sort_uniq Int.compare (List.map Var.to_int inst.Propagator.inst_vars))
+
+let in_scope t id v =
+  id >= 0
+  && id < Array.length t.scopes
+  &&
+  let s = t.scopes.(id) and x = Var.to_int v in
+  let rec go lo hi =
+    if lo >= hi then false
+    else
+      let mid = (lo + hi) lsr 1 in
+      let y = s.(mid) in
+      if y = x then true else if y < x then go (mid + 1) hi else go lo mid
+  in
+  go 0 (Array.length s)
 
 (* M2-T6: THE SELF-WAKE VETO, and the aliased-scope rule that guards it.
 
@@ -330,6 +355,11 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
     (fun (inst : Propagator.instance) ->
       if inst.Propagator.id >= 0 then veto.(inst.Propagator.id) <- honours_claim inst)
     instances;
+  let scopes = Array.make (Array.length triggers) [||] in
+  List.iter
+    (fun (inst : Propagator.instance) ->
+      if inst.Propagator.id >= 0 then scopes.(inst.Propagator.id) <- scope_of inst)
+    instances;
   {
     instances = Array.of_list instances;
     watchers;
@@ -344,6 +374,7 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
     seen = None;
     incremental = true;
     poll_left = default_poll_runs;
+    scopes;
   }
 
 let set_incremental t b = t.incremental <- b
@@ -443,6 +474,11 @@ let add ?(trigger = default_trigger) (t : t) (inst : Propagator.instance) =
     Array.blit t.veto 0 grown 0 (Array.length t.veto);
     t.veto <- grown);
   t.veto.(inst.Propagator.id) <- honours_claim inst;
+  if Array.length t.scopes <= inst.Propagator.id then (
+    let grown = Array.make (inst.Propagator.id + 1) [||] in
+    Array.blit t.scopes 0 grown 0 (Array.length t.scopes);
+    t.scopes <- grown);
+  t.scopes.(inst.Propagator.id) <- scope_of inst;
   (* M6-T18: a new instance has never run, so it is at its fixpoint at no state: it is
      seeded by the next [propagate] whatever else changed, and after any later backjump
      to a fixpoint older than the one it is born at. *)
@@ -588,21 +624,26 @@ exception Mis_attributed of string
 
    It is ON BY DEFAULT, not behind BAGUETTE_DEBUG, and that is deliberate. A Debug-gated
    check of a field nobody else reads is indistinguishable from no check at all in every
-   run the suite actually makes. The cost is one hashtable lookup and one short [List.mem]
-   per NEW TRAIL ENTRY -- the same lookup [watchers_of_new_entries] makes on the same
-   entries a moment later, and bounded by the number of prunings, not by the trail or the
+   run the suite actually makes. The cost is one binary search in the instance's sorted
+   scope per NEW TRAIL ENTRY, bounded by the number of prunings, not by the trail or the
    variable count.
 
-   The watcher table is consulted rather than [inst.inst_vars] directly because it is
-   built from exactly that list ([create] above) and is indexed, so membership is O(the
-   watchers of one variable) instead of O(the instance's arity). The two agree by
-   construction; if they ever did not, this check is what would say so. *)
+   Until M6-T22 the watcher table was consulted ("the short [List.mem]"), on the argument
+   that it is indexed by variable. The list it returns is short only while the watchers
+   of one variable are few: with a learned database it is every learned clause naming
+   the variable, and D-0138 measured that walk at 15 % of a QR48 solve. [t.scopes] is
+   built from the same [inst_vars] at the same two places ([create], [add]), so the
+   answer is the table's. *)
 let check_attribution (t : t) (inst : Propagator.instance) store ~since
     ~(conflict : Store.conflict option) =
   let id = inst.Propagator.id in
-  let watches v =
-    match Hashtbl.find_opt t.watchers v with None -> false | Some ids -> List.mem id ids
-  in
+  (* M6-T22 / D-0138: membership in the instance's own sorted scope, which is the
+     watcher table's answer by construction (both are built from [inst_vars], at [create]
+     and at [add]). It used to be [List.mem id] over the watcher list of [e.var], and on
+     a learned database that list is every learned clause naming the variable, newest
+     first, with the model propagators that actually prune at its far end: on QR48 that
+     walk, under OCaml's polymorphic [compare], was 15 % of the solve's cycles. *)
+  let watches v = in_scope t id v in
   for i = since to Store.trail_length store - 1 do
     let e : Store.entry = Store.trail_entry store i in
     if e.Store.prop <> id then
