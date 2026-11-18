@@ -461,8 +461,20 @@ module Learned_clause = struct
 
   (* M6-T22 / D-0138: the variables of the two watches. [ask] answers [false] for every
      other variable whatever the store holds, which is [Propagator.inst_watched]'s
-     contract, so the engine may wake this clause from these two variables only. *)
-  let watched t () = (t.atoms.(t.w1).Pb.x, t.atoms.(t.w2).Pb.x)
+     contract, so the engine may wake this clause from these two variables only.
+
+     M11-complexity-T3 (D-0142, E1): with the move that falsifies each. A literal that
+     is the one rung of a two-valued declared variable ([decl_hi = decl_lo + 1] and
+     [k = decl_hi], so `x >= hi` or `x <= lo`) is falsified only by the move of one bound
+     and fixes the variable when false, which is [Propagator.watch_lo]/[watch_hi]'s
+     contract; every other literal is [watch_any]. A `var bool` is the common case: its
+     ladder has the one rung (D-0007). *)
+  let watch_of (a : Pb.atom) =
+    if a.Pb.decl_hi = a.Pb.decl_lo + 1 && a.Pb.k = a.Pb.decl_hi then
+      if a.Pb.positive then Propagator.watch_hi a.Pb.x else Propagator.watch_lo a.Pb.x
+    else Propagator.watch_any a.Pb.x
+
+  let watched t () = (watch_of t.atoms.(t.w1), watch_of t.atoms.(t.w2))
 
   (* The advisor [Propagator.pack] takes: both halves of one object. *)
   let advise t = { Propagator.ask = ask t; watched = Some (watched t) }

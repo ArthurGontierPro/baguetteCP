@@ -2112,6 +2112,141 @@ let test_index_positions () =
     (engine.Engine.wv1.(0) <> engine.Engine.wv1.(1)
     && engine.Engine.wv2.(0) <> engine.Engine.wv1.(1))
 
+(* ---------------------------------------------------------------------------
+   M11-complexity-T3 (D-0142, E1): the wake index by direction wakes what the variable
+   index woke
+
+   Two engines over the same learned clauses, from the same store: one as packed
+   ([Clause.Learned_clause.advise], directional slots for the rung of a two-valued
+   variable), one whose advisor reports every watch as [Propagator.watch_any] -- the
+   M6-T22 index, which asked every watcher of a variable on every change of it. A random
+   search drives both (decide a bound, propagate, backtrack on a conflict or at random)
+   and after every [propagate] the two must agree on the outcome and on the WHOLE trail,
+   entry by entry (variable, new box, reason). The trail is the order of the prunings, so
+   equal trails are equal wake orders wherever a wake order could show. The directional
+   engine must also ask strictly less ([c_wakes]), or the test proves nothing.
+
+   Clauses over four Booleans and two variables on 0..3 (whose watches stay [watch_any]),
+   so both kinds of slot and the mix are exercised. Under BAGUETTE_DEBUG the declined
+   and the unasked instances are run by [check_declined] as well. *)
+let test_direction_index () =
+  let module Clause = Baguette_core.Clause in
+  let module LC = Clause.Learned_clause in
+  let bounds =
+    [ ("a", 0, 1); ("b", 0, 1); ("c", 0, 1); ("d", 0, 1); ("x", 0, 3); ("y", 0, 3) ]
+  in
+  let nv = List.length bounds in
+  let decl name =
+    List.find_map (fun (n, lo, hi) -> if n = name then Some (lo, hi) else None) bounds
+  in
+  let rng = Random.State.make [| 0x0142; 1 |] in
+  let lit () =
+    let nm, lo, hi = List.nth bounds (Random.State.int rng nv) in
+    let k = lo + 1 + Random.State.int rng (hi - lo) in
+    if Random.State.bool rng then Lit.ge nm k else Lit.le nm (k - 1)
+  in
+  let any_of (adv : Propagator.advisor) =
+    let to_any w = Propagator.watch_any (Propagator.watch_var w) in
+    {
+      adv with
+      Propagator.watched =
+        Option.map
+          (fun w () ->
+            let a, b = w () in
+            (to_any a, to_any b))
+          adv.Propagator.watched;
+    }
+  in
+  let trail store =
+    List.init (Store.trail_length store) (fun i ->
+        let e = Store.trail_entry store i in
+        ( Var.to_int e.Store.var,
+          Domain.lo e.Store.now,
+          Domain.hi e.Store.now,
+          Reason.to_string e.Store.reason ))
+  in
+  let scenes = 300 and agree = ref 0 and steps = ref 0 and conflicts = ref 0 in
+  let w_dir = ref 0 and w_any = ref 0 in
+  for _ = 1 to scenes do
+    let clauses =
+      List.init
+        (3 + Random.State.int rng 6)
+        (fun _ -> List.init (2 + Random.State.int rng 3) (fun _ -> lit ()))
+    in
+    let build wrap =
+      let store = mk_store bounds in
+      let insts =
+        List.filter_map (fun ls -> Clause.of_lits store ~decl ls) clauses
+        |> List.mapi (fun id p ->
+               let lc = LC.make p in
+               Propagator.pack ~id
+                 ~advise:(wrap (LC.advise lc))
+                 (module LC : Propagator.S with type t = LC.t)
+                 lc)
+      in
+      (store, Engine.create insts)
+    in
+    let s1, e1 = build Fun.id and s2, e2 = build any_of in
+    let ok = ref true in
+    let step () =
+      let r1 =
+        try Ok (Engine.propagate e1 s1) with ex -> Error (Printexc.to_string ex)
+      in
+      let r2 =
+        try Ok (Engine.propagate e2 s2) with ex -> Error (Printexc.to_string ex)
+      in
+      incr steps;
+      let kind = function
+        | Ok Engine.Fixpoint -> "fix"
+        | Ok (Engine.Conflict _) -> "conflict"
+        | Error m -> m
+      in
+      if kind r1 <> kind r2 || trail s1 <> trail s2 then ok := false;
+      kind r1
+    in
+    let rec go depth =
+      if depth < 6 && !ok then
+        match step () with
+        | "fix" ->
+            let v = Random.State.int rng nv in
+            let d = Store.get s1 (var v) in
+            if Domain.lo d < Domain.hi d then (
+              let k = Domain.lo d + Random.State.int rng (Domain.hi d - Domain.lo d) in
+              let up = Random.State.bool rng in
+              List.iter
+                (fun s ->
+                  Store.new_level s;
+                  ignore
+                    (if up then Store.set_lo s (var v) (k + 1) no_facts_placeholder
+                     else Store.set_hi s (var v) k no_facts_placeholder))
+                [ s1; s2 ];
+              go (depth + 1);
+              if Random.State.int rng 3 = 0 then (
+                List.iter Store.backtrack [ s1; s2 ];
+                go depth))
+            else go (depth + 1)
+        | "conflict" -> incr conflicts
+        | _ -> ok := false
+    in
+    go 0;
+    if !ok then incr agree;
+    w_dir := !w_dir + (Engine.counters e1).Engine.c_wakes;
+    w_any := !w_any + (Engine.counters e2).Engine.c_wakes
+  done;
+  check
+    (Printf.sprintf
+       "E1: %d random searches (%d propagate calls, %d conflicts), the direction index \
+        and the variable index give the same outcomes and the same trails"
+       scenes !steps !conflicts)
+    (!agree = scenes);
+  check
+    (Printf.sprintf "E1: ...and the direction index asks less (%d wakes against %d)"
+       !w_dir !w_any)
+    (!w_dir < !w_any);
+  check
+    (Printf.sprintf "E1: ...over enough conflicts to matter (%d > 100)" !conflicts)
+    (!conflicts > 100)
+
 let () =
   test_fixpoint_tightens_and_settles ();
   test_conflict_carries_explanation ();
@@ -2152,6 +2287,7 @@ let () =
   test_hole_split_with_settled_ancestor ();
   test_declined_while_pending ();
   test_index_positions ();
+  test_direction_index ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

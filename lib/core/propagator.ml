@@ -85,6 +85,29 @@ type pb_row = { r_terms : (int * Baguette_proof.Lit.t) list; r_degree : int; r_c
 (* The engine holds a heterogeneous collection of propagators, so it needs them erased to
    a common type. Packing at registration time keeps [propagate] a plain closure call on
    the hot path instead of a first-class-module application. *)
+(* M11-complexity-T3 (D-0142, D-0140's E1): a WATCH, as the engine's wake index keys it:
+   the variable of one watched literal and the bound move that can FALSIFY it.
+
+     [watch_any v]  any change of [v] may falsify it (the general case, and the only
+                    one before E1);
+     [watch_lo v]   the literal is the rung of a TWO-VALUED variable read negatively
+                    (`v <= lo`): only a move of [v]'s LOWER bound falsifies it, and
+                    once it is false [v] is fixed;
+     [watch_hi v]   the same rung read positively (`v >= hi`): only a move of the
+                    UPPER bound falsifies it, and once it is false [v] is fixed.
+
+   The second half of [watch_lo] / [watch_hi] is what makes the engine's use of them
+   exact (lib/core/engine.ml, "The wake index by direction"): a watch that is false
+   leaves no later change of its variable on the same branch to be asked about. Only a
+   propagator that knows its literal is such a rung may claim it; anything else says
+   [watch_any]. An int, three per variable, so the index is an array. *)
+type watch = int
+
+let watch_any v = 3 * Var.to_int v
+let watch_lo v = (3 * Var.to_int v) + 1
+let watch_hi v = (3 * Var.to_int v) + 2
+let watch_var (w : watch) = Var.of_int (w / 3)
+
 type instance = {
   id : int;
   inst_name : string;
@@ -101,10 +124,13 @@ type instance = {
          change nothing and not fail. The default always answers [true]. Under
          BAGUETTE_DEBUG the engine runs every dropped wake anyway and raises if it did
          anything ([Engine.check_advise]). *)
-  inst_watched : (unit -> Var.t * Var.t) option;
+  inst_watched : (unit -> watch * watch) option;
       (* M6-T22 / D-0138: [Some w] when [inst_advise] answers [false] for EVERY variable
          except the two [w ()] returns (the same variable twice is allowed), whatever the
          store says -- the two variables a watched-literal propagator currently watches.
+         M11-complexity-T3 (D-0142, E1): each comes as a [watch], which also says which
+         bound move can falsify the literal, so the engine asks only on that move when
+         the watch is directional.
          The engine then wakes the instance only from changes of those two variables,
          asking [w] again after each run, instead of from its whole scope: the answers
          are the advisor's own, so the runs are the same, and what goes is the asking.
@@ -132,7 +158,7 @@ let advise_always : Store.t -> Var.t -> bool = fun _ _ -> true
    ([Clause.Learned_clause.advise]) and cannot pass one without the other. *)
 type advisor = {
   ask : Store.t -> Var.t -> bool;
-  watched : (unit -> Var.t * Var.t) option;
+  watched : (unit -> watch * watch) option;
 }
 
 let no_advisor = { ask = advise_always; watched = None }
