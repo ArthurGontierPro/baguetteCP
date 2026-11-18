@@ -516,11 +516,12 @@ let emit_clause ctx lits =
   match defining_line ctx lits with
   | Some cid -> cid
   | None ->
+      (* The origin is rendered only if something reads it (D-0145, D-0140 J6): the
+         writer's audit naming a leaked id, or the mutation knob. *)
       let cid =
-        Writer.rup_clause ctx.writer
-          ~origin:
-            (Printf.sprintf "clause(%s)"
-               (String.concat " " (List.map Lit.to_string lits)))
+        Writer.rup_clause_lazy ctx.writer
+          ~origin:(fun () ->
+            Printf.sprintf "clause(%s)" (String.concat " " (List.map Lit.to_string lits)))
           lits
       in
       state_clause ctx lits cid;
@@ -541,14 +542,20 @@ let emit_clause ctx lits =
    what is already there. Consulting here would also break two properties [Trace] owns
    -- [emitted_ids] would list one id twice, and [permanent_ids] would hand
    [Search.solve] an id to delete twice, which is an I-X2 violation rather than a saving. *)
-let emit_rup_clause ctx ~origin lits =
+(* [~origin] is a thunk (D-0145, D-0140 J6): [Trace] builds it from the line's literals,
+   and only the writer's audit and the mutation knob ever render it. [emit_rup_clause]
+   below is the same over a string, for [Search]'s bridges. *)
+let emit_rup_clause_lazy ctx ~origin lits =
   (* M9-no-proof-T2: no line, no claim-index entry, no literal validated. *)
-  if Writer.is_null ctx.writer then Writer.fresh ctx.writer ~origin
+  if Writer.is_null ctx.writer then Writer.fresh_lazy ctx.writer ~origin
   else (
     validate_lits ctx lits;
-    let cid = Writer.rup_clause ctx.writer ~origin lits in
+    let cid = Writer.rup_clause_lazy ctx.writer ~origin lits in
     state_clause ctx lits cid;
     cid)
+
+let emit_rup_clause ctx ~origin lits =
+  emit_rup_clause_lazy ctx ~origin:(fun () -> origin) lits
 
 (* [Linear (terms, rhs)] -- rup of exactly the constraint it states. Not [pol]; see
    D-0009 (docs/DECISIONS.md) for the full story, summarised here because
@@ -584,9 +591,10 @@ let emit_rup_clause ctx ~origin lits =
    available -- it is not available here. *)
 let emit_linear ctx terms rhs =
   validate_lits ctx (List.map snd terms);
-  Writer.rup ctx.writer
-    ~origin:(Printf.sprintf "linear: %s" (Opb.constr_to_string (Opb.ge terms rhs)))
-    (Opb.ge terms rhs)
+  let c = Opb.ge terms rhs in
+  Writer.rup_lazy ctx.writer
+    ~origin:(fun () -> Printf.sprintf "linear: %s" (Opb.constr_to_string c))
+    c
 
 (* [Cut (e1, e2, c1, c2)] -- recurse on both reasons, then combine: c1 * e1 + c2 * e2.
 
@@ -613,8 +621,8 @@ let emit_linear ctx terms rhs =
    `rup` the module header describes. *)
 let pol_stating ctx ~origin ~claim expr =
   match claim with
-  | None -> Writer.pol ctx.writer ~origin expr
-  | Some c -> Writer.pol_concluding ctx.writer ~origin ~claim:c expr
+  | None -> Writer.pol_lazy ctx.writer ~origin expr
+  | Some c -> Writer.pol_concluding_lazy ctx.writer ~origin ~claim:c expr
 
 let emit_cut ~emit ~claim ctx e1 e2 c1 c2 =
   if c1 < 1 || c2 < 1 then
@@ -623,7 +631,7 @@ let emit_cut ~emit ~claim ctx e1 e2 c1 c2 =
   let id1 = emit ctx e1 in
   let id2 = emit ctx e2 in
   pol_stating ctx ~claim
-    ~origin:(Printf.sprintf "cut(%d*%d + %d*%d)" c1 id1 c2 id2)
+    ~origin:(fun () -> Printf.sprintf "cut(%d*%d + %d*%d)" c1 id1 c2 id2)
     Pol.(add (mul (id id1) c1) (mul (id id2) c2))
 
 (* [Combine (summands, divisor)] -- docs/DECISIONS.md D-0013: the "weaken, divide, add"
@@ -764,7 +772,8 @@ let emit_combine ~emit ~claim ctx summands divisor =
   in
   let expr = if divisor <= 1 then expr else Pol.div expr divisor in
   pol_stating ctx ~claim
-    ~origin:(Printf.sprintf "combine(%d summand(s), / %d)" (List.length summands) divisor)
+    ~origin:(fun () ->
+      Printf.sprintf "combine(%d summand(s), / %d)" (List.length summands) divisor)
     expr
 
 (* The fragment one [Linear_term] contributes to a bits-arm `pol`, shared by the

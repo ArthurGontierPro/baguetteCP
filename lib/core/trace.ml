@@ -398,8 +398,13 @@ let claims encoding e name = List.map (fun l -> l.claim) (lines encoding e name)
 
 let clause_of ~claim ~facts = claim @ List.map Lit.negate facts
 
-let emit_line (ctx : Justify.ctx) ~origin ~claim ~facts =
-  Justify.emit_rup_clause ctx ~origin (clause_of ~claim ~facts)
+(* [~origin] rendered on demand (D-0145, D-0140 J6); [emit_line] is the same over a
+   string. *)
+let emit_line_lazy (ctx : Justify.ctx) ~origin ~claim ~facts =
+  Justify.emit_rup_clause_lazy ctx ~origin (clause_of ~claim ~facts)
+
+let emit_line ctx ~origin ~claim ~facts =
+  emit_line_lazy ctx ~origin:(fun () -> origin) ~claim ~facts
 
 (* M8-bits-encoding-T2 (D-0130 section 2's first refinement, D-0132 section 2.5): is
    this entry's line the BITS arm's? The unit is the ROW -- a pruning whose row has a
@@ -663,7 +668,10 @@ let emit_to_page (ctx : Justify.ctx) t store =
               if !at <> level then (
                 Writer.set_level ctx.Justify.writer level;
                 at := level);
-              let origin =
+              (* Rendered only if read (D-0145, D-0140 J6): by the writer's audit naming
+                 a leaked id, or by the mutation knob. It was a [Printf] and a rendering
+                 of the claim per trace line. *)
+              let origin () =
                 Printf.sprintf "trace: %s from %d fact(s)%s"
                   (String.concat " \\/ " (List.map Lit.to_string claim))
                   (List.length facts)
@@ -678,7 +686,7 @@ let emit_to_page (ctx : Justify.ctx) t store =
                 | Some (dcid, dclause) when same_clause dclause (clause_of ~claim ~facts)
                   ->
                     dcid
-                | _ -> emit_line ctx ~origin ~claim ~facts
+                | _ -> emit_line_lazy ctx ~origin ~claim ~facts
               in
               record t ~level cid;
               t.line_ids.(i) <-
@@ -756,8 +764,9 @@ let conflict_line_to_page (ctx : Justify.ctx) t (c : Store.conflict) =
            twin of [derive_ahead] for an entry. *)
         if c.Store.c_ahead then ignore (Justify.emit ctx c.Store.c_why : Writer.cid);
         let cid =
-          Justify.emit_rup_clause ctx
-            ~origin:(Printf.sprintf "trace: conflict from %d fact(s)" (List.length facts))
+          Justify.emit_rup_clause_lazy ctx
+            ~origin:(fun () ->
+              Printf.sprintf "trace: conflict from %d fact(s)" (List.length facts))
             (List.map Lit.negate facts)
         in
         record t ~level:(Writer.current_level ctx.Justify.writer) cid;

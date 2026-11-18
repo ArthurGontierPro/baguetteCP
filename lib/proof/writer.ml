@@ -84,26 +84,47 @@ module Pol = struct
      D-0023 -- an id our counter got wrong is then a hard "label not assigned" error
      rather than a silently different constraint. The positional rendering this used to
      sit beside went with format 2.0 (D-0046); there is no unlabelled `pol` any more. *)
-  let rec write_cited b cite = function
-    | Id c -> Buffer.add_string b (cite c)
+  (* M11-complexity-T5 (D-0145, D-0140 W4): the integers go through [Lit.add_int], which
+     writes [string_of_int]'s bytes without the format interpreter "%d" used to cost per
+     operator; [id_out] writes one constraint reference. *)
+  let rec write_with b id_out = function
+    | Id c -> id_out b c
     | Axiom l -> Buffer.add_string b (Lit.to_string l)
     | Add (a, c) ->
-        write_cited b cite a;
+        write_with b id_out a;
         Buffer.add_char b ' ';
-        write_cited b cite c;
+        write_with b id_out c;
         Buffer.add_string b " +"
     | Mul (a, k) ->
-        write_cited b cite a;
-        Buffer.add_string b (Printf.sprintf " %d *" k)
+        write_with b id_out a;
+        Buffer.add_char b ' ';
+        Lit.add_int b k;
+        Buffer.add_string b " *"
     | Div (a, k) ->
-        write_cited b cite a;
-        Buffer.add_string b (Printf.sprintf " %d d" k)
+        write_with b id_out a;
+        Buffer.add_char b ' ';
+        Lit.add_int b k;
+        Buffer.add_string b " d"
     | Sat a ->
-        write_cited b cite a;
+        write_with b id_out a;
         Buffer.add_string b " s"
     | Weaken (a, v) ->
-        write_cited b cite a;
-        Buffer.add_string b (Printf.sprintf " %s w" (Lit.var_name v))
+        write_with b id_out a;
+        Buffer.add_char b ' ';
+        Buffer.add_string b (Lit.var_name v);
+        Buffer.add_string b " w"
+
+  let write_cited b cite p = write_with b (fun b c -> Buffer.add_string b (cite c)) p
+
+  (* [write_cited b Opb.label_of], with each reference written as "@c" and its decimal
+     straight into [b] rather than through [Printf.sprintf "@c%d"]. The writer's own
+     path; the bytes are [to_string_cited ~cite:Opb.label_of]'s. *)
+  let write_labelled b p =
+    write_with b
+      (fun b c ->
+        Buffer.add_string b "@c";
+        Lit.add_int b c)
+      p
 
   let to_string_cited ~cite p =
     let b = Buffer.create 64 in
@@ -265,7 +286,13 @@ module Mutation = struct
     Printf.sprintf "%s at site %S, occurrence %d" (kind_name m.kind) m.site m.occurrence
 end
 
-type entry = { origin : string; level : int }
+(* [origin] is rendered on demand (M11-complexity-T5, D-0145, D-0140 J6 and W8). The
+   audit keeps one entry per live id, and reads [origin] only to name a leaked id in
+   [audit_report]; the mutation knob and [--stats]'s widest `pol` are its other two
+   readers, and neither runs on a normal line. Building every line's origin string
+   eagerly was a [Printf] and a rendering of the line's literals per line, all of it
+   thrown away. *)
+type entry = { origin : unit -> string; level : int }
 
 type t = {
   oc : out_channel;
@@ -324,12 +351,18 @@ type t = {
   mutable n_rup : int;
   mutable pol_tokens : int;
   mutable pol_tokens_max : int;
-  mutable pol_widest : string;
+  mutable pol_widest : unit -> string;
       (* M8-bits-encoding-T5 (D-0131): the SHAPE counters, read back by [shape_stats] for
          bin/main.ml's [--stats]. How many `pol` and `rup` lines this writer put on the
          page, the tokens over every `pol` ([Pol.tokens]), the widest single `pol` and the
          [~origin] that wrote it -- so a Theta(w)-token `pol` is visible by name, not only
          as a slow check. Counted on what is written, after the mutation knob. *)
+  buf : Buffer.t;
+      (* M11-complexity-T5 (D-0145, D-0140 W2 and W4): the line being written. A rule
+         is assembled here and handed to the channel in ONE call ([put_line]), instead
+         of a [Printf] format with "\n" appended per line, a string per piece and about
+         four copies of a `pol`. In OCaml 5 every write to a channel takes the channel's
+         lock, so one call per line is also the cheapest way to write it (D-0143). *)
 }
 
 let audit_enabled () =
@@ -362,7 +395,8 @@ let create ?(comments = false) ?audit ?(null = false) oc =
     n_rup = 0;
     pol_tokens = 0;
     pol_tokens_max = 0;
-    pol_widest = "";
+    pol_widest = (fun () -> "");
+    buf = Buffer.create 256;
   }
 
 (* A writer that emits ONE deliberately wrong step, for the mutation gate. Off is not
@@ -410,7 +444,7 @@ let shape_stats (t : t) : shape_stats =
     n_rup = t.n_rup;
     pol_tokens = t.pol_tokens;
     pol_tokens_max = t.pol_tokens_max;
-    pol_widest = t.pol_widest;
+    pol_widest = t.pol_widest ();
   }
 
 let live_count t = Itbl.length t.live
@@ -511,25 +545,85 @@ let line t fmt =
         emit_us := !emit_us + (emit_now () - t0))
       t.oc (fmt ^^ "\n")
 
-(* M6-T22 / D-0138: [line] for a line that is already in pieces, written straight to the
-   channel. The same bytes, the same checks, the same [emit_lines] and [emit_us]
-   accounting; what goes is the format's interpretation, once per line. Used by [rup],
-   which is nearly every line a search writes (1.29 M of QR48's 1.40 M). *)
-let put t (parts : string list) =
+(* M6-T22 / D-0138 wrote [rup], nearly every line a search writes (1.29 M of QR48's
+   1.40 M), as a list of pieces straight to the channel, without the format's
+   interpretation. M11-complexity-T5 takes that one step further for every rule on the
+   search's path: the pieces are assembled in one buffer and written in one call. *)
+
+(* M11-complexity-T5 (D-0145). The line in [t.buf], cleared and ready to be filled; then
+   [put_line] (a rule: refused once the proof has ended) or [put_comment] (a level
+   marker: never refused, as [always_comment] never was) ends it with "\n" and writes it
+   in one call, with [line]'s accounting. A buffer that one huge line grew past
+   [buf_keep] is given back, as [Opb.output_row]'s is. *)
+let buf_keep = 1 lsl 20
+
+let line_buf t =
+  Buffer.clear t.buf;
+  t.buf
+
+let write_buf t =
+  let b = t.buf in
+  Buffer.add_char b '\n';
+  (if not !emit_clock then (
+     incr emit_lines;
+     Buffer.output_buffer t.oc b)
+   else
+     let t0 = emit_now () in
+     Buffer.output_buffer t.oc b;
+     incr emit_lines;
+     emit_us := !emit_us + (emit_now () - t0));
+  if Buffer.length b > buf_keep then Buffer.reset b
+
+let put_line t =
   if t.finished then invalid_arg "Writer: the proof has already ended";
-  if not t.null then (
-    let write () =
-      List.iter (output_string t.oc) parts;
-      output_char t.oc '\n'
-    in
-    if not !emit_clock then (
-      incr emit_lines;
-      write ())
-    else
-      let t0 = emit_now () in
-      write ();
-      incr emit_lines;
-      emit_us := !emit_us + (emit_now () - t0))
+  if not t.null then write_buf t
+
+let put_comment t = if not t.null then write_buf t
+
+(* "@c<id> ", the label a rule that yields [id] is prefixed with ([label_for]). *)
+let add_label b id =
+  Buffer.add_string b "@c";
+  Lit.add_int b id;
+  Buffer.add_char b ' '
+
+(* "@c<id>", a citation ([cite]). *)
+let add_cite b id =
+  Buffer.add_string b "@c";
+  Lit.add_int b id
+
+(* [lits_to_string lits] appended to [b]: the literals separated by one space. *)
+let add_lits b lits =
+  List.iteri
+    (fun i l ->
+      if i > 0 then Buffer.add_char b ' ';
+      Buffer.add_string b (Lit.to_string l))
+    lits
+
+(* [Opb.constr_body c] appended to [b], byte for byte: per term the signed coefficient
+   ("+" for a >= 0, as "%+d" writes it), the literal and a space, then the relation and
+   the degree. A run of terms over one variable sanitises its name once, as
+   [Opb.output_row] does ([Lit.add_sanitized] writes [Lit.to_string]'s bytes). *)
+let add_constr_body b (c : Opb.constr) =
+  let last = ref "" and last' = ref "" in
+  List.iter
+    (fun (a, (l : Lit.t)) ->
+      if a >= 0 then Buffer.add_char b '+';
+      Lit.add_int b a;
+      Buffer.add_char b ' ';
+      let x = Lit.owner l.Lit.v in
+      let x' =
+        if x == !last then !last'
+        else
+          let x' = Lit.sanitize x in
+          last := x;
+          last' := x';
+          x'
+      in
+      Lit.add_sanitized b x' l;
+      Buffer.add_char b ' ')
+    c.Opb.terms;
+  Buffer.add_string b (match c.Opb.rel with Opb.Ge -> ">= " | Opb.Eq -> "= ");
+  Lit.add_int b c.Opb.rhs
 
 (* A rule, terminated by `;`. Rules whose body already carries one -- [rup] and the
    OPB constraint rendering it uses -- go through [line] directly: a second `;` is a
@@ -591,7 +685,7 @@ let always_comment t fmt =
       t.oc
       ("%% " ^^ fmt ^^ "\n")
 
-let fresh t ~origin =
+let fresh_lazy t ~origin =
   t.next_id <- t.next_id + 1;
   (* M9-no-proof-T2: the null writer counts and nothing else. No tag and no bucket, so
      [wipe_level] has nothing to walk; no audit entry, so [live_ids] stays empty. *)
@@ -608,6 +702,13 @@ let fresh t ~origin =
       t.by_lvl.(lv) <- t.next_id :: t.by_lvl.(lv);
       if lv > t.by_hi then t.by_hi <- lv));
   t.next_id
+
+(* Every rule that yields an id comes in two forms: the one taking [~origin] as a
+   string, which every caller had, and a [_lazy] one taking a thunk that renders it,
+   for the callers on the per-line path ([Justify], [Trace]), which build their origin
+   from the line's literals (D-0140 J6). The string form is the lazy one over a
+   constant. *)
+let fresh t ~origin = fresh_lazy t ~origin:(fun () -> origin)
 
 (* Preamble: version line, then the count of model constraints loaded from the .opb.
 
@@ -659,7 +760,12 @@ let set_level t l =
      it and leave a comment where the marker used to be. That comment is emitted
      unconditionally: without it a proof has nothing in it that says where a decision
      began, and the proofs in this project are read by hand. *)
-  always_comment t "level %d" l;
+  (* "% level <l>", as [always_comment t "level %d" l] wrote it (D-0145: one per
+     decision, so not through a format). *)
+  let b = line_buf t in
+  Buffer.add_string b "% level ";
+  Lit.add_int b l;
+  put_comment t;
   t.level <- l
 
 let current_level t = t.level
@@ -849,13 +955,28 @@ let runs ids =
    therefore exercised by nothing but a unit test, and this project's signature defect
    is a check that cannot see its own subject fail. One shape, exercised 14 times by
    the model suite, is worth more than the bytes. *)
+let del_id t id =
+  let b = line_buf t in
+  Buffer.add_string b "del id ";
+  add_cite b id;
+  Buffer.add_string b " ;";
+  put_line t
+
+let del_range t lo hi =
+  let b = line_buf t in
+  Buffer.add_string b "del range ";
+  add_cite b lo;
+  Buffer.add_char b ' ';
+  add_cite b hi;
+  Buffer.add_string b " ;";
+  put_line t
+
 let del_run t (lo, hi) =
-  if lo = hi then rule t (Printf.sprintf "del id %s" (cite t lo))
-  else if hi < t.next_id then
-    rule t (Printf.sprintf "del range %s %s" (cite t lo) (cite t (hi + 1)))
+  if lo = hi then del_id t lo
+  else if hi < t.next_id then del_range t lo (hi + 1)
   else (
-    rule t (Printf.sprintf "del range %s %s" (cite t lo) (cite t hi));
-    rule t (Printf.sprintf "del id %s" (cite t hi)))
+    del_range t lo hi;
+    del_id t hi)
 
 let debug_xcheck =
   match Sys.getenv_opt "BAGUETTE_DEBUG" with
@@ -969,7 +1090,7 @@ let knob_for t ~corrupts ~origin =
   match t.mutation with
   | Some m
     when t.mutation_note = None && corrupts m.Mutation.kind
-         && contains_sub ~needle:m.Mutation.site origin ->
+         && contains_sub ~needle:m.Mutation.site (origin ()) ->
       Some m
   | _ -> None
 
@@ -1087,7 +1208,7 @@ let corrupt_pol t ~origin (p : Pol.t) =
               Some
                 (Printf.sprintf "%s\n  origin: %s\n  before: pol %s\n   after: pol %s"
                    (Mutation.kind_name m.Mutation.kind)
-                   origin (render p) (render q));
+                   (origin ()) (render p) (render q));
             q)
           else p
       | _ -> p)
@@ -1136,7 +1257,7 @@ let corrupt_claim t ~origin (c : Opb.constr) =
               Some
                 (Printf.sprintf "%s (%s)\n  origin: %s\n  before: %s\n   after: %s"
                    (Mutation.kind_name m.Mutation.kind)
-                   what origin (Opb.constr_to_string c) (Opb.constr_to_string c'));
+                   what (origin ()) (Opb.constr_to_string c) (Opb.constr_to_string c'));
             c')
           else c
       | _ -> c)
@@ -1144,13 +1265,8 @@ let corrupt_claim t ~origin (c : Opb.constr) =
 (* ------------------------------ rules ------------------------------------ *)
 
 (* Every rule below that yields an id takes its label from the id it is ABOUT to be
-   given, so [fresh] has to run first and the body is written afterwards. *)
-let emit_yielding t ~origin body_of_id =
-  let id = t.next_id + 1 in
-  rule t (label_for t id ^ body_of_id id);
-  let id' = fresh t ~origin in
-  assert (id = id');
-  id
+   given: the body is written first, labelled [t.next_id + 1], and [fresh] then hands
+   out exactly that id. *)
 
 (* A cutting-planes derivation, and the ONLY way this module writes a `pol` line.
 
@@ -1173,11 +1289,11 @@ let emit_yielding t ~origin body_of_id =
       docs/PROOF-FORMAT.md section 2 lists -- ids, literal axioms, `+`, `* k`, `d k`,
       `s`, `w v` -- so there is no derivation the raw form could state that [pol]
       cannot. It bought no expressiveness, only an unchecked path. *)
-let pol t ~origin p =
+let pol_lazy t ~origin p =
   (* M9-no-proof-T2: every rule that yields an id yields one from the null writer and
      renders nothing; the guard sits before the shape counters so `--stats` cannot
      report a `pol` that was never written. *)
-  if t.null then fresh t ~origin
+  if t.null then fresh_lazy t ~origin
   else
     (* [corrupt_pol] is the identity for every writer [create] built. *)
     let p = corrupt_pol t ~origin p in
@@ -1187,23 +1303,45 @@ let pol t ~origin p =
     if n > t.pol_tokens_max then (
       t.pol_tokens_max <- n;
       t.pol_widest <- origin);
-    emit_yielding t ~origin (fun _ -> "pol " ^ Pol.to_string_cited ~cite:(cite t) p)
+    (* "@c<id> pol <expression> ;", in [t.buf] (D-0145: it was the label, then "pol "
+       and the expression concatenated, then [rule]'s format, four copies). *)
+    let id = t.next_id + 1 in
+    let b = line_buf t in
+    add_label b id;
+    Buffer.add_string b "pol ";
+    Pol.write_labelled b p;
+    Buffer.add_string b " ;";
+    put_line t;
+    let id' = fresh_lazy t ~origin in
+    assert (id = id');
+    id
+
+let pol t ~origin p = pol_lazy t ~origin:(fun () -> origin) p
 
 (* Reverse unit propagation of a PB constraint. Prefer [pol] where the reasoning is
    known; see docs/PROOF-FORMAT.md section 2.
 
    The body already ends in " ;" (Opb.constr_to_string), which is the rule terminator,
    so this goes through [line] rather than [rule]: `rup ... ; ;` is a syntax error. *)
-let rup t ~origin c =
-  if t.null then fresh t ~origin
+let rup_lazy t ~origin c =
+  if t.null then fresh_lazy t ~origin
   else
     let c = corrupt_claim t ~origin c in
     let id = t.next_id + 1 in
     t.n_rup <- t.n_rup + 1;
-    put t [ label_for t id; "rup "; Opb.constr_to_string c ];
-    fresh t ~origin
+    (* "@c<id> rup <body> ;" in [t.buf], one call to the channel (D-0145, W2). *)
+    let b = line_buf t in
+    add_label b id;
+    Buffer.add_string b "rup ";
+    add_constr_body b c;
+    Buffer.add_string b " ;";
+    put_line t;
+    fresh_lazy t ~origin
+
+let rup t ~origin c = rup_lazy t ~origin:(fun () -> origin) c
 
 (* Reverse unit propagation of a clause -- the common case. *)
+let rup_clause_lazy t ~origin lits = rup_lazy t ~origin (Opb.clause lits)
 let rup_clause t ~origin lits = rup t ~origin (Opb.clause lits)
 
 (* ---------------- stating what a step CONCLUDES (M1-T51) ------------------
@@ -1243,13 +1381,23 @@ let rup_clause t ~origin lits = rup t ~origin (Opb.clause lits)
    exists to record.
 
    It yields an id like any other rule, so I-X2 applies to what it hands back. *)
-let implied t ~origin ~hint c =
-  if t.null then fresh t ~origin
+let implied_lazy t ~origin ~hint c =
+  if t.null then fresh_lazy t ~origin
   else
     let c = corrupt_claim t ~origin c in
     let id = t.next_id + 1 in
-    line t "%sia %s : %s ;" (label_for t id) (Opb.constr_body c) (cite t hint);
-    fresh t ~origin
+    (* "@c<id> ia <body> : @c<hint> ;" (D-0145). *)
+    let b = line_buf t in
+    add_label b id;
+    Buffer.add_string b "ia ";
+    add_constr_body b c;
+    Buffer.add_string b " : ";
+    add_cite b hint;
+    Buffer.add_string b " ;";
+    put_line t;
+    fresh_lazy t ~origin
+
+let implied t ~origin ~hint c = implied_lazy t ~origin:(fun () -> origin) ~hint c
 
 (* Redundance-based strengthening: used only to introduce definitions (direct-encoding
    channelling, reified variables). The witness maps variables to 0, 1 or a literal. *)
@@ -1264,7 +1412,7 @@ let red t ~origin ~witness c =
   (match witness with [] -> invalid_arg "Writer.red: empty witness" | _ -> ());
   if t.null then fresh t ~origin
   else
-    let c = corrupt_claim t ~origin c in
+    let c = corrupt_claim t ~origin:(fun () -> origin) c in
     let w =
       String.concat " "
         (List.map
@@ -1291,7 +1439,15 @@ let delete_many t ids =
   | [] -> ()
   | _ when t.null -> ()
   | _ ->
-      rule t (Printf.sprintf "del id %s" (cite_all t ids));
+      let b = line_buf t in
+      Buffer.add_string b "del id ";
+      List.iteri
+        (fun i id ->
+          if i > 0 then Buffer.add_char b ' ';
+          add_cite b id)
+        ids;
+      Buffer.add_string b " ;";
+      put_line t;
       List.iter (Itbl.remove t.tags) ids;
       List.iter (forget t) ids
 
@@ -1322,11 +1478,14 @@ let delete t id = delete_many t [ id ]
    mutation harness reaches the derivation here through the lanes it already has --
    which is the D-0030 dual obligation in the [pol] comment above, and the reason this
    is a wrapper rather than a second emission path. *)
-let pol_concluding t ~origin ~claim p =
-  let derivation = pol t ~origin p in
-  let id = implied t ~origin ~hint:derivation claim in
+let pol_concluding_lazy t ~origin ~claim p =
+  let derivation = pol_lazy t ~origin p in
+  let id = implied_lazy t ~origin ~hint:derivation claim in
   delete t derivation;
   id
+
+let pol_concluding t ~origin ~claim p =
+  pol_concluding_lazy t ~origin:(fun () -> origin) ~claim p
 
 (* [delc] takes its constraint reference directly, with no `id` keyword ("Expected a
    constraint ID (label or signed integer) ... but found `id`"). [del] and [core] keep
@@ -1351,7 +1510,14 @@ let lits_to_string lits = String.concat " " (List.map Lit.to_string lits)
 (* [sol] records a solution and derives nothing. The assignment must propagate to a
    total assignment, so hand it every decision variable's literals. *)
 let solution t lits =
-  if not t.null then rule t (Printf.sprintf "sol %s" (lits_to_string lits))
+  if not t.null then (
+    (* "sol <lits> ;" in [t.buf] (D-0145, D-0140 W6: it was the whole assignment as one
+       [String.concat], then [Printf], then [rule]'s format). *)
+    let b = line_buf t in
+    Buffer.add_string b "sol ";
+    add_lits b lits;
+    Buffer.add_string b " ;";
+    put_line t)
 
 (* [solx] records a solution *and* adds the clause excluding it; that clause is an
    id you own.
@@ -1400,10 +1566,17 @@ let improving t ~origin lits =
   if t.null then fresh t ~origin
   else
     let id = t.next_id + 1 in
-    rule t (Printf.sprintf "%ssoli %s" (label_for t id) (lits_to_string lits));
+    (* "@c<id> soli <lits> ;" (D-0145, W6). *)
+    let b = line_buf t in
+    add_label b id;
+    Buffer.add_string b "soli ";
+    add_lits b lits;
+    Buffer.add_string b " ;";
+    put_line t;
     let id = fresh t ~origin in
     forget t id;
-    if t.audit then Itbl.replace t.objective id { origin; level = t.level };
+    if t.audit then
+      Itbl.replace t.objective id { origin = (fun () -> origin); level = t.level };
     id
 
 (* Objective update (M5). [diff] gives the change, [`New] the whole new objective. *)
@@ -1442,7 +1615,7 @@ let audit_report t =
     (fun id ->
       let (e : entry) = Itbl.find t.live id in
       Buffer.add_string b
-        (Printf.sprintf "  id %d from %s (level %d)\n" id e.origin e.level))
+        (Printf.sprintf "  id %d from %s (level %d)\n" id (e.origin ()) e.level))
     (live_ids t);
   Buffer.contents b
 
