@@ -14785,3 +14785,74 @@ negative (p3, and p5/p6, verify) because the sweep from the top fixes `x_i` and 
 finish the argument, and at layer 0 a "too strong" lemma is implied by `START` -- the negative
 controls had to be built where a layer holds two live states and a value range unit propagation
 cannot fix (q2).
+
+### 5. `regular` as built, and what checks it
+
+**Files.** `lib/core/prop/regular.ml` (new; its header is section 3 in the code's words);
+`lib/flatzinc/compile.ml`, one block `post_regular` plus its dispatch arm and its bits-hold arm
+(the letters stay on the order encoding: the rows are over their ladders); `Model.Regular` and
+its oracle arm (`Model.regular_run`), `Builder`'s `baguette_regular` arm; one appended block in
+`lib/proof/encoding.ml` (`add_root_lemma`, `emit_root_lemmas`, called last in `start_proof`);
+`mznlib/fzn_regular.mzn`, `mznlib/fzn_regular_set.mzn`. No `Explanation` constructor, no
+`deriving_ahead`, nothing in `justify.ml`, `trace.ml`, `search.ml`.
+
+**Three things the design did not say and the code had to.**
+
+1. **One value at a time.** A letter value removed at a bound is its own trail entry, so the
+   claim is the settled bound and its negation pins the letter to the ONE value whose edges
+   the forward rows refute; a multi-value bound move would leave the letter unpinned and the
+   line not RUP. The reason then carries the bound fact `x >= v` (or `<= v`) that pins it.
+2. **The tail's order.** Per-value facts first, the letter's bound facts last. Nothing in the
+   proof depends on it; it lets the `death-fact` mutation lane drop the last literal and hit
+   the decision fact instead of a root fact the page restores (GCS's trap 3).
+3. **A layer emptied, or a fixed flag killed, is reported by the propagator**, never by
+   `Store.apply`'s failing arm, whose derivation would be the one pruning's and not the
+   contradiction (element.ml's reason, the same rule).
+
+**Cost, measured.** On `2011_nonogram_non_med_1` (100 regulars, 72 369 flags) the first version
+spent a quarter of its time in the GC and in polymorphic hashing of reason facts; the call now
+allocates only the reasons it writes (predecessor table and scratch arrays at `make`, dead-flag
+facts deduplicated by a stamp). The proofs of the two versions are the same line for line (same
+facts, same order). The node rate stays about 140 nodes/s over its first 600 nodes and falls to 40/s over a minute
+as the learned database grows, most of it outside `regular.ml` (learned-clause instances,
+analysis), with 1UIP clauses of 16+ literals: a flag death's reason
+is every dead predecessor, and the cut lands on flags. Smaller reasons (on letters only) are the
+obvious next lever for the nonograms that time out (section 6); they are not in this row.
+
+**Tests.**
+
+- `test/unit/test_prop.ml`, brute force: 300 random automata (2 or 3 states, alphabet `1..2`,
+  letters declared `0..3` so two values fail everywhere) x 4 random narrowings (letter bounds and
+  holes, flags fixed either way): **I-P1** (no solution lost, no conflict where one exists),
+  **DOMAIN consistency over letters and flags** (every remaining value of every variable is in a
+  solution within the current domains), **I-P2** (a second call changes nothing). 1 200 scenes,
+  370 pruned, 830 conflicts, 0 violations.
+- `test/unit/test_prop.ml`, the checker: the root-lemma counts (`n * Q * runs`: 48 for
+  instance 2, 20 for the next), and a model whose first branch fails under a decision the root
+  does not see (no two consecutive 2s, letters summing to 8): its proof, 20 lemmas and 44 trace
+  and nogood lines, VERIFIED.
+- `test/unit/test_mutation.ml`, three lanes behind a control, each refused at the RUP wording
+  ("The constraint is not implied by reverse unit propagation (RUP) from core and derived
+  database."): `lemma-rhs` (one lemma's degree raised: the lemmas are checked), `death-fact` (the
+  forward death of `s2_4` under the split `x1 <= 2`, its decision fact dropped), `no-lemmas` (all
+  48 lemmas deleted, their labels taken out of the end-of-run `del`: that death has nothing left
+  to sweep `x1` with).
+- The M2-T10 oracle (`BAGUETTE_CONSISTENCY=1`) on the four regular models: `CHECKED: regular
+  (domain)` x8, x1, x3 (some instance-checks of `regular_opt` skipped over the tuple cap, stated
+  by the oracle), no violation; `BAGUETTE_DEBUG=1` and the I-X2 audit on, all four VERIFIED.
+- Models (`test/models/`, flattened from `mznlib/test/*_src*.mzn`, every proof VERIFIED):
+  `regular_sat` (4x4 nonogram by regular expressions), `regular_unsat` (3x3 with disagreeing
+  clues), `regular_set_sat` (alphabet `3..5`, the gap 4 failing), `regular_opt` (a roster
+  maximised to 13 with a bound proof); and section 1-2's six gcc models. `check_mznlib.sh`: 26
+  ok, 0 failed (every new source flattens to its route, none to the decomposition).
+- I-X10: `regular.ml` is classified `Single_row` in `test/unit/test_trace.ml`'s table.
+
+**Gate** (fresh clone of `wave49-globals` at `b8a7817` on `fataepyc-06`, binary `c1485cc6`,
+`make check` under `ulimit -v 4000000`): rc 0, model tests 189 passed, determinism 189 models
+identical, mutation 96 checks passed, peak RSS 97 056 kB. Every test model against `main`'s
+gate-52 binary (`307879fa`): 183
+of 189 byte-identical in `.out`, exit code, `.opb` and `.pbp`; the 6 that differ are the six the
+old binary cannot read (`regular_*` x4: `baguette_regular` is unknown to it; `gcc_repeat_*` x2:
+it refused the repeat). The closed-gcc models are identical under both (the route was std's).
+**Differential lane** (`origin/wave47-lanes` merged, `make diff ARGS="--tier all -j 24"`, at `abae541` and again at `b8a7817`): 232
+of 232 runs equal the reference.
