@@ -1676,10 +1676,11 @@ solve :: int_search([z, x, y], input_order, indomain_max, complete) satisfy;
     (* -- M8-bits-encoding-T3 continuation: int_eq_reif / int_ne_reif over bits
        (D-0134 section 8) --------------------------------------------------------------
        test/models/bits_reif_eq_sat.fzn (inlined), SATISFIABLE, solved in its own search
-       order. The first "[resolve]" line is the interior hole x <> 2 that b = 0 and y = 2
-       make through b <-> (x = y): the guarded A/B pair, each half with the reifier as one
-       more term, resolved on the selector and pinned by `ia` to a clause carrying the
-       reifier's literal. Each corruption is refused at the `ia`. *)
+       order, with one conflict (d \/ e) so that the trace reaches the page. The first
+       "[resolve]" line is the interior hole x <> 2 that b = 0 and y = 2 make through
+       b <-> (x = y): the guarded A/B pair, each half with the reifier as one more term,
+       resolved on the selector and pinned by `ia` to a clause carrying the reifier's
+       literal. Each corruption is refused at the `ia`. *)
     let reif_src =
       {|
 var 0..9: x :: output_var;
@@ -1694,6 +1695,7 @@ constraint int_lin_le([-1], [y], -2);
 constraint int_eq_reif(x, z, e);
 constraint int_lin_eq([1], [z], 1);
 constraint int_ne_reif(x, 4, d);
+constraint bool_clause([d, e], []);
 solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), int_search([x], input_order, indomain_max, complete)]) satisfy;
 |}
     in
