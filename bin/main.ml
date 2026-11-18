@@ -691,6 +691,16 @@ let audit_enabled () =
    that silently used the default because the spelling was wrong is exactly the
    "byte-identical before and after" trap CLAUDE.md records twice. *)
 let retention_policy () =
+  (match Sys.getenv_opt "BAGUETTE_RETENTION_TRACE" with
+  | None -> ()
+  | Some v -> (
+      match int_of_string_opt v with
+      | Some n when n >= 0 -> Retention.trace_every := n
+      | _ ->
+          prerr_endline
+            (Printf.sprintf
+               "baguette: BAGUETTE_RETENTION_TRACE=%S is not a count. Use N >= 0." v);
+          exit 2));
   let bad v =
     prerr_endline
       (Printf.sprintf

@@ -419,6 +419,20 @@ let policy_name t = t.policy.p_name
 let holds t cid = List.exists (fun e -> e.e_cid = cid) t.live_rev
 let was_retired t cid = Hashtbl.mem t.gone cid
 
+(* M10-search-strategy-T4 (D-0139): a PROGRESS TRACE, measurement only. Every
+   [!trace_every] constraints added, one stderr line with what the database holds and the
+   process CPU time, so that a run's learning RATE can be read at its start and at its end
+   -- the per-node slowdown the codes models show as the base grows is a slope, and a
+   single end-of-run total cannot show a slope. 0 (the default) prints nothing; bin/main.ml
+   sets it from BAGUETTE_RETENTION_TRACE. stderr only, so the determinism gate and the
+   stdout-identity lane never see it. *)
+let trace_every = ref 0
+
+let trace t =
+  if !trace_every > 0 && t.n_added mod !trace_every = 0 then
+    Printf.eprintf "retention-trace: added=%d live=%d evicted=%d pinned=%d cpu=%.2f\n%!"
+      t.n_added (List.length t.live_rev) t.n_evicted t.n_pinned (Sys.time ())
+
 (* Register a learned constraint. The id must be one [Learned.introduce] or
    [Pb_analysis.introduce] just handed back, and registering it is what transfers I-X2's
    obligation from the caller to this database.
@@ -453,6 +467,7 @@ let add t ~cid ~(row : Learned.t) ~lbd ~origin =
   t.next_seq <- t.next_seq + 1;
   t.n_added <- t.n_added + 1;
   t.live_rev <- e :: t.live_rev;
+  trace t;
   e
 
 (* --------------------------------------------------------------- I-X3: citations *)
