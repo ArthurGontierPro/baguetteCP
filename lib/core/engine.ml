@@ -854,10 +854,10 @@ let watchers_of_new_entries ?self t store ~since =
       let stat = t.wake_static.(x) and nd = t.dyn_len.(x) in
       if stat <> [] || nd > 0 then (
         let change = Domain.classify ~old:e.old ~now:e.now in
-        (* M6-T22: the self-watching instances that want this entry, DESCENDING, to be
-           merged into the static ones by id (see the wake index's header). A BAGUETTE_DEBUG
-           [check_advise] runs the instance, which may resync the very slice being walked,
-           so it walks a copy then. *)
+        (* M6-T22: the self-watching instances that want this entry, DESCENDING, to
+           be merged into the static ones by id (see the wake index's header). A
+           BAGUETTE_DEBUG [check_advise] runs the instance, which may resync the very
+           slice being walked, so it walks a copy then. *)
         let dl = ref [] in
         if nd > 0 then (
           let ids =
