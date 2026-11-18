@@ -12553,7 +12553,7 @@ What it says, instance by instance and no further:
   than `REFUSED rc 5`, and a census that reads statuses should know it.
 ## D-0134  M8-bits-encoding-T3: the full substrate -- maxmin over bits by SELECTOR rows and one `Resolve` step, the checker facts measured first, and the step order
 
-**Status**: **IN PROGRESS, DESIGN SETTLED** (agent-t3, branch `wave44-t3`, 2026-11-16). **Steps 1 and 2 (int_ne only) landed 2026-11-18** (agent-t3b, §4 onwards); steps 3 to 5 and the rest of step 2 are open (§7).
+**Status**: **IN PROGRESS, DESIGN SETTLED** (agent-t3, branch `wave44-t3`, 2026-11-16). **Steps 1 and 2 (int_ne only) landed 2026-11-18** (agent-t3b, §4 onwards); steps 3 to 5 and the rest of step 2 are open (§7). **Step 2's rest, steps 3 and 4 landed 2026-11-18** (agent-t3c, branch `wave46-t3`, §8 onwards): the reified and `bool2int` holds released, mapping's and ATSP's walls diagnosed and mapping's fixed, PB analysis over mixed rows measured and left to the clause path, learned clauses over atoms checked; step 5 designed and probed, not built (§13).
 Written before the first edit to `lib/`, as D-0132 was: §1 is measured on the checker, §2 is
 the design as it will be built, §3 the plan with coordinates; §4 onwards is filled as each
 step lands. Inputs read whole: D-0132, D-0130 §3.4/§7.4/§7.5/§13-§15 and its addendum,
@@ -12868,6 +12868,355 @@ widths. The commits after `20c324f` are documentation only.
 - **`Resolve` is general.** Its parts are any `Combine`s of `Linear`'s shape and model rows;
   maxmin's selector rows and `Ne`'s pair are its two producers, and the guarded rows of the
   reified families are the next. The `[resolve]` origin tag lets a mutation lane aim at it.
+
+### 8. Step 2's rest: `int_eq_reif` / `int_ne_reif` released (2026-11-18, agent-t3c, branch `wave46-t3`)
+
+§7 named the shape: the four guarded rows are `Ne`'s A/B pair plus LE/GE, each with the
+reifier as one more term. The two faces that are [Linear] instances (enforce-hold, and the
+half of entailment that REFUTES the condition) were already the bits arm's `pol`. The two
+[Clause] pieces were not, and neither was the entailment that pushes the reifier, so they
+were probed on the checker before any code (`bench/bits_spike/probe_t3c.sh`, VeriPB 3.0.2
+d5644ca4, fataepyc-06). Model R is satisfiable: `x in 0..7` on 3 bits, `y in 0..3` on 2,
+`b` a bool on the ladder, `b <-> (x + y = 5)` as `Encoding.add_int_lin_eq_reif`'s four rows
+over `_ne1` (c = 5, big_a = big_b = 6). Model N is the same with `int_ne_reif`'s guards.
+
+| probe | line(s) | verdict |
+|---|---|---|
+| r1 | enforce-not-hold, the hole `x <> 3` from `b = 0`, `y = 2`: `pol @A @x3a + @y2a + @bt 6 * + s @B @x4b + @y3b + @bt 6 * + s + s` (`@bt` the width-1 tautology `+1 b_ge_1 +1 ~b_ge_1 >= 1`), pinned by `ia +1 ~x_ge_3 +1 x_ge_4 +1 ~y_ge_2 +1 y_ge_3 +1 b_ge_1 >= 1` | **s VERIFIED** |
+| r2 | the ENTAILMENT, `x = 3`, `y = 2` push `b >= 1`: r1's `pol` unchanged, pinned by the trace clause `b_ge_1 \/ ~facts` | **s VERIFIED** |
+| r3 | r1 pinned without the reifier's literal | **refused**: "Expected constraint is not syntactically implied by the constraint at the hint." |
+| r4 | r1 with B2 of `x` cited in the A half where B1 belongs | **refused**, the r3 wording |
+| r5 | r2's clause as a bare `rup` over the pairs | accepted HERE (3 bits); not relied on, as D-0134's a5 and g2 |
+| r6 | enforce-hold: LE with `y >= 2` and `b >= 1` gives `x <= 3`, [Linear]'s bits `Combine` with `b` a term (`5 *` its bridge) | **s VERIFIED** |
+| r7 | entailment's refuting half: LE with `x >= 4`, `y >= 2` pushes `b <= 0` (divided by 5) | **s VERIFIED** |
+| r8 | the all-fixed conflict (`b = 0`, `x = 3`, `y = 2`): r1's derivation read as `~facts` | **s VERIFIED** |
+| n1 | `int_ne_reif`: `b = 1`, `y = 2` make `x <> 3`, the guard `+6 b` in both halves, `~b_ge_1` in the clause | **s VERIFIED** |
+| n2 | n1 pinned with `b_ge_1`, the wrong polarity | **refused**, the r3 wording |
+
+The decisions, each read off a row above.
+
+1. **No new constructor.** The two [Clause] pieces over a bits scope are `Ne`'s `Resolve` of
+   the A and B halves with the reifier as one more `Linear_term` in each, on that row's own
+   guard coefficient and at the value that denies the equality (`p_wrong`). The guard is
+   `-big` when the disequality side speaks at b = 0 (`int_eq_reif`) and `+big` when it speaks
+   at b = 1 (`int_ne_reif`), which is `Encoding.guard_row`'s rule, read from the polarity.
+   The reifier's bridge is the width-1 tautology (D-0132 §5.3), so it adds nothing to the
+   arithmetic and keeps its literal in the clause.
+2. **The entailment is the same derivation.** Its claim is the reifier off `p_wrong`, whose
+   negation is exactly the bound the reifier's term assumes, so the derived clause IS the
+   trace clause, as for maxmin's claim variable (§2.3). r2 is r1's `pol` with the claim
+   listed first.
+3. **The rows' ids.** `Encoding.add_int_lin_eq_reif` returns a record (`eq_reif_rows`) with A's
+   and B's ids and big-Ms beside LE's and GE's. `compile.ml`'s `post_reif_eq` hands them to
+   `Reif_lin_eq.make ?rows` iff the condition's terms hold a bits variable, as `post_ne`
+   does. With no bits variable nothing changes, byte for byte.
+4. **The holes it punches** are `Ne`'s: an interior removal whose derived clause is the
+   hole's trace clause, and a settle past a hole follows §5.2 (the trace's `rup` after the
+   `ia`). Nothing new was needed in `Trace` or `Justify`.
+
+What landed: `lib/core/prop/reif_lin_eq.ml` (`ne_rows`, `nogood_resolve`, the header's bits
+section), `lib/proof/encoding.ml` (the record), `lib/flatzinc/compile.ml` (`int_eq_reif`
+leaves `held_families`, `post_reif_eq` passes the rows). Tests. test_prop: five scenes
+(the hole at b = 0, the entailment, the all-fixed conflict, `int_ne_reif`'s hole and its
+entailment), each a `Resolve` of two parts whose clause is the per-value twin's [Clause]
+literal for literal, with D-0026's agreement, and the hole checked interior; the hole, the
+entailment and the conflict written by `emit_bits_pruning` under a DECISION over the
+satisfiable model VERIFY, as does `int_ne_reif`'s hole, and three tamperings are refused
+at the `ia` wording (r3, the entailment without its claim, n2). test_mutation: `bits_reif` (`bits_reif_eq_sat` inlined,
+solved in its own order) with `pol-cite`, `truncate` and `drop-literal` aimed at
+`[resolve]`, all refused. test_compile: r and s of the eligibility scene go on bits. Three
+models: `bits_reif_eq_sat` (an interior hole, an entailment pushing `d` under a decision, a
+conflict so that the trace reaches the page, a learned clause over x's atom),
+`bits_reif_eq_unsat` (four pigeons as six reified equalities, three of each polarity, the
+reifiers forced) and `bits_reif_eq_branch_unsat` (D-0057's reifier decided by search, over
+bits). A first version of the sat model had no conflict and its trace never reached the
+page (D-0018 writes it lazily): the mutation lanes said "found no site" and the model was
+rebuilt with one, the same finding as §5.5.
+
+### 9. `bool2int` released, through `compile.ml`
+
+`lib/core/prop/bool2int.ml` justifies its four pushes with [Clause]s, RUP over its two rows
+and the integer's ladder, and a bits integer has no ladder. The file is M6-T22's this week,
+so the release is made where the choice belongs anyway, in the compiler: over a bits `x`,
+`post_bool2int` posts the same two rows in the same order (`x - b <= 0`, `b - x <= 0`) with a
+[Linear] each (`Lin_eq.make`), packed under a face `Bool2int_row` that reports `bool2int` (the
+device of [Arith]'s faces). Linear's four pushes over the two rows are `Bool2int`'s four, and
+each is the bits arm's `pol`. A bool2int whose integer is not on bits keeps `Bool2int`, so at
+`W = none` nothing moves, and `bool2int.ml` was not touched. Models `bits_bool2int_sat` (the
+x -> b direction over a bits row under a decision, then a clause conflict) and
+`bits_bool2int_unsat` (two channellings bound a sum below its floor at the root). No cross-
+session request was needed.
+
+### 10. Mapping and ATSP: what holds them, and the fix for mapping
+
+Both diagnosed on fataepyc-06 at `W = 0` with the binary of `main` (`7ddbf348`), 90 s, the
+`.opb.rows` kept (`/scratch/arthur/wave46-t3-out/diag/`).
+
+- **ATSP is held by `int_eq_reif`.** `2021_ATSP_instance9_0p25` warned about 22 variables of
+  width 2 303 880 left on the ladder at `W = 0`, all of the `job_end` array, each named by
+  `int_eq_reif(job_end_i, X, b)` rows (4 729 `int_eq_reif` in the instance). Their ladders
+  filled the 4 GB file cap of the diagnostic in under a minute (the 16 GB cap of the 177
+  in under 300 s). §8's release is the fix, measured in §14.
+- **Mapping is held by `int_times`'s case split.** `2015_mapping_mesh3x3_2` wrote 1 900 171
+  rows (840 MB) in its first minute and then nothing more until the timeout; the last rows
+  are guarded rows over `X_INTRODUCED_arith_453581`. The instance has 63
+  `int_times(b, y, z)` with `b` in 0..1 and `y` in 0..7200, and the builder split every one
+  over `y`: 7 201 guard Booleans and their rows each, 453 663 guards in all. Bits shrink a
+  row, not the number of rows (D-0132 §7), so `W` cannot help.
+
+**The fix: the case split runs over the NARROWER operand** (`lib/flatzinc/builder.ml`,
+added to the claim for this). `x * y = z` is symmetric, the split costs one guard and two
+to four rows per value of its case variable, and the builder always took the second
+operand. It now swaps the two when the first is strictly narrower (a constant counts as
+width 0, which sends `int_times(3, y, z)` down the linear path). A tie keeps the model's
+order, so every suite model with `int_times` is posted as before (both have the wider
+operand first or equal widths) and the 173 are byte-identical at `W = none`. `int_div` is
+not symmetric and keeps its split. The census over the 177's `.fzn`
+(`/scratch/arthur/wave46-t3-out/arith_census.tsv`, groups summed over every `int_times` and
+`int_div`):
+
+| instances | groups before | groups after |
+|---|---|---|
+| the 109 with `int_times` or `int_div` | 71 171 029 | 21 992 995 |
+| `2018_mapping_mesh_star_2` (261 `int_times`, y in 0..10000) | 2 610 261 | 522 |
+| `2015_mapping_mesh3x3_2` | 453 663 | 126 |
+| `2011_carpet-cutting_mzn_rnd_test.15` | 2 541 200 | 50 824 |
+| `2025_carpet-cutting_cc_rnd_8_1` | 3 343 248 | 94 176 |
+| the five `arithmetic-target` (both operands wide, and `int_div`) | 21 912 036 | 17 529 573 |
+
+What is left after the swap is `arithmetic-target`, whose products have both operands wide
+(up to 86 570): that is step 5's case (§13). The swap changes `W = none` too, on the
+Challenge only (mapping, carpet-cutting, ATSP's `int_times(x in 0..7, y in 0..28)`): it is
+an encoding of the model and not of the proof. T4's comparison of `W = none` with `W = k`
+must use this binary on both sides.
+
+### 11. Step 3: PB conflict analysis over mixed rows -- measured; the clause fallback stays, and the lift is designed, not built
+
+A [Linear] instance over a row with a bits term is packed without `~row:` (D-0132 §2.7), so
+PB analysis meets `No_row` on it and the M2-L3 clause path learns instead. To count how
+often, `--stats` gains `pb-whys`: every recorded fallback reason (the first 64), counted.
+
+On the suite (179 models; `sA-none/`, and the gate's `sG-{0,8}/`, which have `pb-whys`):
+
+| W | PB analyses | PB rows learned | fell back | ...on a mixed `int_lin_le` row (of the recorded) | models whose FIRST fallback is one |
+|---|---|---|---|---|---|
+| none | 307 | 106 | 201 | 0 | 0 |
+| 0 | 341 | 95 | 246 | 115 of 246 | 21 |
+| 8 | 334 | 103 | 231 | 80 of 231 | 7 |
+
+So on the suite the bits arm costs PB analysis eleven learned rows of 106 at `W = 0` and
+three at `W = 8`, and half of the fallbacks at `W = 0` are mixed rows. Every model still
+verifies and still gives its answer: the clause learned instead is weaker, not wrong.
+
+On the Challenge, PB analysis was looked for first. Eight instances of the 177 that finish
+compiling (train, ship-schedule, smelt_2, unit-commitment; `pbscan/`, 90 s) learn NO PB row at
+either threshold: their fallbacks are `cumulative`, `bool2int`, `<unknown>` (a decision or a
+declaration) and clauses before any mixed row. The 215 `.fzn` kept under `wave41run/*/work/`
+were then scanned at `W = none` (`pbscan3/`, 45 s each; 80 printed their statistics within
+the budget, 24 tried PB analysis): PB analysis learns a row on twelve of them, and the five
+with the most were run at `W = 0` and `W = 8` (`pbscan4/`, the same 45 s, every run stopped
+by the limit):
+
+| instance | W | nodes in 45 s | PB analyses | learned | fell back | mixed `int_lin_le` (of the recorded) |
+|---|---|---|---|---|---|---|
+| `2017_rcpsp-wet_j90_48_4-wet` | none | 717 | 201 | 25 | 176 | 0 of 64 |
+| | 0 | 4 030 | 1 546 | 64 | 1 482 | 0 of 64 |
+| `2019_rcpsp-wet-diverse_j30_44_8-wet-diverse-4` | none | 98 | 14 | 6 | 8 | 0 of 8 |
+| | 0 | 98 | 14 | 0 | 14 | 10 of 14 |
+| `2023_roster-shifts-bool_s50_e50_c3` | none | 62 | 3 | 2 | 1 | 0 of 1 |
+| | 0 | 965 | 454 | 0 | 454 | 55 of 64 |
+| `2026_workforce-alloc_instance_202` | none | 3 412 | 1 533 | 23 | 1 510 | 0 of 64 |
+| | 0 | 14 140 | 6 896 | 0 | 6 896 | 0 of 64 (the first 64 are as at `none`) |
+| `2025_fbd1_FBDk06` | none | 92 | 40 | 23 | 17 | 0 of 17 |
+| | 0 | 93 | 40 | 23 | 17 | 0 of 17 (one variable on bits) |
+
+`W = 8` gives the `W = 0` line within a few units on all five. Where PB analysis fires on the
+Challenge and the bits arm puts its rows on bits, the bits arm takes most of it away: all of
+it on rcpsp-wet-diverse, roster-shifts-bool and workforce-alloc, two thirds of the rate on
+rcpsp-wet (12 % of the analyses learn at `W = none`, 4 % at `W = 0`,
+where its search visits 5.6 times more nodes in the same 45 s, so the counts are not
+comparable one for one); fbd1, with one variable on bits, keeps its 23 rows. By D-0130 §14 question 5's own rule the lift below is therefore worth
+building; T3 did not build it.
+
+**Why the bits term is not lifted at T3.** The obvious lift is the ladder's (M2-L11): replace
+a bits term by its order expansion over the minted atoms, the sparse chain as a ladder.
+That row is not one cutting-planes step from the atom pairs. For `X'` the bits sum and atoms
+at `v_1 < ... < v_k`, the staircase `X' <= (v_1 - lo - 1) + sum_j (v_(j+1) - v_j) x_ge_(v_j)` is
+valid, but each B2 pair gives only `X' <= (k_v - 1) + K_v x_ge_v`, and a nonnegative
+combination of those with total weight 1 on `X'` is a convex combination, weaker than the
+staircase at every corner but one; division does not repair it, because the bits keep
+their coefficients 2^i. What IS one step is the row INSTANTIATED at the propagation: the
+reason row plus each bits term's bridge at the bound it read, with the pruned term at the
+negation of its claim, unsaturated, i.e. the bits arm's `pol` without its division and
+saturation (D-0132 §2.1, the [Resolve] reading of the claim term). Building that needs four
+things this step did not have time to do well: PB analysis reading a reason's row from the
+ENTRY (its explanation) rather than from the instance (`row_of` is per instance today, and
+its caller is `search.ml`, M10-T1's this week); `Justify.emit_summand` rendering a bits
+`Linear_term` as its bridge inside a nested `pol` (today it can only raise there); the
+atoms' coefficients, which depend on the variable's bit count (`K = 2^n - k`), handed to
+`pb_analysis.ml` by the encoding; and a checker probe of the learned row's `ia` over atoms.
+D-0130 §14 question 5 set the rule ("only if the fallback is frequent on the instances that
+matter"); the numbers above are what that rule reads. The clause path is permanent anyway
+(D-0044) and sound on every row. What T3 leaves is the design above and the counter.
+
+D-0031's seven models (`chain_sat`, `guess_wrong_sat`, `ne_conflict_sat`,
+`near_limit_ne_sat`, `near_limit_unsat`, `offset_unsat`, `width_sat_depth`; `lin_sat` is the
+orchestrator's eighth) verify at `W = 0` and `W = 8` in this run as in §6. At `W = 0` each
+has two or three variables on bits; at `W = 8` only `chain_sat` (3) and `width_sat_depth` (2)
+have any. The nearest-neighbour links of D-0130 §14 question 2 suffice wherever a trace line
+walks them.
+
+### 12. Step 4: learned clauses over bits atoms, and `soli` / `conclusion BOUNDS` over a bits objective
+
+Nothing in the emission had to change; what was missing was a check that says so.
+
+- **Atoms before citation.** `Learned.introduce` writes its clause without passing it
+  through `Justify.validate_lits`, because every literal it writes came from a trace line
+  or a decision (D-0132 §2.6), and those were minted before their lines. test_mutation now
+  reads `bits_reif`'s honest proof line by line and checks that every literal of a bits
+  variable a line names was defined by an earlier `red` pair; the learned clause
+  `~x_ge_4 \/ y_ge_3` of that proof is one of the lines it reads. The I-X2 audit runs on in
+  every test, so a minted atom is retired once and only by the end-of-run sweep.
+- **The learned clause is load-bearing.** A lane `learned-rhs` raises the learned clause's
+  degree to 2. The model's own solution (`b = 0`, `y = 2`, `x = 3`) makes exactly one of its
+  literals true, so the strengthened clause is false on a solution, and the checker refuses
+  it.
+- **`soli` and `conclusion BOUNDS` over a bits objective** verify in the suite at `W = 0` and
+  `W = 8`: `bits_opt_min_sat`, `bits_maxmin_opt_sat` (ties, selectors listed), `opt_min_sat`,
+  `opt_max_sat`, `opt_floor_sat` (D-0132 §5.1's derived floor), `opt_ne_sat` and `opt_unsat`
+  (`BOUNDS INF INF`). A stopped optimisation concludes `NONE` (`Search.conclude_stopped`), so
+  no path writes a `BOUNDS` without an optimality or infeasibility proof, and none needed a
+  bits case. Step 4 is done.
+
+**A rendering request answered on the way** (M6-T22's cross-session row on `lib/proof/lit.ml`,
+which is in this claim). In proof mode every literal re-scanned its variable's name for
+characters to sanitise. A one-entry memo on the name's physical identity was tried first and
+measured useless (QR48 `bag_def`, `BAGUETTE_NODE_LIMIT=10000`, proof on, `perf record`): the
+scan's share did not move, because QR48's lines are clauses over different variables, and a
+table keyed on the name would hash it end to end, which is the cost. What landed is the scan
+itself read through a 256-entry table instead of a recursive closure calling `ident_char`:
+its self time goes from 2.05 % (`go` 1.12, `ident_char` 0.86, `needs_sanitize` 0.07) to 0.87 %,
+the wall time is within noise (9.83 to 9.97 s against 9.89 to 9.96 s, three runs each), and
+the `.opb` and `.pbp` are identical (md5). `/scratch/arthur/wave46-t3-out/litperf22/`.
+
+### 13. Step 5: `int_times` over two wide operands -- the design and its probe; not built
+
+After §10 the only large split left is a product whose two operands are both wide
+(`arithmetic-target`, five of the 177, 17.5 M groups). The design: split over the BITS of
+the narrower operand, in the model, as D-0060 put the value split in the model.
+`y = lo_y + sum_i 2^i c_i` over n fresh Booleans `c_i` (a linear equality), `p_i = x * c_i`
+(an `int_times` over a 0..1 operand, two groups each after §10), and
+`z = lo_y x + sum_i 2^i p_i` (a linear equality): n guards where the value split has w, and
+no new proof shape, every row a [Linear] or a narrow `int_times`.
+
+Probed by hand in FlatZinc before any code (`bench/bits_spike/probe_t3c_times.sh`, both at
+`W = 0`, both verified): `x * y = 2021` with `x <= y` over 2..300.
+
+| encoding | `.opb` | nodes | conflicts | `.pbp` | verify |
+|---|---|---|---|---|---|
+| value split (299 groups) | 345 864 B | 3 | 1 | 184 684 B | 0.02 s |
+| binary expansion (9 bits) | 18 294 B | 407 | 201 | 1 750 665 B | 0.12 s |
+
+The model is 19 times smaller and the propagation is much weaker: bounds over the expansion
+do not see the factorisation that the value split's guards see, so the search does the work
+and the proof grows 9.5 times. It is therefore a trade, not a free win, and it changes the
+SEARCH, which no other step of T3 does at `W = none`. Not built. If it is, it belongs under
+the bits threshold (the expansion when `Encoding.wants_bits` holds for the case operand),
+needs `Model.aux` to carry the expansion and `Model.check_assignment` to check it, and should
+be measured on the five `arithmetic-target` instances against the value split, which never
+completes its `.opb` there. `int_div` has no symmetric form and no expansion here.
+
+### 14. Measurements (fataepyc-06, VeriPB 3.0.2 d5644ca4; outputs under `/scratch/arthur/wave46-t3-out/`)
+
+**The suite** (`sA-{none,0,8}/`, snapshot `wave46-t3-snapA` at `37a5dfe`, binary `870d398c`,
+`run156.sh` over 179 models: the 173 of gate 46 and six new ones):
+
+| W | verified | models with a bits variable | `.opb` B | `.pbp` B | atoms | links | bits-arm `pol` | choice groups |
+|---|---|---|---|---|---|---|---|---|
+| none | 179 / 179 | 0 | 382 347 | 535 509 | 0 | 0 | 0 | 0 models |
+| 0 | 179 / 179 | 103 | 189 888 | 902 441 | 840 | 1 042 | 1 236 | 10 models |
+| 8 | 179 / 179 | 31 | 194 492 | 788 209 | 542 | 842 | 730 | 6 models |
+
+At `W = none` the 173 pre-existing models are **byte-identical in stdout, exit code, `.opb`
+and `.pbp`** to `gate46.art/new` (binary `7ddbf348`); the six differences are the six new
+models, which have no reference. Held back at `W = 0`, summed over models: gcc 107, alldiff
+47, element 43, cumulative 12, holes 3 (`int_eq_reif` and `bool2int` are gone from the line);
+at `W = 8`: element 6, alldiff 2, holes 1. Against §6 at `W = 0`: 14 more models on bits, 66
+more bits-arm lines, all verified.
+
+**The 177 encoding-wall runs at `W = 0`** (§6's protocol and `run169.sh`, 8-way, `timeout
+300`, `ulimit -v 16 GiB -f 16 GB`, snapshot binary `870d398c`, `w0-177A/`; a `.opb` is
+complete when its header is on disk):
+
+| prior status (D-0129) | instances | complete, T2 | step 1 | step 2 (`int_ne`) | this work |
+|---|---|---|---|---|---|
+| CAPPED | 143 | 43 | 78 | 78 | **131** |
+| TIMEOUT | 19 | 16 | 16 | 16 | 17 |
+| ERROR | 7 | 6 | 6 | 6 | 6 |
+| OPT8 | 8 | 8 | 8 | 8 | 8 |
+| **all** | **177** | **73** | **108** | **108** | **162** |
+
+**54 more complete `.opb` and none lost**; 114 of the 162 printed an answer or an incumbent
+within the 300 s, against 82 of 108. Attributed by the gained instances' constraints
+(`arith_census.tsv` and a count of the `.fzn`'s builtins):
+
+- the narrower case operand (§10): all 18 carpet-cutting (each 0.6 to 3.3 M groups down to
+  8 to 94 k), the 9 mapping that were unfinished, and `2026_kitchen_kitchen_b1` (3.6 M
+  groups down to 1 040);
+- the reified release (§8): all six ATSP (`2021_ATSP_*` and `2025_atsp_*`, 9 MB to 94 MB
+  where step 2 hit the 16 GB file cap), `2015_cvrp_A-n64-k9` (111 380 `int_eq_reif`, a
+  3.9 GB `.opb`), `2021_vrp-submission`, `2023_multi-agent-graph-coverage`, `2025_hitori`,
+  `2026_atp-stage2`, the five `flowshop-workers`, the three `zephyrus` (with `bool2int`),
+  the four `yumi-dynamic` and the two `saeling`, whose `int_times` groups the swap does not
+  change (their case operands are already 0..1);
+- both, on `2025_ihtc-2024-marte_i11` (842 963 `int_eq_reif`, 848 k groups down to 61 k, a
+  3.2 GB `.opb`).
+
+Still unfinished at 300 s, 15: `arithmetic-target` 5 (§13's case), `multiple-constant-
+multiplication` 3, and one each of `liner-sf-repositioning`, `rcpsp-wet-diverse`,
+`whirlpool`, `pentominoes-zayenz`, `ma-path-finding`, `table-layout`, `ihtc-2024-marte`.
+Among the completed, what still holds variables back is element (11 603 variables in 60
+instances), holes (5 701 in 54), gcc (4 358 in 10), alldiff (1 780 in 11) and cumulative
+(519 in 8); `int_eq_reif` (18 527 in 74 under step 2) is gone, and `bool2int` never showed.
+The 162 `.opb` weigh 66.8 kB to 4.07 GB, median 52.9 MB (80.4 MB for step 2's 108), 11 of
+them 1 GB or more. `2014_road-cons_road_20` again completes its `.opb` and dies on the
+16 GiB address-space cap during search (rc 134), as in §6.
+
+### 15. The gate, and where T3 stands
+
+**The gate** (`/scratch/arthur/wave46-t3-out/gate.status`, a fresh clone of `wave46-t3` at
+`e1b46dc`, which carries `main`'s M6-T22 merge, `make check` under `ulimit -v 4000000`): **rc
+0**, 26 s wall with the shared dune cache warm, peak RSS 89.7 MB (`/usr/bin/time -v`): format,
+build, the width lint, determinism, every unit suite (3 790 `ok` lines), 179 model tests passed,
+22 of them `bits_*` at `--bits-above 0` as well. With no flags, against gate 47's binary
+(`a9217430`, `main` at `23eb9d6`): stdout and exit codes identical on all 179 models, `.opb` and
+`.pbp` identical on 178. The one difference is `arith_times_narrow_sat`, new here, whose
+`int_times(b, y, z)` the old binary splits over `y` (§10). The suite with the gate's binary
+(`e8354a74`): 179 / 179 verified at `W = 0` and at `W = 8`, with §14's byte totals to the byte.
+
+**Where T3 stands.** Steps 1 to 4 are done and step 5 is designed and probed: maxmin,
+`int_ne`/`int_lin_ne`, `int_eq_reif`/`int_ne_reif` and `bool2int` hold nothing over bits;
+mapping and carpet-cutting no longer split over their wide operand; PB analysis over mixed
+rows is measured and left to the clause path; learned clauses over atoms are checked and
+lanes cover them. The bits encoding's holds are now the enumerating families of D-0130 §3.4
+(gcc, alldiff, element, cumulative) and declared holes, nothing else.
+
+**What T4 inherits.**
+
+- `W = none` moved on the Challenge (§10, the `int_times` operand order), so T4's baseline
+  for `W = none` must be re-run with this binary rather than read from D-0133.
+- The 177 after this work: 162 complete `.opb` at `W = 0` (from 108), the rest
+  `arithmetic-target` and nine singletons; what holds variables back is the enumerating
+  families and declared holes only. Read §14 before choosing T4's middle value of `W`.
+- PB analysis over mixed rows: §11's design (the row instantiated at the propagation, read
+  from the entry; a bits `Linear_term` rendered as its bridge inside a nested `pol`; the bit
+  count handed to `pb_analysis.ml`). §11's five Challenge instances say it is worth
+  building: where PB analysis learns at `W = none`, the bits arm takes most or all of it
+  away. It touches `search.ml`'s call (the row per entry), so it wants that file free.
+- Step 5 (§13): the binary expansion for `arithmetic-target`, a search trade to measure, not
+  a proof shape. `int_div` has no expansion.
+- The three-line bits pruning (`pol` + `ia` + `del`) and the per-atom `red` pair are still
+  D-0132 §7's bytes; nothing here changed them.
 
 ## D-0138  M6-T22: the per-node cost on the XOR codes was the engine asking every learned clause about every variable it names; a wake index of watched variables and smaller fixes make QR48 4.4 times faster with the same nodes and the same proof
 

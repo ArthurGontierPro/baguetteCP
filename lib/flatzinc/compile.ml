@@ -651,6 +651,27 @@ let pack_div_row ~mixed (p : Linear.t) : pending =
 let pack_abs_row ~mixed (p : Linear.t) : pending =
   pack_arith_row (module Arith.Abs_row : Propagator.S with type t = Linear.t) ~mixed p
 
+(* M8-bits-encoding-T3 continuation (D-0134 section 9): `bool2int(b, x)` over a BITS
+   integer. lib/core/prop/bool2int.ml justifies its four pushes with [Clause]s, RUP over
+   its two rows and x's LADDER, and a bits x has no ladder (no bound crosses a bits row
+   by unit propagation, D-0127). So over a bits x the channelling is posted as what it
+   is, the equality x = b: the same two rows in the same order, each with a [Linear]
+   instance -- whose pushes are Bool2int's four, one per row and bound -- justified by
+   [Linear]'s bits `pol` (D-0132). This face is the [Arith] faces' device: the instance
+   reports the builtin the model wrote. Defined here and not in bool2int.ml because the
+   choice is the compiler's, made from the scope, as [post_maxmin]'s shape is. *)
+module Bool2int_row : Propagator.S with type t = Linear.t = struct
+  type t = Linear.t
+
+  let name = "bool2int"
+  let consistency = Propagator.Bounds
+  let vars = Linear.vars
+  let propagate = Linear.propagate
+end
+
+let pack_bool2int_row (p : Linear.t) : pending =
+  pack_arith_row (module Bool2int_row : Propagator.S with type t = Linear.t) ~mixed:true p
+
 (* ---------------------------------------------------------------------------
    M8-bits-encoding-T2: eligibility for the bits encoding, by SCOPE (D-0130 section 3.4,
    D-0132 section 2.7)
@@ -669,10 +690,6 @@ let pack_abs_row ~mixed (p : Linear.t) : pending =
      element      array_int_element: the index's direct encoding, the result's rows
      cumulative   the capacity rows over gcc's window indicators
      holes        a declared set domain: the hole rows are ladder rows
-     int_eq_reif  int_eq_reif / int_ne_reif: lib/core/prop/reif_lin_eq.ml justifies
-                  with [Clause]s and punches holes (T2 holds it; D-0132 section 2.7)
-     bool2int     lib/core/prop/bool2int.ml justifies with [Clause]s; its `x` is width
-                  1 in practice (T2 holds it; D-0132 section 2.7)
 
    Eligible: int_lin_le/eq, int_le/lt/eq, int_lin_le_reif/int_le_reif (every face of
    lib/core/prop/reif_lin_le.ml is a [Linear] instance), int_times/div/abs (guarded
@@ -680,8 +697,13 @@ let pack_abs_row ~mixed (p : Linear.t) : pending =
    since M8-bits-encoding-T3 array_int_maximum/minimum: a scope with a bits variable
    posts the SELECTOR shape instead of one clause row per threshold value
    (lib/core/prop/maxmin.ml, D-0134), so nothing in it names an order literal per
-   value and nothing holds it; and int_ne/int_lin_ne, whose nogood over a bits scope is
-   D-0130 section 7.4's two-half `pol` through the A/B pair (lib/core/prop/ne.ml).
+   value and nothing holds it; int_ne/int_lin_ne, whose nogood over a bits scope is
+   D-0130 section 7.4's two-half `pol` through the A/B pair (lib/core/prop/ne.ml); and
+   int_eq_reif/int_ne_reif, whose two [Clause] pieces over a bits scope are the same
+   two halves with the reifier as one more term (lib/core/prop/reif_lin_eq.ml, D-0134
+   section 8) and whose other faces are [Linear] instances; and bool2int, posted over a
+   bits integer as its two rows with a [Linear] each ([Bool2int_row], D-0134 section 9)
+   rather than as lib/core/prop/bool2int.ml's [Clause]-justified instance.
    Computed from the model BEFORE any declaration, which is the only moment the scope
    is known and the encoding is empty. *)
 let held_families (m : Model.t) : (int, string list) Hashtbl.t =
@@ -704,9 +726,6 @@ let held_families (m : Model.t) : (int, string list) Hashtbl.t =
   List.iter
     (fun (c : Model.constr) ->
       match c.Model.k with
-      | Model.Bool2int (b, x) -> hold "bool2int" [ b; x ]
-      | Model.Int_eq_reif (a, b, r) | Model.Int_ne_reif (a, b, r) ->
-          hold "int_eq_reif" [ a; b; r ]
       | Model.All_different ops -> hold "alldiff" ops
       | Model.Global_cardinality (xs, _, counts) -> hold "gcc" (xs @ counts)
       | Model.Cumulative (ss, _, _, _) -> hold "cumulative" ss
@@ -716,7 +735,8 @@ let held_families (m : Model.t) : (int, string list) Hashtbl.t =
       | Model.Array_bool_and _ | Model.Bool_eq _ | Model.Bool_not _
       | Model.Int_lin_le_reif _ | Model.Int_le_reif _ | Model.Int_times _
       | Model.Int_div _ | Model.Int_abs _ | Model.Array_int_maximum _
-      | Model.Array_int_minimum _ | Model.Int_lin_ne _ | Model.Int_ne _ ->
+      | Model.Array_int_minimum _ | Model.Int_lin_ne _ | Model.Int_ne _
+      | Model.Int_eq_reif _ | Model.Int_ne_reif _ | Model.Bool2int _ ->
           ())
     m.Model.constraints;
   held
@@ -1467,13 +1487,29 @@ let compile (m : Model.t) : t =
           check_row pos ~what:"this reified linear equality"
             (negate_terms nterms @ [ (g k_ge, ri) ])
             (Checked.add (Checked.neg rhs) (g k_ge));
-          let le_id, ge_id, k_le, k_ge =
+          let r =
             Encoding.add_int_lin_eq_reif encoding (opb_terms pos nterms) rhs
               ~reifier:(name_of pos ri) ~pos:positive
           in
+          (* M8-bits-encoding-T3 (D-0134 section 8): over a bits scope A's and B's ids are
+             the instance's, its disequality pieces derived through them
+             (lib/core/prop/reif_lin_eq.ml); otherwise dropped, as [post_ne] drops its
+             pair's. *)
+          let rows =
+            if mixed nterms then
+              Some
+                {
+                  Reif_lin_eq.a_id = r.Encoding.a_id;
+                  b_id = r.Encoding.b_id;
+                  big_a = r.Encoding.big_a;
+                  big_b = r.Encoding.big_b;
+                }
+            else None
+          in
           [
             pack
-              (Reif_lin_eq.make ~le_id ~ge_id ~k_le ~k_ge ~positive store
+              (Reif_lin_eq.make ?rows ~le_id:r.Encoding.le_id ~ge_id:r.Encoding.ge_id
+                 ~k_le:r.Encoding.k_le ~k_ge:r.Encoding.k_ge ~positive store
                  (prop_terms nterms) rhs ~reifier:(Var.of_int ri));
           ]
   in
@@ -1611,6 +1647,17 @@ let compile (m : Model.t) : t =
   let post_bool2int pos b x =
     let b = bool_operand pos ~builtin:"bool2int" ~what:"the first argument" b in
     match (b, x) with
+    | Model.Var bi, Model.Var xi when on_bits.(xi) ->
+        (* M8-bits-encoding-T3 continuation: the same two rows, a [Linear] over each
+           ([Bool2int_row]'s header says why). *)
+        let nterms = normalise_terms [ (1, xi); (-1, bi) ] in
+        check_row pos ~what:"this bool2int channelling" nterms 0;
+        let le_id = Encoding.add_int_lin_le encoding (opb_terms pos nterms) 0 in
+        let ge_id =
+          Encoding.add_int_lin_le encoding (opb_terms pos (negate_terms nterms)) 0
+        in
+        let le, ge = Lin_eq.make ~le_id ~ge_id store (prop_terms nterms) 0 in
+        [ pack_bool2int_row le; pack_bool2int_row ge ]
     | Model.Var bi, Model.Var xi ->
         let nterms = normalise_terms [ (1, xi); (-1, bi) ] in
         check_row pos ~what:"this bool2int channelling" nterms 0;

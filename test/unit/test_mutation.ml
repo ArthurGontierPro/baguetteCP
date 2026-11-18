@@ -1673,6 +1673,106 @@ solve :: int_search([z, x, y], input_order, indomain_max, complete) satisfy;
           ~knob:(knob ~site:"[resolve]" Writer.Mutation.Drop_literal)
           "drop-literal");
 
+    (* -- M8-bits-encoding-T3 continuation: int_eq_reif / int_ne_reif over bits
+       (D-0134 section 8) --------------------------------------------------------------
+       test/models/bits_reif_eq_sat.fzn (inlined), SATISFIABLE, solved in its own search
+       order, with one conflict (d \/ e) so that the trace reaches the page. The first
+       "[resolve]" line is the interior hole x <> 2 that b = 0 and y = 2 make through
+       b <-> (x = y): the guarded A/B pair, each half with the reifier as one more term,
+       resolved on the selector and pinned by `ia` to a clause carrying the reifier's
+       literal. Each corruption is refused at the `ia`. *)
+    let reif_src =
+      {|
+var 0..9: x :: output_var;
+var 0..9: y :: output_var;
+var 0..9: z :: output_var;
+var bool: b :: output_var;
+var bool: e :: output_var;
+var bool: d :: output_var;
+constraint int_eq_reif(x, y, b);
+constraint int_lin_le([1, -1], [x, y], 2);
+constraint int_lin_le([-1], [y], -2);
+constraint int_eq_reif(x, z, e);
+constraint int_lin_eq([1], [z], 1);
+constraint int_ne_reif(x, 4, d);
+constraint bool_clause([d, e], []);
+solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), int_search([x], input_order, indomain_max, complete)]) satisfy;
+|}
+    in
+    let b, outcome = solve_bits_src reif_src ~name:"bits_reif" () in
+    check "bits_reif: the solver solves it (the instance is what we think it is)"
+      (match outcome with Search.Sat _ -> true | Search.Unsat -> false);
+    check "bits_reif: the reified equalities are on bits (a guarded `_ne` row over bits)"
+      (contains (read_file b.opb) "_ne0_ge_1" && contains (read_file b.opb) "x_bit_0");
+    check "bits_reif: a derived line pins a clause naming the reifier b"
+      (contains (read_file b.pbp) "b_ge_1");
+    (* M8-bits-encoding-T3 continuation, step 4 (D-0134 section 12): ATOMS BEFORE
+       CITATION. Every literal of a bits variable (x, y, z here) that a line names must
+       have been minted by an earlier `red` pair -- the learned clause's literals
+       included, which [Learned.introduce] writes without validating them itself because
+       each came from a trace line or a decision (D-0132 section 2.6). Read off the
+       honest proof, line by line, so a learned clause naming an atom nothing minted
+       would be seen here and not only as a checker oddity. *)
+    let atoms_before_citation text =
+      let minted = Hashtbl.create 16 in
+      let is_bits_atom tok =
+        let tok =
+          if String.length tok > 0 && tok.[0] = '~' then
+            String.sub tok 1 (String.length tok - 1)
+          else tok
+        in
+        if
+          String.length tok > 5
+          && (String.sub tok 0 5 = "x_ge_"
+             || String.sub tok 0 5 = "y_ge_"
+             || String.sub tok 0 5 = "z_ge_")
+        then Some tok
+        else None
+      in
+      List.for_all
+        (fun line ->
+          let toks = String.split_on_char ' ' line in
+          if List.mem "red" toks then (
+            (* the witness `: <atom> -> v` names the atom the pair defines *)
+            let rec witness = function
+              | ":" :: a :: "->" :: _ -> Hashtbl.replace minted a ()
+              | _ :: rest -> witness rest
+              | [] -> ()
+            in
+            witness toks;
+            true)
+          else
+            List.for_all
+              (fun tok ->
+                match is_bits_atom tok with
+                | Some a -> Hashtbl.mem minted a
+                | None -> true)
+              toks)
+        (String.split_on_char '\n' text)
+    in
+    check "bits_reif: every bits atom a line names was minted by an earlier `red` pair"
+      (atoms_before_citation (read_file b.pbp));
+    let build_reif ~name ~mutation = fst (solve_bits_src reif_src ~mutation ~name ()) in
+    gated ~tag:"bits_reif"
+      ~control:(fun () -> control_holds ~tag:"bits_reif" ~proof:b.pbp)
+      ~declares:[ "pol-cite"; "truncate"; "drop-literal"; "learned-rhs" ]
+      (fun c ->
+        (* The learned clause over x's atom, its degree raised to 2: the model's own
+           solution (b = 0, y = 2, x = 3) makes exactly one of its literals true, so the
+           strengthened clause is false on a solution and cannot be implied. *)
+        emitter_lane c ~build:build_reif ~expect:`Rejects
+          ~knob:(knob ~site:"1UIP learned clause" Writer.Mutation.Strengthen_rhs)
+          "learned-rhs";
+        emitter_lane c ~build:build_reif ~expect:`Rejects
+          ~knob:(knob ~site:"[resolve]" Writer.Mutation.Swap_citation)
+          "pol-cite";
+        emitter_lane c ~build:build_reif ~expect:`Rejects
+          ~knob:(knob ~site:"[resolve]" Writer.Mutation.Truncate_derivation)
+          "truncate";
+        emitter_lane c ~build:build_reif ~expect:`Rejects
+          ~knob:(knob ~site:"[resolve]" Writer.Mutation.Drop_literal)
+          "drop-literal");
+
     (* -- the harness's own guards -------------------------------------------- *)
     (* A mutation that rewrote nothing would make every lane green against the control's
        own proof. mutate_proof.sh calls that out rather than running veripb on an

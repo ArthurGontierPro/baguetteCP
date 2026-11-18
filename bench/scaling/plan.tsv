@@ -1,0 +1,11 @@
+# M11-complexity-T2 (D-0141). The scaling lane's PLAN: one line per (instance, mode),
+# TAB-separated. The instance is one of bench/diff/corpus/. Budgets N0 < N1 <= N2 < N3:
+# the early segment is (N0, N1] (small learned database), the late one (N2, N3] (large).
+# N3 must stay below the node at which the search closes (QR48 closes at 23 367, which is
+# why the clause-path line is QR72). Changing a line is a change to its baseline: re-record.
+#
+# id	mode	N0	N1	N2	N3	why
+H_qr72_bag_def	noproof	1000	2000	16000	32000	clause path, cheap conflicts: the most sensitive line (database ~500 -> ~16 000)
+H_qr72_bag_def	proof	1000	2000	16000	32000	the same search with the proof written: trace, justification, writer
+2012_parity-learning_48_24_6.2	noproof	500	1000	8000	16000	PB path: learned PB rows propagating, runs per node x4 over the run
+2012_parity-learning_48_24_6.2	proof	500	1000	8000	16000	PB path with pol lines written

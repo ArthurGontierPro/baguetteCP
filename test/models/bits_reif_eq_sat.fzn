@@ -1,0 +1,26 @@
+% M8-bits-encoding-T3 continuation (D-0134 section 8): int_eq_reif / int_ne_reif over bits.
+% At `--bits-above 0` x, y, z are on bits and the two [Clause] pieces of the reified
+% equality are DERIVED: rows A and B of its guarded `_neN` pair, each with the bridges of
+% the fixed terms and the reifier as one more term, saturated and summed so the selector
+% resolves away. Deciding b = 0 and then y = 2 makes x <> 2 through b <-> (x = y): an
+% interior hole in a bits domain (x is in 0..4 by x <= y + 2), the reifier's literal in its
+% clause. x is then decided at its top, 4, and d <-> (x <> 4) has its condition ENTAILED
+% with d open: the entailment piece pushes d to 0, a derived line whose reifier term
+% carries the negation of the claim; the rows faces (LE/GE, [Linear]) push e to 0, and
+% d \/ e fails. The trace reaches the page at that conflict (it is written lazily, D-0018),
+% the learned clause names x's atom, and x = 3 then satisfies everything: the search lands
+% on b = 0, y = 2, x = 3, z = 1, e = 0, d = 1.
+var 0..9: x :: output_var;
+var 0..9: y :: output_var;
+var 0..9: z :: output_var;
+var bool: b :: output_var;
+var bool: e :: output_var;
+var bool: d :: output_var;
+constraint int_eq_reif(x, y, b);
+constraint int_lin_le([1, -1], [x, y], 2);
+constraint int_lin_le([-1], [y], -2);
+constraint int_eq_reif(x, z, e);
+constraint int_lin_eq([1], [z], 1);
+constraint int_ne_reif(x, 4, d);
+constraint bool_clause([d, e], []);
+solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), int_search([x], input_order, indomain_max, complete)]) satisfy;
