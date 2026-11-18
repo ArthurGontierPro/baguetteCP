@@ -12551,3 +12551,251 @@ What it says, instance by instance and no further:
   `test_m9_discard_rows_mint_the_same_ids` already checks. (ii) The heap budget does not
   cover an address-space death in the compile phase. That shows as `ERROR rc 134` rather
   than `REFUSED rc 5`, and a census that reads statuses should know it.
+
+## D-0137  M10-search-strategy-T1: restarts, phase saving and an activity heuristic, behind flags -- a restart is the backjump this solver already writes, taken to a chosen level, and it adds no rule to the proof
+
+**Status**: DECIDED 2026-11-18 (agent-strategy, branch `wave45-strategy`). Answers D-0045's open
+question for the flags, not for the default. The default search, its stdout and its proof are
+unchanged, and SPEC §3.4 is amended to say so (section 6). The default itself is
+M10-search-strategy-T5's to decide by measurement. Sections 7 and 8 are filled as T2 and T3 land.
+
+### 0. Why, in the measured cases
+
+The user's requests of 2026-11-18 (WORKLOG, "codes-cp measurements" and its addendum) give
+three models where the search, not the proof, decides. On aut.mzn order 7 (`o7k2`) the value
+choice alone separates 158 nodes and 5.2 s (`indomain_max` on the generator bits) from more than
+1 800 s (`indomain_min`, or no annotation), in both solvers. Chuffed's `-f` (activity with
+restarts, alternating with the annotation) solves every variant. On the two QR codes Chuffed's
+fixed search is faster than its free one (QR48 0.4 s against 19.6 s, QR72 2.8 s against 125 s),
+so a heuristic is not a free win and has to be measured per model. Read off the `.log` files in
+`fataepyc-06:/scratch/arthur/codes-bench/`:
+
+| model | Chuffed def | Chuffed `-f` | Chuffed `u` (min) | Chuffed `u1` (max) | Chuffed `ufree` |
+|---|---|---|---|---|---|
+| QR48 | 23 668 nodes, 0 restarts, 0.44 s | 123 835 nodes, 269 restarts, 19.6 s | 11 709, 0.20 s | 11 710, 0.14 s | 16 939, 55 restarts, 0.37 s |
+| QR72 | 90 500, 0 restarts, 2.8 s | 752 668, 1 329 restarts, 125 s | 50 736, 1.7 s | 50 704, 1.0 s | 70 197, 159 restarts, 2.6 s |
+| o7k2 | 11 nodes, 0.01 s | 11 nodes, 0 restarts, 0.01 s | 16 M, > 1 800 s | 140, 0.01 s | 231, 2 restarts, 0.02 s |
+
+What Chuffed does on a model with no annotation is not recorded in these logs. On o7k2 it
+coincides with `-f` (11 nodes) and never restarts. The `-f` restart counts are of the order of
+Luby restarts on a unit of 100 conflicts (that schedule allows about 105 000 conflicts over 270
+runs on QR48 against 117 616 failures observed, and about 630 000 over 1 330 runs on QR72 against
+692 166), which is an inference from the counts and not a reading of Chuffed's source.
+
+### 1. What a restart is in this solver, written as the proof lines it produces
+
+**The claim D-0045 left open is verified in the code.** `Writer.wipe_level`
+(`lib/proof/writer.ml`, the `if l <= 0 then invalid_arg` at its top) refuses level 0.
+`Learned.introduce` and `Pb_analysis.introduce` emit inside `Justify.with_level ctx 0`
+(`learned.ml:305`, `pb_analysis.ml:893`), so every learned id is tagged 0, and the improving
+constraint of a branch-and-bound run is too (`Search.record_improving`). `Retention` is their only
+deleter (D-0051). So no backjump, however far, deletes a learned constraint, and a restart is a
+backjump.
+
+**On the trail**, a restart to level `t` undoes the levels above `t`, one `Store.backtrack` per
+level, which is the undo every backjump already performs. Level 0, and every level up to `t`, is
+kept.
+
+**In the search**, the depth-first search is a recursion with one frame per open level, and each
+frame owns its level's two closing lines. So a restart is not an exception that jumps to the top.
+It is a third node outcome, `NRestart t`, that each frame above `t` passes up after closing its
+own level exactly as the backjump arm does (`Writer.set_level (lvl - 1)`, then
+`Justify.wipe_level lvl`), with no nogood to keep. The frame whose node sits at level `t` then
+**re-enters its own node** with its decision stack unchanged. That re-entry is the move M5-T1
+(an improving solution) and M7-T12 (an assignment's sibling, D-0077) already make, and it is why
+no new mechanism is needed. A full restart is `t = 0` and the frame is the root.
+
+**In the writer**, the lines a restart writes are the `% level l` comment of each level it
+closes and the `del` lines of `wipe_level t+1`, which retire every id tagged above `t`, namely
+the trace lines, the conflict lines, the bridges, the branch nogoods filed above `t` and the
+assignment clauses filed above `t`. A full restart is `wipe_level 1`, never `wipe_level 0`.
+**No rule kind is new**, so there is no new line to hand-check on 3.0.2. What has to be checked
+is that the lines a later run cites are still live, and T2's lanes check that on emitted proofs
+(section 7).
+
+**The conflict that triggers it.** The restart is decided in `dfs`'s conflict arm, after
+learning. That arm writes the trace, the conflict line, the bridges and the learned constraint
+(level 0), and then, instead of the branch nogood, returns `NRestart t`. The nogood is not
+written, because nothing would cite it. It would be filed at a level the unwinding wipes. The
+learned constraint is what carries the conflict across the restart. A conflict at which learning
+declined (`Learn.at_conflict` returned `None`) never restarts, so every restart is preceded by a
+learned constraint on the page.
+
+**The trace** is per branch only in the sense that its lines carry their trail entry's level.
+`Trace.resync` finds the common prefix of the trail it has written and the live trail by physical
+identity (`trace.ml`, its header's last bullet), so after the unwinding it simply continues from
+the kept prefix. Its level-0 lines are in `Trace.permanent` and are deleted once, at the end, by
+`Search.retire_trace`. A restart therefore needs no call into `Trace`. What changes is how often
+level 0 grows. After a restart the root re-runs `Engine.propagate`, the learned instances that
+are unit there prune at level 0, and those prunings get permanent trace lines at the next
+conflict. That is the shape `close_root_conflict` already handles, since a root conflict after
+a restart is the ordinary root conflict.
+
+**The learned database, the globals and the engine** are untouched. Learned units stay in
+`stats.globals_rev` and are re-applied at the root's re-entry, where they now land at level 0 for
+good. Registered `Learned_clause` and `Learned_pb` instances stay in the engine.
+
+**Completeness (I-S2) and termination.** Soundness does not move: `=====UNSATISFIABLE=====`
+still requires the root's empty clause, derived in the last run. What a restart policy owes is
+termination, and every policy here owes it by the same argument. Every decision strictly narrows
+a finite domain (`check_decision_landed`), so a tree searched from the root has fewer than
+`B = 2^(D+1)` nodes, `D` the sum of the declared widths, whatever the learned database holds, and
+fewer than `B` conflicts. Each policy below has a cutoff (the number of conflicts a run may take
+before it may restart) that is **unbounded over the run index**. So some run gets a cutoff above
+`B` and completes. This is the textbook argument for Luby and it is the reason the LBD policy
+below carries a Luby floor. Without the floor, termination would rest on every learned clause
+being new, which holds only while retention keeps everything and every learned clause gets an
+instance, two things T4 (D-0139) and `BAGUETTE_PROPAGATE_LEARNED=off` can change.
+
+**Determinism.** Every schedule is a function of the conflict count and of the learned
+clauses' LBDs, both deterministic. No clock, no random draw. Two runs of one binary stay
+byte-identical, which `scripts/check_determinism.sh` requires.
+
+**Interaction with the statistics.** M1-T36's identity `nodes = 2 decisions + 1 - skipped -
+3 assigns` counts a split's second child as dispatched. A frame unwound by a restart during its
+first child never dispatches the second, so a counter `restart_unexplored` joins the identity.
+The root's re-entry is not a node, as M5-T1's is not.
+
+### 1.1 Partial restarts (van der Tak, Ramos, Heule, JSAT 2011)
+
+`NRestart t` with `t > 0` is a partial restart, and the proof side is the same at every `t`
+above. Any `t` in `[0, d)` is sound, so the criterion is a question of efficiency only. The trail
+reuse rule keeps the levels whose decisions the heuristic would take again. It is only defined
+for a dynamic heuristic: under the activity order (section 4) a level `i` is kept when its
+decision variable's activity is above the activity of the best variable that is unfixed at the
+conflict and not a decision variable of a kept level, which over-approximates the candidate set
+of the paper and so keeps at most as many levels as the paper would. Under a static order (an
+annotation, or SPEC §3.4's default) the order retakes the same prefix until a learned
+constraint changes a domain it reads, so a static order's partial restart is simply its full one
+with fewer lines, and the flag is not offered for it. Status: the mechanism (`NRestart t`) lands
+in T2, the criterion with T3 if the activity order lands, otherwise it is what remains (section
+9).
+
+### 2. The policies and their parameters
+
+A policy lives in a new module `lib/core/restart.ml`, as data plus a small state machine
+(`on_conflict`, `due`, `on_restart`), pure and unit-testable. The flag is
+`--restarts POLICY`:
+
+| `--restarts` | rule | parameters | from |
+|---|---|---|---|
+| `none` (default) | never | | SPEC §3.4 |
+| `luby[:U]` | run `k` may take `U * luby(k)` conflicts | `U = 100` | Luby, Sinclair, Zuckerman, IPL 1993; the unit is Chuffed's, inferred above |
+| `geom[:U[:F]]` | run `k` may take `U * F^k` conflicts | `U = 100`, `F = 1.5` | Walsh, IJCAI 1999 |
+| `lbd[:W[:K]]` | restart when the last `W` learned LBDs average more than `1/K` times the run-wide average, and the run has taken at least `max(W, luby(k))` conflicts | `W = 50`, `K = 0.8` | Audemard and Simon, CP 2012 (Glucose's dynamic restarts) |
+| `stable` | alternate an `lbd` phase and a `luby:U` phase, each phase `L` conflicts long, `L` doubling at each switch from 1 000 | `U = 100` | the stabilising alternation of Oh (SAT 2015), used by CaDiCaL and Kissat |
+
+Not implemented, and recorded so the next session does not start blind: agility-based restarts
+(Biere, SAT 2008), which need the trail's polarity flips and so a hook in `Store`'s push path that
+is M6-T22's file; Glucose's blocking of a restart on a long trail (SAT 2012); and the
+stable mode's switch of the value heuristic to target phases. Biere and Fröhlich (POS 2015)
+compare the schemes on SAT benchmarks and find no single winner, which is the reason all of them
+sit behind one flag and T5 chooses by measurement.
+
+### 3. Phase saving over order literals (Pipatsrisawat and Darwiche, SAT 2007)
+
+A new module `lib/core/phase.ml` keeps one saved value per variable. **What is saved** is the
+value the variable was FIXED at when its level is undone. Before each `Store.backtrack` the
+search reads the entries of the level being undone and records, for each variable a fixed `now`
+domain names, that value. A variable that was only narrowed saves nothing. In SAT terms this is
+saving on unassignment, and for a Boolean it is exactly the saved polarity.
+
+**What it changes** is the value choice, never the variable choice. After the order (annotation,
+default, or activity) has picked a variable `v`, a saved value `s` still in `dom(v)` replaces the
+order's value choice. At `s = lo` that is the one-literal decision `x <= lo` first, at `s = hi`
+the one-literal decision `x >= hi` first, and strictly inside it is D-0077's assignment decision
+`x = s`, the shape `indomain_median` already uses and SPEC §3.4 already defines. A saved value
+that has left the domain falls back to the order's own choice. So phase saving adds no decision
+shape and no proof line. Flag: `--phase-saving`.
+
+**Over an annotation it is a substitution of the value choice**, which SPEC §3.4 forbids done
+silently. The flag is the user asking for it, and section 6 says so in the SPEC.
+
+### 4. The activity heuristic for integer variables
+
+A new module `lib/core/activity.ml`, behind `--search activity` and `--search alternate`.
+
+- **What is scored** is the integer (or Boolean) VARIABLE, one float each, not the order
+  literal. A decision here picks a variable and then a value, and the literal follows from the
+  pair, so scoring literals would score something the search never chooses directly. Chuffed
+  scores the Boolean literal variables of its order encoding, which is the other reading,
+  recorded as the alternative.
+- **What is bumped** is every variable of the learned 1UIP clause, after minimisation (Chaff's
+  original VSIDS, Moskewicz et al., DAC 2001). MiniSat's EVSIDS bumps every variable seen during
+  the analysis as well, which needs the variables resolved over, and those are inside
+  `Analysis.analyse`'s walk. That variant is the hook this record would add to `analysis.ml`
+  (this session's file) if the clause variant measures badly, and `learn.ml` (another session's)
+  is not touched either way. A conflict that learned nothing bumps the variables of the
+  conflict's own reason facts, so a run with learning off still moves the scores (that is
+  dom/wdeg's signal, Boussemart et al., ECAI 2004, in its simplest form).
+- **Decay** is EVSIDS's, by growing the increment: `inc := inc / 0.95` after every conflict,
+  and every score and the increment are divided by `1e100` when a score passes `1e100`.
+- **Selection** is the unfixed variable with the highest score, ties broken by SPEC §3.4's
+  first-fail rule (smallest domain, then earliest), so that at the start, when every score is 0,
+  the activity order IS the default order. The scan is linear in the unfixed variables per
+  decision, as `unfixed` already is. A heap is the optimisation if the scan shows in a profile.
+- **The value** is the saved phase when `--phase-saving` is on and one is saved, otherwise the
+  value choice of the first annotation phase that names the variable, otherwise `indomain_min`.
+  The annotation's value choices are read from `Search.sequence`'s own record of its phases,
+  so `compile.ml` is not touched.
+- **Alternation with the annotation** (Chuffed's `-f`, Ohrimenko, Stuckey, Codish, Constraints
+  2009) is `--search alternate`. Run 0 uses the annotation (or SPEC §3.4's default when there is
+  none), run 1 the activity order, and so on, switching at each restart. Without `--restarts`
+  there is one run, so `alternate` alone is the annotation, and the CLI says so.
+
+Impact-based search (Refalo, CP 2004), activity-based search in the sense of Michel and Van
+Hentenryck (CPAIOR 2012, activity measured as domain reduction per propagation) and LRB/CHB
+(Liang et al., SAT 2016, AAAI 2016) are not built. They need a measurement per propagation, which
+is `Engine`'s hot loop and M6-T22's file this wave.
+
+### 5. Interaction with deletion (D-0139, M10-search-strategy-T4)
+
+Coordinated through this record, and `retention.ml` is not edited here.
+
+- Restarts change nothing about who deletes a learned id. They do change when a learned
+  instance prunes at level 0, which after a restart is routine. A level-0 line is written lazily
+  (at the next conflict) and is RUP only while the learned constraint it rests on is live. Once
+  written it stands alone. `Retention.cite` already pins a constraint that has a consumer, which
+  covers this. A policy that evicts must keep honouring it.
+- The LBD the `lbd` restart policy reads is `Learn.lbd`, the same number `Retention.add` is
+  given. T4's tiers and this policy read one quantity and neither owns it.
+- Termination under eviction rests on the cutoff schedule (section 1), never on the learned
+  database, so T4 may evict freely as far as this record is concerned.
+
+### 6. The SPEC §3.4 amendment
+
+The first paragraph of §3.4 keeps its sentence and gains one that names the flags. The text
+added, after the `**Default.**` paragraph:
+
+> **Restarts, phase saving and activity search are opt-in** (M10-search-strategy, D-0137). With
+> none of `--restarts`, `--phase-saving` and `--search` given, the search is the default above
+> or the annotation, and its output and proof are byte-identical to a build without these
+> flags. `--restarts luby[:U] | geom[:U[:F]] | lbd[:W[:K]] | stable` restarts the depth-first
+> search on a deterministic schedule of conflict counts, each with a cutoff unbounded over the
+> run index, so the search stays complete. A restart is a backjump to level 0 that keeps every
+> learned constraint, and every restart is reflected in the proof as the backtrack it is.
+> `--phase-saving` replaces the value choice (an annotation's included) by the value the
+> variable was last fixed at when that value is still in its domain. `--search activity` selects
+> the unfixed variable with the highest conflict activity, and `--search alternate` alternates the
+> annotation and the activity order at each restart. Each of these substitutes a strategy, and
+> each is only ever the user's explicit request. Without the flag, the sentence under "Anything
+> else MUST be refused" stands as it is.
+
+The `**Default.**` sentence ("restarts disabled") is unchanged, because it is still the
+default.
+
+### 7. T2: restarts and phase saving as built (to be filled)
+
+### 8. T3: the activity heuristic as built (to be filled)
+
+### 9. What remains (to be filled)
+
+### 10. The baseline (to be filled when the runs finish)
+
+Today's search, main's binary `6d3d2dc3` (gate 2026-11-18), on fataepyc-06, `--time-limit 600`,
+each run with the proof (verified by veripb 3.0.2) and with `--no-proof`. Codes set: the nine
+baguette flattenings in `codes-bench`. Subset: twenty Challenge instances re-flattened with
+main's mznlib (the wave43 `.fzn` were deleted after solving, and the re-flattenings differ from
+wave43's by 6 to 21 bytes), five per status of the wave43 run, chosen where Chuffed's free run
+beats its fixed one (no SAT instance in the 1-300 s window shows that, so the five SAT ones are
+plain).

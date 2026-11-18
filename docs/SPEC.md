@@ -294,6 +294,20 @@ in this project is aimed at.
 **Default.** A model with no search annotation is searched by first-fail variable selection
 with min-value branching, depth-first, restarts disabled.
 
+**Restarts, phase saving and activity search are opt-in** (M10-search-strategy, D-0137). With
+none of `--restarts`, `--phase-saving` and `--search` given, the search is the default above
+or the annotation, and its output and proof are byte-identical to a build without these
+flags. `--restarts luby[:U] | geom[:U[:F]] | lbd[:W[:K]] | stable` restarts the depth-first
+search on a deterministic schedule of conflict counts, each with a cutoff unbounded over the
+run index, so the search stays complete. A restart is a backjump to level 0 that keeps every
+learned constraint, and every restart is reflected in the proof as the backtrack it is.
+`--phase-saving` replaces the value choice (an annotation's included) by the value the
+variable was last fixed at when that value is still in its domain. `--search activity` selects
+the unfixed variable with the highest conflict activity, and `--search alternate` alternates the
+annotation and the activity order at each restart. Each of these substitutes a strategy, and
+each is only ever the user's explicit request. Without the flag, the sentence under "Anything
+else MUST be refused" below stands as it is.
+
 **Annotations** *(normative; the honouring requirement predates M7-T2, which brought the
 implementation into compliance with it)*. `int_search` and `bool_search` with the variable
 choices `input_order`, `first_fail`, `anti_first_fail`, `smallest` and `largest`, and the
