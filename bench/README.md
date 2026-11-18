@@ -1293,29 +1293,34 @@ D-xxxx MEASUREMENT (D-0105 onwards).
 ## 10. The M11 lanes: same search, and no cost that grows with the database (M11-complexity-T2, D-0141)
 
 Two lanes guard the M11 pass, which replaces every operation whose cost grows with the run.
-Neither is part of `make check`; the gate runs them right after it, on fataepyc-06:
+Neither is part of `make check`. A batch agent runs the fast tier after each change, and the gate
+runs everything right after `make check`, on fataepyc-06:
 
 ```sh
-make check && make diff ARGS="-j 16" && make scaling ARGS="-j 16"
+make diff ARGS="-j 16"                      # fast tier, ~3 min: after every change
+make diff ARGS="--tier all -j 24"           # + D-0140's six instances, ~4 min: before reporting, and the gate
+make diff ARGS="--debug --tier all -j 24"   # the same under BAGUETTE_DEBUG=1 at <= 1 500 nodes
+make scaling ARGS="-j 16"                   # report-only until M11-complexity-T6
 ```
 
-**`make diff`** (`scripts/diff_lane.sh`, about three minutes at 16 in parallel). The 21 instances
-of `bench/diff/corpus/` (QR48, QR72 and 19 Challenge instances, 766 KB of `.fzn.gz`, listed with
-their budgets and families in `bench/diff/corpus.tsv`) are each run at a fixed
-`BAGUETTE_NODE_LIMIT` in every configuration of `bench/diff/configs.tsv` (default, `--no-proof`,
-`lbd:500`, `fifo:500`, the same two with learned propagation off, `BAGUETTE_PB_ANALYSIS=off`,
+**`make diff`** (`scripts/diff_lane.sh`). The instances of `bench/diff/corpus/` (QR48, QR72, 19
+Challenge instances in the fast tier, D-0140's six in the slow tier; 958 KB of `.fzn.gz`, listed
+with budget, tier, class and families in `bench/diff/corpus.tsv`) run at a fixed
+`BAGUETTE_NODE_LIMIT` in the configurations of `bench/diff/configs.tsv` (default, `audit0`,
+`--no-proof`, `lbd:500`, `fifo:500`, the same two with learned propagation off, PB analysis off,
 `--bits-above 0`). Exit code, stdout, the `--stats` counters (prose and clocks stripped by
 `bench/diff/observe.py`) and the `.opb`/`.pbp` sha256 must equal `bench/diff/reference/`. A
-difference fails with the instance, the configuration and the first differing item. The
-reference is re-recorded (`--update`, which also runs veripb over every proof it records) only
+difference fails with the instance, the configuration and the first differing item, SEARCH before
+the proof hashes before WORK, and the classes `bool` and `int` are summed apart. The reference is
+re-recorded (`--update`, which runs veripb over every proof and never records a non-zero exit) only
 after a gated merge that changes the search on purpose. **Never to make the lane pass.** To add a
 configuration when a flag merges, add a line to `configs.tsv` and record it with
-`--update --config NAME`.
+`--update --config NAME` (and `--debug`).
 
-**`make scaling`** (`scripts/scaling_lane.sh`, under two minutes). For each line of
+**`make scaling`** (`scripts/scaling_lane.sh`, about two and a half minutes). For each line of
 `bench/scaling/plan.tsv` it runs one instance at four node budgets, reads `instructions:u` from
-`perf stat`, and prints the cost per propagator run in the late segment (large database) over
-the early one (small database). It also prints the same ratio per node and in `cycles:u`, for
-information only. A line is OVER when its ratio exceeds the baseline in
-`bench/scaling/baseline.tsv` by more than 1 %. The lane is REPORT-ONLY until M11-complexity-T6
-(`ARGS=--enforce` fails now). Without perf it falls back to the GC's allocated words and says so.
+`perf stat`, and prints the instructions per node of a late segment (large database) over an early
+one (small database), D-0140's measure. Per propagator run and `cycles:u` are printed as
+information. A line is OVER when its ratio exceeds `bench/scaling/baseline.tsv` by more than 0.5 %,
+a ratchet re-recorded only downward. REPORT-ONLY until M11-complexity-T6 (`ARGS=--enforce` fails
+now). Without perf it falls back to the GC's allocated words and says so.

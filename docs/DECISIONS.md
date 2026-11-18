@@ -14121,6 +14121,464 @@ RSS 481 MB.
 - If `define_reif` (the `.pbp` door) were wired into `Compile`, G would still be right, because it
   keeps `Occurs` exact; that is why it does not take the cheaper route of skipping `Occurs`.
 
+## D-0144  M11-complexity-T4 part 1: learning and PB analysis without their quadratic lists, the trail walk of `falsified_before` replaced by the bound history; 1 to 3.5 % of the instructions at 10 000 nodes, every byte the same
+
+**Status**: **DONE** (part 1 of M11-complexity-T4), recorded 2026-11-18 (agent-batch4a,
+`wave49-batch4a`). The contract is D-0140 §5's rows L1, S5 (its `learn.ml` half), P1, P2 (but
+`linear.ml`'s `pb_row`, which is M11-T3's) and J6 (its `learn.ml` part), and §7's T4 paragraph.
+Files changed: `lib/core/learn.ml`, `lib/core/pb_analysis.ml`, `lib/core/reduce.ml`,
+`lib/core/ladder.ml`, `test/unit/test_learn.ml`, `test/unit/test_core.ml`. No store function was
+added, and nothing in `search.ml`, `analysis.ml`, `retention.ml`, `learned.ml`, `store.ml` or
+`writer.ml`. Measured on `fataepyc-06` against `main`'s binary `5e6f653e` (`da9df69`, the binary
+gate 50 recorded), outputs under `/scratch/arthur/wave49-batch4a-runs/`.
+
+### 1. The fixes, and why each one keeps the bytes
+
+Every fix replaces a data structure and keeps the function it computes. Where the argument is not
+a line long, the old code stays in the module as the specification, under a `_reference` or
+`_scan` name, and a unit test or a `BAGUETTE_DEBUG` check compares the two.
+
+**L1, `Learn.supports`.** The I-S4 support list was deduplicated by a `List.exists` over the list
+so far and grown by `acc @ [s]`, quadratic in the supports of every learned clause (the check is
+always on). Now a table of the ids taken (`Hashtbl.Make (Int)`) and a reversed list turned round
+once. The same first-seen entries in the same order; the table is never iterated.
+
+**S5, `Learn.minimise_with`** (the `search.ml` half, `dfs`'s `kept`, is part 2). The branch
+nogood is as long as the decision stack (147 on mspsp, 226 on openshop) and was minimised by a
+fold that appended with `@` and found a literal's slot by a `List.map` over the whole accumulator
+with a POLYMORPHIC `slot m = Some s`. Now one cell per slot behind a table keyed by
+`(variable name, direction)` with `String.equal`/`Bool.equal`, the cells kept in first-appearance
+order. Same output element for element: a slot's cell is created where the fold appended the slot's
+first literal, and a later literal of the slot replaces the cell exactly when the fold replaced
+it (`keep` does not return the old one). `minimise_with_reference` is the old fold, and
+`test_learn.ml` compares the two on 2 000 random clauses under both policies, payloads included.
+
+**J6, `Learn.introduce`'s origin.** The origin string renders every literal of the learned clause.
+The null writer of a `--no-proof` run drops `~origin` unread (`Writer.fresh`, M9-no-proof-T2), so
+for it the string is no longer built (`Writer.is_null`). With a writer that writes, it is built as
+before, because the audit keeps it per live id and the mutation knob matches it; making it lazy
+there is the writer's change and is a cross-session request to M11-T5. The origin is never written
+to the `.pbp`, so neither arm can change a byte.
+
+**P1, `Pb_analysis.falsified_before`.** Asked four to five times per term per elimination by
+`Reduce` and `Ladder`, it reconstructed the variable's bounds before trail position `at` by two
+linear trail walks (`bounds_before`). It now answers from the bound history D-0088 and D-0124
+already keep, through the existing `Store.var_support`, in O(log moves): `[x >= k]` is false
+before `at` iff `hi x <= k - 1` holds now and the one live entry that established it sits strictly
+below `at`, or no entry established it (the created domain already had it). A bound only tightens
+along the trail (I-D3), so a bound that does not hold now held at no earlier position. The scan
+stays as `falsified_before_scan`, checked against under `BAGUETTE_DEBUG` at every call, and
+`test_core.ml`'s bound-history test compares the two at every position on every literal of a
+hand-built trail (holes, a fix, a duplicated name, undo and re-push).
+
+**P2, the rest of the PB step.**
+- `analyse`'s `step` carried `antecedents`, `antecedent_rows` and `pivots` grown by `@`, with a
+  `List.mem` per cited id: now reversed accumulators turned round once when the loop stops, and
+  the ids taken in an int table. Same lists.
+- `asserting_level` scanned every level from 0 with a full slack sum per level (levels x terms, the
+  levels being the search depth): now one pass over the terms into per-level sums and a suffix
+  maximum. The `Checked` operations are the old ones value for value, so an overflow raises where
+  it raised with the same message (which reaches `--stats` through `Fallback (Overflow m)`): the
+  level-0 sum is accumulated in list order with `Checked.add` exactly as before, every later sum
+  is that one minus coefficients that are >= 1, and each level's `Checked.sub` of the degree is on
+  the same two integers. `asserting_level_reference` is the old scan; `test_learn.ml` compares
+  the two on 3 000 random rows, with levels below 0, at 0 and past the conflict level, and with
+  coefficients near 2^61 so that both the overflow arm and the ordinary one are reached.
+- `fat_memo` and `cited_ids` keyed through `Lit.equal` and `Int.equal` (`Hashtbl.Make`) instead of
+  the polymorphic compare of a plain `Hashtbl` or `List.mem`; `cited_ids` also lost its `@`.
+- `Ladder.lift` accumulated the multipliers per rung in an association list (`assoc` and
+  `remove_assoc` per rung per term): now an int table, folded into a list that is then sorted by
+  the rung value, which is unique, so the table's order reaches nothing.
+- `Reduce.round_to_one`'s postcondition looked each kept term up in the reduced row by a scan
+  (row^2 per elimination): the reduced row is now read once into a table that keeps the first
+  term per literal, as `coeff_of`'s `find_map` did.
+
+Not done, and why: `Ladder.lift` still folds `Learned.combine` once per rung, each one re-sorting
+the whole row. One combination of all the rungs gives the same normal form, but not the same
+sequence of `Checked` additions, so the overflow point and its message could move; it needs its
+own argument, and `learned.ml` is M10-T4's file. Requested in WORKLOG.md.
+
+### 2. Byte identity
+
+- **The differential lane** (D-0141, `origin/wave47-lanes` merged into the branch), `make diff
+  ARGS="--tier all -j 24"` on `cc0639a5`: **232 of 232 runs equal the reference**, 54 of 54 in the
+  Boolean class and 178 of 178 in the integer class: rc, stdout, the `--stats` counters, `.opb`
+  and `.pbp` sha256, over every configuration D-0140 §7 asks T4 for (`keep_all`, `fifo-po`,
+  `lbd-po`, `nopb` for PB analysis off, `audit0`, `bits0`, `noproof`), with PB analysis learning
+  rows on cyclic, mspsp and rcpsp_11 and the deep searches of mspsp and openshop.
+- **The debug pass**, `--tier all --debug -j 16`, where `falsified_before`'s cross-check runs at
+  every call: **223 of 223 runs equal the reference** (54 Boolean, 169 integer;
+  lot-sizing's nine excluded by name as on `main`, `bench/diff/debug-skip.tsv`), rc 0, no
+  invariant fired.
+- **The measurement runs below**: stdout, the `--stats` output minus clocks, and the `.pbp` and
+  `.opb` md5 identical between `main` and the branch on all eight (instance, mode) pairs,
+  including cyclic's 2.0 GB proof (`17257ea6`).
+- **The unit suites**, `dune runtest --root . --force` under `ulimit -v 4000000`: 0 FAIL, the new
+  reference tests included.
+- **The gate**, `make check` on a fresh clone at `6c2646f` on `fataepyc-06`: rc 0, 0 FAIL,
+  179 models passed, peak RSS 89 MB (`make_check_wall 25.01 s peak_rss 89268 kB`, gate 50 said
+  23.30 s and 89 864 kB), and every model's stdout, exit code, `.opb` and `.pbp` byte-identical to
+  gate 50's (`/scratch/arthur/gate50.art/new/`, binary `5e6f653e`): 179 models, 0 differences.
+
+### 3. Measurement
+
+`perf stat -e instructions:u`, `BAGUETTE_NODE_LIMIT=10000`, `--stats`, one process each, the four
+instances D-0140 §1 names for T4 (`.fzn` md5 as there: cyclic `b6939345`, mspsp `ab82542d`,
+rcpsp_11 `3b810f0e`, QR48 `3ed67581`). `main` is `5e6f653e`, the branch `cc0639a5`. Two more
+builds split the gain: `learn` is `main` with only the branch's `learn.ml` (`cea992b0`: L1, S5,
+J6), `noP1` is the branch with `falsified_before` routed back to the scan (`5eaa9611`: everything
+but P1). So L1+S5+J6 = `learn` - `main`, P1 = branch - `noP1`, and P2 = `noP1` - `learn`.
+
+Instructions (G) at 10 000 nodes, and each split as a share of `main`'s count:
+
+| instance | mode | `main` | branch | total | L1+S5+J6 | P1 | P2 |
+|---|---|---|---|---|---|---|---|
+| cyclic-rcpsp_easy_6 | no-proof | 65.074 | 64.429 | **-0.99 %** | -0.73 % | -0.26 % | -0.01 % |
+| | proof | 1 205.443 | 1 204.819 | -0.05 % | -0.06 % | -0.00 % | +0.01 % |
+| mspsp_hard_01 | no-proof | 106.131 | 102.437 | **-3.48 %** | -2.70 % | -0.77 % | -0.01 % |
+| | proof | 187.726 | 184.069 | **-1.95 %** | -1.50 % | -0.45 % | -0.00 % |
+| rcpsp_11 | no-proof | 90.952 | 90.009 | **-1.04 %** | -0.83 % | -0.11 % | -0.10 % |
+| | proof | 296.647 | 295.644 | -0.34 % | -0.24 % | -0.05 % | -0.05 % |
+| QR48 (clause path) | no-proof | 25.871 | 25.206 | **-2.57 %** | -2.56 % | +0.03 % | -0.03 % |
+| | proof | 42.167 | 41.501 | **-1.58 %** | -1.63 % | +0.03 % | +0.08 % |
+
+Every (instance, mode) pair has the same stdout, `--stats` minus clocks and proof md5 in all four
+builds. Reading it:
+
+- **The learning half is most of it**, and it is S5 and L1 more than J6: mspsp's nogoods are as
+  deep as its search (147) and lose 2.7 %, QR48's 2.6 % (no PB analysis at all, `pb-learned=0`).
+  J6 acts only without the proof; its own share was not isolated by a build, and the column is
+  larger without the proof than with it on every instance, which it is also for the dilution
+  described in the last bullet.
+- **P1 is worth 0.8 % on mspsp** (65 PB rows learned in 10 000 nodes) and 0.26 % on cyclic, and
+  nothing on QR48, which never runs PB analysis: what a trail walk per literal query cost, and what
+  D-0140 measured as 0.3 % inclusive on cyclic.
+- **P2 is below what this measures**, as D-0140 §5 said ("nv, under 1 %"): within 0.1 % either way,
+  QR48's and cyclic proof's small positive entries included, which are differences of two builds
+  that are both noise-level away from each other (QR48 never reaches the code P2 changed). It is
+  kept because it removes quadratic and polymorphic work that grows with the depth and the row
+  width, and the lane shows it costs no byte.
+- In proof mode the shares are smaller because the proof writing (M11-T5's) is most of the count:
+  cyclic writes 2.0 GB of proof in 10 000 nodes.
+
+### 4. What is left for T4 part 2
+
+These wait for the branches in flight (`wave45-strategy` holds `search.ml` and `analysis.ml`,
+`wave45-retention` holds `retention.ml` and `learned.ml`), as the ROADMAP says:
+
+- `retention.ml`: R1 (`reduce` copies `live_rev` per learned constraint, under `keep_all` too), R2
+  (`holds` by `List.exists`), R3 (`fifo`/`lbd` sort the database per reduce), R4 (the key is
+  `Learned.to_string`). D-0140 ranks R1 + R2 fourth of all items.
+- `search.ml`: S1 (`count_learned_activity`'s polymorphic `List.mem`, mspsp -7.7 % in D-0140's
+  scratch patch), S2 (`register_learned*` render every literal into the `Retention.cite`
+  message), S3 (`decision_entries` over the whole trail), S4 (`unfixed`/`first_fail`), S5's other
+  half (`dfs`'s `kept`, polymorphic `List.mem` per nogood literal), S6 (`apply_globals`), and J6's
+  `bridges` origin.
+- `analysis.ml`: A1 (the 1UIP loop's lists and name-keyed facts), A3 (`check_attribution`'s
+  `List.exists Var.equal`); A2 stays, it is the backjump's definition.
+- `learned.ml`: L2 (`ladder_form`/`to_linear_row` per learned clause for `--stats` only), and
+  `Learned.combine` once per rung in `Ladder.lift` (§1, with its overflow argument).
+- Two cross-session requests filed in WORKLOG.md: a lazy `~origin` in `writer.ml` (M11-T5), then
+  in `Learned.introduce`'s signature; the combination of all the rungs at once in `learned.ml`.
+
+## D-0141  M11-complexity-T2: the two lanes of the M11 pass -- a differential lane that holds the search, the proof and the counters byte for byte on real instances at a fixed node budget, and a scaling lane that reads the growth of a node's cost in instructions
+
+**Status:** DONE, 2026-11-18 (agent-lanes, branch `wave47-lanes`). No file under `lib/` changes.
+**Context:** ROADMAP M11-complexity-T2; D-0140 (the inventory, whose §7 lists what this lane must
+contain per batch); D-0142 §1 (the debug-check fix this lane's debug pass prompted); D-0138 and
+D-0136 (linear costs the test models never showed); M6-T9 (`BAGUETTE_NODE_LIMIT`).
+
+### 1. Why two lanes, and why neither is in `make check`
+
+The M11 pass replaces every operation whose cost grows with the run, and each replacement must keep
+the search and the proof byte for byte. The test models cannot hold it to that. They never build a
+learned database of more than a few hundred constraints, so a change that alters the search only
+once the database is large passes all of them. This was measured. A throwaway binary that flips the
+side explored first at the 1 500th decision gives **0 differing artefacts on the 179 models**
+(stdout, exit code, `.opb`, `.pbp`), and the differential lane rejects it on **198 of its 232 runs**
+(§5).
+
+`make check` takes 25 s on fataepyc-06. The differential lane makes 232 solver runs of 1 to about
+330 s (466 with its debug pass), and the scaling lane needs `perf` and runs of up to 40 000 nodes.
+Neither fits the two-minute bound for `check`, so both are separate targets that the gate runs
+right after it (§7). Everything they read is in the repository, so they run from a fresh clone.
+
+### 2. The corpus, and where it lives
+
+In the repository: `bench/diff/corpus/`, 25 files (`gzip -9n`), **958 KB** in all, listed in
+`bench/diff/corpus.tsv` with budget, tier, class, configurations and the families each covers. That
+is under the 5 MB the brief allowed. Keeping it in the repository means `make diff` needs nothing
+off the repository, a clone carries the corpus its reference was recorded on, and a corpus change
+is reviewed like a code change. The instances are `.fzn` already flattened with the baguette
+mznlib, so the lane does not depend on MiniZinc.
+
+**Fast tier** (every batch, after every change; 21 instances, one default run 5 to 10.5 s at load 70):
+
+| instance | budget | class | why |
+|---|---|---|---|
+| `H_qr48_bag_def`, `H_qr72_bag_def` | 6 000, 5 000 | bool | D-0138's codes models: clause path |
+| `2012_parity-learning_48_24_6.2` | 4 000 | bool | learned PB rows (217 of 2 208) that propagate |
+| `2024_monitor-placement-…_real_hard` | 5 000 | bool | `array_bool_and` heavy |
+| `2017_opd_small_bibd_08_28_14`, `2015_opd_small_bibd_10_30_09` | 5 000, 4 000 | int | `int_times`; PB analysis learns rows (115, 124) |
+| `2013_rcpsp_12` | 5 000 | int | `cumulative` |
+| `2021_perfect_square_102` | 10 000 | int | reified disjunctive packing, 4 831 learned |
+| `2011_bacp_bacp-22` | 6 000 | int | linear, optimisation |
+| `2012_amaze_2012-06-29` | 6 000 | int | `int_eq_reif`, `int_lin_eq` |
+| `2013_filters_dct_2_2`, `2021_steiner-systems_…_N21` | 12 000, 7 000 | int | `array_int_maximum` |
+| `2015_grid-colouring_13_11` | 5 000 | int | reified linear |
+| `2016_diameterc-mst_s_v20_a50_d4` | 4 000 | int | `int_eq_reif`, `int_ne_reif` |
+| `2017_tc-graph-color_k5_05` | 8 000 | int | 819 `int_lin_ne`: domains with holes |
+| `2019_fox-geese-corn_foxgeesecorn_54` | 3 000 | int | `array_int_element`; several improving solutions |
+| `2020_lot-sizing_pigment15b.psp` | 3 000 | int | `global_cardinality`, `all_different_int`, element |
+| `2023_chessboard_chessboard4` | 2 500 | int | `global_cardinality`, element |
+| `2023_evm-super-compilation_isolated_block_6_0_input` | 2 000 | int | gcc, element, `int_ne` |
+| `2018_soccer-computational_xIGData_24_16_14_2` | 1 500 | int | `all_different_int` (310 learned: setup-heavy) |
+| `2011_roster_chicroster_dataset_large_18` | 3 500 | int | `int_eq_reif`, `int_ne_reif`, `array_bool_and` |
+
+The Challenge instances come from D-0133's archive (wave 43), among the TIMEOUT rows with the most
+learned constraints per second. They were flattened again on the node (that run kept only the
+REFUSED `.fzn`) and probed at 2 000 and 8 000 nodes. Those whose setup alone takes tens of seconds
+(cyclic-rcpsp_hard_11 106 s at 2 000 nodes, l2p 192 s, test-scheduling 43 s, saeling 40 s,
+openshop_j8per0-2 65 s at 2 000 nodes) were left out of the fast tier.
+
+**Slow tier** (D-0140 §7: its six measured instances, `.fzn` md5 equal to D-0140 §1's): QR48 and
+QR72 at 10 000; `2013_rcpsp_11` and `2012_mspsp_hard_01` at 10 000 (integer learned clauses, learned
+PB rows 25 and 65, mspsp at depth 147); `2011_cyclic-rcpsp_easy_6` at **2 000**, because its proof
+costs 180 M instructions a node, with `--bits-above 0`; `2014_openshop_gp10-4` at **300**, because
+its setup alone was 112 s without the proof and about 330 s with it on a8d2924 (depth 101 at 300
+nodes). D-0143, merged the same day, makes that setup 2 000 times cheaper without the proof and 9
+times with it and keeps every byte, so openshop's budget can grow at the next re-record.
+
+**Classes.** Each instance is `bool` or `int` after the variables its learned clauses range over,
+and the lane sums the two apart (`diff_lane: class bool …: x of y runs equal`), because D-0140's E1
+(a wake index by direction) is exact on the first and can reorder runs on the second.
+
+### 3. The configurations
+
+`bench/diff/configs.tsv`, the one file the orchestrator extends when a flag merges (the restart and
+activity flags of `wave45-strategy` have commented slots):
+
+| name | what | why |
+|---|---|---|
+| `default` | the CLI as shipped, proof on, audit on | the path every batch must keep |
+| `audit0` | `BAGUETTE_PROOF_AUDIT=0` | the end sweep's `del` lines exist only under the audit (D-0140 W8) |
+| `noproof` | `--no-proof` | stdout and counters; T3/T4 code without the proof's cost |
+| `lbd`, `fifo` | `BAGUETTE_RETENTION=lbd:500`, `fifo:500` | the policy runs after every learned constraint |
+| `lbd-po`, `fifo-po` | the same with `BAGUETTE_PROPAGATE_LEARNED=off` | where the cap binds (below) |
+| `nopb` | `BAGUETTE_PB_ANALYSIS=off` | the clause path only (`Search.no_pb`) |
+| `bits0` | `--bits-above 0` | the bits arm, atoms, `red` lines |
+
+Fast tier: all nine on every instance (189 runs). Slow tier: the configurations its line names (QR
+all nine; rcpsp_11 and mspsp eight, all but `bits0`; cyclic six, with `bits0`; openshop three), 43
+runs.
+
+**A finding on the retention configurations.** On main every learned constraint is a registered
+instance, so it is CITED, the soft cap pins all of them, and `lbd:500` and `fifo:500` **evict
+nothing** (QR48 at 6 000 nodes: `2990 added, 0 evicted, 2990 cited`). Their search equals the
+default's and only the policy's own code runs. With learned propagation off the cap binds (QR48:
+2 494 of 2 994 evicted mid-search; 20 of the 21 fast instances evict), which is what the `-po` lines
+are for. If `wave45-retention` changes this, its merge re-records.
+
+**Pinned environment.** The runner unsets every `BAGUETTE_*` variable of the caller's shell except
+the memory cap, so a stray `BAGUETTE_RETENTION` in a terminal cannot become the default, and
+`BAGUETTE_PROOF_AUDIT` is the CLI default (on) except in `audit0`. Each run is in its own directory
+with the model linked as `model.fzn` and the proof prefix `p`, because the `.opb` names the model
+path it was given (`* baguette: model.fzn`).
+
+**The debug pass.** `--debug` runs every selected (instance, configuration) again under
+`BAGUETTE_DEBUG=1` at min(budget, 1 500) nodes, against `bench/diff/reference-debug/`, because
+`check_watched`, `check_skip` and the I-P7 advise check catch a lost wake (D-0138) and run only in
+debug. Two runs are excluded by name in `bench/diff/debug-skip.tsv`, which the lane prints on every
+debug pass: lot-sizing under `lbd-po` and `fifo-po`. Debug with proof-only learning costs that
+instance 6.1 GB and 248 s at 1 500 nodes (measured under a 32 GB cap: rc 0, no invariant fired),
+and under the 4 GB cap it dies in the GC. Everywhere, a run with a non-zero exit is NEVER recorded
+(`--update` refuses it and quotes the solver's last line), so the lane cannot bless a failure.
+
+### 4. What is compared, and what a failure says
+
+`bench/diff/observe.py` turns a run into a text file: `rc`, every stdout line, the `--stats` and
+`limit:` counters, and the sha256 of the `.opb` and `.pbp`. A counter is kept as `key/unit value`
+with the leading number-unit pairs only, because the prose after it is edited for reasons that are
+not the search. `limit:` is kept field by field minus `cpu`, `wall`, `fired` and `time-limit`, and
+`time:` lines never appear. A counter present on one side only is a NOTE, not a failure, so a row
+that adds a counter needs no re-record (`pb-whys`, added by a8d2924, showed up exactly so). The
+comparator's self-test (12 cases) runs first on every invocation.
+
+Each counter is SEARCH or WORK. WORK is how much propagation it took to reach the same tree:
+propagator runs, effectful runs, wakes and their masks, seeds, deferred reasons, citation memos,
+the per-family run lines. It is the class a T3 batch is most likely to move on purpose (D-0140 E1,
+E2). Both classes fail. The message names the first differing item in the order exit code, stdout,
+SEARCH, proof hashes, WORK, and counts the rest:
+
+    DIFF 2011_bacp_bacp-22 [default]: .pbp sha256: reference 5e42…, now 462a…   [differing items: hash 1, work 10]
+
+so a message that names a WORK item first has everything else equal, and the batch must say in its
+record why the work moved. The order was set after the red test, whose first version named
+`limit.props` first on a changed search, because the `limit:` line comes first on stderr.
+
+### 5. Validation
+
+All on fataepyc-06 at load 30 to 70 on 192 cores, `ulimit -v 4000000` per run.
+
+- **Determinism.** Both tiers twice on a8d2924's binary: **232/232 both times** (220 s and 225 s
+  at `-j 24`, peak RSS of the whole lane 3.7 GB). The first 168-run lane twice: 168/168 both times.
+  On f9bf6c4's binary `15e23df0` (D-0142 §1's debug-only fix) the same references: **232/232, WORK counters included** (221 s), so they were kept.
+- **Red.** The throwaway binary `2614f4c3` (a8d2924 plus one line in `Search.branch_split`: the
+  side order flips at the 1 500th decision; never committed). The 179 test models: 0 differing
+  artefacts against a8d2924's binary. The lane: **198 of 232 runs differ**, class `bool` 54 of 54,
+  class `int` 144 of 178 (the rest never reach a 1 500th decision). For example
+  `DIFF 2011_bacp_bacp-22 [bits0]: SEARCH counter pol-tokens/tokens: reference 6368492 tokens, now 6368504 tokens   [differing items: search 1, hash 1, work 10]`.
+- **A cost-only change is green.** The teeth binary of §6 (an O(n) copy per learned constraint):
+  168/168 equal. The lane does not confuse cost with search.
+- **The debug pass raised an alarm, and it was the debug checks.** Its first recording on a8d2924
+  hit the I-P7 advise check on 16 instances, all of the `int` class, within 1 500 nodes (rcpsp_11,
+  rcpsp_12, mspsp, cyclic, openshop, roster, amaze, grid-colouring, diameterc-mst, tc-graph-color,
+  soccer, fox-geese-corn, lot-sizing, perfect_square, chessboard, evm; not QR48, QR72, parity,
+  monitor-placement, the two opd, bacp, filters, steiner), for example
+  `Engine.Not_at_fixpoint("I-P7: propagator #335 learned_clause declined the wake for a change of
+  X_INTRODUCED_30_, but a run pruned 1 entr(y/ies)")`, rc 2, proof truncated. With learned
+  propagation off only lot-sizing failed, and that was the memory cost of §3. I reported it as lost
+  propagation. It was not: agent-batch3 traced it (D-0142 §1) to two wrong debug checks. The I-P7
+  check ran a declined clause at the ask although another change of the same walk had already queued
+  it, and an O(1) swap-remove left a watch position stale that only the debug position check reads.
+  It showed on integers only because on a Boolean the change of the other watch's variable decides
+  that watch, while on an integer variable a change can leave the watch open in the same walk as a
+  unit propagation. The fix is debug-only (f9bf6c4), so the plain references were kept. The debug
+  pass was recorded on f9bf6c4: **223 runs, all rc 0, every proof VERIFIED** (497 s at `-j 24`), lot-sizing's nine excluded by name. Two compare runs: **223/223 both times** (406 s and 410 s).
+
+### 6. The scaling lane
+
+`scripts/scaling_lane.sh` runs each line of `bench/scaling/plan.tsv` at four node budgets and reads
+`perf stat -e instructions:u` (with `--stats` and `OCAMLRUNPARAM=v=0x400`):
+
+    ratio = [(I(N3) - I(N2)) / (N3 - N2)] / [(I(N1) - I(N0)) / (N1 - N0)]
+
+the instructions per node of a late segment (large database) over an early one (small database),
+D-0140 §7's measure. The plan: QR72 no-proof and proof over 1k..10k and 10k..40k (D-0140's
+segments); `2013_rcpsp_11` no-proof over 1k..10k and 10k..20k (D-0140's steepest growth, cut at 20k
+to keep the run near two minutes); `2012_parity-learning` both modes over 1k..4k and 8k..16k (PB
+rows). The lane checks that every run stopped at its budget (`nodes = N+1`), else the line is
+BROKEN. It takes 150 s at `-j 16`.
+
+**Why instructions.** They are a property of the binary and its input, not of the load: two whole
+runs of the same binary differ by 0.05 %, and the per-node ratio by at most 0.07 % between two runs
+of the final plan (a 500..1 000 early segment of an earlier plan jittered by 0.25 %, which is why
+parity's early segment is now 1k..4k). Cycles are printed as information. They did not even see the
+teeth below (QR72 no-proof, cycles per propagator run late over early: main 1.77, teeth 1.67), which
+is D-0140's 30 % again. Instructions understate a cost bound by memory (a list walk over the major
+heap retires few instructions per cache miss), which is why the copy D-0138 measured at 13 % of
+QR48's cycles is a few per cent here. That is the price of a gate that does not flake on a shared
+node.
+
+**Why per node and not per propagator run.** The ratio is not 1 even for a perfect implementation,
+because runs per node grow with the database (D-0140 §2: from 44 to 525 learned-clause runs per node
+on QR72). A first version divided by propagator runs to strip that, and read 0.91 on QR72. It cannot
+be the gate, because T3 removes the runs that change nothing, which moves that denominator, while
+the node count of a budget is fixed. Per run is printed as information.
+
+**The threshold** is a RATCHET. `bench/scaling/baseline.tsv` holds each line's ratio, and a line is
+OVER when its ratio exceeds the baseline by more than **0.5 %** (seven times the jitter). A batch
+that lowers a ratio re-records it after its gated merge, in its own commit, and nothing re-records
+it upward. Baselines on a8d2924 (`e8354a74`), instructions per node:
+
+| line | early (M/node) | late (M/node) | ratio | D-0140 §7 |
+|---|---|---|---|---|
+| QR72 no-proof, 1k..10k / 10k..40k | 3.92 | 7.01 | **1.789** | 1.8 |
+| QR72 proof, same | 6.62 | 10.33 | **1.561** | |
+| rcpsp_11 no-proof, 1k..10k / 10k..20k | 9.72 | 23.13 | **2.379** | 3.4 (to 40k) |
+| parity-learning no-proof, 1k..4k / 8k..16k | 4.85 | 15.11 | **3.116** | |
+| parity-learning proof, same | 7.86 | 18.09 | **2.301** | |
+
+A repeat of the same binary gave 1.7890, 1.5605, 2.3778, 3.1160 and 2.3014, all `ok`.
+
+**Report-only.** Main still carries the linear costs T3 and T4 remove, so the lane prints its
+verdict and exits 0. `--enforce` (or `SCALING_ENFORCE=1`) fails an OVER line now, and T6 makes it
+the default. Without a working `perf` it falls back to the GC's allocated words, says so, and
+compares a line only against a baseline of the same metric.
+
+**Teeth.** A throwaway binary adds `ignore (Sys.opaque_identity (List.map Fun.id t.live_rev))` in
+`Retention.add`: one O(n) copy of the database per learned constraint, search unchanged (binary
+`efb7587c` on a8d2924, never committed). Against the baseline:
+
+| line | baseline | teeth | change | verdict at 0.5 % |
+|---|---|---|---|---|
+| QR72 no-proof | 1.7890 | 1.8847 | +5.3 % | OVER |
+| QR72 proof | 1.5611 | 1.6196 | +3.7 % | OVER |
+| rcpsp_11 no-proof | 2.3789 | 2.3883 | +0.4 % | ok |
+| parity no-proof | 3.1157 | 3.1440 | +0.9 % | OVER |
+| parity proof | 2.3011 | 2.3160 | +0.6 % | OVER |
+
+The run itself used the 1 % margin then in force and printed OVER on the two QR72 lines; the last
+column applies the 0.5 % now in force to the same numbers. The copy is caught where a conflict is
+cheap and the database large (QR72 holds 20 000 constraints at 40k) and missed on rcpsp_11, whose
+nodes cost two to three times more instructions. An O(n) cost per conflict with a small constant is
+a few per cent of a node at these sizes. A first, per-run version of the lane on a9217430 gave the
+same picture (QR72 +5.7 % and +3.7 %, parity +1.4 % and +0.9 %).
+
+### 7. Wiring and the gate
+
+    make diff ARGS="-j 16"                     # fast tier, ~3 min: a batch agent, after every change
+    make diff ARGS="--tier all -j 24"          # both tiers, ~4 min: before reporting, and the gate
+    make diff ARGS="--debug --tier all -j 24"  # the debug pass, ~7 min
+    make scaling ARGS="-j 16"                  # report-only until T6, ~2.5 min
+
+are `make` targets that depend on `build` and apply the Makefile's cap (`--full` runs the plain and
+debug passes in one command). The lines to add to the orchestrator's gate script after
+`make check`, with `export TMPDIR=/scratch/arthur/tmp` (proofs of up to a few hundred MB are written
+and deleted per run):
+
+    (ulimit -v 4000000; timeout 3600 make diff ARGS="--tier all -j 24") > $G.diff.log 2>&1; echo "diff rc=$? $(grep '^diff_lane: \(ok\|FAIL\)' $G.diff.log)" >> $ST
+    (ulimit -v 4000000; timeout 3600 make diff ARGS="--debug --tier all -j 24") > $G.ddiff.log 2>&1; echo "debug diff rc=$? $(grep '^diff_lane: \(ok\|FAIL\)' $G.ddiff.log)" >> $ST
+    (ulimit -v 4000000; timeout 1800 make scaling ARGS="-j 16") > $G.scaling.log 2>&1; echo "scaling rc=$?" >> $ST; grep '^scaling: .*late/early' $G.scaling.log >> $ST
+
+**The gate procedure on a fresh clone** (`gate47.sh`'s steps, clone of `ef93f52` = main f9bf6c4 plus
+this branch, at `/scratch/arthur/wave47-lanes-gate`, load about 35): `make check` **rc 0** in 26.3 s,
+peak RSS 89.7 MB, `check: ok`, binary `15e23df0` (the gate-48e binary). Then `make diff ARGS="-j 16"`
+rc 0, 189/189 in 217 s (largest process 206 MB), and `make scaling ARGS="-j 16"` rc 0, every line
+within its threshold in 130 s (largest process 641 MB: QR72 at 40 000 nodes with the proof), with
+ratios 1.7887, 1.5613, 2.3790, 3.1157 and 2.3033 against baselines recorded on a8d2924.
+
+### 8. The reference rule, and the recordings
+
+The reference is re-recorded (`--update`, which runs veripb over every proof and refuses any run
+with a non-zero exit or a proof the checker does not accept) only after a GATED merge that changes
+the default search, the proof bytes or a recorded counter ON PURPOSE, in its own commit whose
+message gives the reason. Never to make a failing lane pass: a difference is a finding about the
+change under test, as a failing model test is. `bench/diff/reference/BINARY` (and its debug twin)
+keep one line per recording.
+
+It was recorded first on `a9217430` (main at the branch's start), then **re-recorded on a8d2924's
+binary `e8354a74`** (the gate-48 binary, md5 equal) at the orchestrator's request, because the
+M8-T3 continuation changes the default search on some Challenge instances. On this corpus a8d2924
+moved only the `bits0` configuration (9 proofs, more variables released to bits). The default,
+retention and no-proof runs kept every byte, and the other 147 changed files carry only the new
+`pb-whys` counter: that is what one merge looks like through the lane. The slow tier and `audit0`
+were recorded on the same binary, the debug pass on f9bf6c4 (`15e23df0`), whose fix is debug-only.
+Every recorded proof was accepted by veripb 3.0.2 (`s VERIFIED NO CONCLUSION`: a node-limit stop
+concludes nothing). `--update`'s veripb runs outside the per-run cap and peaked at 7.8 GB on the
+slow tier, so a re-record belongs on the node.
+
+### 9. How a batch of M11 uses the two lanes
+
+1. Merge `main` (with this lane), build `bin/`, hash the binary.
+2. After each change, `make diff ARGS="-j 16"`. A SEARCH, stdout or hash difference is a bug in the
+   change. A WORK-only difference is allowed only if the batch argues it in its record. An item
+   D-0140 marks *ordering* cannot be held to byte identity; it needs D-0104's standard (node counts,
+   every proof VERIFIED) and its own record, and the re-record that follows its gated merge.
+3. Before reporting, both tiers and the debug pass, and `make scaling ARGS="-j 16"`, quoting the
+   per-node ratios against the baseline. A ratio that went down is the batch's result. After the
+   gated merge, the baseline is re-recorded (`scripts/scaling_lane.sh --update`) in its own commit.
+4. T6 flips the scaling lane to `--enforce` by default.
+
+### 10. What would reverse this
+
+A corpus instance whose run is not deterministic at a node budget (a hash table seeded by address,
+a clock read on the search path) would make the lane flaky; two full runs agreed byte for byte, and
+the first such flake is a bug in the solver, not in the lane. If `instructions:u` stops being
+available where the gate runs, the fallback is blind to costs that do not allocate, and the scaling
+lane belongs where perf works. If a batch makes runs per node fall sharply, the per-node ratios fall
+with them, and that is the point of the pass.
+
 ## D-0146  M7-T28 first steps and M7-T29's gcc half: the closed gcc forms were never decomposed, a repeated gcc variable is copied away in the model, and `regular` is a layered graph of state flags whose every pruning is one `rup` against its rows and its backward-chain lemmas
 
 **Status**: **IN PROGRESS**, opened 2026-11-18 (agent-globals, `wave49-globals`). The contract
