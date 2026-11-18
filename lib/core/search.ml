@@ -2835,8 +2835,9 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
           | Some t ->
               (* M10-T2 (D-0137 section 1): a restart to level [t], 0 unless the trail
                  is reused. The learned constraint is on the page at level 0; the nogood
-                 is NOT written, because it would be filed at the conflict's own level,
-                 which the unwinding wipes ([t] is below it), and nothing would cite it. *)
+                 is NOT written. Its consumer is the frame owning the deepest level it
+                 names, and the restart re-enters a node instead of returning a nogood to
+                 any frame, so nothing would cite it. *)
               stats.restart_targets <- stats.restart_targets + t;
               NRestart t
           | None ->

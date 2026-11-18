@@ -514,8 +514,43 @@ let test_reuse_keeps_levels () =
        (List.fold_left (fun acc r -> acc + r.restarts) 0 runs))
     (kept > 0 && List.for_all (fun r -> contains r.verdict "VERIFIED") runs)
 
+(* D-0137 section 1, determinism: every schedule is a function of the conflicts, so two
+   runs with the strategies on write the same proof byte for byte, as the default does
+   (scripts/check_determinism.sh only runs the default). *)
+let test_determinism_with_flags () =
+  let dir = Filename.temp_file "baguette_m10det" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let cfg =
+    {
+      Search.default_config with
+      Search.search = Search.Alternate;
+      Search.restarts = Restart.Luby 1;
+      Search.phase_saving = true;
+    }
+  in
+  let cfg2 =
+    {
+      cfg with
+      Search.search = Search.Activity_order;
+      Search.restarts = Restart.Lbd { window = 2; k = 1.0 };
+      Search.reuse_trail = true;
+    }
+  in
+  List.iter
+    (fun (tag, c) ->
+      let a = solve_with dir ("d1" ^ tag) (queens 8) c in
+      let b = solve_with dir ("d2" ^ tag) (queens 8) c in
+      check
+        (Printf.sprintf
+           "M10: two runs with %s write the same proof byte for byte (%d restarts)" tag
+           a.restarts)
+        (a.proof = b.proof && a.restarts > 0))
+    [ ("alternate+luby:1+phase", cfg); ("activity+lbd+reuse+phase", cfg2) ]
+
 let () =
   print_endline "";
+  test_determinism_with_flags ();
   test_activity_unit ();
   test_luby ();
   test_schedules ();
