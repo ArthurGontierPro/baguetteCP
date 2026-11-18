@@ -229,6 +229,49 @@ by `bash fzn/make.sh <msc> <tag>`. In priority order:
    a literal permutation of the encoding, but the permutation is not in the `.fzn`. How would it be
    given (sidecar file, annotation)?
 
+### 2026-11-18 — codes-cp measurements: per-node cost, branching heuristic, learned-clause deletion (from the codes-cp side session)
+
+Measured on fataepyc-07, `/scratch/arthur/codes-cp/results/runs/H_*` (script `bench/heur.sh` there,
+`.fzn.gz` and `.opb.gz` kept next to each run). Baguette at `2c97b16` (old build), with proof.
+
+| instance | solver, search | nodes | time |
+|---|---|---|---|
+| QR48 half (minweight, xor chains + 2 cardinalities) | Chuffed, no annotation | 23 668 | 0.6 s |
+| same | baguette, no annotation (SPEC 3.4) | 23 367 | 135 s |
+| same | baguette, `bool_search(u, input_order, indomain_max)` | 23 429 | 92 s |
+| QR72 half | Chuffed, no annotation | 90 500 | 2.8 s |
+| same | baguette, any of the three searches | 70 000 to 76 000 | > 1 800 s (UNKNOWN) |
+| aut.mzn order 7, k = 2 | Chuffed, `indomain_min` on the generator bits | 16 M | > 1 800 s |
+| same | Chuffed, `indomain_max` | 140 | 0.01 s |
+| same | baguette, no annotation or `indomain_min` | ~50 000 | > 1 800 s |
+| same | baguette, `indomain_max` | 158 | 5.2 s, proof 1 MB, VERIFIED |
+
+Two separate findings.
+
+1. **Per-node cost on XOR-heavy Boolean models.** On the codes, baguette visits the SAME number of
+   nodes as Chuffed and is 200 times slower per node (QR48: about 170 nodes/s against 40 000), and it
+   slows down as it goes (QR72: about 40 nodes/s, 37 000 learned clauses kept). `skipped 0`: no
+   backjump ever happens, and `cls-prune 0`. Request: profile it, and split solving from proof
+   writing with `--no-proof` (M9-T2) once it lands.
+2. **The value choice decides the order-7 model, in both solvers.** Request: a **heuristic study**,
+   with the literature as the starting point. Activity-based variable selection (VSIDS, Moskewicz et
+   al., DAC 2001, "Chaff"; EVSIDS, Eén and Sörensson, SAT 2003, "MiniSat"), phase saving
+   (Pipatsrisawat and Darwiche, SAT 2007), learning-rate branching (Liang, Ganesh, Poupart,
+   Czarnecki, SAT 2016, LRB; AAAI 2016, CHB), and on the CP side dom/wdeg (Boussemart, Hemery,
+   Lecoutre, Sais, ECAI 2004), impact-based search (Refalo, CP 2004), activity-based search (Michel
+   and Van Hentenryck, CPAIOR 2012), and Chuffed's alternation of annotation and activity with
+   restarts (Ohrimenko, Stuckey, Codish, Constraints 2009, lazy clause generation). Restarts (Luby,
+   Sinclair, Zuckerman, IPL 1993; Audemard and Simon, CP 2012) tie in with D-0045, still open.
+3. **Learned-clause deletion.** D-0051 kept `keep_all` by measurement, on the suite of the time. The
+   codes models slow down per node as the base grows. The QR48 LBD histogram is
+   `2:2,3:3,4:85,5:945,6:3302,7:4145,8:2440,9:680,10:108`. Request: re-measure retention on these
+   models. Literature: LBD, the number of distinct decision levels among a clause's literals, keep the
+   "glue" clauses with LBD ≤ 2 forever (Audemard and Simon, IJCAI 2009, Glucose); three tiers by
+   LBD (Oh, SAT 2015, "Between SAT and UNSAT"); a simplified reduction (Jamali and Mitchell, SAT 2019);
+   data-driven deletion (Soos, Kulkarni, Meel, SAT 2019, CrystalBall); LBD on PB constraints
+   (Elffers and Nordström, IJCAI 2018, RoundingSat). In a proof, a deleted clause is also a smaller
+   database for the checker.
+
 ## Completed
 
 | Task | Session | Date | Summary |
