@@ -4239,6 +4239,59 @@ let test_bits_atoms_veripb () =
           Encoding.ensure_atom e w "x" 3);
       close_out oc
 
+(* M11-complexity-T7 (D-0143): [Opb.normalise] skips its table when [distinct_names]
+   shows the table would merge nothing. Pinned here against the table itself
+   ([normalise_by_name], the pre-T7 function) on rows that merge and rows that do not:
+   rendered text AND structure must agree, and both paths must actually be taken. The
+   owners include a sanitise collision ("a.b" / "a_b") and the values a negative one, so
+   a run split across two physically different but equal-after-sanitise owners is seen. *)
+let test_m11t7_normalise_paths () =
+  let owners = [| "x"; "y"; "a.b"; "a_b"; "z" |] in
+  let st = Random.State.make [| 1143 |] in
+  let pick a = a.(Random.State.int st (Array.length a)) in
+  let lit () =
+    let x = pick owners and v = Random.State.int st 7 - 3 in
+    let l =
+      match Random.State.int st 3 with
+      | 0 -> Lit.ge x v
+      | 1 -> Lit.eq x v
+      | _ -> Lit.bit x (abs v)
+    in
+    if Random.State.bool st then l else Lit.negate l
+  in
+  (* A linear row's shape: blocks of increasing values per owner. *)
+  let block () =
+    let x = pick owners and a = Random.State.int st 7 - 3 in
+    let lo = Random.State.int st 5 - 2 and n = 1 + Random.State.int st 5 in
+    List.init n (fun i -> (a, Lit.ge x (lo + i)))
+  in
+  let fast = ref 0 and slow = ref 0 and bad = ref 0 in
+  for i = 1 to 4000 do
+    let terms =
+      if i mod 2 = 0 then
+        List.concat (List.init (Random.State.int st 4) (fun _ -> block ()))
+      else
+        List.init (Random.State.int st 10) (fun _ -> (Random.State.int st 7 - 3, lit ()))
+    in
+    let c = Opb.ge terms (Random.State.int st 11 - 5) in
+    if Opb.distinct_names terms then incr fast else incr slow;
+    let a = Opb.normalise c and b = Opb.normalise_by_name c in
+    if not (Opb.constr_to_string a = Opb.constr_to_string b && a = b) then incr bad
+  done;
+  check_eq "m11t7: normalise and normalise_by_name agree on 4000 rows" ~expected:"0"
+    ~got:(string_of_int !bad);
+  check "m11t7: the fast path was taken" (!fast > 500);
+  check "m11t7: the table was taken" (!slow > 500);
+  (* The two cases the run split has to see through. *)
+  check "m11t7: a collision across owners is not distinct"
+    (not (Opb.distinct_names [ (1, Lit.ge "a.b" 1); (1, Lit.ge "a_b" 1) ]));
+  check "m11t7: a value revisited by a later run is not distinct"
+    (not
+       (Opb.distinct_names
+          [ (1, Lit.ge "x" 1); (1, Lit.ge "x" 2); (1, Lit.ge "y" 1); (1, Lit.ge "x" 2) ]));
+  check "m11t7: two kinds at one value are distinct"
+    (Opb.distinct_names [ (1, Lit.ge "x" 1); (1, Lit.eq "x" 1); (1, Lit.bit "x" 1) ])
+
 let () =
   report_checker ();
   test_lits ();
@@ -4290,6 +4343,7 @@ let () =
   test_bits_declare ();
   test_bits_mixed_row ();
   test_bits_atoms_veripb ();
+  test_m11t7_normalise_paths ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
