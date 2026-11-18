@@ -13931,8 +13931,8 @@ proof-only, and agent-lanes records it in D-0141. It is the lot-sizing line abov
 
 ### 2. The batch: how every fix below is measured and held to the bytes
 
-**Status of the batch**: DONE, recorded 2026-11-18 (agent-batch3, `wave48-batch3`). Seven fixes, all
-byte-identical in stdout, the SEARCH counters and the proof (sections 3 to 8 and 3's memory
+**Status of the batch**: DONE, recorded 2026-11-18 (agent-batch3, `wave48-batch3`). Eight fixes, all
+byte-identical in stdout, the SEARCH counters and the proof (sections 3 to 8b and 3's memory
 addendum), four items left out because they reorder runs, with their measured gains (section 9).
 
 **The evidence per fix**, all on `fataepyc-06` against the reference binary `e8354a74` (gate 48's,
@@ -14134,10 +14134,11 @@ clause is rarely asked, the walk's per-variable bookkeeping costs more than it s
 
 **What changed.** Every run built the list of term minima (`List.map`) and its `List.combine` with the
 terms. The minima now go into a scratch array written for every term at the top of every run. It was
-first one array per row (`8b96877`), which raised smelt_2's memory before node 1 from 327 to 378 MB,
-`int_times` posting a guarded row per value of its case variable. It is now one array shared by every
-row (commit `1453de2`), safe for the reason pb.ml's scratch is: it carries nothing between runs and two
-runs never overlap.
+first one array per row (`8b96877`), which cost smelt_2 about 9 MB before node 1 (378 to 369 MB when it
+went, `int_times` posting a guarded row per value of its case variable). It is now one array shared by
+every row (commit `1453de2`), safe for the reason pb.ml's scratch is. It carries nothing between runs,
+and two runs never overlap. (That commit's message puts the whole of smelt_2's 327 to 378 MB on these
+arrays. Most of it was section 8b's first table, measured after.)
 
 **Why the bytes cannot move.** The minima are computed in term order as `List.map` computed them, then
 summed in term order from 0 through `Checked.add` as `Checked.sum` did, so the values and an overflow's
@@ -14220,6 +14221,30 @@ previous fix's, WORK counters included.
 | mspsp_hard_01 | 90.39 | 90.24 | -0.2 % |
 | cyclic-rcpsp_easy_6 | 68.49 | 68.57 | +0.1 % |
 | openshop_gp10-4 | 797.71 | 797.52 | 0 |
+
+### 8b. D-0143's request: `Engine.create` without its `List.mem` (`engine.ml`, commits `8e28002`, `7f4420a`)
+
+**The request** (agent-setup, D-0143, under `## Cross-session requests`). `Engine.create` registered
+each instance on each variable of its scope after a `List.mem` of its id over the variable's watcher
+list, so building the engine was quadratic in a variable's degree. On 2014 smelt_2 (variables in about
+2 000 constraints, 30 228 `int_times`) `List.mem` and polymorphic compare were 16 % of the 3 s left
+before node 1 after D-0143.
+
+**What changed.** Ids are distinct (`t.instances` holds instance `i` at slot `i`), so the id being
+registered can only be in a variable's list if this same instance put it there for an earlier
+occurrence of the variable in its own scope, and then it is the head, nothing having been prepended
+since. The test is now the head. A first version (`8e28002`) kept a table of every (variable, id)
+pair instead, exact without the argument, but the table raised smelt_2's peak memory by about 30 MB
+for the length of the setup (369 to 339 MB when it went), and `7f4420a` replaced it.
+
+**Why the bytes cannot move.** The same lists in the same order, by the argument above. `test_engine.ml`,
+`test_create_watchers`, keeps the old loop as the specification and compares every variable's list on
+200 random engines whose scopes repeat variables.
+
+**Evidence.** smelt_2 at one node, `--no-proof`, main (`85cecf4`, after D-0143) against the batch's tip,
+two runs each: 15.55 G instructions to 12.50 G (-19.6 %), 2.85 s to 2.49 s, stdout identical. The
+batch's tip uses 339 MB at that point against main's 327 MB (the per-row arrays of sections 3 and 4,
+for every model row). The lane on the tip is section 11's.
 
 ### 9. What this batch leaves out, and why: the items that reorder runs, with their measured gains
 
