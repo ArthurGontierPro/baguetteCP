@@ -4344,7 +4344,7 @@ let test_m11t7_header_by_runs () =
     ~expected:"0" ~got:(string_of_int !bad)
 
 (* M11-complexity-T7 (D-0143): [Opb.output_row] writes its integers with
-   [Lit.output_int] and its literals with [Lit.output_sanitized], one sanitise per owner
+   [Lit.add_int] and its literals with [Lit.add_sanitized], one sanitise per owner
    run. Pinned against the pre-T7 renderer spelled out with [Printf] ("%+d" and
    [Lit.to_string], which test_lit_rendering_is_the_reference pins in turn), over the
    names and the values that test uses, the extremes included. *)
@@ -4365,9 +4365,11 @@ let test_m11t7_output_row_is_the_reference () =
   let ok = ref true in
   List.iter
     (fun v ->
-      if capture (fun oc -> Lit.output_int oc v) <> string_of_int v then ok := false)
+      let b = Buffer.create 8 in
+      Lit.add_int b v;
+      if Buffer.contents b <> string_of_int v then ok := false)
     values;
-  check "m11t7: Lit.output_int is string_of_int" !ok;
+  check "m11t7: Lit.add_int is string_of_int" !ok;
   let ok = ref true in
   List.iteri
     (fun i x ->

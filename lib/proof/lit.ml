@@ -99,17 +99,20 @@ let render_sanitized ~neg x mid v =
 
 let render ~neg x mid v = render_sanitized ~neg (sanitize x) mid v
 
-(* [string_of_int n], written to [oc] without the allocation (M11-complexity-T7). *)
+(* [string_of_int n], appended to [b] without the allocation (M11-complexity-T7). A
+   [Buffer], not an [out_channel]: in OCaml 5 every [output_char]/[output_string] on a
+   channel is a C call that takes and releases the channel's mutex, and that was a third
+   of writing openshop's 2.2 GB .opb one piece at a time (D-0143). *)
 let int_scratch = Bytes.create 24
 
-let output_int oc n =
-  if n = min_int then output_string oc (string_of_int n)
+let add_int b n =
+  if n = min_int then Buffer.add_string b (string_of_int n)
   else (
-    if n < 0 then output_char oc '-';
+    if n < 0 then Buffer.add_char b '-';
     let a = abs n in
     let ld = n_digits a in
     put_digits int_scratch 0 a ld;
-    output oc int_scratch 0 ld)
+    Buffer.add_subbytes b int_scratch 0 ld)
 
 let var_name = function
   | Ge (x, v) -> render ~neg:false x "_ge_" v
@@ -122,20 +125,20 @@ let to_string l =
   | Eq (x, v) -> render ~neg:(not l.positive) x "_eq_" v
   | Bit (x, i) -> render ~neg:(not l.positive) x "_bit_" i
 
-(* [to_string l] written to [oc] with its owner already sanitised as [x'], and nothing
+(* [to_string l] appended to [b] with its owner already sanitised as [x'], and nothing
    allocated (M11-complexity-T7): the same five pieces [render] assembles, in order. *)
-let output_sanitized oc x' l =
+let add_sanitized b x' l =
   let mid, v =
     match l.v with
     | Ge (_, v) -> ("_ge_", v)
     | Eq (_, v) -> ("_eq_", v)
     | Bit (_, i) -> ("_bit_", i)
   in
-  if not l.positive then output_char oc '~';
-  output_string oc x';
-  output_string oc mid;
-  if v < 0 then output_char oc 'm';
-  output_int oc (abs v)
+  if not l.positive then Buffer.add_char b '~';
+  Buffer.add_string b x';
+  Buffer.add_string b mid;
+  if v < 0 then Buffer.add_char b 'm';
+  add_int b (abs v)
 
 (* x >= v, as a literal. *)
 let ge x v = pos (Ge (x, v))

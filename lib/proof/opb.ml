@@ -264,21 +264,32 @@ let label_of i = Printf.sprintf "@c%d" i
    the checker enforcing the discipline [Encoding.add_constraint] already imposes, so
    it is not a restriction added here -- but it is why an `=` row cannot reach this
    function at all. *)
-(* M11-complexity-T7 (D-0143): the owner is sanitised once per run of terms naming the
-   same string (physically), not once per literal, and the integers are written by
-   [Lit.output_int] instead of through [string_of_int]. The bytes are [constr_to_string]'s,
-   which test/unit/test_proof.ml checks row by row. *)
+(* M11-complexity-T7 (D-0143): the row is assembled in one [Buffer] and handed to the
+   channel once. Written piece by piece, every piece was a C call taking the channel's
+   mutex (OCaml 5), a third of the .opb's cost on openshop. The owner is sanitised once
+   per run of terms naming the same string (physically), not once per literal, and the
+   integers are written by [Lit.add_int] instead of through [string_of_int]. The bytes
+   are [constr_to_string]'s, which test/unit/test_proof.ml checks row by row. The buffer
+   is reused from row to row; it holds the longest row written so far (about 0.5 MB on
+   openshop), and is shrunk back when one row has made it larger than [row_buf_keep]. *)
+let row_buf = Buffer.create 4096
+let row_buf_keep = 1 lsl 22
+
 let output_row oc i c =
   match c.rel with
   | Ge ->
-      output_string oc (label_of i);
-      output_char oc ' ';
+      let b = row_buf in
+      Buffer.clear b;
+      (* [label_of i], without [Printf]: "@c" and the decimal. *)
+      Buffer.add_string b "@c";
+      Lit.add_int b i;
+      Buffer.add_char b ' ';
       let cache = ref None in
       List.iter
         (fun (a, (l : Lit.t)) ->
-          if a >= 0 then output_char oc '+';
-          Lit.output_int oc a;
-          output_char oc ' ';
+          if a >= 0 then Buffer.add_char b '+';
+          Lit.add_int b a;
+          Buffer.add_char b ' ';
           let x = Lit.owner l.Lit.v in
           let x' =
             match !cache with
@@ -288,12 +299,14 @@ let output_row oc i c =
                 cache := Some (x, x');
                 x'
           in
-          Lit.output_sanitized oc x' l;
-          output_char oc ' ')
+          Lit.add_sanitized b x' l;
+          Buffer.add_char b ' ')
         c.terms;
-      output_string oc ">= ";
-      Lit.output_int oc c.rhs;
-      output_string oc " ;\n"
+      Buffer.add_string b ">= ";
+      Lit.add_int b c.rhs;
+      Buffer.add_string b " ;\n";
+      Buffer.output_buffer oc b;
+      if Buffer.length b > row_buf_keep then Buffer.reset b
   | Eq ->
       invalid_arg
         "Opb.output_row: an `=` row cannot carry a label -- it is two constraints to the \
