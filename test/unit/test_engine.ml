@@ -2127,8 +2127,12 @@ let test_index_positions () =
    engine must also ask strictly less ([c_wakes]), or the test proves nothing.
 
    Clauses over four Booleans and two variables on 0..3 (whose watches stay [watch_any]),
-   so both kinds of slot and the mix are exercised. Under BAGUETTE_DEBUG the declined
-   and the unasked instances are run by [check_declined] as well. *)
+   so both kinds of slot and the mix are exercised, each passed through [Learn.minimise]
+   as every registered learned clause is: one literal per (variable, polarity), which is
+   the two-watched-literal precondition [Clause.Learned_clause] states (two rungs of one
+   variable in one direction can propagate with both watched, see its [make]). Under
+   BAGUETTE_DEBUG the declined and the unasked instances are run by [check_declined] as
+   well. *)
 let test_direction_index () =
   let module Clause = Baguette_core.Clause in
   let module LC = Clause.Learned_clause in
@@ -2170,8 +2174,11 @@ let test_direction_index () =
   for _ = 1 to scenes do
     let clauses =
       List.init
-        (3 + Random.State.int rng 6)
-        (fun _ -> List.init (2 + Random.State.int rng 3) (fun _ -> lit ()))
+        (8 + Random.State.int rng 9)
+        (fun _ ->
+          Baguette_core.Learn.minimise
+            (List.init (2 + Random.State.int rng 2) (fun _ -> lit ())))
+      |> List.filter (fun ls -> List.length ls >= 2)
     in
     let build wrap =
       let store = mk_store bounds in

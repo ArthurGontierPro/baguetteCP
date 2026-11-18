@@ -446,9 +446,32 @@ module Learned_clause = struct
     t.w1 <- w1;
     t.w2 <- (if w2 >= 0 then w2 else w1)
 
+  (* THE PRECONDITION of the two watches (D-0142 section 5): at most one literal per
+     (variable, polarity). Two rungs of one variable in one direction, `x >= 3 \/ x >= 5`,
+     can propagate with both of them non-false -- [Pb.pass]'s ladder-effective rule forces
+     `x >= 3` once every other literal is false -- so watching those two would let a
+     change of an unwatched variable make the clause unit unasked. Opposite polarities on
+     one variable are fine: BOUNDS cannot punch the hole between them, so a run with both
+     open does nothing. [Learn.minimise] merges every same-slot pair of the 1UIP clause, and
+     that clause is the only one [Search] registers here; checked under BAGUETTE_DEBUG. *)
+  let one_per_slot (atoms : Pb.atom array) =
+    let n = Array.length atoms in
+    let ok = ref true in
+    for i = 0 to n - 1 do
+      for j = i + 1 to n - 1 do
+        if
+          Var.to_int atoms.(i).Pb.x = Var.to_int atoms.(j).Pb.x
+          && atoms.(i).Pb.positive = atoms.(j).Pb.positive
+        then ok := false
+      done
+    done;
+    !ok
+
   let make (pb : Pb.t) =
     let atoms = pb.Pb.atoms in
     let n = Array.length atoms in
+    Debug.check "Learned_clause: one literal per (variable, polarity) (D-0142 section 5)"
+      (fun () -> one_per_slot atoms);
     { pb; atoms; w1 = 0; w2 = (if n > 1 then 1 else 0) }
 
   (* I-P7: queue only when a WATCHED literal on [v] has just become false. Written

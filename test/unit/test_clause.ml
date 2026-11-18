@@ -556,8 +556,10 @@ let test_citation_guard () =
    TWO WATCHES as [Pb.propagate] followed by [rewatch] (the watches decide every later
    wake, so they are part of what must not move).
 
-   Random clauses over two Booleans and two small integers (both polarities, several
-   rungs of one variable, repeats), random narrowed boxes and random starting watches,
+   Random clauses over two Booleans and two small integers (both polarities, rungs of one
+   variable, repeats), passed through [Learn.minimise] as every registered learned clause
+   is (one literal per (variable, polarity), [Learned_clause.make]'s precondition), with
+   random narrowed boxes and random starting watches,
    each run twice from the same state: once through [Learned_clause.propagate], once
    through the old composition. *)
 let old_quiet store (t : Clause.t) =
@@ -605,10 +607,11 @@ let test_one_walk () =
   for trial = 1 to trials do
     let n = 2 + Random.State.int rng 7 in
     let lits =
-      List.init n (fun _ ->
-          let nm, lo, hi = List.nth bounds (Random.State.int rng 4) in
-          let k = lo + 1 + Random.State.int rng (hi - lo) in
-          if Random.State.bool rng then Lit.ge nm k else Lit.le nm (k - 1))
+      Baguette_core.Learn.minimise
+        (List.init n (fun _ ->
+             let nm, lo, hi = List.nth bounds (Random.State.int rng 4) in
+             let k = lo + 1 + Random.State.int rng (hi - lo) in
+             if Random.State.bool rng then Lit.ge nm k else Lit.le nm (k - 1)))
     in
     let narrowed =
       List.map
