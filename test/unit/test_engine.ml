@@ -1971,6 +1971,80 @@ let test_seed_is_exact () =
        ci.Engine.c_effectful cf.Engine.c_effectful ci.Engine.c_runs cf.Engine.c_runs)
     (ci.Engine.c_effectful = cf.Engine.c_effectful && ci.Engine.c_runs < cf.Engine.c_runs)
 
+(* ---------------------------------------------------------------------------
+   M11-complexity-T3 (D-0142 section 1): a declined ask on a PENDING instance is not a
+   lost wake
+
+   The BAGUETTE_DEBUG check of I-P7 used to run an instance at the very ask its advisor
+   declined. I-P7's premise is that every change since the instance's last run was
+   declined; a learned clause that an earlier change of the same walk had already woken
+   does not meet it, and its run there is simply the run it is queued for. On integer
+   variables that happens at every other unit propagation: the change that makes the
+   clause unit is on one watch's variable, and a change of the OTHER watch's variable
+   that leaves that watch open comes in the same walk.
+
+   The scene is the smallest one: the learned clause `x >= 3 \/ y <= 1` over 0..4,
+   watching both literals, and one level that moves y to 2..4 (the clause goes unit) and
+   x to 1..4 (its watch `x >= 3` stays open). The seed asks the clause on both entries:
+   yes on y, no on x. Before D-0142 the check, run at the no, saw the unit propagation and
+   raised [Not_at_fixpoint] under BAGUETTE_DEBUG; now it waits for the end of the seed and
+   skips the clause, which is dirty, and the clause's own run makes the propagation.
+
+   The CONTROL is the check's teeth, kept: the same clause behind an advisor that declines
+   EVERYTHING is a real lost wake, it is not pending, and under BAGUETTE_DEBUG the
+   deferred check still refuses it (without BAGUETTE_DEBUG the pruning is simply lost,
+   which is what makes the check worth having). This test means something only under
+   BAGUETTE_DEBUG=1, and that is how the batch lane runs it. *)
+let test_declined_while_pending () =
+  let module Clause = Baguette_core.Clause in
+  let module LC = Clause.Learned_clause in
+  let bounds = [ ("x", 0, 4); ("y", 0, 4) ] in
+  let decl name =
+    List.find_map (fun (n, lo, hi) -> if n = name then Some (lo, hi) else None) bounds
+  in
+  let scene advise_of =
+    let store = mk_store bounds in
+    let p = Option.get (Clause.of_lits store ~decl [ Lit.ge "x" 3; Lit.le "y" 1 ]) in
+    let lc = LC.make p in
+    let inst =
+      Propagator.pack ~id:0 ~advise:(advise_of lc)
+        (module LC : Propagator.S with type t = LC.t)
+        lc
+    in
+    let engine = Engine.create [ inst ] in
+    (match Engine.propagate engine store with
+    | Engine.Fixpoint -> ()
+    | Engine.Conflict _ -> failwith "pending: unexpected conflict at the root");
+    Store.new_level store;
+    ignore (Store.set_lo store (var 1) 2 no_facts_placeholder);
+    ignore (Store.set_lo store (var 0) 1 no_facts_placeholder);
+    let r =
+      match Engine.propagate engine store with
+      | Engine.Fixpoint -> Ok ()
+      | Engine.Conflict _ -> Error "conflict"
+      | exception Engine.Not_at_fixpoint m -> Error m
+    in
+    (r, Domain.lo (Store.get store (var 0)))
+  in
+  let r, x_lo = scene LC.advise in
+  check
+    (Printf.sprintf
+       "pending: the ask declined on x while the clause is already woken is not a lost \
+        wake%s"
+       (match r with Ok () -> "" | Error m -> " -- got: " ^ m))
+    (r = Ok ());
+  check "pending: and the clause's own run makes the unit propagation x >= 3" (x_lo = 3);
+  let deaf _ = { Propagator.ask = (fun _ _ -> false); watched = None } in
+  let r, x_lo = scene deaf in
+  if Baguette_core.Debug.enabled then
+    check "pending CONTROL: an advisor that declines everything is still refused"
+      (match r with
+      | Error m -> String.length m > 4 && String.sub m 0 4 = "I-P7"
+      | Ok () -> false)
+  else
+    check "pending CONTROL: without BAGUETTE_DEBUG that lost wake is simply lost"
+      (r = Ok () && x_lo = 1)
+
 let () =
   test_fixpoint_tightens_and_settles ();
   test_conflict_carries_explanation ();
@@ -2009,6 +2083,7 @@ let () =
   test_marker_proxy_is_not_the_node_count ();
   test_hole_split_sweep ();
   test_hole_split_with_settled_ancestor ();
+  test_declined_while_pending ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

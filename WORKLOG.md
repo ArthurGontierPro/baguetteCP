@@ -467,6 +467,19 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M8-bits-encoding-T3 (steps 1, 2 partial; T3 stays WIP) | agent-t3 + agent-t3b (`wave44-t3`) | 2026-11-18 | **D-0134 §4-§7.** maxmin over a bits scope by selector rows + one `Resolve` `pol` per pruning, selectors listed in `sol`/`soli`; `int_ne`/`int_lin_ne` released (the A/B pair resolved); `Justify.is_bits_derivation` (a T2 latent). 173/173 verified at W none/0/8, 165 byte-identical at none; gate rc 0 on `20c324f`, 85 MB. The 177 at W = 0: 73 -> 108 complete `.opb`. Open: reified holds, steps 3-5 |
 | M11-complexity-T1 | agent-inventory (`wave47-inventory`) | 2026-11-18 | **D-0140.** The inventory, read-only: 48 items, each with what it grows with, how often it runs, its measured marginal share, the fix, the batch (T3/T4/T5), the byte risk and the reference. Six instances (QR48, QR72, rcpsp_11, mspsp_hard_01, cyclic-rcpsp_easy_6, openshop_gp10-4) at 1, 1k, 10k, 40k nodes, both modes; scratch patches S1 (`count_learned_activity`), S2 (retention), S3a-c measured byte-identical; outputs in `bench/perf/` |
 ## Handoff notes
+## Lost propagation found by the M11-T2 debug pass, dated, 2026-11-18 (orchestrator)
+
+agent-lanes ran the differential lane under `BAGUETTE_DEBUG=1` at 1 500 nodes: the I-P7 advise check
+fires on 16 of 27 instances, all with integer variables (`Engine.Not_at_fixpoint("I-P7: propagator #335
+learned_clause declined the wake for a change of X_INTRODUCED_30_, but a run pruned 1 entr(y/ies)")` on
+2013_rcpsp_12, rc 2). Without debug every proof verifies: it is lost propagation, not unsoundness. Dated
+by the orchestrator on `/scratch/arthur/orch-ip7/`: every gate binary back to `1a0cfa7` (2026-11-02)
+fails the same way, so M6-T22 (D-0138) did not introduce it and did not change the search; it is older
+(D-0104's learned-clause `ask` is the first suspect; ROADMAP M6-T8 records the debug gate as unclean since
+October). A second, separate case fires with `BAGUETTE_PROPAGATE_LEARNED=off`. Assigned to M11-T3
+(agent-batch3) as its first item, merged alone when gated; its fix changes the search on integer instances
+by design, after which the lane's reference is re-recorded on the new main.
+
 ## M11-complexity-T1 handoff, 2026-11-18 (agent-inventory, `wave47-inventory`): the inventory, D-0140
 
 Read-only, no file under `lib/`, `bin/`, `test/` changed. D-0140 has the 48-item table, the ranking,
