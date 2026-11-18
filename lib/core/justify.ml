@@ -891,9 +891,11 @@ let emit_combine ~emit ~claim ctx summands divisor =
     | f :: rest -> List.fold_left Pol.add f rest
   in
   let expr = if divisor <= 1 then expr else Pol.div expr divisor in
+  (* The count now, so that the origin, which the audit keeps for as long as the line
+     is live, holds two integers and not the summands. *)
+  let n_summands = List.length summands in
   pol_stating ctx ~claim
-    ~origin:(fun () ->
-      Printf.sprintf "combine(%d summand(s), / %d)" (List.length summands) divisor)
+    ~origin:(fun () -> Printf.sprintf "combine(%d summand(s), / %d)" n_summands divisor)
     expr
 
 (* The fragment one [Linear_term] contributes to a bits-arm `pol`, shared by the

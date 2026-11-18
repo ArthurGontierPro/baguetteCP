@@ -730,11 +730,13 @@ let emit_to_page (ctx : Justify.ctx) t store =
                 at := level);
               (* Rendered only if read (D-0145, D-0140 J6): by the writer's audit naming
                  a leaked id, or by the mutation knob. It was a [Printf] and a rendering
-                 of the claim per trace line. *)
+                 of the claim per trace line. It holds the claim and a count, not the
+                 facts: the audit keeps it while the line is live. *)
+              let n_facts = List.length facts in
               let origin () =
                 Printf.sprintf "trace: %s from %d fact(s)%s"
                   (String.concat " \\/ " (List.map Lit.to_string claim))
-                  (List.length facts)
+                  n_facts
                   (match settled_over with
                   | [] -> ""
                   | vs ->
@@ -824,9 +826,9 @@ let conflict_line_to_page (ctx : Justify.ctx) t (c : Store.conflict) =
            twin of [derive_ahead] for an entry. *)
         if c.Store.c_ahead then ignore (Justify.emit ctx c.Store.c_why : Writer.cid);
         let cid =
+          let n_facts = List.length facts in
           Justify.emit_rup_clause_lazy ctx
-            ~origin:(fun () ->
-              Printf.sprintf "trace: conflict from %d fact(s)" (List.length facts))
+            ~origin:(fun () -> Printf.sprintf "trace: conflict from %d fact(s)" n_facts)
             (List.map Lit.negate facts)
         in
         record t ~level:(Writer.current_level ctx.Justify.writer) cid;
