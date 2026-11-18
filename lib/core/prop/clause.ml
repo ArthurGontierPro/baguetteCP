@@ -296,39 +296,9 @@ let width = Pb.width
 (* ------------------------------------------------------------------- propagation
 
    [Pb.propagate], unwrapped. The header says why there is no second copy, and
-   lib/core/prop/pb.ml's own header derives the four arms this used to spell out.
-
-   M6-T22 / D-0138: with ONE exception, a run [Pb.propagate] would make in vain. When
-   the row has degree 1 and two non-false literals sit on DIFFERENT variables, the slack
-   S - 1 (S the non-false coefficients' sum) is at least 1, so there is no conflict; and
-   a literal is forced only when its LADDER-EFFECTIVE coefficient (pb.ml, [effective])
-   exceeds S - 1, i.e. reaches S, which needs ALL of the non-false coefficient sum to
-   sit in that literal's own (variable, polarity) -- and a non-false literal on another
-   variable, with its coefficient of at least 1, rules that out. So [Pb.propagate]
-   would return [Fixpoint] having changed nothing, and [quiet] says so with one walk
-   that stops at the second free variable, instead of the survey, the slack, the
-   forceable filter and, from 12 literals on, the hash table of [Pb.effective_of]. The
-   runs it skips are runs that change nothing, so every run that does change something
-   happens in the same order on the same domains. On QR48 these are most of the 270 `bool_clause` runs
-   per node (36 change something) and nearly all of the learned clauses'. *)
-let quiet store (p : Pb.t) =
-  Pb.degree p = 1
-  &&
-  let free (tm : Pb.term) = Pb.status store tm.Pb.a <> Pb.Unsat_lit in
-  let rec other xi = function
-    | [] -> false
-    | (tm : Pb.term) :: rest ->
-        (Var.to_int tm.Pb.a.Pb.x <> xi && free tm) || other xi rest
-  in
-  let rec first = function
-    | [] -> false
-    | (tm : Pb.term) :: rest ->
-        if free tm then other (Var.to_int tm.Pb.a.Pb.x) rest else first rest
-  in
-  first p.Pb.terms
-
-let propagate t store =
-  if quiet store t then Propagator.Fixpoint else Pb.propagate t store
+   lib/core/prop/pb.ml's own header derives the four arms this used to spell out. Its
+   degree-1 shortcut (M6-T22, [Pb.quiet]) is therefore this module's too. *)
+let propagate = Pb.propagate
 (* ---------------------------------------------------------------------------
    The Boolean face, and the same propagator under the name of the builtin that
    produced the clause.
@@ -413,15 +383,7 @@ module Learned_clause = struct
      state in lib/core/prop/ and the one kind I-P7 admits. [w1] and [w2] index [atoms];
      after a run both are non-false unless the clause was unit or failed, and a widening
      domain cannot falsify a literal, so backtracking never has to restore them. *)
-  type nonrec t = {
-    pb : Pb.t;
-    atoms : Pb.atom array;
-    mutable w1 : int;
-    mutable w2 : int;
-    plain : bool;
-        (** M6-T22: degree 1, the condition of [quiet]'s argument (see [Clause.quiet]),
-            computed once. *)
-  }
+  type nonrec t = { pb : Pb.t; atoms : Pb.atom array; mutable w1 : int; mutable w2 : int }
 
   let name = "learned_clause"
   let consistency = consistency
@@ -487,8 +449,7 @@ module Learned_clause = struct
   let make (pb : Pb.t) =
     let atoms = Array.of_list (List.map (fun (tm : Pb.term) -> tm.Pb.a) pb.Pb.terms) in
     let n = Array.length atoms in
-    let plain = Pb.degree pb = 1 in
-    { pb; atoms; w1 = 0; w2 = (if n > 1 then 1 else 0); plain }
+    { pb; atoms; w1 = 0; w2 = (if n > 1 then 1 else 0) }
 
   (* I-P7: queue only when a WATCHED literal on [v] has just become false. Written
      without a local closure (M6-T22): this is asked once per wake, and the closure the
@@ -506,34 +467,13 @@ module Learned_clause = struct
   (* The advisor [Propagator.pack] takes: both halves of one object. *)
   let advise t = { Propagator.ask = ask t; watched = Some (watched t) }
 
-  (* M6-T22 / D-0138: [Clause.quiet]'s test over the atom array: is [Pb.propagate]
-     certain to do nothing, because two non-false literals sit on DIFFERENT variables of a
-     degree-1 row? [Clause.quiet] has the argument.
-
-     This is the run a watch move IS. On QR48 (D-0138) a learned clause runs 369 times
-     per node and changes something 0.01 times per node: nearly every run is a watched
-     literal falsified with another literal still free, which a two-watched-literal
-     solver answers by moving the watch. [rewatch] still runs after it, on the same
-     store, so the watches -- and every later wake -- are what they were. *)
-  let quiet store t =
-    t.plain
-    &&
-    let n = Array.length t.atoms in
-    let rec first i =
-      if i >= n then -1 else if false_at store t i then first (i + 1) else i
-    in
-    let i = first 0 in
-    i >= 0
-    &&
-    let xi = Var.to_int t.atoms.(i).Pb.x in
-    let rec other j =
-      j < n
-      && ((Var.to_int t.atoms.(j).Pb.x <> xi && not (false_at store t j)) || other (j + 1))
-    in
-    other (i + 1)
-
+  (* M6-T22 / D-0138: nearly every run of a learned clause is a watched literal falsified
+     with another literal still free -- the run a two-watched-literal solver answers by
+     moving the watch. [Pb.propagate] answers it with [Pb.quiet], one walk, and
+     [rewatch] then moves the watch on the same store, so the watches -- and every later
+     wake -- are what they were. *)
   let propagate t store =
-    let r = if quiet store t then Propagator.Fixpoint else Pb.propagate t.pb store in
+    let r = propagate t.pb store in
     rewatch store t;
     r
 end
