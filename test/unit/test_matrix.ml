@@ -904,7 +904,7 @@ let run_instance inst =
   Encoding.start_proof encoding writer;
   (* M1-T31: no ambient row to install, so no thunk to fail. *)
   let ctx = Justify.create ~writer ~encoding in
-  let trace = Trace.create () in
+  let trace = Trace.create ~history:true () in
   let entry_level = Store.level store in
   let outcome =
     try Search.solve ~engine ~store ~ctx ~check:(independent_check m) ~trace ()
@@ -1999,7 +1999,7 @@ let known_bug_ne_trace_facts () =
   let writer = Writer.create ~audit:true oc in
   Encoding.start_proof encoding writer;
   let ctx = Justify.create ~writer ~encoding in
-  let trace = Trace.create () in
+  let trace = Trace.create ~history:true () in
   let outcome = Search.solve ~engine ~store ~ctx ~check:(independent_check m) ~trace () in
   close_out oc;
   let proof = read_file pbp in
@@ -2414,7 +2414,7 @@ let bridge_derivation () =
   let writer = Writer.create ~audit:true oc in
   Encoding.start_proof encoding writer;
   let ctx = Justify.create ~writer ~encoding in
-  let trace = Trace.create () in
+  let trace = Trace.create ~history:true () in
   let stats = Search.stats_create () in
   let outcome =
     Search.solve ~engine ~store ~ctx ~check:(fun _ -> true) ~trace ~stats ()
@@ -2521,7 +2521,7 @@ let bridge_across_levels () =
   let writer = Writer.create ~audit:true oc in
   Encoding.start_proof encoding writer;
   let ctx = Justify.create ~writer ~encoding in
-  let trace = Trace.create () in
+  let trace = Trace.create ~history:true () in
   let stats = Search.stats_create () in
   let outcome =
     Search.solve ~engine ~store ~ctx ~check:(fun _ -> true) ~trace ~stats ()

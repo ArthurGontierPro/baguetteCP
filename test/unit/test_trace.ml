@@ -444,7 +444,7 @@ let run_model m =
   Encoding.start_proof encoding writer;
   (* M1-T31: no ambient row to install, so no thunk to fail. *)
   let ctx = Justify.create ~writer ~encoding in
-  let trace = Trace.create () in
+  let trace = Trace.create ~history:true () in
   let entry_level = Store.level store in
   let outcome = Search.solve ~engine ~store ~ctx ~check:(independent_check m) ~trace () in
   close_out oc;
@@ -724,7 +724,7 @@ let run_fzn c =
   let writer = Writer.create ~audit:true oc in
   Encoding.start_proof encoding writer;
   let ctx = Justify.create ~writer ~encoding in
-  let trace = Trace.create () in
+  let trace = Trace.create ~history:true () in
   (* I-S1 the same way bin/main.ml does it: the model re-checks the assignment, the
      propagators are not trusted. [Compile] builds the store in [Model.vars] order, which
      is the promise that makes this index-for-index. *)
@@ -1829,7 +1829,7 @@ let is4_scene ~retire =
   let writer = Writer.create ~audit:true oc in
   Encoding.start_proof encoding writer;
   let ctx = Justify.create ~writer ~encoding in
-  let trace = Trace.create () in
+  let trace = Trace.create ~history:true () in
   let x = Option.get (var_by_name store "x") in
   let removed v = Store.remove store x v factless = Store.Changed in
   let ok_holes = removed 3 && removed 2 in
@@ -2027,7 +2027,7 @@ let test_m6t15_position_of () =
   let writer = Writer.create ~audit:false oc in
   Encoding.start_proof encoding writer;
   let ctx = Justify.create ~writer ~encoding in
-  let trace = Trace.create () in
+  let trace = Trace.create ~history:true () in
   let x = Option.get (var_by_name store "x") and y = Option.get (var_by_name store "y") in
   let ok r = r = Store.Changed in
   let top () = Store.trail_entry store (Store.trail_length store - 1) in
@@ -2156,7 +2156,7 @@ let test_m11t5_resync_and_levels () =
   let writer = Writer.create ~audit:false oc in
   Encoding.start_proof encoding writer;
   let ctx = Justify.create ~writer ~encoding in
-  let trace = Trace.create () in
+  let trace = Trace.create ~history:true () in
   let vars =
     [| Option.get (var_by_name store "x"); Option.get (var_by_name store "y") |]
   in
@@ -2211,7 +2211,16 @@ let test_m11t5_resync_and_levels () =
        !emits)
     (!bad_resync = 0 && !emits > 20);
   check "M11-T5: every line filed at its entry's level, none for a level start"
-    (!bad_level = 0)
+    (!bad_level = 0);
+  (* J4: the history is opt-in, and a trace without it refuses to answer rather than
+     answering [[]]. *)
+  check "M11-T5: the history trace listed the lines it wrote"
+    (Trace.emitted_ids trace <> []);
+  let bare = Trace.create () in
+  let refuses f = match f () with _ -> false | exception Invalid_argument _ -> true in
+  check "M11-T5: a trace made without ~history refuses emitted_ids and citations"
+    (refuses (fun () -> Trace.emitted_ids bare)
+    && refuses (fun () -> Trace.citations bare))
 
 let () =
   print_endline "";

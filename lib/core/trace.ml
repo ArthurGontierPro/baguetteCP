@@ -126,18 +126,24 @@ type t = {
      are trace lines and check each one on its own against the .opb -- which is the only
      way to demonstrate the property this whole module exists for, that a trace line is
      a decision-free consequence of the model and needs nothing else in the database.
-     See test/unit/test_trace.ml. *)
+     See test/unit/test_trace.ml. Kept only by a trace made with [~history:true]. *)
   mutable ids_rev : Writer.cid list;
   (* Which lines this module wrote for each trail position, and for a hole line, which
      hole it claims. Parallel to [done_] and keyed the same way. It exists so that when a
      settle line cites a hole, this module can name the *id* of the hole's own line and
      not merely the facts on it -- which is what makes I-S4 checkable. See [citations]. *)
   mutable line_ids : written list array;
-  (* The I-S4 record, newest first. See [citation] and [i_s4_violations]. *)
+  (* The I-S4 record, newest first, under [~history:true]. See [citation] and
+     [i_s4_violations]. *)
   mutable cites_rev : citation list;
   (* M11-complexity-T5 (D-0145, D-0140 J3): this module's low-water reader on the store
      it writes the trace of, registered by the first [resync]. *)
   mutable low_water : (Store.t * int) option;
+  (* M11-complexity-T5 (D-0145, D-0140 J4): whether [ids_rev] and [cites_rev] are kept.
+     They are read by tests only, and kept they grow with every line of the run (a cons
+     per trace line, a record per citation), which the major GC walks for as long as the
+     run lasts. [create ~history:true] keeps them; [Search]'s own trace does not. *)
+  history : bool;
 }
 
 (* One "line A rests on line B" edge, with the two facts I-S4 is about, **measured at the
@@ -177,7 +183,7 @@ and citation = {
   hole : int; (* the hole value whose line is cited -- for the failure message *)
 }
 
-let create () =
+let create ?(history = false) () =
   {
     done_ = Array.make 64 Store.dummy_entry;
     n_done = 0;
@@ -186,13 +192,29 @@ let create () =
     line_ids = Array.make 64 [];
     cites_rev = [];
     low_water = None;
+    history;
   }
 
 let permanent_ids t = List.rev t.permanent
-let emitted_ids t = List.rev t.ids_rev
+
+(* A trace made without [~history:true] has no record to give, and says so rather than
+   answering [[]], which a test would read as "no line was written". *)
+let need_history what t =
+  if not t.history then
+    invalid_arg
+      (Printf.sprintf
+         "Trace.%s: this trace keeps no history; make it with Trace.create ~history:true \
+          (M11-complexity-T5)"
+         what)
+
+let emitted_ids t =
+  need_history "emitted_ids" t;
+  List.rev t.ids_rev
 
 (* The I-S4 edges, oldest first. *)
-let citations t = List.rev t.cites_rev
+let citations t =
+  need_history "citations" t;
+  List.rev t.cites_rev
 
 (* I-S4 on one edge: [None] if it holds, [Some message] naming which half broke.
 
@@ -225,7 +247,7 @@ let i_s4_verdict c =
 let i_s4_violations t = List.filter_map i_s4_verdict (citations t)
 
 let record t ~level cid =
-  t.ids_rev <- cid :: t.ids_rev;
+  if t.history then t.ids_rev <- cid :: t.ids_rev;
   if level = 0 then t.permanent <- cid :: t.permanent
 
 let remember t i (e : Store.entry) =
@@ -566,7 +588,7 @@ let record_citation t (w : Writer.t) ~citing ~citing_level ~cited ~cited_level ~
     let live_known = Writer.auditing w in
     let cited_live = live_known && Writer.is_live w cited in
     let c = { citing; cited; citing_level; cited_level; cited_live; live_known; hole } in
-    t.cites_rev <- c :: t.cites_rev;
+    if t.history then t.cites_rev <- c :: t.cites_rev;
     Debug.check
       (match i_s4_verdict c with Some m -> m | None -> "I-S4")
       (fun () -> i_s4_verdict c = None)
