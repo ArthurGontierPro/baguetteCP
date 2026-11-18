@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M8-bits-encoding-T3 | design record D-0134 first (`docs/DECISIONS.md` appended), then `lib/proof/encoding.ml`, `lib/proof/lit.ml`, `lib/core/prop/maxmin.ml`, `lib/core/prop/ne.ml`, `lib/core/prop/arith.ml` if reached, `lib/core/pb_analysis.ml`, `lib/core/ladder.ml`, `lib/core/learn.ml`, `lib/core/trace.ml`, `lib/core/justify.ml`, `lib/flatzinc/compile.ml` (eligibility releases), `bin/main.ml` (`--stats`), their tests under `test/unit/`, new `test/models/bits_*.fzn` + `test/expected/`, `docs/PROOF-FORMAT.md` §3/§4 (bits paragraphs), `docs/ROADMAP.md` T3 row, `docs/INVARIANTS.md` if an invariant is added | agent-t3 (`wave44-t3`) | 2026-11-16 |
 | M9-no-proof-T2 | `bin/main.ml` (`--no-proof`), `lib/proof/writer.ml` (null channel, `~audit:false`), `lib/proof/encoding.ml` (`Discard_rows` path only), `lib/flatzinc/compile.ml` (the mode threaded through), `scripts/run_model_tests.sh` or `test/unit/test_endtoend.ml` (the stdout-identity lane), `docs/DECISIONS.md` (D-0135 appended), `docs/ROADMAP.md` M9-T2 row, `docs/SPEC.md` §1 only if the amendment needs a word | agent-noproof2 (`wave44-noproof`) | 2026-11-16 |
 
 ## Cross-session requests
@@ -323,7 +322,21 @@ work. The owning session picks it up.
 | M8-bits-encoding-T5 | agent-rup (`wave42-rup`) | 2026-11-13 | D-0131. The root conflict closes as its trace + `rup >= 1` (every root `pol` gone, 36 of 156 proofs change, stdout and `.opb` byte-identical); `emit_concluding` writes `rup <literal>`; `--stats` counts `rup`/`pol` lines and `pol` tokens. D-0028's model at 10⁶: 29.8 MB → 138 B; the quadratic shape is a Θ(w) chain of root prunings, where the baseline's checker dies at 16 GiB and the `rup` form finishes (Θ(w²) in RUP time); hints rejected by measurement. The seven OPT proofs are byte-identical to the baseline's: no root `pol` was ever in them. Gate green, 20 min, 85 MB |
 | M8-bits-encoding-T4 (baseline) | agent-remeasure2 (`wave43-read`) | 2026-11-16 | **D-0133** and the D-0131 addendum. The sixteen editions with `f158c9f` (binary `a6327dc6`) against D-0129's archive: 0 REJECTED on 224 verified proofs, the same sixteen ranks, 1 594 of 1 600 statuses unchanged, the same 184 complete answers, incumbents 799 -> 800, objective better on 14 / worse on 20 of 799 (the noise floor T4 must stand above); 223 of the 224 verified proofs byte-identical to D-0129's, D-0131's shape on one root-UNSAT only. The seven OPT proofs verify under 60 h (1 h 20 to 16 h 22, up to 20.5 GiB; `8ShipsUnconst` over the harness's 16 GiB), and D-0131 §5's `5Ships`/`7ShipsMixedUnconst` line counts are corrected. Archives on the laptop; 37 GB of proofs deleted on the node. |
 
+| M8-bits-encoding-T3 (steps 1, 2 partial; T3 stays WIP) | agent-t3 + agent-t3b (`wave44-t3`) | 2026-11-18 | **D-0134 §4-§7.** maxmin over a bits scope by selector rows + one `Resolve` `pol` per pruning, selectors listed in `sol`/`soli`; `int_ne`/`int_lin_ne` released (the A/B pair resolved); `Justify.is_bits_derivation` (a T2 latent). 173/173 verified at W none/0/8, 165 byte-identical at none; gate rc 0 on `20c324f`, 85 MB. The 177 at W = 0: 73 -> 108 complete `.opb`. Open: reified holds, steps 3-5 |
 ## Handoff notes
+## M8-bits-encoding-T3 handoff, 2026-11-18 (agent-t3b, `wave44-t3`): maxmin and int_ne over bits, D-0134 §4-§7
+
+T3 is **WIP**: steps 1 and 2 (`int_ne`/`int_lin_ne` only) landed, steps 3 to 5 and the reified
+holds did not (D-0134 §7 says where each stands). maxmin over a bits scope posts one big-M
+selector row per operand over `$mxN` and a clause (`Encoding.add_choice`), every pruning is one
+`Explanation.Resolve` `pol` pinned by `ia`, and `sol`/`soli` list the selectors. `Ne` over a bits
+scope derives its nogood as the `Resolve` of its A/B pair (probe g1). The bits arm now takes only
+a derivation it can render (`Justify.is_bits_derivation`), which fixed a T2 latent the suite
+found once `int_ne` was released (§5.3). Suite: 173/173 verified at `W = none`, `0`, `8`; the
+165 pre-existing byte-identical at `W = none` to `gate44.art/new`. Gate rc 0 on `20c324f`, peak
+85 MB. The 177 at `W = 0`: 73 -> 108 complete `.opb` (tower 15/15, road-cons 10/10, largescheduling 6/6, none lost); `int_ne`'s release moves none; mapping and ATSP are held by something other than maxmin and do not reach `--stats` in 300 s. Read D-0134 §5 before touching `justify.ml`'s bits arm, and §7 before the
+reified families: their guarded rows are `Ne`'s pair plus LE/GE, so `Resolve` is ready for them.
+
 ## Wave 43 merged and gated, 2026-11-16 (orchestrator)
 
 Merged on `main`: `wave43-read` (D-0133 + the D-0131 addendum, `0f79f59`) and `wave43-t2` (D-0132,
