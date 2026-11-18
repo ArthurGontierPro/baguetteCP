@@ -427,4 +427,22 @@ branches in flight on 2026-11-18 (`wave44-t3` continuation as `wave46-t3`, `wave
 | M11-complexity-T4 | **Batch 2, search, analysis, learning and retention** | TODO | After the merges; T1's list |
 | M11-complexity-T5 | **Batch 3, trace, justification and proof writing** | TODO | After the merges; T1's list |
 | M11-complexity-T6 | **The scaling lane becomes a gate, and the re-baseline** handed to M8-T4, M9-T3 and M10-T5 | TODO | |
-| M11-complexity-T7 | **Setup: the cost before the first node** (D-0140 §8.4, item X1): openshop spends 762 G instructions (112 s) before node 1, with or without the proof, in encoding reified rows over wide domains and sanitising literal names (D-0080's request). Same standard as the batches: stdout, node counts and proof bytes identical | TODO | Opened 2026-11-18 from D-0140; record D-0143 |
+| M11-complexity-T7 | **Setup: the cost before the first node** (D-0140 §8.4, item X1): openshop spends 762 G instructions (112 s) before node 1, with or without the proof, in encoding reified rows over wide domains and sanitising literal names (D-0080's request). Same standard as the batches: stdout, node counts and proof bytes identical | DONE | Opened 2026-11-18 from D-0140, done the same day (agent-setup, `wave48-setup`), D-0143. The setup was the .opb name pipeline, three lists and two string tables per term of every linear row. Eight fixes in `encoding.ml`, `opb.ml`, `lit.ml`: openshop to node 1 723.5 G -> 0.36 G instructions without the proof, 950.5 G -> 105.7 G with it (now proportional to the .opb); stdout, counters, .opb and .pbp identical on five instances, the 179 models and the diff lane (232/232) |
+
+## M12-parity — XOR constraints as a system, certified
+
+Opened 2026-11-18 from the codes models (WORKLOG "codes-cp measurements"; the discussion of that day).
+baguette has no XOR propagator: `mznlib/redefinitions.mzn` turns `bool_xor` into four clauses and
+`array_bool_xor` into `sum = 2k + 1` with an order-encoded `k`, so a chain of XORs is reasoned clause by
+clause and learning rebuilds parity with long clauses (QR48: 11 684 learned, 6 581 of 16 literals or
+more). Chuffed and GCS do the same through MiniZinc (GCS's `ParitySystem` with Gauss-Jordan exists in its
+library, certified by Gocht and Nordström's PB derivation, AAAI 2021, but its FlatZinc front end maps
+`bool_xor` to a reified equality and never installs it; `/scratch/arthur/gcs/dev_docs/parity-system.md`).
+The question is how many nodes system-level parity removes on a minimum-weight problem, where the
+cardinality does part of the work; nobody has measured it. The user's point stands: the `.opb` stays the
+plain encoding, and any parity form is derived inside the proof, as GCS does.
+
+| ID | Task | Status | Notes |
+|---|---|---|---|
+| M12-parity-T1 | **The spike**: a Gauss-Jordan parity propagator over the model's XORs, with its explanations as data but no proof rendering yet, run ONLY under `--no-proof` on a branch that is never merged; nodes and time on QR48, QR72, aut order 7 and golay against today's search and Chuffed | TODO | Opened 2026-11-18; record D-0147; the decision to build T2 is the user's |
+| M12-parity-T2 | **The certified version**: the parity rows derived in the proof from the clause encoding (GCS's `red` scaffolding, deleted after use), each elimination one `pol`, each inference one `pol` and one `rup`; the gathering of `bool_xor` chains as rows | TODO | Only if T1's nodes say so |

@@ -14289,3 +14289,195 @@ RESULT_GATE
   measurement (asks are cache misses on cold clause records, not instructions). If the node's noise
   hid a loss, it would show there first. The instruction counts, which are the metric, do not move
   the wrong way on any of the six.
+## D-0143  M11-complexity-T7: the setup before node 1 was the .opb's name pipeline, three lists and two string tables per term of every linear row; eight fixes make openshop's setup 2 000 times cheaper without the proof and 9 times with it, every byte the same
+
+**Status**: **DONE**, recorded 2026-11-18 (agent-setup, `wave48-setup`). The contract is ROADMAP
+`## M11-complexity`, row T7, opened from D-0140 §8.4 (item X1) and D-0080's request 6. Files
+changed: `lib/proof/encoding.ml`, `lib/proof/opb.ml`, `lib/proof/lit.ml`,
+`test/unit/test_proof.ml`. Nothing under `lib/core/`, `lib/flatzinc/` or `bin/`. Measured on
+`fataepyc-06` against `main`'s binary `e8354a74` (gate 48), outputs under
+`/scratch/arthur/wave48-setup-runs/`.
+
+### 1. Reproduction
+
+`BAGUETTE_NODE_LIMIT=1`, `--stats`, under `perf stat -e instructions:u` and `/usr/bin/time`, once
+with `--no-proof` and once with `--proof` (`meas.sh`). Four more instances were chosen by a sweep
+of the setup alone over 181 Challenge `.fzn` (`sweep/sweep.tsv`: the 20 of D-0135 and the 162 of
+the eligibility study): the ones whose setup finishes and costs most per `.opb` line, with
+different builtins. md5 of the `.fzn` in brackets.
+
+| instance | what it is | `.opb` lines | mode | instructions | wall | peak RSS |
+|---|---|---|---|---|---|---|
+| `2014_openshop_gp10-4` (`61d04e6c`) | 1 800 `int_lin_le_reif` over 100 variables `0..10000` | 1 015 299 | no-proof | 723.5 G | 102.1 s | 43 MB |
+| | | | proof | 950.5 G | 131.9 s | 85 MB |
+| `2014_cyclic-rcpsp_hard_2` (`1704b63d`) | 557 `int_lin_le` and 386 reified over `-31007..307` | 6 448 198 | no-proof | 6 860 G | 901.9 s | 867 MB |
+| | | | proof | 8 908 G | 1 233.2 s | 1 140 MB |
+| `2015_mapping_mesh3x3_mpeg_2` (`ecfa97a9`) | `int_eq_reif`/`int_ne_reif`, `int_times` over `0..4800` | 4 313 240 | no-proof | 292.2 G | 44.6 s | 274 MB |
+| | | | proof | 414.8 G | 67.1 s | 429 MB |
+| `2014_smelt_smelt_2` (`089f040d`) | 30 228 `int_times`, 20 000 `int_le_reif` | 405 982 | no-proof | 270.9 G | 38.7 s | 535 MB |
+| | | | proof | 394.5 G | 56.5 s | 545 MB |
+| `2019_zephyrus_12__6__6__3` (`e758329e`) | 1 752 `int_lin_le_reif` over `0..4096` | 442 042 | no-proof | 189.5 G | 26.7 s | 137 MB |
+| | | | proof | 253.6 G | 36.4 s | 151 MB |
+
+D-0140 measured 762.6 G on openshop with `a9217430`; `e8354a74` gives 723.5 G. The sweep also
+found instances whose setup does not finish in 120 s (carpet-cutting, fjsp, `train_instance`,
+nmseq, openshop_tai20); they were not used, because a setup that does not end cannot be compared
+byte for byte at node 1 in a bounded time.
+
+### 2. Where the setup time went
+
+`--time` puts all of it in one phase on every instance: `compile` is 102.1 of 102.1 s on openshop
+(parse 0.02 s, search 0.003 s), and on the others parse is under 0.5 s. Inside `Compile`, the
+flat profile of openshop without the proof is GC 41 % (`oldify_one`, `do_some_marking`,
+`pool_sweep`, `caml_shared_try_alloc`), string hashing 13 % (`caml_hash_mix_string`, `caml_hash`),
+`Lit.needs_sanitize` 5.6 %, `Lit.render`, `string_of_int`'s `printf` machinery and
+`caml_make_vect`; the other three profiles have the same shape. The dwarf call graph attributes
+what it can unwind to `Compile.post_reif_le` -> `Encoding.add_int_lin_le_reif_rows` ->
+`Opb.normalise` and `Encoding.add_constraint`.
+
+The mechanism, from the code. A linear row over order-encoded variables has one term per rung,
+so openshop's 3 600 big-M rows are 20 000 terms each, 72 M terms in all, and each term went
+through:
+
+1. `Encoding.linear_terms_int_lin_le`: a tuple, a literal, a cons, and the row so far copied once
+   per variable (`acc @ vterms`);
+2. `Opb.le`: a second list with every coefficient negated;
+3. `Opb.normalise`: the literal's name RENDERED (sanitise scan, `string_of_int`, a fresh string),
+   hashed end to end into a table grown to 32 768 buckets per row, a third list, and a fourth
+   from the `filter_map`, all only to learn that no two names were equal;
+4. `Encoding.add_constraint`: per term, the owner sanitised and hashed again for `Occurs` (the
+   header's name count), and scanned a third time by `note_renamed`;
+5. with the proof, `Opb.output_row`: the name rendered a second time and every piece of the row
+   (sign, digits, space, name, space) sent to the channel by its own `output_*` call, each a C
+   call that takes and releases the channel's mutex in OCaml 5.
+
+A 20 000-term row's three lists are larger than the minor heap, so every word of them was
+promoted and then marked and swept: that is the GC share. Without the proof, steps 1 to 4 ran in
+full for rows that `Discard_rows` then dropped at `commit`.
+
+Who grows faster than its output: (3) and (4) cost a render and two string hashes per term where
+the output is one name per term, the 32 768-bucket table is allocated per row, (1)'s copy is
+O(k² w) on a row over k variables of width w, and without the proof all of it produces nothing.
+The `.opb` itself (2.18 GB on openshop) is the one cost proportional to the output.
+
+### 3. The fixes, one per commit, each measured on openshop to node 1
+
+Cumulative, instructions (wall) without and with the proof. Peak RSS stays between 31 and 45 MB
+without the proof and between 77 and 85 MB with it, and falls to 17 MB at G.
+
+| step | commit | what | no-proof | proof |
+|---|---|---|---|---|
+| base | `e8354a74` | `main` | 723.5 G (102.1 s) | 950.5 G (131.9 s) |
+| A | `2ea7112` | `linear_terms_int_lin_le` concatenates its blocks once | 717.0 G (99.1 s) | 946.5 G (131.3 s) |
+| B | `3ce68d8` | `Opb.normalise` without the table when the names are shown distinct | 342.3 G (38.3 s) | 570.0 G (69.1 s) |
+| C | `c31af77` | `add_constraint` counts the header per run, not per term | 214.9 G (25.4 s) | 452.5 G (58.9 s) |
+| D | `191343a` | `output_row` writes without rendering strings; digits without `string_of_int` | 214.5 G (24.6 s) | 360.4 G (45.3 s) |
+| E | `91129b7` | `expand_int_lin_le` in one pass, no intermediate list | 49.7 G (5.6 s) | 195.4 G (26.3 s) |
+| F | `a5bb560` | `output_row` assembles the row in one `Buffer` and outputs it once | 49.5 G (5.5 s) | 105.7 G (15.0 s) |
+| G | `287af05` | under `Discard_rows`, a linear row is counted, not built | 0.356 G (0.11 s) | 105.7 G (15.7 s) |
+| H | `2bf99ec` | the direct-encoding requests are a set, not a list | 0.356 G (0.09 s) | 105.7 G (15.3 s) |
+
+A is a growth fix that openshop does not exercise (its rows have two variables). H is too: an
+`alldiff`/`element` model requesting the direct encoding of n variables did O(n²) `List.mem`
+over strings in `request_direct` and O(n · declared) in `direct_requested`; none of the five
+instances requests one. Each is kept because it is a cost that grows faster than its output.
+
+**Why each is byte-identical.**
+
+- A. Same blocks in the same order; `List.concat (List.rev blocks)` is the list `@` built.
+- B. `Opb.normalise` merges two terms iff their rendered names are equal, and `Lit.render` is
+  injective on (sanitised owner, kind, value) (the argument `Encoding.Occurs` already rests on,
+  M7-T27 (b)). `distinct_names` splits the terms into runs (one owner string physically, one kind,
+  strictly increasing values: distinct by construction) and checks that no two runs of the same
+  sanitised owner and kind overlap; an owner with more than 8 runs is sent to the table. When it
+  holds, the table's entry for each term is that term's own coefficient and `pbvar`, so the one-pass
+  `normalise_distinct` makes the same terms in the same order and the same moves of the right-hand
+  side (summed in another order, which integer addition does not see). The table is kept as
+  `normalise_by_name` and is the path for every row it does not clear.
+- C. `Occurs` keeps each owner's names as sorted, disjoint, non-adjacent intervals, the unique
+  canonical form of the set, so adding a run's points one at a time or as one interval leaves the
+  same list and adds the same count. `note_renamed` is idempotent and is called at the first term
+  of every run, which is where every owner first occurs, so the comments keep their order.
+- D. `Lit.n_digits`/`put_digits` write the decimal of a non-negative int; `abs min_int` is
+  negative and keeps `string_of_int`, so even that value prints as before. The owner is
+  sanitised once per run of the same string, which is a pure function of the string.
+- E. When the variables' sanitised names are pairwise distinct, the three steps (substitute,
+  `Opb.le`, `normalise_distinct`) map each positive rung literal with coefficient `c = -a` (or
+  `-(a 2^i)` on bit i) to `(c, l)` if `c > 0`, to nothing if `c = 0`, and to `(-c, ~l)` with the
+  right-hand side lowered by `c` if `c < 0`. `expand_int_lin_le` does exactly that back to front.
+  Otherwise it takes the three steps, kept as `expand_int_lin_le_by_steps`.
+- F. A `Buffer` holds the bytes the channel calls wrote, in the same order; `"@c"` and the decimal
+  are `Printf.sprintf "@c%d"`.
+- G. Under `Discard_rows` nothing reads the row: the `.opb` is never written, and the only other
+  reader of `Occurs` is `reif_occurs`, which no caller in `lib/` or `bin/` reaches (`define_reif`
+  is used by tests only). `Occurs` and the renamings are kept exact all the same, read off the
+  variables, when the row's names are distinct and no expanded coefficient is zero (one test on
+  each bits variable's top bit, because a wrapped `a 2^i` stays wrapped for every higher i): each
+  variable then contributes its whole block, one interval. Otherwise the row is built as before.
+  The id is the next one either way. This is D-0126's rule 1 (the ladder loop replaced by its
+  count) applied to a linear row.
+- H. The set answers the same membership as the list; the order is still the declaration order,
+  read off `vars`.
+
+**Unit tests** (`test/unit/test_proof.ml`, all `m11t7`): `normalise` against `normalise_by_name` on
+4 000 random rows with both paths taken, a sanitise collision, a revisited value and three kinds
+at one value; the per-run header against `Opb.write`'s scan on 200 random encodings; `add_int`
+and `output_row` against the `Printf` reference over the extreme ints and awkward names; the
+one-pass expansion against the three steps on 3 000 rows over order and bits variables,
+collisions, repeats and zero coefficients; a discarding against a retaining encoding on 2 000
+rows (ids, name count, renamings after every row).
+
+### 4. After, on the five instances
+
+The final binary is `2bf99ec` (md5 `6e2439c8`).
+
+| instance | no-proof before -> after | proof before -> after | peak RSS proof |
+|---|---|---|---|
+| openshop_gp10-4 | 723.5 G, 102.1 s -> **0.356 G, 0.09 s** | 950.5 G, 131.9 s -> **105.7 G, 15.3 s** | 85 -> 78 MB |
+| cyclic-rcpsp_hard_2 | 6 860 G, 901.9 s -> **49.9 G, 6.9 s** | 8 908 G, 1 233.2 s -> **1 304 G, 177.4 s** | 1 140 -> 969 MB |
+| mapping_mesh3x3_mpeg_2 | 292.2 G, 44.6 s -> **22.7 G, 3.0 s** | 414.8 G, 67.1 s -> **87.0 G, 15.6 s** | 429 -> 436 MB |
+| smelt_2 | 270.9 G, 38.7 s -> **15.5 G, 3.1 s** | 394.5 G, 56.5 s -> **53.4 G, 9.6 s** | 545 -> 349 MB |
+| zephyrus_12__6__6__3 | 189.5 G, 26.7 s -> **0.47 G, 0.11 s** | 253.6 G, 36.4 s -> **26.8 G, 4.3 s** | 151 -> 107 MB |
+
+On every instance and both modes, stdout, the `nodes`, `opb` and `ladder` counters, and with the
+proof the `.opb` and `.pbp` md5 are the base binary's (`meas-base*/meas.tsv`,
+`meas-final/meas.tsv`; openshop `.opb` `d511219f`, `.pbp` `122615c1`; cyclic `da891065`/`a0191b30`;
+mapping `1bce4af3`/`56b77cfe`; smelt `b6582ee3`/`3ce67d9a`; zephyrus `81218311`/`140f5869`), and so
+at every intermediate commit on openshop.
+
+**The gate** (`/scratch/arthur/wave48-setup-runs/gate.sh`, gate 48's script on a fresh clone of
+`2bf99ec` merged with `wave47-lanes` at `ff2f5cb`): `make check` rc 0 (`check: ok`, peak RSS
+90 MB); the 179 models' stdout, exit code, `.opb` and `.pbp` byte-identical to gate 48's
+`/scratch/arthur/gate48.art/new/` (0 differences in each of the four); `make diff ARGS="--tier all
+-j 24"` (M11-T2's lane, D-0141): 232 of 232 runs equal the reference, 54 bool and 178 int, peak
+RSS 481 MB.
+
+### 5. What is left
+
+- **With the proof, the setup is now proportional to the `.opb`**: 48 instructions per byte on
+  openshop (2.18 GB), 63 on cyclic-rcpsp_hard_2 (20.7 GB), and the profile is the formatting of the
+  bytes (`put_digits`, `n_digits`, `Buffer.add_*`, `memmove`) plus the GC of the one list a row
+  still is. What would cut it further is a constant: stream a linear row straight into the buffer
+  from the integer terms instead of materialising its literals (about the GC's 25 %), and write a
+  coefficient's digits once per run. The width itself (D-0028) is the bits encoding's question,
+  not this record's.
+- **Without the proof, the setup that is left is not the encoding**: smelt_2's 3.1 s are parse
+  0.46 s and `Compile` 2.2 s, of which about 16 % is polymorphic `compare` and `List.mem`. By
+  reading the code that is `Engine.create`'s `List.mem` over each variable's watcher list,
+  O(degree²) per variable (variables in about 2 000 constraints there); `perf`'s unwinder gave no
+  chains to confirm it. `engine.ml` is M11-T3's, so it is filed under `## Cross-session
+  requests`. mapping's 3.0 s are mostly the root propagation (`search` 2.2 s), not setup.
+- Other encoding doors still build through the steps: `add_int_lin_ne`, the equality reification's
+  four rows and `add_choice` go through `expand_int_lin_le` (and so get E) but not through G's
+  count under `Discard_rows`. None of the five instances is dominated by them.
+- The instances whose setup did not finish in 120 s in the sweep (carpet-cutting, fjsp,
+  `train_instance`, nmseq, openshop_tai20) were not re-measured; the Challenge-wide run M11
+  precedes will.
+
+### 6. What would reverse this
+
+- A row whose names collide after sanitising takes the old path in B, E and G, so a model full of
+  `a.b`/`a_b` pairs gets none of the gain (`Compile.check_name_collisions` refuses such models
+  today, so it is not reachable from the CLI).
+- If `define_reif` (the `.pbp` door) were wired into `Compile`, G would still be right, because it
+  keeps `Occurs` exact; that is why it does not take the cheaper route of skipping `Occurs`.
