@@ -121,10 +121,19 @@ sol = "sol " + " ".join(
 ) + " ;"
 # p1: the root fixpoint, a decision x0 = 2 below it, then the solution 2 1 1 and SAT.
 write("p1.pbp", HEAD + blemmas() + root + below + [sol] + tail("conclusion SAT ;"))
-# p2: a B lemma too strong (its predecessors dropped)
-write("p2.pbp", HEAD + blemmas(mutate=(0, 3, 1)) + tail("conclusion NONE ;"))
-# p3: the forward death without one B lemma it rests on
-write("p3.pbp", HEAD + blemmas(skip=(0, 3, 1)) + root[:5] + tail("conclusion NONE ;"))
+# p2: a B lemma too strong: B(1,3,1) with its predecessors s1q2 s1q3 dropped says "s2q3 -> x1 <> 1",
+#     which the solution 2 1 1 falsifies. (At layer 0 the same mutation is IMPLIED -- s0q2 and s0q3
+#     are false by the start row -- and the checker rightly accepts it; measured, not a negative.)
+write("p2.pbp", HEAD + blemmas(mutate=(1, 3, 1)) + tail("conclusion NONE ;"))
+# p3: a forward death BELOW the root that needs its B lemmas: under x0 >= 2 layer 1 holds q2 only,
+#     and s2q2 has no live predecessor (its only edge in is q1 -2-> q2). Its fact is s1q1 dead.
+#     p3 drops B(1,2,1) and B(1,2,2) and must be REFUSED; p3b keeps them and must verify. Dropping
+#     only one is NOT a negative: the sweep from the top fixes x1 and the forward rows finish it.
+p3_line = ["rup +1 ~s2q2 +1 s1q1 >= 1 ;"]
+def drop2(lines):
+    return [x for x in lines if x not in ("rup " + B(1, 2, 1) + " ;", "rup " + B(1, 2, 2) + " ;")]
+write("p3.pbp", HEAD + drop2(blemmas()) + root + below + p3_line + tail("conclusion NONE ;"))
+write("p3b.pbp", HEAD + blemmas() + root + below + p3_line + tail("conclusion NONE ;"))
 # p4: P1 below the root with its fact dropped
 write("p4.pbp", HEAD + blemmas() + root + ["rup +1 ~s1q1 >= 1 ;"] + tail("conclusion NONE ;"))
 # p5: P3 at the second bound without the first bound's line
