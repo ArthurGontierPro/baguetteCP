@@ -73,6 +73,8 @@ let implemented =
     (* M4-T10 (D-0096): cumulative, and disjunctive as its unit case, through
        mznlib/fzn_cumulative.mzn and mznlib/fzn_disjunctive*.mzn. *)
     "baguette_cumulative";
+    (* M7-T28 (D-0146): regular, through mznlib/fzn_regular.mzn and fzn_regular_set.mzn. *)
+    "baguette_regular";
   ]
 
 (* The rest of the SPEC 2.1 table, with the milestone that will bring it in. Listing
@@ -1093,6 +1095,32 @@ let build_constraint env (c : Ast.constraint_item) =
                    (operands env pos ca))
             in
             Model.Global_cardinality (operands env pos xa, cover, operands env pos na)
+        | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
+    (* M7-T28 (D-0146). `baguette_regular(x, Q, smin, d, q0, F, s)`: the automaton is
+       CONSTANTS (Q, smin, the flattened table, the start, the accepting states), refused
+       here with a position otherwise; the letters and the state flags are operands.
+       lib/flatzinc/compile.ml's [post_regular] checks the shape. *)
+    | "baguette_regular" -> (
+        arity 7;
+        match c.Ast.c_args with
+        | [ xa; qa; sa; da; q0a; fa; fla ] ->
+            let const what e = as_const pos ~builtin:id ~what (operand env pos e) in
+            let consts what e =
+              Array.of_list
+                (List.map
+                   (fun op -> as_const pos ~builtin:id ~what op)
+                   (operands env pos e))
+            in
+            Model.Regular
+              {
+                Model.r_xs = operands env pos xa;
+                r_nq = const "the number of states" qa;
+                r_smin = const "the first symbol" sa;
+                r_delta = consts "every transition" da;
+                r_q0 = const "the start state" q0a;
+                r_final = consts "every accepting state" fa;
+                r_flags = operands env pos fla;
+              }
         | _ -> Error.failf pos "builtin `%s`: internal arity mismatch" id)
     (* M4-T10 (D-0096). `baguette_cumulative(s, d, r, cap)`: the durations, resources
        and capacity are CONSTANTS, refused here with a position otherwise, as the cover

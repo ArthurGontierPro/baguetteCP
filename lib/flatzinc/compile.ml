@@ -163,6 +163,7 @@ module Element = Baguette_core.Element
 module Gcc = Baguette_core.Gcc
 module Maxmin = Baguette_core.Maxmin
 module Cumulative = Baguette_core.Cumulative
+module Regular = Baguette_core.Regular (* M7-T28, D-0146 *)
 module View = Baguette_core.View
 
 (* M2-L12/D-0052: the clause propagator was widened to general order literals and its
@@ -730,6 +731,7 @@ let held_families (m : Model.t) : (int, string list) Hashtbl.t =
       | Model.Global_cardinality (xs, _, counts) -> hold "gcc" (xs @ counts)
       | Model.Cumulative (ss, _, _, _) -> hold "cumulative" ss
       | Model.Array_int_element (idx, _, res) -> hold "element" [ idx; res ]
+      | Model.Regular r -> hold "regular" r.Model.r_xs (* M7-T28: rows over x's ladder *)
       | Model.Int_lin_le _ | Model.Int_lin_eq _ | Model.Int_le _ | Model.Int_lt _
       | Model.Int_eq _ | Model.Bool_clause _ | Model.Array_bool_or _
       | Model.Array_bool_and _ | Model.Bool_eq _ | Model.Bool_not _
@@ -1163,6 +1165,178 @@ let compile (m : Model.t) : t =
     let p = Gcc.make store encoding ~cover:cover_rows (List.map Var.of_int movable) in
     [ (fun id -> Propagator.pack ~id (module Gcc : Propagator.S with type t = Gcc.t) p) ]
   in
+  (* ======================================================================== M7-T28
+
+     `baguette_regular(x, Q, smin, d, q0, F, s)` (D-0146 section 3; the one block this
+     row adds to this file, with its dispatch and bits-hold arms below). The rows are
+     lib/core/prop/regular.ml's header, posted in this order:
+
+       ALO_i, AMO_i   for every layer i = 0..n (the flags' exactly-one)
+       START, ACCEPT
+       FWD(i, q, R)   per layer i < n, state q, symbol run R of x_i's declared hull
+
+     and the backward chains B(i, q', R) go to [Encoding.add_root_lemma], which derives
+     them as `rup` when the proof starts -- derived, not posted, so a wrong one is a
+     refused line and not a stronger model (D-0146 section 3.2).
+
+     A SYMBOL RUN is a maximal stretch of consecutive values of the hull whose columns of
+     the table are identical. Every argument the proof makes about a value holds for its
+     whole run, so one row per run is exact, and a hull wider than the alphabet costs at
+     most two all-fail runs rather than a row per value.
+
+     Refused with a position: a table that is not Q rows, a transition outside 0..Q, a
+     start or an accepting state outside 1..Q, and flags that are not (n + 1) * Q
+     Booleans declared on 0..1 (the library introduces them; a hand-written .fzn that
+     gets them wrong is told so). A letter that is a constant is a [Regular.Fixed]: no
+     literal, one run. *)
+  let post_regular pos (r : Model.regular) =
+    let builtin = "baguette_regular" in
+    let nq = r.Model.r_nq in
+    let xs = Array.of_list r.Model.r_xs and flags = Array.of_list r.Model.r_flags in
+    let n = Array.length xs in
+    let decl i =
+      let d = Store.get store (Var.of_int i) in
+      (Domain.lo d, Domain.hi d)
+    in
+    if nq < 1 then
+      Error.failf pos "builtin `%s`: Q is %d; an automaton needs a state" builtin nq;
+    if Array.length r.Model.r_delta mod nq <> 0 then
+      Error.failf pos "builtin `%s`: the transition table has %d entries, not Q = %d rows"
+        builtin
+        (Array.length r.Model.r_delta)
+        nq;
+    Array.iter
+      (fun t ->
+        if t < 0 || t > nq then
+          Error.failf pos "builtin `%s`: a transition goes to %d, outside 0..%d" builtin t
+            nq)
+      r.Model.r_delta;
+    if r.Model.r_q0 < 1 || r.Model.r_q0 > nq then
+      Error.failf pos "builtin `%s`: the start state %d is outside 1..%d" builtin
+        r.Model.r_q0 nq;
+    Array.iter
+      (fun f ->
+        if f < 1 || f > nq then
+          Error.failf pos "builtin `%s`: the accepting state %d is outside 1..%d" builtin
+            f nq)
+      r.Model.r_final;
+    if Array.length flags <> (n + 1) * nq then
+      Error.failf pos
+        "builtin `%s`: %d state flags for %d letters and Q = %d; there must be %d" builtin
+        (Array.length flags) n nq
+        ((n + 1) * nq);
+    let fvars =
+      Array.map
+        (function
+          | Model.Var i when decl i = (0, 1) -> Var.of_int i
+          | _ ->
+              Error.failf pos
+                "builtin `%s`: a state flag is not a Boolean variable declared on 0..1"
+                builtin)
+        flags
+    in
+    let flit i q = Lit.ge (Store.name store fvars.((i * nq) + q - 1)) 1 in
+    let cells =
+      Array.map
+        (function
+          | Model.Const c -> Regular.Fixed c
+          | Model.Var i ->
+              let dlo, dhi = decl i in
+              Regular.Letter { var = Var.of_int i; name = name_of pos i; dlo; dhi })
+        xs
+    in
+    let w = Array.length r.Model.r_delta / nq in
+    let step q v =
+      let k = v - r.Model.r_smin in
+      if k < 0 || k >= w then 0 else r.Model.r_delta.(((q - 1) * w) + k)
+    in
+    let states = List.init nq (fun k -> k + 1) in
+    let runs i =
+      let lo, hi =
+        match cells.(i) with
+        | Regular.Fixed c -> (c, c)
+        | Regular.Letter { dlo; dhi; _ } -> (dlo, dhi)
+      in
+      let same u v = List.for_all (fun q -> step q u = step q v) states in
+      let rec go a v acc =
+        if v > hi then List.rev ((a, hi) :: acc)
+        else if same a v then go a (v + 1) acc
+        else go v (v + 1) ((a, v - 1) :: acc)
+      in
+      go lo (lo + 1) []
+    in
+    let notin i (a, b) =
+      match cells.(i) with
+      | Regular.Fixed _ -> []
+      | Regular.Letter { name; dlo; dhi; _ } ->
+          (if a > dlo then [ Lit.negate (Lit.ge name a) ] else [])
+          @ if b < dhi then [ Lit.ge name (b + 1) ] else []
+    in
+    let add c = ignore (Encoding.add_constraint encoding c : int) in
+    for i = 0 to n do
+      add (Opb.ge (List.map (fun q -> (1, flit i q)) states) 1);
+      add (Opb.ge (List.map (fun q -> (1, Lit.negate (flit i q))) states) (nq - 1))
+    done;
+    add (Opb.clause [ flit 0 r.Model.r_q0 ]);
+    add
+      (Opb.ge
+         (List.map
+            (fun f -> (1, flit n f))
+            (List.sort_uniq compare (Array.to_list r.Model.r_final)))
+         1);
+    for i = 0 to n - 1 do
+      let rs = runs i in
+      List.iter
+        (fun q ->
+          List.iter
+            (fun (a, b) ->
+              let t = step q a in
+              add
+                (Opb.clause
+                   ((Lit.negate (flit i q) :: notin i (a, b))
+                   @ if t > 0 then [ flit (i + 1) t ] else [])))
+            rs)
+        states;
+      List.iter
+        (fun q' ->
+          List.iter
+            (fun (a, b) ->
+              let preds = List.filter (fun q -> step q a = q') states in
+              Encoding.add_root_lemma encoding
+                (Opb.clause
+                   ((Lit.negate (flit (i + 1) q') :: notin i (a, b))
+                   @ List.map (fun q -> flit i q) preds)))
+            rs)
+        states
+    done;
+    let letters =
+      Array.to_list
+        (Array.map (function Model.Var i -> Some i | Model.Const _ -> None) xs)
+      |> List.filter_map Fun.id
+    in
+    let aliased = List.length (List.sort_uniq compare letters) <> List.length letters in
+    let p =
+      Regular.make store ~xs:cells ~nq ~smin:r.Model.r_smin ~delta:r.Model.r_delta
+        ~q0:r.Model.r_q0
+        ~final:(Array.to_list r.Model.r_final)
+        ~flags:fvars
+    in
+    if aliased then
+      [
+        (fun id ->
+          Propagator.pack ~id
+            (module Regular.Aliased : Propagator.S with type t = Regular.t)
+            p);
+      ]
+    else
+      [
+        (fun id ->
+          Propagator.pack ~idempotent:true ~id
+            (module Regular : Propagator.S with type t = Regular.t)
+            p);
+      ]
+  in
+  (* ===================================================================== end M7-T28 *)
   (* ------------------------------------------------------------------------ M4-T9
 
      `array_int_maximum(m, xs)` / `array_int_minimum(m, xs)`, as lib/core/prop/maxmin.ml's
@@ -1889,6 +2063,7 @@ let compile (m : Model.t) : t =
           | Model.Array_int_element (i, vs, c) -> post_array_int_element pos i vs c
           | Model.Array_int_maximum (mo, xs) -> post_maxmin pos ~dir:Maxmin.Max mo xs
           | Model.Array_int_minimum (mo, xs) -> post_maxmin pos ~dir:Maxmin.Min mo xs
+          | Model.Regular r -> post_regular pos r (* M7-T28, D-0146 *)
         with Checked.Overflow msg ->
           reject_row pos
             ~what:
