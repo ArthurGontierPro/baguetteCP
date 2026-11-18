@@ -467,6 +467,18 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M8-bits-encoding-T3 (steps 1, 2 partial; T3 stays WIP) | agent-t3 + agent-t3b (`wave44-t3`) | 2026-11-18 | **D-0134 §4-§7.** maxmin over a bits scope by selector rows + one `Resolve` `pol` per pruning, selectors listed in `sol`/`soli`; `int_ne`/`int_lin_ne` released (the A/B pair resolved); `Justify.is_bits_derivation` (a T2 latent). 173/173 verified at W none/0/8, 165 byte-identical at none; gate rc 0 on `20c324f`, 85 MB. The 177 at W = 0: 73 -> 108 complete `.opb`. Open: reified holds, steps 3-5 |
 | M11-complexity-T1 | agent-inventory (`wave47-inventory`) | 2026-11-18 | **D-0140.** The inventory, read-only: 48 items, each with what it grows with, how often it runs, its measured marginal share, the fix, the batch (T3/T4/T5), the byte risk and the reference. Six instances (QR48, QR72, rcpsp_11, mspsp_hard_01, cyclic-rcpsp_easy_6, openshop_gp10-4) at 1, 1k, 10k, 40k nodes, both modes; scratch patches S1 (`count_learned_activity`), S2 (retention), S3a-c measured byte-identical; outputs in `bench/perf/` |
 ## Handoff notes
+## The I-P7 alarm was the debug checks, fix merged and gated, 2026-11-18 (orchestrator)
+
+Correction to the note below of the same day: no propagation was lost. agent-batch3 traced the I-P7
+alarm to two wrong BAGUETTE_DEBUG checks (D-0142 §1): the advise check ran a declined clause at the ask
+although another change of the same walk had already queued it (integer-only, because a Boolean change
+always decides the watch it touches), and the wake index's swap-remove left `wp2` stale for an instance
+with both watches on one variable, which only the debug position check reads. `wave48-ip7` merged as
+`f9bf6c4`. Gate on fataepyc-06 (`/scratch/arthur/gate49.status`, clone
+`/scratch/arthur/baguette-gate-20261118e`): `make check` rc 0, 3 796 `ok`, 179 models, all four
+artefacts identical to gate 48's binary `e8354a74`; binary `15e23df095bee742af0dbb6ab7b07e86`. The
+lane's plain references stay valid; agent-lanes records the debug-pass references on this main.
+
 ## Lost propagation found by the M11-T2 debug pass, dated, 2026-11-18 (orchestrator)
 
 agent-lanes ran the differential lane under `BAGUETTE_DEBUG=1` at 1 500 nodes: the I-P7 advise check
