@@ -159,16 +159,19 @@
    and the strongest forceable threshold one slot per group, so a pass is O(row) and
    allocates nothing unless it prunes or conflicts.
 
-   The layout also holds three SCRATCH arrays (the statuses, the effective coefficients and
-   the per-group strongest threshold), and that is mutable memory inside [t]. It is not
-   state in the sense above, and the argument is short: every pass WRITES every cell it
-   will read before it reads it (all statuses first, then every term's effective
-   coefficient, then every group's slot), so nothing one pass leaves there is ever read by
-   another. A cached slack is refused because a later call relies on a number an earlier
-   call computed under domains the trail has since undone; here no call relies on any
-   number from an earlier call. Passes on one row never interleave: [assign] only moves the
-   store, and the next pass starts after the last read of the previous one (the [apply]
-   loop recurses into [propagate] only once it is past every term). *)
+   A pass also needs three SCRATCH arrays (the statuses, the effective coefficients and the
+   per-group strongest threshold). They are mutable memory, and module-level: one set,
+   [scratch], shared by every row and grown to the longest (a set per row cost 15 % of the
+   peak memory of a 40 000-node run, one learned clause per conflict). It is not state in
+   the sense above, and the argument is short: every pass WRITES every cell it will read
+   before it reads it (all statuses first, then every term's effective coefficient and every
+   group's slot), so nothing one pass leaves there is ever read by another. A cached slack is
+   refused because a later call relies on a number an earlier call computed under domains
+   the trail has since undone; here no call relies on any number from an earlier call. And
+   two passes never overlap, whatever rows they belong to: a pass calls nothing that runs a
+   propagator ([assign] only moves the store, which wakes nobody until the engine walks the
+   trail after the run), it recurses into [propagate] only once it is past its last read,
+   and the solver runs one propagator at a time on one domain. *)
 
 module Lit = Baguette_proof.Lit
 
@@ -202,31 +205,22 @@ type term = { coeff : int; a : atom }
 type status = Sat_lit | Unsat_lit | Open
 
 (* M11-complexity-T3 (D-0142, D-0140's E3 (a)): the pass's LAYOUT, built once per row on
-   its first pass, and its working memory.
+   its first pass.
 
      [arr]     the terms, in term order (index [i] is the [i]-th term).
-     [gid]     each term's GROUP: the terms of one (variable, polarity), the only terms
-               [effective] can add for one another. Numbered by first occurrence.
-     [dom]     every term index, group after group, each group in DOMINANCE order:
-               strongest threshold first (the largest [k] in a positive group, the
-               smallest in a negative one), ties by term index.
-     [gfirst]  group [g] is [dom.(gfirst.(g))] .. [dom.(gfirst.(g + 1) - 1)].
+     [groups]  [None] when no two terms share a (variable, polarity), which is every
+               clause [Learn.minimise] produced: then term [i] is group [i] alone.
+               Otherwise the GROUPS, the terms [effective] can add for one another:
+       [gid]     each term's group, numbered by first occurrence;
+       [dom]     every term index, group after group, each group in DOMINANCE order:
+                 strongest threshold first (the largest [k] in a positive group, the
+                 smallest in a negative one), ties by term index;
+       [gfirst]  group [g] is [dom.(gfirst.(g))] .. [dom.(gfirst.(g + 1) - 1)].
 
-   and three scratch arrays that a pass writes before it reads them (the header's "The
-   pass's working memory is not state"):
-
-     [st]      the snapshot F: every term's status at the top of the pass.
-     [eff]     every term's ladder-effective coefficient under that snapshot.
-     [gbest]   per group, the strongest threshold among its forceable terms. *)
-type layout = {
-  arr : term array;
-  gid : int array;
-  dom : int array;
-  gfirst : int array;
-  st : status array;
-  eff : int array;
-  gbest : int array;
-}
+   The working memory of a pass is not here but in [scratch] below, shared by every row:
+   see the header's "The pass's working memory is not state". *)
+type groups = { gid : int array; dom : int array; gfirst : int array }
+type layout = { arr : term array; groups : groups option }
 
 let layout_of (terms : term list) : layout =
   let arr = Array.of_list terms in
@@ -243,29 +237,47 @@ let layout_of (terms : term list) : layout =
           gid.(i) <- !ng;
           incr ng)
     arr;
-  let dominance i j =
-    let c = Int.compare gid.(i) gid.(j) in
-    if c <> 0 then c
-    else
-      let ki = arr.(i).a.k and kj = arr.(j).a.k in
-      let c = if arr.(i).a.positive then Int.compare kj ki else Int.compare ki kj in
-      if c <> 0 then c else Int.compare i j
-  in
-  let dom = Array.init n Fun.id in
-  Array.sort dominance dom;
-  let gfirst = Array.make (!ng + 1) n in
-  for p = n - 1 downto 0 do
-    gfirst.(gid.(dom.(p))) <- p
-  done;
-  {
-    arr;
-    gid;
-    dom;
-    gfirst;
-    st = Array.make n Open;
-    eff = Array.make n 0;
-    gbest = Array.make !ng 0;
-  }
+  if !ng = n then { arr; groups = None }
+  else
+    let dominance i j =
+      let c = Int.compare gid.(i) gid.(j) in
+      if c <> 0 then c
+      else
+        let ki = arr.(i).a.k and kj = arr.(j).a.k in
+        let c = if arr.(i).a.positive then Int.compare kj ki else Int.compare ki kj in
+        if c <> 0 then c else Int.compare i j
+    in
+    let dom = Array.init n Fun.id in
+    Array.sort dominance dom;
+    let gfirst = Array.make (!ng + 1) n in
+    for p = n - 1 downto 0 do
+      gfirst.(gid.(dom.(p))) <- p
+    done;
+    { arr; groups = Some { gid; dom; gfirst } }
+
+(* A term's group: its index when every group is a single term. *)
+let group w i = match w.groups with None -> i | Some g -> g.gid.(i)
+
+(* The pass's working memory, one set for every row (the header's "The pass's working
+   memory is not state"), grown to the longest row seen:
+
+     [st]      the snapshot F: every term's status at the top of the pass;
+     [eff]     every term's ladder-effective coefficient under that snapshot;
+     [gbest]   per group, the strongest threshold among its forceable terms. *)
+type scratch = {
+  mutable st : status array;
+  mutable eff : int array;
+  mutable gbest : int array;
+}
+
+let scratch = { st = [||]; eff = [||]; gbest = [||] }
+
+let ensure_scratch n =
+  if Array.length scratch.st < n then (
+    let m = max n (2 * Array.length scratch.st) in
+    scratch.st <- Array.make m Open;
+    scratch.eff <- Array.make m 0;
+    scratch.gbest <- Array.make m 0)
 
 (* M11-complexity-T3 (D-0142, D-0140's E2 (a)): what [quiet]'s walk found, kept for the
    learned clause's watch move (lib/core/prop/clause.ml, [Learned_clause.propagate]). When
@@ -406,7 +418,7 @@ let is_false = function Unsat_lit -> true | Sat_lit | Open -> false
 let is_open = function Open -> true | Sat_lit | Unsat_lit -> false
 
 (* The explanation of one step, and the reason facts that go with it, read off the
-   pass's snapshot [w.st].
+   pass's snapshot [scratch.st].
 
    The step names every FALSIFIED term and, for a forcing, the forced term [claim] (a
    conflict passes [-1]). Both are taken IN TERM ORDER, which is what makes the degree-1
@@ -421,7 +433,7 @@ let is_open = function Open -> true | Sat_lit | Unsat_lit -> false
 let reason_clause t w ~claim =
   let picked = ref [] and facts = ref [] and n_picked = ref 0 in
   for j = t.n_terms - 1 downto 0 do
-    let falsified = is_false w.st.(j) in
+    let falsified = is_false scratch.st.(j) in
     if falsified || j = claim then (
       let a = w.arr.(j).a in
       incr n_picked;
@@ -509,7 +521,7 @@ let effective w i =
   for j = 0 to Array.length w.arr - 1 do
     let u = w.arr.(j) in
     if
-      (not (is_false w.st.(j)))
+      (not (is_false scratch.st.(j)))
       && Var.to_int u.a.x = Var.to_int a.x
       && u.a.positive = a.positive
       && if a.positive then u.a.k >= a.k else u.a.k <= a.k
@@ -538,27 +550,38 @@ let effective w i =
 
    The same walk resets each group's [gbest] for [mark_forceable]. *)
 let effective_all w =
-  for g = 0 to Array.length w.gfirst - 2 do
-    let stop = w.gfirst.(g + 1) in
-    w.gbest.(g) <- (if w.arr.(w.dom.(w.gfirst.(g))).a.positive then min_int else max_int);
-    let sum = ref 0 and fits = ref true and p = ref w.gfirst.(g) in
-    while !p < stop do
-      let k = w.arr.(w.dom.(!p)).a.k in
-      let q = ref !p in
-      while !q < stop && w.arr.(w.dom.(!q)).a.k = k do
-        let j = w.dom.(!q) in
-        (if not (is_false w.st.(j)) then
-           let c = w.arr.(j).coeff in
-           if !sum > max_int - c then fits := false else sum := !sum + c);
-        incr q
-      done;
-      let e = if !fits then !sum else -1 in
-      for r = !p to !q - 1 do
-        w.eff.(w.dom.(r)) <- e
-      done;
-      p := !q
-    done
-  done
+  match w.groups with
+  | None ->
+      (* Every term its own group: [effective] adds the term's own coefficient while the
+         term is non-false, and from 0 a single positive addend cannot overflow. *)
+      for i = 0 to Array.length w.arr - 1 do
+        let tm = w.arr.(i) in
+        scratch.gbest.(i) <- (if tm.a.positive then min_int else max_int);
+        scratch.eff.(i) <- (if is_false scratch.st.(i) then 0 else tm.coeff)
+      done
+  | Some g ->
+      for gi = 0 to Array.length g.gfirst - 2 do
+        let stop = g.gfirst.(gi + 1) in
+        scratch.gbest.(gi) <-
+          (if w.arr.(g.dom.(g.gfirst.(gi))).a.positive then min_int else max_int);
+        let sum = ref 0 and fits = ref true and p = ref g.gfirst.(gi) in
+        while !p < stop do
+          let k = w.arr.(g.dom.(!p)).a.k in
+          let q = ref !p in
+          while !q < stop && w.arr.(g.dom.(!q)).a.k = k do
+            let j = g.dom.(!q) in
+            (if not (is_false scratch.st.(j)) then
+               let c = w.arr.(j).coeff in
+               if !sum > max_int - c then fits := false else sum := !sum + c);
+            incr q
+          done;
+          let e = if !fits then !sum else -1 in
+          for r = !p to !q - 1 do
+            scratch.eff.(g.dom.(r)) <- e
+          done;
+          p := !q
+        done
+      done
 
 (* The FORCEABLE terms are the open ones whose effective coefficient exceeds the slack.
    Of the forceable literals of one variable at one polarity only the STRONGEST claim is
@@ -574,18 +597,20 @@ let effective_all w =
 let mark_forceable w ~slack =
   let any = ref false in
   for i = 0 to Array.length w.arr - 1 do
-    if is_open w.st.(i) then (
-      if w.eff.(i) < 0 then w.eff.(i) <- effective w i;
-      if w.eff.(i) > slack then (
+    if is_open scratch.st.(i) then (
+      if scratch.eff.(i) < 0 then scratch.eff.(i) <- effective w i;
+      if scratch.eff.(i) > slack then (
         any := true;
-        let a = w.arr.(i).a and g = w.gid.(i) in
-        if a.positive then (if a.k > w.gbest.(g) then w.gbest.(g) <- a.k)
-        else if a.k < w.gbest.(g) then w.gbest.(g) <- a.k))
+        let a = w.arr.(i).a and g = group w i in
+        if a.positive then (if a.k > scratch.gbest.(g) then scratch.gbest.(g) <- a.k)
+        else if a.k < scratch.gbest.(g) then scratch.gbest.(g) <- a.k))
   done;
   !any
 
 let forced w ~slack i =
-  is_open w.st.(i) && w.eff.(i) > slack && w.arr.(i).a.k = w.gbest.(w.gid.(i))
+  is_open scratch.st.(i)
+  && scratch.eff.(i) > slack
+  && w.arr.(i).a.k = scratch.gbest.(group w i)
 
 (* One pass, then repeat while the store moved.
 
@@ -660,11 +685,12 @@ let rec propagate t store = if quiet store t then Propagator.Fixpoint else pass 
 and pass t store =
   let w = Lazy.force t.layout in
   let n = t.n_terms in
+  ensure_scratch n;
   let slack = ref (-t.degree) and n_open = ref 0 in
   for i = 0 to n - 1 do
     let tm = w.arr.(i) in
     let s = status store tm.a in
-    w.st.(i) <- s;
+    scratch.st.(i) <- s;
     match s with
     | Unsat_lit -> ()
     | Open ->
