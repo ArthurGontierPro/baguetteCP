@@ -451,6 +451,17 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 
 | M8-bits-encoding-T3 (steps 1, 2 partial; T3 stays WIP) | agent-t3 + agent-t3b (`wave44-t3`) | 2026-11-18 | **D-0134 §4-§7.** maxmin over a bits scope by selector rows + one `Resolve` `pol` per pruning, selectors listed in `sol`/`soli`; `int_ne`/`int_lin_ne` released (the A/B pair resolved); `Justify.is_bits_derivation` (a T2 latent). 173/173 verified at W none/0/8, 165 byte-identical at none; gate rc 0 on `20c324f`, 85 MB. The 177 at W = 0: 73 -> 108 complete `.opb`. Open: reified holds, steps 3-5 |
 ## Handoff notes
+## M6-T22 merged on top of M8-T3 (WIP) and gated, 2026-11-18 (orchestrator)
+
+`wave45-pernode` merged as `23eb9d6` (code merged without conflict). Gate of `23eb9d6` on fataepyc-06
+(`/scratch/arthur/gate47.status`, clone `/scratch/arthur/baguette-gate-20261118c`): `make check` rc 0 in
+25.0 s, peak RSS 87 MB, 3 751 `ok`, 173 models; against gate 46's binary `7ddbf348` with no flags, stdout,
+exit codes, `.opb` and `.pbp` byte-identical on all 173. Binary `a92174309acf973610248d5ce7700098`.
+M6-T22's two requests were forwarded by message: `Retention.reduce` (about 13 % of QR48's cycles) to
+agent-retention (M10-T4), the `lit.ml` name sanitising (3.2 % in proof mode) to agent-t3c. The two M10
+agents and agent-t3c were told to merge `origin/main` before their timed measurements, because their
+branches predate the faster engine.
+
 ## M6-T22 handoff, 2026-11-18 (agent-pernode, `wave45-pernode`): the per-node cost on the XOR codes, D-0138
 
 Branch `wave45-pernode`, code at `0364386`, gated on fataepyc-06 (`make check` rc 0, 3 632 ok, 85 MB; the
