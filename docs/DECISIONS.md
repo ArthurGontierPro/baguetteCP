@@ -12193,3 +12193,179 @@ What held the rest, read off the `--stats` lines: none of the 104 reached the en
   question 2); D-0031's seven models at `W = 0` are the first test of it.
 - PB conflict analysis declines every mixed row (`~mixed`); whether a bits term should be
   lifted is D-0130 §14's question 5 and the fallback counter says how often it mattered.
+
+## D-0135  M9-no-proof-T2: `--no-proof` as built -- the null writer keeps every id an Explanation carries, stdout is byte-identical on 165 models and 9 at `--bits-above 0`, and what twenty Challenge instances do without the proof
+
+**Status**: DONE 2026-11-18 (agent-noproof2 then agent-noproof3 after a rate-limit cut, branch
+`wave44-noproof`, commits `c0311a9`, `c5d8ca5`, `62db1e7`). Implements D-0126; SPEC §1's
+paragraph needed no word changed. Everything measured is on `fataepyc-06` under
+`/scratch/arthur/wave44-noproof-out/`, binary md5 `09d667d9` (the gate clone
+`/scratch/arthur/wave44-noproof-gate` at `62db1e7`).
+
+### 1. What landed
+
+- `bin/main.ml`: `--no-proof`, refused beside `--proof PREFIX` (exit 2, no file opened). The
+  run keeps `Encoding.row_sink` at `Discard_rows` (as every run without `--proof` already
+  did), opens `Filename.null` instead of a temp `.pbp`, and builds the writer with
+  `Writer.create ~null:true`. `Encoding.start_proof` is still called through it.
+  `--stats` prints `stats: no-proof ... UNVERIFIED` in place of the proof-shape and atom
+  reports, and `--time`'s `emitln` reads 0.
+- `lib/proof/writer.ml`: the null writer. Every rule that yields an id (`pol`, `rup`, `ia`,
+  `red`, `solx`, `soli`, `obju`, the header's `f`) returns `fresh t` and renders nothing.
+  `fresh` keeps counting and skips the tag, the level bucket and the audit entry, so
+  `wipe_level` has nothing to walk and `live_ids` stays empty. Deletions, `core id`, `sol`
+  and `conclusion` are no-ops. The header still sets the counter to `n_model_constraints`,
+  so `start_proof`'s direct-encoding ids land where the proved run puts them.
+- `lib/core/justify.ml`, `trace.ml`: the guard at the entry of `emit`, `emit_stating`,
+  `emit_concluding`, `emit_rup_clause`, `Trace.emit`, `Trace.conflict_line` and
+  `record_citation`. Under the null writer nothing is forced, materialised, validated or
+  rendered. `Model_row id` still answers `id`. `conflict_line` answers `Some id`, never
+  `None`, because `None` sends `Search` off to force `c_why` and write a `pol`.
+- `lib/proof/encoding.ml`: D-0126 rule 1's short-circuit. Under `Discard` the ladder loop
+  becomes `t.n <- t.n + ladder`, with the assertion that it lands where the loop would. The
+  hole rows still go through `commit`.
+
+### 2. The id rule, checked
+
+Rules 1 and 2 of D-0126 hold as stated and are now tested three ways.
+
+- `test_proof.ml`, `test_m9_discard_rows_mint_the_same_ids`: one encoding with holes, an
+  `int_lin_le`, an `int_lin_ne`, a clause, an equality, a reified row and an
+  `all_different`, built under `Retain_rows` and under `Discard_rows`. Same
+  `n_constraints`, same `Encoding.cost`, the same ids from every row door, every rung and
+  hole id at the same place. This is the lane that would see a miscounted short-circuit,
+  because the hole rows are committed after the ladder.
+- `test_endtoend.ml` (a), in process, on `alldiff_const_sat` (a direct encoding),
+  `backjump_deep_unsat` (learning and backjumps) and `opt_min_sat` (branch and bound):
+  proved with a real writer and unproved with the null one, the same answer, the same tree
+  (nodes, decisions, conflicts, depth, skipped, learned, pb), the same `n_constraints`,
+  `cost`, rung, hole, direct-encoding and at-least-one ids, with the control that the
+  direct ids were indeed minted through the null writer. Deferred reasons materialised
+  drop (2 against 4, 3 against 8), never rise.
+- The bits encoding. `ensure_atom` (D-0132) does mint ids, through `Writer.red`, `rup` and
+  `pol_concluding`, all of which reduce to `fresh` under the null writer. Its callers are
+  `Justify.ensure_lit` (guarded, so under `--no-proof` it never runs) and the objective
+  bridge in `Search` (`search.ml`, the bits objective's improving bound), which does run,
+  through the null writer. So the atom ids minted after `start_proof` differ between the
+  two modes by design. They are D-0126 rule 3's proof-only ids: no `Explanation` value
+  carries one, and a bits variable's bound rows (`lb_row`/`ub_row`, which a bits term DOES
+  cite) are model rows minted by `commit` and identical. Measured on the 9 `bits_*` models at
+  `--bits-above 0`, both modes with `--stats`: `opb` (ids minted), `ladder`, `bits`,
+  `nodes`, `decisions`, `conflicts`, `learned` identical on all 9, while the proved runs
+  minted 0 to 19 atoms (`/scratch/arthur/wave44-noproof-out/bitsids/`).
+
+### 3. The lane
+
+`scripts/run_model_tests.sh`, so `make check` runs it. Every model's ordinary proved run
+(proof verified) is followed by a `--no-proof` run, and the model PASSES only if the exit
+code is equal, `--no-proof` wrote nothing to stderr, and stdout is byte-identical (`cmp`).
+A difference fails the model by name with a 20-line diff and the D-0126 sentence that the
+finding is about the proved run. A second pass runs the `bits_*` models at `--bits-above 0`,
+proves them (veripb), runs them again under `--no-proof` and requires the same, and fails if
+it found no model to run. The CLI lane in `test_endtoend.ml` (b) checks, on the same three
+models, that `--no-proof` creates no file beside the model and none in a private `TMPDIR`
+(a private one so that parallel suites cannot race the count), that `--stats`/`--time` say
+what §1 says, and that `--no-proof --proof x` exits 2 naming both flags. `test/unit/dune`
+declares `bin/main.exe` a dependency, so `dune runtest` cannot run the CLI lane on a stale
+binary.
+
+**Result: no difference anywhere.** 165 of 165 models and 9 of 9 at `--bits-above 0`. So
+on everything the gate solves, proof logging does not steer the search.
+
+**The gate**, fresh clone of `62db1e7` on fataepyc-06 (`gate.sh`, `gate.check.log`):
+`make check` rc 0, `check: ok`, 3 694 unit `ok` lines and 0 FAIL, 165 model tests passed,
+9 bits identity passes, determinism lane identical on 165, peak RSS 82 MB, 25.6 s wall.
+
+### 4. The 165 models, proved against unproved
+
+Three repetitions each, the gate binary, `--proof` as the model test against
+`--no-proof` (`m165.tsv`). Nothing to read here, and this is said so nobody reads into it:
+the sum over 165 models of the best of three walls is 0.07 s proved and 0.05 s unproved
+(10 ms resolution), median peak RSS 6.19 MB against 6.17 MB, the largest 9.3 MB both sides.
+Every exit code was 0.
+
+### 5. Twenty Challenge instances
+
+Chosen from D-0133's archive (`~/mznc-archive/runs/wave43run-2026-11-13/<Y>/results.tsv`):
+five OPT, five TIMEOUT with an incumbent, five CAPPED, five REFUSED by the heap budget. The
+five heap `.fzn` were still in `wave43run/<Y>/work/`; the other fifteen were re-flattened with
+the run's tool chain (MiniZinc 2.10.1, `baguette-gate-20261113/tools/baguette.msc`, the
+model and data from `pair.tsv`) and prepared with `tools/compare/compare.py prep`, as
+`ELIGIBILITY-wave41.md`'s Method. Harness limits for both modes: `timeout -k 30 1200`,
+`ulimit -v 16777216 -f 16000000`, `--max-heap-mb 8192`, plus `--time-limit 1170 --stats` so a
+run that reaches the limit reports its nodes. Status by `compare.py classify`, `TIMEOUT` when
+the solver printed `limit: reached` or was killed at 1 200 s, proofs of finished runs checked
+with veripb 3.0.2. Ten jobs at a time, each instance's two modes side by side, one run each:
+the walls carry the noise of a shared node and are not repeated. Files `challenge.tsv`,
+`runs/{proved,noproof}/`; the TSVs and `one.sh` are archived on the laptop under
+`~/mznc-archive/runs/wave44-noproof-2026-11-18/`.
+
+| class | instance | proved: status, obj, wall s, RSS MB, nodes | `--no-proof`: status, obj, wall s, RSS MB, nodes |
+|---|---|---|---|
+| OPT | 2011_bacp_bacp-19 | OPT 28, 22.2, 235, 6 906, VERIFIED | OPT 28, 19.0, 197, 6 906 |
+| OPT | 2013_radiation_i6-7 | OPT 635, 85.8, 763, 4 322, VERIFIED | OPT 635, 81.2, 657, 4 322 |
+| OPT | 2016_mrcpsp_j30_17_10 | OPT 26, 44.2, 1 817, 475, VERIFIED | OPT 26, 28.2, 1 444, 475 |
+| OPT | 2016_tpp_tpp_4_5_20_1 | OPT 115, 236.4, 318, 19 183, VERIFIED | OPT 115, 107.7, 66, 19 183 |
+| OPT | 2019_zephyrus_12__6__6__3 | OPT 780, 54.3, 340, 563, VERIFIED | OPT 780, 42.7, 281, 563 |
+| INC | 2011_cyclic-rcpsp_easy_6 | TIMEOUT 674, 1 170, 424, 44 030 | TIMEOUT 674, 1 170, 131, 199 664 |
+| INC | 2011_open-stacks_problem_10_20_1 | TIMEOUT 7, 1 173, 711, 18 128 | TIMEOUT 7, 1 173, 436, 20 170 |
+| INC | 2012_mspsp_hard_01 | TIMEOUT 35, 1 179, 2 370, 34 149 | TIMEOUT 35, 1 179, 1 846, 35 837 |
+| INC | 2013_rcpsp_11 | TIMEOUT 78, 1 180, 930, 34 282 | TIMEOUT **77**, 1 181, 758, 36 970 |
+| INC | 2014_openshop_gp10-4 | TIMEOUT 1139, 1 180, 1 810, 33 957 | TIMEOUT 1139, 1 183, 1 494, 38 376 |
+| CAPPED | 2011_ship-schedule_5ShipsMixed | CAPPED max 281030, 927, 3 092, - | **OPT** max **289650**, 570, 3 374, 1 391 (unverified) |
+| CAPPED | 2014_road-cons_road_20 | CAPPED, 291, 60, - | **ERROR rc 134**, 44, 16 512, - |
+| CAPPED | 2015_zephyrus_zephyrus_20_20 | CAPPED, 354, 7 697, - | REFUSED (heap), 1 099, 8 695, - |
+| CAPPED | 2019_nside_EASY_200_50 | CAPPED max 2768, 522, 3 879, - | TIMEOUT max **2896**, 1 200, 3 073, 4 440 |
+| CAPPED | 2021_ATSP_instance16_0p35 | CAPPED, 277, 92, - | **ERROR rc 134**, 43, 16 512, - |
+| HEAP | 2011_pentominoes_04 | REFUSED, 262, 8 786, - | REFUSED, 502, 12 109, - |
+| HEAP | 2013_ghoulomb_3-9-16 | REFUSED min 61, 1 046, 9 880, - | TIMEOUT min 61, 1 200, 952, 58 |
+| HEAP | 2013_nmseq_395 | REFUSED, 551, 10 315, - | TIMEOUT, 1 200, 2 988, 8 |
+| HEAP | 2017_opt-cryptanalysis_r15 | REFUSED, 837, 8 659, - | TIMEOUT, 1 178, 1 111, 33 255 |
+| HEAP | 2025_fbd1_FBDk07 | REFUSED min 157, 141, 9 017, - | TIMEOUT min **145**, 1 171, 1 724, 2 418 |
+
+What it says, instance by instance and no further:
+
+- **Where both runs finish, they agree.** The five OPTs have the same optimum, the same node
+  count and the same stdout md5 in both modes, which is the stdout lane's statement on
+  Challenge-sized runs. The proof's wall overhead on them is 6 %, 17 %, 27 %, 57 % and 119 %
+  (tpp, 957 MB of proof), its RSS overhead 19 % to 381 %. Four of the five INC runs end on the
+  same incumbent with the same stdout md5.
+- **On a timeout the proof costs nodes.** 1.05x to 1.13x more nodes in 1 170 s on four INC
+  instances, 4.5x on cyclic-rcpsp_easy_6. rcpsp_11 finds 77 where the proved run stopped at 78.
+- **The proof was the whole of four heap refusals.** ghoulomb, nmseq, opt-cryptanalysis and
+  FBDk07 run to the time limit under `--no-proof` at 1.0 to 3.0 GB where the proved run died at
+  the 8 GB heap budget, and FBDk07 improves 157 to 145. pentominoes_04 still dies on the heap,
+  later (502 s against 262 s): its memory is the search's, not the proof's.
+- **CAPPED splits three ways.** 5ShipsMixed reaches an unverified OPT (289 650, better than the
+  proved incumbent 281 030) in 570 s, and nside a better incumbent (2 896 against 2 768).
+  zephyrus_20_20 moves from the file cap to the heap budget. **road-cons_road_20 and
+  ATSP_instance16_0p35 die at 43 s with `Fatal error: allocation failure during minor GC`,
+  16.5 GB RSS, rc 134**, where the proved runs were still writing the ladder at 60 to 90 MB
+  when the file cap stopped them. A backtrace under gdb at 14 s
+  (`/scratch/arthur/wave44-noproof-out/diag/`) puts road_20 in `Compile.compile`, building the
+  OBJECTIVE's terms in `Encoding.linear_terms_int_lin_le`, a `List.init` over the ladder of
+  `objective :: 0..190000000` (ATSP16's objective is `6120..166846394`): one list of ~10^8
+  terms, which is the 16 GB. So the short-circuit does what D-0126 rule 1 says, and the next
+  wall is the residual allocation D-0126 left as T3's question: a row (here the objective) is
+  still built as Θ(w) terms over the ladder whatever the sink. The proved run never gets
+  there, because writing that same ladder (1.9 x 10^8 clauses) meets the 16 GB file cap
+  first. Two side facts: the 8 GB heap budget did not
+  catch it (the address-space cap fired first, in the compile phase), and three runs (nside,
+  ghoulomb, nmseq) were killed by the outer `timeout` rather than stopped by
+  `--time-limit 1170`, because a node took longer than the margin. That is M6-T21's subject.
+
+### 6. What M9-no-proof-T3 inherits
+
+- The instrument, gated: any stdout difference on the 165 + 9 fails `make check` by name.
+  Its claim stops at what the gate solves. Section 5's INC and CAPPED rows differ in stdout
+  because they stop at a wall clock, which says nothing about steering.
+- The harness change is T3's: `scripts/compare_run.sh` is untouched here. `one.sh` in the
+  output directory is the per-run recipe used above, and its two differences from the
+  harness (`--time-limit 1170`, `--stats`) are deliberate.
+- Two findings to take further. (i) Under `--no-proof` a row over a wide ladder is the next
+  wall (road_20 and ATSP16, both on the objective at width ~10^8). Not building a row's
+  terms under `Discard` (or putting such an objective on the bits encoding, whose row is
+  `n` terms) is the lever, and it must keep `n_constraints` and every returned id, which
+  `test_m9_discard_rows_mint_the_same_ids` already checks. (ii) The heap budget does not
+  cover an address-space death in the compile phase. That shows as `ERROR rc 134` rather
+  than `REFUSED rc 5`, and a census that reads statuses should know it.

@@ -20,7 +20,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M8-bits-encoding-T3 | design record D-0134 first (`docs/DECISIONS.md` appended), then `lib/proof/encoding.ml`, `lib/proof/lit.ml`, `lib/core/prop/maxmin.ml`, `lib/core/prop/ne.ml`, `lib/core/prop/arith.ml` if reached, `lib/core/pb_analysis.ml`, `lib/core/ladder.ml`, `lib/core/learn.ml`, `lib/core/trace.ml`, `lib/core/justify.ml`, `lib/flatzinc/compile.ml` (eligibility releases), `bin/main.ml` (`--stats`), their tests under `test/unit/`, new `test/models/bits_*.fzn` + `test/expected/`, `docs/PROOF-FORMAT.md` §3/§4 (bits paragraphs), `docs/ROADMAP.md` T3 row, `docs/INVARIANTS.md` if an invariant is added | agent-t3 (`wave44-t3`) | 2026-11-16 |
-| M9-no-proof-T2 | `bin/main.ml` (`--no-proof`), `lib/proof/writer.ml` (null channel, `~audit:false`), `lib/proof/encoding.ml` (`Discard_rows` path only), `lib/flatzinc/compile.ml` (the mode threaded through), `scripts/run_model_tests.sh` or `test/unit/test_endtoend.ml` (the stdout-identity lane), `docs/DECISIONS.md` (D-0135 appended), `docs/ROADMAP.md` M9-T2 row, `docs/SPEC.md` §1 only if the amendment needs a word | agent-noproof2 (`wave44-noproof`) | 2026-11-16 |
 
 ## Cross-session requests
 
@@ -322,8 +321,27 @@ work. The owning session picks it up.
 | M8-bits-encoding-T1 | agent-m8t1 (`wave42-t1`) | 2026-11-10 | **D-0130**, the design record, documentation only. The substrate contract (a propagator cannot spell a bit; `Encoding`, `Justify` and `Trace` are the three places that know two representations), `declare_int` over bits (offset from `lo`, `bit_length(hi − lo)` bits, two bound rows, no ladder), `ensure_atom` (the `red` pair at level 0, the sparse chain, the counter, the D-0053 hazard), the mixed row and its overflow envelope, `Linear`'s bits `pol` (divide, cite the atom, saturate) with `gen.py`'s w = 10⁶ lines as the worked example, `Weaken_declared`, `min:`/`soli` unchanged in protocol, `--bits-above`, the three-threshold test plan, what `W = 0` cannot compare. PROOF-FORMAT §2a's rule amended to D-0127's with the old sentence kept as a dated note. Touched `docs/PROOF-FORMAT.md`, `docs/DECISIONS.md`, `docs/ROADMAP.md` (T1 row), `WORKLOG.md`; not `docs/INVARIANTS.md`, not `bench/` |
 | M8-bits-encoding-T5 | agent-rup (`wave42-rup`) | 2026-11-13 | D-0131. The root conflict closes as its trace + `rup >= 1` (every root `pol` gone, 36 of 156 proofs change, stdout and `.opb` byte-identical); `emit_concluding` writes `rup <literal>`; `--stats` counts `rup`/`pol` lines and `pol` tokens. D-0028's model at 10⁶: 29.8 MB → 138 B; the quadratic shape is a Θ(w) chain of root prunings, where the baseline's checker dies at 16 GiB and the `rup` form finishes (Θ(w²) in RUP time); hints rejected by measurement. The seven OPT proofs are byte-identical to the baseline's: no root `pol` was ever in them. Gate green, 20 min, 85 MB |
 | M8-bits-encoding-T4 (baseline) | agent-remeasure2 (`wave43-read`) | 2026-11-16 | **D-0133** and the D-0131 addendum. The sixteen editions with `f158c9f` (binary `a6327dc6`) against D-0129's archive: 0 REJECTED on 224 verified proofs, the same sixteen ranks, 1 594 of 1 600 statuses unchanged, the same 184 complete answers, incumbents 799 -> 800, objective better on 14 / worse on 20 of 799 (the noise floor T4 must stand above); 223 of the 224 verified proofs byte-identical to D-0129's, D-0131's shape on one root-UNSAT only. The seven OPT proofs verify under 60 h (1 h 20 to 16 h 22, up to 20.5 GiB; `8ShipsUnconst` over the harness's 16 GiB), and D-0131 §5's `5Ships`/`7ShipsMixedUnconst` line counts are corrected. Archives on the laptop; 37 GB of proofs deleted on the node. |
+| M9-no-proof-T2 | agent-noproof2, agent-noproof3 (`wave44-noproof`) | 2026-11-18 | **D-0135**. `--no-proof`: null writer (ids minted, nothing written), guards at Justify/Trace entry, `Discard` ladder short-circuit, exit 2 beside `--proof`. Identity lane in `make check`: 165/165 + 9 bits at W = 0, no stdout difference. Gate rc 0, 82 MB. Twenty Challenge instances measured both ways |
 
 ## Handoff notes
+## M9-no-proof-T2 handoff, 2026-11-18 (agent-noproof3 after agent-noproof2, `wave44-noproof`): D-0135
+
+`baguette M.fzn --no-proof` exists (commits `c0311a9`, `c5d8ca5`, `62db1e7`, plus the docs commit).
+The null writer mints every id through `fresh` and writes nothing; Justify and Trace return at
+their entry under it; `Encoding.start_proof` still runs, so direct-encoding ids match the proved
+run; the `Discard` ladder loop is replaced by its count. Bits atoms (`ensure_atom`) are minted only
+in the proved run (and by the objective bridge in both): proof-only ids, D-0126 rule 3.
+The lane: `scripts/run_model_tests.sh` re-runs every model under `--no-proof` after the proved
+run and fails it by name unless stdout and rc are byte-identical; a second pass does the same on
+the `bits_*` models at `--bits-above 0` (proof verified). 165/165 and 9/9, no difference.
+Unit lanes: `test_proof.ml` `test_m9_discard_rows_mint_the_same_ids`; `test_endtoend.ml` M9 (a)
+in process and (b) through the CLI (no file created, private TMPDIR). test/unit/dune now depends
+on `bin/main.exe`. Gate on fataepyc-06: `make check` rc 0, 3 694 ok, 0 FAIL, 82 MB peak RSS.
+Twenty Challenge instances (D-0135 section 5, `/scratch/arthur/wave44-noproof-out/`): the five
+OPTs agree to the node, proof overhead 6 % to 119 % wall; 4 of 5 heap refusals were the proof's
+memory; road_20 and ATSP16 die at 43 s (rc 134, 16.5 GB) building a 10^8-term objective row,
+which is T3's first lever. `scripts/compare_run.sh` untouched (T3's).
+
 ## Wave 43 merged and gated, 2026-11-16 (orchestrator)
 
 Merged on `main`: `wave43-read` (D-0133 + the D-0131 addendum, `0f79f59`) and `wave43-t2` (D-0132,
