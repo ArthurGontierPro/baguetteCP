@@ -368,6 +368,25 @@ module Occurs = struct
       o.bit <- merge a b o.bit;
       t.count <- t.count + n)
 
+  (* The direct literals x_eq_a .. x_eq_b, as one interval (M11-complexity-T7). *)
+  let add_eq_range t x a b =
+    if a <= b then (
+      let o = owner t x in
+      let n = b - a + 1 - overlap a b o.eq in
+      o.eq <- merge a b o.eq;
+      t.count <- t.count + n)
+
+  (* [add_var] over the run x_k_a .. x_k_b of one kind ([Lit.kind_rank]), all at once.
+     The ranges are a set kept in its one canonical form (sorted, disjoint, never
+     adjacent: [merge] absorbs both), so adding a run's points one by one or as one
+     interval leaves the same list, and [count] grows by the points newly covered either
+     way. *)
+  let add_run t x kind a b =
+    match kind with
+    | 0 -> add_range t x a b
+    | 1 -> add_eq_range t x a b
+    | _ -> add_bit_range t x a b
+
   let add_var t (v : Lit.pbvar) =
     match v with
     | Lit.Ge (x, k) -> add_range t x k k
@@ -584,13 +603,36 @@ let commit t c =
       invalid_arg "Encoding.add_constraint: the .opb has already been written (I-X5)");
   t.n
 
-(* Append a constraint to the .opb and hand back the id [f] will give it. *)
+(* Append a constraint to the .opb and hand back the id [f] will give it.
+
+   M11-complexity-T7 (D-0143): the header's accounting is done per RUN, not per term. A
+   run is a stretch of consecutive terms whose owner is the same string (physically), of
+   one kind, at consecutive values -- a whole variable's block of a linear row is one --
+   and it is added to [Occurs] as one interval ([Occurs.add_run]: the same set and the
+   same count as its points one by one). [note_renamed] is called at the first term of
+   every run, which is where every owner first occurs, so the renaming comments keep
+   their first-occurrence order; it is idempotent after that. Per term this used to
+   sanitise and hash the owner and scan it again for [note_renamed]: on openshop's 72 M
+   terms of big-M rows, three passes over a 17-byte name and a table probe each. *)
 let add_constraint t c =
-  List.iter
-    (fun (_, (l : Lit.t)) ->
-      Occurs.add_var t.occurs l.Lit.v;
-      note_renamed t (Lit.owner l.Lit.v))
-    (Opb.terms c);
+  let rec go x kind lo hi = function
+    | [] -> Occurs.add_run t.occurs x kind lo hi
+    | (_, (l : Lit.t)) :: rest ->
+        let y = Lit.owner l.Lit.v
+        and k = Lit.kind_rank l.Lit.v
+        and v = Lit.value l.Lit.v in
+        if y == x && k = kind && v = hi + 1 then go x kind lo v rest
+        else (
+          Occurs.add_run t.occurs x kind lo hi;
+          start y k v rest)
+  and start x kind v rest =
+    note_renamed t x;
+    go x kind v v rest
+  in
+  (match Opb.terms c with
+  | [] -> ()
+  | (_, (l : Lit.t)) :: rest ->
+      start (Lit.owner l.Lit.v) (Lit.kind_rank l.Lit.v) (Lit.value l.Lit.v) rest);
   commit t c
 
 (* sum a_i l_i = b, as the two inequalities the checker would have split it into

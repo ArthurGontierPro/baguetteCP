@@ -4292,6 +4292,57 @@ let test_m11t7_normalise_paths () =
   check "m11t7: two kinds at one value are distinct"
     (Opb.distinct_names [ (1, Lit.ge "x" 1); (1, Lit.eq "x" 1); (1, Lit.bit "x" 1) ])
 
+(* M11-complexity-T7 (D-0143): [Encoding.add_constraint] counts the header's names per
+   run of one owner, one kind and consecutive values instead of per term. Pinned on
+   random rows -- runs, broken runs, repeated values, the three kinds, a sanitise
+   collision and renamed owners -- against [Opb.write], which scans the rows for its
+   header and is the reference every .opb in test/expected/ was written by. *)
+let test_m11t7_header_by_runs () =
+  let owners = [| "x"; "y"; "a.b"; "a_b"; "q[2]" |] in
+  let st = Random.State.make [| 2143 |] in
+  let pick a = a.(Random.State.int st (Array.length a)) in
+  let mk x kind v =
+    match kind with 0 -> Lit.ge x v | 1 -> Lit.eq x v | _ -> Lit.bit x (abs v)
+  in
+  let row () =
+    List.concat
+      (List.init
+         (1 + Random.State.int st 4)
+         (fun _ ->
+           let x = pick owners and kind = Random.State.int st 3 in
+           let lo = Random.State.int st 9 - 4 and n = 1 + Random.State.int st 6 in
+           let step = if Random.State.int st 4 = 0 then 2 else 1 in
+           List.init n (fun i ->
+               let l = mk x kind (lo + (i * step)) in
+               ( 1 + Random.State.int st 3,
+                 if Random.State.bool st then l else Lit.negate l ))))
+  in
+  let bad = ref 0 in
+  for _ = 1 to 200 do
+    let e = m7t27_create Encoding.Retain_rows in
+    for _ = 1 to 1 + Random.State.int st 6 do
+      ignore (Encoding.add_constraint e (Opb.ge (row ()) 1) : int)
+    done;
+    let render f =
+      let path = Filename.temp_file "baguette_m11t7" ".opb" in
+      let oc = open_out path in
+      f oc;
+      close_out oc;
+      let ic = open_in_bin path in
+      let s = really_input_string ic (in_channel_length ic) in
+      close_in ic;
+      Sys.remove path;
+      s
+    in
+    let counted = render (fun oc -> Encoding.write_opb ~comments:[] e oc) in
+    let scanned =
+      render (fun oc -> Opb.write oc ~comments:[] ~constraints:(Encoding.constraints e))
+    in
+    if counted <> scanned then incr bad
+  done;
+  check_eq "m11t7: the per-run header equals Opb.write's scan on 200 encodings"
+    ~expected:"0" ~got:(string_of_int !bad)
+
 let () =
   report_checker ();
   test_lits ();
@@ -4344,6 +4395,7 @@ let () =
   test_bits_mixed_row ();
   test_bits_atoms_veripb ();
   test_m11t7_normalise_paths ();
+  test_m11t7_header_by_runs ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
