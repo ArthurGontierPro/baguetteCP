@@ -879,9 +879,10 @@ let test_d_tiers_on_schedule () =
     (e5 @ e6 @ e7 @ e8 @ e9 = []);
   let l7, e10 = step 10 ~lbd:12 in
   check
-    "(d) tiers: the second reduction evicts the worst three of six local entries, \
-     highest LBD first, ties oldest first"
-    (e10 = [ l7; l2; l3 ]);
+    "(d) tiers: the second reduction evicts the worst three of six local entries: the \
+     two left unused since the first reduction, then -- the four new ones all being in \
+     their grace -- the highest LBD"
+    (e10 = [ l2; l3; l7 ]);
   check "(d) tiers: exactly two reductions ran" (Retention.n_reductions db = 2);
   check "(d) tiers: both glue clauses are still held"
     (Retention.holds db glue_a && Retention.holds db glue_b);
@@ -896,8 +897,9 @@ let test_d_tiers_on_schedule () =
     (List.for_all (Retention.was_retired db) !all)
 
 (* Oh's tier 2: a mid entry not used between two checks is demoted to local, and one
-   that WAS used (its gated instance propagated) stays. Uses a gate because "used" is
-   only ever observed through one. *)
+   that WAS used (its gated instance propagated) stays. A new entry is in its grace at
+   the first check it meets (CaDiCaL's rule, see [Retention.tier_params]), so demotion
+   takes two checks. Uses a gate because "used" is only ever observed through one. *)
 let test_d_mid_demotion () =
   let params = { Retention.core = 2; mid = 6; first = 1000; inc = 0; mid_every = 3 } in
   let pg = open_page "baguette_ret_mid" in
@@ -931,9 +933,17 @@ let test_d_mid_demotion () =
     (match Retention.entry_of db m_idle with
     | Some e -> Retention.entry_tier e = Retention.Mid
     | None -> false);
-  ignore (gated.Baguette_core.Propagator.run store);
   let _, _ = learn pg db 3 ~lbd:1 in
-  check "(d) mid: the unused mid entry was demoted to local at the check"
+  check "(d) mid: at the first check both new entries are in their grace and stay mid"
+    (List.for_all
+       (fun c ->
+         match Retention.entry_of db c with
+         | Some e -> Retention.entry_tier e = Retention.Mid
+         | None -> false)
+       [ m_idle; m_busy ]);
+  ignore (gated.Baguette_core.Propagator.run store);
+  List.iter (fun k -> ignore (learn pg db k ~lbd:1)) [ 4; 5; 6 ];
+  check "(d) mid: the unused mid entry was demoted to local at the second check"
     (match Retention.entry_of db m_idle with
     | Some e -> Retention.entry_tier e = Retention.Local
     | None -> false);
