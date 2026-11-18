@@ -12988,7 +12988,14 @@ A fresh clone of `wave45-strategy` at `8fa9585` (main `bd87a57` merged) on fatae
 and 14 restarts), `test_search_strategy` green. **Without the flags, on the 173 models of main,
 stdout, exit code, `.opb` and `.pbp` are byte-identical** to main's binary `a9217430`
 (`/scratch/arthur/gate47.art/new/`): 0 differences in each of the four. The new binary is
-`878ceb53`. Status: `/scratch/arthur/wave45-strategy-runs/gate.status`.
+`878ceb53`. Status: `/scratch/arthur/wave45-strategy-runs/gate.8fa9585.status`.
+
+**Re-run after merging `origin/main` (`576da4b`) and `origin/wave47-lanes`**, on a fresh clone of
+`efbe5b6`: **`make check` rc 0**, peak RSS 89 876 kB, 182 model tests passed (179 plus the three
+`restart_*`, which restart 8, 3 and 14 times in their lane), and **0 differences in stdout, exit
+code, `.opb` and `.pbp` on all 179 models** against main's binary `e8354a74` (gate 48,
+`/scratch/arthur/gate48.art/new/`). The new binary is `28c4a51c`. Status:
+`/scratch/arthur/wave45-strategy-runs/gate.status`.
 
 ### 12. For the differential lane (M11-T2, D-0141): flags off, and the lines to add
 

@@ -474,9 +474,10 @@ All three behind flags, default unchanged: `--restarts luby[:U]|geom[:U[:F]]|lbd
 outcome `NRestart t` in `search.ml` that unwinds frames like the backjump arm and re-enters the node at
 level `t`, so it writes only `% level` comments and `del` lines (no rule kind is new, checked per run).
 New modules `restart.ml`, `phase.ml`, `activity.ml`; new binary `test_search_strategy`; three
-`restart_*` models with a lane in `run_model_tests.sh`. Gate on a fresh node clone of `8fa9585` (main
-`bd87a57` merged): `make check` rc 0, peak RSS 87 MB, 173 models' stdout, rc, `.opb` and `.pbp`
-byte-identical to main's `a9217430` without the flags. Measured (D-0137 section 10): aut order 7 with no
+`restart_*` models with a lane in `run_model_tests.sh`. Gate on a fresh node clone of `efbe5b6` (main
+`576da4b` and `wave47-lanes` merged): `make check` rc 0, peak RSS 90 MB, 179 models' stdout, rc, `.opb`
+and `.pbp` byte-identical to main's `e8354a74` without the flags; `make diff -j 16` 168 of 168 equal.
+D-0137 section 12 gives the three `bench/diff/configs.tsv` lines to add at merge. Measured (D-0137 section 10): aut order 7 with no
 annotation goes from a 600 s timeout to 64 s (80 s with proof) under `--search alternate --restarts luby
 --phase-saving`; the QR codes are best with today's search, as Chuffed's are with its fixed one; `lbd`
 never fires on them. The twenty-instance Challenge subset is D-0137 section 10.2. Next: T5 picks defaults; the scoring of order literals (Chuffed's) is
