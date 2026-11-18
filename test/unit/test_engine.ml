@@ -2319,11 +2319,11 @@ let test_direction_walk_order () =
     (by_direction = by_variable && by_variable = [ 0; 1 ])
 
 (* ---------------------------------------------------------------------------
-   M11-complexity-T3 (D-0142, D-0143's request): [Engine.create] registers watchers through
-   a table of the (variable, id) pairs already added instead of a [List.mem] over each
-   variable's list. The old loop is kept here as the specification and must build the same
-   list, in the same order, for every variable, on random scopes that repeat variables
-   (the aliased case [List.mem] was there for). *)
+   M11-complexity-T3 (D-0142, D-0143's request): [Engine.create] tests only the head of a
+   variable's watcher list where it ran a [List.mem] over the whole list (ids are distinct,
+   so the instance being registered can only be at the head). The old loop is kept here as
+   the specification and must build the same list, in the same order, for every variable,
+   on random scopes that repeat variables (the aliased case [List.mem] was there for). *)
 module Scope = struct
   type t = Var.t list
 

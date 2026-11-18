@@ -612,21 +612,23 @@ let honours_claim (inst : Propagator.instance) =
 
 let create ?(trigger = default_trigger) (instances : Propagator.instance list) : t =
   let watchers = Hashtbl.create 64 in
-  (* M11-complexity-T3 (D-0142, D-0143's request): whether [id] is already in [v]'s list,
-     answered by a table of the (variable, id) pairs added so far instead of a [List.mem]
-     over the list, which made building the engine quadratic in a variable's degree
-     (smelt_2: variables in about 2 000 constraints). The table holds exactly the pairs
-     the lists hold, so the answer, the lists and their order are the old ones. *)
-  let seen = Hashtbl.create 64 in
+  (* M11-complexity-T3 (D-0142, D-0143's request): whether [id] is already in [v]'s list
+     was a [List.mem] over the list, which made building the engine quadratic in a
+     variable's degree (smelt_2: variables in about 2 000 constraints). Ids are distinct
+     ([t.instances] is indexed by them, instance [i] at slot [i]), so [id] can only be in
+     [v]'s list if THIS instance put it there, for an earlier occurrence of [v] in its own
+     scope, and then it is the head, nothing having been prepended since. So the head is
+     the whole test: the same lists in the same order, in O(1) and without the table of
+     pairs a first version kept, which cost smelt_2 50 MB of peak memory. *)
   List.iter
     (fun (inst : Propagator.instance) ->
+      let id = inst.Propagator.id in
       List.iter
         (fun v ->
-          let key = (Var.to_int v, inst.Propagator.id) in
-          if not (Hashtbl.mem seen key) then (
-            Hashtbl.replace seen key ();
-            let cur = try Hashtbl.find watchers v with Not_found -> [] in
-            Hashtbl.replace watchers v (inst.Propagator.id :: cur)))
+          let cur = try Hashtbl.find watchers v with Not_found -> [] in
+          match cur with
+          | first :: _ when first = id -> ()
+          | _ -> Hashtbl.replace watchers v (id :: cur))
         inst.Propagator.inst_vars)
     instances;
   let max_id =
