@@ -273,6 +273,21 @@ type t = {
           search. Indexed by id and grown by [add] like [triggers]; an id with no entry
           has the empty scope. See [in_scope] for why this replaced a walk of the
           watcher list. *)
+  mutable wake_static : int list array;
+      (** M6-T22 / D-0138: variable int -> the ids of the instances with NO
+          [inst_watched] that read it, newest first. The wake loops' copy of [watchers]
+          minus the self-watching instances, indexed by array rather than hashed. Grown
+          on demand; a variable past its end has no such reader. *)
+  mutable dyn_ids : int array array;
+  mutable dyn_len : int array;
+      (** M6-T22 / D-0138: variable int -> the self-watching instances that CURRENTLY
+          watch it, as [dyn_ids.(x).(0 .. dyn_len.(x) - 1)], in no particular order. The
+          invariant, kept by [sync_watched]: [id] is there exactly once iff [x] is
+          [wv1.(id)] or [wv2.(id)]. *)
+  mutable wv1 : int array;
+  mutable wv2 : int array;
+      (** M6-T22 / D-0138: id -> the two variables (ints) a self-watching instance
+          reported at the end of its last run, or [-1] before its first. *)
 }
 
 let unborn = max_int
@@ -295,6 +310,143 @@ let in_scope t id v =
       if y = x then true else if y < x then go (mid + 1) hi else go lo mid
   in
   go 0 (Array.length s)
+
+(* ------------------------------------------- M6-T22: the wake index of watched literals
+
+   D-0104 (M6-T20) gave a learned clause an advisor, two watched literals answered in
+   O(1), and left the watcher table untouched: the clause's WHOLE scope stayed
+   registered, so every trail entry on a variable still asked every learned clause
+   naming that variable, and the clause said no unless one of its two watches was on it.
+   On the codes models (D-0138: QR48, 23 367 nodes, 11 684 learned clauses of width 9 to
+   16 and more) that is 439 million asks for 23 k nodes, 18 800 per node, and the asking
+   -- [advises], the clause's [ask], the closure call and the cache miss on each clause
+   record -- was 37 % of the cycles. A clause asked on a variable it does not watch
+   always says no, so those asks decide nothing.
+
+   An instance packed with [inst_watched] (a watched-literal advisor) is therefore
+   indexed by the variables it currently WATCHES and not by its scope: [dyn_ids].
+   After every run of it, whoever ran it, [sync_watched] reads the two variables back
+   and moves the instance's entries. The [run] in [t.instances] is wrapped at [create] /
+   [add] to do that, so no caller -- the fixpoint loop, the BAGUETTE_DEBUG re-runs, the
+   consistency oracle -- can run it without the index following. A wake on [x] then asks
+   exactly the instances whose advisor could say yes, the same question the full scope
+   asked, so the set of instances queued is the old set (the others all answered no).
+
+   The ORDER is kept as well: per trail entry the old walk queued the woken ids in
+   ascending id order (the watcher list is newest-first and is walked by prepending),
+   and [watchers_of_new_entries] merges the woken self-watching ids into the static ones
+   by id. A self-watching instance never sits in [wake_static], whose lists are
+   otherwise the old ones. Before its first run such an instance is in no list at all,
+   which loses nothing: it was [add]ed since the last fixpoint, so [propagate] seeds it
+   (rule (b)) and any wake could only have marked a slot that is dirty already.
+
+   The watcher table [watchers] itself is unchanged -- every instance, its whole scope --
+   because it is the declaration of what an instance reads, which test_engine.ml's
+   wake-order oracle and the attribution argument are stated against. *)
+
+let ensure_var t x =
+  let n = Array.length t.wake_static in
+  if x >= n then (
+    let m = max (x + 1) (2 * n) in
+    let ws = Array.make m [] in
+    Array.blit t.wake_static 0 ws 0 n;
+    t.wake_static <- ws;
+    let di = Array.make m [||] in
+    Array.blit t.dyn_ids 0 di 0 n;
+    t.dyn_ids <- di;
+    let dl = Array.make m 0 in
+    Array.blit t.dyn_len 0 dl 0 n;
+    t.dyn_len <- dl)
+
+let dyn_push t x id =
+  ensure_var t x;
+  let len = t.dyn_len.(x) in
+  let a = t.dyn_ids.(x) in
+  let a =
+    if len < Array.length a then a
+    else
+      let b = Array.make (max 4 (2 * len)) 0 in
+      Array.blit a 0 b 0 len;
+      t.dyn_ids.(x) <- b;
+      b
+  in
+  a.(len) <- id;
+  t.dyn_len.(x) <- len + 1
+
+(* Swap-remove: the order inside one variable's slice carries nothing, the wake loop
+   sorts what it wakes. *)
+let dyn_remove t x id =
+  let len = t.dyn_len.(x) in
+  let a = t.dyn_ids.(x) in
+  let rec find i = if i >= len then -1 else if a.(i) = id then i else find (i + 1) in
+  let i = find 0 in
+  if i >= 0 then (
+    a.(i) <- a.(len - 1);
+    t.dyn_len.(x) <- len - 1)
+
+(* Under BAGUETTE_DEBUG, after every run of a self-watching instance: the advisor must
+   answer [false] for every variable of its scope it does not watch, which is the whole
+   of what [inst_watched] claims and the whole of why [dyn_ids] may leave it out of
+   those variables' wakes. *)
+exception Bad_watch of string
+
+let check_watched t (inst : Propagator.instance) store a1 a2 =
+  let id = inst.Propagator.id in
+  if id >= 0 && id < Array.length t.scopes then
+    Array.iter
+      (fun x ->
+        if x <> a1 && x <> a2 && inst.Propagator.inst_advise store (Var.of_int x) then
+          raise
+            (Bad_watch
+               (Printf.sprintf
+                  "M6-T22: propagator #%d %s reports watching variables %d and %d, but \
+                   its advisor wants a wake on variable %d. [inst_watched] claims the \
+                   advisor answers false off the watched variables, and Engine.dyn_ids \
+                   relies on it."
+                  id inst.Propagator.inst_name a1 a2 x)))
+      t.scopes.(id)
+
+let sync_watched t (inst : Propagator.instance) store (w : unit -> Var.t * Var.t) =
+  let id = inst.Propagator.id in
+  let v1, v2 = w () in
+  let a1 = Var.to_int v1 and a2 = Var.to_int v2 in
+  let o1 = t.wv1.(id) and o2 = t.wv2.(id) in
+  if a1 <> o1 || a2 <> o2 then (
+    let gone x = x >= 0 && x <> a1 && x <> a2 in
+    if gone o1 then dyn_remove t o1 id;
+    if o2 <> o1 && gone o2 then dyn_remove t o2 id;
+    let fresh x = x <> o1 && x <> o2 in
+    if fresh a1 then dyn_push t a1 id;
+    if a2 <> a1 && fresh a2 then dyn_push t a2 id;
+    t.wv1.(id) <- a1;
+    t.wv2.(id) <- a2);
+  if Debug.enabled then check_watched t inst store a1 a2
+
+(* The instance as [t.instances] holds it: a self-watching one with its [run] wrapped so
+   the index follows every run of it. *)
+let indexed t (inst : Propagator.instance) =
+  match inst.Propagator.inst_watched with
+  | None -> inst
+  | Some w ->
+      let run = inst.Propagator.run in
+      {
+        inst with
+        Propagator.run =
+          (fun store ->
+            let r = run store in
+            sync_watched t inst store w;
+            r);
+      }
+
+(* Register a NON-self-watching instance in [wake_static], once per distinct variable,
+   prepending as [watchers] does. *)
+let index_static t (inst : Propagator.instance) =
+  if Option.is_none inst.Propagator.inst_watched then
+    List.iter
+      (fun x ->
+        ensure_var t x;
+        t.wake_static.(x) <- inst.Propagator.id :: t.wake_static.(x))
+      (List.sort_uniq Int.compare (List.map Var.to_int inst.Propagator.inst_vars))
 
 (* M2-T6: THE SELF-WAKE VETO, and the aliased-scope rule that guards it.
 
@@ -360,22 +512,36 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
     (fun (inst : Propagator.instance) ->
       if inst.Propagator.id >= 0 then scopes.(inst.Propagator.id) <- scope_of inst)
     instances;
-  {
-    instances = Array.of_list instances;
-    watchers;
-    triggers;
-    ctr = counters_create ();
-    runs_by_id = Array.make (Array.length triggers) 0;
-    eff_by_id = Array.make (Array.length triggers) 0;
-    veto;
-    born = Array.make (Array.length triggers) unborn;
-    epoch = 0;
-    fixpoints = [];
-    seen = None;
-    incremental = true;
-    poll_left = default_poll_runs;
-    scopes;
-  }
+  let t =
+    {
+      instances = Array.of_list instances;
+      watchers;
+      triggers;
+      ctr = counters_create ();
+      runs_by_id = Array.make (Array.length triggers) 0;
+      eff_by_id = Array.make (Array.length triggers) 0;
+      veto;
+      born = Array.make (Array.length triggers) unborn;
+      epoch = 0;
+      fixpoints = [];
+      seen = None;
+      incremental = true;
+      poll_left = default_poll_runs;
+      scopes;
+      wake_static = [||];
+      dyn_ids = [||];
+      dyn_len = [||];
+      wv1 = Array.make (Array.length triggers) (-1);
+      wv2 = Array.make (Array.length triggers) (-1);
+    }
+  in
+  (* M6-T22: the wake index, in [instances] order -- the order [watchers] was built in. *)
+  Array.iteri
+    (fun i inst ->
+      index_static t inst;
+      t.instances.(i) <- indexed t inst)
+    t.instances;
+  t
 
 let set_incremental t b = t.incremental <- b
 let n_instances t = Array.length t.instances
@@ -458,6 +624,16 @@ let add ?(trigger = default_trigger) (t : t) (inst : Propagator.instance) =
           two must           agree; pack with Engine.next_id."
          inst.Propagator.inst_name inst.Propagator.id expected);
   t.instances <- Array.append t.instances [| inst |];
+  if Array.length t.wv1 <= inst.Propagator.id then (
+    let grow a =
+      let b = Array.make (max (inst.Propagator.id + 1) (2 * Array.length a)) (-1) in
+      Array.blit a 0 b 0 (Array.length a);
+      b
+    in
+    t.wv1 <- grow t.wv1;
+    t.wv2 <- grow t.wv2);
+  index_static t inst;
+  t.instances.(inst.Propagator.id) <- indexed t inst;
   List.iter
     (fun v ->
       let cur = try Hashtbl.find t.watchers v with Not_found -> [] in
@@ -588,23 +764,56 @@ let watchers_of_new_entries ?self t store ~since =
   let vetoed = match self with Some id -> vetoes_self t id | None -> false in
   let self_id = match self with Some id -> id | None -> -1 in
   let acc = ref [] in
+  let wants id change v =
+    if vetoed && id = self_id then (
+      t.ctr.c_vetoed <- t.ctr.c_vetoed + 1;
+      false)
+    else if wakes_on (trigger_of t id) change then (
+      incr wakes;
+      t.ctr.c_wakes <- t.ctr.c_wakes + 1;
+      advises t store id v)
+    else (
+      incr masked_wakes;
+      t.ctr.c_masked <- t.ctr.c_masked + 1;
+      false)
+  in
   for i = Store.trail_length store - 1 downto since do
     let e : Store.entry = Store.trail_entry store i in
-    match Hashtbl.find_opt t.watchers e.var with
-    | None -> ()
-    | Some ids ->
+    let x = Var.to_int e.var in
+    if x < Array.length t.wake_static then
+      let stat = t.wake_static.(x) and nd = t.dyn_len.(x) in
+      if stat <> [] || nd > 0 then (
         let change = Domain.classify ~old:e.old ~now:e.now in
+        (* M6-T22: the self-watching instances that want this entry, DESCENDING, to be
+           merged into the static ones by id (see the wake index's header). A BAGUETTE_DEBUG
+           [check_advise] runs the instance, which may resync the very slice being walked,
+           so it walks a copy then. *)
+        let dl = ref [] in
+        if nd > 0 then (
+          let ids =
+            if Debug.enabled then Array.sub t.dyn_ids.(x) 0 nd else t.dyn_ids.(x)
+          in
+          for j = 0 to nd - 1 do
+            let id = ids.(j) in
+            if wants id change e.var then dl := id :: !dl
+          done;
+          match !dl with
+          | _ :: _ :: _ -> dl := List.sort (fun a b -> Int.compare b a) !dl
+          | _ -> ());
+        let rec flush_above s =
+          match !dl with
+          | d :: rest when d > s ->
+              acc := d :: !acc;
+              dl := rest;
+              flush_above s
+          | _ -> ()
+        in
         List.iter
           (fun id ->
-            if vetoed && id = self_id then t.ctr.c_vetoed <- t.ctr.c_vetoed + 1
-            else if wakes_on (trigger_of t id) change then (
-              incr wakes;
-              t.ctr.c_wakes <- t.ctr.c_wakes + 1;
-              if advises t store id e.var then acc := id :: !acc)
-            else (
-              incr masked_wakes;
-              t.ctr.c_masked <- t.ctr.c_masked + 1))
-          ids
+            flush_above id;
+            if wants id change e.var then acc := id :: !acc)
+          stat;
+        flush_above min_int)
   done;
   !acc
 
@@ -1157,21 +1366,32 @@ let check_consistency_exn (t : t) (store : Store.t) : unit =
 
 let seed_dirty t store ~since ~epoch ~(dirty : bool array) =
   let n = Array.length dirty in
+  let mark change v id =
+    if id >= 0 && id < n && wakes_on (trigger_of t id) change then
+      (* An instance born after the fixpoint at [epoch] has never run on this
+         state: [propagate] seeds it whatever it says, so its advisor is not
+         asked -- and under BAGUETTE_DEBUG not checked, since a run of it is
+         EXPECTED to prune (I-P7 is a contract between runs). *)
+      if t.born.(id) > epoch || advises t store id v then dirty.(id) <- true
+  in
   for i = Store.trail_length store - 1 downto since do
     let e : Store.entry = Store.trail_entry store i in
-    match Hashtbl.find_opt t.watchers e.var with
-    | None -> ()
-    | Some ids ->
+    let x = Var.to_int e.var in
+    if x < Array.length t.wake_static then
+      let stat = t.wake_static.(x) and nd = t.dyn_len.(x) in
+      if stat <> [] || nd > 0 then (
         let change = Domain.classify ~old:e.old ~now:e.now in
-        List.iter
-          (fun id ->
-            if id >= 0 && id < n && wakes_on (trigger_of t id) change then
-              (* An instance born after the fixpoint at [epoch] has never run on this
-                 state: [propagate] seeds it whatever it says, so its advisor is not
-                 asked -- and under BAGUETTE_DEBUG not checked, since a run of it is
-                 EXPECTED to prune (I-P7 is a contract between runs). *)
-              if t.born.(id) > epoch || advises t store id e.var then dirty.(id) <- true)
-          ids
+        List.iter (mark change e.var) stat;
+        (* M6-T22: the self-watching instances watching [x]; order is immaterial here,
+           this only marks. A copy under BAGUETTE_DEBUG, for [watchers_of_new_entries]'s
+           reason. *)
+        if nd > 0 then
+          let ids =
+            if Debug.enabled then Array.sub t.dyn_ids.(x) 0 nd else t.dyn_ids.(x)
+          in
+          for j = 0 to nd - 1 do
+            mark change e.var ids.(j)
+          done)
   done
 
 (* M6-T18: under BAGUETTE_DEBUG, the run a skipped slot would have made under the old
