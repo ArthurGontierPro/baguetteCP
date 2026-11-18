@@ -1694,11 +1694,14 @@ let m9_binary () =
 
 (* Run the solver with [args] from inside [cwd]; return (exit code, stdout, stderr) and
    leave [cwd] as it was apart from what the solver itself created. *)
-let m9_run binary ~cwd args =
+let m9_run ?tmpdir binary ~cwd args =
   let out = Filename.concat cwd "out" and err = Filename.concat cwd "err" in
+  let env =
+    match tmpdir with None -> "" | Some d -> "TMPDIR=" ^ Filename.quote d ^ " "
+  in
   let rc =
     Sys.command
-      (Printf.sprintf "cd %s && %s %s > %s 2> %s" (Filename.quote cwd)
+      (Printf.sprintf "cd %s && %s%s %s > %s 2> %s" (Filename.quote cwd) env
          (Filename.quote binary) args (Filename.quote out) (Filename.quote err))
   in
   let o = read_file out and e = read_file err in
@@ -1706,14 +1709,14 @@ let m9_run binary ~cwd args =
   Sys.remove err;
   (rc, o, e)
 
-(* How many `baguette*` entries the temp directory holds: a proof channel the CLI opens
-   without --proof is a temp file named that way, and --no-proof must open none. *)
-let m9_temp_count () =
-  Array.fold_left
-    (fun n f ->
-      if String.length f >= 8 && String.sub f 0 8 = "baguette" then n + 1 else n)
-    0
-    (Sys.readdir (Filename.get_temp_dir_name ()))
+(* The temp directory a run sees: its own, empty, so "--no-proof opened no temp file" is
+   a statement about THIS run and not about whatever the other test binaries dune runs in
+   parallel create and delete in the shared one. A proof channel the CLI opens without
+   --proof is [Filename.temp_file], which honours TMPDIR. *)
+let m9_fresh_dir parent name =
+  let d = Filename.concat parent name in
+  Sys.mkdir d 0o700;
+  d
 
 let rec m9_rm_rf p =
   if Sys.is_directory p then (
@@ -1749,10 +1752,11 @@ let test_m9_no_proof_cli () =
           and unproved = Filename.concat dir (name ^ ".noproof") in
           Sys.mkdir proved 0o700;
           Sys.mkdir unproved 0o700;
+          let tmp = m9_fresh_dir dir (name ^ ".tmp") in
           let rc_p, out_p, err_p = m9_run binary ~cwd:proved ("--proof p " ^ q) in
-          let before = m9_temp_count () in
-          let rc_n, out_n, err_n = m9_run binary ~cwd:unproved ("--no-proof " ^ q) in
-          let after = m9_temp_count () in
+          let rc_n, out_n, err_n =
+            m9_run ~tmpdir:tmp binary ~cwd:unproved ("--no-proof " ^ q)
+          in
           check (tag ^ ": the proved run exits 0") (rc_p = 0);
           check (tag ^ ": --no-proof exits as the proved run does") (rc_n = rc_p);
           check
@@ -1771,8 +1775,10 @@ let test_m9_no_proof_cli () =
           check
             (tag ^ ": --no-proof created NO file beside the model")
             (Sys.readdir unproved = [||]);
-          check (tag ^ ": ...and none in the temp directory") (after = before);
-          let _, out_s, err_s = m9_run binary ~cwd:unproved ("--no-proof --stats " ^ q) in
+          check (tag ^ ": ...and none in its temp directory") (Sys.readdir tmp = [||]);
+          let _, out_s, err_s =
+            m9_run ~tmpdir:tmp binary ~cwd:unproved ("--no-proof --stats " ^ q)
+          in
           check
             (tag ^ ": --stats under --no-proof says the run is unproved")
             (m6_says err_s "stats: no-proof" && m6_says err_s "UNVERIFIED");
@@ -1780,14 +1786,16 @@ let test_m9_no_proof_cli () =
             (tag ^ ": ...and reports no proof-shape or atom counter")
             ((not (m6_says err_s "pol-tokens")) && not (m6_says err_s "atomlinks"));
           check (tag ^ ": ...with stdout untouched") (out_s = out_p);
-          let _, out_t, err_t = m9_run binary ~cwd:unproved ("--no-proof --time " ^ q) in
+          let _, out_t, err_t =
+            m9_run ~tmpdir:tmp binary ~cwd:unproved ("--no-proof --time " ^ q)
+          in
           check
             (tag ^ ": --time under --no-proof counts zero emitted lines")
             (m6_says err_t (Printf.sprintf "time: %-10s %10d lines" "emitln" 0));
           check (tag ^ ": ...with stdout untouched") (out_t = out_p);
           check
             (tag ^ ": --stats and --time created no file either")
-            (Sys.readdir unproved = [||]);
+            (Sys.readdir unproved = [||] && Sys.readdir tmp = [||]);
           let rc_x, out_x, err_x =
             m9_run binary ~cwd:unproved ("--no-proof --proof x " ^ q)
           in

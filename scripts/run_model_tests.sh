@@ -186,10 +186,58 @@ for fzn in "${ROOT}"/test/models/*.fzn; do
   report "${base}" pass || true
 done
 
+# M9-no-proof-T2 (D-0126, D-0135): the same identity at `--bits-above 0`, on the bits_*
+# models. The pass above runs them at the default W = none, where nothing is on the bits
+# encoding; here every eligible variable is, so atoms are minted on demand
+# ([Encoding.ensure_atom], D-0132) -- through the page in the proved run and not at all
+# under `--no-proof`, whose justifications are never rendered -- and the proof-side ids
+# the two runs mint after `start_proof` diverge. That is allowed (D-0126's id rule, point
+# 3: no Explanation carries one) and this lane is what checks that the search never reads
+# one. The proved side is verified by veripb here too; its stdout is NOT compared with
+# test/expected/, which records the W = none run, only with the --no-proof run's.
+bits_pass=0
+for fzn in "${ROOT}"/test/models/bits_*.fzn; do
+  [ -f "${fzn}" ] || continue
+  base="$(basename "${fzn}" .fzn)"
+  prefix="${OUT}/${base}.w0"
+  "${SOLVER}" "${fzn}" --bits-above 0 --proof "${prefix}" > "${prefix}.out" 2> "${prefix}.err"
+  rc=$?
+  if [ "${rc}" -ne 0 ] || [ -s "${prefix}.err" ]; then
+    echo "FAIL  ${base} (--bits-above 0): the proved run exited ${rc} or wrote to stderr"
+    sed 's/^/       /' "${prefix}.err" | head -5
+    fail=$((fail+1)); continue
+  fi
+  if ! "${VERIPB}" "${prefix}.opb" "${prefix}.pbp" > "${prefix}.veripb" 2>&1; then
+    echo "FAIL  ${base} (--bits-above 0): veripb rejected the proof"
+    sed 's/^/       /' "${prefix}.veripb" | tail -20
+    fail=$((fail+1)); continue
+  fi
+  "${SOLVER}" "${fzn}" --bits-above 0 --no-proof > "${prefix}.noproof.out" 2> "${prefix}.noproof.err"
+  rc2=$?
+  if [ "${rc2}" -ne "${rc}" ] || [ -s "${prefix}.noproof.err" ]; then
+    echo "FAIL  ${base} (--bits-above 0): --no-proof exited ${rc2} where the proved run exited ${rc}, or wrote to stderr (M9-no-proof-T2)"
+    sed 's/^/       /' "${prefix}.noproof.err" | head -5
+    fail=$((fail+1)); continue
+  fi
+  if ! cmp -s "${prefix}.out" "${prefix}.noproof.out"; then
+    echo "FAIL  ${base} (--bits-above 0): --no-proof stdout DIFFERS from the proved run (M9-no-proof-T2)"
+    diff -u "${prefix}.out" "${prefix}.noproof.out" | sed 's/^/       /' | head -20
+    echo "       D-0126: a finding about the PROVED run. Record it; do not change the no-proof side."
+    fail=$((fail+1)); continue
+  fi
+  echo "PASS  ${base} (--bits-above 0)"
+  bits_pass=$((bits_pass+1))
+done
+if [ "${bits_pass}" -eq 0 ]; then
+  echo "FAIL  the --bits-above 0 identity lane ran on NO model: test/models/bits_*.fzn is empty."
+  fail=$((fail+1))
+fi
+
 echo
 echo "model tests: ${pass} passed, ${fail} failed, ${xfail} expected-fail, ${xpass} unexpected-pass, ${skip} skipped"
 echo "  every PASS is a proof veripb accepted AND a --no-proof run whose stdout and exit code"
-echo "  are byte-identical to it (M9-no-proof-T2, D-0126)."
+echo "  are byte-identical to it (M9-no-proof-T2, D-0126); ${bits_pass} bits_* model(s) passed"
+echo "  the same identity at --bits-above 0, proof verified."
 
 if [ "${xfail}" -gt 0 ]; then
 
