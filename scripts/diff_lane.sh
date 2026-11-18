@@ -24,7 +24,9 @@
 #   --debug  every selected run again under BAGUETTE_DEBUG=1 at min(budget, 1500) nodes,
 #          against bench/diff/reference-debug/: check_watched, check_skip and the I-P7
 #          advise check are what catch a lost wake (D-0138), and they only run in debug
-#   --full   = --tier all, then the same under --debug. THE GATE RUNS THIS.
+#   --full   = --tier all, then the same under --debug. The gate runs the two passes as
+#          two commands, so that the debug pass, RED on a8d2924 (D-0141 s5: the I-P7 advise
+#          check fires on 16 integer instances), is reported apart from the plain one.
 #
 #   scripts/diff_lane.sh [--tier fast|slow|all] [--debug | --full] [-j N]
 #   scripts/diff_lane.sh --update ...         RE-RECORD the reference (see the rule below)
@@ -132,6 +134,20 @@ while IFS=$'\t' read -r name env flags proof; do
 done < "$D/configs.tsv"
 for c in "${ONLY_CFGS[@]+"${ONLY_CFGS[@]}"}"; do in_list "$c" "${CFG_NAMES[@]}" || die "no configuration named $c"; done
 
+# The debug pass's named exclusions: bench/diff/debug-skip.tsv, `name<TAB>config<TAB>reason`
+# (config `*` for every configuration of that instance).
+# A run listed there is NOT run under --debug, and the lane prints it with its reason on
+# every debug pass, so an exclusion can never become silent. Never a way to hide a failure:
+# an entry says why the run cannot be afforded under BAGUETTE_DEBUG, with the measurement.
+declare -A DSKIP=()
+if [ "$DEBUG" = 1 ] && [ -f "$D/debug-skip.tsv" ]; then
+  while IFS=$'\t' read -r sn sc sr; do
+    case "$sn" in ''|'#'*) continue ;; esac
+    DSKIP["$sn|$sc"]="$sr"
+  done < "$D/debug-skip.tsv"
+fi
+SKIPPED=()
+
 # JOBS: "name file budget class cfg-index", one per (instance, configuration).
 JOBS=()
 declare -A CLASS_OF=()
@@ -148,6 +164,11 @@ while IFS=$'\t' read -r name file budget tier class cfgs _rest; do
     c="${CFG_NAMES[$ci]}"
     in_list "$c" "${ONLY_CFGS[@]+"${ONLY_CFGS[@]}"}" || continue
     [ "$cfgs" = all ] || in_list "$c" ${cfgs//,/ } || continue
+    if [ -n "${DSKIP["$name|$c"]+x}" ]; then
+      SKIPPED+=("$name [$c, debug]: ${DSKIP["$name|$c"]}"); continue
+    elif [ -n "${DSKIP["$name|*"]+x}" ]; then
+      SKIPPED+=("$name [$c, debug]: ${DSKIP["$name|*"]}"); continue
+    fi
     JOBS+=("$name $file $budget $class $ci")
   done
 done < "$D/corpus.tsv"
@@ -163,6 +184,7 @@ echo "diff_lane: solver $BIN md5 $MD5"
 echo "diff_lane: reference recorded by: $(grep -v '^#' "$REFDIR/BINARY" 2>/dev/null | tail -1)"
 echo "diff_lane: tier $TIER$([ "$DEBUG" = 1 ] && echo ", DEBUG pass (BAGUETTE_DEBUG=1, at most $DEBUG_BUDGET nodes)"), ${#JOBS[@]} runs, $PAR in parallel, ${TMO}s and ulimit -v $CAP_KB per run$([ "$UPDATE" = 1 ] && echo ', RECORDING')"
 
+for k in "${SKIPPED[@]+"${SKIPPED[@]}"}"; do echo "diff_lane: SKIPPED by bench/diff/debug-skip.tsv: $k"; done
 for j in "${JOBS[@]}"; do
   read -r _n file _b _c _ci <<< "$j"
   [ -f "$WORK/fzn/$file.fzn" ] || gzip -dc "$D/corpus/$file.fzn.gz" > "$WORK/fzn/$file.fzn" || die "cannot decompress $file"
