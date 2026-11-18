@@ -25,6 +25,19 @@
 
 type cid = int
 
+(* M11-complexity-T5 (D-0145, D-0140 W3). The writer's tables are keyed by a constraint
+   id, which is an [int]. They were polymorphic [Hashtbl]s, so every [fresh], every
+   deletion and every lookup on a proof line went through the C primitives [caml_hash]
+   and [compare_val]. Ids are dense and handed out in order, so the identity is a perfect
+   hash and [Int.equal] is the equality. No emitted byte depends on a table's iteration
+   order: every fold over one below is sorted before it is used. *)
+module Itbl = Hashtbl.Make (struct
+  type t = int
+
+  let equal = Int.equal
+  let hash x = x land max_int
+end)
+
 (* ---------------------------------------------------------------------------
    Cutting-planes expressions, reverse Polish.
    --------------------------------------------------------------------------- *)
@@ -257,14 +270,14 @@ type entry = { origin : string; level : int }
 type t = {
   oc : out_channel;
   mutable next_id : cid;
-  live : (cid, entry) Hashtbl.t; (* id -> what introduced it, for audit failures *)
-  model : (cid, unit) Hashtbl.t; (* ids fixed by the .opb, not an obligation *)
-  objective : (cid, entry) Hashtbl.t;
+  live : entry Itbl.t; (* id -> what introduced it, for audit failures *)
+  model : unit Itbl.t; (* ids fixed by the .opb, not an obligation *)
+  objective : entry Itbl.t;
       (* M5-T1: the objective-improving constraints `soli` handed back. Not an
          obligation either, and for a sharper reason than [model]'s -- these are ids we
          DID receive, and deleting one is an unchecked deletion that weakens the
          checker's guarantee over the conclusion that follows it. See [improving]. *)
-  tags : (cid, int) Hashtbl.t;
+  tags : int Itbl.t;
       (* Always on, rather than under [audit]: the level each live derived id was
          tagged with. VeriPB 3.0 has no level stack -- the checker used to keep this
          and `w` used to consult it (D-0024) -- so [wipe_level] reproduces `w l` from
@@ -274,7 +287,12 @@ type t = {
       (* M6-T17: the ids [fresh] tagged at each level, newest first, indexed by level, so
          [wipe_level l] walks levels >= l only instead of folding all of [tags]. An id
          deleted by other means stays in its bucket; [wipe_level] skips it by looking it
-         up in [tags], which is the authority. *)
+         up in [tags], which is the authority.
+
+         M11-complexity-T5 (D-0145, D-0140 W5): bucket 0 is never filled. [wipe_level]
+         refuses level 0, so nothing ever read it, and it held every id ever minted at
+         level 0 (the learned constraints, the permanent trace lines) for the whole run.
+         A level-0 id is retired only by an explicit deletion, which reads [tags]. *)
   mutable by_hi : int; (* no bucket above this index is non-empty *)
   audit : bool;
   null : bool;
@@ -325,10 +343,10 @@ let create ?(comments = false) ?audit ?(null = false) oc =
   {
     oc;
     next_id = 0;
-    live = Hashtbl.create 256;
-    model = Hashtbl.create 64;
-    objective = Hashtbl.create 8;
-    tags = Hashtbl.create 256;
+    live = Itbl.create 256;
+    model = Itbl.create 64;
+    objective = Itbl.create 8;
+    tags = Itbl.create 256;
     by_lvl = Array.make 16 [];
     by_hi = -1;
     audit;
@@ -395,16 +413,16 @@ let shape_stats (t : t) : shape_stats =
     pol_widest = t.pol_widest;
   }
 
-let live_count t = Hashtbl.length t.live
-let live_ids t = Hashtbl.fold (fun id _ acc -> id :: acc) t.live [] |> List.sort compare
+let live_count t = Itbl.length t.live
+let live_ids t = Itbl.fold (fun id _ acc -> id :: acc) t.live [] |> List.sort Int.compare
 
 (* M5-T1. The ids [improving] handed back, which are discharged by the conclusion and
    never deleted. Exposed so a test can assert they are still on the page rather than
    inferring it from the absence of a `del`. *)
 let objective_ids t =
-  Hashtbl.fold (fun id _ acc -> id :: acc) t.objective [] |> List.sort compare
+  Itbl.fold (fun id _ acc -> id :: acc) t.objective [] |> List.sort Int.compare
 
-let is_live t id = Hashtbl.mem t.live id
+let is_live t id = Itbl.mem t.live id
 
 (* The proof is append-only and is never rewound (invariant I-X4); once [conclusion]
    has run, nothing more may be written to it. *)
@@ -578,15 +596,17 @@ let fresh t ~origin =
   (* M9-no-proof-T2: the null writer counts and nothing else. No tag and no bucket, so
      [wipe_level] has nothing to walk; no audit entry, so [live_ids] stays empty. *)
   if not t.null then (
-    if t.audit then Hashtbl.replace t.live t.next_id { origin; level = t.level };
-    Hashtbl.replace t.tags t.next_id t.level;
+    if t.audit then Itbl.replace t.live t.next_id { origin; level = t.level };
+    Itbl.replace t.tags t.next_id t.level;
     let lv = t.level in
-    if lv >= Array.length t.by_lvl then (
-      let a = Array.make (max (lv + 1) (2 * Array.length t.by_lvl)) [] in
-      Array.blit t.by_lvl 0 a 0 (Array.length t.by_lvl);
-      t.by_lvl <- a);
-    t.by_lvl.(lv) <- t.next_id :: t.by_lvl.(lv);
-    if lv > t.by_hi then t.by_hi <- lv);
+    (* Not level 0: see [by_lvl]. *)
+    if lv > 0 then (
+      if lv >= Array.length t.by_lvl then (
+        let a = Array.make (max (lv + 1) (2 * Array.length t.by_lvl)) [] in
+        Array.blit t.by_lvl 0 a 0 (Array.length t.by_lvl);
+        t.by_lvl <- a);
+      t.by_lvl.(lv) <- t.next_id :: t.by_lvl.(lv);
+      if lv > t.by_hi then t.by_hi <- lv));
   t.next_id
 
 (* Preamble: version line, then the count of model constraints loaded from the .opb.
@@ -620,11 +640,11 @@ let header t ~n_model_constraints =
   t.n_model <- n_model_constraints;
   if t.audit then
     for i = 1 to n_model_constraints do
-      Hashtbl.replace t.model i ()
+      Itbl.replace t.model i ()
     done
 
 let model_ids t =
-  Hashtbl.fold (fun id () acc -> id :: acc) t.model [] |> List.sort compare
+  Itbl.fold (fun id () acc -> id :: acc) t.model [] |> List.sort Int.compare
 
 (* ------------------------- deletion levels ------------------------------- *)
 
@@ -686,7 +706,7 @@ let with_level t l f =
 (* The level an id is tagged with, or [None] if the id is not tagged -- it was retired,
    or it is a model row, which nothing tags. A test that wants to see WHERE an id landed
    asks here rather than grepping the proof. *)
-let tag_of t id = Hashtbl.find_opt t.tags id
+let tag_of t id = Itbl.find_opt t.tags id
 
 (* ------------------------------------------------------------------ reading it back
 
@@ -882,29 +902,46 @@ let wipe_level t l =
 
      [del_run] is what turns an inclusive run into a rule; `del range` is half-open and
      that difference is the whole of M1-T22. *)
+  (* M11-complexity-T5 (D-0145, D-0140 W5): the doomed ids in ascending order without a
+     sort in the usual case. A bucket is newest first, so the fold below lists the ids
+     it keeps oldest first, in front of the higher levels' ids already collected. Ids
+     are handed out in order, so a higher level's ids are usually all newer and the
+     whole list is ascending as built; a level re-entered after an interlude at a lower
+     one can break that, and then the list is sorted, which is what it always was. Ids
+     are distinct, so either way it is the sorted set the old [List.sort compare] gave. *)
   let doomed_ids = ref [] in
-  for lv = l to t.by_hi do
-    List.iter
-      (fun id ->
-        if Hashtbl.find_opt t.tags id = Some lv then doomed_ids := id :: !doomed_ids)
-      t.by_lvl.(lv);
+  for lv = t.by_hi downto l do
+    doomed_ids :=
+      List.fold_left
+        (fun acc id ->
+          match Itbl.find_opt t.tags id with
+          | Some lv' when lv' = lv -> id :: acc
+          | _ -> acc)
+        !doomed_ids t.by_lvl.(lv);
     t.by_lvl.(lv) <- []
   done;
   if t.by_hi >= l then t.by_hi <- l - 1;
-  let doomed = List.sort compare !doomed_ids in
+  let rec ascending = function
+    | (a : int) :: (b :: _ as rest) -> a < b && ascending rest
+    | _ -> true
+  in
+  let doomed =
+    if ascending !doomed_ids then !doomed_ids else List.sort Int.compare !doomed_ids
+  in
   (* The old whole-table computation, kept one wave as a BAGUETTE_DEBUG cross-check.
      [proof] cannot see [Baguette_core.Debug], hence its own read of the flag. *)
   if debug_xcheck then
     if
-      doomed
-      <> (Hashtbl.fold (fun id lv acc -> if lv >= l then id :: acc else acc) t.tags []
-         |> List.sort compare)
+      not
+        (List.equal Int.equal doomed
+           (Itbl.fold (fun id lv acc -> if lv >= l then id :: acc else acc) t.tags []
+           |> List.sort Int.compare))
     then
       failwith
         "invariant violated: Writer.wipe_level per-level doomed set = whole-table fold";
-  List.iter (Hashtbl.remove t.tags) doomed;
+  List.iter (Itbl.remove t.tags) doomed;
   List.iter (del_run t) (runs doomed);
-  if t.audit then List.iter (Hashtbl.remove t.live) doomed
+  if t.audit then List.iter (Itbl.remove t.live) doomed
 (* VeriPB's LevelStack does not move the current level on a wipe, so neither do we:
    the mirror has to stay exact (invariant I-X3). *)
 
@@ -987,11 +1024,11 @@ let rec cited_ids acc (p : Pol.t) =
    a pass. *)
 let citable_ids t =
   let live = ref [] in
-  Hashtbl.iter (fun id _ -> live := id :: !live) t.tags;
+  Itbl.iter (fun id _ -> live := id :: !live) t.tags;
   for i = t.n_model downto 1 do
     live := i :: !live
   done;
-  List.sort_uniq compare !live
+  List.sort_uniq Int.compare !live
 
 let apply_to_pol t kind (p : Pol.t) =
   match kind with
@@ -1246,8 +1283,8 @@ let red t ~origin ~witness c =
 
 let forget t id =
   if t.audit then (
-    Hashtbl.remove t.live id;
-    Hashtbl.remove t.model id)
+    Itbl.remove t.live id;
+    Itbl.remove t.model id)
 
 let delete_many t ids =
   match ids with
@@ -1255,7 +1292,7 @@ let delete_many t ids =
   | _ when t.null -> ()
   | _ ->
       rule t (Printf.sprintf "del id %s" (cite_all t ids));
-      List.iter (Hashtbl.remove t.tags) ids;
+      List.iter (Itbl.remove t.tags) ids;
       List.iter (forget t) ids
 
 let delete t id = delete_many t [ id ]
@@ -1297,7 +1334,7 @@ let pol_concluding t ~origin ~claim p =
 let delete_core t id =
   if not t.null then (
     rule t (Printf.sprintf "delc %s" (cite t id));
-    Hashtbl.remove t.tags id;
+    Itbl.remove t.tags id;
     forget t id)
 
 (* Move constraints into the core set (after an improving solution, M5). *)
@@ -1366,7 +1403,7 @@ let improving t ~origin lits =
     rule t (Printf.sprintf "%ssoli %s" (label_for t id) (lits_to_string lits));
     let id = fresh t ~origin in
     forget t id;
-    if t.audit then Hashtbl.replace t.objective id { origin; level = t.level };
+    if t.audit then Itbl.replace t.objective id { origin; level = t.level };
     id
 
 (* Objective update (M5). [diff] gives the change, [`New] the whole new objective. *)
@@ -1400,17 +1437,17 @@ let audit_report t =
   let b = Buffer.create 256 in
   Buffer.add_string b
     (Printf.sprintf "proof audit: %d constraint id(s) never deleted (invariant I-X2)\n"
-       (Hashtbl.length t.live));
+       (Itbl.length t.live));
   List.iter
     (fun id ->
-      let (e : entry) = Hashtbl.find t.live id in
+      let (e : entry) = Itbl.find t.live id in
       Buffer.add_string b
         (Printf.sprintf "  id %d from %s (level %d)\n" id e.origin e.level))
     (live_ids t);
   Buffer.contents b
 
 let check_audit t =
-  if t.audit && Hashtbl.length t.live > 0 then
+  if t.audit && Itbl.length t.live > 0 then
     (* No printing here: the exception carries the report and has a printer, so a
        solver that lets it escape still shows it, and a test that expects it is not
        forced to swallow stderr. *)
