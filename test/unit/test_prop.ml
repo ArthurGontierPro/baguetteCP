@@ -4408,7 +4408,7 @@ let reif_eq_veripb_scene () =
   Encoding.declare_int e "x" ~lo:0 ~hi:2;
   Encoding.declare_int e "y" ~lo:0 ~hi:2;
   Encoding.declare_bool e "b";
-  let le_id, ge_id, k_le, k_ge =
+  let { Encoding.le_id; ge_id; k_le; k_ge; _ } =
     Encoding.add_int_lin_eq_reif e [ (1, "x"); (-1, "y") ] 0 ~reifier:"b" ~pos:true
   in
   let store =
@@ -7228,6 +7228,181 @@ let test_bits_ne_veripb () =
   run_veripb_rejects_saying ~name:"bits ne BREAK: the same pol pinned one literal short"
     ~build:(build_bits_ne ~tamper:true) ~saying:bits_mm_ia_refusal
 
+(* M8-bits-encoding-T3 continuation (D-0134 section 8, probes r1/r2/n1/r8 of
+   bench/bits_spike/probe_t3c.sh): int_eq_reif / int_ne_reif over bits. x in 0..7 and y
+   in 0..3 on bits, b a bool (order, width 1), b <-> (x + y = 5) as Encoding's four
+   guarded rows, the instance built with A's and B's ids and big-Ms. The two [Clause]
+   pieces become one Resolve of the two halves, each carrying the reifier as one more
+   term; every clause is the per-value twin's literal for literal. *)
+let bits_reif_scene ~positive () =
+  let e = Encoding.create () in
+  Encoding.declare_int_bits e "x" ~lo:0 ~hi:7;
+  Encoding.declare_int_bits e "y" ~lo:0 ~hi:3;
+  Encoding.declare_bool e "b";
+  let r =
+    Encoding.add_int_lin_eq_reif e [ (1, "x"); (1, "y") ] 5 ~reifier:"b" ~pos:positive
+  in
+  let rows =
+    {
+      Reif_lin_eq.a_id = r.Encoding.a_id;
+      b_id = r.Encoding.b_id;
+      big_a = r.Encoding.big_a;
+      big_b = r.Encoding.big_b;
+    }
+  in
+  let decls = [ ("x", 0, 7); ("y", 0, 3); ("b", 0, 1) ] in
+  let mk ?rows st =
+    Reif_lin_eq.make ?rows ~le_id:r.Encoding.le_id ~ge_id:r.Encoding.ge_id
+      ~k_le:r.Encoding.k_le ~k_ge:r.Encoding.k_ge ~positive st
+      [ (1, var 0); (1, var 1) ]
+      5 ~reifier:(var 2)
+  in
+  let store = mk_store decls and twin_store = mk_store decls in
+  (e, store, mk ~rows store, twin_store, mk twin_store)
+
+(* The three scenes: [`Hole] fixes b at the value denying the equality and y = 2, so
+   x <> 3 (an interior hole); [`Entail] fixes x = 3, y = 2 and leaves b open, so the
+   entailment piece pushes b; [`Conflict] fixes all three with the sum on 5 and b
+   denying it. Returns the entry for the pruned variable, or the conflict. *)
+let bits_reif_run ~positive scene store p =
+  let wrong = if positive then 0 else 1 in
+  let fix v k =
+    ignore (Store.set_lo store (var v) k placeholder_pruning);
+    ignore (Store.set_hi store (var v) k placeholder_pruning)
+  in
+  (match scene with
+  | `Hole ->
+      fix 2 wrong;
+      fix 1 2
+  | `Entail ->
+      fix 0 3;
+      fix 1 2
+  | `Conflict ->
+      fix 2 wrong;
+      fix 0 3;
+      fix 1 2);
+  let before = Store.trail_length store in
+  match (Reif_lin_eq.propagate p store, scene) with
+  | Propagator.Conflict c, `Conflict -> `Conflict c
+  | Propagator.Fixpoint, `Hole -> (
+      match mm_entry_of store before (var 0) with
+      | Some e -> `Entry e
+      | None -> failwith "bits reif: no entry for x")
+  | Propagator.Fixpoint, `Entail -> (
+      match mm_entry_of store before (var 2) with
+      | Some e -> `Entry e
+      | None -> failwith "bits reif: no entry for b")
+  | _ -> failwith "bits reif: the scene did not do what it was built for"
+
+let test_bits_reif_rules () =
+  let sorted ls = List.sort compare (List.map Lit.to_string ls) in
+  let one ~positive scene ~title ~expect =
+    let _, store, p, twin_store, twin = bits_reif_scene ~positive () in
+    let got = bits_reif_run ~positive scene store p
+    and tgot = bits_reif_run ~positive scene twin_store twin in
+    let why, twhy, facts =
+      match (got, tgot) with
+      | `Entry e, `Entry te ->
+          ( Store.explanation store e,
+            Store.explanation twin_store te,
+            Reason.facts e.Store.reason )
+      | `Conflict c, `Conflict tc ->
+          (c.Store.c_why, tc.Store.c_why, Reason.facts c.Store.c_reason)
+      | _ -> failwith "bits reif: the twin did something else"
+    in
+    match (Explanation.force why, Explanation.force twhy) with
+    | Explanation.Resolve parts, Explanation.Clause twin_lits ->
+        check (title ^ ": two parts, the A half and the B half") (List.length parts = 2);
+        check
+          (title ^ ": the derived clause is the twin's nogood, literal for literal")
+          (sorted (Justify.resolve_clause parts) = sorted twin_lits
+          && sorted twin_lits = List.sort compare expect);
+        check
+          (title ^ ": D-0026, the reason and the derivation agree")
+          (Store.agreement_holds store (Reason.because ~concludes:None facts why))
+    | _ -> check (title ^ ": a Resolve against the twin's Clause") false
+  in
+  let hole = [ "x_ge_4"; "y_ge_3"; "~x_ge_3"; "~y_ge_2" ] in
+  one ~positive:true `Hole ~title:"bits int_eq_reif r1, the hole at b = 0"
+    ~expect:("b_ge_1" :: hole);
+  one ~positive:true `Entail ~title:"bits int_eq_reif r2, the entailment pushes b"
+    ~expect:("b_ge_1" :: hole);
+  one ~positive:true `Conflict ~title:"bits int_eq_reif r8, the all-fixed conflict"
+    ~expect:("b_ge_1" :: hole);
+  one ~positive:false `Hole ~title:"bits int_ne_reif n1, the hole at b = 1"
+    ~expect:("~b_ge_1" :: hole);
+  one ~positive:false `Entail ~title:"bits int_ne_reif, the entailment pushes b to 0"
+    ~expect:("~b_ge_1" :: hole);
+  (* the hole is interior: 3 is out of x, both bounds stay *)
+  let _, store, p, _, _ = bits_reif_scene ~positive:true () in
+  ignore (bits_reif_run ~positive:true `Hole store p);
+  check "bits int_eq_reif r1: the hole is interior"
+    (let d = Store.get store (var 0) in
+     (not (Domain.mem d 3)) && Domain.lo d = 0 && Domain.hi d = 7)
+
+(* The emitter's line for a scene, under a DECISION (the writer at level 1 while the
+   atoms' pairs land at level 0) over the satisfiable model; [tamper] replaces the
+   `ia`'s clause by [tamper]'s literals, the `pol` kept. *)
+let build_bits_reif ~positive scene ~tamper dir =
+  let e, store, p, _, _ = bits_reif_scene ~positive () in
+  let opb = Filename.concat dir "bits_reif.opb"
+  and pbp = Filename.concat dir "bits_reif.pbp" in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "b <-> x + y = 5, x and y on bits" ] e oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let w = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof e w;
+  let ctx = Justify.create ~writer:w ~encoding:e in
+  Writer.set_level w 1;
+  (match bits_reif_run ~positive scene store p with
+  | `Entry en ->
+      ignore
+        (Justify.emit_bits_pruning ctx ~origin:"bits reif" ~concludes:en.Store.concludes
+           (Store.explanation store en)
+          : Writer.cid * Lit.t list)
+  | `Conflict c ->
+      ignore
+        (Justify.emit_bits_pruning ctx ~origin:"bits reif conflict" ~concludes:None
+           c.Store.c_why
+          : Writer.cid * Lit.t list));
+  Writer.set_level w 0;
+  Writer.delete_many w (Writer.live_ids w);
+  Writer.conclusion w Writer.No_conclusion;
+  close_out oc;
+  (match tamper with
+  | None -> ()
+  | Some claim ->
+      let text = replace_ia_claim (read_text pbp) claim in
+      let oc = open_out_bin pbp in
+      output_string oc text;
+      close_out oc);
+  (opb, pbp)
+
+let test_bits_reif_veripb () =
+  let hole = "+1 ~x_ge_3 +1 x_ge_4 +1 ~y_ge_2 +1 y_ge_3" in
+  run_veripb ~name:"bits int_eq_reif r1: the hole's two-half pol, under a decision"
+    ~build:(build_bits_reif ~positive:true `Hole ~tamper:None);
+  run_veripb_rejects_saying
+    ~name:
+      "bits int_eq_reif BREAK (probe r3): the hole pinned without the reifier's literal"
+    ~build:(build_bits_reif ~positive:true `Hole ~tamper:(Some hole))
+    ~saying:bits_mm_ia_refusal;
+  run_veripb ~name:"bits int_eq_reif r2: the entailment's pol, under a decision"
+    ~build:(build_bits_reif ~positive:true `Entail ~tamper:None);
+  run_veripb_rejects_saying
+    ~name:"bits int_eq_reif BREAK: the entailment pinned without its claim"
+    ~build:(build_bits_reif ~positive:true `Entail ~tamper:(Some hole))
+    ~saying:bits_mm_ia_refusal;
+  run_veripb ~name:"bits int_eq_reif r8: the all-fixed conflict, under a decision"
+    ~build:(build_bits_reif ~positive:true `Conflict ~tamper:None);
+  run_veripb ~name:"bits int_ne_reif n1: the hole at b = 1, under a decision"
+    ~build:(build_bits_reif ~positive:false `Hole ~tamper:None);
+  run_veripb_rejects_saying
+    ~name:"bits int_ne_reif BREAK (probe n2): the reifier's literal of the wrong polarity"
+    ~build:(build_bits_reif ~positive:false `Hole ~tamper:(Some (hole ^ " +1 b_ge_1")))
+    ~saying:bits_mm_ia_refusal
+
 (* ================================================================ M4-T10, D-0096
 
    cumulative (and disjunctive as its cap = 1 case), lib/core/prop/cumulative.ml.
@@ -7758,6 +7933,8 @@ let () =
   test_bits_maxmin_veripb ();
   test_bits_ne_rules ();
   test_bits_ne_veripb ();
+  test_bits_reif_rules ();
+  test_bits_reif_veripb ();
   (* M4-T10, D-0096: cumulative. *)
   test_cumulative_soundness ();
   test_cumulative_checking ();

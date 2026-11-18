@@ -70,7 +70,35 @@
 
    Shape, arithmetic and snapshot discipline follow lib/core/prop/ne.ml, which is this
    module's unreified twin: compute once, snapshot the decision eagerly, build the
-   literals behind [Explanation.deferred], every product through [Checked]. *)
+   literals behind [Explanation.deferred], every product through [Checked].
+
+   ---------------------------------------------------------------------------
+   Over the BITS encoding (M8-bits-encoding-T3, docs/DECISIONS.md D-0134 section 8)
+   ---------------------------------------------------------------------------
+
+   The enforce-hold face and the refutation half of entailment are [Linear] instances
+   over LE and GE, so over a bits scope they are already [Linear]'s bits `pol` (D-0132),
+   with the reifier as one more term. The two [Clause] pieces are not: the nogood is RUP
+   over A, B and the LADDER, and over a bits variable no bound crosses a row by unit
+   propagation (D-0127). So a scope with a bits variable is built with [~rows], A's and
+   B's ids and big-Ms from [Encoding.add_int_lin_eq_reif], and the SAME nogood is
+   derived as [Ne]'s two halves resolved on the selector ([Explanation.Resolve]), each
+   half carrying the reifier as one more [Linear_term] at the value that denies the
+   equality, with A's or B's own guard coefficient:
+
+     A + every pair's bridge + |big_a| x b's bridge, saturated:  sel \/ ~facts \/ [b <> wrong]
+     B + every pair's bridge + |big_b| x b's bridge, saturated: ~sel \/ ~facts' \/ [b <> wrong]
+
+   Both degrees are exactly 1 (the pairs sum to c and the guard is off at [p_wrong]),
+   and the sum resolves the selector away: the clause left is [nogood]'s, literal for
+   literal. The ENTAILMENT piece ([entail_equal]) is the same derivation read the other
+   way round: its claim is the reifier off [p_wrong], whose negation is exactly the bound
+   the reifier's term assumes, so the derived clause IS its trace clause `claim \/
+   ~facts` -- maxmin's claim variable is carried the same way (D-0134 section 2.3).
+   Measured before this code (bench/bits_spike/probe_t3c.sh, r1/r2/n1 verified, the pin
+   without the reifier's literal or with the wrong bridge refused at the `ia`). The
+   reason half is untouched (D-0026's split). A scope with no bits variable has no
+   [rows] and is byte for byte what it was. *)
 
 module Encoding = Baguette_proof.Encoding
 
@@ -78,6 +106,9 @@ module Encoding = Baguette_proof.Encoding
    the same freeze [Linear.make] and [Ne.make] perform and for the same reason: a
    nogood literal is stated relative to the declared bound. *)
 type term = { coeff : int; x : Var.t; name : string; decl_lo : int; decl_hi : int }
+
+(* A's and B's ids and big-Ms over a bits scope (the header's last section). *)
+type ne_rows = { a_id : int; b_id : int; big_a : int; big_b : int }
 
 type payload = {
   p_terms : term list;
@@ -89,6 +120,7 @@ type payload = {
          int_ne_reif. The nogoods below name this value, because a nogood that did not
          mention the reifier would be claiming the disequality unconditionally -- which
          is the I-P5 failure [Ne] shipped between M1-T9 and M1-T17, one level up. *)
+  p_rows : ne_rows option; (* over a bits scope (T3), else [None] *)
 }
 
 type t = Reif.t
@@ -109,7 +141,32 @@ let nogood p pairs =
        pairs
     @ Encoding.ne_clause_lits ~name:p.p_bname ~decl_lo:0 ~decl_hi:1 p.p_wrong)
 
-let explain p pairs = Explanation.deferred (fun () -> nogood p pairs)
+(* The same nogood over a bits scope, derived (the header's last section): A and B,
+   each with every pair as a [Linear_term] on the row's own coefficient and the reifier
+   at [p_wrong] on the row's guard coefficient, resolved on the selector. The guard is
+   [-big] when the disequality side speaks at b = 0 (int_eq_reif) and [+big] when it
+   speaks at b = 1 (int_ne_reif): [Encoding.guard_row]'s rule. *)
+let nogood_resolve p r pairs =
+  let guard big = if p.p_wrong = 0 then Checked.neg big else big in
+  let part row sign big =
+    Explanation.combine
+      (Explanation.term 1 (Explanation.model_row row)
+       :: List.map
+            (fun (tm, v) ->
+              Explanation.linear_term ~coeff:(sign * tm.coeff) ~name:tm.name
+                ~decl_lo:tm.decl_lo ~decl_hi:tm.decl_hi ~value:v [])
+            pairs
+      @ [
+          Explanation.linear_term ~coeff:(guard big) ~name:p.p_bname ~decl_lo:0 ~decl_hi:1
+            ~value:p.p_wrong [];
+        ])
+      1
+  in
+  Explanation.resolve [ part r.a_id 1 r.big_a; part r.b_id (-1) r.big_b ]
+
+let explain p pairs =
+  Explanation.deferred (fun () ->
+      match p.p_rows with None -> nogood p pairs | Some r -> nogood_resolve p r pairs)
 
 (* The reifier's own contribution to the reason half (D-0018 point 3 / D-0026): it is
    fixed at the value the nogood names, so the trace line's tail carries it too. Over a
@@ -246,14 +303,15 @@ let entail_equal p store =
 
 (* [terms] is the condition `sum a_i x_i = rhs`; [reifier] is not among them.
    [positive] is [true] for `int_eq_reif` and [false] for `int_ne_reif`. The four ids
-   and two big-Ms come from [Encoding.add_int_lin_eq_reif], which posted the rows; only
-   LE and GE are cited, so only their ids are taken.
+   and two big-Ms come from [Encoding.add_int_lin_eq_reif], which posted the rows; LE
+   and GE are cited by the [Linear] faces, and A and B ([?rows]) only over a bits scope,
+   where the disequality pieces derive through them (the header's last section).
 
    Zero-coefficient terms are dropped for the disequality pieces, exactly as [Ne.make]
    drops them: a term that is not part of the constraint must not count towards "how
    many terms are unfixed". They are kept in the [Linear] rows, which skip them
    themselves and must be given the row's own term list unchanged (M2-L6). *)
-let make ~le_id ~ge_id ~k_le ~k_ge ~positive store terms rhs ~reifier =
+let make ?rows ~le_id ~ge_id ~k_le ~k_ge ~positive store terms rhs ~reifier =
   let vac_eq = if positive then 0 else 1 in
   let guard k = if vac_eq = 1 then (Checked.neg k, 0) else (k, k) in
   let kl, dl = guard k_le and kg, dg = guard k_ge in
@@ -286,6 +344,7 @@ let make ~le_id ~ge_id ~k_le ~k_ge ~positive store terms rhs ~reifier =
       p_b = reifier;
       p_bname = Store.name store reifier;
       p_wrong = vac_eq;
+      p_rows = rows;
     }
   in
   let rows store =

@@ -1129,6 +1129,28 @@ let report_stats (st : Search.stats) ~exhausted =
   if Search.stats_pb_fallbacks st <> [] then
     Printf.eprintf "stats: %-10s %10s        first fallback reason: %s\n" "pb-why" ""
       (List.hd (Search.stats_pb_fallbacks st));
+  (* M8-bits-encoding-T3 (D-0134 section 11): every reason among the RECORDED fallbacks
+     (the first [Search.pb_reason_cap]), counted, most frequent first. A row with a bits
+     term offers no PB row (D-0132 section 2.7), so over bits the clause path's share
+     moves to "no PB row for instance int_lin_le" and its kin; this is the line that
+     says by how much, which `pb-why` (the first reason only) cannot. *)
+  (match Search.stats_pb_fallbacks st with
+  | [] -> ()
+  | reasons ->
+      let counts = Hashtbl.create 8 in
+      List.iter
+        (fun r ->
+          Hashtbl.replace counts r
+            (1 + Option.value (Hashtbl.find_opt counts r) ~default:0))
+        reasons;
+      let sorted =
+        List.sort
+          (fun (r1, n1) (r2, n2) -> if n1 <> n2 then compare n2 n1 else compare r1 r2)
+          (Hashtbl.fold (fun r n acc -> (r, n) :: acc) counts [])
+      in
+      Printf.eprintf "stats: %-10s %10d recd   %s\n" "pb-whys" (List.length reasons)
+        (String.concat "; "
+           (List.map (fun (r, n) -> Printf.sprintf "%d x %s" n r) sorted)));
   Printf.eprintf "stats: %-10s %10d pivots %s\n" "pb-steps" st.Search.n_pb_steps
     "pivots eliminated by linear combination + reduction, over all analyses";
   Printf.eprintf "stats: %-10s %10d rows   %s\n" "pb-convert" st.Search.n_pb_converts

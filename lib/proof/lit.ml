@@ -34,10 +34,27 @@ let ident_char = function
   | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' -> true
   | _ -> false
 
+(* 2026-11-18 (M8-bits-encoding-T3, answering M6-T22's cross-session request: the scan
+   below was about 3 % of QR48's proof-mode time, as [go] and [ident_char]). The scan reads
+   a 256-entry table in a loop instead of calling [ident_char] from a recursive closure;
+   it answers the same question for every byte, so every name is what it was. A memo of
+   the answer was tried first and measured useless there: a one-entry memo on the
+   string's physical identity left the profile unchanged, because QR48's lines are
+   clauses over DIFFERENT variables, and a table keyed on the name would hash it end to
+   end, which is the cost being removed (docs/DECISIONS.md D-0134 section 12). *)
+let ident_table =
+  Bytes.init 256 (fun i -> if ident_char (Char.chr i) then '\001' else '\000')
+
 let needs_sanitize name =
   let n = String.length name in
-  let rec go i = i < n && ((not (ident_char (String.unsafe_get name i))) || go (i + 1)) in
-  go 0
+  let i = ref 0 in
+  while
+    !i < n
+    && Bytes.unsafe_get ident_table (Char.code (String.unsafe_get name !i)) = '\001'
+  do
+    incr i
+  done;
+  !i < n
 
 let sanitize name =
   if needs_sanitize name then String.map (fun c -> if ident_char c then c else '_') name

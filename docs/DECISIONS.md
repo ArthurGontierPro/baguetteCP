@@ -12992,7 +12992,7 @@ stdout, exit code, `.opb` and `.pbp` are byte-identical** to main's binary `a921
 
 ## D-0134  M8-bits-encoding-T3: the full substrate -- maxmin over bits by SELECTOR rows and one `Resolve` step, the checker facts measured first, and the step order
 
-**Status**: **IN PROGRESS, DESIGN SETTLED** (agent-t3, branch `wave44-t3`, 2026-11-16). **Steps 1 and 2 (int_ne only) landed 2026-11-18** (agent-t3b, §4 onwards); steps 3 to 5 and the rest of step 2 are open (§7).
+**Status**: **IN PROGRESS, DESIGN SETTLED** (agent-t3, branch `wave44-t3`, 2026-11-16). **Steps 1 and 2 (int_ne only) landed 2026-11-18** (agent-t3b, §4 onwards); steps 3 to 5 and the rest of step 2 are open (§7). **Step 2's rest, steps 3 and 4 landed 2026-11-18** (agent-t3c, branch `wave46-t3`, §8 onwards): the reified and `bool2int` holds released, mapping's and ATSP's walls diagnosed and mapping's fixed, PB analysis over mixed rows measured and left to the clause path, learned clauses over atoms checked; step 5 designed and probed, not built (§13).
 Written before the first edit to `lib/`, as D-0132 was: §1 is measured on the checker, §2 is
 the design as it will be built, §3 the plan with coordinates; §4 onwards is filled as each
 step lands. Inputs read whole: D-0132, D-0130 §3.4/§7.4/§7.5/§13-§15 and its addendum,
@@ -13308,6 +13308,355 @@ widths. The commits after `20c324f` are documentation only.
   maxmin's selector rows and `Ne`'s pair are its two producers, and the guarded rows of the
   reified families are the next. The `[resolve]` origin tag lets a mutation lane aim at it.
 
+### 8. Step 2's rest: `int_eq_reif` / `int_ne_reif` released (2026-11-18, agent-t3c, branch `wave46-t3`)
+
+§7 named the shape: the four guarded rows are `Ne`'s A/B pair plus LE/GE, each with the
+reifier as one more term. The two faces that are [Linear] instances (enforce-hold, and the
+half of entailment that REFUTES the condition) were already the bits arm's `pol`. The two
+[Clause] pieces were not, and neither was the entailment that pushes the reifier, so they
+were probed on the checker before any code (`bench/bits_spike/probe_t3c.sh`, VeriPB 3.0.2
+d5644ca4, fataepyc-06). Model R is satisfiable: `x in 0..7` on 3 bits, `y in 0..3` on 2,
+`b` a bool on the ladder, `b <-> (x + y = 5)` as `Encoding.add_int_lin_eq_reif`'s four rows
+over `_ne1` (c = 5, big_a = big_b = 6). Model N is the same with `int_ne_reif`'s guards.
+
+| probe | line(s) | verdict |
+|---|---|---|
+| r1 | enforce-not-hold, the hole `x <> 3` from `b = 0`, `y = 2`: `pol @A @x3a + @y2a + @bt 6 * + s @B @x4b + @y3b + @bt 6 * + s + s` (`@bt` the width-1 tautology `+1 b_ge_1 +1 ~b_ge_1 >= 1`), pinned by `ia +1 ~x_ge_3 +1 x_ge_4 +1 ~y_ge_2 +1 y_ge_3 +1 b_ge_1 >= 1` | **s VERIFIED** |
+| r2 | the ENTAILMENT, `x = 3`, `y = 2` push `b >= 1`: r1's `pol` unchanged, pinned by the trace clause `b_ge_1 \/ ~facts` | **s VERIFIED** |
+| r3 | r1 pinned without the reifier's literal | **refused**: "Expected constraint is not syntactically implied by the constraint at the hint." |
+| r4 | r1 with B2 of `x` cited in the A half where B1 belongs | **refused**, the r3 wording |
+| r5 | r2's clause as a bare `rup` over the pairs | accepted HERE (3 bits); not relied on, as D-0134's a5 and g2 |
+| r6 | enforce-hold: LE with `y >= 2` and `b >= 1` gives `x <= 3`, [Linear]'s bits `Combine` with `b` a term (`5 *` its bridge) | **s VERIFIED** |
+| r7 | entailment's refuting half: LE with `x >= 4`, `y >= 2` pushes `b <= 0` (divided by 5) | **s VERIFIED** |
+| r8 | the all-fixed conflict (`b = 0`, `x = 3`, `y = 2`): r1's derivation read as `~facts` | **s VERIFIED** |
+| n1 | `int_ne_reif`: `b = 1`, `y = 2` make `x <> 3`, the guard `+6 b` in both halves, `~b_ge_1` in the clause | **s VERIFIED** |
+| n2 | n1 pinned with `b_ge_1`, the wrong polarity | **refused**, the r3 wording |
+
+The decisions, each read off a row above.
+
+1. **No new constructor.** The two [Clause] pieces over a bits scope are `Ne`'s `Resolve` of
+   the A and B halves with the reifier as one more `Linear_term` in each, on that row's own
+   guard coefficient and at the value that denies the equality (`p_wrong`). The guard is
+   `-big` when the disequality side speaks at b = 0 (`int_eq_reif`) and `+big` when it speaks
+   at b = 1 (`int_ne_reif`), which is `Encoding.guard_row`'s rule, read from the polarity.
+   The reifier's bridge is the width-1 tautology (D-0132 §5.3), so it adds nothing to the
+   arithmetic and keeps its literal in the clause.
+2. **The entailment is the same derivation.** Its claim is the reifier off `p_wrong`, whose
+   negation is exactly the bound the reifier's term assumes, so the derived clause IS the
+   trace clause, as for maxmin's claim variable (§2.3). r2 is r1's `pol` with the claim
+   listed first.
+3. **The rows' ids.** `Encoding.add_int_lin_eq_reif` returns a record (`eq_reif_rows`) with A's
+   and B's ids and big-Ms beside LE's and GE's. `compile.ml`'s `post_reif_eq` hands them to
+   `Reif_lin_eq.make ?rows` iff the condition's terms hold a bits variable, as `post_ne`
+   does. With no bits variable nothing changes, byte for byte.
+4. **The holes it punches** are `Ne`'s: an interior removal whose derived clause is the
+   hole's trace clause, and a settle past a hole follows §5.2 (the trace's `rup` after the
+   `ia`). Nothing new was needed in `Trace` or `Justify`.
+
+What landed: `lib/core/prop/reif_lin_eq.ml` (`ne_rows`, `nogood_resolve`, the header's bits
+section), `lib/proof/encoding.ml` (the record), `lib/flatzinc/compile.ml` (`int_eq_reif`
+leaves `held_families`, `post_reif_eq` passes the rows). Tests. test_prop: five scenes
+(the hole at b = 0, the entailment, the all-fixed conflict, `int_ne_reif`'s hole and its
+entailment), each a `Resolve` of two parts whose clause is the per-value twin's [Clause]
+literal for literal, with D-0026's agreement, and the hole checked interior; the hole, the
+entailment and the conflict written by `emit_bits_pruning` under a DECISION over the
+satisfiable model VERIFY, as does `int_ne_reif`'s hole, and three tamperings are refused
+at the `ia` wording (r3, the entailment without its claim, n2). test_mutation: `bits_reif` (`bits_reif_eq_sat` inlined,
+solved in its own order) with `pol-cite`, `truncate` and `drop-literal` aimed at
+`[resolve]`, all refused. test_compile: r and s of the eligibility scene go on bits. Three
+models: `bits_reif_eq_sat` (an interior hole, an entailment pushing `d` under a decision, a
+conflict so that the trace reaches the page, a learned clause over x's atom),
+`bits_reif_eq_unsat` (four pigeons as six reified equalities, three of each polarity, the
+reifiers forced) and `bits_reif_eq_branch_unsat` (D-0057's reifier decided by search, over
+bits). A first version of the sat model had no conflict and its trace never reached the
+page (D-0018 writes it lazily): the mutation lanes said "found no site" and the model was
+rebuilt with one, the same finding as §5.5.
+
+### 9. `bool2int` released, through `compile.ml`
+
+`lib/core/prop/bool2int.ml` justifies its four pushes with [Clause]s, RUP over its two rows
+and the integer's ladder, and a bits integer has no ladder. The file is M6-T22's this week,
+so the release is made where the choice belongs anyway, in the compiler: over a bits `x`,
+`post_bool2int` posts the same two rows in the same order (`x - b <= 0`, `b - x <= 0`) with a
+[Linear] each (`Lin_eq.make`), packed under a face `Bool2int_row` that reports `bool2int` (the
+device of [Arith]'s faces). Linear's four pushes over the two rows are `Bool2int`'s four, and
+each is the bits arm's `pol`. A bool2int whose integer is not on bits keeps `Bool2int`, so at
+`W = none` nothing moves, and `bool2int.ml` was not touched. Models `bits_bool2int_sat` (the
+x -> b direction over a bits row under a decision, then a clause conflict) and
+`bits_bool2int_unsat` (two channellings bound a sum below its floor at the root). No cross-
+session request was needed.
+
+### 10. Mapping and ATSP: what holds them, and the fix for mapping
+
+Both diagnosed on fataepyc-06 at `W = 0` with the binary of `main` (`7ddbf348`), 90 s, the
+`.opb.rows` kept (`/scratch/arthur/wave46-t3-out/diag/`).
+
+- **ATSP is held by `int_eq_reif`.** `2021_ATSP_instance9_0p25` warned about 22 variables of
+  width 2 303 880 left on the ladder at `W = 0`, all of the `job_end` array, each named by
+  `int_eq_reif(job_end_i, X, b)` rows (4 729 `int_eq_reif` in the instance). Their ladders
+  filled the 4 GB file cap of the diagnostic in under a minute (the 16 GB cap of the 177
+  in under 300 s). §8's release is the fix, measured in §14.
+- **Mapping is held by `int_times`'s case split.** `2015_mapping_mesh3x3_2` wrote 1 900 171
+  rows (840 MB) in its first minute and then nothing more until the timeout; the last rows
+  are guarded rows over `X_INTRODUCED_arith_453581`. The instance has 63
+  `int_times(b, y, z)` with `b` in 0..1 and `y` in 0..7200, and the builder split every one
+  over `y`: 7 201 guard Booleans and their rows each, 453 663 guards in all. Bits shrink a
+  row, not the number of rows (D-0132 §7), so `W` cannot help.
+
+**The fix: the case split runs over the NARROWER operand** (`lib/flatzinc/builder.ml`,
+added to the claim for this). `x * y = z` is symmetric, the split costs one guard and two
+to four rows per value of its case variable, and the builder always took the second
+operand. It now swaps the two when the first is strictly narrower (a constant counts as
+width 0, which sends `int_times(3, y, z)` down the linear path). A tie keeps the model's
+order, so every suite model with `int_times` is posted as before (both have the wider
+operand first or equal widths) and the 173 are byte-identical at `W = none`. `int_div` is
+not symmetric and keeps its split. The census over the 177's `.fzn`
+(`/scratch/arthur/wave46-t3-out/arith_census.tsv`, groups summed over every `int_times` and
+`int_div`):
+
+| instances | groups before | groups after |
+|---|---|---|
+| the 109 with `int_times` or `int_div` | 71 171 029 | 21 992 995 |
+| `2018_mapping_mesh_star_2` (261 `int_times`, y in 0..10000) | 2 610 261 | 522 |
+| `2015_mapping_mesh3x3_2` | 453 663 | 126 |
+| `2011_carpet-cutting_mzn_rnd_test.15` | 2 541 200 | 50 824 |
+| `2025_carpet-cutting_cc_rnd_8_1` | 3 343 248 | 94 176 |
+| the five `arithmetic-target` (both operands wide, and `int_div`) | 21 912 036 | 17 529 573 |
+
+What is left after the swap is `arithmetic-target`, whose products have both operands wide
+(up to 86 570): that is step 5's case (§13). The swap changes `W = none` too, on the
+Challenge only (mapping, carpet-cutting, ATSP's `int_times(x in 0..7, y in 0..28)`): it is
+an encoding of the model and not of the proof. T4's comparison of `W = none` with `W = k`
+must use this binary on both sides.
+
+### 11. Step 3: PB conflict analysis over mixed rows -- measured; the clause fallback stays, and the lift is designed, not built
+
+A [Linear] instance over a row with a bits term is packed without `~row:` (D-0132 §2.7), so
+PB analysis meets `No_row` on it and the M2-L3 clause path learns instead. To count how
+often, `--stats` gains `pb-whys`: every recorded fallback reason (the first 64), counted.
+
+On the suite (179 models; `sA-none/`, and the gate's `sG-{0,8}/`, which have `pb-whys`):
+
+| W | PB analyses | PB rows learned | fell back | ...on a mixed `int_lin_le` row (of the recorded) | models whose FIRST fallback is one |
+|---|---|---|---|---|---|
+| none | 307 | 106 | 201 | 0 | 0 |
+| 0 | 341 | 95 | 246 | 115 of 246 | 21 |
+| 8 | 334 | 103 | 231 | 80 of 231 | 7 |
+
+So on the suite the bits arm costs PB analysis eleven learned rows of 106 at `W = 0` and
+three at `W = 8`, and half of the fallbacks at `W = 0` are mixed rows. Every model still
+verifies and still gives its answer: the clause learned instead is weaker, not wrong.
+
+On the Challenge, PB analysis was looked for first. Eight instances of the 177 that finish
+compiling (train, ship-schedule, smelt_2, unit-commitment; `pbscan/`, 90 s) learn NO PB row at
+either threshold: their fallbacks are `cumulative`, `bool2int`, `<unknown>` (a decision or a
+declaration) and clauses before any mixed row. The 215 `.fzn` kept under `wave41run/*/work/`
+were then scanned at `W = none` (`pbscan3/`, 45 s each; 80 printed their statistics within
+the budget, 24 tried PB analysis): PB analysis learns a row on twelve of them, and the five
+with the most were run at `W = 0` and `W = 8` (`pbscan4/`, the same 45 s, every run stopped
+by the limit):
+
+| instance | W | nodes in 45 s | PB analyses | learned | fell back | mixed `int_lin_le` (of the recorded) |
+|---|---|---|---|---|---|---|
+| `2017_rcpsp-wet_j90_48_4-wet` | none | 717 | 201 | 25 | 176 | 0 of 64 |
+| | 0 | 4 030 | 1 546 | 64 | 1 482 | 0 of 64 |
+| `2019_rcpsp-wet-diverse_j30_44_8-wet-diverse-4` | none | 98 | 14 | 6 | 8 | 0 of 8 |
+| | 0 | 98 | 14 | 0 | 14 | 10 of 14 |
+| `2023_roster-shifts-bool_s50_e50_c3` | none | 62 | 3 | 2 | 1 | 0 of 1 |
+| | 0 | 965 | 454 | 0 | 454 | 55 of 64 |
+| `2026_workforce-alloc_instance_202` | none | 3 412 | 1 533 | 23 | 1 510 | 0 of 64 |
+| | 0 | 14 140 | 6 896 | 0 | 6 896 | 0 of 64 (the first 64 are as at `none`) |
+| `2025_fbd1_FBDk06` | none | 92 | 40 | 23 | 17 | 0 of 17 |
+| | 0 | 93 | 40 | 23 | 17 | 0 of 17 (one variable on bits) |
+
+`W = 8` gives the `W = 0` line within a few units on all five. Where PB analysis fires on the
+Challenge and the bits arm puts its rows on bits, the bits arm takes most of it away: all of
+it on rcpsp-wet-diverse, roster-shifts-bool and workforce-alloc, two thirds of the rate on
+rcpsp-wet (12 % of the analyses learn at `W = none`, 4 % at `W = 0`,
+where its search visits 5.6 times more nodes in the same 45 s, so the counts are not
+comparable one for one); fbd1, with one variable on bits, keeps its 23 rows. By D-0130 §14 question 5's own rule the lift below is therefore worth
+building; T3 did not build it.
+
+**Why the bits term is not lifted at T3.** The obvious lift is the ladder's (M2-L11): replace
+a bits term by its order expansion over the minted atoms, the sparse chain as a ladder.
+That row is not one cutting-planes step from the atom pairs. For `X'` the bits sum and atoms
+at `v_1 < ... < v_k`, the staircase `X' <= (v_1 - lo - 1) + sum_j (v_(j+1) - v_j) x_ge_(v_j)` is
+valid, but each B2 pair gives only `X' <= (k_v - 1) + K_v x_ge_v`, and a nonnegative
+combination of those with total weight 1 on `X'` is a convex combination, weaker than the
+staircase at every corner but one; division does not repair it, because the bits keep
+their coefficients 2^i. What IS one step is the row INSTANTIATED at the propagation: the
+reason row plus each bits term's bridge at the bound it read, with the pruned term at the
+negation of its claim, unsaturated, i.e. the bits arm's `pol` without its division and
+saturation (D-0132 §2.1, the [Resolve] reading of the claim term). Building that needs four
+things this step did not have time to do well: PB analysis reading a reason's row from the
+ENTRY (its explanation) rather than from the instance (`row_of` is per instance today, and
+its caller is `search.ml`, M10-T1's this week); `Justify.emit_summand` rendering a bits
+`Linear_term` as its bridge inside a nested `pol` (today it can only raise there); the
+atoms' coefficients, which depend on the variable's bit count (`K = 2^n - k`), handed to
+`pb_analysis.ml` by the encoding; and a checker probe of the learned row's `ia` over atoms.
+D-0130 §14 question 5 set the rule ("only if the fallback is frequent on the instances that
+matter"); the numbers above are what that rule reads. The clause path is permanent anyway
+(D-0044) and sound on every row. What T3 leaves is the design above and the counter.
+
+D-0031's seven models (`chain_sat`, `guess_wrong_sat`, `ne_conflict_sat`,
+`near_limit_ne_sat`, `near_limit_unsat`, `offset_unsat`, `width_sat_depth`; `lin_sat` is the
+orchestrator's eighth) verify at `W = 0` and `W = 8` in this run as in §6. At `W = 0` each
+has two or three variables on bits; at `W = 8` only `chain_sat` (3) and `width_sat_depth` (2)
+have any. The nearest-neighbour links of D-0130 §14 question 2 suffice wherever a trace line
+walks them.
+
+### 12. Step 4: learned clauses over bits atoms, and `soli` / `conclusion BOUNDS` over a bits objective
+
+Nothing in the emission had to change; what was missing was a check that says so.
+
+- **Atoms before citation.** `Learned.introduce` writes its clause without passing it
+  through `Justify.validate_lits`, because every literal it writes came from a trace line
+  or a decision (D-0132 §2.6), and those were minted before their lines. test_mutation now
+  reads `bits_reif`'s honest proof line by line and checks that every literal of a bits
+  variable a line names was defined by an earlier `red` pair; the learned clause
+  `~x_ge_4 \/ y_ge_3` of that proof is one of the lines it reads. The I-X2 audit runs on in
+  every test, so a minted atom is retired once and only by the end-of-run sweep.
+- **The learned clause is load-bearing.** A lane `learned-rhs` raises the learned clause's
+  degree to 2. The model's own solution (`b = 0`, `y = 2`, `x = 3`) makes exactly one of its
+  literals true, so the strengthened clause is false on a solution, and the checker refuses
+  it.
+- **`soli` and `conclusion BOUNDS` over a bits objective** verify in the suite at `W = 0` and
+  `W = 8`: `bits_opt_min_sat`, `bits_maxmin_opt_sat` (ties, selectors listed), `opt_min_sat`,
+  `opt_max_sat`, `opt_floor_sat` (D-0132 §5.1's derived floor), `opt_ne_sat` and `opt_unsat`
+  (`BOUNDS INF INF`). A stopped optimisation concludes `NONE` (`Search.conclude_stopped`), so
+  no path writes a `BOUNDS` without an optimality or infeasibility proof, and none needed a
+  bits case. Step 4 is done.
+
+**A rendering request answered on the way** (M6-T22's cross-session row on `lib/proof/lit.ml`,
+which is in this claim). In proof mode every literal re-scanned its variable's name for
+characters to sanitise. A one-entry memo on the name's physical identity was tried first and
+measured useless (QR48 `bag_def`, `BAGUETTE_NODE_LIMIT=10000`, proof on, `perf record`): the
+scan's share did not move, because QR48's lines are clauses over different variables, and a
+table keyed on the name would hash it end to end, which is the cost. What landed is the scan
+itself read through a 256-entry table instead of a recursive closure calling `ident_char`:
+its self time goes from 2.05 % (`go` 1.12, `ident_char` 0.86, `needs_sanitize` 0.07) to 0.87 %,
+the wall time is within noise (9.83 to 9.97 s against 9.89 to 9.96 s, three runs each), and
+the `.opb` and `.pbp` are identical (md5). `/scratch/arthur/wave46-t3-out/litperf22/`.
+
+### 13. Step 5: `int_times` over two wide operands -- the design and its probe; not built
+
+After §10 the only large split left is a product whose two operands are both wide
+(`arithmetic-target`, five of the 177, 17.5 M groups). The design: split over the BITS of
+the narrower operand, in the model, as D-0060 put the value split in the model.
+`y = lo_y + sum_i 2^i c_i` over n fresh Booleans `c_i` (a linear equality), `p_i = x * c_i`
+(an `int_times` over a 0..1 operand, two groups each after §10), and
+`z = lo_y x + sum_i 2^i p_i` (a linear equality): n guards where the value split has w, and
+no new proof shape, every row a [Linear] or a narrow `int_times`.
+
+Probed by hand in FlatZinc before any code (`bench/bits_spike/probe_t3c_times.sh`, both at
+`W = 0`, both verified): `x * y = 2021` with `x <= y` over 2..300.
+
+| encoding | `.opb` | nodes | conflicts | `.pbp` | verify |
+|---|---|---|---|---|---|
+| value split (299 groups) | 345 864 B | 3 | 1 | 184 684 B | 0.02 s |
+| binary expansion (9 bits) | 18 294 B | 407 | 201 | 1 750 665 B | 0.12 s |
+
+The model is 19 times smaller and the propagation is much weaker: bounds over the expansion
+do not see the factorisation that the value split's guards see, so the search does the work
+and the proof grows 9.5 times. It is therefore a trade, not a free win, and it changes the
+SEARCH, which no other step of T3 does at `W = none`. Not built. If it is, it belongs under
+the bits threshold (the expansion when `Encoding.wants_bits` holds for the case operand),
+needs `Model.aux` to carry the expansion and `Model.check_assignment` to check it, and should
+be measured on the five `arithmetic-target` instances against the value split, which never
+completes its `.opb` there. `int_div` has no symmetric form and no expansion here.
+
+### 14. Measurements (fataepyc-06, VeriPB 3.0.2 d5644ca4; outputs under `/scratch/arthur/wave46-t3-out/`)
+
+**The suite** (`sA-{none,0,8}/`, snapshot `wave46-t3-snapA` at `37a5dfe`, binary `870d398c`,
+`run156.sh` over 179 models: the 173 of gate 46 and six new ones):
+
+| W | verified | models with a bits variable | `.opb` B | `.pbp` B | atoms | links | bits-arm `pol` | choice groups |
+|---|---|---|---|---|---|---|---|---|
+| none | 179 / 179 | 0 | 382 347 | 535 509 | 0 | 0 | 0 | 0 models |
+| 0 | 179 / 179 | 103 | 189 888 | 902 441 | 840 | 1 042 | 1 236 | 10 models |
+| 8 | 179 / 179 | 31 | 194 492 | 788 209 | 542 | 842 | 730 | 6 models |
+
+At `W = none` the 173 pre-existing models are **byte-identical in stdout, exit code, `.opb`
+and `.pbp`** to `gate46.art/new` (binary `7ddbf348`); the six differences are the six new
+models, which have no reference. Held back at `W = 0`, summed over models: gcc 107, alldiff
+47, element 43, cumulative 12, holes 3 (`int_eq_reif` and `bool2int` are gone from the line);
+at `W = 8`: element 6, alldiff 2, holes 1. Against §6 at `W = 0`: 14 more models on bits, 66
+more bits-arm lines, all verified.
+
+**The 177 encoding-wall runs at `W = 0`** (§6's protocol and `run169.sh`, 8-way, `timeout
+300`, `ulimit -v 16 GiB -f 16 GB`, snapshot binary `870d398c`, `w0-177A/`; a `.opb` is
+complete when its header is on disk):
+
+| prior status (D-0129) | instances | complete, T2 | step 1 | step 2 (`int_ne`) | this work |
+|---|---|---|---|---|---|
+| CAPPED | 143 | 43 | 78 | 78 | **131** |
+| TIMEOUT | 19 | 16 | 16 | 16 | 17 |
+| ERROR | 7 | 6 | 6 | 6 | 6 |
+| OPT8 | 8 | 8 | 8 | 8 | 8 |
+| **all** | **177** | **73** | **108** | **108** | **162** |
+
+**54 more complete `.opb` and none lost**; 114 of the 162 printed an answer or an incumbent
+within the 300 s, against 82 of 108. Attributed by the gained instances' constraints
+(`arith_census.tsv` and a count of the `.fzn`'s builtins):
+
+- the narrower case operand (§10): all 18 carpet-cutting (each 0.6 to 3.3 M groups down to
+  8 to 94 k), the 9 mapping that were unfinished, and `2026_kitchen_kitchen_b1` (3.6 M
+  groups down to 1 040);
+- the reified release (§8): all six ATSP (`2021_ATSP_*` and `2025_atsp_*`, 9 MB to 94 MB
+  where step 2 hit the 16 GB file cap), `2015_cvrp_A-n64-k9` (111 380 `int_eq_reif`, a
+  3.9 GB `.opb`), `2021_vrp-submission`, `2023_multi-agent-graph-coverage`, `2025_hitori`,
+  `2026_atp-stage2`, the five `flowshop-workers`, the three `zephyrus` (with `bool2int`),
+  the four `yumi-dynamic` and the two `saeling`, whose `int_times` groups the swap does not
+  change (their case operands are already 0..1);
+- both, on `2025_ihtc-2024-marte_i11` (842 963 `int_eq_reif`, 848 k groups down to 61 k, a
+  3.2 GB `.opb`).
+
+Still unfinished at 300 s, 15: `arithmetic-target` 5 (§13's case), `multiple-constant-
+multiplication` 3, and one each of `liner-sf-repositioning`, `rcpsp-wet-diverse`,
+`whirlpool`, `pentominoes-zayenz`, `ma-path-finding`, `table-layout`, `ihtc-2024-marte`.
+Among the completed, what still holds variables back is element (11 603 variables in 60
+instances), holes (5 701 in 54), gcc (4 358 in 10), alldiff (1 780 in 11) and cumulative
+(519 in 8); `int_eq_reif` (18 527 in 74 under step 2) is gone, and `bool2int` never showed.
+The 162 `.opb` weigh 66.8 kB to 4.07 GB, median 52.9 MB (80.4 MB for step 2's 108), 11 of
+them 1 GB or more. `2014_road-cons_road_20` again completes its `.opb` and dies on the
+16 GiB address-space cap during search (rc 134), as in §6.
+
+### 15. The gate, and where T3 stands
+
+**The gate** (`/scratch/arthur/wave46-t3-out/gate.status`, a fresh clone of `wave46-t3` at
+`e1b46dc`, which carries `main`'s M6-T22 merge, `make check` under `ulimit -v 4000000`): **rc
+0**, 26 s wall with the shared dune cache warm, peak RSS 89.7 MB (`/usr/bin/time -v`): format,
+build, the width lint, determinism, every unit suite (3 790 `ok` lines), 179 model tests passed,
+22 of them `bits_*` at `--bits-above 0` as well. With no flags, against gate 47's binary
+(`a9217430`, `main` at `23eb9d6`): stdout and exit codes identical on all 179 models, `.opb` and
+`.pbp` identical on 178. The one difference is `arith_times_narrow_sat`, new here, whose
+`int_times(b, y, z)` the old binary splits over `y` (§10). The suite with the gate's binary
+(`e8354a74`): 179 / 179 verified at `W = 0` and at `W = 8`, with §14's byte totals to the byte.
+
+**Where T3 stands.** Steps 1 to 4 are done and step 5 is designed and probed: maxmin,
+`int_ne`/`int_lin_ne`, `int_eq_reif`/`int_ne_reif` and `bool2int` hold nothing over bits;
+mapping and carpet-cutting no longer split over their wide operand; PB analysis over mixed
+rows is measured and left to the clause path; learned clauses over atoms are checked and
+lanes cover them. The bits encoding's holds are now the enumerating families of D-0130 §3.4
+(gcc, alldiff, element, cumulative) and declared holes, nothing else.
+
+**What T4 inherits.**
+
+- `W = none` moved on the Challenge (§10, the `int_times` operand order), so T4's baseline
+  for `W = none` must be re-run with this binary rather than read from D-0133.
+- The 177 after this work: 162 complete `.opb` at `W = 0` (from 108), the rest
+  `arithmetic-target` and nine singletons; what holds variables back is the enumerating
+  families and declared holes only. Read §14 before choosing T4's middle value of `W`.
+- PB analysis over mixed rows: §11's design (the row instantiated at the propagation, read
+  from the entry; a bits `Linear_term` rendered as its bridge inside a nested `pol`; the bit
+  count handed to `pb_analysis.ml`). §11's five Challenge instances say it is worth
+  building: where PB analysis learns at `W = none`, the bits arm takes most or all of it
+  away. It touches `search.ml`'s call (the row per entry), so it wants that file free.
+- Step 5 (§13): the binary expansion for `arithmetic-target`, a search trade to measure, not
+  a proof shape. `int_div` has no expansion.
+- The three-line bits pruning (`pol` + `ia` + `del`) and the per-atom `red` pair are still
+  D-0132 §7's bytes; nothing here changed them.
+
 ## D-0138  M6-T22: the per-node cost on the XOR codes was the engine asking every learned clause about every variable it names; a wake index of watched variables and smaller fixes make QR48 4.4 times faster with the same nodes and the same proof
 
 **Status**: **DONE**, recorded 2026-11-18 (agent-pernode, `wave45-pernode`). Measured on
@@ -13486,3 +13835,426 @@ A self-watching instance whose `ask` says yes off its watched variables would lo
 which is the M2-T5 hazard. `check_watched` under BAGUETTE_DEBUG is the instrument, and it runs after
 every run of every such instance. A caller that ran a learned clause from its own copy of the
 instance, outside `t.instances`, would bypass `sync_watched`. No caller does.
+
+## D-0140  M11-complexity-T1: the inventory of the costs that grow with the run, measured on six instances at four node budgets, ranked, and split into the three code batches
+
+**Status**: **DONE**, recorded 2026-11-18 (agent-inventory, `wave47-inventory`). Read-only on the
+code, and no file under `lib/`, `bin/` or `test/` changed. Measured on `fataepyc-06` with `main` at
+`dc40d89` (binary md5 `a92174309acf973610248d5ce7700098`), outputs under
+`/scratch/arthur/wave47-inventory-runs/`. The supporting scripts, the summaries and the raw
+profiles are under `bench/perf/` (text only). The contract is ROADMAP `## M11-complexity`, row T1.
+The known items are cited, not rediscovered: D-0136 (`Retention.retire`), D-0138 (the wake index
+and its §5 list), D-0090 (`Trace.position_of`) and the orchestrator's finding of 2026-11-18
+(`Search.count_learned_activity`).
+
+### 1. Method
+
+**Instances.** Two codes models and four integer-heavy Challenge instances that time out with many
+conflicts. The Challenge `.fzn` are the files D-0135 flattened (`wave44-noproof-out/fzn/`), copied.
+
+| instance | source | `.fzn` md5 | why |
+|---|---|---|---|
+| `H_qr48_bag_def` | `/scratch/arthur/codes-bench/` | `3ed67581` | D-0138's instance, Boolean, UNSAT at 23 367 nodes |
+| `H_qr72_bag_def` | same | `8826a8c3` | D-0138's, Boolean, long |
+| `2013_rcpsp_11` | wave43 TIMEOUT, D-0135 | `3b810f0e` | cumulative + reified linear, 31 nodes/s over 20 min |
+| `2012_mspsp_hard_01` | same | `ab82542d` | int_times + reified, 30 nodes/s over 20 min |
+| `2011_cyclic-rcpsp_easy_6` | same | `b6939345` | int_times guards, learned PB rows, 240 KB of proof per node |
+| `2014_openshop_gp10-4` | same | `61d04e6c` | 1 800 int_lin_le_reif, depth 226 |
+
+**Budgets.** `BAGUETTE_NODE_LIMIT` = 1 (the setup alone), 1 000, 10 000 and 40 000, each with
+`--no-proof` and with `--proof`, and `--bits-above 0` once on two instances at 10 000. QR48 ends
+UNSAT at 23 367 nodes, so its 40 000 run is the whole run.
+
+**Instruments**, one process each (`bench/perf/one.sh`).
+
+- `perf stat -e instructions:u,cycles:u` with `--stats` and `OCAMLRUNPARAM=v=0x400` (GC totals at
+  exit). The summary is `bench/perf/m11t1-stats.tsv`, written by `bench/perf/summ47.sh`.
+- `perf record -F 499 --per-thread` for self time. Four agents shared the node, and the per-user
+  `perf_event_mlock_kb` budget refused a plain `perf record` as soon as several ran at once (it
+  exits 255 with an empty file, silently under `-q`). `--per-thread -m 128` fits.
+- **The marginal profile** (`bench/perf/agg47.py A.data B.data`). For two runs of the same
+  instance and mode at budgets A < B, the samples of each symbol in B minus those in A. The setup
+  and the first A nodes cancel, so what is left is the cost of nodes A to B, and a cost that grows
+  with the run shows as a share that grows from one segment to the next. All the shares below are
+  marginal unless they say otherwise. Every profile is in `bench/perf/m11t1-profiles.txt`.
+- `perf record --call-graph dwarf` at 99 Hz on four instances at 10 000. It attributes OCaml
+  frames but NOT the C runtime, because OCaml 5 runs OCaml code on its own stack and `caml_c_call` switches
+  to the system stack, so `caml_compare`, `caml_hash` and the GC never unwind to their OCaml
+  caller (28 % of the samples on QR72 have no Baguette frame). Where a C leaf matters, the
+  attribution below comes from a scratch experiment instead.
+- **Scratch experiments.** Three patches (the third also split in three) applied to `main` in a
+  throwaway clone and never merged
+  (`bench/perf/scratch/*.patch`), measured at the same budget, with stdout, node counts,
+  propagator runs and, in proof mode, `.pbp` md5 compared to `main`'s.
+- Load on the node was 40 to 60 on 192 cores. **Instruction counts are the metric.** Cycles moved
+  by up to 30 % between two runs of the same binary at different times (QR72 at 40 000 nodes,
+  268 G then 198 G), so cycles are quoted only from binaries started together, three times, and read
+  against a control (`bench/perf/rep47.sh`, §4).
+
+**The code reading.** I read `engine.ml`, `store.ml`, `domain.ml`, `search.ml` and
+`retention.ml` on the per-node, per-conflict and per-propagation paths. Three read-only sub-audits
+covered the propagators, the analysis/trace/justification modules and the proof writer, with
+the same question. I checked every item that ranks against the code. One of their claims was
+corrected on the way. The eager origin strings (J6) are not dead work in a CLI run, because
+`bin/main.ml` turns the writer's audit on by default and the audit keeps each live id's origin.
+Making them lazy is still right, and still leaves the bytes alone.
+
+### 2. What grows, the cost of a node segment by segment
+
+User instructions per node over each segment, in millions. Setup is the whole run at budget 1, in
+units of 10⁹.
+
+| instance | mode | setup (G) | nodes 1..1k | 1k..10k | 10k..40k | growth |
+|---|---|---|---|---|---|---|
+| QR48 | no-proof | 0.07 | 1.46 | 2.72 | 4.50 (to 23 367) | ×3.1 |
+| QR48 | proof | 0.09 | 2.90 | 4.59 | 6.73 (to 23 367) | ×2.3 |
+| QR72 | no-proof | 0.14 | 2.16 | 3.92 | 7.01 | ×3.2 |
+| QR72 | proof | 0.17 | 4.34 | 6.69 | 10.41 | ×2.4 |
+| rcpsp_11 | no-proof | 1.53 | 3.46 | 9.73 | **32.90** | **×9.5** |
+| rcpsp_11 | proof | 2.43 | 29.32 | 29.96 | 53.69 | ×1.8 |
+| mspsp_hard_01 | no-proof | 4.22 | 7.31 | 10.89 | 21.61 | ×3.0 |
+| mspsp_hard_01 | proof | 6.18 | 16.15 | 19.61 | 31.30 | ×1.9 |
+| cyclic-rcpsp_easy_6 | no-proof | 29.70 | 40.82 | 41.00 | 38.49 | flat |
+| cyclic-rcpsp_easy_6 | proof | 43.22 | 179.41 | 185.42 | 175.53 | flat |
+| openshop_gp10-4 | no-proof | **762.64** | 4.61 | 8.64 | 22.18 | ×4.8 |
+| openshop_gp10-4 | proof | **1 001.88** | 8.80 | 15.17 | 28.08 | ×3.2 |
+
+Allocation per node (thousands of words, no-proof, same segments): QR72 69, 127, 222. rcpsp_11
+108, 209, 577. mspsp 211, 290, 447. openshop 94, 179, 450. cyclic 1 263, 1 159, 1 040. What
+grows is the copy of the database per conflict (R1 in §5, three words per learned constraint)
+and the learned-clause runs, each of which allocates its survey (E2, E4).
+
+The counters say what grows. At 40 000 nodes the database holds about 20 000 learned constraints
+on every instance but cyclic (73), and the learned clauses' runs per node, averaged from the
+start, go from 44 to 204 to 525 on QR72 and from 42 to 288 to 981 on rcpsp_11, of which 0.05
+and 2.7 per node change anything. On rcpsp_11 at 40 000 nodes the advisors declined 341 M of
+411 M wakes, 8 500 per node.
+
+**Three readings.** (1) On the codes models and on rcpsp_11, mspsp and openshop the cost of a node
+grows three to ten times between the first thousand nodes and the 10 000 to 40 000 segment. The
+growth is the learned database, and on the deep instances the trail as well (§3, §4). (2) The
+proof adds a cost per node that is roughly FLAT (rcpsp_11 26, 20 and 21 M instructions per node,
+mspsp 9, 9 and 10, cyclic 139, 144 and 137, QR72 2.2, 2.8 and 3.4). It is large, and T5 is about
+its constant, not about growth. (3) Two costs are larger than anything else on their instance.
+openshop spends 762 G instructions (112 s) before node 1, in `--no-proof` as well, which is
+outside the three batches (X1 in §5). cyclic-rcpsp spends 73 % of a no-proof node on 21 learned
+PB rows (E3, in T3).
+
+### 3. The profiles
+
+Share of self samples (cycles) by owner, MARGINAL segments, no-proof (`agg47.py --categories`).
+`List` is `Stdlib.List`, "closures" is `caml_apply*`/`caml_curry*`, "compare" and "hash" are the
+polymorphic C primitives, "search and learning" is `Search`, `Analysis`, `Learn`, `Pb_analysis`,
+`Reduce`, `Ladder` and `Learned`, "model propagators" every `prop/` module but `Clause` and `Pb`,
+with `Checked`.
+
+| owner | QR72 10k..40k | rcpsp_11 1k..10k | rcpsp_11 10k..40k | mspsp 1k..10k | mspsp 10k..40k | cyclic 10k..40k | openshop 10k..40k |
+|---|---|---|---|---|---|---|---|
+| `Clause` | 17.0 | 10.9 | 17.8 | 8.6 | 14.3 | 0.1 | 14.5 |
+| `Engine` | 17.0 | 9.7 | 14.3 | 14.7 | 13.6 | 3.5 | 10.8 |
+| `Pb` | 9.4 | 20.2 | 19.6 | 8.2 | 10.8 | 18.4 | 13.0 |
+| `List` | 21.5 | 13.3 | 11.6 | 14.6 | 13.6 | 20.5 | 13.4 |
+| closures | 5.0 | 9.5 | 11.0 | 7.0 | 7.2 | 6.8 | 11.1 |
+| compare | 1.7 | 5.2 | 7.8 | 7.1 | **14.5** | 0.7 | 6.8 |
+| hash | 0.9 | 1.5 | 0.8 | 0.8 | 0.6 | 0.5 | 1.3 |
+| `Retention` | 5.6 | 1.0 | 2.5 | 1.4 | 2.9 | 0 | 3.4 |
+| `Store` | 5.6 | 7.0 | 4.0 | 9.1 | 5.3 | 5.2 | 10.5 |
+| GC/alloc | 4.7 | 4.9 | 2.4 | 7.5 | 4.2 | **31.0** | 3.6 |
+| search and learning | 3.2 | 1.1 | 0.3 | 2.1 | 1.2 | 0.2 | 1.3 |
+| model propagators | 0.4 | 7.5 | 2.0 | 9.3 | 4.4 | 7.8 | 2.9 |
+| proof path (`Lit` and strings, even without a proof) | 1.2 | 1.0 | 0.2 | 1.4 | 0.8 | 0.2 | 0.9 |
+| other | 6.7 | 7.3 | 5.7 | 8.2 | 6.5 | 5.2 | 6.5 |
+
+Top functions of the largest segment, no-proof:
+
+- **QR72 10k..40k**: `Clause.ask` 11.2, `List.rev_append` 9.3 (in `Retention.reduce`),
+  `List.exists` 8.2 (`Retention.holds`), `Pb.status` 6.6, `Engine.advises` 5.9, `Retention.fun`
+  5.6 (the closure of `holds`), `caml_apply2` 4.8, `Store.get` 3.7, `Engine.wants` 2.9.
+- **rcpsp_11 10k..40k**: `Clause.ask` 13.2, `Pb.status` 11.8, `caml_apply2` 10.6, `caml_compare`
+  6.6, `Pb.fun` 6.1, `Engine.wants` 5.2, `Engine.advises` 4.4, `List.rev_append` 3.6,
+  `List.exists` 2.9, `Store.get` 2.7, `Clause.fun` 2.6, `Retention.fun` 2.5.
+- **mspsp 10k..40k**: `caml_compare` 12.1, `Clause.ask` 9.1, `Pb.status` 8.1, `caml_apply2` 6.9,
+  `List.rev_append` 3.7, `Engine.advises` 3.7, `List.exists` 3.4, `Engine.wants` 3.0,
+  `Retention.fun` 2.9, `compare_val` 2.4.
+- **cyclic 10k..40k**: `Pb.fun` 13.0, `oldify_one` 8.0, `pool_sweep` 5.9, `caml_shared_try_alloc`
+  5.7, `do_some_marking` 5.7, `Pb.status` 5.3, `caml_apply2` 5.0, `List.map_dps` 4.7.
+
+**Proof mode** adds, on the same segments, strings and IO 13.0 % (rcpsp_11 1k..10k), `caml_hash`
+5.6 %, `caml_compare` + `compare_val` 4.6 %, GC 13.6 %, `Justify` 2.6 %, `Writer` 2.2 %. On
+QR72 10k..40k the proof-only owners together are under 6 %, and the growing items are the
+no-proof ones. Which OCaml function calls `caml_hash` in proof mode cannot be read from these
+profiles (§1). The candidates are J2, W3 and W7 in §5.
+
+**`--bits-above 0`.** On rcpsp_11 it bits-encodes ONE variable (cumulative holds back 30) and
+changes nothing measurable (92.54 G against 92.58 G at 10 000 nodes, same stdout). On cyclic it
+bits-encodes 63 variables, and the no-proof run at 10 000 nodes costs **119.4 G instructions
+against 439.6 G**, with the same stdout, nodes and conflicts. The difference is the 21 learned PB
+rows the order arm derives by lifting onto ladder rungs (`pb-lifted 5`, `pb-rungs 560`) and the
+bits arm does not derive. They make 6.1 runs per node in all, 0.02 of them effective, each about
+5 M instructions (E3 in §5). With the proof the gap is 1 541.8 G against 1 891.4 G.
+
+**Where a node's cost goes at 40 000 nodes**, from the marginal profiles and the scratch
+experiments (no-proof, rcpsp_11 / mspsp / QR72):
+
+- Learned clauses woken through their watched variables and asked by their advisor (E1), about
+  35 / 22 / 25 %.
+- Learned clauses run (E2), about 23 / 15 / 13 %.
+- The learned database's O(n) per conflict (R1, R2). S2 removes 1.1 / 1.3 / 5.2 % of the
+  instructions, and on QR72 about a quarter of the cycles (§4).
+- Polymorphic compare from list membership per node and per conflict (S1, S5). S1 removes 3.1 /
+  7.7 / 0.2 % of the instructions, and S5 holds most of what is left (compare was 14.5 % of
+  mspsp's cycles before S1).
+- Conflict analysis and learning proper (`Analysis`, `Learn`, `Pb_analysis`), under 3 %
+  everywhere.
+- GC, 2 to 5 % (31 % on cyclic, from `Pb.pass`).
+- Model propagation, under 5 % on these segments (7 to 9 % on the first ten thousand nodes of
+  rcpsp_11 and mspsp).
+- The proof, flat per node. It is 39 % of a proof-mode node on rcpsp_11 at 10k..40k (67 % at
+  1k..10k) and 78 % on cyclic.
+
+### 4. Scratch experiments
+
+`main` and three patches (`bench/perf/scratch/`), no-proof, user instructions in units of 10⁹.
+**On every row the stdout, the node count and the propagator runs equal `main`'s**, and in proof
+mode (QR72 and rcpsp_11 and mspsp at 10 000, QR48 to UNSAT) the `.pbp` md5 of `all` equals
+`main`'s.
+
+- **S1** `count_learned_activity` classifies an id through a byte per engine id instead of two
+  `List.mem` over every learned instance.
+- **S2** `Retention.holds` reads a table of held ids, and `reduce` returns at once under
+  `keep_all` (D-0138 §5's experiment, repeated at 40 000 nodes).
+- **S3** = S3a (`Search.unfixed` tests `Domain.is_fixed` instead of `Domain.size > 1`) + S3b
+  (`Search.decision_entries` walks the level marks instead of the whole trail) + S3c (the engine
+  asks `Domain.classify` only for the kind of change, without walking the width or allocating).
+- **all** = S1 + S2 + S3.
+
+| instance, nodes | main | S1 | S2 | S3a | S3b | S3c | all |
+|---|---|---|---|---|---|---|---|
+| QR48, 10 000 | 25.99 | 25.98 | 25.39 | | | | 25.07 |
+| QR72, 10 000 | 37.61 | 37.53 | 36.98 | | | | 36.33 |
+| QR72, 40 000 | 248.00 | 247.47 | 235.19 | | | | 232.13 |
+| rcpsp_11, 10 000 | 92.56 | 90.66 | 91.97 | | | | 89.22 |
+| rcpsp_11, 40 000 | 1 079.70 | 1 046.48 | 1 067.93 | | 1 076.73 | | 1 030.74 |
+| mspsp, 10 000 | 109.51 | 105.93 | 108.90 | 109.55 | 98.82 | 109.51 | 94.59 |
+| mspsp, 40 000 | 757.79 | 699.58 | 747.99 | | 720.88 | | 652.75 |
+| openshop, 10 000 | 845.03 (82.4 after setup) | | | 845.73 | 841.86 | 844.89 | |
+| cyclic, 10 000 | 439.08 | | | 438.19 | 437.01 | 439.21 | |
+
+Cycles, the five binaries started together, three times (QR72, 40 000 nodes, no-proof,
+`bench/perf/rep47.sh`):
+
+| variant | instructions (G) | cycles r1 / r2 / r3 (G) | median |
+|---|---|---|---|
+| `main` | 248.0 | 271.6 / 277.8 / 192.3 | 271.6 |
+| S1 | 247.5 | 229.9 / 206.4 / 178.3 | 206.4 |
+| S2 | 235.1 | 160.8 / 169.0 / 144.9 | 160.8 |
+| S3b | 245.8 | 211.6 / 215.7 / 176.8 | 211.6 |
+| all | 232.1 | 191.8 / 149.5 / 133.2 | 149.5 |
+
+`main` was started first in each repetition and was the slowest every time, even against S3b,
+which changes 0.9 % of QR72's instructions. So part of every gap to `main` is where the process
+landed on the node, and S3b is the better control. Against S3b, S2 saves about 24 % of the cycles
+and S1 about 2 %.
+
+**Readings.** S2 is the retention item D-0138 §5 filed. At 40 000 nodes it is worth 5.2 % of
+QR72's instructions and about a quarter of its cycles, because the walk is a pointer chase over
+20 000 cells twice per conflict. On rcpsp_11 and mspsp it is worth 1.1 to 1.3 % of the
+instructions, because their nodes cost more for other reasons. S1 is small at 10 000 nodes and
+grows to 7.7 % of mspsp's instructions and 3.1 % of rcpsp_11's at 40 000. It runs at every node
+whether or not `--stats` is asked for, and its cost is the list's length times the prunings made
+by learned instances (164 000 on mspsp by 40 000 nodes). S3b, one whole-trail walk per conflict, is
+**10 % of mspsp at 10 000 nodes** and 4 % of openshop's node cost, where nobody had looked. S3a
+and S3c measure nothing on these models (no holes, and `Domain.size` without holes is O(1)), and
+stay in the list for the hole-heavy models.
+
+### 5. The inventory
+
+48 items, one row each (P2 groups six small sites of the PB analysis). **Grows with**: DB = the learned database, trail, depth = decision levels,
+lines = the proof's live lines, model = the model's size (fixed in a run, but per node).
+**Runs**: node, conflict, learned (per learned constraint), run (per propagator run), wake (per
+trail entry per wake walk), pruning, line (per proof line). **Share** is the measured marginal
+share of the largest segment (or the scratch saving), "nv" = not visible at these budgets, with
+the reason. **Risk** is to the node count and the proof bytes: *none* (same runs in the same order,
+same lines), *ordering* (the set of prunings is the same, but their order or the instance that
+makes them can move, so the trail order, the trace and the bytes can move, and the node count
+under learning), *bytes* (the proof text changes by design). The batch is the ROADMAP's: T3 engine,
+store and propagators, T4 search, analysis, learning and retention, T5 trace, justification and
+proof writing.
+
+**T3, engine, store and propagators**
+
+| # | site | grows with | runs | share | replacement | risk | reference |
+|---|---|---|---|---|---|---|---|
+| E1 | `engine.ml` `watchers_of_new_entries` and `seed_dirty` asking `Clause.Learned_clause.ask` on every move of a watched VARIABLE | DB (clauses watching a variable) | wake | rcpsp_11 10k..40k about 35 % (`Clause.ask` 13.2, closures 10.6, `Engine.wants` 5.2, `Engine.advises` 4.4, `Store.get` 2.7), QR72 25, mspsp 22. 83 % of rcpsp_11's wakes are declined | index `dyn_ids` by (variable, the bound move that FALSIFIES the watched literal), so the other direction never asks. Then a blocker literal tested before the ask | none on Booleans. Ordering on integer variables, where one run can move both bounds (D-0138 §5) | MiniSat watch lists per literal and MiniSat 2.2's blocker. GCS `refined-triggers.md` (2WL 58 s against watch-all 105 s on tsp). Chuffed `SAT::propagate` |
+| E2 | `clause.ml` `Learned_clause.propagate`: `Pb.propagate` (`quiet`) then `rewatch` (`best` twice), three walks with `Pb.status` per literal | DB (learned-clause runs per node, averaged from the start: QR72 44, 204, 525; rcpsp_11 42, 288, 981; 0.3 % of them effective) | run | rcpsp_11 about 23 % (`Pb.status` 11.8, `Pb.fun` 6.1, `Clause.fun` 2.6, `Pb.first`, `best`, `false_at`), mspsp 15, QR72 13 | (a) one status pass per run, shared by `quiet` and `rewatch`. (b) The 2WL move: from the falsified watch, scan for a non-false literal and call `Pb.propagate` only when there is none | (a) none. (b) ordering, the watches chosen differ | MiniSat `propagate`, Gent 2013 (circular watches) |
+| E2b | `engine.ml` `propagate`, rule (b): every instance born after the fixpoint resumed from is seeded | DB × backjump distance | node | not separated: 23.4 M of QR72's 39.2 M runs at 40k are seeded, from every cause | measure seeds by cause first. A 2WL clause whose two watches are non-false at the resumed state needs no seed (backtracking keeps the watch invariant), checked by `check_skip` | none if every skipped seed is a no-op (D-0138's argument) | MiniSat never revisits a clause on backtrack |
+| E3 | `learned.ml` `pb_instance` packs `Pb.Learned_pb` with no advisor, and `pb.ml` `pass` costs O(row) to O(row²): `survey` (`List.map`), `effective_of` (a `Hashtbl` per pass from 12 terms), `strongest` (`List.exists` per forceable term) | DB (PB rows) × row length (rows lifted onto ladder rungs are long) | run, woken by any bound move of any variable of the row | **cyclic: 73 % of a no-proof node** (439.6 G against 119.4 G when the 21 rows are not derived, §3), 6.1 runs per node, 0.02 effective, about 5 M instructions each | (a) an allocation-free pass: statuses in a per-instance array, `strongest` as one max per (variable, polarity), the groups built at `make`. (b) A slack-watch advisor: wake only when the slack can fall below the largest effective coefficient | (a) none. (b) ordering | GCS `linear-slack-waking.md`. RoundingSat's watched PB propagation (Elffers, Nordström 2018) |
+| E4 | `pb.ml` `pass` allocates for every non-quiet run of any `Pb`-backed instance, model clauses included | model × runs | run | GC 31 % on cyclic (with E3), 2 to 7 % elsewhere | per-instance scratch, reset per run | none | GCS `propagator-performance.md`, "Reuse data structures to avoid per-wake allocation" |
+| E5 | `domain.ml` `classify`, called by the engine per entry and per wake walk: walks the WIDTH for a hole entry and allocates a `Bound` and its options | model (width) | wake | S3c: 0 on these six (no holes) | the kind only, from the bounds (I-D3: an entry always shrinks its domain) | none | |
+| E6 | `arith.ml` `int_times`/`int_div`: O(w) guarded rows and guards per constraint, all woken by any bound move of the case variable | model (width of the case variable) | run | cyclic: 3 781 instances, 2 164 runs per node, 37 effective. mspsp: 15 092 instances, 396 runs per node, 88 effective | an advisor: wake a guarded row only while its guard can still hold, a guard only when the case variable crosses its value | ordering | GCS `refined-triggers.md` |
+| E7 | `linear.ml` `propagate`: `List.map term_min` and `List.combine` per run (688, 761), `no_other_term` O(arity) per pruning (553), no advisor for the bound that does not feed `term_min` (687) | model (arity) | run, pruning | mspsp `Linear` + `Checked` 4.8 + 3.4 % at 1k..10k, 2.3 + 1.5 % at 10k..40k | mins in a per-instance array, a nonzero count at `make`, an advisor on the feeding bound | none, the advisor ordering | GCS `propagator-performance.md` (incrementality) |
+| E8 | `cumulative.ml` `pass`: `Array.make` of the horizon (485), the profile rebuilt per pass (483, 492), `range` lists per task (558, 562), `Array.to_list` and filters per pruning (502) | model (horizon, tasks) | run | rcpsp_11 `Cumulative` 4.5 % at 1k..10k, 0.9 % at 10k..40k | a reused buffer, the profile kept across runs, for-loops | none | GCS `inferred-cumulative.md` |
+| E9 | `alldiff.ml`: `remover_index` scans the trail per hole (272), `gone_of` per term per pass (295), `List.sort_uniq compare` (805), every interval O(n³) (833), `free_reachable` builds a range per i (1095) | trail × holes, model | run | cyclic `Alldiff` 2.4 % (10.4 % of the bits arm's smaller total) | `Store.remover`, `s_gone` only when forced, `Int.compare`, a Puget sweep | none, the sweep ordering | Puget 1998, López-Ortiz et al. 2003 |
+| E10 | `element.ml`: trail scans per dead index hole (526, 918), eager hole facts per pass (1139, 1111), `List.mem` and `@` facts (827, 685) | trail, model | pruning, run | nv: no element in these six | `Store.remover`, lazy facts, stamped arrays | none | |
+| E11 | `gcc.ml`: rules A and C filter per interval and per value (1140, 1151, 977), `in_scope_of` enumerates (692) | model (n² to n³) | run | nv: no gcc here | a sorted sweep with prefix sums | none if the order is kept | |
+| E12 | `maxmin.ml`: the full reach list and eager facts per run, no advisor (448 to 484) | model (n) | run | nv | count reachers, lazy facts, an advisor | none, the advisor ordering | |
+| E13 | `ne.ml`, `reif_lin_eq.ml`: prefix scan for two unfixed terms, `List.nth`, `filteri`, eager facts | model (arity) | run, pruning | nv | two watched unfixed positions, arrays | none | MiniSat two watches |
+| E14 | `store.ml` `hi_below`/`lo_at_least` (357) and `support_before` (1197) walk one bound's chain of moves | trail (moves of one variable) | unit or conflict run of a clause, deferred reason | nv | binary search in `lo_hist`/`hi_hist` | none | |
+| E15 | `domain.ml` `with_hole` copies the bitset per interior removal | model (width) | pruning | nv | a chunked or trailed bitset | none | GCS `large-domains.md` |
+
+**T4, search, analysis, learning and retention**
+
+| # | site | grows with | runs | share | replacement | risk | reference |
+|---|---|---|---|---|---|---|---|
+| R1 | `retention.ml` `reduce` copies `live_rev` (`List.rev`) after every learned constraint, under `keep_all` too | DB | learned | S2 at 40k: QR72 −5.2 % instructions and about −24 % cycles (§4), mspsp −1.3 %, rcpsp_11 −1.1 %. Marginal `List.rev_append` 9.3 % (QR72), 3.6 (rcpsp_11), 3.7 (mspsp) | return at once when the policy cannot evict. A capped policy reduces on a schedule over an array | none | KNOWN, D-0138 §5. MiniSat `reduceDB` runs on a schedule, not per conflict |
+| R2 | `retention.ml` `holds` (`List.exists`), from `add` | DB | learned | with R1 (`List.exists` 8.2 + `Retention.fun` 5.6 on QR72) | a table of held ids | none | KNOWN, D-0138 §5 |
+| R3 | `retention.ml` `fifo` and `lbd`: `List.length`, `filteri` and a sort over the database per reduce | DB log DB | learned | nv: `keep_all` is the default | a queue or a heap, reduction on a schedule | ordering if the schedule moves | `wave45-retention`'s file. MiniSat and Chuffed `reduceDB` |
+| R4 | `retention.ml` `add`: the key is `Learned.to_string` (a `Printf` per literal and `Lit.to_string`), kept in `keys` | width, memory DB | learned | with S2 below | a structural key over (degree, terms) | none, it feeds `n_duplicate` only | |
+| S1 | `search.ml` `count_learned_activity`: two `List.mem` (polymorphic compare) over every learned instance, per pruning a learned instance made and per conflict, at EVERY node | DB × learned prunings | node | S1 at 40k: **mspsp −7.7 %**, rcpsp_11 −3.1 %, QR72 −0.2 %. At 10k: mspsp −3.3 %, rcpsp_11 −2.1 % | a byte per engine id. Only the iteration order of a `Hashtbl` depends on hashing, so a membership table is as deterministic | none, counters only | the orchestrator, 2026-11-18 |
+| S2 | `search.ml` `register_learned` and `register_learned_pb`: the `Retention.cite` message renders every literal (`Printf`, `String.concat`, `Lit.to_string`) and the string is kept | width, memory DB | learned | with R4: `Lit.go` + `Lit.ident_char` 5.5 % of openshop's no-proof 1k..10k (long names) | a closure that renders on demand | none | |
+| S3 | `search.ml` `decision_entries`: the whole trail, with a binary search per entry, per conflict | trail | conflict | S3b: **mspsp −9.8 % at 10k, −4.9 % at 40k**, openshop −3.9 % of the node cost at 10k, rcpsp_11 −0.3 % at 40k | the level marks (`Store.level_marks`), deduplicated | none | MiniSat `trail_lim` |
+| S4 | `search.ml` `unfixed` and `first_fail`: two passes over every variable per node, `Domain.size` (O(width/8) with holes) | model (variables) | node | S3a: 0 on these six | `Domain.is_fixed`. Later an incrementally kept candidate set | none | `wave45-strategy`'s file. Chuffed's and MiniSat's order heap |
+| S5 | `search.ml` `dfs`'s `kept` (`List.mem l ls`, polymorphic, per nogood literal) and `learn.ml` `minimise_with` (`acc @ [item]`, polymorphic `slot m = Some s`), O(depth²) | depth | conflict | the polymorphic compare left after S1 (mspsp 14.5 % of cycles at 10k..40k, S1 removes about half) | `Int.equal`, a stamped array by slot, a reversed accumulator | none | MiniSat `seen` |
+| S6 | `search.ml` `apply_globals`: every learned unit at every node, `List.rev globals_rev` and a `Reason.because` built before the bound is tested | learned units | node | nv (6 to 27 units) | test the bound first, an array | none | Chuffed asserts learned units at the root |
+| A1 | `analysis.ml` the 1UIP loop: `Frontier.nodes` (`List.map`), `one_uip` (filter, length), `best_expandable`, `add_all` (`@`), `remove` (filter) per resolution, facts keyed by name strings | conflict-level trail × frontier | conflict | `Analysis` 2.7 % on QR72 10k..40k, under 1 % elsewhere | MiniSat's path counter, a stamped `seen`, variable ids | ordering, ties follow the cell order | MiniSat `analyze`, Chuffed `SAT::analyze` |
+| A2 | `analysis.ml` `dependency_levels`: the decision closure over every level, per conflict | reachable trail | conflict | within A1 | none proposed: it is the backjump's definition (D-0070) | changes nodes | |
+| A3 | `analysis.ml` `check_attribution`: `List.exists Var.equal` over `inst_vars`, per citation | arity, learned rows included | conflict | nv | the sorted scope and a binary search, as the engine's since D-0138 (1) | none | D-0138 |
+| L1 | `learn.ml` `supports`: `List.exists` and `acc @ [s]` per support (the I-S4 check, always on) | cut size² | learned | nv | a stamped set, a reversed accumulator | none | |
+| L2 | `learned.ml` `ladder_form`/`to_linear_row`: polymorphic sorts, O(n²) grouping, per learned clause, for `--stats`'s `convertible` only | width | learned | nv | compute under `--stats` only | none | |
+| P1 | `pb_analysis.ml` `bounds_before`: a linear trail walk per literal query, asked 4 to 5 times per term per step through `reduce.ml` | trail | PB step | cyclic: 0.3 % inclusive, PB analysis 0.9 % in all | the store's per-variable history and a binary search, `falsified` once per term | none | Chuffed keeps level and position per literal |
+| P2 | `pb_analysis.ml` `step` (`List.mem cid`, `@`), `asserting_level` (levels × terms), `fat_memo` (polymorphic table per conflict); `linear.ml` `pb_row` rebuilt per call; `ladder.ml` `lift` (`assoc` per rung, `combine` re-sorts per rung); `reduce.ml` `coeff_of` (row²) | steps², levels × terms, widths | PB step | nv, under 1 % | reversed accumulators, prefix sums, cached rows, int arrays | none, the ladder ordering (the overflow point can move) | RoundingSat's array-based analysis |
+
+**T5, trace, justification and proof writing**
+
+| # | site | grows with | runs | share | replacement | risk | reference |
+|---|---|---|---|---|---|---|---|
+| J1 | `justify.ml` `shallow_hash`: every `Deferred` hashes to 6, `Cut` and `Combine` operands by tag only, so the memo's buckets are long and walked with `==`, `wipe_level` filters a bucket per doomed key, and level-0 entries stay | lines (memo, level 0 forever) | line | `Justify` 2.6 % of rcpsp_11's proof 1k..10k | an id stamped in each explanation at creation, hashed | none | |
+| J2 | `justify.ml` claim index `stated`, keyed by `Lit.t list`: the polymorphic hash stops at 10 meaningful words (about three literals), equality is `compare_val`, `clause_key` sorts twice on a miss, level-0 entries stay | lines | line (every clause emitted) | within `caml_hash` 5.6 % and compare 4.6 % (rcpsp_11 proof 1k..10k), shared with W3 and W7 | `Hashtbl.Make` with a hash over the whole sorted list (or over variable ids), the key computed once | none | |
+| J3 | `trace.ml` `resync` walks the common prefix from position 0 | trail | conflict | nv | the store's low-water mark (`Store.register_low_water`) | none | |
+| J4 | `trace.ml` `ids_rev` and `cites_rev` are never truncated and only tests read them | lines (memory) | line | memory only | a test switch, or counters | none | |
+| J5 | `trace.ml` `emit_to_page`: `is_level_start` and `level_of_index` per entry | levels | line | `Store.go` 1 to 2 % (shared with S3) | a monotone cursor over the marks | none | KNOWN, D-0138 (7) made it log |
+| J6 | eager origin strings: `trace.ml` 649/666/745/760 (every trace line), `justify.ml` `emit_clause`, `emit_linear` (renders the constraint twice), `emit_cut`, `emit_combine`, `learn.ml` `introduce`, `search.ml` `bridges` | line length | line | within strings/IO, 13 % of rcpsp_11's proof 1k..10k (with W1, W2, W4) | a lazy origin. The CLI turns the writer's audit on and the audit keeps each live id's origin, so the string is kept, but it is never written | none | GCS `propagator-performance.md`, "Don't build a reason nothing is going to read" |
+| W1 | `lit.ml` `render`/`sanitize` re-scans the name per literal | lines × literals | literal | `Lit` 1 to 1.5 % in proof mode | sanitise once per variable | none | KNOWN, D-0138 §5 and D-0080 |
+| W2 | `writer.ml` `rup`, `opb.ml` `constr_body`/`add_term`: a `Buffer` per line, `string_of_int` per term, `^ " ;"`, `sprintf "@c%d"`, about four copies of a line | line length | line | within strings/IO | stream into the channel | none | D-0138 (9) |
+| W3 | `writer.ml` `tags`: a polymorphic `Hashtbl` keyed by an int id | lines | line | within hash and compare | an int-indexed array | none | |
+| W4 | `writer.ml` `line`, `rule`, `comment` through `fmt ^^ "\n"` and `Printf` (pol, del, level markers), `pol` copies its line four times, `delete_many` uses `String.concat` | line length | line | within strings/IO | direct writes | none | |
+| W5 | `writer.ml` `wipe_level` sorts the doomed ids per backjump, `by_lvl.(0)` never drains | ids wiped, memory | backjump | nv | merge the sorted buckets, prune level 0 on delete | none | |
+| W6 | `writer.ml` `solution`/`improving` and `encoding.ml` `assignment_lits`: whole-assignment lists and `String.concat` per solution | model (widths) | solution | nv | stream | none | |
+| W7 | `encoding.ml` `find`/`is_declared` by name string per literal (`validate_lits`) and per trace line, `is_bits` and `ensure_atom` lookups | lines × literals | literal | within hash | look up by variable index, check under the audit only | none | |
+| W8 | `writer.ml` `live` (the audit) keeps an entry and an origin per live id, and the end sweep's `del` reads it | live ids (memory) | line | memory | keep it, with J6's lazy origin | the end sweep's `del` line exists only under the audit, so the `.pbp` depends on `BAGUETTE_PROOF_AUDIT` | |
+
+**Outside the three batches**
+
+| # | site | grows with | runs | share | replacement | risk | reference |
+|---|---|---|---|---|---|---|---|
+| X1 | `encoding.ml` `add_int_lin_le_reif_rows`, `Lit.sanitize`/`render`, `Opb.normalise`/`hash` at compile | model (rows × widths) | once | openshop: **762 G instructions (112 s) before node 1, with `--no-proof` too**: GC 41 %, `Lit` 16 %, string hash 11 % | the D-0080 request (sanitise once, hash ints), and no literal text when there is no proof | none | D-0080, D-0129 |
+
+### 6. Ranking by expected gain
+
+By the share measured at the largest segment, weighted by how many of the six instances show it.
+The first two are the bulk of what is left. D-0138 §5 named the first in one bullet and did not
+name the second.
+
+| rank | item | batch | expected gain at 40 000 nodes, no-proof | risk |
+|---|---|---|---|---|
+| 1 | E1, learned-clause asks by direction (plus a blocker) | T3 | most of 22 to 35 % on every learning instance, half of the asks are the wrong direction on QR48 (D-0138) and 83 % of rcpsp_11's wakes are declined | none on Booleans, ordering on integers |
+| 2 | E2 (a), one status pass per learned-clause run, then E2b | T3 | a third to a half of 13 to 23 % | none |
+| 3 | E3, learned PB rows: an allocation-free `pass` and `strongest` in one walk, then a slack advisor | T3 | up to 73 % on cyclic (order arm), on every instance that learns PB rows over ladders | none, then ordering |
+| 4 | R1 + R2, the database's O(n) per conflict | T4 | QR72 −5.2 % instructions and the largest cycles saving measured (three repetitions, §4), mspsp −1.3 %, rcpsp_11 −1.1 % | none |
+| 5 | S1, then S5, the polymorphic `List.mem` per node and per conflict | T4 | mspsp −7.7 % (S1), up to 14.5 % of cycles with S5 | none |
+| 6 | S3, `decision_entries` over the marks | T4 | mspsp −4.9 % at 40k and −9.8 % at 10k, openshop −3.9 % | none |
+| 7 | R4 + S2, rendering learned constraints into strings in no-proof mode | T4 | openshop 5.5 % at 1k..10k | none |
+| 8 | E6, `int_times` guard wakes | T3 | cyclic and mspsp: 98 % and 78 % of those runs change nothing, not separated in cycles | ordering |
+| 9 | J2, W1 to W4, J6, the proof's constant per line | T5 | strings/IO 13 %, hash 6 %, compare 5 % of rcpsp_11's proof segment (flat per node, so the gain is constant, not growing) | none |
+| 10 | E4, E7, E8, the model propagators' per-run allocation | T3 | 2 to 8 % on the first ten thousand nodes of rcpsp_11 and mspsp | none |
+
+The three scratch patches together (`all`) remove 6.4 % of QR72's instructions at 40 000
+nodes, 13.9 % of mspsp's and 4.5 % of rcpsp_11's, with the same bytes. Items 1 to 3 are where the
+larger part is, and they are not patched in this record because they are T3's design work.
+
+### 7. What the differential lane (M11-T2, D-0141) must cover, per batch
+
+The lane compares stdout, node counts and proof hashes at a fixed node budget (ROADMAP T2). For
+the pass to be safe it must contain, per batch, the shapes below. The six instances of this
+record are a usable core (their `.fzn` md5 are in §1), at 10 000 nodes (QR48, QR72, rcpsp_11,
+mspsp take 7 to 30 s without the proof, cyclic 65 s, openshop 130 s of which 112 s are setup).
+
+**T3** (E1 to E15).
+- Learned clauses over **Boolean** variables (QR48, QR72) and over **integer** order literals
+  (rcpsp_11, mspsp, openshop). E1's direction index is exact on the first and can reorder runs
+  on the second, so the lane must report them separately.
+- Learned **PB rows** that propagate, in cyclic's order arm (21 rows lifted onto ladders) and in
+  rcpsp_11 and mspsp (25 to 82 rows).
+- `int_times`/`int_div` guards (cyclic, mspsp), a `cumulative` (rcpsp_11), an `all_different`
+  (cyclic), and at least one model with **holes** (an `int_ne`/`alldiff` Regin model) for E5, E14
+  and E15, which these six do not exercise.
+- Every run of the lane once under `BAGUETTE_DEBUG=1` at a smaller budget (1 500 nodes, as
+  D-0138 did), because `check_watched`, `check_skip` and the I-P7 advise check are what catch a
+  lost wake. An item marked *ordering* cannot be held to byte identity. It needs D-0104's standard
+  (node counts reported, every proof VERIFIED by veripb) and its own record.
+
+**T4** (R, S, A, L, P).
+- Every retention policy (`keep_all`, and `fifo`/`lbd` through `BAGUETTE_RETENTION`), because R1
+  and R3 change the code path a policy takes.
+- PB analysis on and off (`Search.no_pb`), and an instance where it learns rows (cyclic, mspsp),
+  for P1 and P2.
+- Deep searches (mspsp depth 147, openshop 226) for S3 and S5, and a branch-and-bound model with
+  learned units for S6 (all four Challenge instances are optimisation problems).
+- `--stats` output byte-compared too, because S1 rewrites the counters it prints.
+
+**T5** (J, W).
+- The `.pbp` byte-identical on every lane, with **`BAGUETTE_PROOF_AUDIT` pinned**, because the
+  end sweep's `del` line exists only under the audit (W8). The lane runs the CLI default (audit
+  on) and once with `BAGUETTE_PROOF_AUDIT=0`.
+- `--bits-above 0` on an instance where it bits-encodes many variables (63 on cyclic) for W7's
+  atom path and the `red` lines.
+- Several improving solutions (W6), long variable names that sanitise (openshop's) for W1, and a
+  model whose explanations are `Deferred` at level 0 for J1.
+
+**The scaling lane** should read instructions, not wall time or cycles, because the same binary
+moved by 30 % in cycles (§1). This record's numbers give it a baseline, the instructions per node of the
+10k..40k segment over those of the 1k..10k segment: QR72 1.8, rcpsp_11 3.4, mspsp 2.0, openshop
+2.6 in no-proof mode. After the pass a ratio near 1 is the target, and a ratio that rises is the
+alarm.
+
+### 8. What this changes in the plan
+
+1. **T3 holds most of the growth, not T4.** E1 and E2 are about half of a node at 40 000 nodes on
+   every learning instance, and they live in `engine.ml`, `prop/clause.ml` and `prop/pb.ml`. No
+   branch in flight on 2026-11-18 claims those three files (`wave46-t3` claims `pb_analysis.ml`,
+   `ladder.ml`, `learn.ml`, `trace.ml`, `justify.ml` and others, `wave45-strategy` claims
+   `search.ml` and `analysis.ml`, `wave45-retention` claims `retention.ml` and `learned.ml`). The
+   ROADMAP keeps the batches after the merges by the user's decision, and this record does not
+   change that, but T3's first items do not collide with the branches.
+2. **E3 is the largest single item on its instance and it belongs to two milestones.** The
+   learned PB rows lifted onto ladder rungs cost 73 % of cyclic-rcpsp's no-proof node. The bits
+   arm does not derive them, so M8-bits-encoding-T4's comparison of the two arms on such
+   instances measures this cost as much as the encoding. T3 should take E3 (a) before M8-T4 runs.
+3. **R1 and R2 may already be gone.** They are in `wave45-retention`'s file and filed as a request
+   by D-0138. T4 checks after that merge before doing them.
+4. **A setup batch is missing.** X1 (762 G instructions on openshop before the first node, in
+   `--no-proof` as well) is larger than every per-node item on that instance at 10 000 nodes. It
+   is D-0080's request and not M11's, but the Challenge-wide measurements M11 is meant to precede
+   will see it on every instance with many reified rows over wide domains.
+5. **T5 is a constant, not a growth.** The proof's cost per node is flat on every instance, so T5
+   does not move the scaling lane. The proof is 39 to 78 % of a proof-mode node on rcpsp_11 and
+   cyclic, and the per-line overheads T5 targets (strings, hashing, comparison) are about a
+   quarter of rcpsp_11's proof-mode cycles. Its lane is the byte-identity lane alone.
+6. **T5 needs a better profiler first.** In OCaml 5 without frame pointers `perf` cannot tell
+   which OCaml function called `caml_hash` or `caml_compare` (§1). An opam switch with
+   `ocaml-option-fp` on the node would attribute J2, W3 and W7 directly, instead of by scratch
+   patch.
+
+### 9. What would reverse this
+
+- **A longer run.** At 40 000 nodes the database holds about 20 000 constraints. A cost that is
+  O(n) per conflict with a small constant (A1's closure walk, J1's memo buckets, W5's level-0
+  bucket) could overtake the ranked items at 200 000 nodes. The scaling lane is the instrument.
+- **Other shapes.** None of the six has `element` or `gcc`, `maxmin` appears three times on
+  cyclic only, and no domain here is hole-heavy, so E5, E9 to E12, E14 and E15 are ranked from the
+  code alone. A profile of a Regin or element model
+  could move one of them into the top ten.
+- **The scratch patches are evidence of a gain, not the fixes.** S1 to S3 kept every byte on the
+  instances measured. T4's versions must pass the lane, not this record's runs.
+- **Cycles.** If the node were quiet, the cycle savings of S1 and S3b could turn out larger than
+  their instruction savings, as S2's is. They are ranked by instructions here.
