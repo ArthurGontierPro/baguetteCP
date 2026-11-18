@@ -929,6 +929,33 @@ let test_end_to_end () =
        var -2..2: z;\n\
        constraint int_times(x,y,z);\n\
        solve satisfy;\n";
+  (* M8-bits-encoding-T3 continuation (D-0134 section 10): the NARROWER operand is the
+     case variable. A 0..1 first factor against a 0..3 second one is split over the
+     0..1 factor -- one guard Boolean, not three -- and the answers and the proof are
+     judged as every other lane here. *)
+  run_model ~title:"e2e arith: int_times splits over the narrower factor"
+    ~src:
+      "var 0..1: b;\n\
+       var 0..3: y;\n\
+       var 0..3: z;\n\
+       constraint int_times(b,y,z);\n\
+       solve satisfy;\n";
+  (match
+     List.filter_map
+       (fun (c : M.constr) ->
+         match c.M.k with M.Int_times (x, y, _, aux) -> Some (x, y, aux) | _ -> None)
+       (build
+          "var 0..1: b;\n\
+           var 0..3: y;\n\
+           var 0..3: z;\n\
+           constraint int_times(b,y,z);\n\
+           solve satisfy;\n")
+         .M.constraints
+   with
+  | [ (M.Var x, M.Var y, aux) ] ->
+      check "int_times: the 0..3 factor is first and the 0..1 factor is the case variable"
+        (x = 1 && y = 0 && List.length aux.M.y_ge = 1)
+  | _ -> check "int_times: one Int_times over two variables" false);
   run_model ~title:"e2e arith: int_div, divisor may be zero (D-0033)"
     ~src:
       "var -2..2: x;\n\
@@ -1841,8 +1868,13 @@ let test_bits_eligibility () =
       check "bits elig: n (int_ne) and m (int_lin_ne) released by T3 and on bits"
         (on "n" && on "m");
       check "bits elig: h has holes and stays order" (not (on "h"));
-      check "bits elig: r, s held by int_eq_reif" ((not (on "r")) && not (on "s"));
-      check "bits elig: q held by bool2int" (not (on "q"));
+      (* M8-bits-encoding-T3 continuation (D-0134 section 8): int_eq_reif holds nothing
+         any more; r and s go on bits, f is a bool and stays order by rule. *)
+      check "bits elig: r, s released by T3 (int_eq_reif) and on bits"
+        (on "r" && on "s" && not (on "f"));
+      (* D-0134 section 9: bool2int holds nothing either; q is posted as its two rows
+         with a [Linear] each and goes on bits. *)
+      check "bits elig: q released by T3 (bool2int) and on bits" (on "q");
       check "bits elig: g, cnt held by gcc" ((not (on "g")) && not (on "cnt"));
       (* M8-bits-encoding-T3 (D-0134 section 2.5): maxmin holds nothing any more. mx and
          k are named by nothing else and go on bits. *)
@@ -1853,12 +1885,12 @@ let test_bits_eligibility () =
         (n "alldiff" = 2
         && n "int_ne" = 0
         && n "holes" = 1
-        && n "int_eq_reif" = 2
-        && n "bool2int" = 1
+        && n "int_eq_reif" = 0
+        && n "bool2int" = 0
         && n "gcc" = 2
         && n "maxmin" = 0);
-      check "bits elig: exactly six variables went on bits (e, mx, k, c, n, m)"
-        ((Encoding.cost enc).Encoding.c_bits_vars = 6);
+      check "bits elig: exactly nine variables went on bits (e, mx, k, c, n, m, r, s, q)"
+        ((Encoding.cost enc).Encoding.c_bits_vars = 9);
       check "bits elig: the maxmin scope posted ONE choice group of two selectors"
         ((Encoding.cost enc).Encoding.c_choices = 1
         && List.length
