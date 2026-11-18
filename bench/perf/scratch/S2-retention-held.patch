@@ -1,0 +1,51 @@
+--- a/lib/core/retention.ml
++++ b/lib/core/retention.ml
+@@ -383,6 +383,7 @@
+   cited : (Writer.cid, string) Hashtbl.t;
+       (* cid -> what cites it, for the live citation. Lookup only. See [cite]. *)
+   keys : (string, Writer.cid) Hashtbl.t;
++  s2_held : (int, int) Hashtbl.t; (* M11-T1 SCRATCH S2: cid -> live entries holding it *)
+       (* Canonical row text -> the first id that stated it. Lookup only, and MEASUREMENT
+          only: it feeds [n_duplicate] and no policy reads it. M1-T59 found duplicate
+          `rup` lines harmless per-proof; a retention policy that evicts and lets the same
+@@ -404,6 +405,7 @@
+     gone = Hashtbl.create 64;
+     cited = Hashtbl.create 16;
+     keys = Hashtbl.create 64;
++    s2_held = Hashtbl.create 1024;
+   }
+ 
+ let live t = List.rev_map (fun e -> e.e_cid) t.live_rev
+@@ -416,7 +418,7 @@
+ let n_cited t = t.n_cited
+ let n_pinned t = t.n_pinned
+ let policy_name t = t.policy.p_name
+-let holds t cid = List.exists (fun e -> e.e_cid = cid) t.live_rev
++let holds t cid = Hashtbl.mem t.s2_held cid
+ let was_retired t cid = Hashtbl.mem t.gone cid
+ 
+ (* Register a learned constraint. The id must be one [Learned.introduce] or
+@@ -453,6 +455,7 @@
+   t.next_seq <- t.next_seq + 1;
+   t.n_added <- t.n_added + 1;
+   t.live_rev <- e :: t.live_rev;
++  Hashtbl.replace t.s2_held cid (1 + Option.value ~default:0 (Hashtbl.find_opt t.s2_held cid));
+   e
+ 
+ (* --------------------------------------------------------------- I-X3: citations *)
+@@ -557,6 +560,7 @@
+         ids;
+     Writer.delete_many (Justify.writer ctx) ids;
+     Hashtbl.iter (fun cid e -> Hashtbl.replace t.gone cid e) held;
++    List.iter (fun e -> if Hashtbl.mem wanted e.e_cid then Hashtbl.remove t.s2_held e.e_cid) t.live_rev;
+     t.live_rev <- List.filter (fun e -> not (Hashtbl.mem wanted e.e_cid)) t.live_rev)
+ 
+ (* Apply the policy. Returns the ids evicted, in the order they were deleted.
+@@ -565,6 +569,7 @@
+    policy is the one place where an id that this database does not hold could enter the
+    deletion path. [retire]'s [Not_owned] is where it lands. *)
+ let reduce t ctx =
++  if t.policy == keep_all then [] else
+   let victims = t.policy.p_evict (live_entries t) in
+   (* M2-L12: A CITED CONSTRAINT IS NOT ELIGIBLE FOR EVICTION, so the cap is SOFT.
+ 
