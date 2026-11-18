@@ -12557,7 +12557,8 @@ What it says, instance by instance and no further:
 **Status**: DECIDED 2026-11-18 (agent-strategy, branch `wave45-strategy`). Answers D-0045's open
 question for the flags, not for the default. The default search, its stdout and its proof are
 unchanged, and SPEC §3.4 is amended to say so (section 6). The default itself is
-M10-search-strategy-T5's to decide by measurement. Sections 7 and 8 are filled as T2 and T3 land.
+M10-search-strategy-T5's to decide by measurement. T2 and T3 landed the same day on the same
+branch: sections 7 and 8 are what was built, section 10 what it measures, section 11 the gate.
 
 ### 0. Why, in the measured cases
 
@@ -12785,21 +12786,209 @@ added, after the `**Default.**` paragraph:
 The `**Default.**` sentence ("restarts disabled") is unchanged, because it is still the
 default.
 
-### 7. T2: restarts and phase saving as built (to be filled)
+### 7. T2: restarts and phase saving as built
 
-### 8. T3: the activity heuristic as built (to be filled)
+**Code.** `lib/core/restart.ml` (the policies of section 2, a pure state machine, with the
+CLI spelling `Restart.of_string` that refuses a malformed policy instead of defaulting),
+`lib/core/phase.ml` (section 3), and in `lib/core/search.ml` the node outcome `NRestart t`,
+the per-solve record `strat` (built by `search_core` only when a strategy flag is on, so the
+default run takes one `match` on `None` per hook and nothing else), the three hooks
+`undo_level`, `restart_after_conflict` and `close_restarted`, the order wrapper `phased`, and
+the config fields `restarts` and `phase_saving`. `bin/main.ml`: `--restarts POLICY` and
+`--phase-saving`, and under `--stats` five `stats:` lines (`restarts`, `unexplored`, `kept`,
+`phases`, `phase-used`) printed only when a strategy flag is on, so a default run's `--stats`
+is unchanged line for line.
 
-### 9. What remains (to be filled)
+**What the proof shows.** No rule kind is new, which `test_search_strategy` checks on every
+restarting run (the rule keywords of its proof are a subset of the restart-free proof's).
+Over the 165 models with `--restarts luby:1 --phase-saving` (a restart after every learned
+conflict at first), 155 restarts in all, **165 of 165 proofs VERIFIED and every verdict equal
+to main's** (`smoke/luby1ps` on fataepyc-06).
 
-### 10. The baseline (to be filled when the runs finish)
+**Lanes.** `test/unit/test_search_strategy.ml` (new binary): the Luby sequence; each policy's
+schedule (Luby, geometric, the LBD test, its ring cleared at a restart, the Luby floor
+holding run 14 to 8 conflicts, the stable switch only at a restart); the CLI spelling; the
+default config off and `--restarts none` byte-identical to it; and end to end, on 6-queens
+over 0/1 cells (SAT, conflicts that learn), 5 pigeons in 4 holes (UNSAT) and 6-queens
+minimising the first row's column (OPT 2), under `luby:1`, `geom:1:1.2`, `lbd:2:1`,
+`luby:1` with phase saving, and phase saving alone: the same answer, a VERIFIED proof, every
+id deleted under the I-X2 audit, M1-T36's identity with `restart_unexplored`, no new rule
+kind, and two runs with the strategies on writing the same proof byte for byte. Three new
+models `test/models/restart_*.fzn` run in the main pass at default flags (their expected
+outputs are main's binary's), and a new lane in `scripts/run_model_tests.sh` runs them again
+with `--restarts luby:1 --phase-saving --search alternate`: VERIFIED, veripb's verdict line
+equal to the default run's, the `--no-proof` identity of D-0126, and at least one restart
+(read from `--stats`, so a lane whose flag was not in force fails).
 
-Today's search, main's binary `6d3d2dc3` (gate 2026-11-18), on fataepyc-06, `--time-limit 600`,
-each run with the proof (verified by veripb 3.0.2) and with `--no-proof`. Codes set: the nine
-baguette flattenings in `codes-bench`. Subset: twenty Challenge instances re-flattened with
-main's mznlib (the wave43 `.fzn` were deleted after solving, and the re-flattenings differ from
-wave43's by 6 to 21 bytes), five per status of the wave43 run, chosen where Chuffed's free run
-beats its fixed one (no SAT instance in the 1-300 s window shows that, so the five SAT ones are
-plain).
+**No mutation lane, and why.** T2's brief asks for one "on any new proof line". There is
+none. A restart writes `% level` comments and `del` lines, and the only way such a line can
+be wrong is to delete something a later line needs. At a full restart that cannot happen by
+construction (`wipe_level` refuses 0, and everything a later run cites is tagged 0). A
+missing deletion is not a checker matter either, because the end-of-search sweeps delete
+every live id. The positive lanes above, on a satisfiable model among others, are what would
+see an over-deletion.
+
+### 8. T3: the activity heuristic as built
+
+**Code.** `lib/core/activity.ml` (section 4: one score per variable, `bump_lits` once per
+variable per learned clause, `bump_facts` for a conflict that learned nothing, EVSIDS decay
+with a rescale at `1e100`, `select` with SPEC §3.4's first-fail tie-break, `best_score` for
+the reuse rule). In `search.ml`: `activity_order`, `annotated_value` (an annotation's value
+choice for a variable, read from `Search.sequence`'s own record of its phases, so `compile.ml`
+is untouched), `alternate` (the parity of the restart policy's run index picks the order,
+and the staged form follows it), `reuse_target` (section 1.1), the config fields `search`
+and `reuse_trail`. `bin/main.ml`: `--search annotation|activity|alternate` and
+`--reuse-trail`, and a `stats: activity` line. The hook in `analysis.ml` for MiniSat's
+"every variable seen" bump was not needed to measure the clause variant and was not added.
+
+**Lanes.** The activity scores (`test_search_strategy`): all zero is first-fail's choice, a
+bump outranks it, a later bump weighs more and a variable is bumped once per clause, a rescale
+keeps the order. End to end, the three models under `activity`, `activity` with `luby:1` and
+phase saving, `alternate` with `luby:1`, and `activity` with `luby:1` and `--reuse-trail`,
+with the same five checks as T2's; and `--reuse-trail` really keeping levels (92 levels kept
+over 24 restarts on the three models, every proof VERIFIED), so the partial-restart lane is
+not full restarts under another name.
+
+### 9. What remains
+
+- **The defaults are T5's.** Nothing here is on by default, and section 10 says why none of it
+  should be on every model: the codes split (aut wants the activity order with restarts and
+  phase saving, the QR codes want today's search), as Chuffed's fixed and free searches do.
+- **Not built, each with its reason above:** agility restarts and Glucose's blocking (a hook in
+  `Store`'s push path), the stable mode's switch of the value heuristic, MiniSat's "every
+  variable seen" bump (a hook in `analysis.ml`, this session's file, not needed to measure
+  the clause variant), scoring the order literals' Booleans as Chuffed does (the difference
+  section 10 points at first), impact-based search, activity-based search in Michel and Van
+  Hentenryck's sense, LRB/CHB (a measurement per propagation, `Engine`'s hot loop), and a heap
+  for `Activity.select` (the linear scan has not shown in any profile yet).
+- **No mutation lane** (section 7: no rule is new), and no break lane for a partial restart
+  that wipes one level too many. That one would be checker-visible (the re-entered node's
+  level-`t` trace lines gone), and is the lane to add if `--reuse-trail` is ever proposed as a
+  default.
+- **The LBD policy's K** never fires on the codes (section 10, point 4). T5 should sweep it, or
+  measure Glucose's newer EMA form, before calling `lbd` useless.
+
+### 10. The measurements: today's search, the strategies, and Chuffed
+
+**Binaries.** Every number below was taken on fataepyc-06 on 2026-11-18 with two binaries
+built on the M6-T22 engine (D-0138, the orchestrator's instruction of that afternoon). The
+baseline rows are **main's binary `a9217430`** (main `23eb9d6`, gate 47). The strategy rows
+are **`878ceb53`, this branch at `8fa9585`** (main `bd87a57` merged), which is byte-identical
+to `a9217430` without the flags on all 173 models (section 11). A first campaign on the
+pre-M6-T22 engine (`6d3d2dc3` and `db7468f1`) was stopped when M6-T22 landed. Its node counts
+agree with the ones below wherever both exist (QR48 `luby` 28 658 nodes and 60 restarts on
+both engines), and its times are not used. Node counts compare across binaries, and times only
+within this section.
+
+**Protocol.** `scripts/` is not involved, the harness is `wave45-strategy-runs/brun.sh`. Each
+run is `--time-limit` (600 s on the codes, 300 s on the subset) and `--stats`, once with
+`--no-proof` and once with `--proof`, the proof checked by veripb 3.0.2 (`d5644ca4`) and then
+deleted (its size is kept). Eight runs at a time, on a node shared with two other agents' runs
+(load 20 to 40), so a time is good to about 10 %. Results:
+`/scratch/arthur/wave45-strategy-runs/out3/<config>/<model>.<mode>.res`, tables by
+`tables.py`.
+
+**Configurations.** `base` is main's binary at default flags. `luby` = `--restarts luby`
+(unit 100), `lbd` = `--restarts lbd`, `ps` = `--phase-saving`, `act` = `--search activity`,
+`alt` = `--search alternate`, `reuse` = `--reuse-trail`, combined as named.
+
+#### 10.1 The codes set (the user's 2026-11-18 flattenings; `def` = no annotation, `u1` = `bool_search(..., input_order, indomain_max)` on the generator rows)
+
+Without the proof (time, nodes, restarts):
+
+| config | qr48 def | qr48 u1 | qr72 def | qr72 u1 | o7k2 def | o7k2 u1 |
+|---|---|---|---|---|---|---|
+| base | UNSAT 26 s, 23367 n | UNSAT 18 s, 23429 n | UNSAT 510 s, 100685 n | UNSAT 318 s, 101435 n | TO 600 s, 55178 n | UNSAT 3 s, 158 n |
+| luby | UNSAT 41 s, 28658 n, 60 r | UNSAT 24 s, 27600 n, 60 r | TO 600 s, 109054 n, 157 r | UNSAT 409 s, 114130 n, 179 r | TO 600 s, 50475 n, 92 r | UNSAT 3 s, 158 n |
+| lbd | UNSAT 26 s, 23367 n | UNSAT 18 s, 23429 n | UNSAT 557 s, 100685 n | UNSAT 316 s, 101435 n | TO 600 s, 53434 n, 40 r | UNSAT 3 s, 158 n |
+| lubyps | UNSAT 38 s, 28441 n, 60 r | UNSAT 31 s, 28408 n, 60 r | TO 600 s, 102123 n, 151 r | TO 600 s, 111790 n, 166 r | TO 600 s, 50089 n, 91 r | UNSAT 3 s, 155 n |
+| ps | UNSAT 25 s, 23377 n | UNSAT 20 s, 23395 n | UNSAT 560 s, 100923 n | UNSAT 455 s, 101057 n | TO 600 s, 53204 n | UNSAT 3 s, 155 n |
+| act | UNSAT 54 s, 32136 n | UNSAT 41 s, 28873 n | TO 600 s, 94692 n | TO 600 s, 100585 n | TO 600 s, 66105 n | UNSAT 81 s, 15561 n |
+| actlubyps | UNSAT 43 s, 35232 n, 62 r | UNSAT 41 s, 36709 n, 62 r | TO 600 s, 117489 n, 179 r | TO 600 s, 107006 n, 157 r | UNSAT 164 s, 33469 n, 61 r | UNSAT 41 s, 10702 n, 27 r |
+| altluby | UNSAT 127 s, 50917 n, 90 r | UNSAT 127 s, 48216 n, 84 r | TO 600 s, 110747 n, 157 r | TO 600 s, 103744 n, 151 r | UNSAT 366 s, 45650 n, 77 r | UNSAT 3 s, 158 n |
+| altlubyps | UNSAT 89 s, 50325 n, 88 r | UNSAT 108 s, 51131 n, 90 r | TO 600 s, 111170 n, 157 r | TO 600 s, 118526 n, 172 r | UNSAT 64 s, 14746 n, 30 r | UNSAT 3 s, 155 n |
+| actreuse | UNSAT 28 s, 27343 n, 60 r | UNSAT 28 s, 27962 n, 60 r | TO 600 s, 117026 n, 183 r | TO 600 s, 102777 n, 156 r | UNSAT 138 s, 29393 n, 59 r | UNSAT 27 s, 6996 n, 17 r |
+
+With the proof (time, nodes, restarts, `.pbp` size, veripb's verdict and time; every verdict is
+VERIFIED, `UNSATISFIABLE` for the UNSAT rows and `NO CONCLUSION` for the stopped ones):
+
+| config | qr48 def | qr48 u1 | qr72 def | qr72 u1 | o7k2 def | o7k2 u1 |
+|---|---|---|---|---|---|---|
+| base | UNSAT 37 s, 23367 n, 144 MB, V 7.02 s | UNSAT 27 s, 23429 n, 144 MB, V 6.92 s | TO 600 s, 96839 n, 1031 MB, V 53.95 s | UNSAT 432 s, 101435 n, 1091 MB, V 56.39 s | TO 600 s, 53413 n, 828 MB, V 411.53 s | UNSAT 4 s, 158 n, 2 MB, V 0.73 s |
+| luby | UNSAT 58 s, 28658 n, 60 r, 173 MB, V 9.16 s | UNSAT 37 s, 27600 n, 60 r, 170 MB, V 8.94 s | TO 600 s, 103085 n, 153 r, 1055 MB, V 66.31 s | UNSAT 471 s, 114130 n, 179 r, 1215 MB, V 70.62 s | TO 600 s, 47149 n, 84 r, 847 MB, V 426.65 s | UNSAT 4 s, 158 n, 2 MB, V 0.73 s |
+| lbd | UNSAT 38 s, 23367 n, 144 MB, V 6.97 s | UNSAT 27 s, 23429 n, 144 MB, V 7.02 s | TO 600 s, 92830 n, 980 MB, V 51.84 s | UNSAT 384 s, 101435 n, 1091 MB, V 56.14 s | TO 600 s, 50102 n, 40 r, 822 MB, V 377.98 s | UNSAT 4 s, 158 n, 2 MB, V 0.74 s |
+| lubyps | UNSAT 50 s, 28441 n, 60 r, 173 MB, V 8.79 s | UNSAT 46 s, 28408 n, 60 r, 173 MB, V 8.99 s | TO 600 s, 88904 n, 126 r, 895 MB, V 52.15 s | TO 600 s, 104736 n, 156 r, 1090 MB, V 61.99 s | TO 600 s, 49096 n, 88 r, 769 MB, V 392.45 s | UNSAT 4 s, 155 n, 2 MB, V 0.80 s |
+| ps | UNSAT 46 s, 23377 n, 144 MB, V 6.90 s | UNSAT 34 s, 23395 n, 144 MB, V 6.96 s | TO 600 s, 96195 n, 1026 MB, V 55.19 s | UNSAT 522 s, 101057 n, 1088 MB, V 56.87 s | TO 600 s, 51595 n, 747 MB, V 415.04 s | UNSAT 4 s, 155 n, 2 MB, V 0.78 s |
+| act | UNSAT 72 s, 32136 n, 242 MB, V 11.13 s | UNSAT 59 s, 28873 n, 271 MB, V 12.39 s | TO 601 s, 79306 n, 947 MB, V 46.84 s | TO 600 s, 91966 n, 1168 MB, V 55.14 s | TO 600 s, 58220 n, 849 MB, V 554.09 s | UNSAT 110 s, 15561 n, 308 MB, V 32.34 s |
+| actlubyps | UNSAT 60 s, 35232 n, 62 r, 302 MB, V 14.01 s | UNSAT 71 s, 36709 n, 62 r, 305 MB, V 14.67 s | TO 601 s, 94793 n, 134 r, 1263 MB, V 65.03 s | TO 600 s, 102198 n, 149 r, 1153 MB, V 61.18 s | UNSAT 192 s, 33469 n, 61 r, 318 MB, V 46.21 s | UNSAT 47 s, 10702 n, 27 r, 67 MB, V 7.25 s |
+| altluby | UNSAT 153 s, 50917 n, 90 r, 269 MB, V 14.89 s | UNSAT 119 s, 48216 n, 84 r, 283 MB, V 14.78 s | TO 600 s, 99649 n, 140 r, 729 MB, V 44.41 s | TO 600 s, 98372 n, 140 r, 937 MB, V 53.62 s | UNSAT 440 s, 45650 n, 77 r, 921 MB, V 354.82 s | UNSAT 4 s, 158 n, 2 MB, V 0.73 s |
+| altlubyps | UNSAT 135 s, 50325 n, 88 r, 302 MB, V 15.52 s | UNSAT 115 s, 51131 n, 90 r, 305 MB, V 15.20 s | TO 600 s, 105203 n, 149 r, 1043 MB, V 56.09 s | TO 600 s, 107687 n, 155 r, 1052 MB, V 56.17 s | UNSAT 80 s, 14746 n, 30 r, 206 MB, V 33.00 s | UNSAT 4 s, 155 n, 2 MB, V 0.77 s |
+| actreuse | UNSAT 45 s, 27343 n, 60 r, 278 MB, V 12.31 s | UNSAT 46 s, 27962 n, 60 r, 284 MB, V 12.71 s | TO 600 s, 90348 n, 126 r, 1160 MB, V 58.95 s | TO 600 s, 91442 n, 128 r, 1203 MB, V 60.39 s | UNSAT 156 s, 29393 n, 59 r, 282 MB, V 43.22 s | UNSAT 30 s, 6996 n, 17 r, 51 MB, V 5.45 s |
+
+Chuffed on the same instances (its own flattenings, the user's `.log` files, solve time):
+
+| | QR48 def | QR48 u1 | QR72 def | QR72 u1 | o7k2 def | o7k2 u1 |
+|---|---|---|---|---|---|---|
+| Chuffed def / annotation | 0.44 s, 23 668 n | 0.14 s, 11 710 n | 2.8 s, 90 500 n | 1.0 s, 50 704 n | 0.01 s, 11 n | 0.01 s, 140 n |
+| Chuffed `-f` | 19.6 s, 123 835 n, 269 r | (`ufree`, min annotation) 0.37 s, 16 939 n, 55 r | 125 s, 752 668 n, 1 329 r | (`ufree`) 2.6 s, 70 197 n, 159 r | 0.01 s, 11 n | (`ufree`) 0.02 s, 231 n, 2 r |
+
+**What the codes say.**
+
+1. **aut order 7 without an annotation is solved, by the activity order with restarts and
+   phase saving, and not by any one of the three alone.** `base` stops at 600 s (55 178
+   nodes), and so do `luby`, `lbd`, `ps` and `act` alone. `act+luby+ps` refutes it in 164 s
+   (33 469 nodes, 61 restarts), 192 s with the proof (318 MB, VERIFIED in 46 s). Chuffed's
+   alternation, `alt+luby+ps`, is the best: **64 s and 14 746 nodes, 80 s with the proof (206
+   MB, VERIFIED in 33 s)**. Partial restarts help the activity order a little (`act+reuse`, 138
+   s, 29 393 nodes, about 15 levels kept per restart). Phase saving is what makes the restarts
+   work here (`alt+luby` without it takes 366 s and 45 650 nodes). Chuffed needs 11 nodes, so
+   the heuristic is still three orders of magnitude from Chuffed's on node count. The
+   difference most worth measuring next is the scoring, since Chuffed scores the Boolean
+   literals of its encoding where this scores variables (section 4).
+2. **On aut with the `indomain_max` annotation the annotation is best and the alternation keeps
+   it**: 158 nodes in 3 s for `base`, `luby`, `lbd`, `ps` and both `alt` rows (the first run IS
+   the annotation and finishes before the first restart). Replacing the annotation by activity
+   costs it (`act`, 15 561 nodes).
+3. **On the QR codes today's search is the best of everything measured, as Chuffed's fixed
+   search is the best of Chuffed's.** QR48: `base` 26 s and 23 367 nodes, every restarting
+   configuration 17 % (`act+reuse`) to 118 % (`alt+luby`) more nodes. QR72 is now solved by `base` without the proof (510 s
+   `def`, 318 s `u1`, on the M6-T22 engine) and by no restarting configuration within 600 s.
+   Chuffed's `-f` is 45 times slower than its default on QR48, so this is the same finding in
+   both solvers and not a weakness of the implementation.
+4. **`lbd` almost never fires on these models** (0 restarts on QR48 and QR72, 40 on o7k2 in
+   600 s). The learned clauses' LBD is nearly constant along a run (the user's QR48 histogram
+   is concentrated on 5 to 8), and K = 0.8 asks for a run's recent average to exceed the global
+   one by 25 %. That is a parameter finding for T5, not a defect.
+5. **The proof's cost of a restart is its trace.** At equal nodes the proof is the same size
+   (`ps`, `lbd` against `base`). Restarts make it grow with the nodes (QR48 144 MB to 173 MB
+   for 23 % more nodes), and the activity order more than in proportion (QR48 `act` 242 MB for
+   37 % more nodes, so more bytes per node). The checker time follows the size (7 s to 14 s on
+   QR48).
+
+#### 10.2 The Challenge subset
+
+Twenty instances from D-0133's run (`wave43run-2026-11-13`), five per status that run gave
+baguette (OPT, SAT, TIMEOUT with an incumbent, TIMEOUT with none), chosen where Chuffed's free
+search beats its fixed one in the Challenge's own results (`results/<Y>.json`, `chuffed-fd`
+against `chuffed-free`). No SAT instance in the 1 to 300 s window shows a free advantage (both
+Chuffed runs solve them in seconds), so the five SAT ones are plain. The wave43 `.fzn` were
+deleted after solving, so all twenty were re-flattened with main's `mznlib`
+(`baguette-gate-20261118`, MiniZinc 2.10.1). The re-flattenings differ from wave43's by 6 to 21
+bytes. Time limit 300 s, veripb capped at 600 to 900 s per proof (a run whose check did not
+finish says `check-TO`).
+
+SUBSET_TABLES
+
+### 11. The gate
+
+A fresh clone of `wave45-strategy` at `8fa9585` (main `bd87a57` merged) on fataepyc-06,
+`/scratch/arthur/wave45-strategy-gate`, under `ulimit -v 4000000`: **`make check` rc 0**, peak RSS
+86 688 kB (`/usr/bin/time -v` over `make check`), 176 model tests passed (173 plus the three
+`restart_*`), 17 `bits_*` at `--bits-above 0`, the three `restart_*` again with restarts (8, 3
+and 14 restarts), `test_search_strategy` green. **Without the flags, on the 173 models of main,
+stdout, exit code, `.opb` and `.pbp` are byte-identical** to main's binary `a9217430`
+(`/scratch/arthur/gate47.art/new/`): 0 differences in each of the four. The new binary is
+`878ceb53`. Status: `/scratch/arthur/wave45-strategy-runs/gate.status`.
 
 ## D-0134  M8-bits-encoding-T3: the full substrate -- maxmin over bits by SELECTOR rows and one `Resolve` step, the checker facts measured first, and the step order
 
