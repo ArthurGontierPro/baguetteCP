@@ -118,13 +118,17 @@ let usage () =
   prerr_endline "                    unlike --time it is safe to leave on while timing.";
   prerr_endline "                    stdout is byte-identical with and without it.";
   prerr_endline "  --time-limit S    stop the search after S seconds (M6-T9). Checked at";
-  prerr_endline "                    the entry of every search node, against the WALL";
+  prerr_endline "                    the entry of every search node and every 128";
+  prerr_endline
+    "                    propagator runs inside one (M6-T21), against the WALL";
   prerr_endline
     "                    clock (Unix.gettimeofday, M6-T10 -- the clock an outer";
   prerr_endline "                    `timeout` uses, so under load the stop wins the race";
   prerr_endline "                    the CPU clock lost), counted from process start, so";
-  prerr_endline "                    parse and compile are inside it. One slow node can";
-  prerr_endline "                    overrun it; keep an outer `timeout` above it. On";
+  prerr_endline "                    parse and compile are inside it. One slow propagator";
+  prerr_endline
+    "                    run or conflict can overrun it; keep an outer `timeout`";
+  prerr_endline "                    above it. On";
   prerr_endline "                    expiry: stdout is `=====UNKNOWN=====` if no solution";
   prerr_endline
     "                    was printed, and otherwise just the solutions already";
@@ -1097,7 +1101,7 @@ let report_limit opts (st : Search.stats) ~(engine : Engine.t) ~best =
   Printf.eprintf
     "limit: reached time-limit=%s cpu=%.2fs wall=%.2fs nodes=%d decisions=%d \
      conflicts=%d learned=%d pb-learned=%d db=%d maxdepth=%d incumbent=%s props=%d \
-     eff=%d contra=%d\n\
+     eff=%d contra=%d at=%s\n\
      %!"
     (match opts.time_limit with None -> "none" | Some s -> Printf.sprintf "%gs" s)
     (Sys.time ()) (wall ()) st.Search.nodes st.Search.decisions st.Search.conflicts
@@ -1109,6 +1113,8 @@ let report_limit opts (st : Search.stats) ~(engine : Engine.t) ~best =
     st.Search.max_depth
     (match best with None -> "none" | Some (_, v) -> string_of_int v)
     c.Engine.c_runs c.Engine.c_effectful c.Engine.c_contra
+    (* M6-T21: where the stop landed -- a node entry, or a poll inside propagation. *)
+    (if st.Search.stopped_in_propagation then "propagation" else "node")
 
 let solve opts (m : Model.t) =
   (* M7-T27 (b), D-0123 family C: the .opb's rows go to disk as they are minted, never

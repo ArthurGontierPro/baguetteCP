@@ -130,7 +130,17 @@ exception Stopped of { best : (assignment * int) option }
 
 (* Internal: raised at node entry by [dfs] when [config.stop] says so, and caught by
    [search_core], which re-raises it with the state the finaliser needs. Never escapes
-   this module. *)
+   this module.
+
+   M6-T21 (D-0136): [dfs] also raises it when [Engine.propagate] stops BETWEEN two
+   propagator runs ([Engine.Stopped]), because [config.stop] said yes at one of the
+   engine's polls. That point is as good as node entry for the finaliser, and for the
+   same reasons: no propagator is mid-run, the engine never writes the proof, and this
+   node has not yet written a line (its trace, its conflict line and its nogood are all
+   written AFTER [propagate] returns, in [dfs]'s [Conflict] arm). What the stopped node
+   leaves is trail entries whose explanations were never rendered, and the finaliser
+   does not read the trail. A half-propagated node is therefore concluded NONE exactly
+   as a node stopped at its entry is: NONE claims nothing about it. *)
 exception Limit_hit
 
 (* One node's outcome, before it has been reported to its own caller: a solution, or a
@@ -537,6 +547,10 @@ type stats = {
   mutable level_diffs_rev : string list;
       (* The disagreements, newest first, capped: one line each, closure set against PB
          set. Capped for the reason [pb_fallback_rev] is. *)
+  mutable stopped_in_propagation : bool;
+      (* M6-T21: the run was stopped by a poll INSIDE [Engine.propagate] rather than at a
+         node entry. Read by the CLI's `limit:` line and by the lane that pins the
+         poll. *)
 }
 
 let stats_create () =
@@ -595,6 +609,7 @@ let stats_create () =
     n_level_assert_deeper = 0;
     n_level_pb_empty = 0;
     level_diffs_rev = [];
+    stopped_in_propagation = false;
   }
 
 let stats_learned s = List.rev s.learned_rev
@@ -1383,7 +1398,20 @@ type config = {
          all in a state the finaliser can sweep, and a check inside propagation or
          conflict analysis would have to unwind a half-written derivation. The cost is
          that a single node that takes longer than the remaining budget overruns it; the
-         CLI's caller keeps its own wall-clock `timeout` above `--time-limit` for that. *)
+         CLI's caller keeps its own wall-clock `timeout` above `--time-limit` for that.
+
+         M6-T21 (D-0136): ALSO asked inside [Engine.propagate], after every
+         [stop_poll_runs]-th completed propagator run, because late nodes on a large
+         learned database overran a 600 s limit by 49 s. Between two runs is the one
+         point inside a node with the node-entry property above (see [Limit_hit]), so a
+         [true] there leaves through the same path. A predicate that depends only on the
+         world (the clock, the node count) is unaffected by being asked more often; one
+         that COUNTS its calls is not, which is why [stop_poll_runs = 0] exists. *)
+  stop_poll_runs : int;
+      (* M6-T21. Completed propagator runs between two asks of [stop] inside
+         [Engine.propagate]; [0] asks at node entry only, which is M6-T9's contract
+         exactly. Default [Engine.default_poll_runs]. With [stop] at its default
+         [never] the value changes nothing but one decrement per run. *)
   propagate_learned : bool;
       (* M2-L12. Whether a learned clause gets a runtime consumer: a unit becomes a
          global bound tightening applied at every node, a wider one becomes a
@@ -1420,6 +1448,7 @@ let default_config =
     break_bridge_levels = false;
     bnb = None;
     stop = (fun () -> false);
+    stop_poll_runs = Engine.default_poll_runs;
   }
 
 let no_learning = { default_config with learn = false; pb = false }
@@ -2489,8 +2518,15 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
     count_learned_activity stats store ~since:trail_before
       (match apply_globals store stats with
       | Some c -> Engine.Conflict c
+      | None when cfg.stop_poll_runs > 0 ->
+          Engine.propagate ~stop:cfg.stop ~poll_runs:cfg.stop_poll_runs engine store
       | None -> Engine.propagate engine store)
   with
+  | exception Engine.Stopped ->
+      (* M6-T21: the engine stopped between two runs; see [Limit_hit] for why this is
+         as consistent a point as the line above. *)
+      stats.stopped_in_propagation <- true;
+      raise Limit_hit
   | Engine.Conflict c -> (
       stats.conflicts <- stats.conflicts + 1;
       (* M2-T7: [c] carries the reporting instance's id ([c.Store.c_prop]) as well as its

@@ -1411,6 +1411,148 @@ let test_m6_time_limit () =
         (Array.to_list (Sys.readdir dir));
       try Sys.rmdir dir with _ -> ())
 
+(* --------------------------------- M6-T21 / D-0136: the stop poll inside propagation *)
+
+(* M6-T21: [config.stop] is also asked inside [Engine.propagate], after every
+   [stop_poll_runs]-th completed propagator run, and a [true] there leaves through M6-T9's
+   path. Here the poll is asked after EVERY run ([stop_poll_runs = 1]) and the stop is a
+   predicate on the engine's own run counter, so where it lands is deterministic.
+
+   What is asserted, and why each needs asserting:
+
+   1. The run stops INSIDE propagation ([stats.stopped_in_propagation]) and with exactly
+      [k] runs taken: the poll fires after the k-th run completes and nothing runs after
+      it, which is the "never mid-run, never one more" half of the design.
+   2. It stops past the root, with learned constraints on the page, so the conclusion has
+      something real to sweep; every id is deleted (I-X2, audit on).
+   3. veripb -c accepts the proof and says VERIFIED NO CONCLUSION: a HALF-PROPAGATED node
+      concluded NONE is a valid proof.
+   4. THE BREAK, as in M6-T9: `conclusion UNSAT` in its place is refused in the checker's
+      wording, so (3) is not a checker accepting anything over this file.
+   5. THE CONTROL: the same predicate with [stop_poll_runs = 0] (node entry only, M6-T9's
+      contract) stops at a node ENTRY and only after MORE than [k] runs -- the node that
+      crossed [k] ran on to its end. Without (5), (1) could be a stop that would have
+      landed there anyway. *)
+let test_m6_t21_stop_in_propagation () =
+  match veripb_path () with
+  | None ->
+      incr failures;
+      print_endline
+        "FAIL M6-T21: veripb not found -- the stopped proofs were NOT checked. A missing \
+         checker is a failure, never a skip."
+  | Some veripb -> (
+      let dir = Filename.temp_file "baguette_m6t21" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let run ~name ~k ~poll =
+        let compiled, opb, pbp, poc, writer, ctx, check = m6_setup dir name m6_pigeons in
+        let engine = compiled.Baguette_flatzinc.Compile.engine in
+        let stats = Search.stats_create () in
+        let config =
+          {
+            Search.default_config with
+            Search.stop = (fun () -> (Engine.counters engine).Engine.c_runs >= k);
+            stop_poll_runs = poll;
+          }
+        in
+        let stopped =
+          match
+            Search.solve ~engine ~store:compiled.Baguette_flatzinc.Compile.store ~ctx
+              ~check ~stats ~config ()
+          with
+          | _ -> false
+          | exception Search.Stopped { best = None } -> true
+          | exception Search.Stopped { best = Some _ } -> false
+        in
+        let live = Writer.live_ids writer in
+        close_out poc;
+        (stopped, stats, (Engine.counters engine).Engine.c_runs, live, opb, pbp)
+      in
+      (* The first k from 40 up whose stop lands strictly inside a node: a k that a
+         node's propagation happens to end on is caught at the next entry instead, and
+         is not this lane's case. Deterministic, so the same k on every machine. *)
+      let rec pick k =
+        if k > 200 then None
+        else
+          let ((_, st, runs, _, _, _) as r) = run ~name:"t21" ~k ~poll:1 in
+          if st.Search.stopped_in_propagation && runs = k then Some (k, r)
+          else pick (k + 1)
+      in
+      (match pick 40 with
+      | None ->
+          check_bool_m6
+            "M6-T21: some k in 40..200 stops INSIDE propagation with exactly k runs taken"
+            false
+      | Some (k, (stopped, st, runs, live, opb, pbp)) ->
+          check_bool_m6 "M6-T21: the stopped run raises Stopped, no incumbent" stopped;
+          check_bool_m6
+            (Printf.sprintf
+               "M6-T21: ... INSIDE propagation, after exactly the k = %d-th run (%d \
+                taken)"
+               k runs)
+            (st.Search.stopped_in_propagation && runs = k);
+          check_bool_m6
+            (Printf.sprintf
+               "M6-T21: ... past the root, with learned constraints (%d nodes, %d \
+                learned)"
+               st.Search.nodes st.Search.n_learned)
+            (st.Search.nodes > 1 && st.Search.n_learned > 0);
+          check_bool_m6 "M6-T21: ... every id it received is deleted (I-X2, audit on)"
+            (live = []);
+          let proof = read_file pbp in
+          check_bool_m6
+            "M6-T21: ... and the proof ENDS output NONE / conclusion NONE / end"
+            (m6_says proof
+               "output NONE ;\nconclusion NONE ;\nend pseudo-Boolean proof ;\n");
+          let rc, out = m6_veripb veripb dir opb pbp in
+          check_bool_m6
+            "M6-T21: veripb -c accepts the proof of a run stopped mid-propagation, and \
+             says VERIFIED NO CONCLUSION"
+            (rc = 0 && m6_says out "VERIFIED NO CONCLUSION");
+          if rc <> 0 then print_endline out;
+          let needle = "conclusion NONE ;" in
+          let i =
+            let rec find i =
+              if i + String.length needle > String.length proof then 0
+              else if String.sub proof i (String.length needle) = needle then i
+              else find (i + 1)
+            in
+            find 0
+          in
+          let broken =
+            String.sub proof 0 i ^ "conclusion UNSAT ;"
+            ^ String.sub proof
+                (i + String.length needle)
+                (String.length proof - i - String.length needle)
+          in
+          let pbp2 = Filename.concat dir "t21_broken.pbp" in
+          let oc = open_out pbp2 in
+          output_string oc broken;
+          close_out oc;
+          let rc2, out2 = m6_veripb veripb dir opb pbp2 in
+          check_bool_m6
+            "M6-T21 BREAK: `conclusion UNSAT` in place of NONE is REFUSED, at full \
+             strength (the checker's own wording for an unproved UNSAT claim)"
+            (rc2 <> 0 && m6_says out2 m6_unsat_wording);
+          if not (m6_says out2 m6_unsat_wording) then print_endline out2;
+          (* (5) the control. *)
+          let stopped0, st0, runs0, live0, opb0, pbp0 = run ~name:"t21ctl" ~k ~poll:0 in
+          check_bool_m6
+            (Printf.sprintf
+               "M6-T21 CONTROL: node entry only, the same stop lands at a node ENTRY and \
+                after MORE than k = %d runs (%d)"
+               k runs0)
+            (stopped0 && (not st0.Search.stopped_in_propagation) && runs0 > k);
+          check_bool_m6 "M6-T21 CONTROL: ... every id deleted (I-X2)" (live0 = []);
+          let rc0, out0 = m6_veripb veripb dir opb0 pbp0 in
+          check_bool_m6 "M6-T21 CONTROL: ... and veripb -c accepts it, NO CONCLUSION"
+            (rc0 = 0 && m6_says out0 "VERIFIED NO CONCLUSION");
+          if rc0 <> 0 then print_endline out0);
+      List.iter
+        (fun f -> try Sys.remove (Filename.concat dir f) with _ -> ())
+        (Array.to_list (Sys.readdir dir));
+      try Sys.rmdir dir with _ -> ())
+
 (* ------------------------------------- M7-T27 (b) / D-0123: the streamed .opb, end to end *)
 
 (* The CLI's shape: [Encoding.row_sink] set to stream BEFORE [Compile.compile], the
@@ -1480,6 +1622,7 @@ let () =
   test_m5_derivation_is_load_bearing ();
   test_element_derivation_is_load_bearing ();
   test_m6_time_limit ();
+  test_m6_t21_stop_in_propagation ();
   test_m7t27_streamed_proof_verifies ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;

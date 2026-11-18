@@ -47,9 +47,32 @@
    (the dependency runs the other way), so the engine brackets every [run] with
    [Store.with_running] and then reads the stamp back in [check_attribution]. See
    [Store.entry]'s [prop] field for why the id is stamped from here rather than passed in
-   by the propagator. *)
+   by the propagator.
+
+   M6-T21 (D-0136) adds the fourth: a STOP POLL between two propagator runs. [propagate]
+   takes the caller's [?stop] predicate (the search passes [config.stop], i.e. the clock
+   `--time-limit` reads) and asks it after every [?poll_runs]-th COMPLETED run of this
+   engine -- never during one, so no propagator is ever left half-way through a domain
+   update. When it says yes, the loop leaves without running anything else, does the
+   same low-water reset a [Conflict] return does, records NO fixpoint (the store is not
+   at one), and raises [Stopped]. Nothing here touches the proof (above), so at that
+   point the writer holds exactly what it held when the call began: the node's prunings
+   are trail entries with unrendered explanations, nothing more. [Search.dfs] turns
+   [Stopped] into its own node-entry stop, and the run ends through M6-T9's path. Why
+   the point is consistent, and what it costs (nothing measurable), is D-0136. Without
+   [?stop] the loop is exactly what it was: the countdown is one decrement per run. *)
 
 type outcome = Fixpoint | Conflict of Store.conflict
+
+(* M6-T21: [propagate] was told to stop, between two runs; see the header. Never escapes
+   [Search], which re-raises it as its node-entry stop. *)
+exception Stopped
+
+(* M6-T21: runs between two asks of [?stop], when the caller does not say. A clock read
+   (Unix.gettimeofday through the CLI's closure) every 128 runs is noise next to 128
+   propagator calls; the run rate on the codes model of D-0136 puts 128 runs well under
+   a millisecond. *)
+let default_poll_runs = 128
 
 (* ------------------------------------------------------------------ triggers *)
 
@@ -240,6 +263,10 @@ type t = {
   mutable incremental : bool;
       (** M6-T18: [false] makes every call seed every instance, as before M6-T18. For
           tests that compare the two; a solve never sets it. *)
+  mutable poll_left : int;
+      (** M6-T21: completed runs left before [propagate] next asks its [?stop]. PER
+          ENGINE and carried ACROSS calls, so a long run of short nodes still polls on
+          schedule; only a call given [?stop] counts it down. *)
 }
 
 let unborn = max_int
@@ -316,6 +343,7 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
     fixpoints = [];
     seen = None;
     incremental = true;
+    poll_left = default_poll_runs;
   }
 
 let set_incremental t b = t.incremental <- b
@@ -1136,7 +1164,7 @@ let check_skip (inst : Propagator.instance) (store : Store.t) : unit =
 (* Run every propagator to a joint fixpoint (invariant I-P2): the seed slots in id order
    (only the dirty ones run, see above), then the FIFO, re-fed only by the watchers of
    variables a run actually changed. *)
-let propagate (t : t) (store : Store.t) : outcome =
+let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) : outcome =
   let n = n_instances t in
   if n = 0 then Fixpoint
   else
@@ -1179,6 +1207,19 @@ let propagate (t : t) (store : Store.t) : outcome =
     let cursor = ref 0 in
     let wake id = if id >= !cursor && id < n then dirty.(id) <- true else enqueue id in
     let conflict = ref None in
+    (* M6-T21: set by the poll at the end of a completed [Fixpoint] run, read by both
+       loops' guards; see the header. *)
+    let stopped = ref false in
+    let poll =
+      match stop with
+      | None -> fun () -> ()
+      | Some stop ->
+          fun () ->
+            t.poll_left <- t.poll_left - 1;
+            if t.poll_left <= 0 then (
+              t.poll_left <- max 1 poll_runs;
+              if stop () then stopped := true)
+    in
     let run_one id =
       let inst = t.instances.(id) in
       let before = Store.trail_length store in
@@ -1204,9 +1245,12 @@ let propagate (t : t) (store : Store.t) : outcome =
           bump_by_id t id ~eff:pruned;
           if pruned && Debug.enabled && vetoes_self t id then check_claim inst store;
           let woken = watchers_of_new_entries ~self:id t store ~since:before in
-          List.iter wake woken
+          List.iter wake woken;
+          (* M6-T21: AFTER the run and its wakes, so the run is whole whatever the poll
+             says. Not on the [Conflict] arm: that call is leaving anyway. *)
+          poll ()
     in
-    while Option.is_none !conflict && !cursor < n do
+    while Option.is_none !conflict && (not !stopped) && !cursor < n do
       let id = !cursor in
       incr cursor;
       if dirty.(id) then (
@@ -1216,7 +1260,7 @@ let propagate (t : t) (store : Store.t) : outcome =
         t.ctr.c_skipped <- t.ctr.c_skipped + 1;
         if Debug.enabled then check_skip t.instances.(id) store)
     done;
-    while Option.is_none !conflict && not (Queue.is_empty queue) do
+    while Option.is_none !conflict && (not !stopped) && not (Queue.is_empty queue) do
       let id = Queue.pop queue in
       in_queue.(id) <- false;
       run_one id
@@ -1233,6 +1277,11 @@ let propagate (t : t) (store : Store.t) : outcome =
     | _ -> ());
     match !conflict with
     | Some c -> Conflict c
+    | None when !stopped ->
+        (* M6-T21: not a fixpoint, so neither I-P2 nor the M6-T18 record below. The next
+           call (there is none in a solve: the search is ending) would reseed from the
+           last recorded fixpoint, exactly as after a [Conflict]. *)
+        raise Stopped
     | None ->
         (* I-P2, checked rather than asserted in a comment. Only on the no-failure
            return: I-P2 says nothing about a [Conflict], and re-running propagators
