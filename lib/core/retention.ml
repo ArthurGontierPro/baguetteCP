@@ -238,6 +238,36 @@
    it verifies because [reduce] refuses to delete the ones that are leaned on. The
    citation guard is doing the work the citation count of 0 used to do for free.
 
+   ---------------------------------------------------------------------------
+   M10-search-strategy-T4 (D-0139) RE-MEASURED IT ON MODELS THAT LEARN 10^4 TO 10^5
+   ---------------------------------------------------------------------------
+
+   D-0051's two verdicts above were taken on a suite where the largest learned base was 73
+   constraints. D-0139 took them to the coding-theory models and fifteen Challenge
+   instances, 1 170 s each, and three things came out, in order:
+
+     1. **Nothing above could evict anything.** Every learned clause and PB row is cited
+        for the whole search (M2-L12/L13), so `lbd:2000` on QR48 evicted 0 of 11 684 and
+        refused 46.9 million proposals, 27 % slower than `off` because it sorted the
+        database on every conflict to propose them. The cap was not soft but absent.
+     2. **The cost the user saw is in PROPAGATING the base, not in holding it.** The
+        learning rate falls 2 to 135 times from the start of a run to its end; with
+        BAGUETTE_PROPAGATE_LEARNED=off and every clause still held, QR48 runs the same
+        nodes in a tenth of the time.
+     3. **With a detachable consumer ([gate], below) and three LBD tiers ([tiered]), a
+        policy can act**, and on the codes it removes most of that cost at an EQUAL search
+        (QR72 with proof 554 -> 296 s, the same conflicts). On the Challenge subset it buys
+        conflicts and no answer, a third of them clauses learned again after eviction, and
+        costs `bacp-22` a 2.3 times slower optimum; the checker's time does not move at an
+        equal search, so "a smaller database for the checker" buys nothing measurable here.
+
+   So [default] is still [keep_all], now as a recommendation to M10-T5 (restarts and an
+   activity heuristic change what eviction loses) rather than as D-0051's measurement.
+   [gate] is wired by the search only on branch `wave45-retention-hook` until the
+   cross-session request for lib/core/search.ml is taken; without it [tiered] can evict
+   only what has no consumer, exactly as [lbd] could. D-0139 has the tables, the binaries
+   each was measured on, the lock rule's break, and what is pending.
+
    ### Determinism
 
    The gate requires two runs of one binary to be byte-identical, and a learned database
@@ -246,6 +276,8 @@
    introduction order; [gone] and [cited] are [Hashtbl]s that are only ever queried with
    [find_opt]/[mem] and never folded or iterated; and every policy below sorts on a key
    ending in [e_seq], which is unique, so no sort is left to compare equal elements.
+   D-0139 kept that: [index] and the table [locked_instances] builds are lookup only,
+   and [tiered] ranks on a key ending in [e_seq] like the others.
 *)
 
 module Lit = Baguette_proof.Lit
@@ -801,9 +833,11 @@ let gate t store ~cid (inst : Propagator.instance) : Propagator.instance =
    not depend on its premises staying -- VeriPB's database keeps derived constraints) or
    a level-0 unit, which [tiered] never proposes (LBD 1) and which is cited without a
    gate, so no policy can evict it. Under [BAGUETTE_PROOF_AUDIT] and the checker, every
-   proof the D-0139 hook build emitted over the 165 models at an every-few-conflicts
-   schedule verified; that sweep is the evidence this argument is complete, and the
-   unit lanes in test/unit/test_retention.ml pin each half. *)
+   proof the D-0139 hook build emitted over the 173 test models verified, under five
+   schedules down to a reduction per learned constraint. Half 1 is load-bearing: without
+   it `colour_unsat` is rejected ("Trying to access constraint with ID 175 that has
+   already been deleted"). Half 2 reddens no model in the suite and is kept on the
+   argument above; the unit lanes in test/unit/test_retention.ml pin both. *)
 let locked_instances t =
   let locked = Hashtbl.create 64 in
   if t.last_conflict >= 0 then Hashtbl.replace locked t.last_conflict ();

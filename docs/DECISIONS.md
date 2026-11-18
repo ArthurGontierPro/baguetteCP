@@ -13396,3 +13396,274 @@ A self-watching instance whose `ask` says yes off its watched variables would lo
 which is the M2-T5 hazard. `check_watched` under BAGUETTE_DEBUG is the instrument, and it runs after
 every run of every such instance. A caller that ran a learned clause from its own copy of the
 instance, outside `t.instances`, would bypass `sync_watched`. No caller does.
+
+## D-0139  M10-search-strategy-T4: retention re-measured, the learned database made evictable (`Retention.gate`, the lock rule, three LBD tiers), and why the default should stay `keep_all` until M10-T5
+
+**Status**: **ACCEPTED** as built, 2026-11-18, agent-retention (`wave45-retention`). The default
+is unchanged (`keep_all`). Whether `tiered` becomes the default is M10-T5's decision, and §6
+below is this row's recommendation for it. The eviction of a learned constraint that has a
+consumer needs a two-site change in `lib/core/search.ml`, which M10-T1..T3 have claimed. It is
+on branch `wave45-retention-hook` (commit `c0c2c33`) and filed under `## Cross-session requests`.
+Every measurement of `tiered` below ran on that hook build.
+
+Request: WORKLOG 2026-11-18 "codes-cp measurements", point 3 and the addendum's point 4.
+Governing records: D-0051 (`keep_all` by measurement, and its M2-L12 re-run), D-0045 (the
+lifetime finding), D-0136 §1 (`retire` in one pass), D-0138 (M6-T22, the engine this row's
+step 3 runs on).
+
+### Binaries, so that no two tables are read as one
+
+| table | binary (md5) | tree |
+|---|---|---|
+| §1 (step 1) | `e4631564` | `wave45-retention` at `5c55eea`: main `9f3ed78`, i.e. the engine BEFORE M6-T22, plus a stderr-only progress line |
+| §3 (step 3) | `fcb944a4` | `wave45-retention-hook` at `6771a23`: main `23eb9d6` (M6-T22) + this row + the hook |
+| §4 timing | `a9217430` (main 23eb9d6) against `fcb944a4` | |
+| gate, `make diff` | `eececf76` | `wave45-retention` at `0824b1d`: main `a8d2924` via `wave47-lanes` + this row, no hook |
+
+Every run: `--time-limit 1170`, `ulimit -v 16777216 -f 16000000`, `--max-heap-mb 8192`, one
+run per cell, 10 in parallel on fataepyc-06. A proof run is checked by VeriPB 3.0.2 (`d5644ca4`)
+with a 3 600 s limit. "learned/s start → end" is the number of learned constraints per CPU
+second over the first 2 000 and over the last 2 000 the run learned, read from
+`BAGUETTE_RETENTION_TRACE=500` (new, stderr only). In these models conflicts and learned
+clauses are one to one, nodes about two per conflict.
+
+The instances are the four codes models from `fataepyc-06:/scratch/arthur/codes-bench/` and
+fifteen Challenge instances. Those are the fifteen TIMEOUT rows of D-0133's archive with the
+most learned clauses, one per family, flattened again with `tools/baguette.msc`.
+
+### 1. Step 1: today's policies, on main's engine of the morning
+
+| instance | answer (proof) | conflicts (np) | learned/s start → end (np) | held at stop | `lbd:2000` conflicts (np) | conflicts, learned clauses not propagated | .pbp MB | check (s) |
+|---|---|---|---|---|---|---|---|---|
+| H_o7k2_u1 | UNSATISFIABLE | 58 | - → - | - | 58 | 84 | 1.6 | unsatisfiable 0.75 |
+| H_qr48_def | UNSATISFIABLE | 11684 | 401 → 55 | 11500 | 11684 | 11715 | 143.8 | unsatisfiable 6.75 |
+| H_qr48_u | UNSATISFIABLE | 11684 | 406 → 54 | 11500 | 11684 | 11715 | 143.8 | unsatisfiable 6.95 |
+| H_qr72_def | UNKNOWN/STOP | 30207 | 343 → 11 | 30207 | 28898 | 50718 | 609.7 | no conclusion 30.77 |
+| 2011_bacp_bacp-22 | UNKNOWN/STOP | 27624 | 319 → 11 | 27624 | 28968 | 116363 | 272.7 | no conclusion 41.53 |
+| 2011_cyclic-rcpsp_hard_11 | SAT/STOP:1290 | 24029 | 157 → 7 | 23940 | 24632 | - | 1467.2 | timeout 3600 |
+| 2011_roster_chicroster_dataset_large_18 | SAT/STOP:15 | 27557 | 111 → 15 | 27544 | 26482 | - | 976.8 | no conclusion 104.28 |
+| 2012_parity-learning_48_24_6.2 | UNKNOWN/STOP | 22463 | 260 → 11 | 24826 | 20505 | - | 436.1 | no conclusion 24.01 |
+| 2013_filters_dct_2_2 | SAT/STOP:18 | 32302 | 442 → 13 | 32301 | 30497 | 115361 | 280.3 | no conclusion 113.93 |
+| 2013_l2p_l2p2 | UNKNOWN/STOP | 34015 | 255 → 13 | 34015 | 29007 | 94003 | 1450.9 | timeout 3600 |
+| 2013_rcpsp_12 | SAT/STOP:39 | 25428 | 366 → 10 | 25425 | 25384 | - | 659.8 | no conclusion 100.34 |
+| 2015_grid-colouring_13_11 | SAT/STOP:7 | 28691 | 182 → 9 | 28686 | 27122 | 97372 | 828.2 | no conclusion 139.03 |
+| 2017_opd_small_bibd_08_28_14 | SAT/STOP:7 | 40410 | 273 → 14 | 41497 | 33765 | 91769 | 708.5 | no conclusion 67.46 |
+| 2019_fox-geese-corn_foxgeesecorn_54 | SAT/STOP:1426 | 25450 | 161 → 7 | 25390 | 22608 | - | 225.8 | no conclusion 204.50 |
+| 2021_perfect_square_102 | UNKNOWN/STOP | 30561 | 1081 → 8 | 30561 | 29134 | 128136 | 378.9 | no conclusion 579.57 |
+| 2021_steiner-systems_steiner_t2_k7_N21 | UNKNOWN/STOP | 31948 | 326 → 14 | 31948 | 29081 | 119679 | 592.9 | no conclusion 71.84 |
+| 2023_test-scheduling_t20m10r10-17 | SAT/STOP:1069 | 30976 | 30 → 14 | 30975 | 30684 | 106216 | 698.6 | timeout 3600 |
+| 2024_neighbours_neightbours-new-5 | UNKNOWN/STOP | 47225 | 96 → 19 | 47225 | 39819 | 79245 | 2848.5 | no conclusion 199.11 |
+| 2026_saeling_s021 | SAT/STOP:200 | 34011 | 180 → 16 | 34009 | 30328 | 100742 | 1784.9 | timeout 3600 |
+
+Three findings, and the third is the one the rest of this record is built on.
+
+1. **The slowdown the user saw is general.** On every instance that runs to the limit, the
+   learning rate at the end is 2 to 135 times lower than at the start, and the base holds
+   every learned clause (`keep_all`). QR48 goes from 401 to 55 learned/s, `perfect_square`
+   from 1 081 to 8.
+2. **Without propagation, the learned base costs nothing per node.** With
+   `BAGUETTE_PROPAGATE_LEARNED=off` (the M2-L4 build, every clause still on the page) QR48 is
+   UNSAT in 11 s instead of 111 s, at the same node count (23 429 against 23 367). QR72 is
+   UNSAT in 154 s instead of stopping at 1 170 s. The Challenge instances run 1.7 to 4.2 times more
+   conflicts. On the merged engine (§3's binary) the same build solves QR48 in 7.8 s and QR72 in
+   71 s, or 136 s with proof. That build loses elsewhere: `grid-colouring` ends on 8 instead of
+   7, and `saeling` without an incumbent. So the cost is in PROPAGATING the learned clauses,
+   not in holding them.
+3. **`lbd:N` and `fifo:N` evict nothing.** Since M2-L12 every learned clause and PB row has a
+   runtime consumer and is `cite`d for the whole search, and `reduce` refuses to evict a cited
+   constraint. On QR48 `lbd:2000` evicts 0 of 11 684 and counts **46 894 770** refused
+   proposals. It runs 27 % slower than `off` (141.6 s against 111.2 s), because before this row
+   it sorted the whole database on every conflict to propose evictions it then refused. D-0051's
+   M2-L12 re-run had seen the start of this ("the constraints that propagate are the ones a
+   policy may not evict"). At this scale it means that no policy in the tree could act at all.
+
+### 2. What was built
+
+All in `lib/core/retention.ml`; `bin/main.ml` parses the policy. Three pieces.
+
+**(a) `Retention.gate db store ~cid inst`.** The search hands a learned constraint's engine
+instance to the database before `Engine.add`. What comes back is the same instance behind a
+switch. While the switch is on it runs and advises as before, and it records whether a run
+propagated (the trail grew) or conflicted. That record is `e_used`, the activity `tiered` ranks
+on, and for a conflict it also records the instance id (`last_conflict`). When `reduce` evicts the
+constraint, the switch goes off. `run` then answers `Fixpoint` without calling the propagator,
+`advise` answers `false`, and the citation is released before `retire`, so `retire`'s `Cited`
+guard keeps its meaning. Under `keep_all` (`p_detaches = false`) `gate` returns the instance
+**physically unchanged**, so the default build runs the closures it ran before this record.
+
+**(b) The lock rule (`locked_instances`).** A gated constraint may be evicted unless its instance
+is (1) the propagator of a trail entry still on the trail, or (2) the most recent gated instance
+to return `Conflict`. Half (1) holds because `lib/core/trace.ml` is lazy. A branch writes its
+trace lines when it fails, by walking the trail, and the line for an entry a learned instance
+propagated is `rup` against that learned constraint. So the constraint has to stay on the page as
+long as the entry can still be traced, and that is as long as the entry is on the trail. This is
+Glucose's "locked" clause, extended from the reason of the current assignment to every entry.
+Half (2) holds because `reduce` runs inside conflict handling, after the learned clause is on
+the page and before `pb_at_conflict` resolves the conflicting instance's row. Every other
+reference to a learned id is either a line already written (VeriPB keeps derived constraints when
+their premises go) or a level-0 unit. A unit is cited without a gate, so no policy can evict it.
+
+**(c) `tiered`.** Core (LBD ≤ `core`, default 2) is never proposed. Mid (≤ `mid`, default 6)
+is demoted to local if it goes unused between two checks, and a check comes every `mid_every`
+(10 000) learned constraints. Local is halved at each reduction, with the worst ranked first:
+unused before used, then higher LBD, then older. The first reduction comes at `first` (2 000) and
+each later one `first + k·inc` (`inc` 300) after the previous one, which is Glucose's schedule. A
+new entry starts used, which is CaDiCaL's grace. Without it, the clause that a reduction's own
+`add` had just learned would rank first among the unused, because `reduce` runs before the
+search backtracks.
+Spelled `BAGUETTE_RETENTION=tiered` or `tiered:core=2,mid=6,first=2000,inc=300,mid_every=10000`.
+The schedule counts learned constraints, not conflicts, because `reduce` sees one call per
+`add`. The two counts differ by the PB rows (M2-L6), and those are measured below.
+
+**Also changed, with no change to what is evicted.** A policy is now a pair `due`/`evict` built
+per database. `reduce` used to materialise the whole live list on every learned constraint, under
+`keep_all` too, and `due` makes that call O(1). `holds` is now a hash lookup. It used to walk the
+list, which made `add` O(n). `fifo` and `lbd` evict exactly what they evicted before.
+
+### 3. Step 3: `tiered` (defaults) against `keep_all`, on the merged engine with the hook
+
+| instance | conflicts np, off → tiered | conflicts proof, off → tiered | evicted (proof) | held at end, off → tiered | answer off / tiered (proof) | .pbp MB off → tiered | check s off → tiered |
+|---|---|---|---|---|---|---|---|
+| H_o7k2_u1 | 58 → 58 (+0 %) | 58 → 58 (+0 %) | 0 | - → - | UNSAT 4.29 s / UNSAT 4.23 s | 1.6 → 1.6 | 0.76 → 0.72 |
+| H_qr48_def | 11684 → 11684 (+0 %) | 11684 → 11684 (+0 %) | 4357 | 11500 → 7143 | UNSAT 44.77 s / UNSAT 31.39 s | 143.8 → 143.8 | 7.12 → 6.94 |
+| H_qr48_u | 11684 → 11684 (+0 %) | 11684 → 11684 (+0 %) | 4357 | 11500 → 7143 | UNSAT 36.60 s / UNSAT 30.26 s | 143.8 → 143.8 | 7.14 → 6.84 |
+| H_qr72_def | 50343 → 50346 (+0 %) | 50343 → 50346 (+0 %) | 41758 | 50000 → 8242 | UNSAT 554.20 s / UNSAT 295.55 s | 1084.6 → 1084.9 | 57.11 → 56.49 |
+| 2011_bacp_bacp-22 | 54610 → 91671 (+68 %) | 54610 → 91671 (+68 %) | 81511 | 54500 → 9989 | OPT 358.27 s / OPT 818.76 s | 486.1 → 812.6 | 78.06 → 122.86 |
+| 2011_cyclic-rcpsp_hard_11 | 64775 → 79176 (+22 %) | 58287 → 61492 (+5 %) | 48884 | 58194 → 12481 | inc 1288 / inc 1288 | 3262.1 → 3354.2 | >3600 → >3600 |
+| 2011_roster_chicroster_dataset_large_18 | 63781 → 65588 (+3 %) | 54273 → 58412 (+8 %) | 49669 | 54260 → 8730 | inc 15 / inc 15 | 1924.6 → 2099.3 | 215.16 → 225.80 |
+| 2012_parity-learning_48_24_6.2 | 41365 → 88027 (+113 %) | 38607 → 80816 (+109 %) | 82199 | 42626 → 7679 | none / none | 720.2 → 1504.9 | 44.41 → 80.92 |
+| 2013_filters_dct_2_2 | 61096 → 67021 (+10 %) | 56402 → 61462 (+9 %) | 39712 | 56401 → 21749 | inc 18 / inc 18 | 437.5 → 475.8 | 175.86 → 205.73 |
+| 2013_l2p_l2p2 | 50712 → 55041 (+9 %) | 50712 → 55041 (+9 %) | 43834 | 50500 → 11166 | OPT 809.74 s / OPT 648.71 s | 2180.0 → 2289.5 | >3600 → >3600 |
+| 2013_rcpsp_12 | 46463 → 47494 (+2 %) | 46995 → 47298 (+1 %) | 25778 | 46992 → 21517 | inc 39 / inc 39 | 1237.4 → 1251.1 | 196.21 → 193.04 |
+| 2015_grid-colouring_13_11 | 52456 → 62729 (+20 %) | 48701 → 60810 (+25 %) | 48421 | 48690 → 12384 | inc 7 / inc 7 | 1737.8 → 2184.0 | 285.04 → 411.66 |
+| 2017_opd_small_bibd_08_28_14 | 107536 → 231872 (+116 %) | 99304 → 165839 (+67 %) | 149785 | 101731 → 16751 | inc 7 / inc 7 | 1664.5 → 2768.4 | 173.75 → 283.45 |
+| 2019_fox-geese-corn_foxgeesecorn_54 | 27337 → 27755 (+2 %) | 28152 → 28195 (+0 %) | 8787 | 28092 → 19348 | inc 1426 / inc 1426 | 260.8 → 261.2 | 295.62 → 271.39 |
+| 2021_perfect_square_102 | 61586 → 61648 (+0 %) | 56986 → 64207 (+13 %) | 49902 | 56986 → 14305 | none / none | 762.3 → 929.0 | 1505.23 → 1984.35 |
+| 2021_steiner-systems_steiner_t2_k7_N21 | 72037 → 105210 (+46 %) | 53924 → 90012 (+67 %) | 82149 | 53924 → 7863 | none / none | 969.8 → 1623.3 | 126.22 → 207.07 |
+| 2023_test-scheduling_t20m10r10-17 | 52143 → 56808 (+9 %) | 47978 → 43766 (-9 %) | 24481 | 47977 → 19284 | inc 1069 / inc 1069 | 1048.4 → 931.2 | >3600 → >3600 |
+| 2024_neighbours_neightbours-new-5 | 60677 → 62529 (+3 %) | 32665 → 33583 (+3 %) | 6531 | 32665 → 27052 | none / none | 3678.3 → 3614.3 | 245.41 → 244.55 |
+| 2026_saeling_s021 | 52957 → 43577 (-18 %) | 40203 → 38486 (-4 %) | 22067 | 40201 → 16417 | inc 198 / inc 198 | 2101.3 → 1880.3 | >3600 → >3600 |
+
+How to read it.
+
+- **The codes: same search, much less propagation, and the proof run gains most.** QR48 and
+  QR72 have the SAME conflict count under both policies (11 684, and 50 343 against 50 346).
+  The clauses `tiered` evicts were never needed again. On QR72 the learned clauses' runs per
+  node fall from 996 to 345 and all propagator runs from 1 523 to 872 per node. Wall to UNSAT
+  with proof: QR48 44.8 → 31.4 s and 36.6 → 30.3 s, QR72 **554 → 296 s** (−47 %). Without
+  proof: QR48 22.1 → 22.4 s and 24.8 → 24.1 s (unchanged), QR72 343 → 266 s (−22 %).
+- **The Challenge: more conflicts per second, partly hollow, and no better answer.** Within
+  the 1 170 s, 12 of the 13 runs that reach the limit run more conflicts under `tiered` (np), up to +116 % on `opd` and
+  +113 % on `parity-learning`. Every incumbent and every final status is identical between the
+  two policies, in both modes. Part of the gain is the solver learning the same clause again
+  after evicting it: the `duplicate` counter under `tiered` is 36 % of the learned clauses on
+  `bacp-22` (33 200 of 91 671), 41 % on `steiner`, 33 % on `cyclic-rcpsp` and 15 % on `opd`,
+  against 0 to 3 % under `keep_all`. A DFS without restarts walks back into the subtree an
+  evicted clause had closed.
+- **One clear regression: `bacp-22`.** It reaches OPT under both, but needs 54 610 → 91 671
+  conflicts and 358 → 819 s with proof (231 → 662 s without). `l2p2` goes the other way, with
+  9 % more conflicts but 810 → 649 s to OPT with proof (446 → 391 s without).
+- **The checker sees no smaller database.** At an equal search the check time does not move.
+  QR48 takes 7.1 → 6.9 s and QR72 57.1 → 56.5 s, on the same proof bytes (the `del` lines are
+  under 0.1 %). Elsewhere proof bytes and check time scale with the conflicts run, about
+  18 kB per conflict on `steiner` under both policies. So in this proof system "a deleted
+  clause is a smaller database for the checker" buys nothing measurable. VeriPB's unit
+  propagation does not walk the learned constraints a `rup` does not touch.
+- Every proof that finished checking was VERIFIED, and every one that did not ran out of the
+  3 600 s budget. No REJECTED in either column.
+- PB rows are a small share everywhere except one instance. `parity-learning` has 9 062 PB rows
+  out of 80 816 under `tiered`. Everywhere else it is under 0.5 % (`opd` 697 of 165 839). A
+  RoundingSat LBD for PB rows would therefore matter only on `parity-learning`. It is parked,
+  and the request row says what it needs.
+
+**Still running when this was written (pending, to read later).** Two more step-3
+configurations, no proof, on the same binary `fcb944a4`, in
+`fataepyc-06:/scratch/arthur/wave45-retention-runs/step3/`:
+
+- `T500.np/`: `tiered:first=500,inc=100,mid_every=2500`, the aggressive schedule;
+- `lbd5000.np/`: `lbd:5000`, the cap policy, which evicts for the first time once the hook is
+  in.
+
+Read them with `python3 -I table.py step3 off.np T.np T500.np lbd5000.np` in that directory.
+The driver's log is `drive-step3.log`, and it ends in `ALL DONE` when the 114 runs are in.
+They decide nothing above. They answer whether a more aggressive schedule or a plain cap
+changes the `bacp`/duplicate picture.
+
+### 4. The learned database's O(n) per conflict (M6-T22's cross-session request), taken here
+
+`reduce` now asks the policy's `due` first, which is O(1), so `keep_all` never builds the live
+list. `holds` is a hash lookup and `size` a counter. QR48 (`H_qr48_bag_def`) without proof at
+the default policy, 3 runs each, sequential on fataepyc-06: main 23eb9d6 takes 26.9, 27.3 and
+25.5 s, this build 20.5, 20.5 and 21.3 s, **about −22 %**. The M6-T22 scratch patch had
+measured −14 % in cycles. Exactly-once deletion is still a property of `retire` alone, and
+test_retention's (a)/(b) lanes are unchanged and green.
+
+### 5. Soundness: what was run, what reddens
+
+- **Sweeps over the 173 test models on the hook build.** Every proof was put through the
+  checker under five schedules: `tiered:core=0,mid=0,first=1,inc=0,mid_every=1` (a reduction
+  per learned constraint, half the base each time), `tiered:first=20,inc=5,mid_every=50`,
+  `fifo:0`, `lbd:2` and `lbd:0` (on the pre-merge build). **173 of 173 VERIFIED under each.**
+  The aggressive schedule detaches 2 034 constraints, and the lock refuses 1 971 proposals.
+- **The lock rule is load-bearing.** Its trail half was removed and the same sweep run:
+  `colour_unsat` is REJECTED with *"Trying to access constraint with ID 175 that has already
+  been deleted"*, on the pre-merge and the merged build alike. Removing the last-conflict
+  half reddens nothing, under the aggressive schedule or under `fifo:0`. That half is argued
+  (§2) and pinned by a unit lane, but no model in the suite needs it. It is kept because its
+  failure would be a rejected proof and it costs one table entry per reduction.
+- **`BAGUETTE_DEBUG=1`** passes on 172 of 173. The exception is `rup_level0_nogood_sat`,
+  which raises an I-P7 `Not_at_fixpoint` in `learned_clause`. The same exception is raised
+  at the default policy on main 23eb9d6 and on main before M6-T22. It is not this row's, and
+  it is filed for `clause.ml`.
+- **Unit lanes**, test/unit/test_retention.ml section (d), 146 checks in all, green:
+  - the tiers on a worked schedule (a glue clause never evicted, the worst local half evicted
+    at `first` and at `first + k·inc`, every id deleted once, checker accepts);
+  - mid demotion after the grace;
+  - the gate (identity under `keep_all`, locked by the trail and by the last conflict, a
+    detached instance never runs and declines every wake, an unknown id refused, checker
+    accepts);
+  - `tiered` through a real search on both builds.
+- **Gate** (`make check` on a fresh clone of `0824b1d`): rc 0, 3 847 ok, 0 FAIL, 179 model
+  tests passed. All four artefacts are byte-identical to gate 48's binary `e8354a74` on 179 of
+  179 models (535 509 `.pbp` bytes both). **`make diff ARGS="-j 16"`** (M11-T2): 168 of 168
+  runs equal the reference, `lbd`/`fifo` configurations included, so the evictions under
+  those policies are unchanged. The first run of the lane reddened the 84 `lbd`/`fifo` runs
+  on the `retention` counter's TEXT alone, because the first draft appended three counters to
+  that line for every detaching policy. They are now appended under `tiered` only.
+
+### 6. The default question: a recommendation for M10-T5
+
+**Keep `keep_all` as the default for now. Merge the hook. Measure `tiered` again with restarts
+and the activity heuristic, as M10-T5 plans.**
+
+- **For `tiered`.** At an equal search it removes most of the per-node cost the learned base
+  adds, which is the user's complaint: QR72 with proof is 47 % faster with the same conflicts.
+  It never changed an answer or an incumbent on 19 instances, and every proof verified.
+- **Against making it the default today.**
+  - On the Challenge subset it buys conflicts, not answers. About a third of those conflicts
+    are clauses learned a second time.
+  - It costs `bacp-22` a 2.3× slower OPT.
+  - Its proof-side promise (a smaller database for the checker) measures as nothing.
+  - Glucose's reduction is designed together with restarts and an activity heuristic. Its
+    "used" signal is participation in conflict analysis, and its LBD is updated as clauses
+    are used. This row has neither. "Used" here means propagated or conflicted, and LBD is
+    the derivation's, because `analysis.ml` and `search.ml` are M10-T1..T3's.
+- **What would make it the default.** A run of M10-T5's sixteen editions in which `tiered` with
+  restarts improves the answer count without a `bacp`-style regression. The knob is
+  `BAGUETTE_RETENTION=tiered[:core=,mid=,first=,inc=,mid_every=]`. A middle ground worth
+  measuring there is a larger `first` or a larger `mid` bound, which keeps more of the base on
+  instances like `bacp`. `lbd:N`/`fifo:N` with the hook in are also real policies for the first
+  time and are in the pending runs.
+
+### 7. What this row did not do, and where it went
+
+- **The hook in `search.ml`**: filed under `## Cross-session requests` (`c0c2c33`).
+- **An engine call that removes a detached instance from the wake index**: not needed after
+  M6-T22. A detached clause stays only in the index of its two watched variables, and there it
+  costs one closure call that returns `false`.
+- **The PB-row LBD (RoundingSat)**: parked, see §3.
+- **LBD updated on use (Glucose)**: needs a hook in `analysis.ml`, which M10-T1..T3 own.
+  Recorded, not approximated.
+- **Jamali and Mitchell's simplified reduction and CrystalBall**: not built. The first is a
+  different ranking inside the same `evict` (one function). The second needs features this
+  solver does not log yet. Neither is worth building before restarts exist.
