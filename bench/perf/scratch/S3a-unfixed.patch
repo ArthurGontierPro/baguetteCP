@@ -1,0 +1,20 @@
+--- a/lib/core/search.ml
++++ b/lib/core/search.ml
+@@ -715,7 +715,7 @@
+   let n = Store.n_vars store in
+   let k = ref 0 in
+   for i = 0 to n - 1 do
+-    if Domain.size (Store.get store (Var.of_int i)) > 1 then incr k
++    if not (Domain.is_fixed (Store.get store (Var.of_int i))) then incr k
+   done;
+   if !k = 0 then [||]
+   else
+@@ -723,7 +723,7 @@
+     let j = ref 0 in
+     for i = 0 to n - 1 do
+       let v = Var.of_int i in
+-      if Domain.size (Store.get store v) > 1 then (
++      if not (Domain.is_fixed (Store.get store v)) then (
+         out.(!j) <- v;
+         incr j)
+     done;

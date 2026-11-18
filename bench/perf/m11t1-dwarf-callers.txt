@@ -1,0 +1,864 @@
+######## 2011_cyclic-rcpsp_easy_6_10000_np_dw
+user samples: 7070
+-- self time attributed to nearest Baguette frame (%)
+ 48.57%  (no baguette frame)
+ 10.79%  Baguette_core.Pb.fun
+  4.41%  Baguette_core.Pb.status
+  3.99%  Baguette_core.Store.get
+  3.96%  Baguette_core.Pb.effective_of
+  3.25%  Baguette_core.Pb.pass
+  2.38%  Baguette_core.Alldiff.fun
+  1.92%  Baguette_core.Linear.term_min
+  1.91%  Baguette_core.Linear.propagate
+  1.36%  Baguette_core.Alldiff.gone_of
+  1.27%  Baguette_core.Engine.run_one
+  0.75%  Baguette_proof.Lit.go
+  0.74%  Baguette_core.Checked.add
+  0.72%  Baguette_core.Linear.fun
+  0.68%  Baguette_core.Store.go
+  0.66%  Baguette_core.Engine.fun
+  0.65%  Baguette_core.Var.to_int
+  0.59%  Baguette_core.Engine.watchers_of_new_entries
+  0.50%  Baguette_core.Pb_analysis.down
+  0.45%  Baguette_core.Domain.lo
+  0.44%  Baguette_core.Store.trail_entry
+  0.44%  Baguette_proof.Lit.var_compare
+  0.44%  Baguette_core.Domain.hi
+  0.38%  Baguette_proof.Lit.ident_char
+  0.37%  Baguette_core.Engine.advises
+  0.35%  Baguette_core.Checked.ceildiv
+  0.35%  Baguette_core.Checked.mul
+  0.33%  Baguette_core.Pb.3
+  0.31%  Baguette_core.Pb.26
+  0.31%  Baguette_core.Engine.wants
+-- non-Baguette leaf -> nearest Baguette caller (%)
+  5.94%  oldify_one  <-  (no baguette frame)
+  5.54%  pool_sweep  <-  (no baguette frame)
+  4.29%  caml_shared_try_alloc  <-  (no baguette frame)
+  4.26%  do_some_marking  <-  (no baguette frame)
+  3.62%  caml_apply2  <-  (no baguette frame)
+  3.21%  oldify_mopup  <-  (no baguette frame)
+  2.35%  Stdlib.List.map_dps  <-  (no baguette frame)
+  1.80%  Stdlib.List.fold_left  <-  (no baguette frame)
+  1.63%  Stdlib.List.init_dps  <-  (no baguette frame)
+  1.57%  Stdlib.List.rev_append  <-  Baguette_core.Pb.effective_of
+  1.39%  Stdlib.List.length_aux  <-  Baguette_core.Pb.effective_of
+  1.13%  Has_status_hd (inlined)  <-  (no baguette frame)
+  1.09%  Stdlib.List.find_all  <-  Baguette_core.Pb.pass
+  1.02%  caml_tuplify2  <-  (no baguette frame)
+  1.00%  Stdlib.List.map_dps  <-  Baguette_core.Pb.pass
+  0.99%  alloc_shared (inlined)  <-  (no baguette frame)
+  0.89%  Stdlib.List.iter  <-  Baguette_core.Pb.effective_of
+  0.86%  caml_initialize  <-  (no baguette frame)
+  0.74%  Stdlib.List.init_dps  <-  Baguette_core.Alldiff.gone_of
+  0.65%  Stdlib.List.iter  <-  (no baguette frame)
+  0.59%  Stdlib.List.map  <-  (no baguette frame)
+  0.59%  Stdlib.List.find_all  <-  (no baguette frame)
+  0.52%  caml_apply2  <-  Baguette_core.Linear.propagate
+  0.50%  caml_hash  <-  (no baguette frame)
+  0.50%  caml_apply2  <-  Baguette_core.Pb.pass
+  0.47%  Stdlib.List.map_dps  <-  Baguette_core.Pb.fun
+  0.44%  compare_val  <-  (no baguette frame)
+  0.41%  pool_allocate (inlined)  <-  (no baguette frame)
+  0.41%  Stdlib.List.map_dps  <-  Baguette_core.Alldiff.gone_of
+  0.38%  try_update_object_header  <-  (no baguette frame)
+-- inclusive (%)
+ 25.88%  Baguette_flatzinc.Error.catch
+ 24.95%  Baguette_core.Search.branch_split
+ 24.94%  Baguette_core.Search.search_core_inner
+ 24.92%  Baguette_core.Search.optimise_inner
+ 24.87%  Baguette_core.Search.dfs
+ 23.66%  Baguette_core.Engine.run_one
+ 23.64%  Baguette_core.Engine.propagate_inner
+ 14.37%  Baguette_core.Pb.pass
+ 12.81%  Baguette_core.Pb.fun
+  5.37%  Baguette_core.Pb.status
+  5.04%  Baguette_core.Pb.effective_of
+  4.26%  Baguette_core.Store.get
+  4.02%  Baguette_core.Linear.propagate
+  3.95%  Baguette_core.Alldiff.fun
+  2.16%  Baguette_core.Alldiff.propagate
+  2.07%  Baguette_core.Alldiff.pass
+  2.05%  Baguette_core.Linear.term_min
+  1.98%  Baguette_core.Alldiff.snap_of
+  1.63%  Baguette_core.Alldiff.gone_of
+  1.56%  Baguette_core.Engine.watchers_of_new_entries
+  1.34%  Baguette_core.Linear.fun
+  0.96%  Baguette_flatzinc.Compile.fun
+  0.96%  Baguette_flatzinc.Compile.compile
+  0.93%  Baguette_core.Search.learn_at_conflict
+  0.92%  Baguette_core.Search.pb_at_conflict
+  0.89%  Baguette_core.Pb_analysis.analyse
+  0.88%  Baguette_flatzinc.Compile.post_int_times
+  0.88%  Baguette_core.Engine.fun
+  0.86%  Baguette_flatzinc.Compile.post_le_as
+  0.86%  Baguette_core.Pb_analysis.loop
+
+######## 2011_cyclic-rcpsp_easy_6_10000_p_dw
+user samples: 29387
+-- self time attributed to nearest Baguette frame (%)
+ 66.56%  (no baguette frame)
+  4.69%  Baguette_core.Justify.fun
+  3.05%  Baguette_proof.Writer.write_cited
+  2.58%  Baguette_core.Pb.fun
+  1.13%  Baguette_core.Justify.go
+  1.07%  Baguette_core.Pb.status
+  1.06%  Baguette_core.Alldiff.fun
+  0.91%  Baguette_core.Store.get
+  0.87%  Baguette_proof.Writer.374
+  0.87%  Baguette_proof.Writer.tokens
+  0.87%  Baguette_core.Pb.effective_of
+  0.81%  Baguette_core.Justify.emit_summand
+  0.76%  Baguette_core.Pb.pass
+  0.65%  Baguette_core.Justify.emit_combine
+  0.64%  Baguette_proof.Encoding.find
+  0.62%  Baguette_core.Justify.shallow_hash
+  0.52%  Baguette_core.Justify.shallow_tag
+  0.52%  Baguette_proof.Encoding.consistency_id
+  0.38%  Baguette_proof.Writer.fun
+  0.38%  Baguette_core.Alldiff.gone_of
+  0.38%  Baguette_core.Linear.term_min
+  0.38%  Baguette_core.Explanation.term
+  0.33%  Baguette_proof.Lit.go
+  0.33%  Baguette_core.Justify.emit
+  0.33%  Baguette_proof.Writer.fresh
+  0.32%  Baguette_core.Search.273
+  0.31%  Baguette_core.Linear.propagate
+  0.30%  Baguette_proof.Opb.label_of
+  0.30%  Baguette_core.Alldiff.excl
+  0.28%  Baguette_core.Engine.run_one
+-- non-Baguette leaf -> nearest Baguette caller (%)
+  4.20%  caml_hash  <-  (no baguette frame)
+  4.06%  oldify_one  <-  (no baguette frame)
+  3.92%  do_some_marking  <-  (no baguette frame)
+  3.69%  __memmove_avx_unaligned_erms  <-  (no baguette frame)
+  3.33%  pool_sweep  <-  (no baguette frame)
+  3.32%  caml_shared_try_alloc  <-  (no baguette frame)
+  2.52%  __printf_buffer  <-  (no baguette frame)
+  1.92%  oldify_mopup  <-  (no baguette frame)
+  1.82%  caml_apply2  <-  (no baguette frame)
+  1.33%  caml_hash  <-  Baguette_core.Justify.fun
+  1.32%  Stdlib.List.map_dps  <-  (no baguette frame)
+  1.29%  caml_c_call  <-  (no baguette frame)
+  1.28%  CamlinternalFormat.strput_acc  <-  (no baguette frame)
+  1.13%  caml_alloc_string  <-  (no baguette frame)
+  1.12%  Stdlib.Buffer.add_string  <-  (no baguette frame)
+  0.96%  Stdlib.List.find_all_dps  <-  (no baguette frame)
+  0.93%  alloc_shared (inlined)  <-  (no baguette frame)
+  0.92%  Stdlib.Hashtbl.find_opt  <-  (no baguette frame)
+  0.83%  CamlinternalFormat.make_printf  <-  (no baguette frame)
+  0.80%  Has_status_hd (inlined)  <-  (no baguette frame)
+  0.76%  __printf_buffer_write  <-  (no baguette frame)
+  0.74%  do_compare_val (inlined)  <-  (no baguette frame)
+  0.73%  caml_hash_mix_intnat (inlined)  <-  (no baguette frame)
+  0.68%  caml_initialize  <-  (no baguette frame)
+  0.67%  caml_alloc_sprintf  <-  (no baguette frame)
+  0.65%  caml_string_equal  <-  (no baguette frame)
+  0.60%  caml_hash_mix_string  <-  (no baguette frame)
+  0.59%  caml_tuplify2  <-  (no baguette frame)
+  0.54%  memmove@plt  <-  (no baguette frame)
+  0.51%  compare_val  <-  (no baguette frame)
+-- inclusive (%)
+ 14.14%  Baguette_flatzinc.Error.catch
+ 13.87%  Baguette_core.Search.branch_split
+ 13.86%  Baguette_core.Search.search_core_inner
+ 13.86%  Baguette_core.Search.optimise_inner
+ 12.70%  Baguette_core.Search.dfs
+  5.63%  Baguette_core.Justify.emit_summand
+  5.35%  Baguette_core.Engine.run_one
+  5.34%  Baguette_core.Engine.propagate_inner
+  5.32%  Baguette_core.Justify.memoized
+  5.28%  Baguette_core.Justify.emit_combine
+  4.84%  Baguette_core.Justify.fun
+  4.38%  Baguette_core.Trace.emit_to_page
+  4.18%  Baguette_core.Trace.derive_ahead
+  3.37%  Baguette_proof.Writer.write_cited
+  3.26%  Baguette_core.Pb.pass
+  3.06%  Baguette_core.Pb.fun
+  3.03%  Baguette_proof.Writer.emit_yielding
+  2.94%  Baguette_core.Alldiff.fun
+  2.86%  Baguette_proof.Writer.fun
+  2.49%  Baguette_proof.Writer.to_string_cited
+  1.62%  Baguette_core.Explanation.force
+  1.58%  Baguette_core.Alldiff.prune_summands
+  1.56%  Baguette_core.Alldiff.core_summands
+  1.36%  Baguette_core.Alldiff.alo_over
+  1.32%  Baguette_core.Alldiff.excl
+  1.32%  Baguette_core.Alldiff.exclude_summand
+  1.27%  Baguette_core.Pb.status
+  1.13%  Baguette_core.Justify.go
+  1.06%  Baguette_proof.Encoding.consistency_id
+  1.03%  Baguette_core.Pb.effective_of
+
+######## 2012_mspsp_hard_01_10000_np_dw
+user samples: 3248
+-- self time attributed to nearest Baguette frame (%)
+ 32.20%  (no baguette frame)
+  5.91%  Baguette_core.Pb.status
+  5.02%  Baguette_core.Clause.ask
+  3.02%  Baguette_core.Engine.fun
+  2.99%  Baguette_core.Store.get
+  2.96%  Baguette_core.Linear.term_min
+  2.77%  Baguette_core.Store.go
+  2.37%  Baguette_core.Engine.run_one
+  2.31%  Baguette_core.Engine.advises
+  1.97%  Baguette_core.Linear.propagate
+  1.63%  Baguette_core.Engine.wants
+  1.60%  Baguette_core.Retention.reduce
+  1.48%  Baguette_core.Linear.fun
+  1.45%  Baguette_core.Clause.best
+  1.29%  Baguette_core.Checked.add
+  1.14%  Baguette_core.Engine.watchers_of_new_entries
+  1.05%  Baguette_core.Var.to_int
+  0.95%  Baguette_core.Clause.false_at
+  0.92%  Baguette_core.Checked.floordiv
+  0.92%  Baguette_core.Engine.propagate_inner
+  0.92%  Baguette_core.Pb.fun
+  0.92%  Baguette_core.Retention.fun
+  0.86%  Baguette_core.Reif.go
+  0.83%  Baguette_core.Engine.down
+  0.80%  Baguette_core.Domain.56
+  0.77%  Baguette_core.Clause.fun
+  0.58%  Baguette_core.Pb.first
+  0.55%  Baguette_core.Store.push_hist
+  0.55%  Baguette_core.Store.is_level_start
+  0.55%  Baguette_core.Pb.other
+-- non-Baguette leaf -> nearest Baguette caller (%)
+  4.19%  caml_apply2  <-  (no baguette frame)
+  3.51%  caml_compare  <-  (no baguette frame)
+  2.37%  Stdlib.List.map  <-  (no baguette frame)
+  1.60%  Stdlib.List.rev_append  <-  Baguette_core.Retention.reduce
+  1.32%  caml_shared_try_alloc  <-  (no baguette frame)
+  1.26%  oldify_one  <-  (no baguette frame)
+  1.23%  do_some_marking  <-  (no baguette frame)
+  1.14%  compare_val  <-  (no baguette frame)
+  1.14%  Stdlib.List.map_dps  <-  (no baguette frame)
+  1.11%  Stdlib.List.exists  <-  (no baguette frame)
+  1.02%  do_compare_val (inlined)  <-  (no baguette frame)
+  0.80%  Stdlib.List.fold_left  <-  (no baguette frame)
+  0.77%  oldify_mopup  <-  (no baguette frame)
+  0.68%  pool_sweep  <-  (no baguette frame)
+  0.65%  caml_hash  <-  (no baguette frame)
+  0.52%  write_barrier (inlined)  <-  (no baguette frame)
+  0.46%  Stdlib.List.iter  <-  (no baguette frame)
+  0.43%  Stdlib.List.map  <-  Baguette_core.Linear.propagate
+  0.43%  Stdlib.List.exists  <-  Baguette_core.Retention.add
+  0.43%  Stdlib.List.map  <-  Baguette_core.Engine.run_one
+  0.43%  caml_c_call  <-  (no baguette frame)
+  0.37%  Stdlib.List.map  <-  Baguette_core.Engine.propagate_inner
+  0.34%  caml_apply2  <-  Baguette_core.Domain.56
+  0.34%  Stdlib.List.combine  <-  (no baguette frame)
+  0.34%  Stdlib.Fun.finally_no_exn  <-  (no baguette frame)
+  0.31%  alloc_shared (inlined)  <-  (no baguette frame)
+  0.31%  caml_string_equal  <-  (no baguette frame)
+  0.31%  caml_modify  <-  (no baguette frame)
+  0.31%  Stdlib.List.find_all_dps  <-  (no baguette frame)
+  0.28%  pool_allocate (inlined)  <-  (no baguette frame)
+-- inclusive (%)
+ 30.36%  Baguette_core.Search.branch_split
+ 30.33%  Baguette_core.Search.dfs
+ 23.34%  Baguette_core.Engine.propagate_inner
+ 21.74%  Baguette_core.Engine.run_one
+ 10.75%  Baguette_core.Search.search_core_inner
+  9.36%  Baguette_core.Search.optimise_inner
+  7.45%  Baguette_core.Engine.fun
+  6.37%  Baguette_core.Engine.watchers_of_new_entries
+  6.37%  Baguette_core.Pb.status
+  6.07%  Baguette_flatzinc.Error.catch
+  6.03%  Baguette_core.Engine.advises
+  5.26%  Baguette_core.Linear.propagate
+  5.08%  Baguette_core.Clause.ask
+  4.65%  Baguette_core.Search.learn_at_conflict
+  3.60%  Baguette_core.Clause.propagate
+  3.45%  Baguette_core.Store.get
+  3.14%  Baguette_core.Linear.term_min
+  3.02%  Baguette_core.Reif.go
+  2.77%  Baguette_core.Store.go
+  2.52%  Baguette_core.Clause.best
+  2.43%  Baguette_core.Store.is_level_start
+  2.31%  Baguette_core.Search.decision_entries
+  2.12%  Baguette_core.Linear.fun
+  2.09%  Baguette_core.Search.bridges
+  1.82%  Baguette_core.Clause.false_at
+  1.66%  Baguette_core.Engine.wants
+  1.60%  Baguette_core.Retention.reduce
+  1.57%  Baguette_core.Clause.rewatch
+  1.54%  Baguette_core.Pb.propagate
+  1.29%  Baguette_core.Checked.add
+
+######## 2012_mspsp_hard_01_10000_p_dw
+user samples: 5487
+-- self time attributed to nearest Baguette frame (%)
+ 45.62%  (no baguette frame)
+  3.72%  Baguette_core.Pb.status
+  3.48%  Baguette_core.Clause.ask
+  2.50%  Baguette_core.Store.get
+  2.11%  Baguette_core.Engine.fun
+  2.04%  Baguette_core.Engine.advises
+  1.95%  Baguette_core.Linear.term_min
+  1.51%  Baguette_core.Engine.run_one
+  1.42%  Baguette_core.Store.go
+  1.26%  Baguette_core.Linear.propagate
+  1.24%  Baguette_core.Engine.watchers_of_new_entries
+  1.20%  Baguette_core.Engine.wants
+  1.04%  Baguette_core.Linear.fun
+  0.97%  Baguette_core.Checked.add
+  0.95%  Baguette_core.Retention.fun
+  0.93%  Baguette_proof.Lit.go
+  0.89%  Baguette_core.Retention.reduce
+  0.84%  Baguette_proof.Lit.ident_char
+  0.78%  Baguette_core.Reif.go
+  0.64%  Baguette_core.Clause.fun
+  0.62%  Baguette_core.Clause.best
+  0.58%  Baguette_core.Checked.mul
+  0.56%  Baguette_core.Var.to_int
+  0.55%  Baguette_proof.Lit.render
+  0.55%  Baguette_core.Engine.propagate_inner
+  0.49%  Baguette_core.Pb.first
+  0.49%  Baguette_core.Domain.56
+  0.47%  Baguette_core.Pb.fun
+  0.46%  Baguette_core.Justify.fun
+  0.46%  Baguette_core.Engine.down
+-- non-Baguette leaf -> nearest Baguette caller (%)
+  3.94%  caml_compare  <-  (no baguette frame)
+  3.50%  caml_apply2  <-  (no baguette frame)
+  2.15%  do_some_marking  <-  (no baguette frame)
+  1.91%  caml_hash  <-  (no baguette frame)
+  1.82%  caml_shared_try_alloc  <-  (no baguette frame)
+  1.82%  oldify_one  <-  (no baguette frame)
+  1.77%  Stdlib.List.map  <-  (no baguette frame)
+  1.59%  do_compare_val (inlined)  <-  (no baguette frame)
+  1.33%  __memmove_avx_unaligned_erms  <-  (no baguette frame)
+  1.33%  compare_val  <-  (no baguette frame)
+  1.29%  pool_sweep  <-  (no baguette frame)
+  1.24%  __printf_buffer  <-  (no baguette frame)
+  1.09%  oldify_mopup  <-  (no baguette frame)
+  1.04%  Stdlib.List.exists  <-  (no baguette frame)
+  0.89%  Stdlib.List.rev_append  <-  Baguette_core.Retention.reduce
+  0.69%  caml_c_call  <-  (no baguette frame)
+  0.64%  caml_hash_mix_string  <-  (no baguette frame)
+  0.56%  Stdlib.List.fold_left  <-  (no baguette frame)
+  0.56%  Stdlib.List.map_dps  <-  (no baguette frame)
+  0.51%  Stdlib.Hashtbl.find_opt  <-  (no baguette frame)
+  0.51%  Stdlib.List.iter  <-  (no baguette frame)
+  0.44%  Stdlib.List.map  <-  Baguette_core.Linear.propagate
+  0.42%  caml_hash_mix_intnat (inlined)  <-  (no baguette frame)
+  0.42%  Stdlib.List.exists  <-  Baguette_core.Retention.add
+  0.40%  alloc_shared (inlined)  <-  (no baguette frame)
+  0.38%  __printf_buffer_write  <-  (no baguette frame)
+  0.38%  CamlinternalFormat.strput_acc  <-  (no baguette frame)
+  0.38%  Stdlib.Hashtbl.key_index  <-  (no baguette frame)
+  0.36%  Stdlib.List.find_all_dps  <-  (no baguette frame)
+  0.35%  caml_alloc_string  <-  (no baguette frame)
+-- inclusive (%)
+ 22.25%  Baguette_core.Search.branch_split
+ 21.45%  Baguette_core.Search.dfs
+ 14.53%  Baguette_core.Engine.propagate_inner
+ 13.78%  Baguette_core.Engine.run_one
+  7.00%  Baguette_core.Search.search_core_inner
+  5.96%  Baguette_core.Search.optimise_inner
+  4.87%  Baguette_core.Engine.advises
+  4.70%  Baguette_core.Engine.watchers_of_new_entries
+  4.39%  Baguette_core.Engine.fun
+  4.32%  Baguette_flatzinc.Error.catch
+  3.94%  Baguette_core.Pb.status
+  3.50%  Baguette_core.Clause.ask
+  3.43%  Baguette_core.Linear.propagate
+  2.99%  Baguette_core.Search.learn_at_conflict
+  2.88%  Baguette_core.Store.get
+  2.88%  Baguette_core.Trace.emit_to_page
+  2.13%  Baguette_core.Linear.term_min
+  2.10%  Baguette_core.Reif.go
+  1.82%  Baguette_core.Clause.propagate
+  1.57%  Baguette_core.Trace.fun
+  1.53%  Baguette_core.Linear.fun
+  1.42%  Baguette_core.Store.go
+  1.29%  Baguette_core.Clause.best
+  1.28%  Baguette_core.Engine.wants
+  1.15%  Baguette_core.Store.is_level_start
+  1.13%  Baguette_core.Justify.emit_rup_clause
+  1.06%  Baguette_core.Retention.add
+  1.00%  Baguette_core.Search.decision_entries
+  0.98%  Baguette_proof.Lit.go
+  0.97%  Baguette_core.Checked.add
+
+######## 2013_rcpsp_11_10000_np_dw
+user samples: 2828
+-- self time attributed to nearest Baguette frame (%)
+ 30.59%  (no baguette frame)
+ 11.60%  Baguette_core.Pb.status
+  8.03%  Baguette_core.Clause.ask
+  6.51%  Baguette_core.Pb.fun
+  3.50%  Baguette_core.Store.get
+  3.08%  Baguette_core.Engine.advises
+  2.65%  Baguette_core.Engine.wants
+  2.09%  Baguette_core.Retention.reduce
+  1.84%  Baguette_core.Retention.fun
+  1.80%  Baguette_core.Cumulative.overloaded
+  1.70%  Baguette_core.Clause.best
+  1.27%  Baguette_core.Clause.fun
+  1.20%  Baguette_core.Var.to_int
+  1.13%  Baguette_core.Pb.first
+  1.06%  Baguette_core.Engine.watchers_of_new_entries
+  1.03%  Baguette_core.Clause.false_at
+  0.85%  Baguette_core.Store.go
+  0.81%  Baguette_core.Engine.run_one
+  0.74%  Baguette_core.Linear.propagate
+  0.74%  Baguette_core.Checked.add
+  0.74%  Baguette_core.Cumulative.first_overloaded
+  0.71%  Baguette_core.Retention.add
+  0.50%  Baguette_core.Engine.fun
+  0.42%  Baguette_core.Engine.mark
+  0.42%  Baguette_core.Cumulative.row_at
+  0.42%  Baguette_core.Pb.pass
+  0.42%  Baguette_core.Engine.trigger_of
+  0.39%  Baguette_core.Cumulative.pass
+  0.39%  Baguette_core.Linear.term_min
+  0.39%  Baguette_core.Linear.fun
+-- non-Baguette leaf -> nearest Baguette caller (%)
+  6.51%  caml_apply2  <-  (no baguette frame)
+  5.16%  caml_compare  <-  (no baguette frame)
+  2.09%  Stdlib.List.rev_append  <-  Baguette_core.Retention.reduce
+  1.94%  Stdlib.List.exists  <-  (no baguette frame)
+  1.34%  compare_val  <-  (no baguette frame)
+  1.13%  caml_hash  <-  (no baguette frame)
+  1.10%  Stdlib.List.fold_left  <-  (no baguette frame)
+  0.81%  oldify_one  <-  (no baguette frame)
+  0.74%  Stdlib.List.rev_append  <-  (no baguette frame)
+  0.67%  do_some_marking  <-  (no baguette frame)
+  0.67%  Stdlib.List.exists  <-  Baguette_core.Retention.add
+  0.64%  do_compare_val (inlined)  <-  (no baguette frame)
+  0.57%  pool_sweep  <-  (no baguette frame)
+  0.46%  caml_shared_try_alloc  <-  (no baguette frame)
+  0.46%  oldify_mopup  <-  (no baguette frame)
+  0.42%  Stdlib.List.iter  <-  (no baguette frame)
+  0.39%  Stdlib.Hashtbl.find_opt  <-  (no baguette frame)
+  0.39%  Stdlib.List.init_dps  <-  (no baguette frame)
+  0.39%  Stdlib.Hashtbl.key_index  <-  (no baguette frame)
+  0.35%  caml_hash_mix_intnat (inlined)  <-  (no baguette frame)
+  0.32%  caml_c_call  <-  (no baguette frame)
+  0.32%  Stdlib.List.length_aux  <-  (no baguette frame)
+  0.32%  caml_apply2  <-  Baguette_core.Engine.advises
+  0.28%  Stdlib.List.map_dps  <-  (no baguette frame)
+  0.25%  Stdlib.List.map  <-  (no baguette frame)
+  0.25%  write_barrier (inlined)  <-  (no baguette frame)
+  0.25%  Stdlib.List.find_all  <-  (no baguette frame)
+  0.25%  Stdlib.List.fold_left  <-  Baguette_core.Pb.fun
+  0.21%  Stdlib.Fun.protect  <-  (no baguette frame)
+  0.18%  Stdlib.List.sort  <-  (no baguette frame)
+-- inclusive (%)
+ 31.36%  Baguette_flatzinc.Error.catch
+ 31.26%  Baguette_core.Search.branch_split
+ 31.26%  Baguette_core.Search.optimise_inner
+ 31.26%  Baguette_core.Search.search_core_inner
+ 31.15%  Baguette_core.Search.dfs
+ 25.95%  Baguette_core.Engine.propagate_inner
+ 23.97%  Baguette_core.Engine.run_one
+ 11.85%  Baguette_core.Pb.status
+ 10.08%  Baguette_core.Engine.advises
+  8.73%  Baguette_core.Engine.watchers_of_new_entries
+  8.20%  Baguette_core.Clause.ask
+  7.57%  Baguette_core.Pb.fun
+  5.55%  Baguette_core.Engine.fun
+  5.48%  Baguette_core.Pb.pass
+  4.81%  Baguette_core.Search.learn_at_conflict
+  4.77%  Baguette_core.Clause.propagate
+  3.61%  Baguette_core.Store.get
+  3.15%  Baguette_core.Clause.best
+  2.65%  Baguette_core.Engine.wants
+  2.48%  Baguette_core.Clause.false_at
+  2.37%  Baguette_core.Cumulative.pass
+  2.19%  Baguette_core.Cumulative.propagate
+  2.09%  Baguette_core.Retention.reduce
+  1.98%  Baguette_core.Retention.add
+  1.94%  Baguette_core.Cumulative.overloaded
+  1.87%  Baguette_core.Clause.rewatch
+  1.84%  Baguette_core.Retention.fun
+  1.80%  Baguette_core.Pb.propagate
+  1.66%  Baguette_core.Linear.propagate
+  1.52%  Baguette_core.Pb.first
+
+######## 2013_rcpsp_11_10000_p_dw
+user samples: 6412
+-- self time attributed to nearest Baguette frame (%)
+ 53.29%  (no baguette frame)
+  5.16%  Baguette_core.Pb.status
+  3.81%  Baguette_core.Clause.ask
+  3.20%  Baguette_core.Pb.fun
+  2.31%  Baguette_core.Justify.fun
+  1.81%  Baguette_core.Store.get
+  1.65%  Baguette_proof.Writer.write_cited
+  1.54%  Baguette_core.Engine.wants
+  1.37%  Baguette_core.Engine.advises
+  0.78%  Baguette_core.Cumulative.overloaded
+  0.72%  Baguette_core.Justify.shallow_hash
+  0.70%  Baguette_core.Engine.watchers_of_new_entries
+  0.70%  Baguette_core.Retention.fun
+  0.66%  Baguette_core.Retention.reduce
+  0.62%  Baguette_core.Var.to_int
+  0.59%  Baguette_core.Clause.fun
+  0.56%  Baguette_core.Justify.emit_combine
+  0.55%  Baguette_core.Pb.first
+  0.55%  Baguette_core.Clause.best
+  0.55%  Baguette_core.Clause.false_at
+  0.53%  Baguette_core.Justify.emit_summand
+  0.51%  Baguette_core.Justify.go
+  0.50%  Baguette_core.Store.go
+  0.47%  Baguette_proof.Writer.374
+  0.45%  Baguette_proof.Writer.tokens
+  0.44%  Baguette_core.Pb.pass
+  0.42%  Baguette_proof.Writer.fresh
+  0.39%  Baguette_core.Engine.fun
+  0.37%  Baguette_core.Engine.run_one
+  0.36%  Baguette_core.Checked.add
+-- non-Baguette leaf -> nearest Baguette caller (%)
+  3.91%  caml_apply2  <-  (no baguette frame)
+  3.28%  caml_hash  <-  (no baguette frame)
+  2.53%  do_some_marking  <-  (no baguette frame)
+  2.46%  __memmove_avx_unaligned_erms  <-  (no baguette frame)
+  2.00%  oldify_one  <-  (no baguette frame)
+  2.00%  caml_compare  <-  (no baguette frame)
+  1.89%  __printf_buffer  <-  (no baguette frame)
+  1.86%  caml_shared_try_alloc  <-  (no baguette frame)
+  1.40%  pool_sweep  <-  (no baguette frame)
+  1.23%  caml_c_call  <-  (no baguette frame)
+  1.08%  do_compare_val (inlined)  <-  (no baguette frame)
+  1.03%  compare_val  <-  (no baguette frame)
+  1.03%  oldify_mopup  <-  (no baguette frame)
+  0.97%  CamlinternalFormat.strput_acc  <-  (no baguette frame)
+  0.92%  Stdlib.List.exists  <-  (no baguette frame)
+  0.76%  caml_hash  <-  Baguette_core.Justify.fun
+  0.75%  Stdlib.Buffer.add_string  <-  (no baguette frame)
+  0.72%  caml_alloc_string  <-  (no baguette frame)
+  0.67%  Stdlib.List.fold_left  <-  (no baguette frame)
+  0.67%  Stdlib.List.find_all_dps  <-  (no baguette frame)
+  0.67%  CamlinternalFormat.make_printf  <-  (no baguette frame)
+  0.66%  Stdlib.List.rev_append  <-  Baguette_core.Retention.reduce
+  0.59%  caml_hash_mix_intnat (inlined)  <-  (no baguette frame)
+  0.55%  __printf_buffer_write  <-  (no baguette frame)
+  0.51%  write_barrier (inlined)  <-  (no baguette frame)
+  0.51%  Stdlib.List.map_dps  <-  (no baguette frame)
+  0.50%  Stdlib.Hashtbl.find_opt  <-  (no baguette frame)
+  0.50%  Stdlib.Hashtbl.replace  <-  (no baguette frame)
+  0.47%  caml_alloc_sprintf  <-  (no baguette frame)
+  0.45%  parse_format  <-  (no baguette frame)
+-- inclusive (%)
+ 18.50%  Baguette_core.Search.branch_split
+ 18.12%  Baguette_core.Search.search_core_inner
+ 18.11%  Baguette_core.Search.optimise_inner
+ 18.08%  Baguette_flatzinc.Error.catch
+ 17.79%  Baguette_core.Search.dfs
+ 12.74%  Baguette_core.Engine.propagate_inner
+ 12.02%  Baguette_core.Engine.run_one
+  5.40%  Baguette_core.Pb.status
+  4.63%  Baguette_core.Engine.advises
+  4.24%  Baguette_core.Engine.watchers_of_new_entries
+  3.98%  Baguette_core.Clause.ask
+  3.57%  Baguette_core.Pb.fun
+  3.35%  Baguette_core.Justify.memoized
+  3.24%  Baguette_core.Justify.emit_summand
+  3.06%  Baguette_core.Justify.emit_combine
+  3.01%  Baguette_core.Pb.pass
+  2.90%  Baguette_core.Trace.emit_to_page
+  2.62%  Baguette_core.Engine.fun
+  2.60%  Baguette_core.Trace.derive_ahead
+  2.40%  Baguette_core.Justify.fun
+  2.21%  Baguette_core.Clause.propagate
+  1.87%  Baguette_core.Store.get
+  1.86%  Baguette_proof.Writer.write_cited
+  1.81%  Baguette_core.Search.learn_at_conflict
+  1.73%  Baguette_proof.Writer.emit_yielding
+  1.54%  Baguette_core.Engine.wants
+  1.31%  Baguette_proof.Writer.fun
+  1.29%  Baguette_core.Clause.false_at
+  1.28%  Baguette_core.Clause.best
+  1.17%  Baguette_core.Cumulative.pass
+
+######## 2014_openshop_gp10-4_1_np_dw
+user samples: 11106
+-- self time attributed to nearest Baguette frame (%)
+ 71.68%  (no baguette frame)
+  9.11%  Baguette_proof.Lit.go
+  5.38%  Baguette_proof.Lit.ident_char
+  2.28%  Baguette_proof.Opb.fun
+  2.16%  Baguette_proof.Opb.hash
+  2.07%  Baguette_proof.Opb.normalise
+  1.55%  Baguette_proof.Lit.render
+  1.29%  Baguette_proof.Encoding.fun
+  1.08%  Baguette_proof.Lit.sanitize
+  0.63%  Baguette_proof.Encoding.merge
+  0.52%  Baguette_proof.Encoding.owner
+  0.50%  Baguette_proof.Encoding.add_range
+  0.43%  Baguette_proof.Lit.needs_sanitize
+  0.35%  Baguette_proof.Encoding.note_renamed
+  0.19%  Baguette_proof.Lit.ge
+  0.19%  Baguette_proof.Encoding.hash
+  0.12%  Baguette_proof.Encoding.overlap
+  0.10%  Baguette_proof.Encoding.add_var
+  0.10%  Baguette_proof.Opb.le
+  0.06%  Baguette_proof.Lit.pos
+  0.05%  Baguette_proof.Lit.neg
+  0.03%  Baguette_proof.Lit.var_name
+  0.03%  Baguette_core.Store.30
+  0.02%  Baguette_proof.Lit.3
+  0.02%  Baguette_flatzinc.Compile.compile
+  0.02%  Baguette_proof.Lit.owner
+  0.01%  Baguette_flatzinc.Compile.post_reif_le
+  0.01%  Baguette_proof.Encoding.add_constraint
+  0.01%  Baguette_flatzinc.Error.catch
+  0.01%  Baguette_flatzinc.Compile.fun
+-- non-Baguette leaf -> nearest Baguette caller (%)
+  8.35%  oldify_one  <-  (no baguette frame)
+  6.93%  do_some_marking  <-  (no baguette frame)
+  6.53%  pool_sweep  <-  (no baguette frame)
+  5.98%  caml_shared_try_alloc  <-  (no baguette frame)
+  4.75%  caml_hash_mix_string  <-  (no baguette frame)
+  3.92%  oldify_mopup  <-  (no baguette frame)
+  3.23%  caml_hash  <-  (no baguette frame)
+  2.07%  caml_string_equal  <-  (no baguette frame)
+  1.94%  __printf_buffer  <-  (no baguette frame)
+  1.38%  __memmove_avx_unaligned_erms  <-  (no baguette frame)
+  1.36%  Has_status_hd (inlined)  <-  (no baguette frame)
+  1.34%  caml_apply2  <-  (no baguette frame)
+  1.34%  alloc_shared (inlined)  <-  (no baguette frame)
+  1.25%  compare_val  <-  (no baguette frame)
+  1.07%  Stdlib.Hashtbl.key_index  <-  (no baguette frame)
+  0.95%  Stdlib.Hashtbl.find_opt  <-  (no baguette frame)
+  0.89%  caml_hash_mix_string  <-  Baguette_proof.Opb.normalise
+  0.83%  _itoa_word  <-  (no baguette frame)
+  0.79%  write_barrier (inlined)  <-  (no baguette frame)
+  0.74%  try_update_object_header  <-  (no baguette frame)
+  0.68%  caml_string_length  <-  (no baguette frame)
+  0.68%  Stdlib.Hashtbl.replace  <-  (no baguette frame)
+  0.67%  Stdlib.Hashtbl.insert_bucket  <-  (no baguette frame)
+  0.67%  caml_c_call  <-  (no baguette frame)
+  0.59%  caml_modify  <-  (no baguette frame)
+  0.59%  pb_above_waterline (inlined)  <-  (no baguette frame)
+  0.59%  caml_hash_mix_string  <-  Baguette_proof.Opb.hash
+  0.55%  Stdlib.Hashtbl.insert_all_buckets  <-  (no baguette frame)
+  0.55%  pb_push (inlined)  <-  (no baguette frame)
+  0.50%  parse_format  <-  (no baguette frame)
+-- inclusive (%)
+ 12.01%  Baguette_flatzinc.Error.catch
+ 12.00%  Baguette_flatzinc.Compile.compile
+ 11.98%  Baguette_flatzinc.Compile.fun
+ 11.77%  Baguette_flatzinc.Compile.post_reif_le
+ 11.76%  Baguette_proof.Encoding.add_int_lin_le_reif_rows
+  9.86%  Baguette_proof.Lit.go
+  6.03%  Baguette_proof.Encoding.add_constraint
+  5.38%  Baguette_proof.Lit.ident_char
+  5.31%  Baguette_proof.Opb.normalise
+  4.80%  Baguette_proof.Encoding.fun
+  4.02%  Baguette_proof.Opb.fun
+  3.55%  Baguette_proof.Encoding.add_range
+  3.46%  Baguette_proof.Lit.sanitize
+  2.80%  Baguette_proof.Encoding.owner
+  2.63%  Baguette_proof.Lit.render
+  2.44%  Baguette_proof.Opb.hash
+  2.35%  Baguette_proof.Encoding.note_renamed
+  0.70%  Baguette_proof.Encoding.merge
+  0.61%  Baguette_proof.Encoding.expand_int_lin_le
+  0.43%  Baguette_proof.Lit.needs_sanitize
+  0.33%  Baguette_proof.Encoding.hash
+  0.20%  Baguette_flatzinc.Compile.post_le_as
+  0.19%  Baguette_proof.Lit.ge
+  0.14%  Baguette_proof.Encoding.add_int_lin_le
+  0.12%  Baguette_proof.Encoding.overlap
+  0.11%  Baguette_proof.Lit.3
+  0.10%  Baguette_proof.Encoding.add_var
+  0.10%  Baguette_proof.Opb.le
+  0.06%  Baguette_proof.Lit.pos
+  0.05%  Baguette_proof.Lit.neg
+
+######## H_qr72_bag_def_10000_np_dw
+user samples: 1310
+-- self time attributed to nearest Baguette frame (%)
+ 27.86%  (no baguette frame)
+  7.94%  Baguette_core.Clause.ask
+  7.10%  Baguette_core.Pb.status
+  4.58%  Baguette_core.Retention.reduce
+  4.27%  Baguette_core.Retention.fun
+  3.51%  Baguette_core.Store.get
+  3.51%  Baguette_core.Engine.advises
+  2.29%  Baguette_core.Engine.wants
+  2.21%  Baguette_core.Analysis.fun
+  2.21%  Baguette_core.Clause.fun
+  1.53%  Baguette_core.Engine.run_one
+  1.37%  Baguette_core.Engine.down
+  1.30%  Baguette_core.Clause.false_at
+  1.15%  Baguette_core.Pb.other
+  1.07%  Baguette_core.Engine.fun
+  0.99%  Baguette_core.Var.to_int
+  0.99%  Baguette_core.Engine.watchers_of_new_entries
+  0.99%  Baguette_core.Pb.first
+  0.92%  Baguette_core.Retention.add
+  0.84%  Baguette_core.Analysis.same_slot
+  0.76%  Baguette_core.Engine.propagate_inner
+  0.69%  Baguette_core.Analysis.support_of
+  0.69%  Baguette_core.Clause.best
+  0.69%  Baguette_core.Domain.lo
+  0.61%  Baguette_core.Pb.propagate
+  0.61%  Baguette_core.Clause.rewatch
+  0.61%  Baguette_core.Engine.heap_pop
+  0.53%  Baguette_core.Pb.fun
+  0.53%  Baguette_core.Store.apply
+  0.53%  Baguette_core.Store.go
+-- non-Baguette leaf -> nearest Baguette caller (%)
+  4.50%  Stdlib.List.rev_append  <-  Baguette_core.Retention.reduce
+  3.51%  caml_apply2  <-  (no baguette frame)
+  3.51%  Stdlib.List.exists  <-  (no baguette frame)
+  1.45%  Stdlib.List.find_all_dps  <-  (no baguette frame)
+  1.45%  caml_shared_try_alloc  <-  (no baguette frame)
+  0.92%  Stdlib.List.exists  <-  Baguette_core.Retention.add
+  0.92%  caml_compare  <-  (no baguette frame)
+  0.84%  pool_sweep  <-  (no baguette frame)
+  0.76%  Stdlib.List.iter  <-  (no baguette frame)
+  0.76%  do_some_marking  <-  (no baguette frame)
+  0.76%  oldify_mopup  <-  (no baguette frame)
+  0.76%  Stdlib.List.map_dps  <-  (no baguette frame)
+  0.76%  Stdlib.List.fold_left  <-  (no baguette frame)
+  0.69%  caml_hash  <-  (no baguette frame)
+  0.69%  caml_initialize  <-  (no baguette frame)
+  0.69%  caml_string_equal  <-  (no baguette frame)
+  0.61%  do_compare_val (inlined)  <-  (no baguette frame)
+  0.53%  Stdlib.List.find_all  <-  (no baguette frame)
+  0.53%  caml_c_call  <-  (no baguette frame)
+  0.46%  caml_hash_mix_string  <-  (no baguette frame)
+  0.46%  Stdlib.Hashtbl.find_opt  <-  (no baguette frame)
+  0.38%  Stdlib.Fun.protect  <-  (no baguette frame)
+  0.38%  Stdlib.Hashtbl.key_index  <-  (no baguette frame)
+  0.31%  Stdlib.@_dps  <-  (no baguette frame)
+  0.31%  compare_val  <-  (no baguette frame)
+  0.31%  oldify_one  <-  (no baguette frame)
+  0.31%  Stdlib.Fun.finally_no_exn  <-  (no baguette frame)
+  0.23%  caml_curry2  <-  (no baguette frame)
+  0.23%  caml_make_vect  <-  (no baguette frame)
+  0.23%  Stdlib.List.length_aux  <-  (no baguette frame)
+-- inclusive (%)
+ 31.15%  Baguette_flatzinc.Error.catch
+ 31.15%  Baguette_core.Search.branch_split
+ 31.15%  Baguette_core.Search.solve_inner
+ 31.15%  Baguette_core.Search.search_core_inner
+ 30.53%  Baguette_core.Search.dfs
+ 18.09%  Baguette_core.Engine.propagate_inner
+ 17.18%  Baguette_core.Engine.run_one
+ 12.37%  Baguette_core.Search.learn_at_conflict
+  8.32%  Baguette_core.Engine.advises
+  8.09%  Baguette_core.Clause.ask
+  7.48%  Baguette_core.Pb.status
+  7.02%  Baguette_core.Engine.watchers_of_new_entries
+  5.42%  Baguette_core.Engine.fun
+  4.58%  Baguette_core.Retention.reduce
+  4.27%  Baguette_core.Retention.fun
+  4.27%  Baguette_core.Retention.add
+  4.05%  Baguette_core.Pb.propagate
+  3.74%  Baguette_core.Clause.propagate
+  3.59%  Baguette_core.Store.get
+  2.98%  Baguette_core.Analysis.fun
+  2.90%  Baguette_core.Learn.at_conflict_inner
+  2.29%  Baguette_core.Engine.wants
+  2.21%  Baguette_core.Analysis.loop
+  2.21%  Baguette_core.Clause.fun
+  1.76%  Baguette_core.Analysis.analyse_inner
+  1.76%  Baguette_core.Clause.false_at
+  1.60%  Baguette_core.Pb.first
+  1.37%  Baguette_core.Engine.down
+  1.30%  Baguette_core.Pb.other
+  1.22%  Baguette_core.Analysis.support_of
+
+######## H_qr72_bag_def_10000_p_dw
+user samples: 1512
+-- self time attributed to nearest Baguette frame (%)
+ 44.05%  (no baguette frame)
+  4.17%  Baguette_core.Pb.status
+  3.24%  Baguette_core.Retention.reduce
+  3.11%  Baguette_core.Clause.ask
+  2.78%  Baguette_core.Engine.advises
+  2.51%  Baguette_core.Store.get
+  2.18%  Baguette_core.Analysis.fun
+  1.59%  Baguette_core.Retention.fun
+  1.06%  Baguette_core.Engine.watchers_of_new_entries
+  0.99%  Baguette_core.Engine.down
+  0.99%  Baguette_proof.Lit.render
+  0.93%  Baguette_proof.Lit.ident_char
+  0.93%  Baguette_core.Engine.fun
+  0.93%  Baguette_proof.Lit.go
+  0.93%  Baguette_core.Pb.other
+  0.93%  Baguette_core.Clause.best
+  0.79%  Baguette_core.Store.go
+  0.79%  Baguette_core.Engine.wants
+  0.79%  Baguette_core.Var.to_int
+  0.79%  Baguette_core.Engine.run_one
+  0.73%  Baguette_core.Search.306
+  0.66%  Baguette_proof.Lit.var_compare
+  0.66%  Baguette_core.Engine.sync_watched
+  0.66%  Baguette_core.Engine.propagate_inner
+  0.60%  Baguette_core.Trace.emit_to_page
+  0.53%  Baguette_core.Domain.hi
+  0.53%  Baguette_core.Clause.fun
+  0.46%  Baguette_proof.Lit.compare
+  0.46%  Baguette_core.Analysis.same_slot
+  0.46%  Baguette_core.Trace.fun
+-- non-Baguette leaf -> nearest Baguette caller (%)
+  3.24%  Stdlib.List.rev_append  <-  Baguette_core.Retention.reduce
+  3.04%  caml_hash  <-  (no baguette frame)
+  2.12%  do_compare_val (inlined)  <-  (no baguette frame)
+  2.05%  caml_apply2  <-  (no baguette frame)
+  1.65%  oldify_one  <-  (no baguette frame)
+  1.59%  pool_sweep  <-  (no baguette frame)
+  1.59%  caml_shared_try_alloc  <-  (no baguette frame)
+  1.52%  Stdlib.List.exists  <-  (no baguette frame)
+  1.52%  __memmove_avx_unaligned_erms  <-  (no baguette frame)
+  1.32%  do_some_marking  <-  (no baguette frame)
+  1.32%  __printf_buffer  <-  (no baguette frame)
+  0.99%  oldify_mopup  <-  (no baguette frame)
+  0.86%  caml_hash_mix_string  <-  (no baguette frame)
+  0.86%  compare_val  <-  (no baguette frame)
+  0.79%  caml_compare  <-  (no baguette frame)
+  0.79%  Stdlib.List.map_dps  <-  (no baguette frame)
+  0.73%  Stdlib.List.find_all_dps  <-  (no baguette frame)
+  0.66%  caml_initialize  <-  (no baguette frame)
+  0.60%  caml_c_call  <-  (no baguette frame)
+  0.60%  Stdlib.List.iter  <-  (no baguette frame)
+  0.53%  write_barrier (inlined)  <-  (no baguette frame)
+  0.53%  Stdlib.List.find_all  <-  (no baguette frame)
+  0.46%  __strchrnul_avx2  <-  (no baguette frame)
+  0.46%  Stdlib.Hashtbl.key_index  <-  (no baguette frame)
+  0.46%  pool_allocate (inlined)  <-  (no baguette frame)
+  0.46%  Stdlib.List.map  <-  (no baguette frame)
+  0.40%  Stdlib.@_dps  <-  (no baguette frame)
+  0.40%  __printf_buffer_write  <-  (no baguette frame)
+  0.40%  caml_hash_mix_intnat (inlined)  <-  (no baguette frame)
+  0.40%  __memcmp_avx2_movbe  <-  (no baguette frame)
+-- inclusive (%)
+ 21.83%  Baguette_core.Search.search_core_inner
+ 21.83%  Baguette_core.Search.solve_inner
+ 21.83%  Baguette_flatzinc.Error.catch
+ 21.83%  Baguette_core.Search.branch_split
+ 20.97%  Baguette_core.Search.dfs
+ 10.71%  Baguette_core.Engine.propagate_inner
+  9.66%  Baguette_core.Engine.run_one
+  7.87%  Baguette_core.Search.learn_at_conflict
+  4.50%  Baguette_core.Pb.status
+  4.43%  Baguette_core.Engine.advises
+  4.10%  Baguette_core.Engine.fun
+  3.70%  Baguette_core.Engine.watchers_of_new_entries
+  3.24%  Baguette_core.Retention.reduce
+  3.11%  Baguette_core.Clause.ask
+  2.98%  Baguette_core.Learn.at_conflict_inner
+  2.78%  Baguette_core.Trace.emit_to_page
+  2.78%  Baguette_core.Analysis.fun
+  2.71%  Baguette_core.Clause.propagate
+  2.58%  Baguette_core.Analysis.loop
+  2.51%  Baguette_core.Pb.propagate
+  2.51%  Baguette_core.Store.get
+  2.12%  Baguette_core.Trace.fun
+  2.05%  Baguette_core.Analysis.analyse_inner
+  1.59%  Baguette_core.Retention.fun
+  1.39%  Baguette_core.Justify.emit_rup_clause
+  1.39%  Baguette_proof.Lit.render
+  1.32%  Baguette_core.Retention.add
+  1.26%  Baguette_core.Clause.best
+  1.12%  Baguette_core.Pb.other
+  1.06%  Baguette_proof.Opb.add_term
+

@@ -1,0 +1,2253 @@
+
+######## H_qr48_bag_def np, nodes 0..1000 (setup included)
+profile: H_qr48_bag_def_1000_np_rec.data
+samples: 145
+-- by owner (share of self samples)
+ 15.17%  Store
+ 12.41%  Engine
+ 11.03%  Stdlib.List
+ 10.34%  other C/kernel
+  9.66%  Pb
+  6.90%  Analysis
+  6.21%  closure calls
+  4.83%  GC/alloc
+  4.14%  polymorphic compare
+  3.45%  polymorphic hash
+  2.76%  Stdlib.Hashtbl
+  2.07%  strings/IO
+  1.38%  Clause
+  1.38%  Lit
+  0.69%  Lexer
+  0.69%  Var
+  0.69%  Learn
+  0.69%  Checked
+  0.69%  Retention
+  0.69%  Propagator
+  0.69%  Debug
+  0.69%  Stdlib.Queue
+  0.69%  Domain
+  0.69%  Linear
+-- by function (top 25)
+  4.83%  caml_apply2
+  4.14%  Baguette_core.Store.get
+  3.45%  Baguette_core.Engine.down
+  3.45%  Baguette_core.Pb.status
+  3.45%  Baguette_core.Analysis.fun
+  2.76%  caml_shared_try_alloc
+  2.76%  Baguette_core.Store.trail_entry
+  2.76%  Baguette_core.Store.go
+  2.07%  compare_val
+  2.07%  Baguette_core.Engine.run_one
+  2.07%  Stdlib.List.find_all
+  2.07%  Baguette_core.Pb.pass
+  2.07%  caml_hash_mix_string
+  1.38%  pool_sweep
+  1.38%  Stdlib.List.map_dps
+  1.38%  Stdlib.List.map
+  1.38%  caml_hash
+  1.38%  Stdlib.List.find_all_dps
+  1.38%  Baguette_core.Engine.watchers_of_new_entries
+  1.38%  Baguette_core.Pb.propagate
+  1.38%  Baguette_core.Store.is_level_start
+  1.38%  caml_compare
+  1.38%  Baguette_core.Store.lo_support_at
+  1.38%  caml_apply3
+  1.38%  Baguette_core.Pb.fun
+
+######## H_qr48_bag_def np, MARGINAL nodes 1000..10000
+profile: H_qr48_bag_def_10000_np_rec.data minus H_qr48_bag_def_1000_np_rec.data
+samples: 3236
+-- by owner (share of self samples)
+ 16.41%  Engine
+ 16.25%  Stdlib.List
+ 11.12%  Pb
+  9.61%  Clause
+  7.23%  Store
+  6.06%  GC/alloc
+  5.66%  Analysis
+  5.59%  closure calls
+  3.65%  other C/kernel
+  2.69%  Retention
+  2.13%  polymorphic compare
+  2.04%  polymorphic hash
+  1.70%  Domain
+  1.64%  Stdlib.Hashtbl
+  1.33%  Var
+  1.14%  Lit
+  0.99%  strings/IO
+  0.71%  Stdlib.Fun
+  0.53%  Search
+  0.53%  Linear
+  0.46%  Learn
+  0.43%  Reason
+  0.34%  Stdlib.Queue
+  0.31%  Stdlib.@_dps
+-- by function (top 25)
+  6.46%  Baguette_core.Pb.status
+  5.38%  Stdlib.List.rev_append
+  4.98%  caml_apply2
+  4.48%  Baguette_core.Clause.ask
+  3.86%  Baguette_core.Store.get
+  3.52%  Stdlib.List.exists
+  3.09%  Baguette_core.Engine.advises
+  2.69%  Baguette_core.Retention.fun
+  2.10%  Baguette_core.Engine.down
+  1.98%  Baguette_core.Engine.wants
+  1.76%  Baguette_core.Analysis.fun
+  1.55%  compare_val
+  1.55%  Baguette_core.Clause.best
+  1.45%  Stdlib.List.find_all_dps
+  1.33%  Baguette_core.Engine.watchers_of_new_entries
+  1.33%  Baguette_core.Var.to_int
+  1.33%  Baguette_core.Clause.false_at
+  1.30%  Baguette_core.Pb.other
+  1.27%  caml_hash
+  1.27%  Baguette_core.Engine.fun
+  1.21%  do_some_marking
+  1.17%  Baguette_core.Domain.hi
+  1.11%  oldify_one
+  1.11%  Baguette_core.Clause.fun
+  1.02%  Baguette_core.Pb.fun
+
+######## H_qr48_bag_def np, MARGINAL nodes 10000..40000 (QR48: 10000..23367, the whole run)
+profile: H_qr48_bag_def_40000_np_rec.data minus H_qr48_bag_def_10000_np_rec.data
+samples: 13548
+-- by owner (share of self samples)
+ 19.86%  Stdlib.List
+ 17.43%  Engine
+ 17.10%  Clause
+ 10.93%  Pb
+  6.52%  Store
+  5.45%  closure calls
+  4.59%  GC/alloc
+  4.24%  Retention
+  2.18%  Analysis
+  2.18%  other C/kernel
+  1.67%  Var
+  1.28%  Domain
+  1.09%  polymorphic hash
+  1.06%  polymorphic compare
+  0.72%  Stdlib.Hashtbl
+  0.62%  strings/IO
+  0.47%  Stdlib.Fun
+  0.33%  Search
+  0.32%  Checked
+  0.29%  Stdlib.Queue
+  0.24%  Linear
+  0.23%  Stdlib.@_dps
+  0.18%  Lit
+  0.17%  Propagator
+-- by function (top 25)
+ 10.41%  Baguette_core.Clause.ask
+  8.70%  Stdlib.List.rev_append
+  7.69%  Baguette_core.Pb.status
+  6.47%  Stdlib.List.exists
+  5.14%  caml_apply2
+  4.76%  Baguette_core.Engine.advises
+  4.52%  Baguette_core.Store.get
+  4.24%  Baguette_core.Retention.fun
+  2.75%  Baguette_core.Engine.wants
+  2.23%  Baguette_core.Clause.fun
+  1.93%  Baguette_core.Clause.false_at
+  1.66%  Baguette_core.Var.to_int
+  1.44%  Baguette_core.Engine.down
+  1.30%  Baguette_core.Engine.watchers_of_new_entries
+  1.12%  Baguette_core.Pb.first
+  1.10%  Baguette_core.Engine.fun
+  1.06%  Baguette_core.Clause.best
+  1.04%  oldify_one
+  1.00%  Baguette_core.Engine.run_one
+  0.92%  do_some_marking
+  0.92%  caml_shared_try_alloc
+  0.89%  Baguette_core.Domain.hi
+  0.88%  Baguette_core.Clause.rewatch
+  0.85%  Baguette_core.Pb.other
+  0.83%  Baguette_core.Analysis.fun
+
+######## H_qr48_bag_def p, nodes 0..1000 (setup included)
+profile: H_qr48_bag_def_1000_p_rec.data
+samples: 272
+-- by owner (share of self samples)
+ 12.13%  GC/alloc
+ 11.03%  strings/IO
+  9.56%  other C/kernel
+  8.82%  Stdlib.List
+  6.62%  Store
+  5.88%  polymorphic compare
+  5.88%  Pb
+  5.15%  Engine
+  4.04%  closure calls
+  3.68%  polymorphic hash
+  3.31%  Analysis
+  2.94%  Lit
+  2.57%  Stdlib.Hashtbl
+  1.84%  Reason
+  1.47%  Domain
+  1.47%  Search
+  1.47%  Trace
+  1.10%  Justify
+  1.10%  Clause
+  1.10%  Opb
+  0.74%  Propagator
+  0.74%  Stdlib.Buffer
+  0.74%  Debug
+  0.74%  Stdlib.String
+-- by function (top 25)
+  4.41%  compare_val
+  2.94%  Baguette_core.Pb.status
+  2.94%  oldify_one
+  2.94%  caml_apply2
+  2.21%  caml_hash
+  2.21%  oldify_mopup
+  2.21%  Baguette_core.Store.go
+  1.84%  caml_shared_try_alloc
+  1.84%  Baguette_core.Store.get
+  1.47%  __printf_buffer
+  1.47%  __memmove_avx_unaligned_erms
+  1.47%  caml_format_int
+  1.47%  caml_hash_mix_string
+  1.47%  caml_modify
+  1.47%  Stdlib.List.find_all
+  1.47%  Baguette_core.Store.apply
+  1.47%  __printf_buffer_write
+  1.47%  Baguette_core.Analysis.fun
+  1.10%  Baguette_proof.Lit.go
+  1.10%  parse_format
+  1.10%  Baguette_core.Pb.first
+  1.10%  Baguette_core.Engine.down
+  1.10%  __memcmp_avx2_movbe
+  1.10%  Stdlib.List.find_all_dps
+  1.10%  do_some_marking
+
+######## H_qr48_bag_def p, MARGINAL nodes 1000..10000
+profile: H_qr48_bag_def_10000_p_rec.data minus H_qr48_bag_def_1000_p_rec.data
+samples: 6000
+-- by owner (share of self samples)
+ 13.23%  Stdlib.List
+ 12.17%  Engine
+ 10.03%  GC/alloc
+  9.32%  Clause
+  8.53%  Pb
+  6.45%  strings/IO
+  6.12%  Store
+  4.57%  polymorphic hash
+  4.37%  other C/kernel
+  4.35%  closure calls
+  2.95%  polymorphic compare
+  2.60%  Analysis
+  2.28%  Retention
+  2.27%  Lit
+  1.90%  Stdlib.Hashtbl
+  1.13%  Var
+  1.00%  Domain
+  0.77%  Trace
+  0.65%  Stdlib.Buffer
+  0.57%  Writer
+  0.43%  Linear
+  0.38%  Stdlib.Fun
+  0.38%  Search
+  0.33%  Checked
+-- by function (top 25)
+  5.62%  Baguette_core.Pb.status
+  5.25%  Baguette_core.Clause.ask
+  3.97%  Stdlib.List.rev_append
+  3.77%  caml_apply2
+  3.70%  Stdlib.List.exists
+  3.43%  Baguette_core.Store.get
+  3.20%  caml_hash
+  3.02%  Baguette_core.Engine.advises
+  2.48%  compare_val
+  2.27%  Baguette_core.Retention.fun
+  1.82%  do_some_marking
+  1.80%  oldify_one
+  1.73%  caml_shared_try_alloc
+  1.58%  Baguette_core.Engine.wants
+  1.40%  __printf_buffer
+  1.37%  caml_hash_mix_string
+  1.28%  __memmove_avx_unaligned_erms
+  1.25%  pool_sweep
+  1.13%  Baguette_core.Engine.down
+  1.13%  Baguette_core.Clause.fun
+  1.12%  Baguette_core.Var.to_int
+  1.00%  Baguette_core.Clause.false_at
+  0.97%  Baguette_core.Clause.best
+  0.92%  Baguette_core.Analysis.fun
+  0.87%  Baguette_core.Pb.other
+
+######## H_qr48_bag_def p, MARGINAL nodes 10000..40000 (QR48: 10000..23367, the whole run)
+profile: H_qr48_bag_def_40000_p_rec.data minus H_qr48_bag_def_10000_p_rec.data
+samples: 18083
+-- by owner (share of self samples)
+ 19.48%  Stdlib.List
+ 15.49%  Clause
+ 14.57%  Engine
+  8.64%  Pb
+  6.71%  GC/alloc
+  4.84%  Store
+  4.49%  closure calls
+  4.15%  Retention
+  3.40%  strings/IO
+  2.92%  other C/kernel
+  2.59%  polymorphic hash
+  1.97%  polymorphic compare
+  1.74%  Analysis
+  1.55%  Lit
+  1.40%  Stdlib.Hashtbl
+  1.22%  Var
+  0.84%  Domain
+  0.53%  Trace
+  0.38%  Writer
+  0.35%  Stdlib.Buffer
+  0.29%  Stdlib.Fun
+  0.25%  Justify
+  0.24%  Reason
+  0.22%  Stdlib.Queue
+-- by function (top 25)
+  9.78%  Baguette_core.Clause.ask
+  8.45%  Stdlib.List.rev_append
+  7.28%  Stdlib.List.exists
+  6.13%  Baguette_core.Pb.status
+  4.76%  Baguette_core.Engine.advises
+  4.26%  caml_apply2
+  4.13%  Baguette_core.Retention.fun
+  3.09%  Baguette_core.Store.get
+  2.68%  Baguette_core.Engine.wants
+  2.01%  caml_hash
+  1.94%  Baguette_core.Clause.fun
+  1.57%  Baguette_core.Clause.false_at
+  1.46%  do_some_marking
+  1.42%  compare_val
+  1.29%  Baguette_core.Engine.down
+  1.23%  oldify_one
+  1.22%  Baguette_core.Var.to_int
+  1.03%  caml_shared_try_alloc
+  0.92%  Baguette_core.Clause.rewatch
+  0.87%  Baguette_core.Pb.first
+  0.86%  Baguette_core.Engine.fun
+  0.84%  Baguette_core.Engine.watchers_of_new_entries
+  0.84%  pool_sweep
+  0.79%  Baguette_core.Clause.best
+  0.74%  Baguette_core.Pb.other
+
+######## H_qr72_bag_def np, nodes 0..1000 (setup included)
+profile: H_qr72_bag_def_1000_np_rec.data
+samples: 215
+-- by owner (share of self samples)
+ 10.23%  Engine
+  9.30%  Stdlib.List
+  9.30%  other C/kernel
+  8.84%  Pb
+  8.84%  GC/alloc
+  7.44%  Store
+  6.51%  polymorphic compare
+  6.05%  closure calls
+  5.12%  Analysis
+  4.19%  Lit
+  3.26%  polymorphic hash
+  3.26%  Search
+  3.26%  strings/IO
+  2.79%  Clause
+  2.33%  Domain
+  2.33%  Stdlib.Hashtbl
+  1.86%  Linear
+  1.40%  Stdlib.@_dps
+  0.93%  Learn
+  0.47%  Lexer
+  0.47%  Encoding
+  0.47%  Stdlib.Queue
+  0.47%  Reason
+  0.47%  Learned
+-- by function (top 25)
+  6.05%  compare_val
+  5.58%  caml_apply2
+  4.65%  Baguette_core.Pb.status
+  3.26%  do_some_marking
+  2.79%  Baguette_core.Analysis.fun
+  2.33%  Stdlib.List.map_dps
+  2.33%  caml_hash_mix_string
+  2.33%  Baguette_core.Store.get
+  1.86%  Baguette_core.Engine.down
+  1.86%  Baguette_core.Search.unfixed
+  1.86%  Stdlib.List.find_all
+  1.86%  Baguette_core.Engine.run_one
+  1.40%  oldify_mopup
+  1.40%  caml_shared_try_alloc
+  1.40%  Baguette_core.Engine.fun
+  1.40%  Baguette_proof.Lit.compare
+  1.40%  Stdlib.@_dps
+  1.40%  Baguette_core.Engine.check_attribution
+  1.40%  Baguette_core.Analysis.same_slot
+  1.40%  oldify_one
+  1.40%  Baguette_proof.Lit.var_compare
+  0.93%  Baguette_core.Store.establishes
+  0.93%  Baguette_core.Engine.up
+  0.93%  Baguette_core.Pb.first
+  0.93%  Stdlib.List.exists
+
+######## H_qr72_bag_def np, MARGINAL nodes 1000..10000
+profile: H_qr72_bag_def_10000_np_rec.data minus H_qr72_bag_def_1000_np_rec.data
+samples: 4714
+-- by owner (share of self samples)
+ 15.21%  Stdlib.List
+ 14.06%  Engine
+ 11.05%  Pb
+  9.38%  Clause
+  8.15%  Store
+  6.72%  GC/alloc
+  6.24%  Analysis
+  4.88%  closure calls
+  4.20%  polymorphic compare
+  3.63%  other C/kernel
+  2.10%  polymorphic hash
+  1.99%  Retention
+  1.91%  Stdlib.Hashtbl
+  1.42%  strings/IO
+  1.29%  Var
+  1.02%  Domain
+  0.83%  Lit
+  0.78%  Search
+  0.66%  Stdlib.@_dps
+  0.62%  Stdlib.Fun
+  0.59%  Checked
+  0.57%  Stdlib.Queue
+  0.51%  Linear
+  0.40%  Learn
+-- by function (top 25)
+  6.72%  Baguette_core.Pb.status
+  4.79%  Baguette_core.Clause.ask
+  4.16%  Baguette_core.Store.get
+  4.09%  caml_apply2
+  3.99%  Stdlib.List.rev_append
+  3.29%  Stdlib.List.exists
+  2.42%  Baguette_core.Analysis.fun
+  2.40%  Baguette_core.Engine.advises
+  2.23%  compare_val
+  1.99%  Stdlib.List.find_all_dps
+  1.99%  Baguette_core.Retention.fun
+  1.78%  Baguette_core.Engine.wants
+  1.59%  caml_compare
+  1.48%  do_some_marking
+  1.48%  Baguette_core.Engine.watchers_of_new_entries
+  1.46%  caml_shared_try_alloc
+  1.42%  Baguette_core.Engine.down
+  1.40%  caml_hash
+  1.27%  Baguette_core.Var.to_int
+  1.25%  Baguette_core.Clause.best
+  1.23%  Baguette_core.Clause.fun
+  1.17%  Stdlib.List.map_dps
+  1.10%  Baguette_core.Pb.first
+  1.10%  Baguette_core.Pb.other
+  1.10%  Baguette_core.Clause.false_at
+
+######## H_qr72_bag_def np, MARGINAL nodes 10000..40000 (QR48: 10000..23367, the whole run)
+profile: H_qr72_bag_def_40000_np_rec.data minus H_qr72_bag_def_10000_np_rec.data
+samples: 51769
+-- by owner (share of self samples)
+ 21.53%  Stdlib.List
+ 17.04%  Engine
+ 17.01%  Clause
+  9.39%  Pb
+  5.63%  Retention
+  5.58%  Store
+  5.02%  closure calls
+  4.67%  GC/alloc
+  2.65%  Analysis
+  2.03%  other C/kernel
+  1.70%  Var
+  1.69%  polymorphic compare
+  1.16%  Domain
+  0.94%  polymorphic hash
+  0.67%  Stdlib.Hashtbl
+  0.64%  strings/IO
+  0.36%  Stdlib.Fun
+  0.27%  Search
+  0.26%  Stdlib.Queue
+  0.25%  Lit
+  0.23%  Stdlib.@_dps
+  0.23%  Linear
+  0.22%  Reason
+  0.19%  Checked
+-- by function (top 25)
+ 11.15%  Baguette_core.Clause.ask
+  9.33%  Stdlib.List.rev_append
+  8.15%  Stdlib.List.exists
+  6.62%  Baguette_core.Pb.status
+  5.94%  Baguette_core.Engine.advises
+  5.62%  Baguette_core.Retention.fun
+  4.77%  caml_apply2
+  3.74%  Baguette_core.Store.get
+  2.91%  Baguette_core.Engine.wants
+  2.19%  Baguette_core.Clause.fun
+  1.68%  Baguette_core.Var.to_int
+  1.58%  Baguette_core.Clause.false_at
+  1.21%  Baguette_core.Engine.down
+  1.11%  Baguette_core.Analysis.fun
+  0.99%  Baguette_core.Engine.fun
+  0.98%  Baguette_core.Clause.best
+  0.97%  Baguette_core.Engine.watchers_of_new_entries
+  0.92%  Baguette_core.Pb.first
+  0.92%  oldify_one
+  0.87%  caml_shared_try_alloc
+  0.87%  do_some_marking
+  0.83%  Baguette_core.Pb.other
+  0.83%  compare_val
+  0.82%  caml_compare
+  0.82%  Baguette_core.Domain.hi
+
+######## H_qr72_bag_def p, nodes 0..1000 (setup included)
+profile: H_qr72_bag_def_1000_p_rec.data
+samples: 429
+-- by owner (share of self samples)
+ 12.82%  GC/alloc
+ 12.59%  strings/IO
+  8.62%  other C/kernel
+  7.69%  polymorphic compare
+  7.69%  Engine
+  6.53%  Pb
+  6.53%  Stdlib.List
+  5.36%  polymorphic hash
+  4.66%  Lit
+  4.66%  Store
+  4.66%  Analysis
+  2.10%  Stdlib.Hashtbl
+  1.86%  closure calls
+  1.40%  Search
+  1.17%  Domain
+  1.17%  Writer
+  1.17%  Stdlib.Buffer
+  1.17%  Trace
+  0.93%  Stdlib.String
+  0.93%  Clause
+  0.93%  Reason
+  0.70%  Checked
+  0.70%  Var
+  0.70%  Learn
+-- by function (top 25)
+  6.76%  compare_val
+  4.20%  Baguette_core.Pb.status
+  3.73%  caml_hash
+  2.33%  caml_shared_try_alloc
+  2.33%  do_some_marking
+  2.33%  Baguette_core.Engine.watchers_of_new_entries
+  2.33%  oldify_one
+  2.10%  oldify_mopup
+  1.86%  __memmove_avx_unaligned_erms
+  1.86%  Baguette_core.Analysis.fun
+  1.63%  __printf_buffer
+  1.63%  caml_apply2
+  1.63%  caml_blit_string
+  1.63%  caml_hash_mix_string
+  1.40%  parse_format
+  1.40%  caml_string_equal
+  1.40%  pool_sweep
+  1.40%  Baguette_proof.Lit.ident_char
+  1.17%  caml_string_length
+  1.17%  Baguette_core.Store.go
+  1.17%  caml_alloc_sprintf
+  1.17%  Stdlib.List.find_all_dps
+  0.93%  Baguette_core.Analysis.support_of
+  0.93%  Baguette_core.Pb.first
+  0.93%  Baguette_proof.Lit.sanitize
+
+######## H_qr72_bag_def p, MARGINAL nodes 1000..10000
+profile: H_qr72_bag_def_10000_p_rec.data minus H_qr72_bag_def_1000_p_rec.data
+samples: 6787
+-- by owner (share of self samples)
+ 12.33%  Stdlib.List
+ 11.85%  GC/alloc
+  9.30%  Engine
+  7.79%  strings/IO
+  7.26%  Pb
+  6.07%  Store
+  5.61%  Clause
+  5.41%  other C/kernel
+  5.04%  polymorphic hash
+  4.73%  polymorphic compare
+  3.88%  closure calls
+  3.40%  Lit
+  3.40%  Analysis
+  2.24%  Stdlib.Hashtbl
+  1.94%  Retention
+  0.96%  Var
+  0.83%  Trace
+  0.78%  Domain
+  0.69%  Writer
+  0.65%  Search
+  0.65%  Stdlib.Buffer
+  0.52%  Linear
+  0.44%  Stdlib.Fun
+  0.44%  Justify
+-- by function (top 25)
+  4.60%  Baguette_core.Pb.status
+  3.68%  compare_val
+  3.52%  caml_hash
+  3.39%  caml_apply2
+  3.33%  Stdlib.List.rev_append
+  2.77%  Stdlib.List.exists
+  2.70%  Baguette_core.Clause.ask
+  2.48%  Baguette_core.Store.get
+  2.36%  do_some_marking
+  2.06%  caml_shared_try_alloc
+  2.06%  oldify_one
+  1.93%  Baguette_core.Retention.fun
+  1.81%  Baguette_core.Engine.advises
+  1.62%  __memmove_avx_unaligned_erms
+  1.59%  __printf_buffer
+  1.53%  Baguette_core.Analysis.fun
+  1.52%  caml_hash_mix_string
+  1.40%  pool_sweep
+  1.16%  oldify_mopup
+  1.15%  Baguette_core.Engine.wants
+  1.12%  Stdlib.List.find_all_dps
+  1.09%  Baguette_proof.Lit.go
+  1.06%  Baguette_core.Engine.down
+  0.93%  Baguette_core.Var.to_int
+  0.91%  caml_c_call
+
+######## H_qr72_bag_def p, MARGINAL nodes 10000..40000 (QR48: 10000..23367, the whole run)
+profile: H_qr72_bag_def_40000_p_rec.data minus H_qr72_bag_def_10000_p_rec.data
+samples: 74927
+-- by owner (share of self samples)
+ 21.79%  Stdlib.List
+ 14.55%  Clause
+ 14.39%  Engine
+  7.84%  Pb
+  6.48%  GC/alloc
+  5.59%  Retention
+  4.90%  Store
+  4.12%  closure calls
+  3.06%  strings/IO
+  2.79%  other C/kernel
+  2.31%  polymorphic hash
+  2.12%  polymorphic compare
+  1.75%  Analysis
+  1.38%  Var
+  1.13%  Lit
+  1.13%  Stdlib.Hashtbl
+  0.98%  Domain
+  0.40%  Trace
+  0.32%  Writer
+  0.32%  Stdlib.Buffer
+  0.29%  Stdlib.Fun
+  0.25%  Stdlib.Queue
+  0.24%  Reason
+  0.21%  Linear
+-- by function (top 25)
+ 10.32%  Stdlib.List.rev_append
+  9.91%  Baguette_core.Clause.ask
+  7.79%  Stdlib.List.exists
+  5.58%  Baguette_core.Retention.fun
+  5.40%  Baguette_core.Pb.status
+  5.21%  Baguette_core.Engine.advises
+  3.85%  caml_apply2
+  3.09%  Baguette_core.Store.get
+  2.59%  Baguette_core.Engine.wants
+  2.04%  Baguette_core.Clause.fun
+  1.67%  caml_hash
+  1.41%  caml_shared_try_alloc
+  1.36%  Baguette_core.Var.to_int
+  1.29%  compare_val
+  1.28%  oldify_one
+  1.15%  do_some_marking
+  1.12%  Baguette_core.Clause.false_at
+  0.90%  Baguette_core.Engine.down
+  0.86%  Baguette_core.Pb.first
+  0.82%  Baguette_core.Engine.fun
+  0.79%  pool_sweep
+  0.77%  Baguette_core.Engine.watchers_of_new_entries
+  0.76%  caml_compare
+  0.75%  Baguette_core.Pb.other
+  0.70%  Baguette_core.Analysis.fun
+
+######## 2013_rcpsp_11 np, nodes 0..1000 (setup included)
+profile: 2013_rcpsp_11_1000_np_rec.data
+samples: 425
+-- by owner (share of self samples)
+  9.88%  Cumulative
+  9.88%  Stdlib.List
+  8.24%  Lit
+  8.24%  GC/alloc
+  8.24%  Engine
+  6.82%  Store
+  6.12%  polymorphic hash
+  4.94%  other C/kernel
+  4.00%  polymorphic compare
+  4.00%  strings/IO
+  3.76%  closure calls
+  3.76%  Pb
+  3.29%  Stdlib.Hashtbl
+  3.29%  Linear
+  3.06%  Clause
+  2.82%  Checked
+  1.65%  Stdlib.Array
+  1.18%  Reif
+  0.94%  Encoding
+  0.71%  Stdlib.String
+  0.71%  Stdlib.Queue
+  0.71%  Retention
+  0.71%  Opb
+  0.47%  Propagator
+-- by function (top 25)
+  3.76%  Baguette_proof.Lit.go
+  3.53%  Baguette_proof.Lit.ident_char
+  3.29%  caml_hash_mix_string
+  3.29%  compare_val
+  2.82%  caml_hash
+  2.82%  Baguette_core.Store.go
+  2.82%  caml_apply2
+  2.82%  Baguette_core.Cumulative.overloaded
+  2.59%  Baguette_core.Pb.status
+  2.59%  do_some_marking
+  1.88%  caml_shared_try_alloc
+  1.88%  Baguette_core.Clause.ask
+  1.88%  Baguette_core.Store.get
+  1.88%  Stdlib.List.init_dps
+  1.65%  Baguette_core.Cumulative.row_at
+  1.41%  Stdlib.List.exists
+  1.41%  Baguette_core.Linear.fun
+  1.18%  Baguette_core.Cumulative.compulsory_at
+  1.18%  Baguette_core.Cumulative.first_overloaded
+  1.18%  caml_string_equal
+  1.18%  Baguette_core.Linear.term_min
+  1.18%  Baguette_core.Engine.wants
+  1.18%  Stdlib.List.map
+  0.94%  caml_make_vect
+  0.94%  Stdlib.Array.map
+
+######## 2013_rcpsp_11 np, MARGINAL nodes 1000..10000
+profile: 2013_rcpsp_11_10000_np_rec.data minus 2013_rcpsp_11_1000_np_rec.data
+samples: 11769
+-- by owner (share of self samples)
+ 20.19%  Pb
+ 13.26%  Stdlib.List
+ 10.87%  Clause
+  9.73%  Engine
+  9.49%  closure calls
+  7.03%  Store
+  5.17%  polymorphic compare
+  4.93%  GC/alloc
+  4.51%  Cumulative
+  2.44%  other C/kernel
+  1.55%  Checked
+  1.45%  polymorphic hash
+  1.45%  Stdlib.Hashtbl
+  1.31%  Var
+  1.24%  Linear
+  0.99%  Retention
+  0.95%  Domain
+  0.76%  Analysis
+  0.53%  strings/IO
+  0.33%  Stdlib.Fun
+  0.27%  Lit
+  0.19%  Stdlib.Queue
+  0.16%  Stdlib.Array
+  0.14%  Reif
+-- by function (top 25)
+ 10.67%  Baguette_core.Pb.status
+  8.62%  caml_apply2
+  7.37%  Baguette_core.Pb.fun
+  6.38%  Baguette_core.Clause.ask
+  3.70%  Baguette_core.Store.get
+  3.02%  Stdlib.List.rev_append
+  2.89%  caml_compare
+  2.40%  Baguette_core.Engine.advises
+  2.36%  Baguette_core.Engine.wants
+  2.27%  Stdlib.List.fold_left
+  2.24%  compare_val
+  1.67%  Stdlib.List.exists
+  1.61%  Baguette_core.Clause.best
+  1.52%  Baguette_core.Cumulative.overloaded
+  1.31%  Baguette_core.Var.to_int
+  1.18%  Baguette_core.Clause.false_at
+  1.13%  caml_hash
+  1.10%  Baguette_core.Clause.fun
+  1.09%  Baguette_core.Pb.first
+  0.99%  Baguette_core.Retention.fun
+  0.98%  Baguette_core.Store.go
+  0.88%  Stdlib.List.map_dps
+  0.84%  do_some_marking
+  0.82%  oldify_one
+  0.76%  Stdlib.List.init_dps
+
+######## 2013_rcpsp_11 np, MARGINAL nodes 10000..40000 (QR48: 10000..23367, the whole run)
+profile: 2013_rcpsp_11_40000_np_rec.data minus 2013_rcpsp_11_10000_np_rec.data
+samples: 259260
+-- by owner (share of self samples)
+ 19.57%  Pb
+ 17.80%  Clause
+ 14.29%  Engine
+ 11.60%  Stdlib.List
+ 11.03%  closure calls
+  7.81%  polymorphic compare
+  3.95%  Store
+  2.50%  Retention
+  2.44%  GC/alloc
+  1.82%  Var
+  1.72%  other C/kernel
+  0.87%  Cumulative
+  0.84%  Stdlib.Hashtbl
+  0.83%  polymorphic hash
+  0.71%  Domain
+  0.67%  Checked
+  0.39%  Linear
+  0.24%  Stdlib.Fun
+  0.22%  Analysis
+  0.17%  Stdlib.Queue
+  0.08%  strings/IO
+  0.07%  Propagator
+  0.06%  Stdlib.Array
+  0.06%  Lit
+-- by function (top 25)
+ 13.15%  Baguette_core.Clause.ask
+ 11.84%  Baguette_core.Pb.status
+ 10.58%  caml_apply2
+  6.58%  caml_compare
+  6.08%  Baguette_core.Pb.fun
+  5.16%  Baguette_core.Engine.wants
+  4.39%  Baguette_core.Engine.advises
+  3.57%  Stdlib.List.rev_append
+  2.93%  Stdlib.List.exists
+  2.72%  Baguette_core.Store.get
+  2.58%  Baguette_core.Clause.fun
+  2.49%  Baguette_core.Retention.fun
+  1.82%  Baguette_core.Var.to_int
+  1.54%  Stdlib.List.fold_left
+  1.23%  compare_val
+  1.06%  Baguette_core.Pb.first
+  0.94%  Baguette_core.Clause.best
+  0.80%  Baguette_core.Clause.false_at
+  0.78%  caml_hash
+  0.70%  Baguette_core.Engine.trigger_of
+  0.63%  Stdlib.List.map_dps
+  0.59%  Baguette_core.Engine.mark
+  0.54%  Baguette_core.Engine.watchers_of_new_entries
+  0.51%  Stdlib.List.find_all
+  0.49%  Baguette_core.Engine.fun
+
+######## 2013_rcpsp_11 p, nodes 0..1000 (setup included)
+profile: 2013_rcpsp_11_1000_p_rec.data
+samples: 2650
+-- by owner (share of self samples)
+ 20.64%  strings/IO
+ 20.23%  GC/alloc
+  9.06%  polymorphic hash
+  8.75%  other C/kernel
+  6.00%  Stdlib.List
+  5.09%  Justify
+  3.58%  Stdlib.Hashtbl
+  3.21%  Writer
+  3.06%  polymorphic compare
+  2.72%  Cumulative
+  2.45%  closure calls
+  2.42%  Lit
+  2.08%  Stdlib.Buffer
+  1.70%  Store
+  1.02%  Engine
+  0.94%  Stdlib.Printf
+  0.75%  Pb
+  0.72%  Stdlib.Bytes
+  0.72%  Encoding
+  0.68%  Linear
+  0.53%  Explanation
+  0.45%  Stdlib.^
+  0.38%  Clause
+  0.38%  Checked
+-- by function (top 25)
+  8.34%  caml_hash
+  4.15%  __memmove_avx_unaligned_erms
+  3.74%  oldify_one
+  3.74%  do_some_marking
+  3.55%  __printf_buffer
+  2.98%  caml_shared_try_alloc
+  2.79%  pool_sweep
+  2.45%  CamlinternalFormat.strput_acc
+  2.23%  caml_c_call
+  2.04%  caml_alloc_string
+  1.92%  compare_val
+  1.77%  caml_apply2
+  1.62%  Baguette_core.Justify.fun
+  1.55%  oldify_mopup
+  1.40%  caml_blit_string
+  1.25%  Baguette_proof.Lit.go
+  1.25%  Baguette_proof.Writer.write_cited
+  1.25%  Stdlib.Buffer.add_string
+  1.25%  CamlinternalFormat.make_printf
+  1.06%  Stdlib.List.find_all_dps
+  1.02%  caml_compare
+  1.02%  Stdlib.Hashtbl.key_index
+  0.98%  Stdlib.Hashtbl.find_opt
+  0.94%  parse_format
+  0.94%  caml_alloc_sprintf
+
+######## 2013_rcpsp_11 p, MARGINAL nodes 1000..10000
+profile: 2013_rcpsp_11_10000_p_rec.data minus 2013_rcpsp_11_1000_p_rec.data
+samples: 31002
+-- by owner (share of self samples)
+ 13.58%  GC/alloc
+ 13.01%  strings/IO
+  9.44%  Pb
+  8.71%  Stdlib.List
+  6.46%  Clause
+  6.01%  polymorphic hash
+  5.71%  Engine
+  5.67%  closure calls
+  5.02%  other C/kernel
+  4.61%  polymorphic compare
+  3.27%  Store
+  2.62%  Justify
+  2.17%  Writer
+  2.14%  Cumulative
+  2.13%  Stdlib.Hashtbl
+  1.51%  Stdlib.Buffer
+  0.94%  Retention
+  0.78%  Checked
+  0.72%  Var
+  0.65%  Linear
+  0.64%  Lit
+  0.58%  Stdlib.Printf
+  0.48%  Domain
+  0.42%  Stdlib.Bytes
+-- by function (top 25)
+  5.60%  caml_hash
+  5.33%  Baguette_core.Pb.status
+  5.14%  caml_apply2
+  4.41%  Baguette_core.Clause.ask
+  3.09%  Baguette_core.Pb.fun
+  2.88%  __memmove_avx_unaligned_erms
+  2.65%  do_some_marking
+  2.58%  oldify_one
+  2.45%  caml_compare
+  2.12%  __printf_buffer
+  2.11%  caml_shared_try_alloc
+  2.11%  compare_val
+  1.77%  Baguette_core.Store.get
+  1.74%  pool_sweep
+  1.53%  Baguette_core.Engine.wants
+  1.49%  Baguette_core.Engine.advises
+  1.46%  Stdlib.List.rev_append
+  1.42%  Stdlib.List.exists
+  1.32%  caml_c_call
+  1.21%  CamlinternalFormat.strput_acc
+  1.07%  caml_alloc_string
+  1.04%  Stdlib.List.fold_left
+  1.01%  oldify_mopup
+  0.94%  Baguette_core.Retention.fun
+  0.93%  Baguette_core.Justify.fun
+
+######## 2013_rcpsp_11 p, MARGINAL nodes 10000..40000 (QR48: 10000..23367, the whole run)
+profile: 2013_rcpsp_11_40000_p_rec.data minus 2013_rcpsp_11_10000_p_rec.data
+samples: 308215
+-- by owner (share of self samples)
+ 15.93%  Pb
+ 14.60%  Clause
+ 11.39%  Engine
+ 11.02%  Stdlib.List
+  9.40%  closure calls
+  7.24%  polymorphic compare
+  6.18%  GC/alloc
+  4.13%  strings/IO
+  3.25%  Store
+  2.67%  other C/kernel
+  2.54%  polymorphic hash
+  2.11%  Retention
+  1.43%  Var
+  1.41%  Stdlib.Hashtbl
+  1.05%  Justify
+  0.89%  Cumulative
+  0.74%  Writer
+  0.61%  Domain
+  0.57%  Checked
+  0.47%  Stdlib.Buffer
+  0.37%  Lit
+  0.31%  Linear
+  0.20%  Stdlib.Printf
+  0.19%  Stdlib.Fun
+-- by function (top 25)
+ 10.77%  Baguette_core.Clause.ask
+  9.54%  Baguette_core.Pb.status
+  8.93%  caml_apply2
+  5.69%  caml_compare
+  5.03%  Baguette_core.Pb.fun
+  3.86%  Baguette_core.Engine.wants
+  3.66%  Baguette_core.Engine.advises
+  3.35%  Stdlib.List.rev_append
+  2.50%  Stdlib.List.exists
+  2.37%  caml_hash
+  2.18%  Baguette_core.Store.get
+  2.11%  Baguette_core.Retention.fun
+  2.05%  Baguette_core.Clause.fun
+  1.53%  compare_val
+  1.43%  Baguette_core.Var.to_int
+  1.37%  do_some_marking
+  1.30%  Stdlib.List.fold_left
+  1.10%  oldify_one
+  0.98%  caml_shared_try_alloc
+  0.85%  __memmove_avx_unaligned_erms
+  0.82%  Baguette_core.Clause.best
+  0.81%  Baguette_core.Pb.first
+  0.77%  pool_sweep
+  0.72%  __printf_buffer
+  0.69%  Stdlib.List.map_dps
+
+######## 2013_rcpsp_11 b0np, nodes 0..10000 (setup included)
+profile: 2013_rcpsp_11_10000_b0np_rec.data
+samples: 13612
+-- by owner (share of self samples)
+ 19.34%  Pb
+ 12.42%  Stdlib.List
+ 11.43%  Clause
+ 11.11%  Engine
+  9.22%  closure calls
+  6.46%  Store
+  5.91%  polymorphic compare
+  4.59%  GC/alloc
+  4.04%  Cumulative
+  2.45%  other C/kernel
+  1.58%  polymorphic hash
+  1.51%  Checked
+  1.27%  Stdlib.Hashtbl
+  1.26%  Var
+  1.25%  Retention
+  1.19%  Linear
+  0.98%  Domain
+  0.69%  Analysis
+  0.60%  Lit
+  0.52%  strings/IO
+  0.35%  Stdlib.Fun
+  0.24%  Reif
+  0.20%  Stdlib.Array
+  0.19%  Stdlib.Queue
+-- by function (top 25)
+ 10.81%  Baguette_core.Pb.status
+  8.57%  caml_apply2
+  7.32%  Baguette_core.Clause.ask
+  6.74%  Baguette_core.Pb.fun
+  3.77%  caml_compare
+  3.50%  Baguette_core.Store.get
+  2.87%  Baguette_core.Engine.wants
+  2.83%  Baguette_core.Engine.advises
+  2.75%  Stdlib.List.rev_append
+  2.17%  Stdlib.List.exists
+  2.12%  compare_val
+  1.97%  Stdlib.List.fold_left
+  1.56%  Baguette_core.Clause.fun
+  1.31%  Baguette_core.Cumulative.overloaded
+  1.26%  Baguette_core.Var.to_int
+  1.24%  Baguette_core.Retention.fun
+  1.20%  caml_hash
+  1.12%  Baguette_core.Clause.best
+  0.92%  Baguette_core.Pb.first
+  0.89%  Baguette_core.Clause.false_at
+  0.89%  oldify_one
+  0.84%  Baguette_core.Engine.watchers_of_new_entries
+  0.79%  Baguette_core.Store.go
+  0.77%  Stdlib.List.init_dps
+  0.76%  Baguette_core.Checked.add
+
+######## 2013_rcpsp_11 b0p, nodes 0..10000 (setup included)
+profile: 2013_rcpsp_11_10000_b0p_rec.data
+samples: 30374
+-- by owner (share of self samples)
+ 15.59%  GC/alloc
+ 14.74%  strings/IO
+  8.56%  Stdlib.List
+  8.51%  Pb
+  6.52%  polymorphic hash
+  5.00%  other C/kernel
+  4.89%  closure calls
+  4.69%  Clause
+  4.39%  Engine
+  4.24%  polymorphic compare
+  3.24%  Store
+  3.16%  Justify
+  2.55%  Stdlib.Hashtbl
+  2.34%  Writer
+  2.11%  Cumulative
+  1.55%  Stdlib.Buffer
+  0.92%  Lit
+  0.70%  Stdlib.Printf
+  0.67%  Checked
+  0.60%  Retention
+  0.60%  Var
+  0.55%  Linear
+  0.45%  Stdlib.Bytes
+  0.44%  Stdlib.^
+-- by function (top 25)
+  5.93%  caml_hash
+  4.61%  Baguette_core.Pb.status
+  4.29%  caml_apply2
+  3.11%  Baguette_core.Pb.fun
+  3.06%  do_some_marking
+  3.01%  __memmove_avx_unaligned_erms
+  2.99%  Baguette_core.Clause.ask
+  2.84%  oldify_one
+  2.43%  caml_shared_try_alloc
+  2.34%  __printf_buffer
+  2.18%  compare_val
+  2.04%  pool_sweep
+  2.01%  caml_compare
+  1.68%  Baguette_core.Store.get
+  1.40%  CamlinternalFormat.strput_acc
+  1.40%  caml_alloc_string
+  1.24%  caml_c_call
+  1.24%  Stdlib.List.exists
+  1.23%  Stdlib.List.rev_append
+  1.16%  oldify_mopup
+  1.16%  Baguette_core.Engine.advises
+  1.07%  Baguette_core.Justify.fun
+  0.98%  caml_blit_string
+  0.95%  CamlinternalFormat.make_printf
+  0.94%  Stdlib.List.fold_left
+
+######## 2012_mspsp_hard_01 np, nodes 0..1000 (setup included)
+profile: 2012_mspsp_hard_01_1000_np_rec.data
+samples: 1108
+-- by owner (share of self samples)
+ 15.79%  GC/alloc
+ 10.83%  Store
+ 10.02%  Engine
+  9.48%  Stdlib.List
+  6.68%  closure calls
+  5.69%  Lit
+  5.51%  other C/kernel
+  4.96%  Linear
+  4.42%  Checked
+  4.15%  polymorphic hash
+  3.79%  strings/IO
+  2.80%  Stdlib.Hashtbl
+  2.62%  Pb
+  1.81%  polymorphic compare
+  1.17%  Opb
+  0.81%  Reif
+  0.81%  Lexer
+  0.81%  Analysis
+  0.81%  Encoding
+  0.72%  Stdlib.Fun
+  0.63%  Pb_analysis
+  0.63%  Search
+  0.54%  Var
+  0.54%  Clause
+-- by function (top 25)
+  5.60%  caml_apply2
+  4.42%  do_some_marking
+  3.34%  Baguette_core.Store.go
+  3.25%  oldify_one
+  2.98%  caml_shared_try_alloc
+  2.89%  Baguette_proof.Lit.go
+  2.89%  Stdlib.List.map
+  2.71%  caml_hash
+  2.62%  Baguette_proof.Lit.ident_char
+  2.62%  Baguette_core.Store.get
+  2.08%  Baguette_core.Linear.term_min
+  1.71%  Stdlib.List.fold_left
+  1.71%  Baguette_core.Engine.fun
+  1.62%  compare_val
+  1.62%  Baguette_core.Checked.add
+  1.53%  Baguette_core.Linear.fun
+  1.44%  caml_hash_mix_string
+  1.44%  oldify_mopup
+  1.26%  Baguette_core.Engine.watchers_of_new_entries
+  1.26%  Baguette_core.Engine.run_one
+  1.17%  Baguette_core.Linear.propagate
+  1.17%  Baguette_core.Pb.status
+  0.99%  caml_make_vect
+  0.99%  pool_sweep
+  0.99%  Baguette_core.Checked.ceildiv
+
+######## 2012_mspsp_hard_01 np, MARGINAL nodes 1000..10000
+profile: 2012_mspsp_hard_01_10000_np_rec.data minus 2012_mspsp_hard_01_1000_np_rec.data
+samples: 16488
+-- by owner (share of self samples)
+ 14.73%  Engine
+ 14.58%  Stdlib.List
+  9.10%  Store
+  8.57%  Clause
+  8.19%  Pb
+  7.48%  GC/alloc
+  7.05%  polymorphic compare
+  6.99%  closure calls
+  4.78%  Linear
+  3.43%  Checked
+  3.00%  other C/kernel
+  1.61%  Domain
+  1.41%  Retention
+  1.36%  Analysis
+  1.04%  Var
+  0.85%  Stdlib.Hashtbl
+  0.82%  polymorphic hash
+  0.72%  Reif
+  0.68%  strings/IO
+  0.64%  Stdlib.Fun
+  0.43%  Stdlib.Queue
+  0.42%  Lit
+  0.38%  Search
+  0.37%  Cumulative
+-- by function (top 25)
+  6.45%  caml_apply2
+  5.91%  Baguette_core.Pb.status
+  4.97%  Baguette_core.Clause.ask
+  4.66%  caml_compare
+  4.22%  Stdlib.List.map
+  3.12%  Baguette_core.Store.get
+  3.10%  Baguette_core.Engine.advises
+  2.87%  Baguette_core.Linear.term_min
+  2.70%  Baguette_core.Engine.fun
+  2.35%  compare_val
+  2.15%  Stdlib.List.exists
+  2.12%  Stdlib.List.rev_append
+  1.98%  Baguette_core.Store.go
+  1.78%  Baguette_core.Engine.wants
+  1.75%  Stdlib.List.fold_left
+  1.57%  caml_shared_try_alloc
+  1.50%  do_some_marking
+  1.41%  Baguette_core.Engine.run_one
+  1.41%  Baguette_core.Retention.fun
+  1.38%  Baguette_core.Clause.best
+  1.37%  Stdlib.List.map_dps
+  1.36%  Baguette_core.Engine.watchers_of_new_entries
+  1.34%  oldify_one
+  1.33%  Baguette_core.Checked.add
+  1.18%  Baguette_core.Clause.fun
+
+######## 2012_mspsp_hard_01 np, MARGINAL nodes 10000..40000 (QR48: 10000..23367, the whole run)
+profile: 2012_mspsp_hard_01_40000_np_rec.data minus 2012_mspsp_hard_01_10000_np_rec.data
+samples: 155165
+-- by owner (share of self samples)
+ 14.52%  polymorphic compare
+ 14.34%  Clause
+ 13.65%  Engine
+ 13.62%  Stdlib.List
+ 10.78%  Pb
+  7.17%  closure calls
+  5.30%  Store
+  4.21%  GC/alloc
+  2.91%  Retention
+  2.34%  other C/kernel
+  2.31%  Linear
+  1.54%  Checked
+  1.38%  Var
+  1.10%  Domain
+  0.76%  Analysis
+  0.61%  polymorphic hash
+  0.57%  Stdlib.Hashtbl
+  0.45%  strings/IO
+  0.35%  Reif
+  0.34%  Stdlib.Queue
+  0.34%  Stdlib.Fun
+  0.21%  Learn
+  0.20%  Cumulative
+  0.19%  Lit
+-- by function (top 25)
+ 12.13%  caml_compare
+  9.08%  Baguette_core.Clause.ask
+  8.13%  Baguette_core.Pb.status
+  6.85%  caml_apply2
+  3.73%  Stdlib.List.rev_append
+  3.65%  Baguette_core.Engine.advises
+  3.41%  Stdlib.List.exists
+  2.96%  Baguette_core.Engine.wants
+  2.92%  Baguette_core.Store.get
+  2.91%  Baguette_core.Retention.fun
+  2.37%  compare_val
+  2.21%  Stdlib.List.map
+  2.08%  Baguette_core.Clause.best
+  1.80%  Baguette_core.Clause.fun
+  1.72%  Baguette_core.Engine.fun
+  1.38%  Baguette_core.Var.to_int
+  1.38%  Baguette_core.Linear.term_min
+  1.05%  Baguette_core.Pb.first
+  1.04%  Baguette_core.Clause.false_at
+  1.03%  Stdlib.List.fold_left
+  0.85%  do_some_marking
+  0.82%  Baguette_core.Engine.watchers_of_new_entries
+  0.80%  Baguette_core.Engine.run_one
+  0.80%  caml_shared_try_alloc
+  0.78%  Stdlib.List.map_dps
+
+######## 2012_mspsp_hard_01 p, nodes 0..1000 (setup included)
+profile: 2012_mspsp_hard_01_1000_p_rec.data
+samples: 2281
+-- by owner (share of self samples)
+ 17.32%  GC/alloc
+ 11.66%  strings/IO
+  7.89%  other C/kernel
+  7.28%  Store
+  7.23%  Stdlib.List
+  6.36%  polymorphic hash
+  5.87%  Lit
+  5.44%  Engine
+  3.59%  polymorphic compare
+  3.51%  closure calls
+  3.46%  Linear
+  3.46%  Stdlib.Hashtbl
+  2.54%  Checked
+  1.18%  Trace
+  1.10%  Justify
+  0.96%  Opb
+  0.83%  Pb
+  0.79%  Analysis
+  0.79%  Writer
+  0.75%  Encoding
+  0.75%  Domain
+  0.70%  Reif
+  0.57%  Stdlib.Fun
+  0.57%  Clause
+-- by function (top 25)
+  5.04%  caml_hash
+  4.34%  do_some_marking
+  3.59%  oldify_one
+  3.33%  caml_shared_try_alloc
+  2.94%  caml_apply2
+  2.89%  Baguette_proof.Lit.go
+  2.85%  compare_val
+  2.76%  __printf_buffer
+  2.50%  __memmove_avx_unaligned_erms
+  2.15%  Stdlib.List.map
+  2.06%  Baguette_core.Store.go
+  1.84%  Baguette_proof.Lit.ident_char
+  1.80%  Baguette_core.Store.get
+  1.67%  Baguette_core.Linear.term_min
+  1.40%  pool_sweep
+  1.40%  Baguette_core.Engine.fun
+  1.32%  caml_hash_mix_string
+  1.32%  oldify_mopup
+  1.27%  caml_c_call
+  1.10%  caml_modify
+  0.96%  Stdlib.Hashtbl.key_index
+  0.88%  Baguette_core.Checked.add
+  0.83%  caml_alloc_string
+  0.83%  Stdlib.Hashtbl.find_opt
+  0.75%  parse_format
+
+######## 2012_mspsp_hard_01 p, MARGINAL nodes 1000..10000
+profile: 2012_mspsp_hard_01_10000_p_rec.data minus 2012_mspsp_hard_01_1000_p_rec.data
+samples: 26305
+-- by owner (share of self samples)
+ 11.55%  Stdlib.List
+ 11.20%  GC/alloc
+ 10.18%  Engine
+  7.66%  Store
+  6.71%  polymorphic compare
+  6.29%  strings/IO
+  5.90%  Clause
+  5.65%  closure calls
+  5.42%  Pb
+  4.45%  other C/kernel
+  4.29%  polymorphic hash
+  3.84%  Linear
+  2.00%  Checked
+  1.99%  Stdlib.Hashtbl
+  1.70%  Lit
+  1.16%  Retention
+  1.09%  Domain
+  0.93%  Trace
+  0.93%  Writer
+  0.76%  Justify
+  0.74%  Stdlib.Buffer
+  0.71%  Analysis
+  0.65%  Var
+  0.42%  Reif
+-- by function (top 25)
+  5.20%  caml_apply2
+  3.85%  Baguette_core.Pb.status
+  3.77%  caml_compare
+  3.46%  Baguette_core.Clause.ask
+  3.38%  caml_hash
+  3.02%  Stdlib.List.map
+  2.85%  compare_val
+  2.30%  Baguette_core.Store.get
+  2.27%  do_some_marking
+  2.10%  Baguette_core.Engine.fun
+  2.06%  caml_shared_try_alloc
+  2.06%  Baguette_core.Linear.term_min
+  1.99%  Baguette_core.Engine.advises
+  1.97%  oldify_one
+  1.87%  Baguette_core.Store.go
+  1.68%  Stdlib.List.exists
+  1.30%  pool_sweep
+  1.27%  Stdlib.List.fold_left
+  1.20%  Stdlib.List.rev_append
+  1.20%  Baguette_core.Engine.wants
+  1.16%  Baguette_core.Retention.fun
+  1.16%  __memmove_avx_unaligned_erms
+  1.12%  Stdlib.List.map_dps
+  1.08%  __printf_buffer
+  0.96%  Baguette_core.Linear.fun
+
+######## 2012_mspsp_hard_01 p, MARGINAL nodes 10000..40000 (QR48: 10000..23367, the whole run)
+profile: 2012_mspsp_hard_01_40000_p_rec.data minus 2012_mspsp_hard_01_10000_p_rec.data
+samples: 198427
+-- by owner (share of self samples)
+ 13.55%  polymorphic compare
+ 12.35%  Stdlib.List
+ 12.31%  Clause
+ 11.61%  Engine
+  8.80%  Pb
+  6.48%  GC/alloc
+  6.35%  closure calls
+  5.06%  Store
+  3.39%  strings/IO
+  3.09%  other C/kernel
+  2.72%  Retention
+  2.14%  polymorphic hash
+  1.97%  Linear
+  1.26%  Checked
+  1.26%  Var
+  1.13%  Stdlib.Hashtbl
+  0.98%  Lit
+  0.88%  Domain
+  0.63%  Analysis
+  0.49%  Trace
+  0.42%  Writer
+  0.38%  Justify
+  0.33%  Stdlib.Fun
+  0.28%  Stdlib.Buffer
+-- by function (top 25)
+ 11.04%  caml_compare
+  7.92%  Baguette_core.Clause.ask
+  6.70%  Baguette_core.Pb.status
+  6.07%  caml_apply2
+  3.31%  Stdlib.List.rev_append
+  3.29%  Stdlib.List.exists
+  3.24%  Baguette_core.Engine.advises
+  2.72%  Baguette_core.Retention.fun
+  2.63%  Baguette_core.Engine.wants
+  2.62%  Baguette_core.Store.get
+  2.45%  compare_val
+  1.80%  Stdlib.List.map
+  1.72%  caml_hash
+  1.65%  Baguette_core.Clause.fun
+  1.62%  Baguette_core.Clause.best
+  1.39%  Baguette_core.Engine.fun
+  1.32%  caml_shared_try_alloc
+  1.25%  Baguette_core.Var.to_int
+  1.18%  Baguette_core.Linear.term_min
+  1.14%  do_some_marking
+  1.14%  oldify_one
+  0.87%  Baguette_core.Clause.false_at
+  0.84%  Baguette_core.Pb.first
+  0.84%  Stdlib.List.fold_left
+  0.81%  pool_sweep
+
+######## 2011_cyclic-rcpsp_easy_6 np, nodes 0..1000 (setup included)
+profile: 2011_cyclic-rcpsp_easy_6_1000_np_rec.data
+samples: 5344
+-- by owner (share of self samples)
+ 27.69%  GC/alloc
+ 12.43%  Stdlib.List
+ 10.40%  Lit
+  5.60%  closure calls
+  5.20%  Pb
+  4.81%  polymorphic hash
+  4.15%  strings/IO
+  4.10%  other C/kernel
+  3.95%  Store
+  3.26%  Stdlib.Hashtbl
+  2.81%  polymorphic compare
+  2.19%  Alldiff
+  2.00%  Engine
+  1.67%  Pb_analysis
+  1.42%  Linear
+  1.40%  Encoding
+  1.35%  Checked
+  1.18%  Opb
+  0.77%  Learned
+  0.54%  Domain
+  0.52%  Stdlib.String
+  0.47%  Stdlib.Int
+  0.39%  Var
+  0.30%  Stdlib.@_dps
+-- by function (top 25)
+  6.98%  oldify_one
+  5.76%  do_some_marking
+  5.11%  Baguette_proof.Lit.go
+  5.01%  caml_shared_try_alloc
+  5.01%  pool_sweep
+  4.43%  caml_apply2
+  3.63%  Baguette_core.Pb.fun
+  3.07%  Baguette_proof.Lit.ident_char
+  2.69%  oldify_mopup
+  2.69%  Stdlib.List.map_dps
+  2.62%  caml_hash_mix_string
+  2.49%  compare_val
+  2.19%  caml_hash
+  1.91%  Baguette_core.Alldiff.fun
+  1.82%  Stdlib.List.init_dps
+  1.57%  Stdlib.List.fold_left
+  1.55%  Baguette_core.Store.get
+  1.53%  Baguette_core.Pb.status
+  1.42%  Baguette_core.Pb_analysis.down
+  1.29%  Stdlib.List.rev_append
+  1.25%  Baguette_core.Store.trail_entry
+  0.99%  caml_tuplify2
+  0.97%  Stdlib.List.iter
+  0.97%  Stdlib.Hashtbl.find_opt
+  0.84%  Baguette_core.Linear.term_min
+
+######## 2011_cyclic-rcpsp_easy_6 np, MARGINAL nodes 1000..10000
+profile: 2011_cyclic-rcpsp_easy_6_10000_np_rec.data minus 2011_cyclic-rcpsp_easy_6_1000_np_rec.data
+samples: 28051
+-- by owner (share of self samples)
+ 30.51%  GC/alloc
+ 20.89%  Stdlib.List
+ 16.23%  Pb
+  7.10%  closure calls
+  5.73%  Store
+  3.59%  Engine
+  2.71%  Linear
+  2.68%  Alldiff
+  2.13%  Checked
+  2.01%  other C/kernel
+  0.92%  Domain
+  0.80%  polymorphic compare
+  0.63%  Var
+  0.62%  Stdlib.Hashtbl
+  0.54%  polymorphic hash
+  0.43%  Stdlib.Fun
+  0.33%  Reif
+  0.29%  Lit
+  0.29%  Stdlib.Queue
+  0.27%  Pb_analysis
+  0.26%  strings/IO
+  0.15%  Stdlib.Int
+  0.14%  Learned
+  0.14%  Search
+-- by function (top 25)
+ 11.43%  Baguette_core.Pb.fun
+  7.67%  oldify_one
+  5.90%  do_some_marking
+  5.78%  pool_sweep
+  5.39%  caml_apply2
+  5.28%  caml_shared_try_alloc
+  4.94%  Stdlib.List.map_dps
+  4.68%  Baguette_core.Pb.status
+  4.22%  Baguette_core.Store.get
+  3.73%  oldify_mopup
+  3.32%  Stdlib.List.fold_left
+  2.57%  Stdlib.List.init_dps
+  2.36%  Stdlib.List.find_all
+  2.23%  Baguette_core.Alldiff.fun
+  2.00%  Stdlib.List.rev_append
+  1.98%  Stdlib.List.iter
+  1.59%  caml_tuplify2
+  1.51%  Stdlib.List.length_aux
+  1.34%  Baguette_core.Linear.term_min
+  1.20%  caml_initialize
+  0.94%  Stdlib.List.map
+  0.77%  Baguette_core.Engine.run_one
+  0.74%  Baguette_core.Checked.add
+  0.73%  try_update_object_header
+  0.71%  Baguette_core.Engine.fun
+
+######## 2011_cyclic-rcpsp_easy_6 np, MARGINAL nodes 10000..40000 (QR48: 10000..23367, the whole run)
+profile: 2011_cyclic-rcpsp_easy_6_40000_np_rec.data minus 2011_cyclic-rcpsp_easy_6_10000_np_rec.data
+samples: 86855
+-- by owner (share of self samples)
+ 31.00%  GC/alloc
+ 20.49%  Stdlib.List
+ 18.40%  Pb
+  6.80%  closure calls
+  5.18%  Store
+  3.53%  Engine
+  2.61%  Linear
+  2.41%  Alldiff
+  2.27%  Checked
+  1.63%  other C/kernel
+  1.02%  Domain
+  0.86%  Var
+  0.71%  polymorphic compare
+  0.53%  Stdlib.Hashtbl
+  0.48%  polymorphic hash
+  0.42%  Stdlib.Queue
+  0.40%  Stdlib.Fun
+  0.35%  Reif
+  0.11%  Search
+  0.10%  strings/IO
+  0.09%  Stdlib.@
+  0.07%  Lit
+  0.07%  Propagator
+  0.07%  Cumulative
+-- by function (top 25)
+ 12.96%  Baguette_core.Pb.fun
+  7.96%  oldify_one
+  5.93%  pool_sweep
+  5.74%  caml_shared_try_alloc
+  5.71%  do_some_marking
+  5.33%  Baguette_core.Pb.status
+  5.02%  caml_apply2
+  4.74%  Stdlib.List.map_dps
+  3.92%  Baguette_core.Store.get
+  3.92%  oldify_mopup
+  3.38%  Stdlib.List.fold_left
+  2.63%  Stdlib.List.find_all
+  2.17%  Stdlib.List.init_dps
+  2.10%  Stdlib.List.rev_append
+  2.05%  Stdlib.List.iter
+  2.03%  Baguette_core.Alldiff.fun
+  1.65%  Stdlib.List.length_aux
+  1.64%  caml_tuplify2
+  1.14%  Baguette_core.Linear.term_min
+  1.05%  caml_initialize
+  0.86%  Baguette_core.Var.to_int
+  0.83%  Baguette_core.Engine.run_one
+  0.78%  Baguette_core.Checked.add
+  0.73%  Baguette_core.Linear.fun
+  0.72%  Baguette_core.Linear.propagate
+
+######## 2011_cyclic-rcpsp_easy_6 p, nodes 0..1000 (setup included)
+profile: 2011_cyclic-rcpsp_easy_6_1000_p_rec.data
+samples: 16927
+-- by owner (share of self samples)
+ 23.70%  GC/alloc
+ 18.18%  strings/IO
+  8.71%  polymorphic hash
+  7.60%  Stdlib.List
+  6.72%  other C/kernel
+  4.89%  Lit
+  4.66%  Justify
+  3.43%  closure calls
+  3.30%  Stdlib.Hashtbl
+  2.39%  Writer
+  2.20%  polymorphic compare
+  1.95%  Stdlib.Buffer
+  1.74%  Pb
+  1.39%  Alldiff
+  1.15%  Store
+  1.05%  Encoding
+  0.63%  Opb
+  0.61%  Engine
+  0.60%  Stdlib.Printf
+  0.58%  Pb_analysis
+  0.57%  Stdlib.Bytes
+  0.53%  Stdlib.String
+  0.51%  Stdlib.^
+  0.49%  Linear
+-- by function (top 25)
+  7.18%  caml_hash
+  4.90%  oldify_one
+  4.70%  do_some_marking
+  4.05%  __memmove_avx_unaligned_erms
+  3.94%  caml_shared_try_alloc
+  3.89%  pool_sweep
+  3.02%  __printf_buffer
+  2.58%  caml_apply2
+  2.34%  Baguette_proof.Lit.go
+  2.00%  Baguette_core.Justify.fun
+  1.90%  oldify_mopup
+  1.86%  compare_val
+  1.68%  Stdlib.List.map_dps
+  1.53%  caml_hash_mix_string
+  1.52%  caml_alloc_string
+  1.48%  Baguette_proof.Lit.ident_char
+  1.29%  Stdlib.List.find_all_dps
+  1.29%  caml_c_call
+  1.20%  caml_blit_string
+  1.18%  Stdlib.Buffer.add_string
+  1.15%  CamlinternalFormat.strput_acc
+  1.15%  Baguette_core.Pb.fun
+  1.14%  Stdlib.Hashtbl.find_opt
+  1.06%  Baguette_core.Justify.go
+  1.03%  __printf_buffer_write
+
+######## 2011_cyclic-rcpsp_easy_6 p, MARGINAL nodes 1000..10000
+profile: 2011_cyclic-rcpsp_easy_6_10000_p_rec.data minus 2011_cyclic-rcpsp_easy_6_1000_p_rec.data
+samples: 134516
+-- by owner (share of self samples)
+ 25.49%  GC/alloc
+ 17.43%  strings/IO
+  9.35%  Stdlib.List
+  9.31%  polymorphic hash
+  5.90%  Justify
+  5.16%  other C/kernel
+  3.55%  Pb
+  3.52%  closure calls
+  3.16%  Writer
+  2.67%  Stdlib.Hashtbl
+  2.33%  Stdlib.Buffer
+  1.76%  polymorphic compare
+  1.35%  Alldiff
+  1.32%  Store
+  0.85%  Engine
+  0.84%  Stdlib.Printf
+  0.79%  Linear
+  0.68%  Encoding
+  0.67%  Stdlib.Bytes
+  0.59%  Explanation
+  0.54%  Stdlib.^
+  0.51%  Checked
+  0.39%  Stdlib.String
+  0.30%  Stdlib.@
+-- by function (top 25)
+  8.45%  caml_hash
+  5.29%  do_some_marking
+  5.15%  oldify_one
+  4.42%  pool_sweep
+  4.39%  caml_shared_try_alloc
+  4.07%  __memmove_avx_unaligned_erms
+  2.77%  __printf_buffer
+  2.51%  caml_apply2
+  2.51%  Baguette_core.Justify.fun
+  2.43%  Baguette_core.Pb.fun
+  2.24%  Stdlib.List.map_dps
+  1.96%  oldify_mopup
+  1.68%  caml_alloc_string
+  1.48%  Stdlib.List.find_all_dps
+  1.44%  CamlinternalFormat.strput_acc
+  1.44%  compare_val
+  1.42%  Stdlib.Buffer.add_string
+  1.41%  Baguette_core.Justify.go
+  1.19%  caml_blit_string
+  1.18%  caml_c_call
+  1.09%  Baguette_core.Pb.status
+  1.04%  Stdlib.Hashtbl.find_opt
+  1.03%  Stdlib.List.fold_left
+  1.01%  Baguette_proof.Writer.write_cited
+  0.98%  CamlinternalFormat.make_printf
+
+######## 2011_cyclic-rcpsp_easy_6 p, MARGINAL nodes 10000..40000 (QR48: 10000..23367, the whole run)
+profile: 2011_cyclic-rcpsp_easy_6_40000_p_rec.data minus 2011_cyclic-rcpsp_easy_6_10000_p_rec.data
+samples: 405350
+-- by owner (share of self samples)
+ 25.14%  GC/alloc
+ 18.03%  strings/IO
+  9.52%  polymorphic hash
+  9.38%  Stdlib.List
+  5.23%  Justify
+  4.80%  other C/kernel
+  3.98%  Pb
+  3.51%  closure calls
+  3.23%  Writer
+  2.68%  Stdlib.Hashtbl
+  2.57%  Stdlib.Buffer
+  1.68%  polymorphic compare
+  1.39%  Alldiff
+  1.35%  Store
+  0.90%  Stdlib.Printf
+  0.84%  Engine
+  0.72%  Stdlib.Bytes
+  0.68%  Linear
+  0.67%  Encoding
+  0.58%  Stdlib.^
+  0.57%  Explanation
+  0.50%  Checked
+  0.42%  Stdlib.String
+  0.23%  Domain
+-- by function (top 25)
+  8.70%  caml_hash
+  5.78%  do_some_marking
+  5.12%  oldify_one
+  4.11%  __memmove_avx_unaligned_erms
+  3.96%  caml_shared_try_alloc
+  3.91%  pool_sweep
+  2.94%  __printf_buffer
+  2.78%  Baguette_core.Pb.fun
+  2.53%  caml_apply2
+  2.35%  Baguette_core.Justify.fun
+  2.21%  Stdlib.List.map_dps
+  1.98%  oldify_mopup
+  1.84%  caml_alloc_string
+  1.56%  Stdlib.Buffer.add_string
+  1.47%  CamlinternalFormat.strput_acc
+  1.38%  Stdlib.List.find_all_dps
+  1.36%  compare_val
+  1.25%  caml_blit_string
+  1.25%  caml_c_call
+  1.16%  Baguette_core.Pb.status
+  1.13%  Stdlib.Hashtbl.find_opt
+  1.09%  CamlinternalFormat.make_printf
+  1.06%  Baguette_proof.Writer.write_cited
+  1.03%  Stdlib.List.fold_left
+  0.96%  Baguette_core.Store.get
+
+######## 2011_cyclic-rcpsp_easy_6 b0np, nodes 0..10000 (setup included)
+profile: 2011_cyclic-rcpsp_easy_6_10000_b0np_rec.data
+samples: 9023
+-- by owner (share of self samples)
+ 25.32%  Stdlib.List
+ 18.91%  GC/alloc
+ 10.35%  Alldiff
+ 10.17%  Engine
+  6.66%  Checked
+  6.57%  Linear
+  5.75%  Store
+  5.28%  closure calls
+  1.86%  other C/kernel
+  1.47%  Stdlib.Fun
+  1.27%  Stdlib.Queue
+  1.05%  Reif
+  0.90%  Domain
+  0.74%  polymorphic compare
+  0.50%  strings/IO
+  0.44%  Var
+  0.39%  Stdlib.@
+  0.25%  Stdlib.@_dps
+  0.25%  Search
+  0.22%  Stdlib.Array
+  0.22%  Propagator
+  0.21%  Pb
+  0.20%  Lit
+  0.19%  Stdlib.max
+-- by function (top 25)
+  8.63%  Baguette_core.Alldiff.fun
+  8.60%  Stdlib.List.init_dps
+  7.98%  Stdlib.List.map_dps
+  4.71%  caml_apply2
+  3.98%  oldify_one
+  3.21%  do_some_marking
+  2.95%  caml_initialize
+  2.76%  caml_shared_try_alloc
+  2.59%  Baguette_core.Linear.fun
+  2.54%  Baguette_core.Engine.run_one
+  2.40%  pool_sweep
+  2.21%  Baguette_core.Linear.propagate
+  2.15%  Baguette_core.Store.get
+  2.09%  Baguette_core.Engine.fun
+  1.87%  Baguette_core.Checked.add
+  1.77%  oldify_mopup
+  1.75%  Baguette_core.Store.go
+  1.68%  Baguette_core.Linear.term_min
+  1.68%  Baguette_core.Checked.ceildiv
+  1.63%  Stdlib.List.map
+  1.53%  Stdlib.List.combine
+  1.50%  caml_modify
+  1.30%  Stdlib.List.fold_left
+  1.27%  Stdlib.List.iter
+  1.25%  Baguette_core.Checked.floordiv
+
+######## 2011_cyclic-rcpsp_easy_6 b0p, nodes 0..10000 (setup included)
+profile: 2011_cyclic-rcpsp_easy_6_10000_b0p_rec.data
+samples: 119031
+-- by owner (share of self samples)
+ 22.76%  GC/alloc
+ 21.54%  strings/IO
+ 10.85%  polymorphic hash
+  7.42%  Stdlib.List
+  6.28%  Justify
+  5.52%  other C/kernel
+  3.70%  Writer
+  3.17%  Stdlib.Hashtbl
+  2.97%  Stdlib.Buffer
+  2.79%  closure calls
+  1.96%  polymorphic compare
+  1.82%  Alldiff
+  1.09%  Stdlib.Printf
+  0.92%  Engine
+  0.88%  Encoding
+  0.80%  Stdlib.Bytes
+  0.70%  Explanation
+  0.69%  Stdlib.^
+  0.69%  Store
+  0.61%  Linear
+  0.55%  Checked
+  0.53%  Stdlib.String
+  0.26%  Stdlib.@
+  0.26%  Lit
+-- by function (top 25)
+  9.84%  caml_hash
+  4.90%  __memmove_avx_unaligned_erms
+  4.50%  oldify_one
+  4.35%  do_some_marking
+  3.66%  caml_shared_try_alloc
+  3.54%  pool_sweep
+  3.43%  __printf_buffer
+  2.80%  Baguette_core.Justify.fun
+  2.20%  caml_alloc_string
+  1.97%  caml_apply2
+  1.95%  CamlinternalFormat.strput_acc
+  1.91%  Stdlib.List.map_dps
+  1.83%  Stdlib.Buffer.add_string
+  1.61%  Stdlib.List.find_all_dps
+  1.58%  compare_val
+  1.54%  oldify_mopup
+  1.50%  caml_c_call
+  1.44%  caml_blit_string
+  1.28%  Stdlib.Hashtbl.find_opt
+  1.22%  CamlinternalFormat.make_printf
+  1.20%  Baguette_proof.Writer.write_cited
+  1.20%  Baguette_core.Alldiff.fun
+  1.13%  Baguette_core.Justify.go
+  1.02%  __printf_buffer_write
+  1.01%  caml_hash_mix_string
+
+######## 2014_openshop_gp10-4 np, nodes 0..1000 (setup included)
+profile: 2014_openshop_gp10-4_1000_np_rec.data
+samples: 56355
+-- by owner (share of self samples)
+ 41.10%  GC/alloc
+ 15.93%  Lit
+ 10.79%  polymorphic hash
+  8.39%  strings/IO
+  6.79%  Stdlib.Hashtbl
+  4.55%  other C/kernel
+  2.50%  Encoding
+  2.27%  Opb
+  2.09%  closure calls
+  1.94%  polymorphic compare
+  1.53%  Stdlib.List
+  0.66%  Stdlib.String
+  0.39%  Stdlib.max
+  0.33%  Stdlib.@_dps
+  0.29%  Stdlib.min
+  0.14%  Stdlib.string_of_int
+  0.11%  Store
+  0.05%  Pb
+  0.05%  Engine
+  0.02%  Clause
+  0.02%  Checked
+  0.01%  Domain
+  0.01%  Analysis
+  0.01%  Linear
+-- by function (top 25)
+  9.97%  oldify_one
+  9.04%  do_some_marking
+  8.44%  Baguette_proof.Lit.go
+  7.37%  pool_sweep
+  7.17%  caml_shared_try_alloc
+  6.99%  caml_hash_mix_string
+  5.01%  Baguette_proof.Lit.ident_char
+  3.95%  oldify_mopup
+  3.81%  caml_hash
+  1.98%  caml_string_equal
+  1.94%  compare_val
+  1.74%  __printf_buffer
+  1.60%  caml_modify
+  1.49%  caml_apply2
+  1.42%  Baguette_proof.Opb.fun
+  1.41%  Stdlib.Hashtbl.find_opt
+  1.36%  __memmove_avx_unaligned_erms
+  1.16%  Stdlib.Hashtbl.key_index
+  1.10%  Stdlib.Hashtbl.insert_bucket
+  1.08%  Baguette_proof.Lit.render
+  0.89%  try_update_object_header
+  0.85%  Baguette_proof.Opb.hash
+  0.83%  caml_c_call
+  0.78%  Stdlib.Hashtbl.replace
+  0.76%  _itoa_word
+
+######## 2014_openshop_gp10-4 np, MARGINAL nodes 1000..10000
+profile: 2014_openshop_gp10-4_10000_np_rec.data minus 2014_openshop_gp10-4_1000_np_rec.data
+samples: 8615
+-- by owner (share of self samples)
+ 20.26%  GC/alloc
+ 12.15%  Store
+ 10.39%  Stdlib.List
+  8.29%  Pb
+  6.91%  Engine
+  6.28%  Clause
+  6.12%  closure calls
+  5.73%  polymorphic hash
+  4.98%  other C/kernel
+  4.53%  Lit
+  3.99%  polymorphic compare
+  2.30%  Linear
+  1.82%  Checked
+  1.63%  Domain
+  1.09%  Stdlib.@_dps
+  1.03%  Retention
+  1.03%  Analysis
+  0.86%  strings/IO
+  0.72%  Var
+  0.60%  Search
+  0.41%  Encoding
+  0.35%  Learn
+  0.31%  Stdlib.Fun
+  0.21%  Reif
+-- by function (top 25)
+  6.65%  do_some_marking
+  5.87%  caml_apply2
+  5.83%  Baguette_core.Store.back
+  5.47%  Baguette_core.Pb.status
+  3.99%  pool_sweep
+  3.98%  caml_hash_mix_string
+  3.71%  oldify_one
+  3.46%  Baguette_proof.Lit.go
+  3.17%  Stdlib.List.rev_append
+  3.01%  Baguette_core.Clause.ask
+  2.83%  Baguette_core.Store.get
+  2.67%  caml_shared_try_alloc
+  2.08%  caml_compare
+  2.01%  Baguette_proof.Lit.ident_char
+  1.87%  oldify_mopup
+  1.82%  compare_val
+  1.75%  caml_hash
+  1.74%  Stdlib.List.exists
+  1.58%  Baguette_core.Pb.fun
+  1.57%  Baguette_core.Engine.advises
+  1.53%  Baguette_core.Store.go
+  1.29%  __memmove_avx_unaligned_erms
+  1.25%  Baguette_core.Engine.wants
+  1.23%  Baguette_core.Linear.term_min
+  1.09%  Stdlib.@_dps
+
+######## 2014_openshop_gp10-4 np, MARGINAL nodes 10000..40000 (QR48: 10000..23367, the whole run)
+profile: 2014_openshop_gp10-4_40000_np_rec.data minus 2014_openshop_gp10-4_10000_np_rec.data
+samples: 144997
+-- by owner (share of self samples)
+ 14.51%  Clause
+ 13.45%  Stdlib.List
+ 12.98%  Pb
+ 11.14%  closure calls
+ 10.76%  Engine
+ 10.46%  Store
+  6.79%  polymorphic compare
+  3.65%  GC/alloc
+  3.38%  Retention
+  1.83%  Var
+  1.78%  other C/kernel
+  1.63%  Domain
+  1.60%  Linear
+  1.28%  polymorphic hash
+  1.17%  Checked
+  0.87%  Analysis
+  0.64%  strings/IO
+  0.61%  Stdlib.Hashtbl
+  0.18%  Search
+  0.16%  Learn
+  0.15%  Stdlib.Fun
+  0.14%  Reif
+  0.12%  Stdlib.Queue
+  0.12%  Stdlib.@_dps
+-- by function (top 25)
+ 10.38%  caml_apply2
+  9.79%  Baguette_core.Pb.status
+  8.13%  Baguette_core.Clause.ask
+  5.10%  caml_compare
+  4.74%  Stdlib.List.rev_append
+  4.64%  Baguette_core.Store.back
+  4.63%  Stdlib.List.exists
+  4.08%  Baguette_core.Engine.advises
+  3.84%  Baguette_core.Store.get
+  3.76%  Baguette_core.Engine.wants
+  3.37%  Baguette_core.Retention.fun
+  2.81%  Baguette_core.Clause.fun
+  1.83%  Baguette_core.Var.to_int
+  1.78%  Baguette_core.Clause.best
+  1.68%  Baguette_core.Pb.fun
+  1.65%  compare_val
+  1.21%  Baguette_core.Clause.false_at
+  1.08%  Baguette_core.Linear.term_min
+  0.96%  Baguette_core.Domain.lo
+  0.90%  Baguette_core.Pb.first
+  0.74%  caml_shared_try_alloc
+  0.71%  oldify_one
+  0.70%  Stdlib.List.map_dps
+  0.69%  Stdlib.List.fold_left
+  0.64%  caml_hash
+
+######## 2014_openshop_gp10-4 p, nodes 0..1000 (setup included)
+profile: 2014_openshop_gp10-4_1000_p_rec.data
+samples: 74888
+-- by owner (share of self samples)
+ 32.75%  GC/alloc
+ 16.68%  strings/IO
+ 16.55%  Lit
+ 10.29%  other C/kernel
+  8.52%  polymorphic hash
+  5.20%  Stdlib.Hashtbl
+  1.80%  Encoding
+  1.72%  Opb
+  1.66%  closure calls
+  1.52%  polymorphic compare
+  1.29%  Stdlib.List
+  0.57%  Stdlib.String
+  0.31%  Stdlib.max
+  0.23%  Stdlib.output_string
+  0.22%  Stdlib.string_of_int
+  0.22%  Stdlib.@_dps
+  0.19%  Stdlib.min
+  0.07%  Store
+  0.04%  Pb
+  0.04%  Engine
+  0.02%  Clause
+  0.02%  Writer
+  0.02%  Linear
+  0.01%  Domain
+-- by function (top 25)
+  8.49%  Baguette_proof.Lit.go
+  7.56%  oldify_one
+  7.19%  do_some_marking
+  5.65%  pool_sweep
+  5.39%  caml_hash_mix_string
+  5.24%  caml_shared_try_alloc
+  5.14%  Baguette_proof.Lit.ident_char
+  3.84%  __printf_buffer
+  3.14%  caml_hash
+  2.99%  oldify_mopup
+  2.92%  __memmove_avx_unaligned_erms
+  1.66%  parse_format
+  1.62%  caml_string_equal
+  1.50%  compare_val
+  1.45%  Baguette_proof.Lit.render
+  1.31%  caml_c_call
+  1.25%  __printf_buffer_write
+  1.25%  caml_modify
+  1.20%  _itoa_word
+  1.18%  Baguette_proof.Opb.fun
+  1.17%  caml_apply2
+  1.14%  Stdlib.Hashtbl.find_opt
+  1.11%  pthread_mutex_trylock@@GLIBC_2.34
+  1.09%  caml_ml_output_bytes
+  0.99%  pthread_mutex_unlock@@GLIBC_2.2.5
+
+######## 2014_openshop_gp10-4 p, MARGINAL nodes 1000..10000
+profile: 2014_openshop_gp10-4_10000_p_rec.data minus 2014_openshop_gp10-4_1000_p_rec.data
+samples: 14120
+-- by owner (share of self samples)
+ 21.24%  GC/alloc
+  9.07%  strings/IO
+  7.94%  Stdlib.List
+  7.90%  Lit
+  7.90%  Store
+  6.75%  polymorphic compare
+  5.98%  other C/kernel
+  5.42%  Pb
+  4.75%  Engine
+  4.35%  closure calls
+  4.03%  Clause
+  3.79%  polymorphic hash
+  1.35%  Linear
+  1.14%  Checked
+  0.91%  Domain
+  0.82%  Encoding
+  0.79%  Retention
+  0.70%  Stdlib.String
+  0.68%  Stdlib.@_dps
+  0.65%  Analysis
+  0.54%  Var
+  0.41%  Search
+  0.38%  Trace
+  0.33%  Stdlib.min
+-- by function (top 25)
+  5.67%  do_some_marking
+  5.03%  compare_val
+  4.08%  oldify_one
+  3.96%  pool_sweep
+  3.92%  caml_apply2
+  3.88%  Baguette_core.Store.back
+  3.76%  Baguette_core.Pb.status
+  3.61%  caml_shared_try_alloc
+  3.26%  Baguette_proof.Lit.go
+  2.93%  __memmove_avx_unaligned_erms
+  2.75%  caml_hash_mix_string
+  2.17%  Stdlib.List.rev_append
+  2.15%  Baguette_proof.Lit.ident_char
+  2.13%  __printf_buffer
+  1.84%  Baguette_core.Clause.ask
+  1.71%  Baguette_core.Store.get
+  1.56%  caml_compare
+  1.38%  Baguette_proof.Lit.render
+  1.31%  oldify_mopup
+  1.24%  Stdlib.List.exists
+  1.20%  Baguette_core.Engine.advises
+  1.08%  caml_c_call
+  1.06%  caml_blit_string
+  1.04%  caml_hash
+  0.89%  parse_format
+
+######## 2014_openshop_gp10-4 p, MARGINAL nodes 10000..40000 (QR48: 10000..23367, the whole run)
+profile: 2014_openshop_gp10-4_40000_p_rec.data minus 2014_openshop_gp10-4_10000_p_rec.data
+samples: 154345
+-- by owner (share of self samples)
+ 13.41%  Clause
+ 12.86%  Stdlib.List
+ 12.20%  Pb
+ 10.31%  closure calls
+  9.84%  Engine
+  9.54%  Store
+  8.72%  polymorphic compare
+  4.21%  GC/alloc
+  3.17%  Retention
+  2.60%  other C/kernel
+  2.09%  strings/IO
+  1.67%  Var
+  1.53%  Domain
+  1.33%  Linear
+  1.26%  Lit
+  1.04%  Checked
+  0.76%  Analysis
+  0.75%  polymorphic hash
+  0.68%  Stdlib.Hashtbl
+  0.23%  Learn
+  0.19%  Stdlib.Buffer
+  0.16%  Trace
+  0.15%  Stdlib.Fun
+  0.14%  Reif
+-- by function (top 25)
+  9.68%  caml_apply2
+  9.20%  Baguette_core.Pb.status
+  7.56%  Baguette_core.Clause.ask
+  4.86%  caml_compare
+  4.66%  Stdlib.List.rev_append
+  4.34%  Baguette_core.Store.back
+  4.11%  Stdlib.List.exists
+  3.73%  compare_val
+  3.63%  Baguette_core.Engine.advises
+  3.56%  Baguette_core.Engine.wants
+  3.30%  Baguette_core.Store.get
+  3.17%  Baguette_core.Retention.fun
+  2.62%  Baguette_core.Clause.fun
+  1.67%  Baguette_core.Clause.best
+  1.67%  Baguette_core.Var.to_int
+  1.62%  Baguette_core.Pb.fun
+  1.09%  Baguette_core.Clause.false_at
+  0.95%  do_some_marking
+  0.93%  Baguette_core.Domain.lo
+  0.85%  Baguette_core.Pb.first
+  0.82%  Baguette_core.Linear.term_min
+  0.77%  oldify_one
+  0.69%  Stdlib.List.map_dps
+  0.69%  caml_shared_try_alloc
+  0.59%  caml_hash
+
+######## 2014_openshop_gp10-4 np, SETUP ONLY (BAGUETTE_NODE_LIMIT=1)
+profile: 2014_openshop_gp10-4_1_np_rec.data
+samples: 54723
+-- by owner (share of self samples)
+ 41.41%  GC/alloc
+ 15.83%  Lit
+ 10.97%  polymorphic hash
+  8.69%  strings/IO
+  6.68%  Stdlib.Hashtbl
+  4.42%  other C/kernel
+  2.66%  Encoding
+  2.17%  Opb
+  2.07%  closure calls
+  1.86%  polymorphic compare
+  1.46%  Stdlib.List
+  0.58%  Stdlib.String
+  0.39%  Stdlib.max
+  0.36%  Stdlib.@_dps
+  0.29%  Stdlib.min
+  0.12%  Stdlib.string_of_int
+  0.01%  Compile
+  0.01%  Checked
+  0.00%  Lexer
+  0.00%  Stdlib.@
+  0.00%  Engine
+  0.00%  Reif_lin_le
+-- by function (top 25)
+ 10.17%  oldify_one
+  8.99%  do_some_marking
+  8.49%  Baguette_proof.Lit.go
+  7.27%  caml_shared_try_alloc
+  7.22%  pool_sweep
+  6.92%  caml_hash_mix_string
+  5.16%  Baguette_proof.Lit.ident_char
+  4.07%  oldify_mopup
+  4.05%  caml_hash
+  2.05%  caml_string_equal
+  1.86%  compare_val
+  1.75%  __printf_buffer
+  1.60%  caml_modify
+  1.53%  __memmove_avx_unaligned_erms
+  1.50%  caml_apply2
+  1.44%  Stdlib.Hashtbl.find_opt
+  1.32%  Baguette_proof.Opb.fun
+  1.16%  Stdlib.Hashtbl.key_index
+  1.07%  Stdlib.Hashtbl.insert_bucket
+  0.88%  Baguette_proof.Lit.render
+  0.87%  try_update_object_header
+  0.85%  Baguette_proof.Opb.hash
+  0.82%  caml_c_call
+  0.81%  Baguette_proof.Encoding.fun
+  0.81%  _itoa_word

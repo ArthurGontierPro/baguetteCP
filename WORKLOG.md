@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M11-complexity-T1 | `docs/DECISIONS.md` (D-0140 appended) and new files under `bench/perf/` only. READ-ONLY everywhere else: no file under `lib/`, `bin/`, `test/` changes | agent-inventory (`wave47-inventory`) | 2026-11-18 |
 | M11-complexity-T2 | new `scripts/diff_lane.sh` and `scripts/scaling_lane.sh` (names as the record decides), new `bench/diff/` (corpus list, references), `Makefile` (the targets and their place in `check`), `docs/DECISIONS.md` (D-0141 appended), `bench/README.md`. No file under `lib/` | agent-lanes (`wave47-lanes`) | 2026-11-18 |
 | M10-search-strategy-T1, then T2 and T3 | `docs/DECISIONS.md` (D-0137 appended), `docs/SPEC.md` §3.4 (the restart amendment), `docs/ROADMAP.md` M10 rows T1-T3, `lib/core/search.ml` (restarts, phase saving, branching), a new `lib/core/activity.ml` (+ `docs/ARCHITECTURE.md` §1 and `CLAUDE.md`'s map), `lib/core/analysis.ml` (activity bumps, if needed), `bin/main.ml` (flags), `test/unit/test_search*.ml`/`test_learn.ml`/`test_endtoend.ml`, new `test/models/*restart*`/`*activity*` + `test/expected/` | agent-strategy (`wave45-strategy`) | 2026-11-18 |
 | M10-search-strategy-T4 | `lib/core/retention.ml`, `lib/core/learned.ml` (an LBD field if needed), `bin/main.ml` (the policy flag only), `test/unit/test_retention.ml`, `docs/DECISIONS.md` (D-0139 appended), `docs/ROADMAP.md` M10-T4 row | agent-retention (`wave45-retention`) | 2026-11-18 |
@@ -464,7 +463,24 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M9-no-proof-T2 | agent-noproof2, agent-noproof3 (`wave44-noproof`) | 2026-11-18 | **D-0135**. `--no-proof`: null writer (ids minted, nothing written), guards at Justify/Trace entry, `Discard` ladder short-circuit, exit 2 beside `--proof`. Identity lane in `make check`: 165/165 + 9 bits at W = 0, no stdout difference. Gate rc 0, 82 MB. Twenty Challenge instances measured both ways |
 
 | M8-bits-encoding-T3 (steps 1, 2 partial; T3 stays WIP) | agent-t3 + agent-t3b (`wave44-t3`) | 2026-11-18 | **D-0134 §4-§7.** maxmin over a bits scope by selector rows + one `Resolve` `pol` per pruning, selectors listed in `sol`/`soli`; `int_ne`/`int_lin_ne` released (the A/B pair resolved); `Justify.is_bits_derivation` (a T2 latent). 173/173 verified at W none/0/8, 165 byte-identical at none; gate rc 0 on `20c324f`, 85 MB. The 177 at W = 0: 73 -> 108 complete `.opb`. Open: reified holds, steps 3-5 |
+| M11-complexity-T1 | agent-inventory (`wave47-inventory`) | 2026-11-18 | **D-0140.** The inventory, read-only: 48 items, each with what it grows with, how often it runs, its measured marginal share, the fix, the batch (T3/T4/T5), the byte risk and the reference. Six instances (QR48, QR72, rcpsp_11, mspsp_hard_01, cyclic-rcpsp_easy_6, openshop_gp10-4) at 1, 1k, 10k, 40k nodes, both modes; scratch patches S1 (`count_learned_activity`), S2 (retention), S3a-c measured byte-identical; outputs in `bench/perf/` |
 ## Handoff notes
+## M11-complexity-T1 handoff, 2026-11-18 (agent-inventory, `wave47-inventory`): the inventory, D-0140
+
+Read-only, no file under `lib/`, `bin/`, `test/` changed. D-0140 has the 48-item table, the ranking,
+what the T2 lanes must cover per batch, and what changes in the plan.
+- **The top two are T3's.** Learned clauses asked on every move of a watched VARIABLE (E1, 22 to
+  35 % of a node at 40 000 nodes) and learned-clause runs with three status walks (E2, 13 to 23 %),
+  in `engine.ml`, `prop/clause.ml`, `prop/pb.ml`, which no branch in flight claims.
+- **21 learned PB rows cost 73 % of cyclic-rcpsp's no-proof node** in the order arm (E3). The bits
+  arm does not derive them (119 G against 440 G instructions at 10 000 nodes), which M8-T4 must know.
+- Scratch patches, same stdout, nodes and `.pbp`: S1 −7.7 % on mspsp at 40k, S2 (retention) −5.2 %
+  instructions and about −24 % cycles on QR72 at 40k, S3b (`decision_entries`) −9.8 % on mspsp at 10k.
+- openshop spends 762 G instructions in setup before node 1, `--no-proof` too (X1, D-0080).
+- Lanes: pin `BAGUETTE_PROOF_AUDIT` (the end sweep's `del` depends on it), and count instructions.
+- Node: `/scratch/arthur/wave47-inventory-runs/` keeps the perf.data. The clones
+  `/scratch/arthur/wave47-inventory-{s1,s2,s3,s3a,s3b,s3c,all}` can be deleted.
+
 ## M8-bits-encoding-T3 continuation merged and gated, 2026-11-18 (orchestrator)
 
 `wave46-t3` merged as `a8d2924` (no code conflict). Gate of `a8d2924` on fataepyc-06
@@ -494,7 +510,6 @@ worth building, and was not built (it needs `search.ml`'s call). Step 4 done (at
 expansion of a wide case operand probed, 19x smaller model and far weaker search; not built
 (§13). `Lit.needs_sanitize` scans through a table (M6-T22's request): 2.0 % -> 0.9 % of QR48's
 proof-mode time, proofs byte-identical. 179/179 verified at `W = none`, `0`, `8` (the 173 of gate 46 byte-identical with no flags; against gate 47's binary 178 of 179, the difference the new `arith_times_narrow_sat`); gate rc 0 on `e1b46dc` (26 s, 89.7 MB). The 177 at `W = 0`: 108 -> **162** complete `.opb` (+54, none lost: carpet-cutting 18, mapping 9, ATSP 6, flowshop-workers 5, yumi-dynamic 4, zephyrus 3, ...); 15 unfinished, 5 of them `arithmetic-target`.
-
 ## M6-T22 merged on top of M8-T3 (WIP) and gated, 2026-11-18 (orchestrator)
 
 `wave45-pernode` merged as `23eb9d6` (code merged without conflict). Gate of `23eb9d6` on fataepyc-06

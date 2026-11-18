@@ -1,0 +1,74 @@
+--- a/lib/core/search.ml
++++ b/lib/core/search.ml
+@@ -1943,6 +1943,19 @@
+    reading of the object rather than a degenerate case to special-case away. Suppressing
+    it would be deciding, on this side, that the proof-side derivation is not to be
+    believed. [Search.n_pb_nondegenerate] is how many rows are not this. *)
++(* M11-T1 SCRATCH S1 (never merged): the kind of a learned instance by id, O(1). *)
++module S1_kind = struct
++  let a = ref (Bytes.make 1024 '\000')
++  let reset () = Bytes.fill !a 0 (Bytes.length !a) '\000'
++  let set id k =
++    if id >= Bytes.length !a then (
++      let b = Bytes.make (max (id + 1) (2 * Bytes.length !a)) '\000' in
++      Bytes.blit !a 0 b 0 (Bytes.length !a);
++      a := b);
++    Bytes.set !a id k
++  let get id = if id < Bytes.length !a then Bytes.get !a id else '\000'
++end
++
+ let register_learned_pb engine store ctx stats ~bump ~cid ~(row : Learned.t) =
+   let decl = Learned.decl_of_encoding ctx.Justify.encoding in
+   let id = Engine.next_id engine in
+@@ -1952,6 +1965,7 @@
+       Engine.add engine inst;
+       stats.n_pb_instances <- stats.n_pb_instances + 1;
+       stats.pb_inst_ids_rev <- id :: stats.pb_inst_ids_rev;
++      S1_kind.set id 'p';
+       Retention.cite stats.db ~cid
+         ~by:
+           (Printf.sprintf "learned_pb instance #%d, %s (M2-L13)" id
+@@ -2184,10 +2198,11 @@
+ let count_learned_activity stats store ~since (o : Engine.outcome) : Engine.outcome =
+   let classify id =
+     if id < stats.first_learned_id then ()
+-    else if List.mem id stats.pb_inst_ids_rev then
+-      stats.n_pb_prunes <- stats.n_pb_prunes + 1
+-    else if List.mem id stats.clause_inst_ids_rev then
+-      stats.n_clause_prunes <- stats.n_clause_prunes + 1
++    else
++      match S1_kind.get id with
++      | 'p' -> stats.n_pb_prunes <- stats.n_pb_prunes + 1
++      | 'c' -> stats.n_clause_prunes <- stats.n_clause_prunes + 1
++      | _ -> ()
+   in
+   for i = since to Store.trail_length store - 1 do
+     classify (Store.trail_entry store i).Store.prop
+@@ -2196,9 +2211,9 @@
+   | Engine.Conflict c ->
+       let id = c.Store.c_prop in
+       if id >= stats.first_learned_id then
+-        if List.mem id stats.pb_inst_ids_rev then
++        if S1_kind.get id = 'p' then
+           stats.n_pb_inst_conflicts <- stats.n_pb_inst_conflicts + 1
+-        else if List.mem id stats.clause_inst_ids_rev then
++        else if S1_kind.get id = 'c' then
+           stats.n_clause_inst_conflicts <- stats.n_clause_inst_conflicts + 1
+   | Engine.Fixpoint -> ());
+   o
+@@ -2291,6 +2306,7 @@
+                lc);
+           stats.n_clause_instances <- stats.n_clause_instances + 1;
+           stats.clause_inst_ids_rev <- id :: stats.clause_inst_ids_rev;
++          S1_kind.set id 'c';
+           Retention.cite stats.db ~cid
+             ~by:
+               (Printf.sprintf "learned_clause instance #%d over %s (M2-L12)" id
+@@ -3106,6 +3122,7 @@
+   stats.first_learned_id <- Engine.next_id engine;
+   stats.pb_inst_ids_rev <- [];
+   stats.clause_inst_ids_rev <- [];
++  S1_kind.reset ();
+   stats.nodes <- stats.nodes + 1;
+   let result =
+     try dfs engine store ctx trace stats config order []
