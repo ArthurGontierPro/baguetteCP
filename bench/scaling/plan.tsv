@@ -9,5 +9,5 @@
 H_qr72_bag_def	noproof	1000	10000	10000	40000	Boolean learned clauses: D-0140 x1.8 per node, database ~20 000 at 40k
 H_qr72_bag_def	proof	1000	10000	10000	40000	the same search with the proof written: trace, justification, writer (T5)
 2013_rcpsp_11	noproof	1000	10000	10000	20000	integer learned clauses, cumulative: D-0140's steepest growth (x9.5 to 40k); 20k keeps the run near two minutes
-2012_parity-learning_48_24_6.2	noproof	500	1000	8000	16000	learned PB rows propagating (x4 runs per node over the run)
-2012_parity-learning_48_24_6.2	proof	500	1000	8000	16000	PB path with pol lines written
+2012_parity-learning_48_24_6.2	noproof	1000	4000	8000	16000	learned PB rows propagating (x4 runs per node over the run)
+2012_parity-learning_48_24_6.2	proof	1000	4000	8000	16000	PB path with pol lines written
