@@ -298,6 +298,19 @@ type t = {
       (** M6-T22 / D-0138: id -> where its entry sits in [dyn_ids.(wv1.(id))] and
           [dyn_ids.(wv2.(id))], so a watch move removes it in O(1). When both watches are
           on one variable there is one entry and [wp1] holds it. *)
+  mutable births : (int * int list) list;
+  mutable newborns : int list;
+      (** M6-T22 / D-0138: [born], inverted. [newborns] is every id whose [born] is
+          [unborn]; [births] holds, most recent first and so in DECREASING epoch, one
+          [(e, ids)] per epoch some instance is born at, with exactly the ids whose [born]
+          is [e]. So "every id born after epoch [e]" is [newborns] plus the head of
+          [births] down to [e], and [propagate] reads and updates [born] through it in
+          time proportional to the instances concerned rather than to all of them. *)
+  mutable heap : int array;
+  mutable heap_len : int;
+      (** M6-T22 / D-0138: the DIRTY seed slots of the current [propagate] call, as a
+          binary min-heap of ids, so the seed visits them in id order without walking the
+          clean ones. An id is in it iff its [dirty] flag is set. Empty between calls. *)
   mutable dirty : bool array;
   mutable in_queue : bool array;
       (** M6-T22 / D-0138: [propagate]'s seed marks and queue membership, by id, kept
@@ -590,6 +603,10 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
       wv2 = Array.make (Array.length triggers) (-1);
       wp1 = Array.make (Array.length triggers) (-1);
       wp2 = Array.make (Array.length triggers) (-1);
+      births = [];
+      newborns = List.rev_map (fun (i : Propagator.instance) -> i.Propagator.id) instances;
+      heap = Array.make (Array.length triggers) 0;
+      heap_len = 0;
       dirty = Array.make (Array.length triggers) false;
       in_queue = Array.make (Array.length triggers) false;
     }
@@ -718,7 +735,9 @@ let add ?(trigger = default_trigger) (t : t) (inst : Propagator.instance) =
      seeded by the next [propagate] whatever else changed, and after any later backjump
      to a fixpoint older than the one it is born at. *)
   t.born <- room t.born id unborn;
-  t.born.(id) <- unborn
+  t.born.(id) <- unborn;
+  t.newborns <- id :: t.newborns;
+  t.heap <- room t.heap id 0
 
 (* The variables an instance watches, or [None] if this engine has no such instance.
 
@@ -1413,7 +1432,48 @@ let check_consistency_exn (t : t) (store : Store.t) : unit =
    the end. A starved instance is caught at the slot it was skipped at, before any later
    wake could cover it up. *)
 
-let seed_dirty t store ~since ~epoch ~(dirty : bool array) =
+(* M6-T22: the seed's min-heap of dirty ids ([t.heap]). *)
+let heap_push t id =
+  let h = t.heap in
+  let rec up i =
+    if i > 0 then
+      let p = (i - 1) / 2 in
+      if h.(p) > id then (
+        h.(i) <- h.(p);
+        up p)
+      else h.(i) <- id
+    else h.(i) <- id
+  in
+  up t.heap_len;
+  t.heap_len <- t.heap_len + 1
+
+let heap_pop t =
+  let h = t.heap in
+  let top = h.(0) in
+  let len = t.heap_len - 1 in
+  t.heap_len <- len;
+  (if len > 0 then
+     let x = h.(len) in
+     let rec down i =
+       let l = (2 * i) + 1 in
+       if l >= len then h.(i) <- x
+       else
+         let c = if l + 1 < len && h.(l + 1) < h.(l) then l + 1 else l in
+         if h.(c) < x then (
+           h.(i) <- h.(c);
+           down c)
+         else h.(i) <- x
+     in
+     down 0);
+  top
+
+(* Mark [id] dirty for this call's seed: the flag and the heap together. *)
+let mark_dirty t id =
+  if not t.dirty.(id) then (
+    t.dirty.(id) <- true;
+    heap_push t id)
+
+let seed_dirty t store ~since ~epoch =
   let n = t.count in
   let mark change v id =
     if id >= 0 && id < n && wakes_on (trigger_of t id) change then
@@ -1421,7 +1481,7 @@ let seed_dirty t store ~since ~epoch ~(dirty : bool array) =
          state: [propagate] seeds it whatever it says, so its advisor is not
          asked -- and under BAGUETTE_DEBUG not checked, since a run of it is
          EXPECTED to prune (I-P7 is a contract between runs). *)
-      if t.born.(id) > epoch || advises t store id v then dirty.(id) <- true
+      if t.born.(id) > epoch || advises t store id v then mark_dirty t id
   in
   for i = Store.trail_length store - 1 downto since do
     let e : Store.entry = Store.trail_entry store i in
@@ -1495,10 +1555,16 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
           match t.fixpoints with
           | [] -> -1
           | (since, e) :: _ ->
-              seed_dirty t store ~since ~epoch:e ~dirty;
-              for id = 0 to n - 1 do
-                if t.born.(id) > e then dirty.(id) <- true
-              done;
+              seed_dirty t store ~since ~epoch:e;
+              (* Rule (b): every id with [born > e], read off [births] (M6-T22). *)
+              List.iter (mark_dirty t) t.newborns;
+              let rec young = function
+                | (b, ids) :: rest when b > e ->
+                    List.iter (mark_dirty t) ids;
+                    young rest
+                | _ -> ()
+              in
+              young t.births;
               e)
       | _ ->
           t.seen <-
@@ -1506,7 +1572,13 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
           t.fixpoints <- [];
           -1
     in
-    if since_epoch < 0 then Array.fill dirty 0 n true;
+    if since_epoch < 0 then (
+      (* Every slot: an ascending array is already a min-heap. *)
+      Array.fill dirty 0 n true;
+      for id = 0 to n - 1 do
+        t.heap.(id) <- id
+      done;
+      t.heap_len <- n);
     let in_queue = t.in_queue in
     let queue = Queue.create () in
     let enqueue id =
@@ -1517,7 +1589,7 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
     (* Seed slots below [cursor] have been passed; a wake for one at or above it is a
        wake the full seed's queue would have deduplicated (rule (c) above). *)
     let cursor = ref 0 in
-    let wake id = if id >= !cursor && id < n then dirty.(id) <- true else enqueue id in
+    let wake id = if id >= !cursor && id < n then mark_dirty t id else enqueue id in
     let conflict = ref None in
     (* M6-T21: set by the poll at the end of a completed [Fixpoint] run. The poll also
        ENDS both loops itself -- the cursor to [n], the queue emptied -- rather than the
@@ -1541,7 +1613,10 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
               if stop () then (
                 stopped := true;
                 (* M6-T22: the slots and the queue this abandons, cleared. *)
-                Array.fill dirty !cursor (n - !cursor) false;
+                for i = 0 to t.heap_len - 1 do
+                  dirty.(t.heap.(i)) <- false
+                done;
+                t.heap_len <- 0;
                 cursor := n;
                 Queue.iter (fun id -> in_queue.(id) <- false) queue;
                 Queue.clear queue))
@@ -1576,18 +1651,30 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
              says. Not on the [Conflict] arm: that call is leaving anyway. *)
           poll ()
     in
+    (* The slots [!cursor .. upto - 1] are passed CLEAN: counted, and under
+       BAGUETTE_DEBUG run by [check_skip], exactly as the slot-by-slot walk did. *)
+    let pass_clean upto =
+      t.ctr.c_skipped <- t.ctr.c_skipped + (upto - !cursor);
+      if Debug.enabled then
+        for q = !cursor to upto - 1 do
+          check_skip t.instances.(q) store
+        done
+    in
     let loops () =
-      while Option.is_none !conflict && !cursor < n do
-        let id = !cursor in
-        incr cursor;
-        if dirty.(id) then (
-          dirty.(id) <- false;
-          t.ctr.c_seeded <- t.ctr.c_seeded + 1;
-          run_one id)
-        else (
-          t.ctr.c_skipped <- t.ctr.c_skipped + 1;
-          if Debug.enabled then check_skip t.instances.(id) store)
+      (* M6-T22: the seed walks the dirty slots in id order off [t.heap] -- the same
+         runs, in the same order, as the walk over every slot, which cost O(n) per call
+         on a learned database of n. *)
+      while Option.is_none !conflict && t.heap_len > 0 do
+        let id = heap_pop t in
+        pass_clean id;
+        cursor := id + 1;
+        dirty.(id) <- false;
+        t.ctr.c_seeded <- t.ctr.c_seeded + 1;
+        run_one id
       done;
+      if Option.is_none !conflict then (
+        pass_clean n;
+        cursor := n);
       while Option.is_none !conflict && not (Queue.is_empty queue) do
         let id = Queue.pop queue in
         in_queue.(id) <- false;
@@ -1599,10 +1686,14 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
        can leave anything. Both are cleared here, so the next call starts all false. *)
     (match loops () with
     | () ->
-        if !cursor < n then Array.fill dirty !cursor (n - !cursor) false;
+        for i = 0 to t.heap_len - 1 do
+          dirty.(t.heap.(i)) <- false
+        done;
+        t.heap_len <- 0;
         Queue.iter (fun id -> in_queue.(id) <- false) queue
     | exception e ->
         Array.fill dirty 0 n false;
+        t.heap_len <- 0;
         Array.fill in_queue 0 n false;
         raise e);
     (* Reset the low-water mark HERE, at the end of the call, and not only at its start:
@@ -1633,9 +1724,16 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
         if t.incremental then (
           let e = t.epoch + 1 in
           t.epoch <- e;
-          for id = 0 to n - 1 do
-            if t.born.(id) > since_epoch then t.born.(id) <- e
-          done;
+          (* Every id with [born > since_epoch] is born at [e]: [newborns] and the head
+             of [births] down to [since_epoch], merged into one entry (M6-T22). *)
+          let rec take acc = function
+            | (b, ids) :: rest when b > since_epoch -> take (List.rev_append ids acc) rest
+            | rest -> (acc, rest)
+          in
+          let merged, rest = take t.newborns t.births in
+          List.iter (fun id -> t.born.(id) <- e) merged;
+          t.births <- (if merged = [] then rest else (e, merged) :: rest);
+          t.newborns <- [];
           let len = Store.trail_length store in
           t.fixpoints <-
             (match t.fixpoints with
