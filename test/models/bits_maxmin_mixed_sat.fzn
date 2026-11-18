@@ -1,10 +1,12 @@
 % M8-bits-encoding-T3 (D-0134, probe e1): the MIXED selector shape. m has width 1 and stays
-% on the order ladder at every W; a goes on bits at `--bits-above 0` and `8`, b at 0 only.
-% At the root only a can reach lo(m) = 4, so R4 pushes a >= 4 from two declared facts;
-% a = 4 then lets R3 cap m. The bridges of m are D-0132's `rup` pairs, a's the `red` pair.
+% on the order ladder at every W; a and c go on bits at `--bits-above 0` and `8`, b at 0
+% only. c <= a + 1, so a = 0, 1, 2 each leave every operand below lo(m) = 4: a Maxmin
+% conflict whose `pol` cites m's D-0132 `rup` bridge pair beside the operands' `red`
+% pairs. a = 3 leaves c the only operand that can reach 4, so R4 pushes c >= 4.
 var 4..5: m :: output_var;
 var 0..9: a :: output_var;
 var 0..3: b :: output_var;
-constraint array_int_maximum(m, [a, b]);
-constraint int_lin_le([1, 1], [a, b], 11);
-solve :: int_search([a, m, b], input_order, indomain_min, complete) satisfy;
+var 0..9: c :: output_var;
+constraint array_int_maximum(m, [a, b, c]);
+constraint int_lin_le([1, -1], [c, a], 1);
+solve :: int_search([a, m, b, c], input_order, indomain_min, complete) satisfy;
