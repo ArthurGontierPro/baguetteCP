@@ -754,90 +754,7 @@ let pack_div_guard (p : Reif_lin_le.t) : pending =
 let pack_abs_guard (p : Reif_lin_le.t) : pending =
   pack_reif_as (module Arith.Abs_guard : Propagator.S with type t = Reif_lin_le.t) p
 
-(* ======================================================================== M7-T29
-   M7-T28 / M7-T29 (D-0146): the globals block. Everything this file does for them is in
-   this block and in the dispatch arms that call it, so that the encoding work other
-   sessions do on the rest of the file does not meet it.
-   ======================================================================== *)
-
-(* `fzn_global_cardinality` with the SAME VARIABLE twice among its movable operands.
-
-   MiniZinc produces it by unification: community-detection's must-link constraints
-   `x[a] = x[b]` make two array cells one variable, and the gcc over x then names it
-   twice (D-0121: nine Challenge instances, all refused). Its tally contribution is the
-   number of occurrences, and every cancellation in lib/core/prop/gcc.ml's derivations
-   assumes one (the header of that module: an ALO line per confined variable, a drop
-   line per other). Teaching gcc.ml multiplicities would touch every rule and every
-   derivation of a 1 200-line module whose proofs are measured line by line.
-
-   So the repeat is NORMALISED AWAY here, before the store exists, and gcc.ml never sees
-   one: every occurrence after the first is replaced by a FRESH variable declared on the
-   original's domain (a set domain included, whose holes then get their own [Ne]
-   instances like any declared set), tied to it by an ordinary `int_eq`. The model this
-   produces is the original with one defined variable per repeat, so the .opb is a
-   faithful encoding of the FlatZinc file and every solution extends to it uniquely.
-   What it costs is propagation strength between the copies: `int_eq` is [Lin_eq],
-   bounds consistent, so a hole gcc punches in a copy does not travel to the original
-   (or back). That is weaker, never unsound, and it is the right trade for a shape that
-   occurs on a constraint the instances in question state with bounds [0, n] -- which
-   prunes nothing.
-
-   The copies are appended after every model variable, so no existing index moves, and
-   a model with no repeat comes back PHYSICALLY unchanged: every byte of its .opb, .pbp
-   and output is what it was. A copy is named `X_INTRODUCED_gcc_copy_<k>`, the
-   flattener's own convention; [check_name_collisions] runs after this and refuses a
-   model that already uses the name. A FIXED operand (a constant, or a variable declared
-   on one value) is folded by [post_global_cardinality] and is never a term, so it is
-   never copied. *)
-let split_gcc_repeats (m : Model.t) : Model.t =
-  let n0 = Array.length m.Model.vars in
-  let fresh_rev = ref [] and defs_rev = ref [] in
-  let fixed i =
-    let lo, hi = bounds_of_domain m.Model.vars.(i) in
-    lo = hi
-  in
-  let copy pos i =
-    let j = n0 + List.length !fresh_rev in
-    let v = m.Model.vars.(i) in
-    fresh_rev :=
-      { v with Model.v_name = Printf.sprintf "X_INTRODUCED_gcc_copy_%d" (j - n0) }
-      :: !fresh_rev;
-    defs_rev :=
-      { Model.k = Model.Int_eq (Model.Var i, Model.Var j); c_pos = pos } :: !defs_rev;
-    Model.Var j
-  in
-  let rewrite (c : Model.constr) =
-    match c.Model.k with
-    | Model.Global_cardinality (xs, cover, counts) ->
-        let seen = Hashtbl.create 16 in
-        let xs' =
-          List.map
-            (fun op ->
-              match op with
-              | Model.Var i when not (fixed i) ->
-                  if Hashtbl.mem seen i then copy c.Model.c_pos i
-                  else (
-                    Hashtbl.replace seen i ();
-                    op)
-              | _ -> op)
-            xs
-        in
-        { c with Model.k = Model.Global_cardinality (xs', cover, counts) }
-    | _ -> c
-  in
-  let constraints = List.map rewrite m.Model.constraints in
-  if !fresh_rev = [] then m
-  else
-    {
-      m with
-      Model.vars = Array.append m.Model.vars (Array.of_list (List.rev !fresh_rev));
-      constraints = constraints @ List.rev !defs_rev;
-    }
-
-(* ======================================================================== end M7-T29 *)
-
 let compile (m : Model.t) : t =
-  let m = split_gcc_repeats m in
   (* M5-T1. Resolved to a model variable index and a direction, or refused. The
      ENCODING half of it happens further down, once the variable is declared: an
      objective line is the order encoding of that variable and cannot be written before
@@ -1160,9 +1077,9 @@ let compile (m : Model.t) : t =
          cancellation in gcc.ml assumes 1. all_different can let a repeat through
          because its pairwise decomposition refutes it; there is no such decomposition
          here, so it is refused rather than mis-counted. SINCE M7-T29 (D-0146) THIS IS A
-         GUARD, NOT A PATH: [split_gcc_repeats] replaces every repeat by a copy tied with
-         `int_eq` before the store exists, so [compile] never reaches it; a caller that
-         posts a gcc by another route still meets the refusal rather than a miscount. *)
+         GUARD, NOT A PATH: [Builder.split_gcc_repeats] replaces every repeat by a copy
+         tied with `int_eq` in the model itself, so a parsed model never reaches it; a
+         [Model.t] built by other means still meets the refusal rather than a miscount. *)
   let post_global_cardinality pos (xs : Model.operand list) (cover : int array)
       (counts : Model.operand list) =
     if Array.length cover <> List.length counts then

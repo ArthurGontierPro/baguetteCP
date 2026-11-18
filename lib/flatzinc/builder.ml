@@ -1357,6 +1357,89 @@ let add_item st (item : Ast.item) =
       else st.deferred_rev <- c :: st.deferred_rev
   | Ast.Solve (kind, annots, pos) -> st.solve <- Some (kind, annots, pos)
 
+(* ======================================================================== M7-T29
+   `fzn_global_cardinality` with the SAME VARIABLE twice among its movable operands
+   (D-0146 section 2).
+
+   MiniZinc produces it by unification: community-detection's must-link constraints
+   `x[a] = x[b]` make two array cells one variable, and the gcc over x then names it
+   twice (D-0121: nine Challenge instances, all refused). Its tally contribution is the
+   number of occurrences, and every cancellation in lib/core/prop/gcc.ml's derivations
+   assumes one (that module's header: an ALO line per confined variable, a drop line per
+   other). Teaching gcc.ml multiplicities would touch every rule and every derivation of
+   a 1 200-line module whose proofs are measured line by line.
+
+   So the repeat is NORMALISED AWAY, in the model itself, and gcc.ml never sees one:
+   every occurrence after the first is replaced by a FRESH variable declared on the
+   original's domain (a set domain included, whose holes then get their own [Ne]
+   instances like any declared set), tied to it by an ordinary `int_eq`. The result is
+   the original model with one defined variable per repeat, so the .opb is a faithful
+   encoding of the FlatZinc file and every solution extends to it uniquely. It is done
+   HERE and not in lib/flatzinc/compile.ml because bin/main.ml maps the store back onto
+   [Model.vars] to print a solution: a variable compile.ml added would be a store
+   variable the model does not have (measured: "solver variable 2 is outside the model's
+   2 variables").
+
+   What it costs is propagation strength between the copies: `int_eq` is [Lin_eq], bounds
+   consistent, so a hole gcc punches in a copy does not travel to the original (or back).
+   That is weaker, never unsound, and the right trade for a shape the instances that
+   produce it state with bounds [0, n], which prune nothing.
+
+   The copies are appended after every model variable, so no index moves, and a model
+   with no repeat comes back PHYSICALLY unchanged: every byte of its .opb, .pbp and
+   output is what it was. A copy is named `X_INTRODUCED_gcc_copy_<k>`, the flattener's own
+   convention; lib/flatzinc/compile.ml's [check_name_collisions] refuses a model that
+   already uses the name. A FIXED operand (a constant, or a variable declared on one
+   value) is folded by compile.ml's [post_global_cardinality] and is never a term of
+   anything, so it is never copied. *)
+let split_gcc_repeats (m : Model.t) : Model.t =
+  let n0 = Array.length m.Model.vars in
+  let fresh_rev = ref [] and defs_rev = ref [] in
+  let fixed i =
+    match m.Model.vars.(i).Model.v_dom with
+    | Model.Drange (lo, hi) -> lo = hi
+    | Model.Dset [ _ ] -> true
+    | Model.Dset _ | Model.Dbool -> false
+  in
+  let copy pos i =
+    let j = n0 + List.length !fresh_rev in
+    let v = m.Model.vars.(i) in
+    fresh_rev :=
+      { v with Model.v_name = Printf.sprintf "X_INTRODUCED_gcc_copy_%d" (j - n0) }
+      :: !fresh_rev;
+    defs_rev :=
+      { Model.k = Model.Int_eq (Model.Var i, Model.Var j); c_pos = pos } :: !defs_rev;
+    Model.Var j
+  in
+  let rewrite (c : Model.constr) =
+    match c.Model.k with
+    | Model.Global_cardinality (xs, cover, counts) ->
+        let seen = Hashtbl.create 16 in
+        let xs' =
+          List.map
+            (fun op ->
+              match op with
+              | Model.Var i when not (fixed i) ->
+                  if Hashtbl.mem seen i then copy c.Model.c_pos i
+                  else (
+                    Hashtbl.replace seen i ();
+                    op)
+              | _ -> op)
+            xs
+        in
+        if List.for_all2 ( == ) xs xs' then c
+        else { c with Model.k = Model.Global_cardinality (xs', cover, counts) }
+    | _ -> c
+  in
+  let constraints = List.map rewrite m.Model.constraints in
+  if !fresh_rev = [] then m
+  else
+    {
+      m with
+      Model.vars = Array.append m.Model.vars (Array.of_list (List.rev !fresh_rev));
+      constraints = constraints @ List.rev !defs_rev;
+    }
+
 (* After the last item. The deferred constraints are built here, after inference; a
    variable that stays unbounded is refused AFTER, so a malformed constraint still
    reports its own error first (M7-T19, D-0083). *)
@@ -1380,13 +1463,14 @@ let finish st : Model.t =
     | Ast.Maximize e -> Model.Maximize (operand env solve_pos e)
   in
   let search = List.filter_map (search_of_annot env solve_pos) solve_annots in
-  {
-    Model.vars = Array.of_list (List.rev env.vars_rev);
-    constraints = List.rev st.built_rev;
-    objective;
-    search;
-    output = List.rev env.outputs_rev;
-  }
+  split_gcc_repeats
+    {
+      Model.vars = Array.of_list (List.rev env.vars_rev);
+      constraints = List.rev st.built_rev;
+      objective;
+      search;
+      output = List.rev env.outputs_rev;
+    }
 
 let of_lexer lx =
   let st = create () in
