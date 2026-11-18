@@ -19,6 +19,9 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M6-T22 | `lib/core/engine.ml`, `lib/core/store.ml`, `lib/core/domain.ml`, `lib/core/prop/clause.ml`, `lib/core/prop/pb.ml`, `lib/core/prop/bool2int.ml`, `lib/core/prop/linear.ml`, `lib/core/prop/lin_eq.ml`, `lib/proof/writer.ml` (the write path only), their unit tests, `docs/DECISIONS.md` (D-0138 appended), `docs/ROADMAP.md` M6-T22 row. NOT `search.ml` (M10-T1), `retention.ml` (M10-T4), `learn.ml`/`trace.ml`/`justify.ml`/`pb_analysis.ml` (M8-T3) | agent-pernode (`wave45-pernode`) | 2026-11-18 |
+| M10-search-strategy-T1, then T2 and T3 | `docs/DECISIONS.md` (D-0137 appended), `docs/SPEC.md` §3.4 (the restart amendment), `docs/ROADMAP.md` M10 rows T1-T3, `lib/core/search.ml` (restarts, phase saving, branching), a new `lib/core/activity.ml` (+ `docs/ARCHITECTURE.md` §1 and `CLAUDE.md`'s map), `lib/core/analysis.ml` (activity bumps, if needed), `bin/main.ml` (flags), `test/unit/test_search*.ml`/`test_learn.ml`/`test_endtoend.ml`, new `test/models/*restart*`/`*activity*` + `test/expected/` | agent-strategy (`wave45-strategy`) | 2026-11-18 |
+| M10-search-strategy-T4 | `lib/core/retention.ml`, `lib/core/learned.ml` (an LBD field if needed), `bin/main.ml` (the policy flag only), `test/unit/test_retention.ml`, `docs/DECISIONS.md` (D-0139 appended), `docs/ROADMAP.md` M10-T4 row | agent-retention (`wave45-retention`) | 2026-11-18 |
 | M8-bits-encoding-T3 | design record D-0134 first (`docs/DECISIONS.md` appended), then `lib/proof/encoding.ml`, `lib/proof/lit.ml`, `lib/core/prop/maxmin.ml`, `lib/core/prop/ne.ml`, `lib/core/prop/arith.ml` if reached, `lib/core/pb_analysis.ml`, `lib/core/ladder.ml`, `lib/core/learn.ml`, `lib/core/trace.ml`, `lib/core/justify.ml`, `lib/flatzinc/compile.ml` (eligibility releases), `bin/main.ml` (`--stats`), their tests under `test/unit/`, new `test/models/bits_*.fzn` + `test/expected/`, `docs/PROOF-FORMAT.md` §3/§4 (bits paragraphs), `docs/ROADMAP.md` T3 row, `docs/INVARIANTS.md` if an invariant is added | agent-t3 (`wave44-t3`) | 2026-11-16 |
 
 ## Cross-session requests
@@ -288,6 +291,11 @@ Two separate findings.
    assignment trail in CDCL solvers"). On the proof side a restart is a backjump to level 0 (or to the
    kept level) and writes nothing new, but D-0045 found that `Writer.wipe_level` and learned-constraint
    lifetimes interact with it, so that finding is the place to start.
+
+   Status 2026-11-18 (orchestrator): dispatched. Point 1 is M6-T22 (`wave45-pernode`), points 2 and 4
+   are M10-search-strategy-T1 to T3 (`wave45-strategy`), point 3 is M10-search-strategy-T4
+   (`wave45-retention`). The 24 kept `.fzn.gz`, their logs and `heur.sh` were copied read-only to
+   `fataepyc-06:/scratch/arthur/codes-bench/`.
 
 ## Completed
 
