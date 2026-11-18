@@ -1841,7 +1841,10 @@ let test_bits_eligibility () =
       check "bits elig: n (int_ne) and m (int_lin_ne) released by T3 and on bits"
         (on "n" && on "m");
       check "bits elig: h has holes and stays order" (not (on "h"));
-      check "bits elig: r, s held by int_eq_reif" ((not (on "r")) && not (on "s"));
+      (* M8-bits-encoding-T3 continuation (D-0134 section 8): int_eq_reif holds nothing
+         any more; r and s go on bits, f is a bool and stays order by rule. *)
+      check "bits elig: r, s released by T3 (int_eq_reif) and on bits"
+        (on "r" && on "s" && not (on "f"));
       check "bits elig: q held by bool2int" (not (on "q"));
       check "bits elig: g, cnt held by gcc" ((not (on "g")) && not (on "cnt"));
       (* M8-bits-encoding-T3 (D-0134 section 2.5): maxmin holds nothing any more. mx and
@@ -1853,12 +1856,12 @@ let test_bits_eligibility () =
         (n "alldiff" = 2
         && n "int_ne" = 0
         && n "holes" = 1
-        && n "int_eq_reif" = 2
+        && n "int_eq_reif" = 0
         && n "bool2int" = 1
         && n "gcc" = 2
         && n "maxmin" = 0);
-      check "bits elig: exactly six variables went on bits (e, mx, k, c, n, m)"
-        ((Encoding.cost enc).Encoding.c_bits_vars = 6);
+      check "bits elig: exactly eight variables went on bits (e, mx, k, c, n, m, r, s)"
+        ((Encoding.cost enc).Encoding.c_bits_vars = 8);
       check "bits elig: the maxmin scope posted ONE choice group of two selectors"
         ((Encoding.cost enc).Encoding.c_choices = 1
         && List.length

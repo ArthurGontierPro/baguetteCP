@@ -2693,8 +2693,13 @@ let add_int_lin_le_reif_rows t terms rhs ~reifier =
 
    A and B are [expand_int_lin_ne]'s own pair with one more guard term, and the
    auxiliary Boolean is the same .opb-only one a plain [int_lin_ne] uses: nothing
-   propagates over it and nothing cites A or B, exactly as lib/core/prop/ne.ml
-   describes for the unguarded pair. LE and GE ARE cited, so their ids come back.
+   propagates over it. LE and GE are cited by the enforce-hold face, so their ids come
+   back; since M8-bits-encoding-T3 (D-0134 section 8) A and B come back too, with their
+   big-Ms, because over a BITS scope the disequality face's nogood is DERIVED through
+   them (lib/core/prop/reif_lin_eq.ml), as lib/core/prop/ne.ml derives through the
+   unguarded pair. The guard term on the reifier is [-big] in A and B when [pos] (the
+   disequality side speaks at b = 0) and [+big] otherwise; that is [guard_row]'s rule,
+   and the caller reads it from [pos] rather than from a second copy of the numbers.
 
    **Why no [p] and [q].** D-0053 left open where the `p <-> (sum<=c)`,
    `q <-> (sum>=c)`, `b <-> p /\ q` decomposition's two fresh reifiers should live.
@@ -2706,6 +2711,17 @@ let add_int_lin_le_reif_rows t terms rhs ~reifier =
    bin/main.ml's [assignment_values] rejects any solver variable outside the model's
    own -- so the decomposition is not merely redundant here, it is not reachable
    without a change on the other side of that bridge. *)
+type eq_reif_rows = {
+  le_id : cid;
+  ge_id : cid;
+  k_le : int;
+  k_ge : int;
+  a_id : cid;
+  b_id : cid;
+  big_a : int;
+  big_b : int;
+}
+
 let add_int_lin_eq_reif t terms rhs ~reifier ~pos =
   check_lin_ne_computable t terms rhs ~what:"Encoding.add_int_lin_eq_reif";
   ensure_reif_bool t reifier;
@@ -2746,9 +2762,9 @@ let add_int_lin_eq_reif t terms rhs ~reifier ~pos =
      is checked against and a missing row there is a relaxation of the model. *)
   let le_id = add_int_lin_le t le_terms le_rhs in
   let ge_id = add_int_lin_le t ge_terms ge_rhs in
-  ignore (add_int_lin_le t a_terms a_rhs : cid);
-  ignore (add_int_lin_le t b_terms b_rhs : cid);
-  (le_id, ge_id, k_le, k_ge)
+  let a_id = add_int_lin_le t a_terms a_rhs in
+  let b_id = add_int_lin_le t b_terms b_rhs in
+  { le_id; ge_id; k_le; k_ge; a_id; b_id; big_a; big_b }
 
 (* ---------------------------------------------------------------------------
    Views (M4-T0)

@@ -1673,6 +1673,52 @@ solve :: int_search([z, x, y], input_order, indomain_max, complete) satisfy;
           ~knob:(knob ~site:"[resolve]" Writer.Mutation.Drop_literal)
           "drop-literal");
 
+    (* -- M8-bits-encoding-T3 continuation: int_eq_reif / int_ne_reif over bits
+       (D-0134 section 8) --------------------------------------------------------------
+       test/models/bits_reif_eq_sat.fzn (inlined), SATISFIABLE, solved in its own search
+       order. The first "[resolve]" line is the interior hole x <> 2 that b = 0 and y = 2
+       make through b <-> (x = y): the guarded A/B pair, each half with the reifier as one
+       more term, resolved on the selector and pinned by `ia` to a clause carrying the
+       reifier's literal. Each corruption is refused at the `ia`. *)
+    let reif_src =
+      {|
+var 0..9: x :: output_var;
+var 0..9: y :: output_var;
+var 0..9: z :: output_var;
+var bool: b :: output_var;
+var bool: e :: output_var;
+var bool: d :: output_var;
+constraint int_eq_reif(x, y, b);
+constraint int_lin_le([1, -1], [x, y], 2);
+constraint int_lin_le([-1], [y], -2);
+constraint int_eq_reif(x, z, e);
+constraint int_lin_eq([1], [z], 1);
+constraint int_ne_reif(x, 4, d);
+solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), int_search([x], input_order, indomain_max, complete)]) satisfy;
+|}
+    in
+    let b, outcome = solve_bits_src reif_src ~name:"bits_reif" () in
+    check "bits_reif: the solver solves it (the instance is what we think it is)"
+      (match outcome with Search.Sat _ -> true | Search.Unsat -> false);
+    check "bits_reif: the reified equalities are on bits (a guarded `_ne` row over bits)"
+      (contains (read_file b.opb) "_ne0_ge_1" && contains (read_file b.opb) "x_bit_0");
+    check "bits_reif: a derived line pins a clause naming the reifier b"
+      (contains (read_file b.pbp) "b_ge_1");
+    let build_reif ~name ~mutation = fst (solve_bits_src reif_src ~mutation ~name ()) in
+    gated ~tag:"bits_reif"
+      ~control:(fun () -> control_holds ~tag:"bits_reif" ~proof:b.pbp)
+      ~declares:[ "pol-cite"; "truncate"; "drop-literal" ]
+      (fun c ->
+        emitter_lane c ~build:build_reif ~expect:`Rejects
+          ~knob:(knob ~site:"[resolve]" Writer.Mutation.Swap_citation)
+          "pol-cite";
+        emitter_lane c ~build:build_reif ~expect:`Rejects
+          ~knob:(knob ~site:"[resolve]" Writer.Mutation.Truncate_derivation)
+          "truncate";
+        emitter_lane c ~build:build_reif ~expect:`Rejects
+          ~knob:(knob ~site:"[resolve]" Writer.Mutation.Drop_literal)
+          "drop-literal");
+
     (* -- the harness's own guards -------------------------------------------- *)
     (* A mutation that rewrote nothing would make every lane green against the control's
        own proof. mutate_proof.sh calls that out rather than running veripb on an

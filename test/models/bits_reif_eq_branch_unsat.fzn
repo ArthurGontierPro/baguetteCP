@@ -1,0 +1,14 @@
+% M8-bits-encoding-T3 continuation (D-0134 section 8): reif_eq_branch_unsat.fzn over BITS.
+% b <-> (x = y) and b <-> (x <> y) at once is unsatisfiable, and nothing about it is
+% visible at level 0, so the search branches on b and every conflict below sits under that
+% decision: the reifier's literal is load-bearing in every derived line (D-0057's finding,
+% which this model carries to the bits arm). x and y are over 0..2 (width 2), so on bits
+% at `--bits-above 0`: under b = 1 the int_ne_reif's disequality piece and the
+% int_eq_reif's rows clash; under b = 0 the int_eq_reif's disequality piece and the
+% int_ne_reif's rows do, each piece a two-half `pol` with the reifier as one more term.
+var bool: b :: output_var;
+var 0..2: x :: output_var;
+var 0..2: y :: output_var;
+constraint int_eq_reif(x, y, b);
+constraint int_ne_reif(x, y, b);
+solve satisfy;
