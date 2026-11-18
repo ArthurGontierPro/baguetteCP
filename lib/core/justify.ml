@@ -331,6 +331,23 @@ let rec shallow_hash (e : Explanation.t) =
    line was written at. See the module header's "claim index". *)
 type stated = { s_cid : Writer.cid; s_level : int }
 
+(* M11-complexity-T5 (D-0145, D-0140 J2). The claim index's table. It was a polymorphic
+   [Hashtbl] keyed by the sorted literal list: the C hash stops after ten meaningful words,
+   which is about three literals, so clauses that agree on their first literals shared a
+   bucket, and the equality was [compare_val] over the lists. Now the hash mixes every
+   literal ([lit_hash]) and the equality is [Lit.equal] element by element, which is the
+   structural equality the polymorphic table used ([Lit.t] is strings, ints and a bool).
+   Nothing iterates this table, so only the cost of a lookup changes. *)
+module Claims = Hashtbl.Make (struct
+  type t = Lit.t list
+
+  let equal = List.equal Lit.equal
+
+  let hash ls =
+    let rec go h = function [] -> h | l :: rest -> go (mix h (lit_hash l)) rest in
+    finish (go 8 ls)
+end)
+
 type ctx = {
   writer : Writer.t;
   encoding : Encoding.t;
@@ -338,8 +355,10 @@ type ctx = {
       (* Boxed behind a ref for the same reason it always was -- it is proof state,
          shared by every view of the same writer -- although since M1-T31 removed
          [for_constraint] there is only ever one view. *)
-  stated : (Lit.t list, stated) Hashtbl.t;
-  stated_by_level : (int, Lit.t list list) Hashtbl.t; (* M6-T17: keys each level stated *)
+  stated : stated Claims.t;
+  mutable stated_by_level : Lit.t list list array;
+      (* M6-T17: the keys each level stated, indexed by level. Level 0 is not recorded
+         (M11-complexity-T5): no wipe reaches it. *)
   mutable stated_hi : int;
       (* M2-T9. Clause (as a sorted literal set) -> the line that states it. Read by
          [defining_line] and [defining_lit], written by every clause this module puts on
@@ -351,8 +370,8 @@ let create ~writer ~encoding =
     writer;
     encoding;
     memo = { tbl = Itbl.create 1024; by_level = Array.make 16 []; memo_hi = -1 };
-    stated = Hashtbl.create 64;
-    stated_by_level = Hashtbl.create 16;
+    stated = Claims.create 64;
+    stated_by_level = Array.make 16 [];
     stated_hi = -1;
   }
 
@@ -425,16 +444,14 @@ let wipe_level ctx level =
             | b -> Itbl.replace m.tbl h b))
       (List.sort_uniq Int.compare !hs));
   for l = level to ctx.stated_hi do
-    match Hashtbl.find_opt ctx.stated_by_level l with
-    | None -> ()
-    | Some keys ->
-        Hashtbl.remove ctx.stated_by_level l;
-        List.iter
-          (fun k ->
-            match Hashtbl.find_opt ctx.stated k with
-            | Some (s : stated) when s.s_level >= level -> Hashtbl.remove ctx.stated k
-            | _ -> ())
-          keys
+    let keys = ctx.stated_by_level.(l) in
+    ctx.stated_by_level.(l) <- [];
+    List.iter
+      (fun k ->
+        match Claims.find_opt ctx.stated k with
+        | Some (s : stated) when s.s_level >= level -> Claims.remove ctx.stated k
+        | _ -> ())
+      keys
   done;
   if ctx.stated_hi >= level then ctx.stated_hi <- level - 1
 
@@ -472,18 +489,23 @@ let clause_key (lits : Lit.t list) : Lit.t list option =
    (Within one [Trace.emit] the trail is walked oldest first, so levels arrive
    non-decreasing and this is almost always the first writer anyway; the comparison is
    here so that "almost always" is not what the index rests on.) *)
+let state_key ctx key (cid : Writer.cid) =
+  let level = Writer.current_level ctx.writer in
+  match Claims.find_opt ctx.stated key with
+  | Some s when s.s_level <= level -> ()
+  | _ ->
+      Claims.replace ctx.stated key { s_cid = cid; s_level = level };
+      if level > 0 then (
+        if level >= Array.length ctx.stated_by_level then (
+          let n = Array.length ctx.stated_by_level in
+          let a = Array.make (Stdlib.max (level + 1) (2 * n)) [] in
+          Array.blit ctx.stated_by_level 0 a 0 n;
+          ctx.stated_by_level <- a);
+        ctx.stated_by_level.(level) <- key :: ctx.stated_by_level.(level);
+        if level > ctx.stated_hi then ctx.stated_hi <- level)
+
 let state_clause ctx (lits : Lit.t list) (cid : Writer.cid) =
-  match clause_key lits with
-  | None -> ()
-  | Some key -> (
-      let level = Writer.current_level ctx.writer in
-      match Hashtbl.find_opt ctx.stated key with
-      | Some s when s.s_level <= level -> ()
-      | _ ->
-          Hashtbl.replace ctx.stated key { s_cid = cid; s_level = level };
-          Hashtbl.replace ctx.stated_by_level level
-            (key :: Option.value (Hashtbl.find_opt ctx.stated_by_level level) ~default:[]);
-          if level > ctx.stated_hi then ctx.stated_hi <- level)
+  match clause_key lits with None -> () | Some key -> state_key ctx key cid
 
 (* [defining_line ctx lits] is the id of a line already on the page that states exactly
    the clause [lits], and that a line written *now* may cite: it is at or below the
@@ -494,23 +516,23 @@ let state_clause ctx (lits : Lit.t list) (cid : Writer.cid) =
    this table and [Writer]'s live set have drifted, and the only thing that wipes either
    is [wipe_level], which does both. Making it a fallback would also make *emission*
    depend on whether the audit is on, and the .pbp must not. *)
+let defining_key ctx key : Writer.cid option =
+  match Claims.find_opt ctx.stated key with
+  | Some s when s.s_level <= Writer.current_level ctx.writer ->
+      if Writer.auditing ctx.writer && not (Writer.is_live ctx.writer s.s_cid) then
+        invalid_arg
+          (Printf.sprintf
+             "Justify.defining_line: the claim index names @c%d for `%s`, which the \
+              proof no longer contains -- the index and the writer's live set have \
+              drifted. Only [Justify.wipe_level] may retire either, and it retires both. \
+              See justify.ml's claim-index header and I-S4."
+             s.s_cid
+             (String.concat " " (List.map Lit.to_string key)))
+      else Some s.s_cid
+  | _ -> None
+
 let defining_line ctx (lits : Lit.t list) : Writer.cid option =
-  match clause_key lits with
-  | None -> None
-  | Some key -> (
-      match Hashtbl.find_opt ctx.stated key with
-      | Some s when s.s_level <= Writer.current_level ctx.writer ->
-          if Writer.auditing ctx.writer && not (Writer.is_live ctx.writer s.s_cid) then
-            invalid_arg
-              (Printf.sprintf
-                 "Justify.defining_line: the claim index names @c%d for `%s`, which the \
-                  proof no longer contains -- the index and the writer's live set have \
-                  drifted. Only [Justify.wipe_level] may retire either, and it retires \
-                  both. See justify.ml's claim-index header and I-S4."
-                 s.s_cid
-                 (String.concat " " (List.map Lit.to_string key)))
-          else Some s.s_cid
-      | _ -> None)
+  match clause_key lits with None -> None | Some key -> defining_key ctx key
 
 (* D-0009's missing field, and the whole reason the index exists.
 
@@ -598,7 +620,10 @@ let memoized ctx (e : Explanation.t) (thunk : unit -> Writer.cid) : Writer.cid =
    already retires by [live_ids] rather than by counting what it was handed. *)
 let emit_clause ctx lits =
   validate_lits ctx lits;
-  match defining_line ctx lits with
+  (* The key once (M11-complexity-T5, D-0140 J2): it was sorted by [defining_line] and
+     again by [state_clause]. *)
+  let key = clause_key lits in
+  match match key with None -> None | Some k -> defining_key ctx k with
   | Some cid -> cid
   | None ->
       (* The origin is rendered only if something reads it (D-0145, D-0140 J6): the
@@ -609,7 +634,7 @@ let emit_clause ctx lits =
             Printf.sprintf "clause(%s)" (String.concat " " (List.map Lit.to_string lits)))
           lits
       in
-      state_clause ctx lits cid;
+      (match key with None -> () | Some k -> state_key ctx k cid);
       cid
 
 (* A clause emitted outside the [Explanation.t] world entirely: docs/DECISIONS.md

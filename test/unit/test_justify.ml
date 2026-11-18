@@ -1773,6 +1773,36 @@ let test_memo_identity_m11t5 () =
   in
   expect_ok "m11t5 memo: no exception" r
 
+(* M11-complexity-T5 (D-0145, D-0140 J2): the claim index hashes every literal of the
+   key, where the polymorphic hash read about three. Clauses that agree on their first
+   literals and differ further on each keep their own line, and each is found again,
+   in whatever order its literals come. *)
+let test_index_long_keys_m11t5 () =
+  let _, r =
+    emitted (fun w ->
+        let e = Encoding.create () in
+        List.iter
+          (fun x -> Encoding.declare_int e x ~lo:0 ~hi:9)
+          [ "a"; "b"; "c"; "d"; "z" ];
+        Encoding.start_proof e w;
+        let ctx = Justify.create ~writer:w ~encoding:e in
+        let prefix = [ Lit.ge "a" 1; Lit.ge "b" 1; Lit.ge "c" 1; Lit.ge "d" 1 ] in
+        let clause v = prefix @ [ Lit.ge "z" v ] in
+        let ids =
+          List.init 9 (fun v -> Justify.emit_rup_clause ctx ~origin:"t" (clause (v + 1)))
+        in
+        let last = Writer.last_id w in
+        let found =
+          List.init 9 (fun v ->
+              Justify.emit ctx (Explanation.clause (List.rev (clause (v + 1)))))
+        in
+        check
+          "m11t5 index: nine clauses sharing four literals, each found as its own line"
+          (List.equal Int.equal ids found && Writer.last_id w = last);
+        Writer.delete_many w ids)
+  in
+  expect_ok "m11t5 index: no exception" r
+
 let () =
   test_model_row ();
   test_decision_has_no_id ();
@@ -1780,6 +1810,7 @@ let () =
   test_index_reuses_the_right_line ();
   test_index_is_structural ();
   test_index_ignores_clause_order ();
+  test_index_long_keys_m11t5 ();
   test_index_levels ();
   test_wipe_levels_scene ();
   test_defining_lit ();
