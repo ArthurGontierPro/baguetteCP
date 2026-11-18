@@ -1,0 +1,15 @@
+% M8-bits-encoding-T3 (D-0134): array_int_MINIMUM over bits -- the same selector shape over
+% the negated views, so its rows are `x_i - m + M_i b_i <= M_i` with M_i = dhi(x_i) -
+% dlo(m). m <= 2 by a row while x >= 3 and y >= 5, so z is the only operand that can
+% reach down to hi(m) and R4 (mirrored) pushes z <= 2; indomain_max then walks x down
+% through failed branches until x + y + z <= 12 admits x = y = 5.
+var 0..9: m :: output_var;
+var 0..9: x :: output_var;
+var 0..9: y :: output_var;
+var 0..9: z :: output_var;
+constraint array_int_minimum(m, [x, y, z]);
+constraint int_lin_le([-1], [x], -3);
+constraint int_lin_le([-1], [y], -5);
+constraint int_lin_le([1], [m], 2);
+constraint int_lin_le([1, 1, 1], [x, y, z], 12);
+solve :: int_search([m, z, x, y], input_order, indomain_max, complete) satisfy;
