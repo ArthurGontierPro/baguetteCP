@@ -14022,7 +14022,10 @@ MB, mspsp 1 287 to 1 487 MB, openshop 1 015 to 1 111 MB, measured on `8b96877`).
 are now one module-level set shared by every row, which is safe because two passes never overlap
 (pb.ml's header gives the argument), and a row whose (variable, polarity) groups are all single terms,
 every clause `Learn.minimise` produced, keeps no group arrays (its effective coefficient is its own
-coefficient while it is non-false). RESULT_MEM
+coefficient while it is non-false). The lane (232 runs) and the six at 10 000 nodes:
+every observation equal to the previous fix's. Instructions within 0.8 % either way (mspsp 90.24 to
+89.57 G, cyclic 68.57 to 68.82 G). Peak RSS at 10 000 nodes: rcpsp_11 146 to 129 MB, mspsp 330 to 306
+MB, and at 40 000 nodes section 10 has it within -1.7 % and +4.5 % of the reference.
 
 ### 4. E2 (a): one walk per learned-clause run (`prop/pb.ml`, `prop/clause.ml`, commit `ca9a53e`)
 
@@ -14295,20 +14298,58 @@ satisfied, which this batch did not separate. Not measured, it is the next E1 qu
 ### 10. The batch's result: instructions at three budgets, and the scaling ratios
 
 User instructions, `--no-proof`, in units of 10⁹, on the reference binary (`e8354a74`) and on the
-batch's tip (`dd935e2`, every fix above), each pair measured on the same node the same afternoon.
+batch at `2cea86d` (sections 3 to 8 and the memory addendum, before section 8b and before main's
+D-0143 was merged in, so that the numbers are this batch's alone), measured on the same node the same
+afternoon. At every budget every observation of the batch equals the reference's but WORK counters
+(18 of 18 runs).
 
-RESULT_TABLE
+| instance | 1 000: ref, batch | 10 000: ref, batch | 40 000: ref, batch | at 40 000 |
+|---|---|---|---|---|
+| QR48 (UNSAT at 23 367) | 1.52, 1.44 | 25.96, 23.58 | 86.14, 76.13 | -11.6 % |
+| QR72 | 2.31, 2.19 | 37.55, 34.57 | 247.71, 220.90 | -10.8 % |
+| rcpsp_11 | 4.81, 4.42 | 92.33, 64.05 | 1 079.68, 647.08 | **-40.1 %** |
+| mspsp_hard_01 | 11.19, 10.13 | 109.13, 89.57 | 756.51, 584.50 | **-22.7 %** |
+| cyclic-rcpsp_easy_6 | 17.20, 17.12 | 75.23, 68.82 | 294.22, 261.07 | -11.3 % |
+| openshop_gp10-4 | 728.77, 729.47 | 806.88, 798.27 | 1 471.55, 1 318.40 | -10.4 % |
+
+Wall time at 40 000 nodes on the loaded node, for orientation only: rcpsp_11 439 s to 283 s, mspsp 298
+to 241, QR72 90 to 64, openshop 364 to 308. Peak RSS at 40 000 nodes against the reference: between
+-1.7 % and +4.5 % (rcpsp_11 551 to 576 MB, mspsp 1 287 to 1 344 MB). Before section 3's memory addendum
+it was up to +16 %.
 
 **The scaling ratio** D-0140 section 7 defines: instructions per node over the 10 000 to 40 000
 segment, over the same over the 1 000 to 10 000 segment. Near 1 is the target, a rise is the alarm.
 
-RESULT_RATIOS
+| instance | per node, 1k to 10k (M instr.) | per node, 10k to 40k | ratio, reference | ratio, batch |
+|---|---|---|---|---|
+| QR48 | 2.72 to 2.46 | 4.50 to 3.93 | 1.66 | 1.60 |
+| QR72 | 3.92 to 3.60 | 7.01 to 6.21 | 1.79 | 1.73 |
+| rcpsp_11 | 9.72 to 6.63 | 32.91 to 19.43 | 3.38 | 2.93 |
+| mspsp_hard_01 | 10.88 to 8.83 | 21.58 to 16.50 | 1.98 | 1.87 |
+| cyclic-rcpsp_easy_6 | 6.45 to 5.74 | 7.30 to 6.41 | 1.13 | 1.12 |
+| openshop_gp10-4 | 8.68 to 7.64 | 22.16 to 17.34 | 2.55 | 2.27 |
 
-RESULT_READING
+The reference ratios are D-0140 section 7's (1.8, 3.4, 2.0, 2.6), measured again here on the binary
+that has moved since.
+
+**Reading.** The batch takes the most from the later segment, where the growth is: the cost of a
+node between 10 000 and 40 000 falls by 41 % on rcpsp_11, 24 % on mspsp and 22 % on openshop, against
+32 %, 19 % and 12 % in the first segment, so every ratio falls. None reaches 1. What still grows is
+mostly T4's (the database's O(n) per conflict in `retention.ml`, `Search.decision_entries` walking the
+whole trail, the polymorphic `List.mem` of `count_learned_activity`) and the learned clauses' runs that
+change nothing, which E2 (b) and the blocker would address and section 9 leaves to the user. rcpsp_11's
+-40 % at 40 000 nodes is mostly E3 (a) and E1: its model clauses and learned clauses pass often, and
+72 % of its asks were declined ones before E1.
 
 ### 11. The gate
 
-RESULT_GATE
+On a fresh clone of the batch's tip on `fataepyc-06` (`7f4420a`, binary `104769d1`,
+`/scratch/arthur/wave48-batch3-runs/gate.sh`, gate 48's script with the reference artefacts kept):
+`make check` rc 0 under the 4 GB cap, 3 834 unit checks ok and 0 FAIL, 179 models passed (VeriPB and
+the no-proof stdout lane), peak RSS 92 776 kB. Against main's `e8354a74` (gate 48's artefacts, which
+also predate D-0143), all 179 models: stdout 0 differences, exit codes 0, `.opb` 0, `.pbp` 0.
+
+RESULT_FINAL
 
 ### 12. What would reverse this
 
