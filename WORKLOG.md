@@ -20,7 +20,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M8-bits-encoding-T3 (continuation: the reified/bool2int holds, steps 3-5, mapping/ATSP diagnosis) | `lib/core/pb_analysis.ml`, `lib/core/ladder.ml`, `lib/core/learn.ml`, `lib/core/trace.ml`, `lib/core/justify.ml`, `lib/core/explanation.ml`, `lib/proof/encoding.ml`, `lib/proof/lit.ml`, `lib/flatzinc/compile.ml`, `lib/core/prop/reif*.ml`, `lib/core/prop/arith.ml`, `bin/main.ml` (`--stats` only), their tests, new `test/models/bits_*`, `docs/DECISIONS.md` (D-0134 sections appended), `docs/PROOF-FORMAT.md` §3/§4, `docs/ROADMAP.md` T3 row. `prop/bool2int.ml` is M6-T22's: request any change there | agent-t3c (`wave46-t3`) | 2026-11-18 |
-| M10-search-strategy-T1, then T2 and T3 | `docs/DECISIONS.md` (D-0137 appended), `docs/SPEC.md` §3.4 (the restart amendment), `docs/ROADMAP.md` M10 rows T1-T3, `lib/core/search.ml` (restarts, phase saving, branching), a new `lib/core/activity.ml` (+ `docs/ARCHITECTURE.md` §1 and `CLAUDE.md`'s map), `lib/core/analysis.ml` (activity bumps, if needed), `bin/main.ml` (flags), `test/unit/test_search*.ml`/`test_learn.ml`/`test_endtoend.ml`, new `test/models/*restart*`/`*activity*` + `test/expected/` | agent-strategy (`wave45-strategy`) | 2026-11-18 |
 | M10-search-strategy-T4 | `lib/core/retention.ml`, `lib/core/learned.ml` (an LBD field if needed), `bin/main.ml` (the policy flag only), `test/unit/test_retention.ml`, `docs/DECISIONS.md` (D-0139 appended), `docs/ROADMAP.md` M10-T4 row | agent-retention (`wave45-retention`) | 2026-11-18 |
 
 ## Cross-session requests
@@ -311,6 +310,7 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M10-search-strategy-T1, T2, T3 | agent-strategy (`wave45-strategy`) | 2026-11-18 | **D-0137.** Restarts (`--restarts luby|geom|lbd|stable`), phase saving (`--phase-saving`), the activity order (`--search activity|alternate`, `--reuse-trail`), all opt-in; SPEC §3.4 amended. A restart is the node outcome `NRestart t` (a backjump to level `t` that re-enters the node), no new rule kind. New `restart.ml`, `phase.ml`, `activity.ml`, `test_search_strategy`, three `restart_*` models and their lane. Gate green, 173 models byte-identical to main without the flags. aut order 7 unannotated: timeout -> 64 s (`alternate+luby+phase`); the QR codes stay best with today's search |
 | M6-T22 | agent-pernode (`wave45-pernode`) | 2026-11-18 | **D-0138.** The per-node cost on the XOR codes was the engine asking every learned clause about every variable it names (D-0104 kept the whole scope registered: 18 800 asks per node on QR48, 37 % of the cycles) plus `check_attribution`'s `List.mem` (15 %). A wake index of the two watched variables (`Propagator.advisor`, `Engine.dyn_ids`), the degree-1 shortcut in `Pb.propagate`, no per-node or per-conflict array of the database, an O(1) watch move, a heap seed, binary-searched level marks, `rup` without `Printf`. QR48 to UNSAT: 107.1 s to 24.3 s without proof, 125.0 s to 38.0 s with it (same 143 MB proof, byte for byte, VERIFIED); QR72 now UNSAT in 531 s without proof; same nodes, same runs, 165 models byte-identical, gate green (3 632 ok, 85 MB) |
 | M6-T21 | agent-timelimit (`wave44-timelimit`) | 2026-11-18 | **D-0136.** The `--time-limit` overshoot (+46 s at 600, +108 at 1 200) was `conclude_stopped`'s sweep: `Retention.retire` was O(k n), and the end-of-search sweep has k = n learned clauses. One pass now; 600 s stops at 600.3 s, 1 200 at 1 200.5, proofs VERIFIED NO CONCLUSION. The stop is also polled inside `Engine.propagate` after every 128 completed runs (`Engine.Stopped` -> `Limit_hit`, at a run boundary, nothing written by the node yet): +0.035 % instructions at a fixed node budget. `limit:` gains `at=` and `fired=`. Conflict analysis needed no poll. Gate of `d63f371` green (3 629 checks, 85 MB), 165 models byte-identical |
 | M8-bits-encoding-T2 | agent-t2 (`wave43-t2`) | 2026-11-16 | **D-0132.** The bits encoding for `Linear`: `Lit.Bit`, `declare_int_bits` (two bound rows, no ladder), the mixed row, `ensure_atom` (the `red` pair at level 0 + nearest-neighbour links; a `rup` bridge pair for an order variable in a mixed row), `Explanation.Linear_term`, `Justify.emit_bits_pruning` (one `pol` deriving exactly the trace clause, pinned by `ia`), Trace's per-entry fork, eligibility by scope in `Compile`, `--bits-above W`. Gate green on a fresh clone (19 min 46 s, 85 MB); the 156 byte-identical at `W = none`; 165 of 165 verified at `W = 0` and at `W = 8`; D-0028's model at 10⁶ on bits: 2.4 kB `.opb`, 192 B proof, 0.00 s (order: 156 MB, 3.2 s, 1.9 GB); the Θ(w) chain's checker 1 429 s → 4.8 s at 10⁵ (17× the bytes). The 169 at `W = 0`: see D-0132 §6 (b) |
@@ -451,6 +451,22 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 
 | M8-bits-encoding-T3 (steps 1, 2 partial; T3 stays WIP) | agent-t3 + agent-t3b (`wave44-t3`) | 2026-11-18 | **D-0134 §4-§7.** maxmin over a bits scope by selector rows + one `Resolve` `pol` per pruning, selectors listed in `sol`/`soli`; `int_ne`/`int_lin_ne` released (the A/B pair resolved); `Justify.is_bits_derivation` (a T2 latent). 173/173 verified at W none/0/8, 165 byte-identical at none; gate rc 0 on `20c324f`, 85 MB. The 177 at W = 0: 73 -> 108 complete `.opb`. Open: reified holds, steps 3-5 |
 ## Handoff notes
+## M10-search-strategy-T1..T3 handoff, 2026-11-18 (agent-strategy, `wave45-strategy`): restarts, phase saving, the activity order (D-0137)
+
+All three behind flags, default unchanged: `--restarts luby[:U]|geom[:U[:F]]|lbd[:W[:K]]|stable[:U]`,
+`--phase-saving`, `--search annotation|activity|alternate`, `--reuse-trail`. A restart is a third node
+outcome `NRestart t` in `search.ml` that unwinds frames like the backjump arm and re-enters the node at
+level `t`, so it writes only `% level` comments and `del` lines (no rule kind is new, checked per run).
+New modules `restart.ml`, `phase.ml`, `activity.ml`; new binary `test_search_strategy`; three
+`restart_*` models with a lane in `run_model_tests.sh`. Gate on a fresh node clone of `8fa9585` (main
+`bd87a57` merged): `make check` rc 0, peak RSS 87 MB, 173 models' stdout, rc, `.opb` and `.pbp`
+byte-identical to main's `a9217430` without the flags. Measured (D-0137 section 10): aut order 7 with no
+annotation goes from a 600 s timeout to 64 s (80 s with proof) under `--search alternate --restarts luby
+--phase-saving`; the QR codes are best with today's search, as Chuffed's are with its fixed one; `lbd`
+never fires on them. The twenty-instance Challenge subset is D-0137 section 10.2. Next: T5 picks defaults; the scoring of order literals (Chuffed's) is
+the first heuristic variant to measure. T4 (D-0139): restarts make level-0 prunings by learned
+instances routine, so an evicting policy must keep honouring `Retention.cite`.
+
 ## M6-T22 merged on top of M8-T3 (WIP) and gated, 2026-11-18 (orchestrator)
 
 `wave45-pernode` merged as `23eb9d6` (code merged without conflict). Gate of `23eb9d6` on fataepyc-06
