@@ -1,0 +1,5 @@
+# M11-complexity-T2 (D-0141). Runs the DEBUG pass does not make, each with its measured
+# reason; the lane prints every one of them on every debug pass. TAB-separated:
+# name, config, reason. An entry is a cost the pass cannot afford, never a failure hidden.
+2020_lot-sizing_pigment15b.psp	lbd-po	BAGUETTE_DEBUG with proof-only learning: 6.1 GB peak and 248 s at 1 500 nodes (32 GB cap, rc 0, no invariant fired, 2026-11-18); over the 4 GB cap it dies in the GC
+2020_lot-sizing_pigment15b.psp	fifo-po	same as lbd-po (the cost is BAGUETTE_PROPAGATE_LEARNED=off under debug, not the policy)
