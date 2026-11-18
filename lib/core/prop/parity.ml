@@ -94,7 +94,10 @@
    alongside, can derive) and counts the inferences and conflicts that closure does NOT
    reach: [beyond_inferred] and [beyond_conflicts]. That is the "what did the system find
    that the clauses did not" column of D-0147. bin/main.ml prints the line on stderr at
-   exit when `--parity` is given. *)
+   exit when `--parity` is given.
+
+   BAGUETTE_PARITY_MODE=beyond keeps only those: see [beyond_only] for why the default
+   mode, which applies everything Gauss-Jordan finds, can hurt the search. *)
 
 module Lit = Baguette_proof.Lit
 
@@ -296,6 +299,17 @@ let stats =
 
 let diagnose_up =
   match Sys.getenv_opt "BAGUETTE_PARITY_UP" with Some "1" -> true | _ -> false
+
+(* BAGUETTE_PARITY_MODE=beyond: apply ONLY what the unit-propagation closure of the
+   gathered rows does not reach (inferences it leaves open, conflicts it does not find),
+   and leave everything else to the clause encoding. Measured in D-0147 section 4: in
+   the default mode the instance, which the FIFO engine runs as soon as any atom moves,
+   pre-empts the chain clauses and records the support of a derived row where a
+   two-literal clause would have been the reason, and on aut order 7 that alone turned
+   172 nodes into more than 60 000. In this mode a parity reason exists only where no
+   clause reason could. *)
+let beyond_only =
+  match Sys.getenv_opt "BAGUETTE_PARITY_MODE" with Some "beyond" -> true | _ -> false
 
 let report oc =
   Printf.fprintf oc
@@ -734,18 +748,27 @@ let propagate t store =
   let v = snapshot t store in
   let outcome = analyse t v in
   stats.time <- stats.time +. (Sys.time () -. t0);
-  if diagnose_up then (
-    let up_conflict, vu = up_closure t v in
-    stats.up_runs <- stats.up_runs + 1;
-    match outcome with
-    | Conflict_on _ ->
-        if not up_conflict then stats.beyond_conflicts <- stats.beyond_conflicts + 1
-    | Implied l ->
-        if not up_conflict then
-          List.iter
-            (fun (a, _, _) ->
-              if vu.(a) < 0 then stats.beyond_inferred <- stats.beyond_inferred + 1)
-            l);
+  let outcome =
+    if not (diagnose_up || beyond_only) then outcome
+    else
+      let up_conflict, vu = up_closure t v in
+      stats.up_runs <- stats.up_runs + 1;
+      (match outcome with
+      | Conflict_on _ ->
+          if not up_conflict then stats.beyond_conflicts <- stats.beyond_conflicts + 1
+      | Implied l ->
+          if not up_conflict then
+            List.iter
+              (fun (a, _, _) ->
+                if vu.(a) < 0 then stats.beyond_inferred <- stats.beyond_inferred + 1)
+              l);
+      if not beyond_only then outcome
+      else if up_conflict then Implied []
+      else
+        match outcome with
+        | Conflict_on _ -> outcome
+        | Implied l -> Implied (List.filter (fun (a, _, _) -> vu.(a) < 0) l)
+  in
   match outcome with
   | Conflict_on atoms ->
       stats.conflicts <- stats.conflicts + 1;
