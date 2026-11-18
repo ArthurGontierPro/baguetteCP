@@ -12661,15 +12661,16 @@ The root's re-entry is not a node, as M5-T1's is not.
 `NRestart t` with `t > 0` is a partial restart, and the proof side is the same at every `t`
 above. Any `t` in `[0, d)` is sound, so the criterion is a question of efficiency only. The trail
 reuse rule keeps the levels whose decisions the heuristic would take again. It is only defined
-for a dynamic heuristic: under the activity order (section 4) a level `i` is kept when its
-decision variable's activity is above the activity of the best variable that is unfixed at the
-conflict and not a decision variable of a kept level, which over-approximates the candidate set
-of the paper and so keeps at most as many levels as the paper would. Under a static order (an
-annotation, or SPEC §3.4's default) the order retakes the same prefix until a learned
-constraint changes a domain it reads, so a static order's partial restart is simply its full one
-with fewer lines, and the flag is not offered for it. Status: the mechanism (`NRestart t`) lands
-in T2, the criterion with T3 if the activity order lands, otherwise it is what remains (section
-9).
+for a dynamic heuristic. Under the activity order (section 4) the levels are kept from the root
+up while the level's decision variable scores strictly above the best score among the variables
+unfixed at the conflict, and the target is capped one below the conflict's level. The paper
+compares with the variable the heuristic would pick after the backjump. The conflict's state has
+fewer unfixed variables than that, so this rule can keep a level more than the paper would. That
+costs efficiency at worst, never soundness. Under a static order (an annotation, or SPEC §3.4's
+default) the order retakes the same prefix until a learned constraint changes a domain it reads,
+so the rule would keep nearly everything and is not offered (`--reuse-trail` is ignored outside
+`--search activity`). Status: the mechanism (`NRestart t`) landed in T2, the rule in T3
+(section 8).
 
 ### 2. The policies and their parameters
 
