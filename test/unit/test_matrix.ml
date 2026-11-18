@@ -415,6 +415,8 @@ let walk_explanation e =
                than named in the value, so there is nothing here to walk into. *)
             | Explanation.Defining _ -> ())
           summands
+    (* M8-bits-encoding-T3 (D-0134): a choice derivation is one `pol` over its parts. *)
+    | Explanation.Resolve parts -> List.iter (go ~in_pol:true) parts
     | Explanation.Deferred _ -> ()
   in
   go ~in_pol:false e;

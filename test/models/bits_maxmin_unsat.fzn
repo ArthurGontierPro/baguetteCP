@@ -1,0 +1,21 @@
+% M8-bits-encoding-T3 (D-0134): maxmin_unsat.fzn on 0..9, so every integer is on bits at
+% `--bits-above 0`. m = max(a, b, c) with a = b = c, and p \/ q \/ r where each selector
+% says "that x is STRICTLY below m". Whichever the search makes true, the equalities carry
+% hi(x) <= hi(m) - 1 to every x and R3 pulls hi(m) down one step, round again until a
+% domain empties: every R3 line is a selector-shape `pol` (D-0134 section 2.3), and the
+% refutation rests on them.
+var 0..9: m :: output_var;
+var 0..9: a :: output_var;
+var 0..9: b :: output_var;
+var 0..9: c :: output_var;
+var bool: p :: output_var;
+var bool: q :: output_var;
+var bool: r :: output_var;
+constraint array_int_maximum(m, [a, b, c]);
+constraint int_eq(a, b);
+constraint int_eq(b, c);
+constraint int_lin_le_reif([1, -1], [a, m], -1, p);
+constraint int_lin_le_reif([1, -1], [b, m], -1, q);
+constraint int_lin_le_reif([1, -1], [c, m], -1, r);
+constraint bool_clause([p, q, r], []);
+solve :: int_search([p, q, r, m, a, b, c], input_order, indomain_min, complete) satisfy;

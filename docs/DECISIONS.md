@@ -12551,3 +12551,320 @@ What it says, instance by instance and no further:
   `test_m9_discard_rows_mint_the_same_ids` already checks. (ii) The heap budget does not
   cover an address-space death in the compile phase. That shows as `ERROR rc 134` rather
   than `REFUSED rc 5`, and a census that reads statuses should know it.
+## D-0134  M8-bits-encoding-T3: the full substrate -- maxmin over bits by SELECTOR rows and one `Resolve` step, the checker facts measured first, and the step order
+
+**Status**: **IN PROGRESS, DESIGN SETTLED** (agent-t3, branch `wave44-t3`, 2026-11-16). **Steps 1 and 2 (int_ne only) landed 2026-11-18** (agent-t3b, §4 onwards); steps 3 to 5 and the rest of step 2 are open (§7).
+Written before the first edit to `lib/`, as D-0132 was: §1 is measured on the checker, §2 is
+the design as it will be built, §3 the plan with coordinates; §4 onwards is filled as each
+step lands. Inputs read whole: D-0132, D-0130 §3.4/§7.4/§7.5/§13-§15 and its addendum,
+D-0095, D-0031's list, PROOF-FORMAT §3's bits paragraphs, INVARIANTS, the module headers
+and bodies of `maxmin.ml`, `explanation.ml`, `justify.ml`'s bits arm, `trace.ml`'s `emit` /
+`conflict_line`, `compile.ml`'s `held_families` / declaration loop / `post_maxmin`,
+`encoding.ml`'s `ensure_atom` / `bound_lines` / `assignment_lits` / `add_int_lin_ne`,
+`search.ml`'s conflict arms, `store.ml`'s `agreement_holds`, `pb_analysis.ml`'s `cited_ids`.
+
+### 0. The sentence
+
+`array_int_maximum`/`minimum` over a scope with a bits variable is posted as **one big-M
+selector row per operand plus one clause over the selectors**, O(bits) each, instead of one
+clause per threshold value (D-0095, Θ(w) rows); every one of its prunings is **one `pol`
+that resolves the n selector-row clauses on their selectors** and derives exactly the
+trace clause C_v, through the same bridges D-0132 gave `Linear`; the propagator's reasons
+(facts and claims) are unchanged, only its justification is; and `sol`/`soli` list the
+selectors, because a tie leaves them free and the checker refuses a solution that does not
+fix them.
+
+### 1. Checker facts, measured before writing (`bench/bits_spike/probe_t3.sh`, VeriPB 3.0.2 d5644ca4, fataepyc-06, 2026-11-16)
+
+Model A (satisfiable): `m, x in 0..7` on 3 bits, `y in 0..3` on 2 bits, `m = max(x, y)` as
+the two linear rows `x - m <= 0`, `y - m <= 0`, the two selector rows `m - x + 7 b_x <= 7`,
+`m - y + 7 b_y <= 7` (`M_i = dhi(m) - dlo(x_i)`), the clause `b_x \/ b_y`, six bound rows.
+The pruning probed is R3 at H = 4 (facts `x <= 4`, `y <= 3` declared; claim `m <= 4`):
+C_5 = `~m_ge_5 \/ x_ge_5`. Model C: `m in 5..7`, `x, y in 0..3`, UNSAT at the root with no
+fact. Model E: `m` and `y` on the LADDER (0..3), `x` on bits (0..7): the mixed shape. Model
+G: `x in 0..7`, `y in 0..3` on bits, `x + y <> 5` as `int_lin_ne`'s A/B pair.
+
+| probe | line(s) | verdict |
+|---|---|---|
+| a1 | the honest R3 shape: the atom pairs of `m_ge_5`, `x_ge_5`; `pol @c3 @x2 + @m1 + s @c4 @c11 + @m1 + 2 d s + @c5 + s` (per operand: selector row + its bound, B2 at 5 for `x`, the declared `@ub` for `y` + B1 of `m` at 5, divided by `D_i = m_bound - x_bound` = 1 for `x`, 5 - 3 = 2 for `y`, saturated; the clauses summed with the selector clause, saturated); `ia +1 ~m_ge_5 +1 x_ge_5 >= 1 : @pol`; `del` | **s VERIFIED** |
+| a2 | B1 of `x` cited where B2 belongs | **refused**: "Expected constraint is not syntactically implied by the constraint at the hint." |
+| a3 | the pin claims the unit `~m_ge_5` | **refused**, same wording |
+| a4 | the wrong selector row cited (`@c4` for `@c3`) | **refused**, same wording |
+| a5 | C_5 as a bare `rup` over the pairs and the selector rows | **accepted HERE** -- 3 bits, and `y`'s declared bound closes it by PB propagation -- the same caveat as D-0132's c2: not in general (D-0127), so the arm always writes the `pol` |
+| a6 | `soli` over the bits only, with a TIE (`m = x = y = 3`) | **refused**: "The propagated assignment does not satisfy the constraint with ID 5." (the selector clause: neither selector is propagated) |
+| a7 | the same `soli` with `_mx1_ge_1 ~_mx2_ge_1` listed | **s VERIFIED** |
+| a8 | `sol` + `conclusion SAT` over the bits only, with the tie | **refused**, the a6 wording |
+| a9 | `soli` over the bits only, NO tie (`y = 1`) | **s VERIFIED** -- with one maximiser the selectors follow by propagation, as `_neN` does |
+| a10 | `soli` of a wrong solution (`m = 3 > max(1, 1)`) | **refused**: "Propagation engine error: The given solution is conflicting with constraint 5 in the database." |
+| c1 | the factless root conflict: `pol @c3 @c9 + @c6 + 2 d s @c4 @c11 + @c6 + 2 d s + @c5 + s` to `0 >= 1`, `ia >= 1`, `del`, `rup >= 1`, `conclusion UNSAT` | **s VERIFIED UNSATISFIABLE** |
+| c2 | `rup >= 1` alone on model C | accepted here (2-bit widths); not relied on |
+| e1 | the MIXED R3 at H = 1 (`m`, `y` order; `x` bits): `pol @c3 @x2 + @o1 + s @c4 @o2 + @o1 + s + @c5 + s` with `@o1` = B1' of `m` at 2 and `@o2` = B2' of `y` at 2 (D-0132 §2.2's `rup` bridges), pinned by `ia +1 ~m_ge_2 +1 x_ge_2 +1 y_ge_2 >= 1` | **s VERIFIED** |
+| g1 | `Ne`'s hole `x <> 3` from `y = 2` as D-0130 §7.4's two halves: `pol @A @x3a + @y2a + s @B @x4b + @y3b + s + s` deriving `~x_ge_3 \/ x_ge_4 \/ ~y_ge_2 \/ y_ge_3`, pinned by `ia` | **s VERIFIED** (step 2's shape is settled by the same probe run) |
+| g2 | the hole clause as a bare `rup` over the four pairs | accepted here (3 bits); the caveat of a5 |
+| g3 | the A half cites B2 of `x` where B1 belongs | **refused** at the a2 wording |
+
+### 2. The decisions
+
+1. **The selector shape.** For `m = max_i x_i` with any bits variable in `{m} ∪ {x_i}`, the
+   disjunctive half `m <= max_i x_i` is posted as n rows `m - x_i + M_i b_i <= M_i`
+   (`M_i = dhi(m) - dlo(x_i)` in max coordinates; for a minimum the negated views, so
+   `x_i - m + M_i b_i <= M_i` with `M_i = dhi(x_i) - dlo(m)`) over fresh `.opb`-only Booleans
+   `$mxN` (`fresh_aux_name`, as `$neN`), plus the clause `Σ b_i >= 1`; nothing is posted when
+   D-0095's threshold range is empty (the disjunction is vacuous by declaration and the
+   propagator never fires). The conjunctive half is unchanged: n `Linear` instances over
+   mixed rows (D-0132). The rejected alternative of D-0095's header is taken because its
+   three objections were the ladder's: a big-M row over bits is O(bits) not Θ(w); the
+   selectors are proof-only like `_neN` (a9); and a pruning is a `pol` either way on bits.
+   A scope with NO bits variable keeps D-0095's per-value rows byte for byte.
+2. **One `Explanation` constructor, `Resolve of t list`**: the sum of the listed
+   derivations, each rendered as its own `Combine` (summed, divided, SATURATED to a clause)
+   or a `Model_row` cited as is, saturated again -- hyper-resolution on the literals that
+   cancel between them (the selectors), as ONE `pol`. This record is its decision record
+   (explanation.ml's header rule). Why not nested `Combine`s: `Combine` has no saturation
+   and its bits rendering adds the pruned variable's atom at the end, where here the claim
+   variable is cancelled INSIDE every selector row and the term left over is the selector;
+   a constructor that says "resolve" says what the derivation is. The same shape is step
+   2's `Ne` (g1: two halves, no selector row) and step 5's guards.
+3. **The maxmin derivation of C_v** (`Maxmin.expl_at`, selector shape): `Resolve
+   [Combine ([Term (1, Model_row row_i); Linear_term m; Linear_term x_i], D_i) for each i;
+   Model_row sel]`, where `Linear_term m` carries `m >= m_bound` (`m_bound = max (v, dlo m)`)
+   with the row's base coefficient and `Linear_term x_i` carries `x_i <= x_bound`
+   (`x_bound = min (v - 1, dhi x_i)`), a constant operand contributes no term, and
+   `D_i = m_bound - x_bound >= 1`. `Justify` renders every `Linear_term` through
+   D-0132's fragment (B1/B2 or the bound line, scaled by |coeff| = 1), so the arithmetic
+   is a1/c1/e1 exactly. The `Linear_term` of the CLAIM variable carries the negation of
+   the claim as the bound assumed (R3: `m >= H + 1`; R4: `x_j <= L - 1`): the derived
+   clause is C_v with every literal, which IS the trace clause `claim \/ ~facts` as in
+   the order arm (the facts stay `m >= v`, `x_i <= v - 1`, D-0095's), so `concludes` adds
+   no atom and `Trace.same_clause` makes the `ia` the line. The reason half is untouched
+   (D-0026's split): `propagate` is not edited; `expl_at` returns a `Deferred` building
+   the `Resolve` for the selector shape and the shared `Clause` for the per-value one.
+4. **`sol`/`soli` list the selectors** (a6/a8 against a7): `Encoding` keeps every choice
+   group (its selector names and a function from the solution's bindings to the chosen
+   index, built by `Compile` from the views), and `assignment_lits` appends `b_j` for the
+   first operand attaining `m` and `~b_i` for the others. `Encoding` sees names and
+   values only.
+5. **Eligibility**: `maxmin` leaves `held_families`; the per-value shape is used iff no
+   variable of the scope is on bits, decided in `post_maxmin` from `on_bits`. `--stats`
+   gains `choices` (selector groups posted) beside the held-back line.
+6. **Trace and the conflict arms**: `Trace.emit` and `conflict_line` take a `Resolve` where
+   they take a `Combine` (`Justify.emit_bits_pruning` dispatches on the shape); a bare
+   `Justify.emit` of a `Resolve` raises, as a bits `Linear_term` in a bare `pol` does.
+   `Pb_analysis.cited_ids` walks a `Resolve`'s parts; `weakened_row_only` answers `false`.
+7. **The step order** is the ROADMAP's: maxmin (this section) → `Ne`'s release and the two
+   T2 holds → PB analysis over mixed rows → learned-clause emission / `soli` over a bits
+   objective / D-0031's seven at `W = 0` → `int_times` if time allows. Each lands with a
+   checker-backed test before the next.
+
+### 3. The plan, with coordinates (commit after each step)
+
+1. `explanation.ml:169-225` `Resolve of t list` + `resolve`; `lits` (`head`), `to_string`.
+   Exhaustiveness: `pb_analysis.ml:618-632`, `search.ml:1568-1593` (`weakened_row_only`
+   falls to `| _ -> false`), `store.ml:523-535` (`| _ -> []`), `justify.ml:779-797`.
+2. `justify.ml:838-902` `emit_bits_pruning` dispatches: `Combine` as today; `Resolve`
+   renders each part (`Combine` → fragments, `Pol.div`, `Pol.saturate`; `Model_row` → id),
+   sums, saturates, pins by `ia` the clause of every `Linear_term`'s negated literal
+   (deduplicated), and refuses a `concludes` whose literal is not in it.
+3. `trace.ml:638-650, 718-735`: `Combine _ | Resolve _`.
+4. `maxmin.ml`: `shape = Per_value | Selector of { rows : int array; sel : int }`,
+   `on_selectors`, `selector_bigm`, `expl_at`'s second arm; header rewritten for the
+   two shapes.
+5. `encoding.ml`: `choices` + `add_choice` + `assignment_lits` (line 1835) + the counter;
+   `compile.ml:685-730` drop `hold "maxmin"`, `post_maxmin` (1158-1190) posts the selector
+   rows through `Encoding.add_int_lin_le` with `opb_terms` and the aux, registers the
+   choice; `bin/main.ml:770` the `choices` line.
+6. Tests: `test_prop.ml:6713` the selector shape's `Resolve`, literal for literal, and
+   D-0026's agreement; `test_proof.ml:3879` the a1-a4/c1/e1 lanes through the real
+   emitter, pairs minted UNDER A DECISION over a SATISFIABLE model; `test_compile.ml:1826`
+   maxmin released and the choice registered; `test_mutation.ml:1498` a `bits_maxmin`
+   instance (`pol-cite` on the selector row, the wrong bridge, `truncate`); models
+   `test/models/bits_maxmin_{sat,tie_sat,unsat,search_sat,min_sat,mixed_sat}.fzn`.
+7. Node: `W = none` byte-identical against `gate44.art/new`; the suite at `W = 0` and
+   `W = 8`; the held instances of the 169 at `W = 0` against D-0132 §6 (b).
+
+### 4. What landed (2026-11-18, agent-t3b, commits `72e2e8c` .. `c7a0636` on `wave44-t3`), against §2 and §3
+
+The salvaged WIP (`be5297e`) was checked against §2.2 and §2.3 before anything was built on
+it, and kept: `Resolve`, its rendering (each part saturated to its clause, the parts summed
+and saturated once more) and the clause as the parts' negated literals in part order are
+§2.2 as written. Two things in it changed, both recorded in §5.
+
+**Step 1, maxmin over bits (§3 items 1 to 7).**
+
+- `explanation.ml`: `Resolve of t list` and `resolve` (two parts at least, none a decision),
+  placed before `Deferred` so that constructor's text is unchanged.
+- `justify.ml`: `emit_bits_resolve`, reached through `emit_bits_pruning`'s dispatch on the
+  forced shape. Its `pol` carries the origin tag `[resolve]`, which is what the mutation
+  lanes aim at. `is_bits_derivation` says which shapes the bits arm can render (§5.3).
+  `resolve_clause` computes a `Resolve`'s clause without writing, and `emit` answers a cited
+  `Resolve` with the line stating that clause (§5.1).
+- `maxmin.ml`: `shape = Per_value | Selector`, chosen by the caller. The per-value array is
+  not built for the selector shape (its range is Θ(w) on bits). `selector_rows` spells S_i
+  on the bases, `attach_selectors` receives the ids compile.ml minted, `chosen` is the
+  solution's pick, and `expl_at` returns per threshold v a `Deferred` `Resolve`, cached per
+  v so prunings at one threshold share one physical explanation. The derivation at v is the
+  same for R3, R4 and the conflict, exactly as the per-value C_v is. The disjunction is
+  vacuous, and nothing is posted, when the threshold range is empty or m is one of the
+  operands. The header states both shapes. `propagate` was not edited.
+- `encoding.ml`: choice groups. `add_choice` mints `$mxN` through `fresh_aux_name`, posts each
+  S_i through `add_int_lin_le` and the clause through `add_constraint`, and records the group.
+  `assignment_lits` appends `choice_lits`, the picked selector true and the others false, in
+  the order the groups were posted. `cost` gains `c_choices`.
+- `compile.ml`: `maxmin` leaves `held_families`. `post_maxmin` takes the selector shape iff
+  a variable of the scope is on bits, after the n linear rows, as §2.5 says.
+- `bin/main.ml`: `stats: choices N groups`.
+- Tests. test_prop: R3, R4 and the conflict on a hand-built bits store, each a `Resolve` of
+  n + 1 parts whose clause is the per-value twin's C_v literal for literal, with D-0026's
+  agreement; the pick at a tie; R3 written by `emit_bits_pruning` under a decision over a
+  satisfiable model (probe a1's shape) is VERIFIED, and the same `pol` pinned by the unit
+  `~m_ge_5` (probe a3) is refused at *"Expected constraint is not syntactically implied by the
+  constraint at the hint."*; the factless root conflict (probe c1) refutes its model.
+  test_compile: maxmin released, one choice group of two selectors in the eligibility scene,
+  an all-order scope keeps the per-value rows at `W = 0`, and a minimum with a constant
+  operand posts S_i with M_i = 7, 3, 5. test_mutation: `bits_maxmin`, the satisfiable
+  `bits_maxmin_sat` compiled at `W = 0`, with three lanes refused on the derivation
+  (`pol-cite` swaps the first part's selector row, `truncate`, `drop-literal` at the `ia`).
+  Six models: `bits_maxmin_{sat,tie_sat,unsat,min_sat,mixed_sat,opt_sat}`. The tie model
+  needs the selectors in `sol`, the makespan model in every `soli`, the mixed model cites
+  m's D-0132 `rup` bridge pair beside the operands' `red` pairs, and the minimum's conflict
+  is a mirrored `Resolve` under a decision.
+
+**Step 2, partly: `int_ne` / `int_lin_ne` released (D-0130 §7.4).**
+
+- `ne.ml`: `make ?rows` takes the A/B ids of `Encoding.add_int_lin_ne`'s pair over a bits
+  scope, and the nogood is then `nogood_resolve`, two divisor-1 `Combine`s (row A with every
+  pair as a `Linear_term` on A's coefficient, row B on the negated ones) resolved on the
+  selector, probe g1's shape. Both degrees are exactly 1 because the pairs sum to c. A scope
+  with no bits variable has no rows and keeps its `Clause`.
+- `compile.ml`: `post_ne` passes the ids when the row is mixed, and `int_ne` leaves
+  `held_families`.
+- `search.ml`: the two conflict arms that write a factless derivation before the nogood take
+  a `Resolve` as they take a `Combine` (a disequality with every term fixed has no fact, and
+  over bits its nogood cannot be reached by unit propagation).
+- Tests. test_prop: the interior hole x <> 3 on a bits domain, a `Resolve` of two parts whose
+  clause is the twin's nogood literal for literal, with the agreement; its `pol` written by
+  the emitter under a decision VERIFIES (g1), and pinned one literal short is refused at the
+  `ia` wording. test_mutation: `bits_ne` (`bits_ne_sat` inlined) with the same three lanes.
+  test_compile: the eligibility scene's n, m and c go on bits. Two models: `bits_ne_sat` (a
+  root hole in a bits domain, a settle past it, an all-fixed conflict under a decision) and
+  `bits_ne_unsat` (four pigeons in three holes as six `int_ne` on 0..2).
+- **Not done**: `int_eq_reif`/`int_ne_reif` and `bool2int` stay held (§7).
+
+**Steps 3, 4 and 5 were not started** (§7 says where each stands).
+
+### 5. Deviations from §2, each found by the checker, the suite or the build
+
+1. **`Justify.emit` of a `Resolve` answers instead of raising** (§2.6 said it raises). An
+   order-arm derivation renders a `Linear_term` with citations as one `Term` per cited
+   entry (D-0132 §2.4), and the entry that moved an ORDER variable of a maxmin scope with a
+   bits operand is justified by a `Resolve`. Raising there would end a legal run. The
+   per-value shape cited the clause C_v, and the `Resolve` derives the same C_v, so the
+   answer is the line stating it (the trace line when it is on the page, else the same
+   `pol` + `ia` written then). Found by reading `emit_summand`; no suite model reaches it.
+2. **The `Resolve` arm does not refuse a claim that is not in its clause** (the WIP did). Once
+   `Ne` punches holes in bits domains a claim can settle past a hole, and its literal is then
+   stronger than the clause's. The trace writes its ordinary `rup` after the `ia`, RUP
+   through the hole's line, which is D-0132 §2.5's rule for a `Combine`. Exercised by
+   `bits_ne_sat` (z <= x <= 5 settles to z <= 4 past the hole at 5).
+3. **The bits arm took any `Combine`** (a T2 latent). A LEARNED constraint's conflict over
+   bits atoms is a `Combine` citing the entries that falsified its literals, which
+   `emit_bits_pruning` cannot render. The suite at `W = 0` found it once `int_ne` was
+   released: `element_learn_hole_{sat,unsat}` (y went on bits) ended in exit 2 with *"a
+   summand that is not a Linear term"* and a truncated proof the checker refused at
+   end-of-file. The trace now asks `Justify.is_bits_derivation` at both sites, and such a
+   line keeps the order arm's `rup`, which is unit propagation over the learned line. No T2
+   model had learning over a bits variable.
+4. **test_matrix's derivation walker** matched `Explanation.t` exhaustively and did not build
+   against the WIP's constructor. The WIP was described as building, which was true of
+   `lib/` and `bin/` only.
+5. **A mutation lane over a compiled model must solve in the model's own search order**, as
+   the CLI does (`?order:c.Compile.order`). Without it `bits_ne_sat` found its solution with
+   no conflict, the trace (written lazily, at conflicts) never reached the page, and every
+   knob reported that it found no site, which the harness turns into a failure.
+
+### 6. Measurements (fataepyc-06, VeriPB 3.0.2 d5644ca4; outputs under `/scratch/arthur/wave44-t3-out/`)
+
+**The suite** (`suite3-{none,0,8}/`, binary `250ce5ae` at `c7a0636`, `run156.sh` of D-0132 over
+the 173 models, the 165 of wave 43 plus the six `bits_maxmin_*` and the two `bits_ne_*`):
+
+| W | verified | models with a bits variable | `.opb` B | `.pbp` B | atoms | links | bits-arm `pol` | choice groups |
+|---|---|---|---|---|---|---|---|---|
+| none | 173 / 173 | 0 | 371 009 | 527 233 | 0 | 0 | 0 | 0 models |
+| 0 | 173 / 173 | 89 | 181 930 | 878 622 | 800 | 1 022 | 1 170 | 10 models |
+| 8 | 173 / 173 | 27 | 186 326 | 773 168 | 524 | 829 | 711 | 6 models |
+
+At `W = none` the 165 pre-existing models are **byte-identical in stdout, exit code, `.opb`
+and `.pbp`** to `gate44.art/new` (`main`, binary `274a8028`), with 463 646 `.pbp` bytes on
+both sides; the eight new models have no reference. Against D-0132 §6 at `W = 0` (62 models
+with a bits variable, 408 atoms, 512 bits-arm lines) the releases put 27 more models on bits
+and the bits-arm lines more than double, all verified. Atoms per bits-arm line went from
+0.80 to 0.68. Held back on the suite at `W = 0`, summed over models: gcc 107,
+alldiff 47, element 43, int_eq_reif 13, cumulative 12, holes 3, bool2int 3 (maxmin and
+int_ne are gone from the line). D-0031's models in the suite (`chain_sat`,
+`guess_wrong_sat`, `lin_sat`, `ne_conflict_sat`, `near_limit_ne_sat`, `near_limit_unsat`,
+`offset_unsat`, `width_root_unsat`) each have two or three variables on bits at `W = 0` and
+all verify, so the nearest-neighbour links of D-0130 §14 question 2 sufficed wherever a
+trace line walked them.
+
+**The 177 encoding-wall runs at `W = 0`** (D-0132 §6 (b)'s protocol and script, `run169.sh`:
+`/scratch/arthur/wave42-elig/files.tsv`, 8-way, `timeout 300`, `ulimit -v 16 GiB -f 16 GB`;
+a `.opb` is complete when its header is on disk):
+
+| prior status (D-0129) | instances | complete, T2 (D-0132 §6 b) | complete, step 1 (`6e53a433`) | complete, step 2 (`250ce5ae`) |
+|---|---|---|---|---|
+| CAPPED | 143 | 43 | 78 | 78 |
+| TIMEOUT | 19 | 16 | 16 | 16 |
+| ERROR | 7 | 6 | 6 | 6 |
+| OPT8 | 8 | 8 | 8 | 8 |
+| **all** | **177** | **73** | **108** | **108** |
+
+Step 1 (`w0-169/`) completes **35 more `.opb` and loses none** of T2's 73: all 15 tower, all
+10 road-cons, all 6 largescheduling and four test-scheduling. The 35 weigh 11.8 MB to 4.07 GB
+(median 77.8 MB), and 25 of them printed an answer or an incumbent within the 300 s. Of the
+108, 82 printed one, and 24 hold no variable back at all. Step 2 (`w0-177ne/`, `int_ne`
+released, the gate's binary) completes the same 108. It moves no instance across the line,
+and `int_ne` (89 variables over 4 instances under step 1) leaves the held-back line. Still
+unfinished at 300 s: 69, none of which printed a `--stats` line (each was killed before
+compile ended; the 70th run without one is `road_20` below). By family: carpet-cutting 18 (`int_times`'s split),
+mapping 9 (7 of 16 complete, as under T2), flowshop-workers 5, arithmetic-target 5,
+yumi-dynamic 4, zephyrus 3, ATSP 6 (all six at the 16 GB file cap, rc 153), and singletons.
+**The maxmin-held families of D-0130's addendum are therefore not all maxmin's.** Tower,
+road-cons and largescheduling were, and complete. Mapping and ATSP are held by something
+else that compile does not reach in 300 s, and their `--stats` line does not exist to say
+what. Among the completed, what still holds variables back is `int_eq_reif` (18 527
+variables in 74 instances), gcc (3 993 in 9), element (5 253 in 29), holes (1 796 in 23),
+cumulative (519 in 8) and alldiff (404 in 4). `2014_road-cons_road_20` completes its 369 MB
+`.opb` and then dies at 294 s on the 16 GiB address-space cap during search ("allocation
+failure during minor GC", rc 134), a memory finding and not a proof one.
+
+**The gate** (`gate.status`, a fresh clone of `20c324f` at `/scratch/arthur/wave44-t3-gate`,
+`make check` under `ulimit -v 4000000`): **rc 0**, 20 s wall with the shared dune cache warm,
+peak RSS 85 MB (`/usr/bin/time -v`): format, build, the width lint, determinism (173 models,
+`.opb`/`.pbp`/stdout identical across two runs), every unit suite, 173 model tests passed. A
+first attempt failed on the width lint (a test scene declared `~lo:m_lo`), fixed by literal
+widths. The commits after `20c324f` are documentation only.
+
+### 7. Where T3 stops, and what its continuation or T4 inherits
+
+- **Step 2's rest.** `int_eq_reif`/`int_ne_reif` stay held. Their four guarded rows
+  (reif_lin_eq.ml's header) are `Ne`'s A/B pair plus LE/GE, each with the reifier as one
+  more term, so the enforce-not-hold face is `Ne`'s `Resolve` with the reifier's
+  `Linear_term` in both parts and the enforce-hold face is `Linear`'s `Combine` on LE/GE.
+  The entailment face and the holes it punches need a probe before code, as §1 did here.
+  `bool2int` stays held. Its `x` is width 1 in the population, so the hold costs little
+  (it does not appear among the 177's held families above). `int_eq_reif` is now the
+  largest hold on the population by far (§6).
+- **Step 3** (PB conflict analysis over mixed rows) was not started. `Linear` instances
+  over mixed rows still offer no PB row (D-0132 §2.7), and `Maxmin` and `Ne` never offered
+  one, so a conflict that involves them takes the clause path, counted in `--stats`'s
+  fallback line. Deviation §5.3 shows that learned constraints over bits atoms do occur.
+- **Step 4** was not done as a separate step. What exists: every literal a learned clause
+  or a nogood writes passes `Justify.validate_lits`, which mints a bits atom before the
+  line that names it (D-0132 §2.6), and the suite's audit (I-X2) ran green at `W = 0`
+  and `W = 8`, including the two `element_learn_hole` models of §5.3. `soli` over a bits objective with ties verifies
+  (`bits_maxmin_opt_sat`, 21 improving solutions, each listing the selectors).
+- **Step 5** (`int_times`/`int_div` over bits) was not started. D-0132 §7's note stands:
+  carpet-cutting's wall is the case split's row COUNT, which bits do not shrink.
+- **`Resolve` is general.** Its parts are any `Combine`s of `Linear`'s shape and model rows;
+  maxmin's selector rows and `Ne`'s pair are its two producers, and the guarded rows of the
+  reified families are the next. The `[resolve]` origin tag lets a mutation lane aim at it.

@@ -1,0 +1,12 @@
+% M8-bits-encoding-T3 (D-0134 section 2.4, probes a6-a8): a solution with a TIE. m = max(x,
+% y) with x = y, so at the solution both operands attain m, both selector rows hold with
+% their selector true or false, and the clause over the selectors is not propagated by
+% anything: the checker refuses a `sol` that leaves them out ("The propagated assignment
+% does not satisfy the constraint"). Encoding's choice group lists b_x true and b_y false.
+var 0..9: m :: output_var;
+var 0..9: x :: output_var;
+var 0..9: y :: output_var;
+constraint array_int_maximum(m, [x, y]);
+constraint int_eq(x, y);
+constraint int_lin_le([-1], [m], -3);
+solve satisfy;

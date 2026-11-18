@@ -22,7 +22,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | M6-T22 | `lib/core/engine.ml`, `lib/core/store.ml`, `lib/core/domain.ml`, `lib/core/prop/clause.ml`, `lib/core/prop/pb.ml`, `lib/core/prop/bool2int.ml`, `lib/core/prop/linear.ml`, `lib/core/prop/lin_eq.ml`, `lib/proof/writer.ml` (the write path only), their unit tests, `docs/DECISIONS.md` (D-0138 appended), `docs/ROADMAP.md` M6-T22 row. NOT `search.ml` (M10-T1), `retention.ml` (M10-T4), `learn.ml`/`trace.ml`/`justify.ml`/`pb_analysis.ml` (M8-T3) | agent-pernode (`wave45-pernode`) | 2026-11-18 |
 | M10-search-strategy-T1, then T2 and T3 | `docs/DECISIONS.md` (D-0137 appended), `docs/SPEC.md` §3.4 (the restart amendment), `docs/ROADMAP.md` M10 rows T1-T3, `lib/core/search.ml` (restarts, phase saving, branching), a new `lib/core/activity.ml` (+ `docs/ARCHITECTURE.md` §1 and `CLAUDE.md`'s map), `lib/core/analysis.ml` (activity bumps, if needed), `bin/main.ml` (flags), `test/unit/test_search*.ml`/`test_learn.ml`/`test_endtoend.ml`, new `test/models/*restart*`/`*activity*` + `test/expected/` | agent-strategy (`wave45-strategy`) | 2026-11-18 |
 | M10-search-strategy-T4 | `lib/core/retention.ml`, `lib/core/learned.ml` (an LBD field if needed), `bin/main.ml` (the policy flag only), `test/unit/test_retention.ml`, `docs/DECISIONS.md` (D-0139 appended), `docs/ROADMAP.md` M10-T4 row | agent-retention (`wave45-retention`) | 2026-11-18 |
-| M8-bits-encoding-T3 | design record D-0134 first (`docs/DECISIONS.md` appended), then `lib/proof/encoding.ml`, `lib/proof/lit.ml`, `lib/core/prop/maxmin.ml`, `lib/core/prop/ne.ml`, `lib/core/prop/arith.ml` if reached, `lib/core/pb_analysis.ml`, `lib/core/ladder.ml`, `lib/core/learn.ml`, `lib/core/trace.ml`, `lib/core/justify.ml`, `lib/flatzinc/compile.ml` (eligibility releases), `bin/main.ml` (`--stats`), their tests under `test/unit/`, new `test/models/bits_*.fzn` + `test/expected/`, `docs/PROOF-FORMAT.md` §3/§4 (bits paragraphs), `docs/ROADMAP.md` T3 row, `docs/INVARIANTS.md` if an invariant is added | agent-t3 (`wave44-t3`) | 2026-11-16 |
 
 ## Cross-session requests
 
@@ -438,7 +437,21 @@ Two separate findings.
 | M8-bits-encoding-T4 (baseline) | agent-remeasure2 (`wave43-read`) | 2026-11-16 | **D-0133** and the D-0131 addendum. The sixteen editions with `f158c9f` (binary `a6327dc6`) against D-0129's archive: 0 REJECTED on 224 verified proofs, the same sixteen ranks, 1 594 of 1 600 statuses unchanged, the same 184 complete answers, incumbents 799 -> 800, objective better on 14 / worse on 20 of 799 (the noise floor T4 must stand above); 223 of the 224 verified proofs byte-identical to D-0129's, D-0131's shape on one root-UNSAT only. The seven OPT proofs verify under 60 h (1 h 20 to 16 h 22, up to 20.5 GiB; `8ShipsUnconst` over the harness's 16 GiB), and D-0131 §5's `5Ships`/`7ShipsMixedUnconst` line counts are corrected. Archives on the laptop; 37 GB of proofs deleted on the node. |
 | M9-no-proof-T2 | agent-noproof2, agent-noproof3 (`wave44-noproof`) | 2026-11-18 | **D-0135**. `--no-proof`: null writer (ids minted, nothing written), guards at Justify/Trace entry, `Discard` ladder short-circuit, exit 2 beside `--proof`. Identity lane in `make check`: 165/165 + 9 bits at W = 0, no stdout difference. Gate rc 0, 82 MB. Twenty Challenge instances measured both ways |
 
+| M8-bits-encoding-T3 (steps 1, 2 partial; T3 stays WIP) | agent-t3 + agent-t3b (`wave44-t3`) | 2026-11-18 | **D-0134 §4-§7.** maxmin over a bits scope by selector rows + one `Resolve` `pol` per pruning, selectors listed in `sol`/`soli`; `int_ne`/`int_lin_ne` released (the A/B pair resolved); `Justify.is_bits_derivation` (a T2 latent). 173/173 verified at W none/0/8, 165 byte-identical at none; gate rc 0 on `20c324f`, 85 MB. The 177 at W = 0: 73 -> 108 complete `.opb`. Open: reified holds, steps 3-5 |
 ## Handoff notes
+## M8-bits-encoding-T3 handoff, 2026-11-18 (agent-t3b, `wave44-t3`): maxmin and int_ne over bits, D-0134 §4-§7
+
+T3 is **WIP**: steps 1 and 2 (`int_ne`/`int_lin_ne` only) landed, steps 3 to 5 and the reified
+holds did not (D-0134 §7 says where each stands). maxmin over a bits scope posts one big-M
+selector row per operand over `$mxN` and a clause (`Encoding.add_choice`), every pruning is one
+`Explanation.Resolve` `pol` pinned by `ia`, and `sol`/`soli` list the selectors. `Ne` over a bits
+scope derives its nogood as the `Resolve` of its A/B pair (probe g1). The bits arm now takes only
+a derivation it can render (`Justify.is_bits_derivation`), which fixed a T2 latent the suite
+found once `int_ne` was released (§5.3). Suite: 173/173 verified at `W = none`, `0`, `8`; the
+165 pre-existing byte-identical at `W = none` to `gate44.art/new`. Gate rc 0 on `20c324f`, peak
+85 MB. The 177 at `W = 0`: 73 -> 108 complete `.opb` (tower 15/15, road-cons 10/10, largescheduling 6/6, none lost); `int_ne`'s release moves none; mapping and ATSP are held by something other than maxmin and do not reach `--stats` in 300 s. Read D-0134 §5 before touching `justify.ml`'s bits arm, and §7 before the
+reified families: their guarded rows are `Ne`'s pair plus LE/GE, so `Resolve` is ready for them.
+
 ## M6-T21 and M9-no-proof-T2 merged together and gated, 2026-11-18 (orchestrator)
 
 Merged on `main`: `wave44-timelimit` (D-0136, `481568d`) and `wave44-noproof` (D-0135, `c7ddd75`); their
@@ -474,7 +487,6 @@ Twenty Challenge instances (D-0135 section 5, `/scratch/arthur/wave44-noproof-ou
 OPTs agree to the node, proof overhead 6 % to 119 % wall; 4 of 5 heap refusals were the proof's
 memory; road_20 and ATSP16 die at 43 s (rc 134, 16.5 GB) building a 10^8-term objective row,
 which is T3's first lever. `scripts/compare_run.sh` untouched (T3's).
-
 ## Wave 43 merged and gated, 2026-11-16 (orchestrator)
 
 Merged on `main`: `wave43-read` (D-0133 + the D-0131 addendum, `0f79f59`) and `wave43-t2` (D-0132,

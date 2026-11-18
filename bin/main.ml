@@ -836,7 +836,11 @@ let report_encoding_cost (c : Encoding.cost) =
     | [] -> "none"
     | hs -> String.concat ", " (List.map (fun (f, n) -> Printf.sprintf "%s: %d" f n) hs));
   Printf.eprintf "stats: %-10s %10d lines  bound rows (2 per bits variable)\n" "bitsrows"
-    c.Encoding.c_bits_rows
+    c.Encoding.c_bits_rows;
+  (* M8-bits-encoding-T3 (D-0134 section 2.5): choice groups posted -- one per maxmin
+     scope with a bits variable, each n selector rows and one clause. *)
+  Printf.eprintf "stats: %-10s %10d groups selector rows + clause (maxmin over bits)\n"
+    "choices" c.Encoding.c_choices
 
 (* M7-T8. A resource overrun can fire at a DECLARATION, before any file exists, or at
    [ensure_direct], which runs inside [start_proof] with the .opb already on disk and
