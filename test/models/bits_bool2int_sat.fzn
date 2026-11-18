@@ -1,0 +1,14 @@
+% M8-bits-encoding-T3 continuation (D-0134 section 9): bool2int over a BITS integer. At
+% `--bits-above 0` x (0..5) and y (0..9) are on bits, so bool2int(b, x) is posted as its
+% two rows with a [Linear] each and justified by Linear's bits `pol`: at the root b's top
+% confines x to 0..1 and y = x + 3 to 3..4; deciding y = 3 fixes x = 0, which pushes b to
+% 0 (the x -> b direction, over a bits row), and the clause then forces c. The search
+% lands on b = false, c = true, x = 0, y = 3.
+var bool: b :: output_var;
+var bool: c :: output_var;
+var 0..5: x :: output_var;
+var 0..9: y :: output_var;
+constraint bool2int(b, x);
+constraint int_lin_eq([1, -1], [y, x], 3);
+constraint bool_clause([b, c], []);
+solve :: int_search([y], input_order, indomain_min, complete) satisfy;
