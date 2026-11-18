@@ -831,14 +831,16 @@ let emit_bits_resolve ctx ~origin ~(concludes : Reason.fact option) parts =
       (fun acc l -> if List.exists (Lit.equal l) acc then acc else acc @ [ l ])
       [] (List.rev !neg_facts_rev)
   in
-  (match Option.bind concludes Reason.lit_of_fact with
-  | Some l when not (List.exists (Lit.equal l) clause) ->
-      invalid_arg
-        (Printf.sprintf
-           "Justify.emit_bits_pruning: the Resolve derivation does not carry its claim \
-            %s (D-0134 section 2.3: the claim variable's term must assume its negation)"
-           (Lit.to_string l))
-  | _ -> ());
+  (* The claim is normally one of those literals (D-0134 section 2.3), and then [Trace]
+     takes the `ia` as the line. Not always: a claim that SETTLED past a hole -- an
+     operand of maxmin, or a disequality's own variable, with an interior hole beside
+     the value -- is a stronger bound than the clause's literal, and [Trace] then writes
+     its ordinary `rup` after this line, RUP in sequence through the hole's own line
+     (D-0132 section 2.5's rule, which a [Resolve] obeys as a [Combine] does). So the
+     claim is validated, and nothing is refused for it. *)
+  Option.iter
+    (fun l -> validate_lits ctx [ l ])
+    (Option.bind concludes Reason.lit_of_fact);
   (* The origin names the shape, so a mutation lane can aim at a choice derivation and
      not at the first [Linear] bits line that happens to precede it. *)
   let cid =

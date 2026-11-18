@@ -1605,8 +1605,10 @@ let close_root_conflict ctx trace store (c : Store.conflict) =
   | Explanation.Clause [] -> Justify.emit ctx e
   | forced ->
       (match (line, forced) with
-      | None, (Explanation.Combine _ | Explanation.Cut _) when not (weakened_row_only e)
-        ->
+      (* M8-bits-encoding-T3 (D-0134): a [Resolve] -- a choice derivation over bits,
+         e.g. a disequality all of whose terms are fixed -- is arithmetic too. *)
+      | None, (Explanation.Combine _ | Explanation.Cut _ | Explanation.Resolve _)
+        when not (weakened_row_only e) ->
           (* Factless: [conflict_line] wrote nothing, so the derivation is written here,
              as the under-a-decision arm of [dfs] writes it -- unless it is one row
              weakened, which the checker refutes unaided. *)
@@ -2543,7 +2545,9 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
                  Found by the M4-T2 random sweep, on a branch whose Regin conflict left
                  the nogood with nothing to propagate along. *)
               match Explanation.force c.Store.c_why with
-              | Explanation.Combine _ | Explanation.Cut _ ->
+              (* M8-bits-encoding-T3 (D-0134): a [Resolve] states its clause by `pol`
+                 + `ia`; over bits the nogood cannot reach it by unit propagation. *)
+              | Explanation.Combine _ | Explanation.Cut _ | Explanation.Resolve _ ->
                   ignore (Justify.emit ctx c.Store.c_why : Writer.cid)
               | _ ->
                   (* A conflict whose derivation IS a clause already states itself in the

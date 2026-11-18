@@ -669,8 +669,6 @@ let pack_abs_row ~mixed (p : Linear.t) : pending =
      element      array_int_element: the index's direct encoding, the result's rows
      cumulative   the capacity rows over gcc's window indicators
      holes        a declared set domain: the hole rows are ladder rows
-     int_ne       int_ne / int_lin_ne: held at T2, released by T3 with D-0130 section
-                  7.4's two-half `pol`
      int_eq_reif  int_eq_reif / int_ne_reif: lib/core/prop/reif_lin_eq.ml justifies
                   with [Clause]s and punches holes (T2 holds it; D-0132 section 2.7)
      bool2int     lib/core/prop/bool2int.ml justifies with [Clause]s; its `x` is width
@@ -682,7 +680,8 @@ let pack_abs_row ~mixed (p : Linear.t) : pending =
    since M8-bits-encoding-T3 array_int_maximum/minimum: a scope with a bits variable
    posts the SELECTOR shape instead of one clause row per threshold value
    (lib/core/prop/maxmin.ml, D-0134), so nothing in it names an order literal per
-   value and nothing holds it.
+   value and nothing holds it; and int_ne/int_lin_ne, whose nogood over a bits scope is
+   D-0130 section 7.4's two-half `pol` through the A/B pair (lib/core/prop/ne.ml).
    Computed from the model BEFORE any declaration, which is the only moment the scope
    is known and the encoding is empty. *)
 let held_families (m : Model.t) : (int, string list) Hashtbl.t =
@@ -696,7 +695,6 @@ let held_families (m : Model.t) : (int, string list) Hashtbl.t =
         | Model.Const _ -> ())
       ops
   in
-  let vars_of_terms terms = List.map (fun (_, i) -> Model.Var i) terms in
   Array.iteri
     (fun i (v : Model.var) ->
       match v.Model.v_dom with
@@ -706,8 +704,6 @@ let held_families (m : Model.t) : (int, string list) Hashtbl.t =
   List.iter
     (fun (c : Model.constr) ->
       match c.Model.k with
-      | Model.Int_lin_ne (terms, _) -> hold "int_ne" (vars_of_terms terms)
-      | Model.Int_ne (a, b) -> hold "int_ne" [ a; b ]
       | Model.Bool2int (b, x) -> hold "bool2int" [ b; x ]
       | Model.Int_eq_reif (a, b, r) | Model.Int_ne_reif (a, b, r) ->
           hold "int_eq_reif" [ a; b; r ]
@@ -720,7 +716,7 @@ let held_families (m : Model.t) : (int, string list) Hashtbl.t =
       | Model.Array_bool_and _ | Model.Bool_eq _ | Model.Bool_not _
       | Model.Int_lin_le_reif _ | Model.Int_le_reif _ | Model.Int_times _
       | Model.Int_div _ | Model.Int_abs _ | Model.Array_int_maximum _
-      | Model.Array_int_minimum _ ->
+      | Model.Array_int_minimum _ | Model.Int_lin_ne _ | Model.Int_ne _ ->
           ())
     m.Model.constraints;
   held
@@ -955,8 +951,12 @@ let compile (m : Model.t) : t =
      before anything narrows it; only the packing is deferred. *)
   let post_ne pos nterms rhs ~pack =
     check_row pos ~what:"this disequality" nterms rhs;
-    ignore (Encoding.add_int_lin_ne encoding (opb_terms pos nterms) rhs : int * int);
-    [ pack (Ne.make store (prop_terms nterms) rhs) ]
+    let ab = Encoding.add_int_lin_ne encoding (opb_terms pos nterms) rhs in
+    (* M8-bits-encoding-T3 (D-0134 section 6): over a bits scope the pair's ids are the
+       instance's, its prunings derived through them (lib/core/prop/ne.ml); otherwise
+       dropped, as the module header says. *)
+    let rows = if mixed nterms then Some ab else None in
+    [ pack (Ne.make ?rows store (prop_terms nterms) rhs) ]
   in
 
   (* ---------------------------------------------------------- M4-T1, all_different
