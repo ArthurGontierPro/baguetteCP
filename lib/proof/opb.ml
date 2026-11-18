@@ -264,21 +264,35 @@ let label_of i = Printf.sprintf "@c%d" i
    the checker enforcing the discipline [Encoding.add_constraint] already imposes, so
    it is not a restriction added here -- but it is why an `=` row cannot reach this
    function at all. *)
+(* M11-complexity-T7 (D-0143): the owner is sanitised once per run of terms naming the
+   same string (physically), not once per literal, and the integers are written by
+   [Lit.output_int] instead of through [string_of_int]. The bytes are [constr_to_string]'s,
+   which test/unit/test_proof.ml checks row by row. *)
 let output_row oc i c =
   match c.rel with
   | Ge ->
       output_string oc (label_of i);
       output_char oc ' ';
+      let cache = ref None in
       List.iter
-        (fun (a, l) ->
+        (fun (a, (l : Lit.t)) ->
           if a >= 0 then output_char oc '+';
-          output_string oc (string_of_int a);
+          Lit.output_int oc a;
           output_char oc ' ';
-          output_string oc (Lit.to_string l);
+          let x = Lit.owner l.Lit.v in
+          let x' =
+            match !cache with
+            | Some (y, y') when y == x -> y'
+            | _ ->
+                let x' = Lit.sanitize x in
+                cache := Some (x, x');
+                x'
+          in
+          Lit.output_sanitized oc x' l;
           output_char oc ' ')
         c.terms;
       output_string oc ">= ";
-      output_string oc (string_of_int c.rhs);
+      Lit.output_int oc c.rhs;
       output_string oc " ;\n"
   | Eq ->
       invalid_arg

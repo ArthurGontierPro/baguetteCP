@@ -4343,6 +4343,59 @@ let test_m11t7_header_by_runs () =
   check_eq "m11t7: the per-run header equals Opb.write's scan on 200 encodings"
     ~expected:"0" ~got:(string_of_int !bad)
 
+(* M11-complexity-T7 (D-0143): [Opb.output_row] writes its integers with
+   [Lit.output_int] and its literals with [Lit.output_sanitized], one sanitise per owner
+   run. Pinned against the pre-T7 renderer spelled out with [Printf] ("%+d" and
+   [Lit.to_string], which test_lit_rendering_is_the_reference pins in turn), over the
+   names and the values that test uses, the extremes included. *)
+let test_m11t7_output_row_is_the_reference () =
+  let capture f =
+    let path = Filename.temp_file "baguette_m11t7" ".row" in
+    let oc = open_out_bin path in
+    f oc;
+    close_out oc;
+    let ic = open_in_bin path in
+    let s = really_input_string ic (in_channel_length ic) in
+    close_in ic;
+    Sys.remove path;
+    s
+  in
+  let names = [ "x"; ""; "X_INTRODUCED_12_"; "$ne0"; "a.b"; "a-b"; "q[3]"; "_" ] in
+  let values = [ 0; 1; -3; 7; -10; 99; max_int; min_int; min_int + 1 ] in
+  let ok = ref true in
+  List.iter
+    (fun v ->
+      if capture (fun oc -> Lit.output_int oc v) <> string_of_int v then ok := false)
+    values;
+  check "m11t7: Lit.output_int is string_of_int" !ok;
+  let ok = ref true in
+  List.iteri
+    (fun i x ->
+      let lits =
+        List.concat_map
+          (fun v ->
+            List.concat_map
+              (fun l -> [ l; Lit.negate l ])
+              [ Lit.ge x v; Lit.eq x v; Lit.bit x v ])
+          values
+      in
+      (* Coefficients cycle through the same extremes; the owner changes mid-row so the
+         run cache is both hit and missed. *)
+      let terms =
+        List.mapi (fun j l -> (List.nth values (j mod List.length values), l)) lits
+        @ [ (5, Lit.ge "other" 2); (-1, Lit.ge x 1) ]
+      in
+      let c = Opb.ge terms (List.nth values (i mod List.length values)) in
+      let reference =
+        Printf.sprintf "@c%d %s>= %d ;\n" (i + 1)
+          (String.concat ""
+             (List.map (fun (a, l) -> Printf.sprintf "%+d %s " a (Lit.to_string l)) terms))
+          (Opb.rhs c)
+      in
+      if capture (fun oc -> Opb.output_row oc (i + 1) c) <> reference then ok := false)
+    names;
+  check "m11t7: Opb.output_row writes the pre-T7 bytes" !ok
+
 let () =
   report_checker ();
   test_lits ();
@@ -4396,6 +4449,7 @@ let () =
   test_bits_atoms_veripb ();
   test_m11t7_normalise_paths ();
   test_m11t7_header_by_runs ();
+  test_m11t7_output_row_is_the_reference ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
