@@ -142,7 +142,33 @@
    unsound in a way no proof check catches, because the wrong slack yields a pruning
    whose [rup] is still valid for the F it names.
 
-   Every pass recomputes from [Store.get]. *)
+   Every pass recomputes from [Store.get].
+
+   ---------------------------------------------------------------------------
+   The pass's working memory is not state (M11-complexity-T3, D-0142)
+   ---------------------------------------------------------------------------
+
+   A pass used to allocate its whole survey: a list of (term, status) pairs, from 12 terms
+   on a hash table of (variable, polarity) groups, the forceable list, and a [List.exists]
+   over it per forceable term to keep the strongest. On a learned row lifted onto ladder
+   rungs that is quadratic in a group, and D-0140 (E3) measured the learned PB rows at
+   73 % of a no-proof node on 2011 cyclic-rcpsp. The pass now runs over a [layout] built
+   once per row, on its first pass ([t.layout] is lazy, so a row [quiet] always answers
+   never builds one): the terms as an array, each term's (variable, polarity) GROUP, and
+   each group's terms strongest threshold first. With it [effective] is one walk per group
+   and the strongest forceable threshold one slot per group, so a pass is O(row) and
+   allocates nothing unless it prunes or conflicts.
+
+   The layout also holds three SCRATCH arrays (the statuses, the effective coefficients and
+   the per-group strongest threshold), and that is mutable memory inside [t]. It is not
+   state in the sense above, and the argument is short: every pass WRITES every cell it
+   will read before it reads it (all statuses first, then every term's effective
+   coefficient, then every group's slot), so nothing one pass leaves there is ever read by
+   another. A cached slack is refused because a later call relies on a number an earlier
+   call computed under domains the trail has since undone; here no call relies on any
+   number from an earlier call. Passes on one row never interleave: [assign] only moves the
+   store, and the next pass starts after the last read of the previous one (the [apply]
+   loop recurses into [propagate] only once it is past every term). *)
 
 module Lit = Baguette_proof.Lit
 
@@ -172,6 +198,75 @@ type atom = {
    imposed here. *)
 type term = { coeff : int; a : atom }
 
+(* The status of one literal under the live domains, as [status] below reads it. *)
+type status = Sat_lit | Unsat_lit | Open
+
+(* M11-complexity-T3 (D-0142, D-0140's E3 (a)): the pass's LAYOUT, built once per row on
+   its first pass, and its working memory.
+
+     [arr]     the terms, in term order (index [i] is the [i]-th term).
+     [gid]     each term's GROUP: the terms of one (variable, polarity), the only terms
+               [effective] can add for one another. Numbered by first occurrence.
+     [dom]     every term index, group after group, each group in DOMINANCE order:
+               strongest threshold first (the largest [k] in a positive group, the
+               smallest in a negative one), ties by term index.
+     [gfirst]  group [g] is [dom.(gfirst.(g))] .. [dom.(gfirst.(g + 1) - 1)].
+
+   and three scratch arrays that a pass writes before it reads them (the header's "The
+   pass's working memory is not state"):
+
+     [st]      the snapshot F: every term's status at the top of the pass.
+     [eff]     every term's ladder-effective coefficient under that snapshot.
+     [gbest]   per group, the strongest threshold among its forceable terms. *)
+type layout = {
+  arr : term array;
+  gid : int array;
+  dom : int array;
+  gfirst : int array;
+  st : status array;
+  eff : int array;
+  gbest : int array;
+}
+
+let layout_of (terms : term list) : layout =
+  let arr = Array.of_list terms in
+  let n = Array.length arr in
+  let key (a : atom) = (2 * Var.to_int a.x) + if a.positive then 1 else 0 in
+  let ids = Hashtbl.create (max 1 n) in
+  let gid = Array.make n 0 and ng = ref 0 in
+  Array.iteri
+    (fun i tm ->
+      match Hashtbl.find_opt ids (key tm.a) with
+      | Some g -> gid.(i) <- g
+      | None ->
+          Hashtbl.add ids (key tm.a) !ng;
+          gid.(i) <- !ng;
+          incr ng)
+    arr;
+  let dominance i j =
+    let c = Int.compare gid.(i) gid.(j) in
+    if c <> 0 then c
+    else
+      let ki = arr.(i).a.k and kj = arr.(j).a.k in
+      let c = if arr.(i).a.positive then Int.compare kj ki else Int.compare ki kj in
+      if c <> 0 then c else Int.compare i j
+  in
+  let dom = Array.init n Fun.id in
+  Array.sort dominance dom;
+  let gfirst = Array.make (!ng + 1) n in
+  for p = n - 1 downto 0 do
+    gfirst.(gid.(dom.(p))) <- p
+  done;
+  {
+    arr;
+    gid;
+    dom;
+    gfirst;
+    st = Array.make n Open;
+    eff = Array.make n 0;
+    gbest = Array.make !ng 0;
+  }
+
 (* [pb] is the whole constraint's literals in term order, and [expl_all] is the clause
    over all of them -- both built once at construction. [expl_all] is not "the
    explanation": for a general row the explanation of a pruning is the SUBSET clause
@@ -186,6 +281,9 @@ type t = {
   pb : Lit.t list;
   expl_all : Explanation.t;
   n_terms : int;
+  layout : layout Lazy.t;
+      (* The pass's layout and working memory, built on the first pass (the header's
+         "The pass's working memory is not state"). *)
 }
 
 let name = "pb"
@@ -196,7 +294,14 @@ let pb_lit a = if a.positive then Lit.ge a.name a.k else Lit.le a.name (a.k - 1)
 
 let finish terms degree =
   let pb = List.map (fun tm -> pb_lit tm.a) terms in
-  { terms; degree; pb; expl_all = Explanation.clause pb; n_terms = List.length terms }
+  {
+    terms;
+    degree;
+    pb;
+    expl_all = Explanation.clause pb;
+    n_terms = List.length terms;
+    layout = lazy (layout_of terms);
+  }
 
 (* ------------------------------------------------------------------ construction *)
 
@@ -271,8 +376,6 @@ let falsity_fact a =
 
 (* ------------------------------------------------------------------- propagation *)
 
-type status = Sat_lit | Unsat_lit | Open
-
 (* LIVE domains, every call. See the header: this is the whole difference between this
    object and [Propagator.pb_row]. *)
 let status store a =
@@ -285,46 +388,43 @@ let status store a =
   else if Domain.lo d >= a.k then Unsat_lit
   else Open
 
-(* One full walk: every term's status, in term order. No early exit, unlike the clause
-   survey this replaces -- the slack needs every falsified coefficient, so there is
-   nothing to stop at. *)
-let survey store t = List.map (fun tm -> (tm, status store tm.a)) t.terms
+let is_false = function Unsat_lit -> true | Sat_lit | Open -> false
+let is_open = function Open -> true | Sat_lit | Unsat_lit -> false
 
-let slack_of degree surveyed =
-  List.fold_left
-    (fun s (tm, st) -> if st = Unsat_lit then s else Checked.add s tm.coeff)
-    (-degree) surveyed
+(* The explanation of one step, and the reason facts that go with it, read off the
+   pass's snapshot [w.st].
 
-(* The explanation of one step, and the reason facts that go with it.
-
-   [keep] selects the terms the step names: for a forcing, the forced literal plus every
-   falsified one; for a conflict, every falsified one. Both are walked IN TERM ORDER,
-   which is what makes the degree-1 case byte-identical to the clause propagator this
-   replaces -- there the selected set is always the whole constraint, in the same order
-   [pb] has, so the value handed to [Explanation.clause] is the same list.
+   The step names every FALSIFIED term and, for a forcing, the forced term [claim] (a
+   conflict passes [-1]). Both are taken IN TERM ORDER, which is what makes the degree-1
+   case byte-identical to the clause propagator this replaced -- there the selected set
+   is always the whole constraint, in the same order [pb] has, so the value handed to
+   [Explanation.clause] is the same list.
 
    When the set IS the whole constraint the shared [expl_all] is returned instead of an
    equal fresh one, so lib/core/justify.ml's memoisation on physical identity still
    fires. That is not an optimisation of this module's making: it is the property
    clause.ml's header claims for a clause, preserved. *)
-let reason_clause t surveyed ~(keep : term -> status -> bool) =
-  let picked = List.filter (fun (tm, st) -> keep tm st) surveyed in
-  (* The FALSIFIED members of [picked] are the facts. The forced literal, if [keep] took
-     one, is not a fact -- [assign] passes it as [concludes] instead, which is D-0043's
-     shape and what lets [Store.apply] check the claim against the bound. *)
-  let facts =
-    List.filter_map
-      (fun (tm, st) -> if st = Unsat_lit then Some (falsity_fact tm.a) else None)
-      picked
-  in
+let reason_clause t w ~claim =
+  let picked = ref [] and facts = ref [] and n_picked = ref 0 in
+  for j = t.n_terms - 1 downto 0 do
+    let falsified = is_false w.st.(j) in
+    if falsified || j = claim then (
+      let a = w.arr.(j).a in
+      incr n_picked;
+      picked := a :: !picked;
+      (* The FALSIFIED members are the facts. The forced literal is not a fact --
+         [assign] passes it as [concludes] instead, which is D-0043's shape and what lets
+         [Store.apply] check the claim against the bound. *)
+      if falsified then facts := falsity_fact a :: !facts)
+  done;
   let expl =
-    if List.length picked = t.n_terms then t.expl_all
-    else Explanation.clause (List.map (fun (tm, _) -> pb_lit tm.a) picked)
+    if !n_picked = t.n_terms then t.expl_all
+    else Explanation.clause (List.map pb_lit !picked)
   in
-  (expl, facts)
+  (expl, !facts)
 
-(* Force one open literal true. A positive atom moves [lo] to [k], a negative one moves
-   [hi] to [k - 1]; either way exactly ONE bound moves, so lib/core/trace.ml writes
+(* Force term [i], which is open, true. A positive atom moves [lo] to [k], a negative one
+   moves [hi] to [k - 1]; either way exactly ONE bound moves, so lib/core/trace.ml writes
    exactly one line for it. The reason is not optional and there is no factless mutator
    to reach for (I-P5): without it the line would claim the new bound unconditionally,
    which is false.
@@ -332,11 +432,9 @@ let reason_clause t surveyed ~(keep : term -> status -> bool) =
    D-0043: [concludes] is the [Reason.fact] mirror of the bound handed to the mutator on
    the next line, against the same declared bounds [falsity_fact] uses, so [Store.apply]
    can check the two against each other. *)
-let assign t store surveyed (tm : term) =
-  let a = tm.a in
-  let expl, facts =
-    reason_clause t surveyed ~keep:(fun u st -> u == tm || st = Unsat_lit)
-  in
+let assign t store w i =
+  let a = w.arr.(i).a in
+  let expl, facts = reason_clause t w ~claim:i in
   let concludes =
     Some
       (if a.positive then Reason.at_least ~name:a.name ~decl:a.decl_lo a.k
@@ -345,8 +443,8 @@ let assign t store surveyed (tm : term) =
   let j = Reason.because ~concludes facts expl in
   if a.positive then Store.set_lo store a.x a.k j else Store.set_hi store a.x (a.k - 1) j
 
-let conflict_of t store surveyed =
-  let expl, facts = reason_clause t surveyed ~keep:(fun _ st -> st = Unsat_lit) in
+let conflict_of t store w =
+  let expl, facts = reason_clause t w ~claim:(-1) in
   Propagator.Conflict (Store.conflict store (Reason.because ~concludes:None facts expl))
 
 (* ------------------------------------------------- the LADDER-EFFECTIVE coefficient
@@ -391,60 +489,89 @@ let conflict_of t store surveyed =
    [Learn.minimise]'s [slot] keys on (variable, polarity) and subsumes same-direction
    pairs before a clause is built, and a `bool_clause` has one rung per variable -- and
    the suite's proofs are byte-identical across this change, which is what says so. *)
-let effective surveyed (tm : term) =
-  let a = tm.a in
-  List.fold_left
-    (fun acc (u, st) ->
-      if st = Unsat_lit then acc
-      else if Var.to_int u.a.x <> Var.to_int a.x then acc
-      else if u.a.positive <> a.positive then acc
-      else if a.positive then if u.a.k >= a.k then Checked.add acc u.coeff else acc
-      else if u.a.k <= a.k then Checked.add acc u.coeff
-      else acc)
-    0 surveyed
+let effective w i =
+  let a = w.arr.(i).a in
+  let acc = ref 0 in
+  for j = 0 to Array.length w.arr - 1 do
+    let u = w.arr.(j) in
+    if
+      (not (is_false w.st.(j)))
+      && Var.to_int u.a.x = Var.to_int a.x
+      && u.a.positive = a.positive
+      && if a.positive then u.a.k >= a.k else u.a.k <= a.k
+    then acc := Checked.add !acc u.coeff
+  done;
+  !acc
 
-(* [effective], for every term of one pass, without the O(n) walk per term (M6-T11,
-   D-0085). D-0080 put ~45 % of 2017 tc-graph-color's self time in [Pb.*], and on a
-   generated knapsack locally this walk ([effective]'s fold under the [forceable] filter)
-   is the hot path: a pass over an n-term learned row was O(n^2).
+(* [effective] for every term of one pass, in O(row) (M11-complexity-T3, D-0142, E3 (a);
+   before it, M6-T11 / D-0085 grouped by a hash table per pass and walked a group per
+   term, which was still quadratic in a group and allocated every pass).
 
-   The terms [effective] can add for [tm] are the non-falsified terms of [tm]'s own
-   (variable, polarity). So the pass groups those once, IN TERM ORDER, and each query
-   walks only its group with [effective]'s own test, adding through [Checked.add] from 0
-   in the same order: the same addends in the same sequence, so the same sum and the same
-   overflow, by construction. Below [group_from] terms the walk is cheaper than the
-   table, and the plain [effective] runs; the two agree, so the cut-off is free to move. *)
-let group_from = 12
+   The terms [effective] adds for a term are the non-falsified ones of its group whose
+   threshold is at least as strong as its own. The layout lists each group strongest
+   first, so one walk that sums the non-falsified coefficients gives every term its value
+   as the running sum at the end of its TIE RUN (the terms of the group with the same
+   threshold, which count one another).
 
-let effective_of surveyed =
-  if List.length surveyed < group_from then effective surveyed
-  else
-    let groups = Hashtbl.create 16 in
-    let key (a : atom) = (2 * Var.to_int a.x) + if a.positive then 1 else 0 in
-    List.iter
-      (fun ((u, st) as us) ->
-        if st <> Unsat_lit then
-          let k = key u.a in
-          Hashtbl.replace groups k
-            (us :: Option.value (Hashtbl.find_opt groups k) ~default:[]))
-      (List.rev surveyed);
-    fun (tm : term) ->
-      match Hashtbl.find_opt groups (key tm.a) with
-      | None -> 0
-      | Some group -> effective group tm
+   Same number: the addends are [effective]'s and all of them are positive (the
+   constructors keep only coefficients >= 1), so their order does not change the sum. The
+   one thing an order can change is WHERE [Checked.add] overflows, and so the message it
+   raises. That is kept exact rather than argued away: a running sum that would pass
+   [max_int] is not taken, every term from there on in the group is marked [-1], and
+   [mark_forceable] calls [effective] itself for such a term, which raises what it always
+   raised, at the same query. Every other term gets its true sum, because the running sum
+   only grows.
 
-(* Of the forceable literals of one variable at one polarity, keep the STRONGEST claim:
-   the largest threshold among the positive ones, the smallest among the negative. The
-   others are implied by it through the domain, so forcing them too would move no bound
-   and would only risk a second trace line for one inference. *)
-let strongest forceable (tm, _) =
-  not
-    (List.exists
-       (fun (u, _) ->
-         Var.to_int u.a.x = Var.to_int tm.a.x
-         && u.a.positive = tm.a.positive
-         && if tm.a.positive then u.a.k > tm.a.k else u.a.k < tm.a.k)
-       forceable)
+   The same walk resets each group's [gbest] for [mark_forceable]. *)
+let effective_all w =
+  for g = 0 to Array.length w.gfirst - 2 do
+    let stop = w.gfirst.(g + 1) in
+    w.gbest.(g) <- (if w.arr.(w.dom.(w.gfirst.(g))).a.positive then min_int else max_int);
+    let sum = ref 0 and fits = ref true and p = ref w.gfirst.(g) in
+    while !p < stop do
+      let k = w.arr.(w.dom.(!p)).a.k in
+      let q = ref !p in
+      while !q < stop && w.arr.(w.dom.(!q)).a.k = k do
+        let j = w.dom.(!q) in
+        (if not (is_false w.st.(j)) then
+           let c = w.arr.(j).coeff in
+           if !sum > max_int - c then fits := false else sum := !sum + c);
+        incr q
+      done;
+      let e = if !fits then !sum else -1 in
+      for r = !p to !q - 1 do
+        w.eff.(w.dom.(r)) <- e
+      done;
+      p := !q
+    done
+  done
+
+(* The FORCEABLE terms are the open ones whose effective coefficient exceeds the slack.
+   Of the forceable literals of one variable at one polarity only the STRONGEST claim is
+   forced: the largest threshold among the positive ones, the smallest among the negative.
+   The others are implied by it through the domain, so forcing them too would move no
+   bound and would only risk a second trace line for one inference.
+
+   [mark_forceable] records each group's strongest forceable threshold in [gbest] and
+   says whether anything is forceable. It queries the terms in term order, as the list
+   filter it replaced did, which is what keeps the [Checked] overflow of [effective_all]
+   at the same query. [forced] is then "forceable and as strong as its group's best",
+   which is "no forceable term of its group is strictly stronger", the old [strongest]. *)
+let mark_forceable w ~slack =
+  let any = ref false in
+  for i = 0 to Array.length w.arr - 1 do
+    if is_open w.st.(i) then (
+      if w.eff.(i) < 0 then w.eff.(i) <- effective w i;
+      if w.eff.(i) > slack then (
+        any := true;
+        let a = w.arr.(i).a and g = w.gid.(i) in
+        if a.positive then (if a.k > w.gbest.(g) then w.gbest.(g) <- a.k)
+        else if a.k < w.gbest.(g) then w.gbest.(g) <- a.k))
+  done;
+  !any
+
+let forced w ~slack i =
+  is_open w.st.(i) && w.eff.(i) > slack && w.arr.(i).a.k = w.gbest.(w.gid.(i))
 
 (* One pass, then repeat while the store moved.
 
@@ -468,8 +595,7 @@ let strongest forceable (tm, _) =
    (variable, polarity) -- and a non-false literal on another variable, with its
    coefficient of at least 1, rules that out. So the pass would return [Fixpoint] having
    changed nothing, and [quiet] says so with one walk that stops at the second free
-   variable, instead of the survey, the slack, the forceable filter and, from
-   [group_from] terms on, the hash table of [effective_of].
+   variable, instead of the pass's walks over the whole row.
 
    Degree 1 is every clause ([Clause], learned or not) and only the clauses' rows here.
    On QR48 (D-0138) a learned clause runs 369 times per node and changes something 0.01
@@ -492,32 +618,49 @@ let quiet store t =
 
 let rec propagate t store = if quiet store t then Propagator.Fixpoint else pass t store
 
+(* The pass over the layout (M11-complexity-T3, D-0142): the snapshot F and the slack in
+   one walk, then -- only when a term is open -- [effective_all], [mark_forceable], and
+   the forcings in term order. It allocates nothing unless it prunes or conflicts, and
+   then only the explanation. Every step reads the snapshot, never the store, from the
+   first walk on, so computing [forced] term by term while assigning gives the list the
+   old pass computed whole before its first assignment. *)
 and pass t store =
-  let surveyed = survey store t in
-  let slack = slack_of t.degree surveyed in
-  if slack < 0 then conflict_of t store surveyed
-  else
-    let effective = effective_of surveyed in
-    let forceable =
-      List.filter (fun (tm, st) -> st = Open && effective tm > slack) surveyed
-    in
-    let forced = List.filter (strongest forceable) forceable in
-    if forced = [] then Propagator.Fixpoint
+  let w = Lazy.force t.layout in
+  let n = t.n_terms in
+  let slack = ref (-t.degree) and n_open = ref 0 in
+  for i = 0 to n - 1 do
+    let tm = w.arr.(i) in
+    let s = status store tm.a in
+    w.st.(i) <- s;
+    match s with
+    | Unsat_lit -> ()
+    | Open ->
+        incr n_open;
+        slack := Checked.add !slack tm.coeff
+    | Sat_lit -> slack := Checked.add !slack tm.coeff
+  done;
+  let slack = !slack in
+  if slack < 0 then conflict_of t store w
+  else if !n_open = 0 then Propagator.Fixpoint
+  else (
+    effective_all w;
+    if not (mark_forceable w ~slack) then Propagator.Fixpoint
     else
-      let rec apply moved = function
-        | [] -> if moved then propagate t store else Propagator.Fixpoint
-        | (tm, _) :: rest -> (
-            match assign t store surveyed tm with
-            | Store.Changed -> apply true rest
-            | Store.Unchanged -> apply moved rest
-            | Store.Conflict e ->
-                (* Reachable, unlike the clause case: two forced literals on one
-                   variable can be jointly unsatisfiable, and then the row plus the
-                   snapshot F really is a contradiction. Forwarded exactly as
-                   [Store.apply] returns it, the way every other propagator does. *)
-                Propagator.Conflict e)
+      let rec apply moved i =
+        if i = n then if moved then propagate t store else Propagator.Fixpoint
+        else if not (forced w ~slack i) then apply moved (i + 1)
+        else
+          match assign t store w i with
+          | Store.Changed -> apply true (i + 1)
+          | Store.Unchanged -> apply moved (i + 1)
+          | Store.Conflict e ->
+              (* Reachable, unlike the clause case: two forced literals on one
+                 variable can be jointly unsatisfiable, and then the row plus the
+                 snapshot F really is a contradiction. Forwarded exactly as
+                 [Store.apply] returns it, the way every other propagator does. *)
+              Propagator.Conflict e
       in
-      apply false forced
+      apply false 0)
 
 (* --------------------------------------------------------------------------------
    The learned face: a PB row this search derived, registered mid-search by
