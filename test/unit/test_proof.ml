@@ -3744,6 +3744,62 @@ let test_m7t27_ladder_ids_are_arithmetic () =
   check "M7-T27 (b): a hole is not a rung" (rung "h" 1 <> Encoding.hole_id e "h" 1);
   Encoding.encoding_budget := saved
 
+(* M9-no-proof-T2 (D-0126's id rule, rule 1). The same encoding built under [Retain_rows]
+   and under [Discard_rows] -- the sink `--no-proof` and every run without --proof use,
+   and the one whose ladder loop is short-circuited to its count -- mints the same ids
+   from every row door, has the same [n_constraints] and the same [Encoding.cost], and
+   puts every rung and every hole row at the same id. A rung id is arithmetic and a hole
+   row is committed after the ladder, so a short-circuit that miscounted would move the
+   hole rows and every id after them; this is the lane that would see it. *)
+let m9_fill e =
+  Encoding.declare_int e "a[1]" ~lo:0 ~hi:4;
+  Encoding.declare_int_with_holes e "h" ~holes:[ 2 ] ~lo:0 ~hi:3;
+  Encoding.declare_bool e "b";
+  Encoding.declare_int e "y" ~lo:(-2) ~hi:2;
+  Encoding.declare_int_with_holes e "z" ~holes:[ -1; 1 ] ~lo:(-3) ~hi:3;
+  Encoding.declare_int e "u" ~lo:1 ~hi:3;
+  Encoding.declare_int e "v" ~lo:1 ~hi:3;
+  let le = Encoding.add_int_lin_le e [ (1, "a[1]"); (2, "y") ] 3 in
+  let ne = Encoding.add_int_lin_ne e [ (1, "a[1]"); (-1, "h") ] 1 in
+  let cl = Encoding.add_constraint e (Opb.clause [ Lit.bool_true "b"; Lit.le "y" 0 ]) in
+  let eq = Encoding.add_equality e [ (1, Lit.ge "z" 1); (1, Lit.ge "y" 1) ] 1 in
+  let reif = Encoding.add_int_lin_le_reif e [ (1, "y") ] 0 ~reifier:"b" in
+  let ad = Encoding.add_all_different e [ "u"; "v" ] in
+  (le, ne, cl, eq, reif, ad)
+
+let test_m9_discard_rows_mint_the_same_ids () =
+  let saved = !Encoding.encoding_budget in
+  Encoding.encoding_budget := None;
+  let build policy =
+    let e = m7t27_create policy in
+    let doors = m9_fill e in
+    let slots =
+      List.concat_map
+        (fun x ->
+          let lo, hi = Encoding.domain e x in
+          List.concat_map
+            (fun v -> [ Encoding.consistency_id e x v; Encoding.hole_id e x v ])
+            (List.init (hi - lo + 1) (fun i -> lo + i)))
+        (Encoding.vars e)
+    in
+    (e, doors, slots)
+  in
+  let e_ret, doors_ret, slots_ret = build Encoding.Retain_rows in
+  let e_dis, doors_dis, slots_dis = build Encoding.Discard_rows in
+  check "M9-no-proof-T2: Discard_rows mints as many ids as Retain_rows"
+    (Encoding.n_constraints e_dis = Encoding.n_constraints e_ret);
+  check "M9-no-proof-T2: ...and the count is the retained rows' own"
+    (Encoding.n_constraints e_ret = List.length (Encoding.constraints e_ret));
+  check "M9-no-proof-T2: the same Encoding.cost under both sinks"
+    (Encoding.cost e_dis = Encoding.cost e_ret);
+  check "M9-no-proof-T2: every row door returns the same ids under both sinks"
+    (doors_dis = doors_ret);
+  check "M9-no-proof-T2: every rung and hole row sits at the same id under both sinks"
+    (slots_dis = slots_ret);
+  check "M9-no-proof-T2: the control -- the declarations have holes, so hole rows exist"
+    (List.exists Option.is_some slots_ret);
+  Encoding.encoding_budget := saved
+
 (* ------------------------------------------------------------------ *)
 (* M8-bits-encoding-T2 (D-0130 sections 4-6 and 11, D-0132): the bits  *)
 (* encoding, the on-demand atom, and the checker's judgement of both.  *)
@@ -4229,6 +4285,7 @@ let () =
   test_lit_rendering_is_the_reference ();
   test_m7t27_streamed_opb_is_byte_identical ();
   test_m7t27_ladder_ids_are_arithmetic ();
+  test_m9_discard_rows_mint_the_same_ids ();
   test_bits_naming ();
   test_bits_declare ();
   test_bits_mixed_row ();

@@ -1620,6 +1620,343 @@ let test_m7t27_streamed_proof_verifies () =
         (Array.to_list (Sys.readdir dir));
       try Sys.rmdir dir with _ -> ())
 
+(* ------------------------------------------------- M9-no-proof-T2: solving without a proof
+
+   docs/DECISIONS.md D-0126 (the design) and D-0135 (what landed); docs/SPEC.md section 1's
+   amended paragraph. `--no-proof` is a measurement instrument, and this is the ONLY unit
+   test allowed to use it, beside the stdout-identity pass of scripts/run_model_tests.sh.
+   Two lanes:
+
+   (a) IN PROCESS, the id rule. The same three models compiled under [Retain_rows] with a
+       real writer and under [Discard_rows] with the null writer ([Writer.create
+       ~null:true]): the same answer, the same tree ([Search.stats]), the same
+       [Encoding.n_constraints] and [Encoding.cost], the same rung, hole and
+       direct-encoding ids -- every id an [Explanation] can carry, D-0126's rule -- and
+       FEWER deferred reasons materialised, which is what the mode is for.
+
+   (b) THROUGH THE CLI, the files. `baguette M.fzn --no-proof` prints the bytes the proved
+       run prints, exits as it exits, writes to stderr only what it is asked for and
+       creates NO file: none beside the model, none in the temp directory. `--stats` says
+       the run is unproved, `--time` counts zero emitted lines, and `--no-proof --proof` is
+       refused with exit 2 before anything is opened. test/unit/dune declares bin/main.exe
+       as a dependency of the test binaries, so `dune runtest` builds the solver this lane
+       runs -- the stale-binary trap CLAUDE.md records does not reach it.
+
+   The three models are test/models/ files verbatim: alldiff_const_sat (a direct encoding,
+   so [start_proof] mints ids through the writer), backjump_deep_unsat (learning and
+   backjumps, so [Learned.introduce] and [Retention] run through the null writer) and
+   opt_min_sat (branch and bound, so `soli` and the conclusion do). *)
+
+let m9_models =
+  [
+    ( "alldiff_const_sat",
+      "var 1..3: p :: output_var;\n\
+       var 1..3: q :: output_var;\n\
+       constraint all_different_int([p, q, 2]);\n\
+       constraint int_le(p, q);\n\
+       solve satisfy;\n" );
+    ( "backjump_deep_unsat",
+      "var 0..1: p :: output_var;\n\
+       var 0..1: q :: output_var;\n\
+       var 0..1: r :: output_var;\n\
+       var 0..3: x :: output_var;\n\
+       var 0..3: y :: output_var;\n\
+       constraint int_ne(x, y);\n\
+       constraint int_eq(x, y);\n\
+       solve satisfy;\n" );
+    ( "opt_min_sat",
+      "var 0..5: x :: output_var;\n\
+       var 0..5: y :: output_var;\n\
+       constraint int_lin_le([-1,-1],[x,y],-4);\n\
+       constraint int_lin_le([1,-2],[x,y],0);\n\
+       solve minimize y;\n" );
+  ]
+
+(* What the proved and the unproved run of one model must agree on. *)
+type m9_run = {
+  m9_answer : string; (* the outcome, rendered *)
+  m9_tree : int list; (* nodes, decisions, conflicts, max_depth, skipped, learned, pb *)
+  m9_n : int; (* Encoding.n_constraints: ids minted by [commit] *)
+  m9_cost : Encoding.cost;
+  m9_ids : (string * int option) list; (* every id an Explanation can carry, by name *)
+  m9_later : int; (* deferred reasons materialised during this solve (D-0124) *)
+}
+
+let m9_solve ~null name src =
+  let saved = !Encoding.row_sink in
+  Encoding.row_sink := if null then Encoding.Discard_rows else Encoding.Retain_rows;
+  let m = Baguette_flatzinc.Builder.of_string ~file:name src in
+  let compiled =
+    Fun.protect
+      ~finally:(fun () -> Encoding.row_sink := saved)
+      (fun () -> Baguette_flatzinc.Compile.compile m)
+  in
+  let enc = compiled.Baguette_flatzinc.Compile.encoding in
+  let store = compiled.Baguette_flatzinc.Compile.store in
+  let path = if null then Filename.null else Filename.temp_file "baguette_m9" ".pbp" in
+  let oc = open_out path in
+  let writer = Writer.create ~audit:(not null) ~null oc in
+  Encoding.start_proof enc writer;
+  let ctx = mk_ctx writer enc in
+  let stats = Search.stats_create () in
+  let check_asn assignment =
+    let values = Array.make (Baguette_flatzinc.Model.nvars m) 0 in
+    List.iter (fun (v, x) -> values.(Var.to_int v) <- x) assignment;
+    Baguette_flatzinc.Model.check_assignment m values
+  in
+  let render asn =
+    String.concat " "
+      (List.map (fun (v, x) -> Printf.sprintf "%s=%d" (Store.name store v) x) asn)
+  in
+  let later0 = !Baguette_core.Reason.materialisations in
+  let answer =
+    match compiled.Baguette_flatzinc.Compile.objective with
+    | None -> (
+        match
+          Search.solve ~engine:compiled.Baguette_flatzinc.Compile.engine ~store ~ctx
+            ~check:check_asn ~stats ?order:compiled.Baguette_flatzinc.Compile.order ()
+        with
+        | Search.Sat asn -> "SAT " ^ render asn
+        | Search.Unsat -> "UNSAT")
+    | Some objective -> (
+        let printed = ref [] in
+        match
+          Search.optimise ~engine:compiled.Baguette_flatzinc.Compile.engine ~store ~ctx
+            ~check:check_asn ~stats ~objective
+            ?order:compiled.Baguette_flatzinc.Compile.order
+            ~on_solution:(fun asn -> printed := render asn :: !printed)
+            ()
+        with
+        | Search.Opt (asn, v) ->
+            Printf.sprintf "OPT %d %s [%s]" v (render asn)
+              (String.concat "; " (List.rev !printed))
+        | Search.Opt_unsat -> "OPT_UNSAT")
+  in
+  let later = !Baguette_core.Reason.materialisations - later0 in
+  close_out oc;
+  if not null then Sys.remove path;
+  let ids =
+    List.concat_map
+      (fun x ->
+        let lo, hi = Encoding.domain enc x in
+        List.concat_map
+          (fun v ->
+            [
+              (Printf.sprintf "rung %s>=%d" x v, Encoding.consistency_id enc x v);
+              (Printf.sprintf "hole %s<>%d" x v, Encoding.hole_id enc x v);
+              (Printf.sprintf "direct-lo %s=%d" x v, Encoding.direct_lo_id enc x v);
+              (Printf.sprintf "direct-hi %s=%d" x v, Encoding.direct_hi_id enc x v);
+              (Printf.sprintf "direct-fwd %s=%d" x v, Encoding.direct_fwd_id enc x v);
+            ])
+          (List.init (max 0 (hi - lo + 1)) (fun i -> lo + i))
+        @ [ (Printf.sprintf "at-least-one %s" x, Encoding.at_least_one_id enc x) ])
+      (Encoding.vars enc)
+  in
+  {
+    m9_answer = answer;
+    m9_tree =
+      [
+        stats.Search.nodes;
+        stats.Search.decisions;
+        stats.Search.conflicts;
+        stats.Search.max_depth;
+        stats.Search.skipped;
+        stats.Search.n_learned;
+        stats.Search.n_pb_learned;
+      ];
+    m9_n = Encoding.n_constraints enc;
+    m9_cost = Encoding.cost enc;
+    m9_ids = ids;
+    m9_later = later;
+  }
+
+let m9_ints xs = String.concat "," (List.map string_of_int xs)
+let m9_opt = function None -> "-" | Some i -> string_of_int i
+
+let test_m9_no_proof_in_process () =
+  List.iter
+    (fun (name, src) ->
+      let tag = "M9-no-proof-T2 (a) " ^ name in
+      let p = m9_solve ~null:false name src in
+      let n = m9_solve ~null:true name src in
+      check
+        (tag ^ ": the same answer with and without a proof")
+        (p.m9_answer = n.m9_answer);
+      if p.m9_answer <> n.m9_answer then
+        Printf.printf "  proved: %s\n  no-proof: %s\n" p.m9_answer n.m9_answer;
+      check
+        (tag
+       ^ ": the same tree -- nodes, decisions, conflicts, depth, skipped, learned, pb")
+        (p.m9_tree = n.m9_tree);
+      if p.m9_tree <> n.m9_tree then
+        Printf.printf "  proved: %s\n  no-proof: %s\n" (m9_ints p.m9_tree)
+          (m9_ints n.m9_tree);
+      check
+        (tag ^ ": the same number of ids minted by Encoding.commit (D-0126 rule 1)")
+        (p.m9_n = n.m9_n);
+      check (tag ^ ": the same Encoding.cost") (p.m9_cost = n.m9_cost);
+      check
+        (tag ^ ": every rung, hole and direct-encoding id identical (D-0126's id rule)")
+        (p.m9_ids = n.m9_ids);
+      if p.m9_ids <> n.m9_ids then
+        List.iter2
+          (fun (k, a) (_, b) ->
+            if a <> b then
+              Printf.printf "  %s: proved %s, no-proof %s\n" k (m9_opt a) (m9_opt b))
+          p.m9_ids n.m9_ids;
+      if name = "alldiff_const_sat" then
+        check
+          (tag
+         ^ ": the direct encoding WAS minted through the null writer (the control: \
+            start_proof ran, D-0126 rule 2)")
+          (List.exists
+             (fun (k, v) ->
+               String.length k > 7 && String.sub k 0 7 = "direct-" && v <> None)
+             n.m9_ids);
+      check
+        (Printf.sprintf
+           "%s: --no-proof materialises no more deferred reasons than the proved run (%d \
+            vs %d)"
+           tag n.m9_later p.m9_later)
+        (n.m9_later <= p.m9_later);
+      if name <> "alldiff_const_sat" then
+        check
+          (tag
+         ^ ": ...and strictly fewer: the trace's per-entry materialisations are gone \
+            (D-0124, D-0126)")
+          (n.m9_later < p.m9_later))
+    m9_models
+
+(* bin/main.exe, found above the test's own cwd (dune runs a test in
+   _build/default/test/unit, and _build/default/bin/main.exe is two levels up). *)
+let m9_binary () =
+  let exe = Filename.concat "bin" "main.exe" in
+  let rec up d n =
+    if n > 6 then None
+    else
+      let p = Filename.concat d exe in
+      if Sys.file_exists p then Some p
+      else up (Filename.concat d Filename.parent_dir_name) (n + 1)
+  in
+  up (Sys.getcwd ()) 0
+
+(* Run the solver with [args] from inside [cwd]; return (exit code, stdout, stderr) and
+   leave [cwd] as it was apart from what the solver itself created. *)
+let m9_run ?tmpdir binary ~cwd args =
+  let out = Filename.concat cwd "out" and err = Filename.concat cwd "err" in
+  let env =
+    match tmpdir with None -> "" | Some d -> "TMPDIR=" ^ Filename.quote d ^ " "
+  in
+  let rc =
+    Sys.command
+      (Printf.sprintf "cd %s && %s%s %s > %s 2> %s" (Filename.quote cwd) env
+         (Filename.quote binary) args (Filename.quote out) (Filename.quote err))
+  in
+  let o = read_file out and e = read_file err in
+  Sys.remove out;
+  Sys.remove err;
+  (rc, o, e)
+
+(* The temp directory a run sees: its own, empty, so "--no-proof opened no temp file" is
+   a statement about THIS run and not about whatever the other test binaries dune runs in
+   parallel create and delete in the shared one. A proof channel the CLI opens without
+   --proof is [Filename.temp_file], which honours TMPDIR. *)
+let m9_fresh_dir parent name =
+  let d = Filename.concat parent name in
+  Sys.mkdir d 0o700;
+  d
+
+let rec m9_rm_rf p =
+  if Sys.is_directory p then (
+    Array.iter (fun f -> m9_rm_rf (Filename.concat p f)) (Sys.readdir p);
+    Sys.rmdir p)
+  else Sys.remove p
+
+let test_m9_no_proof_cli () =
+  match m9_binary () with
+  | None ->
+      incr failures;
+      print_endline
+        "FAIL M9-no-proof-T2 (b): bin/main.exe was not found above the test's cwd, so \
+         the CLI lane was NOT run. Build bin/ first (`dune build bin/`); test/unit/dune \
+         declares the dependency, so under `dune runtest` this cannot happen."
+  | Some binary ->
+      let binary =
+        if Filename.is_relative binary then Filename.concat (Sys.getcwd ()) binary
+        else binary
+      in
+      let dir = Filename.temp_file "baguette_m9cli" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      List.iter
+        (fun (name, src) ->
+          let tag = "M9-no-proof-T2 (b) " ^ name in
+          let fzn = Filename.concat dir (name ^ ".fzn") in
+          let oc = open_out fzn in
+          output_string oc src;
+          close_out oc;
+          let q = Filename.quote fzn in
+          let proved = Filename.concat dir (name ^ ".proved")
+          and unproved = Filename.concat dir (name ^ ".noproof") in
+          Sys.mkdir proved 0o700;
+          Sys.mkdir unproved 0o700;
+          let tmp = m9_fresh_dir dir (name ^ ".tmp") in
+          let rc_p, out_p, err_p = m9_run binary ~cwd:proved ("--proof p " ^ q) in
+          let rc_n, out_n, err_n =
+            m9_run ~tmpdir:tmp binary ~cwd:unproved ("--no-proof " ^ q)
+          in
+          check (tag ^ ": the proved run exits 0") (rc_p = 0);
+          check (tag ^ ": --no-proof exits as the proved run does") (rc_n = rc_p);
+          check
+            (tag ^ ": --no-proof prints the proved run's bytes, exactly")
+            (out_n = out_p);
+          if out_n <> out_p then Printf.printf "  proved:\n%s  no-proof:\n%s" out_p out_n;
+          check
+            (tag ^ ": neither run writes to stderr unasked (M1-T49)")
+            (err_p = "" && err_n = "");
+          if err_p <> "" || err_n <> "" then
+            Printf.printf "  proved:\n%s  no-proof:\n%s" err_p err_n;
+          check
+            (tag ^ ": the proved run DID write p.opb and p.pbp (the control)")
+            (Sys.file_exists (Filename.concat proved "p.opb")
+            && Sys.file_exists (Filename.concat proved "p.pbp"));
+          check
+            (tag ^ ": --no-proof created NO file beside the model")
+            (Sys.readdir unproved = [||]);
+          check (tag ^ ": ...and none in its temp directory") (Sys.readdir tmp = [||]);
+          let _, out_s, err_s =
+            m9_run ~tmpdir:tmp binary ~cwd:unproved ("--no-proof --stats " ^ q)
+          in
+          check
+            (tag ^ ": --stats under --no-proof says the run is unproved")
+            (m6_says err_s "stats: no-proof" && m6_says err_s "UNVERIFIED");
+          check
+            (tag ^ ": ...and reports no proof-shape or atom counter")
+            ((not (m6_says err_s "pol-tokens")) && not (m6_says err_s "atomlinks"));
+          check (tag ^ ": ...with stdout untouched") (out_s = out_p);
+          let _, out_t, err_t =
+            m9_run ~tmpdir:tmp binary ~cwd:unproved ("--no-proof --time " ^ q)
+          in
+          check
+            (tag ^ ": --time under --no-proof counts zero emitted lines")
+            (m6_says err_t (Printf.sprintf "time: %-10s %10d lines" "emitln" 0));
+          check (tag ^ ": ...with stdout untouched") (out_t = out_p);
+          check
+            (tag ^ ": --stats and --time created no file either")
+            (Sys.readdir unproved = [||] && Sys.readdir tmp = [||]);
+          let rc_x, out_x, err_x =
+            m9_run binary ~cwd:unproved ("--no-proof --proof x " ^ q)
+          in
+          check (tag ^ ": --no-proof beside --proof is a usage error, exit 2") (rc_x = 2);
+          check
+            (tag ^ ": ...that names both flags")
+            (m6_says err_x "--no-proof" && m6_says err_x "--proof");
+          check
+            (tag ^ ": ...prints nothing on stdout and opens no file")
+            (out_x = "" && Sys.readdir unproved = [||]))
+        m9_models;
+      m9_rm_rf dir
+
 let () =
   print_endline "";
   List.iter run_model models;
@@ -1630,6 +1967,8 @@ let () =
   test_m6_time_limit ();
   test_m6_t21_stop_in_propagation ();
   test_m7t27_streamed_proof_verifies ();
+  test_m9_no_proof_in_process ();
+  test_m9_no_proof_cli ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

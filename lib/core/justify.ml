@@ -532,10 +532,13 @@ let emit_clause ctx lits =
    -- [emitted_ids] would list one id twice, and [permanent_ids] would hand
    [Search.solve] an id to delete twice, which is an I-X2 violation rather than a saving. *)
 let emit_rup_clause ctx ~origin lits =
-  validate_lits ctx lits;
-  let cid = Writer.rup_clause ctx.writer ~origin lits in
-  state_clause ctx lits cid;
-  cid
+  (* M9-no-proof-T2: no line, no claim-index entry, no literal validated. *)
+  if Writer.is_null ctx.writer then Writer.fresh ctx.writer ~origin
+  else (
+    validate_lits ctx lits;
+    let cid = Writer.rup_clause ctx.writer ~origin lits in
+    state_clause ctx lits cid;
+    cid)
 
 (* [Linear (terms, rhs)] -- rup of exactly the constraint it states. Not [pol]; see
    D-0009 (docs/DECISIONS.md) for the full story, summarised here because
@@ -786,6 +789,13 @@ let rec emit ctx (e : Explanation.t) : Writer.cid =
             nogood (D-0018). See justify.ml's [emit] header and M1-T50."
            (Lit.to_string l))
   | Explanation.Model_row id -> id
+  (* M9-no-proof-T2 (D-0126): under `--no-proof` the writer is null, and the guard sits
+     HERE, before the memo and before anything is forced -- a [Deferred] thunk is never
+     run for the proof's sake, and no literal is validated or rendered. The id handed
+     back is distinct and stands for nothing; [Model_row] above and [Decision] before it
+     keep their arms, because the first is an id the model already has and the second
+     is a caller's mistake in both modes. *)
+  | _ when Writer.is_null ctx.writer -> Writer.fresh ctx.writer ~origin:"no-proof"
   | Explanation.Clause lits -> memoized ctx e (fun () -> emit_clause ctx lits)
   | Explanation.Linear (terms, rhs) ->
       memoized ctx e (fun () -> emit_linear ctx terms rhs)
@@ -823,7 +833,9 @@ let emit_stating ctx ~(claim : Opb.constr) (e : Explanation.t) : Writer.cid =
     | Explanation.Decision _ ->
         emit ctx e
   in
-  go e
+  (* M9-no-proof-T2: nothing stated and nothing forced; see [emit]. *)
+  if Writer.is_null ctx.writer then Writer.fresh ctx.writer ~origin:"no-proof: stated"
+  else go e
 
 (* M8-bits-encoding-T2: the BITS arm's trace line -- the module header's "The BITS arm"
    says what the `pol` is and why it derives exactly the trace clause. [concludes] is
@@ -939,6 +951,9 @@ let emit_concluding ctx ~(concludes : Reason.fact option) (e : Explanation.t) : 
     =
   match Option.bind concludes Reason.lit_of_fact with
   | None -> emit ctx e
+  (* M9-no-proof-T2: nothing concluded and nothing forced; see [emit]. *)
+  | Some _ when Writer.is_null ctx.writer ->
+      Writer.fresh ctx.writer ~origin:"no-proof: concluding"
   | Some l -> (
       (* The same hygiene [emit_clause] applies to a reason's literals: a conclusion
          about a variable this encoding never declared is a caller's mistake and says

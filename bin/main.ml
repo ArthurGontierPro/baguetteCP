@@ -36,6 +36,23 @@
    still fails loudly if the solver cannot justify itself. It is the file that is
    optional, not the proof.
 
+   **Except under `--no-proof` (M9-no-proof-T2, D-0126), which is off by default and is
+   a MEASUREMENT INSTRUMENT, not a mode of the solver.** It keeps every Explanation (the
+   mutators take one by type, I-P4), the learning and the independent solution check
+   I-S1, and skips what makes bytes: the .opb rows ([Encoding.row_sink] at
+   [Discard_rows], and the ladder loop short-circuited to its count), the .pbp (a
+   [Writer.t] over [Filename.null] built by [Writer.create ~null:true], whose every rule
+   mints its id and writes nothing), every justification and trace ([Justify] and
+   [Trace] return at their entry under that writer, before forcing anything), the
+   proof-side deletion of learned rows and the audit I-X2. [Encoding.start_proof] is
+   still called, through that writer, because element and alldiff embed its
+   [Writer.fresh] ids in their explanations and D-0126's id rule wants those identical
+   in both modes. What it prints is UNVERIFIED and SPEC 1 says it is not a result;
+   `--stats` says so on stderr. `make check` proves every model AND runs it again under
+   this flag: stdout and the exit code must be byte-identical
+   (scripts/run_model_tests.sh), which is the one direct test that proof logging never
+   steers the search.
+
    **The .opb comment names the model's BASENAME, not the path it was given** (M1-T37).
    `.opb` bytes are the one column M3-T5 found trustworthy at every row, and while the
    header read `"baguette: " ^ opts.model` that column was not a property of the model at
@@ -69,6 +86,7 @@ type options = {
   time : bool;
   stats : bool;
   time_limit : float option;
+  no_proof : bool; (* M9-no-proof-T2: solve without a proof -- see the header *)
 }
 
 (* Exit codes. 0 covers both SAT and UNSAT: an UNSAT model is a successful run that
@@ -93,7 +111,8 @@ let usage () =
   prerr_endline
     "usage: baguette MODEL.fzn [--proof PREFIX] [--proof-comments] [--all] [--time] \
      [--stats] [--max-order-width N] [--max-direct-values N] [--width-warn N] \
-     [--max-encoding-clauses N] [--max-heap-mb N] [--bits-above W] [--time-limit S]";
+     [--max-encoding-clauses N] [--max-heap-mb N] [--bits-above W] [--time-limit S] \
+     [--no-proof]";
   prerr_endline "";
   prerr_endline "  --proof PREFIX    write PREFIX.opb and PREFIX.pbp (SPEC 4.1); verify";
   prerr_endline "                    them with: veripb PREFIX.opb PREFIX.pbp";
@@ -138,6 +157,26 @@ let usage () =
   prerr_endline "                    usual; the proof ends `conclusion NONE`, which";
   prerr_endline "                    veripb checks and reports as VERIFIED NO CONCLUSION.";
   prerr_endline "                    Exit status 0: a stopped run is not a failure.";
+  prerr_endline
+    "  --no-proof        (M9-no-proof-T2, D-0126) solve WITHOUT a proof. Off by";
+  prerr_endline "                    default, and a MEASUREMENT INSTRUMENT: the answer it";
+  prerr_endline
+    "                    prints is UNVERIFIED and is not a result (SPEC 1). It";
+  prerr_endline
+    "                    writes no .opb, no .pbp, no justification and no trace,";
+  prerr_endline
+    "                    skips the proof-side deletion of learned rows and the";
+  prerr_endline
+    "                    audit I-X2 (BAGUETTE_PROOF_AUDIT is ignored), and keeps";
+  prerr_endline
+    "                    every explanation, the learning, the solution check and";
+  prerr_endline
+    "                    every front-end refusal. stdout is byte-identical to the";
+  prerr_endline
+    "                    proved run's -- scripts/run_model_tests.sh checks that on";
+  prerr_endline
+    "                    every model, every `make check`. Cannot be combined with";
+  prerr_endline "                    --proof (exit 2). --stats says the run was unproved.";
   prerr_endline "";
   prerr_endline "  --max-order-width N   refuse any variable whose DECLARED width";
   prerr_endline "                    exceeds N. DEFAULT: none -- the default build has no";
@@ -255,6 +294,7 @@ let parse_args argv =
   let time = ref false in
   let stats = ref false in
   let time_limit = ref None in
+  let no_proof = ref false in
   let rec go i =
     if i >= Array.length argv then ()
     else
@@ -274,6 +314,9 @@ let parse_args argv =
           go (i + 1)
       | "--stats" ->
           stats := true;
+          go (i + 1)
+      | "--no-proof" ->
+          no_proof := true;
           go (i + 1)
       | "--time-limit" ->
           if i + 1 >= Array.length argv then usage ();
@@ -330,6 +373,14 @@ let parse_args argv =
           go (i + 1)
   in
   go 1;
+  (* M9-no-proof-T2 (D-0126): the two flags contradict each other, and a silent choice
+     between them is the trap CLAUDE.md records twice -- a measurement whose flag was
+     never in force. A usage error, exit 2, and no file is touched. *)
+  if !no_proof && !proof_prefix <> None then (
+    prerr_endline
+      "baguette: --no-proof and --proof PREFIX contradict each other: one asks for no \
+       proof and the other for where to write it. Give one of them.";
+    exit exit_usage);
   match !model with
   | None -> usage ()
   | Some m ->
@@ -341,6 +392,7 @@ let parse_args argv =
         time = !time;
         stats = !stats;
         time_limit = !time_limit;
+        no_proof = !no_proof;
       }
 
 (* --------------------------------------------------------- timing (M1-T35) *)
@@ -604,13 +656,19 @@ let assignment_values m store (assignment : Search.assignment) =
 (* The proof channel, plus how to finish with it. Without --proof it is a temporary
    file that is removed afterwards: see the header. *)
 let open_proof_channel opts =
-  match opts.proof_prefix with
-  | Some prefix ->
-      let path = prefix ^ ".pbp" in
-      (open_out path, fun () -> ())
-  | None -> (
-      let path = Filename.temp_file "baguette" ".pbp" in
-      (open_out path, fun () -> try Sys.remove path with Sys_error _ -> ()))
+  (* M9-no-proof-T2: the null channel. Nothing is written through it -- the writer over
+     it is [Writer.create ~null:true] and every rule returns before rendering -- and it
+     exists so that the writer has a channel to be over and the pipeline below keeps its
+     one shape. [parse_args] has already refused `--no-proof` beside `--proof`. *)
+  if opts.no_proof then (open_out Filename.null, fun () -> ())
+  else
+    match opts.proof_prefix with
+    | Some prefix ->
+        let path = prefix ^ ".pbp" in
+        (open_out path, fun () -> ())
+    | None -> (
+        let path = Filename.temp_file "baguette" ".pbp" in
+        (open_out path, fun () -> try Sys.remove path with Sys_error _ -> ()))
 
 let audit_enabled () =
   (* The library defaults this off and turns it on with BAGUETTE_PROOF_AUDIT=1
@@ -844,6 +902,18 @@ let report_proof_shapes (sh : Writer.shape_stats) =
   else
     Printf.eprintf "stats: %-10s %10d tokens in the widest `pol` -- %s\n" "pol-widest"
       sh.Writer.pol_tokens_max sh.Writer.pol_widest
+
+(* M9-no-proof-T2 (D-0126). The line that says what this run is NOT, printed in place of
+   the proof-shape and atom reports: those would read all zeros here, which to anyone
+   grepping `stats:` looks like a proof with no `pol` in it rather than no proof. *)
+let report_no_proof () =
+  Printf.eprintf "stats: %-10s %10d %-6s %s\n" "no-proof" 1 "bool"
+    "--no-proof: NO PROOF EXISTS for this run; the answer on stdout is UNVERIFIED";
+  prerr_endline
+    "stats: and is not a result (SPEC 1, D-0126). A measurement instrument: what the";
+  prerr_endline
+    "stats: proof costs is what the same run WITH a proof costs beyond this one. No";
+  prerr_endline "stats: proof-shape or atom counters: nothing was written."
 
 let report_stats (st : Search.stats) ~exhausted =
   prerr_endline
@@ -1156,7 +1226,8 @@ let solve opts (m : Model.t) =
     Timing.phase "proofopen" (fun () ->
         let proof_oc, cleanup = open_proof_channel opts in
         let writer =
-          Writer.create ~comments:opts.proof_comments ~audit:(audit_enabled ()) proof_oc
+          Writer.create ~comments:opts.proof_comments ~audit:(audit_enabled ())
+            ~null:opts.no_proof proof_oc
         in
         Encoding.start_proof encoding writer;
         (* Every propagator instance carries its own row id (D-0011/D-0015). This used
@@ -1308,8 +1379,10 @@ let solve opts (m : Model.t) =
       ~families:(Engine.family_table compiled.Compile.engine)
       (Engine.counters compiled.Compile.engine)
       ~nodes:stats.Search.nodes;
-    report_proof_shapes (Writer.shape_stats (Justify.writer ctx));
-    report_atoms (Encoding.atom_stats encoding))
+    if opts.no_proof then report_no_proof ()
+    else (
+      report_proof_shapes (Writer.shape_stats (Justify.writer ctx));
+      report_atoms (Encoding.atom_stats encoding)))
 
 (* --------------------------------------------------------------------- main *)
 

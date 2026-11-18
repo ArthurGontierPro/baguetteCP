@@ -277,6 +277,17 @@ type t = {
          up in [tags], which is the authority. *)
   mutable by_hi : int; (* no bucket above this index is non-empty *)
   audit : bool;
+  null : bool;
+      (* M9-no-proof-T2 (D-0126). A NULL writer: every rule below mints its id through
+         [fresh] and writes nothing -- no line, no level comment, no deletion, no
+         conclusion -- and [fresh] itself keeps no tag, no bucket and no audit entry.
+         Built by [create ~null:true] for `--no-proof`, over a channel nobody reads
+         (bin/main.ml opens [Filename.null]). The ids it hands back are DISTINCT and
+         nothing else: a caller keyed by id (the retention database, the sweeps) sees the
+         same shape it sees in a proved run, and the one counter that must agree with the
+         proved run to the number -- the direct-encoding ids [Encoding.start_proof]
+         mints -- does, because [header] and [fresh] count the same way. Everything past
+         [start_proof] is a proof-only id that no [Explanation] carries. *)
   comments : bool;
   mutable level : int;
   mutable finished : bool;
@@ -306,8 +317,11 @@ type t = {
 let audit_enabled () =
   match Sys.getenv_opt "BAGUETTE_PROOF_AUDIT" with Some "1" -> true | _ -> false
 
-let create ?(comments = false) ?audit oc =
+let create ?(comments = false) ?audit ?(null = false) oc =
   let audit = match audit with Some b -> b | None -> audit_enabled () in
+  (* M9-no-proof-T2: a null writer audits nothing, whatever the environment asked for --
+     there is no page for I-X2 to be a statement about. *)
+  let audit = audit && not null in
   {
     oc;
     next_id = 0;
@@ -318,6 +332,7 @@ let create ?(comments = false) ?audit oc =
     by_lvl = Array.make 16 [];
     by_hi = -1;
     audit;
+    null;
     comments;
     level = 0;
     finished = false;
@@ -355,6 +370,10 @@ let mutation_plan t = t.mutation
 let cite _t id = Opb.label_of id
 let cite_all t ids = String.concat " " (List.map (cite t) ids)
 let auditing t = t.audit
+
+(* M9-no-proof-T2: is this the null writer? [Justify] and [Trace] ask at the entry of
+   their emitting functions and return before forcing or rendering anything. *)
+let is_null t = t.null
 let last_id t = t.next_id
 
 (* The shape counters, as a value (M8-bits-encoding-T5, D-0131). [pol_widest] is the
@@ -460,7 +479,10 @@ let emitted_lines () = !emit_lines
 
 let line t fmt =
   if t.finished then invalid_arg "Writer: the proof has already ended";
-  if not !emit_clock then (
+  (* M9-no-proof-T2: the null writer consumes the format and writes nothing, and
+     [emit_lines] stays where it was, so --time's `emitln` reads 0. *)
+  if t.null then Printf.ifprintf t.oc (fmt ^^ "\n")
+  else if not !emit_clock then (
     incr emit_lines;
     Printf.fprintf t.oc (fmt ^^ "\n"))
   else
@@ -495,7 +517,8 @@ let label_for _t id = Opb.label_of id ^ " "
    paths in Encoding that nothing but test/unit/test_proof.ml reaches -- and it would
    take a caller emitting far more suppressed comments than rules to matter. *)
 let comment t fmt =
-  if not !emit_clock then
+  if t.null then Printf.ifprintf t.oc ("%% " ^^ fmt ^^ "\n")
+  else if not !emit_clock then
     if t.comments then (
       incr emit_lines;
       Printf.fprintf t.oc ("%% " ^^ fmt ^^ "\n"))
@@ -517,7 +540,8 @@ let comment t fmt =
    themselves ([set_level]), which is why this bypass of [line] is not a detail: on a
    model with 196 decisions it is 196 of the proof's lines. *)
 let always_comment t fmt =
-  if not !emit_clock then (
+  if t.null then Printf.ifprintf t.oc ("%% " ^^ fmt ^^ "\n")
+  else if not !emit_clock then (
     incr emit_lines;
     Printf.fprintf t.oc ("%% " ^^ fmt ^^ "\n"))
   else
@@ -531,15 +555,18 @@ let always_comment t fmt =
 
 let fresh t ~origin =
   t.next_id <- t.next_id + 1;
-  if t.audit then Hashtbl.replace t.live t.next_id { origin; level = t.level };
-  Hashtbl.replace t.tags t.next_id t.level;
-  let lv = t.level in
-  if lv >= Array.length t.by_lvl then (
-    let a = Array.make (max (lv + 1) (2 * Array.length t.by_lvl)) [] in
-    Array.blit t.by_lvl 0 a 0 (Array.length t.by_lvl);
-    t.by_lvl <- a);
-  t.by_lvl.(lv) <- t.next_id :: t.by_lvl.(lv);
-  if lv > t.by_hi then t.by_hi <- lv;
+  (* M9-no-proof-T2: the null writer counts and nothing else. No tag and no bucket, so
+     [wipe_level] has nothing to walk; no audit entry, so [live_ids] stays empty. *)
+  if not t.null then (
+    if t.audit then Hashtbl.replace t.live t.next_id { origin; level = t.level };
+    Hashtbl.replace t.tags t.next_id t.level;
+    let lv = t.level in
+    if lv >= Array.length t.by_lvl then (
+      let a = Array.make (max (lv + 1) (2 * Array.length t.by_lvl)) [] in
+      Array.blit t.by_lvl 0 a 0 (Array.length t.by_lvl);
+      t.by_lvl <- a);
+    t.by_lvl.(lv) <- t.next_id :: t.by_lvl.(lv);
+    if lv > t.by_hi then t.by_hi <- lv);
   t.next_id
 
 (* Preamble: version line, then the count of model constraints loaded from the .opb.
@@ -550,20 +577,24 @@ let fresh t ~origin =
    used to be silent was the *consequence* of miscounting inside [Encoding] -- a `pol`
    citing a shifted id. That is gone too: citations are labels. *)
 let header t ~n_model_constraints =
-  line t "pseudo-Boolean proof version %s" proof_version;
-  (* A corrupted proof says so in its own first comment, unconditionally -- not under
-     --proof-comments, because the point is that this line cannot be switched off.
-     Nothing but [create_mutated] can produce it, so its presence in a file is proof
-     that the file came from the mutation gate and its absence is proof that it did
-     not. *)
-  (match t.mutation with
-  | Some m ->
-      always_comment t
-        "DELIBERATELY CORRUPTED PROOF (Writer.create_mutated): %s. Emitted by the M1-T26 \
-         mutation gate; a normal run cannot produce this line."
-        (Mutation.describe m)
-  | None -> ());
-  rule t (Printf.sprintf "f %d" n_model_constraints);
+  (* M9-no-proof-T2: the null writer writes no preamble, but the counter still starts
+     where the `f` rule would have put it, so the direct-encoding ids
+     [Encoding.start_proof] mints next are the proved run's (D-0126's id rule). *)
+  if not t.null then (
+    line t "pseudo-Boolean proof version %s" proof_version;
+    (* A corrupted proof says so in its own first comment, unconditionally -- not under
+       --proof-comments, because the point is that this line cannot be switched off.
+       Nothing but [create_mutated] can produce it, so its presence in a file is proof
+       that the file came from the mutation gate and its absence is proof that it did
+       not. *)
+    (match t.mutation with
+    | Some m ->
+        always_comment t
+          "DELIBERATELY CORRUPTED PROOF (Writer.create_mutated): %s. Emitted by the \
+           M1-T26 mutation gate; a normal run cannot produce this line."
+          (Mutation.describe m)
+    | None -> ());
+    rule t (Printf.sprintf "f %d" n_model_constraints));
   (* The f rule makes the model constraints ids 1..n. *)
   t.next_id <- n_model_constraints;
   t.n_model <- n_model_constraints;
@@ -1086,15 +1117,20 @@ let emit_yielding t ~origin body_of_id =
       `s`, `w v` -- so there is no derivation the raw form could state that [pol]
       cannot. It bought no expressiveness, only an unchecked path. *)
 let pol t ~origin p =
-  (* [corrupt_pol] is the identity for every writer [create] built. *)
-  let p = corrupt_pol t ~origin p in
-  let n = Pol.tokens p in
-  t.n_pol <- t.n_pol + 1;
-  t.pol_tokens <- t.pol_tokens + n;
-  if n > t.pol_tokens_max then (
-    t.pol_tokens_max <- n;
-    t.pol_widest <- origin);
-  emit_yielding t ~origin (fun _ -> "pol " ^ Pol.to_string_cited ~cite:(cite t) p)
+  (* M9-no-proof-T2: every rule that yields an id yields one from the null writer and
+     renders nothing; the guard sits before the shape counters so `--stats` cannot
+     report a `pol` that was never written. *)
+  if t.null then fresh t ~origin
+  else
+    (* [corrupt_pol] is the identity for every writer [create] built. *)
+    let p = corrupt_pol t ~origin p in
+    let n = Pol.tokens p in
+    t.n_pol <- t.n_pol + 1;
+    t.pol_tokens <- t.pol_tokens + n;
+    if n > t.pol_tokens_max then (
+      t.pol_tokens_max <- n;
+      t.pol_widest <- origin);
+    emit_yielding t ~origin (fun _ -> "pol " ^ Pol.to_string_cited ~cite:(cite t) p)
 
 (* Reverse unit propagation of a PB constraint. Prefer [pol] where the reasoning is
    known; see docs/PROOF-FORMAT.md section 2.
@@ -1102,11 +1138,13 @@ let pol t ~origin p =
    The body already ends in " ;" (Opb.constr_to_string), which is the rule terminator,
    so this goes through [line] rather than [rule]: `rup ... ; ;` is a syntax error. *)
 let rup t ~origin c =
-  let c = corrupt_claim t ~origin c in
-  let id = t.next_id + 1 in
-  t.n_rup <- t.n_rup + 1;
-  line t "%srup %s" (label_for t id) (Opb.constr_to_string c);
-  fresh t ~origin
+  if t.null then fresh t ~origin
+  else
+    let c = corrupt_claim t ~origin c in
+    let id = t.next_id + 1 in
+    t.n_rup <- t.n_rup + 1;
+    line t "%srup %s" (label_for t id) (Opb.constr_to_string c);
+    fresh t ~origin
 
 (* Reverse unit propagation of a clause -- the common case. *)
 let rup_clause t ~origin lits = rup t ~origin (Opb.clause lits)
@@ -1149,10 +1187,12 @@ let rup_clause t ~origin lits = rup t ~origin (Opb.clause lits)
 
    It yields an id like any other rule, so I-X2 applies to what it hands back. *)
 let implied t ~origin ~hint c =
-  let c = corrupt_claim t ~origin c in
-  let id = t.next_id + 1 in
-  line t "%sia %s : %s ;" (label_for t id) (Opb.constr_body c) (cite t hint);
-  fresh t ~origin
+  if t.null then fresh t ~origin
+  else
+    let c = corrupt_claim t ~origin c in
+    let id = t.next_id + 1 in
+    line t "%sia %s : %s ;" (label_for t id) (Opb.constr_body c) (cite t hint);
+    fresh t ~origin
 
 (* Redundance-based strengthening: used only to introduce definitions (direct-encoding
    channelling, reified variables). The witness maps variables to 0, 1 or a literal. *)
@@ -1165,20 +1205,22 @@ let witness_value_to_string = function
 
 let red t ~origin ~witness c =
   (match witness with [] -> invalid_arg "Writer.red: empty witness" | _ -> ());
-  let c = corrupt_claim t ~origin c in
-  let w =
-    String.concat " "
-      (List.map
-         (fun (v, value) ->
-           Printf.sprintf "%s -> %s" (Lit.var_name v) (witness_value_to_string value))
-         witness)
-  in
-  (* `red <constraint> : <witness> ;` -- the rule ends at the first `;`, so a witness
-     written after one is silently not a witness, and the checker says "A witness must
-     be specified for the red-rule". Measured. *)
-  let id = t.next_id + 1 in
-  line t "%sred %s : %s ;" (label_for t id) (Opb.constr_body c) w;
-  fresh t ~origin
+  if t.null then fresh t ~origin
+  else
+    let c = corrupt_claim t ~origin c in
+    let w =
+      String.concat " "
+        (List.map
+           (fun (v, value) ->
+             Printf.sprintf "%s -> %s" (Lit.var_name v) (witness_value_to_string value))
+           witness)
+    in
+    (* `red <constraint> : <witness> ;` -- the rule ends at the first `;`, so a witness
+       written after one is silently not a witness, and the checker says "A witness must
+       be specified for the red-rule". Measured. *)
+    let id = t.next_id + 1 in
+    line t "%sred %s : %s ;" (label_for t id) (Opb.constr_body c) w;
+    fresh t ~origin
 
 (* ---------------------------- deletion ----------------------------------- *)
 
@@ -1190,6 +1232,7 @@ let forget t id =
 let delete_many t ids =
   match ids with
   | [] -> ()
+  | _ when t.null -> ()
   | _ ->
       rule t (Printf.sprintf "del id %s" (cite_all t ids));
       List.iter (Hashtbl.remove t.tags) ids;
@@ -1232,13 +1275,17 @@ let pol_concluding t ~origin ~claim p =
    constraint ID (label or signed integer) ... but found `id`"). [del] and [core] keep
    theirs. Measured; there is no pattern to infer. *)
 let delete_core t id =
-  rule t (Printf.sprintf "delc %s" (cite t id));
-  Hashtbl.remove t.tags id;
-  forget t id
+  if not t.null then (
+    rule t (Printf.sprintf "delc %s" (cite t id));
+    Hashtbl.remove t.tags id;
+    forget t id)
 
 (* Move constraints into the core set (after an improving solution, M5). *)
 let core t ids =
-  match ids with [] -> () | _ -> rule t (Printf.sprintf "core id %s" (cite_all t ids))
+  match ids with
+  | [] -> ()
+  | _ when t.null -> ()
+  | _ -> rule t (Printf.sprintf "core id %s" (cite_all t ids))
 
 (* ---------------------------- solutions ---------------------------------- *)
 
@@ -1246,7 +1293,8 @@ let lits_to_string lits = String.concat " " (List.map Lit.to_string lits)
 
 (* [sol] records a solution and derives nothing. The assignment must propagate to a
    total assignment, so hand it every decision variable's literals. *)
-let solution t lits = rule t (Printf.sprintf "sol %s" (lits_to_string lits))
+let solution t lits =
+  if not t.null then rule t (Printf.sprintf "sol %s" (lits_to_string lits))
 
 (* [solx] records a solution *and* adds the clause excluding it; that clause is an
    id you own.
@@ -1256,9 +1304,11 @@ let solution t lits = rule t (Printf.sprintf "sol %s" (lits_to_string lits))
    `preserved` machinery, which this project has no encoding for. Nothing in M1 emits
    it; enumeration (and M5's `soli`, untested here) will have to face this. *)
 let solution_excluding t ~origin lits =
-  let id = t.next_id + 1 in
-  rule t (Printf.sprintf "%ssolx %s" (label_for t id) (lits_to_string lits));
-  fresh t ~origin
+  if t.null then fresh t ~origin
+  else
+    let id = t.next_id + 1 in
+    rule t (Printf.sprintf "%ssolx %s" (label_for t id) (lits_to_string lits));
+    fresh t ~origin
 
 (* Improving solution for optimisation (M5-T1). The checker reads the objective out of
    the .opb, builds the strictly-improving constraint "obj <= <this solution's value> - 1"
@@ -1290,28 +1340,32 @@ let solution_excluding t ~origin lits =
    that "nothing was leaked" and "nothing was retired that could not be" stay distinct
    claims rather than one silence. *)
 let improving t ~origin lits =
-  let id = t.next_id + 1 in
-  rule t (Printf.sprintf "%ssoli %s" (label_for t id) (lits_to_string lits));
-  let id = fresh t ~origin in
-  forget t id;
-  if t.audit then Hashtbl.replace t.objective id { origin; level = t.level };
-  id
+  if t.null then fresh t ~origin
+  else
+    let id = t.next_id + 1 in
+    rule t (Printf.sprintf "%ssoli %s" (label_for t id) (lits_to_string lits));
+    let id = fresh t ~origin in
+    forget t id;
+    if t.audit then Hashtbl.replace t.objective id { origin; level = t.level };
+    id
 
 (* Objective update (M5). [diff] gives the change, [`New] the whole new objective. *)
 let objective_update t ~origin kind terms =
-  let body =
-    String.concat " "
-      (List.map (fun (a, l) -> Printf.sprintf "%+d %s" a (Lit.to_string l)) terms)
-  in
-  (* Already `;`-terminated, so 3.0 needs no second one -- but 3.0 does demand an
-     explicit subproof for the proofgoals an objective update raises ("Proofgoal #1
-     could not be autoproven"), which this does not emit. M5 territory; recorded in
-     D-0023 as measured-and-not-solved rather than left to be discovered. *)
-  let id = t.next_id + 1 in
-  line t "%sobju %s %s ;" (label_for t id)
-    (match kind with `New -> "new" | `Diff -> "diff")
-    body;
-  fresh t ~origin
+  if t.null then fresh t ~origin
+  else
+    let body =
+      String.concat " "
+        (List.map (fun (a, l) -> Printf.sprintf "%+d %s" a (Lit.to_string l)) terms)
+    in
+    (* Already `;`-terminated, so 3.0 needs no second one -- but 3.0 does demand an
+       explicit subproof for the proofgoals an objective update raises ("Proofgoal #1
+       could not be autoproven"), which this does not emit. M5 territory; recorded in
+       D-0023 as measured-and-not-solved rather than left to be discovered. *)
+    let id = t.next_id + 1 in
+    line t "%sobju %s %s ;" (label_for t id)
+      (match kind with `New -> "new" | `Diff -> "diff")
+      body;
+    fresh t ~origin
 
 (* ----------------------------- audit ------------------------------------- *)
 
@@ -1411,41 +1465,45 @@ let conclusion ?(output = "NONE") t v =
      exactly when the .opb has none either and the empty assignment is the complete one.
      test/unit/test_proof.ml's control lane asserts the non-empty side rather than
      leaving that as an argument. *)
-  (match v with Sat lits -> solution t lits | _ -> ());
-  rule t (Printf.sprintf "output %s" output);
-  (match v with
-  | Sat _ -> rule t "conclusion SAT"
-  | No_conclusion -> rule t "conclusion NONE"
-  | Unsat None -> rule t "conclusion UNSAT"
-  | Unsat (Some id) ->
-      rule t (Printf.sprintf "conclusion UNSAT : %s" (cite t id));
-      forget t id
-  | Bounds { lower; lower_id; upper; upper_assignment } ->
-      let b = Buffer.create 64 in
-      Buffer.add_string b
-        (match lower with
-        | None -> "conclusion BOUNDS INF"
-        | Some l -> Printf.sprintf "conclusion BOUNDS %d" l);
-      (match lower_id with
-      | Some id ->
-          Buffer.add_string b (Printf.sprintf " : %s" (cite t id));
-          forget t id
-      | None -> ());
-      Buffer.add_string b
-        (match upper with None -> " INF" | Some u -> Printf.sprintf " %d" u);
-      if upper <> None && upper_assignment <> [] then
-        Buffer.add_string b (Printf.sprintf " : %s" (lits_to_string upper_assignment));
-      rule t (Buffer.contents b));
-  rule t "end pseudo-Boolean proof";
-  t.finished <- true;
-  (* The fourth write to [t.oc], and the only one that is not a line: it is where the
-     buffered proof actually reaches the kernel, so on a proof of any size it is the
-     single largest emission cost in the whole of [search]. It bypasses [line] by
-     construction and is accumulated here rather than left out. It adds no line, so
-     [emit_lines] does not move. *)
-  (if not !emit_clock then flush t.oc
-   else
-     let t0 = emit_now () in
-     flush t.oc;
-     emit_us := !emit_us + (emit_now () - t0));
-  check_audit t
+  (* M9-no-proof-T2: the null writer has nothing to end, nothing to flush and nothing
+     to audit; it only stops accepting rules, as a finished proof does. *)
+  if t.null then t.finished <- true
+  else (
+    (match v with Sat lits -> solution t lits | _ -> ());
+    rule t (Printf.sprintf "output %s" output);
+    (match v with
+    | Sat _ -> rule t "conclusion SAT"
+    | No_conclusion -> rule t "conclusion NONE"
+    | Unsat None -> rule t "conclusion UNSAT"
+    | Unsat (Some id) ->
+        rule t (Printf.sprintf "conclusion UNSAT : %s" (cite t id));
+        forget t id
+    | Bounds { lower; lower_id; upper; upper_assignment } ->
+        let b = Buffer.create 64 in
+        Buffer.add_string b
+          (match lower with
+          | None -> "conclusion BOUNDS INF"
+          | Some l -> Printf.sprintf "conclusion BOUNDS %d" l);
+        (match lower_id with
+        | Some id ->
+            Buffer.add_string b (Printf.sprintf " : %s" (cite t id));
+            forget t id
+        | None -> ());
+        Buffer.add_string b
+          (match upper with None -> " INF" | Some u -> Printf.sprintf " %d" u);
+        if upper <> None && upper_assignment <> [] then
+          Buffer.add_string b (Printf.sprintf " : %s" (lits_to_string upper_assignment));
+        rule t (Buffer.contents b));
+    rule t "end pseudo-Boolean proof";
+    t.finished <- true;
+    (* The fourth write to [t.oc], and the only one that is not a line: it is where the
+       buffered proof actually reaches the kernel, so on a proof of any size it is the
+       single largest emission cost in the whole of [search]. It bypasses [line] by
+       construction and is accumulated here rather than left out. It adds no line, so
+       [emit_lines] does not move. *)
+    (if not !emit_clock then flush t.oc
+     else
+       let t0 = emit_now () in
+       flush t.oc;
+       emit_us := !emit_us + (emit_now () - t0));
+    check_audit t)

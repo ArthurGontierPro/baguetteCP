@@ -1246,11 +1246,24 @@ let declare_int_gen t x ~holes ~lo ~hi =
         1 ~x_ge_(v+1) 1 x_ge_v >= 1        i.e.  x >= v+1 -> x >= v.
      [commit], not [add_constraint]: the rung's id is [ladder_base + (value - lo - 1)]
      by construction of this loop, and its names were accounted above. *)
-  for value = lo + 1 to hi - 1 do
-    let c = Opb.clause [ Lit.negate (Lit.ge x (value + 1)); Lit.ge x value ] in
-    let id = commit t c in
-    assert (id = v.ladder_base + (value - lo - 1))
-  done;
+  (match t.sink with
+  | Discard ->
+      (* M9-no-proof-T2 (D-0126, rule 1): under [Discard_rows] no rung is ever read back,
+         so the loop below, which would build [ladder] clauses only to drop them at
+         [commit], is replaced by its count. The ids are arithmetic -- a rung's is
+         [ladder_base + (value - lo - 1)] by construction -- so nothing that cites one
+         can tell the difference, and the hole rows below still go through [commit] and
+         land exactly where the loop would have left them. This is the one place the
+         encoding half is skipped rather than discarded; everything else counts by
+         committing. *)
+      t.n <- t.n + ladder;
+      assert (t.n = v.ladder_base + ladder - 1)
+  | Retain _ | Stream _ | Written ->
+      for value = lo + 1 to hi - 1 do
+        let c = Opb.clause [ Lit.negate (Lit.ge x (value + 1)); Lit.ge x value ] in
+        let id = commit t c in
+        assert (id = v.ladder_base + (value - lo - 1))
+      done);
   (* The hole rows, after the whole ladder, in ascending order. See the comment above
      this function for why the polarity is the ladder's mirror and not its copy. *)
   List.iter
