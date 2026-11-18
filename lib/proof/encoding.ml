@@ -477,7 +477,18 @@ type t = {
      is accepted whatever its witness (D-0053), so [ensure_atom] raises instead
      (D-0130 section 5.4). *)
   mutable atoms_closed : bool;
+  (* M8-bits-encoding-T3 (D-0134 section 2.4): the CHOICE groups -- selector Booleans
+     posted by [add_choice] that the rows leave free at a tie -- newest first, and how
+     many. [assignment_lits] lists every group's selectors after the bindings. *)
+  mutable choices_rev : choice list;
+  mutable n_choices : int;
 }
+
+(* One choice group: its selectors, and which one a solution picks, read from the
+   solution's bindings by FlatZinc name. Built by lib/flatzinc/compile.ml from the
+   propagator that owns the group (maxmin's [chosen]); this module sees names and
+   values only. *)
+and choice = { ch_sels : string list; ch_pick : (string -> int) -> int }
 
 (* The encoding the CLI is currently building, for the REACTIVE guard alone (M7-T8).
 
@@ -523,6 +534,8 @@ let create () =
     n_bound_lines = 0;
     n_bits_prunings = 0;
     atoms_closed = false;
+    choices_rev = [];
+    n_choices = 0;
   }
 
 let create () =
@@ -787,6 +800,7 @@ type cost = {
   c_bits_vars : int; (* M8-bits-encoding-T2: variables on the bits encoding *)
   c_bits_rows : int; (* their bound rows, 2 per variable *)
   c_held_back : (string * int) list; (* eligible by width, held by scope: family, count *)
+  c_choices : int; (* M8-bits-encoding-T3: choice groups posted ([add_choice]) *)
 }
 
 let cost t =
@@ -798,6 +812,7 @@ let cost t =
     c_bits_vars = t.bits_vars;
     c_bits_rows = t.bits_rows;
     c_held_back = List.rev t.held_back_rev;
+    c_choices = t.n_choices;
   }
 
 (* [Compile] says a variable was eligible by width and held back by [family]'s scope
@@ -1845,8 +1860,40 @@ let assignment_lits_of t x value =
   in
   order @ direct
 
+(* M8-bits-encoding-T3 (D-0134 section 2.4): after the bindings, every choice group's
+   selectors -- the picked one true, the others false -- in the order the groups were
+   posted. A tie leaves several selectors free under the rows and the clause over them
+   is then not propagated, so the checker refuses a `sol`/`soli` that does not list
+   them (D-0134 section 1, a6/a8 against a7). With no group the list is what it always
+   was. *)
+let choice_lits t bindings =
+  match t.choices_rev with
+  | [] -> []
+  | groups ->
+      let values = Names.create 64 in
+      List.iter (fun (x, v) -> Names.replace values x v) bindings;
+      let value_of x =
+        match Names.find_opt values x with
+        | Some v -> v
+        | None ->
+            invalid_arg
+              (Printf.sprintf
+                 "Encoding.assignment_lits: a choice group reads `%s`, which the \
+                  assignment does not bind"
+                 x)
+      in
+      List.concat_map
+        (fun g ->
+          let j = g.ch_pick value_of in
+          List.mapi
+            (fun i sel ->
+              if i = j then Lit.bool_true sel else Lit.negate (Lit.bool_true sel))
+            g.ch_sels)
+        (List.rev groups)
+
 let assignment_lits t bindings =
   List.concat_map (fun (x, value) -> assignment_lits_of t x value) bindings
+  @ choice_lits t bindings
 
 (* ---------------------------------------------------------------------------
    Output
@@ -2325,6 +2372,39 @@ let add_int_lin_ne t terms rhs =
   let id_a = add_constraint t row_a in
   let id_b = add_constraint t row_b in
   (id_a, id_b)
+
+(* ---------------------------------------------------------------------------
+   M8-bits-encoding-T3 (D-0134 sections 2.1 and 2.4): a CHOICE group
+   ---------------------------------------------------------------------------
+
+   [add_choice t ~rows ~pick] posts, for each [(terms, big_m, rhs)], a fresh selector
+   Boolean `$mxN` and the row  terms + big_m * b_i <= rhs  (through [add_int_lin_le],
+   so a bits term is its bits and an order term its ladder), then the clause
+   b_1 + ... + b_n >= 1, and registers the group for [assignment_lits]. It returns the
+   rows' ids in order and the clause's id. The selectors are .opb-only like `_neN`: no
+   propagator searches on them, a pruning derives through them (lib/core/prop/maxmin.ml's
+   selector shape) and a solution lists them. [big_m >= 1] is the caller's arithmetic;
+   a row whose selector does not occur in it would leave the selector free and is
+   refused here. *)
+let add_choice t ~(rows : ((int * string) list * int * int) list) ~pick =
+  if rows = [] then invalid_arg "Encoding.add_choice: an empty choice group";
+  let posted =
+    List.map
+      (fun (terms, big_m, rhs) ->
+        if big_m < 1 then invalid_arg "Encoding.add_choice: a selector coefficient < 1";
+        let sel = fresh_aux_name t "mx" in
+        declare_bool t sel;
+        let id = add_int_lin_le t (terms @ [ (big_m, sel) ]) rhs in
+        (sel, id))
+      rows
+  in
+  let sels = List.map fst posted in
+  let clause =
+    add_constraint t (Opb.ge (List.map (fun s -> (1, Lit.bool_true s)) sels) 1)
+  in
+  t.choices_rev <- { ch_sels = sels; ch_pick = pick } :: t.choices_rev;
+  t.n_choices <- t.n_choices + 1;
+  (List.map snd posted, clause)
 
 (* ---------------------------------------------------------------------------
    M3-T1: reified variables, and the two doors a definition can come through

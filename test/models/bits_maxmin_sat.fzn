@@ -1,0 +1,17 @@
+% M8-bits-encoding-T3 (D-0134): array_int_maximum under SEARCH, satisfiable, the lane that
+% puts the selector shape's derivations on the page. At `--bits-above 0` every variable
+% here is on bits and the disjunction is one big-M row per operand over `$mxN` plus a
+% clause over the selectors; at W = none it is D-0095's per-value rows, and the answer
+% is the same. m >= 6 is a ROW, not a declaration, so the threshold range spans 6..9 and
+% the Maxmin conflict at threshold 6 (a, b pushed below 6 by the branch, c <= 5 by
+% declaration) is a `pol` resolving three selector rows with the clause, written under a
+% decision over a satisfiable model (D-0053). R3 closes the search once a = 6.
+var 0..9: m :: output_var;
+var 0..9: a :: output_var;
+var 0..9: b :: output_var;
+var 0..5: c :: output_var;
+constraint array_int_maximum(m, [a, b, c]);
+constraint int_lin_le([-1], [m], -6);
+constraint int_le(b, a);
+constraint int_lin_le([1, 1, 1], [a, b, c], 9);
+solve :: int_search([a, b, c, m], input_order, indomain_min, complete) satisfy;
