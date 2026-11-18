@@ -413,6 +413,17 @@ Two separate findings.
 | M9-no-proof-T2 | agent-noproof2, agent-noproof3 (`wave44-noproof`) | 2026-11-18 | **D-0135**. `--no-proof`: null writer (ids minted, nothing written), guards at Justify/Trace entry, `Discard` ladder short-circuit, exit 2 beside `--proof`. Identity lane in `make check`: 165/165 + 9 bits at W = 0, no stdout difference. Gate rc 0, 82 MB. Twenty Challenge instances measured both ways |
 
 ## Handoff notes
+## M6-T21 and M9-no-proof-T2 merged together and gated, 2026-11-18 (orchestrator)
+
+Merged on `main`: `wave44-timelimit` (D-0136, `481568d`) and `wave44-noproof` (D-0135, `c7ddd75`); their
+code merged without conflict. Gate of `c7ddd75` on fataepyc-06 (`/scratch/arthur/gate45.status`, clone
+`/scratch/arthur/baguette-gate-20261118`): `make check` rc 0, 165 models, the stdout-identity lane green
+(165 models plus 9 `bits_*` at `--bits-above 0`), binary `6d3d2dc323cb9f084f08edf34e619ee1`; against gate
+44's binary `274a8028`, with no limit and proof on, stdout, exit codes, `.opb` and `.pbp` are
+byte-identical on all 165. M8-bits-encoding-T3 (`wave44-t3`) is the only live claim. Note for M8-T4: the
+retire fix of D-0136 speeds the end of every run, so D-0133's baseline must be re-measured with a binary
+that has it before the arms are compared.
+
 ## M6-T21 handoff, 2026-11-18 (agent-timelimit, `wave44-timelimit`): the `--time-limit` overshoot, D-0136
 
 - The overshoot was NOT node granularity. The stop fired on time (`fired=600.00s` on the new `limit:` field) and the 46 s (600 s) / 108 s (1 200 s) went to `conclude_stopped`'s first sweep: `Retention.retire` looked every id up in the database list three times, O(n^2) at the end of search, where n is every learned clause under `keep_all`. One pass now (`lib/core/retention.ml`, claim widened on the branch by measurement). Finished SAT/UNSAT runs paid the same sweep and are faster too.
