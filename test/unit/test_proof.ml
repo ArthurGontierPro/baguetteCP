@@ -4396,6 +4396,44 @@ let test_m11t7_output_row_is_the_reference () =
     names;
   check "m11t7: Opb.output_row writes the pre-T7 bytes" !ok
 
+(* M11-complexity-T7 (D-0143): [Encoding.expand_int_lin_le] builds the row in one pass
+   when the variables' sanitised names are distinct. Pinned against
+   [expand_int_lin_le_by_steps] (substitute, [Opb.le], [Opb.normalise]) on random rows
+   over order variables (a singleton and a width-1 one among them), bits variables, a
+   sanitise collision ("a.b" / "a_b"), repeated variables and zero coefficients, so both
+   branches run. *)
+let test_m11t7_expand_one_pass () =
+  let e = m7t27_create Encoding.Retain_rows in
+  let order =
+    [ ("x", -3, 4); ("a.b", 0, 5); ("a_b", 1, 3); ("one", 2, 2); ("w1", 0, 1) ]
+  in
+  List.iter (fun (x, lo, hi) -> Encoding.declare_int e x ~lo ~hi) order;
+  Encoding.declare_int_bits e "bx" ~lo:(-2) ~hi:9;
+  Encoding.declare_int_bits e "q[1]" ~lo:0 ~hi:5;
+  let vars = [| "x"; "a.b"; "a_b"; "one"; "w1"; "bx"; "q[1]" |] in
+  let st = Random.State.make [| 3143 |] in
+  let bad = ref 0 and fast = ref 0 and slow = ref 0 in
+  for _ = 1 to 3000 do
+    let k = Random.State.int st 5 in
+    let terms =
+      List.init k (fun _ ->
+          (Random.State.int st 9 - 4, vars.(Random.State.int st (Array.length vars))))
+    in
+    let rhs = Random.State.int st 41 - 20 in
+    if Encoding.distinct_owners terms then incr fast else incr slow;
+    let a = Encoding.expand_int_lin_le e terms rhs
+    and b = Encoding.expand_int_lin_le_by_steps e terms rhs in
+    if not (a = b && Opb.constr_to_string a = Opb.constr_to_string b) then incr bad
+  done;
+  check_eq "m11t7: one-pass expansion equals the three steps on 3000 rows" ~expected:"0"
+    ~got:(string_of_int !bad);
+  check "m11t7: the one-pass expansion was taken" (!fast > 500);
+  check "m11t7: the steps were taken" (!slow > 300);
+  check "m11t7: a sanitise collision is not distinct"
+    (not (Encoding.distinct_owners [ (1, "a.b"); (2, "a_b") ]));
+  check "m11t7: a zero coefficient does not count"
+    (Encoding.distinct_owners [ (0, "x"); (2, "x") ])
+
 let () =
   report_checker ();
   test_lits ();
@@ -4450,6 +4488,7 @@ let () =
   test_m11t7_normalise_paths ();
   test_m11t7_header_by_runs ();
   test_m11t7_output_row_is_the_reference ();
+  test_m11t7_expand_one_pass ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

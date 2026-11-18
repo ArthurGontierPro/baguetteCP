@@ -2068,12 +2068,92 @@ let linear_terms_int_lin_le t terms =
   in
   (List.concat (List.rev blocks), const)
 
-(* The full row  sum_i a_i x_i <= rhs,  as a normalised [Opb.t]. Exposed on its
-   own (not just via [add_int_lin_le]) so a caller -- or a test -- can inspect
-   the row before it is committed to the .opb. *)
-let expand_int_lin_le t terms rhs =
+(* The full row  sum_i a_i x_i <= rhs,  as a normalised [Opb.t], by the three steps
+   spelled out: substitute, negate to ">=", merge. The REFERENCE for
+   [expand_int_lin_le] below, which takes it whenever two of the row's variables could
+   share a name. *)
+let expand_int_lin_le_by_steps t terms rhs =
   let opb_terms, const = linear_terms_int_lin_le t terms in
   Opb.normalise (Opb.le opb_terms (rhs - const))
+
+(* M11-complexity-T7 (D-0143). Do the variables with a non-zero coefficient have
+   pairwise distinct SANITISED names? Then no two literals of the expanded row share a
+   rendered name ([Lit.render] is injective on (sanitised owner, kind, value), see
+   [Occurs]), and [Opb.normalise] has nothing to merge. *)
+let distinct_owners terms =
+  match terms with
+  | [] | [ _ ] -> true
+  | _ ->
+      let seen = Names.create 8 in
+      List.for_all
+        (fun (a, x) ->
+          a = 0
+          ||
+          let k = Lit.sanitize x in
+          (not (Names.mem seen k))
+          &&
+          (Names.add seen k ();
+           true))
+        terms
+
+(* The full row  sum_i a_i x_i <= rhs,  as a normalised [Opb.t]. Exposed on its
+   own (not just via [add_int_lin_le]) so a caller -- or a test -- can inspect
+   the row before it is committed to the .opb.
+
+   M11-complexity-T7 (D-0143): when [distinct_owners] holds, the three steps are done in
+   one pass that builds the final row back to front, with no intermediate list. A
+   big-M row of openshop_gp10-4 is 20 000 terms, and the three steps allocated about 30
+   words per term in three lists that all outlived the minor heap; this allocates the
+   final terms only. What it builds is what the steps build, term by term:
+
+   - [linear_terms_int_lin_le] gives, per variable in order and per rung (or bit) in
+     ascending order, [(a, l)] with [l] POSITIVE ([Lit.ge] / [Lit.bit]), coefficient [a]
+     on a rung and [a * 2^i] on bit i, and the constant [sum a_i lo_i];
+   - [Opb.le] negates every coefficient and makes the right-hand side
+     [-(rhs - const)];
+   - [Opb.normalise], with every name distinct, keeps the order and maps each positive
+     [(c, l)] to [(c, l)] if [c > 0], to nothing if [c = 0], and to [(-c, ~l)] with the
+     right-hand side lowered by [c] if [c < 0] ([Opb.normalise_distinct]).
+
+   The right-hand side's moves are summed apart and applied at the end; integer addition
+   commutes, wrapped or not. test/unit/test_proof.ml compares this function with
+   [expand_int_lin_le_by_steps] on random rows over order and bits variables, sanitise
+   collisions and repeated variables included. *)
+let expand_int_lin_le t terms rhs =
+  if not (distinct_owners terms) then expand_int_lin_le_by_steps t terms rhs
+  else
+    let const =
+      List.fold_left
+        (fun const (a, x) -> if a = 0 then const else const + (a * (find t x).lo))
+        0 terms
+    in
+    let moved = ref 0 in
+    let push c l acc =
+      if c = 0 then acc
+      else if c > 0 then (c, l) :: acc
+      else (
+        moved := !moved + c;
+        (-c, Lit.negate l) :: acc)
+    in
+    let rec back acc = function
+      | [] -> acc
+      | (a, _) :: rest when a = 0 -> back acc rest
+      | (a, x) :: rest ->
+          let v = find t x in
+          let acc = ref acc in
+          (match v.repr with
+          | Order ->
+              for value = v.hi downto v.lo + 1 do
+                acc := push (-a) (Lit.ge x value) !acc
+              done
+          | Bits { n; _ } ->
+              for i = n - 1 downto 0 do
+                acc := push (-(a * (1 lsl i))) (Lit.bit x i) !acc
+              done);
+          back !acc rest
+    in
+    let row = back [] (List.rev terms) in
+    Opb.ge row (-(rhs - const) - !moved)
 
 (* ---------------------------------------------------------------------------
    M1-T32: the precondition that makes "Compile is the only door" enforced rather
