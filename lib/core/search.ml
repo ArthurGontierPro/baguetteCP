@@ -1401,12 +1401,15 @@ type config = {
          CLI's caller keeps its own wall-clock `timeout` above `--time-limit` for that.
 
          M6-T21 (D-0136): ALSO asked inside [Engine.propagate], after every
-         [stop_poll_runs]-th completed propagator run, because late nodes on a large
-         learned database overran a 600 s limit by 49 s. Between two runs is the one
-         point inside a node with the node-entry property above (see [Limit_hit]), so a
-         [true] there leaves through the same path. A predicate that depends only on the
-         world (the clock, the node count) is unaffected by being asked more often; one
-         that COUNTS its calls is not, which is why [stop_poll_runs = 0] exists. *)
+         [stop_poll_runs]-th completed propagator run, so that one node with a long
+         propagation cannot hold the stop past the limit. (The 2026-11-17 overshoot,
+         49 s past 600, was mostly NOT that: it was [Retention.retire]'s quadratic
+         end-of-search sweep, fixed in the same row. D-0136 has both measured.)
+         Between two runs is the one point inside a node with the node-entry property
+         above (see [Limit_hit]), so a [true] there leaves through the same path. A
+         predicate that depends only on the world (the clock, the node count) is
+         unaffected by being asked more often; one that COUNTS its calls is not, which
+         is why [stop_poll_runs = 0] exists. *)
   stop_poll_runs : int;
       (* M6-T21. Completed propagator runs between two asks of [stop] inside
          [Engine.propagate]; [0] asks at node entry only, which is M6-T9's contract

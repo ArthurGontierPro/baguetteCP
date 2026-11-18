@@ -70,8 +70,8 @@ exception Stopped
 
 (* M6-T21: runs between two asks of [?stop], when the caller does not say. A clock read
    (Unix.gettimeofday through the CLI's closure) every 128 runs is noise next to 128
-   propagator calls; the run rate on the codes model of D-0136 puts 128 runs well under
-   a millisecond. *)
+   propagator calls; on the codes model of D-0136 (47 k runs/s late in a 600 s run) 128
+   runs take about 3 ms, which bounds the stop's latency there. *)
 let default_poll_runs = 128
 
 (* ------------------------------------------------------------------ triggers *)
