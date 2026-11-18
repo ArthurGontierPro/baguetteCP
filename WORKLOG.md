@@ -439,6 +439,17 @@ Two separate findings.
 
 | M8-bits-encoding-T3 (steps 1, 2 partial; T3 stays WIP) | agent-t3 + agent-t3b (`wave44-t3`) | 2026-11-18 | **D-0134 §4-§7.** maxmin over a bits scope by selector rows + one `Resolve` `pol` per pruning, selectors listed in `sol`/`soli`; `int_ne`/`int_lin_ne` released (the A/B pair resolved); `Justify.is_bits_derivation` (a T2 latent). 173/173 verified at W none/0/8, 165 byte-identical at none; gate rc 0 on `20c324f`, 85 MB. The 177 at W = 0: 73 -> 108 complete `.opb`. Open: reified holds, steps 3-5 |
 ## Handoff notes
+## M8-bits-encoding-T3 (WIP) merged on top of wave 44 and gated, 2026-11-18 (orchestrator)
+
+`wave44-t3` merged as `bfa7cf2` (code merged without conflict beside D-0135/D-0136). Gate of `bfa7cf2` on
+fataepyc-06 (`/scratch/arthur/gate46.status`, clone `/scratch/arthur/baguette-gate-20261118b`): `make
+check` rc 0 in 23.6 s, peak RSS 87 MB, 3 751 `ok` checks, 173 models; against gate 45's binary
+`6d3d2dc3` with no flags, stdout, exit codes, `.opb` and `.pbp` byte-identical on all 173. Binary
+`7ddbf348e5de6953087b6459dcfcf8e1`. On the gate's speed: every orchestrator gate since gate 43 took 20 to
+25 s (the shared dune cache builds the fresh clone; the check count grows with the suite, 3 511 at
+gate 43), so the agents' "19 to 20 min" figures are their cold builds, not a different test set. M8-T3
+is WIP and its claim released: steps 3 to 5 and the reified/bool2int holds need a new claim.
+
 ## M8-bits-encoding-T3 handoff, 2026-11-18 (agent-t3b, `wave44-t3`): maxmin and int_ne over bits, D-0134 §4-§7
 
 T3 is **WIP**: steps 1 and 2 (`int_ne`/`int_lin_ne` only) landed, steps 3 to 5 and the reified
