@@ -1548,6 +1548,47 @@ let test_low_water () =
   Store.backtrack_to s 0;
   check "low water: a pop to the root reaches 1" (Store.take_low_water s a = 1)
 
+(* M11-complexity-T3 (D-0142): [Store.is_level_start] reads a per-position count of the
+   open level marks instead of searching the marks. The old definition is kept as
+   [is_level_start_by_marks]; a random walk of levels (some empty, so that two marks share
+   a position), bound moves and backtracks must leave the two equal at every trail
+   position, one past the end included. *)
+let test_level_start_count () =
+  let s =
+    Store.create ~names:[| "x"; "y"; "z" |]
+      ~domains:[| Domain.make 0 30; Domain.make 0 30; Domain.make 0 30 |]
+  in
+  let r = Reason.because ~concludes:None Reason.none (Explanation.model_row 1) in
+  let rng = Random.State.make [| 0x0142; 3 |] in
+  let agree = ref true and steps = 4000 and shared = ref 0 in
+  for _ = 1 to steps do
+    (match Random.State.int rng 5 with
+    | 0 | 1 -> Store.new_level s
+    | 2 | 3 ->
+        let v = Var.of_int (Random.State.int rng 3) in
+        let d = Store.get s v in
+        if Domain.lo d < Domain.hi d then
+          ignore
+            (if Random.State.bool rng then Store.set_lo s v (Domain.lo d + 1) r
+             else Store.set_hi s v (Domain.hi d - 1) r)
+    | _ -> if Store.level s > 0 then Store.backtrack s);
+    for i = 0 to Store.trail_length s + 1 do
+      if Store.is_level_start s i <> Store.is_level_start_by_marks s i then agree := false
+    done;
+    let ms = Store.level_marks s in
+    if List.length (List.sort_uniq Int.compare ms) < List.length ms then incr shared
+  done;
+  check
+    (Printf.sprintf
+       "D-0142: is_level_start (the count) equals the search over the marks on %d random \
+        steps"
+       steps)
+    !agree;
+  check
+    (Printf.sprintf "D-0142: ...including %d states with two levels at one position"
+       !shared)
+    (!shared > 100)
+
 let () =
   match Array.to_list Sys.argv with
   | _ :: "--agreeing-push" :: _ -> disagreeing_push ~agree:true ()
@@ -1575,6 +1616,7 @@ let () =
       test_var_named_index ();
       test_bound_history ();
       test_low_water ();
+      test_level_start_count ();
       if !failures > 0 then (
         Printf.printf "\n%d failure(s)\n" !failures;
         exit 1)
