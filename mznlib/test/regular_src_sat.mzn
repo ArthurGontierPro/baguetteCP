@@ -17,4 +17,3 @@ constraint regular([g[i, 2] | i in 1..4], "1* 2 2 2 1*");
 constraint regular([g[i, 3] | i in 1..4], "1* 2 2 1*");
 constraint regular([g[i, 4] | i in 1..4], "1* 2 1*");
 solve satisfy;
-output ["g = \(g);\n"];
