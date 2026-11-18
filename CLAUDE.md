@@ -281,6 +281,11 @@ lib/core/       Baguette_core
                             over gcc's window indicators, one capacity row per time point,
                             CHECKING; the first Needs_derivation family whose CONFLICTS carry
                             facts, so they can be learned from (M4-T10, D-0096)
+    regular.ml              regular (DFA) through mznlib's baguette_regular, DOMAIN
+                            consistent over the letters and (n+1)*Q STATE FLAGS (store
+                            variables, so a dead state is a trail entry); every pruning one
+                            rup against its rows plus the backward-chain lemmas
+                            Encoding.start_proof derives (M7-T28, D-0146)
     linear.ml               int_lin_le. THE REFERENCE PROPAGATOR — copy this shape.
     lin_eq.ml               int_lin_eq (two model rows, see D-0011)
     ne.ml                   int_lin_ne and int_ne (VALUE consistency)

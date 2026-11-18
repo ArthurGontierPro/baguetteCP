@@ -98,6 +98,10 @@ lib/core/       Baguette_core
                             views (M4-T9, D-0095). Over a bits variable, one big-M
                             SELECTOR row per operand + a clause, each pruning one
                             Resolve `pol` (M8-bits-encoding-T3, D-0134)
+    regular.ml              regular (DFA), DOMAIN consistent (Pesant's layered graph) over
+                            the letters AND (n+1)*Q state flags the mznlib route introduces;
+                            every pruning one rup against its rows plus the backward-chain
+                            lemmas Encoding.start_proof derives (M7-T28, D-0146)
     linear.ml               int_lin_le. THE REFERENCE PROPAGATOR -- copy this shape
     lin_eq.ml               int_lin_eq (two model rows, see D-0011)
     ne.ml                   int_lin_ne and int_ne (VALUE consistency)
