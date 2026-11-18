@@ -82,6 +82,14 @@
    `--bits-above none` is untouched: [emit_summand] renders a [Linear_term] exactly as it
    rendered the [Weaken]/[Term] it replaced.
 
+   M8-bits-encoding-T3 (D-0134): the second bits-arm shape is [Explanation.Resolve],
+   a CHOICE derivation -- maxmin's selector rows over bits, each summed with the bounds
+   it reads and saturated to a clause on its selector, the clauses summed with the
+   selector clause and saturated ([emit_bits_resolve]). The same fragment per term, the
+   same `ia` pin, and no atom added for the claim: the claim variable's term assumes
+   the claim's negation inside every part, so the derived clause is the trace clause
+   with the claim among its literals (D-0134 section 2.3), which is checked.
+
    Atoms are minted where a name first reaches the writer (D-0130 section 3.3):
    [validate_lits] below, which every clause, `rup`, [Defining] and nogood already pass
    through, mints the atom of every bits-owned order literal it checks; [Trace] and
@@ -235,6 +243,7 @@ let shallow_tag (e : Explanation.t) =
   | Explanation.Model_row i -> 4 + (16 * i)
   | Explanation.Combine _ -> 5
   | Explanation.Deferred _ -> 6
+  | Explanation.Resolve _ -> 7
 
 let shallow_hash (e : Explanation.t) =
   match e with
@@ -261,6 +270,7 @@ let shallow_hash (e : Explanation.t) =
                       r.Explanation.lt_value ))
             ss )
   | Explanation.Deferred _ -> 6
+  | Explanation.Resolve parts -> Hashtbl.hash (7, List.map shallow_tag parts)
 
 (* A claim that is already on the page: the id of the line stating it and the level that
    line was written at. See the module header's "claim index". *)
@@ -794,6 +804,16 @@ let rec emit ctx (e : Explanation.t) : Writer.cid =
   | Explanation.Combine (summands, divisor) ->
       memoized ctx e (fun () -> emit_combine ~emit ~claim:None ctx summands divisor)
   | Explanation.Deferred _ -> memoized ctx e (fun () -> emit ctx (Explanation.force e))
+  (* M8-bits-encoding-T3 (D-0134 section 2.6): a [Resolve] is a bits-arm derivation and
+     is written only by [emit_bits_pruning], which pins the clause it derives. Reaching
+     it here means an order-arm path was handed a choice derivation, which no propagator
+     builds on the order encoding. *)
+  | Explanation.Resolve _ ->
+      invalid_arg
+        (Printf.sprintf
+           "Justify.emit: a Resolve derivation (%s) is written by emit_bits_pruning, \
+            never as a bare pol (D-0134 section 2)"
+           (Explanation.to_string e))
 
 (* M2-L6: emit [e] as a [pol] that STATES the constraint [claim], where [e] renders to a
    [pol] at all.
@@ -820,7 +840,7 @@ let emit_stating ctx ~(claim : Opb.constr) (e : Explanation.t) : Writer.cid =
         emit_combine ~emit ~claim:(Some claim) ctx summands divisor
     | Explanation.Deferred _ -> go (Explanation.force e)
     | Explanation.Clause _ | Explanation.Linear _ | Explanation.Model_row _
-    | Explanation.Decision _ ->
+    | Explanation.Decision _ | Explanation.Resolve _ ->
         emit ctx e
   in
   go e
@@ -835,48 +855,51 @@ let emit_stating ctx ~(claim : Opb.constr) (e : Explanation.t) : Writer.cid =
    Precondition: [e] forces to [Linear]'s [Combine] shape -- the row as [Term (1,
    Model_row)] and every other summand a [Linear_term]; anything else is a caller's
    mistake and says so here. *)
-let emit_bits_pruning ctx ~origin ~(concludes : Reason.fact option) (e : Explanation.t) :
-    Writer.cid * Lit.t list =
+(* The fragment one [Linear_term] contributes to a bits-arm `pol`, shared by the
+   [Combine] rendering (D-0132) and the [Resolve] one (D-0134): the bound line scaled by
+   |a| when the bound it read is the declared one, the bridge scaled by |a| otherwise --
+   and in that case the term's negated literal is pushed on [neg_facts_rev], oldest
+   first after reversal, which is the order the derived clause lists them in. [None]
+   for a fixed variable, which has nothing to weaken. *)
+let bits_term_fragment ctx neg_facts_rev (r : Explanation.linear_term) =
   let w = ctx.writer and enc = ctx.encoding in
-  let summands, divisor =
-    match Explanation.force e with
-    | Explanation.Combine (summands, divisor) -> (summands, divisor)
-    | other ->
-        invalid_arg
-          (Printf.sprintf "Justify.emit_bits_pruning: not a Linear derivation: %s"
-             (Explanation.to_string other))
-  in
+  let c = Stdlib.abs r.Explanation.lt_coeff and x = r.Explanation.lt_name in
+  match Explanation.lt_lit r with
+  | None ->
+      if Explanation.lt_width r <= 0 then None (* a fixed variable: nothing to weaken *)
+      else
+        let lb, ub = Encoding.bound_lines enc w x in
+        Some (Pol.mul (Pol.id (if r.Explanation.lt_coeff > 0 then lb else ub)) c)
+  | Some l ->
+      validate_lits ctx [ l ];
+      (* [x >= v] cites B1 at v; [x <= v] is [~x_ge_(v+1)] and cites B2 at v+1:
+         [Lit.value] is the atom's value either way. *)
+      let b1, b2 = Encoding.ensure_atom enc w x (Lit.value l.Lit.v) in
+      neg_facts_rev := Lit.negate l :: !neg_facts_rev;
+      Some (Pol.mul (Pol.id (if l.Lit.positive then b1 else b2)) c)
+
+(* The summands of one bits-arm [Combine], as `pol` fragments: the row(s) and the terms.
+   Anything else in a bits derivation is a propagator's mistake and is named. *)
+let bits_summand_fragment ctx neg_facts_rev = function
+  | Explanation.Term (c, Explanation.Model_row id) -> Some (Pol.mul (Pol.id id) c)
+  | Explanation.Linear_term r -> bits_term_fragment ctx neg_facts_rev r
+  | s ->
+      invalid_arg
+        (Printf.sprintf "Justify.emit_bits_pruning: a summand that is not a Linear term: %s"
+           (Explanation.summand_to_string s))
+
+let bits_sum frags =
+  match frags with
+  | [] -> invalid_arg "Justify.emit_bits_pruning: empty derivation"
+  | f :: rest -> List.fold_left Pol.add f rest
+
+(* D-0132 section 2.1: [Linear]'s row, every term weakened by its bridge or bound line,
+   divided by the pruned term's coefficient, closed by the pruned variable's own atom. *)
+let emit_bits_combine ctx ~origin ~(concludes : Reason.fact option) summands divisor =
+  let w = ctx.writer and enc = ctx.encoding in
   let neg_facts_rev = ref [] in
-  let fragment = function
-    | Explanation.Term (c, Explanation.Model_row id) -> Some (Pol.mul (Pol.id id) c)
-    | Explanation.Linear_term r -> (
-        let c = Stdlib.abs r.Explanation.lt_coeff and x = r.Explanation.lt_name in
-        match Explanation.lt_lit r with
-        | None ->
-            if Explanation.lt_width r <= 0 then None
-              (* a fixed variable: nothing to weaken *)
-            else
-              let lb, ub = Encoding.bound_lines enc w x in
-              Some (Pol.mul (Pol.id (if r.Explanation.lt_coeff > 0 then lb else ub)) c)
-        | Some l ->
-            validate_lits ctx [ l ];
-            (* [x >= v] cites B1 at v; [x <= v] is [~x_ge_(v+1)] and cites B2 at v+1:
-               [Lit.value] is the atom's value either way. *)
-            let b1, b2 = Encoding.ensure_atom enc w x (Lit.value l.Lit.v) in
-            neg_facts_rev := Lit.negate l :: !neg_facts_rev;
-            Some (Pol.mul (Pol.id (if l.Lit.positive then b1 else b2)) c))
-    | s ->
-        invalid_arg
-          (Printf.sprintf
-             "Justify.emit_bits_pruning: a summand that is not a Linear term: %s"
-             (Explanation.summand_to_string s))
-  in
-  let frags = List.filter_map fragment summands in
-  let expr =
-    match frags with
-    | [] -> invalid_arg "Justify.emit_bits_pruning: empty derivation"
-    | f :: rest -> List.fold_left Pol.add f rest
-  in
+  let frags = List.filter_map (bits_summand_fragment ctx neg_facts_rev) summands in
+  let expr = bits_sum frags in
   let expr = if divisor <= 1 then expr else Pol.div expr divisor in
   let claim =
     match Option.bind concludes Reason.lit_of_fact with
@@ -900,6 +923,60 @@ let emit_bits_pruning ctx ~origin ~(concludes : Reason.fact option) (e : Explana
   Encoding.note_bits_pruning enc;
   state_clause ctx clause cid;
   (cid, clause)
+
+(* D-0134 section 2.2: each part saturated to its clause (a [Combine]: its fragments
+   summed, divided, saturated; a [Model_row]: cited as it is), the parts summed and
+   saturated once more. The clause derived is every part's negated literal, without
+   duplicates, in part order -- the claim is one of them, carried by the part that
+   assumed its negation, and is checked to be. No atom is added for it. *)
+let emit_bits_resolve ctx ~origin ~(concludes : Reason.fact option) parts =
+  let w = ctx.writer and enc = ctx.encoding in
+  let neg_facts_rev = ref [] in
+  let part (e : Explanation.t) =
+    match Explanation.force e with
+    | Explanation.Model_row id -> Pol.id id
+    | Explanation.Combine (summands, divisor) ->
+        let frags = List.filter_map (bits_summand_fragment ctx neg_facts_rev) summands in
+        let expr = bits_sum frags in
+        Pol.saturate (if divisor <= 1 then expr else Pol.div expr divisor)
+    | other ->
+        invalid_arg
+          (Printf.sprintf
+             "Justify.emit_bits_pruning: a Resolve part that is neither a Combine nor a \
+              model row: %s"
+             (Explanation.to_string other))
+  in
+  let expr = Pol.saturate (bits_sum (List.map part parts)) in
+  let clause =
+    List.fold_left
+      (fun acc l -> if List.exists (Lit.equal l) acc then acc else acc @ [ l ])
+      [] (List.rev !neg_facts_rev)
+  in
+  (match Option.bind concludes Reason.lit_of_fact with
+  | Some l when not (List.exists (Lit.equal l) clause) ->
+      invalid_arg
+        (Printf.sprintf
+           "Justify.emit_bits_pruning: the Resolve derivation does not carry its claim \
+            %s (D-0134 section 2.3: the claim variable's term must assume its negation)"
+           (Lit.to_string l))
+  | _ -> ());
+  let cid = Writer.pol_concluding w ~origin ~claim:(Opb.clause clause) expr in
+  Encoding.note_bits_pruning enc;
+  state_clause ctx clause cid;
+  (cid, clause)
+
+(* The bits arm's one door: a [Linear] derivation (D-0132) or a choice derivation
+   (D-0134), written as one `pol` pinned by `ia`; the id and the clause it derived. *)
+let emit_bits_pruning ctx ~origin ~(concludes : Reason.fact option) (e : Explanation.t) :
+    Writer.cid * Lit.t list =
+  match Explanation.force e with
+  | Explanation.Combine (summands, divisor) ->
+      emit_bits_combine ctx ~origin ~concludes summands divisor
+  | Explanation.Resolve parts -> emit_bits_resolve ctx ~origin ~concludes parts
+  | other ->
+      invalid_arg
+        (Printf.sprintf "Justify.emit_bits_pruning: not a bits derivation: %s"
+           (Explanation.to_string other))
 
 (* M8-bits-encoding-T5 (D-0131): a [Combine] or [Cut] that concludes a LITERAL is
    written as `rup <literal> >= 1 ;` -- the module header says why, and this comment
@@ -947,5 +1024,5 @@ let emit_concluding ctx ~(concludes : Reason.fact option) (e : Explanation.t) : 
       match Explanation.force e with
       | Explanation.Cut _ | Explanation.Combine _ -> emit_clause ctx [ l ]
       | Explanation.Clause _ | Explanation.Linear _ | Explanation.Model_row _
-      | Explanation.Decision _ | Explanation.Deferred _ ->
+      | Explanation.Decision _ | Explanation.Deferred _ | Explanation.Resolve _ ->
           emit ctx e)
