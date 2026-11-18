@@ -158,6 +158,51 @@ sol_bad = "sol " + " ".join(
     + ["%s%s" % ("" if q == 1 else "~", s(i, q)) for i in range(n + 1) for q in range(1, Q + 1)]
 ) + " ;"
 write("p10.pbp", HEAD + [sol_bad] + tail("conclusion SAT ;"))
+# Instance 2 (m2.opb, probes q*): where a B lemma is load-bearing. Q = 4, x_i in 1..4, q0 = 1,
+# F = {4}: d[1,1] = 2, d[1,2] = 3; d[2,v] = 2 and d[3,v] = 3 for v in 1..3; d[2,4] = d[3,4] = 4;
+# d[4,v] = 4. Layer 1 holds TWO live states (2 and 3) with x0 free, and under the fact x1 <= 3 the
+# state 4 at layer 2 has no live predecessor edge. Without B(1,4,1..3) unit propagation has no
+# value of x1 to fix and the death is not RUP; that is the case the lemmas exist for.
+def instance2():
+    global Q, n, lo, hi, q0, F, d, rows, HEAD
+    Q, n, lo, hi, q0, F = 4, 3, 1, 4, 1, {4}
+    d = {(1, 1): 2, (1, 2): 3}
+    for v in (1, 2, 3):
+        d[(2, v)] = 2
+        d[(3, v)] = 3
+    d[(2, 4)] = 4
+    d[(3, 4)] = 4
+    for v in (1, 2, 3, 4):
+        d[(4, v)] = 4
+    rows = []
+    for i in range(n):
+        for v in range(lo + 2, hi + 1):
+            rows.append(clause([neg(ge(i, v)), ge(i, v - 1)]))
+    for i in range(n + 1):
+        rows.append(" ".join("+1 " + s(i, q) for q in range(1, Q + 1)) + " >= 1")
+        rows.append(" ".join("+1 ~" + s(i, q) for q in range(1, Q + 1)) + " >= %d" % (Q - 1))
+    rows.append(clause([s(0, q0)]))
+    rows.append(clause([s(n, f) for f in sorted(F)]))
+    for i in range(n):
+        for q in range(1, Q + 1):
+            for v in range(lo, hi + 1):
+                t = delta(q, v)
+                rows.append(clause([neg(s(i, q))] + not_in(i, v, v) + ([s(i + 1, t)] if t else [])))
+    with open(os.path.join(out, "m2.opb"), "w") as f:
+        f.write("* #variable= %d #constraint= %d\n" % (n * (hi - lo) + (n + 1) * Q, len(rows)))
+        for k, r in enumerate(rows, 1):
+            f.write("@c%d %s ;\n" % (k, r))
+    HEAD = ["pseudo-Boolean proof version 3.0", "f %d ;" % len(rows)]
+    root2 = ["rup +1 ~s0q%d >= 1 ;" % q for q in (2, 3, 4)] + ["rup +1 ~s1q%d >= 1 ;" % q for q in (1, 4)]
+    line = ["rup +1 ~s2q4 +1 x1_ge_4 >= 1 ;"]
+    keep = blemmas()
+    drop = [x for x in keep if x not in ["rup " + B(1, 4, v) + " ;" for v in (1, 2, 3)]]
+    write("q1.pbp", HEAD + keep + root2 + line + tail("conclusion NONE ;"))
+    write("q2.pbp", HEAD + drop + root2 + line + tail("conclusion NONE ;"))
+
+
 # p11: UNSAT at the root: refute x0 = 3 and x1 = 3 (F(i,q,3) all fail), then x0 = 1 AND x0 = 2
 #      both live, so no refutation of the instance exists -- a conclusion UNSAT must be REFUSED
 write("p11.pbp", HEAD + blemmas() + root + ["rup >= 1 ;"] + tail("conclusion UNSAT ;"))
+# instance 2 last: it rebinds the module's instance globals
+instance2()

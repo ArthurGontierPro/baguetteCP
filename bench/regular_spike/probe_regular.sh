@@ -9,9 +9,10 @@ out="${1:-$here/out}"
 mkdir -p "$out"
 python3 -I "$here/gen_probe.py" "$out"
 VERIPB="${VERIPB:-$HOME/.cargo/bin/veripb}"
-for p in $(ls "$out"/p*.pbp | sort -V); do
+for p in $(ls "$out"/[pq]*.pbp | sort -V); do
   b=$(basename "$p" .pbp)
-  msg=$("$VERIPB" "$out/m.opb" "$p" 2>&1)
+  m="$out/m.opb"; case $b in q*) m="$out/m2.opb";; esac
+  msg=$("$VERIPB" "$m" "$p" 2>&1)
   rc=$?
   echo "== $b rc=$rc :: $(echo "$msg" | grep -E -i 'verif|error|reverse|contradict|solution|warning|fail' | head -4 | tr '\n' ' ')"
 done
