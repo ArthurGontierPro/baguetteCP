@@ -7745,7 +7745,7 @@ let test_cumulative_search () =
 
    The run used to build the list of term minima and its [List.combine] with the terms;
    it now keeps the minima in the row's scratch array. [Ref_linear.propagate] is the old
-   function, kept here verbatim as the specification, and 2 000 random rows (four
+   function, kept here verbatim as the specification, and 3 000 random rows (four
    variables over small boxes that include negatives, coefficients -3..3 with zeros,
    every right-hand side from infeasible to slack) are run through both from the same
    narrowed store: same outcome, same conflict reason, same trail with the same reasons. *)
@@ -7838,7 +7838,7 @@ let test_linear_scratch () =
     in
     (out, trail)
   in
-  let trials = 2000 and same = ref 0 and prunes = ref 0 and conflicts = ref 0 in
+  let trials = 3000 and same = ref 0 and prunes = ref 0 and conflicts = ref 0 in
   for _ = 1 to trials do
     let raw =
       List.filter_map
