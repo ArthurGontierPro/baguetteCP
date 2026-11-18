@@ -164,6 +164,7 @@ module Gcc = Baguette_core.Gcc
 module Maxmin = Baguette_core.Maxmin
 module Cumulative = Baguette_core.Cumulative
 module View = Baguette_core.View
+module Parity = Baguette_core.Parity (* M12-parity-T1 spike, D-0147 *)
 
 (* M2-L12/D-0052: the clause propagator was widened to general order literals and its
    file renamed [Clause]. The Boolean face this front end builds is [Clause.make] plus
@@ -732,9 +733,9 @@ let held_families (m : Model.t) : (int, string list) Hashtbl.t =
       | Model.Array_int_element (idx, _, res) -> hold "element" [ idx; res ]
       | Model.Int_lin_le _ | Model.Int_lin_eq _ | Model.Int_le _ | Model.Int_lt _
       | Model.Int_eq _ | Model.Bool_clause _ | Model.Array_bool_or _
-      | Model.Array_bool_and _ | Model.Bool_eq _ | Model.Bool_not _
-      | Model.Int_lin_le_reif _ | Model.Int_le_reif _ | Model.Int_times _
-      | Model.Int_div _ | Model.Int_abs _ | Model.Array_int_maximum _
+      | Model.Array_bool_and _ | Model.Bool_eq _ | Model.Bool_not _ | Model.Bool_xor _
+      | Model.Array_bool_xor _ | Model.Int_lin_le_reif _ | Model.Int_le_reif _
+      | Model.Int_times _ | Model.Int_div _ | Model.Int_abs _ | Model.Array_int_maximum _
       | Model.Array_int_minimum _ | Model.Int_lin_ne _ | Model.Int_ne _
       | Model.Int_eq_reif _ | Model.Int_ne_reif _ | Model.Bool2int _ ->
           ())
@@ -754,7 +755,7 @@ let pack_div_guard (p : Reif_lin_le.t) : pending =
 let pack_abs_guard (p : Reif_lin_le.t) : pending =
   pack_reif_as (module Arith.Abs_guard : Propagator.S with type t = Reif_lin_le.t) p
 
-let compile (m : Model.t) : t =
+let compile ?(parity : Parity.licence option) (m : Model.t) : t =
   (* M5-T1. Resolved to a model variable index and a direction, or refused. The
      ENCODING half of it happens further down, once the variable is declared: an
      objective line is the order encoding of that variable and cannot be written before
@@ -1630,6 +1631,33 @@ let compile (m : Model.t) : t =
     fwd @ bwd
   in
 
+  (* M12-parity-T1 (spike, D-0147). `bool_xor(x, y, b)` is posted as EXACTLY the four
+     clauses the stock mznlib/redefinitions.mzn writes for it, in its order, so the clause
+     path is the one the solver always had; the spike's mznlib only keeps the builtin
+     whole so that the gathering below can see it. *)
+  let post_bool_xor pos x y b =
+    let builtin = "bool_xor" and pack = pack_bool_clause in
+    let c1 = clause ~builtin ~pack pos [ (x, true); (y, true); (b, false) ] in
+    let c2 = clause ~builtin ~pack pos [ (b, false); (x, false); (y, false) ] in
+    let c3 = clause ~builtin ~pack pos [ (b, true); (y, true); (x, false) ] in
+    let c4 = clause ~builtin ~pack pos [ (b, true); (x, true); (y, false) ] in
+    c1 @ c2 @ c3 @ c4
+  in
+
+  (* ...and `array_bool_xor(xs)` as the stock library's sum(xs) = 2k + 1, with the k the
+     builder created. *)
+  let post_array_bool_xor pos xs k =
+    let terms, rhs =
+      List.fold_left
+        (fun (ts, r) op ->
+          match bool_operand pos ~builtin:"array_bool_xor" ~what:"every argument" op with
+          | Model.Var i -> ((1, i) :: ts, r)
+          | Model.Const c -> (ts, r - c))
+        ([], 1) xs
+    in
+    post_eq pos (normalise_terms (List.rev ((-2, k) :: terms))) rhs
+  in
+
   (* bool2int(b, x) is x = b, so it posts the two rows an equality posts -- row LE
      `x - b <= 0` first, row GE `b - x <= 0` second, which is the order
      lib/core/prop/bool2int.ml's header names them in and the order its worked RUP
@@ -1861,6 +1889,8 @@ let compile (m : Model.t) : t =
           | Model.Bool2int (b, x) -> post_bool2int pos b x
           | Model.Bool_eq (a, b) -> post_bool_eq pos a b
           | Model.Bool_not (a, b) -> post_bool_not pos a b
+          | Model.Bool_xor (a, b, r) -> post_bool_xor pos a b r
+          | Model.Array_bool_xor (xs, k) -> post_array_bool_xor pos xs k
           | Model.Int_lin_le_reif (terms, rhs, r) ->
               post_reif_le pos ~builtin:"int_lin_le_reif" ~pack:pack_int_lin_le_reif
                 (normalise_terms terms) rhs r
@@ -1916,6 +1946,50 @@ let compile (m : Model.t) : t =
           (holes_of_domain v))
       (Array.to_list (Array.mapi (fun i v -> (i, v)) m.Model.vars))
   in
-  let instances = hole_instances @ instances in
+  (* M12-parity-T1 (spike, D-0147): the XOR rows of the model gathered into systems,
+     one lib/core/prop/parity.ml instance per connected component of two rows or more,
+     posted ON TOP of the clause encoding above (which is unchanged) and AFTER every
+     other instance, so that the instance ids and the queue order of everything else are
+     the ones a run without `--parity` has. [?parity] is a [Parity.licence], which only a
+     `--no-proof` run can obtain: parity.ml's header says why. *)
+  let parity_instances =
+    match parity with
+    | None -> []
+    | Some (_ : Parity.licence) ->
+        let row ops rhs =
+          let xs, r =
+            List.fold_left
+              (fun (xs, r) (op : Model.operand) ->
+                match op with
+                | Model.Var i -> (Var.of_int i :: xs, r)
+                | Model.Const c -> (xs, r lxor (c land 1)))
+              ([], rhs) ops
+          in
+          (List.rev xs, r)
+        in
+        let rows =
+          List.filter_map
+            (fun (c : Model.constr) ->
+              match c.Model.k with
+              | Model.Bool_xor (a, b, r) -> Some (row [ a; b; r ] 0)
+              | Model.Array_bool_xor (xs, _) -> Some (row xs 1)
+              | Model.Bool_eq (a, b) -> Some (row [ a; b ] 0)
+              | Model.Bool_not (a, b) -> Some (row [ a; b ] 1)
+              | _ -> None)
+            m.Model.constraints
+        in
+        List.filter_map
+          (fun comp ->
+            if List.length comp < 2 then None
+            else
+              let p = Parity.make store comp in
+              Some
+                (fun id ->
+                  Propagator.pack ~id ~idempotent:true
+                    (module Parity : Propagator.S with type t = Parity.t)
+                    p))
+          (Parity.components rows)
+  in
+  let instances = hole_instances @ instances @ parity_instances in
   let engine = Engine.create (List.mapi (fun id pending -> pending id) instances) in
   { store; engine; encoding; objective; order = search_order }

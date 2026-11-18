@@ -119,11 +119,12 @@ predicate bool_eq_reif(var bool: x, var bool: y, var bool: b) =
   bool_clause([b], [x, y]);
 
 % b <-> (x != y)
-predicate bool_xor(var bool: x, var bool: y, var bool: b) =
-  bool_clause([x, y], [b]) /\
-  bool_clause([], [b, x, y]) /\
-  bool_clause([b, y], [x]) /\
-  bool_clause([b, x], [y]);
+% M12-parity-T1 SPIKE (D-0147, branch wave49-parity, never merged): `bool_xor` is
+% KEPT AS A BUILTIN here, so that the solver sees the XOR rows. lib/flatzinc/compile.ml
+% posts exactly the four clauses this predicate used to write, in this order:
+%   bool_clause([x, y], [b]) /\ bool_clause([], [b, x, y]) /\
+%   bool_clause([b, y], [x]) /\ bool_clause([b, x], [y])
+% and, under `--parity --no-proof`, gathers the row into lib/core/prop/parity.ml.
 
 % b <-> (x -> y)
 predicate bool_le_reif(var bool: x, var bool: y, var bool: b) =
@@ -139,12 +140,10 @@ predicate bool_lin_le(array [int] of int: as, array [int] of var bool: xs, int: 
 predicate bool_lin_eq(array [int] of int: as, array [int] of var bool: xs, var int: y) =
   int_lin_eq(as ++ [-1], [bool2int(xs[i]) | i in index_set(xs)] ++ [y], 0);
 
-% An odd number of the xs hold.  k is the number of *pairs* that do.
-predicate array_bool_xor(array [int] of var bool: xs) =
-  let {
-    int: n = card(index_set(xs));
-    var 0..(n div 2): k;
-  } in sum (i in index_set(xs)) (bool2int(xs[i])) = 2 * k + 1;
+% An odd number of the xs hold.
+% M12-parity-T1 SPIKE (D-0147): KEPT AS A BUILTIN, like `bool_xor` above. The builder
+% creates the `var 0..(n div 2)` k and compile.ml posts sum(xs) = 2 * k + 1, which is
+% what this predicate used to write.
 
 %-----------------------------------------------------------------------------%
 % Element

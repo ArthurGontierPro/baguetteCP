@@ -64,6 +64,15 @@ type cstr =
     (* `bool2int(b, x)`: x = b, with b Boolean and x an integer operand. *)
   | Bool_eq of operand * operand (* `bool_eq(a, b)`: a <-> b *)
   | Bool_not of operand * operand (* `bool_not(a, b)`: a <-> ~b *)
+  (* M12-parity-T1 (spike, D-0147): the two XOR builtins, kept whole by the spike's
+     mznlib instead of being redefined as clauses there. compile.ml posts the SAME clause
+     decomposition the stock mznlib wrote, and under `--parity` gathers them into
+     lib/core/prop/parity.ml's system as well. *)
+  | Bool_xor of operand * operand * operand (* `bool_xor(a, b, r)`: r <-> (a != b) *)
+  | Array_bool_xor of operand list * int
+  (* `array_bool_xor(xs)`: an odd number of the xs hold. The int is the auxiliary
+     `var 0..n/2` k the decomposition sum(xs) = 2k + 1 needs, created by the builder
+     for the reason [Int_times]'s aux is. *)
   (* ------------------------------------------------------- M3, reified forms.
 
      The reifier (the last operand of each) is Boolean; the constrained operands are
@@ -247,6 +256,11 @@ let string_of_cstr t = function
       Printf.sprintf "%s <-> %s" (string_of_operand t a) (string_of_operand t b)
   | Bool_not (a, b) ->
       Printf.sprintf "%s <-> not %s" (string_of_operand t a) (string_of_operand t b)
+  | Bool_xor (a, b, r) ->
+      Printf.sprintf "%s <-> (%s xor %s)" (string_of_operand t r) (string_of_operand t a)
+        (string_of_operand t b)
+  | Array_bool_xor (xs, _) ->
+      Printf.sprintf "xor([%s])" (String.concat ", " (List.map (string_of_operand t) xs))
   | Int_lin_le_reif (ts, rhs, r) ->
       Printf.sprintf "%s <-> (%s <= %d)" (string_of_operand t r) (string_of_terms t ts)
         rhs
@@ -560,6 +574,8 @@ let check_assignment (t : t) (values : int array) : bool =
     | Bool2int (b, x) -> value x = if truth b then 1 else 0
     | Bool_eq (a, b) -> truth a = truth b
     | Bool_not (a, b) -> truth a <> truth b
+    | Bool_xor (a, b, r) -> truth r = (truth a <> truth b)
+    | Array_bool_xor (xs, _) -> List.length (List.filter truth xs) mod 2 = 1
     (* M3: each re-evaluated as the equivalence it is, in both directions, from the
        FlatZinc definition and from nothing in lib/core/prop/. *)
     | Int_lin_le_reif (ts, rhs, r) -> truth r = (sum_cmp ts rhs <= 0)

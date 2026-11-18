@@ -40,6 +40,9 @@ let implemented =
     "bool2int";
     "bool_eq";
     "bool_not";
+    (* M12-parity-T1 (spike, D-0147), kept whole by the spike's mznlib. *)
+    "bool_xor";
+    "array_bool_xor";
     (* M3, the reified row (M3-T2 / M3-T4). *)
     "int_lin_le_reif";
     "int_le_reif";
@@ -1066,6 +1069,18 @@ let build_constraint env (c : Ast.constraint_item) =
     | "bool2int" -> cmp (fun b x -> Model.Bool2int (b, x))
     | "bool_eq" -> cmp (fun a b -> Model.Bool_eq (a, b))
     | "bool_not" -> cmp (fun a b -> Model.Bool_not (a, b))
+    | "bool_xor" -> arity3 (fun a b r -> Model.Bool_xor (a, b, r))
+    | "array_bool_xor" ->
+        one_array (fun xs ->
+            let n = env.naux in
+            env.naux <- n + 1;
+            let k =
+              new_var env
+                (Printf.sprintf "X_INTRODUCED_xor_%d" n)
+                (Model.Drange (0, List.length xs / 2))
+                pos
+            in
+            Model.Array_bool_xor (xs, k))
     (* M4-T1. One array argument, and the operands are kept exactly as written --
        duplicates and constants included. `all_different_int([x, x])` is UNSAT and
        `all_different_int([x, 1])` is `x <> 1`, and both fall out of the pairwise rows

@@ -77,6 +77,7 @@ module Justify = Baguette_core.Justify
 module Writer = Baguette_proof.Writer
 module Encoding = Baguette_proof.Encoding
 module Checked = Baguette_core.Checked
+module Parity = Baguette_core.Parity (* M12-parity-T1 spike, D-0147 *)
 
 type options = {
   model : string;
@@ -87,6 +88,9 @@ type options = {
   stats : bool;
   time_limit : float option;
   no_proof : bool; (* M9-no-proof-T2: solve without a proof -- see the header *)
+  parity : bool;
+      (* M12-parity-T1 (spike, D-0147): post lib/core/prop/parity.ml over the model's
+         XOR rows. Refused without --no-proof: the propagator has no proof rendering. *)
 }
 
 (* Exit codes. 0 covers both SAT and UNSAT: an UNSAT model is a successful run that
@@ -157,6 +161,10 @@ let usage () =
   prerr_endline "                    usual; the proof ends `conclusion NONE`, which";
   prerr_endline "                    veripb checks and reports as VERIFIED NO CONCLUSION.";
   prerr_endline "                    Exit status 0: a stopped run is not a failure.";
+  prerr_endline
+    "  --parity          (M12-parity-T1 SPIKE, D-0147) add a Gauss-Jordan propagator";
+  prerr_endline "                    over the model's XOR rows. It has NO proof: refused";
+  prerr_endline "                    unless --no-proof is given as well.";
   prerr_endline
     "  --no-proof        (M9-no-proof-T2, D-0126) solve WITHOUT a proof. Off by";
   prerr_endline "                    default, and a MEASUREMENT INSTRUMENT: the answer it";
@@ -295,6 +303,7 @@ let parse_args argv =
   let stats = ref false in
   let time_limit = ref None in
   let no_proof = ref false in
+  let parity = ref false in
   let rec go i =
     if i >= Array.length argv then ()
     else
@@ -317,6 +326,9 @@ let parse_args argv =
           go (i + 1)
       | "--no-proof" ->
           no_proof := true;
+          go (i + 1)
+      | "--parity" ->
+          parity := true;
           go (i + 1)
       | "--time-limit" ->
           if i + 1 >= Array.length argv then usage ();
@@ -381,6 +393,12 @@ let parse_args argv =
       "baguette: --no-proof and --proof PREFIX contradict each other: one asks for no \
        proof and the other for where to write it. Give one of them.";
     exit exit_usage);
+  (* M12-parity-T1 (D-0147): the spike propagator has no proof rendering, so it is
+     refused in any run that writes one -- including the default run, which writes its
+     proof to a temporary file. *)
+  if !parity && not !no_proof then (
+    prerr_endline ("baguette: --parity is refused without --no-proof: " ^ Parity.refusal);
+    exit exit_usage);
   match !model with
   | None -> usage ()
   | Some m ->
@@ -393,6 +411,7 @@ let parse_args argv =
         stats = !stats;
         time_limit = !time_limit;
         no_proof = !no_proof;
+        parity = !parity;
       }
 
 (* --------------------------------------------------------- timing (M1-T35) *)
@@ -1233,7 +1252,14 @@ let solve opts (m : Model.t) =
       at_exit (fun () ->
           if Sys.file_exists rows then try Sys.remove rows with Sys_error _ -> ())
   | None -> Encoding.row_sink := Encoding.Discard_rows);
-  let compiled = Timing.phase "compile" (fun () -> Compile.compile m) in
+  let compiled =
+    Timing.phase "compile" (fun () ->
+        if opts.parity then (
+          (* the line goes out at exit, after the search's own stats *)
+          at_exit (fun () -> Parity.report stderr);
+          Compile.compile ~parity:(Parity.licence ~no_proof:opts.no_proof) m)
+        else Compile.compile m)
+  in
   let store = compiled.Compile.store in
   let encoding = compiled.Compile.encoding in
   if opts.stats then report_encoding_cost (Encoding.cost encoding);
@@ -1255,6 +1281,11 @@ let solve opts (m : Model.t) =
           Writer.create ~comments:opts.proof_comments ~audit:(audit_enabled ())
             ~null:opts.no_proof proof_oc
         in
+        (* M12-parity-T1 (D-0147): the second lock, against the WRITER itself rather
+           than the flag that was meant to choose it. *)
+        if !Parity.posted > 0 && not (Writer.is_null writer) then (
+          prerr_endline ("baguette: " ^ Parity.refusal);
+          exit exit_usage);
         Encoding.start_proof encoding writer;
         (* Every propagator instance carries its own row id (D-0011/D-0015). This used
            to install a [model_id] thunk that raised, because [Explanation.Trivial]
