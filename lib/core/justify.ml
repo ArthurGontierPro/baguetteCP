@@ -991,6 +991,34 @@ let emit_bits_combine ctx ~origin ~(concludes : Reason.fact option) summands div
   state_clause ctx clause cid;
   (cid, clause)
 
+(* Whether [emit_bits_pruning] can render [e] (forced): a [Combine] of [Linear]'s shape --
+   every summand the row cited as [Term (_, Model_row _)] or a [Linear_term] -- or a
+   [Resolve] of such parts and model rows. Anything else is not a bits derivation even
+   when its scope holds a bits variable, and keeps the order arm's line: a LEARNED
+   constraint's conflict or pruning is the case that exists (a row citing the entries
+   that falsified its literals; its literals are atoms, so its `rup` is unit propagation
+   over the learned line itself). Found by the suite at `W = 0` once T3 released `int_ne`
+   (D-0134 section 5): element_learn_hole_{sat,unsat} learned a clause over `y`'s atoms
+   and its conflict reached the bits arm, which refused the [Term] it could not render. *)
+let rec is_bits_derivation (e : Explanation.t) =
+  let summand = function
+    | Explanation.Term (_, t) -> (
+        match Explanation.force t with Explanation.Model_row _ -> true | _ -> false)
+    | Explanation.Linear_term _ -> true
+    | Explanation.Weaken _ | Explanation.Defining _ -> false
+  in
+  match Explanation.force e with
+  | Explanation.Combine (summands, _) -> List.for_all summand summands
+  | Explanation.Resolve parts ->
+      List.for_all
+        (fun p ->
+          match Explanation.force p with
+          | Explanation.Model_row _ -> true
+          | Explanation.Combine _ -> is_bits_derivation p
+          | _ -> false)
+        parts
+  | _ -> false
+
 (* M8-bits-encoding-T2: the BITS arm's trace line -- the module header's "The BITS arm"
    says what the `pol` is and why it derives exactly the trace clause. [concludes] is
    the pruning's own claim ([Reason.justified]'s third half, D-0043), [None] for a

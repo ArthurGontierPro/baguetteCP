@@ -639,7 +639,7 @@ let emit (ctx : Justify.ctx) t store =
           let derived =
             if bits_arm ctx.Justify.encoding ~claim_owner:name all_facts then
               match Explanation.force (Store.explanation store e) with
-              | (Explanation.Combine _ | Explanation.Resolve _) as forced ->
+              | forced when Justify.is_bits_derivation forced ->
                   let origin =
                     Printf.sprintf "bits trace: %s from %d fact(s)" name
                       (List.length facts)
@@ -721,10 +721,7 @@ let conflict_line (ctx : Justify.ctx) t (c : Store.conflict) =
     && List.exists
          (fun f -> bits_owner ctx.Justify.encoding (Reason.fact_owner f))
          all_facts
-    &&
-    match Explanation.force c.Store.c_why with
-    | Explanation.Combine _ | Explanation.Resolve _ -> true
-    | _ -> false
+    && Justify.is_bits_derivation c.Store.c_why
   in
   if bits then (
     let cid, _ =
