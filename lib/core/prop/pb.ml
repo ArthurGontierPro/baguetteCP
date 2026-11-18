@@ -459,7 +459,40 @@ let strongest forceable (tm, _) =
 
    I-P3: on return there is nothing more to say about this constraint, because the last
    pass found no forceable term and a non-negative slack. *)
-let rec propagate t store =
+
+(* M6-T22 / D-0138: the pass, when it can be seen in advance to do nothing. At degree 1
+   with two non-false literals on DIFFERENT variables, the slack S - 1 (S the non-false
+   coefficients' sum) is at least 1, so there is no conflict; and a literal is forced
+   only when its LADDER-EFFECTIVE coefficient ([effective]) exceeds S - 1, i.e. reaches
+   S, which needs ALL of the non-false coefficient sum to sit in that literal's own
+   (variable, polarity) -- and a non-false literal on another variable, with its
+   coefficient of at least 1, rules that out. So the pass would return [Fixpoint] having
+   changed nothing, and [quiet] says so with one walk that stops at the second free
+   variable, instead of the survey, the slack, the forceable filter and, from
+   [group_from] terms on, the hash table of [effective_of].
+
+   Degree 1 is every clause ([Clause], learned or not) and only the clauses' rows here.
+   On QR48 (D-0138) a learned clause runs 369 times per node and changes something 0.01
+   times per node, and a `bool_clause` 270 times for 36: the runs this answers are the
+   runs that change nothing, so every run that does change something happens in the same
+   order on the same domains, and the trail and the proof are the same. *)
+let quiet store t =
+  t.degree = 1
+  &&
+  let free tm = status store tm.a <> Unsat_lit in
+  let rec other xi = function
+    | [] -> false
+    | tm :: rest -> (Var.to_int tm.a.x <> xi && free tm) || other xi rest
+  in
+  let rec first = function
+    | [] -> false
+    | tm :: rest -> if free tm then other (Var.to_int tm.a.x) rest else first rest
+  in
+  first t.terms
+
+let rec propagate t store = if quiet store t then Propagator.Fixpoint else pass t store
+
+and pass t store =
   let surveyed = survey store t in
   let slack = slack_of t.degree surveyed in
   if slack < 0 then conflict_of t store surveyed
