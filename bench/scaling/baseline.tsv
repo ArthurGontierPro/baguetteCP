@@ -1,0 +1,7 @@
+# M11-complexity-T2 (D-0141). The scaling lane's baseline ratios, per (instance, mode, metric).
+# A RATCHET: re-recorded by `scripts/scaling_lane.sh --update` only after a gated merge that
+# LOWERS a ratio (an M11 batch, or T6), in its own commit; never upward to make a line pass.
+H_qr72_bag_def	noproof	instructions	0.9061	fataepyc-06	a92174309acf973610248d5ce7700098	2026-11-18
+H_qr72_bag_def	proof	instructions	0.7441	fataepyc-06	a92174309acf973610248d5ce7700098	2026-11-18
+2012_parity-learning_48_24_6.2	noproof	instructions	0.9403	fataepyc-06	a92174309acf973610248d5ce7700098	2026-11-18
+2012_parity-learning_48_24_6.2	proof	instructions	0.5581	fataepyc-06	a92174309acf973610248d5ce7700098	2026-11-18

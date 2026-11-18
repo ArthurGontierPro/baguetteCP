@@ -25,7 +25,8 @@
 #
 # THE COST. `perf stat -e instructions:u` when perf works here: user-mode instructions
 # retired are a property of the binary and its input, not of the machine's load, so a
-# node at load 50 gives the same count as an idle one (measured: 0.05 % between two runs).
+# node at load 50 gives nearly the same count as an idle one (measured: 0.05 % between two
+# whole runs, up to 0.25 % on a segment ratio).
 # Otherwise the OCaml GC's allocated words (OCAMLRUNPARAM=v=0x400), which are exactly
 # deterministic but blind to a cost that does not allocate (a List.mem); the lane says
 # which one it used, and compares a line only against a baseline of the same metric.
@@ -38,8 +39,8 @@
 # on them would be a flaky gate.
 #
 # THE THRESHOLD. bench/scaling/baseline.tsv holds each line's ratio as recorded; the lane
-# enforces ratio <= baseline x (1 + margin), margin 1 % by default (ten times the run-to-run
-# jitter of the ratio, measured at <= 0.1 %). It is a RATCHET: a
+# enforces ratio <= baseline x (1 + margin), margin 1 % by default (four times the run-to-run
+# jitter of the ratio, measured at <= 0.25 % on fataepyc-06 at load 50). It is a RATCHET: a
 # batch that lowers a ratio re-records it (--update, in its own commit, after the gated
 # merge), and nothing re-records it upward.
 #
