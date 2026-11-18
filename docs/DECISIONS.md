@@ -14207,7 +14207,17 @@ kept across runs only with a trail-undone state, which is the cumulative's own d
 cumulative tests (`test_prop.ml`'s soundness, checking, rows, time-table fixpoint and search lanes,
 with VeriPB) and the lane's two rcpsp instances in nine configurations are the checks.
 
-**Evidence.** RESULT_E8
+**Evidence.** The lane, 232 runs, and the six at 10 000 nodes: every observation equal to the
+previous fix's, WORK counters included.
+
+| instance, 10 000 nodes, no-proof | before | after | change |
+|---|---|---|---|
+| QR48 | 23.56 | 23.55 | 0 |
+| QR72 | 34.63 | 34.63 | 0 |
+| rcpsp_11 | 66.01 | 63.99 | **-3.1 %** |
+| mspsp_hard_01 | 90.39 | 90.24 | -0.2 % |
+| cyclic-rcpsp_easy_6 | 68.49 | 68.57 | +0.1 % |
+| openshop_gp10-4 | 797.71 | 797.52 | 0 |
 
 ### 9. What this batch leaves out, and why: the items that reorder runs, with their measured gains
 
