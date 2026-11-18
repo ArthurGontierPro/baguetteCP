@@ -3,6 +3,16 @@
 # and verify the emitted proof with veripb.
 #
 # A model that produces the right answer with a proof veripb rejects is a FAILURE.
+#
+# M9-no-proof-T2 (D-0126): and then solve it AGAIN under `--no-proof`, and require stdout
+# and the exit code to be byte-identical to the proved run's. This is the only test in the
+# tree that runs the solver without a proof (docs/SPEC.md section 1 forbids every other
+# one), and it is the first direct test that proof logging never steers the search: the
+# justifications, the trace lines and the deletions are the one thing the two runs do not
+# share, so a difference here is a finding about the PROVED run -- something in Justify,
+# Trace or Writer fed a decision, a wake or a reason -- and never a reason to touch the
+# no-proof side. The proved side is the ordinary run above, so the lane costs one
+# unverified run per model and nothing it prints is a result (SPEC 1).
 set -uo pipefail
 
 # MACHINE LIMIT (2026-09-16). 15 GB of RAM shared by every concurrent session, and three
@@ -141,18 +151,45 @@ for fzn in "${ROOT}"/test/models/*.fzn; do
     continue
   fi
 
-  if "${VERIPB}" "${prefix}.opb" "${prefix}.pbp" > "${prefix}.veripb" 2>&1; then
-    report "${base}" pass || true
-  else
+  if ! "${VERIPB}" "${prefix}.opb" "${prefix}.pbp" > "${prefix}.veripb" 2>&1; then
     if report "${base}" fail "veripb rejected the proof"; then continue; fi
     sed 's/^/       /' "${prefix}.veripb" | tail -20
     echo "       opb=${prefix}.opb proof=${prefix}.pbp"
     echo "       See docs/PROOF-FORMAT.md section 6 before changing anything."
+    continue
   fi
+
+  # M9-no-proof-T2 (D-0126): the stdout-identity lane. The proved run above is the
+  # reference; this run writes no .opb, no .pbp and no justification, and must print
+  # the same bytes and exit the same way. See the header. A model listed in PENDING
+  # never gets here (the proved run already reported it).
+  "${SOLVER}" "${fzn}" --no-proof > "${prefix}.noproof.out" 2> "${prefix}.noproof.err"
+  rc2=$?
+  if [ "${rc2}" -ne "${rc}" ]; then
+    if report "${base}" fail "--no-proof exited ${rc2} where the proved run exited ${rc} (M9-no-proof-T2)"; then continue; fi
+    sed 's/^/       /' "${prefix}.noproof.err" | head -5
+    continue
+  fi
+  if [ -s "${prefix}.noproof.err" ]; then
+    if report "${base}" fail "--no-proof wrote to stderr with no --time flag (M1-T49)"; then continue; fi
+    sed 's/^/       /' "${prefix}.noproof.err" | head -20
+    continue
+  fi
+  if ! cmp -s "${prefix}.out" "${prefix}.noproof.out"; then
+    if report "${base}" fail "--no-proof stdout DIFFERS from the proved run (M9-no-proof-T2)"; then continue; fi
+    diff -u "${prefix}.out" "${prefix}.noproof.out" | sed 's/^/       /' | head -20
+    echo "       D-0126: the proof was steering the search. This is a finding about the PROVED"
+    echo "       run (Justify, Trace or Writer fed a decision, a wake or a reason). Record it;"
+    echo "       do not make this lane pass by changing the no-proof side."
+    continue
+  fi
+  report "${base}" pass || true
 done
 
 echo
 echo "model tests: ${pass} passed, ${fail} failed, ${xfail} expected-fail, ${xpass} unexpected-pass, ${skip} skipped"
+echo "  every PASS is a proof veripb accepted AND a --no-proof run whose stdout and exit code"
+echo "  are byte-identical to it (M9-no-proof-T2, D-0126)."
 
 if [ "${xfail}" -gt 0 ]; then
 
