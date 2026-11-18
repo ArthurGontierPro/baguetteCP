@@ -348,8 +348,15 @@ type evictor = {
    observe without a hook in lib/core/analysis.ml; a propagation is the nearest signal
    the instance itself gives, and it is a superset (every clause that takes part in an
    analysis propagated or conflicted first). An ungated entry -- the build where the
-   search does not call [gate] -- is never used, which is the honest reading: nothing
-   observed it working.
+   search does not call [gate] -- is never used after its first check, which is the
+   honest reading: nothing observed it working.
+
+   A NEW entry starts USED, CaDiCaL's rule (a learned clause is created with its `used`
+   flag set): at the first check it meets it ranks with the used, whatever it did.
+   Without that grace a reduction ranks a clause learned one conflict earlier -- which has
+   had no chance to propagate -- with the unused, first in line; [reduce] runs right
+   after [add], before the search has backtracked, so the clause just learned would be
+   the likeliest victim of the reduction its own [add] triggered.
 
    The schedule counts LEARNED CONSTRAINTS, not conflicts: [reduce] sees one call per
    [add], and a conflict that also learns a PB row (M2-L6) adds two. D-0139 records the
@@ -661,7 +668,7 @@ let add t ~cid ~(row : Learned.t) ~lbd ~origin =
       e_origin = origin;
       e_tier =
         (match t.policy.p_tiers with Some prm -> tier_of_lbd prm lbd | None -> Local);
-      e_used = false;
+      e_used = t.policy.p_tiers <> None (* the grace above [tier_params] *);
       e_gate = None;
     }
   in
