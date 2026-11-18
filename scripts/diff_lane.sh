@@ -191,15 +191,25 @@ run_one() { # name file budget class cfg-index
     echo $? > rc
   )
   local rcv; rcv="$(cat "$dir/rc")"
+  # A non-zero exit is quoted with the solver's last stderr line (an invariant under
+  # BAGUETTE_DEBUG, the memory cap, a crash), and it is NEVER recorded as a reference:
+  # the lane must not bless a failure.
+  local why=""
+  [ "$rcv" = 0 ] || why="   [exit $rcv: $(grep -v '^\(stats\|limit\|time\):' "$dir/err" | tail -1 | cut -c1-240)]"
   if [ "$proof" = "yes" ]; then
     if [ ! -f "$dir/p.opb" ] || [ ! -f "$dir/p.pbp" ]; then
-      echo "DIFF $label: no proof written (rc $rcv)" > "$res"; return
+      echo "DIFF $label: no proof written (rc $rcv)$why" > "$res"; return
     fi
     python3 -I "$OBS" observe "$rcv" "$dir/out" "$dir/err" "$dir/p.opb" "$dir/p.pbp" > "$dir/obs"
   else
     python3 -I "$OBS" observe "$rcv" "$dir/out" "$dir/err" > "$dir/obs"
   fi
   if [ "$UPDATE" = 1 ]; then
+    if [ "$rcv" != 0 ]; then
+      echo "REFUSED $label: not recorded$why" > "$res"
+      [ -n "$KEEP" ] || rm -f "$dir/p.opb" "$dir/p.pbp"
+      return
+    fi
     if [ "$proof" = "yes" ]; then
       local v; v="$(timeout 3600 "$VERIPB" "$dir/p.opb" "$dir/p.pbp" 2>&1)"
       if [ $? -ne 0 ] || ! grep -q '^s VERIFIED' <<< "$v"; then
@@ -211,9 +221,12 @@ run_one() { # name file budget class cfg-index
     cp "$dir/obs" "$ref"
     echo "recorded $label (rc $rcv)" > "$res"
   elif [ ! -f "$ref" ]; then
-    echo "DIFF $label: NO REFERENCE at ${ref#"$ROOT"/} -- record it with --update (see the rule)" > "$res"
+    echo "DIFF $label: NO REFERENCE at ${ref#"$ROOT"/} -- record it with --update (see the rule)$why" > "$res"
   else
     python3 -I "$OBS" compare "$ref" "$dir/obs" "$label" > "$res"
+    if [ -n "$why" ] && grep -q '^DIFF' "$res"; then
+      { head -1 "$res" | tr -d '\n'; printf '%s\n' "$why"; } > "$res.tmp" && mv "$res.tmp" "$res"
+    fi
   fi
   [ -n "$KEEP" ] || rm -f "$dir/p.opb" "$dir/p.pbp"
 }
