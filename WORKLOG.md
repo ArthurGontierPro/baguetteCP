@@ -307,6 +307,18 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | **The learned database costs O(n) per conflict, and it is now the largest share.** `Retention.reduce` (called after every learned constraint, `search.ml` ~L2112 and ~L2490) builds `live_entries t = List.rev t.live_rev`, n cells, even under `keep_all`, whose `p_evict` ignores it; `Retention.add` calls `holds`, a `List.exists` over `live_rev`. Self time on QR48 no-proof: `List.rev_append` 5.8 %, `List.exists` 5.4 %, `Retention.fun_1135` (the `holds` closure) 1.9 %: about 13 %, growing with the database. A scratch experiment on the node (not committed): `holds` through a `Hashtbl` of live cids kept by `add` and `retire`, and `reduce` returning `[]` at once when the policy is `keep_all`. On QR48 at 10 k nodes cycles fell 14 % (14.44 G to 12.42 G) and instructions 2.3 %; on QR72 cycles fell 10 %; nodes and runs identical. Since M10-T4 rewrites eviction, please keep the policy's view of the database free of a per-conflict O(n) copy (Glucose's `reduceDB` runs every k conflicts, not every one) | `lib/core/retention.ml` | agent-pernode | open, for agent-retention (M10-T4) |
 | Proof mode only: rendering a literal re-scans its variable's name for characters to sanitise on every call (`Lit.go`, `ident_char`, `render`, `sanitize`: 3.2 % of QR48's proof-mode self time; 1.29 M `rup` lines of about 16 literals). The names are fixed after compile, so a per-name memo of `sanitize` (or of the rendered `x_ge_` prefix) would remove the scan; byte identity is the test | `lib/proof/lit.ml` | agent-pernode | open, for agent-t3 (M8-T3), low priority |
 
+### 2026-11-18 — bug: `bool_xor(x, y, true)` reaches baguette unredefined (from the codes-cp side session)
+
+5. A model that fixes the output of an XOR chain to true makes MiniZinc 2.10.1 emit
+   `constraint bool_xor(X_INTRODUCED_103_,X_INTRODUCED_39_,true);` with
+   `tools/baguette.msc`, although `mznlib/redefinitions.mzn:122` redefines `bool_xor` with a `var bool`
+   third argument. baguette then refuses the model ("unknown builtin `bool_xor`", exit 2), correctly
+   per SPEC 2.1, but the gap is in the mznlib. Reproduce: in `~/codes-cp`,
+   `minizinc -c --solver ~/baguette/tools/baguette.msc -D "Wmax=12;HALF=6;FIRST=0;SECOND=0;THIRD=0;FIXU={};FIXC={1,2,3};" models/minweight_fix.mzn instances/qr80_T.dzn`
+   with the `FIXC` line written as `constraint forall(j in FIXC)(c[j]);` (the committed model now
+   works around it with a sum). Probably a par-`b` overload is needed, or the 3-argument form must be
+   caught as `fzn_bool_xor`; worth a census of the other `bool_*` builtins with a par argument.
+
 ## Completed
 
 | Task | Session | Date | Summary |
