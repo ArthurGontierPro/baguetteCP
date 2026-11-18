@@ -30,6 +30,13 @@
 # deterministic but blind to a cost that does not allocate (a List.mem); the lane says
 # which one it used, and compares a line only against a baseline of the same metric.
 #
+# Instructions UNDERSTATE a cost that is bound by memory rather than by work: a walk over a
+# list strewn across the major heap retires few instructions per cache miss. D-0138
+# measured `Retention.reduce`'s copy at 13 % of the CYCLES on QR48; in instructions the
+# same kind of copy is a few per cent. So `cycles:u` is read too and printed beside the
+# enforced ratio, as information: cycles move with the load on a shared node, and a gate
+# on them would be a flaky gate.
+#
 # THE THRESHOLD. bench/scaling/baseline.tsv holds each line's ratio as recorded; the lane
 # enforces ratio <= baseline x (1 + margin), margin 1 % by default (ten times the run-to-run
 # jitter of the ratio, measured at <= 0.1 %). It is a RATCHET: a
@@ -105,7 +112,7 @@ run_one() { # id mode budget -> $WORK/<id>.<mode>.<budget>/{cost,nodes,props}
     $CAPCMD
     if [ "$METRIC" = instructions ]; then
       OCAMLRUNPARAM=v=0x400 BAGUETTE_NODE_LIMIT="$n" timeout -k 10 "$TMO" \
-        "$PERF" stat -x, -e instructions:u -o perf.txt "$BIN" model.fzn --stats "${pf[@]}" > out 2> err
+        "$PERF" stat -x, -e instructions:u,cycles:u -o perf.txt "$BIN" model.fzn --stats "${pf[@]}" > out 2> err
     else
       OCAMLRUNPARAM=v=0x400 BAGUETTE_NODE_LIMIT="$n" timeout -k 10 "$TMO" \
         "$BIN" model.fzn --stats "${pf[@]}" > out 2> err
@@ -115,6 +122,7 @@ run_one() { # id mode budget -> $WORK/<id>.<mode>.<budget>/{cost,nodes,props}
   rm -f "$d/p.opb" "$d/p.pbp"
   awk '/^allocated_words:/ {print $2}' "$d/err" > "$d/gcwords"
   [ -f "$d/perf.txt" ] && grep 'instructions' "$d/perf.txt" | cut -d, -f1 > "$d/instructions"
+  [ -f "$d/perf.txt" ] && grep 'cycles' "$d/perf.txt" | cut -d, -f1 > "$d/cycles"
   awk '$1=="stats:" && $2=="nodes" {print $3; exit}' "$d/err" > "$d/nodes"
   awk '$1=="stats:" && $2=="props" {print $3; exit}' "$d/err" > "$d/props"
 }
@@ -160,6 +168,12 @@ node_early, node_late = (c1 - c0) / (n1 - n0), (c3 - c2) / (n3 - n2)
 print("%.4f %.1f %.1f %.4f" % (late / early, early, late, node_late / node_early))
 PY
 )
+  cyc=""
+  if [ "$METRIC" = instructions ] && [ -n "$(get "$n0" cycles)" ] && [ -n "$(get "$n3" cycles)" ]; then
+    cyc="$(python3 -I -c 'import sys; c=list(map(int, sys.argv[1:5])); p=list(map(int, sys.argv[5:9])); print("%.4f" % (((c[3]-c[2])/(p[3]-p[2])) / ((c[1]-c[0])/(p[1]-p[0]))))' \
+      "$(get "$n0" cycles)" "$(get "$n1" cycles)" "$(get "$n2" cycles)" "$(get "$n3" cycles)" \
+      "$(get "$n0" props)" "$(get "$n1" props)" "$(get "$n2" props)" "$(get "$n3" props)" 2>/dev/null)"
+  fi
   base="$(awk -F'\t' -v i="$id" -v m="$mode" -v k="$METRIC" '$1==i && $2==m && $3==k {r=$4} END {print r}' "$S/baseline.tsv" 2>/dev/null)"
   NEWBASE+="$id	$mode	$METRIC	$ratio	$(hostname -s)	$MD5	$(date -u +%Y-%m-%d)"$'\n'
   if [ -z "$base" ]; then
@@ -174,6 +188,8 @@ PY
   fi
   printf 'scaling: %-32s [%-7s] per-prop late/early = %s (%s -> %s %s/run); per-node %s -- %s\n' \
     "$id" "$mode" "$ratio" "$early" "$late" "$METRIC" "$node_ratio" "$verdict"
+  [ -z "$cyc" ] || printf 'scaling: %-32s [%-7s]   cycles:u per-prop late/early = %s (load-sensitive: information, never enforced)\n' \
+    "$id" "$mode" "$cyc"
 done
 
 if [ "$UPDATE" = 1 ]; then
