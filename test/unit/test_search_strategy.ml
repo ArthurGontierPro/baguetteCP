@@ -163,23 +163,58 @@ let test_of_string () =
 
 (* ------------------------------------------------------- the search, end to end *)
 
-(* 6-queens over 1..6: satisfiable, and first-fail/min takes several conflicts to find a
-   solution, so a restart lands in the middle of a run that then answers SAT. *)
-let queens n =
-  let b = Buffer.create 1024 in
+(* n-queens over 0/1 cells: one per row and per column (int_lin_eq), at most one per
+   diagonal (int_lin_le). Satisfiable for n = 6, and first-fail/min reaches its first
+   solution through conflicts that LEARN (8 of them at n = 6, measured with the CLI), so a
+   restart lands in the middle of a run that then answers SAT. The integer-variable
+   n-queens over int_ne/int_lin_ne would not do: its conflicts learn nothing (the holes'
+   Ne reasons decline 1UIP), and a conflict that learned nothing never restarts (D-0137
+   section 1). With [~opt], the first row's column is a variable [c1] to minimise; 6-queens
+   has no solution with a queen in a corner of row 1, so the optimum 2 is PROVED by
+   conflicts. *)
+let queens ?(opt = false) n =
+  let b = Buffer.create 4096 in
+  let add fmt = Printf.ksprintf (Buffer.add_string b) fmt in
+  let ones k = String.concat "," (List.init k (fun _ -> "1")) in
+  let row cells =
+    String.concat "," (List.map (fun (i, j) -> Printf.sprintf "b%d%d" i j) cells)
+  in
   for i = 1 to n do
-    Buffer.add_string b (Printf.sprintf "var 1..%d: q%d :: output_var;\n" n i)
-  done;
-  for i = 1 to n do
-    for j = i + 1 to n do
-      Buffer.add_string b (Printf.sprintf "constraint int_ne(q%d,q%d);\n" i j);
-      Buffer.add_string b
-        (Printf.sprintf "constraint int_lin_ne([1,-1],[q%d,q%d],%d);\n" i j (j - i));
-      Buffer.add_string b
-        (Printf.sprintf "constraint int_lin_ne([1,-1],[q%d,q%d],%d);\n" i j (i - j))
+    for j = 1 to n do
+      add "var 0..1: b%d%d :: output_var;\n" i j
     done
   done;
-  Buffer.add_string b "solve satisfy;\n";
+  if opt then add "var 1..%d: c1 :: output_var;\n" n;
+  for i = 1 to n do
+    add "constraint int_lin_eq([%s],[%s],1);\n" (ones n)
+      (row (List.init n (fun j -> (i, j + 1))))
+  done;
+  for j = 1 to n do
+    add "constraint int_lin_eq([%s],[%s],1);\n" (ones n)
+      (row (List.init n (fun i -> (i + 1, j))))
+  done;
+  let diag cells =
+    if List.length cells > 1 then
+      add "constraint int_lin_le([%s],[%s],1);\n" (ones (List.length cells)) (row cells)
+  in
+  for d = -(n - 2) to n - 2 do
+    diag
+      (List.filter_map
+         (fun i -> if i - d >= 1 && i - d <= n then Some (i, i - d) else None)
+         (List.init n (fun i -> i + 1)))
+  done;
+  for s = 3 to (2 * n) - 1 do
+    diag
+      (List.filter_map
+         (fun i -> if s - i >= 1 && s - i <= n then Some (i, s - i) else None)
+         (List.init n (fun i -> i + 1)))
+  done;
+  if opt then (
+    add "constraint int_lin_eq([%s,-1],[%s,c1],0);\n"
+      (String.concat "," (List.init n (fun j -> string_of_int (j + 1))))
+      (row (List.init n (fun j -> (1, j + 1))));
+    add "solve minimize c1;\n")
+  else add "solve satisfy;\n";
   Buffer.contents b
 
 (* 5 pigeons, 4 holes, 0/1 cells: unsatisfiable, and the refutation takes conflicts. *)
@@ -202,13 +237,6 @@ let pigeons =
   done;
   Buffer.add_string b "solve satisfy;\n";
   Buffer.contents b
-
-(* A minimisation with a search that conflicts: queens with the first queen's column as
-   the objective. *)
-let queens_opt n =
-  let s = queens n in
-  let s = String.sub s 0 (String.length s - String.length "solve satisfy;\n") in
-  s ^ "solve minimize q1;\n"
 
 type run = {
   answer : string; (* "SAT", "UNSAT", or "OPT v" *)
@@ -253,7 +281,10 @@ let solve_with dir name src (config : Search.config) =
             ~on_solution:(fun _ -> ())
             ()
         with
-        | Search.Opt (_, v) -> (Printf.sprintf "OPT %d" v, true)
+        (* [exhausted:false]: an optimisation that reaches the objective's floor
+           stops at that solution without closing the tree ([record_improving]'s
+           [`Proved]), so only the bound half of M1-T36 is owed. *)
+        | Search.Opt (_, v) -> (Printf.sprintf "OPT %d" v, false)
         | Search.Opt_unsat -> ("UNSAT", true))
   in
   let live = List.length (Writer.live_ids writer) in
@@ -307,7 +338,7 @@ let test_restarting_search () =
   Sys.remove dir;
   Sys.mkdir dir 0o700;
   let cases =
-    [ ("queens6", queens 6); ("pigeons54", pigeons); ("queens5opt", queens_opt 5) ]
+    [ ("queens6", queens 6); ("pigeons54", pigeons); ("queens6opt", queens ~opt:true 6) ]
   in
   let policies =
     [
