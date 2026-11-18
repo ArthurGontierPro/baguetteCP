@@ -152,17 +152,19 @@ bench: build
 	$(CAP) ./bench/run_bench.sh $(ARGS)
 
 # M11-complexity-T2 (D-0141). The two lanes of the M11 pass, deliberately NOT part of
-# `check`: the differential lane is 168 runs of real instances (about three minutes on
-# fataepyc-06 at 16 in parallel, far longer on a laptop, and a laptop is not where runs
-# go), and the scaling lane needs perf and runs of up to 32 000 nodes. The gate script
-# runs both right after `make check`:
+# `check` (25 s): the differential lane's fast tier is 189 runs of real instances (about
+# three minutes on fataepyc-06 at -j 16; a laptop is not where runs go), its slow tier and
+# debug pass add D-0140's six instances and BAGUETTE_DEBUG=1, and the scaling lane needs
+# perf and runs of up to 40 000 nodes. A batch agent runs `make diff ARGS="-j 16"` after
+# each change; the gate script runs, right after `make check`,
 #
-#   make check && make diff ARGS="-j 16" && make scaling ARGS="-j 16"
+#   make diff ARGS="--tier all -j 24"    # hard: fails on any difference
+#   make diff ARGS="--debug --tier all -j 24"   # the debug pass (RED on a8d2924: D-0141 s5)
+#   make scaling ARGS="-j 16"            # REPORT-ONLY until M11-complexity-T6 (--enforce)
 #
 # `make diff` FAILS on any difference from bench/diff/reference/; the rule for
 # re-recording it (never to make it pass) is in D-0141 and in the script's header.
-# `make scaling` is REPORT-ONLY until M11-complexity-T6 (ARGS=--enforce fails now).
-# Everything both lanes read is in the repository (bench/diff/corpus/, 766 KB gz).
+# Everything both lanes read is in the repository (bench/diff/corpus/, 958 KB gz).
 diff: build
 	$(CAP) ./scripts/diff_lane.sh $(ARGS)
 

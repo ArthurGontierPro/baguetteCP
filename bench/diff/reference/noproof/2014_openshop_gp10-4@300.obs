@@ -1,0 +1,82 @@
+rc 0
+out objective = 1235;
+out X_INTRODUCED_16_ = array1d(1..100, [0, 990, 244, 642, 1, 1031, 1231, 1086, 992, 2, 520, 0, 229, 1076, 1031, 749, 494, 534, 1032, 244, 521, 229, 0, 995, 1076, 1136, 489, 1087, 1077, 494, 84, 1013, 779, 0, 24, 83, 520, 11, 1015, 1045, 1, 811, 642, 26, 0, 586, 990, 749, 774, 781, 1086, 489, 1087, 1167, 1170, 0, 1, 811, 1206, 1207, 998, 993, 1013, 990, 83, 1, 0, 137, 781, 534, 26, 992, 1014, 11, 600, 84, 983, 0, 990, 1046, 1045, 1046, 643, 600, 137, 601, 778, 115, 0, 861, 995, 984, 774, 24, 2, 1032, 861, 25, 115, 0]);
+out ----------
+search ladder/cls 1008899 cls
+search opb/lines 1015299 lines
+search direct/vals 0 vals
+search widest/wide 10000 wide
+search bits/vars 0 vars
+search bitsrows/lines 0 lines
+search choices/groups 0 groups
+search limit.nodes 301
+search limit.decisions 231
+search limit.conflicts 69
+search limit.learned 64
+search limit.pb-learned 0
+search limit.db 64
+search limit.maxdepth 101
+search limit.incumbent 1235
+work limit.props 78929
+work limit.eff 6440
+work limit.contra 68
+search limit.at node
+search nodes/nodes 301 nodes
+search decisions/decs 231 decs
+search conflicts/nodes 69 nodes
+search maxdepth/levels 101 levels
+work exhausted/bool 0 bool 1 if
+search skipped/nodes 83 nodes
+search learned/cls 64 cls
+work later/asks 1150 asks
+work cites/memos 1092 memos
+search convertible/cls 0 cls
+search retention keep-all keep-all: 64 added, 0 evicted, 64 swept, 0 live, 5 duplicate, 63 cited, 0 pinned
+search lbd 1:1,3:8,4:8,5:39,6:7,7:1
+search width 1:1,3:2,5:5,6:48,8:8
+search globals/units 1 units
+search glob-prune/prunes 16 prunes
+search glob-confl/confl 1 confl
+search cls-inst/inst 63 inst
+search cls-decl/cls 0 cls
+search cls-prune/prunes 71 prunes
+search pb-inst/inst 0 inst
+search pb-inst-no/rows 0 rows
+search pb-prune/prunes 0 prunes
+search pb-confl/confl 0 confl
+search minimised/lits 0 lits
+search i-s4-cross/lines 0 lines
+search pb-tried/confl 64 confl
+search pb-learned/rows 0 rows
+search pb-fallback/confl 64 confl
+search pb-why first fallback reason: no PB row for instance <unknown>
+work pb-whys/recd 64 recd 52 x
+search pb-steps/pivots 0 pivots
+search pb-convert/rows 0 rows
+search pb-stronger/rows 0 rows
+search pb-nondeg/rows 0 rows
+search pb-lifted/rows 0 rows
+search pb-rungs/rungs 0 rungs
+search lvl-cmp/confl 0 confl
+search lvl-same/confl 0 confl
+search lvl-narrow/confl 0 confl
+search lvl-wide/confl 0 confl
+search lvl-incomp/confl 0 confl
+search lvl-empty/confl 0 confl
+search lvl-assert/confl 0 confl
+work int_lin_le_reif/inst 1800 inst 200.8 runs/node 10.51 eff/node
+work bool_clause/inst 2700 inst 32.8 runs/node 7.83 eff/node
+work int_lin_le/inst 100 inst 22.5 runs/node 2.82 eff/node
+work learned_clause/inst 63 inst 6.1 runs/node 0.24 eff/node
+work props/runs 78929 runs
+work eff/runs 6440 runs
+work contra/runs 68 runs
+work passes/snaps 0 snaps
+work deductions/chgs 0 chgs
+work wakes/wakes 83036 wakes
+work masked/wakes 0 wakes
+work vetoed/wakes 849 wakes
+work advised/wakes 2428 wakes
+work seeded/runs 36576 runs
+work skipped/slots 1349426 slots
+search no-proof/bool 1 bool

@@ -1,7 +1,8 @@
 # M11-complexity-T2 (D-0141). The scaling lane's baseline ratios, per (instance, mode, metric).
 # A RATCHET: re-recorded by `scripts/scaling_lane.sh --update` only after a gated merge that
 # LOWERS a ratio (an M11 batch, or T6), in its own commit; never upward to make a line pass.
-H_qr72_bag_def	noproof	instructions	0.9085	fataepyc-06	e8354a74b5a2a5b0ac3d83f5a98d0a96	2026-11-18
-H_qr72_bag_def	proof	instructions	0.7449	fataepyc-06	e8354a74b5a2a5b0ac3d83f5a98d0a96	2026-11-18
-2012_parity-learning_48_24_6.2	noproof	instructions	0.9538	fataepyc-06	e8354a74b5a2a5b0ac3d83f5a98d0a96	2026-11-18
-2012_parity-learning_48_24_6.2	proof	instructions	0.5615	fataepyc-06	e8354a74b5a2a5b0ac3d83f5a98d0a96	2026-11-18
+H_qr72_bag_def	noproof	instructions	1.7890	fataepyc-06	e8354a74b5a2a5b0ac3d83f5a98d0a96	2026-11-18
+H_qr72_bag_def	proof	instructions	1.5611	fataepyc-06	e8354a74b5a2a5b0ac3d83f5a98d0a96	2026-11-18
+2013_rcpsp_11	noproof	instructions	2.3789	fataepyc-06	e8354a74b5a2a5b0ac3d83f5a98d0a96	2026-11-18
+2012_parity-learning_48_24_6.2	noproof	instructions	3.1157	fataepyc-06	e8354a74b5a2a5b0ac3d83f5a98d0a96	2026-11-18
+2012_parity-learning_48_24_6.2	proof	instructions	2.3011	fataepyc-06	e8354a74b5a2a5b0ac3d83f5a98d0a96	2026-11-18
