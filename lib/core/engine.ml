@@ -228,6 +228,11 @@ let () =
 
 type t = {
   mutable instances : Propagator.instance array;
+      (** By id, [0 .. count - 1]; the slots past [count] are [vacant] (M6-T22). *)
+  mutable count : int;
+      (** M6-T22 / D-0138: the number of instances. Every id-indexed array of this record
+          is at least this long and grows by DOUBLING in [add]; before M6-T22 each grew
+          by one, so a learned clause copied six arrays of the whole database. *)
   (* var -> ids of the propagator instances that read it. Built once at [create] time
      from each instance's [inst_vars]; instances never change their variable set after
      that, so the table does not need to be rebuilt per call. *)
@@ -288,9 +293,39 @@ type t = {
   mutable wv2 : int array;
       (** M6-T22 / D-0138: id -> the two variables (ints) a self-watching instance
           reported at the end of its last run, or [-1] before its first. *)
+  mutable dirty : bool array;
+  mutable in_queue : bool array;
+      (** M6-T22 / D-0138: [propagate]'s seed marks and queue membership, by id, kept
+          from one call to the next and ALL FALSE between calls ([propagate] clears what
+          it set, on every exit). They were allocated per call: two arrays of the whole
+          database per search node, in the major heap once past 256 instances. *)
 }
 
 let unborn = max_int
+
+(* M6-T22: the filler of [instances] past [count]. Never run: every reader of
+   [instances] stops at [count]. *)
+let vacant : Propagator.instance =
+  {
+    Propagator.id = -1;
+    inst_name = "<vacant>";
+    inst_consistency = Propagator.Checking;
+    inst_vars = [];
+    run = (fun _ -> Propagator.Fixpoint);
+    inst_row = Propagator.no_row;
+    inst_advise = Propagator.advise_always;
+    inst_watched = None;
+    inst_idempotent = false;
+  }
+
+(* M6-T22: [a] with room for index [id], doubling, the new slots [fill]. *)
+let room a id fill =
+  let n = Array.length a in
+  if id < n then a
+  else
+    let b = Array.make (max (id + 1) (2 * n)) fill in
+    Array.blit a 0 b 0 n;
+    b
 
 (* M6-T22 / D-0138: an instance's scope as the sorted set of its variables' ints. *)
 let scope_of (inst : Propagator.instance) =
@@ -515,6 +550,7 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
   let t =
     {
       instances = Array.of_list instances;
+      count = List.length instances;
       watchers;
       triggers;
       ctr = counters_create ();
@@ -533,6 +569,8 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
       dyn_len = [||];
       wv1 = Array.make (Array.length triggers) (-1);
       wv2 = Array.make (Array.length triggers) (-1);
+      dirty = Array.make (Array.length triggers) false;
+      in_queue = Array.make (Array.length triggers) false;
     }
   in
   (* M6-T22: the wake index, in [instances] order -- the order [watchers] was built in. *)
@@ -544,23 +582,28 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
   t
 
 let set_incremental t b = t.incremental <- b
-let n_instances t = Array.length t.instances
+let n_instances t = t.count
+
+(* M6-T22: the instances, in id order, without the [vacant] tail. *)
+let iter_instances t f =
+  for i = 0 to t.count - 1 do
+    f t.instances.(i)
+  done
+
 let counters t = t.ctr
 
 (* M6-T20. [name, instances, runs, effectful runs] per propagator family, most runs
    first; ties by name so the table is deterministic. *)
 let family_table t =
   let tbl = Hashtbl.create 16 in
-  Array.iter
-    (fun (inst : Propagator.instance) ->
+  iter_instances t (fun (inst : Propagator.instance) ->
       let id = inst.Propagator.id in
       let r = if id < Array.length t.runs_by_id then t.runs_by_id.(id) else 0 in
       let e = if id < Array.length t.eff_by_id then t.eff_by_id.(id) else 0 in
       let n, r0, e0 =
         try Hashtbl.find tbl inst.Propagator.inst_name with Not_found -> (0, 0, 0)
       in
-      Hashtbl.replace tbl inst.Propagator.inst_name (n + 1, r0 + r, e0 + e))
-    t.instances;
+      Hashtbl.replace tbl inst.Propagator.inst_name (n + 1, r0 + r, e0 + e));
   let rows = Hashtbl.fold (fun name (n, r, e) acc -> (name, n, r, e) :: acc) tbl [] in
   List.sort
     (fun (na, _, ra, _) (nb, _, rb, _) ->
@@ -586,7 +629,7 @@ let vetoes_self t id = id >= 0 && id < Array.length t.veto && t.veto.(id)
    given. Exposed rather than left to the caller to compute from [n_instances], because
    the two are the same number only because [add] keeps them so, and a caller that
    derived it for itself would silently stop agreeing the day that stops being true. *)
-let next_id t = Array.length t.instances
+let next_id t = t.count
 
 (* Register one more propagator instance, AFTER [create] -- M2-L1's half of "instantiate
    a learned constraint as a Linear instance registered with the engine".
@@ -609,11 +652,11 @@ let next_id t = Array.length t.instances
       *unsound* -- it just wakes more than it must -- but it would make a learned
       instance's trigger unreachable, which is a silent loss of the M2-T5 mask.
 
-   Appending copies both arrays. That is O(n) per learned constraint and is the right
-   trade for now: learning adds constraints at a rate bounded by conflicts, not by
-   propagations, and an amortised-growth buffer here would be a second representation of
-   "which instances exist" for no measured gain. Say so in M2-L4 if the retention policy
-   makes it a hot path. *)
+   Appending copied every id-indexed array, O(n) per learned constraint, on the argument
+   that learning is bounded by conflicts. D-0138 measured what that costs when there is a
+   conflict at every other node and n is the learned database: six arrays of n words in
+   the major heap per conflict, and the marking they feed. Since M6-T22 the arrays grow by
+   doubling and [count] says which instances exist. *)
 let add ?(trigger = default_trigger) (t : t) (inst : Propagator.instance) =
   let expected = next_id t in
   if inst.Propagator.id <> expected then
@@ -623,46 +666,36 @@ let add ?(trigger = default_trigger) (t : t) (inst : Propagator.instance) =
           is           #%d. Engine.propagate indexes its instance array BY ID, so the \
           two must           agree; pack with Engine.next_id."
          inst.Propagator.inst_name inst.Propagator.id expected);
-  t.instances <- Array.append t.instances [| inst |];
-  if Array.length t.wv1 <= inst.Propagator.id then (
-    let grow a =
-      let b = Array.make (max (inst.Propagator.id + 1) (2 * Array.length a)) (-1) in
-      Array.blit a 0 b 0 (Array.length a);
-      b
-    in
-    t.wv1 <- grow t.wv1;
-    t.wv2 <- grow t.wv2);
+  let id = inst.Propagator.id in
+  t.instances <- room t.instances id vacant;
+  t.count <- id + 1;
+  t.wv1 <- room t.wv1 id (-1);
+  t.wv2 <- room t.wv2 id (-1);
+  t.dirty <- room t.dirty id false;
+  t.in_queue <- room t.in_queue id false;
   index_static t inst;
-  t.instances.(inst.Propagator.id) <- indexed t inst;
-  List.iter
-    (fun v ->
+  t.instances.(id) <- indexed t inst;
+  let scope = scope_of inst in
+  (* The instance is new, so it is in no watcher list yet: one prepend per DISTINCT
+     variable is the old [List.mem]-guarded loop's result, without walking the list --
+     which on a learned database is every learned clause naming the variable. *)
+  Array.iter
+    (fun x ->
+      let v = Var.of_int x in
       let cur = try Hashtbl.find t.watchers v with Not_found -> [] in
-      if not (List.mem inst.Propagator.id cur) then
-        Hashtbl.replace t.watchers v (inst.Propagator.id :: cur))
-    inst.Propagator.inst_vars;
-  if Array.length t.triggers <= inst.Propagator.id then (
-    let grown = Array.make (inst.Propagator.id + 1) wake_on_any in
-    Array.blit t.triggers 0 grown 0 (Array.length t.triggers);
-    t.triggers <- grown);
-  t.triggers.(inst.Propagator.id) <- trigger inst;
-  if Array.length t.veto <= inst.Propagator.id then (
-    let grown = Array.make (inst.Propagator.id + 1) false in
-    Array.blit t.veto 0 grown 0 (Array.length t.veto);
-    t.veto <- grown);
-  t.veto.(inst.Propagator.id) <- honours_claim inst;
-  if Array.length t.scopes <= inst.Propagator.id then (
-    let grown = Array.make (inst.Propagator.id + 1) [||] in
-    Array.blit t.scopes 0 grown 0 (Array.length t.scopes);
-    t.scopes <- grown);
-  t.scopes.(inst.Propagator.id) <- scope_of inst;
+      Hashtbl.replace t.watchers v (id :: cur))
+    scope;
+  t.triggers <- room t.triggers id wake_on_any;
+  t.triggers.(id) <- trigger inst;
+  t.veto <- room t.veto id false;
+  t.veto.(id) <- honours_claim inst;
+  t.scopes <- room t.scopes id [||];
+  t.scopes.(id) <- scope;
   (* M6-T18: a new instance has never run, so it is at its fixpoint at no state: it is
      seeded by the next [propagate] whatever else changed, and after any later backjump
      to a fixpoint older than the one it is born at. *)
-  if Array.length t.born <= inst.Propagator.id then (
-    let grown = Array.make (inst.Propagator.id + 1) unborn in
-    Array.blit t.born 0 grown 0 (Array.length t.born);
-    t.born <- grown);
-  t.born.(inst.Propagator.id) <- unborn
+  t.born <- room t.born id unborn;
+  t.born.(id) <- unborn
 
 (* The variables an instance watches, or [None] if this engine has no such instance.
 
@@ -671,25 +704,20 @@ let add ?(trigger = default_trigger) (t : t) (inst : Propagator.instance) =
    caller that built this from its own list of instances would stop agreeing with the
    engine the moment a learned constraint was registered. *)
 let vars_of t id =
-  if id >= 0 && id < Array.length t.instances then
-    Some t.instances.(id).Propagator.inst_vars
-  else None
+  if id >= 0 && id < t.count then Some t.instances.(id).Propagator.inst_vars else None
 
 (* M2-L6: the PB row instance [id] is, or [None] when it does not expose one. The same
    shape as [vars_of] and for the same reason -- lib/core/pb_analysis.ml is shown the
    engine through two narrow functions rather than being handed the instance array. *)
 let row_of t store id =
-  if id >= 0 && id < Array.length t.instances then
-    t.instances.(id).Propagator.inst_row store
-  else None
+  if id >= 0 && id < t.count then t.instances.(id).Propagator.inst_row store else None
 
 (* The builtin name instance [id] was packed under, for a diagnostic that has to say
    WHICH propagator family declined to expose a row. "<unknown>" rather than a raise: a
    fallback reason nobody can read is a counter with no diagnosis behind it, but it is
    still only a message. *)
 let name_of t id =
-  if id >= 0 && id < Array.length t.instances then t.instances.(id).Propagator.inst_name
-  else "<unknown>"
+  if id >= 0 && id < t.count then t.instances.(id).Propagator.inst_name else "<unknown>"
 
 let trigger_of t id =
   if id >= 0 && id < Array.length t.triggers then t.triggers.(id) else wake_on_any
@@ -748,7 +776,7 @@ let check_advise (inst : Propagator.instance) (store : Store.t) v =
         fail (Printf.sprintf "pruned %d entr(y/ies)" (Store.trail_length store - before))
 
 let advises t store id v =
-  if id < 0 || id >= Array.length t.instances then true
+  if id < 0 || id >= t.count then true
   else
     let inst = t.instances.(id) in
     if inst.Propagator.inst_advise store v then true
@@ -931,8 +959,7 @@ let check_fixpoint (t : t) (store : Store.t) : unit =
       (Propagator.consistency_to_string inst.Propagator.inst_consistency)
       what
   in
-  Array.iter
-    (fun (inst : Propagator.instance) ->
+  iter_instances t (fun (inst : Propagator.instance) ->
       let before = Store.trail_length store in
       match inst.Propagator.run store with
       | Propagator.Conflict _ ->
@@ -947,7 +974,6 @@ let check_fixpoint (t : t) (store : Store.t) : unit =
                        (Store.name store e.var) (Domain.to_string e.old)
                        (Domain.to_string e.now)
                        (Domain.change_to_string (Domain.classify ~old:e.old ~now:e.now))))))
-    t.instances
 
 (* M2-T6: the CLAIM RE-CHECKER, GCS's companion to the veto ("re-runs every honoured
    idempotence claim ... and aborts if it infers anything").
@@ -1309,9 +1335,9 @@ let check_instance_consistency (inst : Propagator.instance) (store : Store.t) :
    not been woken yet has not been given the chance the level promises. *)
 let check_consistency (t : t) (store : Store.t) : violation list =
   incr oracle_nodes;
-  Array.fold_left
-    (fun acc inst -> acc @ check_instance_consistency inst store)
-    [] t.instances
+  let acc = ref [] in
+  iter_instances t (fun inst -> acc := !acc @ check_instance_consistency inst store);
+  !acc
 
 (* The gated hot-path form: first violation raises, with the scene in the message. Same
    shape as [check_fixpoint] and for the same reason -- what it reports is something
@@ -1365,7 +1391,7 @@ let check_consistency_exn (t : t) (store : Store.t) : unit =
    wake could cover it up. *)
 
 let seed_dirty t store ~since ~epoch ~(dirty : bool array) =
-  let n = Array.length dirty in
+  let n = t.count in
   let mark change v id =
     if id >= 0 && id < n && wakes_on (trigger_of t id) change then
       (* An instance born after the fixpoint at [epoch] has never run on this
@@ -1429,7 +1455,9 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
   let n = n_instances t in
   if n = 0 then Fixpoint
   else
-    let dirty = Array.make n false in
+    (* M6-T22: [t]'s own, all false on entry; this call clears what it sets, on every
+       exit (see [t.dirty]). *)
+    let dirty = t.dirty in
     (* The epoch of the fixpoint the seed is relative to, or -1 when there is none and
        every slot is dirty. *)
     let since_epoch =
@@ -1456,7 +1484,7 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
           -1
     in
     if since_epoch < 0 then Array.fill dirty 0 n true;
-    let in_queue = Array.make n false in
+    let in_queue = t.in_queue in
     let queue = Queue.create () in
     let enqueue id =
       if (not in_queue.(id)) && id >= 0 && id < n then (
@@ -1489,7 +1517,10 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
               t.poll_left <- poll_runs;
               if stop () then (
                 stopped := true;
+                (* M6-T22: the slots and the queue this abandons, cleared. *)
+                Array.fill dirty !cursor (n - !cursor) false;
                 cursor := n;
+                Queue.iter (fun id -> in_queue.(id) <- false) queue;
                 Queue.clear queue))
     in
     let run_one id =
@@ -1522,21 +1553,35 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
              says. Not on the [Conflict] arm: that call is leaving anyway. *)
           poll ()
     in
-    while Option.is_none !conflict && !cursor < n do
-      let id = !cursor in
-      incr cursor;
-      if dirty.(id) then (
-        t.ctr.c_seeded <- t.ctr.c_seeded + 1;
-        run_one id)
-      else (
-        t.ctr.c_skipped <- t.ctr.c_skipped + 1;
-        if Debug.enabled then check_skip t.instances.(id) store)
-    done;
-    while Option.is_none !conflict && not (Queue.is_empty queue) do
-      let id = Queue.pop queue in
-      in_queue.(id) <- false;
-      run_one id
-    done;
+    let loops () =
+      while Option.is_none !conflict && !cursor < n do
+        let id = !cursor in
+        incr cursor;
+        if dirty.(id) then (
+          dirty.(id) <- false;
+          t.ctr.c_seeded <- t.ctr.c_seeded + 1;
+          run_one id)
+        else (
+          t.ctr.c_skipped <- t.ctr.c_skipped + 1;
+          if Debug.enabled then check_skip t.instances.(id) store)
+      done;
+      while Option.is_none !conflict && not (Queue.is_empty queue) do
+        let id = Queue.pop queue in
+        in_queue.(id) <- false;
+        run_one id
+      done
+    in
+    (* M6-T22: a [Conflict] leaves the seed slots past the cursor and the queue's
+       members marked; an exception (a BAGUETTE_DEBUG check, an attribution failure)
+       can leave anything. Both are cleared here, so the next call starts all false. *)
+    (match loops () with
+    | () ->
+        if !cursor < n then Array.fill dirty !cursor (n - !cursor) false;
+        Queue.iter (fun id -> in_queue.(id) <- false) queue
+    | exception e ->
+        Array.fill dirty 0 n false;
+        Array.fill in_queue 0 n false;
+        raise e);
     (* Reset the low-water mark HERE, at the end of the call, and not only at its start:
        the next call must see the pops since this call RETURNED. Read only at the start,
        the mark would still stand at this call's starting length, below every fixpoint
