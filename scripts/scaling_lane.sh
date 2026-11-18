@@ -6,22 +6,21 @@
 # mode (proof or noproof) and four node budgets N0 < N1 <= N2 < N3. The instance is run at
 # each budget (BAGUETTE_NODE_LIMIT, deterministic) and a COST is read off each run. Then
 #
-#     early = (cost(N1) - cost(N0)) / (props(N1) - props(N0))     small database
-#     late  = (cost(N3) - cost(N2)) / (props(N3) - props(N2))     large database
+#     early = (cost(N1) - cost(N0)) / (N1 - N0)     per node, small database
+#     late  = (cost(N3) - cost(N2)) / (N3 - N2)     per node, large database
 #     ratio = late / early
 #
-# where props is the number of propagator runs (`stats: props`). A build in which every
-# operation costs the same whatever the size of the database has a ratio that does not
-# move when an M11 batch lands; an operation linear in the database, run per conflict,
-# per node or per propagation, raises the late segment and not the early one.
+# D-0140 section 7's measure (QR72 1.8, rcpsp_11 3.4 over 1k-10k and 10k-40k, no-proof).
+# An operation linear in the database, run per conflict, per node or per propagation,
+# raises the late segment and not the early one. The ratio is not 1 even for a perfect
+# implementation, because the work per node grows with the database ON PURPOSE (more
+# learned constraints, more of them waking); that part is identical in every build that
+# passes the differential lane, so it sits in the baseline and cancels in the comparison.
 #
-# WHY PER PROPAGATOR RUN AND NOT PER NODE. The number of propagator runs per node grows
-# with the database ON PURPOSE: more learned constraints, more of them waking (QR48:
-# 316 runs per node over nodes 1000-2000, 694 over 16000-23000; parity-learning: x4).
-# That growth is the search, not its implementation, and it is identical in every build
-# that passes the differential lane, which checks `props` byte for byte. Per node, the
-# lane would read the search's own shape as a regression; per propagator run it reads
-# what each unit of work costs. The per-node ratio is printed beside it.
+# The ratio PER PROPAGATOR RUN (`stats: props`) is printed beside it, as information. It
+# strips the growth in runs per node, but it cannot be the gate: M11-T3 removes runs that
+# change nothing (D-0140 E1, E2), which moves its denominator, while the node count of
+# each budget is fixed by construction.
 #
 # THE COST. `perf stat -e instructions:u` when perf works here: user-mode instructions
 # retired are a property of the binary and its input, not of the machine's load, so a
@@ -39,7 +38,7 @@
 # on them would be a flaky gate.
 #
 # THE THRESHOLD. bench/scaling/baseline.tsv holds each line's ratio as recorded; the lane
-# enforces ratio <= baseline x (1 + margin), margin 1 % by default (four times the run-to-run
+# enforces the per-node ratio <= baseline x (1 + margin), margin 1 % by default (four times the run-to-run
 # jitter of the ratio, measured at <= 0.25 % on fataepyc-06 at load 50). It is a RATCHET: a
 # batch that lowers a ratio re-records it (--update, in its own commit, after the gated
 # merge), and nothing re-records it upward.
@@ -135,7 +134,7 @@ while IFS=$'\t' read -r id mode n0 n1 n2 n3 _why; do
   [ -f "$CORPUS/$id.fzn.gz" ] || die "$id is not in bench/diff/corpus/"
   [ -f "$WORK/$id.fzn" ] || gzip -dc "$CORPUS/$id.fzn.gz" > "$WORK/$id.fzn"
   LINES+=("$id $mode $n0 $n1 $n2 $n3")
-  for n in "$n0" "$n1" "$n2" "$n3"; do
+  for n in $(printf '%s\n' "$n0" "$n1" "$n2" "$n3" | sort -un); do
     while [ "$(jobs -r | wc -l)" -ge "$PAR" ]; do wait -n; done
     run_one "$id" "$mode" "$n" &
   done
@@ -158,7 +157,7 @@ for l in "${LINES[@]}"; do
     fi
   done
   [ "$ok" = 1 ] || { BROKEN=$((BROKEN + 1)); continue; }
-  read -r ratio early late node_ratio < <(python3 -I - \
+  read -r ratio early late prop_ratio < <(python3 -I - \
     "$(get "$n0" "$METRIC")" "$(get "$n1" "$METRIC")" "$(get "$n2" "$METRIC")" "$(get "$n3" "$METRIC")" \
     "$(get "$n0" props)" "$(get "$n1" props)" "$(get "$n2" props)" "$(get "$n3" props)" \
     "$n0" "$n1" "$n2" "$n3" <<'PY'
@@ -166,14 +165,14 @@ import sys
 c0, c1, c2, c3, p0, p1, p2, p3, n0, n1, n2, n3 = map(int, sys.argv[1:])
 early, late = (c1 - c0) / (p1 - p0), (c3 - c2) / (p3 - p2)
 node_early, node_late = (c1 - c0) / (n1 - n0), (c3 - c2) / (n3 - n2)
-print("%.4f %.1f %.1f %.4f" % (late / early, early, late, node_late / node_early))
+print("%.4f %.0f %.0f %.4f" % (node_late / node_early, node_early, node_late, late / early))
 PY
 )
   cyc=""
   if [ "$METRIC" = instructions ] && [ -n "$(get "$n0" cycles)" ] && [ -n "$(get "$n3" cycles)" ]; then
     cyc="$(python3 -I -c 'import sys; c=list(map(int, sys.argv[1:5])); p=list(map(int, sys.argv[5:9])); print("%.4f" % (((c[3]-c[2])/(p[3]-p[2])) / ((c[1]-c[0])/(p[1]-p[0]))))' \
       "$(get "$n0" cycles)" "$(get "$n1" cycles)" "$(get "$n2" cycles)" "$(get "$n3" cycles)" \
-      "$(get "$n0" props)" "$(get "$n1" props)" "$(get "$n2" props)" "$(get "$n3" props)" 2>/dev/null)"
+      "$n0" "$n1" "$n2" "$n3" 2>/dev/null)"
   fi
   base="$(awk -F'\t' -v i="$id" -v m="$mode" -v k="$METRIC" '$1==i && $2==m && $3==k {r=$4} END {print r}' "$S/baseline.tsv" 2>/dev/null)"
   NEWBASE+="$id	$mode	$METRIC	$ratio	$(hostname -s)	$MD5	$(date -u +%Y-%m-%d)"$'\n'
@@ -187,10 +186,10 @@ PY
       verdict="OVER (baseline $base, threshold $thr)"; OVER=$((OVER + 1))
     fi
   fi
-  printf 'scaling: %-32s [%-7s] per-prop late/early = %s (%s -> %s %s/run); per-node %s -- %s\n' \
-    "$id" "$mode" "$ratio" "$early" "$late" "$METRIC" "$node_ratio" "$verdict"
-  [ -z "$cyc" ] || printf 'scaling: %-32s [%-7s]   cycles:u per-prop late/early = %s (load-sensitive: information, never enforced)\n' \
-    "$id" "$mode" "$cyc"
+  printf 'scaling: %-32s [%-7s] per-node late/early = %s (%s -> %s %s/node) -- %s\n' \
+    "$id" "$mode" "$ratio" "$early" "$late" "$METRIC" "$verdict"
+  printf 'scaling: %-32s [%-7s]   information only: per propagator run %s%s\n' \
+    "$id" "$mode" "$prop_ratio" "$([ -z "$cyc" ] || echo ", cycles:u per node $cyc (load-sensitive)")"
 done
 
 if [ "$UPDATE" = 1 ]; then
@@ -210,7 +209,7 @@ if [ "$BROKEN" -gt 0 ]; then
 fi
 if [ "$OVER" -gt 0 ]; then
   if [ "$ENFORCE" = 1 ]; then
-    echo "scaling_lane: FAIL -- $OVER line(s) over threshold: the cost per propagator run grows with the"
+    echo "scaling_lane: FAIL -- $OVER line(s) over threshold: the cost per node grows with the"
     echo "              learned database more than the recorded baseline (${WALL}s)"
     exit 1
   fi

@@ -152,7 +152,7 @@ bench: build
 	$(CAP) ./bench/run_bench.sh $(ARGS)
 
 # M11-complexity-T2 (D-0141). The two lanes of the M11 pass, deliberately NOT part of
-# `check`: the differential lane is 126 runs of real instances (about two minutes on
+# `check`: the differential lane is 168 runs of real instances (about three minutes on
 # fataepyc-06 at 16 in parallel, far longer on a laptop, and a laptop is not where runs
 # go), and the scaling lane needs perf and runs of up to 32 000 nodes. The gate script
 # runs both right after `make check`:

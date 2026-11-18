@@ -1299,7 +1299,7 @@ Neither is part of `make check`; the gate runs them right after it, on fataepyc-
 make check && make diff ARGS="-j 16" && make scaling ARGS="-j 16"
 ```
 
-**`make diff`** (`scripts/diff_lane.sh`, about two minutes at 16 in parallel). The 21 instances
+**`make diff`** (`scripts/diff_lane.sh`, about three minutes at 16 in parallel). The 21 instances
 of `bench/diff/corpus/` (QR48, QR72 and 19 Challenge instances, 766 KB of `.fzn.gz`, listed with
 their budgets and families in `bench/diff/corpus.tsv`) are each run at a fixed
 `BAGUETTE_NODE_LIMIT` in every configuration of `bench/diff/configs.tsv` (default, `--no-proof`,

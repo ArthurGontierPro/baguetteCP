@@ -13,7 +13,12 @@
 #
 # The node budget is per INSTANCE (corpus.tsv), never per configuration.
 # BAGUETTE_NODE_LIMIT is set by the runner; do not set it here.
+#
+# BAGUETTE_PROOF_AUDIT is PINNED: the runner unsets the caller's BAGUETTE_* variables, so
+# every line but audit0 runs the CLI default (audit on), and audit0 runs it off. The end
+# sweep's `del` lines exist only under the audit (D-0140 W8), so the .pbp depends on it.
 default	-	-	yes
+audit0	BAGUETTE_PROOF_AUDIT=0	-	yes
 noproof	-	--no-proof	no
 #
 # lbd and fifo consult the policy after every learned constraint, but on main every
