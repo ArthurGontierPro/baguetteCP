@@ -1207,8 +1207,13 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
     let cursor = ref 0 in
     let wake id = if id >= !cursor && id < n then dirty.(id) <- true else enqueue id in
     let conflict = ref None in
-    (* M6-T21: set by the poll at the end of a completed [Fixpoint] run, read by both
-       loops' guards; see the header. *)
+    (* M6-T21: set by the poll at the end of a completed [Fixpoint] run. The poll also
+       ENDS both loops itself -- the cursor to [n], the queue emptied -- rather than the
+       loops testing [stopped] in their guards: the seed loop's guard is evaluated once
+       per instance SLOT, run or skipped, which on a large learned database is billions
+       of times in one run (3.5e9 skipped slots in D-0136's 600 s run), and one more test
+       there measured +0.7 % instructions. Here the cost is per RUN, and only when the
+       caller passed [?stop]. *)
     let stopped = ref false in
     let poll =
       match stop with
@@ -1221,7 +1226,10 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
             t.poll_left <- t.poll_left - 1;
             if t.poll_left <= 0 then (
               t.poll_left <- poll_runs;
-              if stop () then stopped := true)
+              if stop () then (
+                stopped := true;
+                cursor := n;
+                Queue.clear queue))
     in
     let run_one id =
       let inst = t.instances.(id) in
@@ -1253,7 +1261,7 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
              says. Not on the [Conflict] arm: that call is leaving anyway. *)
           poll ()
     in
-    while Option.is_none !conflict && (not !stopped) && !cursor < n do
+    while Option.is_none !conflict && !cursor < n do
       let id = !cursor in
       incr cursor;
       if dirty.(id) then (
@@ -1263,7 +1271,7 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
         t.ctr.c_skipped <- t.ctr.c_skipped + 1;
         if Debug.enabled then check_skip t.instances.(id) store)
     done;
-    while Option.is_none !conflict && (not !stopped) && not (Queue.is_empty queue) do
+    while Option.is_none !conflict && not (Queue.is_empty queue) do
       let id = Queue.pop queue in
       in_queue.(id) <- false;
       run_one id
