@@ -839,7 +839,12 @@ let emit_bits_resolve ctx ~origin ~(concludes : Reason.fact option) parts =
             %s (D-0134 section 2.3: the claim variable's term must assume its negation)"
            (Lit.to_string l))
   | _ -> ());
-  let cid = Writer.pol_concluding w ~origin ~claim:(Opb.clause clause) expr in
+  (* The origin names the shape, so a mutation lane can aim at a choice derivation and
+     not at the first [Linear] bits line that happens to precede it. *)
+  let cid =
+    Writer.pol_concluding w ~origin:(origin ^ " [resolve]") ~claim:(Opb.clause clause)
+      expr
+  in
   Encoding.note_bits_pruning enc;
   state_clause ctx clause cid;
   (cid, clause)
