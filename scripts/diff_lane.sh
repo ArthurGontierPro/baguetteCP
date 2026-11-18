@@ -25,8 +25,8 @@
 #          against bench/diff/reference-debug/: check_watched, check_skip and the I-P7
 #          advise check are what catch a lost wake (D-0138), and they only run in debug
 #   --full   = --tier all, then the same under --debug. The gate runs the two passes as
-#          two commands, so that the debug pass, RED on a8d2924 (D-0141 s5: the I-P7 advise
-#          check fires on 16 integer instances), is reported apart from the plain one.
+#          two commands, so that a debug-only failure (the I-P7 false alarm of D-0141 s5, fixed
+#          by D-0142 s1) is reported apart from the plain pass.
 #
 #   scripts/diff_lane.sh [--tier fast|slow|all] [--debug | --full] [-j N]
 #   scripts/diff_lane.sh --update ...         RE-RECORD the reference (see the rule below)
@@ -285,8 +285,9 @@ fi
 if [ "$UPDATE" = 1 ]; then
   if [ "$BAD" -ne 0 ]; then echo "diff_lane: FAIL -- $BAD run(s) not recorded"; exit 1; fi
   mkdir -p "$REFDIR"
+  hdr=1; [ -f "$REFDIR/BINARY" ] && hdr=0
   {
-    [ -f "$REFDIR/BINARY" ] || echo "# Who recorded ${REFDIR#"$ROOT"/}/: one line per --update, newest last (D-0141)."
+    [ "$hdr" = 0 ] || echo "# Who recorded ${REFDIR#"$ROOT"/}/: one line per --update, newest last (D-0141)."
     echo "$(date -u +%Y-%m-%dT%H:%MZ) md5=$MD5 commit=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo '?') host=$(hostname -s) tier=$TIER runs=$TOTAL"
   } >> "$REFDIR/BINARY"
   echo "diff_lane: recorded $TOTAL reference(s) in ${WALL}s, every proof accepted by $VERIPB"

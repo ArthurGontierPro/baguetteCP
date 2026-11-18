@@ -21,7 +21,6 @@ of it to every session and stopping at a broken line before it even reached the 
 |---|---|---|---|
 | M11-complexity-T3 | `lib/core/engine.ml`, `lib/core/store.ml`, `lib/core/domain.ml`, `lib/core/propagator.ml`, `lib/core/prop/clause.ml`, `lib/core/prop/pb.ml`, `lib/core/prop/arith.ml`, `lib/core/prop/linear.ml`, `lib/core/prop/lin_eq.ml`, `lib/core/prop/ne.ml`, `lib/core/prop/alldiff.ml`, `lib/core/prop/element.ml`, their unit tests, `docs/DECISIONS.md` (D-0142 appended), `docs/ROADMAP.md` M11-T3 row. NOT `search.ml`, `analysis.ml`, `retention.ml`, `learned.ml` (in flight) | agent-batch3 (`wave48-batch3`) | 2026-11-18 |
 | M11-complexity-T7 | `lib/proof/encoding.ml`, `lib/proof/lit.ml`, `lib/proof/opb.ml`, `lib/flatzinc/compile.ml`, `lib/flatzinc/builder.ml`, `lib/core/prop/reif*.ml` (construction only), their unit tests, `docs/DECISIONS.md` (D-0143 appended), `docs/ROADMAP.md` M11-T7 row | agent-setup (`wave48-setup`) | 2026-11-18 |
-| M11-complexity-T2 | new `scripts/diff_lane.sh` and `scripts/scaling_lane.sh` (names as the record decides), new `bench/diff/` (corpus list, references), `Makefile` (the targets and their place in `check`), `docs/DECISIONS.md` (D-0141 appended), `bench/README.md`. No file under `lib/` | agent-lanes (`wave47-lanes`) | 2026-11-18 |
 | M10-search-strategy-T1, then T2 and T3 | `docs/DECISIONS.md` (D-0137 appended), `docs/SPEC.md` §3.4 (the restart amendment), `docs/ROADMAP.md` M10 rows T1-T3, `lib/core/search.ml` (restarts, phase saving, branching), a new `lib/core/activity.ml` (+ `docs/ARCHITECTURE.md` §1 and `CLAUDE.md`'s map), `lib/core/analysis.ml` (activity bumps, if needed), `bin/main.ml` (flags), `test/unit/test_search*.ml`/`test_learn.ml`/`test_endtoend.ml`, new `test/models/*restart*`/`*activity*` + `test/expected/` | agent-strategy (`wave45-strategy`) | 2026-11-18 |
 | M10-search-strategy-T4 | `lib/core/retention.ml`, `lib/core/learned.ml` (an LBD field if needed), `bin/main.ml` (the policy flag only), `test/unit/test_retention.ml`, `docs/DECISIONS.md` (D-0139 appended), `docs/ROADMAP.md` M10-T4 row | agent-retention (`wave45-retention`) | 2026-11-18 |
 
@@ -466,7 +465,28 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 
 | M8-bits-encoding-T3 (steps 1, 2 partial; T3 stays WIP) | agent-t3 + agent-t3b (`wave44-t3`) | 2026-11-18 | **D-0134 §4-§7.** maxmin over a bits scope by selector rows + one `Resolve` `pol` per pruning, selectors listed in `sol`/`soli`; `int_ne`/`int_lin_ne` released (the A/B pair resolved); `Justify.is_bits_derivation` (a T2 latent). 173/173 verified at W none/0/8, 165 byte-identical at none; gate rc 0 on `20c324f`, 85 MB. The 177 at W = 0: 73 -> 108 complete `.opb`. Open: reified holds, steps 3-5 |
 | M11-complexity-T1 | agent-inventory (`wave47-inventory`) | 2026-11-18 | **D-0140.** The inventory, read-only: 48 items, each with what it grows with, how often it runs, its measured marginal share, the fix, the batch (T3/T4/T5), the byte risk and the reference. Six instances (QR48, QR72, rcpsp_11, mspsp_hard_01, cyclic-rcpsp_easy_6, openshop_gp10-4) at 1, 1k, 10k, 40k nodes, both modes; scratch patches S1 (`count_learned_activity`), S2 (retention), S3a-c measured byte-identical; outputs in `bench/perf/` |
+| M11-complexity-T2 | agent-lanes (`wave47-lanes`) | 2026-11-18 | **D-0141.** `make diff`: 25 instances (QR48, QR72, 19 Challenge in the fast tier, D-0140's six in the slow tier; 958 KB gz in `bench/diff/corpus/`) x 9 configurations (default, audit0, noproof, lbd, fifo, lbd-po, fifo-po, nopb, bits0), 232 runs at fixed BAGUETTE_NODE_LIMIT, stdout + rc + counters (SEARCH/WORK) + .opb/.pbp sha256 against `bench/diff/reference/` (e8354a74), plus a BAGUETTE_DEBUG pass (223 runs, f9bf6c4). Red binary: 198/232 differ while the 179 models show 0. `make scaling`: instructions:u per node, late over early, ratchet + 0.5 %, report-only until T6; teeth caught on 4 of 5 lines. Neither in `make check`; the gate runs both after it |
 ## Handoff notes
+## M11-complexity-T2 handoff, 2026-11-18 (agent-lanes, `wave47-lanes`): the differential and scaling lanes, D-0141
+
+Two `make` targets, neither in `make check`. `make diff` runs 25 instances of `bench/diff/corpus/` (958 KB
+gz in the repository) at a fixed `BAGUETTE_NODE_LIMIT` in up to nine configurations and compares stdout, rc,
+the `--stats`/`limit:` counters (SEARCH and WORK, prose and clocks stripped) and the `.opb`/`.pbp` sha256 to
+`bench/diff/reference/` (232 runs, recorded on e8354a74 and still equal on f9bf6c4). `--debug` reruns them under
+`BAGUETTE_DEBUG=1` at <= 1 500 nodes against `bench/diff/reference-debug/` (223 runs, lot-sizing excluded by
+name in `bench/diff/debug-skip.tsv`). `make scaling` reads `instructions:u` per node, late over early segment,
+against a ratchet baseline + 0.5 %, REPORT-ONLY until M11-T6. Exact gate lines (after `make check`, with
+`export TMPDIR=/scratch/arthur/tmp`):
+
+    (ulimit -v 4000000; timeout 3600 make diff ARGS="--tier all -j 24") > $G.diff.log 2>&1; echo "diff rc=$?" >> $ST
+    (ulimit -v 4000000; timeout 3600 make diff ARGS="--debug --tier all -j 24") > $G.ddiff.log 2>&1; echo "debug diff rc=$?" >> $ST
+    (ulimit -v 4000000; timeout 1800 make scaling ARGS="-j 16") > $G.scaling.log 2>&1; echo "scaling rc=$?" >> $ST
+
+About 4, 7 and 2.5 minutes. Batch agents run `make diff ARGS="-j 16"` (fast tier) after each change. Never
+re-record to make a lane pass (D-0141 §8); a new flag is one line in `bench/diff/configs.tsv` plus
+`--update --config NAME` (and `--debug`). Note for retention work: on main `lbd:N`/`fifo:N` evict nothing
+(every learned constraint is cited); only the `-po` configurations exercise eviction.
+
 ## The I-P7 alarm was the debug checks, fix merged and gated, 2026-11-18 (orchestrator)
 
 Correction to the note below of the same day: no propagation was lost. agent-batch3 traced the I-P7
