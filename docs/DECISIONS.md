@@ -12990,6 +12990,44 @@ stdout, exit code, `.opb` and `.pbp` are byte-identical** to main's binary `a921
 (`/scratch/arthur/gate47.art/new/`): 0 differences in each of the four. The new binary is
 `878ceb53`. Status: `/scratch/arthur/wave45-strategy-runs/gate.status`.
 
+### 12. For the differential lane (M11-T2, D-0141): flags off, and the lines to add
+
+**With the flags off nothing moves.** `make diff ARGS="-j 16"` on this branch after merging
+`origin/main` (`576da4b`) and `origin/wave47-lanes` (`eaf5a7b`), binary `28c4a51c` at `9fb9b09`,
+against the reference recorded on `a9ffcc5` (`e8354a74`), 21 instances times the 8 configurations
+of `bench/diff/configs.tsv`: **`diff_lane: ok -- 168 of 168 runs equal the reference`** (203 s, rc 0). The strategy counters (`stats: restarts`, `unexplored`,
+`kept`, `activity`, `phases`, `phase-used`) are printed only when a strategy flag is on, so a
+default run's `--stats`, which the lane observes, has no new line.
+
+**The lines to add when this branch merges**, in place of the two commented slots (the slot's
+`--branching <activity>` is spelled `--search activity` here):
+
+```
+restarts	-	--restarts luby:1 --phase-saving	yes
+activity	-	--search activity --restarts luby:1 --reuse-trail	yes
+alternate	-	--search alternate --restarts lbd:3:1.5 --phase-saving	yes
+```
+
+Why these three. The lane runs at fixed node budgets, so a schedule must fire inside them:
+`luby:1` restarts after the first learned conflict and then on Luby's sequence of single
+conflicts, which is what the 165-model smoke run used (155 restarts, every proof VERIFIED). The
+`lbd` policy at its defaults never fires on the codes (section 10, point 4), so the third line
+uses a window of 3 and K = 1.5, which fires once the window's average exceeds two thirds of the
+run's (a window of 5 with K = 1 restarted 6 times over the whole suite, too rarely to be a lane),
+and so exercises the LBD state machine and its Luby floor. Between them the three
+lines cover every code path this branch adds: full restarts (all three), partial restarts
+(`--reuse-trail`, only under `activity`), the activity order with its bumps and decay, the
+alternation and its staged form, phase saving's save and use, and the assignment decision
+phase saving can produce at an interior saved value. `stable` and `geom` are the same
+mechanism under another schedule and do not need a line of their own. Each line needs its
+reference recorded once with `scripts/diff_lane.sh --update --config NAME` on the merged binary.
+
+All three were run over the 182 test models first (binary `28c4a51c`, every proof through
+veripb 3.0.2, `smoke/<tag>/summary` on the node): `restarts` (`luby:1` with phase saving)
+165 of 165 VERIFIED earlier on `7c3bbc2a` with 155 restarts; `activity` 182 of 182 VERIFIED,
+verdicts equal to the default run's, 182 restarts and 539 levels kept by `--reuse-trail`;
+`alternate` 182 of 182 VERIFIED, verdicts equal, 79 restarts.
+
 ## D-0134  M8-bits-encoding-T3: the full substrate -- maxmin over bits by SELECTOR rows and one `Resolve` step, the checker facts measured first, and the step order
 
 **Status**: **IN PROGRESS, DESIGN SETTLED** (agent-t3, branch `wave44-t3`, 2026-11-16). **Steps 1 and 2 (int_ne only) landed 2026-11-18** (agent-t3b, §4 onwards); steps 3 to 5 and the rest of step 2 are open (§7). **Step 2's rest, steps 3 and 4 landed 2026-11-18** (agent-t3c, branch `wave46-t3`, §8 onwards): the reified and `bool2int` holds released, mapping's and ATSP's walls diagnosed and mapping's fixed, PB analysis over mixed rows measured and left to the clause path, learned clauses over atoms checked; step 5 designed and probed, not built (§13).
