@@ -134,7 +134,8 @@ while IFS=$'\t' read -r name env flags proof; do
 done < "$D/configs.tsv"
 for c in "${ONLY_CFGS[@]+"${ONLY_CFGS[@]}"}"; do in_list "$c" "${CFG_NAMES[@]}" || die "no configuration named $c"; done
 
-# The debug pass's named exclusions: bench/diff/debug-skip.tsv, `name<TAB>config<TAB>reason`.
+# The debug pass's named exclusions: bench/diff/debug-skip.tsv, `name<TAB>config<TAB>reason`
+# (config `*` for every configuration of that instance).
 # A run listed there is NOT run under --debug, and the lane prints it with its reason on
 # every debug pass, so an exclusion can never become silent. Never a way to hide a failure:
 # an entry says why the run cannot be afforded under BAGUETTE_DEBUG, with the measurement.
@@ -165,6 +166,8 @@ while IFS=$'\t' read -r name file budget tier class cfgs _rest; do
     [ "$cfgs" = all ] || in_list "$c" ${cfgs//,/ } || continue
     if [ -n "${DSKIP["$name|$c"]+x}" ]; then
       SKIPPED+=("$name [$c, debug]: ${DSKIP["$name|$c"]}"); continue
+    elif [ -n "${DSKIP["$name|*"]+x}" ]; then
+      SKIPPED+=("$name [$c, debug]: ${DSKIP["$name|*"]}"); continue
     fi
     JOBS+=("$name $file $budget $class $ci")
   done
