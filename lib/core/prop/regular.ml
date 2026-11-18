@@ -80,6 +80,11 @@
      P5  a flag fixed to 1 kills the rest of its layer: AMO_i. START and ACCEPT kill layer
          0 outside q0 and layer n outside F with no facts.
 
+   ORDER ON THE TAIL: the per-value facts (dead flags, the holes' removers) first, the
+   letter's own bound facts LAST. Nothing in the proof depends on it; it is what lets
+   test/unit/test_mutation.ml's `death-fact` lane drop the last literal and hit the
+   DECISION fact of a death under a split, instead of a root fact the page restores.
+
    A layer left with no live flag is a CONFLICT whose facts are its dead flags (ALO_i);
    killing a flag fixed to 1 is a conflict on the pruning's facts plus that flag's; two
    flags fixed to 1 in one layer, on the pair (AMO_i).
@@ -271,7 +276,6 @@ let fixed_flags store t =
 let forward_reason store t i q' =
   let a = new_acc () in
   let lo, hi, mem = letter_dom store t i in
-  add_bounds a t i lo hi;
   for v = lo to hi do
     let preds =
       List.filter (fun q -> step t q v = q') (List.init t.nq (fun k -> k + 1))
@@ -281,6 +285,7 @@ let forward_reason store t i q' =
     else if not (mem v) then add_hole a store t i v
     else invalid_arg "Regular: a forward death with a live predecessor edge"
   done;
+  add_bounds a t i lo hi;
   facts a
 
 (* Step 2. *)
@@ -308,7 +313,6 @@ let forward store t =
 let backward_reason store t i q =
   let a = new_acc () in
   let lo, hi, mem = letter_dom store t i in
-  add_bounds a t i lo hi;
   for v = lo to hi do
     let tq = step t q v in
     if tq = 0 then ()
@@ -316,6 +320,7 @@ let backward_reason store t i q =
     else if not (mem v) then add_hole a store t i v
     else invalid_arg "Regular: a backward death with a live successor edge"
   done;
+  add_bounds a t i lo hi;
   facts a
 
 (* Step 3. *)
@@ -371,14 +376,14 @@ let values store t i =
           if not (Hashtbl.mem supported v) then (
             let d = Store.get store var in
             let a = new_acc () in
-            if v = Domain.lo d then add a (Reason.at_least ~name ~decl:dlo v);
-            if v = Domain.hi d then add a (Reason.at_most ~name ~decl:dhi v);
             for q = 1 to t.nq do
               let tq = step t q v in
               if tq > 0 then
                 if dead store t i q then add a (dead_fact t i q)
                 else add a (dead_fact t (i + 1) tq)
             done;
+            if v = Domain.lo d && v > dlo then add a (Reason.at_least ~name ~decl:dlo v);
+            if v = Domain.hi d && v < dhi then add a (Reason.at_most ~name ~decl:dhi v);
             let fs = facts a in
             if Domain.is_fixed d then raise (Found (conflict store fs));
             let claim =

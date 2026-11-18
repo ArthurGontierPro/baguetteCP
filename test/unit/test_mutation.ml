@@ -1359,6 +1359,106 @@ let census ~dir =
      from a parse error"
     s.judgement
 
+(* ------------------------------------------------------------------ M7-T28 *)
+(* regular (D-0146): the instance and the two lane shapes its lanes use.   *)
+(* ------------------------------------------------------------------ *)
+
+(* D-0146 section 4's instance 2 -- Q = 4 over letters 1..4, F = {4}, two live states in
+   layer 1 whatever x0 is -- with the row x2 <= x1 + 1 and a SPLIT on x1 first. The low
+   half x1 <= 2 kills state 4 at layer 2 (its only live way in is the letter 4), and that
+   forward death is the line the lemmas exist for: x1 keeps TWO values, so unit
+   propagation fixes no letter and the forward rows alone do not refute s2_4 (probe q2).
+   Then layer 3 needs x2 = 4 > x1 + 1, the branch fails, and its trace is on the page with
+   the decision fact x1 <= 2 on that line's tail. The high half finds a word. *)
+let regular_src =
+  let flags = List.init 16 (fun k -> Printf.sprintf "s%d_%d" (k / 4) ((k mod 4) + 1)) in
+  String.concat ""
+    ([
+       "var 1..4: x0 :: output_var;\n";
+       "var 1..4: x1 :: output_var;\n";
+       "var 1..4: x2 :: output_var;\n";
+     ]
+    @ List.map (fun f -> Printf.sprintf "var bool: %s;\n" f) flags
+    @ [
+        "constraint baguette_regular([x0, x1, x2], 4, 1, [2, 3, 0, 0, 2, 2, 2, 4, 3, 3, \
+         3, 4, 4, 4, 4, 4], 1, [4], [";
+        String.concat ", " flags;
+        "]);\n";
+        "constraint int_lin_le([1, -1], [x2, x1], 1);\n";
+        "solve :: int_search([x1, x0, x2], input_order, indomain_split, complete) satisfy;\n";
+      ])
+
+(* An emitter lane that also asserts the checker's WORDING at full strength: a rejection
+   on the grammar would satisfy [Rejected_on_derivation]'s exit status and say nothing
+   about the derivation (CLAUDE.md, "assert the checker's wording"). *)
+let regular_lane c ~build ~knob name =
+  let lane = Printf.sprintf "%s/%s" c.c_tag name in
+  ran c name;
+  let b = build ~name:(Printf.sprintf "%s_%s" c.c_tag name) ~mutation:knob in
+  if not b.fired then (
+    incr checks;
+    fail "%s: the knob %s found no site it could corrupt -- nothing was tested" lane
+      (Writer.Mutation.describe knob))
+  else
+    let v, out = check_proof b in
+    let rejected = v = Rejected_on_derivation in
+    check (Printf.sprintf "%s: veripb rejects the corrupted step" lane) rejected;
+    check
+      (Printf.sprintf "%s: ... at the checker's RUP wording" lane)
+      (contains out rup_wording);
+    if not (rejected && contains out rup_wording) then show out
+
+(* The text lane: the honest proof with every ROOT LEMMA deleted (their labels taken out
+   of the end-of-run `del` too, so the file still parses and the checker has to judge a
+   derivation). The lemmas are the block of [n_lemmas] lines after the comment
+   [Encoding.emit_root_lemmas] writes. *)
+let regular_no_lemmas_lane c ~proof ~opb ~n_lemmas =
+  let lane = Printf.sprintf "%s/no-lemmas" c.c_tag in
+  ran c "no-lemmas";
+  let lines = Array.of_list (String.split_on_char '\n' (read_file proof)) in
+  let start = ref (-1) in
+  Array.iteri
+    (fun i l -> if !start < 0 && contains l "root lemmas (D-0146)" then start := i + 1)
+    lines;
+  if !start < 0 then (
+    incr checks;
+    fail "%s: the proof carries no root-lemma block, so nothing was tested" lane)
+  else
+    let lemma i = i >= !start && i < !start + n_lemmas in
+    let label l =
+      match String.index_opt l ' ' with Some k -> String.sub l 0 k | None -> l
+    in
+    let gone = List.init n_lemmas (fun k -> label (String.trim lines.(!start + k))) in
+    let strip_del l =
+      if String.length l > 7 && String.sub l 0 7 = "del id " then
+        let ids =
+          List.filter
+            (fun w -> w <> "" && not (List.mem w gone))
+            (String.split_on_char ' ' (String.sub l 7 (String.length l - 7)))
+        in
+        if ids = [ ";" ] then "" else "del id " ^ String.concat " " ids
+      else l
+    in
+    let kept =
+      List.filteri (fun i _ -> not (lemma i)) (Array.to_list lines) |> List.map strip_del
+    in
+    let pbp = proof ^ ".no-lemmas.pbp" in
+    let oc = open_out pbp in
+    output_string oc (String.concat "\n" kept);
+    close_out oc;
+    let v, out = check_proof { pbp; opb; fired = true } in
+    let rejected = v = Rejected_on_derivation in
+    check
+      (Printf.sprintf
+         "%s: with the %d backward chains deleted the proof is REFUSED -- a forward \
+          death under a decision rests on them"
+         lane n_lemmas)
+      rejected;
+    check
+      (Printf.sprintf "%s: ... at the checker's RUP wording" lane)
+      (contains out rup_wording);
+    if not (rejected && contains out rup_wording) then show out
+
 let run () =
   (* Without the script nothing below can check anything, and a run that quietly
      reports "waiting" lanes would read as if the harness had merely found nothing to
@@ -1847,6 +1947,61 @@ solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), in
           "harness: nothing under lib/ or bin/ names Writer.create_mutated, so no normal \
            run can arm a knob"
           (rc <> 0));
+
+    (* -- M7-T28: regular (D-0146) ----------------------------------------------------
+       [regular_src] above. Three lanes, each refused at the RUP wording:
+         lemma-rhs   one backward chain's degree raised: the lemma itself is checked,
+                     so a wrong one is a refused line, not a stronger model;
+         death-fact  the forward death of s2_4 under x1 <= 2 with its last tail literal
+                     -- the decision fact, which the module puts last -- dropped;
+         no-lemmas   every backward chain deleted: that same death has nothing left to
+                     sweep x1 with, which is what the lemmas are for. *)
+    let solve_reg ?mutation ~name () =
+      let m = F.Builder.of_string ~file:name regular_src in
+      let c = Compile.compile m in
+      let opb = Filename.concat dir (name ^ ".opb")
+      and pbp = Filename.concat dir (name ^ ".pbp") in
+      let oc = open_out opb in
+      Encoding.write_opb ~comments:[ "test_mutation: " ^ name ] c.Compile.encoding oc;
+      close_out oc;
+      let oc = open_out pbp in
+      let writer =
+        match mutation with
+        | None -> Writer.create ~comments:true ~audit:true oc
+        | Some mutation -> Writer.create_mutated ~comments:false ~audit:true ~mutation oc
+      in
+      Encoding.start_proof c.Compile.encoding writer;
+      let ctx = Justify.create ~writer ~encoding:c.Compile.encoding in
+      let outcome =
+        Search.solve ~engine:c.Compile.engine ~store:c.Compile.store ~ctx
+          ~check:(fun _ -> true)
+          ?order:c.Compile.order ()
+      in
+      close_out oc;
+      ( { pbp; opb; fired = Writer.mutation_fired writer },
+        outcome,
+        Encoding.n_root_lemmas c.Compile.encoding )
+    in
+    let b, outcome, n_lemmas = solve_reg ~name:"regular" () in
+    check "regular: the solver solves it (the instance is what we think it is)"
+      (match outcome with Search.Sat _ -> true | Search.Unsat -> false);
+    check "regular: 48 backward chains, one per layer, state and symbol run"
+      (n_lemmas = 48);
+    let build_reg ~name ~mutation =
+      let b, _, _ = solve_reg ~mutation ~name () in
+      b
+    in
+    gated ~tag:"regular"
+      ~control:(fun () -> control_holds ~tag:"regular" ~proof:b.pbp)
+      ~declares:[ "lemma-rhs"; "death-fact"; "no-lemmas" ]
+      (fun c ->
+        regular_lane c ~build:build_reg
+          ~knob:(knob ~site:"root lemma (D-0146)" Writer.Mutation.Strengthen_rhs)
+          "lemma-rhs";
+        regular_lane c ~build:build_reg
+          ~knob:(knob ~site:"trace: ~s2_4_ge_1" Writer.Mutation.Drop_literal)
+          "death-fact";
+        regular_no_lemmas_lane c ~proof:b.pbp ~opb:b.opb ~n_lemmas);
 
     census ~dir;
 
