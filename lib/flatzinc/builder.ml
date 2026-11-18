@@ -1175,6 +1175,22 @@ let build_constraint env (c : Ast.constraint_item) =
        when both operands are constants and the quotient is a number. *)
     | "int_times" ->
         arity3 (fun x y z ->
+            (* M8-bits-encoding-T3 continuation (D-0134 section 10): the case split runs
+               over the SECOND operand -- one guard Boolean and two to four rows per value
+               of its declared domain (lib/core/prop/arith.ml) -- and x * y = z is
+               symmetric, so the NARROWER operand goes second. On the Challenge the shape
+               that matters is `int_times(b, y, z)` with b in 0..1 and y up to 0..10000
+               (mapping, carpet-cutting): split over y it is 10 001 groups, split over b it
+               is two. A tie keeps the order the model wrote, so a model whose operands
+               are equally wide, or whose first is the wider, is posted exactly as before.
+               Not done for int_div, which is not symmetric. *)
+            let width = function
+              | Model.Const _ -> 0
+              | Model.Var i ->
+                  let lo, hi = var_bounds i in
+                  hi - lo
+            in
+            let x, y = if width x < width y then (y, x) else (x, y) in
             let aux =
               match y with
               | Model.Const _ -> { Model.x_sign = None; y_ge = [] }
