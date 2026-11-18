@@ -1214,10 +1214,13 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
       match stop with
       | None -> fun () -> ()
       | Some stop ->
+          (* A countdown left by a caller with a longer period is cut to this one's. *)
+          let poll_runs = max 1 poll_runs in
+          if t.poll_left > poll_runs then t.poll_left <- poll_runs;
           fun () ->
             t.poll_left <- t.poll_left - 1;
             if t.poll_left <= 0 then (
-              t.poll_left <- max 1 poll_runs;
+              t.poll_left <- poll_runs;
               if stop () then stopped := true)
     in
     let run_one id =
