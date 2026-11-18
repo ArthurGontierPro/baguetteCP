@@ -545,6 +545,122 @@ let test_citation_guard () =
   (try Sys.remove pbp with _ -> ());
   try Sys.rmdir dir with _ -> ()
 
+(* ---------------------------------------------------------------------------
+   M11-complexity-T3 (D-0142, D-0140's E2 (a)): one walk per learned-clause run
+
+   A learned clause's run used to be [Pb.propagate] (whose [Pb.quiet] walks the clause)
+   followed by [rewatch], whose [best] walked it again once per watch to replace. Now
+   [Pb.quiet] records the first two non-false literals and [rewatch_quiet] chooses the
+   watches from them. The claim is that nothing observable moves: [Pb.quiet] answers as
+   the list walk it replaced, and a run leaves the same trail, the same boxes and the SAME
+   TWO WATCHES as [Pb.propagate] followed by [rewatch] (the watches decide every later
+   wake, so they are part of what must not move).
+
+   Random clauses over two Booleans and two small integers (both polarities, several
+   rungs of one variable, repeats), random narrowed boxes and random starting watches,
+   each run twice from the same state: once through [Learned_clause.propagate], once
+   through the old composition. *)
+let old_quiet store (t : Clause.t) =
+  let module Pb = Baguette_core.Pb in
+  t.Pb.degree = 1
+  &&
+  let free (tm : Pb.term) = Pb.status store tm.a <> Pb.Unsat_lit in
+  let rec other xi = function
+    | [] -> false
+    | (tm : Pb.term) :: rest -> (Var.to_int tm.a.x <> xi && free tm) || other xi rest
+  in
+  let rec first = function
+    | [] -> false
+    | (tm : Pb.term) :: rest ->
+        if free tm then other (Var.to_int tm.a.x) rest else first rest
+  in
+  first t.Pb.terms
+
+let test_one_walk () =
+  let module Pb = Baguette_core.Pb in
+  let module LC = Clause.Learned_clause in
+  let bounds = [ ("p", 0, 1); ("q", 0, 1); ("x", 0, 4); ("y", 0, 3) ] in
+  let rng = Random.State.make [| 0x0142; 2 |] in
+  let trials = 4000 in
+  let quiet_same = ref 0 and run_same = ref 0 and n_quiet = ref 0 and moved = ref 0 in
+  let first_diff = ref None in
+  let observe store (lc : LC.t) r =
+    let out =
+      match r with
+      | exception e -> `Raised (Printexc.to_string e)
+      | Propagator.Fixpoint -> `Fix
+      | Propagator.Conflict c ->
+          `Conflict (Baguette_core.Reason.to_string c.Store.c_reason)
+    in
+    let trail =
+      List.init (Store.trail_length store) (fun i ->
+          let e = Store.trail_entry store i in
+          ( Var.to_int e.Store.var,
+            Domain.lo e.Store.now,
+            Domain.hi e.Store.now,
+            Baguette_core.Reason.to_string e.Store.reason ))
+    in
+    (out, trail, lc.LC.w1, lc.LC.w2)
+  in
+  for trial = 1 to trials do
+    let n = 2 + Random.State.int rng 7 in
+    let lits =
+      List.init n (fun _ ->
+          let nm, lo, hi = List.nth bounds (Random.State.int rng 4) in
+          let k = lo + 1 + Random.State.int rng (hi - lo) in
+          if Random.State.bool rng then Lit.ge nm k else Lit.le nm (k - 1))
+    in
+    let narrowed =
+      List.map
+        (fun (nm, lo, hi) ->
+          let lo' = lo + Random.State.int rng (hi - lo + 1) in
+          let hi' = lo' + Random.State.int rng (hi - lo' + 1) in
+          (nm, lo', hi'))
+        bounds
+    in
+    let s_new = mk_store narrowed and s_old = mk_store narrowed in
+    match Clause.of_lits s_new ~decl:(decl_of bounds) lits with
+    | None -> failwith "of_lits refused an order-literal clause"
+    | Some pb ->
+        let w = Pb.width pb in
+        let w1 = Random.State.int rng w and w2 = Random.State.int rng w in
+        let lc_new = LC.make pb and lc_old = LC.make pb in
+        lc_new.LC.w1 <- w1;
+        lc_new.LC.w2 <- w2;
+        lc_old.LC.w1 <- w1;
+        lc_old.LC.w2 <- w2;
+        let q_old = old_quiet s_new pb in
+        if Pb.quiet s_new pb = q_old then incr quiet_same;
+        if q_old then incr n_quiet;
+        let got = observe s_new lc_new (LC.propagate lc_new s_new) in
+        let want =
+          observe s_old lc_old
+            (let r = Pb.propagate pb s_old in
+             LC.rewatch s_old lc_old;
+             r)
+        in
+        if got = want then incr run_same
+        else if !first_diff = None then first_diff := Some trial;
+        if q_old && (lc_new.LC.w1 <> w1 || lc_new.LC.w2 <> w2) then incr moved
+  done;
+  check
+    (Printf.sprintf
+       "E2a: %d random clauses, Pb.quiet answers as the list walk it replaced" trials)
+    (!quiet_same = trials);
+  check
+    (Printf.sprintf
+       "E2a: ...and a learned-clause run leaves the same outcome, trail and two watches \
+        as Pb.propagate + rewatch (first difference: %s)"
+       (match !first_diff with None -> "none" | Some i -> string_of_int i))
+    (!run_same = trials);
+  check
+    (Printf.sprintf "E2a: ...%d of the runs are quiet (> 1000)" !n_quiet)
+    (!n_quiet > 1000);
+  check
+    (Printf.sprintf
+       "E2a: ...and %d quiet runs MOVE a watch (> 300), the case the scan answers" !moved)
+    (!moved > 300)
+
 let () =
   test_declared_levels ();
   test_bool_face_rejects_non_bool ();
@@ -554,6 +670,7 @@ let () =
   test_unit_prunes ();
   test_clause_instance ();
   test_citation_guard ();
+  test_one_walk ();
   if !failures > 0 then (
     Printf.printf "\n%d check(s) FAILED\n" !failures;
     exit 1)

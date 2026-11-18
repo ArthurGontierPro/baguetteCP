@@ -267,6 +267,14 @@ let layout_of (terms : term list) : layout =
     gbest = Array.make !ng 0;
   }
 
+(* M11-complexity-T3 (D-0142, D-0140's E2 (a)): what [quiet]'s walk found, kept for the
+   learned clause's watch move (lib/core/prop/clause.ml, [Learned_clause.propagate]). When
+   [quiet] answers [true], [f1] and [f2] are the indices of the FIRST TWO non-false
+   literals; when it answers [false] they mean nothing. [quiet] writes both before it can
+   answer [true], so, like the layout's scratch, the record carries nothing from one call
+   to the next. *)
+type scan = { mutable f1 : int; mutable f2 : int }
+
 (* [pb] is the whole constraint's literals in term order, and [expl_all] is the clause
    over all of them -- both built once at construction. [expl_all] is not "the
    explanation": for a general row the explanation of a pruning is the SUBSET clause
@@ -281,6 +289,10 @@ type t = {
   pb : Lit.t list;
   expl_all : Explanation.t;
   n_terms : int;
+  atoms : atom array;
+      (* The atoms in term order, for [quiet]'s walk; lib/core/prop/clause.ml's learned
+         clause shares this array for its watches. *)
+  scan : scan;
   layout : layout Lazy.t;
       (* The pass's layout and working memory, built on the first pass (the header's
          "The pass's working memory is not state"). *)
@@ -300,6 +312,8 @@ let finish terms degree =
     pb;
     expl_all = Explanation.clause pb;
     n_terms = List.length terms;
+    atoms = Array.of_list (List.map (fun tm -> tm.a) terms);
+    scan = { f1 = -1; f2 = -1 };
     layout = lazy (layout_of terms);
   }
 
@@ -601,20 +615,39 @@ let forced w ~slack i =
    On QR48 (D-0138) a learned clause runs 369 times per node and changes something 0.01
    times per node, and a `bool_clause` 270 times for 36: the runs this answers are the
    runs that change nothing, so every run that does change something happens in the same
-   order on the same domains, and the trail and the proof are the same. *)
+   order on the same domains, and the trail and the proof are the same.
+
+   M11-complexity-T3 (D-0142, E2 (a)): the walk is over [t.atoms] with top-level
+   functions, so it builds no closure per call, and it records the first two non-false
+   literals in [t.scan], which is what lets a learned clause move its watches without a
+   walk of its own. The predicate is the one above, split at the second non-false literal:
+   "a non-false literal after the first one, on another variable" is "the second one is
+   on another variable, or a non-false literal after the second one is". *)
+let rec next_free store (atoms : atom array) i =
+  if i >= Array.length atoms then i
+  else if is_false (status store atoms.(i)) then next_free store atoms (i + 1)
+  else i
+
+let rec free_off store (atoms : atom array) xi i =
+  let j = next_free store atoms i in
+  j < Array.length atoms
+  && (Var.to_int atoms.(j).x <> xi || free_off store atoms xi (j + 1))
+
 let quiet store t =
   t.degree = 1
   &&
-  let free tm = status store tm.a <> Unsat_lit in
-  let rec other xi = function
-    | [] -> false
-    | tm :: rest -> (Var.to_int tm.a.x <> xi && free tm) || other xi rest
-  in
-  let rec first = function
-    | [] -> false
-    | tm :: rest -> if free tm then other (Var.to_int tm.a.x) rest else first rest
-  in
-  first t.terms
+  let atoms = t.atoms in
+  let n = Array.length atoms in
+  let f1 = next_free store atoms 0 in
+  f1 < n
+  &&
+  let f2 = next_free store atoms (f1 + 1) in
+  t.scan.f1 <- f1;
+  t.scan.f2 <- f2;
+  f2 < n
+  &&
+  let xi = Var.to_int atoms.(f1).x in
+  Var.to_int atoms.(f2).x <> xi || free_off store atoms xi (f2 + 1)
 
 let rec propagate t store = if quiet store t then Propagator.Fixpoint else pass t store
 
