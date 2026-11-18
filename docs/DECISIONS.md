@@ -14133,13 +14133,15 @@ clause is rarely asked, the walk's per-variable bookkeeping costs more than it s
 ### 6. E7: `Linear.propagate` without its two lists (`prop/linear.ml`, commit `8b96877`)
 
 **What changed.** Every run built the list of term minima (`List.map`) and its `List.combine` with the
-terms. The minima now go into a per-row scratch array (`t.mins`), written for every term at the top of
-every run.
+terms. The minima now go into a scratch array written for every term at the top of every run. It was
+first one array per row (`8b96877`), which raised smelt_2's memory before node 1 from 327 to 378 MB,
+`int_times` posting a guarded row per value of its case variable. It is now one array shared by every
+row (commit `1453de2`), safe for the reason pb.ml's scratch is: it carries nothing between runs and two
+runs never overlap.
 
 **Why the bytes cannot move.** The minima are computed in term order as `List.map` computed them, then
 summed in term order from 0 through `Checked.add` as `Checked.sum` did, so the values and an overflow's
-message are the old ones, and the pruning walk reads term `idx`'s minimum at `idx`. The array carries
-nothing between runs. Every `int_times`/`int_div`/`int_abs` row and guard is a `Linear` (or a
+message are the old ones, and the pruning walk reads term `idx`'s minimum at `idx`. Every `int_times`/`int_div`/`int_abs` row and guard is a `Linear` (or a
 `Reif_lin_le` of two), so this reaches E6's rows as well, without changing which of them run.
 
 **The test.** `test_prop.ml`, `test_linear_scratch`: the old function kept verbatim as the
