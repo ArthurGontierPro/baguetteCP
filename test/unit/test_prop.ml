@@ -7740,6 +7740,160 @@ let test_cumulative_search () =
   run_veripb ~name:"cumulative search: the UNSAT lane's refutation verifies"
     ~build:(fun _ -> (opb, pbp))
 
+(* ---------------------------------------------------------------------------
+   M11-complexity-T3 (D-0142, E7): [Linear.propagate] without its two lists
+
+   The run used to build the list of term minima and its [List.combine] with the terms;
+   it now keeps the minima in the row's scratch array. [Ref_linear.propagate] is the old
+   function, kept here verbatim as the specification, and 2 000 random rows (four
+   variables over small boxes that include negatives, coefficients -3..3 with zeros,
+   every right-hand side from infeasible to slack) are run through both from the same
+   narrowed store: same outcome, same conflict reason, same trail with the same reasons. *)
+module Ref_linear = struct
+  open Linear
+
+  let propagate (t : Linear.t) store =
+    let mins = List.map (fun tm -> term_min store tm) t.terms in
+    let total_min = Checked.sum mins in
+    let slack = Checked.sub t.rhs total_min in
+    if slack < 0 then
+      let snaps = row_snaps store t.terms ~exclude:None in
+      Propagator.Conflict
+        (Store.conflict store
+           (justified_of_snaps ~concludes:None (base_explanation t) snaps 1))
+    else
+      let result = ref Propagator.Fixpoint in
+      let conflict = ref None in
+      let cross_conflict (tm : term) snaps =
+        let opposite_fact = opposite_bound_fact store tm in
+        conflict :=
+          Some
+            (Store.conflict store
+               (Reason.because ~concludes:None
+                  (List.map fact_of_snap snaps @ [ opposite_fact ])
+                  (explain_cross_conflict ~base:(base_explanation t) ~snaps ~crossed:tm
+                     ~name:(Store.name store tm.x)
+                     ~opposite_value:(Reason.fact_value opposite_fact)
+                     ~opposite:(opposite_rests_on store tm))))
+      in
+      List.iteri
+        (fun idx ((tm : term), m) ->
+          if Option.is_none !conflict && tm.coeff <> 0 then
+            let max_term = Checked.add m slack in
+            let d = Store.get store tm.x in
+            if tm.coeff > 0 then (
+              let new_hi = floordiv max_term tm.coeff in
+              if new_hi < Domain.hi d then
+                let h = Store.history store in
+                let exclude = Some idx in
+                let concludes =
+                  Some
+                    (Reason.at_most ~name:(Store.name store tm.x) ~decl:tm.decl_hi new_hi)
+                in
+                let j =
+                  justified_at ~concludes (base_explanation t) h t.terms ~exclude tm.coeff
+                in
+                match Store.set_hi store tm.x new_hi j with
+                | Store.Conflict _ -> cross_conflict tm (row_snaps_at h t.terms ~exclude)
+                | Store.Changed | Store.Unchanged -> ())
+            else
+              let new_lo = ceildiv max_term tm.coeff in
+              if new_lo > Domain.lo d then
+                let h = Store.history store in
+                let exclude = Some idx in
+                let divisor = Checked.neg tm.coeff in
+                let concludes =
+                  Some
+                    (Reason.at_least ~name:(Store.name store tm.x) ~decl:tm.decl_lo new_lo)
+                in
+                let j =
+                  justified_at ~concludes (base_explanation t) h t.terms ~exclude divisor
+                in
+                match Store.set_lo store tm.x new_lo j with
+                | Store.Conflict _ -> cross_conflict tm (row_snaps_at h t.terms ~exclude)
+                | Store.Changed | Store.Unchanged -> ())
+        (List.combine t.terms mins);
+      (match !conflict with Some c -> result := Propagator.Conflict c | None -> ());
+      !result
+end
+
+let test_linear_scratch () =
+  print_endline
+    "\n-- M11-complexity-T3 (D-0142, E7): Linear.propagate without its two lists";
+  let bounds = [ ("a", -3, 4); ("b", 0, 5); ("c", -2, 2); ("d", 1, 6) ] in
+  let rng = Random.State.make [| 0x0142; 7 |] in
+  let observe store r =
+    let out =
+      match r with
+      | exception e -> "raised " ^ Printexc.to_string e
+      | Propagator.Fixpoint -> "fix"
+      | Propagator.Conflict c -> "conflict " ^ Reason.to_string c.Store.c_reason
+    in
+    let trail =
+      List.init (Store.trail_length store) (fun i ->
+          let e = Store.trail_entry store i in
+          Printf.sprintf "%d:%d..%d:%s" (Var.to_int e.Store.var) (Domain.lo e.Store.now)
+            (Domain.hi e.Store.now)
+            (Reason.to_string e.Store.reason))
+    in
+    (out, trail)
+  in
+  let trials = 2000 and same = ref 0 and prunes = ref 0 and conflicts = ref 0 in
+  for _ = 1 to trials do
+    let raw =
+      List.filter_map
+        (fun i ->
+          if Random.State.int rng 4 = 0 then None
+          else Some (Random.State.int rng 7 - 3, var i))
+        [ 0; 1; 2; 3 ]
+    in
+    let rhs = Random.State.int rng 21 - 8 in
+    let narrow () =
+      let s = mk_store bounds in
+      Store.new_level s;
+      List.iteri
+        (fun i (_, lo, hi) ->
+          let lo' = lo + Random.State.int rng (hi - lo + 1) in
+          let hi' = lo' + Random.State.int rng (hi - lo' + 1) in
+          ignore (Store.set_lo s (var i) lo' placeholder_pruning);
+          ignore (Store.set_hi s (var i) hi' placeholder_pruning))
+        bounds;
+      s
+    in
+    let st = Random.State.copy rng in
+    let s1 = narrow () in
+    let s2 =
+      (* the same narrowing, replayed from the saved generator state *)
+      let s = mk_store bounds in
+      Store.new_level s;
+      List.iteri
+        (fun i (_, lo, hi) ->
+          let lo' = lo + Random.State.int st (hi - lo + 1) in
+          let hi' = lo' + Random.State.int st (hi - lo' + 1) in
+          ignore (Store.set_lo s (var i) lo' placeholder_pruning);
+          ignore (Store.set_hi s (var i) hi' placeholder_pruning))
+        bounds;
+      s
+    in
+    let base = Store.trail_length s1 in
+    let row = Linear.make ~row_id:1 (mk_store bounds) raw rhs in
+    let got = observe s1 (Linear.propagate row s1) in
+    let want = observe s2 (Ref_linear.propagate row s2) in
+    if got = want then incr same;
+    match want with
+    | o, _ when String.length o > 8 && String.sub o 0 8 = "conflict" -> incr conflicts
+    | _, tr when List.length tr > base -> incr prunes
+    | _ -> ()
+  done;
+  check
+    (Printf.sprintf
+       "E7: %d random rows, the scratch-array run and the list run show the same outcome \
+        and trail"
+       trials)
+    (!same = trials);
+  check (Printf.sprintf "E7: ...%d of them prune (> 300)" !prunes) (!prunes > 300);
+  check (Printf.sprintf "E7: ...%d of them conflict (> 300)" !conflicts) (!conflicts > 300)
+
 let () =
   print_endline "\npropagator unit tests";
   test_soundness ();
@@ -7941,6 +8095,8 @@ let () =
   test_cumulative_rows ();
   test_cumulative_timetable_fixpoint ();
   test_cumulative_search ();
+  (* M11-complexity-T3, D-0142: Linear's scratch array. *)
+  test_linear_scratch ();
   if !failures > 0 then (
     Printf.printf "\n%d FAILURE(S)\n" !failures;
     exit 1)

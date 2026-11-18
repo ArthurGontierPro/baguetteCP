@@ -134,7 +134,13 @@ module Lit = Baguette_proof.Lit
    explanation needs is the declared bound, which the store no longer holds once this or
    any other propagator has narrowed the domain). *)
 type term = { coeff : int; x : Var.t; decl_lo : int; decl_hi : int }
-type t = { terms : term list; rhs : int; row_id : int }
+
+(* [mins] is SCRATCH (M11-complexity-T3, D-0142, E7): one slot per term, where a run of
+   [propagate] keeps each term's minimum while it walks the row. Written for every term
+   at the top of every run before anything reads it, so it carries nothing from one run
+   to the next; it only spares the run the two lists it used to allocate (the minima and
+   their [List.combine] with the terms). *)
+type t = { terms : term list; rhs : int; row_id : int; mins : int array }
 
 let name = "int_lin_le"
 let consistency = Propagator.Bounds
@@ -151,7 +157,7 @@ let make ~row_id store raw_terms rhs =
         { coeff; x; decl_lo = Domain.lo d; decl_hi = Domain.hi d })
       raw_terms
   in
-  { terms; rhs; row_id }
+  { terms; rhs; row_id; mins = Array.make (List.length terms) 0 }
 
 let base_explanation t = Explanation.model_row t.row_id
 let vars t = List.map (fun tm -> tm.x) t.terms
@@ -684,9 +690,14 @@ let explain_cross_conflict ~base ~snaps ~crossed:(tm : term) ~name ~opposite_val
    and returning the conflict that the old one-shot slot's comment had to argue about.
    Neither path names this instance's id: [Store.conflict] stamps whoever the engine said
    was running. *)
+(* M11-complexity-T3 (D-0142, E7): the minima go into [t.mins] in term order, as
+   [List.map] computed them, and are summed afterwards in the same order from 0 through
+   [Checked.add], as [Checked.sum] did; so every value, and an overflow's message, is the
+   one the lists gave. The pruning walk then reads the minimum of term [idx] at [idx]. *)
 let propagate t store =
-  let mins = List.map (fun tm -> term_min store tm) t.terms in
-  let total_min = Checked.sum mins in
+  let mins = t.mins in
+  List.iteri (fun i tm -> mins.(i) <- term_min store tm) t.terms;
+  let total_min = Array.fold_left Checked.add 0 mins in
   let slack = Checked.sub t.rhs total_min in
   if slack < 0 then
     let snaps = row_snaps store t.terms ~exclude:None in
@@ -715,9 +726,9 @@ let propagate t store =
                    ~opposite:(opposite_rests_on store tm))))
     in
     List.iteri
-      (fun idx ((tm : term), m) ->
+      (fun idx (tm : term) ->
         if Option.is_none !conflict && tm.coeff <> 0 then
-          let max_term = Checked.add m slack in
+          let max_term = Checked.add mins.(idx) slack in
           let d = Store.get store tm.x in
           (* D-0124: the history is taken HERE, immediately before the push, so it
              holds exactly what a snapshot taken here would have read -- including the
@@ -758,6 +769,6 @@ let propagate t store =
               match Store.set_lo store tm.x new_lo j with
               | Store.Conflict _ -> cross_conflict tm (row_snaps_at h t.terms ~exclude)
               | Store.Changed | Store.Unchanged -> ())
-      (List.combine t.terms mins);
+      t.terms;
     (match !conflict with Some c -> result := Propagator.Conflict c | None -> ());
     !result
