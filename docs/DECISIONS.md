@@ -12196,7 +12196,7 @@ What held the rest, read off the `--stats` lines: none of the 104 reached the en
 
 ## D-0134  M8-bits-encoding-T3: the full substrate -- maxmin over bits by SELECTOR rows and one `Resolve` step, the checker facts measured first, and the step order
 
-**Status**: **IN PROGRESS, DESIGN SETTLED** (agent-t3, branch `wave44-t3`, 2026-11-16).
+**Status**: **IN PROGRESS, DESIGN SETTLED** (agent-t3, branch `wave44-t3`, 2026-11-16). **Steps 1 and 2 (int_ne only) landed 2026-11-18** (agent-t3b, §4 onwards); steps 3 to 5 and the rest of step 2 are open (§7).
 Written before the first edit to `lib/`, as D-0132 was: §1 is measured on the checker, §2 is
 the design as it will be built, §3 the plan with coordinates; §4 onwards is filled as each
 step lands. Inputs read whole: D-0132, D-0130 §3.4/§7.4/§7.5/§13-§15 and its addendum,
@@ -12324,3 +12324,103 @@ G: `x in 0..7`, `y in 0..3` on bits, `x + y <> 5` as `int_lin_ne`'s A/B pair.
    `test/models/bits_maxmin_{sat,tie_sat,unsat,search_sat,min_sat,mixed_sat}.fzn`.
 7. Node: `W = none` byte-identical against `gate44.art/new`; the suite at `W = 0` and
    `W = 8`; the held instances of the 169 at `W = 0` against D-0132 §6 (b).
+
+### 4. What landed (2026-11-18, agent-t3b, commits `72e2e8c` .. `c7a0636` on `wave44-t3`), against §2 and §3
+
+The salvaged WIP (`be5297e`) was checked against §2.2 and §2.3 before anything was built on
+it, and kept: `Resolve`, its rendering (each part saturated to its clause, the parts summed
+and saturated once more) and the clause as the parts' negated literals in part order are
+§2.2 as written. Two things in it changed, both recorded in §5.
+
+**Step 1, maxmin over bits (§3 items 1 to 7).**
+
+- `explanation.ml`: `Resolve of t list` and `resolve` (two parts at least, none a decision),
+  placed before `Deferred` so that constructor's text is unchanged.
+- `justify.ml`: `emit_bits_resolve`, reached through `emit_bits_pruning`'s dispatch on the
+  forced shape. Its `pol` carries the origin tag `[resolve]`, which is what the mutation
+  lanes aim at. `is_bits_derivation` says which shapes the bits arm can render (§5.3).
+  `resolve_clause` computes a `Resolve`'s clause without writing, and `emit` answers a cited
+  `Resolve` with the line stating that clause (§5.1).
+- `maxmin.ml`: `shape = Per_value | Selector`, chosen by the caller. The per-value array is
+  not built for the selector shape (its range is Θ(w) on bits). `selector_rows` spells S_i
+  on the bases, `attach_selectors` receives the ids compile.ml minted, `chosen` is the
+  solution's pick, and `expl_at` returns per threshold v a `Deferred` `Resolve`, cached per
+  v so prunings at one threshold share one physical explanation. The derivation at v is the
+  same for R3, R4 and the conflict, exactly as the per-value C_v is. The disjunction is
+  vacuous, and nothing is posted, when the threshold range is empty or m is one of the
+  operands. The header states both shapes. `propagate` was not edited.
+- `encoding.ml`: choice groups. `add_choice` mints `$mxN` through `fresh_aux_name`, posts each
+  S_i through `add_int_lin_le` and the clause through `add_constraint`, and records the group.
+  `assignment_lits` appends `choice_lits`, the picked selector true and the others false, in
+  the order the groups were posted. `cost` gains `c_choices`.
+- `compile.ml`: `maxmin` leaves `held_families`. `post_maxmin` takes the selector shape iff
+  a variable of the scope is on bits, after the n linear rows, as §2.5 says.
+- `bin/main.ml`: `stats: choices N groups`.
+- Tests. test_prop: R3, R4 and the conflict on a hand-built bits store, each a `Resolve` of
+  n + 1 parts whose clause is the per-value twin's C_v literal for literal, with D-0026's
+  agreement; the pick at a tie; R3 written by `emit_bits_pruning` under a decision over a
+  satisfiable model (probe a1's shape) is VERIFIED, and the same `pol` pinned by the unit
+  `~m_ge_5` (probe a3) is refused at *"Expected constraint is not syntactically implied by the
+  constraint at the hint."*; the factless root conflict (probe c1) refutes its model.
+  test_compile: maxmin released, one choice group of two selectors in the eligibility scene,
+  an all-order scope keeps the per-value rows at `W = 0`, and a minimum with a constant
+  operand posts S_i with M_i = 7, 3, 5. test_mutation: `bits_maxmin`, the satisfiable
+  `bits_maxmin_sat` compiled at `W = 0`, with three lanes refused on the derivation
+  (`pol-cite` swaps the first part's selector row, `truncate`, `drop-literal` at the `ia`).
+  Six models: `bits_maxmin_{sat,tie_sat,unsat,min_sat,mixed_sat,opt_sat}`. The tie model
+  needs the selectors in `sol`, the makespan model in every `soli`, the mixed model cites
+  m's D-0132 `rup` bridge pair beside the operands' `red` pairs, and the minimum's conflict
+  is a mirrored `Resolve` under a decision.
+
+**Step 2, partly: `int_ne` / `int_lin_ne` released (D-0130 §7.4).**
+
+- `ne.ml`: `make ?rows` takes the A/B ids of `Encoding.add_int_lin_ne`'s pair over a bits
+  scope, and the nogood is then `nogood_resolve`, two divisor-1 `Combine`s (row A with every
+  pair as a `Linear_term` on A's coefficient, row B on the negated ones) resolved on the
+  selector, probe g1's shape. Both degrees are exactly 1 because the pairs sum to c. A scope
+  with no bits variable has no rows and keeps its `Clause`.
+- `compile.ml`: `post_ne` passes the ids when the row is mixed, and `int_ne` leaves
+  `held_families`.
+- `search.ml`: the two conflict arms that write a factless derivation before the nogood take
+  a `Resolve` as they take a `Combine` (a disequality with every term fixed has no fact, and
+  over bits its nogood cannot be reached by unit propagation).
+- Tests. test_prop: the interior hole x <> 3 on a bits domain, a `Resolve` of two parts whose
+  clause is the twin's nogood literal for literal, with the agreement; its `pol` written by
+  the emitter under a decision VERIFIES (g1), and pinned one literal short is refused at the
+  `ia` wording. test_mutation: `bits_ne` (`bits_ne_sat` inlined) with the same three lanes.
+  test_compile: the eligibility scene's n, m and c go on bits. Two models: `bits_ne_sat` (a
+  root hole in a bits domain, a settle past it, an all-fixed conflict under a decision) and
+  `bits_ne_unsat` (four pigeons in three holes as six `int_ne` on 0..2).
+- **Not done**: `int_eq_reif`/`int_ne_reif` and `bool2int` stay held (§7).
+
+**Steps 3, 4 and 5 were not started** (§7 says where each stands).
+
+### 5. Deviations from §2, each found by the checker, the suite or the build
+
+1. **`Justify.emit` of a `Resolve` answers instead of raising** (§2.6 said it raises). An
+   order-arm derivation renders a `Linear_term` with citations as one `Term` per cited
+   entry (D-0132 §2.4), and the entry that moved an ORDER variable of a maxmin scope with a
+   bits operand is justified by a `Resolve`. Raising there would end a legal run. The
+   per-value shape cited the clause C_v, and the `Resolve` derives the same C_v, so the
+   answer is the line stating it (the trace line when it is on the page, else the same
+   `pol` + `ia` written then). Found by reading `emit_summand`; no suite model reaches it.
+2. **The `Resolve` arm does not refuse a claim that is not in its clause** (the WIP did). Once
+   `Ne` punches holes in bits domains a claim can settle past a hole, and its literal is then
+   stronger than the clause's. The trace writes its ordinary `rup` after the `ia`, RUP
+   through the hole's line, which is D-0132 §2.5's rule for a `Combine`. Exercised by
+   `bits_ne_sat` (z <= x <= 5 settles to z <= 4 past the hole at 5).
+3. **The bits arm took any `Combine`** (a T2 latent). A LEARNED constraint's conflict over
+   bits atoms is a `Combine` citing the entries that falsified its literals, which
+   `emit_bits_pruning` cannot render. The suite at `W = 0` found it once `int_ne` was
+   released: `element_learn_hole_{sat,unsat}` (y went on bits) ended in exit 2 with *"a
+   summand that is not a Linear term"* and a truncated proof the checker refused at
+   end-of-file. The trace now asks `Justify.is_bits_derivation` at both sites, and such a
+   line keeps the order arm's `rup`, which is unit propagation over the learned line. No T2
+   model had learning over a bits variable.
+4. **test_matrix's derivation walker** matched `Explanation.t` exhaustively and did not build
+   against the WIP's constructor. The WIP was described as building, which was true of
+   `lib/` and `bin/` only.
+5. **A mutation lane over a compiled model must solve in the model's own search order**, as
+   the CLI does (`?order:c.Compile.order`). Without it `bits_ne_sat` found its solution with
+   no conflict, the trace (written lazily, at conflicts) never reached the page, and every
+   knob reported that it found no site, which the harness turns into a failure.
