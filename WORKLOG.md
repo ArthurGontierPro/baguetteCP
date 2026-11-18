@@ -494,6 +494,12 @@ out want smaller reasons (on letters, not flags; 1UIP clauses are 16+ literals);
 record and probes in D-0146 §7 (stage 1 channel filtering, stage 2 needs lemma ids alldiff can cite);
 `fplen` (M7-T29's other half) untouched. `test/unit/test_trace.ml` (one I-X10 row) and
 `test/unit/test_compile.ml` (one relation arm) were touched for the new constructor/module.
+**PENDING ON THE NODE** (fataepyc-06 dropped mid-measurement; both runs are detached with pid files,
+nothing to relaunch): `/scratch/arthur/wave49-globals-meas-after/` (160 Challenge instances at 300 s with
+proof, 51 read: 13 complete, all VERIFIED, 11 of them new -- D-0146 §6) and `/scratch/arthur/wave49-globals-routes.tsv`
+(which instances reach the routes once flattened). Read both with `bench/regular_spike/join_globals.py` and
+fill D-0146 §6's table. No proof shape is pending: every line `regular` writes was measured on the checker
+before it landed; `inverse` is design only (§7) and its stage 2 needs a probe before any code.
 
 ## M11-complexity-T2 handoff, 2026-11-18 (agent-lanes, `wave47-lanes`): the differential and scaling lanes, D-0141
 

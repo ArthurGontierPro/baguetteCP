@@ -14856,3 +14856,113 @@ old binary cannot read (`regular_*` x4: `baguette_regular` is unknown to it; `gc
 it refused the repeat). The closed-gcc models are identical under both (the route was std's).
 **Differential lane** (`origin/wave47-lanes` merged, `make diff ARGS="--tier all -j 24"`, at `abae541` and again at `b8a7817`): 232
 of 232 runs equal the reference.
+
+### 6. The Challenge instances, before and after
+
+**The run.** `scripts/compare_run.sh` over the 160 Challenge instances whose model calls
+`regular` (110, of which 20 also call a closed gcc), a closed gcc (30 more) or is
+community-detection (20, the gcc repeat), selected from `bench/challenge/<Y>.lst` by
+`bench/regular_spike/select_globals.py` (the model and the `.mzn` it includes, comments
+stripped; list at `/scratch/arthur/wave49-globals-inst.lst`). Each instance re-flattened with
+THIS branch's mznlib (MiniZinc 2.10.1, `tools/baguette.msc`), baguette only, 300 s, proof on,
+`MEM_KB=16777216`, `PROOF_CAP_KB=16000000`, 10-way, every complete answer's proof checked by
+`veripb` 3.0.2; frozen clone `/scratch/arthur/wave49-globals-meas-src-after` at `bde7930`, binary `08361947` (before section 5's tail reorder and allocation change: the same prunings and the same facts per line, the tail's literals in another order), output `/scratch/arthur/wave49-globals-meas-after/`. **Before** is wave 43's
+run of the sixteen editions (D-0133's baseline: `/scratch/arthur/wave43run/<Y>/results.tsv`,
+binary `a6327dc6`, **1 200 s**), so the comparison gives the old binary four times the time.
+`bench/regular_spike/join_globals.py` joins the two; a SAT answer to a satisfaction problem
+counts as complete, a time-out with a solution as an incumbent.
+
+**INTERIM: 51 of the 160 instances**, the last read before `fataepyc-06` became unreachable on
+2026-11-18 (the run itself is detached and goes on; see "Pending" below). Status before (wave 43,
+1 200 s) -> after (this branch, 300 s):
+
+| group (by source) | transition | instances |
+|---|---|---|
+| regular | TIMEOUT -> COMPLETE | 9 |
+| regular | REFUSED -> COMPLETE | 2 |
+| regular | COMPLETE -> COMPLETE | 2 |
+| regular | REFUSED -> TIMEOUT | 2 |
+| regular | TIMEOUT -> TIMEOUT | 15 |
+| regular + gcc_closed | TIMEOUT -> TIMEOUT | 10 |
+| gcc_closed | CAPPED -> CAPPED | 5 |
+| gcc_closed | REFUSED -> CAPPED, REFUSED -> TIMEOUT | 1, 1 |
+| gcc_closed | REFUSED -> REFUSED | 2 |
+| gcc_repeat (community-detection 2017) | REFUSED -> attempted: 2 with an incumbent, 1 without | 3 |
+
+**Every one of the 13 complete answers is VERIFIED by `veripb`; none rejected.** The eleven
+that moved are nonograms (2011 `non_fast_3`, `non_fast_6`, `non_med_1`; 2012 `non_awful_5`,
+`non_fast_4`, `non_fast_11`; 2013 `dom_08`) and pentominoes (2011 `_02`, `_06`; 2013
+`pentominoes-int_02`, `_06`), in 34 to 270 s, where the old binary had timed out at 1 200 s or
+refused the decomposed model at the front end (the cause per instance is in wave 43's results.tsv).
+D-0122 counted `regular` at 0 complete of 94 attempted. The nonograms still timing out are the
+per-node cost and the learned clauses of section 5, not a refusal. The community-detection
+instances are no longer refused (M7-T29): `Strike.s2.k8` reaches an incumbent of 73 and
+`Strike.s6.k5` one of 51 within 300 s (the harness writes TIMEOUT with the objective and 3
+solutions; an interrupted run's proof is not checked). The `CAPPED` gcc instances are gbac, whose
+`.opb` alone passes the 16 GB file cap before the first node, on both binaries: a width matter,
+not one of these routes.
+
+**A correction to the grouping, measured.** The selection reads sources, and `gbac` names
+`regular` in its source but its flattened model calls it ZERO times (17 gcc calls), so the
+"regular" group above holds instances that never reach `regular.ml`.
+`bench/regular_spike/count_routes.sh` flattens each instance with this branch's library and
+counts the routes it reaches; its first 94 rows were in (nonograms: 100 to 120 `baguette_regular`
+calls, pentominoes 10 to 12) when the node went away.
+
+**Pending on `fataepyc-06`, to read when the node is back** (both detached, both with pid files,
+nothing to relaunch):
+
+1. `/scratch/arthur/wave49-globals-meas-after/` (`compare_run.sh`, pid in
+   `/scratch/arthur/wave49-globals-meas-after.pid`; `DONE` written at the end): the remaining 109
+   instances. Read with `python3 -I bench/regular_spike/join_globals.py
+   /scratch/arthur/wave49-globals-inst.lst /scratch/arthur/wave43run
+   /scratch/arthur/wave49-globals-meas-after`, which now counts a time-out with solutions as an
+   incumbent.
+2. `/scratch/arthur/wave49-globals-routes.tsv` (pid `/scratch/arthur/wave49-globals-routes.pid`):
+   the 160 rows of routes reached, to regroup item 1 by what the FLATTENED model calls.
+
+Nothing about the proof is pending: every shape `regular` writes was measured on the checker
+before it landed (section 4) and is held by the lanes and models of section 5.
+
+### 7. `inverse`: the design record, before any code (step 5 of the row)
+
+D-0122: 70 instances, 44 of the 50 attempted time out with no solution. MiniZinc 2.10.1's
+`std/fzn_inverse.mzn` is `f[i] in index_set(invf) /\ invf[f[i]] = i` and the mirror, an
+`array_var_int_element` per position, which baguette's subset does not have, so it reaches the
+solver as std's further decomposition: `n^2` reified equalities and their clauses.
+
+**7.1 The model rows** (`baguette_inverse(f, fmin, g, gmin)` from a mznlib `fzn_inverse`, the
+offsets carrying the two index sets): std's semantics as CHANNEL clauses over the order
+literals, per pair `(i, j)` of declared values, both directions, each `x = v` split into its two
+order halves:
+
+    CH(i, j)    f_i <> j  \/  g_j >= i        f_i <> j  \/  g_j <= i
+    CH'(j, i)   g_j <> i  \/  f_i >= j        g_j <> i  \/  f_i <= j
+
+`4 n^2` rows of at most three literals, no auxiliary, no direct encoding: the decomposition std
+writes, minus its reifiers.
+
+**7.2 Stage 1, the propagator: channel filtering**, `j in dom(f_i) <=> i in dom(g_j)` both
+ways, the `element` shape twice. Consistency **Checking** honestly (arc consistent on each
+channel pair, which is not domain consistency of `inverse`: that needs `all_different`'s
+matching on `f`). Every pruning is one `rup` with its facts on the tail -- the bound or the hole
+remover of the other side -- so the family is `Single_row`. **Measured** (`bench/regular_spike/
+probe_inverse.sh`, `n = 3`, 3.0.2 on `fataepyc-06`): a bound prune under a fact (`i1`) and an
+interior hole (`i2`) VERIFY; a prune the facts do not support (`i3`) is refused at the RUP
+wording.
+
+**7.3 Stage 2, `all_different` strength, and the one open question.** Both arrays of an
+`inverse` are permutations, so `all_different(f)` is implied, and running `alldiff.ml` over `f`
+and over `g` gives the matching's pruning. Its derivations cite pairwise rows `f_i <> j \/ f_k
+<> j` which the `.opb` above does not state -- and must not post as model rows (an implied row
+posted is the trust section 3.2 refused). They are ROOT LEMMAS: **measured**, the pairwise row
+is `rup` from `CH(i,j)` and `CH(k,j)` at the root (`i4` VERIFIES). So stage 2 is section 3.2's
+mechanism with one addition: `Encoding.add_root_lemma` has to hand back an id `alldiff.ml` can
+cite in its `pol`, which the regular lemmas never needed (they are used by unit propagation
+only). That API, and whether alldiff's derivations survive citing proof lines instead of model
+rows, is what a stage-2 probe must settle first.
+
+A measured surprise worth keeping: a Hall prune (`f1, f2 in {1, 2}` so `f3 >= 3`, `i5`) is
+already RUP over the channel rows of `n = 3` -- the mirror side does the counting, `g_3` having
+one possible preimage left. It is the singleton complement that makes it so; with two values
+outside the Hall set unit propagation fixes nothing, and stage 2 is still needed.
