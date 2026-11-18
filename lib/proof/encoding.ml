@@ -459,7 +459,7 @@ type t = {
   mutable widest : (string * int * int) option; (* name, lo, hi *)
   mutable direct_values : int;
   direct_cids : (cid, unit) Hashtbl.t;
-  mutable direct_wanted_rev : string list;
+  direct_wanted : unit Names.t;
       (* M4-T1. The variables a propagator has declared it will need the DIRECT
          encoding for, recorded at compile time and materialised by [start_proof].
 
@@ -539,7 +539,7 @@ let create () =
     objective = None;
     n_aux = 0;
     direct_cids = Hashtbl.create 64;
-    direct_wanted_rev = [];
+    direct_wanted = Names.create 16;
     alo = Hashtbl.create 16;
     ladder_clauses = 0;
     widest = None;
@@ -1821,10 +1821,13 @@ let request_direct t x =
   let v = find t x in
   let size = v.hi - v.lo + 1 in
   check_direct_size x size;
-  if not (List.mem x t.direct_wanted_rev) then
-    t.direct_wanted_rev <- x :: t.direct_wanted_rev
+  Names.replace t.direct_wanted x ()
 
-let direct_requested t = List.filter (fun x -> List.mem x t.direct_wanted_rev) (vars t)
+(* M11-complexity-T7 (D-0143): the requests are a set keyed on the name. They were a
+   list, scanned with the polymorphic [List.mem] once per request and once per declared
+   variable here, O(requests x variables) at compile time; the set answers the same
+   membership, and the order is still the declaration order read off [vars]. *)
+let direct_requested t = List.filter (fun x -> Names.mem t.direct_wanted x) (vars t)
 
 (* The ids a Hall derivation names with [Explanation.Model_row]. Each is [None] exactly
    when the line does not exist, and every [None] here is a CONSTANT, not a gap:
