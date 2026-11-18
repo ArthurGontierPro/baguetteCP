@@ -293,6 +293,11 @@ type t = {
   mutable wv2 : int array;
       (** M6-T22 / D-0138: id -> the two variables (ints) a self-watching instance
           reported at the end of its last run, or [-1] before its first. *)
+  mutable wp1 : int array;
+  mutable wp2 : int array;
+      (** M6-T22 / D-0138: id -> where its entry sits in [dyn_ids.(wv1.(id))] and
+          [dyn_ids.(wv2.(id))], so a watch move removes it in O(1). When both watches are
+          on one variable there is one entry and [wp1] holds it. *)
   mutable dirty : bool array;
   mutable in_queue : bool array;
       (** M6-T22 / D-0138: [propagate]'s seed marks and queue membership, by id, kept
@@ -406,18 +411,20 @@ let dyn_push t x id =
       b
   in
   a.(len) <- id;
-  t.dyn_len.(x) <- len + 1
+  t.dyn_len.(x) <- len + 1;
+  len
 
-(* Swap-remove: the order inside one variable's slice carries nothing, the wake loop
-   sorts what it wakes. *)
-let dyn_remove t x id =
+(* Swap-remove the entry at [i] of [x]'s slice: the order inside one slice carries
+   nothing, the wake loop sorts what it wakes. The entry moved into [i] has its position
+   updated; it belongs to an instance whose [wv1]/[wv2] are current, and [wp1] is the
+   slot when [wv1] is [x] (both watches on [x] included). *)
+let dyn_remove t x i =
   let len = t.dyn_len.(x) in
   let a = t.dyn_ids.(x) in
-  let rec find i = if i >= len then -1 else if a.(i) = id then i else find (i + 1) in
-  let i = find 0 in
-  if i >= 0 then (
-    a.(i) <- a.(len - 1);
-    t.dyn_len.(x) <- len - 1)
+  let moved = a.(len - 1) in
+  a.(i) <- moved;
+  t.dyn_len.(x) <- len - 1;
+  if i < len - 1 then if t.wv1.(moved) = x then t.wp1.(moved) <- i else t.wp2.(moved) <- i
 
 (* Under BAGUETTE_DEBUG, after every run of a self-watching instance: the advisor must
    answer [false] for every variable of its scope it does not watch, which is the whole
@@ -447,15 +454,27 @@ let sync_watched t (inst : Propagator.instance) store (w : unit -> Var.t * Var.t
   let a1 = Var.to_int v1 and a2 = Var.to_int v2 in
   let o1 = t.wv1.(id) and o2 = t.wv2.(id) in
   if a1 <> o1 || a2 <> o2 then (
+    let p1 = t.wp1.(id) and p2 = t.wp2.(id) in
     let gone x = x >= 0 && x <> a1 && x <> a2 in
-    if gone o1 then dyn_remove t o1 id;
-    if o2 <> o1 && gone o2 then dyn_remove t o2 id;
+    if gone o1 then dyn_remove t o1 p1;
+    if o2 <> o1 && gone o2 then dyn_remove t o2 p2;
+    (* A kept variable keeps its entry, wherever its old slot recorded it. *)
     let fresh x = x <> o1 && x <> o2 in
-    if fresh a1 then dyn_push t a1 id;
-    if a2 <> a1 && fresh a2 then dyn_push t a2 id;
+    let pos_of x = if fresh x then dyn_push t x id else if x = o1 then p1 else p2 in
+    let q1 = pos_of a1 in
+    let q2 = if a2 = a1 then q1 else pos_of a2 in
     t.wv1.(id) <- a1;
-    t.wv2.(id) <- a2);
-  if Debug.enabled then check_watched t inst store a1 a2
+    t.wv2.(id) <- a2;
+    t.wp1.(id) <- q1;
+    t.wp2.(id) <- q2);
+  if Debug.enabled then (
+    check_watched t inst store a1 a2;
+    let at x p = p >= 0 && p < t.dyn_len.(x) && t.dyn_ids.(x).(p) = id in
+    if not (at a1 t.wp1.(id) && at a2 t.wp2.(id)) then
+      raise
+        (Bad_watch
+           (Printf.sprintf "M6-T22: the wake index lost propagator #%d %s's watch entries"
+              id inst.Propagator.inst_name)))
 
 (* The instance as [t.instances] holds it: a self-watching one with its [run] wrapped so
    the index follows every run of it. *)
@@ -569,6 +588,8 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
       dyn_len = [||];
       wv1 = Array.make (Array.length triggers) (-1);
       wv2 = Array.make (Array.length triggers) (-1);
+      wp1 = Array.make (Array.length triggers) (-1);
+      wp2 = Array.make (Array.length triggers) (-1);
       dirty = Array.make (Array.length triggers) false;
       in_queue = Array.make (Array.length triggers) false;
     }
@@ -671,6 +692,8 @@ let add ?(trigger = default_trigger) (t : t) (inst : Propagator.instance) =
   t.count <- id + 1;
   t.wv1 <- room t.wv1 id (-1);
   t.wv2 <- room t.wv2 id (-1);
+  t.wp1 <- room t.wp1 id (-1);
+  t.wp2 <- room t.wp2 id (-1);
   t.dirty <- room t.dirty id false;
   t.in_queue <- room t.in_queue id false;
   index_static t inst;
