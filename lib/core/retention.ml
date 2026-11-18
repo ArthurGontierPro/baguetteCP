@@ -985,8 +985,11 @@ let to_string t =
     "%s: %d added, %d evicted, %d swept, %d live, %d duplicate, %d cited, %d pinned%s"
     t.policy.p_name t.n_added t.n_evicted t.n_swept (size t) t.n_duplicate t.n_cited
     t.n_pinned
-    (* D-0139: only for a policy that can detach, so the keep-all line is unchanged. *)
-    (if t.policy.p_detaches then
+    (* D-0139: only for [tiered], so the keep-all, fifo and lbd lines are the ones the
+       M11-T2 differential lane recorded (it compares this counter as text; the first
+       draft appended it for every detaching policy and reddened all 84 fifo/lbd runs
+       on this counter alone). *)
+    (if t.policy.p_tiers <> None then
        Printf.sprintf ", %d reductions, %d detached, %d locked" t.n_reductions
          t.n_detached t.n_locked
      else "")
