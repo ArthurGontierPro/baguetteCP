@@ -7134,6 +7134,92 @@ let test_bits_maxmin_veripb () =
   run_veripb ~name:"bits maxmin c1: the factless root conflict refutes the model"
     ~build:build_bits_mm_root_conflict
 
+(* M8-bits-encoding-T3 (D-0134 section 6, D-0130 section 7.4, probe g1): int_lin_ne over
+   bits. x in 0..7 and y in 0..3 on bits, x + y <> 5 as Encoding's A/B pair, the instance
+   built with the pair's ids. y fixed at 2 removes the INTERIOR value 3 from x: a hole in
+   a bits domain, justified by one Resolve of the two halves, whose clause is the
+   per-value twin's nogood literal for literal. The emitter's line verifies under a
+   decision over this satisfiable model; pinned one literal short it is refused at `ia`. *)
+let bits_ne_scene () =
+  let e = Encoding.create () in
+  Encoding.declare_int_bits e "x" ~lo:0 ~hi:7;
+  Encoding.declare_int_bits e "y" ~lo:0 ~hi:3;
+  let rows = Encoding.add_int_lin_ne e [ (1, "x"); (1, "y") ] 5 in
+  let decls = [ ("x", 0, 7); ("y", 0, 3) ] in
+  let store = mk_store decls in
+  let p = Ne.make ~rows store [ (1, var 0); (1, var 1) ] 5 in
+  let twin_store = mk_store decls in
+  let twin = Ne.make twin_store [ (1, var 0); (1, var 1) ] 5 in
+  (e, store, p, twin_store, twin)
+
+let bits_ne_hole store p =
+  ignore (Store.set_lo store (var 1) 2 placeholder_pruning);
+  ignore (Store.set_hi store (var 1) 2 placeholder_pruning);
+  let before = Store.trail_length store in
+  (match Ne.propagate p store with
+  | Propagator.Fixpoint -> ()
+  | _ -> failwith "bits ne: the scene did not prune");
+  mm_entry_of store before (var 0)
+
+let test_bits_ne_rules () =
+  let sorted ls = List.sort compare (List.map Lit.to_string ls) in
+  let _, store, p, twin_store, twin = bits_ne_scene () in
+  match (bits_ne_hole store p, bits_ne_hole twin_store twin) with
+  | Some e, Some te -> (
+      check "bits ne: the hole is interior (3 is out, both bounds stay)"
+        (let d = Store.get store (var 0) in
+         (not (Domain.mem d 3)) && Domain.lo d = 0 && Domain.hi d = 7);
+      let ex = Store.explanation store e in
+      match
+        (Explanation.force ex, Explanation.force (Store.explanation twin_store te))
+      with
+      | Explanation.Resolve parts, Explanation.Clause twin_lits ->
+          check "bits ne: two parts, the A half and the B half" (List.length parts = 2);
+          check "bits ne: the derived clause is the twin's nogood, literal for literal"
+            (sorted (Justify.resolve_clause parts) = sorted twin_lits
+            && sorted twin_lits = [ "x_ge_4"; "y_ge_3"; "~x_ge_3"; "~y_ge_2" ]);
+          check "bits ne: D-0026, the reason and the derivation agree"
+            (Store.agreement_holds store
+               (Reason.because ~concludes:None (Reason.facts e.Store.reason) ex))
+      | _ -> check "bits ne: a Resolve against the twin's Clause" false)
+  | _ -> check "bits ne: both instances pushed an entry for x" false
+
+let build_bits_ne ~tamper dir =
+  let e, store, p, _, _ = bits_ne_scene () in
+  let opb = Filename.concat dir "bits_ne.opb"
+  and pbp = Filename.concat dir "bits_ne.pbp" in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "x + y <> 5, both on bits" ] e oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let w = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof e w;
+  let ctx = Justify.create ~writer:w ~encoding:e in
+  Writer.set_level w 1;
+  (match bits_ne_hole store p with
+  | None -> failwith "bits ne: no entry for x"
+  | Some en ->
+      ignore
+        (Justify.emit_bits_pruning ctx ~origin:"bits ne hole"
+           ~concludes:en.Store.concludes (Store.explanation store en)
+          : Writer.cid * Lit.t list));
+  Writer.set_level w 0;
+  Writer.delete_many w (Writer.live_ids w);
+  Writer.conclusion w Writer.No_conclusion;
+  close_out oc;
+  if tamper then (
+    let text = replace_ia_claim (read_text pbp) "+1 ~x_ge_3 +1 x_ge_4 +1 ~y_ge_2" in
+    let oc = open_out_bin pbp in
+    output_string oc text;
+    close_out oc);
+  (opb, pbp)
+
+let test_bits_ne_veripb () =
+  run_veripb ~name:"bits ne g1: the two-half pol of a hole, under a decision, verifies"
+    ~build:(build_bits_ne ~tamper:false);
+  run_veripb_rejects_saying ~name:"bits ne BREAK: the same pol pinned one literal short"
+    ~build:(build_bits_ne ~tamper:true) ~saying:bits_mm_ia_refusal
+
 (* ================================================================ M4-T10, D-0096
 
    cumulative (and disjunctive as its cap = 1 case), lib/core/prop/cumulative.ml.
@@ -7662,6 +7748,8 @@ let () =
   test_maxmin_veripb ();
   test_bits_maxmin_rules ();
   test_bits_maxmin_veripb ();
+  test_bits_ne_rules ();
+  test_bits_ne_veripb ();
   (* M4-T10, D-0096: cumulative. *)
   test_cumulative_soundness ();
   test_cumulative_checking ();
