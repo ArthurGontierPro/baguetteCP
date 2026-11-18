@@ -1,0 +1,33 @@
+# M11-complexity-T2 (D-0141). The differential lane's CORPUS: one instance per line,
+# TAB-separated. The instance is bench/diff/corpus/<id>.fzn.gz (gzip -9n, flattened with
+# the baguette mznlib of the commit that recorded it -- the .fzn is the input, it is
+# never re-flattened by the lane). The budget is BAGUETTE_NODE_LIMIT for that instance in
+# every configuration, chosen so that one default run takes 1 to 10 s on fataepyc-06 and
+# builds a learned database of thousands of constraints where the instance allows it.
+#
+# Columns: id, node budget, what it covers (constraint families after flattening; `PB`
+# when `--stats` shows PB rows learned), where it comes from.
+#
+# Changing a budget or an instance is a change to the reference: record it with
+# `scripts/diff_lane.sh --update --only ID` in the same commit, on the gated main binary.
+H_qr48_bag_def	6000	bool_clause, bool2int, int_lin_le; clause path; the D-0138 shape	codes-cp QR48 (fataepyc-06:/scratch/arthur/codes-bench), UNSAT in 38 s
+H_qr72_bag_def	5000	bool_clause, bool2int, int_lin_le; clause path, wider	codes-cp QR72, solved without proof in 531 s
+2012_parity-learning_48_24_6.2	4000	bool_clause, int_lin_eq, bool2int; PB path (pb-learned ~10 %, learned PB rows propagating)	MiniZinc Challenge 2012
+2017_opd_small_bibd_08_28_14	5000	int_times, int_lin_le_reif, bool_clause, array_bool_and; PB path	Challenge 2017
+2015_opd_small_bibd_10_30_09	4000	int_times, int_lin_le_reif, bool_clause; PB path, second shape	Challenge 2015
+2013_rcpsp_12	5000	cumulative, int_lin_le_reif	Challenge 2013
+2021_perfect_square_102	10000	int_lin_le_reif (disjunctive packing), bool_clause	Challenge 2021
+2011_bacp_bacp-22	6000	int_lin_le, int_lin_eq, element-free linear model	Challenge 2011
+2012_amaze_2012-06-29	6000	int_eq_reif, int_lin_eq, bool2int	Challenge 2012
+2013_filters_dct_2_2	12000	array_int_maximum, int_lin_le_reif	Challenge 2013
+2021_steiner-systems_steiner_t2_k7_N21	7000	array_int_maximum, int_le_reif, int_lin_eq, bool_not	Challenge 2021
+2015_grid-colouring_13_11	5000	int_lin_le_reif, bool_clause, array_bool_and	Challenge 2015
+2016_diameterc-mst_s_v20_a50_d4	4000	int_eq_reif, int_ne_reif, int_lin_le_reif	Challenge 2016
+2017_tc-graph-color_k5_05	8000	int_lin_ne, int_eq_reif, int_lin_le_reif	Challenge 2017
+2019_fox-geese-corn_foxgeesecorn_54	3000	array_int_element, int_eq_reif, int_ne_reif; optimisation with incumbents	Challenge 2019
+2020_lot-sizing_pigment15b.psp	3000	global_cardinality, all_different_int, array_int_element, int_ne_reif	Challenge 2020
+2023_chessboard_chessboard4	2500	global_cardinality, array_int_element, int_ne_reif	Challenge 2023
+2023_evm-super-compilation_isolated_block_6_0_input	2000	global_cardinality, array_int_element, int_ne, bool_eq	Challenge 2023
+2018_soccer-computational_xIGData_24_16_14_2	1500	all_different_int, int_lin_le, int_lin_le_reif	Challenge 2018
+2011_roster_chicroster_dataset_large_18	3500	int_eq_reif, int_ne_reif, int_lin_eq, array_bool_and	Challenge 2011
+2024_monitor-placement-1id_igp_weight_based_rocketfuel_rf1755_real_hard	5000	array_bool_and, bool_clause, bool2int	Challenge 2024
