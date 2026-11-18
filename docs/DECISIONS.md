@@ -13819,3 +13819,112 @@ alarm.
   instances measured. T4's versions must pass the lane, not this record's runs.
 - **Cycles.** If the node were quiet, the cycle savings of S1 and S3b could turn out larger than
   their instruction savings, as S2's is. They are ranked by instructions here.
+
+## D-0142  M11-complexity-T3: batch 1 of the complexity pass (engine, store, propagators), and first the I-P7 alarm on integer instances, which was two debug checks and not lost propagation
+
+**Status**: section 1 **DONE**, recorded 2026-11-18 (agent-batch3, branch `wave48-ip7`, merged alone
+ahead of the batch at the orchestrator's request). The batch's optimisations (`wave48-batch3`) are
+the sections after it. Measured on `fataepyc-06`, outputs under `/scratch/arthur/wave48-batch3-runs/`.
+The list executed is D-0140's T3 rows. The standard is the user's: every test passes after every
+change, and stdout, the SEARCH counters and the proof stay byte-identical.
+
+### 1. The I-P7 alarm on integer instances: two BAGUETTE_DEBUG checks were wrong, the search was not
+
+**The report** (the orchestrator's WORKLOG note of 2026-11-18, from agent-lanes' debug pass of the
+M11-T2 lane). Under `BAGUETTE_DEBUG=1` at 1 500 nodes the I-P7 advise check raised on 16 of 27
+instances, all with integer variables, for example on 2013 rcpsp_12
+`Engine.Not_at_fixpoint("I-P7: propagator #335 learned_clause declined the wake for a change of
+X_INTRODUCED_30_, but a run pruned 1 entr(y/ies)")`, rc 2. Every gate binary back to `1a0cfa7` did
+the same. The note read it as lost propagation.
+
+**The trace** (a throwaway instrumented build of `576da4b` that dumps the clause's literals and
+watches at every run and every declined ask). Instance #335 is the learned clause
+
+    X29 >= 38  \/  X31 >= 36  \/  X30 <= 26  \/  X30 >= 31  \/  X31 <= 26  \/  X29 <= 27
+
+over 0..67, watching `X30 >= 31` and `X31 <= 26`, both open at trail length 380. Positions 381 to
+383 then move the lower bounds of X29, X30 and X31 to 28, and one walk over those entries asks #335
+twice. On X31 the watch `X31 <= 26` is false, the ask says yes, and #335 is queued. On X30 the watch
+`X30 >= 31` is still open and the ask says no, which is right, because nothing about X30 made the
+clause unit. The old check ran #335 at that second ask. By then the clause WAS unit (X31's entry is
+already in the store), so the run forced `X30 >= 31` and the check called it a lost wake. It was the
+run #335 had just been queued for.
+
+**Why only integers.** On a Boolean the change of the other watch's variable fixes it, so that watch
+is decided: true, and the clause is satisfied and a run prunes nothing, or false, and the ask says
+yes. On an integer variable a change can leave the watch open, and with a learned database such a
+change comes in the same walk as a unit propagation all the time.
+
+**Cause 1, the I-P7 check.** I-P7 lets an advisor decline a change "if, every change since this
+instance's last run on a variable it names having been answered [false], a run now would change
+nothing". `Engine.check_advise`, called from `advises` at the declined ask, did not test the
+premise: an instance that another change of the same walk had woken, or an earlier walk whose wakes
+have not run yet, is not covered by it, and its run there is its pending run. The seed has the same
+shape (`seed_dirty` marks a slot dirty at one entry and can be declined, and was checked, at
+another).
+
+**Fix 1** (`lib/core/engine.ml`, debug-only, commit `f76fee6`). `advises` records a declined ask
+(`t.declined`) instead of running the check, and `check_declined` runs it once the walk is over and
+its wakes are in (`run_one`, after `List.iter wake woken`) or once the seed and the newborn marks are
+done, for each instance that is neither dirty nor queued, once per instance per walk. For such an
+instance the premise holds: every change of this walk was declined for it (an accepted one would have
+made it pending), every change of an earlier walk of the same call was declined or was followed by a
+run of it (an accepted wake runs before the call returns a fixpoint), and the changes from before the
+call are the seed's, whose accepted ones made it dirty. So the check is I-P7 read literally, as
+before, and only the false alarm goes. Without `BAGUETTE_DEBUG`, `t.declined` stays empty and no line
+that runs differs.
+
+**Cause 2, found behind the first.** With the I-P7 alarm gone the debug runs went further, and 15
+lane instances (integer ones again) stopped on `Bad_watch("M6-T22: the wake index lost propagator #N
+learned_clause's watch entries")`. The index (D-0138 (5)) keeps, per self-watching instance, where
+its entries sit in `dyn_ids` (`wp1`, `wp2`). With both watches on one variable there is one entry and
+`sync_watched` sets both positions to it. The O(1) swap-remove of ANOTHER instance's entry updated
+only `wp1` of the instance it moved, so `wp2` went stale. The index never reads `wp2` when both
+watches are on one variable (only `wp1` is used then), but `sync_watched`'s debug check of the
+positions does, and reported a lost entry. An integer clause such as `x >= 5 \/ x <= 2` watches one
+variable twice. A Boolean clause almost never does, which is why D-0138's debug runs of QR48 and
+QR72 never met it.
+
+**Fix 2** (`lib/core/engine.ml`, commit `d330a8c`). `dyn_remove` updates both positions of the moved
+instance when both name the slot. The positions it changes are never read outside the debug check,
+so again nothing a solve does differs.
+
+**What it changes: no search.** The note expected the fix to change the search on integer instances.
+It does not, because no propagation was lost: neither fix touches a line that runs without
+`BAGUETTE_DEBUG`, the differential lane on the fixed binary (`15e23df0`, `--tier all`) gives 232 of 232 runs equal
+to the reference, WORK counters included (178 of them in the lane's integer class), and with
+the alarms gone the debug pass reaches, at every fixpoint, the I-P2 re-run check, which runs every
+instance and raises at the first that would prune, and the M6-T18 skip check, which runs every clean
+slot. Both stay silent.
+
+**The debug pass after the fixes** (25 distinct lane instances x 9 configurations at 1 500 nodes,
+`BAGUETTE_DEBUG=1`, 4 GB cap, each proof through VeriPB 3.0.2): 216 of 225 runs end rc 0 with no
+debug check firing. The 9 others are 2020 lot-sizing, which dies of memory under the cap in every
+configuration (`allocation failure during minor GC`). That is debug mode's own cost, which agent-lanes
+ran under 32 GB with no invariant firing (D-0141). 185 proofs say `VERIFIED NO CONCLUSION`. The seven of openshop (a 2.2 GB
+`.opb` at 1 500 nodes) exhausted VeriPB's 8 GB cap in the pass, after solves that ended rc 0 with no
+check firing. The lane's slow tier verifies openshop's proof at 300 nodes, and one 1 500-node debug
+proof was rerun under a 32 GB cap (the result is in the batch's section on the gate).
+Before the fixes the same pass stopped on the I-P7 alarm (16 instances) and then on the index check
+(15).
+
+**The unit lane.** `test_engine.ml`, two tests that fail before their fix and pass after:
+
+- `test_declined_while_pending`: the clause `x >= 3 \/ y <= 1` over 0..4 and one level that moves y
+  to 2..4 (the clause goes unit) and x to 1..4 (its watch stays open). Under `BAGUETTE_DEBUG=1` it
+  FAILS against `e809a08`'s engine with the reported message (`I-P7: propagator #0 learned_clause
+  declined the wake for a change of x, but a run pruned 1 entr(y/ies)`) and passes with fix 1, and
+  the clause's queued run makes `x >= 3`. Its control keeps the check's teeth: the same clause behind
+  an advisor that declines everything is a real lost wake, is not pending, and the deferred check
+  still refuses it (without `BAGUETTE_DEBUG` that pruning is simply lost).
+- `test_index_positions`: clause B (`x >= 7 \/ y >= 3 \/ z >= 1`, watching x and y) indexed on x
+  before clause A (`x >= 5 \/ x <= 2`, both watches on x). Bringing x below 7 moves B's watch to z,
+  and the removal moves A's entry. The test reads the index directly, so it needs no debug mode:
+  FAIL on `f76fee6`'s engine (A's `wp2` points past the slice), pass with fix 2.
+
+Unit suites on the fixed branch: 3 724 ok, 0 FAIL, and `test_engine` 123 ok, and 117 ok under
+`BAGUETTE_DEBUG=1`.
+
+**The second case** (`BAGUETTE_PROPAGATE_LEARNED=off`) is not an invariant either: the orchestrator's
+correction says the run dies of memory under the 4 GB cap in debug mode when learned constraints are
+proof-only, and agent-lanes records it in D-0141. It is the lot-sizing line above. Not chased here.

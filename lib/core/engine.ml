@@ -317,6 +317,10 @@ type t = {
           from one call to the next and ALL FALSE between calls ([propagate] clears what
           it set, on every exit). They were allocated per call: two arrays of the whole
           database per search node, in the major heap once past 256 instances. *)
+  mutable declined : (int * Var.t) list;
+      (** M11-complexity-T3 (D-0142 section 1): under BAGUETTE_DEBUG only, the asks the
+          advisors declined during the current wake walk or seed, newest first, waiting
+          for [check_declined]. Always [[]] when BAGUETTE_DEBUG is off. *)
 }
 
 let unborn = max_int
@@ -429,15 +433,19 @@ let dyn_push t x id =
 
 (* Swap-remove the entry at [i] of [x]'s slice: the order inside one slice carries
    nothing, the wake loop sorts what it wakes. The entry moved into [i] has its position
-   updated; it belongs to an instance whose [wv1]/[wv2] are current, and [wp1] is the
-   slot when [wv1] is [x] (both watches on [x] included). *)
+   updated; it belongs to an instance whose [wv1]/[wv2] are current. With both its
+   watches on [x] it has ONE entry and both positions name it, so both are updated
+   (D-0142 section 1: updating [wp1] alone left [wp2] stale, which only the
+   BAGUETTE_DEBUG position check reads, and which it then reported as a lost entry). *)
 let dyn_remove t x i =
   let len = t.dyn_len.(x) in
   let a = t.dyn_ids.(x) in
   let moved = a.(len - 1) in
   a.(i) <- moved;
   t.dyn_len.(x) <- len - 1;
-  if i < len - 1 then if t.wv1.(moved) = x then t.wp1.(moved) <- i else t.wp2.(moved) <- i
+  if i < len - 1 then (
+    if t.wv1.(moved) = x then t.wp1.(moved) <- i;
+    if t.wv2.(moved) = x then t.wp2.(moved) <- i)
 
 (* Under BAGUETTE_DEBUG, after every run of a self-watching instance: the advisor must
    answer [false] for every variable of its scope it does not watch, which is the whole
@@ -609,6 +617,7 @@ let create ?(trigger = default_trigger) (instances : Propagator.instance list) :
       heap_len = 0;
       dirty = Array.make (Array.length triggers) false;
       in_queue = Array.make (Array.length triggers) false;
+      declined = [];
     }
   in
   (* M6-T22: the wake index, in [instances] order -- the order [watchers] was built in. *)
@@ -798,8 +807,9 @@ let trigger_of t id =
      bounds only cannot lose a bound move that happened to be bundled with a hole. *)
 (* M6-T20 / D-0104. The advisor's answer for instance [id] on a change of [v], or [true]
    for an id this engine does not know (the safe answer, as for the trigger). Under
-   BAGUETTE_DEBUG a [false] is CHECKED on the spot: the instance is run and must prune
-   nothing and not fail, which is I-P7 read literally. *)
+   BAGUETTE_DEBUG a [false] is CHECKED: the instance is run and must prune nothing and
+   not fail, which is I-P7 read literally -- once the walk is over and only if nothing
+   else woke it ([check_declined], D-0142 section 1). *)
 exception Not_at_fixpoint of string
 
 let check_advise (inst : Propagator.instance) (store : Store.t) v =
@@ -824,8 +834,47 @@ let advises t store id v =
     if inst.Propagator.inst_advise store v then true
     else (
       t.ctr.c_advised <- t.ctr.c_advised + 1;
-      if Debug.enabled then check_advise inst store v;
+      if Debug.enabled then t.declined <- (id, v) :: t.declined;
       false)
+
+(* M11-complexity-T3 (D-0142 section 1): the I-P7 check of the declined asks, made once
+   the walk that asked them is over and its wakes are in, and only for an instance that
+   is NOT PENDING.
+
+   I-P7 lets an advisor decline a change only "if, every change since this instance's
+   last run on a variable it names having been answered [false], a run now would change
+   nothing". That premise is false for an instance that some OTHER change since its last
+   run woke and that has not run yet: it is in the queue (or a dirty seed slot), and a
+   run of it now may well prune -- the run it is queued for. Until this record the check
+   ran on the spot, at the declined ask, and so it ran such instances early and called
+   their pending run a lost wake. On an integer variable that is ordinary: a learned
+   clause is woken because its second watch was falsified (an entry on [y]), and before
+   it runs, a change of its first watch's variable [x] that leaves that watch open is
+   declined -- correctly, the clause is already queued -- and the check, run there, sees
+   the unit propagation the queue is about to make. A Boolean change cannot do that: it
+   fixes the variable, so the watch it touches is decided, true (the clause is satisfied
+   and a run does nothing) or false (the ask says yes). That is why the alarm was on the
+   integer instances only (D-0142 section 1 has the trace on 2013 rcpsp_12).
+
+   So the check now waits for the end of the walk ([watchers_of_new_entries], after the
+   caller's wakes) or of the seed ([seed_dirty] and the newborn marks), and skips every
+   instance that is dirty or queued. For the rest, the premise holds -- every change of
+   that walk was declined for it, and any earlier one was declined or was run since --
+   and a run must change nothing, exactly as before. Each instance is checked once per
+   walk, at the variable of its first declined ask. This is the whole change: without
+   BAGUETTE_DEBUG [declined] stays empty and nothing here runs. *)
+let check_declined t store =
+  if t.declined <> [] then (
+    let ds = List.rev t.declined in
+    t.declined <- [];
+    let seen = ref [] in
+    List.iter
+      (fun (id, v) ->
+        if not (List.mem id !seen) then (
+          seen := id :: !seen;
+          if not (t.dirty.(id) || t.in_queue.(id)) then
+            check_advise t.instances.(id) store v))
+      ds)
 
 let watchers_of_new_entries ?self t store ~since =
   (* M2-T6: [self] is the instance that pushed these entries. When its claim is
@@ -834,6 +883,8 @@ let watchers_of_new_entries ?self t store ~since =
   let vetoed = match self with Some id -> vetoes_self t id | None -> false in
   let self_id = match self with Some id -> id | None -> -1 in
   let acc = ref [] in
+  (* D-0142 section 1: what this walk declines is checked after it, by its caller. *)
+  if Debug.enabled then t.declined <- [];
   let wants id change v =
     if vetoed && id = self_id then (
       t.ctr.c_vetoed <- t.ctr.c_vetoed + 1;
@@ -1475,6 +1526,7 @@ let mark_dirty t id =
 
 let seed_dirty t store ~since ~epoch =
   let n = t.count in
+  if Debug.enabled then t.declined <- [];
   let mark change v id =
     if id >= 0 && id < n && wakes_on (trigger_of t id) change then
       (* An instance born after the fixpoint at [epoch] has never run on this
@@ -1565,6 +1617,7 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
                 | _ -> ()
               in
               young t.births;
+              if Debug.enabled then check_declined t store;
               e)
       | _ ->
           t.seen <-
@@ -1647,6 +1700,7 @@ let propagate ?stop ?(poll_runs = default_poll_runs) (t : t) (store : Store.t) :
           if pruned && Debug.enabled && vetoes_self t id then check_claim inst store;
           let woken = watchers_of_new_entries ~self:id t store ~since:before in
           List.iter wake woken;
+          if Debug.enabled then check_declined t store;
           (* M6-T21: AFTER the run and its wakes, so the run is whole whatever the poll
              says. Not on the [Conflict] arm: that call is leaving anyway. *)
           poll ()
