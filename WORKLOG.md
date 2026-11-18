@@ -199,6 +199,36 @@ propagations), and exit through the normal path at a consistent point. Do NOT ra
 inside a propagator (store/id counter mid-update) and do not rely on an external kill (truncated
 proof). Cost should be unmeasurable; please confirm with a before/after nodes/s.
 
+### 2026-11-18 — what the codes-cp side project needs from baguette (from the codes-cp side session)
+
+Context: `~/codes-cp` certifies lattice and code results with baguette proofs (Leech minimum 4, QR80
+distance 16 in 2154 verified proofs). VeriPB certifies the `.opb`, so every model shortcut is an
+axiom. Representative `.fzn` (baguette, Chuffed and GCS flattenings): `~/codes-cp/fzn/`, regenerated
+by `bash fzn/make.sh <msc> <tag>`. In priority order:
+
+1. **Cubes under assumptions.** QR80 was split into 2154 disjoint cubes (fixed `u_i`), each proved
+   UNSAT separately; that the cubes cover the space is checked by a script, outside VeriPB. Request: a
+   way to pass a cube as ASSUMPTIONS (e.g. `--assume x=1,y=0`) rather than model constraints, with the
+   proof concluding the clause `¬cube` instead of `⊥`. Then the cube proofs plus one final `rup` step
+   become one checked statement.
+2. **A test case: `aut.mzn`, order 7, k = 2.** UNSAT in 4.3 s with Chuffed, > 2 h with baguette and
+   with GCS (both with proof). `~/codes-cp/fzn/o7k2_bag.fzn` (18 MB: 105k `bool_clause`, 26k
+   `bool2int`, 2.8k `int_lin_le`, 235 `array_bool_and`, 16 `int_times`/`int_div`). No search
+   annotation. Probably search or learning, not encoding (see 3); worth understanding.
+3. **Parity.** Every code model is XOR. `bool_xor` decomposes into 4 clauses
+   (`mznlib/redefinitions.mzn:122`), which is propagation-equivalent to a native binary xor, so a
+   native binary xor would only shrink the `.opb` (Golay: 65 xor -> 260 clauses). What would change
+   the search is a native parity row with Gaussian elimination over F2, justified in VeriPB as in
+   Gocht and Nordström (AAAI 2021, parity reasoning in pseudo-Boolean proofs). It would also let a
+   proof derive the "two halves" identity u = c·Aᵀ that we now admit. Large; a design question first.
+4. **Tie the proof to its input.** Write a hash (sha256) of the input `.fzn` as a comment in the
+   `.opb` header, so a verified proof names the FlatZinc it answers.
+5. **Symmetry breaking with proof** (design only for now). Our `LEX` (lex order on generator rows)
+   is admitted. MiniZinc wraps such constraints in `symmetry_breaking_constraint`; the lex-leader can
+   be justified by the dominance rule (Bogaerts, Gocht, McCreesh, Nordström 2022) when the symmetry is
+   a literal permutation of the encoding, but the permutation is not in the `.fzn`. How would it be
+   given (sidecar file, annotation)?
+
 ## Completed
 
 | Task | Session | Date | Summary |
