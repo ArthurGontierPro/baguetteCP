@@ -188,7 +188,7 @@ def self_test():
 
     ref = obs("=====UNKNOWN=====\n", SELF_ERR)
     want_in = [
-        "search nodes/nodes 2001", "search skipped/nodes 0", "work skipped/slots 1739699",
+        "search nodes/nodes 2001 nodes", "search skipped/nodes 0 nodes", "work skipped/slots 1739699 slots",
         "search lbd 5:1,6:3,16:877", "work learned_clause/inst 991 inst 73.7 runs/node 0.02 eff/node",
         "search limit.nodes 2001", "work limit.props 517",
         "search pb-why first fallback reason: no PB row for instance bool2int",
