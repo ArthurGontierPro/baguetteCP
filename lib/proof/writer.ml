@@ -493,6 +493,26 @@ let line t fmt =
         emit_us := !emit_us + (emit_now () - t0))
       t.oc (fmt ^^ "\n")
 
+(* M6-T22 / D-0138: [line] for a line that is already in pieces, written straight to the
+   channel. The same bytes, the same checks, the same [emit_lines] and [emit_us]
+   accounting; what goes is the format's interpretation, once per line. Used by [rup],
+   which is nearly every line a search writes (1.29 M of QR48's 1.40 M). *)
+let put t (parts : string list) =
+  if t.finished then invalid_arg "Writer: the proof has already ended";
+  if not t.null then (
+    let write () =
+      List.iter (output_string t.oc) parts;
+      output_char t.oc '\n'
+    in
+    if not !emit_clock then (
+      incr emit_lines;
+      write ())
+    else
+      let t0 = emit_now () in
+      write ();
+      incr emit_lines;
+      emit_us := !emit_us + (emit_now () - t0))
+
 (* A rule, terminated by `;`. Rules whose body already carries one -- [rup] and the
    OPB constraint rendering it uses -- go through [line] directly: a second `;` is a
    syntax error. *)
@@ -1143,7 +1163,7 @@ let rup t ~origin c =
     let c = corrupt_claim t ~origin c in
     let id = t.next_id + 1 in
     t.n_rup <- t.n_rup + 1;
-    line t "%srup %s" (label_for t id) (Opb.constr_to_string c);
+    put t [ label_for t id; "rup "; Opb.constr_to_string c ];
     fresh t ~origin
 
 (* Reverse unit propagation of a clause -- the common case. *)

@@ -49,8 +49,25 @@
    names a representation, and nothing in lib/core/prop/ can spell a bit.
 
    [Weaken], [Term] and [Defining] stay, with their other producers: the enumerating
-   families (alldiff, gcc, element, cumulative, maxmin), which are order-only by
-   D-0130 section 3.4, and [Pb_analysis]'s reductions.
+   families (alldiff, gcc, element, cumulative), which are order-only by D-0130
+   section 3.4, and [Pb_analysis]'s reductions.
+
+   -------------------------------------------------------------------------------
+   M8-bits-encoding-T3 / docs/DECISIONS.md D-0134: [Resolve], the sum of saturated
+   derivations -- resolution on a choice encoding's selectors, in one `pol`
+   -------------------------------------------------------------------------------
+
+   D-0134 section 2.2 is this constructor's decision record. A family whose order
+   encoding is one clause row per VALUE (maxmin, D-0095) cannot post those rows over a
+   bits variable (its atoms do not exist when the .opb is closed, D-0130 section 3.4),
+   so over bits it posts one big-M SELECTOR row per operand and a clause over the
+   selectors, and a pruning that was one row restated becomes a derivation: each
+   selector row plus the bounds it reads, saturated to a clause on its selector, the
+   clauses summed with the selector clause, saturated. [Resolve] is that shape as data:
+   a list of derivations to saturate and sum. It is the first constructor whose parts'
+   [Linear_term]s include the CLAIM variable, carrying the negation of the claim as the
+   bound assumed, because the claim is cancelled inside every part and not left over as
+   the one term a [Combine] divides and then closes with the pruned variable's atom.
 
    [Deferred] exists because most prunings are never asked for a reason. Computing a full
    explanation eagerly for every pruning is the standard way to make a proof-logging
@@ -187,6 +204,20 @@ type t =
     (* sum of summands, then divide by the int (>= 1; 1 means "do not divide" --
        Justify skips emitting a division step rather than a no-op "1 d"). One
        [Combine] is one [pol] step (D-0013). *)
+  | Resolve of t list
+    (* M8-bits-encoding-T3, D-0134 section 2.2: the SUM of the listed derivations, each
+       first saturated to the clause it derives (a [Combine] is summed, divided and
+       saturated; a [Model_row] is cited as it stands), saturated again -- resolution on
+       the literals that cancel between them, as ONE `pol` step. The literals that
+       cancel are a choice encoding's selectors: maxmin's `b_i -> m <= x_i` rows summed
+       with `\/ b_i` (and, by the same shape, int_lin_ne's A/B pair on `_neN`). The
+       clause it derives is the union of its parts' literals less the cancelled pairs,
+       and every part's [Linear_term] is read for that clause -- including the one that
+       carries the NEGATION of the claim as the bound it assumed (section 2.3): no atom
+       is added for the claim at the end, unlike a [Combine]'s bits rendering. Rendered
+       by the bits arm ([Justify.emit_bits_pruning]) as an entry's trace line; a bare
+       [Justify.emit] meets one only as a CITATION from an order-arm derivation and
+       answers the line stating the clause it derives (D-0134 section 5). *)
   | Deferred of thunk
 (* Computed only if actually needed. *)
 
@@ -270,6 +301,14 @@ let citable what e =
 
 let cut e1 e2 c1 c2 = Cut (citable "cut" e1, citable "cut" e2, c1, c2)
 let term coeff e = Term (coeff, citable "term" e)
+
+(* [resolve parts]: the parts are cited (summed) and so cannot be decisions; two is the
+   least that can resolve on anything (D-0134 section 2.2). *)
+let resolve parts =
+  (match parts with
+  | [] | [ _ ] -> invalid_arg "Explanation.resolve: at least two derivations to resolve"
+  | _ -> ());
+  Resolve (List.map (citable "resolve") parts)
 
 (* [Linear_term] and its readings (M8-bits-encoding-T2). The term is DECLARED when the
    bound it read is the declared one in its own direction, and then has no literal:
@@ -377,6 +416,7 @@ let lits e =
         go a;
         go b
     | Combine (summands, _) -> List.iter go_summand summands
+    | Resolve parts -> List.iter go parts
     | Deferred _ -> assert false (* force returns a non-deferred head *)
   and go_summand = function
     | Term (_, e) -> go e
@@ -459,6 +499,8 @@ let rec to_string e =
       Printf.sprintf "combine(%s)%s"
         (String.concat " + " (List.map summand_to_string summands))
         (if divisor = 1 then "" else Printf.sprintf " / %d" divisor)
+  | Resolve parts ->
+      Printf.sprintf "resolve(%s)" (String.concat " | " (List.map to_string parts))
   | Deferred { forced = Some e; _ } -> "deferred[" ^ to_string e ^ "]"
   | Deferred { forced = None; _ } -> "deferred[?]"
 

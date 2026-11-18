@@ -626,6 +626,8 @@ let cited_ids (e : Explanation.t) : int list =
         go a;
         go b
     | Explanation.Deferred _ -> go (Explanation.force e)
+    (* M8-bits-encoding-T3 (D-0134): a choice derivation cites its parts' rows. *)
+    | Explanation.Resolve parts -> List.iter go parts
     | Explanation.Decision _ | Explanation.Clause _ | Explanation.Linear _ -> ()
   and summand = function
     | Explanation.Term (_, e) -> go e

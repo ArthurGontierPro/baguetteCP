@@ -667,11 +667,8 @@ let pack_abs_row ~mixed (p : Linear.t) : pending =
      alldiff      all_different_int: the direct encoding and the pairwise clause rows
      gcc          global_cardinality: the counting rows over the order encoding
      element      array_int_element: the index's direct encoding, the result's rows
-     maxmin       array_int_maximum/minimum: one clause row per threshold value
      cumulative   the capacity rows over gcc's window indicators
      holes        a declared set domain: the hole rows are ladder rows
-     int_ne       int_ne / int_lin_ne: held at T2, released by T3 with D-0130 section
-                  7.4's two-half `pol`
      int_eq_reif  int_eq_reif / int_ne_reif: lib/core/prop/reif_lin_eq.ml justifies
                   with [Clause]s and punches holes (T2 holds it; D-0132 section 2.7)
      bool2int     lib/core/prop/bool2int.ml justifies with [Clause]s; its `x` is width
@@ -679,7 +676,12 @@ let pack_abs_row ~mixed (p : Linear.t) : pending =
 
    Eligible: int_lin_le/eq, int_le/lt/eq, int_lin_le_reif/int_le_reif (every face of
    lib/core/prop/reif_lin_le.ml is a [Linear] instance), int_times/div/abs (guarded
-   linear rows and [Linear] instances), the clause family's rows (bools, width 1).
+   linear rows and [Linear] instances), the clause family's rows (bools, width 1), and
+   since M8-bits-encoding-T3 array_int_maximum/minimum: a scope with a bits variable
+   posts the SELECTOR shape instead of one clause row per threshold value
+   (lib/core/prop/maxmin.ml, D-0134), so nothing in it names an order literal per
+   value and nothing holds it; and int_ne/int_lin_ne, whose nogood over a bits scope is
+   D-0130 section 7.4's two-half `pol` through the A/B pair (lib/core/prop/ne.ml).
    Computed from the model BEFORE any declaration, which is the only moment the scope
    is known and the encoding is empty. *)
 let held_families (m : Model.t) : (int, string list) Hashtbl.t =
@@ -693,7 +695,6 @@ let held_families (m : Model.t) : (int, string list) Hashtbl.t =
         | Model.Const _ -> ())
       ops
   in
-  let vars_of_terms terms = List.map (fun (_, i) -> Model.Var i) terms in
   Array.iteri
     (fun i (v : Model.var) ->
       match v.Model.v_dom with
@@ -703,22 +704,19 @@ let held_families (m : Model.t) : (int, string list) Hashtbl.t =
   List.iter
     (fun (c : Model.constr) ->
       match c.Model.k with
-      | Model.Int_lin_ne (terms, _) -> hold "int_ne" (vars_of_terms terms)
-      | Model.Int_ne (a, b) -> hold "int_ne" [ a; b ]
       | Model.Bool2int (b, x) -> hold "bool2int" [ b; x ]
       | Model.Int_eq_reif (a, b, r) | Model.Int_ne_reif (a, b, r) ->
           hold "int_eq_reif" [ a; b; r ]
       | Model.All_different ops -> hold "alldiff" ops
       | Model.Global_cardinality (xs, _, counts) -> hold "gcc" (xs @ counts)
-      | Model.Array_int_maximum (mx, xs) | Model.Array_int_minimum (mx, xs) ->
-          hold "maxmin" (mx :: xs)
       | Model.Cumulative (ss, _, _, _) -> hold "cumulative" ss
       | Model.Array_int_element (idx, _, res) -> hold "element" [ idx; res ]
       | Model.Int_lin_le _ | Model.Int_lin_eq _ | Model.Int_le _ | Model.Int_lt _
       | Model.Int_eq _ | Model.Bool_clause _ | Model.Array_bool_or _
       | Model.Array_bool_and _ | Model.Bool_eq _ | Model.Bool_not _
       | Model.Int_lin_le_reif _ | Model.Int_le_reif _ | Model.Int_times _
-      | Model.Int_div _ | Model.Int_abs _ ->
+      | Model.Int_div _ | Model.Int_abs _ | Model.Array_int_maximum _
+      | Model.Array_int_minimum _ | Model.Int_lin_ne _ | Model.Int_ne _ ->
           ())
     m.Model.constraints;
   held
@@ -953,8 +951,12 @@ let compile (m : Model.t) : t =
      before anything narrows it; only the packing is deferred. *)
   let post_ne pos nterms rhs ~pack =
     check_row pos ~what:"this disequality" nterms rhs;
-    ignore (Encoding.add_int_lin_ne encoding (opb_terms pos nterms) rhs : int * int);
-    [ pack (Ne.make store (prop_terms nterms) rhs) ]
+    let ab = Encoding.add_int_lin_ne encoding (opb_terms pos nterms) rhs in
+    (* M8-bits-encoding-T3 (D-0134 section 6): over a bits scope the pair's ids are the
+       instance's, its prunings derived through them (lib/core/prop/ne.ml); otherwise
+       dropped, as the module header says. *)
+    let rows = if mixed nterms then Some ab else None in
+    [ pack (Ne.make ?rows store (prop_terms nterms) rhs) ]
   in
 
   (* ---------------------------------------------------------- M4-T1, all_different
@@ -1154,7 +1156,15 @@ let compile (m : Model.t) : t =
      sides on the row side, so `int_max(x, 3, m)` needs no case of its own. Rows are
      posted in a fixed order -- linear rows in operand order, then the clauses in
      increasing threshold -- because the order they are appended is the order of the ids
-     the proof cites. *)
+     the proof cites.
+
+     M8-bits-encoding-T3 (D-0134 sections 2.1, 2.5): when a variable of the scope is on
+     the bits encoding, the disjunctive half is the SELECTOR shape instead -- one big-M
+     row per operand over a fresh `$mxN` and one clause over the selectors, posted by
+     [Encoding.add_choice] from [Maxmin.selector_rows] after the linear rows, and the
+     ids handed back to the instance. The group's pick ([Maxmin.chosen]) reads the
+     solution by FlatZinc name, which is all [Encoding] may see. A scope with no bits
+     variable takes the per-value branch, byte for byte as before. *)
   let post_maxmin pos ~(dir : Maxmin.dir) (mo : Model.operand) (xs : Model.operand list) =
     let linear =
       List.concat_map
@@ -1168,13 +1178,37 @@ let compile (m : Model.t) : t =
       | Model.Var i -> View.of_var (Var.of_int i)
       | Model.Const k -> View.const k
     in
-    let p = Maxmin.make store ~dir (view mo) (List.map view xs) in
-    List.iter
-      (fun lits ->
-        ignore
-          (Encoding.add_constraint encoding (Opb.ge (List.map (fun l -> (1, l)) lits) 1)
-            : int))
-      (Maxmin.rows p);
+    let on_bits_op = function Model.Var i -> on_bits.(i) | Model.Const _ -> false in
+    let selector =
+      Encoding.n_bits_vars encoding > 0 && List.exists on_bits_op (mo :: xs)
+    in
+    let p =
+      Maxmin.make
+        ~shape:(if selector then `Selector else `Per_value)
+        store ~dir (view mo) (List.map view xs)
+    in
+    if selector then
+      match Maxmin.selector_rows p with
+      | [] -> () (* the disjunction holds by declaration; no rule fires *)
+      | srs ->
+          let rows =
+            List.map
+              (fun (r : Maxmin.selector_row) ->
+                (r.Maxmin.sr_terms, r.Maxmin.sr_big_m, r.Maxmin.sr_rhs))
+              srs
+          in
+          (* Every term is +-1 and M_i = dhi(m) - dlo(x_i), so each row's magnitude
+             is a few declared bounds, inside [Checked.limit]'s envelope (path 1) by
+             the declaration cap; [Encoding.add_int_lin_le]'s own guard backs it. *)
+          let ids, clause = Encoding.add_choice encoding ~rows ~pick:(Maxmin.chosen p) in
+          Maxmin.attach_selectors p ~rows:ids ~clause
+    else
+      List.iter
+        (fun lits ->
+          ignore
+            (Encoding.add_constraint encoding (Opb.ge (List.map (fun l -> (1, l)) lits) 1)
+              : int))
+        (Maxmin.rows p);
     let pack id =
       match dir with
       | Maxmin.Max ->

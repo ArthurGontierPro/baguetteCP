@@ -95,7 +95,9 @@ lib/core/       Baguette_core
     maxmin.ml               array_int_maximum / array_int_minimum (and int_max/int_min):
                             the DISJUNCTION m <= max x as one clause row per threshold,
                             beside n Linear rows m >= x_i; min is max over negated
-                            views (M4-T9, D-0095)
+                            views (M4-T9, D-0095). Over a bits variable, one big-M
+                            SELECTOR row per operand + a clause, each pruning one
+                            Resolve `pol` (M8-bits-encoding-T3, D-0134)
     linear.ml               int_lin_le. THE REFERENCE PROPAGATOR -- copy this shape
     lin_eq.ml               int_lin_eq (two model rows, see D-0011)
     ne.ml                   int_lin_ne and int_ne (VALUE consistency)

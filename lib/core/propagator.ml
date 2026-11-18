@@ -101,6 +101,15 @@ type instance = {
          change nothing and not fail. The default always answers [true]. Under
          BAGUETTE_DEBUG the engine runs every dropped wake anyway and raises if it did
          anything ([Engine.check_advise]). *)
+  inst_watched : (unit -> Var.t * Var.t) option;
+      (* M6-T22 / D-0138: [Some w] when [inst_advise] answers [false] for EVERY variable
+         except the two [w ()] returns (the same variable twice is allowed), whatever the
+         store says -- the two variables a watched-literal propagator currently watches.
+         The engine then wakes the instance only from changes of those two variables,
+         asking [w] again after each run, instead of from its whole scope: the answers
+         are the advisor's own, so the runs are the same, and what goes is the asking.
+         [None], the default, is "my advisor may want any variable of my scope". Under
+         BAGUETTE_DEBUG the claim is checked after every run ([Engine.check_watched]). *)
   inst_idempotent : bool;
       (* M2-T6. The CLAIM that one call of [run] reaches this instance's own fixpoint:
          run it again straight after, with nothing else having moved, and it prunes
@@ -116,6 +125,17 @@ type instance = {
 
 let no_row : Store.t -> pb_row option = fun _ -> None
 let advise_always : Store.t -> Var.t -> bool = fun _ _ -> true
+
+(* M6-T20 / M6-T22: what [pack]'s [?advise] takes -- the advisor ([inst_advise]) and,
+   for a watched-literal advisor, the two variables it watches ([inst_watched]). A record
+   so that the packing site hands over both halves of one object
+   ([Clause.Learned_clause.advise]) and cannot pass one without the other. *)
+type advisor = {
+  ask : Store.t -> Var.t -> bool;
+  watched : (unit -> Var.t * Var.t) option;
+}
+
+let no_advisor = { ask = advise_always; watched = None }
 
 (* M2-T6 / M6-T18. The single-call idempotence claim is made AT THE PACKING SITE, by
    passing [~idempotent:true], and nowhere else. It used to be a table by packed name
@@ -136,7 +156,7 @@ let advise_always : Store.t -> Var.t -> bool = fun _ _ -> true
    [Element], [Maxmin] and [Bool2int] make no claim. The default is [false]: an instance
    whose packing site says nothing is re-woken off its own prunings, which is never
    unsound, only slower. *)
-let pack (type a) ?(row = no_row) ?(advise = advise_always) ?(idempotent = false) ~id
+let pack (type a) ?(row = no_row) ?(advise = no_advisor) ?(idempotent = false) ~id
     (module P : S with type t = a) (p : a) : instance =
   {
     id;
@@ -145,7 +165,8 @@ let pack (type a) ?(row = no_row) ?(advise = advise_always) ?(idempotent = false
     inst_vars = P.vars p;
     run = (fun store -> P.propagate p store);
     inst_row = row;
-    inst_advise = advise;
+    inst_advise = advise.ask;
+    inst_watched = advise.watched;
     inst_idempotent = idempotent;
   }
 

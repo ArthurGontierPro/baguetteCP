@@ -925,6 +925,7 @@ let test_d_mid_demotion () =
           Baguette_core.Propagator.Fixpoint);
       inst_row = Baguette_core.Propagator.no_row;
       inst_advise = Baguette_core.Propagator.advise_always;
+      inst_watched = None;
       inst_idempotent = false;
     }
   in
@@ -981,6 +982,7 @@ let test_d_gate () =
                 P.Fixpoint)));
       inst_row = P.no_row;
       inst_advise = P.advise_always;
+      inst_watched = None;
       inst_idempotent = false;
     }
   in

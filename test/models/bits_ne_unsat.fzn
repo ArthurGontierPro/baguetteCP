@@ -1,0 +1,16 @@
+% M8-bits-encoding-T3 (D-0134 section 6): four pigeons in three holes, as six int_ne over
+% 0..2 -- width 2, so on bits at `--bits-above 0` (and on the ladder at 8). Every pruning
+% is a VALUE removal (a 1 is interior, a hole in a bits domain), every conflict a
+% disequality with both terms fixed, and the refutation's nogoods are RUP only through
+% the derived two-half `pol` lines, none of which the A/B rows give by unit propagation.
+var 0..2: a :: output_var;
+var 0..2: b :: output_var;
+var 0..2: c :: output_var;
+var 0..2: d :: output_var;
+constraint int_ne(a, b);
+constraint int_ne(a, c);
+constraint int_ne(a, d);
+constraint int_ne(b, c);
+constraint int_ne(b, d);
+constraint int_ne(c, d);
+solve satisfy;

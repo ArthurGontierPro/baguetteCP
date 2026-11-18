@@ -296,7 +296,8 @@ let width = Pb.width
 (* ------------------------------------------------------------------- propagation
 
    [Pb.propagate], unwrapped. The header says why there is no second copy, and
-   lib/core/prop/pb.ml's own header derives the four arms this used to spell out. *)
+   lib/core/prop/pb.ml's own header derives the four arms this used to spell out. Its
+   degree-1 shortcut (M6-T22, [Pb.quiet]) is therefore this module's too. *)
 let propagate = Pb.propagate
 (* ---------------------------------------------------------------------------
    The Boolean face, and the same propagator under the name of the builtin that
@@ -450,11 +451,27 @@ module Learned_clause = struct
     let n = Array.length atoms in
     { pb; atoms; w1 = 0; w2 = (if n > 1 then 1 else 0) }
 
-  (* I-P7: queue only when a WATCHED literal on [v] has just become false. *)
-  let advise t store v =
-    let on i = Var.to_int t.atoms.(i).Pb.x = Var.to_int v && false_at store t i in
-    on t.w1 || on t.w2
+  (* I-P7: queue only when a WATCHED literal on [v] has just become false. Written
+     without a local closure (M6-T22): this is asked once per wake, and the closure the
+     first version built per call was an allocation on the engine's hottest loop. *)
+  let ask t store v =
+    let x = Var.to_int v in
+    (Var.to_int t.atoms.(t.w1).Pb.x = x && false_at store t t.w1)
+    || (Var.to_int t.atoms.(t.w2).Pb.x = x && false_at store t t.w2)
 
+  (* M6-T22 / D-0138: the variables of the two watches. [ask] answers [false] for every
+     other variable whatever the store holds, which is [Propagator.inst_watched]'s
+     contract, so the engine may wake this clause from these two variables only. *)
+  let watched t () = (t.atoms.(t.w1).Pb.x, t.atoms.(t.w2).Pb.x)
+
+  (* The advisor [Propagator.pack] takes: both halves of one object. *)
+  let advise t = { Propagator.ask = ask t; watched = Some (watched t) }
+
+  (* M6-T22 / D-0138: nearly every run of a learned clause is a watched literal falsified
+     with another literal still free -- the run a two-watched-literal solver answers by
+     moving the watch. [Pb.propagate] answers it with [Pb.quiet], one walk, and
+     [rewatch] then moves the watch on the same store, so the watches -- and every later
+     wake -- are what they were. *)
   let propagate t store =
     let r = propagate t.pb store in
     rewatch store t;
