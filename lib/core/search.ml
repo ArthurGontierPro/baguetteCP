@@ -315,6 +315,11 @@ type global = {
 type strat = {
   st_restart : Restart.t;
   st_phase : Phase.t option;
+  st_activity : Activity.t option;
+      (* M10-T3: the scores, when the order is [Activity_order] or [Alternate]. *)
+  st_reuse : bool;
+      (* M10-T3: partial restarts by the trail-reuse rule (D-0137 section 1.1); only ever
+         [true] with [Activity_order], where the rule is defined. *)
   mutable st_lbd : int option;
       (* The LBD of the clause learned at the conflict being handled, set by
          [learn_at_conflict] and consumed by the restart decision in [dfs]'s conflict
@@ -324,9 +329,12 @@ type strat = {
 type stats = {
   mutable strat : strat option;
   mutable restart_unexplored : int;
-      (* M10-T2: second children a restart left undispatched -- a split frame unwound
-         while its FIRST child was running. M1-T36's identity counts that child as
-         dispatched, so [stats_expected_nodes] subtracts this. 0 without restarts. *)
+  mutable restart_targets : int;
+  (* M10-T3: the sum of the levels restarts kept (0 for a full restart), so the mean
+     kept prefix of the trail-reuse rule is this over the restart count. *)
+  (* M10-T2: second children a restart left undispatched -- a split frame unwound
+     while its FIRST child was running. M1-T36's identity counts that child as
+     dispatched, so [stats_expected_nodes] subtracts this. 0 without restarts. *)
   mutable nodes : int;
   mutable conflicts : int;
       (* M6-T9: nodes whose propagation (or a learned unit) failed, at ANY level, the
@@ -583,6 +591,7 @@ let stats_create () =
   {
     strat = None;
     restart_unexplored = 0;
+    restart_targets = 0;
     nodes = 0;
     conflicts = 0;
     decisions = 0;
@@ -716,6 +725,9 @@ let stats_restarts s =
 
 let stats_phase s =
   match s.strat with Some { st_phase = Some p; _ } -> Some p | _ -> None
+
+let stats_activity s =
+  match s.strat with Some { st_activity = Some a; _ } -> Some a | _ -> None
 
 let stats_consistent s ~exhausted =
   if exhausted then s.nodes = stats_expected_nodes s
@@ -1076,6 +1088,12 @@ let staged_of (o : order) : staged option =
       staged_cache := Some (o, s);
       s
 
+(* M10-T3: the phases a [sequence] was built from, keyed by the order it returned, the
+   same way [staged_orders] is. The activity order reads an annotation's VALUE choice for
+   a variable from here (D-0137 section 4), so compile.ml does not have to hand it over. *)
+let sequence_phases : (order, phase list) Ephemeron.K1.Bucket.t =
+  Ephemeron.K1.Bucket.make ()
+
 let sequence ?(fallback = spec_order) (phases : phase list) : order =
   let full store cands =
     let live = Hashtbl.create (2 * Array.length cands) in
@@ -1116,6 +1134,7 @@ let sequence ?(fallback = spec_order) (phases : phase list) : order =
     go phases
   in
   Ephemeron.K1.Bucket.add staged_orders full staged;
+  Ephemeron.K1.Bucket.add sequence_phases full phases;
   full
 
 (* ------------------------------------------- M10-search-strategy-T2: phase saving
@@ -1150,6 +1169,50 @@ let phased (ph : Phase.t) (o : order) : order =
   | Some st ->
       Ephemeron.K1.Bucket.add staged_orders full (fun store ->
           Option.map (apply store) (st store))
+  | None -> ());
+  full
+
+(* ------------------------------------------ M10-search-strategy-T3: the activity order
+
+   D-0137 section 4. The variable is [Activity.select]'s; the value is the annotation's
+   value choice for that variable when some phase of the annotation names it (the first
+   such phase, as [sequence] would consult them), and SPEC 3.4's [indomain_min]
+   otherwise. A saved phase, when [--phase-saving] is on, is applied on top by [phased],
+   as for every other order. The activity order has no staged form: it ranks every
+   unfixed variable, which is [unfixed store]. *)
+let annotated_value (annotation : order) : val_select =
+  match Ephemeron.K1.Bucket.find sequence_phases annotation with
+  | None -> indomain_min
+  | Some phases -> (
+      let tbl = Hashtbl.create 64 in
+      List.iter
+        (fun ph ->
+          Array.iter
+            (fun v ->
+              let i = Var.to_int v in
+              if not (Hashtbl.mem tbl i) then Hashtbl.replace tbl i ph.p_val)
+            ph.p_vars)
+        phases;
+      fun store v ->
+        match Hashtbl.find_opt tbl (Var.to_int v) with
+        | Some f -> f store v
+        | None -> indomain_min store v)
+
+let activity_order (a : Activity.t) ~(value : val_select) : order =
+ fun store cands -> value store (Activity.select a store cands)
+
+(* Chuffed's `-f` (D-0137 section 4): the annotation on even runs, the activity order on
+   odd ones, the run index being the restart policy's. The staged form follows the same
+   parity: the annotation's own on an even run, and on an odd run [None], which sends
+   [dfs] to [unfixed store] and then to the full form, i.e. to the activity order. *)
+let alternate ~(run : unit -> int) ~(annotation : order) ~(activity : order) : order =
+  let full store cands =
+    if run () land 1 = 0 then annotation store cands else activity store cands
+  in
+  (match staged_of annotation with
+  | Some st ->
+      Ephemeron.K1.Bucket.add staged_orders full (fun store ->
+          if run () land 1 = 0 then st store else None)
   | None -> ());
   full
 
@@ -1377,6 +1440,12 @@ type bnb = {
          [Some] means the search is over and this is what the conclusion cites. *)
 }
 
+(* M10-search-strategy-T3 (D-0137 section 4): which variable order a solve uses. *)
+type search_mode =
+  | Annotated (* the order handed to [solve]: SPEC 3.4's default or the annotation *)
+  | Activity_order (* [activity_order], every run *)
+  | Alternate (* the annotation and the activity order, switching at each restart *)
+
 type config = {
   learn : bool;
   policy : Learn.policy;
@@ -1509,6 +1578,12 @@ type config = {
   phase_saving : bool;
       (* M10-search-strategy-T2 (D-0137 section 3): replace the order's value choice by
          the variable's saved phase ([phased]). OFF by default. *)
+  search : search_mode;
+      (* M10-search-strategy-T3 (D-0137 section 4). [Annotated] is the order the caller
+         passed (SPEC 3.4's default, or the annotation) and every pre-M10 caller's. *)
+  reuse_trail : bool;
+      (* M10-T3: partial restarts under [Activity_order] (D-0137 section 1.1). Ignored
+         with any other order, where the rule is not defined. OFF. *)
 }
 
 let default_config =
@@ -1533,6 +1608,8 @@ let default_config =
     stop_poll_runs = Engine.default_poll_runs;
     restarts = Restart.No_restarts;
     phase_saving = false;
+    search = Annotated;
+    reuse_trail = false;
   }
 
 let no_learning = { default_config with learn = false; pb = false }
@@ -2535,10 +2612,15 @@ let record_improving ctx store stats (b : bnb) (asn : assignment) : [ `Continue 
    reads the level about to be popped (lib/core/phase.ml).
 
    [restart_after_conflict] is asked once per conflict under a decision, after learning
-   and before the nogood. It feeds the policy and answers whether to restart now; a
-   conflict that learned nothing never restarts (D-0137 section 1: every restart is
-   preceded by a learned constraint on the page, which is what carries the conflict
-   across it). When it answers yes the policy has already counted the restart.
+   and before the nogood. It feeds the policy and answers whether to restart now, and to
+   which level; a conflict that learned nothing never restarts (D-0137 section 1: every
+   restart is preceded by a learned constraint on the page, which is what carries the
+   conflict across it). When it answers [Some t] the policy has already counted the
+   restart. M10-T3 adds the activity's half: a conflict that learned nothing bumps its own
+   reason facts' variables (the learned clause's were bumped in [learn_at_conflict]), and
+   every conflict decays. Under [reuse_trail] the target is the trail-reuse rule's
+   (D-0137 section 1.1): the levels, from the root up, whose decision variable still
+   outscores every variable unfixed at the conflict, capped one below the conflict's.
 
    [close_restarted] is a frame's half of the unwinding: its level, closed as the backjump
    arm closes it ([close_level]) but with no nogood to keep, so the D-0018.4 check on the
@@ -2550,17 +2632,37 @@ let undo_level stats store =
   | Some { st_phase = None; _ } | None -> ());
   Store.backtrack store
 
-let restart_after_conflict stats =
+let reuse_target (a : Activity.t) store (decisions : Lit.t list) =
+  let best = Activity.best_score a (unfixed store) in
+  let rec keep n = function
+    | [] -> n
+    | l :: rest -> (
+        match Activity.var_of_lit store l with
+        | Some v when Activity.score a v > best -> keep (n + 1) rest
+        | Some _ | None -> n)
+  in
+  (* [decisions] is newest first and one literal per level, so the oldest is level 1. *)
+  let kept = keep 0 (List.rev decisions) in
+  Stdlib.min kept (Store.level store - 1)
+
+let restart_after_conflict stats store (c : Store.conflict) decisions =
   match stats.strat with
-  | None -> false
+  | None -> None
   | Some st ->
       let lbd = st.st_lbd in
       st.st_lbd <- None;
+      (match st.st_activity with
+      | Some a ->
+          if lbd = None then Activity.bump_facts a store (Reason.facts c.Store.c_reason);
+          Activity.decay a
+      | None -> ());
       Restart.on_conflict st.st_restart ~lbd;
       if lbd <> None && Restart.due st.st_restart then (
         Restart.on_restart st.st_restart;
-        true)
-      else false
+        match st.st_activity with
+        | Some a when st.st_reuse -> Some (Stdlib.max 0 (reuse_target a store decisions))
+        | Some _ | None -> Some 0)
+      else None
 
 let close_restarted ctx ~lvl =
   Writer.set_level ctx.Justify.writer (lvl - 1);
@@ -2588,7 +2690,13 @@ let rec learn_at_conflict engine store ctx trace stats cfg (c : Store.conflict) 
           | [] -> "I-S4: the learned clause's supports are live at its derivation")
           (fun () -> broken = []);
         let cid = Learn.introduce ctx l in
-        (match stats.strat with Some st -> st.st_lbd <- Some (Learn.lbd l) | None -> ());
+        (match stats.strat with
+        | Some st -> (
+            st.st_lbd <- Some (Learn.lbd l);
+            match st.st_activity with
+            | Some a -> Activity.bump_lits a store (Learn.lits l)
+            | None -> ())
+        | None -> ());
         stats.n_learned <- stats.n_learned + 1;
         let clause_converts = Learn.converts l in
         if clause_converts then stats.n_converts <- stats.n_converts + 1;
@@ -2664,7 +2772,7 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
              root's own, and nothing is learned here: a conflict under no decision is
              already the strongest nogood there is. *)
           NFail ([], close_root_conflict ctx trace store c)
-      | _ ->
+      | _ -> (
           (* D-0018, in the order the record gives: the branch's own propagation trace
              first, then the conflict's reason line, then the nogood. Each of the first
              two is globally valid and decision-free; only the last one mentions the
@@ -2723,41 +2831,44 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
              the nogood, at the nogood's own level, so the same [w] retires both. *)
           let protected = bridges ctx trace stats store decisions in
           let keep = learn_at_conflict engine store ctx trace stats cfg c in
-          if restart_after_conflict stats then
-            (* M10-T2 (D-0137 section 1): a full restart. The learned constraint is on
-               the page at level 0; the nogood is NOT written, because it would be filed
-               at a level the unwinding wipes and nothing would cite it. *)
-            NRestart 0
-          else
-            let all = levelled_nogood decisions ~top:(Store.level store) in
-            let ng =
-              match keep with
-              | None -> minimise stats cfg.policy all
-              | Some ls ->
-                  (* M7-T6/D-0070. [ls] is [Learn.levels] -- the decision levels the 1UIP
-                     walk says the conflict rests on -- and filtering by it is what makes
-                     the nogood the cut's clause rather than the whole stack. It is right
-                     about the IMPLICATION GRAPH and wrong about the PROOF whenever a
-                     decision push SETTLED past a hole: the graph records the decision as
-                     the literal the branch assumed ([x >= b]), everything downstream
-                     propagated from the bound the trail landed on ([x >= m]), and the step
-                     between them is not an edge, so no ancestor that punched the hole ever
-                     enters the walk. [bridges] has just written that step down as a line
-                     conditioned on exactly those ancestors, so dropping their levels
-                     leaves the nogood no longer entailing its own bridge, and 3.0.2
-                     rejects the nogood -- at the nogood, several inferences away from the
-                     settle. Keeping them costs a weaker clause on the SETTLE PATHS ONLY;
-                     [protected] is empty on every path with no hole split, which is almost
-                     all of them, and the filter is then exactly what it was. *)
-                  let kept (lit, l) =
-                    List.mem l ls
-                    || (not cfg.break_bridge_levels)
-                       && List.exists (fun p -> Lit.equal lit (Lit.negate p)) protected
-                  in
-                  minimise stats cfg.policy (List.filter kept all)
-            in
-            let cid = emit_nogood ctx ng in
-            NFail (ng, cid))
+          match restart_after_conflict stats store c decisions with
+          | Some t ->
+              (* M10-T2 (D-0137 section 1): a restart to level [t], 0 unless the trail
+                 is reused. The learned constraint is on the page at level 0; the nogood
+                 is NOT written, because it would be filed at the conflict's own level,
+                 which the unwinding wipes ([t] is below it), and nothing would cite it. *)
+              stats.restart_targets <- stats.restart_targets + t;
+              NRestart t
+          | None ->
+              let all = levelled_nogood decisions ~top:(Store.level store) in
+              let ng =
+                match keep with
+                | None -> minimise stats cfg.policy all
+                | Some ls ->
+                    (* M7-T6/D-0070. [ls] is [Learn.levels] -- the decision levels the 1UIP
+                       walk says the conflict rests on -- and filtering by it is what makes
+                       the nogood the cut's clause rather than the whole stack. It is right
+                       about the IMPLICATION GRAPH and wrong about the PROOF whenever a
+                       decision push SETTLED past a hole: the graph records the decision as
+                       the literal the branch assumed ([x >= b]), everything downstream
+                       propagated from the bound the trail landed on ([x >= m]), and the step
+                       between them is not an edge, so no ancestor that punched the hole ever
+                       enters the walk. [bridges] has just written that step down as a line
+                       conditioned on exactly those ancestors, so dropping their levels
+                       leaves the nogood no longer entailing its own bridge, and 3.0.2
+                       rejects the nogood -- at the nogood, several inferences away from the
+                       settle. Keeping them costs a weaker clause on the SETTLE PATHS ONLY;
+                       [protected] is empty on every path with no hole split, which is almost
+                       all of them, and the filter is then exactly what it was. *)
+                    let kept (lit, l) =
+                      List.mem l ls
+                      || (not cfg.break_bridge_levels)
+                         && List.exists (fun p -> Lit.equal lit (Lit.negate p)) protected
+                    in
+                    minimise stats cfg.policy (List.filter kept all)
+              in
+              let cid = emit_nogood ctx ng in
+              NFail (ng, cid)))
   | Engine.Fixpoint -> (
       (* M6-T13: a staged order ([sequence]) answers from the store when one of its phases
          has a live variable, and the O(store) candidate array is built only when it does
@@ -3261,19 +3372,36 @@ let search_core ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx) ?tr
      they wrap. With every one of them off this is [None] and [order] is the caller's,
      physically, so the default search is the pre-M10 code path. *)
   stats.strat <-
-    (match (config.restarts, config.phase_saving) with
-    | Restart.No_restarts, false -> None
-    | policy, ps ->
+    (match (config.restarts, config.phase_saving, config.search) with
+    | Restart.No_restarts, false, Annotated -> None
+    | policy, ps, mode ->
+        let n = Store.n_vars store in
         Some
           {
             st_restart = Restart.create policy;
-            st_phase = (if ps then Some (Phase.create (Store.n_vars store)) else None);
+            st_phase = (if ps then Some (Phase.create n) else None);
+            st_activity =
+              (match mode with
+              | Annotated -> None
+              | Activity_order | Alternate -> Some (Activity.create n));
+            st_reuse = config.reuse_trail && mode = Activity_order;
             st_lbd = None;
           });
   let order =
     match stats.strat with
-    | Some { st_phase = Some ph; _ } -> phased ph order
-    | _ -> order
+    | None -> order
+    | Some st -> (
+        let order =
+          match (config.search, st.st_activity) with
+          | Annotated, _ | _, None -> order
+          | Activity_order, Some a -> activity_order a ~value:(annotated_value order)
+          | Alternate, Some a ->
+              alternate
+                ~run:(fun () -> Restart.run st.st_restart)
+                ~annotation:order
+                ~activity:(activity_order a ~value:(annotated_value order))
+        in
+        match st.st_phase with Some ph -> phased ph order | None -> order)
   in
   let result =
     try dfs engine store ctx trace stats config order []

@@ -243,6 +243,7 @@ type run = {
   verdict : string;
   proof : string;
   restarts : int;
+  kept : int; (* levels kept by restarts, summed: > 0 only for a partial restart *)
   live : int;
   consistent : bool;
 }
@@ -309,6 +310,7 @@ let solve_with dir name src (config : Search.config) =
     verdict;
     proof = read_file pbp;
     restarts = Search.stats_restarts stats;
+    kept = stats.Search.restart_targets;
     live;
     consistent = Search.stats_consistent stats ~exhausted;
   }
@@ -357,6 +359,28 @@ let test_restarting_search () =
           Search.phase_saving = true;
         } );
       ("phase", { Search.default_config with Search.phase_saving = true });
+      (* M10-T3 *)
+      ("activity", { Search.default_config with Search.search = Search.Activity_order });
+      ( "activity+luby:1+phase",
+        {
+          Search.default_config with
+          Search.search = Search.Activity_order;
+          Search.restarts = Restart.Luby 1;
+          Search.phase_saving = true;
+        } );
+      ( "alternate+luby:1",
+        {
+          Search.default_config with
+          Search.search = Search.Alternate;
+          Search.restarts = Restart.Luby 1;
+        } );
+      ( "activity+luby:1+reuse",
+        {
+          Search.default_config with
+          Search.search = Search.Activity_order;
+          Search.restarts = Restart.Luby 1;
+          Search.reuse_trail = true;
+        } );
     ]
   in
   List.iter
@@ -374,7 +398,7 @@ let test_restarting_search () =
               (String.map (function ':' | '+' | '.' -> '_' | c -> c) pname)
           in
           let r = solve_with dir tag src config in
-          let restarting = pname <> "phase" in
+          let restarting = pname <> "phase" && pname <> "activity" in
           check
             (Printf.sprintf
                "M10-T2 %s --restarts/--phase %s: same answer (%s), %d restarts" name pname
@@ -423,13 +447,82 @@ let test_defaults_are_off () =
   check "M10-T2: --restarts none is byte-identical to the default proof"
     (a.proof = b.proof)
 
+(* ------------------------------------------------------ M10-T3: the activity scores *)
+
+module Activity = Baguette_core.Activity
+module Store = Baguette_core.Store
+module Domain = Baguette_core.Domain
+module Lit = Baguette_proof.Lit
+
+let test_activity_unit () =
+  let store =
+    Store.create ~names:[| "a"; "b"; "c" |]
+      ~domains:[| Domain.make 0 3; Domain.make 0 1; Domain.make 0 1 |]
+  in
+  let v i = Var.of_int i in
+  let cands = [| v 0; v 1; v 2 |] in
+  let a = Activity.create 3 in
+  check "Activity: all scores 0 -> first-fail's choice (smallest domain, earliest): b"
+    (Var.to_int (Activity.select a store cands) = 1);
+  Activity.bump_lits a store [ Lit.pos (Lit.Ge ("c", 1)) ];
+  check "Activity: a bumped variable outranks first-fail: c"
+    (Var.to_int (Activity.select a store cands) = 2);
+  Activity.decay a;
+  Activity.bump_lits a store [ Lit.pos (Lit.Ge ("a", 2)); Lit.neg (Lit.Ge ("a", 1)) ];
+  check "Activity: a later bump weighs more (EVSIDS), and once per clause per variable"
+    (Var.to_int (Activity.select a store cands) = 0
+    && Activity.score a (v 0) = 1.0 /. Activity.decay_factor
+    && Activity.n_bumps a = 2);
+  for _ = 1 to 5000 do
+    Activity.decay a
+  done;
+  Activity.bump_lits a store [ Lit.pos (Lit.Ge ("b", 1)) ];
+  check
+    (Printf.sprintf
+       "Activity: rescaling keeps every score finite and the order intact (%d rescales)"
+       (Activity.n_rescales a))
+    (Activity.n_rescales a > 0
+    && Float.is_finite (Activity.score a (v 1))
+    && Var.to_int (Activity.select a store cands) = 1
+    && Activity.score a (v 0) >= Activity.score a (v 2))
+
+(* The trail-reuse rule must actually keep a level somewhere, or the partial-restart lane
+   above tested full restarts under another name. *)
+let test_reuse_keeps_levels () =
+  let dir = Filename.temp_file "baguette_m10r" "" in
+  Sys.remove dir;
+  Sys.mkdir dir 0o700;
+  let cfg =
+    {
+      Search.default_config with
+      Search.search = Search.Activity_order;
+      Search.restarts = Restart.Luby 1;
+      Search.reuse_trail = true;
+    }
+  in
+  let runs =
+    List.map
+      (fun (n, src) -> solve_with dir n src cfg)
+      [ ("rq8", queens 8); ("rp54", pigeons); ("rq6o", queens ~opt:true 6) ]
+  in
+  let kept = List.fold_left (fun acc r -> acc + r.kept) 0 runs in
+  check
+    (Printf.sprintf
+       "M10-T3: --reuse-trail keeps levels at some restart (%d kept over %d restarts), \
+        every proof VERIFIED"
+       kept
+       (List.fold_left (fun acc r -> acc + r.restarts) 0 runs))
+    (kept > 0 && List.for_all (fun r -> contains r.verdict "VERIFIED") runs)
+
 let () =
   print_endline "";
+  test_activity_unit ();
   test_luby ();
   test_schedules ();
   test_of_string ();
   test_defaults_are_off ();
   test_restarting_search ();
+  test_reuse_keeps_levels ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
