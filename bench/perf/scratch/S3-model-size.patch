@@ -1,0 +1,76 @@
+--- a/lib/core/search.ml
++++ b/lib/core/search.ml
+@@ -715,7 +715,7 @@
+   let n = Store.n_vars store in
+   let k = ref 0 in
+   for i = 0 to n - 1 do
+-    if Domain.size (Store.get store (Var.of_int i)) > 1 then incr k
++    if not (Domain.is_fixed (Store.get store (Var.of_int i))) then incr k
+   done;
+   if !k = 0 then [||]
+   else
+@@ -723,7 +723,7 @@
+     let j = ref 0 in
+     for i = 0 to n - 1 do
+       let v = Var.of_int i in
+-      if Domain.size (Store.get store v) > 1 then (
++      if not (Domain.is_fixed (Store.get store v)) then (
+         out.(!j) <- v;
+         incr j)
+     done;
+@@ -1733,12 +1733,15 @@
+    the same ~before [Trace.settle_facts] passes for a propagator's settle; M1-T66 asks it
+    for a decision's. *)
+ let decision_entries store =
++  (* M11-T1 SCRATCH S3: the level marks, not the whole trail. *)
+   let n = Store.trail_length store in
+-  let acc = ref [] in
+-  for i = n - 1 downto 0 do
+-    if Store.is_level_start store i then acc := (i, Store.trail_entry store i) :: !acc
+-  done;
+-  !acc
++  let rec go acc prev = function
++    | [] -> List.rev acc
++    | m :: rest ->
++        if m = prev || m >= n then go acc prev rest
++        else go ((m, Store.trail_entry store m) :: acc) m rest
++  in
++  go [] (-1) (Store.level_marks store)
+ 
+ (* Did this push land somewhere strictly stronger than its literal names, and if so on
+    what? [Some cond] is the bound the trail actually recorded; [None] means the push
+--- a/lib/core/engine.ml
++++ b/lib/core/engine.ml
+@@ -125,6 +125,14 @@
+ let default_trigger (inst : Propagator.instance) =
+   trigger_of_consistency inst.Propagator.inst_consistency
+ 
++(* M11-T1 SCRATCH S3: the change's KIND only; [wakes_on] reads nothing else. A trail entry
++   always shrinks its domain (I-D3), so equal bounds mean holes. *)
++let s3_bound = Domain.Bound { lo = None; hi = None }
++let s3_holes = Domain.Holes []
++let s3_kind old now =
++  if Domain.lo old <> Domain.lo now || Domain.hi old <> Domain.hi now then s3_bound
++  else s3_holes
++
+ let wakes_on trig (c : Domain.change) =
+   match c with
+   | Domain.NoChange -> false
+@@ -853,7 +861,7 @@
+     if x < Array.length t.wake_static then
+       let stat = t.wake_static.(x) and nd = t.dyn_len.(x) in
+       if stat <> [] || nd > 0 then (
+-        let change = Domain.classify ~old:e.old ~now:e.now in
++        let change = s3_kind e.old e.now in
+         (* M6-T22: the self-watching instances that want this entry, DESCENDING, to
+            be merged into the static ones by id (see the wake index's header). A
+            BAGUETTE_DEBUG [check_advise] runs the instance, which may resync the very
+@@ -1489,7 +1497,7 @@
+     if x < Array.length t.wake_static then
+       let stat = t.wake_static.(x) and nd = t.dyn_len.(x) in
+       if stat <> [] || nd > 0 then (
+-        let change = Domain.classify ~old:e.old ~now:e.now in
++        let change = s3_kind e.old e.now in
+         List.iter (mark change e.var) stat;
+         (* M6-T22: the self-watching instances watching [x]; order is immaterial here,
+            this only marks. A copy under BAGUETTE_DEBUG, for [watchers_of_new_entries]'s
