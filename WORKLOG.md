@@ -465,6 +465,19 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 
 | M8-bits-encoding-T3 (steps 1, 2 partial; T3 stays WIP) | agent-t3 + agent-t3b (`wave44-t3`) | 2026-11-18 | **D-0134 §4-§7.** maxmin over a bits scope by selector rows + one `Resolve` `pol` per pruning, selectors listed in `sol`/`soli`; `int_ne`/`int_lin_ne` released (the A/B pair resolved); `Justify.is_bits_derivation` (a T2 latent). 173/173 verified at W none/0/8, 165 byte-identical at none; gate rc 0 on `20c324f`, 85 MB. The 177 at W = 0: 73 -> 108 complete `.opb`. Open: reified holds, steps 3-5 |
 ## Handoff notes
+## M8-bits-encoding-T3 continuation merged and gated, 2026-11-18 (orchestrator)
+
+`wave46-t3` merged as `a8d2924` (no code conflict). Gate of `a8d2924` on fataepyc-06
+(`/scratch/arthur/gate48.status`, clone `/scratch/arthur/baguette-gate-20261118d`): `make check` rc 0 in
+24.4 s, peak RSS 88 MB, 3 790 `ok`, 179 models; against gate 47's binary `a9217430` with no flags, stdout
+and exit codes identical on all 179, `.opb` and `.pbp` identical on 178. The one difference is
+`arith_times_narrow_sat`, the new model whose `int_times` split now runs over the narrower operand, as
+the agent reported. That builder change moves the default search on the mapping and carpet-cutting
+Challenge families, so D-0133 is a stale baseline twice over (D-0136 and this). Binary
+`e8354a74b5a2a5b0ac3d83f5a98d0a96`. agent-lanes was told to record M11-T2's reference on this binary.
+Open from T3 for T4: PB analysis over bits rows (D-0134 §11, needs `search.ml`) and `int_times` over bits
+(a search trade, measured in the probe).
+
 ## M8-bits-encoding-T3 continuation handoff, 2026-11-18 (agent-t3c, `wave46-t3`): the reified and bool2int holds, mapping/ATSP, steps 3 to 5, D-0134 §8-§15
 
 `int_eq_reif`/`int_ne_reif` are released over bits: their two [Clause] pieces (the
