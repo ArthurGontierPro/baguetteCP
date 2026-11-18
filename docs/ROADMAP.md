@@ -427,4 +427,4 @@ branches in flight on 2026-11-18 (`wave44-t3` continuation as `wave46-t3`, `wave
 | M11-complexity-T4 | **Batch 2, search, analysis, learning and retention** | TODO | After the merges; T1's list |
 | M11-complexity-T5 | **Batch 3, trace, justification and proof writing** | TODO | After the merges; T1's list |
 | M11-complexity-T6 | **The scaling lane becomes a gate, and the re-baseline** handed to M8-T4, M9-T3 and M10-T5 | TODO | |
-
+| M11-complexity-T7 | **Setup: the cost before the first node** (D-0140 §8.4, item X1): openshop spends 762 G instructions (112 s) before node 1, with or without the proof, in encoding reified rows over wide domains and sanitising literal names (D-0080's request). Same standard as the batches: stdout, node counts and proof bytes identical | TODO | Opened 2026-11-18 from D-0140; record D-0143 |
