@@ -12878,11 +12878,15 @@ not full restarts under another name.
 
 ### 10. The measurements: today's search, the strategies, and Chuffed
 
-**Binaries.** Every number below was taken on fataepyc-06 on 2026-11-18 with two binaries
-built on the M6-T22 engine (D-0138, the orchestrator's instruction of that afternoon). The
-baseline rows are **main's binary `a9217430`** (main `23eb9d6`, gate 47). The strategy rows
-are **`878ceb53`, this branch at `8fa9585`** (main `bd87a57` merged), which is byte-identical
-to `a9217430` without the flags on all 173 models (section 11). A first campaign on the
+**Binaries.** Every number below was taken on fataepyc-06 on 2026-11-18 on the M6-T22 engine
+(D-0138, the orchestrator's instruction of that afternoon). The baseline rows are **main's
+binary `a9217430`** (main `23eb9d6`, gate 47). The codes rows WITHOUT `--phase-saving` are
+**`878ceb53`** (this branch at `8fa9585`, main `bd87a57` merged, byte-identical to `a9217430`
+without the flags on all 173 models, section 11). The codes rows WITH `--phase-saving` are
+**`46b0deaa`** (`48de0a3`, after section 3's addendum), whose only difference from `878ceb53`
+on these runs is the decision phase saving makes at an interior saved value; the same rows on
+`878ceb53` (with the assignment shape) all VERIFIED too and differ little (aut `alt+luby+ps`
+64 s and 14 746 nodes there, 62 s and 14 600 here). The subset's binaries are in 10.2. A first campaign on the
 pre-M6-T22 engine (`6d3d2dc3` and `db7468f1`) was stopped when M6-T22 landed. Its node counts
 agree with the ones below wherever both exist (QR48 `luby` 28 658 nodes and 60 restarts on
 both engines), and its times are not used. Node counts compare across binaries, and times only
@@ -12909,13 +12913,13 @@ Without the proof (time, nodes, restarts):
 | base | UNSAT 26 s, 23367 n | UNSAT 18 s, 23429 n | UNSAT 510 s, 100685 n | UNSAT 318 s, 101435 n | TO 600 s, 55178 n | UNSAT 3 s, 158 n |
 | luby | UNSAT 41 s, 28658 n, 60 r | UNSAT 24 s, 27600 n, 60 r | TO 600 s, 109054 n, 157 r | UNSAT 409 s, 114130 n, 179 r | TO 600 s, 50475 n, 92 r | UNSAT 3 s, 158 n |
 | lbd | UNSAT 26 s, 23367 n | UNSAT 18 s, 23429 n | UNSAT 557 s, 100685 n | UNSAT 316 s, 101435 n | TO 600 s, 53434 n, 40 r | UNSAT 3 s, 158 n |
-| lubyps | UNSAT 38 s, 28441 n, 60 r | UNSAT 31 s, 28408 n, 60 r | TO 600 s, 102123 n, 151 r | TO 600 s, 111790 n, 166 r | TO 600 s, 50089 n, 91 r | UNSAT 3 s, 155 n |
-| ps | UNSAT 25 s, 23377 n | UNSAT 20 s, 23395 n | UNSAT 560 s, 100923 n | UNSAT 455 s, 101057 n | TO 600 s, 53204 n | UNSAT 3 s, 155 n |
+| lubyps | UNSAT 51 s, 28441 n, 60 r | UNSAT 36 s, 28408 n, 60 r | TO 600 s, 87425 n, 126 r | TO 600 s, 103482 n, 155 r | TO 600 s, 51163 n, 92 r | UNSAT 3 s, 157 n |
+| ps | UNSAT 27 s, 23377 n | UNSAT 23 s, 23395 n | TO 600 s, 98207 n | UNSAT 420 s, 101057 n | TO 600 s, 46321 n | UNSAT 3 s, 157 n |
 | act | UNSAT 54 s, 32136 n | UNSAT 41 s, 28873 n | TO 600 s, 94692 n | TO 600 s, 100585 n | TO 600 s, 66105 n | UNSAT 81 s, 15561 n |
-| actlubyps | UNSAT 43 s, 35232 n, 62 r | UNSAT 41 s, 36709 n, 62 r | TO 600 s, 117489 n, 179 r | TO 600 s, 107006 n, 157 r | UNSAT 164 s, 33469 n, 61 r | UNSAT 41 s, 10702 n, 27 r |
+| actlubyps | UNSAT 42 s, 35232 n, 62 r | UNSAT 47 s, 36709 n, 62 r | TO 600 s, 91924 n, 126 r | TO 600 s, 99600 n, 141 r | UNSAT 164 s, 31369 n, 60 r | UNSAT 44 s, 10702 n, 27 r |
 | altluby | UNSAT 127 s, 50917 n, 90 r | UNSAT 127 s, 48216 n, 84 r | TO 600 s, 110747 n, 157 r | TO 600 s, 103744 n, 151 r | UNSAT 366 s, 45650 n, 77 r | UNSAT 3 s, 158 n |
-| altlubyps | UNSAT 89 s, 50325 n, 88 r | UNSAT 108 s, 51131 n, 90 r | TO 600 s, 111170 n, 157 r | TO 600 s, 118526 n, 172 r | UNSAT 64 s, 14746 n, 30 r | UNSAT 3 s, 155 n |
-| actreuse | UNSAT 28 s, 27343 n, 60 r | UNSAT 28 s, 27962 n, 60 r | TO 600 s, 117026 n, 183 r | TO 600 s, 102777 n, 156 r | UNSAT 138 s, 29393 n, 59 r | UNSAT 27 s, 6996 n, 17 r |
+| altlubyps | UNSAT 129 s, 50325 n, 88 r | UNSAT 105 s, 51131 n, 90 r | TO 600 s, 107003 n, 155 r | TO 600 s, 106303 n, 153 r | UNSAT 62 s, 14600 n, 30 r | UNSAT 3 s, 157 n |
+| actreuse | UNSAT 31 s, 27343 n, 60 r | UNSAT 32 s, 27962 n, 60 r | TO 600 s, 97543 n, 142 r | TO 600 s, 91812 n, 129 r | UNSAT 159 s, 29589 n, 59 r | UNSAT 29 s, 6996 n, 17 r |
 
 With the proof (time, nodes, restarts, `.pbp` size, veripb's verdict and time; every verdict is
 VERIFIED, `UNSATISFIABLE` for the UNSAT rows and `NO CONCLUSION` for the stopped ones):
@@ -12925,13 +12929,13 @@ VERIFIED, `UNSATISFIABLE` for the UNSAT rows and `NO CONCLUSION` for the stopped
 | base | UNSAT 37 s, 23367 n, 144 MB, V 7.02 s | UNSAT 27 s, 23429 n, 144 MB, V 6.92 s | TO 600 s, 96839 n, 1031 MB, V 53.95 s | UNSAT 432 s, 101435 n, 1091 MB, V 56.39 s | TO 600 s, 53413 n, 828 MB, V 411.53 s | UNSAT 4 s, 158 n, 2 MB, V 0.73 s |
 | luby | UNSAT 58 s, 28658 n, 60 r, 173 MB, V 9.16 s | UNSAT 37 s, 27600 n, 60 r, 170 MB, V 8.94 s | TO 600 s, 103085 n, 153 r, 1055 MB, V 66.31 s | UNSAT 471 s, 114130 n, 179 r, 1215 MB, V 70.62 s | TO 600 s, 47149 n, 84 r, 847 MB, V 426.65 s | UNSAT 4 s, 158 n, 2 MB, V 0.73 s |
 | lbd | UNSAT 38 s, 23367 n, 144 MB, V 6.97 s | UNSAT 27 s, 23429 n, 144 MB, V 7.02 s | TO 600 s, 92830 n, 980 MB, V 51.84 s | UNSAT 384 s, 101435 n, 1091 MB, V 56.14 s | TO 600 s, 50102 n, 40 r, 822 MB, V 377.98 s | UNSAT 4 s, 158 n, 2 MB, V 0.74 s |
-| lubyps | UNSAT 50 s, 28441 n, 60 r, 173 MB, V 8.79 s | UNSAT 46 s, 28408 n, 60 r, 173 MB, V 8.99 s | TO 600 s, 88904 n, 126 r, 895 MB, V 52.15 s | TO 600 s, 104736 n, 156 r, 1090 MB, V 61.99 s | TO 600 s, 49096 n, 88 r, 769 MB, V 392.45 s | UNSAT 4 s, 155 n, 2 MB, V 0.80 s |
-| ps | UNSAT 46 s, 23377 n, 144 MB, V 6.90 s | UNSAT 34 s, 23395 n, 144 MB, V 6.96 s | TO 600 s, 96195 n, 1026 MB, V 55.19 s | UNSAT 522 s, 101057 n, 1088 MB, V 56.87 s | TO 600 s, 51595 n, 747 MB, V 415.04 s | UNSAT 4 s, 155 n, 2 MB, V 0.78 s |
+| lubyps | UNSAT 63 s, 28441 n, 60 r, 173 MB, V 9.00 s | UNSAT 44 s, 28408 n, 60 r, 173 MB, V 8.94 s | TO 600 s, 82063 n, 126 r, 818 MB, V 46.73 s | TO 600 s, 93039 n, 129 r, 955 MB, V 53.70 s | TO 600 s, 48015 n, 84 r, 1179 MB, V 100.70 s | UNSAT 3 s, 157 n, 2 MB, V 0.36 s |
+| ps | UNSAT 40 s, 23377 n, 144 MB, V 6.89 s | UNSAT 31 s, 23395 n, 144 MB, V 6.88 s | TO 600 s, 95989 n, 1024 MB, V 53.59 s | UNSAT 520 s, 101057 n, 1088 MB, V 56.00 s | TO 600 s, 44292 n, 1280 MB, V 100.55 s | UNSAT 3 s, 157 n, 2 MB, V 0.35 s |
 | act | UNSAT 72 s, 32136 n, 242 MB, V 11.13 s | UNSAT 59 s, 28873 n, 271 MB, V 12.39 s | TO 601 s, 79306 n, 947 MB, V 46.84 s | TO 600 s, 91966 n, 1168 MB, V 55.14 s | TO 600 s, 58220 n, 849 MB, V 554.09 s | UNSAT 110 s, 15561 n, 308 MB, V 32.34 s |
-| actlubyps | UNSAT 60 s, 35232 n, 62 r, 302 MB, V 14.01 s | UNSAT 71 s, 36709 n, 62 r, 305 MB, V 14.67 s | TO 601 s, 94793 n, 134 r, 1263 MB, V 65.03 s | TO 600 s, 102198 n, 149 r, 1153 MB, V 61.18 s | UNSAT 192 s, 33469 n, 61 r, 318 MB, V 46.21 s | UNSAT 47 s, 10702 n, 27 r, 67 MB, V 7.25 s |
+| actlubyps | UNSAT 61 s, 35232 n, 62 r, 302 MB, V 14.34 s | UNSAT 63 s, 36709 n, 62 r, 305 MB, V 14.49 s | TO 600 s, 89480 n, 126 r, 1195 MB, V 60.57 s | TO 600 s, 87157 n, 126 r, 954 MB, V 52.85 s | UNSAT 186 s, 31369 n, 60 r, 286 MB, V 25.97 s | UNSAT 52 s, 10702 n, 27 r, 67 MB, V 5.78 s |
 | altluby | UNSAT 153 s, 50917 n, 90 r, 269 MB, V 14.89 s | UNSAT 119 s, 48216 n, 84 r, 283 MB, V 14.78 s | TO 600 s, 99649 n, 140 r, 729 MB, V 44.41 s | TO 600 s, 98372 n, 140 r, 937 MB, V 53.62 s | UNSAT 440 s, 45650 n, 77 r, 921 MB, V 354.82 s | UNSAT 4 s, 158 n, 2 MB, V 0.73 s |
-| altlubyps | UNSAT 135 s, 50325 n, 88 r, 302 MB, V 15.52 s | UNSAT 115 s, 51131 n, 90 r, 305 MB, V 15.20 s | TO 600 s, 105203 n, 149 r, 1043 MB, V 56.09 s | TO 600 s, 107687 n, 155 r, 1052 MB, V 56.17 s | UNSAT 80 s, 14746 n, 30 r, 206 MB, V 33.00 s | UNSAT 4 s, 155 n, 2 MB, V 0.77 s |
-| actreuse | UNSAT 45 s, 27343 n, 60 r, 278 MB, V 12.31 s | UNSAT 46 s, 27962 n, 60 r, 284 MB, V 12.71 s | TO 600 s, 90348 n, 126 r, 1160 MB, V 58.95 s | TO 600 s, 91442 n, 128 r, 1203 MB, V 60.39 s | UNSAT 156 s, 29393 n, 59 r, 282 MB, V 43.22 s | UNSAT 30 s, 6996 n, 17 r, 51 MB, V 5.45 s |
+| altlubyps | UNSAT 146 s, 50325 n, 88 r, 302 MB, V 15.87 s | UNSAT 150 s, 51131 n, 90 r, 305 MB, V 16.23 s | TO 600 s, 98386 n, 136 r, 983 MB, V 55.60 s | TO 600 s, 96050 n, 129 r, 951 MB, V 53.76 s | UNSAT 78 s, 14600 n, 30 r, 211 MB, V 18.57 s | UNSAT 3 s, 157 n, 2 MB, V 0.34 s |
+| actreuse | UNSAT 59 s, 27343 n, 60 r, 278 MB, V 12.98 s | UNSAT 53 s, 27962 n, 60 r, 284 MB, V 12.98 s | TO 600 s, 91550 n, 129 r, 1172 MB, V 61.74 s | TO 600 s, 82720 n, 126 r, 1089 MB, V 58.16 s | UNSAT 232 s, 29589 n, 59 r, 275 MB, V 24.60 s | UNSAT 32 s, 6996 n, 17 r, 51 MB, V 4.30 s |
 
 Chuffed on the same instances (its own flattenings, the user's `.log` files, solve time):
 
@@ -12945,11 +12949,10 @@ Chuffed on the same instances (its own flattenings, the user's `.log` files, sol
 1. **aut order 7 without an annotation is solved, by the activity order with restarts and
    phase saving, and not by any one of the three alone.** `base` stops at 600 s (55 178
    nodes), and so do `luby`, `lbd`, `ps` and `act` alone. `act+luby+ps` refutes it in 164 s
-   (33 469 nodes, 61 restarts), 192 s with the proof (318 MB, VERIFIED in 46 s). Chuffed's
-   alternation, `alt+luby+ps`, is the best: **64 s and 14 746 nodes, 80 s with the proof (206
-   MB, VERIFIED in 33 s)**. Partial restarts help the activity order a little (`act+reuse`, 138
-   s, 29 393 nodes, about 15 levels kept per restart). Phase saving is what makes the restarts
-   work here (`alt+luby` without it takes 366 s and 45 650 nodes). Chuffed needs 11 nodes, so
+   (31 369 nodes, 60 restarts), 186 s with the proof (286 MB, VERIFIED in 26 s). Chuffed's
+   alternation, `alt+luby+ps`, is the best: **62 s and 14 600 nodes, 78 s with the proof (211
+   MB, VERIFIED in 19 s)**. Partial restarts change the activity order little (`act+reuse`,
+   159 s and 29 589 nodes). Phase saving is what makes the restarts work here (`alt+luby` without it takes 366 s and 45 650 nodes). Chuffed needs 11 nodes, so
    the heuristic is still three orders of magnitude from Chuffed's on node count. The
    difference most worth measuring next is the scoring, since Chuffed scores the Boolean
    literals of its encoding where this scores variables (section 4).
@@ -12985,7 +12988,89 @@ deleted after solving, so all twenty were re-flattened with main's `mznlib`
 bytes. Time limit 300 s, veripb capped at 600 to 900 s per proof (a run whose check did not
 finish says `check-TO`).
 
-SUBSET_TABLES
+Measured on `878ceb53` (the strategy rows) and `a9217430` (`sbase`), that is BEFORE the
+phase-saving fix of section 3's addendum, so every strategy column below still made assignment
+decisions at interior saved values. All twenty instances, both modes, are complete. Without the
+proof:
+
+| instance | sbase | slubyps | saltlubyps | sactlubyps |
+|---|---|---|---|---|
+| 2012_ship-schedule_6ShipsMixed | OPT 77 s, 3335 n | OPT 66 s, 2222 n, 6 r | SAT 600 s, ? n | TO(300505) 312 s, 60 n |
+| 2014_amaze_2012-04-27 | SAT 10 s, 9427 n | SAT 13 s, 10720 n, 28 r | SAT 21 s, 14075 n, 30 r | SAT 6 s, 8715 n, 23 r |
+| 2014_fillomino_5x5_1 | SAT 20 s, 9646 n | SAT 26 s, 9714 n, 28 r | SAT 7 s, 5244 n, 14 r | SAT 10 s, 7054 n, 16 r |
+| 2014_openshop_gp10-4 | TO(1139) 300 s, 36374 n | TO(1139) 300 s, 31711 n, 60 r | TO(1079) 300 s, 42833 n, 62 r | TO(1077) 300 s, 47279 n, 64 r |
+| 2016_nfc_18_3_5 | OPT 88 s, 1033 n | TO(1338) 300 s, 1208 n, 4 r | OPT 105 s, 863 n, 2 r | OPT 29 s, 398 n, 1 r |
+| 2016_solbat_sb_15_15_7_3 | SAT 97 s, 13892 n | SAT 130 s, 14412 n, 30 r | SAT 57 s, 12132 n, 28 r | SAT 119 s, 19728 n, 31 r |
+| 2017_cargo_challenge01_0s_1913 | SAT 600 s, ? n | SAT 600 s, ? n | SAT 600 s, ? n | UNKNOWN 600 s, ? n |
+| 2017_hrc_exp1-1-5670 | OPT 19 s, 8343 n | OPT 22 s, 9134 n, 20 r | OPT 9 s, 5516 n, 13 r | OPT 19 s, 8683 n, 17 r |
+| 2019_amaze_2012-03-19 | SAT 62 s, 24465 n | SAT 51 s, 23279 n, 52 r | SAT 211 s, 35057 n, 62 r | SAT 1 s, 1741 n, 6 r |
+| 2019_rotating-workforce_Example1337 | TO 300 s, 11333 n | TO 300 s, 11734 n, 19 r | TO 300 s, 789 n, 2 r | TO 305 s, 303 n, 1 r |
+| 2020_cable_tree_wiring_R046 | TO(2826893) 323 s, 1446 n | TO(2826840) 308 s, 1139 n | TO(2826840) 307 s, 1139 n | TO(2835315) 301 s, 663 n, 1 r |
+| 2020_hoist-benchmark-for-minizinc_PU_3_8_5 | TO 312 s, 18 n | TO 312 s, 18 n | TO 318 s, 18 n | SAT 600 s, ? n |
+| 2021_perfect_square_92 | TO 300 s, 24924 n | TO 300 s, 18848 n, 45 r | TO 300 s, 69949 n, 124 r | TO 300 s, 61794 n, 109 r |
+| 2022_blocks-world_16-4-13 | TO 300 s, 25468 n | TO 300 s, 29156 n, 59 r | TO 300 s, 36379 n, 62 r | TO 300 s, 49998 n, 91 r |
+| 2023_kidney-exchange_3_20_0.15_3 | OPT 83 s, 1489 n | OPT 133 s, 2095 n, 5 r | OPT 299 s, 2624 n, 6 r | TO(608) 302 s, 612 n, 2 r |
+| 2023_test-scheduling_t30m20r3-20 | TO(2745) 300 s, 15099 n | TO(2745) 300 s, 11213 n, 29 r | TO(2745) 300 s, 11285 n, 27 r | TO(2763) 300 s, 18653 n, 29 r |
+| 2024_word-equations_word_equations_02_track_8-int | OPT 28 s, 2630 n | OPT 23 s, 2396 n, 6 r | OPT 9 s, 312 n, 1 r | OPT 4 s, 36 n |
+| 2025_EchoSched_15-15-0-1_3 | TO(18890) 300 s, 6034 n | TO(18871) 300 s, 4865 n, 5 r | TO(18864) 300 s, 5323 n, 5 r | SAT 600 s, ? n |
+| 2026_gbac_csplib12-gbac | TO 312 s, 1 n | TO 309 s, 1 n | TO 311 s, 1 n | TO 314 s, 1 n |
+| 2026_gcc-benchmark_instance-i24 | SAT 5 s, 363 n | SAT 5 s, 363 n | SAT 5 s, 363 n | TO 300 s, 23738 n |
+
+With the proof (`check-TO`: veripb did not finish within its cap of 600 to 900 s; the `SAT 600
+s, ? n` cells with a syntax error are runs the 600 s wall killed after the stop, their proof
+truncated, section 13 point 3; the one `Checking error` is section 13 point 1):
+
+| instance | sbase | slubyps | saltlubyps | sactlubyps |
+|---|---|---|---|---|
+| 2012_ship-schedule_6ShipsMixed | OPT 140 s, 3335 n, 2408 MB, check-TO 900.08 s | OPT 110 s, 2222 n, 6 r, 1315 MB, check-TO 600.06 s | SAT 600 s, ? n, 666 MB, check-TO 600.06 s | TO(300505) 343 s, 60 n, 135 MB, check-TO 600.05 s |
+| 2014_amaze_2012-04-27 | SAT 14 s, 9427 n, 84 MB, V 7.24 s | SAT 20 s, 10720 n, 28 r, 102 MB, V 9.78 s | SAT 33 s, 14075 n, 30 r, 115 MB, V 11.86 s | SAT 11 s, 8715 n, 23 r, 55 MB, V 5.07 s |
+| 2014_fillomino_5x5_1 | SAT 33 s, 9646 n, 197 MB, V 43.90 s | SAT 50 s, 9714 n, 28 r, 218 MB, V 59.18 s | SAT 13 s, 5244 n, 14 r, 94 MB, V 23.30 s | SAT 17 s, 7054 n, 16 r, 128 MB, V 26.38 s |
+| 2014_openshop_gp10-4 | TO(1139) 300 s, 29795 n, 1088 MB, check-TO 900.07 s | TO(1139) 300 s, 24599 n, 45 r, 1598 MB, check-TO 600.14 s | TO(1079) 300 s, 28121 n, 47 r, 2687 MB, check-TO 600.13 s | TO(1077) 300 s, 33620 n, 54 r, 1506 MB, check-TO 600.11 s |
+| 2016_nfc_18_3_5 | OPT 101 s, 1033 n, 450 MB, V 19.24 s | TO(1338) 300 s, 1137 n, 3 r, 750 MB, V 42.40 s | OPT 119 s, 863 n, 2 r, 401 MB, V 20.27 s | OPT 35 s, 398 n, 1 r, 189 MB, V 7.39 s |
+| 2016_solbat_sb_15_15_7_3 | SAT 187 s, 13892 n, 998 MB, V 184.17 s | SAT 201 s, 14412 n, 30 r, 1018 MB, V 196.69 s | SAT 118 s, 12132 n, 28 r, 591 MB, V 118.53 s | SAT 176 s, 19728 n, 31 r, 842 MB, V 144.90 s |
+| 2017_cargo_challenge01_0s_1913 | SAT 600 s, ? n, 33 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 610.42 s | SAT 600 s, ? n, 33 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 593.53 s | SAT 600 s, ? n, 33 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 585.83 s | UNKNOWN 600 s, ? n, 0 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 22.01 s |
+| 2017_hrc_exp1-1-5670 | OPT 46 s, 8343 n, 296 MB, V 26.59 s | OPT 43 s, 9134 n, 20 r, 280 MB, V 27.28 s | OPT 23 s, 5516 n, 13 r, 139 MB, V 13.56 s | OPT 40 s, 8683 n, 17 r, 213 MB, REJECTED:Error:_Checking_error_at_/scratch/arthur/wave45-strategy-runs/out3/sactlubyps/2017_hrc_exp1-1-5670.proof.pbp:620348 6.02 s |
+| 2019_amaze_2012-03-19 | SAT 71 s, 24465 n, 199 MB, V 18.51 s | SAT 70 s, 23279 n, 52 r, 193 MB, V 19.03 s | SAT 229 s, 35057 n, 62 r, 279 MB, V 33.38 s | SAT 1 s, 1741 n, 6 r, 8 MB, V 0.76 s |
+| 2019_rotating-workforce_Example1337 | TO 301 s, 9678 n, 691 MB, check-TO 900.04 s | TO 301 s, 9733 n, 14 r, 745 MB, check-TO 600.03 s | TO 314 s, 614 n, 2 r, 59 MB, V 36.88 s | TO 302 s, 223 n, 42 MB, V 14.50 s |
+| 2020_cable_tree_wiring_R046 | SAT 601 s, ? n, 916 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 108.30 s | SAT 601 s, ? n, 963 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 108.21 s | SAT 601 s, ? n, 968 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 116.72 s | SAT 601 s, ? n, 1835 MB, check-TO 600.10 s |
+| 2020_hoist-benchmark-for-minizinc_PU_3_8_5 | TO 326 s, 18 n, 0 MB, V 5.10 s | TO 320 s, 18 n, 0 MB, V 5.43 s | TO 330 s, 18 n, 0 MB, V 4.47 s | SAT 600 s, ? n, 35 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 71.72 s |
+| 2021_perfect_square_92 | TO 300 s, 22560 n, 336 MB, V 689.52 s | TO 300 s, 18690 n, 45 r, 492 MB, check-TO 600.02 s | TO 300 s, 62606 n, 108 r, 328 MB, check-TO 600.02 s | TO 300 s, 60084 n, 107 r, 221 MB, V 170.16 s |
+| 2022_blocks-world_16-4-13 | TO 300 s, 17706 n, 1578 MB, check-TO 900.05 s | TO 300 s, 20838 n, 40 r, 1686 MB, check-TO 600.07 s | TO 300 s, 24895 n, 48 r, 1816 MB, check-TO 600.03 s | TO 300 s, 37547 n, 62 r, 1479 MB, V 525.99 s |
+| 2023_kidney-exchange_3_20_0.15_3 | OPT 90 s, 1489 n, 34 MB, V 3.89 s | OPT 136 s, 2095 n, 5 r, 49 MB, V 5.01 s | TO(815) 300 s, 2571 n, 6 r, 73 MB, V 7.90 s | TO(608) 301 s, 612 n, 2 r, 27 MB, V 2.58 s |
+| 2023_test-scheduling_t30m20r3-20 | TO 330 s, 1 n, 0 MB, V 23.33 s | TO 323 s, 1 n, 0 MB, V 24.46 s | TO 326 s, 1 n, 0 MB, V 22.56 s | TO 323 s, 1 n, 0 MB, V 28.88 s |
+| 2024_word-equations_word_equations_02_track_8-int | OPT 58 s, 2630 n, 377 MB, V 323.04 s | OPT 54 s, 2396 n, 6 r, 384 MB, V 253.67 s | OPT 11 s, 312 n, 1 r, 14 MB, V 9.85 s | OPT 7 s, 36 n, 15 MB, V 8.62 s |
+| 2025_EchoSched_15-15-0-1_3 | TO(18890) 301 s, 5677 n, 960 MB, check-TO 600.08 s | TO(18875) 300 s, 3692 n, 3 r, 1981 MB, check-TO 600.08 s | TO(18875) 300 s, 3518 n, 3 r, 1941 MB, check-TO 600.08 s | SAT 600 s, ? n, 711 MB, check-TO 600.08 s |
+| 2026_gbac_csplib12-gbac | TO 416 s, 1 n, 0 MB, V 28.21 s | TO 424 s, 1 n, 0 MB, V 35.87 s | TO 398 s, 1 n, 0 MB, V 44.26 s | TO 406 s, 1 n, 0 MB, V 41.30 s |
+| 2026_gcc-benchmark_instance-i24 | SAT 6 s, 363 n, 0 MB, V 0.30 s | SAT 5 s, 363 n, 0 MB, V 0.29 s | SAT 6 s, 363 n, 0 MB, V 0.29 s | TO 300 s, 18515 n, 1035 MB, V 148.34 s |
+
+**The re-measurement on `46b0deaa`** (phase saving without the assignment shape) was running in
+`/scratch/arthur/wave45-strategy-runs/out4/{slubyps,saltlubyps,sactlubyps}/` when this was
+written, 58 of its 120 subset runs done. What it had shown by then: `2017_hrc_exp1-1-5670`
+under `sactlubyps` is now OPT in 5 s (3 115 nodes) and **VERIFIED** with the proof (11 s, 75 MB,
+checked in 7 s), where it was the refused proof above; no new refusal among the 58. The rest of
+`out4` is what a reader of this record should take as the subset's final strategy columns
+(`OUT=.../out5 python3 -I tables.py subset` merges it with `sbase`).
+
+**What the subset says**, on the complete table above:
+
+1. **The free search matters where Chuffed's free search matters, and it cuts both ways.** The
+   activity order with restarts and phase saving (`sactlubyps`) is the best column on
+   word-equations (OPT in 4 s, 36 nodes, against 28 s), nfc (OPT in 29 s against 88 s; Chuffed's
+   fixed search never proves it) and the two amaze instances (1 s and 6 s against 62 s and
+   10 s). It is the worst on ship-schedule (an incumbent at 300 s where `base` proves the
+   optimum in 77 s), kidney-exchange and the gcc benchmark (`base` 5 s, the activity order
+   times out). `alt+luby+ps` wins fillomino, solbat and hrc and loses the 2019 amaze. No column
+   dominates.
+2. **Restarts with phase saving and the annotation's order (`slubyps`) change little**: most rows
+   within a third of `base`, kidney-exchange 60 % slower, nfc lost (a timeout where `base`
+   proves the optimum).
+3. **The TIMEOUT instances without a solution stay without one** in every column (rotating
+   workforce, hoist, perfect square, blocks world, gbac), where Chuffed's free search solves
+   them. On two of them (hoist, gbac) the run makes 1 to 18 nodes in 300 s with the proof, so the
+   search is not what stops it there.
+4. **The proof follows the nodes**, as on the codes: where the free search takes fewer nodes the
+   proof is smaller and checks faster (word-equations 377 MB and 323 s of checking for `base`,
+   15 MB and 9 s for `sactlubyps`).
 
 ### 11. The gate
 
