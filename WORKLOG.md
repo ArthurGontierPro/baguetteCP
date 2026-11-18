@@ -271,6 +271,24 @@ Two separate findings.
    (Elffers and Nordström, IJCAI 2018, RoundingSat). In a proof, a deleted clause is also a smaller
    database for the checker.
 
+### 2026-11-18 — addendum to the request above: restarts, and reusing the trail (from the codes-cp side session)
+
+4. **Restarts with a good strategy, and trail reuse.** Tied to points 2 and 3: an activity heuristic
+   and LBD-based deletion are designed together with restarts, and SPEC §3.4 still disables them
+   (D-0045, open). Request: a decision record on enabling restarts, then a study of the strategy.
+   Literature on the policy: Luby (Luby, Sinclair, Zuckerman, IPL 1993), geometric (Walsh, IJCAI 1999),
+   agility-based (Biere, SAT 2008, "Adaptive restart strategies"), dynamic restarts on the LBD average
+   (Audemard and Simon, CP 2012, "Refining restarts strategies for SAT and UNSAT"), a comparison
+   (Biere and Fröhlich, POS 2015, "Evaluating CDCL restart schemes"), and the alternation of a
+   restart-heavy mode and a "stabilizing" mode (Oh, SAT 2015; used by CaDiCaL and Kissat). Phase
+   saving (Pipatsrisawat and Darwiche, SAT 2007) is what makes frequent restarts cheap.
+   **Partial restarts.** At a restart, keep the bottom of the trail whose decisions the heuristic
+   would take again anyway, that is, every decision level whose decision variable has a higher
+   activity than the best unassigned variable (van der Tak, Ramos, Heule, JSAT 2011, "Reusing the
+   assignment trail in CDCL solvers"). On the proof side a restart is a backjump to level 0 (or to the
+   kept level) and writes nothing new, but D-0045 found that `Writer.wipe_level` and learned-constraint
+   lifetimes interact with it, so that finding is the place to start.
+
 ## Completed
 
 | Task | Session | Date | Summary |
