@@ -14254,7 +14254,8 @@ for every model row). The lane on the tip is section 11's.
 Each item below changes the order in which runs happen, so the trail, the learned clauses and the
 proof can move, and D-0104's standard (node counts reported, every proof verified) applies, not
 byte identity. They are a decision for the user, one each. The gains are measured on throwaway
-builds of `8b96877` (this batch's last fix), never merged, at 10 000 nodes without the proof.
+builds of `8b96877` (the batch as it stood after E7), never merged, at 10 000 nodes without the
+proof.
 
 **(a) E2 (b), the MiniSat watch move.** On a falsified watch, look for a non-false literal from
 that watch's position onwards (circularly) and stop there, instead of re-reading the clause from
@@ -14349,7 +14350,15 @@ On a fresh clone of the batch's tip on `fataepyc-06` (`7f4420a`, binary `104769d
 the no-proof stdout lane), peak RSS 92 776 kB. Against main's `e8354a74` (gate 48's artefacts, which
 also predate D-0143), all 179 models: stdout 0 differences, exit codes 0, `.opb` 0, `.pbp` 0.
 
-RESULT_FINAL
+The tip, merged with main's D-0143 (`7f4420a`), on the rest of the evidence. The lane, `--tier all`:
+232 runs, 50 identical, 182 differing in WORK counters only, none in anything else. The six at 10 000
+nodes: every observation equal to `2cea86d`'s. Unit 3 762 ok and 0 FAIL, `test_pb`, `test_clause` and
+`test_engine` ok under `BAGUETTE_DEBUG=1`. The debug pass (25 lane instances x 9 configurations at
+1 500 nodes): the same 216 of 225 runs end rc 0 with no check firing as on section 1's fixed binary,
+with the same decisions, conflicts and learned counts in all 225, the same 9 lot-sizing runs die of
+memory under the cap, and 185 proofs say `VERIFIED NO CONCLUSION`. openshop's seven proofs again
+exhausted VeriPB's 8 GB cap in the pass. Section 1's rerun of one of them under 32 GB ended
+`VERIFIED NO CONCLUSION` (600 s, 7.8 GB).
 
 ### 12. What would reverse this
 
