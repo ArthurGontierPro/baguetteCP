@@ -125,6 +125,15 @@ let slack (row : Learned.t) ~(falsified : Lit.t -> bool) : int =
   in
   Checked.sub sum (Learned.degree row)
 
+(* A literal-keyed table through [Lit.equal], never the polymorphic compare
+   (M11-complexity-T4, D-0144). *)
+module Lit_tbl = Hashtbl.Make (struct
+  type t = Lit.t
+
+  let equal = Lit.equal
+  let hash = Hashtbl.hash
+end)
+
 let coeff_of (row : Learned.t) (l : Lit.t) : int option =
   List.find_map
     (fun (tm : Learned.term) -> if Lit.equal tm.lit l then Some tm.coeff else None)
@@ -268,12 +277,25 @@ let round_to_one : t =
     postcondition =
       (fun v o ->
         conflicting_invariant v o
-        && List.for_all
-             (fun (tm : Learned.term) ->
-               Lit.equal tm.lit v.pivot || v.falsified tm.lit
-               || tm.coeff mod o.divisor <> 0
-               || coeff_of o.reduced tm.lit = Some (tm.coeff / o.divisor))
-             (Learned.terms v.row));
+        &&
+        (* M11-complexity-T4 (D-0140 P2, D-0144): [coeff_of o.reduced] was a scan of the
+           reduced row per term of [v.row], row^2 per elimination. The reduced row's
+           coefficients are now read once into a table, keeping the FIRST term per literal
+           as [coeff_of]'s [find_map] does, so every lookup answers what the scan did. *)
+        let reduced = Lit_tbl.create 64 in
+        List.iter
+          (fun (tm : Learned.term) ->
+            if not (Lit_tbl.mem reduced tm.lit) then Lit_tbl.add reduced tm.lit tm.coeff)
+          (Learned.terms o.reduced);
+        List.for_all
+          (fun (tm : Learned.term) ->
+            Lit.equal tm.lit v.pivot || v.falsified tm.lit
+            || tm.coeff mod o.divisor <> 0
+            ||
+            match Lit_tbl.find_opt reduced tm.lit with
+            | Some c -> Int.equal c (tm.coeff / o.divisor)
+            | None -> false)
+          (Learned.terms v.row));
   }
 
 (* Every reduction this solver has, in the order D-0044 ranks them. M2-L7 appends

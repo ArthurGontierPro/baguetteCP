@@ -368,6 +368,25 @@ module Occurs = struct
       o.bit <- merge a b o.bit;
       t.count <- t.count + n)
 
+  (* The direct literals x_eq_a .. x_eq_b, as one interval (M11-complexity-T7). *)
+  let add_eq_range t x a b =
+    if a <= b then (
+      let o = owner t x in
+      let n = b - a + 1 - overlap a b o.eq in
+      o.eq <- merge a b o.eq;
+      t.count <- t.count + n)
+
+  (* [add_var] over the run x_k_a .. x_k_b of one kind ([Lit.kind_rank]), all at once.
+     The ranges are a set kept in its one canonical form (sorted, disjoint, never
+     adjacent: [merge] absorbs both), so adding a run's points one by one or as one
+     interval leaves the same list, and [count] grows by the points newly covered either
+     way. *)
+  let add_run t x kind a b =
+    match kind with
+    | 0 -> add_range t x a b
+    | 1 -> add_eq_range t x a b
+    | _ -> add_bit_range t x a b
+
   let add_var t (v : Lit.pbvar) =
     match v with
     | Lit.Ge (x, k) -> add_range t x k k
@@ -440,7 +459,7 @@ type t = {
   mutable widest : (string * int * int) option; (* name, lo, hi *)
   mutable direct_values : int;
   direct_cids : (cid, unit) Hashtbl.t;
-  mutable direct_wanted_rev : string list;
+  direct_wanted : unit Names.t;
       (* M4-T1. The variables a propagator has declared it will need the DIRECT
          encoding for, recorded at compile time and materialised by [start_proof].
 
@@ -520,7 +539,7 @@ let create () =
     objective = None;
     n_aux = 0;
     direct_cids = Hashtbl.create 64;
-    direct_wanted_rev = [];
+    direct_wanted = Names.create 16;
     alo = Hashtbl.create 16;
     ladder_clauses = 0;
     widest = None;
@@ -584,13 +603,36 @@ let commit t c =
       invalid_arg "Encoding.add_constraint: the .opb has already been written (I-X5)");
   t.n
 
-(* Append a constraint to the .opb and hand back the id [f] will give it. *)
+(* Append a constraint to the .opb and hand back the id [f] will give it.
+
+   M11-complexity-T7 (D-0143): the header's accounting is done per RUN, not per term. A
+   run is a stretch of consecutive terms whose owner is the same string (physically), of
+   one kind, at consecutive values -- a whole variable's block of a linear row is one --
+   and it is added to [Occurs] as one interval ([Occurs.add_run]: the same set and the
+   same count as its points one by one). [note_renamed] is called at the first term of
+   every run, which is where every owner first occurs, so the renaming comments keep
+   their first-occurrence order; it is idempotent after that. Per term this used to
+   sanitise and hash the owner and scan it again for [note_renamed]: on openshop's 72 M
+   terms of big-M rows, three passes over a 17-byte name and a table probe each. *)
 let add_constraint t c =
-  List.iter
-    (fun (_, (l : Lit.t)) ->
-      Occurs.add_var t.occurs l.Lit.v;
-      note_renamed t (Lit.owner l.Lit.v))
-    (Opb.terms c);
+  let rec go x kind lo hi = function
+    | [] -> Occurs.add_run t.occurs x kind lo hi
+    | (_, (l : Lit.t)) :: rest ->
+        let y = Lit.owner l.Lit.v
+        and k = Lit.kind_rank l.Lit.v
+        and v = Lit.value l.Lit.v in
+        if y == x && k = kind && v = hi + 1 then go x kind lo v rest
+        else (
+          Occurs.add_run t.occurs x kind lo hi;
+          start y k v rest)
+  and start x kind v rest =
+    note_renamed t x;
+    go x kind v v rest
+  in
+  (match Opb.terms c with
+  | [] -> ()
+  | (_, (l : Lit.t)) :: rest ->
+      start (Lit.owner l.Lit.v) (Lit.kind_rank l.Lit.v) (Lit.value l.Lit.v) rest);
   commit t c
 
 (* sum a_i l_i = b, as the two inequalities the checker would have split it into
@@ -1779,10 +1821,13 @@ let request_direct t x =
   let v = find t x in
   let size = v.hi - v.lo + 1 in
   check_direct_size x size;
-  if not (List.mem x t.direct_wanted_rev) then
-    t.direct_wanted_rev <- x :: t.direct_wanted_rev
+  Names.replace t.direct_wanted x ()
 
-let direct_requested t = List.filter (fun x -> List.mem x t.direct_wanted_rev) (vars t)
+(* M11-complexity-T7 (D-0143): the requests are a set keyed on the name. They were a
+   list, scanned with the polymorphic [List.mem] once per request and once per declared
+   variable here, O(requests x variables) at compile time; the set answers the same
+   membership, and the order is still the declaration order read off [vars]. *)
+let direct_requested t = List.filter (fun x -> Names.mem t.direct_wanted x) (vars t)
 
 (* The ids a Hall derivation names with [Explanation.Model_row]. Each is [None] exactly
    when the line does not exist, and every [None] here is a CONSTANT, not a gap:
@@ -1996,33 +2041,122 @@ let start_proof t w =
    A variable with a_i = 0 contributes nothing (skipped outright, so it never
    even touches the constant). A singleton domain (lo_i = hi_i) has no order
    literals at all -- the [List.init] below produces zero terms for it -- and
-   contributes only lo_i * a_i to the constant. *)
+   contributes only lo_i * a_i to the constant.
+
+   M11-complexity-T7 (D-0143): the per-variable blocks are collected newest first and
+   concatenated ONCE at the end. The fold used to append each block to everything before
+   it ([acc @ vterms]), which copied the row built so far once per variable: a row over
+   k variables of width w cost O(k^2 w) cons cells for an output of k w terms. Same
+   blocks, same order, so the same list. *)
 let linear_terms_int_lin_le t terms =
-  List.fold_left
-    (fun (acc, const) (a, x) ->
-      if a = 0 then (acc, const)
-      else
-        let v = find t x in
-        let const = const + (a * v.lo) in
-        let vterms =
-          match v.repr with
-          | Order ->
-              List.init (max 0 (v.hi - v.lo)) (fun i -> (a, Lit.ge x (v.lo + 1 + i)))
-          | Bits { n; _ } ->
-              (* M8-bits-encoding-T2 (D-0130 section 6): the same fold of [a * lo] into
-                 the constant, and [a * 2^i] on bit i in place of [a] on every rung. One
-                 row holds both shapes. *)
-              List.init n (fun i -> (a * (1 lsl i), Lit.bit x i))
-        in
-        (acc @ vterms, const))
-    ([], 0) terms
+  let blocks, const =
+    List.fold_left
+      (fun (acc, const) (a, x) ->
+        if a = 0 then (acc, const)
+        else
+          let v = find t x in
+          let const = const + (a * v.lo) in
+          let vterms =
+            match v.repr with
+            | Order ->
+                List.init (max 0 (v.hi - v.lo)) (fun i -> (a, Lit.ge x (v.lo + 1 + i)))
+            | Bits { n; _ } ->
+                (* M8-bits-encoding-T2 (D-0130 section 6): the same fold of [a * lo] into
+                   the constant, and [a * 2^i] on bit i in place of [a] on every rung. One
+                   row holds both shapes. *)
+                List.init n (fun i -> (a * (1 lsl i), Lit.bit x i))
+          in
+          (vterms :: acc, const))
+      ([], 0) terms
+  in
+  (List.concat (List.rev blocks), const)
+
+(* The full row  sum_i a_i x_i <= rhs,  as a normalised [Opb.t], by the three steps
+   spelled out: substitute, negate to ">=", merge. The REFERENCE for
+   [expand_int_lin_le] below, which takes it whenever two of the row's variables could
+   share a name. *)
+let expand_int_lin_le_by_steps t terms rhs =
+  let opb_terms, const = linear_terms_int_lin_le t terms in
+  Opb.normalise (Opb.le opb_terms (rhs - const))
+
+(* M11-complexity-T7 (D-0143). Do the variables with a non-zero coefficient have
+   pairwise distinct SANITISED names? Then no two literals of the expanded row share a
+   rendered name ([Lit.render] is injective on (sanitised owner, kind, value), see
+   [Occurs]), and [Opb.normalise] has nothing to merge. *)
+let distinct_owners terms =
+  match terms with
+  | [] | [ _ ] -> true
+  | _ ->
+      let seen = Names.create 8 in
+      List.for_all
+        (fun (a, x) ->
+          a = 0
+          ||
+          let k = Lit.sanitize x in
+          (not (Names.mem seen k))
+          &&
+          (Names.add seen k ();
+           true))
+        terms
 
 (* The full row  sum_i a_i x_i <= rhs,  as a normalised [Opb.t]. Exposed on its
    own (not just via [add_int_lin_le]) so a caller -- or a test -- can inspect
-   the row before it is committed to the .opb. *)
+   the row before it is committed to the .opb.
+
+   M11-complexity-T7 (D-0143): when [distinct_owners] holds, the three steps are done in
+   one pass that builds the final row back to front, with no intermediate list. A
+   big-M row of openshop_gp10-4 is 20 000 terms, and the three steps allocated about 30
+   words per term in three lists that all outlived the minor heap; this allocates the
+   final terms only. What it builds is what the steps build, term by term:
+
+   - [linear_terms_int_lin_le] gives, per variable in order and per rung (or bit) in
+     ascending order, [(a, l)] with [l] POSITIVE ([Lit.ge] / [Lit.bit]), coefficient [a]
+     on a rung and [a * 2^i] on bit i, and the constant [sum a_i lo_i];
+   - [Opb.le] negates every coefficient and makes the right-hand side
+     [-(rhs - const)];
+   - [Opb.normalise], with every name distinct, keeps the order and maps each positive
+     [(c, l)] to [(c, l)] if [c > 0], to nothing if [c = 0], and to [(-c, ~l)] with the
+     right-hand side lowered by [c] if [c < 0] ([Opb.normalise_distinct]).
+
+   The right-hand side's moves are summed apart and applied at the end; integer addition
+   commutes, wrapped or not. test/unit/test_proof.ml compares this function with
+   [expand_int_lin_le_by_steps] on random rows over order and bits variables, sanitise
+   collisions and repeated variables included. *)
 let expand_int_lin_le t terms rhs =
-  let opb_terms, const = linear_terms_int_lin_le t terms in
-  Opb.normalise (Opb.le opb_terms (rhs - const))
+  if not (distinct_owners terms) then expand_int_lin_le_by_steps t terms rhs
+  else
+    let const =
+      List.fold_left
+        (fun const (a, x) -> if a = 0 then const else const + (a * (find t x).lo))
+        0 terms
+    in
+    let moved = ref 0 in
+    let push c l acc =
+      if c = 0 then acc
+      else if c > 0 then (c, l) :: acc
+      else (
+        moved := !moved + c;
+        (-c, Lit.negate l) :: acc)
+    in
+    let rec back acc = function
+      | [] -> acc
+      | (a, _) :: rest when a = 0 -> back acc rest
+      | (a, x) :: rest ->
+          let v = find t x in
+          let acc = ref acc in
+          (match v.repr with
+          | Order ->
+              for value = v.hi downto v.lo + 1 do
+                acc := push (-a) (Lit.ge x value) !acc
+              done
+          | Bits { n; _ } ->
+              for i = n - 1 downto 0 do
+                acc := push (-(a * (1 lsl i))) (Lit.bit x i) !acc
+              done);
+          back !acc rest
+    in
+    let row = back [] (List.rev terms) in
+    Opb.ge row (-(rhs - const) - !moved)
 
 (* ---------------------------------------------------------------------------
    M1-T32: the precondition that makes "Compile is the only door" enforced rather
@@ -2098,9 +2232,63 @@ let check_lin_le_computable t terms rhs ~what =
    This is one of the two committing doors M1-T32 guards. The check runs BEFORE the
    expansion, so a row that cannot be computed never reaches the sink and
    the encoding is left exactly as it was. *)
+(* M11-complexity-T7 (D-0143): under [Discard_rows] (`--no-proof`) the expanded row is
+   never read, so it is not built: what [add_constraint] would have recorded is recorded
+   from the variables, per variable instead of per term, and the id is minted. It is
+   D-0126's rule 1 (the ladder loop replaced by its count) applied to a linear row.
+
+   What [add_constraint] records is the header's names ([Occurs]) and the renamings,
+   and nothing reads either under [Discard_rows] (the .opb is never written), but they
+   are kept exact all the same, so that the encoding is the same object in both modes.
+   They can be read off the variables when [discard_shape_ok] holds:
+
+   - [distinct_owners]: no two literals of the row share a name, so [Opb.normalise]
+     drops a term only for a zero coefficient;
+   - no expanded coefficient is zero. A rung carries [a <> 0]; bit i carries
+     [a * 2^i], zero only if it wrapped, and if bit i's wraps so does every higher
+     bit's, so the top bit is the one to test ([Compile]'s cap keeps it from happening).
+
+   Then the row's terms are, per variable with [a <> 0] in order, the whole block
+   x_ge_(lo+1) .. x_ge_hi (none when lo = hi) or x_bit_0 .. x_bit_(n-1): one interval
+   per variable ([Occurs.add_range] / [add_bit_range], which [add_constraint]'s runs
+   reduce to), and the first occurrence of each owner in that order ([note_renamed]).
+   Otherwise the row is built and committed as in the other modes.
+   test/unit/test_proof.ml feeds the same random rows to a discarding and a retaining
+   encoding and compares ids, name counts and renamings. *)
+let discard_shape_ok t terms =
+  distinct_owners terms
+  && List.for_all
+       (fun (a, x) ->
+         a = 0
+         ||
+         match (find t x).repr with
+         | Order -> true
+         | Bits { n; _ } -> a * (1 lsl (n - 1)) <> 0)
+       terms
+
+let count_discarded_row t terms =
+  List.iter
+    (fun (a, x) ->
+      if a <> 0 then
+        let v = find t x in
+        match v.repr with
+        | Order ->
+            if v.hi > v.lo then (
+              note_renamed t x;
+              Occurs.add_range t.occurs x (v.lo + 1) v.hi)
+        | Bits { n; _ } ->
+            note_renamed t x;
+            Occurs.add_bit_range t.occurs x 0 (n - 1))
+    terms;
+  t.n <- t.n + 1;
+  t.n
+
 let add_int_lin_le t terms rhs =
   check_lin_le_computable t terms rhs ~what:"Encoding.add_int_lin_le";
-  add_constraint t (expand_int_lin_le t terms rhs)
+  match t.sink with
+  | Discard when discard_shape_ok t terms -> count_discarded_row t terms
+  | Discard | Retain _ | Stream _ | Written ->
+      add_constraint t (expand_int_lin_le t terms rhs)
 
 (* ---------------------------------------------------------------------------
    M1-T9: disequalities.

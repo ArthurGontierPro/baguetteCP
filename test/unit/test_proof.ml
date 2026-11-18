@@ -4239,6 +4239,249 @@ let test_bits_atoms_veripb () =
           Encoding.ensure_atom e w "x" 3);
       close_out oc
 
+(* M11-complexity-T7 (D-0143): [Opb.normalise] skips its table when [distinct_names]
+   shows the table would merge nothing. Pinned here against the table itself
+   ([normalise_by_name], the pre-T7 function) on rows that merge and rows that do not:
+   rendered text AND structure must agree, and both paths must actually be taken. The
+   owners include a sanitise collision ("a.b" / "a_b") and the values a negative one, so
+   a run split across two physically different but equal-after-sanitise owners is seen. *)
+let test_m11t7_normalise_paths () =
+  let owners = [| "x"; "y"; "a.b"; "a_b"; "z" |] in
+  let st = Random.State.make [| 1143 |] in
+  let pick a = a.(Random.State.int st (Array.length a)) in
+  let lit () =
+    let x = pick owners and v = Random.State.int st 7 - 3 in
+    let l =
+      match Random.State.int st 3 with
+      | 0 -> Lit.ge x v
+      | 1 -> Lit.eq x v
+      | _ -> Lit.bit x (abs v)
+    in
+    if Random.State.bool st then l else Lit.negate l
+  in
+  (* A linear row's shape: blocks of increasing values per owner. *)
+  let block () =
+    let x = pick owners and a = Random.State.int st 7 - 3 in
+    let lo = Random.State.int st 5 - 2 and n = 1 + Random.State.int st 5 in
+    List.init n (fun i -> (a, Lit.ge x (lo + i)))
+  in
+  let fast = ref 0 and slow = ref 0 and bad = ref 0 in
+  for i = 1 to 4000 do
+    let terms =
+      if i mod 2 = 0 then
+        List.concat (List.init (Random.State.int st 4) (fun _ -> block ()))
+      else
+        List.init (Random.State.int st 10) (fun _ -> (Random.State.int st 7 - 3, lit ()))
+    in
+    let c = Opb.ge terms (Random.State.int st 11 - 5) in
+    if Opb.distinct_names terms then incr fast else incr slow;
+    let a = Opb.normalise c and b = Opb.normalise_by_name c in
+    if not (Opb.constr_to_string a = Opb.constr_to_string b && a = b) then incr bad
+  done;
+  check_eq "m11t7: normalise and normalise_by_name agree on 4000 rows" ~expected:"0"
+    ~got:(string_of_int !bad);
+  check "m11t7: the fast path was taken" (!fast > 500);
+  check "m11t7: the table was taken" (!slow > 500);
+  (* The two cases the run split has to see through. *)
+  check "m11t7: a collision across owners is not distinct"
+    (not (Opb.distinct_names [ (1, Lit.ge "a.b" 1); (1, Lit.ge "a_b" 1) ]));
+  check "m11t7: a value revisited by a later run is not distinct"
+    (not
+       (Opb.distinct_names
+          [ (1, Lit.ge "x" 1); (1, Lit.ge "x" 2); (1, Lit.ge "y" 1); (1, Lit.ge "x" 2) ]));
+  check "m11t7: two kinds at one value are distinct"
+    (Opb.distinct_names [ (1, Lit.ge "x" 1); (1, Lit.eq "x" 1); (1, Lit.bit "x" 1) ])
+
+(* M11-complexity-T7 (D-0143): [Encoding.add_constraint] counts the header's names per
+   run of one owner, one kind and consecutive values instead of per term. Pinned on
+   random rows -- runs, broken runs, repeated values, the three kinds, a sanitise
+   collision and renamed owners -- against [Opb.write], which scans the rows for its
+   header and is the reference every .opb in test/expected/ was written by. *)
+let test_m11t7_header_by_runs () =
+  let owners = [| "x"; "y"; "a.b"; "a_b"; "q[2]" |] in
+  let st = Random.State.make [| 2143 |] in
+  let pick a = a.(Random.State.int st (Array.length a)) in
+  let mk x kind v =
+    match kind with 0 -> Lit.ge x v | 1 -> Lit.eq x v | _ -> Lit.bit x (abs v)
+  in
+  let row () =
+    List.concat
+      (List.init
+         (1 + Random.State.int st 4)
+         (fun _ ->
+           let x = pick owners and kind = Random.State.int st 3 in
+           let lo = Random.State.int st 9 - 4 and n = 1 + Random.State.int st 6 in
+           let step = if Random.State.int st 4 = 0 then 2 else 1 in
+           List.init n (fun i ->
+               let l = mk x kind (lo + (i * step)) in
+               ( 1 + Random.State.int st 3,
+                 if Random.State.bool st then l else Lit.negate l ))))
+  in
+  let bad = ref 0 in
+  for _ = 1 to 200 do
+    let e = m7t27_create Encoding.Retain_rows in
+    for _ = 1 to 1 + Random.State.int st 6 do
+      ignore (Encoding.add_constraint e (Opb.ge (row ()) 1) : int)
+    done;
+    let render f =
+      let path = Filename.temp_file "baguette_m11t7" ".opb" in
+      let oc = open_out path in
+      f oc;
+      close_out oc;
+      let ic = open_in_bin path in
+      let s = really_input_string ic (in_channel_length ic) in
+      close_in ic;
+      Sys.remove path;
+      s
+    in
+    let counted = render (fun oc -> Encoding.write_opb ~comments:[] e oc) in
+    let scanned =
+      render (fun oc -> Opb.write oc ~comments:[] ~constraints:(Encoding.constraints e))
+    in
+    if counted <> scanned then incr bad
+  done;
+  check_eq "m11t7: the per-run header equals Opb.write's scan on 200 encodings"
+    ~expected:"0" ~got:(string_of_int !bad)
+
+(* M11-complexity-T7 (D-0143): [Opb.output_row] writes its integers with
+   [Lit.add_int] and its literals with [Lit.add_sanitized], one sanitise per owner
+   run. Pinned against the pre-T7 renderer spelled out with [Printf] ("%+d" and
+   [Lit.to_string], which test_lit_rendering_is_the_reference pins in turn), over the
+   names and the values that test uses, the extremes included. *)
+let test_m11t7_output_row_is_the_reference () =
+  let capture f =
+    let path = Filename.temp_file "baguette_m11t7" ".row" in
+    let oc = open_out_bin path in
+    f oc;
+    close_out oc;
+    let ic = open_in_bin path in
+    let s = really_input_string ic (in_channel_length ic) in
+    close_in ic;
+    Sys.remove path;
+    s
+  in
+  let names = [ "x"; ""; "X_INTRODUCED_12_"; "$ne0"; "a.b"; "a-b"; "q[3]"; "_" ] in
+  let values = [ 0; 1; -3; 7; -10; 99; max_int; min_int; min_int + 1 ] in
+  let ok = ref true in
+  List.iter
+    (fun v ->
+      let b = Buffer.create 8 in
+      Lit.add_int b v;
+      if Buffer.contents b <> string_of_int v then ok := false)
+    values;
+  check "m11t7: Lit.add_int is string_of_int" !ok;
+  let ok = ref true in
+  List.iteri
+    (fun i x ->
+      let lits =
+        List.concat_map
+          (fun v ->
+            List.concat_map
+              (fun l -> [ l; Lit.negate l ])
+              [ Lit.ge x v; Lit.eq x v; Lit.bit x v ])
+          values
+      in
+      (* Coefficients cycle through the same extremes; the owner changes mid-row so the
+         run cache is both hit and missed. *)
+      let terms =
+        List.mapi (fun j l -> (List.nth values (j mod List.length values), l)) lits
+        @ [ (5, Lit.ge "other" 2); (-1, Lit.ge x 1) ]
+      in
+      let c = Opb.ge terms (List.nth values (i mod List.length values)) in
+      let reference =
+        Printf.sprintf "@c%d %s>= %d ;\n" (i + 1)
+          (String.concat ""
+             (List.map (fun (a, l) -> Printf.sprintf "%+d %s " a (Lit.to_string l)) terms))
+          (Opb.rhs c)
+      in
+      if capture (fun oc -> Opb.output_row oc (i + 1) c) <> reference then ok := false)
+    names;
+  check "m11t7: Opb.output_row writes the pre-T7 bytes" !ok
+
+(* M11-complexity-T7 (D-0143): [Encoding.expand_int_lin_le] builds the row in one pass
+   when the variables' sanitised names are distinct. Pinned against
+   [expand_int_lin_le_by_steps] (substitute, [Opb.le], [Opb.normalise]) on random rows
+   over order variables (a singleton and a width-1 one among them), bits variables, a
+   sanitise collision ("a.b" / "a_b"), repeated variables and zero coefficients, so both
+   branches run. *)
+let test_m11t7_expand_one_pass () =
+  let e = m7t27_create Encoding.Retain_rows in
+  let order =
+    [ ("x", -3, 4); ("a.b", 0, 5); ("a_b", 1, 3); ("one", 2, 2); ("w1", 0, 1) ]
+  in
+  List.iter (fun (x, lo, hi) -> Encoding.declare_int e x ~lo ~hi) order;
+  Encoding.declare_int_bits e "bx" ~lo:(-2) ~hi:9;
+  Encoding.declare_int_bits e "q[1]" ~lo:0 ~hi:5;
+  let vars = [| "x"; "a.b"; "a_b"; "one"; "w1"; "bx"; "q[1]" |] in
+  let st = Random.State.make [| 3143 |] in
+  let bad = ref 0 and fast = ref 0 and slow = ref 0 in
+  for _ = 1 to 3000 do
+    let k = Random.State.int st 5 in
+    let terms =
+      List.init k (fun _ ->
+          (Random.State.int st 9 - 4, vars.(Random.State.int st (Array.length vars))))
+    in
+    let rhs = Random.State.int st 41 - 20 in
+    if Encoding.distinct_owners terms then incr fast else incr slow;
+    let a = Encoding.expand_int_lin_le e terms rhs
+    and b = Encoding.expand_int_lin_le_by_steps e terms rhs in
+    if not (a = b && Opb.constr_to_string a = Opb.constr_to_string b) then incr bad
+  done;
+  check_eq "m11t7: one-pass expansion equals the three steps on 3000 rows" ~expected:"0"
+    ~got:(string_of_int !bad);
+  check "m11t7: the one-pass expansion was taken" (!fast > 500);
+  check "m11t7: the steps were taken" (!slow > 300);
+  check "m11t7: a sanitise collision is not distinct"
+    (not (Encoding.distinct_owners [ (1, "a.b"); (2, "a_b") ]));
+  check "m11t7: a zero coefficient does not count"
+    (Encoding.distinct_owners [ (0, "x"); (2, "x") ])
+
+(* M11-complexity-T7 (D-0143): under [Discard_rows], [add_int_lin_le] counts a row from
+   its variables instead of building it. The same random rows (order and bits
+   variables, a width-0 and a width-1 one, a sanitise collision, renamed owners,
+   repeated variables, zero coefficients) go to a discarding and a retaining encoding,
+   interleaved with hand-built clauses; the ids, the header's name count and the
+   renaming comments must agree after every row. *)
+let test_m11t7_discarded_rows_count_the_same () =
+  let mk policy =
+    let e = m7t27_create policy in
+    List.iter
+      (fun (x, lo, hi) -> Encoding.declare_int e x ~lo ~hi)
+      [ ("x", -3, 4); ("a.b", 0, 5); ("a_b", 1, 3); ("one", 2, 2); ("w1", 0, 1) ];
+    Encoding.declare_int_bits e "bx" ~lo:(-2) ~hi:9;
+    Encoding.declare_int_bits e "q[1]" ~lo:0 ~hi:5;
+    e
+  in
+  let d = mk Encoding.Discard_rows and r = mk Encoding.Retain_rows in
+  let vars = [| "x"; "a.b"; "a_b"; "one"; "w1"; "bx"; "q[1]" |] in
+  let st = Random.State.make [| 4143 |] in
+  let same () =
+    Encoding.n_constraints d = Encoding.n_constraints r
+    && d.Encoding.occurs.Encoding.Occurs.count = r.Encoding.occurs.Encoding.Occurs.count
+    && d.Encoding.renamed_rev = r.Encoding.renamed_rev
+  in
+  let bad = ref 0 in
+  for i = 1 to 2000 do
+    (if i mod 7 = 0 then (
+       let c =
+         Opb.clause [ Lit.ge "x" (Random.State.int st 7 - 2); Lit.bool_true "w1" ]
+       in
+       ignore (Encoding.add_constraint d c : int);
+       ignore (Encoding.add_constraint r c : int))
+     else
+       let terms =
+         List.init (Random.State.int st 4) (fun _ ->
+             (Random.State.int st 7 - 3, vars.(Random.State.int st (Array.length vars))))
+       in
+       let rhs = Random.State.int st 21 - 10 in
+       ignore (Encoding.add_int_lin_le d terms rhs : int);
+       ignore (Encoding.add_int_lin_le r terms rhs : int));
+    if not (same ()) then incr bad
+  done;
+  check_eq "m11t7: a discarded row counts what a retained one records, 2000 rows"
+    ~expected:"0" ~got:(string_of_int !bad);
+  check "m11t7: the renamings were exercised" (List.length r.Encoding.renamed_rev >= 2)
+
 let () =
   report_checker ();
   test_lits ();
@@ -4290,6 +4533,11 @@ let () =
   test_bits_declare ();
   test_bits_mixed_row ();
   test_bits_atoms_veripb ();
+  test_m11t7_normalise_paths ();
+  test_m11t7_header_by_runs ();
+  test_m11t7_output_row_is_the_reference ();
+  test_m11t7_expand_one_pass ();
+  test_m11t7_discarded_rows_count_the_same ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

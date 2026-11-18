@@ -1441,6 +1441,20 @@ let test_bound_history () =
           bad :=
             Printf.sprintf "falsified_at %s: history %d scan %d" (Lit.to_string l) a b))
       lits;
+    (* M11-complexity-T4 (D-0144): [Pb_analysis.falsified_before] against the two trail
+       walks it replaced, at every position [at], on every literal. *)
+    List.iter
+      (fun l ->
+        for at = 0 to n + 1 do
+          let a = Baguette_core.Pb_analysis.falsified_before s ~at l in
+          let b = Baguette_core.Pb_analysis.falsified_before_scan s ~at l in
+          if a <> b then (
+            ok := false;
+            bad :=
+              Printf.sprintf "falsified_before %s at %d: history %b scan %b"
+                (Lit.to_string l) at a b)
+        done)
+      lits;
     List.iter
       (fun var ->
         for value = -1 to 11 do

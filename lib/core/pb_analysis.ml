@@ -112,9 +112,11 @@
    store is read, but only for values the trail already fixes; nothing here can see a
    domain the propagation did not see. That is I-X6 on this half.
 
-   The cost is a downward scan of the trail per variable per elimination. It is bounded by
-   [Store.trail_length] and the rows here have few variables; a measurement that finds it
-   hot should memoise per [at], not reach for a live read.
+   The cost was a downward scan of the trail per literal query, four to five queries per
+   term per elimination. Since M11-complexity-T4 (D-0144) [falsified_before] answers from
+   the variable's bound history in O(log moves), with the same answers, and
+   [bounds_before] stays as the specification it is checked against under
+   [BAGUETTE_DEBUG]. Still never a live read.
 
    ---------------------------------------------------------------------------
    Why the PB row can propagate where the clause cannot -- D-0044's fork, from the
@@ -306,7 +308,7 @@ let bounds_before store ~at v =
    slack, which [Reduce]'s own postcondition then rejects -- a fallback, not a wrong row.
    No [Linear.pb_row] contains one, so this arm is unreached today and is written to be
    unreachable-and-safe rather than unreachable-and-absent. *)
-let falsified_before store ~at (l : Lit.t) =
+let falsified_before_scan store ~at (l : Lit.t) =
   match l.Lit.v with
   | Lit.Eq _ | Lit.Bit _ -> false
   | Lit.Ge (name, k) -> (
@@ -315,6 +317,50 @@ let falsified_before store ~at (l : Lit.t) =
       | Some v ->
           let lo, hi = bounds_before store ~at v in
           if l.Lit.positive then hi < k else lo >= k)
+
+(* M11-complexity-T4 (D-0140 P1, D-0144): the same answer as [falsified_before_scan]
+   above, case for case, from [v]'s bound history in O(log moves) instead of the two trail
+   walks of [bounds_before]. [Reduce] and [Ladder] ask it four to five times per term per
+   elimination, so the walk was paid trail-length times that per PB step.
+
+   [[x >= k]] is false before [at] iff [hi x <= k - 1] then, i.e. iff that bound had been
+   established strictly below [at] or held from the start. A bound only tightens along the
+   trail (I-D3), so:
+
+     - if it does not hold NOW, it held at no earlier position either: [false];
+     - otherwise [Store.var_support] names the one live entry that established it, and
+       the answer is whether that entry sits strictly below [at]: [bounds_before] reads
+       the bound off the newest entry on [v] below [at], which includes that entry's
+       tightening exactly when that entry is among them;
+     - [no_support] while it holds now means no entry established it: it held in the
+       domain [v] was created with, which is what [bounds_before] reconstructs at every
+       [at] (the oldest entry's [old], or the store's domain when [v] has no entry).
+
+   The negation [~[x >= k]] is the same question on the lower bound with value [k]. The
+   scan stays as the [BAGUETTE_DEBUG] cross-check, as [falsified_at_scan] does for
+   [falsified_at]. *)
+let falsified_before store ~at (l : Lit.t) =
+  let r =
+    match l.Lit.v with
+    | Lit.Eq _ | Lit.Bit _ -> false
+    | Lit.Ge (name, k) -> (
+        match Store.var_named store name with
+        | None -> false
+        | Some v ->
+            let d = Store.get store v in
+            let positive = l.Lit.positive in
+            let holds_now = if positive then Domain.hi d < k else Domain.lo d >= k in
+            if not holds_now then false
+            else
+              let p =
+                if positive then Store.var_support store v ~is_lower:false ~value:(k - 1)
+                else Store.var_support store v ~is_lower:true ~value:k
+              in
+              p = Store.no_support || p < at)
+  in
+  Debug.check "M11-T4: falsified_before agrees with the trail scan" (fun () ->
+      r = falsified_before_scan store ~at l);
+  r
 
 (* The same question at the conflict, i.e. with the whole trail in force. *)
 let falsified_now store (l : Lit.t) =
@@ -491,13 +537,64 @@ let row_levels v =
    does -- "this row licenses no jump at all", which is a real outcome and not a failure:
    [assertive_slack] guarantees [conflict_level - 1] asserts, but [first_resolution]
    guarantees nothing, and a row learned under it can land here. *)
-let asserting_level v =
+let asserting_level_reference v =
   let rec scan lvl =
     if lvl >= v.c_conflict_level then v.c_conflict_level
     else if asserts_at v lvl then lvl
     else scan (lvl + 1)
   in
   scan 0
+
+(* M11-complexity-T4 (D-0140 P2, D-0144): [asserting_level_reference] above, in one pass
+   over the terms instead of one per level -- it was levels x terms, once per learned row,
+   and the levels are the search depth.
+
+   At level [lvl] the unfalsified terms are those with [c_level_of > lvl], so the slack
+   sum at [lvl + 1] is the one at [lvl] minus the coefficients falsified exactly at
+   [lvl + 1], and the largest unfalsified coefficient is a suffix maximum over levels.
+   Levels at or below 0 are falsified at every [lvl] scanned and are left out; levels at
+   or above the conflict level are unfalsified at every [lvl] scanned and are bucketed
+   there.
+
+   The [Checked] operations are the reference's, value for value, so an overflow raises
+   where it raised and with the same message (it reaches [Fallback (Overflow m)]). The
+   level-0 sum is accumulated over the terms in list order with [Checked.add], which is
+   exactly the reference's first sum; every later sum is that one minus nonnegative
+   coefficients (a row's coefficients are >= 1, [Learned.make]), so it cannot overflow and
+   the reference's own additions for it could not either. Each level's [Checked.sub] of
+   the degree is then the reference's, on the same two integers. *)
+let asserting_level v =
+  let cl = v.c_conflict_level in
+  if cl <= 0 then cl
+  else
+    let at_lvl = Array.make (cl + 1) 0 and max_at = Array.make (cl + 1) 0 in
+    let s0 =
+      List.fold_left
+        (fun acc (tm : Learned.term) ->
+          let l = v.c_level_of tm.Learned.lit in
+          if l <= 0 then acc
+          else
+            let b = if l > cl then cl else l in
+            let c = tm.Learned.coeff in
+            at_lvl.(b) <- at_lvl.(b) + c;
+            if c > max_at.(b) then max_at.(b) <- c;
+            Checked.add acc c)
+        0 (Learned.terms v.c_row)
+    in
+    (* max_at.(b) becomes the largest coefficient at any level >= b *)
+    for b = cl - 1 downto 1 do
+      if max_at.(b + 1) > max_at.(b) then max_at.(b) <- max_at.(b + 1)
+    done;
+    let degree = Learned.degree v.c_row in
+    let rec scan lvl sum =
+      if lvl >= cl then cl
+      else
+        let s = Checked.sub sum degree in
+        (* the terms unfalsified at [lvl] sit at levels >= lvl + 1 *)
+        if s < 0 || max_at.(lvl + 1) > s then lvl
+        else scan (lvl + 1) (sum - at_lvl.(lvl + 1))
+    in
+    scan 0 s0
 
 (* THE criterion (docs/ROADMAP.md M2-L6 test (a2)). Stop as soon as the row would still
    say something after the conflict level is undone -- that is, as soon as it conflicts or
@@ -609,6 +706,17 @@ type t = {
 
 type result = Learned_row of t | Fallback of fallback
 
+(* Monomorphic tables for the analysis (M11-complexity-T4, D-0144): a literal keyed through
+   [Lit.equal], an id through [Int.equal], never the polymorphic compare. *)
+module Lit_tbl = Hashtbl.Make (struct
+  type t = Lit.t
+
+  let equal = Lit.equal
+  let hash = Hashtbl.hash
+end)
+
+module Int_tbl = Hashtbl.Make (Int)
+
 (* ------------------------------------------------------- reading a derivation *)
 
 (* Every constraint id the derivation cites. The I-S4 discharge in the header is a claim
@@ -616,8 +724,15 @@ type result = Learned_row of t | Fallback of fallback
    rather than a catch-all, so a constructor added to [Explanation] stops compiling here
    and whoever adds it says what it cites. *)
 let cited_ids (e : Explanation.t) : int list =
+  (* Built reversed and turned round once, the ids taken in a table (M11-complexity-T4,
+     D-0144); the same ids in the same first-seen order as the [List.mem]/[@] it was. *)
+  let seen = Int_tbl.create 16 in
   let acc = ref [] in
-  let add id = if not (List.mem id !acc) then acc := !acc @ [ id ] in
+  let add id =
+    if not (Int_tbl.mem seen id) then (
+      Int_tbl.replace seen id ();
+      acc := id :: !acc)
+  in
   let rec go (e : Explanation.t) =
     match e with
     | Explanation.Model_row id -> add id
@@ -647,7 +762,7 @@ let cited_ids (e : Explanation.t) : int list =
              (Lit.to_string l))
   in
   go e;
-  !acc
+  List.rev !acc
 
 (* ------------------------------------------------------- the loop *)
 
@@ -678,16 +793,21 @@ let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row optio
      pivot and once per term per criterion check by [level_of], it is memoised here.
      [Lit.t] holds no closure and nothing mutable, so structural hashing is sound; the
      table is only ever looked up, never iterated, so no emitted byte depends on its
-     order. *)
-  let fat_memo : (Lit.t, int) Hashtbl.t = Hashtbl.create 64 in
+     order. M11-complexity-T4 (D-0140 P2, D-0144): keyed through [Lit.equal] rather than
+     the polymorphic compare of a plain [Hashtbl]; [Lit.equal] is structural equality on
+     the same record, so the same lookups hit. *)
+  let fat_memo = Lit_tbl.create 64 in
   let falsified_at store l =
-    match Hashtbl.find_opt fat_memo l with
+    match Lit_tbl.find_opt fat_memo l with
     | Some i -> i
     | None ->
         let i = falsified_at store l in
-        Hashtbl.add fat_memo l i;
+        Lit_tbl.add fat_memo l i;
         i
   in
+  (* M11-complexity-T4 (D-0140 P2, D-0144): the ids [antecedents] already holds, so that
+     the dedup below is a lookup instead of a [List.mem] over the list so far. *)
+  let cited = Int_tbl.create 16 in
   let level_of l =
     let at = falsified_at store l in
     if at = Store.no_support then 0 else Store.level_of_index store at
@@ -796,9 +916,14 @@ let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row optio
             ]
             1
         in
+        (* [antecedents], [rows] and [pivots] are carried REVERSED through the loop and
+           turned round once when it stops (M11-complexity-T4, D-0144: they were
+           appended with [@], quadratic in the steps); [cited] holds the ids taken. *)
         let add (antecedents, rows) cid r =
-          if List.mem cid antecedents then (antecedents, rows)
-          else (antecedents @ [ cid ], rows @ [ r ])
+          if Int_tbl.mem cited cid then (antecedents, rows)
+          else (
+            Int_tbl.replace cited cid ();
+            (cid :: antecedents, r :: rows))
         in
         let acc = add (antecedents, rows) reason_row.Propagator.r_cid r in
         (* The ladder rows are PREMISES of this derivation and are recorded as such. The
@@ -813,7 +938,7 @@ let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row optio
         let lifts =
           match lift with None -> lifts | Some lt -> lifts + lt.Ladder.rungs
         in
-        (row', expl', pivots @ [ l ], antecedents, rows, lifts)
+        (row', expl', l :: pivots, antecedents, rows, lifts)
   in
   try
     let conflict_row =
@@ -838,11 +963,11 @@ let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row optio
               row;
               derivation = expl;
               steps;
-              pivots;
+              pivots = List.rev pivots;
               reduction_name = reduction.Reduce.name;
               criterion_name = criterion.crit_name;
-              antecedents;
-              antecedent_rows = rows;
+              antecedents = List.rev antecedents;
+              antecedent_rows = List.rev rows;
               ladder_rungs = lifts;
               (* M2-L15, from the FROZEN view and at the moment the criterion stopped --
                  not recomputed later against a store that has moved (I-X6). *)
@@ -857,6 +982,7 @@ let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row optio
         in
         loop row' expl' (steps + 1) pivots' antecedents' rows' lifts'
     in
+    Int_tbl.replace cited conflict_row.Propagator.r_cid ();
     loop row0 expl0 0 [] [ conflict_row.Propagator.r_cid ] [ row0 ] 0
   with
   | Give_up f -> Fallback f

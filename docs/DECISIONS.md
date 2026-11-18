@@ -13928,6 +13928,358 @@ Unit suites on the fixed branch: 3 724 ok, 0 FAIL, and `test_engine` 123 ok, and
 **The second case** (`BAGUETTE_PROPAGATE_LEARNED=off`) is not an invariant either: the orchestrator's
 correction says the run dies of memory under the 4 GB cap in debug mode when learned constraints are
 proof-only, and agent-lanes records it in D-0141. It is the lot-sizing line above. Not chased here.
+## D-0143  M11-complexity-T7: the setup before node 1 was the .opb's name pipeline, three lists and two string tables per term of every linear row; eight fixes make openshop's setup 2 000 times cheaper without the proof and 9 times with it, every byte the same
+
+**Status**: **DONE**, recorded 2026-11-18 (agent-setup, `wave48-setup`). The contract is ROADMAP
+`## M11-complexity`, row T7, opened from D-0140 §8.4 (item X1) and D-0080's request 6. Files
+changed: `lib/proof/encoding.ml`, `lib/proof/opb.ml`, `lib/proof/lit.ml`,
+`test/unit/test_proof.ml`. Nothing under `lib/core/`, `lib/flatzinc/` or `bin/`. Measured on
+`fataepyc-06` against `main`'s binary `e8354a74` (gate 48), outputs under
+`/scratch/arthur/wave48-setup-runs/`.
+
+### 1. Reproduction
+
+`BAGUETTE_NODE_LIMIT=1`, `--stats`, under `perf stat -e instructions:u` and `/usr/bin/time`, once
+with `--no-proof` and once with `--proof` (`meas.sh`). Four more instances were chosen by a sweep
+of the setup alone over 181 Challenge `.fzn` (`sweep/sweep.tsv`: the 20 of D-0135 and the 162 of
+the eligibility study): the ones whose setup finishes and costs most per `.opb` line, with
+different builtins. md5 of the `.fzn` in brackets.
+
+| instance | what it is | `.opb` lines | mode | instructions | wall | peak RSS |
+|---|---|---|---|---|---|---|
+| `2014_openshop_gp10-4` (`61d04e6c`) | 1 800 `int_lin_le_reif` over 100 variables `0..10000` | 1 015 299 | no-proof | 723.5 G | 102.1 s | 43 MB |
+| | | | proof | 950.5 G | 131.9 s | 85 MB |
+| `2014_cyclic-rcpsp_hard_2` (`1704b63d`) | 557 `int_lin_le` and 386 reified over `-31007..307` | 6 448 198 | no-proof | 6 860 G | 901.9 s | 867 MB |
+| | | | proof | 8 908 G | 1 233.2 s | 1 140 MB |
+| `2015_mapping_mesh3x3_mpeg_2` (`ecfa97a9`) | `int_eq_reif`/`int_ne_reif`, `int_times` over `0..4800` | 4 313 240 | no-proof | 292.2 G | 44.6 s | 274 MB |
+| | | | proof | 414.8 G | 67.1 s | 429 MB |
+| `2014_smelt_smelt_2` (`089f040d`) | 30 228 `int_times`, 20 000 `int_le_reif` | 405 982 | no-proof | 270.9 G | 38.7 s | 535 MB |
+| | | | proof | 394.5 G | 56.5 s | 545 MB |
+| `2019_zephyrus_12__6__6__3` (`e758329e`) | 1 752 `int_lin_le_reif` over `0..4096` | 442 042 | no-proof | 189.5 G | 26.7 s | 137 MB |
+| | | | proof | 253.6 G | 36.4 s | 151 MB |
+
+D-0140 measured 762.6 G on openshop with `a9217430`; `e8354a74` gives 723.5 G. The sweep also
+found instances whose setup does not finish in 120 s (carpet-cutting, fjsp, `train_instance`,
+nmseq, openshop_tai20); they were not used, because a setup that does not end cannot be compared
+byte for byte at node 1 in a bounded time.
+
+### 2. Where the setup time went
+
+`--time` puts all of it in one phase on every instance: `compile` is 102.1 of 102.1 s on openshop
+(parse 0.02 s, search 0.003 s), and on the others parse is under 0.5 s. Inside `Compile`, the
+flat profile of openshop without the proof is GC 41 % (`oldify_one`, `do_some_marking`,
+`pool_sweep`, `caml_shared_try_alloc`), string hashing 13 % (`caml_hash_mix_string`, `caml_hash`),
+`Lit.needs_sanitize` 5.6 %, `Lit.render`, `string_of_int`'s `printf` machinery and
+`caml_make_vect`; the other three profiles have the same shape. The dwarf call graph attributes
+what it can unwind to `Compile.post_reif_le` -> `Encoding.add_int_lin_le_reif_rows` ->
+`Opb.normalise` and `Encoding.add_constraint`.
+
+The mechanism, from the code. A linear row over order-encoded variables has one term per rung,
+so openshop's 3 600 big-M rows are 20 000 terms each, 72 M terms in all, and each term went
+through:
+
+1. `Encoding.linear_terms_int_lin_le`: a tuple, a literal, a cons, and the row so far copied once
+   per variable (`acc @ vterms`);
+2. `Opb.le`: a second list with every coefficient negated;
+3. `Opb.normalise`: the literal's name RENDERED (sanitise scan, `string_of_int`, a fresh string),
+   hashed end to end into a table grown to 32 768 buckets per row, a third list, and a fourth
+   from the `filter_map`, all only to learn that no two names were equal;
+4. `Encoding.add_constraint`: per term, the owner sanitised and hashed again for `Occurs` (the
+   header's name count), and scanned a third time by `note_renamed`;
+5. with the proof, `Opb.output_row`: the name rendered a second time and every piece of the row
+   (sign, digits, space, name, space) sent to the channel by its own `output_*` call, each a C
+   call that takes and releases the channel's mutex in OCaml 5.
+
+A 20 000-term row's three lists are larger than the minor heap, so every word of them was
+promoted and then marked and swept: that is the GC share. Without the proof, steps 1 to 4 ran in
+full for rows that `Discard_rows` then dropped at `commit`.
+
+Who grows faster than its output: (3) and (4) cost a render and two string hashes per term where
+the output is one name per term, the 32 768-bucket table is allocated per row, (1)'s copy is
+O(k² w) on a row over k variables of width w, and without the proof all of it produces nothing.
+The `.opb` itself (2.18 GB on openshop) is the one cost proportional to the output.
+
+### 3. The fixes, one per commit, each measured on openshop to node 1
+
+Cumulative, instructions (wall) without and with the proof. Peak RSS stays between 31 and 45 MB
+without the proof and between 77 and 85 MB with it, and falls to 17 MB at G.
+
+| step | commit | what | no-proof | proof |
+|---|---|---|---|---|
+| base | `e8354a74` | `main` | 723.5 G (102.1 s) | 950.5 G (131.9 s) |
+| A | `2ea7112` | `linear_terms_int_lin_le` concatenates its blocks once | 717.0 G (99.1 s) | 946.5 G (131.3 s) |
+| B | `3ce68d8` | `Opb.normalise` without the table when the names are shown distinct | 342.3 G (38.3 s) | 570.0 G (69.1 s) |
+| C | `c31af77` | `add_constraint` counts the header per run, not per term | 214.9 G (25.4 s) | 452.5 G (58.9 s) |
+| D | `191343a` | `output_row` writes without rendering strings; digits without `string_of_int` | 214.5 G (24.6 s) | 360.4 G (45.3 s) |
+| E | `91129b7` | `expand_int_lin_le` in one pass, no intermediate list | 49.7 G (5.6 s) | 195.4 G (26.3 s) |
+| F | `a5bb560` | `output_row` assembles the row in one `Buffer` and outputs it once | 49.5 G (5.5 s) | 105.7 G (15.0 s) |
+| G | `287af05` | under `Discard_rows`, a linear row is counted, not built | 0.356 G (0.11 s) | 105.7 G (15.7 s) |
+| H | `2bf99ec` | the direct-encoding requests are a set, not a list | 0.356 G (0.09 s) | 105.7 G (15.3 s) |
+
+A is a growth fix that openshop does not exercise (its rows have two variables). H is too: an
+`alldiff`/`element` model requesting the direct encoding of n variables did O(n²) `List.mem`
+over strings in `request_direct` and O(n · declared) in `direct_requested`; none of the five
+instances requests one. Each is kept because it is a cost that grows faster than its output.
+
+**Why each is byte-identical.**
+
+- A. Same blocks in the same order; `List.concat (List.rev blocks)` is the list `@` built.
+- B. `Opb.normalise` merges two terms iff their rendered names are equal, and `Lit.render` is
+  injective on (sanitised owner, kind, value) (the argument `Encoding.Occurs` already rests on,
+  M7-T27 (b)). `distinct_names` splits the terms into runs (one owner string physically, one kind,
+  strictly increasing values: distinct by construction) and checks that no two runs of the same
+  sanitised owner and kind overlap; an owner with more than 8 runs is sent to the table. When it
+  holds, the table's entry for each term is that term's own coefficient and `pbvar`, so the one-pass
+  `normalise_distinct` makes the same terms in the same order and the same moves of the right-hand
+  side (summed in another order, which integer addition does not see). The table is kept as
+  `normalise_by_name` and is the path for every row it does not clear.
+- C. `Occurs` keeps each owner's names as sorted, disjoint, non-adjacent intervals, the unique
+  canonical form of the set, so adding a run's points one at a time or as one interval leaves the
+  same list and adds the same count. `note_renamed` is idempotent and is called at the first term
+  of every run, which is where every owner first occurs, so the comments keep their order.
+- D. `Lit.n_digits`/`put_digits` write the decimal of a non-negative int; `abs min_int` is
+  negative and keeps `string_of_int`, so even that value prints as before. The owner is
+  sanitised once per run of the same string, which is a pure function of the string.
+- E. When the variables' sanitised names are pairwise distinct, the three steps (substitute,
+  `Opb.le`, `normalise_distinct`) map each positive rung literal with coefficient `c = -a` (or
+  `-(a 2^i)` on bit i) to `(c, l)` if `c > 0`, to nothing if `c = 0`, and to `(-c, ~l)` with the
+  right-hand side lowered by `c` if `c < 0`. `expand_int_lin_le` does exactly that back to front.
+  Otherwise it takes the three steps, kept as `expand_int_lin_le_by_steps`.
+- F. A `Buffer` holds the bytes the channel calls wrote, in the same order; `"@c"` and the decimal
+  are `Printf.sprintf "@c%d"`.
+- G. Under `Discard_rows` nothing reads the row: the `.opb` is never written, and the only other
+  reader of `Occurs` is `reif_occurs`, which no caller in `lib/` or `bin/` reaches (`define_reif`
+  is used by tests only). `Occurs` and the renamings are kept exact all the same, read off the
+  variables, when the row's names are distinct and no expanded coefficient is zero (one test on
+  each bits variable's top bit, because a wrapped `a 2^i` stays wrapped for every higher i): each
+  variable then contributes its whole block, one interval. Otherwise the row is built as before.
+  The id is the next one either way. This is D-0126's rule 1 (the ladder loop replaced by its
+  count) applied to a linear row.
+- H. The set answers the same membership as the list; the order is still the declaration order,
+  read off `vars`.
+
+**Unit tests** (`test/unit/test_proof.ml`, all `m11t7`): `normalise` against `normalise_by_name` on
+4 000 random rows with both paths taken, a sanitise collision, a revisited value and three kinds
+at one value; the per-run header against `Opb.write`'s scan on 200 random encodings; `add_int`
+and `output_row` against the `Printf` reference over the extreme ints and awkward names; the
+one-pass expansion against the three steps on 3 000 rows over order and bits variables,
+collisions, repeats and zero coefficients; a discarding against a retaining encoding on 2 000
+rows (ids, name count, renamings after every row).
+
+### 4. After, on the five instances
+
+The final binary is `2bf99ec` (md5 `6e2439c8`).
+
+| instance | no-proof before -> after | proof before -> after | peak RSS proof |
+|---|---|---|---|
+| openshop_gp10-4 | 723.5 G, 102.1 s -> **0.356 G, 0.09 s** | 950.5 G, 131.9 s -> **105.7 G, 15.3 s** | 85 -> 78 MB |
+| cyclic-rcpsp_hard_2 | 6 860 G, 901.9 s -> **49.9 G, 6.9 s** | 8 908 G, 1 233.2 s -> **1 304 G, 177.4 s** | 1 140 -> 969 MB |
+| mapping_mesh3x3_mpeg_2 | 292.2 G, 44.6 s -> **22.7 G, 3.0 s** | 414.8 G, 67.1 s -> **87.0 G, 15.6 s** | 429 -> 436 MB |
+| smelt_2 | 270.9 G, 38.7 s -> **15.5 G, 3.1 s** | 394.5 G, 56.5 s -> **53.4 G, 9.6 s** | 545 -> 349 MB |
+| zephyrus_12__6__6__3 | 189.5 G, 26.7 s -> **0.47 G, 0.11 s** | 253.6 G, 36.4 s -> **26.8 G, 4.3 s** | 151 -> 107 MB |
+
+On every instance and both modes, stdout, the `nodes`, `opb` and `ladder` counters, and with the
+proof the `.opb` and `.pbp` md5 are the base binary's (`meas-base*/meas.tsv`,
+`meas-final/meas.tsv`; openshop `.opb` `d511219f`, `.pbp` `122615c1`; cyclic `da891065`/`a0191b30`;
+mapping `1bce4af3`/`56b77cfe`; smelt `b6582ee3`/`3ce67d9a`; zephyrus `81218311`/`140f5869`), and so
+at every intermediate commit on openshop.
+
+**The gate** (`/scratch/arthur/wave48-setup-runs/gate.sh`, gate 48's script on a fresh clone of
+`2bf99ec` merged with `wave47-lanes` at `ff2f5cb`): `make check` rc 0 (`check: ok`, peak RSS
+90 MB); the 179 models' stdout, exit code, `.opb` and `.pbp` byte-identical to gate 48's
+`/scratch/arthur/gate48.art/new/` (0 differences in each of the four); `make diff ARGS="--tier all
+-j 24"` (M11-T2's lane, D-0141): 232 of 232 runs equal the reference, 54 bool and 178 int, peak
+RSS 481 MB.
+
+### 5. What is left
+
+- **With the proof, the setup is now proportional to the `.opb`**: 48 instructions per byte on
+  openshop (2.18 GB), 63 on cyclic-rcpsp_hard_2 (20.7 GB), and the profile is the formatting of the
+  bytes (`put_digits`, `n_digits`, `Buffer.add_*`, `memmove`) plus the GC of the one list a row
+  still is. What would cut it further is a constant: stream a linear row straight into the buffer
+  from the integer terms instead of materialising its literals (about the GC's 25 %), and write a
+  coefficient's digits once per run. The width itself (D-0028) is the bits encoding's question,
+  not this record's.
+- **Without the proof, the setup that is left is not the encoding**: smelt_2's 3.1 s are parse
+  0.46 s and `Compile` 2.2 s, of which about 16 % is polymorphic `compare` and `List.mem`. By
+  reading the code that is `Engine.create`'s `List.mem` over each variable's watcher list,
+  O(degree²) per variable (variables in about 2 000 constraints there); `perf`'s unwinder gave no
+  chains to confirm it. `engine.ml` is M11-T3's, so it is filed under `## Cross-session
+  requests`. mapping's 3.0 s are mostly the root propagation (`search` 2.2 s), not setup.
+- Other encoding doors still build through the steps: `add_int_lin_ne`, the equality reification's
+  four rows and `add_choice` go through `expand_int_lin_le` (and so get E) but not through G's
+  count under `Discard_rows`. None of the five instances is dominated by them.
+- The instances whose setup did not finish in 120 s in the sweep (carpet-cutting, fjsp,
+  `train_instance`, nmseq, openshop_tai20) were not re-measured; the Challenge-wide run M11
+  precedes will.
+
+### 6. What would reverse this
+
+- A row whose names collide after sanitising takes the old path in B, E and G, so a model full of
+  `a.b`/`a_b` pairs gets none of the gain (`Compile.check_name_collisions` refuses such models
+  today, so it is not reachable from the CLI).
+- If `define_reif` (the `.pbp` door) were wired into `Compile`, G would still be right, because it
+  keeps `Occurs` exact; that is why it does not take the cheaper route of skipping `Occurs`.
+
+## D-0144  M11-complexity-T4 part 1: learning and PB analysis without their quadratic lists, the trail walk of `falsified_before` replaced by the bound history; 1 to 3.5 % of the instructions at 10 000 nodes, every byte the same
+
+**Status**: **DONE** (part 1 of M11-complexity-T4), recorded 2026-11-18 (agent-batch4a,
+`wave49-batch4a`). The contract is D-0140 §5's rows L1, S5 (its `learn.ml` half), P1, P2 (but
+`linear.ml`'s `pb_row`, which is M11-T3's) and J6 (its `learn.ml` part), and §7's T4 paragraph.
+Files changed: `lib/core/learn.ml`, `lib/core/pb_analysis.ml`, `lib/core/reduce.ml`,
+`lib/core/ladder.ml`, `test/unit/test_learn.ml`, `test/unit/test_core.ml`. No store function was
+added, and nothing in `search.ml`, `analysis.ml`, `retention.ml`, `learned.ml`, `store.ml` or
+`writer.ml`. Measured on `fataepyc-06` against `main`'s binary `5e6f653e` (`da9df69`, the binary
+gate 50 recorded), outputs under `/scratch/arthur/wave49-batch4a-runs/`.
+
+### 1. The fixes, and why each one keeps the bytes
+
+Every fix replaces a data structure and keeps the function it computes. Where the argument is not
+a line long, the old code stays in the module as the specification, under a `_reference` or
+`_scan` name, and a unit test or a `BAGUETTE_DEBUG` check compares the two.
+
+**L1, `Learn.supports`.** The I-S4 support list was deduplicated by a `List.exists` over the list
+so far and grown by `acc @ [s]`, quadratic in the supports of every learned clause (the check is
+always on). Now a table of the ids taken (`Hashtbl.Make (Int)`) and a reversed list turned round
+once. The same first-seen entries in the same order; the table is never iterated.
+
+**S5, `Learn.minimise_with`** (the `search.ml` half, `dfs`'s `kept`, is part 2). The branch
+nogood is as long as the decision stack (147 on mspsp, 226 on openshop) and was minimised by a
+fold that appended with `@` and found a literal's slot by a `List.map` over the whole accumulator
+with a POLYMORPHIC `slot m = Some s`. Now one cell per slot behind a table keyed by
+`(variable name, direction)` with `String.equal`/`Bool.equal`, the cells kept in first-appearance
+order. Same output element for element: a slot's cell is created where the fold appended the slot's
+first literal, and a later literal of the slot replaces the cell exactly when the fold replaced
+it (`keep` does not return the old one). `minimise_with_reference` is the old fold, and
+`test_learn.ml` compares the two on 2 000 random clauses under both policies, payloads included.
+
+**J6, `Learn.introduce`'s origin.** The origin string renders every literal of the learned clause.
+The null writer of a `--no-proof` run drops `~origin` unread (`Writer.fresh`, M9-no-proof-T2), so
+for it the string is no longer built (`Writer.is_null`). With a writer that writes, it is built as
+before, because the audit keeps it per live id and the mutation knob matches it; making it lazy
+there is the writer's change and is a cross-session request to M11-T5. The origin is never written
+to the `.pbp`, so neither arm can change a byte.
+
+**P1, `Pb_analysis.falsified_before`.** Asked four to five times per term per elimination by
+`Reduce` and `Ladder`, it reconstructed the variable's bounds before trail position `at` by two
+linear trail walks (`bounds_before`). It now answers from the bound history D-0088 and D-0124
+already keep, through the existing `Store.var_support`, in O(log moves): `[x >= k]` is false
+before `at` iff `hi x <= k - 1` holds now and the one live entry that established it sits strictly
+below `at`, or no entry established it (the created domain already had it). A bound only tightens
+along the trail (I-D3), so a bound that does not hold now held at no earlier position. The scan
+stays as `falsified_before_scan`, checked against under `BAGUETTE_DEBUG` at every call, and
+`test_core.ml`'s bound-history test compares the two at every position on every literal of a
+hand-built trail (holes, a fix, a duplicated name, undo and re-push).
+
+**P2, the rest of the PB step.**
+- `analyse`'s `step` carried `antecedents`, `antecedent_rows` and `pivots` grown by `@`, with a
+  `List.mem` per cited id: now reversed accumulators turned round once when the loop stops, and
+  the ids taken in an int table. Same lists.
+- `asserting_level` scanned every level from 0 with a full slack sum per level (levels x terms, the
+  levels being the search depth): now one pass over the terms into per-level sums and a suffix
+  maximum. The `Checked` operations are the old ones value for value, so an overflow raises where
+  it raised with the same message (which reaches `--stats` through `Fallback (Overflow m)`): the
+  level-0 sum is accumulated in list order with `Checked.add` exactly as before, every later sum
+  is that one minus coefficients that are >= 1, and each level's `Checked.sub` of the degree is on
+  the same two integers. `asserting_level_reference` is the old scan; `test_learn.ml` compares
+  the two on 3 000 random rows, with levels below 0, at 0 and past the conflict level, and with
+  coefficients near 2^61 so that both the overflow arm and the ordinary one are reached.
+- `fat_memo` and `cited_ids` keyed through `Lit.equal` and `Int.equal` (`Hashtbl.Make`) instead of
+  the polymorphic compare of a plain `Hashtbl` or `List.mem`; `cited_ids` also lost its `@`.
+- `Ladder.lift` accumulated the multipliers per rung in an association list (`assoc` and
+  `remove_assoc` per rung per term): now an int table, folded into a list that is then sorted by
+  the rung value, which is unique, so the table's order reaches nothing.
+- `Reduce.round_to_one`'s postcondition looked each kept term up in the reduced row by a scan
+  (row^2 per elimination): the reduced row is now read once into a table that keeps the first
+  term per literal, as `coeff_of`'s `find_map` did.
+
+Not done, and why: `Ladder.lift` still folds `Learned.combine` once per rung, each one re-sorting
+the whole row. One combination of all the rungs gives the same normal form, but not the same
+sequence of `Checked` additions, so the overflow point and its message could move; it needs its
+own argument, and `learned.ml` is M10-T4's file. Requested in WORKLOG.md.
+
+### 2. Byte identity
+
+- **The differential lane** (D-0141, `origin/wave47-lanes` merged into the branch), `make diff
+  ARGS="--tier all -j 24"` on `cc0639a5`: **232 of 232 runs equal the reference**, 54 of 54 in the
+  Boolean class and 178 of 178 in the integer class: rc, stdout, the `--stats` counters, `.opb`
+  and `.pbp` sha256, over every configuration D-0140 §7 asks T4 for (`keep_all`, `fifo-po`,
+  `lbd-po`, `nopb` for PB analysis off, `audit0`, `bits0`, `noproof`), with PB analysis learning
+  rows on cyclic, mspsp and rcpsp_11 and the deep searches of mspsp and openshop.
+- **The debug pass**, `--tier all --debug -j 16`, where `falsified_before`'s cross-check runs at
+  every call: **223 of 223 runs equal the reference** (54 Boolean, 169 integer;
+  lot-sizing's nine excluded by name as on `main`, `bench/diff/debug-skip.tsv`), rc 0, no
+  invariant fired.
+- **The measurement runs below**: stdout, the `--stats` output minus clocks, and the `.pbp` and
+  `.opb` md5 identical between `main` and the branch on all eight (instance, mode) pairs,
+  including cyclic's 2.0 GB proof (`17257ea6`).
+- **The unit suites**, `dune runtest --root . --force` under `ulimit -v 4000000`: 0 FAIL, the new
+  reference tests included.
+- **The gate**, `make check` on a fresh clone at `6c2646f` on `fataepyc-06`: rc 0, 0 FAIL,
+  179 models passed, peak RSS 89 MB (`make_check_wall 25.01 s peak_rss 89268 kB`, gate 50 said
+  23.30 s and 89 864 kB), and every model's stdout, exit code, `.opb` and `.pbp` byte-identical to
+  gate 50's (`/scratch/arthur/gate50.art/new/`, binary `5e6f653e`): 179 models, 0 differences.
+
+### 3. Measurement
+
+`perf stat -e instructions:u`, `BAGUETTE_NODE_LIMIT=10000`, `--stats`, one process each, the four
+instances D-0140 §1 names for T4 (`.fzn` md5 as there: cyclic `b6939345`, mspsp `ab82542d`,
+rcpsp_11 `3b810f0e`, QR48 `3ed67581`). `main` is `5e6f653e`, the branch `cc0639a5`. Two more
+builds split the gain: `learn` is `main` with only the branch's `learn.ml` (`cea992b0`: L1, S5,
+J6), `noP1` is the branch with `falsified_before` routed back to the scan (`5eaa9611`: everything
+but P1). So L1+S5+J6 = `learn` - `main`, P1 = branch - `noP1`, and P2 = `noP1` - `learn`.
+
+Instructions (G) at 10 000 nodes, and each split as a share of `main`'s count:
+
+| instance | mode | `main` | branch | total | L1+S5+J6 | P1 | P2 |
+|---|---|---|---|---|---|---|---|
+| cyclic-rcpsp_easy_6 | no-proof | 65.074 | 64.429 | **-0.99 %** | -0.73 % | -0.26 % | -0.01 % |
+| | proof | 1 205.443 | 1 204.819 | -0.05 % | -0.06 % | -0.00 % | +0.01 % |
+| mspsp_hard_01 | no-proof | 106.131 | 102.437 | **-3.48 %** | -2.70 % | -0.77 % | -0.01 % |
+| | proof | 187.726 | 184.069 | **-1.95 %** | -1.50 % | -0.45 % | -0.00 % |
+| rcpsp_11 | no-proof | 90.952 | 90.009 | **-1.04 %** | -0.83 % | -0.11 % | -0.10 % |
+| | proof | 296.647 | 295.644 | -0.34 % | -0.24 % | -0.05 % | -0.05 % |
+| QR48 (clause path) | no-proof | 25.871 | 25.206 | **-2.57 %** | -2.56 % | +0.03 % | -0.03 % |
+| | proof | 42.167 | 41.501 | **-1.58 %** | -1.63 % | +0.03 % | +0.08 % |
+
+Every (instance, mode) pair has the same stdout, `--stats` minus clocks and proof md5 in all four
+builds. Reading it:
+
+- **The learning half is most of it**, and it is S5 and L1 more than J6: mspsp's nogoods are as
+  deep as its search (147) and lose 2.7 %, QR48's 2.6 % (no PB analysis at all, `pb-learned=0`).
+  J6 acts only without the proof; its own share was not isolated by a build, and the column is
+  larger without the proof than with it on every instance, which it is also for the dilution
+  described in the last bullet.
+- **P1 is worth 0.8 % on mspsp** (65 PB rows learned in 10 000 nodes) and 0.26 % on cyclic, and
+  nothing on QR48, which never runs PB analysis: what a trail walk per literal query cost, and what
+  D-0140 measured as 0.3 % inclusive on cyclic.
+- **P2 is below what this measures**, as D-0140 §5 said ("nv, under 1 %"): within 0.1 % either way,
+  QR48's and cyclic proof's small positive entries included, which are differences of two builds
+  that are both noise-level away from each other (QR48 never reaches the code P2 changed). It is
+  kept because it removes quadratic and polymorphic work that grows with the depth and the row
+  width, and the lane shows it costs no byte.
+- In proof mode the shares are smaller because the proof writing (M11-T5's) is most of the count:
+  cyclic writes 2.0 GB of proof in 10 000 nodes.
+
+### 4. What is left for T4 part 2
+
+These wait for the branches in flight (`wave45-strategy` holds `search.ml` and `analysis.ml`,
+`wave45-retention` holds `retention.ml` and `learned.ml`), as the ROADMAP says:
+
+- `retention.ml`: R1 (`reduce` copies `live_rev` per learned constraint, under `keep_all` too), R2
+  (`holds` by `List.exists`), R3 (`fifo`/`lbd` sort the database per reduce), R4 (the key is
+  `Learned.to_string`). D-0140 ranks R1 + R2 fourth of all items.
+- `search.ml`: S1 (`count_learned_activity`'s polymorphic `List.mem`, mspsp -7.7 % in D-0140's
+  scratch patch), S2 (`register_learned*` render every literal into the `Retention.cite`
+  message), S3 (`decision_entries` over the whole trail), S4 (`unfixed`/`first_fail`), S5's other
+  half (`dfs`'s `kept`, polymorphic `List.mem` per nogood literal), S6 (`apply_globals`), and J6's
+  `bridges` origin.
+- `analysis.ml`: A1 (the 1UIP loop's lists and name-keyed facts), A3 (`check_attribution`'s
+  `List.exists Var.equal`); A2 stays, it is the backjump's definition.
+- `learned.ml`: L2 (`ladder_form`/`to_linear_row` per learned clause for `--stats` only), and
+  `Learned.combine` once per rung in `Ladder.lift` (§1, with its overflow argument).
+- Two cross-session requests filed in WORKLOG.md: a lazy `~origin` in `writer.ml` (M11-T5), then
+  in `Learned.introduce`'s signature; the combination of all the rungs at once in `learned.ml`.
 
 ## D-0141  M11-complexity-T2: the two lanes of the M11 pass -- a differential lane that holds the search, the proof and the counters byte for byte on real instances at a fixed node budget, and a scaling lane that reads the growth of a node's cost in instructions
 
@@ -13993,7 +14345,9 @@ openshop_j8per0-2 65 s at 2 000 nodes) were left out of the fast tier.
 QR72 at 10 000; `2013_rcpsp_11` and `2012_mspsp_hard_01` at 10 000 (integer learned clauses, learned
 PB rows 25 and 65, mspsp at depth 147); `2011_cyclic-rcpsp_easy_6` at **2 000**, because its proof
 costs 180 M instructions a node, with `--bits-above 0`; `2014_openshop_gp10-4` at **300**, because
-its setup alone is 112 s without the proof and about 330 s with it (depth 101 at 300 nodes).
+its setup alone was 112 s without the proof and about 330 s with it on a8d2924 (depth 101 at 300
+nodes). D-0143, merged the same day, makes that setup 2 000 times cheaper without the proof and 9
+times with it and keeps every byte, so openshop's budget can grow at the next re-record.
 
 **Classes.** Each instance is `bool` or `int` after the variables its learned clauses range over,
 and the lane sums the two apart (`diff_lane: class bool …: x of y runs equal`), because D-0140's E1

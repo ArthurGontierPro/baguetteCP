@@ -19,8 +19,10 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M11-complexity-T5 | `lib/core/justify.ml`, `lib/core/trace.ml`, `lib/proof/writer.ml`, `lib/core/reason.ml`, their unit tests, `docs/DECISIONS.md` (D-0145 appended), `docs/ROADMAP.md` M11-T5 row; a new opam switch `baguette-fp` on fataepyc-06 for profiling only. NOT `opb.ml`, `encoding.ml`, `lit.ml` (M11-T7), `learn.ml` (M11-T4 part 1) | agent-batch5 (`wave49-batch5`) | 2026-11-18 |
+| M7-T28 (first steps) and M7-T29 (the gcc half) | `mznlib/*.mzn`, `lib/core/prop/gcc.ml`, a new `lib/core/prop/regular.ml` (+ `docs/ARCHITECTURE.md` §1 and `CLAUDE.md`'s map), `lib/flatzinc/compile.ml` (dispatch lines only, in one separated block: M11-T7 is optimising that file), new `test/models/*` + `test/expected/`, `test/unit/test_prop.ml`, `docs/DECISIONS.md` (D-0146 appended), `docs/SPEC.md` §2.1 (the builtins table), `docs/ROADMAP.md` M7-T28/T29 rows | agent-globals (`wave49-globals`) | 2026-11-18 |
+| M12-parity-T1 (spike, branch never merged except its record) | on the branch only: a new `lib/core/prop/parity.ml`, `mznlib/` routes, `lib/flatzinc/compile.ml`; on main only `docs/DECISIONS.md` (D-0147) and `docs/ROADMAP.md` M12 rows, merged by the orchestrator | agent-parity (`wave49-parity`) | 2026-11-18 |
 | M11-complexity-T3 | `lib/core/engine.ml`, `lib/core/store.ml`, `lib/core/domain.ml`, `lib/core/propagator.ml`, `lib/core/prop/clause.ml`, `lib/core/prop/pb.ml`, `lib/core/prop/arith.ml`, `lib/core/prop/linear.ml`, `lib/core/prop/lin_eq.ml`, `lib/core/prop/ne.ml`, `lib/core/prop/alldiff.ml`, `lib/core/prop/element.ml`, their unit tests, `docs/DECISIONS.md` (D-0142 appended), `docs/ROADMAP.md` M11-T3 row. NOT `search.ml`, `analysis.ml`, `retention.ml`, `learned.ml` (in flight) | agent-batch3 (`wave48-batch3`) | 2026-11-18 |
-| M11-complexity-T7 | `lib/proof/encoding.ml`, `lib/proof/lit.ml`, `lib/proof/opb.ml`, `lib/flatzinc/compile.ml`, `lib/flatzinc/builder.ml`, `lib/core/prop/reif*.ml` (construction only), their unit tests, `docs/DECISIONS.md` (D-0143 appended), `docs/ROADMAP.md` M11-T7 row | agent-setup (`wave48-setup`) | 2026-11-18 |
 | M10-search-strategy-T1, then T2 and T3 | `docs/DECISIONS.md` (D-0137 appended), `docs/SPEC.md` §3.4 (the restart amendment), `docs/ROADMAP.md` M10 rows T1-T3, `lib/core/search.ml` (restarts, phase saving, branching), a new `lib/core/activity.ml` (+ `docs/ARCHITECTURE.md` §1 and `CLAUDE.md`'s map), `lib/core/analysis.ml` (activity bumps, if needed), `bin/main.ml` (flags), `test/unit/test_search*.ml`/`test_learn.ml`/`test_endtoend.ml`, new `test/models/*restart*`/`*activity*` + `test/expected/` | agent-strategy (`wave45-strategy`) | 2026-11-18 |
 | M10-search-strategy-T4 | `lib/core/retention.ml`, `lib/core/learned.ml` (an LBD field if needed), `bin/main.ml` (the policy flag only), `test/unit/test_retention.ml`, `docs/DECISIONS.md` (D-0139 appended), `docs/ROADMAP.md` M10-T4 row | agent-retention (`wave45-retention`) | 2026-11-18 |
 
@@ -307,6 +309,7 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 |---|---|---|---|
 | **The learned database costs O(n) per conflict, and it is now the largest share.** `Retention.reduce` (called after every learned constraint, `search.ml` ~L2112 and ~L2490) builds `live_entries t = List.rev t.live_rev`, n cells, even under `keep_all`, whose `p_evict` ignores it; `Retention.add` calls `holds`, a `List.exists` over `live_rev`. Self time on QR48 no-proof: `List.rev_append` 5.8 %, `List.exists` 5.4 %, `Retention.fun_1135` (the `holds` closure) 1.9 %: about 13 %, growing with the database. A scratch experiment on the node (not committed): `holds` through a `Hashtbl` of live cids kept by `add` and `retire`, and `reduce` returning `[]` at once when the policy is `keep_all`. On QR48 at 10 k nodes cycles fell 14 % (14.44 G to 12.42 G) and instructions 2.3 %; on QR72 cycles fell 10 %; nodes and runs identical. Since M10-T4 rewrites eviction, please keep the policy's view of the database free of a per-conflict O(n) copy (Glucose's `reduceDB` runs every k conflicts, not every one) | `lib/core/retention.ml` | agent-pernode | open, for agent-retention (M10-T4) |
 | Proof mode only: rendering a literal re-scans its variable's name for characters to sanitise on every call (`Lit.go`, `ident_char`, `render`, `sanitize`: 3.2 % of QR48's proof-mode self time; 1.29 M `rup` lines of about 16 literals). The names are fixed after compile, so a per-name memo of `sanitize` (or of the rendered `x_ge_` prefix) would remove the scan; byte identity is the test | `lib/proof/lit.ml` | agent-pernode | **done 2026-11-18** (agent-t3c, `wave46-t3`, D-0134 §12): a one-entry memo was measured useless on QR48 (clause lines over different variables) and dropped; `needs_sanitize` now scans through a 256-entry table, its self time 2.05 % -> 0.87 % at 10 000 nodes, proofs identical by md5 |
+| Setup only, small: `Engine.create` registers a watcher with `List.mem inst.id cur` over the variable's watcher list (`engine.ml` ~L558, polymorphic compare on ints), so building the engine is O(degree^2) per variable. On `2014_smelt_smelt_2` (variables in about 2 000 constraints) `compare_val`, `caml_compare` and `List.mem` are 16 % of the flat profile of the 3 s no-proof setup left after D-0143; the attribution to this loop is by reading the code, because `perf`'s unwinder gave no call chains there. A `Hashtbl` of (var, id) seen, or deduplicating each instance's `inst_vars` once, gives the same lists in the same order | `lib/core/engine.ml` | agent-setup (`wave48-setup`, D-0143) | open, for M11-T3 |
 
 ### 2026-11-18 — bug: `bool_xor(x, y, true)` reaches baguette unredefined (from the codes-cp side session)
 
@@ -320,10 +323,19 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
    works around it with a sum). Probably a par-`b` overload is needed, or the 3-argument form must be
    caught as `fzn_bool_xor`; worth a census of the other `bool_*` builtins with a par argument.
 
+### 2026-11-18 — M11-complexity-T4 part 1 (D-0144): what is left in files part 1 does not hold (agent-batch4a, `wave49-batch4a`)
+
+| Request | File | From | Status |
+|---|---|---|---|
+| **A lazy `~origin` (D-0140 J6, the writer's half).** `Learn.introduce` now builds no origin string for the null writer, which drops it unread. With a writer that writes, the string is still built per learned clause (every literal through `Lit.to_string` and `String.concat`), because `Writer.fresh` stores it in the audit's `entry.origin` and `knob_for` matches the mutation site against it, although neither the `.pbp` nor anything else reads it in a run that passes. Proposal: an `origin` that is a `string Lazy.t` (or `unit -> string`) in `entry` and in the `~origin` of `rup`/`pol`/`implied`/`red`, forced only by `knob_for` when a mutation is armed and by the audit's failure messages; existing callers wrap their literal string with `Lazy.from_val`. Then `learn.ml` passes `lazy (Printf.sprintf ...)`, and `justify.ml`'s `emit_*`, `trace.ml` and `search.ml`'s `bridges` can do the same. Byte identity holds by construction (the origin is never written) | `lib/proof/writer.ml` (then `lib/core/learned.ml` `introduce`'s signature) | agent-batch4a | open, for M11-T5 (agent-batch5); `learned.ml` is M10-T4's |
+| **`Ladder.lift` re-sorts the whole row once per rung** (D-0140 P2, its `combine` half): `lifted` is a fold of `Learned.combine acc 1 (ladder_row w) m` over the rungs, and each `combine` scales, sorts and cancels the full row. A `Learned.combine_many` (one scale, one sort, one cancel over the row and all rungs) gives the same normal form, but its `Checked` additions are not the fold's, so the `Overflow` point and its message can move (the message reaches `--stats` through `pb_fallback_rev`). Needs the overflow argument written down, or a measured "no instance reaches it", in its own record | `lib/core/learned.ml` | agent-batch4a | open, for T4 part 2 after M10-T4 merges |
+
 ## Completed
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M11-complexity-T4 (part 1: learning and PB analysis; T4 stays TODO) | agent-batch4a (`wave49-batch4a`) | 2026-11-18 | **D-0144.** L1 (`Learn.supports` through an int table and a reversed list), S5's `learn.ml` half (`minimise_with` one cell per slot behind a monomorphic table), J6's `learn.ml` part (no origin string for the null writer), P1 (`Pb_analysis.falsified_before` from the bound history through `Store.var_support`, O(log moves) instead of two trail walks), P2 (`step`'s accumulators reversed, `asserting_level` in one pass, `fat_memo`/`cited_ids` monomorphic, `Ladder.lift`'s multipliers in an int table, `round_to_one`'s postcondition reads the reduced row once). The old functions stay as `_reference`/`_scan` specifications with unit tests and a debug check. Instructions at 10 000 nodes: mspsp -3.48 %, QR48 -2.57 %, rcpsp_11 -1.04 %, cyclic -0.99 % without the proof. Lane 232/232 and debug pass 223/223 equal, gate rc 0 with 179 models identical to gate 50 |
+| M11-complexity-T7 | agent-setup (`wave48-setup`) | 2026-11-18 | **D-0143.** The setup before node 1 was the .opb name pipeline: every term of every linear row went through three lists, a rendered name hashed into a per-row table, and a per-term sanitise and hash for the header; with the proof, every piece of a row was its own channel call under the channel mutex. Eight fixes, one per commit, in `encoding.ml`, `opb.ml`, `lit.ml`: openshop_gp10-4 to node 1 723.5 G -> 0.36 G instructions (102 s -> 0.09 s) without the proof and 950.5 G -> 105.7 G (132 s -> 15 s) with it; cyclic-rcpsp_hard_2 902 s -> 7 s without. stdout, counters, .opb and .pbp identical on five instances, 179 models, diff lane 232/232; gate green |
 | M8-bits-encoding-T3 (continuation; T3 DONE) | agent-t3c (`wave46-t3`) | 2026-11-18 | **D-0134 §8-§15.** `int_eq_reif`/`int_ne_reif` released over bits (their two `Clause` pieces derived as `Ne`'s `Resolve` with the reifier as one more term, probed first); `bool2int` over a bits integer posted by `compile.ml` as two rows with a `Linear` each; ATSP was held by `int_eq_reif`, mapping and carpet-cutting by `int_times`'s split over its wide operand, now split over the narrower one (`builder.ml`); step 3 measured (PB analysis over mixed rows falls back; `--stats pb-whys`), the lift designed, not built; step 4 checked; step 5 designed and probed, not built. 179/179 verified at `W = none`, `0`, `8` (the 173 of gate 46 byte-identical with no flags; against gate 47's binary 178 of 179, the difference the new `arith_times_narrow_sat`); gate rc 0 on `e1b46dc` (26 s, 89.7 MB). The 177 at `W = 0`: 108 -> **162** complete `.opb` (+54, none lost: carpet-cutting 18, mapping 9, ATSP 6, flowshop-workers 5, yumi-dynamic 4, zephyrus 3, ...); 15 unfinished, 5 of them `arithmetic-target`. |
 | M6-T22 | agent-pernode (`wave45-pernode`) | 2026-11-18 | **D-0138.** The per-node cost on the XOR codes was the engine asking every learned clause about every variable it names (D-0104 kept the whole scope registered: 18 800 asks per node on QR48, 37 % of the cycles) plus `check_attribution`'s `List.mem` (15 %). A wake index of the two watched variables (`Propagator.advisor`, `Engine.dyn_ids`), the degree-1 shortcut in `Pb.propagate`, no per-node or per-conflict array of the database, an O(1) watch move, a heap seed, binary-searched level marks, `rup` without `Printf`. QR48 to UNSAT: 107.1 s to 24.3 s without proof, 125.0 s to 38.0 s with it (same 143 MB proof, byte for byte, VERIFIED); QR72 now UNSAT in 531 s without proof; same nodes, same runs, 165 models byte-identical, gate green (3 632 ok, 85 MB) |
 | M6-T21 | agent-timelimit (`wave44-timelimit`) | 2026-11-18 | **D-0136.** The `--time-limit` overshoot (+46 s at 600, +108 at 1 200) was `conclude_stopped`'s sweep: `Retention.retire` was O(k n), and the end-of-search sweep has k = n learned clauses. One pass now; 600 s stops at 600.3 s, 1 200 at 1 200.5, proofs VERIFIED NO CONCLUSION. The stop is also polled inside `Engine.propagate` after every 128 completed runs (`Engine.Stopped` -> `Limit_hit`, at a run boundary, nothing written by the node yet): +0.035 % instructions at a fixed node budget. `limit:` gains `at=` and `fired=`. Conflict analysis needed no poll. Gate of `d63f371` green (3 629 checks, 85 MB), 165 models byte-identical |
@@ -487,6 +499,50 @@ re-record to make a lane pass (D-0141 §8); a new flag is one line in `bench/dif
 `--update --config NAME` (and `--debug`). Note for retention work: on main `lbd:N`/`fifo:N` evict nothing
 (every learned constraint is cited); only the `-po` configurations exercise eviction.
 
+## M11-complexity-T4 part 1 handoff, 2026-11-18 (agent-batch4a, `wave49-batch4a`): learning and PB analysis, D-0144
+
+- **What changed.** `lib/core/learn.ml`, `pb_analysis.ml`, `reduce.ml`, `ladder.ml`,
+  `test/unit/test_learn.ml`, `test/unit/test_core.ml`. No new store function. The branch also
+  carries the merge of `origin/wave47-lanes` (scripts/, bench/diff/, bench/scaling/, Makefile,
+  docs), which the lane needed. Every byte of stdout, `--stats`, `.opb` and `.pbp` is unchanged:
+  lane 232/232, debug pass 223/223, gate rc 0 with 179 models identical to gate 50.
+- **Numbers.** Instructions at 10 000 nodes, no proof: mspsp -3.48 %, QR48 -2.57 %, rcpsp_11
+  -1.04 %, cyclic -0.99 %. Most of it is the learning half (S5, L1); P1 is 0.8 % on mspsp; P2 is
+  below what the counter resolves, as D-0140 predicted.
+- **For part 2.** Everything left is in files held by M10 (`search.ml`, `analysis.ml`,
+  `retention.ml`, `learned.ml`); D-0144 §4 lists it. Two requests filed: a lazy `~origin` in
+  `writer.ml` (M11-T5), and one combination of all rungs in `Ladder.lift` (`learned.ml`, needs
+  its overflow argument).
+
+## M11-complexity-T7 merged and gated; wave 49 launched, 2026-11-18 (orchestrator)
+
+`wave48-setup` merged as `f5f57c3` (ROADMAP's duplicated T7 row repaired in `da9df69`). Gate of `da9df69`
+on fataepyc-06 (`/scratch/arthur/gate50.status`, clone `/scratch/arthur/baguette-gate-20261118f`): `make
+check` rc 0, 3 812 `ok`, 179 models, all four artefacts identical to gate 49's binary `15e23df0`; binary
+`5e6f653eec7f773aaad31aaa1429f0e9`. Openshop's setup 102 s -> 0.09 s without proof, 132 s -> 15 s with it.
+At the user's request (the node had room and the token budget allowed it), four more agents started on
+files nobody held: `wave49-batch5` (M11-T5, proof writing, D-0145, with a profiling-only opam switch
+`baguette-fp`), `wave49-batch4a` (M11-T4 part 1, learning and PB analysis, D-0144), `wave49-globals`
+(M7-T28 first steps and M7-T29's gcc half, D-0146), `wave49-parity` (M12-parity-T1, a no-proof spike on a
+branch never merged, D-0147). The user's codes models and instances were copied read-only to
+`fataepyc-06:/scratch/arthur/codes-bench/src/`.
+## M11-complexity-T7 handoff, 2026-11-18 (agent-setup, `wave48-setup`): the setup before node 1, D-0143
+
+- **What changed.** `lib/proof/encoding.ml`, `opb.ml`, `lit.ml` and `test/unit/test_proof.ml` only.
+  `Opb.normalise` skips its name table when the row's names are shown distinct by runs
+  (`normalise_by_name` is the old function, kept as the fallback and the test's reference);
+  `Encoding.expand_int_lin_le` builds a row over distinctly named variables in one pass
+  (`expand_int_lin_le_by_steps` is the old one); `add_constraint` counts the header per run;
+  `Opb.output_row` assembles the row in one `Buffer`; under `--no-proof` a linear row is counted
+  from its variables and never built. Every byte of stdout, `.opb` and `.pbp` is unchanged.
+- **Numbers.** openshop_gp10-4 to node 1: 723.5 G -> 0.36 G instructions without the proof,
+  950.5 G -> 105.7 G with it. With the proof the setup is now about 50 to 65 instructions per byte
+  of `.opb`, so the width (D-0028) is what is left, not the pipeline.
+- **For M11-T3.** `Engine.create`'s `List.mem` over each variable's watchers is O(degree²) at setup
+  (filed under `## Cross-session requests`, small: about 16 % of smelt_2's 3 s left).
+- **For the Challenge-wide run.** The sweep's instances whose setup did not end in 120 s
+  (carpet-cutting, fjsp, `train_instance`, nmseq, openshop_tai20) were not re-measured.
+
 ## The I-P7 alarm was the debug checks, fix merged and gated, 2026-11-18 (orchestrator)
 
 Correction to the note below of the same day: no propagation was lost. agent-batch3 traced the I-P7
@@ -511,7 +567,6 @@ fails the same way, so M6-T22 (D-0138) did not introduce it and did not change t
 October). A second, separate case fires with `BAGUETTE_PROPAGATE_LEARNED=off`. Assigned to M11-T3
 (agent-batch3) as its first item, merged alone when gated; its fix changes the search on integer instances
 by design, after which the lane's reference is re-recorded on the new main.
-
 ## M11-complexity-T1 handoff, 2026-11-18 (agent-inventory, `wave47-inventory`): the inventory, D-0140
 
 Read-only, no file under `lib/`, `bin/`, `test/` changed. D-0140 has the 48-item table, the ranking,
