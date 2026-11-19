@@ -1325,8 +1325,10 @@ growing part, `growth = late - early` instructions per node: a line is OVER when
 `bench/scaling/baseline.tsv`'s by more than 0.5 % of the baseline's late cost per node, and an OVER
 line fails the lane. Not the ratio, because D-0152 §4 saw it rise on 4 of 5 lines after a batch that
 made every node cheaper; the ratio, the ratio per propagator run and `cycles:u` are printed as
-information. The baseline is a ratchet: `--update` records it after a gated merge in its own commit
-and refuses while a line is OVER (`--raise` exists for a decision record only). `--report` prints
+information. The baseline is a ratchet: `--update` records it after a gated merge in its own commit,
+refuses while a line is OVER, and keeps a line's recorded row wherever its growth did not go down,
+so that merges which each stay inside the margin cannot walk it upward. `--update --raise` writes
+every line as measured, for a change to `plan.tsv` or a decision record, never to make a line pass. `--report` prints
 without failing, for exploration. Without perf it falls back to the GC's allocated words and says
 so, and a line with no baseline in the metric used FAILS, because a line the gate cannot judge is
 not a pass.

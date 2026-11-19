@@ -60,11 +60,15 @@
 # of one binary spread by at most 0.11 % of late, and a build that differs only in its GC
 # phase drifted by at most 0.18 %; a planted O(database) scan per node moved the growth
 # by 0.68 % to 5.0 % of late. With `early` unchanged this is D-0141's 0.5 % on the ratio;
-# the two rules part only when `early` moves, which is the case D-0152 section 4 met. The baseline is a RATCHET: `--update` records the
-# lines as measured, in its own commit after a gated merge, and REFUSES while a line is
-# OVER its recorded baseline. Raising a baseline takes `--raise`, which a decision record
-# must justify (a search change that does more work per learned constraint on purpose);
-# making the lane pass is never that justification.
+# the two rules part only when `early` moves, which is the case D-0152 section 4 met.
+#
+# The baseline is a RATCHET, per line: `--update` (in its own commit, after a gated merge)
+# writes a line's new measurement only where its growth went DOWN, and keeps the recorded
+# line where it went up within the margin, so that merges which each add less than the
+# margin cannot walk the baseline upward. It REFUSES while a line is OVER. `--update
+# --raise` writes every line as measured: for a change to plan.tsv, or for a decision
+# record that justifies a higher growth (a search change that does more work per learned
+# constraint on purpose); making the lane pass is never that justification.
 #
 # ENFORCING since M11-complexity-T6: an OVER line exits 1. `--report` (or
 # SCALING_ENFORCE=0) prints the verdicts and exits 0, for exploration only; `--enforce`
@@ -168,7 +172,7 @@ done < "$S/plan.tsv"
 wait
 WALL=$(( $(date +%s) - START ))
 
-OVER=0; BROKEN=0; NOBASE=0; NEWBASE=""
+OVER=0; BROKEN=0; NOBASE=0; KEPT=0; NEWBASE=""
 for l in "${LINES[@]}"; do
   read -r id mode n0 n1 n2 n3 <<< "$l"
   get() { cat "$WORK/$id.$mode.$1/$2" 2>/dev/null; }
@@ -205,7 +209,14 @@ PY
   # in the pre-T6 format (the ratio in column 4, seven columns) is not a growth baseline.
   read -r bgrowth blate < <(awk -F'\t' -v i="$id" -v m="$mode" -v k="$METRIC" \
     '$1==i && $2==m && $3==k && NF>=10 {g=$4; l=$5} END {print g, l}' "$S/baseline.tsv" 2>/dev/null)
-  NEWBASE+="$id	$mode	$METRIC	$growth	$late	$early	$ratio	$(hostname -s)	$MD5	$(date -u +%Y-%m-%d)"$'\n'
+  row="$id	$mode	$METRIC	$growth	$late	$early	$ratio	$(hostname -s)	$MD5	$(date -u +%Y-%m-%d)"
+  # The ratchet: a line whose growth did not go down keeps its recorded row (unless --raise).
+  if [ "$RAISE" = 0 ] && [ -n "${bgrowth:-}" ] && [ "$growth" -ge "$bgrowth" ]; then
+    row="$(awk -F'\t' -v i="$id" -v m="$mode" -v k="$METRIC" \
+      '$1==i && $2==m && $3==k && NF>=10 {r=$0} END {print r}' "$S/baseline.tsv")"
+    KEPT=$((KEPT + 1))
+  fi
+  NEWBASE+="$row"$'\n'
   if [ -z "${bgrowth:-}" ] || [ -z "${blate:-}" ]; then
     verdict="NO BASELINE for metric $METRIC"; NOBASE=$((NOBASE + 1))
   else
@@ -238,7 +249,8 @@ if [ "$UPDATE" = 1 ]; then
     echo "# to make a line pass."
     printf '%s' "$NEWBASE"
   } > "$S/baseline.tsv"
-  echo "scaling_lane: baseline recorded in bench/scaling/baseline.tsv (${WALL}s)"
+  echo "scaling_lane: baseline recorded in bench/scaling/baseline.tsv; $KEPT line(s) whose growth did"
+  echo "              not go down kept their recorded row (the ratchet) (${WALL}s)"
   exit 0
 fi
 if [ "$BROKEN" -gt 0 ]; then
