@@ -2132,12 +2132,14 @@ let bridges (ctx : Justify.ctx) trace stats store (decisions : Lit.t list) : Lit
                        (Lit.to_string l) (Lit.to_string claim))
                     (fun () -> holes <> []);
                   let lits = claim :: Lit.negate l :: List.map Lit.negate ancestors in
-                  let origin =
+                  (* D-0152 (D-0140 J6): the origin is a thunk, rendered only by the
+                     writer's audit or the mutation knob, as [Trace]'s are (D-0145). *)
+                  let origin () =
                     Printf.sprintf "M1-T55: %s settled onto %s" (Lit.to_string l)
                       (Lit.to_string claim)
                   in
                   protect (l :: ancestors);
-                  let cid = Justify.emit_rup_clause ctx ~origin lits in
+                  let cid = Justify.emit_rup_clause_lazy ctx ~origin lits in
                   let level = Writer.current_level ctx.Justify.writer in
                   let cited, unnamed =
                     List.fold_left
