@@ -263,10 +263,11 @@
 
    So [default] is still [keep_all], now as a recommendation to M10-T5 (restarts and an
    activity heuristic change what eviction loses) rather than as D-0051's measurement.
-   [gate] is wired by the search only on branch `wave45-retention-hook` until the
-   cross-session request for lib/core/search.ml is taken; without it [tiered] can evict
-   only what has no consumer, exactly as [lbd] could. D-0139 has the tables, the binaries
-   each was measured on, the lock rule's break, and what is pending.
+   [gate] is wired by the search since main 36c1312 (the two `Engine.add` sites in
+   lib/core/search.ml, cherry-picked from `wave45-retention-hook`), so `lbd`, `fifo` and
+   `tiered` all evict for real now; under [keep_all] the gate is the identity and the
+   default is byte-identical to before it. D-0139 has the tables, the binaries each was
+   measured on, the lock rule's break, and the two late configurations.
 
    ### Determinism
 
