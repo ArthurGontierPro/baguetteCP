@@ -1773,6 +1773,93 @@ let test_memo_identity_m11t5 () =
   in
   expect_ok "m11t5 memo: no exception" r
 
+(* M11-complexity-T12 (D-0166). Three structures changed representation and none of
+   them may change what they answer: the memo is a chained hash that grows (past 2 048
+   entries), the writer lists a level's ids as runs of consecutive ids, and the claim
+   index keys a clause by a packed array over interned names. 5 000 derivations over
+   four interleaved levels, a run at one level broken by an interlude at another, and
+   clauses that differ only by kind, sign, name or order. *)
+let test_representations_m11t12 () =
+  let _, r =
+    emitted (fun w ->
+        let _, ctx, cx, cy = build_two_ctx w in
+        let comb i =
+          Explanation.combine
+            [
+              Explanation.Term (1 + (i mod 7), Explanation.model_row cx);
+              Explanation.Term (1, Explanation.model_row cy);
+            ]
+            1
+        in
+        let n = 5000 in
+        let es = Array.init n comb in
+        let lvl i = 1 + (i mod 4) in
+        let ids =
+          Array.mapi
+            (fun i e ->
+              Writer.set_level w (lvl i);
+              Justify.emit ctx e)
+            es
+        in
+        check "m11t12 memo: 5000 values, 5000 ids, 5000 entries"
+          (List.length (List.sort_uniq Int.compare (Array.to_list ids)) = n
+          && fst (Justify.memo_stats ctx) = n);
+        Writer.set_level w 4;
+        let last = Writer.last_id w in
+        let again = Array.map (Justify.emit ctx) es in
+        check "m11t12 memo: each found again by identity after the table grew"
+          (again = ids && Writer.last_id w = last);
+        (* A run at level 2 broken by an interlude at level 1, then resumed. *)
+        Writer.set_level w 2;
+        let r1 = List.init 3 (fun i -> Justify.emit ctx (comb (n + i))) in
+        Writer.set_level w 1;
+        let inter = Justify.emit ctx (comb (n + 3)) in
+        Writer.set_level w 2;
+        let r2 = List.init 3 (fun i -> Justify.emit ctx (comb (n + 4 + i))) in
+        Writer.set_level w 4;
+        Justify.wipe_level ctx 2;
+        let live_at l = List.for_all (fun id -> Writer.is_live w id) l in
+        let dead l = List.for_all (fun id -> not (Writer.is_live w id)) l in
+        let at_or_above k = List.filteri (fun i _ -> lvl i >= k) (Array.to_list ids) in
+        let below k = List.filteri (fun i _ -> lvl i < k) (Array.to_list ids) in
+        check "m11t12 writer: the wipe of level 2 retires levels 2..4 and nothing else"
+          (dead (at_or_above 2)
+          && dead r1 && dead r2
+          && live_at (below 2)
+          && live_at [ inter ]);
+        check "m11t12 memo: the wipe keeps exactly the level-1 entries"
+          (fst (Justify.memo_stats ctx) = (n / 4) + 1);
+        Writer.set_level w 1;
+        let last = Writer.last_id w in
+        let back = Array.map (Justify.emit ctx) es in
+        check "m11t12 memo: a level-1 entry answers, a wiped one is derived afresh"
+          (Array.for_all2
+             (fun (i, a) b -> if lvl i = 1 then a = b else b > last)
+             (Array.mapi (fun i a -> (i, a)) ids)
+             back);
+        (* The claim index: kind, sign, name and order. *)
+        Writer.set_level w 1;
+        let cl ls = Justify.emit ctx (Explanation.clause ls) in
+        let a = cl [ Lit.ge "x" 1; Lit.ge "y" 2 ] in
+        let b = cl [ Lit.ge "y" 2; Lit.ge "x" 1 ] in
+        let c = cl [ Lit.negate (Lit.ge "x" 1); Lit.ge "y" 2 ] in
+        let d = cl [ Lit.ge "x" 2; Lit.ge "y" 1 ] in
+        let e = cl [ Lit.ge "y" 1; Lit.ge "x" 2 ] in
+        check "m11t12 claims: one set in two orders is one line" (a = b && d = e);
+        check "m11t12 claims: a sign or a swapped name is another clause"
+          (c <> a && d <> a && c <> d);
+        check "m11t12 claims: the index answers the set it holds"
+          (Justify.defining_line ctx [ Lit.ge "y" 2; Lit.ge "x" 1 ] = Some a
+          && Justify.defining_line ctx [ Lit.ge "x" 1 ] = None);
+        Writer.set_level w 2;
+        Justify.wipe_level ctx 1;
+        Writer.set_level w 0;
+        check "m11t12 claims: the wipe empties the index"
+          (Justify.defining_line ctx [ Lit.ge "x" 1; Lit.ge "y" 2 ] = None);
+        Writer.delete_many w (Writer.live_ids w))
+  in
+  expect_ok "m11t12 representations: no exception" r
+
 (* M11-complexity-T10 (D-0158). The memo's two modes over the same scene: a derivation
    REBUILT at each of three levels, as D-0149's propagator rebuilt its [Combine] (one
    physical copy per level), plus a thunk of the same derivation.
@@ -1984,6 +2071,7 @@ let () =
   test_wipe ();
   test_memo_identity_m11t5 ();
   test_share_m11t10 ();
+  test_representations_m11t12 ();
   run_veripb ~name:"justify: a Linear explanation, checked end to end"
     ~build:build_linear_proof;
   run_veripb ~name:"justify: a Cut of two Linears, checked end to end"
