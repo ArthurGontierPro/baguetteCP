@@ -19271,3 +19271,204 @@ model lane's own output directory) and the two tracked fixtures under `bench/con
   stderr. A per-run unique name would never collide but would pile up files in the cwd.
 - **Overwriting.** Chosen silent, like `--proof PREFIX` and a compiler. Refusing to overwrite
   would make the second run of a model fail until the user deletes the first proof.
+
+## D-0164  M11-complexity-T11: what black-hole keeps per node, and Element's foreign-hole clauses built lazily
+
+Status: DONE (the fix); section 7 stays open
+Date: 2026-11-19
+
+By agent-heap (branch `wave54-heap` for the probe, `wave54-heap-fix` for the fix, both on
+the hub). Base: `wave53-alldiff` tip `b7e1ca9` (M7-T33, not yet merged), binary `45b8a3c7`.
+Runs in `/scratch/arthur/wave54-heap-runs/`, copied to `/cluster/arthur/baguette-results/wave54-heap/`.
+
+### 1. The question
+
+D-0155 section 4 and D-0156 section 4 left one finding open. `2011_black-hole_9` without
+`--proof` held 6.3 GB RSS after 39 nodes, and with M7-T33 black-hole x4, black-hole_layout x3 and
+ghoulomb x1 stop at the 8 GB heap budget (rc 5) within about 90 s. Which structure holds the
+memory, and is it (a) data that should be released on backtrack and is not, (b) data that is
+legitimately live along the branch but too big per entry, or (c) something cumulative across the
+run?
+
+### 2. Method
+
+A probe on `wave54-heap` (`lib/core/search.ml`, the seven commits marked PROBE, not for merging):
+
+- `BAGUETTE_HEAP_PROBE=K`: every K nodes a full major GC, the live heap (`Gc.stat`), the words
+  reachable from the search's roots `(store, engine, ctx, trace, stats)`, and the MARGINAL share of
+  the trail, the explanation arena, the propagator instances and, per propagator family, of that
+  family's trail entries together with their arena slots (each hidden in turn and
+  `Obj.reachable_words` taken again). `unreached` = live minus reachable, which is where a
+  module-level table would show.
+- `BAGUETTE_HEAP_QUICK=1`: `Gc.quick_stat` at every node, no forced GC.
+- At `BAGUETTE_NODE_LIMIT` with the probe on: DESTRUCTIVE drops in a fixed order (writer audit
+  table, writer tags, `Justify` memo, `Justify` stated, trace, the arena slots family by family,
+  the arena, the trail), live heap after each.
+
+memtrace is not usable: OCaml 5.1.1 has no `Gc.Memprof`.
+
+### 3. What is retained
+
+**Without `--proof`, base binary, `2011_black-hole_9`** (probe every 5 nodes):
+
+| node | trail | live | arena share | element entries + slots |
+|---|---|---|---|---|
+| 5 | 7 047 | 121 MB | 26 MB | 6 322 / 32 MB |
+| 10 | 12 179 | 244 MB | 135 MB | 10 919 / 154 MB |
+| 15 | 18 767 | 725 MB | 579 MB | 16 694 / 633 MB |
+| 30 | 24 924 | 1 194 MB | 965 MB | |
+| 40 | 24 928 | 1 193 MB | 965 MB | 22 007 / 1 082 MB |
+
+`unreached` is 0 at every probe and the instances' share is 0, so nothing is held outside the
+search's roots and nothing is (c). Between nodes 15 and 20, and on `2013_black-hole_4` between
+nodes 20 and 25 where the trail shrinks back to 17 746 entries, the live heap follows the trail
+and not the node count: what a backtrack pops is released. So it is not (a) either. It is (b):
+live along the branch, and far too big per entry, about 49 KB per `array_int_element` entry at
+node 40 and growing with depth (4.7 KB per entry at node 5), so the heap is superlinear in the
+trail.
+
+The structure: `Element.index_hole_clause` (`lib/core/prop/element.ml`, M7-T21 / D-0084), called
+by `pos_gone` for each dead position whose index value is an interior hole punched under a decision
+by another propagator. It built `Explanation.clause (unit :: List.map Lit.negate (Reason.lits
+e.reason))` EAGERLY: the puncher's whole reason materialised as fresh literals. `dead_positions`
+calls `pos_gone` for every dead declared position at every pruning (`alo`, `push_lo_expl`,
+`push_hi_expl`, `hole_expl`, `no_position_conflict`), so one pruning copied O(dead positions x
+puncher facts) literals, and the puncher's facts themselves grow along the branch (an element
+reason carries its index holes' punchers' facts, `index_hole_facts`). On black-hole the 102
+element constraints share ONE index, `X_INTRODUCED_107_` over 1..416 (the widest variable of the
+model), each with its own constant array and a result over 1..52. Every hole one instance punches in
+that index is a foreign hole for the 101 others, and a pruning walks up to 416 dead positions.
+
+**With `--proof`** the eager copies were only part of it. The quick probe (`p5/`) shows the heap
+flat until the first failure deep in the tree, then a jump at that one node: base 1 661 -> 4 182 MB,
+fix 763 -> 3 242 MB at node 30 of `2011_black-hole_9`, then +100 to +350 MB per later failure. At
+the first failure `Trace.emit` writes a line and its derivation for every entry of the branch
+(about 25 000), and each written derivation stays reachable until its level is wiped. The drops at
+node 40 (`p7/`, fix, live 2 660 MB):
+
+| dropped (in this order) | live after | share |
+|---|---|---|
+| writer audit table (`Writer.live`, origin closures) | 2 335 MB | 325 MB |
+| writer `tags` + `by_lvl` | 2 145 MB | 190 MB |
+| `Justify` memo | 1 804 MB | 341 MB |
+| `Justify` stated (claim index) | 1 471 MB | 333 MB |
+| trace | 1 454 MB | 17 MB |
+| explanation arena (forced derivations) | 233 MB | 1 221 MB |
+| trail (reasons, `cites` memos) | 93 MB | 140 MB |
+
+All of it is (b) as well: proof state of the open levels, wiped by `Justify.wipe_level`. Dropping
+the arena slots family by family after the four tables above (`p12/`): element's slots free 60 MB,
+then `all_different_int`'s free 1 161 MB, inverse, int_lin_le and decisions nothing. So the
+largest single holder in proof mode is the FORCED derivations of `all_different` prunings, about
+530 entries on the branch and 2.2 MB each, held by `Explanation.force`'s memoisation once their
+lines are written (element's derivations cite them, which is why dropping element's slots first
+frees little). Without `--proof` the same 530 entries hold 15 MB: what is big is the rendered
+derivation, not the snapshot it is built from.
+
+Without `--proof` one more (b) item shows in `--stats` on `2013_black-hole_4` (300 s, fix): the
+decision-closure citation memos (`Store.entry.cites`, M7-T27 a3), 13 163 memos and 231.6 MB.
+
+### 4. The fix (one commit on `wave54-heap-fix`, element.ml only)
+
+1. `9e6a230`: the puncher is still found eagerly (I-X6: which entry punched the hole is live store
+   state), its literals are not. The clause is built inside `Explanation.deferred` from the
+   puncher's `Reason.t`, which is frozen data (a `Facts` list, or a `Later` reading a history that
+   is valid while the puncher is on the trail, and the puncher is below the pruning, so it outlives
+   every arena slot that can hold the thunk). Same literals in the same order.
+
+It changes neither the type `Explanation.t`, a proof rule nor the search.
+
+Tried and reverted (`e0a57bb`, reverted by `3b32af4` on `wave54-heap`): one clause per hole,
+cached per index value with the puncher entry it was built for, so that every pruning citing the
+hole shares one node. Same proof bytes, but no gain on bh9 with `--proof` (live 2 660 -> 2 657 MB
+at node 40, RSS 5 644 -> 5 620 MB) and 7 958 -> 7 518 MB on bh4, because section 3's proof-mode
+holder is alldiff's derivations rather than these clauses. Its cache also keeps popped puncher
+entries alive (75 MB on bh9 without `--proof`). Not worth a cache.
+
+### 5. Measurements (fataepyc-06)
+
+Binaries: base `45b8a3c7` (`b7e1ca9`), fix `c4cd4783` (`9e6a230`). The probe binaries (the same
+code plus the inactive probe, whose own node limit exits at once): base `3e8c79ae`, fix `af833694`.
+
+Equal nodes (node limit 40, same trail length at every probe, so the same search), probe binaries,
+`perf stat -e instructions:u` (`p3/`):
+
+| run | RSS base -> fix | instructions base -> fix |
+|---|---|---|
+| bh9 `--no-proof` | 2 127 -> 839 MB | 132.4 G -> 111.9 G (-15.5 %) |
+| bh4 `--no-proof` | 6 044 -> 1 719 MB | 645.1 G -> 471.4 G (-26.9 %) |
+| bh9 `--proof` | 5 424 -> 4 344 MB | 686.9 G -> 670.8 G (-2.3 %) |
+| bh4 `--proof` | 11 655 -> 7 977 MB | 2 109.6 G -> 1 938.0 G (-8.1 %) |
+
+The `.pbp` of each proof pair has the same sha256 (bh9 `468e80ec...`, 551 MB; bh4 `fb65a630...`,
+1.13 GB).
+
+The same with the clean binaries and the CLI's own node limit (`BAGUETTE_NODE_LIMIT=40`, M6-T9,
+which writes the proof to its end; `p10/`):
+
+| run | RSS base -> fix | instructions base -> fix | `.pbp` (same sha256) |
+|---|---|---|---|
+| bh9 `--proof` | 6 726 -> 5 644 MB | 800.4 G -> 776.8 G (-3.0 %) | 617 MB `e29e8967...` |
+| bh4 `--proof` | 11 656 -> 7 958 MB | 2 134.6 G -> 1 960.8 G (-8.1 %) | 2.50 GB `f08cdbd5...` |
+
+The Challenge setting, `2013_black-hole_4`, 300 s, `--max-heap-mb 8192` (`p9/`, clean binaries):
+
+| | base | fix |
+|---|---|---|
+| `--proof` | rc 5 at 92 s (heap budget), 8.42 GB | rc 0, time limit, 42 nodes, 8.02 GB |
+| `--no-proof` | 125 nodes, 6.60 GB | 154 nodes, 2.04 GB |
+
+The 15 black-hole and black-hole_layout instances at 30 nodes with `--proof` (`p4/`), peak RSS
+base -> fix: bh4 11 292 -> 7 098 MB, bh12 8 243 -> 6 382, bh14 12 136 -> 10 847, bh16 3 467 ->
+2 255, bh18 4 879 -> 3 031, bh20 3 218 -> 2 350, bh9 5 145 -> 4 152, layout_3 4 706 -> 4 103,
+layout_14 10 787 -> 10 106, layout_17 6 525 -> 5 168, layout_25 12 352 -> 11 140, layout_27 3 861
+-> 2 599. bh6, bh10 and bh17 finish under 400 MB either way.
+
+### 6. Bytes and the gate
+
+- Every `test/models/*.fzn` (200) solved with `--proof`, plus the 15 black-hole instances at
+  `BAGUETTE_NODE_LIMIT=30`: stdout, exit code, `.opb` and `.pbp` sha256 of fix against base,
+  215 of 215 identical (`p4/results`).
+- fix on a fresh clone (`gate/`): `make check` under `ulimit -v 4000000` rc 0, 200/200 models,
+  0 FAIL. `make diff ARGS="--tier all -j 16"`: FAIL, 18 of 301 runs differ from the reference,
+  `2020_lot-sizing_pigment15b.psp` in 12 configurations and `2011_cyclic-rcpsp_easy_6@2000` in 6,
+  exactly the runs wave53-alldiff's handoff says must be re-recorded at its merge. The same lane
+  on the BASE binary fails on the same 18 runs, and the kept observations of base and fix are equal on 300 of 301 runs. The one
+  that differs is lot-sizing's `activity` configuration, which dies at the lane's 4 GB cap in
+  both (the cap wave53-alldiff's `--update` already hit): base with rc 134 "allocation failure
+  during minor GC" before printing its encoding counters, fix with rc 2 "Out of memory" after
+  them. Rerun twice each with the same cap (`p8/`), base and fix both die with rc 134, so where
+  the 4 GB cap is hit is not deterministic. With the cap at 24 GB both complete (rc 0, 4.27 GB peak RSS) and their observations, proof hashes included, are equal.
+
+### 7. What is left, not done here
+
+- With `--proof`, black-hole still grows 100 to 350 MB per deep failure and reaches 2.66 GB live
+  (5.6 GB RSS) at node 40 of bh9. The holders are section 3's table: alldiff's forced derivations
+  (1.16 GB), the `Justify` memo (341 MB) and claim index (333 MB), the writer's audit table (325 MB,
+  on by default in the CLI) and its tags (190 MB). They are proof state of the open levels. Shrinking
+  the largest means not keeping a forced derivation once its line is written: its id is what a
+  later citation needs, and the `Justify` memo already holds that under the `Deferred` node's
+  identity. But `Explanation.force` memoises the tree by design, `Justify`'s hashing reads the
+  forced head, and a re-forced tree has new inner nodes, so whether the bytes stay the same needs
+  its own argument and measurement. That touches `explanation.ml` and `justify.ml` and is a
+  decision of its own, not attempted here. The other way in is the size of alldiff's derivations
+  themselves, 2.2 MB of heap each.
+- The per-pruning `dead_positions` list is still built eagerly, one deferred thunk per dead
+  position per pruning (about 8 KB per element entry at node 40 without `--proof`), and an element
+  reason still copies its index holes' punchers' facts (`index_hole_facts`).
+- `Store.entry.cites` (231.6 MB on bh4 without `--proof`).
+
+### 8. To land
+
+The fix touches only `lib/core/prop/element.ml`, which nobody claims in the current table. The
+branch is built on `wave53-alldiff` (M7-T33), so it lands after that merge, as the one commit
+`9e6a230` cherry-picked onto main and gated there (the alldiff merge re-records the lane's
+lot-sizing and cyclic references first). The probe commits on `wave54-heap` are not to be merged.
+
+### 9. Landed on main ahead of M7-T33 (orchestrator)
+
+The fix touches `element.ml` only, which main holds since D-0155, so it was cherry-picked onto main
+(`bb59854`) as its own branch `wave54-heapfix` instead of waiting for wave53-alldiff's merge. The
+numbers of section 5 were measured over wave53-alldiff's tip; on main the gate checks that every
+artefact stays byte-identical (gate 69, WORKLOG).
+
