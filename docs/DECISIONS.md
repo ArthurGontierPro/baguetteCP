@@ -18372,19 +18372,48 @@ never reaches the memo by node 400.
 Share mode is a large proof and memory saving where propagators rebuild derivations (cable loses
 94 % of its proof and 24 % of its RSS, cyclic 84 % of its proof). It costs instructions where most
 misses are new lines (rcpsp +14.5 %, mspsp +2.7 %), because every miss is rendered and hashed once
-more before it is written. SHARE-VERIPB
+more before it is written.
+
+The differential lane with sharing on (`memo-gate.sh`, `--tier all`, 301 runs at the lane's node
+budgets, each under `ulimit -v 4000000`) reports 85 of 301 runs different from the reference. On
+all 85 the only lines that differ, besides the `.pbp` hash and the WORK counters, are two `--stats`
+counters, `pol` (the `pol` lines written) and `pol-tokens` (their operands and operators). They
+measure the proof's size. `observe.py` files them under SEARCH only because they are not in its WORK
+list, and nothing reads them back, since `Writer.n_pol` and `pol_tokens` are read by `main.ml`'s
+stats printer and by nothing in `lib/`. On every one of the 301 runs, stdout, the exit code, the
+`.opb` hash and every other counter (nodes, failures, learned, the LBD and width histograms, the
+retention line) equal the reference, and on the 216 others the `.pbp` hash is equal too, because
+nothing was shared there. The 85 runs are 12 instances (cyclic, mspsp, rcpsp_11, rcpsp_12,
+lot-sizing, parity-learning, soccer, chessboard, evm, bacp and the two opd) under their
+configurations. `pol` lines go down on all 85 and up on none. Over the 301 runs they fall from
+70.8 M to 48.4 M (-32 %) and `pol` tokens from 1 226 M to 670 M (-45 %). Depending on the configuration,
+lot-sizing loses 67 % to 92 % of its `pol` lines, cyclic 80 % to 84 %, soccer up to 85 % and
+rcpsp_11 12 % to 33 %. Veripb
+`d5644ca4` accepts all 274 kept proofs (the other 27 runs are the `noproof` configuration), 272
+with `s VERIFIED NO CONCLUSION` and two with `s VERIFIED BOUNDS` at the optimum. This check ran
+veripb under `ulimit -v 16000000`, because the cyclic proofs are large. The model suite with
+`BAGUETTE_MEMO_SHARE=1` passes 198 of 198 with every proof checked. The per-run counters are in
+`/cluster/arthur/baguette-results/wave53-memo/share-lane-pol-counters.txt`.
 
 ### 5. The decision left to the user
 
 Turning share mode on by default would shrink proofs by up to 16 times on instances like cable and
-cyclic and keep the search identical. It would change every `.pbp` hash in the differential lane's
-reference, while stdout and every SEARCH counter stay. It costs up to +14.5 % instructions on
+cyclic and keep the search identical. It would change the `.pbp` hash and the `pol` and `pol-tokens`
+counters of 85 of the differential lane's 301 reference runs, which would then be re-recorded in a
+commit of their own. Stdout and every other counter stay. It costs up to +14.5 % instructions on
 rcpsp_11. The switch is one line (`share_default`). The alternative that keeps the bytes is D-0140
 J1's id in `Explanation.t`, which would make the walk O(1) but still write 1.9 GB on cable.
 
 ### 6. The gate (default mode)
 
-GATE-NUMBERS
+`memo-gate.sh` on a fresh clone of `95759c5` (code `c488b8e`), on `fataepyc-06`. `make check` rc 0
+under `ulimit -v 4000000`, 4 256 ok and 0 FAIL, 198 models, peak RSS 100 MB. The binary is
+`59368b5f`. Against `base.exe` (`9a9c461`, md5 `64ec63e0`, gate 61's binary), the 198 models give
+0 differences over their four artefacts (stdout, exit code, `.opb`, `.pbp`). The differential lane
+gives 301 of 301 runs equal to the reference and its debug pass 289 of 289. The scaling lane is
+within every threshold. The share-mode checks are in section 4. The gate's status, the share
+lane's logs and the section 4 runs (without their proofs) are copied to
+`/cluster/arthur/baguette-results/wave53-memo/`.
 
 ### 7. Not done
 
