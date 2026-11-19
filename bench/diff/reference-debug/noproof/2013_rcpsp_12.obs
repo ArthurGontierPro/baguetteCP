@@ -20,7 +20,7 @@ search limit.pb-learned 0
 search limit.db 724
 search limit.maxdepth 26
 search limit.incumbent 40
-work limit.props 240486
+work limit.props 236212
 work limit.eff 15486
 work limit.contra 723
 search limit.at node
@@ -68,19 +68,19 @@ search lvl-incomp/confl 0 confl
 search lvl-empty/confl 0 confl
 search lvl-assert/confl 0 confl
 work int_lin_le_reif/inst 153 inst 81.8 runs/node 4.95 eff/node
-work learned_clause/inst 722 inst 53.9 runs/node 1.82 eff/node
+work learned_clause/inst 722 inst 51.0 runs/node 1.82 eff/node
 work int_lin_le/inst 25 inst 13.6 runs/node 1.03 eff/node
 work bool_clause/inst 153 inst 5.6 runs/node 1.91 eff/node
 work cumulative/inst 3 inst 5.4 runs/node 0.61 eff/node
-work props/runs 240486 runs
+work props/runs 236212 runs
 work eff/runs 15486 runs
 work contra/runs 723 runs
 work passes/snaps 12462 snaps
 work deductions/chgs 6159 chgs
-work wakes/wakes 731220 wakes
+work wakes/wakes 571864 wakes
 work masked/wakes 0 wakes
 work vetoed/wakes 1554 wakes
-work advised/wakes 425614 wakes
-work seeded/runs 141398 runs
-work skipped/slots 808066 slots
+work advised/wakes 245016 wakes
+work seeded/runs 139120 runs
+work skipped/slots 810344 slots
 search no-proof/bool 1 bool

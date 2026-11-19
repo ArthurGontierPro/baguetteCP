@@ -34,7 +34,7 @@ search limit.pb-learned 0
 search limit.db 56
 search limit.maxdepth 30
 search limit.incumbent 674
-work limit.props 1140364
+work limit.props 1140332
 work limit.eff 72409
 work limit.contra 732
 search limit.at node
@@ -86,21 +86,21 @@ work int_lin_le/inst 241 inst 70.6 runs/node 24.90 eff/node
 work int_lin_le_reif/inst 147 inst 52.4 runs/node 4.82 eff/node
 work bool_not/inst 162 inst 4.7 runs/node 1.34 eff/node
 work bool2int/inst 81 inst 2.5 runs/node 1.34 eff/node
-work learned_clause/inst 51 inst 2.3 runs/node 0.46 eff/node
+work learned_clause/inst 51 inst 2.2 runs/node 0.46 eff/node
 work cumulative/inst 1 inst 1.9 runs/node 0.01 eff/node
 work bool_clause/inst 45 inst 1.8 runs/node 0.00 eff/node
 work array_int_maximum/inst 2 inst 1.7 runs/node 0.05 eff/node
 work array_int_minimum/inst 1 inst 1.6 runs/node 0.03 eff/node
 work all_different_int/inst 1 inst 1.5 runs/node 0.36 eff/node
-work props/runs 1140364 runs
+work props/runs 1140332 runs
 work eff/runs 72409 runs
 work contra/runs 732 runs
 work passes/snaps 10661 snaps
 work deductions/chgs 1998 chgs
-work wakes/wakes 2549509 wakes
+work wakes/wakes 2500306 wakes
 work masked/wakes 0 wakes
 work vetoed/wakes 58587 wakes
-work advised/wakes 83232 wakes
+work advised/wakes 33897 wakes
 work seeded/runs 97103 runs
 work skipped/slots 2898619 slots
 search rup/lines 16395 lines

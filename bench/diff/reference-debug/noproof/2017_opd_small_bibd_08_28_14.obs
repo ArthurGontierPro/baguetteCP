@@ -92,10 +92,10 @@ work eff/runs 56367 runs
 work contra/runs 445 runs
 work passes/snaps 0 snaps
 work deductions/chgs 0 chgs
-work wakes/wakes 306601 wakes
+work wakes/wakes 301281 wakes
 work masked/wakes 0 wakes
 work vetoed/wakes 13668 wakes
-work advised/wakes 8061 wakes
+work advised/wakes 0 wakes
 work seeded/runs 80913 runs
 work skipped/slots 12760980 slots
 search no-proof/bool 1 bool
