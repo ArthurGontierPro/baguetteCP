@@ -12715,8 +12715,13 @@ shape and no proof line. Flag: `--phase-saving`.
 branch nogood veripb refuses on `2017_hrc_exp1-1-5670` (section 13), and with the one-literal
 split the same run verifies. The split keeps `s` at the top of its first branch, so the next
 decision on `x` with the same phase is `x >= s` there and lands on `s`. Phase saving now never
-produces the assignment shape. The root cause is not found and is filed as a finding (section 13),
-because the shape is main's too (`indomain_median`).
+produces the assignment shape.
+
+**Second addendum, 2026-11-19: that was not the cause.** The subset re-measurement on the fixed
+binary `46b0deaa` refused another proof on the same instance, under `--search alternate
+--restarts luby --phase-saving` (section 13 point 1), with no assignment decision anywhere. The
+one-literal split stays, since it is a correct and simpler decision, but it fixes nothing, and the
+refusal is open.
 
 **Over an annotation it is a substitution of the value choice**, which SPEC §3.4 forbids done
 silently. The flag is the user asking for it, and section 6 says so in the SPEC.
@@ -12873,6 +12878,9 @@ not full restarts under another name.
   that wipes one level too many. That one would be checker-visible (the re-entered node's
   level-`t` trace lines gone), and is the lane to add if `--reuse-trail` is ever proposed as a
   default.
+- **The refused proofs of section 13 point 1** are open, and they come first: until they are
+  explained, a restart combined with phase saving and a dynamic order is not proof-safe on every
+  instance.
 - **The LBD policy's K** never fires on the codes (section 10, point 4). T5 should sweep it, or
   measure Glucose's newer EMA form, before calling `lbd` useless.
 
@@ -12985,92 +12993,92 @@ against `chuffed-free`). No SAT instance in the 1 to 300 s window shows a free a
 Chuffed runs solve them in seconds), so the five SAT ones are plain. The wave43 `.fzn` were
 deleted after solving, so all twenty were re-flattened with main's `mznlib`
 (`baguette-gate-20261118`, MiniZinc 2.10.1). The re-flattenings differ from wave43's by 6 to 21
-bytes. Time limit 300 s, veripb capped at 600 to 900 s per proof (a run whose check did not
-finish says `check-TO`).
+bytes. Time limit 300 s.
 
-Measured on `878ceb53` (the strategy rows) and `a9217430` (`sbase`), that is BEFORE the
-phase-saving fix of section 3's addendum, so every strategy column below still made assignment
-decisions at interior saved values. All twenty instances, both modes, are complete. Without the
-proof:
+**Binaries.** `sbase` is main's `a9217430`. The three strategy columns are **`46b0deaa`**
+(`48de0a3`, phase saving without the assignment shape), measured 2026-11-18 in
+`/scratch/arthur/wave45-strategy-runs/out4/`, all 120 runs complete (both drivers finished,
+`c4.done` and `c4rev.done` in the run directory). They replace a first measurement of the same
+three columns on `878ceb53` (`out3/`), whose one refused proof is section 13 point 1.
+`slubyps` = `--restarts luby --phase-saving`, `saltlubyps` = the same with `--search alternate`,
+`sactlubyps` = with `--search activity`.
+
+Without the proof:
 
 | instance | sbase | slubyps | saltlubyps | sactlubyps |
 |---|---|---|---|---|
-| 2012_ship-schedule_6ShipsMixed | OPT 77 s, 3335 n | OPT 66 s, 2222 n, 6 r | SAT 600 s, ? n | TO(300505) 312 s, 60 n |
-| 2014_amaze_2012-04-27 | SAT 10 s, 9427 n | SAT 13 s, 10720 n, 28 r | SAT 21 s, 14075 n, 30 r | SAT 6 s, 8715 n, 23 r |
-| 2014_fillomino_5x5_1 | SAT 20 s, 9646 n | SAT 26 s, 9714 n, 28 r | SAT 7 s, 5244 n, 14 r | SAT 10 s, 7054 n, 16 r |
-| 2014_openshop_gp10-4 | TO(1139) 300 s, 36374 n | TO(1139) 300 s, 31711 n, 60 r | TO(1079) 300 s, 42833 n, 62 r | TO(1077) 300 s, 47279 n, 64 r |
-| 2016_nfc_18_3_5 | OPT 88 s, 1033 n | TO(1338) 300 s, 1208 n, 4 r | OPT 105 s, 863 n, 2 r | OPT 29 s, 398 n, 1 r |
-| 2016_solbat_sb_15_15_7_3 | SAT 97 s, 13892 n | SAT 130 s, 14412 n, 30 r | SAT 57 s, 12132 n, 28 r | SAT 119 s, 19728 n, 31 r |
+| 2012_ship-schedule_6ShipsMixed | OPT 77 s, 3335 n | OPT 16 s, 2052 n, 5 r | TO(212945) 388 s, 480 n, 1 r | TO(300510) 310 s, 105 n |
+| 2014_amaze_2012-04-27 | SAT 10 s, 9427 n | SAT 9 s, 9856 n, 22 r | SAT 23 s, 16633 n, 30 r | SAT 2 s, 4910 n, 13 r |
+| 2014_fillomino_5x5_1 | SAT 20 s, 9646 n | SAT 18 s, 8974 n, 21 r | SAT 8 s, 6669 n, 14 r | SAT 7 s, 6434 n, 14 r |
+| 2014_openshop_gp10-4 | TO(1139) 300 s, 36374 n | TO(1101) 300 s, 48020 n, 62 r | TO(1078) 300 s, 42995 n, 62 r | TO(1078) 300 s, 46218 n, 62 r |
+| 2016_nfc_18_3_5 | OPT 88 s, 1033 n | OPT 36 s, 673 n, 2 r | OPT 228 s, 1335 n, 4 r | OPT 12 s, 246 n |
+| 2016_solbat_sb_15_15_7_3 | SAT 97 s, 13892 n | SAT 133 s, 16061 n, 30 r | SAT 162 s, 22191 n, 44 r | SAT 125 s, 21331 n, 36 r |
 | 2017_cargo_challenge01_0s_1913 | SAT 600 s, ? n | SAT 600 s, ? n | SAT 600 s, ? n | UNKNOWN 600 s, ? n |
-| 2017_hrc_exp1-1-5670 | OPT 19 s, 8343 n | OPT 22 s, 9134 n, 20 r | OPT 9 s, 5516 n, 13 r | OPT 19 s, 8683 n, 17 r |
-| 2019_amaze_2012-03-19 | SAT 62 s, 24465 n | SAT 51 s, 23279 n, 52 r | SAT 211 s, 35057 n, 62 r | SAT 1 s, 1741 n, 6 r |
-| 2019_rotating-workforce_Example1337 | TO 300 s, 11333 n | TO 300 s, 11734 n, 19 r | TO 300 s, 789 n, 2 r | TO 305 s, 303 n, 1 r |
-| 2020_cable_tree_wiring_R046 | TO(2826893) 323 s, 1446 n | TO(2826840) 308 s, 1139 n | TO(2826840) 307 s, 1139 n | TO(2835315) 301 s, 663 n, 1 r |
-| 2020_hoist-benchmark-for-minizinc_PU_3_8_5 | TO 312 s, 18 n | TO 312 s, 18 n | TO 318 s, 18 n | SAT 600 s, ? n |
-| 2021_perfect_square_92 | TO 300 s, 24924 n | TO 300 s, 18848 n, 45 r | TO 300 s, 69949 n, 124 r | TO 300 s, 61794 n, 109 r |
-| 2022_blocks-world_16-4-13 | TO 300 s, 25468 n | TO 300 s, 29156 n, 59 r | TO 300 s, 36379 n, 62 r | TO 300 s, 49998 n, 91 r |
-| 2023_kidney-exchange_3_20_0.15_3 | OPT 83 s, 1489 n | OPT 133 s, 2095 n, 5 r | OPT 299 s, 2624 n, 6 r | TO(608) 302 s, 612 n, 2 r |
-| 2023_test-scheduling_t30m20r3-20 | TO(2745) 300 s, 15099 n | TO(2745) 300 s, 11213 n, 29 r | TO(2745) 300 s, 11285 n, 27 r | TO(2763) 300 s, 18653 n, 29 r |
-| 2024_word-equations_word_equations_02_track_8-int | OPT 28 s, 2630 n | OPT 23 s, 2396 n, 6 r | OPT 9 s, 312 n, 1 r | OPT 4 s, 36 n |
-| 2025_EchoSched_15-15-0-1_3 | TO(18890) 300 s, 6034 n | TO(18871) 300 s, 4865 n, 5 r | TO(18864) 300 s, 5323 n, 5 r | SAT 600 s, ? n |
-| 2026_gbac_csplib12-gbac | TO 312 s, 1 n | TO 309 s, 1 n | TO 311 s, 1 n | TO 314 s, 1 n |
-| 2026_gcc-benchmark_instance-i24 | SAT 5 s, 363 n | SAT 5 s, 363 n | SAT 5 s, 363 n | TO 300 s, 23738 n |
+| 2017_hrc_exp1-1-5670 | OPT 19 s, 8343 n | OPT 28 s, 12751 n, 27 r | OPT 22 s, 10117 n, 20 r | OPT 5 s, 3115 n, 6 r |
+| 2019_amaze_2012-03-19 | SAT 62 s, 24465 n | SAT 67 s, 27381 n, 58 r | SAT 167 s, 38291 n, 62 r | SAT 0 s, 922 n, 2 r |
+| 2019_rotating-workforce_Example1337 | TO 300 s, 11333 n | TO 300 s, 12897 n, 20 r | TO 332 s, 647 n, 2 r | TO 319 s, 760 n, 2 r |
+| 2020_cable_tree_wiring_R046 | TO(2826893) 323 s, 1446 n | TO(2826840) 301 s, 1145 n | TO(2826840) 302 s, 1145 n | TO(2556804) 552 s, 850 n, 1 r |
+| 2020_hoist-benchmark-for-minizinc_PU_3_8_5 | TO 312 s, 18 n | TO 311 s, 18 n | TO 309 s, 18 n | SAT 600 s, ? n |
+| 2021_perfect_square_92 | TO 300 s, 24924 n | TO 300 s, 64643 n, 104 r | TO 300 s, 75278 n, 122 r | TO 300 s, 57782 n, 98 r |
+| 2022_blocks-world_16-4-13 | TO 300 s, 25468 n | TO 300 s, 29563 n, 55 r | TO 300 s, 42767 n, 62 r | TO 300 s, 58044 n, 78 r |
+| 2023_kidney-exchange_3_20_0.15_3 | OPT 83 s, 1489 n | OPT 128 s, 2110 n, 5 r | TO(793) 305 s, 2309 n, 5 r | TO(608) 301 s, 829 n, 2 r |
+| 2023_test-scheduling_t30m20r3-20 | TO(2745) 300 s, 15099 n | TO(2745) 300 s, 15063 n, 30 r | TO(2745) 300 s, 17362 n, 31 r | TO(2747) 300 s, 23222 n, 30 r |
+| 2024_word-equations_word_equations_02_track_8-int | OPT 28 s, 2630 n | OPT 26 s, 2351 n, 6 r | OPT 5 s, 302 n, 1 r | OPT 5 s, 57 n |
+| 2025_EchoSched_15-15-0-1_3 | TO(18890) 300 s, 6034 n | SAT 600 s, ? n | TO(18844) 300 s, 6898 n, 6 r | SAT 600 s, ? n |
+| 2026_gbac_csplib12-gbac | TO 312 s, 1 n | TO 300 s, 15527 n | TO 300 s, 18761 n | SAT 600 s, ? n |
+| 2026_gcc-benchmark_instance-i24 | SAT 5 s, 363 n | SAT 5 s, 363 n | SAT 5 s, 363 n | TO 300 s, 23077 n |
 
-With the proof (`check-TO`: veripb did not finish within its cap of 600 to 900 s; the `SAT 600
-s, ? n` cells with a syntax error are runs the 600 s wall killed after the stop, their proof
-truncated, section 13 point 3; the one `Checking error` is section 13 point 1):
+With the proof. veripb's cap was 900 s for `sbase` and 300 s for the strategy columns, so a
+`check-TO` there means "not checked in 300 s", not a refusal. The `SAT 600 s, ? n` cells are runs
+the 600 s wall killed after the stop had fired, their proof truncated, which is what the
+`Syntax_error` verdicts are (section 13 point 3, main's binary included). The one `Checking
+error` is a real refusal (section 13 point 1).
 
 | instance | sbase | slubyps | saltlubyps | sactlubyps |
 |---|---|---|---|---|
-| 2012_ship-schedule_6ShipsMixed | OPT 140 s, 3335 n, 2408 MB, check-TO 900.08 s | OPT 110 s, 2222 n, 6 r, 1315 MB, check-TO 600.06 s | SAT 600 s, ? n, 666 MB, check-TO 600.06 s | TO(300505) 343 s, 60 n, 135 MB, check-TO 600.05 s |
-| 2014_amaze_2012-04-27 | SAT 14 s, 9427 n, 84 MB, V 7.24 s | SAT 20 s, 10720 n, 28 r, 102 MB, V 9.78 s | SAT 33 s, 14075 n, 30 r, 115 MB, V 11.86 s | SAT 11 s, 8715 n, 23 r, 55 MB, V 5.07 s |
-| 2014_fillomino_5x5_1 | SAT 33 s, 9646 n, 197 MB, V 43.90 s | SAT 50 s, 9714 n, 28 r, 218 MB, V 59.18 s | SAT 13 s, 5244 n, 14 r, 94 MB, V 23.30 s | SAT 17 s, 7054 n, 16 r, 128 MB, V 26.38 s |
-| 2014_openshop_gp10-4 | TO(1139) 300 s, 29795 n, 1088 MB, check-TO 900.07 s | TO(1139) 300 s, 24599 n, 45 r, 1598 MB, check-TO 600.14 s | TO(1079) 300 s, 28121 n, 47 r, 2687 MB, check-TO 600.13 s | TO(1077) 300 s, 33620 n, 54 r, 1506 MB, check-TO 600.11 s |
-| 2016_nfc_18_3_5 | OPT 101 s, 1033 n, 450 MB, V 19.24 s | TO(1338) 300 s, 1137 n, 3 r, 750 MB, V 42.40 s | OPT 119 s, 863 n, 2 r, 401 MB, V 20.27 s | OPT 35 s, 398 n, 1 r, 189 MB, V 7.39 s |
-| 2016_solbat_sb_15_15_7_3 | SAT 187 s, 13892 n, 998 MB, V 184.17 s | SAT 201 s, 14412 n, 30 r, 1018 MB, V 196.69 s | SAT 118 s, 12132 n, 28 r, 591 MB, V 118.53 s | SAT 176 s, 19728 n, 31 r, 842 MB, V 144.90 s |
-| 2017_cargo_challenge01_0s_1913 | SAT 600 s, ? n, 33 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 610.42 s | SAT 600 s, ? n, 33 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 593.53 s | SAT 600 s, ? n, 33 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 585.83 s | UNKNOWN 600 s, ? n, 0 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 22.01 s |
-| 2017_hrc_exp1-1-5670 | OPT 46 s, 8343 n, 296 MB, V 26.59 s | OPT 43 s, 9134 n, 20 r, 280 MB, V 27.28 s | OPT 23 s, 5516 n, 13 r, 139 MB, V 13.56 s | OPT 40 s, 8683 n, 17 r, 213 MB, REJECTED:Error:_Checking_error_at_/scratch/arthur/wave45-strategy-runs/out3/sactlubyps/2017_hrc_exp1-1-5670.proof.pbp:620348 6.02 s |
-| 2019_amaze_2012-03-19 | SAT 71 s, 24465 n, 199 MB, V 18.51 s | SAT 70 s, 23279 n, 52 r, 193 MB, V 19.03 s | SAT 229 s, 35057 n, 62 r, 279 MB, V 33.38 s | SAT 1 s, 1741 n, 6 r, 8 MB, V 0.76 s |
-| 2019_rotating-workforce_Example1337 | TO 301 s, 9678 n, 691 MB, check-TO 900.04 s | TO 301 s, 9733 n, 14 r, 745 MB, check-TO 600.03 s | TO 314 s, 614 n, 2 r, 59 MB, V 36.88 s | TO 302 s, 223 n, 42 MB, V 14.50 s |
-| 2020_cable_tree_wiring_R046 | SAT 601 s, ? n, 916 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 108.30 s | SAT 601 s, ? n, 963 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 108.21 s | SAT 601 s, ? n, 968 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 116.72 s | SAT 601 s, ? n, 1835 MB, check-TO 600.10 s |
-| 2020_hoist-benchmark-for-minizinc_PU_3_8_5 | TO 326 s, 18 n, 0 MB, V 5.10 s | TO 320 s, 18 n, 0 MB, V 5.43 s | TO 330 s, 18 n, 0 MB, V 4.47 s | SAT 600 s, ? n, 35 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 71.72 s |
-| 2021_perfect_square_92 | TO 300 s, 22560 n, 336 MB, V 689.52 s | TO 300 s, 18690 n, 45 r, 492 MB, check-TO 600.02 s | TO 300 s, 62606 n, 108 r, 328 MB, check-TO 600.02 s | TO 300 s, 60084 n, 107 r, 221 MB, V 170.16 s |
-| 2022_blocks-world_16-4-13 | TO 300 s, 17706 n, 1578 MB, check-TO 900.05 s | TO 300 s, 20838 n, 40 r, 1686 MB, check-TO 600.07 s | TO 300 s, 24895 n, 48 r, 1816 MB, check-TO 600.03 s | TO 300 s, 37547 n, 62 r, 1479 MB, V 525.99 s |
-| 2023_kidney-exchange_3_20_0.15_3 | OPT 90 s, 1489 n, 34 MB, V 3.89 s | OPT 136 s, 2095 n, 5 r, 49 MB, V 5.01 s | TO(815) 300 s, 2571 n, 6 r, 73 MB, V 7.90 s | TO(608) 301 s, 612 n, 2 r, 27 MB, V 2.58 s |
-| 2023_test-scheduling_t30m20r3-20 | TO 330 s, 1 n, 0 MB, V 23.33 s | TO 323 s, 1 n, 0 MB, V 24.46 s | TO 326 s, 1 n, 0 MB, V 22.56 s | TO 323 s, 1 n, 0 MB, V 28.88 s |
-| 2024_word-equations_word_equations_02_track_8-int | OPT 58 s, 2630 n, 377 MB, V 323.04 s | OPT 54 s, 2396 n, 6 r, 384 MB, V 253.67 s | OPT 11 s, 312 n, 1 r, 14 MB, V 9.85 s | OPT 7 s, 36 n, 15 MB, V 8.62 s |
-| 2025_EchoSched_15-15-0-1_3 | TO(18890) 301 s, 5677 n, 960 MB, check-TO 600.08 s | TO(18875) 300 s, 3692 n, 3 r, 1981 MB, check-TO 600.08 s | TO(18875) 300 s, 3518 n, 3 r, 1941 MB, check-TO 600.08 s | SAT 600 s, ? n, 711 MB, check-TO 600.08 s |
-| 2026_gbac_csplib12-gbac | TO 416 s, 1 n, 0 MB, V 28.21 s | TO 424 s, 1 n, 0 MB, V 35.87 s | TO 398 s, 1 n, 0 MB, V 44.26 s | TO 406 s, 1 n, 0 MB, V 41.30 s |
-| 2026_gcc-benchmark_instance-i24 | SAT 6 s, 363 n, 0 MB, V 0.30 s | SAT 5 s, 363 n, 0 MB, V 0.29 s | SAT 6 s, 363 n, 0 MB, V 0.29 s | TO 300 s, 18515 n, 1035 MB, V 148.34 s |
+| 2012_ship-schedule_6ShipsMixed | OPT 140 s, 3335 n, 2408 MB, check-TO 900.08 s | OPT 37 s, 2052 n, 5 r, 1244 MB, check-TO 300.06 s | TO(212945) 407 s, 480 n, 1 r, 788 MB, V 120.12 s | TO(300510) 318 s, 105 n, 142 MB, V 17.71 s |
+| 2014_amaze_2012-04-27 | SAT 14 s, 9427 n, 84 MB, V 7.24 s | SAT 14 s, 9856 n, 22 r, 81 MB, V 7.30 s | SAT 34 s, 16633 n, 30 r, 119 MB, V 12.42 s | SAT 3 s, 4910 n, 13 r, 24 MB, V 2.02 s |
+| 2014_fillomino_5x5_1 | SAT 33 s, 9646 n, 197 MB, V 43.90 s | SAT 29 s, 8974 n, 21 r, 168 MB, V 35.30 s | SAT 15 s, 6669 n, 14 r, 102 MB, V 22.57 s | SAT 14 s, 6434 n, 14 r, 100 MB, V 20.41 s |
+| 2014_openshop_gp10-4 | TO(1139) 300 s, 29795 n, 1088 MB, check-TO 900.07 s | TO(1101) 300 s, 35216 n, 59 r, 2485 MB, check-TO 300.06 s | TO(1078) 300 s, 36154 n, 57 r, 1942 MB, check-TO 300.07 s | TO(1078) 300 s, 39570 n, 61 r, 1653 MB, check-TO 300.10 s |
+| 2016_nfc_18_3_5 | OPT 101 s, 1033 n, 450 MB, V 19.24 s | OPT 43 s, 673 n, 2 r, 218 MB, V 7.20 s | OPT 253 s, 1335 n, 4 r, 721 MB, V 56.51 s | OPT 14 s, 246 n, 68 MB, V 2.47 s |
+| 2016_solbat_sb_15_15_7_3 | SAT 187 s, 13892 n, 998 MB, V 184.17 s | SAT 208 s, 16061 n, 30 r, 1148 MB, V 184.59 s | SAT 269 s, 22191 n, 44 r, 1310 MB, V 289.42 s | SAT 208 s, 21331 n, 36 r, 1006 MB, V 189.51 s |
+| 2017_cargo_challenge01_0s_1913 | SAT 600 s, ? n, 33 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 610.42 s | SAT 600 s, ? n, 33 MB, check-TO 300.09 s | SAT 600 s, ? n, 33 MB, check-TO 300.08 s | UNKNOWN 600 s, ? n, 0 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 22.83 s |
+| 2017_hrc_exp1-1-5670 | OPT 46 s, 8343 n, 296 MB, V 26.59 s | OPT 62 s, 12751 n, 27 r, 387 MB, V 37.57 s | OPT 50 s, 10117 n, 20 r, 274 MB, REJECTED:Error:_Checking_error_at_/scratch/arthur/wave45-strategy-runs/out4/saltlubyps/2017_hrc_exp1-1-5670.proof.pbp:983748 9.08 s | OPT 11 s, 3115 n, 6 r, 75 MB, V 6.82 s |
+| 2019_amaze_2012-03-19 | SAT 71 s, 24465 n, 199 MB, V 18.51 s | SAT 91 s, 27381 n, 58 r, 204 MB, V 19.99 s | SAT 249 s, 38291 n, 62 r, 270 MB, V 30.67 s | SAT 1 s, 922 n, 2 r, 5 MB, V 0.39 s |
+| 2019_rotating-workforce_Example1337 | TO 301 s, 9678 n, 691 MB, check-TO 900.04 s | TO 301 s, 10983 n, 17 r, 820 MB, check-TO 300.02 s | TO 325 s, 647 n, 2 r, 58 MB, V 17.31 s | TO 360 s, 760 n, 2 r, 70 MB, V 21.33 s |
+| 2020_cable_tree_wiring_R046 | SAT 601 s, ? n, 916 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 108.30 s | SAT 601 s, ? n, 966 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 105.04 s | SAT 601 s, ? n, 946 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 106.03 s | SAT 601 s, ? n, 1926 MB, check-TO 300.08 s |
+| 2020_hoist-benchmark-for-minizinc_PU_3_8_5 | TO 326 s, 18 n, 0 MB, V 5.10 s | TO 320 s, 18 n, 0 MB, V 5.05 s | TO 324 s, 18 n, 0 MB, V 5.04 s | SAT 600 s, ? n, 31 MB, REJECTED:Error:_Syntax_error_while_parsing_proof_file! 50.74 s |
+| 2021_perfect_square_92 | TO 300 s, 22560 n, 336 MB, V 689.52 s | TO 300 s, 61059 n, 93 r, 427 MB, check-TO 300.02 s | TO 300 s, 71427 n, 113 r, 331 MB, check-TO 300.01 s | TO 300 s, 55533 n, 93 r, 201 MB, V 182.24 s |
+| 2022_blocks-world_16-4-13 | TO 300 s, 17706 n, 1578 MB, check-TO 900.05 s | TO 300 s, 20950 n, 37 r, 1658 MB, check-TO 300.02 s | TO 300 s, 27765 n, 48 r, 1811 MB, check-TO 300.02 s | TO 300 s, 45792 n, 62 r, 1424 MB, check-TO 300.02 s |
+| 2023_kidney-exchange_3_20_0.15_3 | OPT 90 s, 1489 n, 34 MB, V 3.89 s | OPT 130 s, 2110 n, 5 r, 49 MB, V 5.59 s | TO(793) 302 s, 2308 n, 5 r, 60 MB, V 6.15 s | TO(608) 301 s, 806 n, 2 r, 40 MB, V 4.64 s |
+| 2023_test-scheduling_t30m20r3-20 | TO 330 s, 1 n, 0 MB, V 23.33 s | TO(2745) 300 s, 1683 n, 5 r, 63 MB, check-TO 300.14 s | TO(2766) 300 s, 2557 n, 6 r, 136 MB, check-TO 300.15 s | TO(4709) 300 s, 2732 n, 115 MB, V 263.20 s |
+| 2024_word-equations_word_equations_02_track_8-int | OPT 58 s, 2630 n, 377 MB, V 323.04 s | OPT 51 s, 2351 n, 6 r, 378 MB, V 256.04 s | OPT 7 s, 302 n, 1 r, 14 MB, V 10.45 s | OPT 7 s, 57 n, 18 MB, V 9.89 s |
+| 2025_EchoSched_15-15-0-1_3 | TO(18890) 301 s, 5677 n, 960 MB, check-TO 600.08 s | TO(18867) 300 s, 6538 n, 5 r, 2309 MB, check-TO 300.08 s | TO(18844) 318 s, 6041 n, 4 r, 2373 MB, check-TO 300.08 s | SAT 600 s, ? n, 711 MB, check-TO 300.08 s |
+| 2026_gbac_csplib12-gbac | TO 416 s, 1 n, 0 MB, V 28.21 s | TO 361 s, 1 n, 0 MB, V 42.06 s | TO 357 s, 1 n, 0 MB, V 27.19 s | TO 362 s, 1 n, 0 MB, V 39.85 s |
+| 2026_gcc-benchmark_instance-i24 | SAT 6 s, 363 n, 0 MB, V 0.30 s | SAT 5 s, 363 n, 0 MB, V 0.31 s | SAT 5 s, 363 n, 0 MB, V 0.30 s | TO 300 s, 18616 n, 1027 MB, V 142.97 s |
 
-**The re-measurement on `46b0deaa`** (phase saving without the assignment shape) was running in
-`/scratch/arthur/wave45-strategy-runs/out4/{slubyps,saltlubyps,sactlubyps}/` when this was
-written, 58 of its 120 subset runs done. What it had shown by then: `2017_hrc_exp1-1-5670`
-under `sactlubyps` is now OPT in 5 s (3 115 nodes) and **VERIFIED** with the proof (11 s, 75 MB,
-checked in 7 s), where it was the refused proof above; no new refusal among the 58. The rest of
-`out4` is what a reader of this record should take as the subset's final strategy columns
-(`OUT=.../out5 python3 -I tables.py subset` merges it with `sbase`).
-
-**What the subset says**, on the complete table above:
+**What the subset says.**
 
 1. **The free search matters where Chuffed's free search matters, and it cuts both ways.** The
-   activity order with restarts and phase saving (`sactlubyps`) is the best column on
-   word-equations (OPT in 4 s, 36 nodes, against 28 s), nfc (OPT in 29 s against 88 s; Chuffed's
-   fixed search never proves it) and the two amaze instances (1 s and 6 s against 62 s and
-   10 s). It is the worst on ship-schedule (an incumbent at 300 s where `base` proves the
-   optimum in 77 s), kidney-exchange and the gcc benchmark (`base` 5 s, the activity order
-   times out). `alt+luby+ps` wins fillomino, solbat and hrc and loses the 2019 amaze. No column
-   dominates.
-2. **Restarts with phase saving and the annotation's order (`slubyps`) change little**: most rows
-   within a third of `base`, kidney-exchange 60 % slower, nfc lost (a timeout where `base`
-   proves the optimum).
-3. **The TIMEOUT instances without a solution stay without one** in every column (rotating
+   activity order with restarts and phase saving (`sactlubyps`) is the best column on nfc (OPT
+   in 12 s and 246 nodes against 88 s; Chuffed's fixed search never proves it), word-equations
+   (5 s against 28 s), hrc (5 s against 19 s), fillomino and both amaze (the 2019 one in under a
+   second against 62 s). It is the worst on ship-schedule and kidney-exchange (incumbents at
+   300 s where `base` proves the optimum) and on the gcc benchmark (`base` 5 s, the activity
+   order times out). On openshop and cable-tree its incumbent at the stop is better (1 078
+   against 1 139, Chuffed's free search proves 1 077; 2 556 804 against 2 826 893).
+2. **Restarts with phase saving and the annotation's order (`slubyps`) are never more than 55 %
+   slower than `base` where both answer, and faster on two**: ship-schedule OPT in 16 s against
+   77 s, nfc in 36 s against 88 s.
+3. **`saltlubyps` is best only on EchoSched's incumbent** (18 844 against 18 890) and ties on
+   word-equations and openshop. On nfc, solbat and the 2019 amaze it is the slowest column.
+4. **The TIMEOUT instances without a solution stay without one** in every column (rotating
    workforce, hoist, perfect square, blocks world, gbac), where Chuffed's free search solves
-   them. On two of them (hoist, gbac) the run makes 1 to 18 nodes in 300 s with the proof, so the
-   search is not what stops it there.
-4. **The proof follows the nodes**, as on the codes: where the free search takes fewer nodes the
+   them. On hoist and gbac the run makes 1 to 18 nodes in 300 s with the proof, so the search is
+   not what stops it there.
+5. **The proof follows the nodes**, as on the codes: where the free search takes fewer nodes the
    proof is smaller and checks faster (word-equations 377 MB and 323 s of checking for `base`,
-   15 MB and 9 s for `sactlubyps`).
+   18 MB and 10 s for `sactlubyps`; nfc 450 MB against 68 MB).
 
 ### 11. The gate
 
@@ -13133,18 +13141,32 @@ restarts), and `--search activity --restarts luby:1 --phase-saving` 182 of 182 (
 `28c4a51c`, before the fix, which does not touch it: `activity` with `--reuse-trail` 182 of 182
 (182 restarts, 539 levels kept).
 
+**Caution, 2026-11-19.** Section 13 point 1 is open: two proofs refused on one Challenge
+instance under restarts with phase saving and a dynamic order. `diff_lane.sh --update` runs the
+checker over every proof it records and refuses one it does not accept, so recording these three
+references is itself a check on the 21 lane instances, and a refusal there would be a second
+reproduction worth having.
+
 ### 13. Findings for other owners (filed in WORKLOG, `## Cross-session requests`, 2026-11-18)
 
-1. **A branch nogood veripb refuses, with D-0077's assignment decision in the tree.** On
-   `2017_hrc_exp1-1-5670` under `--search activity --restarts luby --phase-saving` (phase
-   saving then assigning interior saved values), the nogood of node 2801 keeps 34 of 50 decision
-   levels and is not RUP. The clause of all 50 is, and so is the nogood with the one decision of
-   level 26 added back, and no other single level does it. So `Learn.levels` misses a level the
-   trace needs, while every `BAGUETTE_DEBUG` check holds (M7-T27 (a3)'s memo-against-walk
-   cross-check included). Reproduced on the pre-M6-T22 code too. With phase saving branching
-   `x <= s` instead (section 3's addendum) the same run verifies, so the assignment shape is the
-   suspect. Main reaches that shape through `indomain_median`, which is why this is a finding
-   and not only a fix here.
+1. **A branch nogood veripb refuses, under restarts with phase saving and a dynamic order. OPEN.**
+   On `2017_hrc_exp1-1-5670`, twice. (a) Binary `28c4a51c`, `--search activity --restarts luby
+   --phase-saving`, phase saving then assigning interior saved values: the nogood of node 2801
+   keeps 34 of 50 decision levels and is not RUP. The clause of all 50 is, and so is the nogood
+   with the one decision of level 26 added back, and no other single level does it. So
+   `Learn.levels` misses a level the trace needs, while every `BAGUETTE_DEBUG` check holds (M7-T27
+   (a3)'s memo-against-walk cross-check included). Reproduced on the pre-M6-T22 code. (b) Binary
+   `46b0deaa`, phase saving branching `x <= s` (no assignment decision), `--search alternate
+   --restarts luby --phase-saving`: `reverse unit propagation` refused at line 983 748 of a
+   274 MB proof (10 117 nodes, 20 restarts). Not yet localised. On that instance every
+   configuration without restarts verifies (`ps`, `act`, `act+ps`), and so do `luby+ps` and
+   `act+luby` on both binaries, `act+luby+ps` on `46b0deaa` and `alt+luby+ps` on `878ceb53`. So
+   the refusals need restarts and phase saving and a dynamic order together, and depend on the
+   path. The 182 test models and the codes set never refused (every flag set measured). **Until
+   this is found, the strategy flags are not proof-safe on every instance**, and the default,
+   which is byte-identical to main, is unaffected. The first thing to try is (b) under the
+   instrumentation of (a) (`all`, `ng` and `ls` printed at the refused node), to see whether it
+   too is one missing level of the closure.
 2. **I-P7 fires on this instance at default flags**, on main's code and before M6-T22: a learned
    clause's advisor declines a wake for a change that, run, prunes. A missed pruning, not an
    unsound one.

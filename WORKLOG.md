@@ -357,6 +357,14 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
    printed, the proof truncated), and so were the strategy flags on those two and on
    `2020_hoist-benchmark-for-minizinc_PU_3_8_5`. The finaliser after the stop is the time.
 
+   **Addendum to point 1, 2026-11-19 (agent-strategy).** The assignment shape is NOT the cause.
+   On the fixed binary `46b0deaa` (phase saving never assigns), `--search alternate --restarts
+   luby --phase-saving` on the same instance is refused too (`reverse unit propagation`, line
+   983 748 of a 274 MB proof, 10 117 nodes, 20 restarts;
+   `out4/saltlubyps/2017_hrc_exp1-1-5670.proof.veripb`). Both refusals need restarts, phase
+   saving and a dynamic order together; every other combination verifies there. Open, owner
+   M10 (search.ml); D-0137 section 13 point 1 has what to try first.
+
 ## Completed
 
 | Task | Session | Date | Summary |
@@ -517,11 +525,10 @@ stdout, rc, `.opb` and `.pbp` byte-identical to main's `e8354a74` without the fl
 168 of 168 equal. D-0137 section 12 gives the three `bench/diff/configs.tsv` lines to add at merge.
 Phase saving branches `x <= s` at an interior saved value, not D-0077's `x = s`: with the assignment
 shape one Challenge proof was refused (D-0137 section 13, and the findings under `## Cross-session
-requests`). PENDING on fataepyc-06 when this was written: the subset re-measurement of the three
-phase-saving configurations on `46b0deaa`, `/scratch/arthur/wave45-strategy-runs/out4/{slubyps,
-saltlubyps,sactlubyps}/*.res` (driver PIDs in `c4.pid`; `c4.done` and `c4rev.done` when finished);
-merge it with `sbase` by `OUT=.../out5 python3 -I tables.py subset` after copying, and replace the
-strategy columns of D-0137 section 10.2 with it. Measured (D-0137 section 10): aut order 7 with no
+requests`). 2026-11-19: the subset re-measurement on `46b0deaa` finished (120 runs, `out4/`) and
+is now D-0137 section 10.2. It refused one more proof on the same Challenge instance, under
+`alternate+luby+phase`, so the assignment shape was not the cause: the refusal is OPEN and the
+strategy flags are not proof-safe on every instance until it is found (D-0137 section 13). Measured (D-0137 section 10): aut order 7 with no
 annotation goes from a 600 s timeout to 62 s (78 s with proof) under `--search alternate --restarts luby
 --phase-saving`; the QR codes are best with today's search, as Chuffed's are with its fixed one; `lbd`
 never fires on them. The twenty-instance Challenge subset is D-0137 section 10.2. Next: T5 picks defaults; the scoring of order literals (Chuffed's) is
