@@ -2152,7 +2152,8 @@ let test_inverse_models () =
    above written apart from [Model.check_assignment] -- solved, and its proof checked. The
    scenes cover what [post_member] folds: a constant in x, a constant y, y one of the x,
    a variable twice in x (the [Aliased] packing), disjoint hulls (the row is `~b_k`
-   alone), set domains whose holes interleave (the bound-form chase), an empty x, and the
+   alone), root holes that interleave (the bound-form chase; this file's brute force does
+   no set domains, so the holes are int_ne rows), an empty x, and the
    Boolean spelling. Then the four shapes the front end refuses, by their message. *)
 let member_src ?(bools = []) ~ints ~call ~extra () =
   String.concat ""
@@ -2214,8 +2215,17 @@ let test_member_models () =
   run_model ~title:"member: UNSAT, x over {1, 3, 5} and y over {2, 4}: holes interleave"
     ~src:
       (member_src
-         ~ints:[ ("x1", "{1,3,5}"); ("x2", "{1,3,5}"); ("y", "{2,4}") ]
-         ~bools:(sels 2) ~call:"baguette_member([x1, x2], y, [b1, b2])" ~extra:[] ());
+         ~ints:[ ("x1", "1..5"); ("x2", "1..5"); ("y", "2..4") ]
+         ~bools:(sels 2) ~call:"baguette_member([x1, x2], y, [b1, b2])"
+         ~extra:
+           [
+             "int_ne(x1, 2)";
+             "int_ne(x1, 4)";
+             "int_ne(x2, 2)";
+             "int_ne(x2, 4)";
+             "int_ne(y, 3)";
+           ]
+         ());
   run_model ~title:"member: UNSAT, an empty x"
     ~src:(member_src ~ints:[ ("y", r4) ] ~call:"baguette_member([], y, [])" ~extra:[] ());
   run_model ~title:"member: SAT, the Boolean spelling, q forced false, only p3 false"
