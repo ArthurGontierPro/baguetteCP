@@ -18304,3 +18304,150 @@ names them.
   could show that). The default would then be the user's to revisit.
 - A refused proof under `-f`. That would be a bug against D-0148's fix, and the warning would come
   back with its reproducer.
+
+## D-0160  M11-complexity-T6 and M6-T7: the scaling lane is a gate on the GROWTH of the cost per node (late minus early, 0.5 % of late), not on the ratio; the width lint's escape hatch becomes a region that ocamlformat leaves in place
+
+Status: DECIDED (built, measured on fataepyc-06; the baseline re-recorded on main's binary `64ec63e0`)
+Date: 2026-11-19
+Task: M11-complexity-T6 and M6-T7 (agent-tooling, `wave53-tooling`).
+Touches: `scripts/scaling_lane.sh` (the gate, `--report`, the ratchet in `--update`, `--raise`),
+`bench/scaling/baseline.tsv` (new format, re-recorded), `bench/scaling/plan.tsv` (header),
+the Makefile's `scaling` target (`--enforce`), `scripts/check_test_widths.py` (the region
+pragma, its docstring and self-test), `bench/README.md` and CLAUDE.md (the lane's description).
+No `lib/` change.
+
+### 1. What the scaling gate reads
+
+D-0141 §6 defined the lane's measure as the ratio of the late segment's instructions per node to
+the early segment's, and a 0.5 % ratchet on that ratio. D-0152 §4 is why that cannot be the gate:
+after part 2 of T4 every early and every late cost per node fell, and the ratio ROSE on four of
+five lines, because the batch removed mostly a per-conflict constant, which shrinks the early
+segment proportionally more. A gate on the ratio would have failed the batch that made every
+node cheaper.
+
+The gate now reads the part of the cost that grows with the run,
+
+    growth = late - early                 (instructions per node)
+
+and a line is OVER when
+
+    growth > baseline growth + 0.005 x baseline late
+
+An operation linear in the learned database raises `late` and not `early`, so it raises the
+growth whatever happened to the constant. A constant added per node raises both segments and
+leaves the growth alone. That is deliberate, because a constant per node is not a scaling
+regression, and the differential lane and the benchmarks see it. The ratio, the ratio per
+propagator run and `cycles:u` stay on the report as information.
+
+**Why the margin is a fraction of `late`.** The noise of a difference scales with the two terms
+and not with their difference. A margin relative to the growth would tighten as a batch drives
+the growth towards zero, and the gate would start to flake exactly when the code got better.
+With `early` unchanged the rule is D-0141's 0.5 % on the ratio (late x 1.005 against late); the two
+rules part only when `early` moves, which is D-0152 §4's case.
+
+**The metric** stays `instructions:u` (D-0141). Cycles are printed and never gated.
+
+### 2. The tolerance, from measurement
+
+On fataepyc-06 under the other agents' load (load average 3 to 16), main's binary `64ec63e0`
+(gate 61's), `--report -j 16`, three runs, then one run of a build that differs only by a
+4 096-word major-heap allocation at startup (`gcphase`, which moves every major slice), growth in
+instructions per node and the spread as a share of the line's late cost per node:
+
+| line | run 1 | run 2 | run 3 | range / late | gcphase | worst gap to a main run / late |
+|---|---|---|---|---|---|---|
+| QR72 noproof | 2 023 324 | 2 022 852 | 2 023 661 | 0.017 % | 2 024 260 | 0.03 % |
+| QR72 proof | 2 356 778 | 2 359 956 | 2 363 908 | **0.109 %** | 2 352 168 | **0.18 %** (below) |
+| rcpsp_11 noproof | 6 855 439 | 6 849 418 | 6 856 421 | 0.054 % | 6 857 101 | 0.06 % |
+| parity noproof | 5 700 485 | 5 697 146 | 5 695 740 | 0.054 % | 5 699 138 | 0.04 % |
+| parity proof | 5 697 624 | 5 697 278 | 5 693 102 | 0.043 % | 5 698 898 | 0.06 % |
+
+The same binary spreads by at most 0.11 % of late, and a no-op build's GC phase moved it by at
+most 0.18 %. The margin is **0.5 % of late**: 4.6 times the run-to-run range and 2.8 times the
+GC-phase drift, so a baseline recorded from one run does not flake against a later build that only
+moved its allocations. D-0152 §4 saw whole counts move by up to 0.4 % between such builds on
+openshop, which is not in the plan; if a plan line ever drifts that far without a cost change,
+widen the margin by a decision record, never re-record upward to absorb it.
+
+### 3. The planted regression
+
+A throwaway build (not committed) added at the decision node of `Search.branch_split`, after
+`stats.nodes <- stats.nodes + 1`,
+
+    ignore (Sys.opaque_identity (List.length (Retention.live_entries stats.db)))
+
+one O(database) copy and walk per node. Its growth against main's three runs, as a share of late:
+
+| line | plant growth | excess over main / late | margin |
+|---|---|---|---|
+| QR72 noproof | 2 262 819 | +5.0 % | 0.5 % |
+| QR72 proof | 2 575 968 | +3.3 % | 0.5 % |
+| rcpsp_11 noproof | 6 942 810 | +0.68 % | 0.5 % |
+| parity noproof | 5 793 104 | +1.1 % | 0.5 % |
+| parity proof | 5 797 256 | +1.0 % | 0.5 % |
+
+Every line is over. rcpsp_11 is the closest (its node is 13 M instructions and its database
+smaller per node), so a scan of the database once per node is about the smallest regression the
+lane sees on all five lines; on the Boolean lines it sees one ten times smaller.
+
+### 4. The ratchet
+
+`--update` refuses while a line is OVER, and per line it writes the new measurement only where the
+growth went DOWN; a line that rose inside the margin keeps its recorded row. Without that, merges
+that each add 0.4 % could walk the baseline upward one re-record at a time. `--update --raise`
+writes every line as measured: for a change to `plan.tsv`, or for a decision record that justifies
+a higher growth on purpose. The baseline file carries growth, late, early and ratio per line, and
+a row in D-0141's seven-column format is not read as a growth baseline.
+
+**Enforcing.** The script enforces by default (`--report` or `SCALING_ENFORCE=0` for exploration),
+and the Makefile's target passes `--enforce` explicitly. A line with no baseline in the metric
+used now FAILS under enforcement: a line the gate cannot judge is not a pass, and on a machine
+without perf (the GC-words fallback) the lane therefore fails rather than silently passing.
+
+### 5. M6-T7: the width lint's region
+
+The `(* width-ok: reason *)` marker must sit on the line with the bound, and ocamlformat moves a
+trailing comment that no longer fits onto a line of its own (test_learn.ml still carries a
+`(* width-ok: see above *)` stranded below its call). The lint now also accepts a REGION,
+
+    (* width-ok-begin: reason *)
+    ... the declaration, however ocamlformat breaks it ...
+    (* width-ok-end *)
+
+each marker a comment of its own, which ocamlformat 0.26.1 leaves in place (checked on a
+deliberately overlong call inside a `List.for_all` lambda: the call was broken over two lines,
+both markers stayed around it, and the lint exempted it). The region is held to the shape of an
+exemption: the begin names a reason, the region is closed by its own end (an unclosed begin, a
+nested begin and a lone end are failures, never a region to the end of the file), it spans at
+most 15 lines, and a region that exempts no labelled bound is reported as stale. The markers count
+only where a comment opens on them, so prose naming the pragma is not one. The matcher is
+unchanged outside a region. The self-test gained 14 whole-file cases, including the stranded
+marker (still flagged) and the limit pinned at 15 lines; it fails if MAX_REGION is moved either
+way, if the stale check is removed, or if a marker on the following line is accepted.
+
+The lint was not changed to judge only arguments it can evaluate. That would exempt every
+variable bound, `~hi:cap` included, which is the shape of the 2026-09-16 bug when `cap` is wide.
+
+### 6. What would reverse this
+
+- A plan line whose growth moves by more than 0.5 % of late between two builds that cannot differ
+  in cost. Then the margin is too tight for that line: widen it here, with the measurement.
+- A regression that the growth cannot see because it adds the same cost to both segments at
+  every database size. That is a constant per node, which is the benchmarks' business, not this
+  lane's.
+
+### 7. The gate
+
+Fresh clone of `49a6c75` on fataepyc-06 (`/scratch/arthur/wave53-tooling-runs/gate.sh`), binary
+`64ec63e0`, byte-identical to main's: `make check` rc 0, 4 243 unit checks ok and 0 FAIL, 198
+models passed, width lint self-test and scan green, 25.2 s, peak RSS 99 MB. Then
+`make scaling ARGS="-j 16"` (now `--enforce`) three times: rc 0 each, every line ok, the largest
+excess +0.10 % of late (parity proof) against the 0.5 % margin, 51 to 54 s, peak RSS 396 MB. Then
+the lane with `--enforce` on the planted binary against the committed baseline: rc 1, all five
+lines OVER, by +5.07, +3.36, +0.66, +1.11 and +1.07 % of late, peak RSS 407 MB.
+
+**For the orchestrator's gate script.** Its scaling line greps `'^scaling: .*late/early'` for the
+status file; since T6 that pattern matches the information line, so grep `'^scaling: .*growth'`
+for the verdicts. The lane's rc is now the verdict and must count as red. After a gated merge,
+re-record with `scripts/scaling_lane.sh --update -j 16` on the merged binary in its own commit;
+it refuses while a line is OVER and keeps every line whose growth did not go down.

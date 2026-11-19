@@ -3,7 +3,8 @@
 # the early segment is (N0, N1] (small learned database), the late one (N2, N3] (large).
 # N3 must stay below the node at which the search closes (QR48 closes at 23 367, which is
 # why the clause-path lines are QR72). D-0140 section 2 measured the same segments
-# (1k..10k, 10k..40k). Changing a line is a change to its baseline: re-record it.
+# (1k..10k, 10k..40k). Changing a line is a change to its baseline: re-record it, with
+# `scripts/scaling_lane.sh --update --raise` since the ratchet of M11-complexity-T6 (D-0160).
 #
 # id	mode	N0	N1	N2	N3	why
 H_qr72_bag_def	noproof	1000	10000	10000	40000	Boolean learned clauses: D-0140 x1.8 per node, database ~20 000 at 40k

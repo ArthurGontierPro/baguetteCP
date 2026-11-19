@@ -8,16 +8,17 @@
 #
 #     early = (cost(N1) - cost(N0)) / (N1 - N0)     per node, small database
 #     late  = (cost(N3) - cost(N2)) / (N3 - N2)     per node, large database
-#     ratio = late / early
+#     growth = late - early                         the part that grows (THE GATE)
+#     ratio  = late / early                         information since T6
 #
 # D-0140 section 7's measure (QR72 1.8, rcpsp_11 3.4 over 1k-10k and 10k-40k, no-proof).
 # An operation linear in the database, run per conflict, per node or per propagation,
-# raises the late segment and not the early one. The ratio is not 1 even for a perfect
-# implementation, because the work per node grows with the database ON PURPOSE (more
+# raises the late segment and not the early one. The growth is not 0 (nor the ratio 1)
+# even for a perfect implementation, because the work per node grows with the database ON PURPOSE (more
 # learned constraints, more of them waking); that part is identical in every build that
 # passes the differential lane, so it sits in the baseline and cancels in the comparison.
 #
-# The ratio PER PROPAGATOR RUN (`stats: props`) is printed beside it, as information. It
+# The ratio PER PROPAGATOR RUN (`stats: props`) is printed too, as information. It
 # strips the growth in runs per node, but it cannot be the gate: M11-T3 removes runs that
 # change nothing (D-0140 E1, E2), which moves its denominator, while the node count of
 # each budget is fixed by construction.
@@ -34,20 +35,46 @@
 # list strewn across the major heap retires few instructions per cache miss. D-0138
 # measured `Retention.reduce`'s copy at 13 % of the CYCLES on QR48; in instructions the
 # same kind of copy is a few per cent. So `cycles:u` is read too and printed beside the
-# enforced ratio, as information: cycles move with the load on a shared node, and a gate
+# enforced growth, as a late/early ratio and as information only: cycles move with the load on a shared node, and a gate
 # on them would be a flaky gate.
 #
-# THE THRESHOLD. bench/scaling/baseline.tsv holds each line's ratio as recorded; the lane
-# enforces the per-node ratio <= baseline x (1 + margin), margin 0.5 % by default (seven times the run-to-run
-# jitter of the per-node ratio, measured at <= 0.07 % on fataepyc-06 at load 40). It is a RATCHET: a
-# batch that lowers a ratio re-records it (--update, in its own commit, after the gated
-# merge), and nothing re-records it upward.
+# THE GATE (M11-complexity-T6, D-0160) reads the GROWING PART of the cost per node,
 #
-# REPORT-ONLY UNTIL M11-complexity-T6. Main still carries known linear costs owned by
-# rows in flight, so the lane prints its verdict and exits 0. `--enforce` (or
-# SCALING_ENFORCE=1) makes an OVER line fail; T6 makes that the default.
+#     growth = late - early        instructions per node
 #
-#   scripts/scaling_lane.sh [--enforce] [--update] [-j N] [--bin PATH] [--keep DIR]
+# against a ratcheted baseline, and NOT the ratio. D-0152 section 4 is why: a batch that
+# made every node cheaper raised the ratio on 4 of 5 lines, because what it removed was
+# mostly a per-conflict CONSTANT, which shrinks the early segment proportionally more
+# than the late one. A constant per node is not what this lane exists to see; an
+# operation linear in the database is, and it raises `late` and not `early`, so it raises
+# `growth` whatever happened to the constant. The ratio is still printed, as information.
+#
+# A line is OVER when
+#
+#     growth > baseline growth + margin x baseline late
+#
+# The margin is a fraction of the LATE segment's cost per node, not of the growth, because
+# the noise in a difference of two segments scales with the segments and not with their
+# difference: a batch that drives the growth towards zero must not make the gate tighter.
+# Default 0.005 (0.5 % of late), set from measurement on fataepyc-06 (D-0160): three runs
+# of one binary spread by at most 0.11 % of late, and a build that differs only in its GC
+# phase drifted by at most 0.18 %; a planted O(database) scan per node moved the growth
+# by 0.68 % to 5.0 % of late. With `early` unchanged this is D-0141's 0.5 % on the ratio;
+# the two rules part only when `early` moves, which is the case D-0152 section 4 met.
+#
+# The baseline is a RATCHET, per line: `--update` (in its own commit, after a gated merge)
+# writes a line's new measurement only where its growth went DOWN, and keeps the recorded
+# line where it went up within the margin, so that merges which each add less than the
+# margin cannot walk the baseline upward. It REFUSES while a line is OVER. `--update
+# --raise` writes every line as measured: for a change to plan.tsv, or for a decision
+# record that justifies a higher growth (a search change that does more work per learned
+# constraint on purpose); making the lane pass is never that justification.
+#
+# ENFORCING since M11-complexity-T6: an OVER line exits 1. `--report` (or
+# SCALING_ENFORCE=0) prints the verdicts and exits 0, for exploration only; `--enforce`
+# is accepted and is the default.
+#
+#   scripts/scaling_lane.sh [--enforce|--report] [--update [--raise]] [-j N] [--bin PATH] [--keep DIR]
 #
 # Environment: SCALING_PAR (default 8), SCALING_TIMEOUT (default 900 s per run),
 # SCALING_MARGIN (default 0.005), BAGUETTE_MEM_CAP_KB (ulimit -v per run, default 4000000).
@@ -60,8 +87,9 @@ PAR="${SCALING_PAR:-8}"
 TMO="${SCALING_TIMEOUT:-900}"
 MARGIN="${SCALING_MARGIN:-0.005}"
 CAP_KB="${BAGUETTE_MEM_CAP_KB:-4000000}"
-ENFORCE="${SCALING_ENFORCE:-0}"
+ENFORCE="${SCALING_ENFORCE:-1}"
 UPDATE=0
+RAISE=0
 KEEP=""
 
 die() { echo "scaling_lane: $*" >&2; exit 2; }
@@ -69,7 +97,9 @@ usage() { sed -n '2,/^set -u/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 2; 
 while [ $# -gt 0 ]; do
   case "$1" in
     --enforce) ENFORCE=1 ;;
+    --report) ENFORCE=0 ;;
     --update) UPDATE=1 ;;
+    --raise) RAISE=1 ;;
     -j) [ $# -ge 2 ] || usage; PAR="$2"; shift ;;
     --bin) [ $# -ge 2 ] || usage; BIN="$2"; shift ;;
     --keep) [ $# -ge 2 ] || usage; KEEP="$2"; shift ;;
@@ -142,7 +172,7 @@ done < "$S/plan.tsv"
 wait
 WALL=$(( $(date +%s) - START ))
 
-OVER=0; BROKEN=0; NEWBASE=""
+OVER=0; BROKEN=0; NOBASE=0; KEPT=0; NEWBASE=""
 for l in "${LINES[@]}"; do
   read -r id mode n0 n1 n2 n3 <<< "$l"
   get() { cat "$WORK/$id.$mode.$1/$2" 2>/dev/null; }
@@ -157,7 +187,7 @@ for l in "${LINES[@]}"; do
     fi
   done
   [ "$ok" = 1 ] || { BROKEN=$((BROKEN + 1)); continue; }
-  read -r ratio early late prop_ratio < <(python3 -I - \
+  read -r ratio early late growth prop_ratio < <(python3 -I - \
     "$(get "$n0" "$METRIC")" "$(get "$n1" "$METRIC")" "$(get "$n2" "$METRIC")" "$(get "$n3" "$METRIC")" \
     "$(get "$n0" props)" "$(get "$n1" props)" "$(get "$n2" props)" "$(get "$n3" props)" \
     "$n0" "$n1" "$n2" "$n3" <<'PY'
@@ -165,7 +195,8 @@ import sys
 c0, c1, c2, c3, p0, p1, p2, p3, n0, n1, n2, n3 = map(int, sys.argv[1:])
 early, late = (c1 - c0) / (p1 - p0), (c3 - c2) / (p3 - p2)
 node_early, node_late = (c1 - c0) / (n1 - n0), (c3 - c2) / (n3 - n2)
-print("%.4f %.0f %.0f %.4f" % (node_late / node_early, node_early, node_late, late / early))
+print("%.4f %.0f %.0f %.0f %.4f" % (node_late / node_early, node_early, node_late,
+                                    node_late - node_early, late / early))
 PY
 )
   cyc=""
@@ -174,47 +205,72 @@ PY
       "$(get "$n0" cycles)" "$(get "$n1" cycles)" "$(get "$n2" cycles)" "$(get "$n3" cycles)" \
       "$n0" "$n1" "$n2" "$n3" 2>/dev/null)"
   fi
-  base="$(awk -F'\t' -v i="$id" -v m="$mode" -v k="$METRIC" '$1==i && $2==m && $3==k {r=$4} END {print r}' "$S/baseline.tsv" 2>/dev/null)"
-  NEWBASE+="$id	$mode	$METRIC	$ratio	$(hostname -s)	$MD5	$(date -u +%Y-%m-%d)"$'\n'
-  if [ -z "$base" ]; then
-    verdict="NO BASELINE for metric $METRIC (report only)"
+  # The baseline's columns: id mode metric growth late early ratio host md5 date. A line
+  # in the pre-T6 format (the ratio in column 4, seven columns) is not a growth baseline.
+  read -r bgrowth blate < <(awk -F'\t' -v i="$id" -v m="$mode" -v k="$METRIC" \
+    '$1==i && $2==m && $3==k && NF>=10 {g=$4; l=$5} END {print g, l}' "$S/baseline.tsv" 2>/dev/null)
+  row="$id	$mode	$METRIC	$growth	$late	$early	$ratio	$(hostname -s)	$MD5	$(date -u +%Y-%m-%d)"
+  # The ratchet: a line whose growth did not go down keeps its recorded row (unless --raise).
+  if [ "$RAISE" = 0 ] && [ -n "${bgrowth:-}" ] && [ "$growth" -ge "$bgrowth" ]; then
+    row="$(awk -F'\t' -v i="$id" -v m="$mode" -v k="$METRIC" \
+      '$1==i && $2==m && $3==k && NF>=10 {r=$0} END {print r}' "$S/baseline.tsv")"
+    KEPT=$((KEPT + 1))
+  fi
+  NEWBASE+="$row"$'\n'
+  if [ -z "${bgrowth:-}" ] || [ -z "${blate:-}" ]; then
+    verdict="NO BASELINE for metric $METRIC"; NOBASE=$((NOBASE + 1))
   else
-    thr="$(python3 -I -c "print('%.4f' % ($base * (1 + $MARGIN)))")"
-    if python3 -I -c "import sys; sys.exit(0 if $ratio <= $thr else 1)"; then
-      verdict="ok (baseline $base, threshold $thr)"
+    read -r thr excess < <(python3 -I -c "
+g, bg, bl, m = $growth, $bgrowth, $blate, $MARGIN
+print('%.0f %+.2f' % (bg + m * bl, 100 * (g - bg) / bl))")
+    if python3 -I -c "import sys; sys.exit(0 if $growth <= $thr else 1)"; then
+      verdict="ok (baseline $bgrowth, threshold $thr, $excess % of late)"
     else
-      verdict="OVER (baseline $base, threshold $thr)"; OVER=$((OVER + 1))
+      verdict="OVER (baseline $bgrowth, threshold $thr, $excess % of late)"; OVER=$((OVER + 1))
     fi
   fi
-  printf 'scaling: %-32s [%-7s] per-node late/early = %s (%s -> %s %s/node) -- %s\n' \
-    "$id" "$mode" "$ratio" "$early" "$late" "$METRIC" "$verdict"
-  printf 'scaling: %-32s [%-7s]   information only: per propagator run %s%s\n' \
-    "$id" "$mode" "$prop_ratio" "$([ -z "$cyc" ] || echo ", cycles:u per node $cyc (load-sensitive)")"
+  printf 'scaling: %-32s [%-7s] growth late-early = %s %s/node (%s -> %s) -- %s\n' \
+    "$id" "$mode" "$growth" "$METRIC" "$early" "$late" "$verdict"
+  printf 'scaling: %-32s [%-7s]   information only: per-node late/early %s, per propagator run %s%s\n' \
+    "$id" "$mode" "$ratio" "$prop_ratio" "$([ -z "$cyc" ] || echo ", cycles:u per node $cyc (load-sensitive)")"
 done
 
 if [ "$UPDATE" = 1 ]; then
   [ "$BROKEN" = 0 ] || die "not recording a baseline with $BROKEN broken line(s)"
+  if [ "$OVER" -gt 0 ] && [ "$RAISE" = 0 ]; then
+    die "not recording: $OVER line(s) are OVER their baseline, and the baseline is a ratchet.
+              Raising it takes --raise and a decision record naming the cause (D-0160)."
+  fi
   {
-    echo "# M11-complexity-T2 (D-0141). The scaling lane's baseline ratios, per (instance, mode, metric)."
-    echo "# A RATCHET: re-recorded by \`scripts/scaling_lane.sh --update\` only after a gated merge that"
-    echo "# LOWERS a ratio (an M11 batch, or T6), in its own commit; never upward to make a line pass."
+    echo "# M11-complexity-T6 (D-0160, after D-0141). The scaling lane's baselines, per (instance, mode, metric):"
+    echo "# id, mode, metric, GROWTH (late - early per node, the gated column), late, early, ratio, host, md5, date."
+    echo "# A RATCHET: re-recorded by \`scripts/scaling_lane.sh --update\` after a gated merge, in its own"
+    echo "# commit. --update refuses while a line is OVER; --raise exists for a decision record, never"
+    echo "# to make a line pass."
     printf '%s' "$NEWBASE"
   } > "$S/baseline.tsv"
-  echo "scaling_lane: baseline recorded in bench/scaling/baseline.tsv (${WALL}s)"
+  echo "scaling_lane: baseline recorded in bench/scaling/baseline.tsv; $KEPT line(s) whose growth did"
+  echo "              not go down kept their recorded row (the ratchet) (${WALL}s)"
   exit 0
 fi
 if [ "$BROKEN" -gt 0 ]; then
   echo "scaling_lane: FAIL -- $BROKEN line(s) could not be measured (${WALL}s)"
   exit 1
 fi
-if [ "$OVER" -gt 0 ]; then
+if [ $((OVER + NOBASE)) -gt 0 ]; then
   if [ "$ENFORCE" = 1 ]; then
-    echo "scaling_lane: FAIL -- $OVER line(s) over threshold: the cost per node grows with the"
-    echo "              learned database more than the recorded baseline (${WALL}s)"
+    if [ "$OVER" -gt 0 ]; then
+      echo "scaling_lane: FAIL -- $OVER line(s) over threshold: the part of the cost per node that grows"
+      echo "              with the learned database grew beyond the recorded baseline (${WALL}s)"
+    fi
+    if [ "$NOBASE" -gt 0 ]; then
+      echo "scaling_lane: FAIL -- $NOBASE line(s) have no $METRIC growth baseline: a line the gate"
+      echo "              cannot judge is not a pass (record it, or run where perf works) (${WALL}s)"
+    fi
     exit 1
   fi
-  echo "scaling_lane: REPORT-ONLY -- $OVER line(s) over threshold, NOT failing (M11-complexity-T6 makes"
-  echo "              this a gate; --enforce fails now) (${WALL}s)"
+  echo "scaling_lane: REPORT ONLY (--report) -- $OVER line(s) over threshold, $NOBASE without a"
+  echo "              baseline, NOT failing (${WALL}s)"
   exit 0
 fi
-echo "scaling_lane: ok -- every line within its threshold$([ "$ENFORCE" = 1 ] || echo ' (report-only until M11-complexity-T6)') (${WALL}s)"
+echo "scaling_lane: ok -- every line within its threshold$([ "$ENFORCE" = 1 ] || echo ' (--report)') (${WALL}s)"
