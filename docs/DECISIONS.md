@@ -18451,3 +18451,184 @@ status file; since T6 that pattern matches the information line, so grep `'^scal
 for the verdicts. The lane's rc is now the verdict and must count as red. After a gated merge,
 re-record with `scripts/scaling_lane.sh --update -j 16` on the merged binary in its own commit;
 it refuses while a line is OVER and keeps every line whose growth did not go down.
+
+## D-0159  M7-T28 continued: `member` native -- one selector per position as a store variable, the rows in the BOUND form (D-0151's value form measured short), domain consistency, every pruning one `rup` except a value of y two holes exclude, which is derived ahead
+
+Status: DONE (built, measured, gated on the branch; the orchestrator merges)
+Date: 2026-11-19
+Task: M7-T28 (agent-member, `wave53-member`), the design of D-0151 section 3.
+Touches: `lib/core/prop/member.ml` (new), `lib/flatzinc/compile.ml` (`post_member`, its
+dispatch arm and its `hold "member"`), `lib/flatzinc/model.ml` and `builder.ml` (the `Member`
+constructor, its oracle and `baguette_member`/`baguette_member_bool`), `mznlib/fzn_member_int.mzn`,
+`mznlib/fzn_member_bool.mzn`, `mznlib/test/member_src_{sat,unsat,bool_sat}.mzn`,
+`test/models/member_{sat,unsat,bool_sat,gap_sat}.fzn` and their `test/expected/*.out`,
+`test/unit/test_prop.ml`, `test_compile.ml`, `test_trace.ml` (the I-X10 row and scene),
+`test_mutation.ml` (three lanes), `bench/member_spike/`, SPEC 2.1, PROOF-FORMAT section 4,
+ARCHITECTURE section 1 and CLAUDE.md's map. No `Explanation` constructor, nothing in
+`justify.ml`, `explanation.ml`, `learned.ml`, `element.ml`, `alldiff.ml`, `trace.ml`,
+`search.ml` or `encoding.ml`.
+
+### 1. The one place this departs from D-0151 section 3: the rows
+
+Section 3.1 wrote the VALUE form, per position i and value v of y,
+`~b_i \/ y <> v \/ x_i >= v` and `~b_i \/ y <> v \/ x_i <= v`. Its probes never put two HOLES
+of x_i inside y's range under one selector death, nor two hole-excluded positions under one
+value of y. Both were probed here before any OCaml (`bench/member_spike/gen_rows_probe.py`,
+`probe_rows.sh`, VeriPB 3.0.2 on fataepyc-06; x1, x2, x3, y over 1..5, model holes x1 <> 2,
+x1 <> 4, x2 <> 2, y <> 3, the OR row), against the value form (V) and the BOUND form (B), the
+order encoding's own equality under the selector:
+
+    R+(i, v)   ~b_i \/ ~[y >= v] \/ [x_i >= v]      R-(i, v)   ~b_i \/ ~[x_i >= v] \/ [y >= v]
+
+| probe | content | V | B |
+|---|---|---|---|
+| q1 | `~b1` with y in 2..4 by facts: x1 in {1,3,5} and y in {2,4} share nothing, two holes of x1 inside y's range | refused, RUP wording | VERIFIED |
+| q1w | q1 without `y <= 4` (y = 5 = x1 matches) | refused | refused |
+| q2 | `y <> 2`, x1 and x2 excluding 2 by a hole only, x3 by `x3 >= 3` | refused | refused |
+| q2a | q2 after one lemma `~b_i \/ y <> 2` per hole-excluded position | VERIFIED | VERIFIED |
+| q2p | q2 after the three lemmas, `pol OR a1 + a2 + a3 + 3 d` and `ia` of the claim clause from it | VERIFIED | VERIFIED |
+| q2w | q2p's lemmas with x3's fact dropped from its own | refused (at a3) | refused |
+| q2c | `y <> 2` with ONE hole-excluded position | VERIFIED | VERIFIED |
+| q3 | D-0151's m5 (x1 <= 2 from y <= 2, x2 >= 3, x3 >= 3) with no selector line | refused | VERIFIED |
+| q4, q4h | under a set selector: x1 <= 4 from y <= 4, x2 <> 3 against y's hole | VERIFIED | VERIFIED |
+| q5 | a wrong `y <> 5` | refused | refused |
+| q6 / q7 | `sol` y = x1 = 5 with b1 / with b2 instead | SATISFIABLE / refused, "falsifies" | same |
+
+q1 is the finding. A selector death is a trail entry whose line must be RUP alone, and in the
+value form it is not once x_i has two holes inside y's range: y = v forces x_i = v and the hole
+`x_i <> v` is a two-literal clause, so unit propagation pushes y past neither the lowest such
+hole from below nor the highest from above. The bound form chases both lower bounds upward,
+each hole pushing its own variable past it through its own line and R+/R- carrying the bound
+to the other. Same row count to within the folding, three literals instead of four, and q3
+shows a letters-only death is even RUP without the selector lines (they stay: the holes need
+them). So the rows are the bound form, per threshold of the union of the two declared hulls,
+a constant literal folded, and a threshold below the first or past the last that matters not
+written (a ladder clause implies it); two hulls more than one apart leave the single row `~b_i`.
+
+q2 is the second fact, and no row form removes it: a value of y that two or more LIVE
+positions exclude by a hole only needs one case split per selector (b_i /\ y = v gives
+x_i >= v and x_i <= v, and `x_i <> v` is two literals). Section 3.2 said "every pruning one
+`rup`"; that holds for every pruning but this one (section 3).
+
+### 2. The propagator, as built
+
+`lib/core/prop/member.ml`, its header the statement. Selectors are store variables in the
+scope, introduced by mznlib's `let` exactly as regular's flags are. One call, to its fixpoint:
+
+- **K** b_i dies when dom(x_i) and dom(y) share no value (if b_i is set: a conflict);
+- **C** no live selector is the OR row's conflict; one left and not set is set to 1;
+- **E** for every set selector, y and x_k are made equal domain-wise (bounds, then the
+  interior values the other lacks); K, C and E repeat until E changes nothing;
+- **S** with no selector set, a value of y no live position holds is removed.
+
+Afterwards every remaining value of x, y and the selectors extends to a solution (the header
+argues each kind), so the tag is `Domain`; with a variable twice among x and y the same code is
+packed as `Member.Aliased`, `Checking`, as regular does (x_i and x_j one variable with b_i and
+b_j the last two live selectors: a value of it outside y is unsupported and stays). The two
+sections 3.2 left open are taken the way the probes support: the selectors are cited through
+the TAILS of their own lines (D-0151 section 1's recursion; q3 shows bound-only tails would
+even do without them, the holes are why they stay), and y and x_k are equalised through R+/R-
+at one threshold (q4, q4h).
+
+The reasons are on the LETTERS (x and y) with regular.ml's machinery, copied rather than shared
+(that module is not this task's): a slot per distinct variable, the reason under construction
+as stamped arrays keeping the strongest fact per letter and direction, a selector's tail cached
+with the trail entry it belongs to and read back through `Store.hi_support`/`lo_support`. A
+selector a decision fixed is cited as itself.
+
+### 3. The proof, and the one shape written ahead
+
+K, C, E and S are each one `rup` (the header gives each argument; K is q1's chase, S is the OR
+row with the dead selectors' lines firing on their tails). S's line is NOT RUP when two or more
+live positions exclude v by a hole only (q2). That removal is made under
+`Store.deriving_ahead`, and its justification is the derivation `Trace.derive_ahead` writes
+before the line:
+
+- one lemma per position, `A_i = ~b_i \/ y <> v \/ ~F_i` with F_i the facts excluding v from
+  x_i (each a `rup`: assume b_i and y = v, R+/R- pin x_i to v, F_i refutes it, through the
+  hole's own line); for a dead position its death line, which `Justify`'s claim index finds on
+  the page; nothing for a selector a decision killed (its literal stays in the sum, as its fact
+  is in the reason);
+- `OR + sum A_i`, divided by the lemmas' count: exactly the clause `y <> v \/ ~F` (q2p pins it
+  with `ia`).
+
+The trace line then rests on the lemmas (q2a). The `pol` is not load-bearing for that line; it
+is what a CITATION of the entry reads (`Justify.emit` of the entry's explanation, as an
+order-arm derivation citing the bound would), so the explanation still derives exactly what the
+line states. Under I-X10 the family is `Needs_derivation` for this shape and `Single_row` for
+every other; `test/unit/test_trace.ml` classifies it so and drives the shape in
+`test_ix10_derive_ahead` (the line refused alone at the RUP wording, a `pol` ahead of it in the
+solver's own proof, the whole proof VERIFIED).
+
+### 4. Tests
+
+- `test/unit/test_prop.ml`: a brute force over 1 500 random scenes (n in 2..3 over 1..4, a
+  constant sometimes, y over 1..4, bounds, root holes and selectors fixed by the scene, one
+  variable twice in 320 of them): I-P1, domain consistency (non-aliased), I-P2 and every reason
+  SOUND over the declared domains -- 803 scenes pruned, 65 conflicts, 1 733 reasons, 1 258
+  selector facts all on selectors the scene fixed (none on one the propagator moved), 51
+  removals made ahead with 110 lemmas each true on every solution; no violation. Three scenes
+  end to end on veripb: the shape written ahead (its line found, a `pol` just before it), the
+  parity refutation, the Boolean spelling.
+- `test/unit/test_compile.ml`: nine scenes brute-forced over their declared box and checked by
+  veripb (search, a constant in x, a constant y above both hulls, y one of the x, a variable
+  twice in x, interleaved root holes, an empty x, the Boolean spelling) and the four refusals
+  (selector count, a selector not on 0..1, a selector among x, a selector twice), 41 checks.
+- `test/unit/test_trace.ml`: the I-X10 row and scene above.
+- `test/unit/test_mutation.ml`, three lanes, each refused at the RUP wording: `death-fact`
+  (b4's death under x4 >= 4 with its one tail literal dropped), `gap-lemma` (x3's lemma of the
+  derivation ahead with its last literal, the bound that excludes 2, dropped), `no-ahead` (the
+  `pol` and the three lemmas it cites deleted: the removal's own line is refused).
+- Four models: `member_sat`, `member_unsat` (parity: y = x1 + x2 over odd x, refuted by search
+  through selector deaths across the holes; the root removes y's even values ahead), and
+  `member_bool_sat` flattened by MiniZinc 2.10.1 from `mznlib/test/` (MUST-EMIT the route,
+  MUST-NOT-EMIT std's reifications, SOLVES-AS), and the hand-written `member_gap_sat`. Each
+  VERIFIED on the node; Chuffed agrees on the three sources.
+
+`fzn_member_int` keeps a constant array a domain restriction (`y in {...}`), which the
+flattener does better than any propagator; `fzn_member_bool` is the same relation over 0..1.
+
+### 5. The Challenge
+
+**Census.** D-0122's 40 instances call `member` in their sources
+(`bench/member_spike/select_member.py`); flattened with this branch's mznlib
+(`member_routes.sh`), 35 reach `baguette_member`: the 20 elitserien handball (8 calls of 3
+positions) and 15 code-generator (81 to 1 733 calls, up to 23 positions). The 5
+multiple-constant-multiplication instances call it in a reified context over a constant array,
+which is std's `set_in_reif` route and not this one. No instance reaches `baguette_member_bool`.
+
+**Runs.** `meas_member.sh` on fataepyc-06, `compare_run.sh` over the 35, 300 s, proof on,
+veripb on every complete answer, 12 + 12 at a time. Before: main `13dadc9` (binary `64ec63e0`),
+flattened with main's mznlib, so member is std's `int_eq_reif` per position and a clause.
+After: this branch at `e79a2fa` (main merged in; `lib/` and `bin/` differ from main by this
+record only).
+
+| 35 instances, 300 s | OPT/UNSAT (VERIFIED) | timeout with a solution | timeout, none | CAPPED (proof > 16 GB) | REFUSED (8 GB heap) |
+|---|---|---|---|---|---|
+| before | 1 | 2 | 24 | 6 | 2 (one with a solution) |
+| after | 1 | 2 | 23 | 7 | 2 (one with a solution) |
+
+The complete answer is the same instance both sides (`2023_code-generator_mips_gcc.flow.find_regno_partial`,
+OPT 6340, 38.5 s, VERIFIED); the incumbents are the same values. Two statuses moved, neither an
+answer: `gcc.function.use_return_register` from a timeout to the heap budget at 283 s (both
+without a solution), `mesa.eval.gl_Map1f` from the heap budget to the proof cap at 165 s (both
+without a solution). **No answer changed.**
+
+**Why, read off the search** (`meas_stats.sh`, 60 s, `--no-proof --stats`, six of the 35):
+the handball instances visit about 100 nodes a minute on BOTH sides, and member's 8 instances
+are not among the ten busiest families (int_eq_reif and int_ne_reif lead with 470 to 510 runs
+a node) -- the bottleneck there is elsewhere. On the code-generator, the node count moves both
+ways (`rasta.mapping.comp_Jboundaries` 4 670 -> 5 659, `gcc.cfgrtl.update_br_prob_note`
+1 527 -> 1 447, `find_regno_partial` completes on both), peak RSS within 2 %; those instances
+end on the proof cap or the heap, which member neither causes nor cures.
+
+**What it costs** (`member_rows.py`, the exact rows `post_member` writes): two rows per
+threshold of the hulls' overlap per position, from 320 rows on a handball instance to 1.39 M on
+`hexagon_gcc.reload1.gen_reload` and 3.77 M on `gl_Map1f` (2.83 M constraints in its .fzn);
+std's decomposition is a handful of rows per position. That is D-0028's width-proportionality,
+paid per position. **The lever, not built and not measured:** post `b_k -> x_k = y` as the two
+big-M rows `x_k - y + M ~b_k >= 0` and its mirror (width-independent), and write a threshold
+row only when a pruning needs it, as a lemma -- each is RUP from its big-M row (assume b_k,
+`y >= v` and `x_k < v`: the ladders bound both sides and the row is violated), the way
+`Encoding.add_cited_lemma` serves inverse's stage 2. Its probes come first: the chase of
+section 3 needs the rows on the page, so a lazy scheme writes them ahead of each line.
