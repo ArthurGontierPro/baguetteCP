@@ -437,6 +437,18 @@ let keep_all =
     p_tiers = None;
   }
 
+(* M11-complexity-T4 (D-0152, D-0140 R3): the orders [fifo] and [lbd] rank by, over ints
+   ([Int.compare], where the polymorphic [compare] was called per comparison).
+   [by_seq] is total because [e_seq] is unique. [reduce] hands [evict] the live list
+   oldest first, i.e. already in [by_seq] order ([add] appends with the next [e_seq], and
+   [retire] only filters), so [fifo] checks that in one pass and sorts only a list that
+   is not; [List.sort] being stable and the order total, the sorted list is the list. *)
+let by_seq a b = Int.compare a.e_seq b.e_seq
+
+let rec sorted_by_seq = function
+  | a :: (b :: _ as rest) -> a.e_seq < b.e_seq && sorted_by_seq rest
+  | [ _ ] | [] -> true
+
 (* Evict oldest-first down to [cap]. This IS the activity policy -- see the header: with
    every learned constraint's activity identically zero, an activity ranking is a tie
    across the whole database and the tie-break is all that is left. Spelling it [fifo]
@@ -455,7 +467,7 @@ let fifo ~cap =
               else
                 List.filteri
                   (fun i _ -> i < n - cap)
-                  (List.sort (fun a b -> compare a.e_seq b.e_seq) live));
+                  (if sorted_by_seq live then live else List.sort by_seq live));
         });
     p_detaches = true;
     p_tiers = None;
@@ -481,9 +493,7 @@ let lbd ~cap =
                 let worst_first =
                   List.sort
                     (fun a b ->
-                      match compare b.e_lbd a.e_lbd with
-                      | 0 -> compare a.e_seq b.e_seq
-                      | c -> c)
+                      match Int.compare b.e_lbd a.e_lbd with 0 -> by_seq a b | c -> c)
                     live
                 in
                 List.filteri (fun i _ -> i < n - cap) worst_first);
@@ -528,10 +538,10 @@ let tiered ?(params = default_tier_params) () =
                 let worst_first =
                   List.sort
                     (fun a b ->
-                      match compare a.e_used b.e_used with
+                      match Bool.compare a.e_used b.e_used with
                       | 0 -> (
-                          match compare b.e_lbd a.e_lbd with
-                          | 0 -> compare a.e_seq b.e_seq
+                          match Int.compare b.e_lbd a.e_lbd with
+                          | 0 -> by_seq a b
                           | c -> c)
                       | c -> c)
                     local

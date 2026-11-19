@@ -1167,7 +1167,57 @@ let test_r4_row_key () =
     "D-0152 S2: a lazy citation is not rendered until asked, then says what it was given"
     (before = 0 && text = Some "instance #7 over x_ge_1" && !asked = 1)
 
+(* M11-complexity-T4 (D-0152, D-0140 R3): [fifo] skips its sort when the list is already
+   oldest first, and [fifo] and [lbd] rank with [Int.compare]. Both must evict exactly
+   what the polymorphic sort evicted, on the live list as [reduce] hands it over and on
+   a shuffled one. *)
+let test_r3_orders () =
+  let rng = Random.State.make [| 0x0152; 6 |] in
+  let db = Retention.create ~policy:Retention.keep_all () in
+  for i = 0 to 199 do
+    let row = Learned.of_clause [ Lit.ge "uu" (2 + i) ] in
+    ignore
+      (Retention.add db ~cid:(5000 + i) ~row
+         ~lbd:(1 + Random.State.int rng 6)
+         ~origin:"R3")
+  done;
+  let live = Retention.live_entries db in
+  let shuffled =
+    List.map snd (List.sort compare (List.map (fun e -> (Random.State.bits rng, e)) live))
+  in
+  let ids l = List.map Retention.entry_cid l in
+  let fifo_ref cap l =
+    let n = List.length l in
+    List.filteri
+      (fun i _ -> i < n - cap)
+      (List.sort (fun a b -> compare (Retention.entry_seq a) (Retention.entry_seq b)) l)
+  in
+  let lbd_ref cap l =
+    let n = List.length l in
+    List.filteri
+      (fun i _ -> i < n - cap)
+      (List.sort
+         (fun a b ->
+           match compare (Retention.entry_lbd b) (Retention.entry_lbd a) with
+           | 0 -> compare (Retention.entry_seq a) (Retention.entry_seq b)
+           | c -> c)
+         l)
+  in
+  let ok = ref true in
+  List.iter
+    (fun cap ->
+      List.iter
+        (fun l ->
+          let f = (Retention.fifo ~cap).Retention.p_new () in
+          let b = (Retention.lbd ~cap).Retention.p_new () in
+          if ids (f.Retention.evict ~added:0 l) <> ids (fifo_ref cap l) then ok := false;
+          if ids (b.Retention.evict ~added:0 l) <> ids (lbd_ref cap l) then ok := false)
+        [ live; shuffled ])
+    [ 0; 1; 50; 199; 200; 300 ];
+  check "D-0152 R3: fifo and lbd evict what the polymorphic sorts evicted" !ok
+
 let () =
+  test_r3_orders ();
   test_r4_row_key ();
   test_a_exactly_once ();
   test_a_pinned_on_the_shipped_build ();
