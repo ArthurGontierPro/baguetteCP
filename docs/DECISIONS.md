@@ -18891,7 +18891,18 @@ cyclic 8.6 s both.
 openshop gains more than row 1's 28.9 % because those lists were what its major GC was collecting.
 `caml_major_collection_slice` was 11.3 % of the base run.
 
-AFTER_PROFILE_PLACEHOLDER
+The after-profile (`prof/g1/`, `g1_fp.exe` under `--no-proof`, the same ten instances, read with
+`suspects.sh`) confirms rows 1, 5 and 6. `record_improving` falls from 28.9 % of openshop to 0.3 %,
+and `Encoding.assignment_lits` and `assignment_lits_of` no longer appear on any instance.
+`Learn.supports` is gone everywhere, and `emit_root_lemmas` is replaced by `mint_root_lemma_ids` at
+0.07 % of black-hole. No frame whose name says it serves only the proof reaches 1 % of any
+instance any more except black-hole's compile-time encoding (`Opb.clause` 0.9 %, `ensure_direct`
+and `start_proof` 0.8 % each), which builds the model's rows and is the same in both modes. What
+remains of the no-proof cost lies outside this row's files. Alldiff's `snap_of` is 43.2 % of cyclic
+and 87.8 % of black-hole (87.0 % in `hole_cite`), and `Compile.post_inverse` is 4.3 % of black-hole
+and `post_regular` 0.6 % of nonogram's budget run (section 6). `Retention.add` (2.0 % of roster,
+0.3 to 0.6 % elsewhere) and `Search.bridges` (1.0 % of openshop) serve the search as well as the
+proof, so they are not candidates for a null guard.
 
 ### 5. The checks
 
