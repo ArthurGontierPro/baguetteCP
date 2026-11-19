@@ -2652,8 +2652,18 @@ let record_improving ctx store stats (b : bnb) (asn : assignment) : [ `Continue 
          o.o_name (Domain.lo d) (Domain.hi d));
   let value = Domain.lo d in
   b.b_on_solution asn;
-  let bindings = List.map (fun (v, x) -> (Store.name store v, x)) asn in
-  let lits = Encoding.assignment_lits ctx.Justify.encoding bindings in
+  (* M9-no-proof-T4 (D-0161): under `--no-proof` the null writer's [improving] mints its
+     id and reads nothing else, so the full literal family of every variable was built
+     for no reader -- 29 % of 2014_openshop_gp10-4's instructions at 10 000 nodes, where
+     every improving solution spells out each order ladder. The id is minted by the same
+     call either way; nothing in the search reads [lits]. *)
+  let null = Writer.is_null ctx.Justify.writer in
+  let lits =
+    if null then []
+    else
+      let bindings = List.map (fun (v, x) -> (Store.name store v, x)) asn in
+      Encoding.assignment_lits ctx.Justify.encoding bindings
+  in
   (* `soli` and not `sol`: `sol` adds nothing, and the constraint this line yields is the
      entire reason the bound below is derivable. It is also the reason the solution is
      handed over in full -- the checker PROPAGATES a logged solution, which is what lets
@@ -2710,10 +2720,15 @@ let record_improving ctx store stats (b : bnb) (asn : assignment) : [ `Continue 
        `pol @soli @B + s` -- B1 of the atom for `~obj_ge_v` (a minimisation's `obj <=
        v - 1`), B2 for `obj_ge_(v+1)` (a maximisation's) -- pinned by `ia` to the unit,
        which is then what the global's trace line is RUP from. The `soli` id stays in
-       [b_soli_ids] for the sweep; the bridge's id is the global's support. *)
+       [b_soli_ids] for the sweep; the bridge's id is the global's support.
+
+       M9-no-proof-T4 (D-0161): not under `--no-proof`. The bridge is a proof line and
+       nothing else: minting the atom builds its `red` pair and links for the null writer
+       to drop, and [Justify.state_clause] fills a claim index only rendering reads. The
+       global then carries the `soli` id, which no search step reads ([g_cid]). *)
     let cid =
       let enc = ctx.Justify.encoding in
-      if Encoding.n_bits_vars enc > 0 && Encoding.is_bits enc o.o_name then
+      if (not null) && Encoding.n_bits_vars enc > 0 && Encoding.is_bits enc o.o_name then
         Justify.with_level ctx 0 (fun () ->
             let w = ctx.Justify.writer in
             let b1, b2 = Encoding.ensure_atom enc w o.o_name (Lit.value lit.Lit.v) in
@@ -2819,6 +2834,18 @@ let close_restarted ctx ~lvl =
   Writer.set_level ctx.Justify.writer (lvl - 1);
   Justify.wipe_level ctx lvl
 
+(* M8-bits-encoding-T2 (D-0130 section 5.4): a decision's atom is on the page before the
+   level that assumes it opens -- minted at level 0, so no [w] takes it.
+
+   M9-no-proof-T4 (D-0161): not under `--no-proof`, where no line is written for the
+   atom to be on the page for. [Encoding.ensure_atom] would still build the `red` pair,
+   its links and their origin strings for the null writer to drop, at the first decision
+   on every new bound of a bits variable. Nothing in the search reads an atom: PB
+   analysis over a bits row asks [Encoding.ensure_atom] itself ([Pb_analysis.bits_of_ctx])
+   and gets the memoised pair or a fresh one, so the ids it compares stay distinct. *)
+let ensure_decision_atom ctx lit =
+  if not (Writer.is_null ctx.Justify.writer) then Justify.ensure_lit ctx lit
+
 let rec learn_at_conflict engine store ctx trace stats cfg (c : Store.conflict) =
   if not cfg.learn then None
   else
@@ -2830,7 +2857,12 @@ let rec learn_at_conflict engine store ctx trace stats cfg (c : Store.conflict) 
     | Some l -> (
         (* The break: the `w` first, the derivation second. *)
         if cfg.break_i_s4 then Justify.wipe_level ctx (Store.level store);
-        let ss = Learn.supports store trace l in
+        (* M9-no-proof-T4 (D-0161): I-S4 is about lines on the page, and under
+           `--no-proof` [Trace] writes none, so [Learn.supports] could only walk the cut
+           and the folds to find nothing. [] is what it would have answered. *)
+        let ss =
+          if Writer.is_null ctx.Justify.writer then [] else Learn.supports store trace l
+        in
         let broken = Learn.support_check ctx.Justify.writer ss in
         stats.i_s4_supports <- stats.i_s4_supports + List.length ss;
         stats.i_s4_crossings <- stats.i_s4_crossings + List.length (Learn.crossings ss);
@@ -3111,9 +3143,7 @@ and branch_split engine store ctx trace stats cfg order decisions (dec : decisio
          (Store.name store v) k (Domain.lo d) (Domain.hi d));
   let name = Store.name store v in
   let lit = Lit.ge name (k + 1) in
-  (* M8-bits-encoding-T2 (D-0130 section 5.4): a decision's atom is on the page before
-     the level that assumes it opens -- minted at level 0, so no [w] takes it. *)
-  Justify.ensure_lit ctx lit;
+  ensure_decision_atom ctx lit;
   (* The two sides, in the order this decision asks for. They are the same two functions
      whichever way round they go: which side is explored first changes the tree, and
      changes nothing about what is emitted for either side. *)
@@ -3275,9 +3305,10 @@ and branch_assign engine store ctx trace stats cfg order decisions (a : assign) 
   (* The assumption's two literals, and its negation's two. [Lit.le x (m-1)] is
      [~(x >= m)] and [Lit.ge x (m+1)] is [~(x <= m)] by construction of [Lit]. *)
   let dec_ge = Lit.ge name m and dec_le = Lit.le name m in
-  (* M8-bits-encoding-T2: both atoms before the two levels open (see [branch]). *)
-  Justify.ensure_lit ctx dec_ge;
-  Justify.ensure_lit ctx dec_le;
+  (* M8-bits-encoding-T2: both atoms before the two levels open (see
+     [ensure_decision_atom]). *)
+  ensure_decision_atom ctx dec_ge;
+  ensure_decision_atom ctx dec_le;
   let p = Store.level store in
   stats.decisions <- stats.decisions + 2;
   stats.assigns <- stats.assigns + 1;
@@ -3768,8 +3799,14 @@ let solve ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx)
       (match Writer.live_ids ctx.Justify.writer with
       | [] -> ()
       | ids -> Writer.delete_many ctx.Justify.writer ids);
-      let bindings = List.map (fun (v, x) -> (Store.name store v, x)) assignment in
-      let lits = Encoding.assignment_lits ctx.Justify.encoding bindings in
+      (* M9-no-proof-T4 (D-0161): the null writer's conclusion reads nothing; see
+         [record_improving]. *)
+      let lits =
+        if Writer.is_null ctx.Justify.writer then []
+        else
+          let bindings = List.map (fun (v, x) -> (Store.name store v, x)) assignment in
+          Encoding.assignment_lits ctx.Justify.encoding bindings
+      in
       Writer.conclusion ctx.Justify.writer (Writer.Sat lits);
       Sat assignment
   | NRestart _ ->
