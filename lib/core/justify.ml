@@ -284,6 +284,29 @@ and memo_table = {
          level answers too. See the module header's "Memoisation". *)
 }
 
+(* M11-complexity-T10 (D-0158). Off unless asked for: BAGUETTE_MEMO_STATS=1 counts the
+   memo's lookups, its identity and structural hits, the entries it holds at most and its
+   longest bucket, and prints them to stderr at exit, as BAGUETTE_WAKE_STATS does for the
+   engine. Counting a bucket's length is a walk of it, which is why it is not always on. *)
+let memo_stats_on =
+  match Sys.getenv_opt "BAGUETTE_MEMO_STATS" with
+  | Some ("1" | "true" | "yes" | "on") -> true
+  | _ -> false
+
+let ms_lookups = ref 0
+let ms_hits = ref 0
+let ms_shared = ref 0
+let ms_entries = ref 0
+let ms_entries_peak = ref 0
+let ms_longest = ref 0
+
+let () =
+  if memo_stats_on then
+    at_exit (fun () ->
+        Printf.eprintf
+          "baguette: memo lookups=%d hits=%d shared=%d entries_peak=%d longest_bucket=%d\n"
+          !ms_lookups !ms_hits !ms_shared !ms_entries_peak !ms_longest)
+
 (* The default of [create]'s sharing, read once. Only "1" turns it on. *)
 let share_default =
   match Sys.getenv_opt "BAGUETTE_MEMO_SHARE" with Some "1" -> true | _ -> false
@@ -538,12 +561,14 @@ let find_in_bucket ctx h dh (e : Explanation.t) =
   let rec go_share cur = function
     | [] -> None
     | (k, (m : memo_entry)) :: rest ->
-        if
-          k == e
-          || m.level <= cur
-             && Int.equal m.deep (Lazy.force dh)
-             && Explanation.equal_within share_budget k e
-        then Some m
+        if k == e then Some m
+        else if
+          m.level <= cur
+          && Int.equal m.deep (Lazy.force dh)
+          && Explanation.equal_within share_budget k e
+        then (
+          if memo_stats_on then incr ms_shared;
+          Some m)
         else go_share cur rest
   in
   match Itbl.find_opt ctx.memo.tbl h with
@@ -580,6 +605,11 @@ let remember_with ctx (e : Explanation.t) h dh (cid : Writer.cid) : Writer.cid =
   let m = ctx.memo in
   let bucket = Option.value (Itbl.find_opt m.tbl h) ~default:[] in
   Itbl.replace m.tbl h ((e, { cid; level; deep = Lazy.force dh }) :: bucket);
+  if memo_stats_on then (
+    incr ms_entries;
+    if !ms_entries > !ms_entries_peak then ms_entries_peak := !ms_entries;
+    let n = List.length bucket + 1 in
+    if n > !ms_longest then ms_longest := n);
   if level > 0 then (
     if level >= Array.length m.by_level then (
       let a = Array.make (Stdlib.max (level + 1) (2 * Array.length m.by_level)) [] in
@@ -615,6 +645,10 @@ let wipe_level ctx level =
         match Itbl.find_opt m.tbl h with
         | None -> ()
         | Some bucket -> (
+            if memo_stats_on then
+              List.iter
+                (fun (_, (me : memo_entry)) -> if me.level >= level then decr ms_entries)
+                bucket;
             match List.filter (fun (_, (me : memo_entry)) -> me.level < level) bucket with
             | [] -> Itbl.remove m.tbl h
             | b -> Itbl.replace m.tbl h b))
@@ -766,8 +800,11 @@ let memoized ctx (e : Explanation.t) (thunk : unit -> Writer.cid) : Writer.cid =
          nothing else it reads is mutable). *)
       let h = shallow_hash e in
       let dh = deep_of ctx e in
+      if memo_stats_on then incr ms_lookups;
       match find_memo ctx h dh e with
-      | Some m -> m.cid
+      | Some m ->
+          if memo_stats_on then incr ms_hits;
+          m.cid
       | None -> remember_with ctx e h dh (thunk ()))
 
 (* [Clause lits] -- rup, not pol.
