@@ -250,15 +250,30 @@ let error_to_string = function
    state, which is the wrong side of I-X6's line. M2-L6's slack criterion needs the
    coefficients of the constraint under construction, which is a field to add to this
    view when M2-L1's [Learned.t] exists -- not a store. *)
-type view = { v_nodes : node list; v_conflict_level : int }
+type view = {
+  v_nodes : node list Lazy.t;
+  v_conflict_level : int;
+  v_at_conflict_level : int;
+      (* How many of [v_nodes] sit at [v_conflict_level]. D-0152 (D-0140 A1): carried so
+         [one_uip] stops on a count the walk keeps, and [v_nodes] is lazy so that a
+         criterion that reads only the count never has the list built. *)
+}
+
+(* The view of a finished node list, counted here. *)
+let view_of nodes ~conflict_level =
+  {
+    v_nodes = Lazy.from_val nodes;
+    v_conflict_level = conflict_level;
+    v_at_conflict_level =
+      List.length (List.filter (fun n -> n.level = conflict_level) nodes);
+  }
 
 (* [stop] decides when the walk ends. [postcondition] is what THIS criterion guarantees
    about the cut it produced, and it is the only place a rule like 1UIP may be written
    down. See the header. *)
 type criterion = { crit_name : string; stop : view -> bool; postcondition : view -> bool }
 
-let count_at_conflict_level v =
-  List.length (List.filter (fun n -> n.level = v.v_conflict_level) v.v_nodes)
+let count_at_conflict_level v = v.v_at_conflict_level
 
 (* The clause path (M2-L3): resolve conflict-level facts away until one is left. The
    postcondition is the 1UIP rule and it is scoped to this value. *)
@@ -283,7 +298,7 @@ let conflict_side =
    value that makes [criterion] a component with a range rather than a two-valued flag.
    Its postcondition is its own and says nothing about counts. *)
 let every_conflict_level_node_is_a_root v =
-  List.for_all (fun n -> n.level <> v.v_conflict_level || n.root) v.v_nodes
+  List.for_all (fun n -> n.level <> v.v_conflict_level || n.root) (Lazy.force v.v_nodes)
 
 let decision_cut =
   {
@@ -318,7 +333,7 @@ let decision_cut =
    300 s, 13% of the nodes; since D-0124 a reason is rebuilt on each ask, so that was
    the whole of (a)'s time cost. *)
 let every_node_above_root_is_a_root v =
-  List.for_all (fun n -> n.root || n.level = 0) v.v_nodes
+  List.for_all (fun n -> n.root || n.level = 0) (Lazy.force v.v_nodes)
 
 let decision_closure =
   {
@@ -465,7 +480,34 @@ let add_node nodes n =
    monomorphic [String] table per bound direction, and hashes only incoming facts.
 
    [mk] is applied to the facts in order, once each, so [mk_node]'s counters and its
-   [Bad] exception fire in the same order as before. *)
+   [Bad] exception fire in the same order as before.
+
+   M11-complexity-T4 (D-0152, D-0140 A1): THE 1UIP LOOP WITHOUT A PASS OVER THE FRONTIER
+   PER RESOLUTION. Each step used to rebuild the node list ([nodes], a [List.map]), count
+   its conflict-level nodes for [one_uip] (a filter and a length), fold it for the
+   expandable node of largest support, append the fresh cells with [@] and filter the
+   expanded cell out: five passes over the frontier per step, so a conflict cost its
+   resolutions times its frontier. Now:
+
+     - a cell carries its creation number [seq], and a removed cell is marked dead and
+       left where it is. [rev_cells] is every cell ever made, newest first, so the live
+       ones in [seq] order are the old [cells] list exactly: cells were only ever
+       appended in creation order and filtered out;
+     - [at_level] counts the live cells whose node sits at [conflict_level], kept at the
+       three places a cell's node changes (created, merged, removed). It is the count
+       [one_uip] stops on, which [view] now carries;
+     - [best] is a max-heap of (support, seq) over the expandable nodes, pushed whenever
+       a cell takes a node, and cleaned lazily: an entry is current while its cell is
+       live and still holds that very node (a node is never re-used, [mk] builds a new
+       one per fact, so physical equality cannot see an old node come back). Its top is
+       the expandable node of largest support, ties to the smallest [seq], i.e. the
+       EARLIEST cell -- which is what the fold over the cells returned, since it kept the
+       first of equal supports.
+
+   [remove] finds the cell through the table, where it filtered the list. Under
+   BAGUETTE_DEBUG [analyse] checks the count and the heap's answer against the passes
+   they replaced, at every step. [create ()] with no level and no [expandable] keeps the
+   old merge-only behaviour, which test_analysis.ml compares against [add_node]. *)
 module Frontier = struct
   module H = Hashtbl.Make (struct
     type t = string
@@ -474,42 +516,123 @@ module Frontier = struct
     let hash (s : string) = Hashtbl.hash s
   end)
 
-  type cell = { mutable cur : node }
-  type t = { lo : cell H.t; hi : cell H.t; mutable cells : cell list }
+  type cell = { mutable cur : node; seq : int; mutable alive : bool }
+  type entry = { e_support : int; e_seq : int; e_cell : cell; e_node : node }
 
-  let create () = { lo = H.create 64; hi = H.create 64; cells = [] }
+  type t = {
+    lo : cell H.t;
+    hi : cell H.t;
+    mutable rev_cells : cell list;
+    mutable next_seq : int;
+    conflict_level : int;
+    expandable : node -> bool;
+    mutable at_level : int;
+    mutable heap : entry array;
+    mutable heap_n : int;
+  }
+
+  let create ?(conflict_level = min_int) ?(expandable = fun _ -> false) () =
+    {
+      lo = H.create 64;
+      hi = H.create 64;
+      rev_cells = [];
+      next_seq = 0;
+      conflict_level;
+      expandable;
+      at_level = 0;
+      heap = [||];
+      heap_n = 0;
+    }
+
   let table f n = if Reason.fact_is_lower n.fact then f.lo else f.hi
-  let nodes f = List.map (fun c -> c.cur) f.cells
+
+  let nodes f =
+    List.fold_left (fun acc c -> if c.alive then c.cur :: acc else acc) [] f.rev_cells
+
+  let at_conflict_level f = f.at_level
+
+  (* [a] comes out of the heap before [b]. *)
+  let above a b =
+    a.e_support > b.e_support || (a.e_support = b.e_support && a.e_seq < b.e_seq)
+
+  let push f c =
+    let n = c.cur in
+    if f.expandable n then (
+      let e = { e_support = n.support; e_seq = c.seq; e_cell = c; e_node = n } in
+      if f.heap_n = Array.length f.heap then (
+        let bigger = Array.make (Stdlib.max 16 (2 * f.heap_n)) e in
+        Array.blit f.heap 0 bigger 0 f.heap_n;
+        f.heap <- bigger);
+      let i = ref f.heap_n in
+      f.heap_n <- f.heap_n + 1;
+      while !i > 0 && above e f.heap.((!i - 1) / 2) do
+        f.heap.(!i) <- f.heap.((!i - 1) / 2);
+        i := (!i - 1) / 2
+      done;
+      f.heap.(!i) <- e)
+
+  let pop_top f =
+    f.heap_n <- f.heap_n - 1;
+    let last = f.heap.(f.heap_n) in
+    let i = ref 0 and placed = ref false in
+    while not !placed do
+      let l = (2 * !i) + 1 and r = (2 * !i) + 2 in
+      let b = if l < f.heap_n && above f.heap.(l) last then l else !i in
+      let b =
+        if r < f.heap_n && above f.heap.(r) (if b = !i then last else f.heap.(b)) then r
+        else b
+      in
+      if b = !i then (
+        if !i < f.heap_n then f.heap.(!i) <- last;
+        placed := true)
+      else (
+        f.heap.(!i) <- f.heap.(b);
+        i := b)
+    done
+
+  (* The expandable node of largest support, ties to the earliest cell, or [None]. *)
+  let rec best f =
+    if f.heap_n = 0 then None
+    else
+      let e = f.heap.(0) in
+      if e.e_cell.alive && e.e_cell.cur == e.e_node then Some e.e_node
+      else (
+        pop_top f;
+        best f)
+
+  let level_count f n = if n.level = f.conflict_level then 1 else 0
 
   let add_all f facts ~mk =
-    let fresh = ref [] in
     List.iter
       (fun x ->
         let n = mk x in
         let tbl = table f n and name = Reason.fact_owner n.fact in
         match H.find_opt tbl name with
-        | Some c -> c.cur <- stronger c.cur n
+        | Some c ->
+            let s = stronger c.cur n in
+            if s != c.cur then (
+              f.at_level <- f.at_level - level_count f c.cur + level_count f s;
+              c.cur <- s;
+              push f c)
         | None ->
-            let c = { cur = n } in
+            let c = { cur = n; seq = f.next_seq; alive = true } in
+            f.next_seq <- f.next_seq + 1;
             H.replace tbl name c;
-            fresh := c :: !fresh)
-      facts;
-    if !fresh <> [] then f.cells <- f.cells @ List.rev !fresh
+            f.rev_cells <- c :: f.rev_cells;
+            f.at_level <- f.at_level + level_count f n;
+            push f c)
+      facts
 
   (* Drop [n]'s cell, as [analyse]'s [List.filter] on slot AND value did. The frontier
      holds one cell per slot, so this removes [n]'s slot whenever [n] is in it. *)
   let remove f n =
-    let hit = ref false in
-    f.cells <-
-      List.filter
-        (fun c ->
-          let m = c.cur in
-          if same_slot m n && fact_value m.fact = fact_value n.fact then (
-            hit := true;
-            false)
-          else true)
-        f.cells;
-    if !hit then H.remove (table f n) (Reason.fact_owner n.fact)
+    let tbl = table f n and name = Reason.fact_owner n.fact in
+    match H.find_opt tbl name with
+    | Some c when fact_value c.cur.fact = fact_value n.fact ->
+        c.alive <- false;
+        f.at_level <- f.at_level - level_count f c.cur;
+        H.remove tbl name
+    | Some _ | None -> ()
 end
 
 (* An insertion-ordered set of ints: [to_list] is the elements in FIRST-OCCURRENCE order,
@@ -608,13 +731,32 @@ let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
         else match acc with Some m when m.support >= n.support -> acc | _ -> Some n)
       None nodes
   in
-  let frontier = Frontier.create () in
+  let frontier = Frontier.create ~conflict_level ~expandable () in
+  (* D-0152 (D-0140 A1): the criterion is shown the walk's count and a lazy node list,
+     and the next node comes off [Frontier.best]; see [Frontier]. Under BAGUETTE_DEBUG
+     both are checked against the passes over the list they replaced. *)
+  let view () =
+    {
+      v_nodes = lazy (Frontier.nodes frontier);
+      v_conflict_level = conflict_level;
+      v_at_conflict_level = Frontier.at_conflict_level frontier;
+    }
+  in
   let rec loop () =
-    let nodes = Frontier.nodes frontier in
-    if criterion.stop { v_nodes = nodes; v_conflict_level = conflict_level } then nodes
+    let v = view () in
+    Debug.check "D-0152: the frontier's conflict-level count is the filter's" (fun () ->
+        v.v_at_conflict_level
+        = (view_of (Lazy.force v.v_nodes) ~conflict_level).v_at_conflict_level);
+    if criterion.stop v then Frontier.nodes frontier
     else
-      match best_expandable nodes with
-      | None -> nodes
+      let next = Frontier.best frontier in
+      Debug.check "D-0152: the frontier's best node is the fold's" (fun () ->
+          match (next, best_expandable (Frontier.nodes frontier)) with
+          | None, None -> true
+          | Some a, Some b -> a == b
+          | _ -> false);
+      match next with
+      | None -> Frontier.nodes frontier
       | Some n ->
           if !resolutions >= max_resolutions then raise (Bad (Diverged !resolutions));
           incr resolutions;
@@ -640,7 +782,7 @@ let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
       (Reason.facts c.Store.c_reason)
       ~mk:(mk_node ~before:(Store.trail_length store));
     let nodes = loop () in
-    let stopped = criterion.stop { v_nodes = nodes; v_conflict_level = conflict_level } in
+    let stopped = criterion.stop (view_of nodes ~conflict_level) in
     let factless =
       List.filter_map
         (fun n ->
@@ -723,7 +865,7 @@ let backjump_level t =
   match List.rev (cited_levels t) with _ :: second :: _ -> second | _ -> 0
 
 let postcondition_holds (crit : criterion) t =
-  crit.postcondition { v_nodes = t.nodes; v_conflict_level = t.conflict_level }
+  crit.postcondition (view_of t.nodes ~conflict_level:t.conflict_level)
 
 (* Every fact in the cut holds in the store as it stands. Half of this row's oracle; the
    other half (that the model plus the cut is unsatisfiable) needs the model and lives in
