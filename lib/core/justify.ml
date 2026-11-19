@@ -244,12 +244,7 @@ module Itbl = Hashtbl.Make (struct
   let hash x = x land max_int
 end)
 
-type memo_entry = {
-  cid : Writer.cid;
-  level : int;
-  deep : int;
-      (* M11-complexity-T10 (D-0158): the key's [deep_hash] in share mode, 0 otherwise *)
-}
+type memo_entry = { cid : Writer.cid; level : int }
 
 (* M6-T9 (a cross-session PROPOSAL, D-0080). The memo keyed by physical identity, as
    before, but bucketed by a SHALLOW structural hash so a lookup is O(bucket) and not
@@ -434,16 +429,24 @@ let rec shallow_hash (e : Explanation.t) =
       let budget = ref operand_budget in
       finish (operand_list budget 7 0 parts)
 
-(* M11-complexity-T10 (D-0158). The hash share mode compares before it asks
-   [Explanation.equal_within]: every element of every list and every field of a
-   [Linear_term], where [shallow_hash] reads four elements and 48 operand nodes, over at
-   most [share_budget] nodes. A [Deferred] at the top is its forced value, as in
+(* M11-complexity-T10 (D-0158). SHARE MODE'S KEY, in place of [shallow_hash]: every
+   element of every list and every field of a [Linear_term], where [shallow_hash] reads
+   four elements and 48 operand nodes, over at most [share_budget] nodes. A [Deferred]
+   at the top is its forced value (and an unforced one [unforced_hash]), as in
    [shallow_hash]; one below the top is a constant, as in [operand_hash], so forcing a
-   thunk cannot move a key. Two values that are equal only through a nested thunk's
-   forcing can therefore hash apart; they are then not shared, which costs a line and
-   nothing else. Without it, rcpsp_11's buckets of [Combine]s that agree on their first
-   four summands were compared structurally entry by entry, and the comparison was 90 %
-   of the run (measured, D-0158 section 3). *)
+   thunk cannot move a key, and a value keeps its key for as long as it lives. Two
+   values that are equal only through a nested thunk's forcing can therefore land in two
+   buckets; they are then not shared, which costs a line and nothing else.
+
+   Why a key of its own. Under [shallow_hash], rcpsp_11 at 10 000 nodes has buckets of
+   up to 7 730 distinct [Combine]s that agree on their first four summands. Off, those
+   are walked with [==], which is cheap per entry. With a structural comparison per entry
+   the walk was 90 % of the run; with this hash compared first it was still 1.8 times
+   the instructions of the run without sharing (D-0158 section 3). Keyed by it, a bucket
+   holds the copies of one derivation and little else. It costs a walk of the value per
+   lookup, which share mode pays back by not writing the copies; off, it would cost more
+   than the long buckets it spreads (measured on the same instance), so off keeps
+   [shallow_hash]. *)
 let deep_hash (e : Explanation.t) =
   let budget = ref share_budget in
   let rec go h (e : Explanation.t) =
@@ -479,8 +482,10 @@ let deep_hash (e : Explanation.t) =
         in
         List.fold_left go h r.Explanation.lt_cited
   in
-  let top = match e with Explanation.Deferred { forced = Some f; _ } -> f | e -> e in
-  finish (go 0 top)
+  match e with
+  | Explanation.Deferred { forced = None; _ } -> unforced_hash
+  | Explanation.Deferred { forced = Some f; _ } -> finish (go 0 f)
+  | e -> finish (go 0 e)
 
 (* A claim that is already on the page: the id of the line stating it and the level that
    line was written at. See the module header's "claim index". *)
@@ -550,23 +555,19 @@ let create ~writer ~encoding = create_sharing ~share:share_default ~writer ~enco
    honest than adding an [Explanation] constructor that means "and also remember this". *)
 let writer ctx = ctx.writer
 
-let find_in_bucket ctx h dh (e : Explanation.t) =
+let find_in_bucket ctx h (e : Explanation.t) =
   let rec go = function
     | [] -> None
     | (k, m) :: rest -> if k == e then Some m else go rest
   in
   (* M11-complexity-T10 (D-0158): newest first, the first entry that is [e] itself or,
-     at or below the current level, of [e]'s [deep_hash] and structurally equal to it.
-     [dh] is forced only when an entry gets that far. *)
+     at or below the current level, structurally equal to it. The bucket is [e]'s
+     [deep_hash], so an entry that gets to [equal_within] is nearly always a copy. *)
   let rec go_share cur = function
     | [] -> None
     | (k, (m : memo_entry)) :: rest ->
         if k == e then Some m
-        else if
-          m.level <= cur
-          && Int.equal m.deep (Lazy.force dh)
-          && Explanation.equal_within share_budget k e
-        then (
+        else if m.level <= cur && Explanation.equal_within share_budget k e then (
           if memo_stats_on then incr ms_shared;
           Some m)
         else go_share cur rest
@@ -588,23 +589,23 @@ let memo_stats ctx =
 
 (* [e]'s entry, looked up under the hash [h] it was given ([shallow_hash e]). A forced
    [Deferred] is also looked up under [unforced_hash]: see there. *)
-let find_memo ctx h dh (e : Explanation.t) =
-  match find_in_bucket ctx h dh e with
+let find_memo ctx h (e : Explanation.t) =
+  match find_in_bucket ctx h e with
   | Some _ as m -> m
   | None -> (
       match e with
       | Explanation.Deferred { forced = Some _; _ } when h <> unforced_hash ->
-          find_in_bucket ctx unforced_hash dh e
+          find_in_bucket ctx unforced_hash e
       | _ -> None)
 
-(* [e]'s [deep_hash], computed when share mode first needs it. *)
-let deep_of ctx e = if ctx.memo.share then lazy (deep_hash e) else Lazy.from_val 0
+(* [e]'s key in the memo: [shallow_hash] off, [deep_hash] in share mode. *)
+let memo_key ctx e = if ctx.memo.share then deep_hash e else shallow_hash e
 
-let remember_with ctx (e : Explanation.t) h dh (cid : Writer.cid) : Writer.cid =
+let remember_with ctx (e : Explanation.t) h (cid : Writer.cid) : Writer.cid =
   let level = Writer.current_level ctx.writer in
   let m = ctx.memo in
   let bucket = Option.value (Itbl.find_opt m.tbl h) ~default:[] in
-  Itbl.replace m.tbl h ((e, { cid; level; deep = Lazy.force dh }) :: bucket);
+  Itbl.replace m.tbl h ((e, { cid; level }) :: bucket);
   if memo_stats_on then (
     incr ms_entries;
     if !ms_entries > !ms_entries_peak then ms_entries_peak := !ms_entries;
@@ -619,7 +620,7 @@ let remember_with ctx (e : Explanation.t) h dh (cid : Writer.cid) : Writer.cid =
     if level > m.memo_hi then m.memo_hi <- level);
   cid
 
-let remember ctx e cid = remember_with ctx e (shallow_hash e) (deep_of ctx e) cid
+let remember ctx e cid = remember_with ctx e (memo_key ctx e) cid
 
 (* Backtracking: wipe the writer's level and drop the memo entries it invalidated, in
    one call, so the two structures cannot drift apart. Always call this instead of
@@ -791,21 +792,20 @@ let memoized ctx (e : Explanation.t) (thunk : unit -> Writer.cid) : Writer.cid =
          the thunk of a [Deferred] forces it, see [emit]), unless some path remembered
          it unforced, which [unforced_hash]'s bucket would hold. [remember] hashes it
          again after the thunk, forced. *)
-      match find_in_bucket ctx unforced_hash (Lazy.from_val 0) e with
+      match find_in_bucket ctx unforced_hash e with
       | Some m -> m.cid
       | None -> remember ctx e (thunk ()))
   | _ -> (
       (* Hashed once: a head that is not a [Deferred] hashes the same before and after
-         its thunk runs ([shallow_hash] reads a nested [Deferred] as a constant, and
-         nothing else it reads is mutable). *)
-      let h = shallow_hash e in
-      let dh = deep_of ctx e in
+         its thunk runs ([shallow_hash] and [deep_hash] read a nested [Deferred] as a
+         constant, and nothing else they read is mutable). *)
+      let h = memo_key ctx e in
       if memo_stats_on then incr ms_lookups;
-      match find_memo ctx h dh e with
+      match find_memo ctx h e with
       | Some m ->
           if memo_stats_on then incr ms_hits;
           m.cid
-      | None -> remember_with ctx e h dh (thunk ()))
+      | None -> remember_with ctx e h (thunk ()))
 
 (* [Clause lits] -- rup, not pol.
 
