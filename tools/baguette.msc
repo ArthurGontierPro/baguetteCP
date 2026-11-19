@@ -10,5 +10,7 @@
   "needsSolns2Out": true,
   "tags": ["cp", "int", "proof"],
   "stdFlags": ["-i", "-f", "-n", "-p", "-r", "-s", "-t", "-v"],
-  "extraFlags": []
+  "extraFlags": [
+    ["--proof", "Write the VeriPB proof as PREFIX.opb and PREFIX.pbp (SPEC 4.1)", "string", ""]
+  ]
 }

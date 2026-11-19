@@ -1512,11 +1512,12 @@ let report_limit opts (st : Search.stats) ~(engine : Engine.t) ~best =
    run's last marker. The names are the FlatZinc specification's standard ones, each
    read from a counter `--stats` already prints on stderr, so nothing here is counted
    twice: failures are the search's conflicts, nogoods its learned clause and PB rows,
-   propagations the propagator runs off the queue. initTime is the wall clock from
+   propagations the propagator runs off the queue. No nSolutions: MiniZinc's solns2out
+   counts the solutions itself and prints that line after this block. initTime is the wall clock from
    process start to the search's entry (parse, compile, the .opb, the proof's header);
    solveTime is the wall clock of the search after it. *)
 let report_mzn_stats (st : Search.stats) ~(engine : Engine.t) ~init_time ~solve_time
-    ~n_solutions ~objective =
+    ~objective =
   let c = Engine.counters engine in
   let line k v = Printf.printf "%%%%%%mzn-stat: %s=%s\n" k v in
   let int k v = line k (string_of_int v) in
@@ -1526,10 +1527,9 @@ let report_mzn_stats (st : Search.stats) ~(engine : Engine.t) ~init_time ~solve_
   int "peakDepth" st.Search.max_depth;
   int "nogoods" (st.Search.n_learned + st.Search.n_pb_learned);
   int "propagations" c.Engine.c_runs;
-  int "nSolutions" n_solutions;
   (match objective with None -> () | Some v -> int "objective" v);
-  line "initTime" (Printf.sprintf "%.3f" init_time);
-  line "solveTime" (Printf.sprintf "%.3f" solve_time);
+  line "initTime" (Printf.sprintf "%.6f" init_time);
+  line "solveTime" (Printf.sprintf "%.6f" solve_time);
   print_string "%%%mzn-stat-end\n";
   flush stdout
 
@@ -1587,8 +1587,7 @@ let solve opts (m : Model.t) =
      up under a flag is a counter no test exercises. --stats decides whether it is
      PRINTED, not whether it is kept. *)
   let stats = Search.stats_create () in
-  (* M7-T32: what `-s`'s block reports. Counted where the solutions are printed. *)
-  let n_printed = ref 0 in
+  (* M7-T32: where `-s`'s initTime ends and its solveTime starts. *)
   let t_search = ref 0. in
   (* M6-T9. An outer `timeout` kills with SIGTERM, and a killed run used to leave
      nothing behind: at_exit never ran, so a TIMEOUT-SOLVE row could not say what the
@@ -1673,7 +1672,6 @@ let solve opts (m : Model.t) =
                       (Search.optimise ~engine:compiled.Compile.engine ~store ~ctx ~check
                          ~stats ~config ~objective ?order:compiled.Compile.order
                          ~on_solution:(fun assignment ->
-                           incr n_printed;
                            print_string
                              (Output.solution m (assignment_values m store assignment));
                            flush stdout)
@@ -1705,7 +1703,6 @@ let solve opts (m : Model.t) =
   Timing.phase "output" (fun () ->
       (match outcome with
       | `Satisfy (Search.Sat assignment) ->
-          incr n_printed;
           print_string (Output.solution m (assignment_values m store assignment))
       | `Satisfy Search.Unsat -> print_string Output.unsatisfiable
       (* SPEC 2.2: `==========` after the last solution when the search space is
@@ -1727,7 +1724,6 @@ let solve opts (m : Model.t) =
   if opts.mzn_stats then
     report_mzn_stats stats ~engine:compiled.Compile.engine ~init_time:!t_search
       ~solve_time:(wall () -. !t_search)
-      ~n_solutions:!n_printed
       ~objective:
         (match outcome with
         | `Optimise (Search.Opt (_, v)) | `Stopped (Some (_, v)) -> Some v
