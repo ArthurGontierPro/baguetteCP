@@ -378,6 +378,22 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
    saving and a dynamic order together; every other combination verifies there. Open, owner
    M10 (search.ml); D-0137 section 13 point 1 has what to try first.
 
+### 2026-11-19 — two findings from M7-T28's measurements, for the owners of the code they point at (agent-globals2, `wave51-globals2`, D-0151 section 4)
+
+1. **`test/unit/test_retention.ml` fails five checks on main since `36c1312`** (the M10-T4 hook
+   that routes learned instances through `Retention.gate`): `(a) deep shipped` x3 and
+   `(c) deep shipped` x2 -- "the policy evicts NOTHING", "the cap evicted nothing". Bisected on
+   fataepyc-06: `a0b50da` 0 failures, `36c1312` 5; main `9c1b8e6` 5. So `make check` fails at
+   `unit` on main and on every branch cut from it; wave51-globals2's gate ran `make -k check`
+   to see the rest. Owner: retention.ml / test_retention.ml (claimed by `wave50-proofbugs` today).
+2. **`Element.add_facts` is quadratic and dominates black-hole** (`lib/core/prop/element.ml`
+   line ~827: `List.fold_left (fun acc f -> if List.mem f acc then acc else acc @ [ f ])`, a
+   polymorphic compare of facts holding `X_INTRODUCED_` names, plus an append per fact). Under
+   `perf` with the frame-pointer switch on `2011_black-hole_20` (102 `array_int_element` over
+   52 positions), 99 % of the run is in `Element.pass`, 93 % of it in that `List.mem`: 13 to 27
+   nodes in 300 s, on main and on this branch alike. A stamp or hash dedup (regular.ml's
+   [add_key] shape) is the obvious fix. Owner: M11-complexity (element.ml is unclaimed).
+
 ## Completed
 
 | Task | Session | Date | Summary |
