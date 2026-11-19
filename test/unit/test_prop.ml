@@ -8503,9 +8503,9 @@ let test_member_brute_force () =
     let holes = ref [] and by_scene = Hashtbl.create 4 in
     for k = 0 to n do
       let d = Store.get store (var k) in
-      if regular_rnd 4 = 0 then
+      if regular_rnd 3 = 0 then
         ignore (Store.set_lo store (var k) (Domain.lo d + 1) placeholder_pruning);
-      if regular_rnd 4 = 0 then
+      if regular_rnd 3 = 0 then
         ignore (Store.set_hi store (var k) (Domain.hi d - 1) placeholder_pruning);
       let d = Store.get store (var k) in
       if regular_rnd 2 = 0 && Domain.hi d - Domain.lo d >= 2 then (
@@ -8514,7 +8514,7 @@ let test_member_brute_force () =
         ignore (Store.remove store (var k) h placeholder_pruning))
     done;
     for i = 0 to n - 1 do
-      match regular_rnd 12 with
+      match regular_rnd 8 with
       | 0 ->
           Hashtbl.replace by_scene (Printf.sprintf "b%d" i) ();
           ignore (Store.set_hi store (var (n + 1 + i)) 0 placeholder_pruning)
