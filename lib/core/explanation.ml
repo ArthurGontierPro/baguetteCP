@@ -387,6 +387,54 @@ let is_forced = function Deferred { forced = None; _ } -> false | _ -> true
    debug printing, which must not have side effects on the memo table. *)
 let peek = function Deferred th -> th.forced | e -> Some e
 
+(* M11-complexity-T10 (D-0158). STRUCTURAL equality, read through forcing and never
+   causing it: two explanations are equal when they would render the same derivation
+   of the same constraint. A [Deferred] that is forced is its forced value, so a forced
+   thunk equals its own head; one that is not forced equals only itself, since its value
+   is not known yet and asking would run a thunk (the [peek] rule above). Physical
+   equality is tried first at every node, so a shared sub-derivation costs one
+   comparison. A [Linear_term] is compared by every field, its citations included.
+   Nothing in the solver depends on this: it is what [Justify]'s memo uses to tell a
+   rebuilt copy of an explanation from a different one. *)
+let rec equal (a : t) (b : t) =
+  a == b
+  ||
+  match (a, b) with
+  | Deferred { forced = Some fa; _ }, _ -> equal fa b
+  | _, Deferred { forced = Some fb; _ } -> equal a fb
+  | Decision la, Decision lb -> Lit.equal la lb
+  | Clause la, Clause lb -> List.equal Lit.equal la lb
+  | Linear (ta, ra), Linear (tb, rb) -> Int.equal ra rb && List.equal term_equal ta tb
+  | Cut (a1, a2, c1, c2), Cut (b1, b2, d1, d2) ->
+      Int.equal c1 d1 && Int.equal c2 d2 && equal a1 b1 && equal a2 b2
+  | Model_row i, Model_row j -> Int.equal i j
+  | Combine (sa, da), Combine (sb, db) ->
+      Int.equal da db && List.equal summand_equal sa sb
+  | Resolve pa, Resolve pb -> List.equal equal pa pb
+  | ( ( Decision _ | Clause _ | Linear _ | Cut _ | Model_row _ | Combine _ | Resolve _
+      | Deferred _ ),
+      _ ) ->
+      false
+
+and term_equal (ca, la) (cb, lb) = Int.equal ca cb && Lit.equal la lb
+
+and summand_equal sa sb =
+  sa == sb
+  ||
+  match (sa, sb) with
+  | Term (ca, ea), Term (cb, eb) -> Int.equal ca cb && equal ea eb
+  | Weaken la, Weaken lb -> List.equal term_equal la lb
+  | Defining (ca, la), Defining (cb, lb) -> Int.equal ca cb && Lit.equal la lb
+  | Linear_term ra, Linear_term rb ->
+      ra == rb
+      || Int.equal ra.lt_coeff rb.lt_coeff
+         && String.equal ra.lt_name rb.lt_name
+         && Int.equal ra.lt_decl_lo rb.lt_decl_lo
+         && Int.equal ra.lt_decl_hi rb.lt_decl_hi
+         && Int.equal ra.lt_value rb.lt_value
+         && List.equal equal ra.lt_cited rb.lt_cited
+  | (Term _ | Weaken _ | Defining _ | Linear_term _), _ -> false
+
 (* Literals mentioned by an explanation, after forcing, without duplicates. Conflict
    analysis walks this. *)
 let lits e =
