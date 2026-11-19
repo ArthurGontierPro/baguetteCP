@@ -8576,8 +8576,11 @@ let test_m7t33_conflict_facts () =
                 the counting argument, not reverse unit propagation) -- cumulative's lane;
      no-pol     the honest proof with the derivation ahead of that line deleted is
                 refused AT that line, so the derivation is what carries it in sequence too;
-     no-fact    the line with its last fact dropped is refused at that line: every fact is
-                one the derivation leaves in its row (the crossed opposing bound among them).
+     no-crossed the line without the pushed variable's UPPER bound -- the crossed opposing
+                bound, which the pruning's own reason does not carry and [Store.apply]'s
+                [Failed] arm warns a conflict line needs -- is refused at that line;
+     no-fact    the line with its last fact (a Hall member's bound) dropped is refused at
+                that line: every fact is one the derivation leaves in its row.
 
    Each refusal is asserted on the checker's WORDING at full strength ([rup_wording]) and
    on the line it names ("Checking error at <path>:<n>"): an exit status cannot tell a
@@ -8650,7 +8653,7 @@ let m7t33_refused ~name ~opb ~pbp ~at lines =
         (ok_word && line = Some at);
       if not (ok_word && line = Some at) then Printf.printf "     veripb said: %s\n" out
 
-let m7t33_lane ~title ~src ~min_learned ~line ~no_fact =
+let m7t33_lane ~title ~src ~min_learned ~line ~mutants =
   let c = compile_src src in
   let dir = Filename.temp_file "baguette_m7t33_lane" "" in
   Sys.remove dir;
@@ -8720,15 +8723,16 @@ let m7t33_lane ~title ~src ~min_learned ~line ~no_fact =
     (* no-pol: line [i] (0-based) moves up to line [i] (1-based) once [i - 1] is gone. *)
     m7t33_refused ~name:(title ^ " no-pol") ~opb ~pbp:mutated ~at:i
       (List.filteri (fun j _ -> j <> i - 1) honest);
-    (if no_fact then
-       (* The last ` +1 <lit>` term of the claim dropped, label and all else kept. *)
-       let l = arr.(i) in
-       let cut =
-         String.rindex_from l (String.length l - String.length " >= 1 ;" - 1) '+'
-       in
-       let l' = String.sub l 0 (cut - 1) ^ " >= 1 ;" in
-       m7t33_refused ~name:(title ^ " no-fact") ~opb ~pbp:mutated ~at:(i + 1)
-         (List.mapi (fun j x -> if j = i then l' else x) honest));
+    (* Each mutant replaces the pinned line's body, its label kept, so nothing that
+       cites the line stops parsing and the checker has to judge it. *)
+    let label = String.sub arr.(i) 0 (String.length arr.(i) - String.length line) in
+    List.iter
+      (fun (name, body) ->
+        m7t33_refused
+          ~name:(title ^ " " ^ name)
+          ~opb ~pbp:mutated ~at:(i + 1)
+          (List.mapi (fun j x -> if j = i then label ^ body else x) honest))
+      mutants;
     List.iter
       (fun f -> try Sys.remove f with _ -> ())
       [
@@ -8742,9 +8746,16 @@ let m7t33_lane ~title ~src ~min_learned ~line ~no_fact =
 
 let test_m7t33_lanes () =
   m7t33_lane ~title:"M7-T33 b stage 1" ~src:m7t33_stage1_src ~min_learned:2
-    ~line:"rup +1 x3_ge_3 +1 x1_ge_3 +1 x2_ge_3 >= 1 ;" ~no_fact:true;
+    ~line:"rup +1 x3_ge_3 +1 x1_ge_3 +1 x2_ge_3 >= 1 ;"
+    ~mutants:
+      [
+        ("no-crossed", "rup +1 x1_ge_3 +1 x2_ge_3 >= 1 ;");
+        ("no-fact", "rup +1 x3_ge_3 +1 x1_ge_3 >= 1 ;");
+      ];
+  (* One fact only (k <= 2, listed once), so no fact can be dropped without corrupting
+     the claim itself rather than its reason (test_mutation.ml's trap 3). *)
   m7t33_lane ~title:"M7-T33 b regin" ~src:m7t33_regin_src ~min_learned:2
-    ~line:"rup +1 k_ge_3 >= 1 ;" ~no_fact:false
+    ~line:"rup +1 k_ge_3 >= 1 ;" ~mutants:[]
 
 let () =
   test_m7t33_conflict_facts ();
