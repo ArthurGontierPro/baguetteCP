@@ -24,7 +24,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | M11-complexity-T9 | `lib/core/learned.ml`, `lib/core/pb_analysis.ml`, `lib/core/ladder.ml`, `lib/core/reduce.ml`, their unit tests | agent-learned (`wave53-learned`) | 2026-11-19 |
 | M11-complexity-T10 | `lib/core/justify.ml`, `lib/core/explanation.ml` (additive functions only, the type unchanged), `test/unit/test_justify.ml` | agent-memo (`wave53-memo`) | 2026-11-19 |
 | M7-T28 (`member`) | new `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, new `test/models/`, `test/unit/test_prop.ml` (member section) | agent-member (`wave53-member`) | 2026-11-19 |
-| M11-complexity-T6 and M6-T7 | `scripts/scaling_lane.sh`, `bench/scaling/`, `Makefile` (scaling target), `scripts/check_test_widths.py` | agent-tooling (`wave53-tooling`) | 2026-11-19 |
 
 ## Cross-session requests
 
@@ -559,6 +558,23 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M7-T28 (continuation: regular's reasons, inverse; the row stays IN PROGRESS) | agent-globals2 (`wave51-globals2`) | 2026-11-19 | **D-0151.** `regular`'s reasons on the LETTERS (tails recurse into the dead flags' own lines; probes on 60 scenes first): learned clauses 321 -> 80 literals on average over 40 nonograms/pentominoes, node rate x2.6 without the proof, complete 19 -> 20 of 65 with it, all VERIFIED. `inverse` native: `lib/core/prop/inverse.ml` (channel, CHECKING), mznlib `fzn_inverse`, stage 2 all_different from CITED root lemmas (`Encoding.add_cited_lemma`, alldiff's lemma-row hook), 2 mutation lanes, 3 models; Challenge 70 reach the route, 3 -> 3 complete (held by `Element.add_facts` and alldiff's factless conflicts, both filed). `member` designed with probes. Gate on `d1df37f`: `make -k check` rc 2 from the 5 pre-existing test_retention checks only (main fails the same), 195 models passed, peak RSS 100 104 kB; 181/195 models byte-identical to main (the 14 diffs: inverse x3, regular_opt/unsat .pbp); diff lane 184/184 default runs equal (fifo/lbd diffs identical to main's, strategy configs without references on this base) |
 
 ## Handoff notes
+
+### 2026-11-19 (orchestrator): wave53-tooling merged, gate 62 green
+
+`23c77c8` merges D-0160 (the scaling lane enforces on the growth of the cost per node; the width
+lint's begin/end region). Gate 62 on fataepyc-06: `make check` rc 0, 198 models with 0 artefact
+differences (binary `64ec63e0`, the same as gate 61's), lane 301/301, debug 289/289, scaling
+ENFORCED ok on every line (largest +0.07 % of late). After a gated merge that moves the cost per
+node on purpose, re-record with `scripts/scaling_lane.sh --update -j 16` in its own commit.
+
+### M11-complexity-T6 and M6-T7 handoff, 2026-11-19 (agent-tooling, `wave53-tooling`): D-0160
+
+The scaling lane is a gate on the GROWTH (late minus early instructions per node), OVER beyond the
+baseline by 0.5 % of the baseline's late cost; the ratio is information (D-0152 §4). Re-baselined
+on `64ec63e0`; `--update` is a per-line ratchet, `--raise` only with a decision record. Gate: check
+green, three enforced passes, a planted O(database) scan per node failed on all five lines. The
+orchestrator's gate must grep `'^scaling: .*growth'` and treat the lane's rc as red. The width lint
+takes a `(* width-ok-begin: reason *)` ... `(* width-ok-end *)` region that ocamlformat leaves alone.
 
 ### 2026-11-19 (orchestrator): the parity idea archived (D-0147 §10)
 
