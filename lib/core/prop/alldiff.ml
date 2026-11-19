@@ -322,34 +322,25 @@ let established_at_root store v ~lower =
 
 let range a b = List.init (Stdlib.max 0 (b - a + 1)) (fun i -> a + i)
 
-(* The trail POSITION of the entry that took [value] out of [var], or [None].
+(* The entry that took [value] out of [var], or [None].
 
-   [Store.remover] answers the same question with the entry, and the entry is not enough
-   here: what decides whether a hole may be cited as a unit is the LEVEL it was
-   established at, and [Store.entry] does not carry one ([Store.level_of_index] counts
-   the level marks at or below a position instead). Same rule, same "a value leaves a
-   domain once and stays gone until the backtrack that pops the entry that removed it",
-   so this finds at most one and stops at the first hit.
+   What decides whether a hole may be cited as a unit is the LEVEL it was established at,
+   and [Store.level_of_index] reads that off the entry's trail position, [pos] (M6-T15).
+   Until M7-T33 this walked the WHOLE trail backwards once per hole asked about, because
+   when it was written the entry did not carry its position; on the Challenge's black-hole
+   instances, once element's own walk was gone (D-0155), that walk was 70 to 89 % of the
+   run. [Store.remover] answers from [var]'s entry history by binary search (D-0088), and
+   it is the SAME entry: its predicate (on [var], [value] in [old], not in [now]) is the
+   walk's, [Store.remover_scan] is the walk started at the same position, and
+   [Store.remover] agrees with that scan under [BAGUETTE_DEBUG] by physical equality.
+   Element made the same move in D-0155. Read eagerly, at snapshot time (I-X6).
 
    [None] is a hole with no trail entry behind it -- a declared gap, which
    lib/flatzinc/compile.ml's [reject_set_domain] refuses, so no model reaches it. *)
-let remover_index store ~var value =
-  let rec go i =
-    if i < 0 then None
-    else
-      let e = Store.trail_entry store i in
-      if
-        Var.equal e.Store.var var && Domain.mem e.Store.old value
-        && not (Domain.mem e.Store.now value)
-      then Some i
-      else go (i - 1)
-  in
-  go (Store.trail_length store - 1)
-
 let hole_cite store var value =
-  match remover_index store ~var value with
-  | Some i when Store.level_of_index store i = 0 -> Gone_hole_root
-  | Some i -> Gone_hole (Store.trail_entry store i).Store.reason
+  match Store.remover store ~before:(Store.trail_length store) ~var value with
+  | Some e when Store.level_of_index store e.Store.pos = 0 -> Gone_hole_root
+  | Some e -> Gone_hole e.Store.reason
   | None -> Gone_hole (Reason.of_facts Reason.none)
 
 (* [s_gone], ascending: below the window, then the holes inside it, then above. The
