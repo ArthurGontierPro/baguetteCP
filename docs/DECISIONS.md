@@ -14123,9 +14123,10 @@ RSS 481 MB.
 
 ## D-0147  M12-parity-T1: the parity spike. Gauss-Jordan over the XOR rows removes no node on the user's searches, because every row there is a definition read forwards, and applied eagerly it hurts aut order 7 by spoiling the learned clauses
 
-**Status**: **measured, with reads pending** (see §9; `fataepyc-06` became unreachable at 18:00 on
-2026-11-18 with runs still going). Recorded 2026-11-18 by agent-parity on branch `wave49-parity`,
-which is NEVER merged. Only this record, the M12 rows of ROADMAP and the WORKLOG release come to
+**Status**: **DONE** (a spike; building T2 is the user's decision). Recorded 2026-11-18 and
+completed 2026-11-19 by agent-parity on branch `wave49-parity` (the node was unreachable overnight,
+the detached runs finished without it and were read the next morning, §9). The branch is NEVER
+merged. Only this record, the M12 rows of ROADMAP and the WORKLOG release come to
 `main`. The contract is ROADMAP `## M12-parity`, row T1. Measured on `fataepyc-06` (load 55 to 75
 throughout, so a wall time is good to about a third, and the node counts are exact). Outputs are
 under `/scratch/arthur/wave49-parity-runs/`, with one line per run in `out/<tag>.res` and the full
@@ -14232,14 +14233,26 @@ flattened with Chuffed's own library). `def` is no annotation, `u` and `u1` are 
 | aut o7 k2 | def | > 87 199 | > 91 841 | 1 800 (limit) | 1 800 (limit) | 187 | 11, 0.009 s |
 | | u | > 90 112 | > 93 364 | 1 800 (limit) | 1 800 (limit) | 192 | > 16 M (limit) |
 | | u1 | **172** | **> 60 435** | 2.3 | 1 800 (limit) | 105 | 140, 0.013 s |
-| QR104 L | def | pending (§9) | pending | | | | > 101 M in 3 600 s (limit) |
+| QR104 L | def | > 187 954 | > 175 321 | 1 800 (limit) | 1 800 (limit) | 14.7 | > 101 M in 3 600 s (limit) |
 
 Learned clauses equal conflicts in every row (one per conflict, `keep_all`). The `def` and `u` trees
 are the same tree, because SPEC 3.4's first-fail ties are broken by declaration order and `u` is
 declared first.
 
+The beyond mode of §4 (`PB`) gives exactly the N tree wherever it applies nothing, and on these
+searches it applies nothing on every minimum-weight instance: QR48 `def` 23 367 nodes, QR48 `u1`
+23 429, QR72 `def` 100 685, each with 0 inferences applied, and QR104 `def` with 0 applied in
+1 800 s. On aut `def` and `u` it applies nothing either (60 580 and 66 388 nodes in 1 800 s, fewer
+than N because the unit-propagation closure over 26 133 rows runs at every wake).
+
+fzn-chuffed run on the re-flattened files visits exactly the user's node counts on all ten golay and
+QR rows above (170, 156, 23 668, 27 868, 11 709, 11 710, 90 500, 91 824, 50 736, 50 704), so keeping
+`bool_xor` whole changed nothing Chuffed sees. On aut it aborts (`arithmetic.cpp:668: Cannot handle
+non-sign-fixed vars`, on the `int_div` that baguette's library keeps whole), so aut's Chuffed column
+is the user's run.
+
 The wall times of the P arm are lower on every QR pair (by 1 to 32 %, on all ten pairs, with the
-same tree). The parity instance fixes in one run the `c` and `acc` atoms that the chain clauses
+same tree or one 6 nodes smaller). The parity instance fixes in one run the `c` and `acc` atoms that the chain clauses
 would fix one wake at a time. That is an engine effect and not what the spike asks about, and on a
 node at load 60 it is a direction rather than a measurement.
 
@@ -14249,16 +14262,21 @@ node at load 60 it is a direction rather than a measurement.
 |---|---|---|---|---|---|
 | golay24 L def | 177 | 1 129 | 0 | 0 | 0 inferences, 0 conflicts |
 | QR48 L def | 30 914 | 457 344 | 0 | 0 | 0 inferences, 0 conflicts |
-| QR48 L u1 | 30 883 | 458 149 | 0 | 6 | pending (§9) |
-| QR72 L def | 138 429 | 5 047 769 | 0 | 75 | pending (§9) |
+| QR48 L u1 | 30 883 | 458 149 | 0 | 6 | 0 inferences, 0 conflicts |
+| QR48 R def | 30 931 | 448 720 | 0 | 0 | 0 inferences, 0 conflicts |
+| QR72 L def | 138 429 | 5 047 769 | 0 | 75 | 0 inferences, 0 conflicts |
+| QR72 L u1 | 138 064 | 5 064 436 | 0 | 156 | 0 inferences, 0 conflicts |
+| QR104 L def (beyond mode, 1 800 s) | 249 979 | 0 applied | | | 0 inferences, 0 conflicts |
+| aut o7 def, first 20 000 nodes | 194 192 | 537 973 | 13 520 | 1 513 | 0 inferences, 0 conflicts |
 | aut o7 u1 | 487 313 | 2 881 812 | 82 140 | 3 837 | **458** inferences (0.016 %), 0 conflicts |
-| aut o7 def (1 800 s) | 871 218 | 2 639 122 | 73 529 | 7 789 | pending (§9) |
 
-On the minimum-weight models the system never implied a generator bit, and every one of its
-inferences is in reach of the chain clauses' unit propagation. That is about 20 inferences per node
-on QR48 and 50 on QR72, all of them the `c` and `acc` values the chains derive anyway. The 75
-parity conflicts on QR72 are conflicts the parity instance reported before a clause did, and they
-moved the tree by 6 nodes out of 100 685.
+On the minimum-weight models, under the user's searches, the system never implied a generator bit,
+and every one of its inferences and conflicts is in reach of the chain clauses' unit propagation.
+That is about 20 inferences per node on QR48 and 50 on QR72, all of them the `c` and `acc` values
+the chains derive anyway. The parity conflicts (75 on QR72 `def`, 156 under `u1`) are conflicts the
+parity instance reported before a clause did, and they moved the tree by 6 nodes out of 100 685
+under `def` and by none under `u1`. On aut `def` the system does imply free atoms (13 520 in the
+first 20 000 nodes), and unit propagation reaches every one of them too.
 
 **On aut the default mode is harmful.** With `u1`, baguette proves UNSAT in 172 nodes without the
 system and does not finish in 1 800 s with it. Only 458 of the 2.9 M parity inferences are beyond
@@ -14272,8 +14290,11 @@ have an LBD of 16 or more, and 40 conflicts backjump.
 `BAGUETTE_PARITY_MODE=beyond` (`bin/main2.exe`) applies only what the unit-propagation closure does
 not reach and leaves every other inference to the clauses. On aut `u1` it applies exactly the 458
 beyond inferences (4 of them on free atoms) and still does not finish (14 441 nodes in 300 s), so
-on this instance even those 458 change the `u1` tree for the worse. Where they occur (at the root or
-deeper) is the first read of §9.
+on this instance even those 458 change the `u1` tree for the worse. They all come late. With node
+limits of 1, 60, 100 and 140 the beyond-mode run and the run without parity have the same node and
+conflict counts and the system applies nothing. The 458 inferences all come between node 141 and
+node 172, where the run without parity is one conflict from its UNSAT. Applied there, they reroute
+that last conflict and the proof does not close.
 
 ### 5. Why the user's searches leave the system nothing to do
 
@@ -14297,16 +14318,23 @@ user's searches it does not.
 The extra search `c` shows the other case. It branches on `c ++ u` with `indomain_min`, which is
 not one of the user's searches (it is `minweight.mzn` with only the `solve` item changed,
 `models/minweight_c.mzn` in the run directory). Fixing `c_j = 0` is a parity equation over `u`, and
-a few of them pin `u`. On golay24 the system then cuts the tree by four, and 95 % of its
-inferences are beyond unit propagation.
+a few of them pin `u`. There the system has real work to do.
 
-| golay24, search `c` | nodes N | nodes P | nodes P, beyond mode | inferences | beyond UP |
-|---|---|---|---|---|---|
-| L | 1 551 | 375 | 383 | 8 627 (1 527 on `u`) | 8 214, and 26 conflicts all within UP's reach |
-| R | 1 590 | 399 | | 8 534 (1 545 on `u`) | 8 213 |
+| search `c` | nodes N | nodes P | nodes P, beyond mode | inferences P (on `u`) | beyond unit propagation | Chuffed |
+|---|---|---|---|---|---|---|
+| golay24 L | 1 551 | 375 | 383 | 8 627 (1 527) | 8 214 (95 %), its 26 conflicts all within reach | 2 101 |
+| golay24 R | 1 590 | 399 | | 8 534 (1 545) | 8 213 | |
+| QR48 L | > 147 282 | > 142 500 | > 147 956 | 7 976 142 (737 693) | 94 % (7 278 925 of 7 704 964 in the diagnostic run; 30 of its 15 058 conflicts) | > 600 s |
+| QR48 R | > 159 379 | > 167 628 | | 9 811 573 (855 180) | | |
+| QR72 L | > 146 803 | > 192 726 | > 214 061 | 14 481 214 (1 275 094) | the beyond run applies 15 882 560 | > 600 s |
+| QR104 L | not run | > 99 920 | > 107 138 | 16 288 273 (694 722) | the beyond run applies 16 483 596 | |
 
-That tree is still larger than the 133 nodes of the user's search on the same instance. QR48, QR72
-and QR104 under `c` are pending (§9).
+A `>` is a count at the 1 800 s limit. On golay24 the system cuts the tree by four, but that tree
+stays three times the 133 nodes of the user's search. On the QR codes no run closes under `c`, with
+or without the system, and Chuffed does not close QR48 or QR72 under `c` in 600 s either. The
+system infers about 55 (QR48) to 165 (QR104) literals per node there, nearly all of them beyond unit propagation, and a
+count of nodes at a time limit says nothing about the size of a tree no run finishes. So the one
+search under which the system has work to do is a search that is hopeless on these codes anyway.
 
 ### 6. What the certified version (T2) would cost, per GCS's §2 to §4
 
@@ -14342,24 +14370,27 @@ still be paid in full before node 1.
 
 ### 7. Recommendation for T2
 
-**Do not build T2 for these models as the user runs them.** Under `def`, `u` and `u1` the system
-removes no node on golay24, QR48 and QR72 (identical trees, or 6 nodes of 100 685), because every
-XOR row there is a definition read forwards and the chain clauses already do that completely. On
-aut it finds 458 inferences beyond unit propagation out of 2.9 M, and applied eagerly it turns the
-172-node `u1` proof into a timeout by spoiling the learned clauses. A certified version would pay
-§6's level-0 scaffolding (177 000 lines on aut) and per-inference `pol`s to justify, on these runs,
-nothing the clauses do not already justify.
+**Do not build T2 for these models.** Under `def`, `u` and `u1` the system removes no node on
+golay24, QR48 and QR72 (identical trees, or 6 nodes of 100 685) and finds nothing beyond unit
+propagation on QR104 either, because every XOR row there is a definition read forwards and the
+chain clauses already do that completely. On aut it finds 458 inferences beyond unit propagation
+out of 2.9 M, and applied eagerly it turns the 172-node `u1` proof into a timeout by spoiling the
+learned clauses. The QR runs under `c` were the open case of this recommendation, and they close
+it. That search is the only one where the system has work to do, and no QR code closes under it in
+1 800 s with or without the system. A certified version would pay §6's level-0 scaffolding (177 000
+lines on aut) and per-inference `pol`s to justify, on every run that closes, nothing the clauses do
+not already justify.
 
 The node counts that separate baguette from Chuffed are elsewhere. Chuffed visits about the same
 tree under `def` (23 668 against 23 367 on QR48) and half of it under `u` and `u1` (11 709 against
 23 367), and it is 80 times faster per node on QR48 and 200 times on QR72. On aut `def` it needs 11 nodes where baguette
 does not finish, and §4 shows that parity is not the difference there either.
 
-If the user wants T2 anyway, two conditions follow from this record. It should be built in the
-beyond shape, so that a parity reason exists only where no clause reason could, which also bounds
-the proof cost by the beyond inferences. And it should be judged on a search that fixes defined
-bits early (the `c` variant, or activity-based branching with restarts once M10 lands), since that
-is the only place this record saw the system cut nodes (golay24 under `c`, by four).
+If the user wants T2 anyway, it should be built in the beyond shape, so that a parity reason exists
+only where no clause reason could, which also bounds the proof cost by the beyond inferences. The
+place to measure again before that is a search that fixes defined bits early AND still closes on
+these codes. Activity-based branching with restarts, once M10 lands, is the candidate, and this
+branch's `--parity` and beyond mode can be run against it as they stand.
 
 ### 8. What a no-proof spike cannot tell
 
@@ -14378,22 +14409,17 @@ is the only place this record saw the system cut nodes (golay24 under `c`, by fo
   flight on `main`) may fix defined bits early the way the `c` variant does, and whether the system
   pays there is open.
 
-### 9. Pending on the node (unreachable from 18:00 on 2026-11-18)
+### 9. The runs, and the night the node was away
 
-Three detached batches were running when the connection dropped. They keep running, and each run
-writes `out/<tag>.res` (one line) and `out/<tag>.err` under `/scratch/arthur/wave49-parity-runs/`.
-A batch writes `<jobfile>.done` when it ends. The PIDs of the batch drivers are in `batch2.pid`
-(4162602), `batch3.pid` (217639) and `batch4.pid` (241245). `bash run1.sh` uses `bin/main.exe`, and
-the `PB` tags use `bin/main2.exe` with `BAGUETTE_PARITY_MODE=beyond`.
-
-| batch | job file | still to read | for |
-|---|---|---|---|
-| 2 | `jobs2.txt` | `qr104_def_N`, `qr104_def_P` (1 800 s) | §3's QR104 row |
-| 3 | `jobs3b.txt` (4 slots) | `qr48_c_{N,P,PD}`, `qr48R_c_{N,P}`, `qr72_c_{N,P}`, `qr104_c_P` | §5's table for QR48, QR72, QR104 |
-| | | `qr48_u1_PD`, `qr48R_def_PD`, `qr72_def_PD`, `qr72_u1_PD`, `o7k2_def_PD20k` (node limit 20 000) | §4's pending beyond counts |
-| | | `ch_*`, fzn-chuffed `-s` on the re-flattened files (the first copies in batch 2 failed on a wrong flag and are rerun at the end of `jobs3b.txt`) | Chuffed on the same `.fzn` as baguette |
-| 4 | `jobs4.txt` (1 slot) | `qr48_c_PB`, `o7k2_def_PB`, `qr72_c_PB`, `o7k2_u_PB`, `qr48_def_PB`, `qr48_u1_PB`, `qr72_def_PB`, `qr104_def_PB`, `qr104_c_PB` | beyond mode against the default mode |
-
-One read was about to be launched when the node dropped and never ran: `o7k2_u1` in beyond mode
-with `BAGUETTE_NODE_LIMIT=1` and `=60`, against the same limits without `--parity`, to find where
-the 458 beyond inferences occur and where the `u1` tree first diverges.
+`fataepyc-06` was unreachable from 18:00 on 2026-11-18 to the next morning. Four detached batches
+were running and finished without supervision (`jobs1.txt`, `jobs2.txt`, `jobs3b.txt` and
+`jobs4.txt` in the run directory, each with its `.done` marker; `jobs3.txt` is the list `jobs3b.txt`
+was cut from and never ran). On 2026-11-19 their 90 `out/*.res` were read and §3
+to §5 filled from them. `bash run1.sh` used `bin/main.exe`, and the tags ending in `PB` used
+`bin/main2.exe` with `BAGUETTE_PARITY_MODE=beyond`. The tags ending in `PD` set
+`BAGUETTE_PARITY_UP=1`, and `o7k2_def_PD20k` also `BAGUETTE_NODE_LIMIT=20000`. The `ch_*` runs are
+fzn-chuffed `-s` on the re-flattened files (a first copy failed on a wrong flag and was rerun).
+The one read that the node's absence delayed, the place where the 458 beyond inferences occur on
+aut `u1`, was run on 2026-11-19 (`o7k2_u1_{PB,N}_n{1,60,100,140,171}`, a few seconds each). No QR104
+`c` run without `--parity` was made, since no `c` run closes on any QR code and the missing number
+would not change §7.
