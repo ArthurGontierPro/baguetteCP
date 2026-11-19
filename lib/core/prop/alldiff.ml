@@ -209,9 +209,27 @@ type snap = {
      again. For a hole-free domain -- every domain M4-T1 ever saw -- this is two runs of
      [Gone_below]/[Gone_above] and costs no trail walk at all. *)
   s_gone : (int * gone) list;
+  (* The term's [rungs], carried so that a derivation reaches the ladder without the
+     name (M7-T33, D-0156). Not a number the derivation depends on: the ladder ids are
+     written once and never move (the header's I-X6 paragraph). *)
+  s_rungs : (int -> int option) Lazy.t;
 }
 
-type term = { x : Var.t; name : string; decl_lo : int; decl_hi : int }
+(* [rungs] is [Encoding.consistency_id] for this variable with the lookup done once, the
+   first time a derivation cites one of its ladder rungs, and kept for the instance's
+   lifetime (M7-T33, D-0156). Until then [excl] looked the variable up by NAME for every
+   rung it cited -- a string hash per rung, O(width) rungs per excluded value -- which was
+   12.4 % of 2011_cyclic-rcpsp_easy_6's proof mode (D-0145 section 5). Lazy because an
+   instance whose explanations are never forced (no proof, or a test without an encoding
+   for its variables) must not look anything up. The ids are the same, so every proof is
+   byte-identical. *)
+type term = {
+  x : Var.t;
+  name : string;
+  decl_lo : int;
+  decl_hi : int;
+  rungs : (int -> int option) Lazy.t;
+}
 
 type t = {
   terms : term array;
@@ -268,7 +286,14 @@ let make ?(cutoff = default_cutoff) ?(lemma_rows = []) store enc ~rows vars =
       (List.map
          (fun x ->
            let d = Store.get store x in
-           { x; name = Store.name store x; decl_lo = Domain.lo d; decl_hi = Domain.hi d })
+           let name = Store.name store x in
+           {
+             x;
+             name;
+             decl_lo = Domain.lo d;
+             decl_hi = Domain.hi d;
+             rungs = lazy (Encoding.consistency_ids enc name);
+           })
          vars)
   in
   { terms; enc; cutoff; rows = tbl; lemmas }
@@ -343,6 +368,7 @@ let snap_of store tm =
     s_lo_root = established_at_root store tm.x ~lower:true;
     s_hi_root = established_at_root store tm.x ~lower:false;
     s_gone = gone_of store tm d;
+    s_rungs = tm.rungs;
   }
 
 (* ------------------------------------------------------------------ explanations *)
@@ -455,22 +481,20 @@ let amo t ss v =
    every u strictly inside the declared range -- and every u this asks for is, because
    v is inside the declared range and the current bound it is being compared against is
    strictly inside it too (if it were not, there would be no such v). *)
+(* The ladder rung of [s]'s variable at [u], through the term's once-looked-up [rungs]
+   (M7-T33, D-0156): the id [Encoding.consistency_id] gives, without the name lookup. *)
+let rung s u = cite (cid_of "ladder rung" (Lazy.force s.s_rungs u))
+
 let excl t s v =
   if v < s.s_lo then
     Explanation.combine
       (cite (cid_of "d_hi" (Encoding.direct_hi_id t.enc s.s_name v))
-      :: List.map
-           (fun u ->
-             cite (cid_of "ladder rung" (Encoding.consistency_id t.enc s.s_name u)))
-           (range (v + 1) (s.s_lo - 1)))
+      :: List.map (rung s) (range (v + 1) (s.s_lo - 1)))
       1
   else if v > s.s_hi then
     Explanation.combine
       (cite (cid_of "d_lo" (Encoding.direct_lo_id t.enc s.s_name v))
-      :: List.map
-           (fun u ->
-             cite (cid_of "ladder rung" (Encoding.consistency_id t.enc s.s_name u)))
-           (range (s.s_hi + 1) (v - 1)))
+      :: List.map (rung s) (range (s.s_hi + 1) (v - 1)))
       1
   else invalid_arg "Alldiff.excl: the value is inside the current window"
 
@@ -688,11 +712,9 @@ let prune_summands t ~a ~b ~halls ~y ~lower =
    `Alldiff: ladder rung has no constraint id` crash (exit 2) the bench/fuzz sweep found on
    models where an element constraint had shaved y's upper bound below a Hall interval
    reaching y's declared top. *)
-let overshoot_cancel t ~b ~y ~lower =
+let overshoot_cancel ~b ~y ~lower =
   if lower && b + 1 > y.s_hi && b < y.s_dhi && y.s_hi < y.s_dhi && y.s_hi_root then
-    List.map
-      (fun u -> cite (cid_of "ladder rung" (Encoding.consistency_id t.enc y.s_name u)))
-      (range (y.s_hi + 1) b)
+    List.map (rung y) (range (y.s_hi + 1) b)
     @ [ Explanation.defining 1 (Lit.le y.s_name y.s_hi) ]
   else []
 
@@ -701,8 +723,7 @@ let prune_expl t ~a ~b ~halls ~y ~lower =
       Explanation.combine
         (prune_summands t ~a ~b ~halls ~y ~lower
         @ hall_cancels ~keep:(fun v -> a <= v && v <= b) ~halls
-        @ target_cancel ~y ~lower
-        @ overshoot_cancel t ~b ~y ~lower)
+        @ target_cancel ~y ~lower @ overshoot_cancel ~b ~y ~lower)
         1)
 
 (* ------------------------------------------------------ M4-T2: a VALUE is removed
