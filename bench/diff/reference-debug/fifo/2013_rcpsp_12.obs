@@ -13,45 +13,45 @@ search bits/vars 0 vars
 search bitsrows/lines 0 lines
 search choices/groups 0 groups
 search limit.nodes 1501
-search limit.decisions 775
-search limit.conflicts 725
-search limit.learned 724
+search limit.decisions 770
+search limit.conflicts 730
+search limit.learned 729
 search limit.pb-learned 0
-search limit.db 723
+search limit.db 500
 search limit.maxdepth 26
 search limit.incumbent 40
-work limit.props 236212
-work limit.eff 15486
-work limit.contra 723
+work limit.props 226951
+work limit.eff 15160
+work limit.contra 728
 search limit.at node
 search nodes/nodes 1501 nodes
-search decisions/decs 775 decs
-search conflicts/nodes 725 nodes
+search decisions/decs 770 decs
+search conflicts/nodes 730 nodes
 search maxdepth/levels 26 levels
 work exhausted/bool 0 bool 1 if
-search skipped/nodes 35 nodes
-search learned/cls 724 cls
-work later/asks 43012 asks
-work cites/memos 7356 memos
+search skipped/nodes 28 nodes
+search learned/cls 729 cls
+work later/asks 42514 asks
+work cites/memos 7265 memos
 search convertible/cls 0 cls
-search retention fifo(cap=500) fifo(cap=500): 724 added, 1 evicted, 723 swept, 0 live, 5 duplicate, 722 cited, 24976 pinned
-search lbd 1:2,2:1,3:161,4:201,5:146,6:115,7:66,8:26,9:4,10:2
-search width 1:2,3:1,5:7,6:147,7:7,8:185,9:5,10:154,11:8,12:91,13:24,14:46,15:15,16:32
+search retention fifo(cap=500) fifo(cap=500): 729 added, 229 evicted, 500 swept, 0 live, 5 duplicate, 727 cited, 5 pinned
+search lbd 1:2,2:1,3:168,4:198,5:152,6:114,7:63,8:23,9:6,10:2
+search width 1:2,3:1,5:7,6:153,7:9,8:190,9:6,10:155,11:8,12:83,13:24,14:46,15:14,16:31
 search globals/units 2 units
 search glob-prune/prunes 18 prunes
 search glob-confl/confl 2 confl
-search cls-inst/inst 722 inst
+search cls-inst/inst 727 inst
 search cls-decl/cls 0 cls
-search cls-prune/prunes 2727 prunes
+search cls-prune/prunes 2620 prunes
 search pb-inst/inst 0 inst
 search pb-inst-no/rows 0 rows
 search pb-prune/prunes 0 prunes
 search pb-confl/confl 0 confl
-search minimised/lits 289 lits
-search i-s4-cross/lines 6047 lines
-search pb-tried/confl 724 confl
+search minimised/lits 285 lits
+search i-s4-cross/lines 6023 lines
+search pb-tried/confl 729 confl
 search pb-learned/rows 0 rows
-search pb-fallback/confl 724 confl
+search pb-fallback/confl 729 confl
 search pb-why first fallback reason: no PB row for instance <unknown>
 work pb-whys/recd 64 recd 41 x
 search pb-steps/pivots 0 pivots
@@ -67,25 +67,25 @@ search lvl-wide/confl 0 confl
 search lvl-incomp/confl 0 confl
 search lvl-empty/confl 0 confl
 search lvl-assert/confl 0 confl
-work int_lin_le_reif/inst 153 inst 81.8 runs/node 4.95 eff/node
-work learned_clause/inst 722 inst 51.0 runs/node 1.82 eff/node
-work int_lin_le/inst 25 inst 13.6 runs/node 1.03 eff/node
-work bool_clause/inst 153 inst 5.6 runs/node 1.91 eff/node
-work cumulative/inst 3 inst 5.4 runs/node 0.61 eff/node
-work props/runs 236212 runs
-work eff/runs 15486 runs
-work contra/runs 723 runs
-work passes/snaps 12462 snaps
-work deductions/chgs 6159 chgs
-work wakes/wakes 571864 wakes
+work int_lin_le_reif/inst 153 inst 80.6 runs/node 4.88 eff/node
+work learned_clause/inst 727 inst 46.6 runs/node 1.75 eff/node
+work int_lin_le/inst 25 inst 13.2 runs/node 1.01 eff/node
+work bool_clause/inst 153 inst 5.5 runs/node 1.86 eff/node
+work cumulative/inst 3 inst 5.3 runs/node 0.60 eff/node
+work props/runs 226951 runs
+work eff/runs 15160 runs
+work contra/runs 728 runs
+work passes/snaps 12281 snaps
+work deductions/chgs 6158 chgs
+work wakes/wakes 567286 wakes
 work masked/wakes 0 wakes
-work vetoed/wakes 1554 wakes
-work advised/wakes 245016 wakes
-work seeded/runs 139120 runs
-work skipped/slots 810344 slots
-search rup/lines 23360 lines
-search pol/lines 175804 lines
-search pol-tokens/tokens 2183744 tokens
+work vetoed/wakes 1530 wakes
+work advised/wakes 254148 wakes
+work seeded/runs 134766 runs
+work skipped/slots 811019 slots
+search rup/lines 23067 lines
+search pol/lines 176183 lines
+search pol-tokens/tokens 2185641 tokens
 search pol-widest/tokens 229 tokens
 search atoms/atoms 0 atoms
 search atomlinks/lines 0 lines
@@ -93,4 +93,4 @@ search bridges/pairs 0 pairs
 search boundlines/pairs 0 pairs
 search bitsprune/lines 0 lines
 opb 034ea827d99f67ebfe7a7c0aa346167afac6361339071eebd6b9d8f29c4cd68b
-pbp 76a27ab40a24dd2918cd0d753aa00ba4267959cbeaae584ce4a1d8aafa855c9e
+pbp 4c929db50a07fa7383da7635edf69bee22adf444db923f4d3045eb6434670c3c

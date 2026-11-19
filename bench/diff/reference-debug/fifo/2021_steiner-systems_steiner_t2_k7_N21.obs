@@ -12,10 +12,10 @@ search limit.decisions 778
 search limit.conflicts 722
 search limit.learned 722
 search limit.pb-learned 0
-search limit.db 722
+search limit.db 500
 search limit.maxdepth 38
 search limit.incumbent none
-work limit.props 530833
+work limit.props 528743
 work limit.eff 110052
 work limit.contra 722
 search limit.at node
@@ -29,7 +29,7 @@ search learned/cls 722 cls
 work later/asks 147915 asks
 work cites/memos 15453 memos
 search convertible/cls 722 cls
-search retention fifo(cap=500) fifo(cap=500): 722 added, 0 evicted, 722 swept, 0 live, 0 duplicate, 722 cited, 24753 pinned
+search retention fifo(cap=500) fifo(cap=500): 722 added, 222 evicted, 500 swept, 0 live, 0 duplicate, 722 cited, 0 pinned
 search lbd 9:20,10:40,11:60,12:80,13:140,14:120,15:100,16:162
 search width 16:722
 search globals/units 0 units
@@ -67,21 +67,21 @@ work bool_clause/inst 2826 inst 54.4 runs/node 5.43 eff/node
 work int_lin_le/inst 1470 inst 38.9 runs/node 3.41 eff/node
 work bool2int/inst 1565 inst 34.2 runs/node 18.94 eff/node
 work int_lin_le_reif/inst 1080 inst 31.8 runs/node 11.32 eff/node
-work learned_clause/inst 722 inst 31.0 runs/node 0.00 eff/node
+work learned_clause/inst 722 inst 29.6 runs/node 0.00 eff/node
 work int_le_reif/inst 360 inst 25.9 runs/node 4.86 eff/node
 work bool_not/inst 1458 inst 20.1 runs/node 5.90 eff/node
 work array_int_maximum/inst 10 inst 1.2 runs/node 0.00 eff/node
-work props/runs 530833 runs
+work props/runs 528743 runs
 work eff/runs 110052 runs
 work contra/runs 722 runs
 work passes/snaps 0 snaps
 work deductions/chgs 0 chgs
-work wakes/wakes 666902 wakes
+work wakes/wakes 665225 wakes
 work masked/wakes 0 wakes
 work vetoed/wakes 8634 wakes
-work advised/wakes 0 wakes
-work seeded/runs 96842 runs
-work skipped/slots 21122671 slots
+work advised/wakes 561 wakes
+work seeded/runs 95148 runs
+work skipped/slots 21124365 slots
 search rup/lines 116416 lines
 search pol/lines 0 lines
 search pol-tokens/tokens 0 tokens
@@ -91,4 +91,4 @@ search bridges/pairs 0 pairs
 search boundlines/pairs 0 pairs
 search bitsprune/lines 0 lines
 opb 2d202af4f015dac6d2edb9318c929f06e7b7bef4b1f88663f7fddbbcbda560da
-pbp e7d4a6ed52169f39467c49dfce595b2a8e41b0509c7b9534d5b64b28c911971e
+pbp 293c84824cfddde04f0e6da3868a40cb9db5942f568aba1ed5515376f7205527

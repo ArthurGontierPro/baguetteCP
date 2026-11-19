@@ -8,45 +8,45 @@ search bits/vars 0 vars
 search bitsrows/lines 0 lines
 search choices/groups 0 groups
 search limit.nodes 6001
-search limit.decisions 3007
-search limit.conflicts 2993
-search limit.learned 2993
+search limit.decisions 3008
+search limit.conflicts 2992
+search limit.learned 2992
 search limit.pb-learned 0
-search limit.db 2993
+search limit.db 500
 search limit.maxdepth 32
 search limit.incumbent none
-work limit.props 1246069
-work limit.eff 143523
-work limit.contra 2993
+work limit.props 973193
+work limit.eff 143634
+work limit.contra 2992
 search limit.at node
 search nodes/nodes 6001 nodes
-search decisions/decs 3007 decs
-search conflicts/nodes 2993 nodes
+search decisions/decs 3008 decs
+search conflicts/nodes 2992 nodes
 search maxdepth/levels 32 levels
 work exhausted/bool 0 bool 1 if
-search skipped/nodes 3 nodes
-search learned/cls 2993 cls
-work later/asks 100780 asks
-work cites/memos 73848 memos
+search skipped/nodes 4 nodes
+search learned/cls 2992 cls
+work later/asks 102503 asks
+work cites/memos 75184 memos
 search convertible/cls 0 cls
-search retention fifo(cap=500) fifo(cap=500): 2993 added, 0 evicted, 2993 swept, 0 live, 0 duplicate, 2993 cited, 3108771 pinned
-search lbd 5:23,6:106,7:266,8:387,9:477,10:580,11:531,12:336,13:144,14:114,15:29
-search width 11:2,12:20,13:93,14:111,15:82,16:2685
+search retention fifo(cap=500) fifo(cap=500): 2992 added, 2492 evicted, 500 swept, 0 live, 667 duplicate, 2992 cited, 286 pinned
+search lbd 5:62,6:151,7:327,8:372,9:443,10:481,11:491,12:426,13:128,14:88,15:23
+search width 11:2,12:45,13:200,14:177,15:108,16:2460
 search globals/units 0 units
 search glob-prune/prunes 0 prunes
 search glob-confl/confl 0 confl
-search cls-inst/inst 2993 inst
+search cls-inst/inst 2992 inst
 search cls-decl/cls 0 cls
-search cls-prune/prunes 2802 prunes
+search cls-prune/prunes 1652 prunes
 search pb-inst/inst 0 inst
 search pb-inst-no/rows 0 rows
 search pb-prune/prunes 0 prunes
 search pb-confl/confl 0 confl
 search minimised/lits 0 lits
-search i-s4-cross/lines 44429 lines
-search pb-tried/confl 2993 confl
+search i-s4-cross/lines 40858 lines
+search pb-tried/confl 2992 confl
 search pb-learned/rows 0 rows
-search pb-fallback/confl 2993 confl
+search pb-fallback/confl 2992 confl
 search pb-why first fallback reason: no PB row for instance bool2int
 work pb-whys/recd 64 recd 63 x
 search pb-steps/pivots 0 pivots
@@ -62,23 +62,23 @@ search lvl-wide/confl 0 confl
 search lvl-incomp/confl 0 confl
 search lvl-empty/confl 0 confl
 search lvl-assert/confl 0 confl
-work learned_clause/inst 2993 inst 84.2 runs/node 0.47 eff/node
-work int_eq_reif/inst 500 inst 41.4 runs/node 6.49 eff/node
-work int_le_reif/inst 450 inst 33.8 runs/node 3.88 eff/node
-work int_lin_le/inst 135 inst 29.6 runs/node 2.75 eff/node
-work bool2int/inst 950 inst 18.7 runs/node 10.33 eff/node
-work props/runs 1246069 runs
-work eff/runs 143523 runs
-work contra/runs 2993 runs
+work int_eq_reif/inst 500 inst 42.0 runs/node 6.61 eff/node
+work learned_clause/inst 2992 inst 38.6 runs/node 0.28 eff/node
+work int_le_reif/inst 450 inst 34.1 runs/node 3.84 eff/node
+work int_lin_le/inst 135 inst 28.7 runs/node 2.76 eff/node
+work bool2int/inst 950 inst 18.7 runs/node 10.44 eff/node
+work props/runs 973193 runs
+work eff/runs 143634 runs
+work contra/runs 2992 runs
 work passes/snaps 0 snaps
 work deductions/chgs 0 chgs
-work wakes/wakes 1328046 wakes
-work masked/wakes 11152 wakes
-work vetoed/wakes 29654 wakes
-work advised/wakes 55809 wakes
-work seeded/runs 165527 runs
-work skipped/slots 20999613 slots
-search rup/lines 168562 lines
+work wakes/wakes 1973524 wakes
+work masked/wakes 14261 wakes
+work vetoed/wakes 31365 wakes
+work advised/wakes 1056945 wakes
+work seeded/runs 107872 runs
+work skipped/slots 21055650 slots
+search rup/lines 170316 lines
 search pol/lines 0 lines
 search pol-tokens/tokens 0 tokens
 search atoms/atoms 0 atoms
@@ -87,4 +87,4 @@ search bridges/pairs 0 pairs
 search boundlines/pairs 0 pairs
 search bitsprune/lines 0 lines
 opb b04006bb65351b90325a86d4086ba6f56cbea19966988fff3b9d0f2253e05191
-pbp 5e42d50a95481878894a50fb1c108eb7a202f47d20159979522b5f857ae15df5
+pbp 8440e54d0c52d04fe31e5f001f18211b7e6a889a153dc51a5426bdcb848656d9

@@ -12,10 +12,10 @@ search limit.decisions 759
 search limit.conflicts 741
 search limit.learned 741
 search limit.pb-learned 0
-search limit.db 741
+search limit.db 500
 search limit.maxdepth 24
 search limit.incumbent none
-work limit.props 374484
+work limit.props 368801
 work limit.eff 49405
 work limit.contra 741
 search limit.at node
@@ -29,7 +29,7 @@ search learned/cls 741 cls
 work later/asks 19754 asks
 work cites/memos 26659 memos
 search convertible/cls 741 cls
-search retention lbd(cap=500) lbd(cap=500): 741 added, 0 evicted, 741 swept, 0 live, 0 duplicate, 741 cited, 29161 pinned
+search retention lbd(cap=500) lbd(cap=500): 741 added, 241 evicted, 500 swept, 0 live, 0 duplicate, 741 cited, 0 pinned
 search lbd 2:2,3:2,4:35,5:193,6:281,7:192,8:33,9:2,16:1
 search width 9:111,10:135,11:22,12:123,13:79,15:1,16:270
 search globals/units 0 units
@@ -63,20 +63,20 @@ search lvl-incomp/confl 0 confl
 search lvl-empty/confl 0 confl
 search lvl-assert/confl 0 confl
 work bool_clause/inst 992 inst 174.5 runs/node 21.21 eff/node
-work learned_clause/inst 741 inst 57.0 runs/node 0.01 eff/node
+work learned_clause/inst 741 inst 53.2 runs/node 0.01 eff/node
 work bool2int/inst 48 inst 14.4 runs/node 11.31 eff/node
 work int_lin_le/inst 3 inst 3.5 runs/node 0.38 eff/node
-work props/runs 374484 runs
+work props/runs 368801 runs
 work eff/runs 49405 runs
 work contra/runs 741 runs
 work passes/snaps 0 snaps
 work deductions/chgs 0 chgs
-work wakes/wakes 423191 wakes
+work wakes/wakes 420691 wakes
 work masked/wakes 0 wakes
 work vetoed/wakes 4088 wakes
-work advised/wakes 0 wakes
-work seeded/runs 233085 runs
-work skipped/slots 1879621 slots
+work advised/wakes 4897 wakes
+work seeded/runs 227618 runs
+work skipped/slots 1885088 slots
 search rup/lines 55884 lines
 search pol/lines 0 lines
 search pol-tokens/tokens 0 tokens
@@ -86,4 +86,4 @@ search bridges/pairs 0 pairs
 search boundlines/pairs 0 pairs
 search bitsprune/lines 0 lines
 opb 62bd7e715fc67af61007088ab61c91253d5d0fb698fb96718f7fcbb123470321
-pbp f1b5f3c4651654c6ad23c4553f52e59c8be4bc852493812e0acf2b1f7f3271a8
+pbp 66c81fa0c92e072c49946b8b3396c7de4745e32bdd0bff483ee84f1ad5fcea9f

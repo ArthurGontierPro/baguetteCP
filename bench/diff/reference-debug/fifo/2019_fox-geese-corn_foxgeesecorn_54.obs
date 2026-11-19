@@ -23,10 +23,10 @@ search limit.decisions 791
 search limit.conflicts 709
 search limit.learned 708
 search limit.pb-learned 1
-search limit.db 707
+search limit.db 501
 search limit.maxdepth 148
 search limit.incumbent 1126
-work limit.props 227107
+work limit.props 227104
 work limit.eff 33542
 work limit.contra 707
 search limit.at node
@@ -40,7 +40,7 @@ search learned/cls 708 cls
 work later/asks 254894 asks
 work cites/memos 23749 memos
 search convertible/cls 0 cls
-search retention fifo(cap=500) fifo(cap=500): 709 added, 2 evicted, 707 swept, 0 live, 0 duplicate, 707 cited, 21660 pinned
+search retention fifo(cap=500) fifo(cap=500): 709 added, 208 evicted, 501 swept, 0 live, 0 duplicate, 707 cited, 16 pinned
 search lbd 1:2,2:1,3:3,4:120,5:64,6:40,7:40,8:438
 search width 1:2,2:1,3:3,5:4,6:116,7:13,8:51,10:1,12:27,13:464,14:3,15:8,16:15
 search globals/units 2 units
@@ -85,17 +85,17 @@ work bool2int/inst 9 inst 0.5 runs/node 0.22 eff/node
 work array_int_element/inst 3 inst 0.3 runs/node 0.10 eff/node
 work int_ne_reif/inst 16 inst 0.2 runs/node 0.07 eff/node
 work int_le_reif/inst 6 inst 0.0 runs/node 0.01 eff/node
-work props/runs 227107 runs
+work props/runs 227104 runs
 work eff/runs 33542 runs
 work contra/runs 707 runs
 work passes/snaps 7427 snaps
 work deductions/chgs 149 chgs
-work wakes/wakes 454634 wakes
+work wakes/wakes 454636 wakes
 work masked/wakes 9 wakes
 work vetoed/wakes 16947 wakes
-work advised/wakes 172842 wakes
-work seeded/runs 81360 runs
-work skipped/slots 1048998 slots
+work advised/wakes 172847 wakes
+work seeded/runs 81357 runs
+work skipped/slots 1049001 slots
 search rup/lines 50065 lines
 search pol/lines 4 lines
 search pol-tokens/tokens 48 tokens
@@ -106,4 +106,4 @@ search bridges/pairs 0 pairs
 search boundlines/pairs 0 pairs
 search bitsprune/lines 0 lines
 opb 306ff9f9f1994232d506ca2839cf4ebbcd973c29ee58fc11b42c346ccdadbe6c
-pbp 787e249bd6b0e51babf58db03809963df3caee5dc1812e1e449206b45e9a4546
+pbp bf56046828b9e43f4b0a9e4cc2f1bff4f3d94cbed788ded8dab734f14c38e448
