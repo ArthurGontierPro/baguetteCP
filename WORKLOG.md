@@ -617,6 +617,28 @@ section 1. Shares are inclusive, of the whole run.
 
 ## Handoff notes
 
+### 2026-11-19 night (orchestrator): gate 70 green; the state for the morning -- READ THIS FIRST
+
+Gate 70 (`dcb40f1`, merge wave54-live, D-0166, binary `214e74d1`) against gate 64's `d7a1ef00`:
+`make check` rc 0 (4 289 ok, 198 models, 99 MB), 198 models x 4 artefacts equal, lane 301/301,
+debug 289/289, scaling ok. Since the move to the node, main gained (gates 65 to 70, all green,
+every `--proof` artefact byte-identical, nothing re-recorded): D-0158 memo share mode (off),
+D-0161 the `--no-proof` guards, D-0162 `fplen` a correct refusal (PROPOSED), D-0163 the default
+keeps the proof, D-0164 element's heap per node, D-0166 the proof-side live memory.
+
+**Finished, waiting to merge, in this order:** `wave53-alldiff` (M7-T33, D-0156; re-record cyclic
+x6 and lot-sizing x12 at merge), then `wave54-snap` (D-0165, `snap_of` lazy, cyclic `--no-proof`
+-25.6 %, gated against alldiff's tip; delete its claim row on main at merge). `wave53-member`
+(D-0159) as before.
+
+**Waiting for the user:** lot-sizing [activity] over the lane's 4 GB cap with alldiff (D-0156 §7:
+raise this line's cap, skip it, cut its budget, or hold the merge); `member` (D-0159 §5); the memo
+share mode's default (D-0158 §5); D-0162 §3's objective-dominance sentence (recommended: no);
+D-0163 §6 the proof's directory, MiniZinc's `./baguette-proof.*`, silent overwrite; D-0166 §5
+releasing the forced alldiff trees (1.16 GB on bh9) through a field in `Explanation`'s thunk
+(option B, an `Explanation.t` change). Also seen: the openshop checker panics on alldiff's
+`--update` pass, on main's own proof (D-0156 §7, not investigated).
+
 ### 2026-11-19 night (agent-live, `wave54-live`): M11-complexity-T12, D-0166
 
 Four proof-side tables keep less per line, every byte the same (`justify.ml`, `writer.ml`): bh9 `--proof` node 40
