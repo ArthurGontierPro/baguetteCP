@@ -17295,3 +17295,234 @@ which is why it stops inside the second conflict's trace and why the 120 s run f
   252 open levels and the flush, linear, and was not touched.
   `2020_hoist-benchmark-for-minizinc_PU_3_8_5` (D-0137 section 13.3, strategy flags only)
   was not re-measured.
+
+## D-0152  M11-complexity-T4 part 2: search, analysis and retention without their per-node and per-conflict scans; 5 to 17 % of the instructions at 40 000 nodes without the proof on five of D-0140's six instances, every byte the same
+
+**Status**: **DONE** (part 2 of M11-complexity-T4, which closes the task), recorded 2026-11-19
+(agent-batch4b, `wave52-batch4b`). The contract is D-0140 §5's rows S1 to S6, A1, A3, R1 to R4, L2,
+J6's `search.ml` site and P2's `Learned.combine` half, and D-0144 §4. Files changed:
+`lib/core/search.ml` (not the PB-analysis call site, which M8 holds this wave), `lib/core/analysis.ml`,
+`lib/core/retention.ml`, `lib/core/learned.ml`, and the tests `test_search_strategy.ml`,
+`test_retention.ml`, `test_learned.ml`, `test_analysis.ml`. Measured on `fataepyc-06` against
+`main` at `ef6e659`, binary `9571b17ca68c59e3fd0b7e335b156211` (gate 57's), outputs under
+`/scratch/arthur/wave52-batch4b-runs/`.
+
+### 1. What was already done, and what is not done
+
+- **R1 and R2** were done by D-0139 (M10-T4): `Retention.reduce` is O(1) unless the policy is due,
+  and `holds` is a hash lookup. Nothing left.
+- **S3's store half** was D-0142 (`Store.is_level_start` in one load); its search half is below.
+- **J6** in `trace.ml`, `justify.ml` and `writer.ml` was D-0145; `learn.ml`'s was D-0144. Only
+  `bridges` was left, below.
+- **A2** stays, as D-0140 said: it is the backjump's definition.
+- **A3** (`check_attribution`'s `List.exists Var.equal` per citation) is NOT done. D-0140 measured it
+  "nv", and the cheap form needs `Engine.in_scope` handed to `Analysis.analyse`, whose only solver
+  caller is `Learn.at_conflict` in `learn.ml`, a file this batch did not claim. A per-analysis memo
+  of sorted scopes inside `analysis.ml` would sort a learned clause's scope to answer one query, which
+  costs more than the scan.
+- **P2's `Learned.combine` per rung** is NOT done. The fold lives in `ladder.ml`, which M8 holds this
+  wave, and the change (one combination of all rungs) moves the `Checked` additions and so possibly
+  the overflow point and its message, which reach `--stats`. D-0144 §1 and its WORKLOG request stand.
+- **R4 was done and reverted** (§3).
+
+### 2. The fixes, and why each keeps the bytes
+
+One commit per fix. Where the argument is not a line long, the old code is kept as the
+specification and compared, either under `BAGUETTE_DEBUG` at every call (so the debug pass of the
+differential lane exercises it) or in a unit test on random inputs.
+
+**S1, `count_learned_activity`** (`8366c18`). Per trail entry of every node, the instance id was
+looked up with two polymorphic `List.mem` over every learned instance id. It is now one byte load
+from `learned_kinds`, indexed by `id - first_learned_id`, grown by doubling at registration.
+`learned_kind` answers "none" below the boundary and for an id nothing registered, which is when
+neither list held it, and the table is never iterated, so the determinism argument the lists were
+kept for holds. Counters only. Test: `test_search_strategy.ml`, against the two lists on 50 random
+registrations, past two growths.
+
+**S3, `decision_entries`** (`552ba14`). Per conflict, `bridges` asked `Store.is_level_start` at every
+trail position. It now reads `Store.level_marks`: an entry is a level start iff an open mark sits at
+it, the marks are monotone (I-T2), an empty level shares its position with the next, so the marks
+below the trail's end with repeats dropped are the scan's positions in the scan's order.
+`decision_entries_scan` is the old walk, compared under `BAGUETTE_DEBUG` at every call and on a
+6 000-step random walk of a store (5 623 states with two levels at one position).
+
+**S4, `unfixed` and `first_fail`** (`345e707`). `unfixed` asks `Domain.is_fixed` (two loads) instead
+of `Domain.size > 1` (a hole count); they agree on every stored domain by I-D1 and I-D2. The staged
+`sequence`'s liveness test likewise. `first_fail` stops at the first candidate of size 2: every
+candidate is unfixed (`type order` says so, and `unfixed` and both arms of `sequence` filter for it)
+and the comparison is strict, so nothing later can replace it. On a Boolean model that is the first
+candidate. Test: the same random walk, with holes punched, against the full scan.
+
+**S5, the nogood's `kept` filter in `dfs`** (`62c7641`). A polymorphic `List.mem l ls` per nogood
+literal, depth squared per conflict, is now `level_set ls`, one byte per level. A list with a
+negative level (none exists) would be answered by `List.exists`, so the function is `List.mem` on
+every list. Test: 2 000 random level lists.
+
+**S6, `apply_globals`** (`3179e37`). The learned units were reversed at every node and each one's
+justification built before its bound was tested. The forward list is now kept beside the reversed
+one (`push_global`), and a unit whose bound is already in force is skipped before anything is built:
+exactly the case `Domain.set_lo`/`set_hi` answer `Unchanged`, on which `Store.apply` does nothing.
+
+**S2, the citation texts** (`34f5077`, kept after §3's revert). `register_learned` and
+`register_learned_pb` rendered every literal of every learned clause, unit and PB row into the
+`Retention.cite` message, which only a `Cited` exception or `cited_by` reads. `Retention.cite_lazy`
+stores a `Lazy.t` over the same immutable values (the clause instance's literal list, the unit, the
+row), so the text is the same when it is read. `cite` keeps its signature. Test in
+`test_retention.ml`.
+
+**R3, the `fifo`, `lbd` and `tiered` orders** (`024c118`). `reduce` hands `evict` the live list
+oldest first (`add` appends with the next `e_seq`, `retire` only filters), so `fifo`'s sort was the
+identity: one pass checks the order and the sort runs only on a list that is not sorted (stable sort,
+total order, so the sorted list is the list). The three policies compare with `Int.compare` and
+`Bool.compare`, which give the polymorphic `compare`'s signs on ints and bools. Test: both policies
+against the polymorphic sorts, on the live list and a shuffled one, at six caps.
+
+**J6, `bridges`' origin** (`5ec5722`). A thunk through `Justify.emit_rup_clause_lazy`, as `Trace`'s
+since D-0145. The origin is never written to the `.pbp`.
+
+**L2, `Learned.to_linear_row`** (`62c9acc`). Asked on every learned clause (`Learn.at_conflict`'s
+`l_converts`, for `--stats`' `convertible`): `ladder_form` sorted the rungs with the polymorphic
+`compare` and `to_linear_row` grouped them with a `List.partition` over the whole remainder per
+variable. `rung_compare` is `String.compare`, then `Int.compare` twice, the polymorphic order on a
+`(string, int, int)` triple, and on the sorted list a variable's rungs are the contiguous prefix the
+partition returned. Not "under `--stats` only": the predicate is computed in `learn.ml`, which this
+batch did not claim, and the CLI does not tell the search whether `--stats` is on. Test:
+`test_learned.ml`, against the old code copied as the reference, 5 000 random rows (1 229 with a
+linear form).
+
+**A1, the 1UIP walk** (`b9e266e`). Each resolution step rebuilt the node list, counted its
+conflict-level nodes for `one_uip`, folded it for the expandable node of largest support, appended
+the fresh cells with `@` and filtered the expanded cell out, five passes over the frontier per step.
+Now the frontier's cells carry a creation number and a removed cell is marked dead in place (the live
+cells in creation order are the old list: cells were only appended and filtered); the count of live
+conflict-level cells is kept at the three places a cell's node changes; and a max-heap on
+(support, creation number), pushed whenever a cell takes an expandable node and cleaned lazily (an
+entry is current while its cell is live and still holds that very node; `mk` builds a fresh node per
+fact, so physical equality cannot see an old one come back), gives the fold's choice, ties to the
+earliest cell. The criterion's `view` carries the count and a lazy node list, so `one_uip` never has
+the list built. The risk D-0140 named, "ordering, ties follow the cell order", is what the heap's
+second key is for. Both the count and the choice are checked against the old passes under
+`BAGUETTE_DEBUG` at every step, and in `test_analysis.ml` on 3 000 random walks (6 580 steps, roots,
+four levels, supports that tie). `Frontier.create ()` without a level keeps the merge-only behaviour
+M6-T16's test compares against `add_node`.
+
+### 3. R4, done and reverted (`34f5077`, `d4e8477`)
+
+R4 keyed `Retention`'s duplicate table on the learned row (`Learned.equal`, `Learned.hash`) instead
+of its text, and dropped the per-entry text `e_key`, which nothing read. The count is the same
+(the rendering is injective over a compiled model: `Lit.render` on (sanitised owner, kind, value),
+`Compile.check_name_collisions`, the auxiliaries named away from every sanitised name), the bytes
+were the same, and no instruction was saved within the noise (§4). But the table then held every
+learned ROW, about twelve words per term, where it held the row's text, and the peak RSS rose by
+6 to 8 % at 10 000 nodes (mspsp 301 → 321 MB, openshop proof 609 → 660 MB, rcpsp_11 129 → 138 MB,
+QR72 91 → 98 MB). Reverted. A key that is both small and free to build would be a hash of the row
+with the text kept only on collision; it was not worth a structure at a gain this file could not
+measure.
+
+### 4. Measurement
+
+`perf stat -e instructions:u`, `BAGUETTE_NODE_LIMIT` at 1 000, 10 000 and 40 000, `--stats`, one
+process per (instance, budget, mode), D-0140 §1's six `.fzn` (md5 as there), scripts
+`msr.sh`/`batch.sh`/`cmp.sh` under the runs directory. Every pair below has the same stdout, the
+same `--stats` output (msr.sh drops only `cpu=`, `wall=` and the GC totals), and in proof mode the
+same `.pbp` and `.opb` md5, cyclic's 9 GB proof at 40 000 nodes included. WORK counters did not move
+either: the `--stats` text is identical.
+
+**Per fix**, at 10 000 nodes, each against the build before it (G instructions, the share of the
+previous build's count):
+
+| fix | mspsp np | mspsp p | rcpsp_11 np | openshop np | openshop p | QR72 np | QR48 np | cyclic np |
+|---|---|---|---|---|---|---|---|---|
+| S1 | **-4.38** | -2.89 | **-3.08** | **-3.14** | -0.90 | -0.16 | -0.01 | -0.09 |
+| S3 | **-2.66** | -1.55 | -0.30 | -0.90 | -0.40 | -0.46 | -0.32 | -0.37 |
+| S4 | -0.00 | +0.10 | -0.01 | -0.16 | +0.13 | -0.30 | -0.29 | -0.00 |
+| S5 | -0.36 | -0.28 | -0.11 | **-2.95** | -0.97 | -0.58 | -0.34 | -0.17 |
+| S6 | -0.01 | -0.12 | -0.08 | +0.37 | -0.02 | -0.07 | +0.02 | +0.13 |
+| S2 + R4 | -0.36 | +0.03 | -0.06 | +0.37 | +0.33 | +0.20 | -0.05 | +0.03 |
+| R3 | +0.04 | +0.00 | +0.00 | +0.16 | -0.13 | -0.01 | +0.00 | +0.00 |
+| J6 | -0.01 | -0.02 | +0.01 | -0.01 | +0.12 | +0.01 | -0.00 | -0.04 |
+| L2 | **-1.18** | -0.74 | -0.28 | -0.18 | -0.00 | -0.48 | -0.23 | +0.01 |
+| A1 | **-3.55** | **-2.11** | -0.66 | -0.15 | -0.47 | **-16.09** | **-11.23** | +0.03 |
+
+Reading it. Instruction counts move by up to about 0.4 % between two builds whose difference
+cannot cost a cycle (S6, R3, J6 on openshop), which is the GC: a change in what is allocated moves
+the major slices. Entries inside that band are noise.
+
+- **A1 is the largest item on the Boolean codes**, which D-0140 had at 2.7 % of QR72's marginal
+  profile: QR72 -16 %, QR48 -11 % without the proof. Their 1UIP frontiers are long (every lower-level
+  literal of a learned XOR clause stays in it) and a conflict resolves many times, so five passes per
+  step were most of the analysis.
+- **S1 is D-0140's scratch patch** (mspsp -7.7 % at 40 000): -4.4 % at 10 000 here, rcpsp_11 and
+  openshop -3 %.
+- **S3** is mspsp's deep trail (147 levels): -2.7 %. **S5** is openshop's 226-literal nogoods: -3 %.
+- **L2** is worth 1.2 % on mspsp, the instance with the longest learned clauses over integers.
+- **S4, S6, R3, J6, S2** are below what this measures on these six: S4 and S6 because D-0140 measured
+  them "nv" (no holes, 6 to 27 units), R3 because the default policy is `keep_all`, J6 because a
+  settle bridge is rare. They are kept because each removes a scan that grows with the run (S4 with
+  the variables, R3 with the database under a capped policy) and the lane shows they cost no byte.
+
+**The batch**, `main` against the final branch (`d4e8477`, binary `d12feec0`):
+
+Instructions (G) and the change, no-proof then proof:
+
+| instance | 1 000 np | 10 000 np | 40 000 np | 1 000 p | 10 000 p | 40 000 p |
+|---|---|---|---|---|---|---|
+| cyclic-rcpsp_easy_6 | 6.48 → 6.45 (-0.5 %) | 58.03 → 57.72 (-0.5 %) | 250.6 → 249.3 (-0.5 %) | 64.38 → 64.37 (-0.0 %) | 646.4 → 646.4 (+0.0 %) | 2 519.9 → 2 520.2 (+0.0 %) |
+| mspsp_hard_01 | 7.36 → 7.00 (-5.0 %) | 82.88 → 73.13 (**-11.8 %**) | 542.7 → 449.1 (**-17.3 %**) | 12.83 → 12.46 (-2.9 %) | 132.2 → 122.3 (**-7.5 %**) | 757.7 → 662.8 (**-12.5 %**) |
+| rcpsp_11 | 3.20 → 3.10 (-3.1 %) | 61.31 → 58.44 (-4.7 %) | 629.0 → 591.9 (**-5.9 %**) | 20.54 → 20.44 (-0.5 %) | 196.7 → 194.2 (-1.3 %) | 1 151.4 → 1 116.1 (-3.1 %) |
+| openshop_gp10-4 | 4.48 → 4.22 (-5.9 %) | 71.05 → 65.84 (**-7.3 %**) | 559.6 → 515.0 (**-8.0 %**) | 110.38 → 110.14 (-0.2 %) | 200.9 → 196.0 (-2.4 %) | 776.0 → 731.6 (**-5.7 %**) |
+| QR72 | 2.01 → 1.72 (-14.6 %) | 32.36 → 26.63 (**-17.7 %**) | 201.8 → 170.4 (**-15.6 %**) | 3.18 → 2.87 (-9.5 %) | 46.87 → 40.86 (**-12.8 %**) | 271.7 → 238.0 (**-12.4 %**) |
+| QR48 | 1.35 → 1.19 (-12.1 %) | 22.15 → 19.43 (**-12.3 %**) | 70.60 → 62.72 (**-11.2 %**) | 2.09 → 1.93 (-7.8 %) | 31.63 → 28.74 (**-9.1 %**) | 95.69 → 87.31 (**-8.8 %**) |
+
+The gain grows with the budget on mspsp and rcpsp_11 (S1's lists and S3's trail grow with the run)
+and is flat on the codes (A1's passes are per resolution). cyclic does not move: its no-proof node
+is D-0140 E3's learned PB rows (T3's) and its proof node is the proof writing (T5's).
+
+**Peak RSS**: the final binary is LOWER than `main` on eleven of the twelve 40 000-node runs, by 4 to 8 %
+(mspsp 1 293 → 1 217 MB no-proof and 1 542 → 1 439 MB proof, openshop 939 → 865 MB, rcpsp_11 568 →
+527 MB, QR72 367 → 341 MB, cyclic proof 222 → 218 MB; cyclic no-proof equal), because a learned
+clause's citation text is no longer held. At 10 000 nodes it is lower on ten of twelve; cyclic is
+higher by 3 and 9 MB (43 → 46, 195 → 204), within the GC's run-to-run spread at that size.
+
+**The scaling lane**, `make scaling ARGS="-j 16"`, per-node instructions late over early (gate 57's
+report on the same `main` binary, then this batch's gate on the final binary `d12feec0`):
+
+| line | ratio before | ratio after | early (instr/node) before → after | late before → after | late - early before → after |
+|---|---|---|---|---|---|
+| QR72 noproof | 1.6752 | 1.7314 | 3 372 784 → 2 767 506 | 5 650 100 → 4 791 783 | 2 277 316 → 2 024 277 (-11.1 %) |
+| QR72 proof | 1.5447 | 1.5582 | 4 854 459 → 4 218 325 | 7 498 779 → 6 573 102 | 2 644 320 → 2 354 777 (-10.9 %) |
+| rcpsp_11 noproof | 2.1333 | 2.1147 | 6 457 077 → 6 148 991 | 13 775 195 → 13 003 084 | 7 318 118 → 6 854 093 (-6.3 %) |
+| parity noproof | 2.7161 | 2.8348 | 3 338 838 → 3 103 565 | 9 068 457 → 8 797 940 | 5 729 619 → 5 694 375 (-0.6 %) |
+| parity proof | 2.1380 | 2.1843 | 5 037 661 → 4 807 910 | 10 770 435 → 10 502 137 | 5 732 774 → 5 694 227 (-0.7 %) |
+
+**The ratios did not fall, except rcpsp_11's.** Every early and every late per-node cost fell, but
+on QR72 and parity the early segment fell proportionally more (QR72 -18 % early against -15 % late),
+so the ratio of the two rose. What the fixes took is mostly a per-conflict constant (A1's passes, S1's
+lists while the database is still small), not the part that grows: the growing part, late minus
+early, fell 11 % on QR72, 6 % on rcpsp_11 and under 1 % on parity. The ratio is the wrong lens for a
+saving of this shape, and M11-T6's `--enforce` should read it with that in mind: a batch that cuts a
+constant can raise the ratio while every node gets cheaper. What still grows on parity is not in
+this batch's files (D-0140 E1 to E3, T3's, the learned-clause wakes).
+
+### 5. Byte identity
+
+- **The differential lane** on `b9e266e` (every fix but §3's revert): `make diff ARGS="--tier all
+  -j 24"` **301 of 301 runs equal** the reference, and `--debug --tier all -j 24` **289 of 289**,
+  where S3's and A1's cross-checks run at every call. The lane covers the default, audit off,
+  no-proof, `lbd`, `fifo`, the `-po` variants, `nopb`, `bits0`, and restarts, activity and alternate,
+  which run `apply_globals`, `count_learned_activity`, the `kept` filter and the analysis under every
+  strategy.
+- **The measurement runs** (§4): 36 of 36 identical in stdout, `--stats`, `.pbp` and `.opb`, for the
+  final binary and for each intermediate one at 10 000 nodes.
+- **The unit suites**, `dune runtest --root . --force` under `ulimit -v 4000000` at `d4e8477`:
+  rc 0, no failure, every D-0152 test passing (12 lines), peak RSS 99 MB.
+- **The gate**: `make check` on a fresh node clone at `d4e8477` (`/scratch/arthur/wave52-batch4b-gate.sh`, gate 57's script with no `--update` line): rc 0, peak RSS 99 MB (`make_check_wall 25.87 s peak_rss 98724 kB`), and all 193 models' stdout, exit code, `.opb` and `.pbp` byte-identical to gate 57's binary `9571b17c` (0 differences). In the same script, on the final binary `d12feec0`: the lane 301 of 301 and the debug pass 289 of 289 equal, the scaling lane rc 0 (the table above).
+
+### 6. What would reverse this
+
+- A criterion other than `one_uip` that reads `v_nodes` in a hot loop would pay `Frontier.nodes`
+  per step again; the lazy list costs nothing only to a criterion that reads the count.
+- `first_fail`'s early stop rests on `type order`'s contract that every candidate is unfixed. An
+  order that hands it fixed variables would get a different variable; `Debug` does not check it.
+- If the learned database must hold rows anyway (an evicting policy that re-derives, or a
+  duplicate-merging step), §3's key becomes free and should come back.
