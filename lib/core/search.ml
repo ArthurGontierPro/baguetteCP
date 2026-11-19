@@ -1588,7 +1588,12 @@ type config = {
          above (see [Limit_hit]), so a [true] there leaves through the same path. A
          predicate that depends only on the world (the clock, the node count) is
          unaffected by being asked more often; one that COUNTS its calls is not, which
-         is why [stop_poll_runs = 0] exists. *)
+         is why [stop_poll_runs = 0] exists.
+
+         M6-T23 (D-0149): the same knob governs the two polls added there, inside a
+         conflict's [Trace.emit] (every trail entry) and inside PB conflict analysis
+         (every elimination and every ladder rung): [inner_stop] below. So [0] still
+         means node entry only, everywhere. *)
   stop_poll_runs : int;
       (* M6-T21. Completed propagator runs between two asks of [stop] inside
          [Engine.propagate]; [0] asks at node entry only, which is M6-T9's contract
@@ -2244,6 +2249,11 @@ let pb_level_verdict stats ~(closure : int list) ~(pb : int list) ~asserting_lev
    than left a paragraph: the derivation must cite constraint ids that are on the page at
    level 0. A [pol] citing a hole line across levels is the violation learn.ml's header
    says M2-L6's reduction steps are the first thing that could write. *)
+(* M6-T23 (D-0149): the stop as asked INSIDE a node, by a conflict's trace and by PB
+   conflict analysis. [stop_poll_runs = 0] is M6-T9's contract, node entry only, and it
+   holds for these two polls as it does for [Engine.propagate]'s. *)
+let inner_stop cfg = if cfg.stop_poll_runs > 0 then cfg.stop else fun () -> false
+
 (* M2-L15: returns the level set the learned row names, paired with its own asserting
    level -- [None] when no row was learned. The return value is DATA for
    [pb_level_verdict]; the default build compares it and acts on none of it. *)
@@ -2253,8 +2263,8 @@ let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_conve
   else (
     stats.n_pb_attempts <- stats.n_pb_attempts + 1;
     match
-      Pb_analysis.analyse ~stop:cfg.stop store c ~row_of:(Engine.row_of engine store)
-        ~name_of:(Engine.name_of engine)
+      Pb_analysis.analyse ~stop:(inner_stop cfg) store c
+        ~row_of:(Engine.row_of engine store) ~name_of:(Engine.name_of engine)
         ~ladder_id:
           (if cfg.pb_ladder then Encoding.consistency_id ctx.Justify.encoding
            else fun _ _ -> None)
@@ -2833,7 +2843,7 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
              1.9 GB of trace and took 20 minutes with nothing asking; the lines already
              written are a valid prefix (see [Trace.Stopped]) and this node has written
              nothing else yet. *)
-          (try Trace.emit ~stop:cfg.stop ctx trace store
+          (try Trace.emit ~stop:(inner_stop cfg) ctx trace store
            with Trace.Stopped ->
              stats.stopped_in_trace <- true;
              raise Limit_hit);

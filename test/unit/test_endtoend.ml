@@ -1302,7 +1302,15 @@ let test_m6_time_limit () =
       (* (1)-(4) the stopped satisfaction run. *)
       (let compiled, opb, pbp, poc, writer, ctx, check = m6_setup dir "stop" m6_pigeons in
        let stats = Search.stats_create () in
-       let config = { Search.default_config with Search.stop = m6_after 6 } in
+       (* [m6_after] COUNTS its calls, so this lane asks for M6-T9's contract, the stop
+          asked at node entry only, which is [stop_poll_runs = 0] (D-0136). It ran on the
+          default config until M6-T23 (D-0149) added polls inside a conflict's trace and
+          PB analysis: those ask a counting predicate more often, and on the default
+          config this lane then stops inside the first conflict's trace instead of at the
+          7th node. *)
+       let config =
+         { Search.default_config with Search.stop = m6_after 6; stop_poll_runs = 0 }
+       in
        let r =
          match
            Search.solve ~engine:compiled.Baguette_flatzinc.Compile.engine
