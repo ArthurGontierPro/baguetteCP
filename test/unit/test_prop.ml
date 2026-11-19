@@ -8090,9 +8090,14 @@ let test_regular_letter_reasons () =
         (regular_product (List.init n (fun _ -> [ 0; 1; 2; 3 ])))
     in
     let value_of (w, st) name =
-      Scanf.sscanf_opt name "x%d%!" (fun i -> w.(i)) |> function
-      | Some v -> v
-      | None -> Scanf.sscanf name "s%d_%d" (fun i q -> if st.(i) = q then 1 else 0)
+      let rest = String.sub name 1 (String.length name - 1) in
+      match (name.[0], String.index_opt rest '_') with
+      | 'x', None -> w.(int_of_string rest)
+      | 's', Some u ->
+          let i = int_of_string (String.sub rest 0 u)
+          and q = int_of_string (String.sub rest (u + 1) (String.length rest - u - 1)) in
+          if st.(i) = q then 1 else 0
+      | _ -> failwith ("test_regular_letter_reasons: a fact on " ^ name)
     in
     let holds sol (f : Reason.fact) =
       let v = value_of sol (Reason.fact_owner f) in
