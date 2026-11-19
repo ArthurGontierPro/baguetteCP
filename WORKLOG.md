@@ -20,7 +20,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M7-T31 and M6-T23 | `lib/core/search.ml` (the decision closure, `branch_assign`, the stopped path), `lib/core/learn.ml`, `lib/core/analysis.ml`, `lib/core/trace.ml`, `lib/core/retention.ml` and `lib/proof/writer.ml` (the finaliser only), their unit tests, new `test/models/*` + `test/expected/`, `test/unit/test_mutation.ml`, `docs/DECISIONS.md` (D-0148, D-0149), `docs/ROADMAP.md` M7-T31 and M6-T23 rows | agent-proofbugs (`wave50-proofbugs`) | 2026-11-19 |
-| M7-T28 (first steps) and M7-T29 (the gcc half) | `mznlib/*.mzn`, `lib/core/prop/gcc.ml`, a new `lib/core/prop/regular.ml` (+ `docs/ARCHITECTURE.md` §1 and `CLAUDE.md`'s map), `lib/flatzinc/compile.ml` (dispatch lines only, in one separated block: M11-T7 is optimising that file), new `test/models/*` + `test/expected/`, `test/unit/test_prop.ml`, `docs/DECISIONS.md` (D-0146 appended), `docs/SPEC.md` §2.1 (the builtins table), `docs/ROADMAP.md` M7-T28/T29 rows | agent-globals (`wave49-globals`) | 2026-11-18 |
 
 ## Cross-session requests
 
@@ -530,7 +529,28 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M8-bits-encoding-T3 (steps 1, 2 partial; T3 stays WIP) | agent-t3 + agent-t3b (`wave44-t3`) | 2026-11-18 | **D-0134 §4-§7.** maxmin over a bits scope by selector rows + one `Resolve` `pol` per pruning, selectors listed in `sol`/`soli`; `int_ne`/`int_lin_ne` released (the A/B pair resolved); `Justify.is_bits_derivation` (a T2 latent). 173/173 verified at W none/0/8, 165 byte-identical at none; gate rc 0 on `20c324f`, 85 MB. The 177 at W = 0: 73 -> 108 complete `.opb`. Open: reified holds, steps 3-5 |
 | M11-complexity-T1 | agent-inventory (`wave47-inventory`) | 2026-11-18 | **D-0140.** The inventory, read-only: 48 items, each with what it grows with, how often it runs, its measured marginal share, the fix, the batch (T3/T4/T5), the byte risk and the reference. Six instances (QR48, QR72, rcpsp_11, mspsp_hard_01, cyclic-rcpsp_easy_6, openshop_gp10-4) at 1, 1k, 10k, 40k nodes, both modes; scratch patches S1 (`count_learned_activity`), S2 (retention), S3a-c measured byte-identical; outputs in `bench/perf/` |
 | M11-complexity-T2 | agent-lanes (`wave47-lanes`) | 2026-11-18 | **D-0141.** `make diff`: 25 instances (QR48, QR72, 19 Challenge in the fast tier, D-0140's six in the slow tier; 958 KB gz in `bench/diff/corpus/`) x 9 configurations (default, audit0, noproof, lbd, fifo, lbd-po, fifo-po, nopb, bits0), 232 runs at fixed BAGUETTE_NODE_LIMIT, stdout + rc + counters (SEARCH/WORK) + .opb/.pbp sha256 against `bench/diff/reference/` (e8354a74), plus a BAGUETTE_DEBUG pass (223 runs, f9bf6c4). Red binary: 198/232 differ while the 179 models show 0. `make scaling`: instructions:u per node, late over early, ratchet + 0.5 %, report-only until T6; teeth caught on 4 of 5 lines. Neither in `make check`; the gate runs both after it |
+| M7-T28 (first steps; the row stays IN PROGRESS) and M7-T29 (the gcc half) | agent-globals (`wave49-globals`) | 2026-11-18 | **D-0146.** `regular` native (`lib/core/prop/regular.ml`, DOMAIN, every pruning one `rup`, backward chains as root lemmas via `Encoding.add_root_lemma`, mznlib `fzn_regular`/`fzn_regular_set`, 3 mutation lanes, 4 models); the closed gcc forms pinned (std already routed them) with the implied sum; a repeated gcc variable copied by `Builder.split_gcc_repeats`; `inverse` design record and probes (§7). Gate: make check rc 0, 189 models, peak RSS 97 056 kB; diff lane 232/232; Challenge numbers in D-0146 §6 |
 ## Handoff notes
+## M7-T28 (first steps) and M7-T29 (gcc half) handoff, 2026-11-18 (agent-globals, `wave49-globals`): D-0146
+
+`regular` is native: `lib/core/prop/regular.ml`, DOMAIN consistent over the letters and `(n+1)*Q` state
+flags that `mznlib/fzn_regular.mzn` / `fzn_regular_set.mzn` introduce as `var bool` (a dead state is a
+flag at 0, an ordinary trail entry). The `.opb` holds only the DFA (exactly-one per layer, START, ACCEPT,
+forward clauses per symbol run); the backward chains are ROOT LEMMAS derived as `rup` by
+`Encoding.start_proof` from `Encoding.add_root_lemma` (a new appended block in `encoding.ml`; a model with
+none writes nothing). Every pruning is one `rup`, `Single_row`, no new `Explanation` constructor. The
+closed gcc forms were already on gcc.ml through std (the D-0122 census reads sources); mznlib now pins them
+and adds `sum(counts) = |x|`. A repeated gcc variable is copied by `Builder.split_gcc_repeats` (in the
+builder, not compile: `bin/main.ml` prints from `Model.vars`). Next session: the nonograms that still time
+out want smaller reasons (on letters, not flags; 1UIP clauses are 16+ literals); `inverse` has its design
+record and probes in D-0146 §7 (stage 1 channel filtering, stage 2 needs lemma ids alldiff can cite);
+`fplen` (M7-T29's other half) untouched. `test/unit/test_trace.ml` (one I-X10 row) and
+`test/unit/test_compile.ml` (one relation arm) were touched for the new constructor/module.
+**Measurement read 2026-11-19 (D-0146 §6, 160 of 160, grouped by the routes the flattened model takes):**
+`regular`-only instances 5 -> 18 complete of 65 (all VERIFIED), community-detection 0 -> 16 answers of 20
+(one OPT whose proof veripb could not check: out of memory under the cap on a 14M-wide objective), the
+closed-gcc instances unchanged (gbac's width wall). Nothing is pending on the node.
+
 ## M10-search-strategy-T4 handoff, 2026-11-18 (agent-retention, `wave45-retention`): D-0139
 
 - **What changed.** `lib/core/retention.ml` gains `gate`, the lock rule (`locked_instances`),
@@ -625,7 +645,6 @@ its exactness rests on `Learn.minimise` (one literal per variable and polarity, 
 E3 (b), E6 and the blocker reorder runs and are left as decisions with their measured gains (section 9).
 T4 should take `Search.decision_entries` over the marks (S3). Its per-entry cost is now one load, but the
 walk itself still covers the whole trail at every conflict.
-
 ## M11-complexity-T2 handoff, 2026-11-18 (agent-lanes, `wave47-lanes`): the differential and scaling lanes, D-0141
 
 Two `make` targets, neither in `make check`. `make diff` runs 25 instances of `bench/diff/corpus/` (958 KB

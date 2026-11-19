@@ -16459,3 +16459,390 @@ and the activity heuristic, as M10-T5 plans.**
 - **Jamali and Mitchell's simplified reduction and CrystalBall**: not built. The first is a
   different ranking inside the same `evict` (one function). The second needs features this
   solver does not log yet. Neither is worth building before restarts exist.
+
+## D-0146  M7-T28 first steps and M7-T29's gcc half: the closed gcc forms were never decomposed, a repeated gcc variable is copied away in the model, and `regular` is a layered graph of state flags whose every pruning is one `rup` against its rows and its backward-chain lemmas
+
+**Status**: **DONE** (2026-11-19; opened 2026-11-18, agent-globals, `wave49-globals`). The contract
+is ROADMAP rows M7-T28 (the decomposed globals that kill the search, D-0122) and M7-T29 (the gcc
+refusal of D-0121). Sections 1 and 2 are done and measured; section 3 is the design of
+`regular`, written and checked on the checker BEFORE any solver code (section 4); section 5 is
+the implementation, section 6 the Challenge measurement (final, 160 of 160), section 7 the design
+record of `inverse`.
+
+### 1. `global_cardinality_closed` and `_low_up_closed`: the route already existed
+
+D-0122's census counts 30 instances using `global_cardinality_closed` (26 of them time out with
+no solution) and lists it as **not native**, with the note "gcc over a closed value set, one
+mznlib line each onto gcc.ml". The census reads the model SOURCE (`challenge_globals.py`:
+"an instance uses a global when its model ... calls it"); it does not look at the flattened
+`.fzn`. Flattened, the closed forms were already on `gcc.ml`:
+
+- MiniZinc 2.10.1's `std/fzn_global_cardinality_closed.mzn` is `forall(i)(xs[i] in cover) /\
+  global_cardinality(xs, cover, count)`, and `global_cardinality` reaches
+  `fzn_global_cardinality`, which `mznlib/fzn_global_cardinality.mzn` keeps whole (D-0078).
+- `std/fzn_global_cardinality_low_up_closed.mzn` is the same over
+  `global_cardinality_low_up`, which reaches mznlib's `fzn_global_cardinality_low_up.mzn`
+  (D-0087), plus the par check `|xs| in sum(lbound)..sum(ubound)`.
+
+**Measured** on 2.10.1 (node `fataepyc-06`): the four provenance sources
+`mznlib/test/gcc_{,low_up_}closed_src_{sat,unsat}.mzn`, flattened against `main`'s mznlib (the
+two new files removed), emit exactly one `baguette_global_cardinality` call each and no
+`int_eq_reif`; the domain restriction lands on the declarations. So the 26 empty time-outs are not
+a missing route, and nothing in this row changes how those instances reach `gcc.ml`.
+
+What the two new files (`mznlib/fzn_global_cardinality_closed.mzn`,
+`mznlib/fzn_global_cardinality_low_up_closed.mzn`) do instead:
+
+1. **They pin the route**, so a std that decomposed the closed form again would not change what
+   baguette receives without a line of this repository changing.
+2. **They state the implied row** `sum(counts) = |xs|`, the one consequence of a closed cover
+   `gcc.ml` does not derive (its rules are interval capacities and per-value tallies, never the
+   total). It is an `int_lin_eq`, carried by `Lin_eq` with its own `pol`. It holds only when
+   the cover has no repeated value, and the files guard on that (`card` of the cover as a set
+   against its length) rather than assume it. For `_low_up_closed` the counts are declared in
+   the file, on the bounds `fzn_global_cardinality_low_up.mzn` gives them, so the row has
+   something to sum.
+
+Flattened with the new files the same sources emit one `baguette_global_cardinality` and one
+`int_lin_eq`; all four solve as their names say with proofs VERIFIED by 3.0.2
+(`test/models/gcc_{,low_up_}closed_{sat,unsat}.fzn`, `test/expected/`). Whether the implied row
+changes anything on the 30 instances is section 6's measurement.
+
+### 2. M7-T29, the gcc half: a repeated variable is copied away in the model
+
+`fzn_global_cardinality` with the same variable twice was refused by
+`Compile.post_global_cardinality` (D-0121: nine instances, community-detection 2017, 2021 and
+2026). The cause is MiniZinc's unification: the model's must-link constraints `x[a] = x[b]` make two
+array cells one variable, and `global_cardinality_low_up(x, 1..k, 0, n)` then names it twice.
+Its tally contribution is its multiplicity, and every cancellation in `gcc.ml`'s derivations
+assumes one.
+
+**Two ways out, and the choice.** Teaching `gcc.ml` multiplicities means weighting rule A's
+`|H|`, rule (a)'s saturation test and rule C's tallies, and scaling every ALO and drop line in
+every derivation by the multiplicity: every rule and every proof shape of a 1 200-line module
+whose lines are each measured on the checker. **Normalising the repeat away** costs one pass over
+the model: every occurrence after the first is replaced by a fresh variable declared on the
+original's domain and tied to it by `int_eq`. `gcc.ml` never sees a repeat, the `.opb` is the
+original model with one defined variable per repeat (so it decides the same solutions, projected),
+and nothing in the proof machinery changes. The cost is propagation between the copies: `int_eq`
+is `Lin_eq`, bounds consistent, so a hole `gcc.ml` punches in a copy does not reach the original.
+On the instances that produce the shape the gcc is `low_up` with bounds `[0, n]`, which prunes
+nothing, so the trade costs them nothing measurable. **Chosen: normalise.**
+
+**Where.** `Builder.split_gcc_repeats`, applied by `Builder.finish`, not `Compile`. Measured: the
+first version lived in `compile.ml` and the solver then died printing the solution with "solver
+variable 2 is outside the model's 2 variables", because `bin/main.ml` maps the store back onto
+`Model.vars` and a variable the compiler added is a store variable the model does not have. In
+the builder the copy is a model variable like any other. A copy is named
+`X_INTRODUCED_gcc_copy_<k>` (the flattener's own convention; `check_name_collisions` refuses a
+clash), appended after every model variable so no index moves, and a model with no repeat comes
+back physically unchanged. The refusal in `post_global_cardinality` stays as a guard for a
+`Model.t` built by other means.
+
+`test/models/gcc_repeat_{sat,unsat}.fzn` (from `mznlib/test/gcc_repeat_src_*.mzn`): the SAT one
+has value 1 occurring once among `[a, a, b]`, so its only solution is `[2, 2, 1]` and a front
+end that counted the repeat once would also accept `[1, 1, 2]`; the UNSAT one asks each of 1 and
+2 once among three cells. Both VERIFIED.
+
+### 3. `regular`: the design
+
+`regular(x, Q, S, d, q0, F)`: the word `x[1..n]` drives the DFA with states `1..Q`, transition
+`d[q, v]` (0 = fail) and start `q0` to a state in `F`. MiniZinc 2.10.1's decomposition is
+`n + 1` state variables `a[i] in 1..Q` and `a[i+1] = d[a[i], x[i]]`, an `array_int_element` on a
+computed index per layer; D-0122 measured it at 0 complete of 94 attempted instances, 70 of them
+timing out with no solution.
+
+**3.1 The model rows.** The route is `baguette_regular(x, Q, smin, d, q0, F, s)`
+(`mznlib/fzn_regular.mzn`): `d` flattened row-major over the contiguous symbol range
+`smin..smin+W-1` (0 for a value outside the alphabet, which is how `fzn_regular_set`'s non-
+contiguous `S` is carried), `F` as an array, and `s` an array of `(n+1) * Q` **state flags**
+`var bool`, introduced by the mznlib `let`, `s[i, q]` meaning "after `i` letters the automaton is in
+`q`". The `.opb` holds, over order literals of `x` and the flags' own literals:
+
+- `ALO_i`: `sum_q s[i,q] >= 1` and `AMO_i`: `sum_q ~s[i,q] >= Q - 1`, for every layer `i = 0..n`;
+- `START`: `s[0,q0] >= 1`; `ACCEPT`: `sum_{f in F} s[n,f] >= 1`;
+- `FWD(i, q, R)`: `~s[i,q] \/ x_i notin R \/ s[i+1, t]` for every layer `i < n`, state `q`, and
+  **symbol run** `R = [a, b]`, where `t = d[q, R]` and the clause loses its last literal when
+  `t = 0`. `x_i notin R` is `~x_i_ge_a \/ x_i_ge_(b+1)` with a constant half dropped at a
+  declared bound. A run is a maximal stretch of consecutive values of `x_i`'s declared hull whose
+  COLUMNS of `d` are identical (every state goes to the same place on each of them), so the
+  values outside the alphabet are one run, and a run is exactly the granularity at which every
+  argument below holds.
+
+That is the DFA's own semantics (GCS writes the same rows, `dev_docs/regular.md` "OPB encoding"),
+and it is all the `.opb` says: nothing in it is a consequence the solver computed.
+
+**3.2 The root lemmas.** The forward rows cannot carry a FORWARD death (a state no live
+predecessor edge reaches): that argument is two-dimensional (every pair `(q, v)` of layer `i`
+misses `q'`), and unit propagation fixes neither `a` state nor a value of `x_i`. GCS's answer, and
+this one, is the **backward chain**, one per layer `i < n`, state `q'` and run `R`:
+
+    B(i, q', R):  ~s[i+1,q'] \/ x_i notin R \/ OR_{q : d[q,R] = q'} s[i,q]
+
+derived ONCE, at the start of the proof, as `rup`: negate it and `AMO_(i+1)` clears every other
+flag of layer `i+1`, every `FWD(i, q, R)` with `q` outside the disjunction then forces `~s[i,q]`,
+and `ALO_i` is empty. They are written by `Encoding.start_proof` from a list compile.ml fills
+(`Encoding.add_root_lemma`, one appended block in `encoding.ml`), after the direct encoding and
+before search, never deleted until the end-of-run sweep (search.ml retires every live id before
+the conclusion). Deriving them rather than putting them in the `.opb` is the point: the checker
+verifies each one, so a bug in the inversion of `d` is a REJECTED proof, not a stronger model with
+a verified wrong answer (section 4, probe p2).
+
+**3.3 The propagator** (`lib/core/prop/regular.ml`, new; the layered-graph filtering of Pesant
+2004). Its scope is `x` and the flags, and the flags ARE store variables -- that is what lets every
+state death be an ordinary trail entry with a reason, written by `Trace` like any other pruning,
+instead of a proof line the propagator would have to write itself (GCS's `~state[i][q]` cache).
+One call:
+
+1. **Fixed flags.** A flag fixed to 1 kills every other flag of its layer (`AMO_i`); two fixed
+   to 1 in one layer is a conflict. `START` and `ACCEPT` kill the flags of layer 0 other than
+   `q0` and the flags of layer `n` outside `F` (their reason is empty).
+2. **Forward.** Layer by layer from 0: `q'` at `i+1` is reached iff some reached `q` at `i` has
+   an edge `d[q, v] = q'` with `v in dom(x_i)`. Each unreached live flag is killed (P1).
+3. **Backward.** Layer by layer from `n - 1`: a reached `q` at `i` survives iff some edge leaves
+   it on a value of `dom(x_i)` into a live flag of `i+1`. Each other is killed (P2).
+4. **Values.** `v in dom(x_i)` survives iff some live `q` at `i` has `d[q, v]` live at `i+1`;
+   every other value is removed (P3), one value at a time, so a bound move is a one-value step.
+5. **Fixing.** A layer left with one live flag fixes it to 1 (P4, `ALO_i`). A layer left with
+   none is a conflict (`ALO_i`, the layer's dead flags as facts).
+
+**Consistency: DOMAIN** (SPEC 3.2), for a scope where no variable of `x` repeats: after one call
+every remaining value of every `x_i` lies on an accepting path through the current domains, and
+so does every remaining value of every flag (1 for a live state; 0 because its layer holds
+another live state, or the flag is fixed). That is the definition, over the joint scope. A
+repeated `x` variable couples two layers the graph treats as independent, so that instance is
+packed as `Regular.Aliased`, declared `Checking`, with the same code.
+
+**3.4 Reasons and explanations, as data.** Every pruning's reason is BOUND facts (D-0026):
+
+- P1, `s[i+1,q']` dies forward: per run `R` of `x_i` meeting `[lo, hi]` of `x_i`, either every
+  predecessor `q` of `q'` on `R` is dead (the facts `s[i,q] <= 0`), or every value of `R` in
+  `[lo, hi]` is a hole (the facts of each hole's remover, D-0075's technique, as `element.ml`
+  does); plus `x_i >= lo` and `x_i <= hi` where they are not the declared bounds.
+- P2, `s[i,q]` dies backward: the same per run, with the successor `d[q, R]` dead (or 0) in place
+  of the predecessors.
+- P3, `x_i <> v`: per state `q` with `d[q, v] > 0`, either `s[i,q] <= 0` or `s[i+1, d[q,v]] <= 0`;
+  plus the bound fact `x_i >= v` (resp. `<= v`) when `v` is the current lower (upper) bound, since
+  the claim is then the settled bound and its negation must pin `x_i` to `v`.
+- P4: the other flags of the layer dead. Conflicts: the facts of the pruning that would empty,
+  plus the fixed flag; or the layer's dead flags.
+
+The explanation is `Explanation.clause` of the claim and the negated facts, deferred: the trace
+line itself, which `Justify` memoises against it. **No new `Explanation` constructor** and no
+`deriving_ahead`: every line is RUP once its facts are assumed, against the `.opb` rows, the root
+lemmas and the earlier trace lines (a hole is cited through its remover, so its own line fires).
+Under I-X10 the family is **`Single_row`** in the sense the table already gives `element.ml`:
+one constraint, several rows, plus lines on the page before search -- I-X10's own wording is
+"RUP against the `.opb` plus the lines already on the page".
+
+**3.5 What it costs.** Rows: `(n+1)` ALO/AMO pairs, `n * Q * runs` forward rows and as many
+lemmas, `runs <= |dom x_i|`. A call is `O(n * E)` with `E` the automaton's non-failing edges
+(the transition table is scanned once per layer, per live state, over its out-edges). The flags are
+`(n+1) * Q` Booleans of the store, each one order literal. The decomposition it replaces was
+`n + 1` integer state variables plus an element per layer, so the width is comparable and the
+propagation is not.
+
+### 4. The proof story, checked before coding
+
+`bench/regular_spike/` (`gen_probe.py`, `probe_regular.sh`), run on `fataepyc-06` against VeriPB
+3.0.2 (`d5644ca4`) on 2026-11-18 before any solver code. Instance 1: `Q = 3`, alphabet `{1, 2}`,
+`x_i in 1..3` (3 is outside the alphabet), `q0 = 1`, `F = {3}`, `n = 3`, language `1* 2 1+`.
+Instance 2 is built so that a lemma is load-bearing (two live states in layer 1 and three values
+of `x_1` that unit propagation cannot fix).
+
+| probe | content | verdict |
+|---|---|---|
+| p1 | all 27 lemmas; root deaths by START/ACCEPT, a forward (P1) and a backward (P2) death, two top-bound value removals (P3); below a decision `x0 >= 2` a P1 with its fact and a P4; then `sol` with the flags and `conclusion SAT` | VERIFIED SATISFIABLE |
+| p2 | one lemma too strong (its predecessors dropped, at layer 1) | refused: "The constraint is not implied by reverse unit propagation (RUP)" |
+| p4 | the P1 below the decision with its fact dropped | refused, same wording |
+| p7 | a false bound move (`x1 >= 2` under `x0 >= 2`, where 1 is supported) | refused, same wording |
+| p8 | an interior hole `x1 <> 2` with its fact | VERIFIED |
+| p9 | `sol` naming only `x`, no flag | VERIFIED SATISFIABLE: the checker fills the flags by propagation (the solver lists them anyway, they are store variables) |
+| p10 | `sol` of a word the DFA rejects, with its honest state run | refused: "The given assignment falsifies the constraint with ID 13" |
+| p11 | `rup >= 1` on a satisfiable instance | refused, RUP wording |
+| q1 / q2 | instance 2: a forward death below the root with all lemmas / with the three it needs dropped | VERIFIED / refused, RUP wording |
+
+Measured facts that shaped the design, not only confirmed it: dropping ONE lemma is often not a
+negative (p3, and p5/p6, verify) because the sweep from the top fixes `x_i` and the forward rows
+finish the argument, and at layer 0 a "too strong" lemma is implied by `START` -- the negative
+controls had to be built where a layer holds two live states and a value range unit propagation
+cannot fix (q2).
+
+### 5. `regular` as built, and what checks it
+
+**Files.** `lib/core/prop/regular.ml` (new; its header is section 3 in the code's words);
+`lib/flatzinc/compile.ml`, one block `post_regular` plus its dispatch arm and its bits-hold arm
+(the letters stay on the order encoding: the rows are over their ladders); `Model.Regular` and
+its oracle arm (`Model.regular_run`), `Builder`'s `baguette_regular` arm; one appended block in
+`lib/proof/encoding.ml` (`add_root_lemma`, `emit_root_lemmas`, called last in `start_proof`);
+`mznlib/fzn_regular.mzn`, `mznlib/fzn_regular_set.mzn`. No `Explanation` constructor, no
+`deriving_ahead`, nothing in `justify.ml`, `trace.ml`, `search.ml`.
+
+**Three things the design did not say and the code had to.**
+
+1. **One value at a time.** A letter value removed at a bound is its own trail entry, so the
+   claim is the settled bound and its negation pins the letter to the ONE value whose edges
+   the forward rows refute; a multi-value bound move would leave the letter unpinned and the
+   line not RUP. The reason then carries the bound fact `x >= v` (or `<= v`) that pins it.
+2. **The tail's order.** Per-value facts first, the letter's bound facts last. Nothing in the
+   proof depends on it; it lets the `death-fact` mutation lane drop the last literal and hit
+   the decision fact instead of a root fact the page restores (GCS's trap 3).
+3. **A layer emptied, or a fixed flag killed, is reported by the propagator**, never by
+   `Store.apply`'s failing arm, whose derivation would be the one pruning's and not the
+   contradiction (element.ml's reason, the same rule).
+
+**Cost, measured.** On `2011_nonogram_non_med_1` (100 regulars, 72 369 flags) the first version
+spent a quarter of its time in the GC and in polymorphic hashing of reason facts; the call now
+allocates only the reasons it writes (predecessor table and scratch arrays at `make`, dead-flag
+facts deduplicated by a stamp). The proofs of the two versions are the same line for line (same
+facts, same order). The node rate stays about 140 nodes/s over its first 600 nodes and falls to 40/s over a minute
+as the learned database grows, most of it outside `regular.ml` (learned-clause instances,
+analysis), with 1UIP clauses of 16+ literals: a flag death's reason
+is every dead predecessor, and the cut lands on flags. Smaller reasons (on letters only) are the
+obvious next lever for the nonograms that time out (section 6); they are not in this row.
+
+**Tests.**
+
+- `test/unit/test_prop.ml`, brute force: 300 random automata (2 or 3 states, alphabet `1..2`,
+  letters declared `0..3` so two values fail everywhere) x 4 random narrowings (letter bounds and
+  holes, flags fixed either way): **I-P1** (no solution lost, no conflict where one exists),
+  **DOMAIN consistency over letters and flags** (every remaining value of every variable is in a
+  solution within the current domains), **I-P2** (a second call changes nothing). 1 200 scenes,
+  370 pruned, 830 conflicts, 0 violations.
+- `test/unit/test_prop.ml`, the checker: the root-lemma counts (`n * Q * runs`: 48 for
+  instance 2, 20 for the next), and a model whose first branch fails under a decision the root
+  does not see (no two consecutive 2s, letters summing to 8): its proof, 20 lemmas and 44 trace
+  and nogood lines, VERIFIED.
+- `test/unit/test_mutation.ml`, three lanes behind a control, each refused at the RUP wording
+  ("The constraint is not implied by reverse unit propagation (RUP) from core and derived
+  database."): `lemma-rhs` (one lemma's degree raised: the lemmas are checked), `death-fact` (the
+  forward death of `s2_4` under the split `x1 <= 2`, its decision fact dropped), `no-lemmas` (all
+  48 lemmas deleted, their labels taken out of the end-of-run `del`: that death has nothing left
+  to sweep `x1` with).
+- The M2-T10 oracle (`BAGUETTE_CONSISTENCY=1`) on the four regular models: `CHECKED: regular
+  (domain)` x8, x1, x3 (some instance-checks of `regular_opt` skipped over the tuple cap, stated
+  by the oracle), no violation; `BAGUETTE_DEBUG=1` and the I-X2 audit on, all four VERIFIED.
+- Models (`test/models/`, flattened from `mznlib/test/*_src*.mzn`, every proof VERIFIED):
+  `regular_sat` (4x4 nonogram by regular expressions), `regular_unsat` (3x3 with disagreeing
+  clues), `regular_set_sat` (alphabet `3..5`, the gap 4 failing), `regular_opt` (a roster
+  maximised to 13 with a bound proof); and section 1-2's six gcc models. `check_mznlib.sh`: 26
+  ok, 0 failed (every new source flattens to its route, none to the decomposition).
+- I-X10: `regular.ml` is classified `Single_row` in `test/unit/test_trace.ml`'s table.
+
+**Gate** (fresh clone of `wave49-globals` at `b8a7817` on `fataepyc-06`, binary `c1485cc6`,
+`make check` under `ulimit -v 4000000`): rc 0, model tests 189 passed, determinism 189 models
+identical, mutation 96 checks passed, peak RSS 97 056 kB. Every test model against `main`'s
+gate-52 binary (`307879fa`): 183
+of 189 byte-identical in `.out`, exit code, `.opb` and `.pbp`; the 6 that differ are the six the
+old binary cannot read (`regular_*` x4: `baguette_regular` is unknown to it; `gcc_repeat_*` x2:
+it refused the repeat). The closed-gcc models are identical under both (the route was std's).
+**Differential lane** (`origin/wave47-lanes` merged, `make diff ARGS="--tier all -j 24"`, at `abae541` and again at `b8a7817`): 232
+of 232 runs equal the reference.
+
+### 6. The Challenge instances, before and after
+
+**The run.** `scripts/compare_run.sh` over the 160 Challenge instances whose model source calls
+`regular`, a closed gcc, or is community-detection, selected from `bench/challenge/<Y>.lst` by
+`bench/regular_spike/select_globals.py` (list at `/scratch/arthur/wave49-globals-inst.lst`).
+Each instance re-flattened with THIS branch's mznlib (MiniZinc 2.10.1, `tools/baguette.msc`),
+baguette only, 300 s, proof on, `MEM_KB=16777216`, `PROOF_CAP_KB=16000000`, 10-way, every
+complete answer's proof checked by `veripb` 3.0.2; frozen clone
+`/scratch/arthur/wave49-globals-meas-src-after` at `bde7930`, binary `08361947` (before section
+5's tail reorder and allocation change: the same prunings and the same facts per line, the
+tail's literals in another order); output `/scratch/arthur/wave49-globals-meas-after/`, all 160
+done on 2026-11-18 18:43. **Before** is wave 43's run of the sixteen editions (D-0133's baseline,
+`/scratch/arthur/wave43run/<Y>/results.tsv`, binary `a6327dc6`, **1 200 s**): the old binary had
+four times the time.
+
+**Grouped by the routes the FLATTENED model takes**, not by the source.
+`bench/regular_spike/count_routes.sh` flattened all 160 with this library and counted the
+`baguette_regular` and `baguette_global_cardinality` calls (`/scratch/arthur/wave49-globals-routes.tsv`,
+160 OK). It matters: gbac names `regular` in its source and calls it zero times once flattened,
+so the source grouping put it in the wrong row. Read with
+`bench/regular_spike/join_globals.py <list> <wave43run> <after> <routes.tsv>`; a SAT answer to
+a satisfaction problem counts as complete, a time-out with a solution as an incumbent.
+
+| route reached | n | before: complete / incumbent / no answer | after: complete / incumbent / no answer |
+|---|---|---|---|
+| `regular` only | 65 | 5 / 16 / 44 (34 time-out, 9 refused, 1 capped) | **18 / 17 / 30** (28 time-out, 2 refused) |
+| `regular` and gcc | 45 | 0 / 5 / 40 (35 time-out, 5 refused) | 0 / 6 / 39 (38 time-out, 1 refused) |
+| gcc only (the closed forms) | 30 | 4 / 1 / 25 (8 capped, 9 refused, 7 time-out, 1 error) | 4 / 2 / 24 (9 capped, 8 refused, 6 time-out, 1 error) |
+| gcc with a repeated variable (community-detection) | 20 | 0 / 0 / 20 (all refused) | **1 / 15 / 4** (3 time-out, 1 refused) |
+
+**Every complete answer whose proof was checked is VERIFIED, none REJECTED: the 18 `regular`
+and the 4 gcc.** The one exception is the community-detection OPT
+(`2021_..._rnd_n100_e5000_s500_d300_c4_p50`, 2 484 055 in 45 s): `veripb` ran out of memory
+under the harness's cap ("memory allocation of 683697504 bytes failed") on a 2 GB `.opb` whose
+`objective` is declared 14 227 894 wide. That is a finding about width (D-0028), not about these
+routes, and the answer stands UNCHECKED: no re-run with a raised cap.
+
+What moved, by name:
+
+- **`regular`, 13 new complete answers** (10 time-outs, 3 refusals before): nonograms 2011
+  `non_fast_3`, `non_fast_6`, `non_med_1`, 2012 `non_awful_5`, `non_fast_4`, `non_fast_11`,
+  2013 `dom_08`; pentominoes 2011 `_02`, `_06`, 2013 `pentominoes-int_02`, `_06`, 2020 `_02`,
+  `_06`; in 33 to 270 s. D-0122 had counted `regular` at 0 complete of 94 attempted. One new
+  incumbent (2014 `traveling-tppv_circ14bnonbal`); five refusals became attempts that time out
+  (the `_04` pentominoes, two zayenz). One regression in kind, not in answer:
+  `2021_pentominoes-zayenz_size_20_tiles_15_seed_4711` was CAPPED (proof file) and is now
+  refused by the 8 GB heap budget at 182 s; neither run answered.
+- **`regular` with gcc** (elitserien handball, rotating-workforce, generalized peaceable queens, work-task-variation): one
+  refusal became an incumbent and three became time-outs; no new complete answer. These are
+  optimisation models where `regular` is one constraint among many.
+- **The closed gcc forms** (gbac, blocks-world, gcc-benchmark): no change in kind, as section 1 predicted -- the route was std's
+  already, and the implied row does not move these instances. gbac dominates the row: 8 CAPPED
+  and 8 REFUSED at the width wall or the heap budget before and after, its load variables
+  declared tens to hundreds of thousands wide. One refusal became an incumbent
+  (`2016_gbac_reduced_UD6`), and `2026_gbac_csplib12`, a time-out with no solution at 1 200 s,
+  now finds 2058 before the heap budget stops it at 186 s (the harness files it REFUSED).
+- **The repeated gcc variable**: all 20 community-detection instances were refused; 19 are now
+  attempted, 15 with an incumbent and one OPT. The remaining refusal is
+  `2024_community-detection_Polblogs`, whose `objective` is declared 125 096 898 wide.
+
+**Reading.** The reach this row bought is `regular` on satisfaction models (nonogram,
+pentominoes: 5 -> 18 complete of 65, all verified) and community-detection (0 -> 16 answers of
+20). The nonograms still timing out are section 5's per-node cost and wide learned clauses, the
+next lever; the gcc rows are held by width, not by gcc.
+
+### 7. `inverse`: the design record, before any code (step 5 of the row)
+
+D-0122: 70 instances, 44 of the 50 attempted time out with no solution. MiniZinc 2.10.1's
+`std/fzn_inverse.mzn` is `f[i] in index_set(invf) /\ invf[f[i]] = i` and the mirror, an
+`array_var_int_element` per position, which baguette's subset does not have, so it reaches the
+solver as std's further decomposition: `n^2` reified equalities and their clauses.
+
+**7.1 The model rows** (`baguette_inverse(f, fmin, g, gmin)` from a mznlib `fzn_inverse`, the
+offsets carrying the two index sets): std's semantics as CHANNEL clauses over the order
+literals, per pair `(i, j)` of declared values, both directions, each `x = v` split into its two
+order halves:
+
+    CH(i, j)    f_i <> j  \/  g_j >= i        f_i <> j  \/  g_j <= i
+    CH'(j, i)   g_j <> i  \/  f_i >= j        g_j <> i  \/  f_i <= j
+
+`4 n^2` rows of at most three literals, no auxiliary, no direct encoding: the decomposition std
+writes, minus its reifiers.
+
+**7.2 Stage 1, the propagator: channel filtering**, `j in dom(f_i) <=> i in dom(g_j)` both
+ways, the `element` shape twice. Consistency **Checking** honestly (arc consistent on each
+channel pair, which is not domain consistency of `inverse`: that needs `all_different`'s
+matching on `f`). Every pruning is one `rup` with its facts on the tail -- the bound or the hole
+remover of the other side -- so the family is `Single_row`. **Measured** (`bench/regular_spike/
+probe_inverse.sh`, `n = 3`, 3.0.2 on `fataepyc-06`): a bound prune under a fact (`i1`) and an
+interior hole (`i2`) VERIFY; a prune the facts do not support (`i3`) is refused at the RUP
+wording.
+
+**7.3 Stage 2, `all_different` strength, and the one open question.** Both arrays of an
+`inverse` are permutations, so `all_different(f)` is implied, and running `alldiff.ml` over `f`
+and over `g` gives the matching's pruning. Its derivations cite pairwise rows `f_i <> j \/ f_k
+<> j` which the `.opb` above does not state -- and must not post as model rows (an implied row
+posted is the trust section 3.2 refused). They are ROOT LEMMAS: **measured**, the pairwise row
+is `rup` from `CH(i,j)` and `CH(k,j)` at the root (`i4` VERIFIES). So stage 2 is section 3.2's
+mechanism with one addition: `Encoding.add_root_lemma` has to hand back an id `alldiff.ml` can
+cite in its `pol`, which the regular lemmas never needed (they are used by unit propagation
+only). That API, and whether alldiff's derivations survive citing proof lines instead of model
+rows, is what a stage-2 probe must settle first.
+
+A measured surprise worth keeping: a Hall prune (`f1, f2 in {1, 2}` so `f3 >= 3`, `i5`) is
+already RUP over the channel rows of `n = 3` -- the mirror side does the counting, `g_3` having
+one possible preimage left. It is the singleton complement that makes it so; with two values
+outside the Hall set unit propagation fixes nothing, and stage 2 is still needed.

@@ -1130,6 +1130,14 @@ let ix10_table =
        the lines are often RUP anyway once their full tails are on them -- measured, not
        a reason to reclassify. *)
     ("cumulative.ml", Needs_derivation);
+    (* M7-T28 (D-0146): regular. Single_row in element.ml's sense -- one constraint,
+       several rows (exactly-one per layer, START, ACCEPT, the forward rows) -- plus the
+       backward-chain lemmas [Encoding.start_proof] derives before search, which are
+       "lines already on the page" in I-X10's own wording. Every pruning (a state flag
+       killed forward or backward, a letter value with no live edge, a flag fixed by its
+       layer) is one rup with its bound facts on the tail; measured on the checker before
+       the module existed (D-0146 section 4) and by its mutation lanes. *)
+    ("regular.ml", Single_row);
   ]
 
 (* (a) CLOSURE. OCaml cannot reflect over its own modules, so the only way to notice a
