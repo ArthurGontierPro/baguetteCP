@@ -1300,7 +1300,7 @@ runs everything right after `make check`, on fataepyc-06:
 make diff ARGS="-j 16"                      # fast tier, ~3 min: after every change
 make diff ARGS="--tier all -j 24"           # + D-0140's six instances, ~4 min: before reporting, and the gate
 make diff ARGS="--debug --tier all -j 24"   # the same under BAGUETTE_DEBUG=1 at <= 1 500 nodes
-make scaling ARGS="-j 16"                   # report-only until M11-complexity-T6
+make scaling ARGS="-j 16"                   # a gate since M11-complexity-T6 (D-0160)
 ```
 
 **`make diff`** (`scripts/diff_lane.sh`). The instances of `bench/diff/corpus/` (QR48, QR72, 19
@@ -1320,7 +1320,13 @@ configuration when a flag merges, add a line to `configs.tsv` and record it with
 **`make scaling`** (`scripts/scaling_lane.sh`, about two and a half minutes). For each line of
 `bench/scaling/plan.tsv` it runs one instance at four node budgets, reads `instructions:u` from
 `perf stat`, and prints the instructions per node of a late segment (large database) over an early
-one (small database), D-0140's measure. Per propagator run and `cycles:u` are printed as
-information. A line is OVER when its ratio exceeds `bench/scaling/baseline.tsv` by more than 0.5 %,
-a ratchet re-recorded only downward. REPORT-ONLY until M11-complexity-T6 (`ARGS=--enforce` fails
-now). Without perf it falls back to the GC's allocated words and says so.
+one (small database), D-0140's measure. Since M11-complexity-T6 (D-0160) the GATE reads the
+growing part, `growth = late - early` instructions per node: a line is OVER when its growth exceeds
+`bench/scaling/baseline.tsv`'s by more than 0.5 % of the baseline's late cost per node, and an OVER
+line fails the lane. Not the ratio, because D-0152 §4 saw it rise on 4 of 5 lines after a batch that
+made every node cheaper; the ratio, the ratio per propagator run and `cycles:u` are printed as
+information. The baseline is a ratchet: `--update` records it after a gated merge in its own commit
+and refuses while a line is OVER (`--raise` exists for a decision record only). `--report` prints
+without failing, for exploration. Without perf it falls back to the GC's allocated words and says
+so, and a line with no baseline in the metric used FAILS, because a line the gate cannot judge is
+not a pass.

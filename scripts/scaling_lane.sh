@@ -56,9 +56,11 @@
 # The margin is a fraction of the LATE segment's cost per node, not of the growth, because
 # the noise in a difference of two segments scales with the segments and not with their
 # difference: a batch that drives the growth towards zero must not make the gate tighter.
-# Default 0.004 (0.4 % of late), set from the run-to-run spread of three runs of one binary
-# on fataepyc-06 under load, and from the drift of a build that differs only in its GC
-# phase (D-0160 has the measurements). The baseline is a RATCHET: `--update` records the
+# Default 0.005 (0.5 % of late), set from measurement on fataepyc-06 (D-0160): three runs
+# of one binary spread by at most 0.11 % of late, and a build that differs only in its GC
+# phase drifted by at most 0.18 %; a planted O(database) scan per node moved the growth
+# by 0.68 % to 5.0 % of late. With `early` unchanged this is D-0141's 0.5 % on the ratio;
+# the two rules part only when `early` moves, which is the case D-0152 section 4 met. The baseline is a RATCHET: `--update` records the
 # lines as measured, in its own commit after a gated merge, and REFUSES while a line is
 # OVER its recorded baseline. Raising a baseline takes `--raise`, which a decision record
 # must justify (a search change that does more work per learned constraint on purpose);
@@ -71,7 +73,7 @@
 #   scripts/scaling_lane.sh [--enforce|--report] [--update [--raise]] [-j N] [--bin PATH] [--keep DIR]
 #
 # Environment: SCALING_PAR (default 8), SCALING_TIMEOUT (default 900 s per run),
-# SCALING_MARGIN (default 0.004), BAGUETTE_MEM_CAP_KB (ulimit -v per run, default 4000000).
+# SCALING_MARGIN (default 0.005), BAGUETTE_MEM_CAP_KB (ulimit -v per run, default 4000000).
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 S="$ROOT/bench/scaling"
@@ -79,7 +81,7 @@ CORPUS="$ROOT/bench/diff/corpus"
 BIN="${BIN:-$ROOT/_build/default/bin/main.exe}"
 PAR="${SCALING_PAR:-8}"
 TMO="${SCALING_TIMEOUT:-900}"
-MARGIN="${SCALING_MARGIN:-0.004}"
+MARGIN="${SCALING_MARGIN:-0.005}"
 CAP_KB="${BAGUETTE_MEM_CAP_KB:-4000000}"
 ENFORCE="${SCALING_ENFORCE:-1}"
 UPDATE=0

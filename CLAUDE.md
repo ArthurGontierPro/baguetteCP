@@ -355,8 +355,9 @@ make diff ARGS="--tier all -j 24"    # the DIFFERENTIAL lane (M11-T2, D-0141): r
                                      # bench/diff/reference; add --debug for the BAGUETTE_DEBUG pass.
                                      # Node only. Re-record (--update) only after a gated merge that
                                      # changes the search on purpose, in its own commit
-make scaling ARGS="-j 16"            # the SCALING lane: cost per node late vs early, report-only
-                                     # until M11-complexity-T6 makes it a gate
+make scaling ARGS="-j 16"            # the SCALING lane, a GATE since M11-complexity-T6 (D-0160): fails
+                                     # when late - early instructions per node grows past the ratcheted
+                                     # baseline by 0.5 % of the late cost; the ratio is information only
 ```
 
 ---
