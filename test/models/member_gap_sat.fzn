@@ -1,0 +1,22 @@
+% M7-T28 (D-0159), hand-written: the one shape member writes AHEAD. x1 and x2 over {1, 3}
+% (declared holes), x3 and y over 1..3, w1 w2 w3 a pigeonhole only while x3 = 3.
+% Largest-first on x3: x3 = 3 leaves y's 2 held by no live position, x1 and x2 excluding it
+% by a HOLE only, so `y <> 2` is derived ahead (one lemma per position, the OR row, the sum
+% divided); the w branch then fails and the derivation is on the page; x3 = 2 solves.
+predicate baguette_member(array [int] of var int: x,var int: y,array [int] of var bool: b);
+var {1,3}: x1 :: output_var;
+var {1,3}: x2 :: output_var;
+var 1..3: x3 :: output_var;
+var 1..3: y :: output_var;
+var bool: b1;
+var bool: b2;
+var bool: b3;
+var 1..2: w1 :: output_var;
+var 1..2: w2 :: output_var;
+var 1..3: w3 :: output_var;
+constraint baguette_member([x1, x2, x3], y, [b1, b2, b3]);
+constraint int_ne(w1, w2);
+constraint int_ne(w1, w3);
+constraint int_ne(w2, w3);
+constraint int_lin_le([1, 1], [w3, x3], 5);
+solve :: int_search([x3, w1, w2, w3, y, x1, x2], input_order, indomain_max, complete) satisfy;
