@@ -3448,8 +3448,8 @@ was opened for coverage. This record then demoted it. The user closed it for the
   `emit_bits_resolve`, D-0134), with no `Explanation` constructor. On the default order encoding
   no proof uses it: in gate 61's proofs of the 198 test models, 0 of 1 602 `pol` lines saturate
   and 447 divide.
-- In the solver, as the reduction of PB conflict analysis, it adds no expressivity. Section 3
-  above shows that it cannot rescue the rows `to_linear_row` refuses.
+- In the solver, as the reduction of PB conflict analysis, it adds no expressivity. The section above,
+  "M2-L7 is NOT the next row", shows that it cannot rescue the rows `to_linear_row` refuses.
 - It is not expected to win either. Division-based learning (RoundingSat) is exponentially
   stronger than saturation-based learning (Sat4j), whose coefficients also grow (Elffers and
   Nordström, IJCAI 2018). baguette already has division and `round_to_one`.
