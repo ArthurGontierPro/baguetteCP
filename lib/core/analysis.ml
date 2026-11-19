@@ -826,8 +826,7 @@ let cite store ~check ~before fact =
     if level = 0 then None
     else
       Some
-        (pack ~pos:s ~level
-           ~root:(rests_on_nothing store s e)
+        (pack ~pos:s ~level ~root:(rests_on_nothing store s e)
            ~is_lower:(Reason.fact_is_lower fact))
 
 (* [memo_entries]/[memo_ints] count the memos built and the ints they hold, over the run:
