@@ -20,7 +20,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M7-T32 | `tools/baguette.msc`, `bin/main.ml` (flag parsing and solution printing only), `lib/flatzinc/output.ml`, `docs/SPEC.md` §2.2 (the flags and the output), new `test/models/*` + `test/expected/`, `test/unit/test_endtoend.ml`, `scripts/run_model_tests.sh` only if a lane needs it, `docs/DECISIONS.md` (D-0150), `docs/ROADMAP.md` M7-T32 row. NOT `search.ml` (M7-T31): if improving solutions need a search hook, request it | agent-flags (`wave51-flags`) | 2026-11-19 |
-| M7-T28 (continuation: regular's reasons, inverse) | `lib/core/prop/regular.ml`, a new `lib/core/prop/inverse.ml` (+ `docs/ARCHITECTURE.md` §1 and `CLAUDE.md`'s map), `lib/core/prop/alldiff.ml` (only the lemma-citation hook D-0146 §7 needs), `lib/flatzinc/compile.ml` (dispatch block), `mznlib/*.mzn`, `lib/proof/encoding.ml` (`add_root_lemma` only), their tests, new `test/models/*`, `docs/DECISIONS.md` (D-0151), `docs/SPEC.md` §2.1, `docs/ROADMAP.md` M7-T28 row; added 2026-11-19: `docs/PROOF-FORMAT.md` §4 (the `regular` and `inverse` rows only), `bench/regular_spike/*` | agent-globals2 (`wave51-globals2`) | 2026-11-19 |
 | M7-T31 and M6-T23 | `lib/core/search.ml` (the decision closure, `branch_assign`, the stopped path), `lib/core/learn.ml`, `lib/core/analysis.ml`, `lib/core/trace.ml`, `lib/core/retention.ml` and `lib/proof/writer.ml` (the finaliser only), their unit tests, new `test/models/*` + `test/expected/`, `test/unit/test_mutation.ml`, `docs/DECISIONS.md` (D-0148, D-0149), `docs/ROADMAP.md` M7-T31 and M6-T23 rows | agent-proofbugs (`wave50-proofbugs`) | 2026-11-19 |
 
 ## Cross-session requests
@@ -548,7 +547,25 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M11-complexity-T1 | agent-inventory (`wave47-inventory`) | 2026-11-18 | **D-0140.** The inventory, read-only: 48 items, each with what it grows with, how often it runs, its measured marginal share, the fix, the batch (T3/T4/T5), the byte risk and the reference. Six instances (QR48, QR72, rcpsp_11, mspsp_hard_01, cyclic-rcpsp_easy_6, openshop_gp10-4) at 1, 1k, 10k, 40k nodes, both modes; scratch patches S1 (`count_learned_activity`), S2 (retention), S3a-c measured byte-identical; outputs in `bench/perf/` |
 | M11-complexity-T2 | agent-lanes (`wave47-lanes`) | 2026-11-18 | **D-0141.** `make diff`: 25 instances (QR48, QR72, 19 Challenge in the fast tier, D-0140's six in the slow tier; 958 KB gz in `bench/diff/corpus/`) x 9 configurations (default, audit0, noproof, lbd, fifo, lbd-po, fifo-po, nopb, bits0), 232 runs at fixed BAGUETTE_NODE_LIMIT, stdout + rc + counters (SEARCH/WORK) + .opb/.pbp sha256 against `bench/diff/reference/` (e8354a74), plus a BAGUETTE_DEBUG pass (223 runs, f9bf6c4). Red binary: 198/232 differ while the 179 models show 0. `make scaling`: instructions:u per node, late over early, ratchet + 0.5 %, report-only until T6; teeth caught on 4 of 5 lines. Neither in `make check`; the gate runs both after it |
 | M7-T28 (first steps; the row stays IN PROGRESS) and M7-T29 (the gcc half) | agent-globals (`wave49-globals`) | 2026-11-18 | **D-0146.** `regular` native (`lib/core/prop/regular.ml`, DOMAIN, every pruning one `rup`, backward chains as root lemmas via `Encoding.add_root_lemma`, mznlib `fzn_regular`/`fzn_regular_set`, 3 mutation lanes, 4 models); the closed gcc forms pinned (std already routed them) with the implied sum; a repeated gcc variable copied by `Builder.split_gcc_repeats`; `inverse` design record and probes (§7). Gate: make check rc 0, 189 models, peak RSS 97 056 kB; diff lane 232/232; Challenge numbers in D-0146 §6 |
+| M7-T28 (continuation: regular's reasons, inverse; the row stays IN PROGRESS) | agent-globals2 (`wave51-globals2`) | 2026-11-19 | **D-0151.** `regular`'s reasons on the LETTERS (tails recurse into the dead flags' own lines; probes on 60 scenes first): learned clauses 321 -> 80 literals on average over 40 nonograms/pentominoes, node rate x2.6 without the proof, complete 19 -> 20 of 65 with it, all VERIFIED. `inverse` native: `lib/core/prop/inverse.ml` (channel, CHECKING), mznlib `fzn_inverse`, stage 2 all_different from CITED root lemmas (`Encoding.add_cited_lemma`, alldiff's lemma-row hook), 2 mutation lanes, 3 models; Challenge 70 reach the route, 3 -> 3 complete (held by `Element.add_facts` and alldiff's factless conflicts, both filed). `member` designed with probes. Gate: GATE_SUMMARY |
 ## Handoff notes
+## M7-T28 (continuation: regular's reasons, inverse) handoff, 2026-11-19 (agent-globals2, `wave51-globals2`): D-0151
+
+`regular`'s reasons name the LETTERS only: where a line would cite a dead flag it cites the tail of
+that flag's own earlier trace line (still one `rup` per pruning, against the rows, the lemmas and
+those lines); a letter is cited only where an edge leaves a live state, as the weakest bound, and
+the tail keeps the strongest fact per letter and direction. All inside `regular.ml`; each flag's
+tail is cached with the trail entry it belongs to (physical equality). Measured: learned clauses 4x
+shorter, more answers on the pentominoes, two nonograms lost. `inverse` is native
+(`lib/core/prop/inverse.ml`, channel filtering, CHECKING) through `mznlib/fzn_inverse.mzn`, plus
+all_different over each array from CITED root lemmas (`Encoding.add_cited_lemma` /
+`root_lemma_id`; alldiff's only change is `make ?lemma_rows`). On the Challenge it does not move
+the counts: black-hole is held by `Element.add_facts`' quadratic dedup, and p1f learns nothing
+because alldiff reports its Hall conflicts with `Reason.none` -- giving those conflicts their facts
+under `deriving_ahead` (cumulative's D-0096 shape) is the next thing to do, then `member` from
+D-0151 section 3. test_retention's five `deep shipped` checks fail on main since `36c1312` (not this
+branch; the gate ran `make -k check`). Both findings are filed under Cross-session requests.
+
 ## M7-T28 (first steps) and M7-T29 (gcc half) handoff, 2026-11-18 (agent-globals, `wave49-globals`): D-0146
 
 `regular` is native: `lib/core/prop/regular.ml`, DOMAIN consistent over the letters and `(n+1)*Q` state
