@@ -192,50 +192,39 @@ let rec in_make_order = function
   | (a, l1) :: ((_, l2) :: _ as rest) ->
       a > 0 && Lit.compare l1 l2 < 0 && in_make_order rest
 
-(* A stable sort by [Lit.compare] on the literal, equal to [List.sort]'s answer on every
-   input (a stable sort has one answer). It cuts the list into its maximal non-decreasing
-   RUNS, sorts the runs by their first literal, and keeps the concatenation when every
-   run ends strictly below the next one's start: then no literal of one run lies inside
-   another's range, so the concatenation is sorted, and two equal literals can only be
-   in the same run, in input order, which is stability. When that fails, or when the list
-   has many short runs (a learned clause in trail order), it is [List.sort] itself. A
-   model row's expansion is one run per variable, so this costs [k log k] comparisons
-   for [k] variables instead of [n log n] for [n] rungs. *)
+(* A stable sort by [Lit.compare] on the literal, so equal to [List.sort]'s answer on
+   every input (a stable sort has one answer): a NATURAL merge sort. The list is cut into
+   its maximal non-decreasing runs and adjacent runs are merged, pairwise, until one is
+   left, the earlier run winning ties, which is stability. Two runs whose ranges do not
+   overlap are joined by an append, after one comparison either way, instead of a merge.
+   A model row's expansion ([Linear.pb_row]) is one sorted run per variable, and a bits
+   bridge row a run of bits then its atom, so this costs about [n] comparisons where
+   [List.sort] costs [n log n]; a list in no order costs what [List.sort] costs. *)
 let sort_by_lit (l : (Lit.t * int) list) : (Lit.t * int) list =
   let cmp (l1, _) (l2, _) = Lit.compare l1 l2 in
-  let n = List.length l in
-  let max_runs = 1 + (n / 8) in
-  (* The runs, each in input order, the list of them reversed; [None] past [max_runs]. *)
-  let rec runs k acc cur last = function
-    | [] -> Some (List.rev cur :: acc)
+  (* The runs, in input order. *)
+  let rec runs acc cur last = function
+    | [] -> List.rev (List.rev cur :: acc)
     | x :: rest ->
-        if cmp last x <= 0 then runs k acc (x :: cur) x rest
-        else if k + 1 > max_runs then None
-        else runs (k + 1) (List.rev cur :: acc) [ x ] x rest
+        if cmp last x <= 0 then runs acc (x :: cur) x rest
+        else runs (List.rev cur :: acc) [ x ] x rest
   in
-  let full () = List.sort cmp l in
+  let rec last = function [ y ] -> y | _ :: ys -> last ys | [] -> assert false in
+  (* Two adjacent runs, [a] the earlier. *)
+  let merge2 a b =
+    if cmp (last a) (List.hd b) <= 0 then a @ b
+    else if cmp (last b) (List.hd a) < 0 then b @ a
+    else List.merge cmp a b
+  in
+  let rec pass acc = function
+    | a :: b :: rest -> pass (merge2 a b :: acc) rest
+    | [ r ] -> List.rev (r :: acc)
+    | [] -> List.rev acc
+  in
+  let rec until_one = function [ r ] -> r | rs -> until_one (pass [] rs) in
   match l with
   | [] | [ _ ] -> l
-  | x :: rest -> (
-      match runs 1 [] [ x ] x rest with
-      | None -> full ()
-      | Some [ _ ] -> l (* one run: already sorted *)
-      | Some rev_runs ->
-          let by_start =
-            List.stable_sort
-              (fun r1 r2 -> cmp (List.hd r1) (List.hd r2))
-              (List.rev rev_runs)
-          in
-          let rec last = function
-            | [ y ] -> y
-            | _ :: ys -> last ys
-            | [] -> assert false
-          in
-          let rec disjoint = function
-            | r1 :: (r2 :: _ as rest) -> cmp (last r1) (List.hd r2) < 0 && disjoint rest
-            | _ -> true
-          in
-          if disjoint by_start then List.concat by_start else full ())
+  | x :: rest -> ( match runs [] [ x ] x rest with [ _ ] -> l | rs -> until_one rs)
 
 let make (raw : (int * Lit.t) list) (degree : int) : t =
   if in_make_order raw then

@@ -435,13 +435,16 @@ let bit_block name n ~negated =
       let b = Lit.bit name i in
       (1 lsl i, if negated then Lit.negate b else b))
 
+(* The atom is listed first (D-0157): [Learned.make]'s answer is a function of the terms
+   and not of their order, and atom-then-bits is the order it produces, so it takes the
+   list as it stands. *)
 let b1_row name ~lo ~n v =
   let k = v - lo in
-  Learned.make (bit_block name n ~negated:false @ [ (k, Lit.negate (Lit.ge name v)) ]) k
+  Learned.make ((k, Lit.negate (Lit.ge name v)) :: bit_block name n ~negated:false) k
 
 let b2_row name ~lo ~n v =
   let big_k = (1 lsl n) - (v - lo) in
-  Learned.make (bit_block name n ~negated:true @ [ (big_k, Lit.ge name v) ]) big_k
+  Learned.make ((big_k, Lit.ge name v) :: bit_block name n ~negated:true) big_k
 
 let lb_row name ~n = Learned.make (bit_block name n ~negated:false) 0
 

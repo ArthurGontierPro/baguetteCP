@@ -346,29 +346,45 @@ let falsified_before_scan store ~at (l : Lit.t) =
 
    The negation [~[x >= k]] is the same question on the lower bound with value [k]. The
    scan stays as the [BAGUETTE_DEBUG] cross-check, as [falsified_at_scan] does for
-   [falsified_at]. *)
-let falsified_before store ~at (l : Lit.t) =
-  let r =
-    match l.Lit.v with
-    | Lit.Eq _ | Lit.Bit _ -> false
-    | Lit.Ge (name, k) -> (
-        match Store.var_named store name with
-        | None -> false
-        | Some v ->
-            let d = Store.get store v in
-            let positive = l.Lit.positive in
-            let holds_now = if positive then Domain.hi d < k else Domain.lo d >= k in
-            if not holds_now then false
-            else
-              let p =
-                if positive then Store.var_support store v ~is_lower:false ~value:(k - 1)
-                else Store.var_support store v ~is_lower:true ~value:k
-              in
-              p = Store.no_support || p < at)
+   [falsified_at].
+
+   M11-complexity-T9 (D-0157): applied to [store] and [~at] alone it is a predicate that
+   remembers the last name it looked up, by the name's physical identity, in front of
+   [Store.var_named]'s hash: a step asks it of one reason's terms over and over, and
+   [Ladder.instantiate]'s binary search asks it of one variable's atoms O(log w) times in
+   a row. A name is a name: the same string answers the same variable. *)
+let falsified_before store ~at =
+  let last = ref None in
+  let var_named name =
+    match !last with
+    | Some (n, v) when n == name -> v
+    | _ ->
+        let v = Store.var_named store name in
+        last := Some (name, v);
+        v
   in
-  Debug.check "M11-T4: falsified_before agrees with the trail scan" (fun () ->
-      r = falsified_before_scan store ~at l);
-  r
+  fun (l : Lit.t) ->
+    let r =
+      match l.Lit.v with
+      | Lit.Eq _ | Lit.Bit _ -> false
+      | Lit.Ge (name, k) -> (
+          match var_named name with
+          | None -> false
+          | Some v ->
+              let d = Store.get store v in
+              let positive = l.Lit.positive in
+              let holds_now = if positive then Domain.hi d < k else Domain.lo d >= k in
+              if not holds_now then false
+              else
+                let p =
+                  if positive then Store.var_support store v ~is_lower:false ~value:(k - 1)
+                  else Store.var_support store v ~is_lower:true ~value:k
+                in
+                p = Store.no_support || p < at)
+    in
+    Debug.check "M11-T4: falsified_before agrees with the trail scan" (fun () ->
+        r = falsified_before_scan store ~at l);
+    r
 
 (* The same question at the conflict, i.e. with the whole trail in force. *)
 let falsified_now store (l : Lit.t) =
@@ -791,7 +807,12 @@ let row_memo_bool (lits : Lit.t array) (p : Lit.t -> bool) : Lit.t -> bool =
   fun l -> m l = 1
 
 let lits_array (row : Learned.t) : Lit.t array =
-  Array.of_list (List.map (fun (tm : Learned.term) -> tm.Learned.lit) (Learned.terms row))
+  match Learned.terms row with
+  | [] -> [||]
+  | tm0 :: _ as terms ->
+      let a = Array.make (List.length terms) tm0.Learned.lit in
+      List.iteri (fun i (tm : Learned.term) -> a.(i) <- tm.Learned.lit) terms;
+      a
 
 (* ------------------------------------------------------- reading a derivation *)
 
@@ -1061,7 +1082,7 @@ let analyse ?(stop = fun () -> false) ?(bits = Ladder.no_bits) store (c : Store.
     (* D-0153: the conflict row's bits blocks, at the bounds in force at the conflict. *)
     let row0, expl0, bridge_rows0 =
       instantiated row0_opb ~cid:conflict_row.Propagator.r_cid ~pivot:None
-        ~falsified:(falsified_now store)
+        ~falsified:(falsified_before store ~at:(Store.trail_length store))
     in
     (* If our reconstruction of the conflicting row is not actually conflicting, the row
        we built is not the row the store conflicted on. That is a real disagreement and it
