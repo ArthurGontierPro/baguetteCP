@@ -2752,6 +2752,17 @@ let undo_level stats store =
   | Some { st_phase = None; _ } | None -> ());
   Store.backtrack store
 
+(* D-0152 (D-0140 S5): [level_set ls l] is [List.mem l ls] for a list of decision
+   levels, answered from a byte per level. Levels are never negative; a list that held
+   one would be answered by the scan, so the function is [List.mem] on every list. *)
+let level_set (ls : int list) : int -> bool =
+  if List.exists (fun l -> l < 0) ls then fun l -> List.exists (Int.equal l) ls
+  else
+    let top = List.fold_left Stdlib.max (-1) ls in
+    let tbl = Bytes.make (top + 1) '\000' in
+    List.iter (fun l -> Bytes.set tbl l '\001') ls;
+    fun l -> l >= 0 && l <= top && Char.equal (Bytes.get tbl l) '\001'
+
 let reuse_target (a : Activity.t) store (decisions : Lit.t list) =
   let best = Activity.best_score a (unfixed store) in
   let rec keep n = function
@@ -2993,8 +3004,12 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
                        settle. Keeping them costs a weaker clause on the SETTLE PATHS ONLY;
                        [protected] is empty on every path with no hole split, which is almost
                        all of them, and the filter is then exactly what it was. *)
+                    (* D-0152 (D-0140 S5): membership in [ls] is one load from a
+                       table of its levels, where it was a polymorphic [List.mem] per
+                       nogood literal (depth squared per conflict). Same predicate. *)
+                    let in_ls = level_set ls in
                     let kept (lit, l) =
-                      List.mem l ls
+                      in_ls l
                       || (not cfg.break_bridge_levels)
                          && List.exists (fun p -> Lit.equal lit (Lit.negate p)) protected
                     in
