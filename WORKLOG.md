@@ -616,6 +616,15 @@ section 1. Shares are inclusive, of the whole run.
 
 ## Handoff notes
 
+### 2026-11-19 night (orchestrator): D-0164 merged, gate 69 green
+
+Gate 69 (`1668f43`, merge wave54-heapfix, `Element.index_hole_clause` lazy, binary `22620b60`)
+against gate 64's `d7a1ef00`: `make check` rc 0 (4 279 ok, 198 models, 99 MB), 198 models x 4
+artefacts equal, lane 301/301, debug 289/289, scaling ok. On main itself (without M7-T33),
+`2013_black-hole_4 --no-proof --time-limit 60`: 13 nodes on both gate 68's `b4a16e86` and gate
+69's binary, same counters, peak RSS 575 -> 189 MB (`/scratch/arthur/heapfix-main/`). Main still
+stops at 13 nodes there because of `Alldiff.remover_index`, which wave53-alldiff fixes.
+
 ### 2026-11-19 night (orchestrator): gates 67 and 68 green; M9-no-proof-T5 merged
 
 Gate 67 (`ba44dfa`, merge wave54-fplen, binary `a52448f2`) and gate 68 (`375d45b`, merge
