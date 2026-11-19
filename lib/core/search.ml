@@ -2248,7 +2248,7 @@ let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_conve
   else (
     stats.n_pb_attempts <- stats.n_pb_attempts + 1;
     match
-      Pb_analysis.analyse store c ~row_of:(Engine.row_of engine store)
+      Pb_analysis.analyse ~stop:cfg.stop store c ~row_of:(Engine.row_of engine store)
         ~name_of:(Engine.name_of engine)
         ~ladder_id:
           (if cfg.pb_ladder then Encoding.consistency_id ctx.Justify.encoding
