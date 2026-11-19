@@ -20,7 +20,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M12-parity-T1 (re-run on the orbit model) | the `wave49-parity` branch only (merge main into it if needed); on main only `docs/DECISIONS.md` (a D-0147 addendum) and `docs/ROADMAP.md` M12 rows, merged by the orchestrator | agent-parity2 (`wave49-parity`) | 2026-11-19 |
-| M10-search-strategy-T5 (the user's default decision) and M11-complexity-T3 §9 (deferred) | `bin/main.ml` (the stale `-f` warning), `test/unit/test_endtoend.ml` (its check), `README.md` (usage), `docs/DECISIONS.md` (D-0142 addendum, D-0154), `docs/ROADMAP.md` (M10-T5 and M11-T3 rows) | orchestrator | 2026-11-19 |
 
 ## Cross-session requests
 
@@ -555,6 +554,14 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M7-T28 (continuation: regular's reasons, inverse; the row stays IN PROGRESS) | agent-globals2 (`wave51-globals2`) | 2026-11-19 | **D-0151.** `regular`'s reasons on the LETTERS (tails recurse into the dead flags' own lines; probes on 60 scenes first): learned clauses 321 -> 80 literals on average over 40 nonograms/pentominoes, node rate x2.6 without the proof, complete 19 -> 20 of 65 with it, all VERIFIED. `inverse` native: `lib/core/prop/inverse.ml` (channel, CHECKING), mznlib `fzn_inverse`, stage 2 all_different from CITED root lemmas (`Encoding.add_cited_lemma`, alldiff's lemma-row hook), 2 mutation lanes, 3 models; Challenge 70 reach the route, 3 -> 3 complete (held by `Element.add_facts` and alldiff's factless conflicts, both filed). `member` designed with probes. Gate on `d1df37f`: `make -k check` rc 2 from the 5 pre-existing test_retention checks only (main fails the same), 195 models passed, peak RSS 100 104 kB; 181/195 models byte-identical to main (the 14 diffs: inverse x3, regular_opt/unsat .pbp); diff lane 184/184 default runs equal (fifo/lbd diffs identical to main's, strategy configs without references on this base) |
 
 ## Handoff notes
+
+### 2026-11-19 (orchestrator): D-0154, the user's decisions; gate 61 green
+
+The user deferred D-0142 §9's four reordering items, kept the fixed search as the default (as in the
+Challenge) and asked the README to say that users can try free search `-f`. `71499e6` removes the
+stale `-f` warning (D-0148 closed M7-T31) and adds README's MiniZinc and Search sections. Gate 61 on
+fataepyc-06 (binary `64ec63e0`): `make check` rc 0, 198 models with 0 artefact differences against
+gate 60's `245a3de1`, lane 301/301, debug 289/289, scaling ok. M10-T5 now measures `-f` only.
 ## State of the project, 2026-11-19 evening (orchestrator) -- read this first
 
 Main `cb44532`+, gate 60 green (198 models; lane 301/301, debug 289/289; binary `245a3de1`). Every branch of
