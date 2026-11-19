@@ -59,7 +59,7 @@ search pb-tried/confl 708 confl
 search pb-learned/rows 0 rows
 search pb-fallback/confl 708 confl
 search pb-why first fallback reason: no PB row for instance int_lin_le_reif
-work pb-whys/recd 64 recd 33 x
+work pb-whys/recd 64 recd 62 x
 search pb-steps/pivots 0 pivots
 search pb-convert/rows 0 rows
 search pb-stronger/rows 0 rows

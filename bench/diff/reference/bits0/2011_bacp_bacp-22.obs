@@ -47,7 +47,7 @@ search i-s4-cross/lines 44429 lines
 search pb-tried/confl 2993 confl
 search pb-learned/rows 0 rows
 search pb-fallback/confl 2993 confl
-search pb-why first fallback reason: no PB row for instance int_lin_le
+search pb-why first fallback reason: no PB row for instance bool2int
 work pb-whys/recd 64 recd 63 x
 search pb-steps/pivots 0 pivots
 search pb-convert/rows 0 rows
