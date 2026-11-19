@@ -69,8 +69,17 @@ lib/core/       Baguette_core
   propagator.ml             the PROPAGATOR module type (65 lines -- read it whole)
   engine.ml                 propagate-to-fixpoint loop and the queue (section 5)
   search.ml                 DFS, branching, backtracking, every step proof-logged.
-                            NOT restarts: SPEC 3.4 disables them, and whether that
-                            survives clause learning is the open question D-0045
+                            Restarts are OPT-IN (SPEC 3.4, D-0137): a restart is the
+                            node outcome NRestart t, the backjump unwinding to level t
+                            and re-entering that node -- no new proof rule
+  restart.ml                WHEN to restart: the policies (Luby, geometric, Glucose's
+                            LBD average with a Luby floor, the stable alternation) as
+                            a pure state machine over conflicts (M10-T2, D-0137)
+  phase.ml                  PHASE SAVING: the value each variable was last fixed at,
+                            read when its level is undone (M10-T2, D-0137)
+  activity.ml               the ACTIVITY heuristic: one VSIDS score per variable,
+                            learned-clause bumps, EVSIDS decay, first-fail tie-break
+                            (M10-T3, D-0137)
   checked.ml                checked integer arithmetic + the overflow cap
   interval.ml               interval arithmetic: mul, square, div of bounds
   debug.ml                  BAGUETTE_DEBUG-gated invariant checks

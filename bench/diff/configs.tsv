@@ -33,6 +33,7 @@ lbd-po	BAGUETTE_PROPAGATE_LEARNED=off BAGUETTE_RETENTION=lbd:500	-	yes
 fifo-po	BAGUETTE_PROPAGATE_LEARNED=off BAGUETTE_RETENTION=fifo:500	-	yes
 nopb	BAGUETTE_PB_ANALYSIS=off	-	yes
 bits0	-	--bits-above 0	yes
-# --- slots for flags not on main yet (wave45-strategy); uncomment when they merge ---
-# restarts	-	--restarts <policy>	yes
-# activity	-	--branching <activity>	yes
+# --- the search-strategy flags (M10-search-strategy-T1..T3, D-0137 section 12), added 2026-11-19 ---
+restarts	-	--restarts luby:1 --phase-saving	yes
+activity	-	--search activity --restarts luby:1 --reuse-trail	yes
+alternate	-	--search alternate --restarts lbd:3:1.5 --phase-saving	yes

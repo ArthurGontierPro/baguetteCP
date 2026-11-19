@@ -250,7 +250,15 @@ lib/core/       Baguette_core
                             own, no name, so no sanitize table (M4-T0, D-0058)
   propagator.ml             the PROPAGATOR module type (51 lines — read it whole)
   engine.ml                 propagate-to-fixpoint loop and the queue (ARCH §5)
-  search.ml                 DFS, branching, backtracking, every step proof-logged
+  search.ml                 DFS, branching, backtracking, every step proof-logged.
+                            Restarts are opt-in (SPEC 3.4, D-0137): NRestart t unwinds
+                            to level t and re-enters that node, no new proof rule
+  restart.ml                WHEN to restart: Luby, geometric, Glucose's LBD average
+                            (with a Luby floor), the stable alternation (M10-T2)
+  phase.ml                  phase saving: the value a variable was last fixed at,
+                            read when its level is undone (M10-T2, D-0137)
+  activity.ml               the activity heuristic: VSIDS score per variable,
+                            learned-clause bumps, EVSIDS decay (M10-T3, D-0137)
   checked.ml                checked integer arithmetic + the overflow cap (M1-T23)
   interval.ml               interval arithmetic: mul, square, div of bounds (M4-T4a)
   debug.ml                  BAGUETTE_DEBUG-gated invariant checks
@@ -310,6 +318,7 @@ test/unit/                  22 binaries: test_core test_domain test_engine test_
                             test_compile test_endtoend test_matrix test_mutation
                             test_output test_random test_interval test_learned
                             test_learn test_analysis test_ladder test_retention test_clause test_pb test_consistency
+                            test_search_strategy (M10: restarts, phases, activity)
   mem_guard.ml              NOT a test binary: the shared Gc-alarm heap guard every
                             suite installs (M1-T53). All 22 announce arming under
                             BAGUETTE_TEST_HEAP_CAP_ANNOUNCE=1

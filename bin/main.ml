@@ -73,6 +73,9 @@ module Var = Baguette_core.Var
 module Store = Baguette_core.Store
 module Search = Baguette_core.Search
 module Retention = Baguette_core.Retention
+module Restart = Baguette_core.Restart
+module Phase = Baguette_core.Phase
+module Activity = Baguette_core.Activity
 module Justify = Baguette_core.Justify
 module Writer = Baguette_proof.Writer
 module Encoding = Baguette_proof.Encoding
@@ -87,6 +90,10 @@ type options = {
   stats : bool;
   time_limit : float option;
   no_proof : bool; (* M9-no-proof-T2: solve without a proof -- see the header *)
+  restarts : Restart.policy; (* M10-search-strategy-T2, D-0137: --restarts *)
+  phase_saving : bool; (* M10-search-strategy-T2, D-0137: --phase-saving *)
+  search : Search.search_mode; (* M10-search-strategy-T3, D-0137: --search *)
+  reuse_trail : bool; (* M10-search-strategy-T3, D-0137: --reuse-trail *)
 }
 
 (* Exit codes. 0 covers both SAT and UNSAT: an UNSAT model is a successful run that
@@ -112,7 +119,7 @@ let usage () =
     "usage: baguette MODEL.fzn [--proof PREFIX] [--proof-comments] [--all] [--time] \
      [--stats] [--max-order-width N] [--max-direct-values N] [--width-warn N] \
      [--max-encoding-clauses N] [--max-heap-mb N] [--bits-above W] [--time-limit S] \
-     [--no-proof]";
+     [--no-proof] [--restarts POLICY] [--phase-saving] [--search ORDER] [--reuse-trail]";
   prerr_endline "";
   prerr_endline "  --proof PREFIX    write PREFIX.opb and PREFIX.pbp (SPEC 4.1); verify";
   prerr_endline "                    them with: veripb PREFIX.opb PREFIX.pbp";
@@ -177,6 +184,36 @@ let usage () =
   prerr_endline
     "                    every model, every `make check`. Cannot be combined with";
   prerr_endline "                    --proof (exit 2). --stats says the run was unproved.";
+  prerr_endline "";
+  prerr_endline
+    "  --restarts POLICY (M10-search-strategy-T2, D-0137, SPEC 3.4) restart the search";
+  prerr_endline
+    "                    to level 0 on a deterministic schedule. POLICY is one of";
+  prerr_endline
+    "                    none (default), luby[:U] (U * luby(k) conflicts, U=100),";
+  prerr_endline
+    "                    geom[:U[:F]] (U * F^k, 100 and 1.5), lbd[:W[:K]] (Glucose's";
+  prerr_endline
+    "                    LBD average, W=50 K=0.8, with a Luby floor), stable[:U]";
+  prerr_endline "                    (lbd and luby:U phases alternating). Every learned";
+  prerr_endline "                    constraint is kept across a restart.";
+  prerr_endline
+    "  --phase-saving    (M10-search-strategy-T2, D-0137) branch on the value a";
+  prerr_endline "                    variable was last fixed at, when it is still in its";
+  prerr_endline
+    "                    domain; the variable choice is unchanged. Overrides an";
+  prerr_endline "                    annotation's value choice: an explicit substitution.";
+  prerr_endline "  --search ORDER    (M10-search-strategy-T3, D-0137) the variable order:";
+  prerr_endline "                    annotation (default: the annotation, else SPEC 3.4's";
+  prerr_endline "                    first-fail), activity (the unfixed variable with the";
+  prerr_endline "                    highest conflict activity, EVSIDS decay), alternate";
+  prerr_endline "                    (annotation and activity, switching at each restart;";
+  prerr_endline "                    needs --restarts to ever switch).";
+  prerr_endline
+    "  --reuse-trail     with --search activity and --restarts: keep the levels";
+  prerr_endline
+    "                    whose decision still outscores every unfixed variable";
+  prerr_endline "                    (partial restarts, van der Tak et al. 2011).";
   prerr_endline "";
   prerr_endline "  --max-order-width N   refuse any variable whose DECLARED width";
   prerr_endline "                    exceeds N. DEFAULT: none -- the default build has no";
@@ -295,6 +332,10 @@ let parse_args argv =
   let stats = ref false in
   let time_limit = ref None in
   let no_proof = ref false in
+  let restarts = ref Restart.No_restarts in
+  let phase_saving = ref false in
+  let search = ref Search.Annotated in
+  let reuse_trail = ref false in
   let rec go i =
     if i >= Array.length argv then ()
     else
@@ -317,6 +358,34 @@ let parse_args argv =
           go (i + 1)
       | "--no-proof" ->
           no_proof := true;
+          go (i + 1)
+      (* M10-search-strategy-T2 (D-0137). A malformed policy is a usage error, never a
+         silent `none`: a measurement whose flag was not in force is the trap CLAUDE.md
+         records twice. *)
+      | "--restarts" ->
+          if i + 1 >= Array.length argv then usage ();
+          (match Restart.of_string argv.(i + 1) with
+          | Ok p -> restarts := p
+          | Error msg ->
+              Printf.eprintf "--restarts: %s\n" msg;
+              usage ());
+          go (i + 2)
+      | "--phase-saving" ->
+          phase_saving := true;
+          go (i + 1)
+      | "--search" ->
+          if i + 1 >= Array.length argv then usage ();
+          (match argv.(i + 1) with
+          | "annotation" -> search := Search.Annotated
+          | "activity" -> search := Search.Activity_order
+          | "alternate" -> search := Search.Alternate
+          | other ->
+              Printf.eprintf "--search: %S is not annotation, activity or alternate\n"
+                other;
+              usage ());
+          go (i + 2)
+      | "--reuse-trail" ->
+          reuse_trail := true;
           go (i + 1)
       | "--time-limit" ->
           if i + 1 >= Array.length argv then usage ();
@@ -393,6 +462,10 @@ let parse_args argv =
         stats = !stats;
         time_limit = !time_limit;
         no_proof = !no_proof;
+        restarts = !restarts;
+        phase_saving = !phase_saving;
+        search = !search;
+        reuse_trail = !reuse_trail;
       }
 
 (* --------------------------------------------------------- timing (M1-T35) *)
@@ -919,6 +992,41 @@ let report_no_proof () =
     "stats: proof costs is what the same run WITH a proof costs beyond this one. No";
   prerr_endline "stats: proof-shape or atom counters: nothing was written."
 
+(* M10-search-strategy (D-0137): the opt-in strategies' counters, printed only when one
+   of them is on, so that a default run's --stats is unchanged line for line. *)
+let search_name = function
+  | Search.Annotated -> "annotation"
+  | Search.Activity_order -> "activity"
+  | Search.Alternate -> "alternate"
+
+let report_strategy opts (st : Search.stats) =
+  if
+    opts.restarts <> Restart.No_restarts
+    || opts.phase_saving
+    || opts.search <> Search.Annotated
+  then (
+    Printf.eprintf "stats: %-10s %10d runs   %s\n" "restarts" (Search.stats_restarts st)
+      (Printf.sprintf "restarts taken under --restarts %s (M10-T2, D-0137)"
+         (Restart.to_string opts.restarts));
+    Printf.eprintf "stats: %-10s %10d nodes  %s\n" "unexplored"
+      st.Search.restart_unexplored
+      "second children a restart left undispatched (in the M1-T36 identity)";
+    Printf.eprintf "stats: %-10s %10d levels %s\n" "kept" st.Search.restart_targets
+      "levels kept by restarts, summed (--reuse-trail; 0 for full restarts)";
+    (match Search.stats_activity st with
+    | None -> ()
+    | Some a ->
+        Printf.eprintf "stats: %-10s %10d bumps  %s\n" "activity" (Activity.n_bumps a)
+          (Printf.sprintf "variable bumps under --search %s (%d rescales)"
+             (search_name opts.search) (Activity.n_rescales a)));
+    match Search.stats_phase st with
+    | None -> ()
+    | Some ph ->
+        Printf.eprintf "stats: %-10s %10d vals   %s\n" "phases" (Phase.n_saves ph)
+          "values saved at a level's undo (--phase-saving)";
+        Printf.eprintf "stats: %-10s %10d decs   %s\n" "phase-used" (Phase.n_used ph)
+          "decisions whose value a saved phase chose")
+
 let report_stats (st : Search.stats) ~exhausted =
   prerr_endline
     "stats: baguette search-tree counters (M1-T36). Counted by Search itself, not read";
@@ -1313,6 +1421,10 @@ let solve opts (m : Model.t) =
                 retention = retention_policy ();
                 propagate_learned = propagate_learned ();
                 pb = pb_analysis ();
+                restarts = opts.restarts;
+                phase_saving = opts.phase_saving;
+                search = opts.search;
+                reuse_trail = opts.reuse_trail;
                 stop =
                   (let by_time =
                      match opts.time_limit with
@@ -1401,6 +1513,7 @@ let solve opts (m : Model.t) =
       flush stdout);
   if opts.stats then (
     report_stats stats ~exhausted;
+    report_strategy opts stats;
     report_engine_counters
       ~families:(Engine.family_table compiled.Compile.engine)
       (Engine.counters compiled.Compile.engine)
