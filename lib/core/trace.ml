@@ -660,9 +660,6 @@ let derive_ahead (ctx : Justify.ctx) store (e : Store.entry) =
    the page cites. *)
 exception Stopped
 
-(* How often [emit] asks [stop]: once every [stop_every] trail entries. *)
-let stop_every = 64
-
 let emit_to_page ?(stop = fun () -> false) (ctx : Justify.ctx) t store =
   resync t store;
   let saved = Writer.current_level ctx.Justify.writer in
@@ -677,7 +674,9 @@ let emit_to_page ?(stop = fun () -> false) (ctx : Justify.ctx) t store =
   let n_levels = Store.level store in
   let lv = ref (Store.level_of_index store t.n_done) in
   for i = t.n_done to n - 1 do
-    if i land (stop_every - 1) = 0 && stop () then (
+    (* Asked at every entry: one entry's lines (its derivation ahead included) are the
+       latency. At every 64th, cable's 120 s limit fired at 123.88 s (D-0149). *)
+    if stop () then (
       if !at <> saved then Writer.set_level ctx.Justify.writer saved;
       raise Stopped);
     while !lv < n_levels && mark_at store !lv <= i do
