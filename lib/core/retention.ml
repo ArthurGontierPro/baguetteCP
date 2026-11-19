@@ -284,22 +284,20 @@
 module Lit = Baguette_proof.Lit
 module Writer = Baguette_proof.Writer
 
-(* D-0152 (D-0140 R4): a table keyed on a learned row, for the duplicate count. *)
-module Rows = Hashtbl.Make (struct
-  type t = Learned.t
-
-  let equal = Learned.equal
-  let hash = Learned.hash
-end)
-
 (* ------------------------------------------------------------------ entries *)
 
 (* One learned constraint the database holds.
 
-   [e_seq] is introduction order and is unique, which is what makes every sort here
-   total. M11-complexity-T4 (D-0152) removed [e_key], the constraint's rendering
-   ([Learned.to_string]): it was kept per entry and read by nothing, and the duplicate
-   MEASUREMENT it fed now keys on the row itself ([keys] below). *)
+   [e_key] is the constraint's canonical rendering ([Learned.to_string], which sorts and
+   merges in [Learned.make]), used for the duplicate MEASUREMENT below and for nothing
+   else -- it is not part of any policy. [e_seq] is introduction order and is unique,
+   which is what makes every sort here total.
+
+   M11-complexity-T4 (D-0152, D-0140 R4) tried keying the duplicate count on the row
+   itself, to drop the rendering. It kept the bytes and cost no instruction, but the
+   table then held every learned ROW (about twelve words per term) where it held the
+   row's text, and the peak RSS rose 6 to 8 % at 10 000 nodes on four of D-0140's
+   instances. Reverted; the text is the cheaper key to hold. *)
 type tier = Core | Mid | Local
 
 let tier_to_string = function Core -> "core" | Mid -> "mid" | Local -> "local"
@@ -315,6 +313,7 @@ type entry = {
   e_lbd : int;
   e_size : int; (* terms in the row; 1 is a unit clause *)
   e_seq : int;
+  e_key : string;
   e_origin : string;
   mutable e_tier : tier;
       (* D-0139. Set from [e_lbd] at [add] under [tiered] ([Local] under every other
@@ -627,13 +626,12 @@ type t = {
          is LAZY (D-0152, D-0140 S2): it names every literal of the citing instance and
          is read only by the [Cited] message and [cited_by], so it is rendered when one
          of them asks, from the same values, and never otherwise. *)
-  keys : Writer.cid Rows.t;
-      (* The row -> the first id that stated it. Lookup only, and MEASUREMENT only: it
-         feeds [n_duplicate] and no policy reads it. M1-T59 found duplicate `rup` lines
-         harmless per-proof; a retention policy that evicts and lets the same clause be
-         re-learned is how they stop being harmless, so the count is kept where a later
-         row can see it. Keyed on the row since D-0152 (D-0140 R4), where it was keyed on
-         the row's rendering; [Learned.equal] says why the count is the same. *)
+  keys : (string, Writer.cid) Hashtbl.t;
+      (* Canonical row text -> the first id that stated it. Lookup only, and MEASUREMENT
+         only: it feeds [n_duplicate] and no policy reads it. M1-T59 found duplicate
+         `rup` lines harmless per-proof; a retention policy that evicts and lets the same
+         clause be re-learned is how they stop being harmless, so the count is kept where
+         a later row can see it. *)
 }
 
 let create ?(policy = default) () =
@@ -657,7 +655,7 @@ let create ?(policy = default) () =
     n_pinned = 0;
     gone = Hashtbl.create 64;
     cited = Hashtbl.create 16;
-    keys = Rows.create 64;
+    keys = Hashtbl.create 64;
   }
 
 let live t = List.rev_map (fun e -> e.e_cid) t.live_rev
@@ -708,15 +706,17 @@ let add t ~cid ~(row : Learned.t) ~lbd ~origin =
     raise
       (Double_delete
          (Printf.sprintf "retention: id %d was already retired and cannot be re-added" cid));
-  (match Rows.find_opt t.keys row with
+  let key = Learned.to_string row in
+  (match Hashtbl.find_opt t.keys key with
   | Some _ -> t.n_duplicate <- t.n_duplicate + 1
-  | None -> Rows.replace t.keys row cid);
+  | None -> Hashtbl.replace t.keys key cid);
   let e =
     {
       e_cid = cid;
       e_lbd = lbd;
       e_size = List.length (Learned.lits row);
       e_seq = t.next_seq;
+      e_key = key;
       e_origin = origin;
       e_tier =
         (match t.policy.p_tiers with Some prm -> tier_of_lbd prm lbd | None -> Local);
