@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M9-no-proof-T4 (the `--no-proof` audit) | `lib/core/trace.ml`, `lib/core/search.ml` (guards only), `lib/proof/encoding.ml` (guards in `start_proof`, additive), `lib/core/prop/regular.ml`, `lib/core/prop/inverse.ml`, `bin/main.ml` (the no-proof wiring); `lib/core/justify.ml` only after agent-memo merges | agent-noproof-audit (`wave53-noproof`) | 2026-11-19 |
 | M7-T33 (and `Alldiff.excl`'s proof cost, D-0145) | `lib/core/prop/alldiff.ml`, `lib/proof/encoding.ml` (additive only), new `test/models/`, `test/unit/test_prop.ml` (alldiff section) | agent-alldiff (`wave53-alldiff`) | 2026-11-19 |
 | M7-T28 (`member`) | new `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, new `test/models/`, `test/unit/test_prop.ml` (member section) | agent-member (`wave53-member`) | 2026-11-19 |
 | M7-T29 (the `fplen` half: bounds inference for a `var int` with no domain) | `lib/flatzinc/builder.ml`, new `test/models/`, `test/unit/test_flatzinc.ml` (one section); `docs/SPEC.md` 2.1 only if the user agrees | agent-fplen (`wave54-fplen`) | 2026-11-19 |
@@ -411,6 +410,44 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
    `BAGUETTE_DEBUG`). element.ml's two copies of the walk were replaced that way in D-0155,
    every artefact unchanged.
 
+### 2026-11-19 — M9-no-proof-T4 (D-0161): proof-only work `--no-proof` still does, in files that row did not hold (agent-noproof-audit, `wave53-noproof`)
+
+Measured with `perf record --call-graph fp` (switch `baguette-fp`) under `--no-proof`, D-0161
+section 1. Shares are inclusive, of the whole run.
+
+1. **`Alldiff.snap_of` builds derivation inputs at every snapshot** (`lib/core/prop/alldiff.ml`,
+   agent-alldiff's). `gone_of` lists every declared value below and above the window
+   (`Gone_below`, `Gone_above`, two `range` lists per variable per pass) and
+   `established_at_root` reads both supports. Only derivations read them (`alo_over`,
+   `hall_cancels`, `target_cancel`, `overshoot_cancel`, all inside `prune_expl`'s `Deferred`).
+   The reason reads only the `Gone_hole` entries (`hall_facts`). Under `--no-proof` at 10 000
+   nodes this is 39.4 % of `2011_cyclic-rcpsp_easy_6`'s instructions (`gone_of` 37.3,
+   `established_at_root` 2.2), built and never read. The below and above runs are functions of
+   `s_dlo`, `s_lo`, `s_hi` and `s_dhi`, which the snapshot already holds, so the `Deferred` can
+   rebuild them when it is forced. The root flags need the supports as they were, so they stay
+   eager or go through a `Store.history` (D-0124). Proof mode gains the same instructions. The
+   holes' `hole_cite` walk is D-0155's request above, and it is 87 % of `2011_black-hole_10`.
+2. **The root lemmas are built in `compile.ml` and dropped under `--no-proof`**
+   (`lib/flatzinc/compile.ml`, agent-member's). Since D-0161 `Encoding.start_proof` mints their
+   ids under the null writer without reading them and drops the list. `post_regular` still
+   builds every B(i, q', R) (`List.filter` over the predecessors, `Opb.clause`), which is 8.9 %
+   of `2012_nonogram_non_awful_5`'s startup instructions under `--no-proof`, and `post_inverse`'s
+   stage 2 builds its pairwise lemmas, 2.8 % of `2011_black-hole_10`'s run. The ids must still
+   be minted, because alldiff cites the pairwise ones (D-0126 rule 2), so the door is a count.
+   compile.ml has no writer, and `Encoding.row_sink` is `Discard_rows` for every run without
+   `--proof` as well, whose temporary proof does write the lemmas. So the change needs a
+   no-proof signal at compile time, for example an ambient set by `bin/main.ml` beside
+   `row_sink`, read by a lazy `add_root_lemma`/`add_cited_lemma` that forces its constraint only
+   when a proof will be written and counts it otherwise.
+3. **`Justify.ensure_lit` has no null-writer guard** (`lib/core/justify.ml`, agent-memo's). Its
+   two callers in `search.ml` (a decision's atom) are guarded since D-0161 and `validate_lits`
+   is reached only past the existing guards, so nothing pays for it today. One line at its head,
+   `if not (Writer.is_null ctx.writer)`, would keep a future caller from minting atoms for the
+   null writer. The memo and the claim index need nothing. Under the null writer `emit`,
+   `emit_stating`, `emit_concluding` and `emit_rup_clause_lazy` return before `memoized` and
+   `state_clause`, so both tables stay empty and `wipe_level` walks nothing. `Justify.*` is at
+   most 0.05 % on all ten instances.
+
 ## Completed
 
 | Task | Session | Date | Summary |
@@ -573,8 +610,17 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M11-complexity-T8 | agent-element (`wave53-element`) | 2026-11-19 | **D-0155.** `Element.add_facts` hashed and linear (same list as the old fold, oracle-tested), the index-hole trail walks through `Store.remover`, live and carried-value membership through an int table, hole facts once per pass. black-hole_10 168 G to 52 G instructions; every model's artefacts equal to main |
 | M13-codes-leads (roadmap rows only) | codes-cp session | 2026-11-19 | Two TODO (to study) rows from the codes-cp phase-1 benchmark: T1 a linear relaxation as a presolve step, T2 symmetry detection with dominance-justified breaking. No code. |
 | M11-complexity-T10 | agent-memo (`wave53-memo`) | 2026-11-19 | **D-0158.** The memo's identical copies are identical LINES, so an entry cannot be shared without changing the bytes. `justify.ml` gains a share mode, OFF by default (`BAGUETTE_MEMO_SHARE=1`), that answers a miss with an identical line already on the page at or below the current level: cable's proof 1 887 -> 114 MB, cyclic's 2 023 -> 322 MB, rcpsp_11 +14.5 % instructions, search identical. Share lane: 85/301 runs differ in the `.pbp` hash and the `pol`/`pol-tokens` counters only (`pol` lines -32 % over the lane), 274/274 proofs VERIFIED. Off, every byte is main's. Gate on `95759c5`: `make check` rc 0, 198 models x 4 artefacts equal to `64ec63e0`, lane 301/301, debug 289/289, binary `59368b5f`. The default is the user's call (D-0158 section 5) |
+| M9-no-proof-T4 | agent-noproof-audit (`wave53-noproof`) | 2026-11-19 | **D-0161.** Six guards behind the null writer in `Search` (`record_improving`'s literal family and bits bridge, the SAT conclusion, `ensure_decision_atom`, `Learn.supports`) and in `start_proof`'s root lemmas (`mint_root_lemma_ids`). openshop `--no-proof` -42.6 % instructions, RSS 341 -> 93 MB; proved runs byte-identical. Gate on `658c785` (binary `fd3d9635`): `make check` rc 0 (4 253 ok, 198 models, 100 MB), 198 models x 4 artefacts equal to `d7a1ef00`, lane 301/301, debug 289/289, scaling ok |
 
 ## Handoff notes
+
+### 2026-11-19 (agent-noproof-audit, finished by the orchestrator): M9-no-proof-T4, D-0161
+
+Six guards put the proof-only work of `Search` and `Encoding.start_proof`'s root lemmas behind the
+null writer: openshop under `--no-proof` -42.6 % instructions, RSS 341 -> 93 MB, proved runs
+byte-identical to main. Gate on `658c785` green (4 253 ok, 198 models, lane 301/301, debug 289/289,
+scaling ok). Left for the owners: alldiff's `snap_of` (39.4 % of cyclic under `--no-proof`),
+compile.ml's root lemmas, `Justify.ensure_lit`'s guard (the three requests, dated 2026-11-19).
 
 ### 2026-11-19 (agent-memo, `wave53-memo`): M11-complexity-T10, D-0158
 
