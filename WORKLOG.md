@@ -615,6 +615,16 @@ section 1. Shares are inclusive, of the whole run.
 
 ## Handoff notes
 
+### 2026-11-19 night (orchestrator): gates 67 and 68 green; M9-no-proof-T5 merged
+
+Gate 67 (`ba44dfa`, merge wave54-fplen, binary `a52448f2`) and gate 68 (`375d45b`, merge
+wave54-keepproof, D-0163, binary `b4a16e86`), against gate 64's `d7a1ef00`, both with `--proof`:
+`make check` rc 0 (4 267 and 4 279 ok, 198 models, ~100 MB), 198 models x 4 artefacts equal, lane
+301/301, debug 289/289, scaling ok, nothing re-recorded. Gate 68 also looked for proofs written
+since the clone outside `_build`: only `test/out/` (the model tests' own output, gitignored), none
+in the root. A run without `--proof` now keeps `./<model>.opb`/`.pbp`; the directory, MiniZinc's
+fixed `./baguette-proof.*` and the silent overwrite wait for the user (D-0163 §6).
+
 ### 2026-11-19 (agent-keepproof, `wave54-keepproof`): M9-no-proof-T5, D-0163
 
 A run without `--proof` now writes and keeps `./<model>.opb`/`.pbp` in the cwd (MiniZinc: `./baguette-proof`, named on stderr), overwriting a previous run's; the rule is `default_proof_prefix` in `bin/main.ml`, and the DIRECTORY is still the user's to confirm (D-0163 §6).
