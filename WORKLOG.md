@@ -537,6 +537,15 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M7-T28 (first steps; the row stays IN PROGRESS) and M7-T29 (the gcc half) | agent-globals (`wave49-globals`) | 2026-11-18 | **D-0146.** `regular` native (`lib/core/prop/regular.ml`, DOMAIN, every pruning one `rup`, backward chains as root lemmas via `Encoding.add_root_lemma`, mznlib `fzn_regular`/`fzn_regular_set`, 3 mutation lanes, 4 models); the closed gcc forms pinned (std already routed them) with the implied sum; a repeated gcc variable copied by `Builder.split_gcc_repeats`; `inverse` design record and probes (§7). Gate: make check rc 0, 189 models, peak RSS 97 056 kB; diff lane 232/232; Challenge numbers in D-0146 §6 |
 | M7-T32 | agent-flags (`wave51-flags`) | 2026-11-19 | **D-0150.** `tools/baguette.msc` declares `-i -f -n -p -r -s -t -v` (and `--proof` as an extra flag); `bin/main.ml` maps them onto existing options: `-t` ms to `--time-limit`, `-s` = `--stats` plus one `%%%mzn-stat` block on stdout, `-f` = `--search alternate --restarts luby --phase-saving` (warned: not proof-safe until M7-T31), `-r`/`-p` accepted. Every improving solution was already printed with one `soli` each (verified through `minizinc`). Every solution of a satisfaction model (`-a`, `-n N > 1`) refused, exit 3. SPEC §2.2 amended; 30 checks in `test_endtoend`; default artefacts byte-identical on 192 models |
 ## Handoff notes
+## M11-T4 part 2 and M8-T6 merged, gates 58 and 59 green, 2026-11-19 (orchestrator)
+
+Gate 58 on `733b864` (M11-T4 part 2, D-0152): `make check` rc 0, 193 models identical to gate 57's binary,
+lane 301/301 and 289/289, binary `d12feec0`. Gate 59 on `a8315f3` (M8-T6, D-0153): `make check` rc 0, 195
+models identical to gate 57's binary at default flags, the `bits0` configuration re-recorded on purpose (24
+plain and 23 debug runs, every proof accepted), then 301/301 and 289/289; binary
+`0a28d631aa05f20822b66b7a0a54828f`. Open: the M7-T28 continuation (wave51-globals2) and the parity spike's
+re-run on the orbit model (wave49-parity).
+
 ## M8-bits-encoding-T6 handoff, 2026-11-19 (agent-pbbits, `wave52-pbbits`): PB analysis over rows with a bits term, D-0153
 
 A mixed `Linear` row is now offered to PB analysis as the .opb holds it (`Linear.pb_row ?bits_n`,
