@@ -411,6 +411,9 @@ type stats = {
          for the reason [db] is. Deduplication matters here and not for the clause
          instances below: one model (width_sat_depth) derives 49 of the suite's 72 units,
          many of them the same bound twice, and this list is walked at every node. *)
+  mutable globals_fwd : global list;
+      (* D-0152 (D-0140 S6): [List.rev globals_rev], kept beside it by [push_global] so
+         [apply_globals] does not reverse the list at every node. *)
   mutable n_global_prunes : int;
       (* Times applying a global actually MOVED a bound. This is the counter that says
          whether step 1 did anything: a learned unit that never prunes is a learned unit
@@ -616,6 +619,7 @@ let stats_create () =
     learned_rev = [];
     db = Retention.create ();
     globals_rev = [];
+    globals_fwd = [];
     n_global_prunes = 0;
     n_global_conflicts = 0;
     n_global_declined = 0;
@@ -2494,32 +2498,47 @@ let count_learned_activity stats store ~since (o : Engine.outcome) : Engine.outc
    answer [None] out of range, and [Pb_analysis] turns that into its ordinary [No_row]
    fallback. *)
 let apply_globals store stats : Store.conflict option =
+  (* D-0152 (D-0140 S6): the forward list is kept, not rebuilt per node, and a bound
+     already in force is skipped before its justification is built. That is exactly the
+     case [Domain.set_lo]/[set_hi] answer [Unchanged] (the bound is at or past [g_k]), on
+     which [Store.apply] does nothing and the loop goes on, as it does here. *)
   let rec go = function
     | [] -> None
     | g :: rest -> (
-        let j = Reason.because ~concludes:(Some g.g_fact) Reason.none g.g_expl in
-        let r =
-          if g.g_pos then Store.set_lo store g.g_var g.g_k j
-          else Store.set_hi store g.g_var (g.g_k - 1) j
+        let d = Store.get store g.g_var in
+        let in_force =
+          if g.g_pos then g.g_k <= Domain.lo d else g.g_k - 1 >= Domain.hi d
         in
-        match r with
-        | Store.Unchanged -> go rest
-        | Store.Changed ->
-            stats.n_global_prunes <- stats.n_global_prunes + 1;
-            go rest
-        | Store.Conflict _ ->
-            stats.n_global_conflicts <- stats.n_global_conflicts + 1;
-            let d = Store.get store g.g_var in
-            let nm = Store.name store g.g_var in
-            let opposing =
-              if g.g_pos then Reason.at_most ~name:nm ~decl:g.g_decl_hi (Domain.hi d)
-              else Reason.at_least ~name:nm ~decl:g.g_decl_lo (Domain.lo d)
-            in
-            Some
-              (Store.conflict store
-                 (Reason.because ~concludes:None [ opposing ] g.g_expl)))
+        if in_force then go rest
+        else
+          let j = Reason.because ~concludes:(Some g.g_fact) Reason.none g.g_expl in
+          let r =
+            if g.g_pos then Store.set_lo store g.g_var g.g_k j
+            else Store.set_hi store g.g_var (g.g_k - 1) j
+          in
+          match r with
+          | Store.Unchanged -> go rest
+          | Store.Changed ->
+              stats.n_global_prunes <- stats.n_global_prunes + 1;
+              go rest
+          | Store.Conflict _ ->
+              stats.n_global_conflicts <- stats.n_global_conflicts + 1;
+              let d = Store.get store g.g_var in
+              let nm = Store.name store g.g_var in
+              let opposing =
+                if g.g_pos then Reason.at_most ~name:nm ~decl:g.g_decl_hi (Domain.hi d)
+                else Reason.at_least ~name:nm ~decl:g.g_decl_lo (Domain.lo d)
+              in
+              Some
+                (Store.conflict store
+                   (Reason.because ~concludes:None [ opposing ] g.g_expl)))
   in
-  go (List.rev stats.globals_rev)
+  go stats.globals_fwd
+
+(* File a learned unit, newest last in [globals_fwd] and newest first in [globals_rev]. *)
+let push_global stats g =
+  stats.globals_rev <- g :: stats.globals_rev;
+  stats.globals_fwd <- stats.globals_fwd @ [ g ]
 
 (* Give the learned clause a runtime consumer, and TELL RETENTION IT HAS ONE.
 
@@ -2546,7 +2565,7 @@ let register_learned engine store ctx stats ~cid ~(lits : Lit.t list) =
         match global_of store ~decl ~cid l with
         | None -> stats.n_global_declined <- stats.n_global_declined + 1
         | Some g ->
-            stats.globals_rev <- g :: stats.globals_rev;
+            push_global stats g;
             Retention.cite stats.db ~cid
               ~by:
                 (Printf.sprintf "the learned unit %s, applied at every node (M2-L12)"
@@ -2710,7 +2729,7 @@ let record_improving ctx store stats (b : bnb) (asn : assignment) : [ `Continue 
     let decl = Learned.decl_of_encoding ctx.Justify.encoding in
     match global_of store ~decl ~cid lit with
     | Some g ->
-        stats.globals_rev <- g :: stats.globals_rev;
+        push_global stats g;
         `Continue
     | None ->
         (* [global_of] declines a literal whose variable the STORE does not know or the
@@ -3509,6 +3528,7 @@ let search_core ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx) ?tr
      it compiles again -- or [Engine] grows a truncate-to-a-mark and this comment becomes
      that function's reason for existing. *)
   stats.globals_rev <- [];
+  stats.globals_fwd <- [];
   (* M2-L13: the id boundary [count_learned_activity] tests against. Recorded here rather
      than in [stats_create] for the same reason the database is: a [stats] may outlive a
      [solve], and the engine it is about to be pointed at is not the one it last saw. *)
