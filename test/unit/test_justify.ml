@@ -1780,8 +1780,9 @@ let test_memo_identity_m11t5 () =
    Off ([create_sharing ~share:false], the default): every copy is its own entry and its
    own line -- the proof the suite and the lanes have recorded.
    On: each copy renders the line the first copy wrote, so it gets that line's id while
-   the line's level is at or below the writer's, and it is remembered AT THE LINE'S
-   LEVEL, so a wipe above that level keeps it; a copy asked for BELOW the line's level
+   the line's level is at or below the writer's, and it is remembered at the writer's
+   level like any entry, so a wipe above the line drops the copy but not the line, and
+   the copy asked for again finds the line; a copy asked for BELOW the line's level
    (through [with_level]) gets its own line; after the wipe of the line's level the next
    copy is derived afresh; an unforced [Deferred] is never forced by a lookup. *)
 let test_share_m11t10 () =
@@ -1880,9 +1881,9 @@ let test_share_m11t10 () =
       check "m11t10 share ON: every copy is remembered (six entries, three to a bucket)"
         (n = 6 && longest = 3);
       check
-        "m11t10 share ON: the copies are remembered at the line's level, so a wipe of \
-         level 2 keeps them and nothing is derived again"
-        (n_after = 6 && id2b = id1 && not c2_minted);
+        "m11t10 share ON: a wipe of level 2 drops the copies made at 2 and 3, and the \
+         copy asked for again finds the level-1 line"
+        (n_after = 2 && id2b = id1 && not c2_minted);
       check "m11t10 share ON: a forced thunk of the same derivation shares the line"
         (id_d = id1 && (not d_minted) && id_d_again = id1);
       check "m11t10 share ON: the thunk ran once, by force and not by a lookup" (calls = 1);
