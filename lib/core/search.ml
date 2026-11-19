@@ -585,6 +585,9 @@ type stats = {
       (* M6-T21: the run was stopped by a poll INSIDE [Engine.propagate] rather than at a
          node entry. Read by the CLI's `limit:` line and by the lane that pins the
          poll. *)
+  mutable stopped_in_trace : bool;
+      (* M6-T23 (D-0149): the run was stopped by a poll inside a conflict's
+         [Trace.emit]. Read by the CLI's `limit:` line ([at=trace]). *)
 }
 
 let stats_create () =
@@ -647,6 +650,7 @@ let stats_create () =
     n_level_pb_empty = 0;
     level_diffs_rev = [];
     stopped_in_propagation = false;
+    stopped_in_trace = false;
   }
 
 let stats_learned s = List.rev s.learned_rev
@@ -2818,8 +2822,18 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
 
              M2-L3 inserts the learned clause between the bridges and the nogood, which is
              the one place it can go: after everything its [rup] rests on and before
-             anything that retires them. *)
-          Trace.emit ctx trace store;
+             anything that retires them.
+
+             M6-T23 (D-0149): the trace polls the stop between two trail entries, and a
+             stop that fires there leaves through [Limit_hit] like one at node entry. On
+             2020_cable_tree_wiring_R046 the first conflict, 252 levels down, writes
+             1.9 GB of trace and took 20 minutes with nothing asking; the lines already
+             written are a valid prefix (see [Trace.Stopped]) and this node has written
+             nothing else yet. *)
+          (try Trace.emit ~stop:cfg.stop ctx trace store
+           with Trace.Stopped ->
+             stats.stopped_in_trace <- true;
+             raise Limit_hit);
           (match Trace.conflict_line ctx trace c with
           | Some _ -> ()
           | None -> (

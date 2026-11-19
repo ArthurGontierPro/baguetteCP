@@ -652,7 +652,18 @@ let derive_ahead (ctx : Justify.ctx) store (e : Store.entry) =
    against the lines of the holes it walked over (see [line]), and those holes are
    earlier trail entries, so their lines are already in the database when the settle's
    line is checked. *)
-let emit_to_page (ctx : Justify.ctx) t store =
+(* M6-T23 (D-0149): raised by [emit] when its [stop] says yes, between two trail
+   entries. Every line already written is whole and RUP where it stands (each rests only
+   on the model and on earlier lines, oldest first, see the header), so the page is a
+   valid prefix of the branch's trace, and the writer is back on the level it was on.
+   What is left unwritten is the lines of the entries not yet reached, which nothing on
+   the page cites. *)
+exception Stopped
+
+(* How often [emit] asks [stop]: once every [stop_every] trail entries. *)
+let stop_every = 64
+
+let emit_to_page ?(stop = fun () -> false) (ctx : Justify.ctx) t store =
   resync t store;
   let saved = Writer.current_level ctx.Justify.writer in
   let at = ref saved in
@@ -666,6 +677,9 @@ let emit_to_page (ctx : Justify.ctx) t store =
   let n_levels = Store.level store in
   let lv = ref (Store.level_of_index store t.n_done) in
   for i = t.n_done to n - 1 do
+    if i land (stop_every - 1) = 0 && stop () then (
+      if !at <> saved then Writer.set_level ctx.Justify.writer saved;
+      raise Stopped);
     while !lv < n_levels && mark_at store !lv <= i do
       incr lv
     done;
@@ -772,8 +786,8 @@ let emit_to_page (ctx : Justify.ctx) t store =
    "nothing", which is the truth: a learned clause under this mode rests on lines that
    were never written, and [Learn.supports] reports none. The guard is a wrapper rather
    than a line inside [emit_to_page] so that the function above keeps its shape. *)
-let emit (ctx : Justify.ctx) t store =
-  if not (Writer.is_null ctx.Justify.writer) then emit_to_page ctx t store
+let emit ?stop (ctx : Justify.ctx) t store =
+  if not (Writer.is_null ctx.Justify.writer) then emit_to_page ?stop ctx t store
 
 (* D-0018 point 3: "a conflict under decisions logs its own reason line first, then the
    nogood". A conflict establishes no bound, so its line is the same clause with the
