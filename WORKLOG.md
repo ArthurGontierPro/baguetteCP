@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M7-T33 (and `Alldiff.excl`'s proof cost, D-0145) | `lib/core/prop/alldiff.ml`, `lib/proof/encoding.ml` (additive only), new `test/models/`, `test/unit/test_prop.ml` (alldiff section) | agent-alldiff (`wave53-alldiff`) | 2026-11-19 |
 | M11-complexity-T9 | `lib/core/learned.ml`, `lib/core/pb_analysis.ml`, `lib/core/ladder.ml`, `lib/core/reduce.ml`, their unit tests | agent-learned (`wave53-learned`) | 2026-11-19 |
 | M11-complexity-T10 | `lib/core/justify.ml`, `lib/core/explanation.ml` (additive functions only, the type unchanged), `test/unit/test_justify.ml` | agent-memo (`wave53-memo`) | 2026-11-19 |
 | M7-T28 (`member`) | new `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, new `test/models/`, `test/unit/test_prop.ml` (member section) | agent-member (`wave53-member`) | 2026-11-19 |
@@ -572,40 +571,18 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M7-T32 | agent-flags (`wave51-flags`) | 2026-11-19 | **D-0150.** `tools/baguette.msc` declares `-i -f -n -p -r -s -t -v` (and `--proof` as an extra flag); `bin/main.ml` maps them onto existing options: `-t` ms to `--time-limit`, `-s` = `--stats` plus one `%%%mzn-stat` block on stdout, `-f` = `--search alternate --restarts luby --phase-saving` (warned: not proof-safe until M7-T31), `-r`/`-p` accepted. Every improving solution was already printed with one `soli` each (verified through `minizinc`). Every solution of a satisfaction model (`-a`, `-n N > 1`) refused, exit 3. SPEC §2.2 amended; 30 checks in `test_endtoend`; default artefacts byte-identical on 192 models |
 | M7-T28 (continuation: regular's reasons, inverse; the row stays IN PROGRESS) | agent-globals2 (`wave51-globals2`) | 2026-11-19 | **D-0151.** `regular`'s reasons on the LETTERS (tails recurse into the dead flags' own lines; probes on 60 scenes first): learned clauses 321 -> 80 literals on average over 40 nonograms/pentominoes, node rate x2.6 without the proof, complete 19 -> 20 of 65 with it, all VERIFIED. `inverse` native: `lib/core/prop/inverse.ml` (channel, CHECKING), mznlib `fzn_inverse`, stage 2 all_different from CITED root lemmas (`Encoding.add_cited_lemma`, alldiff's lemma-row hook), 2 mutation lanes, 3 models; Challenge 70 reach the route, 3 -> 3 complete (held by `Element.add_facts` and alldiff's factless conflicts, both filed). `member` designed with probes. Gate on `d1df37f`: `make -k check` rc 2 from the 5 pre-existing test_retention checks only (main fails the same), 195 models passed, peak RSS 100 104 kB; 181/195 models byte-identical to main (the 14 diffs: inverse x3, regular_opt/unsat .pbp); diff lane 184/184 default runs equal (fifo/lbd diffs identical to main's, strategy configs without references on this base) |
 | M11-complexity-T8 | agent-element (`wave53-element`) | 2026-11-19 | **D-0155.** `Element.add_facts` hashed and linear (same list as the old fold, oracle-tested), the index-hole trail walks through `Store.remover`, live and carried-value membership through an int table, hole facts once per pass. black-hole_10 168 G to 52 G instructions; every model's artefacts equal to main |
+| M7-T33 (and `Alldiff.excl`'s proof cost, D-0145; `hole_cite` through `Store.remover`, D-0155 §4) | agent-alldiff (`wave53-alldiff`) | 2026-11-19 | **D-0156.** alldiff's pigeonholes carry their facts under a decision, so they are learned from (root byte-identical). `p1f_13` TIMEOUT -> UNSAT 19.5 s VERIFIED, elitserien 0 -> 20 incumbents, Challenge pairs 100 instances: 5 -> 6 complete, 16 -> 37 incumbents. `excl` cyclic 646 -> 581 G, `hole_cite` bh10 52 -> 16 G and bh20@20 1846 -> 175 G, bytes equal. Tip gate (`45b8a3c7`): check rc 0, 4278 ok, 200 models, 4 alldiff `.pbp` differ, lane 18 DIFF (cyclic x6, lot-sizing x12) and debug 6, all expected. Open: lot-sizing [activity] over the 4 GB cap, black-hole's heap per node, openshop's checker panic at `--update` (D-0156 §4, §7). |
 
 ## Handoff notes
 
-### PAUSED 2026-11-19 (agent-alldiff, wave53-alldiff)
+### 2026-11-19 (agent-alldiff, `wave53-alldiff`): M7-T33 done, D-0156, NOT merged
 
-**Done and committed** (branch `wave53-alldiff`, pushed to node06 and origin): `b543817` part 2,
-`Alldiff.excl` through `Encoding.consistency_ids` (byte-identical); `4943f23` + `e3b7bc9` part 1,
-alldiff's two pigeonholes carry their facts under a decision (`push_conflict`), root unchanged,
-two SAT models + test_prop M7-T33 lanes (all green on the node); `cc9d94d` the orchestrator's
-addition, `hole_cite` through `Store.remover` (byte-identical); `328e631` merge of origin/main
-`c058ada`. Docs NOT written: the D-0156 draft (sections 1-3, 5, 5b filled; 4, 6, 7 TBD) is
-`/scratch/arthur/wave53-alldiff-runs/D-0156-draft.md`. Not yet done: append it to DECISIONS.md,
-ROADMAP row M7-T33 DONE, release the claim row, final handoff note.
-
-**Measured** (all under `/scratch/arthur/wave53-alldiff-runs/`): part 2 `m/*.sum` (cyclic
-646.22 -> 581.31 G, -10.0 %, .pbp md5 equal; rcpsp_11 equal). Gate on `b543817` alone
-(`gate/status`, "A" lines): check rc 0, 4243 ok, 0 FAIL, 198 models, 0 artefact diffs, lane
-301/301, debug 289/289. Gate on `4943f23` ("B" lines): check rc 0, 4275 ok, 0 FAIL, 200 models;
-artefact diffs only 4 alldiff `.pbp`; lane 18 DIFF (cyclic x6, lot-sizing x12), debug 6 (cyclic);
-scaling ok. bh (`final/status`): bh10 52.23 -> 15.92 G, bh20@20 1846 -> 174.5 G, artefacts equal.
-p1f_13: main TIMEOUT 0 learned -> UNSAT 19.5 s, 1877 learned, VERIFIED (`chal/results.tsv`).
-**FINDING**: lot-sizing [activity] dies at the lane's 4 GB cap (rc 134): main 3.44 GB RSS, branch
-4.35 GB, search-side (`--no-proof` 2.55 -> 3.49 GB, `mem/`), tracking learned 846 -> 1722
-(`repro/`). Do not raise the cap; it is the orchestrator's call.
-
-**Running** (detached, may finish alone): `final.sh`, pid in `final.pid`, writes `final/status`:
-the Challenge pairs main `643f44e9` vs tip `45b8a3c7` (`chal/`, `summ_pair.py chal/results.tsv
-main new`), then the tip gate in `gate-tip/` (logs `final/gate/`), then `--update` of both passes
-in that throwaway clone (verifies every proof; expect lot-sizing [activity] REFUSED).
-
-**Next**: read `final/status`; fill D-0156 sections 4 (chal summary), 6 (tip gate), 7 (re-record:
-cyclic@2000 x {default, audit0, lbd, nopb, bits0, noproof} both passes, lot-sizing x 12 configs,
-activity blocked by the cap finding); append D-0156 at the end of DECISIONS.md; ROADMAP DONE;
-remove the claim row; handoff note; report.
+Branch `wave53-alldiff` is ready for the orchestrator's gated merge (tip gate green, D-0156 §6). The merge must re-record
+the lane per D-0156 §7: cyclic@2000 x 6 configurations in both passes, and lot-sizing x 11 configurations. lot-sizing
+[activity] cannot be recorded under the 4 GB cap (main 3.44 GB, branch 4.35 GB, learned 846 -> 1722), and the user
+must decide. `--update` also refuses `2014_openshop_gp10-4@300` [default, audit0] on a checker panic, over a proof whose
+bytes are main's, so that refusal comes from main and not this branch. Black-hole now reaches the 8 GB heap budget
+within 300 s (D-0156 §4 finding); the next step is a heap profile, not done here.
 
 ### 2026-11-19 (orchestrator): wave53-tooling merged, gate 62 green
 
