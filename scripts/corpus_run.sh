@@ -113,9 +113,13 @@
 #   SOLVER_ARGS  extra solver arguments, word-split, placed before the model (M6-T9;
 #            e.g. "--time-limit 280 --stats --time"). Non-empty, each instance's
 #            solver stderr is also kept as $OUT/err/<id>.err
-#   NO_PROOF 1 to run the solver WITHOUT --proof and skip the checker (M6-T9,
-#            measurement only: the solver still writes its proof to a temporary
-#            file, so this removes the checker and the artefact, not the logging)
+#   NO_PROOF 1 to skip the checker (M6-T9, measurement only). The solver still
+#            writes its proof, to $L.opb/$L.pbp, which are deleted unchecked: this
+#            removes the checker and the artefact, not the logging. Until
+#            M9-no-proof-T5 the run went without --proof and the solver itself wrote
+#            the .pbp to a temporary file; a run without --proof now KEEPS its proof in
+#            the cwd, so the prefix is explicit. To skip the logging too, add
+#            SOLVER_ARGS=--no-proof (D-0126), which then replaces the prefix.
 #   RSS      1 to record the solver's peak RSS via /usr/bin/time when it
 #            exists; the figure goes into the compact detail as rss= (MB). Default 0
 #
@@ -609,7 +613,11 @@ $(head -c 120 "$L.mzn.err" | tr '\t\n\r' '   ')"
   # sits OUTSIDE `timeout`, so a kill still lands on the solver and GNU time
   # passes timeout's 124 through; the RSS it reports is the reaped descendant's.
   local -a proofargs=(--proof "$L") wrap=()
-  [ "$NO_PROOF" = "1" ] && proofargs=()
+  # M9-no-proof-T5: --no-proof beside --proof is a usage error (exit 2), so under
+  # NO_PROOF=1 a --no-proof in SOLVER_ARGS takes the prefix's place.
+  if [ "$NO_PROOF" = "1" ]; then
+    case " $SOLVER_ARGS " in *" --no-proof "*) proofargs=() ;; esac
+  fi
   [ "$RSS" = "1" ] && [ -x /usr/bin/time ] && wrap=(/usr/bin/time -q -f '%M' -o "$L.rss")
   rm -f "$L.rss"
   # shellcheck disable=SC2086

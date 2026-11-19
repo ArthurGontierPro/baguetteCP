@@ -72,7 +72,8 @@ for src in "${ROOT}"/mznlib/test/*.mzn; do
       echo "FAIL ${base}: the flattened model's proof was not VERIFIED"
       tail -3 "${tmp}/${n}.vp"
       dfail=1
-    elif ! "${BAGUETTE:-${ROOT}/_build/default/bin/main.exe}" "${tmp}/${n}_flat.fzn" 2>/dev/null |
+    elif ! "${BAGUETTE:-${ROOT}/_build/default/bin/main.exe}" "${tmp}/${n}_flat.fzn" \
+      --proof "${tmp}/${n}_again" 2>/dev/null |
       diff -q - "${exp}" > /dev/null; then
       echo "FAIL ${base}: the flattened model does not print test/expected/${n}.out"
       dfail=1
