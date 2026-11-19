@@ -1,0 +1,47 @@
+# bench/challenge — the MiniZinc Challenge editions
+
+`<YEAR>.lst` (2011 to 2026) is each edition's official instance set; `bench/README.md` §9 says how
+the lists are built and how an edition is run and ranked. This file says where the solvers and the
+recorded runs are, so that a session reads a table instead of relaunching a series.
+
+## 1. The solvers
+
+| Tool | Where |
+|---|---|
+| MiniZinc 2.10.1 bundle, with Chuffed | node: `/scratch/arthur/mzn/MiniZincIDE-2.10.1-x86_64-linux-gnu/bin/minizinc` (not on `PATH`); laptop: `~/opt/MiniZincIDE-2.10.1-x86_64-linux-gnu`, linked as `~/.local/bin/minizinc` |
+| Chuffed | `--solver chuffed` from the bundle |
+| GCS (Glasgow Constraint Solver) | node: `--solver /scratch/arthur/gcs/build/glasgow.msc` |
+| baguette | flatten with `minizinc -c --solver <checkout>/tools/baguette.msc model.mzn data.dzn -o x.fzn`, which uses `mznlib/`, then run `_build/default/bin/main.exe`; or `MZN_SOLVER_PATH=<checkout>/tools minizinc --solver baguette ...` |
+| Kissat 4.0.2, pysat | installed 2026-11-16 under `/scratch/arthur/tools/`, which is not on `fataepyc-06` (checked 2026-11-19); look on `fataepyc-07` before reinstalling |
+
+Flattening is fine on the laptop; solving goes to the node (`scripts/README.md` §1).
+
+## 2. The recorded runs
+
+| Run | What | Where |
+|---|---|---|
+| M7-T26, 2026-10-30/31 | All sixteen editions, 1 200 s, 16 GiB, PAR 30; baguette and Chuffed, GCS on 2025 and 2026 only; fixed category only | tables `/scratch/arthur/m7t26/<YEAR>/{results,flatten}.tsv`; corpus `/scratch/arthur/mznc/<YEAR>/`; archive `/scratch/arthur/mznc-archive/` (also `~/mznc-archive` on the laptop); records D-0105 (2026) to D-0120 (2011), synthesis D-0121 |
+| wave43, 2026-11-13 | The editions again after M7-T27 | `/scratch/arthur/wave43run/`, D-0133 |
+| Later rows | Per-feature Challenge runs (`regular`, `inverse`, `member`, alldiff conflicts) | each record's own section names its run directory |
+
+Re-read an edition without re-running it:
+
+```sh
+python3 -I tools/compare/challenge_rank.py <archive>/results/<YEAR>.json bench/challenge/<YEAR>.lst \
+  /scratch/arthur/m7t26/<YEAR> [--no-chuffed] [--category=free]
+```
+
+M7-T26's headline, stale since the November work: baguette-fd last in 13 editions and next to last
+in 3; 169 complete answers, all VERIFIED; 543 refusals (388 width wall, 145 heap budget, 9 gcc with
+a repeated variable, 1 unbounded `var int`). The M8, M9, M10 and M11 milestones changed most of
+those numbers, and the Challenge-wide re-measurement (M8-T4, M9-T3, M10-T5) is still to be run.
+
+## 3. Rules for a new series
+
+- Read the recorded tables first. A series costs the node for a day or more.
+- Every baguette answer is checked: the harnesses pass `--proof` and run `veripb`. An OPT or UNSAT
+  whose proof is not VERIFIED is demoted by `challenge_rank.py`.
+- Ask the user before a new series whether to run Chuffed again. M7-T26 reran it as a scale factor
+  against the official `chuffed-fd` results, and the user asked why; the question was left open.
+- The free category (`-f`, D-0154) has not been run yet. It is M10-T5's measurement.
+- Hash the binary of every series and write the hash in its record.

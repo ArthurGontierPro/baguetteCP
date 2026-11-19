@@ -574,6 +574,51 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 
 ## Handoff notes
 
+### 2026-11-19 late (orchestrator): the orchestrator moves to fataepyc-06 -- READ THIS FIRST
+
+The user loses the laptop's connection to the node and relaunches the orchestrator ON
+`fataepyc-06`, in the clone `/scratch/arthur/baguette` (CLAUDE.md, "A session launched ON
+fataepyc-06"; `scripts/README.md` is the operating manual; `bench/challenge/README.md` has the
+solver paths). The laptop's memory notes were moved into those two READMEs and CLAUDE.md.
+
+**On main and gated (gates 61 to 64 green):** D-0154 (the default search stays fixed, `-f`
+documented, the stale `-f` warning removed), D-0160 (the scaling lane is a blocking gate), D-0155
+(element: black-hole_10 168 G -> 52 G instructions), D-0157 (learned PB arithmetic: PB rows over bits
+1.89x -> 1.39x). Docs only: D-0147 §10-11 (parity archived by the user), M2-L7 closed (D-0050
+addendum), M9-no-proof-T5 opened (the user's decision: the default run writes AND KEEPS its proof).
+
+**Paused agents** (each branch carries a WIP commit and a `PAUSED` note at the top of its own
+`## Handoff notes`; relaunch one fresh agent per branch from that note, on the node):
+- `wave53-alldiff` (M7-T33, `Alldiff.excl`, `Alldiff.remover_index`), tip `eac5fdd`. p1f_13 timeout
+  -> UNSAT in 19.5 s (1 877 learned), black-hole_20 1 846 G -> 175 G instructions, 15 handball
+  instances gain an incumbent. Lot-sizing under the lane's `activity` configuration now dies at the
+  lane's 4 GB cap (twice the learned clauses). `final.sh` was still running
+  (`/scratch/arthur/wave53-alldiff-runs/final.pid`). Left: D-0156 from its draft, ROADMAP, the gate
+  numbers. At merge: re-record the lane for cyclic (6 configurations) and lot-sizing (12).
+- `wave53-memo` (M11-T10), tip `496ee3e`. Sharing identical explanations cannot keep the bytes:
+  each copy wrote its own line, so it needs an id in `Explanation.t` (the user's decision). Built
+  instead: a share mode behind `BAGUETTE_MEMO_SHARE=1`, off by default (byte-identical): cable's
+  proof 1 887 -> 114 MB, RSS 21.1 -> 16.0 GB, -22 % instructions, but rcpsp_11 +14.5 %.
+  `memo-gate.sh` was still running (`/scratch/arthur/wave53-memo-runs/memo-gate.pid`). Left: the
+  placeholders of D-0158 from `gate.status`.
+- `wave53-noproof` (M9-no-proof-T4), tip `cabacd2`. Six guards: openshop under `--no-proof` -42.6 %
+  instructions, RSS 341 -> 93 MB. Left: the profile placeholder, `gate.sh`, the handoff. Its
+  requests: `Alldiff.snap_of` builds derivation-only data at every snapshot (39.4 % of cyclic under
+  `--no-proof`, after the alldiff merge), the root lemmas built in `compile.ml` (8.9 % of
+  nonogram's startup), `Justify.ensure_lit`'s own guard.
+
+**Finished, not merged:** `wave53-member` (M7-T28 `member`, D-0159), tip `1a913cf`, gate green. On
+the Challenge it changes no answer, and its rows grow with the domain width (3.77 M on
+`gl_Map1f`), so it waits for the user (merge, keep the branch until D-0159 §5's cheaper encoding,
+or merge with a fallback). Its claim row stays until then.
+
+**Waiting for the user:** `member` (above); an investigation of `bin_packing_load` (48 of 65
+instances refused by the front end, cause unrecorded); where the default proof is written
+(M9-T5; proposed `./<model>.opb` and `.pbp`); the memo share mode or an id in `Explanation.t`; the
+lot-sizing `activity` lane cap.
+
+**Merge order once resumed:** alldiff (with its re-record commit), then noproof, then memo.
+
 ### 2026-11-19 (orchestrator): wave53-element and wave53-learned merged, gates 63 and 64 green
 
 Gate 63 (`c058ada`, D-0155, binary `643f44e9`) and gate 64 (`6bf83d4`, D-0157, binary `d7a1ef00`), each
