@@ -429,63 +429,52 @@ let rec shallow_hash (e : Explanation.t) =
       let budget = ref operand_budget in
       finish (operand_list budget 7 0 parts)
 
-(* M11-complexity-T10 (D-0158). SHARE MODE'S KEY, in place of [shallow_hash]: every
-   element of every list and every field of a [Linear_term], where [shallow_hash] reads
-   four elements and 48 operand nodes, over at most [share_budget] nodes. A [Deferred]
-   at the top is its forced value (and an unforced one [unforced_hash]), as in
-   [shallow_hash]; one below the top is a constant, as in [operand_hash], so forcing a
-   thunk cannot move a key, and a value keeps its key for as long as it lives. Two
-   values that are equal only through a nested thunk's forcing can therefore land in two
-   buckets; they are then not shared, which costs a line and nothing else.
+(* M11-complexity-T10 (D-0158). SHARE MODE'S KEY, in place of [shallow_hash]: the same
+   hash with no width at the top. Every summand of a [Combine], every literal of a
+   [Clause] or [Linear] and every part of a [Resolve] is mixed in, each summand as
+   [summand_hash] reads it, where [shallow_hash] reads four; the operands under them
+   are still read by [operand_hash] within one shared budget of [operand_budget] nodes.
+   So a [Deferred] at the top is its forced value (and an unforced one [unforced_hash]),
+   one below the top is a constant, forcing a thunk cannot move a key, and a value keeps
+   its key for as long as it lives. Two values equal only through a nested thunk's
+   forcing can land in two buckets; they are then not shared, which costs a line and
+   nothing else.
 
-   Why a key of its own. Under [shallow_hash], rcpsp_11 at 10 000 nodes has buckets of
-   up to 7 730 distinct [Combine]s that agree on their first four summands. Off, those
-   are walked with [==], which is cheap per entry. With a structural comparison per entry
-   the walk was 90 % of the run; with this hash compared first it was still 1.8 times
-   the instructions of the run without sharing (D-0158 section 3). Keyed by it, a bucket
-   holds the copies of one derivation and little else. It costs a walk of the value per
-   lookup, which share mode pays back by not writing the copies; off, it would cost more
-   than the long buckets it spreads (measured on the same instance), so off keeps
-   [shallow_hash]. *)
-let deep_hash (e : Explanation.t) =
-  let budget = ref share_budget in
-  let rec go h (e : Explanation.t) =
-    if !budget <= 0 then h
-    else (
-      decr budget;
-      match e with
-      | Explanation.Decision l -> mix (mix h 0) (lit_hash l)
-      | Explanation.Clause ls ->
-          List.fold_left (fun h l -> mix h (lit_hash l)) (mix h 1) ls
-      | Explanation.Linear (ts, r) -> mix (List.fold_left term (mix h 2) ts) r
-      | Explanation.Cut (a, b, c1, c2) -> go (go (mix (mix (mix h 3) c1) c2) a) b
-      | Explanation.Model_row i -> mix (mix h 4) i
-      | Explanation.Combine (ss, d) -> List.fold_left summand (mix (mix h 5) d) ss
-      | Explanation.Deferred _ -> mix h 6
-      | Explanation.Resolve parts -> List.fold_left go (mix h 7) parts)
-  and term h (c, l) = mix (mix h c) (lit_hash l)
-  and summand h = function
-    | Explanation.Term (c, t) -> go (mix (mix h 10) c) t
-    | Explanation.Weaken ls -> List.fold_left term (mix h 11) ls
-    | Explanation.Defining (c, l) -> mix (mix (mix h 12) c) (lit_hash l)
-    | Explanation.Linear_term r ->
-        let h =
-          mix
-            (mix
-               (mix
-                  (mix
-                     (mix (mix h 13) r.Explanation.lt_coeff)
-                     (Hashtbl.hash r.Explanation.lt_name))
-                  r.Explanation.lt_decl_lo)
-               r.Explanation.lt_decl_hi)
-            r.Explanation.lt_value
-        in
-        List.fold_left go h r.Explanation.lt_cited
+   Why a key of its own, and why this one (D-0158 section 3, rcpsp_11 at 10 000 nodes).
+   Under [shallow_hash] that instance has buckets of up to 7 730 distinct [Combine]s that
+   agree on their first four summands: off, they are walked with [==], cheap per entry;
+   with a structural comparison per entry the walk was 90 % of the run. A hash of the
+   WHOLE value, operands included, made every bucket short and cost 46 % of the run
+   itself, because it re-walked every nested operand at every lookup. This one reads
+   each top-level list once and stops at 48 operand nodes, which is what tells
+   D-0149's cable chains apart. Off keeps [shallow_hash]: there a wider hash would buy
+   nothing that [==] needs. *)
+let wide_hash (e : Explanation.t) =
+  let rec all f h n = function
+    | [] -> mix h n
+    | x :: rest -> all f (mix h (f x)) (n + 1) rest
   in
-  match e with
-  | Explanation.Deferred { forced = None; _ } -> unforced_hash
-  | Explanation.Deferred { forced = Some f; _ } -> finish (go 0 f)
-  | e -> finish (go 0 e)
+  let rec go (e : Explanation.t) =
+    match e with
+    | Explanation.Decision l -> finish (mix 0 (lit_hash l))
+    | Explanation.Clause ls -> finish (all lit_hash 1 0 ls)
+    | Explanation.Linear (ts, r) ->
+        finish (mix (all (fun (c, l) -> mix c (lit_hash l)) 2 0 ts) r)
+    | Explanation.Cut (a, b, c1, c2) ->
+        let budget = ref operand_budget in
+        finish
+          (operand_hash budget (operand_hash budget (mix (mix (mix 3 c1) c2) 10) a) b)
+    | Explanation.Model_row i -> finish (mix 4 i)
+    | Explanation.Combine (ss, d) ->
+        let budget = ref operand_budget in
+        finish (all (summand_hash budget) (mix 5 d) 0 ss)
+    | Explanation.Deferred { forced = Some f; _ } -> go f
+    | Explanation.Deferred { forced = None; _ } -> unforced_hash
+    | Explanation.Resolve parts ->
+        let budget = ref operand_budget in
+        finish (all (fun p -> operand_hash budget 0 p) 7 0 parts)
+  in
+  go e
 
 (* A claim that is already on the page: the id of the line stating it and the level that
    line was written at. See the module header's "claim index". *)
@@ -562,7 +551,7 @@ let find_in_bucket ctx h (e : Explanation.t) =
   in
   (* M11-complexity-T10 (D-0158): newest first, the first entry that is [e] itself or,
      at or below the current level, structurally equal to it. The bucket is [e]'s
-     [deep_hash], so an entry that gets to [equal_within] is nearly always a copy. *)
+     [wide_hash], so an entry that gets to [equal_within] is nearly always a copy. *)
   let rec go_share cur = function
     | [] -> None
     | (k, (m : memo_entry)) :: rest ->
@@ -598,8 +587,8 @@ let find_memo ctx h (e : Explanation.t) =
           find_in_bucket ctx unforced_hash e
       | _ -> None)
 
-(* [e]'s key in the memo: [shallow_hash] off, [deep_hash] in share mode. *)
-let memo_key ctx e = if ctx.memo.share then deep_hash e else shallow_hash e
+(* [e]'s key in the memo: [shallow_hash] off, [wide_hash] in share mode. *)
+let memo_key ctx e = if ctx.memo.share then wide_hash e else shallow_hash e
 
 let remember_with ctx (e : Explanation.t) h (cid : Writer.cid) : Writer.cid =
   let level = Writer.current_level ctx.writer in
@@ -797,7 +786,7 @@ let memoized ctx (e : Explanation.t) (thunk : unit -> Writer.cid) : Writer.cid =
       | None -> remember ctx e (thunk ()))
   | _ -> (
       (* Hashed once: a head that is not a [Deferred] hashes the same before and after
-         its thunk runs ([shallow_hash] and [deep_hash] read a nested [Deferred] as a
+         its thunk runs ([shallow_hash] and [wide_hash] read a nested [Deferred] as a
          constant, and nothing else they read is mutable). *)
       let h = memo_key ctx e in
       if memo_stats_on then incr ms_lookups;
