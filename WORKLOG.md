@@ -23,6 +23,7 @@ of it to every session and stopping at a broken line before it even reached the 
 | M7-T28 (`member`) | new `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, new `test/models/`, `test/unit/test_prop.ml` (member section) | agent-member (`wave53-member`) | 2026-11-19 |
 | M7-T29 (the `fplen` half: bounds inference for a `var int` with no domain) | `lib/flatzinc/builder.ml`, new `test/models/`, `test/unit/test_flatzinc.ml` (one section); `docs/SPEC.md` 2.1 only if the user agrees | agent-fplen (`wave54-fplen`) | 2026-11-19 |
 | M11-complexity-T11 (investigation; no edit of `lib/` without a new claim) | new files under `/scratch/arthur/wave54-heap-runs/` only; a probe branch `wave54-heap` | agent-heap (`wave54-heap`) | 2026-11-19 |
+| M9-no-proof-T5 (the default keeps the proof) | `bin/main.ml` (the proof channel), `docs/SPEC.md` §1 and §4.1, `README.md`, `scripts/diff_lane.sh`, `scripts/corpus_run.sh`, `scripts/compare_run.sh`, `test/unit/test_endtoend.ml`, `tools/baguette.msc` | agent-keepproof (`wave54-keepproof`) | 2026-11-19 |
 
 ## Cross-session requests
 
