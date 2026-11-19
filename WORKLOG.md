@@ -21,7 +21,6 @@ of it to every session and stopping at a broken line before it even reached the 
 |---|---|---|---|
 | M7-T33 (and `Alldiff.excl`'s proof cost, D-0145) | `lib/core/prop/alldiff.ml`, `lib/proof/encoding.ml` (additive only), new `test/models/`, `test/unit/test_prop.ml` (alldiff section) | agent-alldiff (`wave53-alldiff`) | 2026-11-19 |
 | M7-T28 (`member`) | new `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, new `test/models/`, `test/unit/test_prop.ml` (member section) | agent-member (`wave53-member`) | 2026-11-19 |
-| M7-T29 (the `fplen` half: bounds inference for a `var int` with no domain) | `lib/flatzinc/builder.ml`, new `test/models/`, `test/unit/test_flatzinc.ml` (one section); `docs/SPEC.md` 2.1 only if the user agrees | agent-fplen (`wave54-fplen`) | 2026-11-19 |
 | M11-complexity-T11 (investigation; no edit of `lib/` without a new claim) | new files under `/scratch/arthur/wave54-heap-runs/` only; a probe branch `wave54-heap` | agent-heap (`wave54-heap`) | 2026-11-19 |
 | M9-no-proof-T5 (the default keeps the proof) | `bin/main.ml` (the proof channel), `docs/SPEC.md` §1 and §4.1, `README.md`, `scripts/diff_lane.sh`, `scripts/corpus_run.sh`, `scripts/compare_run.sh`, `test/unit/test_endtoend.ml`, `tools/baguette.msc` | agent-keepproof (`wave54-keepproof`) | 2026-11-19 |
 
@@ -612,8 +611,28 @@ section 1. Shares are inclusive, of the whole run.
 | M13-codes-leads (roadmap rows only) | codes-cp session | 2026-11-19 | Two TODO (to study) rows from the codes-cp phase-1 benchmark: T1 a linear relaxation as a presolve step, T2 symmetry detection with dominance-justified breaking. No code. |
 | M11-complexity-T10 | agent-memo (`wave53-memo`) | 2026-11-19 | **D-0158.** The memo's identical copies are identical LINES, so an entry cannot be shared without changing the bytes. `justify.ml` gains a share mode, OFF by default (`BAGUETTE_MEMO_SHARE=1`), that answers a miss with an identical line already on the page at or below the current level: cable's proof 1 887 -> 114 MB, cyclic's 2 023 -> 322 MB, rcpsp_11 +14.5 % instructions, search identical. Share lane: 85/301 runs differ in the `.pbp` hash and the `pol`/`pol-tokens` counters only (`pol` lines -32 % over the lane), 274/274 proofs VERIFIED. Off, every byte is main's. Gate on `95759c5`: `make check` rc 0, 198 models x 4 artefacts equal to `64ec63e0`, lane 301/301, debug 289/289, binary `59368b5f`. The default is the user's call (D-0158 section 5) |
 | M9-no-proof-T4 | agent-noproof-audit (`wave53-noproof`) | 2026-11-19 | **D-0161.** Six guards behind the null writer in `Search` (`record_improving`'s literal family and bits bridge, the SAT conclusion, `ensure_decision_atom`, `Learn.supports`) and in `start_proof`'s root lemmas (`mint_root_lemma_ids`). openshop `--no-proof` -42.6 % instructions, RSS 341 -> 93 MB; proved runs byte-identical. Gate on `658c785` (binary `fd3d9635`): `make check` rc 0 (4 253 ok, 198 models, 100 MB), 198 models x 4 artefacts equal to `d7a1ef00`, lane 301/301, debug 289/289, scaling ok |
+| M7-T29 (the `fplen` half; M7-T29 DONE) | agent-fplen (`wave54-fplen`) | 2026-11-19 | **D-0162 (PROPOSED).** No fix: `connect__0086_02` is the one connect instance with a positive floor-plan cost, and `fplen`/`fpwid` are bounded only below and minimised, so the model's solution set is unbounded in them and SPEC 2.1 admits no bound. A dominance cap from the objective is drafted in D-0162 §3 for the user. Measured on a hand-capped `.fzn` (binary `c72c48e2`): order encoding passed 51 GB of `.opb` in 5 min (stopped), `--bits-above 10000` stopped on the 16 GB heap budget at 15 min 25 s, no solution. One `test_flatzinc` reject case pins the shape. Gate: `make check` rc 0, 198 models, peak RSS 100 MB |
 
 ## Handoff notes
+
+### 2026-11-19 night (orchestrator, in screen on fataepyc-06): memo, noproof and fplen merged; gates 65, 66 green
+
+Gate 65 (`d3ab9b7`, merge wave53-memo, D-0158, share mode OFF, binary `c72c48e2`) and gate 66
+(`38c7625`, merge wave53-noproof, D-0161, binary `a52448f2`), each against gate 64's `d7a1ef00`:
+`make check` rc 0 (4 266 ok, 198 models, ~100 MB), 198 models x 4 artefacts equal, lane 301/301,
+debug 289/289, scaling ok. Nothing re-recorded. Merge order changed from the move note: alldiff
+waits for the user's lot-sizing [activity] decision (D-0156 §7), so memo and noproof went first.
+wave54-fplen (M7-T29 DONE, D-0162 PROPOSED: `fplen` is a correct refusal; a test pins it) merged
+after them, gate 67 on it. bin_packing_load (the user's question): none of the 48 refusals is the
+global; every rc 5 is the 8 GB heap budget on wide objectives and sums (gbac's sum of squared load
+deviations, mapping's communication cost), and `--bits-above 64` runs all four tried (RSS 9-17 GB
+-> 1.3-3.5 GB, gbac_UD3 0 -> 15 solutions). Report: `/cluster/arthur/baguette-results/binpack-probe/REPORT.md`.
+
+### 2026-11-19 (agent-fplen, `wave54-fplen`): M7-T29's `fplen` half, D-0162 (PROPOSED)
+
+No solver change. `fplen` is a correct refusal, because the model bounds it only from below and minimises it, so no sound inference
+bounds it. D-0162 §3 drafts the objective-dominance sentence the user would have to accept, and §4-§5 show that even capped the
+instance dies on memory (51 GB of `.opb` on the order encoding, heap budget on bits). Recommendation there is to leave it refused.
 
 ### 2026-11-19 (agent-noproof-audit, finished by the orchestrator): M9-no-proof-T4, D-0161
 

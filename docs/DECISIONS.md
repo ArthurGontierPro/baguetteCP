@@ -19086,3 +19086,65 @@ Three requests are under `## Cross-session requests` in `WORKLOG.md`, dated 2026
   at compile time.
 - **`justify.ml` (agent-memo).** `ensure_lit` should carry the null guard itself, so that a future
   caller cannot mint atoms for the null writer. Nothing pays for its absence today.
+## D-0162  M7-T29 (the `fplen` half): `connect__0086_02` is a correct refusal under SPEC 2.1; capping a variable from the objective would be a dominance argument, and is PROPOSED for the user, not built
+
+Status: PROPOSED. Nothing changed in the solver; the SPEC sentence in section 3 awaits the user.
+Date: 2026-11-19
+Task: M7-T29, the `fplen` half (agent-fplen, `wave54-fplen`).
+Touches: `test/unit/test_flatzinc.ml` (one `reject` case pinning the shape). No solver code.
+Follows D-0083 (bounds inference, which already called this refusal correct), D-0121.
+
+### 1. The cause
+
+`2021_MZNC_connect_connect__0086_02` is the only one of the five `connect` instances with a
+positive floor-plan cost (`dFPUnitCost__PERIM = 100`, `nFPUnits = 0`; the four others have both
+costs 0, so `fpSz = [0, 0]`). Its perimeter branch states only
+`fpSz[c] >= fpPosXY_F[c] - fpPosXY[c]` and `fpSzCost[c] = fpSz[c] * 1`, and the objective
+minimises `PIPECOST + SUPPCOST + FPCOST`. Flattened: `int_lin_le([-1,1,-1],[fplen,X2775,X2773],0)`
+(`X2775` in 54939..112000, `X2773` in 0..1) and `int_lin_eq([1,-1,-1],[FPCOST,fplen,fpwid],0)`,
+then `OBJ__PHASE_1 = FPCOST + SUPPCOST + PIPECOST`. Nothing bounds `fplen`, `fpwid`, `FPCOST` or
+`OBJ__PHASE_1` above: the model's solution set really is unbounded in them (any `fplen >= 54938`
+extends a solution). SPEC 2.1's inference MUST be sound for every solution, so no rule, extended
+or not, may bound them. The refusal (binary `c72c48e2`) names `fplen`, lower bound 54938, and
+three other undomained variables.
+
+### 2. What a bound would need
+
+The only finite bound is a DOMINANCE one: `fplen` occurs in one lower-bound row and with a positive
+coefficient in the minimised cost, so any solution with `fplen > max(X2775) - min(X2773) = 112000`
+is matched by one with `fplen = 112000` and a strictly better objective. That keeps the optimum and
+loses solutions, so it violates 2.1's soundness sentence as written, and the `.opb` would encode
+the capped model: VeriPB would certify the optimum of a model the user did not write, by an
+argument it never checks (or the cap has to be derived in the proof, a `red` whose witness moves
+`fplen` to a value depending on other variables, which the order encoding does not express as a
+substitution).
+
+### 3. The SPEC sentence it would need (for the user)
+
+> A `var int` with no declared domain that occurs only (a) in rows bounding it from below and
+> (b) with a positive coefficient in a chain of equalities defining a minimised objective (the
+> mirror for maximise) MAY be capped at the largest value its lower-bound rows can require. The
+> capped model has the same optimal value, not the same solutions; a solution printed is a
+> solution of the original model, and the proof certifies the capped model, which the
+> diagnostic on stderr says.
+
+### 4. What the cap would buy (measured on a hand-patched `.fzn`, binary `c72c48e2`)
+
+`fplen` declared 54938..112000 and `fpwid` 24992..62000 by hand
+(`/scratch/arthur/wave54-fplen-runs/fplen_capped.fzn`), everything else as flattened. The model
+then compiles, but it has the four siblings' shape: `PIPECOST` is declared 0..216000000,
+`SUPPCOST` 0..86000000, and 217 auxiliaries 0..1000000. On the order encoding the `.opb` passed
+51 GB within five minutes, still in the encoding (stopped by its PID; the siblings were CAPPED at
+about 370 GB in wave 41, ELIGIBILITY-wave41). With `--bits-above 10000`: see section 5.
+
+### 5. The bits run
+
+Same patched `.fzn`, `--bits-above 10000 --width-warn none --proof --time-limit 1200
+--max-heap-mb 16384`, under `systemd-run -p MemoryMax=32G`: 1 166 variables on bits (110 held back
+by `element`), `.opb` 0.93 GB. The run stopped on the HEAP BUDGET after 15 min 25 s (exit 5,
+peak RSS 26.2 GB), with no solution printed and a 0.77 GB `.pbp` (nothing to verify). So the cap
+alone does not make the instance answerable: it would turn a refusal at parse time into a
+memory death in the search, the fate of 14 other wide instances in D-0121. The user's call is
+whether that is worth a normative sentence that changes what the proof certifies; this record's
+recommendation is NO for now, and to revisit it with the bits encoding's `element` (the 110
+held-back variables).
