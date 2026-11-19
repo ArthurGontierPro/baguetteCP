@@ -47,7 +47,10 @@
    proof-side deletion of learned rows and the audit I-X2. [Encoding.start_proof] is
    still called, through that writer, because element and alldiff embed its
    [Writer.fresh] ids in their explanations and D-0126's id rule wants those identical
-   in both modes. What it prints is UNVERIFIED and SPEC 1 says it is not a result;
+   in both modes. Since D-0161 it mints the root lemmas' ids without reading the lemmas,
+   and [Search] no longer builds what only a proof line reads (an improving solution's
+   literal family, a decision's bits atom, I-S4's walk over the cut). What it prints is
+   UNVERIFIED and SPEC 1 says it is not a result;
    `--stats` says so on stderr. `make check` proves every model AND runs it again under
    this flag: stdout and the exit code must be byte-identical
    (scripts/run_model_tests.sh), which is the one direct test that proof logging never
