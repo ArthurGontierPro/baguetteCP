@@ -1780,10 +1780,10 @@ let test_memo_identity_m11t5 () =
    Off ([create_sharing ~share:false], the default): every copy is its own entry and its
    own line -- the proof the suite and the lanes have recorded.
    On: each copy renders the line the first copy wrote, so it gets that line's id while
-   the line's level is at or below the writer's, and is not remembered (one entry per
-   line); a copy asked for BELOW the line's level (through [with_level]) gets its own
-   line; after the wipe of the line's level the next copy is derived afresh; an
-   unforced [Deferred] is never forced by a lookup. *)
+   the line's level is at or below the writer's, and it is remembered AT THE LINE'S
+   LEVEL, so a wipe above that level keeps it; a copy asked for BELOW the line's level
+   (through [with_level]) gets its own line; after the wipe of the line's level the next
+   copy is derived afresh; an unforced [Deferred] is never forced by a lookup. *)
 let test_share_m11t10 () =
   let run share =
     let _, r =
@@ -1805,13 +1805,22 @@ let test_share_m11t10 () =
               ]
               2
           in
+          let c2 = copy () in
           Writer.set_level w 1;
           let id1 = Justify.emit ctx (copy ()) in
           Writer.set_level w 2;
-          let id2 = Justify.emit ctx (copy ()) in
+          let id2 = Justify.emit ctx c2 in
           Writer.set_level w 3;
           let id3 = Justify.emit ctx (copy ()) in
-          let n_entries, longest = Justify.memo_stats ctx in
+          let stats = Justify.memo_stats ctx in
+          (* Wipe levels 2 and up: the line is at level 1. *)
+          Justify.wipe_level ctx 2;
+          Writer.set_level w 1;
+          let n_after_wipe = fst (Justify.memo_stats ctx) in
+          let last = Writer.last_id w in
+          let id2b = Justify.emit ctx c2 in
+          let c2_minted = Writer.last_id w > last in
+          Writer.set_level w 3;
           let calls = ref 0 in
           let d =
             Explanation.deferred (fun () ->
@@ -1830,22 +1839,30 @@ let test_share_m11t10 () =
           let live_low = Writer.is_live w id_low in
           Justify.wipe_level ctx 1;
           ( [ id1; id2; id3 ],
-            (n_entries, longest),
-            id_low,
+            stats,
+            (n_after_wipe, id2b, c2_minted),
             (id_d, d_minted, id_d_again, !calls),
-            id_after,
-            live_low ))
+            (id_after, id_low, live_low) ))
     in
     r
   in
   (match run false with
-  | Ok ([ id1; id2; id3 ], (n, longest), _, (_, d_minted, _, calls), _, _) ->
+  | Ok
+      ( [ id1; id2; id3 ],
+        (n, longest),
+        (n_after, _, c2_minted),
+        (_, d_minted, _, calls),
+        _ ) ->
       check "m11t10 share OFF: three rebuilt copies, three lines"
         (List.length (List.sort_uniq Int.compare [ id1; id2; id3 ]) = 3);
       check
         "m11t10 share OFF: six entries, three to a bucket (each copy and its inner \
          Combine)"
         (n = 6 && longest = 3);
+      check
+        "m11t10 share OFF: a wipe of level 2 drops the copies made at 2 and 3, which are \
+         derived again"
+        (n_after = 2 && c2_minted);
       check "m11t10 share OFF: a thunk of the same derivation mints its own line" d_minted;
       check "m11t10 share OFF: the thunk ran once" (calls = 1)
   | Ok _ -> check "m11t10 share OFF: the scene ran" false
@@ -1856,19 +1873,23 @@ let test_share_m11t10 () =
   | Ok
       ( [ id1; id2; id3 ],
         (n, longest),
-        id_low,
+        (n_after, id2b, c2_minted),
         (id_d, d_minted, id_d_again, calls),
-        id_after,
-        live_low ) ->
+        (id_after, id_low, live_low) ) ->
       check "m11t10 share ON: three rebuilt copies, one line" (id1 = id2 && id2 = id3);
-      check "m11t10 share ON: one memo entry per line written" (n = 2 && longest = 1);
-      check "m11t10 share ON: a copy asked for below the line's level gets its own line"
-        (id_low > id_after && live_low);
+      check "m11t10 share ON: every copy is remembered (six entries, three to a bucket)"
+        (n = 6 && longest = 3);
+      check
+        "m11t10 share ON: the copies are remembered at the line's level, so a wipe of \
+         level 2 keeps them and nothing is derived again"
+        (n_after = 6 && id2b = id1 && not c2_minted);
       check "m11t10 share ON: a forced thunk of the same derivation shares the line"
         (id_d = id1 && (not d_minted) && id_d_again = id1);
       check "m11t10 share ON: the thunk ran once, by force and not by a lookup" (calls = 1);
       check "m11t10 share ON: after the wipe of the line's level, derived afresh"
-        (id_after > id1)
+        (id_after > id1);
+      check "m11t10 share ON: a copy asked for below the line's level gets its own line"
+        (id_low > id_after && live_low)
   | Ok _ -> check "m11t10 share ON: the scene ran" false
   | Error e ->
       incr failures;

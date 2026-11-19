@@ -160,8 +160,8 @@
    expressions derive the same constraint whatever explanations they came from, so the
    key is the text, not the explanation, and no structural equality on [Explanation.t]
    is needed (the thing the paragraph above warns against stays untouched). A copy
-   answered this way is not remembered in the memo: its line is the first copy's, and the
-   memo holds one entry per line written. Off, the proof is byte for byte what it was.
+   answered this way is remembered with the shared line's id at the shared line's level,
+   so its entry dies with the line. Off, the proof is byte for byte what it was.
    On, it is shorter and its ids differ; the search does not change. The default is off
    because that is a change of proof bytes, which is the user's to decide (D-0158).
 
@@ -564,8 +564,10 @@ let find_memo ctx h (e : Explanation.t) =
           find_in_bucket ctx unforced_hash e
       | _ -> None)
 
-let remember_with ctx (e : Explanation.t) h (cid : Writer.cid) : Writer.cid =
-  let level = Writer.current_level ctx.writer in
+(* [e] remembered at [level], the level of the line [cid] names: the writer's current
+   level for a line just written, the shared line's own level in share mode (D-0158), so
+   that the entry is wiped with the line and not before or after it. *)
+let remember_at ctx (e : Explanation.t) h (cid : Writer.cid) level : Writer.cid =
   let m = ctx.memo in
   let bucket = Option.value (Itbl.find_opt m.tbl h) ~default:[] in
   Itbl.replace m.tbl h ((e, { cid; level }) :: bucket);
@@ -583,6 +585,7 @@ let remember_with ctx (e : Explanation.t) h (cid : Writer.cid) : Writer.cid =
     if level > m.memo_hi then m.memo_hi <- level);
   cid
 
+let remember_with ctx e h cid = remember_at ctx e h cid (Writer.current_level ctx.writer)
 let remember ctx e cid = remember_with ctx e (shallow_hash e) cid
 
 (* Backtracking: wipe the writer's level and drop the memo entries it invalidated, in
@@ -786,11 +789,13 @@ let memoized ctx (e : Explanation.t) (thunk : unit -> Writer.cid) : Writer.cid =
    line -- for a [Combine] or a [Cut] that emits its operands, which is what the line
    would have done first anyway, so the page gets the same lines in the same order up to
    this one -- and returns it with the function that writes it. An identical line at or
-   below the current level answers, and then [e] is not remembered: the memo keeps one
-   entry per line written. *)
+   below the current level answers, and [e] is remembered with that line's id AT THAT
+   LINE'S LEVEL, so the entry dies with the line. Not remembering it was measured: on
+   rcpsp_11 every later lookup of a copy rendered it again, operands and all, and the
+   lookups went from 9.0 M to 24.8 M (D-0158 section 3). *)
 let find_line ctx k =
   match Lines.find_opt ctx.lines k with
-  | Some (s : stated) when s.s_level <= Writer.current_level ctx.writer -> Some s.s_cid
+  | Some (s : stated) when s.s_level <= Writer.current_level ctx.writer -> Some s
   | _ -> None
 
 let state_line ctx k (cid : Writer.cid) =
@@ -817,9 +822,9 @@ let memoized_line ctx (e : Explanation.t)
   | None -> (
       let k, write = line () in
       match find_line ctx k with
-      | Some cid ->
+      | Some s ->
           if memo_stats_on then incr ms_shared;
-          cid
+          remember_at ctx e h s.s_cid s.s_level
       | None ->
           let cid = write () in
           state_line ctx k cid;
