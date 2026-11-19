@@ -574,6 +574,13 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 
 ## Handoff notes
 
+### 2026-11-19 (orchestrator): wave53-element and wave53-learned merged, gates 63 and 64 green
+
+Gate 63 (`c058ada`, D-0155, binary `643f44e9`) and gate 64 (`6bf83d4`, D-0157, binary `d7a1ef00`), each
+against the previous gate's binary: `make check` rc 0, 198 models with 0 artefact differences, lane
+301/301, debug 289/289, scaling enforced ok on every line (within +0.13 % of late). No reference was
+re-recorded. `Alldiff.remover_index` (agent-element's request) was forwarded to agent-alldiff.
+
 ### 2026-11-19 (orchestrator): wave53-tooling merged, gate 62 green
 
 `23c77c8` merges D-0160 (the scaling lane enforces on the growth of the cost per node; the width
