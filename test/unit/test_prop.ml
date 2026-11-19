@@ -7893,6 +7893,7 @@ let test_linear_scratch () =
     (!same = trials);
   check (Printf.sprintf "E7: ...%d of them prune (> 300)" !prunes) (!prunes > 300);
   check (Printf.sprintf "E7: ...%d of them conflict (> 300)" !conflicts) (!conflicts > 300)
+
 (* ======================================================================== M7-T28
 
    regular (D-0146). Two questions, the module header's two claims:
