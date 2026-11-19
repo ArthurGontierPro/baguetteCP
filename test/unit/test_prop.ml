@@ -8045,6 +8045,301 @@ let test_regular_brute_force () =
        !scenes !changed !conflicts)
     (!bad = 0 && !scenes = 1200 && !changed > 100 && !conflicts > 10)
 
+(* D-0151: the reasons ON THE LETTERS, by brute force over the same random scenes. Every
+   pruning and conflict the call reports must be SOUND on its own facts over the DECLARED
+   domains -- every accepted word (letters 0..3, flags its run) that satisfies the facts
+   keeps the claim (no removed value; for a conflict, no word at all) -- and no fact may
+   name a flag THIS call moved: a flag fact is allowed only on a flag the scene fixed
+   (cited as itself, as a decision would be). Two narrowing rounds per scene, so the
+   second call recurses into tails the first one cached. *)
+let test_regular_letter_reasons () =
+  regular_rng := 2027;
+  let unsound = ref 0 and flag_facts = ref 0 and reasons = ref 0 and facts_n = ref 0 in
+  let conflicts = ref 0 and widest = ref 0 and first_bad = ref "" in
+  let bad what =
+    incr unsound;
+    if !first_bad = "" then first_bad := what
+  in
+  for _ = 1 to 300 do
+    let n = 2 + regular_rnd 2 and nq = 2 + regular_rnd 2 in
+    let delta = Array.init (nq * 2) (fun _ -> regular_rnd (nq + 1)) in
+    let final =
+      List.filter (fun _ -> regular_rnd 2 = 0) (List.init nq (fun k -> k + 1))
+    in
+    let final = if final = [] then [ nq ] else final in
+    let nf = (n + 1) * nq in
+    let decls =
+      List.init n (fun i -> (Printf.sprintf "x%d" i, 0, 3))
+      @ List.init nf (fun k -> (Printf.sprintf "s%d_%d" (k / nq) ((k mod nq) + 1), 0, 1))
+    in
+    let store = mk_store decls in
+    let xs =
+      Array.init n (fun i ->
+          Regular.Letter { var = var i; name = Printf.sprintf "x%d" i; dlo = 0; dhi = 3 })
+    in
+    let flags = Array.init nf (fun k -> var (n + k)) in
+    let p = Regular.make store ~xs ~nq ~smin:1 ~delta ~q0:1 ~final ~flags in
+    let fixed_by_scene = Hashtbl.create 4 in
+    (* every accepted word over the declared letters, with its run *)
+    let words =
+      List.filter_map
+        (fun w ->
+          match regular_accepts ~nq ~delta ~final w with
+          | Some st -> Some (Array.of_list w, st)
+          | None -> None)
+        (regular_product (List.init n (fun _ -> [ 0; 1; 2; 3 ])))
+    in
+    let value_of (w, st) name =
+      let rest = String.sub name 1 (String.length name - 1) in
+      match (name.[0], String.index_opt rest '_') with
+      | 'x', None -> w.(int_of_string rest)
+      | 's', Some u ->
+          let i = int_of_string (String.sub rest 0 u)
+          and q = int_of_string (String.sub rest (u + 1) (String.length rest - u - 1)) in
+          if st.(i) = q then 1 else 0
+      | _ -> failwith ("test_regular_letter_reasons: a fact on " ^ name)
+    in
+    let holds sol (f : Reason.fact) =
+      let v = value_of sol (Reason.fact_owner f) in
+      if Reason.fact_is_lower f then v >= Reason.fact_value f
+      else v <= Reason.fact_value f
+    in
+    let audit what facts claim_ok =
+      incr reasons;
+      facts_n := !facts_n + List.length facts;
+      widest := max !widest (List.length facts);
+      List.iter
+        (fun f ->
+          let nm = Reason.fact_owner f in
+          if nm.[0] = 's' then (
+            incr flag_facts;
+            if not (Hashtbl.mem fixed_by_scene nm) then
+              bad (Printf.sprintf "%s cites the flag %s, which it moved itself" what nm)))
+        facts;
+      List.iter
+        (fun sol ->
+          if List.for_all (holds sol) facts && not (claim_ok sol) then
+            bad (Printf.sprintf "%s: an accepted word satisfies its facts" what))
+        words
+    in
+    for _round = 1 to 2 do
+      for i = 0 to n - 1 do
+        let d = Store.get store (var i) in
+        if not (Domain.is_fixed d) then (
+          if regular_rnd 2 = 0 then
+            ignore
+              (Store.set_lo store (var i)
+                 (Domain.lo d + regular_rnd 2)
+                 placeholder_pruning);
+          if regular_rnd 3 = 0 then
+            ignore
+              (Store.set_hi store (var i)
+                 (Domain.hi d - regular_rnd 2)
+                 placeholder_pruning))
+      done;
+      for k = 0 to nf - 1 do
+        let nm = Printf.sprintf "s%d_%d" (k / nq) ((k mod nq) + 1) in
+        if Domain.size (Store.get store (var (n + k))) = 2 then
+          match regular_rnd 20 with
+          | 0 ->
+              Hashtbl.replace fixed_by_scene nm ();
+              ignore (Store.set_hi store (var (n + k)) 0 placeholder_pruning)
+          | 1 ->
+              Hashtbl.replace fixed_by_scene nm ();
+              ignore (Store.set_lo store (var (n + k)) 1 placeholder_pruning)
+          | _ -> ()
+      done;
+      let from = Store.trail_length store in
+      let outcome = Regular.propagate p store in
+      for pos = from to Store.trail_length store - 1 do
+        let e = Store.trail_entry store pos in
+        let nm = Store.name store e.Store.var in
+        let removed =
+          List.filter
+            (fun v -> not (Domain.mem e.Store.now v))
+            (Domain.to_list e.Store.old)
+        in
+        audit (Printf.sprintf "the pruning of %s" nm) (Reason.facts e.Store.reason)
+          (fun sol -> not (List.mem (value_of sol nm) removed))
+      done;
+      match outcome with
+      | Propagator.Conflict c ->
+          incr conflicts;
+          audit "a conflict" (Reason.facts c.Store.c_reason) (fun _ -> false)
+      | Propagator.Fixpoint -> ()
+    done
+  done;
+  if !first_bad <> "" then Printf.printf "     first violation: %s\n" !first_bad;
+  check
+    (Printf.sprintf
+       "regular (D-0151): %d reasons (%d conflicts, %d facts, widest %d, %d flag facts \
+        all on flags the scene fixed): every one SOUND over the declared domains, none \
+        naming a flag the propagator moved"
+       !reasons !conflicts !facts_n !widest !flag_facts)
+    (!unsound = 0 && !reasons > 1000 && !conflicts > 10)
+
+(* ======================================================================== M7-T28
+
+   inverse (D-0151 section 2), by brute force over random small scenes: f over 1..nf, g
+   over 1..ng (nf, ng in 2..3, so some scenes have no solution at all), each declared one
+   value wider than the other's index set on a side so the restriction rows are read, then
+   random bound narrowings and holes. The claims of lib/core/prop/inverse.ml's header:
+
+   - I-P1: no solution (an f/g pair of mutual inverses inside the current domains) is
+     removed, and a conflict only where there is none;
+   - CHANNEL consistency after a fixpoint: every value of f_i is an index of g, and
+     j in dom(f_i) <=> i in dom(g_j), both ways;
+   - I-P2: a second call changes nothing;
+   - every reason SOUND on its own facts over the DECLARED domains: each pair of mutual
+     inverses satisfying the facts keeps the claim (for a conflict, none satisfies them). *)
+module Inverse = Baguette_core.Inverse
+
+let test_inverse_brute_force () =
+  regular_rng := 2028;
+  let bad = ref 0 and scenes = ref 0 and changed = ref 0 and conflicts = ref 0 in
+  let reasons = ref 0 and first_bad = ref "" in
+  let flag what =
+    incr bad;
+    if !first_bad = "" then first_bad := what
+  in
+  for _ = 1 to 400 do
+    incr scenes;
+    let nf = 2 + regular_rnd 2 and ng = 2 + regular_rnd 2 in
+    (* f_i declared over 0..ng+1 sometimes, g_j over 1..nf otherwise *)
+    let wide = regular_rnd 2 = 0 in
+    let fdecl = if wide then (0, ng + 1) else (1, ng) in
+    let decls =
+      List.init nf (fun i -> (Printf.sprintf "f%d" (i + 1), fst fdecl, snd fdecl))
+      @ List.init ng (fun j -> (Printf.sprintf "g%d" (j + 1), 1, nf))
+    in
+    let store = mk_store decls in
+    let cell k name (lo, hi) = Inverse.Cell { var = var k; name; dlo = lo; dhi = hi } in
+    let f = Array.init nf (fun i -> cell i (Printf.sprintf "f%d" (i + 1)) fdecl) in
+    let g =
+      Array.init ng (fun j -> cell (nf + j) (Printf.sprintf "g%d" (j + 1)) (1, nf))
+    in
+    let p = Inverse.make ~f ~fmin:1 ~g ~gmin:1 in
+    let nv = nf + ng in
+    (* The scene's holes are punched with no facts, as a ROOT hole is: the propagator
+       cites a hole through its remover's facts, which are none, so the audit below holds
+       every solution to the scene's holes the way the page holds it to a root line. *)
+    let holes = ref [] in
+    for k = 0 to nv - 1 do
+      let d = Store.get store (var k) in
+      if regular_rnd 3 = 0 then
+        ignore (Store.set_lo store (var k) (Domain.lo d + 1) placeholder_pruning);
+      if regular_rnd 4 = 0 then
+        ignore (Store.set_hi store (var k) (Domain.hi d - 1) placeholder_pruning);
+      let d = Store.get store (var k) in
+      if regular_rnd 3 = 0 && Domain.hi d - Domain.lo d >= 2 then (
+        holes := (k, Domain.lo d + 1) :: !holes;
+        ignore (Store.remove store (var k) (Domain.lo d + 1) placeholder_pruning))
+    done;
+    (* every pair of mutual inverses over the DECLARED domains *)
+    let declared k = if k < nf then fdecl else (1, nf) in
+    let rec words k =
+      if k = nv then [ [] ]
+      else
+        let lo, hi = declared k in
+        List.concat_map
+          (fun v -> List.map (fun w -> v :: w) (words (k + 1)))
+          (List.init (hi - lo + 1) (fun d -> lo + d))
+    in
+    let sols =
+      if nf <> ng then []
+      else
+        List.filter_map
+          (fun w ->
+            let a = Array.of_list w in
+            let ok_f i =
+              let j = a.(i) in
+              j >= 1 && j <= ng && a.(nf + j - 1) = i + 1
+            and ok_g j =
+              let i = a.(nf + j) in
+              i >= 1 && i <= nf && a.(i - 1) = j + 1
+            in
+            if
+              List.for_all ok_f (List.init nf Fun.id)
+              && List.for_all ok_g (List.init ng Fun.id)
+            then Some a
+            else None)
+          (words 0)
+    in
+    let inside a =
+      Array.for_all Fun.id
+        (Array.mapi (fun k v -> Domain.mem (Store.get store (var k)) v) a)
+    in
+    let live = List.filter inside sols in
+    let value_of a name =
+      let k = int_of_string (String.sub name 1 (String.length name - 1)) - 1 in
+      if name.[0] = 'f' then a.(k) else a.(nf + k)
+    in
+    let holds a (fct : Reason.fact) =
+      let v = value_of a (Reason.fact_owner fct) in
+      if Reason.fact_is_lower fct then v >= Reason.fact_value fct
+      else v <= Reason.fact_value fct
+    in
+    let audit what facts claim_ok =
+      incr reasons;
+      List.iter
+        (fun a ->
+          if
+            List.for_all (fun (k, v) -> a.(k) <> v) !holes
+            && List.for_all (holds a) facts
+            && not (claim_ok a)
+          then
+            flag
+              (Printf.sprintf "%s: a solution satisfies its facts [%s]" what
+                 (Reason.to_string_facts facts)))
+        sols
+    in
+    let from = Store.trail_length store in
+    let before = Store.snapshot store in
+    let outcome = Inverse.propagate p store in
+    for pos = from to Store.trail_length store - 1 do
+      let e = Store.trail_entry store pos in
+      let nm = Store.name store e.Store.var in
+      let removed =
+        List.filter (fun v -> not (Domain.mem e.Store.now v)) (Domain.to_list e.Store.old)
+      in
+      audit ("the pruning of " ^ nm) (Reason.facts e.Store.reason) (fun a ->
+          not (List.mem (value_of a nm) removed))
+    done;
+    match outcome with
+    | Propagator.Conflict c ->
+        incr conflicts;
+        audit "a conflict" (Reason.facts c.Store.c_reason) (fun _ -> false);
+        if live <> [] then flag "a conflict on a scene with a solution"
+    | Propagator.Fixpoint -> (
+        if not (Store.same_domains store before) then incr changed;
+        if not (List.for_all inside live) then flag "a solution was removed";
+        for i = 1 to nf do
+          let df = Store.get store (var (i - 1)) in
+          Domain.iter
+            (fun j ->
+              if j < 1 || j > ng then flag "f keeps a value outside g's index set")
+            df;
+          for j = 1 to ng do
+            let dg = Store.get store (var (nf + j - 1)) in
+            if Domain.mem df j <> Domain.mem dg i then
+              flag (Printf.sprintf "f%d and g%d disagree after the call" i j)
+          done
+        done;
+        let snap = Store.snapshot store in
+        match Inverse.propagate p store with
+        | Propagator.Conflict _ -> flag "the second call conflicts"
+        | Propagator.Fixpoint ->
+            if not (Store.same_domains store snap) then flag "the second call prunes")
+  done;
+  if !first_bad <> "" then Printf.printf "     first violation: %s\n" !first_bad;
+  check
+    (Printf.sprintf
+       "inverse (D-0151): I-P1, channel consistency, I-P2 and every reason SOUND over \
+        the declared domains, %d scenes (%d pruned, %d conflicts, %d reasons): no \
+        violation"
+       !scenes !changed !conflicts !reasons)
+    (!bad = 0 && !changed > 100 && !conflicts > 20 && !reasons > 500)
+
 (* A [baguette_regular] instance as FlatZinc: [n] letters on 1..[dom_hi], [nq] states,
    [table] row-major over the symbols 1..|table|/nq, start 1, accepting [final], flags
    s<i>_<q>, then the [extra] lines and an input-order, smallest-first search on x. Shared
@@ -8345,7 +8640,9 @@ let () =
   test_linear_scratch ();
   (* M7-T28, D-0146: regular. *)
   test_regular_brute_force ();
+  test_regular_letter_reasons ();
   test_regular_veripb ();
+  test_inverse_brute_force ();
   if !failures > 0 then (
     Printf.printf "\n%d FAILURE(S)\n" !failures;
     exit 1)

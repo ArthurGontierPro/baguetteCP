@@ -1388,6 +1388,26 @@ let regular_src =
         "solve :: int_search([x1, x0, x2], input_order, indomain_split, complete) satisfy;\n";
       ])
 
+(* inverse (D-0151 section 2): f and g on 1..3, each the other's inverse, with
+   g2 + g3 <= 4 and a split on f1 first. The low half f1 <= 1 takes 2 and 3 out of f1, so
+   the CHANNEL removes 1 from g2 and from g3 -- `g2 >= 2` with the decision fact f1 <= 1
+   on its tail, the line the `channel-fact` lane corrupts -- and then g2 = g3 = 2 is a
+   pigeonhole the stage-2 all_different over g (or the channel) refutes. The high half
+   finds f = g = [2, 1, 3]. Both arrays are distinct variables, so compile.ml posts the
+   two all_different instances whose pairwise rows are the cited ROOT LEMMAS the
+   `lemma-rhs` lane corrupts. *)
+let inverse_src =
+  String.concat ""
+    (List.map
+       (fun x -> Printf.sprintf "var 1..3: %s :: output_var;\n" x)
+       [ "f1"; "f2"; "f3"; "g1"; "g2"; "g3" ]
+    @ [
+        "constraint baguette_inverse([f1, f2, f3], 1, [g1, g2, g3], 1);\n";
+        "constraint int_lin_le([1, 1], [g2, g3], 4);\n";
+        "solve :: int_search([f1, f2, f3, g1, g2, g3], input_order, indomain_min, \
+         complete) satisfy;\n";
+      ])
+
 (* An emitter lane that also asserts the checker's WORDING at full strength: a rejection
    on the grammar would satisfy [Rejected_on_derivation]'s exit status and say nothing
    about the derivation (CLAUDE.md, "assert the checker's wording"). *)
@@ -2002,6 +2022,63 @@ solve :: seq_search([int_search([b, y], input_order, indomain_min, complete), in
           ~knob:(knob ~site:"trace: ~s2_4_ge_1" Writer.Mutation.Drop_literal)
           "death-fact";
         regular_no_lemmas_lane c ~proof:b.pbp ~opb:b.opb ~n_lemmas);
+
+    (* -- M7-T28: inverse (D-0151) ------------------------------------------------------
+       [inverse_src] above. Two lanes, each refused at the RUP wording:
+         channel-fact  the channel pruning g2 >= 2 under f1 <= 1 with its last tail
+                       literal -- the fact excluding 2 from f1, which the module puts
+                       last -- dropped: the channel row alone does not give it;
+         lemma-rhs     one pairwise root lemma's degree raised: stage 2's rows are
+                       derived and checked, so a wrong one is a refused line, not a
+                       stronger model. *)
+    let solve_inv ?mutation ~name () =
+      let m = F.Builder.of_string ~file:name inverse_src in
+      let c = Compile.compile m in
+      let opb = Filename.concat dir (name ^ ".opb")
+      and pbp = Filename.concat dir (name ^ ".pbp") in
+      let oc = open_out opb in
+      Encoding.write_opb ~comments:[ "test_mutation: " ^ name ] c.Compile.encoding oc;
+      close_out oc;
+      let oc = open_out pbp in
+      let writer =
+        match mutation with
+        | None -> Writer.create ~comments:true ~audit:true oc
+        | Some mutation -> Writer.create_mutated ~comments:false ~audit:true ~mutation oc
+      in
+      Encoding.start_proof c.Compile.encoding writer;
+      let ctx = Justify.create ~writer ~encoding:c.Compile.encoding in
+      let outcome =
+        Search.solve ~engine:c.Compile.engine ~store:c.Compile.store ~ctx
+          ~check:(fun _ -> true)
+          ?order:c.Compile.order ()
+      in
+      close_out oc;
+      ( { pbp; opb; fired = Writer.mutation_fired writer },
+        outcome,
+        Encoding.n_root_lemmas c.Compile.encoding )
+    in
+    let b, outcome, n_lemmas = solve_inv ~name:"inverse" () in
+    check "inverse: the solver solves it (the instance is what we think it is)"
+      (match outcome with Search.Sat _ -> true | Search.Unsat -> false);
+    check
+      (Printf.sprintf
+         "inverse: 18 pairwise root lemmas, 3 pairs x 3 values over f and over g (%d)"
+         n_lemmas)
+      (n_lemmas = 18);
+    let build_inv ~name ~mutation =
+      let b, _, _ = solve_inv ~mutation ~name () in
+      b
+    in
+    gated ~tag:"inverse"
+      ~control:(fun () -> control_holds ~tag:"inverse" ~proof:b.pbp)
+      ~declares:[ "channel-fact"; "lemma-rhs" ]
+      (fun c ->
+        regular_lane c ~build:build_inv
+          ~knob:(knob ~site:"trace: g2_ge_2 from 1 fact" Writer.Mutation.Drop_literal)
+          "channel-fact";
+        regular_lane c ~build:build_inv
+          ~knob:(knob ~site:"root lemma (D-0146)" Writer.Mutation.Strengthen_rhs)
+          "lemma-rhs");
 
     census ~dir;
 

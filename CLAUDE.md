@@ -293,7 +293,12 @@ lib/core/       Baguette_core
                             consistent over the letters and (n+1)*Q STATE FLAGS (store
                             variables, so a dead state is a trail entry); every pruning one
                             rup against its rows plus the backward-chain lemmas
-                            Encoding.start_proof derives (M7-T28, D-0146)
+                            Encoding.start_proof derives (M7-T28, D-0146). The reasons name
+                            the LETTERS only, recursing into the dead flags' own tails (D-0151)
+    inverse.ml              inverse(f, g) through mznlib's baguette_inverse: CHANNEL filtering
+                            (j in f_i <=> i in g_j), CHECKING, every pruning one rup; compile.ml
+                            adds all_different over each array whose pairwise rows are cited
+                            ROOT LEMMAS (Encoding.add_cited_lemma) (M7-T28, D-0151)
     linear.ml               int_lin_le. THE REFERENCE PROPAGATOR — copy this shape.
     lin_eq.ml               int_lin_eq (two model rows, see D-0011)
     ne.ml                   int_lin_ne and int_ne (VALUE consistency)

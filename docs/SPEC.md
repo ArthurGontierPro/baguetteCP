@@ -83,9 +83,11 @@ no variable and needs no domain of its own.
 | M3 | reified forms: `int_lin_le_reif`, `int_eq_reif`, `int_le_reif`, `int_ne_reif` |
 | M4 | `all_different_int`, `int_abs`, `int_times`, `int_div`, `array_int_element`, `global_cardinality` (M7-T16), `array_int_maximum`, `array_int_minimum`, `int_max`, `int_min` (M4-T9) |
 | M5 | `int_lin_le` with an objective; `minimize` / `maximize` |
-| M7 | `regular` (M7-T28, D-0146: `fzn_regular` and `fzn_regular_set`, kept whole by mznlib as `baguette_regular(x, Q, smin, d, q0, F, s)` with the `(n+1)*Q` state flags `s` the library introduces); `global_cardinality_closed`, `global_cardinality_low_up_closed` (M7-T28, D-0146: mznlib onto `global_cardinality`, with the closed cover's implied `sum(counts) = |x|`) |
+| M7 | `regular` (M7-T28, D-0146: `fzn_regular` and `fzn_regular_set`, kept whole by mznlib as `baguette_regular(x, Q, smin, d, q0, F, s)` with the `(n+1)*Q` state flags `s` the library introduces); `global_cardinality_closed`, `global_cardinality_low_up_closed` (M7-T28, D-0146: mznlib onto `global_cardinality`, with the closed cover's implied `sum(counts) = |x|`); `inverse` (M7-T28, D-0151: `fzn_inverse`, kept whole by mznlib as `baguette_inverse(f, fmin, g, gmin)`, the two first indices carrying the index sets) |
 
 A variable that occurs more than once in `global_cardinality`'s array is accepted *(amended 2026-11-18, M7-T29, D-0146)*: it counts once per occurrence, and the front end MUST NOT refuse it nor count it once. (The implementation copies each repeat into a fresh variable tied by `int_eq`.)
+
+`baguette_inverse(f, fmin, g, gmin)` *(added 2026-11-19, M7-T28, D-0151)* holds iff, for every position `k` of `f` and `l` of `g` (0-based), `f[k]` lies in `gmin..gmin+|g|-1`, `g[l]` lies in `fmin..fmin+|f|-1`, and `f[k] = gmin + l` exactly when `g[l] = fmin + k` -- std's `fzn_inverse` over the two index sets the offsets name. Either array MAY hold constants and MAY repeat a variable (an involution passes the same array twice); arrays of different lengths are accepted and unsatisfiable.
 
 Encountering a builtin outside the implemented set MUST produce a clear error naming the
 builtin and exit non-zero. It MUST NOT silently ignore the constraint. *(normative)*

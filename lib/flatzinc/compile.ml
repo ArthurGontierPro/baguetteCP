@@ -164,6 +164,7 @@ module Gcc = Baguette_core.Gcc
 module Maxmin = Baguette_core.Maxmin
 module Cumulative = Baguette_core.Cumulative
 module Regular = Baguette_core.Regular (* M7-T28, D-0146 *)
+module Inverse = Baguette_core.Inverse (* M7-T28, D-0151 *)
 module View = Baguette_core.View
 
 (* M2-L12/D-0052: the clause propagator was widened to general order literals and its
@@ -733,6 +734,9 @@ let held_families (m : Model.t) : (int, string list) Hashtbl.t =
       | Model.Cumulative (ss, _, _, _) -> hold "cumulative" ss
       | Model.Array_int_element (idx, _, res) -> hold "element" [ idx; res ]
       | Model.Regular r -> hold "regular" r.Model.r_xs (* M7-T28: rows over x's ladder *)
+      | Model.Inverse iv ->
+          (* M7-T28 (D-0151): the channel rows are over both arrays' ladders *)
+          hold "inverse" (iv.Model.inv_f @ iv.Model.inv_g)
       | Model.Int_lin_le _ | Model.Int_lin_eq _ | Model.Int_le _ | Model.Int_lt _
       | Model.Int_eq _ | Model.Bool_clause _ | Model.Array_bool_or _
       | Model.Array_bool_and _ | Model.Bool_eq _ | Model.Bool_not _
@@ -1338,6 +1342,165 @@ let compile (m : Model.t) : t =
             (module Regular : Propagator.S with type t = Regular.t)
             p);
       ]
+  in
+  (* ------------------------------------------------------------------------ M7-T28
+
+     `baguette_inverse(f, fmin, g, gmin)` (D-0146 section 7, D-0151 section 2): the
+     CHANNEL rows lib/core/prop/inverse.ml's header states, over the order literals of
+     both arrays, and the propagator. A constant in either array is a [Inverse.Fixed]:
+     every literal about it is folded here to true (the row is not written) or false (it
+     is dropped from the row), so a constant that contradicts the relation leaves an
+     empty row, which is the false row -- the right answer. *)
+  let post_inverse pos (iv : Model.inverse) =
+    let cell = function
+      | Model.Const c -> Inverse.Fixed c
+      | Model.Var i ->
+          let d = Store.get store (Var.of_int i) in
+          Inverse.Cell
+            {
+              var = Var.of_int i;
+              name = name_of pos i;
+              dlo = Domain.lo d;
+              dhi = Domain.hi d;
+            }
+    in
+    let f = Array.of_list (List.map cell iv.Model.inv_f)
+    and g = Array.of_list (List.map cell iv.Model.inv_g) in
+    let fmin = iv.Model.inv_fmin and gmin = iv.Model.inv_gmin in
+    let nf = Array.length f and ng = Array.length g in
+    (* A disjunct: the constant true (the row holds), the constant false (dropped), or
+       literals. *)
+    let ne c v =
+      match c with
+      | Inverse.Fixed k -> if k = v then `F else `T
+      | Inverse.Cell { name; dlo; dhi; _ } ->
+          if v < dlo || v > dhi then `T
+          else if dlo = dhi then `F
+          else `L (Encoding.ne_clause_lits ~name ~decl_lo:dlo ~decl_hi:dhi v)
+    and ge c v =
+      match c with
+      | Inverse.Fixed k -> if k >= v then `T else `F
+      | Inverse.Cell { name; dlo; dhi; _ } ->
+          if v <= dlo then `T else if v > dhi then `F else `L [ Lit.ge name v ]
+    and le c v =
+      match c with
+      | Inverse.Fixed k -> if k <= v then `T else `F
+      | Inverse.Cell { name; dlo; dhi; _ } ->
+          if v >= dhi then `T
+          else if v < dlo then `F
+          else `L [ Lit.negate (Lit.ge name (v + 1)) ]
+    in
+    let row parts =
+      if not (List.mem `T parts) then
+        let lits = List.concat_map (function `L l -> l | `T | `F -> []) parts in
+        ignore (Encoding.add_constraint encoding (Opb.clause lits) : int)
+    in
+    let gmax = gmin + ng - 1 and fmax = fmin + nf - 1 in
+    Array.iter
+      (fun c ->
+        row [ ge c gmin ];
+        row [ le c gmax ])
+      f;
+    Array.iter
+      (fun c ->
+        row [ ge c fmin ];
+        row [ le c fmax ])
+      g;
+    Array.iteri
+      (fun kf cf ->
+        let i = fmin + kf in
+        Array.iteri
+          (fun kg cg ->
+            let j = gmin + kg in
+            (* CH(i, j): f_i = j -> g_j = i; CH'(j, i): g_j = i -> f_i = j *)
+            row [ ne cf j; ge cg i ];
+            row [ ne cf j; le cg i ];
+            row [ ne cg i; ge cf j ];
+            row [ ne cg i; le cf j ])
+          g)
+      f;
+    let p = Inverse.make ~f ~fmin ~g ~gmin in
+    (* Idempotent only when no variable occurs twice across the two arrays: an aliased
+       variable is two cells one removal changes at once, and the second pass can then
+       owe the first one more (the header's I-P2 argument is per cell). *)
+    let ops =
+      List.filter_map
+        (function Model.Var i -> Some i | Model.Const _ -> None)
+        (iv.Model.inv_f @ iv.Model.inv_g)
+    in
+    let idempotent = List.length (List.sort_uniq compare ops) = List.length ops in
+    (* STAGE 2 (D-0146 section 7.3, D-0151 section 2): both arrays are permutations, so
+       all_different over each is IMPLIED, and lib/core/prop/alldiff.ml over it brings the
+       matching's pruning the channel cannot see (a pigeonhole). Its derivations cite the
+       pairwise rows `x <> v \/ z <> v`, which this .opb does not state: they are ROOT
+       LEMMAS, each `rup` from the two channel rows CH(i, v) and CH(k, v) (or from the
+       restriction rows, for a v outside the other index set), registered with
+       [Encoding.add_cited_lemma] and handed to alldiff through its lemma-row hook. One
+       instance per array over its variables, when they are pairwise distinct (a repeat
+       is the involution's or a unification's, and Alldiff's Hall test is by name), and
+       when the model does not already post all_different over the same set (its model
+       rows would make this one a duplicate). A constant in the array is left to the
+       channel. *)
+    let stage2 (arr : Model.operand list) =
+      let is =
+        List.filter_map (function Model.Var i -> Some i | Model.Const _ -> None) arr
+      in
+      let set = List.sort_uniq compare is in
+      let posted =
+        List.exists
+          (fun (c : Model.constr) ->
+            match c.Model.k with
+            | Model.All_different xs ->
+                List.sort_uniq compare
+                  (List.filter_map
+                     (function Model.Var i -> Some i | Model.Const _ -> None)
+                     xs)
+                = set
+            | _ -> false)
+          m.Model.constraints
+      in
+      if List.length set < 2 || List.length set <> List.length is || posted then []
+      else
+        let names = List.map (name_of pos) is in
+        List.iter (Encoding.request_direct encoding) names;
+        let decl i =
+          let d = Store.get store (Var.of_int i) in
+          (Domain.lo d, Domain.hi d)
+        in
+        let rec pairs = function
+          | [] -> []
+          | x :: rest -> List.map (fun z -> (x, z)) rest @ pairs rest
+        in
+        let lemma_rows =
+          List.concat_map
+            (fun (x, z) ->
+              let (xlo, xhi), (zlo, zhi) = (decl x, decl z) in
+              let nx = name_of pos x and nz = name_of pos z in
+              List.init
+                (max 0 (min xhi zhi - max xlo zlo + 1))
+                (fun k ->
+                  let v = max xlo zlo + k in
+                  let c =
+                    Opb.clause
+                      (Encoding.ne_clause_lits ~name:nx ~decl_lo:xlo ~decl_hi:xhi v
+                      @ Encoding.ne_clause_lits ~name:nz ~decl_lo:zlo ~decl_hi:zhi v)
+                  in
+                  ((nx, nz, v), Encoding.add_cited_lemma encoding c)))
+            (pairs is)
+        in
+        let a =
+          Alldiff.make ~lemma_rows store encoding ~rows:[] (List.map Var.of_int is)
+        in
+        [
+          (fun id ->
+            Propagator.pack ~id (module Alldiff : Propagator.S with type t = Alldiff.t) a);
+        ]
+    in
+    (fun id ->
+      Propagator.pack ~idempotent ~id
+        (module Inverse : Propagator.S with type t = Inverse.t)
+        p)
+    :: (stage2 iv.Model.inv_f @ stage2 iv.Model.inv_g)
   in
   (* ===================================================================== end M7-T28 *)
   (* ------------------------------------------------------------------------ M4-T9
@@ -2068,6 +2231,7 @@ let compile (m : Model.t) : t =
           | Model.Array_int_maximum (mo, xs) -> post_maxmin pos ~dir:Maxmin.Max mo xs
           | Model.Array_int_minimum (mo, xs) -> post_maxmin pos ~dir:Maxmin.Min mo xs
           | Model.Regular r -> post_regular pos r (* M7-T28, D-0146 *)
+          | Model.Inverse iv -> post_inverse pos iv (* M7-T28, D-0151 *)
         with Checked.Overflow msg ->
           reject_row pos
             ~what:

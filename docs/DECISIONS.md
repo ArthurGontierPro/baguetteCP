@@ -17809,3 +17809,353 @@ the same eight; `make scaling`: ok. The forced `dune runtest` and every `bits_*`
    M11-T4 part 2's this wave); a sorted-array `Learned` and a cap on the learned PB instances
    registered are the two levers.
 4. The `bits0` reference, for the orchestrator.
+## D-0151  M7-T28 continued: `regular`'s reasons on the letters (every tail recurses into the dead flags' own lines, so a learned clause names cells and not states), `inverse` native in two stages (channel filtering, then all_different over each array from cited root lemmas), and `member` designed with probes
+
+**Status**: **DONE** (2026-11-19, agent-globals2, `wave51-globals2`). The contract is ROADMAP row
+M7-T28 and D-0146's two open items: section 5's "smaller reasons (on letters only) are the
+obvious next lever" and section 7's `inverse` design. Section 1 is `regular`'s reasons (design,
+checker probes before the OCaml, implementation, measurement), section 2 `inverse` (stage 1,
+stage 2 and its API, the Challenge), section 3 `member` (a design record with probes, no code),
+section 4 what was checked.
+
+### 1. `regular`'s reasons on the letters
+
+**1.1 What D-0146 left.** A flag death's reason was its dead predecessors (`s <= 0` facts), a
+letter pruning's the dead flags on its edges. 1UIP learning then cut on FLAGS: a learned clause
+named states of one row's automaton, which only that row's propagator can read back, and on the
+nonograms of D-0146 section 6 nearly every clause sat in the stock histogram's `>= 16` bucket.
+
+**1.2 The design: recursion through the flags' own lines.** The literature's explanation of a
+layered graph -- Gange, Stuckey and Szymanek, "MDD propagators with explanation" (Constraints
+16(4), 2011), on the decision diagram Pesant's filtering (CP 2004) walks; the g-nogoods of
+Katsirelos and Bacchus (AAAI 2005), whose literals are the variables' removed values -- explains
+`x_i <> v` by killing every `v`-edge of layer `i` ABOVE (its source unreachable), BELOW (its
+target unable to reach the end) or by its LETTER (the value removed), and the letters it cites
+are the ones where an edge leaves a LIVE state. GCS (`dev_docs/regular.md` on fataepyc-06) does
+not compute such reasons at all: GCS does not learn, so its `Regular` justifies with the whole
+current domain and cache-gated `~state[i][q]` lines.
+
+The proof is what decides the shape here. A tail of letters only is in general NOT RUP in one
+line against the rows and the backward lemmas: a state's death several layers past the letters
+that caused it is a case split over the intermediate letters' values, which unit propagation
+cannot do. It IS RUP once the flags it passes through are dead on the page -- and they are: every
+flag death is a trail entry whose trace line Trace writes, oldest first, before any line that
+rests on it. So the rule is:
+
+- where D-0146 cited a dead flag `s(i,q) <= 0`, cite the TAIL of the line that killed it, which
+  is letter facts by the same rule one level down. Assume the new tail and that flag's line
+  fires (its tail is a subset), so every argument of D-0146 section 3.4 goes through unchanged;
+- a letter is cited only where it must be: in a forward death (P1), per value `v` of `x_i`'s
+  alphabet, if every predecessor on `v` is dead, recurse into their tails; otherwise `v` is out
+  of the domain and is cited as the WEAKEST bound excluding every such value (`x_i >= v+1` for
+  the largest below the live lower bound, `x_i <= v-1` for the smallest above the upper one), or
+  inside `[lo, hi]` through the hole's remover. A backward death (P2) the same with successors.
+  A value removal (P3) takes, per state with an edge on `v`, the dead side whose tail adds fewer
+  new facts. A flag fixed to 1 (P4) takes the tails of the rest of its layer; a flag killed by
+  the one fixed in its layer (P5), that one's tail; a conflict, the union of what it reads;
+- the tails are kept as the STRONGEST fact per letter and direction (`x >= 3` subsumes
+  `x >= 2` through the ladder), so a tail has at most two facts per letter however deep;
+- a flag moved by anything but this instance (under the engine, a decision on a flag) has no
+  tail of ours and is cited as itself.
+
+"Recurse rather than cite" is Gange's preference: it keeps the cited letters at the FRONTIER, so
+a death far from a decision cites the decision, not the letters it forced on the way.
+
+**1.3 Checked on the checker first.** `bench/regular_spike/gen_letters_probe.py` is a Python
+reference of the five steps of `regular.ml` with these reasons, run on random automata (Q = 3
+to 5, letters of 2 to 4 values, 4 to 6 letters, one or TWO bound decisions per round so a
+domain-consistent propagator meets conflicts below the root) and three nonogram automata; the
+proof is every pruning in trail order, as Trace writes it. `probe_letters.sh`, VeriPB 3.0.2
+(`d5644ca4`) on fataepyc-06, 60 scenes:
+
+| what | verdict |
+|---|---|
+| the 60 proofs, every line letter-tailed (19 end in a conflict) | **60 accepted** |
+| each line with a non-empty tail, its LAST fact dropped (578 variants) | 539 refused at the RUP wording, 39 accepted (the fact was redundant for unit propagation: the explanation is greedy, not minimum) |
+| every flag line removed, up to the first letter or conflict line with a tail (40 variants) | 12 refused at the RUP wording: the flags' own lines are load-bearing; in the other 28 the line happened to be RUP alone |
+
+**1.4 As built.** `lib/core/prop/regular.ml` only (its header rewritten around it): the letters
+are SLOTS (one per distinct variable of the word), a reason under construction is stamped
+scratch arrays indexed by (slot, direction) -- no hashing on the common path, D-0146 section 5's
+lesson -- and each flag line's tail is kept per flag as packed (key, value) pairs WITH the trail
+entry it belongs to. A tail is read back through the entry that moved the flag now
+(`Store.hi_support`/`lo_support`), and a cache hit is that same entry by physical equality, so a
+flag revived by a backtrack and moved again by a decision is cited as itself, never through a
+stale tail. No new `Explanation` constructor, no `deriving_ahead`, nothing outside the module.
+
+Tests: `test/unit/test_prop.ml`'s new brute force audits every reason (2 747 over 300 automata x
+2 narrowing rounds, 341 of them conflicts): each is SOUND over the DECLARED domains -- every
+accepted word satisfying the facts keeps the claim -- and no fact names a flag the propagator
+moved (675 flag facts, all on flags the scene fixed); widest tail 5. D-0146's brute force
+(I-P1, domain consistency, I-P2), its veripb proof and its three mutation lanes (`lemma-rhs`,
+`death-fact`, `no-lemmas`) all hold unchanged: the `death-fact` line's tail is now the one fact
+`x1 <= 3`, the WEAKEST bound excluding the letter 4 under the decision `x1 <= 2`. The four
+`regular` models verify.
+
+**1.5 Measured.** Two runs, on fataepyc-06, over the instances D-0146 section 6 found reaching
+`regular` alone (`/scratch/arthur/wave51-globals2-regonly.lst`, 65: 20 nonograms, 20
+pentominoes in three models, 10 peaceable, 15 traveling-tppv), each re-flattened with this
+branch's mznlib (the `regular` route is D-0146's, unchanged). "Before" is main at this branch's
+base (`9c1b8e6`, the same `lib/` and `bin/` as `e34e133`), "after" this branch.
+
+*(a) The widths, without the proof.* The stock `--stats` width histogram stops at a `>= 16`
+bucket, and that is where 98 to 99 % of the learned clauses land on both sides -- the first
+reading of the proof-on run below would have called the change a no-op. So the 40 nonograms
+and pentominoes were run again on binaries whose bucket is widened to 4 096 (a two-line edit
+of `search.ml`'s histogram in throwaway clones; nothing else differs), 120 s, `--no-proof`
+(`bench/regular_spike/meas_width.sh`, `summ_width.py`), with a third binary, **V1**, that
+prefers the letter's own bound to the recursion wherever both are available (Gange's other
+choice: the local literal first):
+
+| 40 instances, 120 s | complete | nodes/s | learned clauses | width: mean | width: median of the per-run medians |
+|---|---|---|---|---|---|
+| main (flag reasons, D-0146) | 16 | 40.6 | 68 287 | 321.1 | 594 |
+| **V0** (this branch: recursion first) | **20** | **107.5** | 161 561 | **80.0** | **50** |
+| V1 (the letter's bound first) | 20 | 108.2 | 166 790 | 83.8 | 75 |
+
+The learned clauses are FOUR times shorter on average (and twelve times at the median run),
+the node rate 2.6 times higher (smaller reasons to materialise, shorter clauses to watch), and
+four more instances complete in the time. V1 changes little; V0 is kept, being the slightly
+shorter and faster of the two on the instances both solve (mean 27.5 s against 32.5 s).
+Not every instance moves the same way: `2012_nonogram_non_awful_5` is solved by main in 71 s
+and by neither variant in 120 s (16 351 nodes), so shorter clauses do not always mean a better
+search -- the cut lands elsewhere, and the backjumps with it.
+
+*(b) The answers, with the proof.* All 65 instances, 300 s, proof on, `--max-heap-mb 8192`,
+`ulimit -v 16777216 -f 16000000`, 10-way, every complete answer's proof checked by `veripb`
+3.0.2 (`bench/regular_spike/meas_reasons.sh`, `summ_pair.py`; output
+`/scratch/arthur/wave51-globals2-meas1/`, binaries `bb8ccd8b` before and `affc5bdf` after,
+the latter built at `02ba057`, whose `regular.ml` is this branch's):
+
+| 65 instances reaching `regular` alone | complete | incumbent | no answer | nodes/s | proofs |
+|---|---|---|---|---|---|
+| before (main, flag reasons) | 19 | 17 | 29 | 34.4 | 19 VERIFIED |
+| after (letter reasons) | **20** | 17 | 28 | **54.5** | **20 VERIFIED**, none rejected |
+
+By family, complete before -> after: nonograms 12 -> 10 of 20, pentominoes 4 -> 6 of 10,
+pentominoes-int 2 -> 3 of 5, pentominoes-zayenz 1 -> 1 of 5, peaceable 0 -> 0 of 10 (an
+incumbent on all ten, both sides), traveling-tppv 0 -> 0 of 15 (an incumbent on seven, both
+sides). Gained: the three
+`pentominoes_05` (2011, 2013 int, 2020), each in about 100 s where main timed out; lost:
+`2012_nonogram_non_awful_3` (284 s before) and `non_awful_5` (87 s before), the instance the
+width run already showed. On the 17 instances both sides answer, the time goes from 671 s to
+507 s in total, faster on 11 of them. (D-0146 section 6 counted 18 complete with the binary
+`08361947`; main has moved since, and completes 19 here.)
+
+**Reading.** The lever D-0146 named is real and measured: learned clauses four times shorter,
+the node rate up by half with the proof on (2.6 times without it), and the pentominoes, whose
+letters take one value per tile, are where it pays in answers. On the nonograms the count does
+not move up: two are lost, and the 1UIP cut over cells lands on a different, shorter, not
+uniformly better clause. What to try next for them is no longer in the reasons: a search
+that restarts and keeps its phases (M10's alternate configuration, M7-T30's row), so that the
+deeper backjumps a shorter clause allows stop costing the work they discard.
+
+### 2. `inverse`, native in two stages
+
+**2.1 The route.** `mznlib/fzn_inverse.mzn` keeps std's index-set restrictions (`f[i] in
+index_set(invf)` and the mirror, which tighten the declarations when the flattener can) and
+replaces std's `invf[f[i]] = i` element chains by ONE call `baguette_inverse(f, fmin, g, gmin)`,
+the two first indices carrying the index sets (FlatZinc arrays are 1-based); both arrays empty is
+`true`. `Model.Inverse` with its oracle arm, `Builder`'s `baguette_inverse` arm, SPEC 2.1's row
+and relation (normative), `Compile.post_inverse`.
+
+**2.2 Stage 1: channel filtering** (`lib/core/prop/inverse.ml`, new). The `.opb` holds D-0146
+section 7.1's channel clauses, both directions, each `x = v` split into its two order halves,
+with every literal about a constant or a value outside a declared domain FOLDED at compile time
+(the row is dropped when a literal is true, the literal when it is false, so a constant that
+contradicts the relation leaves the empty row), and a unit row wherever a declared domain reaches
+outside the other index set. One call restricts every value to the other index set, then makes
+`j in dom(f_i) <=> i in dom(g_j)` hold both ways; a second call changes nothing when no variable
+repeats across the arrays (`~idempotent` is packed only then: an involution passes the same
+variables twice and the second pass can owe the first). Consistency **Checking**: arc consistent
+on each channel pair, not domain consistent on `inverse` (a value set no matching covers is
+all_different's to see). Every pruning is ONE `rup`: removing `i` from `g_j` because `j` is out
+of `dom(f_i)` cites the weakest bound excluding `j` (or the hole's remover), LAST, after the bound
+fact that pins `g_j` to `i` when `i` is a bound -- D-0146 probes `i1` to `i3`. I-X10:
+`Single_row` (`test/unit/test_trace.ml`'s table).
+
+**2.3 Stage 2: all_different over each array, from CITED root lemmas.** Both arrays are
+permutations, so `all_different(f)` and `all_different(g)` are implied, and `alldiff.ml` over
+each prunes what a matching sees and the channel does not -- the pigeonhole `f1, f2, f3 <= 2`
+over `1..5`, which leaves the channel with `g3, g4, g5` in `4..5`. Its Hall derivations cite the
+pairwise rows `x <> v \/ z <> v` by id. The `.opb` must not state them (an implied row posted is
+a stronger model nothing checks); they are ROOT LEMMAS, `rup` from `CH(i, v)` and `CH(k, v)`
+(probe `i4`), or from the restriction rows for a `v` outside the other index set. What D-0146
+section 7.3 left open was the API, since a lemma's id exists only once `Encoding.start_proof` has
+written it and alldiff is built at compile time:
+
+- `Encoding.add_cited_lemma` registers a lemma like `add_root_lemma` and returns a HANDLE;
+  `Encoding.root_lemma_id` resolves it once the proof has started (`None` before, and for ever
+  under `--no-proof`). The lemmas are written in registration order, retired by the end-of-run
+  sweep. The comment line before them is D-0146's, byte for byte, when no lemma is cited, so a
+  model with only `regular`'s backward chains writes what it wrote before.
+- `alldiff.ml` gets ONE thing, said in its header: `make ?lemma_rows`, and `row` resolving a
+  lemma handle to its id when a derivation is rendered. The counting, the cancellations and every
+  `pol` are the ones a model row gets -- a `pol` cites a derived line exactly as a model row.
+
+`post_inverse` posts one such alldiff per array when its operands are pairwise distinct
+variables (a repeat is an involution's or a unification's, and alldiff's Hall test is by name)
+and the model does not already post `all_different_int` over the same set; it requests the
+direct encoding of the array, as `post_all_different` does. A constant in an array is left to
+the channel. Lemmas: one per pair of positions per shared declared value.
+
+**Whether alldiff's derivations survive citing proof lines, measured on the solver's own
+output** (the stage-2 probe D-0146 asked for): `test/unit/test_mutation.ml`'s `inverse` instance
+(18 cited lemmas) verifies and its two lanes are refused at the RUP wording -- `channel-fact`
+(the channel pruning `g2 >= 2` under the decision `f1 <= 1`, its excluding fact dropped) and
+`lemma-rhs` (a pairwise lemma's degree raised); `test/models/inverse_unsat.fzn`, the pigeonhole,
+is refuted at the ROOT by stage 2 (34 nodes under stage 1, 1 node now) and its UNSAT proof, whose
+conclusion rests on alldiff's Hall `pol`s over lemma ids, is VERIFIED; and the Challenge's
+`2011_black-hole_10` (one inverse over 52 positions, 138 K cited lemmas, 345 K proof lines) is
+refuted at the root in 24 s and VERIFIED UNSATISFIABLE by 3.0.2 in 4.8 s, where the decomposition
+timed out at 1 200 s in wave 43 (Chuffed: UNSAT in 0.1 s).
+
+**2.4 Tests and models.** `test/unit/test_prop.ml`, brute force over 400 random scenes (f and g
+of 2 or 3 positions, some of different lengths, f sometimes declared one value wider on each
+side, random bound narrowings and holes): I-P1, channel consistency after the call, I-P2, and
+every reason SOUND over the declared domains (1 420 reasons, 127 conflicts) -- the scene's holes
+are punched with no facts, as a root hole is, so the audit holds every solution to them the way
+the page holds it to a root line. `test/unit/test_compile.ml`, eight inline scenes brute-forced,
+solved and veripb-checked: SAT under search, index sets from 0 and 1, a constant in `f`, a
+constant no `g` can mirror (UNSAT), declared domains wider than the index sets, three `f` into
+two `g` (UNSAT), and an involution `f = g`. Models from `mznlib/test/inverse_src_*.mzn`
+(MUST-EMIT `baguette_inverse`, MUST-NOT-EMIT `int_eq_reif`): `inverse_sat`,
+`inverse_unsat` (the pigeonhole), `inverse_offset_sat` (index sets `0..3` and `10..13`, a
+constant folded into `f` by the flattener, a set domain); every proof VERIFIED.
+`check_mznlib.sh`: 29 ok, 0 failed.
+
+**2.5 The Challenge.** Selected by SOURCE as a superset (`\binverse\s*\(` in the model or its
+includes: 70 instances, `/scratch/arthur/wave51-globals2-inv-cand.lst`), then counted by the
+route the FLATTENED model takes, D-0146 section 6's rule (`bench/regular_spike/inverse_routes.sh`):
+all 70 reach `baguette_inverse` -- black-hole (15, one call over 52 positions), elitserien
+handball (20, 21 calls over 14), p1f (5, 11 to 16 calls over 12 to 17), p1f-pjs (10, 9 to 21
+calls over 10 to 22), tdtsp (15, two calls over 11 or 21), travelling-thief (5, one call over 10
+or 20). Each run re-flattened by its own checkout's mznlib (main reaches std's decomposition),
+300 s, proof on, 8 GB heap budget, every complete answer checked by veripb 3.0.2
+(`bench/regular_spike/meas_pair.sh`; `/scratch/arthur/wave51-globals2-meas-inv/`; binaries
+`bb8ccd8b` main at `9c1b8e6`, `d5581237` this branch at `c9d46e1`, the same `lib/` as the head):
+
+| 70 instances reaching `baguette_inverse` | complete | incumbent | no answer | proofs |
+|---|---|---|---|---|
+| main (std's decomposition) | 3 | 12 | 55 | 3 VERIFIED |
+| this branch (channel + stage 2) | 3 | 12 | 55 | 3 VERIFIED, none rejected |
+
+By family the two agree everywhere but two instances: `2011_black-hole_10` is refuted at the
+root in 24 s by stage 2 (main timed out), and `2015_p1f_13`, UNSAT in 58 s under the
+decomposition, times out natively. The three incumbents whose value both runs report are
+equal; tdtsp keeps 10 incumbents of 15, elitserien and black-hole stay without an answer
+where they were. Two refusals are the heap budget's, not the route's
+(`2023_travelling-thief_n20_k20`: the decomposition aborts at the OCaml allocation failure
+and the native route is refused by the 8 GB budget, both at 135 s; `2025_black-hole_layout_14`:
+main times out, the native run is refused at 314 s). Stage 1 alone was run on the first eight
+instances (all black-hole) before the run was narrowed to two binaries for time: it answers
+one of them, where main answers two and stage 2 three -- `2013_black-hole_6` is refuted at the
+root by the decomposition and by stage 2, not by the channel alone.
+
+**Why the reach did not move, measured rather than guessed.** Two causes, both outside the
+inverse propagator, each found on its family:
+
+- *black-hole: 99 % of the run is `Element.add_facts`.* `perf` on a frame-pointer build
+  (`2011_black-hole_20`, stage 1): 99 % in `Element.pass`, 93 % of it in the `List.mem` of
+  `add_facts`' quadratic dedup (polymorphic compare of facts holding `X_INTRODUCED_` names).
+  3 to 27 nodes in 300 s on main and on this branch alike: the 102 `array_int_element` of
+  the model, not the inverse, hold the search. Filed as a cross-session request (M11).
+- *p1f: the native route learns NOTHING.* On `2015_p1f_13` stage 1 and stage 2 both run with
+  `learned = 0` (main: 523 in 58 s). A debug build of `Learn.at_conflict` on stage 2: all 128
+  conflicts of a 15 s run give an EMPTY cut, and the ones printed are `all_different_int` Hall
+  conflicts with no facts (the model posts 145 all_different; stage 1, which adds none, learns
+  nothing either) -- and
+  `alldiff.ml` reports its conflicts with `Reason.none` on purpose (its comment: the Hall
+  argument is a `pol`, and `rup ~facts >= 1` would not be RUP). A factless conflict gives the
+  1UIP walk nothing to resolve. Under std's decomposition main learns, presumably because the
+  decomposition's reified rows, which do report facts, meet the contradictions before alldiff
+  does (not measured further). The fix is alldiff's, and has its precedent:
+  give the Hall conflict its facts and write its `pol` AHEAD of the `rup` (`deriving_ahead`),
+  as cumulative (D-0096) and element (D-0101) did -- the next row, not this one, since
+  alldiff.ml here carries only the lemma-row hook.
+
+### 3. `member`: the design record, with probes, no code
+
+D-0122: 40 instances. std's `fzn_member_int(x, y)` is `exists(i)(x[i] == y)`: `n` reified
+equalities and a clause. ROADMAP's note called it "a disjunction of equalities over a View".
+
+**3.1 The rows.** A SELECTOR Boolean `b_i` per position, introduced by the mznlib `let` the way
+`regular`'s flags are (so a selector is a store variable and its death a trail entry), the clause
+`OR_i b_i`, and per position `i` and value `v` of `y`'s declared domain the two halves of
+`b_i /\ y = v -> x_i = v` over order literals,
+
+    ~b_i \/ y <> v \/ x_i >= v        ~b_i \/ y <> v \/ x_i <= v
+
+constant halves folded as `inverse` folds them: `2 n |dom y|` clauses of at most four literals,
+`n` Booleans, one direction suffices (with `b_i` and `x_i = w <> y`, the row at `v = y` already
+forces `x_i = y`). No direct encoding.
+
+**3.2 The propagator it implies.** Domain consistency is cheap: `v` in `dom(y)` survives iff some
+live `b_i` has `v` in `dom(x_i)`; `b_i` dies iff `dom(x_i)` and `dom(y)` share no value; when one
+selector is left it is fixed to 1 and `x_i` and `y` are made equal domain-wise; with two or more
+left, nothing about the `x` can be pruned. Every pruning one `rup`, its tail on the letters by
+section 1's rule -- a selector is to `member` what a state flag is to `regular`.
+
+**3.3 Measured on the checker** (`bench/regular_spike/gen_member_probe.py`,
+`probe_member.sh`, 3.0.2 on fataepyc-06; `x1, x2, x3, y` in `1..4`, a model row `x3 <> 2`
+standing for a hole the page holds):
+
+| probe | content | verdict |
+|---|---|---|
+| m1 | `y <> 2` (interior), facts `x1 >= 3`, `x2 <= 1`, the hole of `x3` | VERIFIED |
+| m2 | m1 with `x1 >= 3` dropped | refused, RUP wording |
+| m3 | `y <= 3`, every `x_i <= 3` | VERIFIED |
+| m4 | one position left: `x1 <= 2` from `y <= 2` and the facts `~b2`, `~b3` | VERIFIED |
+| m5 | the same claim on the LETTERS alone (`x2 >= 3`, `x3 >= 3` for the selectors) | refused, RUP wording |
+| m5b | m5 after the two SELECTOR deaths `~b2 \/ ~(y <= 2) \/ ~(x2 >= 3)` and the same for `b3` | VERIFIED |
+| m6 | a wrong pruning (`y <> 2` with `x2` free) | refused, RUP wording |
+| m7 / m7b | the selector `b1` fixed as the last one, letters alone / after the two selector deaths | refused / VERIFIED |
+| m8 | `sol` y = x2 = 3 with `b2` | VERIFIED SATISFIABLE |
+| m9 | `sol` of a word no position matches | refused, "falsifies the constraint" |
+
+m5 against m5b is the design fact worth keeping: a selector's death is a case split over `y`'s
+values (`b2` with `y <= 2` and `x2 >= 3` contradicts on `y = 1` and on `y = 2` separately), so a
+letters-only line is RUP only once the selectors' own lines are on the page. That is exactly
+section 1's situation, and its answer applies unchanged: selectors as store variables, their
+deaths trail entries with letter tails (each RUP alone by a sweep over `y`'s values, m5b's first
+two lines), and every later line recursing into those tails. Not built: the row's next step is
+the propagator, its brute force and lanes, and the census of which Challenge instances reach
+`fzn_member_int` once flattened.
+
+### 4. What was checked, and what was not changed
+
+- **Files.** `lib/core/prop/regular.ml` (the reasons), `lib/core/prop/inverse.ml` (new),
+  `lib/core/prop/alldiff.ml` (the lemma-row hook only, said in its header),
+  `lib/proof/encoding.ml` (the root-lemma block: a count, `add_cited_lemma`, `root_lemma_id`),
+  `lib/flatzinc/{model,builder,compile}.ml` (the `Inverse` arms, `post_inverse`),
+  `mznlib/fzn_inverse.mzn`, SPEC 2.1 (normative row and relation), PROOF-FORMAT section 4 (the
+  `regular` note, the `inverse` row), ARCHITECTURE section 1 and CLAUDE.md's map. No
+  `Explanation` constructor, nothing in `search.ml`, `learn.ml`, `analysis.ml`, `trace.ml`,
+  `retention.ml`, `writer.ml` (`wave50-proofbugs`) or in `bin/main.ml`, `output.ml`,
+  `tools/baguette.msc` (`wave51-flags`).
+- **The M2-T10 oracle** (`BAGUETTE_CONSISTENCY=1`) on the seven `regular` and `inverse` models:
+  `CHECKED: regular (domain)` x8 and x1, `all_different_int (domain)` x4 on each SAT inverse
+  model (the stage-2 instances), `inverse (checking)` with no obligation at its level, no
+  violation; `regular_opt` skips nine instance-checks over the tuple cap, as in D-0146.
+  `BAGUETTE_DEBUG=1` and the I-X2 audit on: all seven VERIFIED.
+- **Pre-existing, not this branch:** `test/unit/test_retention.ml`'s five `deep shipped` checks
+  fail on main from `36c1312` on (bisected: `a0b50da` 0 failures, `36c1312` 5) -- the M10-T4
+  hook that routes learned instances through `Retention.gate`. A cross-session request is filed
+  for its owner; `dune runtest --root . --force` on this branch fails on exactly those five.
+- **Gate** (fresh clone of `wave51-globals2` at `d1df37f` on fataepyc-06, binary `0ec2649f`,
+  `/scratch/arthur/gate53.sh` with its two `--update` lines removed, `make -k check` under
+  `ulimit -v 4000000`): rc 2, and only from the five pre-existing `test_retention` checks above
+  (main `9c1b8e6` fails the same five); everything else passes -- fmt clean, width lint clean,
+  determinism 195 models identical, `check_unlimited` ok, 104 mutation checks, model tests 195
+  passed; peak RSS 100 104 kB. Every test model against main's binary at the branch base
+  (`bb8ccd8b`, `9c1b8e6`): 181 of 195 byte-identical in `.out`, exit code, `.opb` and `.pbp`;
+  the 14 differences are the three `inverse_*` models (the old binary cannot read
+  `baguette_inverse`, four artefacts each) and the `.pbp` of `regular_opt` and `regular_unsat`
+  (the letter reasons; `regular_sat` and `regular_set_sat` solve at the root and are
+  identical). **Differential lane** (`make diff ARGS="--tier all -j 24"`): every one of the 184
+  default-configuration runs equal the reference; the 117 that differ are all in the `fifo`,
+  `lbd`, `activity`, `alternate` and `restarts` configurations -- the 48 `fifo`/`lbd` lines are
+  byte for byte the 48 main at `9c1b8e6` prints (run there, same lane), and the 69 others have
+  no reference on this branch (recorded on main by gate 53, after the base). The debug pass the
+  same: 184 default runs equal, 105 differences in those five configurations. Scaling lane ok.
+  No reference was recorded (`git status bench/diff` empty).

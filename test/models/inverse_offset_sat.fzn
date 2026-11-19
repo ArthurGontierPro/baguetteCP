@@ -1,0 +1,17 @@
+% M7-T28 (D-0151): flattened by MiniZinc 2.10.1 with baguette's mznlib from
+% mznlib/test/inverse_src_offset_sat.mzn. f over 0..3 into 10..13 and g back: the first
+% indices travel as arguments; f[0] = 12 is a constant in the array, g[10] a set domain.
+predicate baguette_inverse(array [int] of var int: f,int: fmin,array [int] of var int: g,int: gmin);
+array [1..2] of int: X_INTRODUCED_26_ = [-1,1];
+var 10..13: X_INTRODUCED_18_;
+var 10..13: X_INTRODUCED_19_;
+var 10..13: X_INTRODUCED_20_;
+var {0,2,3}: X_INTRODUCED_22_;
+var 0..3: X_INTRODUCED_23_;
+var 0..3: X_INTRODUCED_24_;
+var 0..3: X_INTRODUCED_25_;
+array [1..4] of var int: X_INTRODUCED_16_:: output_array([1..4]) = [12,X_INTRODUCED_18_,X_INTRODUCED_19_,X_INTRODUCED_20_];
+array [1..4] of var int: X_INTRODUCED_21_:: output_array([1..4]) = [X_INTRODUCED_22_,X_INTRODUCED_23_,X_INTRODUCED_24_,X_INTRODUCED_25_];
+constraint baguette_inverse([12,X_INTRODUCED_18_,X_INTRODUCED_19_,X_INTRODUCED_20_],0,[X_INTRODUCED_22_,X_INTRODUCED_23_,X_INTRODUCED_24_,X_INTRODUCED_25_],10);
+constraint int_lin_le(X_INTRODUCED_26_,[X_INTRODUCED_20_,X_INTRODUCED_19_],-1);
+solve  satisfy;

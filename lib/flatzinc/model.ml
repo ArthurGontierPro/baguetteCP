@@ -65,6 +65,18 @@ let regular_run r word =
   in
   if r.r_q0 < 1 || r.r_q0 > r.r_nq then None else go r.r_q0 [ r.r_q0 ] word
 
+(* M7-T28 (D-0151 section 2). `baguette_inverse(f, fmin, g, gmin)`, std's fzn_inverse
+   through mznlib/fzn_inverse.mzn: position k of [inv_f] is f_(inv_fmin + k), position k
+   of [inv_g] is g_(inv_gmin + k), and the RELATION is f_i = j <-> g_j = i with every value
+   of f an index of g and every value of g an index of f (lib/core/prop/inverse.ml's
+   header). *)
+type inverse = {
+  inv_f : operand list;
+  inv_fmin : int;
+  inv_g : operand list;
+  inv_gmin : int;
+}
+
 type cstr =
   | Int_lin_le of (int * int) list * int (* sum coeff*x_i <= rhs *)
   | Int_lin_eq of (int * int) list * int (* sum coeff*x_i  = rhs *)
@@ -183,6 +195,8 @@ type cstr =
   | Array_int_element of operand * int array * operand
   (* M7-T28 (D-0146): see [regular] above. *)
   | Regular of regular
+  (* M7-T28 (D-0151): see [inverse] above. *)
+  | Inverse of inverse
 
 type constr = { k : cstr; c_pos : Pos.t }
 
@@ -333,6 +347,12 @@ let string_of_cstr t = function
         (String.concat ", " (List.map (string_of_operand t) r.r_xs))
         r.r_nq r.r_q0
         (String.concat ", " (List.map string_of_int (Array.to_list r.r_final)))
+  | Inverse iv ->
+      Printf.sprintf "inverse([%s] from %d, [%s] from %d)"
+        (String.concat ", " (List.map (string_of_operand t) iv.inv_f))
+        iv.inv_fmin
+        (String.concat ", " (List.map (string_of_operand t) iv.inv_g))
+        iv.inv_gmin
 
 let to_string t =
   let b = Buffer.create 256 in
@@ -700,6 +720,20 @@ let check_assignment (t : t) (values : int array) : bool =
                       let i = k / r.r_nq and q = (k mod r.r_nq) + 1 in
                       value f = if List.nth states i = q then 1 else 0)
                     r.r_flags))
+    (* M7-T28 (D-0151), the relation as std's fzn_inverse states it: every f_i is an index
+       of g and g at it is i, and every g_j is an index of f and f at it is j. *)
+    | Inverse iv ->
+        let f = Array.of_list (List.map value iv.inv_f)
+        and g = Array.of_list (List.map value iv.inv_g) in
+        let nf = Array.length f and ng = Array.length g in
+        let ok_f k =
+          let j = f.(k) - iv.inv_gmin in
+          j >= 0 && j < ng && g.(j) = iv.inv_fmin + k
+        and ok_g k =
+          let i = g.(k) - iv.inv_fmin in
+          i >= 0 && i < nf && f.(i) = iv.inv_gmin + k
+        in
+        List.for_all ok_f (List.init nf Fun.id) && List.for_all ok_g (List.init ng Fun.id)
   in
   let domains_ok =
     let ok = ref true in

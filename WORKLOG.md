@@ -20,7 +20,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M12-parity-T1 (re-run on the orbit model) | the `wave49-parity` branch only (merge main into it if needed); on main only `docs/DECISIONS.md` (a D-0147 addendum) and `docs/ROADMAP.md` M12 rows, merged by the orchestrator | agent-parity2 (`wave49-parity`) | 2026-11-19 |
-| M7-T28 (continuation: regular's reasons, inverse) | `lib/core/prop/regular.ml`, a new `lib/core/prop/inverse.ml` (+ `docs/ARCHITECTURE.md` §1 and `CLAUDE.md`'s map), `lib/core/prop/alldiff.ml` (only the lemma-citation hook D-0146 §7 needs), `lib/flatzinc/compile.ml` (dispatch block), `mznlib/*.mzn`, `lib/proof/encoding.ml` (`add_root_lemma` only), their tests, new `test/models/*`, `docs/DECISIONS.md` (D-0151), `docs/SPEC.md` §2.1, `docs/ROADMAP.md` M7-T28 row | agent-globals2 (`wave51-globals2`) | 2026-11-19 |
 
 ## Cross-session requests
 
@@ -378,6 +377,22 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
    saving and a dynamic order together; every other combination verifies there. Open, owner
    M10 (search.ml); D-0137 section 13 point 1 has what to try first.
 
+### 2026-11-19 — two findings from M7-T28's measurements, for the owners of the code they point at (agent-globals2, `wave51-globals2`, D-0151 section 4)
+
+1. **`test/unit/test_retention.ml` fails five checks on main since `36c1312`** (the M10-T4 hook
+   that routes learned instances through `Retention.gate`): `(a) deep shipped` x3 and
+   `(c) deep shipped` x2 -- "the policy evicts NOTHING", "the cap evicted nothing". Bisected on
+   fataepyc-06: `a0b50da` 0 failures, `36c1312` 5; main `9c1b8e6` 5. So `make check` fails at
+   `unit` on main and on every branch cut from it; wave51-globals2's gate ran `make -k check`
+   to see the rest. Owner: retention.ml / test_retention.ml (claimed by `wave50-proofbugs` today).
+2. **`Element.add_facts` is quadratic and dominates black-hole** (`lib/core/prop/element.ml`
+   line ~827: `List.fold_left (fun acc f -> if List.mem f acc then acc else acc @ [ f ])`, a
+   polymorphic compare of facts holding `X_INTRODUCED_` names, plus an append per fact). Under
+   `perf` with the frame-pointer switch on `2011_black-hole_20` (102 `array_int_element` over
+   52 positions), 99 % of the run is in `Element.pass`, 93 % of it in that `List.mem`: 13 to 27
+   nodes in 300 s, on main and on this branch alike. A stamp or hash dedup (regular.ml's
+   [add_key] shape) is the obvious fix. Owner: M11-complexity (element.ml is unclaimed).
+
 ## Completed
 
 | Task | Session | Date | Summary |
@@ -536,7 +551,26 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M11-complexity-T2 | agent-lanes (`wave47-lanes`) | 2026-11-18 | **D-0141.** `make diff`: 25 instances (QR48, QR72, 19 Challenge in the fast tier, D-0140's six in the slow tier; 958 KB gz in `bench/diff/corpus/`) x 9 configurations (default, audit0, noproof, lbd, fifo, lbd-po, fifo-po, nopb, bits0), 232 runs at fixed BAGUETTE_NODE_LIMIT, stdout + rc + counters (SEARCH/WORK) + .opb/.pbp sha256 against `bench/diff/reference/` (e8354a74), plus a BAGUETTE_DEBUG pass (223 runs, f9bf6c4). Red binary: 198/232 differ while the 179 models show 0. `make scaling`: instructions:u per node, late over early, ratchet + 0.5 %, report-only until T6; teeth caught on 4 of 5 lines. Neither in `make check`; the gate runs both after it |
 | M7-T28 (first steps; the row stays IN PROGRESS) and M7-T29 (the gcc half) | agent-globals (`wave49-globals`) | 2026-11-18 | **D-0146.** `regular` native (`lib/core/prop/regular.ml`, DOMAIN, every pruning one `rup`, backward chains as root lemmas via `Encoding.add_root_lemma`, mznlib `fzn_regular`/`fzn_regular_set`, 3 mutation lanes, 4 models); the closed gcc forms pinned (std already routed them) with the implied sum; a repeated gcc variable copied by `Builder.split_gcc_repeats`; `inverse` design record and probes (§7). Gate: make check rc 0, 189 models, peak RSS 97 056 kB; diff lane 232/232; Challenge numbers in D-0146 §6 |
 | M7-T32 | agent-flags (`wave51-flags`) | 2026-11-19 | **D-0150.** `tools/baguette.msc` declares `-i -f -n -p -r -s -t -v` (and `--proof` as an extra flag); `bin/main.ml` maps them onto existing options: `-t` ms to `--time-limit`, `-s` = `--stats` plus one `%%%mzn-stat` block on stdout, `-f` = `--search alternate --restarts luby --phase-saving` (warned: not proof-safe until M7-T31), `-r`/`-p` accepted. Every improving solution was already printed with one `soli` each (verified through `minizinc`). Every solution of a satisfaction model (`-a`, `-n N > 1`) refused, exit 3. SPEC §2.2 amended; 30 checks in `test_endtoend`; default artefacts byte-identical on 192 models |
+| M7-T28 (continuation: regular's reasons, inverse; the row stays IN PROGRESS) | agent-globals2 (`wave51-globals2`) | 2026-11-19 | **D-0151.** `regular`'s reasons on the LETTERS (tails recurse into the dead flags' own lines; probes on 60 scenes first): learned clauses 321 -> 80 literals on average over 40 nonograms/pentominoes, node rate x2.6 without the proof, complete 19 -> 20 of 65 with it, all VERIFIED. `inverse` native: `lib/core/prop/inverse.ml` (channel, CHECKING), mznlib `fzn_inverse`, stage 2 all_different from CITED root lemmas (`Encoding.add_cited_lemma`, alldiff's lemma-row hook), 2 mutation lanes, 3 models; Challenge 70 reach the route, 3 -> 3 complete (held by `Element.add_facts` and alldiff's factless conflicts, both filed). `member` designed with probes. Gate on `d1df37f`: `make -k check` rc 2 from the 5 pre-existing test_retention checks only (main fails the same), 195 models passed, peak RSS 100 104 kB; 181/195 models byte-identical to main (the 14 diffs: inverse x3, regular_opt/unsat .pbp); diff lane 184/184 default runs equal (fifo/lbd diffs identical to main's, strategy configs without references on this base) |
+
 ## Handoff notes
+## M7-T28 (continuation: regular's reasons, inverse) handoff, 2026-11-19 (agent-globals2, `wave51-globals2`): D-0151
+
+`regular`'s reasons name the LETTERS only: where a line would cite a dead flag it cites the tail of
+that flag's own earlier trace line (still one `rup` per pruning, against the rows, the lemmas and
+those lines); a letter is cited only where an edge leaves a live state, as the weakest bound, and
+the tail keeps the strongest fact per letter and direction. All inside `regular.ml`; each flag's
+tail is cached with the trail entry it belongs to (physical equality). Measured: learned clauses 4x
+shorter, more answers on the pentominoes, two nonograms lost. `inverse` is native
+(`lib/core/prop/inverse.ml`, channel filtering, CHECKING) through `mznlib/fzn_inverse.mzn`, plus
+all_different over each array from CITED root lemmas (`Encoding.add_cited_lemma` /
+`root_lemma_id`; alldiff's only change is `make ?lemma_rows`). On the Challenge it does not move
+the counts: black-hole is held by `Element.add_facts`' quadratic dedup, and p1f learns nothing
+because alldiff reports its Hall conflicts with `Reason.none` -- giving those conflicts their facts
+under `deriving_ahead` (cumulative's D-0096 shape) is the next thing to do, then `member` from
+D-0151 section 3. test_retention's five `deep shipped` checks fail on main since `36c1312` (not this
+branch; the gate ran `make -k check`). Both findings are filed under Cross-session requests.
+
 ## M11-T4 part 2 and M8-T6 merged, gates 58 and 59 green, 2026-11-19 (orchestrator)
 
 Gate 58 on `733b864` (M11-T4 part 2, D-0152): `make check` rc 0, 193 models identical to gate 57's binary,
@@ -635,6 +669,7 @@ scaling lane ok and lower on every line (rcpsp_11 2.38 -> 2.14). The lane refere
 M11-T3 are `a95634f` (openshop needs BAGUETTE_MEM_CAP_KB=32 GB at `--update`). Next gate: main with
 retention, the hook and globals. Open: M7-T31/M6-T23 (wave50-proofbugs), M7-T32 (wave51-flags), M7-T28
 continuation (wave51-globals2).
+
 ## M7-T28 (first steps) and M7-T29 (gcc half) handoff, 2026-11-18 (agent-globals, `wave49-globals`): D-0146
 
 `regular` is native: `lib/core/prop/regular.ml`, DOMAIN consistent over the letters and `(n+1)*Q` state
