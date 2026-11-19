@@ -18414,3 +18414,19 @@ variable bound, `~hi:cap` included, which is the shape of the 2026-09-16 bug whe
 - A regression that the growth cannot see because it adds the same cost to both segments at
   every database size. That is a constant per node, which is the benchmarks' business, not this
   lane's.
+
+### 7. The gate
+
+Fresh clone of `49a6c75` on fataepyc-06 (`/scratch/arthur/wave53-tooling-runs/gate.sh`), binary
+`64ec63e0`, byte-identical to main's: `make check` rc 0, 4 243 unit checks ok and 0 FAIL, 198
+models passed, width lint self-test and scan green, 25.2 s, peak RSS 99 MB. Then
+`make scaling ARGS="-j 16"` (now `--enforce`) three times: rc 0 each, every line ok, the largest
+excess +0.10 % of late (parity proof) against the 0.5 % margin, 51 to 54 s, peak RSS 396 MB. Then
+the lane with `--enforce` on the planted binary against the committed baseline: rc 1, all five
+lines OVER, by +5.07, +3.36, +0.66, +1.11 and +1.07 % of late, peak RSS 407 MB.
+
+**For the orchestrator's gate script.** Its scaling line greps `'^scaling: .*late/early'` for the
+status file; since T6 that pattern matches the information line, so grep `'^scaling: .*growth'`
+for the verdicts. The lane's rc is now the verdict and must count as red. After a gated merge,
+re-record with `scripts/scaling_lane.sh --update -j 16` on the merged binary in its own commit;
+it refuses while a line is OVER and keeps every line whose growth did not go down.
