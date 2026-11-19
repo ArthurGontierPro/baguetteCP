@@ -351,30 +351,39 @@ let test_a_exactly_once () =
       cleanup r.r_dir)
     scenes
 
-(* M2-L12, the other side of the lane above: the SHIPPED build, where the same cap
-   evicts NOTHING.
+(* M2-L12, the other side of the lane above: the SHIPPED build, where every learned
+   constraint gets a runtime consumer -- a unit becomes a global bound tightening, a wider
+   clause a registered [Clause.Learned_clause] instance -- and is CITED for the search.
 
-   This is not a weaker version of the check above, it is the finding. Every learned
-   constraint on these two scenes gets a runtime consumer -- a unit becomes a global
-   bound tightening, a wider clause a registered [Clause.Learned_clause] instance -- and
-   [Retention.reduce] refuses to evict a cited constraint, so the cap is SOFT. I-X2 still
-   has to hold: everything the policy could not evict has to be swept at the end, which
-   is the adding-up check repeated here against a zero eviction count. *)
+   Until the D-0139 hook (lib/core/search.ml routes both instance kinds through
+   [Retention.gate], main 36c1312) this lane asserted that the cap evicts NOTHING here,
+   because [reduce] refused every cited constraint. With the hook, a constraint whose
+   consumer is a gated instance is evictable unless [Retention.locked_instances] names it,
+   and evicting it detaches the instance first; a learned UNIT is cited without a gate and
+   stays pinned. So the assertions are now: eviction happens and goes through the gate
+   (not vacuous: [deep] detaches, measured 2026-11-19), the unit side is still refused and
+   counted rather than raised, and I-X2 adds up with both sources of deletion carrying
+   traffic. The proof must verify either way, which is the lane's real obligation. *)
 let test_a_pinned_on_the_shipped_build () =
+  let detached = ref 0 and pinned = ref 0 in
   List.iter
     (fun (name, src, cap) ->
       let r = run ~policy:(Retention.lbd ~cap) src in
       let db = r.r_db in
       let title s = Printf.sprintf "(a) %s shipped: %s" name s in
+      detached := !detached + Retention.n_detached db;
+      pinned := !pinned + Retention.n_pinned db;
       check
-        (title "every learned constraint has a consumer, so the policy evicts NOTHING")
-        (Retention.n_evicted db = 0 && Retention.n_cited db > 0);
+        (title "every learned constraint has a consumer (all cited)")
+        (Retention.n_cited db > 0);
       check
-        (title "...and the refusals are counted rather than raised")
-        (Retention.n_pinned db > 0);
+        (title
+           "every detach is an eviction: a cited constraint leaves only through its gate")
+        (Retention.n_detached db <= Retention.n_evicted db);
       check
-        (title "I-X2 still adds up: what the cap could not evict, the sweep took")
-        (Retention.n_added db = Retention.n_swept db && Retention.size db = 0);
+        (title "I-X2 adds up: what the cap evicted plus what the sweep took is everything")
+        (Retention.n_added db = Retention.n_evicted db + Retention.n_swept db
+        && Retention.size db = 0);
       check
         (title "no id is cited by two `del` rules")
         (not (has_duplicate (del_citations r.r_proof)));
@@ -383,7 +392,15 @@ let test_a_pinned_on_the_shipped_build () =
         (r.r_audit_error = None);
       expect_accepted ~title:(title "the proof") ~dir:r.r_dir ~opb:r.r_opb ~pbp:r.r_pbp;
       cleanup r.r_dir)
-    scenes
+    scenes;
+  check
+    "(a) shipped: the hook makes eviction real -- some cited constraint was detached and \
+     evicted (the lane is not vacuous)"
+    (!detached > 0);
+  check
+    "(a) shipped: a consumer without a gate (a learned unit) is still refused, and the \
+     refusal is counted rather than raised"
+    (!pinned > 0)
 
 (* The guard, at the module level: a second retirement of one id is refused, and the
    refusal happens BEFORE anything is written. *)
@@ -695,20 +712,19 @@ let test_c_bytes_both_ways () =
       cleanup on.r_dir)
     scenes
 
-(* M2-L12: the same comparison on the SHIPPED build, where it comes out the other way.
+(* M2-L12: the same comparison on the SHIPPED build.
 
-   D-0051's cap sweep was re-run for this row (lib/core/retention.ml's header has the
-   table) and its conclusion is that eviction still buys nothing -- but for a new reason:
-   what a policy may evict has no consumer, and what has a consumer it may not evict. On
-   these two scenes that is total: nothing is evicted at any cap, so the proof under
-   `lbd:<cap>` is BYTE-IDENTICAL to the proof under keep_all.
-
-   Asserting byte-identity is the opposite of what a before/after usually wants, and it is
-   asserted here for the same reason CLAUDE.md distrusts it: identical bytes are no
-   evidence UNLESS you know why. Here the why is checked beside it -- zero evicted, a
-   positive pinned count -- so the identity is a measurement and not two runs of the same
-   binary by accident. *)
+   Before the D-0139 hook nothing was evicted here at any cap, so the proof under
+   `lbd:<cap>` was BYTE-IDENTICAL to the proof under keep_all, and this lane asserted that
+   identity together with its reason (zero evicted, a positive pinned count). With the hook
+   a gated constraint is evictable, and on [deep] the cap now evicts (measured 2026-11-19);
+   on [bool] it still does not. The assertion is therefore the reason-and-effect pair
+   itself, which is what made the old identity a measurement rather than two runs of one
+   binary by accident: the proofs are byte-identical EXACTLY when the cap evicted nothing.
+   Both proofs must verify either way, and at least one scene must evict or the pair is
+   only ever tested on its identity side. *)
 let test_c_bytes_on_the_shipped_build () =
+  let evicted = ref 0 in
   List.iter
     (fun (name, src, cap) ->
       let off = run ~policy:Retention.keep_all src in
@@ -717,15 +733,18 @@ let test_c_bytes_on_the_shipped_build () =
       expect_accepted ~title:(title "policy OFF") ~dir:off.r_dir ~opb:off.r_opb
         ~pbp:off.r_pbp;
       expect_accepted ~title:(title "policy ON") ~dir:on.r_dir ~opb:on.r_opb ~pbp:on.r_pbp;
+      evicted := !evicted + Retention.n_evicted on.r_db;
       check
-        (title "the cap evicted nothing, because everything under it is cited")
-        (Retention.n_evicted on.r_db = 0 && Retention.n_pinned on.r_db > 0);
+        (title "the two proofs are byte-identical exactly when the cap evicted nothing")
+        (off.r_proof = on.r_proof = (Retention.n_evicted on.r_db = 0));
       check
-        (title "...so the two proofs ARE byte-identical, and that is the finding")
-        (off.r_proof = on.r_proof);
+        (title "an eviction under the cap went through a gate or had no consumer")
+        (Retention.n_detached on.r_db <= Retention.n_evicted on.r_db);
       cleanup off.r_dir;
       cleanup on.r_dir)
-    scenes
+    scenes;
+  check "(c) shipped: some scene evicted, so both sides of the pair are exercised"
+    (!evicted > 0)
 
 (* ==================================================== determinism and the policy axis *)
 
