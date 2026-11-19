@@ -16846,3 +16846,164 @@ A measured surprise worth keeping: a Hall prune (`f1, f2 in {1, 2}` so `f3 >= 3`
 already RUP over the channel rows of `n = 3` -- the mirror side does the counting, `g_3` having
 one possible preimage left. It is the singleton complement that makes it so; with two values
 outside the Hall set unit propagation fixes nothing, and stage 2 is still needed.
+
+## D-0150  M7-T32: the MiniZinc standard flags. `tools/baguette.msc` declares `-i -f -n -p -r -s -t -v`, each maps onto an option the CLI already had, every improving solution was already printed with its `soli`, and enumerating a satisfaction model is refused until it has a proof shape
+
+**Status**: **DONE** (2026-11-19, agent-flags, `wave51-flags`). The contract is ROADMAP row
+M7-T32, opened from the user's remark that baguette should take the same options as the other
+entrants. `search.ml` was not touched (M7-T31 holds it): nothing here needed a new search hook.
+
+### 1. What MiniZinc passes a solver, measured
+
+The FlatZinc specification (docs.minizinc.dev, `fzn-spec`, "Solver configuration files" and
+"Statistics output") gives the meaning of each standard flag. `-a` reports all solutions of a
+satisfaction problem and intermediate solutions of an optimisation problem. `-i` prints
+intermediate solutions of an optimisation problem, and "should be supported rather than -a for
+solvers which only support printing of intermediate solutions". `-n i` stops after `i` solutions
+of a satisfaction problem. `-f` is free search (ignore the search annotations). `-s` prints
+statistics. `-v` logs to stderr. `-p i` runs `i` threads. `-r i` is the random seed. `-t ms` is a
+wall time limit in milliseconds. The page does not say which of `-a` and `-i` the driver passes,
+so that was measured: a fake solver that logs its argv, three `.msc` files (declaring `-a` and
+`-i`, `-a` only, `-i` only), MiniZinc 2.10.1 on `fataepyc-06`.
+
+- The flags always come BEFORE the `.fzn` path.
+- On an optimisation model `-a`, `-i`, `--all-solutions` and `--intermediate-solutions` all
+  reach the solver as `-i` when it declares `-i`, and as `-a` when it declares only `-a`.
+- On a satisfaction model `-a` reaches the solver as `-a` when it is declared. When only `-i`
+  is declared MiniZinc passes nothing and prints `WARNING: Solver does not support all
+  solutions for satisfaction problems.` `-i` on a satisfaction model is dropped.
+- `-n i` reaches the solver on a satisfaction model only, and `-n 1` never does.
+- `--time-limit 5000` reaches it as `-t 4888`, the flattening time taken off, and
+  `--solver-time-limit 5000` as `-t 5000`.
+- `-f`, `-s`, `-p 4`, `-r 7` reach it as given.
+
+The `.msc` of the bundle's Chuffed declares `-a -f -n -r -s -t -v --cp-profiler`, Gecode's
+`-a -f -n -p -r -s -t --cp-profiler`, CP-SAT's `-a -i -f -p -r -s -v`.
+
+### 2. The declaration and the mapping
+
+`"stdFlags": ["-i", "-f", "-n", "-p", "-r", "-s", "-t", "-v"]`, and `--proof` as an extra flag
+of type string, so that `minizinc --solver baguette --proof P` writes `P.opb` and `P.pbp` (SPEC
+§1: the proof is a primary output; `--fzn-flags "--proof P"` also works). `-a` is NOT declared,
+because baguette prints intermediate solutions but cannot enumerate those of a satisfaction
+model (section 4). Declared this way MiniZinc maps `-a` to `-i` on an optimisation model by
+itself, and on a satisfaction model it warns and runs the first solution, which is the
+specification's own answer for such a solver. The CLI still accepts `-a` for a direct caller.
+
+| flag | baguette |
+|---|---|
+| `-i` | Accepted, no change. Since M5-T1 every improving solution is printed as it is found, each followed by `----------`, and `==========` follows the last when the proof establishes it is optimal (SPEC §2.2). On a satisfaction model it has no effect. |
+| `-a`, `--all` | On an optimisation model, `-i`. On a satisfaction model, REFUSED, exit 3, after the model is read (before M7-T32 `--all` was refused on every model, before the parse). |
+| `-n N` | `N >= 1`. `N = 1` is the default behaviour. `N > 1` on a satisfaction model is REFUSED as `-a` is. On an optimisation model it is ignored, as the specification uses it for satisfaction only. |
+| `-f` | `--search alternate --restarts luby --phase-saving`, each only where `--search` or `--restarts` was not given explicitly, in either order on the line. Chuffed's free search is the alternation of the annotation with its activity order under restarts (D-0137 section 4), Luby on a unit of 100 conflicts is D-0137 section 0's reading of Chuffed's restart counts, and phase saving is what Chuffed's SAT layer does. See section 5 for the warning. |
+| `-t MS` | `--time-limit MS/1000`: the same stop (wall clock from process start, parse and compile inside it), the same `limit:` line and `conclusion NONE`. A later `-t` or `--time-limit` wins. |
+| `-r SEED` | Accepted and unused. Nothing on the CLI's path draws a random number (`Search.random_order` is the tests' fuzzer and has its own state). |
+| `-p N` | Accepted. The run uses one thread. |
+| `-s` | `--stats` (stderr, unchanged), plus ONE block on stdout after the run's last marker: `%%%mzn-stat:` lines `nodes`, `failures` (the search's conflicts), `restarts`, `peakDepth`, `nogoods` (learned clauses and PB rows), `propagations` (propagator runs), `objective` (when a solution was found on an optimisation model), `initTime` (wall seconds from process start to the search's entry), `solveTime` (wall seconds of the search), then `%%%mzn-stat-end`. No `nSolutions`: `solns2out` counts the solutions and prints that line itself. |
+| `-v` | One line on stderr naming the search, the restart policy, phase saving and the time limit the flags became. |
+
+A malformed argument (`-t abc`, `-t -5`, `-n 0`, `-p 0`, `-r x`, a flag with no argument) is a
+usage error, exit 2, as every other option's is. The notes for `-r` and `-p N > 1` and the
+warning for `-f` go to stderr under `--stats`, `-s` or `-v` only, so that a run that asked for
+none of these keeps the empty stderr M1-T49 requires.
+
+### 3. Intermediate solutions and the proof
+
+Nothing had to change. `Search.optimise` calls the CLI's `on_solution` at each improving
+solution (`Search.record_improving`), after the independent check I-S1 of that solution and
+before the `soli` line that logs it and yields the strictly-improving constraint
+(`Writer.improving`). So the solutions printed and the `soli` lines of the proof are in one to one
+correspondence, and the last printed solution is the one `conclusion BOUNDS` names when the
+search finishes. A stopped run prints the improving solutions it found and no `==========`, and
+its proof ends `conclusion NONE` (SPEC §2.2, M6-T9), with one `soli` per printed solution as well.
+
+Measured through `minizinc --solver tools/baguette.msc` on `fataepyc-06` (binary md5
+`3298a0cdc8a6b13d7fb045116e87e3ca`, commit `3fcafda`, MiniZinc 2.10.1, veripb 3.0.2), on three
+small MiniZinc models written for this (a 6-item knapsack maximising profit, 4 jobs on 2 machines
+minimising the makespan, an 8-mark Golomb ruler):
+
+| model, flags | printed solutions | last printed | proof | veripb |
+|---|---|---|---|---|
+| knapsack `-i` (and `-a`, none, `-i -f`) | 3 (profit 0, 11, 20) | 20, then `==========` | 3 `soli`, `conclusion BOUNDS -20` | `VERIFIED BOUNDS -20 <= obj <= -20` |
+| makespan `-i` (and `-a`, none, `-i -f`) | 3 (span 14, 9, 7) | 7, then `==========` | 3 `soli`, `conclusion BOUNDS 7` | `VERIFIED BOUNDS 7 <= obj <= 7` |
+| Golomb `-i -t 3000` | 6 (length 44, 41, 40, 39, 38, 36) | 36, no `==========` | 6 `soli`, `conclusion NONE` | `VERIFIED NO CONCLUSION` |
+| Golomb `-i -f -s -t 3000` | 6, same lengths | 36, then the `-s` block | 6 `soli`, `conclusion NONE` | `VERIFIED NO CONCLUSION` |
+| `a < b < c` over 1..4, satisfy, `-s -r 3 -p 4 -t 5000` | 1 | `----------`, then the `-s` block | `conclusion SAT` | `VERIFIED SATISFIABLE` |
+
+The knapsack's optimum 20 and the makespan's 7 are checked by hand (items 7 and 8, or 3, 4 and
+8, fill the capacity 15; the durations 3+4 and 2+5 split 14 evenly). On the satisfaction model
+`-a` gave MiniZinc's warning and one solution, `-n 1` one solution, and `-n 2` baguette's
+refusal (MiniZinc prints `=====ERROR=====`).
+
+### 4. Refused: every solution of a satisfaction model, and the design for later
+
+`-a`, `--all` and `-n N > 1` on a satisfaction model exit 3 with a message that names this
+record. Enumeration needs two things that do not exist.
+
+1. **A search that continues past a solution.** `Search.solve` returns the first. Continuing is
+   the branch-and-bound loop of `Search.optimise` with the improving constraint replaced by the
+   exclusion of the solution just found. That is `search.ml`, which M7-T31 holds this week, and
+   no request is filed for it because the second need decides its shape.
+2. **A proof shape for "no other solution".** `Writer.solution_excluding` writes `solx`, which
+   veripb 3.0.2 refuses outside a preserved set ("Logging and excluding a solution with 'solx'
+   is only possible if a preserved set is specified", M1, recorded at the function). The
+   exclusion of a solution is not implied by the model, so it cannot be a `rup` or a `pol` line,
+   and a `red` that adds it would be wrong. The shape to measure on the checker BEFORE any code
+   is a preserved set over the order literals of the OUTPUT variables, one `solx` per solution
+   (excluding the projection, so two solutions that differ only on non-output variables are one
+   solution, as `solns2out` prints them), the search refuting the rest under those exclusions,
+   and `conclusion UNSAT` after the last one with `==========` on stdout. Whether veripb 3.0.2's
+   preserved-set syntax takes the order literals of a variable as one unit, and what it then
+   checks of each `solx`, is the first measurement.
+
+Printing one solution and letting its `----------` stand for "the only one" would be a claim no
+proof makes, which is why the CLI refuses rather than degrading.
+
+### 5. `-f` is not proof-safe on every instance yet
+
+`-f` is exactly the combination `saltlubyps` of D-0137 section 10.2, and section 13 point 1 (b)
+records a branch nogood veripb refuses under it on `2017_hrc_exp1-1-5670`. That is open as
+M7-T31. Until it lands a `-f` run may print correct solutions with a proof the checker refuses,
+which SPEC §1 calls a failed run. So the CLI says it on stderr under `--stats`, `-s` or `-v`
+(`baguette: WARNING -f (free search) is ... NOT proof-safe on every instance yet ... M7-T31`), the
+usage text says it, and the Challenge harness must not pass `-f` for a proved category until
+M7-T31 is closed. The default (no `-f`) is byte-identical to main, which the gate checks.
+
+### 6. Tests
+
+`test/unit/test_endtoend.ml`, `test_m7t32_std_flags`, 30 checks through `bin/main.exe` on an
+optimisation model with two improving solutions and a satisfaction model: `-i`, `-a`, `--all`
+and `-n 3` on the optimisation model, `-i` and `-n 1` on the satisfaction model, `-t 600000` and
+`-r 7 -p 4` all leave stdout byte-identical to the plain run and stderr empty; `-i --proof` has
+one `soli` per printed solution and verifies at the printed optimum; `-f --proof` reaches the same
+optimum and verifies; `-s` keeps the plain stdout as a prefix and appends exactly one block that
+ends `%%%mzn-stat-end` and names `objective=2`; `-f -v` names `alternate`, `luby:100` and phase
+saving with the M7-T31 warning; an explicit `--search` and `--restarts` win over `-f` on either
+side of it; `-t 2500` is 2.5 s; enumeration on the satisfaction model exits 3 with stdout empty;
+six malformed arguments exit 2. MiniZinc's own handling (section 1) is not a unit lane, since
+the suite does not depend on a MiniZinc install; section 3's runs are the end-to-end evidence.
+
+### 7. The gate (fataepyc-06, fresh clone of `wave51-flags` at `362066a`, binary md5 `3298a0cdc8a6b13d7fb045116e87e3ca`)
+
+`/scratch/arthur/gate53.sh` without its two `--update` lines, so no lane reference was recorded.
+The commits after `362066a` are documentation only.
+
+- **`make check` stops at `fmt-check` on `test/unit/test_prop.ml`**, before building. That is
+  main's own debt: a clean clone of `e34e133` fails the same way on the same file (one blank
+  line missing before the M7-T28 banner). This branch's two `.ml` pass `ocamlformat --check`.
+  The rest of `check` was then run in its order, `make build lint determinism unlimit
+  selftests test`: build, lint, determinism, unlimit and selftests pass; `unit` fails on
+  **5 checks of `test_retention`** (`(a)` and `(c)` "deep shipped", the policy that should evict
+  nothing), and `test_retention.exe` built from `e34e133` fails the same 5. Every other unit
+  check passes (4 114 `ok`, the 30 of section 6 among them). `make models`, which `make` skipped
+  after the unit failure: **192 passed, 0 failed**. Peak RSS 41.8 MB (the targets above) and
+  38.7 MB (`make models`), under `ulimit -v 4000000`.
+- **The default is unchanged.** The 192 models run with `--proof` by the branch's binary and by
+  `e34e133`'s: `.out`, exit code, `.opb` and `.pbp` byte-identical on all 192.
+- **`make diff ARGS="--tier all -j 24"`**: 117 of 301 runs differ from the recorded references,
+  in five configurations only: `fifo` 24 and `lbd` 24 (counters moved by M10-search-strategy-T4's
+  `Retention.gate`, `36c1312`, recorded before it) and `restarts`, `activity`, `alternate` 23 each
+  (no reference recorded on main yet). Every run of every other configuration is equal. The same
+  lane with `--bin` set to `e34e133`'s binary prints **the identical 117 `DIFF` lines**, so the
+  branch adds no difference to main's. The three findings above are filed in WORKLOG,
+  `## Cross-session requests`.

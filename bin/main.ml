@@ -62,7 +62,26 @@
    holding a .opb and a .pbp in a temp directory still needs to know which model they
    belong to, and the *directory* is the one part of the path that person already knows:
    they typed it. bench/run_bench.sh checks this property on every run -- see
-   `opb_path_independence` there -- so the dependence cannot come back unnoticed. *)
+   `opb_path_independence` there -- so the dependence cannot come back unnoticed.
+
+   **The MiniZinc standard flags** (M7-T32, D-0150, SPEC 2.2). `minizinc --solver
+   baguette` passes a solver only the flags its `tools/baguette.msc` declares in
+   `stdFlags`, always BEFORE the model file, and each one here is a thin mapping onto a
+   long option that already existed: `-t MS` is `--time-limit MS/1000`; `-s` is `--stats`
+   plus a `%%%mzn-stat:` block on stdout at the end of the run (the one way stdout
+   differs with a flag, and only with this one); `-f` is `--search alternate --restarts
+   luby --phase-saving` for whichever of the three was not given explicitly (Chuffed's
+   free search, D-0137 section 4), NOT proof-safe on every instance until M7-T31 lands;
+   `-i` and, on an optimisation model, `-a` ask for every improving solution, which this
+   CLI prints anyway, each with its own `soli` line in the proof; `-r SEED` is accepted
+   and unused (nothing on the CLI's path draws a random number); `-p N` is accepted and
+   the run uses one thread; `-v` says on stderr what the flags became. REFUSED, exit 3,
+   after the model is read: `-a` and `-n N > 1` on a SATISFACTION model, because
+   enumerating solutions needs a proof shape for "no other solution" that the writer
+   does not have (VeriPB 3.0's `solx` needs a preserved set, see [Writer]) and a search
+   that continues past a solution, which [Search.solve] does not do. The .msc therefore
+   declares `-i` and not `-a`, and MiniZinc itself then answers `-a` on a satisfaction
+   model with "Solver does not support all solutions". *)
 
 module Model = Baguette_flatzinc.Model
 module Builder = Baguette_flatzinc.Builder
@@ -94,6 +113,14 @@ type options = {
   phase_saving : bool; (* M10-search-strategy-T2, D-0137: --phase-saving *)
   search : Search.search_mode; (* M10-search-strategy-T3, D-0137: --search *)
   reuse_trail : bool; (* M10-search-strategy-T3, D-0137: --reuse-trail *)
+  (* M7-T32, D-0150: the MiniZinc standard flags. See the header. *)
+  intermediate : bool; (* -i: every improving solution; printed anyway *)
+  n_solutions : int option; (* -n N; N > 1 on a satisfaction model is refused *)
+  free_search : bool; (* -f: the D-0137 combination, minus what was given explicitly *)
+  seed : int option; (* -r SEED: accepted, unused *)
+  threads : int option; (* -p N: accepted, one thread *)
+  mzn_stats : bool; (* -s: --stats and the %%%mzn-stat block on stdout *)
+  verbose : bool; (* -v: the flags' mapping, on stderr *)
 }
 
 (* Exit codes. 0 covers both SAT and UNSAT: an UNSAT model is a successful run that
@@ -119,7 +146,32 @@ let usage () =
     "usage: baguette MODEL.fzn [--proof PREFIX] [--proof-comments] [--all] [--time] \
      [--stats] [--max-order-width N] [--max-direct-values N] [--width-warn N] \
      [--max-encoding-clauses N] [--max-heap-mb N] [--bits-above W] [--time-limit S] \
-     [--no-proof] [--restarts POLICY] [--phase-saving] [--search ORDER] [--reuse-trail]";
+     [--no-proof] [--restarts POLICY] [--phase-saving] [--search ORDER] [--reuse-trail] \
+     [-a] [-i] [-n N] [-f] [-t MS] [-r SEED] [-p N] [-s] [-v]";
+  prerr_endline "";
+  prerr_endline
+    "  The MiniZinc standard flags (M7-T32, D-0150; tools/baguette.msc declares them):";
+  prerr_endline
+    "  -i                every improving solution of an optimisation model, each";
+  prerr_endline "                    followed by `----------` (printed anyway; SPEC 2.2).";
+  prerr_endline "  -a                -i on an optimisation model; refused (exit 3) on a";
+  prerr_endline
+    "                    satisfaction model: enumeration has no proof shape yet.";
+  prerr_endline
+    "  -n N              stop after N solutions: N = 1 is the default; N > 1 on a";
+  prerr_endline "                    satisfaction model is refused (exit 3) as -a is.";
+  prerr_endline "  -f                free search: --search alternate --restarts luby";
+  prerr_endline "                    --phase-saving, each unless given explicitly. NOT";
+  prerr_endline
+    "                    proof-safe on every instance until M7-T31 (D-0137 13).";
+  prerr_endline "  -t MS             --time-limit in milliseconds.";
+  prerr_endline
+    "  -r SEED           accepted and unused: the search draws no random number.";
+  prerr_endline "  -p N              accepted; the run uses one thread.";
+  prerr_endline
+    "  -s                --stats, plus a `%%%mzn-stat:` block on STDOUT at the";
+  prerr_endline "                    end of the run (MiniZinc's statistics format).";
+  prerr_endline "  -v                what the flags above became, on stderr.";
   prerr_endline "";
   prerr_endline "  --proof PREFIX    write PREFIX.opb and PREFIX.pbp (SPEC 4.1); verify";
   prerr_endline "                    them with: veripb PREFIX.opb PREFIX.pbp";
@@ -129,7 +181,11 @@ let usage () =
   prerr_endline "                    test/models/: .opb and .pbp are byte-identical with";
   prerr_endline "                    and without it. It will start mattering once the";
   prerr_endline "                    direct-encoding path (M4) lands (see M1-T48).";
-  prerr_endline "  --all             every solution, not just the first (not implemented)";
+  prerr_endline
+    "  --all             on an optimisation model, every improving solution (printed";
+  prerr_endline
+    "                    anyway); on a satisfaction model, every solution: NOT";
+  prerr_endline "                    implemented, refused with exit 3 (M7-T32, D-0150).";
   prerr_endline "  --time            phase-by-phase CPU timings, ON STDERR, one `time: `";
   prerr_endline "                    line each. Off by default; stdout is byte-identical";
   prerr_endline "                    with and without it (SPEC 2.2). Read what each phase";
@@ -339,6 +395,26 @@ let parse_args argv =
   let phase_saving = ref false in
   let search = ref Search.Annotated in
   let reuse_trail = ref false in
+  (* M7-T32 (D-0150). [restarts_given] and [search_given] let `-f` fill only what was
+     not asked for explicitly, in either order on the command line. *)
+  let restarts_given = ref false and search_given = ref false in
+  let intermediate = ref false in
+  let n_solutions = ref None in
+  let free_search = ref false in
+  let seed = ref None in
+  let threads = ref None in
+  let mzn_stats = ref false in
+  let verbose = ref false in
+  (* A standard flag's integer argument. Malformed is a usage error, as everywhere in
+     this parser: a flag that was not in force is the trap CLAUDE.md records twice. *)
+  let int_arg flag ~ok ~what i =
+    if i + 1 >= Array.length argv then usage ();
+    match int_of_string_opt argv.(i + 1) with
+    | Some n when ok n -> n
+    | _ ->
+        Printf.eprintf "%s: %S is not %s.\n" flag argv.(i + 1) what;
+        usage ()
+  in
   let rec go i =
     if i >= Array.length argv then ()
     else
@@ -368,7 +444,9 @@ let parse_args argv =
       | "--restarts" ->
           if i + 1 >= Array.length argv then usage ();
           (match Restart.of_string argv.(i + 1) with
-          | Ok p -> restarts := p
+          | Ok p ->
+              restarts := p;
+              restarts_given := true
           | Error msg ->
               Printf.eprintf "--restarts: %s\n" msg;
               usage ());
@@ -386,6 +464,7 @@ let parse_args argv =
               Printf.eprintf "--search: %S is not annotation, activity or alternate\n"
                 other;
               usage ());
+          search_given := true;
           go (i + 2)
       | "--reuse-trail" ->
           reuse_trail := true;
@@ -435,6 +514,42 @@ let parse_args argv =
           if i + 1 >= Array.length argv then usage ();
           set_limit "--bits-above" Encoding.bits_above argv.(i + 1);
           go (i + 2)
+      (* M7-T32 (D-0150): the MiniZinc standard flags. See the header. *)
+      | "-a" ->
+          all_solutions := true;
+          go (i + 1)
+      | "-i" ->
+          intermediate := true;
+          go (i + 1)
+      | "-n" ->
+          n_solutions :=
+            Some (int_arg "-n" ~ok:(fun n -> n >= 1) ~what:"a positive integer" i);
+          go (i + 2)
+      | "-f" ->
+          free_search := true;
+          go (i + 1)
+      | "-t" ->
+          let ms =
+            int_arg "-t"
+              ~ok:(fun n -> n >= 0)
+              ~what:"a time limit in milliseconds (a non-negative integer)" i
+          in
+          time_limit := Some (float_of_int ms /. 1000.);
+          go (i + 2)
+      | "-r" ->
+          seed := Some (int_arg "-r" ~ok:(fun _ -> true) ~what:"an integer seed" i);
+          go (i + 2)
+      | "-p" ->
+          threads :=
+            Some (int_arg "-p" ~ok:(fun n -> n >= 1) ~what:"a positive integer" i);
+          go (i + 2)
+      | "-s" ->
+          stats := true;
+          mzn_stats := true;
+          go (i + 1)
+      | "-v" ->
+          verbose := true;
+          go (i + 1)
       | "-h" | "--help" -> usage ()
       | arg when String.length arg > 0 && arg.[0] = '-' ->
           Printf.eprintf "unknown option: %s\n" arg;
@@ -445,6 +560,18 @@ let parse_args argv =
           go (i + 1)
   in
   go 1;
+  (* M7-T32: `-f` is Chuffed's free search, the alternation of the annotation with the
+     activity order under restarts (D-0137 section 4), with phase saving as Chuffed's SAT
+     layer has it and Luby on D-0137's unit of 100 conflicts (section 0). An explicit
+     --search or --restarts wins wherever it sits on the line. *)
+  if !free_search then (
+    if not !search_given then search := Search.Alternate;
+    (if not !restarts_given then
+       restarts :=
+         match Restart.of_string "luby" with
+         | Ok p -> p
+         | Error msg -> failwith ("Restart.of_string \"luby\": " ^ msg));
+    phase_saving := true);
   (* M9-no-proof-T2 (D-0126): the two flags contradict each other, and a silent choice
      between them is the trap CLAUDE.md records twice -- a measurement whose flag was
      never in force. A usage error, exit 2, and no file is touched. *)
@@ -469,6 +596,13 @@ let parse_args argv =
         phase_saving = !phase_saving;
         search = !search;
         reuse_trail = !reuse_trail;
+        intermediate = !intermediate;
+        n_solutions = !n_solutions;
+        free_search = !free_search;
+        seed = !seed;
+        threads = !threads;
+        mzn_stats = !mzn_stats;
+        verbose = !verbose;
       }
 
 (* --------------------------------------------------------- timing (M1-T35) *)
@@ -1373,6 +1507,32 @@ let report_limit opts (st : Search.stats) ~(engine : Engine.t) ~best =
     (if st.Search.stopped_in_propagation then "propagation" else "node")
     (if Float.is_nan !stop_fired_at then "none" else Printf.sprintf "%.2fs" !stop_fired_at)
 
+(* M7-T32 (D-0150). MiniZinc's statistics format, on STDOUT under `-s` only: one
+   `%%%mzn-stat: name=value` line each and `%%%mzn-stat-end`, printed once, after the
+   run's last marker. The names are the FlatZinc specification's standard ones, each
+   read from a counter `--stats` already prints on stderr, so nothing here is counted
+   twice: failures are the search's conflicts, nogoods its learned clause and PB rows,
+   propagations the propagator runs off the queue. No nSolutions: MiniZinc's solns2out
+   counts the solutions itself and prints that line after this block. initTime is the wall clock from
+   process start to the search's entry (parse, compile, the .opb, the proof's header);
+   solveTime is the wall clock of the search after it. *)
+let report_mzn_stats (st : Search.stats) ~(engine : Engine.t) ~init_time ~solve_time
+    ~objective =
+  let c = Engine.counters engine in
+  let line k v = Printf.printf "%%%%%%mzn-stat: %s=%s\n" k v in
+  let int k v = line k (string_of_int v) in
+  int "nodes" st.Search.nodes;
+  int "failures" st.Search.conflicts;
+  int "restarts" (Search.stats_restarts st);
+  int "peakDepth" st.Search.max_depth;
+  int "nogoods" (st.Search.n_learned + st.Search.n_pb_learned);
+  int "propagations" c.Engine.c_runs;
+  (match objective with None -> () | Some v -> int "objective" v);
+  line "initTime" (Printf.sprintf "%.6f" init_time);
+  line "solveTime" (Printf.sprintf "%.6f" solve_time);
+  print_string "%%%mzn-stat-end\n";
+  flush stdout
+
 let solve opts (m : Model.t) =
   (* M7-T27 (b), D-0123 family C: the .opb's rows go to disk as they are minted, never
      to the heap. With --proof the body is written to PREFIX.opb.rows and [write_opb]
@@ -1427,6 +1587,8 @@ let solve opts (m : Model.t) =
      up under a flag is a counter no test exercises. --stats decides whether it is
      PRINTED, not whether it is kept. *)
   let stats = Search.stats_create () in
+  (* M7-T32: where `-s`'s initTime ends and its solveTime starts. *)
+  let t_search = ref 0. in
   (* M6-T9. An outer `timeout` kills with SIGTERM, and a killed run used to leave
      nothing behind: at_exit never ran, so a TIMEOUT-SOLVE row could not say what the
      run was doing. This handler writes the same counters as the `limit:` line, tagged
@@ -1462,6 +1624,7 @@ let solve opts (m : Model.t) =
                what belongs to [search] is the DIFFERENCE across this call and not the
                total. Sampled inside the phase so that the two brackets nest. *)
             let e0 = Writer.emitted_us () and l0 = Writer.emitted_lines () in
+            t_search := wall ();
             let config =
               {
                 Search.default_config with
@@ -1558,6 +1721,13 @@ let solve opts (m : Model.t) =
       | `Stopped None -> print_string "=====UNKNOWN=====\n"
       | `Stopped (Some _) -> ());
       flush stdout);
+  if opts.mzn_stats then
+    report_mzn_stats stats ~engine:compiled.Compile.engine ~init_time:!t_search
+      ~solve_time:(wall () -. !t_search)
+      ~objective:
+        (match outcome with
+        | `Optimise (Search.Opt (_, v)) | `Stopped (Some (_, v)) -> Some v
+        | _ -> None);
   if opts.stats then (
     report_stats stats ~exhausted;
     report_strategy opts stats;
@@ -1569,6 +1739,65 @@ let solve opts (m : Model.t) =
     else (
       report_proof_shapes (Writer.shape_stats (Justify.writer ctx));
       report_atoms (Encoding.atom_stats encoding)))
+
+(* ------------------------------------------- MiniZinc standard flags (M7-T32) *)
+
+(* D-0150. What the standard flags became, on stderr: the warning and the two notes under
+   --stats, -s or -v (so a run that asked for none of them keeps its stderr empty,
+   M1-T49), and under -v also the resolved search and limit. *)
+let report_std_flags opts =
+  if opts.stats || opts.verbose then (
+    if opts.free_search then
+      prerr_endline
+        "baguette: WARNING -f (free search) is --search alternate --restarts luby \
+         --phase-saving here, and that combination is NOT proof-safe on every instance \
+         yet: a refused branch nogood is open as M7-T31 (D-0137 section 13). Check the \
+         proof.";
+    (match opts.threads with
+    | Some n when n > 1 ->
+        Printf.eprintf "baguette: -p %d accepted; baguette runs on one thread.\n" n
+    | _ -> ());
+    match opts.seed with
+    | Some r ->
+        Printf.eprintf
+          "baguette: -r %d accepted and unused: the search draws no random number.\n" r
+    | None -> ());
+  if opts.verbose then
+    Printf.eprintf
+      "baguette: -v: search=%s restarts=%s phase-saving=%b time-limit=%s threads=1 \
+       improving-solutions=every-one%s\n\
+       %!"
+      (search_name opts.search)
+      (Restart.to_string opts.restarts)
+      opts.phase_saving
+      (match opts.time_limit with None -> "none" | Some s -> Printf.sprintf "%gs" s)
+      (if opts.intermediate || opts.all_solutions then " (asked, and printed anyway)"
+       else " (printed anyway)")
+
+(* D-0150. Enumeration is refused on a SATISFACTION model, after it is read (whether it
+   is one is a property of the model, not of the command line). It needs two things that
+   do not exist: a search that goes on past a solution ([Search.solve] returns the
+   first), and a proof shape for "no other solution" -- VeriPB 3.0's `solx` excludes a
+   solution only under a preserved set, which this project has no encoding for
+   ([Writer.solution_excluding]). Printing one solution and letting `----------` stand
+   for "the only one" would be a claim nothing proves. On an optimisation model `-a` is
+   `-i`, and `-n` is not used (the FlatZinc specification: satisfaction problems only). *)
+let refuse_enumeration opts (m : Model.t) =
+  match m.Model.objective with
+  | Model.Minimize _ | Model.Maximize _ -> ()
+  | Model.Satisfy -> (
+      let refuse what =
+        Printf.eprintf
+          "baguette: %s on a satisfaction model is not implemented: the search stops at \
+           the first solution, and the proof has no shape yet for \"no other solution\" \
+           (VeriPB's solx needs a preserved set; M7-T32, D-0150). Re-run without it.\n"
+          what;
+        exit exit_unsupported
+      in
+      if opts.all_solutions then refuse "every solution (-a, --all)";
+      match opts.n_solutions with
+      | Some n when n > 1 -> refuse (Printf.sprintf "-n %d" n)
+      | _ -> ())
 
 (* --------------------------------------------------------------------- main *)
 
@@ -1594,15 +1823,7 @@ let () =
   if not (Sys.file_exists opts.model) then (
     Printf.eprintf "no such file: %s\n" opts.model;
     exit exit_usage);
-  if opts.all_solutions then (
-    (* SPEC 2.2 describes `==========` for an exhausted search, and Output.exhausted
-       renders it, but Search.solve stops at the first solution: there is no
-       all-solutions mode to print it after. Saying so beats printing one solution and
-       letting the `----------` imply there were no others. *)
-    prerr_endline
-      "baguette: --all is not implemented -- Search.solve returns the first solution \
-       only. Re-run without it.";
-    exit exit_unsupported);
+  report_std_flags opts;
   Timing.record "args" (Timing.now () - t_main);
   match
     Timing.phase "parse" (fun () -> Fz_error.catch (fun () -> Builder.of_file opts.model))
@@ -1611,6 +1832,7 @@ let () =
       prerr_endline (Fz_error.to_string e);
       exit exit_usage
   | Ok m -> (
+      refuse_enumeration opts m;
       match Fz_error.catch (fun () -> solve opts m) with
       | Ok () -> exit exit_ok
       | Error e ->

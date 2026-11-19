@@ -165,6 +165,19 @@ the checker; it proves every line it contains and nothing about the answer. A st
 exits 0, and says what it was doing on stderr (`limit:`), which is how a harness tells it
 from a run killed from outside.
 
+**The MiniZinc standard flags** *(normative, M7-T32, D-0150, 2026-11-19)*.
+`tools/baguette.msc` declares `-i -f -n -p -r -s -t -v`, and the CLI accepts them and `-a`.
+On an optimisation model `-i` and `-a` change nothing on stdout, because every improving
+solution is already printed as above, each with its own `soli` line in the proof. On a
+satisfaction model `-a`, `--all` and `-n N` with `N > 1` MUST be refused with exit 3 and
+nothing on stdout, until enumerating solutions has a proof shape (D-0150 section 4).
+`-n 1`, `-t MS` (`--time-limit` in milliseconds), `-r SEED` (accepted and unused), `-p N`
+(accepted, one thread) and `-v` (a line on stderr) leave stdout as without them. `-f` is
+`--search alternate --restarts luby --phase-saving` for each of the three not given
+explicitly. `-s` is `--stats` and, alone among the flags, adds to stdout: one block of
+`%%%mzn-stat: name=value` lines ending `%%%mzn-stat-end`, after the run's last marker.
+`--stats` itself still leaves stdout byte-identical.
+
 **How a value is rendered** *(normative)*. Until now this section gave the line shape and
 the markers but never said what goes on the right of the `=`, so the rule lived only in
 `lib/flatzinc/output.ml` and in `test/expected/bool_out_sat.out`. It is stated here
