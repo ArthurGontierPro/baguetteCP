@@ -554,6 +554,27 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M7-T28 (continuation: regular's reasons, inverse; the row stays IN PROGRESS) | agent-globals2 (`wave51-globals2`) | 2026-11-19 | **D-0151.** `regular`'s reasons on the LETTERS (tails recurse into the dead flags' own lines; probes on 60 scenes first): learned clauses 321 -> 80 literals on average over 40 nonograms/pentominoes, node rate x2.6 without the proof, complete 19 -> 20 of 65 with it, all VERIFIED. `inverse` native: `lib/core/prop/inverse.ml` (channel, CHECKING), mznlib `fzn_inverse`, stage 2 all_different from CITED root lemmas (`Encoding.add_cited_lemma`, alldiff's lemma-row hook), 2 mutation lanes, 3 models; Challenge 70 reach the route, 3 -> 3 complete (held by `Element.add_facts` and alldiff's factless conflicts, both filed). `member` designed with probes. Gate on `d1df37f`: `make -k check` rc 2 from the 5 pre-existing test_retention checks only (main fails the same), 195 models passed, peak RSS 100 104 kB; 181/195 models byte-identical to main (the 14 diffs: inverse x3, regular_opt/unsat .pbp); diff lane 184/184 default runs equal (fifo/lbd diffs identical to main's, strategy configs without references on this base) |
 
 ## Handoff notes
+## State of the project, 2026-11-19 evening (orchestrator) -- read this first
+
+Main `cb44532`+, gate 60 green (198 models; lane 301/301, debug 289/289; binary `245a3de1`). Every branch of
+waves 41-52 is merged and gated except the M12 parity spike, whose code stays on `wave49-parity` by design.
+
+- **Merged this week**: M6-T21/T22/T23 (time limit, per-node cost on XOR codes), M7-T28 first parts (native
+  `regular` with letter reasons, `inverse`, closed and repeated gcc), M7-T31 (a refused-proof bug that main
+  could hit at default flags), M7-T32 (MiniZinc standard flags), M8 T2/T3/T5/T6 (bits encoding: 162 of the
+  177 encoding-wall runs now write their `.opb` at `--bits-above 0`), M9-T2 (`--no-proof`), M10 T1-T4
+  (restarts, phase saving, activity, tiered retention, all behind flags), M11 T1-T5 and T7 (the complexity
+  pass with its differential and scaling lanes).
+- **Running**: the parity spike re-run on the orbit model (claim row `M12-parity-T1 (re-run ...)`).
+- **Next, in order** (ROADMAP rows opened today): M11-T8 (`Element.add_facts` quadratic), M7-T33 (alldiff
+  conflicts with facts), M11-T9 (`Learned` arithmetic on PB rows), M11-T10 (memo sharing), M11-T6 (the
+  scaling lane as a gate; read D-0152 §4 first), then the Challenge-wide measurements M8-T4, M9-T3, M10-T5
+  on the optimised binary (D-0133 is no longer a valid baseline).
+- **Waiting for the user**: the four run-reordering items of D-0142 §9, M12-parity-T2 after the orbit
+  re-run, the free-category default once M10-T5 measures it.
+- **Procedures**: gates and lanes as in D-0141 §7 and the last `/scratch/arthur/gate60.sh` on fataepyc-06;
+  CLAUDE.md now names fataepyc-06 as baguette's node and lists `make diff` and `make scaling`.
+
 ## The M7-T28 continuation merged, gate 60 green, 2026-11-19 (orchestrator)
 
 `wave51-globals2` merged as `ab99b0a` (D-0151). Gate 60 (`/scratch/arthur/gate60.status`, clone

@@ -350,6 +350,13 @@ make check          # fmt-check + build + lint + determinism + test — the gate
 make fmt            # the explicit fixer. Rewrites files. Run it, then stage only YOURS
 make proof FZN=test/models/foo.fzn   # solve and verify one model's proof
 make bench ARGS="..."                # measurement only, never a commit gate
+make diff ARGS="--tier all -j 24"    # the DIFFERENTIAL lane (M11-T2, D-0141): real instances at a
+                                     # fixed node budget, stdout + counters + proof hashes against
+                                     # bench/diff/reference; add --debug for the BAGUETTE_DEBUG pass.
+                                     # Node only. Re-record (--update) only after a gated merge that
+                                     # changes the search on purpose, in its own commit
+make scaling ARGS="-j 16"            # the SCALING lane: cost per node late vs early, report-only
+                                     # until M11-complexity-T6 makes it a gate
 ```
 
 ---
@@ -438,11 +445,12 @@ not just the session that caused it.
 - Keep explanations *lazy where they are expensive*: see `docs/ARCHITECTURE.md`,
   "Deferred explanations".
 
-## The node (`fataepyc-07`) is shared with the user's OTHER experiments
+## The nodes are shared with the user's OTHER experiments
 
-Baguette's regression runs go to `fataepyc-07`, and so do the user's other experiments
-(graph solvers, `veripb`, Julia harnesses), under the **same user**, often for hours or
-days. On 2026-10-28 a session cleaning up its own runs did `pkill -u arthur -f veripb` and
+Since November 2026 baguette's runs go to `fataepyc-06` (git remote `node06`, bare repo
+`/scratch/arthur/baguette.git`); `fataepyc-07` carries the user's other experiments (graph solvers,
+`veripb`, Julia harnesses, the codes-cp side project) and is **off limits for baguette runs**. Both
+run under the **same user**, often for hours or days, and other sessions share fataepyc-06 too. On 2026-10-28 a session cleaning up its own runs did `pkill -u arthur -f veripb` and
 killed the `veripb` children of an experiment that had been running for hours. It had to be
 restarted from scratch.
 
