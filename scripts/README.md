@@ -27,7 +27,7 @@ On `fataepyc-06`:
 proofs, run outputs and disposable clones only. Code, clones you work in, memories and any result
 worth keeping go to `/cluster/arthur/` (persistent, shared by the cluster's nodes): copy a run's
 tables and logs there, under `baguette-results/<run>/`, before citing them in a decision record.
-`/scratch/arthur/baguette.git` is a stale copy of the hub from before the move: do not push to it.
+The hub used to be `/scratch/arthur/baguette.git`; it was removed on 2026-11-19, after the move.
 The home directory `/users/grad/arthur` is NFS too, shared by the cluster but not with the laptop.
 
 ## 2. The shell

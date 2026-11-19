@@ -620,6 +620,13 @@ lot-sizing `activity` lane cap.
 
 **Merge order once resumed:** alldiff (with its re-record commit), then noproof, then memo.
 
+**The two detached runs finished** before the move. alldiff's `final.sh`: `LANES-DONE`, then both
+`--update` passes rc 2 (the lot-sizing `activity` run at the 4 GB cap, as the agent predicted);
+its D-0156 draft is also copied to `/cluster/arthur/baguette-results/wave53-alldiff/`. memo's
+`memo-gate.sh`: share mode's lane proofs 274/274 VERIFIED, but against the reference without
+`.pbp` and WORK 216 same and 85 different, which says share mode moves stdout or SEARCH counters
+somewhere: read `/scratch/arthur/wave53-memo-runs/gate.status` before filling D-0158.
+
 ### 2026-11-19 (orchestrator): wave53-element and wave53-learned merged, gates 63 and 64 green
 
 Gate 63 (`c058ada`, D-0155, binary `643f44e9`) and gate 64 (`6bf83d4`, D-0157, binary `d7a1ef00`), each
