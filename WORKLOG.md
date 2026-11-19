@@ -554,6 +554,15 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M7-T28 (continuation: regular's reasons, inverse; the row stays IN PROGRESS) | agent-globals2 (`wave51-globals2`) | 2026-11-19 | **D-0151.** `regular`'s reasons on the LETTERS (tails recurse into the dead flags' own lines; probes on 60 scenes first): learned clauses 321 -> 80 literals on average over 40 nonograms/pentominoes, node rate x2.6 without the proof, complete 19 -> 20 of 65 with it, all VERIFIED. `inverse` native: `lib/core/prop/inverse.ml` (channel, CHECKING), mznlib `fzn_inverse`, stage 2 all_different from CITED root lemmas (`Encoding.add_cited_lemma`, alldiff's lemma-row hook), 2 mutation lanes, 3 models; Challenge 70 reach the route, 3 -> 3 complete (held by `Element.add_facts` and alldiff's factless conflicts, both filed). `member` designed with probes. Gate on `d1df37f`: `make -k check` rc 2 from the 5 pre-existing test_retention checks only (main fails the same), 195 models passed, peak RSS 100 104 kB; 181/195 models byte-identical to main (the 14 diffs: inverse x3, regular_opt/unsat .pbp); diff lane 184/184 default runs equal (fifo/lbd diffs identical to main's, strategy configs without references on this base) |
 
 ## Handoff notes
+## The M7-T28 continuation merged, gate 60 green, 2026-11-19 (orchestrator)
+
+`wave51-globals2` merged as `ab99b0a` (D-0151). Gate 60 (`/scratch/arthur/gate60.status`, clone
+`/scratch/arthur/baguette-gate-20261119h`): `make check` rc 0, 198 models; against gate 59's binary the only
+artefacts that differ are the three new inverse models and the `.pbp` of `regular_opt` and `regular_unsat`
+(regular's reasons now cite letters), as the agent reported; the lane 301/301 and 289/289 equal; binary
+`245a3de143182d38d09347a4c0698c81`. Next from D-0151's measured blockers: `Element.add_facts`'s quadratic
+duplicate check (99 % of black-hole) and alldiff conflicts reported without facts (nothing learned on p1f).
+
 ## M7-T28 (continuation: regular's reasons, inverse) handoff, 2026-11-19 (agent-globals2, `wave51-globals2`): D-0151
 
 `regular`'s reasons name the LETTERS only: where a line would cite a dead flag it cites the tail of
