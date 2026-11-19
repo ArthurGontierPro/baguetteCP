@@ -372,7 +372,8 @@ let test_a_pinned_on_the_shipped_build () =
       let db = r.r_db in
       let title s = Printf.sprintf "(a) %s shipped: %s" name s in
       detached := !detached + Retention.n_detached db;
-      pinned := !pinned + Retention.n_pinned db;
+      (* Refusals of an UNGATED consumer: [n_pinned] also counts the locked. *)
+      pinned := !pinned + Retention.n_pinned db - Retention.n_locked db;
       check
         (title "every learned constraint has a consumer (all cited)")
         (Retention.n_cited db > 0);
@@ -1065,9 +1066,10 @@ let test_d_gate () =
     (Retention.n_added db = Retention.n_evicted db + Retention.n_swept db)
 
 (* The policy through a real search. On the M2-L4 build (no consumer) it evicts and the
-   proof is accepted; on the shipped build every learned constraint has a consumer that
-   lib/core/search.ml does NOT route through [Retention.gate] (D-0139's cross-session
-   request), so the policy can evict only what has none -- and the proof is accepted. *)
+   proof is accepted. On the shipped build every learned constraint has a consumer, and
+   since the D-0139 hook (main 36c1312) lib/core/search.ml routes the clause and PB
+   instances through [Retention.gate], so the policy evicts what is not locked and leaves
+   the learned units (cited without a gate) -- and the proof is accepted. *)
 let test_d_tiered_in_a_search () =
   let policy =
     Retention.tiered
