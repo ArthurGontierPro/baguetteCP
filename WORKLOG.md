@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M12-parity-T1 (re-run on the orbit model) | the `wave49-parity` branch only (merge main into it if needed); on main only `docs/DECISIONS.md` (a D-0147 addendum) and `docs/ROADMAP.md` M12 rows, merged by the orchestrator | agent-parity2 (`wave49-parity`) | 2026-11-19 |
 
 ## Cross-session requests
 
@@ -554,6 +553,14 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M7-T28 (continuation: regular's reasons, inverse; the row stays IN PROGRESS) | agent-globals2 (`wave51-globals2`) | 2026-11-19 | **D-0151.** `regular`'s reasons on the LETTERS (tails recurse into the dead flags' own lines; probes on 60 scenes first): learned clauses 321 -> 80 literals on average over 40 nonograms/pentominoes, node rate x2.6 without the proof, complete 19 -> 20 of 65 with it, all VERIFIED. `inverse` native: `lib/core/prop/inverse.ml` (channel, CHECKING), mznlib `fzn_inverse`, stage 2 all_different from CITED root lemmas (`Encoding.add_cited_lemma`, alldiff's lemma-row hook), 2 mutation lanes, 3 models; Challenge 70 reach the route, 3 -> 3 complete (held by `Element.add_facts` and alldiff's factless conflicts, both filed). `member` designed with probes. Gate on `d1df37f`: `make -k check` rc 2 from the 5 pre-existing test_retention checks only (main fails the same), 195 models passed, peak RSS 100 104 kB; 181/195 models byte-identical to main (the 14 diffs: inverse x3, regular_opt/unsat .pbp); diff lane 184/184 default runs equal (fifo/lbd diffs identical to main's, strategy configs without references on this base) |
 
 ## Handoff notes
+
+### 2026-11-19 (orchestrator): the parity idea archived (D-0147 §10)
+
+agent-parity2 stopped after its orbit runs ended and before writing its reading, so the
+orchestrator released its claim and recorded the raw results in D-0147 §10. On the orbit model no
+XOR configuration (clauses, eager system, beyond mode) closes o0, o2 or o3 in 1 800 s, and the sums
+(`ENC=2`) close all three in 34 to 838 s. The user archived the idea. M12-parity-T2 is not built,
+and `wave49-parity` and `/scratch/arthur/wave49-parity-orbit` are kept for a later reopening.
 
 ### 2026-11-19 (orchestrator): D-0154, the user's decisions; gate 61 green
 

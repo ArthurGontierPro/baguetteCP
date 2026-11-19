@@ -16156,6 +16156,37 @@ The one read that the node's absence delayed, the place where the 458 beyond inf
 aut `u1`, was run on 2026-11-19 (`o7k2_u1_{PB,N}_n{1,60,100,140,171}`, a few seconds each). No QR104
 `c` run without `--parity` was made, since no `c` run closes on any QR code and the missing number
 would not change §7.
+
+### 10. Addendum 2026-11-19: the orbit re-run, and the idea archived by the user
+
+The codes session's CryptoMiniSat runs (clauses 335.9 s, native XOR 20.5 s, Gauss 1.6 s on the
+orbit model) reopened §7, and the spike was re-run on that model (`minweight_chk.mzn`, flattened
+with the spike library, 1 800 s, `--no-proof`, run directory
+`/scratch/arthur/wave49-parity-orbit`, results in `batch1.log` and `out/`). The agent that ran it
+stopped after the runs ended (13:03) and before writing its reading, and left no unsaved work (the
+branch tip is still `2d8a0c7`). These are the raw results, read by the orchestrator. `N` is
+today's clauses, `P` the system applied eagerly, `PB` the beyond mode, `E2` the codes model's
+`ENC=2`, which writes each parity as a sum (`int_lin_eq`) instead of `bool_xor`.
+
+| instance | N | P | PB | E2 (sums) |
+|---|---|---|---|---|
+| o0 (orbit) | stop 1 800 s, 13 008 n | stop, 17 072 n | stop, 10 089 n | UNSAT 838 s, 15 945 n |
+| o2 (orbit) | stop, 14 345 n | stop, 17 104 n | stop, 10 891 n | UNSAT 63 s, 2 603 n |
+| o3 (orbit) | stop, 14 610 n | stop, 16 239 n | stop, 10 787 n | UNSAT 34 s, 1 273 n |
+| b2 (basis) | UNSAT 66 s, 108 699 n | UNSAT 51 s, 108 699 n | UNSAT 66 s, 108 699 n | UNSAT 68 s, 8 253 n |
+| b3 (basis) | UNSAT 10 s, 29 779 n | UNSAT 10 s, 29 779 n | UNSAT 12 s, 29 779 n | UNSAT 4 s, 2 099 n |
+
+On the orbit instances no XOR configuration closes in 1 800 s, and the sums close all three. On the
+basis instances the system leaves the tree unchanged, as in §3. Since no `N`, `P` or `PB` orbit run
+finishes, these runs cannot say whether the system shrinks the orbit tree. They say only that,
+in baguette as it is, the sums do better than this spike.
+
+**Decision (the user, 2026-11-19).** The parity propagator is ARCHIVED. M12-parity-T2 is not
+built. The parity work goes on as sums in the codes models. The branch `wave49-parity` and the
+run directories stay where they are, so that the idea can be reopened later without rebuilding
+the spike. To reopen it, first find out why the orbit runs visit about 8 nodes per second
+under `N`, `P` and `PB`, against 20 to 40 under `E2`.
+
 ## D-0139  M10-search-strategy-T4: retention re-measured, the learned database made evictable (`Retention.gate`, the lock rule, three LBD tiers), and why the default should stay `keep_all` until M10-T5
 
 **Status**: **ACCEPTED** as built, 2026-11-18, agent-retention (`wave45-retention`). The default
