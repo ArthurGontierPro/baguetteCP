@@ -454,3 +454,22 @@ plain encoding, and any parity form is derived inside the proof, as GCS does.
 |---|---|---|---|
 | M12-parity-T1 | **The spike**: a Gauss-Jordan parity propagator over the model's XORs, with its explanations as data but no proof rendering yet, run ONLY under `--no-proof` on a branch that is never merged; nodes and time on QR48, QR72, aut order 7 and golay against today's search and Chuffed | DONE | **D-0147.** Under `def`, `u`, `u1` the system removes no node: golay24 133 = 133, QR48 23 367 = 23 367, QR72 100 685 vs 100 679, and 0 inferences or conflicts beyond unit propagation on golay24, QR48, QR72 and QR104, because every XOR row is a definition `c = f(u)` read forwards. On aut o7 `u1` it finds 458 of 2.9 M beyond UP, all between nodes 141 and 172, and turns 172 nodes into a timeout (even in the beyond-only mode). Only a search fixing `c` first gives it work (94 % beyond UP on QR48): golay24 1 551 to 375 nodes, but no QR code closes under that search in 1 800 s with or without parity, nor under Chuffed in 600 s. Recommendation: do not build T2 for these models; if built, in the beyond-UP shape, measured first against M10's search. Branch `wave49-parity` never merged Re-run on the ORBIT model (17 296 redundant rows) under way on 2026-11-19, after the codes session's CryptoMiniSat runs showed XOR reasoning paying there and not on the basis (D-0147 addendum to come) -- orbit re-run 2026-11-19 (D-0147 §10): no XOR configuration closes o0, o2, o3 in 1 800 s, the sums do; the idea is archived |
 | M12-parity-T2 | **The certified version**: the parity rows derived in the proof from the clause encoding (GCS's `red` scaffolding, deleted after use), each elimination one `pol`, each inference one `pol` and one `rup`; the gathering of `bool_xor` chains as rows | ARCHIVED | The user, 2026-11-19 (D-0147 §10): on the orbit model no XOR configuration closes in 1 800 s and the sums (`ENC=2`) close all three instances, so T2 is not built. Reopen from `wave49-parity` and D-0147 §10 |
+
+## M13-codes-leads — what the codes-cp benchmark suggests, to study
+
+Opened 2026-11-19 from the phase-1 benchmark of the codes-cp project (`~/codes-cp/benchmark/`,
+`results/phase1-p1` on the node, read with `run/best.py`): 2 687 runs of 10 minutes, one thread,
+32 GB, no proof. On the 64 minimum-distance decision instances (extended QR codes, their orbit
+models, random codes), baguette b403e28 at default flags solves 39 with the parity checks as sums
+and 36 with them as XOR chains, against 50 for Gecode and CP-SAT and 55 to 57 for HiGHS, SCIP and
+Gurobi on the same sums model. With the sums it visits the fewest nodes of any solver, and it is the
+slowest per node. A run with the M10 options (`--search activity --restarts luby --phase-saving
+--reuse-trail`, `BAGUETTE_RETENTION=tiered`) is being added to the same table.
+
+These rows are leads to study, not commitments. The user's direction of 2026-11-19 is to stay away
+from a complicated presolve for now: a linear relaxation is the presolve step worth looking at.
+
+| ID | Task | Status | Notes |
+|---|---|---|---|
+| M13-codes-leads-T1 | **A linear relaxation as a presolve step**: solve the LP relaxation of the model's linear rows at the root (possibly at a few nodes later) and use its bound and its reduced-cost fixings. Each consequence is a nonnegative combination of model rows followed by a rounding, so one `pol` in the proof, the shape `Linear` already writes | TODO (to study) | Evidence: the MILP solvers find codewords and minimum weights far faster than every learner. Gurobi solves 73 of 83 P1 instances against 68 for RoundingSat, and all 15 instances where Gurobi is clearly faster are SAT questions or optimisation, while RoundingSat wins the UNSAT proofs. A cheap first measurement: what the root LP bound alone would fix on the codes and on the Challenge instances, before any code in baguette |
+| M13-codes-leads-T2 | **Symmetry detection**: find the model's variable symmetries (an automorphism search on the constraint graph, as CP-SAT's presolve does) and break them with constraints the proof justifies by the dominance rule | TODO (to study) | The certification half already exists outside baguette, a posteriori: codes-cp's `dom/` turns lex constraints into VeriPB `dom` lines (`scripts/domproof.py`, `scripts/dommerge.py`) and merged proofs for Hamming, Golay and QR48 are checked. Evidence: on the [n, k, d] existence instances, the AAAI-26 symmetry breaking takes Kissat from 15 to 30 solved of 32. The user's intuition is that detection is the hard part |

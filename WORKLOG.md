@@ -22,7 +22,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | M7-T33 (and `Alldiff.excl`'s proof cost, D-0145) | `lib/core/prop/alldiff.ml`, `lib/proof/encoding.ml` (additive only), new `test/models/`, `test/unit/test_prop.ml` (alldiff section) | agent-alldiff (`wave53-alldiff`) | 2026-11-19 |
 | M11-complexity-T10 | `lib/core/justify.ml`, `lib/core/explanation.ml` (additive functions only, the type unchanged), `test/unit/test_justify.ml` | agent-memo (`wave53-memo`) | 2026-11-19 |
 | M7-T28 (`member`) | new `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, new `test/models/`, `test/unit/test_prop.ml` (member section) | agent-member (`wave53-member`) | 2026-11-19 |
-| M13-codes-leads (roadmap rows only) | `docs/ROADMAP.md` (a new M13 section at the end, nothing else) | codes-cp session | 2026-11-19 |
 
 ## Cross-session requests
 
@@ -570,6 +569,7 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M7-T32 | agent-flags (`wave51-flags`) | 2026-11-19 | **D-0150.** `tools/baguette.msc` declares `-i -f -n -p -r -s -t -v` (and `--proof` as an extra flag); `bin/main.ml` maps them onto existing options: `-t` ms to `--time-limit`, `-s` = `--stats` plus one `%%%mzn-stat` block on stdout, `-f` = `--search alternate --restarts luby --phase-saving` (warned: not proof-safe until M7-T31), `-r`/`-p` accepted. Every improving solution was already printed with one `soli` each (verified through `minizinc`). Every solution of a satisfaction model (`-a`, `-n N > 1`) refused, exit 3. SPEC §2.2 amended; 30 checks in `test_endtoend`; default artefacts byte-identical on 192 models |
 | M7-T28 (continuation: regular's reasons, inverse; the row stays IN PROGRESS) | agent-globals2 (`wave51-globals2`) | 2026-11-19 | **D-0151.** `regular`'s reasons on the LETTERS (tails recurse into the dead flags' own lines; probes on 60 scenes first): learned clauses 321 -> 80 literals on average over 40 nonograms/pentominoes, node rate x2.6 without the proof, complete 19 -> 20 of 65 with it, all VERIFIED. `inverse` native: `lib/core/prop/inverse.ml` (channel, CHECKING), mznlib `fzn_inverse`, stage 2 all_different from CITED root lemmas (`Encoding.add_cited_lemma`, alldiff's lemma-row hook), 2 mutation lanes, 3 models; Challenge 70 reach the route, 3 -> 3 complete (held by `Element.add_facts` and alldiff's factless conflicts, both filed). `member` designed with probes. Gate on `d1df37f`: `make -k check` rc 2 from the 5 pre-existing test_retention checks only (main fails the same), 195 models passed, peak RSS 100 104 kB; 181/195 models byte-identical to main (the 14 diffs: inverse x3, regular_opt/unsat .pbp); diff lane 184/184 default runs equal (fifo/lbd diffs identical to main's, strategy configs without references on this base) |
 | M11-complexity-T8 | agent-element (`wave53-element`) | 2026-11-19 | **D-0155.** `Element.add_facts` hashed and linear (same list as the old fold, oracle-tested), the index-hole trail walks through `Store.remover`, live and carried-value membership through an int table, hole facts once per pass. black-hole_10 168 G to 52 G instructions; every model's artefacts equal to main |
+| M13-codes-leads (roadmap rows only) | codes-cp session | 2026-11-19 | Two TODO (to study) rows from the codes-cp phase-1 benchmark: T1 a linear relaxation as a presolve step, T2 symmetry detection with dominance-justified breaking. No code. |
 
 ## Handoff notes
 
@@ -647,6 +647,14 @@ waves 41-52 is merged and gated except the M12 parity spike, whose code stays on
   re-run, the free-category default once M10-T5 measures it.
 - **Procedures**: gates and lanes as in D-0141 §7 and the last `/scratch/arthur/gate60.sh` on fataepyc-06;
   CLAUDE.md now names fataepyc-06 as baguette's node and lists `make diff` and `make scaling`.
+
+## M13-codes-leads opened, 2026-11-19 (codes-cp session): two leads to study, no code
+
+`docs/ROADMAP.md` gains an M13 section at its end. The codes-cp phase-1 benchmark (2 687 runs, 10 min)
+puts baguette at default flags last of the CP solvers on the minimum-distance instances (39 of 64,
+against 50 for Gecode and CP-SAT and 55 to 57 for the MILP solvers on the same sums model). T1 is a
+linear relaxation as a presolve step, T2 symmetry detection with breaking justified by `dom`. The user
+does not want a complicated presolve now. A run with the M10 options is being added to the same table.
 
 ## The M7-T28 continuation merged, gate 60 green, 2026-11-19 (orchestrator)
 
