@@ -734,6 +734,78 @@ let test_merge_nodes_is_the_add_node_fold () =
     && render (Analysis.Frontier.nodes f)
        = "a>=4@10 c>=2@21 d>=6@15 a<=7@13 e>=1@17 b<=4@20 f>=1@22")
 
+(* M11-complexity-T4 (D-0152, D-0140 A1). The walk no longer passes over the frontier per
+   resolution: [Frontier.at_conflict_level] is a kept count and [Frontier.best] a lazily
+   cleaned heap. On random walks -- batches of facts over a few slots, both directions,
+   supports that tie (one entry can move both bounds), roots, several levels -- each step
+   takes [best], removes it as [analyse] does and adds a batch, and at every point the
+   count must equal the filter over [Frontier.nodes], and [best] must be the node the
+   fold over the list chose: largest support among the expandable ones, ties to the
+   earliest cell. *)
+let test_frontier_best_and_count () =
+  let rng = Random.State.make [| 0x0152; 7 |] in
+  let names = [| "a"; "b"; "c"; "d"; "e"; "f" |] in
+  let cl = 2 in
+  let expandable n = (not n.Analysis.root) && n.Analysis.level = cl in
+  let fold nodes =
+    List.fold_left
+      (fun acc n ->
+        if not (expandable n) then acc
+        else
+          match acc with
+          | Some m when m.Analysis.support >= n.Analysis.support -> acc
+          | _ -> Some n)
+      None nodes
+  in
+  let fact () =
+    let name = names.(Random.State.int rng (Array.length names)) in
+    let value = Random.State.int rng 6 in
+    if Random.State.bool rng then Reason.At_least { name; value; decl = 0 }
+    else Reason.At_most { name; value; decl = 9 }
+  in
+  let node () =
+    {
+      Analysis.fact = fact ();
+      level = Random.State.int rng 4;
+      support = Random.State.int rng 12;
+      implied_by = Store.no_prop;
+      root = Random.State.int rng 5 = 0;
+    }
+  in
+  let ok_count = ref true and ok_best = ref true and steps = ref 0 in
+  for _ = 1 to 3000 do
+    let f = Analysis.Frontier.create ~conflict_level:cl ~expandable () in
+    Analysis.Frontier.add_all f (List.init 6 (fun _ -> node ())) ~mk:Fun.id;
+    let go = ref true in
+    while !go do
+      incr steps;
+      let ns = Analysis.Frontier.nodes f in
+      if
+        Analysis.Frontier.at_conflict_level f
+        <> List.length (List.filter (fun n -> n.Analysis.level = cl) ns)
+      then ok_count := false;
+      let b = Analysis.Frontier.best f in
+      (match (b, fold ns) with
+      | None, None -> ()
+      | Some x, Some y when x == y -> ()
+      | _ -> ok_best := false);
+      match b with
+      | None -> go := false
+      | Some n ->
+          Analysis.Frontier.remove f n;
+          if !steps mod 7 <> 0 then
+            Analysis.Frontier.add_all f
+              (List.init (Random.State.int rng 4) (fun _ -> node ()))
+              ~mk:Fun.id
+    done
+  done;
+  check
+    (Printf.sprintf "D-0152 A1: the kept conflict-level count is the filter's (%d steps)"
+       !steps)
+    (!ok_count && !steps > 2000);
+  check "D-0152 A1: Frontier.best is the fold's choice, ties to the earliest cell"
+    !ok_best
+
 let test_uniq_is_the_list_mem_append () =
   let seq = [ 4; 1; 4; 7; 1; 0; 9; 7; 3; 4; 0; 12 ] in
   let reference =
@@ -1179,6 +1251,7 @@ let test_memo_agrees_on_every_other_scene () =
 let () =
   test_scene1_shape ();
   test_merge_nodes_is_the_add_node_fold ();
+  test_frontier_best_and_count ();
   test_uniq_is_the_list_mem_append ();
   test_oracle_non_vacuous ();
   test_oracle_every_criterion ();

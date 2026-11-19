@@ -14,7 +14,10 @@
      them on purpose: on an UNSAT one the database ends contradictory and a `rup` checked
      there proves less (D-0053, D-0066).
 
-   Every model here declares domains of single digits (CLAUDE.md: no wide domain). *)
+   Every model here declares domains of single digits (CLAUDE.md: no wide domain).
+
+   M11-complexity-T4 (D-0152) adds a third kind: the per-node structures of search.ml
+   that replaced a scan, each checked against the scan it replaced on random inputs. *)
 
 module Encoding = Baguette_proof.Encoding
 module Writer = Baguette_proof.Writer
@@ -548,8 +551,138 @@ let test_determinism_with_flags () =
         (a.proof = b.proof && a.restarts > 0))
     [ ("alternate+luby:1+phase", cfg); ("activity+lbd+reuse+phase", cfg2) ]
 
+(* ------------------------------------------- D-0152: the structures against their scans *)
+
+module Reason = Baguette_core.Reason
+module Explanation = Baguette_core.Explanation
+
+(* S1: [learned_kind] after [set_learned_kind] answers what the two id lists answered,
+   [List.mem] in the PB list first, then in the clause list, nothing below
+   [first_learned_id]. Ids are registered sparsely and past 64 and 128, so the table
+   grows more than once, and the queries include ids below the boundary and past the end. *)
+let test_learned_kinds () =
+  let rng = Random.State.make [| 0x0152; 1 |] in
+  let ok = ref true in
+  for round = 1 to 50 do
+    let s = Search.stats_create () in
+    let first = 10 + Random.State.int rng 50 in
+    s.Search.first_learned_id <- first;
+    let pb = ref [] and cl = ref [] in
+    for _ = 1 to 1 + Random.State.int rng (if round mod 5 = 0 then 300 else 30) do
+      let id = first - 3 + Random.State.int rng 400 in
+      if not (List.mem id !pb || List.mem id !cl) then
+        if Random.State.bool rng then (
+          pb := id :: !pb;
+          Search.set_learned_kind s id Search.kind_pb)
+        else (
+          cl := id :: !cl;
+          Search.set_learned_kind s id Search.kind_clause)
+    done;
+    for id = -2 to first + 450 do
+      let want =
+        if id < first then Search.kind_none
+        else if List.mem id !pb then Search.kind_pb
+        else if List.mem id !cl then Search.kind_clause
+        else Search.kind_none
+      in
+      if not (Char.equal (Search.learned_kind s id) want) then ok := false
+    done
+  done;
+  check "D-0152 S1: the kind table answers what the two id lists answered" !ok;
+  let s = Search.stats_create () in
+  check "D-0152 S1: a fresh stats knows no learned id (first_learned_id = max_int)"
+    (Char.equal (Search.learned_kind s 0) Search.kind_none
+    && Char.equal (Search.learned_kind s (-1)) Search.kind_none)
+
+(* S5: [level_set ls] is [List.mem _ ls], on lists with repeats, the empty list, and a
+   negative level (the scan's fallback). *)
+let test_level_set () =
+  let rng = Random.State.make [| 0x0152; 5 |] in
+  let ok = ref true in
+  for _ = 1 to 2000 do
+    let n = Random.State.int rng 12 in
+    let ls =
+      List.init n (fun _ ->
+          if Random.State.int rng 40 = 0 then -1 - Random.State.int rng 3
+          else Random.State.int rng 30)
+    in
+    let f = Search.level_set ls in
+    for l = -5 to 35 do
+      if f l <> List.mem l ls then ok := false
+    done
+  done;
+  check "D-0152 S5: level_set is List.mem on 2 000 random level lists" !ok
+
+(* S3 and S4, on one random walk of a store: levels (some empty, so two marks share a
+   position, and some opened with no push yet, so a mark sits at the trail's end), bound
+   moves, interior holes, and backtracks. At every step [decision_entries] equals
+   [decision_entries_scan], [unfixed] equals the [Domain.size > 1] filter, and
+   [first_fail] over it equals the full scan. *)
+let test_marks_and_unfixed () =
+  let n = 6 in
+  let names = Array.init n (Printf.sprintf "v%d") in
+  let domains = Array.init n (fun i -> Domain.make 0 (if i < 2 then 1 else 9)) in
+  let s = Store.create ~names ~domains in
+  let r = Reason.because ~concludes:None Reason.none (Explanation.model_row 1) in
+  let rng = Random.State.make [| 0x0152; 3 |] in
+  let entries_ok = ref true and unfixed_ok = ref true and ff_ok = ref true in
+  let shared = ref 0 and holes = ref 0 in
+  let full_first_fail cands =
+    let best = ref cands.(0) in
+    Array.iter
+      (fun v ->
+        if Domain.size (Store.get s v) < Domain.size (Store.get s !best) then best := v)
+      cands;
+    !best
+  in
+  for _ = 1 to 6000 do
+    (match Random.State.int rng 7 with
+    | 0 | 1 -> Store.new_level s
+    | 2 | 3 | 4 ->
+        let v = Var.of_int (Random.State.int rng n) in
+        let d = Store.get s v in
+        if Domain.lo d < Domain.hi d then
+          ignore
+            (match Random.State.int rng 3 with
+            | 0 -> Store.set_lo s v (Domain.lo d + 1) r
+            | 1 -> Store.set_hi s v (Domain.hi d - 1) r
+            | _ ->
+                if Domain.hi d - Domain.lo d >= 2 then (
+                  incr holes;
+                  Store.remove s v (Domain.lo d + 1) r)
+                else Store.set_lo s v (Domain.lo d + 1) r)
+    | _ -> if Store.level s > 0 then Store.backtrack s);
+    let a = Search.decision_entries s and b = Search.decision_entries_scan s in
+    if not (List.equal (fun (i, e) (j, e') -> i = j && e == e') a b) then
+      entries_ok := false;
+    let ms = Store.level_marks s in
+    if List.length (List.sort_uniq Int.compare ms) < List.length ms then incr shared;
+    let u = Search.unfixed s in
+    let want =
+      Array.of_list
+        (List.filter (fun v -> Domain.size (Store.get s v) > 1) (List.init n Var.of_int))
+    in
+    if u <> want then unfixed_ok := false;
+    if Array.length u > 0 && not (Var.equal (Search.first_fail s u) (full_first_fail u))
+    then ff_ok := false
+  done;
+  check "D-0152 S3: decision_entries over the marks equals the trail scan" !entries_ok;
+  check
+    (Printf.sprintf "D-0152 S3: ...including %d states with two levels at one position"
+       !shared)
+    (!shared > 100);
+  check "D-0152 S4: unfixed by is_fixed equals the Domain.size > 1 filter" !unfixed_ok;
+  check
+    (Printf.sprintf
+       "D-0152 S4: first_fail stopping at size 2 equals the full scan (%d holes punched)"
+       !holes)
+    (!ff_ok && !holes > 100)
+
 let () =
   print_endline "";
+  test_learned_kinds ();
+  test_level_set ();
+  test_marks_and_unfixed ();
   test_determinism_with_flags ();
   test_activity_unit ();
   test_luby ();

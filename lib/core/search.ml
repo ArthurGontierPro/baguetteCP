@@ -411,6 +411,9 @@ type stats = {
          for the reason [db] is. Deduplication matters here and not for the clause
          instances below: one model (width_sat_depth) derives 49 of the suite's 72 units,
          many of them the same bound twice, and this list is walked at every node. *)
+  mutable globals_fwd : global list;
+      (* D-0152 (D-0140 S6): [List.rev globals_rev], kept beside it by [push_global] so
+         [apply_globals] does not reverse the list at every node. *)
   mutable n_global_prunes : int;
       (* Times applying a global actually MOVED a bound. This is the counter that says
          whether step 1 did anything: a learned unit that never prunes is a learned unit
@@ -438,12 +441,16 @@ type stats = {
       (* ...and the rows [Pb.of_terms] refused: a [Lit.Eq] literal, or a name the
          encoding does not declare. Same two reasons as [n_global_declined], counted
          rather than silently skipped for the same reason. *)
-  mutable pb_inst_ids_rev : int list;
-      (* The engine instance ids of those, newest first. A LIST and not a [Hashtbl]:
-         nothing here may iterate a hash table (the determinism gate), and the list is
-         one entry per learned row. Read by [count_learned_activity] to tell a pruning
-         made by a learned PB row from one made by a learned clause. *)
-  mutable clause_inst_ids_rev : int list; (* ...and the M2-L12 clause instances' *)
+  mutable learned_kinds : Bytes.t;
+      (* M11-complexity-T4 (D-0152, D-0140 S1): one byte per engine id at or above
+         [first_learned_id], saying which kind of learned instance has that id
+         ([kind_pb], [kind_clause], or [kind_none]). Read by [count_learned_activity] to
+         tell a pruning made by a learned PB row from one made by a learned clause, at
+         every trail entry of every node. It replaced two id LISTS ([pb_inst_ids_rev],
+         [clause_inst_ids_rev]) walked by a polymorphic [List.mem] per entry, which made
+         every node pay for the size of the learned database. An array indexed by id is
+         never iterated, so the determinism argument the lists were kept for (no
+         [Hashtbl] iteration in a solve) holds for it as it held for them. *)
   mutable n_pb_prunes : int;
       (* Bounds actually MOVED by a learned PB instance. This is the counter M2-L13
          turns on and the one M2-L12 reported as 0 for the clause path: an instance with
@@ -612,6 +619,7 @@ let stats_create () =
     learned_rev = [];
     db = Retention.create ();
     globals_rev = [];
+    globals_fwd = [];
     n_global_prunes = 0;
     n_global_conflicts = 0;
     n_global_declined = 0;
@@ -619,8 +627,7 @@ let stats_create () =
     n_clause_declined = 0;
     n_pb_instances = 0;
     n_pb_inst_declined = 0;
-    pb_inst_ids_rev = [];
-    clause_inst_ids_rev = [];
+    learned_kinds = Bytes.empty;
     n_pb_prunes = 0;
     n_pb_inst_conflicts = 0;
     n_clause_prunes = 0;
@@ -703,6 +710,28 @@ let record_bridge s b =
   s.n_bridges <- s.n_bridges + 1;
   if s.n_bridges <= bridge_cap then s.bridges_rev <- b :: s.bridges_rev
 
+(* D-0152 (D-0140 S1): the kind of the learned instance with engine id [id], kept in
+   [learned_kinds] at [id - first_learned_id]. The table grows by doubling, so
+   registering costs amortised O(1), and an id outside it is [kind_none]. *)
+let kind_none = '\000'
+let kind_pb = '\001'
+let kind_clause = '\002'
+
+let learned_kind s id =
+  let i = id - s.first_learned_id in
+  if i < 0 || i >= Bytes.length s.learned_kinds then kind_none
+  else Bytes.unsafe_get s.learned_kinds i
+
+let set_learned_kind s id k =
+  let i = id - s.first_learned_id in
+  if i >= 0 then (
+    let n = Bytes.length s.learned_kinds in
+    if i >= n then (
+      let b = Bytes.make (Stdlib.max (i + 1) (Stdlib.max 64 (2 * n))) kind_none in
+      Bytes.blit s.learned_kinds 0 b 0 n;
+      s.learned_kinds <- b);
+    Bytes.set s.learned_kinds i k)
+
 (* Does this pair of counts satisfy the identity above? [exhausted] is whether the
    search closed its whole tree. Public because [solve] checks it only under
    BAGUETTE_DEBUG and the tests must be able to check it always. *)
@@ -763,11 +792,16 @@ let stats_consistent s ~exhausted =
 let unfixed store =
   (* M6-T13: two passes over the domains -- count, then fill -- instead of consing a list
      and copying it, so a node allocates the one array it returns and nothing else. Same
-     array, same ascending store-index order. *)
+     array, same ascending store-index order.
+
+     M11-complexity-T4 (D-0152, D-0140 S4): "unfixed" is [not (Domain.is_fixed d)], two
+     loads, where it was [Domain.size d > 1], which counts the hole bits of a domain
+     with holes. The two agree on every stored domain: I-D2 keeps both bounds members
+     and I-D1 keeps lo <= hi, so the size is 1 exactly when lo = hi. *)
   let n = Store.n_vars store in
   let k = ref 0 in
   for i = 0 to n - 1 do
-    if Domain.size (Store.get store (Var.of_int i)) > 1 then incr k
+    if not (Domain.is_fixed (Store.get store (Var.of_int i))) then incr k
   done;
   if !k = 0 then [||]
   else
@@ -775,7 +809,7 @@ let unfixed store =
     let j = ref 0 in
     for i = 0 to n - 1 do
       let v = Var.of_int i in
-      if Domain.size (Store.get store v) > 1 then (
+      if not (Domain.is_fixed (Store.get store v)) then (
         out.(!j) <- v;
         incr j)
     done;
@@ -835,14 +869,23 @@ let as_split = function
 
 (* First-fail (docs/SPEC.md 3.4): the unfixed variable (domain size > 1) with the
    smallest domain, ties broken by declaration order (the store's variable index). *)
+(* M11-complexity-T4 (D-0152, D-0140 S4): the scan stops at the first candidate of size
+   2. Every candidate is unfixed ([type order] says so, and [unfixed] and both arms of
+   [sequence] filter for it), so no size is below 2, and the comparison is strict, so
+   no later candidate can replace one of size 2: the answer is the one the full scan
+   gives. On a Boolean model that is the first candidate, where the scan read every
+   unfixed variable at every node. *)
 let first_fail store cands =
+  let n = Array.length cands in
   let best = ref cands.(0) in
   let bsize = ref (Domain.size (Store.get store cands.(0))) in
-  for i = 1 to Array.length cands - 1 do
-    let size = Domain.size (Store.get store cands.(i)) in
+  let i = ref 1 in
+  while !i < n && !bsize > 2 do
+    let size = Domain.size (Store.get store cands.(!i)) in
     if size < !bsize then (
-      best := cands.(i);
-      bsize := size)
+      best := cands.(!i);
+      bsize := size);
+    incr i
   done;
   !best
 
@@ -1125,7 +1168,7 @@ let sequence ?(fallback = spec_order) (phases : phase list) : order =
     let n = Store.n_vars store in
     let is_live v =
       let i = Var.to_int v in
-      i >= 0 && i < n && Domain.size (Store.get store v) > 1
+      i >= 0 && i < n && not (Domain.is_fixed (Store.get store v))
     in
     let rec go = function
       | [] -> None
@@ -1933,14 +1976,39 @@ let close_root_conflict ctx trace store (c : Store.conflict) =
    The index is carried because [Store.remover] is asked "which entry took [v] out of
    this variable's domain *before* this point", and the point is a trail position. It is
    the same ~before [Trace.settle_facts] passes for a propagator's settle; M1-T66 asks it
-   for a decision's. *)
-let decision_entries store =
+   for a decision's.
+
+   M11-complexity-T4 (D-0152, D-0140 S3): read off the LEVEL MARKS, one per open level,
+   instead of asking [Store.is_level_start] at every trail position, which made every
+   conflict pay for the whole trail. An entry is a level start iff some open mark sits at
+   its position (that is what [Store.is_level_start] counts, D-0142), the marks are
+   monotone (I-T2), and an empty level shares its position with the next one, so the
+   marks below the trail's end, with repeats dropped, are exactly the positions the scan
+   kept, in the same ascending order. [decision_entries_scan] is the old walk, kept as
+   the specification: [BAGUETTE_DEBUG] compares the two at every call. *)
+let decision_entries_scan store =
   let n = Store.trail_length store in
   let acc = ref [] in
   for i = n - 1 downto 0 do
     if Store.is_level_start store i then acc := (i, Store.trail_entry store i) :: !acc
   done;
   !acc
+
+let decision_entries store =
+  let n = Store.trail_length store in
+  let rec go prev acc = function
+    | [] -> List.rev acc
+    | m :: rest ->
+        if m >= n || m = prev then go prev acc rest
+        else go m ((m, Store.trail_entry store m) :: acc) rest
+  in
+  let entries = go (-1) [] (Store.level_marks store) in
+  Debug.check "D-0152: decision_entries over the marks agrees with the trail scan"
+    (fun () ->
+      List.equal
+        (fun (i, (e : Store.entry)) (j, e') -> i = j && e == e')
+        entries (decision_entries_scan store));
+  entries
 
 (* Did this push land somewhere strictly stronger than its literal names, and if so on
    what? [Some cond] is the bound the trail actually recorded; [None] means the push
@@ -2064,12 +2132,14 @@ let bridges (ctx : Justify.ctx) trace stats store (decisions : Lit.t list) : Lit
                        (Lit.to_string l) (Lit.to_string claim))
                     (fun () -> holes <> []);
                   let lits = claim :: Lit.negate l :: List.map Lit.negate ancestors in
-                  let origin =
+                  (* D-0152 (D-0140 J6): the origin is a thunk, rendered only by the
+                     writer's audit or the mutation knob, as [Trace]'s are (D-0145). *)
+                  let origin () =
                     Printf.sprintf "M1-T55: %s settled onto %s" (Lit.to_string l)
                       (Lit.to_string claim)
                   in
                   protect (l :: ancestors);
-                  let cid = Justify.emit_rup_clause ctx ~origin lits in
+                  let cid = Justify.emit_rup_clause_lazy ctx ~origin lits in
                   let level = Writer.current_level ctx.Justify.writer in
                   let cited, unnamed =
                     List.fold_left
@@ -2154,11 +2224,9 @@ let register_learned_pb engine store ctx stats ~bump ~cid ~(row : Learned.t) =
       (* D-0139: behind [Retention.gate], so a policy that detaches can evict it. *)
       Engine.add engine (Retention.gate stats.db store ~cid inst);
       stats.n_pb_instances <- stats.n_pb_instances + 1;
-      stats.pb_inst_ids_rev <- id :: stats.pb_inst_ids_rev;
-      Retention.cite stats.db ~cid
-        ~by:
-          (Printf.sprintf "learned_pb instance #%d, %s (M2-L13)" id
-             (Learned.to_string row))
+      set_learned_kind stats id kind_pb;
+      Retention.cite_lazy stats.db ~cid ~by:(fun () ->
+          Printf.sprintf "learned_pb instance #%d, %s (M2-L13)" id (Learned.to_string row))
 
 (* ---------------------------------------------------------------------------
    M2-L15: THE BACKJUMP LEVEL, and why the decision closure is RIGHT and not merely safe
@@ -2390,11 +2458,14 @@ let global_of store ~(decl : string -> (int * int) option) ~cid (l : Lit.t) :
    counters. Passing a [stats] changes no byte of the emitted proof, which is the
    property [solve]'s own comment on [?stats] states. *)
 let count_learned_activity stats store ~since (o : Engine.outcome) : Engine.outcome =
+  (* D-0152 (D-0140 S1): the kind is one byte load per entry, where it was two
+     polymorphic [List.mem] over every learned instance id. [learned_kind] answers
+     [kind_none] below [first_learned_id] and for an id no learned instance has, which is
+     exactly when neither list held it. *)
   let classify id =
-    if id < stats.first_learned_id then ()
-    else if List.mem id stats.pb_inst_ids_rev then
-      stats.n_pb_prunes <- stats.n_pb_prunes + 1
-    else if List.mem id stats.clause_inst_ids_rev then
+    let k = learned_kind stats id in
+    if Char.equal k kind_pb then stats.n_pb_prunes <- stats.n_pb_prunes + 1
+    else if Char.equal k kind_clause then
       stats.n_clause_prunes <- stats.n_clause_prunes + 1
   in
   for i = since to Store.trail_length store - 1 do
@@ -2402,12 +2473,11 @@ let count_learned_activity stats store ~since (o : Engine.outcome) : Engine.outc
   done;
   (match o with
   | Engine.Conflict c ->
-      let id = c.Store.c_prop in
-      if id >= stats.first_learned_id then
-        if List.mem id stats.pb_inst_ids_rev then
-          stats.n_pb_inst_conflicts <- stats.n_pb_inst_conflicts + 1
-        else if List.mem id stats.clause_inst_ids_rev then
-          stats.n_clause_inst_conflicts <- stats.n_clause_inst_conflicts + 1
+      let k = learned_kind stats c.Store.c_prop in
+      if Char.equal k kind_pb then
+        stats.n_pb_inst_conflicts <- stats.n_pb_inst_conflicts + 1
+      else if Char.equal k kind_clause then
+        stats.n_clause_inst_conflicts <- stats.n_clause_inst_conflicts + 1
   | Engine.Fixpoint -> ());
   o
 
@@ -2428,32 +2498,47 @@ let count_learned_activity stats store ~since (o : Engine.outcome) : Engine.outc
    answer [None] out of range, and [Pb_analysis] turns that into its ordinary [No_row]
    fallback. *)
 let apply_globals store stats : Store.conflict option =
+  (* D-0152 (D-0140 S6): the forward list is kept, not rebuilt per node, and a bound
+     already in force is skipped before its justification is built. That is exactly the
+     case [Domain.set_lo]/[set_hi] answer [Unchanged] (the bound is at or past [g_k]), on
+     which [Store.apply] does nothing and the loop goes on, as it does here. *)
   let rec go = function
     | [] -> None
     | g :: rest -> (
-        let j = Reason.because ~concludes:(Some g.g_fact) Reason.none g.g_expl in
-        let r =
-          if g.g_pos then Store.set_lo store g.g_var g.g_k j
-          else Store.set_hi store g.g_var (g.g_k - 1) j
+        let d = Store.get store g.g_var in
+        let in_force =
+          if g.g_pos then g.g_k <= Domain.lo d else g.g_k - 1 >= Domain.hi d
         in
-        match r with
-        | Store.Unchanged -> go rest
-        | Store.Changed ->
-            stats.n_global_prunes <- stats.n_global_prunes + 1;
-            go rest
-        | Store.Conflict _ ->
-            stats.n_global_conflicts <- stats.n_global_conflicts + 1;
-            let d = Store.get store g.g_var in
-            let nm = Store.name store g.g_var in
-            let opposing =
-              if g.g_pos then Reason.at_most ~name:nm ~decl:g.g_decl_hi (Domain.hi d)
-              else Reason.at_least ~name:nm ~decl:g.g_decl_lo (Domain.lo d)
-            in
-            Some
-              (Store.conflict store
-                 (Reason.because ~concludes:None [ opposing ] g.g_expl)))
+        if in_force then go rest
+        else
+          let j = Reason.because ~concludes:(Some g.g_fact) Reason.none g.g_expl in
+          let r =
+            if g.g_pos then Store.set_lo store g.g_var g.g_k j
+            else Store.set_hi store g.g_var (g.g_k - 1) j
+          in
+          match r with
+          | Store.Unchanged -> go rest
+          | Store.Changed ->
+              stats.n_global_prunes <- stats.n_global_prunes + 1;
+              go rest
+          | Store.Conflict _ ->
+              stats.n_global_conflicts <- stats.n_global_conflicts + 1;
+              let d = Store.get store g.g_var in
+              let nm = Store.name store g.g_var in
+              let opposing =
+                if g.g_pos then Reason.at_most ~name:nm ~decl:g.g_decl_hi (Domain.hi d)
+                else Reason.at_least ~name:nm ~decl:g.g_decl_lo (Domain.lo d)
+              in
+              Some
+                (Store.conflict store
+                   (Reason.because ~concludes:None [ opposing ] g.g_expl)))
   in
-  go (List.rev stats.globals_rev)
+  go stats.globals_fwd
+
+(* File a learned unit, newest last in [globals_fwd] and newest first in [globals_rev]. *)
+let push_global stats g =
+  stats.globals_rev <- g :: stats.globals_rev;
+  stats.globals_fwd <- stats.globals_fwd @ [ g ]
 
 (* Give the learned clause a runtime consumer, and TELL RETENTION IT HAS ONE.
 
@@ -2480,11 +2565,10 @@ let register_learned engine store ctx stats ~cid ~(lits : Lit.t list) =
         match global_of store ~decl ~cid l with
         | None -> stats.n_global_declined <- stats.n_global_declined + 1
         | Some g ->
-            stats.globals_rev <- g :: stats.globals_rev;
-            Retention.cite stats.db ~cid
-              ~by:
-                (Printf.sprintf "the learned unit %s, applied at every node (M2-L12)"
-                   (Lit.to_string l)))
+            push_global stats g;
+            Retention.cite_lazy stats.db ~cid ~by:(fun () ->
+                Printf.sprintf "the learned unit %s, applied at every node (M2-L12)"
+                  (Lit.to_string l)))
   | _ :: _ :: _ -> (
       match Clause.of_lits store ~decl lits with
       | None -> stats.n_clause_declined <- stats.n_clause_declined + 1
@@ -2500,11 +2584,12 @@ let register_learned engine store ctx stats ~cid ~(lits : Lit.t list) =
                     with type t = Clause.Learned_clause.t)
                   lc));
           stats.n_clause_instances <- stats.n_clause_instances + 1;
-          stats.clause_inst_ids_rev <- id :: stats.clause_inst_ids_rev;
-          Retention.cite stats.db ~cid
-            ~by:
-              (Printf.sprintf "learned_clause instance #%d over %s (M2-L12)" id
-                 (String.concat " " (List.map Lit.to_string (Clause.literals p)))))
+          set_learned_kind stats id kind_clause;
+          (* D-0152 (D-0140 S2): the citation's text is rendered only if a [Cited]
+             message or [Retention.cited_by] reads it, from the same values. *)
+          Retention.cite_lazy stats.db ~cid ~by:(fun () ->
+              Printf.sprintf "learned_clause instance #%d over %s (M2-L12)" id
+                (String.concat " " (List.map Lit.to_string (Clause.literals p)))))
 
 (* M5-T1: the solution node of a branch-and-bound search.
 
@@ -2644,7 +2729,7 @@ let record_improving ctx store stats (b : bnb) (asn : assignment) : [ `Continue 
     let decl = Learned.decl_of_encoding ctx.Justify.encoding in
     match global_of store ~decl ~cid lit with
     | Some g ->
-        stats.globals_rev <- g :: stats.globals_rev;
+        push_global stats g;
         `Continue
     | None ->
         (* [global_of] declines a literal whose variable the STORE does not know or the
@@ -2685,6 +2770,17 @@ let undo_level stats store =
   | Some { st_phase = Some ph; _ } -> Phase.save_level ph store
   | Some { st_phase = None; _ } | None -> ());
   Store.backtrack store
+
+(* D-0152 (D-0140 S5): [level_set ls l] is [List.mem l ls] for a list of decision
+   levels, answered from a byte per level. Levels are never negative; a list that held
+   one would be answered by the scan, so the function is [List.mem] on every list. *)
+let level_set (ls : int list) : int -> bool =
+  if List.exists (fun l -> l < 0) ls then fun l -> List.exists (Int.equal l) ls
+  else
+    let top = List.fold_left Stdlib.max (-1) ls in
+    let tbl = Bytes.make (top + 1) '\000' in
+    List.iter (fun l -> Bytes.set tbl l '\001') ls;
+    fun l -> l >= 0 && l <= top && Char.equal (Bytes.get tbl l) '\001'
 
 let reuse_target (a : Activity.t) store (decisions : Lit.t list) =
   let best = Activity.best_score a (unfixed store) in
@@ -2927,8 +3023,12 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
                        settle. Keeping them costs a weaker clause on the SETTLE PATHS ONLY;
                        [protected] is empty on every path with no hole split, which is almost
                        all of them, and the filter is then exactly what it was. *)
+                    (* D-0152 (D-0140 S5): membership in [ls] is one load from a
+                       table of its levels, where it was a polymorphic [List.mem] per
+                       nogood literal (depth squared per conflict). Same predicate. *)
+                    let in_ls = level_set ls in
                     let kept (lit, l) =
-                      List.mem l ls
+                      in_ls l
                       || (not cfg.break_bridge_levels)
                          && List.exists (fun p -> Lit.equal lit (Lit.negate p)) protected
                     in
@@ -3428,12 +3528,12 @@ let search_core ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx) ?tr
      it compiles again -- or [Engine] grows a truncate-to-a-mark and this comment becomes
      that function's reason for existing. *)
   stats.globals_rev <- [];
+  stats.globals_fwd <- [];
   (* M2-L13: the id boundary [count_learned_activity] tests against. Recorded here rather
      than in [stats_create] for the same reason the database is: a [stats] may outlive a
      [solve], and the engine it is about to be pointed at is not the one it last saw. *)
   stats.first_learned_id <- Engine.next_id engine;
-  stats.pb_inst_ids_rev <- [];
-  stats.clause_inst_ids_rev <- [];
+  stats.learned_kinds <- Bytes.empty;
   stats.nodes <- stats.nodes + 1;
   (* M10-search-strategy (D-0137): the opt-in strategies' state, per solve, and the order
      they wrap. With every one of them off this is [None] and [order] is the caller's,

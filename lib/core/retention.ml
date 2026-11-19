@@ -291,7 +291,13 @@ module Writer = Baguette_proof.Writer
    [e_key] is the constraint's canonical rendering ([Learned.to_string], which sorts and
    merges in [Learned.make]), used for the duplicate MEASUREMENT below and for nothing
    else -- it is not part of any policy. [e_seq] is introduction order and is unique,
-   which is what makes every sort here total. *)
+   which is what makes every sort here total.
+
+   M11-complexity-T4 (D-0152, D-0140 R4) tried keying the duplicate count on the row
+   itself, to drop the rendering. It kept the bytes and cost no instruction, but the
+   table then held every learned ROW (about twelve words per term) where it held the
+   row's text, and the peak RSS rose 6 to 8 % at 10 000 nodes on four of D-0140's
+   instances. Reverted; the text is the cheaper key to hold. *)
 type tier = Core | Mid | Local
 
 let tier_to_string = function Core -> "core" | Mid -> "mid" | Local -> "local"
@@ -430,6 +436,18 @@ let keep_all =
     p_tiers = None;
   }
 
+(* M11-complexity-T4 (D-0152, D-0140 R3): the orders [fifo] and [lbd] rank by, over ints
+   ([Int.compare], where the polymorphic [compare] was called per comparison).
+   [by_seq] is total because [e_seq] is unique. [reduce] hands [evict] the live list
+   oldest first, i.e. already in [by_seq] order ([add] appends with the next [e_seq], and
+   [retire] only filters), so [fifo] checks that in one pass and sorts only a list that
+   is not; [List.sort] being stable and the order total, the sorted list is the list. *)
+let by_seq a b = Int.compare a.e_seq b.e_seq
+
+let rec sorted_by_seq = function
+  | a :: (b :: _ as rest) -> a.e_seq < b.e_seq && sorted_by_seq rest
+  | [ _ ] | [] -> true
+
 (* Evict oldest-first down to [cap]. This IS the activity policy -- see the header: with
    every learned constraint's activity identically zero, an activity ranking is a tie
    across the whole database and the tie-break is all that is left. Spelling it [fifo]
@@ -448,7 +466,7 @@ let fifo ~cap =
               else
                 List.filteri
                   (fun i _ -> i < n - cap)
-                  (List.sort (fun a b -> compare a.e_seq b.e_seq) live));
+                  (if sorted_by_seq live then live else List.sort by_seq live));
         });
     p_detaches = true;
     p_tiers = None;
@@ -474,9 +492,7 @@ let lbd ~cap =
                 let worst_first =
                   List.sort
                     (fun a b ->
-                      match compare b.e_lbd a.e_lbd with
-                      | 0 -> compare a.e_seq b.e_seq
-                      | c -> c)
+                      match Int.compare b.e_lbd a.e_lbd with 0 -> by_seq a b | c -> c)
                     live
                 in
                 List.filteri (fun i _ -> i < n - cap) worst_first);
@@ -521,10 +537,10 @@ let tiered ?(params = default_tier_params) () =
                 let worst_first =
                   List.sort
                     (fun a b ->
-                      match compare a.e_used b.e_used with
+                      match Bool.compare a.e_used b.e_used with
                       | 0 -> (
-                          match compare b.e_lbd a.e_lbd with
-                          | 0 -> compare a.e_seq b.e_seq
+                          match Int.compare b.e_lbd a.e_lbd with
+                          | 0 -> by_seq a b
                           | c -> c)
                       | c -> c)
                     local
@@ -605,8 +621,11 @@ type t = {
       (* Retired by this database: cid -> the entry it was. Lookup only, never iterated
          (determinism, header). It is what turns a second deletion into an exception
          instead of a silently accepted no-op. *)
-  cited : (Writer.cid, string) Hashtbl.t;
-      (* cid -> what cites it, for the live citation. Lookup only. See [cite]. *)
+  cited : (Writer.cid, string Lazy.t) Hashtbl.t;
+      (* cid -> what cites it, for the live citation. Lookup only. See [cite]. The text
+         is LAZY (D-0152, D-0140 S2): it names every literal of the citing instance and
+         is read only by the [Cited] message and [cited_by], so it is rendered when one
+         of them asks, from the same values, and never otherwise. *)
   keys : (string, Writer.cid) Hashtbl.t;
       (* Canonical row text -> the first id that stated it. Lookup only, and MEASUREMENT
          only: it feeds [n_duplicate] and no policy reads it. M1-T59 found duplicate
@@ -725,10 +744,11 @@ let add t ~cid ~(row : Learned.t) ~lbd ~origin =
    gives it a consumer, a global unit or a [Clause.Learned_clause] instance. [n_cited]
    counts calls, so the population is a measurement this module reports rather than a
    claim its header makes; on `width_sat_depth` it is 49 of 73. *)
-let cite t ~cid ~by =
+let cite_lazy t ~cid ~(by : unit -> string) =
   t.n_cited <- t.n_cited + 1;
-  Hashtbl.replace t.cited cid by
+  Hashtbl.replace t.cited cid (Lazy.from_fun by)
 
+let cite t ~cid ~by = cite_lazy t ~cid ~by:(fun () -> by)
 let uncite t ~cid = Hashtbl.remove t.cited cid
 
 (* Release EVERY citation at once, for [Search.solve]'s end-of-search sweep alone.
@@ -745,7 +765,7 @@ let uncite t ~cid = Hashtbl.remove t.cited cid
    can perform the deletion the guards refuse and watch the checker's answer. Releasing
    is a statement about lifetime and is made once, in one place. *)
 let release_all t = Hashtbl.reset t.cited
-let cited_by t cid = Hashtbl.find_opt t.cited cid
+let cited_by t cid = Option.map Lazy.force (Hashtbl.find_opt t.cited cid)
 
 (* ------------------------------------------- D-0139: a consumer that CAN be detached
 
@@ -905,7 +925,7 @@ let retire ?(unchecked = false) t ctx ~why (ids : Writer.cid list) =
                     "retention: id %d is not held by this database, so deleting it for \
                      %S would be a delete from a second owner (M2-L4)"
                     cid why));
-          match Hashtbl.find_opt t.cited cid with
+          match cited_by t cid with
           | Some by ->
               raise
                 (Cited
