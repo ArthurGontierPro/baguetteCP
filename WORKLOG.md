@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M9-no-proof-T4 (the `--no-proof` audit) | `lib/core/trace.ml`, `lib/core/search.ml` (guards only), `lib/proof/encoding.ml` (guards in `start_proof`, additive), `lib/core/prop/regular.ml`, `lib/core/prop/inverse.ml`, `bin/main.ml` (the no-proof wiring); `lib/core/justify.ml` only after agent-memo merges | agent-noproof-audit (`wave53-noproof`) | 2026-11-19 |
 | M7-T33 (and `Alldiff.excl`'s proof cost, D-0145) | `lib/core/prop/alldiff.ml`, `lib/proof/encoding.ml` (additive only), new `test/models/`, `test/unit/test_prop.ml` (alldiff section) | agent-alldiff (`wave53-alldiff`) | 2026-11-19 |
 | M11-complexity-T10 | `lib/core/justify.ml`, `lib/core/explanation.ml` (additive functions only, the type unchanged), `test/unit/test_justify.ml` | agent-memo (`wave53-memo`) | 2026-11-19 |
 | M7-T28 (`member`) | new `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, new `test/models/`, `test/unit/test_prop.ml` (member section) | agent-member (`wave53-member`) | 2026-11-19 |
@@ -609,45 +608,17 @@ section 1. Shares are inclusive, of the whole run.
 | M7-T28 (continuation: regular's reasons, inverse; the row stays IN PROGRESS) | agent-globals2 (`wave51-globals2`) | 2026-11-19 | **D-0151.** `regular`'s reasons on the LETTERS (tails recurse into the dead flags' own lines; probes on 60 scenes first): learned clauses 321 -> 80 literals on average over 40 nonograms/pentominoes, node rate x2.6 without the proof, complete 19 -> 20 of 65 with it, all VERIFIED. `inverse` native: `lib/core/prop/inverse.ml` (channel, CHECKING), mznlib `fzn_inverse`, stage 2 all_different from CITED root lemmas (`Encoding.add_cited_lemma`, alldiff's lemma-row hook), 2 mutation lanes, 3 models; Challenge 70 reach the route, 3 -> 3 complete (held by `Element.add_facts` and alldiff's factless conflicts, both filed). `member` designed with probes. Gate on `d1df37f`: `make -k check` rc 2 from the 5 pre-existing test_retention checks only (main fails the same), 195 models passed, peak RSS 100 104 kB; 181/195 models byte-identical to main (the 14 diffs: inverse x3, regular_opt/unsat .pbp); diff lane 184/184 default runs equal (fifo/lbd diffs identical to main's, strategy configs without references on this base) |
 | M11-complexity-T8 | agent-element (`wave53-element`) | 2026-11-19 | **D-0155.** `Element.add_facts` hashed and linear (same list as the old fold, oracle-tested), the index-hole trail walks through `Store.remover`, live and carried-value membership through an int table, hole facts once per pass. black-hole_10 168 G to 52 G instructions; every model's artefacts equal to main |
 | M13-codes-leads (roadmap rows only) | codes-cp session | 2026-11-19 | Two TODO (to study) rows from the codes-cp phase-1 benchmark: T1 a linear relaxation as a presolve step, T2 symmetry detection with dominance-justified breaking. No code. |
+| M9-no-proof-T4 | agent-noproof-audit (`wave53-noproof`) | 2026-11-19 | **D-0161.** Six guards behind the null writer in `Search` (`record_improving`'s literal family and bits bridge, the SAT conclusion, `ensure_decision_atom`, `Learn.supports`) and in `start_proof`'s root lemmas (`mint_root_lemma_ids`). openshop `--no-proof` -42.6 % instructions, RSS 341 -> 93 MB; proved runs byte-identical. Gate on `658c785` (binary `fd3d9635`): `make check` rc 0 (4 253 ok, 198 models, 100 MB), 198 models x 4 artefacts equal to `d7a1ef00`, lane 301/301, debug 289/289, scaling ok |
 
 ## Handoff notes
 
-### PAUSED 2026-11-19 (agent-noproof-audit, wave53-noproof)
+### 2026-11-19 (agent-noproof-audit, finished by the orchestrator): M9-no-proof-T4, D-0161
 
-Paused on the orchestrator's request (connection to fataepyc-06 ending). The claim row stays.
-
-**Done and committed** (branch `wave53-noproof`): the six guards (`lib/core/search.ml`:
-`record_improving`'s literal family and bits bridge, `solve`'s SAT conclusion, `ensure_decision_atom`
-at the three decision sites, `Learn.supports` under the null writer; `lib/proof/encoding.ml`:
-`emit_root_lemmas`' null arm `mint_root_lemma_ids`), `bin/main.ml`'s header, the D-0161 draft at
-the end of `docs/DECISIONS.md` (sections 1 to 6 written; two placeholders), the three requests
-under `## Cross-session requests` (dated 2026-11-19, M9-no-proof-T4), the ROADMAP row (still
-IN PROGRESS). Laptop `dune build --root . lib/ bin/ test/ @fmt` is clean.
-
-**Measured** (all on fataepyc-06, `/scratch/arthur/wave53-noproof-runs/`, binaries in `bin/`:
-`base.exe` d7a1ef00 = main `e003729`, `g1.exe` af081ab4 = `5a15ed1`, fp builds `base_fp.exe`,
-`g1_fp.exe`): base profiles `prof/base/`, `prof/base3/` (black-hole, nonogram), startup profiles
-`prof/start_base/`; perf stat `m/base/`, `m/g1/` (table: `bash table.sh base g1`); proved
-identity base vs g1 `ident/g1/` (225 runs, 0 differences); counters `counters/g1/`,
-`counters/base/` (225 runs, stdout/rc equal, only `later` and `i-s4-cross` differ proved vs
-no-proof, identically on both binaries). These are already written into D-0161 sections 2 to 5.
-
-**Nothing is running.** The after-profile of `g1_fp.exe` (`prof.sh`, output `prof/g1/`, pidfile
-`prof_g1.pid`) finished before the pause (`prof/g1/DONE` exists) and has not been read yet. The
-gate script is in place, `gate.sh`, not started.
-
-**Next steps**, in order:
-1. When `prof/g1/DONE` exists: `bash suspects.sh prof/g1` and replace `AFTER_PROFILE_PLACEHOLDER`
-   in D-0161 section 4 with what is left (expect `record_improving`, `Learn.supports`,
-   `emit_root_lemmas` gone; alldiff and compile.ml's lemmas still there).
-2. Run the gate on a fresh clone of the branch tip: `bash gate.sh wave53-noproof` from the runs
-   directory (detached, pidfile), status in `gate.status`, logs `gate.check.log`, `gate.diff.log`,
-   `gate.diffdbg.log`, `gate.scaling.log`. Report the unit-check count, FAIL count, models passed,
-   peak RSS, diff and diff-debug run counts, the scaling rc. Replace `GATE_PLACEHOLDER` in D-0161
-   section 5 with those numbers.
-3. Then: D-0161 `Status` stays DONE only if the gate is green; set the ROADMAP row to DONE with the
-   note naming D-0161; move the claim row to `## Completed`; replace this note with a 3-5 line
-   handoff; push to node06 and origin.
+Six guards put the proof-only work of `Search` and `Encoding.start_proof`'s root lemmas behind the
+null writer: openshop under `--no-proof` -42.6 % instructions, RSS 341 -> 93 MB, proved runs
+byte-identical to main. Gate on `658c785` green (4 253 ok, 198 models, lane 301/301, debug 289/289,
+scaling ok). Left for the owners: alldiff's `snap_of` (39.4 % of cyclic under `--no-proof`),
+compile.ml's root lemmas, `Justify.ensure_lit`'s guard (the three requests, dated 2026-11-19).
 
 ### 2026-11-19 (orchestrator): wave53-tooling merged, gate 62 green
 

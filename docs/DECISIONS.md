@@ -18752,7 +18752,7 @@ A fresh clone of `ebd1c75` on fataepyc-06 (`/scratch/arthur/wave53-learned-gate.
 
 ## D-0161  M9-no-proof-T4: the `--no-proof` audit -- what the null writer still paid for after D-0135, six guards in Search and in start_proof's root lemmas, and three requests to the owners of the rest
 
-Status: IN PROGRESS (built and measured; paused 2026-11-19 before the gate, see WORKLOG `PAUSED`)
+Status: DONE (gate green 2026-11-19, section 5)
 Date: 2026-11-19
 Task: M9-no-proof-T4 (agent-noproof-audit, `wave53-noproof`), the user's question "is `--no-proof`
 nicely detached?".
@@ -18926,7 +18926,11 @@ proof, so they are not candidates for a null guard.
   under `--no-proof` with stdout and exit code compared. It does not compare counters. The
   script above does, and it is not part of the gate.
 
-GATE_PLACEHOLDER
+The gate, on a fresh clone of `658c785` (binary `fd3d9635`, against gate 64's `d7a1ef00`):
+`make check` rc 0 (4 253 ok, 0 FAIL, 198 models passed, 24 s, peak RSS 100 MB); stdout, exit code,
+`.opb` and `.pbp` of the 198 models equal to gate 64's (0 differences); the differential lane 301 of
+301 runs equal to the reference, its debug pass 289 of 289; the scaling lane ok on every line
+(largest +0.11 % of late). Nothing to re-record.
 
 ### 6. What is left, and whose it is
 
