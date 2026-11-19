@@ -2048,7 +2048,7 @@ solve satisfy;
 (* M7-T28 (D-0151 section 2): `baguette_inverse`, end to end. Each scene is brute-forced
    over its declared box by [brute_force] (with the oracle arm above, written apart from
    [Model.check_assignment]), solved, and its proof checked by veripb ([run_model]). The
-   scenes cover what [post_inverse] folds: a SAT and an UNSAT that needs search, index
+   scenes cover what [post_inverse] folds: a SAT that needs search, index
    sets that do not start at 1, a constant inside an array, declared domains wider than
    the other index set (the unit restriction rows), arrays of different lengths (no
    bijection), and an involution, f = g, where the same variables are on both sides. *)
@@ -2070,7 +2070,7 @@ let test_inverse_models () =
          ~decls:(v3 "f" @ v3 "g")
          ~call:"[f1, f2, f3], 1, [g1, g2, g3], 1"
          ~extra:[ "int_ne(f1, 1)"; "int_lin_le([1], [g3], 1)" ]);
-  run_model ~title:"inverse: UNSAT under search (sums 5 both ways, f3 <> 3, f2 <> 3)"
+  run_model ~title:"inverse: SAT under search (sums 5 both ways, f3 <> 3, f2 <> 3)"
     ~src:
       (inverse_src
          ~decls:(v4 "f" @ v4 "g")

@@ -8220,6 +8220,10 @@ let test_inverse_brute_force () =
     in
     let p = Inverse.make ~f ~fmin:1 ~g ~gmin:1 in
     let nv = nf + ng in
+    (* The scene's holes are punched with no facts, as a ROOT hole is: the propagator
+       cites a hole through its remover's facts, which are none, so the audit below holds
+       every solution to the scene's holes the way the page holds it to a root line. *)
+    let holes = ref [] in
     for k = 0 to nv - 1 do
       let d = Store.get store (var k) in
       if regular_rnd 3 = 0 then
@@ -8227,8 +8231,9 @@ let test_inverse_brute_force () =
       if regular_rnd 4 = 0 then
         ignore (Store.set_hi store (var k) (Domain.hi d - 1) placeholder_pruning);
       let d = Store.get store (var k) in
-      if regular_rnd 3 = 0 && Domain.hi d - Domain.lo d >= 2 then
-        ignore (Store.remove store (var k) (Domain.lo d + 1) placeholder_pruning)
+      if regular_rnd 3 = 0 && Domain.hi d - Domain.lo d >= 2 then (
+        holes := (k, Domain.lo d + 1) :: !holes;
+        ignore (Store.remove store (var k) (Domain.lo d + 1) placeholder_pruning))
     done;
     (* every pair of mutual inverses over the DECLARED domains *)
     let declared k = if k < nf then fdecl else (1, nf) in
@@ -8278,8 +8283,14 @@ let test_inverse_brute_force () =
       incr reasons;
       List.iter
         (fun a ->
-          if List.for_all (holds a) facts && not (claim_ok a) then
-            flag (Printf.sprintf "%s: a solution satisfies its facts" what))
+          if
+            List.for_all (fun (k, v) -> a.(k) <> v) !holes
+            && List.for_all (holds a) facts
+            && not (claim_ok a)
+          then
+            flag
+              (Printf.sprintf "%s: a solution satisfies its facts [%s]" what
+                 (Reason.to_string_facts facts)))
         sols
     in
     let from = Store.trail_length store in
