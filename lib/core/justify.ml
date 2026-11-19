@@ -205,7 +205,9 @@
        [Lit.compare] so that clause order does not matter (a clause is a set) and
        [Hashtbl]'s structural equality is the right equality ([Lit.t] holds no closure
        and nothing mutable, unlike [Explanation.t] -- which is why the memo above
-       cannot be a [Hashtbl] and this can).
+       cannot be a [Hashtbl] and this can). Since M11-complexity-T12 (D-0166) the
+       sorted list is stored PACKED, two integers a literal over interned names
+       ([pack_key]); the packing is injective, so the equality is the same one.
      - **The empty clause and a clause with a repeated literal are not indexed.**
        [Opb.clause] gives every literal coefficient 1 without merging duplicates, so a
        repeated literal is a coefficient-2 row rather than the set its key would claim.
@@ -240,16 +242,24 @@ module Writer = Baguette_proof.Writer
 module Pol = Baguette_proof.Writer.Pol
 module Encoding = Baguette_proof.Encoding
 
-(* M11-complexity-T5 (D-0145): the memo's table, keyed by an [int] hash, without the
-   polymorphic [Hashtbl]'s C hash and compare per lookup. *)
-module Itbl = Hashtbl.Make (struct
-  type t = int
+(* M11-complexity-T12 (D-0166): one memo entry is one cell of a slot's chain, holding
+   its key, the id, the level and the full hash. It was a [(key, {cid; level})] pair in
+   a list under an [Itbl] keyed by the hash, with the hash again in a list per level:
+   about 93 bytes an entry, measured, and 2011_black-hole_9 at node 40 holds 3.13 M of
+   them (every inner [Combine] of the all_different derivations is a `pol` line of its
+   own and is remembered). A cell is 48 bytes and its level record 8. *)
+type chain =
+  | Nil
+  | Cell of {
+      key : Explanation.t;
+      cid : Writer.cid;
+      level : int;
+      hash : int;
+      mutable next : chain;
+    }
 
-  let equal = Int.equal
-  let hash x = x land max_int
-end)
-
-type memo_entry = { cid : Writer.cid; level : int }
+(* A growable buffer of [int]s: the hashes one level inserted. *)
+type ibuf = { mutable buf : int array; mutable len : int }
 
 (* M6-T9 (a cross-session PROPOSAL, D-0080). The memo keyed by physical identity, as
    before, but bucketed by a SHALLOW structural hash so a lookup is O(bucket) and not
@@ -272,12 +282,19 @@ type memo_entry = { cid : Writer.cid; level : int }
    [None] to [Some], so the key cannot move once the entry exists, and an entry exists
    only after its thunk forced it, see [memoized]); and the tables are keyed by [int]
    monomorphically. Still only bucketing: the equality is [==] and nothing iterates the
-   table, so no emitted byte can change. *)
+   table, so no emitted byte can change.
+
+   M11-complexity-T12 (D-0166): the table is an open hash of [chain]s over a power-of-two
+   array of slots, a cell found by its full hash and then by [==]. A slot's chain is
+   newest first, as a bucket was, and holds the cells of every hash that maps to the
+   slot; the lookup compares the full hash before the key, so it answers what the
+   bucket of that hash answered. *)
 and memo_table = {
-  tbl : (Explanation.t * memo_entry) list Itbl.t;
-  mutable by_level : int list array;
-      (* the hashes each level inserted, newest first; level 0 is never recorded, since
-         no wipe reaches it (see [wipe_level]) *)
+  mutable slots : chain array;
+  mutable count : int;
+  mutable by_level : ibuf array;
+      (* the hashes each level inserted; level 0 is never recorded, since no wipe
+         reaches it (see [wipe_level]) *)
   mutable memo_hi : int; (* M6-T17: no [by_level] entry above this *)
   share : bool;
       (* M11-complexity-T10 (D-0158): an identical line at or below the current level
@@ -434,31 +451,40 @@ let rec shallow_hash (e : Explanation.t) =
    line was written at. See the module header's "claim index". *)
 type stated = { s_cid : Writer.cid; s_level : int }
 
-(* M11-complexity-T5 (D-0145, D-0140 J2). The claim index's table. It was a polymorphic
-   [Hashtbl] keyed by the sorted literal list: the C hash stops after ten meaningful words,
-   which is about three literals, so clauses that agree on their first literals shared a
-   bucket, and the equality was [compare_val] over the lists. Now the hash mixes the
-   first eight literals ([lit_hash]) and the length, and the equality is [Lit.equal]
-   element by element, which is the structural equality the polymorphic table used
-   ([Lit.t] is strings, ints and a bool).
-   Nothing iterates this table, so only the cost of a lookup changes. *)
+(* M11-complexity-T5 (D-0145, D-0140 J2), M11-complexity-T12 (D-0166). The claim
+   index's table. Its key is the clause as a PACKED array, two [int]s per literal of the
+   sorted set: the variable's name interned in [ctx.names] with the kind and the sign,
+   then the value ([pack_key]). It was the sorted [Lit.t list] itself, and that list was
+   the only thing holding its literals: 4.87 M literals in 25 888 keys on
+   2011_black-hole_9 at node 40 (a trace line's claim and negated facts), 333 MB at about
+   68 bytes a literal (a cons, a [Lit.t], a [Ge] block), where the packed key costs 16.
+   The packing is injective (one interned id per name STRING, so two names are one id
+   exactly when [String.equal] holds, which is what [Lit.equal] compares), so two keys
+   are equal exactly when the sorted literal lists were [List.equal Lit.equal], the
+   equality the table had. The hash mixes the first [claim_hash_width] literals and the
+   length, now from the packed integers rather than a string hash of each name.
+   Nothing iterates this table, so only the cost of a lookup and the bytes a key holds
+   change. *)
 module Claims = Hashtbl.Make (struct
-  type t = Lit.t list
+  type t = int array
 
-  let equal = List.equal Lit.equal
+  let equal (a : int array) (b : int array) =
+    let n = Array.length a in
+    n = Array.length b
+    &&
+    let rec go i = i >= n || (Int.equal a.(i) b.(i) && go (i + 1)) in
+    go 0
 
-  (* The first [claim_hash_width] literals and the length: a key is sorted, so two
-     clauses that agree on that prefix and length share a bucket and [equal] tells them
-     apart. Hashing every literal cost a C string hash per literal of every line
-     (measured on H_qr48, D-0145). *)
+  (* The first [claim_hash_width] literals (two slots each) and the length. A key is
+     sorted, so two clauses that agree on that prefix and length share a bucket and
+     [equal] tells them apart. *)
   let claim_hash_width = 8
 
-  let hash ls =
-    let rec go h n = function
-      | l :: rest when n < claim_hash_width -> go (mix h (lit_hash l)) (n + 1) rest
-      | rest -> mix h (n + List.length rest)
-    in
-    finish (go 8 0 ls)
+  let hash (a : int array) =
+    let n = Array.length a in
+    let m = Stdlib.min n (2 * claim_hash_width) in
+    let rec go h i = if i >= m then h else go (mix h a.(i)) (i + 1) in
+    finish (mix (go 8 0) (n / 2))
 end)
 
 (* M11-complexity-T10 (D-0158). Share mode's index of the lines this module wrote for a
@@ -502,7 +528,7 @@ type ctx = {
          shared by every view of the same writer -- although since M1-T31 removed
          [for_constraint] there is only ever one view. *)
   stated : stated Claims.t;
-  mutable stated_by_level : Lit.t list list array;
+  mutable stated_by_level : int array list array;
       (* M6-T17: the keys each level stated, indexed by level. Level 0 is not recorded
          (M11-complexity-T5): no wipe reaches it. *)
   mutable stated_hi : int;
@@ -513,19 +539,38 @@ type ctx = {
   mutable lines_by_level : line_key list array;
   mutable lines_hi : int;
       (* M11-complexity-T10 (D-0158): share mode's lines, kept as [stated]; empty off *)
+  names : (string, int) Hashtbl.t;
+  mutable name_of : string array;
+      (* M11-complexity-T12 (D-0166): the claim index's interned variable names, both
+         ways ([name_of] only to spell a key back in [defining_key]'s message). One
+         entry per name a stated clause has named, never wiped: the ids must stay
+         stable for as long as a key that uses them can be in [stated]. *)
+  combine_origins : (unit -> string) Writer.Itbl.t;
+      (* M11-complexity-T12 (D-0166): one origin closure per (summands, divisor) shape,
+         shared by every [Combine] line of that shape; see [combine_origin]. *)
 }
 
 let create_sharing ~share ~writer ~encoding =
   {
     writer;
     encoding;
-    memo = { tbl = Itbl.create 1024; by_level = Array.make 16 []; memo_hi = -1; share };
+    memo =
+      {
+        slots = Array.make 1024 Nil;
+        count = 0;
+        by_level = Array.init 16 (fun _ -> { buf = [||]; len = 0 });
+        memo_hi = -1;
+        share;
+      };
     stated = Claims.create 64;
     stated_by_level = Array.make 16 [];
     stated_hi = -1;
     lines = Lines.create (if share then 1024 else 1);
     lines_by_level = Array.make (if share then 16 else 1) [];
     lines_hi = -1;
+    names = Hashtbl.create 64;
+    name_of = Array.make 64 "";
+    combine_origins = Writer.Itbl.create 64;
   }
 
 (* The [ctx] every caller makes: sharing as [BAGUETTE_MEMO_SHARE] says, off unless it is
@@ -537,28 +582,63 @@ let create ~writer ~encoding = create_sharing ~share:share_default ~writer ~enco
    pruning's justification, it is a new constraint -- and asking for the field is more
    honest than adding an [Explanation] constructor that means "and also remember this". *)
 let writer ctx = ctx.writer
+let slot_of (m : memo_table) h = h land (Array.length m.slots - 1)
 
 let find_in_bucket ctx h (e : Explanation.t) =
   let rec go = function
-    | [] -> None
-    | (k, m) :: rest -> if k == e then Some m else go rest
+    | Nil -> None
+    | Cell c -> if c.hash = h && c.key == e then Some c.cid else go c.next
   in
-  match Itbl.find_opt ctx.memo.tbl h with None -> None | Some bucket -> go bucket
+  go ctx.memo.slots.(slot_of ctx.memo h)
 
-(* The memo's size: the entries it holds and its longest bucket. For tests and
-   measurement; it walks the whole table, so nothing on the solving path calls it. *)
+(* The cells of [chain] whose hash is [h]: the length of the bucket of [h], as the
+   table had it before M11-complexity-T12. *)
+let rec same_hash h n = function
+  | Nil -> n
+  | Cell c -> same_hash h (if c.hash = h then n + 1 else n) c.next
+
+(* The memo's size: the entries it holds and its longest bucket (the most entries under
+   one hash). For tests and measurement; it walks the whole table, so nothing on the
+   solving path calls it. *)
 let memo_stats ctx =
-  Itbl.fold
-    (fun _ bucket (n, longest) ->
-      let l = List.length bucket in
-      (n + l, Stdlib.max longest l))
-    ctx.memo.tbl (0, 0)
+  Array.fold_left
+    (fun (n, longest) chain ->
+      let rec go n longest = function
+        | Nil -> (n, longest)
+        | Cell c as here ->
+            go (n + 1) (Stdlib.max longest (same_hash c.hash 0 here)) c.next
+      in
+      go n longest chain)
+    (0, 0) ctx.memo.slots
+
+(* Twice the slots, every cell moved to its slot under the new mask. A slot's chain is
+   rebuilt newest first: the cells of one hash keep their order, which is all a lookup
+   reads (the first [==] match of that hash). *)
+let grow_memo (m : memo_table) =
+  let old = m.slots in
+  m.slots <- Array.make (2 * Array.length old) Nil;
+  Array.iter
+    (fun chain ->
+      let rec cells acc = function
+        | Nil -> acc
+        | Cell c -> cells (Cell c :: acc) c.next
+      in
+      (* oldest first, so pushing each on its new slot leaves the newest at the head *)
+      List.iter
+        (function
+          | Cell c as cell ->
+              let i = slot_of m c.hash in
+              c.next <- m.slots.(i);
+              m.slots.(i) <- cell
+          | Nil -> ())
+        (cells [] chain))
+    old
 
 (* [e]'s entry, looked up under the hash [h] it was given ([shallow_hash e]). A forced
    [Deferred] is also looked up under [unforced_hash]: see there. *)
 let find_memo ctx h (e : Explanation.t) =
   match find_in_bucket ctx h e with
-  | Some _ as m -> m
+  | Some _ as cid -> cid
   | None -> (
       match e with
       | Explanation.Deferred { forced = Some _; _ } when h <> unforced_hash ->
@@ -568,19 +648,29 @@ let find_memo ctx h (e : Explanation.t) =
 let remember_with ctx (e : Explanation.t) h (cid : Writer.cid) : Writer.cid =
   let level = Writer.current_level ctx.writer in
   let m = ctx.memo in
-  let bucket = Option.value (Itbl.find_opt m.tbl h) ~default:[] in
-  Itbl.replace m.tbl h ((e, { cid; level }) :: bucket);
+  if m.count >= 2 * Array.length m.slots then grow_memo m;
+  let i = slot_of m h in
+  m.slots.(i) <- Cell { key = e; cid; level; hash = h; next = m.slots.(i) };
+  m.count <- m.count + 1;
   if memo_stats_on then (
     incr ms_entries;
     if !ms_entries > !ms_entries_peak then ms_entries_peak := !ms_entries;
-    let n = List.length bucket + 1 in
+    let n = same_hash h 0 m.slots.(i) in
     if n > !ms_longest then ms_longest := n);
   if level > 0 then (
-    if level >= Array.length m.by_level then (
-      let a = Array.make (Stdlib.max (level + 1) (2 * Array.length m.by_level)) [] in
-      Array.blit m.by_level 0 a 0 (Array.length m.by_level);
-      m.by_level <- a);
-    m.by_level.(level) <- h :: m.by_level.(level);
+    (if level >= Array.length m.by_level then
+       let n = Array.length m.by_level in
+       m.by_level <-
+         Array.init
+           (Stdlib.max (level + 1) (2 * n))
+           (fun l -> if l < n then m.by_level.(l) else { buf = [||]; len = 0 }));
+    let b = m.by_level.(level) in
+    if b.len = Array.length b.buf then (
+      let a = Array.make (Stdlib.max 16 (2 * b.len)) 0 in
+      Array.blit b.buf 0 a 0 b.len;
+      b.buf <- a);
+    b.buf.(b.len) <- h;
+    b.len <- b.len + 1;
     if level > m.memo_hi then m.memo_hi <- level);
   cid
 
@@ -599,25 +689,30 @@ let wipe_level ctx level =
      [Writer.wipe_level] above refuses [level <= 0], so level 0 is never walked. *)
   let m = ctx.memo in
   if m.memo_hi >= level then (
-    let hs = ref [] in
+    (* M11-complexity-T12: every slot a doomed hash maps to loses exactly its cells at
+       [level] or above. A slot met twice is walked twice and loses nothing the second
+       time, so no sort is needed. The cells kept keep their order. *)
+    let rec keep = function
+      | Nil -> Nil
+      | Cell c when c.level >= level ->
+          m.count <- m.count - 1;
+          if memo_stats_on then decr ms_entries;
+          keep c.next
+      | Cell c as cell ->
+          c.next <- keep c.next;
+          cell
+    in
     for l = level to m.memo_hi do
-      hs := List.rev_append m.by_level.(l) !hs;
-      m.by_level.(l) <- []
+      let b = m.by_level.(l) in
+      for k = 0 to b.len - 1 do
+        let i = slot_of m b.buf.(k) in
+        m.slots.(i) <- keep m.slots.(i)
+      done;
+      (* a large buffer is dropped rather than kept at its peak while the level is empty *)
+      if Array.length b.buf > 4096 then b.buf <- [||];
+      b.len <- 0
     done;
-    m.memo_hi <- level - 1;
-    List.iter
-      (fun h ->
-        match Itbl.find_opt m.tbl h with
-        | None -> ()
-        | Some bucket -> (
-            if memo_stats_on then
-              List.iter
-                (fun (_, (me : memo_entry)) -> if me.level >= level then decr ms_entries)
-                bucket;
-            match List.filter (fun (_, (me : memo_entry)) -> me.level < level) bucket with
-            | [] -> Itbl.remove m.tbl h
-            | b -> Itbl.replace m.tbl h b))
-      (List.sort_uniq Int.compare !hs));
+    m.memo_hi <- level - 1);
   for l = level to ctx.stated_hi do
     let keys = ctx.stated_by_level.(l) in
     ctx.stated_by_level.(l) <- [];
@@ -661,13 +756,57 @@ let with_level ctx level f = Writer.with_level ctx.writer level f
 
 (* The key, or [None] for a clause this index does not describe: the empty clause, and
    any clause whose [Opb] rendering is not the literal *set* its key would claim. See
-   the module header. *)
-let clause_key (lits : Lit.t list) : Lit.t list option =
+   the module header. Packed as [Claims] says (M11-complexity-T12, D-0166), in the
+   order [Lit.compare] sorts the set. *)
+let intern ctx (x : string) =
+  match Hashtbl.find_opt ctx.names x with
+  | Some i -> i
+  | None ->
+      let i = Hashtbl.length ctx.names in
+      Hashtbl.add ctx.names x i;
+      if i >= Array.length ctx.name_of then (
+        let a = Array.make (2 * Array.length ctx.name_of) "" in
+        Array.blit ctx.name_of 0 a 0 (Array.length ctx.name_of);
+        ctx.name_of <- a);
+      ctx.name_of.(i) <- x;
+      i
+
+let pack_key ctx (sorted : Lit.t list) : int array =
+  let a = Array.make (2 * List.length sorted) 0 in
+  List.iteri
+    (fun i (l : Lit.t) ->
+      let kind, x, v =
+        match l.Lit.v with
+        | Lit.Ge (x, v) -> (0, x, v)
+        | Lit.Eq (x, v) -> (1, x, v)
+        | Lit.Bit (x, v) -> (2, x, v)
+      in
+      a.(2 * i) <- (intern ctx x lsl 3) lor (kind lsl 1) lor Bool.to_int l.Lit.positive;
+      a.((2 * i) + 1) <- v)
+    sorted;
+  a
+
+(* [pack_key] read back, for a message only. *)
+let unpack_key ctx (a : int array) : Lit.t list =
+  List.init
+    (Array.length a / 2)
+    (fun i ->
+      let w = a.(2 * i) and v = a.((2 * i) + 1) in
+      let x = ctx.name_of.(w lsr 3) in
+      let pv =
+        match (w lsr 1) land 3 with
+        | 0 -> Lit.Ge (x, v)
+        | 1 -> Lit.Eq (x, v)
+        | _ -> Lit.Bit (x, v)
+      in
+      { Lit.v = pv; positive = w land 1 = 1 })
+
+let clause_key ctx (lits : Lit.t list) : int array option =
   match lits with
   | [] -> None
   | _ ->
       let sorted = List.sort_uniq Lit.compare lits in
-      if List.compare_lengths sorted lits = 0 then Some sorted else None
+      if List.compare_lengths sorted lits = 0 then Some (pack_key ctx sorted) else None
 
 (* Record that [cid] states [lits]. The *outermost* line wins when a clause is stated
    more than once: it is the one that survives the most backtracking, so it is the one
@@ -691,7 +830,7 @@ let state_key ctx key (cid : Writer.cid) =
         if level > ctx.stated_hi then ctx.stated_hi <- level)
 
 let state_clause ctx (lits : Lit.t list) (cid : Writer.cid) =
-  match clause_key lits with None -> () | Some key -> state_key ctx key cid
+  match clause_key ctx lits with None -> () | Some key -> state_key ctx key cid
 
 (* [defining_line ctx lits] is the id of a line already on the page that states exactly
    the clause [lits], and that a line written *now* may cite: it is at or below the
@@ -713,12 +852,12 @@ let defining_key ctx key : Writer.cid option =
               drifted. Only [Justify.wipe_level] may retire either, and it retires both. \
               See justify.ml's claim-index header and I-S4."
              s.s_cid
-             (String.concat " " (List.map Lit.to_string key)))
+             (String.concat " " (List.map Lit.to_string (unpack_key ctx key))))
       else Some s.s_cid
   | _ -> None
 
 let defining_line ctx (lits : Lit.t list) : Writer.cid option =
-  match clause_key lits with None -> None | Some key -> defining_key ctx key
+  match clause_key ctx lits with None -> None | Some key -> defining_key ctx key
 
 (* D-0009's missing field, and the whole reason the index exists.
 
@@ -768,7 +907,7 @@ let memoized ctx (e : Explanation.t) (thunk : unit -> Writer.cid) : Writer.cid =
          it unforced, which [unforced_hash]'s bucket would hold. [remember] hashes it
          again after the thunk, forced. *)
       match find_in_bucket ctx unforced_hash e with
-      | Some m -> m.cid
+      | Some cid -> cid
       | None -> remember ctx e (thunk ()))
   | _ -> (
       (* Hashed once: a head that is not a [Deferred] hashes the same before and after
@@ -777,9 +916,9 @@ let memoized ctx (e : Explanation.t) (thunk : unit -> Writer.cid) : Writer.cid =
       let h = shallow_hash e in
       if memo_stats_on then incr ms_lookups;
       match find_memo ctx h e with
-      | Some m ->
+      | Some cid ->
           if memo_stats_on then incr ms_hits;
-          m.cid
+          cid
       | None -> remember_with ctx e h (thunk ()))
 
 (* M11-complexity-T10 (D-0158). Share mode's lookup: [memoized] for a [Combine], [Cut]
@@ -817,9 +956,9 @@ let memoized_line ctx (e : Explanation.t)
   let h = shallow_hash e in
   if memo_stats_on then incr ms_lookups;
   match find_memo ctx h e with
-  | Some m ->
+  | Some cid ->
       if memo_stats_on then incr ms_hits;
-      m.cid
+      cid
   | None -> (
       let k, write = line () in
       match find_line ctx k with
@@ -861,7 +1000,7 @@ let emit_clause ctx lits =
   validate_lits ctx lits;
   (* The key once (M11-complexity-T5, D-0140 J2): it was sorted by [defining_line] and
      again by [state_clause]. *)
-  let key = clause_key lits in
+  let key = clause_key ctx lits in
   match match key with None -> None | Some k -> defining_key ctx k with
   | Some cid -> cid
   | None ->
@@ -1100,6 +1239,24 @@ let emit_summand ~emit ctx = function
 
 (* The expression and the origin, with the operands emitted; [emit_combine] writes it.
    Split so that share mode can look the line up before writing it (D-0158). *)
+(* The origin of a [Combine] line, which the writer's audit keeps for as long as the line
+   is live. It renders two integers, so every line of one shape can share one closure
+   (M11-complexity-T12, D-0166): a closure per line was 40 bytes for each of the 3.1 M
+   live `pol` lines of 2011_black-hole_9 at node 40, and the shapes are a few hundred. The
+   string it renders is the same. *)
+let combine_origin ctx n_summands divisor =
+  let o () = Printf.sprintf "combine(%d summand(s), / %d)" n_summands divisor in
+  (* The key packs both integers, so it is shared only where both fit in 31 bits (both
+     are positive: a count, and a divisor [>= 1]); a shape outside that keeps its own. *)
+  if n_summands >= 1 lsl 31 || divisor < 0 || divisor >= 1 lsl 31 then o
+  else
+    let k = (n_summands lsl 31) lor divisor in
+    match Writer.Itbl.find_opt ctx.combine_origins k with
+    | Some shared -> shared
+    | None ->
+        Writer.Itbl.add ctx.combine_origins k o;
+        o
+
 let combine_line ~emit ctx summands divisor =
   (* A [Weaken []] summand is a variable with NOTHING to weaken: declared on a single
      value (`var 7..7`), it has no order literal at all -- its whole contribution to the
@@ -1133,8 +1290,7 @@ let combine_line ~emit ctx summands divisor =
   let expr = if divisor <= 1 then expr else Pol.div expr divisor in
   (* The count now, so that the origin, which the audit keeps for as long as the line
      is live, holds two integers and not the summands. *)
-  let n_summands = List.length summands in
-  (expr, fun () -> Printf.sprintf "combine(%d summand(s), / %d)" n_summands divisor)
+  (expr, combine_origin ctx (List.length summands) divisor)
 
 let emit_combine ~emit ~claim ctx summands divisor =
   let expr, origin = combine_line ~emit ctx summands divisor in

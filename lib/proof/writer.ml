@@ -294,10 +294,23 @@ end
    thrown away. *)
 type entry = { origin : unit -> string; level : int }
 
+(* M11-complexity-T12 (D-0166): what the audit keeps per live id is its [origin] alone.
+   It kept an [entry], whose [level] is the id's tag, which [tags] holds for every id the
+   audit holds (the two tables gain and lose their ids at the same sites: [fresh_lazy],
+   [wipe_level], [delete_many], [delete_core]). The record was 24 bytes per live id, and
+   2011_black-hole_9 holds 3.37 M of them at node 40. [audit_report] reads the level from
+   [tags]. *)
+
+(* M11-complexity-T12 (D-0166): a RUN of consecutive ids [lo..hi] that [fresh] tagged
+   at one level. A level's bucket in [by_lvl] lists its runs newest first. It listed its
+   ids, one cons each, and a level's ids are almost always consecutive: 3.37 M live ids
+   on 2011_black-hole_9 at node 40 cost 24 bytes each there. *)
+type run = { lo : cid; mutable hi : cid }
+
 type t = {
   oc : out_channel;
   mutable next_id : cid;
-  live : entry Itbl.t; (* id -> what introduced it, for audit failures *)
+  live : (unit -> string) Itbl.t; (* id -> what introduced it, for audit failures *)
   model : unit Itbl.t; (* ids fixed by the .opb, not an obligation *)
   objective : entry Itbl.t;
       (* M5-T1: the objective-improving constraints `soli` handed back. Not an
@@ -310,7 +323,7 @@ type t = {
          and `w` used to consult it (D-0024) -- so [wipe_level] reproduces `w l` from
          this table. It is a mirror of checker state (invariant I-X3) and stopped being
          optional the moment the checker stopped holding it. *)
-  mutable by_lvl : cid list array;
+  mutable by_lvl : run list array;
       (* M6-T17: the ids [fresh] tagged at each level, newest first, indexed by level, so
          [wipe_level l] walks levels >= l only instead of folding all of [tags]. An id
          deleted by other means stays in its bucket; [wipe_level] skips it by looking it
@@ -319,7 +332,11 @@ type t = {
          M11-complexity-T5 (D-0145, D-0140 W5): bucket 0 is never filled. [wipe_level]
          refuses level 0, so nothing ever read it, and it held every id ever minted at
          level 0 (the learned constraints, the permanent trace lines) for the whole run.
-         A level-0 id is retired only by an explicit deletion, which reads [tags]. *)
+         A level-0 id is retired only by an explicit deletion, which reads [tags].
+
+         M11-complexity-T12 (D-0166): as runs of consecutive ids, newest first, see
+         [run]. Read out from each run's [hi] down to its [lo], a bucket lists exactly the
+         ids, in exactly the order, that the list of ids did. *)
   mutable by_hi : int; (* no bucket above this index is non-empty *)
   audit : bool;
   null : bool;
@@ -690,7 +707,7 @@ let fresh_lazy t ~origin =
   (* M9-no-proof-T2: the null writer counts and nothing else. No tag and no bucket, so
      [wipe_level] has nothing to walk; no audit entry, so [live_ids] stays empty. *)
   if not t.null then (
-    if t.audit then Itbl.replace t.live t.next_id { origin; level = t.level };
+    if t.audit then Itbl.replace t.live t.next_id origin;
     Itbl.replace t.tags t.next_id t.level;
     let lv = t.level in
     (* Not level 0: see [by_lvl]. *)
@@ -699,7 +716,9 @@ let fresh_lazy t ~origin =
         let a = Array.make (max (lv + 1) (2 * Array.length t.by_lvl)) [] in
         Array.blit t.by_lvl 0 a 0 (Array.length t.by_lvl);
         t.by_lvl <- a);
-      t.by_lvl.(lv) <- t.next_id :: t.by_lvl.(lv);
+      (match t.by_lvl.(lv) with
+      | r :: _ when r.hi = t.next_id - 1 -> r.hi <- t.next_id
+      | runs -> t.by_lvl.(lv) <- { lo = t.next_id; hi = t.next_id } :: runs);
       if lv > t.by_hi then t.by_hi <- lv));
   t.next_id
 
@@ -1034,10 +1053,14 @@ let wipe_level t l =
   for lv = t.by_hi downto l do
     doomed_ids :=
       List.fold_left
-        (fun acc id ->
-          match Itbl.find_opt t.tags id with
-          | Some lv' when lv' = lv -> id :: acc
-          | _ -> acc)
+        (fun acc r ->
+          let acc = ref acc in
+          for id = r.hi downto r.lo do
+            match Itbl.find_opt t.tags id with
+            | Some lv' when lv' = lv -> acc := id :: !acc
+            | _ -> ()
+          done;
+          !acc)
         !doomed_ids t.by_lvl.(lv);
     t.by_lvl.(lv) <- []
   done;
@@ -1613,9 +1636,12 @@ let audit_report t =
        (Itbl.length t.live));
   List.iter
     (fun id ->
-      let (e : entry) = Itbl.find t.live id in
+      let origin = Itbl.find t.live id in
+      let level =
+        match Itbl.find_opt t.tags id with Some l -> string_of_int l | None -> "?"
+      in
       Buffer.add_string b
-        (Printf.sprintf "  id %d from %s (level %d)\n" id (e.origin ()) e.level))
+        (Printf.sprintf "  id %d from %s (level %s)\n" id (origin ()) level))
     (live_ids t);
   Buffer.contents b
 

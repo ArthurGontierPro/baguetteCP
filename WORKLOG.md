@@ -22,7 +22,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | M7-T33 (and `Alldiff.excl`'s proof cost, D-0145) | `lib/core/prop/alldiff.ml`, `lib/proof/encoding.ml` (additive only), new `test/models/`, `test/unit/test_prop.ml` (alldiff section) | agent-alldiff (`wave53-alldiff`) | 2026-11-19 |
 | M7-T28 (`member`) | new `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, new `test/models/`, `test/unit/test_prop.ml` (member section) | agent-member (`wave53-member`) | 2026-11-19 |
 | D-0161 request 1 (`Alldiff.snap_of` builds derivation inputs at every snapshot) | `lib/core/prop/alldiff.ml` ON TOP OF `wave53-alldiff` (merges after it), `test/unit/test_prop.ml` (alldiff section) | agent-snap (`wave54-snap`) | 2026-11-19 |
-| M11-complexity-T12 (what a proved run keeps alive) | `lib/core/explanation.ml` (functions only, the type unchanged), `lib/core/justify.ml`, `lib/proof/writer.ml`, their unit tests | agent-live (`wave54-live`) | 2026-11-19 |
 
 ## Cross-session requests
 
@@ -614,8 +613,15 @@ section 1. Shares are inclusive, of the whole run.
 | M7-T29 (the `fplen` half; M7-T29 DONE) | agent-fplen (`wave54-fplen`) | 2026-11-19 | **D-0162 (PROPOSED).** No fix: `connect__0086_02` is the one connect instance with a positive floor-plan cost, and `fplen`/`fpwid` are bounded only below and minimised, so the model's solution set is unbounded in them and SPEC 2.1 admits no bound. A dominance cap from the objective is drafted in D-0162 §3 for the user. Measured on a hand-capped `.fzn` (binary `c72c48e2`): order encoding passed 51 GB of `.opb` in 5 min (stopped), `--bits-above 10000` stopped on the 16 GB heap budget at 15 min 25 s, no solution. One `test_flatzinc` reject case pins the shape. Gate: `make check` rc 0, 198 models, peak RSS 100 MB |
 | M9-no-proof-T5 | agent-keepproof (`wave54-keepproof`) | 2026-11-19 | **D-0163.** A run without `--proof` keeps its proof: `default_proof_prefix` in `bin/main.ml` gives `./foo.opb`/`.pbp` for `DIR/foo.fzn`, and `./baguette-proof` for MiniZinc's `mznfile*.fzn` (named on stderr); the next run overwrites. `tools/baguette.msc` gains `--no-proof`. Proofless runs fixed in `test_endtoend` (M7-T32), `check_unlimited.sh`, `check_mznlib.sh`, `learning_baseline.sh`, `corpus_run.sh` NO_PROOF=1 (still writes, unchecked); `diff_lane.sh` refuses proof=no without `--no-proof`. Files beyond the claim: `scripts/check_unlimited.sh`, `mznlib/test/check_mznlib.sh`, `bench/learning_baseline.sh`; `compare_run.sh` needed nothing. |
 | M11-complexity-T11 | agent-heap (`wave54-heap`, fix `wave54-heapfix`) | 2026-11-19 | **D-0164.** `Element.index_hole_clause` defers the puncher's literals; bh4 `--no-proof` 40 nodes 6.04 -> 1.72 GB RSS, -26.9 % instructions, `--proof` 11.66 -> 7.96 GB; 215 of 215 artefacts equal. The proof-side holders stay open (D-0164 §7) |
+| M11-complexity-T12 | agent-live (`wave54-live`) | 2026-11-19 | **D-0166.** Byte-identical shrink of four proof-side holders: claim index keys packed (333 -> 76 MB), memo as a chained table (342 -> 244 MB), audit keeps the origin alone, shared per `Combine` shape (325 -> 132 MB), `by_lvl` as runs (189 -> 118 MB). bh9 `--proof` node 40 (alldiff base): live 2 660 -> 2 041 MB, RSS 4 346 -> 3 648 MB, -2.2 % instructions, `.pbp` md5 equal. Gate on `c46952f` (binary `214e74d1`): `make check` rc 0 (4 289 ok), 198 x 4 artefacts equal to `22620b60`, lane 301/301, debug 289/289, scaling ok. alldiff's forced derivations (1.16 GB) and the never-hit memo entries are the user's call (D-0166 §5) |
 
 ## Handoff notes
+
+### 2026-11-19 night (agent-live, `wave54-live`): M11-complexity-T12, D-0166
+
+Four proof-side tables keep less per line, every byte the same (`justify.ml`, `writer.ml`): bh9 `--proof` node 40
+live 2 660 -> 2 041 MB, gate green on `c46952f`, ready to merge (it does not need wave53-alldiff). Left for
+the user (D-0166 §5): alldiff's forced trees, 1.16 GB, need a field on `Explanation`'s thunk (option B).
 
 ### 2026-11-19 night (orchestrator): D-0164 merged, gate 69 green
 
