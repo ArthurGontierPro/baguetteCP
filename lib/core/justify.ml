@@ -145,6 +145,22 @@
    [Model_row] is never memoised: it writes nothing and returns the id it already
    carries, so there is nothing to remember.
 
+   M11-complexity-T10 (D-0158) adds a second way to hit, OFF by default: with
+   [BAGUETTE_MEMO_SHARE=1] (or [create_sharing ~share:true]) an entry also answers for
+   a value that is STRUCTURALLY equal to its key ([Explanation.equal_within], read
+   through forcing and never causing it), provided the entry's level is at or below the
+   writer's current level. That is the claim index's condition 2 below, for the same reason: `w l`
+   retires levels [>= l], so a line at a level at or below the citing line's is never
+   retired before it, and a shared entry cannot outlive the level that derived it. The
+   identity hit keeps its old meaning in both modes. Off, the proof is byte for byte what
+   it was. On, a propagator that rebuilds the same derivation at every level (D-0149's
+   388 copies on cable_tree_wiring) gets one line instead of one per copy, so the proof
+   is shorter and its ids differ; the search does not change. The default is off because
+   that is a change of proof bytes, which is the user's to decide (D-0158 section 4).
+   The thing the header warned about above is not touched: the bucket is still chosen by
+   [shallow_hash], which never reads a [Deferred]'s mutable field, and structural
+   equality is only ever asked inside a bucket.
+
    Every memo entry is tagged with the writer's level at the moment it was created
    (docs/PROOF-FORMAT.md section 5: [w] wipes every constraint at or above a level).
    [wipe_level] drops the matching memo entries in the same call that wipes the writer,
@@ -258,7 +274,19 @@ and memo_table = {
       (* the hashes each level inserted, newest first; level 0 is never recorded, since
          no wipe reaches it (see [wipe_level]) *)
   mutable memo_hi : int; (* M6-T17: no [by_level] entry above this *)
+  share : bool;
+      (* M11-complexity-T10 (D-0158): a structurally equal entry at or below the current
+         level answers too. See the module header's "Memoisation". *)
 }
+
+(* The default of [create]'s sharing, read once. Only "1" turns it on. *)
+let share_default =
+  match Sys.getenv_opt "BAGUETTE_MEMO_SHARE" with Some "1" -> true | _ -> false
+
+(* How many node pairs [find_in_bucket] lets one structural comparison walk before it
+   answers "not known to be equal" (see [Explanation.equal_within]). A rebuilt chain on
+   cable_tree_wiring is under a hundred nodes. *)
+let share_budget = 4096
 
 let shallow_tag (e : Explanation.t) =
   match e with
@@ -426,15 +454,19 @@ type ctx = {
          the page, wiped by [wipe_level]. Lookup only -- never iterated for emission. *)
 }
 
-let create ~writer ~encoding =
+let create_sharing ~share ~writer ~encoding =
   {
     writer;
     encoding;
-    memo = { tbl = Itbl.create 1024; by_level = Array.make 16 []; memo_hi = -1 };
+    memo = { tbl = Itbl.create 1024; by_level = Array.make 16 []; memo_hi = -1; share };
     stated = Claims.create 64;
     stated_by_level = Array.make 16 [];
     stated_hi = -1;
   }
+
+(* The [ctx] every caller makes: sharing as [BAGUETTE_MEMO_SHARE] says, off unless it is
+   "1" (D-0158). [create_sharing] names it, for a test that needs either mode. *)
+let create ~writer ~encoding = create_sharing ~share:share_default ~writer ~encoding
 
 (* The writer a [ctx] emits through. [Learned] needs it to put a constraint on the page
    with a rule this module has no [Explanation.t] for -- a learned constraint is not a
@@ -447,7 +479,29 @@ let find_in_bucket ctx h (e : Explanation.t) =
     | [] -> None
     | (k, m) :: rest -> if k == e then Some m else go rest
   in
-  match Itbl.find_opt ctx.memo.tbl h with None -> None | Some bucket -> go bucket
+  (* M11-complexity-T10 (D-0158): newest first, the first entry that is [e] itself or,
+     at or below the current level, structurally equal to it. *)
+  let rec go_share cur = function
+    | [] -> None
+    | (k, (m : memo_entry)) :: rest ->
+        if k == e || (m.level <= cur && Explanation.equal_within share_budget k e) then
+          Some m
+        else go_share cur rest
+  in
+  match Itbl.find_opt ctx.memo.tbl h with
+  | None -> None
+  | Some bucket ->
+      if ctx.memo.share then go_share (Writer.current_level ctx.writer) bucket
+      else go bucket
+
+(* The memo's size: the entries it holds and its longest bucket. For tests and
+   measurement; it walks the whole table, so nothing on the solving path calls it. *)
+let memo_stats ctx =
+  Itbl.fold
+    (fun _ bucket (n, longest) ->
+      let l = List.length bucket in
+      (n + l, Stdlib.max longest l))
+    ctx.memo.tbl (0, 0)
 
 (* [e]'s entry, looked up under the hash [h] it was given ([shallow_hash e]). A forced
    [Deferred] is also looked up under [unforced_hash]: see there. *)

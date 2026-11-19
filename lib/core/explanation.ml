@@ -394,46 +394,58 @@ let peek = function Deferred th -> th.forced | e -> Some e
    is not known yet and asking would run a thunk (the [peek] rule above). Physical
    equality is tried first at every node, so a shared sub-derivation costs one
    comparison. A [Linear_term] is compared by every field, its citations included.
-   Nothing in the solver depends on this: it is what [Justify]'s memo uses to tell a
-   rebuilt copy of an explanation from a different one. *)
-let rec equal (a : t) (b : t) =
-  a == b
-  ||
-  match (a, b) with
-  | Deferred { forced = Some fa; _ }, _ -> equal fa b
-  | _, Deferred { forced = Some fb; _ } -> equal a fb
-  | Decision la, Decision lb -> Lit.equal la lb
-  | Clause la, Clause lb -> List.equal Lit.equal la lb
-  | Linear (ta, ra), Linear (tb, rb) -> Int.equal ra rb && List.equal term_equal ta tb
-  | Cut (a1, a2, c1, c2), Cut (b1, b2, d1, d2) ->
-      Int.equal c1 d1 && Int.equal c2 d2 && equal a1 b1 && equal a2 b2
-  | Model_row i, Model_row j -> Int.equal i j
-  | Combine (sa, da), Combine (sb, db) ->
-      Int.equal da db && List.equal summand_equal sa sb
-  | Resolve pa, Resolve pb -> List.equal equal pa pb
-  | ( ( Decision _ | Clause _ | Linear _ | Cut _ | Model_row _ | Combine _ | Resolve _
-      | Deferred _ ),
-      _ ) ->
-      false
 
-and term_equal (ca, la) (cb, lb) = Int.equal ca cb && Lit.equal la lb
+   [equal_within n] gives up after comparing [n] pairs of nodes and answers [false]: two
+   values built separately can share sub-derivations in a way [==] at the top cannot
+   see, and a walk that ignores the sharing is exponential in its depth. [false] is the
+   safe answer for every caller here, since it only means "not known to be the same",
+   which is what [Justify]'s memo assumed of every pair before D-0158. *)
+exception Budget
 
-and summand_equal sa sb =
-  sa == sb
-  ||
-  match (sa, sb) with
-  | Term (ca, ea), Term (cb, eb) -> Int.equal ca cb && equal ea eb
-  | Weaken la, Weaken lb -> List.equal term_equal la lb
-  | Defining (ca, la), Defining (cb, lb) -> Int.equal ca cb && Lit.equal la lb
-  | Linear_term ra, Linear_term rb ->
-      ra == rb
-      || Int.equal ra.lt_coeff rb.lt_coeff
-         && String.equal ra.lt_name rb.lt_name
-         && Int.equal ra.lt_decl_lo rb.lt_decl_lo
-         && Int.equal ra.lt_decl_hi rb.lt_decl_hi
-         && Int.equal ra.lt_value rb.lt_value
-         && List.equal equal ra.lt_cited rb.lt_cited
-  | (Term _ | Weaken _ | Defining _ | Linear_term _), _ -> false
+let equal_within budget (a : t) (b : t) =
+  let left = ref budget in
+  let rec eq (a : t) (b : t) =
+    a == b
+    ||
+    (decr left;
+     if !left < 0 then raise_notrace Budget;
+     match (a, b) with
+     | Deferred { forced = Some fa; _ }, _ -> eq fa b
+     | _, Deferred { forced = Some fb; _ } -> eq a fb
+     | Decision la, Decision lb -> Lit.equal la lb
+     | Clause la, Clause lb -> List.equal Lit.equal la lb
+     | Linear (ta, ra), Linear (tb, rb) -> Int.equal ra rb && List.equal term_eq ta tb
+     | Cut (a1, a2, c1, c2), Cut (b1, b2, d1, d2) ->
+         Int.equal c1 d1 && Int.equal c2 d2 && eq a1 b1 && eq a2 b2
+     | Model_row i, Model_row j -> Int.equal i j
+     | Combine (sa, da), Combine (sb, db) ->
+         Int.equal da db && List.equal summand_eq sa sb
+     | Resolve pa, Resolve pb -> List.equal eq pa pb
+     | ( ( Decision _ | Clause _ | Linear _ | Cut _ | Model_row _ | Combine _ | Resolve _
+         | Deferred _ ),
+         _ ) ->
+         false)
+  and term_eq (ca, la) (cb, lb) = Int.equal ca cb && Lit.equal la lb
+  and summand_eq sa sb =
+    sa == sb
+    ||
+    match (sa, sb) with
+    | Term (ca, ea), Term (cb, eb) -> Int.equal ca cb && eq ea eb
+    | Weaken la, Weaken lb -> List.equal term_eq la lb
+    | Defining (ca, la), Defining (cb, lb) -> Int.equal ca cb && Lit.equal la lb
+    | Linear_term ra, Linear_term rb ->
+        ra == rb
+        || Int.equal ra.lt_coeff rb.lt_coeff
+           && String.equal ra.lt_name rb.lt_name
+           && Int.equal ra.lt_decl_lo rb.lt_decl_lo
+           && Int.equal ra.lt_decl_hi rb.lt_decl_hi
+           && Int.equal ra.lt_value rb.lt_value
+           && List.equal eq ra.lt_cited rb.lt_cited
+    | (Term _ | Weaken _ | Defining _ | Linear_term _), _ -> false
+  in
+  try eq a b with Budget -> false
+
+let equal a b = equal_within max_int a b
 
 (* Literals mentioned by an explanation, after forcing, without duplicates. Conflict
    analysis walks this. *)

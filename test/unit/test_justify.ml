@@ -1773,6 +1773,228 @@ let test_memo_identity_m11t5 () =
   in
   expect_ok "m11t5 memo: no exception" r
 
+(* M11-complexity-T10 (D-0158). [Explanation.equal] is STRUCTURAL and read through
+   forcing without causing it. A copy rebuilt node for node is equal to the original; a
+   change in one coefficient, row, literal or [Linear_term] field is not; a forced
+   [Deferred] is its forced value; an unforced one is equal only to itself, and comparing
+   it never runs its thunk. *)
+let test_equal_m11t10 () =
+  let row i = Explanation.model_row i in
+  let lin v = Explanation.linear [ (1, Lit.ge "x" v) ] 1 in
+  let lt ?(value = 2) cited =
+    Explanation.linear_term ~coeff:3 ~name:"x" ~decl_lo:0 ~decl_hi:3 ~value cited
+  in
+  (* Built afresh on every call, so two calls give two physical copies. *)
+  let chain k =
+    Explanation.combine
+      [
+        Explanation.Term
+          ( 2,
+            Explanation.combine
+              [ Explanation.Term (1, row k); Explanation.Term (1, row 7) ]
+              1 );
+        Explanation.Weaken [ (1, Lit.ge "x" 1) ];
+        Explanation.Defining (1, Lit.ge "x" 2);
+        lt [ lin 2 ];
+      ]
+      2
+  in
+  let a = chain 5 and b = chain 5 in
+  check "m11t10 equal: a rebuilt chain is a different value" (not (a == b));
+  check "m11t10 equal: a rebuilt chain is equal to its original" (Explanation.equal a b);
+  check "m11t10 equal: a row two levels down tells two chains apart"
+    (not (Explanation.equal a (chain 6)));
+  let with_summands ss d = Explanation.combine ss d in
+  check "m11t10 equal: the divisor counts"
+    (not
+       (Explanation.equal
+          (with_summands [ Explanation.Term (1, row 1) ] 1)
+          (with_summands [ Explanation.Term (1, row 1) ] 2)));
+  check "m11t10 equal: a Linear_term's value counts"
+    (not
+       (Explanation.equal
+          (with_summands [ lt [] ] 1)
+          (with_summands [ lt ~value:1 [] ] 1)));
+  check "m11t10 equal: a Linear_term's citations count"
+    (not
+       (Explanation.equal
+          (with_summands [ lt [ lin 2 ] ] 1)
+          (with_summands [ lt [ lin 3 ] ] 1)));
+  check "m11t10 equal: a Cut compares both operands and both coefficients"
+    (Explanation.equal
+       (Explanation.cut (lin 1) (lin 2) 1 2)
+       (Explanation.cut (lin 1) (lin 2) 1 2)
+    && (not
+          (Explanation.equal
+             (Explanation.cut (lin 1) (lin 2) 1 2)
+             (Explanation.cut (lin 2) (lin 1) 1 2)))
+    && not
+         (Explanation.equal
+            (Explanation.cut (lin 1) (lin 2) 1 2)
+            (Explanation.cut (lin 1) (lin 2) 2 1)));
+  check "m11t10 equal: two constructors are never equal"
+    (not (Explanation.equal (lin 1) (Explanation.clause [ Lit.ge "x" 1 ])));
+  let calls = ref 0 in
+  let d () =
+    Explanation.deferred (fun () ->
+        incr calls;
+        chain 5)
+  in
+  let d1 = d () and d2 = d () in
+  check "m11t10 equal: an unforced Deferred is equal to itself" (Explanation.equal d1 d1);
+  check "m11t10 equal: two unforced Deferreds are not equal, whatever they would give"
+    (not (Explanation.equal d1 d2));
+  check "m11t10 equal: an unforced Deferred is not equal to a value"
+    (not (Explanation.equal d1 a));
+  check "m11t10 equal: comparing never forced a thunk" (!calls = 0);
+  ignore (Explanation.force d1 : Explanation.t);
+  check "m11t10 equal: a forced Deferred is equal to a copy of its value"
+    (Explanation.equal d1 a && Explanation.equal a d1);
+  check "m11t10 equal: a forced Deferred against an unforced one is not equal"
+    (not (Explanation.equal d1 d2));
+  ignore (Explanation.force d2 : Explanation.t);
+  check "m11t10 equal: two forced Deferreds of equal values are equal"
+    (Explanation.equal d1 d2);
+  check "m11t10 equal: each thunk ran once, by force and not by equal" (!calls = 2)
+
+(* M11-complexity-T10 (D-0158). The memo's two modes over the same scene: a derivation
+   REBUILT at each of three levels, as D-0149's propagator rebuilt its [Combine] (one
+   physical copy per level), plus a thunk of the same derivation.
+
+   Off ([create_sharing ~share:false], the default): every copy is its own entry and its
+   own line -- the proof the suite and the lanes have recorded.
+   On: the copies share the first copy's line, while that line's level is at or below
+   the writer's; a copy asked for BELOW the line's level (through [with_level]) gets its
+   own line; after the wipe of the line's level the next copy is derived afresh; an
+   unforced [Deferred] is never forced by a lookup. *)
+let test_share_m11t10 () =
+  let run share =
+    let _, r =
+      emitted (fun w ->
+          let e, _, cx, cy = build_two_ctx w in
+          let ctx = Justify.create_sharing ~share ~writer:w ~encoding:e in
+          let copy () =
+            Explanation.combine
+              [
+                Explanation.Term
+                  ( 1,
+                    Explanation.combine
+                      [
+                        Explanation.Term (1, Explanation.model_row cx);
+                        Explanation.Term (1, Explanation.model_row cy);
+                      ]
+                      1 );
+                Explanation.Term (2, Explanation.model_row cy);
+              ]
+              2
+          in
+          Writer.set_level w 1;
+          let id1 = Justify.emit ctx (copy ()) in
+          Writer.set_level w 2;
+          let id2 = Justify.emit ctx (copy ()) in
+          Writer.set_level w 3;
+          let id3 = Justify.emit ctx (copy ()) in
+          let n_entries, longest = Justify.memo_stats ctx in
+          let calls = ref 0 in
+          let d =
+            Explanation.deferred (fun () ->
+                incr calls;
+                copy ())
+          in
+          let last = Writer.last_id w in
+          let id_d = Justify.emit ctx d in
+          let d_minted = Writer.last_id w > last in
+          let id_d_again = Justify.emit ctx d in
+          Justify.wipe_level ctx 1;
+          Writer.set_level w 2;
+          let id_after = Justify.emit ctx (copy ()) in
+          (* A copy asked for at level 1 while the line is at level 2. *)
+          let id_low = Justify.with_level ctx 1 (fun () -> Justify.emit ctx (copy ())) in
+          let live_low = Writer.is_live w id_low in
+          Justify.wipe_level ctx 1;
+          ( [ id1; id2; id3 ],
+            (n_entries, longest),
+            id_low,
+            (id_d, d_minted, id_d_again, !calls),
+            id_after,
+            live_low ))
+    in
+    r
+  in
+  (match run false with
+  | Ok ([ id1; id2; id3 ], (n, longest), _, (_, d_minted, _, calls), _, _) ->
+      check "m11t10 share OFF: three rebuilt copies, three lines"
+        (List.length (List.sort_uniq Int.compare [ id1; id2; id3 ]) = 3);
+      check
+        "m11t10 share OFF: six entries, three to a bucket (each copy and its inner \
+         Combine)"
+        (n = 6 && longest = 3);
+      check "m11t10 share OFF: a thunk of the same derivation mints its own line" d_minted;
+      check "m11t10 share OFF: the thunk ran once" (calls = 1)
+  | Ok _ -> check "m11t10 share OFF: the scene ran" false
+  | Error e ->
+      incr failures;
+      Printf.printf "FAIL m11t10 share OFF (raised %s)\n" (Printexc.to_string e));
+  match run true with
+  | Ok
+      ( [ id1; id2; id3 ],
+        (n, longest),
+        id_low,
+        (id_d, d_minted, id_d_again, calls),
+        id_after,
+        live_low ) ->
+      check "m11t10 share ON: three rebuilt copies, one line" (id1 = id2 && id2 = id3);
+      check "m11t10 share ON: one entry per distinct derivation" (n = 2 && longest = 1);
+      check "m11t10 share ON: a copy asked for below the line's level gets its own line"
+        (id_low > id_after && live_low);
+      check "m11t10 share ON: a forced thunk of the same derivation shares the line"
+        (id_d = id1 && (not d_minted) && id_d_again = id1);
+      check "m11t10 share ON: the thunk ran once, by force and not by a lookup" (calls = 1);
+      check "m11t10 share ON: after the wipe of the line's level, derived afresh"
+        (id_after > id1)
+  | Ok _ -> check "m11t10 share ON: the scene ran" false
+  | Error e ->
+      incr failures;
+      Printf.printf "FAIL m11t10 share ON (raised %s)\n" (Printexc.to_string e)
+
+(* The same scene end to end, share ON, through 3.0.2: the copies at levels 2 and 3 cite
+   the level-1 line, and a [Cut] at level 3 of two more rebuilt copies cites it twice.
+   Every cited id must be live when it is cited, and the model is satisfiable (D-0053: a
+   contradictory database would make the check vacuous). *)
+let build_share_proof dir =
+  let e = Encoding.create () in
+  Encoding.declare_int e "x" ~lo:0 ~hi:3;
+  Encoding.declare_int e "y" ~lo:0 ~hi:3;
+  let cx = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "x" 2) ] 1) in
+  let cy = Encoding.add_constraint e (Opb.ge [ (1, Lit.ge "y" 1) ] 1) in
+  let opb = Filename.concat dir "share.opb" in
+  let pbp = Filename.concat dir "share.pbp" in
+  let oc = open_out opb in
+  Encoding.write_opb ~comments:[ "x >= 2; y >= 1" ] e oc;
+  close_out oc;
+  let oc = open_out pbp in
+  let w = Writer.create ~comments:true ~audit:true oc in
+  Encoding.start_proof e w;
+  let ctx = Justify.create_sharing ~share:true ~writer:w ~encoding:e in
+  let copy () =
+    Explanation.combine
+      [
+        Explanation.Term (1, Explanation.model_row cx);
+        Explanation.Term (2, Explanation.model_row cy);
+      ]
+      1
+  in
+  Writer.set_level w 1;
+  ignore (Justify.emit ctx (copy ()) : Writer.cid);
+  Writer.set_level w 2;
+  ignore (Justify.emit ctx (copy ()) : Writer.cid);
+  Writer.set_level w 3;
+  ignore (Justify.emit ctx (Explanation.cut (copy ()) (copy ()) 1 2) : Writer.cid);
+  Justify.wipe_level ctx 1;
+  Writer.conclusion w (Writer.Sat (Encoding.assignment_lits e [ ("x", 2); ("y", 1) ]));
+  close_out oc;
+  (opb, pbp)
+
 (* M11-complexity-T5 (D-0145, D-0140 J2): the claim index hashes eight literals of the
    key and its length, where the polymorphic hash read about three. Clauses that agree on
    their first literals and differ further on each keep their own line, and each is
@@ -1822,10 +2044,15 @@ let () =
   test_deferred_cut ();
   test_wipe ();
   test_memo_identity_m11t5 ();
+  test_equal_m11t10 ();
+  test_share_m11t10 ();
   run_veripb ~name:"justify: a Linear explanation, checked end to end"
     ~build:build_linear_proof;
   run_veripb ~name:"justify: a Cut of two Linears, checked end to end"
     ~build:build_cut_proof;
+  run_veripb
+    ~name:"m11t10 share ON: rebuilt copies citing one line across levels, end to end"
+    ~build:build_share_proof;
   run_veripb
     ~name:"justify: a real int_lin_le pruning (one-step bound), checked end to end"
     ~build:build_int_lin_le_ok;
