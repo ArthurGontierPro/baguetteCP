@@ -18,9 +18,42 @@ project's signature failure mode occurring inside the check written to prevent i
 was caught only by running the lint against the line it exists to catch. If you change the
 matching here, re-run the self-test at the bottom.
 
-A line that genuinely needs a width may name a reason:
+A line that genuinely needs a width may name a reason, in one of two forms.
+
+ON THE LINE. The marker sits on the line that carries the bound:
 
     Encoding.declare_int e "w" ~lo:0 ~hi:999  (* width-ok: D-0028 measured shape *)
+
+This form does not survive ocamlformat wherever the line is reformatted: a trailing
+comment that no longer fits is moved onto a line of its own, after the code, and the
+bound loses its marker (M6-T7, found merging M4-T3; test_learn.ml carries the scar, a
+``(* width-ok: see above *)`` stranded on the line below the call it was written for).
+
+A REGION, the form that survives formatting (M6-T7, D-0160). Two comments, each on a line
+of its own, which ocamlformat leaves where they are:
+
+    (* width-ok-begin: M1-T54, the cap is the subject *)
+    E.declare_int e "x" ~lo:0
+      ~hi:cap;
+    (* width-ok-end *)
+
+Every bound strictly between the two lines is exempt. The region is held to what an
+exemption should be, so that it cannot become a quiet way of switching the lint off:
+
+- the begin marker must name a reason on its own line (``width-ok-begin:`` and text);
+- a region must be closed, and closed by its own ``width-ok-end``: an unclosed begin, a
+  second begin before the end, or an end with no begin is a FAILURE, never a region that
+  runs to the end of the file;
+- a region may span at most MAX_REGION lines between its markers -- one declaration and
+  the call around it, not a test function;
+- a region that exempts no labelled bound at all is a failure too: it is stale, and a
+  stale exemption is the one that later waves a real bug through.
+
+The markers are recognised only inside a comment that opens on the marker's line
+(``(* width-ok-begin:``), so prose that merely names the pragma is not a pragma.
+
+The matcher itself is unchanged by the region form: outside a region, every argument is
+judged exactly as before.
 """
 import pathlib
 import re
@@ -38,6 +71,13 @@ ARG = re.compile(r"~(hi|lo):\s*(\([^()]*\)|[A-Za-z0-9_.]+)")
 SMALL = re.compile(r"^\(?-?[0-9]{1,4}\)?$")
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+# The region pragma (M6-T7). Recognised only where a comment OPENS on the marker.
+BEGIN = re.compile(r"\(\*\s*width-ok-begin:")
+END = re.compile(r"\(\*\s*width-ok-end\b")
+# Lines strictly between the markers. One declaration, its call and a reflowed comment
+# fit in this; a test function does not.
+MAX_REGION = 15
 
 
 def offenders(text):
@@ -89,20 +129,88 @@ def strip_comments(lines):
     return out
 
 
+def regions(raw):
+    """Return (exempt line numbers, pragma errors) for one file's lines, 1-based.
+
+    The pragma is read from the RAW lines (it lives in a comment, which
+    strip_comments blanks out). Every malformed use is an error rather than a
+    silently wider or narrower region; see the module docstring.
+    """
+    exempt, errors = set(), []
+    start = None
+    for n, line in enumerate(raw, 1):
+        b, e = BEGIN.search(line), END.search(line)
+        if b and e:
+            errors.append((n, "width-ok-begin and width-ok-end on one line exempt nothing"))
+            continue
+        if b:
+            if start is not None:
+                errors.append((n, f"width-ok-begin inside the region opened at line {start}"))
+                continue
+            if not line[b.end():].split("*)")[0].strip():
+                errors.append((n, "width-ok-begin names no reason"))
+            start = n
+        elif e:
+            if start is None:
+                errors.append((n, "width-ok-end with no width-ok-begin"))
+                continue
+            inner = range(start + 1, n)
+            if len(inner) > MAX_REGION:
+                errors.append((start, f"width-ok region of {len(inner)} lines "
+                                      f"(at most {MAX_REGION}): exempt the declaration, "
+                                      "not the function"))
+            else:
+                exempt.update(inner)
+            start = None
+    if start is not None:
+        errors.append((start, "width-ok-begin is never closed by a width-ok-end"))
+    return exempt, errors
+
+
+def judge(raw):
+    """Yield (line number, message) for every finding in one file's lines."""
+    exempt, errors = regions(raw)
+    yield from errors
+    used = set()
+    for n, (line, code) in enumerate(zip(raw, strip_comments(raw)), 1):
+        found = list(offenders(code))
+        if n in exempt:
+            if found:
+                used.add(n)
+            continue
+        if "width-ok:" in line:
+            continue
+        for arg, is_bad in found:
+            if is_bad:
+                yield n, f"~...:{arg}    {line.strip()[:90]}"
+    # A region whose lines carry no labelled bound exempts nothing: it is stale.
+    if exempt:
+        for start, stop in spans(sorted(exempt)):
+            if not used & set(range(start, stop + 1)):
+                yield start - 1, "width-ok region exempts no ~lo:/~hi: bound (stale marker)"
+
+
+def spans(lines):
+    """Group sorted line numbers into maximal runs of consecutive lines."""
+    run = []
+    for n in lines:
+        if run and n != run[-1] + 1:
+            yield run[0], run[-1]
+            run = []
+        run.append(n)
+    if run:
+        yield run[0], run[-1]
+
+
 def scan():
     bad = []
     for sub in ("lib", "test", "bin"):
         for path in sorted((ROOT / sub).rglob("*.ml")):
             if "_build" in path.parts:
                 continue
-            raw = path.read_text().splitlines()
-            for n, (line, code) in enumerate(zip(raw, strip_comments(raw)), 1):
-                if "width-ok:" in line:
-                    continue
-                for arg, is_bad in offenders(code):
-                    if is_bad:
-                        rel = path.relative_to(ROOT)
-                        bad.append(f"{rel}:{n}: ~...:{arg}    {line.strip()[:90]}")
+            rel = path.relative_to(ROOT)
+            for n, msg in judge(path.read_text().splitlines()):
+                bad.append(f"{rel}:{n}: {msg}")
     return bad
 
 
@@ -146,9 +254,57 @@ def self_test():
         if any(b for _, b in offenders(s)):
             print(f"SELF-TEST FAIL: should have passed: {s}", file=sys.stderr)
             ok = False
+    # M6-T7: the region pragma, the form that survives ocamlformat. Each case is a whole
+    # file; the expected result is the set of line numbers judge() reports.
+    wide = "  E.declare_int e \"x\" ~lo:0 ~hi:cap;"
+    files = [
+        ("a region exempts the bound ocamlformat left without its marker",
+         ["(* width-ok-begin: M1-T54, the cap is the subject *)",
+          "  E.declare_int e \"x\" ~lo:0",
+          "    ~hi:cap;", "(* width-ok-end *)"], set()),
+        ("a reflowed begin comment still opens the region",
+         ["(* width-ok-begin: M1-T54, the cap is the subject, and the reason runs",
+          "   on over a second line *)", wide, "(* width-ok-end *)"], set()),
+        ("the line AFTER the region is judged again",
+         ["(* width-ok-begin: M1-T54 *)", wide, "(* width-ok-end *)", wide], {4}),
+        ("the line BEFORE the region is judged too",
+         [wide, "(* width-ok-begin: M1-T54 *)", wide, "(* width-ok-end *)"], {1}),
+        ("the trailing form still works where nothing moved it",
+         [wide + " (* width-ok: M1-T54 *)"], set()),
+        ("a trailing marker moved onto the next line by ocamlformat does NOT exempt",
+         [wide, "(* width-ok: M1-T54 *)"], {1}),
+        ("an unclosed begin is a failure, not a region to the end of the file",
+         ["(* width-ok-begin: M1-T54 *)", wide, wide], {1, 2, 3}),
+        ("an end with no begin is a failure",
+         [wide, "(* width-ok-end *)"], {1, 2}),
+        ("a second begin inside a region is a failure",
+         ["(* width-ok-begin: a *)", "(* width-ok-begin: b *)", wide,
+          "(* width-ok-end *)"], {2}),
+        ("a begin without a reason is a failure",
+         ["(* width-ok-begin: *)", wide, "(* width-ok-end *)"], {1}),
+        # The limit is pinned at 15 here, so that raising MAX_REGION fails the test
+        # instead of silently widening every region.
+        ("a region of 15 lines is accepted",
+         ["(* width-ok-begin: at the limit *)"] + ["  ()"] * 14 + [wide,
+          "(* width-ok-end *)"], set()),
+        ("a region of 16 lines exempts nothing",
+         ["(* width-ok-begin: too long *)"] + ["  ()"] * 15 + [wide,
+          "(* width-ok-end *)"], {1, 17}),
+        ("a region with no labelled bound in it is stale",
+         ["(* width-ok-begin: stale *)", "  let x = 3 in", "(* width-ok-end *)"], {1}),
+        ("prose naming the pragma is not a pragma",
+         ["(* use a `width-ok-begin:` region here *)", wide], {2}),
+    ]
+    for what, lines, expected in files:
+        got = {n for n, _ in judge(lines)}
+        if got != expected:
+            print(f"SELF-TEST FAIL: {what}: expected findings at lines "
+                  f"{sorted(expected)}, got {sorted(got)}", file=sys.stderr)
+            ok = False
     if not ok:
         return 1
-    print("width lint self-test: flags the 2026-09-16 line, passes narrow and width-0")
+    print("width lint self-test: flags the 2026-09-16 line, passes narrow and width-0, "
+          "and the width-ok region holds its shape")
     return 0
 
 
@@ -157,7 +313,8 @@ if __name__ == "__main__":
         sys.exit(self_test())
     found = scan()
     if found:
-        print("FAIL a declared domain has a width that is not a small literal:",
+        print("FAIL a declared domain has a width that is not a small literal,\n"
+              "     or a width-ok region is malformed:",
               file=sys.stderr)
         for f in found:
             print("  " + f, file=sys.stderr)
@@ -166,7 +323,10 @@ if __name__ == "__main__":
             "interior value. A wide domain is an allocation loop, not a bigger test.\n"
             "Drive overflow with large COEFFICIENTS against modest domains, or fix the\n"
             "variable (~lo:v ~hi:v -- width 0 costs nothing however large v is).\n"
-            "If the width is genuinely needed, mark the line: (* width-ok: reason *)",
+            "If the width is genuinely needed, mark the line: (* width-ok: reason *),\n"
+            "or, where ocamlformat moves that comment off the line, wrap the declaration\n"
+            "in (* width-ok-begin: reason *) ... (* width-ok-end *), each on its own line.\n"
+            "A malformed or stale region is reported here too.",
             file=sys.stderr)
         sys.exit(1)
     print("width lint: no wide declared domain")

@@ -1,8 +1,10 @@
-# M11-complexity-T2 (D-0141). The scaling lane's baseline ratios, per (instance, mode, metric).
-# A RATCHET: re-recorded by `scripts/scaling_lane.sh --update` only after a gated merge that
-# LOWERS a ratio (an M11 batch, or T6), in its own commit; never upward to make a line pass.
-H_qr72_bag_def	noproof	instructions	1.7890	fataepyc-06	e8354a74b5a2a5b0ac3d83f5a98d0a96	2026-11-18
-H_qr72_bag_def	proof	instructions	1.5611	fataepyc-06	e8354a74b5a2a5b0ac3d83f5a98d0a96	2026-11-18
-2013_rcpsp_11	noproof	instructions	2.3789	fataepyc-06	e8354a74b5a2a5b0ac3d83f5a98d0a96	2026-11-18
-2012_parity-learning_48_24_6.2	noproof	instructions	3.1157	fataepyc-06	e8354a74b5a2a5b0ac3d83f5a98d0a96	2026-11-18
-2012_parity-learning_48_24_6.2	proof	instructions	2.3011	fataepyc-06	e8354a74b5a2a5b0ac3d83f5a98d0a96	2026-11-18
+# M11-complexity-T6 (D-0160, after D-0141). The scaling lane's baselines, per (instance, mode, metric):
+# id, mode, metric, GROWTH (late - early per node, the gated column), late, early, ratio, host, md5, date.
+# A RATCHET: re-recorded by `scripts/scaling_lane.sh --update` after a gated merge, in its own
+# commit. --update refuses while a line is OVER; --raise exists for a decision record, never
+# to make a line pass.
+H_qr72_bag_def	noproof	instructions	2023488	4773955	2750467	1.7357	fataepyc-06	64ec63e019e192aaec1da06410745ee2	2026-11-19
+H_qr72_bag_def	proof	instructions	2359956	6547926	4187970	1.5635	fataepyc-06	64ec63e019e192aaec1da06410745ee2	2026-11-19
+2013_rcpsp_11	noproof	instructions	6856414	13007148	6150734	2.1147	fataepyc-06	64ec63e019e192aaec1da06410745ee2	2026-11-19
+2012_parity-learning_48_24_6.2	noproof	instructions	5695911	8790124	3094213	2.8408	fataepyc-06	64ec63e019e192aaec1da06410745ee2	2026-11-19
+2012_parity-learning_48_24_6.2	proof	instructions	5690160	10493987	4803827	2.1845	fataepyc-06	64ec63e019e192aaec1da06410745ee2	2026-11-19
