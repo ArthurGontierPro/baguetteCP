@@ -299,6 +299,10 @@ lib/core/       Baguette_core
                             (j in f_i <=> i in g_j), CHECKING, every pruning one rup; compile.ml
                             adds all_different over each array whose pairwise rows are cited
                             ROOT LEMMAS (Encoding.add_cited_lemma) (M7-T28, D-0151)
+    member.ml               member(x, y) through mznlib's baguette_member: DOMAIN consistent
+                            over x, y and one SELECTOR per position (store variables, as
+                            regular's flags); every pruning one rup on the letters, except a
+                            value of y two holes exclude, derived AHEAD (M7-T28, D-0159)
     linear.ml               int_lin_le. THE REFERENCE PROPAGATOR — copy this shape.
     lin_eq.ml               int_lin_eq (two model rows, see D-0011)
     ne.ml                   int_lin_ne and int_ne (VALUE consistency)
