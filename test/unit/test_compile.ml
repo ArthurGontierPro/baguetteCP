@@ -690,7 +690,16 @@ let evaluate (m : M.t) (assign : int array) =
           let assoc base ops = List.mapi (fun k x -> (base + k, operand x)) ops in
           let f = assoc iv.M.inv_fmin iv.M.inv_f and g = assoc iv.M.inv_gmin iv.M.inv_g in
           List.for_all (fun (i, j) -> List.assoc_opt j g = Some i) f
-          && List.for_all (fun (j, i) -> List.assoc_opt i f = Some j) g)
+          && List.for_all (fun (j, i) -> List.assoc_opt i f = Some j) g
+      (* M7-T28 (D-0159), written apart from [Model.check_assignment]: the positions the
+         selectors name, all equal to y, and at least one of them. *)
+      | M.Member mb ->
+          let named =
+            List.filteri
+              (fun k _ -> operand (List.nth mb.M.mem_b k) = 1)
+              (List.map operand mb.M.mem_x)
+          in
+          named <> [] && List.for_all (( = ) (operand mb.M.mem_y)) named)
     m.M.constraints
 
 (* Brute force over the declared box: the independent oracle for the expected answer.
