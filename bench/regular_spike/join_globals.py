@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Join the D-0146 instance list with the D-0122 baseline (wave43run, 1200 s) and the
+"""Join the D-0146 instance list (optionally regrouped by routes.tsv, see below) with the D-0122 baseline (wave43run, 1200 s) and the
 after run (300 s). Usage: join.py <inst.lst> <wave43run-dir> <after-dir>
 Prints per group: before -> after status transitions, and the instances that changed."""
 import collections
@@ -14,6 +14,27 @@ for line in open(lst):
         continue
     c = line.rstrip("\n").split("\t")
     groups[c[0]] = c[3]
+# Optional 4th argument: count_routes.sh's output. The instances are then grouped by the
+# routes the FLATTENED model takes (baguette_regular / baguette_global_cardinality calls),
+# community-detection kept apart as the gcc repeat, instead of by the model source.
+if len(sys.argv) > 4:
+    routes = {}
+    for line in open(sys.argv[4]):
+        c = line.rstrip("\n").split("\t")
+        if len(c) >= 4:
+            routes[c[0]] = c
+    for iid in list(groups):
+        r = routes.get(iid)
+        if r is None or r[3] != "OK":
+            groups[iid] = "flatten-fail"
+        elif "community-detection" in iid:
+            groups[iid] = "gcc_repeat"
+        elif int(r[1]) > 0:
+            groups[iid] = "regular" + ("+gcc" if int(r[2]) > 0 else "")
+        elif int(r[2]) > 0:
+            groups[iid] = "gcc_closed"
+        else:
+            groups[iid] = "no-route"
 
 
 def load(path):
