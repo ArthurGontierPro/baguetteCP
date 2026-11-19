@@ -1104,7 +1104,71 @@ let test_d_tiered_in_a_search () =
         [ false; true ])
     scenes
 
+(* M11-complexity-T4 (D-0152, D-0140 R4 and S2). The duplicate count keys on the row
+   ([Learned.equal], [Learned.hash]) where it keyed on the row's rendering. On random rows
+   over names that sanitise apart (as [Compile.check_name_collisions] guarantees for a
+   model), the two keys are the same equivalence: [Learned.equal] agrees with string
+   equality of [Learned.to_string] on every pair, equal rows hash equally, and
+   [n_duplicate] equals the count a string-keyed table gives. A lazy citation renders
+   the text it was given, when asked, and only then. *)
+let test_r4_row_key () =
+  let rng = Random.State.make [| 0x0152; 4 |] in
+  let names = [| "a"; "b"; "x_1"; "y" |] in
+  let lit () =
+    let x = names.(Random.State.int rng (Array.length names)) in
+    let v = Random.State.int rng 7 - 3 in
+    let l =
+      match Random.State.int rng 3 with
+      | 0 -> Lit.ge x v
+      | 1 -> Lit.eq x v
+      | _ -> Lit.bit x (abs v)
+    in
+    if Random.State.bool rng then l else Lit.negate l
+  in
+  let row () =
+    Learned.make
+      (List.init
+         (1 + Random.State.int rng 3)
+         (fun _ -> (1 + Random.State.int rng 2, lit ())))
+      (1 + Random.State.int rng 3)
+  in
+  let rows = Array.init 3000 (fun _ -> row ()) in
+  let db = Retention.create ~policy:Retention.keep_all () in
+  let texts = Hashtbl.create 64 and dups = ref 0 in
+  Array.iteri
+    (fun i r ->
+      ignore (Retention.add db ~cid:(1000 + i) ~row:r ~lbd:1 ~origin:"D-0152 R4");
+      let s = Learned.to_string r in
+      if Hashtbl.mem texts s then incr dups else Hashtbl.replace texts s ())
+    rows;
+  check
+    (Printf.sprintf
+       "D-0152 R4: n_duplicate keyed on the row equals the string-keyed count (%d of %d)"
+       !dups (Array.length rows))
+    (Retention.n_duplicate db = !dups && !dups > 100);
+  let agree = ref true in
+  for i = 0 to 299 do
+    for j = 0 to 299 do
+      let a = rows.(i) and b = rows.(j) in
+      let e = Learned.equal a b in
+      if e <> String.equal (Learned.to_string a) (Learned.to_string b) then agree := false;
+      if e && Learned.hash a <> Learned.hash b then agree := false
+    done
+  done;
+  check "D-0152 R4: Learned.equal is string equality of to_string, and hash respects it"
+    !agree;
+  let asked = ref 0 in
+  Retention.cite_lazy db ~cid:1000 ~by:(fun () ->
+      incr asked;
+      "instance #7 over x_ge_1");
+  let before = !asked in
+  let text = Retention.cited_by db 1000 in
+  check
+    "D-0152 S2: a lazy citation is not rendered until asked, then says what it was given"
+    (before = 0 && text = Some "instance #7 over x_ge_1" && !asked = 1)
+
 let () =
+  test_r4_row_key ();
   test_a_exactly_once ();
   test_a_pinned_on_the_shipped_build ();
   test_a_double_delete_guard ();

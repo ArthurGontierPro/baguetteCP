@@ -284,14 +284,22 @@
 module Lit = Baguette_proof.Lit
 module Writer = Baguette_proof.Writer
 
+(* D-0152 (D-0140 R4): a table keyed on a learned row, for the duplicate count. *)
+module Rows = Hashtbl.Make (struct
+  type t = Learned.t
+
+  let equal = Learned.equal
+  let hash = Learned.hash
+end)
+
 (* ------------------------------------------------------------------ entries *)
 
 (* One learned constraint the database holds.
 
-   [e_key] is the constraint's canonical rendering ([Learned.to_string], which sorts and
-   merges in [Learned.make]), used for the duplicate MEASUREMENT below and for nothing
-   else -- it is not part of any policy. [e_seq] is introduction order and is unique,
-   which is what makes every sort here total. *)
+   [e_seq] is introduction order and is unique, which is what makes every sort here
+   total. M11-complexity-T4 (D-0152) removed [e_key], the constraint's rendering
+   ([Learned.to_string]): it was kept per entry and read by nothing, and the duplicate
+   MEASUREMENT it fed now keys on the row itself ([keys] below). *)
 type tier = Core | Mid | Local
 
 let tier_to_string = function Core -> "core" | Mid -> "mid" | Local -> "local"
@@ -307,7 +315,6 @@ type entry = {
   e_lbd : int;
   e_size : int; (* terms in the row; 1 is a unit clause *)
   e_seq : int;
-  e_key : string;
   e_origin : string;
   mutable e_tier : tier;
       (* D-0139. Set from [e_lbd] at [add] under [tiered] ([Local] under every other
@@ -605,14 +612,18 @@ type t = {
       (* Retired by this database: cid -> the entry it was. Lookup only, never iterated
          (determinism, header). It is what turns a second deletion into an exception
          instead of a silently accepted no-op. *)
-  cited : (Writer.cid, string) Hashtbl.t;
-      (* cid -> what cites it, for the live citation. Lookup only. See [cite]. *)
-  keys : (string, Writer.cid) Hashtbl.t;
-      (* Canonical row text -> the first id that stated it. Lookup only, and MEASUREMENT
-         only: it feeds [n_duplicate] and no policy reads it. M1-T59 found duplicate
-         `rup` lines harmless per-proof; a retention policy that evicts and lets the same
-         clause be re-learned is how they stop being harmless, so the count is kept where
-         a later row can see it. *)
+  cited : (Writer.cid, string Lazy.t) Hashtbl.t;
+      (* cid -> what cites it, for the live citation. Lookup only. See [cite]. The text
+         is LAZY (D-0152, D-0140 S2): it names every literal of the citing instance and
+         is read only by the [Cited] message and [cited_by], so it is rendered when one
+         of them asks, from the same values, and never otherwise. *)
+  keys : Writer.cid Rows.t;
+      (* The row -> the first id that stated it. Lookup only, and MEASUREMENT only: it
+         feeds [n_duplicate] and no policy reads it. M1-T59 found duplicate `rup` lines
+         harmless per-proof; a retention policy that evicts and lets the same clause be
+         re-learned is how they stop being harmless, so the count is kept where a later
+         row can see it. Keyed on the row since D-0152 (D-0140 R4), where it was keyed on
+         the row's rendering; [Learned.equal] says why the count is the same. *)
 }
 
 let create ?(policy = default) () =
@@ -636,7 +647,7 @@ let create ?(policy = default) () =
     n_pinned = 0;
     gone = Hashtbl.create 64;
     cited = Hashtbl.create 16;
-    keys = Hashtbl.create 64;
+    keys = Rows.create 64;
   }
 
 let live t = List.rev_map (fun e -> e.e_cid) t.live_rev
@@ -687,17 +698,15 @@ let add t ~cid ~(row : Learned.t) ~lbd ~origin =
     raise
       (Double_delete
          (Printf.sprintf "retention: id %d was already retired and cannot be re-added" cid));
-  let key = Learned.to_string row in
-  (match Hashtbl.find_opt t.keys key with
+  (match Rows.find_opt t.keys row with
   | Some _ -> t.n_duplicate <- t.n_duplicate + 1
-  | None -> Hashtbl.replace t.keys key cid);
+  | None -> Rows.replace t.keys row cid);
   let e =
     {
       e_cid = cid;
       e_lbd = lbd;
       e_size = List.length (Learned.lits row);
       e_seq = t.next_seq;
-      e_key = key;
       e_origin = origin;
       e_tier =
         (match t.policy.p_tiers with Some prm -> tier_of_lbd prm lbd | None -> Local);
@@ -725,10 +734,11 @@ let add t ~cid ~(row : Learned.t) ~lbd ~origin =
    gives it a consumer, a global unit or a [Clause.Learned_clause] instance. [n_cited]
    counts calls, so the population is a measurement this module reports rather than a
    claim its header makes; on `width_sat_depth` it is 49 of 73. *)
-let cite t ~cid ~by =
+let cite_lazy t ~cid ~(by : unit -> string) =
   t.n_cited <- t.n_cited + 1;
-  Hashtbl.replace t.cited cid by
+  Hashtbl.replace t.cited cid (Lazy.from_fun by)
 
+let cite t ~cid ~by = cite_lazy t ~cid ~by:(fun () -> by)
 let uncite t ~cid = Hashtbl.remove t.cited cid
 
 (* Release EVERY citation at once, for [Search.solve]'s end-of-search sweep alone.
@@ -745,7 +755,7 @@ let uncite t ~cid = Hashtbl.remove t.cited cid
    can perform the deletion the guards refuse and watch the checker's answer. Releasing
    is a statement about lifetime and is made once, in one place. *)
 let release_all t = Hashtbl.reset t.cited
-let cited_by t cid = Hashtbl.find_opt t.cited cid
+let cited_by t cid = Option.map Lazy.force (Hashtbl.find_opt t.cited cid)
 
 (* ------------------------------------------- D-0139: a consumer that CAN be detached
 
@@ -905,7 +915,7 @@ let retire ?(unchecked = false) t ctx ~why (ids : Writer.cid list) =
                     "retention: id %d is not held by this database, so deleting it for \
                      %S would be a delete from a second owner (M2-L4)"
                     cid why));
-          match Hashtbl.find_opt t.cited cid with
+          match cited_by t cid with
           | Some by ->
               raise
                 (Cited

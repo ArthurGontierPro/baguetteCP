@@ -279,6 +279,38 @@ let to_string t =
           t.terms))
     t.degree
 
+(* M11-complexity-T4 (D-0152, D-0140 R4): the row as a KEY, for [Retention]'s duplicate
+   count, which used [to_string] and so rendered every literal of every learned
+   constraint into a string that was kept for the whole run.
+
+   [equal] is equality of the normal form [make] produces: the same terms in the same
+   order and the same degree. It is the equivalence [to_string] keyed on. Rows equal here
+   render equally, and the converse holds for every row over a compiled model, because
+   the rendering is injective there: [Lit.render] is injective on (sanitised owner, kind,
+   value) (lib/proof/encoding.ml, the [Occurs] note), [Compile.check_name_collisions]
+   refuses two variables whose names sanitise alike, and [Encoding] names its
+   auxiliaries away from every sanitised name. [hash] reads every term, so a long row
+   whose first ten terms agree still spreads. *)
+let equal a b =
+  Int.equal a.degree b.degree
+  && List.equal
+       (fun x y -> Int.equal x.coeff y.coeff && Lit.equal x.lit y.lit)
+       a.terms b.terms
+
+let hash t =
+  let term h tm =
+    let kind, owner, v =
+      match tm.lit.Lit.v with
+      | Lit.Ge (x, v) -> (0, x, v)
+      | Lit.Eq (x, v) -> (1, x, v)
+      | Lit.Bit (x, v) -> (2, x, v)
+    in
+    let p = if tm.lit.Lit.positive then 1 else 0 in
+    let x = Hashtbl.hash owner + (31 * (v + (31 * ((2 * kind) + p)))) + (7 * tm.coeff) in
+    ((h * 65599) + x) land max_int
+  in
+  List.fold_left term (Hashtbl.hash t.degree) t.terms
+
 (* --------------------------------------------------------------------- proof side *)
 
 (* The constraint as the .opb/.pbp writes it. [Opb.ge] is already the checkers' own

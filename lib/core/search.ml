@@ -2223,10 +2223,8 @@ let register_learned_pb engine store ctx stats ~bump ~cid ~(row : Learned.t) =
       Engine.add engine (Retention.gate stats.db store ~cid inst);
       stats.n_pb_instances <- stats.n_pb_instances + 1;
       set_learned_kind stats id kind_pb;
-      Retention.cite stats.db ~cid
-        ~by:
-          (Printf.sprintf "learned_pb instance #%d, %s (M2-L13)" id
-             (Learned.to_string row))
+      Retention.cite_lazy stats.db ~cid ~by:(fun () ->
+          Printf.sprintf "learned_pb instance #%d, %s (M2-L13)" id (Learned.to_string row))
 
 (* ---------------------------------------------------------------------------
    M2-L15: THE BACKJUMP LEVEL, and why the decision closure is RIGHT and not merely safe
@@ -2566,10 +2564,9 @@ let register_learned engine store ctx stats ~cid ~(lits : Lit.t list) =
         | None -> stats.n_global_declined <- stats.n_global_declined + 1
         | Some g ->
             push_global stats g;
-            Retention.cite stats.db ~cid
-              ~by:
-                (Printf.sprintf "the learned unit %s, applied at every node (M2-L12)"
-                   (Lit.to_string l)))
+            Retention.cite_lazy stats.db ~cid ~by:(fun () ->
+                Printf.sprintf "the learned unit %s, applied at every node (M2-L12)"
+                  (Lit.to_string l)))
   | _ :: _ :: _ -> (
       match Clause.of_lits store ~decl lits with
       | None -> stats.n_clause_declined <- stats.n_clause_declined + 1
@@ -2586,10 +2583,11 @@ let register_learned engine store ctx stats ~cid ~(lits : Lit.t list) =
                   lc));
           stats.n_clause_instances <- stats.n_clause_instances + 1;
           set_learned_kind stats id kind_clause;
-          Retention.cite stats.db ~cid
-            ~by:
-              (Printf.sprintf "learned_clause instance #%d over %s (M2-L12)" id
-                 (String.concat " " (List.map Lit.to_string (Clause.literals p)))))
+          (* D-0152 (D-0140 S2): the citation's text is rendered only if a [Cited]
+             message or [Retention.cited_by] reads it, from the same values. *)
+          Retention.cite_lazy stats.db ~cid ~by:(fun () ->
+              Printf.sprintf "learned_clause instance #%d over %s (M2-L12)" id
+                (String.concat " " (List.map Lit.to_string (Clause.literals p)))))
 
 (* M5-T1: the solution node of a branch-and-bound search.
 
