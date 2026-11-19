@@ -18283,3 +18283,187 @@ names them.
   could show that). The default would then be the user's to revisit.
 - A refused proof under `-f`. That would be a bug against D-0148's fix, and the warning would come
   back with its reproducer.
+## D-0157  M11-complexity-T9: the learned PB row's arithmetic without its sorts -- `Learned.combine` as one merge of two sorted rows, `Ladder.lift`'s rungs in one merge, `make` without a sort on sorted input, each row of an analysis read through a memo of its own literals; every result equal, the overflow point unmoved
+
+Status: DONE (built, measured, gated; nothing to re-record)
+Date: 2026-11-19
+Task: M11-complexity-T9 (agent-learned, `wave53-learned`).
+Touches: `lib/core/learned.ml` (`make` / `make_reference`, `sort_by_lit`, `combine` /
+`combine_reference`, `mass`, `walk`, `equal`, `add_multiples`, `to_string`, `to_linear_row`'s
+sorts, `decl_of_encoding`), `lib/core/ladder.ml` (`lift` through `add_multiples`,
+`instantiate`'s sum handed over in order, `b1_row`/`b2_row` atom first),
+`lib/core/pb_analysis.ml` (`row_memo`, the analysis loop reading each row through it, the
+pivot's coefficient from `pivot_of`, `falsified_before`'s name cache), `test/unit/test_learned.ml`,
+`test/unit/test_ladder.ml`. `reduce.ml` is NOT touched: its rows reach `make`'s fast path, and its
+predicate arrives memoised. No other file, and no cross-session request.
+Follows D-0153 section 5 (the profile that opened the row) and section 8.3, D-0152 section 1 and
+D-0144 section 1 (`Ladder.lift`'s per-rung `combine`, left with its overflow argument), D-0145
+section 1 (the frame-pointer switch), D-0085 (`combine`'s one-pass span), I-X8 / D-0029 (an
+overflow is a fallback, never a wrap).
+
+### 0. The sentence
+
+A learned PB row is `make`'s output, so its terms are already sorted by literal, and the
+arithmetic on it is a merge. `combine` walks the two rows once instead of scaling, appending,
+sorting by variable, grouping and handing the result to a `make` that sorts again. A lift adds all
+its rungs in one walk instead of one `combine` per rung, and `make` keeps a list that is already in
+its order. Each fast path runs only where its answer is provably the reference's, overflow
+included, and the reference runs everywhere else.
+
+### 1. The profile, before (`baguette-fp`, `perf record --call-graph fp`, main `9a9c461`)
+
+Inclusive shares of the whole run, proof mode (no-proof within a point). D-0153's five instances
+at `--bits-above 0` at its node budgets (`BAGUETTE_NODE_LIMIT`), and the two default-path
+instances at 10 000 nodes.
+
+| site | rcpsp-wet (1 500) | roster-shifts-bool (900) |
+|---|---|---|
+| `Pb_analysis.analyse` | 39.5 | 10.8 |
+| `Learned.combine` (in the elimination and the lift) | 15.1 | 3.1 |
+| `Learned.make` (every caller) | 10.2 | 2.6 |
+| `Ladder.instantiate` | 9.3 | 2.2 |
+| `Ladder.lift` (a `combine` per rung) | 9.2 | under 1 |
+| `falsified_at` + `level_of` (the memo's `Lit.t` hash, four reads of each row per step) | 9.5 | 5.6 |
+| `Reduce` (the attempt, its predicate asked four or five times per term) | 4.7 | 1.0 |
+| `to_linear_row` + `to_string` + `decl_of_encoding` (per learned row: `--stats`, the retention key) | under 1 | 5.0 |
+| GC inside the analysis | 7.7 | 2.5 |
+
+On the other three bits instances and on rcpsp_11 and mspsp_hard_01 the analysis is under 1 % of
+the run (rcpsp_11 falls back on 4 849 of 4 874 conflicts, on rows `cumulative` does not offer).
+The default path is not this row's, and its numbers below only show that nothing got worse. What
+the rest of a bits run costs is not in these files: `Trace.emit_to_page` (34 to 45 % of
+rcpsp-wet, mostly `Justify.emit_bits_combine`, with or without the proof) and `Pb.pass`, the
+learned instances' propagation (38 % of roster).
+
+### 2. What changed, and why each result is the reference's
+
+1. **`Learned.make`.** An input already in `make`'s output order (strictly increasing by
+   `Lit.compare`, every coefficient >= 1) is that order. The fold, the stable sort and the merge
+   all leave it unchanged, so it is taken as it stands. Otherwise the sort is `sort_by_lit`, a
+   natural merge sort (adjacent runs merged pairwise, the earlier run winning ties, two runs with
+   disjoint ranges joined by an append). It is a stable sort, so its answer is exactly
+   `List.sort`'s, and it costs about `n` comparisons on a model row's expansion, which is one
+   sorted run per variable. The old body is `make_reference`.
+2. **`Learned.combine`**, the step every elimination takes. Both inputs are sorted by literal,
+   hence by variable, so `walk` merges them one variable at a time, nets the two polarities as
+   stage 3 does (`p - m` on `l`, `n - m` on `~l`, `m = min p n` off the degree) and emits at most
+   one term per variable, in increasing variable order, which is the order the reference's `make`
+   produces. A term whose coefficient and literal are an input's is that input's record (the same
+   value, no allocation). The old body is `combine_reference`, word for word.
+   **The overflow point.** `walk` sums in plain `int`, so it runs only when
+   `ca * mass a + cb * mass b <= max_int`, `mass` being |degree| plus the coefficients. Every
+   integer the reference forms (a scaled coefficient or degree, a side sum, `dropped`, the final
+   degree) is then at most that in absolute value, and a `Checked` operation raises only when its
+   exact result is out of range, so the reference would not have raised. Otherwise, and with a
+   negative multiplier, a coefficient below 1, or an input out of order (`walk` checks that the
+   variables it visits strictly increase rather than assuming it of a public record), the
+   reference runs and raises where and as it always did.
+3. **`Ladder.lift` through `Learned.add_multiples`.** The fold `combine acc 1 rung m` over k rungs
+   is k walks of a row that does not shrink. The answer is one walk of the row with all the rungs'
+   scaled terms, sorted together, and it is the fold's answer because cancellation keeps a running
+   total. For a variable with positive and negative masses P and N over the row and the first j
+   summands, after j steps it carries `P - N` (or `N - P` on the negation) and the degree has lost
+   `min P N` for it in all. That holds after the first step, which normalises the whole row, and
+   each further step keeps it, since netting `P - N + dp` against `dn` drops
+   `min (P + dp) (N + dn) - N` more. With no summand the fold is the row itself, not normalised,
+   and so is this. The guard is the same bound over the whole fold
+   (`mass row + sum m_j * mass r_j`), and outside it the fold itself runs. The stop is asked once
+   per rung in both cases, and nothing between two asks can raise in the one-walk case, so a yes
+   raises `Stopped` at the same rung. This is the change D-0144 and D-0152 left for its overflow
+   argument, and the argument is the bound.
+4. **`Ladder.instantiate`.** The bridges' scaled terms are handed to `make` atoms first, bits
+   after, each half in block order. That is already `make`'s order (blocks are found in the row's
+   sorted order, one atom each, bits by index), so `make` sorts nothing. `make`'s answer is a
+   function of the multiset, and the `Checked` products run before the reordering, in the same
+   order, inside the same two-argument application. `b1_row`/`b2_row` list the atom first for the
+   same reason.
+5. **The analysis reads each row through `row_memo`.** The pivot choice, the conflict check after
+   the combination and the criterion's two scans each asked `falsified_at` of every term, through
+   `fat_memo`, whose key is a `Lit.t`, so each read paid a hash of the name and a `Lit.equal`.
+   Every read walks the row first to last and asks about the record the row holds, so `row_memo`
+   finds it by a pointer comparison at most four places past the last answer and computes each
+   term once per row. The reason's predicate, which `Reduce` and `lift` ask four or five times per
+   term, is memoised the same way. A literal not found (the pivot made by `Lit.negate`, a term a
+   combination rebuilt) is answered by the function itself. The answers are the function's,
+   because the trail does not move during `analyse` and a reason's predicate is frozen at its
+   position (I-X6). The pivot's coefficient now comes with the pivot from `pivot_of` (a row names
+   a literal once), and `falsified_before`, applied to a store and a position, remembers the last
+   name it looked up by physical identity.
+6. **Per learned row.** `to_string` (the retention key) writes into one buffer (`Lit.add_int`,
+   `Lit.add_sanitized`, the same bytes). `to_linear_row` (`--stats`) no longer re-sorts the rungs
+   of a row that `make` already listed in `rung_compare` order, since a stable sort of a sorted
+   list is the list. `decl_of_encoding` asks `Encoding.domain` once and reads `Undeclared` as
+   `None`.
+
+Where the argument is longer than a line, the old code stays as the specification.
+`make_reference`, `combine_reference` and the fold of it are compared at every call under
+`BAGUETTE_DEBUG`, so the lane's debug pass runs the comparison on every combine and lift of its
+runs, and on random inputs in the unit lanes.
+
+### 3. Tests
+
+- **test_learned, the D-0157 lanes.** `make` against `make_reference` on 20 000 raw lists of four
+  shapes (anything, a model row's blocks, `make`'s own output, overlapping blocks). `sort_by_lit`
+  against `List.stable_sort` with a payload, so stability is checked. `combine` against
+  `combine_reference` on 30 000 pairs with coefficients near 2^60 and multipliers 0, -1, 2^31 and
+  near 2^60 (15 615 rows, 9 305 of them by the one walk, 14 385 overflows, message for message).
+  `add_multiples` against the fold with a counted stop that raises at a drawn call (22 978 rows,
+  20 223 by the one walk, 3 449 overflows, 3 573 stops, the number of asks equal). `to_string`
+  against the `Printf` rendering, `min_int` included. Each lane requires both arms to be reached.
+- **test_ladder.** `lift` on 5 000 random rows over a ladder in either pivot direction, the lifted
+  row against the per-rung fold of `combine_reference` term for term (1 289 lifts), and a stop
+  answering yes at a drawn rung raising after exactly that many asks.
+
+### 4. Measurements (fataepyc-06, `/scratch/arthur/wave53-learned-runs/m/`)
+
+Binaries: main = `64ec63e0` (`9a9c461`, gate 61's binary), branch = `0fe90d0c` (`ebd1c75`).
+`perf stat -e instructions:u`, OCaml `minor_words` (`OCAMLRUNPARAM=v=0x400`) and peak RSS at the
+fixed node budgets. Every pair is equal in stdout, rc, the non-timing `--stats` lines and the
+`.opb`/`.pbp` sha256.
+
+| instance (nodes, flags) | proof | instructions, main -> branch | ratio | minor words | peak RSS MB |
+|---|---|---|---|---|---|
+| rcpsp-wet (1 500, `--bits-above 0`) | no | 77.71 G -> 57.39 G | **0.738** | 1.84 G -> 0.90 G | 140 -> 135 |
+| | yes | 77.99 G -> 57.58 G | **0.738** | 1.84 G -> 0.90 G | 144 -> 135 |
+| roster-shifts-bool (900, `--bits-above 0`) | no | 145.60 G -> 135.50 G | **0.931** | 1.40 G -> 1.02 G | 828 -> 807 |
+| | yes | 145.42 G -> 135.52 G | **0.932** | 1.40 G -> 1.02 G | 811 -> 822 |
+| rcpsp-wet-diverse (90, `--bits-above 0`) | no / yes | 46.76 / 47.99 G -> 46.58 / 47.80 G | 0.996 / 0.996 | -0.1 % | 1 418 -> 1 409 |
+| workforce-alloc (3 000, `--bits-above 0`) | no / yes | 22.26 / 22.82 G -> 22.18 / 22.78 G | 0.997 / 0.999 | -0.6 % | 231 -> 230 |
+| fbd1 (90, `--bits-above 0`) | no / yes | 209.01 / 210.66 G -> 207.71 / 209.39 G | 0.994 / 0.994 | -1.1 % | 2 245 -> 2 250 |
+| rcpsp_11 (10 000, default) | no / yes | 194.06 / 194.27 G -> 193.76 / 194.02 G | 0.998 / 0.999 | -1.0 % | 164 -> 166 |
+| mspsp_hard_01 (10 000, default) | no / yes | 121.85 / 122.32 G -> 121.29 / 121.84 G | 0.995 / 0.996 | -0.7 % | 361 -> 361 |
+
+In three steps on rcpsp-wet without the proof: 77.71 G, then 61.19 G (items 1 to 3), 58.83 G
+(items 5 and 6), 57.39 G (the natural merge sort, the atom-first bridges, the name cache). After,
+the analysis is 20.1 % of rcpsp-wet (was 39.5 %) and 6.1 % of roster (was 10.8 %); `combine` is
+2.2 % and the lift under 1 %. The GC share of the whole run hardly moves (rcpsp-wet 20 to 22 %,
+roster 15 %), because it is now the trace's and the justification's. For scale, D-0153's before
+binary (`9571b17c`, where a row with a bits term offers no PB row and falls back) runs rcpsp-wet
+at 1 500 nodes in 41.17 G without the proof. The PB rows over bits cost 1.89x that on main and 1.39x on this branch.
+
+### 5. The gate
+
+A fresh clone of `ebd1c75` on fataepyc-06 (`/scratch/arthur/wave53-learned-gate.*`), binary
+`0fe90d0c`, the one measured above.
+
+- `make check` rc 0 (24.7 s, peak RSS 97 456 kB): 4 251 unit checks `ok`, no `FAIL`; model tests
+  198 passed, 0 failed; the 24 `bits_*` models at `--bits-above 0` passed (proof verified,
+  `--no-proof` stdout identical).
+- Every `test/models/*.fzn` at default flags and at `--bits-above 0` against main's binary at the
+  branch point (`64ec63e0`): 396 runs, 0 differences in stdout, rc, `.opb`, `.pbp` or the
+  non-timing `--stats` lines.
+- `make diff --tier all -j 24`: 301 of 301 runs equal the reference, `bits0` included, SEARCH and
+  WORK counters alike. `--debug`: 289 of 289, with `combine` and `add_multiples` compared to their
+  references at every call and no check fired. `make scaling -j 16`: ok, every line within its
+  threshold. No reference file changed, so nothing is to re-record.
+
+### 6. What is left
+
+- `Trace.emit_to_page` and `Justify.emit_bits_combine` on bits runs (34 to 45 % of rcpsp-wet, with
+  or without the proof) and `Pb.pass` on roster (38 %). These are the two remaining costs of
+  `--bits-above 0`, and neither is in this row's files.
+- In the analysis: `Ladder.instantiate`'s frozen bound (a binary search of `falsified_before`
+  probes) and `Encoding.ensure_atom`'s lookups (4 % of rcpsp-wet), and one `fat_memo` read per
+  term per new row. A per-variable integer index would remove the last hash, as RoundingSat's
+  arrays do. `Lit.t` has no integer identity, and giving it one is a `lib/proof/` change.
+- `Linear.pb_row` still rebuilds its row per call (D-0140 P2's other half, which is `linear.ml`'s).
