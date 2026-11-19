@@ -1958,14 +1958,39 @@ let close_root_conflict ctx trace store (c : Store.conflict) =
    The index is carried because [Store.remover] is asked "which entry took [v] out of
    this variable's domain *before* this point", and the point is a trail position. It is
    the same ~before [Trace.settle_facts] passes for a propagator's settle; M1-T66 asks it
-   for a decision's. *)
-let decision_entries store =
+   for a decision's.
+
+   M11-complexity-T4 (D-0152, D-0140 S3): read off the LEVEL MARKS, one per open level,
+   instead of asking [Store.is_level_start] at every trail position, which made every
+   conflict pay for the whole trail. An entry is a level start iff some open mark sits at
+   its position (that is what [Store.is_level_start] counts, D-0142), the marks are
+   monotone (I-T2), and an empty level shares its position with the next one, so the
+   marks below the trail's end, with repeats dropped, are exactly the positions the scan
+   kept, in the same ascending order. [decision_entries_scan] is the old walk, kept as
+   the specification: [BAGUETTE_DEBUG] compares the two at every call. *)
+let decision_entries_scan store =
   let n = Store.trail_length store in
   let acc = ref [] in
   for i = n - 1 downto 0 do
     if Store.is_level_start store i then acc := (i, Store.trail_entry store i) :: !acc
   done;
   !acc
+
+let decision_entries store =
+  let n = Store.trail_length store in
+  let rec go prev acc = function
+    | [] -> List.rev acc
+    | m :: rest ->
+        if m >= n || m = prev then go prev acc rest
+        else go m ((m, Store.trail_entry store m) :: acc) rest
+  in
+  let entries = go (-1) [] (Store.level_marks store) in
+  Debug.check "D-0152: decision_entries over the marks agrees with the trail scan"
+    (fun () ->
+      List.equal
+        (fun (i, (e : Store.entry)) (j, e') -> i = j && e == e')
+        entries (decision_entries_scan store));
+  entries
 
 (* Did this push land somewhere strictly stronger than its literal names, and if so on
    what? [Some cond] is the bound the trail actually recorded; [None] means the push
