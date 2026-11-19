@@ -22,7 +22,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | M9-no-proof-T4 (the `--no-proof` audit) | `lib/core/trace.ml`, `lib/core/search.ml` (guards only), `lib/proof/encoding.ml` (guards in `start_proof`, additive), `lib/core/prop/regular.ml`, `lib/core/prop/inverse.ml`, `bin/main.ml` (the no-proof wiring); `lib/core/justify.ml` only after agent-memo merges | agent-noproof-audit (`wave53-noproof`) | 2026-11-19 |
 | M7-T33 (and `Alldiff.excl`'s proof cost, D-0145) | `lib/core/prop/alldiff.ml`, `lib/proof/encoding.ml` (additive only), new `test/models/`, `test/unit/test_prop.ml` (alldiff section) | agent-alldiff (`wave53-alldiff`) | 2026-11-19 |
 | M7-T28 (`member`) | new `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, new `test/models/`, `test/unit/test_prop.ml` (member section) | agent-member (`wave53-member`) | 2026-11-19 |
-| M7-T29 (the `fplen` half: bounds inference for a `var int` with no domain) | `lib/flatzinc/builder.ml`, new `test/models/`, `test/unit/test_flatzinc.ml` (one section); `docs/SPEC.md` 2.1 only if the user agrees | agent-fplen (`wave54-fplen`) | 2026-11-19 |
 
 ## Cross-session requests
 
@@ -572,8 +571,15 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M11-complexity-T8 | agent-element (`wave53-element`) | 2026-11-19 | **D-0155.** `Element.add_facts` hashed and linear (same list as the old fold, oracle-tested), the index-hole trail walks through `Store.remover`, live and carried-value membership through an int table, hole facts once per pass. black-hole_10 168 G to 52 G instructions; every model's artefacts equal to main |
 | M13-codes-leads (roadmap rows only) | codes-cp session | 2026-11-19 | Two TODO (to study) rows from the codes-cp phase-1 benchmark: T1 a linear relaxation as a presolve step, T2 symmetry detection with dominance-justified breaking. No code. |
 | M11-complexity-T10 | agent-memo (`wave53-memo`) | 2026-11-19 | **D-0158.** The memo's identical copies are identical LINES, so an entry cannot be shared without changing the bytes. `justify.ml` gains a share mode, OFF by default (`BAGUETTE_MEMO_SHARE=1`), that answers a miss with an identical line already on the page at or below the current level: cable's proof 1 887 -> 114 MB, cyclic's 2 023 -> 322 MB, rcpsp_11 +14.5 % instructions, search identical. Share lane: 85/301 runs differ in the `.pbp` hash and the `pol`/`pol-tokens` counters only (`pol` lines -32 % over the lane), 274/274 proofs VERIFIED. Off, every byte is main's. Gate on `95759c5`: `make check` rc 0, 198 models x 4 artefacts equal to `64ec63e0`, lane 301/301, debug 289/289, binary `59368b5f`. The default is the user's call (D-0158 section 5) |
+| M7-T29 (the `fplen` half; M7-T29 DONE) | agent-fplen (`wave54-fplen`) | 2026-11-19 | **D-0162 (PROPOSED).** No fix: `connect__0086_02` is the one connect instance with a positive floor-plan cost, and `fplen`/`fpwid` are bounded only below and minimised, so the model's solution set is unbounded in them and SPEC 2.1 admits no bound. A dominance cap from the objective is drafted in D-0162 §3 for the user. Measured on a hand-capped `.fzn` (binary `c72c48e2`): order encoding passed 51 GB of `.opb` in 5 min (stopped), `--bits-above 10000` stopped on the 16 GB heap budget at 15 min 25 s, no solution. One `test_flatzinc` reject case pins the shape. Gate: `make check` rc 0, 198 models, peak RSS 100 MB |
 
 ## Handoff notes
+
+### 2026-11-19 (agent-fplen, `wave54-fplen`): M7-T29's `fplen` half, D-0162 (PROPOSED)
+
+No solver change. `fplen` is a correct refusal, because the model bounds it only from below and minimises it, so no sound inference
+bounds it. D-0162 §3 drafts the objective-dominance sentence the user would have to accept, and §4-§5 show that even capped the
+instance dies on memory (51 GB of `.opb` on the order encoding, heap budget on bits). Recommendation there is to leave it refused.
 
 ### 2026-11-19 (agent-memo, `wave53-memo`): M11-complexity-T10, D-0158
 
