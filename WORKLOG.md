@@ -22,6 +22,7 @@ of it to every session and stopping at a broken line before it even reached the 
 | M11-complexity-T8 | `lib/core/prop/element.ml`, `test/unit/test_prop.ml` (element section) | agent-element (`wave53-element`) | 2026-11-19 |
 | M7-T33 (and `Alldiff.excl`'s proof cost, D-0145) | `lib/core/prop/alldiff.ml`, `lib/proof/encoding.ml` (additive only), new `test/models/`, `test/unit/test_prop.ml` (alldiff section) | agent-alldiff (`wave53-alldiff`) | 2026-11-19 |
 | M11-complexity-T9 | `lib/core/learned.ml`, `lib/core/pb_analysis.ml`, `lib/core/ladder.ml`, `lib/core/reduce.ml`, their unit tests | agent-learned (`wave53-learned`) | 2026-11-19 |
+| M11-complexity-T10 | `lib/core/justify.ml`, `lib/core/explanation.ml` (additive functions only, the type unchanged), `test/unit/test_justify.ml` | agent-memo (`wave53-memo`) | 2026-11-19 |
 | M7-T28 (`member`) | new `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, new `test/models/`, `test/unit/test_prop.ml` (member section) | agent-member (`wave53-member`) | 2026-11-19 |
 | M11-complexity-T6 and M6-T7 | `scripts/scaling_lane.sh`, `bench/scaling/`, `Makefile` (scaling target), `scripts/check_test_widths.py` | agent-tooling (`wave53-tooling`) | 2026-11-19 |
 
@@ -558,6 +559,29 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M7-T28 (continuation: regular's reasons, inverse; the row stays IN PROGRESS) | agent-globals2 (`wave51-globals2`) | 2026-11-19 | **D-0151.** `regular`'s reasons on the LETTERS (tails recurse into the dead flags' own lines; probes on 60 scenes first): learned clauses 321 -> 80 literals on average over 40 nonograms/pentominoes, node rate x2.6 without the proof, complete 19 -> 20 of 65 with it, all VERIFIED. `inverse` native: `lib/core/prop/inverse.ml` (channel, CHECKING), mznlib `fzn_inverse`, stage 2 all_different from CITED root lemmas (`Encoding.add_cited_lemma`, alldiff's lemma-row hook), 2 mutation lanes, 3 models; Challenge 70 reach the route, 3 -> 3 complete (held by `Element.add_facts` and alldiff's factless conflicts, both filed). `member` designed with probes. Gate on `d1df37f`: `make -k check` rc 2 from the 5 pre-existing test_retention checks only (main fails the same), 195 models passed, peak RSS 100 104 kB; 181/195 models byte-identical to main (the 14 diffs: inverse x3, regular_opt/unsat .pbp); diff lane 184/184 default runs equal (fifo/lbd diffs identical to main's, strategy configs without references on this base) |
 
 ## Handoff notes
+
+### PAUSED 2026-11-19 (agent-memo, wave53-memo)
+
+Done and committed on `wave53-memo` (code tip `c488b8e`, binary md5 `59368b5f`; docs `95759c5`):
+share mode in `justify.ml`, OFF by default (`BAGUETTE_MEMO_SHARE=1`), `BAGUETTE_MEMO_STATS=1`,
+tests in `test_justify.ml`, D-0158 appended (placeholders `SHARE-VERIPB` in section 4 and
+`GATE-NUMBERS` in section 6), ROADMAP row DONE, handoff note below (placeholder `GATE-LINE`).
+Measured (all in D-0158 section 4): `/scratch/arthur/wave53-memo-runs/m/<instance>/<tag>-<mode>/res`,
+final runs are tag `tip8`, main is `base` (and `base.exe` = 9a9c461 = gate 61's `64ec63e0`).
+Gate on a fresh clone of `95759c5` (script `/scratch/arthur/wave53-memo-runs/memo-gate.sh`,
+status `gate.status`, pidfile `memo-gate.pid`): `make check` rc 0, 4256 ok, 0 FAIL, 198 models,
+peak RSS 100 MB; 198 models x 4 artefacts equal to main's (0 diffs); lane 301/301; debug 289/289;
+scaling ok. Share mode: model suite with `BAGUETTE_MEMO_SHARE=1` 198/198 (veripb on each); the
+instance proofs of cable, cyclic, rcpsp_11 and mspsp in share mode all `s VERIFIED NO CONCLUSION`
+(`m/<instance>/tip8-sperf/veripb.log`).
+Still running when paused (detached, may finish): the share-mode lane and veripb of its kept
+proofs, inside `memo-gate.sh` (pid in `memo-gate.pid`, kept runs `share-keep/`, logs
+`gate.share-diff.log`, `gate.share-cmp.log`, `gate.share-veripb.log`; summary lines appended to
+`gate.status`, ending with `DONE`).
+Next steps: (1) read the last lines of `gate.status`; (2) fill `SHARE-VERIPB`, `GATE-NUMBERS` and
+`GATE-LINE` from it; (3) delete this PAUSED note and the claim row above; (4) commit
+`M11-complexity-T10: gate numbers`, push node06 and origin, report. The branch
+`wave53-memo-probe` on node06 is a measuring probe, not for merge.
 
 ### 2026-11-19 (agent-memo, `wave53-memo`): M11-complexity-T10, D-0158
 
