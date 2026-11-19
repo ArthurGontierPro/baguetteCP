@@ -533,6 +533,18 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M11-complexity-T2 | agent-lanes (`wave47-lanes`) | 2026-11-18 | **D-0141.** `make diff`: 25 instances (QR48, QR72, 19 Challenge in the fast tier, D-0140's six in the slow tier; 958 KB gz in `bench/diff/corpus/`) x 9 configurations (default, audit0, noproof, lbd, fifo, lbd-po, fifo-po, nopb, bits0), 232 runs at fixed BAGUETTE_NODE_LIMIT, stdout + rc + counters (SEARCH/WORK) + .opb/.pbp sha256 against `bench/diff/reference/` (e8354a74), plus a BAGUETTE_DEBUG pass (223 runs, f9bf6c4). Red binary: 198/232 differ while the 179 models show 0. `make scaling`: instructions:u per node, late over early, ratchet + 0.5 %, report-only until T6; teeth caught on 4 of 5 lines. Neither in `make check`; the gate runs both after it |
 | M7-T28 (first steps; the row stays IN PROGRESS) and M7-T29 (the gcc half) | agent-globals (`wave49-globals`) | 2026-11-18 | **D-0146.** `regular` native (`lib/core/prop/regular.ml`, DOMAIN, every pruning one `rup`, backward chains as root lemmas via `Encoding.add_root_lemma`, mznlib `fzn_regular`/`fzn_regular_set`, 3 mutation lanes, 4 models); the closed gcc forms pinned (std already routed them) with the implied sum; a repeated gcc variable copied by `Builder.split_gcc_repeats`; `inverse` design record and probes (§7). Gate: make check rc 0, 189 models, peak RSS 97 056 kB; diff lane 232/232; Challenge numbers in D-0146 §6 |
 ## Handoff notes
+## Wave 45/49 merged on 2026-11-19, gate 53 green (orchestrator)
+
+Merged: `wave45-strategy` (`0b6f809`, docs `f93cd4f`), the parity spike's docs only (`a01a640`),
+`wave45-retention` (`a0b50da`) plus its hook cherry-picked (`36c1312`), `wave49-globals` (`b13ce94`). The
+lane gained three configurations (restarts, activity, alternate); their references were recorded by gate
+53 on `0b6f809` (`/scratch/arthur/gate53.status`): `make check` rc 0, 182 models identical to gate 52's
+binary, 69 plain and 66 debug references with every proof accepted, then 301/301 and 289/289 equal, the
+scaling lane ok and lower on every line (rcpsp_11 2.38 -> 2.14). The lane references re-recorded after
+M11-T3 are `a95634f` (openshop needs BAGUETTE_MEM_CAP_KB=32 GB at `--update`). Next gate: main with
+retention, the hook and globals. Open: M7-T31/M6-T23 (wave50-proofbugs), M7-T32 (wave51-flags), M7-T28
+continuation (wave51-globals2).
+
 ## M7-T28 (first steps) and M7-T29 (gcc half) handoff, 2026-11-18 (agent-globals, `wave49-globals`): D-0146
 
 `regular` is native: `lib/core/prop/regular.ml`, DOMAIN consistent over the letters and `(n+1)*Q` state
