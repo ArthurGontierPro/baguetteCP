@@ -145,6 +145,27 @@
    [Model_row] is never memoised: it writes nothing and returns the id it already
    carries, so there is nothing to remember.
 
+   M11-complexity-T10 (D-0158): SHARE MODE, off by default. A propagator that rebuilds
+   the same derivation at every level (D-0149's 388 copies on cable_tree_wiring) hands
+   this module a new value each time, so the memo above misses and each copy writes its
+   own line, identical to the first copy's but for its id. With [BAGUETTE_MEMO_SHARE=1]
+   (or [create_sharing ~share:true]) a [Combine], [Cut] or [Linear] that the memo misses
+   is first rendered -- its operands emitted, in the order its own line would emit them
+   -- and the LINE it would write is looked up in [lines]: an identical `pol`
+   expression, or an identical `rup` target, already on the page at a level at or below
+   the writer's current one answers with that line's id, and nothing is written. That is
+   the claim index's condition 2 below, for the same reason: `w l` retires levels
+   [>= l], so a line at a level at or below the citing line's is never retired before
+   it, and a shared line cannot outlive the level that derived it. Two identical
+   expressions derive the same constraint whatever explanations they came from, so the
+   key is the text, not the explanation, and no structural equality on [Explanation.t]
+   is needed (the thing the paragraph above warns against stays untouched). A copy
+   answered this way is remembered with the shared line's id at the writer's current
+   level, as every entry is; the line is at or below that level, so the entry never
+   outlives it. Off, the proof is byte for byte what it was.
+   On, it is shorter and its ids differ; the search does not change. The default is off
+   because that is a change of proof bytes, which is the user's to decide (D-0158).
+
    Every memo entry is tagged with the writer's level at the moment it was created
    (docs/PROOF-FORMAT.md section 5: [w] wipes every constraint at or above a level).
    [wipe_level] drops the matching memo entries in the same call that wipes the writer,
@@ -258,7 +279,38 @@ and memo_table = {
       (* the hashes each level inserted, newest first; level 0 is never recorded, since
          no wipe reaches it (see [wipe_level]) *)
   mutable memo_hi : int; (* M6-T17: no [by_level] entry above this *)
+  share : bool;
+      (* M11-complexity-T10 (D-0158): an identical line at or below the current level
+         answers a miss. See the module header's "Memoisation". *)
 }
+
+(* M11-complexity-T10 (D-0158). Off unless asked for: BAGUETTE_MEMO_STATS=1 counts the
+   memo's lookups, its hits, the misses an identical line answered (share mode), the
+   entries it holds at most and its longest bucket, and prints them to stderr at exit,
+   as BAGUETTE_WAKE_STATS does for the engine. Counting a bucket's length is a walk of
+   it, which is why it is not always on. *)
+let memo_stats_on =
+  match Sys.getenv_opt "BAGUETTE_MEMO_STATS" with
+  | Some ("1" | "true" | "yes" | "on") -> true
+  | _ -> false
+
+let ms_lookups = ref 0
+let ms_hits = ref 0
+let ms_shared = ref 0
+let ms_entries = ref 0
+let ms_entries_peak = ref 0
+let ms_longest = ref 0
+
+let () =
+  if memo_stats_on then
+    at_exit (fun () ->
+        Printf.eprintf
+          "baguette: memo lookups=%d hits=%d shared=%d entries_peak=%d longest_bucket=%d\n"
+          !ms_lookups !ms_hits !ms_shared !ms_entries_peak !ms_longest)
+
+(* The default of [create]'s sharing, read once. Only "1" turns it on. *)
+let share_default =
+  match Sys.getenv_opt "BAGUETTE_MEMO_SHARE" with Some "1" -> true | _ -> false
 
 let shallow_tag (e : Explanation.t) =
   match e with
@@ -409,6 +461,39 @@ module Claims = Hashtbl.Make (struct
     finish (go 8 0 ls)
 end)
 
+(* M11-complexity-T10 (D-0158). Share mode's index of the lines this module wrote for a
+   [Combine], [Cut] or [Linear]: the expression or target, exactly as written, to the
+   line's id and level. Keyed by the whole of it, hashed over every node (the hash costs
+   what rendering the line costs, and is paid only on a memo miss), compared with the
+   structural equality of [Pol.t] and [Opb.constr], which hold integers, literals and
+   nothing mutable. Like [stated], nothing iterates it. *)
+type line_key = Pol_line of Pol.t | Rup_line of Opb.constr
+
+let rec pol_hash h (p : Pol.t) =
+  match p with
+  | Pol.Id c -> mix (mix h 1) c
+  | Pol.Axiom l -> mix (mix h 2) (lit_hash l)
+  | Pol.Add (a, b) -> pol_hash (pol_hash (mix h 3) a) b
+  | Pol.Mul (a, k) -> mix (pol_hash (mix h 4) a) k
+  | Pol.Div (a, k) -> mix (pol_hash (mix h 5) a) k
+  | Pol.Sat a -> pol_hash (mix h 6) a
+  | Pol.Weaken (a, v) -> mix (pol_hash (mix h 7) a) (Hashtbl.hash v)
+
+module Lines = Hashtbl.Make (struct
+  type t = line_key
+
+  let equal (a : t) (b : t) = a = b
+
+  let hash = function
+    | Pol_line p -> finish (pol_hash 1 p)
+    | Rup_line (c : Opb.constr) ->
+        finish
+          (List.fold_left
+             (fun h (k, l) -> mix (mix h k) (lit_hash l))
+             (mix (mix 2 c.Opb.rhs) (Hashtbl.hash c.Opb.rel))
+             c.Opb.terms)
+end)
+
 type ctx = {
   writer : Writer.t;
   encoding : Encoding.t;
@@ -424,17 +509,28 @@ type ctx = {
       (* M2-T9. Clause (as a sorted literal set) -> the line that states it. Read by
          [defining_line] and [defining_lit], written by every clause this module puts on
          the page, wiped by [wipe_level]. Lookup only -- never iterated for emission. *)
+  lines : stated Lines.t;
+  mutable lines_by_level : line_key list array;
+  mutable lines_hi : int;
+      (* M11-complexity-T10 (D-0158): share mode's lines, kept as [stated]; empty off *)
 }
 
-let create ~writer ~encoding =
+let create_sharing ~share ~writer ~encoding =
   {
     writer;
     encoding;
-    memo = { tbl = Itbl.create 1024; by_level = Array.make 16 []; memo_hi = -1 };
+    memo = { tbl = Itbl.create 1024; by_level = Array.make 16 []; memo_hi = -1; share };
     stated = Claims.create 64;
     stated_by_level = Array.make 16 [];
     stated_hi = -1;
+    lines = Lines.create (if share then 1024 else 1);
+    lines_by_level = Array.make (if share then 16 else 1) [];
+    lines_hi = -1;
   }
+
+(* The [ctx] every caller makes: sharing as [BAGUETTE_MEMO_SHARE] says, off unless it is
+   "1" (D-0158). [create_sharing] names it, for a test that needs either mode. *)
+let create ~writer ~encoding = create_sharing ~share:share_default ~writer ~encoding
 
 (* The writer a [ctx] emits through. [Learned] needs it to put a constraint on the page
    with a rule this module has no [Explanation.t] for -- a learned constraint is not a
@@ -448,6 +544,15 @@ let find_in_bucket ctx h (e : Explanation.t) =
     | (k, m) :: rest -> if k == e then Some m else go rest
   in
   match Itbl.find_opt ctx.memo.tbl h with None -> None | Some bucket -> go bucket
+
+(* The memo's size: the entries it holds and its longest bucket. For tests and
+   measurement; it walks the whole table, so nothing on the solving path calls it. *)
+let memo_stats ctx =
+  Itbl.fold
+    (fun _ bucket (n, longest) ->
+      let l = List.length bucket in
+      (n + l, Stdlib.max longest l))
+    ctx.memo.tbl (0, 0)
 
 (* [e]'s entry, looked up under the hash [h] it was given ([shallow_hash e]). A forced
    [Deferred] is also looked up under [unforced_hash]: see there. *)
@@ -465,6 +570,11 @@ let remember_with ctx (e : Explanation.t) h (cid : Writer.cid) : Writer.cid =
   let m = ctx.memo in
   let bucket = Option.value (Itbl.find_opt m.tbl h) ~default:[] in
   Itbl.replace m.tbl h ((e, { cid; level }) :: bucket);
+  if memo_stats_on then (
+    incr ms_entries;
+    if !ms_entries > !ms_entries_peak then ms_entries_peak := !ms_entries;
+    let n = List.length bucket + 1 in
+    if n > !ms_longest then ms_longest := n);
   if level > 0 then (
     if level >= Array.length m.by_level then (
       let a = Array.make (Stdlib.max (level + 1) (2 * Array.length m.by_level)) [] in
@@ -500,6 +610,10 @@ let wipe_level ctx level =
         match Itbl.find_opt m.tbl h with
         | None -> ()
         | Some bucket -> (
+            if memo_stats_on then
+              List.iter
+                (fun (_, (me : memo_entry)) -> if me.level >= level then decr ms_entries)
+                bucket;
             match List.filter (fun (_, (me : memo_entry)) -> me.level < level) bucket with
             | [] -> Itbl.remove m.tbl h
             | b -> Itbl.replace m.tbl h b))
@@ -514,7 +628,18 @@ let wipe_level ctx level =
         | _ -> ())
       keys
   done;
-  if ctx.stated_hi >= level then ctx.stated_hi <- level - 1
+  if ctx.stated_hi >= level then ctx.stated_hi <- level - 1;
+  for l = level to ctx.lines_hi do
+    let keys = ctx.lines_by_level.(l) in
+    ctx.lines_by_level.(l) <- [];
+    List.iter
+      (fun k ->
+        match Lines.find_opt ctx.lines k with
+        | Some (s : stated) when s.s_level >= level -> Lines.remove ctx.lines k
+        | _ -> ())
+      keys
+  done;
+  if ctx.lines_hi >= level then ctx.lines_hi <- level - 1
 
 (* Emit at a chosen level -- [Writer.with_level] with the [ctx]'s two side tables kept
    honest, and the call every learned constraint goes through (M2-L1, D-0045).
@@ -650,9 +775,61 @@ let memoized ctx (e : Explanation.t) (thunk : unit -> Writer.cid) : Writer.cid =
          its thunk runs ([shallow_hash] reads a nested [Deferred] as a constant, and
          nothing else it reads is mutable). *)
       let h = shallow_hash e in
+      if memo_stats_on then incr ms_lookups;
       match find_memo ctx h e with
-      | Some m -> m.cid
+      | Some m ->
+          if memo_stats_on then incr ms_hits;
+          m.cid
       | None -> remember_with ctx e h (thunk ()))
+
+(* M11-complexity-T10 (D-0158). Share mode's lookup: [memoized] for a [Combine], [Cut]
+   or [Linear], with the line index between the memo and the writer. [line] renders the
+   line -- for a [Combine] or a [Cut] that emits its operands, which is what the line
+   would have done first anyway, so the page gets the same lines in the same order up to
+   this one -- and returns it with the function that writes it. An identical line at or
+   below the current level answers, and [e] is remembered with that line's id at the
+   current level, as any entry is: the line is at or below it, so the entry never
+   outlives the line. Both other choices were measured (D-0158 section 3). Not
+   remembering [e] made every later lookup of a copy render it again, operands and all
+   (rcpsp_11: 9.0 M lookups became 24.8 M). Remembering it at the LINE's level kept every
+   copy of a level-0 line for the rest of the run (cyclic: from 78 s and 181 MB to more
+   than 18 minutes and 7 GB, stopped). *)
+let find_line ctx k =
+  match Lines.find_opt ctx.lines k with
+  | Some (s : stated) when s.s_level <= Writer.current_level ctx.writer -> Some s
+  | _ -> None
+
+let state_line ctx k (cid : Writer.cid) =
+  let level = Writer.current_level ctx.writer in
+  Lines.replace ctx.lines k { s_cid = cid; s_level = level };
+  if level > 0 then (
+    if level >= Array.length ctx.lines_by_level then (
+      let a =
+        Array.make (Stdlib.max (level + 1) (2 * Array.length ctx.lines_by_level)) []
+      in
+      Array.blit ctx.lines_by_level 0 a 0 (Array.length ctx.lines_by_level);
+      ctx.lines_by_level <- a);
+    ctx.lines_by_level.(level) <- k :: ctx.lines_by_level.(level);
+    if level > ctx.lines_hi then ctx.lines_hi <- level)
+
+let memoized_line ctx (e : Explanation.t)
+    ~(line : unit -> line_key * (unit -> Writer.cid)) : Writer.cid =
+  let h = shallow_hash e in
+  if memo_stats_on then incr ms_lookups;
+  match find_memo ctx h e with
+  | Some m ->
+      if memo_stats_on then incr ms_hits;
+      m.cid
+  | None -> (
+      let k, write = line () in
+      match find_line ctx k with
+      | Some s ->
+          if memo_stats_on then incr ms_shared;
+          remember_with ctx e h s.s_cid
+      | None ->
+          let cid = write () in
+          state_line ctx k cid;
+          remember_with ctx e h cid)
 
 (* [Clause lits] -- rup, not pol.
 
@@ -761,12 +938,16 @@ let emit_rup_clause ctx ~origin lits =
    explanation claims, unlike the old [pol <model_id>], at the cost of being exactly the
    "checker searches" case docs/PROOF-FORMAT.md section 2 says to avoid when a [pol] is
    available -- it is not available here. *)
-let emit_linear ctx terms rhs =
+let linear_line ctx terms rhs =
   validate_lits ctx (List.map snd terms);
-  let c = Opb.ge terms rhs in
+  Opb.ge terms rhs
+
+let write_linear ctx c =
   Writer.rup_lazy ctx.writer
     ~origin:(fun () -> Printf.sprintf "linear: %s" (Opb.constr_to_string c))
     c
+
+let emit_linear ctx terms rhs = write_linear ctx (linear_line ctx terms rhs)
 
 (* [Cut (e1, e2, c1, c2)] -- recurse on both reasons, then combine: c1 * e1 + c2 * e2.
 
@@ -796,15 +977,20 @@ let pol_stating ctx ~origin ~claim expr =
   | None -> Writer.pol_lazy ctx.writer ~origin expr
   | Some c -> Writer.pol_concluding_lazy ctx.writer ~origin ~claim:c expr
 
-let emit_cut ~emit ~claim ctx e1 e2 c1 c2 =
+(* The expression and the origin, with the operands emitted; [emit_cut] writes it. Split
+   so that share mode can look the line up before writing it (D-0158). *)
+let cut_line ~emit ctx e1 e2 c1 c2 =
   if c1 < 1 || c2 < 1 then
     invalid_arg
       (Printf.sprintf "Justify.emit: Cut coefficients must be >= 1, got (%d, %d)" c1 c2);
   let id1 = emit ctx e1 in
   let id2 = emit ctx e2 in
-  pol_stating ctx ~claim
-    ~origin:(fun () -> Printf.sprintf "cut(%d*%d + %d*%d)" c1 id1 c2 id2)
-    Pol.(add (mul (id id1) c1) (mul (id id2) c2))
+  ( Pol.(add (mul (id id1) c1) (mul (id id2) c2)),
+    fun () -> Printf.sprintf "cut(%d*%d + %d*%d)" c1 id1 c2 id2 )
+
+let emit_cut ~emit ~claim ctx e1 e2 c1 c2 =
+  let expr, origin = cut_line ~emit ctx e1 e2 c1 c2 in
+  pol_stating ctx ~claim ~origin expr
 
 (* [Combine (summands, divisor)] -- docs/DECISIONS.md D-0013: the "weaken, divide, add"
    derivation. One [pol] step: every summand's [Pol.t] fragment added left to right,
@@ -912,7 +1098,9 @@ let emit_summand ~emit ctx = function
       [ Pol.mul (Pol.id id) c ]
   | Explanation.Weaken lits -> emit_weaken ctx lits
 
-let emit_combine ~emit ~claim ctx summands divisor =
+(* The expression and the origin, with the operands emitted; [emit_combine] writes it.
+   Split so that share mode can look the line up before writing it (D-0158). *)
+let combine_line ~emit ctx summands divisor =
   (* A [Weaken []] summand is a variable with NOTHING to weaken: declared on a single
      value (`var 7..7`), it has no order literal at all -- its whole contribution to the
      row is the constant the encoding already folded into the degree -- so
@@ -946,9 +1134,11 @@ let emit_combine ~emit ~claim ctx summands divisor =
   (* The count now, so that the origin, which the audit keeps for as long as the line
      is live, holds two integers and not the summands. *)
   let n_summands = List.length summands in
-  pol_stating ctx ~claim
-    ~origin:(fun () -> Printf.sprintf "combine(%d summand(s), / %d)" n_summands divisor)
-    expr
+  (expr, fun () -> Printf.sprintf "combine(%d summand(s), / %d)" n_summands divisor)
+
+let emit_combine ~emit ~claim ctx summands divisor =
+  let expr, origin = combine_line ~emit ctx summands divisor in
+  pol_stating ctx ~claim ~origin expr
 
 (* The fragment one [Linear_term] contributes to a bits-arm `pol`, shared by the
    [Combine] rendering (D-0132) and the [Resolve] one (D-0134): the bound line scaled by
@@ -1099,10 +1289,22 @@ let rec emit ctx (e : Explanation.t) : Writer.cid =
      is a caller's mistake in both modes. *)
   | _ when Writer.is_null ctx.writer -> Writer.fresh ctx.writer ~origin:"no-proof"
   | Explanation.Clause lits -> memoized ctx e (fun () -> emit_clause ctx lits)
+  | Explanation.Linear (terms, rhs) when ctx.memo.share ->
+      memoized_line ctx e ~line:(fun () ->
+          let c = linear_line ctx terms rhs in
+          (Rup_line c, fun () -> write_linear ctx c))
   | Explanation.Linear (terms, rhs) ->
       memoized ctx e (fun () -> emit_linear ctx terms rhs)
+  | Explanation.Cut (e1, e2, c1, c2) when ctx.memo.share ->
+      memoized_line ctx e ~line:(fun () ->
+          let expr, origin = cut_line ~emit ctx e1 e2 c1 c2 in
+          (Pol_line expr, fun () -> pol_stating ctx ~claim:None ~origin expr))
   | Explanation.Cut (e1, e2, c1, c2) ->
       memoized ctx e (fun () -> emit_cut ~emit ~claim:None ctx e1 e2 c1 c2)
+  | Explanation.Combine (summands, divisor) when ctx.memo.share ->
+      memoized_line ctx e ~line:(fun () ->
+          let expr, origin = combine_line ~emit ctx summands divisor in
+          (Pol_line expr, fun () -> pol_stating ctx ~claim:None ~origin expr))
   | Explanation.Combine (summands, divisor) ->
       memoized ctx e (fun () -> emit_combine ~emit ~claim:None ctx summands divisor)
   | Explanation.Deferred _ -> memoized ctx e (fun () -> emit ctx (Explanation.force e))

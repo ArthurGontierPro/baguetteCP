@@ -18749,3 +18749,141 @@ A fresh clone of `ebd1c75` on fataepyc-06 (`/scratch/arthur/wave53-learned-gate.
   term per new row. A per-variable integer index would remove the last hash, as RoundingSat's
   arrays do. `Lit.t` has no integer identity, and giving it one is a `lib/proof/` change.
 - `Linear.pb_row` still rebuilds its row per call (D-0140 P2's other half, which is `linear.ml`'s).
+## D-0158  M11-complexity-T10: the memo's identical copies cannot share an entry without changing the proof's bytes; a share mode that writes each identical line once is built, off by default, and turning it on is the user's call
+
+Status: DECIDED for the default (off, every byte as before). OPEN for the user: whether share mode becomes the default (section 5).
+Date: 2026-11-19
+Task: M11-complexity-T10 (agent-memo, `wave53-memo`).
+Touches: `lib/core/justify.ml` (share mode: `create_sharing`, the `Lines` index, `memoized_line`;
+`cut_line`, `combine_line` and `linear_line` split out of `emit_cut`, `emit_combine` and
+`emit_linear` with the same order of side effects; `BAGUETTE_MEMO_STATS`, `memo_stats`),
+`test/unit/test_justify.ml` (`test_share_m11t10`, both modes over one scene, and a veripb lane of
+a share-mode proof). `lib/core/explanation.ml` is unchanged, since the structural equality added
+on the way was removed again (section 3). Follows D-0149 section 3 fix 3, D-0140 J1, D-0145.
+
+### 1. The finding: an identical copy is a line of its own, so sharing it changes the proof
+
+The memo answers "have I emitted this VALUE before", by `==`. D-0149's 388 copies on cable are
+structurally identical values built separately, and each one missed the memo, was emitted and
+wrote its own line, identical to the first copy's but for its id. The new `BAGUETTE_MEMO_STATS=1`
+counts it on the default binary. On `2020_cable_tree_wiring_R046` at 300 nodes the memo takes
+17 513 986 lookups, has no hit and holds 17 513 986 entries at its peak, with a longest bucket of
+1 326. On `2011_cyclic-rcpsp_easy_6` at 10 000 nodes it takes 9 538 832 lookups for 106 hits.
+
+So "one entry for identical explanations" and "every proof line and every id byte-identical"
+cannot both hold. An entry shared by two copies is one line where the proof had two, and every id
+after it moves. Of cable's 17.5 M lookups, 17 314 925 find an identical line already on the page,
+and 8 210 033 of cyclic's 9.5 M do (section 4).
+
+A byte-identical change can only make the same walk cheaper, and for that it must tell two copies
+apart without comparing them. An `Explanation.t` cannot do that, because a copy has no identity
+but its address. The remedy is D-0140 J1's alternative, an id stamped in each explanation at
+creation, which changes the type and therefore needs the user's record. It is not done here.
+
+### 2. What was built: share mode, off by default
+
+It is turned on by `BAGUETTE_MEMO_SHARE=1` (or `Justify.create_sharing ~share:true`). For a
+`Combine`, a `Cut` or a `Linear` that misses the memo, `memoized_line` first renders the line,
+emitting the operands in the order the line itself would emit them, so the page gets the same lines
+in the same order up to this one. It then looks the LINE up in `Lines` (the `Pol.t` expression of
+a `pol`, the `Opb.constr` of a `rup`). An identical line at a level at or below the writer's current
+level answers with its id, and nothing is written. The copy is then remembered in the memo with
+that id at the current level, as every entry is.
+
+- Two identical `pol` expressions, or two identical `rup` targets, derive the same constraint
+  whatever explanations they came from. The level condition is the claim index's condition 2
+  (M2-T9). `w l` retires levels `>= l`, so a line at or below the citing level is not retired
+  before the citing line, and an entry at the current level is wiped no later than the line it
+  names. veripb 3.0.2 accepts every share-mode proof measured (sections 4 and 6).
+- The key is the line and not the explanation, so no structural equality on `Explanation.t` is
+  needed and the header's warning about `Deferred`'s mutable field stays untouched.
+- Off, the code path is the one before this task, and every byte is the same (section 6).
+
+### 3. The designs measured and dropped on the way (rcpsp_11 and cable)
+
+| design | what went wrong |
+|---|---|
+| `Explanation.equal` on a hash hit, shallow buckets | rcpsp_11 keeps buckets of up to 7 730 distinct `Combine`s that agree on their first four summands, and comparing each structurally was 90 % of the run |
+| the same, keyed by a full structural hash | rcpsp +71 % instructions, because the hash re-walked every nested operand at every lookup (46 % of the run) |
+| keyed by a hash of every top-level summand | rcpsp 21 times the instructions, because the near-twins differ below the top |
+| the line as key, the copy not remembered | rcpsp's 9.0 M lookups became 24.8 M (each lookup of a copy rendered it again), +77 % |
+| the line as key, the copy remembered at the LINE's level | every copy of a level-0 line stayed for the rest of the run, and cyclic went from 78 s and 181 MB to more than 18 min and 7 GB (stopped) |
+| the line's text as key (a string, which the collector does not scan) | cable +12 % against the `Pol.t` key, rcpsp -1 % |
+
+The design kept is the `Pol.t` key with the copy remembered at the current level.
+
+### 4. Measured on `fataepyc-06`, proof mode, `perf stat -e instructions:u`
+
+"main" is the branch point `9a9c461` (md5 `64ec63e0`, gate 61's binary), "branch" is `c488b8e`
+(md5 `59368b5f`), off and with `BAGUETTE_MEMO_SHARE=1`. Budgets are `BAGUETTE_NODE_LIMIT`, 10 000
+for D-0140's six, 300 for cable (D-0149's) and 400 for cargo. The runs are under
+`/scratch/arthur/wave53-memo-runs/m/`. Instructions in G, `.pbp` in MB, peak RSS.
+
+| instance | main | branch, off | branch, share | `.pbp` off / share | RSS off / share | memo off: lookups, hits, peak, longest | shared |
+|---|---|---|---|---|---|---|---|
+| H_qr48_bag_def | 28.59 | 28.59 | 28.59 | 54.7 / 54.7 | 83 / 85 MB | 9 982, 0, 6, 1 | 0 |
+| H_qr72_bag_def | 40.50 | 40.52 | 40.52 | 78.2 / 78.2 | 101 / 103 MB | 9 967, 0, 6, 1 | 0 |
+| 2013_rcpsp_11 | 194.23 | 194.46 | 222.74 (+14.5 %) | 420.7 / 374.3 | 164 / 172 MB | 8.97 M, 4.37 M, 25 557, 7 730 | 543 369 |
+| 2012_mspsp_hard_01 | 122.31 | 122.38 | 125.65 (+2.7 %) | 226.1 / 221.2 | 364 / 359 MB | 1.67 M, 0.79 M, 2 598, 108 | 88 855 |
+| 2011_cyclic-rcpsp_easy_6 | 645.99 | 646.58 | 584.68 (-9.6 %) | 2 022.8 / 321.7 | 193 / 186 MB | 9.54 M, 106, 32 215, 87 | 8.21 M |
+| 2014_openshop_gp10-4 | 196.13 | 195.92 | 196.34 | 505.0 / 505.0 | 607 / 631 MB | 8 309, 0, 324, 1 | 0 |
+| 2020_cable_tree_wiring_R046 | 797.16 | 797.79 | 621.60 (-22 %) | 1 887.2 / 114.1 | 21.05 / 15.97 GB | 17.5 M, 0, 17.5 M, 1 326 | 17.3 M |
+| 2017_cargo_challenge01_0s_1913 | 123.16 | 122.97 | 122.90 | 0.005 / 0.005 | 268 / 268 MB | 0 lookups | 0 |
+
+Every run of the branch, in both modes, prints main's stdout and main's `--stats` search counters.
+Off, its `.pbp` is main's byte for byte on all eight. Cargo's time is PB analysis (D-0149), and it
+never reaches the memo by node 400.
+
+Share mode is a large proof and memory saving where propagators rebuild derivations (cable loses
+94 % of its proof and 24 % of its RSS, cyclic 84 % of its proof). It costs instructions where most
+misses are new lines (rcpsp +14.5 %, mspsp +2.7 %), because every miss is rendered and hashed once
+more before it is written.
+
+The differential lane with sharing on (`memo-gate.sh`, `--tier all`, 301 runs at the lane's node
+budgets, each under `ulimit -v 4000000`) reports 85 of 301 runs different from the reference. On
+all 85 the only lines that differ, besides the `.pbp` hash and the WORK counters, are two `--stats`
+counters, `pol` (the `pol` lines written) and `pol-tokens` (their operands and operators). They
+measure the proof's size. `observe.py` files them under SEARCH only because they are not in its WORK
+list, and nothing reads them back, since `Writer.n_pol` and `pol_tokens` are read by `main.ml`'s
+stats printer and by nothing in `lib/`. On every one of the 301 runs, stdout, the exit code, the
+`.opb` hash and every other counter (nodes, failures, learned, the LBD and width histograms, the
+retention line) equal the reference, and on the 216 others the `.pbp` hash is equal too, because
+nothing was shared there. The 85 runs are 12 instances (cyclic, mspsp, rcpsp_11, rcpsp_12,
+lot-sizing, parity-learning, soccer, chessboard, evm, bacp and the two opd) under their
+configurations. `pol` lines go down on all 85 and up on none. Over the 301 runs they fall from
+70.8 M to 48.4 M (-32 %) and `pol` tokens from 1 226 M to 670 M (-45 %). Depending on the configuration,
+lot-sizing loses 67 % to 92 % of its `pol` lines, cyclic 80 % to 84 %, soccer up to 85 % and
+rcpsp_11 12 % to 33 %. Veripb
+`d5644ca4` accepts all 274 kept proofs (the other 27 runs are the `noproof` configuration), 272
+with `s VERIFIED NO CONCLUSION` and two with `s VERIFIED BOUNDS` at the optimum. This check ran
+veripb under `ulimit -v 16000000`, because the cyclic proofs are large. The model suite with
+`BAGUETTE_MEMO_SHARE=1` passes 198 of 198 with every proof checked. The per-run counters are in
+`/cluster/arthur/baguette-results/wave53-memo/share-lane-pol-counters.txt`.
+
+### 5. The decision left to the user
+
+Turning share mode on by default would shrink proofs by up to 16 times on instances like cable and
+cyclic and keep the search identical. It would change the `.pbp` hash and the `pol` and `pol-tokens`
+counters of 85 of the differential lane's 301 reference runs, which would then be re-recorded in a
+commit of their own. Stdout and every other counter stay. It costs up to +14.5 % instructions on
+rcpsp_11. The switch is one line (`share_default`). The alternative that keeps the bytes is D-0140
+J1's id in `Explanation.t`, which would make the walk O(1) but still write 1.9 GB on cable.
+
+### 6. The gate (default mode)
+
+`memo-gate.sh` on a fresh clone of `95759c5` (code `c488b8e`), on `fataepyc-06`. `make check` rc 0
+under `ulimit -v 4000000`, 4 256 ok and 0 FAIL, 198 models, peak RSS 100 MB. The binary is
+`59368b5f`. Against `base.exe` (`9a9c461`, md5 `64ec63e0`, gate 61's binary), the 198 models give
+0 differences over their four artefacts (stdout, exit code, `.opb`, `.pbp`). The differential lane
+gives 301 of 301 runs equal to the reference and its debug pass 289 of 289. The scaling lane is
+within every threshold. The share-mode checks are in section 4. The gate's status, the share
+lane's logs and the section 4 runs (without their proofs) are copied to
+`/cluster/arthur/baguette-results/wave53-memo/`.
+
+### 7. Not done
+
+- The id in `Explanation.t` (section 1), a type change for the user's record.
+- Share mode renders a missed line twice when it writes it, once for the key and once in the
+  writer. Handing the writer the rendered expression would remove that, and is `writer.ml`'s change.
+- `Resolve` and `Clause` are not in share mode. A `Clause` already goes through the claim index,
+  which is the same sharing for clauses, and a `Resolve` answers through `defining_line`.
