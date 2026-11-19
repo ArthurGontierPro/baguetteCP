@@ -17295,3 +17295,287 @@ which is why it stops inside the second conflict's trace and why the 120 s run f
   252 open levels and the flush, linear, and was not touched.
   `2020_hoist-benchmark-for-minizinc_PU_3_8_5` (D-0137 section 13.3, strategy flags only)
   was not re-measured.
+
+## D-0153  M8-bits-encoding: PB conflict analysis over rows with a bits term -- every bits block is INSTANTIATED through its atom's bridge before the analysis resolves on it
+
+Status: DECIDED (built, measured; the bits0 lane reference is the orchestrator's to re-record after the gated merge)
+Date: 2026-11-19
+Task: M8-bits-encoding, D-0134 section 11's lift (agent-pbbits, `wave52-pbbits`).
+Touches: `lib/core/ladder.ml` (the bits arm at its foot: `bits`, `instantiate`,
+`derive_instantiated`), `lib/core/pb_analysis.ml` (`?bits`, the conflict row and every reason
+instantiated, `Mixed_row` fallback, `bits_bridges`, `bits_of_ctx`), `lib/core/prop/linear.ml`
+(`pb_row ?bits_n`), `lib/flatzinc/compile.ml` (`pack_linear`/`pack_arith_row`'s `~mixed` now
+carries the bit counts; the dispatch block is untouched), `lib/core/search.ml` (the PB-analysis
+call site, one argument), `test/unit/test_ladder.ml` (section (e)), `test/unit/test_compile.ml`
+(the mixed row is the .opb's row), `test/models/bits_pb_learn_sat.fzn`,
+`bits_pb_order_pivot_sat.fzn`, `bench/bits_spike/probe_pbbits.sh`. `learned.ml` is NOT touched.
+Follows D-0134 section 11 (the gap and the design), D-0132 sections 2.1-2.8 (the bridges, the
+atom at level 0), D-0130 sections 5 and 7, D-0044 (the clause path stays), D-0127 (where `rup`
+is and is not enough).
+
+### 0. The sentence
+
+A row with a term on the bits encoding is offered to PB conflict analysis as the .opb holds it
+(`a * 2^i` on `x_bit_i`), and before anything resolves on it every bits block is replaced
+through ONE line the proof already has or mints at level 0 -- the bridge of the atom at the
+bound in force (B2 for an upper bound, B1 for a lower, D-0130 section 5.1), the declared-bound
+row at a declared bound, and for the pruned block of a reason the PIVOT's own atom -- so the row
+that reaches `Reduce`, `Ladder.lift`, the criterion and `Pb` is over order literals and atoms
+only, and the learned row is stated by `ia` as before.
+
+### 1. Checker facts, measured before writing (`bench/bits_spike/probe_pbbits.sh`, VeriPB 3.0.2 d5644ca4, fataepyc-06, 2026-11-19)
+
+Model M (satisfiable, x = 4, y = 7, z = 1): `x, y in 0..7` on 3 bits, `z in 0..3` on the
+ladder; R1: `x + z <= 5` (mixed), R2: `x + y >= 11`. The scene: the decision z >= 3, R1 pushes
+`x <= 2` (pivot `~x_ge_3`, a bits term pruned), R2 conflicts. Model S (satisfiable): R3:
+`z + y <= 2`, R4: `x + z >= 4`; the decision x <= 1, R4 pushes z >= 3 (an ORDER pivot in a
+mixed reason), R3 conflicts.
+
+| probe | line(s) | verdict |
+|---|---|---|
+| p1 | the conflict row at the conflict `pol @R2 @x3b + @uby +` (B2 of `x_ge_3`, y's declared high) = `5 x_ge_3 >= 2`; the reason at the pivot's atom `pol @R1 @x3a +` (B1) = `3 ~x_ge_3 + ~z_ge_1..3 >= 1` (both pinned by `e`); `pol @i1 3 d`; `pol @i0 @r1 5 * +`; `ia +5 ~z_ge_1 +5 ~z_ge_2 +5 ~z_ge_3 >= 2` | **s VERIFIED** |
+| p2 | B1 cited where B2 belongs in the conflict row's instantiation | **refused** at the `ia`: "Expected constraint is not syntactically implied by the constraint at the hint." |
+| p3 | B2 cited where B1 belongs in the reason's | **refused**, same wording |
+| p4 | the learned row over-claimed (degree 3: `z <= 1`, true in the model, not what the derivation gives) | **refused**, same wording |
+| p5 | B1 of `x_ge_3` under the flipped witness `x_ge_3 -> 1`. FIRST over m.opb, where it was ACCEPTED: R2 forces `x >= 4` at the root, so the flipped witness is right in every model (D-0132 section 5.4's lesson). Over t.opb (R1 alone, x = 0 feasible) | **refused**: "Proofgoal #1 could not be autoproven. Please add an explicit subproof for proofgoal #1." (p5ok, the right witness, s VERIFIED) |
+| p6 | ALTERNATIVE "the bits row itself as an antecedent": `pol @R2 @R1 + @uby +` (x's whole block cancels, no atom), `ia +1 ~z_ge_1 +1 ~z_ge_2 +1 ~z_ge_3 >= 2` | **s VERIFIED** -- and STRONGER than p1 (`z <= 1` against `z <= 2`): the reason is tight here |
+| p7 | ALTERNATIVE "the sparse chain as the ladder of a bits term": the staircase `X' <= 2 + 2 x_ge_3 + 3 x_ge_5` over two minted atoms and their link, as `rup` | accepted at 3 bits |
+| p7w | the same staircase at 8 bits (atoms at 100 and 200) | **refused**: "The constraint is not implied by reverse unit propagation (RUP) ..." -- D-0127's caveat, as D-0134 section 11 argued |
+| p8 | p1's learned row as a bare `rup` | accepted at 3 bits; not relied on |
+| s1 | S's scene: `pol @R3 @lby +`; `pol @R4 @x2b +` (B2 of `x_ge_2`, x's bound read at the propagation); `pol @i1 ~z_ge_2 + ~z_ge_3 +` (the reduction's weakening); `pol @i0 @r1 +`; `ia +6 x_ge_2 +1 ~z_ge_2 +1 ~z_ge_3 >= 1` | **s VERIFIED** |
+| s2 | B1 cited where B2 belongs in the reason | **refused** at the hint wording |
+
+So the shape is the one D-0134 section 11 named: the row INSTANTIATED at the propagation (p1,
+s1); a wrong bridge is refused at the `ia` that states the learned row, at the checker's
+judgement on the `pol` (p2, p3, s2); the sparse chain as a ladder is not one step and its `rup`
+does not survive width (p7w). The third shape (p6) is stronger where it applies and is left as
+the next step, for the reasons in section 2.5.
+
+### 2. The decisions
+
+1. **Where the bits are lifted: in the reason row and the conflict row, before anything
+   resolves.** `Ladder.instantiate ~bits ~row ~pivot ~falsified` finds every bits block of the
+   row by its bit 0 (one pass over the sorted terms) and adds, at multiplier `a` (the block's
+   coefficient on bit 0), one line per block: a POSITIVE block `a * X'` (a row helped by a large
+   x) reads x's UPPER bound u -- B2 of `x_ge_(u+1)`, leaving `a K x_ge_(u+1)` and the degree
+   lowered by `a (u - lo)`, or `@ub` at the declared high, leaving nothing; a NEGATIVE block
+   reads the LOWER bound l -- B1 of `x_ge_l`, leaving `a k ~x_ge_l`, or `@lb`. The bridges are
+   summed and added to the row in one `Learned.combine` (they name disjoint variables). A bit
+   left over, a block of a variable the encoding does not know, or a pivot outside the declared
+   range is `Mixed_row`, a fallback with its reason, never a row with a bit in it. So no learned
+   row, no criterion, no level computation and no `Pb` instance ever sees a `Lit.Bit`.
+2. **Which bound: the one in force under the frozen predicate, and the PIVOT's atom for the
+   pruned block.** The bound is read off the same `falsified_before ~at` the reduction uses
+   (I-X6), by binary search over the declared range for the tightest `u` whose atom is reported
+   falsified (O(log w) asks of the bound history). Its atom is then falsified under that
+   predicate, so the block contributes to the slack exactly what the integer propagator read.
+   The block of the pivot's variable, when its direction matches the pivot's, is instantiated at
+   the pivot's own value (B1 of `x_ge_v` for the pivot `~x_ge_v`, B2 for `x_ge_v`), which puts
+   the pivot in the row at `a k_v` (resp. `a K_v`): the learned row names the pivot, and the
+   entry that falsified it may have pushed further. The arithmetic, for an upper push from
+   `Linear` with the others at their bounds: Linear deduced `a X' <= K` with `K / a < k_v`; the
+   instantiated row is `a k_v ~x_ge_v + (falsified atoms) >= a k_v - K`, slack `K < a k_v`, so
+   the pivot is propagated and `Reduce`'s postcondition (slack exactly 0 after the division)
+   holds. A pruning that settled past a hole can fall short, and the postcondition says so: a
+   fallback (3 such in the suite at `W = 0`, section 5).
+3. **The conflict row the same way, at the conflict, with no pivot.** Every atom is then
+   falsified and the slack is the integer slack `Linear` found negative.
+4. **Minted on demand, at level 0.** `bits.bridge` is `Encoding.ensure_atom` (through
+   `Pb_analysis.bits_of_ctx`), which writes the `red` pair and its sparse links the first time
+   the atom is named and memoises it after; almost every atom asked for is already on the page,
+   because the trace names the same bounds. A bridge is a level-0 line never deleted before the
+   conclusion (D-0132 section 2.8), so pb_analysis.ml's I-S4 discharge stands with one more kind
+   of leaf (its header says so) and the I-S4 `Debug.check` at the call site is unchanged. The
+   atoms are minted during the analysis, before the learned row's `pol`, also when the analysis
+   later falls back; that is a level-0 line like any other, and it keeps the debug and release
+   builds on the same line order. `ensure_atom`'s precondition (no root contradiction) holds:
+   PB analysis runs at a conflict below the root.
+5. **Not taken: the bits row itself as an antecedent (p6).** Adding conflict and reason with
+   multipliers that cancel the pivot variable's whole block is IntSat's integer elimination, and
+   p6 shows it can learn more. It leaves every other variable's block in the learned row, and a
+   `Bit` is a literal the criterion, `asserting_level`, the pivot choice and `Pb` cannot read (it
+   is never falsified by a bound); where the reason is not tight, `b * slack_C + a * r` can be
+   non-negative and the conflict is lost to rounding, which `Reduce` exists to repair over 0-1
+   literals and has no counterpart for over an integer block. It would be its own row, with a
+   bits-aware slack.
+6. **The row is offered as the .opb holds it, which needs `Linear.pb_row ?bits_n` and
+   `compile.ml`'s `~mixed`.** D-0132 section 2.7 packed a mixed `Linear` WITHOUT its row; now
+   `~mixed` is `None` (no bits term: the order expansion, byte for byte what it was) or
+   `Some bits_n` (`Encoding.bits_n`), and `Linear.pb_row ~bits_n` spells a bits term as
+   `a * 2^i` on `x_bit_i` with the same `a * lo` fold. `test_compile` asserts that the row
+   offered is the committed .opb row term for term; the `int_lin_le`, `int_lin_eq`, arith and
+   `bool2int`-over-bits faces all go through it. `pb_row` also lost its quadratic `acc @ block`
+   (the same list).
+7. **No `learned.ml` change, no new `Explanation` constructor, no search.ml change beyond the
+   call site's `~bits:(Pb_analysis.bits_of_ctx ctx)`.** The derivation is `Combine`s of
+   `Model_row`s; `Justify` writes it as it writes every PB derivation (D-0131: `pol`, stated by
+   `ia`).
+
+### 3. What landed (agent-pbbits, `wave52-pbbits`, commits `4f4bcdc` .. `295b313` and this record)
+
+- `4f4bcdc` the probe (`bench/bits_spike/probe_pbbits.sh`) and the claim amended to name
+  `linear.ml`'s `pb_row` and `compile.ml`'s pack lines.
+- `829e9a6` the arm: `Ladder.instantiate` / `derive_instantiated` / `has_bits` / the four rows
+  (`b1_row`, `b2_row`, `lb_row`, `ub_row`, exactly `Encoding`'s), `Ladder.bits` and `no_bits`;
+  `Pb_analysis.analyse ?bits` instantiating the conflict row (at the conflict) and every reason
+  (at the propagation, pivot's atom), `Mixed_row`, `t.bits_bridges`, `bits_of_ctx`;
+  `Linear.pb_row ?bits_n`; `compile.ml`'s `linear_row ~mixed`; the call site's one argument;
+  test_compile's mixed-row lane rewritten (it asserted "no row", it now asserts "the .opb row").
+- `6428772` the lanes and the two models (section 4).
+- `295b313` the bridges summed and added in one `Learned.combine`, a block found by its bit 0
+  in one pass, `pb_row` without its quadratic append. Same rows: the suite at `W = 0` is byte
+  for byte `829e9a6`'s (193 models, artefacts and every counter), and on rcpsp-wet it doubles
+  the nodes `W = 0` reaches in 45 s (1 589 with `829e9a6`, 3 248 with this).
+
+### 4. Tests
+
+- **test_ladder (e1)**, the arithmetic on probe p1's scene, by hand: the reason at the pivot's
+  atom is `3 ~x_ge_3 + ~z_ge_1..3 >= 1` through B1 alone; the conflict row at the conflict is
+  `5 x_ge_3 >= 2` through B2 and y's `@ub`; each is entailed by its premises at every 0-1 point
+  (bits included); the division's postcondition holds on the reason; the elimination gives p1's
+  verified row; with `no_bits` a mixed row is an `Error`, never a row with a bit in it.
+- **(e2) / (e3)**: `bits_pb_learn_sat` (every term on bits, bits pivots; 3 conflicts, 3 PB rows)
+  and `bits_pb_order_pivot_sat` (width-1 order pivots in mixed rows; 4 and 4) solved at
+  `--bits-above 0` in their own search order: no fallback, at least one row through bridges, no
+  bit in any learned row, every cited id positive and equal to the antecedents, every learned row
+  entailed by its premises at every 0-1 point (the oracle ran on all seven rows, none skipped),
+  veripb accepts. Both models are SATISFIABLE, so every `red` pair is checked over a database
+  that does not prove everything (D-0053; probe p5 shows the alternative passing vacuously).
+- **(e4) the breaks**: the conflict row's instantiation (the first `combine(4 summand(s), / 1)`
+  in `bits_pb_learn_sat`) corrupted by `Writer.Mutation`'s `Swap_citation` and
+  `Truncate_derivation`; each knob fired and veripb refused at "not syntactically implied by the
+  constraint at the hint" (the learned row's `ia`), matched whole.
+- **test_compile**: the mixed rows `x + y <= 7` and `y - z <= 0` at `W = 0` offer exactly the
+  committed .opb row, bits and all.
+- `make check`'s `--bits-above 0` lane runs both new models (they are `bits_*`), proof verified,
+  `--no-proof` stdout identical.
+
+### 5. Measurements (fataepyc-06, VeriPB 3.0.2 d5644ca4; outputs under `/scratch/arthur/wave52-pbbits-out/`)
+
+Binaries: before = `bab0cce2` (`4f4bcdc`, main's `lib/` at `ef6e659`), after = `bc83a6da`
+(`295b313`). Suite runs `sA-*` / `sC-*`, Challenge `cA` / `cC` (45 s) and `nA` / `nC` (a fixed
+node budget, the same for both binaries).
+
+**The suite** (the 193 models of `ef6e659`; every proof verified on both sides, `--stats`):
+
+| W | binary | PB analyses | PB rows learned | fell back | ...on a mixed `int_lin_le` row | models learning a row |
+|---|---|---|---|---|---|---|
+| none | before | 373 | 154 | 219 | 0 | 19 |
+| none | after | 373 | 154 | 219 | 0 | 19 |
+| 0 | before | 407 | 143 | 264 | 110 | 9 |
+| 0 | after | 407 | **213** | **194** | **0** | **19** |
+
+With the two new models (195): `W = 0` 414 / 220 / 194, 21 models; `W = none` 380 / 157 / 223.
+At `W = none` every artefact (`.out`, `.rc`, `.opb`, `.pbp`) and every non-timing `--stats` line
+is byte-identical on the 193. At `W = 0`, stdout and rc are byte-identical on all 193; ten
+proofs change (`backjump_lineq_unsat`, `bits_opt_min_sat`, `bits_search_sat`, `chain_sat`,
+`guess_wrong_sat`, `ladder_lift_unsat`, `near_limit_unsat`, `offset_unsat`, `opt_min_sat`,
+`width_sat_depth`), the ten that now learn the 70 rows (49 of them `width_sat_depth`'s, which
+learns 49 of 49 where `W = none` learns 26); 18 more models change only their `pb-whys`, because
+the 110 mixed-row fallbacks there now fall back one row further on. The 194 that remain, by
+recorded reason: `<unknown>` (a decision or a declaration) 36, no pivot left 30,
+`learned_clause` 19, `int_ne_reif` 18, maxmin selector rows 17 + 2, `int_ne` 12,
+`int_lin_le_reif` 12, `cumulative` 11, `array_int_element` 11, `regular` 6, `bool_clause` 5,
+`global_cardinality` 4, the Boolean families 7, `int_lin_ne` 1, and **3 reduction
+postconditions** (`median_assign_sat`, `trace_settle_sat`, `trace_settle_holes_sat`: a pruning
+that settled past a hole, section 2.2). No `Mixed_row` fallback anywhere.
+
+**The five Challenge instances of D-0134 section 11**, first as D-0134 ran them (`--time-limit
+45 --stats --proof`, every proof verified; nodes / conflicts / PB analyses / rows learned /
+fallbacks / incumbent):
+
+| instance | W | before | after |
+|---|---|---|---|
+| `2017_rcpsp-wet_j90_48_4-wet` | none | 824 / 239 / 233 / 44 / 189 / 1878 | 850 / 249 / 240 / 46 / 194 / 1874 |
+| | 0 | 7 029 / 3 073 / 2 951 / **79** / 2 872 / 1689 | 3 248 / 1 308 / 1 186 / **451** / 735 / 1719 |
+| `2019_rcpsp-wet-diverse_j30_44_8-wet-diverse-4` | none | 99 / 17 / 15 / 6 / 9 / 413 | the same |
+| | 0 | 99 / 17 / 15 / **0** / 15 / 413 | 99 / 17 / 15 / **5** / 10 / 413 |
+| `2023_roster-shifts-bool_s50_e50_c3` | none | 62 / 3 / 3 / 2 / 1 / 5272 | the same |
+| | 0 | 1 902 / 921 / 921 / **0** / 921 / 5272 | 804 / 374 / 374 / **372** / 2 / 5272 |
+| `2026_workforce-alloc_instance_202` | none | 3 799 / 1 726 / 1 726 / 191 / 1 535 / 1125 | 3 787 / 1 721 / 1 720 / 186 / 1 534 / 1125 |
+| | 0 | 22 672 / 11 164 / 11 163 / **0** / 11 163 / 1125 | 23 527 / 11 591 / 11 590 / **0** / 11 590 / 1125 |
+| `2025_fbd1_FBDk06` | none | 131 / 62 / 57 / 32 / 25 / 117 | 134 / 64 / 58 / 32 / 26 / 117 |
+| | 0 | 132 / 63 / 57 / 32 / 25 / 117 | 137 / 65 / 60 / 33 / 27 / 117 |
+
+All twenty proofs VERIFIED (VeriPB, `NO CONCLUSION` at the limit; workforce-alloc at `W = none` takes the checker 1 401 s, at `W = 0` 748 s, as before the change). The
+`W = none` lines run the same code on both sides (the suite says byte for byte); what moves
+there is what a time limit moves under a shared node's load.
+
+A time limit compares two different searches, so the same five were run at a FIXED node budget
+(`BAGUETTE_NODE_LIMIT`, the same for both binaries) at `W = 0`:
+
+| instance | nodes | conflicts | PB rows, before -> after | wall, before -> after | proofs |
+|---|---|---|---|---|---|
+| rcpsp-wet | 1 500 | 552 | 28 -> **126** | 6.4 s -> 12.2 s | both VERIFIED |
+| rcpsp-wet-diverse | 90 | 12 | 0 -> **5** | 9.0 s -> 9.4 s | both VERIFIED |
+| roster-shifts-bool | 900 | 422 | 0 -> **420** | 22.0 s -> 51.2 s | both VERIFIED |
+| workforce-alloc | 3 000 | 1 406 | 0 -> 0 | 5.8 s -> 5.6 s | both VERIFIED |
+| fbd1 | 90 | 42 | 23 -> 23 | 33.8 s -> 33.4 s | both VERIFIED |
+
+**At equal nodes the search is the same on all five** (decisions, conflicts, depth and stdout
+identical): the learned PB rows propagate (roster: 420 instances, 428 bound moves) but move
+nothing the learned clauses do not move at the same node. What this row buys on these five is
+the proof's learned object -- a PB row learned beside the clause, on 420 of roster's 422 conflicts and
+126 of rcpsp-wet's 552 (28 before) -- at a time cost of 1.0x to 2.3x per node, which in 45 s is fewer nodes
+(rcpsp-wet 7 029 -> 3 248, roster 1 902 -> 804) and on rcpsp-wet a worse incumbent at the limit
+(1689 -> 1719; the 1 500-node runs reach the same 1819). A `perf` profile of roster at 900
+nodes puts 45 % of the time in the OCaml GC and 14 % in `Pb`'s slack propagation of the learned
+rows: the list-based `Learned` arithmetic over rows of hundreds of bits blocks, and the learned
+instances themselves, not the instantiation (its one `combine` per row, `295b313`, is what took
+rcpsp-wet from 1 589 to 3 248 nodes in 45 s). The cost is the PB machinery's, paid now where it
+was not paid before; D-0130 section 14's rule was about the fallback rate, and the rate is what
+moved.
+
+**workforce-alloc is not this row's.** D-0134 section 11 read its 0 at `W = 0` as the bits arm.
+With an uncapped `pb-whys` (a throwaway build, `pb_reason_cap` raised, not committed) at 3 800
+nodes both thresholds fall back on the same 555 `bool_clause`, 493 `learned_clause`, 417
+`int_lin_le_reif`; the difference is `int_eq_reif`, 64 fallbacks at `W = none` against 256 at
+`W = 0` -- exactly the 192 rows `W = none` learns. `int_eq_reif` over a bits scope is built with
+its A/B pair (D-0134 section 8) and offers no row; over the ladder its conflicts resolve through
+rows that do. That is the next family to lift, not this one.
+
+### 6. The differential lane, and exactly which `bits0` runs change
+
+The gate's two passes on `295b313` (below): every configuration but `bits0` equals the
+reference on every instance, in both passes; in `bits0` these eight runs differ, the same eight
+in the release pass (293 of 301 equal) and the debug pass (281 of 289 equal):
+
+| instance (budget) | what differs | PB rows, before -> after | proof |
+|---|---|---|---|
+| `2011_cyclic-rcpsp_easy_6` (2 000) | PB rows; search counters, the tree the same (1 018 decisions) | 0 -> 5 | VERIFIED |
+| `2012_amaze_2012-06-29` (6 000) | PB rows; the tree the same (3 405 decisions) | 0 -> 2 | VERIFIED |
+| `2012_parity-learning_48_24_6.2` (4 000) | the search (2 008 -> 2 009 decisions) | 0 -> 172 | VERIFIED |
+| `2015_opd_small_bibd_10_30_09` (4 000) | the search (2 336 -> 2 334) | 0 -> 103 | VERIFIED |
+| `2017_opd_small_bibd_08_28_14` (5 000) | the search (2 855 -> 2 858) | 0 -> 124 | VERIFIED |
+| `2011_bacp_bacp-22` (6 000) | `pb-why` only (the first fallback is now `bool2int`, not a mixed `int_lin_le`) | 0 -> 0 | VERIFIED |
+| `2018_soccer-computational_xIGData_24_16_14_2` (1 500) | `pb-why` only, the same | 0 -> 0 | VERIFIED |
+| `2019_fox-geese-corn_foxgeesecorn_54` (3 000) | `pb-whys` counts only | 0 -> 0 | VERIFIED |
+
+Each was re-run at its lane budget with `--bits-above 0 --proof` and checked, with the new and
+the old binary (`b0C/`, `b0A/`): sixteen VERIFIED. Wall time on the changed searches moves by
+under 10 % (parity 4.57 -> 4.87 s, the two opd 3.26 -> 3.56 s and 4.03 -> 4.36 s). The
+reference is NOT re-recorded here: the orchestrator re-records `bits0` after the gated merge
+(D-0141's rule).
+
+### 7. The gate (fresh clone of `295b313` on fataepyc-06, `/scratch/arthur/wave52-pbbits-gate.*`)
+
+`make check` rc 0 (31.5 s, peak RSS 100 176 kB); the 195 models at default flags against gate
+57's binary `9571b17c`: 0 artefact differences (`.out`, `.rc`, `.opb`, `.pbp`); `make diff
+--tier all -j 24`: 293 of 301 equal, the eight `bits0` runs of section 6; `--debug`: 281 of 289,
+the same eight; `make scaling`: ok. The forced `dune runtest` and every `bits_*` model at
+`--bits-above 0` (proof verified, `--no-proof` stdout identical) are inside `make check`.
+
+### 8. What is left
+
+1. **The integer elimination (probe p6).** Cancelling the pivot variable's whole block by
+   adding conflict and reason learns more where the reason is tight. It needs a slack, a level
+   and a pivot over a bits BLOCK (its bound, not its bits), i.e. a learned row that may keep
+   blocks and a `Pb` that propagates them; and a rounding answer where the reason is not tight.
+2. **`int_eq_reif` / `int_ne_reif` and `Ne` over bits offer no row** (their instances stand for
+   two or four rows, D-0054); workforce-alloc's PB rows at `W = none` are that family's
+   (section 5). Maxmin's selector rows likewise.
+3. **The PB machinery's cost on wide rows** (section 5's profile): GC-heavy list arithmetic in
+   `Learned` and the learned instances' propagation. `learned.ml` is outside this row (it was
+   M11-T4 part 2's this wave); a sorted-array `Learned` and a cap on the learned PB instances
+   registered are the two levers.
+4. The `bits0` reference, for the orchestrator.
