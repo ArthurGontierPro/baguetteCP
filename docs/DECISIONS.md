@@ -16982,3 +16982,28 @@ saving with the M7-T31 warning; an explicit `--search` and `--restarts` win over
 side of it; `-t 2500` is 2.5 s; enumeration on the satisfaction model exits 3 with stdout empty;
 six malformed arguments exit 2. MiniZinc's own handling (section 1) is not a unit lane, since
 the suite does not depend on a MiniZinc install; section 3's runs are the end-to-end evidence.
+
+### 7. The gate (fataepyc-06, fresh clone of `wave51-flags` at `362066a`, binary md5 `3298a0cdc8a6b13d7fb045116e87e3ca`)
+
+`/scratch/arthur/gate53.sh` without its two `--update` lines, so no lane reference was recorded.
+The commits after `362066a` are documentation only.
+
+- **`make check` stops at `fmt-check` on `test/unit/test_prop.ml`**, before building. That is
+  main's own debt: a clean clone of `e34e133` fails the same way on the same file (one blank
+  line missing before the M7-T28 banner). This branch's two `.ml` pass `ocamlformat --check`.
+  The rest of `check` was then run in its order, `make build lint determinism unlimit
+  selftests test`: build, lint, determinism, unlimit and selftests pass; `unit` fails on
+  **5 checks of `test_retention`** (`(a)` and `(c)` "deep shipped", the policy that should evict
+  nothing), and `test_retention.exe` built from `e34e133` fails the same 5. Every other unit
+  check passes (4 114 `ok`, the 30 of section 6 among them). `make models`, which `make` skipped
+  after the unit failure: **192 passed, 0 failed**. Peak RSS 41.8 MB (the targets above) and
+  38.7 MB (`make models`), under `ulimit -v 4000000`.
+- **The default is unchanged.** The 192 models run with `--proof` by the branch's binary and by
+  `e34e133`'s: `.out`, exit code, `.opb` and `.pbp` byte-identical on all 192.
+- **`make diff ARGS="--tier all -j 24"`**: 117 of 301 runs differ from the recorded references,
+  in five configurations only: `fifo` 24 and `lbd` 24 (counters moved by M10-search-strategy-T4's
+  `Retention.gate`, `36c1312`, recorded before it) and `restarts`, `activity`, `alternate` 23 each
+  (no reference recorded on main yet). Every run of every other configuration is equal. The same
+  lane with `--bin` set to `e34e133`'s binary prints **the identical 117 `DIFF` lines**, so the
+  branch adds no difference to main's. The three findings above are filed in WORKLOG,
+  `## Cross-session requests`.

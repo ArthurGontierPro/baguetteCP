@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M7-T32 | `tools/baguette.msc`, `bin/main.ml` (flag parsing and solution printing only), `lib/flatzinc/output.ml`, `docs/SPEC.md` §2.2 (the flags and the output), new `test/models/*` + `test/expected/`, `test/unit/test_endtoend.ml`, `scripts/run_model_tests.sh` only if a lane needs it, `docs/DECISIONS.md` (D-0150), `docs/ROADMAP.md` M7-T32 row. NOT `search.ml` (M7-T31): if improving solutions need a search hook, request it | agent-flags (`wave51-flags`) | 2026-11-19 |
 | M7-T28 (continuation: regular's reasons, inverse) | `lib/core/prop/regular.ml`, a new `lib/core/prop/inverse.ml` (+ `docs/ARCHITECTURE.md` §1 and `CLAUDE.md`'s map), `lib/core/prop/alldiff.ml` (only the lemma-citation hook D-0146 §7 needs), `lib/flatzinc/compile.ml` (dispatch block), `mznlib/*.mzn`, `lib/proof/encoding.ml` (`add_root_lemma` only), their tests, new `test/models/*`, `docs/DECISIONS.md` (D-0151), `docs/SPEC.md` §2.1, `docs/ROADMAP.md` M7-T28 row | agent-globals2 (`wave51-globals2`) | 2026-11-19 |
 | M7-T31 and M6-T23 | `lib/core/search.ml` (the decision closure, `branch_assign`, the stopped path), `lib/core/learn.ml`, `lib/core/analysis.ml`, `lib/core/trace.ml`, `lib/core/retention.ml` and `lib/proof/writer.ml` (the finaliser only), their unit tests, new `test/models/*` + `test/expected/`, `test/unit/test_mutation.ml`, `docs/DECISIONS.md` (D-0148, D-0149), `docs/ROADMAP.md` M7-T31 and M6-T23 rows | agent-proofbugs (`wave50-proofbugs`) | 2026-11-19 |
 
@@ -333,6 +332,7 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 
 |---|---|---|---|
 | `Alldiff.excl` cites one ladder rung per value through `Encoding.consistency_id`, which looks the variable up by NAME every time (`Encoding.find`, a string `Hashtbl`, `Encoding.hash`): 12.4 % of 2011_cyclic-rcpsp_easy_6's proof mode at 2 000 nodes and 2.6 % of rcpsp_11's at 10 000, measured with the frame-pointer switch at `910af19`. Look the variable up once per exclusion (its `ladder_base` and bounds) and compute the rung ids arithmetically, as `consistency_id` itself does; or give `Encoding` a lookup by variable index (D-0140 W7). Byte-neutral: the ids are the same. | `lib/core/prop/alldiff.ml`, `lib/proof/encoding.ml` | agent-batch5 (M11-T5) | open |
+| **Three gate findings on main at `e34e133`, not from M7-T32** (D-0150 section 7, measured on a fresh clone on fataepyc-06, each reproduced with main's own binary or clone): (1) `test/unit/test_prop.ml` is not formatted, so `make check` stops at `fmt-check` before building (one blank line missing before the M7-T28 `regular` banner, after `test_linear_scratch`); (2) `test_retention` fails 5 checks, `(a)` and `(c)` "deep shipped" (the policy that should evict nothing), presumably since `36c1312` routed the learned instances through `Retention.gate`; (3) `make diff --tier all` differs on 117 of 301 runs, `fifo` and `lbd` (counters moved by `36c1312`) and `restarts`, `activity`, `alternate` (no reference committed). The default configuration is equal everywhere. Each needs its owner's decision (D-0141's rule on re-recording) | `test/unit/test_prop.ml`, `test/unit/test_retention.ml`, `bench/diff/reference/` | agent-flags (M7-T32) | open |
 ### 2026-11-18 — three findings from the M10 measurements, for the owners of the code they point at (agent-strategy, `wave45-strategy`, D-0137 section 13)
 
 1. **A branch nogood veripb refuses, with D-0077's assignment decision in the tree** (search.ml,
@@ -532,7 +532,21 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M11-complexity-T1 | agent-inventory (`wave47-inventory`) | 2026-11-18 | **D-0140.** The inventory, read-only: 48 items, each with what it grows with, how often it runs, its measured marginal share, the fix, the batch (T3/T4/T5), the byte risk and the reference. Six instances (QR48, QR72, rcpsp_11, mspsp_hard_01, cyclic-rcpsp_easy_6, openshop_gp10-4) at 1, 1k, 10k, 40k nodes, both modes; scratch patches S1 (`count_learned_activity`), S2 (retention), S3a-c measured byte-identical; outputs in `bench/perf/` |
 | M11-complexity-T2 | agent-lanes (`wave47-lanes`) | 2026-11-18 | **D-0141.** `make diff`: 25 instances (QR48, QR72, 19 Challenge in the fast tier, D-0140's six in the slow tier; 958 KB gz in `bench/diff/corpus/`) x 9 configurations (default, audit0, noproof, lbd, fifo, lbd-po, fifo-po, nopb, bits0), 232 runs at fixed BAGUETTE_NODE_LIMIT, stdout + rc + counters (SEARCH/WORK) + .opb/.pbp sha256 against `bench/diff/reference/` (e8354a74), plus a BAGUETTE_DEBUG pass (223 runs, f9bf6c4). Red binary: 198/232 differ while the 179 models show 0. `make scaling`: instructions:u per node, late over early, ratchet + 0.5 %, report-only until T6; teeth caught on 4 of 5 lines. Neither in `make check`; the gate runs both after it |
 | M7-T28 (first steps; the row stays IN PROGRESS) and M7-T29 (the gcc half) | agent-globals (`wave49-globals`) | 2026-11-18 | **D-0146.** `regular` native (`lib/core/prop/regular.ml`, DOMAIN, every pruning one `rup`, backward chains as root lemmas via `Encoding.add_root_lemma`, mznlib `fzn_regular`/`fzn_regular_set`, 3 mutation lanes, 4 models); the closed gcc forms pinned (std already routed them) with the implied sum; a repeated gcc variable copied by `Builder.split_gcc_repeats`; `inverse` design record and probes (§7). Gate: make check rc 0, 189 models, peak RSS 97 056 kB; diff lane 232/232; Challenge numbers in D-0146 §6 |
+| M7-T32 | agent-flags (`wave51-flags`) | 2026-11-19 | **D-0150.** `tools/baguette.msc` declares `-i -f -n -p -r -s -t -v` (and `--proof` as an extra flag); `bin/main.ml` maps them onto existing options: `-t` ms to `--time-limit`, `-s` = `--stats` plus one `%%%mzn-stat` block on stdout, `-f` = `--search alternate --restarts luby --phase-saving` (warned: not proof-safe until M7-T31), `-r`/`-p` accepted. Every improving solution was already printed with one `soli` each (verified through `minizinc`). Every solution of a satisfaction model (`-a`, `-n N > 1`) refused, exit 3. SPEC §2.2 amended; 30 checks in `test_endtoend`; default artefacts byte-identical on 192 models |
 ## Handoff notes
+## M7-T32 handoff, 2026-11-19 (agent-flags, `wave51-flags`): the MiniZinc standard flags, D-0150
+
+`minizinc --solver tools/baguette.msc` now passes baguette `-i -f -n -p -r -s -t -v` (measured
+with a fake solver: always before the `.fzn`; `-a` on an optimisation model arrives as `-i`; on a
+satisfaction model MiniZinc itself warns that all solutions are unsupported, because `-a` is not
+declared) and `--proof P` (extra flag). Nothing in `search.ml` changed: the CLI already printed
+every improving solution, each with its `soli`. Enumeration of a satisfaction model is REFUSED
+(exit 3) and D-0150 section 4 is the design to measure first (a preserved set over the output
+variables' order literals and `solx`). `-f` is D-0137's `saltlubyps`, so it inherits M7-T31's
+open refusal: do not pass `-f` to a proved Challenge category until M7-T31 is closed. Gate: main's
+own `test_prop.ml` formatting, 5 `test_retention` checks and 117 diff-lane runs fail identically
+with and without this branch (request filed); default artefacts byte-identical on 192 models.
+
 ## M7-T28 (first steps) and M7-T29 (gcc half) handoff, 2026-11-18 (agent-globals, `wave49-globals`): D-0146
 
 `regular` is native: `lib/core/prop/regular.ml`, DOMAIN consistent over the letters and `(n+1)*Q` state
