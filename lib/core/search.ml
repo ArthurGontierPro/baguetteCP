@@ -1181,6 +1181,32 @@ let phased (ph : Phase.t) (o : order) : order =
   | None -> ());
   full
 
+(* ------------------------------------------------- M7-T31: the median sweep's knob
+
+   D-0148. [median_values o] is [o] with every decision's VALUE replaced by
+   [indomain_median]'s for the variable [o] chose, so that an interior median becomes
+   D-0077's assignment decision wherever the domain allows one. It exists for one
+   purpose: a sweep over the model suite and the lane corpus that takes the assignment
+   shape everywhere, under any order and any strategy, without re-flattening a model.
+   It is reached only through the environment variable BAGUETTE_TEST_VALUE_CHOICE=median,
+   read once per solve in [search_core] beside BAGUETTE_DEBUG's family, and it is NOT a
+   command-line flag: SPEC 3.4 fixes the value choice a model gets, and this changes it.
+   Unset, the order is the same value, so a default run cannot see it. It wraps both
+   forms of [o], as [phased] does, and it goes on last, after [phased], so the median
+   is the value every decision takes. *)
+let median_values (o : order) : order =
+  let apply store c =
+    let v = match c with Split d -> d.d_var | Assign a -> a.a_var in
+    indomain_median store v
+  in
+  let full store cands = apply store (o store cands) in
+  (match staged_of o with
+  | Some st ->
+      Ephemeron.K1.Bucket.add staged_orders full (fun store ->
+          Option.map (apply store) (st store))
+  | None -> ());
+  full
+
 (* ------------------------------------------ M10-search-strategy-T3: the activity order
 
    D-0137 section 4. The variable is [Activity.select]'s; the value is the annotation's
@@ -3416,6 +3442,15 @@ let search_core ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx) ?tr
                 ~activity:(activity_order a ~value:(annotated_value order))
         in
         match st.st_phase with Some ph -> phased ph order | None -> order)
+  in
+  let order =
+    match Sys.getenv_opt "BAGUETTE_TEST_VALUE_CHOICE" with
+    | Some "median" -> median_values order
+    | None | Some "" -> order
+    | Some other ->
+        invalid_arg
+          (Printf.sprintf
+             "BAGUETTE_TEST_VALUE_CHOICE=%s: the only value is `median` (D-0148)" other)
   in
   let result =
     try dfs engine store ctx trace stats config order []
