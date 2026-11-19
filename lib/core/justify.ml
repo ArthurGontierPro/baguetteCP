@@ -244,7 +244,12 @@ module Itbl = Hashtbl.Make (struct
   let hash x = x land max_int
 end)
 
-type memo_entry = { cid : Writer.cid; level : int }
+type memo_entry = {
+  cid : Writer.cid;
+  level : int;
+  deep : int;
+      (* M11-complexity-T10 (D-0158): the key's [deep_hash] in share mode, 0 otherwise *)
+}
 
 (* M6-T9 (a cross-session PROPOSAL, D-0080). The memo keyed by physical identity, as
    before, but bucketed by a SHALLOW structural hash so a lookup is O(bucket) and not
@@ -406,6 +411,54 @@ let rec shallow_hash (e : Explanation.t) =
       let budget = ref operand_budget in
       finish (operand_list budget 7 0 parts)
 
+(* M11-complexity-T10 (D-0158). The hash share mode compares before it asks
+   [Explanation.equal_within]: every element of every list and every field of a
+   [Linear_term], where [shallow_hash] reads four elements and 48 operand nodes, over at
+   most [share_budget] nodes. A [Deferred] at the top is its forced value, as in
+   [shallow_hash]; one below the top is a constant, as in [operand_hash], so forcing a
+   thunk cannot move a key. Two values that are equal only through a nested thunk's
+   forcing can therefore hash apart; they are then not shared, which costs a line and
+   nothing else. Without it, rcpsp_11's buckets of [Combine]s that agree on their first
+   four summands were compared structurally entry by entry, and the comparison was 90 %
+   of the run (measured, D-0158 section 3). *)
+let deep_hash (e : Explanation.t) =
+  let budget = ref share_budget in
+  let rec go h (e : Explanation.t) =
+    if !budget <= 0 then h
+    else (
+      decr budget;
+      match e with
+      | Explanation.Decision l -> mix (mix h 0) (lit_hash l)
+      | Explanation.Clause ls ->
+          List.fold_left (fun h l -> mix h (lit_hash l)) (mix h 1) ls
+      | Explanation.Linear (ts, r) -> mix (List.fold_left term (mix h 2) ts) r
+      | Explanation.Cut (a, b, c1, c2) -> go (go (mix (mix (mix h 3) c1) c2) a) b
+      | Explanation.Model_row i -> mix (mix h 4) i
+      | Explanation.Combine (ss, d) -> List.fold_left summand (mix (mix h 5) d) ss
+      | Explanation.Deferred _ -> mix h 6
+      | Explanation.Resolve parts -> List.fold_left go (mix h 7) parts)
+  and term h (c, l) = mix (mix h c) (lit_hash l)
+  and summand h = function
+    | Explanation.Term (c, t) -> go (mix (mix h 10) c) t
+    | Explanation.Weaken ls -> List.fold_left term (mix h 11) ls
+    | Explanation.Defining (c, l) -> mix (mix (mix h 12) c) (lit_hash l)
+    | Explanation.Linear_term r ->
+        let h =
+          mix
+            (mix
+               (mix
+                  (mix
+                     (mix (mix h 13) r.Explanation.lt_coeff)
+                     (Hashtbl.hash r.Explanation.lt_name))
+                  r.Explanation.lt_decl_lo)
+               r.Explanation.lt_decl_hi)
+            r.Explanation.lt_value
+        in
+        List.fold_left go h r.Explanation.lt_cited
+  in
+  let top = match e with Explanation.Deferred { forced = Some f; _ } -> f | e -> e in
+  finish (go 0 top)
+
 (* A claim that is already on the page: the id of the line stating it and the level that
    line was written at. See the module header's "claim index". *)
 type stated = { s_cid : Writer.cid; s_level : int }
@@ -474,18 +527,23 @@ let create ~writer ~encoding = create_sharing ~share:share_default ~writer ~enco
    honest than adding an [Explanation] constructor that means "and also remember this". *)
 let writer ctx = ctx.writer
 
-let find_in_bucket ctx h (e : Explanation.t) =
+let find_in_bucket ctx h dh (e : Explanation.t) =
   let rec go = function
     | [] -> None
     | (k, m) :: rest -> if k == e then Some m else go rest
   in
   (* M11-complexity-T10 (D-0158): newest first, the first entry that is [e] itself or,
-     at or below the current level, structurally equal to it. *)
+     at or below the current level, of [e]'s [deep_hash] and structurally equal to it.
+     [dh] is forced only when an entry gets that far. *)
   let rec go_share cur = function
     | [] -> None
     | (k, (m : memo_entry)) :: rest ->
-        if k == e || (m.level <= cur && Explanation.equal_within share_budget k e) then
-          Some m
+        if
+          k == e
+          || m.level <= cur
+             && Int.equal m.deep (Lazy.force dh)
+             && Explanation.equal_within share_budget k e
+        then Some m
         else go_share cur rest
   in
   match Itbl.find_opt ctx.memo.tbl h with
@@ -505,20 +563,23 @@ let memo_stats ctx =
 
 (* [e]'s entry, looked up under the hash [h] it was given ([shallow_hash e]). A forced
    [Deferred] is also looked up under [unforced_hash]: see there. *)
-let find_memo ctx h (e : Explanation.t) =
-  match find_in_bucket ctx h e with
+let find_memo ctx h dh (e : Explanation.t) =
+  match find_in_bucket ctx h dh e with
   | Some _ as m -> m
   | None -> (
       match e with
       | Explanation.Deferred { forced = Some _; _ } when h <> unforced_hash ->
-          find_in_bucket ctx unforced_hash e
+          find_in_bucket ctx unforced_hash dh e
       | _ -> None)
 
-let remember_with ctx (e : Explanation.t) h (cid : Writer.cid) : Writer.cid =
+(* [e]'s [deep_hash], computed when share mode first needs it. *)
+let deep_of ctx e = if ctx.memo.share then lazy (deep_hash e) else Lazy.from_val 0
+
+let remember_with ctx (e : Explanation.t) h dh (cid : Writer.cid) : Writer.cid =
   let level = Writer.current_level ctx.writer in
   let m = ctx.memo in
   let bucket = Option.value (Itbl.find_opt m.tbl h) ~default:[] in
-  Itbl.replace m.tbl h ((e, { cid; level }) :: bucket);
+  Itbl.replace m.tbl h ((e, { cid; level; deep = Lazy.force dh }) :: bucket);
   if level > 0 then (
     if level >= Array.length m.by_level then (
       let a = Array.make (Stdlib.max (level + 1) (2 * Array.length m.by_level)) [] in
@@ -528,7 +589,7 @@ let remember_with ctx (e : Explanation.t) h (cid : Writer.cid) : Writer.cid =
     if level > m.memo_hi then m.memo_hi <- level);
   cid
 
-let remember ctx e cid = remember_with ctx e (shallow_hash e) cid
+let remember ctx e cid = remember_with ctx e (shallow_hash e) (deep_of ctx e) cid
 
 (* Backtracking: wipe the writer's level and drop the memo entries it invalidated, in
    one call, so the two structures cannot drift apart. Always call this instead of
@@ -696,7 +757,7 @@ let memoized ctx (e : Explanation.t) (thunk : unit -> Writer.cid) : Writer.cid =
          the thunk of a [Deferred] forces it, see [emit]), unless some path remembered
          it unforced, which [unforced_hash]'s bucket would hold. [remember] hashes it
          again after the thunk, forced. *)
-      match find_in_bucket ctx unforced_hash e with
+      match find_in_bucket ctx unforced_hash (Lazy.from_val 0) e with
       | Some m -> m.cid
       | None -> remember ctx e (thunk ()))
   | _ -> (
@@ -704,9 +765,10 @@ let memoized ctx (e : Explanation.t) (thunk : unit -> Writer.cid) : Writer.cid =
          its thunk runs ([shallow_hash] reads a nested [Deferred] as a constant, and
          nothing else it reads is mutable). *)
       let h = shallow_hash e in
-      match find_memo ctx h e with
+      let dh = deep_of ctx e in
+      match find_memo ctx h dh e with
       | Some m -> m.cid
-      | None -> remember_with ctx e h (thunk ()))
+      | None -> remember_with ctx e h dh (thunk ()))
 
 (* [Clause lits] -- rup, not pol.
 
