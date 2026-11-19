@@ -181,13 +181,13 @@ let remove store c v why =
         | Store.Conflict c -> raise (Found c)
         | Store.Changed | Store.Unchanged -> ())
 
-(* Every value of [c] outside [lo, hi] (the other array's index set) goes, on no facts:
+(* Every value of [c] outside [first, last] (the other array's index set) goes, on no facts:
    the unit rows compile.ml posts for a declared domain that reaches outside (and, for a
    constant outside, the empty row it posts). A live domain wholly outside is a conflict
    on the one bound fact that puts it there, against the same unit row. *)
-let restrict store c ~lo ~hi =
+let restrict store c ~first ~last =
   match c with
-  | Fixed k -> if k < lo || k > hi then raise (Found (conflict store []))
+  | Fixed k -> if k < first || k > last then raise (Found (conflict store []))
   | Cell { var; name; dlo; dhi } ->
       let move r =
         match r with
@@ -195,21 +195,21 @@ let restrict store c ~lo ~hi =
         | Store.Changed | Store.Unchanged -> ()
       in
       let d = Store.get store var in
-      if Domain.hi d < lo then
+      if Domain.hi d < first then
         raise (Found (conflict store [ Reason.at_most ~name ~decl:dhi (Domain.hi d) ]));
-      if Domain.lo d > hi then
+      if Domain.lo d > last then
         raise (Found (conflict store [ Reason.at_least ~name ~decl:dlo (Domain.lo d) ]));
-      (if Domain.lo d < lo then
-         let concl = Reason.at_least ~name ~decl:dlo lo in
+      (if Domain.lo d < first then
+         let concl = Reason.at_least ~name ~decl:dlo first in
          move
-           (Store.set_lo store var lo
+           (Store.set_lo store var first
               (Reason.because ~concludes:(Some concl) []
                  (clause_expl (Option.to_list (Reason.lit_of_fact concl)) []))));
       let d = Store.get store var in
-      if Domain.hi d > hi then
-        let concl = Reason.at_most ~name ~decl:dhi hi in
+      if Domain.hi d > last then
+        let concl = Reason.at_most ~name ~decl:dhi last in
         move
-          (Store.set_hi store var hi
+          (Store.set_hi store var last
              (Reason.because ~concludes:(Some concl) []
                 (clause_expl (Option.to_list (Reason.lit_of_fact concl)) [])))
 
@@ -232,8 +232,8 @@ let channel store ~a ~amin ~b ~bmin =
 let propagate t store =
   try
     let nf = Array.length t.f and ng = Array.length t.g in
-    Array.iter (restrict store ~lo:t.gmin ~hi:(t.gmin + ng - 1)) t.f;
-    Array.iter (restrict store ~lo:t.fmin ~hi:(t.fmin + nf - 1)) t.g;
+    Array.iter (restrict store ~first:t.gmin ~last:(t.gmin + ng - 1)) t.f;
+    Array.iter (restrict store ~first:t.fmin ~last:(t.fmin + nf - 1)) t.g;
     channel store ~a:t.f ~amin:t.fmin ~b:t.g ~bmin:t.gmin;
     channel store ~a:t.g ~amin:t.gmin ~b:t.f ~bmin:t.fmin;
     Propagator.Fixpoint
