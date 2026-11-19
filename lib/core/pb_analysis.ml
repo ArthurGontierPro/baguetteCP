@@ -656,6 +656,9 @@ type fallback =
           numbers because the alternative is a counter nobody can act on. *)
   | Nothing_to_learn  (** the criterion stopped before any elimination happened *)
   | Diverged of int
+  | Stopped
+      (** M6-T23 (D-0149): the search's stop (the time limit) fired during the
+          analysis, which was abandoned so that the stop lands at the next node *)
 
 let fallback_to_string = function
   | No_row n -> Printf.sprintf "no PB row for instance %s" n
@@ -669,6 +672,7 @@ let fallback_to_string = function
         s d
   | Nothing_to_learn -> "the criterion stopped before any elimination"
   | Diverged n -> Printf.sprintf "did not terminate after %d eliminations" n
+  | Stopped -> "the search's stop fired during the analysis"
 
 type t = {
   row : Learned.t;  (** the learned PB inequality *)
@@ -783,9 +787,10 @@ exception Give_up of fallback
 
    [name_of] is only for the [No_row] message and may answer anything; a fallback reason
    nobody can read is a counter with no diagnosis behind it. *)
-let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row option)
-    ~(name_of : int -> string) ~(ladder_id : string -> int -> int option)
-    ~(break_ladder : bool) ~(reduction : Reduce.t) ~(criterion : criterion) : result =
+let analyse ?(stop = fun () -> false) store (c : Store.conflict)
+    ~(row_of : int -> Propagator.pb_row option) ~(name_of : int -> string)
+    ~(ladder_id : string -> int -> int option) ~(break_ladder : bool)
+    ~(reduction : Reduce.t) ~(criterion : criterion) : result =
   let conflict_level = Store.level store in
   let max_steps = Store.trail_length store + 1 in
   (* M6-T9. The trail does not move while [analyse] runs, so [falsified_at] is a pure
@@ -882,8 +887,9 @@ let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row optio
           | Ok o -> (o, (fun e -> e), None)
           | Error e0 -> (
               let lifted =
-                try Ladder.lift ~row:r ~pivot:p ~falsified ~ladder_id
-                with Checked.Overflow m -> raise (Give_up (Overflow m))
+                try Ladder.lift ~stop ~row:r ~pivot:p ~falsified ~ladder_id () with
+                | Checked.Overflow m -> raise (Give_up (Overflow m))
+                | Ladder.Stopped -> raise (Give_up Stopped)
               in
               match lifted with
               | None -> raise (Give_up e0)
@@ -976,6 +982,7 @@ let analyse store (c : Store.conflict) ~(row_of : int -> Propagator.pb_row optio
               conflict_level;
             }
       else if steps >= max_steps then raise (Give_up (Diverged steps))
+      else if stop () then raise (Give_up Stopped)
       else
         let row', expl', pivots', antecedents', rows', lifts' =
           step row expl steps pivots antecedents rows lifts

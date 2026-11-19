@@ -1,0 +1,40 @@
+% M7-T31 / D-0148: an improving bound, re-applied at a node, SETTLES over a hole punched
+% one level below, and the branch nogood under it must name the hole's level.
+%
+% `Search.apply_globals` pushes every learned unit and the branch-and-bound bound at every
+% node, with no facts (the constraint is on the page at level 0, so it needs none). When
+% that push lands on a hole, the domain settles past it, and the settle's trace line cites
+% the facts of whoever punched the hole. Until D-0148 the decision closure took any
+% factless pruning for a root: it kept the push's own level and never folded its holes,
+% so a conflict resting on the settled bound left the hole's level out of the nogood, and
+% 3.0.2 refused it at "The constraint is not implied by reverse unit propagation". Found
+% on 2017_hrc_exp1-1-5670 under --search alternate --restarts luby --phase-saving (a
+% learned unit settling over a hole); this model reaches the same shape at default flags
+% through the improving bound.
+%
+% The path, under input_order and indomain_max:
+%   level 1  t = 3            -> int_ne punches obj <> 3
+%   level 2  p = 1            -> r >= 1 -> obj >= 3, settling to obj = 4; then e, f, g
+%            a solution with obj = 4; the bound obj <= 3 is installed and refutes the
+%            branch, whose nogood names levels 1 and 2
+%   level 2  p = 0 (re-entry) -> the bound obj <= 3 SETTLES over the hole to obj <= 2,
+%            a factless entry at level 2 resting on level 1; Rr gives r <= 0
+%   level 3  e = 1            -> f >= 1, g >= 1, and f + g - 2r <= 1 conflicts
+% The conflict rests on obj <= 2, so on t = 3 (level 1) and not on p = 0 (level 2): the
+% nogood is `~e_ge_1 \/ ~t_ge_3`. The unfixed closure wrote `~e_ge_1 \/ p_ge_1`.
+%
+% Declared domains are at most five values wide.
+var 1..3: t :: output_var;
+var 0..1: p :: output_var;
+var 0..1: e :: output_var;
+var 0..1: f :: output_var;
+var 0..1: g :: output_var;
+var 0..1: r :: output_var;
+var 0..4: obj :: output_var;
+constraint int_ne(obj, t);
+constraint int_lin_le([3, -1], [r, obj], 0);
+constraint int_lin_le([1, -1], [p, r], 0);
+constraint int_lin_le([1, -1], [e, f], 0);
+constraint int_lin_le([1, -1], [e, g], 0);
+constraint int_lin_le([1, 1, -2], [f, g, r], 1);
+solve :: int_search([t, p, e, f, g, r, obj], input_order, indomain_max, complete) minimize obj;

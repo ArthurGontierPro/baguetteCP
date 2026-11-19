@@ -585,6 +585,9 @@ type stats = {
       (* M6-T21: the run was stopped by a poll INSIDE [Engine.propagate] rather than at a
          node entry. Read by the CLI's `limit:` line and by the lane that pins the
          poll. *)
+  mutable stopped_in_trace : bool;
+      (* M6-T23 (D-0149): the run was stopped by a poll inside a conflict's
+         [Trace.emit]. Read by the CLI's `limit:` line ([at=trace]). *)
 }
 
 let stats_create () =
@@ -647,6 +650,7 @@ let stats_create () =
     n_level_pb_empty = 0;
     level_diffs_rev = [];
     stopped_in_propagation = false;
+    stopped_in_trace = false;
   }
 
 let stats_learned s = List.rev s.learned_rev
@@ -1181,6 +1185,32 @@ let phased (ph : Phase.t) (o : order) : order =
   | None -> ());
   full
 
+(* ------------------------------------------------- M7-T31: the median sweep's knob
+
+   D-0148. [median_values o] is [o] with every decision's VALUE replaced by
+   [indomain_median]'s for the variable [o] chose, so that an interior median becomes
+   D-0077's assignment decision wherever the domain allows one. It exists for one
+   purpose: a sweep over the model suite and the lane corpus that takes the assignment
+   shape everywhere, under any order and any strategy, without re-flattening a model.
+   It is reached only through the environment variable BAGUETTE_TEST_VALUE_CHOICE=median,
+   read once per solve in [search_core] beside BAGUETTE_DEBUG's family, and it is NOT a
+   command-line flag: SPEC 3.4 fixes the value choice a model gets, and this changes it.
+   Unset, the order is the same value, so a default run cannot see it. It wraps both
+   forms of [o], as [phased] does, and it goes on last, after [phased], so the median
+   is the value every decision takes. *)
+let median_values (o : order) : order =
+  let apply store c =
+    let v = match c with Split d -> d.d_var | Assign a -> a.a_var in
+    indomain_median store v
+  in
+  let full store cands = apply store (o store cands) in
+  (match staged_of o with
+  | Some st ->
+      Ephemeron.K1.Bucket.add staged_orders full (fun store ->
+          Option.map (apply store) (st store))
+  | None -> ());
+  full
+
 (* ------------------------------------------ M10-search-strategy-T3: the activity order
 
    D-0137 section 4. The variable is [Activity.select]'s; the value is the annotation's
@@ -1558,7 +1588,12 @@ type config = {
          above (see [Limit_hit]), so a [true] there leaves through the same path. A
          predicate that depends only on the world (the clock, the node count) is
          unaffected by being asked more often; one that COUNTS its calls is not, which
-         is why [stop_poll_runs = 0] exists. *)
+         is why [stop_poll_runs = 0] exists.
+
+         M6-T23 (D-0149): the same knob governs the two polls added there, inside a
+         conflict's [Trace.emit] (every trail entry) and inside PB conflict analysis
+         (every elimination and every ladder rung): [inner_stop] below. So [0] still
+         means node entry only, everywhere. *)
   stop_poll_runs : int;
       (* M6-T21. Completed propagator runs between two asks of [stop] inside
          [Engine.propagate]; [0] asks at node entry only, which is M6-T9's contract
@@ -2214,6 +2249,11 @@ let pb_level_verdict stats ~(closure : int list) ~(pb : int list) ~asserting_lev
    than left a paragraph: the derivation must cite constraint ids that are on the page at
    level 0. A [pol] citing a hole line across levels is the violation learn.ml's header
    says M2-L6's reduction steps are the first thing that could write. *)
+(* M6-T23 (D-0149): the stop as asked INSIDE a node, by a conflict's trace and by PB
+   conflict analysis. [stop_poll_runs = 0] is M6-T9's contract, node entry only, and it
+   holds for these two polls as it does for [Engine.propagate]'s. *)
+let inner_stop cfg = if cfg.stop_poll_runs > 0 then cfg.stop else fun () -> false
+
 (* M2-L15: returns the level set the learned row names, paired with its own asserting
    level -- [None] when no row was learned. The return value is DATA for
    [pb_level_verdict]; the default build compares it and acts on none of it. *)
@@ -2223,8 +2263,8 @@ let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_conve
   else (
     stats.n_pb_attempts <- stats.n_pb_attempts + 1;
     match
-      Pb_analysis.analyse store c ~row_of:(Engine.row_of engine store)
-        ~name_of:(Engine.name_of engine)
+      Pb_analysis.analyse ~stop:(inner_stop cfg) store c
+        ~row_of:(Engine.row_of engine store) ~name_of:(Engine.name_of engine)
         ~ladder_id:
           (if cfg.pb_ladder then Encoding.consistency_id ctx.Justify.encoding
            else fun _ _ -> None)
@@ -2795,8 +2835,18 @@ and dfs engine store ctx trace stats cfg (order : order) (decisions : Lit.t list
 
              M2-L3 inserts the learned clause between the bridges and the nogood, which is
              the one place it can go: after everything its [rup] rests on and before
-             anything that retires them. *)
-          Trace.emit ctx trace store;
+             anything that retires them.
+
+             M6-T23 (D-0149): the trace polls the stop between two trail entries, and a
+             stop that fires there leaves through [Limit_hit] like one at node entry. On
+             2020_cable_tree_wiring_R046 the first conflict, 252 levels down, writes
+             1.9 GB of trace and took 20 minutes with nothing asking; the lines already
+             written are a valid prefix (see [Trace.Stopped]) and this node has written
+             nothing else yet. *)
+          (try Trace.emit ~stop:(inner_stop cfg) ctx trace store
+           with Trace.Stopped ->
+             stats.stopped_in_trace <- true;
+             raise Limit_hit);
           (match Trace.conflict_line ctx trace c with
           | Some _ -> ()
           | None -> (
@@ -3419,6 +3469,15 @@ let search_core ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx) ?tr
                 ~activity:(activity_order a ~value:(annotated_value order))
         in
         match st.st_phase with Some ph -> phased ph order | None -> order)
+  in
+  let order =
+    match Sys.getenv_opt "BAGUETTE_TEST_VALUE_CHOICE" with
+    | Some "median" -> median_values order
+    | None | Some "" -> order
+    | Some other ->
+        invalid_arg
+          (Printf.sprintf
+             "BAGUETTE_TEST_VALUE_CHOICE=%s: the only value is `median` (D-0148)" other)
   in
   let result =
     try dfs engine store ctx trace stats config order []

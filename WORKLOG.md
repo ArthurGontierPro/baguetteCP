@@ -20,7 +20,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M7-T28 (continuation: regular's reasons, inverse) | `lib/core/prop/regular.ml`, a new `lib/core/prop/inverse.ml` (+ `docs/ARCHITECTURE.md` §1 and `CLAUDE.md`'s map), `lib/core/prop/alldiff.ml` (only the lemma-citation hook D-0146 §7 needs), `lib/flatzinc/compile.ml` (dispatch block), `mznlib/*.mzn`, `lib/proof/encoding.ml` (`add_root_lemma` only), their tests, new `test/models/*`, `docs/DECISIONS.md` (D-0151), `docs/SPEC.md` §2.1, `docs/ROADMAP.md` M7-T28 row | agent-globals2 (`wave51-globals2`) | 2026-11-19 |
-| M7-T31 and M6-T23 | `lib/core/search.ml` (the decision closure, `branch_assign`, the stopped path), `lib/core/learn.ml`, `lib/core/analysis.ml`, `lib/core/trace.ml`, `lib/core/retention.ml` and `lib/proof/writer.ml` (the finaliser only), their unit tests, new `test/models/*` + `test/expected/`, `test/unit/test_mutation.ml`, `docs/DECISIONS.md` (D-0148, D-0149), `docs/ROADMAP.md` M7-T31 and M6-T23 rows | agent-proofbugs (`wave50-proofbugs`) | 2026-11-19 |
 
 ## Cross-session requests
 
@@ -382,6 +381,7 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 
 | Task | Session | Date | Summary |
 |---|---|---|---|
+| M7-T31 and M6-T23 | agent-proofbugs (`wave50-proofbugs`) | 2026-11-19 | **D-0148, D-0149.** M7-T31: the refused nogoods on hrc were a FACTLESS pruning (a learned unit or the improving bound re-applied by `apply_globals`) that settled over a hole, taken for a root by the decision closure, so the hole's levels left the nogood. `Analysis.rests_on_nothing` expands it like any settle. Reachable at default flags (`opt_global_settles_hole_sat`, refused by main's binary), `test_analysis` scene 7, a median/strategy sweep of 1 233 runs all VERIFIED. M6-T23: not the finaliser. The stop was never asked inside one PB analysis (cargo) or one conflict's trace (cable, plus a degenerate memo hash, 6.6x), and both now poll it. Overshoot at 300 s: cargo > 2 100 s -> 0.1 s, cable 1 209 s -> 10 s. The I-P7 alarm does not fire on main. Default proofs byte-identical (192/193 models, every lane run of this row) |
 | M11-complexity-T4 (part 1: learning and PB analysis; T4 stays TODO) | agent-batch4a (`wave49-batch4a`) | 2026-11-18 | **D-0144.** L1 (`Learn.supports` through an int table and a reversed list), S5's `learn.ml` half (`minimise_with` one cell per slot behind a monomorphic table), J6's `learn.ml` part (no origin string for the null writer), P1 (`Pb_analysis.falsified_before` from the bound history through `Store.var_support`, O(log moves) instead of two trail walks), P2 (`step`'s accumulators reversed, `asserting_level` in one pass, `fat_memo`/`cited_ids` monomorphic, `Ladder.lift`'s multipliers in an int table, `round_to_one`'s postcondition reads the reduced row once). The old functions stay as `_reference`/`_scan` specifications with unit tests and a debug check. Instructions at 10 000 nodes: mspsp -3.48 %, QR48 -2.57 %, rcpsp_11 -1.04 %, cyclic -0.99 % without the proof. Lane 232/232 and debug pass 223/223 equal, gate rc 0 with 179 models identical to gate 50 |
 | M11-complexity-T3 | agent-batch3 (`wave48-batch3`) | 2026-11-18 | **D-0142.** Section 1 merged alone (`f9bf6c4`): the I-P7 alarm of the debug pass was two BAGUETTE_DEBUG checks (the advise check run on a queued clause, a stale `wp2` read by the index check), no search change. Then eight fixes byte-identical in stdout, SEARCH counters and proofs (lane `--tier all`: WORK counters only, wakes -26 %): E3 (a) the PB pass over a layout and its memory, E2 (a) one walk per learned-clause run, E1 the wake index by direction on every variable, E7, `Store.is_level_start` in one load, E8's range lists, `Engine.create` without `List.mem` (D-0143's request). At 40 000 nodes: rcpsp_11 -40 %, mspsp -23 %, QR72 -11 %, openshop -10 % instructions, scaling ratios 3.38 to 2.93, 1.98 to 1.87, 1.79 to 1.73, 2.55 to 2.27. Gate green (3 834 ok, 179 models, four artefacts identical to main's). E2 (b), E3 (b), E6 and the blocker left as decisions with measured gains. |
 | M11-complexity-T5 | agent-batch5 (`wave49-batch5`) | 2026-11-18 | **D-0145.** Batch 3: the `pol`/`rup`/`ia`/`del`/level/`sol` lines assembled in one writer buffer (W2, W4, W6), the per-line origins lazy and holding counts only (J6, W8), the writer's id tables monomorphic and `wipe_level` without a sort (W3, W5), the memo's hash an allocation-free mix computed once (J1), the claim index a `Hashtbl.Make` (J2), `resync` from the low-water mark and a level cursor (J3, J5), the trace history opt-in (J4). Proof mode at 10 000 nodes: QR48 -16 %, rcpsp_11 -36 %, mspsp -19 %, cyclic -46 % instructions, RSS down too; `.pbp`/`.opb`/stdout/counters identical, lane 232/232 at four commits. Profiler: opam switch `baguette-fp` (frame pointers) on fataepyc-06. |
@@ -534,6 +534,21 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M7-T28 (first steps; the row stays IN PROGRESS) and M7-T29 (the gcc half) | agent-globals (`wave49-globals`) | 2026-11-18 | **D-0146.** `regular` native (`lib/core/prop/regular.ml`, DOMAIN, every pruning one `rup`, backward chains as root lemmas via `Encoding.add_root_lemma`, mznlib `fzn_regular`/`fzn_regular_set`, 3 mutation lanes, 4 models); the closed gcc forms pinned (std already routed them) with the implied sum; a repeated gcc variable copied by `Builder.split_gcc_repeats`; `inverse` design record and probes (§7). Gate: make check rc 0, 189 models, peak RSS 97 056 kB; diff lane 232/232; Challenge numbers in D-0146 §6 |
 | M7-T32 | agent-flags (`wave51-flags`) | 2026-11-19 | **D-0150.** `tools/baguette.msc` declares `-i -f -n -p -r -s -t -v` (and `--proof` as an extra flag); `bin/main.ml` maps them onto existing options: `-t` ms to `--time-limit`, `-s` = `--stats` plus one `%%%mzn-stat` block on stdout, `-f` = `--search alternate --restarts luby --phase-saving` (warned: not proof-safe until M7-T31), `-r`/`-p` accepted. Every improving solution was already printed with one `soli` each (verified through `minizinc`). Every solution of a satisfaction model (`-a`, `-n N > 1`) refused, exit 3. SPEC §2.2 amended; 30 checks in `test_endtoend`; default artefacts byte-identical on 192 models |
 ## Handoff notes
+## M7-T31 and M6-T23 handoff, 2026-11-19 (agent-proofbugs, `wave50-proofbugs`): D-0148, D-0149
+
+M7-T31 is not the assignment shape. A factless pruning that SETTLED over a hole (a learned unit
+or the branch-and-bound bound pushed by `apply_globals`) was a root of the decision closure,
+while its trace line cites the hole's facts. `Analysis.rests_on_nothing` now expands it (both
+walks). Main was affected at default flags (`opt_global_settles_hole_sat`). `-f`
+(`saltlubyps`) is safe on this branch as far as hrc goes. M6-T23 was the stop never asked inside
+a PB analysis or a conflict's trace, not the finaliser. Both poll it under `stop_poll_runs`
+(0 = node entry only, now stated by M6-T9's lane), `limit:` gains `at=trace`, and the memo
+hashes operands by content (byte-identical, cable 6.6x). For the orchestrator, no lane run
+changes because of this branch. The 48 plain and 39 debug `fifo`/`lbd` differences are main's
+(retention hook), byte-identical under `681a9e6`'s binary, and need main's re-record, not
+this branch's. Still open are the memo's 388 structural duplicates per bucket (an explanation id, J1's
+alternative) and hoist, not re-measured. The sweep knob is `BAGUETTE_TEST_VALUE_CHOICE=median`.
+
 ## Gate 56 green on the merged main, 2026-11-19 (orchestrator)
 
 Gate 56 on `2fb5bd8` (`/scratch/arthur/gate56.status`, clone `/scratch/arthur/baguette-gate-20261119d`):
@@ -545,7 +560,6 @@ two lanes that pinned the pre-hook behaviour), M7-T32 (`681a9e6`), and the lbd/f
 re-recorded on purpose by gate 55 (`2fb5bd8`). Gate 54 had failed on fmt-check (my merge) and showed the
 expected lbd/fifo search change. Open: M7-T31/M6-T23 (wave50-proofbugs), the M7-T28 continuation
 (wave51-globals2). Waiting on M7-T31: M11-T4 part 2 and M8's PB analysis over bits rows (both need search.ml).
-
 ## M7-T32 handoff, 2026-11-19 (agent-flags, `wave51-flags`): the MiniZinc standard flags, D-0150
 
 `minizinc --solver tools/baguette.msc` now passes baguette `-i -f -n -p -r -s -t -v` (measured

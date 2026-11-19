@@ -1504,7 +1504,9 @@ let report_limit opts (st : Search.stats) ~(engine : Engine.t) ~best =
     (match best with None -> "none" | Some (_, v) -> string_of_int v)
     c.Engine.c_runs c.Engine.c_effectful c.Engine.c_contra
     (* M6-T21: where the stop landed -- a node entry, or a poll inside propagation. *)
-    (if st.Search.stopped_in_propagation then "propagation" else "node")
+    (if st.Search.stopped_in_propagation then "propagation"
+     else if st.Search.stopped_in_trace then "trace" (* M6-T23, D-0149 *)
+     else "node")
     (if Float.is_nan !stop_fired_at then "none" else Printf.sprintf "%.2fs" !stop_fired_at)
 
 (* M7-T32 (D-0150). MiniZinc's statistics format, on STDOUT under `-s` only: one

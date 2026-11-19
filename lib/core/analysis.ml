@@ -80,10 +80,22 @@
      - it has no supporting entry at all (the bound is still the declared one -- it
        materialises to no literal, [Reason.lit_of_fact] returns [None], and it is in the
        cut only so that [Reason.owners]' notion of scope survives the walk); or
-     - its supporting entry rests on no facts ([Reason.is_empty]). That is a DECISION
-       (search.ml pushes [Reason.none] beside [Explanation.decision] -- D-0018/D-0037),
-       a constraint posted at this level, or a pruning that genuinely follows from a
-       model row alone.
+     - its supporting entry rests on no facts ([Reason.is_empty]) AND is either a level
+       start or settled over no hole ([rests_on_nothing]). That is a DECISION (search.ml
+       pushes [Reason.none] beside [Explanation.decision] -- D-0018/D-0037), a constraint
+       posted at this level, or a pruning that genuinely follows from a model row alone
+       -- a learned unit or an improving bound re-applied by [Search.apply_globals] is
+       the common one.
+
+   A factless pruning that SETTLED over a hole is not a root (M7-T31, D-0148). Its trace
+   line claims the bound the trail landed on and cites the facts of every hole it walked
+   over ([Trace.settle_facts]), so it rests on those holes exactly as a propagator's
+   settle does, and it is expanded the same way: into the reasons of the holes' removers
+   (see "Holes" below). Treated as a root it pinned its own level and dropped the levels
+   the holes rest on, and on 2017_hrc_exp1-1-5670 a learned unit re-applied at level 61
+   that settled over a hole punched at level 41 left level 41 out of a branch nogood the
+   checker then refused. A DECISION that settles stays a root: it is assumed, and the
+   settle step is [Search.bridges]' line, with its own protection of the levels below.
 
    Keeping the last kind rather than dropping it is the conservative choice and it is
    deliberate. Dropping a node that "rests on nothing" would give a shorter, stronger
@@ -292,8 +304,8 @@ let decision_cut =
    rests on further facts, at unknown levels, that the cut does not name. A backjump that
    skipped a level on that basis would skip a branch nothing had refuted. This criterion
    resolves until no such node is left, so every node IS a decision, a declared bound or
-   a factless pruning, and the levels it names really are the levels the conflict rests
-   on. See lib/core/learn.ml for the argument written out.
+   a factless pruning that settled over no hole, and the levels it names really are the
+   levels the conflict rests on. See lib/core/learn.ml for the argument written out.
 
    LEVEL 0 IS NOT EXPANDED (M7-T27 (a2), D-0124 addendum). A node at level 0 rests on
    level-0 facts only -- its support entry precedes every level mark, and so does every
@@ -384,6 +396,18 @@ let support_of store ~before fact =
         Debug.check "M6-T14: the bound history agrees with the trail scan" (fun () ->
             at = scan_support store ~before ~v ~is_lower ~value);
         (at, false)
+
+(* Is the entry at trail position [p] a ROOT: does its trace line rest on nothing a
+   decision supports? A decision does by definition. A pruning without facts does only if
+   its bound move walked over no hole, because a settle's line cites the holes' facts
+   ([Trace.settle_facts]) and so rests on whatever punched them (M7-T31, D-0148; see the
+   header's "Roots"). Both bounds are asked: an entry that moved neither, or moved one
+   onto a value its old domain held, settled over nothing. *)
+let rests_on_nothing store p (e : Store.entry) =
+  Reason.is_empty e.Store.reason
+  && (Store.is_level_start store p
+     || Store.settled_over_lo e.Store.old ~cur:(Domain.lo e.Store.now) = []
+        && Store.settled_over_hi e.Store.old ~cur:(Domain.hi e.Store.now) = [])
 
 let same_slot a b =
   String.equal (Reason.fact_owner a.fact) (Reason.fact_owner b.fact)
@@ -542,7 +566,7 @@ let analyse ?(scope = At_conflict_level) store (c : Store.conflict)
         level = Store.level_of_index store support;
         support;
         implied_by = e.Store.prop;
-        root = Reason.is_empty e.Store.reason;
+        root = rests_on_nothing store support e;
       }
   in
   (* The facts a hole-consuming bound move rests on, per the rule in the header, with
@@ -686,8 +710,9 @@ let cited_levels t = List.sort_uniq Int.compare (List.map (fun n -> n.level) t.n
    Read this off a cut produced with [~scope:Everywhere] and [decision_closure] and it is
    a sound dependency set: every node above level 0 is then a root, so every node is a
    decision, a level-0 fact (dropped here, and resting on level-0 facts only -- see
-   [decision_closure]) or a factless pruning (globally valid, but recorded at the level
-   it happened at and therefore kept -- conservative, which is the safe direction here).
+   [decision_closure]) or a factless pruning that settled over no hole (globally valid,
+   but recorded at the level it happened at and therefore kept -- conservative, which is
+   the safe direction here; one that settled is expanded, see [rests_on_nothing]).
    Read it off a 1UIP cut and it is NOT one; see [decision_closure]. *)
 let decision_levels t = List.rev (List.filter (fun l -> l > 0) (cited_levels t))
 
@@ -762,8 +787,8 @@ let to_string t =
    ([best_expandable]); a cited position merged into an existing cell only when it is
    higher ([stronger]: on one slot a later position is a stronger bound, by I-D3, and
    the same position is the same fact); the cell removed when its position is expanded
-   ([Frontier.remove]); a decision or factless pruning ([Reason.is_empty]) never
-   expanded; level 0 never entered. The answer is the set of levels of the cells left,
+   ([Frontier.remove]); a decision or a factless pruning that settled over no hole
+   ([rests_on_nothing]) never expanded; level 0 never entered. The answer is the set of levels of the cells left,
    which are all roots above level 0: [decision_closure]'s postcondition, by
    construction. Under BAGUETTE_DEBUG the walk over facts runs beside it and the two
    answers must agree; test_analysis.ml compares them on every scene.
@@ -801,8 +826,7 @@ let cite store ~check ~before fact =
     if level = 0 then None
     else
       Some
-        (pack ~pos:s ~level
-           ~root:(Reason.is_empty e.Store.reason)
+        (pack ~pos:s ~level ~root:(rests_on_nothing store s e)
            ~is_lower:(Reason.fact_is_lower fact))
 
 (* [memo_entries]/[memo_ints] count the memos built and the ints they hold, over the run:

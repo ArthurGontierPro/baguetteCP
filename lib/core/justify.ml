@@ -233,8 +233,9 @@ type memo_entry = { cid : Writer.cid; level : int }
 (* M6-T9 (a cross-session PROPOSAL, D-0080). The memo keyed by physical identity, as
    before, but bucketed by a SHALLOW structural hash so a lookup is O(bucket) and not
    O(every explanation emitted since the last wipe). The hash never descends into a
-   [Deferred] (its [thunk] is mutable, which is the trap the header names), nor into a
-   [Cut]/[Term] operand beyond its constructor, so forcing a thunk cannot move a key.
+   [Deferred] (its [thunk] is mutable, which is the trap the header names), so forcing a
+   thunk cannot move a key. (It read a [Cut]/[Term] operand by its constructor alone
+   until M6-T23, D-0149: see [operand_hash].)
    Equality inside a bucket is still [==], so the memo's meaning is unchanged. [by_level]
    records which keys each level inserted, so [wipe_level] removes exactly those.
 
@@ -298,7 +299,48 @@ let mix_list f h xs =
   in
   go h 0 xs
 
-let summand_hash = function
+(* M6-T23 (D-0149). An OPERAND ([Term]'s, [Cut]'s, [Resolve]'s) hashed by its content,
+   depth first, over at most [operand_budget] nodes and [hash_width] elements of each
+   list, where it was hashed by its constructor alone. On 2020_cable_tree_wiring_R046 the
+   explanations are chains [Combine [k * Combine [... Combine [Model_row i; ...]]]] that
+   differ only in the row ids two to seven levels down, so with the constructor alone
+   about 5 000 of them shared each bucket and [find_in_bucket]'s [==] walk was 93 % of
+   the run (300 M steps for 1.6 M lookups), which is what made a node outlast the time
+   limit by minutes. A [Deferred] operand is a constant whatever its [forced] says, so,
+   as before, forcing a thunk cannot move a key: everything else this walks is
+   immutable. Still only bucketing: the equality is [==], so no emitted byte changes. *)
+let operand_budget = 48
+
+let rec operand_hash budget h (e : Explanation.t) =
+  if !budget <= 0 then mix h 9
+  else (
+    decr budget;
+    match e with
+    | Explanation.Decision l -> mix (mix h 0) (lit_hash l)
+    | Explanation.Clause ls -> mix_list lit_hash (mix h 1) ls
+    | Explanation.Linear (ts, r) ->
+        mix (mix_list (fun (c, l) -> mix c (lit_hash l)) (mix h 2) ts) r
+    | Explanation.Cut (a, b, c1, c2) ->
+        operand_hash budget (operand_hash budget (mix (mix (mix h 3) c1) c2) a) b
+    | Explanation.Model_row i -> mix (mix h 4) i
+    | Explanation.Combine (ss, d) -> operand_summands budget (mix (mix h 5) d) 0 ss
+    | Explanation.Deferred _ -> mix h 6
+    | Explanation.Resolve parts -> operand_list budget (mix h 7) 0 parts)
+
+and operand_summands budget h n = function
+  | s :: rest when n < hash_width -> (
+      match s with
+      | Explanation.Term (c, t) ->
+          operand_summands budget (operand_hash budget (mix h c) t) (n + 1) rest
+      | other -> operand_summands budget (mix h (summand_hash_flat other)) (n + 1) rest)
+  | _ -> mix h n
+
+and operand_list budget h n = function
+  | e :: rest when n < hash_width ->
+      operand_list budget (operand_hash budget h e) (n + 1) rest
+  | _ -> mix h n
+
+and summand_hash_flat = function
   | Explanation.Term (c, t) -> mix c (shallow_tag t)
   | Explanation.Weaken ls -> mix_list (fun (c, l) -> mix c (lit_hash l)) 1 ls
   | Explanation.Defining (c, l) -> mix (mix 2 c) (lit_hash l)
@@ -306,6 +348,10 @@ let summand_hash = function
       mix
         (mix (mix 3 (Hashtbl.hash r.Explanation.lt_name)) r.Explanation.lt_coeff)
         r.Explanation.lt_value
+
+let summand_hash budget = function
+  | Explanation.Term (c, t) -> operand_hash budget (mix 0 c) t
+  | other -> summand_hash_flat other
 
 (* The value a [Deferred] that has not been forced hashes to. Nothing is ever remembered
    under it in practice ([memoized] forces before it remembers), and [find_memo] looks
@@ -320,12 +366,17 @@ let rec shallow_hash (e : Explanation.t) =
   | Explanation.Linear (ts, r) ->
       finish (mix (mix_list (fun (c, l) -> mix c (lit_hash l)) 2 ts) r)
   | Explanation.Cut (a, b, c1, c2) ->
-      finish (mix (mix (mix (mix 3 (shallow_tag a)) (shallow_tag b)) c1) c2)
+      let budget = ref operand_budget in
+      finish (operand_hash budget (operand_hash budget (mix (mix (mix 3 c1) c2) 10) a) b)
   | Explanation.Model_row i -> finish (mix 4 i)
-  | Explanation.Combine (ss, d) -> finish (mix_list summand_hash (mix 5 d) ss)
+  | Explanation.Combine (ss, d) ->
+      let budget = ref operand_budget in
+      finish (mix_list (summand_hash budget) (mix 5 d) ss)
   | Explanation.Deferred { forced = Some f; _ } -> shallow_hash f
   | Explanation.Deferred { forced = None; _ } -> unforced_hash
-  | Explanation.Resolve parts -> finish (mix_list shallow_tag 7 parts)
+  | Explanation.Resolve parts ->
+      let budget = ref operand_budget in
+      finish (operand_list budget 7 0 parts)
 
 (* A claim that is already on the page: the id of the line stating it and the level that
    line was written at. See the module header's "claim index". *)
@@ -596,7 +647,8 @@ let memoized ctx (e : Explanation.t) (thunk : unit -> Writer.cid) : Writer.cid =
       | None -> remember ctx e (thunk ()))
   | _ -> (
       (* Hashed once: a head that is not a [Deferred] hashes the same before and after
-         its thunk runs ([shallow_hash] reads operands by their tag only). *)
+         its thunk runs ([shallow_hash] reads a nested [Deferred] as a constant, and
+         nothing else it reads is mutable). *)
       let h = shallow_hash e in
       match find_memo ctx h e with
       | Some m -> m.cid

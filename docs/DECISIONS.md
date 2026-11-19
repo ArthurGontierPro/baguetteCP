@@ -17007,3 +17007,291 @@ The commits after `362066a` are documentation only.
   lane with `--bin` set to `e34e133`'s binary prints **the identical 117 `DIFF` lines**, so the
   branch adds no difference to main's. The three findings above are filed in WORKLOG,
   `## Cross-session requests`.
+
+## D-0148  M7-T31: a factless pruning that settled over a hole is not a root of the decision closure; the refused branch nogoods on hrc were that, not the assignment shape
+
+Status: DECIDED
+Date: 2026-11-19
+Task: M7-T31 (agent-proofbugs, `wave50-proofbugs`).
+Touches: `lib/core/analysis.ml` (`rests_on_nothing`, used by `analyse`'s `mk_node` and by
+`dependency_levels`' `cite`), `lib/core/search.ml` (`median_values`, a test-only knob),
+`test/unit/test_analysis.ml` (scene 7), `test/models/opt_global_settles_hole_sat.fzn`.
+Follows D-0137 section 13.1 and the WORKLOG note "three findings from the M10
+measurements", D-0124's a3 addendum (the closure over memoised citations), D-0077 (the
+assignment decision), M1-T44/M1-T57 (a settle's line cites the holes it walked over).
+
+### 1. The two reproducers, and what they had in common
+
+**A.** D-0137's own, on binary `28c4a51c` (code `9fb9b09`, identical in `lib/` and `bin/`
+to `457eb7f`): `2017_hrc_exp1-1-5670` with `--search activity --restarts luby
+--phase-saving`, phase saving then taking D-0077's assignment `x = s`, refused at line
+620 348 at *"The constraint is not implied by reverse unit propagation (RUP) from core and
+derived database"*. **B.** The orchestrator's second one, on current main (`f689aae`, binary
+`35fb5d77`), where phase saving branches `x <= s` and no assignment is ever taken, on the same
+instance with `--search alternate --restarts luby --phase-saving`, refused at line 983 748
+(`@c971723`, the branch nogood of node 3 935, a second child at level 80) at the same
+wording. So the assignment shape was not the cause, and B is what was dissected.
+
+### 2. The measurement
+
+An instrumented copy of the binary (not committed; `fataepyc-06:/scratch/arthur/
+wave50-proofbugs-dbg`, `BAGUETTE_DBG_NG`/`BAGUETTE_DBG_NODE`) printed the decision stack, the
+closure's levels and the nogood, and at node 3 935 the whole trail, with every entry's level, old
+and new domain, reason facts with their supports, and the trace line ids written for it. The
+same run's proof was byte-identical to the uninstrumented one.
+
+- The nogood kept 15 of 80 decision levels. Each of the 65 dropped decisions was added back
+  in turn (`addback.py`, one checker run each), and **only level 41** (`X_INTRODUCED_2859_ <= 0`)
+  makes it RUP, and the clause of all 80 is RUP too.
+- Replaying the conflict's facts over the trace lines of the live trail, under the 15 kept
+  decisions (`sim.py`), the chain breaks at one line, the one of trail entry 815, at level 61,
+  `X_INTRODUCED_2086_` from `1..3` to `1..1`, **with an empty reason and not a level start**,
+  whose line is `@c970126 rup +1 ~X_INTRODUCED_2086__ge_2 +1 X_INTRODUCED_2226__ge_1 >= 1`.
+  Entry 815 is the learned unit `X_INTRODUCED_2086_ <= 2` (`@c959341`, level 0), re-applied
+  at that node by `Search.apply_globals` with `Reason.none`. The value 2 was a hole, punched
+  at level 41 by entry 565 citing `X_INTRODUCED_2226_ <= 0` (entry 562, from the level-41
+  decision), so the push settled to `<= 1`, and `Trace.settle_facts` gave the line the
+  hole's facts. Every line the chain needs is on the page and live, so the nogood lacks a
+  premise and no line is missing.
+
+### 3. The cause
+
+`Analysis` called a node a ROOT, never expanded, when its supporting entry had no facts
+(`Reason.is_empty`), and its header said why that was safe, "a decision, a constraint posted
+at this level, or a pruning that genuinely follows from a model row alone", whose level the
+closure keeps, which is conservative. That holds for a factless entry that landed exactly
+where it was pushed. It does not hold for one that SETTLED, because its trace line cites
+the facts of every hole the settle crossed (M1-T57), exactly as a propagator's settle
+does. The closure pinned the entry's own level (61, kept
+anyway here) and never folded the holes, so the hole's level (41) left the nogood. Both
+walks, the memo over citations and the walk over facts, used the one rule, which is why
+BAGUETTE_DEBUG's cross-check agreed with a wrong answer.
+
+The shape needs a factless push at a level above a hole on its variable. `apply_globals`
+makes one at every node for every learned unit and for the branch-and-bound bound, so main
+can reach it at default flags (section 5). Restarts multiply the learned units and the
+dynamic orders vary the levels, which is why D-0137 saw it only under those flags. A's
+assignment shape made it likelier still, because D-0077's sibling removes `x = s` as a HOLE at the
+node's level, and the split `x <= s` punches none.
+
+**The GCS lead** (`restarts-nogoods-weighting.md`, "The proof lifecycle", point 1, about a
+restart that forgets root-level lines the next pass relies on) was checked and does not apply. A
+trace line carries its trail entry's level (`Trace.emit_to_page`), a restart to `t` wipes
+levels above `t` only, whose entries it pops, and `Writer.wipe_level` refuses level 0. So
+no line of a surviving entry is deleted, and section 2 found every needed line live.
+
+### 4. The fix
+
+With `Analysis.rests_on_nothing store p e`, an entry is a root when its reason is empty AND it is
+a level start or settled over no hole (`Store.settled_over_lo`/`_hi` both empty, the same run
+of holes `Trace.holes_below`/`holes_above` compute for the line). A factless settle is then
+expanded like any settle, into the reasons of the holes' removers, by both walks (the memo's
+`cites_of` already folded holes, it was never asked). Its own level is no longer pinned,
+which is right because its line needs the level-0 unit and the hole lines and no decision. A DECISION
+that settles stays a root, because it is assumed and its settle step is `Search.bridges`' line,
+whose ancestors the nogood keeps through `protected` (M1-T55/D-0070).
+
+The root rule is shared with the 1UIP walk, so a factless settle at the conflict level is
+now resolved there as well instead of standing in the cut. Both cuts are sound. No run
+below learned a different clause because of it (the default lane is byte-identical).
+
+### 5. The failing-first tests
+
+- `test/models/opt_global_settles_hole_sat.fzn`, 7 variables of at most 5 values. At default
+  flags, `t = 3` punches `obj <> 3` at level 1, the first solution `obj = 4` installs
+  `obj <= 3`, and at the re-entry of level 2 that bound settles to `obj <= 2`, a factless
+  entry resting on level 1; a level-3 conflict rests on it. `f689aae`'s binary writes the
+  nogood `~e_ge_1 \/ p_ge_1` and 3.0.2 refuses it at line 44 at the RUP wording, and the fix
+  writes `~e_ge_1 \/ ~t_ge_3` (the only changed line) and the proof is VERIFIED, OPT 0.
+  Its stdout is the same under both binaries.
+- `test_analysis.ml` scene 7 (`test_factless_settle_is_expanded`) builds a hole at level 1, a
+  single-term row pushing `o <= 3` factlessly at level 2 and settling to `o <= 2`, a conflict
+  resting on it. With the old rule restored three checks fail (the closure names `[2]`, a set
+  under which brute force finds the model satisfiable), and with the fix the closure is `[2; 1]`,
+  the memo and the walk agree, and the entry's memo is the hole remover's level-1 citation.
+- No mutation lane, because no rule kind and no line shape is new. Only the decisions a
+  nogood names change.
+
+### 6. The sweep
+
+The knob `BAGUETTE_TEST_VALUE_CHOICE=median` (test-only, read from the environment, never a CLI flag, in
+`Search.median_values`, wrapped last, after `phased`) replaces every decision's value by
+`indomain_median`'s, so an interior median is an assignment everywhere. Run on `fataepyc-06`
+over the 183 suite models (`test/models/` minus PENDING, with the new one) and the lane
+corpus's 27 (instance, budget) pairs at their node budgets, every proof checked, with the
+fixed binary (`fix-50d9221`, md5 `68b3d753`) and the same code with the old root rule
+(`unfixed-50d9221`, `b17cd31c`):
+
+| configuration | suite, fixed | corpus, fixed | proofs changed by the fix |
+|---|---|---|---|
+| default | 183/183 VERIFIED; 182 byte-identical to `f689aae` | (the lane) | the new model only |
+| median | 183/183 | 27/27 | none |
+| `--search alternate --restarts luby --phase-saving` | 183/183 | 27/27 | the new model only |
+| `--search activity --restarts luby --phase-saving` | 183/183 | 27/27 | none |
+| median + alternate + `luby:1` + phase saving | 183/183 | 27/27 | 2 suite (`backjump_unsat`, `backjump_deep_unsat`), 1 corpus (`2012_mspsp_hard_01@10000`) |
+| median + activity + `luby:1` + phase saving + `--reuse-trail` | 183/183 | 27/27 | 6 corpus (`bacp-22`, `filters_dct_2_2`, `rcpsp_12`, `foxgeesecorn_54`, `mspsp_hard_01`, `pigment15b`) |
+
+1 233 runs, every one VERIFIED with the fix. Under the old rule the only refusal in the
+1 233 was the new model under `alternate`. The shape occurs in the ten runs the last column
+names, and there the checker found the hole some other way (the disequality's own `.opb`
+rows, when its operands' facts are derivable), so those nogoods were unsupported by their
+trace but not refused. That is also why the 189-model gates never saw it. With the fix, hrc
+under B verifies (OPT 2, 10 328 nodes instead of 10 117) and under A, on `457eb7f` plus this
+commit, verifies too (BOUNDS 2, 8 086 nodes), and A without the fix still refuses at line 620 348
+(`main-9fb9b09.exe`, re-run).
+
+### 7. What changes on purpose
+
+A proof changes only where a factless push settled over a hole that the closure reached, and the
+nogood names the hole's levels instead of the push's. The differential lane's nine recorded
+configurations are byte-identical (232/232 with the fixed binary). The three strategy
+configurations (`restarts`, `activity`, `alternate`) had no reference on this branch when it
+was measured; their gate-53 references are compared at the merge (section 8 if any differ).
+
+### 8. The lane at the merge (2026-11-19, after `origin/main` at `681a9e6` was merged in)
+
+The three strategy configurations' references (gate 53) are on the branch now. Run with this
+branch's binary, every run of `restarts`, `activity` and `alternate`, plain and debug, equals
+its reference, so the fix changes no lane run under any configuration. The only differing runs
+are `fifo` and `lbd`, identical under current main's binary (D-0149 section 5).
+
+## D-0149  M6-T23: the `--time-limit` overshoot on cargo and cable was the stop never being asked, inside a PB analysis and inside a conflict's trace, and not the finaliser; and D-0137 section 13.2's alarm is gone on main
+
+Status: DECIDED
+Date: 2026-11-19
+Task: M6-T23 (agent-proofbugs, `wave50-proofbugs`).
+Touches: `lib/core/pb_analysis.ml` (`?stop`, the `Stopped` fallback), `lib/core/ladder.ml`
+(`lift ?stop`, `Ladder.Stopped`), `lib/core/trace.ml` (`emit ?stop`, `Trace.Stopped`),
+`lib/core/justify.ml` (`operand_hash`), `lib/core/search.ml` (the conflict arm and
+`pb_at_conflict` pass `cfg.stop`; `stats.stopped_in_trace`), `bin/main.ml` (`at=trace`).
+Follows D-0136 (M6-T21: `retire`'s sweep, the poll inside `Engine.propagate`, `fired=`),
+D-0137 section 13.2 and 13.3, D-0145 (J1, the memo's hash).
+
+### 1. Finding 2 (D-0137 section 13.2): no alarm on current main
+
+`BAGUETTE_DEBUG=1` on `2017_hrc_exp1-1-5670`, binary `f689aae` (which has D-0142 section 1's
+`f9bf6c4`), 1 500 s limit: at default flags OPT 2 in 8 343 nodes with and without the proof
+(the 296 MB proof VERIFIED), under `--search activity --restarts luby --phase-saving` OPT in
+3 115 nodes, under `--search alternate --restarts luby --phase-saving` OPT in 10 117 nodes.
+Neither `Not_at_fixpoint("I-P7: ...")` nor `Bad_watch("M6-T22: ...")` fired in any of the
+four. Both were D-0142 section 1's two false alarms, measured on `28c4a51c`, which predates
+the fix; engine.ml and prop/clause.ml need nothing. (The `alternate` run is D-0148's refused
+proof, and no invariant fired there either, which D-0148 section 3 explains.)
+
+### 2. Finding 3: what the overshoot was
+
+D-0137 section 13.3 read the overshoot as the finaliser after the stop. Measured on
+`fataepyc-06` with `--time-limit 300` under an outer wall of 2 400 s, binary `f689aae`, the
+`limit:` line's `fired=` (D-0136) says otherwise on both instances. The time is before
+the stop says yes, inside one node, where nothing asks it.
+
+| instance | proof | `fired=` | exit | nodes, conflicts | where the time went (perf, from 302 s) |
+|---|---|---|---|---|---|
+| `2017_cargo_challenge01_0s_1913` | no | never | killed at 2 400 s | 461, 15 | one PB analysis |
+| `2017_cargo_challenge01_0s_1913` | yes | never | killed at 2 400 s | 461, 15 | the same |
+| `2020_cable_tree_wiring_R046` | no | 302.23 s | 302.70 s | 1 505, 71 | (none) |
+| `2020_cable_tree_wiring_R046` | yes | 1 500.09 s | 1 509.5 s | 254, 1 | the first conflict's trace |
+
+**Cargo, with or without the proof.** A frame-pointer build (`baguette-fp`, D-0145) put
+90.3 % of the run under `Pb_analysis.analyse` -> `step` -> `Ladder.lift` (89.7 %), whose fold
+adds one ladder row per rung with `Learned.combine` (56 %) and re-sorts the whole row in
+`Learned.make` each time (34 %), with the GC around it. The 16th conflict's analysis did not
+end in 2 100 s. D-0136 had found that conflict analysis needed no poll, which was true of
+the instances it measured.
+
+**Cable, with the proof.** 254 nodes and one conflict, 252 levels down. Its `Trace.emit`
+writes the whole branch's lines, 1.9 GB, and from 302 s to 452 s 93.3 % of the samples were
+in `Justify.find_in_bucket`'s `==` walk. An instrumented build counted 1.65 M memo lookups
+for 300 M bucket steps, in buckets of 4 700 to 6 500 entries, each a chain
+`Combine [k * Combine [... Combine [Model_row i; ...]]]` differing from its neighbours only
+in row ids two to seven levels down. The shallow hash read a `Term` operand by its
+constructor alone (it did before J1 as well, since J1 changed the hash function and not its depth).
+The stop is asked at node entry and inside propagation, and a trace is neither.
+
+**The finaliser was never the time.** From `fired=` to exit, 6.6 s on cable with the proof,
+0.5 s without it.
+
+### 3. The fixes
+
+1. **PB analysis asks the stop** (`974c77d`). `Pb_analysis.analyse ?stop` checks it before
+   every elimination, and `Ladder.lift ?stop` before every rung's `combine`. Yes gives the
+   new fallback `Stopped`, and the conflict arm carries on with the clause path, exactly as
+   for any other fallback, so the stop lands at the next node entry. Nothing PB analysis
+   abandons has been written.
+2. **A conflict's trace asks the stop** (`3523070`, every entry since `aab586a`).
+   `Trace.emit ?stop` checks it before each trail entry. Yes restores the writer's level
+   and raises `Trace.Stopped`, which the conflict arm turns into `Limit_hit`
+   (`stats.stopped_in_trace`, `at=trace` on the `limit:` line). The lines already written
+   are a valid prefix, because each is RUP from the model and from earlier lines (oldest
+   first, Trace's header), and nothing else of the node is on the page yet.
+3. **The memo hashes an operand by its content** (`bc8aa58`). `operand_hash` walks a
+   `Term`'s, `Cut`'s or `Resolve`'s operand depth first, over at most 48 nodes and
+   `hash_width` elements per list. A nested `Deferred` is a constant whatever its `forced`
+   says, so forcing a thunk still cannot move a key, and the equality is still `==`, so no
+   emitted byte can change. Measured, 3.96 M lookups per 300 M steps (was 1.65 M), the
+   biggest bucket 388 entries. Those 388 are structurally IDENTICAL, one physical copy per
+   decision level of the same `Combine` rebuilt by its propagator, which no hash separates.
+   That is what is left of the walk, and the remedy is D-0140's J1 alternative (an id
+   stamped in each explanation at creation), which needs an `Explanation` field and a
+   record of its own. Not done here.
+
+In every run without a limit the stop is `fun () -> false` (or the node budget's
+`nodes > n`, which cannot turn true inside a node), so fixes 1 and 2 change nothing there.
+
+### 4. After
+
+Same machine, same flags, every stopped proof checked by 3.0.2 (64 GB cap for the checker,
+whose runs on these 1.9 GB `.opb` files need 7 to 16 GB):
+
+| instance, limit | binary | `fired=` | `limit:` wall | process exit | `at=` | proof |
+|---|---|---|---|---|---|---|
+| cargo, 300 s, no proof | `f689aae` | never | - | killed at 2 400 s | - | - |
+| cargo, 300 s, no proof | `85cc1b0` | 300.07 s | 300.07 s | 300.11 s | node | - |
+| cargo, 300 s, proof | `f689aae` | never | - | killed at 2 400 s | - | truncated |
+| cargo, 300 s, proof | `85cc1b0` | 300.05 s | 300.06 s | 300.12 s | node | VERIFIED NO CONCLUSION |
+| cable, 300 s, no proof | `f689aae` | 302.23 s | 302.23 s | 302.70 s | node | - |
+| cable, 300 s, no proof | `85cc1b0` | 300.32 s | 300.32 s | 300.73 s | node | - |
+| cable, 300 s, proof | `f689aae` | 1 500.09 s | 1 506.66 s | 1 509.52 s | node | (not checked) |
+| cable, 300 s, proof | `85cc1b0` | 304.82 s | 312.05 s | 314.96 s | node | VERIFIED NO CONCLUSION |
+| cable, 300 s, proof | `aab586a` | 300.09 s | 307.11 s | 310.40 s | trace | see section 5 |
+| cable, 120 s, proof | `85cc1b0` | 123.88 s | 133.40 s | - | trace | VERIFIED NO CONCLUSION |
+| cable, 120 s, proof | `aab586a` | 120.04 s | 129.74 s | 131.13 s | trace | VERIFIED NO CONCLUSION |
+
+Stop to exit, the finaliser's share, is 0.04 to 0.07 s on cargo, 7 to 10 s on cable with the
+proof (deleting the live ids of 252 open levels and flushing a 1.2 to 2.5 GB file), as
+before the fixes. The overshoot past the limit goes from more than 2 100 s to 0.1 s on cargo
+and from 1 209 s to 10 s on cable. Cargo's search is unchanged up to the stop (461 nodes and
+15 conflicts both ways). With `85cc1b0`, cable's first conflict wrote its whole 1.9 GB trace
+in about 280 s where `f689aae` took 1 200 s (fix 3 alone), and the stop then landed at the
+next node entry. `aab586a` polls at every trace entry where `85cc1b0` polled at every 64th,
+which is why it stops inside the second conflict's trace and why the 120 s run fires at
+120.04 s rather than 123.88 s.
+
+### 5. What the fixes cost, and what they change
+
+- **Bytes.** Fix 3 is bucketing only, and measured so. Cable at a 300-node budget with the
+  proof writes the same stdout, `.opb` and 1 887 164 408-byte `.pbp` (md5 `eee608b4`) under
+  `f689aae` in 1 847 s and under `bc8aa58` in 278 s (6.6 times faster, the same 21 GB peak).
+  Fixes 1 and 2 act only when the stop says yes inside a node, which a run without a time
+  limit never does, nor a node budget (`nodes > n` cannot change inside a node).
+- **The suite and the lane.** On the merged branch, 193 suite models with the proof are
+  byte-identical to current main's binary (`681a9e6`) except D-0148's new model. In the
+  differential lane, 301 plain and 289 debug runs, every run equals its reference except
+  48 plain and 39 debug runs in `fifo` and `lbd`. The `fifo` and `lbd` runs (51 plain, 49
+  debug) are byte-identical (stdout, `.opb`, `.pbp`, observations) between this branch's
+  binary and `681a9e6`'s, so those differences are main's, from the retention hook merged
+  after the references were recorded (`36c1312`, D-0139). Nothing in this row changes a
+  lane run.
+- **The M6-T9 lane, found by the gate.** `test_endtoend`'s stopped-satisfaction lane uses a
+  stop that COUNTS its calls (`m6_after 6`), and the new polls asked it inside the first
+  conflict's trace, so it stopped there instead of at the 7th node. D-0136 had already made
+  `stop_poll_runs = 0` the node-entry-only contract for such a predicate. The two new polls
+  follow it now (`inner_stop`, `c707051`) and the lane states it in its config, which is
+  what it always meant: it had run on the default config only because its scene never
+  reached `Engine.propagate`'s 128-run poll.
+- **Not done.** The 388-copy buckets (section 3, fix 3) are what remains of the memo walk;
+  the remedy is an explanation id, which is D-0140 J1's alternative and needs its own
+  record. The finaliser's 7 to 10 s on a 2 GB cable proof is the `del` of every live id of
+  252 open levels and the flush, linear, and was not touched.
+  `2020_hoist-benchmark-for-minizinc_PU_3_8_5` (D-0137 section 13.3, strategy flags only)
+  was not re-measured.

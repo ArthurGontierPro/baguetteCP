@@ -228,9 +228,19 @@ module Int_tbl = Hashtbl.Make (Int)
    Raises nothing: [Learned.combine] multiplies through [Checked] and may raise
    [Checked.Overflow], which is I-X8 / D-0029 and is the caller's to catch -- it is the
    same raise the caller already catches around its own [combine], and the answer to it
-   is to learn a clause instead, never to wrap. *)
-let lift ~(row : Learned.t) ~(pivot : Lit.t) ~(falsified : Lit.t -> bool)
-    ~(ladder_id : string -> int -> int option) : t option =
+   is to learn a clause instead, never to wrap.
+
+   M6-T23 (D-0149): [stop] is asked before every rung's [combine], and [Stopped] is
+   raised when it says yes. One lift on 2017_cargo_challenge01 folds thousands of rungs
+   into a row of thousands of terms, minutes of [combine] and its GC with nothing polling
+   the time limit, so the stop fired only after the analysis ended, long past the limit.
+   The default never says yes, so nothing changes without a limit, and a limit that fires
+   here abandons a lift whose row nothing has used yet. *)
+exception Stopped
+
+let lift ?(stop = fun () -> false) ~(row : Learned.t) ~(pivot : Lit.t)
+    ~(falsified : Lit.t -> bool) ~(ladder_id : string -> int -> int option) () : t option
+    =
   match pivot.Lit.v with
   | Lit.Eq _ -> None (* the direct encoding has no ladder: D-0019/D-0040 *)
   | Lit.Bit _ -> None (* a bits variable has no ladder either: D-0130 section 7.5 *)
@@ -290,7 +300,9 @@ let lift ~(row : Learned.t) ~(pivot : Lit.t) ~(falsified : Lit.t -> bool)
         else
           let lifted =
             List.fold_left
-              (fun acc (w, m, _) -> Learned.combine acc 1 (ladder_row ~name w) m)
+              (fun acc (w, m, _) ->
+                if stop () then raise Stopped;
+                Learned.combine acc 1 (ladder_row ~name w) m)
               row steps
           in
           let rows = List.map (fun (w, _, cid) -> (cid, ladder_row ~name w)) steps in
