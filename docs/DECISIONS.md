@@ -18749,3 +18749,187 @@ A fresh clone of `ebd1c75` on fataepyc-06 (`/scratch/arthur/wave53-learned-gate.
   term per new row. A per-variable integer index would remove the last hash, as RoundingSat's
   arrays do. `Lit.t` has no integer identity, and giving it one is a `lib/proof/` change.
 - `Linear.pb_row` still rebuilds its row per call (D-0140 P2's other half, which is `linear.ml`'s).
+
+## D-0161  M9-no-proof-T4: the `--no-proof` audit -- what the null writer still paid for after D-0135, six guards in Search and in start_proof's root lemmas, and three requests to the owners of the rest
+
+Status: IN PROGRESS (built and measured; paused 2026-11-19 before the gate, see WORKLOG `PAUSED`)
+Date: 2026-11-19
+Task: M9-no-proof-T4 (agent-noproof-audit, `wave53-noproof`), the user's question "is `--no-proof`
+nicely detached?".
+Touches: `lib/core/search.ml` (`record_improving`, `solve`'s SAT arm, `learn_at_conflict`, the new
+`ensure_decision_atom` and its three call sites), `lib/proof/encoding.ml` (`emit_root_lemmas`'
+null arm, `mint_root_lemma_ids`), `bin/main.ml` (its header only). `lib/core/trace.ml`,
+`lib/core/prop/regular.ml` and `lib/core/prop/inverse.ml` were claimed and need nothing (section
+2). `justify.ml`, `compile.ml` and `alldiff.ml` are other rows' files and get requests (section 6).
+
+### 1. Method
+
+D-0135 built the detachment on 2026-11-18. What merged since (the bits atoms and PB analysis over
+bits rows, D-0153; `regular`'s and `inverse`'s root lemmas, D-0146 and D-0151; the memo and the
+citation index of D-0145) was never profiled under the mode, and the orchestrator's note under
+D-0153 section 6 says why those "without the proof" profiles do not count: a run without
+`--proof` writes a temporary proof. Every run below passes `--no-proof`.
+
+- Binaries on `fataepyc-06`: main at the branch point `e003729` (md5 `d7a1ef00`, called *base*),
+  and this branch at `5a15ed1` (md5 `af081ab4`, *guarded*), the same `lib/` as the tip. Profiles
+  use the frame-pointer switch `baguette-fp` of D-0145 (`_build_fp`, base `b5db9239`, guarded
+  `c3baa1a3`), `perf record -F 499 --per-thread -m 128 --call-graph fp`, read with `perf report
+  --children` and a caller split over `perf script` stacks (`under.py`). Instruction counts are
+  `perf stat -e instructions:u` on the ordinary switch, peak RSS is `/usr/bin/time`'s.
+- Instances. D-0140's six from `bench/diff/corpus` at 10 000 nodes. Two bits instances at
+  `--bits-above 0`, `2017_rcpsp-wet_j90_48_4-wet` at 10 000 nodes and
+  `2023_roster-shifts-bool_s50_e50_c3` at 900, D-0157's budget, because 10 000 had run past eight
+  minutes. Two Challenge instances of D-0151's runs, `2011_black-hole_10` (`inverse` native, 138 K
+  cited root lemmas, refuted at the root so the whole run is setup, from
+  `wave51-globals2-meas-inv/fzn/f7196cf5/`) and `2012_nonogram_non_awful_5` (105 `regular` calls,
+  from `wave51-globals2-meas1/fzn/`) at 10 000 nodes.
+- The startup is `BAGUETTE_NODE_LIMIT=1`, D-0140's "setup alone": parse, compile, `start_proof`,
+  the root's propagation and the first child.
+- Everything is under `/scratch/arthur/wave53-noproof-runs/` (`specs.tsv`, `meas.sh`, `prof.sh`,
+  `ident.sh`, `counters.sh`, `table.sh`, `m/`, `prof/`, `ident/`, `counters/`).
+
+### 2. What `--no-proof` did that only a proof line reads
+
+Shares are inclusive, of the whole run under the base binary.
+
+| # | function | where it showed | what it built | verdict |
+|---|---|---|---|---|
+| 1 | `Search.record_improving` -> `Encoding.assignment_lits` | openshop 28.9 %, cyclic 1.1 %, wet_b0 0.4 %, mspsp 0.4 % | every improving solution's whole literal family (each rung of each variable, the direct values, the choice selectors) for a `soli` the null writer drops unread | guarded |
+| 2 | `Search.solve`, the SAT conclusion | once per run | the same family for `conclusion SAT` | guarded |
+| 3 | `record_improving`, the bits objective's bridge | under 0.1 % | `Encoding.ensure_atom` (the `red` pair, its links, their origin strings) and a `Justify.state_clause` entry, per improving solution | guarded |
+| 4 | `Justify.ensure_lit` at a decision | under 0.1 % (`ensure_atom` 0.09 % of wet_b0, PB analysis included) | the decision's atom on a bits variable | guarded at the three call sites |
+| 5 | `Learn.supports` + `support_check` (I-S4) | up to 0.21 % (roster) | a walk over the cut and the folds that finds no line, because `Trace` writes none | guarded |
+| 6 | `Encoding.emit_root_lemmas` | nonogram 1.8 % of the startup, black-hole 0.2 % | `List.rev` and `List.map` of every lemma through a null `rup`, and the list kept for the whole search | guarded |
+| 7 | `Encoding.ensure_direct`, `derive_at_least_one` | black-hole 0.8 % | the channelling ids and tables | kept |
+| 8 | `Pb_analysis.bits_of_ctx`'s bridge | under 0.1 % | an atom PB analysis over a bits row asks for | kept |
+| 9 | `Search.bridges` | up to 0.8 % (openshop) | the decision literals a bridge rests on | kept |
+| 10 | `Retention.add`, `Learned.to_string` | roster 2.1 %, elsewhere under 0.5 % | the duplicate key | kept, not proof |
+| 11 | `Alldiff.snap_of` -> `gone_of`, `established_at_root` | cyclic 39.4 %, black-hole 88 % | the derivation's below/above runs and root flags, and each hole's remover | request |
+| 12 | `Compile.post_regular`, `post_inverse` (stage 2) | nonogram 8.9 % of the startup, black-hole 2.8 % | every root lemma's constraint | request |
+
+Why each kept one stays.
+
+- **7.** `element` and `alldiff` carry the channelling ids inside their `Combine`s, so D-0126's rule
+  2 wants them minted in both modes, and the tables `d_lo`, `d_hi`, `d_fwd` and `direct_cids` are
+  what their explanation builders read. Only the `Opb.clause` and `sprintf` arguments are
+  proof-only, about 0.2 % of black-hole's run, and splitting the loop for them was not worth the
+  risk to rule 2.
+- **8.** PB analysis deduplicates its antecedents by id (`Pb_analysis.analyse`'s `add`), so its
+  arithmetic depends on one id per atom. The memo in `ensure_atom` gives that in both modes.
+- **9.** Its answer, the protected decision literals, goes into the nogood (D-0070). The
+  proof-only part inside it (the hole citations, `record_bridge`) is a part of that 0.8 %.
+- **10.** The key feeds `n_duplicate`, a measurement `--stats` prints in both modes (D-0152 kept
+  the text as the cheaper key). It is not proof work and this row leaves it.
+- `Writer.set_level`, `with_level`, `wipe_level` and `fresh`, `Justify.with_level` and
+  `wipe_level` stay. Under the null writer they are O(1), and the fresh id of a learned row is its
+  key in `Retention`.
+- The compile-time bookkeeping under `Discard_rows` (`count_discarded_row`, `discard_shape_ok`,
+  `Occurs`, the renamings) stays. D-0143 keeps the encoding the same object in both modes, and
+  `reif_occurs`'s refusal reads `Occurs`.
+
+And what needed nothing.
+
+- `Trace.settle_facts` and `Trace.derive_ahead` are reached only from `emit_to_page`, behind
+  `Trace.emit`'s guard. `Trace.*` was at most 0.11 % anywhere, nearly all of it `lines_at` and
+  `position_of` called by `Learn.supports` (row 5).
+- The memo and the claim index of `justify.ml` stay empty. `emit`, `emit_stating`,
+  `emit_concluding` and `emit_rup_clause_lazy` return before `memoized` and `state_clause`, so
+  `wipe_level` walks nothing, and the one writer of the claim index the null writer still reached
+  was row 3. `Justify.*` was at most 0.05 % on every instance.
+- `regular.ml` and `inverse.ml` do propagation and reasons, and the reasons feed 1UIP. Their proof
+  side under the null writer is the root lemmas (rows 6 and 12).
+
+One correction to D-0135 section 2, which says the callers of `ensure_atom` are `Justify.ensure_lit`
+"(guarded, so under `--no-proof` it never runs)". `ensure_lit` has no guard. `validate_lits`
+reaches it only past the guards, but `Search.branch_split` and `branch_assign` called it directly,
+so a decision on a bits variable minted its atom through the null writer. The cost was small, and
+row 4 removes it.
+
+### 3. The guards, and why none of them can change the search
+
+- **1, 2.** `lits` is `[]` under the null writer. `Writer.improving` and `Writer.conclusion` read
+  nothing but their id there (`fresh`, `finished`), so the `soli` id is minted by the same call in
+  the same place, and nothing in the search ever read `lits`.
+- **3, 4.** The bits objective's bridge and a decision's atom are skipped under the null writer.
+  The global then carries the `soli` id, which no search step reads (`g_cid` has no reader). An
+  atom PB analysis needs is minted there on first ask and memoised, so the one property the
+  analysis reads, one id per atom, holds. This does change the null writer's counter (fewer fresh
+  ids after `start_proof`), which D-0126's rule 3 allows. Those ids already differ between the two
+  modes (D-0135 section 2), `Retention` orders by `e_seq` and never by id, and section 5 measures
+  every counter equal.
+- **5.** Under the null writer `Trace` holds no line (`n_done = 0`), so `lines_at` and
+  `hole_line_of` answer nothing and `Learn.supports` returned `[]`. The guard returns `[]`, and the
+  `i-s4` counters read the same lengths.
+- **6.** A null `rup` is `Writer.fresh` and reads nothing else, so `Array.init n_lemmas fresh` in
+  registration order mints exactly the ids the `List.map` minted, which is what alldiff cites for
+  the pairwise lemmas of an `inverse` (D-0151, rule 2). The list is then dropped, so the search
+  does not carry it.
+
+### 4. Before and after, under `--no-proof`
+
+Instructions in G at the budget and at the startup (budget 1), peak RSS in MB at the budget. One
+run each. Repeated runs of one binary move by about 0.2 %, so a change under that is noise.
+
+| instance | budget | base | guarded | change | startup base | guarded | change | RSS base | guarded |
+|---|---|---|---|---|---|---|---|---|---|
+| H_qr48_bag_def | 10 000 | 19.02 | 19.01 | -0.1 % | 0.063 | 0.063 | 0 | 65 | 65 |
+| H_qr72_bag_def | 10 000 | 26.00 | 25.96 | -0.2 % | 0.123 | 0.123 | 0 | 83 | 81 |
+| 2013_rcpsp_11 | 10 000 | 58.25 | 58.16 | -0.2 % | 0.212 | 0.212 | 0 | 120 | 117 |
+| 2012_mspsp_hard_01 | 10 000 | 72.63 | 72.31 | -0.4 % | 1.330 | 1.332 | 0 | 281 | 274 |
+| 2011_cyclic-rcpsp_easy_6 | 10 000 | 57.51 | 56.67 | -1.5 % | 0.280 | 0.280 | 0 | 47 | 41 |
+| 2014_openshop_gp10-4 | 10 000 | 65.77 | 37.72 | **-42.6 %** | 0.356 | 0.355 | 0 | 341 | **93** |
+| rcpsp-wet, `--bits-above 0` | 10 000 | 1 054.01 | 1 048.82 | -0.5 % | 0.430 | 0.430 | 0 | 582 | 584 |
+| roster-shifts-bool, `--bits-above 0` | 900 | 103.89 | 103.82 | -0.1 % | 0.377 | 0.378 | 0 | 582 | 578 |
+| 2011_black-hole_10 (whole run) | root | 41.70 | 41.63 | -0.2 % | 41.71 | 41.63 | -0.2 % | 152 | 149 |
+| 2012_nonogram_non_awful_5 | 10 000 | 340.50 | 338.70 | -0.5 % | 5.479 | 5.401 | -1.4 % | 1 043 | **891** |
+
+The startup's peak RSS moves by 4 % at most (nonogram 178 to 172 MB, black-hole 157 to 151 MB),
+because the root lemmas are built during compile either way (row 12). Wall time, one run each on
+a node at load 50: openshop 12.0 to 8.1 s, nonogram 62.8 to 59.6 s, rcpsp-wet 171 to 165 s,
+cyclic 8.6 s both.
+
+openshop gains more than row 1's 28.9 % because those lists were what its major GC was collecting.
+`caml_major_collection_slice` was 11.3 % of the base run.
+
+AFTER_PROFILE_PLACEHOLDER
+
+### 5. The checks
+
+- **The proved run is byte-identical to main's.** Every `test/models/*.fzn` at default flags (198),
+  the 24 `bits_*` at `--bits-above 0` and the 3 `restart_*` with the restart lane's flags, base
+  against guarded, 225 runs, 0 differences in stdout, exit code, stderr, `.opb` or `.pbp`
+  (`ident.sh`).
+- **Under `--no-proof`, stdout and the search counters equal the proved run's.** The same 225
+  runs, each proved (`--proof --stats`) and unproved (`--no-proof --stats`), on the guarded
+  binary. Stdout and exit code are equal on all 225, and every `stats:` line is equal except two
+  that are about the proof, `later` (deferred reasons materialised, which the trace asks for once
+  per entry, 111 runs) and `i-s4-cross` (hole lines above level 0 that a learned clause rests on,
+  40 runs). Every node, decision, conflict, skip, learned, PB, global, propagation and wake
+  counter is equal on every run. The base binary gives the same two exceptions on the same runs,
+  and the 450 `--stats` outputs are line for line the same on the two binaries (`counters.sh`).
+- On the ten instances, base against guarded under `--no-proof`, stdout and the `limit:` line
+  (nodes, decisions, conflicts, learned, PB rows, database, depth, incumbent, propagator runs)
+  are equal.
+- `make check`'s lane already covers what this row needed. Every model (the four `regular_*` and
+  three `inverse_*` among them) and the `bits_*` at `--bits-above 0` are proved and then run
+  under `--no-proof` with stdout and exit code compared. It does not compare counters. The
+  script above does, and it is not part of the gate.
+
+GATE_PLACEHOLDER
+
+### 6. What is left, and whose it is
+
+Three requests are under `## Cross-session requests` in `WORKLOG.md`, dated 2026-11-19.
+
+- **`alldiff.ml` (agent-alldiff).** `snap_of` builds `Gone_below`/`Gone_above` (two `range` lists
+  per variable per pass) and the two root flags at every snapshot, and only the deferred
+  derivations read them. That is 39.4 % of cyclic's instructions under `--no-proof`, and the same
+  instructions in proof mode. The runs are functions of four ints the snapshot holds, so the
+  `Deferred` can rebuild them. Black-hole's 88 % is the holes' `hole_cite` walk, D-0155's request.
+- **`compile.ml` (agent-member).** The root lemmas are still built in `post_regular` and
+  `post_inverse` and now dropped unread at `start_proof`, 8.9 % of nonogram's startup and 2.8 % of
+  black-hole. A count would do, but compile.ml has no writer, and `Discard_rows` also covers the
+  runs without `--proof`, whose temporary proof writes the lemmas. So it needs a no-proof signal
+  at compile time.
+- **`justify.ml` (agent-memo).** `ensure_lit` should carry the null guard itself, so that a future
+  caller cannot mint atoms for the null writer. Nothing pays for its absence today.

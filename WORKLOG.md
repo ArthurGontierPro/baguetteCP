@@ -410,6 +410,44 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
    `BAGUETTE_DEBUG`). element.ml's two copies of the walk were replaced that way in D-0155,
    every artefact unchanged.
 
+### 2026-11-19 — M9-no-proof-T4 (D-0161): proof-only work `--no-proof` still does, in files that row did not hold (agent-noproof-audit, `wave53-noproof`)
+
+Measured with `perf record --call-graph fp` (switch `baguette-fp`) under `--no-proof`, D-0161
+section 1. Shares are inclusive, of the whole run.
+
+1. **`Alldiff.snap_of` builds derivation inputs at every snapshot** (`lib/core/prop/alldiff.ml`,
+   agent-alldiff's). `gone_of` lists every declared value below and above the window
+   (`Gone_below`, `Gone_above`, two `range` lists per variable per pass) and
+   `established_at_root` reads both supports. Only derivations read them (`alo_over`,
+   `hall_cancels`, `target_cancel`, `overshoot_cancel`, all inside `prune_expl`'s `Deferred`).
+   The reason reads only the `Gone_hole` entries (`hall_facts`). Under `--no-proof` at 10 000
+   nodes this is 39.4 % of `2011_cyclic-rcpsp_easy_6`'s instructions (`gone_of` 37.3,
+   `established_at_root` 2.2), built and never read. The below and above runs are functions of
+   `s_dlo`, `s_lo`, `s_hi` and `s_dhi`, which the snapshot already holds, so the `Deferred` can
+   rebuild them when it is forced. The root flags need the supports as they were, so they stay
+   eager or go through a `Store.history` (D-0124). Proof mode gains the same instructions. The
+   holes' `hole_cite` walk is D-0155's request above, and it is 87 % of `2011_black-hole_10`.
+2. **The root lemmas are built in `compile.ml` and dropped under `--no-proof`**
+   (`lib/flatzinc/compile.ml`, agent-member's). Since D-0161 `Encoding.start_proof` mints their
+   ids under the null writer without reading them and drops the list. `post_regular` still
+   builds every B(i, q', R) (`List.filter` over the predecessors, `Opb.clause`), which is 8.9 %
+   of `2012_nonogram_non_awful_5`'s startup instructions under `--no-proof`, and `post_inverse`'s
+   stage 2 builds its pairwise lemmas, 2.8 % of `2011_black-hole_10`'s run. The ids must still
+   be minted, because alldiff cites the pairwise ones (D-0126 rule 2), so the door is a count.
+   compile.ml has no writer, and `Encoding.row_sink` is `Discard_rows` for every run without
+   `--proof` as well, whose temporary proof does write the lemmas. So the change needs a
+   no-proof signal at compile time, for example an ambient set by `bin/main.ml` beside
+   `row_sink`, read by a lazy `add_root_lemma`/`add_cited_lemma` that forces its constraint only
+   when a proof will be written and counts it otherwise.
+3. **`Justify.ensure_lit` has no null-writer guard** (`lib/core/justify.ml`, agent-memo's). Its
+   two callers in `search.ml` (a decision's atom) are guarded since D-0161 and `validate_lits`
+   is reached only past the existing guards, so nothing pays for it today. One line at its head,
+   `if not (Writer.is_null ctx.writer)`, would keep a future caller from minting atoms for the
+   null writer. The memo and the claim index need nothing. Under the null writer `emit`,
+   `emit_stating`, `emit_concluding` and `emit_rup_clause_lazy` return before `memoized` and
+   `state_clause`, so both tables stay empty and `wipe_level` walks nothing. `Justify.*` is at
+   most 0.05 % on all ten instances.
+
 ## Completed
 
 | Task | Session | Date | Summary |
@@ -573,6 +611,43 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M13-codes-leads (roadmap rows only) | codes-cp session | 2026-11-19 | Two TODO (to study) rows from the codes-cp phase-1 benchmark: T1 a linear relaxation as a presolve step, T2 symmetry detection with dominance-justified breaking. No code. |
 
 ## Handoff notes
+
+### PAUSED 2026-11-19 (agent-noproof-audit, wave53-noproof)
+
+Paused on the orchestrator's request (connection to fataepyc-06 ending). The claim row stays.
+
+**Done and committed** (branch `wave53-noproof`): the six guards (`lib/core/search.ml`:
+`record_improving`'s literal family and bits bridge, `solve`'s SAT conclusion, `ensure_decision_atom`
+at the three decision sites, `Learn.supports` under the null writer; `lib/proof/encoding.ml`:
+`emit_root_lemmas`' null arm `mint_root_lemma_ids`), `bin/main.ml`'s header, the D-0161 draft at
+the end of `docs/DECISIONS.md` (sections 1 to 6 written; two placeholders), the three requests
+under `## Cross-session requests` (dated 2026-11-19, M9-no-proof-T4), the ROADMAP row (still
+IN PROGRESS). Laptop `dune build --root . lib/ bin/ test/ @fmt` is clean.
+
+**Measured** (all on fataepyc-06, `/scratch/arthur/wave53-noproof-runs/`, binaries in `bin/`:
+`base.exe` d7a1ef00 = main `e003729`, `g1.exe` af081ab4 = `5a15ed1`, fp builds `base_fp.exe`,
+`g1_fp.exe`): base profiles `prof/base/`, `prof/base3/` (black-hole, nonogram), startup profiles
+`prof/start_base/`; perf stat `m/base/`, `m/g1/` (table: `bash table.sh base g1`); proved
+identity base vs g1 `ident/g1/` (225 runs, 0 differences); counters `counters/g1/`,
+`counters/base/` (225 runs, stdout/rc equal, only `later` and `i-s4-cross` differ proved vs
+no-proof, identically on both binaries). These are already written into D-0161 sections 2 to 5.
+
+**Nothing is running.** The after-profile of `g1_fp.exe` (`prof.sh`, output `prof/g1/`, pidfile
+`prof_g1.pid`) finished before the pause (`prof/g1/DONE` exists) and has not been read yet. The
+gate script is in place, `gate.sh`, not started.
+
+**Next steps**, in order:
+1. When `prof/g1/DONE` exists: `bash suspects.sh prof/g1` and replace `AFTER_PROFILE_PLACEHOLDER`
+   in D-0161 section 4 with what is left (expect `record_improving`, `Learn.supports`,
+   `emit_root_lemmas` gone; alldiff and compile.ml's lemmas still there).
+2. Run the gate on a fresh clone of the branch tip: `bash gate.sh wave53-noproof` from the runs
+   directory (detached, pidfile), status in `gate.status`, logs `gate.check.log`, `gate.diff.log`,
+   `gate.diffdbg.log`, `gate.scaling.log`. Report the unit-check count, FAIL count, models passed,
+   peak RSS, diff and diff-debug run counts, the scaling rc. Replace `GATE_PLACEHOLDER` in D-0161
+   section 5 with those numbers.
+3. Then: D-0161 `Status` stays DONE only if the gate is green; set the ROADMAP row to DONE with the
+   note naming D-0161; move the claim row to `## Completed`; replace this note with a 3-5 line
+   handoff; push to node06 and origin.
 
 ### 2026-11-19 (orchestrator): wave53-tooling merged, gate 62 green
 
