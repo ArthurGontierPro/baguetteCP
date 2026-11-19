@@ -461,37 +461,31 @@ module Claims = Hashtbl.Make (struct
 end)
 
 (* M11-complexity-T10 (D-0158). Share mode's index of the lines this module wrote for a
-   [Combine], [Cut] or [Linear]: the expression or target, exactly as written, to the
-   line's id and level. Keyed by the whole of it, hashed over every node (the hash costs
-   what rendering the line costs, and is paid only on a memo miss), compared with the
-   structural equality of [Pol.t] and [Opb.constr], which hold integers, literals and
-   nothing mutable. Like [stated], nothing iterates it. *)
-type line_key = Pol_line of Pol.t | Rup_line of Opb.constr
-
-let rec pol_hash h (p : Pol.t) =
-  match p with
-  | Pol.Id c -> mix (mix h 1) c
-  | Pol.Axiom l -> mix (mix h 2) (lit_hash l)
-  | Pol.Add (a, b) -> pol_hash (pol_hash (mix h 3) a) b
-  | Pol.Mul (a, k) -> mix (pol_hash (mix h 4) a) k
-  | Pol.Div (a, k) -> mix (pol_hash (mix h 5) a) k
-  | Pol.Sat a -> pol_hash (mix h 6) a
-  | Pol.Weaken (a, v) -> mix (pol_hash (mix h 7) a) (Hashtbl.hash v)
+   [Combine], [Cut] or [Linear]: the line's TEXT, as the page has it but for the rule
+   name and the id, to the line's id and level. Text, because it is the exact identity
+   of a line, because a string is one block the collector does not scan (D-0158 section
+   3: holding every live line's [Pol.t] cost rcpsp_11 a sixth of its run in the
+   collector), and because [Hashtbl.hash] and [String.equal] on it are the C hash and a
+   memcmp. Like [stated], nothing iterates it. *)
+type line_key = string
 
 module Lines = Hashtbl.Make (struct
   type t = line_key
 
-  let equal (a : t) (b : t) = a = b
-
-  let hash = function
-    | Pol_line p -> finish (pol_hash 1 p)
-    | Rup_line (c : Opb.constr) ->
-        finish
-          (List.fold_left
-             (fun h (k, l) -> mix (mix h k) (lit_hash l))
-             (mix (mix 2 c.Opb.rhs) (Hashtbl.hash c.Opb.rel))
-             c.Opb.terms)
+  let equal = String.equal
+  let hash (k : t) = Hashtbl.hash k
 end)
+
+(* The key of a `pol` line: [Pol.write_labelled]'s bytes, the writer's own rendering. *)
+let key_buf = Buffer.create 256
+
+let pol_key (expr : Pol.t) : line_key =
+  Buffer.clear key_buf;
+  Buffer.add_string key_buf "pol ";
+  Pol.write_labelled key_buf expr;
+  Buffer.contents key_buf
+
+let rup_key (c : Opb.constr) : line_key = "rup " ^ Opb.constr_to_string c
 
 type ctx = {
   writer : Writer.t;
@@ -1291,19 +1285,19 @@ let rec emit ctx (e : Explanation.t) : Writer.cid =
   | Explanation.Linear (terms, rhs) when ctx.memo.share ->
       memoized_line ctx e ~line:(fun () ->
           let c = linear_line ctx terms rhs in
-          (Rup_line c, fun () -> write_linear ctx c))
+          (rup_key c, fun () -> write_linear ctx c))
   | Explanation.Linear (terms, rhs) ->
       memoized ctx e (fun () -> emit_linear ctx terms rhs)
   | Explanation.Cut (e1, e2, c1, c2) when ctx.memo.share ->
       memoized_line ctx e ~line:(fun () ->
           let expr, origin = cut_line ~emit ctx e1 e2 c1 c2 in
-          (Pol_line expr, fun () -> pol_stating ctx ~claim:None ~origin expr))
+          (pol_key expr, fun () -> pol_stating ctx ~claim:None ~origin expr))
   | Explanation.Cut (e1, e2, c1, c2) ->
       memoized ctx e (fun () -> emit_cut ~emit ~claim:None ctx e1 e2 c1 c2)
   | Explanation.Combine (summands, divisor) when ctx.memo.share ->
       memoized_line ctx e ~line:(fun () ->
           let expr, origin = combine_line ~emit ctx summands divisor in
-          (Pol_line expr, fun () -> pol_stating ctx ~claim:None ~origin expr))
+          (pol_key expr, fun () -> pol_stating ctx ~claim:None ~origin expr))
   | Explanation.Combine (summands, divisor) ->
       memoized ctx e (fun () -> emit_combine ~emit ~claim:None ctx summands divisor)
   | Explanation.Deferred _ -> memoized ctx e (fun () -> emit ctx (Explanation.force e))
