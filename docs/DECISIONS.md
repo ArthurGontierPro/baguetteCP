@@ -19472,3 +19472,109 @@ The fix touches `element.ml` only, which main holds since D-0155, so it was cher
 numbers of section 5 were measured over wave53-alldiff's tip; on main the gate checks that every
 artefact stays byte-identical (gate 69, WORKLOG).
 
+
+## D-0166  M11-complexity-T12: what a proved run keeps once a line is written; four holders shrunk byte for byte, the largest is the user's call
+
+Status: DONE for sections 2 and 3 (every byte the same). OPEN for the user: section 5.
+Date: 2026-11-19
+Task: M11-complexity-T12 (agent-live, `wave54-live`). Follows D-0164 section 7.
+Touches: `lib/core/justify.ml` (the claim index's packed keys, the memo's chained table, shared
+`Combine` origins), `lib/proof/writer.ml` (the audit keeps the origin alone, `by_lvl` as runs),
+`test/unit/test_justify.ml` (`test_representations_m11t12`). `lib/core/explanation.ml` is
+unchanged.
+
+### 1. The question
+
+D-0164 section 3 found 2.66 GB live on `2011_black-hole_9` with `--proof` at node 40, held by
+alldiff's forced derivations (1.16 GB), the `Justify` memo (341 MB) and claim index (333 MB), the
+writer's audit table (325 MB) and its tags (190 MB). For each holder, which part must outlive the
+line it wrote and which part is kept only because nothing dropped it?
+
+Measured on a throwaway base, main `f5c7973` with `origin/wave53-alldiff` merged (main stops at 13
+nodes on black-hole) and agent-heap's PROBE commits, plus counts per table at the node limit:
+3 131 911 memo entries (3 130 755 of them inner `Combine`s, 462 `Deferred`, 694 `Clause`),
+25 888 claim keys holding 4 868 262 literals (16 387 keys over 20 literals: the trace lines),
+3 371 554 live ids in the audit table and in `tags` alike. With `BAGUETTE_MEMO_STATS=1` the memo
+takes 3 391 406 lookups to node 40 and answers **none** of them.
+
+### 2. What each holder must keep, and what it kept for nothing
+
+| holder | read again after the line is written | kept only because nothing dropped it | done |
+|---|---|---|---|
+| claim index (`stated`) | the clause as a SET, for `defining_line`'s equality test and `wipe_level` | a fresh `Lit.t` record and `Ge` block per literal of every key, 68 bytes a literal | key packed to two ints a literal over interned names: 333 -> 76 MB |
+| memo | the key's identity (`==`), its hash, the id and the level, for the hit test and the wipe | a tuple, a record and a list cons per entry, and the hash again as a cons per level, about 93 bytes | one 48-byte cell per entry in a chained table, the per-level hashes in int buffers: 342 -> 244 MB |
+| audit table (`live`) | the id's presence (I-X2, `is_live`, the end sweep `live_ids`), its origin for a failure report | the level (it is the id's tag, in `tags`), and one origin closure per `Combine` line | the origin alone, one closure per `Combine` shape: 325 -> 132 MB |
+| `tags`, `by_lvl` | each live id's level, for `wipe_level`'s doomed set | one cons per id in a level's bucket, whose ids are almost always consecutive | the bucket as runs of consecutive ids: 189 -> 118 MB |
+| alldiff's forced derivations | the head's identity and shallow hash (memo hit), the whole tree for `Explanation.lits` (the D-0026 agreement check under `BAGUETTE_DEBUG`), `Pb_analysis.cited_ids`, and a re-emission after the memo entry's level is wiped while the explanation lives on | nothing, within the type: see section 5 | not done, 1.16 GB stays |
+
+The memo's entries are kept as they were, each one. Every lookup keys on a physical value, so an
+entry cannot be dropped while its key is reachable without risking a second line, and the memo
+cannot know which keys a later derivation will reach.
+
+### 3. Why the bytes cannot move
+
+- Claim index: the packing is injective (one interned id per name string, so two names share an
+  id exactly when `String.equal` holds, which is what `Lit.equal` compares; kind, sign and value
+  are their own fields), so two packed keys are equal exactly when the sorted literal lists were
+  equal. Nothing iterates the table. The interned names are never wiped, so an id stays stable
+  for as long as any key can use it.
+- Memo: a lookup compares the full hash, then `==`, and a slot's chain is newest first as a bucket
+  was, so it answers what the bucket of that hash answered; growing the table keeps each hash's
+  cells in their order. A wipe removes from a slot exactly its cells at the wiped level or above.
+- Audit: `live` and `tags` gain and lose ids at the same four sites (`fresh_lazy`, `wipe_level`,
+  `delete_many`, `delete_core`); nothing re-tags an id, so the report's level read from `tags` is
+  the level the entry held. An origin is rendered only by the report, the mutation knob and
+  `--stats`' widest `pol`, and a shared `Combine` closure renders the same string (the key packs
+  both integers and is used only where both fit in 31 bits).
+- `by_lvl`: a run is extended only when the new id is the next one at the same level, and a bucket
+  read from each run's `hi` down to its `lo` lists the same ids in the same order as the list did,
+  so `wipe_level` computes the same doomed list and writes the same deletions.
+
+`test_representations_m11t12` drives 5 000 derivations over four interleaved levels past the
+table's growth, a run broken by an interlude at another level, and clauses that differ by kind,
+sign, name or order, through hits, wipes and re-derivation.
+
+### 4. Measurements (fataepyc-06, `2011_black-hole_9`, `--proof`, node 40)
+
+Binaries on the throwaway base: before `d1e5e20a`, after `b28d132a` (the same PROBE code, which
+is inert without `BAGUETTE_HEAP_PROBE` except for the node limit). Runs in
+`/scratch/arthur/wave54-live-runs/`.
+
+| | before | after |
+|---|---|---|
+| live heap at node 40 | 2 660 MB | 2 041 MB |
+| peak RSS (probe off) | 4 346 MB | 3 648 MB |
+| instructions (`perf stat`, probe off) | 670.7 G | 656.3 G (-2.2 %) |
+| wall (probe off, shared node) | 118.9 s | 121.8 s |
+| `.pbp` md5 | `1d8104fe` | `1d8104fe` |
+
+The drops after the change (same order as D-0164's): audit origins 13 MB (was 129), audit table
+119 MB, `tags` + `by_lvl` 118 MB, memo 244 MB, claim index 76 MB, trace 16 MB, element's arena
+slots 61 MB, all_different's 1 160 MB.
+
+### 5. For the user: alldiff's forced derivations (1.16 GB) and the memo that never hits
+
+Every forced derivation is held by its arena slot through `thunk.forced` (and `thunk.compute`,
+which `force` sets to a closure returning it) for as long as its trail entry stands. After the line
+is written the solver reads it again only in the four ways of section 2's last row. None of the
+options below is taken.
+
+| option | what changes | bytes | memory on bh9 node 40 | cost |
+|---|---|---|---|---|
+| A. keep (now) | nothing | same | 1.16 GB stays | none |
+| B. a thunk records its emitted id and level, drops its forced tree, keeps its original closure and re-forces on a later read | `Explanation.t`'s `thunk` record (a field) | same if every thunk is deterministic (I-X6 says it closes over a snapshot) and a re-forced tree shares no non-thunk node with another live one; argued, then measured | most of 1.16 GB (the closures hold about 15 MB, D-0164) | a re-force per later read: debug agreement walks, `cited_ids`, a re-emission after a wipe |
+| C. replace the forced tree by `Model_row id` once written | no type change | a citation after the line's level is wiped names a deleted id; `Explanation.lits` loses the cited literals, so the D-0026 agreement check under `BAGUETTE_DEBUG` fires on the parents | most of 1.16 GB | not sound as it stands; rejected |
+| D. make alldiff's derivations smaller (share the axiom chains, fewer inner `Combine`s per line) | `lib/core/prop/alldiff.ml` only | same if every line is the same | unknown, the tree is 2.2 MB of heap per derivation | its own task |
+| E. memoise only roots and `Deferred`s, not a `Combine` reached as another `Combine`'s `Term` | `justify.ml` only | same if no non-thunk node is shared by two derivations or twice in one; that is explanation.ml's stated discipline ("a thunk is the ONLY shared node"), not a property of the type, and a violation would write a duplicate line, still valid | most of the memo's 244 MB here (3.13 M inner entries, 0 hits) | the discipline becomes load-bearing for the bytes; a `BAGUETTE_DEBUG` check could keep the full memo and assert no inner hit |
+
+Recommendation: B, which takes the largest holder without touching any proof line, if the user
+accepts a field on `thunk`; E is cheap, but it makes a comment-level discipline load-bearing for
+the bytes, and that should be the user's call too.
+
+### 6. Gate
+
+Fresh clone of `wave54-live` at `c46952f` from the hub (`/scratch/arthur/wave54-live-gate`, binary
+`214e74d1`) against gate 69's `22620b60`: `make check` rc 0 (4 289 ok, gate 69's 4 279 plus the 10
+of `test_representations_m11t12`; 198 models, peak RSS 99 MB), 198 models x 4 artefacts equal
+(`out`, `rc`, `opb`, `pbp`), lane 301/301 and debug 289/289 equal to the reference, scaling ok,
+`bench/diff` untouched. Nothing to re-record.
