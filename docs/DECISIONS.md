@@ -18451,3 +18451,112 @@ status file; since T6 that pattern matches the information line, so grep `'^scal
 for the verdicts. The lane's rc is now the verdict and must count as red. After a gated merge,
 re-record with `scripts/scaling_lane.sh --update -j 16` on the merged binary in its own commit;
 it refuses while a line is OVER and keeps every line whose growth did not go down.
+
+## D-0155  M11-complexity-T8: `Element`'s fact deduplication hashed and linear, and the other per-pruning scans of element.ml gone; `2011_black-hole_10` from 168 G to 52 G instructions, every byte the same
+
+Status: DONE (built, measured, gated on a fresh clone; every lane equals its reference, nothing to re-record)
+Date: 2026-11-19
+Task: M11-complexity-T8 (agent-element, `wave53-element`), opened from D-0151 section 2.
+Touches: `lib/core/prop/element.ml` (`Fact_tbl`, `fact_acc`/`add_to`/`acc_facts`, `add_facts`,
+`hole_facts`, `index_hole_puncher`, `Int_tbl`/`int_set`, `dead_positions`, `conflict_facts`,
+`filter_index`, `filter_result`), `test/unit/test_prop.ml` (one oracle test in the element
+section). Measured on `fataepyc-06` against main at `9a9c461` (binary
+`64ec63e019e192aaec1da06410745ee2`), this branch's code at `f793ebe` (binary
+`643f44e96155b901eb00573538b90e70`); outputs under `/scratch/arthur/wave53-element-meas/`.
+
+### 1. What was quadratic
+
+D-0151 section 2 put 99 % of `2011_black-hole_10`'s run (102 `array_int_element`, the native
+`inverse`) in `Element.add_facts`: `List.mem f acc` then `acc @ [f]` per fact, so quadratic in
+the facts collected, each step a polymorphic compare of records holding `X_INTRODUCED_` names.
+Reading the rest of the module under the same standard found four more scans on per-pass or
+per-pruning paths:
+
+- `index_hole_clause` and `conflict_facts`' puncher walked the WHOLE trail backwards once per
+  interior index hole asked about, so O(positions x trail) per pruning and per conflict.
+- `dead_positions` asked `List.mem p live` once per declared position, and every pruning's eager
+  explanation calls it (one per hole `filter_result` punches): O(|decl| x |live|).
+- `filter_result`'s interior-value loop asked `List.mem v vals` once per value of the result's
+  window: O(width x |live|) per pass.
+- `filter_result` built its reason (the index's hole facts, one remover's reason per hole, a
+  `Later` materialised for each) on EVERY pass, and most passes prune nothing; `filter_index`
+  rebuilt the result's hole facts once per removal.
+
+### 2. The fixes, and why each keeps the bytes
+
+- **`add_facts`** is a hashed accumulator (`Fact_tbl`, `Hashtbl.Make` on `Reason.fact` with a
+  monomorphic structural `equal`: both constructors, `String.equal` on the name, `=` on the two
+  ints) plus a reversed list. It returns the old fold's list element for element: the seed whole
+  and in order, duplicates inside it included (the fold never examined them), then each later fact
+  iff no equal fact precedes it. `index_hole_facts`, `result_hole_facts` and `conflict_facts` feed
+  one accumulator rather than folding `add_facts`, which is the same composition. Test:
+  `test_d0155_element_add_facts_oracle` holds `Element.add_facts` to the old fold on 2 000 random
+  lists over a small alphabet (seeds with duplicates in over 100 of them).
+- **The two trail walks** go through `Store.remover` (D-0088, binary search over the variable's
+  entry history), and the level through the entry's `pos` (M6-T15). The walk's predicate (on
+  `ibase`, `bp` in `old`, not in `now`, from the top of the trail) is `Store.remover_scan`'s, and
+  `Store.remover` is checked against that scan by physical equality under `BAGUETTE_DEBUG`, which
+  the debug pass of the differential lane runs.
+- **`dead_positions`** and the interior-value loop test membership in an `Int_tbl` built once per
+  call. The walks are still over `t.decl_pos` and the window, in the same order.
+- **`filter_result`'s reason** is `lazy` and forced at the first pruning. Nothing in the pass writes
+  the store before the first `justified` call (only reads: `live_positions`, the explanations'
+  eager reads), so the list is the one the eager `let` built. **`filter_index`'s result hole
+  facts** are read once per pass: a removal there moves only the index, so while the result's base
+  variable is another variable its holes and removers are the same at every removal. When the result
+  IS the index, every removal re-reads, as before.
+
+The only counter this can move is `Reason.materialisations` (`--stats`), lower where a pass built
+facts for nobody; no lane's recorded counters moved (section 5).
+
+### 3. Measurements (fataepyc-06, `perf stat -e instructions:u`, proof on)
+
+| instance | budget | main | this branch | artefacts |
+|---|---|---|---|---|
+| `2011_black-hole_10` (native inverse) | to the end (UNSAT at the root) | 168.0 G, 23.5 s | 52.2 G, 7.6 s | stdout, .opb, .pbp, stats equal |
+| `2011_black-hole_20` | 20 nodes | 6 284 G, 934 s | 1 846 G, 280 s | equal |
+| `2023_chessboard_chessboard4` (98 elements) | 10 000 nodes | 170.3 G, 30.6 s | 110.3 G, 21.9 s | equal |
+| `2020_lot-sizing_pigment15b` (14) | 12 000 nodes | 160.6 G, 28.1 s | 144.7 G, 25.5 s | equal |
+| `2023_evm-super-compilation_..._6_0` (94) | 8 000 nodes | 101.3 G, 19.3 s | 100.3 G, 19.6 s | equal |
+
+Peak RSS moves by under 2 % either way.
+
+**The Challenge black-hole family at 300 s** (D-0151's inverse list, `bench/regular_spike/meas_pair.sh`,
+8 GB heap budget, every complete answer's proof checked by veripb 3.0.2): main and this branch
+answer the same three (`2011_black-hole_10` 23.4 s to 7.9 s, `2011_black-hole_17` 2.1 to 1.5 s,
+`2013_black-hole_6` 5.1 to 3.9 s), all VERIFIED. The other twelve time out on both, with 1.2x to 2x
+the nodes on this branch (for example `2011_black-hole_9` 14 to 26, `2013_black-hole_16` 13 to 27).
+`2025_black-hole_layout_14` is refused by the 8 GB heap budget at 323 s on this branch where main
+timed out at 20 nodes, which is D-0151's native-route refusal again, reached because the run gets
+further.
+
+### 4. Why the reach did not move, and what is next (not done here)
+
+`perf record` after the fix, on `2011_black-hole_10` and on 90 s of `2011_black-hole_20`: Element is
+gone from the profile (0.1 %), and about 70 % (bh10) to 89 % (bh20) of the run is
+`Alldiff.remover_index` (`Alldiff.go`, `Store.trail_entry`, `caml_apply2`, `Int.equal`), the same
+whole-trail walk per hole that this record removed from element.ml. alldiff.ml is claimed by
+agent-alldiff (M7-T33), so this is a cross-session request in WORKLOG, not a change. To size it, an
+UNCOMMITTED probe (that walk replaced by `Store.remover` plus `pos`, `/scratch/arthur/wave53-element-probe`,
+results in `wave53-element-meas/probe/`) ran the same fifteen instances: the same three answers
+VERIFIED (bh10 in 2.5 s); of the twelve others, four time out at 80 to 95 nodes where this branch
+reached 14 to 27, and eight are refused by the 8 GB heap budget between 87 s and 305 s. The
+memory is not the proof's: `2011_black-hole_9` without `--proof` holds 6.3 GB RSS after 39 nodes
+(about 150 MB per node). That is the next wall on this family, and nobody owns it yet.
+
+Outside element.ml, nothing else of this shape was found on a per-node path: `Analysis.scan_support`
+is the same walk but is the `BAGUETTE_DEBUG` cross-check only.
+
+### 5. The gate
+
+On a fresh clone of `f793ebe` on fataepyc-06 (`/scratch/arthur/wave53-element-gate`, binary
+`643f44e9`), the code tip; the commits after it touch only `docs/` and `WORKLOG.md`.
+
+- `make check`: rc 0. 4 245 unit checks `ok`, 0 `FAIL` (the two D-0155 checks among them); model
+  tests 198 passed, 0 failed; peak RSS 98 MB (`/usr/bin/time -v`).
+- `make diff ARGS="--tier all -j 24"`: 301 of 301 runs equal the reference (bool 72/72, int
+  229/229). `--debug`: 289 of 289 equal (bool 72/72, int 217/217; the debug-skip list as on main).
+  No recorded counter moved, so nothing is to be re-recorded.
+- `make scaling ARGS="-j 16"`: ok, every line within its threshold (report-only).
+- Artefacts: every one of the 198 `test/models/*.fzn` run under main's binary (`64ec63e0`) and this
+  branch's (`643f44e9`): stdout, exit code, `.opb` and `.pbp` byte-identical, 0 differ.

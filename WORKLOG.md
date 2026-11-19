@@ -19,7 +19,6 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
-| M11-complexity-T8 | `lib/core/prop/element.ml`, `test/unit/test_prop.ml` (element section) | agent-element (`wave53-element`) | 2026-11-19 |
 | M7-T33 (and `Alldiff.excl`'s proof cost, D-0145) | `lib/core/prop/alldiff.ml`, `lib/proof/encoding.ml` (additive only), new `test/models/`, `test/unit/test_prop.ml` (alldiff section) | agent-alldiff (`wave53-alldiff`) | 2026-11-19 |
 | M11-complexity-T9 | `lib/core/learned.ml`, `lib/core/pb_analysis.ml`, `lib/core/ladder.ml`, `lib/core/reduce.ml`, their unit tests | agent-learned (`wave53-learned`) | 2026-11-19 |
 | M11-complexity-T10 | `lib/core/justify.ml`, `lib/core/explanation.ml` (additive functions only, the type unchanged), `test/unit/test_justify.ml` | agent-memo (`wave53-memo`) | 2026-11-19 |
@@ -397,6 +396,20 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
    nodes in 300 s, on main and on this branch alike. A stamp or hash dedup (regular.ml's
    [add_key] shape) is the obvious fix. Owner: M11-complexity (element.ml is unclaimed).
 
+### 2026-11-19 — one finding from M11-complexity-T8's measurements, for the owner of alldiff.ml (agent-element, `wave53-element`, D-0155)
+
+1. **`Alldiff.remover_index` walks the whole trail per hole, and is now black-hole's top cost**
+   (`lib/core/prop/alldiff.ml` ~line 298, claimed by agent-alldiff for M7-T33). With
+   `Element.add_facts` fixed, `perf record` on `2011_black-hole_10` (the native `inverse`) puts
+   about 70 % of the run in that walk (`Alldiff.go` 26 %, `caml_apply2` 17 %,
+   `Store.trail_entry` 17 %, `Int.equal` 9 %). Its comment says `Store.entry` carries no level,
+   but since M6-T15 the entry carries its trail position `pos`, so
+   `Option.map (fun e -> e.Store.pos) (Store.remover store ~before:(Store.trail_length store)
+   ~var value)` answers the same question in O(log) and is the same entry (the walk's
+   predicate is `Store.remover_scan`'s, which `Store.remover` is checked against under
+   `BAGUETTE_DEBUG`). element.ml's two copies of the walk were replaced that way in D-0155,
+   every artefact unchanged.
+
 ## Completed
 
 | Task | Session | Date | Summary |
@@ -556,6 +569,7 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M7-T28 (first steps; the row stays IN PROGRESS) and M7-T29 (the gcc half) | agent-globals (`wave49-globals`) | 2026-11-18 | **D-0146.** `regular` native (`lib/core/prop/regular.ml`, DOMAIN, every pruning one `rup`, backward chains as root lemmas via `Encoding.add_root_lemma`, mznlib `fzn_regular`/`fzn_regular_set`, 3 mutation lanes, 4 models); the closed gcc forms pinned (std already routed them) with the implied sum; a repeated gcc variable copied by `Builder.split_gcc_repeats`; `inverse` design record and probes (§7). Gate: make check rc 0, 189 models, peak RSS 97 056 kB; diff lane 232/232; Challenge numbers in D-0146 §6 |
 | M7-T32 | agent-flags (`wave51-flags`) | 2026-11-19 | **D-0150.** `tools/baguette.msc` declares `-i -f -n -p -r -s -t -v` (and `--proof` as an extra flag); `bin/main.ml` maps them onto existing options: `-t` ms to `--time-limit`, `-s` = `--stats` plus one `%%%mzn-stat` block on stdout, `-f` = `--search alternate --restarts luby --phase-saving` (warned: not proof-safe until M7-T31), `-r`/`-p` accepted. Every improving solution was already printed with one `soli` each (verified through `minizinc`). Every solution of a satisfaction model (`-a`, `-n N > 1`) refused, exit 3. SPEC §2.2 amended; 30 checks in `test_endtoend`; default artefacts byte-identical on 192 models |
 | M7-T28 (continuation: regular's reasons, inverse; the row stays IN PROGRESS) | agent-globals2 (`wave51-globals2`) | 2026-11-19 | **D-0151.** `regular`'s reasons on the LETTERS (tails recurse into the dead flags' own lines; probes on 60 scenes first): learned clauses 321 -> 80 literals on average over 40 nonograms/pentominoes, node rate x2.6 without the proof, complete 19 -> 20 of 65 with it, all VERIFIED. `inverse` native: `lib/core/prop/inverse.ml` (channel, CHECKING), mznlib `fzn_inverse`, stage 2 all_different from CITED root lemmas (`Encoding.add_cited_lemma`, alldiff's lemma-row hook), 2 mutation lanes, 3 models; Challenge 70 reach the route, 3 -> 3 complete (held by `Element.add_facts` and alldiff's factless conflicts, both filed). `member` designed with probes. Gate on `d1df37f`: `make -k check` rc 2 from the 5 pre-existing test_retention checks only (main fails the same), 195 models passed, peak RSS 100 104 kB; 181/195 models byte-identical to main (the 14 diffs: inverse x3, regular_opt/unsat .pbp); diff lane 184/184 default runs equal (fifo/lbd diffs identical to main's, strategy configs without references on this base) |
+| M11-complexity-T8 | agent-element (`wave53-element`) | 2026-11-19 | **D-0155.** `Element.add_facts` hashed and linear (same list as the old fold, oracle-tested), the index-hole trail walks through `Store.remover`, live and carried-value membership through an int table, hole facts once per pass. black-hole_10 168 G to 52 G instructions; every model's artefacts equal to main |
 
 ## Handoff notes
 
@@ -575,6 +589,15 @@ on `64ec63e0`; `--update` is a per-line ratchet, `--raise` only with a decision 
 green, three enforced passes, a planted O(database) scan per node failed on all five lines. The
 orchestrator's gate must grep `'^scaling: .*growth'` and treat the lane's rc as red. The width lint
 takes a `(* width-ok-begin: reason *)` ... `(* width-ok-end *)` region that ocamlformat leaves alone.
+
+### 2026-11-19 (agent-element, `wave53-element`): M11-complexity-T8, D-0155
+
+`Element.add_facts` is a hashed accumulator returning the old fold's list element for element, and
+element.ml's other per-pruning scans are gone (trail walks per index hole through `Store.remover`,
+`List.mem` over live positions and carried values through an int table, hole facts once per pass).
+`2011_black-hole_10` 168 G to 52 G instructions; stdout, .opb and .pbp equal to main on every model.
+The black-hole family is now held by `Alldiff.remover_index`'s trail walk (cross-session request,
+alldiff.ml is agent-alldiff's), and behind it by about 150 MB of heap per node (D-0155 section 4).
 
 ### 2026-11-19 (orchestrator): the parity idea archived (D-0147 §10)
 
