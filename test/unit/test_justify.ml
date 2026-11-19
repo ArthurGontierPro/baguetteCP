@@ -1773,99 +1773,16 @@ let test_memo_identity_m11t5 () =
   in
   expect_ok "m11t5 memo: no exception" r
 
-(* M11-complexity-T10 (D-0158). [Explanation.equal] is STRUCTURAL and read through
-   forcing without causing it. A copy rebuilt node for node is equal to the original; a
-   change in one coefficient, row, literal or [Linear_term] field is not; a forced
-   [Deferred] is its forced value; an unforced one is equal only to itself, and comparing
-   it never runs its thunk. *)
-let test_equal_m11t10 () =
-  let row i = Explanation.model_row i in
-  let lin v = Explanation.linear [ (1, Lit.ge "x" v) ] 1 in
-  let lt ?(value = 2) cited =
-    Explanation.linear_term ~coeff:3 ~name:"x" ~decl_lo:0 ~decl_hi:3 ~value cited
-  in
-  (* Built afresh on every call, so two calls give two physical copies. *)
-  let chain k =
-    Explanation.combine
-      [
-        Explanation.Term
-          ( 2,
-            Explanation.combine
-              [ Explanation.Term (1, row k); Explanation.Term (1, row 7) ]
-              1 );
-        Explanation.Weaken [ (1, Lit.ge "x" 1) ];
-        Explanation.Defining (1, Lit.ge "x" 2);
-        lt [ lin 2 ];
-      ]
-      2
-  in
-  let a = chain 5 and b = chain 5 in
-  check "m11t10 equal: a rebuilt chain is a different value" (not (a == b));
-  check "m11t10 equal: a rebuilt chain is equal to its original" (Explanation.equal a b);
-  check "m11t10 equal: a row two levels down tells two chains apart"
-    (not (Explanation.equal a (chain 6)));
-  let with_summands ss d = Explanation.combine ss d in
-  check "m11t10 equal: the divisor counts"
-    (not
-       (Explanation.equal
-          (with_summands [ Explanation.Term (1, row 1) ] 1)
-          (with_summands [ Explanation.Term (1, row 1) ] 2)));
-  check "m11t10 equal: a Linear_term's value counts"
-    (not
-       (Explanation.equal
-          (with_summands [ lt [] ] 1)
-          (with_summands [ lt ~value:1 [] ] 1)));
-  check "m11t10 equal: a Linear_term's citations count"
-    (not
-       (Explanation.equal
-          (with_summands [ lt [ lin 2 ] ] 1)
-          (with_summands [ lt [ lin 3 ] ] 1)));
-  check "m11t10 equal: a Cut compares both operands and both coefficients"
-    (Explanation.equal
-       (Explanation.cut (lin 1) (lin 2) 1 2)
-       (Explanation.cut (lin 1) (lin 2) 1 2)
-    && (not
-          (Explanation.equal
-             (Explanation.cut (lin 1) (lin 2) 1 2)
-             (Explanation.cut (lin 2) (lin 1) 1 2)))
-    && not
-         (Explanation.equal
-            (Explanation.cut (lin 1) (lin 2) 1 2)
-            (Explanation.cut (lin 1) (lin 2) 2 1)));
-  check "m11t10 equal: two constructors are never equal"
-    (not (Explanation.equal (lin 1) (Explanation.clause [ Lit.ge "x" 1 ])));
-  let calls = ref 0 in
-  let d () =
-    Explanation.deferred (fun () ->
-        incr calls;
-        chain 5)
-  in
-  let d1 = d () and d2 = d () in
-  check "m11t10 equal: an unforced Deferred is equal to itself" (Explanation.equal d1 d1);
-  check "m11t10 equal: two unforced Deferreds are not equal, whatever they would give"
-    (not (Explanation.equal d1 d2));
-  check "m11t10 equal: an unforced Deferred is not equal to a value"
-    (not (Explanation.equal d1 a));
-  check "m11t10 equal: comparing never forced a thunk" (!calls = 0);
-  ignore (Explanation.force d1 : Explanation.t);
-  check "m11t10 equal: a forced Deferred is equal to a copy of its value"
-    (Explanation.equal d1 a && Explanation.equal a d1);
-  check "m11t10 equal: a forced Deferred against an unforced one is not equal"
-    (not (Explanation.equal d1 d2));
-  ignore (Explanation.force d2 : Explanation.t);
-  check "m11t10 equal: two forced Deferreds of equal values are equal"
-    (Explanation.equal d1 d2);
-  check "m11t10 equal: each thunk ran once, by force and not by equal" (!calls = 2)
-
 (* M11-complexity-T10 (D-0158). The memo's two modes over the same scene: a derivation
    REBUILT at each of three levels, as D-0149's propagator rebuilt its [Combine] (one
    physical copy per level), plus a thunk of the same derivation.
 
    Off ([create_sharing ~share:false], the default): every copy is its own entry and its
    own line -- the proof the suite and the lanes have recorded.
-   On: the copies share the first copy's line, while that line's level is at or below
-   the writer's; a copy asked for BELOW the line's level (through [with_level]) gets its
-   own line; after the wipe of the line's level the next copy is derived afresh; an
+   On: each copy renders the line the first copy wrote, so it gets that line's id while
+   the line's level is at or below the writer's, and is not remembered (one entry per
+   line); a copy asked for BELOW the line's level (through [with_level]) gets its own
+   line; after the wipe of the line's level the next copy is derived afresh; an
    unforced [Deferred] is never forced by a lookup. *)
 let test_share_m11t10 () =
   let run share =
@@ -1944,7 +1861,7 @@ let test_share_m11t10 () =
         id_after,
         live_low ) ->
       check "m11t10 share ON: three rebuilt copies, one line" (id1 = id2 && id2 = id3);
-      check "m11t10 share ON: one entry per distinct derivation" (n = 2 && longest = 1);
+      check "m11t10 share ON: one memo entry per line written" (n = 2 && longest = 1);
       check "m11t10 share ON: a copy asked for below the line's level gets its own line"
         (id_low > id_after && live_low);
       check "m11t10 share ON: a forced thunk of the same derivation shares the line"
@@ -2044,7 +1961,6 @@ let () =
   test_deferred_cut ();
   test_wipe ();
   test_memo_identity_m11t5 ();
-  test_equal_m11t10 ();
   test_share_m11t10 ();
   run_veripb ~name:"justify: a Linear explanation, checked end to end"
     ~build:build_linear_proof;
