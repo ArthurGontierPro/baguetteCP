@@ -19,6 +19,12 @@ of it to every session and stopping at a broken line before it even reached the 
 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
+| M11-complexity-T8 | `lib/core/prop/element.ml`, `test/unit/test_prop.ml` (element section) | agent-element (`wave53-element`) | 2026-11-19 |
+| M7-T33 (and `Alldiff.excl`'s proof cost, D-0145) | `lib/core/prop/alldiff.ml`, `lib/proof/encoding.ml` (additive only), new `test/models/`, `test/unit/test_prop.ml` (alldiff section) | agent-alldiff (`wave53-alldiff`) | 2026-11-19 |
+| M11-complexity-T9 | `lib/core/learned.ml`, `lib/core/pb_analysis.ml`, `lib/core/ladder.ml`, `lib/core/reduce.ml`, their unit tests | agent-learned (`wave53-learned`) | 2026-11-19 |
+| M11-complexity-T10 | `lib/core/justify.ml`, `lib/core/explanation.ml` (additive functions only, the type unchanged), `test/unit/test_justify.ml` | agent-memo (`wave53-memo`) | 2026-11-19 |
+| M7-T28 (`member`) | new `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, new `test/models/`, `test/unit/test_prop.ml` (member section) | agent-member (`wave53-member`) | 2026-11-19 |
+| M11-complexity-T6 and M6-T7 | `scripts/scaling_lane.sh`, `bench/scaling/`, `Makefile` (scaling target), `scripts/check_test_widths.py` | agent-tooling (`wave53-tooling`) | 2026-11-19 |
 
 ## Cross-session requests
 
