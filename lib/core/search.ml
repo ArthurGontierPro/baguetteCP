@@ -438,12 +438,16 @@ type stats = {
       (* ...and the rows [Pb.of_terms] refused: a [Lit.Eq] literal, or a name the
          encoding does not declare. Same two reasons as [n_global_declined], counted
          rather than silently skipped for the same reason. *)
-  mutable pb_inst_ids_rev : int list;
-      (* The engine instance ids of those, newest first. A LIST and not a [Hashtbl]:
-         nothing here may iterate a hash table (the determinism gate), and the list is
-         one entry per learned row. Read by [count_learned_activity] to tell a pruning
-         made by a learned PB row from one made by a learned clause. *)
-  mutable clause_inst_ids_rev : int list; (* ...and the M2-L12 clause instances' *)
+  mutable learned_kinds : Bytes.t;
+      (* M11-complexity-T4 (D-0152, D-0140 S1): one byte per engine id at or above
+         [first_learned_id], saying which kind of learned instance has that id
+         ([kind_pb], [kind_clause], or [kind_none]). Read by [count_learned_activity] to
+         tell a pruning made by a learned PB row from one made by a learned clause, at
+         every trail entry of every node. It replaced two id LISTS ([pb_inst_ids_rev],
+         [clause_inst_ids_rev]) walked by a polymorphic [List.mem] per entry, which made
+         every node pay for the size of the learned database. An array indexed by id is
+         never iterated, so the determinism argument the lists were kept for (no
+         [Hashtbl] iteration in a solve) holds for it as it held for them. *)
   mutable n_pb_prunes : int;
       (* Bounds actually MOVED by a learned PB instance. This is the counter M2-L13
          turns on and the one M2-L12 reported as 0 for the clause path: an instance with
@@ -619,8 +623,7 @@ let stats_create () =
     n_clause_declined = 0;
     n_pb_instances = 0;
     n_pb_inst_declined = 0;
-    pb_inst_ids_rev = [];
-    clause_inst_ids_rev = [];
+    learned_kinds = Bytes.empty;
     n_pb_prunes = 0;
     n_pb_inst_conflicts = 0;
     n_clause_prunes = 0;
@@ -702,6 +705,28 @@ let stats_bridges s = List.rev s.bridges_rev
 let record_bridge s b =
   s.n_bridges <- s.n_bridges + 1;
   if s.n_bridges <= bridge_cap then s.bridges_rev <- b :: s.bridges_rev
+
+(* D-0152 (D-0140 S1): the kind of the learned instance with engine id [id], kept in
+   [learned_kinds] at [id - first_learned_id]. The table grows by doubling, so
+   registering costs amortised O(1), and an id outside it is [kind_none]. *)
+let kind_none = '\000'
+let kind_pb = '\001'
+let kind_clause = '\002'
+
+let learned_kind s id =
+  let i = id - s.first_learned_id in
+  if i < 0 || i >= Bytes.length s.learned_kinds then kind_none
+  else Bytes.unsafe_get s.learned_kinds i
+
+let set_learned_kind s id k =
+  let i = id - s.first_learned_id in
+  if i >= 0 then (
+    let n = Bytes.length s.learned_kinds in
+    if i >= n then (
+      let b = Bytes.make (Stdlib.max (i + 1) (Stdlib.max 64 (2 * n))) kind_none in
+      Bytes.blit s.learned_kinds 0 b 0 n;
+      s.learned_kinds <- b);
+    Bytes.set s.learned_kinds i k)
 
 (* Does this pair of counts satisfy the identity above? [exhausted] is whether the
    search closed its whole tree. Public because [solve] checks it only under
@@ -2154,7 +2179,7 @@ let register_learned_pb engine store ctx stats ~bump ~cid ~(row : Learned.t) =
       (* D-0139: behind [Retention.gate], so a policy that detaches can evict it. *)
       Engine.add engine (Retention.gate stats.db store ~cid inst);
       stats.n_pb_instances <- stats.n_pb_instances + 1;
-      stats.pb_inst_ids_rev <- id :: stats.pb_inst_ids_rev;
+      set_learned_kind stats id kind_pb;
       Retention.cite stats.db ~cid
         ~by:
           (Printf.sprintf "learned_pb instance #%d, %s (M2-L13)" id
@@ -2390,11 +2415,14 @@ let global_of store ~(decl : string -> (int * int) option) ~cid (l : Lit.t) :
    counters. Passing a [stats] changes no byte of the emitted proof, which is the
    property [solve]'s own comment on [?stats] states. *)
 let count_learned_activity stats store ~since (o : Engine.outcome) : Engine.outcome =
+  (* D-0152 (D-0140 S1): the kind is one byte load per entry, where it was two
+     polymorphic [List.mem] over every learned instance id. [learned_kind] answers
+     [kind_none] below [first_learned_id] and for an id no learned instance has, which is
+     exactly when neither list held it. *)
   let classify id =
-    if id < stats.first_learned_id then ()
-    else if List.mem id stats.pb_inst_ids_rev then
-      stats.n_pb_prunes <- stats.n_pb_prunes + 1
-    else if List.mem id stats.clause_inst_ids_rev then
+    let k = learned_kind stats id in
+    if Char.equal k kind_pb then stats.n_pb_prunes <- stats.n_pb_prunes + 1
+    else if Char.equal k kind_clause then
       stats.n_clause_prunes <- stats.n_clause_prunes + 1
   in
   for i = since to Store.trail_length store - 1 do
@@ -2402,12 +2430,11 @@ let count_learned_activity stats store ~since (o : Engine.outcome) : Engine.outc
   done;
   (match o with
   | Engine.Conflict c ->
-      let id = c.Store.c_prop in
-      if id >= stats.first_learned_id then
-        if List.mem id stats.pb_inst_ids_rev then
-          stats.n_pb_inst_conflicts <- stats.n_pb_inst_conflicts + 1
-        else if List.mem id stats.clause_inst_ids_rev then
-          stats.n_clause_inst_conflicts <- stats.n_clause_inst_conflicts + 1
+      let k = learned_kind stats c.Store.c_prop in
+      if Char.equal k kind_pb then
+        stats.n_pb_inst_conflicts <- stats.n_pb_inst_conflicts + 1
+      else if Char.equal k kind_clause then
+        stats.n_clause_inst_conflicts <- stats.n_clause_inst_conflicts + 1
   | Engine.Fixpoint -> ());
   o
 
@@ -2500,7 +2527,7 @@ let register_learned engine store ctx stats ~cid ~(lits : Lit.t list) =
                     with type t = Clause.Learned_clause.t)
                   lc));
           stats.n_clause_instances <- stats.n_clause_instances + 1;
-          stats.clause_inst_ids_rev <- id :: stats.clause_inst_ids_rev;
+          set_learned_kind stats id kind_clause;
           Retention.cite stats.db ~cid
             ~by:
               (Printf.sprintf "learned_clause instance #%d over %s (M2-L12)" id
@@ -3432,8 +3459,7 @@ let search_core ~(engine : Engine.t) ~(store : Store.t) ~(ctx : Justify.ctx) ?tr
      than in [stats_create] for the same reason the database is: a [stats] may outlive a
      [solve], and the engine it is about to be pointed at is not the one it last saw. *)
   stats.first_learned_id <- Engine.next_id engine;
-  stats.pb_inst_ids_rev <- [];
-  stats.clause_inst_ids_rev <- [];
+  stats.learned_kinds <- Bytes.empty;
   stats.nodes <- stats.nodes + 1;
   (* M10-search-strategy (D-0137): the opt-in strategies' state, per solve, and the order
      they wrap. With every one of them off this is [None] and [order] is the caller's,
