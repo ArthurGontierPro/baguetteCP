@@ -484,11 +484,13 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
   (QR72 with proof 554 → 296 s, the same conflicts). On the Challenge subset it buys conflicts
   and no answer, about a third of them re-learned clauses, and `bacp-22` gets 2.3× slower.
   Measure it with restarts before making it the default.
-- **Pending on fataepyc-06** (detached, no action needed to keep them running):
-  `/scratch/arthur/wave45-retention-runs/step3/T500.np/` and `step3/lbd5000.np/`, 38 no-proof
-  runs on binary `fcb944a4`. Driver log: `drive-step3.log` ends in `ALL DONE`. Read them with
-  `python3 -I table.py step3 off.np T.np T500.np lbd5000.np` in that directory. D-0139 §3
-  says what they would answer.
+- **The two late configurations were read on 2026-11-19 and are in D-0139 §3 and §6.** They
+  were `T500.np` and `lbd5000.np`, in `/scratch/arthur/wave45-retention-runs/step3/` on
+  fataepyc-06. `tiered:first=500` is the best on the codes (QR72 161 s without proof) and
+  proves `test-scheduling` optimal. It is the worst on `bacp-22` (4.6× slower) and gives a
+  worse `saeling` incumbent. `lbd:5000` loses two optima. The recommendation is unchanged:
+  `keep_all` stays the default, and T5 measures `tiered` at `first=500` and at the Glucose
+  default, with restarts.
 - **Pre-existing, not mine.** `BAGUETTE_DEBUG=1` on `rup_level0_nogood_sat` raises an I-P7
   `Not_at_fixpoint` in `learned_clause` on main as well. Filed for `clause.ml`.
 

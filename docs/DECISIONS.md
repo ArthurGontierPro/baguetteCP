@@ -13576,18 +13576,50 @@ How to read it.
   RoundingSat LBD for PB rows would therefore matter only on `parity-learning`. It is parked,
   and the request row says what it needs.
 
-**Still running when this was written (pending, to read later).** Two more step-3
-configurations, no proof, on the same binary `fcb944a4`, in
-`fataepyc-06:/scratch/arthur/wave45-retention-runs/step3/`:
+**Two more configurations, read on 2026-11-19** after the node came back (the driver ended
+`ALL DONE 2026-11-18T18:51`). Both ran without proof on the same binary `fcb944a4`.
+`T500` is `tiered:first=500,inc=100,mid_every=2500`, the aggressive schedule. `lbd:5000` is
+the cap policy, which evicts for the first time once the hook is in. "inc" is the incumbent
+at the stop. `fox-geese-corn` maximises and the others minimise.
 
-- `T500.np/`: `tiered:first=500,inc=100,mid_every=2500`, the aggressive schedule;
-- `lbd5000.np/`: `lbd:5000`, the cap policy, which evicts for the first time once the hook is
-  in.
+| instance | answer: off / tiered / T500 / lbd:5000 | conflicts: off / tiered / T500 / lbd:5000 | held at end: T500 / lbd:5000 |
+|---|---|---|---|
+| H_o7k2_u1 | UNSAT 3 s / UNSAT 4 s / UNSAT 3 s / UNSAT 3 s | 58 / 58 / 58 / 58 | - / - |
+| H_qr48_def | UNSAT 22 s / UNSAT 22 s / UNSAT 17 s / UNSAT 29 s | 11684 / 11684 / 11684 / 11684 | 3100 / 5001 |
+| H_qr48_u | UNSAT 25 s / UNSAT 24 s / UNSAT 16 s / UNSAT 31 s | 11684 / 11684 / 11684 / 11684 | 3100 / 5001 |
+| H_qr72_def | UNSAT 343 s / UNSAT 266 s / UNSAT 161 s / UNSAT 234 s | 50343 / 50346 / 50357 / 50347 | 4835 / 5001 |
+| 2011_bacp_bacp-22 | OPT 231 s / OPT 662 s / OPT 1057 s / none | 54610 / 91671 / 121869 / 91254 | 9816 / 5000 |
+| 2011_cyclic-rcpsp_hard_11 | inc 1288 / inc 1288 / inc 1288 / inc 1288 | 64775 / 79176 / 98041 / 79306 | 8490 / 5002 |
+| 2011_roster_chicroster_dataset_large_18 | inc 15 / inc 15 / inc 15 / inc 15 | 63781 / 65588 / 64275 / 61713 | 5688 / 5000 |
+| 2012_parity-learning_48_24_6.2 | none / none / none / none | 41365 / 88027 / 105114 / 114307 | 4796 / 5000 |
+| 2013_filters_dct_2_2 | inc 18 / inc 18 / inc 18 / inc 18 | 61096 / 67021 / 78336 / 72847 | 8288 / 5019 |
+| 2013_l2p_l2p2 | OPT 446 s / OPT 391 s / OPT 381 s / none | 50712 / 55041 / 55240 / 88301 | 6405 / 5000 |
+| 2013_rcpsp_12 | inc 39 / inc 39 / inc 39 / inc 39 | 46463 / 47494 / 53201 / 66924 | 7676 / 5000 |
+| 2015_grid-colouring_13_11 | inc 7 / inc 7 / inc 7 / inc 7 | 52456 / 62729 / 97306 / 53176 | 8893 / 5000 |
+| 2017_opd_small_bibd_08_28_14 | inc 7 / inc 7 / inc 7 / inc 7 | 107536 / 231872 / 256631 / 113481 | 9618 / 5003 |
+| 2019_fox-geese-corn_foxgeesecorn_54 | inc 1426 / inc 1426 / inc 1426 / inc 1494 | 27337 / 27755 / 37337 / 47703 | 7320 / 5002 |
+| 2021_perfect_square_102 | none / none / none / none | 61586 / 61648 / 69417 / 73855 | 9116 / 5056 |
+| 2021_steiner-systems_steiner_t2_k7_N21 | none / none / none / none | 72037 / 105210 / 119761 / 155183 | 7871 / 5001 |
+| 2023_test-scheduling_t20m10r10-17 | inc 1069 / inc 1069 / OPT 883 s / inc 1069 | 52143 / 56808 / 57578 / 66505 | 7348 / 5000 |
+| 2024_neighbours_neightbours-new-5 | none / none / none / none | 60677 / 62529 / 71431 / 114747 | 15240 / 5070 |
+| 2026_saeling_s021 | inc 190 / inc 190 / inc 198 / none | 52957 / 43577 / 52184 / 101478 | 7200 / 5069 |
 
-Read them with `python3 -I table.py step3 off.np T.np T500.np lbd5000.np` in that directory.
-The driver's log is `drive-step3.log`, and it ends in `ALL DONE` when the 114 runs are in.
-They decide nothing above. They answer whether a more aggressive schedule or a plain cap
-changes the `bacp`/duplicate picture.
+- **`T500` goes further in both directions.**
+  - On the codes it is the fastest policy at the same conflict count. QR72 is UNSAT in
+    161 s (`off` 343 s, `tiered` 266 s) and QR48 in 16 to 17 s (22 to 25 s).
+  - It is the only configuration of the four that changes an answer for the better.
+    `test-scheduling` is proved OPTIMAL at 1 069 in 883 s, where the other three stop at
+    the same incumbent unproved. `l2p2` reaches OPT a little faster (381 s).
+  - It also costs more. `bacp-22` needs 1 057 s to OPT (4.6 times `off`). `saeling` stops
+    on 198 where `off` and `tiered` stop on 190.
+- **`lbd:5000` is dominated.**
+  - It loses two optima the others prove (`bacp-22` and `l2p2` both stop unproved) and
+    loses `saeling`'s incumbent.
+  - It gains one incumbent (`fox-geese-corn` 1 494 against 1 426).
+  - On the codes it is slower than `off` on QR48 (29 to 31 s) and faster on QR72 (234 s).
+  - A cap that keeps no tier evicts the clauses the search needed. That is the evidence for
+    tiers over a cap on this solver.
+
 
 ### 4. The learned database's O(n) per conflict (M6-T22's cross-session request), taken here
 
@@ -13652,8 +13684,17 @@ and the activity heuristic, as M10-T5 plans.**
   restarts improves the answer count without a `bacp`-style regression. The knob is
   `BAGUETTE_RETENTION=tiered[:core=,mid=,first=,inc=,mid_every=]`. A middle ground worth
   measuring there is a larger `first` or a larger `mid` bound, which keeps more of the base on
-  instances like `bacp`. `lbd:N`/`fifo:N` with the hook in are also real policies for the first
-  time and are in the pending runs.
+  instances like `bacp`.
+- **The two later configurations (§3, read 2026-11-19) do not change this recommendation.**
+  They sharpen it.
+  - `tiered` with a short schedule (`first=500`) is the candidate to carry into M10-T5. It
+    is the best policy on the codes (QR72 343 → 161 s at the same conflicts), and it is the
+    only configuration that proved a new optimum (`test-scheduling`).
+  - It also has the worst `bacp-22` (4.6 times slower) and a worse `saeling` incumbent. One
+    answer gained against one lost or degraded is not a default.
+  - `lbd:N` is not a candidate, because it loses two optima and an incumbent.
+  - T5 should therefore measure `tiered` at `first=500` and at the Glucose default, with
+    restarts.
 
 ### 7. What this row did not do, and where it went
 
