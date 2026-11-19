@@ -788,11 +788,16 @@ let stats_consistent s ~exhausted =
 let unfixed store =
   (* M6-T13: two passes over the domains -- count, then fill -- instead of consing a list
      and copying it, so a node allocates the one array it returns and nothing else. Same
-     array, same ascending store-index order. *)
+     array, same ascending store-index order.
+
+     M11-complexity-T4 (D-0152, D-0140 S4): "unfixed" is [not (Domain.is_fixed d)], two
+     loads, where it was [Domain.size d > 1], which counts the hole bits of a domain
+     with holes. The two agree on every stored domain: I-D2 keeps both bounds members
+     and I-D1 keeps lo <= hi, so the size is 1 exactly when lo = hi. *)
   let n = Store.n_vars store in
   let k = ref 0 in
   for i = 0 to n - 1 do
-    if Domain.size (Store.get store (Var.of_int i)) > 1 then incr k
+    if not (Domain.is_fixed (Store.get store (Var.of_int i))) then incr k
   done;
   if !k = 0 then [||]
   else
@@ -800,7 +805,7 @@ let unfixed store =
     let j = ref 0 in
     for i = 0 to n - 1 do
       let v = Var.of_int i in
-      if Domain.size (Store.get store v) > 1 then (
+      if not (Domain.is_fixed (Store.get store v)) then (
         out.(!j) <- v;
         incr j)
     done;
@@ -860,14 +865,23 @@ let as_split = function
 
 (* First-fail (docs/SPEC.md 3.4): the unfixed variable (domain size > 1) with the
    smallest domain, ties broken by declaration order (the store's variable index). *)
+(* M11-complexity-T4 (D-0152, D-0140 S4): the scan stops at the first candidate of size
+   2. Every candidate is unfixed ([type order] says so, and [unfixed] and both arms of
+   [sequence] filter for it), so no size is below 2, and the comparison is strict, so
+   no later candidate can replace one of size 2: the answer is the one the full scan
+   gives. On a Boolean model that is the first candidate, where the scan read every
+   unfixed variable at every node. *)
 let first_fail store cands =
+  let n = Array.length cands in
   let best = ref cands.(0) in
   let bsize = ref (Domain.size (Store.get store cands.(0))) in
-  for i = 1 to Array.length cands - 1 do
-    let size = Domain.size (Store.get store cands.(i)) in
+  let i = ref 1 in
+  while !i < n && !bsize > 2 do
+    let size = Domain.size (Store.get store cands.(!i)) in
     if size < !bsize then (
-      best := cands.(i);
-      bsize := size)
+      best := cands.(!i);
+      bsize := size);
+    incr i
   done;
   !best
 
@@ -1150,7 +1164,7 @@ let sequence ?(fallback = spec_order) (phases : phase list) : order =
     let n = Store.n_vars store in
     let is_live v =
       let i = Var.to_int v in
-      i >= 0 && i < n && Domain.size (Store.get store v) > 1
+      i >= 0 && i < n && not (Domain.is_fixed (Store.get store v))
     in
     let rec go = function
       | [] -> None
