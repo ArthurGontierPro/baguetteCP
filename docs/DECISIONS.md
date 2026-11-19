@@ -15000,6 +15000,14 @@ exhausted VeriPB's 8 GB cap in the pass. Section 1's rerun of one of them under 
   measurement (asks are cache misses on cold clause records, not instructions). If the node's noise
   hid a loss, it would show there first. The instruction counts, which are the metric, do not move
   the wrong way on any of the six.
+
+### 13. Addendum 2026-11-19: the user's decision on section 9
+
+The user declined all four items of section 9 for now ("I don't see a reason to push them now.
+Maybe later."). None is a task. The measurements and the throwaway build stay where section 9
+names them, so that a later session can reopen one item without measuring it again. D-0154
+records this decision together with the search default.
+
 ## D-0143  M11-complexity-T7: the setup before node 1 was the .opb's name pipeline, three lists and two string tables per term of every linear row; eight fixes make openshop's setup 2 000 times cheaper without the proof and 9 times with it, every byte the same
 
 **Status**: **DONE**, recorded 2026-11-18 (agent-setup, `wave48-setup`). The contract is ROADMAP
@@ -18159,3 +18167,55 @@ the propagator, its brute force and lanes, and the census of which Challenge ins
   no reference on this branch (recorded on main by gate 53, after the base). The debug pass the
   same: 184 default runs equal, 105 differences in those five configurations. Scaling lane ok.
   No reference was recorded (`git status bench/diff` empty).
+
+## D-0154  The user's decisions of 2026-11-19: the default search stays the fixed one, as in the MiniZinc Challenge; `-f` is the free search, documented for users, and its warning is gone since D-0148; D-0142 section 9's four reordering items are deferred
+
+Status: DECIDED (by the user)
+Date: 2026-11-19
+Task: M10-search-strategy-T5 (its default half), M11-complexity-T3 (D-0142 section 9).
+Touches: `bin/main.ml` (the `-f` warning of `report_std_flags`, the usage line, the header, the
+`free_search` field no longer read), `test/unit/test_endtoend.ml` (the `-f -v` check),
+`README.md` (Status, MiniZinc usage, Search), `docs/ROADMAP.md` (M10-T5 and M11-T3 rows).
+
+### 1. The default search
+
+D-0137 left the default to M10-T5's measurement. The user chose instead to follow the
+competition: without flags baguette honours the annotation (SPEC §3.4's default when there is
+none), with no restarts and no phase saving, which is the Challenge's fixed category. `-f` is
+the free search, `--search alternate --restarts luby --phase-saving` as D-0150 maps it, which is
+how Chuffed enters both categories. The README tells users they can try it. The reason is D-0137
+section 10: the codes split (QR48 26 s under the default, 129 s under `-f`'s combination; aut
+order 7 a timeout at 600 s against 62 s), and so do the twenty Challenge instances
+(ship-schedule 77 s against 16 s with Luby and phase saving, kidney-exchange 83 s against a
+timeout under every strategy). No single setting wins, so the default stays the one the model's
+author chose.
+
+M10-T5 keeps its measurement half: the sixteen editions under `-f` for the free category and
+`tiered` retention, on the optimised binary. It no longer decides the default.
+
+### 2. The `-f` warning removed
+
+D-0150 section 5 printed a WARNING under `-f` (stderr, under `--stats`, `-s` or `-v`) because
+D-0137 section 13 had refused proofs under phase saving with a dynamic order, open as M7-T31.
+D-0148 closed M7-T31. Its 1 233 runs, `--search alternate --restarts luby --phase-saving` among
+them (183 of 183 suite models and 27 of 27 corpus runs, the hrc reproducer included), were all
+VERIFIED. The warning was stale, so it is removed, together with the usage text's "NOT
+proof-safe". D-0150's rule that the Challenge harness must not pass `-f` for a proved category
+until M7-T31 closes is lifted with it. `-f` proofs are checked like every other proof.
+
+Without `-f` nothing changes, stdout, stderr and the proof included. With `-f` only stderr under
+`--stats`, `-s` or `-v` loses the warning line. `test_endtoend` now checks that the line is
+absent.
+
+### 3. D-0142 section 9
+
+The user declined the four items that reorder runs (the MiniSat watch move, the two advisors, the
+blocker literal) for now. D-0142 section 13 records it, and the measurements stay where section 9
+names them.
+
+### 4. What would reverse this
+
+- A measurement in which one setting wins on nearly every edition (M10-T5's free-category run
+  could show that). The default would then be the user's to revisit.
+- A refused proof under `-f`. That would be a bug against D-0148's fix, and the warning would come
+  back with its reproducer.

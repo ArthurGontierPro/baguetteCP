@@ -2055,9 +2055,9 @@ let test_m7t32_std_flags () =
           check
             (tag ^ ": ...and veripb verifies it at the printed optimum")
             (rc = 0 && m6_says out "VERIFIED BOUNDS 2 <= obj <= 2");
-          (* -f with the proof, on this small model. Not the M7-T31 instance: this says
-             the mapping reaches the search and the proof still closes here, nothing
-             about the instances D-0137 section 13 refuses. *)
+          (* -f with the proof, on this small model: the mapping reaches the search and
+             the proof closes. The instances D-0137 section 13 refused are M7-T31's, and
+             D-0148's 1 233 runs (hrc under -f's combination among them) cover them. *)
           let rc_f, out_f, _ = run ("-f --proof fp " ^ opt) in
           let rc, out =
             m6_veripb veripb dir
@@ -2104,9 +2104,10 @@ let test_m7t32_std_flags () =
       (* -f: the combination, with an explicit flag winning in either order. *)
       let _, _, err_f = run ("-f -v " ^ opt) in
       check
-        (tag ^ ": -f -v says alternate, luby and phase saving, and warns of M7-T31")
+        (tag ^ ": -f -v says alternate, luby and phase saving, and no longer warns")
         (m6_says err_f "search=alternate restarts=luby:100 phase-saving=true"
-        && m6_says err_f "WARNING" && m6_says err_f "M7-T31");
+        && (not (m6_says err_f "WARNING"))
+        && not (m6_says err_f "M7-T31"));
       let _, _, err_f2 = run ("--search activity -f --restarts geom -v " ^ opt) in
       check
         (tag ^ ": an explicit --search or --restarts wins over -f, in either order")

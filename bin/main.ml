@@ -71,7 +71,8 @@
    plus a `%%%mzn-stat:` block on stdout at the end of the run (the one way stdout
    differs with a flag, and only with this one); `-f` is `--search alternate --restarts
    luby --phase-saving` for whichever of the three was not given explicitly (Chuffed's
-   free search, D-0137 section 4), NOT proof-safe on every instance until M7-T31 lands;
+   free search, D-0137 section 4; the refused proofs that made it unsafe were M7-T31's,
+   fixed by D-0148, and the default search stays the fixed one by the user's choice, D-0154);
    `-i` and, on an optimisation model, `-a` ask for every improving solution, which this
    CLI prints anyway, each with its own `soli` line in the proof; `-r SEED` is accepted
    and unused (nothing on the CLI's path draws a random number); `-p N` is accepted and
@@ -116,7 +117,6 @@ type options = {
   (* M7-T32, D-0150: the MiniZinc standard flags. See the header. *)
   intermediate : bool; (* -i: every improving solution; printed anyway *)
   n_solutions : int option; (* -n N; N > 1 on a satisfaction model is refused *)
-  free_search : bool; (* -f: the D-0137 combination, minus what was given explicitly *)
   seed : int option; (* -r SEED: accepted, unused *)
   threads : int option; (* -p N: accepted, one thread *)
   mzn_stats : bool; (* -s: --stats and the %%%mzn-stat block on stdout *)
@@ -161,9 +161,9 @@ let usage () =
     "  -n N              stop after N solutions: N = 1 is the default; N > 1 on a";
   prerr_endline "                    satisfaction model is refused (exit 3) as -a is.";
   prerr_endline "  -f                free search: --search alternate --restarts luby";
-  prerr_endline "                    --phase-saving, each unless given explicitly. NOT";
+  prerr_endline "                    --phase-saving, each unless given explicitly. Worth";
   prerr_endline
-    "                    proof-safe on every instance until M7-T31 (D-0137 13).";
+    "                    trying when the model's search annotation is a poor order.";
   prerr_endline "  -t MS             --time-limit in milliseconds.";
   prerr_endline
     "  -r SEED           accepted and unused: the search draws no random number.";
@@ -598,7 +598,6 @@ let parse_args argv =
         reuse_trail = !reuse_trail;
         intermediate = !intermediate;
         n_solutions = !n_solutions;
-        free_search = !free_search;
         seed = !seed;
         threads = !threads;
         mzn_stats = !mzn_stats;
@@ -1744,17 +1743,12 @@ let solve opts (m : Model.t) =
 
 (* ------------------------------------------- MiniZinc standard flags (M7-T32) *)
 
-(* D-0150. What the standard flags became, on stderr: the warning and the two notes under
-   --stats, -s or -v (so a run that asked for none of them keeps its stderr empty,
-   M1-T49), and under -v also the resolved search and limit. *)
+(* D-0150. What the standard flags became, on stderr: the two notes under --stats, -s or
+   -v (so a run that asked for none of them keeps its stderr empty, M1-T49), and under -v
+   also the resolved search and limit. D-0150's warning for -f is gone since D-0148 closed
+   M7-T31 (D-0154). *)
 let report_std_flags opts =
   if opts.stats || opts.verbose then (
-    if opts.free_search then
-      prerr_endline
-        "baguette: WARNING -f (free search) is --search alternate --restarts luby \
-         --phase-saving here, and that combination is NOT proof-safe on every instance \
-         yet: a refused branch nogood is open as M7-T31 (D-0137 section 13). Check the \
-         proof.";
     (match opts.threads with
     | Some n when n > 1 ->
         Printf.eprintf "baguette: -p %d accepted; baguette runs on one thread.\n" n
