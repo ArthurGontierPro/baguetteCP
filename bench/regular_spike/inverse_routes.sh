@@ -16,9 +16,17 @@ one() {
   args=("$ROOT/$model")
   [ "$data" != "<none>" ] && [ -n "$data" ] && args+=("$ROOT/$data")
   if timeout 1200 $MZN -c --solver baguette "${args[@]}" -o "$out" > "$OUT/fzn/$id.err" 2>&1; then
-    longest=$(grep '^constraint baguette_inverse(' "$out" \
-      | sed -E 's/^constraint baguette_inverse\(\[([^]]*)\].*/\1/' \
-      | awk -F, '{ if (NF > m) m = NF } END { print m + 0 }')
+    # the first argument is a literal [..] or the name of an array declared 1..N
+    longest=$(python3 -I -c '
+import re, sys
+text = open(sys.argv[1]).read()
+decl = {m.group(2): int(m.group(1)) for m in re.finditer(r"^array \[1\.\.(\d+)\] of var [^:]*: (\w+)", text, re.M)}
+best = 0
+for m in re.finditer(r"^constraint baguette_inverse\((\[[^]]*\]|\w+),", text, re.M):
+    a = m.group(1)
+    n = len(a.strip("[]").split(",")) if a.startswith("[") else decl.get(a, 0)
+    best = max(best, n)
+print(best)' "$out")
     printf "%s\t%d\t%d\t%d\tOK\n" "$id" "$(grep -c '^constraint baguette_inverse(' "$out")" \
       "$longest" "$(grep -c '^constraint all_different_int(' "$out")"
   else
