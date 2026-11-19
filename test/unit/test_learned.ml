@@ -701,7 +701,90 @@ let test_ix10_no_new_family () =
     let r = idx_of text "rup" in
     r >= 0 && (d < 0 || r < d))
 
+(* M11-complexity-T4 (D-0152, D-0140 L2): [to_linear_row] with typed sorts and a
+   one-pass grouping, against the code it replaced, copied here as the reference
+   (polymorphic sorts, [List.partition] per variable). Random rows over four integer
+   variables, both polarities, rungs inside and outside the declared box, repeated
+   variables, and one undeclared name; the answer must be equal, [None] included. *)
+let test_l2_to_linear_row_reference () =
+  let reference t ~decl =
+    let ladder_form t =
+      let rec go acc const = function
+        | [] -> Some (List.sort compare acc, const)
+        | tm :: rest -> (
+            let coeff = tm.Learned.coeff and lit = tm.Learned.lit in
+            match lit.Lit.v with
+            | Lit.Eq _ | Lit.Bit _ -> None
+            | Lit.Ge (x, v) ->
+                if lit.Lit.positive then go ((x, v, coeff) :: acc) const rest
+                else go ((x, v, -coeff) :: acc) (const + coeff) rest)
+      in
+      go [] 0 (Learned.terms t)
+    in
+    match ladder_form t with
+    | None -> None
+    | Some (rungs, const0) ->
+        let rec group = function
+          | [] -> []
+          | (x, v, c) :: rest ->
+              let mine, others =
+                List.partition (fun (y, _, _) -> String.equal x y) rest
+              in
+              (x, (v, c) :: List.map (fun (_, v, c) -> (v, c)) mine) :: group others
+        in
+        let rec fold acc const = function
+          | [] -> Some (List.rev acc, const)
+          | (x, rungs) :: rest -> (
+              match decl x with
+              | None -> None
+              | Some (lo, hi) -> (
+                  let rungs =
+                    List.filter (fun (_, c) -> c <> 0) (List.sort compare rungs)
+                  in
+                  match Learned.linear_of_rungs ~lo ~hi rungs with
+                  | None -> None
+                  | Some (0, k) -> fold acc (const + k) rest
+                  | Some (a, k) -> fold ((-a, x) :: acc) (const + k) rest))
+        in
+        Option.map
+          (fun (terms, const) -> (terms, const - Learned.degree t))
+          (fold [] const0 (group rungs))
+  in
+  let decl = function
+    | "p" -> Some (0, 1)
+    | "q" -> Some (0, 3)
+    | "r" -> Some (1, 4)
+    | "s" -> Some (-2, 2)
+    | _ -> None
+  in
+  let rng = Random.State.make [| 0x0152; 2 |] in
+  let names = [| "p"; "q"; "r"; "s"; "zz" |] in
+  let agree = ref true and some = ref 0 in
+  for _ = 1 to 5000 do
+    let n = 1 + Random.State.int rng 8 in
+    let terms =
+      List.init n (fun _ ->
+          let x =
+            names.(Random.State.int rng (if Random.State.int rng 10 = 0 then 5 else 4))
+          in
+          let l = Lit.ge x (Random.State.int rng 8 - 3) in
+          ( 1 + Random.State.int rng 2,
+            if Random.State.int rng 3 = 0 then Lit.negate l else l ))
+    in
+    let t = Learned.make terms (1 + Random.State.int rng 3) in
+    let a = Learned.to_linear_row t ~decl and b = reference t ~decl in
+    if a <> b then agree := false;
+    if a <> None then incr some
+  done;
+  check
+    (Printf.sprintf
+       "D-0152 L2: to_linear_row equals the polymorphic, quadratic reference on 5 000 \
+        random rows (%d with a linear form)"
+       !some)
+    (!agree && !some > 100)
+
 let () =
+  test_l2_to_linear_row_reference ();
   test_normalisation ();
   test_oracle_round_trip ();
   test_d0044_clause_is_degree_one ();

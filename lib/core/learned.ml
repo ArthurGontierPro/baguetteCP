@@ -349,10 +349,21 @@ let retire ctx (id : Writer.cid) = Writer.delete (Justify.writer ctx) id
 
    [None] for a direct-encoding ([Eq]) literal: the direct encoding is a set of 0-1
    variables with no order to read a bound off (D-0019, D-0040), so there is no linear
-   form and saying so is the honest answer. *)
+   form and saying so is the honest answer.
+
+   M11-complexity-T4 (D-0152, D-0140 L2): sorted by [rung_compare], which is the order
+   the polymorphic [compare] gives a [(string, int, int)] triple ([String.compare] on the
+   name, then [Int.compare] on the threshold, then on the coefficient), without the
+   polymorphic call per comparison. [List.sort] sees the same signs, so the list is the
+   same. [to_linear_row] runs on every learned clause, for [--stats]'s [convertible]. *)
+let rung_compare (x1, v1, c1) (x2, v2, c2) =
+  match String.compare x1 x2 with
+  | 0 -> ( match Int.compare v1 v2 with 0 -> Int.compare c1 c2 | c -> c)
+  | c -> c
+
 let ladder_form t =
   let rec go acc const = function
-    | [] -> Some (List.sort compare acc, const)
+    | [] -> Some (List.sort rung_compare acc, const)
     | { coeff; lit } :: rest -> (
         match lit.Lit.v with
         | Lit.Eq _ | Lit.Bit _ -> None (* no ladder form over a bit: D-0130 section 7.5 *)
@@ -424,12 +435,20 @@ let to_linear_row t ~decl =
   match ladder_form t with
   | None -> None
   | Some (rungs, const0) ->
-      (* [rungs] is sorted by (name, threshold), so a variable's rungs are contiguous. *)
+      (* [rungs] is sorted by (name, threshold), so a variable's rungs are contiguous.
+         D-0152 (D-0140 L2): so they are taken as the maximal prefix with [x]'s name, in
+         one pass, which is what [List.partition] over the whole remainder returned on a
+         sorted list (the same rungs in the same order, and the same remainder), where
+         the partition made the grouping quadratic in the clause. *)
+      let rec span x mine = function
+        | (y, v, c) :: rest when String.equal x y -> span x ((v, c) :: mine) rest
+        | others -> (List.rev mine, others)
+      in
       let rec group = function
         | [] -> []
         | (x, v, c) :: rest ->
-            let mine, others = List.partition (fun (y, _, _) -> String.equal x y) rest in
-            (x, (v, c) :: List.map (fun (_, v, c) -> (v, c)) mine) :: group others
+            let mine, others = span x [] rest in
+            (x, (v, c) :: mine) :: group others
       in
       let groups = group rungs in
       let rec fold acc const = function
@@ -439,7 +458,12 @@ let to_linear_row t ~decl =
             | None -> None
             | Some (lo, hi) -> (
                 let rungs =
-                  List.filter (fun (_, c) -> c <> 0) (List.sort compare rungs)
+                  List.filter
+                    (fun (_, c) -> c <> 0)
+                    (List.sort
+                       (fun (v1, c1) (v2, c2) ->
+                         match Int.compare v1 v2 with 0 -> Int.compare c1 c2 | c -> c)
+                       rungs)
                 in
                 match linear_of_rungs ~lo ~hi rungs with
                 | None -> None
