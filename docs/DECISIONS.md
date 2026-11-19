@@ -3436,6 +3436,27 @@ If it is taken anyway for coverage, scope it narrowly: the constructor plus the 
 plug, with a **pinned prediction in its record that no suite `pb-*` figure moves**, and a test
 asserting that prediction rather than a benchmark hoping for a win.
 
+### Addendum 2026-11-19: M2-L7 closed by the user
+
+The user asked whether saturation is useful to the solver, for performance or expressivity, and
+which case had made the need appear. No case did. The row came from D-0044's table of the four
+reductions in the literature, where saturation was the only one baguette could not express, and
+was opened for coverage. This record then demoted it. The user closed it for these reasons.
+
+- Saturation in the PROOF and saturation in the SOLVER are separate questions. In the proof,
+  `Justify` already saturates where a derivation needs it, on the bits paths (`emit_bits_pruning`,
+  `emit_bits_resolve`, D-0134), with no `Explanation` constructor. On the default order encoding
+  no proof uses it: in gate 61's proofs of the 198 test models, 0 of 1 602 `pol` lines saturate
+  and 447 divide.
+- In the solver, as the reduction of PB conflict analysis, it adds no expressivity. Section 3
+  above shows that it cannot rescue the rows `to_linear_row` refuses.
+- It is not expected to win either. Division-based learning (RoundingSat) is exponentially
+  stronger than saturation-based learning (Sat4j), whose coefficients also grow (Elffers and
+  Nordström, IJCAI 2018). baguette already has division and `round_to_one`.
+
+Reopen only for a research comparison of reduction rules under proof logging. If a future proof
+needs a saturation step, `Justify` emits it directly, as the bits paths do.
+
 ## D-0051  A learned constraint has one owner, and retention is dominated by keeping everything
 
 **Status**: **ACCEPTED**, implemented by M2-L4 (2026-09-18, agent-del), `lib/core/retention.ml`.
