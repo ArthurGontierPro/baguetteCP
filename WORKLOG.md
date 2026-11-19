@@ -559,6 +559,14 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 
 ## Handoff notes
 
+### 2026-11-19 (orchestrator): wave53-tooling merged, gate 62 green
+
+`23c77c8` merges D-0160 (the scaling lane enforces on the growth of the cost per node; the width
+lint's begin/end region). Gate 62 on fataepyc-06: `make check` rc 0, 198 models with 0 artefact
+differences (binary `64ec63e0`, the same as gate 61's), lane 301/301, debug 289/289, scaling
+ENFORCED ok on every line (largest +0.07 % of late). After a gated merge that moves the cost per
+node on purpose, re-record with `scripts/scaling_lane.sh --update -j 16` in its own commit.
+
 ### M11-complexity-T6 and M6-T7 handoff, 2026-11-19 (agent-tooling, `wave53-tooling`): D-0160
 
 The scaling lane is a gate on the GROWTH (late minus early instructions per node), OVER beyond the
