@@ -18632,3 +18632,23 @@ row only when a pruning needs it, as a lemma -- each is RUP from its big-M row (
 `y >= v` and `x_k < v`: the ladders bound both sides and the row is violated), the way
 `Encoding.add_cited_lemma` serves inverse's stage 2. Its probes come first: the chase of
 section 3 needs the rows on the page, so a lazy scheme writes them ahead of each line.
+
+### 6. The gate (fataepyc-06, a fresh clone of `30ce66a`; later commits are documentation)
+
+- `make check` rc 0: 4 307 `ok` lines, 0 FAIL, models 202 passed and 0 failed, peak RSS
+  103 MB, 28 s wall.
+- Every `test/models/*.fzn` against main's binary (`64ec63e0`) at the default encoding and at
+  `--bits-above 0`, 404 runs: stdout, exit code, `.opb` and `.pbp` byte-identical on every
+  pre-existing model; the 32 differences are the four new member models (main refuses
+  `baguette_member`), 4 artefacts x 2 encodings each.
+- `make diff --tier all -j 24`: 301 of 301 equal; `--debug`: 289 of 289 equal;
+  `make scaling -j 16`: ok on every line. No lane instance reaches member; `bench/diff` is
+  untouched.
+
+### 7. Next
+
+`bin_packing_load` is the last of D-0122's decomposed globals in this row (65 instances, 0
+complete, 48 refused by the front end before any search). It has no design record: the first
+step is to read why the 48 are refused (the decomposition's width or heap, D-0122 only counts
+them), then probe a per-bin load row the way section 1 probed these rows. For member itself,
+section 5's lazy big-M lever is the one measured cost left.
