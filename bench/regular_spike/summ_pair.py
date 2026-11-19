@@ -36,8 +36,9 @@ def widths(h):
     if h in ("-", "") or ":" not in h:
         return out
     for part in h.split(","):
-        w, n = part.split(":")
-        out += [int(w)] * int(n)
+        w, _, n = part.partition(":")
+        if w.isdigit() and n.isdigit():  # a run that learned nothing prints the label here
+            out += [int(w)] * int(n)
     return out
 
 
