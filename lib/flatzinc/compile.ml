@@ -1426,12 +1426,78 @@ let compile (m : Model.t) : t =
         (iv.Model.inv_f @ iv.Model.inv_g)
     in
     let idempotent = List.length (List.sort_uniq compare ops) = List.length ops in
-    [
-      (fun id ->
-        Propagator.pack ~idempotent ~id
-          (module Inverse : Propagator.S with type t = Inverse.t)
-          p);
-    ]
+    (* STAGE 2 (D-0146 section 7.3, D-0151 section 2): both arrays are permutations, so
+       all_different over each is IMPLIED, and lib/core/prop/alldiff.ml over it brings the
+       matching's pruning the channel cannot see (a pigeonhole). Its derivations cite the
+       pairwise rows `x <> v \/ z <> v`, which this .opb does not state: they are ROOT
+       LEMMAS, each `rup` from the two channel rows CH(i, v) and CH(k, v) (or from the
+       restriction rows, for a v outside the other index set), registered with
+       [Encoding.add_cited_lemma] and handed to alldiff through its lemma-row hook. One
+       instance per array over its variables, when they are pairwise distinct (a repeat
+       is the involution's or a unification's, and Alldiff's Hall test is by name), and
+       when the model does not already post all_different over the same set (its model
+       rows would make this one a duplicate). A constant in the array is left to the
+       channel. *)
+    let stage2 (arr : Model.operand list) =
+      let is =
+        List.filter_map (function Model.Var i -> Some i | Model.Const _ -> None) arr
+      in
+      let set = List.sort_uniq compare is in
+      let posted =
+        List.exists
+          (fun (c : Model.constr) ->
+            match c.Model.k with
+            | Model.All_different xs ->
+                List.sort_uniq compare
+                  (List.filter_map
+                     (function Model.Var i -> Some i | Model.Const _ -> None)
+                     xs)
+                = set
+            | _ -> false)
+          m.Model.constraints
+      in
+      if List.length set < 2 || List.length set <> List.length is || posted then []
+      else
+        let names = List.map (name_of pos) is in
+        List.iter (Encoding.request_direct encoding) names;
+        let decl i =
+          let d = Store.get store (Var.of_int i) in
+          (Domain.lo d, Domain.hi d)
+        in
+        let rec pairs = function
+          | [] -> []
+          | x :: rest -> List.map (fun z -> (x, z)) rest @ pairs rest
+        in
+        let lemma_rows =
+          List.concat_map
+            (fun (x, z) ->
+              let (xlo, xhi), (zlo, zhi) = (decl x, decl z) in
+              let nx = name_of pos x and nz = name_of pos z in
+              List.init
+                (max 0 (min xhi zhi - max xlo zlo + 1))
+                (fun k ->
+                  let v = max xlo zlo + k in
+                  let c =
+                    Opb.clause
+                      (Encoding.ne_clause_lits ~name:nx ~decl_lo:xlo ~decl_hi:xhi v
+                      @ Encoding.ne_clause_lits ~name:nz ~decl_lo:zlo ~decl_hi:zhi v)
+                  in
+                  ((nx, nz, v), Encoding.add_cited_lemma encoding c)))
+            (pairs is)
+        in
+        let a =
+          Alldiff.make ~lemma_rows store encoding ~rows:[] (List.map Var.of_int is)
+        in
+        [
+          (fun id ->
+            Propagator.pack ~id (module Alldiff : Propagator.S with type t = Alldiff.t) a);
+        ]
+    in
+    (fun id ->
+      Propagator.pack ~idempotent ~id
+        (module Inverse : Propagator.S with type t = Inverse.t)
+        p)
+    :: (stage2 iv.Model.inv_f @ stage2 iv.Model.inv_g)
   in
   (* ===================================================================== end M7-T28 *)
   (* ------------------------------------------------------------------------ M4-T9
