@@ -191,7 +191,7 @@ lane_counts() {
 # ============================================================== 4 REFUSES
 lane_refuses() {
   # The flag.
-  "${SOLVER}" "${TMP}/justover.fzn" --max-order-width "${OLD_CAP}" \
+  "${SOLVER}" "${TMP}/justover.fzn" --proof "${TMP}/scratch" --max-order-width "${OLD_CAP}" \
     >"${TMP}/ref.out" 2>"${TMP}/ref.err"
   rc=$?
   if [ "${rc}" != "3" ]; then
@@ -211,7 +211,7 @@ lane_refuses() {
     "this refusal is OFF by default"
 
   # The environment variable.
-  BAGUETTE_MAX_ORDER_WIDTH="${OLD_CAP}" "${SOLVER}" "${TMP}/justover.fzn" \
+  BAGUETTE_MAX_ORDER_WIDTH="${OLD_CAP}" "${SOLVER}" "${TMP}/justover.fzn" --proof "${TMP}/scratch" \
     >"${TMP}/refenv.out" 2>"${TMP}/refenv.err"
   rc=$?
   if [ "${rc}" != "3" ]; then
@@ -233,7 +233,7 @@ lane_refuses() {
 
 # ============================================================== 5 PRECEDENCE
 lane_precedence() {
-  BAGUETTE_MAX_ORDER_WIDTH="${OLD_CAP}" "${SOLVER}" "${TMP}/justover.fzn" \
+  BAGUETTE_MAX_ORDER_WIDTH="${OLD_CAP}" "${SOLVER}" "${TMP}/justover.fzn" --proof "${TMP}/scratch" \
     --max-order-width none >"${TMP}/prec.out" 2>"${TMP}/prec.err"
   rc=$?
   if [ "${rc}" = "0" ] && grep -q '^x = 3;$' "${TMP}/prec.out"; then
@@ -267,7 +267,7 @@ lane_silences() {
 # ============================================================== 7 TYPOS
 lane_typos() {
   for bad in "10 000" "1e4" "-3" "ten"; do
-    "${SOLVER}" "${TMP}/justover.fzn" --max-order-width "${bad}" \
+    "${SOLVER}" "${TMP}/justover.fzn" --proof "${TMP}/scratch" --max-order-width "${bad}" \
       >"${TMP}/bad.out" 2>"${TMP}/bad.err"
     rc=$?
     if [ "${rc}" = "2" ] && grep -q 'is not a limit' "${TMP}/bad.err"; then
@@ -277,7 +277,7 @@ lane_typos() {
       head -3 "${TMP}/bad.err"
     fi
   done
-  BAGUETTE_MAX_ORDER_WIDTH="ten" "${SOLVER}" "${TMP}/justover.fzn" \
+  BAGUETTE_MAX_ORDER_WIDTH="ten" "${SOLVER}" "${TMP}/justover.fzn" --proof "${TMP}/scratch" \
     >"${TMP}/badenv.out" 2>"${TMP}/badenv.err"
   rc=$?
   if [ "${rc}" = "2" ] && grep -q 'is not a limit' "${TMP}/badenv.err"; then
@@ -320,19 +320,19 @@ self_test() {
   # 3: the refusal really is off by default -- if it were not, the ENCODES lane would
   # be passing for the wrong reason. Assert the pre-M7 behaviour is NOT the default.
   st_ok=0
-  "${SOLVER}" "${TMP}/justover.fzn" >/dev/null 2>&1 && st_ok=1
+  "${SOLVER}" "${TMP}/justover.fzn" --proof "${TMP}/scratch" >/dev/null 2>&1 && st_ok=1
   st_check "the default build does NOT refuse the model the control refuses"
 
   # 4: and the limit really is doing something -- if --max-order-width were ignored,
   # lane 4 would be the one passing for the wrong reason.
   st_ok=0
-  "${SOLVER}" "${TMP}/justover.fzn" --max-order-width "${OLD_CAP}" >/dev/null 2>&1 ||
+  "${SOLVER}" "${TMP}/justover.fzn" --proof "${TMP}/scratch" --max-order-width "${OLD_CAP}" >/dev/null 2>&1 ||
     st_ok=1
   st_check "--max-order-width is honoured (the control is not a no-op)"
 
   # 5: the warning threshold is doing something.
   st_ok=0
-  "${SOLVER}" "${TMP}/wide.fzn" --width-warn 999999999 2>"${TMP}/st.err" >/dev/null
+  "${SOLVER}" "${TMP}/wide.fzn" --proof "${TMP}/scratch" --width-warn 999999999 2>"${TMP}/st.err" >/dev/null
   [ -s "${TMP}/st.err" ] || st_ok=1
   st_check "a threshold above the width silences the warning"
 

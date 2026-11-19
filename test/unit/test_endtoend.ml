@@ -1867,8 +1867,9 @@ let m9_run ?tmpdir binary ~cwd args =
 
 (* The temp directory a run sees: its own, empty, so "--no-proof opened no temp file" is
    a statement about THIS run and not about whatever the other test binaries dune runs in
-   parallel create and delete in the shared one. A proof channel the CLI opens without
-   --proof is [Filename.temp_file], which honours TMPDIR. *)
+   parallel create and delete in the shared one. Until M9-no-proof-T5 the CLI opened its
+   proof channel without --proof with [Filename.temp_file], which honours TMPDIR; it no
+   longer opens any temp file, and the check stays as the guard that it does not. *)
 let m9_fresh_dir parent name =
   let d = Filename.concat parent name in
   Sys.mkdir d 0o700;
@@ -2005,7 +2006,15 @@ let test_m7t32_std_flags () =
         Filename.quote p
       in
       let opt = write "opt" fz_optimisation_model and sat = write "sat" m7t32_sat_src in
-      let run args = m9_run binary ~cwd:dir args in
+      (* M9-no-proof-T5: a run without --proof keeps ./opt.opb and ./opt.pbp, so every run
+         here that does not name its proof names one, `plain`, rather than leaving the
+         default name to be overwritten by the next run; the end of the lane checks that
+         no default-named proof appeared. A proved run rather than --no-proof, because
+         SPEC 1 says `make check` always proves. *)
+      let run args =
+        m9_run binary ~cwd:dir
+          (if m6_says args "--proof " then args else "--proof plain " ^ args)
+      in
       let tag = "M7-T32" in
       (* The plain runs every flag is compared with. *)
       let rc_o, out_o, err_o = run opt and rc_s, out_s, err_s = run sat in
@@ -2131,6 +2140,115 @@ let test_m7t32_std_flags () =
             (Printf.sprintf "%s: `%s` is a usage error, exit 2" tag args)
             (rc = 2 && out = ""))
         [ "-t abc"; "-t -5"; "-n 0"; "-p 0"; "-r x"; "-n" ];
+      check
+        (tag ^ ": no run of this lane left a default-named proof (M9-no-proof-T5)")
+        (List.for_all
+           (fun f -> not (Sys.file_exists (Filename.concat dir f)))
+           [ "opt.opb"; "opt.pbp"; "sat.opb"; "sat.pbp" ]);
+      m9_rm_rf dir
+
+(* M9-no-proof-T5 (D-0163): THE DEFAULT RUN KEEPS ITS PROOF. The user decided on 2026-11-19
+   that a run without --proof writes the proof and keeps it, under the name
+   bin/main.ml's [default_proof_prefix] takes from the model; the DIRECTORY (the current
+   one) is the proposal on record and the user's to confirm, so this lane pins the rule as
+   it stands and is the one place to change with it. Through the real binary, each run in
+   its own empty cwd with the model elsewhere:
+     (a) `baguette DIR/keep.fzn` writes ./keep.opb and ./keep.pbp, veripb accepts them,
+         stderr is empty (M1-T49) and nothing appears beside the model;
+     (b) a second run overwrites them with the same bytes and leaves nothing else;
+     (c) a model without the .fzn extension keeps its whole name: ./bare.opb;
+     (d) MiniZinc's temporary `mznfile*.fzn` gives ./baguette-proof.opb and .pbp, which
+         veripb accepts, and stderr names both by their full path;
+     (e) a model the front end refuses (exit 2) leaves no file at all. *)
+let test_m9t5_default_keeps_proof () =
+  match (m9_binary (), veripb_path ()) with
+  | None, _ ->
+      incr failures;
+      print_endline
+        "FAIL M9-no-proof-T5: bin/main.exe was not found above the test's cwd, so the \
+         default-proof lane was NOT run. Build bin/ first."
+  | _, None ->
+      incr failures;
+      print_endline
+        "FAIL M9-no-proof-T5: veripb not found -- the kept proofs were NOT checked. A \
+         missing checker is a failure, never a skip."
+  | Some binary, Some veripb ->
+      let binary =
+        if Filename.is_relative binary then Filename.concat (Sys.getcwd ()) binary
+        else binary
+      in
+      let tag = "M9-no-proof-T5" in
+      let dir = Filename.temp_file "baguette_m9t5" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let models = m9_fresh_dir dir "models" in
+      let write name src =
+        let p = Filename.concat models name in
+        let oc = open_out p in
+        output_string oc src;
+        close_out oc;
+        Filename.quote p
+      in
+      let sorted d = List.sort compare (Array.to_list (Sys.readdir d)) in
+      let verifies cwd prefix =
+        let rc, out =
+          m6_veripb veripb dir
+            (Filename.concat cwd (prefix ^ ".opb"))
+            (Filename.concat cwd (prefix ^ ".pbp"))
+        in
+        rc = 0 && m6_says out "VERIFIED"
+      in
+      (* (a) *)
+      let keep = write "keep.fzn" m7t32_sat_src in
+      let cwd_a = m9_fresh_dir dir "a" in
+      let rc, out, err = m9_run binary ~cwd:cwd_a keep in
+      check
+        (tag ^ " (a): the plain run exits 0 and prints a solution")
+        (rc = 0 && m6_says out "----------");
+      check (tag ^ " (a): ...writes nothing on stderr (M1-T49)") (err = "");
+      check
+        (tag ^ " (a): ...and keeps exactly ./keep.opb and ./keep.pbp in its cwd")
+        (sorted cwd_a = [ "keep.opb"; "keep.pbp" ]);
+      check (tag ^ " (a): ...which veripb accepts") (verifies cwd_a "keep");
+      check
+        (tag ^ " (a): ...and nothing appears beside the model")
+        (sorted models = [ "keep.fzn" ]);
+      (* (b) *)
+      let first = read_file (Filename.concat cwd_a "keep.pbp") in
+      let rc2, out2, _ = m9_run binary ~cwd:cwd_a keep in
+      check
+        (tag ^ " (b): a second run overwrites the proof, the same bytes, nothing else")
+        (rc2 = 0 && out2 = out
+        && read_file (Filename.concat cwd_a "keep.pbp") = first
+        && sorted cwd_a = [ "keep.opb"; "keep.pbp" ]);
+      (* (c) *)
+      let bare = write "bare" m7t32_sat_src in
+      let cwd_c = m9_fresh_dir dir "c" in
+      let rc, _, _ = m9_run binary ~cwd:cwd_c bare in
+      check
+        (tag ^ " (c): a model without .fzn keeps its whole name: ./bare.opb, ./bare.pbp")
+        (rc = 0 && sorted cwd_c = [ "bare.opb"; "bare.pbp" ]);
+      (* (d) *)
+      let mzn = write "mznfileQ1w2E3.fzn" m7t32_sat_src in
+      let cwd_d = m9_fresh_dir dir "d" in
+      let rc, _, err = m9_run binary ~cwd:cwd_d mzn in
+      check
+        (tag ^ " (d): MiniZinc's temporary model gives ./baguette-proof.opb and .pbp")
+        (rc = 0 && sorted cwd_d = [ "baguette-proof.opb"; "baguette-proof.pbp" ]);
+      check (tag ^ " (d): ...which veripb accepts") (verifies cwd_d "baguette-proof");
+      check
+        (tag ^ " (d): ...and stderr names both by their full path")
+        (m6_says err (Filename.concat cwd_d "baguette-proof.opb")
+        && m6_says err (Filename.concat cwd_d "baguette-proof.pbp"));
+      if not (m6_says err (Filename.concat cwd_d "baguette-proof.opb")) then
+        Printf.printf "  stderr:\n%s" err;
+      (* (e) *)
+      let bad = write "bad.fzn" "this is not flatzinc;\n" in
+      let cwd_e = m9_fresh_dir dir "e" in
+      let rc, _, _ = m9_run binary ~cwd:cwd_e bad in
+      check
+        (tag ^ " (e): a refused model exits 2 and leaves no file")
+        (rc = 2 && sorted cwd_e = []);
       m9_rm_rf dir
 
 let () =
@@ -2146,6 +2264,7 @@ let () =
   test_m9_no_proof_in_process ();
   test_m9_no_proof_cli ();
   test_m7t32_std_flags ();
+  test_m9t5_default_keeps_proof ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

@@ -1,5 +1,5 @@
 (* The baguette CLI.
-     baguette MODEL.fzn [--proof PREFIX] [--proof-comments] [--all] [--time]
+     baguette MODEL.fzn [--proof PREFIX | --no-proof] [--proof-comments] [--all] [--time]
 
    docs/ARCHITECTURE.md gives this file one job -- "parse args, wire everything, print
    results" -- and the wiring is the whole of M1-T14. Everything below it already
@@ -28,13 +28,13 @@
    the independent check (I-S1) would then happily confirm, because it would be checking
    the same permuted array.
 
-   **A proof is written even without --proof.** [Search.solve] needs a [Justify.ctx],
-   which needs a [Writer.t], which needs a channel; there is no "solve without logging"
-   mode and docs/SPEC.md 1 is explicit that there should not be one ("The proof is not a
-   debugging aid. It is a primary output"). Without --proof the proof is written to a
-   temporary file and deleted, so the work -- and the audit -- still happens and the run
-   still fails loudly if the solver cannot justify itself. It is the file that is
-   optional, not the proof.
+   **A run without --proof writes its proof and KEEPS it** (M9-no-proof-T5, D-0163, the
+   user's decision of 2026-11-19). docs/SPEC.md 1: "The proof is not a debugging aid. It
+   is a primary output", so the default run writes PREFIX.opb and PREFIX.pbp under a name
+   [default_proof_prefix] takes from the model -- `./foo.opb` and `./foo.pbp` for
+   `foo.fzn`, in the current directory -- and leaves them there. `--proof PREFIX` chooses
+   the name. Until T5 such a run wrote the .pbp to a temporary file and deleted it (and
+   no .opb at all), so the answer it printed came with a proof nobody could check.
 
    **Except under `--no-proof` (M9-no-proof-T2, D-0126), which is off by default and is
    a MEASUREMENT INSTRUMENT, not a mode of the solver.** It keeps every Explanation (the
@@ -107,6 +107,9 @@ module Checked = Baguette_core.Checked
 type options = {
   model : string;
   proof_prefix : string option;
+      (* M9-no-proof-T5: [None] exactly under --no-proof; otherwise --proof's argument, or
+         [default_proof_prefix] of the model when it was not given *)
+  proof_note : bool; (* M9-no-proof-T5: say on stderr where the proof went (MiniZinc) *)
   proof_comments : bool;
   all_solutions : bool;
   time : bool;
@@ -146,11 +149,11 @@ let exit_resource = Encoding.exit_resource
 
 let usage () =
   prerr_endline
-    "usage: baguette MODEL.fzn [--proof PREFIX] [--proof-comments] [--all] [--time] \
-     [--stats] [--max-order-width N] [--max-direct-values N] [--width-warn N] \
+    "usage: baguette MODEL.fzn [--proof PREFIX | --no-proof] [--proof-comments] [--all] \
+     [--time] [--stats] [--max-order-width N] [--max-direct-values N] [--width-warn N] \
      [--max-encoding-clauses N] [--max-heap-mb N] [--bits-above W] [--time-limit S] \
-     [--no-proof] [--restarts POLICY] [--phase-saving] [--search ORDER] [--reuse-trail] \
-     [-a] [-i] [-n N] [-f] [-t MS] [-r SEED] [-p N] [-s] [-v]";
+     [--restarts POLICY] [--phase-saving] [--search ORDER] [--reuse-trail] [-a] [-i] [-n \
+     N] [-f] [-t MS] [-r SEED] [-p N] [-s] [-v]";
   prerr_endline "";
   prerr_endline
     "  The MiniZinc standard flags (M7-T32, D-0150; tools/baguette.msc declares them):";
@@ -176,8 +179,19 @@ let usage () =
   prerr_endline "                    end of the run (MiniZinc's statistics format).";
   prerr_endline "  -v                what the flags above became, on stderr.";
   prerr_endline "";
-  prerr_endline "  --proof PREFIX    write PREFIX.opb and PREFIX.pbp (SPEC 4.1); verify";
-  prerr_endline "                    them with: veripb PREFIX.opb PREFIX.pbp";
+  prerr_endline
+    "  --proof PREFIX    write the proof as PREFIX.opb and PREFIX.pbp (SPEC 4.1);";
+  prerr_endline "                    verify it with: veripb PREFIX.opb PREFIX.pbp";
+  prerr_endline "                    WITHOUT --proof every run still writes and keeps its";
+  prerr_endline "                    proof, as ./MODEL.opb and ./MODEL.pbp in the current";
+  prerr_endline "                    directory, MODEL being the model's file name without";
+  prerr_endline
+    "                    .fzn (M9-no-proof-T5). Under MiniZinc, whose .fzn is a";
+  prerr_endline
+    "                    temporary mznfile*.fzn, it is ./baguette-proof.opb and";
+  prerr_endline
+    "                    .pbp, and stderr says so. A previous run's files of the";
+  prerr_endline "                    same name are overwritten. --no-proof writes none.";
   prerr_endline "  --proof-comments  enable the proof writer's comment lines. As of M1,";
   prerr_endline "                    no shipped model reaches a call site that emits one,";
   prerr_endline "                    so this flag is currently a no-op on every model in";
@@ -377,6 +391,40 @@ let set_limit what r v =
         "%s: %S is not a limit. Give a non-negative integer, or `none` for no limit.\n"
         what v;
       usage ()
+
+(* M9-no-proof-T5 (D-0163). WHERE A RUN WITHOUT --proof WRITES ITS PROOF, decided here and
+   nowhere else. The user decided on 2026-11-19 that such a run writes its proof and KEEPS
+   it. The DIRECTORY is still the user's to confirm: what follows is the proposal on
+   record, and changing it is an edit to [default_proof_prefix] alone.
+
+     baguette DIR/foo.fzn            ->  ./foo.opb and ./foo.pbp, in the CURRENT directory
+     baguette /tmp/mznfileXYZ.fzn    ->  ./baguette-proof.opb and .pbp, and a stderr note
+
+   The result is a PREFIX, as --proof's argument is: the run appends .opb and .pbp. Only a
+   `.fzn` extension is dropped, so no model file is ever its own proof's name (`foo` gives
+   foo.opb, and a model called `x.pbp` gives x.pbp.pbp).
+
+   The second line is the MiniZinc case. `minizinc --solver baguette m.mzn` flattens to a
+   temporary `mznfile<random>.fzn` and passes only that path after the flags (measured on
+   MiniZinc 2.10.1: neither the argv, the environment nor the .fzn names the .mzn), so a
+   name from the model would be a new meaningless name on every run. A fixed name in the
+   current directory is the next best thing; the note on stderr gives its full path,
+   because the user never typed it. `--proof PREFIX` and `--no-proof` are both extraFlags
+   of tools/baguette.msc, so a MiniZinc user can name the proof or skip it.
+
+   A file of the same name is OVERWRITTEN, as `--proof PREFIX` always has done: it is the
+   output of a previous run, like a compiler's. Two runs of the same model, or two MiniZinc
+   runs, in the same directory at the same time therefore write over each other; give each
+   its own --proof. *)
+let mzn_temp_model model =
+  let b = Filename.basename model in
+  String.starts_with ~prefix:"mznfile" b && Filename.check_suffix b ".fzn"
+
+let default_proof_prefix model =
+  let b = Filename.basename model in
+  if mzn_temp_model model then "baguette-proof"
+  else if Filename.check_suffix b ".fzn" then Filename.chop_suffix b ".fzn"
+  else b
 
 let parse_args argv =
   (* The environment first, the command line second, so a flag beats an env var. *)
@@ -586,9 +634,17 @@ let parse_args argv =
   match !model with
   | None -> usage ()
   | Some m ->
+      (* M9-no-proof-T5: from here on [proof_prefix] is [None] only under --no-proof. *)
+      let proof_prefix, proof_note =
+        match !proof_prefix with
+        | Some p -> (Some p, false)
+        | None when !no_proof -> (None, false)
+        | None -> (Some (default_proof_prefix m), mzn_temp_model m)
+      in
       {
         model = m;
-        proof_prefix = !proof_prefix;
+        proof_prefix;
+        proof_note;
         proof_comments = !proof_comments;
         all_solutions = !all_solutions;
         time = !time;
@@ -755,7 +811,7 @@ module Timing = struct
     | "parse" -> "Builder.of_file: lex, parse, build Model.t"
     | "compile" -> "Compile.compile: store, engine, encoding -- no I/O, no proof"
     | "opb" ->
-        "Encoding.write_opb: the .opb built, written and closed (0 without --proof)"
+        "Encoding.write_opb: the .opb built, written and closed (0 under --no-proof)"
     | "proofopen" -> "proof channel opened, Writer.create, Encoding.start_proof"
     | "search" -> "Search.solve: propagation, search and proof emission together"
     | "emit" ->
@@ -766,7 +822,7 @@ module Timing = struct
     | "clockovh" ->
         "this instrument's own cost: charged ONCE to `emit` and ONCE to `propag`. \
          Subtract it"
-    | "pbpclose" -> "the .pbp flushed and closed (and removed, without --proof)"
+    | "pbpclose" -> "the .pbp flushed and closed"
     | "output" -> "Output.solution rendered, printed and flushed to stdout"
     | "other" -> "inside main but outside every phase above (dispatch, diagnostics)"
     | "inmain" -> "main's first statement to here: every row above except startup"
@@ -865,22 +921,18 @@ let assignment_values m store (assignment : Search.assignment) =
 
 (* ------------------------------------------------------------------ running *)
 
-(* The proof channel, plus how to finish with it. Without --proof it is a temporary
-   file that is removed afterwards: see the header. *)
+(* The proof channel: PREFIX.pbp, which the run keeps (M9-no-proof-T5, see the header and
+   [default_proof_prefix]). *)
 let open_proof_channel opts =
   (* M9-no-proof-T2: the null channel. Nothing is written through it -- the writer over
      it is [Writer.create ~null:true] and every rule returns before rendering -- and it
      exists so that the writer has a channel to be over and the pipeline below keeps its
-     one shape. [parse_args] has already refused `--no-proof` beside `--proof`. *)
-  if opts.no_proof then (open_out Filename.null, fun () -> ())
-  else
-    match opts.proof_prefix with
-    | Some prefix ->
-        let path = prefix ^ ".pbp" in
-        (open_out path, fun () -> ())
-    | None -> (
-        let path = Filename.temp_file "baguette" ".pbp" in
-        (open_out path, fun () -> try Sys.remove path with Sys_error _ -> ()))
+     one shape. [parse_args] has already refused `--no-proof` beside `--proof`, and gives
+     every other run a prefix. *)
+  match opts.proof_prefix with
+  | _ when opts.no_proof -> open_out Filename.null
+  | Some prefix -> open_out (prefix ^ ".pbp")
+  | None -> invalid_arg "open_proof_channel: no prefix outside --no-proof"
 
 let audit_enabled () =
   (* The library defaults this off and turns it on with BAGUETTE_PROOF_AUDIT=1
@@ -1108,7 +1160,8 @@ let warn_partial_proof opts =
   | None -> ()
   | Some p ->
       Printf.eprintf
-        "  A proof was requested: %s.opb / %s.pbp are INCOMPLETE -- the run stopped while\n\
+        "  A proof was being written: %s.opb / %s.pbp are INCOMPLETE -- the run stopped \
+         while\n\
         \  writing them. Do not check them and do not keep them; they are not a proof of\n\
         \  anything. Re-run with a larger budget, or with none.\n"
         p p
@@ -1540,8 +1593,9 @@ let report_mzn_stats (st : Search.stats) ~(engine : Engine.t) ~init_time ~solve_
 let solve opts (m : Model.t) =
   (* M7-T27 (b), D-0123 family C: the .opb's rows go to disk as they are minted, never
      to the heap. With --proof the body is written to PREFIX.opb.rows and [write_opb]
-     splices it under the header, then removes it; without --proof there is no .opb to
-     write and the rows are dropped at the door. Set BEFORE [Compile.compile], which is
+     splices it under the header, then removes it; under --no-proof there is no .opb to
+     write and the rows are dropped at the door. Every other run has a prefix
+     (M9-no-proof-T5). Set BEFORE [Compile.compile], which is
      where [Encoding.create] runs. The at_exit is for the runs that end in [exit 5] or
      an uncaught exception with the body half-written: the .opb is INCOMPLETE then
      anyway ([incomplete_proof_warning]), and the body should not outlive it. *)
@@ -1558,6 +1612,18 @@ let solve opts (m : Model.t) =
   if opts.stats then report_encoding_cost (Encoding.cost encoding);
   (* I-X5: the .opb is complete and on disk before any proof rule can cite it. The
      comment names the BASENAME, not the path -- M1-T37, see this file's header. *)
+  (* M9-no-proof-T5: the MiniZinc case of [default_proof_prefix] names a file the user
+     never typed, so say where it is. Printed after the model is read, so a refused model
+     names no file it did not write. *)
+  (match opts.proof_prefix with
+  | Some p when opts.proof_note ->
+      let p = if Filename.is_relative p then Filename.concat (Sys.getcwd ()) p else p in
+      Printf.eprintf
+        "baguette: the proof is written to %s.opb and %s.pbp (the model is MiniZinc's \
+         temporary file; --proof PREFIX names the proof, --no-proof skips it)\n\
+         %!"
+        p p
+  | _ -> ());
   Timing.phase "opb" (fun () ->
       match opts.proof_prefix with
       | Some prefix ->
@@ -1567,9 +1633,9 @@ let solve opts (m : Model.t) =
             encoding oc;
           close_out oc
       | None -> ());
-  let proof_oc, cleanup, ctx =
+  let proof_oc, ctx =
     Timing.phase "proofopen" (fun () ->
-        let proof_oc, cleanup = open_proof_channel opts in
+        let proof_oc = open_proof_channel opts in
         let writer =
           Writer.create ~comments:opts.proof_comments ~audit:(audit_enabled ())
             ~null:opts.no_proof proof_oc
@@ -1581,7 +1647,7 @@ let solve opts (m : Model.t) =
            which row it meant. M1-T31 removed the field: there is no ambient row to
            install, so there is nothing to guard here. *)
         let ctx = Justify.create ~writer ~encoding in
-        (proof_oc, cleanup, ctx))
+        (proof_oc, ctx))
   in
   let check assignment =
     Model.check_assignment m (assignment_values m store assignment)
@@ -1617,10 +1683,7 @@ let solve opts (m : Model.t) =
          exit 143));
   let outcome =
     Fun.protect
-      ~finally:(fun () ->
-        Timing.phase "pbpclose" (fun () ->
-            close_out proof_oc;
-            cleanup ()))
+      ~finally:(fun () -> Timing.phase "pbpclose" (fun () -> close_out proof_oc))
       (fun () ->
         Timing.phase "search" (fun () ->
             (* M1-T47. Writer's accumulator is process-wide and cumulative -- it has

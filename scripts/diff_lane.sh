@@ -130,6 +130,14 @@ in_list() { local x="$1"; shift; [ $# -eq 0 ] && return 0; for y in "$@"; do [ "
 CFG_NAMES=(); CFG_ENV=(); CFG_FLAGS=(); CFG_PROOF=()
 while IFS=$'\t' read -r name env flags proof; do
   case "$name" in ''|'#'*) continue ;; esac
+  # M9-no-proof-T5: a run without --proof writes ./model.opb and ./model.pbp and KEEPS
+  # them, so a `no` line must say --no-proof itself: otherwise it would be a proved run
+  # whose proof nobody hashes, left behind in the run directory.
+  case "$proof" in
+    yes) ;;
+    no) case " $flags " in *" --no-proof "*) ;; *) die "configuration $name: proof=no without --no-proof in its flags (M9-no-proof-T5)" ;; esac ;;
+    *) die "configuration $name: proof column is '$proof', not yes or no" ;;
+  esac
   CFG_NAMES+=("$name"); CFG_ENV+=("$env"); CFG_FLAGS+=("$flags"); CFG_PROOF+=("$proof")
 done < "$D/configs.tsv"
 for c in "${ONLY_CFGS[@]+"${ONLY_CFGS[@]}"}"; do in_list "$c" "${CFG_NAMES[@]}" || die "no configuration named $c"; done
