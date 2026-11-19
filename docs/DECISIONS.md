@@ -19086,3 +19086,126 @@ Three requests are under `## Cross-session requests` in `WORKLOG.md`, dated 2026
   at compile time.
 - **`justify.ml` (agent-memo).** `ensure_lit` should carry the null guard itself, so that a future
   caller cannot mint atoms for the null writer. Nothing pays for its absence today.
+
+## D-0163  M9-no-proof-T5: the default run keeps its proof -- `./<model>.opb` and `.pbp` in the current directory, `./baguette-proof` under MiniZinc, overwritten by the next run, and the directory still the user's to confirm
+
+**Status**: DONE 2026-11-19 (agent-keepproof, branch `wave54-keepproof`). Implements the user's
+decision of 2026-11-19 recorded in the ROADMAP row: a run without `--proof` writes its proof and
+KEEPS it, under a name taken from the model; `--proof PREFIX` chooses the name; `--no-proof` is
+the run without a proof. The directory is the proposal on record, not yet confirmed.
+
+### 1. What a run without `--proof` did, and does
+
+Until this row, `bin/main.ml` opened `Filename.temp_file "baguette" ".pbp"`, wrote the proof into
+it and deleted it at the end, and wrote no `.opb` at all (`Encoding.row_sink` stayed at
+`Discard_rows`, so the model rows were dropped at the door). The answer such a run printed came
+with a proof nobody could check, which SPEC §1 ("a primary output") did not mean.
+
+Now `parse_args` resolves the prefix once. `opts.proof_prefix` is `None` exactly under
+`--no-proof`, and every other run is a `--proof PREFIX` run with PREFIX from
+`default_proof_prefix`: the rows stream to `PREFIX.opb.rows`, the `.opb` is written before the
+proof, the `.pbp` is opened at `PREFIX.pbp`, and nothing is deleted. The temporary file and its
+cleanup closure are gone. A consequence for D-0161 §6's request to `compile.ml`: `Discard_rows`
+now means `--no-proof` and nothing else, so it IS the no-proof signal at compile time that
+request said was missing.
+
+### 2. The naming rule, in one function
+
+`default_proof_prefix` in `bin/main.ml`, whose header states the rule and that the directory is
+the user's to confirm. Changing it is an edit to that function alone.
+
+| Model given | Files kept | stderr |
+|---|---|---|
+| `DIR/foo.fzn` | `./foo.opb`, `./foo.pbp` (current directory) | nothing (M1-T49) |
+| `DIR/foo` (no `.fzn`) | `./foo.opb`, `./foo.pbp` | nothing |
+| `DIR/x.pbp` | `./x.pbp.opb`, `./x.pbp.pbp` (only `.fzn` is dropped, so a model is never its proof's name) | nothing |
+| `/tmp/mznfileXXXXXX.fzn` (MiniZinc) | `./baguette-proof.opb`, `./baguette-proof.pbp` | one line with both full paths |
+| anything, with `--proof P` | `P.opb`, `P.pbp` | nothing |
+| anything, with `--no-proof` | none | nothing |
+
+The MiniZinc case, measured on 2.10.1 with a fake solver that logs its argv, cwd and
+environment: `minizinc --solver S m.mzn` runs the solver in the caller's cwd with argv = the
+flags, then `/tmp/mznfile<6 random chars>.fzn`. Neither the argv, the environment nor the `.fzn`
+names the `.mzn`. A name from the model would be a new meaningless name on every run, so the
+rule recognises MiniZinc's temporary name (`mznfile*.fzn`, the prefix of MiniZinc's
+`FileUtils::TmpFile`) and uses a fixed `baguette-proof` in the cwd, and says where on stderr,
+because the user never typed that name. `tools/baguette.msc` gains `--no-proof` as a `bool`
+extraFlag beside the existing `--proof` string flag (measured: MiniZinc passes `--no-proof` only
+when given). So `minizinc --solver baguette --proof out m.mzn` names the proof and
+`--no-proof` skips it. Checked end to end with the real MiniZinc and the built solver: the
+default run leaves `baguette-proof.opb`/`.pbp`, which veripb verifies (`VERIFIED BOUNDS`).
+
+The alternative for MiniZinc was to recognise any model in the temp directory. It was not taken
+because a user who keeps a model in `/tmp` would get `baguette-proof` instead of its name.
+
+### 3. Overwriting
+
+A file of the same name is overwritten without a word, as `--proof PREFIX` always did and as a
+compiler overwrites its output: it is the previous run's proof. The cost of that choice is that
+two runs of the same model, or two MiniZinc runs, in the same directory at the same time write
+over each other's proof. Give each its own `--proof`. A refusal before the solve (exit 2 at the
+front end) writes nothing; a resource death mid-proof prints the existing INCOMPLETE warning,
+now worded "A proof was being written" since the user may not have asked for one.
+
+### 4. The lanes and tests that ran without `--proof`
+
+Found by grep over every script, test and bench file that names the binary. SPEC §1 says
+`make check` always proves, so the in-gate ones take a scratch prefix, not `--no-proof`.
+
+- `test/unit/test_endtoend.ml`: the M7-T32 flag runs name `--proof plain` in their temp dir when
+  the run names none, and the lane ends by checking no default-named proof appeared. New lane
+  `test_m9t5_default_keeps_proof`, 12 checks: (a) the default run keeps exactly `./keep.opb` and
+  `./keep.pbp` in its cwd, veripb accepts them, stderr is empty, nothing appears beside the
+  model; (b) a second run overwrites them with the same bytes; (c) a model without `.fzn`;
+  (d) `mznfileQ1w2E3.fzn` gives `baguette-proof`, veripb accepts it and stderr names both full
+  paths; (e) a refused model exits 2 and leaves no file.
+- `mznlib/test/check_mznlib.sh`: the second, output-only run of a flattened model names
+  `--proof "$tmp/<n>_again"`.
+- `scripts/diff_lane.sh`: a configuration with `proof=no` must carry `--no-proof` in its flags,
+  and a proof column other than yes/no is refused. The one such line, `noproof`, already did, so
+  no reference moved.
+- `scripts/corpus_run.sh` `NO_PROOF=1`: its documented meaning was "the solver still writes its
+  proof to a temporary file, so this removes the checker and the artefact, not the logging"
+  (config b of D-0080). Kept: it now passes `--proof "$L"` and deletes the pair unchecked. The
+  one difference is that the `.opb` is now written too. `SOLVER_ARGS=--no-proof` beside it
+  replaces the prefix (the two flags together are exit 2).
+- `bench/learning_baseline.sh`: the two `--stats` runs name `--proof "$WORK/s"`.
+- Already explicit, unchanged: `scripts/compare_run.sh` (`--proof "$L"`), `run_model_tests.sh`,
+  `verify_proof.sh`, `check_determinism.sh`, `check_unlimited.sh`, `scaling_lane.sh`,
+  `shrink.sh`, `bench/run_bench.sh`, `bench/fuzz/run.py`, the `bench/perf` scripts. The
+  historical one-off scripts under `bench/m6t9`, `bench/bits_spike` and `bench/regular_spike`
+  all pass `--proof` or `--no-proof`, or go through `corpus_run.sh`.
+
+`*.opb` and `*.pbp` are in `.gitignore`, so a plain `git status` cannot show a stray proof. The
+gate's stray check therefore uses `git status --short --ignored` and a `find` outside `_build`.
+
+### 5. The gate
+
+First gate, fresh clone of `6b8ba3d` in `/scratch/arthur/wave54-keepproof-gate` (binary
+`b4a16e86`, against gate 64's `d7a1ef00`): `make check` rc 0 (4 278 ok, 198 models passed, 25 s,
+peak RSS 99 MB); stdout, exit code, `.opb` and `.pbp` of the 198 models run WITH `--proof` equal
+to main's binary (0 differences, so proof mode is byte-identical); the differential lane 301 of
+301 equal to the reference, its debug pass 289 of 289; the scaling lane ok on every line;
+`bench/diff` unchanged, nothing re-recorded. The stray check then found `./wide.opb`/`.pbp` and
+`./justover.opb`/`.pbp` (2.1 MB and 0.7 MB) in the clone's root: `scripts/check_unlimited.sh`
+had eight runs without `--proof` that the first grep missed, because their solver call and its
+flags sit on separate lines. They now name `--proof "$TMP/scratch"` (`26f9b89`, a script-only
+change). A line scanner over every tracked script, joining continuation lines, then found no
+other run of the solver without `--proof` or `--no-proof`.
+
+Second gate, fresh clone of `26f9b89` in `/scratch/arthur/wave54-keepproof-gate2`: `make check`
+rc 0 (4 278 ok, 198 models, 26 s, peak RSS 100 MB), the same binary `b4a16e86` (so the lanes
+above stand), and no `.opb` or `.pbp` anywhere in the clone outside `_build/`, `test/out/` (the
+model lane's own output directory) and the two tracked fixtures under `bench/control/`, by
+`find` and by `git status --short --ignored`.
+
+### 6. What the user must still confirm
+
+- **The directory.** The current directory is the proposal on record. The alternatives are the
+  model's own directory (which would write into `test/models/` when a model there is run
+  without `--proof`), or a fixed proofs directory. Either is a one-line change to
+  `default_proof_prefix`, plus SPEC §4.1's bullet and the lane `test_m9t5_default_keeps_proof`.
+- **The MiniZinc name.** `./baguette-proof`, fixed, overwritten by the next run, with a line on
+  stderr. A per-run unique name would never collide but would pile up files in the cwd.
+- **Overwriting.** Chosen silent, like `--proof PREFIX` and a compiler. Refusing to overwrite
+  would make the second run of a model fail until the user deletes the first proof.
