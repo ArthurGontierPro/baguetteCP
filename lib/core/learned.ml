@@ -430,12 +430,19 @@ let add_mass x y = if x < 0 || y < 0 || x > max_int - y then -1 else x + y
    established that nothing overflows. A term whose literal and coefficient are an
    input's (a multiplier of 1, the variable on one side only) is that input's record,
    which is the same value and allocates nothing. *)
+(* The two side sums of the variable [walk] is on, mutable so that a variable costs no
+   allocation but its output term. *)
+type sides = { mutable pos : int; mutable neg : int }
+
 let walk ca (a : term list) cb (b : term list) : (term list * int) option =
-  let rec sums c v p n = function
+  let st = { pos = 0; neg = 0 } in
+  (* Adds [c] times the terms on [v] at the head of the list into [st]; the rest. *)
+  let rec sums c v = function
     | tm :: rest when Lit.var_equal tm.lit.Lit.v v ->
-        if tm.lit.Lit.positive then sums c v (p + (c * tm.coeff)) n rest
-        else sums c v p (n + (c * tm.coeff)) rest
-    | rest -> (p, n, rest)
+        if tm.lit.Lit.positive then st.pos <- st.pos + (c * tm.coeff)
+        else st.neg <- st.neg + (c * tm.coeff);
+        sums c v rest
+    | rest -> rest
   in
   let emit v positive c la la' lb lb' =
     match (la, lb) with
@@ -447,30 +454,32 @@ let walk ca (a : term list) cb (b : term list) : (term list * int) option =
         tm
     | _ -> { coeff = c; lit = { Lit.v; positive } }
   in
+  (* [go] finds the smaller variable at the two heads, [visit] nets it. *)
   let rec go started prev la lb acc dropped =
-    let next =
-      match (la, lb) with
-      | [], [] -> None
-      | ta :: _, [] -> Some ta.lit.Lit.v
-      | [], tb :: _ -> Some tb.lit.Lit.v
-      | ta :: _, tb :: _ ->
-          let va = ta.lit.Lit.v and vb = tb.lit.Lit.v in
-          Some (if Lit.var_compare va vb <= 0 then va else vb)
-    in
-    match next with
-    | None -> Some (List.rev acc, dropped)
-    | Some v ->
-        if started && Lit.var_compare prev v >= 0 then None
-        else
-          let p, n, la' = sums ca v 0 0 la in
-          let p, n, lb' = sums cb v p n lb in
-          let m = if p < n then p else n in
-          let acc =
-            if p > m then emit v true (p - m) la la' lb lb' :: acc
-            else if n > m then emit v false (n - m) la la' lb lb' :: acc
-            else acc
-          in
-          go true v la' lb' acc (dropped + m)
+    match (la, lb) with
+    | [], [] -> Some (List.rev acc, dropped)
+    | ta :: _, [] -> visit started prev ta.lit.Lit.v la lb acc dropped
+    | [], tb :: _ -> visit started prev tb.lit.Lit.v la lb acc dropped
+    | ta :: _, tb :: _ ->
+        let va = ta.lit.Lit.v and vb = tb.lit.Lit.v in
+        visit started prev
+          (if Lit.var_compare va vb <= 0 then va else vb)
+          la lb acc dropped
+  and visit started prev v la lb acc dropped =
+    if started && Lit.var_compare prev v >= 0 then None
+    else (
+      st.pos <- 0;
+      st.neg <- 0;
+      let la' = sums ca v la in
+      let lb' = sums cb v lb in
+      let p = st.pos and n = st.neg in
+      let m = if p < n then p else n in
+      let acc =
+        if p > m then emit v true (p - m) la la' lb lb' :: acc
+        else if n > m then emit v false (n - m) la la' lb lb' :: acc
+        else acc
+      in
+      go true v la' lb' acc (dropped + m))
   in
   match (a, b) with
   | [], [] -> Some ([], 0)
@@ -630,9 +639,22 @@ let rung_compare (x1, v1, c1) (x2, v2, c2) =
   | 0 -> ( match Int.compare v1 v2 with 0 -> Int.compare c1 c2 | c -> c)
   | c -> c
 
+(* [List.sort cmp l], which is a stable sort and so returns [l] itself when [l] is
+   already non-decreasing; that is checked first, in one pass (M11-complexity-T9, D-0157).
+   A row out of [make] lists its rungs in [rung_compare] order already ([Lit.compare] is
+   name, then threshold, then the negative literal, whose rung coefficient is the
+   negative one, first), so [to_linear_row] -- asked of every learned row, for
+   [--stats] -- no longer sorts what is sorted. *)
+let sort_unless_sorted cmp l =
+  let rec sorted = function
+    | x :: (y :: _ as rest) -> cmp x y <= 0 && sorted rest
+    | _ -> true
+  in
+  if sorted l then l else List.sort cmp l
+
 let ladder_form t =
   let rec go acc const = function
-    | [] -> Some (List.sort rung_compare acc, const)
+    | [] -> Some (sort_unless_sorted rung_compare (List.rev acc), const)
     | { coeff; lit } :: rest -> (
         match lit.Lit.v with
         | Lit.Eq _ | Lit.Bit _ -> None (* no ladder form over a bit: D-0130 section 7.5 *)
@@ -729,7 +751,7 @@ let to_linear_row t ~decl =
                 let rungs =
                   List.filter
                     (fun (_, c) -> c <> 0)
-                    (List.sort
+                    (sort_unless_sorted
                        (fun (v1, c1) (v2, c2) ->
                          match Int.compare v1 v2 with 0 -> Int.compare c1 c2 | c -> c)
                        rungs)
@@ -813,4 +835,8 @@ let pb_instance ~id ~row_id ?(bump = 0) store ~decl t : Propagator.instance opti
    Kept here rather than in [Encoding] because it is this module's question: [Encoding]
    already answers it, it just answers it by raising. *)
 let decl_of_encoding enc name =
-  if Encoding.is_declared enc name then Some (Encoding.domain enc name) else None
+  (* One lookup (D-0157): [Encoding.domain] raises [Undeclared] exactly when
+     [Encoding.is_declared] says no, both reading the same table. *)
+  match Encoding.domain enc name with
+  | d -> Some d
+  | exception Encoding.Undeclared _ -> None

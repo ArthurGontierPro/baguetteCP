@@ -896,21 +896,23 @@ let test_t9_combine () =
     | 3 -> -1
     | _ -> 1 + Random.State.int rng_t9 6
   in
-  let agree = ref true and n_ok = ref 0 and n_over = ref 0 in
+  let agree = ref true and n_ok = ref 0 and n_over = ref 0 and n_merged = ref 0 in
   for _ = 1 to 30_000 do
     let a = row_t9 ~big:true and b = row_t9 ~big:true in
     let ca = mult () and cb = mult () in
     let got = outcome_t9 (fun () -> Learned.combine a ca b cb) in
     let want = outcome_t9 (fun () -> Learned.combine_reference a ca b cb) in
     if not (same_t9 got want) then agree := false;
+    if Learned.add_mass (Learned.scaled_mass ca a) (Learned.scaled_mass cb b) >= 0 then
+      incr n_merged;
     match want with Ok _ -> incr n_ok | Error _ -> incr n_over
   done;
   check
     (Printf.sprintf
-       "D-0157: combine equals combine_reference on 30 000 pairs (%d rows, %d overflows, \
-        message for message)"
-       !n_ok !n_over)
-    (!agree && !n_ok > 1000 && !n_over > 1000);
+       "D-0157: combine equals combine_reference on 30 000 pairs (%d rows, %d by the one \
+        merge; %d overflows, message for message)"
+       !n_ok !n_merged !n_over)
+    (!agree && !n_merged > 5000 && !n_ok - !n_merged > 1000 && !n_over > 1000);
   (* The pivot cancels: the shape every elimination has. *)
   let p = Lit.ge "a" 2 in
   let r1 = Learned.make [ (3, p); (2, Lit.ge "b" 1) ] 3
@@ -948,6 +950,7 @@ let test_t9_add_multiples () =
     Learned.make [ (1, Lit.ge name w); (1, Lit.negate (Lit.ge name (w + 1))) ] 1
   in
   let agree = ref true and n_ok = ref 0 and n_over = ref 0 and n_stop = ref 0 in
+  let n_merged = ref 0 in
   for _ = 1 to 30_000 do
     let big = Random.State.int rng_t9 3 = 0 in
     let row = row_t9 ~big in
@@ -970,6 +973,13 @@ let test_t9_add_multiples () =
       run (fun ~before -> Learned.add_multiples ~before row summands) ~stop_at
     in
     let want, wcalls = run (fun ~before -> fold ~before row summands) ~stop_at in
+    if
+      summands <> []
+      && List.fold_left
+           (fun acc (m, r) -> Learned.add_mass acc (Learned.scaled_mass m r))
+           (Learned.mass row) summands
+         >= 0
+    then incr n_merged;
     let eq =
       match (got, want) with
       | Ok a, Ok b -> Learned.equal a b
@@ -985,9 +995,9 @@ let test_t9_add_multiples () =
   check
     (Printf.sprintf
        "D-0157: add_multiples equals the fold of combine_reference, stop calls counted, \
-        on 30 000 rows (%d rows, %d overflows, %d stops)"
-       !n_ok !n_over !n_stop)
-    (!agree && !n_ok > 1000 && !n_over > 100 && !n_stop > 100)
+        on 30 000 rows (%d rows, %d overflows, %d stops; %d by the one merge)"
+       !n_ok !n_over !n_stop !n_merged)
+    (!agree && !n_ok > 1000 && !n_over > 100 && !n_stop > 100 && !n_merged > 5000)
 
 let test_t9_to_string () =
   let reference t =
