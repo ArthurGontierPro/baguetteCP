@@ -200,20 +200,33 @@ let vars t = List.map (fun tm -> tm.x) t.terms
    no rungs and contributes only its constant -- both exactly as
    [Encoding.linear_terms_int_lin_le] does it, because these two must agree literally or
    [row_id] names a row this function cannot reproduce. test_learn.ml pins that agreement
-   on every model row the suite compiles. *)
-let pb_row store (t : t) : Propagator.pb_row =
+   on every model row the suite compiles.
+
+   [?bits_n] (M8-bits-encoding, D-0153): a term whose variable is on the BITS encoding
+   ([bits_n name = Some n]) is spelled as the .opb spells it, [a * 2^i] on [x_bit_i] for
+   [i < n], with the same [a * lo] folded into the constant -- the bits are the offset from
+   the declared low (D-0130 section 4), so the fold is the order term's. Without it (the
+   default, every term [None]) the row is the order expansion, character for character
+   what it was. lib/flatzinc/compile.ml passes it for a row with a bits term, which until
+   D-0153 it packed with no PB row at all; lib/core/pb_analysis.ml instantiates the bits
+   blocks before it resolves anything (lib/core/ladder.ml, "The bits arm"). *)
+let pb_row ?(bits_n = fun _ -> None) store (t : t) : Propagator.pb_row =
   let terms, const =
     List.fold_left
       (fun (acc, const) tm ->
         if tm.coeff = 0 then (acc, const)
         else
           let name = Store.name store tm.x in
-          let rungs =
-            List.init
-              (max 0 (tm.decl_hi - tm.decl_lo))
-              (fun i -> (-tm.coeff, Lit.ge name (tm.decl_lo + 1 + i)))
+          let block =
+            match bits_n name with
+            | Some n ->
+                List.init n (fun i -> (Checked.mul (-tm.coeff) (1 lsl i), Lit.bit name i))
+            | None ->
+                List.init
+                  (max 0 (tm.decl_hi - tm.decl_lo))
+                  (fun i -> (-tm.coeff, Lit.ge name (tm.decl_lo + 1 + i)))
           in
-          (acc @ rungs, Checked.add const (Checked.mul tm.coeff tm.decl_lo)))
+          (acc @ block, Checked.add const (Checked.mul tm.coeff tm.decl_lo)))
       ([], 0) t.terms
   in
   { Propagator.r_terms = terms; r_degree = Checked.sub const t.rhs; r_cid = t.row_id }

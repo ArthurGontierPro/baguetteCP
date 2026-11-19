@@ -168,6 +168,13 @@
    rather than a reader having to take this paragraph's word for it, and [Search] checks
    it under [Debug].
 
+   M8-bits-encoding (D-0153) adds ONE kind of leaf, and it keeps the discharge: a row
+   with a bits term is instantiated through its atoms' bridges and its bound rows
+   (lib/core/ladder.ml, "The bits arm"). The bound rows are .opb rows. A bridge is a
+   `red` line, minted by [Encoding.ensure_atom] at LEVEL 0 and never deleted before the
+   conclusion (D-0132 section 2.8) -- so it, too, is retired by no `w`, and outlives
+   every line that cites it. Still no hole line, trace line or conflict-level id.
+
    ---------------------------------------------------------------------------
    MEASURED, M2-L6: our integer propagator is STRONGER than PB propagation on the
    same row -- and M2-L11 has since made it a ROW
@@ -259,6 +266,7 @@
 module Lit = Baguette_proof.Lit
 module Opb = Baguette_proof.Opb
 module Writer = Baguette_proof.Writer
+module Encoding = Baguette_proof.Encoding
 
 (* ------------------------------------------------------- the frozen assignment *)
 
@@ -659,6 +667,12 @@ type fallback =
   | Stopped
       (** M6-T23 (D-0149): the search's stop (the time limit) fired during the
           analysis, which was abandoned so that the stop lands at the next node *)
+  | Mixed_row of string
+      (** M8-bits-encoding (D-0153): a row with a bits term whose blocks could not be
+          instantiated (lib/core/ladder.ml, "The bits arm"), with what could not be
+          read. Not expected from a compiled model -- every block there is [a * 2^i] over
+          a variable the encoding knows -- and a fallback rather than a raise for the
+          reason [Pivot_not_in_reason] is. *)
 
 let fallback_to_string = function
   | No_row n -> Printf.sprintf "no PB row for instance %s" n
@@ -673,6 +687,7 @@ let fallback_to_string = function
   | Nothing_to_learn -> "the criterion stopped before any elimination"
   | Diverged n -> Printf.sprintf "did not terminate after %d eliminations" n
   | Stopped -> "the search's stop fired during the analysis"
+  | Mixed_row m -> Printf.sprintf "a mixed row's bits block was not instantiated: %s" m
 
 type t = {
   row : Learned.t;  (** the learned PB inequality *)
@@ -697,6 +712,10 @@ type t = {
       (** M2-L11: ladder rows cited across all eliminations, i.e. how much of the reason
           came from the order encoding rather than from the model row. 0 means this
           analysis is exactly the one M2-L6 would have produced. *)
+  bits_bridges : int;
+      (** M8-bits-encoding (D-0153): bridge and bound rows cited to instantiate bits
+          blocks, over the conflict row and every reason. 0 means no row of this analysis
+          had a bits term. *)
   levels : int list;
       (** M2-L15: the decision levels this row's literals are falsified at, DESCENDING,
           level 0 dropped -- the same shape and ordering as [Analysis.decision_levels] so
@@ -787,7 +806,7 @@ exception Give_up of fallback
 
    [name_of] is only for the [No_row] message and may answer anything; a fallback reason
    nobody can read is a counter with no diagnosis behind it. *)
-let analyse ?(stop = fun () -> false) store (c : Store.conflict)
+let analyse ?(stop = fun () -> false) ?(bits = Ladder.no_bits) store (c : Store.conflict)
     ~(row_of : int -> Propagator.pb_row option) ~(name_of : int -> string)
     ~(ladder_id : string -> int -> int option) ~(break_ladder : bool)
     ~(reduction : Reduce.t) ~(criterion : criterion) : result =
@@ -813,6 +832,33 @@ let analyse ?(stop = fun () -> false) store (c : Store.conflict)
   (* M11-complexity-T4 (D-0140 P2, D-0144): the ids [antecedents] already holds, so that
      the dedup below is a lookup instead of a [List.mem] over the list so far. *)
   let cited = Int_tbl.create 16 in
+  (* [antecedents], [rows] and [pivots] are carried REVERSED through the loop and turned
+     round once when it stops (M11-complexity-T4, D-0144: they were appended with [@],
+     quadratic in the steps); [cited] holds the ids taken. *)
+  let add (antecedents, rows) cid r =
+    if Int_tbl.mem cited cid then (antecedents, rows)
+    else (
+      Int_tbl.replace cited cid ();
+      (cid :: antecedents, r :: rows))
+  in
+  (* M8-bits-encoding (D-0153): a row with a bits term is INSTANTIATED before anything
+     resolves on it -- every bits block replaced through its bridge at the bound in force
+     under [falsified], or at [pivot]'s own atom for the pruned block (lib/core/ladder.ml,
+     "The bits arm"). A row with none is returned as it is, with the model row as its
+     derivation, which is every row at [--bits-above none]: the analysis is then the one
+     it was, line for line. The rows added are returned as [(id, row)] premises. *)
+  let bridges = ref 0 in
+  let instantiated r0 ~cid ~pivot ~falsified =
+    if not (Ladder.has_bits r0) then (r0, Explanation.model_row cid, [])
+    else
+      match Ladder.instantiate ~bits ~row:r0 ~pivot ~falsified with
+      | Error m -> raise (Give_up (Mixed_row m))
+      | Ok i ->
+          bridges := !bridges + List.length i.Ladder.added;
+          ( i.Ladder.inst,
+            Ladder.derive_instantiated i (Explanation.model_row cid),
+            List.map (fun (_, id, r) -> (id, r)) i.Ladder.added )
+  in
   let level_of l =
     let at = falsified_at store l in
     if at = Store.no_support then 0 else Store.level_of_index store at
@@ -850,14 +896,19 @@ let analyse ?(stop = fun () -> false) store (c : Store.conflict)
           | None -> raise (Give_up (No_row (name_of e.Store.prop)))
           | Some r -> r
         in
-        let r = Learned.of_pb_row reason_row in
+        let r0 = Learned.of_pb_row reason_row in
         (* The pivot in the REASON is the complement: the conflict row carries [l]
            falsified, and the entry propagated [~l] true. *)
         let p = Lit.negate l in
-        if coeff_of r p = None then raise (Give_up Pivot_not_in_reason);
         (* Frozen at the propagation, not at the conflict. This is the I-X6 discharge and
            the header says why it cannot be the conflict-time predicate. *)
         let falsified = falsified_before store ~at in
+        (* D-0153: the reason's bits blocks, at the bounds the propagation read and at
+           the pivot's own atom. [r] is [r0] when it has none. *)
+        let r, base, bridge_rows =
+          instantiated r0 ~cid:reason_row.Propagator.r_cid ~pivot:(Some p) ~falsified
+        in
+        if coeff_of r p = None then raise (Give_up Pivot_not_in_reason);
         (* One attempt at the reduction, as a result rather than a raise, so that the
            M2-L11 ladder lift below can be a RETRY on the same pivot instead of a second
            copy of this block. *)
@@ -914,24 +965,13 @@ let analyse ?(stop = fun () -> false) store (c : Store.conflict)
         if not (slack_at v' conflict_level < 0) then raise (Give_up Not_conflicting);
         let expl' =
           Explanation.combine
-            [
-              Explanation.term 1 expl;
-              Explanation.term a
-                (o.Reduce.derive
-                   (wrap (Explanation.model_row reason_row.Propagator.r_cid)));
-            ]
+            [ Explanation.term 1 expl; Explanation.term a (o.Reduce.derive (wrap base)) ]
             1
         in
-        (* [antecedents], [rows] and [pivots] are carried REVERSED through the loop and
-           turned round once when it stops (M11-complexity-T4, D-0144: they were
-           appended with [@], quadratic in the steps); [cited] holds the ids taken. *)
-        let add (antecedents, rows) cid r =
-          if Int_tbl.mem cited cid then (antecedents, rows)
-          else (
-            Int_tbl.replace cited cid ();
-            (cid :: antecedents, r :: rows))
-        in
-        let acc = add (antecedents, rows) reason_row.Propagator.r_cid r in
+        (* The model row is the premise as the .opb holds it ([r0]), and the bridges a
+           bits block was instantiated through are premises beside it. *)
+        let acc = add (antecedents, rows) reason_row.Propagator.r_cid r0 in
+        let acc = List.fold_left (fun acc (cid, br) -> add acc cid br) acc bridge_rows in
         (* The ladder rows are PREMISES of this derivation and are recorded as such. The
            entailment oracle reads [antecedent_rows], and a premise it was not shown is a
            premise it would wrongly report the conclusion as independent of. *)
@@ -952,8 +992,12 @@ let analyse ?(stop = fun () -> false) store (c : Store.conflict)
       | None -> raise (Give_up (No_row (name_of c.Store.c_prop)))
       | Some r -> r
     in
-    let row0 = Learned.of_pb_row conflict_row in
-    let expl0 = Explanation.model_row conflict_row.Propagator.r_cid in
+    let row0_opb = Learned.of_pb_row conflict_row in
+    (* D-0153: the conflict row's bits blocks, at the bounds in force at the conflict. *)
+    let row0, expl0, bridge_rows0 =
+      instantiated row0_opb ~cid:conflict_row.Propagator.r_cid ~pivot:None
+        ~falsified:(falsified_now store)
+    in
     (* If our reconstruction of the conflicting row is not actually conflicting, the row
        we built is not the row the store conflicted on. That is a real disagreement and it
        falls back rather than deriving from a premise the search does not share. *)
@@ -975,6 +1019,7 @@ let analyse ?(stop = fun () -> false) store (c : Store.conflict)
               antecedents = List.rev antecedents;
               antecedent_rows = List.rev rows;
               ladder_rungs = lifts;
+              bits_bridges = !bridges;
               (* M2-L15, from the FROZEN view and at the moment the criterion stopped --
                  not recomputed later against a store that has moved (I-X6). *)
               levels = row_levels v;
@@ -990,7 +1035,13 @@ let analyse ?(stop = fun () -> false) store (c : Store.conflict)
         loop row' expl' (steps + 1) pivots' antecedents' rows' lifts'
     in
     Int_tbl.replace cited conflict_row.Propagator.r_cid ();
-    loop row0 expl0 0 [] [ conflict_row.Propagator.r_cid ] [ row0 ] 0
+    let antecedents0, rows0 =
+      List.fold_left
+        (fun acc (cid, br) -> add acc cid br)
+        ([ conflict_row.Propagator.r_cid ], [ row0_opb ])
+        bridge_rows0
+    in
+    loop row0 expl0 0 [] antecedents0 rows0 0
   with
   | Give_up f -> Fallback f
   (* M6-T9. The combination and the ladder lift were already wrapped (above), but the
@@ -1003,6 +1054,29 @@ let analyse ?(stop = fun () -> false) store (c : Store.conflict)
   | Checked.Overflow m -> Fallback (Overflow m)
 
 (* ------------------------------------------------------- the proof side *)
+
+(* M8-bits-encoding (D-0153): what [analyse] is told about the bits encoding, read off the
+   context the proof is written through. [Ladder.no_bits] when no variable is on bits,
+   which is every run at [--bits-above none], so the closure below is never built there.
+   [bridge] is [Encoding.ensure_atom]: it MINTS the atom's `red` pair at level 0 the first
+   time the atom is named (lib/core/ladder.ml, "It MINTS, unlike [lift]"). *)
+let bits_of_ctx (ctx : Justify.ctx) : Ladder.bits =
+  let enc = ctx.Justify.encoding and w = ctx.Justify.writer in
+  if Encoding.n_bits_vars enc = 0 then Ladder.no_bits
+  else
+    {
+      Ladder.bits_var =
+        (fun x ->
+          if not (Encoding.is_declared enc x) then None
+          else
+            match Encoding.bits_n enc x with
+            | None -> None
+            | Some n ->
+                let lo, hi = Encoding.domain enc x in
+                Some (lo, hi, n));
+      bridge = (fun x v -> Encoding.ensure_atom enc w x v);
+      bound_rows = (fun x -> Encoding.bound_lines enc w x);
+    }
 
 (* Put the learned PB row on the page and hand back its id.
 
