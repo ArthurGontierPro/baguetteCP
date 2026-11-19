@@ -7893,6 +7893,7 @@ let test_linear_scratch () =
     (!same = trials);
   check (Printf.sprintf "E7: ...%d of them prune (> 300)" !prunes) (!prunes > 300);
   check (Printf.sprintf "E7: ...%d of them conflict (> 300)" !conflicts) (!conflicts > 300)
+
 (* ======================================================================== M7-T28
 
    regular (D-0146). Two questions, the module header's two claims:
@@ -8043,6 +8044,134 @@ let test_regular_brute_force () =
         (%d pruned, %d conflicts): no violation"
        !scenes !changed !conflicts)
     (!bad = 0 && !scenes = 1200 && !changed > 100 && !conflicts > 10)
+
+(* D-0151: the reasons ON THE LETTERS, by brute force over the same random scenes. Every
+   pruning and conflict the call reports must be SOUND on its own facts over the DECLARED
+   domains -- every accepted word (letters 0..3, flags its run) that satisfies the facts
+   keeps the claim (no removed value; for a conflict, no word at all) -- and no fact may
+   name a flag THIS call moved: a flag fact is allowed only on a flag the scene fixed
+   (cited as itself, as a decision would be). Two narrowing rounds per scene, so the
+   second call recurses into tails the first one cached. *)
+let test_regular_letter_reasons () =
+  regular_rng := 2027;
+  let unsound = ref 0 and flag_facts = ref 0 and reasons = ref 0 and facts_n = ref 0 in
+  let conflicts = ref 0 and widest = ref 0 and first_bad = ref "" in
+  let bad what =
+    incr unsound;
+    if !first_bad = "" then first_bad := what
+  in
+  for _ = 1 to 300 do
+    let n = 2 + regular_rnd 2 and nq = 2 + regular_rnd 2 in
+    let delta = Array.init (nq * 2) (fun _ -> regular_rnd (nq + 1)) in
+    let final =
+      List.filter (fun _ -> regular_rnd 2 = 0) (List.init nq (fun k -> k + 1))
+    in
+    let final = if final = [] then [ nq ] else final in
+    let nf = (n + 1) * nq in
+    let decls =
+      List.init n (fun i -> (Printf.sprintf "x%d" i, 0, 3))
+      @ List.init nf (fun k -> (Printf.sprintf "s%d_%d" (k / nq) ((k mod nq) + 1), 0, 1))
+    in
+    let store = mk_store decls in
+    let xs =
+      Array.init n (fun i ->
+          Regular.Letter { var = var i; name = Printf.sprintf "x%d" i; dlo = 0; dhi = 3 })
+    in
+    let flags = Array.init nf (fun k -> var (n + k)) in
+    let p = Regular.make store ~xs ~nq ~smin:1 ~delta ~q0:1 ~final ~flags in
+    let fixed_by_scene = Hashtbl.create 4 in
+    (* every accepted word over the declared letters, with its run *)
+    let words =
+      List.filter_map
+        (fun w ->
+          match regular_accepts ~nq ~delta ~final w with
+          | Some st -> Some (Array.of_list w, st)
+          | None -> None)
+        (regular_product (List.init n (fun _ -> [ 0; 1; 2; 3 ])))
+    in
+    let value_of (w, st) name =
+      Scanf.sscanf_opt name "x%d%!" (fun i -> w.(i)) |> function
+      | Some v -> v
+      | None -> Scanf.sscanf name "s%d_%d" (fun i q -> if st.(i) = q then 1 else 0)
+    in
+    let holds sol (f : Reason.fact) =
+      let v = value_of sol (Reason.fact_owner f) in
+      if Reason.fact_is_lower f then v >= Reason.fact_value f
+      else v <= Reason.fact_value f
+    in
+    let audit what facts claim_ok =
+      incr reasons;
+      facts_n := !facts_n + List.length facts;
+      widest := max !widest (List.length facts);
+      List.iter
+        (fun f ->
+          let nm = Reason.fact_owner f in
+          if nm.[0] = 's' then (
+            incr flag_facts;
+            if not (Hashtbl.mem fixed_by_scene nm) then
+              bad (Printf.sprintf "%s cites the flag %s, which it moved itself" what nm)))
+        facts;
+      List.iter
+        (fun sol ->
+          if List.for_all (holds sol) facts && not (claim_ok sol) then
+            bad (Printf.sprintf "%s: an accepted word satisfies its facts" what))
+        words
+    in
+    for _round = 1 to 2 do
+      for i = 0 to n - 1 do
+        let d = Store.get store (var i) in
+        if not (Domain.is_fixed d) then (
+          if regular_rnd 2 = 0 then
+            ignore
+              (Store.set_lo store (var i)
+                 (Domain.lo d + regular_rnd 2)
+                 placeholder_pruning);
+          if regular_rnd 3 = 0 then
+            ignore
+              (Store.set_hi store (var i)
+                 (Domain.hi d - regular_rnd 2)
+                 placeholder_pruning))
+      done;
+      for k = 0 to nf - 1 do
+        let nm = Printf.sprintf "s%d_%d" (k / nq) ((k mod nq) + 1) in
+        if Domain.size (Store.get store (var (n + k))) = 2 then
+          match regular_rnd 20 with
+          | 0 ->
+              Hashtbl.replace fixed_by_scene nm ();
+              ignore (Store.set_hi store (var (n + k)) 0 placeholder_pruning)
+          | 1 ->
+              Hashtbl.replace fixed_by_scene nm ();
+              ignore (Store.set_lo store (var (n + k)) 1 placeholder_pruning)
+          | _ -> ()
+      done;
+      let from = Store.trail_length store in
+      let outcome = Regular.propagate p store in
+      for pos = from to Store.trail_length store - 1 do
+        let e = Store.trail_entry store pos in
+        let nm = Store.name store e.Store.var in
+        let removed =
+          List.filter
+            (fun v -> not (Domain.mem e.Store.now v))
+            (Domain.to_list e.Store.old)
+        in
+        audit (Printf.sprintf "the pruning of %s" nm) (Reason.facts e.Store.reason)
+          (fun sol -> not (List.mem (value_of sol nm) removed))
+      done;
+      match outcome with
+      | Propagator.Conflict c ->
+          incr conflicts;
+          audit "a conflict" (Reason.facts c.Store.c_reason) (fun _ -> false)
+      | Propagator.Fixpoint -> ()
+    done
+  done;
+  if !first_bad <> "" then Printf.printf "     first violation: %s\n" !first_bad;
+  check
+    (Printf.sprintf
+       "regular (D-0151): %d reasons (%d conflicts, %d facts, widest %d, %d flag facts \
+        all on flags the scene fixed): every one SOUND over the declared domains, none \
+        naming a flag the propagator moved"
+       !reasons !conflicts !facts_n !widest !flag_facts)
+    (!unsound = 0 && !reasons > 1000 && !conflicts > 10)
 
 (* A [baguette_regular] instance as FlatZinc: [n] letters on 1..[dom_hi], [nq] states,
    [table] row-major over the symbols 1..|table|/nq, start 1, accepting [final], flags
@@ -8344,6 +8473,7 @@ let () =
   test_linear_scratch ();
   (* M7-T28, D-0146: regular. *)
   test_regular_brute_force ();
+  test_regular_letter_reasons ();
   test_regular_veripb ();
   if !failures > 0 then (
     Printf.printf "\n%d FAILURE(S)\n" !failures;
