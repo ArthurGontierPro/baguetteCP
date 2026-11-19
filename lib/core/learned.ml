@@ -148,8 +148,24 @@ type t = { terms : term list; degree : int }
    both expect a literal to appear once, and a cut that resolves two reasons naming the
    same bound produces repeats by construction (M2-L2's output does), so the merge is on
    the path M2-L3 will take. Sorting by [Lit.compare] makes the result a function of the
-   SET of terms and not of the order they were built in, which is test (e). *)
-let make (raw : (int * Lit.t) list) (degree : int) : t =
+   SET of terms and not of the order they were built in, which is test (e).
+
+   M11-complexity-T9 (D-0157): [make_reference] is the body this function had, kept as
+   the specification; test_learned.ml compares the two on random rows. [make] gives the
+   same row by two shortcuts, neither of which changes an integer:
+
+     - an input already in the order [make] produces (strictly increasing by
+       [Lit.compare], so no literal twice, every coefficient >= 1) is that order: the
+       fold leaves it as it is, the stable sort leaves it as it is, the merge has nothing
+       to merge. It is taken as it stands. [Reduce]'s reduced row, a ladder row, a
+       learned row handed back by [Pb] and the sum of [Ladder.instantiate] arrive so.
+     - otherwise the sort is [sort_by_lit] below, which is a stable sort and so returns
+       exactly the list [List.sort] (a stable merge sort) returns; it is faster on the
+       one unsorted input that is long, a model row's expansion, which is a few sorted
+       blocks one per variable ([Linear.pb_row]).
+
+   The merge's [a1 + a2] stays unchecked, as it was: it is the reference's arithmetic. *)
+let make_reference (raw : (int * Lit.t) list) (degree : int) : t =
   let signed, degree =
     List.fold_left
       (fun (acc, d) (a, l) ->
@@ -167,6 +183,70 @@ let make (raw : (int * Lit.t) list) (degree : int) : t =
         else { coeff = a1; lit = l1 } :: merge ((l2, a2) :: rest)
   in
   { terms = merge sorted; degree }
+
+(* Is [raw] already in [make]'s output order: strictly increasing by [Lit.compare], every
+   coefficient >= 1? *)
+let rec in_make_order = function
+  | [] -> true
+  | [ (a, _) ] -> a > 0
+  | (a, l1) :: ((_, l2) :: _ as rest) ->
+      a > 0 && Lit.compare l1 l2 < 0 && in_make_order rest
+
+(* A stable sort by [Lit.compare] on the literal, so equal to [List.sort]'s answer on
+   every input (a stable sort has one answer): a NATURAL merge sort. The list is cut into
+   its maximal non-decreasing runs and adjacent runs are merged, pairwise, until one is
+   left, the earlier run winning ties, which is stability. Two runs whose ranges do not
+   overlap are joined by an append, after one comparison either way, instead of a merge.
+   A model row's expansion ([Linear.pb_row]) is one sorted run per variable, and a bits
+   bridge row a run of bits then its atom, so this costs about [n] comparisons where
+   [List.sort] costs [n log n]; a list in no order costs what [List.sort] costs. *)
+let sort_by_lit (l : (Lit.t * int) list) : (Lit.t * int) list =
+  let cmp (l1, _) (l2, _) = Lit.compare l1 l2 in
+  (* The runs, in input order. *)
+  let rec runs acc cur last = function
+    | [] -> List.rev (List.rev cur :: acc)
+    | x :: rest ->
+        if cmp last x <= 0 then runs acc (x :: cur) x rest
+        else runs (List.rev cur :: acc) [ x ] x rest
+  in
+  let rec last = function [ y ] -> y | _ :: ys -> last ys | [] -> assert false in
+  (* Two adjacent runs, [a] the earlier. *)
+  let merge2 a b =
+    if cmp (last a) (List.hd b) <= 0 then a @ b
+    else if cmp (last b) (List.hd a) < 0 then b @ a
+    else List.merge cmp a b
+  in
+  let rec pass acc = function
+    | a :: b :: rest -> pass (merge2 a b :: acc) rest
+    | [ r ] -> List.rev (r :: acc)
+    | [] -> List.rev acc
+  in
+  let rec until_one = function [ r ] -> r | rs -> until_one (pass [] rs) in
+  match l with
+  | [] | [ _ ] -> l
+  | x :: rest -> ( match runs [] [ x ] x rest with [ _ ] -> l | rs -> until_one rs)
+
+let make (raw : (int * Lit.t) list) (degree : int) : t =
+  if in_make_order raw then
+    { terms = List.map (fun (a, l) -> { coeff = a; lit = l }) raw; degree }
+  else
+    let signed, degree =
+      List.fold_left
+        (fun (acc, d) (a, l) ->
+          if a = 0 then (acc, d)
+          else if a > 0 then ((l, a) :: acc, d)
+          else ((Lit.negate l, -a) :: acc, d - a))
+        ([], degree) raw
+    in
+    let sorted = sort_by_lit (List.rev signed) in
+    let rec merge = function
+      | [] -> []
+      | [ (l, a) ] -> [ { coeff = a; lit = l } ]
+      | (l1, a1) :: (l2, a2) :: rest ->
+          if Lit.equal l1 l2 then merge ((l1, a1 + a2) :: rest)
+          else { coeff = a1; lit = l1 } :: merge ((l2, a2) :: rest)
+    in
+    { terms = merge sorted; degree }
 
 (* D-0044's degenerate case, written as what it is: every coefficient 1, degree 1. *)
 let of_clause (lits : Lit.t list) : t = make (List.map (fun l -> (1, l)) lits) 1
@@ -226,7 +306,7 @@ let of_pb_row (r : Propagator.pb_row) : t =
    pivot appears with coefficient [k] on one side and [k] on the other, so [p = n] and
    both terms vanish. Nothing here knows which literal was the pivot, which is correct --
    cancellation is arithmetic, not a special case. *)
-let combine (a : t) (ca : int) (b : t) (cb : int) : t =
+let combine_reference (a : t) (ca : int) (b : t) (cb : int) : t =
   let scaled t c = List.map (fun tm -> (Checked.mul c tm.coeff, tm.lit)) t.terms in
   let raw = scaled a ca @ scaled b cb in
   let degree = Checked.add (Checked.mul ca a.degree) (Checked.mul cb b.degree) in
@@ -269,15 +349,234 @@ let combine (a : t) (ca : int) (b : t) (cb : int) : t =
         cancel (List.rev_append keep racc) (Checked.add dropped m) others
   in
   let terms, dropped = cancel [] 0 sorted in
-  make terms (Checked.sub degree dropped)
+  make_reference terms (Checked.sub degree dropped)
 
+(* ------------------------------------- M11-complexity-T9: the same sums, in one walk
+
+   D-0157. [combine_reference] above is the specification and stays, word for word, as
+   what test_learned.ml and the [BAGUETTE_DEBUG] cross-check compare against. What it
+   costs is the shape, not the arithmetic: two scaled copies and an append, a sort of the
+   whole row by variable, a list per variable, then [make]'s fold, reversal, second sort
+   and merge -- for every elimination of a PB analysis, on a row that is often hundreds
+   of terms and gets one short reason added. D-0153's profile put 45 % of a bits run in
+   the GC, much of it here.
+
+   Both inputs are [make]'s output, so their terms are already sorted by [Lit.compare],
+   which sorts by variable first. The sum is then a MERGE of two sorted lists, one
+   variable at a time, which is what RoundingSat does with its coefficient array: [walk]
+   reads every term of the smaller variable at the two heads, nets the two polarities
+   exactly as stage 3 does, and emits at most one term. The answer is the reference's,
+   term for term:
+
+     - the same terms: per variable the reference sums the scaled coefficients of each
+       polarity (p, n), keeps [p - m] on [l] and [n - m] on [~l] when positive, adds
+       [m = min p n] to what the degree loses. [walk] computes the same p, n and m. With
+       multipliers >= 0 and coefficients >= 1, p and n are >= 0, so at most one side
+       survives, which is why [walk] emits at most one term;
+     - the same order: the reference's [make] sorts by [Lit.compare] and merges equal
+       literals; one term per variable, emitted in increasing variable order, is that
+       order already;
+     - the same degree, [ca * da + cb * db - dropped].
+
+   And the same OVERFLOW, which is the part that needs an argument rather than a
+   reading. [walk] does its sums in plain [int], and it runs only when none of the
+   reference's [Checked] operations can overflow; otherwise the reference runs and
+   raises where it always raised, with the same message. The guard is [mass]: with
+   [M = ca * mass a + cb * mass b <= max_int] (mass = |degree| + the sum of the
+   coefficients), every integer the reference forms is at most M in absolute value -- a
+   scaled coefficient or degree, a side sum (part of one polarity's scaled mass), the
+   [dropped] total (at most half the scaled coefficient mass), and the final degree (at
+   most the scaled degrees plus [dropped]). An operation overflows only when its exact
+   result is out of range, so none does.
+
+   [walk] also checks, rather than assumes, that its inputs are in [make]'s order: the
+   variables it visits must strictly increase. [Learned.t] is a public record, and a row
+   that was not built by [make] gets the reference, never a wrong merge. *)
+
+(* |degree| + the sum of the coefficients, or [-1] when a coefficient is below 1 or the
+   sum passes [max_int]. *)
+let mass t =
+  let rec go s = function
+    | [] -> s
+    | tm :: rest ->
+        if tm.coeff < 1 || s > max_int - tm.coeff then -1 else go (s + tm.coeff) rest
+  in
+  if t.degree = min_int then -1 else go (abs t.degree) t.terms
+
+(* [c * mass t], or [-1] when it is not representable or [c] is negative. *)
+let scaled_mass c t =
+  if c < 0 then -1
+  else
+    let m = mass t in
+    if m < 0 then -1 else if c = 0 then 0 else if m > max_int / c then -1 else c * m
+
+(* [x + y] for two results of [scaled_mass], or [-1]. *)
+let add_mass x y = if x < 0 || y < 0 || x > max_int - y then -1 else x + y
+
+(* The normal form of [ca * a + cb * b] over two term lists sorted by [Lit.compare] (one
+   may hold several terms of a variable, both polarities included), as [(terms,
+   dropped)]; [None] when a list is not sorted. Plain arithmetic: the caller has
+   established that nothing overflows. A term whose literal and coefficient are an
+   input's (a multiplier of 1, the variable on one side only) is that input's record,
+   which is the same value and allocates nothing. *)
+(* The two side sums of the variable [walk] is on, mutable so that a variable costs no
+   allocation but its output term. *)
+type sides = { mutable pos : int; mutable neg : int }
+
+let walk ca (a : term list) cb (b : term list) : (term list * int) option =
+  let st = { pos = 0; neg = 0 } in
+  (* Adds [c] times the terms on [v] at the head of the list into [st]; the rest. *)
+  let rec sums c v = function
+    | tm :: rest when Lit.var_equal tm.lit.Lit.v v ->
+        if tm.lit.Lit.positive then st.pos <- st.pos + (c * tm.coeff)
+        else st.neg <- st.neg + (c * tm.coeff);
+        sums c v rest
+    | rest -> rest
+  in
+  let emit v positive c la la' lb lb' =
+    match (la, lb) with
+    | tm :: _, _
+      when la' != la && ca = 1 && tm.coeff = c && tm.lit.Lit.positive = positive ->
+        tm
+    | _, tm :: _
+      when lb' != lb && cb = 1 && tm.coeff = c && tm.lit.Lit.positive = positive ->
+        tm
+    | _ -> { coeff = c; lit = { Lit.v; positive } }
+  in
+  (* [go] finds the smaller variable at the two heads, [visit] nets it. *)
+  let rec go started prev la lb acc dropped =
+    match (la, lb) with
+    | [], [] -> Some (List.rev acc, dropped)
+    | ta :: _, [] -> visit started prev ta.lit.Lit.v la lb acc dropped
+    | [], tb :: _ -> visit started prev tb.lit.Lit.v la lb acc dropped
+    | ta :: _, tb :: _ ->
+        let va = ta.lit.Lit.v and vb = tb.lit.Lit.v in
+        visit started prev
+          (if Lit.var_compare va vb <= 0 then va else vb)
+          la lb acc dropped
+  and visit started prev v la lb acc dropped =
+    if started && Lit.var_compare prev v >= 0 then None
+    else (
+      st.pos <- 0;
+      st.neg <- 0;
+      let la' = sums ca v la in
+      let lb' = sums cb v lb in
+      let p = st.pos and n = st.neg in
+      let m = if p < n then p else n in
+      let acc =
+        if p > m then emit v true (p - m) la la' lb lb' :: acc
+        else if n > m then emit v false (n - m) la la' lb lb' :: acc
+        else acc
+      in
+      go true v la' lb' acc (dropped + m))
+  in
+  match (a, b) with
+  | [], [] -> Some ([], 0)
+  | tm :: _, _ | [], tm :: _ -> go false tm.lit.Lit.v a b [] 0
+
+let equal (x : t) (y : t) =
+  Int.equal x.degree y.degree
+  && List.equal
+       (fun s u -> Int.equal s.coeff u.coeff && Lit.equal s.lit u.lit)
+       x.terms y.terms
+
+(* [combine_reference]'s answer, raise included, by [walk] wherever [mass] says no
+   [Checked] operation of the reference could overflow. *)
+let combine (a : t) (ca : int) (b : t) (cb : int) : t =
+  let fast =
+    if add_mass (scaled_mass ca a) (scaled_mass cb b) < 0 then None
+    else walk ca a.terms cb b.terms
+  in
+  match fast with
+  | None -> combine_reference a ca b cb
+  | Some (terms, dropped) ->
+      let r = { terms; degree = (ca * a.degree) + (cb * b.degree) - dropped } in
+      Debug.check "M11-T9: Learned.combine equals combine_reference" (fun () ->
+          equal r (combine_reference a ca b cb));
+      r
+
+(* [add_multiples ~before row [(m1, r1); ...; (mk, rk)]] is the fold
+
+     List.fold_left (fun acc (m, r) -> before (); combine acc 1 r m) row summands
+
+   -- [Ladder.lift] adding one ladder row per rung -- and returns what the fold returns,
+   raise included. The fold is k merges of a row that does not shrink, k times the row
+   for a lift of k rungs (cargo's lift was minutes of it, D-0149); the answer is ONE
+   merge of the row with the summands' scaled terms, sorted together.
+
+   That one merge is the fold's answer because cancellation keeps a running total. For a
+   variable, let P and N be the total positive and negative mass the row and the first j
+   summands put on it. After the fold's j-th [combine] the variable carries [P - N] on
+   its positive literal when that is positive, [N - P] on its negative one otherwise, and
+   the degree has lost [min P N] for it in all: true after the first step, which
+   normalises every variable of the row, and kept by each further step, since netting
+   [P - N + dp] against [dn] leaves [P + dp - (N + dn)] and adds [min (P + dp - N) dn]
+   to the [N] already dropped, which is [min (P + dp) (N + dn)] in all. One merge nets P
+   against N once and drops the same [min P N]. With no summand the fold is [row]
+   itself, not normalised, and so is this.
+
+   The guard is the [combine] one, over the whole fold: every integer the fold forms is
+   at most [mass row + sum (m_j * mass r_j)] in absolute value, for the same reasons, so
+   when that is representable no step overflows, and otherwise the fold itself runs.
+   [before] is asked once per summand in both cases; it is [Ladder.lift]'s stop, which
+   raises to abandon the lift, and nothing between two of its calls can raise in the
+   one-merge case, so it raises at the same call. *)
+let add_multiples ?(before = fun () -> ()) (row : t) (summands : (int * t) list) : t =
+  let fold () =
+    List.fold_left
+      (fun acc (m, r) ->
+        before ();
+        combine acc 1 r m)
+      row summands
+  in
+  let bound =
+    List.fold_left (fun acc (m, r) -> add_mass acc (scaled_mass m r)) (mass row) summands
+  in
+  match summands with
+  | [] -> row
+  | _ when bound < 0 -> fold ()
+  | _ -> (
+      let scaled =
+        List.concat_map
+          (fun (m, r) ->
+            List.map (fun tm -> { coeff = m * tm.coeff; lit = tm.lit }) r.terms)
+          summands
+      in
+      let scaled = List.stable_sort (fun s u -> Lit.compare s.lit u.lit) scaled in
+      match walk 1 row.terms 1 scaled with
+      | None -> fold ()
+      | Some (terms, dropped) ->
+          List.iter (fun _ -> before ()) summands;
+          let degree =
+            List.fold_left (fun d (m, r) -> d + (m * r.degree)) row.degree summands
+            - dropped
+          in
+          let r = { terms; degree } in
+          Debug.check "M11-T9: Learned.add_multiples equals the fold of combine"
+            (fun () ->
+              equal r
+                (List.fold_left
+                   (fun acc (m, s) -> combine_reference acc 1 s m)
+                   row summands));
+          r)
+
+(* M11-complexity-T9 (D-0157): into one buffer, where it was a [Printf.sprintf] per term
+   and a [String.concat]; the same bytes ([Lit.add_int] is [string_of_int]'s digits,
+   [Lit.add_sanitized] is [Lit.to_string]'s pieces, lib/proof/lit.ml). [Retention.add]
+   keys every learned row by it. *)
 let to_string t =
-  Printf.sprintf "%s >= %d"
-    (String.concat " "
-       (List.map
-          (fun tm -> Printf.sprintf "+%d %s" tm.coeff (Lit.to_string tm.lit))
-          t.terms))
-    t.degree
+  let b = Buffer.create 64 in
+  List.iteri
+    (fun i tm ->
+      if i > 0 then Buffer.add_char b ' ';
+      Buffer.add_char b '+';
+      Lit.add_int b tm.coeff;
+      Buffer.add_char b ' ';
+      Lit.add_sanitized b (Lit.sanitize (Lit.owner tm.lit.Lit.v)) tm.lit)
+    t.terms;
+  Buffer.add_string b " >= ";
+  Lit.add_int b t.degree;
+  Buffer.contents b
 
 (* --------------------------------------------------------------------- proof side *)
 
@@ -329,9 +628,22 @@ let rung_compare (x1, v1, c1) (x2, v2, c2) =
   | 0 -> ( match Int.compare v1 v2 with 0 -> Int.compare c1 c2 | c -> c)
   | c -> c
 
+(* [List.sort cmp l], which is a stable sort and so returns [l] itself when [l] is
+   already non-decreasing; that is checked first, in one pass (M11-complexity-T9, D-0157).
+   A row out of [make] lists its rungs in [rung_compare] order already ([Lit.compare] is
+   name, then threshold, then the negative literal, whose rung coefficient is the
+   negative one, first), so [to_linear_row] -- asked of every learned row, for
+   [--stats] -- no longer sorts what is sorted. *)
+let sort_unless_sorted cmp l =
+  let rec sorted = function
+    | x :: (y :: _ as rest) -> cmp x y <= 0 && sorted rest
+    | _ -> true
+  in
+  if sorted l then l else List.sort cmp l
+
 let ladder_form t =
   let rec go acc const = function
-    | [] -> Some (List.sort rung_compare acc, const)
+    | [] -> Some (sort_unless_sorted rung_compare (List.rev acc), const)
     | { coeff; lit } :: rest -> (
         match lit.Lit.v with
         | Lit.Eq _ | Lit.Bit _ -> None (* no ladder form over a bit: D-0130 section 7.5 *)
@@ -428,7 +740,7 @@ let to_linear_row t ~decl =
                 let rungs =
                   List.filter
                     (fun (_, c) -> c <> 0)
-                    (List.sort
+                    (sort_unless_sorted
                        (fun (v1, c1) (v2, c2) ->
                          match Int.compare v1 v2 with 0 -> Int.compare c1 c2 | c -> c)
                        rungs)
@@ -512,4 +824,8 @@ let pb_instance ~id ~row_id ?(bump = 0) store ~decl t : Propagator.instance opti
    Kept here rather than in [Encoding] because it is this module's question: [Encoding]
    already answers it, it just answers it by raising. *)
 let decl_of_encoding enc name =
-  if Encoding.is_declared enc name then Some (Encoding.domain enc name) else None
+  (* One lookup (D-0157): [Encoding.domain] raises [Undeclared] exactly when
+     [Encoding.is_declared] says no, both reading the same table. *)
+  match Encoding.domain enc name with
+  | d -> Some d
+  | exception Encoding.Undeclared _ -> None

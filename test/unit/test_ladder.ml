@@ -979,7 +979,84 @@ let test_bits_breaks () =
       (Writer.Mutation.Truncate_derivation, "truncate-derivation");
     ]
 
+(* M11-complexity-T9 (D-0157): [lift] adds its rungs in one merge
+   ([Learned.add_multiples]) where it folded one [Learned.combine] per rung. The lifted
+   row must be the fold's, term for term, and the stop must be asked as the fold asked
+   it: once per rung, before the rung, so a stop that says yes at the k-th rung raises
+   after exactly k asks. Random rows over x's ladder (x in 0..9, every interior rung has
+   an id) and two other variables, either pivot direction, a random falsified set. *)
+let test_t9_lift_one_merge () =
+  let rng = Random.State.make [| 0x0157; 3 |] in
+  let ladder_id name w = if name = "x" && w > 0 && w < 9 then Some (100 + w) else None in
+  let agree = ref true and lifted = ref 0 and stops_ok = ref true in
+  for _ = 1 to 5_000 do
+    let lit () =
+      match Random.State.int rng 4 with
+      | 0 -> Lit.ge "y" (1 + Random.State.int rng 3)
+      | 1 -> Lit.negate (Lit.ge "z" (1 + Random.State.int rng 3))
+      | _ ->
+          let l = Lit.ge "x" (1 + Random.State.int rng 8) in
+          if Random.State.bool rng then Lit.negate l else l
+    in
+    let row =
+      Learned.make
+        (List.init
+           (1 + Random.State.int rng 8)
+           (fun _ -> (1 + Random.State.int rng 4, lit ())))
+        (1 + Random.State.int rng 6)
+    in
+    let k = 1 + Random.State.int rng 8 in
+    let pivot =
+      if Random.State.bool rng then Lit.ge "x" k else Lit.negate (Lit.ge "x" k)
+    in
+    let fals = Hashtbl.create 8 in
+    let falsified l =
+      match Hashtbl.find_opt fals l with
+      | Some b -> b
+      | None ->
+          let b = Random.State.int rng 3 = 0 in
+          Hashtbl.add fals l b;
+          b
+    in
+    match Ladder.lift ~row ~pivot ~falsified ~ladder_id () with
+    | None -> ()
+    | Some lt ->
+        incr lifted;
+        let fold =
+          List.fold_left2
+            (fun acc (_, m, _) (_, r) -> Learned.combine_reference acc 1 r m)
+            row lt.Ladder.steps lt.Ladder.rows
+        in
+        if not (Learned.equal lt.Ladder.lifted fold) then agree := false;
+        (* The stop: yes at the [s]-th ask raises Stopped after exactly [s] asks. *)
+        let s = 1 + Random.State.int rng lt.Ladder.rungs in
+        let asks = ref 0 in
+        let stop () =
+          incr asks;
+          !asks = s
+        in
+        (match Ladder.lift ~stop ~row ~pivot ~falsified ~ladder_id () with
+        | _ -> stops_ok := false
+        | exception Ladder.Stopped -> if !asks <> s then stops_ok := false);
+        let asks = ref 0 in
+        let never () =
+          incr asks;
+          false
+        in
+        ignore (Ladder.lift ~stop:never ~row ~pivot ~falsified ~ladder_id ());
+        if !asks <> lt.Ladder.rungs then stops_ok := false
+  done;
+  check
+    (Printf.sprintf
+       "D-0157: lift's one merge is the per-rung fold of combine_reference, term for \
+        term (%d lifts)"
+       !lifted)
+    (!agree && !lifted > 500);
+  check "D-0157: and the stop is asked once per rung, a yes raising at that rung"
+    !stops_ok
+
 let () =
+  test_t9_lift_one_merge ();
   test_worked_case ();
   test_nondegenerate_counter ();
   test_degenerate_control ();

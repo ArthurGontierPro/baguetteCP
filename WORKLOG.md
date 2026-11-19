@@ -20,7 +20,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | Task | Files being touched | Session | Since |
 |---|---|---|---|
 | M7-T33 (and `Alldiff.excl`'s proof cost, D-0145) | `lib/core/prop/alldiff.ml`, `lib/proof/encoding.ml` (additive only), new `test/models/`, `test/unit/test_prop.ml` (alldiff section) | agent-alldiff (`wave53-alldiff`) | 2026-11-19 |
-| M11-complexity-T9 | `lib/core/learned.ml`, `lib/core/pb_analysis.ml`, `lib/core/ladder.ml`, `lib/core/reduce.ml`, their unit tests | agent-learned (`wave53-learned`) | 2026-11-19 |
 | M11-complexity-T10 | `lib/core/justify.ml`, `lib/core/explanation.ml` (additive functions only, the type unchanged), `test/unit/test_justify.ml` | agent-memo (`wave53-memo`) | 2026-11-19 |
 | M7-T28 (`member`) | new `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, new `test/models/`, `test/unit/test_prop.ml` (member section) | agent-member (`wave53-member`) | 2026-11-19 |
 
@@ -598,6 +597,19 @@ element.ml's other per-pruning scans are gone (trail walks per index hole throug
 `2011_black-hole_10` 168 G to 52 G instructions; stdout, .opb and .pbp equal to main on every model.
 The black-hole family is now held by `Alldiff.remover_index`'s trail walk (cross-session request,
 alldiff.ml is agent-alldiff's), and behind it by about 150 MB of heap per node (D-0155 section 4).
+
+| M11-complexity-T9 | agent-learned (`wave53-learned`) | 2026-11-19 | **D-0157.** `Learned.combine` as one merge of two sorted rows, `Ladder.lift`'s rungs in one merge (`add_multiples`), `make` without a sort on sorted input (natural merge sort otherwise), each analysis row read through a memo of its own literals, per-row `to_string`/`to_linear_row`/decl cheaper. Fast paths only under a bound that rules out every `Checked` overflow of the kept references (compared under `BAGUETTE_DEBUG` and on random rows). Instructions at equal nodes, both modes: rcpsp-wet W=0 -26 %, roster W=0 -7 %, the rest within 1 %, every byte the same. Gate on `ebd1c75` (binary `0fe90d0c`): `make check` rc 0 (4 251 ok, 0 FAIL, 198 models, 97 MB), 396 model runs (default and W=0) identical to main's `64ec63e0`, lane 301/301, debug 289/289, scaling ok, nothing to re-record |
+
+## Handoff notes
+
+### 2026-11-19 (agent-learned, `wave53-learned`): M11-complexity-T9, D-0157
+
+The learned PB row's arithmetic is a merge now: `Learned.combine` walks two sorted rows once, a
+lift adds all its rungs in one walk (`Learned.add_multiples`), `make` keeps a sorted input, and the
+analysis reads each row through `Pb_analysis.row_memo`. The old bodies stay as `make_reference` and
+`combine_reference`, compared at every call under `BAGUETTE_DEBUG`. rcpsp-wet at `--bits-above 0`
+-26 % instructions, roster -7 %, every byte equal, nothing to re-record. What is left of the bits
+cost is `Trace`/`Justify`'s bits lines and `Pb.pass`, not these files (D-0157 section 6).
 
 ### 2026-11-19 (orchestrator): the parity idea archived (D-0147 §10)
 

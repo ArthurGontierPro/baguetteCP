@@ -300,14 +300,19 @@ let lift ?(stop = fun () -> false) ~(row : Learned.t) ~(pivot : Lit.t)
         in
         if steps = [] then None
         else
-          let lifted =
-            List.fold_left
-              (fun acc (w, m, _) ->
-                if stop () then raise Stopped;
-                Learned.combine acc 1 (ladder_row ~name w) m)
-              row steps
-          in
+          (* M11-complexity-T9 (D-0157): the rungs added in ONE merge, by
+             [Learned.add_multiples], which returns what the fold of one
+             [Learned.combine] per rung returned -- the same row, and the same
+             [Checked.Overflow] at the same rung with the same message, because it runs
+             that fold itself whenever an overflow is possible at all. The stop is asked
+             once per rung, before the rung, as the fold asked it. *)
           let rows = List.map (fun (w, _, cid) -> (cid, ladder_row ~name w)) steps in
+          let lifted =
+            Learned.add_multiples
+              ~before:(fun () -> if stop () then raise Stopped)
+              row
+              (List.map2 (fun (_, m, _) (_, r) -> (m, r)) steps rows)
+          in
           Some { lifted; steps; rows; rungs = List.length steps }
 
 (* ===========================================================================
@@ -430,13 +435,16 @@ let bit_block name n ~negated =
       let b = Lit.bit name i in
       (1 lsl i, if negated then Lit.negate b else b))
 
+(* The atom is listed first (D-0157): [Learned.make]'s answer is a function of the terms
+   and not of their order, and atom-then-bits is the order it produces, so it takes the
+   list as it stands. *)
 let b1_row name ~lo ~n v =
   let k = v - lo in
-  Learned.make (bit_block name n ~negated:false @ [ (k, Lit.negate (Lit.ge name v)) ]) k
+  Learned.make ((k, Lit.negate (Lit.ge name v)) :: bit_block name n ~negated:false) k
 
 let b2_row name ~lo ~n v =
   let big_k = (1 lsl n) - (v - lo) in
-  Learned.make (bit_block name n ~negated:true @ [ (big_k, Lit.ge name v) ]) big_k
+  Learned.make ((big_k, Lit.ge name v) :: bit_block name n ~negated:true) big_k
 
 let lb_row name ~n = Learned.make (bit_block name n ~negated:false) 0
 
@@ -560,17 +568,31 @@ let instantiate ~(bits : bits) ~(row : Learned.t) ~(pivot : Lit.t option)
     in
     (a, cid, r)
   in
+  (* M11-complexity-T9 (D-0157): the scaled terms are handed to [Learned.make] with the
+     atoms first and the bits after, each half in block order. [make]'s answer is a
+     function of the multiset it is given, so the row is the same; but that order is
+     already [make]'s own (a block per variable, found in the row's sorted order, one atom
+     each, its bits by index), so [make] takes it as it stands instead of sorting
+     hundreds of blocks. The [Checked] products run as before, in the same order: the
+     reordering happens after them. *)
+  let atoms_first l =
+    List.partition (fun (_, (b : Lit.t)) -> not (Lit.is_bit b.Lit.v)) l
+  in
   try
     let added = List.map block blocks in
     let sum =
       Learned.make
-        (List.concat_map
-           (fun (a, _, r) ->
-             List.map
-               (fun (tm : Learned.term) ->
-                 (Checked.mul a tm.Learned.coeff, tm.Learned.lit))
-               (Learned.terms r))
-           added)
+        (let atoms, bits =
+           atoms_first
+             (List.concat_map
+                (fun (a, _, r) ->
+                  List.map
+                    (fun (tm : Learned.term) ->
+                      (Checked.mul a tm.Learned.coeff, tm.Learned.lit))
+                    (Learned.terms r))
+                added)
+         in
+         atoms @ bits)
         (List.fold_left
            (fun acc (a, _, r) -> Checked.add acc (Checked.mul a (Learned.degree r)))
            0 added)
