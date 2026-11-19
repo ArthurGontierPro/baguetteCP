@@ -17180,4 +17180,20 @@ the propagator, its brute force and lanes, and the census of which Challenge ins
   fail on main from `36c1312` on (bisected: `a0b50da` 0 failures, `36c1312` 5) -- the M10-T4
   hook that routes learned instances through `Retention.gate`. A cross-session request is filed
   for its owner; `dune runtest --root . --force` on this branch fails on exactly those five.
-- **Gate**: GATE_PENDING
+- **Gate** (fresh clone of `wave51-globals2` at `d1df37f` on fataepyc-06, binary `0ec2649f`,
+  `/scratch/arthur/gate53.sh` with its two `--update` lines removed, `make -k check` under
+  `ulimit -v 4000000`): rc 2, and only from the five pre-existing `test_retention` checks above
+  (main `9c1b8e6` fails the same five); everything else passes -- fmt clean, width lint clean,
+  determinism 195 models identical, `check_unlimited` ok, 104 mutation checks, model tests 195
+  passed; peak RSS 100 104 kB. Every test model against main's binary at the branch base
+  (`bb8ccd8b`, `9c1b8e6`): 181 of 195 byte-identical in `.out`, exit code, `.opb` and `.pbp`;
+  the 14 differences are the three `inverse_*` models (the old binary cannot read
+  `baguette_inverse`, four artefacts each) and the `.pbp` of `regular_opt` and `regular_unsat`
+  (the letter reasons; `regular_sat` and `regular_set_sat` solve at the root and are
+  identical). **Differential lane** (`make diff ARGS="--tier all -j 24"`): every one of the 184
+  default-configuration runs equal the reference; the 117 that differ are all in the `fifo`,
+  `lbd`, `activity`, `alternate` and `restarts` configurations -- the 48 `fifo`/`lbd` lines are
+  byte for byte the 48 main at `9c1b8e6` prints (run there, same lane), and the 69 others have
+  no reference on this branch (recorded on main by gate 53, after the base). The debug pass the
+  same: 184 default runs equal, 105 differences in those five configurations. Scaling lane ok.
+  No reference was recorded (`git status bench/diff` empty).
