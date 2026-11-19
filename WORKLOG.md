@@ -22,6 +22,7 @@ of it to every session and stopping at a broken line before it even reached the 
 | M9-no-proof-T4 (the `--no-proof` audit) | `lib/core/trace.ml`, `lib/core/search.ml` (guards only), `lib/proof/encoding.ml` (guards in `start_proof`, additive), `lib/core/prop/regular.ml`, `lib/core/prop/inverse.ml`, `bin/main.ml` (the no-proof wiring); `lib/core/justify.ml` only after agent-memo merges | agent-noproof-audit (`wave53-noproof`) | 2026-11-19 |
 | M7-T33 (and `Alldiff.excl`'s proof cost, D-0145) | `lib/core/prop/alldiff.ml`, `lib/proof/encoding.ml` (additive only), new `test/models/`, `test/unit/test_prop.ml` (alldiff section) | agent-alldiff (`wave53-alldiff`) | 2026-11-19 |
 | M7-T28 (`member`) | new `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, new `test/models/`, `test/unit/test_prop.ml` (member section) | agent-member (`wave53-member`) | 2026-11-19 |
+| M7-T29 (the `fplen` half: bounds inference for a `var int` with no domain) | `lib/flatzinc/builder.ml`, new `test/models/`, `test/unit/test_flatzinc.ml` (one section); `docs/SPEC.md` 2.1 only if the user agrees | agent-fplen (`wave54-fplen`) | 2026-11-19 |
 
 ## Cross-session requests
 
