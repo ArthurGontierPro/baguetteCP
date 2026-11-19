@@ -2331,8 +2331,9 @@ let pb_at_conflict engine store ctx stats cfg (c : Store.conflict) ~clause_conve
   else (
     stats.n_pb_attempts <- stats.n_pb_attempts + 1;
     match
-      Pb_analysis.analyse ~stop:(inner_stop cfg) store c
-        ~row_of:(Engine.row_of engine store) ~name_of:(Engine.name_of engine)
+      (* D-0153: a row with a bits term is instantiated through its bridges. *)
+      Pb_analysis.analyse ~stop:(inner_stop cfg) ~bits:(Pb_analysis.bits_of_ctx ctx) store
+        c ~row_of:(Engine.row_of engine store) ~name_of:(Engine.name_of engine)
         ~ladder_id:
           (if cfg.pb_ladder then Encoding.consistency_id ctx.Justify.encoding
            else fun _ _ -> None)

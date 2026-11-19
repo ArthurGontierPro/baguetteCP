@@ -1,4 +1,5 @@
-(* ladder.ml: THE ORDER-ENCODING LADDER CHAIN, AS A ROW (M2-L11).
+(* ladder.ml: THE ORDER-ENCODING LADDER CHAIN, AS A ROW (M2-L11), and the BITS ARM: a
+   bits block instantiated through its bridges (M8-bits-encoding, D-0153, at the foot).
 
    Consistency level: none -- this is not a propagator. Governing records:
    docs/DECISIONS.md D-0010 (a bound fact is stated in the order encoding's own
@@ -94,7 +95,8 @@
    the propagation by lib/core/pb_analysis.ml's [bounds_before] -- I-X6, and
    lib/core/reduce.ml draws the same line for the same reason.
 
-   It does not mint a row. Every id it cites comes from [Encoding.consistency_id], i.e.
+   It does not mint a row ([lift] does not; the bits arm at the foot of this file does,
+   and says why that is safe). Every id it cites comes from [Encoding.consistency_id], i.e.
    from a row the .opb already contains, introduced before the proof's first decision and
    retired by nothing. That is what keeps pb_analysis.ml's I-S4 discharge true after this
    module joins the derivation: the cited set still holds model-row ids and nothing else.
@@ -307,3 +309,273 @@ let lift ?(stop = fun () -> false) ~(row : Learned.t) ~(pivot : Lit.t)
           in
           let rows = List.map (fun (w, _, cid) -> (cid, ladder_row ~name w)) steps in
           Some { lifted; steps; rows; rungs = List.length steps }
+
+(* ===========================================================================
+   THE BITS ARM: a bits block INSTANTIATED through its bridges (M8-bits-encoding, D-0153)
+   ===========================================================================
+
+   What the ladder lift above does for an order variable, this does for a variable on
+   the BITS encoding (D-0130, D-0132): it turns the reason row the .opb holds into a row
+   that PB-propagates the pivot, by adding rows the proof already has. The difference is
+   in what a bits term IS. An order term of a model row is a run of literals each of
+   which the trail can falsify, so the analysis resolves on them as they stand. A bits
+   term [a * X'] (X' = sum 2^i x_bit_i, the offset of x from its declared low) is not:
+   no bit is a bound, the trail never falsifies one, and a pivot cannot be one. So no
+   row this arm hands back contains a [Bit] literal, and the learned rows, the
+   criterion, the levels and lib/core/prop/pb.ml never see one.
+
+   ---------------------------------------------------------------------------
+   The step: a bridge cancels a whole block, and leaves ONE atom
+   ---------------------------------------------------------------------------
+
+   [Encoding.ensure_atom] gives the atom [x >= v] two rows (D-0130 section 5.1), with
+   k = v - lo and K = 2^n - k:
+
+     B1_v   X' + k ~x_ge_v >= k        (x_ge_v  -> X' >= k)
+     B2_v  ~X' + K  x_ge_v >= K        (~x_ge_v -> X' <= k - 1)
+
+   and every bits variable has its two declared-bound rows, [@lb: X' >= 0] and
+   [@ub: ~X' >= 2^n - 1 - (hi - lo)]. A row carrying [a * X'] (a POSITIVE block, every
+   bit at [a * 2^i]) is helped by a large x, so what the assignment says about it is
+   x's UPPER bound u: adding [a * B2_(u+1)] cancels every bit ([a 2^i x_bit_i +
+   a 2^i ~x_bit_i] is the constant [a 2^i], D-0044's complement cancellation) and leaves
+   [a K x_ge_(u+1)] with the degree lowered by [a (u - lo)] -- the block, worth at most
+   [a (u - lo)] while the atom is false, replaced by exactly that. At the declared high
+   it is [a * @ub], which leaves nothing. A NEGATIVE block ([a * ~X'], a row helped by a
+   small x) reads the LOWER bound l the same way: [a * B1_l] leaves [a k_l ~x_ge_l], and
+   [a * @lb] at the declared low leaves nothing. Every step is the addition of a positive
+   multiple of a line on the page, so the result is sound whatever bound is chosen; the
+   choice decides only whether it is strong enough to propagate.
+
+   ---------------------------------------------------------------------------
+   Which bound: the one in force at the propagation, or the PIVOT's own atom
+   ---------------------------------------------------------------------------
+
+   For every block but the pruned one the bound is the one in force just before the
+   propagation, read off the same frozen predicate the reduction uses (I-X6): the
+   tightest [u] whose atom [x_ge_(u+1)] the predicate reports falsified, by binary search
+   over the declared range. Its atom is then falsified under that predicate, so the
+   block contributes to the slack exactly what the integer propagator read, nothing more.
+
+   The pruned block is instantiated at the PIVOT: when the pivot is [~x_ge_v] (an upper
+   push, x <= v - 1) the block is negative and [a * B1_v] leaves [a k_v ~x_ge_v], the
+   pivot itself at coefficient [a k_v]; a lower push mirrors it through B2_v. The pivot's
+   value and not the propagator's claim, because the learned row names the pivot, and
+   the claim may be tighter than the pivot (the entry that falsified [x_ge_v] may have
+   pushed x lower still). It still propagates: [Linear] deduced [a X' <= K] with
+   [K / a < k_v], and the instantiated row's slack is K against a pivot coefficient of
+   [a k_v] -- D-0153 section 2 has the arithmetic. A pruning that settled past a hole
+   can fall short of it, and [Reduce]'s postcondition then says so: a fallback, never a
+   wrong row.
+
+   The conflict row is instantiated the same way at the conflict, with no pivot: every
+   atom is then falsified, and the row's slack is the integer slack [Linear] found
+   negative.
+
+   ---------------------------------------------------------------------------
+   Why not the alternatives (measured, D-0153 section 1)
+   ---------------------------------------------------------------------------
+
+     - THE SPARSE CHAIN AS THE LADDER of a bits term (replace [a X'] by its order
+       expansion over the minted atoms, then reuse [lift]): that row is not one
+       cutting-planes step from the pairs (D-0134 section 11's convex-combination
+       argument), and as a `rup` it is refused at 8 bits (probe p7w) -- accepted at 3
+       only, D-0127's caveat.
+     - THE BITS ROW ITSELF AS AN ANTECEDENT (add conflict and reason so the pivot
+       variable's whole block cancels, no atom): accepted, and STRONGER where the reason
+       is tight (probe p6 learns z <= 1 where this arm learns z <= 2), but the row it
+       leaves keeps every other variable's block, and a [Bit] in a learned row is a
+       literal the criterion, the levels and [Pb] cannot read; where the reason is not
+       tight it also loses the conflict to rounding, which the reduction here exists to
+       repair. Recorded as the next step, not taken.
+
+   ---------------------------------------------------------------------------
+   It MINTS, unlike [lift]
+   ---------------------------------------------------------------------------
+
+   [lift] cites only ladder rows of the .opb. An atom is a proof line: [bits.bridge] is
+   [Encoding.ensure_atom], which writes the `red` pair (and its sparse-chain links) at
+   level 0 the first time the atom is named, and memoises it after. Almost every atom
+   this arm asks for is already on the page -- the trace names the same bounds as facts
+   and claims -- and one minted here is a level-0 line like any other, never deleted
+   before the conclusion (D-0132 section 2.8), which is what keeps pb_analysis.ml's I-S4
+   discharge true: the derivation still cites only lines no `w` retires. The
+   precondition [ensure_atom] states (no root contradiction on the page) holds because
+   PB analysis runs at a conflict below the root. *)
+
+(* What the analysis is told about the bits encoding: the declared range and bit count of
+   a bits variable, the ids of an atom's two rows, and the ids of the two bound rows.
+   lib/core/pb_analysis.ml builds it from the encoding ([bits_of_ctx]); [no_bits] is the
+   answer for a caller with no encoding, under which a row with a bits term is refused. *)
+type bits = {
+  bits_var : string -> (int * int * int) option;
+      (** [Some (lo, hi, n)] iff the variable is on the bits encoding *)
+  bridge : string -> int -> int * int;
+      (** the ids (B1, B2) of [x >= v], minted on first ask ([Encoding.ensure_atom]) *)
+  bound_rows : string -> int * int;  (** the ids (@lb, @ub) *)
+}
+
+let no_bits =
+  {
+    bits_var = (fun _ -> None);
+    bridge = (fun x _ -> invalid_arg ("Ladder.no_bits: no bridge for " ^ x));
+    bound_rows = (fun x -> invalid_arg ("Ladder.no_bits: no bound rows for " ^ x));
+  }
+
+(* The four rows, as [Encoding] writes them ([declare_int_bits], [mint_bits_atom]). The
+   one thing that must agree with the encoding is the shape, and test_pb.ml asserts it
+   against the lines the encoding actually wrote. *)
+let bit_block name n ~negated =
+  List.init n (fun i ->
+      let b = Lit.bit name i in
+      (1 lsl i, if negated then Lit.negate b else b))
+
+let b1_row name ~lo ~n v =
+  let k = v - lo in
+  Learned.make (bit_block name n ~negated:false @ [ (k, Lit.negate (Lit.ge name v)) ]) k
+
+let b2_row name ~lo ~n v =
+  let big_k = (1 lsl n) - (v - lo) in
+  Learned.make (bit_block name n ~negated:true @ [ (big_k, Lit.ge name v) ]) big_k
+
+let lb_row name ~n = Learned.make (bit_block name n ~negated:false) 0
+
+let ub_row name ~lo ~hi ~n =
+  Learned.make (bit_block name n ~negated:true) ((1 lsl n) - 1 - (hi - lo))
+
+(* An instantiation, as data: the row with every bits block replaced, and the rows added,
+   [(multiplier, constraint id, row)] in the order they were added. *)
+type instantiated = { inst : Learned.t; added : (int * int * Learned.t) list }
+
+(* The derivation of [inst] from the model row's own explanation: one `pol` adding the
+   bridges and bound rows at their multipliers, divisor 1. *)
+let derive_instantiated (i : instantiated) (e : Explanation.t) : Explanation.t =
+  match i.added with
+  | [] -> e
+  | added ->
+      Explanation.combine
+        (Explanation.term 1 e
+        :: List.map
+             (fun (m, cid, _) -> Explanation.term m (Explanation.model_row cid))
+             added)
+        1
+
+let has_bits (row : Learned.t) =
+  List.exists
+    (fun (tm : Learned.term) -> Lit.is_bit tm.Learned.lit.Lit.v)
+    (Learned.terms row)
+
+(* The upper bound of [name] the frozen predicate reports: the smallest [u] in [lo, hi]
+   with [x_ge_(u+1)] falsified, [hi] when none is. Binary search: "x <= u held" only
+   grows with [u]. *)
+let frozen_hi ~falsified name ~lo ~hi =
+  let holds u = u >= hi || falsified (Lit.ge name (u + 1)) in
+  let rec go a b =
+    if a >= b then a
+    else
+      let mid = a + ((b - a) / 2) in
+      if holds mid then go a mid else go (mid + 1) b
+  in
+  go lo hi
+
+(* The lower bound, mirrored: the largest [l] in [lo, hi] with [~x_ge_l] falsified. *)
+let frozen_lo ~falsified name ~lo ~hi =
+  let holds l = l <= lo || falsified (Lit.negate (Lit.ge name l)) in
+  let rec go a b =
+    if a >= b then a
+    else
+      let mid = a + ((b - a + 1) / 2) in
+      if holds mid then go mid b else go a (mid - 1)
+  in
+  go lo hi
+
+exception Unreadable of string
+
+(* [instantiate ~bits ~row ~pivot ~falsified] replaces every bits block of [row] as the
+   section above says: at the pivot's own atom for the block of the pivot's variable when
+   the block's direction matches the pivot's, at the frozen bound otherwise. [Error] names
+   what could not be read: a variable [bits] does not know, a pivot outside the declared
+   range, or a block that is not [a * 2^i] (a bit left over, which is also what a block
+   without its bit 0 leaves).
+
+   A block is found by its bit 0, in one pass over [row]'s terms, which [Learned.make]
+   sorted, so the result is a function of the row. The bridges are added in ONE
+   combination -- their scaled sum, then one [Learned.combine] with the row -- rather
+   than one [combine] per block: a Challenge row has hundreds of bits blocks, and a
+   [combine] sorts the whole row (M6-T23's lesson about [lift], D-0149). The sum is the
+   same row either way; the bridges name disjoint variables, so nothing in it cancels.
+
+   Raises [Checked.Overflow] from the scaling or [Learned.combine], the caller's to catch
+   as for [lift]. *)
+let instantiate ~(bits : bits) ~(row : Learned.t) ~(pivot : Lit.t option)
+    ~(falsified : Lit.t -> bool) : (instantiated, string) result =
+  let blocks =
+    List.filter_map
+      (fun (tm : Learned.term) ->
+        match tm.Learned.lit.Lit.v with
+        | Lit.Bit (x, 0) -> Some (x, tm.Learned.coeff, tm.Learned.lit.Lit.positive)
+        | _ -> None)
+      (Learned.terms row)
+  in
+  let block (x, a, positive) =
+    let lo, hi, n =
+      match bits.bits_var x with
+      | Some r -> r
+      | None -> raise (Unreadable (x ^ " is not on the bits encoding"))
+    in
+    let at_pivot =
+      match pivot with
+      | Some ({ Lit.v = Lit.Ge (y, v); _ } as p)
+        when String.equal x y && Bool.equal p.Lit.positive positive ->
+          if v <= lo || v > hi then
+            raise
+              (Unreadable
+                 (Printf.sprintf "the pivot %s is outside %s's range" (Lit.to_string p) x));
+          Some v
+      | _ -> None
+    in
+    let cid, r =
+      if positive then
+        let atom =
+          match at_pivot with
+          | Some _ -> at_pivot
+          | None ->
+              let u = frozen_hi ~falsified x ~lo ~hi in
+              if u >= hi then None else Some (u + 1)
+        in
+        match atom with
+        | None -> (snd (bits.bound_rows x), ub_row x ~lo ~hi ~n)
+        | Some v -> (snd (bits.bridge x v), b2_row x ~lo ~n v)
+      else
+        let atom =
+          match at_pivot with
+          | Some _ -> at_pivot
+          | None ->
+              let l = frozen_lo ~falsified x ~lo ~hi in
+              if l <= lo then None else Some l
+        in
+        match atom with
+        | None -> (fst (bits.bound_rows x), lb_row x ~n)
+        | Some v -> (fst (bits.bridge x v), b1_row x ~lo ~n v)
+    in
+    (a, cid, r)
+  in
+  try
+    let added = List.map block blocks in
+    let sum =
+      Learned.make
+        (List.concat_map
+           (fun (a, _, r) ->
+             List.map
+               (fun (tm : Learned.term) ->
+                 (Checked.mul a tm.Learned.coeff, tm.Learned.lit))
+               (Learned.terms r))
+           added)
+        (List.fold_left
+           (fun acc (a, _, r) -> Checked.add acc (Checked.mul a (Learned.degree r)))
+           0 added)
+    in
+    let inst = if added = [] then row else Learned.combine row 1 sum 1 in
+    if has_bits inst then raise (Unreadable "a bits block that is not a * 2^i");
+    Ok { inst; added }
+  with Unreadable m -> Error m

@@ -1,0 +1,19 @@
+% M8-bits-encoding (D-0153): PB conflict analysis over rows whose every term is on the bits
+% encoding at --bits-above 0, with a BITS pivot. Satisfiable (x = y = 4, w = 7, z = 3), so
+% every atom's `red` pair is checked over a database that does not prove everything.
+%
+% Nothing is decided at the root: x + y + w >= 15 leaves each of x, y, w at least 1, and
+% the two rows through z leave z <= 6. The search takes z first, at its maximum. z = 6
+% pushes x <= 1 and y <= 1 (each through a row with a bits term on both sides), and the
+% third row then needs w >= 13: a conflict two propagations deep. PB analysis instantiates
+% the conflict row at x <= 1, y <= 1 (the atoms x_ge_2, y_ge_2) and w at its declared high,
+% resolves on each atom against its reason instantiated at that atom, and learns a row
+% over z's atom (z <= 5). The same happens at z = 5 and z = 4; z = 3 lands.
+var 0..7: x :: output_var;
+var 0..7: y :: output_var;
+var 0..7: w :: output_var;
+var 0..7: z :: output_var;
+constraint int_lin_le([1, 1], [x, z], 7);
+constraint int_lin_le([1, 1], [y, z], 7);
+constraint int_lin_le([-1, -1, -1], [x, y, w], -15);
+solve :: int_search([z, x, y, w], input_order, indomain_max, complete) satisfy;

@@ -50,6 +50,10 @@ module Search = Baguette_core.Search
 module Justify = Baguette_core.Justify
 module Encoding = Baguette_proof.Encoding
 module Writer = Baguette_proof.Writer
+module Learned = Baguette_core.Learned
+module Propagator = Baguette_core.Propagator
+module Opb = Baguette_proof.Opb
+module Lit = Baguette_proof.Lit
 
 (* M1-T53: bound this binary's OCaml heap so a runaway test aborts itself,
    naming the cap, rather than relying on an outer `ulimit -v` a bare
@@ -1997,10 +2001,13 @@ let test_bits_default_is_order () =
     (Encoding.n_bits_vars c.Compile.encoding = 0
     && (Encoding.cost c.Compile.encoding).Encoding.c_held_back = [])
 
-let test_bits_mixed_row_has_no_pb_row () =
-  (* D-0132 section 2.7: a Linear instance over a row with a bits term is packed without
-     its PB row, so PB conflict analysis takes the clause path rather than resolving a
-     row the .opb does not contain. [Engine.row_of] is what the analysis asks. *)
+let test_bits_mixed_row_is_the_opb_row () =
+  (* D-0132 section 2.7 packed a Linear instance over a row with a bits term WITHOUT its
+     PB row. D-0153 offers it, spelled as the .opb holds it -- the bits block at
+     [a * 2^i] on [x_bit_i] -- so that PB conflict analysis can instantiate it through its
+     bridges. The row offered must BE the committed row, term for term and degree for
+     degree: an instantiation of anything else derives a row the checker's `ia` refuses.
+     [Engine.row_of] is what the analysis asks. *)
   with_bits_above (Some 0) (fun () ->
       let src =
         {|
@@ -2020,9 +2027,22 @@ solve satisfy;
       check "bits pb_row: x on bits, y (width 3) on bits, z held by alldiff"
         (Encoding.is_bits enc "x" && Encoding.is_bits enc "y"
         && not (Encoding.is_bits enc "z"));
-      let row_of i = Engine.row_of c.Compile.engine c.Compile.store i in
-      check "bits pb_row: the mixed row x + y <= 7 offers no PB row" (row_of 0 = None);
-      check "bits pb_row: the row y - z <= 0 is mixed too (y is on bits)" (row_of 1 = None));
+      let committed = Array.of_list (Encoding.constraints enc) in
+      let same_as_opb i =
+        match Engine.row_of c.Compile.engine c.Compile.store i with
+        | None -> false
+        | Some r ->
+            let mine = Learned.of_pb_row r in
+            let opb = committed.(r.Propagator.r_cid - 1) in
+            let theirs = Learned.make (Opb.terms opb) opb.Opb.rhs in
+            Learned.terms mine = Learned.terms theirs
+            && Learned.degree mine = Learned.degree theirs
+            && List.exists (fun l -> Lit.is_bit l.Lit.v) (Learned.lits mine)
+      in
+      check "bits pb_row: the mixed row x + y <= 7 offers the .opb's row, bits and all"
+        (same_as_opb 0);
+      check "bits pb_row: the row y - z <= 0 (y on bits, z on the ladder) likewise"
+        (same_as_opb 1));
   (* And at the default every Linear instance still offers its row. *)
   let c =
     Compile.compile
@@ -2061,7 +2081,7 @@ let () =
   test_bits_maxmin_shape ();
   test_bits_eligibility ();
   test_bits_default_is_order ();
-  test_bits_mixed_row_has_no_pb_row ();
+  test_bits_mixed_row_is_the_opb_row ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)

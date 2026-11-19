@@ -541,17 +541,20 @@ type pending = int -> Propagator.instance
 (* M2-L6: every [Linear.t] in this solver is packed here -- including both halves of an
    [int_lin_eq] (D-0011) and the [int_le]/[int_lt]/[int_eq] shapes that delegate -- so
    teaching [Linear] its own PB row is taught once, here, and reaches all of them. *)
-(* [~mixed] (M8-bits-encoding-T2, D-0132 section 2.7): a row with a term on the bits
-   encoding is packed WITHOUT its PB row. [Linear.pb_row] spells the order expansion
-   from the declared bounds, which is not what the .opb holds for such a row, and PB
-   conflict analysis resolving it would hand [Learned.combine] arithmetic the checker
-   cannot reproduce. The honest answer is the one [Ne] and [Reif] give: no row, the
-   clause path, counted in the fallback rate (D-0130 section 7.5). *)
+(* [~mixed] (M8-bits-encoding-T2, D-0132 section 2.7; D-0153): [None] for a row with no
+   term on the bits encoding, [Some bits_n] for a row with one. T2 packed the latter
+   WITHOUT its PB row, because [Linear.pb_row] spelled the order expansion and the .opb
+   holds the bits; since D-0153 the row is spelled as the .opb holds it
+   ([Linear.pb_row ~bits_n]) and PB conflict analysis instantiates its bits blocks
+   through their bridges before it resolves (lib/core/ladder.ml, "The bits arm"). *)
+let linear_row ~mixed (lin : Linear.t) =
+  match mixed with
+  | None -> fun store -> Some (Linear.pb_row store lin)
+  | Some bits_n -> fun store -> Some (Linear.pb_row ~bits_n store lin)
+
 let pack_linear ~mixed (lin : Linear.t) : pending =
  fun id ->
-  Propagator.pack ~id ~idempotent:true
-    ~row:
-      (if mixed then Propagator.no_row else fun store -> Some (Linear.pb_row store lin))
+  Propagator.pack ~id ~idempotent:true ~row:(linear_row ~mixed lin)
     (module Linear : Propagator.S with type t = Linear.t)
     lin
 
@@ -637,11 +640,7 @@ let pack_arith_row (module P : Propagator.S with type t = Linear.t) ~mixed
   (* M6-T18: a ROW face is [Linear] and makes [pack_linear]'s idempotence claim; the
      guard faces below are reifications and do not (lib/core/propagator.ml, above
      [pack]). [~mixed] as in [pack_linear]. *)
-  Propagator.pack ~id ~idempotent:true
-    ~row:
-      (if mixed then Propagator.no_row else fun store -> Some (Linear.pb_row store lin))
-    (module P)
-    lin
+  Propagator.pack ~id ~idempotent:true ~row:(linear_row ~mixed lin) (module P) lin
 
 let pack_times_row ~mixed (p : Linear.t) : pending =
   pack_arith_row (module Arith.Times_row : Propagator.S with type t = Linear.t) ~mixed p
@@ -670,8 +669,10 @@ module Bool2int_row : Propagator.S with type t = Linear.t = struct
   let propagate = Linear.propagate
 end
 
-let pack_bool2int_row (p : Linear.t) : pending =
-  pack_arith_row (module Bool2int_row : Propagator.S with type t = Linear.t) ~mixed:true p
+let pack_bool2int_row ~bits_n (p : Linear.t) : pending =
+  pack_arith_row
+    (module Bool2int_row : Propagator.S with type t = Linear.t)
+    ~mixed:(Some bits_n) p
 
 (* ---------------------------------------------------------------------------
    M8-bits-encoding-T2: eligibility for the bits encoding, by SCOPE (D-0130 section 3.4,
@@ -945,11 +946,13 @@ let compile (m : Model.t) : t =
   let mixed nterms =
     Encoding.n_bits_vars encoding > 0 && List.exists (fun (_, i) -> on_bits.(i)) nterms
   in
+  (* ...and the same answer as [pack_linear]'s [~mixed] wants it (D-0153). *)
+  let row_bits nterms = if mixed nterms then Some (Encoding.bits_n encoding) else None in
   (* One row + one instance. [nterms] is the *same* normalised list on both sides. *)
   let post_le_as ~pack ~what pos nterms rhs =
     check_row pos ~what nterms rhs;
     let row_id = Encoding.add_int_lin_le encoding (opb_terms pos nterms) rhs in
-    [ pack ~mixed:(mixed nterms) (Linear.make ~row_id store (prop_terms nterms) rhs) ]
+    [ pack ~mixed:(row_bits nterms) (Linear.make ~row_id store (prop_terms nterms) rhs) ]
   in
   let post_le pos nterms rhs =
     post_le_as ~pack:pack_linear ~what:"this linear inequality" pos nterms rhs
@@ -964,7 +967,7 @@ let compile (m : Model.t) : t =
       Encoding.add_int_lin_le encoding (opb_terms pos (negate_terms nterms)) (-rhs)
     in
     let le, ge = Lin_eq.make ~le_id ~ge_id store (prop_terms nterms) rhs in
-    let mixed = mixed nterms in
+    let mixed = row_bits nterms in
     [ pack_linear ~mixed le; pack_linear ~mixed ge ]
   in
   (* Two rows, one instance, no row id -- see the module header. The propagator is
@@ -1609,7 +1612,7 @@ let compile (m : Model.t) : t =
     let rhs = if v = 1 then -1 else 0 in
     check_row pos ~what:"this reified constant" nterms rhs;
     let row_id = Encoding.add_int_lin_le encoding (opb_terms pos nterms) rhs in
-    [ pack_linear ~mixed:false (Linear.make ~row_id store (prop_terms nterms) rhs) ]
+    [ pack_linear ~mixed:None (Linear.make ~row_id store (prop_terms nterms) rhs) ]
   in
   (* b <-> (sum a_i x_i <= rhs). Two rows, one instance. *)
   let post_reif_le pos ~builtin ~pack nterms rhs r =
@@ -1834,7 +1837,8 @@ let compile (m : Model.t) : t =
           Encoding.add_int_lin_le encoding (opb_terms pos (negate_terms nterms)) 0
         in
         let le, ge = Lin_eq.make ~le_id ~ge_id store (prop_terms nterms) 0 in
-        [ pack_bool2int_row le; pack_bool2int_row ge ]
+        let bits_n = Encoding.bits_n encoding in
+        [ pack_bool2int_row ~bits_n le; pack_bool2int_row ~bits_n ge ]
     | Model.Var bi, Model.Var xi ->
         let nterms = normalise_terms [ (1, xi); (-1, bi) ] in
         check_row pos ~what:"this bool2int channelling" nterms 0;
