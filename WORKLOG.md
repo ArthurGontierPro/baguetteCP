@@ -22,7 +22,6 @@ of it to every session and stopping at a broken line before it even reached the 
 | M11-complexity-T8 | `lib/core/prop/element.ml`, `test/unit/test_prop.ml` (element section) | agent-element (`wave53-element`) | 2026-11-19 |
 | M7-T33 (and `Alldiff.excl`'s proof cost, D-0145) | `lib/core/prop/alldiff.ml`, `lib/proof/encoding.ml` (additive only), new `test/models/`, `test/unit/test_prop.ml` (alldiff section) | agent-alldiff (`wave53-alldiff`) | 2026-11-19 |
 | M11-complexity-T9 | `lib/core/learned.ml`, `lib/core/pb_analysis.ml`, `lib/core/ladder.ml`, `lib/core/reduce.ml`, their unit tests | agent-learned (`wave53-learned`) | 2026-11-19 |
-| M11-complexity-T10 | `lib/core/justify.ml`, `lib/core/explanation.ml` (additive functions only, the type unchanged), `test/unit/test_justify.ml` | agent-memo (`wave53-memo`) | 2026-11-19 |
 | M7-T28 (`member`) | new `lib/core/prop/member.ml`, `lib/flatzinc/compile.ml` (member dispatch), `mznlib/`, new `test/models/`, `test/unit/test_prop.ml` (member section) | agent-member (`wave53-member`) | 2026-11-19 |
 | M11-complexity-T6 and M6-T7 | `scripts/scaling_lane.sh`, `bench/scaling/`, `Makefile` (scaling target), `scripts/check_test_widths.py` | agent-tooling (`wave53-tooling`) | 2026-11-19 |
 
@@ -559,6 +558,15 @@ artefacts are unchanged by every M6-T22 fix, so the numbers below are comparable
 | M7-T28 (continuation: regular's reasons, inverse; the row stays IN PROGRESS) | agent-globals2 (`wave51-globals2`) | 2026-11-19 | **D-0151.** `regular`'s reasons on the LETTERS (tails recurse into the dead flags' own lines; probes on 60 scenes first): learned clauses 321 -> 80 literals on average over 40 nonograms/pentominoes, node rate x2.6 without the proof, complete 19 -> 20 of 65 with it, all VERIFIED. `inverse` native: `lib/core/prop/inverse.ml` (channel, CHECKING), mznlib `fzn_inverse`, stage 2 all_different from CITED root lemmas (`Encoding.add_cited_lemma`, alldiff's lemma-row hook), 2 mutation lanes, 3 models; Challenge 70 reach the route, 3 -> 3 complete (held by `Element.add_facts` and alldiff's factless conflicts, both filed). `member` designed with probes. Gate on `d1df37f`: `make -k check` rc 2 from the 5 pre-existing test_retention checks only (main fails the same), 195 models passed, peak RSS 100 104 kB; 181/195 models byte-identical to main (the 14 diffs: inverse x3, regular_opt/unsat .pbp); diff lane 184/184 default runs equal (fifo/lbd diffs identical to main's, strategy configs without references on this base) |
 
 ## Handoff notes
+
+### 2026-11-19 (agent-memo, `wave53-memo`): M11-complexity-T10, D-0158
+
+The memo's identical copies are identical LINES (each missed and wrote its own), so sharing them
+cannot keep the bytes. `justify.ml` gains a share mode, OFF by default (`BAGUETTE_MEMO_SHARE=1`),
+that answers a miss with an identical line already on the page at or below the current level:
+cable's proof 1 887 -> 114 MB, cyclic's 2 023 -> 322 MB, rcpsp_11 +14.5 % instructions, search
+identical. Off, every byte is main's. The default is the user's to decide (D-0158 section 5).
+GATE-LINE
 
 ### 2026-11-19 (orchestrator): the parity idea archived (D-0147 §10)
 
