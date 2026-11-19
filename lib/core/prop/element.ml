@@ -533,12 +533,25 @@ let hole_line t store w =
    stay in the row, which is the same globally valid "pruning disjoined with what it
    read" every other arm of [pos_gone] already derives. A level-0 hole keeps the bare unit
    -- it is RUP there, and keeping it leaves every proof that never reaches a deep foreign
-   hole byte-identical. The remover is found EAGERLY, here, at pruning time (I-X6). *)
+   hole byte-identical. The remover is found EAGERLY, here, at pruning time (I-X6).
+
+   M11-complexity-T11: the puncher is found eagerly, its literals are not. The clause
+   used to be materialised here, so every pruning of this instance copied every foreign
+   hole's puncher's literals once per dead position -- O(dead x facts) words per entry,
+   with facts growing along the branch. On 2011_black-hole_9 (--no-proof, node 40, the
+   same trail of 24 928 entries) the live heap goes from 1 193 MB to 291 MB, the arena's
+   share from 965 MB to 63 MB. What the thunk keeps is the puncher's [Reason.t], which is frozen data
+   (a [Facts] list, or a [Later] reading a history that is live as long as the puncher
+   is on the trail -- and the puncher is BELOW this pruning, so it outlives every arena
+   slot that can hold this thunk). The literals, their order and the clause are the
+   ones the eager call built, so every proof byte is the same. *)
 let index_hole_clause t store bp =
   let unit = Lit.negate (Lit.eq t.iname bp) in
   match index_hole_puncher store t bp with
   | Some e when Store.level_of_index store e.Store.pos > 0 ->
-      Explanation.clause (unit :: List.map Lit.negate (Reason.lits e.Store.reason))
+      let reason = e.Store.reason in
+      Explanation.deferred (fun () ->
+          Explanation.clause (unit :: List.map Lit.negate (Reason.lits reason)))
   | Some _ | None -> Explanation.clause [ unit ]
 
 (* WHAT A SHAPE-1 LINE LEAVES BEHIND, so that a conflict can cancel it.
