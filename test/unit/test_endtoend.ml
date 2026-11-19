@@ -1957,6 +1957,173 @@ let test_m9_no_proof_cli () =
         m9_models;
       m9_rm_rf dir
 
+(* M7-T32 (D-0150): the MiniZinc standard flags, through the real binary. Each flag is a
+   thin mapping onto an option that already existed, so the lane's main claim is a
+   NEGATIVE one: a flag that only asks for what the CLI does anyway (-i, -a on an
+   optimisation model, -n 1, -r, -p, -t with room to spare) leaves stdout byte for byte
+   as the plain run's, and stderr empty. The positive claims: -i's run prints every
+   improving solution with one `soli` per `----------`, and the proof verifies; -s
+   appends exactly one `%%%mzn-stat:` block to that stdout; -f becomes the D-0137
+   combination with its warning under -v; enumeration on a SATISFACTION model is
+   refused with exit 3 before anything is printed; a malformed argument is a usage
+   error, exit 2. tools/baguette.msc declares the flags; MiniZinc's own handling of them
+   (which it passes, and when) is measured in D-0150, not here. *)
+let m7t32_sat_src =
+  "var 1..4: a :: output_var;\n\
+   var 1..4: b :: output_var;\n\
+   constraint int_lt(a, b);\n\
+   solve satisfy;\n"
+
+let test_m7t32_std_flags () =
+  match m9_binary () with
+  | None ->
+      incr failures;
+      print_endline
+        "FAIL M7-T32: bin/main.exe was not found above the test's cwd, so the \
+         standard-flags lane was NOT run. Build bin/ first."
+  | Some binary ->
+      let binary =
+        if Filename.is_relative binary then Filename.concat (Sys.getcwd ()) binary
+        else binary
+      in
+      let dir = Filename.temp_file "baguette_m7t32" "" in
+      Sys.remove dir;
+      Sys.mkdir dir 0o700;
+      let write name src =
+        let p = Filename.concat dir (name ^ ".fzn") in
+        let oc = open_out p in
+        output_string oc src;
+        close_out oc;
+        Filename.quote p
+      in
+      let opt = write "opt" fz_optimisation_model and sat = write "sat" m7t32_sat_src in
+      let run args = m9_run binary ~cwd:dir args in
+      let tag = "M7-T32" in
+      (* The plain runs every flag is compared with. *)
+      let rc_o, out_o, err_o = run opt and rc_s, out_s, err_s = run sat in
+      check
+        (tag ^ ": the plain runs exit 0 with stderr empty (the control)")
+        (rc_o = 0 && rc_s = 0 && err_o = "" && err_s = "");
+      check
+        (tag ^ ": the optimisation model prints two improving solutions and the marker")
+        (count_substring out_o "----------\n" = 2 && m6_says out_o "==========\n");
+      let same name model args out_ref =
+        let rc, out, err = run (args ^ " " ^ model) in
+        check
+          (Printf.sprintf "%s: %s leaves stdout as the plain run's and stderr empty" tag
+             name)
+          (rc = 0 && out = out_ref && err = "");
+        if out <> out_ref || err <> "" then
+          Printf.printf "  plain:\n%s  with %s:\n%s  stderr:\n%s" out_ref args out err
+      in
+      same "-i (optimisation)" opt "-i" out_o;
+      same "-a (optimisation)" opt "-a" out_o;
+      same "--all (optimisation)" opt "--all" out_o;
+      same "-n 3 (optimisation: -n is for satisfaction)" opt "-n 3" out_o;
+      same "-i (satisfaction: -i is for optimisation)" sat "-i" out_s;
+      same "-n 1 (satisfaction)" sat "-n 1" out_s;
+      same "-t 600000" opt "-t 600000" out_o;
+      same "-r 7 -p 4 (no -s, no -v: no note)" opt "-r 7 -p 4" out_o;
+      (* -i with the proof: one `soli` per printed solution, and it verifies. *)
+      let rc_p, out_p, _ = run ("-i --proof ip " ^ opt) in
+      let pbp = read_file (Filename.concat dir "ip.pbp") in
+      check
+        (tag ^ ": -i --proof prints what the plain run prints")
+        (rc_p = 0 && out_p = out_o);
+      check
+        (tag ^ ": ...with one `soli` line per printed solution")
+        (count_substring pbp " soli " + count_substring pbp "\nsoli "
+        = count_substring out_p "----------\n");
+      (match veripb_path () with
+      | None ->
+          incr failures;
+          Printf.printf "FAIL %s: veripb not found -- the -i proof was NOT checked.\n" tag
+      | Some veripb ->
+          let rc, out =
+            m6_veripb veripb dir
+              (Filename.concat dir "ip.opb")
+              (Filename.concat dir "ip.pbp")
+          in
+          check
+            (tag ^ ": ...and veripb verifies it at the printed optimum")
+            (rc = 0 && m6_says out "VERIFIED BOUNDS 2 <= obj <= 2");
+          (* -f with the proof, on this small model. Not the M7-T31 instance: this says
+             the mapping reaches the search and the proof still closes here, nothing
+             about the instances D-0137 section 13 refuses. *)
+          let rc_f, out_f, _ = run ("-f --proof fp " ^ opt) in
+          let rc, out =
+            m6_veripb veripb dir
+              (Filename.concat dir "fp.opb")
+              (Filename.concat dir "fp.pbp")
+          in
+          check
+            (tag ^ ": -f solves the model to the same optimum and veripb verifies it")
+            (rc_f = 0
+            && m6_says out_f "y = 2;\n----------\n==========\n"
+            && rc = 0
+            && m6_says out "VERIFIED BOUNDS 2 <= obj <= 2"));
+      (* -s: the plain stdout, then exactly one block. *)
+      let rc_st, out_st, err_st = run ("-s -r 7 -p 4 " ^ opt) in
+      let lo = String.length out_o in
+      let tail =
+        if String.length out_st >= lo && String.sub out_st 0 lo = out_o then
+          Some (String.sub out_st lo (String.length out_st - lo))
+        else None
+      in
+      let lines =
+        match tail with
+        | None -> []
+        | Some t -> List.filter (( <> ) "") (String.split_on_char '\n' t)
+      in
+      check (tag ^ ": -s keeps the plain stdout as its prefix") (rc_st = 0 && tail <> None);
+      check
+        (tag ^ ": ...and appends one %%%mzn-stat block, ending %%%mzn-stat-end")
+        (lines <> []
+        && List.for_all
+             (fun l -> String.length l >= 11 && String.sub l 0 11 = "%%%mzn-stat")
+             lines
+        && List.nth lines (List.length lines - 1) = "%%%mzn-stat-end"
+        && count_substring out_st "%%%mzn-stat-end" = 1);
+      check
+        (tag ^ ": ...naming nodes, failures and the objective it reached")
+        (List.mem "%%%mzn-stat: objective=2" lines
+        && List.exists (fun l -> m6_says l "%%%mzn-stat: nodes=") lines
+        && List.exists (fun l -> m6_says l "%%%mzn-stat: failures=") lines);
+      check
+        (tag ^ ": ...with --stats on stderr and the -p and -r notes")
+        (m6_says err_st "stats: nodes" && m6_says err_st "one thread"
+        && m6_says err_st "-r 7 accepted and unused");
+      (* -f: the combination, with an explicit flag winning in either order. *)
+      let _, _, err_f = run ("-f -v " ^ opt) in
+      check
+        (tag ^ ": -f -v says alternate, luby and phase saving, and warns of M7-T31")
+        (m6_says err_f "search=alternate restarts=luby:100 phase-saving=true"
+        && m6_says err_f "WARNING" && m6_says err_f "M7-T31");
+      let _, _, err_f2 = run ("--search activity -f --restarts geom -v " ^ opt) in
+      check
+        (tag ^ ": an explicit --search or --restarts wins over -f, in either order")
+        (m6_says err_f2 "search=activity restarts=geom:100:1.5 phase-saving=true");
+      let _, _, err_t = run ("-t 2500 -v " ^ opt) in
+      check (tag ^ ": -t is milliseconds") (m6_says err_t "time-limit=2.5s");
+      (* Refused: enumeration of a satisfaction model, exit 3, nothing on stdout. *)
+      List.iter
+        (fun args ->
+          let rc, out, err = run (args ^ " " ^ sat) in
+          check
+            (Printf.sprintf
+               "%s: %s on a satisfaction model is refused, exit 3, stdout empty" tag args)
+            (rc = 3 && out = "" && m6_says err "D-0150"))
+        [ "-a"; "--all"; "-n 2" ];
+      (* Malformed arguments: usage errors, exit 2. *)
+      List.iter
+        (fun args ->
+          let rc, out, _ = run (args ^ " " ^ opt) in
+          check
+            (Printf.sprintf "%s: `%s` is a usage error, exit 2" tag args)
+            (rc = 2 && out = ""))
+        [ "-t abc"; "-t -5"; "-n 0"; "-p 0"; "-r x"; "-n" ];
+      m9_rm_rf dir
+
 let () =
   print_endline "";
   List.iter run_model models;
@@ -1969,6 +2136,7 @@ let () =
   test_m7t27_streamed_proof_verifies ();
   test_m9_no_proof_in_process ();
   test_m9_no_proof_cli ();
+  test_m7t32_std_flags ();
   if !failures > 0 then (
     Printf.printf "\n%d failure(s)\n" !failures;
     exit 1)
