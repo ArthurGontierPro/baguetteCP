@@ -55,13 +55,17 @@ before you kill. In practice:
   need killing writes its own `$$` to a pidfile.
 - **The user's own node rules come first.** They live in the global `~/.claude/CLAUDE.md` on the
   cluster's home ("Sur les nœuds de calcul"): at most 92 runs in parallel in all, each under a real
-  memory limit (`systemd-run --user --scope -p MemoryMax=32G ...`); no `-j` above 16 (the lanes run
-  at `-j 16`); look at the free space on `/scratch` before writing large proofs, and tell the user
+  memory limit (`systemd-run --user --scope -p MemoryMax=32G ...`); no `make -j` above 16; look at
+  the free space on `/scratch` before writing large proofs, and tell the user
   when a run writes more than a few tens of GB; never delete or rewrite a file you did not create
   outside this repository; text with quotes or backquotes does not survive `ssh '...'`, so write it
   to a file and `scp` it.
-- **Budget**: at most 16 parallel jobs per agent. Look at `uptime` and `ps -u arthur` before a
-  large series; an experiment that is not yours has priority.
+- **Budget.** `make -j` stays at 16 or below. Lane and campaign runs count toward the 92 runs of
+  the whole node, every experiment included; each lane run is capped by its own `ulimit -v` (4 GB,
+  `BAGUETTE_MEM_CAP_KB`), so 92 of them hold at most 368 GB of the node's 2 TB. An agent uses
+  `-j 16`, so that several can gate at once. The orchestrator's gate may use `-j N` with N = 92
+  minus the runs already going (`ps -u arthur`, read the list). Look at `uptime` before a large
+  series; an experiment that is not yours has priority.
 - **Memory**: suites run under `ulimit -v 4000000` (make applies it); lanes and Challenge runs
   under 16 GB. A run that dies on a cap is a finding. Raise a cap only for an explained exception,
   written in WORKLOG (`BAGUETTE_MEM_CAP_KB=33554432` for openshop's checker, below).
@@ -77,7 +81,8 @@ binary. It does, in order:
 3. For every `test/models/*.fzn`, stdout, exit code, `.opb` and `.pbp` of the new binary against
    the previous gate's binary, both hashed. A change meant to be byte-identical must show 0
    differences. A comparison whose two sides used the same binary is no evidence (CLAUDE.md).
-4. `make diff ARGS="--tier all -j 16"` and `make diff ARGS="--debug --tier all -j 16"`.
+4. `make diff ARGS="--tier all -j N"` and `make diff ARGS="--debug --tier all -j N"`, N as in §3 (16 for
+   an agent, up to 92 minus the node's other runs for the orchestrator).
 5. `make scaling ARGS="-j 16"`, a blocking gate since D-0160: its rc is the verdict.
 6. A `DONE` line in `gateNN.status`. The gate is then recorded in a WORKLOG handoff note
    ("gate NN recorded").
