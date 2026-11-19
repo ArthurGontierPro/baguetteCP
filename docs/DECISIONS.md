@@ -16187,6 +16187,39 @@ run directories stay where they are, so that the idea can be reopened later with
 the spike. To reopen it, first find out why the orbit runs visit about 8 nodes per second
 under `N`, `P` and `PB`, against 20 to 40 under `E2`.
 
+### 11. The reading of the orbit runs (the orchestrator, from the runs' `--stats` and `parity:` lines)
+
+The user asked for the reading the agent did not write. Everything below comes from
+`out/<tag>.err` and `out/<tag>.res` in the run directory. No new run was made.
+
+1. **The orbit model is not the basis model.** With `bool_xor` it is 143 174 XOR constraints,
+   538 197 clauses and 125 926 XOR atoms, of rank 125 902, so only 24 atoms are free. With `ENC=2`
+   it is 17 296 `int_lin_eq`.
+2. **On orbit the system has real work, unlike on the basis model.** The diagnostic runs (`PD`)
+   find 99.6 % of the system's inferences beyond unit propagation (o2: 29 646 800 of 29 776 676;
+   o0 and o3 the same), and the beyond mode (`PB`) applies 20 to 22 million of them. Every one is on
+   a defined atom (`inferred_free=0`), and no parity conflict is beyond unit propagation
+   (`beyond_conflicts=0` on all nine runs). This agrees with what CryptoMiniSat showed.
+3. **The cost per node hides the effect.** Without the system (`N`) a node costs about 91 600
+   propagator runs and 13 300 domain changes, which is 0.125 s per node and 8 nodes per second.
+   With the sums (`E2`) a node costs 8 400 to 13 000 runs, 0.024 s on o2, five times cheaper. In
+   1 800 s `N` reaches 13 000 to 14 600 nodes, `P` 16 000 to 17 000 and `PB` 10 000 to 11 000.
+4. **No XOR run finishes, so the tree sizes are unknown.** The sums close o3 in 1 273 nodes and o2
+   in 2 603, while `N` is still open at 14 610 and 14 345. A node count at a time limit does not
+   measure a tree. These runs therefore cannot say whether the system would close the orbit
+   instances in fewer nodes than the clauses.
+5. **The eager mode spoils the learned clauses again, and the beyond mode does not.** Under `N`,
+   75 % of o2's learned clauses have 9 literals and 4 have 16 or more. Under `P`, 4 655 of 8 548 have
+   16 or more, with reasons of 11.5 atoms per inference (423.8 M reason atoms). Under `PB` the
+   widths are back to `N`'s (4 179 of 5 441 at 9, 2 at 16 or more). This is aut's §4 story,
+   and it confirms that a T2 would have to be the beyond mode.
+
+**What would decide.** Run `N` and `PB` on o3 (and o2) without a time limit, a few hours each on
+the node, and compare the node counts at UNSAT. If `PB` closes in far fewer nodes than `N`, the
+system pays on orbit, and T2 in the beyond mode is worth reopening. Even then the sums stay the
+better encoding until the clause encoding's cost per node comes down. If the counts are close,
+the idea stays archived.
+
 ## D-0139  M10-search-strategy-T4: retention re-measured, the learned database made evictable (`Retention.gate`, the lock rule, three LBD tiers), and why the default should stay `keep_all` until M10-T5
 
 **Status**: **ACCEPTED** as built, 2026-11-18, agent-retention (`wave45-retention`). The default
